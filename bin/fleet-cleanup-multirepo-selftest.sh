@@ -115,7 +115,7 @@ mkwin() {   # $1=name $2=cwd, then option/value pairs → prints the window id
   printf '%s' "$w"
 }
 wA=$(mkwin issue-12 "$WORK/a-issue-12" @issue 12 @repo o/a)
-wB=$(mkwin b·issue-12 "$WORK/b-issue-12" @issue 12 @repo o/b)
+wB=$(mkwin issue-12 "$WORK/b-issue-12" @issue 12 @repo o/b)
 wUNK=$(mkwin unk-12 "$WORK" @issue 12)
 wNO=$(mkwin norepo "$HOME" @raw 1 @norepo 1)
 # The notice the daemon shows one tick before it reaps (#565) — already served.

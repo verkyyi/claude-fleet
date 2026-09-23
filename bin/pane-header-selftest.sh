@@ -1,7 +1,7 @@
 #!/bin/bash
 # pane-header-selftest.sh — the top-of-window header contract (issue #267).
 #
-# Every window shows a top-of-pane header naming its session — "index:name" plus
+# Every window shows a top-of-pane header naming its session — its name plus
 # the bound ##{@issue} when issue-bound — EXCEPT the hub, whose operator pane keeps
 # its "▸ FLEET HUB" cue and whose dash pane stays empty. That behaviour lives in
 # ONE line of conf/tmux-attention.conf: `set -g pane-border-format "…"`. This test
@@ -67,9 +67,18 @@ tmux set-window-option -t "$rw" @raw 1
 # --- assert the three-way routing --------------------------------------------
 worker="$(render "$ww")"
 case "$worker" in
-  *"issue-267"*"#267"*) : ;;                       # index:name + bound issue
+  *"issue-267"*"#267"*) : ;;                       # name + bound issue
   *) fail "worker header missing name/issue — got [$worker]" ;;
 esac
+# issue #1023: just the name + #issue — no WORKER label, no index: prefix.
+case "$worker" in
+  *WORKER*|*[0-9]:issue-267*) fail "worker header still carries WORKER / index: — got [$worker]" ;;
+esac
+[ "$worker" = " issue-267 #267 " ] || fail "worker header is not exactly ' name #issue ' — got [$worker]"
+# focus is colour only (#999): an inactive worker pane reads the same words
+wp2="$(tmux split-window -d -P -F '#{pane_id}' -t "$ww")"
+[ "$(render "$wp2")" = "$worker" ] || fail "inactive worker header words differ — got [$(render "$wp2")] vs [$worker]"
+tmux kill-pane -t "$wp2"
 
 hubpane="$(render "$sp")"
 case "$hubpane" in

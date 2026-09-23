@@ -577,8 +577,10 @@ The dash renderers (`tmux-dashboard-rows.sh`, and with it the sidebar, plus
   child whose parent is hidden renders as an orphan rather than folding away.
 
 The short tag (`fleet_repo_short`: `FLEET_REPO_SHORT` in the repo's conf, else its
-initials or first two letters, full name on a collision) also prefixes every
-window name in a 2+ repo fleet (`tl·issue-12`). A no-repo session is not prefixed.
+initials or first two letters, full name on a collision) is the dash badge only.
+Window names stay bare in a 2+ repo fleet too (`issue-12`, issue #1023 — #793
+used to prefix them `tl·issue-12`); identity is `@repo`/`@issue`, never the name,
+so a bare `issue-12` of repo A never blocks repo B's #12.
 `bin/fleet-pick-repo-selftest.sh` pins the picker, dash and label.
 
 **Backlog for any repo (issue #794).** The backlog follows the current repo too.

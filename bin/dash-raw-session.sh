@@ -341,12 +341,9 @@ fi
 # window and its worktree read alike; a custom --name is deduped against THIS
 # fleet's live window names (<name>, <name>-2, …). The name is cosmetic — the
 # worktree/branch uniqueness is what git/fs guarantee above.
-# 2+ repos (issue #793): a repo session wears its repo's short tag (`tl·scratch-4`);
-# a no-repo one does not — its name already says `norepo`. One-repo: unchanged.
+# No repo tag, even with 2+ repos (issue #1023 dropped #793's `tl·` prefix): the
+# dash shows the repo, and identity is `@repo`, never the name.
 base="${custom:-$slug}"
-if [ "$MULTI" = 1 ] && [ "$NOREPO" != 1 ] && [ -n "$REPO_ARG" ]; then
-  _sh=$(fleet_repo_short_of "$SESS" "$REPO_ARG"); [ -n "$_sh" ] && base="${_sh}·$base"; unset _sh
-fi
 existing=$(TM list-windows -t "$SESS" -F '#{window_name}' 2>/dev/null)
 name="$base"; n=2
 while printf '%s\n' "$existing" | grep -qxF "$name"; do name="$base-$n"; n=$((n + 1)); done

@@ -238,29 +238,33 @@ collect() {
 }
 collect
 dash() { FLEET_SESSION="$S" FZF_COLUMNS=160 bash "$BIN/tmux-dashboard-rows.sh" 2>/dev/null | tail -n +2 | strip; }
+# A row is found by its window id (field 2), never its name: since #1023 names carry
+# no repo tag, so A#12 and B#12 are both plain `issue-12` (and both scratches are
+# `scratch-1`) — a name can't tell the repos apart; identity is @repo/@issue.
+row_of() { printf '%s\n' "$rows" | awk -F '\037' -v w="$1" '$2==w {print; exit}'; }
 rows=$(dash)
-rA=$(printf '%s\n' "$rows" | grep -F "$(opt "$wA" window_name)" | head -1)
-rB=$(printf '%s\n' "$rows" | grep -F "$(opt "$wB" window_name)" | head -1)
+rA=$(row_of "$wA")
+rB=$(row_of "$wB")
 has   a "A#12's row shows A's PR merged" "$rA" "merged"
 hasnt a "A#12's row shows no B PR"     "$rA" "#201"
 has   a "B#12's row shows B's PR"      "$rB" "#201"
 hasnt a "B#12's row shows no A PR"     "$rB" "#101"
-rN=$(printf '%s\n' "$rows" | grep -F "$(opt "$wN" window_name)" | head -1)
+rN=$(row_of "$wN")
 hasnt a "the no-repo row shows no PR"  "$rN" "#"
 
 # ==== (h) collector/backlog/hub: `all` and a picked repo ===============================
 backlog() { FLEET_SESSION="$1" bash "$BIN/tmux-issues-rows.sh" all 2>/dev/null; }
 f14() { tail -n +2 | awk -F '\037' '{ print $1 "|" $4 }' | tr '\n' ' '; }
 chk h "backlog under all: both repos, bound #12s hidden" "$(backlog "$S" | f14)" "30|o/alpha 31|o/beta "
-has h "dash under all: A's scratch listed" "$rows" "$(opt "$sA" window_name)"
-has h "dash under all: B's scratch listed" "$rows" "$(opt "$sB" window_name)"
+has h "dash under all: A's scratch listed" "$(row_of "$sA")" "$(opt "$sA" window_name)"
+has h "dash under all: B's scratch listed" "$(row_of "$sB")" "$(opt "$sB" window_name)"
 fleet_current_repo_set "$S" o/beta
 chk h "the footer follows the pick" "$(tmux show-option -gqv @fleet_repo_label)" beta
 chk h "backlog with B picked: B only" "$(backlog "$S" | f14)" "31|o/beta "
 rows=$(dash)
-has   h "dash with B picked: B#12 shown"  "$rows" "$(opt "$wB" window_name)"
-hasnt h "dash with B picked: A#12 hidden" "$rows" "$(opt "$wA" window_name)"
-hasnt h "dash with B picked: A's scratch hidden" "$rows" "$(opt "$sA" window_name)"
+has   h "dash with B picked: B#12 shown"  "$(row_of "$wB")" "$(opt "$wB" window_name)"
+chk   h "dash with B picked: A#12 hidden" "$(row_of "$wA")" ""
+chk   h "dash with B picked: A's scratch hidden" "$(row_of "$sA")" ""
 fleet_current_repo_set "$S" all
 
 # ==== (b)+(e) A's PR merges → one cleanup tick ==========================================
