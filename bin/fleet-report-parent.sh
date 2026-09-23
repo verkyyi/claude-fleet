@@ -2,7 +2,7 @@
 # fleet-report-parent.sh — a finished child worker PUSHES its outcome to the
 # session that SPAWNED it (issue #574), instead of leaving that session to poll.
 #
-#   fleet-report-parent.sh --state merged|blocked|failed|reaped|stopped [options]
+#   fleet-report-parent.sh --state merged|blocked|failed|reaped|stopped|waiting|idle [options]
 #
 # The parent/child link has existed since #503: every spawn stamps `@origin` on
 # the new window (`issue-<N>` / `scratch-<N>`, empty ≡ the hub), canonicalised by
@@ -17,7 +17,10 @@
 # fleet_peer_send (#513) — the SendMessage tool's local inbox socket. Queued while
 # the parent is mid-turn, delivered as its next turn. NEVER tmux send-keys (#437).
 #
-#   --state <s>     merged | blocked | failed | reaped | stopped (required)
+#   --state <s>     merged | blocked | failed | reaped | stopped | waiting | idle
+#                   (required). A `stopped` whose child is still busy (issue #864)
+#                   is re-filed here as `waiting` (bg job / open PR) or `idle` (the
+#                   PR gate could not be read) — see TIERS below.
 #   --pr <N>        the PR number, for a merged or failed report
 #   --verdict <v>   the reap verdict, for a `reaped` report (unmerged, dirty, …)
 #   --summary <t>   1–3 lines of what happened (the parent's whole payoff)
@@ -44,6 +47,14 @@
 # On a delivered report the child's window is stamped `@reported 1`, which is what
 # stops the reaper fallback (session-end-hook.sh / dash-reap.sh) sending a second,
 # blunter report for the same session a minute later.
+#
+# TIERS (issue #938): every report is banded by report_tier (fleet-children-lib.sh)
+# and the band is written into the ledger event. loud = someone must act (BLOCKED,
+# FAILED not being fixed, REAPED unmerged/dirty, a true STOPPED, a child in
+# `needs`); quiet = worth knowing (MERGED, FAILED while fixing, other reaps);
+# silent = a turn boundary (WAITING, IDLE) — RECORDED, never sent, never stamped.
+# FLEET_CHILD_REPORT=immediate (the default; legacy `1`) delivers loud + quiet one
+# by one, exactly as before; `batch` is the digest's (C5, #939).
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -69,16 +80,17 @@ while [ "$#" -gt 0 ]; do
     -L*)        SOCK="${1#-L}" ;;
     --only-once) ONCE=1 ;;
     --dry-run)  DRY=1 ;;
-    -h|--help)  sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)  sed -n '2,58p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *)          printf 'fleet-report-parent: unknown argument %s\n' "$1" >&2; exit 2 ;;
   esac
   shift
 done
 
+STATES='merged|blocked|failed|reaped|stopped|waiting|idle'
 case "$STATE" in
-  merged|blocked|failed|reaped|stopped) ;;
-  '') printf 'fleet-report-parent: --state is required (merged|blocked|failed|reaped|stopped)\n' >&2; exit 2 ;;
-  *)  printf 'fleet-report-parent: unknown --state %s (merged|blocked|failed|reaped|stopped)\n' "$STATE" >&2; exit 2 ;;
+  merged|blocked|failed|reaped|stopped|waiting|idle) ;;
+  '') printf 'fleet-report-parent: --state is required (%s)\n' "$STATES" >&2; exit 2 ;;
+  *)  printf 'fleet-report-parent: unknown --state %s (%s)\n' "$STATE" "$STATES" >&2; exit 2 ;;
 esac
 
 # quiet <msg> — the "nothing to do, and that is fine" exit. Silent in production so
@@ -94,13 +106,14 @@ TM() { if [ -n "$SOCK" ]; then tmux -L "$SOCK" "$@"; else tmux "$@"; fi; }
 target="${WIN:-${TMUX_PANE:-}}"
 [ -n "$target" ] || quiet 'no child window (no --win and no $TMUX_PANE)'
 row=$(TM display-message -p -t "$target" \
-        '#{window_id}|#{@origin}|#{@issue}|#{@reported}|#{@worktree}|#{window_name}' 2>/dev/null)
+        '#{window_id}|#{@origin}|#{@issue}|#{@reported}|#{@worktree}|#{@claude_state}|#{window_name}' 2>/dev/null)
 [ -n "$row" ] || quiet "child window '$target' is gone"
 selfwin=${row%%|*};  row=${row#*|}
 worigin=${row%%|*};  row=${row#*|}
 wissue=${row%%|*};   row=${row#*|}
 wreported=${row%%|*}; row=${row#*|}
-wworktree=${row%%|*}; wname=${row#*|}
+wworktree=${row%%|*}; row=${row#*|}
+wstate=${row%%|*};   wname=${row#*|}
 
 [ -n "$ORIGIN" ] && worigin="$ORIGIN"
 [ -n "$ISSUE" ]  && wissue="${ISSUE//[^0-9]/}"
@@ -118,7 +131,7 @@ wname=$(printf '%s' "$wname" | tr -d '"<>')
 # The Stop fallback reports a stopped TURN, never a claim that an unfinished PR
 # landed. Transfer/loop pauses are not completion and must not wake the parent.
 if [ "$STATE" = stopped ]; then
-  [ "$(TM display-message -p -t "$target" '#{@claude_state}')" = "done" ] || quiet 'not done'
+  [ "$wstate" = "done" ] || quiet 'not done'
   [ "$(TM display-message -p -t "$target" '#{@handoff_armed}')" != 1 ] || quiet 'handoff pending'
   manifest=$(TM display-message -p -t "$target" '#{@handoff_manifest}')
   if [ -n "$manifest" ] && ! python3 - "$manifest" <<'PYLOOP'
@@ -139,9 +152,14 @@ fi
 # default forever.
 sess="$SOCK"; [ -n "$sess" ] || sess=$(fleet_current_session)
 [ -n "$sess" ] && fleet_load_conf "$sess"
-case "${FLEET_CHILD_REPORT:-1}" in
-  0|no|off|false) quiet 'FLEET_CHILD_REPORT=0 for this fleet' ;;
-esac
+# shellcheck source=/dev/null
+[ -f "$BIN/fleet-children-lib.sh" ] && . "$BIN/fleet-children-lib.sh"
+if command -v children_report_mode >/dev/null 2>&1; then
+  MODE=$(children_report_mode)
+else   # a half-synced install without the lib: the historic switch
+  case "${FLEET_CHILD_REPORT:-1}" in 0|no|off|false) MODE=0 ;; *) MODE=immediate ;; esac
+fi
+[ "$MODE" = 0 ] && quiet 'FLEET_CHILD_REPORT=0 for this fleet'
 
 # --- rail 1: is there a parent at all? ----------------------------------------
 # Empty ≡ hub (the operator spawned it — they have the dash). The literals
@@ -184,6 +202,30 @@ esac
 branch_arg="$BRANCH"
 [ -n "$BRANCH" ] || BRANCH="${selfkey##*:}"
 
+# --- a turn boundary is not a stop (issue #864) -------------------------------
+# The Stop fallback fires on EVERY done turn of a child that has not reported. A
+# child that opened its PR and parked a gate waiter in the background (or left a
+# test running) ended its turn, not its work — two monorepo EPICs saw 15/15 such
+# STOPPED reports, every one of them false. So a busy child is re-filed: WAITING
+# (bg job / open PR) or IDLE (gh could not read the gate — undetermined). Both are
+# tier silent: the ledger records the transition, nothing is sent, nothing is
+# stamped, so a later Stop that finds the child genuinely idle still reports once.
+# Before the ledger (it must record the RIGHT state), after the cheap rails: this
+# walks processes and may ask GitHub.
+busy=''
+if [ "$STATE" = stopped ] && busy=$(fleet_child_busy "$sess" "$selfwin" "$branch_arg"); then
+  case "$busy" in pr-unknown) STATE=idle ;; *) STATE=waiting ;; esac
+  VERDICT="$busy"
+fi
+
+# --- the tier (issue #938): does this report need to wake anyone? ---------------
+if command -v report_tier >/dev/null 2>&1; then
+  TIER=$(report_tier "$STATE" "$SUMMARY" "$VERDICT" "$wstate")
+else
+  TIER=loud
+fi
+UST=$(printf '%s' "$STATE" | tr '[:lower:]' '[:upper:]')
+
 # --- the ledger (issue #937): every report is RECORDED, delivered or not --------
 # Written here — a parent key is known, nothing is sent yet — so a report the rails
 # below drop (parent reaped, no live Claude, no reachable inbox) still lands in the
@@ -191,12 +233,14 @@ branch_arg="$BRANCH"
 # without a `gh pr` + capture-pane per child. Keyed by the parent's KEY, not its
 # window id, so a migrated/restored parent reads the same file. Deduped on
 # (child, state, pr) against that child's latest event; never fails, prints nothing.
-if [ "$DRY" != 1 ] && [ -f "$BIN/fleet-children-lib.sh" ]; then
-  # shellcheck source=/dev/null
-  . "$BIN/fleet-children-lib.sh"
-  children_append "$worigin" "$(python3 -c 'import json,sys; print(json.dumps(dict(zip(("child","state","pr","verdict","summary","title"), sys.argv[1:]))))' \
-    "$selfkey" "$(printf '%s' "$STATE" | tr '[:lower:]' '[:upper:]')" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" 2>/dev/null)" "$sess" || :
+if [ "$DRY" != 1 ] && command -v children_append >/dev/null 2>&1; then
+  children_append "$worigin" "$(python3 -c 'import json,sys; print(json.dumps(dict(zip(("child","state","pr","verdict","summary","title","tier"), sys.argv[1:]))))' \
+    "$selfkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER" 2>/dev/null)" "$sess" || :
 fi
+
+# silent = ledger only, in every mode: a parent is never woken for a turn boundary.
+# The `child busy (<reason>)` wording is #864's, kept for whoever greps for it.
+[ "$TIER" = silent ] && quiet "tier=silent · $UST${busy:+ · child busy ($busy)} — ledger only"
 
 # --- rail 2: the parent window, and a live Claude under it ---------------------
 pwin=$(fleet_win_for_key "$worigin" "$SOCK") \
@@ -216,17 +260,6 @@ if [ "$parent_agent" != codex ] && [ -z "$parent_sleep$parent_evidence" ]; then
   [ -n "$ppid" ] || quiet "parent $worigin ($pwin) has no live Claude under it"
 fi
 
-# --- rail 3 (stopped only): a turn boundary is not a stop (issue #864) ----------
-# The Stop fallback fires on EVERY done turn of a child that has not reported. A
-# child that opened its PR and parked a gate waiter in the background (or left a
-# test running) ended its turn, not its work — two monorepo EPICs saw 15/15 such
-# STOPPED reports, every one of them false. Last, after the cheap rails: this one
-# walks processes and may ask GitHub. Nothing is stamped, so a later Stop that
-# finds the child genuinely idle still reports once.
-if [ "$STATE" = stopped ]; then
-  busy=$(fleet_child_busy "$sess" "$selfwin" "$branch_arg") && quiet "child busy ($busy)"
-fi
-
 # --- the envelope: FIXED shape, 4 lines typical, 6 at its widest ---------------
 # Fixed because it is read by two audiences with opposite needs: the parent model,
 # which must be able to judge it at a glance and get straight back to its OWN
@@ -239,6 +272,9 @@ case "$STATE" in
   failed)  st="FAILED${PR:+ (PR #${PR//[^0-9]/})}" ;;
   stopped) st="STOPPED (no ship report)" ;;
   reaped)  st="REAPED${VERDICT:+ ($VERDICT)}" ;;
+  # only reached when a `needs` child lifts a silent state to loud (report_tier)
+  waiting) st="WAITING${VERDICT:+ ($VERDICT)}" ;;
+  idle)    st="IDLE${VERDICT:+ ($VERDICT)}" ;;
 esac
 msg="[child-report] $label${wname:+ \"$wname\"}"$'\n'"state: $st · branch $BRANCH"
 if [ -n "$SUMMARY" ]; then
@@ -258,8 +294,8 @@ fi
 msg="$msg"$'\n'"no reply needed${FLEET_LANG_RULE_NOTICE:+ — $FLEET_LANG_RULE_NOTICE}"
 
 if [ "$DRY" = 1 ]; then
-  printf 'fleet-report-parent: would send to %s (%s, pid %s)\n--- envelope ---\n%s\n' \
-    "$worigin" "$pwin" "$ppid" "$msg"
+  printf 'fleet-report-parent: would send to %s (%s, pid %s) tier=%s\n--- envelope ---\n%s\n' \
+    "$worigin" "$pwin" "$ppid" "$TIER" "$msg"
   exit 0
 fi
 

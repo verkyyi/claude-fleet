@@ -28,7 +28,9 @@ import sys
 import time
 
 STATES = ('MERGED', 'BLOCKED', 'FAILED', 'STOPPED', 'REAPED', 'WAITING', 'IDLE')
-FIELDS = ('child', 'state', 'pr', 'verdict', 'summary', 'title')
+FIELDS = ('child', 'state', 'pr', 'verdict', 'summary', 'title', 'tier')
+# report_tier's three bands (issue #938, fleet-children-lib.sh); '' = a pre-#938 event.
+TIERS = ('loud', 'quiet', 'silent')
 KEY_OK = set('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-')
 
 # The dash's state → rank table (tmux-dashboard-rows.sh state_v), verbatim: rank 0
@@ -80,6 +82,7 @@ def cmd_append(a):
     ev['verdict'] = clean(ev['verdict'], 1, 64)
     ev['summary'] = clean(ev['summary'])
     ev['title'] = clean(ev['title'], 1)
+    ev['tier'] = str(ev['tier']).lower() if str(ev['tier']).lower() in TIERS else ''
     if not ev['child'] or ev['state'] not in STATES:
         print('fleet-children: need child + state (%s)' % '|'.join(STATES), file=sys.stderr)
         return 2
