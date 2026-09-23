@@ -17,6 +17,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/fleet-lib.sh" ] && . "$BIN/fleet-lib.sh"     # also sources the sibling global fleet.conf
 # shellcheck source=/dev/null
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"   # kept for a lib-less install
+_fs="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleet.settings"; [ -f "$_fs" ] && . "$_fs"   # the login's settings win (#979)
 
 # Per-fleet overlay (issue #472). Until now this script read the GLOBAL fleet.conf
 # only — and nothing else carried the per-fleet conf into a spawned window either

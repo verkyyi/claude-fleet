@@ -4,20 +4,19 @@
 # cw <branch> [window-name]  — create a worktree + tmux window running claude
 # cwrm <branch>              — remove a worktree + its branch
 # cwclean [--prune]          — audit worktrees; --prune removes merged+clean+idle ones
-# cf [<owner/repo>] [dir]    — bring up a fleet (no args = infer from this checkout)
+# cf [<owner/repo>] [dir]    — go to your fleet; with a repo, add it + make it current
 #
 # It also installs a tmux() destroy-guard (issue #158) — see the bottom of the
 # file — so an accidental `tmux kill-server` from a bypass-perms worker can't
 # take down every fleet sharing the default socket.
 
-# cf — go to a fleet. With NO args it first tries to (re)attach to an already-
-# running fleet (issue #212): a live fleet is one detach+attach away, so there's no
-# need to walk the heavier fleet-up/restore machinery — fleet-attach.sh handles the
-# single-fleet-straight-in / multiple-fleet-picker / cross-socket cases and exits 10
-# only when nothing is running, at which point we fall through to fleet-up (which
-# infers the repo from this checkout). With args (an explicit repo/dir/flags) the
-# operator is naming a fleet to bring up, so go straight to fleet-up; any of its
-# flags pass through.
+# cf — go to your fleet. One login runs ONE fleet (issue #979). With NO args it
+# first tries to (re)attach to it when it is running (issue #212) — fleet-attach.sh
+# exits 10 only when nothing is running, and then fleet-up brings it up (creating
+# it, named "fleet", when this login has none; inferring the repo from this
+# checkout, else using the fleet's own). `cf <owner/repo>` goes straight to
+# fleet-up, which ADDS that repo to the fleet (fleet-repo.sh add) and makes it the
+# current repo — it never creates a second fleet. Any fleet-up flag passes through.
 cf() {
   local bin="${${(%):-%x}:h:h}/bin"   # this file lives at <fleet>/shell/cw.zsh
   if [ $# -eq 0 ] && [ -x "$bin/fleet-attach.sh" ]; then

@@ -508,6 +508,14 @@ _conf_val() {
   sed -n 's/^[[:space:]]*'"$2"'[[:space:]]*=[[:space:]]*\([^#]*\).*/\1/p' "$1" | tail -1 | tr -d "\"' 	"
 }
 
+# _gconf_val <KEY> → the login-wide value: the login's settings file (issue #979),
+# else the install's fleet.conf it replaces (dual-read).
+_gconf_val() {
+  _gv=$(_conf_val "$conf_dir/fleet.settings" "$1")
+  [ -n "$_gv" ] || _gv=$(_conf_val "$(dirname "$0")/../fleet.conf" "$1")
+  printf '%s' "$_gv"
+}
+
 # _conf_has <file> <KEY> → 0 iff the file assigns KEY (uncommented), even to "".
 _conf_has() {
   [ -f "$1" ] && grep -Eq "^[[:space:]]*(export[[:space:]]+)?$2[[:space:]]*=" "$1"
@@ -975,7 +983,7 @@ fsev=''
 if [ -n "$fsev" ]; then
   fmb=$(printf '%s' "$fsev" | cut -f1); fcpu=$(printf '%s' "$fsev" | cut -f2)
   fet=$(printf '%s' "$fsev" | cut -f3)
-  fwmb="${FLEET_FSEVENTSD_WARN_MB:-$(_conf_val "$(dirname "$0")/../fleet.conf" FLEET_FSEVENTSD_WARN_MB)}"
+  fwmb="${FLEET_FSEVENTSD_WARN_MB:-$(_gconf_val FLEET_FSEVENTSD_WARN_MB)}"
   case "$fwmb" in ''|*[!0-9]*) fwmb=1024 ;; esac
   if awk -v m="$fmb" -v c="$fcpu" -v w="$fwmb" 'BEGIN{ exit !((m+0 >= w+0) || (c+0 >= 90)) }'; then
     warn machine "fseventsd at ${fmb} MB RSS, ${fcpu}% CPU, up ${fet} — over the ${fwmb} MB / 90% line; new sessions stall at spawn while it is bloated (issue #889). Fix: \`sudo killall fseventsd\` — launchd restarts it at once"
@@ -992,9 +1000,9 @@ tcps=''
 #    hits: the global cap, or the per-fleet caps' sum when every fleet has one and
 #    they add up to less. Past 2 sessions per core the box is overcommitted before
 #    a single session does anything expensive.
-gmax="${FLEET_GLOBAL_MAX_SESSIONS:-$(_conf_val "$(dirname "$0")/../fleet.conf" FLEET_GLOBAL_MAX_SESSIONS)}"
+gmax="${FLEET_GLOBAL_MAX_SESSIONS:-$(_gconf_val FLEET_GLOBAL_MAX_SESSIONS)}"
 case "$gmax" in ''|*[!0-9]*) gmax=8 ;; esac
-gfmax=$(_conf_val "$(dirname "$0")/../fleet.conf" FLEET_MAX_SESSIONS)
+gfmax=$(_gconf_val FLEET_MAX_SESSIONS)
 csum=0; cn=0; cunl=0
 if [ -d "$conf_dir" ]; then
   while IFS= read -r cf; do
@@ -1075,7 +1083,6 @@ fi
 # pane when the fleet is up ($TMUX + $TMUX_PANE — exactly the hook's inputs, so the
 # pane→session→conf hop is exercised too), else resolved by session name.
 hc="$(dirname "$0")/fleet-hook-conf.sh"
-gconf="$(dirname "$0")/../fleet.conf"
 if [ ! -f "$hc" ]; then
   warn handoff "bin/fleet-hook-conf.sh missing — the Stop hook cannot read FLEET_AUTO_HANDOFF_PCT from the conf, so the auto-handoff nudge is inert (#561); run /fleet-sync-install"
 elif [ -d "$conf_dir" ]; then
@@ -1084,7 +1091,7 @@ elif [ -d "$conf_dir" ]; then
     case "$cf" in */fleets/*/conf) sess=${cf%/conf}; sess=${sess##*/} ;; *) sess=$(basename "$cf" .conf) ;; esac
     # what the operator SET: the per-fleet line, else the global one, else off.
     want=$(_conf_val "$cf" FLEET_AUTO_HANDOFF_PCT)
-    [ -n "$want" ] || want=$(_conf_val "$gconf" FLEET_AUTO_HANDOFF_PCT)
+    [ -n "$want" ] || want=$(_gconf_val FLEET_AUTO_HANDOFF_PCT)
     case "$want" in ''|*[!0-9]*) want=0 ;; esac
     # what the HOOK SEES: the same resolver the hook runs.
     via="session name (fleet not running)"
@@ -1262,8 +1269,8 @@ if [ -d "$conf_dir" ] && [ -x "$dl_sh" ]; then
   while IFS= read -r cf; do
     [ -n "$cf" ] || continue
     case "$cf" in */fleets/*/conf) sess=${cf%/conf}; sess=${sess##*/} ;; *) sess=$(basename "$cf" .conf) ;; esac
-    bd_on=$(_conf_val "$cf" FLEET_BASE_DEPS); [ -n "$bd_on" ] || bd_on=$(_conf_val "$gconf" FLEET_BASE_DEPS)
-    bd_ws=$(_conf_val "$cf" FLEET_WORKTREE_SETUP); [ -n "$bd_ws" ] || bd_ws=$(_conf_val "$gconf" FLEET_WORKTREE_SETUP)
+    bd_on=$(_conf_val "$cf" FLEET_BASE_DEPS); [ -n "$bd_on" ] || bd_on=$(_gconf_val FLEET_BASE_DEPS)
+    bd_ws=$(_conf_val "$cf" FLEET_WORKTREE_SETUP); [ -n "$bd_ws" ] || bd_ws=$(_gconf_val FLEET_WORKTREE_SETUP)
     case "$bd_on:$bd_ws" in 1:*|:*fleet-deps-link*)
       main=$(sh -c '. "$1" 2>/dev/null; printf %s "${FLEET_MAIN:-}"' _ "$cf")
       [ -d "$main" ] && _deps_row "$sess" "$main" ;;
@@ -1303,7 +1310,7 @@ elif [ -d "$conf_dir" ]; then
     case "$cf" in */fleets/*/conf) sess=${cf%/conf}; sess=${sess##*/} ;; *) sess=$(basename "$cf" .conf) ;; esac
     main=$(sh -c '. "$1" 2>/dev/null; printf %s "${FLEET_MAIN:-}"' _ "$cf")
     [ -n "$main" ] || { warn trust "$sess: conf has no FLEET_MAIN — cannot check checkout trust"; continue; }
-    pretrust=$(_conf_val "$cf" FLEET_PRETRUST); [ -n "$pretrust" ] || pretrust=$(_conf_val "$gconf" FLEET_PRETRUST)
+    pretrust=$(_conf_val "$cf" FLEET_PRETRUST); [ -n "$pretrust" ] || pretrust=$(_gconf_val FLEET_PRETRUST)
     verdict=$(sh "$tr_sh" check "$main" 2>/dev/null)
     case "$verdict" in
       trusted)
@@ -1368,7 +1375,7 @@ fi
 # Advice, not a fault — some roots are excluded another way (Privacy list, a volume
 # with indexing off) — so it is INFO. Unset = the sibling layout, nothing to say.
 if [ -d "$conf_dir" ]; then
-  groot=$(_conf_val "$gconf" FLEET_WORKTREE_ROOT)
+  groot=$(_gconf_val FLEET_WORKTREE_ROOT)
   while IFS= read -r cf; do
     [ -n "$cf" ] || continue
     case "$cf" in */fleets/*/conf) sess=${cf%/conf}; sess=${sess##*/} ;; *) sess=$(basename "$cf" .conf) ;; esac

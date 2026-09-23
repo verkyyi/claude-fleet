@@ -64,6 +64,13 @@ if [ -z "${_FLEET_GLOBAL_CONF_SOURCED:-}" ] && [ -z "${FLEET_SKIP_GLOBAL_CONF:-}
   if [ -n "$_flib_dir" ] && [ -f "$_flib_dir/../fleet.conf" ]; then
     . "$_flib_dir/../fleet.conf"
   fi
+  # ONE settings file per login (issue #979): $FLEET_CONF_DIR/fleet.settings, read
+  # AFTER the install's fleet.conf so it wins. The install file stays a dual-read
+  # fallback, so a setup that was never merged (fleet-settings.sh merge) loads
+  # byte for byte as before. Not a `*.conf` on purpose: fleet_each_conf reads every
+  # legacy $FLEET_CONF_DIR/*.conf as a fleet, and `fleet.conf` there would be read
+  # as a fleet named `fleet` — the new default session name.
+  [ -f "$FLEET_CONF_DIR/fleet.settings" ] && . "$FLEET_CONF_DIR/fleet.settings"
   # eval so the space-separated NAME list re-tokenizes under zsh too (an unquoted
   # $var is NOT word-split there); export of a name the conf left unset is harmless.
   eval "export $_FLEET_GLOBAL_ONLY"
@@ -100,6 +107,10 @@ unset _flib_here
 # hand-build a slug/session-suffixed path. For a transition window (land→migrate)
 # the READ-side helpers accept BOTH the new layout and the legacy flat one, so a
 # running fleet keeps working until bin/fleet-migrate-layout.sh moves its state.
+
+# The login's ONE settings file (issue #979) — machine-wide keys and the fleet's
+# settings together. Sourced at the top of this lib after the install fleet.conf.
+fleet_settings_file() { printf '%s/fleet.settings' "$FLEET_CONF_DIR"; }
 
 # Durable per-fleet state dir for <sess> (created on demand). WRITERS use this.
 fleet_state_dir() {
@@ -149,6 +160,20 @@ fleet_each_conf() {
     [ -f "$FLEET_CONF_DIR/fleets/$sess/conf" ] && continue
     printf '%s\t%s\n' "$sess" "$conf"
   done
+}
+
+# The login's fleet (issue #979): one login runs ONE fleet, holding all its repos.
+# Prints that fleet's session when exactly one fleet is configured (rc 0). None
+# configured → nothing, rc 1 (a brand-new fleet is named "fleet"). Two or more — an
+# estate from before the fold (fleet-repo.sh fold) — → nothing, rc 2: there is no
+# single answer, and a caller must never guess one.
+fleet_login_fleet() {
+  local all rest
+  all=$(fleet_each_conf); [ -n "$all" ] || return 1
+  rest=${all#*
+}
+  [ "$rest" = "$all" ] || return 2
+  printf '%s\n' "${all%%	*}"
 }
 
 # repo (owner/name or any remote URL) → the tmux SESSION name of the configured

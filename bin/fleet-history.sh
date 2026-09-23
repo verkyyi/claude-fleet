@@ -88,6 +88,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # resolves per-session via the sessmap / per-session conf below.
 # shellcheck source=/dev/null
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf" 2>/dev/null || true
+_fs="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleet.settings"; [ -f "$_fs" ] && . "$_fs"   # the login's settings win (#979)
 
 
 # --- ledger location: per-fleet (a fleet ≡ a repo), durable across reboots -----

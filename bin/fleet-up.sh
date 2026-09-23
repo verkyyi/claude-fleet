@@ -1,8 +1,15 @@
 #!/bin/bash
 # fleet-up.sh [<owner/repo>] [<checkout-dir>] [--name <session>] [--base <branch>]
 #
-# Bring up a new FLEET: a tmux session pinned to one GitHub repo, with a local
-# checkout (reused if it exists, cloned if it doesn't). With no <owner/repo>,
+# ONE FLEET PER LOGIN (issue #979). A login runs exactly one fleet holding all its
+# repos, so this brings up THE fleet — or, when the login already has one, adds the
+# repo to it and makes it the current repo (fleet-repo.sh add + the current-repo
+# pick), then lands you on it. Creating a SECOND fleet is refused: a second fleet
+# means a second login. A brand-new fleet is named "fleet"; an existing fleet keeps
+# its name (fleet-claude-fleet stays fleet-claude-fleet).
+#
+# Bringing a fleet up: a tmux session with its first repo's local checkout (reused
+# if it exists, cloned if it doesn't). With no <owner/repo>,
 # infers it from the current checkout: run it from inside a git worktree and it
 # uses that repo's 'origin' and that worktree as the checkout dir. Writes the per-fleet conf
 # ($FLEET_CONF_DIR/<session>.conf) the rest of the tooling reads, builds the
@@ -10,7 +17,8 @@
 # reached via prefix+g; there is no standalone 'dash' window), and kicks the
 # collector so the dash has data immediately. See docs/ARCHITECTURE.md.
 #
-# A fleet ≡ a tmux session ≡ one repo. Run once per repo you want to work.
+# A fleet ≡ a tmux session ≡ one login. Run it for every repo you want to work:
+# the first brings the fleet up, each further one adds its repo.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
@@ -20,7 +28,7 @@ die() { echo "fleet-up: $*" >&2; exit 1; }
 usage() { echo "usage: fleet-up.sh [<owner/repo>] [<checkout-dir>] [--name <session>] [--base <branch>]" >&2; }
 need_arg() { [ "$1" -ge 2 ] || { usage; die "$2 needs an argument"; }; }   # $1=$#, $2=flag
 
-REPO=""; DIR=""; NAME=""; BASE=""
+REPO=""; DIR=""; NAME=""; BASE=""; FROM_CONF=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --name) need_arg "$#" --name; NAME="$2"; shift 2;;
@@ -43,13 +51,21 @@ fi
 
 # No <owner/repo> given: infer it from the current checkout ($PWD in a git
 # worktree), and default the checkout dir to that worktree so we reuse it.
+# Outside any checkout, `cf` still means "take me to my fleet" (issue #979): with
+# the login's fleet configured, bring THAT fleet up on its own repo.
 if [ -z "$REPO" ]; then
-  top=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null) \
-    || die "no <owner/repo> given and $PWD is not a git checkout"
-  REPO=$(git -C "$top" remote get-url origin 2>/dev/null) \
-    || die "$top has no 'origin' remote — pass <owner/repo> explicitly"
-  DIR="${DIR:-$top}"
-  echo "fleet-up: inferred $(fleet_norm_repo "$REPO") from $top"
+  if top=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null); then
+    REPO=$(git -C "$top" remote get-url origin 2>/dev/null) \
+      || die "$top has no 'origin' remote — pass <owner/repo> explicitly"
+    DIR="${DIR:-$top}"
+    echo "fleet-up: inferred $(fleet_norm_repo "$REPO") from $top"
+  elif lf=$(fleet_login_fleet) && [ -n "$lf" ]; then
+    REPO=$( . "$(fleet_conf_file "$lf")" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )
+    [ -n "$REPO" ] || die "fleet '$lf' has no FLEET_REPO in $(fleet_conf_file "$lf")"
+    NAME="${NAME:-$lf}"; FROM_CONF=1
+  else
+    die "no <owner/repo> given and $PWD is not a git checkout"
+  fi
 fi
 
 REPO=$(fleet_norm_repo "$REPO")
@@ -61,19 +77,74 @@ case "$REPO" in
   ?*/?*) : ;;
   *) die "invalid repo '$REPO' — expected owner/repo";;
 esac
-# Standard session name: 'fleet-<repo-basename>' so every fleet groups together
-# and its session visibly names its repo. --name overrides verbatim.
-NAME="${NAME:-fleet-$(basename "$REPO")}"
-NAME=$(printf '%s' "$NAME" | tr '.: ' '-')        # tmux session names: no . : space
+DIR_ARG="$DIR"
 DIR="${DIR:-$HOME/projects/$(basename "$REPO")}"
+
+# --- which fleet: the login's one (issue #979) ---
+# The session name no longer derives from a repo. With a fleet configured, THAT is
+# the fleet; with none, a new one is called "fleet". Two or more configured is an
+# estate from before the fold: use the one already hosting this repo, else the one
+# that is up, else refuse — never guess. --name names the fleet explicitly (restore
+# passes it), and a --name that is not the login's fleet would be a second one.
+if [ -n "$NAME" ]; then
+  NAME=$(printf '%s' "$NAME" | tr '.: ' '-')      # tmux session names: no . : space
+  LOGIN=$(fleet_login_fleet); lrc=$?
+  if [ ! -f "$(fleet_conf_file "$NAME")" ] && [ "$lrc" -ne 1 ]; then
+    [ "$lrc" -eq 0 ] || LOGIN="$(fleet_each_conf | cut -f1 | tr '\n' ' ')"
+    die "refusing a second fleet '$NAME' — this login already has '${LOGIN% }'. One fleet per login: \`fleet-up $REPO\` adds the repo to it; a second fleet needs a second login."
+  fi
+else
+  NAME=$(fleet_login_fleet); lrc=$?
+  if [ "$lrc" -eq 1 ]; then
+    NAME=fleet
+  elif [ "$lrc" -eq 2 ]; then
+    NAME=""
+    while IFS=$'\t' read -r s _; do
+      [ -n "$s" ] && fleet_repo_hosted "$s" "$REPO" && { NAME="$s"; break; }
+    done < <(fleet_each_conf)
+    if [ -z "$NAME" ]; then
+      live=$(fleet_sockets)
+      case "$live" in
+        *$'\n'*|'') die "this login has several fleets ($(fleet_each_conf | cut -f1 | tr '\n' ' ')) and none hosts $REPO — fold them into one (fleet-repo.sh fold <from> --into <fleet>), or pass --name <fleet>" ;;
+        *) NAME="$live" ;;
+      esac
+    fi
+  fi
+fi
 
 # Each fleet gets its OWN tmux server on a named socket (== the session name), so
 # one fleet's crash / stray kill-server can't take down the others (issue #159).
 # SOCK is that socket label; every tmux call below names it explicitly because
 # fleet-up runs from a plain shell (no inherited $TMUX for THIS fleet's server).
 SOCK=$(fleet_socket "$NAME")
-tmux -L "$SOCK" has-session -t "$NAME" 2>/dev/null && die "a tmux session '$NAME' already exists (one fleet per repo)"
+LIVE=0; tmux -L "$SOCK" has-session -t "$NAME" 2>/dev/null && LIVE=1
 
+# The fleet already exists (configured) and this is not its conf's own repo: bring
+# the fleet up on its OWN repo (when it is down), then add this one. The fleet
+# conf's FLEET_REPO/MAIN/BASE_BRANCH stay the fleet's — rewriting them to the new
+# repo would re-home every window it already has.
+ADD_REPO=""; ADD_DIR=""; ADD_BASE=""; KEEP_BASE=0
+CONF_R=$(fleet_conf_file "$NAME")
+if [ -f "$CONF_R" ]; then
+  own_repo=$(fleet_norm_repo "$( . "$CONF_R" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )")
+  own_main=$( . "$CONF_R" >/dev/null 2>&1; printf '%s' "${FLEET_MAIN:-}" )
+  own_base=$( . "$CONF_R" >/dev/null 2>&1; printf '%s' "${FLEET_BASE_BRANCH:-}" )
+  if [ -n "$own_repo" ] && [ "$own_repo" != "$REPO" ]; then
+    ADD_REPO="$REPO"; ADD_DIR="$DIR_ARG"; ADD_BASE="$BASE"
+    REPO="$own_repo"; DIR="${own_main:-$HOME/projects/$(basename "$own_repo")}"
+    BASE="${own_base:-}"; [ -n "$BASE" ] && KEEP_BASE=1
+  elif [ -z "$DIR_ARG" ] && [ -n "${own_main:-}" ]; then
+    DIR="$own_main"                                # its own repo: its own checkout
+    # Named by nothing but the conf (cf from outside a checkout): keep its base too.
+    if [ "$FROM_CONF" = 1 ] && [ -z "$BASE" ] && [ -n "${own_base:-}" ]; then
+      BASE="$own_base"; KEEP_BASE=1
+    fi
+  fi
+fi
+
+if [ "$LIVE" = 1 ]; then
+  echo "fleet-up: fleet '$NAME' is already up"
+else
 # --- checkout: reuse if it's already that repo, else clone ---
 if [ -d "$DIR/.git" ]; then
   have=$(fleet_norm_repo "$(git -C "$DIR" remote get-url origin 2>/dev/null)")
@@ -93,8 +164,14 @@ fi
 # Picking this wrong is the fleet's most expensive silent failure — every worker
 # works perfectly onto a branch nobody ships from — so the ONLY answer we accept
 # quietly is the repo's authoritative GitHub default. Everything else speaks up.
-IFS=$'\t' read -r BASE BASE_SRC BASE_DEFAULT \
-  < <(fleet_resolve_base_branch "$REPO" "$DIR" "$BASE")
+# Bringing an existing fleet up only to add ANOTHER repo: its conf already names
+# its base — use it as is, never re-resolve (or prompt) about a repo you didn't name.
+if [ "$KEEP_BASE" = 1 ]; then
+  BASE_SRC=default; BASE_DEFAULT="$BASE"
+else
+  IFS=$'\t' read -r BASE BASE_SRC BASE_DEFAULT \
+    < <(fleet_resolve_base_branch "$REPO" "$DIR" "$BASE")
+fi
 
 case "$BASE_SRC" in
   default) : ;;   # authoritative — nothing to say
@@ -177,13 +254,34 @@ tmux -L "$SOCK" kill-window -t "$workwin" 2>/dev/null || true
 ( GH_TTL=0 bash "$BIN/tmux-dash-collect.sh" >/dev/null 2>&1 & )
 
 echo "fleet-up: fleet '$NAME' is up (repo=$REPO base=$BASE [$BASE_SRC])"
+fi
+
+# --- a repo the fleet does not host yet: add it, make it the current repo ---
+if [ -n "$ADD_REPO" ]; then
+  if fleet_repo_hosted "$NAME" "$ADD_REPO"; then
+    echo "fleet-up: fleet '$NAME' already hosts $ADD_REPO"
+  else
+    bash "$BIN/fleet-repo.sh" add --session "$NAME" "$ADD_REPO" ${ADD_DIR:+"$ADD_DIR"} ${ADD_BASE:+--base "$ADD_BASE"} \
+      || die "could not add $ADD_REPO to fleet '$NAME'"
+    echo "fleet-up: added $ADD_REPO to fleet '$NAME'"
+  fi
+  fleet_current_repo_set "$NAME" "$ADD_REPO" && echo "fleet-up: current repo → $ADD_REPO"
+elif [ "$LIVE" = 1 ] && [ "$(fleet_current_repo "$NAME")" != all ]; then
+  # Already up on its own repo, and a repo filter is on: pick this one. A fleet
+  # that never picked one (every one-repo fleet) is left exactly as it was.
+  fleet_current_repo_set "$NAME" "$REPO" && echo "fleet-up: current repo → $REPO"
+fi
 
 # --- land the caller on the new fleet ---
 # Each fleet is its OWN tmux server now, so switch-client (same-server only) can't
 # reach it. If we're already attached to ANOTHER fleet, detach this client and
 # re-attach to the new socket in one motion (-E runs post-detach; tmux ≥ 3.2).
 # Outside tmux, just attach the new socket.
-if [ -n "${TMUX:-}" ]; then
+# Already inside this fleet: nothing to switch.
+_here=${TMUX:-}; _here=${_here%%,*}; _here=${_here##*/}
+if [ -n "${TMUX:-}" ] && [ "$_here" = "$SOCK" ]; then
+  :
+elif [ -n "${TMUX:-}" ]; then
   tmux detach-client -E "exec tmux -L '$SOCK' attach -t '$NAME'" 2>/dev/null \
     || echo "          attach:  tmux -L $SOCK attach -t $NAME"
 else

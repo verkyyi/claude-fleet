@@ -28,6 +28,7 @@ main="${1:-}"
 if [ -z "${FLEET_WORKTREE_ROOT+x}" ]; then
   # shellcheck source=/dev/null
   [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
+  _fs="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleet.settings"; [ -f "$_fs" ] && . "$_fs"   # the login's settings win (#979)
   rmain=$(cd "$main" 2>/dev/null && pwd -P) || rmain="$main"
   while IFS=$'\t' read -r s cf; do
     [ -f "$cf" ] || continue

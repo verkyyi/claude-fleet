@@ -13,6 +13,7 @@ set -uo pipefail
 case "$0" in */*) BIN="${0%/*}" ;; *) BIN=. ;; esac   # forkless dirname (issue #888)
 BIN="$(cd "${BIN:-/}" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
+_fs="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleet.settings"; [ -f "$_fs" ] && . "$_fs"   # the login's settings win (#979)
 . "$BIN/usage-lib.sh"
 # The interval-daemon liveness registry + relative-interval thresholds (issue
 # #639). Sourced HERE and not from usage-lib.sh so nothing has to guess a lib's
