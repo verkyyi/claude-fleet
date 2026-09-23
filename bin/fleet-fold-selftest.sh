@@ -189,7 +189,7 @@ leg "2 real run moves idle + hibernating, leaves busy + unbound"
 TB kill-window -t "=$B:notes"
 ovl_before=$(cat "$OVL")
 : > "$CALLS"
-( sleep 2; tmux -L "$B" set -w -t "$W13" @claude_state done ) &
+( sleep 2; tmux -L "$B" set -w -t "$W13" @claude_state "done" ) &
 flip=$!
 out=$(FLEET_FOLD_POLL=1 FLEET_FOLD_WAIT=30 bash "$FR" fold "$B" --into "$A" --wait 2>&1); rc=$?
 wait "$flip" 2>/dev/null
@@ -216,7 +216,7 @@ eq "archived source rc" "$rc" 1; has "archived source msg" "$out" "'$B' is not a
 out=$(bash "$FR" fold "$A" 2>&1); rc=$?
 eq "no --into = usage" "$rc" 2
 # a source that already hosts two repos
-C=fc; mkrepo "$WORK/mainC" o/c
+C="fc"; mkrepo "$WORK/mainC" o/c
 mkdir -p "$FLEET_CONF_DIR/fleets/$C"
 printf 'FLEET_REPO="o/c"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="master"\n' "$WORK/mainC" > "$FLEET_CONF_DIR/fleets/$C/conf"
 out=$(bash "$FR" fold "$A" --into "$C" --dry-run 2>&1); rc=$?
@@ -224,7 +224,7 @@ eq "2-repo source rc" "$rc" 1; has "2-repo source msg" "$out" "$A hosts 2 repos"
 leg "4 refusals"
 
 # ---- 5. a stopped target / a failed restore never retires the source ----------
-D=fd; mkrepo "$WORK/mainD" o/d
+D="fd"; mkrepo "$WORK/mainD" o/d
 mkdir -p "$FLEET_CONF_DIR/fleets/$D"
 printf 'FLEET_REPO="o/d"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="master"\n' "$WORK/mainD" > "$FLEET_CONF_DIR/fleets/$D/conf"
 tmux -L "$D" new-session -d -s "$D" -n dash 'sleep 3600'
