@@ -172,6 +172,16 @@ whose result token — not its exit code — is toasted), and the row-less new t
 a release outside it, and opened on the press the tap's own release would close
 it. `display-menu` holds its caller until the menu closes, so the view spawns it
 and does not wait.
+Its last item, 「恢复已收工…」 (issue #901), and ⌃o on the sidebar (the hub's
+own restore key; `restore` in `dash-keymap.sh --panel sidebar`) open
+`fleet-restore-pick.sh`: the hub's ⌃t landed list (`fleet-history.sh rows`) in a
+`dash-popup.sh` popup, a pick handed to `dash-restore-session.sh` as the hub's ⌃o
+does — but with `FLEET_SPAWN_FOCUS=1`, so the restored window becomes current. A
+PR-less issue row whose `issue-<N>` head has a CLOSED-unmerged PR asks first
+(reopen / restore anyway / cancel): cleanup reaps such a window once it sits
+silent past its grace (#543/#544). A bare ⌃o is VDISCARD to a macOS tty, which
+eats the byte even in cbreak mode, so the view switches that character off
+before curses starts.
 
 How keys reach it — the routing decision. The design keeps the worker the
 active pane (above), so typed keys cannot simply land on the view. Two routes

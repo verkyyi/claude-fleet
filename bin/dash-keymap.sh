@@ -102,8 +102,12 @@ preview ctrl-p alt-p' ;;
 # a dot. One tap on an iPad keyboard, where a ⌃-chord is three. It arrives
 # through the `Any` bind like any typed key (no conf bind), and no tmux prefix is
 # a bare `.`, so it never remaps.
+# `restore` (issue #901) is the hub's own ⌃o: the landed list + restore as one
+# popup (fleet-restore-pick.sh). macOS's tty eats a bare ⌃o as VDISCARD, so the
+# view switches that off before curses starts (fleet-sidebar.py main).
 sidebar) TABLE='new ctrl-n alt-n
-menu . .' ;;
+menu . .
+restore ctrl-o alt-o' ;;
 *) echo "dash-keymap.sh: unknown panel '$PANEL' (dash|backlog|config|sidebar)" >&2; exit 2 ;;
 esac
 
