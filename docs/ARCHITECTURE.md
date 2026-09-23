@@ -139,7 +139,10 @@ still never switches on highlight or preview.
 A double-click on the worker while its sidebar is on screen is tmux's stock
 select-word, not zoom (issue #820): the gate is `@sidebar_worker` set and the
 window not zoomed, so a zoomed worker and a sidebar-less window keep
-double-click-to-zoom; `DoubleClick1Border` is unchanged.
+double-click-to-zoom. A double-click on the sidebar/worker divider zooms the
+worker (issue #823) — tmux gives that border to the sidebar, so its first press
+enters navigation and the fleet-sidebar `DoubleClick1Border` bind zooms
+`@sidebar_worker` instead of re-entering it.
 ONE input line closes the list (issue #896; the hints it replaced live in the
 `?` sheet's "task sidebar" group). Away from the sidebar it is a bare `›`; with
 the keyboard there (a tap anywhere on it, prefix E) it shows a dim `› 新会话名…`,

@@ -444,6 +444,18 @@ try:
     wait_for(lambda: view_on(w1) == [side], 'unzoom by double-click lost the sidebar view')
     check(tm('display-message', '-p', '-t', p1, '#{pane_in_mode}') == '0',
           'double-click on a zoomed worker entered copy mode')
+    # The sidebar/worker divider is the sidebar's border, so its double-click
+    # runs through navigation — and must still zoom the worker (issue #823).
+    divider = int(tm('display-message', '-p', '-t', side, '#{pane_width}'))
+    click(side, row=5, column=divider, count=2)
+    wait_for(lambda: zoomed(w1) == '1', 'double-click on the divider did not zoom the worker')
+    check(tm('display-message', '-p', '-t', w1, '#{pane_id}') == p1,
+          'double-click on the divider zoomed the sidebar, not the worker')
+    check(not navigation(), 'double-click on the divider left sidebar navigation on')
+    tm('resize-pane', '-Z', '-t', p1)
+    wait_for(lambda: view_on(w1) == [side] and
+             tm('display-message', '-p', '-t', side, '#{pane_pid}') == side_pid,
+             'unzoom after a divider double-click lost the sidebar view')
 
     # Blank space and rapid repeat clicks are focus targets too. The
     # release/double-click events must not silently reset the custom key table.
