@@ -1418,7 +1418,7 @@ _repo_block() {
 
   # deploy — merged ≠ live (#541); REF wins over CHECK when both are set
   if [ -n "$dref" ]; then
-    case "$dref" in "~/"*) dref="$HOME/${dref#\~/}" ;; esac
+    case "$dref" in \~/*) dref="$HOME/${dref#\~/}" ;; esac
     if git -C "$dref" rev-parse --verify -q HEAD >/dev/null 2>&1; then
       pass deploy "$r: FLEET_DEPLOY_REF $dref — a merged PR reads live once its sha reaches that HEAD"
     else
