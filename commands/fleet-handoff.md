@@ -133,8 +133,20 @@ Then take the FIRST matching case:
 
 3. **`DEST=file`, OR any fall-through from above** → **FILE storage**, always
    **OUTSIDE the repo**, same convention for every seat:
-   `~/.claude/handoff/<session>-<YYYY-MM-DD>.md` (create the dir). **Never commit it.**
-   Add a `-<slug>` suffix when a session hands off more than one task.
+   the path the helper prints (create the dir). **Never commit it.**
+   Pass `--slug <slug>` when a session hands off more than one task.
+
+   ```sh
+   DOC=$(~/.claude/fleet/bin/fleet-handoff-file.sh path [--slug <slug>])
+   ~/.claude/fleet/bin/fleet-handoff-file.sh repo   # → the doc's `Repo:` line value
+   ```
+
+   A one-repo fleet gets `~/.claude/handoff/<session>-<YYYY-MM-DD>[-<slug>].md`, as
+   always. A fleet hosting 2+ repos puts this pane's repo in the name —
+   `<session>-<owner-name>-<YYYY-MM-DD>[-<slug>].md` — because every repo's file
+   handoffs share one directory and pickup must not resume another repo's (issue
+   #992). Either way, fill the skeleton's `Repo:` line with the second command's
+   output.
 
    > A handoff written *into* the repo used to be the worker path
    > (`doc/handoff/<slug>.md`, committed in the `issue-<N>` worktree). It is
@@ -305,10 +317,30 @@ before reading it:
    gh issue view "$ISSUE" --repo "$FLEET_REPO" --json comments \
      -q 'last(.comments[] | select(.body | contains("<!-- fleet:handoff -->"))) | .body'
    ```
-3. **File-fallback search** — the newest `~/.claude/handoff/<session>-*.md`, when
-   neither above resolves. An old repo-committed handoff may still exist in a repo
-   that has not been cleaned up (`git grep -lI 'Handoff:' -- doc`); read it as
-   history, never write a new one there.
+3. **File-fallback search**, when neither above resolves — ask the helper, never
+   `ls -t` the directory yourself:
+
+   ```sh
+   ~/.claude/fleet/bin/fleet-handoff-file.sh find; echo "rc=$?"
+   ```
+
+   - **rc 0** → the path it printed is this pane's handoff. A one-repo fleet gets
+     the newest `<session>-*.md`, as always. A fleet hosting 2+ repos gets the
+     newest file attributed to THIS pane's repo (`fleet_window_repo`): by the
+     repo in its name, else its `Repo:` line, else the repo named in its text —
+     and it also searches the old names of fleets folded into this one
+     (`fleet-repo.sh fold`'s archive), attributed to the repo that fleet hosted.
+   - **rc 4 (AMBIGUOUS)** → it did NOT pick: every line is
+     `<path>\t<repo|?>\t<mtime>`, either because a file whose repo is unknown is
+     newer than this repo's newest, or because only other repos' / unknown files
+     exist. **Never pick one yourself** — ask the operator which to resume
+     (`AskUserQuestion`, one option per path, newest first; resume none is a fine
+     answer), then treat the choice as an explicit `<source>`.
+   - **rc 1** → no file handoff exists; say so.
+
+   An old repo-committed handoff may still exist in a repo that has not been
+   cleaned up (`git grep -lI 'Handoff:' -- doc`); read it as history, never write
+   a new one there.
 
 Then run the repo-shipped base skill **`~/.claude/skills/handoff/SKILL.md` PICK-UP
 mode verbatim** on the resolved source:
