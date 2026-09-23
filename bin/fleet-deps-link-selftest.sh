@@ -38,6 +38,13 @@
 #              while its lockfile is unchanged (one `still failing since` line, then
 #              silence), a lockfile change retries it, `--refresh-base <main> <dir>`
 #              forces it, and a success clears the marker.
+#   TRANSIENT  (issue #1028) the install's output classifies a failure: network /
+#              corrupt cache retries itself with doubling backoff (npm cache verify
+#              first after corruption) and parks only past the cap; lock drift,
+#              native build, lifecycle script and unknown park at once; a legacy
+#              (unclassified) marker is retried once.
+#   DOCTOR     fleet-doctor's deps row: `failing (transient, retry at …)` vs
+#              `failing (parked: <why>)`.
 #   PRIME      --prime-base installs + stamps every lockfile dir (npm / yarn / pnpm
 #              each with its frozen-lockfile form); --base-status counts them; a
 #              tracked lockfile the install rewrote is restored (base stays clean).
@@ -248,6 +255,7 @@ for pm in npm yarn pnpm; do
   cat > "$FB/$pm" <<FAKE
 #!/bin/sh
 printf '%s %s %s\n' "\$(pwd -P)" "$pm" "\$*" >> "$WORK/pm.calls"
+[ -z "\${FAKE_OUT:-}" ] || printf '%b\\n' "\$FAKE_OUT" >&2
 [ "\${FAKE_RC:-0}" = 0 ] || exit "\$FAKE_RC"
 mkdir -p node_modules/fresh-from-$pm
 [ "$pm" != yarn ] || printf '# rewritten by yarn\\n' >> yarn.lock   # yarn v1 does this for real
@@ -298,12 +306,91 @@ out=$("$DL" --refresh-base "$MAIN" "$NEW" "$NEW")
 [ -z "$out" ] && [ ! -s "$WORK/pm.calls" ] || fail "REFRESH: a quiet run must install nothing" "$out"
 ok "REFRESH: changed lockfile ⇒ reinstall + stamp ⇒ link; failure ⇒ parked until the lock changes or a forced retry; quiet run is a no-op"
 
+# ---- TRANSIENT (issue #1028) ------------------------------------------------
+# The install's output classifies the failure: a transient one (network, a corrupt
+# npm cache/extract) retries itself with backoff and is parked only past the cap;
+# a deterministic one (lock drift, native build, …) parks at once, as in #1026.
+mk() { cut -d' ' -f"$1" "$MAIN/node_modules/.fleet-install-failed" 2>/dev/null; }
+T0=2000000000; export FLEET_BASE_DEPS_RETRY_BASE=300 FLEET_BASE_DEPS_RETRY_CAP=1000
+CORRUPT='npm warn tarball tarball data for yallist@4.0.0 seems to be corrupted. Trying again.\nnpm error code ENOENT\nnpm error ENOENT: Cannot cd into /x/node_modules/yallist'
+: > "$WORK/pm.calls"
+out=$(FAKE_RC=1 FAKE_OUT="$CORRUPT" FLEET_DEPS_NOW=$T0 "$DL" --refresh-base "$MAIN" .)
+[ "$out" = "install-failed:rc=1 ." ] || fail "TRANSIENT: corrupt-cache failure verdict" "$out"
+[ "$(mk 4) $(mk 5) $(mk 6) $(mk 7)" = "transient corrupt-cache 1 $T0" ] \
+  || fail "TRANSIENT: 1st failure ⇒ transient, retry due next tick" "$(cat "$MAIN/node_modules/.fleet-install-failed")"
+grep -q "$MAIN FAILED (rc=1, transient: corrupt-cache) — left unstamped; retry 2 at" "$WORK/base-deps.log" \
+  || fail "TRANSIENT: failure + class logged" "$(tail -3 "$WORK/base-deps.log")"
+out=$(FLEET_DEPS_NOW=$T0 "$DL" --base-status "$MAIN")
+printf '%s\n' "$out" | grep -q '^summary .* failing=1 .* failing-transient=1 next-retry=next-tick parked-causes=-$' \
+  || fail "TRANSIENT: status says transient, due" "$out"
+# Next tick: retried — `npm cache verify` first (the last failure was corruption).
+: > "$WORK/pm.calls"
+out=$(FAKE_RC=1 FAKE_OUT="$CORRUPT" FLEET_DEPS_NOW=$T0 "$DL" --refresh-base "$MAIN")
+[ "$out" = "install-failed:rc=1 ." ] || fail "TRANSIENT: next tick must retry" "$out"
+[ "$(cat "$WORK/pm.calls")" = "$MAIN npm cache verify
+$MAIN npm ci" ] || fail "TRANSIENT: expected cache verify, then npm ci" "$(cat "$WORK/pm.calls")"
+[ "$(mk 6) $(mk 7)" = "2 $((T0 + 300))" ] || fail "TRANSIENT: 2nd failure ⇒ retry after RETRY_BASE" "$(cat "$MAIN/node_modules/.fleet-install-failed")"
+# Before it is due: silent, nothing run; the dry run says why; status names the time.
+: > "$WORK/pm.calls"
+out=$(FAKE_RC=1 FLEET_DEPS_NOW=$((T0 + 100)) "$DL" --refresh-base "$MAIN")
+[ -z "$out" ] && [ ! -s "$WORK/pm.calls" ] || fail "TRANSIENT: a retry not yet due must be silent" "$out / $(cat "$WORK/pm.calls")"
+out=$(FLEET_DEPS_NOW=$((T0 + 100)) "$DL" --dry-run --refresh-base "$MAIN")
+[ "$out" = "skipped:retry-later ." ] || fail "TRANSIENT: dry run names the pending retry" "$out"
+out=$(FLEET_DEPS_NOW=$((T0 + 100)) "$DL" --base-status "$MAIN")
+printf '%s\n' "$out" | grep -q '^summary .* failing-transient=1 next-retry=20[0-9-]*T[0-9:]*Z parked-causes=-$' \
+  || fail "TRANSIENT: status carries the retry time" "$out"
+# Due ⇒ retried, the delay doubles …
+out=$(FAKE_RC=1 FAKE_OUT="$CORRUPT" FLEET_DEPS_NOW=$((T0 + 300)) "$DL" --refresh-base "$MAIN")
+[ "$(mk 6) $(mk 7)" = "3 $((T0 + 900))" ] || fail "TRANSIENT: 3rd failure ⇒ the delay doubles" "$out / $(cat "$MAIN/node_modules/.fleet-install-failed")"
+# … until the next retry would land past RETRY_CAP after the first failure ⇒ parked.
+out=$(FAKE_RC=1 FAKE_OUT="$CORRUPT" FLEET_DEPS_NOW=$((T0 + 900)) "$DL" --refresh-base "$MAIN")
+[ "$(mk 4) $(mk 5) $(mk 6)" = "parked corrupt-cache 4" ] || fail "TRANSIENT: past the cap ⇒ parked" "$(cat "$MAIN/node_modules/.fleet-install-failed")"
+grep -q "past the 1000s retry window; parked until the lockfile changes" "$WORK/base-deps.log" || fail "TRANSIENT: park logged" "$(tail -3 "$WORK/base-deps.log")"
+: > "$WORK/pm.calls"
+out=$(FAKE_RC=1 FLEET_DEPS_NOW=$((T0 + 99999)) "$DL" --refresh-base "$MAIN")
+[ "$out" = "skipped:failing ." ] && [ ! -s "$WORK/pm.calls" ] || fail "TRANSIENT: a parked transient stays parked" "$out"
+out=$("$DL" --base-status "$MAIN")
+printf '%s\n' "$out" | grep -q '^summary .* failing-transient=0 next-retry=- parked-causes=corrupt-cache$' || fail "TRANSIENT: parked status" "$out"
+# A success clears it all.
+out=$("$DL" --refresh-base "$MAIN" .)
+[ "$out" = "installed ." ] && [ ! -e "$MAIN/node_modules/.fleet-install-failed" ] || fail "TRANSIENT: success clears the marker" "$out"
+# Deterministic: parked on the FIRST failure, never retried on its own.
+out=$(FAKE_RC=1 FAKE_OUT='npm error code EUSAGE\nnpm error `npm ci` can only install packages when your package.json and package-lock.json are in sync.' \
+      FLEET_DEPS_NOW=$T0 "$DL" --refresh-base "$MAIN" .)
+[ "$(mk 4) $(mk 5)" = "parked lock-drift" ] || fail "TRANSIENT: EUSAGE ⇒ parked lock-drift" "$(cat "$MAIN/node_modules/.fleet-install-failed")"
+grep -q "$MAIN FAILED (rc=1, deterministic: lock-drift) — left unstamped; not retried" "$WORK/base-deps.log" || fail "TRANSIENT: deterministic logged" "$(tail -2 "$WORK/base-deps.log")"
+: > "$WORK/pm.calls"
+out=$(FAKE_RC=1 FLEET_DEPS_NOW=$T0 "$DL" --refresh-base "$MAIN")
+[ "$out" = "skipped:failing ." ] && [ ! -s "$WORK/pm.calls" ] || fail "TRANSIENT: a deterministic failure is not retried next tick" "$out"
+grep -q "$MAIN still failing since .* (lock-drift)" "$WORK/base-deps.log" || fail "TRANSIENT: skip line names the cause" "$(tail -2 "$WORK/base-deps.log")"
+out=$("$DL" --base-status "$MAIN")
+printf '%s\n' "$out" | grep -q '^summary .* failing-transient=0 next-retry=- parked-causes=lock-drift$' || fail "TRANSIENT: lock-drift status" "$out"
+# The classifier over the other shapes the issue names.
+for c in 'ERR_PNPM_LOCKFILE_BREAKING_CHANGE  Lockfile /x/pnpm-lock.yaml not compatible|parked lock-format' \
+         'gyp ERR! build error|parked native-build' \
+         'npm error code ELIFECYCLE\nnpm error command sh -c node postinstall.js|parked lifecycle-script' \
+         'npm error code ETIMEDOUT\nnpm error network request to https://registry.npmjs.org failed|transient network' \
+         'npm error code E503\nnpm error 503 Service Unavailable - GET https://registry.npmjs.org/x|transient network' \
+         'npm error code EINTEGRITY|transient corrupt-cache' \
+         'something nobody has seen before|parked unknown'; do
+  rm -f "$MAIN/node_modules/.fleet-install-failed"      # each shape a first failure
+  out=$(FAKE_RC=1 FAKE_OUT="${c%|*}" FLEET_DEPS_NOW=$T0 "$DL" --refresh-base "$MAIN" .)
+  [ "$(mk 4) $(mk 5)" = "${c#*|}" ] || fail "TRANSIENT: classify '${c%|*}' ⇒ ${c#*|}" "$(cat "$MAIN/node_modules/.fleet-install-failed")"
+done
+# A pre-#1028 marker (no class) is retried once, so that failure classifies it.
+printf '%s 2026-09-23T00:00:00Z noted\n' "$(sha "$MAIN/package-lock.json")" > "$MAIN/node_modules/.fleet-install-failed"
+: > "$WORK/pm.calls"
+out=$("$DL" --refresh-base "$MAIN")
+[ "$out" = "installed ." ] && grep -qx "$MAIN npm ci" "$WORK/pm.calls" || fail "TRANSIENT: a legacy marker must be retried once" "$out"
+unset FLEET_BASE_DEPS_RETRY_BASE FLEET_BASE_DEPS_RETRY_CAP
+ok "TRANSIENT: network/corrupt-cache retry with doubling backoff (+ npm cache verify) then park past the cap; lock drift/native/lifecycle park at once; legacy marker retried once"
+
 # ---- PRIME + STATUS ---------------------------------------------------------
 rm -f "$MAIN/tools/node_modules/.fleet-lock-sha"
 printf 'lockfileVersion: 10\n' > "$MAIN/web/pnpm-lock.yaml"     # stale web stamp
 git -C "$MAIN" commit -qam 'bump web deps'
 out=$("$DL" --base-status "$MAIN")
-printf '%s\n' "$out" | grep -qx 'summary fresh=1 stale=1 failing=0 unstamped=1 installing=0 not-installed=0 failing-since=-' || fail "STATUS: counts" "$out"
+printf '%s\n' "$out" | grep -qx 'summary fresh=1 stale=1 failing=0 unstamped=1 installing=0 not-installed=0 failing-since=- failing-transient=0 next-retry=- parked-causes=-' || fail "STATUS: counts" "$out"
 # pnpm is NOT on this (daemon-like) PATH — only on the login shell's (issue #1026).
 LB="$WORK/loginbin"; mkdir -p "$LB"; mv "$FB/pnpm" "$LB/pnpm"
 NOPM=""
@@ -320,10 +407,34 @@ grep -qx "$MAIN/tools yarn install --frozen-lockfile" "$WORK/pm.calls" || fail "
 grep -qx "$MAIN/web pnpm install --frozen-lockfile" "$WORK/pm.calls" || fail "PRIME: pnpm form" "$(cat "$WORK/pm.calls")"
 grep -q "pnpm not on PATH — resolved $LB/pnpm" "$WORK/base-deps.log" || fail "PRIME: pnpm resolved from the login PATH, logged" "$(cat "$WORK/base-deps.log")"
 out=$("$DL" --base-status "$MAIN")
-printf '%s\n' "$out" | grep -qx 'summary fresh=3 stale=0 failing=0 unstamped=0 installing=0 not-installed=0 failing-since=-' || fail "PRIME: status after prime" "$out"
+printf '%s\n' "$out" | grep -qx 'summary fresh=3 stale=0 failing=0 unstamped=0 installing=0 not-installed=0 failing-since=- failing-transient=0 next-retry=- parked-causes=-' || fail "PRIME: status after prime" "$out"
 [ -z "$(git -C "$MAIN" status --porcelain --untracked-files=no)" ] \
   || fail "PRIME: an install left the base dirty (yarn rewrote its lockfile)" "$(git -C "$MAIN" status --porcelain)"
 grep -q 'restored tracked tools/yarn.lock' "$WORK/base-deps.log" || fail "PRIME: restore not logged" "$(cat "$WORK/base-deps.log")"
 ok "PRIME: every lockfile dir installed with its frozen form + stamped; --base-status counts; a rewritten lockfile is restored; pnpm resolved off the login PATH"
+
+# ---- DOCTOR (issue #1028) ---------------------------------------------------
+# fleet-doctor's deps row names the failing class: transient + its retry time vs
+# parked + why. Its _deps_row is evaluated against canned --base-status summaries.
+DOC="$BIN/fleet-doctor.sh"
+row=$(awk '/^_deps_row\(\) \{/{p=1} p{print} p&&/^}/{exit}' "$DOC")
+[ -n "$row" ] || fail "DOCTOR: _deps_row not found in fleet-doctor.sh"
+eval "$row"
+warn() { printf 'WARN %s: %s\n' "$1" "$2"; }; pass() { printf 'PASS %s: %s\n' "$1" "$2"; }
+doc_with() {  # <summary fields> → the row
+  printf '#!/bin/sh\necho "summary %s"\n' "$1" > "$WORK/fake-dl"; chmod +x "$WORK/fake-dl"
+  dl_sh="$WORK/fake-dl" _deps_row fleet "$MAIN"
+}
+base='fresh=2 stale=0 failing=1 unstamped=0 installing=0 not-installed=0 failing-since=2026-09-23T08:00:00Z'
+out=$(doc_with "$base failing-transient=1 next-retry=2026-09-23T09:10:00Z parked-causes=-")
+printf '%s\n' "$out" | grep -q '^WARN deps: .* 1 failing / .* (failing: transient, retry at 2026-09-23T09:10:00Z; since 2026-09-23T08:00:00Z) — a transient' \
+  || fail "DOCTOR: transient row" "$out"
+out=$(doc_with "$base failing-transient=0 next-retry=- parked-causes=lock-drift")
+printf '%s\n' "$out" | grep -q '(failing: parked: lock drift; since 2026-09-23T08:00:00Z) — the install fails on the repo' \
+  || fail "DOCTOR: parked row" "$out"
+out=$(doc_with "${base/failing=1/failing=3} failing-transient=1 next-retry=next-tick parked-causes=lock-drift,native-build")
+printf '%s\n' "$out" | grep -q '(failing: 1 transient, retry at next tick; 2 parked: lock drift/native build; since' \
+  || fail "DOCTOR: mixed row" "$out"
+ok "DOCTOR: the deps row says transient (retry at …) vs parked (why)"
 
 printf 'fleet-deps-link-selftest: %d checks passed\n' "$pass"
