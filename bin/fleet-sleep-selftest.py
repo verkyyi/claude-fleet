@@ -897,6 +897,18 @@ class McpRestartTest(unittest.TestCase):
             self.argv[3].append('--wrong')
             self.assertEqual(self.classify(),set())  # rewritten wrapper cannot prove its child
 
+    def test_busy_classify_drops_the_contract_but_keeps_identification(self):
+        # child_busy (#864) asks "MCP service or agent work?", not "may it sleep?":
+        # an uncontracted server and its job/browser are still infrastructure, an
+        # unidentified process is still work.
+        self.rows[4]=(2,'browser');self.rows[5]=(4,'renderer')
+        readers=(lambda pid:self.argv[pid],lambda pid:self.exes[pid])
+        with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE=''):
+            with self.assertRaisesRegex(ValueError,'restartability contract'):self.classify()
+            self.assertEqual(LIB['MCP']['classify'](self.source,(self.config,None),self.rows,1,*readers,strict=False),{2,4,5})
+            self.argv[2]=self.argv[2]+['--different']
+            self.assertEqual(LIB['MCP']['classify'](self.source,(self.config,None),self.rows,1,*readers,strict=False),set())
+
     def test_uvx_reexec_requires_sibling_binary_and_isolated_entrypoint(self):
         uvx=self.root/'uvx';uvx.touch()
         uv=self.root/'uv';uv.touch()

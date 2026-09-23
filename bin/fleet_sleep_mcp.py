@@ -299,7 +299,12 @@ def contract_hint(source, approved, name):
             % (name, ','.join(listed), conf))
 
 
-def classify(source, inventory, rows, server_pid, argv_reader, exe_reader):
+def classify(source, inventory, rows, server_pid, argv_reader, exe_reader, strict=True):
+    # strict=False answers a narrower question (issue #864): not "may this worker
+    # hibernate?" but "is this configured MCP service, or something the agent is
+    # still running?". An uncontracted, unready or job-owning service is still an
+    # MCP service, so its whole subtree is infrastructure; only the exact-match
+    # identification itself is kept.
     configured, statuses = inventory
     approved = {name.strip() for name in os.environ.get('FLEET_SLEEP_MCP_RESTARTABLE', '').split(',') if name.strip()}
     allowed = set()
@@ -311,6 +316,15 @@ def classify(source, inventory, rows, server_pid, argv_reader, exe_reader):
         if len(matches) != 1:
             continue
         name, conf = matches[0]
+        if not strict:
+            pending = [pid]
+            while pending:
+                node = pending.pop()
+                if node in allowed:
+                    continue
+                allowed.add(node)
+                pending.extend(child for child, (pp, _) in rows.items() if pp == node)
+            continue
         if name not in approved:
             raise ValueError('MCP service %s has no restartability contract (FLEET_SLEEP_MCP_RESTARTABLE); %s'
                              % (name, contract_hint(source, approved, name)))

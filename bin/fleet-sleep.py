@@ -637,25 +637,40 @@ def quiet_native_children(client,session_id):
             raise ValueError('another thread/subagent has an unfinished goal')
 
 
-def quiet_processes(source,config_home=None,background=None):
+def quiet_processes(source,config_home=None,background=None,strict=True):
     # background=None is hibernation's contract: any unverified child vetoes.
-    # A list collects those pids instead (still walking their descendants) — only
-    # failover's hard-wall grace passes one (#871); every other veto still raises.
+    # A list collects those pids instead (still walking their descendants) —
+    # failover's hard-wall grace passes one (#871), and so does child_busy (#864);
+    # every other veto still raises. strict=False is child_busy's question — "is
+    # the agent still running WORK?" — asked from inside its own Stop hook: the
+    # MCP restartability contract is dropped (see fleet_sleep_mcp.classify), the
+    # caller's own ancestry (the hook chain) is never work, and under Claude only
+    # a Bash-tool shell counts — concurrent Stop hooks and caffeinate are Claude's
+    # own per-turn machinery, not a job the worker left running.
     rows=TRANSFER['process_rows']()
     pending=[source['pid']]; seen=set()
+    lenient={} if strict else {'strict':False}   # hibernation's call shape unchanged
+    if not strict:
+        pid=os.getpid()
+        while pid in rows and pid not in seen and pid!=source['pid']:
+            seen.add(pid);pid=rows[pid][0]
     mcp_pids=set()
-    if source['agent']=='claude' and any(pp==source['pid'] for pp,_ in rows.values()):
+    # Non-strict Claude needs no inventory: only a Bash-tool shell counts there,
+    # and no MCP server is one — so a missing/odd ~/.claude.json cannot blind it.
+    if strict and source['agent']=='claude' and any(pp==source['pid'] for pp,_ in rows.values()):
         # Claude starts its stdio MCP servers as direct children and has no RPC
         # to enumerate them; the effective config is rebuilt from its own argv
         # and store (issue #784). Nothing else beneath Claude is infrastructure.
         inventory=MCP['claude_inventory'](ARGV['process_argv'](source['pid']),source['worktree'],config_home)
-        mcp_pids=MCP['classify'](source,inventory,rows,source['pid'],ARGV['process_argv'],ARGV['process_executable'])
+        mcp_pids=MCP['classify'](source,inventory,rows,source['pid'],ARGV['process_argv'],ARGV['process_executable'],**lenient)
     while pending:
         parent=pending.pop()
         if parent in seen: continue
         seen.add(parent)
         for pid,(pp,comm) in rows.items():
-            if pp!=parent or pid==parent: continue
+            if pp!=parent or pid==parent or pid in seen: continue
+            if (not strict and source['agent']=='claude' and parent==source['pid']
+                    and pid not in mcp_pids and not tool_shell(pid)): continue
             pending.append(pid)
             if source['agent']=='claude':
                 if pid in mcp_pids: continue
@@ -678,7 +693,7 @@ def quiet_processes(source,config_home=None,background=None):
                     children=[p for p,(pp,c) in rows.items() if pp==pid and c!='codex-code-mode-host']
                     if children:
                         client=RPC(remote,timeout=5)
-                        try:mcp_pids.update(MCP['classify'](source,MCP['inventory'](client),rows,pid,ARGV['process_argv'],ARGV['process_executable']))
+                        try:mcp_pids.update(MCP['classify'](source,MCP['inventory'](client),rows,pid,ARGV['process_argv'],ARGV['process_executable'],**lenient))
                         finally:client.close()
                 continue
             if pid in mcp_pids:continue
@@ -699,6 +714,36 @@ def quiet_processes(source,config_home=None,background=None):
             try:name=ARGV['process_executable'](pid).name
             except OSError:name='unknown'
             raise ValueError('Codex owns unverified background/tool process: pid=%s executable=%s' % (pid,name))
+
+
+def tool_shell(pid):
+    # Claude's Bash tool (foreground, run_in_background, Monitor) runs every
+    # command as `<shell> -c source <config>/shell-snapshots/snapshot-…`; no hook,
+    # MCP server or helper Claude starts on its own sources one.
+    try:return any('/shell-snapshots/snapshot-' in arg for arg in ARGV['process_argv'](pid))
+    except OSError:return False
+
+
+def child_busy(session,target,pid=0):
+    """The pids a worker's agent still owns beyond its MCP services (issue #864).
+
+    A child whose turn ended while a run_in_background test or a PR-gate waiter
+    (`tools/await-pr.sh`) still runs under it has not STOPPED — it is waiting, and
+    its parent must not hear otherwise. Same walk hibernation vetoes on, minus the
+    restartability contract: an uncontracted MCP server is not work in progress.
+    A known Claude pid (fleet_pane_claude_pid) skips the native inspect.
+    """
+    w=Worker(session,target)
+    if pid:
+        source=dict(agent='claude',pid=pid,codex_identity={},
+                    worktree=w.opt('@worktree') or w.opt('pane_current_path'))
+    else:
+        source=w.inspect()
+    try:config_home=json.loads(w.opt('@sleep_evidence') or '{}').get('config_home')
+    except ValueError:config_home=None
+    background=[]
+    quiet_processes(source,config_home or os.environ.get('CLAUDE_CONFIG_DIR'),background=background,strict=False)
+    return background
 
 
 def source_options(source):
@@ -841,11 +886,12 @@ def park(w):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('action',choices=('hook','scan','status','sleep','wake','park','launch','keep-awake','allow-sleep','holds-exit','deliver','restore','why'))
+    p.add_argument('action',choices=('hook','scan','status','sleep','wake','park','launch','keep-awake','allow-sleep','holds-exit','deliver','restore','why','busy'))
     p.add_argument('--session',default='')
     p.add_argument('window',nargs='?')
     p.add_argument('--dry-run',action='store_true')
     p.add_argument('--record',default='')
+    p.add_argument('--pid',type=int,default=0,help='busy: the Claude pid already resolved for this pane')
     p.add_argument('--dwell',type=float,default=0,help='wake only if the window is still current after this many seconds')
     a=p.parse_intermixed_args()
     if a.action=='hook':
@@ -888,6 +934,13 @@ def main():
             record=dict(session=a.session,window=window,at=time.strftime('%Y-%m-%dT%H:%M:%S'),**result)
             print(json.dumps(record,ensure_ascii=False),flush=True)
         return 0
+    if a.action=='busy':
+        # Exit 0 = busy (prints the pids), 1 = idle, 2 = cannot tell (fleet-sleep:
+        # on stderr). A caller that must not guess treats 2 as idle.
+        pids=child_busy(a.session,a.window or '',a.pid)
+        if not pids: return 1
+        print(' '.join(map(str,pids)))
+        return 0
     w=Worker(a.session,a.window or '')
     if a.action=='why': print(json.dumps({'window':w.window,'reasons':w.unmet_reasons()},ensure_ascii=False))
     elif a.action=='sleep': print(json.dumps(w.sleep(manual=True,dry=a.dry_run)))
@@ -923,4 +976,4 @@ if __name__=='__main__':
     signal.signal(signal.SIGTERM,interrupted)
     try: sys.exit(main())
     except (ValueError,KeyError,OSError,subprocess.SubprocessError) as exc:
-        print('fleet-sleep: '+str(exc),file=sys.stderr); sys.exit(1)
+        print('fleet-sleep: '+str(exc),file=sys.stderr); sys.exit(2 if 'busy' in sys.argv[1:2] else 1)
