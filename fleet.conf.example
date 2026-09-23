@@ -1431,6 +1431,32 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Worktree root directory @group=spawn @tier=advanced @scope=fleet @edit=path
 #FLEET_WORKTREE_ROOT=""
 
+# --- Worktree setup hook (bin/fleet-lib.sh fleet_worktree_setup, issue #885) --
+# A command every NEW worktree runs right after `git worktree add` (issue spawns and
+# scratch sessions), as `<cmd> <worktree> <main>` with cwd = the worktree. Empty
+# (default) = nothing runs, the historic behaviour. A relative path resolves against
+# the install root, a bare name against its bin/, a leading ~/ against $HOME.
+# It can never fail a spawn: a non-zero exit or a timeout is one line in
+# logs/worktree-setup.log and the spawn carries on.
+#
+# The stock hook is bin/fleet-deps-link.sh. Why: each worktree installed its own
+# dependencies from zero — on a JS monorepo 3–6 GB and >200,000 files per spawn, all
+# of them fseventsd events at install and again at reap, and nearly all byte-identical
+# to the base checkout's. With it, a directory whose lockfile matches the base's gets
+# `node_modules → <main>/<dir>/node_modules` instead; a differing lockfile, a missing
+# base install, or a base node_modules that links back into repo source (workspace /
+# file: / link: deps) is left to install as usual. `npm|pnpm|yarn|bun install/add/…`
+# in a linked dir is refused by hooks/bash-guard.py — `fleet-deps-link.sh --unlink
+# <dir>` first. Cost: tools that cache INSIDE node_modules (.vite, .cache) share that
+# cache with the base; a toolchain that resolves real paths sees files under <main>.
+# @label=Worktree setup command @group=spawn @tier=advanced @scope=fleet @edit=path
+#FLEET_WORKTREE_SETUP=""
+
+# Wall-clock budget for FLEET_WORKTREE_SETUP (fleet_timebox). The spawn waits this
+# long at most; a hook still running is killed and logged, the spawn continues.
+# @label=Worktree setup timeout @group=spawn @tier=advanced @scope=fleet @edit=int @unit=sec
+#FLEET_WORKTREE_SETUP_TIMEOUT=120
+
 # --- Warm scratch pool (bin/scratch-pool.sh) ---------------------------------
 # How many pre-started scratch sessions to keep parked and ready. 0 (default) = OFF.
 #

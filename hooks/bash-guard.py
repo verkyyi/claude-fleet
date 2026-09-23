@@ -509,6 +509,137 @@ def _wrapper_form(orig_seg, masked_seg):
 _REWRITES = []
 
 
+# --- SHARED DEPENDENCIES (issue #885) ---------------------------------------
+# fleet-deps-link.sh makes a new worktree's node_modules a SYMLINK into the base
+# checkout's. An install / add / remove there would write straight through the
+# link into the base's live tree — every other worktree borrowing it included.
+# So a package-manager command that mutates node_modules, run in (or above) a
+# linked directory, is denied with the one sanctioned way out: --unlink first.
+# Self-scoping: only a worktree whose git dir carries the fleet-deps-links
+# manifest can trip it, so every other repo and session pays one regex.
+_PM_MUTATING = {
+    "npm":  {"install", "i", "in", "ins", "inst", "insta", "instal", "isnt", "isntall",
+             "add", "ci", "clean-install", "ic", "install-clean", "isntall-clean",
+             "install-test", "it", "install-ci-test", "cit", "clean-install-test", "sit",
+             "uninstall", "un", "unlink", "remove", "rm", "r", "update", "up", "upgrade",
+             "udpate", "dedupe", "ddp", "prune", "rebuild", "rb", "link", "ln"},
+    "pnpm": {"install", "i", "add", "remove", "rm", "uninstall", "un", "update", "up",
+             "upgrade", "prune", "rebuild", "rb", "link", "ln", "unlink", "dedupe", "import"},
+    "yarn": {"", "install", "add", "remove", "upgrade", "up", "link", "unlink", "dedupe",
+             "import"},
+    "bun":  {"install", "i", "add", "a", "remove", "rm", "update", "link", "unlink"},
+}
+_PM_DIR_FLAGS = {"--prefix", "-c", "--dir", "--cwd"}
+_PM_RE = re.compile(r"\s*\(*\s*(?:sudo\s+|\w+=\S+\s+)*(npm|pnpm|yarn|bun)(?=\s|$)")
+
+
+def _unq(tok):
+    return tok.strip("\"'").rstrip(")")
+
+
+def _expand(path, cwd):
+    path = os.path.expanduser(_unq(path))
+    return os.path.normpath(path if os.path.isabs(path) else os.path.join(cwd, path))
+
+
+def _cd_target(masked_seg, orig_seg, cwd):
+    """If the segment is `cd <dir>` / `pushd <dir>`, the new cwd; else None."""
+    m = re.match(r"\s*\(*\s*(?:cd|pushd)(?:\s+(\S+))?\s*\)*\s*$", masked_seg)
+    if not m:
+        return None
+    if not m.group(1):
+        return os.path.expanduser("~")
+    return _expand(orig_seg[m.start(1):m.end(1)], cwd)
+
+
+def _worktree_links(start):
+    """(worktree_root, [linked rel dirs]) for the worktree holding <start>, or None."""
+    d = start
+    while True:
+        g = os.path.join(d, ".git")
+        if os.path.isfile(g):
+            with open(g) as fh:
+                line = fh.readline().strip()
+            if not line.startswith("gitdir:"):
+                return None
+            gd = line[len("gitdir:"):].strip()
+            gd = gd if os.path.isabs(gd) else os.path.join(d, gd)
+            mf = os.path.join(gd, "fleet-deps-links")
+            if not os.path.isfile(mf):
+                return None
+            with open(mf) as fh:
+                links = [l.strip() for l in fh if l.strip()]
+            return (d, links) if links else None
+        if os.path.isdir(g):
+            return None                  # a main checkout: fleet never links there
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None
+        d = parent
+
+
+def check_shared_deps(masked_seg, orig_seg, cwd):
+    m = _PM_RE.match(masked_seg)
+    if not m:
+        return
+    pm = m.group(1)
+    toks = orig_seg[m.end():].split()
+    eff, sub, i = cwd, None, 0
+    while i < len(toks):
+        t = _unq(toks[i]).lower()
+        if t in ("-g", "--global", "--location=global"):
+            return                       # a global install never touches the worktree
+        if t in _PM_DIR_FLAGS and i + 1 < len(toks):
+            eff = _expand(toks[i + 1], cwd)
+            i += 2
+            continue
+        if "=" in t and t.split("=", 1)[0] in _PM_DIR_FLAGS:
+            eff = _expand(toks[i].split("=", 1)[1], cwd)
+            i += 1
+            continue
+        if t.startswith("-"):
+            i += 1
+            continue
+        if sub is None:
+            sub = t
+        i += 1
+    if (sub or "") not in _PM_MUTATING[pm]:
+        return
+    wl = _worktree_links(eff)
+    if not wl:
+        return
+    root, links = wl
+    # The project the command acts on: the nearest package.json at or above eff.
+    proj = eff
+    while proj != root and not os.path.isfile(os.path.join(proj, "package.json")):
+        up = os.path.dirname(proj)
+        if up == proj:
+            break
+        proj = up
+    prel = os.path.relpath(proj, root)
+    if prel.startswith(".."):
+        return
+    hit = []
+    for l in links:
+        nm = os.path.normpath(os.path.join(l, "node_modules"))
+        if (prel == "." or l == prel or l.startswith(prel + "/")
+                or prel == nm or prel.startswith(nm + "/")):
+            hit.append(l)
+    if not hit:
+        return
+    sys.stderr.write(
+        "⛔ BLOCKED by ~/.claude/fleet/hooks/bash-guard.py: `%s %s` here would write "
+        "into SHARED dependencies.\n"
+        "node_modules in %s is a link into the base checkout (fleet-deps-link, issue "
+        "#885) — installing through it changes the base's tree and every worktree "
+        "borrowing it.\n"
+        "这里是共享依赖，先 `~/.claude/fleet/bin/fleet-deps-link.sh --unlink %s` "
+        "(removes the LINK only), then install as usual.\n"
+        % (pm, sub or "", ", ".join(hit), os.path.join(root, prel) if prel != "." else root)
+    )
+    sys.exit(2)
+
+
 def _rewrite(span, new_text, note):
     _REWRITES.append((span[0], span[1], new_text))
     _REWRITE_NOTES.append(note)
@@ -591,8 +722,21 @@ def main():
     # then split the MASKED command into statement segments so unrelated tokens
     # can't combine.
     masked = _mask(cmd)
+    cwd = data.get("cwd") or os.getcwd()
     for a, b in _segments(masked):
         check_segment(masked[a:b].lower(), cmd[a:b].lower(), cmd[a:b], (a, b), masked)
+        # Shared-deps rail (#885) follows `cd` across statements, so the common
+        # `cd pkg && npm install` is judged in pkg, not the pane's cwd.
+        try:
+            nxt = _cd_target(masked[a:b], cmd[a:b], cwd)
+            if nxt is not None:
+                cwd = nxt
+            else:
+                check_shared_deps(masked[a:b].lower(), cmd[a:b], cwd)
+        except SystemExit:
+            raise
+        except Exception:
+            pass                         # fail open, as every rail here
 
     if _REWRITES:
         out = cmd
