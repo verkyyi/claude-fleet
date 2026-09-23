@@ -64,14 +64,17 @@ ask() { local k=''; printf '%s ' "$1"; IFS= read -r -n1 k || :; printf '\n'; REP
 if [ "$MODE" = pick ]; then
   command -v fzf >/dev/null 2>&1 || { say 'restore: fzf is missing'; ask '按任意键关闭'; exit 1; }
   US=$'\x1f'
-  rows=$(bash "$BIN/fleet-history.sh" rows 2>/dev/null)
-  [ -n "$rows" ] || { say 'restore: no finished sessions recorded'; ask '按任意键关闭'; exit 0; }
   # Field 1 is the restore target, field 2 a stable key, field 3 the drawn row —
-  # the landed view's own layout, header line included.
-  sel=$(printf '%s\n' "$rows" | fzf --ansi --no-sort --layout=reverse --delimiter="$US" \
+  # the landed view's own layout, header line (or a filler row) included.
+  # Streamed, never collected first: a long ledger takes seconds to render, and
+  # fzf is up and filling meanwhile instead of a blank popup.
+  sel=$(bash "$BIN/fleet-history.sh" rows 2>/dev/null | fzf --ansi --no-sort --layout=reverse --delimiter="$US" \
     --with-nth=3.. --header-lines=1 --prompt='恢复 ▸ ' \
     --header='↵ 恢复并切过去 · esc 取消 · 子任务折叠在父任务下（hub ⌃t 可展开）' \
-    2>/dev/null) || exit 0
+    2>/dev/null)
+  # By the selection, not the exit code: under pipefail a pick made while the
+  # producer was still writing would read as a failure (SIGPIPE).
+  [ -n "$sel" ] || exit 0
   TARGET=${sel%%"$US"*}
 fi
 
