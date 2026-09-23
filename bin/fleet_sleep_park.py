@@ -4,8 +4,13 @@
 park process redraws it on every SIGWINCH and the wake-confirm work (issue #1050)
 passes its own button lines as `footer_lines`. Every fact is optional: a field
 the record or window lacks is left off the card, never guessed (issue #1049).
+
+`WakeButton` + `presses` are the page's one control (issue #1050): ⏎ or a tap
+arms it, a second one ≥`BOUNCE` s later and within the arm window wakes. Pure
+too — the park loop feeds them bytes and a clock.
 """
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -16,6 +21,9 @@ import unicodedata
 HINT = 'Enter this worker to resume the saved conversation.'
 ANSI = re.compile(r'\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])')
 BOLD, DIM, RED, YELLOW, RESET = '\x1b[1m', '\x1b[2m', '\x1b[31m', '\x1b[33m', '\x1b[0m'
+REVERSE = '\x1b[7m'
+SGR_MOUSE = re.compile(r'\x1b\[<(\d+);(\d+);(\d+)([Mm])')
+BOUNCE = 0.3
 PRCI = {'✓': 'checks green', '✗': 'checks failing', '✓↑': 'green, behind base',
         '✓!': 'green, merge conflict', '✓·': 'green, blocked by protection',
         '✓d': 'green, draft', '✓?': 'green, mergeability unknown'}
@@ -215,3 +223,61 @@ def render_park(data, opts, width_, height, footer_lines=None, now=None):
     lines = lines[:max(rows - len(footer) - 1, 1)]
     lines += [''] * max(rows - len(lines) - len(footer) - 1, 0) + [rule] + footer
     return '\n'.join(lines[:rows])
+
+
+class WakeButton:
+    """rest → armed → waking. A press while armed counts only ≥BOUNCE s after
+    the arming one (a key bounce or a double-sent tap is not two presses) and
+    within `arm` s; past the window the arm lapses silently and the next press
+    arms again. Nothing leaves `waking`: the wake respawns this pane."""
+
+    def __init__(self, arm=3.0):
+        self.arm, self.state, self.armed_at = float(arm), 'rest', 0.0
+
+    def press(self, now):
+        """Feed one press; True exactly when it should start the wake."""
+        self.expire(now)
+        if self.state == 'waking': return False
+        if self.state == 'armed':
+            if now - self.armed_at < BOUNCE: return False
+            self.state = 'waking'
+            return True
+        self.state, self.armed_at = 'armed', now
+        return False
+
+    def expire(self, now):
+        """Lapse an arm whose window has passed; True when that changed the state."""
+        if self.state == 'armed' and now - self.armed_at > self.arm:
+            self.state = 'rest'
+            return True
+        return False
+
+    def timeout(self, now):
+        """Seconds until the page must redraw by itself — the next countdown
+        digit, or the lapse — or None: at rest nothing is timed (EPIC #1048 rule 4)."""
+        if self.state != 'armed': return None
+        left = self.arm - (now - self.armed_at)
+        if left <= 0: return 0
+        return left - (math.ceil(left) - 1) + 0.01
+
+    def lines(self, now):
+        if self.state == 'waking':
+            return [YELLOW + REVERSE + ' ↻ waking… ' + RESET]
+        if self.state == 'armed':
+            left = max(math.ceil(self.arm - (now - self.armed_at)), 1)
+            return [YELLOW + REVERSE + f' ⏎ again to wake · {left}… ' + RESET]
+        return [REVERSE + ' ⏎ Wake ' + RESET + DIM + '  press ⏎ (or tap) twice to resume' + RESET]
+
+
+def presses(chunk, button_rows):
+    """How many presses one read of the pane's input holds: ⏎ keys, and left
+    clicks (SGR press) on `button_rows` (1-based). Everything else — letters,
+    other escape sequences, clicks elsewhere, releases — is discarded here and
+    never reaches anything (EPIC #1048 rule 3)."""
+    text = chunk.decode('utf-8', 'replace') if isinstance(chunk, bytes) else chunk
+    n = 0
+    for m in SGR_MOUSE.finditer(text):
+        button, row = int(m.group(1)), int(m.group(3))
+        if m.group(4) == 'M' and button & ~(4 | 8 | 16) == 0 and row in button_rows: n += 1
+    rest = ANSI.sub('', SGR_MOUSE.sub('', text)).replace('\r\n', '\r')
+    return n + rest.count('\r') + rest.count('\n')

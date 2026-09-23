@@ -462,8 +462,12 @@ fcfg_enum_options() {
     FLEET_SLEEP)
       printf '%s%s%s\n' \
         observe "$FCFG_US" 'report idle candidates without exiting agents (default)' \
-        on      "$FCFG_US" 'hibernate idle workers and resume on entry' \
+        on      "$FCFG_US" 'hibernate idle workers; wake from the sleeping page' \
         off     "$FCFG_US" 'disable automatic sleep scans' ;;
+    FLEET_SLEEP_WAKE)
+      printf '%s%s%s\n' \
+        confirm "$FCFG_US" 'wake only on a double press of the page Wake (default)' \
+        dwell   "$FCFG_US" 'wake after 2s on the window (old behaviour)' ;;
     FLEET_HANDOFF_DEST)
       printf '%s%s%s\n' \
         comment "$FCFG_US" 'store the handoff as an issue comment (default)' \
@@ -517,6 +521,13 @@ fcfg_validate() {
         case "$val" in
           ''|off|observe|on) : ;;
           *) printf '%s must be off|observe|on or empty (got: %s)' "$key" "$val"; return 1 ;;
+        esac
+        return 0
+      fi
+      if [ "$key" = FLEET_SLEEP_WAKE ]; then
+        case "$val" in
+          ''|confirm|dwell) : ;;
+          *) printf '%s must be confirm|dwell or empty (got: %s)' "$key" "$val"; return 1 ;;
         esac
         return 0
       fi
