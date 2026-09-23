@@ -259,8 +259,9 @@ meanwhile and leaves curses so an inline fallback has a tty); the spawned
 window becomes current and the view follows, and a cap refusal leaves the issue
 filed with a toast, as from the dash.
 Focus cues use the client's key table, not just `pane_active`: an amber
-**TASKS · INPUT** pane border means sidebar navigation, a blue **WORKER · INPUT**
-badge means worker input, while the `▶` row always identifies the current task.
+**TASKS** pane border means sidebar navigation, a blue **WORKER**
+badge means worker input — colour only, the border text is the same focused or
+not (issue #999), while the `▶` row always identifies the current task.
 There is no title row inside the sidebar; task descriptions start at row zero.
 The spinner samples the worker screen for stuck-working detection instead of
 using window activity, which includes sidebar repaints. The view exits if its
