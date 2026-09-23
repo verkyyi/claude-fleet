@@ -225,6 +225,19 @@ migrated_stamp() {
   return 0
 }
 
+# reported_restore <window> <prior> — put back the @reported a window carried
+# BEFORE this move stamped its own suppression (issue #936). @reported means one
+# thing: "this session's outcome has reached its parent". The move's `1` is only
+# a pre-exit mute for the SessionEnd backstop, so every path that leaves a window
+# alive — the resumed one, or an old one left as is after a failed exit — hands
+# back the prior value: a delivered MERGED stays delivered (no late "stopped"
+# duplicate after the move), an unreported session still owes its report.
+reported_restore() {
+  if [ "${2:-}" = 1 ]; then TM set-window-option -t "$1" @reported 1 2>/dev/null
+  else TM set-window-option -t "$1" -u @reported 2>/dev/null; fi
+  return 0
+}
+
 migrate_one() {
   local lockdir rc
   lockdir=$(wopt "$1" '#{@worktree}')
@@ -300,7 +313,9 @@ migrate_one_body() {
   # (issue #574) so the SessionEnd hook's child-report backstop does not tell this
   # session's PARENT that its child was reaped — seconds before the same session
   # comes back in a new window. The resumed session reports for real when it ships,
-  # and the new window below starts with the stamp cleared.
+  # and the new window below gets back the window's OWN prior value (issue #936):
+  # read here, before the stamp overwrites it.
+  local prior_reported; prior_reported=$(wopt "$wid" '#{@reported}')
   TM set-window-option -t "$wid" @reported 1 2>/dev/null
   # …and the same "not a death" fact, stated to the REAPERS (issue #550). From here
   # until the new window is bound, this worktree has no window and no @issue
@@ -331,7 +346,7 @@ migrate_one_body() {
     sleep 1
   done
   if [ "$alive" = 1 ]; then
-    lease_drop "$ldir"; say "  ✗ $name ($wid): Claude (pid $cpid) did not exit within ${EXIT_WAIT}s — left as is"; skipped=$((skipped+1)); return 0
+    lease_drop "$ldir"; reported_restore "$wid" "$prior_reported"; say "  ✗ $name ($wid): Claude (pid $cpid) did not exit within ${EXIT_WAIT}s — left as is"; skipped=$((skipped+1)); return 0
   fi
   # --force-bg: Claude is verified gone — stop what it left running (only a pid
   # whose start fingerprint still matches; a reused pid is never touched) and
@@ -364,7 +379,7 @@ migrate_one_body() {
   if ! window_closed "$wid"; then
     # … or it doesn't (FLEET_CLOSE_ON_EXIT=0): Claude is verified gone, the pane is
     # at its `exec $SHELL` — relaunch right there, keeping the window.
-    fleet_pane_claude_pid "$wid" "$SOCK" >/dev/null 2>&1 && { lease_drop "$ldir"; say "  ✗ $name ($wid): a Claude is back under the pane — not typing"; skipped=$((skipped+1)); return 0; }
+    fleet_pane_claude_pid "$wid" "$SOCK" >/dev/null 2>&1 && { lease_drop "$ldir"; reported_restore "$wid" "$prior_reported"; say "  ✗ $name ($wid): a Claude is back under the pane — not typing"; skipped=$((skipped+1)); return 0; }
     TM clear-history -t "$wid" 2>/dev/null || :     # drop the old limit banner (stale-banner cascade guard)
     migrated_stamp "$wid" "$wall"
     SK -t "$wid" -l "$cmd" 2>/dev/null; SK -t "$wid" Enter 2>/dev/null
@@ -408,9 +423,11 @@ migrate_one_body() {
   # bindings are already in place, and a lease held across it would only delay the
   # janitor for no further protection.
   lease_drop "$ldir"
-  # …and clear the pre-exit suppression: the resumed session still owes its parent a
-  # report, and (on the CLOSE_ON_EXIT=0 branch) $nw IS the window that carries it.
-  TM set-window-option -t "$nw" -u @reported 2>/dev/null
+  # …and lift the pre-exit suppression back to the window's own value (issue #936):
+  # a session that had NOT reported still owes its parent one — and (on the
+  # CLOSE_ON_EXIT=0 branch) $nw IS the window that carries it — while one whose
+  # MERGED/FAILED already reached the parent must not send a late "stopped".
+  reported_restore "$nw" "$prior_reported"
   # 5. verify: the resumed process's token, read out of its environment.
   local ncp="" nl=""
   for ((i=1; i<=BOOT_WAIT; i++)); do
