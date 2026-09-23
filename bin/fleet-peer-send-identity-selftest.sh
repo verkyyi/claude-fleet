@@ -103,8 +103,8 @@ send() {
 }
 # landed <window-id> <marker> — the marker arrived at that window's inbox, and ONLY there
 landed() {
-  local i
-  for i in $(seq 1 30); do grep -q "$2" "$WORK/got" 2>/dev/null && break; sleep 0.1; done
+  local _
+  for _ in $(seq 1 30); do grep -q "$2" "$WORK/got" 2>/dev/null && break; sleep 0.1; done
   [ "$(grep "$2" "$WORK/got" | cut -f1)" = "in-${1#@}.sock" ]
 }
 one_line() { ok; [ "$lines" -eq 1 ] || fail "$1: exactly one outcome line" "out=[$out] err=[$err]"; }
