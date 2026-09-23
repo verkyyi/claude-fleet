@@ -631,18 +631,31 @@ fleet_current_repo() {
   fi
 }
 
-# fleet_anchor_repo <sess> <window-target> → the repo a session started FROM that
-# window should take (issue #1009): only in a 2+ repo fleet viewing `all`, and only
-# the window's own repo (fleet_window_repo — @repo, never a guess). Prints nothing
-# otherwise — a one-repo fleet, a single repo in view (it still wins), or a
-# window with no repo — and the caller keeps its behavior (no repo / ask).
-fleet_anchor_repo() {
-  local r
-  [ -n "${2:-}" ] || return 0
-  fleet_multirepo "${1:-}" || return 0
-  [ "$(fleet_current_repo "$1")" = all ] || return 0
-  r=$(fleet_window_repo "$1" "$2")
-  [ -n "$r" ] && fleet_repo_hosted "$1" "$r" && printf '%s\n' "$r"
+# fleet_selection_repo <sess> <row-id> → where a session started FROM the highlighted
+# row goes (issues #1009/#997): only in a 2+ repo fleet viewing `all`. <row-id> is a
+# window (`@12` — its repo via fleet_window_repo, never a guess; `none` for a
+# deliberate `@norepo 1` window) or a repo heading, `hdr:<owner/name>` (a hosted
+# repo) or `hdr:none` (the `no repo` group). A trailing `:<anything>` after a window
+# id is ignored, so a caller may always send `<id>:<heading-repo>`. Prints the repo,
+# `none` (start in $HOME, --no-repo), or NOTHING — a one-repo fleet, a single repo
+# in view (it still wins), an unknown window, the `?` heading, a landed row — and
+# the caller keeps today's behavior. The one resolver the sidebar and hub share.
+fleet_selection_repo() {
+  local sess="${1:-}" id="${2:-}" r
+  [ -n "$id" ] || return 0
+  fleet_multirepo "$sess" || return 0
+  [ "$(fleet_current_repo "$sess")" = all ] || return 0
+  case "$id" in
+    hdr:none) r=none ;;
+    hdr:?*/?*) r=$(fleet_norm_repo "${id#hdr:}"); fleet_repo_hosted "$sess" "$r" || r='' ;;
+    @[0-9]*)
+      id=${id%%:*}
+      r=$(fleet_window_repo "$sess" "$id")
+      if [ -n "$r" ]; then fleet_repo_hosted "$sess" "$r" || r=''
+      elif [ "$(_fleet_tmux "$sess" display-message -p -t "$id" '#{@norepo}' 2>/dev/null)" = 1 ]; then r=none; fi ;;
+    *) r='' ;;
+  esac
+  [ -n "$r" ] && printf '%s\n' "$r"
   return 0
 }
 

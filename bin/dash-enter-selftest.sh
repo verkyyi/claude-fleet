@@ -92,7 +92,7 @@ run_enter() {
   PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/tmp" FLEET_SESSION=testsess \
   FLEET_SPAWN_GUARD_MS="${GUARD_MS:-1000}" FLEET_SPAWN_GUARD_SLEEP="${GUARD_SLEEP:-1}" \
   DISPLAY_LOG="$DISPLAY_LOG" SPAWN_LOG="$SPAWN_LOG" \
-    bash "$WORK/bin/dash-enter.sh" 'sess:1' "$1" >"$WORK/out" 2>"$WORK/err"
+    bash "$WORK/bin/dash-enter.sh" "${TARGET:-sess:1}" "$1" ${HREPO+"$HREPO"} >"$WORK/out" 2>"$WORK/err"
 }
 wait_bg() { sleep "${1:-0.6}"; }   # let the backgrounded decider(s) fire
 # clear the debounce timestamp between cases so one case's last-Enter time can't
@@ -176,6 +176,26 @@ grep -q -- '--agent' "$SPAWN_LOG" && fail "D an unknown word: prefix is just a n
 grep -qF 'SPAWN todo: rename things' "$SPAWN_LOG" || fail "D the unknown-prefix name must be kept whole" "$(cat "$SPAWN_LOG")"
 grep -Eq 'codex:\*|claude:\*' "$ENTER" && fail "D dash-enter.sh still parses a codex:/claude: prefix (#559 removed it)" "$(grep -nE 'codex:\*|claude:\*' "$ENTER")"
 ok "D codex:/claude: are inert — the typed text is the name verbatim, no --agent (#559)"
+
+# E. the highlighted row rides to the spawn (issue #997): `<{1}>:<{4}>` becomes
+# --selection, which dash-raw-session.sh resolves (fleet_selection_repo). A value
+# outside the id/repo charset is dropped — it is embedded in a command string.
+reset_debounce; : > "$SPAWN_LOG"
+TARGET='hdr' HREPO='o/beta' GUARD_MS=1000 GUARD_SLEEP=0.2 run_enter 'on beta'
+wait_bg 0.5
+grep -qF -- "--selection='hdr:o/beta'" "$SPAWN_LOG" 2>/dev/null \
+  || grep -qF -- "--selection=hdr:o/beta" "$SPAWN_LOG" || fail "E a heading's {4} rides as --selection=hdr:<repo>" "$(cat "$SPAWN_LOG")"
+reset_debounce; : > "$SPAWN_LOG"
+TARGET='@7' GUARD_MS=1000 GUARD_SLEEP=0.2 run_enter 'on a row'
+wait_bg 0.5
+grep -qF -- "--selection=@7:" "$SPAWN_LOG" || fail "E a session row rides as --selection=@<wid>:" "$(cat "$SPAWN_LOG")"
+reset_debounce; : > "$SPAWN_LOG"
+TARGET='@7' HREPO="x';touch $WORK/pwned;'" GUARD_MS=1000 GUARD_SLEEP=0.2 run_enter 'hostile'
+wait_bg 0.5
+[ -e "$WORK/pwned" ] && fail "E a hostile {4} must never reach the shell"
+grep -qF 'SPAWN hostile' "$SPAWN_LOG" || fail "E a hostile {4} still spawns (today's rule)" "$(cat "$SPAWN_LOG")"
+grep -qE -- "--selection=[^ ]" "$SPAWN_LOG" && fail "E a hostile {4} is dropped, not forwarded" "$(cat "$SPAWN_LOG")"
+ok "E the highlighted row rides to the spawn as --selection; a hostile value is dropped (#997)"
 
 printf '\nselftest OK: %s assertions passed (dash prompt-line paste-storm guard, #531)\n' "$pass"
 exit 0

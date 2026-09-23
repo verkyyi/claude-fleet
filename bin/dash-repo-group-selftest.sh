@@ -15,7 +15,8 @@
 #      name fall back to owner/name for those two only.
 #   B. SIDEBAR — the same groups in the --sidebar frame, its headings bare
 #      (`tokenledger (2)`, no `── `, like the hub list: issue #998), and fleet-sidebar.py's
-#      selectable() never lets the cursor rest on a heading.
+#      selectable() lets the cursor rest only on a heading with a spawn target
+#      (issue #997: `hdr:<repo>` / `hdr:none`), and acts() hands no action one.
 #   C. INERT — every dash bind target (enter, ⌃x reap, ⌃p PR, ⌃o restore, fold
 #      ←/→, pin, rename, answer, migrate) is a no-op on a heading row's `hdr` keys:
 #      no window selected, set, renamed, killed or restored, and no status nag.
@@ -132,8 +133,10 @@ import importlib.util, sys
 spec = importlib.util.spec_from_file_location("sidebar", sys.argv[1])
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 rows = [l.split("|", 4) for l in sys.stdin.read().split("\n") if len(l.split("|", 4)) == 5]
-print(len(rows), len(m.selectable(rows)), "hdr" in m.selectable(rows))' "$BIN/fleet-sidebar.py")
-eq    "B: selectable() skips every heading" "$sel" "7 4 False"
+keys = [k if k.startswith("hdr") else "w" for k in m.selectable(rows)]
+print(len(rows), len(m.sessions(rows)), " ".join(keys), [m.acts(k) for k in keys if k != "w"])' "$BIN/fleet-sidebar.py")
+eq    "B: the cursor stops on each spawn-target heading (#997), acts on none" "$sel" \
+      "7 4 hdr:o/claude-fleet w w hdr:o/tokenledger w hdr:none w ['', '', '']"
 
 # --- C. every bind target is inert on a heading ---------------------------------
 mut='select-window|set-window-option|set-option|set -w|rename-window|kill-|new-window|respawn|swap-|move-|join-pane|display-message [^-]|display-message -[^p]'
@@ -203,8 +206,9 @@ import importlib.util, sys
 spec = importlib.util.spec_from_file_location("sidebar", sys.argv[1])
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 rows = [l.split("|", 4) for l in sys.stdin.read().split("\n") if len(l.split("|", 4)) == 5]
-print(len(rows), len(m.selectable(rows)))' "$BIN/fleet-sidebar.py")
-eq    "E: nothing on an empty sidebar is selectable" "$sel" "3 0"
+print(len(rows), " ".join(m.selectable(rows)), len(m.sessions(rows)))' "$BIN/fleet-sidebar.py")
+eq    "E: an empty sidebar offers only its repo headings (never the hint)" "$sel" \
+      "3 hdr:o/claude-fleet hdr:o/tokenledger 0"
 fleet_current_repo_set alpha o/tokenledger
 eq    "E: picked repo, no sessions — the hint names it" "$(rows)" \
       "hdr|  No sessions in tokenledger — type a name to start one · ⌃n new task"

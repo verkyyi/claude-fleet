@@ -796,26 +796,28 @@ fi
 # ⌃p, ⌃o, fold, pin, rename, answer, migrate) and the sidebar already treat as
 # not-a-row, so no key acts on it. Both surfaces draw it bare, no `── ` rule
 # (issue #998, operator call: the purple / dim-bold paint already sets it apart).
-# The sidebar heading carries the repo
-# (owner/name; '' for `?`/`no repo`) in its otherwise-unused state field — the
-# one field the new-session path may read (EPIC #994). One pass over the repos —
+# Each heading carries its spawn target — owner/name, `none` for `no repo`, ''
+# for `?` — the one thing the new-session path may read (EPIC #994, issue #997):
+# the sidebar in its otherwise-unused state field, the hub in a 4th field fzf
+# never shows (--with-nth=3) and only its ⌃s/⌃n/Enter binds pass on as `{4}`.
+# Both key fields stay `hdr`, so every other bind still ignores it. One pass over the repos —
 # the per-window cost is the RGCNT increment above, and #662's per-frame bound
 # holds.
 if [ "$RGRP" = 1 ]; then
-  hd_v() { local n=${RGCNT[$1]:-0} t
+  hd_v() { local n=${RGCNT[$1]:-0} t tg=${4-$3}
     [ "$n" -gt 0 ] || [ -n "$3" ] || return 0
     t="$2 ($n)"
     if [ "$SIDEBAR" = 1 ]; then
-      buf+="$1	-1	0	0	0	0	0	hdr$US$3$US$US$t$US "$'\n'
+      buf+="$1	-1	0	0	0	0	0	hdr$US$tg$US$US$t$US "$'\n'
     else
-      buf+="$1	-1	0	0	0	0	0	hdr${US}hdr${US}${IN}${t}${R}"$'\n'
+      buf+="$1	-1	0	0	0	0	0	hdr${US}hdr${US}${IN}${t}${R}${tg:+$US$tg}"$'\n'
     fi
   }
   while IFS=$'\t' read -r g nm rp; do
     [ -n "$g" ] && hd_v "$g" "$nm" "$rp"
   done <<< "$RHEADS"
   hd_v "$RNREPO" '? · unknown repo' ''
-  hd_v "$((RNREPO + 1))" 'no repo' ''
+  hd_v "$((RNREPO + 1))" 'no repo' '' none
 fi
 
 # the empty state (issue #998): a frame with no session row says so, and how to

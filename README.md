@@ -339,8 +339,9 @@ are equal — there is no main repo. Once a fleet hosts two:
 - every session carries its repo (`@repo`) and wears a short tag (`tl·issue-12`);
 - the repo picker (tap the fleet name, or the dash's pick key) lists
   `all repos` + each repo, and the pick filters the dash and the backlog;
-- a new session under `all` has no repo and starts in `$HOME`, and the hub opens
-  in `$HOME` too;
+- a new session under `all` starts in the repo of the row you have highlighted —
+  a session or a repo heading like `tokenledger (0)`; a no-repo row (or nothing
+  to go on) starts it in `$HOME`, where the hub opens too;
 - cleanup, PR status, restore and every issue lookup are keyed on (repo, number),
   so repo A's #12 never touches repo B's #12.
 
