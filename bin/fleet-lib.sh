@@ -1724,6 +1724,7 @@ fleet_trash_dir() {
 # or empty for the sibling layout.
 fleet_worktree_root() {
   local r="${FLEET_WORKTREE_ROOT:-}"
+  # shellcheck disable=SC2088  # a LITERAL ~ from a quoted conf value, expanded by hand
   case "$r" in
     '~')   r="$HOME" ;;
     '~/'*) r="$HOME/${r#\~/}" ;;

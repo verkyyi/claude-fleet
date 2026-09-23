@@ -87,6 +87,7 @@ wt="$(fleet_worktree_create "$MAIN" issue-7 master)" || fail "2 create issue-7 u
 listed "$ROOT/repo-issue-7" || fail "2 issue-7 not in git worktree list"
 alloc="$(fleet_scratch_alloc "$MAIN" master)" || fail "2 scratch alloc under ROOT failed"
 [ "$alloc" = "scratch-2	$ROOT/repo-scratch-2" ] || fail "2 scratch alloc under ROOT: '$alloc'"
+# shellcheck disable=SC2088  # a literal ~, as a quoted conf value carries it
 got="$(FLEET_WORKTREE_ROOT='~/wt.noindex' fleet_worktree_dir "$MAIN" issue-8)"
 [ "$got" = "$HOME/wt.noindex/repo-issue-8" ] || fail "2 ~/ not expanded: '$got'"
 ok "2 ROOT set: issue + scratch under ROOT (created on first use), basenames kept, ~/ expanded"
