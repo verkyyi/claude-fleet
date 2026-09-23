@@ -169,7 +169,8 @@ fold_found() {
 fold_move() {
   local out landed
   if [ "$3" = 1 ]; then
-    bash "$BIN/fleet-sleep.sh" wake "$FROM" "$1" >/dev/null 2>&1 \
+    # --over-cap (#1058): the fold moves a worker, it never adds one to the count.
+    bash "$BIN/fleet-sleep.sh" wake "$FROM" "$1" --over-cap >/dev/null 2>&1 \
       || { echo "    $2: wake failed — left in $FROM (fleet-sleep.sh why $FROM $1)"; return 1; }
   fi
   out=$(bash "$BIN/fleet-worker-stop.sh" "$FROM" "$2" 2>/dev/null)

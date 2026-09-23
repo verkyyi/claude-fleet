@@ -45,7 +45,7 @@ R="${E}0m"; US=$'\x1f'
 # for that reason.
 # Keep the column count stable. Codex's agent cell carries an exact cache suffix;
 # the display loop separates it before drawing the ordinary `codex` tag.
-WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{@claude_needs}${US}#{@expand}${US}#{@pin}${US}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}"
+WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{@claude_needs}${US}#{@expand}${US}#{@pin}${US}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -92,7 +92,12 @@ esac; }
 # stale sleeper reads as stale. The epoch is stamped by fleet-sleep.py's phase()
 # — one window option, no sleep-record read per row. m/h/d only, so it fits the
 # 8-cell act column; a missing/garbled stamp leaves the bare `z`. Sets $zage.
-zage_v() { zage=''
+# The field may carry `:cap` (issue #1058: @sleep_wake_deferred rides the same
+# column, so the count stays stable) — an automatic wake waiting for a slot;
+# $zwait is then the row's `z · waiting for a slot` text.
+zage_v() { zage=''; zwait=''
+  case "$1" in *:cap) zwait='z · waiting for a slot' ;; esac
+  set -- "${1%%:*}"
   case "$1" in ''|*[!0-9]*) return 0;; esac
   local d=$(( NOW - $1 )); [ "$d" -lt 0 ] && d=0
   if   [ "$d" -lt 3600 ];  then zage="z $(( d / 60 ))m"
@@ -538,6 +543,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   fleet_reltime "$state_ts" "$NOW"; act=${reltime_out:-}
   acol=$GY; [ -z "$act" ] && act='·'
   # a sleeper's act cell is how long it has slept (issue #1051), not its last turn
+  zwait=''
   if [ "$state" = sleeping ]; then zage_v "$slept"; [ -n "$zage" ] && act=$zage; fi
   # A fresh daemon notice is tied to this exact done turn. Activity invalidates
   # it immediately; a stopped daemon cannot leave a misleading permanent marker.
@@ -764,6 +770,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     [ -n "$repod" ] && label="$label $repod"       # cross-repo child (#1031)
     [ "$pin" = 1 ] && label="* $label"
     [ -n "$kidd" ] && label="$label · $kidd"
+    [ -n "$zwait" ] && label="$label · ${zwait#z · }"   # glyph already reads `z <age>`
     buf+="$rgrp	$pinned	$grk	$gidx	$depth	$rk	$idx	$wid$US$state$US$gl$US$label$US${treed:- }"$'\n'
     continue
   fi
@@ -815,6 +822,9 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # explained by the └ indent under the marked row above it, and marking those too
   # would make the top of the list a wall of pins with no way to see which one is
   # the real handle.
+  # An automatic wake held at the session limit (issue #1058) says so here.
+  [ -n "$zwait" ] && { [ -n "$tagpfx" ] && { tagpfx+=' '; dwidth=$((dwidth+1)); }
+                       tagpfx+="${AM}${zwait}${R}"; dwidth=$(( dwidth + ${#zwait} )); }
   pinpfx=''
   [ "$pin" = 1 ] && { pinpfx='📌 '; dwidth=$(( dwidth + 3 )); }
   pad=$(( USABLE - LEFTW - dwidth - RIGHTW )); [ "$pad" -lt 1 ] && pad=1

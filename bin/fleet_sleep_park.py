@@ -269,6 +269,12 @@ class WakeButton:
         return [REVERSE + ' ⏎ Wake ' + RESET + DIM + '  press ⏎ (or tap) twice to resume' + RESET]
 
 
+def cap_line(n, m):
+    """The armed page's over-limit warning (issue #1058): the second press still
+    wakes — the operator's own wake always goes — so this informs, never blocks."""
+    return YELLOW + f' fleet full {n}/{m} — waking makes {n + 1} ' + RESET
+
+
 def presses(chunk, button_rows):
     """How many presses one read of the pane's input holds: ⏎ keys, and left
     clicks (SGR press) on `button_rows` (1-based). Everything else — letters,

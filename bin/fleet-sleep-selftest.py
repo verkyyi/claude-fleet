@@ -68,7 +68,10 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         (cls.bin/'fleet-transfer.sh').write_text('exec python3 '+str(inspect)+' "$@"\n')
         # Minimal transition lock helper in the sandbox, never the user's leases.
         (cls.bin/'fleet-lib.sh').write_text('fleet_rotate_lease_file() { printf "%s" '+str(cls.root/'lease')+'; }\n'
-            +'fleet_peer_send() { printf "%s\\n" "$2" >> '+str(cls.root/'messages')+'; }\n')
+            +'fleet_peer_send() { printf "%s\\n" "$2" >> '+str(cls.root/'messages')+'; }\n'
+            # The session-limit read (issue #1058): full iff the test wrote <root>/full.
+            +'fleet_load_conf() { :; }\n'
+            +'fleet_cap_full() { [ -s '+str(cls.root/'full')+' ] && cat '+str(cls.root/'full')+'; }\n')
         cls.tm('-f','/dev/null','new-session','-d','-s',cls.socket,'-x','100','-y','30','sleep 300')
         cls.tm('set-option','-g','remain-on-exit','on')
 
@@ -545,6 +548,93 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
             self.assertNotEqual(resumed['native_pid'],self.pid)
             trace=self.root/('input-'+str(resumed['native_pid'])+'.log')
             self.assertEqual(trace.read_bytes(),b'')  # wake itself sends no prompt
+
+    def fleet_full(self,full=True):
+        f=self.root/'full'
+        if full: f.write_text('3 3\n')
+        elif f.exists(): f.unlink()
+
+    def inbox(self):
+        return list((Path(self.env['FLEET_CONF_DIR'])/'fleets'/self.socket/'sleep').glob('inbox-*/*.json'))
+
+    def test_due_loop_waits_for_a_slot_then_runs_once(self):
+        # Issue #1058: a sleeper holds no slot, so an automatic wake at a full
+        # fleet must not push the awake count over — it defers, says so on the
+        # window, and the next tick after a slot frees runs it (late, not twice).
+        module=runpy.run_path(str(self.bin/'fleet-sleep.py'))
+        manifest=self.root/('loop-packet-'+self.pane[1:])/'manifest.json'
+        path=manifest.parent/'loop/state.json';path.parent.mkdir(parents=True)
+        due=time.time()+3600
+        record=dict(id='slot-loop',status='active',agent='claude',thread_id=self.sid,
+                    manifest=str(manifest),worktree=str(self.wt),controller_pid=self.pid,
+                    pane_pid=self.pid,fleet={'session':self.socket,'window_id':self.opt('window_id'),'pane_id':self.pane},
+                    schedule={'prompt':'continue','interval_seconds':3600,'next_run_at':due},deliveries=2)
+        path.write_text(json.dumps(record));self.stamp('@handoff_manifest',manifest)
+        globals_=module['LOOP']['sleep_snapshot'].__globals__
+        self.addCleanup(self.fleet_full,False)
+        with patch.dict(os.environ,self.env),patch.dict(globals_,current=lambda r:None):
+            worker=module['Worker'](self.socket,self.pane)
+            self.assertEqual(worker.sleep(manual=True)['state'],'sleeping')
+            self.fleet_full()
+            with patch.object(module['time'],'time',return_value=due+1):
+                worker.recover();worker.recover()
+            self.assertEqual(self.opt('@worker_lifecycle'),'sleeping')
+            self.assertEqual(self.opt('@sleep_wake_deferred'),'cap')
+            self.assertEqual(self.resume_count(),0)
+            self.fleet_full(False)
+            with patch.object(module['time'],'time',return_value=due+1):worker.recover()
+            self.assertEqual(self.opt('@worker_lifecycle'),'')
+            self.assertEqual(self.opt('@sleep_wake_deferred'),'')
+            self.assertEqual(self.resume_count(),1)
+            self.assertEqual(json.loads(path.read_text())['deliveries'],2)
+
+    def test_message_waits_for_a_slot_and_delivers_once_one_frees(self):
+        self.cli('sleep',self.pane)
+        self.fleet_full();self.addCleanup(self.fleet_full,False)
+        p=subprocess.run(['python3',str(self.bin/'fleet-sleep.py'),'deliver','--session',self.socket,self.pane],
+                         input='held for a slot',env=self.env,text=True,capture_output=True,timeout=50)
+        self.assertEqual(p.returncode,0,p.stderr)
+        self.assertIn('queued — fleet at its session limit',p.stderr)
+        self.assertEqual(self.opt('@worker_lifecycle'),'sleeping')
+        self.assertEqual(self.opt('@sleep_wake_deferred'),'cap')
+        self.assertEqual(len(self.inbox()),1)
+        self.cli('scan')   # still full: the drain retries and defers again
+        self.assertEqual((self.opt('@worker_lifecycle'),self.resume_count(),len(self.inbox())),('sleeping',0,1))
+        self.assertFalse((self.root/'messages').exists() and 'held for a slot' in (self.root/'messages').read_text())
+        # A bare CLI wake at the limit refuses (nothing would retry it) …
+        self.assertIn('fleet full 3/3',self.cli('wake',self.pane,ok=False).stderr)
+        self.assertEqual(self.opt('@worker_lifecycle'),'sleeping')
+        self.fleet_full(False)
+        self.cli('scan')
+        self.assertEqual(self.opt('@worker_lifecycle'),'')
+        self.assertEqual(self.opt('@sleep_wake_deferred'),'')
+        self.assertEqual(self.resume_count(),1)
+        self.assertIn('held for a slot',(self.root/'messages').read_text())
+        self.assertEqual(self.inbox(),[])
+
+    def test_operator_wake_goes_over_the_limit(self):
+        self.cli('sleep',self.pane)
+        self.fleet_full();self.addCleanup(self.fleet_full,False)
+        self.cli('wake',self.pane,'--over-cap')
+        self.assertEqual(self.opt('@worker_lifecycle'),'')
+        self.assertEqual(self.resume_count(),1)
+
+    def test_page_warns_when_full_and_still_wakes(self):
+        # The armed line names the overage; the second press wakes anyway.
+        self.cli('sleep',self.pane)
+        self.fleet_full();self.addCleanup(self.fleet_full,False)
+        self.capture(lambda s:'⏎ Wake' in s)
+        self.assertNotIn('fleet full',self.tm('capture-pane','-p','-t',self.pane))
+        self.tm('send-keys','-t',self.pane,'Enter')
+        screen=self.capture(lambda s:'fleet full' in s)
+        self.assertIn('fleet full 3/3 — waking makes 4',screen)
+        self.assertIn('again to wake',screen)
+        out=os.environ.get('FLEET_SLOTS_EVIDENCE')
+        if out: Path(out).write_text(screen)
+        time.sleep(.4)
+        self.tm('send-keys','-t',self.pane,'Enter')
+        self.await_awake()
+        self.assertEqual(self.resume_count(),1)
 
     def test_claude_mcp_child_sleeps_only_under_the_contract_and_restarts_on_resume(self):
         # A Claude worker's MCP servers are its direct children with no RPC to

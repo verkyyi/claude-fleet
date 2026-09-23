@@ -73,6 +73,31 @@ the resume invocation so a version notification cannot block entry; fresh launch
 keep their normal update policy. Both standalone and npm-installed Codex are
 supported.
 
+### Sleepers and the session limit (issue #1058)
+
+A sleeping worker has no live agent, so it holds no session slot. Both caps —
+`FLEET_GLOBAL_MAX_SESSIONS` and the per-fleet `FLEET_MAX_SESSIONS` — count a
+window only when it is not a panel and its `@worker_lifecycle` is neither
+`sleeping` nor `failed`; `preparing` and `waking` still count. The slots chip
+shows sleepers apart (`slots 12/30 · z8`), and a spawn refused at the limit says
+how many are asleep. A fleet with no sleepers counts exactly as before.
+
+Waking puts a worker back into the count, so each wake source decides what a
+full fleet means for it:
+
+| Wake source | At the limit |
+|---|---|
+| The page's double press, the sidebar menu's Wake (`wake --over-cap`) | wakes anyway, one over; while armed the page reads `fleet full 30/30 — waking makes 31` |
+| An incoming message (`deliver`) | defers — the message is saved first; the scan's drain delivers it once a slot frees |
+| A due loop, a quota-waiting loop finding an account | defers — retried on the next 60 s scan; runs late, never twice |
+| A bare `fleet-sleep.sh wake` | refuses with `fleet full N/M — pass --over-cap to wake anyway` |
+| Spawns | unchanged — refused at the limit, counting awake workers only |
+
+A deferred wake stamps `@sleep_wake_deferred=cap`; its row reads
+`z · waiting for a slot` until the wake runs (or nothing is waiting any more).
+The check and the `waking` stamp are one step under a lock, so a burst of due
+loops cannot push the awake count past the limit.
+
 ## Evidence and exclusions
 
 A real Stop hook binds idle evidence to the native session, owning process and

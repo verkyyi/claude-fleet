@@ -3184,38 +3184,56 @@ fleet_hub_sessions() {
 # dash/plan/backlog are panels — everything else is a Claude working session
 # (the same rule the dashboard uses). Pure tmux + awk, no git/tmux-per-window
 # forks. Prints an integer (0 if tmux isn't running or no fleets are up).
-fleet_session_count() {
-  fleet_list_windows_all '#{session_name} #{window_name}' | awk '
+# A hibernated worker holds NO slot (issue #1058): a window whose
+# @worker_lifecycle is `sleeping` or `failed` has no live agent, so it is left out
+# and tallied apart — `fleet_session_sleepers` prints that tally (the slots chip's
+# `· z8`). preparing / waking still count: the agent is (about to be) live.
+# The lifecycle rides as a trailing ` @L=<value>` field, because a window NAME may
+# itself hold spaces; a reader that never sees the field (no sleepers, an old
+# server) counts exactly as before.
+_fleet_session_tally() {   # → "<awake> <sleepers>" across every fleet
+  fleet_list_windows_all '#{session_name} #{window_name} @L=#{@worker_lifecycle}' | awk '
     { rows[NR]=$0; if ($2=="plan" || $2=="dash") fleet[$1]=1 }
     END {
       for (i=1; i<=NR; i++) {
-        split(rows[i], a, " "); s=a[1]; w=a[2]
-        if (fleet[s] && w!="dash" && w!="plan" && w!="backlog") c++
+        n=split(rows[i], a, " "); s=a[1]; w=a[2]; l=""
+        if (n>=3 && a[n] ~ /^@L=/) l=substr(a[n], 4)
+        if (!fleet[s] || w=="dash" || w=="plan" || w=="backlog") continue
+        if (l=="sleeping" || l=="failed") z++; else c++
       }
-      print c+0
+      print c+0, z+0
     }'
 }
+fleet_session_count() { local t; t=$(_fleet_session_tally); printf '%s\n' "${t%% *}"; }
+fleet_session_sleepers() { local t; t=$(_fleet_session_tally); printf '%s\n' "${t##* }"; }
 
 # CHEAP: count the live Claude WORKING-session windows in ONE fleet session (the
 # per-fleet analogue of fleet_session_count, for issue #70's FLEET_MAX_SESSIONS).
 # Only counts if the session is a real fleet (owns a 'plan'/'dash' hub window);
 # inside it, dash/plan/backlog are panels, everything else is a working session —
 # the same rule the dashboard and the global count use. Prints an integer (0 if
-# the session isn't a fleet, doesn't exist, or tmux isn't running).
-# NB: the hub/panel names (plan/dash/backlog) are duplicated in fleet_session_count
-# above — keep BOTH in sync, or the global and per-fleet caps count different sets.
-fleet_session_count_for() {
-  tmux -L "$(fleet_socket "$1")" list-windows -t "$1" -F '#{window_name}' 2>/dev/null | awk '
-    { name=$0; if (name=="plan" || name=="dash") hub=1; rows[NR]=name }
+# the session isn't a fleet, doesn't exist, or tmux isn't running). Sleeping /
+# failed workers are left out the same way (issue #1058).
+# NB: the hub/panel names (plan/dash/backlog) AND the sleeping/failed rule are
+# duplicated in _fleet_session_tally above — keep BOTH in sync, or the global and
+# per-fleet caps count different sets.
+_fleet_session_tally_for() {   # <sess> → "<awake> <sleepers>" in that fleet
+  tmux -L "$(fleet_socket "$1")" list-windows -t "$1" -F '#{window_name} @L=#{@worker_lifecycle}' 2>/dev/null | awk '
+    { l=""
+      if (match($0, / @L=[^ ]*$/)) { l=substr($0, RSTART+4); name=substr($0, 1, RSTART-1) } else name=$0
+      if (name=="plan" || name=="dash") hub=1; rows[NR]=name; life[NR]=l }
     END {
-      if (!hub) { print 0; exit }
+      if (!hub) { print 0, 0; exit }
       for (i=1; i<=NR; i++) {
         n=rows[i]
-        if (n!="dash" && n!="plan" && n!="backlog") c++
+        if (n=="dash" || n=="plan" || n=="backlog") continue
+        if (life[i]=="sleeping" || life[i]=="failed") z++; else c++
       }
-      print c+0
+      print c+0, z+0
     }'
 }
+fleet_session_count_for() { local t; t=$(_fleet_session_tally_for "$1"); printf '%s\n' "${t%% *}"; }
+fleet_session_sleepers_for() { local t; t=$(_fleet_session_tally_for "$1"); printf '%s\n' "${t##* }"; }
 
 # Cap on concurrent Claude working sessions (issues #28, #70). Returns 0 if a new
 # session may be spawned, non-zero if a cap is already reached. Two ceilings:
@@ -3225,7 +3243,9 @@ fleet_session_count_for() {
 #              session name is passed as $1 (so existing no-arg callers keep the
 #              global-only behaviour unchanged) AND the cap is a positive number.
 # On refusal, prints a human-readable reason on stdout for the caller to surface
-# (tmux display-message); prints nothing when allowed.
+# (tmux display-message); prints nothing when allowed. Both ceilings count AWAKE
+# workers only — a sleeper holds no slot (issue #1058, docs/WORKER-SLEEP.md) —
+# and a sleeper's own wake reads them through fleet_cap_full below.
 # ---- scratch worktree allocation (shared by the ⌃s spawner and the warm pool) --
 # fleet_scratch_alloc <main> <base> — allocate the next free `scratch-<N>` branch
 # and its worktree (fleet_worktree_dir) off origin/<base> (falling back to the local base ref
@@ -3349,20 +3369,47 @@ fleet_session_cap_ok() {
   if [ "$gmax" -ne 0 ]; then                   # 0 ⇒ unlimited
     # count LIVE session windows PLUS spawns still building their window (#531), so
     # a burst of concurrent spawns cannot all slip past before any lands a window.
+    # Sleepers hold no slot (issue #1058); the refusal names them so a full fleet
+    # of sleepers is legible, never a mystery (read only on a refusal).
     n=$(( $(fleet_session_count) + $(fleet_inflight_count) ))
     if [ "$n" -ge "$gmax" ]; then
-      printf 'fleet at capacity: %s/%s Claude sessions running (global) — raise FLEET_GLOBAL_MAX_SESSIONS or close one first' "$n" "$gmax"
+      printf 'fleet at capacity: %s/%s Claude sessions running (global)%s — raise FLEET_GLOBAL_MAX_SESSIONS or close one first' \
+        "$n" "$gmax" "$(_fleet_sleepers_note "$(fleet_session_sleepers)")"
       return 1
     fi
   fi
   if [ -n "$sess" ] && [ "$fmax" -ne 0 ]; then
     n=$(( $(fleet_session_count_for "$sess") + $(fleet_inflight_count "$sess") ))
     if [ "$n" -ge "$fmax" ]; then
-      printf 'fleet at capacity: %s/%s Claude sessions in this fleet — raise FLEET_MAX_SESSIONS or close one first' "$n" "$fmax"
+      printf 'fleet at capacity: %s/%s Claude sessions in this fleet%s — raise FLEET_MAX_SESSIONS or close one first' \
+        "$n" "$fmax" "$(_fleet_sleepers_note "$(fleet_session_sleepers_for "$sess")")"
       return 1
     fi
   fi
   return 0
+}
+_fleet_sleepers_note() { [ "${1:-0}" -gt 0 ] 2>/dev/null && printf ' · z%s sleeping' "$1"; return 0; }
+
+# fleet_cap_full [sess] — the same two ceilings as fleet_session_cap_ok, read for
+# a WAKE rather than a spawn (issue #1058): exit 0 + "<n> <max>" on stdout when a
+# cap is reached (the one that binds — global first), exit 1 + nothing when a
+# sleeper may wake into a free slot. An automatic wake (a due loop, a message)
+# defers on 0; the operator's own wake goes through and the sleeping page quotes
+# the pair as `fleet full N/M — waking makes N+1`.
+fleet_cap_full() {
+  local sess="${1:-}"
+  local gmax="${FLEET_GLOBAL_MAX_SESSIONS:-8}" fmax="${FLEET_MAX_SESSIONS:-0}" n
+  case "$gmax" in ''|*[!0-9]*) gmax=8;; esac
+  case "$fmax" in ''|*[!0-9]*) fmax=0;; esac
+  if [ "$gmax" -ne 0 ]; then
+    n=$(( $(fleet_session_count) + $(fleet_inflight_count) ))
+    [ "$n" -ge "$gmax" ] && { printf '%s %s\n' "$n" "$gmax"; return 0; }
+  fi
+  if [ -n "$sess" ] && [ "$fmax" -ne 0 ]; then
+    n=$(( $(fleet_session_count_for "$sess") + $(fleet_inflight_count "$sess") ))
+    [ "$n" -ge "$fmax" ] && { printf '%s %s\n' "$n" "$fmax"; return 0; }
+  fi
+  return 1
 }
 
 # Compact "slots N/max" chip for the backlog header / dash (issue #331): the
@@ -3371,22 +3418,26 @@ fleet_session_cap_ok() {
 # This makes it expected: reuse fleet_session_count (the SAME cross-fleet count the
 # cap measures — pure tmux+awk, no network) and render an ANSI-truecolor chip:
 # dim with headroom, orange at the last free slot, red at/over the cap. Pass a
-# precomputed count as $1 to avoid a second scan (and for hermetic tests). With the
+# precomputed count as $1 (and sleeper count as $2, default 0 then) to avoid a
+# second scan (and for hermetic tests); sleepers render as `· zN` (#1058). With the
 # cap disabled (gmax=0 ⇒ unlimited) it shows a bare "slots N" (no denominator/color).
 fleet_slots_chip() {
-  local n="${1:-}" gmax="${FLEET_GLOBAL_MAX_SESSIONS:-8}" col reset
+  local n="${1:-}" z="${2:-}" gmax="${FLEET_GLOBAL_MAX_SESSIONS:-8}" col reset t zs=''
   reset=$(printf '\033[0m')                          # POSIX ESC[0m — $'…' is a bashism dash ignores
   case "$gmax" in ''|*[!0-9]*) gmax=8;; esac
-  [ -n "$n" ] || n=$(fleet_session_count)
+  if [ -z "$n" ]; then t=$(_fleet_session_tally); n=${t%% *}; [ -n "$z" ] || z=${t##* }; fi
   case "$n" in ''|*[!0-9]*) n=0;; esac
+  case "$z" in ''|*[!0-9]*) z=0;; esac
+  # Sleepers hold no slot (issue #1058) — shown apart as `· zN`, only when any.
+  [ "$z" -gt 0 ] && zs=" · z$z"
   if [ "$gmax" -eq 0 ]; then                     # unlimited → no denominator, no color
-    printf 'slots %s' "$n"; return
+    printf 'slots %s%s' "$n" "$zs"; return
   fi
   if   [ "$n" -ge "$gmax" ];       then col='247;118;142'   # full      → red    (P0)
   elif [ "$n" -ge $((gmax - 1)) ]; then col='224;175;104'   # last slot → orange (P1)
   else                                  col='86;95;137'     # headroom  → dim    (GY)
   fi
-  printf '\033[38;2;%sm slots %s/%s %s' "$col" "$n" "$gmax" "$reset"
+  printf '\033[38;2;%sm slots %s/%s%s %s' "$col" "$n" "$gmax" "$zs" "$reset"
 }
 
 # --- backlog modal column geometry (issue #371) ------------------------------
