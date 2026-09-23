@@ -79,7 +79,8 @@
 #   --base-status [<main>]    `<state> <dir>` per lockfile directory (fresh / stale /
 #                             failing / unstamped / installing / not-installed) and a
 #                             closing `summary fresh=… stale=… failing=… unstamped=…
-#                             … failing-since=<oldest ts>|-`.
+#                             … failing-since=<oldest ts>|- failing-transient=<n>
+#                             next-retry=<ts>|- parked-causes=<a,b>|-`.
 #
 # Installs are `nice -n 10`, serial, each under fleet_timebox
 # (FLEET_BASE_DEPS_TIMEOUT, default 900 s), output appended to
@@ -91,6 +92,20 @@
 # hammered the monorepo 535×/day — so a failing dir is skipped, with ONE
 # `still failing since <ts>` log line, until its lockfile changes, a --prime-base,
 # or a `--refresh-base <main> <dir>` forces it.
+#
+# That park is for a DETERMINISTIC failure only (issue #1028). The install's output
+# is classified: a TRANSIENT one — the network (ETIMEDOUT / ECONNRESET / ENOTFOUND /
+# a 5xx), a corrupt cache or extract (`tarball … corrupted`, EINTEGRITY, ENOENT
+# `Cannot cd into …`), a timeout — is retried on its own: the next tick, then
+# FLEET_BASE_DEPS_RETRY_BASE (300 s) doubling, until FLEET_BASE_DEPS_RETRY_CAP
+# (21600 s = 6 h) after the first failure, and only then parked. A corrupt-cache
+# failure runs `npm cache verify` once before its retry. Deterministic = lockfile
+# drift (EUSAGE, ERR_PNPM_OUTDATED_LOCKFILE, …), a lockfile format the manager
+# refuses (ERR_PNPM_LOCKFILE_BREAKING_CHANGE), a node-gyp build, a lifecycle
+# script's exit — and anything unrecognised. The marker then reads
+# `<lock sha> <first ts> <noted|-> <transient|parked> <cause> <attempts>
+#  <retry epoch> <first epoch>`; a pre-#1028 marker (two or three fields) carries
+# no class and is retried once, so it gets one.
 #
 # A manager missing from the daemon's PATH (launchd's is not a login shell's — on a
 # Mac pnpm lives beside a keg-only node@NN) is resolved once per run: the login
@@ -217,12 +232,62 @@ base_state() {
 }
 
 # failed_field <base-dir> <n> → field n of its failure marker (1 = lock sha,
-# 2 = first-failure ts, 3 = `noted` once the skip has been logged), or empty.
+# 2 = first-failure ts, 3 = `noted` once the skip has been logged, 4 = class
+# transient|parked, 5 = cause, 6 = attempts, 7 = retry-at epoch, 8 = first-failure
+# epoch — issue #1028), or empty. A pre-#1028 marker has fields 1-3 only.
 failed_field() {
-  local a="" b="" c=""
+  local f1="" f2="" f3="" f4="" f5="" f6="" f7="" f8=""
   [ -f "$1/node_modules/$FAILED" ] || return 0
-  read -r a b c < "$1/node_modules/$FAILED" || [ -n "$a" ] || return 0
-  case "$2" in 1) printf '%s' "$a" ;; 2) printf '%s' "$b" ;; 3) printf '%s' "$c" ;; esac
+  read -r f1 f2 f3 f4 f5 f6 f7 f8 < "$1/node_modules/$FAILED" || [ -n "$f1" ] || return 0
+  case "$2" in 1) printf '%s' "$f1" ;; 2) printf '%s' "$f2" ;; 3) printf '%s' "$f3" ;; 4) printf '%s' "$f4" ;;
+               5) printf '%s' "$f5" ;; 6) printf '%s' "$f6" ;; 7) printf '%s' "$f7" ;; 8) printf '%s' "$f8" ;; esac
+}
+
+# failed_class <base-dir> → transient | parked. A marker with no class (pre-#1028)
+# reads as transient and due: it is retried once, and that failure classifies it.
+failed_class() {
+  case "$(failed_field "$1" 4)" in parked) echo parked ;; *) echo transient ;; esac
+}
+
+# failed_write <base-dir> <sha> <first ts> <noted|-> <class> <cause> <attempts>
+# <retry epoch> <first epoch> — the one writer of the marker's full form.
+failed_write() {
+  local d="$1"; shift
+  mkdir -p "$d/node_modules" 2>/dev/null
+  printf '%s %s %s %s %s %s %s %s\n' "$@" > "$d/node_modules/$FAILED"
+}
+# failed_note <base-dir> — mark a parked marker's skip as logged, every other field kept.
+failed_note() {
+  local d="$1"
+  failed_write "$d" "$(failed_field "$d" 1)" "$(failed_field "$d" 2)" noted parked \
+    "$(failed_field "$d" 5 | sed 's/^$/unknown/')" "$(failed_field "$d" 6 | sed 's/^$/1/')" \
+    0 "$(failed_field "$d" 8 | sed 's/^$/0/')"
+}
+
+now_epoch() { printf '%s' "${FLEET_DEPS_NOW:-$(date +%s)}"; }
+iso_of() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null; }
+
+# classify_failure <output-file> <rc> → `<transient|deterministic> <cause>`.
+# Corruption first: it explains whatever broke downstream of it (a lifecycle
+# script over a half-extracted tree). Then the repo-side causes, which fail the
+# same way on every retry; then the network. Anything unrecognised is
+# deterministic — parking it is the #1026 behaviour, and the safe one.
+classify_failure() {
+  local o="$1"
+  [ "$2" = 124 ] && { echo transient timeout; return; }
+  grep -Eq 'tarball .*corrupt|EINTEGRITY|Cannot cd into|ERR_PNPM_TARBALL_INTEGRITY|ENOTEMPTY' "$o" 2>/dev/null \
+    && { echo transient corrupt-cache; return; }
+  grep -Eq 'ERR_PNPM_LOCKFILE_BREAKING_CHANGE|ERR_PNPM_LOCKFILE_CONFIG_MISMATCH|lockfileVersion .*(not supported|unsupported)' "$o" 2>/dev/null \
+    && { echo deterministic lock-format; return; }
+  grep -Eq 'EUSAGE|ERR_PNPM_OUTDATED_LOCKFILE|ERR_PNPM_FROZEN_LOCKFILE|lockfile needs to be updated|YN0028|are in sync|not in sync' "$o" 2>/dev/null \
+    && { echo deterministic lock-drift; return; }
+  grep -Eq 'gyp ERR!|node-gyp' "$o" 2>/dev/null && { echo deterministic native-build; return; }
+  grep -Eq 'ELIFECYCLE|ERR_PNPM_[A-Z_]*LIFECYCLE|(pre|post)?install script|Command failed with exit code' "$o" 2>/dev/null \
+    && { echo deterministic lifecycle-script; return; }
+  grep -Eq 'ETIMEDOUT|ESOCKETTIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|socket hang up|ERR_PNPM_META_FETCH_FAIL|ERR_PNPM_FETCH_5[0-9][0-9]|E50[0-9]|(^|[^0-9])5[0-9][0-9] (Internal Server Error|Bad Gateway|Service Unavailable|Gateway Time)' "$o" 2>/dev/null \
+    && { echo transient network; return; }
+  grep -Eq 'ENOENT' "$o" 2>/dev/null && { echo transient corrupt-cache; return; }
+  echo deterministic unknown
 }
 
 manifest_add() {  # <manifest> <rel>
@@ -268,7 +333,7 @@ if [ -n "$BASE_MODE" ]; then
   }
 
   if [ "$BASE_MODE" = status ]; then
-    nf=0 ns=0 nx=0 nu=0 ni=0 nn=0 oldest=""
+    nf=0 ns=0 nx=0 nu=0 ni=0 nn=0 oldest="" nt=0 next="" causes=""
     while IFS= read -r r; do
       [ -n "$r" ] || continue
       st=$(base_state "$(at "$r")" "$(lock_of "$(at "$r")")")
@@ -276,15 +341,27 @@ if [ -n "$BASE_MODE" ]; then
                     installing) ni=$((ni+1)) ;;
                     failing) nx=$((nx+1))
                              fts=$(failed_field "$(at "$r")" 2)
-                             { [ -z "$oldest" ] || { [ -n "$fts" ] && [[ "$fts" < "$oldest" ]]; }; } && oldest="$fts" ;;
+                             { [ -z "$oldest" ] || { [ -n "$fts" ] && [[ "$fts" < "$oldest" ]]; }; } && oldest="$fts"
+                             # Issue #1028: which kind — retrying on its own, or parked (why).
+                             if [ "$(failed_class "$(at "$r")")" = transient ]; then
+                               nt=$((nt+1)); fre=$(failed_field "$(at "$r")" 7); fre=${fre:-0}
+                               { [ -z "$next" ] || [ "$fre" -lt "$next" ]; } && next="$fre"
+                             else
+                               fc=$(failed_field "$(at "$r")" 5); fc=${fc:-unknown}
+                               case ",$causes," in *",$fc,"*) ;; *) causes="$causes${causes:+,}$fc" ;; esac
+                             fi ;;
                     *) nn=$((nn+1)) ;;
       esac
       printf '%s %s\n' "$st" "$r"
     done <<EOF
 $(base_dirs)
 EOF
-    printf 'summary fresh=%s stale=%s failing=%s unstamped=%s installing=%s not-installed=%s failing-since=%s\n' \
-      "$nf" "$ns" "$nx" "$nu" "$ni" "$nn" "${oldest:--}"
+    nx_iso=-
+    if [ -n "$next" ]; then
+      if [ "$next" -le "$(now_epoch)" ]; then nx_iso="next-tick"; else nx_iso=$(iso_of "$next"); nx_iso=${nx_iso:--}; fi
+    fi
+    printf 'summary fresh=%s stale=%s failing=%s unstamped=%s installing=%s not-installed=%s failing-since=%s failing-transient=%s next-retry=%s parked-causes=%s\n' \
+      "$nf" "$ns" "$nx" "$nu" "$ni" "$nn" "${oldest:--}" "$nt" "$nx_iso" "${causes:--}"
     exit 0
   fi
 
@@ -337,12 +414,25 @@ EOF
       d=$(at "$r"); fsha=$(failed_field "$d" 1)
       if [ -n "$fsha" ] && [ ! -f "$d/node_modules/$STAMP" ] && lk=$(lock_of "$d") \
          && [ "$fsha" = "$(lock_sha "$d/$lk")" ]; then
+        # Transient (issue #1028): retried on its own once its backoff is due, and
+        # silent until then — the failure itself logged when the retry is.
+        if [ "$(failed_class "$d")" = transient ]; then
+          fre=$(failed_field "$d" 7); fre=${fre:-0}
+          case "$fre" in *[!0-9]*) fre=0 ;; esac
+          if [ "$fre" -le "$(now_epoch)" ]; then
+            keep="$keep$r
+"
+          else
+            [ "$DRY" = 1 ] && printf 'skipped:retry-later %s\n' "$r"
+          fi
+          continue
+        fi
         [ "$DRY" = 1 ] && { printf 'skipped:failing %s\n' "$r"; continue; }
         if [ "$(failed_field "$d" 3)" != noted ]; then
           mkdir -p "$(dirname "$LOG")" 2>/dev/null
-          printf '%s %s still failing since %s, lock %s — not retried until the lockfile changes (--refresh-base %s %s forces it)\n' \
-            "$(ts)" "$d" "$(failed_field "$d" 2)" "${fsha%"${fsha#????????????}"}" "$MAIN" "$r" >> "$LOG"
-          printf '%s %s noted\n' "$fsha" "$(failed_field "$d" 2)" > "$d/node_modules/$FAILED"
+          printf '%s %s still failing since %s (%s), lock %s — not retried until the lockfile changes (--refresh-base %s %s forces it)\n' \
+            "$(ts)" "$d" "$(failed_field "$d" 2)" "$(failed_field "$d" 5)" "${fsha%"${fsha#????????????}"}" "$MAIN" "$r" >> "$LOG"
+          failed_note "$d"
           printf 'skipped:failing %s\n' "$r"
         fi
         continue
@@ -449,8 +539,18 @@ EOF
     rm -f "$d/node_modules/$STAMP"
     : > "$d/node_modules/$INSTALLING"
     printf '%s %s start: %s (lock %s)\n' "$(ts)" "$d" "$*" "${sha%"${sha#????????????}"}" >> "$LOG"
+    # A retry after a corrupt-cache failure verifies npm's cache first — once, here
+    # (issue #1028): a corrupt tarball in the cache fails every retry the same way.
+    if [ "$lk" = package-lock.json ] && [ "$(failed_field "$d" 5)" = corrupt-cache ]; then
+      printf '%s %s npm cache verify (the last failure was a corrupt cache/extract)\n' "$(ts)" "$d" >> "$LOG"
+      ( cd "$d" && PATH="$RUNPATH" && export PATH && fleet_timebox "$TMO" nice -n 10 "$1" cache verify ) </dev/null >> "$LOG" 2>&1
+    fi
     pre=$(git -C "$MAIN" diff --name-only HEAD -- "$d" 2>/dev/null)
-    ( cd "$d" && PATH="$RUNPATH" && export PATH && fleet_timebox "$TMO" nice -n 10 "$@" ) </dev/null >> "$LOG" 2>&1; rc=$?
+    # The output is kept aside to classify a failure — not under node_modules,
+    # which `npm ci` deletes before it starts.
+    out=$(mktemp "${TMPDIR:-/tmp}/fleet-install-out.XXXXXX") || out=/dev/null
+    ( cd "$d" && PATH="$RUNPATH" && export PATH && fleet_timebox "$TMO" nice -n 10 "$@" ) </dev/null > "$out" 2>&1; rc=$?
+    cat "$out" >> "$LOG" 2>/dev/null
     rm -f "$d/node_modules/$INSTALLING"
     # An install must never leave the base dirty: a dirty base blocks base-sync's
     # ff. `yarn install --frozen-lockfile` was seen rewriting a tracked yarn.lock
@@ -473,13 +573,44 @@ RESTORE
       [ "$rc" = 124 ] && why=timeout || why="rc=$rc"
       # Keep the FIRST failure's ts while the lock is unchanged (a forced retry that
       # fails again is still the same failure); a new lock starts a new one.
-      fts=$(failed_field "$d" 2); [ "$(failed_field "$d" 1)" = "$sha" ] && [ -n "$fts" ] || fts=$(ts)
-      mkdir -p "$d/node_modules" 2>/dev/null
-      printf '%s %s\n' "$sha" "$fts" > "$d/node_modules/$FAILED"
-      printf '%s %s FAILED (%s) — left unstamped; not retried until the lockfile changes (lock %s)\n' \
-        "$(ts)" "$d" "$why" "${sha%"${sha#????????????}"}" >> "$LOG"
+      now=$(now_epoch)
+      fts=$(failed_field "$d" 2) fep=$(failed_field "$d" 8) att=$(failed_field "$d" 6)
+      if [ "$(failed_field "$d" 1)" = "$sha" ] && [ -n "$fts" ]; then
+        case "$fep" in ''|*[!0-9]*|0) fep=$now ;; esac
+        case "$att" in ''|*[!0-9]*) att=0 ;; esac
+      else
+        fts=$(ts) fep=$now att=0
+      fi
+      att=$((att+1))
+      # Classify (issue #1028): a transient failure retries itself with backoff —
+      # the next tick, then RETRY_BASE doubling — until RETRY_CAP after the first
+      # failure; a deterministic one is parked until the lockfile changes.
+      read -r kind cause <<CLS
+$(classify_failure "$out" "$rc")
+CLS
+      rbase="${FLEET_BASE_DEPS_RETRY_BASE:-300}"; case "$rbase" in ''|*[!0-9]*) rbase=300 ;; esac
+      rcap="${FLEET_BASE_DEPS_RETRY_CAP:-21600}"; case "$rcap" in ''|*[!0-9]*) rcap=21600 ;; esac
+      lsha="${sha%"${sha#????????????}"}"
+      if [ "$kind" = transient ]; then
+        delay=0; [ "$att" -ge 2 ] && delay=$(( rbase * (1 << (att - 2 > 20 ? 20 : att - 2)) ))
+        rat=$((now + delay))
+        if [ $((rat - fep)) -gt "$rcap" ]; then
+          failed_write "$d" "$sha" "$fts" - parked "$cause" "$att" 0 "$fep"
+          printf '%s %s FAILED (%s, transient: %s) — %s attempts since %s, past the %ss retry window; parked until the lockfile changes (lock %s)\n' \
+            "$(ts)" "$d" "$why" "$cause" "$att" "$fts" "$rcap" "$lsha" >> "$LOG"
+        else
+          failed_write "$d" "$sha" "$fts" - transient "$cause" "$att" "$rat" "$fep"
+          printf '%s %s FAILED (%s, transient: %s) — left unstamped; retry %s at %s (lock %s)\n' \
+            "$(ts)" "$d" "$why" "$cause" "$((att + 1))" "$(iso_of "$rat")" "$lsha" >> "$LOG"
+        fi
+      else
+        failed_write "$d" "$sha" "$fts" - parked "$cause" "$att" 0 "$fep"
+        printf '%s %s FAILED (%s, deterministic: %s) — left unstamped; not retried until the lockfile changes (lock %s)\n' \
+          "$(ts)" "$d" "$why" "$cause" "$lsha" >> "$LOG"
+      fi
       printf 'install-failed:%s %s\n' "$why" "$r"
     fi
+    [ "$out" = /dev/null ] || rm -f "$out"
   done <<EOF
 $TODO
 EOF

@@ -1281,10 +1281,25 @@ _deps_row() {
   # failing (issue #1026) ≠ unstamped: the install ran and failed on the repo's
   # side, so it is parked until its lockfile moves — --prime-base would only fail
   # it again. The oldest failure says how long worktrees have gone unlinked.
+  # Which kind of failing (issue #1028): a transient one retries itself with
+  # backoff, a parked one waits for its lockfile — say which, and why.
+  bd_t=$(bd_get failing-transient); bd_t=${bd_t:-0}; bd_p=$((bd_x - bd_t))
+  bd_next=$(bd_get next-retry); bd_why=$(bd_get parked-causes | tr ',-' '/ ')
+  bd_cls=""
+  if [ "$bd_t" -gt 0 ]; then
+    [ "$bd_next" = next-tick ] && bd_next="next tick"
+    bd_cls="transient, retry at ${bd_next:-?}"; [ "$bd_p" -gt 0 ] && bd_cls="$bd_t $bd_cls"
+  fi
+  if [ "$bd_p" -gt 0 ]; then
+    bd_c="parked: ${bd_why:-unknown}"; [ "$bd_t" -gt 0 ] && bd_c="$bd_p $bd_c"
+    bd_cls="$bd_cls${bd_cls:+; }$bd_c"
+  fi
   bd_txt="$1: base deps $bd_f fresh / $bd_s stale / $bd_x failing / $bd_u unstamped / $bd_n not installed"
-  [ "$bd_x" -gt 0 ] && bd_txt="$bd_txt (failing since ${bd_since:-?})"
+  [ "$bd_x" -gt 0 ] && bd_txt="$bd_txt (failing: $bd_cls; since ${bd_since:-?})"
   if [ "$bd_s" -gt 0 ] || [ "$bd_u" -gt 0 ]; then
     warn deps "$bd_txt — worktrees there install from zero instead of linking; fix: $(dirname "$0")/fleet-deps-link.sh --prime-base '$2' (per dir: --base-status)"
+  elif [ "$bd_x" -gt 0 ] && [ "$bd_p" = 0 ]; then
+    warn deps "$bd_txt — a transient install failure (network / npm cache); it retries itself with backoff, nothing to do unless it parks (log: logs/base-deps.log)"
   elif [ "$bd_x" -gt 0 ]; then
     warn deps "$bd_txt — the install fails on the repo's side and is not retried until its lockfile changes; see logs/base-deps.log, fix the repo, then: $(dirname "$0")/fleet-deps-link.sh --refresh-base '$2' <dir> (which: --base-status)"
   else
