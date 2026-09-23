@@ -183,6 +183,20 @@ case "$label" in
 esac
 [ -n "$BRANCH" ] || BRANCH="${selfkey##*:}"
 
+# --- the ledger (issue #937): every report is RECORDED, delivered or not --------
+# Written here — a parent key is known, nothing is sent yet — so a report the rails
+# below drop (parent reaped, no live Claude, no reachable inbox) still lands in the
+# parent's book, and `fleet-children.sh` can answer "what are my children doing"
+# without a `gh pr` + capture-pane per child. Keyed by the parent's KEY, not its
+# window id, so a migrated/restored parent reads the same file. Deduped on
+# (child, state, pr) against that child's latest event; never fails, prints nothing.
+if [ "$DRY" != 1 ] && [ -f "$BIN/fleet-children-lib.sh" ]; then
+  # shellcheck source=/dev/null
+  . "$BIN/fleet-children-lib.sh"
+  children_append "$worigin" "$(python3 -c 'import json,sys; print(json.dumps(dict(zip(("child","state","pr","verdict","summary","title"), sys.argv[1:]))))' \
+    "$selfkey" "$(printf '%s' "$STATE" | tr '[:lower:]' '[:upper:]')" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" 2>/dev/null)" "$sess" || :
+fi
+
 # --- rail 2: the parent window, and a live Claude under it ---------------------
 pwin=$(fleet_win_for_key "$worigin" "$SOCK") \
   || quiet "parent $worigin has no window on this fleet (reaped, or another fleet)"
