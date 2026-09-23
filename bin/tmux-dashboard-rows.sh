@@ -192,8 +192,13 @@ rslug_v() { rslug=''
 # fleet hosting 2+ repos; then RCUR is the picked repo's slug or `all`, and
 # RSHORTMAP its badge per repo (fleet_dash_repo_frame, once a frame). A one-repo
 # fleet has RMANY=0 and every branch below keeps today's path.
-RMANY=0; RCUR=''; RSHORTMAP=''
+RMANY=0; RCUR=''; RSHORTMAP=''; RGRPMAP=''; RHEADS=''; RNREPO=0
 [ "$RMULTI" = 1 ] && fleet_dash_repo_frame "$FLEET_SESSION"
+# RGRP=1 iff this frame groups its rows by repo (issue #974): `all` in a 2+ repo
+# fleet. A picked repo and a one-repo fleet never group — their frames stay as
+# they were, heading-free, byte for byte.
+RGRP=0; [ "$RMANY" = 1 ] && [ "$RCUR" = all ] && RGRP=1
+RGCNT=()                               # rows per repo group, for the heading's (n)
 # rview_v <@repo> <@norepo> → 1 when the current repo hides this window: a picked
 # repo shows ITS windows only (no-repo and unknown ones wait under `all`). Leaves
 # $rslug set for the caller — the window's repo slug, '' for none/unknown — which
@@ -382,6 +387,21 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   [ -n "${FLEET_SESSION:-}" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
   case "$name" in dash|plan|backlog) continue;; esac   # panels, not Claude sessions
   rview_v "$wrepo" "$wnorepo" || continue              # current repo (issue #793)
+  # repo group (issues #793/#974) — the FIRST sort key. Under `all` in a 2+ repo
+  # fleet each hosted repo is its own group, in fleet_repos order (RGRPMAP, one
+  # lookup off the frame's map, no fork); a window whose repo is not hosted sorts
+  # after them as `?`, and a no-repo session last. Taken here, BEFORE the fold
+  # filter, so a heading's count covers the children a collapsed parent hides.
+  # Everything else is group 0, so a one-repo fleet sorts exactly as before.
+  rgrp=0
+  if [ "$RGRP" = 1 ]; then
+    if [ "$wnorepo" = 1 ]; then rgrp=$((RNREPO + 1))
+    elif [ -n "$rslug" ]; then
+      rgrp=${RGRPMAP#*$'\n'"$rslug"$'\t'}
+      if [ "$rgrp" = "$RGRPMAP" ]; then rgrp=$RNREPO; else rgrp=${rgrp%%$'\n'*}; fi
+    else rgrp=$RNREPO; fi
+    RGCNT[rgrp]=$(( ${RGCNT[rgrp]:-0} + 1 ))
+  fi
   ckey_v "$path"; key=$ckey
   ctxkey="$key"
   case "$agent" in
@@ -625,11 +645,11 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   tagd="$provd"
   [ -n "$agentd" ] && tagd="${tagd:+$tagd }$agentd"
   # repo badge (issue #793): under `all` in a 2+ repo fleet every row names its
-  # repo's short tag first; a no-repo session says so and sorts into its own group
-  # at the foot of the list ($rgrp, the first sort key); an unknown one reads `?`.
-  rgrp=0
-  if [ "$RMANY" = 1 ] && [ "$RCUR" = all ]; then
-    if [ "$wnorepo" = 1 ]; then repod='no repo'; rgrp=1
+  # repo's short tag first — kept inside #974's groups too, since a scrolled list
+  # can put a row far below its heading; a no-repo session says so, an unknown
+  # one reads `?`. ($rgrp, the group it sorts into, was taken above.)
+  if [ "$RGRP" = 1 ]; then
+    if [ "$wnorepo" = 1 ]; then repod='no repo'
     elif [ -n "$rslug" ]; then
       repod=${RSHORTMAP#*$'\n'"$rslug"$'\t'}
       if [ "$repod" = "$RSHORTMAP" ]; then repod=$rslug; else repod=${repod%%$'\n'*}; fi
@@ -772,9 +792,33 @@ printf -v h_gap '%*s' "$h_pad" ''
 printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_i}   ${h_n} ${h_gap}${h_a} ${h_p} ${h_c}${R}"
 fi
 
-# emit by repo group first (issue #793: no-repo sessions sit in their own group at
-# the foot of an `all` view; everything else is group 0, so a one-repo fleet sorts
-# exactly as before), then pinned-first (issue #623), then grouped by spawn provenance (issue #503):
+# group headings (issue #974): under `all` in a 2+ repo fleet, one INERT row opens
+# each non-empty repo group — `── to · verkyyi/tokenledger (1)`. Its sort key is
+# (group, -1): above every row of its group whatever their pin tier. Both of its
+# key fields read `hdr`, the marker every dash bind target (enter, ⌃x, ⌃p, ⌃o,
+# fold, pin, rename, answer, migrate) and the sidebar already treat as not-a-row,
+# so no key acts on it. One pass over the repos — the per-window cost is the
+# RGCNT increment above, and #662's per-frame bound holds.
+if [ "$RGRP" = 1 ]; then
+  hd_v() { local n=${RGCNT[$1]:-0} t
+    [ "$n" -gt 0 ] || return 0
+    t="── $2 ($n)"
+    if [ "$SIDEBAR" = 1 ]; then
+      buf+="$1	-1	0	0	0	0	0	hdr$US$US$US$t$US "$'\n'
+    else
+      buf+="$1	-1	0	0	0	0	0	hdr${US}hdr${US}${IN}${t}${R}"$'\n'
+    fi
+  }
+  while IFS=$'\t' read -r g sh r; do
+    [ -n "$g" ] && hd_v "$g" "$sh · $r"
+  done <<< "$RHEADS"
+  hd_v "$RNREPO" '? · unknown repo'
+  hd_v "$((RNREPO + 1))" 'no repo'
+fi
+
+# emit by repo group first (issues #793/#974: each hosted repo's rows in their own
+# group under `all`, no-repo sessions at the foot; everything else is group 0, so
+# a one-repo fleet sorts exactly as before), then pinned-first (issue #623), then grouped by spawn provenance (issue #503):
 # pinned windows (and the subtrees that float with them) take the whole top of the
 # list whatever their status; below them, roots (hub/autofill/bridge spawns) keep
 # the status-rank order they always had; each root's children sort directly below

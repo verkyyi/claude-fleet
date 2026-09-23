@@ -70,6 +70,8 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
+# The column header / a #974 repo group heading: not a session — a quiet no-op.
+[ "$TARGET" = hdr ] && exit 0
 key=$(restore_key_for "$TARGET") || {
   printf 'dash-restore-session: not a landed session — nothing to restore for %s\n' "$TARGET" >&2
   tmux display-message "restore: not a landed session — ⌃t for the landed view, then ⌃o" 2>/dev/null
