@@ -142,6 +142,9 @@ run_dash() {
   # landed peek therefore always opens folded, which is the same default the live
   # list has.
   rm -f "$C/global/dash_fold_landed_${FLEET_SESSION:-default}"
+  # a multi-repo fleet keeps one per repo, `<file>.<slug>` (issue #790); tmux
+  # never allows a '.' in a session name, so the glob can't reach another fleet's.
+  rm -f "$C/global/dash_fold_landed_${FLEET_SESSION:-default}".* 2>/dev/null
   # Instant actions use execute-silent; interactive actions (new/help/reap/PR)
   # use execute so a refused popup can draw and read inline (#451). Reap's slow
   # disposal tail still runs through fleet_bg (#304); only the confirm owns the

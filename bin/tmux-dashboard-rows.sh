@@ -112,7 +112,7 @@ exp_v() { case "$1" in 1) exp=1 ;; *) exp=0 ;; esac; }
 # would fork a subshell on the 4Hz hot path.
 # Empty = not addressable as a spawn parent. Sets $okey; no subshells.
 okey_v() { okey=''
-  if [ -n "$1" ]; then okey="issue-$1"; return; fi
+  if [ -n "$1" ]; then okey="${okp}issue-$1"; return; fi
   local cand bn sn
   for cand in "$2" "$3"; do
     bn=${cand##*/}
@@ -121,8 +121,26 @@ okey_v() { okey=''
       *-scratch-*) sn=${bn##*-scratch-} ;;
       *)           continue ;;
     esac
-    case "$sn" in ''|*[!0-9]*) continue;; *) okey="scratch-$sn"; return;; esac
+    case "$sn" in ''|*[!0-9]*) continue;; *) okey="${okp}scratch-$sn"; return;; esac
   done
+}
+
+# the window's key PREFIX (issue #790) → $okp. In a fleet hosting 2+ repos, repo
+# A's issue-12 and repo B's issue-12 are two different parents, so the key carries
+# the repo: `<slug>:issue-<N>` — the spelling a multi-repo spawn stamps into
+# @origin (#789). @repo is read in the one list-windows format (pr-refresh stamps
+# an unstamped window within a tick, #792), so this costs no fork. Unknown
+# (or @norepo) → `?:`, a key no @origin ever names: its row renders, nothing
+# groups under it by guesswork. A one-repo fleet: $okp stays empty, keys as today.
+# Takes the window's @repo + @norepo; resolution is rslug_v's (below), one rule for
+# the PR cell and the grouping key.
+okp=''
+MULTI=0
+[ -n "${FLEET_SESSION:-}" ] && fleet_multirepo "$FLEET_SESSION" && MULTI=1
+okp_v() { okp=''
+  [ "$MULTI" = 1 ] || return 0
+  rslug_v "$1" "$2"                    # the window's repo slug, fork-free (#792)
+  if [ -n "$rslug" ]; then okp="$rslug:"; else okp='?:'; fi
 }
 
 # model → context window (FLEET_CTX_WINDOW; haiku 200k). The model short name was
@@ -248,6 +266,7 @@ while IFS=$US read -r sess idx name path state _ _ iss origin wt _ _ nsub exp pi
       PRWANT+="$b1"$'\n'"$b3"$'\n'"$b2"$'\n'
     fi ;;
   esac
+  okp_v "$wrepo" "$wnorepo"
   okey_v "$iss" "$wt" "$path"
   [ -z "$okey" ] && continue
   state_v "$state" "$nsub"; pin_v "$pin"; exp_v "$exp"
@@ -313,7 +332,7 @@ chain_v() { croot=''; crk=9; cidx=99999; chops=0; crootpin=0; crootexp=0
     pexp=${prest%%$'\t'*}; porig=${prest#*$'\t'}
     [ "$ppin" = 1 ] && [ -z "$cpnrk" ] && { cpnrk=$prk; cpnidx=$pidx; }
     case "$porig" in
-      issue-*|scratch-*) cur=$porig; chops=$((chops+1)) ;;  # a child too — keep climbing
+      issue-*|scratch-*|*:issue-*|*:scratch-*) cur=$porig; chops=$((chops+1)) ;;  # a child too — keep climbing
       *) croot=$cur; crk=$prk; cidx=$pidx; crootpin=$ppin; crootexp=$pexp; return ;;   # hub/autofill/none
     esac
   done
@@ -331,7 +350,7 @@ chain_v() { croot=''; crk=9; cidx=99999; chops=0; crootpin=0; crootexp=0
 # separator newline would count `\nA\t1\n` twice in a row as ONE.
 KIDTAB=''
 while IFS=$'\t' read -r _ krk _ _ _ korig; do
-  case "$korig" in issue-*|scratch-*) ;; *) continue ;; esac
+  case "$korig" in issue-*|scratch-*|*:issue-*|*:scratch-*) ;; *) continue ;; esac
   chain_v "$korig"
   [ -n "$croot" ] && KIDTAB+=$'\n'"$croot"$'\t'"$krk"$'\n'
 done <<< "$KEYTAB"
@@ -469,9 +488,10 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # where a closed row has no live window and `~<N>` IS its only id — see
   # fleet-history.sh cmd_rows.) The scratch slot number stays findable: it names
   # the worktree dir and still renders in the `↳~76` provenance tag.
+  okp_v "$wrepo" "$wnorepo"
   okey_v "$iss" "$wt" "$path"
   issd=''; icol=$GN
-  case "$okey" in issue-*) issd="#${okey#issue-}" ;; esac
+  case "$okey" in issue-*|*:issue-*) issd="#${okey##*issue-}" ;; esac
   # --- spawn provenance (issue #503) -----------------------------------------
   # ↳ tag: rendered in the flex span for every non-hub origin (`↳#483` for a
   # worker parent, `↳~12` for a scratch one — key_label's grammar — the literal
@@ -490,8 +510,8 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   provd=''; dname=$name; treed=''
   case "$origin" in
     '') : ;;
-    issue-*)   provd="↳#${origin#issue-}";   treed='└' ;;
-    scratch-*) provd="↳~${origin#scratch-}"; treed='└' ;;
+    issue-*|*:issue-*)     provd="↳#${origin##*issue-}";   treed='└' ;;
+    scratch-*|*:scratch-*) provd="↳~${origin##*scratch-}"; treed='└' ;;
     *)         provd="↳$origin" ;;
   esac
   # agent tag (issue #547): a window running a non-Claude agent (@cc_agent, stamped
@@ -525,7 +545,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   pnrk=''; pnidx=''; pndepth=0
   [ "$pin" = 1 ] && { pnrk=$rk; pnidx=$idx; }
   case "$origin" in
-    issue-*|scratch-*)
+    issue-*|scratch-*|*:issue-*|*:scratch-*)
       depth=1
       chain_v "$origin"; grk=$crk; gidx=$cidx; rootpin=$crootpin
       [ -z "$pnrk" ] && [ -n "$cpnrk" ] && { pnrk=$cpnrk; pnidx=$cpnidx; pndepth=1; }

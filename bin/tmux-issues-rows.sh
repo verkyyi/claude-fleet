@@ -55,6 +55,14 @@ mrank(){ case "$1" in "$NOMS") echo 99; return;; esac
 TAB=$'\t'
 ACTIVE=$(tmux list-windows -a -F "#{session_name}${TAB}#{@issue}${TAB}#{window_name}" 2>/dev/null \
   | awk -F'\t' -v s="${FLEET_SESSION:-}" '$2!="" && (s=="" || $1==s){print $2"\t"$3}')
+# A fleet hosting 2+ repos (issue #790): a row is issue N of the repo whose cache
+# this list reads, so only THAT repo's windows count as bound — repo A's #12
+# window must not mark repo B's #12 as live. Same `issue<TAB>window-name` shape.
+if [ -n "${FLEET_SESSION:-}" ] && fleet_multirepo "$FLEET_SESSION"; then
+  BLREPO=$(fleet_repo_cached "$FLEET_SESSION")
+  ACTIVE=$(fleet_bound_windows "$FLEET_SESSION" \
+    | awk -F'\t' -v p="$BLREPO#" 'p!="#" && index($1, p)==1 { print substr($1, length(p)+1) "\t" $3 }')
+fi
 active_win(){ printf '%s\n' "$ACTIVE" | awk -F'\t' -v n="$1" '$1==n{print $2; exit}'; }
 
 # priority per issue: read the collector's labels cache (num<TAB>comma-labels — the

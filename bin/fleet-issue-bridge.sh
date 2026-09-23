@@ -286,6 +286,14 @@ bridge_find_window() {
   want_slug=$(fleet_slug "$(fleet_norm_repo "$repo")")
   while IFS=$'\t' read -r sess win st bissue; do
     [ "$bissue" = "$issue" ] || continue
+    # A fleet hosting 2+ repos (issue #790): the SESSION's repo says nothing about
+    # which repo this window works — A#12 and B#12 share a session. Match the
+    # WINDOW's own repo; an unknown one (empty) never matches, so B#12's comment
+    # is never typed into A#12's pane.
+    if fleet_multirepo "$sess"; then
+      [ -n "$want_slug" ] && [ "$(fleet_slug "$(fleet_window_repo "$sess" "$win")")" = "$want_slug" ] || continue
+      printf '%s\t%s\t%s' "$sess" "$win" "$st"; return 0
+    fi
     slug=$(fleet_slug_cached "$sess")
     # Cold cache (no sessmap entry yet) → don't blindly trust the @issue-number
     # match: a DIFFERENT fleet may have its own same-numbered issue open, and

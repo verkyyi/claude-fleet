@@ -16,6 +16,28 @@ def field(wid, name):
     return read('tmux', 'display-message', '-p', '-t', wid, '#{'+name+'}')
 
 
+def window_repo(wid):
+    """The window's repo (owner/name): @repo when stamped, else its @worktree's
+    git origin. Empty when unknown or @norepo — an unknown never matches."""
+    repo = field(wid, '@repo')
+    if repo or field(wid, '@norepo') == '1':
+        return repo
+    worktree = field(wid, '@worktree')
+    if not worktree:
+        return ''
+    try:
+        url = read('git', '-C', worktree, 'remote', 'get-url', 'origin')
+    except (OSError, subprocess.SubprocessError):
+        return ''
+    url = re.sub(r'^git@[^:]*:|^https?://[^/]*/', '', url)
+    url = re.sub(r'/+$', '', re.sub(r'\.git$', '', url))
+    return url if re.fullmatch(r'[^/]+/[^/]+', url) else ''
+
+
+def repo_matches(repo, want):
+    return bool(repo) and want in (repo, repo.replace('/', '-'), repo.split('/', 1)[1])
+
+
 def resolve(target):
     if re.fullmatch(r'[@%]\d+', target):
         wid = field(target, 'window_id')
@@ -24,6 +46,15 @@ def resolve(target):
         return wid
     handle = re.fullmatch(r'[a-z][1-9]', target)
     issue = re.fullmatch(r'(?:issue-|#)(\d+)', target)
+    # <repo>#N / <repo>:issue-N (issue #790): in a fleet hosting several repos a
+    # bare #N can name two windows; the qualified form names one. <repo> is
+    # owner/name, its slug (owner-name) or the bare name.
+    qual = re.fullmatch(r'([A-Za-z0-9._/-]+)(?:#|:issue-)(\d+)', target)
+    if qual and not issue:
+        issue = qual
+        want_repo = qual[1]
+    else:
+        want_repo = None
     scratch = re.fullmatch(r'scratch-(\d+)', target)
     if not (handle or issue or scratch):
         # Diagnostic only: never act on the result of an unstable tmux target.
@@ -31,7 +62,7 @@ def resolve(target):
             current = field(target, 'window_id')
         except (OSError, subprocess.SubprocessError):
             current = '(unresolved)'
-        raise ValueError(f'index/name target refused: {target!r}; currently resolves to {current!r}; use @id, %pane, handle, issue-N or scratch-N')
+        raise ValueError(f'index/name target refused: {target!r}; currently resolves to {current!r}; use @id, %pane, handle, issue-N, <repo>#N or scratch-N')
     windows = read('tmux', 'list-windows', '-a', '-F', '#{window_id}').splitlines()
     if not all(re.fullmatch(r'@\d+', w) for w in windows):
         raise ValueError('invalid window inventory')
@@ -40,7 +71,9 @@ def resolve(target):
         if handle:
             matched = field(wid, '@wid') == target
         elif issue:
-            matched = field(wid, '@issue') == issue[1]
+            matched = field(wid, '@issue') == issue[issue.lastindex]
+            if matched and want_repo is not None:
+                matched = repo_matches(window_repo(wid), want_repo)
         else:
             # Same strict basename rule as fleet_scratch_key. A bound worktree
             # is authoritative; only an absent binding permits the cwd fallback.
@@ -50,7 +83,11 @@ def resolve(target):
         if matched:
             matches.add(wid)
     if len(matches) != 1:
-        raise ValueError(f'{target!r} matched {len(matches)} windows; use an explicit @id')
+        hint = 'an explicit @id'
+        if issue and want_repo is None and len(matches) > 1:
+            repos = sorted({window_repo(w) or '?' for w in matches})
+            hint = 'an explicit @id or <repo>#'+issue[1]+' ('+', '.join(repos)+')'
+        raise ValueError(f'{target!r} matched {len(matches)} windows; use {hint}')
     return matches.pop()
 
 
