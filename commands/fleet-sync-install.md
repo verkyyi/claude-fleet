@@ -377,13 +377,31 @@ tmux; the same before-conf is handed to every server (a fleet may have sourced a
 different vintage, but the live install is one checkout and the unbind is harmless
 when a key is already gone).
 
+## 8b. Re-park the already-sleeping workers on every live fleet (issue #1064)
+
+A sleeping worker's page is a `fleet-sleep.py park` process, exec'd when it fell
+asleep — so it keeps running the code it started with. After a sync that changed
+the page, those workers stay on the OLD page: input gate shut, no Wake button, no
+`@sleep_since` (a bare `z`). `repark` respawns only a page whose process predates
+the installed park code (or a dead pane), back-fills the age from the record's
+`created`, and never starts an agent. It is a no-op when every page is current, so
+run it on every sync:
+
+```sh
+for s in $(fleet_sockets); do bash ~/.claude/fleet/bin/fleet-sleep.sh repark "$s"; done
+```
+
+One JSON line per sleeping worker (`reparked` / `current` / `skip`) — surface the
+`reparked` count in step 9. `repark <sess> <@wid> --force` replaces a current page
+by hand.
+
 ## 9. Report — keep it short
 
 One line naming what synced: the `before → after` sha, and which of
 {daemons reloaded, settings re-merged, commands installed/removed, skills
 installed/removed (with any
 personal-skill-diverged warning), dash panes refreshed (with the count),
-conf reloaded (with the unbound count)} actually ran.
+conf reloaded (with the unbound count), sleeping pages re-parked (with the count)} actually ran.
 If you stopped at step 1 (wrong fleet) or step 2 (diverged / already current),
 report that instead with the one-line reason.
 

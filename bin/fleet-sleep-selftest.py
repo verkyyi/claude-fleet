@@ -353,6 +353,42 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
             self.assertEqual(self.tm('display-message','-p','-t',new,'#{@worker_lifecycle}'),'')
         finally:self.tm('kill-window','-t',new)
 
+    def test_repark_replaces_only_a_stale_page_and_backfills_since(self):
+        # Issue #1064: a sync leaves already-sleeping workers on the page they
+        # were exec'd with — input off, no Wake button, no @sleep_since.
+        self.cli('sleep',self.pane)
+        path=Path(self.opt('@sleep_record'))
+        deadline=time.monotonic()+5
+        while self.opt('@sleep_park_ready')!=path.stem and time.monotonic()<deadline:time.sleep(.05)
+        data=json.loads(path.read_text());data.pop('since',None);path.write_text(json.dumps(data))
+        self.stamp('@sleep_since','');self.tm('select-pane','-d','-t',self.pane)
+        park=self.opt('pane_pid');launched=self.root/'launch.args'
+        if launched.exists():launched.unlink()
+        # A current page is never respawned: only the missing age is back-filled.
+        out=json.loads(self.cli('repark',self.pane).stdout)
+        self.assertIn('current',out)
+        self.assertEqual(self.opt('pane_pid'),park)
+        self.assertEqual(self.opt('@sleep_since'),str(int(data['created'])))
+        code=self.bin/'fleet_sleep_park.py';stat=code.stat()
+        os.utime(code,(stat.st_atime,time.time()+5))
+        try:
+            lines=[json.loads(l) for l in self.cli('repark').stdout.splitlines()]
+            self.assertEqual([l['window'] for l in lines if 'reparked' in l],[self.opt('window_id')])
+        finally:os.utime(code,(stat.st_atime,stat.st_mtime))
+        self.assertNotEqual(self.opt('pane_pid'),park)
+        self.assertEqual(self.opt('pane_input_off'),'0')
+        self.assertEqual(self.opt('@worker_lifecycle'),'sleeping')
+        self.assertIn('Wake',self.capture(lambda s:'Wake' in s))
+        self.assertEqual(json.loads(path.read_text())['since'],int(data['created']))
+        self.assertFalse(launched.exists(),'repark must never start the agent')
+        # --force replaces a current page; anything that is not a page never is.
+        park=self.opt('pane_pid')
+        self.assertIn('reparked',json.loads(self.cli('repark',self.pane,'--force').stdout))
+        self.assertNotEqual(self.opt('pane_pid'),park)
+        self.tm('respawn-pane','-k','-t',self.pane,'exec sleep 30')
+        self.assertIn('skip',json.loads(self.cli('repark',self.pane,'--force').stdout))
+        self.assertIn('sleep',self.tm('display-message','-p','-t',self.pane,'#{pane_current_command}'))
+
     def test_native_codex_subagent_veto(self):
         worker=LIB['Worker'](self.socket,self.pane)
         source=dict(agent='codex',session_id=self.sid,pid=self.pid,home=str(self.root),worktree=str(self.wt),transcript=str(self.transcript),codex_identity={'remote':'unix:///fixture'})
