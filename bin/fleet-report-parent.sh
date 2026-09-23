@@ -181,6 +181,7 @@ case "$label" in
       _cr=$(fleet_window_repo "$sess" "$selfwin"); [ -n "$_cr" ] && label="$_cr $label"
     fi ;;
 esac
+branch_arg="$BRANCH"
 [ -n "$BRANCH" ] || BRANCH="${selfkey##*:}"
 
 # --- rail 2: the parent window, and a live Claude under it ---------------------
@@ -199,6 +200,17 @@ if [ "$parent_agent" != codex ] && [ -z "$parent_sleep$parent_evidence" ]; then
   ppid=$(fleet_pane_claude_pid "$pwin" "$SOCK" 2>/dev/null) \
     || quiet "parent $worigin ($pwin) has no live Claude under it"
   [ -n "$ppid" ] || quiet "parent $worigin ($pwin) has no live Claude under it"
+fi
+
+# --- rail 3 (stopped only): a turn boundary is not a stop (issue #864) ----------
+# The Stop fallback fires on EVERY done turn of a child that has not reported. A
+# child that opened its PR and parked a gate waiter in the background (or left a
+# test running) ended its turn, not its work — two monorepo EPICs saw 15/15 such
+# STOPPED reports, every one of them false. Last, after the cheap rails: this one
+# walks processes and may ask GitHub. Nothing is stamped, so a later Stop that
+# finds the child genuinely idle still reports once.
+if [ "$STATE" = stopped ]; then
+  busy=$(fleet_child_busy "$sess" "$selfwin" "$branch_arg") && quiet "child busy ($busy)"
 fi
 
 # --- the envelope: FIXED shape, 4 lines typical, 6 at its widest ---------------

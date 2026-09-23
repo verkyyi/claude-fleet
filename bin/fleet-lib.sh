@@ -3489,6 +3489,55 @@ fleet_pane_claude_pid() {
   printf '%s\n' "${out##* }"
 }
 
+# fleet_child_busy <session> <win> [branch] — is a child whose turn ENDED still
+# working (issue #864)? Prints the reason and exits 0 when it is; prints nothing
+# and exits 1 when it is not (or there is no repo/branch to ask GitHub about):
+#   bg       its agent still owns a Bash-tool job — a run_in_background test, a
+#            PR-gate waiter (`tools/await-pr.sh`). fleet-sleep.py `busy`: the walk
+#            hibernation vetoes on, minus the MCP contract and the calling hook.
+#   pr-open  its branch has an open PR — shipped and waiting on the gate.
+#   pr-unknown  gh missing, failing or slow (5s) for a known repo + branch: the
+#            report has never once been right on a shipped child, so an unread
+#            gate counts as busy — quiet, never an error.
+# A Stop that is only a turn boundary must not tell the parent the child STOPPED:
+# in two monorepo EPICs that report was 15/15 false, every one a worker waiting
+# on its PR gate. [branch] defaults to the @worktree's branch, else issue-<@issue>.
+fleet_child_busy() {
+  local sess="${1:-}" win="${2:-}" br="${3:-}" bin sock='' agent pid='' raw wt iss repo n
+  [ -n "$win" ] || return 1
+  [ -n "$sess" ] || sess=$(fleet_current_session)
+  [ -n "$sess" ] || return 1
+  [ -n "${TMUX:-}" ] || sock=$(fleet_socket "$sess")
+  bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+  if [ -f "$bin/fleet-sleep.py" ] && command -v python3 >/dev/null 2>&1; then
+    agent=$(_fleet_tmux "$sess" display-message -p -t "$win" '#{@cc_agent}' 2>/dev/null)
+    [ "$agent" = codex ] || pid=$(fleet_pane_claude_pid "$win" "$sock" 2>/dev/null) || pid=''
+    if [ "$agent" = codex ] || [ -n "$pid" ]; then
+      python3 "$bin/fleet-sleep.py" busy --session "$sess" ${pid:+--pid "$pid"} "$win" \
+        >/dev/null 2>&1 </dev/null && { printf 'bg\n'; return 0; }
+    fi
+  fi
+  if [ -z "$br" ]; then
+    raw=$(_fleet_tmux "$sess" display-message -p -t "$win" '#{@issue}|#{@worktree}' 2>/dev/null)
+    iss=${raw%%|*}; wt=${raw#*|}
+    [ -n "$wt" ] && [ -d "$wt" ] && br=$(git -C "$wt" branch --show-current 2>/dev/null)
+    case "$iss" in ''|*[!0-9]*) ;; *) [ -n "$br" ] || br="issue-$iss" ;; esac
+  fi
+  [ -n "$br" ] || return 1
+  repo=$(fleet_window_repo "$sess" "$win"); [ -n "$repo" ] || repo="${FLEET_REPO:-}"
+  case "$repo" in ?*/?*) ;; *) return 1 ;; esac
+  command -v gh >/dev/null 2>&1 || { printf 'pr-unknown\n'; return 0; }
+  # REST, not `gh pr list`: the core budget is separate from the GraphQL one the
+  # prmap spends, and this runs on every unreported Stop.
+  n=$(fleet_timebox 5 gh api "repos/$repo/pulls?state=open&head=${repo%%/*}:$br" \
+        --jq length 2>/dev/null)
+  case "$n" in
+    0) return 1 ;;
+    ''|*[!0-9]*) printf 'pr-unknown\n' ;;
+    *) printf 'pr-open\n' ;;
+  esac
+}
+
 # fleet_cc_session_json <pid> — path of the registry record for a Claude pid.
 fleet_cc_session_json() { local f="$FLEET_CC_SESSIONS_DIR/$1.json"; [ -f "$f" ] && printf '%s' "$f"; }
 # fleet_cc_session_field <pid> <field> — one string field off the registry record.

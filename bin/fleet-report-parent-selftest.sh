@@ -286,6 +286,70 @@ RUN --win "$CHILD" --state stopped --only-once >/dev/null
 eq 'quota-wait loop suppresses stopped report' "$b" "$(frames)"
 TM set-window-option -u -t "$CHILD" @handoff_manifest
 
+# --- BUSY: a turn boundary is not a stop (issue #864) ----------------------------
+# A child that ended its turn with a Bash-tool job still running under its Claude
+# (a background test, a PR-gate waiter) or with an open PR is WAITING, not
+# stopped. 15/15 such STOPPED reports in two monorepo EPICs were false.
+# The fake Claude forks a shell carrying the Bash tool's snapshot fingerprint.
+# Absolute /bin/sleep: the fake's PATH is literally `<fakebin>:$PATH`.
+printf 'system("/bin/sh", "-c", "/bin/sleep 600; : /shell-snapshots/snapshot-selftest.sh");\n' > "$WORK/tool.pl"
+printf 'system("/bin/sh", "-c", "/bin/sleep 600; : a concurrent Stop hook");\n'         > "$WORK/hook.pl"
+busy_child() {   # busy_child <name> <issue> <command> — a done child of issue-483
+  new_win "$1" "$3"
+  TM set-window-option -t "$WID" @issue "$2" 2>/dev/null
+  TM set-window-option -t "$WID" @origin issue-483 2>/dev/null
+  TM set-window-option -t "$WID" @claude_state done 2>/dev/null
+}
+busy_child bgchild 530 "PATH='$BINSH:\$PATH' exec claude '$WORK/tool.pl'"; BGCHILD="$WID"
+busy_child hookchild 531 "PATH='$BINSH:\$PATH' exec claude '$WORK/hook.pl'"; HOOKCHILD="$WID"
+for w in "$BGCHILD" "$HOOKCHILD"; do
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    cpid=$(fleet_pane_claude_pid "$w" "$LBL" 2>/dev/null) \
+      && ps -axo ppid=,comm= | awk -v p="$cpid" '$1 == p { f = 1 } END { exit !f }' && break
+    sleep 0.3
+  done
+done
+out=$(RUN --win "$BGCHILD" --state stopped --only-once --dry-run)
+ok; has 'child busy (bg)' "$out" || fail "a live Bash-tool job must hold the STOPPED report" "$out"
+b=$(frames)
+RUN --win "$BGCHILD" --state stopped --only-once >/dev/null
+eq 'a busy child sends nothing' "$b" "$(frames)"
+eq 'a busy child is not stamped (a later idle Stop still reports)' '' \
+  "$(TM display-message -p -t "$BGCHILD" '#{@reported}')"
+out=$(RUN --win "$HOOKCHILD" --state stopped --only-once --dry-run)
+ok; has 'would send' "$out" || fail "a non-tool child (a Stop hook, caffeinate) is not work" "$out"
+# The process gate is a Stop-path gate: a ship report is never held back by it.
+out=$(RUN --win "$BGCHILD" --state merged --pr 9 --dry-run)
+ok; has 'would send' "$out" || fail "a merged report must ignore the busy gate" "$out"
+
+# The PR gate, against a fake gh: 540 has an open PR, 541's gh fails, 542 none.
+mkdir -p "$WORK/ghbin"
+cat > "$WORK/ghbin/gh" <<'GH'
+#!/bin/sh
+case "$*" in
+  *head=acme:issue-540*) echo 1 ;;
+  *head=acme:issue-541*) echo 'HTTP 403: API rate limit exceeded' >&2; exit 1 ;;
+  *head=acme:*)          echo 0 ;;
+  *) exit 1 ;;
+esac
+GH
+chmod +x "$WORK/ghbin/gh"
+for n in 540 541 542; do
+  busy_child "prchild$n" "$n" "sleep 600"
+  TM set-window-option -t "$WID" @repo acme/widgets 2>/dev/null
+  eval "PRCHILD$n=\$WID"
+done
+out=$(PATH="$WORK/ghbin:$PATH" RUN --win "$PRCHILD540" --state stopped --only-once --dry-run)
+ok; has 'child busy (pr-open)' "$out" || fail "an open PR must hold the STOPPED report" "$out"
+out=$(PATH="$WORK/ghbin:$PATH" RUN --win "$PRCHILD541" --state stopped --only-once --dry-run); rc=$?
+eq 'an unreadable PR gate still exits 0' 0 "$rc"
+ok; has 'child busy (pr-unknown)' "$out" || fail "gh failing must hold the report, silently" "$out"
+b=$(frames)
+out=$(PATH="$WORK/ghbin:$PATH" RUN --win "$PRCHILD542" --state stopped --only-once)
+eq 'an idle done child with no open PR reports once' $((b + 1)) "$(frames)"
+PATH="$WORK/ghbin:$PATH" RUN --win "$PRCHILD542" --state stopped --only-once >/dev/null
+eq '…and only once' $((b + 1)) "$(frames)"
+
 mkdir -p "$FLEET_CONF_DIR/fleets/$LBL"
 printf 'FLEET_CHILD_REPORT=0\n' > "$FLEET_CONF_DIR/fleets/$LBL/conf"
 b=$(frames)
