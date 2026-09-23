@@ -22,7 +22,7 @@ import unicodedata
 
 BIN = Path(__file__).absolute().parent  # preserve the selftest shadow root
 US = "\x1f"
-VIEW_VERSION = "13"  # #997: the cursor may rest on a repo heading (new-session target); replace live v12 views once
+VIEW_VERSION = "14"  # #1032: a tap selects a repo heading, a 2nd tap opens ⌃n there; replace live v13 views once
 # ↑↓ follow (issue #822): an arrow moves the highlight at once and switches to
 # it only after this much quiet. A held key on a slow link is one switch, not
 # one per row, and a row passed over is never selected — so the wake hook's
@@ -262,6 +262,16 @@ def open_help(screen, env):
     screen.clear()
 
 
+def open_tap(screen, session, action, key, env):
+    """A second tap's popup (issue #1032): a session row's menu, or a selected
+    heading's ⌃n popup with its repo pinned — selection_repo resolves `hdr:…`
+    exactly as it does for a typed name, so both paths agree on the target."""
+    if action == "new":
+        new_task(screen, env, selection_repo(session, key, env))
+    else:
+        open_menu(session, key, env)
+
+
 def open_menu(session, wid, env):
     """The row's action menu (issue #898). fleet-sidebar.sh owns every tmux
     command string in it; this only names the row, by its stable window id.
@@ -349,6 +359,38 @@ def selectable(rows):
 def sessions(rows):
     """The window ids alone — what a close lands on (#900), never a heading."""
     return [row[0] for row in rows if row[0] != "hdr"]
+
+
+def target_name(key):
+    """The repo a selected heading names, as the input line shows it (issue
+    #1032): `owner/name` → `name`, the `no repo` heading → `no repo` (its session
+    opens in $HOME). "" for anything that is not a heading with a spawn target."""
+    if not key.startswith("hdr:"):
+        return ""
+    repo = key[4:]
+    return "no repo" if repo == "none" else repo.rsplit("/", 1)[-1]
+
+
+def placeholder(key):
+    """The empty input line's hint: it names the destination whenever a heading
+    is selected (issue #1032), so where a typed name goes is never a guess."""
+    name = target_name(key)
+    return "新会话 → " + name + "…" if name else PLACEHOLDER
+
+
+def tap(hit, highlighted):
+    """What a tap on list key `hit` does, given the highlighted key (issue #1032):
+    the same two-tap grammar for both kinds of row. A session row: 1st tap
+    `jump`s to it, 2nd opens its `menu` (#898). A repo heading with a spawn
+    target: 1st tap `select`s it — highlight only, no window switch — and the 2nd
+    opens the `new`-session popup pinned to its repo. A bare `hdr` (the `?`
+    heading, the empty-state hint) or no row at all: None. A fleet with no
+    headings never sees `select` or `new`, so it taps exactly as before."""
+    if not hit or hit == "hdr":
+        return None
+    if hit.startswith("hdr:"):
+        return "new" if hit == highlighted else "select"
+    return "menu" if hit == highlighted else "jump"
 
 
 def acts(key):
@@ -544,7 +586,7 @@ def ui(screen, session, worker, lock):
             put(height - 1, "› " + tail(text, room - 1) + ("▏" if navigation else ""),
                 curses.A_BOLD if navigation else curses.A_DIM)
         else:
-            put(height - 1, "› " + PLACEHOLDER if navigation else "›", curses.A_DIM)
+            put(height - 1, "› " + placeholder(selected) if navigation else "›", curses.A_DIM)
         screen.refresh()
         # Wake for whichever comes first: the next repaint, a pending follow or
         # a finished spawn.
@@ -674,12 +716,10 @@ def ui(screen, session, worker, lock):
                 _, _, y, _, buttons = curses.getmouse()
             except curses.error:
                 continue
-            hit = rows[offset + y][0] if 0 <= y < page and offset + y < len(rows) else None
-            if hit == "hdr":
-                hit = None  # a repo group heading (#974) is not a row to act on
+            hit = key_of(rows[offset + y]) if 0 <= y < page and offset + y < len(rows) else None
             # `selected`, not the painted cue: a fast double tap lands its second
             # press before the next refresh repaints the first one's switch.
-            highlighted = selected
+            action = tap(hit, selected)
             if buttons & (curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED):
                 refresh_at = 0
                 armed = None
@@ -691,16 +731,24 @@ def ui(screen, session, worker, lock):
                         open_help(screen, env)
                     else:
                         armed = HELP_ROW
-                elif hit and hit == highlighted:
+                elif action in ("menu", "new"):
                     # The second tap on a row (the first switched to it), or a tap
                     # on the row already in view: its action menu — the touch
-                    # path to what `.` opens (issue #898).
+                    # path to what `.` opens (issue #898). On a selected heading
+                    # it is ⌃n pinned to that repo (issue #1032). Both open on
+                    # the release, for the same reason as the key sheet.
                     follow_at = None
                     if buttons & curses.BUTTON1_CLICKED:
-                        open_menu(session, hit, env)
+                        open_tap(screen, session, action, hit, env)
                     else:
                         armed = hit
-                elif hit:
+                elif action == "select":
+                    # A repo heading (issue #1032): highlight it, switch nothing.
+                    # A typed name / ⌃n now starts there; Esc or a tap on a
+                    # session row clears it.
+                    follow_at = None
+                    selected = hit
+                elif action == "jump":
                     selected = hit
                     jump(session, selected, pane, lock)
                 # Anywhere else (the input line included) the click only focuses:
@@ -709,7 +757,9 @@ def ui(screen, session, worker, lock):
                 if armed == HELP_ROW and y == help_y:
                     open_help(screen, env)
                 elif armed is not None and hit == armed:
-                    open_menu(session, armed, env)
+                    open_tap(screen, session, "new" if armed.startswith("hdr:") else "menu",
+                             armed, env)
+                    refresh_at = 0
                 armed = None
             elif buttons & curses.BUTTON4_PRESSED and ids:
                 selected = ids[max(0, index - 3)]

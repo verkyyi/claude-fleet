@@ -10,6 +10,12 @@
 #      row → `--no-repo` ($HOME, issue #997), ⌃n still asks; the hub, an unknown
 #      window → today's behavior (nothing passed).
 #   C. 2-repo fleet viewing ONE repo: nothing passed — that repo still wins.
+#   T. Heading taps (issue #1032), over the REAL sidebar rows: in a one-repo
+#      fleet no row is a heading key, so every tap is today's jump/menu and the
+#      input line keeps its plain hint (byte for byte). Under `all`, a repo
+#      heading's 1st tap selects it (no switch), the 2nd opens ⌃n with CF_REPO
+#      pinned; the line names the target; `no repo` selects (⌃n asks); the `?`
+#      heading stays inert.
 #
 # The sidebar half imports fleet-sidebar.py and runs its real selection_repo /
 # spawn_scratch / new_task against a shadow bin/ whose dash-raw-session.sh and
@@ -101,6 +107,43 @@ PY
   printf '%s|%s' "$(cat "$WORK/dash-raw-session.sh.argv" 2>/dev/null)" \
                  "$(cat "$WORK/dash-popup.sh.argv" 2>/dev/null)"
 }
+# taps <anchor window> → one line per sidebar row as that window's view reads
+# it: `<key> <1st tap> <2nd tap> <input hint>` (a bare heading prints `hdr`).
+taps() {
+  TMUX="$SOCK,1,0" TMUX_PANE=$(pane "$1") FLEET_SESSION="$S" \
+  FLEET_SIDEBAR_CURRENT="$(wid "$1")" \
+  python3 - "$BIN/fleet-sidebar.py" "$(wid "$1")" <<'PY' 2>/dev/null
+import importlib.util, os, subprocess, sys
+spec = importlib.util.spec_from_file_location("sidebar", sys.argv[1])
+mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+out = subprocess.run(["bash", str(mod.BIN / "tmux-dashboard-rows.sh"), "--sidebar"],
+                     capture_output=True, text=True).stdout
+for line in out.split("\n"):
+    row = line.split(mod.US, 4)
+    if len(row) != 5:
+        continue
+    key = mod.key_of(row)
+    print(key, mod.tap(key, sys.argv[2]), mod.tap(key, key), mod.placeholder(key))
+PY
+}
+# tapnew <window> <heading key> → the popup argv a 2nd tap on that heading opens.
+tapnew() {
+  rm -f "$WORK"/*.argv
+  TMUX="$SOCK,1,0" TMUX_PANE=$(pane "$1") FLEET_SESSION="$S" \
+  python3 - "$BIN/fleet-sidebar.py" "$WORK/shadow" "$S" "$2" <<'PY' >/dev/null 2>&1
+import importlib.util, os, sys
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("sidebar", sys.argv[1])
+mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+mod.BIN = Path(sys.argv[2])
+class Stub:
+    def endwin(self): pass
+    def clear(self): pass
+mod.curses = Stub()
+mod.open_tap(Stub(), sys.argv[3], mod.tap(sys.argv[4], sys.argv[4]), sys.argv[4], dict(os.environ))
+PY
+  cat "$WORK/dash-popup.sh.argv" 2>/dev/null
+}
 SH="$WORK/shadow"
 PLAIN="--name n --origin hub|-w 90% -h 12 -- bash $SH/dash-issue-new.sh confirm --spawn"
 TO_B="--name n --origin hub --repo o/b|-w 90% -h 12 -- env CF_REPO=o/b bash $SH/dash-issue-new.sh confirm --spawn"
@@ -111,6 +154,14 @@ for w in wA wB wWT wNO wUNK plan; do
 done
 eq "A: one-repo sidebar spawns unchanged" "$(sidebar wA)" "$PLAIN"
 eq "A: one-repo sidebar spawns unchanged (norepo row)" "$(sidebar wNO)" "$PLAIN"
+T_A="$(taps wA)"
+[ -n "$T_A" ] || fail "T: one-repo sidebar produced no rows"
+eq "T: one-repo fleet has no heading key or heading tap" \
+   "$(printf '%s\n' "$T_A" | grep -c 'hdr:\| select \| new ')" 0
+eq "T: one-repo input hint unchanged" \
+   "$(printf '%s\n' "$T_A" | awk '$4 != "新会话名…"' | wc -l | tr -d ' ')" 0
+eq "T: one-repo row taps jump, then menu" \
+   "$(printf '%s\n' "$T_A" | grep '^@' | grep -v "^$(wid wA) " | awk '{print $2, $3}' | sort -u)" "jump menu"
 tmux set-option -wu -t "$S:wWT" @repo
 
 # --- B. two repos, viewing all ----------------------------------------------------
@@ -131,6 +182,18 @@ tmux set-option -wu -t "$S:wUNK" @repo
 eq "B: sidebar on a B row → scratch + ⌃n go to B" "$(sidebar wB)" "$TO_B"
 eq "B: sidebar on a norepo row → --no-repo scratch, ⌃n asks" "$(sidebar wNO)" "--name n --origin hub --no-repo|${PLAIN#*|}"
 eq "B: sidebar on an unknown row → today's behavior" "$(sidebar wUNK)" "$PLAIN"
+
+T_B="$(taps wA)"
+eq "T: heading B — 1st tap selects, 2nd opens new, hint names it" \
+   "$(printf '%s\n' "$T_B" | grep '^hdr:o/b ')" "hdr:o/b select new 新会话 → b…"
+eq "T: no-repo heading selects as \$HOME" \
+   "$(printf '%s\n' "$T_B" | grep '^hdr:none ')" "hdr:none select new 新会话 → no repo…"
+eq "T: the ? heading stays inert" \
+   "$(printf '%s\n' "$T_B" | grep -c '^hdr None None 新会话名…$')" 1
+eq "T: a session row still jumps, then opens its menu" \
+   "$(printf '%s\n' "$T_B" | grep "^$(wid wB) " | awk '{print $2, $3, $4}')" "jump menu 新会话名…"
+eq "T: 2nd tap on heading B → ⌃n pinned to B" "$(tapnew wA hdr:o/b)" "${TO_B#*|}"
+eq "T: 2nd tap on no-repo heading → ⌃n asks" "$(tapnew wA hdr:none)" "${PLAIN#*|}"
 
 # --- C. two repos, viewing one ----------------------------------------------------
 fleet_current_repo_set "$S" o/a >/dev/null 2>&1 || fail "C: could not set current repo"

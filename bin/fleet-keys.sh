@@ -156,6 +156,7 @@ print_sheet() {
   key "esc" "clear the typed name; on an empty line give input back to the worker"
   key "↑ / ↓" "switch to the highlighted task (follows once you pause, ~¼s; a held key is one switch, a row passed over is never selected); home/end the ends"
   key "← / →" "fold / unfold the highlighted row's subtree"
+  key "tap a heading" "2+ repos, viewing all: a tap on a repo heading selects it (no switch) and the input line names it — a typed name or new task starts THERE; tap it again for the new-task popup pinned to that repo. 'no repo' = \$HOME; esc or a tap on a task clears it"
   key "$(dg new)" "new task — file an issue AND spawn its worker (the hub's ⌃n popup)$(dn new)"
   key "$(dg menu)" "on an EMPTY line: the highlighted task's menu — rename (edits on this line: ↵ applies, esc/empty cancels) · pin · open PR · answer its question · flip new sessions claude⇄codex · reap (asks y/n first) · new task. Inside a name it types a dot. Touch: tap the highlighted row again$(dn menu)"
   key "$(dg restore)" "restore a finished task — the hub's ⌃t landed list in a popup; ↵ brings it back as the current window (a closed-unmerged PR asks to reopen first). Touch: the row menu's last item$(dn restore)"
