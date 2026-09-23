@@ -150,6 +150,17 @@ def worker_cue(pane):
 def tasks_cue(pane):
     return input_line(pane).startswith('› 新会话名')
 
+# Focus on a pane's top line is COLOUR ONLY (issue #999): the focused style is
+# the bg, and the words never change with focus — so no label jumps in or out.
+WORKER_FOCUS = 'bg=#7aa2f7'
+TASKS_FOCUS = 'bg=#e0af68'
+
+def border(pane):
+    return tm('display-message', '-p', '-t', pane, '#{E:pane-border-format}')
+
+def border_text(pane):
+    return re.sub(r'#\[[^]]*\]', '', border(pane))
+
 def windows():
     return tm('list-windows', '-t', 'fleet-test', '-F', '#{window_id}').splitlines()
 
@@ -290,8 +301,9 @@ try:
     check('worker-one' in tm('capture-pane', '-p', '-t', side).splitlines()[0] or
           '修复侧栏' in tm('capture-pane', '-p', '-t', side).splitlines()[0],
           'sidebar should start with a task, not an internal title row')
-    check('WORKER · INPUT' in tm('display-message', '-p', '-t', p1, '#{E:pane-border-format}'),
+    check(WORKER_FOCUS in border(p1),
           'active worker border must identify input focus')
+    check('INPUT' not in border_text(p1) + border_text(side), 'a border still names its focus')
     tm('select-pane', '-t', side)
     check(tm('display-message', '-p', '-t', w1, '#{pane_id}') == p1,
           'sidebar must not become the agent identity for window-targeted tools')
@@ -341,7 +353,7 @@ try:
     wait_for(lambda: 'fleet-sidebar' in tm('list-clients', '-F', '#{client_key_table}'), 'prefix E did not enter sidebar navigation')
     wait_for(lambda: tasks_cue(side),
              'keyboard navigation needs a persistent focus cue')
-    check('INPUT' not in tm('display-message', '-p', '-t', p1, '#{E:pane-border-format}'),
+    check(WORKER_FOCUS not in border(p1),
           'worker header claims input focus while keys go to sidebar')
     os.write(terminal, b'\x1b[B\r')
     wait_for(lambda: bool(view_on(w2)), 'keyboard jump did not move to second worker')
@@ -371,10 +383,11 @@ try:
     wait_for(navigation, 'mouse press/release did not leave arrow keys with the sidebar')
     wait_for(lambda: tasks_cue(side),
              'click did not visibly focus the sidebar')
-    check('INPUT' not in tm('display-message', '-p', '-t', p1, '#{E:pane-border-format}'),
+    check(WORKER_FOCUS not in border(p1),
           'worker still advertises input focus after a sidebar click')
-    check('TASKS · INPUT' in tm('display-message', '-p', '-t', side, '#{E:pane-border-format}'),
+    check(TASKS_FOCUS in border(side),
           'sidebar border did not advertise keyboard focus')
+    nav_text = [border_text(p1), border_text(side)]
     # ↑↓ follow (issue #822): an arrow through the key table switches to the
     # highlighted worker once the highlight settles, keeps the client in the
     # sidebar key table and keeps the worker pane active; a burst that ends on
@@ -391,7 +404,7 @@ try:
     wait_for(navigation, 'follow did not keep the client in the sidebar key table')
     wait_for(lambda: tasks_cue(side), 'follow lost the navigation cue')
     check(tm('display-message', '-p', '-t', w2, '#{pane_id}') == p2, 'follow did not keep the worker pane active')
-    check('INPUT' not in tm('display-message', '-p', '-t', p2, '#{E:pane-border-format}'),
+    check(WORKER_FOCUS not in border(p2),
           'worker advertises input focus after a follow')
     check(switches() == [w2], 'one arrow made %r window switches' % switches())
     os.write(terminal, b'\x1b[A')
@@ -414,8 +427,10 @@ try:
     wait_for(lambda: not navigation(), 'clicking the already-active worker did not leave navigation')
     wait_for(lambda: worker_cue(side),
              'worker click left the sidebar highlighted')
-    check('WORKER · INPUT' in tm('display-message', '-p', '-t', p1, '#{E:pane-border-format}'),
+    check(WORKER_FOCUS in border(p1),
           'worker click did not restore its input badge')
+    check([border_text(p1), border_text(side)] == nav_text,
+          'border text changed with focus: %r != %r' % ([border_text(p1), border_text(side)], nav_text))
     os.write(terminal, b'worker-input-check')
     wait_for(lambda: 'worker-input-check' in tm('capture-pane', '-p', '-t', p1),
              'typing after a worker click did not reach the worker')
@@ -476,7 +491,7 @@ try:
     wait_for(lambda: tasks_cue(side), 'second navigation entry lost focus cue')
     os.write(terminal, b'\x1b')
     wait_for(lambda: worker_cue(side), 'Escape did not restore input focus')
-    check('INPUT' in tm('display-message', '-p', '-t', p1, '#{E:pane-border-format}'),
+    check(WORKER_FOCUS in border(p1),
           'Escape left the worker border dimmed')
 
     # A pointer MOVE keeps navigation (issue #925). Claude Code asks for

@@ -243,14 +243,15 @@ highlights the current worker, and keeps that worker visible even in a folded
 group. Rows use your task descriptions, without internal worker IDs or a second
 title row inside the sidebar. The current task has a `▶` marker. Click the
 sidebar (or press `prefix E`) to give it the arrow keys: an amber
-**TASKS · INPUT** pane border and selection show keyboard focus. ↑↓ (and
+**TASKS** pane border and selection show keyboard focus. ↑↓ (and
 Home/End) switch to the highlighted task without Enter, once the highlight has
 rested for about a quarter second: a held key is one switch, not one per row,
 and a row you only passed over is never selected — nor woken, since a sleeping
 worker resumes only after the view has stayed on it for two seconds. The
 sidebar keeps the arrow keys after each switch, and a click switches the same
 way. Click the worker, or press Enter/Esc, to return keyboard input to the worker;
-its top border then shows a blue **WORKER · INPUT** badge before the task name.
+its top border's **WORKER** label then turns blue. The words on a pane's top
+line never change with focus — only the colour moves.
 Clicking the top border itself requires tmux 3.7 or newer; on older versions,
 click inside the sidebar or use `prefix E` to focus it.
 `prefix e` saves the on/off preference as `FLEET_SIDEBAR`;
