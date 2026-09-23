@@ -160,8 +160,10 @@ override them):
   and it is RECORD-ONLY — a bare `fleet-comment.sh` posts something the target
   worker will NEVER see, while printing a URL and exiting 0.** To actually reach
   another worker, pick a channel: **SendMessage** for a pure instruction (direct
-  to that worker's session, immediate, returns a delivery receipt — preferred),
-  or `fleet-comment.sh --to-worker` when the instruction also belongs in the
+  to that worker's session, immediate, returns a delivery receipt — preferred;
+  from a script, `~/.claude/fleet/bin/fleet-peer-send.sh issue:<N> '…'` — always
+  by issue, never a `<sess>:<idx>` window number, which drifts when any window
+  closes, issue #1046), or `fleet-comment.sh --to-worker` when the instruction also belongs in the
   issue record. Since #489 the wrapper prints which of the two happened on
   stderr, and warns when you post record-only to an issue that has a live
   worker — read that line instead of assuming delivery. NEVER drive
