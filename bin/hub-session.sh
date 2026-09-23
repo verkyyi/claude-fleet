@@ -34,9 +34,10 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-lib.sh"
 
 SESS="${HUB_SESSION:-$(fleet_current_session)}"
-# Last resort (run outside tmux, no session given): the global primary fleet,
-# named by the same 'fleet-<repo>' standard fleet-up.sh uses.
-[ -z "$SESS" ] && SESS="fleet-$(basename "${FLEET_REPO:-primary}")"
+# Last resort (run outside tmux, no session given): the login's one fleet
+# (issue #979), else the name fleet-up.sh gives a brand-new fleet.
+[ -z "$SESS" ] && SESS="$(fleet_login_fleet 2>/dev/null)"
+[ -z "$SESS" ] && SESS=fleet
 # This fleet's own tmux server socket (== session name, issue #159). Named on
 # EVERY tmux call so the hub is built on the right socket whether we're invoked
 # from fleet-up (no $TMUX) or from a zoom bind inside the fleet ($TMUX set) — the

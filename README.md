@@ -354,8 +354,11 @@ server goes down and its conf is archived under
 `~/.config/claude-fleet/archive/`. It is never deleted.
 
 `bin/multirepo-e2e-selftest.sh` proves the whole path end to end. One crash of
-the fleet's tmux server takes every repo in it down, so keep a repo you want
-isolated in its own fleet.
+the fleet's tmux server takes every repo in it down — and a login runs exactly
+**one fleet** (issue #979): `fleet-up <owner/repo>` / `cf <owner/repo>` with a fleet
+already configured ADDS the repo to it and makes it the current repo, and a second
+fleet is refused. A repo you want isolated needs a second login. A brand-new fleet
+is named `fleet`; an existing one keeps its name.
 
 `cf` (from `shell/cw.zsh`) is your one-key way to a fleet. With **no args** it
 first tries to (re)attach to an already-running fleet (`bin/fleet-attach.sh`,
@@ -363,14 +366,20 @@ issue #212): one live fleet → straight in; a leftover second one → the
 most recently active (there is no fleet picker, issue #980); already inside the
 only one → a no-op. Only when
 **nothing** is running does it fall through to `fleet-up.sh` — inferring the repo
-from the current checkout's `origin` and reusing that worktree (no clone). With
-args it forwards them straight to `fleet-up.sh` to bring a named fleet up.
+from the current checkout's `origin` and reusing that worktree (no clone), or
+bringing your fleet up on its own repo from outside a checkout. With args it
+forwards them straight to `fleet-up.sh`, which adds that repo to your fleet.
 
 Each fleet keeps its durable state in **one directory per fleet** —
 `~/.config/claude-fleet/fleets/<session>/` (its `conf` overlay, restore map,
 issue-bridge state), so `ls ~/.config/claude-fleet/fleets/` is the list of
 running fleets (issue #181). The `conf` overlays the global `fleet.conf`, which
-still works as a one-fleet default. Every fleet gets a **`plan` hub** window holding
+still works as a one-fleet default. **One settings file per login** (issue #979):
+`bin/fleet-settings.sh merge` folds the install's `fleet.conf` and the fleet's
+`conf` into `~/.config/claude-fleet/fleet.settings` (the `conf` keeps only
+`FLEET_REPO`/`FLEET_MAIN`/`FLEET_BASE_BRANCH`; the old files stay as
+`*.pre-merge`). Read order is install `fleet.conf` < `fleet.settings` < the
+fleet `conf`, so an unmerged login loads exactly as before. Every fleet gets a **`plan` hub** window holding
 the **dash alone**. The hub used to split a persistent `claude` in below it, but
 that pane rebuilt itself on every ⌂ tap, `F9`, fresh fleet and crash recovery —
 closing it never stuck — so it is gone, along with the `FLEET_HUB_CMD` knob that

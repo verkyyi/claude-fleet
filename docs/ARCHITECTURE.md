@@ -817,8 +817,13 @@ Where "existing or newly-created checkout" is handled:
    no-arg, from-inside-a-checkout path — but *first* tries `bin/fleet-attach.sh`,
    the fast-path reattach to an already-running fleet: it only walks the fleet-up
    path below when nothing is live. See issue #212.)
-1. `session = slug(repo)`; refuse if a tmux session by that name already exists
-   (one fleet per repo).
+1. **One fleet per login** (issue #979). `session` = the login's one configured
+   fleet (it keeps its name), else `fleet` for a brand-new one — never derived
+   from a repo. When that fleet is configured and `<owner/repo>` is not its own
+   repo, the fleet comes up on its OWN repo (if down) and the named repo is added
+   (`fleet-repo.sh add`) and made current. A `--name` that is not the login's
+   fleet is refused: a second fleet means a second login. Already up on its own
+   repo → attach, no rewrite.
 2. Checkout: if `<dir>` exists and is that repo → use it; else clone it. This
    becomes `FLEET_MAIN`.
 3. Write `$FLEET_CONF_DIR/fleets/<session>/conf` (`FLEET_REPO`, `FLEET_MAIN`,

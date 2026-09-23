@@ -56,6 +56,7 @@ if [ "$nav" = 0 ] &&
    [ "$(tmux display-message -p '#{&&:#{@sidebar_worker},#{!=:#{window_zoomed_flag},1}}' 2>/dev/null)" = 1 ] &&
    [ -z "$(tmux display-message -p -t '{top-left}' '#{@sidebar_input}' 2>/dev/null)" ]; then
   [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
+  _fs="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleet.settings"; [ -f "$_fs" ] && . "$_fs"   # the login's settings win (#979)
   fleet_load_conf "$SESS"
   if [ "${FLEET_HOME_SIDEBAR_FIRST:-1}" != 0 ] &&
      tmux switch-client ${client:+-c "$client"} -T fleet-sidebar 2>/dev/null; then
@@ -83,6 +84,7 @@ if [ "$nav" = 0 ] && [ -n "$target" ] &&
   case "$(tmux display-message -p '#{window_name}' 2>/dev/null)" in dash|plan|backlog) curw='' ;; esac
   if [ -n "$curw" ] && [ "$curw" != "$(tmux display-message -p -t "$target" '#{window_id}' 2>/dev/null)" ]; then
     [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
+    _fs="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleet.settings"; [ -f "$_fs" ] && . "$_fs"   # the login's settings win (#979)
     fleet_load_conf "$SESS"
     if [ "${FLEET_HOME_SIDEBAR_FIRST:-1}" != 0 ]; then
       if [ "$mode" = --home ]; then cause=home; else cause=f9; fi

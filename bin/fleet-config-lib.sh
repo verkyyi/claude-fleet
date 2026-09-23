@@ -29,7 +29,15 @@ FCFG_US="$(printf '\037')"
 
 # --- file locations (all overridable for tests) -----------------------------
 fcfg_example()     { printf '%s' "${FCFG_EXAMPLE:-$FCFG_DIR/../fleet.conf.example}"; }
-fcfg_global_conf() { printf '%s' "${FCFG_GLOBAL_CONF:-$FCFG_DIR/../fleet.conf}"; }
+# The machine-wide layer. Since issue #979 a login keeps ONE settings file,
+# $FLEET_CONF_DIR/fleet.settings: once it exists, global writes land there and it
+# wins over the install's fleet.conf, which stays a read-only fallback (dual-read).
+fcfg_install_conf() { printf '%s' "${FCFG_GLOBAL_CONF:-$FCFG_DIR/../fleet.conf}"; }
+fcfg_settings_conf() { printf '%s' "${FCFG_SETTINGS_CONF:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleet.settings}"; }
+fcfg_global_conf() {
+  local s; s=$(fcfg_settings_conf)
+  if [ -f "$s" ]; then printf '%s' "$s"; else fcfg_install_conf; fi
+}
 # The per-fleet overlay for a session. FCFG_FLEET_CONF overrides (tests); else the
 # per-fleet layout fleets/<session>/conf (issue #181), falling back to a legacy
 # flat <session>.conf when only that exists (edit it in place until migrated). A
@@ -275,7 +283,8 @@ fcfg_file_value() {
 fcfg_effective() {
   local key="$1" sess="${2:-}" v
   if v=$(fcfg_file_value "$(fcfg_fleet_conf "$sess")" "$key"); then printf '%s%sfleet'  "$v" "$FCFG_US"; return; fi
-  if v=$(fcfg_file_value "$(fcfg_global_conf)"      "$key"); then printf '%s%sglobal' "$v" "$FCFG_US"; return; fi
+  if v=$(fcfg_file_value "$(fcfg_settings_conf)"    "$key"); then printf '%s%sglobal' "$v" "$FCFG_US"; return; fi
+  if v=$(fcfg_file_value "$(fcfg_install_conf)"     "$key"); then printf '%s%sglobal' "$v" "$FCFG_US"; return; fi
   printf '%s%sdefault' "$(fcfg_default "$key")" "$FCFG_US"
 }
 
