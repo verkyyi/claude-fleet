@@ -10,6 +10,8 @@
 #   landed:issue:<n>          PR-less landed row  → resume by issue number <n>
 #   landed:<pr>               PR-bearing row      → resume by #<pr>
 #   landed:scratch:scratch-<n> scratch row (#466) → resume by its scratch key
+# In a fleet hosting 2+ repos each shape may end in `@<owner/name>` — the row's
+# own repo (issue #804); it is the --repo default, so a resume lands in its repo.
 # Anything else (a live-view row, the header) is a no-op with a hint — restore only
 # applies to the landed view (⌃t).
 #
@@ -38,6 +40,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # empty). The scratch case must precede the `landed:*` catch-all, which would
 # otherwise read the whole `scratch:scratch-<n>` tail as a PR number.
 restore_key_for() {
+  set -- "${1%@*}"                                              # the @<repo> suffix is not the key (#804)
   case "${1:-}" in
     landed:scratch:*) printf '%s' "${1#landed:scratch:}" ;;   # scratch-<n> (#466)
     landed:issue:*)   printf '%s' "${1#landed:issue:}" ;;
@@ -72,6 +75,8 @@ while [ "$#" -gt 0 ]; do
 done
 # The column header / a #974 repo group heading: not a session — a quiet no-op.
 [ "$TARGET" = hdr ] && exit 0
+# A merged landed row names its own repo (issue #804); an explicit --repo wins.
+case "$TARGET" in landed:*@*) [ -n "$REPO_ARG" ] || REPO_ARG=${TARGET#*@} ;; esac
 key=$(restore_key_for "$TARGET") || {
   printf 'dash-restore-session: not a landed session — nothing to restore for %s\n' "$TARGET" >&2
   tmux display-message "restore: not a landed session — ⌃t for the landed view, then ⌃o" 2>/dev/null
