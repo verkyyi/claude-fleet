@@ -2213,6 +2213,21 @@ fleet_worktree_setup() {
   return 0
 }
 
+# fleet_base_deps_on — rc 0 iff this (loaded) fleet keeps its BASE checkout's
+# dependencies installed from the current lockfile (issue #961): base-sync then
+# runs `fleet-deps-link.sh --refresh-base` after each tick. FLEET_BASE_DEPS=1/0 says
+# so explicitly; unset, it follows the stock shared-deps hook — on exactly when
+# FLEET_WORKTREE_SETUP runs fleet-deps-link, whose links are only safe if the tree
+# they point into keeps up with master. Anything else: off (the historic default).
+fleet_base_deps_on() {
+  case "${FLEET_BASE_DEPS:-}" in
+    1) return 0 ;;
+    0) return 1 ;;
+  esac
+  case "${FLEET_WORKTREE_SETUP:-}" in *fleet-deps-link*) return 0 ;; esac
+  return 1
+}
+
 # fleet_worktree_drop <main> <worktree-dir> [--force] — retire a worktree WITHOUT
 # paying for its bytes. Prints exactly one token; rc 0 ⇔ the worktree is gone from
 # `git worktree list`:

@@ -27,6 +27,17 @@
 #              logged and the worktree is still created (and promptly).
 #   DROP       fleet_worktree_drop on a linked worktree drops the LINK; the trash
 #              sweep never reaches the base's tree.
+#   STALE      (issue #961) the base's lockfile moved but its node_modules was not
+#              reinstalled (stamp = the OLD sha) ⇒ `installed-needed:base-stale`, no
+#              link; no stamp ⇒ `installed-needed:base-unstamped`; a reinstall in
+#              flight (.fleet-installing) ⇒ base-stale.
+#   REFRESH    --refresh-base <main> <old> <new> reinstalls exactly the dir whose
+#              lockfile changed, stamps it, and a new worktree then LINKS; a quiet
+#              second run does nothing; a failing install leaves it unstamped (not
+#              linked) and the next --refresh-base retries it.
+#   PRIME      --prime-base installs + stamps every lockfile dir (npm / yarn / pnpm
+#              each with its frozen-lockfile form); --base-status counts them; a
+#              tracked lockfile the install rewrote is restored (base stays clean).
 #
 # Real git, temp dirs, fake node_modules — no network, no npm, no tmux.
 set -uo pipefail
@@ -78,6 +89,11 @@ mkdir -p node_modules/lodash packages/a/node_modules/left-pad tools/node_modules
 : > packages/a/node_modules/left-pad/index.js
 ln -s ../../packages/a tools/node_modules/a-src            # workspace link → source
 ln -s .pnpm/react@1/node_modules/react web/node_modules/react   # pnpm store link
+# A base install is trusted only when stamped with its lockfile's sha (issue #961):
+# stamp these as a --prime-base would have.
+sha() { if command -v shasum >/dev/null 2>&1; then shasum -a 256 < "$1"; else sha256sum < "$1"; fi | cut -d' ' -f1; }
+stamp() { sha "$MAIN/$1/$2" > "$MAIN/$1/node_modules/.fleet-lock-sha"; }
+stamp . package-lock.json; stamp tools yarn.lock; stamp web pnpm-lock.yaml
 snap() { find "$MAIN/node_modules" "$MAIN/packages/a/node_modules" | sort; }
 BASE_SNAP=$(snap)
 
@@ -196,5 +212,81 @@ case "$tok" in trashed:*) ;; *) fail "DROP: unexpected token" "$tok" ;; esac
 fleet_trash_sweep "$MAIN" 0 >/dev/null
 [ "$(snap)" = "$BASE_SNAP" ] || fail "DROP: base tree changed"
 ok "DROP: link removed before the trash; sweep leaves the base intact"
+
+# ---- STALE (issue #961) ------------------------------------------------------
+# The base fast-forwards to a commit that bumps the root lockfile; its node_modules
+# still carries the OLD stamp. A fresh worktree's lockfile matches the base's —
+# exactly the case the lockfile compare alone got wrong.
+unset FLEET_WORKTREE_SETUP
+OLD=$(git -C "$MAIN" rev-parse HEAD)
+printf '{"lockfileVersion":3,"bump":1}\n' > "$MAIN/package-lock.json"
+git -C "$MAIN" commit -qam 'bump root deps'
+NEW=$(git -C "$MAIN" rev-parse HEAD)
+git -C "$MAIN" worktree add -q "$WORK/wt-stale" -b wt-stale >/dev/null 2>&1 || fail "STALE: worktree add"
+out=$("$DL" --dry-run "$WORK/wt-stale" "$MAIN")
+printf '%s\n' "$out" | grep -qx 'installed-needed:base-stale .' || fail "STALE: stamp of the old lockfile must not link" "$out"
+printf '%s\n' "$out" | grep -qx 'skipped:root-not-linked packages/a' || fail "STALE: member of a stale root" "$out"
+printf '%s\n' "$out" | grep -qx 'linked web' || fail "STALE: an untouched fresh dir still links" "$out"
+mv "$MAIN/node_modules/.fleet-lock-sha" "$WORK/stamp.bak"
+out=$("$DL" --dry-run "$WORK/wt-stale" "$MAIN")
+printf '%s\n' "$out" | grep -qx 'installed-needed:base-unstamped .' || fail "STALE: no stamp must not link" "$out"
+stamp . package-lock.json; : > "$MAIN/node_modules/.fleet-installing"
+out=$("$DL" --dry-run "$WORK/wt-stale" "$MAIN")
+printf '%s\n' "$out" | grep -qx 'installed-needed:base-stale .' || fail "STALE: a reinstall in flight must not link" "$out"
+rm -f "$MAIN/node_modules/.fleet-installing"; mv "$WORK/stamp.bak" "$MAIN/node_modules/.fleet-lock-sha"
+ok "STALE: old stamp / no stamp / install in flight ⇒ installed-needed:base-*, no link"
+
+# ---- REFRESH ---------------------------------------------------------------
+# Fake package managers: record the call, make a node_modules, exit $FAKE_RC.
+FB="$WORK/fakebin"; mkdir -p "$FB"
+for pm in npm yarn pnpm; do
+  cat > "$FB/$pm" <<FAKE
+#!/bin/sh
+printf '%s %s %s\n' "\$(pwd -P)" "$pm" "\$*" >> "$WORK/pm.calls"
+[ "\${FAKE_RC:-0}" = 0 ] || exit "\$FAKE_RC"
+mkdir -p node_modules/fresh-from-$pm
+[ "$pm" != yarn ] || printf '# rewritten by yarn\\n' >> yarn.lock   # yarn v1 does this for real
+FAKE
+  chmod +x "$FB/$pm"
+done
+export PATH="$FB:$PATH" FLEET_BASE_DEPS_LOG="$WORK/base-deps.log"
+: > "$WORK/pm.calls"
+out=$(FAKE_RC=1 "$DL" --refresh-base "$MAIN" "$OLD" "$NEW")
+printf '%s\n' "$out" | grep -qx 'install-failed:rc=1 .' || fail "REFRESH: failing install verdict" "$out"
+[ ! -e "$MAIN/node_modules/.fleet-lock-sha" ] || fail "REFRESH: a failed install left a stamp"
+[ ! -e "$MAIN/node_modules/.fleet-installing" ] || fail "REFRESH: a failed install left the in-flight marker"
+out=$("$DL" --dry-run "$WORK/wt-stale" "$MAIN")
+printf '%s\n' "$out" | grep -qx 'installed-needed:base-unstamped .' || fail "REFRESH: failed install must not link" "$out"
+# The retry needs no diff: the dir is recorded as ours and not fresh.
+: > "$WORK/pm.calls"
+out=$("$DL" --refresh-base "$MAIN")
+[ "$out" = "installed ." ] || fail "REFRESH: retry did not reinstall exactly the root" "$out"
+grep -qx "$MAIN npm ci" "$WORK/pm.calls" || fail "REFRESH: expected npm ci in the base root" "$(cat "$WORK/pm.calls")"
+[ "$(cat "$MAIN/node_modules/.fleet-lock-sha")" = "$(sha "$MAIN/package-lock.json")" ] || fail "REFRESH: stamp is not the new lockfile's sha"
+grep -q "$MAIN ok" "$WORK/base-deps.log" || fail "REFRESH: install not logged" "$(cat "$WORK/base-deps.log")"
+out=$("$DL" "$WORK/wt-stale" "$MAIN")
+printf '%s\n' "$out" | grep -qx 'linked .' || fail "REFRESH: reinstalled base must link" "$out"
+: > "$WORK/pm.calls"
+out=$("$DL" --refresh-base "$MAIN" "$NEW" "$NEW")
+[ -z "$out" ] && [ ! -s "$WORK/pm.calls" ] || fail "REFRESH: a quiet run must install nothing" "$out"
+ok "REFRESH: changed lockfile ⇒ reinstall + stamp ⇒ link; failure ⇒ unstamped + retried; quiet run is a no-op"
+
+# ---- PRIME + STATUS ---------------------------------------------------------
+rm -f "$MAIN/tools/node_modules/.fleet-lock-sha"
+printf 'lockfileVersion: 10\n' > "$MAIN/web/pnpm-lock.yaml"     # stale web stamp
+git -C "$MAIN" commit -qam 'bump web deps'
+out=$("$DL" --base-status "$MAIN")
+printf '%s\n' "$out" | grep -qx 'summary fresh=1 stale=1 unstamped=1 installing=0 not-installed=0' || fail "STATUS: counts" "$out"
+: > "$WORK/pm.calls"
+out=$("$DL" --prime-base "$MAIN")
+[ "$(printf '%s\n' "$out" | grep -c '^installed ')" = 3 ] || fail "PRIME: expected 3 installs" "$out"
+grep -qx "$MAIN/tools yarn install --frozen-lockfile" "$WORK/pm.calls" || fail "PRIME: yarn v1 form" "$(cat "$WORK/pm.calls")"
+grep -qx "$MAIN/web pnpm install --frozen-lockfile" "$WORK/pm.calls" || fail "PRIME: pnpm form" "$(cat "$WORK/pm.calls")"
+out=$("$DL" --base-status "$MAIN")
+printf '%s\n' "$out" | grep -qx 'summary fresh=3 stale=0 unstamped=0 installing=0 not-installed=0' || fail "PRIME: status after prime" "$out"
+[ -z "$(git -C "$MAIN" status --porcelain --untracked-files=no)" ] \
+  || fail "PRIME: an install left the base dirty (yarn rewrote its lockfile)" "$(git -C "$MAIN" status --porcelain)"
+grep -q 'restored tracked tools/yarn.lock' "$WORK/base-deps.log" || fail "PRIME: restore not logged" "$(cat "$WORK/base-deps.log")"
+ok "PRIME: every lockfile dir installed with its frozen form + stamped; --base-status counts; a rewritten lockfile is restored"
 
 printf 'fleet-deps-link-selftest: %d checks passed\n' "$pass"

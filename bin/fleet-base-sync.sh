@@ -49,6 +49,10 @@
 #   FLEET_LAND_LEASE_DIR        SHARED land-lease dir (with the cleaner + landers)
 #                                                     (default ~/.claude/leases)
 #   LAND_LEASE_DIR             per-tool override of the lease dir (tests)
+#   FLEET_BASE_DEPS             1 = after each tick, reinstall base dirs whose
+#                               lockfile moved (fleet-deps-link.sh --refresh-base);
+#                               unset = on iff FLEET_WORKTREE_SETUP is fleet-deps-link
+#                               (fleet_base_deps_on, issue #961); 0 = off
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -80,7 +84,7 @@ ARGV_SESS=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run|-n) DRY=1 ;;
-    -h|--help)    sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)    sed -n '2,49p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)           printf 'fleet-base-sync: unknown flag %s\n' "$1" >&2; exit 2 ;;
     *)            ARGV_SESS+=("$1") ;;
   esac
@@ -96,19 +100,20 @@ LEASE_DIR="${LAND_LEASE_DIR:-${FLEET_LAND_LEASE_DIR:-$HOME/.claude/leases}}"
 log() { printf '%s fleet-base-sync: %s\n' "$(date '+%H:%M:%S' 2>/dev/null || echo '--:--:--')" "$*" >&2; }
 
 # --- extract ONE fleet's base identity (subshelled so its conf never leaks into
-# the discovery loop). Prints TSV: on-flag \t repo \t main \t base-branch.
+# the discovery loop). Prints TSV: on-flag \t repo \t main \t base-branch \t deps.
 fleet_ident() { (
   fleet_load_conf "$1"
   off="${FLEET_BASE_SYNC:-1}"
   repo="${FLEET_REPO:-}"
   _r=$(fleet_repo_cached "$1"); [ -n "$_r" ] && repo="$_r"
-  printf '%s\t%s\t%s\t%s\n' "$off" "$repo" "${FLEET_MAIN:-}" "${FLEET_BASE_BRANCH:-master}"
+  deps=0; fleet_base_deps_on && deps=1
+  printf '%s\t%s\t%s\t%s\t%s\n' "$off" "$repo" "${FLEET_MAIN:-}" "${FLEET_BASE_BRANCH:-master}" "$deps"
 ) }
 
 # --- move ONE repo's base. Runs in a subshell so its lease trap is scoped to the
 # single mover (never leaks across the discovery loop). No conf is sourced here.
 sync_repo() { (
-  sess="$1"; repo="$2"; main="$3"; base="$4"; slug="$5"
+  sess="$1"; repo="$2"; main="$3"; base="$4"; slug="$5"; deps="${6:-0}"
   lease="$LEASE_DIR/land-$slug.lock"
   old=$(git -C "$main" rev-parse --short HEAD 2>/dev/null)
 
@@ -153,6 +158,16 @@ sync_repo() { (
     log "$sess: base checkout $main would not fast-forward — resolve it by hand (something diverged locally)."
   fi
   land_lease_release "$lease"
+
+  # Shared deps (issue #961): the base's node_modules must follow its lockfiles, or
+  # every worktree fleet-deps-link points at it borrows a stale tree. Reinstall what
+  # this ff changed (old..HEAD) plus anything still stale from an earlier move — a
+  # cleaner's ff, a failed or killed install. AFTER the lease: an install can take
+  # minutes and must not hold the cleaner off the base. Never affects the ff.
+  if [ "$deps" = 1 ] && [ -x "$BIN/fleet-deps-link.sh" ]; then
+    "$BIN/fleet-deps-link.sh" --refresh-base "$main" ${old:+"$old"} ${old:+HEAD} 2>/dev/null \
+      | while IFS= read -r l; do log "$sess: deps $l"; done
+  fi
 ) }
 
 # --- which fleets? argv wins; else every live fleet session on this server. -----
@@ -185,7 +200,7 @@ fi
 # the same repo (one shared base checkout) never double-move it in a tick.
 synced=$'\n'
 for sess in ${SESSIONS[@]+"${SESSIONS[@]}"}; do
-  IFS=$'\t' read -r off repo main base < <(fleet_ident "$sess")
+  IFS=$'\t' read -r off repo main base deps < <(fleet_ident "$sess")
   if [ "$off" = 0 ]; then
     log "$sess: base-sync off (FLEET_BASE_SYNC=0) — skip"
     continue
@@ -200,6 +215,6 @@ for sess in ${SESSIONS[@]+"${SESSIONS[@]}"}; do
   esac
   synced="${synced}${cmain}"$'\n'
   slug=$(fleet_slug "$(fleet_norm_repo "$repo")")
-  sync_repo "$sess" "$repo" "$main" "$base" "$slug"
+  sync_repo "$sess" "$repo" "$main" "$base" "$slug" "$deps"
 done
 exit 0

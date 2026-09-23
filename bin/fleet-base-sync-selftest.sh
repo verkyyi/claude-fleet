@@ -17,6 +17,11 @@
 #   • OFF SWITCH  FLEET_BASE_SYNC=0 → no-op (default is ON).
 #   • DRY-RUN     --dry-run prints "would ff …" and moves NOTHING (no pull, no
 #                  lease taken).
+#   • BASE-DEPS   (issue #961) FLEET_BASE_DEPS=1 + an ff that changes a lockfile →
+#                  that dir is reinstalled in the base and stamped with the new
+#                  lockfile's sha; a failing install is logged, the ff still lands.
+#                  Unset (and no fleet-deps-link hook) → no install, no `deps` line:
+#                  the tick is what it was before.
 #
 # Exit 0 = pass. Non-zero = fail (prints the captured log + the base/remote tips).
 # repo fake/repo → slug fake-repo → shared lease land-fake-repo.lock.
@@ -36,7 +41,8 @@ mkdir -p "$WORK/bin" "$WORK/conf" "$WORK/leases"
 cp "$SRC" "$WORK/bin/fleet-base-sync.sh"
 cp "$BIN/fleet-lib.sh" "$WORK/bin/fleet-lib.sh"
 cp "$BIN/fleet-land-lease.sh" "$WORK/bin/fleet-land-lease.sh"
-chmod +x "$WORK/bin/fleet-base-sync.sh"
+cp "$BIN/fleet-deps-link.sh" "$WORK/bin/fleet-deps-link.sh"
+chmod +x "$WORK/bin/fleet-base-sync.sh" "$WORK/bin/fleet-deps-link.sh"
 
 # --- fake fleet-diskguard.sh: gate open unless $WORK/disk_closed exists ----------
 cat > "$WORK/bin/fleet-diskguard.sh" <<FAKE
@@ -156,5 +162,48 @@ run --dry-run s1
 grep -q 'would ff ' "$WORK/log" || fail "dry-run: should log 'would ff …'"
 ls "$WORK/leases"/land-*.lock >/dev/null 2>&1 && fail "dry-run: must not take a lease"
 
-printf 'selftest PASS: behind·current·diverged · one-per-repo · single-writer · disk-gate · off-switch · dry-run\n'
+# 9) BASE-DEPS: an ff that bumps the root lockfile reinstalls the base's root deps.
+mkdir -p "$WORK/fakebin"
+cat > "$WORK/fakebin/npm" <<FAKE
+#!/bin/sh
+printf '%s npm %s\n' "\$(pwd -P)" "\$*" >> "$WORK/npm.calls"
+[ "\${FAKE_RC:-0}" = 0 ] || exit "\$FAKE_RC"
+mkdir -p node_modules/dep
+FAKE
+chmod +x "$WORK/fakebin/npm"
+lock_commit() { # seed a lockfile change on the remote
+  printf '{"name":"r"}\n' > "$SEED/package.json"
+  printf '{"lockfileVersion":3,"v":"%s"}\n' "$1" > "$SEED/package-lock.json"
+  g -C "$SEED" add package.json package-lock.json; g -C "$SEED" commit -q -m "deps $1"
+  g -C "$SEED" push -q origin master 2>/dev/null
+}
+sha() { if command -v shasum >/dev/null 2>&1; then shasum -a 256 < "$1"; else sha256sum < "$1"; fi | cut -d' ' -f1; }
+drun() { PATH="$WORK/fakebin:$PATH" FLEET_BASE_DEPS_LOG="$WORK/deps.log" run "$@"; }
+
+reset; scene current; lock_commit 1; conf s1 'FLEET_BASE_DEPS=1'; : > "$WORK/npm.calls"
+drun s1
+[ "$(main_tip)" = "$(remote_tip)" ] || fail "base-deps: the ff must still land"
+grep -q ": deps installed \.\$" "$WORK/log" || fail "base-deps: should log 'deps installed .'"
+[ "$(cat "$MAIN/node_modules/.fleet-lock-sha" 2>/dev/null)" = "$(sha "$MAIN/package-lock.json")" ] \
+  || fail "base-deps: base root must be stamped with the new lockfile's sha"
+ls "$WORK/leases"/land-*.lock >/dev/null 2>&1 && fail "base-deps: the land lease must be released"
+: > "$WORK/npm.calls"; reset; drun s1
+[ ! -s "$WORK/npm.calls" ] || fail "base-deps: a quiet tick must not reinstall"
+
+lock_commit 2; reset; FAKE_RC=1 drun s1
+[ "$(main_tip)" = "$(remote_tip)" ] || fail "base-deps: a failing install must not block the ff"
+grep -q ': deps install-failed:rc=1 \.' "$WORK/log" || fail "base-deps: failed install should be logged"
+[ ! -e "$MAIN/node_modules/.fleet-lock-sha" ] || fail "base-deps: a failed install must leave the dir unstamped"
+reset; drun s1
+grep -q ": deps installed \.\$" "$WORK/log" || fail "base-deps: the next tick must retry the failed dir"
+
+# 10) BASE-DEPS off (the default): same lockfile ff, no install, no deps line.
+reset; scene current; lock_commit 3; conf s1; : > "$WORK/npm.calls"
+drun s1
+[ "$(main_tip)" = "$(remote_tip)" ] || fail "base-deps-off: the ff must land"
+[ ! -s "$WORK/npm.calls" ] || fail "base-deps-off: nothing may be installed with the feature off"
+grep -q ': deps ' "$WORK/log" && fail "base-deps-off: no deps line may be logged with the feature off"
+[ ! -e "$MAIN/node_modules" ] || fail "base-deps-off: node_modules appeared"
+
+printf 'selftest PASS: behind·current·diverged · one-per-repo · single-writer · disk-gate · off-switch · dry-run · base-deps on/off\n'
 exit 0
