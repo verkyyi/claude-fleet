@@ -27,7 +27,10 @@ MAX_MESSAGE = 4000
 # scratch-<N> slug of an @raw scratch worktree. It survives /fleet-handoff (same
 # window, new native session), an account migration (new window, @issue re-bound),
 # renumber-windows and a tmux server restart. Window IDs and @wid handles do not.
-WORKER_KEY_RE = r"(?:issue|scratch)-[1-9][0-9]{0,9}"
+# A multi-repo fleet prefixes the window's repo slug (issue #1018, the #789
+# spelling): two hosted repos can both have an issue-12. A one-repo fleet's keys
+# stay bare.
+WORKER_KEY_RE = r"(?:[A-Za-z0-9][A-Za-z0-9._-]{0,127}:)?(?:issue|scratch)-[1-9][0-9]{0,9}"
 WORKER_ID_RE = re.compile(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/(" + WORKER_KEY_RE + r")")
 CONFIG_KEYS = {"FLEET_MAX_SESSIONS": (0, 256),
                "FLEET_AUTOFILL": (0, 1),
@@ -64,21 +67,38 @@ def parse_worker_id(value):
     """Return (fleet_id, key) for a canonical worker id, or raise."""
     match = isinstance(value, str) and WORKER_ID_RE.fullmatch(value)
     if not match:
-        raise Fault("INVALID_ARGUMENT", "worker_id must be <fleet UUID>/issue-<N> or <fleet UUID>/scratch-<N>")
+        raise Fault("INVALID_ARGUMENT", "worker_id must be <fleet UUID>/[<repo>:]issue-<N> or <fleet UUID>/[<repo>:]scratch-<N>")
     return identifier(match.group(1)), match.group(2)
 
 
-def worker_key(issue, scratch, worktree):
+def repo_slug(repo):
+    """fleet_slug: owner/name → owner-name, anything outside [A-Za-z0-9._-] dropped."""
+    return re.sub(r"[^A-Za-z0-9._-]", "", repo.replace("/", "-"))
+
+
+def repo_named(repo, want):
+    """fleet_repo_for_slug's match rule: owner/name, its slug, or the bare name."""
+    return bool(repo) and want in (repo, repo_slug(repo), repo.split("/", 1)[-1])
+
+
+def worker_key(issue, scratch, worktree, repo=""):
     """The durable key of one window: issue-<N>, scratch-<N> (strict: the worktree
-    basename must end in scratch-<digits>, as fleet_scratch_key), or None."""
+    basename must end in scratch-<digits>, as fleet_scratch_key), or None. `repo`
+    is the adapter's column 9 (issue #1018): empty in a one-repo fleet (the key
+    stays bare), the window's owner/name in a multi-repo one (the key becomes
+    <slug>:issue-<N>), `?` when that repo is unknown — None, never a guess."""
+    key = None
     if issue is not None:
-        return "issue-%d" % issue
-    if scratch:
+        key = "issue-%d" % issue
+    elif scratch:
         base = (worktree or "").rstrip("/").rsplit("/", 1)[-1]
         found = re.fullmatch(r"(?:.*-)?scratch-([1-9][0-9]{0,9})", base)
         if found:
-            return "scratch-" + found.group(1)
-    return None
+            key = "scratch-" + found.group(1)
+    if key and repo:
+        slug = repo_slug(repo) if repo != "?" else ""
+        key = slug + ":" + key if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", slug) else None
+    return key
 
 
 def worker_identity(fleet_id, key):

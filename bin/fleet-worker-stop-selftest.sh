@@ -18,6 +18,7 @@
 #   6. an agent that will not exit → failed:no-exit (7), window + pid survive
 #   7. a scratch key resolves through @raw + @worktree, Codex gets its bracketed /exit
 #   8. usage: a window NUMBER is not a key (2)
+#   9. multi-repo: `<repo>:issue-N` stops only that repo's window (issue #1018)
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 REAL_TMUX=$(command -v tmux) || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
@@ -150,6 +151,25 @@ for bad in "@12" "12" "issue-" "issue-x" "scratch-0"; do
   [ "$rc" = 2 ] || fail "8: '$bad' should be a usage refusal (2)" "rc=$rc out=$out"
 done
 has_win "$w2" || fail "8: a usage refusal closed a window"
+
+# --- 9. a multi-repo fleet (issue #1018): `<repo>:issue-N` stops THAT repo's -----
+#        window only; a bare key two repos hold is ambiguous; an unhosted repo is
+#        a usage refusal. Last, because the overlay makes the fleet multi-repo.
+mkdir -p "$FLEET_CONF_DIR/fleets/fleetS/repos"
+printf 'FLEET_REPO="acme/other"\n' > "$FLEET_CONF_DIR/fleets/fleetS/repos/acme-other.conf"
+w9a=$(mkwin nine-a "$SHELLED" 9); w9b=$(mkwin nine-b "$SHELLED" 9); sleep 0.3
+tf set-window-option -t "$w9a" @repo acme/fleetS; tf set-window-option -t "$w9b" @repo acme/other
+run_stop fleetS issue-9
+[ "$rc" = 6 ] && [ "$out" = refused:ambiguous ] || fail "9: bare key held in two repos expected refused:ambiguous/6" "rc=$rc out=$out"
+run_stop fleetS nope:issue-9
+[ "$rc" = 2 ] || fail "9: an unhosted repo prefix should be a usage refusal (2)" "rc=$rc out=$out"
+run_stop fleetS acme-other:issue-9
+[ "$rc" = 0 ] && [ "$out" = stopped:closed ] || fail "9: expected stopped:closed/0" "rc=$rc out=$out err=$(cat "$WORK/err")"
+has_win "$w9b" && fail "9: acme/other's window survived its stop"
+has_win "$w9a" || fail "9: acme/fleetS's issue-9 window was closed by acme/other's stop"
+run_stop fleetS acme/fleetS:issue-9
+[ "$rc" = 0 ] && [ "$out" = stopped:closed ] || fail "9: owner/name prefix expected stopped:closed/0" "rc=$rc out=$out"
+has_win "$w9a" && fail "9: acme/fleetS's window survived its stop"
 
 if [ "$FAIL" = 0 ]; then echo "fleet-worker-stop-selftest: OK"; exit 0; fi
 echo "fleet-worker-stop-selftest: $FAIL failure(s)"; exit 1

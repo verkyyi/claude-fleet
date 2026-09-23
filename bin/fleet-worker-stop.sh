@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-worker-stop.sh <session> <issue-N|scratch-N> — GRACEFUL stop of ONE live
+# fleet-worker-stop.sh <session> [<repo>:]<issue-N|scratch-N> — GRACEFUL stop of ONE live
 # worker, addressed by its DURABLE key, never by a window number (issue #834).
 #
 # The Fleet Hub's `worker_stop` lands here. A tmux window id is an observation:
@@ -53,10 +53,19 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-lib.sh"
 
 SESS="${1:-}"; KEY="${2:-}"
+# A multi-repo fleet (issue #1018) names the repo too: `<repo>:issue-N` (the #789
+# spelling; <repo> = owner/name, slug or bare name), because two hosted repos can
+# both have an issue-12. WREPO is then that hosted repo and only its windows
+# match; a bare key matches every repo's, so two of them refuse as ambiguous.
+WREPO=''
+case "$KEY" in *:*)
+  [ -n "$SESS" ] && WREPO=$(fleet_repo_for_slug "$SESS" "${KEY%%:*}") || WREPO=''
+  if [ -z "$WREPO" ]; then KEY=""; else KEY=${KEY#*:}; fi ;;
+esac
 case "$KEY" in issue-[1-9]*|scratch-[1-9]*) ;; *) KEY="" ;; esac
 case "${KEY#*-}" in *[!0-9]*) KEY="" ;; esac
 if [ -z "$SESS" ] || [ -z "$KEY" ]; then
-  printf 'usage: fleet-worker-stop.sh <session> <issue-N|scratch-N>\n' >&2; exit 2
+  printf 'usage: fleet-worker-stop.sh <session> [<repo>:]<issue-N|scratch-N>\n' >&2; exit 2
 fi
 fleet_load_conf "$SESS"
 SOCK=$(fleet_socket "$SESS")
@@ -100,6 +109,7 @@ while read -r wid; do
     k=$(fleet_scratch_key "$wt")
   fi
   [ "$k" = "$KEY" ] || continue
+  [ -z "$WREPO" ] || [ "$(fleet_window_repo "$SESS" "$wid")" = "$WREPO" ] || continue
   count=$((count + 1)); found="$wid"
 done <<EOF
 $(TM list-windows -t "=$SESS" -F '#{window_id}' 2>/dev/null)
