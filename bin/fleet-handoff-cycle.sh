@@ -277,6 +277,7 @@ backstop_diag() {
   _hb_age=''
   if [ -f "$SPIN_HB" ]; then
     _hb=$(cat "$SPIN_HB" 2>/dev/null)
+    _hb=${_hb%% *}   # `<epoch> tmux_calls_per_s=…` since #887 — the epoch is the first token
     case "$_hb" in ''|*[!0-9]*) ;; *) _hb_age=$(( $(date +%s 2>/dev/null || echo 0) - _hb )) ;; esac
   fi
   if [ -z "$_hb_age" ]; then

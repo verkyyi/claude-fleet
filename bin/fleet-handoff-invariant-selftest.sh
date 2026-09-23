@@ -224,7 +224,7 @@ spid=$!
 hb=''
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
   sleep 1
-  [ -f "$WORK/logs/spinner.heartbeat" ] && { hb=$(cat "$WORK/logs/spinner.heartbeat" 2>/dev/null); break; }
+  [ -f "$WORK/logs/spinner.heartbeat" ] && { hb=$(cat "$WORK/logs/spinner.heartbeat" 2>/dev/null); hb=${hb%% *}; break; }
 done
 kill "$spid" 2>/dev/null; wait "$spid" 2>/dev/null
 case "$hb" in

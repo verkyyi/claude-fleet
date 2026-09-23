@@ -508,6 +508,15 @@ LLM classifier (haiku)         │                 self-contained glyph renderer
                                           (or its reason re-settled) — never re-reddened
 ```
 
+**How often the spinner reads the bus (#887).** Not every frame. A fleet with an
+animated window (`working`/`looping`/`preparing`/`waking`) is read by the same tmux
+process that writes its frame (`list-windows ';' source-file`); a quiet fleet is
+re-read every 1s, or on its next 0.25s tick when `set-claude-state.sh` has dropped
+`<socket path>.dirty` beside the tmux socket. So a hook write reaches the bar in
+≲0.3s, any other writer in ≤1s, and a machine with nothing working pays ~1 tmux
+fork/s per fleet instead of ~8. `logs/spinner.heartbeat` is `<epoch>
+tmux_calls_per_s=<n.n>` — the epoch stays the first token for the liveness readers.
+
 ## Related
 
 - **Auto-handoff nudge (#330).** `set-claude-state.sh`'s `done` branch also emits
