@@ -459,6 +459,30 @@ try:
     check('INPUT' in tm('display-message', '-p', '-t', p1, '#{E:pane-border-format}'),
           'Escape left the worker border dimmed')
 
+    # A pointer MOVE keeps navigation (issue #925). Claude Code asks for
+    # any-motion tracking, so every nudge of the mouse arrives as a motion
+    # report — tmux has no bindable name for it, so it lands on `Any`. The
+    # worker requests 1003+SGR here (written to its pty as if it printed it).
+    def worker_tracking(on):
+        with open(tm('display-message', '-p', '-t', p1, '#{pane_tty}'), 'w') as tty:
+            tty.write('\x1b[?1003%s\x1b[?1006%s' % ((on and 'h') or 'l', (on and 'h') or 'l'))
+    worker_tracking(True)
+    wait_for(lambda: tm('display-message', '-p', '-t', p1, '#{mouse_all_flag}') == '1',
+             'the worker never turned on any-motion tracking')
+    os.write(terminal, b'\x02E')
+    wait_for(navigation, 'prefix E did not enter navigation before the mouse move')
+    mx = int(tm('display-message', '-p', '-t', p1, '#{pane_left}')) + 10
+    for my in (3, 4, 5):
+        os.write(terminal, ('\x1b[<35;%d;%dM' % (mx, my)).encode())
+    time.sleep(.5)
+    check(navigation(), 'a mouse move over the worker dropped sidebar navigation')
+    check(tasks_cue(side), 'a mouse move over the worker dropped the task highlight')
+    # A right-click on the worker still hands the keyboard back.
+    os.write(terminal, ('\x1b[<2;%d;4M\x1b[<2;%d;4m' % (mx, mx)).encode())
+    wait_for(lambda: not navigation(), 'a right-click on the worker did not leave navigation')
+    wait_for(lambda: worker_cue(side), 'a right-click on the worker left the sidebar highlighted')
+    worker_tracking(False)
+
     # tmux <=3.6a discards top pane-status clicks before key lookup (its mouse
     # hit test recognizes only right/bottom borders). 3.7+ exposes the top border.
     # Use the server version: it is the server that dispatches mouse events.
