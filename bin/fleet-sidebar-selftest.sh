@@ -239,7 +239,11 @@ try:
                  line.startswith('set -g pane-border') or line.startswith('set -g default-terminal') or
                  line == 'set -g mouse on')]
     fixture = work / 'sidebar.conf'
-    fixture.write_text('\n'.join(selected).replace('~/.claude/fleet', str(bin_dir.parent)) + '\n')
+    # `run-shell "sh …hub-zoom.sh"` (the F9 binds): production /bin/sh is bash in
+    # POSIX mode, but CI's is dash, which has no `set -o pipefail` and aborts the
+    # script — drive it the way hub-zoom-home-selftest.sh does (issue #414).
+    fixture.write_text('\n'.join(selected).replace('~/.claude/fleet', str(bin_dir.parent))
+                       .replace('run-shell "sh ', 'run-shell "bash --posix ') + '\n')
     tm('source-file', str(fixture))
     tm('set-hook', '-g', 'session-window-changed[72]',
        "set-option -wF -t fleet-test: @sidebar_ready_on_select '#{@sidebar_worker}'")
