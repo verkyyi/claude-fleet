@@ -11,9 +11,10 @@
 # that panel's own binds plus the global `tmux prefix` binds (which fire from any
 # pane, the dash included), not the other panels' inner binds. Pass the panel via
 # `--context dash|backlog` (default `all` = every group). `--context sidebar`
-# (issue #948) is the task sidebar's own `?` sheet: only the prefix binds that
-# concern the sidebar (prefix e / E, ⌂ / F9), the task sidebar group, and the
-# letters of its `.` row menu — read from fleet-sidebar-menu.sh's table.
+# (issue #948, cut to one screen by #963) is the task sidebar's own `?` sheet:
+# the six keys an operator actually uses there, in short Chinese, so the popup
+# never needs scrolling. Everything else — the full task sidebar group and the
+# `.` row menu's letters — stays in the full sheet, prefix ? away.
 #
 # Usage:
 #   fleet-keys.sh                    # full sheet, wait for q/esc (popup mode)
@@ -94,17 +95,40 @@ want() {
     all)     return 0 ;;
     dash)    case "$1" in prefix|dashboard) return 0 ;; *) return 1 ;; esac ;;
     backlog) case "$1" in prefix|backlog)   return 0 ;; *) return 1 ;; esac ;;
-    sidebar) case "$1" in sidebar|menu)     return 0 ;; *) return 1 ;; esac ;;
+    sidebar) return 1 ;;   # its own compact sheet: print_sidebar_sheet
     *)       return 0 ;;
   esac
 }
 
+# The task sidebar's `?` sheet (issue #963): the six keys an operator uses on
+# the sidebar, one short Chinese line each, so the whole sheet fits its popup
+# (fleet-sidebar.py's open_help sizes it to this) — the popup cannot scroll.
+# `skey <key> <extra> <desc>`: the key column is 14 CELLS; <extra> is how many
+# of the key's characters are double-width (CJK), which ${#k} counts once.
+# Keymap-resolved keys still come from `--panel sidebar` (dg), never hardcoded.
+skey() {
+  local k="$1" pad n
+  n=$((14 - ${#k} - $2)); [ "$n" -lt 1 ] && n=1
+  printf -v pad '%*s' "$n" ''
+  printf '  %s%s%s%s%s\n' "$YEL" "$k" "$R" "$pad" "$3"
+}
+print_sidebar_sheet() {
+  eval "$(bash "$BIN/dash-keymap.sh" --panel sidebar env 2>/dev/null)"
+  printf '%s%s 任务栏快捷键 %s  %sq / esc 关闭%s\n\n' "$B" "$CYAN" "$R" "$DIM" "$R"
+  skey "打字 ↵" 2 "起新会话"
+  skey "↑ ↓" 0 "切换任务"
+  skey "$(dg menu) / 再点一次" 4 "任务菜单$(dn menu)"
+  skey "esc" 0 "键盘还给任务"
+  skey "⌂ / F9" 0 "进任务栏，再按去 hub"
+  skey "prefix ?" 0 "全部按键（prefix = ${DASH_KEYMAP_PREFIX:-C-b}）"
+}
+
 print_sheet() {
   local sub
+  if [ "$CONTEXT" = sidebar ]; then print_sidebar_sheet; return; fi
   case "$CONTEXT" in
     dash)    sub="(dashboard panel · prefix binds work here too · q/esc to close)" ;;
     backlog) sub="(backlog panel · prefix binds work here too · q/esc to close)" ;;
-    sidebar) sub="(task sidebar · prefix = your tmux prefix, ${DASH_KEYMAP_PREFIX:-C-b} here · q/esc to close)" ;;
     *)       sub="(prefix = your tmux prefix, ${DASH_KEYMAP_PREFIX:-C-b} here · q/esc to close)" ;;
   esac
   printf '%s%s fleet keymap %s  %s%s%s\n' "$B" "$CYAN" "$R" "$DIM" "$sub" "$R"
@@ -123,16 +147,6 @@ print_sheet() {
   key "click ● N" "the needs badge (bottom-left) cycles to the next 'needs' window"
   key "click ● N (orange)" "cross-fleet dot = N needy windows in OTHER fleets; click to jump"
   key "click usage" "footer usage stat — opens the usage + account modal"
-  fi
-
-  # The sidebar's own sheet (--context sidebar) keeps just the prefix binds that
-  # reach the sidebar — the full list is prefix ? away.
-  if [ "$CONTEXT" = sidebar ]; then
-  group "reach the sidebar" "— from any worker window"
-  key "prefix E" "focus the task sidebar (or click/tap it); with no sidebar on screen, the task picker"
-  key "prefix Space" "the task picker — this list as a popup, for when the sidebar is hidden"
-  key "⌂ / F9" "first press focuses the sidebar, a second goes to the hub (FLEET_HOME_SIDEBAR_FIRST=0: straight to the hub)"
-  key "prefix ?" "the full fleet keymap"
   fi
 
   if want sidebar; then

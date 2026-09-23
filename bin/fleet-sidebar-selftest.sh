@@ -591,7 +591,7 @@ try:
         else:
             os.write(terminal, b'?')
         wait_for(popup_open, how + ' did not open a popup')
-        wait_for(lambda: 'row menu' in bytes(screen_out).decode('utf-8', 'replace'),
+        wait_for(lambda: '任务栏快捷键' in bytes(screen_out).decode('utf-8', 'replace'),
                  how + ' did not show the sidebar key sheet')
         check(bool(view_on(w1)), how + ' hid the sidebar')
         os.write(terminal, b'q')
