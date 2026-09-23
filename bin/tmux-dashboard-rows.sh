@@ -192,7 +192,7 @@ rslug_v() { rslug=''
 # fleet hosting 2+ repos; then RCUR is the picked repo's slug or `all`, and
 # RHEADS its group headings (fleet_dash_repo_frame, once a frame). A one-repo
 # fleet has RMANY=0 and every branch below keeps today's path.
-RMANY=0; RCUR=''; RSHORTMAP=''; RGRPMAP=''; RHEADS=''; RNREPO=0
+RMANY=0; RCUR=''; RGRPMAP=''; RHEADS=''; RNREPO=0
 [ "$RMULTI" = 1 ] && fleet_dash_repo_frame "$FLEET_SESSION"
 # RGRP=1 iff this frame groups its rows by repo (issue #974): `all` in a 2+ repo
 # fleet. A picked repo and a one-repo fleet never group — their frames stay as
