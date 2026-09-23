@@ -221,8 +221,9 @@ Item 3 in detail — the evidence grid (issue #810):
   - **改动前 / 改动后** come from the workers through `fleet-evidence.sh` (step 1).
     A missing stage is a `.none` cell reading **无证据**. Do not take a "before"
     now — the change has landed, and the picture would be fiction.
-  - **已上线** is yours, once. When the fleet has a deploy signal
-    (`FLEET_DEPLOY_REF` / `FLEET_DEPLOY_CHECK`, #541) and the member's deploy state
+  - **已上线** is yours, once. When the member's repo has a deploy signal
+    (`FLEET_DEPLOY_REF` / `FLEET_DEPLOY_CHECK`, #541 — per repo in a multi-repo
+    fleet, from its `repos/<slug>.conf`, #805) and the member's deploy state
     is green, capture ONE shot from prod along the same line the worker followed,
     and store it where a re-run of this report finds it again:
     `~/.claude/fleet/bin/fleet-evidence.sh live --repo "$FLEET_REPO" --issue <M> --epic <N> --note '…' <file>`
