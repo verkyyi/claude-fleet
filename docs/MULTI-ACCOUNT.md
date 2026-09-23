@@ -599,8 +599,20 @@ without a registry session id. Windows move one at a time (each is a cold
 over Claude Code's local inbox socket — the same channel the `SendMessage` /
 `ListAgents` tools use between sessions on one machine — so fleet tooling can
 talk to a worker without `tmux send-keys` into its prompt (issue #437). The
-target is a window id, a pid, or a session uuid; the recipient sees it as a
-message from another session on its next turn. The body rides Claude Code's
+recipient sees it as a message from another session on its next turn.
+
+**Address a worker by identity, not by window number** (issue #1046):
+`fleet-peer-send.sh issue:<N> …` (also `#<N>` / `issue-<N>`; `scratch-<N>` or an
+exact window name for a scratch) is resolved to exactly ONE live window at send
+time — zero or several matches refuse, and `--repo <o/r>` narrows a number two
+repos share. A `<sess>:<idx>` target is a *position*: closing any window
+renumbers the ones after it, and a remembered or handed-off index silently lands
+on a different worker (three operator-authorising instructions went astray that
+way on 2026-09-23). Positional targets still work; pin one with
+`--expect-issue <N>` and it refuses when the window there is someone else. A
+window id (`@N`), pane id, pid or session uuid is stable and needs no pin. Every
+call prints exactly one outcome line — `sent → … (<window> · <worktree>)` on
+success, one stderr line + non-zero exit on any failure. The body rides Claude Code's
 canonical `<cross-session-message from-name=… from-mode=…>` envelope, attesting
 `FLEET_PEER_MODE` (default `bypass`, the mode fleet sessions run in): without
 that attestation a bypass-mode recipient HOLDS the message behind an approve/
