@@ -114,6 +114,9 @@ preview ctrl-p alt-p' ;;
 # `help` (issue #948) follows the same rule: `?` on an EMPTY input line opens
 # the sidebar's own key sheet (fleet-keys.sh --context sidebar), the task list's
 # answer to Claude Code's "? for shortcuts"; inside a name it types a `?`.
+# Aliases, not rows (issue #965): a Chinese IME sends full-width 。/． for `.`
+# and ？ for `?`; the view folds them onto `menu` / `help` on an empty line
+# (fleet-sidebar.py KEY_ALIASES), so no second key is registered here.
 sidebar) TABLE='new ctrl-n alt-n
 menu . .
 restore ctrl-o alt-o
