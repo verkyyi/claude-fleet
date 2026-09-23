@@ -131,11 +131,18 @@ clicks on blank space; tmux 3.6+ also reports clicks on the top pane border.
 Release/repeat events preserve navigation.
 A row click switches workers but retains sidebar navigation. So do ↑↓/Home/End
 (issue #822): a movement key moves the highlight at once and schedules one
-follow for `FOLLOW_SECS` (0.25s) later; every further movement pushes the
+follow for `FOLLOW_SECS` (0.12s) later; every further movement pushes the
 deadline, so a held key on a slow link is one switch and a row passed over is
 never selected. The follow is the same `jump()` a click makes, and touches no
 key table — the movement binds re-enter `fleet-sidebar` before their key
-arrives, which is what keeps browsing alive across the switch. The mouse wheel
+arrives, which is what keeps browsing alive across the switch. Those binds fork
+nothing (issue #1033): the view is always `{top-left}`, so each is a direct
+`send-keys -t '{top-left}'` behind the `@sidebar` gate `Any` uses. The row
+producer runs beside the UI loop, not in it: the loop starts it on its 1s
+refresh, keeps painting the last good rows (so a jump's `▶` moves with the
+pane) and takes the new ones when it exits — only the first frame waits. And
+`session-window-changed[71]` skips its sync when the new window already holds a
+live view naming its worker, which is where a jump leaves it. The mouse wheel
 only scrolls the highlight. Clicking the worker, Enter or Escape returns input
 (Escape, Enter and ⌃n also drop a pending follow); auto-hiding the sidebar also
 clears its key table. The wake hooks (`session-window-changed[72]`,
