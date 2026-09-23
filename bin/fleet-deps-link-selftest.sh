@@ -183,7 +183,7 @@ WT4=$(FLEET_WORKTREE_SETUP="$WORK/slow.sh" FLEET_WORKTREE_SETUP_TIMEOUT=2 fleet_
   || fail "FAILSAFE: slow hook failed the create"
 [ $((SECONDS - t0)) -lt 15 ] || fail "FAILSAFE: timebox not enforced ($((SECONDS - t0))s)"
 [ -d "$WT4" ] && grep -q "TIMEOUT after 2s $WT4" "$FLEET_WORKTREE_SETUP_LOG" || fail "FAILSAFE: timeout not logged" "$(cat "$FLEET_WORKTREE_SETUP_LOG")"
-WT5=$(FLEET_WORKTREE_SETUP="$WORK/nope.sh" fleet_worktree_create "$MAIN" scratch-5 "") || fail "FAILSAFE: missing hook failed the create"
+FLEET_WORKTREE_SETUP="$WORK/nope.sh" fleet_worktree_create "$MAIN" scratch-5 "" >/dev/null || fail "FAILSAFE: missing hook failed the create"
 grep -q "not executable: $WORK/nope.sh" "$FLEET_WORKTREE_SETUP_LOG" || fail "FAILSAFE: missing hook not logged"
 ok "FAILSAFE: failing / timed-out / missing hook ⇒ logged, worktree still created"
 
