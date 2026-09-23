@@ -1,6 +1,6 @@
 // web/dist/charts.js — chart + table primitives. DOM-producing, no fetching.
 //
-// `rankedBars`, `bucketTable`, `bars` (the old page's `timeSeries`), `gauge`,
+// `rankedBars`, `bucketTable`, `bars` (the old page's `timeSeries`),
 // `tile` and `tween` are ported from the old <script> block of
 // web/dist/index.html (pre-Task-11) — unchanged except where the Task 11
 // brief calls for it (rankedBars gains onClick/selectedKey, bucketTable gains
@@ -52,7 +52,7 @@
 // here summarise rather than enumerate.
 
 import { el, escapeHTML, showTip, hideTip } from './lib/dom.js';
-import { fmtInt, fmtUSD, fmtFull, relTime } from './lib/format.js';
+import { fmtInt, fmtUSD, fmtFull, resetIn } from './lib/format.js';
 import { KIND_LABEL, kindOf, activeSourcesAcross, costLine, fmtSourceCost } from './lib/cost.js';
 import { snap, clamp } from './lib/brush.js';
 import { bucketMs, densify, inferBucket } from './lib/buckets.js';
@@ -372,74 +372,53 @@ export function withTable(card, chartEl, tableEl, cardId) {
   return card;
 }
 
-/* ------------------------------------------------------------------ gauge */
+/* ------------------------------------------------------------ window cell */
 
-/** gauge is ONE window's reading: what share of it is spent, on a bar, and when
- *  it resets.
+/** windowCell is ONE quota window in ONE of three states (#153):
  *
- *  #95 rewrote its SHAPE — it used to be a name/percent/state/reset row, a bar,
- *  and then a full sentence of its own ("At the current rate (22.6%/h) this
- *  window fills around 03:25 AM."), about 75px per window. The brief for this
- *  card is "make the current utilization the biggest number, and let everything
- *  else fall back to second place", and the old layout could not do that however
- *  large the percent was set: a sentence on its own line reads as a peer of the
- *  thing above it, and there were two windows per subscription and up to five
- *  subscriptions on the card.
+ *    live     label · state capsule carrying the percent · bar · time to reset
+ *    blocked  label · BLOCKED capsule over the capsule + bar columns · time to reset
+ *    moot     label only — a shorter window behind a blocked longer one
  *
- *  So the row is one line with one trailing `.meta` string. The percent keeps
- *  its size and everything else shrank around it, which is the only way one
- *  number becomes the big one on a card where every row wants to be read.
+ *  It replaces `gauge`, which gave every window a row of its own with the
+ *  percent as the card's biggest number (#95, kept by #129). The operator
+ *  reversed both: two windows share a row now, and the percent moved INTO the
+ *  state capsule, so a row is one line of small type and a card of five
+ *  subscriptions is five lines instead of ten.
  *
- *  The state LABEL stays, and is not the hue's spare tyre: styles.css's rule is
- *  that status colour is always reinforced by the word beside it, never carried
- *  alone, which is what makes this legible to a reader who cannot separate the
- *  four band colours. Shrinking it was allowed; dropping it was not.
+ *  The capsule used to print the state WORD, and styles.css's rule is that
+ *  status colour is always reinforced by something beside it. The number is
+ *  that something now — the bands are thresholds of it — and the word itself
+ *  moves to the capsule's title/aria-label, so it is still what a screen
+ *  reader announces and what a hover shows. Recorded rather than quietly
+ *  re-decided, as the reversals before it were.
  *
- *  The row's own element is `display: contents` (styles.css), so the cells land
- *  in the ENCLOSING grid and the five columns line up across every subscription
- *  in a group rather than each row measuring itself. That is why this returns a
- *  flat row and not a self-contained box. */
-export function gauge(name, w) {
+ *  BLOCKED wears the same outlined capsule in the critical colour: it is the
+ *  reading past 100%, not a different kind of thing. Its bar is not drawn — a
+ *  full bar says nothing the capsule has not — and the reset time keeps its own
+ *  column, so blocked and live rows line up down the card.
+ *
+ *  `extra` is text that rides after the BLOCKED capsule (Codex's credit
+ *  balance). Every state returns the same four cells, so rows never change
+ *  height or shift a column. */
+export function windowCell(label, w, { state = 'live', extra = '' } = {}) {
+  const name = el('span', { class: 'qw' }, label);
+  if (state === 'moot') return el('div', { class: 'qcell' }, name);
+  const meta = el('span', { class: 'meta' }, resetIn(w.resets_at));
+  if (state === 'blocked') {
+    return el('div', { class: 'qcell' }, name,
+      el('span', { class: 'qblocked' },
+        el('span', { class: 'state st-critical' }, t('quota.blocked.badge')),
+        extra ? el('span', { class: 'qextra' }, extra) : null),
+      meta);
+  }
   const pct = Math.max(0, Math.min(100, Number(w.utilization) || 0));
   const b = band(pct);
-
-  // The reset time, and nothing else. This line has now been argued both ways,
-  // so both are on the record.
-  //
-  // #124 removed the reset countdown and kept the burn rate, on this reasoning,
-  // which is quoted rather than paraphrased because reversing a decision is not
-  // a licence to rewrite what it said: "a window that resets in two hours and
-  // one that resets in five behave identically to a reader who is at 17%, and
-  // the number that DOES change what they do next is the burn rate already
-  // sitting beside it."
-  //
-  // #129 reverses it on the operator's direction: the burn rate goes, the reset
-  // time comes back on EVERY window. The rate answers "how fast is this
-  // filling", which is a question about the past five minutes and swings with
-  // them; the reset answers "when do I get this back", which is a fact about
-  // the window and is the one a reader plans around. Where the two conflict,
-  // the operator's call stands — so this is the fourth reversal this batch has
-  // had to write down rather than quietly re-decide.
-  //
-  // `relTime` came back verbatim from fd1d888 (lib/format.js), not rewritten:
-  // the removed version is the one the five `reset.*` keys were written for.
-  //
-  // What did NOT change either time: `w.resets_at` on the wire. It still drives
-  // the burn forecast (recon.go) even though that forecast is no longer
-  // printed, plus the endpoint-share window, the contradiction check and the
-  // account fingerprint. `w.burn` is likewise still computed and still sent;
-  // this row simply stopped reading it.
-  const meta = relTime(w.resets_at);
-
-  return el('div', { class: 'gauge' },
-    el('span', { class: 'name' }, name),
-    // Whole percent. A tenth of a percent of a five-hour window is under two
-    // minutes of work — below what anyone acts on — and `.pct` is tabular-nums,
-    // so dropping the decimal narrows the column for every row at once.
-    el('span', { class: 'pct' }, Math.round(pct) + '%'),
-    el('span', { class: 'state st-' + b.key }, b.label),
+  const shown = Math.round(pct) + '%';
+  return el('div', { class: 'qcell' }, name,
+    el('span', { class: 'state st-' + b.key, title: `${shown} · ${b.label}`, 'aria-label': `${shown} · ${b.label}` }, shown),
     el('div', { class: 'track' }, el('div', { class: 'fill bg-' + b.key, style: `width:${pct}%` })),
-    el('span', { class: 'meta' }, meta));
+    meta);
 }
 
 /* ------------------------------------------------------------------- tile */

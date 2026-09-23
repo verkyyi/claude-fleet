@@ -1,7 +1,7 @@
 // web/dist/quota.js — the quota band: subscription quota, grouped by provider,
-// with the current utilization as the biggest number on the card. The card was
-// titled with the question "am I about to hit the wall?" until #124; the
-// question is still what it answers, it just stopped being printed.
+// one line per subscription (#153). The card was titled with the question "am I
+// about to hit the wall?" until #124; the question is still what it answers, it
+// just stopped being printed.
 //
 // Lifted out of now.js by #95, and the move is the point rather than a tidy-up.
 // The card used to be the first child of <details id="ops">, which is SHUT by
@@ -28,32 +28,21 @@
 // renders; it does not arithmetic.
 import { el, escapeHTML } from './lib/dom.js';
 import { fmtFull } from './lib/format.js';
-import { quotaGroups, quotaSourceOf, sourceMap, windowName, sourceLabel, hasQuotaWindow } from './lib/providers.js';
+import { quotaGroups, windowName, sourceLabel, hasQuotaWindow } from './lib/providers.js';
+import { quotaWindows, blockedBy, isMoot, blockedLast, shortLabel } from './lib/quota-rows.js';
 import { SKIPPED } from './lib/seq.js';
 import * as C from './charts.js';
 import { t } from './lib/i18n.js';
 
-/** The vocabulary line under each group heading.
+/** A group heading is the provider's name and nothing else (#153).
  *
- *  This is the whole reason the card is grouped rather than sorted. Claude and
- *  Codex do not report a quota in the same terms — Claude has a fixed five-hour
- *  and seven-day pair, Codex reports whatever windows its provider names plus a
- *  credit balance — and in one flat list the reader had to infer which
- *  vocabulary each row was speaking from the row itself. Said once per group, it
- *  costs one line and every row under it can stop explaining itself.
- *
- *  Keyed by source with a fallback rather than a lookup that can miss: a source
- *  added to QUOTA_SOURCES with no note here gets a heading and no subtitle,
- *  which is a missing sentence rather than a missing group. */
-const GROUP_NOTE = { claude: 'quota.group.claude.note', codex: 'quota.group.codex.note' };
-
-function groupHeading(source, count) {
-  const note = GROUP_NOTE[source];
-  return el('div', { class: 'qgroup-head' },
-    el('span', { class: 'qgroup-name' }, sourceLabel(source)),
-    el('span', { class: 'qgroup-count' },
-      t(count === 1 ? 'quota.group.count.one' : 'quota.group.count.other', { n: count })),
-    note ? el('span', { class: 'qgroup-note' }, t(note)) : null);
+ *  It used to carry a count ("4 subscriptions") and a vocabulary line ("a fixed
+ *  five-hour and seven-day pair"). Both went at the operator's direction: the
+ *  subscriptions are right there to be counted, and since every window is now
+ *  labelled `5H` / `7D` on its own row, the rows no longer need a sentence to
+ *  say which vocabulary they speak. */
+function groupHeading(source) {
+  return el('div', { class: 'qgroup-head' }, el('span', { class: 'qgroup-name' }, sourceLabel(source)));
 }
 
 /** errMsg mirrors now.js's: a rejected fetch says what failed, and an Error
@@ -62,134 +51,74 @@ const errMsg = (reason) => (reason && reason.message) || String(reason || '');
 
 /* --------------------------------------------------------------- one entry */
 
-/** accountEntry is one subscription: its name, then one row per window, then
- *  whatever its provider adds that is not a window (a credit balance, a blocked
- *  flag, the plan and observation time).
+/** accountEntry is one subscription: its name, then its windows on ONE line.
  *
- *  The non-window notes stay `.hint`s rather than becoming rows because they are
- *  not readings of a pool — a credit balance has no ceiling to be a percentage
- *  of, and rendering it at the weight of a utilization would put the card's
- *  biggest number on something that cannot fill up.
+ *  The line is two cells, shortest window left (a third of the width), longest
+ *  right (two thirds) — the week is the one that decides how much work is left,
+ *  so it gets the room. A window the account does not have leaves its cell
+ *  empty rather than closing the gap, so every row keeps the same columns. A
+ *  reading with more than two windows continues on further lines of the same
+ *  shape; none does today.
  *
- *  #129 gave those rows a WRAPPER, and the wrapper is the whole change on this
- *  side: the card's one remaining extravagance was that it flowed down a single
- *  column however wide the viewport got — ten windows meant ten stacked rows and
- *  a bar 670px long to fill the slack. A column can only flow into a second lane
- *  if something says where one subscription's rows end and the next begins, and
- *  a flat list of siblings does not. This element does.
+ *  Blocked (#153): the window that has stopped the account shows BLOCKED and
+ *  how long until it clears; a shorter window behind it is reduced to its
+ *  label, because none of it can be spent until the longer one resets. The row
+ *  keeps its height and its columns either way — see charts.js's windowCell.
  *
- *  It is `display: contents` until the card is wide enough for two lanes
- *  (styles.css), so on a narrow viewport it is not a box at all and the cells
- *  join `.qgroup` exactly as they did before. Nothing here decides the lane
- *  count; this file renders, and the layout is the stylesheet's. */
-function accountEntry(entry, { showSource } = {}) {
+ *  `.qentry` is the unit the wide layout flows into two lanes (styles.css). */
+function accountEntry(entry) {
   const out = [el('div', { class: 'qacct' }, entry.label || entry.account_uuid)];
   const v = entry.limits || {};
   if (!v.available) {
     out.push(el('div', { class: 'qempty' }, v.reason || t('wall.noReading')));
   } else {
-    out.push(...windowRows(v, { showSource }));
-    out.push(...extraNotes(v));
+    out.push(...windowLines(v));
   }
   return el('div', { class: 'qentry' }, ...out);
 }
 
-/** windowRows turns one reading into gauge rows, in the provider's own terms.
- *
- *  `showSource` controls exactly one thing: whether a Codex window keeps
- *  "Codex · " in its own name. lib/providers.js's windowName prefixes the
- *  limit's provider, which a row needs when it stands alone and does not when
- *  it sits under a heading that has just said it. So the caller passes whether
- *  it drew a heading, rather than which branch it is — both branches draw one
- *  now, and tying this to "am I the grouped branch" is how the single-
- *  subscription view ended up printing "Codex · 7-day window" three lines under
- *  the word "Codex". */
-function windowRows(v, { showSource } = {}) {
-  const rows = [];
-  if (v.windows) {
-    for (const w of v.windows) {
-      const full = windowName(w);
-      rows.push(C.gauge(showSource ? full : stripProvider(full), w));
-    }
-  } else {
-    if (v.five_hour) rows.push(C.gauge(t('quota.fiveHour'), v.five_hour));
-    if (v.seven_day) rows.push(C.gauge(t('quota.sevenDay'), v.seven_day));
-  }
-  return rows;
+/** windowLines lays a reading's windows out two to a line. */
+function windowLines(v) {
+  const ws = quotaWindows(v);
+  const blocking = blockedBy(v, ws);
+  const credits = creditsText(v);
+  const cell = (x) => {
+    if (!x) return el('div', { class: 'qcell' });
+    const label = shortLabel(x.minutes) || stripProvider(windowName(x.w));
+    if (x === blocking) return C.windowCell(label, x.w, { state: 'blocked', extra: credits });
+    if (isMoot(x, blocking)) return C.windowCell(label, x.w, { state: 'moot' });
+    return C.windowCell(label, x.w);
+  };
+  // One window: a day or longer sits in the long (right) cell, anything
+  // shorter in the short one, so a Codex account reporting only its week lines
+  // up under everyone else's 7D.
+  const pairs = ws.length === 1
+    ? [ws[0].minutes >= 1440 ? [null, ws[0]] : [ws[0], null]]
+    : Array.from({ length: Math.ceil(ws.length / 2) }, (_, i) => [ws[2 * i], ws[2 * i + 1]]);
+  return pairs.map(([a, b]) => el('div', { class: 'qrow' }, cell(a), cell(b)));
 }
 
-/** stripProvider drops windowName's leading "<provider> · " segment.
- *
- *  Done here, on the rendered string, rather than by giving windowName a flag:
- *  that function is the one place this build names a window and it is asserted
- *  on directly (web/test/providers.test.mjs), so the group's redundancy is the
- *  group's problem to solve. Falls through to the whole string when there is no
- *  separator, so a provider that stops prefixing loses nothing. */
+/** stripProvider drops windowName's leading "<provider> · " segment. Only the
+ *  fallback for a window with no length to abbreviate reaches it now. */
 function stripProvider(name) {
   const at = name.indexOf(' · ');
   return at > 0 ? name.slice(at + 3) : name;
 }
 
-/** extraNotes is everything a reading carries that is not a window: credits,
- *  the blocked flag, and Codex's plan/observation footer. Ported from the
- *  quotaGauges this file replaces, unchanged in content. */
-function extraNotes(v) {
-  const out = [];
-  for (const c of v.credits || []) {
-    out.push(el('p', { class: 'hint qnote' }, t('quota.credits', {
-      id: c.limit_id,
-      value: c.unlimited ? t('quota.credits.unlimited')
-        : c.balance != null ? c.balance
-        : c.has_credits ? t('quota.credits.available') : t('quota.credits.none'),
-    })));
-  }
-  if (v.blocked) {
-    out.push(el('p', { class: 'hint qnote' },
-      t('quota.blocked', { reason: v.reason || t('quota.blocked.reported') })));
-  }
-  if (v.source === 'codex') {
-    out.push(el('p', { class: 'hint qnote' }, t('quota.codexNote', {
-      plan: v.plan || t('quota.codexAccount'),
-      when: v.observed_at ? new Date(v.observed_at).toLocaleString() : t('common.unknownTime'),
-    })));
-  }
-  return out;
+/** A credit balance, in whole units (#153): "3,866", not "3866.9502100000".
+ *  Shown after the BLOCKED capsule, the one place it changes what a reader does
+ *  — a blocked Codex account with credits can still be spent. Rounded down, so
+ *  it never claims a unit the account does not have. */
+function creditsText(v) {
+  const c = (v.credits || [])[0];
+  if (!c) return '';
+  const value = c.unlimited ? t('quota.credits.unlimited')
+    : c.balance != null && isFinite(Number(c.balance)) ? Math.floor(Number(c.balance)).toLocaleString()
+    : c.has_credits ? t('quota.credits.available') : t('quota.credits.none');
+  return t('quota.credits', { value });
 }
 
 /* ------------------------------------------------------------------- card */
-
-/** worstLine names the subscription closest to its ceiling — and, since #95,
- *  which provider it is.
- *
- *  The provider is not decoration. On this hub one person's Claude and Codex
- *  subscriptions share an email, so "closest to its limit: verky.yi@gmail.com at
- *  100.0%" named a row that appears TWICE on the card and did not say which of
- *  the two it meant. Now that the card is grouped, the line has to say which
- *  group to look in or it points at two places at once.
- *
- *  Still only rendered when the named subscription survived the shown/metered
- *  filter: "closest to its limit: X" naming a heading the viewer cannot find is
- *  worse than no line at all. */
-function worstLine(worst, shownSet, sourceOf) {
-  if (!worst || !shownSet.has(worst.account_uuid)) return null;
-  return el('p', { class: 'hint' }, t('wall.closest', {
-    label: worst.label,
-    source: sourceLabel(quotaSourceOf(worst, sourceOf)),
-    // Whole percent, like the gauge below it (#129). This line quotes the very
-    // figure one of those rows prints, so the two have to round the same way --
-    // "at 94.2%" over a row reading "94%" reads as two different readings of
-    // the same window.
-    pct: Math.round(highest(worst.limits)),
-  }));
-}
-
-/** highest is api.LimitsView.HighestUtilization, in the render layer: the one
- *  number that stands for a reading with several windows. Blocked counts as
- *  full, the same way the Go side counts it. */
-function highest(v) {
-  if (v?.blocked) return 100;
-  return Math.max(v?.five_hour?.utilization || 0, ...(v?.windows || []).map((w) => w.utilization));
-}
 
 /** sharesBlock is "whose five-hour window is this", and it exists only on the
  *  single-subscription branch — endpoint_shares apportions ONE account's window
@@ -234,38 +163,26 @@ function quotaCard(result, accounts) {
     // none: it has no ceiling to be near, so a heading over "no reading
     // available" here claimed a gap that does not exist (#50).
     const { groups, metered } = quotaGroups(limits.per_account, accounts);
-    const sourceOf = sourceMap(accounts);
     const shownSet = new Set(groups.flatMap((g) => g.entries.map((e) => e.account_uuid)));
 
-    // Nothing opens this branch any more, and both halves of that are
-    // deliberate.
-    //
-    // #125 removed `limits.note` -- the server's "utilization is never summed"
-    // sentence -- because now.js printed the same claim as a banner seventy
-    // lines up, in the same viewport, on the same trigger. #124 then removed
-    // chipsIgnoredHint, the scope note that only appeared when a chip was set.
-    // What is left is the thing both sentences were talking about: a reader
-    // looking at five separate bars with five separate resets is not in danger
-    // of adding them up. `note` still ships on the response for the API and MCP
-    // callers that get no gauges.
-    //
-    // The .filter(Boolean) went with the hint. It was not defensive padding --
-    // append() stringifies a bare `null` into a literal "null" TEXT NODE, and
-    // chipsIgnoredHint returned null on every load with no chips -- but with the
-    // hint gone there is no nullable member left to guard. now.js still carries
-    // that guard, with the same note, for a list that really can hold a null.
-    const worst = worstLine(limits.worst, shownSet, sourceOf);
-    if (worst) card.appendChild(worst);
+    // Nothing opens this branch any more. #125 removed the server's "never
+    // summed" note, #124 the chips hint, and #153 the last one, "Closest to its
+    // limit: …" -- at the operator's direction: a blocked subscription already
+    // says so on its own row, and the rest are one glance down the 7D column.
+    // `worst` and `note` still ship on the response for API and MCP callers.
 
     // Filtered down to nothing says something, and it is not the blank the
     // card would otherwise render: every account in view is metered.
     if (!shownSet.size && metered.length) {
       card.appendChild(el('div', { class: 'empty' }, t('wall.meteredOnly')));
     }
+    // Blocked subscriptions go to the end of their group, soonest-back first
+    // (#153): the ones that can take work are the ones worth reading first. The
+    // group itself does not move -- a blocked Claude account stays under Claude.
     for (const g of groups) {
       card.appendChild(el('div', { class: 'qgroup' },
-        groupHeading(g.source, g.entries.length),
-        ...g.entries.map((e) => accountEntry(e))));
+        groupHeading(g.source),
+        ...blockedLast(g.entries).map((e) => accountEntry(e))));
     }
     return card;
   }
@@ -285,13 +202,16 @@ function quotaCard(result, accounts) {
   }
 
   const source = limits.source || 'claude';
-  const heading = hasQuotaWindow(source) ? groupHeading(source, 1) : null;
-  const rows = [...windowRows(limits, { showSource: !heading })];
+  const heading = hasQuotaWindow(source) ? groupHeading(source) : null;
+  const rows = windowLines(limits);
+  // A model-scoped weekly window gets a line of its own, named for its model:
+  // it is not the account's 5H or 7D and must not sit in either column.
   for (const s of limits.scoped || []) {
     if (!s.model && !s.surface) continue;
-    rows.push(C.gauge(t('quota.scopedWeekly', { name: s.model || s.surface }), s));
+    rows.push(el('div', { class: 'qrow qrow-named' },
+      C.windowCell(t('quota.scopedWeekly', { name: s.model || s.surface }), s)));
   }
-  card.appendChild(el('div', { class: 'qgroup' }, heading, ...rows, ...extraNotes(limits)));
+  card.appendChild(el('div', { class: 'qgroup' }, heading, el('div', { class: 'qentry' }, ...rows)));
   card.append(...sharesBlock(limits));
   return card;
 }

@@ -183,149 +183,69 @@ button[aria-pressed="true"] { background: var(--ink); color: var(--surface); bor
    -- and deleting that banner left no banner that should be closable: the rest
    report a fault, and a fault is fixed, not dismissed. */
 
-/* ---- gauges ----
+/* ---- the quota card (#95, #129, #153) ----
 
-   One window is ONE ROW, and #95 is where it became one.
+   One SUBSCRIPTION is one line (#153). It used to be one line per WINDOW (#95)
+   with the percent as the biggest number on the card (#129), flowed into two
+   lanes of ten columns on wide screens. The operator reversed that: the two
+   windows share a line, the shorter one in a third of it and the week in the
+   other two thirds, and the percent moved into the state capsule in the same
+   small type as everything else. Five subscriptions are five lines.
 
-   It used to be three stacked pieces — a name/percent/state/reset line, a bar,
-   and a full sentence of forecast — about 75px tall. The brief for the quota
-   card is that the current utilization should be the biggest number on it, and
-   that could not be had by enlarging the percent: it was already 30px. It was
-   the OTHER figures that had to give way, and a sentence on its own line reads
-   as a peer of whatever is above it however small the type. Measured across
-   five subscriptions with two windows each, the old form was a 1,248px card.
+   A window cell is four columns: label · capsule · bar · time to reset. Every
+   cell uses the same four whether the window is live, BLOCKED (the capsule
+   spans the capsule and bar columns) or moot (label only), so a blocked row is
+   exactly as tall as a live one and its reset time sits in the same column as
+   everyone else's. The capsule column is sized to the widest percent ("100%"),
+   so the bars start on one line down the card.
 
-   The row is `display: contents`, so these cells join the enclosing `.qgroup`
-   grid rather than forming a box of their own. That is what lines the five
-   columns up across every subscription in a group — with per-row boxes, a
-   "5-hour window" and a "Codex · 7-day window" set their own widths and nothing
-   below agrees with anything above it. */
-.gauge { display: contents; }
-.gauge .name { font-size: 12.5px; color: var(--ink-2); font-weight: 500; white-space: nowrap; }
-.gauge .pct { font-size: 26px; font-weight: 620; letter-spacing: -.02em; font-variant-numeric: tabular-nums; text-align: right; line-height: 1.15; }
-.gauge .state { font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 999px; border: 1px solid; justify-self: start; white-space: nowrap; }
-/* The bar is the row's flexible column, and it is vertically centred against a
-   26px number rather than sitting under it. */
-.gauge .track { align-self: center; }
-.gauge .meta { font-size: 11.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
-.track { height: 10px; border-radius: 5px; background: var(--grid); overflow: hidden; }
-.fill { height: 100%; border-radius: 5px; transition: width .35s ease; }
-
-/* ---- the quota card (#95) ----
-
-   A group is a grid of five columns, and every subscription under one heading
-   shares them: window name · utilization · state · bar · when it resets and
-   where the burn lands. The bar takes whatever is left, with a floor, because a
-   2px bar is a decoration rather than a reading.
-
-   The grouping itself is in lib/providers.js's quotaGroups, and it is not
-   cosmetic either: Claude reports a fixed five-hour/seven-day pair and Codex
-   reports whatever windows its provider names plus a credit balance, so a flat
-   list made the reader work out which vocabulary each row spoke. On this hub it
-   was worse than that — one person's Claude and Codex subscriptions share an
-   email, so the flat list printed the same name twice in a row. */
-.qgroup { display: grid; grid-template-columns: auto auto auto minmax(90px, 1fr) auto; align-items: baseline; gap: 5px 10px; margin-top: 18px; }
-.qgroup-head { grid-column: 1 / -1; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; padding-bottom: 2px; border-bottom: 1px solid var(--grid); }
+   The account name still spans the line above its windows rather than taking
+   a column: a name in column one would push every number right by however long
+   the longest email is. */
+.qgroup { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px 28px; margin-top: 18px; }
+.qgroup-head { grid-column: 1 / -1; padding-bottom: 2px; border-bottom: 1px solid var(--grid); }
 .qgroup-name { font-size: 13px; font-weight: 640; letter-spacing: .02em; }
-.qgroup-count { font-size: 11.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
-.qgroup-note { font-size: 11.5px; color: var(--ink-3); }
-/* The subscription's name spans the row above its windows rather than taking a
-   column: the windows are the readings, and a name in column one would push
-   every number right by however long the longest email is. */
-.qacct { grid-column: 1 / -1; margin-top: 9px; font-size: 12px; font-weight: 600; color: var(--ink-2); overflow-wrap: anywhere; }
-/* The first subscription sits closer to the heading than the ones after it. The
-   `.qentry` form is not a second case: #129 wrapped each subscription, and a
-   `display: contents` wrapper is invisible to LAYOUT but not to a SELECTOR, so
-   without this half the rule silently stopped matching and the phone card grew
-   5px. */
-.qgroup-head + .qacct, .qgroup-head + .qentry > .qacct { margin-top: 4px; }
-.qempty, .qnote { grid-column: 1 / -1; font-size: 11.5px; color: var(--ink-3); margin: 0; }
+.qentry { min-width: 0; }
+.qacct { margin-top: 9px; font-size: 12px; font-weight: 600; color: var(--ink-2); overflow-wrap: anywhere; }
+.qempty { font-size: 11.5px; color: var(--ink-3); margin: 2px 0 0; }
 .quota-card .qsub { margin-top: 22px; }
 
-/* One subscription, as a unit (#129). `display: contents` means it is NOT a box
-   here — its cells join `.qgroup` exactly as they did when quota.js returned
-   them loose, so every rule above and the phone layout below are untouched. It
-   exists so the wide layout has something to move; see the two-lane block. */
-.qentry { display: contents; }
+.qrow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 18px; margin-top: 3px; }
+.qrow-named { grid-template-columns: minmax(0, 1fr); }
+.qcell { display: grid; grid-template-columns: 24px 46px minmax(24px, 1fr) auto; gap: 7px; align-items: center; min-width: 0; height: 22px; }
+.qrow-named .qcell { grid-template-columns: auto 46px minmax(24px, 1fr) auto; }
+.qw { font: 600 11.5px/1 ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace; color: var(--ink-2); white-space: nowrap; }
+.qcell .state { font: 600 11px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace; text-align: center; padding: 0 6px; border-radius: 999px; border: 1px solid; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.qcell .meta { font-size: 11.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+/* BLOCKED spans the capsule and bar columns; whatever rides with it (a credit
+   balance) follows the capsule and is clipped before it can push the reset
+   time out of its column. */
+.qblocked { grid-column: 2 / 4; display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; white-space: nowrap; }
+.qextra { font-size: 11px; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; }
+.track { height: 8px; border-radius: 4px; background: var(--grid); overflow: hidden; }
+.fill { height: 100%; border-radius: 4px; transition: width .35s ease; }
 
-/* ---- two lanes, once there is room for two (#129) ----
-
-   The card's last extravagance was that it flowed down ONE column at every
-   width. Ten windows were ten stacked rows — measured here at 538px of group
-   for five subscriptions — while the bar column, the only flexible one, ate the
-   slack and rendered 670px long. Nothing reads a 670px bar more accurately than
-   a 120px one; the width was being spent on nothing while the reader scrolled.
-
-   So above 1180px the group is TWO five-column lanes and a subscription flows
-   into whichever one is next: 5 blocks over 3 rows instead of 5, measured at
-   1440px as 538px -> 335px of group (-37.7%), 631px -> 428px of whole card
-   (-32.2%).
-
-   Why a hand-written `repeat(2, ...)` and not `.tiles`'s `repeat(auto-fit,
-   minmax(140px, 1fr))`, which is this file's other multi-column grid: auto-fit
-   cannot express this. An auto-repeat track list may not contain intrinsic or
-   flexible sizes, and four of these five columns are `auto` and the fifth is
-   `1fr` — the sizing that makes the five columns agree across subscriptions in
-   the first place. `.tiles` can auto-fit because a tile is one opaque 140px
-   box. A gauge is five cells that must line up with the gauge above it.
-
-   Which is also why the lane is `subgrid` rather than a nested grid of its own.
-   A nested grid would size its five columns from its own block's content, so
-   two subscriptions stacked in the same lane would set different widths and the
-   percent column would wander — the exact failure the `display: contents` note
-   above describes. Subgrid puts every block on the lane's tracks, so a lane
-   reads as one column of numbers from top to bottom. Verified: in a five-
-   subscription card the `.pct` cells of every block in lane one share a right
-   edge, and so do lane two's.
-
-   1180px is `.wrap`'s own max-width, which is the whole reason it is the
-   breakpoint rather than a number picked to look responsive. The group is the
-   viewport less the wrap's 40px and the card's 36px, so it grows with the
-   window until the wrap stops and then stays at 1104px forever — and switching
-   exactly there means these ten columns only ever run at the ONE width measured
-   above. Lower would be a range whose wide end is fine and whose narrow end
-   overflows sideways: at 1140px the group is 1064px, and this needs 54 more.
-
-   Two things buy the room it needs. The bar's floor drops to 60px, because
-   when something has to give, a shorter bar is a smaller loss than a forecast
-   pushed off the card — it is a floor, not a width, and at 1440px the bars
-   still measure 101px. And the lanes are separated by 20px of padding on the
-   forecast cell instead of a wider `column-gap`: a gap applies to all nine
-   gutters, so a 30px lane separation would also widen the eight gutters INSIDE
-   the lanes, spending 160px to separate two things. The padding costs 40px and
-   is symmetric — lane one's trailing space separates the lanes, lane two's
-   falls in the card's own right padding. Against the worst content this branch
-   can be handed (a 62-character account name, every window "100.0%" and
-   "critical", a three-digit forecast on every row) the bars still come out at
-   89px, clear of the floor.
-
-   Blocks are placed by ordinary auto-flow in DOM order, row-major: each lands
-   in the first row where a lane is free. Tab order is untouched and nothing
-   here uses `order`. */
+/* Two lanes once there is room for two (#129's breakpoint, kept): 1180px is
+   `.wrap`'s own max-width, so the lanes only ever run at the one width the card
+   has from there on. A subscription is one block now, so plain auto-flow does
+   what #129 needed subgrid for — there are no cross-block columns to keep in
+   step, every block carries its own. */
 @media (min-width: 1180px) {
-  .qgroup { grid-template-columns: repeat(2, auto auto auto minmax(60px, 1fr) auto); gap: 14px 10px; }
-  .qentry {
-    display: grid; grid-column: span 5; grid-template-columns: subgrid;
-    align-items: baseline; gap: 5px 10px;
-  }
-  .gauge .meta { padding-right: 20px; }
-  /* The block supplies the separation between subscriptions now (the grid's
-     14px row gap), so the name stops adding its own on top of it. */
-  .qentry > .qacct, .qgroup-head + .qentry > .qacct { margin-top: 0; }
+  .qgroup { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
-/* Under ~640px the five columns cannot hold: an email, a 26px number and a
-   forecast do not share a phone's width. The row becomes two lines — the
-   reading, then the bar and its meta — and the percent stays the largest thing
-   on both. */
+/* On a phone the two cells cannot share a line: the week drops under the five
+   hours. Each cell keeps its own 22px, so a blocked account is still exactly as
+   tall as a live one. */
 @media (max-width: 640px) {
-  .qgroup { grid-template-columns: 1fr auto auto; }
-  .gauge .track { grid-column: 1 / -1; }
-  .gauge .meta { grid-column: 1 / -1; text-align: left; white-space: normal; }
-  .gauge .name { white-space: normal; }
+  .qrow { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  /* A window the account does not have (Codex reports no 5H) holds its column
+     open on one line; stacked, there is no column to hold, only a blank line. */
+  .qcell:empty { display: none; }
 }
 
-/* Status colour is reinforced by the label text beside it, never alone. */
+/* Status colour is never carried alone: the quota capsule prints the percent
+   it is a band of, and its title/aria-label carries the band's word (#153). */
 .st-good     { color: var(--good);     border-color: var(--good); }
 .st-warning  { color: var(--warning);  border-color: var(--warning); }
 .st-serious  { color: var(--serious);  border-color: var(--serious); }

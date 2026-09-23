@@ -164,17 +164,24 @@ export const shortProject = (p) => {
   return "…/" + (two.length <= 30 ? two : parts[parts.length - 1]);
 };
 
-// Restored verbatim from fd1d888 (#124 removed it; #129 puts the reset time
-// back on every window at the operator's direction — see charts.js's gauge).
-export const relTime = (iso) => {
+/** resetIn is how long until a window resets, in its LARGEST unit only —
+ *  `4d`, `1h`, `21m` — rounded down (#153).
+ *
+ *  It replaces relTime's "resets in 4d 3h". That form was restored verbatim
+ *  from fd1d888 by #129 and is retired here on the operator's direction: the
+ *  second unit is precision nobody plans with ("four days" is the decision, the
+ *  three hours are not), and on a row that now carries two windows side by side
+ *  it was the widest text on the card. Rounded DOWN, so "1d" never promises a
+ *  reset that is really 23 hours away. */
+export const resetIn = (iso) => {
   if (!iso) return t('reset.unknown');
   const ms = new Date(iso) - Date.now();
-  if (ms <= 0) return t('reset.now');
-  const m = Math.round(ms / 60000);
-  if (m < 60) return t('reset.minutes', { m });
+  if (ms < 60000) return t('reset.now');
+  const m = Math.floor(ms / 60000);
+  if (m < 60) return t('reset.in.minutes', { n: m });
   const h = Math.floor(m / 60);
-  if (h < 24) return t('reset.hours', { h, m: m % 60 });
-  return t('reset.days', { d: Math.floor(h / 24), h: h % 24 });
+  if (h < 24) return t('reset.in.hours', { n: h });
+  return t('reset.in.days', { n: Math.floor(h / 24) });
 };
 
 export const ago = (secs) => {
