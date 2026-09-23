@@ -252,18 +252,12 @@ grep -E 'bind -n F9 .*hub-zoom\.sh' "$CONF" | grep -q -- '--home' \
 grep -qF -- '--home' "$SCRIPT" \
   || fail "hub-zoom.sh no longer understands --home (issue #405)"
 # Task bar first (#899): the SECOND press only reaches hub-zoom.sh as --nav through
-# the fleet-sidebar table's own binds, and that table's status click must still
-# serve every other status range the root one does (a bound key never falls through).
+# the fleet-sidebar table's own F9 / status-click binds (fleet-sidebar-selftest.sh
+# pins that the status click otherwise matches the root one).
 grep -Eq '^bind -T fleet-sidebar F9 .*hub-zoom\.sh --nav' "$CONF" \
   || fail "conf: the fleet-sidebar table needs an F9 bind running 'hub-zoom.sh --nav' (#899)"
-navclick=$(grep -E '^bind -T fleet-sidebar MouseDown1Status ' "$CONF")
-printf '%s\n' "$navclick" | grep -qF 'hub-zoom.sh --home --nav' \
+awk '/^bind -T fleet-sidebar MouseDown1Status /,/^}$/' "$CONF" | grep -qF 'hub-zoom.sh --home --nav' \
   || fail "conf: the fleet-sidebar status click must run 'hub-zoom.sh --home --nav' on the ⌂ (#899)"
-for leg in fleet-pick.sh 'next-attention.sh --needs-cycle' usage-modal.sh fleet-xfleet-jump.sh; do
-  grep -qF -- "$leg" "$CONF" || continue
-  printf '%s\n' "$navclick" | grep -qF -- "$leg" \
-    || fail "conf: the fleet-sidebar status click lost the root click's '$leg' range"
-done
 grep -Eq '^bind -n F9 .*--client' "$CONF" \
   || fail "conf: the root F9 must pass --client so the right client's table switches (#899)"
 

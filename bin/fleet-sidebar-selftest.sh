@@ -226,8 +226,10 @@ try:
     def status_block(head):
         start = shipped.index(head)
         return shipped[start + len(head):shipped.index('\n}\n', start)]
+    # The one allowed difference: the ⌂ from the task bar is the SECOND press of
+    # "task bar first" and says so with --nav (issue #899).
     check(status_block('bind -n MouseDown1Status ') ==
-          status_block('bind -T fleet-sidebar MouseDown1Status '),
+          status_block('bind -T fleet-sidebar MouseDown1Status ').replace(' --nav', '', 1),
           'the fleet-sidebar status-bar tap drifted from the root one')
     selected = [line for line in shipped.splitlines() if not line.startswith('#') and
                 'MouseDown1Status' not in line and
