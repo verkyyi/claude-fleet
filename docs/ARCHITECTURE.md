@@ -386,6 +386,23 @@ is read from the window repo's dir. A window with no repo, or an unknown one in 
 2+ repo fleet, gets no PR cell. No overlay → the per-session prmap exactly as
 before (`bin/dash-rows-multirepo-pr-selftest.sh`).
 
+**Cleanup stays inside its own repo (issue #791).** A reaper acts on a window,
+so it takes its repo FROM that window (`fleet_load_window_conf`), never from the
+fleet conf, and joins windows on **(repo, issue)** (`fleet_issue_windows`), never
+a bare number: repo A's merged #12 cannot reach repo B's #12 window or worktree.
+The cleanup daemon runs one pass per hosted repo (that repo's MAIN, its own
+`fleets/<slug>/prmap`, its own lease, one shared per-tick cap) and hands the
+janitor `fleet-cleanup.sh <pr> --repo <r>`; idle close runs one pass per repo;
+SessionEnd, dash ⌃x and `fleet-worker-stop.sh` use the target window's repo; the
+worktree janitor sweeps every hosted MAIN; transfer/migrate accept a worktree
+registered to ANY hosted repo (`fleet_worktree_repo`). A window whose repo is
+unknown, or `@norepo 1`, is **never reaped automatically** — its worktree is left
+alone. ⌃x still closes a `@norepo` session (there is no worktree to drop); ⌃x on
+an issue window whose repo cannot be told is refused until its `@repo` is set,
+and a SessionEnd there closes the window without touching any worktree.
+Degenerate: every caller takes its historic path when the fleet has no overlay (`fleet_has_repo_overlays`);
+`bin/fleet-cleanup-multirepo-selftest.sh` pins both.
+
 ### The launcher pre-trusts the fleet's checkout (issue #563)
 
 Claude Code asks "Quick safety check: Is this a project you created or one you

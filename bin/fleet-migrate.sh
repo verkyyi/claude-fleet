@@ -251,7 +251,11 @@ migrate_one_body() {
   origin=$(wopt "$wid" '#{@origin}')
   hnd=$(wopt "$wid" '#{@wid}')      # the fleet's short window handle (issue #566)
   local sid; sid=$(session_id_for "$cpid" "$cwd") || sid=""
-  if ! migrate_eligible "$name" "$(TM display-message -p -t "$wid" '#{@hub}' 2>/dev/null)" "$raw" "$cwd" "${FLEET_MAIN:-}" "$sid"; then
+  # A multi-repo fleet has one base checkout per hosted repo (issue #791): a raw
+  # pane sitting in ANY of them is the "main-cwd" case, not only the conf repo's.
+  local wmain="${FLEET_MAIN:-}"
+  fleet_has_repo_overlays "$SESS" && wmain=$(fleet_repo_mains "$SESS" | grep -Fx -- "${cwd%/}" | head -n 1)
+  if ! migrate_eligible "$name" "$(TM display-message -p -t "$wid" '#{@hub}' 2>/dev/null)" "$raw" "$cwd" "$wmain" "$sid"; then
     say "  – $name ($wid): not eligible (panel/hub/main-cwd) — skipped"; skipped=$((skipped+1)); return 0
   fi
   if migrate_noop "$label" "$ACTIVE" "$MODEL" "$ACTIVE_BENCHED"; then

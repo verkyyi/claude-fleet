@@ -140,9 +140,10 @@ if [ "${1:-}" = "--exec" ]; then
     key=$(fleet_scratch_key "${5:-}")
     if [ -n "$key" ]; then
       FLEET_SESSION="$sess"; export FLEET_SESSION
-      fleet_load_conf "$sess"
-      REPO="${FLEET_REPO:-}"
-      _r=$(fleet_repo_cached "$sess"); [ -n "$_r" ] && REPO="$_r"
+      # The window's OWN repo (issue #791); unknown in a multi-repo fleet → no
+      # MAIN, no row: nothing of any repo is touched, the window still closes.
+      fleet_load_window_conf "$sess" "$win" || :
+      REPO=$(fleet_resolved_repo "$sess")
       MAIN="${FLEET_MAIN:-}"; [ -n "$MAIN" ] && [ ! -d "$MAIN/.git" ] && MAIN=""
       BASE="${FLEET_BASE_BRANCH:-master}"
       wtdir=""; whead=""; MASTER=""; MERGED_PRS=""
@@ -165,7 +166,7 @@ if [ "${1:-}" = "--exec" ]; then
       # @origin rides along as the row's provenance (issue #503) — read while the
       # window is still alive, exactly like the name.
       worigin=$(tmux display-message -p -t "$win" '#{@origin}' 2>/dev/null)
-      fleet_reap_record "$verdict" "$REPO" "$MAIN" "" "$wtdir" "$win" "$sess" "" "$key" "$wname" "$worigin"
+      { [ -n "$REPO" ] || ! fleet_has_repo_overlays "$sess"; } && fleet_reap_record "$verdict" "$REPO" "$MAIN" "" "$wtdir" "$win" "$sess" "" "$key" "$wname" "$worigin"
 
       # Child-report BACKSTOP (issue #574). The ship path in /fleet-claim reports the
       # outcome to the spawning session itself and stamps @reported, so --only-once
@@ -186,9 +187,14 @@ if [ "${1:-}" = "--exec" ]; then
   # act by verdict (mirrors dash-reap.sh's --exec + reap_full/reap_keep).
   [ -n "$iss" ] || { [ -n "$win" ] && tmux kill-window -t "$win" 2>/dev/null; exit 0; }
   FLEET_SESSION="$sess"; export FLEET_SESSION
-  fleet_load_conf "$sess"
-  REPO="${FLEET_REPO:-}"
-  _r=$(fleet_repo_cached "$sess"); [ -n "$_r" ] && REPO="$_r"
+  # The exiting window's OWN repo (issue #791) — its MAIN, its issue-<N> branch,
+  # its PRs. In a multi-repo fleet a window whose repo cannot be told is never
+  # reaped: close it, keep every worktree, write no row into a guessed ledger.
+  if ! fleet_load_window_conf "$sess" "$win"; then
+    [ -n "$win" ] && tmux kill-window -t "$win" 2>/dev/null
+    exit 0
+  fi
+  REPO=$(fleet_resolved_repo "$sess")
   MAIN="${FLEET_MAIN:-}"; [ -n "$MAIN" ] && [ ! -d "$MAIN/.git" ] && MAIN=""
   BASE="${FLEET_BASE_BRANCH:-master}"
   branch="issue-$iss"

@@ -32,6 +32,13 @@ def minutes():
     return int(value) if re.fullmatch(r"\d{1,6}", value) else 30
 
 
+def norm_repo(value):
+    """owner/name from a remote URL or owner/name (fleet_norm_repo's rules)."""
+    value = re.sub(r"^git@[^:]*:", "", value or "")
+    value = re.sub(r"^https?://[^/]*/", "", value)
+    return re.sub(r"/+$", "", re.sub(r"\.git$", "", value))
+
+
 class Cleaner:
     def __init__(self, args):
         self.args = args
@@ -40,7 +47,7 @@ class Cleaner:
         self.idle = minutes() * 60
 
     def snapshot(self, window):
-        names = ("@raw", "@issue", "@worktree", "@claude_state", "@claude_state_ts",
+        names = ("@raw", "@issue", "@repo", "@norepo", "@worktree", "@claude_state", "@claude_state_ts",
                  "@pin", "@cc_agent", "@cc_launcher_pid", "@codex_identity",
                  "@handoff_manifest", "@agent_transfer_until", "window_name")
         return {n: option(self.tm, window, n) for n in names}
@@ -49,6 +56,12 @@ class Cleaner:
         if (snap["@raw"] != "1" or snap["@issue"] or snap["@pin"] == "1"
                 or snap["@claude_state"] != "done"
                 or snap["window_name"] in ("dash", "plan", "backlog")):
+            return False
+        # A no-repo session is never closed automatically (issue #791), and in a
+        # multi-repo fleet (--window-repo) a pass only closes its OWN repo's windows.
+        if snap["@norepo"] == "1":
+            return False
+        if self.args.window_repo and norm_repo(snap["@repo"]) != norm_repo(self.args.repo):
             return False
         stamp = snap["@claude_state_ts"]
         if not stamp.isdigit() or not 0 < int(stamp) <= self.now:
@@ -159,6 +172,8 @@ def main():
     for name in ("session", "socket-name", "main", "repo", "base"):
         p.add_argument("--" + name, required=True)
     p.add_argument("--limit", type=int, default=4)
+    p.add_argument("--window-repo", action="store_true",
+                   help="only windows whose @repo is --repo (multi-repo fleet)")
     p.add_argument("--dry-run", action="store_true")
     return Cleaner(p.parse_args()).main()
 

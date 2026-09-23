@@ -263,10 +263,11 @@ if [ "${1:-}" = "--exec" ]; then
   iss="$(tmux display-message -t "$target" -p '#{@issue}' 2>/dev/null)"; iss="${iss//[^0-9]/}"
   [ -z "$iss" ] && exit 0
   FLEET_SESSION="$(fleet_current_session)"; export FLEET_SESSION
-  fleet_load_conf "$FLEET_SESSION"
+  # The TARGET window's repo, not the dash's (issue #791). Unknown → nothing
+  # resolves, so no worktree is touched; the window still closes.
+  fleet_load_window_conf "$FLEET_SESSION" "$target" || :
   guard_live
-  REPO="${FLEET_REPO:-}"
-  _r="$(fleet_repo_cached "$FLEET_SESSION")"; [ -n "$_r" ] && REPO="$_r"
+  REPO="$(fleet_resolved_repo "$FLEET_SESSION")"
   MAIN="${FLEET_MAIN:-}"; [ -n "$MAIN" ] && [ ! -d "$MAIN/.git" ] && MAIN=""
   branch="issue-$iss"
   wtdir=""; whead=""
@@ -292,7 +293,10 @@ if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
   # `scratch-<N>` branch under this fleet's MAIN — anything else degrades to a plain
   # window-close, so a stray cwd can never make ⌃x delete unrelated work.
   FLEET_SESSION="$(fleet_current_session)"; export FLEET_SESSION
-  fleet_load_conf "$FLEET_SESSION"
+  # The scratch's OWN repo (issue #791). A no-repo (@norepo) or unknown-repo
+  # scratch resolves no MAIN, so it degrades to the plain window-close below —
+  # the operator's explicit reap still closes it, with no worktree to drop.
+  fleet_load_window_conf "$FLEET_SESSION" "$target" || :
   guard_live
   MAIN="${FLEET_MAIN:-}"; [ -n "$MAIN" ] && [ ! -d "$MAIN/.git" ] && MAIN=""
   swt="$(tmux display-message -t "$target" -p '#{@worktree}' 2>/dev/null)"
@@ -433,11 +437,13 @@ iss="${iss//[^0-9]/}"
 FLEET_SESSION="$(fleet_current_session)"; export FLEET_SESSION
 # Overlay THIS fleet's per-session conf so FLEET_MAIN/FLEET_BASE_BRANCH/FLEET_REPO
 # target the reaped row's fleet, not the global default (a secondary fleet has its
-# own checkout) — same as dash-issue-session.sh / dash-new-session.sh.
-fleet_load_conf "$FLEET_SESSION"
+# own checkout) — same as dash-issue-session.sh / dash-new-session.sh. In a
+# multi-repo fleet, the reaped WINDOW's repo overlay on top (issue #791): its MAIN,
+# its branch, its PRs — never the conf repo's same-numbered issue.
+fleet_load_window_conf "$FLEET_SESSION" "$target" \
+  || refuse no-repo "cannot tell which repo #$iss belongs to — not reaping"
 guard_live
-REPO="${FLEET_REPO:-}"
-_r="$(fleet_repo_cached "$FLEET_SESSION")"; [ -n "$_r" ] && REPO="$_r"
+REPO="$(fleet_resolved_repo "$FLEET_SESSION")"
 [ -z "$REPO" ] && refuse no-repo "no repo resolved — cannot reap #$iss"
 
 MAIN="${FLEET_MAIN:-}"

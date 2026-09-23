@@ -82,6 +82,12 @@
 #   LAND_LEASE_DIR       per-tool override of the lease dir (tests)
 #   CLEANUP_DRY_TEARDOWN 1 = print the teardown cmds, don't run them (tests)
 #   FLEET_SESSION        override the resolved fleet session (daemon callers)
+#
+# --repo <owner/name> (issue #791): the repo the PR belongs to, in a fleet that
+# hosts several. MAIN/base come from THAT repo's overlay, and the worker window is
+# matched on (repo, issue) — repo A's merged #12 never finds repo B's #12 window.
+# Without it the historic resolution applies (the fleet conf's / caller window's
+# repo). A repo the fleet does not host is an error, never a guess.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -100,10 +106,11 @@ CLOSED_GRACE="${FLEET_CLEANUP_CLOSED_GRACE:-900}"
 case "$CLOSED_GRACE" in ''|*[!0-9]*) CLOSED_GRACE=900 ;; esac   # tolerate a garbled conf
 
 # --- args ---------------------------------------------------------------------
-PR=""; DRY=0; AUTO=0
+PR=""; DRY=0; AUTO=0; REPO_ARG=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --pr) shift; PR="${1:-}"; PR="${PR//[^0-9]/}" ;;
+    --repo) shift; REPO_ARG="${1:-}" ;;
     --dry-run|-n) DRY=1 ;;
     --auto) AUTO=1 ;;
     -h|--help) sed -n '2,63p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -122,14 +129,18 @@ done_token() { printf '%s\n' "$1"; }
 # --- resolve fleet identity (this fleet only — never a cwd default) ------------
 FLEET_SESSION="${FLEET_SESSION:-$(fleet_current_session)}"
 fleet_load_conf "$FLEET_SESSION"
+if [ -n "$REPO_ARG" ] && ! fleet_load_repo_conf "$FLEET_SESSION" "$REPO_ARG"; then
+  note "fleet-cleanup: $REPO_ARG is not a repo fleet $FLEET_SESSION hosts."
+  done_token "error:no-repo"; exit 2
+fi
 # Read AFTER the fleet overlay; these values are commonly not exported.
 MERGED_GRACE="${FLEET_CLEANUP_MERGED_GRACE:-600}"
 case "$MERGED_GRACE" in ''|*[!0-9]*) MERGED_GRACE=600 ;; esac
 if [ "${#MERGED_GRACE}" -gt 8 ]; then MERGED_GRACE=600; fi
 MERGED_GRACE=$((10#$MERGED_GRACE))
 [ "$MERGED_GRACE" -le 31536000 ] || MERGED_GRACE=600
-REPO="${FLEET_REPO:-}"
-_r=$(fleet_repo_cached "$FLEET_SESSION"); [ -n "$_r" ] && REPO="$_r"
+if [ -n "$REPO_ARG" ]; then REPO=$(fleet_norm_repo "$REPO_ARG")
+else REPO=$(fleet_resolved_repo "$FLEET_SESSION"); fi
 MAIN="${FLEET_MAIN:-}"
 BASE="${FLEET_BASE_BRANCH:-master}"
 [ -z "$REPO" ] && { note "fleet-cleanup: no repo resolved — run inside a fleet."; done_token "error:no-repo"; exit 2; }
@@ -190,8 +201,9 @@ if [ -n "$BRANCH" ]; then
     # No @issue binding on a non-issue head → the window is addressed by pane cwd.
     [ -n "$WT" ] && IFS=$'\t' read -r WIN WIN_STATE <<<"$(fleet_wt_window "$FLEET_SESSION" "$WT")"
   else
-    WIN=$(ftmux list-windows -t "$FLEET_SESSION" -F '#{window_id} #{@issue}' 2>/dev/null | \
-          awk -v i="$ISSUE" '$2==i{print $1}')
+    # Keyed (repo, issue) — issue #791: a multi-repo fleet's other repo may have
+    # its own #$ISSUE window, and that one is not ours to kill.
+    WIN=$(fleet_issue_windows "$FLEET_SESSION" "$REPO" "$ISSUE")
     # Its @claude_state too — the closed-unmerged gate (issue #544) reads it, and
     # it is a second format pass over the same window list, not a second lookup.
     [ -n "$WIN" ] && WIN_STATE=$(ftmux list-windows -t "$FLEET_SESSION" \
