@@ -1483,6 +1483,26 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Worktree setup timeout @group=spawn @tier=advanced @scope=fleet @edit=int @unit=sec
 #FLEET_WORKTREE_SETUP_TIMEOUT=120
 
+# Keep the BASE checkout's dependencies current with master (issue #961). The link
+# above only proves the LOCKFILES match — and base-sync fast-forwards the base every
+# 60 s, so they always do, even when the base's node_modules was installed from an
+# older lockfile. So fleet-deps-link links only a base tree stamped with the sha of
+# the lockfile it was installed from (node_modules/.fleet-lock-sha), and with this
+# on, base-sync reinstalls (nice'd, serial, timeboxed, logs/base-deps.log) every
+# base dir whose lockfile moved: npm ci / yarn --frozen-lockfile (--immutable on
+# yarn 2+) / pnpm --frozen-lockfile. A failed install is logged and retried next
+# tick; it never affects the fast-forward. Empty = on exactly when
+# FLEET_WORKTREE_SETUP is fleet-deps-link; 1 / 0 force it. Turning shared deps on
+# for a fleet: run `bin/fleet-deps-link.sh --prime-base <main>` once to install +
+# stamp every base dir; `fleet-doctor` counts fresh / stale / unstamped ones.
+# @label=Keep base deps current @group=spawn @tier=advanced @scope=fleet @edit=bool
+#FLEET_BASE_DEPS=""
+
+# Wall-clock budget for ONE base-dir reinstall (fleet_timebox); a timed-out install
+# is killed, logged, left unstamped (so nothing links to it) and retried next tick.
+# @label=Base deps install timeout @group=spawn @tier=advanced @scope=fleet @edit=int @unit=sec
+#FLEET_BASE_DEPS_TIMEOUT=900
+
 # --- Warm scratch pool (bin/scratch-pool.sh) ---------------------------------
 # How many pre-started scratch sessions to keep parked and ready. 0 (default) = OFF.
 #

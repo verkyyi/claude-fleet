@@ -1226,6 +1226,37 @@ EOF
   [ "$_any" = 0 ] && _inv_line '' ''
 fi
 
+# --- shared deps: is the base's node_modules current with its lockfiles? (#961) --
+# With shared deps on (fleet_base_deps_on: FLEET_BASE_DEPS=1, or the stock
+# fleet-deps-link hook), every new worktree borrows the base checkout's
+# node_modules — and fleet-deps-link refuses a tree whose `.fleet-lock-sha` stamp
+# does not match its lockfile, so a stale / unstamped base silently turns every
+# spawn back into a full install. Count them per fleet.
+dl_sh="$(dirname "$0")/fleet-deps-link.sh"
+if [ -d "$conf_dir" ] && [ -x "$dl_sh" ]; then
+  while IFS= read -r cf; do
+    [ -n "$cf" ] || continue
+    case "$cf" in */fleets/*/conf) sess=${cf%/conf}; sess=${sess##*/} ;; *) sess=$(basename "$cf" .conf) ;; esac
+    bd_on=$(_conf_val "$cf" FLEET_BASE_DEPS); [ -n "$bd_on" ] || bd_on=$(_conf_val "$gconf" FLEET_BASE_DEPS)
+    bd_ws=$(_conf_val "$cf" FLEET_WORKTREE_SETUP); [ -n "$bd_ws" ] || bd_ws=$(_conf_val "$gconf" FLEET_WORKTREE_SETUP)
+    case "$bd_on:$bd_ws" in 1:*|:*fleet-deps-link*) ;; *) continue ;; esac
+    main=$(sh -c '. "$1" 2>/dev/null; printf %s "${FLEET_MAIN:-}"' _ "$cf")
+    [ -d "$main" ] || continue
+    bd_sum=$("$dl_sh" --base-status "$main" 2>/dev/null | sed -n 's/^summary //p')
+    [ -n "$bd_sum" ] || continue
+    bd_get() { printf '%s\n' "$bd_sum" | tr ' ' '\n' | sed -n "s/^$1=//p"; }
+    bd_f=$(bd_get fresh); bd_s=$(( $(bd_get stale) + $(bd_get installing) )); bd_u=$(bd_get unstamped); bd_n=$(bd_get not-installed)
+    bd_txt="$sess: base deps $bd_f fresh / $bd_s stale / $bd_u unstamped / $bd_n not installed"
+    if [ "$bd_s" -gt 0 ] || [ "$bd_u" -gt 0 ]; then
+      warn deps "$bd_txt — worktrees there install from zero instead of linking; fix: $(dirname "$0")/fleet-deps-link.sh --prime-base '$main' (per dir: --base-status)"
+    else
+      pass deps "$bd_txt — new worktrees link the base's current tree"
+    fi
+  done <<EOF
+$(_fleet_confs "$conf_dir")
+EOF
+fi
+
 # --- project trust: will a spawned worker stop at "trust this folder?" (issue #563) ---
 # Claude Code keys its per-directory trust on the resolved project root — a linked
 # worktree resolves to its MAIN checkout — with an exact lookup in ~/.claude.json
