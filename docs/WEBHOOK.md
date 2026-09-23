@@ -8,7 +8,8 @@ PR/CI). That is exactly the moment you are watching a PR go green (to review
 (~1s) by wiring GitHub's real-time webhook stream to the SAME single-writer
 refreshers — with **no public endpoint**.
 
-OFF by default (issue #315). A fleet opts in with `FLEET_WEBHOOK=1`.
+OFF by default (issue #315). A fleet opts in with `FLEET_WEBHOOK=1`, which covers
+**every repo it hosts** (issue #800) — see [Every hosted repo](#every-hosted-repo-issue-800).
 
 ## Why `gh webhook forward` (no endpoint)
 
@@ -28,7 +29,7 @@ needs repo admin, which the operator has). `gh` ≥ 2.91 is fine.
 ```
 com.claude-fleet.webhook  (KeepAlive supervisor)
 ├── one local handler        http://127.0.0.1:<port>   (python3)
-└── one `gh webhook forward`  per opted-in LIVE fleet repo  ──► that same --url
+└── one `gh webhook forward`  per opted-in repo of each LIVE fleet  ──► that same --url
         gh webhook forward --repo <owner/repo> \
           --events pull_request,check_run,check_suite,status,issues \
           --url http://127.0.0.1:<port>
@@ -38,6 +39,9 @@ com.claude-fleet.webhook  (KeepAlive supervisor)
   like the other fan-out daemons), deduped **per repo** — a single forward per repo, even if two
   sessions serve it. Dead forwards are auto-restarted each rescan; a repo that opts
   out or whose fleet goes down has its forward reaped.
+- A multi-repo fleet (issue #788) forwards **each repo it hosts** — the fleet conf's
+  `FLEET_REPO` and every `repos/<slug>.conf` overlay's — one forward per repo, with
+  its pidfile at `<state>/forwards/<slug>.pid`.
 - The handler binds to **127.0.0.1 only**. It is threaded, so a slow kick never
   head-of-line-blocks the next delivery, and it ACKs `200` immediately.
 
@@ -55,6 +59,13 @@ handler routes each delivery, by the repo in its payload, to the right owner:
 Both targeted modes narrow the fetch to the ONE repo in the payload and bypass the
 poll TTL (the kick wants it now), but run the exact same fetch code the pollers do —
 so the write-side ownership is unchanged and there is no double-writer race.
+
+Each route logs the **(fleet, repo)** the delivery landed on and the slug whose
+caches it refreshed (`fleets/<slug>/prmap`, `…/issues`), e.g.
+
+```
+route: pull_request acme/b #12 [fleet-x · acme-b] → pr-refresh --repo
+```
 
 ## Polling stays the BACKSTOP
 
@@ -98,6 +109,16 @@ debounces per `(event-class, repo)`: a kick for the same pair fired < `DEBOUNCE`
 seconds ago is skipped (the poll backstop still catches anything dropped). Default
 3s; `FLEET_WEBHOOK_DEBOUNCE=0` disables it.
 
+## Every hosted repo (issue #800)
+
+A fleet that hosts several repos (`bin/fleet-repo.sh add`) gets instant updates
+for all of them, not just the first: `FLEET_WEBHOOK` is a **per-repo** key
+(`_FLEET_REPO_OVERRIDABLE`). Set it once in the fleet conf and every hosted repo
+forwards; set `FLEET_WEBHOOK=0` in one repo's `repos/<slug>.conf` to leave that
+repo on polling alone (or `=1` there to opt in just that repo). A fleet with no
+`repos/` overlay forwards its one `FLEET_REPO` exactly as before.
+`fleet-repo.sh get FLEET_WEBHOOK <owner/repo>` prints what a repo resolves to.
+
 ## Enable it
 
 Per fleet, in `~/.config/claude-fleet/<session>.conf` (or the global `fleet.conf`):
@@ -134,7 +155,7 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude-fleet.webhook
 
 | Env (per-fleet conf / global `fleet.conf` / environment) | Scope | Default | Meaning |
 |---|---|---|---|
-| `FLEET_WEBHOOK` | fleet | `0` (off) | `1` to forward this fleet's repo |
+| `FLEET_WEBHOOK` | fleet / per repo | `0` (off) | `1` to forward every repo the fleet hosts; a repo overlay may override |
 | `FLEET_WEBHOOK_PORT` | global | `8917` | localhost port the handler binds + forwards target |
 | `FLEET_WEBHOOK_SECRET` | global | — | optional HMAC secret (`--secret` + verify) |
 | `FLEET_WEBHOOK_EVENTS` | env | `pull_request,check_run,check_suite,status,issues` | events forwarded |

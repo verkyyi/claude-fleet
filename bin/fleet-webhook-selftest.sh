@@ -15,6 +15,9 @@
 #   • SELECTION   --desired lists opted-in repos, DEDUPED; FLEET_WEBHOOK=0 → excluded.
 #   • RECONCILE   one forward per desired repo; a killed forward is restarted next
 #                 pass; a repo that opts out has its forward reaped.
+#   • EVERY REPO  a multi-repo fleet forwards each hosted repo that opts in (per-repo
+#                 FLEET_WEBHOOK), and a delivery for repo B refreshes B's caches
+#                 (issue #800).
 #
 # python3 is required by --route (HMAC + JSON extraction), matching the daemon; if it
 # is absent the whole test SKIPs cleanly (exit 0), per the runner convention.
@@ -256,6 +259,60 @@ cwp=$(cat "$CST/forwards/acme-widgets.pid"); kill "$cwp" 2>/dev/null; wait_dead 
 grep -qx -- '--repo acme/widgets'   "$CREC" || fail 'catch-up did not re-kick pr-refresh on reconnect'; ok
 grep -qx -- '--issues acme/widgets' "$CREC" || fail 'catch-up did not re-kick collect on reconnect'; ok
 
+# --- EVERY HOSTED REPO (issue #800) -----------------------------------------
+# A fleet hosting several repos (repos/<slug>.conf overlays, issue #788) forwards
+# EACH of them, opt-in resolved PER REPO (an overlay may say 0 or 1; unset inherits
+# the fleet conf), and a delivery for repo B is routed to (fleet, B) — B's caches.
+# The one-repo fleets above (no repos/ dir) are the degenerate case and still
+# forward exactly their FLEET_REPO.
+mkdir -p "$CD/fleets/multi/repos" "$CD/fleets/solo/repos"
+printf 'FLEET_REPO=acme/one\nFLEET_WEBHOOK=1\n'   > "$CD/fleets/multi/conf"
+printf 'FLEET_REPO=acme/two\n'                    > "$CD/fleets/multi/repos/acme-two.conf"    # inherits 1
+printf 'FLEET_REPO=acme/three\nFLEET_WEBHOOK=0\n' > "$CD/fleets/multi/repos/acme-three.conf"  # opts out
+printf 'FLEET_REPO=acme/four\nFLEET_WEBHOOK=0\n'  > "$CD/fleets/solo/conf"
+printf 'FLEET_REPO=acme/five\nFLEET_WEBHOOK=1\n'  > "$CD/fleets/solo/repos/acme-five.conf"    # overlay-only opt-in
+desired=$(FLEET_CONF_DIR="$CD" bash "$WH" --desired multi solo 2>/dev/null | tr '\n' ' ')
+eq 'desired = every hosted repo that opts in (per repo)' "$desired" 'acme/one acme/two acme/five '
+desired=$(FLEET_CONF_DIR="$CD" bash "$WH" --desired alpha 2>/dev/null | tr '\n' ' ')
+eq 'degenerate one-repo fleet forwards just its FLEET_REPO' "$desired" 'acme/widgets '
+
+MST="$WORK/mstate"
+FLEET_CONF_DIR="$CD" FLEET_WEBHOOK_STATE_DIR="$MST" FLEET_WH_FORWARD_CMD="$WORK/fakefwd.sh" \
+  FLEET_WH_HOOKS_LIST_CMD="$NOHOOKS" FLEET_PR_REFRESH_CMD="$NOOP" FLEET_ISSUES_REFRESH_CMD="$NOOP" \
+  bash "$WH" --reconcile multi >/dev/null 2>&1
+eq 'one forward pidfile per hosted repo' "$(cd "$MST/forwards" && ls -- *.pid | tr '\n' ' ')" 'acme-one.pid acme-two.pid '
+
+# route a delivery for EACH repo through the REAL single writers (pr-refresh /
+# collect --issues) with a fake gh on PATH: each lands in its OWN slug's cache dir,
+# and the handler log names (fleet, slug) per delivery.
+mkdir -p "$WORK/fakebin"
+cat > "$WORK/fakebin/gh" <<'EOF'
+#!/bin/sh
+# prmap / issues rows for whichever repo was asked (--repo R); graphql → nothing
+r=''; while [ "$#" -gt 0 ]; do [ "$1" = --repo ] && r="$2"; shift; done
+case "$r" in '') exit 1 ;; esac
+printf 'issue-1\t#1\tOPEN\t%s\n' "$r"
+EOF
+chmod +x "$WORK/fakebin/gh"
+mroute() { # $1=body $2=event → handler log line on stdout
+  printf '%s' "$1" | PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/mcache" FLEET_CONF_DIR="$CD" \
+    FLEET_WEBHOOK_DEBOUNCE=0 FLEET_WEBHOOK_STATE_DIR="$MST" \
+    bash "$WH" --route --event "$2" 2>&1 >/dev/null | grep 'route:'
+}
+mkdir -p "$WORK/mcache"
+l1=$(mroute '{"repository":{"full_name":"acme/one"},"pull_request":{"number":3}}' pull_request)
+l2=$(mroute '{"repository":{"full_name":"acme/two"},"pull_request":{"number":4}}' pull_request)
+l3=$(mroute '{"repository":{"full_name":"acme/two"},"issue":{"number":5}}' issues)
+case "$l1" in *'acme/one #3 [multi · acme-one] → pr-refresh'*) ok ;; *) fail "repo A route log: [$l1]" ;; esac
+case "$l2" in *'acme/two #4 [multi · acme-two] → pr-refresh'*) ok ;; *) fail "repo B route log: [$l2]" ;; esac
+case "$l3" in *'acme/two #5 [multi · acme-two] → collect --issues'*) ok ;; *) fail "repo B issues route log: [$l3]" ;; esac
+MC="$WORK/mcache/.claude-dash/fleets"
+grep -q 'acme/one' "$MC/acme-one/prmap" 2>/dev/null || fail 'repo A delivery did not refresh acme-one prmap'; ok
+grep -q 'acme/two' "$MC/acme-two/prmap" 2>/dev/null || fail 'repo B delivery did not refresh acme-two prmap'; ok
+grep -q 'acme/one' "$MC/acme-two/prmap" 2>/dev/null && fail 'repo A delivery leaked into acme-two prmap'; ok
+[ -f "$MC/acme-two/issues" ] || fail 'repo B issues delivery did not refresh acme-two issues'; ok
+[ -f "$MC/acme-one/issues" ] && fail 'repo B issues delivery wrote acme-one issues'; ok
+
 # --- WAKE DETECTION (issue #410) --------------------------------------------
 # The supervisor idles in short chunks and infers a host SUSPEND from the gap
 # between how long it asked to sleep and how much wall-clock actually passed (bash
@@ -303,5 +360,5 @@ eq 'uneventful idle returns 0 (no wake)'          "$?" 0
 echo 1000 > "$CLK"; : > "$MARK"; wsw
 eq 'suspend across a chunk returns 1 (early wake)' "$?" 1
 
-printf 'selftest PASS: %d assertions (routing · no-write · HMAC · selection · reconcile · reap · backoff · catch-up · wake)\n' "$pass"
+printf 'selftest PASS: %d assertions (routing · no-write · HMAC · selection · reconcile · reap · backoff · catch-up · every-repo · wake)\n' "$pass"
 exit 0
