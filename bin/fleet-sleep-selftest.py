@@ -307,6 +307,25 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         self.assertIn('Waking…',P['render_park'](dict(data,state='waking'),{},80,24))
         self.assertIn('button',P['render_park'](data,{},80,24,footer_lines=['[ button ]']))
         self.assertIsNone(P['last_reply'](self.root/'no-such.jsonl'))
+        # A Codex rollout (issue #1052): the last assistant `message` item's
+        # output text — not a later reasoning/tool/token row, not the user's turn.
+        rollout=self.root/'rollout-codex.jsonl'
+        rows=[{'type':'session_meta','payload':{'id':'x'}},
+              {'type':'response_item','payload':{'type':'message','role':'user','content':[{'type':'input_text','text':'please fix'}]}},
+              {'type':'response_item','payload':{'type':'message','role':'assistant','phase':'commentary','content':[{'type':'output_text','text':'Looking.'}]}},
+              {'type':'response_item','payload':{'type':'message','role':'assistant','phase':'final_answer','content':[{'type':'output_text','text':'Codex landed PR #9.'},{'type':'output_text','text':'Nothing left.'}]}},
+              {'type':'response_item','payload':{'type':'reasoning','summary':[]}},
+              {'type':'event_msg','payload':{'type':'agent_message','message':'assistant said'}},
+              {'type':'event_msg','payload':{'type':'token_count'}}]
+        rollout.write_text(''.join(json.dumps(r)+'\n' for r in rows)+'{"truncated')
+        self.assertEqual(P['last_reply'](rollout,'codex'),'Codex landed PR #9.\n\nNothing left.')
+        self.assertIsNone(P['last_reply'](rollout))       # not a Claude transcript
+        codex=dict(data,source=dict(data['source'],transcript=str(rollout)))
+        facts=P['gather'](codex,{'issue':'7','title':'t'})
+        self.assertEqual(facts['reply'],'Codex landed PR #9.\n\nNothing left.')
+        page=P['render_park'](codex,facts,80,24)
+        self.assertIn('Last reply',page);self.assertIn('Codex landed PR #9.',page)
+        self.assertNotIn('saved screen',page)
         repo=self.root/'git-state';repo.mkdir()
         git=lambda *a:subprocess.run(['git','-C',str(repo),'-c','user.name=t','-c','user.email=t@t',*a],check=True,capture_output=True)
         git('init','-q','-b','issue-7');(repo/'a').write_text('1');git('add','a');git('commit','-qm','a');(repo/'b').write_text('2')

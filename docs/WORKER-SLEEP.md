@@ -239,11 +239,12 @@ bottom: the state (`Sleeping`, `Waking…`, or `Wake failed` with the error), th
 issue and window name, the repo, how long it has been asleep and idle, the agent,
 model, account and memory freed, uncommitted and unpushed work in the worktree,
 the PR's CI glyph (`@prci`) or a merged PR, then the agent's last reply, wrapped
-to the width. Below that is a line listing what still wakes it on its own (a due
+to the width — for Claude the last `assistant` entry of its transcript, for
+Codex the last assistant `message` item of its rollout (issue #1052). Below that is a line listing what still wakes it on its own (a due
 loop, quota coming back, an incoming message) and the Wake button.
 
-When the last reply can't be read (a Codex session, or an unreadable
-transcript), the saved screen is shown instead, dimmed, labelled as old, and
+When the last reply can't be read (an unreadable transcript, or one with no
+assistant text yet), the saved screen is shown instead, dimmed, labelled as old, and
 without the agent's input box and status line. Any field that is missing is
 left off the card. The card is redrawn on SIGWINCH and on input, and on a timer
 only while the button is armed (its countdown). The
