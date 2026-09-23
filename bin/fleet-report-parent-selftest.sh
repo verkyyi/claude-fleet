@@ -298,7 +298,7 @@ busy_child() {   # busy_child <name> <issue> <command> — a done child of issue
   new_win "$1" "$3"
   TM set-window-option -t "$WID" @issue "$2" 2>/dev/null
   TM set-window-option -t "$WID" @origin issue-483 2>/dev/null
-  TM set-window-option -t "$WID" @claude_state done 2>/dev/null
+  TM set-window-option -t "$WID" @claude_state 'done' 2>/dev/null
 }
 busy_child bgchild 530 "PATH='$BINSH:\$PATH' exec claude '$WORK/tool.pl'"; BGCHILD="$WID"
 busy_child hookchild 531 "PATH='$BINSH:\$PATH' exec claude '$WORK/hook.pl'"; HOOKCHILD="$WID"

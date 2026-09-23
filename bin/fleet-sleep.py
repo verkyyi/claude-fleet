@@ -655,7 +655,9 @@ def quiet_processes(source,config_home=None,background=None,strict=True):
         while pid in rows and pid not in seen and pid!=source['pid']:
             seen.add(pid);pid=rows[pid][0]
     mcp_pids=set()
-    if source['agent']=='claude' and any(pp==source['pid'] for pp,_ in rows.values()):
+    # Non-strict Claude needs no inventory: only a Bash-tool shell counts there,
+    # and no MCP server is one — so a missing/odd ~/.claude.json cannot blind it.
+    if strict and source['agent']=='claude' and any(pp==source['pid'] for pp,_ in rows.values()):
         # Claude starts its stdio MCP servers as direct children and has no RPC
         # to enumerate them; the effective config is rebuilt from its own argv
         # and store (issue #784). Nothing else beneath Claude is infrastructure.
