@@ -118,7 +118,6 @@ hasnt "A: … never the other repo's verdict"                 "$(row_of "$out" 3
 hasnt "A: @norepo window shows no PR"                       "$(row_of "$out" 4)" "#"
 hasnt "A: unstamped window in a 2-repo fleet is not guessed" "$(row_of "$out" 5)" "#"
 has   "A: … it shows the em-dash"                           "$(row_of "$out" 5)" "—"
-multi_out=$out
 
 # overlay only for the conf's own repo: still ONE hosted repo → unstamped falls back
 rm -f "$OVL/acme-beta.conf"; printf 'FLEET_MODEL=x\n' > "$OVL/acme-alpha.conf"
