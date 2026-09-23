@@ -55,15 +55,38 @@ each_restore_map() {
     [ -d "$d" ] || continue
     mf="${d}restore.map"; [ -f "$mf" ] || continue
     sess=${d%/}; sess=${sess##*/}
+    fleet_is_pool_session "$sess" && continue      # a pool is not a fleet (#1020)
     printf '%s\t%s\n' "$sess" "$mf"
   done
   for mf in "$RDIR"/*.map; do
     [ -f "$mf" ] || continue
     sess=$(basename "$mf" .map)
     [ -f "$FLEET_CONF_DIR/fleets/$sess/restore.map" ] && continue
+    fleet_is_pool_session "$sess" && continue
     printf '%s\t%s\n' "$sess" "$mf"
   done
 }
+# sweep_state_dirs — snapshot's own litter (issue #1020). A snapshot killed
+# between writing .restore.<pid>.map and its mv (the collector's time budget, a
+# reboot) leaks the temp for good: dozens piled up per fleet dir. Any older than
+# FLEET_RESTORE_TMP_MAX_MIN minutes (default 30) is orphaned — a live snapshot
+# holds its temp for seconds. And a warm-pool dir left by the pre-#1020 snapshot
+# loses its map + temps, then the dir itself once empty (rmdir: never recursive,
+# so anything else parked there survives).
+sweep_state_dirs() {
+  local d n
+  for d in "$FLEET_CONF_DIR"/fleets/*/; do
+    [ -d "$d" ] || continue
+    find "$d" -maxdepth 1 -type f -name '.restore.*.map' \
+      -mmin +"${FLEET_RESTORE_TMP_MAX_MIN:-30}" -exec rm -f {} + 2>/dev/null
+    n=${d%/}; n=${n##*/}
+    fleet_is_pool_session "$n" || continue
+    rm -f "${d}restore.map" "${d}.snapshot-rejects" "$d".restore.*.map 2>/dev/null
+    rmdir "$d" 2>/dev/null && log "snapshot: removed warm-pool state dir $n (not a fleet, issue #1020)"
+  done
+  return 0
+}
+
 # window names that are fleet UI panels (rebuilt by fleet-up/hub-session),
 # NOT Claude work sessions — never snapshotted or restored as sessions.
 PANEL_RE='^(plan|dash|backlog)$'
@@ -90,12 +113,17 @@ snapshot() {
   # client and fails in the collector daemon). No live fleet → the loop is empty
   # and snapshot writes nothing, exactly the old return-early behaviour.
   mkdir -p "$RDIR" || return 0
+  sweep_state_dirs
   # Each fleet runs on its OWN tmux server/socket now (issue #159), so there is no
   # single `tmux list-sessions` that sees them all — fan out over the live fleet
   # sockets and snapshot each one against its own `-L` socket.
   local sock sess
   for sock in $(fleet_sockets); do
   for sess in $(tmux -L "$sock" list-sessions -F '#{session_name}' 2>/dev/null); do
+    # The warm pool's holding session shares this socket but is NOT a fleet
+    # (issue #1020): snapshotting it minted fleets/<sess>-pool/ + a map that
+    # --if-down saw as a fleet DOWN on every tick, and restore() would fleet-up it.
+    fleet_is_pool_session "$sess" "$sock" && continue
     local repo main base conf tmp
     conf=$(fleet_conf_file "$sess")
     repo=""; main=""; base=""

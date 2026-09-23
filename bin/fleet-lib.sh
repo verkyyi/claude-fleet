@@ -3281,6 +3281,24 @@ fleet_scratch_free() {
 # to the dash rows (scoped by FLEET_SESSION) — no per-consumer opt-out to forget.
 fleet_pool_session() { printf '%s-pool\n' "$1"; }
 
+# fleet_is_pool_session <name> [socket] — true when <name> is a warm-pool HOLDING
+# session, not a fleet (issue #1020). The pool shares its fleet's socket, so a
+# per-socket loop (restore snapshot, the collector's sessmap) meets it beside the
+# real fleet; every such reader must skip it or it grows a phantom fleet — a
+# fleets/<sess>-pool/ state dir, a restore map --if-down reads as DOWN forever, a
+# `○ <sess>-pool` row in fleet-list. With [socket] the test is EXACT: <name> is
+# the pool of the fleet that socket belongs to. Without one (a state dir name,
+# a map on disk) it inverts fleet_pool_session — never an ad-hoc suffix guess — and
+# a name that has its OWN conf is a real fleet that merely ends in "-pool".
+fleet_is_pool_session() {
+  local n="${1:-}" own
+  [ -n "$n" ] || return 1
+  if [ -n "${2:-}" ]; then [ "$n" = "$(fleet_pool_session "$2")" ]; return; fi
+  case "$n" in *-pool) own="${n%-pool}" ;; *) return 1 ;; esac
+  [ -n "$own" ] && [ "$(fleet_pool_session "$own")" = "$n" ] || return 1
+  [ ! -f "$(fleet_conf_file "$n")" ]
+}
+
 # Milliseconds since the epoch, portable. BSD `date` has no %N/%3N, so use perl
 # (already a fleet dependency — the sub-second spinner needs Time::HiRes), then
 # python3, then whole seconds ×1000 as a last-resort coarse fallback. Digits only.
