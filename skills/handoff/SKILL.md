@@ -57,6 +57,7 @@ Path: `doc/handoff/<slug>.md` (create the dir; `<slug>` = short kebab task name,
 ```
 # Handoff: <task> — <YYYY-MM-DD>
 Language: <the language this session has been conducted in, e.g. English / 中文>
+Repo: <owner/name of the repo this task works in, or `none`>
 
 ## Objective
 <the standing goal, precise/verbatim. Why this work exists. Success = ?>
@@ -135,5 +136,6 @@ Language: <the language this session has been conducted in, e.g. English / 中�
 - Prefer exact paths, commands, and `file:line` over prose.
 - Thoroughness scales with depth: a shallow task needs a short doc; a multi-day debug needs the full skeleton.
 - Never invent state — if you didn't verify it this turn, say "unverified" rather than asserting it.
+- The `Repo:` line is how a file-mode pickup in a fleet hosting several repos tells this doc from another repo's (a fleet's handoffs share one directory). Write the repo's `owner/name`, or `none` when the task has none.
 - The `Language:` line is not decoration: the pickup session sees the doc and nothing else, so a doc that omits it hands a 中文 conversation to a session with no reason not to answer in English.
 - If the session was looping, the doc MUST carry the `/loop` invocation verbatim — a handoff that drops it silently turns a running loop into a one-shot, and nobody notices until hours of no iterations have gone by.
