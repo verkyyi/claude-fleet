@@ -11,9 +11,9 @@
 # Selection:
 #   0 live fleets → exit 10 (nothing to attach; the caller falls through to up).
 #   1 live fleet  → (re)attach straight to it.
-#   N live fleets → the picker (fleet-pick.sh) when we're interactive inside tmux;
-#                   otherwise the most-recently-active fleet, so a non-interactive
-#                   caller (or one outside tmux) still lands somewhere sensible.
+#   N live fleets → the most-recently-active one. One fleet per login (EPIC #977),
+#                   so N > 1 is a leftover, not a choice: there is no fleet picker
+#                   to offer (issue #980 retired it) — land somewhere sensible.
 #
 # Cross-socket rule (issue #159): each fleet is its OWN tmux server, so you cannot
 # switch-client across them. From INSIDE another fleet we detach + re-attach in one
@@ -78,13 +78,6 @@ if [ "$n" -eq 1 ]; then
   exit
 fi
 
-# Multiple live fleets. Interactive inside tmux → the blessed fzf picker, which
-# already handles the cross-socket detach+attach and marks the current fleet.
-if [ -n "${TMUX:-}" ] && [ -t 0 ] && [ -t 1 ] && command -v fzf >/dev/null 2>&1 \
-   && [ -x "$BIN/fleet-pick.sh" ]; then
-  exec bash "$BIN/fleet-pick.sh"
-fi
-
-# Non-interactive, or outside tmux: land on the most-recently-active fleet.
+# Several live fleets (a leftover — one fleet per login): the most-recently-active.
 # shellcheck disable=SC2046
 attach_to "$(most_recent $(printf '%s\n' "$live"))"

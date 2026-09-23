@@ -145,7 +145,6 @@ print_sheet() {
   key "prefix ?" "this cheatsheet"
   key "F9" "(no prefix) jump back to this session's hub — from a task showing the task bar, the first press focuses the bar (like prefix E) and a second press goes to the hub; the ⌂ tap does the same. A task with NO sidebar on screen opens the task picker instead (prefix Space), F9 in it goes on to the hub (FLEET_HOME_SIDEBAR_FIRST=0 turns both off)"
   key "click ● N" "the needs badge (bottom-left) cycles to the next 'needs' window"
-  key "click ● N (orange)" "cross-fleet dot = N needy windows in OTHER fleets; click to jump"
   key "click usage" "footer usage stat — opens the usage + account modal"
   fi
 
@@ -188,7 +187,7 @@ EOF
   key "$(dg reap)" "reap a finished worker (window + worktree + issue) — confirms when the row isn't merged+clean. Targets: @window-id, %pane-id, registered handle, issue-N or scratch-N; indexes/names are refused. From a SCRIPT: \`dash-reap.sh <handle> --yes\` takes that confirm branch unasked (a dirty worktree is still KEPT) and prints a result token (\`reaped:full\`/\`reaped:keep\`/\`skip:needs-confirm\`/\`refused:<slug>\`); with no client attached it never pops a box at you$(dn reap)"
   key "$(dg migrate)" "move the highlighted session onto another subscription account NOW — the unstick for a \`⚠ stuck\` row (issue #873). A confirm popup shows the target account and every background command the move will stop; y closes it (/exit), stops those commands, and resumes the same transcript in a new window on the account with headroom, the stopped commands named in its first prompt. Refuses when no account has room (every one benched) — it never bounces a session onto another wall. Same as \`fleet-account.sh migrate --force-bg <window>\`; \`migrate --stuck\` moves every stuck row$(dn migrate)"
   key "$(dg pin)" "pin/unpin the highlighted window to the TOP of the list — a pin beats the status sort (a pinned idle row sits above a red one), so the session you are deliberately watching stays where you left it. Pinning a PARENT floats its children with it, still nested; a pinned row is marked 📌. The pin lives on the tmux window, so it vanishes with the window — nothing to clean up$(dn pin)"
-  key "$(dg pick)" "the fleet/repo picker — the same popup a tap on the footer's fleet name opens. Every running fleet, and under a fleet that hosts 2+ repos its repos (+ all repos). A repo in THIS fleet filters the dash to it at once (the footer reads \`<fleet> · <repo>\`); a fleet or a repo in another fleet switches you there$(dn pick)"
+  key "$(dg pick)" "the repo picker — the same popup a tap on the footer's fleet name opens. In a fleet that hosts 2+ repos: all repos + each repo; a pick filters the dash to it at once (the footer reads \`<fleet> · <repo>\`). One fleet per login, so there is no fleet to switch to$(dn pick)"
   key "$(dg view)" "toggle live ⇄ closed (finished sessions + scratch)$(dn view)"
   key "$(dg restore)" "restore the highlighted landed session into a new window (claude --resume)$(dn restore)"
   key "enter (landed)" "resume the highlighted landed session — same as $(dg restore)"

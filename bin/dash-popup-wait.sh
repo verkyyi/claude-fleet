@@ -15,7 +15,7 @@
 # @popup_open with `date +%s` (the open moment); each CLOSE resets it to 0. This
 # guard trusts the flag only while it is FRESH — `now - @popup_open < MAX_AGE`.
 # Why: the one path that leaks the flag is the popup dying before its trailing
-# `set 0` runs — the client detaches / switches fleets / disconnects mid-popup
+# `set 0` runs — the client detaches / disconnects mid-popup
 # (a Termius drop, a `detach-client -E` fleet-switch), interrupting the whole
 # key-command chain. A `client-detached` hook (conf/tmux-attention.conf) clears
 # the flag on the dominant path, but a timestamp is the belt-and-suspenders: a

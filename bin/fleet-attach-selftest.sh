@@ -9,7 +9,8 @@
 #   • 1 live, OUTSIDE tmux          → `tmux -L <sess> attach -t <sess>` (plain attach).
 #   • 1 live, INSIDE another fleet  → detach-client -E targeting the other socket.
 #   • 1 live, ALREADY in it         → no-op ("already on"), no attach/detach issued.
-#   • N live, non-interactive       → most-recently-active fleet (no picker).
+#   • N live                        → most-recently-active fleet — never a fleet
+#                                     picker, even interactive in tmux (#980).
 # Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -107,12 +108,14 @@ ok
 printf 'selftest: already-on leg PASS (no-op, no detach)\n' >&2
 
 # --- N live, non-interactive → most-recently-active ---------------------------
-# fleet-b has the higher session_activity, so a non-interactive caller must land
-# on fleet-b (not the picker, which needs an interactive tty inside tmux).
+# fleet-b has the higher session_activity, so the caller lands on fleet-b. There
+# is no fleet picker to hand off to (one fleet per login, #980).
 run FLEET_LIVE="fleet-a fleet-b" FLEET_ACT_fleet_a="100" FLEET_ACT_fleet_b="200"
 [ "$RC" -eq 0 ] || fail "N live non-interactive should attach to most-recent, got $RC" "$(cat "$WORK/err")"
 grep -q 'fleet-b' "$LOG" || fail "most-recent (higher activity) fleet-b should be attached" "$(cat "$LOG")"
 ok
 printf 'selftest: N-live-most-recent leg PASS (highest session_activity wins)\n' >&2
+grep -q 'fleet-pick' "$SRC" && fail "fleet-attach.sh must not open a fleet picker any more (#980)"
+ok
 
 printf 'selftest OK: fleet-attach fast-path (%s assertions — 0→exit10, single attach in/out of tmux, already-on no-op, multi→most-recent)\n' "$CHECKS"

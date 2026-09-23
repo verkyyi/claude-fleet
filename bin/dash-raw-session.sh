@@ -1,5 +1,5 @@
 #!/bin/bash
-# dash-raw-session.sh [--name <name>] [--prompt <text>] [--agent <a>] [<target-session>] — open a
+# dash-raw-session.sh [--name <name>] [--prompt <text>] [--agent <a>] [<fleet-session>] — open a
 # RAW (non-issue-bound) scratch Claude window in a fleet: plain `claude` on the
 # fleet's socket, with NO GitHub issue and (unless --prompt) NO seed prompt, but in
 # its OWN git worktree off the base branch (issue #290). It is the counterpart to the issue-bound spawners
@@ -64,9 +64,12 @@
 #   * /fleet-history — INDEXED on close and resumable (#466): keyed `scratch-<N>`,
 #                     listed as `~<N>`, restored with ⌃o into a fresh @raw window.
 #
-# With no <target-session> the window is created in the CALLER's fleet (the
-# interactive dash path). Pass <target-session> to spawn into a specific fleet you
-# are not attached to (headless) — in that mode focus never moves.
+# With no <fleet-session> the window is created in the CALLER's fleet (the
+# interactive dash path). A HEADLESS caller — no fleet pane: a script, a daemon, a
+# selftest — names the fleet with <fleet-session>; in that mode focus never moves.
+# From INSIDE a fleet it may only name that same fleet: a different one is refused
+# (issue #980). One fleet per login (EPIC #977) holds every repo, so the old
+# spawn-into-another-fleet move is gone — pick the repo with --repo instead.
 #
 # --repo <owner/name> / --no-repo (issue #789): which repo the scratch belongs to.
 # In a fleet hosting 2+ repos an omitted --repo takes the fleet's CURRENT repo
@@ -86,8 +89,8 @@
 # is still available non-interactively via --name, and any window can be renamed
 # after the fact.
 #
-# --prompt <text>: a SEEDED scratch — a CLI / headless caller's path (the cross-fleet
-# handoff pattern: `--prompt '/fleet-handoff pickup <file>' <target-fleet>`). The
+# --prompt <text>: a SEEDED scratch — a CLI / headless caller's path (e.g.
+# `--prompt '/fleet-handoff pickup <file>' --repo <owner/name>`). The
 # dash prompt line hands its text over as --name-file: a window name plus an
 # editable, unsent draft. Only --prompt is handed to `claude` as its initial prompt,
 # exactly how dash-issue-session.sh seeds a worker, so the session starts WORKING on
@@ -103,7 +106,7 @@ set -uo pipefail
 # Args (order-independent): --name <n> / --name=<n> is the optional window name
 # and input draft; --prompt <t> / --prompt=<t> is the optional submitted seed;
 # --bg backgrounds the slow half of the spawn (the dash ⌃s / typed-↵ path — see
-# below); the lone positional is the headless <target-session>.
+# below); the lone positional is the headless <fleet-session>.
 NAME=""; PROMPT=""; TARGET_SESS=""; BG=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -160,26 +163,35 @@ fleet_load_conf "$SESS"                       # multi-fleet: target THIS fleet's
 SOCK=$(fleet_socket "$SESS")
 TM() { tmux -L "$SOCK" "$@"; }
 # A refusal is a stderr line AND a toast (issue #683): a scratch is spawned
-# headless too — a cross-fleet seeded scratch from another pane, dash-enter's
-# guarded --name-file path — and a toast is on no screen that caller can read.
+# headless too — a script's seeded scratch, dash-enter's guarded --name-file
+# path — and a toast is on no screen that caller can read.
 # stderr is the record; the status line is the glance. Exit 2 = at capacity
 # (retry later), 1 = infrastructure, matching dash-issue-session.sh.
 refuse() { printf 'dash-raw-session: %s\n' "${1#raw: }" >&2; TM display-message "$1" 2>/dev/null; }
+# No spawning into ANOTHER fleet (issue #980): a caller sitting in a fleet pane may
+# name only its own fleet. A caller outside any fleet (no pane, or an ad-hoc
+# session with no fleet conf) is headless and names the fleet it means.
+if [ -n "$TARGET_SESS" ] && [ -n "${TMUX:-}" ]; then
+  _here=$(fleet_current_session)
+  if [ -n "$_here" ] && [ "$_here" != "$TARGET_SESS" ] && [ -f "$(fleet_conf_file "$_here")" ]; then
+    printf 'dash-raw-session: refusing to spawn into fleet %s from fleet %s — one fleet per login; pick the repo with --repo\n' "$TARGET_SESS" "$_here" >&2
+    tmux display-message "raw: no spawning into another fleet ($TARGET_SESS) — use --repo" 2>/dev/null
+    exit 1
+  fi
+  unset _here
+fi
 # Spawn provenance (issue #503): detect BEFORE the --bg re-exec below — the
 # backgrounded pass runs under run-shell -b with no caller pane, so this
 # foreground detect is the only chance; the value rides --origin through.
 # issue-<N>/scratch-<N> when a worker or scratch spawned us; empty ≡ hub (⌃s,
 # the dash PROMPT line). fleet_origin_canon arbitrates it against an explicit
 # --origin (a canonical key is honoured as given; a worktree BASENAME folds to its
-# key; garbage yields to the detected key) and applies the CROSS-FLEET rule (#516):
-# a claude-fleet scratch seeding a monorepo scratch (the handoff pattern) would
-# otherwise stamp a key that names some OTHER window on the target's dash — a
-# bogus parent — so the SOURCE fleet name is stamped instead (`↳<fleet>`, no
-# nesting). Sanitized inside canon (window option + re-exec embed).
+# key; garbage yields to the detected key). The spawn never crosses fleets (#980,
+# refused above), so canon's #516 source-fleet rule has no source to apply here.
+# Sanitized inside canon (window option + re-exec embed).
 _det=$(fleet_origin_key)
-_src=''; [ -n "$_det" ] && [ -n "$TARGET_SESS" ] && _src=$(fleet_current_session)
-ORIGIN=$(fleet_origin_canon "$ORIGIN" "$_det" "$TARGET_SESS" "$_src")
-unset _det _src
+ORIGIN=$(fleet_origin_canon "$ORIGIN" "$_det" "$TARGET_SESS" "")
+unset _det
 
 # Session cap (issues #28, #70): a raw session is a real Claude session, so it is
 # subject to the SAME global + per-fleet ceilings as an issue spawn. Refuse (with a
