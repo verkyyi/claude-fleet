@@ -15,12 +15,13 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import termios
 import time
 import unicodedata
 
 BIN = Path(__file__).absolute().parent  # preserve the selftest shadow root
 US = "\x1f"
-VIEW_VERSION = "6"  # #898: `.` / a second tap opens the row menu; replace live v5 views once
+VIEW_VERSION = "7"  # #901: ⌃o opens the restore picker (needs VDISCARD off); replace live v6 views once
 # ↑↓ follow (issue #822): an arrow moves the highlight at once and switches to
 # it only after this much quiet. A held key on a slow link is one switch, not
 # one per row, and a row passed over is never selected — so the wake hook's
@@ -196,6 +197,27 @@ def new_task(screen, env):
     subprocess.call(["bash", str(BIN / "dash-popup.sh"), "-w", "90%", "-h", "12", "--",
                      "bash", str(BIN / "dash-issue-new.sh"), "confirm", "--spawn"], env=env)
     screen.clear()  # the next refresh resumes curses and repaints the whole grid
+
+
+def restore_pick(screen, session, env):
+    """The restore picker (issue #901), on ⌃o (dash-keymap.sh --panel sidebar
+    `restore`): the hub's landed list in a popup, a pick restored as the current
+    window. Blocks like new_task, and leaves curses for the same inline fallback."""
+    curses.endwin()
+    subprocess.call(["bash", str(BIN / "fleet-restore-pick.sh"), "--session", session], env=env)
+    screen.clear()
+
+
+def no_discard():
+    """macOS's line discipline eats ⌃o as VDISCARD (flush output) even in cbreak
+    mode, so the `restore` byte never reached getch. Switch that one character
+    off before curses saves the tty modes, so an endwin/refresh keeps it off."""
+    try:
+        attrs = termios.tcgetattr(0)
+        attrs[6][termios.VDISCARD] = os.fpathconf(0, "PC_VDISABLE")
+        termios.tcsetattr(0, termios.TCSANOW, attrs)
+    except (AttributeError, OSError, ValueError, termios.error):
+        pass
 
 
 def open_menu(session, wid, env):
@@ -466,7 +488,7 @@ def ui(screen, session, worker, lock):
             follow_at = None
             open_menu(session, selected, env)
             continue
-        if 0 <= key < 256 and key not in (8, 9, 10, 13, 14, 27, 127):
+        if 0 <= key < 256 and key not in (8, 9, 10, 13, 14, 15, 27, 127):
             # A (piece of a) typed character. Every letter types — j k q n
             # included; movement is ↑↓ only, hide is prefix e.
             chars = "".join(c for c in decoder.decode(bytes([key])) if typed(c))
@@ -530,6 +552,12 @@ def ui(screen, session, worker, lock):
             follow_at = None
             new_task(screen, env)
             refresh_at = 0
+        elif key == 15:
+            # ⌃o (`restore`; its ⌥o fallback is rewritten to ⌃o by the bind). The
+            # restored window becomes current; the hook moves this view there.
+            follow_at = None
+            restore_pick(screen, session, env)
+            refresh_at = 0
         elif key == 27 and text and spawning is None:
             # Escape clears a typed name first; the keyboard stays here.
             text, toast = "", ""
@@ -579,6 +607,7 @@ def main():
     if sys.argv[1] == "ui":
         # A lone Escape clears the input line; don't wait ncurses' default 1s.
         os.environ.setdefault("ESCDELAY", "25")
+        no_discard()
         curses.wrapper(ui, sys.argv[2], sys.argv[3], sys.argv[4])
         return
     verb, session, lock, enabled, width, key = sys.argv[1:]

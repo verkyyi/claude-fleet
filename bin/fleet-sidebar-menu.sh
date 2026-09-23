@@ -3,7 +3,8 @@
 # fleet-sidebar-menu.sh — sourced by fleet-sidebar.sh for `menu` / `reap`
 # (issue #898). The task sidebar's per-row action menu: the six things that used
 # to need a trip to the hub list — rename, pin, open PR, answer, flip agent,
-# reap — plus the row-less "new task (file an issue)". Every item calls the SAME
+# reap — plus the row-less "new task (file an issue)" and "restore a finished
+# task" (#901). Every item calls the SAME
 # script the hub binds (EPIC #894 convention 1) with the window's stable `@id`,
 # never an index or a name. The view (fleet-sidebar.py) opens it on `.` (empty
 # input line) or a second tap on the highlighted row; this file owns the tmux
@@ -83,6 +84,8 @@ add "新会话改用 $next" v "$(sh_run "bash $(sq "$BIN/dash-agent-toggle.sh")"
 add "回收…" x "confirm-before -p $(sq "回收「$(fe "$name")」？(y/n)") $(sq "$(sh_run "bash $(sq "$BIN/fleet-sidebar.sh") reap $(sq "$sess") $wid")")"
 add "" "" ""
 add "新建任务（建 issue）…" n "$(sh_run "bash $(sq "$BIN/dash-popup.sh") -w 90% -h 12 -- bash $(sq "$BIN/dash-issue-new.sh") confirm --spawn")"
+# Row-less too (issue #901): the hub's ⌃t landed list + ⌃o, as one popup.
+add "恢复已收工…" o "$(sh_run "bash $(sq "$BIN/fleet-restore-pick.sh") --session $(sq "$sess")")"
 
 if [ "${4:-}" = --print ]; then
   i=0

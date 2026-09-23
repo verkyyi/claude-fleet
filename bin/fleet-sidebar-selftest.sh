@@ -557,9 +557,13 @@ try:
     (shim / 'gh').chmod(0o755)
     conf.write_text(fleet_conf + 'FLEET_REPO=example/repo\n')
     attached = tm('list-clients', '-t', 'fleet-test', '-F', '#{client_name}').splitlines()[0]
-    for chord, label in ((b'\x0e', 'ctrl-n'), (b'\x1bn', 'alt-n (the prefix fallback)')):
+    # ⌃o (`restore`, issue #901) opens the restore picker the same way; its fzf
+    # is the same stub. A bare ⌃o is VDISCARD to a macOS tty — only a view that
+    # switched it off ever sees the byte, which is what this pins.
+    for chord, label in ((b'\x0e', 'ctrl-n'), (b'\x1bn', 'alt-n (the prefix fallback)'),
+                         (b'\x0f', 'ctrl-o'), (b'\x1bo', 'alt-o (the prefix fallback)')):
         os.write(terminal, chord)
-        wait_for(ran.exists, label + ' did not open the new-task popup')
+        wait_for(ran.exists, label + ' did not open its popup')
         check(popup_open() and bool(view_on(w1)), label + ' popup hid the sidebar or skipped @popup_open')
         tm('display-popup', '-C', '-c', attached)
         wait_for(lambda: not popup_open(), 'closing the ' + label + ' popup left @popup_open raised')
@@ -660,13 +664,19 @@ try:
         check(result.returncode == 0, result.stderr)
         return {line.split('\t')[0]: line.split('\t')[1]
                 for line in result.stdout.splitlines() if line.count('\t') == 2}
+    def menu_commands(wid):
+        result = command(['bash', str(bin_dir / 'fleet-sidebar.sh'), 'menu', 'fleet-test', wid, '--print'])
+        return {line.split('\t')[0]: line.split('\t')[2]
+                for line in result.stdout.splitlines() if line.count('\t') == 2}
     def current():
         return tm('display-message', '-p', '-t', 'fleet-test:', '#{window_id}')
     tm('set-option', '-g', 'status-keys', 'emacs')
     tm('set-option', '-w', '-t', w1, '@claude_state', 'working')
     tm('set-option', '-w', '-t', w2, '@claude_state', 'needs')
     items = menu_items(w1)
-    check(set('rtpavxn') <= set(items), 'the row menu lacks an action: %r' % items)
+    check(set('rtpavxno') <= set(items), 'the row menu lacks an action: %r' % items)
+    check(items['o'] == '恢复已收工…' and 'fleet-restore-pick.sh' in menu_commands(w1)['o'],
+          'the row menu\'s last item is not the restore picker (#901): %r' % items)
     check(items['p'].startswith('-') and items['a'].startswith('-'),
           'a row with no PR / no pending question must grey those items: %r' % items)
     check(not items['r'].startswith('-') and not items['x'].startswith('-'), 'rename/reap greyed: %r' % items)
