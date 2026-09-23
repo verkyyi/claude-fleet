@@ -153,6 +153,23 @@ refusal (the cap, a worktree failure) shows its reason on the line for four
 seconds and keeps the name. Escape clears a typed name and keeps the keyboard;
 Enter and Escape on an EMPTY line behave exactly as before. `@sidebar_input=1` on
 the view pane marks a non-empty line.
+The row menu (issue #898) is the hub list's per-row actions without the hub:
+`.` on an EMPTY line (inside a name it types a dot), or a tap on the highlighted
+row — the second tap on a row the first one switched to — opens a tmux
+`display-menu` built by `fleet-sidebar.sh menu <session> <@id>`
+(`bin/fleet-sidebar-menu.sh`; the Python never spells tmux syntax). Every item is
+the hub's own script handed the row's `@id`: rename (`command-prompt`, the name
+parked on the window as `@rename_to` and applied by `dash-rename.sh --wid`, so no
+shell ever sees it), pin (`dash-pin-toggle.sh`), open PR (`dash-open-pr.sh --wid`,
+the worktree's branch looked up in the prmap; greyed with none), answer
+(`dash-popup.sh … dash-answer.sh <sess>:<@id>`; greyed unless the row is
+`needs`), flip new sessions claude⇄codex (`dash-agent-toggle.sh`), reap
+(`confirm-before`, then `fleet-sidebar.sh reap` → `dash-reap.sh <@id> --yes`,
+whose result token — not its exit code — is toasted), and the row-less new task
+(the ⌃n popup). A tap opens the menu on the button RELEASE: tmux closes a menu on
+a release outside it, and opened on the press the tap's own release would close
+it. `display-menu` holds its caller until the menu closes, so the view spawns it
+and does not wait.
 
 How keys reach it — the routing decision. The design keeps the worker the
 active pane (above), so typed keys cannot simply land on the view. Two routes

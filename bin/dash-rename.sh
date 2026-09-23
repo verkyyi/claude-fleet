@@ -29,8 +29,31 @@
 #
 # Prints nothing (⇒ no fzf action at all) when rename is a no-op: already armed,
 # a landed row, no target, or a row that is not a live window.
+#
+# `--wid <@id|handle> [name]` is the SECOND entry (issue #898): the task sidebar's
+# row menu has no fzf query line, so it opens a tmux `command-prompt` whose
+# template parks the typed name on the window (`@rename_to`) and calls this —
+# the name never passes through a shell. Renames that window by its stable id
+# (never an index) with the same rule as dash-enter.sh's rename branch: an EMPTY
+# name cancels. An explicit [name] argument wins over `@rename_to` (scripts).
 set -uo pipefail
 C="${TMPDIR:-/tmp}/.claude-dash"; flag="$C/rename_target"
+
+if [ "${1:-}" = --wid ]; then
+  BIN="$(cd "$(dirname "$0")" && pwd)"
+  # shellcheck source=/dev/null
+  . "$BIN/fleet-lib.sh" 2>/dev/null || true
+  w="${2:-}"
+  command -v fleet_wid_target >/dev/null 2>&1 && w="$(fleet_wid_target "$w")"
+  case "$w" in @[0-9]*) ;; *) exit 0 ;; esac
+  if [ "$#" -ge 3 ]; then name="$3"
+  else name=$(tmux show-options -wqv -t "$w" @rename_to 2>/dev/null)
+  fi
+  tmux set-option -uw -t "$w" @rename_to 2>/dev/null || :
+  [ -n "$name" ] || exit 0
+  tmux rename-window -t "$w" -- "$name" 2>/dev/null || exit 0
+  exit 0
+fi
 target="${1:-}"
 
 # LANDED view (dash ⌃t): rows are finished sessions, not live windows, so ⌃e is

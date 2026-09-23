@@ -127,6 +127,7 @@ print_sheet() {
   key "↑ / ↓" "switch to the highlighted task (follows once you pause, ~¼s; a held key is one switch, a row passed over is never selected); home/end the ends"
   key "← / →" "fold / unfold the highlighted row's subtree"
   key "$(dg new)" "new task — file an issue AND spawn its worker (the hub's ⌃n popup)$(dn new)"
+  key "$(dg menu)" "on an EMPTY line: the highlighted task's menu — rename · pin · open PR · answer its question · flip new sessions claude⇄codex · reap (asks y/n first) · new task. Inside a name it types a dot. Touch: tap the highlighted row again$(dn menu)"
   key "prefix e" "hide the sidebar (q types now; no tap hides it)"
   fi
 
