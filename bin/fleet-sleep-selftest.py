@@ -25,7 +25,7 @@ class SleepTest(unittest.TestCase):
         cls.root=Path(cls.tmp.name)
         cls.socket='sleep-test-'+str(os.getpid())
         cls.bin=cls.root/'bin'; cls.bin.mkdir()
-        for name in ('fleet-sleep.py','.fleet-transfer.py','fleet-input.py','fleet-codex-session.py','fleet-codex-rpc.py','fleet_sleep_argv.py','fleet-loop.py','fleet_sleep_mcp.py'):
+        for name in ('fleet-sleep.py','.fleet-transfer.py','fleet-input.py','fleet-codex-session.py','fleet-codex-rpc.py','fleet_sleep_argv.py','fleet-loop.py','fleet_sleep_mcp.py','fleet_sleep_park.py'):
             shutil.copyfile(BIN/name,cls.bin/name)
         cls.wt=cls.root/'scratch-1'; cls.wt.mkdir()
         cls.sid='11111111-1111-4111-8111-111111111111'
@@ -254,6 +254,63 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
             self.assertTrue(mine and all('at' in r for r in records))
         finally:
             self.tm('kill-window','-t',panel)
+
+    def capture(self,until,timeout=5):
+        deadline=time.monotonic()+timeout
+        while True:
+            screen=self.tm('capture-pane','-p','-t',self.pane)
+            if until(screen) or time.monotonic()>deadline:return screen
+            time.sleep(.05)
+
+    def test_park_card_explains_itself_and_redraws_at_the_new_width(self):
+        # Issue #1049: the sleeping page is drawn for the CURRENT pane, not the
+        # screen captured at sleep time, and a resize (SIGWINCH) redraws it.
+        reply='Shipped the fix and reported back.\n'+'这是一段很长的中文回复，用来检查宽字符按显示宽度换行。'*6
+        entry={'type':'assistant','message':{'content':[{'type':'tool_use','name':'x'},{'type':'text','text':reply}]}}
+        saved=self.transcript.read_text()
+        self.transcript.write_text(saved+json.dumps(entry,ensure_ascii=False)+'\n')
+        self.addCleanup(self.transcript.write_text,saved)
+        self.stamp('@issue','1049');self.tm('rename-window','-t',self.pane,'sleeping-page')
+        self.tm('resize-window','-t',self.pane,'-x','80','-y','24')
+        self.cli('sleep',self.pane)
+        for cols,rows in ((80,24),(200,50)):
+            self.tm('resize-window','-t',self.pane,'-x',str(cols),'-y',str(rows))
+            screen=self.capture(lambda s:'─'*(cols-1) in s and 'reported back' in s)
+            lines=screen.split('\n')
+            self.assertIn('Sleeping · #1049 sleeping-page',lines[0],screen)
+            self.assertIn('Last reply',screen)
+            self.assertIn('Shipped the fix and reported back.',screen)
+            self.assertIn('wakes on its own: incoming message',screen)
+            self.assertIn('asleep ',screen);self.assertIn('claude',screen)
+            self.assertLessEqual(len(lines),rows)
+            self.assertLessEqual(max(LIB['PARK']['width'](l) for l in lines),cols,screen)
+        self.cli('wake',self.pane)
+
+    def test_park_card_fallback_and_states(self):
+        P=LIB['PARK']
+        data=dict(state='sleeping',created=time.time()-3700,evidence={'at':time.time()-5000},model='opus',
+                  source={'agent':'codex','label':'me@x','sleep_loop':{'record':{'status':'active','schedule':{'next_run_at':time.time()+600}}}},
+                  screen='old work line\n'+'x'*300+'\n──────\n❯ \n──────\n  ◆ Opus status line')
+        out=P['render_park'](data,{'issue':'7','title':'t'},80,24)
+        plain=P['ANSI'].sub('',out).split('\n')
+        self.assertEqual(len(plain),24)
+        self.assertLessEqual(max(P['width'](l) for l in plain),80)
+        self.assertIn('\x1b[2mold work line',out)          # the old screen, dimmed…
+        self.assertIn('saved screen (old, not live)',out)  # …and marked as old
+        self.assertNotIn('❯',out);self.assertNotIn('status line',out)
+        self.assertIn('asleep 1h 01m',out);self.assertIn('loop due ',out)
+        failed=P['render_park'](dict(data,state='failed',error='resume is not ready'),{},80,24)
+        self.assertIn('Wake failed',failed);self.assertIn('error: resume is not ready',failed)
+        self.assertIn('Waking…',P['render_park'](dict(data,state='waking'),{},80,24))
+        self.assertIn('button',P['render_park'](data,{},80,24,footer_lines=['[ button ]']))
+        self.assertIsNone(P['last_reply'](self.root/'no-such.jsonl'))
+        repo=self.root/'git-state';repo.mkdir()
+        git=lambda *a:subprocess.run(['git','-C',str(repo),'-c','user.name=t','-c','user.email=t@t',*a],check=True,capture_output=True)
+        git('init','-q','-b','issue-7');(repo/'a').write_text('1');git('add','a');git('commit','-qm','a');(repo/'b').write_text('2')
+        self.assertEqual(P['git_state'](repo),{'branch':'issue-7','dirty':1,'unpushed':1})
+        self.assertIn('work: 1 uncommitted, 1 unpushed on issue-7',P['render_park'](data,{'git':P['git_state'](repo)},80,24))
+        tiny=P['ANSI'].sub('',P['render_park'](data,{'reply':'r'*500},20,5)).split('\n')
+        self.assertLessEqual(len(tiny),5);self.assertLessEqual(max(P['width'](l) for l in tiny),20)
 
     def test_restore_rebinds_saved_record_without_starting_agent(self):
         self.cli('sleep',self.pane)
