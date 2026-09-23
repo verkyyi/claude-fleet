@@ -20,7 +20,7 @@ import unicodedata
 
 BIN = Path(__file__).absolute().parent  # preserve the selftest shadow root
 US = "\x1f"
-VIEW_VERSION = "5"  # #896: the two footer rows became one input line; replace live v4 views once
+VIEW_VERSION = "6"  # #898: `.` / a second tap opens the row menu; replace live v5 views once
 # ↑↓ follow (issue #822): an arrow moves the highlight at once and switches to
 # it only after this much quiet. A held key on a slow link is one switch, not
 # one per row, and a row passed over is never selected — so the wake hook's
@@ -198,6 +198,17 @@ def new_task(screen, env):
     screen.clear()  # the next refresh resumes curses and repaints the whole grid
 
 
+def open_menu(session, wid, env):
+    """The row's action menu (issue #898). fleet-sidebar.sh owns every tmux
+    command string in it; this only names the row, by its stable window id.
+    Not waited on: a tmux display-menu can hold its caller until it closes, and
+    this view keeps painting meanwhile."""
+    if wid.startswith("@"):
+        subprocess.Popen(["bash", str(BIN / "fleet-sidebar.sh"), "menu", session, wid],
+                         env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL)
+
+
 def tail(text, width):
     """The END of the typed name in `width` cells: the cursor end stays visible."""
     out, used = [], 0
@@ -287,6 +298,16 @@ def ui(screen, session, worker, lock):
     # table's Any bind; decode them here, so a CJK name survives whatever locale
     # tmux started this pane under.
     text, toast, toast_until, spawning = "", "", 0.0, None
+    # A press on the already-highlighted row arms the menu; its RELEASE opens it
+    # (issue #898). Opening on the press would lose the menu at once: tmux closes
+    # a menu on a button release outside it, and that release is this tap's own.
+    armed = None
+    # Rename (issue #898): the menu's 改名 turns THIS input line into the name
+    # editor for one row — the hub's ⌃e does the same to its query line. The
+    # name goes to dash-rename.sh as an argv word; no tmux or shell parser ever
+    # sees it (a command-prompt template re-parses the reply, and tmux 3.4 and
+    # 3.7 unescape it differently).
+    renaming = None
     decoder = codecs.getincrementaldecoder("utf-8")("ignore")
     mark_input(pane, "")
     published = None  # the (window, candidates) last written to @sidebar_next
@@ -401,7 +422,9 @@ def ui(screen, session, worker, lock):
         # scratch session named after it. Away from the sidebar only `›` shows.
         # Hide is keyboard-only (prefix e): no tap here hides anything (#821).
         room = max(0, width - 3)
-        if spawning is not None:
+        if renaming is not None:
+            put(height - 1, "改名› " + tail(text, max(0, room - 5)) + "▏", curses.A_BOLD)
+        elif spawning is not None:
             put(height - 1, "› " + tail(text, max(0, room - 2)) + " …", curses.A_DIM)
         elif toast and time.monotonic() < toast_until:
             put(height - 1, "› " + toast, curses.color_pair(7))
@@ -420,6 +443,29 @@ def ui(screen, session, worker, lock):
             wait = min(wait, 0.2)
         screen.timeout(max(1, min(1000, int(wait * 1000))))
         key = screen.getch()
+        if key == curses.KEY_F12:
+            # The menu's rename item: it parked the row's @id on this pane,
+            # switched the client to the sidebar table and sent F12 to wake us.
+            wid = tmux("show-options", "-pqv", "-t", pane, "@sidebar_rename")
+            tmux("set-option", "-up", "-t", pane, "@sidebar_rename")
+            if wid.startswith("@") and spawning is None:
+                follow_at, renaming, toast = None, wid, ""
+                text = fields(wid, "#{window_name}")[0]
+                mark_input(pane, "1")
+            continue
+        if key == 21:
+            # ⌃u clears the line (fix a pre-filled name without holding backspace).
+            if spawning is None:
+                text, toast = "", ""
+                mark_input(pane, renaming or text)
+            continue
+        if key == ord(".") and not text and renaming is None and spawning is None and selected:
+            # `.` on an EMPTY line is the row menu (dash-keymap.sh --panel sidebar
+            # `menu`); inside a name it types. The follow is dropped: the menu
+            # acts on the highlighted row and the window in view stays put.
+            follow_at = None
+            open_menu(session, selected, env)
+            continue
         if 0 <= key < 256 and key not in (8, 9, 10, 13, 14, 27, 127):
             # A (piece of a) typed character. Every letter types — j k q n
             # included; movement is ↑↓ only, hide is prefix e.
@@ -434,7 +480,7 @@ def ui(screen, session, worker, lock):
             if text and spawning is None:
                 text, toast = text[:-1], ""
                 if not text:
-                    mark_input(pane, text)
+                    mark_input(pane, renaming or text)
         elif key == curses.KEY_UP and ids:
             selected = ids[max(0, index - 1)]
             follow_at = time.monotonic() + FOLLOW_SECS
@@ -447,6 +493,15 @@ def ui(screen, session, worker, lock):
         elif key == curses.KEY_END and ids:
             selected = ids[-1]
             follow_at = time.monotonic() + FOLLOW_SECS
+        elif key in (10, 13, curses.KEY_ENTER) and renaming is not None:
+            # An empty name cancels, as in the hub (dash-rename.sh decides).
+            run(["bash", str(BIN / "dash-rename.sh"), "--wid", renaming, text.strip()], env=env)
+            renaming, text = None, ""
+            mark_input(pane, text)
+            refresh_at = 0
+        elif key == 27 and renaming is not None:
+            renaming, text = None, ""
+            mark_input(pane, text)
         elif key in (10, 13, curses.KEY_ENTER) and text.strip():
             # A typed name: start its scratch session (the bind kept the
             # keyboard here while @sidebar_input was set). One spawn at a time.
@@ -489,14 +544,31 @@ def ui(screen, session, worker, lock):
                 _, _, y, _, buttons = curses.getmouse()
             except curses.error:
                 continue
+            hit = rows[offset + y][0] if 0 <= y < page and offset + y < len(rows) else None
+            # `selected`, not the painted cue: a fast double tap lands its second
+            # press before the next refresh repaints the first one's switch.
+            highlighted = selected
             if buttons & (curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED):
                 refresh_at = 0
-                if 0 <= y < page and offset + y < len(rows):
-                    selected = rows[offset + y][0]
+                armed = None
+                if hit and hit == highlighted:
+                    # The second tap on a row (the first switched to it), or a tap
+                    # on the row already in view: its action menu — the touch
+                    # path to what `.` opens (issue #898).
+                    follow_at = None
+                    if buttons & curses.BUTTON1_CLICKED:
+                        open_menu(session, hit, env)
+                    else:
+                        armed = hit
+                elif hit:
+                    selected = hit
                     jump(session, selected, pane, lock)
-                    refresh_at = 0
                 # Anywhere else (the input line included) the click only focuses:
                 # the bind already moved the keyboard here, so typing follows.
+            elif buttons & curses.BUTTON1_RELEASED:
+                if armed is not None and hit == armed:
+                    open_menu(session, armed, env)
+                armed = None
             elif buttons & curses.BUTTON4_PRESSED and ids:
                 selected = ids[max(0, index - 3)]
             elif buttons & getattr(curses, "BUTTON5_PRESSED", 0) and ids:

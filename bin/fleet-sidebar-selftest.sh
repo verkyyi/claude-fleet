@@ -256,10 +256,18 @@ try:
     client = subprocess.Popen([real_tmux, '-S', sock, 'attach-session', '-t', 'fleet-test'],
                               env=client_env, stdin=slave, stdout=slave, stderr=slave)
     os.close(slave)
+    # A tmux menu is a client overlay that capture-pane never shows, so keep
+    # what the attached terminal was sent (issue #898): `painted()` reads it.
+    screen_out = bytearray()
     def drain():
         try:
-            while os.read(terminal, 65536):
-                pass
+            while True:
+                chunk = os.read(terminal, 65536)
+                if not chunk:
+                    return
+                screen_out.extend(chunk)
+                if len(screen_out) > 1 << 20:
+                    del screen_out[:1 << 19]
         except OSError:
             pass
     threading.Thread(target=drain, daemon=True).start()
@@ -625,6 +633,137 @@ try:
     wait_for(lambda: not navigation(), 'the CJK spawn left the keyboard on the sidebar')
     for window in spawned:
         tm('kill-window', '-t', window)
+
+    # The row menu (issue #898): `.` on an EMPTY input line, or a tap on the
+    # highlighted row (the second tap on a row the first one switched to), opens
+    # a tmux display-menu of the hub's per-row actions — each the hub's own
+    # script, handed the row's @id.
+    def painted(*texts):
+        seen = bytes(screen_out).decode('utf-8', 'replace')
+        return all(t in seen for t in texts)
+    def menu_open():
+        return painted('改名', '置顶', '回收')
+    def menu_items(wid):
+        result = command(['bash', str(bin_dir / 'fleet-sidebar.sh'), 'menu', 'fleet-test', wid, '--print'])
+        check(result.returncode == 0, result.stderr)
+        return {line.split('\t')[0]: line.split('\t')[1]
+                for line in result.stdout.splitlines() if line.count('\t') == 2}
+    def current():
+        return tm('display-message', '-p', '-t', 'fleet-test:', '#{window_id}')
+    tm('set-option', '-g', 'status-keys', 'emacs')
+    tm('set-option', '-w', '-t', w1, '@claude_state', 'working')
+    tm('set-option', '-w', '-t', w2, '@claude_state', 'needs')
+    items = menu_items(w1)
+    check(set('rtpavxn') <= set(items), 'the row menu lacks an action: %r' % items)
+    check(items['p'].startswith('-') and items['a'].startswith('-'),
+          'a row with no PR / no pending question must grey those items: %r' % items)
+    check(not items['r'].startswith('-') and not items['x'].startswith('-'), 'rename/reap greyed: %r' % items)
+    check(not menu_items(w2)['a'].startswith('-'), 'a needs row greyed its answer item')
+    # A PR for the branch the worktree is on (the dash's prmap) enables the item.
+    conf.write_text(fleet_conf + 'FLEET_REPO=example/repo\n')
+    prmap = Path(command(['bash', '-c', '. "$1/fleet-lib.sh"; fleet_cache prmap fleet-test',
+                          '_', str(bin_dir)]).stdout.strip())
+    prmap.parent.mkdir(parents=True, exist_ok=True)
+    prmap.write_text(base + '\t#42\tOPEN\t✓\tready\t\n')
+    tm('set-option', '-w', '-t', w1, '@worktree', str(main))
+    # --print shows names as tmux gets them: a format, where ## is a literal #.
+    check(menu_items(w1)['p'] == '打开 PR ##42', 'a row with a PR did not offer it: %r' % menu_items(w1))
+    tm('set-option', '-uw', '-t', w1, '@worktree')
+    prmap.unlink()
+    conf.write_text(fleet_conf)
+
+    os.write(terminal, b'\x02E')
+    wait_for(lambda: navigation() and tasks_cue(side), 'prefix E did not focus the sidebar for the menu')
+    type_keys('a.b')
+    wait_for(lambda: input_line(side) == '› a.b▏', '`.` inside a name did not type: %r' % input_line(side))
+    os.write(terminal, b'\x1b')
+    wait_for(lambda: tasks_cue(side), 'Esc did not clear the dotted name')
+    del screen_out[:]
+    os.write(terminal, b'.')
+    wait_for(menu_open, '`.` on an empty input line did not open the row menu')
+    check(tasks_cue(side), '`.` on an empty line typed a dot instead of opening the menu')
+    os.write(terminal, b't')
+    wait_for(lambda: tm('show-options', '-wqv', '-t', w1, '@pin') == '1', 'the menu\'s pin did not pin the row')
+    check(current() == w1, 'pinning from the menu switched windows')
+    check(menu_items(w1)['t'] == '取消置顶', 'a pinned row does not offer unpin')
+    del screen_out[:]
+    os.write(terminal, b'.')
+    wait_for(menu_open, 'a second `.` did not reopen the menu')
+    os.write(terminal, b't')
+    wait_for(lambda: tm('show-options', '-wqv', '-t', w1, '@pin') == '', 'the menu\'s unpin did not unpin')
+    # Rename: the input line becomes the name editor, pre-filled; Enter hands
+    # the name to dash-rename.sh --wid as argv — quotes, $, # and ; survive.
+    odd = "名'$HOME\"#;x"
+    del screen_out[:]
+    os.write(terminal, b'.')
+    wait_for(menu_open, 'the menu did not open for rename')
+    os.write(terminal, b'r')
+    wait_for(lambda: input_line(side) == '改名› worker-one▏',
+             'rename did not pre-fill the input line: %r' % input_line(side))
+    check(navigation(), 'rename did not keep the keyboard on the sidebar')
+    os.write(terminal, b'\x15')  # C-u: clear the pre-filled current name
+    wait_for(lambda: input_line(side) == '改名› ▏', '⌃u did not clear the rename line')
+    type_keys(odd)
+    wait_for(lambda: input_line(side) == '改名› ' + odd + '▏', 'the odd name did not type: %r' % input_line(side))
+    os.write(terminal, b'\r')
+    # tmux <=3.4 vis-escapes a window name, and again in format output (`$`
+    # reads back backslashed; the hub's own rename included). `odd` has no
+    # backslash, so dropping them compares the name itself — $HOME unexpanded.
+    renamed = lambda: tm('display-message', '-p', '-t', w1, '#{window_name}')
+    wait_for(lambda: renamed() == odd or (server_version() < (3, 5) and renamed().replace('\\', '') == odd),
+             'the menu rename did not apply')
+    check(current() == w1 and tm('show-options', '-pqv', '-t', side, '@sidebar_rename') == '',
+          'rename switched windows or left its parked id behind')
+    wait_for(lambda: tasks_cue(side), 'the input line did not return to the placeholder after rename')
+    tm('rename-window', '-t', w1, 'worker-one')
+    os.write(terminal, b'\x1b')
+    wait_for(lambda: not navigation(), 'Esc after the menu did not hand input back')
+
+    # Touch: a tap on another row only switches (no menu); a second tap on that
+    # row, now highlighted, opens its menu and switches nothing.
+    wait_for(lambda: '修复侧栏' in tm('capture-pane', '-p', '-t', side), 'rows not painted for the tap test')
+    row2 = next(i for i, line in enumerate(tm('capture-pane', '-p', '-t', side).splitlines())
+                if '修复侧栏' in line)
+    del screen_out[:]
+    click(side, row=row2)
+    wait_for(lambda: current() == w2 and view_on(w2) == [side], 'a tap on a row did not switch to it')
+    time.sleep(.8)
+    check(not menu_open(), 'a single tap on another row opened the menu')
+    click(side, row=row2)
+    wait_for(menu_open, 'the second tap on the highlighted row did not open its menu')
+    check(current() == w2, 'the second tap switched windows')
+    check(painted('回答它的提问'), 'the tapped row\'s menu is not that row\'s')
+    os.write(terminal, b'\x1b')
+    time.sleep(.8)
+    tm('select-window', '-t', w1)
+    wait_for(lambda: view_on(w1) == [side], 'the view did not return to the first worker')
+
+    # Reap: confirm-before first (n keeps the window), then dash-reap.sh --yes;
+    # a refusal is toasted from its result token, never silent (#869).
+    w3 = tm('new-window', '-d', '-P', '-F', '#{window_id}', '-n', 'reap-me', 'sleep 600')
+    tm('set-option', '-w', '-t', w3, '@raw', '1')
+    tm('set-option', '-w', '-t', w3, '@claude_state', 'done')
+    for answer in (b'n', b'y'):
+        del screen_out[:]
+        # display-menu holds its caller until the menu closes — the view never
+        # waits on it (open_menu), and neither may this test.
+        opener = subprocess.Popen(['bash', str(bin_dir / 'fleet-sidebar.sh'), 'menu', 'fleet-test', w3],
+                                  env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        wait_for(menu_open, 'the reap test menu did not open')
+        os.write(terminal, b'x')
+        wait_for(lambda: painted('回收「reap-me」'), 'reap did not ask for confirmation')
+        os.write(terminal, answer)
+        opener.wait(timeout=10)
+        if answer == b'n':
+            time.sleep(1)
+            check(w3 in windows(), 'declining the reap confirm still reaped the window')
+    wait_for(lambda: w3 not in windows(), 'a confirmed menu reap did not close the window')
+    wait_for(lambda: painted('fleet: reaped'), 'a confirmed reap did not toast its outcome')
+    check(current() == w1 and w1 in windows(), 'the reap touched the window in view')
+    del screen_out[:]
+    call('reap', hub)
+    wait_for(lambda: painted('not reaped'), 'a refused reap was silent')
+    check(hub in windows(), 'the menu reap disposed of the hub')
 
     # Hide is prefix e — from the sidebar's own key table too — never a click and
     # never a letter.

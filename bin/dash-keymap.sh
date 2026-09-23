@@ -97,7 +97,13 @@ preview ctrl-p alt-p' ;;
 # fleet-sidebar M-n … send-keys C-n`). Later EPIC #894 members add rows here.
 # `hide` is NOT a row: it left this table for prefix e (a global prefix bind),
 # since `q` types now.
-sidebar) TABLE='new ctrl-n alt-n' ;;
+# `menu` (issue #898) is the one printable default: `.` opens the highlighted
+# row's action menu ONLY while the input line is empty — inside a name it types
+# a dot. One tap on an iPad keyboard, where a ⌃-chord is three. It arrives
+# through the `Any` bind like any typed key (no conf bind), and no tmux prefix is
+# a bare `.`, so it never remaps.
+sidebar) TABLE='new ctrl-n alt-n
+menu . .' ;;
 *) echo "dash-keymap.sh: unknown panel '$PANEL' (dash|backlog|config|sidebar)" >&2; exit 2 ;;
 esac
 

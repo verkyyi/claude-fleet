@@ -121,12 +121,13 @@ print_sheet() {
   if want sidebar; then
   eval "$(bash "$BIN/dash-keymap.sh" --panel sidebar env 2>/dev/null)"
   group "task sidebar" "— once prefix E or a tap puts the keyboard on it"
-  key "type a name" "fills the ONE input line at the bottom — every letter types (q n j k too), CJK fine; backspace deletes"
+  key "type a name" "fills the ONE input line at the bottom — every letter types (q n j k too), CJK fine; backspace deletes, ⌃u clears"
   key "enter" "with a name: start a scratch session named after it (the hub's ⌃s) and switch to it — no popup, no hub. A refusal (cap, worktree) shows on the line and keeps the name. Empty line: give input back to the worker"
   key "esc" "clear the typed name; on an empty line give input back to the worker"
   key "↑ / ↓" "switch to the highlighted task (follows once you pause, ~¼s; a held key is one switch, a row passed over is never selected); home/end the ends"
   key "← / →" "fold / unfold the highlighted row's subtree"
   key "$(dg new)" "new task — file an issue AND spawn its worker (the hub's ⌃n popup)$(dn new)"
+  key "$(dg menu)" "on an EMPTY line: the highlighted task's menu — rename (edits on this line: ↵ applies, esc/empty cancels) · pin · open PR · answer its question · flip new sessions claude⇄codex · reap (asks y/n first) · new task. Inside a name it types a dot. Touch: tap the highlighted row again$(dn menu)"
   key "prefix e" "hide the sidebar (q types now; no tap hides it)"
   fi
 

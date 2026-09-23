@@ -242,8 +242,15 @@ while read -r action _ _ def _; do
     || fail "sidebar action '$action' has no \$(dg $action) row in fleet-keys.sh"
   printf '%s\n' "$side_block" | grep -q "\$(dn $action)" \
     || fail "sidebar action '$action' has no \$(dn $action) remap note in fleet-keys.sh"
+  # A printable punctuation default (`menu` = `.`, #898) acts only on an EMPTY
+  # input line, so it reaches the view through the `Any` bind as its own byte.
+  case "$def" in [[:punct:]])
+    grep -qF "key == ord(\"$def\") and not text" "$SIDEBAR_PY" \
+      || fail "sidebar action '$action' ($def) must act only on an empty input line in fleet-sidebar.py"
+    continue ;;
+  esac
   letter="${def#ctrl-}"
-  [ "$letter" != "$def" ] && [ "${#letter}" = 1 ] || fail "sidebar default '$def' must be a ctrl-<letter> (a letter types)"
+  [ "$letter" != "$def" ] && [ "${#letter}" = 1 ] || fail "sidebar default '$def' must be a ctrl-<letter> or one punctuation key (a letter types)"
   byte=$(( $(printf '%d' "'$letter") - 96 ))
   grep -q "key == $byte\b" "$SIDEBAR_PY" \
     || fail "sidebar action '$action' ($def = byte $byte) is not handled in fleet-sidebar.py"

@@ -1,5 +1,7 @@
 #!/bin/bash
 # fleet-sidebar.sh sync|toggle|hide|key [session-target] [key]
+# fleet-sidebar.sh menu <session> <@window-id> [--print]   # a row's action menu
+# fleet-sidebar.sh reap <session> <@window-id>             # the menu's confirmed reap
 # In-pane / tmux-hook entry point: bare tmux inherits this fleet's socket.
 # Only fleet-up-created sessions (a durable conf) opt in, never ad-hoc sessions.
 set -uo pipefail
@@ -36,6 +38,7 @@ case "$verb" in
     fi
     verb=sync ;;
   sync|key) ;;
+  menu|reap) . "$BIN/fleet-sidebar-menu.sh"; exit 0 ;;
   *) exit 2 ;;
 esac
 
