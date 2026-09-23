@@ -98,8 +98,12 @@ norm_repo_arg() {
 #   3. only when nothing is left behind: fleet-down <from> (never --purge), and its
 #      conf dir is ARCHIVED, never deleted, to
 #      $FLEET_CONF_DIR/archive/<from>-folded-into-<sess without fleet->-<YYYYMMDD>.
+#   4. every store keyed by <from> OUTSIDE its conf dir (failover requests, the
+#      warm-pool dir, hub visits, caches) is archived next to the conf or deleted —
+#      fold_side below; the plan lists each kind as a `side:` line (issue #1014).
 # --dry-run prints the plan and stops; a real run prints the SAME plan, then acts.
-# Re-running after a partial fold is safe: an already-hosted repo is left as is.
+# Re-running after a partial fold is safe: an already-hosted repo is left as is,
+# and a <from> already retired (its conf archived) gets just the side sweep.
 _FOLD_CARRY="FLEET_MODEL FLEET_AGENT FLEET_MCP_CONFIG FLEET_DEPLOY_REF FLEET_DEPLOY_CHECK FLEET_REPO_SHORT $_FLEET_REPO_OVERRIDABLE"
 
 # Always the fleet's OWN socket by label — a fold talks to two fleets, so the
@@ -185,11 +189,101 @@ fold_count() {
   printf '%s' "$t" | awk -F'\t' -v a=" $* " 'NF && index(a, " " $2 " ")' | grep -c .
 }
 
+# ---- side state (issue #1014) ----------------------------------------------------
+# Archiving fleets/<from>/ retires what lives INSIDE it (children/, sleep/, evidence/,
+# epic/, bridge/, restore.map). These stores are keyed by <from> OUTSIDE it, and
+# outlived the 2026-09-22 folds: a permanent doctor WARN, a fake `<from>-pool` fleet
+# the crash-restore watcher saw as down every tick, a stale hub line.
+# fold_side <from> → "<action>\t<kind>\t<path>" per store, action one of
+#   archive  moved under <archive>/side/<kind>/ — history, nothing to re-key into:
+#     failover  handoffs/quota-requests/<hash>/ whose record's source.session is
+#               <from>, its unsupported-<from>-<win>.json and <from>.cursor.json.
+#               Its windows are gone, so the reconcile (live sockets only) never
+#               settles them; a moved worker files fresh ones under <sess>.
+#     pool      fleets/<from>-pool/ — the warm pool's restore snapshot. The pool
+#               itself re-keys on its own: <sess>'s pool serves the repo (#797).
+#     restore   the legacy restore/<from>.map and restore/<from>-pool.map.
+#     hub       logs/hub-visits-<from>.log — trips to a hub that no longer exists.
+#   delete   cache — $FLEET_C/global/*<from> runtime state (dash toggles, spawn
+#            debounce, quotawatch probe health) with nothing to preserve.
+fold_side() {
+  local f="$1" p q="$FLEET_CONF_DIR/handoffs/quota-requests" g="$FLEET_C/global"
+  if [ -d "$q" ] && command -v python3 >/dev/null 2>&1; then
+    python3 - "$q" "$f" <<'PY'
+import json, sys
+from pathlib import Path
+q, f = Path(sys.argv[1]), sys.argv[2]
+def session(p):
+    try: r = json.loads(p.read_text())
+    except (OSError, ValueError): return None
+    return (r.get('source') or {}).get('session') if 'source' in r else r.get('session')
+for p in sorted(q.glob('*/request.json')):
+    if session(p) == f: print('archive\tfailover\t%s' % p.parent)
+for p in sorted(q.glob('unsupported-*.json')):
+    if session(p) == f: print('archive\tfailover\t%s' % p)
+p = q / (f + '.cursor.json')
+if p.is_file(): print('archive\tfailover\t%s' % p)
+PY
+  fi
+  p="$FLEET_CONF_DIR/fleets/$f-pool"; [ -d "$p" ] && printf 'archive\tpool\t%s\n' "$p"
+  for p in "$FLEET_CONF_DIR/restore/$f.map" "$FLEET_CONF_DIR/restore/$f-pool.map"; do
+    [ -f "$p" ] && printf 'archive\trestore\t%s\n' "$p"
+  done
+  p="${FLEET_HUB_VISITS_LOGDIR:-$BIN/../logs}/hub-visits-$(printf '%s' "$f" | tr -c 'A-Za-z0-9._-' '_').log"
+  [ -f "$p" ] && printf 'archive\thub\t%s\n' "$p"
+  for p in "$g/dash_view_$f" "$g/dash_fold_rows_$f" "$g/backlog_show_bound_$f" \
+           "$g/spawn_last_ms_$f" "$g/quotawatch.modelcap.$f" "$g/quotawatch.probe.trace.$f" \
+           "$g/dash_fold_landed_$f" "$g/dash_fold_landed_$f".*; do
+    [ -f "$p" ] && printf 'delete\tcache\t%s\n' "$p"
+  done
+  return 0
+}
+# fold_side_plan <tsv> — the plan lines: one per kind, with a count.
+fold_side_plan() {
+  [ -n "$1" ] || { echo "  side:    none keyed by $FROM"; return 0; }
+  printf '%s' "$1" | awk -F'\t' 'NF { n[$1 "\t" $2]++ } END { for (k in n) print k "\t" n[k] }' \
+    | sort -k2,2 | while IFS=$'\t' read -r a k n; do
+        case "$k" in
+          failover) why='failover request(s) — archived, never reconciled once its windows are gone' ;;
+          pool)     why="warm-pool dir fleets/$FROM-pool — archived; $SESS's own pool serves the repo" ;;
+          restore)  why='legacy restore map(s) — archived' ;;
+          hub)      why='hub-visits log — archived' ;;
+          *)        why="runtime cache file(s) under $FLEET_C/global — deleted" ;;
+        esac
+        printf '  side:    %-7s %s %s\n' "$a" "$n" "$why"
+      done
+}
+# fold_side_apply <tsv> <archive-dir> — act on the plan. rc = how many failed.
+fold_side_apply() {
+  local a k p d bad=0
+  while IFS=$'\t' read -r a k p; do
+    [ -n "$p" ] || continue
+    if [ "$a" = delete ]; then rm -f "$p" || bad=$((bad + 1)); continue; fi
+    d="$2/side/$k"; mkdir -p "$d" || { bad=$((bad + 1)); continue; }
+    mv "$p" "$d/" || bad=$((bad + 1))
+  done <<SIDE
+$1
+SIDE
+  return "$bad"
+}
+
 fold_main() {
   FROM="$REPO"
   [ "$FROM" != "$SESS" ] || die "cannot fold $SESS into itself"
-  local fconf; fconf=$(fleet_conf_file "$FROM")
-  [ -f "$fconf" ] || die "'$FROM' is not a fleet (no conf at $fconf)"
+  local fconf side; fconf=$(fleet_conf_file "$FROM")
+  if [ ! -f "$fconf" ]; then
+    # Already retired by an earlier fold (one that predates #1014, or whose sweep
+    # failed): re-running it sweeps just the side state into that archive.
+    local prior; prior=$(ls -d "$FLEET_CONF_DIR/archive/$FROM-folded-into-${SESS#fleet-}-"* 2>/dev/null | tail -n 1)
+    [ -n "$prior" ] || die "'$FROM' is not a fleet (no conf at $fconf)"
+    side=$(fold_side "$FROM")
+    echo "fold $FROM → $SESS: already retired — its conf is archived at $prior"
+    fold_side_plan "$side"
+    [ "$DRY" = 1 ] && return 0
+    fold_side_apply "$side" "$prior" || die "side state: $? store(s) not archived — re-run fold"
+    [ -n "$side" ] && echo "fold: $FROM side state swept into $prior/side"
+    return 0
+  fi
   if [ -n "${TMUX:-}" ] && [ "$(fleet_current_session)" = "$FROM" ]; then
     die "run fold from outside $FROM — its own server is torn down at the end"
   fi
@@ -244,6 +338,8 @@ PLAN
   else
     echo "  retire:  fleet-down $FROM; archive its conf → archive/$FROM-folded-into-${SESS#fleet-}-<date>"
   fi
+  side=$(fold_side "$FROM")
+  fold_side_plan "$side"
   [ "$DRY" = 1 ] && return 0
 
   # ---- execute ----
@@ -309,7 +405,13 @@ PEND
   else   # a legacy flat <sess>.conf
     { mkdir -p "$dest" && mv "$fconf" "$dest/conf"; } || die "cannot archive $fconf"
   fi
+  # The side stores go next to it — re-listed now, after fleet-down, so nothing a
+  # last tick of <from> wrote is left behind.
+  side=$(fold_side "$FROM")
+  fold_side_apply "$side" "$dest" \
+    || die "$FROM retired, but $? side store(s) were not archived — re-run fold to sweep them"
   echo "fold: $FROM retired — its conf is archived at $dest"
+  [ -n "$side" ] && echo "fold: $FROM side state archived at $dest/side"
 }
 
 case "$cmd" in

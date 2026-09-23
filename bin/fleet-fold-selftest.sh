@@ -13,6 +13,12 @@
 #      worker that goes idle mid-wait, then fleet-down B and ARCHIVE its conf dir.
 #   4. refusals: fold into itself, a 2-repo source, a stopped target with work.
 #   5. degenerate: a failed restore leaves the fleet un-retired (never a blind down).
+#   6. side state (issue #1014): every store keyed by B outside its conf dir —
+#      failover requests, the warm-pool dir, the legacy restore map, the hub-visits
+#      log, dash caches — is listed by --dry-run, left alone until B retires, then
+#      archived under <archive>/side/ (caches deleted); a neighbour keyed by A or by
+#      a longer name (fb-2) is never touched, and after the retire no store is left
+#      keyed by B. A fold re-run on an already-retired fleet sweeps just the side.
 #
 # The movers (fleet-worker-stop / dash-restore-session / fleet-sleep / fleet-down)
 # are unit-tested on their own; here a sandbox bin/ swaps them for stubs that do
@@ -145,6 +151,41 @@ OVL="$FLEET_CONF_DIR/fleets/$A/repos/o-b.conf"
 [ "$(fleet_repo_conf_file "$A" o/b)" = "$OVL" ] || OVL=$(fleet_repo_conf_file "$A" o/b)
 B_BEFORE=$(bnames)
 
+# ---- side state keyed by B (and neighbours that must stay) ----------------------
+export FLEET_HUB_VISITS_LOGDIR="$WORK/logs"
+Q="$FLEET_CONF_DIR/handoffs/quota-requests" G="$FLEET_C/global"
+mkdir -p "$Q" "$G" "$FLEET_HUB_VISITS_LOGDIR" "$FLEET_CONF_DIR/fleets/$B-pool" "$FLEET_CONF_DIR/restore"
+req() {  # req <dir> <session> <state>
+  mkdir -p "$Q/$1"
+  printf '{"source": {"session": "%s", "window": ""}, "state": "%s", "attempts": 99}\n' "$2" "$3" > "$Q/$1/request.json"
+}
+req rb1 "$B" ambiguous; req rb2 "$B" cancelled; req ra1 "$A" bound; req rn1 "$B-2" ambiguous
+printf '{"session": "%s", "window": "3", "state": "unsupported"}\n' "$B" > "$Q/unsupported-$B-3.json"
+printf '{"session": "%s", "window": "3", "state": "unsupported"}\n' "$B-2" > "$Q/unsupported-$B-2-3.json"
+printf '{"next": 4}\n' > "$Q/$B.cursor.json"; printf '{"next": 1}\n' > "$Q/$A.cursor.json"
+printf 'FLEET\t%s-pool\to/b\t%s\tmain\n' "$B" "$WORK/mainB" > "$FLEET_CONF_DIR/fleets/$B-pool/restore.map"
+printf 'FLEET\t%s\to/b\n' "$B" > "$FLEET_CONF_DIR/restore/$B.map"
+printf '1\tissue-12\tbell\n' > "$FLEET_HUB_VISITS_LOGDIR/hub-visits-$B.log"
+printf '1\tissue-1\tbell\n' > "$FLEET_HUB_VISITS_LOGDIR/hub-visits-$A.log"
+for f in "dash_view_$B" "dash_fold_landed_$B.x" "quotawatch.modelcap.$B" "dash_view_$B-2" "dash_view_$A"; do
+  : > "$G/$f"
+done
+# side_left <sess> → every seeded store still keyed by <sess> at its ORIGINAL place.
+side_left() {
+  local p
+  for p in "$Q"/*/request.json "$Q"/unsupported-*.json "$Q"/*.cursor.json; do
+    [ -f "$p" ] && grep -q "\"session\": \"$1\"" "$p" && echo "$p"
+  done
+  [ -f "$Q/$1.cursor.json" ] && echo "$Q/$1.cursor.json"
+  for p in "$FLEET_CONF_DIR/fleets/$1-pool" "$FLEET_CONF_DIR/restore/$1.map" \
+           "$FLEET_HUB_VISITS_LOGDIR/hub-visits-$1.log" "$G/dash_view_$1" \
+           "$G/dash_fold_landed_$1.x" "$G/quotawatch.modelcap.$1"; do
+    [ -e "$p" ] && echo "$p"
+  done
+}
+SIDE_B=$(side_left "$B" | grep -c .)
+eq "seeded side stores" "$SIDE_B" 10
+
 # ---- 1. dry run: the plan, and nothing else --------------------------------
 dry=$(bash "$FR" fold "$B" --into "$A" --dry-run 2>&1); rc=$?
 eq "dry rc" "$rc" 0
@@ -160,6 +201,12 @@ for row in "panel    -           dash —" "pool     -           pool-1 —" "mo
   has "dry row [$row]" "$dry" "$row"
 done
 has "dry retire"  "$dry" "retire:  NO — 2 window(s) stay in $B"
+has "dry side failover" "$dry" "side:    archive 4 failover request(s)"
+has "dry side pool"     "$dry" "side:    archive 1 warm-pool dir fleets/$B-pool"
+has "dry side restore"  "$dry" "side:    archive 1 legacy restore map(s)"
+has "dry side hub"      "$dry" "side:    archive 1 hub-visits log"
+has "dry side cache"    "$dry" "side:    delete  3 runtime cache file(s)"
+eq "dry side untouched" "$(side_left "$B" | grep -c .)" "$SIDE_B"
 [ -e "$OVL" ] && fail "dry run wrote the overlay"
 [ -e "$CALLS" ] && fail "dry run called a mover: $(cat "$CALLS")"
 eq "dry B untouched" "$(bnames)" "$B_BEFORE"
@@ -183,6 +230,7 @@ has "restore issue"    "$(cat "$CALLS")" "restore landed:issue:12 $A --repo o/b"
 hasnt "no down"        "$(cat "$CALLS")" "down "
 has "real says not retired" "$real" "$B NOT retired — 2 session(s)"
 [ -f "$FLEET_CONF_DIR/fleets/$B/conf" ] || fail "B's conf gone before retire"
+eq "not retired: side untouched" "$(side_left "$B" | grep -c .)" "$SIDE_B"
 leg "2 real run moves idle + hibernating, leaves busy + unbound"
 
 # ---- 3. re-run with --wait: issue-13 finishes mid-wait → moved, B retired -----
@@ -206,13 +254,24 @@ arch=$(ls -d "$FLEET_CONF_DIR/archive/$B-folded-into-$A-"* 2>/dev/null | head -1
 [ -f "$arch/conf" ] || fail "B's conf not archived under archive/$B-folded-into-$A-<date>"
 has "archived conf intact" "$(cat "$arch/conf" 2>/dev/null)" 'FLEET_REPO="o/b"'
 has "retired line" "$out" "fold: $B retired"
+has "side line" "$out" "fold: $B side state archived at $arch/side"
+eq "no store left keyed by B" "$(side_left "$B")" ""
+for p in failover/rb1/request.json failover/rb2/request.json "failover/unsupported-$B-3.json" \
+         "failover/$B.cursor.json" "pool/$B-pool/restore.map" "restore/$B.map" "hub/hub-visits-$B.log"; do
+  [ -f "$arch/side/$p" ] || fail "side not archived: $p"
+done
+[ -e "$arch/side/cache" ] && fail "caches were archived, not deleted"
+for p in "$Q/ra1/request.json" "$Q/rn1/request.json" "$Q/unsupported-$B-2-3.json" "$Q/$A.cursor.json" \
+         "$FLEET_HUB_VISITS_LOGDIR/hub-visits-$A.log" "$G/dash_view_$B-2" "$G/dash_view_$A"; do
+  [ -f "$p" ] || fail "neighbour swept: $p"
+done
 leg "3 --wait moves the late finisher, then retires + archives"
 
 # ---- 4. refusals --------------------------------------------------------------
 out=$(bash "$FR" fold "$A" --into "$A" 2>&1); rc=$?
 eq "self rc" "$rc" 1; has "self msg" "$out" "cannot fold $A into itself"
-out=$(bash "$FR" fold "$B" --into "$A" 2>&1); rc=$?
-eq "archived source rc" "$rc" 1; has "archived source msg" "$out" "'$B' is not a fleet"
+out=$(bash "$FR" fold fz --into "$A" 2>&1); rc=$?
+eq "no such source rc" "$rc" 1; has "no such source msg" "$out" "'fz' is not a fleet"
 out=$(bash "$FR" fold "$A" 2>&1); rc=$?
 eq "no --into = usage" "$rc" 2
 # a source that already hosts two repos
@@ -241,6 +300,26 @@ has "failed restore msg" "$out" "issue-7: stopped (stopped:exit) but not resumed
 hasnt "failed restore: no down" "$(cat "$CALLS")" "down "
 [ -f "$FLEET_CONF_DIR/fleets/$D/conf" ] || fail "failed restore: D's conf archived anyway"
 leg "5 stopped target / failed restore keep the source"
+
+# ---- 6. a fleet retired before #1014: a re-run sweeps just the side state ------
+out=$(bash "$FR" fold "$B" --into "$A" --dry-run 2>&1); rc=$?
+eq "retired re-run rc" "$rc" 0
+has "retired re-run header" "$out" "fold $B → $A: already retired — its conf is archived at $arch"
+has "retired re-run clean" "$out" "side:    none keyed by $B"
+req rb3 "$B" ambiguous; : > "$G/spawn_last_ms_$B"
+out=$(bash "$FR" fold "$B" --into "$A" --dry-run 2>&1); rc=$?
+has "retired dry lists" "$out" "side:    archive 1 failover request(s)"
+has "retired dry cache" "$out" "side:    delete  1 runtime cache file(s)"
+[ -f "$Q/rb3/request.json" ] || fail "retired dry run moved a record"
+: > "$CALLS"
+out=$(bash "$FR" fold "$B" --into "$A" 2>&1); rc=$?
+eq "retired sweep rc" "$rc" 0
+has "retired sweep line" "$out" "fold: $B side state swept into $arch/side"
+[ -f "$arch/side/failover/rb3/request.json" ] || fail "retired sweep: rb3 not archived"
+[ -e "$G/spawn_last_ms_$B" ] && fail "retired sweep: cache not deleted"
+[ -s "$CALLS" ] && fail "retired sweep called a mover: $(cat "$CALLS")"
+[ -f "$Q/ra1/request.json" ] || fail "retired sweep touched A's record"
+leg "6 side state: listed, archived on retire, swept on a retired re-run"
 
 [ "$FAILS" = 0 ] && { printf 'fleet-fold-selftest: all passed\n'; exit 0; }
 printf 'fleet-fold-selftest: %d failure(s)\n' "$FAILS"; exit 1
