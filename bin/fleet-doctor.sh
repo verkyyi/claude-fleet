@@ -1277,9 +1277,16 @@ _deps_row() {
   [ -n "$bd_sum" ] || return 0
   bd_get() { printf '%s\n' "$bd_sum" | tr ' ' '\n' | sed -n "s/^$1=//p"; }
   bd_f=$(bd_get fresh); bd_s=$(( $(bd_get stale) + $(bd_get installing) )); bd_u=$(bd_get unstamped); bd_n=$(bd_get not-installed)
-  bd_txt="$1: base deps $bd_f fresh / $bd_s stale / $bd_u unstamped / $bd_n not installed"
+  bd_x=$(bd_get failing); bd_x=${bd_x:-0}; bd_since=$(bd_get failing-since)
+  # failing (issue #1026) ≠ unstamped: the install ran and failed on the repo's
+  # side, so it is parked until its lockfile moves — --prime-base would only fail
+  # it again. The oldest failure says how long worktrees have gone unlinked.
+  bd_txt="$1: base deps $bd_f fresh / $bd_s stale / $bd_x failing / $bd_u unstamped / $bd_n not installed"
+  [ "$bd_x" -gt 0 ] && bd_txt="$bd_txt (failing since ${bd_since:-?})"
   if [ "$bd_s" -gt 0 ] || [ "$bd_u" -gt 0 ]; then
     warn deps "$bd_txt — worktrees there install from zero instead of linking; fix: $(dirname "$0")/fleet-deps-link.sh --prime-base '$2' (per dir: --base-status)"
+  elif [ "$bd_x" -gt 0 ]; then
+    warn deps "$bd_txt — the install fails on the repo's side and is not retried until its lockfile changes; see logs/base-deps.log, fix the repo, then: $(dirname "$0")/fleet-deps-link.sh --refresh-base '$2' <dir> (which: --base-status)"
   else
     pass deps "$bd_txt — new worktrees link the base's current tree"
   fi
