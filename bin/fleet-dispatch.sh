@@ -258,8 +258,8 @@ merged_eligible() {
   local live="$1" r ri=0 load; shift
   for r in "$@"; do
     load=$(printf '%s\n' "$live" | awk -v p="$r#" 'index($0, p) == 1' | wc -l | tr -d ' ')
-    eligible_issues "$r" | awk -F'\t' -v OFS='\t' -v r="$r" -v ri="$ri" -v load="$load" \
-      '{ print $1, load + j[$1]++, ri, $2, r }'
+    eligible_issues "$r" | awk -F'\t' -v OFS='\t' -v r="$r" -v ri="$ri" -v base="$load" \
+      '{ print $1, base + j[$1]++, ri, $2, r }'
     ri=$((ri + 1))
   done | sort -t"$(printf '\t')" -k1,1n -k2,2n -k3,3n -k4,4n | cut -f1,4,5
 }
