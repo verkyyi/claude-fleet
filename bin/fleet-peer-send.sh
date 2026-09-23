@@ -134,6 +134,9 @@ case "$tgt" in
       session=$("${tm[@]}" display-message -p -t "$tgt" '#{session_name}' 2>/dev/null)
       err=$(printf '%s' "$text" | python3 "$BIN/fleet-sleep.py" deliver --session "$session" "$tgt" 2>&1 >/dev/null); rc=$?
       [ "$rc" -eq 0 ] || die 1 "${err:-sleep delivery to $tgt failed (exit $rc)}"
+      # A sleeper at a full fleet keeps the message and wakes when a slot frees (#1058).
+      case "$err" in *'queued — fleet at its session limit'*)
+        echo "queued → $tgt: fleet at its session limit; delivers when a slot frees ($label)"; exit 0 ;; esac
       echo "sent → $tgt via wake-delivery ($label)"; exit 0
     fi
     agent=$("${tm[@]}" display-message -p -t "$tgt" '#{@cc_agent}' 2>/dev/null)

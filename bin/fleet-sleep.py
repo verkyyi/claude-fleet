@@ -189,7 +189,39 @@ class Worker:
         data.update(state=state, updated=time.time(), error=error)
         save(path,data)
         self.stamp('@sleep_since',data.get('since',''))
+        if state!='sleeping': self.stamp('@sleep_wake_deferred','')
         self.stamp('@worker_lifecycle',state if state != 'awake' else '')
+
+    def cap_full(self):
+        """(n, max) when a session cap is reached, else None (issue #1058). The
+        same count every spawn is refused on — fleet-lib.sh's fleet_cap_full, with
+        this fleet's conf loaded — so a sleeper waking and a spawn see one number.
+        A check that cannot run answers None: an unreadable cap never strands a
+        wake the fleet always made before."""
+        env=dict(os.environ,FLEET_CONF_DIR=str(self.directory.parents[2]))
+        try:
+            out=subprocess.run(['bash','-c','. "$1"; fleet_load_conf "$2"; fleet_cap_full "$2"','cap',
+                                str(BIN/'fleet-lib.sh'),self.session],env=env,capture_output=True,text=True,timeout=15)
+        except (OSError,subprocess.SubprocessError): return None
+        parts=out.stdout.split()
+        if out.returncode!=0 or len(parts)!=2 or not all(x.isdigit() for x in parts): return None
+        return int(parts[0]),int(parts[1])
+
+    @contextmanager
+    def slot_lock(self):
+        # Check-then-`waking` must be one step across every automatic wake on the
+        # machine (the cap is global), or two due loops at N-1 both see a free
+        # slot. Held only across the count + the phase stamp, never the resume.
+        path=self.directory.parents[2]/'sleep-wake-slot.lock'
+        path.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+        with open(path,'a') as fd:
+            deadline=time.monotonic()+30
+            while True:
+                try: fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB); break
+                except BlockingIOError:
+                    if time.monotonic()>deadline: raise ValueError('wake slot check is busy; retry') from None
+                    time.sleep(.1)
+            yield
 
     def source_key(self, source):
         return tuple(source[k] for k in ('agent','session_id','pid','worktree','home'))
@@ -430,15 +462,25 @@ class Worker:
             time.sleep(.2)
         raise ValueError('pane still owns processes; refusing to replace it')
 
-    def wake_locked(self,path,data):
-        if data['state']=='awake': return
+    def wake_locked(self,path,data,over_cap=True):
+        """Resume the saved conversation. True once awake, False when an automatic
+        wake (over_cap=False: a due loop, a message) found the fleet at its session
+        limit (issue #1058) — it stamps @sleep_wake_deferred=cap and the next scan
+        retries. The operator's own wake passes over_cap=True and always goes."""
+        if data['state']=='awake': return True
         if source_alive(data):
             raise ValueError('original process is still alive; inspect the failed exit')
         self.replaceable()
         source=data['source']
         if not Path(source['worktree']).is_dir() or not Path(source['transcript']).is_file():
             raise ValueError('worktree or exact history is missing')
-        self.phase(path,data,'waking')
+        if over_cap: self.phase(path,data,'waking')
+        else:
+            with self.slot_lock():
+                if self.cap_full():
+                    if self.opt('@sleep_wake_deferred')!='cap': self.stamp('@sleep_wake_deferred','cap')
+                    return False
+                self.phase(path,data,'waking')
         self.tm('select-pane','-d','-t',self.pane)
         data['resume_count']+=1
         save(path,data)
@@ -469,7 +511,7 @@ class Worker:
                         self.stamp('@sleep_evidence','')
                         self.stamp('@sleep_woke_at',time.time())
                         self.phase(path,data,'awake')
-                        return
+                        return True
                 except (subprocess.SubprocessError,OSError): pass
                 if self.opt('pane_dead')=='1': break
                 time.sleep(.25)
@@ -518,7 +560,7 @@ class Worker:
         test='#{==:#{@cc_launcher_pid},'+owner+'}'
         self.tm('if-shell','-F','-t',self.pane,test,' ; '.join(cmds))
 
-    def wake(self,dwell=0,nav=False):
+    def wake(self,dwell=0,nav=False,over_cap=False):
         # --nav marks the tmux navigation/attach hooks: under the default
         # FLEET_SLEEP_WAKE=confirm arriving on a sleeper only shows its page.
         if nav and not wake_on_view(): return
@@ -533,6 +575,11 @@ class Worker:
         with lock(self.lockfile):
             if not self.opt('@worker_lifecycle'): return
             path,data=self.record()
+            # A navigation wake (FLEET_SLEEP_WAKE=dwell) is the operator arriving:
+            # it goes like --over-cap. A bare CLI wake at a full fleet refuses
+            # rather than defer — nothing would retry it (issue #1058).
+            full=None if over_cap or nav or data['state']=='awake' else self.cap_full()
+            if full: raise ValueError('fleet full %d/%d — pass --over-cap to wake anyway'%full)
             self.wake_locked(path,data)
 
     def resume_loop(self,path,data,source,rollback=False):
@@ -585,7 +632,11 @@ class Worker:
             if message['state']=='uncertain': raise ValueError('previous delivery is uncertain; inspect '+str(msgpath))
             save(msgpath,message)
             if self.opt('@worker_lifecycle'):
-                path,data=self.record(); self.wake_locked(path,data)
+                path,data=self.record()
+                if not self.wake_locked(path,data,over_cap=False):
+                    # Already saved above: the scan's drain delivers it once a slot frees.
+                    print('fleet-sleep: queued — fleet at its session limit; delivers when a slot frees',file=sys.stderr)
+                    return
             source=self.inspect()
             if message['session_id']!=source['session_id']:raise ValueError('pending message belongs to an earlier conversation')
             self.stamp('@sleep_evidence','')
@@ -608,6 +659,8 @@ class Worker:
         for path in sorted(self.inbox().glob('*.json'))[:4]:
             message=json.loads(path.read_text())
             if message['state']=='pending':self.deliver(message['text'])
+            # Deferred at the session limit (issue #1058): the rest wait with it.
+            if self.opt('@worker_lifecycle')=='sleeping' and self.opt('@sleep_wake_deferred'): break
 
     def recover(self):
         with lock(self.lockfile):
@@ -642,8 +695,11 @@ class Worker:
                         self.tm('select-pane','-e','-t',self.pane)
                         self.tm('set-option','-p','-t',self.pane,'remain-on-exit',data['remain'])
                 except (ValueError,OSError,subprocess.SubprocessError): pass
-            if data['state']=='sleeping' and ((wake_on_view() and self.visible()) or self.scheduled_wake(path,data)):
-                self.wake_locked(path,data)
+            if data['state']=='sleeping':
+                if wake_on_view() and self.visible(): self.wake_locked(path,data)
+                elif self.scheduled_wake(path,data): self.wake_locked(path,data,over_cap=False)
+                elif self.opt('@sleep_wake_deferred') and not any(self.inbox().glob('*.json')):
+                    self.stamp('@sleep_wake_deferred','')   # nothing waits for a slot any more
 
 
 def quiet_native_children(client,session_id):
@@ -921,7 +977,7 @@ def park(w):
         mode[6][termios.VMIN],mode[6][termios.VTIME]=1,0
         termios.tcsetattr(0,termios.TCSANOW,mode)
     mouse=lambda on:sys.stdout.write('\033[?1000'+('h' if on else 'l')+'\033[?1006'+('h' if on else 'l'))
-    facts,rows,fds=None,set(),[rd,0]
+    facts,rows,fds,full=None,set(),[rd,0],None
     try:
         mouse(True)
         redraw=True
@@ -935,6 +991,7 @@ def park(w):
                     except (ValueError,KeyError,OSError): pass
                     facts=park_facts(w,data)
                 footer=button.lines(now)
+                if button.state=='armed' and full: footer=[PARK['cap_line'](*full)]+footer
                 frame=park_frame(w,data,footer,facts)
                 n=frame.count('\n')+1
                 rows=set(range(n-len(footer)+1,n+1))
@@ -958,9 +1015,14 @@ def park(w):
                 # A discarded key changes nothing on the page: no redraw for it.
                 for _ in range(PARK['presses'](chunk,rows)):
                     redraw=True
+                    was=button.state
                     if button.press(time.monotonic()):
                         mouse(False); sys.stdout.flush()
                         park_wake(w)
+                    elif was!='armed' and button.state=='armed':
+                        # Read once per arm, not polled: the second press wakes
+                        # anyway (over the limit by one), so this only informs.
+                        full=w.cap_full()
     finally:
         try:
             mouse(False); sys.stdout.flush()
@@ -972,7 +1034,8 @@ def park_wake(w):
     # Detached (EPIC #1048 rule 6): wake_locked respawns this pane, killing us.
     # fleet-sleep.sh loads the fleet conf; a sandbox without it runs the .py.
     sh=BIN/'fleet-sleep.sh'
-    command=shlex.join(['bash',str(sh),'wake',w.session,w.window]) if sh.exists() else w.command('wake')
+    # --over-cap: the operator's own wake always goes, one over at a full fleet (#1058).
+    command=shlex.join(['bash',str(sh),'wake',w.session,w.window,'--over-cap']) if sh.exists() else w.command('wake')+' --over-cap'
     w.tm('run-shell','-b',command+' >/dev/null 2>&1')
 
 
@@ -1001,6 +1064,7 @@ def main():
     p.add_argument('--pid',type=int,default=0,help='busy: the Claude pid already resolved for this pane')
     p.add_argument('--dwell',type=float,default=0,help='wake only if the window is still current after this many seconds')
     p.add_argument('--nav',action='store_true',help='wake: from a navigation/attach hook; a no-op unless FLEET_SLEEP_WAKE=dwell')
+    p.add_argument('--over-cap',action='store_true',help='wake: the operator\'s own wake — goes even at the session limit (issue #1058)')
     a=p.parse_intermixed_args()
     if a.action=='hook':
         try: hook()
@@ -1055,7 +1119,7 @@ def main():
     elif a.action=='holds-exit':
         _,data=w.record()
         return 0 if w.holds_exit(data) else 1
-    elif a.action=='wake': w.wake(dwell=a.dwell,nav=a.nav)
+    elif a.action=='wake': w.wake(dwell=a.dwell,nav=a.nav,over_cap=a.over_cap)
     elif a.action=='deliver': w.deliver(sys.stdin.read())
     elif a.action=='restore':
         path=Path(a.record)

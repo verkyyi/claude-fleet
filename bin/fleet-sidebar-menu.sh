@@ -110,8 +110,9 @@ else add "-回答它的提问（没有）" "$(mk answer)" ''; fi
 # the menu and picking it is already the second deliberate step (EPIC #1048
 # decision 4). Detached, because the wake respawns the pane. Keep awake flips the
 # sleep controller's own @sleep_keep_awake hold; the label says what a pick does.
+# --over-cap (issue #1058): the operator's own wake goes even at the session limit.
 slp="bash $(sq "$BIN/fleet-sleep.sh")"
-[ "$life" = sleeping ] && add "唤醒" "$(mk wake)" "$(sh_run "$slp wake $(sq "$sess") $wid")"
+[ "$life" = sleeping ] && add "唤醒" "$(mk wake)" "$(sh_run "$slp wake $(sq "$sess") $wid --over-cap")"
 if [ "$keep" = 1 ]; then add "允许休眠" "$(mk awake)" "$(sh_run "$slp allow-sleep $(sq "$sess") $wid")"
 else add "保持唤醒" "$(mk awake)" "$(sh_run "$slp keep-awake $(sq "$sess") $wid")"; fi
 add "新会话改用 $next" "$(mk agent)" "$(sh_run "bash $(sq "$BIN/dash-agent-toggle.sh")")"
