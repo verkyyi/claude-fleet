@@ -479,6 +479,9 @@ try:
              'the worker never turned on any-motion tracking')
     os.write(terminal, b'\x02E')
     wait_for(navigation, 'prefix E did not enter navigation before the mouse move')
+    # The key table flips at once; the view paints its cue on its own clock. Wait
+    # for the cue BEFORE the move, or a slow paint reads as the move dropping it.
+    wait_for(lambda: tasks_cue(side), 'prefix E did not paint the task highlight before the mouse move')
     mx = int(tm('display-message', '-p', '-t', p1, '#{pane_left}')) + 10
     for my in (3, 4, 5):
         os.write(terminal, ('\x1b[<35;%d;%dM' % (mx, my)).encode())
