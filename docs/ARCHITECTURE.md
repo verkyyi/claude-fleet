@@ -452,6 +452,36 @@ origin column, and keeps one fold file per repo), and the Fleet Hub adapter
 key). A one-repo fleet keeps the bare keys everywhere —
 `bin/multirepo-identity-selftest.sh` pins both halves.
 
+**Pick fleet and repo in one place (issue #793).** The fleet's **current repo**
+(`fleet_current_repo`, default `all`) is one value per fleet, shared by every screen
+attached to it. It is picked in the SAME popup that switches fleets —
+`bin/fleet-pick.sh`, behind the footer's fleet name and the dash's pick key (⌃z,
+`PICK` in `dash-keymap.sh`). Each live fleet row is followed, when that fleet hosts
+2+ repos, by `all repos` + one row per repo, its current one marked `← viewing`.
+A repo row in this fleet calls `fleet_current_repo_set` and returns: the dash
+repaints on its next 1Hz tick, no reattach. A repo row in another fleet sets THAT
+fleet's current repo, then detach-and-reattaches as a fleet row does. The cross-fleet
+● jump (`FLEET_PICK_ONLY`) stays fleet-level. A one-repo fleet shows only its fleet
+row, as before.
+
+Every writer of the current repo republishes the footer label
+(`fleet_repo_label_sync` → the server-global `@fleet_repo_label`). So does each dash
+launch and `fleet-repo.sh add`/`remove`. status-left then reads `<fleet> · <repo
+name>` or `<fleet> · all`, and a one-repo fleet has the option unset (bare `#S`).
+The dash renderers (`tmux-dashboard-rows.sh`, and with it the sidebar, plus
+`dash-fold-toggle.sh`) read one `fleet_dash_repo_frame` per frame:
+- a picked repo shows only its own windows, and a hidden window is no one's parent
+  there;
+- `all` badges every row with its repo's short tag, and puts no-repo sessions in
+  their own group at the foot;
+- grouping keeps #790's repo-qualified keys, and the filter runs before them, so a
+  child whose parent is hidden renders as an orphan rather than folding away.
+
+The short tag (`fleet_repo_short`: `FLEET_REPO_SHORT` in the repo's conf, else its
+initials or first two letters, full name on a collision) also prefixes every
+window name in a 2+ repo fleet (`tl·issue-12`). A no-repo session is not prefixed.
+`bin/fleet-pick-repo-selftest.sh` pins the picker, dash and label.
+
 ### The launcher pre-trusts the fleet's checkout (issue #563)
 
 Claude Code asks "Quick safety check: Is this a project you created or one you

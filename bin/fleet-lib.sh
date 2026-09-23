@@ -328,7 +328,7 @@ fleet_load_conf() {
 
 # Keys that describe the fleet conf's OWN repo, so they must not leak into another
 # repo's view when its overlay is applied: identity, and where it deploys.
-_FLEET_REPO_SCOPED="FLEET_REPO FLEET_MAIN FLEET_BASE_BRANCH FLEET_DEPLOY_REF FLEET_DEPLOY_CHECK"
+_FLEET_REPO_SCOPED="FLEET_REPO FLEET_MAIN FLEET_BASE_BRANCH FLEET_DEPLOY_REF FLEET_DEPLOY_CHECK FLEET_REPO_SHORT"
 
 # fleet_repo_conf_file <sess> <repo> → the overlay path for <repo> (may not exist).
 fleet_repo_conf_file() {
@@ -371,9 +371,13 @@ fleet_has_repo_overlays() {
 
 # fleet_repo_hosted <sess> <repo> → 0 iff the fleet hosts <repo>.
 fleet_repo_hosted() {
-  local want; want=$(fleet_norm_repo "${2:-}")
+  local want all; want=$(fleet_norm_repo "${2:-}")
   [ -n "$want" ] || return 1
-  fleet_repos "${1:-}" | grep -qxF "$want"
+  # Captured, not piped into `grep -q`: grep quits on the first match, and under a
+  # caller's `set -o pipefail` fleet_repos' SIGPIPE'd printf then fails the whole
+  # pipeline — so the FIRST hosted repo read as not hosted (issue #793).
+  all=$(fleet_repos "${1:-}")
+  printf '%s\n' "$all" | grep -qxF "$want"
 }
 
 # fleet_repo_mains <sess> → each hosted repo's base checkout (FLEET_MAIN), one per
@@ -555,7 +559,100 @@ fleet_current_repo_set() {
     fleet_repo_hosted "$sess" "$want" || return 1
   fi
   d=$(fleet_state_dir "$sess")
-  printf '%s\n' "$want" > "$d/current-repo.$$" && mv -f "$d/current-repo.$$" "$d/current-repo"
+  printf '%s\n' "$want" > "$d/current-repo.$$" && mv -f "$d/current-repo.$$" "$d/current-repo" || return 1
+  fleet_repo_label_sync "$sess"
+  return 0
+}
+
+# ---- the current repo on screen (issue #793) --------------------------------
+# fleet_repo_short <owner/name> [<override>] → the short tag a repo wears on the
+# dash badge and as a window-name prefix (`tl·issue-12`): <override> when given
+# (FLEET_REPO_SHORT in the repo's conf/overlay), else the initials of the name's
+# -/_/. words when it has 2+ (claude-fleet → cf), else its first two characters
+# (tokenledger → to). Lowercase ASCII; never empty for a real name.
+fleet_repo_short() {
+  if [ -n "${2:-}" ]; then printf '%s' "$2"; return 0; fi
+  printf '%s\n' "${1##*/}" | awk '{
+    s = tolower($0); gsub(/[^a-z0-9]+/, " ", s); k = split(s, w, " "); o = ""
+    if (k >= 2) { for (i = 1; i <= k && length(o) < 3; i++) o = o substr(w[i], 1, 1) }
+    else o = substr(w[1], 1, 2)
+    printf "%s", o }'
+}
+
+# fleet_repo_shorts <sess> → "<repo>\t<slug>\t<short>" per hosted repo, in
+# fleet_repos order. A short two repos share falls back to each one's full name,
+# so a badge never names the wrong repo. Reads each conf in a subshell.
+fleet_repo_shorts() {
+  local sess="${1:-}" r f o rows='' dup
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    f=$(fleet_repo_conf_file "$sess" "$r")
+    [ -f "$f" ] || f=$(fleet_conf_file "$sess")
+    o=$( unset FLEET_REPO_SHORT; . "$f" >/dev/null 2>&1; printf '%s' "${FLEET_REPO_SHORT:-}" )
+    rows="$rows$r"$'\t'"$(fleet_slug "$r")"$'\t'"$(fleet_repo_short "$r" "$o")"$'\n'
+  done <<EOF
+$(fleet_repos "$sess")
+EOF
+  dup=$(printf '%s' "$rows" | awk -F'\t' 'NF { n[$3]++ } END { for (s in n) if (n[s] > 1) print s }')
+  printf '%s' "$rows" | awk -F'\t' -v dup="$dup" '
+    BEGIN { m = split(dup, d, "\n"); for (i = 1; i <= m; i++) if (d[i] != "") x[d[i]] = 1 }
+    NF { s = $3; if (s in x) { s = $1; sub(/.*\//, "", s) } print $1 "\t" $2 "\t" s }'
+}
+
+# fleet_repo_short_of <sess> <repo> → that hosted repo's short tag ('' if not hosted).
+fleet_repo_short_of() {
+  local want; want=$(fleet_norm_repo "${2:-}")
+  fleet_repo_shorts "${1:-}" | awk -F'\t' -v r="$want" '$1 == r && !f { print $3; f = 1 }'
+}
+
+# fleet_repo_label <sess> → the status bar's repo half: EMPTY in a one-repo fleet
+# (the label stays the bare fleet name, as it always was), else the current repo's
+# name (`tokenledger`) or `all`.
+fleet_repo_label() {
+  local cur
+  _fleet_hosts_many "${1:-}" || return 0
+  cur=$(fleet_current_repo "${1:-}")
+  printf '%s' "${cur##*/}"
+}
+
+# fleet_repo_label_sync <sess> — publish fleet_repo_label as the server-global
+# @fleet_repo_label on THAT fleet's server (status-left draws `<fleet> · <label>`
+# when it is set). Unset in a one-repo fleet. Called by every writer of the
+# current repo and at each dash launch; never fails its caller.
+fleet_repo_label_sync() {
+  local sess="${1:-}" lbl here=''
+  [ -n "$sess" ] || return 0
+  lbl=$(fleet_repo_label "$sess")
+  [ -n "${TMUX:-}" ] && here=$(tmux display-message -p '#{session_name}' 2>/dev/null)
+  if [ "$here" = "$sess" ]; then set -- tmux
+  else set -- tmux -L "$(fleet_socket "$sess")"; fi
+  if [ -n "$lbl" ]; then "$@" set-option -g @fleet_repo_label "$lbl" 2>/dev/null
+  else "$@" set-option -gu @fleet_repo_label 2>/dev/null; fi
+  return 0
+}
+
+# fleet_dash_repo_frame <sess> — once per dash frame, for the row renderers (the
+# dash, the sidebar, the fold toggle). Sets globals, no output:
+#   RMANY     1 iff the fleet hosts 2+ repos; 0 = a one-repo fleet, and then the
+#             other two stay empty and every renderer takes today's path;
+#   RCUR      the current repo's cache slug, or `all`;
+#   RSHORTMAP $'\n'<slug>\t<short>$'\n'… — the badge per repo.
+# A fleet with no repos/ dir costs nothing: the directory test returns first.
+# shellcheck disable=SC2034  # RMANY/RCUR/RSHORTMAP are caller-facing OUTPUT globals
+fleet_dash_repo_frame() {
+  local sess="${1:-}" shorts cur r s sh
+  RMANY=0; RCUR=''; RSHORTMAP=$'\n'
+  [ -d "$FLEET_CONF_DIR/fleets/${sess:-_}/repos" ] || return 0
+  shorts=$(fleet_repo_shorts "$sess")
+  case "$shorts" in *$'\n'*) ;; *) return 0 ;; esac          # one repo: nothing to filter
+  RMANY=1
+  while IFS=$'\t' read -r r s sh; do
+    [ -n "$r" ] && RSHORTMAP+="$s"$'\t'"$sh"$'\n'
+  done <<EOF
+$shorts
+EOF
+  cur=$(fleet_current_repo "$sess")
+  if [ "$cur" = all ]; then RCUR=all; else RCUR=$(fleet_slug "$cur"); fi
 }
 
 # ---- (repo, issue) identity (issue #790) -------------------------------------

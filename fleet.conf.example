@@ -48,6 +48,13 @@ FLEET_BASE_BRANCH="main"
 # @label=Host several repos @group=identity @tier=advanced @scope=fleet @edit=no
 #FLEET_MULTIREPO=0
 
+# A repo's short tag in a fleet that hosts 2+ repos (issue #793): the dash badge
+# under "all" and the window-name prefix (`tl·issue-12`). Set it in the repo's own
+# conf — this fleet conf for its repo, repos/<slug>.conf for any other. Empty = the
+# name's initials (claude-fleet → cf), or its first two letters (tokenledger → to).
+# @label=Repo short tag @group=identity @tier=advanced @scope=fleet @edit=no
+#FLEET_REPO_SHORT=""
+
 # Branches the worktree janitor must never touch (extended regex).
 # @label=Protected-branch pattern @group=janitor @tier=advanced @scope=fleet @edit=regex
 FLEET_PROTECTED_RE="^(master|main|develop|test)$"

@@ -186,7 +186,7 @@ existing=$(TM list-windows -t "$SESS" -F '#{@issue} #{window_id}' 2>/dev/null | 
 if [ "$MULTI" = 1 ]; then
   existing=''
   for _w in $( { TM list-windows -t "$SESS" -F '#{@issue} #{window_id}' 2>/dev/null | awk -v n="$num" '$1==n{print $2}'
-                 TM list-windows -t "$SESS" -F '#{window_name} #{window_id}' 2>/dev/null | awk -v s="$slug" '$1==s{print $2}'; } ); do
+                 TM list-windows -t "$SESS" -F '#{window_name} #{window_id}' 2>/dev/null | awk -v s="$slug" '$1==s || $1 ~ ("·" s "$") {print $2}'; } ); do
     _wr=$(fleet_window_repo "$SESS" "$_w")
     if [ -z "$_wr" ] || [ "$_wr" = "$REPO_ARG" ]; then existing=$_w; break; fi
   done
@@ -322,6 +322,11 @@ if [ -z "$title" ]; then
   [ -z "$title" ] && title=$(gh issue view "$num" --repo "$REPO" --json title -q .title 2>/dev/null)
 fi
 wname=$(fleet_win_name "$title"); [ -z "$wname" ] && wname="$slug"
+# 2+ repos (issue #793): every session wears its repo's short tag — `tl·issue-12`,
+# `cf·fix-the-dash` — so the tmux status bar tells repos apart. One-repo: unchanged.
+if [ "$MULTI" = 1 ]; then
+  _sh=$(fleet_repo_short_of "$SESS" "$REPO_ARG"); [ -n "$_sh" ] && wname="${_sh}·$wname"; unset _sh
+fi
 
 # --- issue #303: --async backgrounds the SLOW tail (worktree add + new-window) ----
 # The synchronous gate above has already run + passed (cap / dedup / claim-at-spawn),

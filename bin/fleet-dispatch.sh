@@ -269,9 +269,10 @@ dispatch_fleet() { (
   # binding AND the bare "issue-<N>" window name — so a window whose @issue was
   # cleared (a slug-named window) is still recognised as live and not counted as
   # a fresh spawn. Second guard beyond the eligible-set's unassigned filter.
+  # A 2+ repo fleet's names carry a repo tag (`tl·issue-12`, issue #793).
   live=$(tmux -L "$(fleet_socket "$sess")" list-windows -t "$sess" -F '#{@issue}	#{window_name}' 2>/dev/null | awk -F'\t' '
     { if ($1 != "") print $1
-      if ($2 ~ /^issue-[0-9]+$/) { n=$2; sub(/^issue-/, "", n); print n } }' | sort -u)
+      if ($2 ~ /^(.*·)?issue-[0-9]+$/) { n=$2; sub(/^.*issue-/, "", n); print n } }' | sort -u)
   is_live() { printf '%s\n' "$live" | grep -qxF "$1"; }
   # A fleet hosting 2+ repos keys the live set by (repo, N) (issue #790): repo A's
   # #12 window must not block spawning repo B's #12. A window whose repo is unknown

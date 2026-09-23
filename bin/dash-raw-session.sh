@@ -328,9 +328,15 @@ fi
 # window and its worktree read alike; a custom --name is deduped against THIS
 # fleet's live window names (<name>, <name>-2, …). The name is cosmetic — the
 # worktree/branch uniqueness is what git/fs guarantee above.
+# 2+ repos (issue #793): a repo session wears its repo's short tag (`tl·scratch-4`);
+# a no-repo one does not — its name already says `norepo`. One-repo: unchanged.
+base="${custom:-$slug}"
+if [ "$MULTI" = 1 ] && [ "$NOREPO" != 1 ] && [ -n "$REPO_ARG" ]; then
+  _sh=$(fleet_repo_short_of "$SESS" "$REPO_ARG"); [ -n "$_sh" ] && base="${_sh}·$base"; unset _sh
+fi
 existing=$(TM list-windows -t "$SESS" -F '#{window_name}' 2>/dev/null)
-name="${custom:-$slug}"; n=2
-while printf '%s\n' "$existing" | grep -qxF "$name"; do name="${custom:-$slug}-$n"; n=$((n + 1)); done
+name="$base"; n=2
+while printf '%s\n' "$existing" | grep -qxF "$name"; do name="$base-$n"; n=$((n + 1)); done
 
 # Spawn non-invasive by default (matches dash-issue-session.sh): -d creates the
 # window WITHOUT making it current, so a user attached to $SESS is not yanked over.
