@@ -375,6 +375,17 @@ returns before any tmux call, byte-for-byte what it did before
 `issues`/`prmap` for every hosted repo, and `hooks/base-readonly-guard.py`
 protects every hosted repo's `FLEET_MAIN`.
 
+PR status joins on **(repo, branch)**, never the branch alone (issue #792) — two
+hosted repos can each have an `issue-3`. Once a fleet has a `repos/` overlay
+(`fleet_has_repo_overlays`, builtins only), pr-refresh matches each window against
+its own repo's `fleets/<slug>/prmap` (stamping `@repo` through `fleet_window_repo`
+for a window that has none), and the dash's row producer reads `@repo`/`@norepo`
+off its one `list-windows` and keys the frame's narrowed haystack
+`<slug>\t<branch>` — still one awk per frame, so #662's bound holds. `deploy_<sha>`
+is read from the window repo's dir. A window with no repo, or an unknown one in a
+2+ repo fleet, gets no PR cell. No overlay → the per-session prmap exactly as
+before (`bin/dash-rows-multirepo-pr-selftest.sh`).
+
 ### The launcher pre-trusts the fleet's checkout (issue #563)
 
 Claude Code asks "Quick safety check: Is this a project you created or one you

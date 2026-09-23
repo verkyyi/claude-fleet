@@ -43,7 +43,7 @@ R="${E}0m"; US=$'\x1f'
 # for that reason.
 # Keep the column count stable. Codex's agent cell carries an exact cache suffix;
 # the display loop separates it before drawing the ordinary `codex` tag.
-WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{@claude_needs}${US}#{@expand}${US}#{@pin}${US}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}"
+WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{@claude_needs}${US}#{@expand}${US}#{@pin}${US}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -139,6 +139,35 @@ _pf=$(fleet_cache prmap "${FLEET_SESSION:-}")
 # deploy_<sha> files (issue #541) live beside the prmap they were derived from.
 PRDIR=${_pf%/*}
 
+# A fleet that hosts more than one repo (issue #792). Identity is (repo, branch),
+# never the branch alone: two repos can each have an `issue-3`, and one per-fleet
+# prmap would paint repo A's green check on repo B's unfinished work. So once the
+# fleet has a repos/ overlay every window is looked up in its OWN repo's prmap
+# (fleets/<slug>/prmap, deploy_<sha> beside it), and the frame's haystack is keyed
+# `<slug>\t<branch>` — still ONE narrowed string per frame, built by ONE awk over
+# the repos on screen, so #662's per-frame bound holds. The window's repo is its
+# @repo (pr-refresh stamps it via fleet_window_repo within a tick); `@norepo 1` has
+# none; an unstamped window falls back to the fleet's ONLY repo, and in a 2+ repo
+# fleet is unknown → no PR cell, never a guess. No overlay = every fleet today:
+# RMULTI=0 and every line below takes the old path, byte for byte.
+RMULTI=0; RONLY=''; RONLY_DONE=0
+[ -n "${FLEET_SESSION:-}" ] && fleet_has_repo_overlays "$FLEET_SESSION" && RMULTI=1
+# window's @repo/@norepo → $rslug, its repo's cache slug ('' = no repo / unknown).
+# fleet_repos (forks) runs at most once a frame, and only for an unstamped window.
+rslug_v() { rslug=''
+  [ "$2" = 1 ] && return
+  local r=$1
+  if [ -z "$r" ]; then
+    if [ "$RONLY_DONE" = 0 ]; then
+      RONLY_DONE=1; RONLY=$(fleet_repos "$FLEET_SESSION")
+      case "$RONLY" in *$'\n'*) RONLY='' ;; esac          # 2+ repos: no default
+    fi
+    r=$RONLY
+  fi
+  [ -n "$r" ] || return
+  r=${r//\//-}; rslug=${r//[^[:alnum:]._-]/}               # = fleet_slug, fork-free
+}
+
 # branch → the three spellings the PR cell looks a row up by, in the order it
 # tries them: the branch EXACTLY as the git cache has it, then with a trailing
 # `+<ahead>` stripped, then with a trailing `-<behind>` stripped. Exact comes
@@ -192,9 +221,10 @@ WLIST=${WLIST//\\037/$US}
 # them $wt arrived as `<path><US><agent><US><handle>` and okey_v's strict
 # `scratch-<digits>` test could never match a @worktree-stamped scratch — the
 # #529 blind spot, reopened in pass A only (pass B reads every field by name).
-# $pin (#623) is named for the same reason: this pass needs it, and it is last.
-KEYTAB=''; PRWANT=''
-while IFS=$US read -r sess idx name path state _ _ iss origin wt _ _ nsub exp pin _; do
+# $pin (#623) is named for the same reason: this pass needs it; so are @repo/
+# @norepo (#792), which trail WFMT, with a final `_` to swallow anything after.
+KEYTAB=''; PRWANT=''; RSLUGS=' '
+while IFS=$US read -r sess idx name path state _ _ iss origin wt _ _ nsub exp pin _ _ _ _ wrepo wnorepo _; do
   [ -z "$name" ] && continue
   [ -n "${FLEET_SESSION:-}" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
   case "$name" in dash|plan|backlog) continue;; esac
@@ -204,7 +234,18 @@ while IFS=$US read -r sess idx name path state _ _ iss origin wt _ _ nsub exp pi
   # same one-line git_ cache read pass B already does.
   ckey_v "$path"
   prbr=''; [ -f "$G/git_$ckey" ] && { IFS=$'\t' read -r prbr _ < "$G/git_$ckey" || :; }
-  case "$prbr" in ''|-) ;; *) prcands_v "$prbr"; PRWANT+="$b1"$'\n'"$b3"$'\n'"$b2"$'\n' ;; esac
+  case "$prbr" in ''|-) ;; *)
+    prcands_v "$prbr"
+    if [ "$RMULTI" = 1 ]; then          # (repo, branch) keys — issue #792
+      rslug_v "$wrepo" "$wnorepo"
+      if [ -n "$rslug" ]; then
+        PRWANT+="$rslug"$'\t'"$b1"$'\n'"$rslug"$'\t'"$b3"$'\n'"$rslug"$'\t'"$b2"$'\n'
+        case "$RSLUGS" in *" $rslug "*) ;; *) RSLUGS+="$rslug " ;; esac
+      fi
+    else
+      PRWANT+="$b1"$'\n'"$b3"$'\n'"$b2"$'\n'
+    fi ;;
+  esac
   okey_v "$iss" "$wt" "$path"
   [ -z "$okey" ] && continue
   state_v "$state" "$nsub"; pin_v "$pin"; exp_v "$exp"
@@ -225,7 +266,18 @@ done <<< "$WLIST"
 # assignment, so a branch containing a backslash would arrive mangled and its row
 # would silently lose its PR cell.
 PRMAPN=$'\n'
-if [ -s "$_pf" ] && [ -n "$PRWANT" ]; then
+if [ "$RMULTI" = 1 ]; then
+  # one awk over every on-screen repo's prmap; each line comes out prefixed with
+  # its repo's slug (the dir it was read from), so the lookup key is (repo, branch).
+  PRFILES=()
+  for _s in $RSLUGS; do [ -s "$FLEET_C/fleets/$_s/prmap" ] && PRFILES+=("$FLEET_C/fleets/$_s/prmap"); done
+  if [ "${#PRFILES[@]}" -gt 0 ] && [ -n "$PRWANT" ]; then
+    PRMAPN=$'\n'$(PRWANT="$PRWANT" awk -F'\t' '
+      BEGIN { n = split(ENVIRON["PRWANT"], a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") want[a[i]] = 1 }
+      { d = FILENAME; sub(/\/prmap$/, "", d); sub(/.*\//, "", d); if ((d "\t" $1) in want) print d "\t" $0 }' \
+      ${PRFILES[@]+"${PRFILES[@]}"} 2>/dev/null)
+  fi
+elif [ -s "$_pf" ] && [ -n "$PRWANT" ]; then
   PRMAPN=$'\n'$(PRWANT="$PRWANT" awk -F'\t' '
     BEGIN { n = split(ENVIRON["PRWANT"], a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") want[a[i]] = 1 }
     ($1 in want)' "$_pf" 2>/dev/null)
@@ -283,7 +335,7 @@ while IFS=$'\t' read -r _ krk _ _ _ korig; do
 done <<< "$KEYTAB"
 
 buf=""
-while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp; do
+while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp wrepo wnorepo; do
   [ -z "$name" ] && continue
   # strict per-fleet: only windows from the viewing dash's own tmux session.
   # FLEET_SESSION exported by tmux-dashboard.sh; unset ⇒ show all (single-fleet).
@@ -305,11 +357,16 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # PR cell: look up the branch in prmap. The cache branch may carry +ahead/-behind
   # decorations; try EXACT first (real branch names can end in -digits, e.g.
   # issue-231 — the old sed-strip wrongly ate that), then decoration-stripped.
-  ptxt='—'; pcol=$GY
-  if [ "$branch" != '-' ] && [ -n "$branch" ]; then
+  # In a multi-repo fleet the key is prefixed with the window's repo slug, and its
+  # deploy_<sha> verdicts come from that repo's dir (issue #792); no repo → '—'.
+  ptxt='—'; pcol=$GY; rpfx=''; rowdir=$PRDIR; rslug=-   # `-` = one-repo fleet: always look up
+  if [ "$RMULTI" = 1 ]; then
+    rslug_v "$wrepo" "$wnorepo"; rpfx="$rslug"$'\t'; rowdir="$FLEET_C/fleets/$rslug"
+  fi
+  if [ "$branch" != '-' ] && [ -n "$branch" ] && [ -n "$rslug" ]; then
     prcands_v "$branch"
     for bare in "$b1" "$b3" "$b2"; do
-      tail=${PRMAPN#*$'\n'"$bare"$'\t'}
+      tail=${PRMAPN#*$'\n'"$rpfx$bare"$'\t'}
       if [ "$tail" != "$PRMAPN" ]; then
         line=${tail%%$'\n'*}
         # line = #num\tstate\tci\tready\tsha. Parse each; ready / sha may be absent
@@ -326,7 +383,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
                   # merged ≠ live (issue #541): the deploy probe's verdict for this
                   # merge sha, when the fleet has one. 7 cells, single-cell glyphs.
                   dst=''
-                  [ -n "$msha" ] && [ -f "$PRDIR/deploy_$msha" ] && { read -r dst _ < "$PRDIR/deploy_$msha" || :; }
+                  [ -n "$msha" ] && [ -f "$rowdir/deploy_$msha" ] && { read -r dst _ < "$rowdir/deploy_$msha" || :; }
                   case "$dst" in
                     live)      ptxt='live';    pcol=$GN;;   # merge sha is in the deployment
                     deploying) ptxt='deploy…'; pcol=$TX;;   # post-merge runs still going
