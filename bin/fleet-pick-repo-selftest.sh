@@ -142,42 +142,42 @@ eq    "D: one-repo fleets print one row each (no ↳)" "$(printf '%s\n' "$fl" | 
 tmux kill-session -t beta; tmux kill-session -t gamma
 
 # --- E. the dash follows the current repo --------------------------------------
-tmux new-window -d -t alpha -n 'cf·issue-1'
-tmux set -w -t 'alpha:cf·issue-1' @repo o/claude-fleet; tmux set -w -t 'alpha:cf·issue-1' @issue 1
-tmux new-window -d -t alpha -n 'tl·issue-2'
-tmux set -w -t 'alpha:tl·issue-2' @repo o/tokenledger; tmux set -w -t 'alpha:tl·issue-2' @issue 2
-tmux set -w -t 'alpha:tl·issue-2' @expand 1
-tmux new-window -d -t alpha -n 'tl·kid'
-tmux set -w -t 'alpha:tl·kid' @repo o/tokenledger; tmux set -w -t 'alpha:tl·kid' @issue 9
-tmux set -w -t 'alpha:tl·kid' @origin o-tokenledger:issue-2
+tmux new-window -d -t alpha -n 'issue-1'
+tmux set -w -t 'alpha:issue-1' @repo o/claude-fleet; tmux set -w -t 'alpha:issue-1' @issue 1
+tmux new-window -d -t alpha -n 'issue-2'
+tmux set -w -t 'alpha:issue-2' @repo o/tokenledger; tmux set -w -t 'alpha:issue-2' @issue 2
+tmux set -w -t 'alpha:issue-2' @expand 1
+tmux new-window -d -t alpha -n 'kid'
+tmux set -w -t 'alpha:kid' @repo o/tokenledger; tmux set -w -t 'alpha:kid' @issue 9
+tmux set -w -t 'alpha:kid' @origin o-tokenledger:issue-2
 tmux new-window -d -t alpha -n norepo
 tmux set -w -t alpha:norepo @norepo 1
 rows() { FLEET_SESSION=alpha FZF_COLUMNS=120 bash "$ROWS" | tail -n +2 | awk -F '\037' '{ print $3 }' | sed "s/$(printf '\033')\[[0-9;]*m//g"; }
 fleet_current_repo_set alpha all
 r=$(rows)
-eq    "E: all → claude-fleet row under its heading" "$(printf '%s\n' "$r" | grep -A1 '^claude-fleet (1)' | tail -n1 | grep -c 'cf·issue-1')" "1"
-eq    "E: all → tokenledger row under its heading" "$(printf '%s\n' "$r" | grep -A1 '^tokenledger (2)' | tail -n1 | grep -c 'tl·issue-2')" "1"
+eq    "E: all → claude-fleet row under its heading" "$(printf '%s\n' "$r" | grep -A1 '^claude-fleet (1)' | tail -n1 | grep -c 'issue-1')" "1"
+eq    "E: all → tokenledger row under its heading" "$(printf '%s\n' "$r" | grep -A1 '^tokenledger (2)' | tail -n1 | grep -c 'issue-2')" "1"
 eq    "E: all → no-repo row under its heading" "$(printf '%s\n' "$r" | grep -A1 '^no repo (1)' | tail -n1 | grep -c norepo)" "1"
 hasnt "E: all → no per-row tag on the no-repo row" "$(printf '%s\n' "$r" | grep norepo | sed 's/.*norepo//')" "no repo"
 eq    "E: all → no-repo group at the foot" "$(printf '%s\n' "$r" | tail -n1 | grep -c norepo)" "1"
-has   "E: qualified origin folds as a child (└)" "$(printf '%s\n' "$r" | grep 'tl·kid')" "└"
-has   "E: its parent carries the subtree badge" "$(printf '%s\n' "$r" | grep 'tl·issue-2')" "0/1 ✓"
+has   "E: qualified origin folds as a child (└)" "$(printf '%s\n' "$r" | grep 'kid')" "└"
+has   "E: its parent carries the subtree badge" "$(printf '%s\n' "$r" | grep 'issue-2')" "0/1 ✓"
 fleet_current_repo_set alpha o/tokenledger
 r=$(rows)
-hasnt "E: tokenledger view hides claude-fleet" "$r" "cf·issue-1"
+hasnt "E: tokenledger view hides claude-fleet" "$r" "issue-1"
 hasnt "E: …and the no-repo session" "$r" "norepo"
-has   "E: …keeps its own rows" "$r" "tl·issue-2"
-hasnt "E: no badge under a picked repo" "$(printf '%s\n' "$r" | grep 'tl·issue-2')" " tl "
+has   "E: …keeps its own rows" "$r" "issue-2"
+hasnt "E: no badge under a picked repo" "$(printf '%s\n' "$r" | grep 'issue-2')" " tl "
 # the fold toggle agrees: ← from the child shuts its repo-qualified parent's block
-FLEET_SESSION=alpha bash "$FOLD" collapse 'alpha:tl·kid' '' >/dev/null 2>&1
-eq    "E: fold toggle reaches the qualified parent" "$(tmux show -wv -t 'alpha:tl·issue-2' @expand 2>/dev/null)" ""
-hasnt "E: collapsed child hidden" "$(rows)" "tl·kid"
+FLEET_SESSION=alpha bash "$FOLD" collapse 'alpha:kid' '' >/dev/null 2>&1
+eq    "E: fold toggle reaches the qualified parent" "$(tmux show -wv -t 'alpha:issue-2' @expand 2>/dev/null)" ""
+hasnt "E: collapsed child hidden" "$(rows)" "kid"
 fleet_current_repo_set alpha all
 # degenerate: no overlay → a stale current-repo file changes nothing
 mv "$FLEET_CONF_DIR/fleets/alpha/repos" "$WORK/repos.off"
 printf 'o/tokenledger\n' > "$FLEET_CONF_DIR/fleets/alpha/current-repo"
 r=$(rows)
-has   "E: one-repo fleet shows every window" "$r" "cf·issue-1"
+has   "E: one-repo fleet shows every window" "$r" "issue-1"
 has   "E: …including no-repo" "$r" "norepo"
 hasnt "E: …with no badge" "$(printf '%s\n' "$r" | grep norepo)" "no repo"
 mv "$WORK/repos.off" "$FLEET_CONF_DIR/fleets/alpha/repos"

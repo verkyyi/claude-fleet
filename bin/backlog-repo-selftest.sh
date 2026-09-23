@@ -118,9 +118,9 @@ seed() {   # (re)write the three repos' issues/labels/parents caches
 seed
 
 "$REAL_TMUX" -S "$SOCK" -f /dev/null new-session -d -s alpha -n plan -x 200 -y 40 || { echo "no isolated tmux" >&2; exit 1; }
-tmux new-window -d -t alpha -n aa·issue-12
-tmux set-option -w -t alpha:aa·issue-12 @issue 12
-tmux set-option -w -t alpha:aa·issue-12 @repo o/aaa
+tmux new-window -d -t alpha -n issue-12
+tmux set-option -w -t alpha:issue-12 @issue 12
+tmux set-option -w -t alpha:issue-12 @repo o/aaa
 tmux new-session -d -s solo -n plan -x 200 -y 40
 
 rows() { FLEET_SESSION="$1" bash "$SB/tmux-issues-rows.sh" all 2>&1; }

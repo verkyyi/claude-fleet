@@ -111,8 +111,8 @@ eq "A an unhosted --repo → refused" "$rc" 1
 spawn 12 "$S" --repo o/b || fail "A --repo o/b spawn failed: $(cat "$WORK/err")"
 wB=$(wins_for "$S" 12 | head -1)
 eq "A @repo stamped" "$(opt "$wB" @repo)" o/b
-case "$(opt "$wB" window_name)" in 'b·'*) ok "A the window name wears B's short tag (#793)" ;;
-  *) fail "A window name has no repo tag: $(opt "$wB" window_name)" ;; esac
+case "$(opt "$wB" window_name)" in *·*|'') fail "A window name carries a repo tag (#1023): [$(opt "$wB" window_name)]" ;;
+  *) ok "A the window name is bare — no repo tag (#1023)" ;; esac
 eq "A @worktree under B's checkout" "$(opt "$wB" @worktree)" "$WORK/mainB-issue-12"
 [ -d "$WORK/mainB-issue-12" ] || fail "A B's worktree was not created"
 eq "A the worktree is B's" "$(git -C "$WORK/mainB-issue-12" remote get-url origin)" https://github.com/o/b.git
@@ -130,6 +130,8 @@ eq "B B#12 does not block A#12" "$(wins_for "$S" 12 | wc -l | tr -d ' ')" 2
 wA=$(wins_for "$S" 12 | grep -vxF "$wB" | head -1)
 eq "B A#12's repo" "$(opt "$wA" @repo)" o/a
 eq "B A#12's worktree" "$(opt "$wA" @worktree)" "$WORK/mainA-issue-12"
+# #1023: names are bare, so A#12 and B#12 can share one — identity is (@repo, @issue).
+eq "B A#12 and B#12 share a bare name, still two windows" "$(opt "$wA" window_name)" "$(opt "$wB" window_name)"
 spawn 12 "$S" --repo o/b
 eq "B a second B#12 is deduped" "$(wins_for "$S" 12 | wc -l | tr -d ' ')" 2
 
@@ -152,7 +154,7 @@ eq "C repo scratch @repo" "$(opt "$wS" @repo)" o/b
 case "$(opt "$wS" @worktree)" in "$WORK/mainB-scratch-"*) ok "C repo scratch worktree under B" ;;
   *) fail "C repo scratch worktree: $(opt "$wS" @worktree)" ;; esac
 eq "C repo scratch @raw" "$(opt "$wS" @raw)" 1
-case "$(opt "$wS" window_name)" in 'b·scratch-'*) ok "C repo scratch name wears B's short tag (#793)" ;;
+case "$(opt "$wS" window_name)" in scratch-*) ok "C repo scratch name is bare (#1023)" ;;
   *) fail "C repo scratch name: $(opt "$wS" window_name)" ;; esac
 case "$(opt "$wN" window_name)" in *·*) fail "C a no-repo session has no repo tag: $(opt "$wN" window_name)" ;;
   *) ok "C no-repo name untagged" ;; esac

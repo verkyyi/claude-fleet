@@ -336,7 +336,8 @@ registers a second repo with the fleet you are in (clone-or-reuse, like
 `fleet-up.sh`); `list` shows what it hosts and `remove` drops one. All hosted repos
 are equal — there is no main repo. Once a fleet hosts two:
 
-- every session carries its repo (`@repo`) and wears a short tag (`tl·issue-12`);
+- every session carries its repo (`@repo`), shown on the dash as a repo heading /
+  short-tag badge (window names stay bare: `issue-12`);
 - the repo picker (tap the fleet name, or the dash's pick key) lists
   `all repos` + each repo, and the pick filters the dash and the backlog;
 - a new session under `all` starts in the repo of the row you have highlighted —

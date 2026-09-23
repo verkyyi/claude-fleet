@@ -675,7 +675,7 @@ fleet_current_repo_set() {
 
 # ---- the current repo on screen (issue #793) --------------------------------
 # fleet_repo_short <owner/name> [<override>] → the short tag a repo wears on the
-# dash badge and as a window-name prefix (`tl·issue-12`): <override> when given
+# dash badge (window names no longer carry it — issue #1023): <override> when given
 # (FLEET_REPO_SHORT in the repo's conf/overlay), else the initials of the name's
 # -/_/. words when it has 2+ (claude-fleet → cf), else its first two characters
 # (tokenledger → to). Lowercase ASCII; never empty for a real name.

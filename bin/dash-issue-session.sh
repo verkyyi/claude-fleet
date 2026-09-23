@@ -322,11 +322,10 @@ if [ -z "$title" ]; then
   [ -z "$title" ] && title=$(gh issue view "$num" --repo "$REPO" --json title -q .title 2>/dev/null)
 fi
 wname=$(fleet_win_name "$title"); [ -z "$wname" ] && wname="$slug"
-# 2+ repos (issue #793): every session wears its repo's short tag — `tl·issue-12`,
-# `cf·fix-the-dash` — so the tmux status bar tells repos apart. One-repo: unchanged.
-if [ "$MULTI" = 1 ]; then
-  _sh=$(fleet_repo_short_of "$SESS" "$REPO_ARG"); [ -n "$_sh" ] && wname="${_sh}·$wname"; unset _sh
-fi
+# No repo tag on the name, even with 2+ repos (issue #1023 dropped #793's `tl·`
+# prefix): the dash's repo headings + badge already say which repo a window is,
+# and identity is `@repo`/`@issue`, never the name. The `·slug$` dedup above still
+# reads a legacy `tl·issue-12` window until it closes.
 
 # --- issue #303: --async backgrounds the SLOW tail (worktree add + new-window) ----
 # The synchronous gate above has already run + passed (cap / dedup / claim-at-spawn),
