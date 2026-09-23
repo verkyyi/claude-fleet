@@ -17,8 +17,9 @@
               changed; write-back to the parent / sub-issues carries both layers.
      Sections are marked plan-only / report-only / both below. The report's
      reading order is: #delivered → #metrics → #members → #gaps → #obstacles →
-     #next → #ops(folded). The plan's is: #metrics → #charter → #members →
-     #risks → #signoff(+#open) → #preflight → #order(folded).
+     #ops(folded) — #next is an anchor inside #gaps, #obstacles is gone (#929).
+     The plan's is: #metrics → #charter → #members → #risks → #signoff(+#open)
+     → #preflight (only with something to handle) → #order(folded).
 
      THE DECIDER'S VIEW (issue #881 — six rounds of 发起人 feedback on EPIC #883):
        · plain words on the surface: 要做的事 not 核心层, 有空再做 not 储备层,
@@ -32,7 +33,19 @@
        · execution is folded: 读数口径, 先后 / 依赖, 来源单号, 复读时间, 预检原文
        · metric table = numbers or ranges only, 指标 / 现在 / 目标
      The fold changes the PAGE, never the issue: write-back still transcribes
-     both layers in full. -->
+     both layers in full.
+
+     WHAT GOES IN THE SLOTS (issue #929 — a page that filled every slot and was
+     still sent back; SKILL.md 「What goes IN the slots」 has the full rules):
+       · 动笔前先读一份已批的样例页 (EPIC #787 「Multi-repo fleet」), surface only:
+         bin/epic-page-surface.sh <url|file> strips every fold
+       · theme is a QUESTION ⇒ #charter opens with 先回答 (别人怎么做 / 我们怎么做 +
+         我们的价值), sources folded; the subtitle says what + where it stops
+       · metrics are outcomes: 已知 N 种 X → 0; never 首跑定 / > 0 / 3 处 → 1 行
+       · 为谁 = a person or role WITH a count; never 所有 Agent / 维护团队
+       · no implementation nouns upstairs (接口 注入 渲染 埋点 回执 域名 SDK CSP 404 …)
+       · 有空再做 = the same theme only; 需要你定的事 = real either/or, no code, no 不做
+       · before share.sh: bin/epic-page-surface.sh --lint <page.html> -->
 <title>⟨theme · 2–4 words⟩</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <style>
@@ -192,18 +205,20 @@
 
 <p class="eyebrow">EPIC ⟨#N once filed · else 「提案」⟩ · ⟨owner/repo⟩ · ⟨YYYY-MM-DD⟩</p>
 <h1>⟨theme, as the operator said it⟩</h1>
-<p class="sub">⟨one sentence: what this batch is for and where it stops⟩</p>
+<p class="sub">⟨one sentence, two things: what this is · where the batch stops — 「…两个仓库的试跑通过就停」, never a slogan⟩</p>
 
 <!-- the band above the fold — PLAIN WORDS (issue #881). PLAN: 要做的事 / 有空再做 / 要看的指标 /
      开跑前要处理 (= core / reserve / metric rows / preflight warnings — never those words).
      REPORT: what the batch DELIVERED and what the numbers did — 上线能力 / 指标已读出 /
      未上线 / 还差什么. Wall-clock, worker-hours and 调度阻塞 are NOT headline numbers
-     (issue #839): they describe how the work ran, and live in the folded 运行情况 (#ops). -->
+     (issue #839): they describe how the work ran, and live in the folded 运行情况 (#ops).
+     A ZERO tile says nothing (issue #929): drop 开跑前要处理 when it is 0 — it and #preflight
+     appear together or not at all. REPORT 还差什么 = the row count of the #gaps table. -->
 <div class="verdict">
   <div class="v"><div class="n">⟨6–8⟩</div><div class="k">要做的事</div></div>
   <div class="v"><div class="n">⟨8–10⟩</div><div class="k">有空再做</div></div>
   <div class="v"><div class="n">⟨j⟩</div><div class="k">要看的指标</div></div>
-  <div class="v warn"><div class="n">⟨w⟩</div><div class="k">开跑前要处理</div></div>
+  <div class="v warn"><div class="n">⟨w⟩</div><div class="k">开跑前要处理</div></div>  <!-- plan: only when w > 0 -->
 </div>
 
 <!-- §1 delivered — REPORT ONLY, and the report's FIRST section (issue #839): what a user
@@ -232,6 +247,7 @@
 <table>
 <thead><tr><th>指标</th><th>现在</th><th>目标</th></tr></thead>
 <tbody>
+<tr><td>⟨已知的「本地好好的，传上去就不行」的情况⟩</td><td class="num">⟨6 种⟩</td><td class="num">⟨0 种⟩</td></tr>
 <tr><td>⟨真实读者 / 30 天⟩</td><td class="num">⟨62⟩</td><td class="num">⟨&gt; 100⟩</td></tr>
 <tr><td>⟨新会话启动⟩</td><td class="num">⟨5–13 秒⟩</td><td class="num">⟨≤ 6 秒⟩</td></tr>
 </tbody>
@@ -243,6 +259,7 @@
 <table>
 <thead><tr><th>指标</th><th>谁来动它</th><th>多久能读出来</th><th>读数口径</th></tr></thead>
 <tbody>
+<tr><td>⟨已知的「本地好好的，传上去就不行」的情况⟩</td><td>⟨全批⟩</td><td>⟨批末⟩</td><td>⟨已知情况的清单本身 — 每种一行，写在这里，报告逐行复核⟩</td></tr>
 <tr><td>⟨真实读者 / 30 天⟩</td><td>⟨成员名称 / 全批⟩</td><td>⟨2 周⟩</td><td>⟨数据源 · 过滤规则（去掉自己人 / 去重 / 时区）· 命令⟩</td></tr>
 </tbody>
 </table>
@@ -255,6 +272,24 @@
      共同约定 is instruction for the workers — technical, and folded. All of it is written
      back verbatim into the parent body after the nod. -->
 <section id="charter">
+<!-- 先回答 — OPTIONAL (issue #929): only when the theme is a QUESTION (「别人怎么做、我们该怎么做、
+     价值在哪」). The answer is the surface, not a fold: 3–4 plain rows, then 我们的价值 as a few
+     items. Sources, links and anything unverified go in its fold. A plain-goal theme drops the
+     whole block, from this comment to the fold. -->
+<h2>先回答</h2>
+<div class="scroll">
+<table>
+<thead><tr><th>做法</th><th>谁这么做</th><th>我们</th></tr></thead>
+<tbody>
+<tr><td>⟨别人怎么做，大白话⟩</td><td>⟨谁⟩</td><td>⟨我们怎么做 / 不这么做⟩</td></tr>
+</tbody>
+</table>
+</div>
+<h3>我们的价值</h3><ul><li>⟨一条一句：别人给不了、我们给得了的⟩</li></ul>
+<details class="fold">
+<summary>出处与未核实</summary>
+<ul><li>⟨链接 · 出处 · 哪条还没核实⟩</li></ul>
+</details>
 <h2>范围</h2>
 <h3>做</h3><ul><li>⟨一条一句大白话⟩</li></ul>
 <h3>不做</h3><ul><li>⟨…⟩</li></ul>
@@ -288,7 +323,7 @@
 <summary><span class="ct"><strong>⟨名称⟩</strong><span class="cg">⟨一句：解决什么⟩</span></span><span class="pill">⟨report: 已上线 / 未完成⟩</span></summary>
 <dl class="kv">
   <dt>目标</dt><dd>⟨what this member delivers, one sentence — plain words⟩</dd>
-  <dt>为谁</dt><dd>⟨which real person or role, and how many of them — 「在微信里收到成果页的读者（每月约 62 人）」⟩</dd>
+  <dt>为谁</dt><dd>⟨which real person or role, and how many of them — 「你，一个人管 3 个 repo，多数时候用 iPad」 · 「在微信里收到成果页的读者（每月约 62 人）」; never 所有 Agent / 维护团队⟩</dd>
   <dt>解决什么</dt><dd>⟨what goes wrong for them today, as they experience it — not the code's shortcoming⟩</dd>
   <dt>怎么算成功</dt><dd>⟨what the decider would look at to believe it worked — names the #metrics row by its 指标 name⟩</dd>
 </dl>
@@ -366,30 +401,27 @@
 </div>
 </section>
 
-<!-- §5 gaps — REPORT ONLY (issue #839). What is NOT done, split by who has to act:
-     待部署 / 要人做的 / 没验证的. This is where 「要注册一个全新微信账号才看得到首次种入，
-     本次未造号」 belongs — an honest gap, written as such, never quietly dropped.
-     「这批不做」 is restated here, and 有空再做 left untouched is not a debt. -->
+<!-- §5 gaps + next — REPORT ONLY, ONE section 「还差什么 · 下一步」 (issue #929; the layout of
+     EPIC #875's report). A two-column table, one row per gap, ONE short clause per cell:
+     what is still missing (待部署 / 要人做的 / 没验证的 — an empty kind is no row at all) and
+     the suggested next step. The next-batch suggestion is a ROW too (「下一批主题：…」), not a
+     list of its own; the #next anchor survives as a span in here. NO lede and NO trailing
+     note: 「这批不做」 stays in the charter, 有空再做 left untouched is simply not listed.
+     There is no obstacles section: fleet-side defects are FILED as issues (numbers only in
+     the durable comment); one that matters to the reader is a 下一步 row in plain words.
+     The band's 还差什么 = the number of rows here. -->
 <section id="gaps">
-<h2>还差什么</h2>
-<ul>
-<li><strong>待部署</strong> — ⟨merged but not live⟩</li>
-<li><strong>要人做的</strong> — ⟨a login, an account, an approval, a decision⟩</li>
-<li><strong>没验证的</strong> — ⟨shipped but nobody has seen it work, and why not⟩</li>
-<li><strong>这批不做</strong> — ⟨the charter's 不做 list, restated so it is not read as a miss⟩</li>
-</ul>
-<p class="lede">「有空再做」没动的不算欠。</p>
-</section>
-
-<!-- §6 obstacles — REPORT ONLY. SPLIT by one test (issue #839): would this obstacle still
-     exist in another repo, on another theme? YES ⇒ a fleet problem ⇒ file it as an issue and
-     leave ONE line here. NO ⇒ it is about this product's change and stays, in full. -->
-<section id="obstacles">
-<h2>障碍</h2>
-<ul>
-<li><strong>⟨产品侧障碍⟩</strong> — ⟨why this change was hard; quoted from the tick log or the blocked reason⟩</li>
-</ul>
-<p>fleet 侧问题已开 issue ⟨#N #M⟩，不在本页展开。</p>
+<span id="next"></span>
+<h2>还差什么 · 下一步</h2>
+<div class="scroll">
+<table>
+<thead><tr><th>还差什么</th><th>建议下一步</th></tr></thead>
+<tbody>
+<tr><td>⟨一句：还差的一件事⟩</td><td>⟨一句：建议怎么补⟩</td></tr>
+<tr><td>⟨这批暴露出来的一个问题⟩</td><td>⟨下一批主题：…⟩</td></tr>
+</tbody>
+</table>
+</div>
 </section>
 
 <!-- §7 risks — PLAN ONLY. SURFACE: each risk ONE plain sentence, 「会出什么事 — 我们怎么兜住」.
@@ -405,6 +437,7 @@
 <ul>
 <li><strong>⟨技术风险⟩</strong> — ⟨which member or convention holds it⟩</li>
 <li><strong>为什么这样切</strong> — ⟨why these seams⟩</li>
+<li><strong>没收进来的</strong> — ⟨backlog items off this theme, left on the backlog on purpose, and why (issue #929)⟩</li>
 </ul>
 </details>
 </section>
@@ -421,7 +454,7 @@
 <table>
 <thead><tr><th>事项</th><th>建议</th></tr></thead>
 <tbody>
-<tr><td>⟨事项，大白话⟩</td><td>⟨默认建议，关键词加粗⟩</td></tr>
+<tr><td>⟨一个真实的二选一，大白话 — 没有代码、路径、参数写法；「不做」放范围⟩</td><td>⟨一条具体建议，关键词加粗⟩</td></tr>
 <tr><td>⟨事项⟩（批后）</td><td>⟨默认建议⟩</td></tr>
 </tbody>
 </table>
@@ -429,9 +462,13 @@
 <p class="lede" style="margin-top:14px">⟨before the nod: 「点头即全部按建议。」 · after: 「发起人 @login YYYY-MM-DD 拍板：全部按建议执行，worker 照做，不再讨论方向。」⟩</p>
 </section>
 
-<!-- §9 preflight — PLAN ONLY, and AFTER the decisions (issue #881). ONE sentence: can it run,
-     and what has to be handled first. The verbatim fleet-epic-preflight.sh screen (and, on
-     FIXABLE, the labels --fix would seed) goes in the fold. -->
+<!-- §9 preflight — PLAN ONLY, AFTER the decisions (issue #881), and ONLY WHEN THERE IS
+     SOMETHING TO HANDLE (issue #929): FIXABLE, or a warning the 发起人 has to act on. READY with
+     nothing to do ⇒ drop this whole section (and the band's 开跑前要处理 tile) — 「可以。不用先
+     处理什么」 is not information. The screen is not lost: it moves to the END of the #order
+     fold as 预检原文, and is written back as before. When shown: ONE sentence — can it run,
+     what to handle first — and the verbatim fleet-epic-preflight.sh screen (plus, on FIXABLE,
+     the labels --fix would seed) in the fold. -->
 <section id="preflight">
 <h2>能不能开跑</h2>
 <div class="callout warn"><p><strong>⟨可以 / 处理后可以 / 不行⟩。</strong>⟨一句：开跑前要处理什么⟩</p></div>
@@ -439,16 +476,6 @@
 <summary>预检原文</summary>
 <pre>⟨fleet-epic-preflight.sh output, verbatim⟩</pre>
 </details>
-</section>
-
-<!-- §10 next — REPORT ONLY. The theme's leftovers plus what this batch surfaced, as input to
-     /fleet-epic-plan. A SUGGESTION, and it must read like one. -->
-<section id="next">
-<h2>建议下一批</h2>
-<p class="lede">建议，不是决定 —— 下一批做什么由发起人定。</p>
-<ul>
-<li><strong>⟨主题候选⟩</strong> — ⟨为什么现在做它⟩</li>
-</ul>
 </section>
 
 <!-- §11 order — PLAN ONLY, LAST, the whole section folded (issue #881): waves, who waits for
@@ -466,6 +493,9 @@
 </tbody>
 </table>
 </div>
+<!-- only when #preflight was dropped (nothing to handle): the screen lives here instead -->
+<h3>预检原文</h3>
+<pre>⟨fleet-epic-preflight.sh output, verbatim⟩</pre>
 </details>
 </section>
 

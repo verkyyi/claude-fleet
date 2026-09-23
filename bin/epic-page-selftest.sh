@@ -95,7 +95,28 @@ order() {  # <label> <id>... — each section starts after the previous one
   done
 }
 order plan metrics charter members risks signoff preflight order
-order report delivered metrics members gaps obstacles next ops
+order report delivered metrics members gaps ops
+# 6h. the report tail (issue #929): #gaps + #next are one two-column table, #next an
+#     anchor inside it, no obstacles section, no lede / trailing note in it
+hasF "$T" '<span id="next"></span>' "template: #next is an anchor inside #gaps"
+hasF "$T" '<thead><tr><th>还差什么</th><th>建议下一步</th></tr></thead>' "template: #gaps is one 还差什么/建议下一步 table"
+for gone in '<section id="next">' '<section id="obstacles">' '不算欠' '建议，不是决定'; do
+  CHECKS=$((CHECKS + 1))
+  grep -q -F "$gone" "$T" && fail "template still carries [$gone]"
+done
+CHECKS=$((CHECKS + 1))
+awk '/<section id="next">|<span id="next">/{f=1} f&&/<\/section>/{exit} f' "$T" | grep -q 'class="lede"' \
+  && fail "template: 还差什么 · 下一步 has a lede"
+hasF "$REPORT" '还差什么 | 建议下一步' "report: step 2 describes the merged table"
+hasF "$SK" '<span id="next">' "SKILL.md sections table: #next is an anchor"
+# 6i. #preflight renders only with something to handle (issue #929); the screen then
+#     lives in the #order fold, so write-back loses nothing
+hasF "$PLAN" 'only when there is something to handle' "plan: #preflight is conditional"
+hasF "$SK" 'only when there is something to handle' "SKILL.md: #preflight is conditional"
+hasF "$T" 'ONLY WHEN THERE IS' "template: the preflight comment says when to drop it"
+CHECKS=$((CHECKS + 1))
+awk '/<section id="order">/{f=1} f' "$T" | grep -q -F '<h3>预检原文</h3>' \
+  || fail "template: the #order fold has no home for 预检原文"
 # 6b. the band in plain words; the old jargon labels are gone from it
 for k in 要做的事 有空再做 要看的指标 开跑前要处理; do
   hasF "$T" "<div class=\"k\">$k</div>" "template: band label $k"

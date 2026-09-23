@@ -129,8 +129,16 @@ of what it received before this change.
 
 **The decider's view — the rules** (issue #881: six rounds of 发起人 feedback on
 EPIC #883's page, fixed into the frame so the next page starts there instead of
-at round one). The surface is for someone deciding, not someone executing:
+at round one; rules 0 and 16–23 from issue #929, a page that filled every slot
+and was still sent back for its surface). The surface is for someone deciding,
+not someone executing — same rules as `skills/epic-page/SKILL.md`'s
+「What goes IN the slots」:
 
+0. **动笔前先读一份已批的样例页 — its surface, folds closed.**
+   `share.sh --list | grep -i epic` (the header line is the base URL), then
+   `~/.claude/fleet/bin/epic-page-surface.sh <base-url>/d/<id>/`. The current
+   样例页 is EPIC #787 「Multi-repo fleet」; if its row is gone, the newest approved
+   plan page. Write yours to that bar.
 1. **Plain words in the number band** — 要做的事 / 有空再做 / 要看的指标 /
    开跑前要处理. Never 核心层 / 储备层 / 新建子单 / 预检警告.
 2. **The preflight says only the problem** — one sentence on what to handle
@@ -157,7 +165,11 @@ at round one). The surface is for someone deciding, not someone executing:
 11. **要做的事 and the member cards are ONE list** — grouped by theme (e.g.
     少写文件 / 少起进程 / 看得见 / 有空再做, `<h3 class="grp">`), each card one line
     (名称 + one sentence of 解决什么) until tapped. No separate overview table.
-12. **能不能开跑 comes last** among the visible sections — after 需要你定的事.
+12. **能不能开跑 comes last** among the visible sections — after 需要你定的事 —
+    and **only when there is something to handle** (issue #929): FIXABLE, or a
+    warning the 发起人 has to act on. READY with nothing to do ⇒ drop the whole
+    `#preflight` section AND the band's 开跑前要处理 tile (a 0 says nothing); the
+    screen moves to the end of the `#order` fold as 预检原文, so nothing is lost.
 13. **范围 in plain words** — short items, no code, no tool names
     (「清掉不用的工作文件夹」「后台少干没用的活」「机器快扛不住时提前提醒」).
 14. **Risks in plain words** — each one sentence, 「会出什么事 — 我们怎么兜住」;
@@ -166,9 +178,37 @@ at round one). The surface is for someone deciding, not someone executing:
     **every row carries a default recommendation**; an item that is only decided
     after the batch is approved is marked 「（批后）」. Under the table, one line:
     「点头即全部按建议。」
+16. **When the theme is a question, the surface answers it — 先回答.** The
+    optional 先回答 slot at the top of `#charter`: a 3–4 row plain table 别人怎么做
+    / 我们怎么做, plus 我们的价值 as a few items; sources, links and unverified
+    claims in its fold. Research folded away while the surface shows only a task
+    list is the miss this rule exists for.
+17. **The subtitle says two things** — what this is, and where the batch stops.
+    Not a slogan.
+18. **Metrics are outcomes the decider can feel and count** — prefer
+    **已知 N 种 X → 0** (#787: 「Known ways work leaks across repos 9 → 0」).
+    Never a target with no number (「首跑定」), a meaningless one (「> 0」
+    「> 现值」), or 现在 / 目标 in different units (「3 处 → 1 行」); no number
+    today ⇒ 「本批不量」.
+19. **为谁 names a person or role, with a count** — 「你，一个人管 3 个 repo，多数时候
+    用 iPad」. Never 「所有 Agent」 / 「维护团队」.
+20. **No implementation nouns on the surface** — rule 7 extended from keys and
+    file names to technical words: CSP, SDK, 接口, 注入, 渲染, 埋点, 回执, 域名,
+    状态码 / 404. A card is named for what the user gets; its sentence is the
+    trouble they hit today.
+21. **有空再做 only extends the same theme** — unrelated backlog bugs stay on the
+    backlog; the 「更多风险与拆分理由」 fold names what was left out and why.
+22. **需要你定的事 is real either/or decisions** — one concrete recommendation per
+    row, no code, no paths, no parameter spelling. 不做 lives in 范围.
+23. **Self-check the surface before sharing** —
+    `~/.claude/fleet/bin/epic-page-surface.sh --lint <page.html>` prints the page
+    as the decider sees it (folds stripped, each card one line) plus a `WARN`
+    line per machine-visible miss. Walk rules 16–22 against that output; a WARN is
+    a question, not a verdict, and rules 16, 17 and 21 are yours to read.
 
 Visible order, top to bottom: title → number band → `#metrics` → `#charter` →
-`#members` → `#risks` → `#signoff` → `#preflight` → `#order` (folded whole).
+`#members` → `#risks` → `#signoff` → `#preflight` (only with something to
+handle, rule 12) → `#order` (folded whole).
 The template's file order already is this order — fill it, don't rearrange it.
 
 The sections, as the template lays them out:
@@ -179,6 +219,7 @@ The sections, as the template lays them out:
 
    | 指标 | 现在 | 目标 |
    |---|---|---|
+   | 已知的「本地好好的，传上去就不行」的情况 | 6 种 | 0 种 |
    | 真实读者 / 30 天 | 62 | > 100 |
    | 新会话启动 | 5–13 秒 | ≤ 6 秒 |
 
@@ -194,8 +235,10 @@ The sections, as the template lays them out:
    - A metric may be **batch-level or hang off one member** — both are supported;
      name the member in the fold and make that member's 怎么算成功 point at the
      same row, by the 指标's name.
-2. **`#charter`** — **范围**: 做 and 不做 as short plain items on the surface (the
-   theme itself is the page's subtitle); **共同约定** — the conventions every
+2. **`#charter`** — **先回答** first when the theme is a question (rule 16; drop
+   the slot otherwise), then **范围**: 做 and 不做 as short plain items on the
+   surface (the theme itself is the page's title; the subtitle says where the
+   batch stops, rule 17); **共同约定** — the conventions every
    member shares (*"this batch does not change conf format"*) — in a fold. It is
    horizontal instruction for the workers and can be as technical as it needs to
    be. All of it goes verbatim into the parent body later.
@@ -246,7 +289,8 @@ The sections, as the template lays them out:
    line under it: 「点头即全部按建议。」 After the nod these are recorded with the
    date and workers do not re-open them — the section is the template for what
    #7773's charter did by hand.
-6. **`#preflight`** — **能不能开跑**: one sentence — can it run, and what to
+6. **`#preflight`** — **omitted when there is nothing to handle** (rule 12).
+   Otherwise **能不能开跑**: one sentence — can it run, and what to
    handle first. The step-1 screen, verbatim, in the fold, plus (on FIXABLE) the
    labels `--fix` would seed.
 7. **`#order`** — the whole section folded, last: **执行安排** — waves, who waits
@@ -254,14 +298,15 @@ The sections, as the template lays them out:
    `dataviz` skill first) only when the graph has real branches. 「先后」 never
    appears on the surface.
 
-Then host it and put **one URL + one sentence** in front of the operator:
+Self-check the surface (rule 23), fix what it shows, then host it and put
+**one URL + one sentence** in front of the operator:
 
 ```sh
 ~/.claude/skills/doc-preview/share.sh <scratchpad>/epic-plan-<slug>.html   # → READY <url>
 ```
 
 *"设计方案页 <READY url> — 要做的事 N · 有空再做 M · 指标 j 条（或「本批不量」）·
-开跑前要处理 w。改哪条直接说；点头即全部按建议，照页面建单。"* On a fleet that runs tap-first (`FLEET_TAP_FIRST=1`), the nod is a
+开跑前要处理 w（为 0 时不写）。改哪条直接说；点头即全部按建议，照页面建单。"* On a fleet that runs tap-first (`FLEET_TAP_FIRST=1`), the nod is a
 bounded choice — an `AskUserQuestion` menu of *照页面建单 / 改清单 / 放弃* is the
 right shape; keep free text for what they want changed.
 
