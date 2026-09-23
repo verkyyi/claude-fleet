@@ -135,7 +135,12 @@ they repaint instantly:
   the individual reports never added up to — `3/5 ✓ · 1!`: three of its five
   descendants done, one asking for you. Same attribution as the grouping, so the
   count describes exactly the block under it; a row that spawned nothing draws
-  nothing.
+  nothing. Since #937 every report is also **recorded**, delivered or not, in
+  the parent's **children ledger** — `$FLEET_STATE/children/<parent-key>.ndjson`
+  (keyed by the parent's key, not its window id, so a migrated parent keeps its
+  book). `bin/fleet-children.sh` merges that ledger with each child's live state
+  into one line per child plus the same `3/5 ✓ · 1!` summary the dash draws —
+  one command instead of a `gh pr` + capture-pane per report.
 - **Fold** — a parent's block is **collapsed by default** on the dash: the list
   shows one line per parent, marked `▸` in the tree column (`▾` when open —
   directly left of the name it folds, since #836), and its aggregate badge is what
