@@ -18,6 +18,10 @@
 #                   on update, prefix-safe keys, int bare / str quoted, and the
 #                   written conf sources back to the value.
 #   • WRITE-SCOPE   the g/f write-scope toggle persists + flips.
+#   • REPO SCOPE    (issue #802) a fleet with a repos/ overlay adds repo:<slug>
+#                   scopes to the toggle; per-repo keys resolve + write per repo;
+#                   the modal's rows show the repo's value; a one-repo fleet's
+#                   toggle and rows are unchanged.
 #
 # Exit 0 = pass. Non-zero = fail (prints which assertion).
 set -uo pipefail
@@ -302,5 +306,86 @@ if [ "$(id -u)" != 0 ]; then
   chmod 700 "$RO"
 fi
 
-printf 'selftest PASS: %d assertions (keys · tags · typing · defaults · layering · validation · write · write-scope)\n' "$pass"
+# --- REPO SCOPE (issue #802) -------------------------------------------------
+# A real fleet-lib over a temp FLEET_CONF_DIR: fleet s2 hosts o/a (its conf) and,
+# once an overlay exists, o/b. FCFG_FLEET_CONF is dropped so the lib resolves the
+# fleet conf the way the modal does.
+unset FCFG_FLEET_CONF
+export FLEET_CONF_DIR="$WORK/confdir"
+mkdir -p "$FLEET_CONF_DIR/fleets/s2"
+F2="$FLEET_CONF_DIR/fleets/s2/conf"
+printf 'FLEET_REPO="o/a"\nFLEET_MODEL="sonnet"\nFLEET_DEPLOY_CHECK="actions"\n' > "$F2"
+# shellcheck source=/dev/null
+. "$BIN/fleet-lib.sh"
+
+# Degenerate: no repos/ overlay → no repo scopes, the historic fleet⇄global flip.
+eq 'one-repo: no repo scopes' "$(fcfg_repo_scopes s2)" ''
+fcfg_wscope_toggle s2; eq 'one-repo toggle → global' "$(fcfg_wscope s2)" global
+fcfg_wscope_toggle s2; eq 'one-repo toggle → fleet'  "$(fcfg_wscope s2)" fleet
+fcfg_wscope_set s2 repo:o-a
+eq 'one-repo: a repo scope reads back as fleet' "$(fcfg_wscope s2)" fleet
+fcfg_wscope_set s2 fleet
+
+# Shim tmux so the modal resolves session s2 with no server.
+SHIM="$WORK/shim"; mkdir -p "$SHIM"
+printf '#!/bin/sh\ncase "$1" in display-message) echo s2 ;; esac\nexit 0\n' > "$SHIM/tmux"; chmod +x "$SHIM/tmux"
+rows() { PATH="$SHIM:$PATH" bash "$BIN/tmux-config.sh" rows | sed 's/\x1b\[[0-9;]*m//g'; }
+ROWS1=$(rows)
+
+mkdir -p "$FLEET_CONF_DIR/fleets/s2/repos"
+printf 'FLEET_REPO="o/b"\nFLEET_MAIN="/tmp/b"\nFLEET_MODEL="opus"\n' > "$FLEET_CONF_DIR/fleets/s2/repos/o-b.conf"
+eq 'repo scopes' "$(fcfg_repo_scopes s2 | cut -d"$FCFG_US" -f1 | paste -sd' ' -)" 'repo:o-a repo:o-b'
+eq 'scope → repo' "$(fcfg_scope_repo s2 repo:o-b)" o/b
+fcfg_scope_repo s2 repo:nope >/dev/null && fail 'unhosted scope resolved'; ok
+# The cycle: fleet → global → repo:o-a → repo:o-b → fleet.
+fcfg_wscope_toggle s2; eq 'cycle 1' "$(fcfg_wscope s2)" global
+fcfg_wscope_toggle s2; eq 'cycle 2' "$(fcfg_wscope s2)" repo:o-a
+fcfg_wscope_toggle s2; eq 'cycle 3' "$(fcfg_wscope s2)" repo:o-b
+eq 'scope label' "$(fcfg_wscope_label s2)" 'REPO o/b'
+fcfg_wscope_toggle s2; eq 'cycle 4' "$(fcfg_wscope s2)" fleet
+fcfg_wscope_set s2 repo:gone; eq 'stale repo scope → fleet' "$(fcfg_wscope s2)" fleet
+
+# Keys + targets.
+for k in FLEET_MODEL FLEET_AGENT FLEET_MCP_CONFIG FLEET_DEPLOY_REF FLEET_DEPLOY_CHECK FLEET_WORKTREE_SETUP; do
+  fcfg_is_repo_key "$k" || fail "$k should be a per-repo key"; ok
+done
+fcfg_is_repo_key FLEET_MAX_SESSIONS && fail 'FLEET_MAX_SESSIONS is not per-repo'; ok
+eq 'repo target' "$(fcfg_target_conf s2 repo:o-b)" "$FLEET_CONF_DIR/fleets/s2/repos/o-b.conf"
+eq 'unhosted repo target is empty' "$(fcfg_target_conf s2 repo:gone)" ''
+
+# Effective value per repo: own overlay ▸ fleet conf ▸ … — and a deploy key does
+# NOT leak from the conf repo into another repo (fleet-lib unsets it).
+eq 'o/b model (own overlay)' "$(fcfg_repo_effective FLEET_MODEL s2 o/b)" "opus${FCFG_US}repo"
+eq 'o/a model (fleet conf)'  "$(fcfg_repo_effective FLEET_MODEL s2 o/a)" "sonnet${FCFG_US}fleet"
+eq 'o/a deploy (fleet conf)' "$(fcfg_repo_effective FLEET_DEPLOY_CHECK s2 o/a)" "actions${FCFG_US}fleet"
+eq 'o/b deploy (no leak)'    "$(fcfg_repo_effective FLEET_DEPLOY_CHECK s2 o/b)" "${FCFG_US}default"
+# …and it agrees with what a reader loading the repo conf actually sees.
+eq 'o/b model = fleet_repo_conf_get' "$(fleet_repo_conf_get s2 o/b FLEET_MODEL)" opus
+eq 'o/b deploy = fleet_repo_conf_get' "$(fleet_repo_conf_get s2 o/b FLEET_DEPLOY_CHECK)" ''
+
+# Write: into o/b's overlay; the conf repo's first write CREATES its overlay,
+# seeded with FLEET_REPO so fleet_repos still lists it once.
+eq 'repo write updates' "$(fcfg_repo_write s2 o-b FLEET_AGENT codex enum)" updated
+eq 'o/b agent after write' "$(fleet_repo_conf_get s2 o/b FLEET_AGENT)" codex
+eq 'fleet conf untouched' "$(fcfg_file_value "$F2" FLEET_AGENT || echo unset)" unset
+eq 'conf-repo write creates' "$(fcfg_repo_write s2 o-a FLEET_MODEL haiku enum)" created
+eq 'conf-repo overlay seeded' "$(fcfg_file_value "$FLEET_CONF_DIR/fleets/s2/repos/o-a.conf" FLEET_REPO)" o/a
+eq 'o/a model after write' "$(fleet_repo_conf_get s2 o/a FLEET_MODEL)" haiku
+eq 'o/b model unaffected'  "$(fleet_repo_conf_get s2 o/b FLEET_MODEL)" opus
+eq 'repos listed once' "$(fleet_repos s2 | paste -sd' ' -)" 'o/a o/b'
+fcfg_repo_write s2 gone FLEET_MODEL opus enum >/dev/null 2>&1 && fail 'write to an unhosted repo succeeded'; ok
+
+# The modal's rows in repo scope show the repo's own value, marked `▸ repo`.
+fcfg_wscope_set s2 repo:o-b
+R=$(rows)
+printf '%s\n' "$R" | grep '^FLEET_AGENT' | grep -q 'codex.*▸ repo' || fail "repo-scope row lacks o/b's agent: $(printf '%s\n' "$R" | grep '^FLEET_AGENT')"; ok
+printf '%s\n' "$R" | grep '^@@NOOP@@' | head -1 | grep -q 'o/b.*REPO o/b' || fail 'context row does not name the repo scope'; ok
+PATH="$SHIM:$PATH" bash "$BIN/tmux-config.sh" preview FLEET_MODEL | sed 's/\x1b\[[0-9;]*m//g' > "$WORK/pv"
+grep -q 'per repo' "$WORK/pv" && grep -qE 'o/a +haiku' "$WORK/pv" && grep -qE 'o/b +opus' "$WORK/pv" \
+  || fail "preview lacks the per-repo values: $(cat "$WORK/pv")"; ok
+# Degenerate rows: drop the overlays and the rows are byte-identical to before.
+rm -rf "$FLEET_CONF_DIR/fleets/s2/repos"
+eq 'one-repo rows unchanged' "$(rows)" "$ROWS1"
+
+printf 'selftest PASS: %d assertions (keys · tags · typing · defaults · layering · validation · write · write-scope · repo-scope)\n' "$pass"
 exit 0

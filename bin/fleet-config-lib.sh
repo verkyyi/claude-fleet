@@ -288,12 +288,104 @@ fcfg_effective() {
   printf '%s%sdefault' "$(fcfg_default "$key")" "$FCFG_US"
 }
 
-# The conf file a write targets for SESSION at SCOPE (global|fleet).
+# The conf file a write targets for SESSION at SCOPE (global|fleet|repo:<slug>).
+# A repo scope whose repo the fleet no longer hosts resolves to NOTHING, so the
+# editor refuses instead of writing an overlay nobody reads.
 fcfg_target_conf() {
   case "$2" in
     global) fcfg_global_conf ;;
+    repo:*) fcfg_repo_conf "$1" "${2#repo:}" ;;
     *)      fcfg_fleet_conf "$1" ;;
   esac
+}
+
+# --- repo scope (issue #802) -------------------------------------------------
+# A fleet hosting 2+ repos (issue #788) keeps each repo's own settings in
+# fleets/<sess>/repos/<slug>.conf. The modal edits them through a third write
+# scope, `repo:<slug>`, reached by the same ⌃s toggle. Only in a fleet that HAS
+# a repos/ overlay: a one-repo fleet keeps the fleet⇄global toggle byte for byte.
+# These helpers need fleet-lib (fleet_repos & co.) in scope — the modal and the
+# editor source it; without it there are simply no repo scopes.
+#
+# The keys a repo overlay DOCUMENTEDLY carries (fleet.conf.example's "Per-repo
+# settings" block): the deploy + launch knobs, then fleet-lib's
+# _FLEET_REPO_OVERRIDABLE (read live, so the two cannot drift).
+fcfg_repo_keys() {
+  printf '%s\n' FLEET_MODEL FLEET_AGENT FLEET_MCP_CONFIG FLEET_DEPLOY_REF FLEET_DEPLOY_CHECK
+  local k
+  for k in ${_FLEET_REPO_OVERRIDABLE:-}; do printf '%s\n' "$k"; done
+}
+fcfg_is_repo_key() {
+  case " $(fcfg_repo_keys | tr '\n' ' ') " in *" ${1:-_} "*) return 0 ;; esac
+  return 1
+}
+
+# fcfg_repo_scopes SESS → "repo:<slug><US><owner/name>" per hosted repo, in
+# fleet_repos order; nothing for a fleet without a repos/ overlay.
+fcfg_repo_scopes() {
+  local sess="${1:-}" r
+  [ -n "$sess" ] || return 0
+  declare -F fleet_has_repo_overlays >/dev/null 2>&1 || return 0
+  fleet_has_repo_overlays "$sess" || return 0
+  while IFS= read -r r; do
+    [ -n "$r" ] && printf 'repo:%s%s%s\n' "$(fleet_slug "$r")" "$FCFG_US" "$r"
+  done <<EOF
+$(fleet_repos "$sess")
+EOF
+  return 0
+}
+
+# fcfg_scope_repo SESS SCOPE → owner/name for a hosted repo:<slug>; else nothing (rc 1).
+fcfg_scope_repo() {
+  local row
+  case "${2:-}" in repo:?*) : ;; *) return 1 ;; esac
+  while IFS= read -r row; do
+    [ "${row%%"$FCFG_US"*}" = "$2" ] && { printf '%s' "${row#*"$FCFG_US"}"; return 0; }
+  done <<EOF
+$(fcfg_repo_scopes "${1:-}")
+EOF
+  return 1
+}
+
+# fcfg_repo_conf SESS SLUG → that repo's overlay path (may not exist yet — the
+# first write creates it), or nothing when the fleet does not host it.
+fcfg_repo_conf() {
+  local r; r=$(fcfg_scope_repo "${1:-}" "repo:${2:-}") || return 0
+  fleet_repo_conf_file "$1" "$r"
+}
+
+# fcfg_repo_effective KEY SESS REPO → "<value><US>repo|fleet|global|default": what
+# REPO's windows read for KEY — the same ladder fleet_load_repo_conf applies, minus
+# the sourcing (no fork per row). Its overlay wins; else the fleet conf, then the
+# global layer, then the default — EXCEPT a repo-scoped identity/deploy key for a
+# repo that is NOT the fleet conf's own, which fleet-lib unsets rather than inherit
+# (_FLEET_REPO_SCOPED), so it falls straight to the default.
+fcfg_repo_effective() {
+  local key="$1" sess="${2:-}" repo="${3:-}" v fconf own
+  if v=$(fcfg_file_value "$(fleet_repo_conf_file "$sess" "$repo")" "$key"); then
+    printf '%s%srepo' "$v" "$FCFG_US"; return
+  fi
+  fconf=$(fcfg_fleet_conf "$sess")
+  case " ${_FLEET_REPO_SCOPED:-} " in
+    *" $key "*)
+      own=$(fcfg_file_value "$fconf" FLEET_REPO); own=$(fleet_norm_repo "$own")
+      if [ "$own" != "$(fleet_norm_repo "$repo")" ]; then
+        printf '%s%sdefault' "$(fcfg_default "$key")" "$FCFG_US"; return
+      fi ;;
+  esac
+  fcfg_effective "$key" "$sess"
+}
+
+# fcfg_repo_write SESS SLUG KEY VALUE TYPE — fcfg_write into the repo's overlay.
+# A brand-new overlay is seeded with its FLEET_REPO first, so fleet_repos still
+# lists it (the conf repo's own overlay is created this way on its first edit).
+fcfg_repo_write() {
+  local r f; r=$(fcfg_scope_repo "${1:-}" "repo:${2:-}") || return 1
+  f=$(fleet_repo_conf_file "$1" "$r")
+  [ -f "$f" ] && { fcfg_write "$f" "$3" "$4" "$5"; return; }
+  fcfg_write "$f" FLEET_REPO "$r" str >/dev/null || return 1
+  fcfg_write "$f" "$3" "$4" "$5" >/dev/null || return 1
+  printf 'created\n'
 }
 
 # --- write-scope state (which layer edits write to) -------------------------
@@ -301,9 +393,34 @@ fcfg_target_conf() {
 # modal's g/f WRITE-SCOPE toggle — which conf an edit lands in. Persisted
 # per-session in the dash cache dir so it survives fzf reloads.
 fcfg_wscope_file()   { printf '%s/global/config_scope_%s' "${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}" "${1:-_}"; }
-fcfg_wscope()        { local f; f=$(fcfg_wscope_file "${1:-}"); if [ -f "$f" ]; then cat "$f"; else printf 'fleet'; fi; }
+# A stored repo:<slug> whose repo is no longer hosted (removed, or the overlay
+# gone) reads back as fleet, so a stale scope can never route an edit nowhere.
+fcfg_wscope() {
+  local f s; f=$(fcfg_wscope_file "${1:-}")
+  if [ -f "$f" ]; then s=$(cat "$f"); else s=fleet; fi
+  case "$s" in repo:*) fcfg_scope_repo "${1:-}" "$s" >/dev/null || s=fleet ;; esac
+  printf '%s' "$s"
+}
 fcfg_wscope_set()    { local f; f=$(fcfg_wscope_file "${1:-}"); mkdir -p "$(dirname "$f")" 2>/dev/null; printf '%s' "$2" > "$f"; }
-fcfg_wscope_toggle() { if [ "$(fcfg_wscope "${1:-}")" = fleet ]; then fcfg_wscope_set "${1:-}" global; else fcfg_wscope_set "${1:-}" fleet; fi; }
+# The ⌃s cycle: fleet → global → repo:<each hosted repo> → fleet. Without a repos/
+# overlay there are no repo scopes, so it is the historic fleet⇄global flip.
+fcfg_wscope_toggle() {
+  local cur next='' prev='' s
+  cur=$(fcfg_wscope "${1:-}")
+  for s in fleet global $(fcfg_repo_scopes "${1:-}" | cut -d"$FCFG_US" -f1); do
+    [ "$prev" = "$cur" ] && { next=$s; break; }
+    prev=$s
+  done
+  fcfg_wscope_set "${1:-}" "${next:-fleet}"
+}
+# fcfg_wscope_label SESS → the scope as the modal names it: FLEET · GLOBAL · REPO owner/name.
+fcfg_wscope_label() {
+  local s r; s=$(fcfg_wscope "${1:-}")
+  case "$s" in
+    repo:*) r=$(fcfg_scope_repo "${1:-}" "$s"); printf 'REPO %s' "$r" ;;
+    *)      printf '%s' "$s" | tr '[:lower:]' '[:upper:]' ;;
+  esac
+}
 
 # --- enum option sets (issue #415) ------------------------------------------
 # The values an @edit=enum key accepts, each with a short annotation, as one

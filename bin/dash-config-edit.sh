@@ -10,7 +10,12 @@
 #   global   → always writes the global fleet.conf (the g/f write-scope toggle
 #              is ignored — a global-only key can't land in a per-fleet overlay).
 #   fleet    → follows the modal's write-scope toggle (global fleet.conf ⇄ the
-#              per-fleet <session>.conf), backing up first.
+#              per-fleet <session>.conf ⇄ a hosted repo's overlay), backing up first.
+#
+# Repo scope (issue #802): in a multi-repo fleet the toggle also reaches
+# repo:<slug>, which writes fleets/<sess>/repos/<slug>.conf. Only the keys a repo
+# overlay documentedly carries (fcfg_repo_keys) are editable there; any other
+# per-fleet key is refused with a pointer back to the FLEET scope.
 set -uo pipefail
 KEY="${1:-}"
 case "$KEY" in FLEET_[A-Z0-9_]*) : ;; *) exit 0 ;; esac   # ignore blank/junk/header rows
@@ -44,6 +49,16 @@ if [ "$KSCOPE" = global ]; then
 else
   SCOPE=$(fcfg_wscope "$SESSION")
 fi
+REPO=''
+case "$SCOPE" in
+  repo:*)
+    REPO=$(fcfg_scope_repo "$SESSION" "$SCOPE")
+    if ! fcfg_is_repo_key "$KEY"; then
+      tmux display-message "config: $KEY is not a per-repo setting — ⌃s to the FLEET scope" 2>/dev/null || true
+      refuse "$KEY is not a per-repo setting — press ⌃s to write the FLEET (or GLOBAL) layer."
+      exit 0
+    fi ;;
+esac
 TARGET=$(fcfg_target_conf "$SESSION" "$SCOPE")
 
 if [ -z "$TARGET" ]; then
@@ -54,8 +69,12 @@ fi
 
 # Show context, read one line, validate, write.
 cur=$(fcfg_file_value "$TARGET" "$KEY" || true)
-ev=$(fcfg_effective "$KEY" "$SESSION"); effval=${ev%"$FCFG_US"*}; effsrc=${ev##*"$FCFG_US"}
-scope_up=$(printf '%s' "$SCOPE" | tr '[:lower:]' '[:upper:]')
+if [ -n "$REPO" ]; then
+  ev=$(fcfg_repo_effective "$KEY" "$SESSION" "$REPO"); scope_up="REPO $REPO"
+else
+  ev=$(fcfg_effective "$KEY" "$SESSION"); scope_up=$(printf '%s' "$SCOPE" | tr '[:lower:]' '[:upper:]')
+fi
+effval=${ev%"$FCFG_US"*}; effsrc=${ev##*"$FCFG_US"}
 
 printf '\n  \033[1m%s\033[0m  [%s]   →  writing to the \033[1m%s\033[0m layer\n' "$(fcfg_label "$KEY")" "$EDIT" "$scope_up"
 printf '  \033[38;2;86;95;137m%s  ·  %s\033[0m\n' "$KEY" "$(fcfg_short "$KEY")"
@@ -124,7 +143,12 @@ if ! reason=$(fcfg_validate "$EDIT" "$val" "$KEY"); then
   exit 0
 fi
 
-if ! wstatus=$(fcfg_write "$TARGET" "$KEY" "$val" "$EDIT"); then
+if [ -n "$REPO" ]; then
+  wstatus=$(fcfg_repo_write "$SESSION" "${SCOPE#repo:}" "$KEY" "$val" "$EDIT"); wrc=$?
+else
+  wstatus=$(fcfg_write "$TARGET" "$KEY" "$val" "$EDIT"); wrc=$?
+fi
+if [ "$wrc" -ne 0 ]; then
   printf '\n  \033[31m✗ write failed\033[0m — %s is not writable (full/read-only volume?)\n  (nothing changed — press any key)' "$TARGET"
   read -rsn1 _ || true
   tmux display-message "config: write to ${TARGET##*/} FAILED — nothing changed" 2>/dev/null || true
@@ -135,8 +159,8 @@ if [ "$wstatus" = created ]; then
   printf '\n  \033[32m✓ created\033[0m %s and set \033[1m%s = %s\033[0m\n  %s\n' "$TARGET" "$KEY" "$show" "$TARGET"
   tmux display-message "config: created ${TARGET##*/} and set $KEY=$show" 2>/dev/null || true
 else
-  printf '\n  \033[32m✓ wrote\033[0m \033[1m%s = %s\033[0m to the %s layer (backup: %s.bak)\n  %s\n' "$KEY" "$show" "$SCOPE" "${TARGET##*/}" "$TARGET"
-  tmux display-message "config: set $KEY=$show ($SCOPE) — backup ${TARGET##*/}.bak" 2>/dev/null || true
+  printf '\n  \033[32m✓ wrote\033[0m \033[1m%s = %s\033[0m to the %s layer (backup: %s.bak)\n  %s\n' "$KEY" "$show" "$scope_up" "${TARGET##*/}" "$TARGET"
+  tmux display-message "config: set $KEY=$show ($scope_up) — backup ${TARGET##*/}.bak" 2>/dev/null || true
 fi
 sleep 0.8
 exit 0
