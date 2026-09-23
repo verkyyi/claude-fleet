@@ -275,6 +275,27 @@ def cap_line(n, m):
     return YELLOW + f' fleet full {n}/{m} — waking makes {n + 1} ' + RESET
 
 
+def wake_cost(data, records):
+    """The armed page's cost line (issue #1053): what a wake restarts and how long
+    one usually takes — "resumes claude + 2 tools (~5s)". The time is the median
+    `wake_seconds` of this worker's past naps (same worktree), else of the whole
+    fleet's; with no recorded wake anywhere the line is omitted (None), never guessed."""
+    def seconds(rows):
+        return sorted(r['wake_seconds'] for r in rows
+                      if isinstance(r.get('wake_seconds'), (int, float)) and r['wake_seconds'] > 0)
+    source = data.get('source') or {}
+    mine = [r for r in records if source.get('worktree')
+            and (r.get('source') or {}).get('worktree') == source['worktree']]
+    samples = seconds(mine) or seconds(records)
+    if not samples: return None
+    n = len(samples)
+    median = samples[n // 2] if n % 2 else (samples[n // 2 - 1] + samples[n // 2]) / 2
+    tools = len(source.get('sleep_mcp') or {})
+    what = source.get('agent') or 'claude'
+    if tools: what += f" + {tools} tool{'s' if tools != 1 else ''}"
+    return f'resumes {what} (~{max(round(median), 1)}s)'
+
+
 def presses(chunk, button_rows):
     """How many presses one read of the pane's input holds: ⏎ keys, and left
     clicks (SGR press) on `button_rows` (1-based). Everything else — letters,

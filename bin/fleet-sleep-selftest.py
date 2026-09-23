@@ -636,6 +636,41 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         self.await_awake()
         self.assertEqual(self.resume_count(),1)
 
+    def test_armed_page_says_what_waking_costs(self):
+        # No wake on record yet: the armed page carries no cost line (#1053).
+        self.cli('sleep',self.pane)
+        self.capture(lambda s:'⏎ Wake' in s)
+        self.tm('send-keys','-t',self.pane,'Enter')
+        self.assertNotIn('resumes',self.capture(lambda s:'again to wake' in s))
+        time.sleep(.4);self.tm('send-keys','-t',self.pane,'Enter')
+        self.await_awake()
+        # The next nap reads the wake it just measured.
+        self.stamp('@claude_state','done')
+        self.stamp('@sleep_evidence',json.dumps(dict(self.evidence,pid=int(self.opt('pane_pid')),at=time.time()-60)))
+        self.cli('sleep',self.pane)
+        self.capture(lambda s:'⏎ Wake' in s)
+        self.assertNotIn('resumes',self.tm('capture-pane','-p','-t',self.pane))
+        self.tm('send-keys','-t',self.pane,'Enter')
+        screen=self.capture(lambda s:'again to wake' in s)
+        self.assertRegex(screen,r'resumes claude \(~\d+s\)')
+        out=os.environ.get('FLEET_WAKE_COST_EVIDENCE')
+        if out: Path(out).write_text(screen)
+
+    def test_wake_cost_line(self):
+        cost=LIB['PARK']['wake_cost']
+        wt=lambda w:{'worktree':w}
+        data={'source':dict(wt('/w/7'),agent='claude',sleep_mcp={'a':'x','b':'y'})}
+        mine=[{'source':wt('/w/7'),'wake_seconds':s} for s in (4,5,6)]
+        other=[{'source':wt('/w/9'),'wake_seconds':30}]*5
+        self.assertEqual(cost(data,mine+other),'resumes claude + 2 tools (~5s)')
+        # No wake of this worker's on record: the fleet-wide median stands in.
+        self.assertEqual(cost(data,other+[{'source':wt('/w/7')}]),'resumes claude + 2 tools (~30s)')
+        self.assertEqual(cost({'source':dict(wt('/w/7'),agent='codex',sleep_mcp={'a':1})},[mine[0],mine[1]]),'resumes codex + 1 tool (~4s)')
+        self.assertEqual(cost({'source':wt('/w/7')},[{'wake_seconds':.2}]),'resumes claude (~1s)')
+        # No data → no line, never a guess.
+        self.assertIsNone(cost(data,[]))
+        self.assertIsNone(cost(data,[{'source':wt('/w/7'),'wake_seconds':'5'},{'state':'sleeping'}]))
+
     def test_claude_mcp_child_sleeps_only_under_the_contract_and_restarts_on_resume(self):
         # A Claude worker's MCP servers are its direct children with no RPC to
         # enumerate them (issue #784). Copying /bin/sleep trips code signing on

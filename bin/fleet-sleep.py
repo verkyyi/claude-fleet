@@ -977,7 +977,7 @@ def park(w):
         mode[6][termios.VMIN],mode[6][termios.VTIME]=1,0
         termios.tcsetattr(0,termios.TCSANOW,mode)
     mouse=lambda on:sys.stdout.write('\033[?1000'+('h' if on else 'l')+'\033[?1006'+('h' if on else 'l'))
-    facts,rows,fds,full=None,set(),[rd,0],None
+    facts,rows,fds,full,cost=None,set(),[rd,0],None,False
     try:
         mouse(True)
         redraw=True
@@ -991,7 +991,9 @@ def park(w):
                     except (ValueError,KeyError,OSError): pass
                     facts=park_facts(w,data)
                 footer=button.lines(now)
-                if button.state=='armed' and full: footer=[PARK['cap_line'](*full)]+footer
+                if button.state=='armed':
+                    if cost: footer=[PARK['DIM']+' '+cost+' '+PARK['RESET']]+footer
+                    if full: footer=[PARK['cap_line'](*full)]+footer
                 frame=park_frame(w,data,footer,facts)
                 n=frame.count('\n')+1
                 rows=set(range(n-len(footer)+1,n+1))
@@ -1023,6 +1025,9 @@ def park(w):
                         # Read once per arm, not polled: the second press wakes
                         # anyway (over the limit by one), so this only informs.
                         full=w.cap_full()
+                        # The records only change when some worker sleeps or
+                        # wakes; one read for this page is enough (#1053).
+                        if cost is False: cost=park_cost(w,data)
     finally:
         try:
             mouse(False); sys.stdout.flush()
@@ -1037,6 +1042,14 @@ def park_wake(w):
     # --over-cap: the operator's own wake always goes, one over at a full fleet (#1058).
     command=shlex.join(['bash',str(sh),'wake',w.session,w.window,'--over-cap']) if sh.exists() else w.command('wake')+' --over-cap'
     w.tm('run-shell','-b',command+' >/dev/null 2>&1')
+
+
+def park_cost(w,data):
+    records=[]
+    for path in w.directory.glob('*.json'):
+        try: records.append(json.loads(path.read_text()))
+        except (OSError,ValueError): pass
+    return PARK['wake_cost'](data,[r for r in records if isinstance(r,dict)])
 
 
 def park_facts(w,data):

@@ -51,6 +51,13 @@ second one at least 0.3 s later and within `FLEET_SLEEP_WAKE_ARM` seconds
 silently and the next press arms again. The sidebar row menu's Wake wakes at
 once (opening the menu and picking it is already two steps).
 
+While armed, one line above the button says what the wake will cost (issue
+#1053): `resumes claude + 2 tools (~5s)`. That covers the agent and the MCP servers
+the contract lets it restart (`source.sleep_mcp`), and the median `wake_seconds`
+of this worker's earlier naps. The worker is matched by worktree; with no naps of
+its own, the median across the fleet's sleep records is used. With no recorded wake
+anywhere, the line is left off. The records are read once, at the first arm.
+
 The page owns the pane's input while it sleeps: every other key, and any click
 outside the button, is read and discarded, so nothing typed there reaches the
 resumed agent. It turns on SGR mouse reporting for the tap and turns it off
