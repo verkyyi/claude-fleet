@@ -209,6 +209,31 @@ rview_v() { [ "$RMANY" = 1 ] || return 0              # one-repo fleet: no fork,
   [ "$RCUR" != all ] && [ "$rslug" != "$RCUR" ] && return 1
   return 0
 }
+# rgrp_v <@norepo> → $rgrp, the window's OWN repo group (issues #793/#974), read
+# off the $rslug rview_v just left: each hosted repo is its own group in
+# fleet_repos order (RGRPMAP, one lookup, no fork), a window whose repo is not
+# hosted is `?` (RNREPO), a no-repo session last. 0 whenever this frame does not
+# group (RGRP=0), so a one-repo fleet and a picked repo never see anything else.
+rgrp_v() { rgrp=0
+  [ "$RGRP" = 1 ] || return 0
+  if [ "$1" = 1 ]; then rgrp=$((RNREPO + 1))
+  elif [ -n "$rslug" ]; then
+    rgrp=${RGRPMAP#*$'\n'"$rslug"$'\t'}
+    if [ "$rgrp" = "$RGRPMAP" ]; then rgrp=$RNREPO; else rgrp=${rgrp%%$'\n'*}; fi
+  else rgrp=$RNREPO; fi
+}
+# RGTAG[g] — the short repo tag (issue #1031) a row wears when it renders in a
+# group that is NOT its own: a cross-repo child follows its parent's group, whose
+# heading then no longer names the child's repo. `⇢` + the first three characters
+# of the repo's bare name (`⇢24h`, `⇢tok`); `⇢?` for an unhosted repo, `⇢none`
+# for no repo. Built once a frame, only when the frame groups.
+RGTAG=()
+if [ "$RGRP" = 1 ]; then
+  while IFS=$'\t' read -r _g _nm _; do
+    [ -n "$_g" ] || continue; _nm=${_nm##*/}; RGTAG[_g]="⇢${_nm:0:3}"
+  done <<< "$RHEADS"
+  RGTAG[RNREPO]='⇢?'; RGTAG[RNREPO + 1]='⇢none'
+fi
 
 # branch → the three spellings the PR cell looks a row up by, in the order it
 # tries them: the branch EXACTLY as the git cache has it, then with a trailing
@@ -252,11 +277,12 @@ WLIST=$(tmux list-windows -a -F "$WFMT")
 # newer versions return the byte. Accept both at the serialization boundary.
 WLIST=${WLIST//\\037/$US}
 
-# pass A — KEYTAB: one `<key>\t<rk>\t<idx>\t<pin>\t<exp>\t<origin>` line per
-# addressable window, the parent-resolution table for the spawn-provenance grouping
-# (#503), the pin bit a child inherits from its parent (#623), the @expand fold bit
-# its children are hidden by, and the subtree progress each parent row reports
-# (#624). @origin stays LAST:
+# pass A — KEYTAB: one `<key>\t<rk>\t<idx>\t<pin>\t<exp>\t<rgrp>\t<origin>` line
+# per addressable window, the parent-resolution table for the spawn-provenance
+# grouping (#503), the pin bit a child inherits from its parent (#623), the
+# @expand fold bit its children are hidden by, the subtree progress each parent
+# row reports (#624), and the repo group a cross-repo child follows its root into
+# (#1031). @origin stays LAST:
 # pass B peels the row with `${x#*\t}`, so only the final field may contain no tab.
 # The `_` placeholders after @worktree (@cc_agent since #547, @wid since #566)
 # are load-bearing: `read` gives the LAST name all remaining fields, so without
@@ -273,6 +299,7 @@ while IFS=$US read -r sess idx name path state _ _ iss origin wt _ _ nsub exp pi
   # filtered out by the current repo (issue #793): not on this dash at all, so it
   # is no one's parent here either — a child whose parent is hidden is an orphan.
   rview_v "$wrepo" "$wnorepo" || continue
+  rgrp_v "$wnorepo"
   # Collect the branch spellings this frame will look up in the prmap (issue
   # #662) — BEFORE the okey filter below, because a window with no addressable
   # key still RENDERS in pass B and still gets a PR cell. Its only cost is the
@@ -295,7 +322,7 @@ while IFS=$US read -r sess idx name path state _ _ iss origin wt _ _ nsub exp pi
   okey_v "$iss" "$wt" "$path"
   [ -z "$okey" ] && continue
   state_v "$state" "$nsub"; pin_v "$pin"; exp_v "$exp"
-  KEYTAB+="$okey"$'\t'"$rk"$'\t'"$idx"$'\t'"$pin"$'\t'"$exp"$'\t'"$origin"$'\n'
+  KEYTAB+="$okey"$'\t'"$rk"$'\t'"$idx"$'\t'"$pin"$'\t'"$exp"$'\t'"$rgrp"$'\t'"$origin"$'\n'
 done <<< "$WLIST"
 
 # The PR haystack for THIS frame (issue #662). The render loop looks a branch up
@@ -338,14 +365,18 @@ fi
 #   $chops    hops taken; 0 ⇒ the named parent itself was missing
 #   $crootpin the root's @pin bit (#623), 0 when there is no live root
 #   $crootexp the root's @expand fold bit, 0 when there is no live root
-#   $cpnrk/$cpnidx  the NEAREST pinned ANCESTOR's rank/idx, empty if none. Self is
+#   $crgrp    the root's repo group (#1031) — the group a cross-repo child renders
+#             in — 0 when there is no live root (unused then: an orphan keeps its own)
+#   $cpnrk/$cpnidx/$cpnrgrp  the NEAREST pinned ANCESTOR's rank/idx/repo group,
+#             empty if none. Self is
 #             not considered here — the caller checks its own @pin first, so a
 #             pinned row is always its own pin root (#623's rule, unchanged).
 # Factored out of the render loop in #624 so the progress count and the grouping
-# can never disagree about who a row belongs to: one walker, two readers.
-chain_v() { croot=''; crk=9; cidx=99999; chops=0; crootpin=0; crootexp=0
-  cpnrk=''; cpnidx=''
-  local cur="$1" t m prow prest porig prk pidx ppin pexp
+# can never disagree about who a row belongs to: one walker, now five readers
+# (sort, fold, caret, pin, badge — and the repo group since #1031).
+chain_v() { croot=''; crk=9; cidx=99999; chops=0; crootpin=0; crootexp=0; crgrp=0
+  cpnrk=''; cpnidx=''; cpnrgrp=''
+  local cur="$1" t m prow prest porig prk pidx ppin pexp pgrp
   t=$'\n'"$KEYTAB"
   while [ "$chops" -lt 4 ]; do
     m=${t#*$'\n'"$cur"$'\t'}
@@ -354,11 +385,12 @@ chain_v() { croot=''; crk=9; cidx=99999; chops=0; crootpin=0; crootexp=0
     prk=${prow%%$'\t'*}; prest=${prow#*$'\t'}
     pidx=${prest%%$'\t'*}; prest=${prest#*$'\t'}
     ppin=${prest%%$'\t'*}; prest=${prest#*$'\t'}
-    pexp=${prest%%$'\t'*}; porig=${prest#*$'\t'}
-    [ "$ppin" = 1 ] && [ -z "$cpnrk" ] && { cpnrk=$prk; cpnidx=$pidx; }
+    pexp=${prest%%$'\t'*}; prest=${prest#*$'\t'}
+    pgrp=${prest%%$'\t'*}; porig=${prest#*$'\t'}
+    [ "$ppin" = 1 ] && [ -z "$cpnrk" ] && { cpnrk=$prk; cpnidx=$pidx; cpnrgrp=$pgrp; }
     case "$porig" in
       issue-*|scratch-*|*:issue-*|*:scratch-*) cur=$porig; chops=$((chops+1)) ;;  # a child too — keep climbing
-      *) croot=$cur; crk=$prk; cidx=$pidx; crootpin=$ppin; crootexp=$pexp; return ;;   # hub/autofill/none
+      *) croot=$cur; crk=$prk; cidx=$pidx; crootpin=$ppin; crootexp=$pexp; crgrp=$pgrp; return ;;   # hub/autofill/none
     esac
   done
 }
@@ -374,7 +406,7 @@ chain_v() { croot=''; crk=9; cidx=99999; chops=0; crootpin=0; crootexp=0
 # substitutions in pass B replace non-overlapping matches, so records sharing one
 # separator newline would count `\nA\t1\n` twice in a row as ONE.
 KIDTAB=''
-while IFS=$'\t' read -r _ krk _ _ _ korig; do
+while IFS=$'\t' read -r _ krk _ _ _ _ korig; do
   case "$korig" in issue-*|scratch-*|*:issue-*|*:scratch-*) ;; *) continue ;; esac
   chain_v "$korig"
   [ -n "$croot" ] && KIDTAB+=$'\n'"$croot"$'\t'"$krk"$'\n'
@@ -389,21 +421,11 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   case "$name" in dash|plan|backlog) continue;; esac   # panels, not Claude sessions
   rview_v "$wrepo" "$wnorepo" || continue              # current repo (issue #793)
   NSESS=$((NSESS + 1))                                 # a session row this frame (#998)
-  # repo group (issues #793/#974) — the FIRST sort key. Under `all` in a 2+ repo
-  # fleet each hosted repo is its own group, in fleet_repos order (RGRPMAP, one
-  # lookup off the frame's map, no fork); a window whose repo is not hosted sorts
-  # after them as `?`, and a no-repo session last. Taken here, BEFORE the fold
-  # filter, so a heading's count covers the children a collapsed parent hides.
-  # Everything else is group 0, so a one-repo fleet sorts exactly as before.
-  rgrp=0
-  if [ "$RGRP" = 1 ]; then
-    if [ "$wnorepo" = 1 ]; then rgrp=$((RNREPO + 1))
-    elif [ -n "$rslug" ]; then
-      rgrp=${RGRPMAP#*$'\n'"$rslug"$'\t'}
-      if [ "$rgrp" = "$RGRPMAP" ]; then rgrp=$RNREPO; else rgrp=${rgrp%%$'\n'*}; fi
-    else rgrp=$RNREPO; fi
-    RGCNT[rgrp]=$(( ${RGCNT[rgrp]:-0} + 1 ))
-  fi
+  # repo group (issues #793/#974) — the FIRST sort key: the row's OWN group here
+  # (rgrp_v); a cross-repo child swaps in its root's once the chain walk below
+  # has run (#1031), and the heading's count is taken there. Everything else is
+  # group 0, so a one-repo fleet sorts exactly as before.
+  rgrp_v "$wnorepo"; ownrgrp=$rgrp
   ckey_v "$path"; key=$ckey
   ctxkey="$key"
   case "$agent" in
@@ -603,6 +625,25 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     pinned=0; grk=$pnrk; gidx=$pnidx; depth=$pndepth
     [ "$pndepth" = 0 ] && treed=''      # promoted to a group root → empty tree cell
   fi
+  # --- repo group: a child FOLLOWS ITS PARENT (issue #1031) ---------------------
+  # A child nested under a live root renders in that root's repo group — the same
+  # attribution the sort, fold, caret, pin and badge already take off chain_v —
+  # or it would land in its own repo's group with a `└` under an unrelated row,
+  # folded away by a caret that sits in another group. A row nested under a
+  # pinned MIDDLE ancestor follows that ancestor, which is its own pin root and
+  # so keeps its own group. Orphans (no live root) and pin-promoted roots are
+  # depth 0 and keep their own. Where the group is not the row's own, a short
+  # repo tag says so — the heading above no longer names its repo. Counted HERE,
+  # once the group is resolved and still BEFORE the fold filter, so a heading's
+  # `(n)` is the rows that render under it, a collapsed parent's hidden ones too.
+  repod=''
+  if [ "$RGRP" = 1 ]; then
+    if [ "$depth" -gt 0 ] && [ -n "$croot" ]; then
+      if [ "$pndepth" = 1 ] && [ "$rootpin" != 1 ]; then rgrp=$cpnrgrp; else rgrp=$crgrp; fi
+    fi
+    [ "$rgrp" != "$ownrgrp" ] && repod=${RGTAG[ownrgrp]-}
+    RGCNT[rgrp]=$(( ${RGCNT[rgrp]:-0} + 1 ))
+  fi
   # --- fold: a collapsed holder hides its subtree ------------------------------
   # Default-collapsed (the @expand polarity in exp_v): a row only survives here if
   # the row it renders UNDER is expanded. Three rails keep that from hiding
@@ -645,6 +686,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # The agent tag (#547) is unaffected: it describes the row, not its parentage.
   [ "$depth" -gt 0 ] && [ -n "$croot" ] && [ "$origin" = "$croot" ] && provd=''
   tagd="$provd"
+  [ -n "$repod" ] && tagd="${tagd:+$tagd }$repod"
   [ -n "$agentd" ] && tagd="${tagd:+$tagd }$agentd"
   # repo badge (issue #793): DROPPED under `all` (issue #995) — the only frame
   # that ever drew it is the grouped one (#974), where the heading above already
@@ -702,6 +744,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     # view draws `marker glyph tree label`, so a 30-column sidebar starts every
     # name at the same column instead of indenting the child's text by two.
     label="$dname"
+    [ -n "$repod" ] && label="$label $repod"       # cross-repo child (#1031)
     [ "$pin" = 1 ] && label="* $label"
     [ -n "$kidd" ] && label="$label · $kidd"
     buf+="$rgrp	$pinned	$grk	$gidx	$depth	$rk	$idx	$wid$US$state$US$gl$US$label$US${treed:- }"$'\n'

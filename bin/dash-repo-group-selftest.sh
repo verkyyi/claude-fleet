@@ -28,6 +28,14 @@
 #      row gets ONE inert `hdr` hint row: `No sessions — …` under `all` and in a
 #      one-repo fleet, `No sessions in <name> — …` for a picked repo, in both
 #      frames; a frame WITH sessions never draws it.
+#   F. CROSS-REPO CHILD (issue #1031) — a child whose parent lives in ANOTHER
+#      hosted repo follows its parent: under `all` it renders directly under the
+#      parent, in the parent's group, with `└` and a short repo tag (`⇢tok`) in
+#      both frames; the parent's heading counts it, its own repo's does not; the
+#      parent's default fold hides it and the caret there unfolds it. A same-repo
+#      child wears no tag; an orphan (parent gone) drops back into its own group
+#      with no `└` and no tag; a picked repo and a one-repo fleet stay
+#      byte-identical to grouping switched off with the cross-repo child present.
 # tmux runs on a PRIVATE socket via a PATH shim that logs every call; gh fails.
 set -uo pipefail
 
@@ -221,6 +229,48 @@ eq    "E: …and in the sidebar" "$(side)" "hdr|||No sessions — type a name| "
 win 'issue-1' @repo o/claude-fleet @issue 1
 hasnt "E: one-repo fleet with a session — no hint" "$(rows)" "No sessions"
 hasnt "E: …no heading"                             "$(rows)" "──"
+mv "$WORK/repos.off" "$FLEET_CONF_DIR/fleets/alpha/repos"
+
+# --- F. a cross-repo child follows its parent (#1031) --------------------------
+fleet_current_repo_set alpha all
+for w in $(tmux list-windows -t alpha -F '#{window_name}' | grep -v '^plan$'); do tmux kill-window -t "alpha:$w"; done
+win 'issue-1' @repo o/claude-fleet @issue 1
+win 'issue-2' @repo o/tokenledger  @issue 2
+win 'xkid'    @repo o/tokenledger  @issue 9 @origin o-claude-fleet:issue-1
+win 'skid'    @repo o/tokenledger  @issue 8 @origin o-tokenledger:issue-2
+r=$(rows)
+eq    "F: collapsed — the child is hidden, counted under its PARENT's heading" \
+      "$(printf '%s\n' "$r" | names | tr '\n' ' ')" "claude-fleet (2) issue-1 tokenledger (2) issue-2 "
+has   "F: …and the caret that unfolds it sits on the parent" "$(printf '%s\n' "$r" | grep 'issue-1')" "▸ issue-1"
+tmux set -w -t 'alpha:issue-1' @expand 1
+tmux set -w -t 'alpha:issue-2' @expand 1
+r=$(rows)
+eq    "F: expanded — the child renders directly under its parent, in its group" \
+      "$(printf '%s\n' "$r" | names | tr '\n' ' ')" "claude-fleet (2) issue-1 xkid tokenledger (2) issue-2 skid "
+has   "F: …drawn as a child"                "$(printf '%s\n' "$r" | grep 'xkid')" "└ xkid"
+has   "F: …with its repo tag"               "$(printf '%s\n' "$r" | grep 'xkid')" " ⇢tok"
+hasnt "F: a same-repo child wears no tag"   "$(printf '%s\n' "$r" | grep 'skid')" "⇢"
+hasnt "F: …nor does any root"               "$(printf '%s\n' "$r" | grep -E 'issue-[12]')" "⇢"
+s=$(side)
+eq    "F: sidebar — the same placement" "$(printf '%s\n' "$s" | awk -F'|' '{ print $4 }' | tr '\n' '/')" \
+      "claude-fleet (2)/issue-1 · 0/1 ✓/xkid ⇢tok/tokenledger (2)/issue-2 · 0/1 ✓/skid/"
+eq    "F: sidebar — the child's tree cell" "$(printf '%s\n' "$s" | awk -F'|' '$4 ~ /^xkid/ { print $5 }')" "└"
+tmux kill-window -t 'alpha:issue-1'
+r=$(rows)
+eq    "F: orphaned — back in its own group" "$(printf '%s\n' "$r" | names | tr '\n' ' ')" \
+      "claude-fleet (0) tokenledger (3) issue-2 skid xkid "
+hasnt "F: …no └"                            "$(printf '%s\n' "$r" | grep 'xkid')" "└"
+hasnt "F: …no repo tag"                     "$(printf '%s\n' "$r" | grep 'xkid')" "⇢"
+has   "F: …the ↳ provenance stays"          "$(printf '%s\n' "$r" | grep 'xkid')" "↳#1"
+win 'issue-1' @repo o/claude-fleet @issue 1 @expand 1
+fleet_current_repo_set alpha o/tokenledger
+eq    "F: picked repo — hub list identical"  "$(rows)" "$(rows "$OFF")"
+eq    "F: picked repo — sidebar identical"   "$(side)" "$(side "$OFF")"
+hasnt "F: picked repo — no tag"              "$(rows)" "⇢"
+fleet_current_repo_set alpha all
+mv "$FLEET_CONF_DIR/fleets/alpha/repos" "$WORK/repos.off"
+eq    "F: one-repo fleet — raw bytes identical" "$(FLEET_SESSION=alpha bash "$ROWS" | od -c)" "$(FLEET_SESSION=alpha bash "$OFF" | od -c)"
+eq    "F: one-repo fleet — sidebar identical"   "$(side)" "$(side "$OFF")"
 mv "$WORK/repos.off" "$FLEET_CONF_DIR/fleets/alpha/repos"
 
 if [ "$FAILS" -gt 0 ]; then printf 'dash-repo-group-selftest: %d of %d checks FAILED\n' "$FAILS" "$CHECKS" >&2; exit 1; fi
