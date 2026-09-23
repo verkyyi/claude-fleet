@@ -241,7 +241,7 @@ migrate_one() {
 }
 
 migrate_one_body() {
-  local wid="$1" cpid="$2" label="$3" name cwd state raw iss wt origin hnd
+  local wid="$1" cpid="$2" label="$3" name cwd state raw iss wt origin hnd wrepo norepo nsid
   # One display-message per field — NOT a joined format split on a control byte:
   # tmux ≤3.4 prints a 0x1f in format output as the literal text `\037` (vis
   # escaping; 3.7 emits the byte), so a separator-based parse is not portable.
@@ -249,6 +249,10 @@ migrate_one_body() {
   cwd=$(wopt "$wid" '#{pane_current_path}'); state=$(wopt "$wid" '#{@claude_state}')
   raw=$(wopt "$wid" '#{@raw}'); iss=$(wopt "$wid" '#{@issue}'); wt=$(wopt "$wid" '#{@worktree}')
   origin=$(wopt "$wid" '#{@origin}')
+  # The window's repo identity (issue #789) rides the move like @issue/@worktree: a
+  # new window without it would load the fleet's default repo, or lose the no-repo
+  # mark that keeps every reaper off a $HOME session.
+  wrepo=$(wopt "$wid" '#{@repo}'); norepo=$(wopt "$wid" '#{@norepo}'); nsid=$(wopt "$wid" '#{@norepo_sid}')
   hnd=$(wopt "$wid" '#{@wid}')      # the fleet's short window handle (issue #566)
   local sid; sid=$(session_id_for "$cpid" "$cwd") || sid=""
   # A multi-repo fleet has one base checkout per hosted repo (issue #791): a raw
@@ -371,7 +375,10 @@ migrate_one_body() {
     # dash never shows it — nothing runs in it, so this is not a destructive kill.
     TM display-message -p -t "$wid" '' >/dev/null 2>&1 && TM kill-window -t "$wid" 2>/dev/null
     # 4. a NEW window, same name + cwd, resumed under the active account.
-    nw=$(TM new-window -d -t "$SESS:" -n "$name" -c "$cwd" -P -F '#{window_id}' "$cmd" 2>/dev/null)
+    local stamp=''
+    [ -n "$wrepo" ] && _fleet_hosts_many "$SESS" && stamp=$(fleet_win_stamp_cmd @repo "$wrepo")
+    [ "$norepo" = 1 ] && stamp=$(fleet_win_stamp_cmd @norepo 1 ${nsid:+@norepo_sid "$nsid"})
+    nw=$(TM new-window -d -t "$SESS:" -n "$name" -c "$cwd" -P -F '#{window_id}' "$stamp$cmd" 2>/dev/null)
     # Stamped first thing (issue #870): a cold `claude --resume` takes seconds to
     # render the old wall, this takes one tmux call.
     [ -n "$nw" ] && migrated_stamp "$nw" "$wall"
@@ -380,6 +387,11 @@ migrate_one_body() {
     [ "$raw" = 1 ] && TM set-window-option -t "$nw" @raw 1 2>/dev/null
     [ -n "$wt" ] && TM set-window-option -t "$nw" @worktree "$wt" 2>/dev/null
     [ -n "$origin" ] && TM set-window-option -t "$nw" @origin "$origin" 2>/dev/null
+    [ -n "$wrepo" ] && TM set-window-option -t "$nw" @repo "$wrepo" 2>/dev/null
+    if [ "$norepo" = 1 ]; then
+      TM set-window-option -t "$nw" @norepo 1 2>/dev/null
+      [ -n "$nsid" ] && TM set-window-option -t "$nw" @norepo_sid "$nsid" 2>/dev/null
+    fi
     # @wid (issue #566): the WHOLE point of the handle is that it survives this —
     # a migrate closes the window and opens a new one, minting a new window_id,
     # and 21 windows went through here in a single night. Re-stamp the SAME handle

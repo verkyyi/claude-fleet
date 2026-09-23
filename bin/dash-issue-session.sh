@@ -1,5 +1,5 @@
 #!/bin/bash
-# dash-issue-session.sh <issue-number> [<target-session>] [--title <t>] [--agent <a>] — spawn a
+# dash-issue-session.sh <issue-number> [<target-session>] [--repo <owner/name>] [--title <t>] [--agent <a>] — spawn a
 # Claude session to work a GitHub issue: a git worktree issue-<N> off the base
 # branch + a tmux window running `claude` seeded to read, claim, and implement the
 # issue. The window is NAMED after the issue CONTENT (a short kebab of its title,
@@ -42,12 +42,12 @@ set -uo pipefail
 # GATE (cap / dedup / claim) still runs + refuses in the foreground; only its slow
 # tail is backgrounded. Opt-in, interactive-only (a headless TARGET_SESS caller
 # that needs the window id back stays synchronous).
-num=""; TARGET_SESS=""; WIN_TITLE=""; ORIGIN=""; AGENT=""; FORCE_FLAG=0; ASYNC_FLAG=0; _pos=0; _want=""
+num=""; TARGET_SESS=""; WIN_TITLE=""; ORIGIN=""; AGENT=""; REPO_ARG=""; FORCE_FLAG=0; ASYNC_FLAG=0; _pos=0; _want=""
 for _a in "$@"; do
   # A value-taking flag (--title <t>) consumes the NEXT arg: _want carries that
   # expectation across one loop turn so the value isn't mistaken for a positional.
   if [ -n "$_want" ]; then
-    case "$_want" in title) WIN_TITLE="$_a" ;; origin) ORIGIN="$_a" ;; agent) AGENT="$_a" ;; esac
+    case "$_want" in title) WIN_TITLE="$_a" ;; origin) ORIGIN="$_a" ;; agent) AGENT="$_a" ;; repo) REPO_ARG="$_a" ;; esac
     _want=""; continue
   fi
   case "$_a" in
@@ -67,6 +67,11 @@ for _a in "$@"; do
     # only a known token is ever embedded in that command string.
     --agent) _want=agent ;;
     --agent=*) AGENT="${_a#--agent=}" ;;
+    # --repo (issue #789): which of the fleet's repos issue <N> belongs to. REQUIRED
+    # once the fleet hosts 2+ repos (issue #12 exists once per repo — never guess);
+    # in a one-repo fleet it defaults to that repo and must name it when given.
+    --repo) _want=repo ;;
+    --repo=*) REPO_ARG="${_a#--repo=}" ;;
     # An UNKNOWN dash-flag is almost always a typo (e.g. --forc). Do NOT let it
     # fall through to the positional slots — treating "--forc" as the issue number
     # strips to "" and silently spawns the wrong thing. Warn loudly and ignore it.
@@ -145,6 +150,22 @@ refuse() {  # <reason> — stderr line + sticky red toast; the CALLER exits with
   TM display-message -d "$REFUSE_MS" "#[fg=red,bold] $1 " 2>/dev/null
 }
 
+# Which repo (issue #789). Every session is born with its repo written on it and
+# spawns from THAT repo's checkout: its overlay (fleet_load_repo_conf) replaces
+# whatever fleet_load_conf resolved — including a CALLER window's repo, which says
+# nothing about the issue being spawned. A fleet hosting 2+ repos needs --repo; a
+# one-repo fleet takes its only repo, and refuses a --repo naming any other.
+MULTI=0; _fleet_hosts_many "$SESS" && MULTI=1
+if [ "$MULTI" = 1 ] && [ -z "$REPO_ARG" ]; then
+  refuse "#$num: this fleet hosts several repos — pass --repo <owner/name>"; exit "$RC_INFRA"
+fi
+if [ -n "$REPO_ARG" ] || [ "$MULTI" = 1 ]; then
+  [ -n "$REPO_ARG" ] || REPO_ARG=$(fleet_repos "$SESS" | head -n1)
+  REPO_ARG=$(fleet_norm_repo "$REPO_ARG")
+  fleet_load_repo_conf "$SESS" "$REPO_ARG" \
+    || { refuse "#$num: $REPO_ARG is not a repo this fleet hosts"; exit "$RC_INFRA"; }
+fi
+
 slug="issue-$num"
 
 # Already spawned? Focus the existing window instead of stacking a duplicate, and
@@ -159,6 +180,18 @@ slug="issue-$num"
 # moves on an interactive spawn when FLEET_SPAWN_FOCUS=1.
 existing=$(TM list-windows -t "$SESS" -F '#{@issue} #{window_id}' 2>/dev/null | awk -v n="$num" '$1==n{print $2; exit}')
 [ -z "$existing" ] && existing=$(TM list-windows -t "$SESS" -F '#{window_name} #{window_id}' 2>/dev/null | awk -v s="$slug" '$1==s{print $2; exit}')
+# 2+ repos (issue #789): identity is (repo, N) — B#12 is not a duplicate of A#12. Scan
+# every candidate and keep the first whose repo is this one OR unknown: a window of
+# unknown repo still blocks (a refused spawn is recoverable, a duplicate is not).
+if [ "$MULTI" = 1 ]; then
+  existing=''
+  for _w in $( { TM list-windows -t "$SESS" -F '#{@issue} #{window_id}' 2>/dev/null | awk -v n="$num" '$1==n{print $2}'
+                 TM list-windows -t "$SESS" -F '#{window_name} #{window_id}' 2>/dev/null | awk -v s="$slug" '$1==s{print $2}'; } ); do
+    _wr=$(fleet_window_repo "$SESS" "$_w")
+    if [ -z "$_wr" ] || [ "$_wr" = "$REPO_ARG" ]; then existing=$_w; break; fi
+  done
+  unset _w _wr
+fi
 if [ -n "$existing" ]; then
   msg="#$num already spawned"
   # Non-invasive by default: don't yank the caller to the existing window; just
@@ -318,7 +351,7 @@ if [ "$ASYNC_FLAG" = 1 ] && [ "$TAIL_ONLY" != 1 ] && [ -z "$TARGET_SESS" ]; then
   # separate client call independent of this process's fds (its stderr copy is what
   # this redirect drops, and the tail has no caller left to read it — the
   # interactive --async path is toast-only by construction).
-  _bg="$_bg exec $(shq "$SELF") $(shq "$num") --title $(shq "$title") --origin $(shq "$ORIGIN")${AGENT:+ --agent $AGENT} >/dev/null 2>&1"
+  _bg="$_bg exec $(shq "$SELF") $(shq "$num") --title $(shq "$title") --origin $(shq "$ORIGIN")${AGENT:+ --agent $AGENT}${REPO_ARG:+ --repo $(shq "$REPO_ARG")} >/dev/null 2>&1"
   TM run-shell -b "$_bg" 2>/dev/null \
     || { refuse "spawn failed for #$num: dispatch"; exit "$RC_INFRA"; }
   exit 0
@@ -393,9 +426,18 @@ detach=(-d); [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && [ -z "$TARGET_SESS" ] && detac
 # `--agent <a>` (issue #547) rides inside the command when a caller chose one; the
 # launcher consumes it and picks the agent. Validated to claude|codex above, so it
 # is safe to embed bare. Absent (the default) the command string is unchanged.
-win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "'$BIN/fleet-claude.sh'${AGENT:+ --agent $AGENT} \"\$(cat '$tf')\"; exec \$SHELL") \
+# 2+ repos (issue #789): the window stamps its OWN @repo/@worktree before the launcher
+# runs — the launcher's fleet_load_conf is window-aware, and a set-option from here
+# after new-window would race it (repo A's trust/model/MCP for a repo-B worker). A
+# one-repo fleet's command string is unchanged.
+stamp=''; [ "$MULTI" = 1 ] && stamp=$(fleet_win_stamp_cmd @repo "$REPO" @worktree "$wt")
+win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "$stamp'$BIN/fleet-claude.sh'${AGENT:+ --agent $AGENT} \"\$(cat '$tf')\"; exec \$SHELL") \
   || { refuse "spawn failed for #$num: new-window"; exit "$RC_INFRA"; }
 TM set-window-option -t "$win" @issue "$num" 2>/dev/null   # bind window ↔ issue
+# The window's repo + worktree (issue #789) — every worker carries both, so any
+# consumer resolves its repo via fleet_window_repo without a git read.
+[ -n "$REPO" ] && TM set-window-option -t "$win" @repo "$REPO" 2>/dev/null
+TM set-window-option -t "$win" @worktree "$wt" 2>/dev/null
 # Window handle (issue #566): the fleet's own short, typeable name for this window
 # (`a1`…`z9`), unique among the fleet's live windows and accepted wherever a window
 # target is. Best-effort by design — a lock timeout or an exhausted alphabet just

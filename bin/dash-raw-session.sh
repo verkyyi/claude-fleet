@@ -68,6 +68,17 @@
 # interactive dash path). Pass <target-session> to spawn into a specific fleet you
 # are not attached to (headless) — in that mode focus never moves.
 #
+# --repo <owner/name> / --no-repo (issue #789): which repo the scratch belongs to.
+# In a fleet hosting 2+ repos an omitted --repo takes the fleet's CURRENT repo
+# (fleet_current_repo), and under `all` the session gets NO repo — the operator's
+# rule: view a repo first for repo work. A one-repo fleet takes its only repo.
+# --no-repo starts the agent in $HOME with no worktree, for work that spans repos:
+# stamped `@norepo 1` (never mistaken for a legacy untagged window) with no
+# @repo/@worktree/@raw, so no reaper ever resolves a worktree to remove; a Claude
+# one launches with `--session-id <uuid>`, stamped as @norepo_sid, so fleet-restore
+# resumes THAT conversation in $HOME, not whatever else ran there last. No ledger
+# row (nothing lands).
+#
 # The dash's ⌃s is a ONE-KEYSTROKE spawn (issue #444): no name popup, no confirm —
 # press it and the scratch window is on its way. Naming was a prompt nobody filled
 # in (the auto `scratch-<N>` matches the worktree and reads better in the dash), and
@@ -93,7 +104,7 @@ set -uo pipefail
 # and input draft; --prompt <t> / --prompt=<t> is the optional submitted seed;
 # --bg backgrounds the slow half of the spawn (the dash ⌃s / typed-↵ path — see
 # below); the lone positional is the headless <target-session>.
-NAME=""; PROMPT=""; TARGET_SESS=""; BG=0; ORIGIN=""; AGENT=""
+NAME=""; PROMPT=""; TARGET_SESS=""; BG=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --name)        NAME="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
@@ -120,6 +131,9 @@ while [ "$#" -gt 0 ]; do
     --agent)       AGENT="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --agent=*)     AGENT="${1#--agent=}"; shift ;;
     --bg)          BG=1; shift ;;
+    --repo)        REPO_ARG="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
+    --repo=*)      REPO_ARG="${1#--repo=}"; shift ;;
+    --no-repo)     NOREPO=1; shift ;;
     *)             TARGET_SESS="$1"; shift ;;
   esac
 done
@@ -172,8 +186,26 @@ unset _det _src
 # human-readable reason) once a cap is reached, rather than quietly overspend.
 if ! cap_msg=$(fleet_session_cap_ok "$SESS"); then refuse "$cap_msg"; exit 2; fi
 
+# Which repo (issue #789) — see the header. The chosen repo's overlay replaces what
+# fleet_load_conf resolved (possibly the CALLER window's repo).
+MULTI=0; _fleet_hosts_many "$SESS" && MULTI=1
+if [ "$NOREPO" != 1 ]; then
+  if [ -z "$REPO_ARG" ] && [ "$MULTI" = 1 ]; then
+    REPO_ARG=$(fleet_current_repo "$SESS")
+    [ "$REPO_ARG" = all ] && { REPO_ARG=''; NOREPO=1; }
+  fi
+  if [ -n "$REPO_ARG" ]; then
+    REPO_ARG=$(fleet_norm_repo "$REPO_ARG")
+    fleet_load_repo_conf "$SESS" "$REPO_ARG" \
+      || { refuse "raw: $REPO_ARG is not a repo this fleet hosts"; exit 1; }
+  fi
+fi
+[ "$NOREPO" = 1 ] && REPO_ARG=''
+
 MAIN="${FLEET_MAIN:-}"
-[ -d "$MAIN/.git" ] || { refuse "raw: FLEET_MAIN is not a git checkout — set it in fleet.conf"; exit 1; }
+if [ "$NOREPO" != 1 ]; then
+  [ -d "$MAIN/.git" ] || { refuse "raw: FLEET_MAIN is not a git checkout — set it in fleet.conf"; exit 1; }
+fi
 BASE="${FLEET_BASE_BRANCH:-master}"
 
 # Backgrounded spawn (issues #304, #444): the cheap/authoritative checks above (session
@@ -204,7 +236,10 @@ if [ "$BG" = 1 ]; then
     printf '%s' "$PROMPT" > "$pf"
     pfarg=" --prompt-file='$pf'"
   fi
-  fleet_bg "FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg$pfarg${ORIGIN:+ --origin='$ORIGIN'}${AGENT:+ --agent=$AGENT}${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1" \
+  # The RESOLVED repo rides along (issue #789), so the bg pass cannot re-resolve a
+  # current repo the operator switched in between.
+  rarg=''; [ "$NOREPO" = 1 ] && rarg=' --no-repo'; [ -n "$REPO_ARG" ] && rarg=" --repo='$REPO_ARG'"
+  fleet_bg "FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg$pfarg${ORIGIN:+ --origin='$ORIGIN'}${AGENT:+ --agent=$AGENT}$rarg${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1" \
     || { [ -n "$nfarg" ] && rm -f "$nf"; [ -n "$pfarg" ] && rm -f "$pf"
          refuse "raw: background dispatch failed"; exit 1; }
   exit 0
@@ -266,7 +301,11 @@ fi
 # argument, which only a cold spawn can carry (see the header).
 warm=0; win=""; slug=""; wt=""
 claimed=""
-[ -z "$PROMPT" ] && { [ -z "$AGENT" ] || [ "$AGENT" = "${FLEET_AGENT:-claude}" ]; } && claimed=$(bash "$BIN/scratch-pool.sh" claim "$SESS" 2>/dev/null | head -1)
+# The pool is built from the fleet conf's own repo, so in a 2+ repo fleet only a
+# scratch for THAT repo may claim one (per-repo pools: #797); a no-repo one never.
+_pool_ok=1; [ "$NOREPO" = 1 ] && _pool_ok=0
+[ "$MULTI" = 1 ] && [ "$REPO_ARG" != "$(fleet_repos "$SESS" | head -n1)" ] && _pool_ok=0
+[ "$_pool_ok" = 1 ] && [ -z "$PROMPT" ] && { [ -z "$AGENT" ] || [ "$AGENT" = "${FLEET_AGENT:-claude}" ]; } && claimed=$(bash "$BIN/scratch-pool.sh" claim "$SESS" 2>/dev/null | head -1)
 if [ -n "$claimed" ]; then
   warm=1
   win=${claimed%%	*}; _rest=${claimed#*	}; slug=${_rest%%	*}; wt=${_rest#*	}
@@ -277,7 +316,9 @@ fi
 # dash-issue-session.sh's mechanics. The allocator lives in fleet-lib.sh
 # (fleet_scratch_alloc) because the warm pool allocates identically; `git worktree
 # add -b` is itself the serialization point vs concurrent ⌃s presses.
-if [ "$warm" = 0 ]; then
+if [ "$NOREPO" = 1 ]; then
+  slug=norepo; wt="$HOME"                        # no worktree: the agent runs in $HOME
+elif [ "$warm" = 0 ]; then
   alloc=$(fleet_scratch_alloc "$MAIN" "$BASE") || alloc=""
   if [ -n "$alloc" ]; then slug=${alloc%%	*}; wt=${alloc#*	}; fi
   [ -n "$slug" ] || { refuse "raw: could not create a scratch worktree"; exit 1; }
@@ -314,17 +355,40 @@ else
   # `--agent <a>` (issue #547) rides in the command when a caller chose one; the
   # launcher consumes it. Validated to claude|codex above, so bare is safe.
   launch="'$BIN/fleet-claude.sh'${AGENT:+ --agent $AGENT}"
+  # The window stamps its own repo identity BEFORE the launcher reads its conf
+  # (issue #789 — see fleet_win_stamp_cmd). A one-repo repo scratch: unchanged.
+  stamp=''; nsid=''
+  if [ "$NOREPO" = 1 ]; then
+    if [ "${AGENT:-${FLEET_AGENT:-claude}}" = claude ]; then
+      nsid=$(uuidgen 2>/dev/null || python3 -c 'import uuid; print(uuid.uuid4())' 2>/dev/null)
+      nsid=$(printf '%s' "$nsid" | tr 'A-F' 'a-f' | LC_ALL=C tr -cd '0-9a-f-')
+      [ -n "$nsid" ] && launch="$launch --session-id $nsid"
+    fi
+    stamp=$(fleet_win_stamp_cmd @norepo 1 ${nsid:+@norepo_sid "$nsid"})
+  elif [ "$MULTI" = 1 ]; then
+    stamp=$(fleet_win_stamp_cmd @repo "$REPO_ARG" @worktree "$wt")
+  fi
   if [ -n "$PROMPT" ]; then
-    tf="$(fleet_cache_dir "$(fleet_slug "${FLEET_REPO:-$SESS}")")/task_$slug.txt"
+    tf="$(fleet_cache_dir "$(fleet_slug "${REPO_ARG:-${FLEET_REPO:-$SESS}}")")/task_$slug.txt"
+    [ "$NOREPO" = 1 ] && tf="$(fleet_cache_dir "$(fleet_slug "$SESS")")/task_norepo-$$.txt"
     printf '%s' "$PROMPT" > "$tf" 2>/dev/null \
       && launch="$launch \"\$(cat '$tf')\""
   fi
-  win=$(TM new-window -d -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$wt" "$launch; exec \$SHELL") \
-    || { fleet_scratch_free "$MAIN" "$slug" "$wt"
+  win=$(TM new-window -d -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$wt" "$stamp$launch; exec \$SHELL") \
+    || { [ "$NOREPO" = 1 ] || fleet_scratch_free "$MAIN" "$slug" "$wt"
          refuse "raw: new-window failed in $SESS"; exit 1; }
-  TM set-window-option -t "$win" @raw 1 2>/dev/null        # mark: raw/scratch, NOT issue-bound
-  TM set-window-option -t "$win" @worktree "$wt" 2>/dev/null # so ⌃x can resolve+reap the worktree
+  if [ "$NOREPO" = 1 ]; then
+    TM set-window-option -t "$win" @norepo 1 2>/dev/null    # deliberately no repo, no worktree
+    [ -n "$nsid" ] && TM set-window-option -t "$win" @norepo_sid "$nsid" 2>/dev/null
+  else
+    TM set-window-option -t "$win" @raw 1 2>/dev/null        # mark: raw/scratch, NOT issue-bound
+    TM set-window-option -t "$win" @worktree "$wt" 2>/dev/null # so ⌃x can resolve+reap the worktree
+  fi
 fi
+# Every repo scratch carries its repo (issue #789), warm or cold.
+[ -n "$REPO_ARG" ] && TM set-window-option -t "$win" @repo "$REPO_ARG" 2>/dev/null
+[ "$NOREPO" != 1 ] && [ "$MULTI" = 0 ] && [ -n "${FLEET_REPO:-}" ] \
+  && TM set-window-option -t "$win" @repo "$(fleet_norm_repo "$FLEET_REPO")" 2>/dev/null
 # Spawn provenance (issue #503) — stamped on the WARM path too: a pool window was
 # pre-warmed with no requester, so its origin is decided at CLAIM time, here.
 [ -n "$ORIGIN" ] && TM set-window-option -t "$win" @origin "$ORIGIN" 2>/dev/null
@@ -370,6 +434,7 @@ if [ -z "$TARGET_SESS" ]; then
     if [ -n "$note" ]; then TM display-message "$note" 2>/dev/null; fi
   else
     msg="spawned raw session → $name"; [ -n "$PROMPT" ] && msg="spawned scratch → $name (seeded)"
+    [ "$NOREPO" = 1 ] && msg="$msg (no repo · \$HOME)"
     [ -n "$AGENT" ] && msg="$msg [$AGENT]"
     [ -n "$note" ] && msg="$msg ($note)"
     TM display-message "$msg" 2>/dev/null

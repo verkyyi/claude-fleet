@@ -33,6 +33,11 @@ PANELS = {"plan", "dash", "backlog"}
 HUB = "__HUB__"
 SEP = "|"  # input field delimiter — printable so it survives tmux (see header)
 MAIN = os.path.realpath(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1] else ""
+# --lead (issue #789): each input line starts with one extra field, the window's
+# repo — `owner/name`, `norepo:<session-id>` for a no-repo session, or empty. A
+# non-empty one becomes WIN column 16 (`-` for no-repo), padded after column 15; an
+# empty one writes nothing, so a one-repo fleet's rows are byte-identical.
+LEAD = "--lead" in sys.argv[2:]
 
 
 def separate_raw_path(path):
@@ -67,6 +72,19 @@ for line in sys.stdin:
     line = line.rstrip("\n")
     if not line:
         continue
+    lead = ''
+    if LEAD:
+        lead, _, line = line.partition(SEP)
+    norepo_sid = None
+    if lead.startswith('norepo:'):
+        cand = lead[len('norepo:'):]
+        try:
+            norepo_sid = cand if str(uuid.UUID(cand)) == cand.lower() else ''
+        except ValueError:
+            norepo_sid = ''
+        lead = '-'
+    elif any(c in lead for c in "\t\n\r") or '/' not in lead:
+        lead = ''
     sleep_record = ''
     extended = line.split(SEP, 12)
     if (len(extended) == 13 and not extended[10].lstrip().startswith('{')
@@ -125,6 +143,10 @@ for line in sys.stdin:
         except (ValueError, KeyError, IndexError, TypeError, AttributeError):
             pass
         suffix = f"\tcodex\t{home}\t{transcript or '-'}"
+    elif norepo_sid is not None:
+        # A no-repo session runs in $HOME, whose project dir is shared with every
+        # other claude started there: never guess by mtime — its own id or nothing.
+        sid = norepo_sid or '-'
     else:
         sid = loop_record.get('thread_id') or newest_sid(path)
     retained = {}
@@ -152,4 +174,6 @@ for line in sys.stdin:
     # discard its marker and let restore silently start a different conversation.
     if sleep_record:
         row += "\t-" * (14 - len(row.split("\t"))) + "\t" + sleep_record
+    if lead:
+        row += "\t-" * (15 - len(row.split("\t"))) + "\t" + lead
     print(row)

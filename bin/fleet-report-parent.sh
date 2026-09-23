@@ -150,6 +150,7 @@ esac
 # this fleet's tmux server cannot reach. All of them: nothing to send.
 case "$worigin" in
   issue-*|scratch-*) ;;
+  ?*:issue-*|?*:scratch-*) ;;    # repo-qualified (issue #789) — a fleet hosting 2+ repos
   '') quiet 'hub-spawned (@origin empty)' ;;
   *)  quiet "@origin '$worigin' is not a window key (daemon / cross-fleet parent)" ;;
 esac
@@ -168,9 +169,19 @@ fi
 case "$selfkey" in
   issue-*)   label="issue #${selfkey#issue-}" ;;
   scratch-*) label="scratch ~${selfkey#scratch-}" ;;
+  ?*:issue-*)   label="${selfkey%%:*} issue #${selfkey##*:issue-}" ;;
+  ?*:scratch-*) label="${selfkey%%:*} scratch ~${selfkey##*:scratch-}" ;;
   *)         label="session ${wname:-?}" ;;
 esac
-[ -n "$BRANCH" ] || BRANCH="$selfkey"
+# 2+ repos (issue #789): name the child's repo, since a parent can have children in
+# several; the branch itself stays the bare key.
+case "$label" in
+  issue\ *|scratch\ *)
+    if [ -n "$sess" ] && _fleet_hosts_many "$sess" && [ -n "${selfwin:-}" ]; then
+      _cr=$(fleet_window_repo "$sess" "$selfwin"); [ -n "$_cr" ] && label="$_cr $label"
+    fi ;;
+esac
+[ -n "$BRANCH" ] || BRANCH="${selfkey##*:}"
 
 # --- rail 2: the parent window, and a live Claude under it ---------------------
 pwin=$(fleet_win_for_key "$worigin" "$SOCK") \
