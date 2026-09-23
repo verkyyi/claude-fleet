@@ -10,6 +10,10 @@ LaunchAgents/systemd units) before you do it.
 Read `CLAUDE.md` (repo root) for what the repo is and the conventions the code
 assumes — this doc is only the install/uninstall procedure.
 
+**Several people on one machine?** Give each person their own OS login and run
+this playbook once per login — see [SHARED-MACHINE.md](SHARED-MACHINE.md). One
+login is one fleet; a shared login gives everyone one quota record.
+
 ## Components
 
 | Piece | What | Requires |

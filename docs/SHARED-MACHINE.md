@@ -1,0 +1,172 @@
+# Shared machine: one OS login per person
+
+A runbook for putting several people on one always-on machine (a Mac mini in
+a closet, a build box) so that each person gets **their own fleet** and **their
+own quota record**. Issue #609; the reasoning is
+[OSS-PACKAGING-PLAN.md, chapter 10](OSS-PACKAGING-PLAN.md#十共享-mini-的正确形态).
+
+**The rule: N people = N OS logins.** Never N people behind one login.
+
+| What you get from a separate login | Why it matters |
+|---|---|
+| Its own `~/.claude` — credentials, transcripts, settings | Usage is attributed to the person who spent it. Behind a shared login, ccquota sees one person, and per-person budgets or breakers have nothing to act on. |
+| Its own `/tmp/tmux-<uid>/` (mode `0700`) | Each person's fleet server sits on a socket the others can't list or attach to. A stray `kill-server`, an OOM or a runaway takes down one person's fleet, not everyone's. |
+| Its own Keychain, LaunchAgents and `~/.claude/fleet` | One fleet per login (EPIC #977). Every repo a person works on lives in that one fleet. Nobody switches fleets. |
+| Its own ccquota agent | ccquota needs one agent per login. It reads that login's transcripts and credentials, which on most systems it couldn't read for another user anyway. |
+
+Everything below uses placeholder names. Replace them:
+
+| Placeholder | Meaning |
+|---|---|
+| `alice` | the new person's short login name |
+| `mini` | a short name for this machine |
+| `hub.example.com` | your ccquota (TokenLedger) hub |
+
+Repeat steps 1–5 for each person. Step 6 checks the whole machine.
+
+---
+
+## 1. Create the OS login (admin, on the machine)
+
+```sh
+sudo sysadminctl -addUser alice -fullName "Alice Example" -password -   # prompts for the password
+# add -admin only if this person must install system software; a fleet doesn't need it
+```
+
+Then sign in as `alice` **once in the GUI** (at the console, or through Screen
+Sharing with fast user switching). That first graphical login creates the
+home directory, the login Keychain, and the `gui/<uid>` launchd domain. Steps
+2 and 4 depend on all three.
+
+## 2. First Claude Code login, as that person
+
+In a shell running as `alice` (their own GUI Terminal, or `ssh alice@mini`):
+
+```sh
+claude          # complete the /login flow with alice's own subscription
+```
+
+This writes `~alice/.claude/` and stores the OAuth credential in **alice's**
+Keychain. Don't copy another login's `~/.claude` or credentials over. Doing so
+brings back the shared-identity problem this runbook exists to fix. If the
+person also uses Codex, run `codex login` here too.
+
+## 3. Enroll the login with the hub (admin, on the hub)
+
+One enrollment per login. Name it `<machine>-<login>` so the hub's endpoint
+list reads as "who, on which box":
+
+```sh
+ccquota enroll --name mini-alice        # prints a one-time enrollment token
+```
+
+Give the token to `alice` over a private channel. It is a credential.
+
+## 4. Run the ccquota agent as that person (LaunchAgent)
+
+`ccquota` isn't a brew formula. See [INSTALL.md step 6](INSTALL.md#install-steps)
+for `go install github.com/verkyyi/ccquota/cmd/ccquota@latest`. As `alice`:
+
+```sh
+mkdir -p ~/.ccquota/agent
+ccquota agent --install --hub https://hub.example.com --state ~/.ccquota/agent \
+  > ~/Library/LaunchAgents/com.ccquota.agent.plist
+# edit the plist: replace REPLACE_WITH_TOKEN (CCQUOTA_TOKEN) with the token from step 3
+chmod 600 ~/Library/LaunchAgents/com.ccquota.agent.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.ccquota.agent.plist
+```
+
+It **must be a per-user LaunchAgent**, not a root LaunchDaemon, and not a
+single agent passed several `--home` values. The agent needs to run as
+`alice` to open alice's Keychain, where Claude Code keeps that credential. A
+root daemon or someone else's agent can count tokens, but it can't read
+account limits. `--home` defaults to the user running the agent, so a
+per-user agent needs no `--home` flag. The equivalent explicit form is
+`ccquota agent --home /Users/alice --state /Users/alice/.ccquota/agent`.
+
+> **Symptom to know:** if the hub shows this endpoint with
+> `limits_unavailable`, the agent is running but can't read a Claude OAuth
+> credential. Check that step 2 ran as *this* login and that the agent
+> runs in this login's `gui/<uid>` domain (the Keychain belongs to it).
+> Usage attribution still works in this state. Only the live limit readings
+> are missing.
+
+## 5. Install claude-fleet for that person
+
+As `alice`, follow [INSTALL.md](INSTALL.md) from the top. Nothing in it is
+per-machine: the live install (`~/.claude/fleet`), the conf dir, the hooks in
+`~/.claude/settings.json`, and the LaunchAgents (step 6 of INSTALL) all live
+in that home directory. Set `CCQUOTA_HUB_URL=https://hub.example.com` in that
+fleet conf so quota rotation reads that login's own record. Then create the login's **one**
+fleet. `fleet-up.sh` refuses to create a second fleet on a login
+(issue #979). A second fleet needs a second login.
+
+```sh
+~/.claude/fleet/bin/fleet-up.sh owner/first-repo    # brings up this login's fleet
+~/.claude/fleet/bin/fleet-up.sh owner/second-repo   # adds the repo to that same fleet
+```
+
+Each login's live install updates on its own schedule. After a
+`git pull` + `/fleet-sync-install` on one login, the others are still behind.
+`fleet-doctor.sh`'s `install` line shows this per login (see
+INSTALL.md step 1).
+
+---
+
+## 6. Verify the machine
+
+Run these once all logins are set up. Each check matches one acceptance item
+of #609.
+
+**Each login has its own `~/.claude`.** As each user:
+
+```sh
+ls -ld ~/.claude && id -un        # owned by that user; no shared path, no symlink into another home
+```
+
+**Each login has one enrollment and one agent.** On the machine (admin):
+
+```sh
+ps -axo user=,command= | grep '[c]cquota agent'   # exactly one line per login, each under its own user
+```
+
+On the hub, every login appears as its own endpoint with `os_user` set:
+
+```sh
+curl -s -H "Authorization: Bearer $CCQUOTA_VIEWER_TOKEN" \
+  https://hub.example.com/v1/endpoints | python3 -m json.tool | grep -E '"(name|os_user)"'
+```
+
+**Usage splits by person:**
+
+```sh
+curl -s -H "Authorization: Bearer $CCQUOTA_VIEWER_TOKEN" \
+  'https://hub.example.com/v1/usage?group=user' | python3 -m json.tool
+```
+
+Expect one bucket per login. A single bucket covering several people means
+someone is still sharing a login.
+
+**Each fleet server is on its own socket and the others can't see it.** As
+`alice`:
+
+```sh
+ls -ld /tmp/tmux-$(id -u)                       # drwx------ alice
+ls /tmp/tmux-$(id -u bob) 2>&1               # Permission denied — bob's sockets are invisible
+bash -c '. ~/.claude/fleet/bin/fleet-lib.sh; fleet_sockets' | wc -l   # 1 — one fleet for this login
+```
+
+On macOS, `/tmp` resolves to `/private/tmp`. tmux may use `$TMUX_TMPDIR` if a
+login sets it. The rule is the same either way: the directory is per-uid and
+`0700`.
+
+---
+
+## Offboarding a person
+
+As that login: `fleet-down.sh`, then `launchctl bootout gui/$(id -u)` each
+`com.claude-fleet.*` and `com.ccquota.agent` plist. The hub has no command
+to delete an endpoint. Once the agent stops, `mini-<login>` goes stale and
+stops reporting. Then an admin runs
+`sudo sysadminctl -deleteUser <login>` (add `-keepHome` to archive the home
+directory). The login's past usage stays on the hub under its `os_user`.
