@@ -240,8 +240,8 @@ cleanup() {
   TM set-option -wu -t "$WIN" @agent_transfer_until 2>/dev/null || :
   # After /exit, keep the bounded lease on failure: a shell/dead pane and the
   # recovery packet remain available while the operator inspects the failure.
-  if [ "$LEASE" = 1 ] && { [ "$SUCCESS" = 1 ] || [ "$EXIT_SENT" = 0 ] || kill -0 "$PID" 2>/dev/null; }; then fleet_rotate_lease_drop "$WT"; fi
-  if [ "$EXIT_SENT" = 0 ] || [ "$SUCCESS" = 1 ] || kill -0 "$PID" 2>/dev/null; then
+  if [ "$LEASE" = 1 ] && { [ "$SUCCESS" = 1 ] || [ "$EXIT_SENT" = 0 ] || fleet_pid_alive "$PID"; }; then fleet_rotate_lease_drop "$WT"; fi
+  if [ "$EXIT_SENT" = 0 ] || [ "$SUCCESS" = 1 ] || fleet_pid_alive "$PID"; then
     TM set-option -p -t "$PANE" remain-on-exit "${REMAIN:-off}" 2>/dev/null || :
   fi
   # An after-turn worker owns the shared lock until it has recorded the outcome.
@@ -297,7 +297,7 @@ fi
 SK Enter || die 'cannot submit source exit'
 EXIT_CONFIRMED=0
 for ((i=0; i<EXIT_WAIT; i++)); do
-  kill -0 "$PID" 2>/dev/null || break
+  fleet_pid_alive "$PID" || break
   # A live ScheduleWakeup adds a native exit dialog. --loop authorizes moving
   # that one timer, so stop it at the source before starting the replacement.
   # Only the exact selected one-timer dialog may get ONE additional Enter.
@@ -313,7 +313,7 @@ for ((i=0; i<EXIT_WAIT; i++)); do
   fi
   sleep 1
 done
-if kill -0 "$PID" 2>/dev/null; then
+if fleet_pid_alive "$PID"; then
   TM capture-pane -p -t "$PANE" > "$BUNDLE/pane-exit-timeout.txt" 2>/dev/null || :
   die "source did not exit; no replacement $TO was launched"
 fi
