@@ -385,6 +385,7 @@ EOF
   # PM_SUB (`<name>` under corepack, else empty) and PM_DIR (prepended to PATH for
   # the install, or empty). Cached per run, the resolved path logged
   # once (issue #1026). rc 1 = nowhere.
+  # shellcheck disable=SC2034  # PMC_<pm>: the per-run cache, read/written via eval
   LOGIN_PATH="" LOGIN_PROBED=0 PMC_npm="" PMC_yarn="" PMC_pnpm=""
   login_path() {
     [ "$LOGIN_PROBED" = 1 ] && return 0
