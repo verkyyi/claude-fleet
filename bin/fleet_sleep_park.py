@@ -83,9 +83,29 @@ def ago(seconds):
     return f'{d}d {h}h'
 
 
-def last_reply(transcript, limit=8 << 20):
-    """Text of the LAST assistant entry that has any, from a Claude JSONL.
-    Reads backwards in chunks; None when unreadable or nothing is found."""
+def reply_text(entry, agent='claude'):
+    """Assistant text of one transcript row, or None when the row is not one.
+    Claude: a `type: assistant` entry. Codex rollout: a `response_item` whose
+    payload is an assistant `message` of `output_text` blocks (issue #1052)."""
+    if agent == 'codex':
+        if entry.get('type') != 'response_item': return None
+        message = entry.get('payload') or {}
+        if message.get('type') != 'message' or message.get('role') != 'assistant': return None
+        kinds = ('output_text', 'text')
+    else:
+        if entry.get('type') != 'assistant': return None
+        message = entry.get('message') or {}
+        kinds = ('text',)
+    content = message.get('content')
+    if isinstance(content, str): return content
+    return '\n\n'.join(b.get('text', '') for b in content or []
+                        if isinstance(b, dict) and b.get('type') in kinds)
+
+
+def last_reply(transcript, agent='claude', limit=8 << 20):
+    """Text of the LAST assistant entry that has any, from a Claude JSONL or a
+    Codex rollout. Reads backwards in chunks; None when unreadable or nothing
+    is found."""
     try:
         with open(transcript, 'rb') as f:
             f.seek(0, 2); end = f.tell(); pos = end; tail = b''
@@ -98,12 +118,9 @@ def last_reply(transcript, limit=8 << 20):
                     if b'"assistant"' not in raw: continue
                     try: entry = json.loads(raw)
                     except ValueError: continue
-                    if entry.get('type') != 'assistant': continue
-                    content = (entry.get('message') or {}).get('content')
-                    if isinstance(content, str): text = content
-                    else: text = '\n\n'.join(b.get('text', '') for b in content or []
-                                             if isinstance(b, dict) and b.get('type') == 'text')
-                    if text.strip(): return text.strip()
+                    if not isinstance(entry, dict): continue
+                    text = reply_text(entry, agent)
+                    if text and text.strip(): return text.strip()
     except OSError:
         return None
     return None
@@ -156,8 +173,9 @@ def gather(data, opts):
     source = data.get('source') or {}
     if source.get('worktree') and Path(source['worktree']).is_dir():
         facts['git'] = git_state(source['worktree'])
-    if source.get('agent', 'claude') == 'claude' and source.get('transcript'):
-        facts['reply'] = last_reply(source['transcript'])
+    agent = source.get('agent', 'claude')
+    if agent in ('claude', 'codex') and source.get('transcript'):
+        facts['reply'] = last_reply(source['transcript'], agent)
     return facts
 
 
