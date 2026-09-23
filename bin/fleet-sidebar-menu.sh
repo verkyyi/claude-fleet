@@ -21,7 +21,28 @@
 #                                 read off stdout (never the exit code, #869) and
 #                                 toasted — a refusal is never silent
 #
+#   bash fleet-sidebar-menu.sh --keys
+#                                 run directly (not sourced): one `key<TAB>what`
+#                                 line per item — the `?` sheet's menu rows
+#                                 (fleet-keys.sh --context sidebar, issue #948)
+#
 # Expects fleet-sidebar.sh's context: $BIN, $sess, $verb, $@, the conf loaded.
+
+# The menu's letters: ONE table, read by the menu below (`mk <action>`) and by
+# the `?` sheet (--keys), so the sheet can never name a letter the menu lacks.
+MENU_KEYS='rename	r	rename — edits on the input line (↵ applies, esc / an empty name cancels)
+pin	t	pin / unpin the row to the top
+pr	p	open its PR (greyed when it has none)
+answer	a	answer its question (a red ? row; greyed otherwise)
+agent	v	flip new sessions claude ⇄ codex
+reap	x	reap it — asks y/n first
+new	n	new task — file an issue AND spawn its worker
+restore	o	restore a finished task (the hub landed list, in a popup)'
+mk() { printf '%s\n' "$MENU_KEYS" | awk -F '\t' -v a="$1" '$1 == a { print $2; exit }'; }
+if [ "${1:-}" = --keys ]; then
+  printf '%s\n' "$MENU_KEYS" | awk -F '\t' '{ print $2 "\t" $3 }'
+  exit 0
+fi
 
 wid="${3:-}"
 case "$wid" in @[0-9]*) ;; *) exit 0 ;; esac
@@ -71,21 +92,21 @@ add() { items+=("$1" "$2" "$3"); }   # name key command
 # Rename edits in the view's own input line (fleet-sidebar.py `renaming`): park
 # the row's id on the view, keep the keyboard there, and wake it with F12.
 if [ -n "$side" ]; then
-  add "改名…" r "set-option -p -t $side @sidebar_rename $wid ; switch-client -T fleet-sidebar ; send-keys -t $side F12"
-else add "-改名…" r ''; fi
-if [ "$pin" = 1 ]; then add "取消置顶" t "$(sh_run "bash $(sq "$BIN/dash-pin-toggle.sh") $wid")"
-else add "置顶" t "$(sh_run "bash $(sq "$BIN/dash-pin-toggle.sh") $wid")"; fi
-if [ -n "$pr" ]; then add "打开 PR $(fe "$pr")" p "$(sh_run "bash $(sq "$BIN/dash-open-pr.sh") --wid $wid")"
-else add "-打开 PR（没有）" p ''; fi
+  add "改名…" "$(mk rename)" "set-option -p -t $side @sidebar_rename $wid ; switch-client -T fleet-sidebar ; send-keys -t $side F12"
+else add "-改名…" "$(mk rename)" ''; fi
+if [ "$pin" = 1 ]; then add "取消置顶" "$(mk pin)" "$(sh_run "bash $(sq "$BIN/dash-pin-toggle.sh") $wid")"
+else add "置顶" "$(mk pin)" "$(sh_run "bash $(sq "$BIN/dash-pin-toggle.sh") $wid")"; fi
+if [ -n "$pr" ]; then add "打开 PR $(fe "$pr")" "$(mk pr)" "$(sh_run "bash $(sq "$BIN/dash-open-pr.sh") --wid $wid")"
+else add "-打开 PR（没有）" "$(mk pr)" ''; fi
 if [ "$state" = needs ]; then
-  add "回答它的提问…" a "$(sh_run "bash $(sq "$BIN/dash-popup.sh") -w 84% -h 70% -- bash $(sq "$BIN/dash-answer.sh") $(sq "$sess:$wid")")"
-else add "-回答它的提问（没有）" a ''; fi
-add "新会话改用 $next" v "$(sh_run "bash $(sq "$BIN/dash-agent-toggle.sh")")"
-add "回收…" x "confirm-before -p $(sq "回收「$(fe "$name")」？(y/n)") $(sq "$(sh_run "bash $(sq "$BIN/fleet-sidebar.sh") reap $(sq "$sess") $wid")")"
+  add "回答它的提问…" "$(mk answer)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") -w 84% -h 70% -- bash $(sq "$BIN/dash-answer.sh") $(sq "$sess:$wid")")"
+else add "-回答它的提问（没有）" "$(mk answer)" ''; fi
+add "新会话改用 $next" "$(mk agent)" "$(sh_run "bash $(sq "$BIN/dash-agent-toggle.sh")")"
+add "回收…" "$(mk reap)" "confirm-before -p $(sq "回收「$(fe "$name")」？(y/n)") $(sq "$(sh_run "bash $(sq "$BIN/fleet-sidebar.sh") reap $(sq "$sess") $wid")")"
 add "" "" ""
-add "新建任务（建 issue）…" n "$(sh_run "bash $(sq "$BIN/dash-popup.sh") -w 90% -h 12 -- bash $(sq "$BIN/dash-issue-new.sh") confirm --spawn")"
+add "新建任务（建 issue）…" "$(mk new)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") -w 90% -h 12 -- bash $(sq "$BIN/dash-issue-new.sh") confirm --spawn")"
 # Row-less too (issue #901): the hub's ⌃t landed list + ⌃o, as one popup.
-add "恢复已收工…" o "$(sh_run "bash $(sq "$BIN/fleet-restore-pick.sh") --session $(sq "$sess")")"
+add "恢复已收工…" "$(mk restore)" "$(sh_run "bash $(sq "$BIN/fleet-restore-pick.sh") --session $(sq "$sess")")"
 
 if [ "${4:-}" = --print ]; then
   i=0

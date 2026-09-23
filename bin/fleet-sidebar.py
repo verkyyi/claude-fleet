@@ -22,7 +22,7 @@ import unicodedata
 
 BIN = Path(__file__).absolute().parent  # preserve the selftest shadow root
 US = "\x1f"
-VIEW_VERSION = "7"  # #901: ⌃o opens the restore picker (needs VDISCARD off); replace live v6 views once
+VIEW_VERSION = "8"  # #948: the `? 快捷键` row above the input line; replace live v7 views once
 # ↑↓ follow (issue #822): an arrow moves the highlight at once and switches to
 # it only after this much quiet. A held key on a slow link is one switch, not
 # one per row, and a row passed over is never selected — so the wake hook's
@@ -32,6 +32,11 @@ FOLLOW_SECS = 0.25
 # the typed name — which is kept — shows again.
 TOAST_SECS = 4
 PLACEHOLDER = "新会话名…"
+# The one row above the input line (issue #948): a tap on it, or `?` on an empty
+# input line, opens this sidebar's key sheet — Claude Code's "? for shortcuts".
+# An explicit exception to EPIC #894 convention 5 (no resident rows), chosen by
+# the operator: on an iPad a whole row is a tap target a hint glyph is not.
+HELP_ROW = " ? 快捷键"
 
 
 def run(args, **kwargs):
@@ -219,6 +224,18 @@ def no_discard():
         termios.tcsetattr(0, termios.TCSANOW, attrs)
     except (AttributeError, OSError, ValueError, termios.error):
         pass
+
+
+def open_help(screen, env):
+    """The sidebar's `?` sheet (issue #948): fleet-keys.sh --context sidebar in
+    a popup via dash-popup.sh (explicit client, the @popup_open epoch), exactly
+    as the hub's `?` opens its own. Blocks until q/Esc closes it, which is the
+    pause: nothing repaints under the popup. Leave curses meanwhile for the same
+    reason new_task does — with no client the sheet runs INLINE in this pane."""
+    curses.endwin()
+    subprocess.call(["bash", str(BIN / "dash-popup.sh"), "-w", "72%", "-h", "80%", "--",
+                     "bash", str(BIN / "fleet-keys.sh"), "--context", "sidebar"], env=env)
+    screen.clear()
 
 
 def open_menu(session, wid, env):
@@ -409,7 +426,10 @@ def ui(screen, session, worker, lock):
         if selected not in ids:
             selected = window if window in ids else (ids[0] if ids else "")
         index = ids.index(selected) if selected in ids else 0
-        page = max(1, height - 1)
+        # The `? 快捷键` row sits above the input line whenever a task row
+        # still fits above it; the list loses that one row.
+        help_y = height - 2 if height >= 3 else None
+        page = max(1, height - (1 if help_y is None else 2))
         offset = max(0, min(offset, max(0, len(rows) - page)))
         if index < offset:
             offset = index
@@ -440,6 +460,8 @@ def ui(screen, session, worker, lock):
             # columns right of its parent's.
             put(y, marker + " " + glyph + " " + (tree or " ") + " " + label, attr,
                 fill=wid == window or (navigation and wid == selected))
+        if help_y is not None:
+            put(help_y, HELP_ROW, curses.A_DIM)
         # ONE input line closes the list (issue #896): the hints moved to the
         # `?` sheet. Typing while the keyboard is here fills it; Enter starts a
         # scratch session named after it. Away from the sidebar only `›` shows.
@@ -488,6 +510,13 @@ def ui(screen, session, worker, lock):
             # acts on the highlighted row and the window in view stays put.
             follow_at = None
             open_menu(session, selected, env)
+            continue
+        if key == ord("?") and not text and renaming is None and spawning is None:
+            # `?` on an EMPTY line is the sidebar's key sheet (dash-keymap.sh
+            # --panel sidebar `help`, issue #948); inside a name it types.
+            follow_at = None
+            open_help(screen, env)
+            refresh_at = 0
             continue
         if 0 <= key < 256 and key not in (8, 9, 10, 13, 14, 15, 27, 127):
             # A (piece of a) typed character. Every letter types — j k q n
@@ -580,7 +609,15 @@ def ui(screen, session, worker, lock):
             if buttons & (curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED):
                 refresh_at = 0
                 armed = None
-                if hit and hit == highlighted:
+                if help_y is not None and y == help_y:
+                    # The `? 快捷键` row (issue #948). Opened on the release, like
+                    # the menu: the popup must not swallow this tap's own release.
+                    follow_at = None
+                    if buttons & curses.BUTTON1_CLICKED:
+                        open_help(screen, env)
+                    else:
+                        armed = HELP_ROW
+                elif hit and hit == highlighted:
                     # The second tap on a row (the first switched to it), or a tap
                     # on the row already in view: its action menu — the touch
                     # path to what `.` opens (issue #898).
@@ -595,7 +632,9 @@ def ui(screen, session, worker, lock):
                 # Anywhere else (the input line included) the click only focuses:
                 # the bind already moved the keyboard here, so typing follows.
             elif buttons & curses.BUTTON1_RELEASED:
-                if armed is not None and hit == armed:
+                if armed == HELP_ROW and y == help_y:
+                    open_help(screen, env)
+                elif armed is not None and hit == armed:
                     open_menu(session, armed, env)
                 armed = None
             elif buttons & curses.BUTTON4_PRESSED and ids:

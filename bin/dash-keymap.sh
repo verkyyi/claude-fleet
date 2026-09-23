@@ -111,9 +111,13 @@ preview ctrl-p alt-p' ;;
 # `restore` (issue #901) is the hub's own ⌃o: the landed list + restore as one
 # popup (fleet-restore-pick.sh). macOS's tty eats a bare ⌃o as VDISCARD, so the
 # view switches that off before curses starts (fleet-sidebar.py main).
+# `help` (issue #948) follows the same rule: `?` on an EMPTY input line opens
+# the sidebar's own key sheet (fleet-keys.sh --context sidebar), the task list's
+# answer to Claude Code's "? for shortcuts"; inside a name it types a `?`.
 sidebar) TABLE='new ctrl-n alt-n
 menu . .
-restore ctrl-o alt-o' ;;
+restore ctrl-o alt-o
+help ? ?' ;;
 *) echo "dash-keymap.sh: unknown panel '$PANEL' (dash|backlog|config|sidebar)" >&2; exit 2 ;;
 esac
 

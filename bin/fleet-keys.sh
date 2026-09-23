@@ -10,12 +10,16 @@
 # when opened from INSIDE a panel it shows only the shortcuts that apply there —
 # that panel's own binds plus the global `tmux prefix` binds (which fire from any
 # pane, the dash included), not the other panels' inner binds. Pass the panel via
-# `--context dash|backlog` (default `all` = every group).
+# `--context dash|backlog` (default `all` = every group). `--context sidebar`
+# (issue #948) is the task sidebar's own `?` sheet: only the prefix binds that
+# concern the sidebar (prefix e / E, ⌂ / F9), the task sidebar group, and the
+# letters of its `.` row menu — read from fleet-sidebar-menu.sh's table.
 #
 # Usage:
 #   fleet-keys.sh                    # full sheet, wait for q/esc (popup mode)
 #   fleet-keys.sh --context dash     # dashboard-scoped sheet (+ tmux prefix)
 #   fleet-keys.sh --context backlog  # backlog-scoped sheet (+ tmux prefix)
+#   fleet-keys.sh --context sidebar  # the task sidebar's sheet (its `?` / ? row)
 #   fleet-keys.sh --plain            # print once and exit (no wait) — pipes/tests
 #                                    #   also implied when stdout is not a tty
 #
@@ -37,7 +41,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 # Unknown context ⇒ fall back to the full sheet (never render nothing).
-case "$CONTEXT" in all|dash|backlog) ;; *) CONTEXT="all" ;; esac
+case "$CONTEXT" in all|dash|backlog|sidebar) ;; *) CONTEXT="all" ;; esac
 # Non-interactive stdout (pipe/redirect/test) ⇒ print-and-exit, never block.
 [ -t 1 ] || PLAIN=1
 
@@ -90,6 +94,7 @@ want() {
     all)     return 0 ;;
     dash)    case "$1" in prefix|dashboard) return 0 ;; *) return 1 ;; esac ;;
     backlog) case "$1" in prefix|backlog)   return 0 ;; *) return 1 ;; esac ;;
+    sidebar) case "$1" in sidebar|menu)     return 0 ;; *) return 1 ;; esac ;;
     *)       return 0 ;;
   esac
 }
@@ -99,6 +104,7 @@ print_sheet() {
   case "$CONTEXT" in
     dash)    sub="(dashboard panel · prefix binds work here too · q/esc to close)" ;;
     backlog) sub="(backlog panel · prefix binds work here too · q/esc to close)" ;;
+    sidebar) sub="(task sidebar · prefix = your tmux prefix, ${DASH_KEYMAP_PREFIX:-C-b} here · q/esc to close)" ;;
     *)       sub="(prefix = your tmux prefix, ${DASH_KEYMAP_PREFIX:-C-b} here · q/esc to close)" ;;
   esac
   printf '%s%s fleet keymap %s  %s%s%s\n' "$B" "$CYAN" "$R" "$DIM" "$sub" "$R"
@@ -119,6 +125,16 @@ print_sheet() {
   key "click usage" "footer usage stat — opens the usage + account modal"
   fi
 
+  # The sidebar's own sheet (--context sidebar) keeps just the prefix binds that
+  # reach the sidebar — the full list is prefix ? away.
+  if [ "$CONTEXT" = sidebar ]; then
+  group "reach the sidebar" "— from any worker window"
+  key "prefix E" "focus the task sidebar (or click/tap it); with no sidebar on screen, the task picker"
+  key "prefix Space" "the task picker — this list as a popup, for when the sidebar is hidden"
+  key "⌂ / F9" "first press focuses the sidebar, a second goes to the hub (FLEET_HOME_SIDEBAR_FIRST=0: straight to the hub)"
+  key "prefix ?" "the full fleet keymap"
+  fi
+
   if want sidebar; then
   eval "$(bash "$BIN/dash-keymap.sh" --panel sidebar env 2>/dev/null)"
   group "task sidebar" "— once prefix E or a tap puts the keyboard on it"
@@ -130,7 +146,18 @@ print_sheet() {
   key "$(dg new)" "new task — file an issue AND spawn its worker (the hub's ⌃n popup)$(dn new)"
   key "$(dg menu)" "on an EMPTY line: the highlighted task's menu — rename (edits on this line: ↵ applies, esc/empty cancels) · pin · open PR · answer its question · flip new sessions claude⇄codex · reap (asks y/n first) · new task. Inside a name it types a dot. Touch: tap the highlighted row again$(dn menu)"
   key "$(dg restore)" "restore a finished task — the hub's ⌃t landed list in a popup; ↵ brings it back as the current window (a closed-unmerged PR asks to reopen first). Touch: the row menu's last item$(dn restore)"
+  key "$(dg help)" "on an EMPTY line, or a tap on the '? 快捷键' row above it: this sidebar's key sheet. Inside a name it types a ?$(dn help)"
   key "prefix e" "hide the sidebar (q types now; no tap hides it)"
+  fi
+
+  if want menu; then
+  group "row menu" "— after . or a second tap on the highlighted row: press its letter"
+  local mk what
+  while IFS='	' read -r mk what; do
+    [ -n "$mk" ] && key "$mk" "$what"
+  done <<EOF
+$(bash "$BIN/fleet-sidebar-menu.sh" --keys 2>/dev/null)
+EOF
   fi
 
   if want dashboard; then

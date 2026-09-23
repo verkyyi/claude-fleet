@@ -577,6 +577,36 @@ try:
     (shim / 'gh').unlink()
     conf.write_text(fleet_conf)
 
+    # The `? 快捷键` row (issue #948) sits right above the input line. A tap on
+    # it, or `?` on an EMPTY input line, opens the sidebar's own key sheet
+    # (fleet-keys.sh --context sidebar) in a popup that raises @popup_open; q
+    # closes it, clears the flag, and the keyboard is still on the sidebar.
+    lines = tm('capture-pane', '-p', '-t', side).splitlines()
+    check(len(lines) >= 2 and lines[-2].strip() == '? 快捷键',
+          'the row above the input line is not the ? row: %r' % lines[-2:])
+    for how in ('a tap on the ? row', '? on an empty input line'):
+        del screen_out[:]
+        if how.startswith('a tap'):
+            click(side, row=height - 2)
+        else:
+            os.write(terminal, b'?')
+        wait_for(popup_open, how + ' did not open a popup')
+        wait_for(lambda: 'row menu' in bytes(screen_out).decode('utf-8', 'replace'),
+                 how + ' did not show the sidebar key sheet')
+        check(bool(view_on(w1)), how + ' hid the sidebar')
+        os.write(terminal, b'q')
+        wait_for(lambda: not popup_open(), 'q on the sidebar key sheet left @popup_open raised')
+        wait_for(lambda: navigation() and tasks_cue(side),
+                 'after ' + how + ' the keyboard did not return to the sidebar')
+        check(input_line(side) == '› 新会话名…', how + ' typed into the input line')
+    # Inside a name `?` is a character: it types, and nothing opens.
+    type_keys('ab?')
+    wait_for(lambda: input_line(side) == '› ab?▏', '? inside a name did not type: %r' % input_line(side))
+    time.sleep(.5)
+    check(not popup_open(), '? inside a name opened the key sheet')
+    os.write(terminal, b'\x1b')
+    wait_for(lambda: tasks_cue(side), 'Esc did not clear the ab? name')
+
     # Typing (issue #896): a click on blank sidebar space, then plain keys, fill
     # the input line — the worker pane stays active and never sees them.
     click(side, row=height - 3)
