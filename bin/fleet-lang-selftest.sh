@@ -142,6 +142,8 @@ carries bin/fleet-quotawatch.sh   FLEET_LANG_RULE_NOTICE 'qmsg="\[fleet quota wa
         'quota-watch warning pushed into a live session'
 carries bin/fleet-report-parent.sh FLEET_LANG_RULE_NOTICE '^msg=.*no reply needed' \
         'child-report envelope'
+carries bin/fleet-children-flush.sh FLEET_LANG_RULE_NOTICE '^  msg=.*no reply needed' \
+        'children-digest envelope'
 # The brief's language section is a heading + the rule beneath it, so the check is
 # a small window rather than one line: the heading must exist AND the rule must be
 # printed under it. (fleet-claim-brief-selftest.sh pins the REAL rendered output;

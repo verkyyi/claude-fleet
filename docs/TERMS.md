@@ -146,7 +146,13 @@ they repaint instantly:
   BLOCKED, FAILED not being fixed, REAPED unmerged/dirty, a true STOPPED, a child
   in `needs`) and **quiet** (MERGED, FAILED while fixing) are delivered; **silent**
   (WAITING / IDLE — a turn ended on an open PR or a background job) is ledger-only
-  and never wakes the parent.
+  and never wakes the parent. Since #939 `FLEET_CHILD_REPORT=batch` also holds
+  the quiet ones: the cleanup tick (`bin/fleet-children-flush.sh`) delivers them
+  merged into one **children digest** — `[children-digest] 3/5 ✓ · 1 ⏳ · 1 !`
+  plus one line per child that changed since the last digest (a
+  `<parent-key>.cursor` beside the ledger) — when a loud report arrives (at once),
+  every child is terminal, the parent is idle, or the oldest has waited
+  `FLEET_CHILD_REPORT_BATCH_SECS` (300). The default stays `immediate`.
 - **Fold** — a parent's block is **collapsed by default** on the dash: the list
   shows one line per parent, marked `▸` in the tree column (`▾` when open —
   directly left of the name it folds, since #836), and its aggregate badge is what

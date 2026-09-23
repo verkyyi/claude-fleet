@@ -351,10 +351,21 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # reaps) are delivered; silent (WAITING / IDLE — a child that ended its turn on an
 # open PR or a background job) is ledger-only, never sent.
 #   immediate (default; the legacy `1`) — loud + quiet delivered one by one.
-#   batch     — the digest mode (EPIC #935 C5, #939).
+#   batch     — the digest mode (issue #939): quiet reports are only recorded, and
+#               the cleanup daemon's 60s tick (bin/fleet-children-flush.sh) delivers
+#               them merged into ONE `[children-digest] 3/5 ✓ · 1 ⏳ · 1 !` — when a
+#               loud report arrives (at once, carrying the queued quiet news), when
+#               every child is terminal, when the parent is idle, or when the oldest
+#               has waited FLEET_CHILD_REPORT_BATCH_SECS.
 #   0         — off: nothing is sent and nothing is ledgered.
 # @label=Child reports outcome to parent @group=spawn @tier=advanced @scope=fleet @edit=bool
 #FLEET_CHILD_REPORT=1
+
+# How long a quiet child report may wait for its digest in FLEET_CHILD_REPORT=batch
+# (issue #939), in seconds. The digest goes out earlier on a loud report, when every
+# child is done, or when the parent is idle; this is the ceiling. Default 300.
+# @label=Child-report digest max wait @group=spawn @tier=advanced @scope=fleet @edit=int @unit=seconds
+#FLEET_CHILD_REPORT_BATCH_SECS=300
 
 # --- Default milestone for filed issues (bin/fleet-issue-file.sh, issue #433) ----
 # Guarantee EVERY filed issue gets a milestone so nothing lands unsorted. When set,

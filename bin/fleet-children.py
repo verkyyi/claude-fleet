@@ -7,6 +7,9 @@ called by hand.
   append  --file <ledger.ndjson>            (event JSON on stdin)
   show    --dir <children-dir> --parent <key> [--json] [--since <seq>]
           [--prmap-dir <dir>] [--prmap <file>]   (live window rows on stdin)
+  scan    --dir <children-dir>                   (keys with undelivered news)
+  digest  --dir <children-dir> --parent <key> [--batch-secs N] [--parent-state S]
+          [--force]              (`fleet-children.sh --json` of that parent on stdin)
 
 The ledger is one NDJSON file per PARENT KEY (`issue-N` / `scratch-N` /
 `<slug>:issue-N` — fleet_origin_canon's spelling, never a window id), so a parent
@@ -18,6 +21,10 @@ unchanged. One line per event:
 
 That shape, `children_append`, and `fleet-children.sh`'s text + `--json` output are
 a stable interface (C4/C5/C6/R1 of EPIC #935 build on it): add fields, never rename.
+
+The DIGEST (issue #939, FLEET_CHILD_REPORT=batch) reads the same file against a
+cursor beside it — `<parent-key>.cursor`, the highest seq already delivered — and
+decides whether this is the moment to wake the parent (see cmd_digest).
 """
 import argparse
 import datetime
@@ -229,6 +236,149 @@ def age(ts):
         '%dh' % (s // 3600) if s < 86400 else '%dd' % (s // 86400)
 
 
+STALE_SECS = 86400             # undelivered news older than this is history, not news
+GLYPHS = '!⏳▸✓–'
+IDLE_STATES = ('done', 'idle')
+
+
+def seq_of(e):
+    try:
+        return int(e.get('seq') or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def ts_of(e):
+    try:
+        return datetime.datetime.strptime(e.get('ts') or '', '%Y-%m-%dT%H:%M:%SZ') \
+            .replace(tzinfo=datetime.timezone.utc).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def read_cursor(d, key):
+    try:
+        with open(os.path.join(d, key + '.cursor'), encoding='utf-8') as fh:
+            return int(fh.read().strip() or 0)
+    except (OSError, ValueError):
+        return 0
+
+
+def news_of(d, key):
+    """(pending, news): events after the cursor, and the ones a digest delivers —
+    everything but tier silent (a turn boundary rides along, never wakes)."""
+    cur = read_cursor(d, key)
+    pend = sorted((e for e in read_events(os.path.join(d, key + '.ndjson')) if seq_of(e) > cur),
+                  key=seq_of)
+    return pend, [e for e in pend if e.get('tier') != 'silent']
+
+
+def cmd_scan(a):
+    """Parent keys whose ledger holds deliverable news younger than STALE_SECS — the
+    tick's cheap pre-filter, so a parent with nothing to say costs no tmux read."""
+    now = time.time()
+    try:
+        names = sorted(os.listdir(a.dir))
+    except OSError:
+        return 0
+    for n in names:
+        if not n.endswith('.ndjson'):
+            continue
+        key = n[:-len('.ndjson')]
+        _, news = news_of(a.dir, key)
+        if news and now - min(ts_of(e) for e in news) <= STALE_SECS:
+            print(key)
+    return 0
+
+
+def label_of(key):
+    pre, bare = (key.split(':', 1) if ':' in key else ('', key))
+    if bare.startswith('issue-'):
+        lab = 'issue #' + bare[len('issue-'):]
+    elif bare.startswith('scratch-'):
+        lab = 'scratch ~' + bare[len('scratch-'):]
+    else:
+        lab = bare
+    return (pre + ' ' + lab) if pre else lab
+
+
+def cmd_digest(a):
+    """Decide + render one [children-digest] for <parent>. Prints ONE JSON object
+    {flush, seq, pending, text}: flush is the reason to send now ('' = hold), seq is
+    what the cursor advances to once it is delivered, text the envelope minus its
+    `no reply needed` line (the shell adds that, with the language notice).
+
+    Flush when there is deliverable news AND one of (issue #939):
+      force    the caller insists (a loud report handing over)
+      loud     a loud event is pending — someone must act, and it carries the
+               quiet news queued ahead of it
+      barrier  every child under the parent is in a terminal bucket (✓ ! –):
+               the batch is over, wake it once
+      age      the oldest undelivered news has waited FLEET_CHILD_REPORT_BATCH_SECS
+      idle     the parent itself is idle (done) — nothing to interrupt
+    News older than a day is history: never flushed (and so a reaped parent's
+    file, or a pre-batch ledger, never turns into a surprise digest)."""
+    try:
+        show = json.loads(sys.stdin.read() or '{}')
+    except ValueError:
+        show = {}
+    if not isinstance(show, dict):
+        show = {}
+    pend, news = news_of(a.dir, a.parent)
+    out = dict(flush='', seq=max([seq_of(e) for e in pend] or [read_cursor(a.dir, a.parent)]),
+               pending=len(news), text='')
+    now = time.time()
+    if not news or now - min(ts_of(e) for e in news) > STALE_SECS:
+        print(json.dumps(out))
+        return 0
+    kids = {k.get('child'): k for k in show.get('children') or [] if isinstance(k, dict)}
+    buckets = [k.get('bucket') for k in kids.values()]
+    if a.force:
+        out['flush'] = 'force'
+    # '' = a pre-#938 event with no band: fail toward delivery, as report_tier does.
+    elif any(e.get('tier') in ('loud', '') for e in news):
+        out['flush'] = 'loud'
+    elif buckets and all(b in ('✓', '!', '–') for b in buckets):
+        out['flush'] = 'barrier'
+    elif now - min(ts_of(e) for e in news) >= a.batch_secs:
+        out['flush'] = 'age'
+    elif a.parent_state in IDLE_STATES:
+        out['flush'] = 'idle'
+
+    sm = show.get('summary') or {}
+    total = int(sm.get('total') or len(kids))
+    head = '[children-digest] %d/%d ✓' % (int(sm.get('done') or 0), total)
+    if sm.get('waiting'):
+        head += ' · %d ⏳' % int(sm['waiting'])
+    if sm.get('needs'):
+        head += ' · %d !' % int(sm['needs'])
+    # One line per child that CHANGED since the cursor, its latest event only.
+    latest = {}
+    for e in pend:
+        latest[e['child']] = e
+    rows = []
+    for child, e in latest.items():
+        g = (kids.get(child) or {}).get('bucket') or bucket(None, e)
+        st = e.get('state', '')
+        if e.get('pr'):
+            st += ' (PR #%s)' % e['pr']
+        elif e.get('verdict'):
+            st += ' (%s)' % e['verdict']
+        title = clean(e.get('title') or (kids.get(child) or {}).get('title', ''), 1, 60)
+        line = '  %s %s%s %s' % (g, label_of(child), ' "%s"' % title if title else '', st)
+        sm1 = clean(e.get('summary'), 1, 120)
+        if sm1:
+            line += ' — ' + sm1
+        rows.append((GLYPHS.index(g) if g in GLYPHS else len(GLYPHS), seq_of(e), line))
+    rows.sort()
+    lines = [r[2] for r in rows[:6]]
+    if len(rows) > 6:
+        lines.append('  … %d more — fleet-children.sh' % (len(rows) - 6))
+    out['text'] = '\n'.join([head] + lines)
+    print(json.dumps(out, ensure_ascii=False))
+    return 0
+
+
 def cmd_show(a):
     wins = read_windows(sys.stdin)
     parent = a.parent
@@ -323,8 +473,16 @@ def main():
     p.add_argument('--since', type=int, default=0)
     p.add_argument('--prmap', default='')
     p.add_argument('--prmap-dir', default='')
+    p = sub.add_parser('scan')
+    p.add_argument('--dir', required=True)
+    p = sub.add_parser('digest')
+    p.add_argument('--dir', required=True)
+    p.add_argument('--parent', required=True)
+    p.add_argument('--batch-secs', type=int, default=300)
+    p.add_argument('--parent-state', default='')
+    p.add_argument('--force', action='store_true')
     a = ap.parse_args()
-    return cmd_append(a) if a.cmd == 'append' else cmd_show(a)
+    return dict(append=cmd_append, show=cmd_show, scan=cmd_scan, digest=cmd_digest)[a.cmd](a)
 
 
 if __name__ == '__main__':

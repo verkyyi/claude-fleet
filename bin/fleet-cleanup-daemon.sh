@@ -450,6 +450,20 @@ if [ "$DRY" = 0 ] && [ "$SWEEP_BUDGET" -gt 0 ]; then
   done
 fi
 
+# --- the children digest (issue #939) --------------------------------------------
+# FLEET_CHILD_REPORT=batch parks quiet child reports in the parent's ledger; this
+# tick is what delivers them, merged into one `[children-digest]` (no daemon of its
+# own, EPIC #935). Before the disk gate: it writes a cursor, not a worktree, and a
+# full disk is no reason to leave a parent in the dark. A fleet not in batch mode is
+# a conf read and nothing else.
+if [ -f "$BIN/fleet-children-flush.sh" ]; then
+  flush_args=(); [ "$DRY" = 1 ] && flush_args=(--dry-run)
+  for s in ${SESSIONS[@]+"${SESSIONS[@]}"}; do
+    fout=$(fleet_timebox 30 bash "$BIN/fleet-children-flush.sh" "$s" ${flush_args[@]+"${flush_args[@]}"})
+    [ -z "$fout" ] || log "$s: $fout"
+  done
+fi
+
 # Diskguard gate is a MACHINE-WIDE (per-volume) condition, so answer it ONCE per
 # tick. A cleanup does a base-checkout pull + worktree teardown; don't add that
 # I/O below the floor. Mirrors the other single-writer, disk-gated fleet daemons.
