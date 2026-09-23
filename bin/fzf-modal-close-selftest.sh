@@ -40,7 +40,7 @@ TOKEN='[✕ close]'
 # a --header). tmux-issues.sh shows the chip only in its POPUP branch (a windowed
 # abort just reopens the pane), but the close CASE is present in both branches
 # (inert windowed — no ✕/close word to tap) — so the same static assertions hold.
-MODALS='tmux-issues.sh tmux-config.sh dash-issue-spawn.sh fleet-pick.sh usage-modal.sh'
+MODALS='tmux-issues.sh tmux-config.sh dash-issue-spawn.sh fleet-repo-ask.sh usage-modal.sh'
 
 for m in $MODALS; do
   f="$BIN/$m"

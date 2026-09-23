@@ -12,12 +12,12 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 SESS=$(fleet_current_session)
 fleet_load_conf "$SESS"                        # multi-fleet: target THIS fleet's repo
 REPO="${FLEET_REPO:-}"
-# A fleet hosting 2+ repos (issue #789): the issue goes to the fleet's CURRENT repo;
-# under `all` there is no repo to file into — say so rather than guess.
+# A fleet hosting 2+ repos (issue #789): the view is always `all` (#1034), so
+# there is no repo to file into here — say so rather than guess.
 RARG=''
 if _fleet_hosts_many "$SESS"; then
   REPO=$(fleet_current_repo "$SESS")
-  [ "$REPO" = all ] && { tmux display-message "new session: this fleet hosts several repos — pick a repo first"; exit 1; }
+  [ "$REPO" = all ] && { tmux display-message "new session: this fleet hosts several repos — use ⌃n, which asks which repo"; exit 1; }
   RARG=$REPO
 fi
 [ -z "$REPO" ] && { tmux display-message "fleet.conf: FLEET_REPO not set — cannot create issue"; exit 1; }

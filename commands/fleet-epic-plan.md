@@ -20,7 +20,7 @@ model picks is a cluster nobody chose.
 
 **Which repo** (issue #803): a fleet may host several repos, and an EPIC lives in
 ONE of them. `--repo <owner/name>` anywhere in `$ARGUMENTS` names it; without it
-the preamble resolves the pane's own repo, then the dash's current repo. A
+the preamble resolves the pane's own repo, else refuses and lists the choices. A
 one-repo fleet always gets its repo — nothing to pass, nothing changes.
 
 ## 0. Resolve fleet + guard seat (run FIRST, every time)

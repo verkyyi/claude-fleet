@@ -1,23 +1,23 @@
 #!/bin/bash
 # backlog-repo-selftest.sh — the backlog for any repo (issue #794).
 #
-# In a fleet hosting 2+ repos the backlog reads the CURRENT repo's issues cache
-# (fleets/<slug>/issues), and under `all` every hosted repo's, each row carrying its
+# In a fleet hosting 2+ repos the backlog reads every hosted repo's issues cache
+# (fleets/<slug>/issues) — the view is always `all` (#1034) — each row carrying its
 # repo as field 4; every row action passes that repo on. Pinned here:
-#   A. CURRENT REPO — B current → only B's rows, each field 4 = B; the popup's border
-#      names B; A current → only A's.
+#   A. NO FILTER — a stale current-repo file (the retired picker's, #1034) narrows
+#      nothing: both repos' rows, the popup's border says all repos.
 #   B. ALL — both repos' rows, one block per repo, each title led by its short tag,
 #      field 4 per row; a bound window hides ONLY its own repo's #N (A#12 bound,
 #      B#12 still listed).
 #   C. ACTIONS TARGET THE ROW'S REPO — close (gh -R + the optimistic drop from THAT
 #      repo's cache only), priority (commit pass + labels cache), comment, preview;
-#      a --repo= the fleet does not host refuses; no row repo → the current repo.
+#      a --repo= the fleet does not host refuses.
 #   D. SPAWN — the popup's enter/preview/close/priority/open binds carry --repo={4};
 #      the ⌃g spawn picker hands the picked row's repo to dash-issue-session.sh.
-#   E. NEW ISSUE — fleet-issue-file.sh from a no-repo caller files into the current
-#      repo, refuses under `all`; dash-issue-new.sh under `all` asks via
-#      fleet-pick.sh --repo-only, files into the pick, drops the optimistic row into
-#      THAT repo's cache, and its --spawn passes --repo.
+#   E. NEW ISSUE — fleet-issue-file.sh from a no-repo caller refuses (a stale
+#      current-repo file too); dash-issue-new.sh with no repo asks via
+#      fleet-repo-ask.sh, files into the pick, drops the optimistic row into THAT
+#      repo's cache, and its --spawn passes --repo.
 #   F. DEGENERATE — a one-repo fleet: rows keep three fields and the per-session
 #      cache, no bind carries --repo, actions resolve the sessmap repo as before.
 # tmux runs on a PRIVATE socket via a PATH shim (run-shell runs its body inline, so
@@ -128,22 +128,17 @@ f4()   { printf '%s\n' "$1" | tail -n +2 | awk -F '\037' '{ print $1 "|" $4 }'; 
 strip(){ printf '%s\n' "$1" | sed $'s/\x1b\\[[0-9;]*m//g'; }
 logs() { : > "$WORK/gh.log"; : > "$WORK/tmux.log"; : > "$WORK/spawn.log"; : > "$WORK/fzf.args"; }
 
-# --- A. current repo -------------------------------------------------------------
-fleet_current_repo_set alpha o/bbb
+# --- A. no filter ---------------------------------------------------------------
+printf 'o/bbb\n' > "$FLEET_CONF_DIR/fleets/alpha/current-repo"
 out=$(rows alpha)
-eq    "A: B current → B's rows, field 4 = B" "$(f4 "$out" | tr '\n' ' ')" "12|o/bbb 30|o/bbb "
-hasnt "A: no A titles"                        "$(strip "$out")" "AAA"
-hasnt "A: one repo shown → no tag"            "$(strip "$out")" "bb BBB"
+eq    "A: a stale current-repo file narrows nothing" "$(f4 "$out" | tr '\n' ' ')" "11|o/aaa 12|o/bbb 30|o/bbb "
 has   "A: B's own #12 NOT hidden by A#12's window" "$(strip "$out")" "BBB twelve"
 logs
 FAKE_CUR=alpha POPUP=1 bash "$SB/tmux-issues.sh" all >/dev/null 2>&1
-has   "A: border names the current repo"      "$(cat "$WORK/fzf.args")" "backlog · GitHub issues · o/bbb"
-fleet_current_repo_set alpha o/aaa
-out=$(rows alpha)
-eq    "A: A current → A's unbound rows"       "$(f4 "$out" | tr '\n' ' ')" "11|o/aaa "
+has   "A: border says all repos"              "$(cat "$WORK/fzf.args")" "· all repos"
+rm -f "$FLEET_CONF_DIR/fleets/alpha/current-repo"
 
 # --- B. all ----------------------------------------------------------------------
-fleet_current_repo_set alpha all
 out=$(rows alpha)
 eq    "B: all → both repos, A block then B"   "$(f4 "$out" | tr '\n' ' ')" "11|o/aaa 12|o/bbb 30|o/bbb "
 has   "B: A rows tagged"                      "$(strip "$out")" "aa AAA eleven"
@@ -183,10 +178,6 @@ hasnt "C: comment never hits A"               "$(cat "$WORK/gh.log")" "o/aaa"
 logs
 FLEET_SESSION=alpha bash "$SB/tmux-issue-preview.sh" 12 --repo=o/bbb >/dev/null 2>&1
 has   "C: preview → gh view -R B"             "$(cat "$WORK/gh.log")" "issue view 12 --repo o/bbb"
-fleet_current_repo_set alpha o/bbb; logs
-FLEET_SESSION=alpha bash "$SB/tmux-issue-preview.sh" 30 --repo= >/dev/null 2>&1
-has   "C: preview, no row repo → current (B)" "$(cat "$WORK/gh.log")" "issue view 30 --repo o/bbb"
-fleet_current_repo_set alpha all
 
 # --- D. spawn --------------------------------------------------------------------
 logs
@@ -206,12 +197,13 @@ logs
 ( cd "$WORK" && FAKE_CUR=alpha bash "$SB/fleet-issue-file.sh" --title 'x' >/dev/null 2>"$WORK/err" ); rc=$?
 eq    "E: filer under all refuses"            "$rc" "1"
 has   "E: … and says why"                     "$(cat "$WORK/err")" "pass --repo"
-fleet_current_repo_set alpha o/bbb; logs
-( cd "$WORK" && FAKE_CUR=alpha bash "$SB/fleet-issue-file.sh" --title 'x' >/dev/null 2>&1 )
-has   "E: filer → the current repo"           "$(cat "$WORK/gh.log")" "issue create --repo o/bbb"
-fleet_current_repo_set alpha all; seed; logs
+printf 'o/bbb\n' > "$FLEET_CONF_DIR/fleets/alpha/current-repo"; logs
+( cd "$WORK" && FAKE_CUR=alpha bash "$SB/fleet-issue-file.sh" --title 'x' >/dev/null 2>&1 ); rc=$?
+eq    "E: a stale current-repo file does not pick the filer's repo" "$rc" "1"
+hasnt "E: … files nothing"                    "$(cat "$WORK/gh.log")" "issue create"
+seed; logs
 FAKE_CUR=alpha FZF_REPO=o/bbb FZF_TITLE='new thing' bash "$SB/dash-issue-new.sh" confirm --spawn >/dev/null 2>&1
-has   "E: ⌃n under all asks which repo"       "$(cat "$WORK/fzf.args")" "which repo"
+has   "E: ⌃n with no repo asks which repo"    "$(cat "$WORK/fzf.args")" "which repo"
 has   "E: filed into the picked repo"         "$(cat "$WORK/gh.log")" "issue create --repo o/bbb"
 has   "E: optimistic row in B's cache"        "$(cat "$C/fleets/o-bbb/issues")" "new thing"
 hasnt "E: … not A's"                          "$(cat "$C/fleets/o-aaa/issues")" "new thing"
@@ -220,12 +212,13 @@ seed; logs
 FAKE_CUR=alpha FZF_TITLE='nope' bash "$SB/dash-issue-new.sh" confirm >/dev/null 2>&1
 hasnt "E: esc on the repo pick files nothing" "$(cat "$WORK/gh.log")" "issue create"
 logs
-FAKE_CUR=alpha bash "$SB/fleet-pick.sh" --repo-only alpha >/dev/null 2>&1
-eq    "E: --repo-only lists the hosted repos" "$(awk -F '\037' '{ print $1 }' "$WORK/fzf.in" | tr '\n' ' ')" "o/aaa o/bbb "
-fleet_current_repo_set alpha o/bbb; seed; logs
-FAKE_CUR=alpha FZF_TITLE='cur thing' bash "$SB/dash-issue-new.sh" confirm >/dev/null 2>&1
-hasnt "E: a picked current repo does not ask" "$(cat "$WORK/fzf.args")" "which repo"
-has   "E: … and files into it"                "$(cat "$WORK/gh.log")" "issue create --repo o/bbb"
+FAKE_CUR=alpha bash "$SB/fleet-repo-ask.sh" alpha >/dev/null 2>&1
+eq    "E: the ask lists the hosted repos"     "$(awk -F '\037' '{ print $1 }' "$WORK/fzf.in" | tr '\n' ' ')" "o/aaa o/bbb "
+seed; logs
+FAKE_CUR=alpha FZF_REPO=o/aaa FZF_TITLE='cur thing' bash "$SB/dash-issue-new.sh" confirm >/dev/null 2>&1
+has   "E: a stale current-repo file still asks" "$(cat "$WORK/fzf.args")" "which repo"
+has   "E: … and files into the pick"          "$(cat "$WORK/gh.log")" "issue create --repo o/aaa"
+rm -f "$FLEET_CONF_DIR/fleets/alpha/current-repo"
 
 # --- F. degenerate ---------------------------------------------------------------
 out=$(rows solo)

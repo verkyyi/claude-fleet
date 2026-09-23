@@ -161,10 +161,10 @@ case "$(opt "$wN" window_name)" in *·*) fail "C a no-repo session has no repo t
 
 raw "$S"; w=$(newest "$S")
 eq "C current repo all → no-repo" "$(opt "$w" @norepo)" 1
-fleet_current_repo_set "$S" o/b
+printf 'o/b\n' > "$FLEET_CONF_DIR/fleets/$S/current-repo"   # the retired picker's (#1034)
 raw "$S"; w=$(newest "$S")
-eq "C current repo o/b → o/b" "$(opt "$w" @repo)" o/b
-fleet_current_repo_set "$S" all
+eq "C a stale current-repo file → still no-repo" "$(opt "$w" @norepo)" 1
+rm -f "$FLEET_CONF_DIR/fleets/$S/current-repo"
 
 # ---- D. keys -------------------------------------------------------------------------
 inpane() {   # $1=window — run the rest as if inside that window's pane

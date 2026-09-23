@@ -7,7 +7,7 @@
 #   B. fleet-repo.sh add REFUSES without=1; with it, writes the
 #      overlay; list shows both repos; a duplicate add is refused.
 #   C. helpers — fleet_repos, fleet_repo_hosted, fleet_load_repo_conf,
-#      fleet_current_repo/_set, fleet_repo_mains.
+#      fleet_current_repo (always `all`, #1034), fleet_repo_mains.
 #   D. window-aware fleet_load_conf — a pane whose window has @repo=B sees B's
 #      MAIN/base/model, and the conf repo's deploy keys do not leak into it; @repo
 #      derived once from @worktree and stamped; @norepo and unknown windows keep
@@ -125,10 +125,9 @@ got=$( fleet_load_repo_conf "$S" o/a; printf '%s|%s|%s' "$FLEET_MAIN" "$FLEET_MO
 eq "C: fleet_load_repo_conf A" "$got" "$WORK/mainA|opus|~/deployed-a"
 ( fleet_load_repo_conf "$S" o/zzz ) && fail "C: fleet_load_repo_conf accepted an unhosted repo"
 eq "C: current repo default" "$(fleet_current_repo "$S")" all
-fleet_current_repo_set "$S" o/b || fail "C: set o/b refused"
-eq "C: current repo set" "$(fleet_current_repo "$S")" o/b
-fleet_current_repo_set "$S" o/zzz && fail "C: set to an unhosted repo accepted"
-fleet_current_repo_set "$S" all
+printf 'o/b\n' > "$(fleet_state_dir "$S")/current-repo"
+eq "C: a stale current-repo file is ignored (#1034)" "$(fleet_current_repo "$S")" all
+rm -f "$(fleet_state_dir "$S")/current-repo"
 eq "C: fleet_repo_mains" "$(fleet_repo_mains "$S" | tr '\n' ' ')" "$WORK/mainA $WORK/mainB "
 
 # --- D. window-aware fleet_load_conf ------------------------------------------------

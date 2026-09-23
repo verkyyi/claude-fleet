@@ -33,7 +33,8 @@ Do not install from memory: read the doc and work from it.
     by `fleet-up` (which writes its conf + spins its socket).
   - **One fleet per login; there is no fleet switching** (EPIC #977, issue #980).
     Every repo a login works on lives in its one fleet, so moving between repos is
-    the repo picker (`fleet-pick.sh`), never a detach-and-reattach. Several fleets
+    the grouped `all` list; a heading picks where a new session goes (issue #1034
+    removed the footer repo picker) — never a detach-and-reattach. Several fleets
     on one machine means several logins — the per-fleet sockets are what keeps
     them apart. Don't add a fleet picker, an other-fleet cue, or a spawn into
     another fleet: `dash-raw-session.sh` refuses one from a fleet pane.

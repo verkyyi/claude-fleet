@@ -14,8 +14,7 @@
 #   ⌃s raw scratch session (instant — no prompt) · ⌃e rename the highlighted
 #   window (inline on the query line; ↵ commits, esc cancels) · ⌃x reap a
 #   finished worker (confirms when the row isn't merged+clean) · ⌃t live⇄landed ·
-#   ⌃o restore a landed session · ⌃z the repo picker (#793/#980 — the popup the
-#   footer's fleet name opens: pick which repo this dash shows) ·
+#   ⌃o restore a landed session ·
 #   ⌃y pin/unpin the highlighted window to the top
 #   of the list (#623 — a pin outranks the status sort, floats the window's
 #   children with it, and marks the row 📌) ·
@@ -147,10 +146,6 @@ run_dash() {
   # a multi-repo fleet keeps one per repo, `<file>.<slug>` (issue #790); tmux
   # never allows a '.' in a session name, so the glob can't reach another fleet's.
   rm -f "$C/global/dash_fold_landed_${FLEET_SESSION:-default}".* 2>/dev/null
-  # The footer's `<fleet> · <repo>` label (issue #793) is a server option; publish
-  # it at every launch so a fleet that just gained its second repo — or a server
-  # restarted since the last pick — shows it without waiting for one.
-  fleet_repo_label_sync "${FLEET_SESSION:-}" 2>/dev/null
   # Instant actions use execute-silent; interactive actions (new/help/reap/PR)
   # use execute so a refused popup can draw and read inline (#451). Reap's slow
   # disposal tail still runs through fleet_bg (#304); only the confirm owns the
@@ -181,7 +176,7 @@ run_dash() {
   # unbound floor for an install missing the helper.
   DASH_KEY_AGENT=ctrl-v DASH_KEY_RELOAD=ctrl-r DASH_KEY_NEW=ctrl-n DASH_KEY_SCRATCH=ctrl-s DASH_KEY_VIEW=ctrl-t
   DASH_KEY_RESTORE=ctrl-o DASH_KEY_PR=ctrl-p DASH_KEY_REAP=ctrl-x DASH_KEY_RENAME=ctrl-e DASH_KEY_ANSWER=ctrl-k
-  DASH_KEY_PIN=ctrl-y DASH_KEY_MIGRATE=ctrl-l DASH_KEY_PICK=ctrl-z
+  DASH_KEY_PIN=ctrl-y DASH_KEY_MIGRATE=ctrl-l
   DASH_GLYPH_AGENT='⌃v'
   eval "$(bash "$KEYMAP" env 2>/dev/null)"
   # The ghost names the agent-flip key (issue #559): export the LAUNCH-TIME glyph
@@ -208,7 +203,6 @@ run_dash() {
     --bind "$DASH_KEY_REAP:execute(bash $BIN/dash-reap.sh {2})+reload(bash $ROWS)" \
     --bind "$DASH_KEY_PIN:execute-silent(bash $BIN/dash-pin-toggle.sh {1})+reload(bash $ROWS)" \
     --bind "$DASH_KEY_MIGRATE:execute(bash $BIN/dash-migrate.sh {1})+reload(bash $ROWS)" \
-    --bind "$DASH_KEY_PICK:execute(bash $BIN/dash-popup.sh -w 62% -h 50% -- bash $BIN/fleet-pick.sh)+reload(bash $ROWS)" \
     --bind "$DASH_KEY_RENAME:transform(bash $BIN/dash-rename.sh {1})" \
     --bind "$DASH_KEY_ANSWER:execute(bash $BIN/dash-popup.sh -w 84% -h 70% -- bash $BIN/dash-answer.sh {1})+reload(bash $ROWS)" \
     --bind "left:transform(bash $BIN/dash-fold-toggle.sh collapse {1} {q})" \

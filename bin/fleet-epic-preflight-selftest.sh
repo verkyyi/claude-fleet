@@ -377,12 +377,12 @@ grep -q 'acme/widgets' "$WORK/err" && grep -q 'acme/b' "$WORK/err" \
   || fail "K2 the refusal must list the hosted repos to pick from" "$(cat "$WORK/err")"
 ok "K2 no --repo with the dash on \`all\` refuses and lists the choices (the skill asks)"
 
-printf 'acme/b\n' > "$WORK/mconf/fleets/fepsess/current-repo"
+printf 'acme/b\n' > "$WORK/mconf/fleets/fepsess/current-repo"   # left by the retired picker
 GH_DEFBRANCH=main mrun
-[ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q 'epic preflight  *acme/b' \
-  || fail "K3 no --repo must follow the dash's current repo (acme/b)" "$OUT
+[ "$RC" -eq 2 ] || fail "K3 a stale current-repo file must not pick a repo (#1034; got $RC)" "$OUT
 $(cat "$WORK/err")"
-ok "K3 no --repo follows the fleet's current repo"
+rm -f "$WORK/mconf/fleets/fepsess/current-repo"
+ok "K3 a stale current-repo file is ignored — no --repo still refuses (#1034)"
 
 # ============================ L: the trio's documented calls name the repo ==
 # A fleet hosting 2+ repos refuses a spawn with no --repo (#972) — and the run

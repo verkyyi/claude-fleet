@@ -9,7 +9,7 @@
 #      → the scratch gets `--repo o/b` and ⌃n's popup `CF_REPO=o/b`; a @norepo
 #      row → `--no-repo` ($HOME, issue #997), ⌃n still asks; the hub, an unknown
 #      window → today's behavior (nothing passed).
-#   C. 2-repo fleet viewing ONE repo: nothing passed — that repo still wins.
+#   C. a stale current-repo file (the retired picker's, #1034) changes no anchor.
 #   T. Heading taps (issue #1032), over the REAL sidebar rows: in a one-repo
 #      fleet no row is a heading key, so every tap is today's jump/menu and the
 #      input line keeps its plain hint (byte for byte). Under `all`, a repo
@@ -195,10 +195,11 @@ eq "T: a session row still jumps, then opens its menu" \
 eq "T: 2nd tap on heading B → ⌃n pinned to B" "$(tapnew wA hdr:o/b)" "${TO_B#*|}"
 eq "T: 2nd tap on no-repo heading → ⌃n asks" "$(tapnew wA hdr:none)" "${PLAIN#*|}"
 
-# --- C. two repos, viewing one ----------------------------------------------------
-fleet_current_repo_set "$S" o/a >/dev/null 2>&1 || fail "C: could not set current repo"
-eq "C: single repo in view anchors nothing" "$(fleet_selection_repo "$S" "$(wid wB)")" ""
-eq "C: sidebar on a B row keeps the viewed repo's path" "$(sidebar wB)" "$PLAIN"
+# --- C. a stale current-repo file ---------------------------------------------------
+printf 'o/a\n' > "$FLEET_CONF_DIR/fleets/$S/current-repo"
+eq "C: a stale current-repo file — a B row still anchors B" "$(fleet_selection_repo "$S" "$(wid wB)")" o/b
+eq "C: …and the sidebar still sends B's row to B" "$(sidebar wB)" "$TO_B"
+rm -f "$FLEET_CONF_DIR/fleets/$S/current-repo"
 
 if [ "$FAILS" -gt 0 ]; then
   printf 'sidebar-anchor-repo-selftest: %s failure(s)\n' "$FAILS" >&2; exit 1

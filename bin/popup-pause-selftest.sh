@@ -71,16 +71,16 @@ grep -Eq '\-ge "\$MAX_AGE"' "$WAIT" \
 
 # --- PRODUCER (static): every modal popup is epoch-stamped + closed ------------
 # Count in CODE lines only (skip the comment block, which names the flag in prose).
-# One epoch stamp and one clear per display-popup surface; there are 5 (prefix
-# b/c/? + the fleet-pick / usage mouse popups — the acct one went with the ◉
-# account chip, #521; the other-fleet ● jump with fleet switching, #980) — and the
-# two mouse ones are bound TWICE, the status-bar tap living in the task sidebar's
-# key table too (#896), so 7 in code.
+# One epoch stamp and one clear per display-popup surface; there are 4 (prefix
+# b/c/? + the usage mouse popup — the acct one went with the ◉ account chip, #521;
+# the other-fleet ● jump with fleet switching, #980; the fleet-name repo picker
+# with the picker itself, #1034) — and the mouse one is bound TWICE, the
+# status-bar tap living in the task sidebar's key table too (#896), so 5 in code.
 # The clears number one MORE than the popups: the client-detached hook also sets
 # 0 (#431).
 code_only() { grep -v '^[[:space:]]*#' "$CONF"; }
 npop=$(code_only | grep -c 'display-popup')
-[ "$npop" -eq 7 ] || fail "expected 7 display-popup binds in conf code (5 surfaces, the 2 mouse ones also in fleet-sidebar), found $npop"
+[ "$npop" -eq 5 ] || fail "expected 5 display-popup binds in conf code (4 surfaces, the mouse one also in fleet-sidebar), found $npop"
 nstamp=$(code_only | grep -c '@popup_open \$(date +%s)')
 nclose=$(code_only | grep -c '@popup_open 0')
 [ "$nstamp" -eq "$npop" ] \

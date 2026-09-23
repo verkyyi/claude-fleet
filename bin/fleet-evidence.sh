@@ -123,7 +123,7 @@ if fleet_multirepo "$sess"; then
   repo=$(fleet_target_repo "$sess" "$repo_arg"); _rc=$?
   case "$_rc" in
     0) ;;
-    4) die "fleet $sess hosts several repos and none is current — pass --repo ($(fleet_repos "$sess" | tr '\n' ' '))" 2 ;;
+    4) die "fleet $sess hosts several repos — pass --repo ($(fleet_repos "$sess" | tr '\n' ' '))" 2 ;;
     *) die "$repo_arg is not a repo fleet $sess hosts" 2 ;;
   esac
   [ "$repo" = "$(fleet_repos "$sess" | head -n1)" ] || state="$state/by-repo/$(fleet_slug "$repo")"

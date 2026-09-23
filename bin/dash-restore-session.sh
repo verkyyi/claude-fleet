@@ -104,7 +104,7 @@ if ! cap_msg=$(fleet_session_cap_ok "$SESS"); then refuse "$cap_msg"; exit 2; fi
 MULTI=0; _fleet_hosts_many "$SESS" && MULTI=1
 if [ -z "$REPO_ARG" ] && [ "$MULTI" = 1 ]; then
   REPO_ARG=$(fleet_current_repo "$SESS")
-  [ "$REPO_ARG" = all ] && { refuse "restore: this fleet hosts several repos — pick a repo first (or pass --repo)"; exit 1; }
+  [ "$REPO_ARG" = all ] && { refuse "restore: this fleet hosts several repos and the row names none — pass --repo"; exit 1; }
 fi
 if [ -n "$REPO_ARG" ]; then
   REPO_ARG=$(fleet_norm_repo "$REPO_ARG")

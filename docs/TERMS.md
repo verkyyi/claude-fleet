@@ -206,9 +206,10 @@ they repaint instantly:
   cache.
 - **`fleet-list.sh`** — list fleets: `●` live / `○` down · name · repo · checkout,
   then `↳` each further repo a fleet hosts.
-- **Repo picker** — `fleet-pick.sh`, behind a tap on the footer's fleet name and
-  the dash's ⌃z: `all repos` + each hosted repo; the pick is the fleet's current
-  repo, which the dash and backlog show. It has no fleet level (#980).
+- **Repo ask** — `fleet-repo-ask.sh`, the per-spawn "which repo?" popup ⌃n opens
+  in a 2+ repo fleet when neither the highlighted row nor a heading names one. It
+  picks a destination, not a view: the dash and backlog always show every hosted
+  repo, grouped (issue #1034 removed the footer repo picker, `fleet-pick.sh`).
 - **`fleet-lib.sh`** — the shared helper library the above (and the collector /
   read-side producers) source: session→repo resolution, slug helpers, per-fleet
   conf overlay.

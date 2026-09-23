@@ -3,8 +3,7 @@
 #
 # ONE FLEET PER LOGIN (issue #979). A login runs exactly one fleet holding all its
 # repos, so this brings up THE fleet — or, when the login already has one, adds the
-# repo to it and makes it the current repo (fleet-repo.sh add + the current-repo
-# pick), then lands you on it. Creating a SECOND fleet is refused: a second fleet
+# repo to it (fleet-repo.sh add), then lands you on it. Creating a SECOND fleet is refused: a second fleet
 # means a second login. A brand-new fleet is named "fleet"; an existing fleet keeps
 # its name (fleet-claude-fleet stays fleet-claude-fleet).
 #
@@ -256,7 +255,7 @@ tmux -L "$SOCK" kill-window -t "$workwin" 2>/dev/null || true
 echo "fleet-up: fleet '$NAME' is up (repo=$REPO base=$BASE [$BASE_SRC])"
 fi
 
-# --- a repo the fleet does not host yet: add it, make it the current repo ---
+# --- a repo the fleet does not host yet: add it ---
 if [ -n "$ADD_REPO" ]; then
   if fleet_repo_hosted "$NAME" "$ADD_REPO"; then
     echo "fleet-up: fleet '$NAME' already hosts $ADD_REPO"
@@ -265,12 +264,10 @@ if [ -n "$ADD_REPO" ]; then
       || die "could not add $ADD_REPO to fleet '$NAME'"
     echo "fleet-up: added $ADD_REPO to fleet '$NAME'"
   fi
-  fleet_current_repo_set "$NAME" "$ADD_REPO" && echo "fleet-up: current repo → $ADD_REPO"
-elif [ "$LIVE" = 1 ] && [ "$(fleet_current_repo "$NAME")" != all ]; then
-  # Already up on its own repo, and a repo filter is on: pick this one. A fleet
-  # that never picked one (every one-repo fleet) is left exactly as it was.
-  fleet_current_repo_set "$NAME" "$REPO" && echo "fleet-up: current repo → $REPO"
 fi
+# The retired repo filter (issue #1034): the dash always shows `all`, so a
+# `current-repo` file left by the old footer picker is dead state — drop it.
+rm -f "$FLEET_CONF_DIR/fleets/$NAME/current-repo" 2>/dev/null
 
 # --- land the caller on the new fleet ---
 # Each fleet is its OWN tmux server now, so switch-client (same-server only) can't

@@ -68,9 +68,9 @@ FLEET_SESSION=$(fleet_current_session); export FLEET_SESSION
 fleet_load_conf "$FLEET_SESSION"
 # repo: CF_REPO (passed through the popup) wins; else the fleet's cached repo,
 # else the global FLEET_REPO — matching the backlog panel's resolution.
-# A fleet hosting 2+ repos (issue #794): CF_REPO, else the CURRENT repo. Under `all`
-# there is none — an issue always belongs to one repo — so the popup ASKS first
-# (fleet-pick.sh --repo-only, phase 2 below); only the background create pass,
+# A fleet hosting 2+ repos (issue #794): CF_REPO, else none (the view is always
+# `all`, #1034) — an issue always belongs to one repo — so the popup ASKS first
+# (fleet-repo-ask.sh, phase 2 below); only the background create pass,
 # which the popup hands a repo, still refuses without one.
 MULTI=0; fleet_multirepo "$FLEET_SESSION" && MULTI=1
 REPO=$(fleet_backlog_repo "$FLEET_SESSION")
@@ -155,10 +155,10 @@ fi
 # one-line fast filer, issue #297; there is no body prompt). Then hand the slow create
 # off to the BACKGROUND so the popup closes INSTANTLY instead of blocking on the create
 # (+ the worktree/window spawn).
-# Under `all` in a 2+ repo fleet, ask WHICH repo first — the same picker as the
-# fleet name, its repo rows only — in this popup, so nothing nests. Esc cancels.
+# In a 2+ repo fleet with no repo to go on, ask WHICH repo first
+# (fleet-repo-ask.sh) — in this popup, so nothing nests. Esc cancels.
 if [ -z "$REPO" ]; then
-  REPO=$(bash "$BIN/fleet-pick.sh" --repo-only "$FLEET_SESSION" 2>/dev/null)
+  REPO=$(bash "$BIN/fleet-repo-ask.sh" "$FLEET_SESSION" 2>/dev/null)
   [ -n "$REPO" ] || exit 0
 fi
 [ "$spawn" = 1 ] && verb="New issue + worker" || verb="New issue"

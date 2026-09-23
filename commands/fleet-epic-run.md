@@ -14,7 +14,7 @@ list them and ask rather than guessing which batch the operator meant.
 
 **Which repo** (issue #803): a fleet may host several repos, and an EPIC lives in
 ONE of them. `--repo <owner/name>` anywhere in `$ARGUMENTS` names it; without it
-the preamble resolves the pane's own repo, then the dash's current repo. A
+the preamble resolves the pane's own repo, else refuses and lists the choices. A
 one-repo fleet always gets its repo — nothing to pass, nothing changes.
 
 ## 0. Resolve fleet + guard seat (run FIRST, every time)
@@ -40,7 +40,7 @@ echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master
   wrong repo — stop and say so, spawn nothing. No marker: an older EPIC; go on.
 - **Carry `--repo "$FLEET_REPO"` in every `/loop` / wake-up prompt** that
   re-enters this skill (`/fleet-epic-run <N> --repo <owner/name>`): the next tick
-  resolves the repo afresh, and the dash's current repo may have moved.
+  resolves the repo afresh, and a hub or scratch pane has no repo of its own.
 
 - **No fleet** → **ABORT**: *"not inside a fleet — run this from a fleet session."*
 - **Wrong seat** — `owner: hub`: refuse when `$SEAT` is `worker`. A worker driving

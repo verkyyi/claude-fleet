@@ -13,7 +13,7 @@ just the one that just ended, so a report can be re-run after the fact.
 
 **Which repo** (issue #803): a fleet may host several repos, and an EPIC lives in
 ONE of them. `--repo <owner/name>` anywhere in `$ARGUMENTS` names it; without it
-the preamble resolves the pane's own repo, then the dash's current repo. A
+the preamble resolves the pane's own repo, else refuses and lists the choices. A
 one-repo fleet always gets its repo — nothing to pass, nothing changes.
 
 **Its usual caller is not a human.** `/fleet-epic-run`'s closing tick runs this

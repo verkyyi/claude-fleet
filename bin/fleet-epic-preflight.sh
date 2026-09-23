@@ -101,7 +101,7 @@ fi
 # A fleet hosting 2+ repos (issue #803): the target is one of THEM, and the fleet
 # rows below (base, deploy) must be that repo's — so load its overlay, not the conf
 # repo's. No --repo resolves like every repo-wide command (fleet_target_repo): the
-# pane's own repo, then the dash's current repo; under `all` it refuses and lists
+# pane's own repo; else (the dash is always `all`, #1034) it refuses and lists
 # the choices, so the skill asks instead of this screen silently probing repo A.
 # A --repo the fleet does NOT host keeps the one-repo override below (repo rows
 # only, noted). A one-repo fleet never enters this block.
@@ -109,9 +109,9 @@ if fleet_multirepo "$sess"; then
   _t=$(fleet_target_repo "$sess" "$repo_arg"); _rc=$?
   if [ "$_rc" = 0 ] && [ -n "$_t" ]; then
     repo="$_t"; fleet_load_repo_conf "$sess" "$repo"; conf_repo="${FLEET_REPO:-$repo}"
-    hint_repo="$repo"   # the --fix rerun must name it: the dash's current repo can move
+    hint_repo="$repo"   # the --fix rerun must name it: another pane has another repo
   elif [ -z "$repo_arg" ]; then
-    printf 'fleet-epic-preflight: fleet %s hosts several repos and none is current — pass --repo, one of:\n' "$sess" >&2
+    printf 'fleet-epic-preflight: fleet %s hosts several repos — pass --repo, one of:\n' "$sess" >&2
     fleet_repos "$sess" | sed 's/^/  /' >&2
     exit 2
   fi

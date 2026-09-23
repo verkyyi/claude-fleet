@@ -267,8 +267,7 @@ The full hub list also hides worker IDs and gives that space to task description
 Mouse mode is shipped **on** by the fleet baseline (see below), so the footer is
 clickable too: the **`⌂` hub icon** (leftmost) is a consistent **home** tap — it
 always lands on this fleet's hub, unzoomed
-(never a pane zoom, unlike `F9`) — the **fleet name** (`#S`) opens the repo picker
-(in a fleet hosting 2+ repos: which repo the dash shows), the red **`● N` needs badge** cycles to the
+(never a pane zoom, unlike `F9`) — the red **`● N` needs badge** cycles to the
 next window that needs you, and the **usage stat** opens the consolidated
 **usage + account modal** (usage/limit detail on top, the account pool as a
 selectable body below). (Comment out `set -g mouse on` in
@@ -284,7 +283,7 @@ badge above — not a pane zoom.
 
 There is no other-fleet cue and no fleet switching: **one fleet per login** holds
 every repo you work on (EPIC #977), so the red `●` is the one needs signal and the
-repo picker is the one place you change what you look at. Several fleets on one
+dash lists every repo at once, grouped under a heading per repo. Several fleets on one
 machine means several logins, each with its own.
 
 ### tmux baseline
@@ -338,9 +337,9 @@ are equal — there is no main repo. Once a fleet hosts two:
 
 - every session carries its repo (`@repo`), shown on the dash as a repo heading /
   short-tag badge (window names stay bare: `issue-12`);
-- the repo picker (tap the fleet name, or the dash's pick key) lists
-  `all repos` + each repo, and the pick filters the dash and the backlog;
-- a new session under `all` starts in the repo of the row you have highlighted —
+- the dash and the backlog list every repo at once, grouped under a heading per
+  repo — there is no per-repo view to switch to;
+- a new session starts in the repo of the row you have highlighted —
   a session or a repo heading like `tokenledger (0)`; a no-repo row (or nothing
   to go on) starts it in `$HOME`, where the hub opens too;
 - cleanup, PR status, restore and every issue lookup are keyed on (repo, number),
@@ -359,7 +358,7 @@ server goes down and its conf is archived under
 `bin/multirepo-e2e-selftest.sh` proves the whole path end to end. One crash of
 the fleet's tmux server takes every repo in it down — and a login runs exactly
 **one fleet** (issue #979): `fleet-up <owner/repo>` / `cf <owner/repo>` with a fleet
-already configured ADDS the repo to it and makes it the current repo, and a second
+already configured ADDS the repo to it, and a second
 fleet is refused. A repo you want isolated needs a second login. A brand-new fleet
 is named `fleet`; an existing one keeps its name.
 
