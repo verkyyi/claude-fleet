@@ -310,6 +310,12 @@ def landing(ids, window, limit=8):
     return (ids[at + 1:] + ids[:at][::-1])[:limit]
 
 
+def selectable(rows):
+    """The ids a cursor can rest on: every row but a repo group heading (issue
+    #974), which the rows producer marks with `hdr` in its id field."""
+    return [row[0] for row in rows if row[0] != "hdr"]
+
+
 def visible(info, now):
     if len(info) != 4:
         return False
@@ -417,7 +423,7 @@ def ui(screen, session, worker, lock):
                     # `@sidebar_next_of` pins them to the window they were read
                     # against: the hub-arrival hook uses them only when THAT is
                     # the window that just closed.
-                    nxt = " ".join(landing([row[0] for row in rows], window))
+                    nxt = " ".join(landing(selectable(rows), window))
                     if (window, nxt) != published and window in [row[0] for row in rows]:
                         tmux("set-option", "-t", "=" + session + ":", "@sidebar_next", nxt, ";",
                              "set-option", "-t", "=" + session + ":", "@sidebar_next_of", window)
@@ -428,19 +434,26 @@ def ui(screen, session, worker, lock):
             screen.getch()
             continue
         height, width = screen.getmaxyx()
-        ids = [row[0] for row in rows]
+        # A repo group heading (issue #974) is inert: `hdr` in the id field, so it
+        # is painted but never selectable — ↑/↓, Home/End and the wheel step over
+        # it, a tap on it does nothing. `where` is the selection's place in the
+        # PAINTED list, which the scroll offset is measured in.
+        ids = selectable(rows)
         if selected not in ids:
             selected = window if window in ids else (ids[0] if ids else "")
         index = ids.index(selected) if selected in ids else 0
+        where = next((i for i, row in enumerate(rows) if row[0] == selected), 0)
         # The `? 快捷键` row sits above the input line whenever a task row
         # still fits above it; the list loses that one row.
         help_y = height - 2 if height >= 3 else None
         page = max(1, height - (1 if help_y is None else 2))
         offset = max(0, min(offset, max(0, len(rows) - page)))
-        if index < offset:
-            offset = index
-        elif index >= offset + page:
-            offset = index - page + 1
+        if index == 0:
+            where = 0  # the top row keeps the heading above it in view
+        if where < offset:
+            offset = where
+        elif where >= offset + page:
+            offset = where - page + 1
 
         def put(y, text, attr=0, fill=False):
             if 0 <= y < height:
@@ -454,6 +467,9 @@ def ui(screen, session, worker, lock):
         screen.erase()
         colors = {"working": 1, "needs": 2, "done": 3, "looping": 4}
         for y, (wid, state, glyph, label, tree) in enumerate(rows[offset:offset + page]):
+            if wid == "hdr":
+                put(y, label, curses.A_DIM | curses.A_BOLD)
+                continue
             attr = curses.color_pair(colors.get(state, 0))
             if wid == window:
                 attr = curses.color_pair(5) | curses.A_BOLD
@@ -613,6 +629,8 @@ def ui(screen, session, worker, lock):
             except curses.error:
                 continue
             hit = rows[offset + y][0] if 0 <= y < page and offset + y < len(rows) else None
+            if hit == "hdr":
+                hit = None  # a repo group heading (#974) is not a row to act on
             # `selected`, not the painted cue: a fast double tap lands its second
             # press before the next refresh repaints the first one's switch.
             highlighted = selected

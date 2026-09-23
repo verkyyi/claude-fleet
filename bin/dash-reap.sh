@@ -223,6 +223,9 @@ target="${1:-}"
 # caller with a token rather than a bare success, but stay silent on the status
 # line: a ⌃x on an empty dash should not nag.
 [ -z "$target" ] && { emit "refused:no-target"; exit 4; }
+# The column header and #974's repo group headings carry `hdr` in both key fields:
+# not a window, so ⌃x on one is the same quiet refusal as an empty dash.
+[ "$target" = hdr ] && { emit "refused:no-target"; exit 4; }
 # Validate the complete invocation before resolving anything: a second target
 # must never be silently ignored. --exec is the existing private background tail.
 shift || true

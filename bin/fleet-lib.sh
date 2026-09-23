@@ -636,18 +636,27 @@ fleet_repo_label_sync() {
 #   RMANY     1 iff the fleet hosts 2+ repos; 0 = a one-repo fleet, and then the
 #             other two stay empty and every renderer takes today's path;
 #   RCUR      the current repo's cache slug, or `all`;
-#   RSHORTMAP $'\n'<slug>\t<short>$'\n'… — the badge per repo.
+#   RSHORTMAP $'\n'<slug>\t<short>$'\n'… — the badge per repo;
+#   RGRPMAP   $'\n'<slug>\t<i>$'\n'… — the repo's group under `all` (issue #974):
+#             its 0-based place in fleet_repos order, so the heading rows sort
+#             the way the repos are registered;
+#   RHEADS    <i>\t<short>\t<owner/name>$'\n'… — the text each group heading names;
+#   RNREPO    how many repos are hosted (the unknown/no-repo groups sort after).
 # A fleet with no repos/ dir costs nothing: the directory test returns first.
-# shellcheck disable=SC2034  # RMANY/RCUR/RSHORTMAP are caller-facing OUTPUT globals
+# shellcheck disable=SC2034  # RMANY/RCUR/RSHORTMAP/RGRPMAP/RHEADS/RNREPO are caller-facing OUTPUT globals
 fleet_dash_repo_frame() {
   local sess="${1:-}" shorts cur r s sh
-  RMANY=0; RCUR=''; RSHORTMAP=$'\n'
+  RMANY=0; RCUR=''; RSHORTMAP=$'\n'; RGRPMAP=$'\n'; RHEADS=''; RNREPO=0
   [ -d "$FLEET_CONF_DIR/fleets/${sess:-_}/repos" ] || return 0
   shorts=$(fleet_repo_shorts "$sess")
   case "$shorts" in *$'\n'*) ;; *) return 0 ;; esac          # one repo: nothing to filter
   RMANY=1
   while IFS=$'\t' read -r r s sh; do
-    [ -n "$r" ] && RSHORTMAP+="$s"$'\t'"$sh"$'\n'
+    [ -n "$r" ] || continue
+    RSHORTMAP+="$s"$'\t'"$sh"$'\n'
+    RGRPMAP+="$s"$'\t'"$RNREPO"$'\n'
+    RHEADS+="$RNREPO"$'\t'"$sh"$'\t'"$r"$'\n'
+    RNREPO=$((RNREPO + 1))
   done <<EOF
 $shorts
 EOF

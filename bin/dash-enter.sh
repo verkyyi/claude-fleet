@@ -128,6 +128,8 @@ else                                              # jump (empty query)
   # $RESTORE is empty on every normal jump; it is non-empty only for the landed-view
   # fall-through above (a non-`landed:` row while a rename/bind was armed), which must
   # put `?` and the prompt back just like the branches that own those modes (#454).
-  tmux select-window -t "$target" 2>/dev/null
+  # `hdr` (the column header, or a #974 repo group heading) names no window: never
+  # hand it to select-window, where tmux would match it against window NAMES.
+  [ "$target" = hdr ] || tmux select-window -t "$target" 2>/dev/null
   echo "${RESTORE}clear-query"
 fi

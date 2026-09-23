@@ -65,7 +65,7 @@ target="${1:-}"
 [ -f "$flag" ] && exit 0
 
 case "$target" in
-  landed:*|"") exit 0 ;;   # a landed row leaking through / no highlighted row
+  landed:*|hdr|"") exit 0 ;;   # a landed row leaking through / a header row / none
 esac
 
 # Read the CURRENT name to pre-fill the editor — and use it as the liveness
