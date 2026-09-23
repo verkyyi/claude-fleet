@@ -993,6 +993,16 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Status-bar container @group=status @tier=advanced @scope=global @edit=str
 #FLEET_STATUS_CONTAINER="claude-dev"
 
+# How long the status bar's machine stats (container / CPU / MEM / DSK) are shared
+# between attached clients, in seconds (issue #890). tmux renders the bar once per
+# status-interval PER CLIENT, so two terminals used to run ps / vm_stat / df twice
+# for the same machine-wide numbers; now the first renderer measures and publishes
+# ${TMPDIR}/fleet-status.cache, and the rest read it. Default 5 = status-interval.
+# 0 = no sharing (every client measures, the pre-#890 behaviour). GLOBAL, like the
+# container above.
+# @label=Status-bar stats sharing (s) @group=status @tier=advanced @scope=global @edit=int
+#FLEET_STATUS_CACHE_SECS=5
+
 # Subscription-limit coloring of the footer usage stat (issue #239). The
 # official weekly/N-hour limit % (scraped into the ratelimit cache while fresh)
 # is NOT printed as its own footer text — that was noise. Instead the existing
