@@ -7,7 +7,9 @@ the record or window lacks is left off the card, never guessed (issue #1049).
 
 `WakeButton` + `presses` are the page's one control (issue #1050): ⏎ or a tap
 arms it, a second one ≥`BOUNCE` s later and within the arm window wakes. Pure
-too — the park loop feeds them bytes and a clock.
+too — the park loop feeds them bytes and a clock. On a failed wake the same
+button reads Retry; when a wake cannot work at all, `blocked_lines` replaces it
+(issue #1054).
 """
 import json
 import math
@@ -249,8 +251,9 @@ class WakeButton:
     within `arm` s; past the window the arm lapses silently and the next press
     arms again. Nothing leaves `waking`: the wake respawns this pane."""
 
-    def __init__(self, arm=3.0):
-        self.arm, self.state, self.armed_at = float(arm), 'rest', 0.0
+    def __init__(self, arm=3.0, verb='wake'):
+        # verb: 'retry' on a failed wake's page (issue #1054) — same presses.
+        self.arm, self.state, self.armed_at, self.verb = float(arm), 'rest', 0.0, verb
 
     def press(self, now):
         """Feed one press; True exactly when it should start the wake."""
@@ -279,12 +282,22 @@ class WakeButton:
         return left - (math.ceil(left) - 1) + 0.01
 
     def lines(self, now):
+        verb = self.verb
         if self.state == 'waking':
-            return [YELLOW + REVERSE + ' ↻ waking… ' + RESET]
+            return [YELLOW + REVERSE + ' ↻ ' + {'wake': 'waking', 'retry': 'retrying'}.get(verb, verb) + '… ' + RESET]
         if self.state == 'armed':
             left = max(math.ceil(self.arm - (now - self.armed_at)), 1)
-            return [YELLOW + REVERSE + f' ⏎ again to wake · {left}… ' + RESET]
-        return [REVERSE + ' ⏎ Wake ' + RESET + DIM + '  press ⏎ (or tap) twice to resume' + RESET]
+            return [YELLOW + REVERSE + f' ⏎ again to {verb} · {left}… ' + RESET]
+        label = verb.capitalize()
+        return [REVERSE + f' ⏎ {label} ' + RESET + DIM + f'  press ⏎ (or tap) twice to {"resume" if verb == "wake" else verb}' + RESET]
+
+
+def blocked_lines(reason):
+    """The page's footer when a wake cannot work from here (issue #1054): the
+    reason and where to read about it — and no button, since a press could
+    only start a wake that fails before it begins."""
+    return [RED + f" can't wake from here: {reason} " + RESET,
+            DIM + '  see docs/WORKER-SLEEP.md, "When a wake fails"' + RESET]
 
 
 def cap_line(n, m):

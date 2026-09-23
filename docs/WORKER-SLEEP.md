@@ -259,6 +259,26 @@ renderer is `render_park()` in `bin/fleet_sleep_park.py`, a pure function of
 the record, the window facts, and the size. Callers can pass their own
 `footer_lines`.
 
+### When a wake fails
+
+A wake whose launcher exits before the agent is ready (a missing tool, a
+setting the resume refuses) leaves the record `failed` and a dead pane. Fleet
+puts the sleeping page back in that pane (issue #1054): the first line reads
+`Wake failed`, then the error and the launcher's last output. The button
+reads **Retry** and takes the same double press as Wake. The sleep scan also
+re-parks a `failed` record left on a dead pane, for a wake that was killed
+before it could.
+
+Retry is offered only when a wake can start: the original agent has exited,
+and the worktree and the saved transcript are still there. Otherwise the
+page shows `can't wake from here: <reason>` and no button. Fix the cause (for
+example, restore the missing transcript), then press ⏎ once; the page checks
+again and the button returns. The check is repeated at the confirming press,
+so a cause that appears between the two presses stops the wake before it
+starts. A failed wake whose pane still runs something (the resumed agent
+waiting on a dialog, say) is never replaced; answer it in the pane, or run
+`fleet-sleep.sh wake <session> <window>` once it has exited.
+
 ## Rollout and validation
 
 Run `bash bin/run-selftests.sh fleet-sleep` for the isolated tmux integration

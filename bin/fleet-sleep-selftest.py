@@ -51,7 +51,10 @@ while True:
     else: text+=c
 ''')
         launcher=cls.bin/'fleet-claude.sh'
-        launcher.write_text('#!/bin/bash\nprintf "%s\\n" "$@" > '+str(cls.root/'launch.args')+'\nexec python3 '+str(cls.agent)+' "$@"\n')
+        # <root>/launch-fail makes the resume fail the way a missing tool does (issue #1054).
+        launcher.write_text('#!/bin/bash\nprintf "%s\\n" "$@" > '+str(cls.root/'launch.args')+'\n'
+            +'[ -e '+str(cls.root/'launch-fail')+' ] && { echo "fleet-claude: claude: command not found" >&2; exit 127; }\n'
+            +'exec python3 '+str(cls.agent)+' "$@"\n')
         launcher.chmod(0o755)
         inspect=cls.bin/'fake-source.py'
         inspect.write_text('''#!/usr/bin/env python3
@@ -954,6 +957,62 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         # The resumed agent must not inherit the page's mouse reporting.
         self.assertEqual((self.opt('mouse_standard_flag'),self.opt('mouse_sgr_flag')),('0','0'))
 
+    def fail_next_wake(self):
+        # A wake whose launcher exits at once (a missing tool): the pane dies,
+        # the record goes `failed`, and the page comes back (issue #1054).
+        flag=self.root/'launch-fail';flag.write_text('1')
+        try: self.cli('wake',self.pane,ok=False)
+        finally: flag.unlink()
+        self.assertEqual(self.opt('@worker_lifecycle'),'failed')
+
+    def test_failed_wake_page_shows_why_and_retries_on_a_double_press(self):
+        self.cli('sleep',self.pane)
+        self.fail_next_wake()
+        screen=self.capture(lambda s:'⏎ Retry' in s)
+        self.assertIn('Wake failed',screen)
+        self.assertIn('command not found',screen)
+        self.assertEqual(self.opt('pane_dead'),'0')
+        out=os.environ.get('FLEET_RETRY_EVIDENCE')
+        if out: Path(out).write_text(screen)
+        self.tm('send-keys','-t',self.pane,'Enter')
+        self.assertIn('again to retry',self.capture(lambda s:'again to retry' in s))
+        self.assertEqual(self.opt('@worker_lifecycle'),'failed')
+        time.sleep(.4)
+        self.tm('send-keys','-t',self.pane,'Enter')
+        self.await_awake()
+        self.assertEqual(self.resume_count(),2)
+
+    def test_non_retryable_failed_wake_shows_the_reason_and_no_button(self):
+        self.cli('sleep',self.pane)
+        self.fail_next_wake()
+        self.capture(lambda s:'⏎ Retry' in s)
+        self.transcript.rename(self.root/'hidden-history')
+        try:
+            self.tm('resize-window','-t',self.pane,'-x','99')   # SIGWINCH re-reads the facts
+            screen=self.capture(lambda s:"can't wake" in s)
+            self.assertIn('saved conversation history is gone',screen)
+            self.assertIn('WORKER-SLEEP.md',screen)
+            self.assertNotIn('Retry',screen)
+            self.tm('send-keys','-t',self.pane,'Enter');time.sleep(.4)
+            self.tm('send-keys','-t',self.pane,'Enter');time.sleep(.6)
+            self.assertNotIn('again to',self.tm('capture-pane','-p','-t',self.pane))
+            self.assertEqual(self.opt('@worker_lifecycle'),'failed')
+            self.assertEqual(self.resume_count(),1)
+        finally:
+            (self.root/'hidden-history').rename(self.transcript)
+            self.tm('resize-window','-t',self.pane,'-x','100')
+
+    def test_scan_reparks_a_failed_wake_left_on_a_dead_pane(self):
+        self.cli('sleep',self.pane)
+        path=Path(self.opt('@sleep_record'))
+        data=json.loads(path.read_text());data.update(state='failed',error='sleep controller stopped')
+        path.write_text(json.dumps(data));self.stamp('@worker_lifecycle','failed')
+        self.tm('respawn-pane','-k','-t',self.pane,'exit 3')
+        deadline=time.monotonic()+5
+        while self.opt('pane_dead')!='1' and time.monotonic()<deadline:time.sleep(.05)
+        self.cli('scan')
+        self.assertIn('⏎ Retry',self.capture(lambda s:'⏎ Retry' in s))
+
     def test_wake_button_state_machine(self):
         P=LIB['PARK'];b=P['WakeButton'](3)
         self.assertIsNone(b.timeout(0))
@@ -964,6 +1023,11 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         self.assertTrue(b.press(14));self.assertEqual(b.state,'waking')
         self.assertFalse(b.press(14.5))
         self.assertEqual(P['presses'](b'q\r\n\x1b[A\x1b[<0;1;9M\x1b[<0;1;9m\x1b[<0;1;3M\x1b[<2;1;9M',{9}),2)
+        r=P['WakeButton'](3,'retry')
+        self.assertIn('⏎ Retry',r.lines(0)[0]);r.press(0)
+        self.assertIn('again to retry · 3',r.lines(0)[0]);r.press(1)
+        self.assertIn('retrying…',r.lines(1)[0])
+        self.assertIn('history is gone',P['blocked_lines']('history is gone')[0])
 
     def test_hook_trust_preserves_only_authorized_hashes(self):
         check=LIB['hook_trust']
