@@ -112,7 +112,7 @@ print_sheet() {
   key "prefix b" "backlog modal — GitHub issues; enter spawns the issue's session"
   key "prefix c" "config modal — view/edit FLEET_* across layers"
   key "prefix ?" "this cheatsheet"
-  key "F9" "(no prefix) jump back to this session's hub"
+  key "F9" "(no prefix) jump back to this session's hub — from a task showing the task bar, the first press focuses the bar (like prefix E) and a second press goes to the hub; the ⌂ tap does the same (FLEET_HOME_SIDEBAR_FIRST=0 turns it off)"
   key "click ● N" "the needs badge (bottom-left) cycles to the next 'needs' window"
   key "click ● N (orange)" "cross-fleet dot = N needy windows in OTHER fleets; click to jump"
   key "click usage" "footer usage stat — opens the usage + account modal"

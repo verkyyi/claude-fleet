@@ -64,7 +64,7 @@ base = subprocess.run(['git', '-C', str(main), 'branch', '--show-current'], text
 fleet_conf = 'FLEET_SIDEBAR=1\nFLEET_MAIN=%s\nFLEET_BASE_BRANCH=%s\n' % (main, base)
 sock = str(work / 'fleet-test')
 env = dict(os.environ, TMPDIR=str(work), FLEET_CONF_DIR=str(work / 'conf'),
-           TERM='xterm-256color')
+           FLEET_HUB_VISITS_LOGDIR=str(work / 'logs'), TERM='xterm-256color')
 shim = work / 'path'
 shim.mkdir()
 (shim / 'tmux').write_text('#!/bin/sh\nexec ' + shlex.quote(real_tmux) +
@@ -226,17 +226,24 @@ try:
     def status_block(head):
         start = shipped.index(head)
         return shipped[start + len(head):shipped.index('\n}\n', start)]
+    # The one allowed difference: the ⌂ from the task bar is the SECOND press of
+    # "task bar first" and says so with --nav (issue #899).
     check(status_block('bind -n MouseDown1Status ') ==
-          status_block('bind -T fleet-sidebar MouseDown1Status '),
+          status_block('bind -T fleet-sidebar MouseDown1Status ').replace(' --nav', '', 1),
           'the fleet-sidebar status-bar tap drifted from the root one')
     selected = [line for line in shipped.splitlines() if not line.startswith('#') and
                 'MouseDown1Status' not in line and
                 ('fleet-sidebar' in line or 'after-select-pane[71]' in line or 'client-detached' in line or
                  'MouseDown1Pane' in line or 'MouseDown1Border' in line or 'DoubleClick1Pane' in line or
+                 line.startswith('bind -n F9 ') or
                  line.startswith('set -g pane-border') or line.startswith('set -g default-terminal') or
                  line == 'set -g mouse on')]
     fixture = work / 'sidebar.conf'
-    fixture.write_text('\n'.join(selected).replace('~/.claude/fleet', str(bin_dir.parent)) + '\n')
+    # `run-shell "sh …hub-zoom.sh"` (the F9 binds): production /bin/sh is bash in
+    # POSIX mode, but CI's is dash, which has no `set -o pipefail` and aborts the
+    # script — drive it the way hub-zoom-home-selftest.sh does (issue #414).
+    fixture.write_text('\n'.join(selected).replace('~/.claude/fleet', str(bin_dir.parent))
+                       .replace('run-shell "sh ', 'run-shell "bash --posix ') + '\n')
     tm('source-file', str(fixture))
     tm('set-hook', '-g', 'session-window-changed[72]',
        "set-option -wF -t fleet-test: @sidebar_ready_on_select '#{@sidebar_worker}'")
@@ -626,8 +633,14 @@ try:
     wait_for(lambda: bool(view_on(w2)), 'unzoom did not restore the enabled sidebar')
     tm('kill-pane', '-t', extra)
 
-    # Hub/home resolution stays on the original @dash pane.
-    command(['bash', str(bin_dir / 'hub-zoom.sh'), '--home'])
+    # Hub/home resolution stays on the original @dash pane — and reaches it on the
+    # SECOND press (issue #899): the first F9 in a task with a bar hands the bar
+    # the keyboard and stays; the second, bound in the fleet-sidebar table, goes on.
+    check(not navigation(), 'fixture should start with the worker holding input')
+    os.write(terminal, b'\x1b[20~')  # F9
+    wait_for(navigation, 'first F9 did not put the keyboard on the task bar')
+    check(tm('display-message', '-p', '#{window_id}') == w2, 'first F9 left the task')
+    os.write(terminal, b'\x1b[20~')  # F9 again, now in the fleet-sidebar table
     wait_for(lambda: not views(), 'hub should not have a worker sidebar')
     check(tm('display-message', '-p', '-t', 'fleet-test:', '#{pane_id}') == hp,
           'home went to a sidebar instead of hub')

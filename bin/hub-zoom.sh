@@ -20,10 +20,55 @@
 # fallback is kept (an accidentally closed hub window is still one tap from
 # restored) but hub-session.sh now rebuilds the dash ALONE, so neither key can
 # resurrect a Claude session.
+#
+# TASK BAR FIRST (issue #899, FLEET_HOME_SIDEBAR_FIRST, default on): pressed in a
+# task whose window shows the task bar (`@sidebar_worker`, not zoomed, and no name
+# half-typed on its input line — `@sidebar_input` on the view, the `{top-left}`
+# pane, issue #896), either key first puts the keyboard ON the
+# task bar — the same navigation state prefix E enters — and stays in this window;
+# most of the time "home" only meant "switch task", and the bar is right there.
+# Pressed again while the bar has the keyboard, it goes to the hub as before. The
+# conf tells the two presses apart with `--nav`: tmux resets the client to the
+# root key table BEFORE a binding runs, so the script cannot read
+# #{client_key_table} itself — the fleet-sidebar table's own F9 / ⌂ binds pass it.
+# A zoomed window has no bar on screen, so ⌂ there still unzooms and goes home.
+# The landing is logged to the hub-visit meter as `home-sidebar` / `f9-sidebar`
+# (issue #897) — a trip to the hub that did NOT happen. Knob 0 ⇒ exactly the old
+# behaviour.
+#
+# Usage: hub-zoom.sh [--home] [--nav] [--client <name>]
 set -uo pipefail
-mode="${1:-}"                             # --home ⇒ always land unzoomed
-. "$(cd "$(dirname "$0")" && pwd)/fleet-lib.sh"
+mode='' nav=0 client=''
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --home)   mode=--home ;;             # --home ⇒ always land unzoomed
+    --nav)    nav=1 ;;                   # the client was on the task bar already
+    --client) client="${2:-}"; shift ;;  # the client that pressed the key
+  esac
+  shift
+done
+BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/fleet-lib.sh"
 SESS=$(tmux display-message -p '#{session_name}' 2>/dev/null)
+
+# Task bar first — decided on this window's own options, before any hub lookup.
+if [ "$nav" = 0 ] &&
+   [ "$(tmux display-message -p '#{&&:#{@sidebar_worker},#{!=:#{window_zoomed_flag},1}}' 2>/dev/null)" = 1 ] &&
+   [ -z "$(tmux display-message -p -t '{top-left}' '#{@sidebar_input}' 2>/dev/null)" ]; then
+  [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
+  fleet_load_conf "$SESS"
+  if [ "${FLEET_HOME_SIDEBAR_FIRST:-1}" != 0 ] &&
+     tmux switch-client ${client:+-c "$client"} -T fleet-sidebar 2>/dev/null; then
+    sid=$(tmux display-message -p '#{session_id}' 2>/dev/null)
+    bash "$BIN/fleet-sidebar.sh" key "$sid" Escape >/dev/null 2>&1 || :
+    tmux display-message ${client:+-c "$client"} 'Tasks: type a name ↵ = new session · ↑↓ switch · ↵/Esc worker · ⌂/F9 again → hub' 2>/dev/null || :
+    if [ "$mode" = --home ]; then cause=home-sidebar; else cause=f9-sidebar; fi
+    bash "$BIN/fleet-hub-visits.sh" record '' "$SESS" "$cause" \
+      "$(tmux display-message -p '#{?#{@wid},#{@wid},#{window_id}}' 2>/dev/null)" '' >/dev/null 2>&1 || :
+    exit 0
+  fi
+fi
+
 target=$(fleet_dash_pane "$SESS")
 if [ -z "$target" ]; then
   exec env HUB_SESSION="$SESS" bash "$(dirname "$0")/hub-session.sh"

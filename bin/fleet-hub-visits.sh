@@ -25,6 +25,10 @@
 #           Later landings get a NEW cause token, never a new file (C4/C5 of
 #           #894 write `home-sidebar` / `closed-next`) — `record` accepts any
 #           lowercase [a-z0-9-] marker as the cause verbatim.
+#             home-sidebar / f9-sidebar
+#                            NOT an arrival: ⌂ / F9 put the keyboard on the task
+#                            bar and stayed in the task (issue #899). hub-zoom.sh
+#                            writes it directly — the trip the key used to cost.
 #
 # The writer is the indexed `session-window-changed[73]` / `client-attached[73]`
 # hooks in conf/tmux-attention.conf. Moving BETWEEN non-hub windows costs no fork:
@@ -38,7 +42,8 @@
 #       table per log file found. Reading rules (EPIC #894's metric table):
 #       repeat arrivals within the SAME second count once; `attach` visits are
 #       listed on their own line and NOT counted in the total — a reconnect or a
-#       fleet-up is not a trip back.
+#       fleet-up is not a trip back. `*-sidebar` lines are listed the same way:
+#       they record a hub trip that did NOT happen.
 #   fleet-hub-visits.sh --all ...
 #       Every log under logs/, whatever session you are in.
 #   fleet-hub-visits.sh --brief [--since 24h] [--session S | --all]
@@ -188,10 +193,12 @@ for f in ${files[@]+"${files[@]}"}; do
     $1 >= cut && NF >= 3 && $3 != "" {
       # repeat arrivals in one second = one visit (attach deduped on its own, so
       # an uncounted attach never swallows a real trip in the same second)
-      key = $1 SUBSEP ($3 == "attach")
+      side = ($3 ~ /-sidebar$/)
+      key = $1 SUBSEP ($3 == "attach") SUBSEP (side ? $3 : "")
       if (key in seen) next
       seen[key] = 1
       if ($3 == "attach") { att++; next }
+      if (side) { if (!($3 in sn)) sorder[++sk] = $3; sn[$3]++; stay++; next }
       if (!($3 in n)) order[++k] = $3
       n[$3]++; tot++
     }
@@ -205,11 +212,12 @@ for f in ${files[@]+"${files[@]}"}; do
         printf "%s\t%d\t%s\n", name, tot, (top == "" ? "-" : top)
         exit
       }
-      printf "hub visits · %s · last %s: %d%s\n", name, since, tot, (att ? sprintf(" (+%d attach, not counted)", att) : "")
-      if (tot + att == 0) exit
+      printf "hub visits · %s · last %s: %d%s%s\n", name, since, tot, (att ? sprintf(" (+%d attach, not counted)", att) : ""), (stay ? sprintf(" (+%d kept on the task bar, not counted)", stay) : "")
+      if (tot + att + stay == 0) exit
       printf "  %-14s %5s\n", "cause", "count"
       for (i = 1; i <= k; i++) printf "  %-14s %5d\n", order[i], n[order[i]]
       if (att) printf "  %-14s %5d  (not counted)\n", "attach", att
+      for (i = 1; i <= sk; i++) printf "  %-14s %5d  (stayed on the task bar, not counted)\n", sorder[i], sn[sorder[i]]
     }' "$f" || rc=1
 done
 exit "$rc"
