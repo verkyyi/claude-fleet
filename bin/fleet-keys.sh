@@ -129,7 +129,8 @@ print_sheet() {
   # reach the sidebar — the full list is prefix ? away.
   if [ "$CONTEXT" = sidebar ]; then
   group "reach the sidebar" "— from any worker window"
-  key "prefix E" "focus the task sidebar (or click/tap it)"
+  key "prefix E" "focus the task sidebar (or click/tap it); with no sidebar on screen, the task picker"
+  key "prefix Space" "the task picker — this list as a popup, for when the sidebar is hidden"
   key "⌂ / F9" "first press focuses the sidebar, a second goes to the hub (FLEET_HOME_SIDEBAR_FIRST=0: straight to the hub)"
   key "prefix ?" "the full fleet keymap"
   fi
