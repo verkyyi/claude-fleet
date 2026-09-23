@@ -177,7 +177,11 @@ working; but `Any` also matches keys and mouse events the root table used to
 pick up for an unbound key, so F9, the wheel and the status-bar tap are bound
 in `fleet-sidebar` too (the tap is a verbatim copy of the root block, compared
 by the selftest), and any other mouse event (`#{mouse_x}` is set only for one)
-drops back to root and is forwarded to the pane under it. Enter and Escape
+is forwarded to the pane under it WITHOUT leaving the table (issue #925): Claude
+Code enables any-motion tracking and tmux has no bindable name for a pointer
+move, so a mere nudge of the mouse lands on `Any` — the presses that should
+leave navigation (left, right, middle on a worker; the wheel) are bound
+explicitly instead. Enter and Escape
 test `@sidebar_input` on `{top-left}` to keep the keyboard on a non-empty line.
 
 Every letter types now — `q`, `n`, `j`, `k` included — so movement is ↑↓ only
