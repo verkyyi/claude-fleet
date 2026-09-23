@@ -501,6 +501,23 @@ initials or first two letters, full name on a collision) also prefixes every
 window name in a 2+ repo fleet (`tl·issue-12`). A no-repo session is not prefixed.
 `bin/fleet-pick-repo-selftest.sh` pins the picker, dash and label.
 
+**Backlog for any repo (issue #794).** The backlog follows the current repo too.
+`fleet_backlog_repos` names what it lists — the current repo, or every hosted repo
+under `all` — and `tmux-issues-rows.sh` reads each one's own
+`fleets/<slug>/issues|labels|parents` (`fleet_backlog_cache`), one sorted block per
+repo, each title led by its short tag under `all`. A row gains a 4th field, its
+repo; only that repo's windows mark it bound, so repo A's #12 never hides repo B's.
+Every row action passes the row's repo on as `--repo=` (`{4}` in the fzf binds):
+the preview, ⌃x close, ⌃y priority, comment, ⌃o open, and Enter/⌃g spawn
+(`dash-issue-session.sh --repo`). `fleet_backlog_repo` resolves an action's repo:
+the row's (it must be hosted), else `CF_REPO` through a popup, else the current repo.
+A new issue has no row, so ⌃n, the sidebar and `fleet-issue-file.sh` file into the
+current repo. `fleet-issue-file.sh` prefers the calling window's repo. Under `all`,
+⌃n asks first with `fleet-pick.sh --repo-only` (the same picker, repo rows only, in
+the same popup). `fleet-issue-file.sh` refuses without `--repo` there. A one-repo
+fleet takes none of these branches: three-field rows, the per-session cache, and
+binds with no `--repo`. `bin/backlog-repo-selftest.sh` pins both halves.
+
 ### The launcher pre-trusts the fleet's checkout (issue #563)
 
 Claude Code asks "Quick safety check: Is this a project you created or one you

@@ -1,5 +1,5 @@
 #!/bin/bash
-# dash-issue-comment.sh <issue-number> [confirm] — add a quick comment to a
+# dash-issue-comment.sh <issue-number> [confirm] [--repo=<owner/name>] — add a quick comment to a
 # GitHub issue straight from the backlog panel (triage without leaving tmux).
 # Called with just the number it opens a small popup that reads one line of
 # text; the popup re-invokes it with `confirm`, which runs `gh issue comment`,
@@ -12,13 +12,16 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"
 C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
+# --repo=<owner/name> (issue #794): the backlog row's repo, in a fleet hosting 2+
+# repos — the action targets THAT repo. fleet_backlog_repo validates it (hosted).
+ROWREPO=''
+for _a in "$@"; do case "$_a" in --repo=*) ROWREPO="${_a#--repo=}" ;; esac; done
 
 FLEET_SESSION=$(fleet_current_session); export FLEET_SESSION
 # repo: CF_REPO (passed through the popup) wins; else the fleet's cached repo,
 # else the global FLEET_REPO — matching the backlog panel's resolution.
-REPO="${FLEET_REPO:-}"
-_r=$(fleet_repo_cached "$FLEET_SESSION"); [ -n "$_r" ] && REPO="$_r"
-[ -n "${CF_REPO:-}" ] && REPO="$CF_REPO"
+# In a 2+ repo fleet: the row's repo, else CF_REPO, else the current repo.
+REPO=$(fleet_backlog_repo "$FLEET_SESSION" "$ROWREPO")
 [ -z "$REPO" ] && { tmux display-message "backlog: no repo resolved — cannot comment on #$num"; exit 1; }
 command -v gh >/dev/null 2>&1 || { tmux display-message "gh not found — cannot comment on #$num"; exit 1; }
 

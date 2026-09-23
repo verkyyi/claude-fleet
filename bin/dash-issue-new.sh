@@ -65,10 +65,15 @@ FLEET_SESSION=$(fleet_current_session); export FLEET_SESSION
 fleet_load_conf "$FLEET_SESSION"
 # repo: CF_REPO (passed through the popup) wins; else the fleet's cached repo,
 # else the global FLEET_REPO — matching the backlog panel's resolution.
-REPO="${FLEET_REPO:-}"
-_r=$(fleet_repo_cached "$FLEET_SESSION"); [ -n "$_r" ] && REPO="$_r"
-[ -n "${CF_REPO:-}" ] && REPO="$CF_REPO"
-[ -z "$REPO" ] && { tmux display-message "backlog: no repo resolved — cannot create issue"; exit 1; }
+# A fleet hosting 2+ repos (issue #794): CF_REPO, else the CURRENT repo. Under `all`
+# there is none — an issue always belongs to one repo — so the popup ASKS first
+# (fleet-pick.sh --repo-only, phase 2 below); only the background create pass,
+# which the popup hands a repo, still refuses without one.
+MULTI=0; fleet_multirepo "$FLEET_SESSION" && MULTI=1
+REPO=$(fleet_backlog_repo "$FLEET_SESSION")
+if [ -z "$REPO" ] && { [ "$MULTI" = 0 ] || [ -n "$title_file" ]; }; then
+  tmux display-message "backlog: no repo resolved — cannot create issue"; exit 1
+fi
 command -v gh >/dev/null 2>&1 || { tmux display-message "gh not found — cannot create issue"; exit 1; }
 # fzf is the interactive title widget now (issue #429), so this path requires it. Guard up
 # top like `gh` so BOTH phases fail with a toast instead of a broken popup if it's absent.
@@ -103,7 +108,7 @@ create_issue() {
     # issue has no milestone + no assignee, matching the collector's row format:
     # "<milestone>\t#<num>\t<assignee>\t<title>". fleet_cache returns the exact file
     # the reload reads, so we never touch the .ts (no flat-cache flash).
-    src=$(fleet_cache issues "$FLEET_SESSION")
+    src=$(fleet_backlog_cache issues "$FLEET_SESSION" "$REPO")
     [ -n "$num" ] && [ -n "$src" ] && \
       printf '%s\t#%s\t%s\t%s\n' '· no milestone' "$num" '·' "$title" >> "$src"
     # refetch to make the cache authoritative (ordering, dedup); GH_TTL=0 forces it.
@@ -116,7 +121,9 @@ create_issue() {
       # (acceptance (c)). --title names the window after the WORK without depending on
       # the optimistic row surviving the collector refetch (issue #216).
       tmux display-message "filed #$num in $REPO ✓ — spawning worker…"
-      ( bash "$BIN/dash-issue-session.sh" "$num" --title "$title" >/dev/null 2>&1 & )
+      # --repo only where it is needed (issue #794): a one-repo fleet's call is unchanged.
+      _sr=''; [ "$MULTI" = 1 ] && _sr=$REPO
+      ( bash "$BIN/dash-issue-session.sh" "$num" --title "$title" ${_sr:+--repo "$_sr"} >/dev/null 2>&1 & )
     else
       tmux display-message "filed new issue #$num in $REPO ✓"
     fi
@@ -138,6 +145,12 @@ fi
 # one-line fast filer, issue #297; there is no body prompt). Then hand the slow create
 # off to the BACKGROUND so the popup closes INSTANTLY instead of blocking on the create
 # (+ the worktree/window spawn).
+# Under `all` in a 2+ repo fleet, ask WHICH repo first — the same picker as the
+# fleet name, its repo rows only — in this popup, so nothing nests. Esc cancels.
+if [ -z "$REPO" ]; then
+  REPO=$(bash "$BIN/fleet-pick.sh" --repo-only "$FLEET_SESSION" 2>/dev/null)
+  [ -n "$REPO" ] || exit 0
+fi
 [ "$spawn" = 1 ] && verb="New issue + worker" || verb="New issue"
 title_prefix='  title ▸ '
 hdr="$verb in $REPO — type a title · Enter = file · Esc = cancel"

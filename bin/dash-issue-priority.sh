@@ -1,5 +1,5 @@
 #!/bin/bash
-# dash-issue-priority.sh <issue-number> [cycle|p0|p1|p2|none] — set/cycle an
+# dash-issue-priority.sh <issue-number> [cycle|p0|p1|p2|none] [--repo=<owner/name>] — set/cycle an
 # issue's priority tier straight from the backlog panel (issue #235).
 #
 # Priority is the `priority:p{0,1,2}` LABEL the backlog rows tag + sort by
@@ -27,17 +27,20 @@ num="${1//[^0-9]/}"; [ -z "$num" ] && exit 0
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"
+# --repo=<owner/name> (issue #794): the backlog row's repo, in a fleet hosting 2+
+# repos — the action targets THAT repo. fleet_backlog_repo validates it (hosted).
+ROWREPO=''
+for _a in "$@"; do case "$_a" in --repo=*) ROWREPO="${_a#--repo=}" ;; esac; done
 
 # `--commit <tier>` = the BACKGROUND authoritative pass (dispatched by the
 # interactive path via fleet_bg); anything else is the interactive keypress with an
 # optional explicit action. An empty <tier> clears priority.
 if [ "${2:-}" = "--commit" ]; then mode=commit; commit_target="${3:-}"
-else mode=interactive; action="${2:-cycle}"; fi
+else mode=interactive; action="${2:-cycle}"; case "$action" in --repo=*) action=cycle ;; esac; fi
 
 FLEET_SESSION=$(fleet_current_session); export FLEET_SESSION
-REPO="${FLEET_REPO:-}"
-_r=$(fleet_repo_cached "$FLEET_SESSION"); [ -n "$_r" ] && REPO="$_r"
-[ -n "${CF_REPO:-}" ] && REPO="$CF_REPO"
+# In a 2+ repo fleet: the row's repo, else CF_REPO, else the current repo.
+REPO=$(fleet_backlog_repo "$FLEET_SESSION" "$ROWREPO")
 [ -z "$REPO" ] && { tmux display-message "backlog: no repo resolved — cannot set priority on #$num"; exit 1; }
 command -v gh >/dev/null 2>&1 || { tmux display-message "gh not found — cannot set priority on #$num"; exit 1; }
 
@@ -66,7 +69,7 @@ fi
 # --- interactive keypress: cache-based cycle + optimistic repaint, bg the gh work -
 # Cycle from the tier the backlog row ACTUALLY shows (the labels cache), so ⌃y is
 # consistent with what's on screen and needs NO network round-trip to decide.
-LBL=$(fleet_cache labels "$FLEET_SESSION")
+LBL=$(fleet_backlog_cache labels "$FLEET_SESSION" "$REPO")
 cur=""
 if [ -n "$LBL" ] && [ -f "$LBL" ]; then
   cur=$(awk -F'\t' -v n="$num" '$1==n{print $2; exit}' "$LBL" \
@@ -105,6 +108,6 @@ fi
 
 # Background the authoritative gh read+edit + reconcile (issue #304) so ⌃y returns
 # INSTANTLY; on failure the bg job corrects the optimistic toast via display-message.
-fleet_bg "bash '$0' '$num' --commit '$new'"
+fleet_bg "bash '$0' '$num' --commit '$new'${ROWREPO:+ '--repo=$REPO'}"
 tmux display-message "#$num → ${new:+priority:$new}${new:-unprioritised} ✓"
 exit 0
