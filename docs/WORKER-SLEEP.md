@@ -175,6 +175,25 @@ the placeholder rather than starting every sleeping agent. A missing worktree,
 transcript or account leaves an actionable failure; it never silently starts a
 new conversation.
 
+### The sleeping page
+
+The placeholder process (`fleet-sleep.py park`) draws a card sized to the
+current pane, not the screen captured at sleep time (issue #1049). Top to
+bottom: the state (`Sleeping`, `Waking…`, or `Wake failed` with the error), the
+issue and window name, the repo, how long it has been asleep and idle, the agent,
+model, account and memory freed, uncommitted and unpushed work in the worktree,
+the PR's CI glyph (`@prci`) or a merged PR, then the agent's last reply, wrapped
+to the width. Below that is a line listing what still wakes it on its own (a due
+loop, quota coming back, an incoming message) and the hint.
+
+When the last reply can't be read (a Codex session, or an unreadable
+transcript), the saved screen is shown instead, dimmed, labelled as old, and
+without the agent's input box and status line. Any field that is missing is
+left off the card. The card is redrawn on SIGWINCH and never on a timer. The
+renderer is `render_park()` in `bin/fleet_sleep_park.py`, a pure function of
+the record, the window facts, and the size. Callers can pass their own
+`footer_lines`.
+
 ## Rollout and validation
 
 Run `bash bin/run-selftests.sh fleet-sleep` for the isolated tmux integration

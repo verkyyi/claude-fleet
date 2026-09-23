@@ -31,6 +31,7 @@ RPC = runpy.run_path(str(BIN / 'fleet-codex-rpc.py'))['Client']
 ARGV = runpy.run_path(str(BIN / 'fleet_sleep_argv.py'))
 LOOP = runpy.run_path(str(BIN / 'fleet-loop.py'))
 MCP = runpy.run_path(str(BIN / 'fleet_sleep_mcp.py'))
+PARK = runpy.run_path(str(BIN / 'fleet_sleep_park.py'))
 
 
 class NotAWorker(ValueError):
@@ -875,13 +876,29 @@ def launch(w):
 
 def park(w):
     path,data=w.record()
-    print('\033[2J\033[H'+data.get('screen',''))
-    print('\nFleet · sleeping — enter this worker to resume the saved conversation.',flush=True)
-    w.stamp('@sleep_park_ready',path.stem)
-    # Blocking on a descriptor, no periodic per-worker polling. tmux focus hooks
-    # and explicit wake replace this exact park process under the window lock.
-    import signal
-    while True: signal.pause()
+    # Redraw on SIGWINCH only — no timer (EPIC #1048 rule 4). The handler just
+    # flags; the draw (tmux + git reads) runs back in the loop, never re-entrant.
+    pending=[True]
+    signal.signal(signal.SIGWINCH,lambda *_:pending.__setitem__(0,True))
+    while True:
+        if pending[0]:
+            pending[0]=False
+            try: path,data=w.record()
+            except (ValueError,KeyError,OSError): pass
+            sys.stdout.write('\033[2J\033[H'+park_frame(w,data)); sys.stdout.flush()
+            if w.opt('@sleep_park_ready')!=path.stem: w.stamp('@sleep_park_ready',path.stem)
+            continue
+        signal.pause()
+
+
+def park_frame(w,data,footer_lines=None):
+    opts={}
+    for key,name in (('issue','@issue'),('title','window_name'),('repo','@repo'),('prci','@prci'),('reap_key','@reap_key')):
+        try: opts[key]=w.opt(name)
+        except subprocess.SubprocessError: pass
+    try: cols,rows=os.get_terminal_size(sys.stdout.fileno())
+    except OSError: cols,rows=int(w.opt('pane_width')),int(w.opt('pane_height'))
+    return PARK['render_park'](data,PARK['gather'](data,opts),cols,rows,footer_lines)
 
 
 def main():
