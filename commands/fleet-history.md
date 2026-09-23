@@ -66,8 +66,22 @@ fleet only.
 ## 1. List closed sessions
 
 ```sh
-bash ~/.claude/fleet/bin/fleet-history.sh list --repo "$FLEET_REPO" $ARGUMENTS
+bash ~/.claude/fleet/bin/fleet-history.sh list $ARGUMENTS
 ```
+
+**A fleet hosting 2+ repos** (issue #804): that one call merges every hosted
+repo's ledger into one newest-first list. It opens with a `repos:` legend
+(`cf=verkyyi/claude-fleet · to=verkyyi/tokenledger …`) and each row carries its
+repo's short tag in a column after the key; a filter word also matches the repo
+(`list tokenledger`). Every per-row action below runs against **that row's
+repo** — load it first, then use the `$FLEET_REPO` / `$FLEET_MAIN` it sets:
+
+```sh
+source ~/.claude/fleet/bin/fleet-lib.sh; fleet_load_repo_conf "$S" <owner/name from the legend>
+```
+
+A one-repo fleet prints the list it always did (no legend, no repo column);
+`--repo R` pins one repo's ledger either way.
 
 Each row is `glyph · key · when · title · PR · sha · one-line-summary`,
 newest first — the glyph is `✓` (landed) or `✗` (closed-unlanded, #320), the key is

@@ -33,6 +33,9 @@ if [ "$target" = --wid ]; then
   target="landed:$pr"
 fi
 
+# A merged landed row ends in `@<owner/name>` (issue #804): THAT repo's PR.
+trepo=''
+case "$target" in landed:*@*) trepo=${target#*@}; target=${target%@*} ;; esac
 case "$target" in
   landed:issue:*|landed:scratch:*|'') exit 0 ;;   # PR-less / scratch row / empty — nothing to open
   landed:*)          pr="${target#landed:}" ;;
@@ -42,7 +45,8 @@ case "$pr" in ''|*[!0-9]*) exit 0 ;; esac    # not a numeric PR
 
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh" 2>/dev/null || true
-repo=$(fleet_repo_cached "${FLEET_SESSION:-}" 2>/dev/null)
+repo=$trepo
+[ -n "$repo" ] || repo=$(fleet_repo_cached "${FLEET_SESSION:-}" 2>/dev/null)
 [ -z "$repo" ] && { fleet_load_conf "${FLEET_SESSION:-}" 2>/dev/null; repo="${FLEET_REPO:-}"; }
 [ -n "$repo" ] && sh "$BIN/open-url.sh" "https://github.com/$repo/pull/$pr"
 exit 0

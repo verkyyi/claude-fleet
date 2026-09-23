@@ -130,10 +130,13 @@ lkey_okey() { case "${1:-}" in scratch-*) printf '%s' "$1" ;; *) printf 'issue-%
 # dash-restore-session.sh, and what the fold below matches a keystroke against.
 # A scratch row is addressed by its own key (#466) even when it escalated into a
 # PR, so the restorer knows to rebuild an @raw window rather than bind a
-# nonexistent @issue.
-landed_target() { # <ledger key> <pr>
-  if is_scratch_key "$1"; then printf 'landed:scratch:%s' "$1"; return; fi
-  case "${2:-}" in ''|-) printf 'landed:issue:%s' "$1" ;; *) printf 'landed:%s' "${2#\#}" ;; esac
+# nonexistent @issue. In a fleet hosting 2+ repos (issue #804) the target ends in
+# `@<owner/name>`, the row's own repo, so a resume lands in THAT repo — a bare
+# `landed:12` names a PR number two repos can share. One-repo fleet: no suffix.
+landed_target() { # <ledger key> <pr> [<repo>]
+  local rs=''; [ -n "${3:-}" ] && [ "$3" != - ] && rs="@$3"
+  if is_scratch_key "$1"; then printf 'landed:scratch:%s%s' "$1" "$rs"; return; fi
+  case "${2:-}" in ''|-) printf 'landed:issue:%s%s' "$1" "$rs" ;; *) printf 'landed:%s%s' "${2#\#}" "$rs" ;; esac
 }
 
 # --- the landed view's fold state --------------------------------------------
@@ -144,35 +147,85 @@ landed_target() { # <ledger key> <pr>
 # polarity). The dash DELETES it on every (re)launch, exactly as it resets
 # dash_view_<session>, so the landed peek always opens folded and the file can
 # never accumulate keys for sessions nobody will look at again.
-landed_fold_file() {
+# A fleet hosting 2+ repos keeps one per repo, `<file>.<slug>` (issue #790): two
+# repos' `issue-12` rows are different sessions. [<slug>] picks that file.
+landed_fold_file() { # [<slug>]
   printf '%s/global/dash_fold_landed_%s%s' "${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}" "${FLEET_SESSION:-default}" \
-    "${LANDED_FOLD_SLUG:+.$LANDED_FOLD_SLUG}"
+    "${1:+.$1}"
 }
 
-# landed_scope <repo> — a fleet hosting 2+ repos (issue #790). One ledger is one
-# repo's, so its keys never collide with each other; what crosses repos is the
-# ORIGIN column, which a multi-repo spawn stamps as `<slug>:issue-<N>` (#789), and
-# the per-fleet fold file, which two repos' `issue-12` rows would share. So: the
-# fold file gets the repo's slug as a suffix, and landed_local_origins drops THIS
-# ledger's own `<slug>:` from col 11 — a parent in the same repo then joins by the
-# bare key it always has, and a parent in ANOTHER repo keeps its prefix, matches no
-# row here, and renders as the ↳ tag of an orphan. A one-repo fleet: both empty.
-LANDED_FOLD_SLUG=''
-landed_scope() {
-  LANDED_FOLD_SLUG=''
+# --- the merged landed view (issue #804) ---------------------------------------
+# A fleet hosting 2+ repos keeps one ledger PER REPO (landed_<slug>.tsv). The
+# landed view (`rows`, `fold`) and `list` merge every repo on screen into ONE
+# newest-first list — the current repo when one is picked, every hosted repo
+# under `all` — and each row keeps its repo: a leading column on the stream,
+# the `@<repo>` on its target (so a resume lands in its own repo), and a short
+# repo badge on the row under `all`, the live dash's own (#793).
+# Inside the merged view every session key is REPO-QUALIFIED, `<slug>:issue-<N>`
+# — the spelling a multi-repo spawn already stamps into @origin (#789) — so two
+# repos' `issue-12` never join, and a parent in ANOTHER hosted repo still nests
+# its child. A bare origin (a row recorded before its fleet went multi-repo) is
+# qualified with the row's own repo on the way in.
+# One-repo fleet: LANDED_MERGED=0, the stream is that one ledger, keys stay bare
+# and every renderer takes the path it always took, byte for byte.
+LANDED_MERGED=0; LANDED_BADGE=0; LANDED_REPOS=''; LANDED_SHORTMAP=$'\n'
+landed_scope() { # [all] — `all` merges every hosted repo, whatever the current repo
+  LANDED_MERGED=0; LANDED_BADGE=0; LANDED_REPOS=''; LANDED_SHORTMAP=$'\n'
+  [ -z "${FLEET_HISTORY_LEDGER:-}" ] || return 0     # a pinned ledger IS one ledger
   [ -n "${FLEET_SESSION:-}" ] && command -v fleet_multirepo >/dev/null 2>&1 \
     && fleet_multirepo "$FLEET_SESSION" || return 0
-  LANDED_FOLD_SLUG=$(fleet_slug "$(fleet_norm_repo "${1:-}")")
+  LANDED_MERGED=1
+  local cur r s sh
+  cur=all; [ "${1:-}" = all ] || cur=$(fleet_current_repo "$FLEET_SESSION")
+  [ "$cur" = all ] && LANDED_BADGE=1
+  while IFS=$'\t' read -r r s sh; do
+    [ -n "$r" ] || continue
+    LANDED_SHORTMAP+="$s"$'\t'"$sh"$'\n'
+    if [ "$cur" = all ] || [ "$cur" = "$r" ]; then LANDED_REPOS+="$r"$'\n'; fi
+  done <<EOF
+$(fleet_repo_shorts "$FLEET_SESSION")
+EOF
 }
-landed_local_origins() {
-  if [ -z "$LANDED_FOLD_SLUG" ]; then cat; return; fi
-  awk -F'\t' -v OFS='\t' -v p="$LANDED_FOLD_SLUG:" \
-    'NF >= 11 && index($11, p) == 1 { $11 = substr($11, length(p) + 1) } { print }'
+# lslug_v <owner/name> → $lslug, fleet_slug's spelling without the fork (the
+# dash's rslug_v idiom) — this runs per row.
+lslug_v() { lslug=${1//\//-}; lslug=${lslug//[^[:alnum:]._-]/}; }
+# lshort_v <slug> → $lshort, that repo's badge (falls back to the slug).
+lshort_v() { lshort=${LANDED_SHORTMAP#*$'\n'"$1"$'\t'}
+  if [ "$lshort" = "$LANDED_SHORTMAP" ]; then lshort=$1; else lshort=${lshort%%$'\n'*}; fi; }
+# landed_stream <repo> [filter] → `<repo>\t<ledger row>` per row, newest first.
+# <repo> is the one-repo fleet's; merged, it is ignored and every LANDED_REPOS
+# ledger is read, its col-11 origin qualified, and the whole set sorted by
+# timestamp — stable, so same-second rows keep their repo's own order. Merged,
+# the substring filter also sees the repo, so `list tokenledger` narrows to it.
+landed_stream() {
+  if [ "$LANDED_MERGED" = 0 ]; then
+    read_ledger "${1:-}" "${2:-}" | awk -v r="${1:--}" '{ print r "\t" $0 }'
+    return 0
+  fi
+  if [ -n "${2:-}" ]; then landed_stream "${1:-}" | grep -iF -- "$2"; return 0; fi
+  local r
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    read_ledger "$r" | awk -F'\t' -v OFS='\t' -v r="$r" -v s="$(fleet_slug "$r")" '
+      NF >= 11 && $11 ~ /^(issue|scratch)-/ { $11 = s ":" $11 } { print r, $0 }'
+  done <<EOF | LC_ALL=C sort -s -t"$(printf '\t')" -k2,2r
+$LANDED_REPOS
+EOF
+}
+# lorg_is_sess <origin> → 0 when the origin names a SESSION (a parent to nest
+# under), not the hub/autofill/bridge. Merged, the qualified spelling counts too.
+lorg_is_sess() {
+  case "${1:-}" in issue-*|scratch-*) return 0 ;; esac
+  [ "$LANDED_MERGED" = 1 ] || return 1
+  case "${1:-}" in *:issue-*|*:scratch-*) return 0 ;; esac
+  return 1
 }
 landed_is_open() { # <root key, @origin spelling> → 0 when its block is unfolded
-  local f; f=$(landed_fold_file)
+  local k="${1:-}" s='' f
+  if [ "$LANDED_MERGED" = 1 ]; then case "$k" in *:*) s=${k%%:*}; k=${k#*:} ;; esac; fi
+  f=$(landed_fold_file "$s")
   [ -f "$f" ] || return 1
-  grep -qxF -- "${1:-}" "$f" 2>/dev/null
+  grep -qxF -- "$k" "$f" 2>/dev/null
 }
 
 # lchain <parent key> — walk up to the ultimate root PRESENT IN THIS VIEW, ≤4 hops
@@ -191,10 +244,8 @@ lchain() { lroot=''; lrootseq=0
     [ "$m" = "$t" ] && return
     row=${m%%$'\n'*}
     rseq=${row%%$'\t'*}; rorg=${row#*$'\t'}
-    case "$rorg" in
-      issue-*|scratch-*) cur=$rorg; hops=$((hops+1)) ;;
-      *) lroot=$cur; lrootseq=$rseq; return ;;
-    esac
+    if lorg_is_sess "$rorg"; then cur=$rorg; hops=$((hops+1))
+    else lroot=$cur; lrootseq=$rseq; return; fi
   done
 }
 
@@ -508,11 +559,18 @@ find_row() {
 # list — human table, newest first
 # ============================================================================
 cmd_list() {
-  local repo="" filter=""
+  local repo="" filter="" all=""
   while [ $# -gt 0 ]; do
-    case "$1" in --repo) repo="${2:-}"; shift 2;; *) filter="$1"; shift;; esac
+    case "$1" in --repo) repo="${2:-}"; shift 2;; --all) all=1; shift;; *) filter="$1"; shift;; esac
   done
-  local out; out=$(read_ledger "$repo" "$filter")
+  # Every hosted repo (issue #804) with `--all`, or with no --repo at all in a
+  # fleet hosting 2+ repos; `--repo R` stays that one ledger. One-repo fleet: the
+  # merge never switches on, and the list below is the one it always printed.
+  if [ -n "$all" ] || [ -z "$repo" ]; then
+    [ -n "${FLEET_SESSION:-}" ] || FLEET_SESSION=$(fleet_current_session 2>/dev/null)
+    landed_scope all
+  fi
+  local out; out=$(landed_stream "$repo" "$filter")
   if [ -z "$out" ]; then
     echo "no landed sessions recorded yet$( [ -n "$filter" ] && printf ' (filter: %s)' "$filter")."
     return 0
@@ -521,8 +579,17 @@ cmd_list() {
   # than a raw ISO timestamp (issue #228), so the CLI list matches the dash's
   # last-activity column. Per-row (a bash loop, not the one-shot awk) since the
   # ISO→relative conversion needs fleet_epoch_from_iso + fleet_reltime.
+  # Merged: one legend line first — which repo each badge names, so a row can be
+  # resumed with its repo's --repo/--main (fleet_load_repo_conf <sess> <repo>).
+  if [ "$LANDED_MERGED" = 1 ]; then
+    local lg='' lr lsh
+    while IFS=$'\t' read -r lr _ lsh; do [ -n "$lr" ] && lg="${lg:+$lg · }$lsh=$lr"; done <<EOF
+$(fleet_repo_shorts "$FLEET_SESSION")
+EOF
+    printf 'repos: %s\n' "$lg"
+  fi
   local now; now=$(date +%s 2>/dev/null)
-  printf '%s\n' "$out" | while IFS=$'\t' read -r when iss title pr sha _ _ sid smry state origin _; do
+  printf '%s\n' "$out" | while IFS=$'\t' read -r rrepo when iss title pr sha _ _ sid smry state origin _; do
     [ -z "$iss" ] && continue
     local ep rel; ep=$(fleet_epoch_from_iso "$when"); fleet_reltime "$ep" "$now"; rel="${reltime_out:-$when}"
     local short="${sha:0:7}"; [ "$sha" = "-" ] && short="-"
@@ -533,6 +600,13 @@ cmd_list() {
     # glyph tells landed (✓) from closed-unlanded (✗); empty state == legacy landed.
     local glyph="✓"; [ "$state" = "closed-unlanded" ] && glyph="✗"
     # key cell: `#<issue>` for a worker, `~<N>` for a scratch (#466) — same width.
+    # Merged (issue #804): a repo column after it — the row's short badge.
+    if [ "$LANDED_MERGED" = 1 ]; then
+      local lslug lshort; lslug_v "$rrepo"; lshort_v "$lslug"
+      printf '%s %-5s  %-4s  %-8s  %-44s  PR %-5s  %-7s  %s\n' \
+        "$glyph" "$(key_label "$iss")" "$lshort" "$rel" "$title" "$pr" "$short" "$smry"
+      continue
+    fi
     printf '%s %-5s  %-8s  %-44s  PR %-5s  %-7s  %s\n' \
       "$glyph" "$(key_label "$iss")" "$rel" "$title" "$pr" "$short" "$smry"
   done
@@ -588,8 +662,8 @@ cmd_rows() {
     else printf -v fld_out "%s%*s" "$s" $((w-n)) ''; fi; }
   local now; now=$(date +%s 2>/dev/null)
 
-  landed_scope "$repo"
-  local out; out=$(read_ledger "$repo" | landed_local_origins)
+  landed_scope
+  local out; out=$(landed_stream "$repo")
 
   # --- nesting (issue #503, applied to the closed list) ------------------------
   # Ledger col 11 IS the spawning session — recorded at land/close time from the
@@ -602,11 +676,12 @@ cmd_rows() {
   # the way (rank, index) is the live one's. The ledger is append-only and a key can
   # recur (a reopened issue, a re-landed scratch), so the FIRST row wins — newest
   # first means the newest one, the one a reader means by that number.
-  local lkeytab='' lseq=0 lk_o lorg0
-  while IFS=$'\t' read -r _ lk0 _ _ _ _ _ _ _ _ lorg0; do
+  local lkeytab='' lseq=0 lk_o lorg0 lrp0 lslug='' lshort=''
+  while IFS=$'\t' read -r lrp0 _ lk0 _ _ _ _ _ _ _ _ lorg0; do
     [ -n "$lk0" ] || continue
     lseq=$((lseq+1))
     lk_o=$(lkey_okey "$lk0")
+    [ "$LANDED_MERGED" = 1 ] && { lslug_v "$lrp0"; lk_o="$lslug:$lk_o"; }
     case $'\n'"$lkeytab" in *$'\n'"$lk_o"$'\t'*) continue ;; esac
     lkeytab+="$lk_o"$'\t'"$lseq"$'\t'"${lorg0:--}"$'\n'
   done <<< "$out"
@@ -620,9 +695,9 @@ cmd_rows() {
   # substitutions below replace non-overlapping matches, so records sharing one
   # separator newline would count two in a row as ONE.
   local lkidtab='' lm
-  while IFS=$'\t' read -r _ lk0 _ _ _ _ _ _ _ lst0 lorg0; do
+  while IFS=$'\t' read -r _ _ lk0 _ _ _ _ _ _ _ lst0 lorg0; do
     [ -n "$lk0" ] || continue
-    case "${lorg0:-}" in issue-*|scratch-*) ;; *) continue ;; esac
+    lorg_is_sess "${lorg0:-}" || continue
     lchain "$lorg0"
     [ -n "$lroot" ] || continue
     case "$lst0" in closed-unlanded) lm=0 ;; *) lm=1 ;; esac
@@ -643,13 +718,30 @@ cmd_rows() {
   # and the per-row logic below is untouched.
   # The wanted set rides the ENVIRONMENT, not `-v`: awk processes escape sequences
   # in a -v assignment.
+  # Merged (issue #804): a PR number is only unique per repo, so each repo's own
+  # prmap (fleets/<slug>/prmap, deploy_<sha> beside it — the live dash's #792
+  # layout) is read, and every haystack line is keyed `<slug>\t#<num>`.
   local _pf prdir prmapn='' prwant=''
+  if [ "$LANDED_MERGED" = 1 ]; then
+    prdir="${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}/fleets"
+    prwant=$(awk -F'\t' '{ p=$5; if (p != "" && p != "-") { sub(/^#/, "", p); r=$1; gsub(/\//, "-", r); print r "\t#" p } }' <<< "$out" | LC_ALL=C sort -u)
+    local _r _prf=()
+    while IFS= read -r _r; do
+      [ -n "$_r" ] || continue; lslug_v "$_r"
+      [ -s "$prdir/$lslug/prmap" ] && _prf+=("$prdir/$lslug/prmap")
+    done <<< "$LANDED_REPOS"
+    [ -n "$prwant" ] && [ "${#_prf[@]}" -gt 0 ] && prmapn=$'\n'$(PRWANT="$prwant" awk -F'\t' '
+      BEGIN { n = split(ENVIRON["PRWANT"], a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") want[a[i]] = 1 }
+      { d = FILENAME; sub(/\/prmap$/, "", d); sub(/.*\//, "", d)
+        if ((d "\t" $2) in want) print d "\t" substr($0, index($0, "\t") + 1) }' ${_prf[@]+"${_prf[@]}"} 2>/dev/null)
+  else
   _pf=$(fleet_cache prmap "${FLEET_SESSION:-}" 2>/dev/null); prdir=${_pf%/*}
   if [ -s "$_pf" ]; then
-    prwant=$(awk -F'\t' '{ p=$4; if (p != "" && p != "-") { sub(/^#/, "", p); print "#" p } }' <<< "$out" | LC_ALL=C sort -u)
+    prwant=$(awk -F'\t' '{ p=$5; if (p != "" && p != "-") { sub(/^#/, "", p); print "#" p } }' <<< "$out" | LC_ALL=C sort -u)
     [ -n "$prwant" ] && prmapn=$'\n'$(PRWANT="$prwant" awk -F'\t' '
       BEGIN { n = split(ENVIRON["PRWANT"], a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") want[a[i]] = 1 }
       ($2 in want)' "$_pf" 2>/dev/null)
+  fi
   fi
 
   # header row (fzf --header-lines=1 pins it) — identical column layout to the live
@@ -675,23 +767,27 @@ cmd_rows() {
   # pipe for the same reason: a piped `while` is a subshell and $lbuf would not
   # survive it.
   local lbuf='' lrow=0 ldepth lgrp lroot lrootseq
-  while IFS=$'\t' read -r when iss title pr sha _ _ sid smry state origin _; do
+  while IFS=$'\t' read -r rrepo when iss title pr sha _ _ sid smry state origin _; do
     [ -z "$iss" ] && continue
     lrow=$((lrow + 1))
     local target fzfkey okey
     fzfkey="${sid:--}"
     okey=$(lkey_okey "$iss")
-    target=$(landed_target "$iss" "$pr")
+    if [ "$LANDED_MERGED" = 1 ]; then
+      lslug_v "$rrepo"; okey="$lslug:$okey"
+      target=$(landed_target "$iss" "$pr" "$rrepo")
+    else
+      target=$(landed_target "$iss" "$pr")
+    fi
     # --- where this row nests ---------------------------------------------------
     # A child sorts under the ultimate root's slot (depth 1 breaks the tie, then its
     # own position); a root, and an orphan whose parent never reached this list,
     # keeps its own chronological slot at depth 0.
     ldepth=0; lgrp=$lrow; lroot=''
-    case "${origin:-}" in
-      issue-*|scratch-*)
-        lchain "$origin"
-        [ -n "$lroot" ] && { ldepth=1; lgrp=$lrootseq; } ;;
-    esac
+    if lorg_is_sess "${origin:-}"; then
+      lchain "$origin"
+      [ -n "$lroot" ] && { ldepth=1; lgrp=$lrootseq; }
+    fi
     # --- the fold ---------------------------------------------------------------
     # Folded by default, and only a `depth>0` row — one drawn with the `└` indent
     # under the line above — can hide. A root and an orphan carry depth 0 and are
@@ -727,14 +823,16 @@ cmd_rows() {
     # dep cell (#541): prmap line for this PR → merge sha → deploy_<sha> verdict.
     local depc='·' depcol=$GY msha='' _t _l _r dst=''
     case "$pr" in ''|-) : ;; *)
-      _t=${prmapn#*$'\t'"#${pr#\#}"$'\t'}
+      if [ "$LANDED_MERGED" = 1 ]; then _t=${prmapn#*$'\n'"$lslug"$'\t'"#${pr#\#}"$'\t'}
+      else _t=${prmapn#*$'\t'"#${pr#\#}"$'\t'}; fi
       if [ "$_t" != "$prmapn" ]; then
         _l=${_t%%$'\n'*}                       # state\tci\tready\tsha
         _r=${_l#*$'\t'}; _r=${_r#*$'\t'}       # ready\tsha (ready may be empty)
         case "$_r" in *$'\t'*) msha=${_r#*$'\t'}; msha=${msha%%$'\t'*};; esac
       fi;;
     esac
-    [ -n "$msha" ] && [ -f "$prdir/deploy_$msha" ] && { read -r dst _ < "$prdir/deploy_$msha" || :; }
+    local depdir=$prdir; [ "$LANDED_MERGED" = 1 ] && depdir="$prdir/$lslug"
+    [ -n "$msha" ] && [ -f "$depdir/deploy_$msha" ] && { read -r dst _ < "$depdir/deploy_$msha" || :; }
     case "$dst" in
       live)      depc='live'; depcol=$GN;;
       deploying) depc='…';    depcol=$TX;;
@@ -781,12 +879,20 @@ cmd_rows() {
     # spawn provenance (issue #503): same ↳ tag grammar as the live dash, before
     # the title. col 11 absent (pre-#503 row) / '-' ≡ hub → no tag. The tag
     # borrows its width from the flex span so act/PR/ctx stay pinned.
-    local tagd='' tagpfx=''
-    case "${origin:-}" in
+    local tagd='' tagpfx='' torg="${origin:-}" tpre=''
+    # merged (issue #804): the origin arrives qualified. The row's own repo is
+    # implied — shed it; a parent in ANOTHER repo keeps that repo's badge.
+    if [ "$LANDED_MERGED" = 1 ]; then
+      case "$torg" in
+        "$lslug":*) torg=${torg#"$lslug":} ;;
+        *:issue-*|*:scratch-*) lshort_v "${torg%%:*}"; tpre=$lshort; torg=${torg#*:} ;;
+      esac
+    fi
+    case "$torg" in
       ''|-) : ;;
-      issue-*)   tagd="↳#${origin#issue-}" ;;
-      scratch-*) tagd="↳~${origin#scratch-}" ;;
-      *)         tagd="↳$origin" ;;
+      issue-*)   tagd="↳$tpre#${torg#issue-}" ;;
+      scratch-*) tagd="↳$tpre~${torg#scratch-}" ;;
+      *)         tagd="↳$torg" ;;
     esac
     # DROP it where the `└` indent already says the same thing — the row is drawn
     # inside a block AND the session it came from IS the row that block hangs off.
@@ -816,12 +922,19 @@ cmd_rows() {
       treed=$carg
       lextra=$(( ${#kidd} + 1 ))
     fi
+    # repo badge (issue #804): under `all` in a 2+ repo fleet every row names its
+    # repo's short tag first — the live dash's #793 badge, same place, same ASCII
+    # clamp (so ${#} stays its width). A picked repo shows its rows only: no badge.
+    local repod=''
+    if [ "$LANDED_BADGE" = 1 ]; then lshort_v "$lslug"; repod=${lshort//[^A-Za-z0-9._ ?-]/}; fi
     local avail=$(( USABLE - LEFTW - RIGHTW - 1 )); [ "$avail" -lt 0 ] && avail=0
+    [ -n "$repod" ] && { avail=$(( avail - ${#repod} - 1 )); [ "$avail" -lt 0 ] && avail=0; }
     [ -n "$tagd" ] && { avail=$(( avail - ${#tagd} - 1 )); [ "$avail" -lt 0 ] && avail=0; }
     avail=$(( avail - lextra )); [ "$avail" -lt 0 ] && avail=0
     fleet_clip_display "$avail" "$dsmry"; dsmry="${clip_out:-}"
     local dw=${clip_w:-0}
-    [ -n "$tagd" ] && { tagpfx="${IN}${tagd}${R} "; dw=$(( dw + ${#tagd} + 1 )); }
+    [ -n "$repod" ] && { tagpfx="${GY}${repod}${R} "; dw=$(( dw + ${#repod} + 1 )); }
+    [ -n "$tagd" ] && { tagpfx+="${IN}${tagd}${R} "; dw=$(( dw + ${#tagd} + 1 )); }
     [ -n "$carg" ] && { tagpfx+="${GY}${kidd}${R} "; dw=$(( dw + lextra )); }
     local pad=$(( USABLE - LEFTW - dw - RIGHTW )); [ "$pad" -lt 1 ] && pad=1
     local gap; printf -v gap '%*s' "$pad" ''
@@ -980,8 +1093,8 @@ cmd_fold() {
   case "$target" in landed:*) ;; *) return 0 ;; esac
 
   local repo; repo=$(rows_repo)
-  landed_scope "$repo"
-  local out; out=$(read_ledger "$repo" | landed_local_origins); [ -n "$out" ] || return 0
+  landed_scope
+  local out; out=$(landed_stream "$repo"); [ -n "$out" ] || return 0
 
   # the same key table cmd_rows builds — and, in the same pass, which key the
   # keystroke landed on, matched through landed_target so the mapping from a row to
@@ -989,14 +1102,22 @@ cmd_fold() {
   # Built WITHOUT a subshell per row (no $(lkey_okey) / $(landed_target) fork): this
   # runs on a keystroke, and a fleet with a few hundred landed rows would otherwise
   # pay a few hundred forks before the arrow did anything.
-  local lkeytab='' lseq=0 lk0 pr0 lorg0 lk_o ltgt selfkey='' lroot lrootseq
-  while IFS=$'\t' read -r _ lk0 _ pr0 _ _ _ _ _ _ lorg0; do
+  # Merged (issue #804): keys are `<slug>:`-qualified and a row's target carries
+  # `@<repo>`; a target WITHOUT one (a stale render) matches the first — newest —
+  # row whose bare target it is.
+  local lkeytab='' lseq=0 lk0 pr0 lorg0 lk_o ltgt selfkey='' lroot lrootseq lrp0 lslug=''
+  while IFS=$'\t' read -r lrp0 _ lk0 _ pr0 _ _ _ _ _ _ lorg0; do
     [ -n "$lk0" ] || continue
     lseq=$((lseq+1))
     case "$lk0" in scratch-*) lk_o=$lk0; ltgt="landed:scratch:$lk0" ;;
       *) lk_o="issue-$lk0"
          case "${pr0:-}" in ''|-) ltgt="landed:issue:$lk0" ;; *) ltgt="landed:${pr0#\#}" ;; esac ;;
     esac
+    if [ "$LANDED_MERGED" = 1 ]; then
+      lslug_v "$lrp0"; lk_o="$lslug:$lk_o"
+      [ -z "$selfkey" ] && [ "$ltgt" = "$target" ] && selfkey=$lk_o
+      ltgt="$ltgt@$lrp0"
+    fi
     [ -z "$selfkey" ] && [ "$ltgt" = "$target" ] && selfkey=$lk_o
     case $'\n'"$lkeytab" in *$'\n'"$lk_o"$'\t'*) continue ;; esac
     lkeytab+="$lk_o"$'\t'"$lseq"$'\t'"${lorg0:--}"$'\n'
@@ -1007,9 +1128,7 @@ cmd_fold() {
   # An orphan owns no block and is in none — nothing to fold either way.
   local holder=$selfkey selforg
   selforg=$(awk -F'\t' -v k="$selfkey" '$1==k{print $3; exit}' <<< "$lkeytab")
-  case "${selforg:-}" in
-    issue-*|scratch-*) lchain "$selforg"; [ -n "$lroot" ] || return 0; holder=$lroot ;;
-  esac
+  if lorg_is_sess "${selforg:-}"; then lchain "$selforg"; [ -n "$lroot" ] || return 0; holder=$lroot; fi
 
   # does the holder actually have a block? A DIRECT child in the ledger is the
   # test: a grandchild whose own parent never landed has a broken chain and is an
@@ -1020,7 +1139,11 @@ cmd_fold() {
   done <<< "$lkeytab"
   [ "$haskids" = 1 ] || return 0
 
-  local f; f=$(landed_fold_file)
+  # the fold file + the key it holds: merged, the holder's own repo's file and
+  # its bare key (landed_is_open reads it the same way).
+  local f hkey=$holder hslug=''
+  if [ "$LANDED_MERGED" = 1 ]; then case "$holder" in *:*) hslug=${holder%%:*}; hkey=${holder#*:} ;; esac; fi
+  f=$(landed_fold_file "$hslug")
   # The dash's producer, not this file's `rows`: in the landed view it is what fzf
   # reloads, and it execs straight into us. Kept as a PATH plus a separately built
   # command string so a repo path containing a space can never word-split.
@@ -1034,7 +1157,7 @@ cmd_fold() {
     [ "$holder" = "$selfkey" ] || return 0
     landed_is_open "$holder" && return 0
     mkdir -p "$(dirname "$f")" 2>/dev/null || true
-    printf '%s\n' "$holder" >> "$f"
+    printf '%s\n' "$hkey" >> "$f"
     printf 'reload(%s)\n' "$ROWSCMD"
     return 0
   fi
@@ -1043,7 +1166,7 @@ cmd_fold() {
   # inside it, which is the gesture that actually gets used.
   landed_is_open "$holder" || return 0
   local tmp="$f.$$"
-  grep -vxF -- "$holder" "$f" > "$tmp" 2>/dev/null || :
+  grep -vxF -- "$hkey" "$f" > "$tmp" 2>/dev/null || :
   if [ -s "$tmp" ]; then mv -f "$tmp" "$f"; else rm -f "$tmp" "$f"; fi   # empty set ⇒ no file, the pristine state
   if [ "$holder" = "$selfkey" ]; then
     printf 'reload(%s)\n' "$ROWSCMD"
@@ -1068,9 +1191,14 @@ cmd_fold() {
   # nothing to do with the fold — and would re-enter this script for no reason. The
   # FALLBACK action still names the producer, because that is what fzf must run.
   local htgt hpr pos='' US2 snap; US2=$(printf '\037')
-  hpr=$(printf '%s\n' "$out" | awk -F'\t' -v k="$holder" '{ o=$2; if (o !~ /^scratch-/) o="issue-" o; if (o==k) {print $4; exit} }')
-  case "$holder" in scratch-*) htgt=$(landed_target "$holder" "$hpr") ;;
-                    *)         htgt=$(landed_target "${holder#issue-}" "$hpr") ;; esac
+  local hrepo=''
+  IFS=$'\t' read -r hpr hrepo <<< "$(printf '%s\n' "$out" | awk -F'\t' -v k="$holder" -v m="$LANDED_MERGED" '
+    { o=$3; if (o !~ /^scratch-/) o="issue-" o
+      if (m == "1") { r=$1; gsub(/\//, "-", r); gsub(/[^A-Za-z0-9._-]/, "", r); o=r ":" o }
+      if (o==k) { print $5 "\t" $1; exit } }')"
+  [ "$LANDED_MERGED" = 1 ] || hrepo=''
+  case "$hkey" in scratch-*) htgt=$(landed_target "$hkey" "$hpr" "$hrepo") ;;
+                  *)         htgt=$(landed_target "${hkey#issue-}" "$hpr" "$hrepo") ;; esac
   snap="${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}/global/dash_fold_rows_${FLEET_SESSION:-default}"
   mkdir -p "${snap%/*}" 2>/dev/null || true
   if cmd_rows > "$snap.$$" 2>/dev/null && [ -s "$snap.$$" ]; then

@@ -86,8 +86,9 @@ esac
 # #543: a PR-less issue row whose issue-<N> head has a CLOSED-unmerged PR.
 case "$TARGET" in
   landed:issue:*)
-    n=${TARGET#landed:issue:}
-    repo=$(fleet_repo_cached "$SESS" 2>/dev/null); repo=${repo:-${FLEET_REPO:-}}
+    n=${TARGET#landed:issue:}; repo=''
+    case "$n" in *@*) repo=${n#*@}; n=${n%@*} ;; esac   # a merged row's own repo (#804)
+    [ -n "$repo" ] || { repo=$(fleet_repo_cached "$SESS" 2>/dev/null); repo=${repo:-${FLEET_REPO:-}}; }
     closed=""
     [ -n "$repo" ] && closed=$(gh pr list --repo "$repo" --head "issue-$n" --state all \
       --json number,state --jq 'sort_by(.number) | last | select(.state == "CLOSED") | .number' 2>/dev/null)
