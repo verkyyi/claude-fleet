@@ -35,6 +35,22 @@ that dies at the boundary. Therefore:
 - **Each tick begins by re-reading the EPIC** — the parent body (the charter), the
   sub-issue list and their states, and the repo's open PRs. Never carry a plan
   from the previous tick.
+- **Member state is ONE read: the children ledger** (issue #937/#940). Every
+  worker this loop spawns carries this pane's key as its `@origin`, and every
+  report it sends is written to this loop's ledger — so the per-member picture is
+  one command, not a `gh pr list` plus a `capture-pane` per member:
+
+  ```sh
+  bash ~/.claude/fleet/bin/fleet-children.sh --json   # {summary, children[{child, bucket, state, pr, pr_state, last, …}]}
+  ```
+
+  It merges the ledger with each child's live window state and the dash's PR
+  cache, needs no `gh`, and survives the loop's own handoff (the ledger is keyed
+  by the parent's key, not its window). Read it FIRST each tick; go to `gh` /
+  `fleet-pr-verdict.sh` only for what it cannot say — a PR's merge verdict in
+  step 2a, or a member that has never spawned. A `[child-report]` that arrives
+  between ticks is a wake-up, not a claim to re-verify: the next tick's ledger
+  read already accounts for it.
 - **Each tick ends by writing what it did** as one marked comment on the parent:
 
   ```
@@ -70,7 +86,7 @@ Workers land their own PRs once `bin/fleet-pr-verdict.sh` reads `READY`
 (issue #441), so this is a **backstop**, not the main path — it catches the worker
 that finished and went idle without merging.
 
-For each EPIC member with an open PR:
+For each EPIC member with an open PR (the ledger read above names them):
 
 ```sh
 bash ~/.claude/fleet/bin/fleet-pr-verdict.sh <PR> -q

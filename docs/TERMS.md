@@ -140,7 +140,8 @@ they repaint instantly:
   (keyed by the parent's key, not its window id, so a migrated parent keeps its
   book). `bin/fleet-children.sh` merges that ledger with each child's live state
   into one line per child plus the same `3/5 ✓ · 1!` summary the dash draws —
-  one command instead of a `gh pr` + capture-pane per report.
+  one command instead of a `gh pr` + capture-pane per report — the check
+  `/fleet-claim` and `/fleet-epic-run` prescribe on a report (#940).
 - **Fold** — a parent's block is **collapsed by default** on the dash: the list
   shows one line per parent, marked `▸` in the tree column (`▾` when open —
   directly left of the name it folds, since #836), and its aggregate badge is what

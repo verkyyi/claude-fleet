@@ -107,7 +107,8 @@ Three habits buy most of it back:
   mid-edit when the quota migration moves the *window*, several writing one
   worktree, no one-worker-one-PR, no history row, no handoff — so work that
   writes code is a WORKER: `fleet-issue-file.sh --parent N --spawn` below, and
-  its `[child-report]` is how the result comes back.
+  its `[child-report]` is how the result comes back — and
+  `~/.claude/fleet/bin/fleet-children.sh` is where you read all of them at once.
 - **Don't dump a whole file to answer a narrow question.** A `grep -n` for the
   symbol plus a targeted `sed -n '<a>,<b>p'` range costs a fraction of a full
   `cat -n` — read the function, not the file that contains it.
@@ -194,8 +195,12 @@ override them):
   bare and let it sit on the backlog. What stays fixed either way: **don't chase
   it in THIS worktree** — one worktree, one issue, one PR. A spawned worker
   claims and ships it on its own, and **pushes a `[child-report]` back to you**
-  when it does (issue #574) — so don't poll for it, and see the acknowledge-don't-
-  take-over rule below for what to do when one arrives.
+  when it does (issue #574) — so don't poll for it. Every report is also written
+  to your **children ledger** (issue #937), so the whole picture is one command
+  away: `~/.claude/fleet/bin/fleet-children.sh` (`--json` for a script) prints one
+  line per child — its ledger outcome, live window state and PR — plus a
+  `3/5 ✓ · 1!` summary. See the acknowledge-don't-take-over rule below for what to
+  do when one arrives.
 - **Hand off before you run out of context.** When the window fills, run
   `/fleet-handoff` — it writes a durable handoff and cycles the pane. You can't
   see your own context meter (Claude Code shows it to the human, not the model),
@@ -321,8 +326,13 @@ override them):
   worker you spawned (`--spawn`) pushes its outcome to you when it lands, blocks,
   or is reaped. It is four lines and it ends `no reply needed` — that is literal.
   **Do not reply to it, do not open its PR, do not adopt its follow-up work.**
-  Note it, and go straight back to your own issue. The report is context, not a
-  task: replying costs you a turn you are not being asked for, and taking over
+  Note it, and go straight back to your own issue. **Want to check it? ONE read,
+  not an investigation:** `~/.claude/fleet/bin/fleet-children.sh` answers "did it
+  really land / stop / block, and how are the rest doing" from the ledger plus
+  each child's live state and the dash's PR cache — no `gh pr list`, no
+  `capture-pane` per child, no re-verifying a report by hand (issue #940; that
+  per-report verification averaged 3.3 extra tool calls a report). The report is
+  context, not a task: replying costs you a turn you are not being asked for, and taking over
   the child's work is how one worker ends up holding two issues and neither
   worktree matches. If it says `BLOCKED` and the blocker is genuinely yours to
   clear, clear it — in your own worktree, or by filing an issue — but that is the
