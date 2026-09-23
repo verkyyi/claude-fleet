@@ -32,21 +32,23 @@ cf() {
 }
 
 cw() {
-  local repo root branch name dir bin
+  local root branch name dir bin
   bin="${${(%):-%x}:h:h}/bin"          # this file lives at <fleet>/shell/cw.zsh
   local launch=claude                  # route through the account launcher if present
   [ -x "$bin/fleet-claude.sh" ] && launch="$bin/fleet-claude.sh"
   root=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "cw: not in a git repo"; return 1; }
-  repo=$(basename "$root")
   branch="$1"; [ -z "$branch" ] && { echo "usage: cw <branch> [window-name]"; return 1; }
   name="${2:-$branch}"
-  dir="$root/../${repo}-${branch//\//-}"
   # refresh the base branch so the new worktree starts from up-to-date code
   if git -C "$root" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
     echo "cw: pulling $(git -C "$root" branch --show-current)..."
     git -C "$root" pull --ff-only || echo "cw: pull failed, continuing from local HEAD"
   fi
-  git worktree add "$dir" -b "$branch" 2>/dev/null || git worktree add "$dir" "$branch" || return 1
+  # The ONE worktree-path exit (issue #886) — lands where this fleet's spawns do
+  # (FLEET_WORKTREE_ROOT, else a sibling of the checkout). New branch off HEAD, or
+  # the existing one of that name.
+  dir=$("$bin/fleet-worktree.sh" create "$root" "${branch//\//-}" "" --reuse --branch "$branch") \
+    || { echo "cw: could not create a worktree for $branch"; return 1; }
   if [ -n "$TMUX" ]; then
     # reuse the current window: rename it, move into the worktree, run claude
     tmux rename-window "$name"
@@ -60,11 +62,11 @@ cw() {
 }
 
 cwrm() {
-  local repo root branch dir
+  local root branch dir bin
+  bin="${${(%):-%x}:h:h}/bin"          # this file lives at <fleet>/shell/cw.zsh
   root=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "cwrm: not in a git repo"; return 1; }
-  repo=$(basename "$root")
   branch="$1"; [ -z "$branch" ] && { echo "usage: cwrm <branch>"; return 1; }
-  dir="$root/../${repo}-${branch//\//-}"
+  dir=$("$bin/fleet-worktree.sh" dir "$root" "${branch//\//-}") || return 1
   git worktree remove "$dir" && echo "removed $dir"
   # refresh the base branch; if $branch was merged remotely this lets -d succeed
   if git -C "$root" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then

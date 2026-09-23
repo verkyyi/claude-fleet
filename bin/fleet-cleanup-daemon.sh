@@ -364,13 +364,16 @@ if [ "$DRY" = 0 ] && [ "$SWEEP_BUDGET" -gt 0 ]; then
   for s in ${SESSIONS[@]+"${SESSIONS[@]}"}; do
     # A subshell read: fleet_load_conf in THIS shell would leak one fleet's conf
     # into the next one's cleanup.
-    m=$(fleet_load_conf "$s" >/dev/null 2>&1; printf '%s' "${FLEET_MAIN:-}")
+    # The worktree root rides along (issue #886): a fleet that parks its worktrees
+    # under FLEET_WORKTREE_ROOT drops them into THAT root's trash.
+    mr=$(fleet_load_conf "$s" >/dev/null 2>&1; printf '%s\t%s' "${FLEET_MAIN:-}" "${FLEET_WORKTREE_ROOT:-}")
+    m=${mr%%$'\t'*}; r=${mr#*$'\t'}
     [ -n "$m" ] || continue
     case " $swept_mains " in *" $m "*) continue ;; esac
     swept_mains="$swept_mains $m"
     budget_left=$(( sweep_deadline - $(now) ))
     [ "$budget_left" -gt 0 ] || break
-    sweep=$(fleet_trash_sweep "$m" "$budget_left")
+    sweep=$(FLEET_WORKTREE_ROOT="$r" fleet_trash_sweep "$m" "$budget_left")
     case "$sweep" in "swept:0 left:0") ;; *) log "$s: worktree trash $sweep ($m)" ;; esac
   done
 fi

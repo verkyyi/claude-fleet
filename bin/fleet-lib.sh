@@ -941,7 +941,7 @@ fleet_seat() {
   [ -n "$issue" ] || return 0          # the binding is required in BOTH shapes
   cwd=$(pwd -P 2>/dev/null)
   # Match both the bare `issue-<N>` worktree name and the `<repo>-issue-<N>`
-  # form that cw.zsh actually creates (dir="$root/../${repo}-${branch}"), where
+  # form every creator names it (fleet_worktree_dir: `<main-basename>-<slug>`), where
   # `issue-<N>` is preceded by `-`, not `/`. `*/*issue-[0-9]*` still requires a
   # path separator (a real nested path) but tolerates the `<repo>-` prefix.
   case "$cwd" in
@@ -1706,6 +1706,81 @@ fleet_trash_dir() {
   printf '%s/.fleet-trash' "$(dirname "$d")"
 }
 
+# ---- worktree placement (issue #886) — the ONE exit for a new worktree's path ----
+# Every code path that creates a worktree (issue spawn, scratch alloc, `cw`) asks
+# these two functions where it goes, so moving the whole estate is one conf key,
+# not three hand-built strings. Any NEW worktree-creating code must go through them.
+#
+# FLEET_WORKTREE_ROOT unset/empty (the default) ⇒ `<dirname main>/<basename main>-<slug>`,
+# the historic sibling-of-the-base layout, byte for byte. Set ⇒
+# `$FLEET_WORKTREE_ROOT/<basename main>-<slug>`: the BASENAME keeps its shape
+# (`<main>-issue-N` / `<main>-scratch-N`), so everything that recognises a worktree
+# by its basename — fleet_seat, fleet_scratch_key, the dash rows, the fold toggle —
+# needs no change, and fleet_trash_dir (a sibling of the worktree) lands under the
+# root on its own. The point of a root is a directory Spotlight skips: name it
+# `*.noindex` (e.g. ~/projects/.fleet-worktrees.noindex) — fleet-doctor says so.
+#
+# fleet_worktree_root — the resolved root (a leading ~/ expanded, trailing / cut),
+# or empty for the sibling layout.
+fleet_worktree_root() {
+  local r="${FLEET_WORKTREE_ROOT:-}"
+  case "$r" in
+    '~')   r="$HOME" ;;
+    '~/'*) r="$HOME/${r#\~/}" ;;
+  esac
+  while [ "${#r}" -gt 1 ] && [ "${r%/}" != "$r" ]; do r="${r%/}"; done
+  printf '%s' "$r"
+}
+
+# fleet_worktree_dir <main> <slug> — the path a worktree for <slug> lives at.
+fleet_worktree_dir() {
+  local main="${1:-}" slug="${2:-}" root
+  [ -n "$main" ] && [ -n "$slug" ] || return 1
+  root="$(fleet_worktree_root)"
+  if [ -n "$root" ]; then
+    printf '%s/%s-%s\n' "$root" "$(basename "$main")" "$slug"
+  else
+    printf '%s/%s-%s\n' "$(dirname "$main")" "$(basename "$main")" "$slug"
+  fi
+}
+
+# fleet_worktree_create <main> <slug> <base> [--reuse] [--branch <b>] — create the
+# worktree for <slug> at fleet_worktree_dir, on a NEW branch (<slug>, or --branch
+# for a name the slug had to flatten, e.g. `cw feat/x` → slug `feat-x`) off
+# origin/<base>, falling back to the local <base>; an empty <base> = the checkout's
+# HEAD. --reuse also accepts an EXISTING branch of that name (a respawn whose
+# branch survived); without it, `-b` failing IS the answer — the scratch allocator
+# relies on that as its serialization point. Creates the root on first use. Silent
+# on both streams (under `run-shell -b` any stdout becomes an overlay over the
+# dash, #401/#446); prints the worktree path on success, rc 1 on failure.
+# This is the hook point for what a new worktree gets beyond the checkout (#885).
+fleet_worktree_create() {
+  local main="" slug="" base="" br="" reuse=0 n=0 wt
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --reuse)  reuse=1 ;;
+      --branch) br="${2:-}"; shift ;;
+      *) n=$((n + 1)); case "$n" in 1) main="$1" ;; 2) slug="$1" ;; 3) base="$1" ;; esac ;;
+    esac
+    shift
+  done
+  [ -n "$main" ] && [ -n "$slug" ] || return 1
+  [ -n "$br" ] || br="$slug"
+  wt="$(fleet_worktree_dir "$main" "$slug")" || return 1
+  mkdir -p "$(dirname "$wt")" 2>/dev/null
+  if [ -n "$base" ]; then
+    git -C "$main" worktree add -b "$br" "$wt" "origin/$base" >/dev/null 2>&1 \
+      || git -C "$main" worktree add -b "$br" "$wt" "$base" >/dev/null 2>&1 \
+      || { [ "$reuse" = 1 ] && git -C "$main" worktree add "$wt" "$br" >/dev/null 2>&1; } \
+      || return 1
+  else
+    git -C "$main" worktree add -b "$br" "$wt" >/dev/null 2>&1 \
+      || { [ "$reuse" = 1 ] && git -C "$main" worktree add "$wt" "$br" >/dev/null 2>&1; } \
+      || return 1
+  fi
+  printf '%s\n' "$wt"
+}
+
 # fleet_worktree_drop <main> <worktree-dir> [--force] — retire a worktree WITHOUT
 # paying for its bytes. Prints exactly one token; rc 0 ⇔ the worktree is gone from
 # `git worktree list`:
@@ -1794,21 +1869,29 @@ fleet_trash_sweep() {
   case "$budget" in ''|*[!0-9]*) budget=20 ;; esac
   [ "$budget" -gt 0 ] || budget=86400
   [ -n "$main" ] || { printf 'swept:0 left:0\n'; return 0; }
-  local trash; trash="$(fleet_trash_dir "$main")"
-  case "${trash##*/}" in .fleet-trash) ;; *) printf 'swept:0 left:0\n'; return 0 ;; esac
-  [ -d "$trash" ] || { printf 'swept:0 left:0\n'; return 0; }
+  # Two trashes when FLEET_WORKTREE_ROOT is set (issue #886): the root's, where
+  # every worktree created since lives and is dropped, and the base's sibling one,
+  # which still holds whatever was created before the root was switched on.
+  local trash root rtrash; trash="$(fleet_trash_dir "$main")"
+  root="$(fleet_worktree_root)"
+  rtrash=""; [ -n "$root" ] && rtrash="$root/.fleet-trash"
+  [ "$rtrash" = "$trash" ] && rtrash=""
 
-  local deadline swept=0 left=0 e remaining
+  local deadline swept=0 left=0 t e remaining
   deadline=$(( $(date +%s 2>/dev/null || echo 0) + budget ))
-  for e in "$trash"/*; do
-    [ -e "$e" ] || continue                       # empty trash → the glob is literal
-    remaining=$(( deadline - $(date +%s 2>/dev/null || echo 0) ))
-    if [ "$remaining" -le 0 ]; then left=$((left + 1)); continue; fi
-    if fleet_timebox "$remaining" rm -rf "$e" >/dev/null 2>&1; then
-      swept=$((swept + 1))
-    else
-      left=$((left + 1))                          # timed out mid-delete — next sweep
-    fi
+  for t in "$trash" "$rtrash"; do
+    case "${t##*/}" in .fleet-trash) ;; *) continue ;; esac
+    [ -d "$t" ] || continue
+    for e in "$t"/*; do
+      [ -e "$e" ] || continue                     # empty trash → the glob is literal
+      remaining=$(( deadline - $(date +%s 2>/dev/null || echo 0) ))
+      if [ "$remaining" -le 0 ]; then left=$((left + 1)); continue; fi
+      if fleet_timebox "$remaining" rm -rf "$e" >/dev/null 2>&1; then
+        swept=$((swept + 1))
+      else
+        left=$((left + 1))                        # timed out mid-delete — next sweep
+      fi
+    done
   done
   printf 'swept:%s left:%s\n' "$swept" "$left"
   return 0
@@ -2442,24 +2525,21 @@ fleet_session_count_for() {
 # (tmux display-message); prints nothing when allowed.
 # ---- scratch worktree allocation (shared by the ⌃s spawner and the warm pool) --
 # fleet_scratch_alloc <main> <base> — allocate the next free `scratch-<N>` branch
-# and its sibling worktree off origin/<base> (falling back to the local base ref
+# and its worktree (fleet_worktree_dir) off origin/<base> (falling back to the local base ref
 # when there is no origin). `git worktree add -b` IS the serialization point — it
 # FAILS if the branch or dir already exists — so concurrent callers retry with the
 # next N rather than trusting a check-then-create gap. Prints "<slug>\t<worktree>".
 fleet_scratch_alloc() {
-  local main="$1" base="$2" dir bse cand cwt n=1
-  dir="$(dirname "$main")"; bse="$(basename "$main")"
+  local main="$1" base="$2" cand cwt n=1
   git -C "$main" fetch origin "$base" --quiet 2>/dev/null
   while [ "$n" -le 999 ]; do
-    cand="scratch-$n"; cwt="$dir/$bse-$cand"
+    cand="scratch-$n"; cwt="$(fleet_worktree_dir "$main" "$cand")"
     if git -C "$main" show-ref --verify --quiet "refs/heads/$cand" 2>/dev/null || [ -e "$cwt" ]; then
       n=$((n + 1)); continue
     fi
-    # >/dev/null 2>&1, not just 2>/dev/null: `git worktree add` reports "Preparing
-    # worktree …" on stderr but "HEAD is now at <sha>" on STDOUT, and under
-    # `run-shell -b` any stdout becomes a view-mode overlay over the dash (#446).
-    if git -C "$main" worktree add -b "$cand" "$cwt" "origin/$base" >/dev/null 2>&1 \
-       || git -C "$main" worktree add -b "$cand" "$cwt" "$base" >/dev/null 2>&1; then
+    # No --reuse: `-b` failing on a branch a racing caller just took is the signal
+    # to move on to the next N. Silent on both streams (#446).
+    if fleet_worktree_create "$main" "$cand" "$base" >/dev/null; then
       printf '%s\t%s\n' "$cand" "$cwt"; return 0
     fi
     n=$((n + 1))
