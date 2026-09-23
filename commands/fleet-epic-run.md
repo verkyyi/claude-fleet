@@ -137,8 +137,9 @@ bash ~/.claude/fleet/bin/fleet-pr-verdict.sh <PR> --repo "$FLEET_REPO" -q
 - `BLOCKED` → branch protection said no. Not yours to force: note it on the
   parent's 待决 and leave it.
 
-A merged PR is not yet *done* if this fleet has a deploy signal: with
-`FLEET_DEPLOY_REF` or `FLEET_DEPLOY_CHECK` set (issue #541), a member counts as
+A merged PR is not yet *done* if its repo has a deploy signal: with
+`FLEET_DEPLOY_REF` or `FLEET_DEPLOY_CHECK` set (issue #541; per repo in a
+multi-repo fleet, from its `repos/<slug>.conf` — #805), a member counts as
 complete only when its deploy state goes green. With neither set, merged ≡ done.
 Do **not** run `/fleet-sync-install` mid-batch — the loop runs on the live install,
 and swapping the floor under running workers is how one bad merge takes the batch

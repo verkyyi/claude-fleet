@@ -323,29 +323,38 @@ done
 # checkout that IS the deployment — claude-fleet's ~/.claude/fleet) or
 # FLEET_DEPLOY_CHECK=actions (post-merge workflow runs for the merge sha), probe the
 # MERGED candidates and cache `<state>\t<epoch>` at fleets/<slug>/deploy_<sha>.
+# The knobs resolve per repo — a repos/<slug>.conf overlay carries its own (#805).
 # Candidates = the newest 20 MERGED PRs (so the ⌃t landed list has data) ∪ every
 # MERGED branch a live window sits on (collected by the loop above). `live` is
 # terminal and never re-probed; ref mode re-probes the rest every tick (one local
 # git each — cheap); actions mode re-probes only entries older than FLEET_DEPLOY_TTL
 # (60s) — so a merged PR that went live minutes ago costs ZERO gh calls from then on.
 # Neither knob set ⇒ nothing written, and the readers keep rendering `merged`.
-deploy_conf_for() {   # $1=repo → DEP_REF / DEP_CHECK from the fleet conf bound to it
-  local want r _s cf
-  want=$(fleet_slug "$(fleet_norm_repo "$1")")
+deploy_conf_for() {   # $1=repo → DEP_REF / DEP_CHECK from the fleet hosting it
+  # Per REPO, not per fleet (issue #805): the knobs are repo-scoped keys
+  # (_FLEET_REPO_SCOPED), so a fleet hosting claude-fleet (FLEET_DEPLOY_REF) AND the
+  # monorepo (FLEET_DEPLOY_CHECK=actions) resolves each repo through
+  # fleet_load_repo_conf — the conf's own repo sees the conf (+ its optional
+  # overlay), any other hosted repo sees ONLY its repos/<slug>.conf, never the conf
+  # repo's knobs. A fleet with no repos/ overlay is the historic read, unchanged.
+  local want _s cf r
+  want=$(fleet_norm_repo "$1")
   DEP_REF=''; DEP_CHECK=''
   while IFS=$'\t' read -r _s cf; do
     [ -f "$cf" ] || continue
+    fleet_repo_hosted "$_s" "$want" || continue
     # unset first: the global fleet.conf sourced at the top may carry these keys for
     # ITS repo, and a per-fleet conf that doesn't set them must not inherit them.
-    r=$( unset FLEET_REPO FLEET_DEPLOY_REF FLEET_DEPLOY_CHECK; . "$cf" >/dev/null 2>&1
-         printf '%s\t%s\t%s' "$(fleet_slug "$(fleet_norm_repo "${FLEET_REPO:-}")")" "${FLEET_DEPLOY_REF:-}" "${FLEET_DEPLOY_CHECK:-}" )
+    r=$( unset FLEET_REPO FLEET_DEPLOY_REF FLEET_DEPLOY_CHECK
+         fleet_load_repo_conf "$_s" "$want" >/dev/null 2>&1 || exit 0
+         printf '%s\t%s' "${FLEET_DEPLOY_REF:-}" "${FLEET_DEPLOY_CHECK:-}" )
     case "$r" in
-      "$want"$'\t'*) r=${r#*$'\t'}; DEP_REF=${r%%$'\t'*}; DEP_CHECK=${r#*$'\t'}
-                      [ -n "$DEP_REF$DEP_CHECK" ] && return 0 ;;
+      *$'\t'*) DEP_REF=${r%%$'\t'*}; DEP_CHECK=${r#*$'\t'}
+               [ -n "$DEP_REF$DEP_CHECK" ] && return 0 ;;
     esac
   done < <(fleet_each_conf)
   # the global fleet.conf's knobs apply to the global FLEET_REPO only
-  if [ -n "$REPO" ] && [ "$(fleet_slug "$(fleet_norm_repo "$REPO")")" = "$want" ]; then
+  if [ -n "$REPO" ] && [ "$(fleet_norm_repo "$REPO")" = "$want" ]; then
     DEP_REF="${FLEET_DEPLOY_REF:-}"; DEP_CHECK="${FLEET_DEPLOY_CHECK:-}"
   fi
   return 0
