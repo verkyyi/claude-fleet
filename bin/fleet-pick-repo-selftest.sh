@@ -155,9 +155,9 @@ tmux set -w -t alpha:norepo @norepo 1
 rows() { FLEET_SESSION=alpha FZF_COLUMNS=120 bash "$ROWS" | tail -n +2 | awk -F '\037' '{ print $3 }' | sed "s/$(printf '\033')\[[0-9;]*m//g"; }
 fleet_current_repo_set alpha all
 r=$(rows)
-eq    "E: all → claude-fleet row under its heading" "$(printf '%s\n' "$r" | grep -A1 '^── claude-fleet (1)' | tail -n1 | grep -c 'cf·issue-1')" "1"
-eq    "E: all → tokenledger row under its heading" "$(printf '%s\n' "$r" | grep -A1 '^── tokenledger (2)' | tail -n1 | grep -c 'tl·issue-2')" "1"
-eq    "E: all → no-repo row under its heading" "$(printf '%s\n' "$r" | grep -A1 '^── no repo (1)' | tail -n1 | grep -c norepo)" "1"
+eq    "E: all → claude-fleet row under its heading" "$(printf '%s\n' "$r" | grep -A1 '^claude-fleet (1)' | tail -n1 | grep -c 'cf·issue-1')" "1"
+eq    "E: all → tokenledger row under its heading" "$(printf '%s\n' "$r" | grep -A1 '^tokenledger (2)' | tail -n1 | grep -c 'tl·issue-2')" "1"
+eq    "E: all → no-repo row under its heading" "$(printf '%s\n' "$r" | grep -A1 '^no repo (1)' | tail -n1 | grep -c norepo)" "1"
 hasnt "E: all → no per-row tag on the no-repo row" "$(printf '%s\n' "$r" | grep norepo | sed 's/.*norepo//')" "no repo"
 eq    "E: all → no-repo group at the foot" "$(printf '%s\n' "$r" | tail -n1 | grep -c norepo)" "1"
 has   "E: qualified origin folds as a child (└)" "$(printf '%s\n' "$r" | grep 'tl·kid')" "└"

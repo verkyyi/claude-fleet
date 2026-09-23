@@ -4,7 +4,7 @@
 #
 # In a fleet hosting 2+ repos with the current repo = `all`, the row producer
 # (bin/tmux-dashboard-rows.sh — the hub list AND the sidebar) opens each repo's
-# rows with one inert heading row, `── <name> (<n>)` — the repo's bare name,
+# rows with one inert heading row, `<name> (<n>)` — the repo's bare name,
 # owner/name only when two hosted repos share it (issue #995) — in
 # fleet_repos order; a window whose repo is not hosted sorts after them under
 # `?`, and the no-repo group stays last. Pinned here:
@@ -13,13 +13,20 @@
 #      every row sits under its OWN repo's heading and carries NO per-row repo
 #      tag (issue #995: the heading names it); two hosted repos sharing a bare
 #      name fall back to owner/name for those two only.
-#   B. SIDEBAR — the same groups in the --sidebar frame, and fleet-sidebar.py's
+#   B. SIDEBAR — the same groups in the --sidebar frame, its headings bare
+#      (`tokenledger (2)`, no `── `, like the hub list: issue #998), and fleet-sidebar.py's
 #      selectable() never lets the cursor rest on a heading.
 #   C. INERT — every dash bind target (enter, ⌃x reap, ⌃p PR, ⌃o restore, fold
 #      ←/→, pin, rename, answer, migrate) is a no-op on a heading row's `hdr` keys:
 #      no window selected, set, renamed, killed or restored, and no status nag.
 #   D. DEGENERATE — a one-repo fleet and a picked repo render BYTE-IDENTICAL to a
 #      producer with the grouping switched off (both frames, hub + sidebar).
+#   E. IDLE + EMPTY (issue #998) — under `all` every HOSTED repo keeps its
+#      heading at `(0)` (the `?`/`no repo` ones still hide at 0), the sidebar
+#      heading carries its repo in the state field, and a frame with no session
+#      row gets ONE inert `hdr` hint row: `No sessions — …` under `all` and in a
+#      one-repo fleet, `No sessions in <name> — …` for a picked repo, in both
+#      frames; a frame WITH sessions never draws it.
 # tmux runs on a PRIVATE socket via a PATH shim that logs every call; gh fails.
 set -uo pipefail
 
@@ -73,7 +80,7 @@ strip() { sed "s/$(printf '\033')\[[0-9;]*m//g"; }
 rows()  { FLEET_SESSION=alpha FZF_COLUMNS=120 bash "${1:-$ROWS}" | tail -n +2 | awk -F '\037' '{ print $1 "|" $3 }' | strip; }
 side()  { FLEET_SESSION=alpha bash "${1:-$ROWS}" --sidebar | tr '\037' '|'; }
 # a rows() line → its heading text, or the window name (glyph/issue/tree cells dropped)
-names() { awk -F'|' '{ l = $2; if (l ~ /^── /) { print l; next }
+names() { awk -F'|' '{ l = $2; if ($1 == "hdr") { print l; next }
                        sub(/^ *[^ ]+ +(#[0-9]+ +)?. +/, "", l); sub(/ .*/, "", l); print l }'; }
 
 # --- A. headings under `all` ----------------------------------------------------
@@ -81,8 +88,8 @@ fleet_current_repo_set alpha all
 r=$(rows)
 eq    "A: the tl parent is collapsed by default (kid hidden)" "$(printf '%s\n' "$r" | grep -c 'tl·kid')" "0"
 eq    "A: groups in fleet_repos order, no-repo last" "$(printf '%s\n' "$r" | names | tr '\n' ' ')" \
-      "── claude-fleet (2) cf·issue-1 cf·issue-3 ── tokenledger (2) tl·issue-2 ── ? · unknown repo (1) xx·issue-4 ── no repo (1) norepo "
-eq    "A: every heading is keyed hdr" "$(printf '%s\n' "$r" | grep -c '^hdr|── ')" "4"
+      "claude-fleet (2) cf·issue-1 cf·issue-3 tokenledger (2) tl·issue-2 ? · unknown repo (1) xx·issue-4 no repo (1) norepo "
+eq    "A: every heading is keyed hdr" "$(printf '%s\n' "$r" | grep -Ec '^hdr\|.* \([0-9]+\)$')" "4"
 eq    "A: …and nothing else is"       "$(printf '%s\n' "$r" | grep -c '^hdr|')" "4"
 # the row's flex span (right of the name) carries no repo tag any more
 tagcell() { printf '%s\n' "$r" | grep -- "$1" | awk -F'|' '{ print $2 }' | sed "s/.*$1//"; }
@@ -96,7 +103,7 @@ has   "A: the column header still leads" "$(FLEET_SESSION=alpha bash "$ROWS" | h
 # an expanded parent shows its child INSIDE its repo group, count unchanged
 tmux set -w -t 'alpha:tl·issue-2' @expand 1
 eq    "A: expanded child sits under its repo's heading" "$(rows | names | sed -n '4,6p' | tr '\n' ' ')" \
-      "── tokenledger (2) tl·issue-2 tl·kid "
+      "tokenledger (2) tl·issue-2 tl·kid "
 tmux set -wu -t 'alpha:tl·issue-2' @expand
 # a repo with no session on screen draws no heading
 tmux kill-window -t 'alpha:xx·issue-4'
@@ -107,7 +114,7 @@ fconf "$FLEET_CONF_DIR/fleets/alpha/repos/p-tokenledger.conf" p/tokenledger tl2
 win 'p·issue-5' @repo p/tokenledger @issue 5
 eq    "A2: colliding repos read owner/name, the rest stay bare" \
       "$(rows | grep '^hdr|' | awk -F'|' '{ print $2 }' | tr '\n' ' ')" \
-      "── claude-fleet (2) ── o/tokenledger (2) ── p/tokenledger (1) ── no repo (1) "
+      "claude-fleet (2) o/tokenledger (2) p/tokenledger (1) no repo (1) "
 eq    "A2: fleet_repo_name — collision" "$(fleet_repo_name alpha o/tokenledger)" "o/tokenledger"
 eq    "A2: fleet_repo_name — bare"      "$(fleet_repo_name alpha o/claude-fleet)" "claude-fleet"
 eq    "A2: fleet_repo_name — not hosted" "$(fleet_repo_name alpha o/elsewhere)" ""
@@ -118,7 +125,7 @@ eq    "A2: …and back to bare once it goes" "$(fleet_repo_name alpha o/tokenled
 # --- B. the sidebar frame -------------------------------------------------------
 s=$(side)
 eq    "B: sidebar groups the same way" "$(printf '%s\n' "$s" | awk -F'|' '{ print $4 }' | tr '\n' ' ')" \
-      "── claude-fleet (2) cf·issue-1 cf·issue-3 ── tokenledger (2) tl·issue-2 · 0/1 ✓ ── no repo (1) norepo "
+      "claude-fleet (2) cf·issue-1 cf·issue-3 tokenledger (2) tl·issue-2 · 0/1 ✓ no repo (1) norepo "
 eq    "B: sidebar headings carry five fields" "$(printf '%s\n' "$s" | grep '^hdr|' | awk -F'|' '{ print NF }' | sort -u)" "5"
 sel=$(printf '%s\n' "$s" | python3 -c '
 import importlib.util, sys
@@ -171,6 +178,45 @@ eq  "D: one-repo fleet — hub list identical" "$(rows)" "$(rows "$OFF")"
 eq  "D: one-repo fleet — sidebar identical"  "$(side)" "$(side "$OFF")"
 hasnt "D: one-repo fleet — no heading"       "$(rows)" "──"
 eq  "D: one-repo fleet — raw bytes identical" "$(FLEET_SESSION=alpha bash "$ROWS" | od -c)" "$(FLEET_SESSION=alpha bash "$OFF" | od -c)"
+mv "$WORK/repos.off" "$FLEET_CONF_DIR/fleets/alpha/repos"
+
+# --- E. idle repos keep a heading; an empty frame says how to start (#998) -----
+fleet_current_repo_set alpha all
+for w in $(tmux list-windows -t alpha -F '#{window_name}' | grep -v '^plan$'); do tmux kill-window -t "alpha:$w"; done
+win 'cf·issue-1' @repo o/claude-fleet @issue 1
+eq    "E: an idle hosted repo keeps its (0) heading" "$(rows | names | tr '\n' ' ')" \
+      "claude-fleet (1) cf·issue-1 tokenledger (0) "
+hasnt "E: no hint while a session is on screen" "$(rows)" "No sessions"
+eq    "E: sidebar headings carry their repo" \
+      "$(side | awk -F'|' '$1 == "hdr" { print $2 "=" $4 }' | tr '\n' ' ')" \
+      "o/claude-fleet=claude-fleet (1) o/tokenledger=tokenledger (0) "
+tmux kill-window -t 'alpha:cf·issue-1'
+r=$(rows)
+eq    "E: all, no sessions — the hint, then every hosted heading at 0" "$(printf '%s\n' "$r" | tr '\n' '/')" \
+      "hdr|  No sessions — type a name to start one · ⌃n new task/hdr|claude-fleet (0)/hdr|tokenledger (0)/"
+has   "E: …under the column header" "$(FLEET_SESSION=alpha bash "$ROWS" | head -n1 | strip)" "window"
+s=$(side)
+eq    "E: sidebar, no sessions" "$(printf '%s\n' "$s" | awk -F'|' '{ print $1 ":" $4 }' | tr '\n' '/')" \
+      "hdr:No sessions — type a name/hdr:claude-fleet (0)/hdr:tokenledger (0)/"
+sel=$(printf '%s\n' "$s" | python3 -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sidebar", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+rows = [l.split("|", 4) for l in sys.stdin.read().split("\n") if len(l.split("|", 4)) == 5]
+print(len(rows), len(m.selectable(rows)))' "$BIN/fleet-sidebar.py")
+eq    "E: nothing on an empty sidebar is selectable" "$sel" "3 0"
+fleet_current_repo_set alpha o/tokenledger
+eq    "E: picked repo, no sessions — the hint names it" "$(rows)" \
+      "hdr|  No sessions in tokenledger — type a name to start one · ⌃n new task"
+eq    "E: …and in the sidebar" "$(side)" "hdr|||No sessions in tokenledger| "
+fleet_current_repo_set alpha all
+mv "$FLEET_CONF_DIR/fleets/alpha/repos" "$WORK/repos.off"
+eq    "E: one-repo fleet, no sessions — the bare hint" "$(rows)" \
+      "hdr|  No sessions — type a name to start one · ⌃n new task"
+eq    "E: …and in the sidebar" "$(side)" "hdr|||No sessions — type a name| "
+win 'cf·issue-1' @repo o/claude-fleet @issue 1
+hasnt "E: one-repo fleet with a session — no hint" "$(rows)" "No sessions"
+hasnt "E: …no heading"                             "$(rows)" "──"
 mv "$WORK/repos.off" "$FLEET_CONF_DIR/fleets/alpha/repos"
 
 if [ "$FAILS" -gt 0 ]; then printf 'dash-repo-group-selftest: %d of %d checks FAILED\n' "$FAILS" "$CHECKS" >&2; exit 1; fi

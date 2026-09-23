@@ -199,6 +199,7 @@ RMANY=0; RCUR=''; RGRPMAP=''; RHEADS=''; RNREPO=0
 # they were, heading-free, byte for byte.
 RGRP=0; [ "$RMANY" = 1 ] && [ "$RCUR" = all ] && RGRP=1
 RGCNT=()                               # rows per repo group, for the heading's (n)
+NSESS=0                                # session rows this frame; 0 → the empty-state hint (#998)
 # rview_v <@repo> <@norepo> → 1 when the current repo hides this window: a picked
 # repo shows ITS windows only (no-repo and unknown ones wait under `all`). Leaves
 # $rslug set for the caller — the window's repo slug, '' for none/unknown — which
@@ -387,6 +388,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   [ -n "${FLEET_SESSION:-}" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
   case "$name" in dash|plan|backlog) continue;; esac   # panels, not Claude sessions
   rview_v "$wrepo" "$wnorepo" || continue              # current repo (issue #793)
+  NSESS=$((NSESS + 1))                                 # a session row this frame (#998)
   # repo group (issues #793/#974) — the FIRST sort key. Under `all` in a 2+ repo
   # fleet each hosted repo is its own group, in fleet_repos order (RGRPMAP, one
   # lookup off the frame's map, no fork); a window whose repo is not hosted sorts
@@ -783,29 +785,60 @@ printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_i}   ${h_n} ${h_gap}${
 fi
 
 # group headings (issue #974): under `all` in a 2+ repo fleet, one INERT row opens
-# each non-empty repo group — `── tokenledger (1)`: the repo's bare name
+# each repo group — `tokenledger (1)`: the repo's bare name
 # (owner/name only for two hosted repos sharing one, fleet_repo_name; issue
-# #995 — the sidebar is 30 columns and the old `to · owner/name` never fit). Its sort key is
-# (group, -1): above every row of its group whatever their pin tier. Both of its
-# key fields read `hdr`, the marker every dash bind target (enter, ⌃x, ⌃p, ⌃o,
-# fold, pin, rename, answer, migrate) and the sidebar already treat as not-a-row,
-# so no key acts on it. One pass over the repos — the per-window cost is the
-# RGCNT increment above, and #662's per-frame bound holds.
+# #995 — the sidebar is 30 columns and the old `to · owner/name` never fit). Every
+# HOSTED repo gets its heading even with nothing running — `tokenledger (0)`
+# (issue #998), so an idle repo still has a place to start work in; the `?` and
+# `no repo` groups exist only while a window is in them, so theirs hide at 0. Its
+# sort key is (group, -1): above every row of its group whatever their pin tier.
+# Both of its key fields read `hdr`, the marker every dash bind target (enter, ⌃x,
+# ⌃p, ⌃o, fold, pin, rename, answer, migrate) and the sidebar already treat as
+# not-a-row, so no key acts on it. Both surfaces draw it bare, no `── ` rule
+# (issue #998, operator call: the purple / dim-bold paint already sets it apart).
+# The sidebar heading carries the repo
+# (owner/name; '' for `?`/`no repo`) in its otherwise-unused state field — the
+# one field the new-session path may read (EPIC #994). One pass over the repos —
+# the per-window cost is the RGCNT increment above, and #662's per-frame bound
+# holds.
 if [ "$RGRP" = 1 ]; then
   hd_v() { local n=${RGCNT[$1]:-0} t
-    [ "$n" -gt 0 ] || return 0
-    t="── $2 ($n)"
+    [ "$n" -gt 0 ] || [ -n "$3" ] || return 0
+    t="$2 ($n)"
     if [ "$SIDEBAR" = 1 ]; then
-      buf+="$1	-1	0	0	0	0	0	hdr$US$US$US$t$US "$'\n'
+      buf+="$1	-1	0	0	0	0	0	hdr$US$3$US$US$t$US "$'\n'
     else
       buf+="$1	-1	0	0	0	0	0	hdr${US}hdr${US}${IN}${t}${R}"$'\n'
     fi
   }
-  while IFS=$'\t' read -r g nm _; do
-    [ -n "$g" ] && hd_v "$g" "$nm"
+  while IFS=$'\t' read -r g nm rp; do
+    [ -n "$g" ] && hd_v "$g" "$nm" "$rp"
   done <<< "$RHEADS"
-  hd_v "$RNREPO" '? · unknown repo'
-  hd_v "$((RNREPO + 1))" 'no repo'
+  hd_v "$RNREPO" '? · unknown repo' ''
+  hd_v "$((RNREPO + 1))" 'no repo' ''
+fi
+
+# the empty state (issue #998): a frame with no session row says so, and how to
+# start one, in ONE inert `hdr` row at the top — never a blank list under the
+# column header. A picked repo names itself (`No sessions in tokenledger`). The
+# hub list spells out both ways in (the query line, the new-task key off
+# dash-keymap.sh); the 30-column sidebar keeps it short, its input line sits
+# right below. Only an empty frame pays the keymap fork.
+if [ "$NSESS" = 0 ]; then
+  e_in=''
+  if [ "$RMANY" = 1 ] && [ "$RCUR" != all ]; then
+    e_in=${RGRPMAP#*$'\n'"$RCUR"$'\t'}
+    if [ "$e_in" = "$RGRPMAP" ]; then e_in=''
+    else e_in=${e_in%%$'\n'*}; e_in=${RHEADS#*"$e_in"$'\t'}; e_in=${e_in%%$'\t'*}; e_in=" in $e_in"; fi
+  fi
+  if [ "$SIDEBAR" = 1 ]; then
+    if [ -n "$e_in" ]; then t="No sessions$e_in"; else t='No sessions — type a name'; fi
+    buf+="-1	-1	0	0	0	0	0	hdr$US$US$US$t$US "$'\n'
+  else
+    DASH_GLYPH_NEW='⌃n'; eval "$(bash "$BIN/dash-keymap.sh" env 2>/dev/null)"
+    t="No sessions$e_in — type a name to start one · $DASH_GLYPH_NEW new task"
+    buf+="-1	-1	0	0	0	0	0	hdr${US}hdr${US}${GY}  ${t}${R}"$'\n'
+  fi
 fi
 
 # emit by repo group first (issues #793/#974: each hosted repo's rows in their own
