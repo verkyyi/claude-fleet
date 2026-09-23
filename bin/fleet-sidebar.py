@@ -11,6 +11,7 @@ import curses
 import fcntl
 import os
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import sys
@@ -575,13 +576,35 @@ def ui(screen, session, worker, lock):
                 selected = ids[min(len(ids) - 1, index + 3)]
 
 
+def conf_enabled(conf, enabled):
+    """FLEET_SIDEBAR as the fleet conf says NOW, read under the lock (issue #826).
+
+    The shell entry point loads the conf before this process takes the lock, so
+    a hook sync fired by a layout change can read `1`, wait out a `hide` that
+    writes `0` and removes the view, then recreate it from the stale value.
+    `hide`/`toggle` write the conf before taking the lock, so a value read here
+    is never older than the last one they applied. No line = keep the caller's
+    value (the global conf or the default).
+    """
+    try:
+        text = Path(conf).read_text() if conf else ""
+    except OSError:
+        return enabled
+    for line in text.splitlines():
+        match = re.match(r"\s*(?:export\s+)?FLEET_SIDEBAR=(\S*)", line)
+        if match:
+            enabled = match.group(1).strip("\"'") or "1"
+    return enabled
+
+
 def main():
     if sys.argv[1] == "ui":
         # A lone Escape clears the input line; don't wait ncurses' default 1s.
         os.environ.setdefault("ESCDELAY", "25")
         curses.wrapper(ui, sys.argv[2], sys.argv[3], sys.argv[4])
         return
-    verb, session, lock, enabled, width, key = sys.argv[1:]
+    verb, session, lock, enabled, width, key = sys.argv[1:7]
+    conf = sys.argv[7] if len(sys.argv) > 7 else ""
     if verb == "key":
         send_key(session, key)
         return
@@ -593,7 +616,7 @@ def main():
     # active window, so rapid switching cannot create duplicate/stale views.
     with open(lock, "w") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
-        sync(session, enabled, width, lock)
+        sync(session, conf_enabled(conf, enabled), width, lock)
 
 
 if __name__ == "__main__":

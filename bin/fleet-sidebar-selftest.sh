@@ -773,6 +773,12 @@ try:
     wait_for(lambda: not views(), 'prefix e while navigating left a view')
     check(not navigation(), 'hiding retained sidebar keyboard focus')
     check('FLEET_SIDEBAR=0' in conf.read_text(), 'collapse was not saved')
+    # A hook sync that loaded the conf BEFORE the hide (enabled=1 on its argv)
+    # and got the lock AFTER it must not recreate the view (issue #826).
+    stale = command(['python3', str(bin_dir / 'fleet-sidebar.py'), 'sync', 'fleet-test',
+                     str(conf) + '.sidebar.lock', '1', '30', '', str(conf)])
+    check(stale.returncode == 0, stale.stderr)
+    check(not views(), 'a sync holding a pre-hide conf read recreated the sidebar')
     tm('select-window', '-t', w2)
     call()
     check(not views(), 'switching reopened a manually collapsed sidebar')
