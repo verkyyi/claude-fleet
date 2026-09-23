@@ -342,7 +342,7 @@ exit 0
 FAKE
 LOG6="$WORK/log6"
 run_m() { PATH="$WORK/fakepath:$PATH" FLEET_CONF_DIR="$MC" FLEET_DISPATCH_LEASE_DIR="$WORK/leases" \
-            bash "$WORK/bin/fleet-dispatch.sh" "$@" m >/dev/null 2>"$LOG6"; }
+            bash "$WORK/bin/fleet-dispatch.sh" m >/dev/null 2>"$LOG6"; }
 fail6() { printf 'selftest FAIL: #799 %s\n' "$1" >&2; printf -- '--- log ---\n' >&2; cat "$LOG6" >&2
           printf -- '--- spawns ---\n' >&2; cat "$SPAWN_LOG" >&2; exit 1; }
 : > "$SPAWN_LOG"
@@ -353,7 +353,7 @@ grep -q 'skip o/a#10 (p3) — window already bound' "$LOG6" || fail6 'a live o/a
 grep -q 'spawned o/b#11 (p3) --repo o/b' "$LOG6" || fail6 'the log must name the repo and the --repo it spawned with'
 grep -q 'm: o/c: autofill off' "$LOG6" || fail6 'a repo whose overlay sets FLEET_AUTOFILL=0 is skipped, and says so'
 grep -qx 'o/c' "$GH_LOG" && fail6 'an opted-out repo must cost no gh call'
-ls "$WORK/leases" | grep -q 'dispatch-' && fail6 'every per-repo lease must be released on exit'
+for l in "$WORK/leases"/dispatch-*; do [ -e "$l" ] && fail6 'every per-repo lease must be released on exit'; done
 # The per-tick budget is the FLEET's, not per repo: 1/tick → exactly one spawn.
 : > "$SPAWN_LOG"
 sed -i.bak 's/^FLEET_AUTOFILL_MAX_PER_TICK=9$/FLEET_AUTOFILL_MAX_PER_TICK=1/' "$MC/fleets/m/conf"
