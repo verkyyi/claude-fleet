@@ -9,9 +9,10 @@
 # ONE shared instance for the whole machine (like pr-refresh, NOT per-worker). Two
 # ingress modes share ONE relay core:
 #   • POLL (default, per-tick daemon) — the robust, no-inbound-port path. Each tick
-#     lists new issue comments across every live fleet's repo via `gh api` with a
-#     `since` watermark (reads are ~free), and relays the qualifying ones. Run from
-#     launchd (com.claude-fleet.issue-bridge) / a systemd timer, ~15s cadence.
+#     lists new issue comments across every repo each live fleet hosts (issue #798)
+#     via `gh api` with a `since` watermark (reads are ~free), and relays the
+#     qualifying ones. Run from launchd (com.claude-fleet.issue-bridge) / a systemd
+#     timer, ~15s cadence.
 #   • --deliver (webhook) — read ONE GitHub `issue_comment` delivery JSON on stdin,
 #     validate its HMAC (FLEET_ISSUE_BRIDGE_SECRET), and relay that one comment.
 #     Wire it behind `gh webhook forward` / a cloudflared tunnel for sub-second
@@ -166,34 +167,47 @@ bridge_assoc_ok() {
 
 # One directory per fleet (issue #181): the dedup set + watermark move to
 # fleets/<sess>/bridge/{seen,since}. The bridge is repo-native (keyed by slug), so
-# bridge_sess_for_slug resolves the slug→session from the configured confs; a slug
-# with no configured fleet (a bare FLEET_REPO) keeps the legacy flat
-# issue-bridge/bridge_<slug>.* file. bridge_state_file DUAL-READS: a legacy file
-# already in place is used until the migrator moves it, so the dedup/watermark set
-# is never split across the land→migrate window. Single-entry memo keeps the
-# conf scan off the per-comment hot path (poll/deliver handle one slug at a time).
-_BR_SLUG='' _BR_SESS=''
-bridge_sess_for_slug() {
+# bridge_state_subdir resolves the slug→(session, slug) state dir from the
+# configured confs; a slug with no configured fleet (a bare FLEET_REPO) keeps the
+# legacy flat issue-bridge/bridge_<slug>.* file. bridge_state_file DUAL-READS: a
+# legacy file already in place is used until the migrator moves it, so the
+# dedup/watermark set is never split across the land→migrate window. Single-entry
+# memo keeps the conf scan off the per-comment hot path (poll/deliver handle one
+# slug at a time).
+#
+# A fleet hosting several repos (issue #798) polls each one, so each keeps its own
+# watermark + seen-set, per (session, slug): the fleet conf's own FLEET_REPO stays
+# at fleets/<sess>/bridge/ — the degenerate one-repo layout, unchanged — and a repo
+# the fleet hosts through a repos/<slug>.conf overlay gets fleets/<sess>/bridge/<slug>/.
+# Prints that dir relative to fleets/ (`<sess>/bridge` or `<sess>/bridge/<slug>`),
+# or nothing. A conf's own repo wins over an overlay naming the same slug.
+_BR_SLUG='' _BR_SUB=''
+bridge_state_subdir() {
   local want="$1" sess conf rp found=''
   [ -n "$want" ] || return 0
-  [ "$want" = "$_BR_SLUG" ] && { printf '%s' "$_BR_SESS"; return; }
+  [ "$want" = "$_BR_SLUG" ] && { printf '%s' "$_BR_SUB"; return; }
   while IFS=$'\t' read -r sess conf; do
     rp=$( . "$conf" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )
-    [ "$(fleet_slug "$(fleet_norm_repo "$rp")")" = "$want" ] && { found="$sess"; break; }
+    [ "$(fleet_slug "$(fleet_norm_repo "$rp")")" = "$want" ] && { found="$sess/bridge"; break; }
   done < <(fleet_each_conf)
-  _BR_SLUG="$want"; _BR_SESS="$found"
+  if [ -z "$found" ]; then
+    while IFS=$'\t' read -r sess conf; do
+      [ -f "$FLEET_CONF_DIR/fleets/$sess/repos/$want.conf" ] && { found="$sess/bridge/$want"; break; }
+    done < <(fleet_each_conf)
+  fi
+  _BR_SLUG="$want"; _BR_SUB="$found"
   printf '%s' "$found"
 }
 # $1=slug $2=kind (seen|since|typing.<cid>) → the state file path (new per-fleet
 # layout, else legacy).
 bridge_state_file() {
-  local slug="$1" kind="$2" sess new old="$STATE/bridge_$1.$2"
-  sess=$(bridge_sess_for_slug "$slug")
-  if [ -n "$sess" ]; then
-    new="$FLEET_CONF_DIR/fleets/$sess/bridge/$kind"
+  local slug="$1" kind="$2" sub new old="$STATE/bridge_$1.$2"
+  sub=$(bridge_state_subdir "$slug")
+  if [ -n "$sub" ]; then
+    new="$FLEET_CONF_DIR/fleets/$sub/$kind"
     [ -f "$new" ] && { printf '%s' "$new"; return; }
     [ -f "$old" ] && { printf '%s' "$old"; return; }   # dual-read a legacy file in place
-    mkdir -p "$FLEET_CONF_DIR/fleets/$sess/bridge" 2>/dev/null
+    mkdir -p "$FLEET_CONF_DIR/fleets/$sub" 2>/dev/null
     printf '%s' "$new"; return
   fi
   mkdir -p "$STATE" 2>/dev/null
@@ -368,12 +382,18 @@ bridge_inject() {
 }
 
 # Find a live fleet session serving <repo> (for a revive spawn). Prints the
-# session name or empty. A fleet session owns a 'plan'/'dash' hub window.
+# session name or empty. A fleet session owns a 'plan'/'dash' hub window. A fleet
+# with repo overlays (issue #798) serves every repo it hosts — its sessmap slug
+# names only one of them; a fleet without keeps the cached-slug match.
 bridge_fleet_for_repo() {
   local repo="$1" want_slug s
   want_slug=$(fleet_slug "$(fleet_norm_repo "$repo")")
   while IFS= read -r s; do
     [ -n "$s" ] || continue
+    if fleet_has_repo_overlays "$s"; then
+      fleet_repo_hosted "$s" "$repo" && { printf '%s' "$s"; return 0; }
+      continue
+    fi
     [ "$(fleet_slug_cached "$s")" = "$want_slug" ] && { printf '%s' "$s"; return 0; }
   done < <(fleet_hub_sessions)
   return 0
@@ -408,7 +428,9 @@ bridge_relay() {
     local msg
     msg="[issue #$issue — comment from @${author:-someone}]"$'\n\n'"$body"
     # sess == the fleet's socket label (issue #159): inject into that server.
-    if bridge_inject "$(fleet_socket "$sess")" "$win" "$msg"; then echo "relayed(#${issue}->${sess})"; return 0; fi
+    # The log names the target WINDOW, not just the fleet (issue #798): two repos'
+    # #12 share a session, and only the window id tells their relays apart.
+    if bridge_inject "$(fleet_socket "$sess")" "$win" "$msg"; then echo "relayed(#${issue}->${sess}:${win})"; return 0; fi
     # The window still exists (we just resolved it) but a tmux op failed — a
     # TRANSIENT error. Return the retry code so the comment is NOT marked seen and
     # is re-attempted next tick, rather than silently dropped. (If the window is
@@ -477,17 +499,22 @@ cid = c.get("id"); num = i.get("number")
 if cid is None or num is None:
     sys.stderr.write("not an issue_comment delivery\n"); sys.exit(7)
 b64 = base64.b64encode((c.get("body") or "").encode()).decode()
+full = (d.get("repository") or {}).get("full_name") or ""
 print("\t".join([str(cid), c.get("author_association") or "NONE",
-                 (c.get("user") or {}).get("login") or "", str(num), b64]))
+                 (c.get("user") or {}).get("login") or "", str(num), b64, full]))
 PYEOF
   )
   row=$(FLEET_SECRET="$secret" FLEET_SIG="$sig" python3 -c "$PY") \
     || { log "delivery rejected (HMAC/parse) — not relaying"; exit 1; }
 
-  local repo="${FLEET_REPO:-}" cid assoc author num b64 body slug lease
-  IFS=$'\t' read -r cid assoc author num b64 <<EOF
+  local repo cid assoc author num b64 full body slug lease
+  IFS=$'\t' read -r cid assoc author num b64 full <<EOF
 $row
 EOF
+  # The delivery names its own repo (issue #798): one hook can serve every repo a
+  # fleet hosts, and repo B's #12 must route as B's, never as FLEET_REPO's #12.
+  # A payload without `repository` (a hand-fed test) keeps the FLEET_REPO default.
+  repo="${full:-${FLEET_REPO:-}}"
   [ -z "$repo" ] && { log "--deliver: FLEET_REPO unset — cannot resolve repo"; exit 1; }
   # tmux down = no target resolvable (every window/pane lookup returns empty, so a
   # relay would take a terminal 'gone' drop and lose the delivery). Treat as
@@ -605,20 +632,36 @@ poll() {
     && queue "$FLEET_REPO" "$ASSOC_FLOOR" "$REVIVE"
   # Per-fleet confs opt in individually, each carrying its own floor/revive. Source
   # in a subshell and emit repo<TAB>floor<TAB>revive so the values can't leak.
+  # A fleet hosting several repos (issue #798) queues EVERY one of them — each
+  # through its own view (fleet conf + that repo's overlay), so an overlay can turn
+  # the bridge off (FLEET_ISSUE_BRIDGE=0) or retune its gate for its repo alone. A
+  # fleet with no repos/ overlay takes the historic one-conf path, byte for byte.
   local _s cf
   while IFS=$'\t' read -r _s cf; do
     [ -f "$cf" ] || continue
     local line rp fl rv
-    line=$( . "$cf" >/dev/null 2>&1
-            [ "${FLEET_ISSUE_BRIDGE:-0}" = 1 ] && printf '%s\t%s\t%s' \
-              "${FLEET_REPO:-}" \
-              "${FLEET_ISSUE_BRIDGE_ASSOC_FLOOR:-$ASSOC_FLOOR}" \
-              "${FLEET_ISSUE_BRIDGE_REVIVE:-$REVIVE}" )
+    if fleet_has_repo_overlays "$_s"; then
+      line=$(fleet_repos "$_s" | while IFS= read -r rp; do
+               ( fleet_load_repo_conf "$_s" "$rp" >/dev/null 2>&1 || exit 0
+                 [ "${FLEET_ISSUE_BRIDGE:-0}" = 1 ] && printf '%s\t%s\t%s\n' "$rp" \
+                   "${FLEET_ISSUE_BRIDGE_ASSOC_FLOOR:-$ASSOC_FLOOR}" \
+                   "${FLEET_ISSUE_BRIDGE_REVIVE:-$REVIVE}" )
+             done)
+    else
+      # An empty FLEET_REPO emits nothing: tab is IFS whitespace, so `read` would
+      # swallow the empty field and poll the assoc floor as a repo name.
+      line=$( . "$cf" >/dev/null 2>&1
+              [ "${FLEET_ISSUE_BRIDGE:-0}" = 1 ] && [ -n "${FLEET_REPO:-}" ] && printf '%s\t%s\t%s' \
+                "${FLEET_REPO:-}" \
+                "${FLEET_ISSUE_BRIDGE_ASSOC_FLOOR:-$ASSOC_FLOOR}" \
+                "${FLEET_ISSUE_BRIDGE_REVIVE:-$REVIVE}" )
+    fi
     [ -z "$line" ] && continue
-    IFS=$'\t' read -r rp fl rv <<EOF
+    while IFS=$'\t' read -r rp fl rv; do
+      queue "$rp" "$fl" "$rv"
+    done <<EOF
 $line
 EOF
-    queue "$rp" "$fl" "$rv"
   done < <(fleet_each_conf)
 
   if [ "${#REPOS[@]}" -eq 0 ]; then

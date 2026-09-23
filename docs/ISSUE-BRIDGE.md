@@ -184,7 +184,7 @@ hands the resume nudge to `claude` as a prompt arg), so it needs no override.
 
 ## Ingress A — poll (default, no inbound port)
 
-The daemon lists new issue comments across every enabled fleet's repo via
+The daemon lists new issue comments across every repo each enabled fleet hosts via
 `gh api` with a `since` watermark. Reads are effectively free (conditional /
 `since` requests), so a ~15s tick is cheap. This is the robust default — nothing
 to expose, no secret required. It is installed as `com.claude-fleet.issue-bridge`
@@ -195,6 +195,19 @@ dedup seen-set. Per fleet (issue #181) that state lives at
 `~/.config/claude-fleet/fleets/<session>/bridge/` as `{since,seen}`, with the
 legacy flat `bridge_<slug>.*` under `FLEET_ISSUE_BRIDGE_STATE_DIR` dual-read as a
 fallback.
+
+A fleet hosting several repos (issue #798) polls **every** repo it hosts
+(`fleet_repos`), not just its conf's `FLEET_REPO`. Each repo keeps its own
+watermark + seen-set per (session, slug): the conf's own repo stays at
+`fleets/<session>/bridge/`, and an overlay-hosted repo gets
+`fleets/<session>/bridge/<slug>/` — so a busy worker in repo B holds only B's
+watermark. Each repo is read through its own view (fleet conf + its
+`repos/<slug>.conf` overlay), so an overlay can set `FLEET_ISSUE_BRIDGE=0` (or its
+own assoc floor / revive) for that repo alone. Routing is by (repo, issue) — B's
+#12 is only ever typed into the window whose `@repo` is B (#790) — and the log's
+`relayed(#N-><session>:<window>)` names the target window. A `--deliver` webhook
+routes by the payload's `repository.full_name` (falling back to `FLEET_REPO`), and
+a revive in a multi-repo fleet spawns with `--repo`.
 
 Enable it per fleet:
 
