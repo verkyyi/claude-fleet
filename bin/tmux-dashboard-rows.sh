@@ -45,7 +45,7 @@ R="${E}0m"; US=$'\x1f'
 # for that reason.
 # Keep the column count stable. Codex's agent cell carries an exact cache suffix;
 # the display loop separates it before drawing the ordinary `codex` tag.
-WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{@claude_needs}${US}#{@expand}${US}#{@pin}${US}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}"
+WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{@claude_needs}${US}#{@expand}${US}#{@pin}${US}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -87,6 +87,18 @@ state_v() { case "$1" in
   looping) gc=$IN; gl='↻';      rk=3;;
   *)       gc=$GY; gl='·';      rk=4;;
 esac; }
+
+# @sleep_since → "z <age>" (issue #1051): how long a sleeping row has slept, so a
+# stale sleeper reads as stale. The epoch is stamped by fleet-sleep.py's phase()
+# — one window option, no sleep-record read per row. m/h/d only, so it fits the
+# 8-cell act column; a missing/garbled stamp leaves the bare `z`. Sets $zage.
+zage_v() { zage=''
+  case "$1" in ''|*[!0-9]*) return 0;; esac
+  local d=$(( NOW - $1 )); [ "$d" -lt 0 ] && d=0
+  if   [ "$d" -lt 3600 ];  then zage="z $(( d / 60 ))m"
+  elif [ "$d" -lt 86400 ]; then zage="z $(( d / 3600 ))h"
+  else                          zage="z $(( d / 86400 ))d"; fi
+}
 
 # @pin → 0/1 (issue #623). `1` is the ONLY pinned value; anything else — unset,
 # 0, or a stray trailing field glued on by a future WFMT addition — is ordinary.
@@ -413,7 +425,7 @@ while IFS=$'\t' read -r _ krk _ _ _ _ korig; do
 done <<< "$KEYTAB"
 
 buf=""
-while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp wrepo wnorepo; do
+while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp wrepo wnorepo slept; do
   [ -z "$name" ] && continue
   # strict per-fleet: only windows from the viewing dash's own tmux session.
   # FLEET_SESSION exported by tmux-dashboard.sh; unset ⇒ show all (single-fleet).
@@ -525,6 +537,8 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # No timestamp yet (a window that never took a turn) → a muted dot.
   fleet_reltime "$state_ts" "$NOW"; act=${reltime_out:-}
   acol=$GY; [ -z "$act" ] && act='·'
+  # a sleeper's act cell is how long it has slept (issue #1051), not its last turn
+  if [ "$state" = sleeping ]; then zage_v "$slept"; [ -n "$zage" ] && act=$zage; fi
   # A fresh daemon notice is tied to this exact done turn. Activity invalidates
   # it immediately; a stopped daemon cannot leave a misleading permanent marker.
   if [ "$state" = "done" ] && [ "$reap_stamp" = "$state_ts" ]; then
@@ -744,6 +758,9 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     # view draws `marker glyph tree label`, so a 30-column sidebar starts every
     # name at the same column instead of indenting the child's text by two.
     label="$dname"
+    # `z 42m` in the glyph field (issue #1051): the view draws it as-is, so a
+    # sleeping row reads its age before the name, where a narrow pane can't clip it.
+    if [ "$state" = sleeping ]; then zage_v "$slept"; [ -n "$zage" ] && gl=$zage; fi
     [ -n "$repod" ] && label="$label $repod"       # cross-repo child (#1031)
     [ "$pin" = 1 ] && label="* $label"
     [ -n "$kidd" ] && label="$label · $kidd"

@@ -28,6 +28,13 @@ bash ~/.claude/fleet/bin/fleet-sleep.sh keep-awake fleet-name @123
 bash ~/.claude/fleet/bin/fleet-sleep.sh allow-sleep fleet-name @123
 ```
 
+The same three are taps in the session list (issue #1051): a sleeping row reads
+`z <age>` (`z 42m`, `z 3h`, `z 2d` — from the window option `@sleep_since`,
+epoch seconds, which `phase()` stamps on entering `sleeping` and clears on any
+other phase), and the sidebar's row menu (`.`) carries **唤醒** (`w`, only on a
+sleeping row; runs `wake` detached, at once) and a **保持唤醒 / 允许休眠** toggle
+(`k`, the label follows `@sleep_keep_awake`).
+
 Manual sleep bypasses only the idle duration, never safety checks. A client
 viewing the window prevents sleep, even if it has not typed recently. Normal
 tmux navigation, sidebar selection and client attach wake a sleeping worker

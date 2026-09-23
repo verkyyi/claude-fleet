@@ -167,8 +167,16 @@ class Worker:
         return path, data
 
     def phase(self, path, data, state, error=''):
+        # `since` (issue #1051) is when this sleep began: kept across a re-entry
+        # into `sleeping` (restore, a failed wake parked again) so the list's
+        # `z <age>` counts the whole nap, and mirrored to @sleep_since so a row
+        # reads one window option instead of this record.
+        if state=='sleeping':
+            if data.get('state')!='sleeping' or not data.get('since'): data['since']=int(time.time())
+        else: data.pop('since',None)
         data.update(state=state, updated=time.time(), error=error)
         save(path,data)
+        self.stamp('@sleep_since',data.get('since',''))
         self.stamp('@worker_lifecycle',state if state != 'awake' else '')
 
     def source_key(self, source):

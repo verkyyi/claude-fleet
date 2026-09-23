@@ -3,7 +3,8 @@
 # fleet-sidebar-menu.sh — sourced by fleet-sidebar.sh for `menu` / `reap`
 # (issue #898). The task sidebar's per-row action menu: the six things that used
 # to need a trip to the hub list — rename, pin, open PR, answer, flip agent,
-# reap — plus the row-less "new task (file an issue)" and "restore a finished
+# reap — plus a sleeping row's Wake and the Keep awake / Allow sleep toggle
+# (issue #1051), plus the row-less "new task (file an issue)" and "restore a finished
 # task" (#901). Every item calls the SAME
 # script the hub binds (EPIC #894 convention 1) with the window's stable `@id`,
 # never an index or a name. The view (fleet-sidebar.py) opens it on `.` (empty
@@ -34,6 +35,8 @@ MENU_KEYS='rename	r	rename — edits on the input line (↵ applies, esc / an em
 pin	t	pin / unpin the row to the top
 pr	p	open its PR (greyed when it has none)
 answer	a	answer its question (a red ? row; greyed otherwise)
+wake	w	wake a sleeping (z) row now — only listed on one
+awake	k	keep it awake ⇄ allow it to sleep again
 agent	v	flip new sessions claude ⇄ codex
 reap	x	reap it — asks y/n first
 new	n	new task — file an issue AND spawn its worker
@@ -78,6 +81,8 @@ fi
 
 name=$(tmux display-message -p -t "$wid" '#{window_name}' 2>/dev/null)
 state=$(tmux display-message -p -t "$wid" '#{@claude_state}' 2>/dev/null)
+life=$(tmux display-message -p -t "$wid" '#{@worker_lifecycle}' 2>/dev/null)
+keep=$(tmux show-options -wqv -t "$wid" @sleep_keep_awake 2>/dev/null)
 pin=$(tmux show-options -wqv -t "$wid" @pin 2>/dev/null)
 pr=$(FLEET_SESSION="$sess" bash "$BIN/dash-open-pr.sh" --wid "$wid" --probe 2>/dev/null </dev/null)
 case "${FLEET_AGENT:-claude}" in codex) next=Claude ;; *) next=Codex ;; esac
@@ -101,6 +106,14 @@ else add "-打开 PR（没有）" "$(mk pr)" ''; fi
 if [ "$state" = needs ]; then
   add "回答它的提问…" "$(mk answer)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") -w 84% -h 70% -- bash $(sq "$BIN/dash-answer.sh") $(sq "$sess:$wid")")"
 else add "-回答它的提问（没有）" "$(mk answer)" ''; fi
+# Wake (issue #1051): only a sleeping row gets it, and it wakes at once — opening
+# the menu and picking it is already the second deliberate step (EPIC #1048
+# decision 4). Detached, because the wake respawns the pane. Keep awake flips the
+# sleep controller's own @sleep_keep_awake hold; the label says what a pick does.
+slp="bash $(sq "$BIN/fleet-sleep.sh")"
+[ "$life" = sleeping ] && add "唤醒" "$(mk wake)" "$(sh_run "$slp wake $(sq "$sess") $wid")"
+if [ "$keep" = 1 ]; then add "允许休眠" "$(mk awake)" "$(sh_run "$slp allow-sleep $(sq "$sess") $wid")"
+else add "保持唤醒" "$(mk awake)" "$(sh_run "$slp keep-awake $(sq "$sess") $wid")"; fi
 add "新会话改用 $next" "$(mk agent)" "$(sh_run "bash $(sq "$BIN/dash-agent-toggle.sh")")"
 add "回收…" "$(mk reap)" "confirm-before -p $(sq "回收「$(fe "$name")」？(y/n)") $(sq "$(sh_run "bash $(sq "$BIN/fleet-sidebar.sh") reap $(sq "$sess") $wid")")"
 add "" "" ""
