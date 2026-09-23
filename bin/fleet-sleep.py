@@ -110,6 +110,18 @@ def source_alive(data):
     return start==data['source_start'] and not state.startswith('Z')
 
 
+def wake_blocker(data):
+    """Why a wake of this record cannot work, or None (issue #1054). The same
+    preconditions wake_locked refuses on before it respawns anything: the
+    original process confirmed exited, the worktree and exact history present.
+    The page offers its button only when this is None."""
+    if source_alive(data): return 'the original agent is still running'
+    source=data.get('source') or {}
+    if not source.get('worktree') or not Path(source['worktree']).is_dir(): return 'the worktree is gone'
+    if not source.get('transcript') or not Path(source['transcript']).is_file(): return 'the saved conversation history is gone'
+    return None
+
+
 def process_tree_rss(pid):
     rows={}
     for line in run(['ps','-axo','pid=,ppid=,rss=']).splitlines():
@@ -486,7 +498,7 @@ class Worker:
         save(path,data)
         command=self.command('launch')
         self.tm('respawn-pane','-k','-t',self.pane,'-c',source['worktree'],command)
-        started=time.monotonic()
+        started=time.monotonic();parked=False
         try:
             while time.monotonic()-started<40:
                 try:
@@ -517,10 +529,31 @@ class Worker:
                 time.sleep(.25)
             raise ValueError('resume is not ready; inspect the retained worker and retry')
         except Exception as exc:
-            self.phase(path,data,'failed',str(exc)); raise
+            self.phase(path,data,'failed',str(exc))
+            parked=self.repark_failed(path,data)
+            raise
         finally:
             self.tm('select-pane','-e','-t',self.pane)
-            self.tm('set-option','-p','-t',self.pane,'remain-on-exit',data['remain'])
+            if not parked: self.tm('set-option','-p','-t',self.pane,'remain-on-exit',data['remain'])
+
+    def repark_failed(self,path,data):
+        """A failed wake whose launcher already exited (a missing tool, a
+        refused setting) leaves a dead pane: put the page back so it shows why
+        and offers Retry (issue #1054). A pane still running anything — the
+        resumed agent stuck on a dialog, its services — is never replaced."""
+        try:
+            if self.opt('pane_dead')!='1': return False
+            # What the launcher printed before it died is the reason; tmux's
+            # own "Pane is dead" line is not.
+            said=[l.strip() for l in self.tm('capture-pane','-p','-t',self.pane).splitlines()
+                  if l.strip() and not l.lstrip().startswith(('Pane is dead','Fleet: restoring'))]
+            if said and 'launcher said:' not in data.get('error',''):
+                data['error']=(data.get('error') or 'wake failed')+' · launcher said: '+' / '.join(said[-2:])
+                save(path,data)
+            self.tm('set-option','-p','-t',self.pane,'remain-on-exit','on')
+            self.tm('respawn-pane','-k','-t',self.pane,'-c',data['source']['worktree'],self.command('park'))
+            return True
+        except (subprocess.SubprocessError,OSError,KeyError): return False
 
     def bind_resumed_codex(self,source):
         # Remote resume may not emit SessionStart. Bind only the explicitly
@@ -695,6 +728,9 @@ class Worker:
                         self.tm('select-pane','-e','-t',self.pane)
                         self.tm('set-option','-p','-t',self.pane,'remain-on-exit',data['remain'])
                 except (ValueError,OSError,subprocess.SubprocessError): pass
+            # A wake that died without reaching its own failure path (a killed
+            # controller, a launcher exiting late) is re-parked here.
+            if data['state']=='failed': self.repark_failed(path,data)
             if data['state']=='sleeping':
                 if wake_on_view() and self.visible(): self.wake_locked(path,data)
                 elif self.scheduled_wake(path,data): self.wake_locked(path,data,over_cap=False)
@@ -960,7 +996,7 @@ def park(w):
     path,data=w.record()
     try: arm=max(float(os.environ.get('FLEET_SLEEP_WAKE_ARM') or 3),1.0)
     except ValueError: arm=3.0
-    button=PARK['WakeButton'](arm)
+    button=PARK['WakeButton'](arm,'retry' if data.get('state')=='failed' else 'wake')
     # SIGWINCH only flags, via the wakeup pipe: select() returns and the loop
     # redraws — never re-entrant (PEP 475 would otherwise just resume select).
     rd,wr=os.pipe()
@@ -977,7 +1013,7 @@ def park(w):
         mode[6][termios.VMIN],mode[6][termios.VTIME]=1,0
         termios.tcsetattr(0,termios.TCSANOW,mode)
     mouse=lambda on:sys.stdout.write('\033[?1000'+('h' if on else 'l')+'\033[?1006'+('h' if on else 'l'))
-    facts,rows,fds,full,cost=None,set(),[rd,0],None,False
+    facts,rows,fds,full,cost,blocker=None,set(),[rd,0],None,False,None
     try:
         mouse(True)
         redraw=True
@@ -990,8 +1026,9 @@ def park(w):
                     try: path,data=w.record()
                     except (ValueError,KeyError,OSError): pass
                     facts=park_facts(w,data)
-                footer=button.lines(now)
-                if button.state=='armed':
+                    blocker=wake_blocker(data) if button.state!='waking' else None
+                footer=PARK['blocked_lines'](blocker) if blocker else button.lines(now)
+                if button.state=='armed' and not blocker:
                     if cost: footer=[PARK['DIM']+' '+cost+' '+PARK['RESET']]+footer
                     if full: footer=[PARK['cap_line'](*full)]+footer
                 frame=park_frame(w,data,footer,facts)
@@ -1016,9 +1053,21 @@ def park(w):
                 if not chunk: fds.remove(0); continue
                 # A discarded key changes nothing on the page: no redraw for it.
                 for _ in range(PARK['presses'](chunk,rows)):
+                    if blocker:
+                        # No button (issue #1054). A press re-reads the facts,
+                        # so a cause fixed meanwhile brings the button back.
+                        facts,redraw=None,True
+                        break
                     redraw=True
                     was=button.state
                     if button.press(time.monotonic()):
+                        # Re-checked at the press, not only at the last draw:
+                        # a wake that cannot start would leave "waking…" up.
+                        try: blocker=wake_blocker(w.record()[1])
+                        except (ValueError,KeyError,OSError) as exc: blocker=str(exc)
+                        if blocker:
+                            button.state,facts='rest',None
+                            break
                         mouse(False); sys.stdout.flush()
                         park_wake(w)
                     elif was!='armed' and button.state=='armed':
