@@ -1271,10 +1271,17 @@ fi
 # does not match its lockfile, so a stale / unstamped base silently turns every
 # spawn back into a full install. Count them per fleet.
 dl_sh="$(dirname "$0")/fleet-deps-link.sh"
-# _deps_row <label> <main> — one verdict for one base checkout
+# _deps_row <label> <main> [<base-branch>] — one verdict for one base checkout
 _deps_row() {
   bd_sum=$("$dl_sh" --base-status "$2" 2>/dev/null | sed -n 's/^summary //p')
   [ -n "$bd_sum" ] || return 0
+  # Issue #1044: "fresh" means fresh against the CHECKED-OUT tree — say which one
+  # when it is not the base branch, and never pass it.
+  bd_off=""
+  if [ -n "${3:-}" ]; then
+    bd_cur=$(git -C "$2" symbolic-ref --quiet --short HEAD 2>/dev/null) || bd_cur="detached HEAD"
+    [ "$bd_cur" = "$3" ] || bd_off=" [against $bd_cur, not $3 — see the checkout row]"
+  fi
   bd_get() { printf '%s\n' "$bd_sum" | tr ' ' '\n' | sed -n "s/^$1=//p"; }
   bd_f=$(bd_get fresh); bd_s=$(( $(bd_get stale) + $(bd_get installing) )); bd_u=$(bd_get unstamped); bd_n=$(bd_get not-installed)
   bd_x=$(bd_get failing); bd_x=${bd_x:-0}; bd_since=$(bd_get failing-since)
@@ -1296,12 +1303,15 @@ _deps_row() {
   fi
   bd_txt="$1: base deps $bd_f fresh / $bd_s stale / $bd_x failing / $bd_u unstamped / $bd_n not installed"
   [ "$bd_x" -gt 0 ] && bd_txt="$bd_txt (failing: $bd_cls; since ${bd_since:-?})"
+  bd_txt="$bd_txt$bd_off"
   if [ "$bd_s" -gt 0 ] || [ "$bd_u" -gt 0 ]; then
     warn deps "$bd_txt — worktrees there install from zero instead of linking; fix: $(dirname "$0")/fleet-deps-link.sh --prime-base '$2' (per dir: --base-status)"
   elif [ "$bd_x" -gt 0 ] && [ "$bd_p" = 0 ]; then
     warn deps "$bd_txt — a transient install failure (network / npm cache); it retries itself with backoff, nothing to do unless it parks (log: logs/base-deps.log)"
   elif [ "$bd_x" -gt 0 ]; then
     warn deps "$bd_txt — the install fails on the repo's side and is not retried until its lockfile changes; see logs/base-deps.log, fix the repo, then: $(dirname "$0")/fleet-deps-link.sh --refresh-base '$2' <dir> (which: --base-status)"
+  elif [ -n "$bd_off" ]; then
+    warn deps "$bd_txt — new worktrees link deps built from the wrong branch's lockfiles; fix: git -C '$2' checkout $3"
   else
     pass deps "$bd_txt — new worktrees link the base's current tree"
   fi
@@ -1314,7 +1324,8 @@ if [ -d "$conf_dir" ] && [ -x "$dl_sh" ]; then
     bd_ws=$(_conf_val "$cf" FLEET_WORKTREE_SETUP); [ -n "$bd_ws" ] || bd_ws=$(_gconf_val FLEET_WORKTREE_SETUP)
     case "$bd_on:$bd_ws" in 1:*|:*fleet-deps-link*)
       main=$(sh -c '. "$1" 2>/dev/null; printf %s "${FLEET_MAIN:-}"' _ "$cf")
-      [ -d "$main" ] && _deps_row "$sess" "$main" ;;
+      bd_b=$(sh -c '. "$1" 2>/dev/null; printf %s "${FLEET_BASE_BRANCH:-master}"' _ "$cf")
+      [ -d "$main" ] && _deps_row "$sess" "$main" "$bd_b" ;;
     esac
     # Each hosted repo keeps its own setup (issue #978): an overlay's
     # FLEET_BASE_DEPS / FLEET_WORKTREE_SETUP win for its base, else the fleet's.
@@ -1325,7 +1336,8 @@ if [ -d "$conf_dir" ] && [ -x "$dl_sh" ]; then
       r_ws=$bd_ws; _conf_has "$rf" FLEET_WORKTREE_SETUP && r_ws=$(_conf_val "$rf" FLEET_WORKTREE_SETUP)
       case "$r_on:$r_ws" in 1:*|:*fleet-deps-link*) ;; *) continue ;; esac
       main=$(sh -c '. "$1" 2>/dev/null; printf %s "${FLEET_MAIN:-}"' _ "$rf")
-      [ -d "$main" ] && _deps_row "$sess [$(basename "$rf" .conf)]" "$main"
+      bd_b=$(sh -c '. "$1" 2>/dev/null; printf %s "${FLEET_BASE_BRANCH:-master}"' _ "$rf")
+      [ -d "$main" ] && _deps_row "$sess [$(basename "$rf" .conf)]" "$main" "$bd_b"
     done
   done <<EOF
 $(_fleet_confs "$conf_dir")
@@ -1337,6 +1349,7 @@ fi
 # each fleets/<sess>/repos/<slug>.conf overlay. Each repo gets its own block —
 #   main    FLEET_MAIN exists, is a git checkout, and its origin IS the repo
 #   base    FLEET_BASE_BRANCH is the repo's GitHub default (#603) and exists locally
+#   checkout  FLEET_MAIN is ON that base branch, and no other worktree holds it (#1044)
 #   trust   Claude Code's trust pre-grant for FLEET_MAIN (#563)
 #   deploy  FLEET_DEPLOY_REF / FLEET_DEPLOY_CHECK are usable (#541)
 #   labels  the canonical fleet label set is seeded on the repo (#333)
@@ -1431,6 +1444,36 @@ _repo_block() {
     else
       warn base "$r: base \"$bbase\" is NOT the repo's default branch (\"$bdef\") — every worker here branches from and merges into \"$bbase\", so the trunk never moves; fix: set FLEET_BASE_BRANCH=\"$bdef\" in $rb_src, or keep it deliberately if \"$bbase\" really is this repo's trunk"
     fi
+  fi
+
+  # checkout — the base checkout must SIT ON the base branch (issue #1044): every
+  # base-mover pulls whatever is checked out, so a base left on a side branch reads
+  # "already current" forever while its shared deps install from a stale tree
+  # (2026-09-23: the monorepo base sat 834 commits behind for 10 days, doctor green).
+  if [ "$main_ok" = 1 ] && [ -n "$bbase" ]; then
+    bcur=$(git -C "$main" symbolic-ref --quiet --short HEAD 2>/dev/null) || bcur="detached HEAD"
+    bbehind=$(git -C "$main" rev-list --count "HEAD..refs/remotes/origin/$bbase" 2>/dev/null)
+    if [ "$bcur" != "$bbase" ]; then
+      warn checkout "$r: base checkout $main is on $bcur, not \"$bbase\"${bbehind:+ ($bbehind commit(s) behind origin/$bbase)} — base-sync will not pull it and its shared deps follow the wrong tree; fix: git -C '$main' checkout $bbase"
+    else
+      [ "${bbehind:-0}" = 0 ] && bbehind=""
+      pass checkout "$r: $main is on \"$bbase\"${bbehind:+ ($bbehind behind origin/$bbase — base-sync catches it up)}"
+    fi
+    # Another worktree holding the base branch refuses that checkout ("already
+    # checked out at …") — e.g. a stale one in a dead session's scratchpad.
+    bholders=$(git -C "$main" worktree list --porcelain 2>/dev/null | awk -v m="$(cd "$main" && pwd -P)" -v b="refs/heads/$bbase" '
+      /^worktree / { p = substr($0, 10); pr = 0; next }
+      /^prunable/  { pr = 1; next }
+      /^branch /   { if (substr($0, 8) == b) hold = p; next }
+      /^$/         { if (hold != "" && hold != m) print hold (pr ? " (prunable)" : ""); hold = "" }
+      END          { if (hold != "" && hold != m) print hold (pr ? " (prunable)" : "") }')
+    # a here-doc, not a pipe: warn() must count in THIS shell
+    while IFS= read -r wh; do
+      [ -n "$wh" ] || continue
+      warn checkout "$r: worktree $wh holds \"$bbase\" — the base checkout cannot switch back to it while it does; fix: git -C '$main' worktree remove --force '${wh% (prunable)}' (or git -C '$main' worktree prune if prunable)"
+    done <<EOF
+$bholders
+EOF
   fi
 
   # trust — the verdict comes from bin/fleet-trust.sh itself
