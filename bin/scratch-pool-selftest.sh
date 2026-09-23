@@ -21,6 +21,10 @@
 #   G. dash-raw-session.sh + claim      → NO new-window (it reuses the warm pane)
 #   H. dash-raw-session.sh, empty claim → falls back to the cold path (new-window)
 #   I. fleet_scratch_alloc/free         → real worktree created, then fully removed
+#   J. Codex provider/account gate
+#   K–P. one pool per hosted repo (#797): a B claim gets a B window and never A's;
+#        untagged entries by worktree origin; per-repo FLEET_SCRATCH_POOL; the
+#        dash-raw-session claim; fan-out reap/status; one-repo fleet unchanged
 #
 # Exit 0 = pass; non-zero = fail.
 set -uo pipefail
@@ -210,6 +214,87 @@ out=$(bash "$POOL" claim tf); [ -z "$out" ] || fail 'Codex fleet claimed another
 setopt_ '@9' pool_account "codex:$WORK/codex-home"
 out=$(bash "$POOL" claim tf); [ -n "$out" ] || fail 'matching warm Codex entry was not claimed'
 ok 'J Codex pool matches provider and account home before moving the window'
+
+# ---- K–Q: one pool per hosted repo (issue #797) -----------------------------
+# A second real repo, and a fleet that hosts both: the conf's own repo o/a plus an
+# overlay for o/b. Pool entries of both repos share the one holding session.
+MAIN_B="$WORK/main-b"; mkdir -p "$MAIN_B"
+( cd "$MAIN_B" && git init -q -b main . && git config user.email t@t && git config user.name t \
+  && echo hi > f && git add f && git commit -qm init ) || fail "K git setup (repo B) failed"
+git -C "$MAIN" remote add origin https://github.com/o/a.git 2>/dev/null
+git -C "$MAIN_B" remote add origin https://github.com/o/b.git 2>/dev/null
+mkconf2() {  # mkconf2 <fleet pool> [<B overlay pool>]
+  mkconf "$1"; printf 'FLEET_REPO="o/a"\n' >> "$FLEET_CONF_DIR/fleets/tf/conf"
+  mkdir -p "$FLEET_CONF_DIR/fleets/tf/repos"
+  { printf 'FLEET_REPO="o/b"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="main"\n' "$MAIN_B"
+    [ -n "${2:-}" ] && printf 'FLEET_SCRATCH_POOL=%s\n' "$2"; } > "$(fleet_repo_conf_file tf o/b)"
+}
+warm() {  # warm <wid> <repo|-> <worktree> — a ready, fresh, right-sized entry
+  addwin "$1" 'tf-pool' "warm-$1" 100 30
+  setopt_ "$1" pool 1; setopt_ "$1" pool_ready 1; setopt_ "$1" pool_slug "scratch-${1#@}"
+  setopt_ "$1" worktree "$3"; setopt_ "$1" pool_account ""; setopt_ "$1" pool_born "$(date +%s)"
+  [ "$2" = - ] || setopt_ "$1" repo "$2"
+}
+in_sess() { awk -F'\t' -v i="$1" '$1==i{print $2}' "$STATE/windows"; }
+
+reset_state; mkfleet; mkconf2 1
+warm '@11' o/a "$WORK/wt-a"; warm '@12' o/b "$WORK/wt-b"
+out=$(bash "$POOL" claim tf --repo o/b 2>&1)
+[ "${out%%	*}" = '@12' ] || fail "K claim --repo o/b must return B's entry" "$out"
+[ "$(in_sess '@11')" = tf-pool ] && [ -f "$STATE/win.@11.pool_ready" ] || fail "K A's entry must stay warm in the pool"
+[ "$(cat "$STATE/win.@12.repo" 2>/dev/null)" = o/b ] || fail "K the claimed window must keep @repo o/b"
+out=$(bash "$POOL" claim tf --repo o/b 2>&1)
+[ -z "$out" ] || fail "K with B's pool empty, a B claim must NOT fall back to A's entry" "$out"
+out=$(bash "$POOL" claim tf --repo o/a 2>&1)
+[ "${out%%	*}" = '@11' ] || fail "K claim --repo o/a must return A's entry" "$out"
+ok "K 2-repo fleet: claim --repo B returns B's warm window; A's pool untouched"
+
+# L: an entry warmed before #797 has no @repo — its worktree's origin says whose it is.
+reset_state; mkfleet; mkconf2 1
+LWT="$WORK/legacy-b"; git clone -q "$MAIN_B" "$LWT" 2>/dev/null && git -C "$LWT" remote set-url origin git@github.com:o/b.git
+warm '@13' - "$LWT"
+out=$(bash "$POOL" claim tf --repo o/a 2>&1); [ -z "$out" ] || fail "L an untagged B entry must not go to A" "$out"
+out=$(bash "$POOL" claim tf --repo o/b 2>&1); [ "${out%%	*}" = '@13' ] || fail "L an untagged entry must be matched by its worktree's origin" "$out"
+ok "L untagged (pre-#797) entry → repo read from its worktree origin"
+
+# M: the overlay's FLEET_SCRATCH_POOL wins over the fleet value, per repo.
+reset_state; mkfleet; mkconf2 1 0
+warm '@11' o/a "$WORK/wt-a"; warm '@12' o/b "$WORK/wt-b"
+out=$(bash "$POOL" claim tf --repo o/b 2>&1); [ -z "$out" ] || fail "M B's overlay turned its pool off" "$out"
+out=$(bash "$POOL" claim tf --repo o/a 2>&1); [ "${out%%	*}" = '@11' ] || fail "M A's pool (fleet value) must still claim" "$out"
+out=$(bash "$POOL" claim tf --repo o/nope 2>&1); [ -z "$out" ] || fail "M an unhosted repo claims nothing" "$out"
+ok "M per-repo FLEET_SCRATCH_POOL: overlay off ⇒ that repo cold, the other still warm"
+
+# N: dash-raw-session hands a B scratch B's warm window, never A's.
+reset_state; mkfleet; mkconf2 1
+warm '@11' o/a "$WORK/wt-a"; warm '@12' o/b "$WORK/wt-b"
+FLEET_CONF_DIR="$FLEET_CONF_DIR" bash "$RAW" tf --repo o/b >/dev/null 2>&1
+grep -q " new-window " "$STATE/log" && fail "N a B scratch with a warm B entry must not cold-spawn" "$(cat "$STATE/log")"
+[ "$(in_sess '@12')" = tf ] && [ "$(in_sess '@11')" = tf-pool ] || fail "N dash-raw-session must move B's entry and leave A's" "$(cat "$STATE/windows")"
+ok "N dash-raw-session --repo o/b claims B's warm window"
+
+# O: fan-out reap retires an entry of a repo the fleet no longer hosts; status lists per repo.
+reset_state; mkfleet; mkconf2 1
+warm '@11' o/a "$WORK/wt-a"; warm '@12' o/b "$WORK/wt-b"; warm '@14' o/gone "$WORK/wt-g"
+bash "$POOL" reap tf >/dev/null 2>&1
+grep -q "kill-window -t @14" "$STATE/log" || fail "O an unhosted repo's entry must be retired" "$(cat "$STATE/log")"
+grep -q "kill-window -t @1[12]" "$STATE/log" && fail "O hosted, usable entries must survive the reap" "$(cat "$STATE/log")"
+: > "$STATE/log"; out=$(bash "$POOL" status tf 2>&1)
+printf '%s\n' "$out" | grep -q "^@11 .* repo=o/a want=1$" && printf '%s\n' "$out" | grep -q "^@12 .* repo=o/b want=1$" \
+  || fail "O status must list each repo's entries with its repo" "$out"
+grep -q "kill-window" "$STATE/log" && fail "O status must never retire anything" "$(cat "$STATE/log")"
+ok "O reap retires an unhosted repo's entry; status reports one pool per repo"
+
+# P: degenerate — a one-repo fleet ignores --repo for its own repo, and has no pool
+# for any other; no @repo is ever written by the pool.
+rm -rf "$FLEET_CONF_DIR/fleets/tf/repos"
+reset_state; mkfleet; mkconf 1; printf 'FLEET_REPO="o/a"\n' >> "$FLEET_CONF_DIR/fleets/tf/conf"
+warm '@11' - "$WORK/wt-a"
+out=$(bash "$POOL" claim tf --repo o/b 2>&1); [ -z "$out" ] || fail "P a one-repo fleet has no pool for another repo" "$out"
+out=$(bash "$POOL" claim tf --repo o/a 2>&1); [ "${out%%	*}" = '@11' ] || fail "P --repo naming the fleet's own repo must claim as before" "$out"
+grep -q "@repo" "$STATE/log" && fail "P a one-repo pool must not touch @repo" "$(cat "$STATE/log")"
+out=$(bash "$POOL" status tf 2>&1); printf '%s' "$out" | grep -q "repo=" && fail "P one-repo status output must be unchanged" "$out"
+ok "P one-repo fleet: unchanged (no @repo, no filter, no repo= in status)"
 
 printf '\n%s tests passed\n' "$pass"
 exit 0
