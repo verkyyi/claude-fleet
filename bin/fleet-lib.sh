@@ -2183,10 +2183,7 @@ fleet_scratch_key() {
 # ---- repo-qualified keys + self-stamping windows (issue #789) ----------------
 # _fleet_hosts_many <sess> → 0 iff the fleet hosts 2+ repos. No repos/ dir ⇒ 1 before
 # reading any conf, so a one-repo fleet pays nothing (the degenerate case).
-_fleet_hosts_many() {
-  [ -d "$FLEET_CONF_DIR/fleets/${1:-_}/repos" ] || return 1
-  [ "$(fleet_repos "${1:-}" | grep -c .)" -ge 2 ]
-}
+_fleet_hosts_many() { fleet_multirepo "$@"; }   # one rule for every key (#790)
 
 # _fleet_key_prefix <sess> <window-target> → "" in a one-repo fleet, "<slug>:" of the
 # window's repo in a 2+ repo fleet; exit 1 there when the window's repo is unknown or
