@@ -1415,6 +1415,22 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Jump to new worker windows @group=spawn @tier=common @scope=fleet @edit=bool
 #FLEET_SPAWN_FOCUS=0
 
+# --- Worktree location (bin/fleet-lib.sh fleet_worktree_dir, issue #886) ------
+# Where NEW worktrees are created — issue spawns, scratch sessions (⌃s and the warm
+# pool) and a manual `cw` all ask the same function. Empty (default) = a sibling of
+# the base checkout (`<main>-issue-N` next to `<main>`), the historic layout.
+#
+# Why set it: worktrees are short-lived, but Spotlight indexes each one (checkout +
+# dependencies) like any long-lived folder — on the machine that prompted this, 92
+# worktrees / 77 GB re-indexed as they churned. Spotlight skips any directory whose
+# name ends in `.noindex`, so point this at one, e.g. ~/projects/.fleet-worktrees.noindex
+# (fleet-doctor says INFO when the name lacks the suffix). Basenames keep their
+# shape (`<main-basename>-issue-N`), so the dash, the seat check and the resume
+# ledger recognise them unchanged; retired worktrees go to `<root>/.fleet-trash`.
+# Existing worktrees are NOT moved — only new ones land here. A leading ~/ is expanded.
+# @label=Worktree root directory @group=spawn @tier=advanced @scope=fleet @edit=path
+#FLEET_WORKTREE_ROOT=""
+
 # --- Warm scratch pool (bin/scratch-pool.sh) ---------------------------------
 # How many pre-started scratch sessions to keep parked and ready. 0 (default) = OFF.
 #

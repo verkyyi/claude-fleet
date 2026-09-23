@@ -53,6 +53,7 @@ _dlib="$(dirname "$0")/fleet-daemon-lib.sh"
 pass() { printf '  %sPASS%s  %-8s %s\n'  "$G" "$Z" "$1" "$2"; }
 warn() { printf '  %sWARN%s  %-8s %s\n'  "$Y" "$Z" "$1" "$2"; warns=$((warns+1)); }
 fail() { printf '  %sFAIL%s  %-8s %s\n'  "$R" "$Z" "$1" "$2"; fails=$((fails+1)); }
+info() { printf '  %sINFO%s  %-8s %s\n'  "$B" "$Z" "$1" "$2"; }   # advice; never counted
 
 # vge A B → 0 (true) if dotted-numeric version A >= B (compares up to 3 parts).
 vge() {
@@ -1297,6 +1298,29 @@ if command -v gh >/dev/null 2>&1 && [ -d "$conf_dir" ]; then
     else
       warn base "$sess: base \"$bbase\" is NOT $brepo's default branch (\"$bdef\") — every worker here branches from and merges into \"$bbase\", so the trunk never moves; fix: set FLEET_BASE_BRANCH=\"$bdef\" in $cf (prefix+c), or keep it deliberately if \"$bbase\" really is this fleet's trunk"
     fi
+  done <<EOF
+$(_fleet_confs "$conf_dir")
+EOF
+fi
+
+# --- worktree root: is it a directory Spotlight skips? (issue #886) --------------
+# FLEET_WORKTREE_ROOT exists to get the fleet's short-lived worktrees (and their
+# dependency trees) out of the Spotlight index; Spotlight skips a directory whose
+# name ends in `.noindex`, so a root without that suffix is moved but still indexed.
+# Advice, not a fault — some roots are excluded another way (Privacy list, a volume
+# with indexing off) — so it is INFO. Unset = the sibling layout, nothing to say.
+if [ -d "$conf_dir" ]; then
+  groot=$(_conf_val "$gconf" FLEET_WORKTREE_ROOT)
+  while IFS= read -r cf; do
+    [ -n "$cf" ] || continue
+    case "$cf" in */fleets/*/conf) sess=${cf%/conf}; sess=${sess##*/} ;; *) sess=$(basename "$cf" .conf) ;; esac
+    wroot=$(_conf_val "$cf" FLEET_WORKTREE_ROOT)   # per-fleet, else the global line
+    [ -n "$wroot" ] || wroot="$groot"
+    [ -n "$wroot" ] || continue
+    case "${wroot%/}" in
+      *.noindex) pass wtroot "$sess: worktrees under $wroot (Spotlight skips *.noindex)" ;;
+      *) info wtroot "$sess: FLEET_WORKTREE_ROOT=$wroot does not end in .noindex — Spotlight still indexes every worktree there; rename it (e.g. ~/projects/.fleet-worktrees.noindex) unless it is excluded another way" ;;
+    esac
   done <<EOF
 $(_fleet_confs "$conf_dir")
 EOF

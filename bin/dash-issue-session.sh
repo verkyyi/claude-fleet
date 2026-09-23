@@ -265,7 +265,8 @@ if [ "$TAIL_ONLY" != 1 ] && [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_F
   gh issue edit "$num" --repo "$REPO" --add-assignee @me >/dev/null 2>&1 || issue_json=''
 fi
 
-wt="$(dirname "$MAIN")/$(basename "$MAIN")-$slug"
+# The ONE path exit (issue #886): FLEET_WORKTREE_ROOT, else a sibling of the base.
+wt="$(fleet_worktree_dir "$MAIN" "$slug")"
 
 # Name the tmux window after the issue CONTENT, not a bare "issue-<N>". Resolution
 # order (issue #216): an explicit --title wins — the create-then-spawn caller just
@@ -352,12 +353,12 @@ tf="$(fleet_cache_dir "$(fleet_slug "$REPO")")/task_$slug.txt"
 printf '%s' "$(fleet_cmd fleet-claim)" > "$tf"
 git -C "$MAIN" fetch origin "$BASE" --quiet 2>/dev/null
 if [ ! -d "$wt" ]; then
-  # >/dev/null 2>&1 (BOTH streams), not just 2>/dev/null: `git worktree add`
-  # prints "HEAD is now at …" / "branch … set up to track …" to STDOUT, and under
+  # >/dev/null: `git worktree add` prints "HEAD is now at …" to STDOUT, and under
   # --async this runs in the run-shell -b tail whose stdout tmux surfaces as an
-  # Esc-to-dismiss view (issue #401). Silence both so the spawn stays silent.
-  git -C "$MAIN" worktree add -b "$slug" "$wt" "origin/$BASE" >/dev/null 2>&1 \
-    || git -C "$MAIN" worktree add "$wt" "$slug" >/dev/null 2>&1 \
+  # Esc-to-dismiss view (issue #401). fleet_worktree_create is silent on both
+  # streams itself; this discards the path it prints. --reuse: a respawn whose
+  # issue-<N> branch survived checks that branch out again.
+  fleet_worktree_create "$MAIN" "$slug" "$BASE" --reuse >/dev/null \
     || { refuse "spawn failed for #$num: worktree add"; exit "$RC_INFRA"; }
 fi
 # Machine-local, per-worktree Git metadata, never repo/charter content (#459).

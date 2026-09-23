@@ -376,8 +376,8 @@ process() {
   fi
 }
 
-clean_fleet() {   # $1=main-checkout  $2=owner/name  $3=base-branch  $4=protected-re  $5=scratch-max-idle
-  REPO_ROOT="$1"; REPO="$2"; BASE="${3:-main}"
+clean_fleet() {   # $1=main-checkout  $2=owner/name  $3=base-branch  $4=protected-re  $5=scratch-max-idle  $6=worktree root
+  REPO_ROOT="$1"; REPO="$2"; BASE="${3:-main}"; WT_ROOT="${6:-}"
   PROTECTED_RE="${4:-^(master|main|develop|test)$}"
   SCRATCH_MAX_IDLE="${5:-0}"
   case "$SCRATCH_MAX_IDLE" in ''|*[!0-9]*) SCRATCH_MAX_IDLE=0 ;; esac
@@ -406,7 +406,7 @@ EOF
   # The cleanup daemon sweeps every tick; this is the backstop for a fleet with
   # FLEET_CLEANUP=0 (or no cleanup daemon loaded at all), on the hourly cadence.
   if [ "$DRY" = 0 ]; then
-    local sw; sw="$(fleet_trash_sweep "$REPO_ROOT" "${FLEET_TRASH_SWEEP_BUDGET:-20}")"
+    local sw; sw="$(FLEET_WORKTREE_ROOT="$WT_ROOT" fleet_trash_sweep "$REPO_ROOT" "${FLEET_TRASH_SWEEP_BUDGET:-20}")"
     case "$sw" in "swept:0 left:0") ;; *) log "TRASH $REPO_ROOT — $sw" ;; esac
   fi
 }
@@ -414,16 +414,18 @@ EOF
 # --- enumerate fleets: the global/default fleet, then each per-fleet conf ---
 DEFAULT_MAIN="${FLEET_MAIN:-}"
 [ -n "$DEFAULT_MAIN" ] && clean_fleet "$DEFAULT_MAIN" "${FLEET_REPO:-}" \
-  "${FLEET_BASE_BRANCH:-main}" "${FLEET_PROTECTED_RE:-}" "${FLEET_SCRATCH_MAX_IDLE:-0}"
+  "${FLEET_BASE_BRANCH:-main}" "${FLEET_PROTECTED_RE:-}" "${FLEET_SCRATCH_MAX_IDLE:-0}" "${FLEET_WORKTREE_ROOT:-}"
 while IFS=$'\t' read -r _s cf; do
   [ -f "$cf" ] || continue
-  IFS=$'\t' read -r fm fr fb fp fx < <( . "$cf" >/dev/null 2>&1
-    printf '%s\t%s\t%s\t%s\t%s' "${FLEET_MAIN:-}" "${FLEET_REPO:-}" \
+  # 0x1f, not a tab: a tab is IFS WHITESPACE, so an empty field would collapse and
+  # slide every later one (the worktree root, usually empty, is last) into its slot.
+  IFS=$'\037' read -r fm fr fb fp fx fw < <( . "$cf" >/dev/null 2>&1
+    printf '%s\037%s\037%s\037%s\037%s\037%s' "${FLEET_MAIN:-}" "${FLEET_REPO:-}" \
       "${FLEET_BASE_BRANCH:-main}" "${FLEET_PROTECTED_RE:-^(master|main|develop|test)\$}" \
-      "${FLEET_SCRATCH_MAX_IDLE:-0}" )
+      "${FLEET_SCRATCH_MAX_IDLE:-0}" "${FLEET_WORKTREE_ROOT:-}" )
   [ -n "$fm" ] || continue
   [ "$fm" = "$DEFAULT_MAIN" ] && continue   # already cleaned as the global default
-  clean_fleet "$fm" "$fr" "$fb" "$fp" "$fx"
+  clean_fleet "$fm" "$fr" "$fb" "$fp" "$fx" "$fw"
 done < <(fleet_each_conf)
 scratch_digest_flush   # #884 — one message for every idle scratch holding work
 
