@@ -155,6 +155,7 @@ _fleet_daemon_key() {
 # The pin is keyed on $$ (unchanged in a subshell, different in any child process),
 # so an accidentally exported pin cannot leak into a child script: the child's
 # $SECONDS restarted at 0, and it simply falls back to `date`.
+# shellcheck disable=SC3028  # $SECONDS is optional by design: absent (dash) → held pin
 fleet_now() {
   if [ -n "${_FLEET_NOW:-}" ] && [ "${_FLEET_NOW_PID:-}" = "$$" ]; then
     if [ -n "${_FLEET_NOW_S0:-}" ]; then
@@ -166,6 +167,7 @@ fleet_now() {
     date +%s
   fi
 }
+# shellcheck disable=SC3028  # see fleet_now
 fleet_now_pin() { _FLEET_NOW=$(date +%s); _FLEET_NOW_S0="${SECONDS:-}"; _FLEET_NOW_PID=$$; }
 
 # fleet_daemon_state_dir [root] — where this install's daemon stamps live.
