@@ -537,11 +537,17 @@ if [ -d "$conf_dir" ]; then
   done <<EOF
 $(_fleet_confs "$conf_dir")
 EOF
+  # A multi-repo fleet may arm a single repo in its overlay (issue #799).
+  for cf in "$conf_dir"/fleets/*/repos/*.conf; do
+    [ -f "$cf" ] || continue
+    val=$(sed -n 's/^[[:space:]]*FLEET_AUTOFILL[[:space:]]*=[[:space:]]*//p' "$cf" | head -1 | tr -d "\"' 	")
+    [ "$val" = 1 ] && armed=$((armed+1))
+  done
   if [ "$armed" -gt 0 ]; then
     if command -v gh >/dev/null 2>&1; then
-      pass autofill "$armed fleet(s) with FLEET_AUTOFILL=1 — dispatcher auto-spawns \`autofill\`-labelled issues (spends LLM tokens)"
+      pass autofill "$armed fleet(s)/repo overlay(s) with FLEET_AUTOFILL=1 — dispatcher auto-spawns \`autofill\`-labelled issues (spends LLM tokens)"
     else
-      warn autofill "$armed fleet(s) set FLEET_AUTOFILL=1 but gh is missing — the dispatcher can't read the backlog"
+      warn autofill "$armed fleet(s)/repo overlay(s) set FLEET_AUTOFILL=1 but gh is missing — the dispatcher can't read the backlog"
     fi
     printf '        note: needs the com.claude-fleet.dispatch daemon installed + the `autofill` label on issues; each auto-spawn opens a real Claude session + PR.\n'
   fi

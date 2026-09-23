@@ -54,7 +54,7 @@ FLEET_BASE_BRANCH="main"
 # FLEET_AGENT / FLEET_MCP_CONFIG), these keys are honored PER REPO — set one in a
 # repo's overlay and that repo's windows, worktrees and daemons passes use it; leave
 # it unset there and the repo gets the fleet conf's value (then this file's):
-#   per-repo: FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET_BASE_DEPS FLEET_SLEEP_MCP_RESTARTABLE FLEET_SCRATCH_POOL FLEET_ISSUE_BRIDGE FLEET_CLEANUP
+#   per-repo: FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET_BASE_DEPS FLEET_SLEEP_MCP_RESTARTABLE FLEET_SCRATCH_POOL FLEET_ISSUE_BRIDGE FLEET_CLEANUP FLEET_AUTOFILL
 # (That line is kept in lockstep with _FLEET_REPO_OVERRIDABLE in bin/fleet-lib.sh
 # by bin/repo-settings-selftest.sh.) Setting one to "" in an overlay switches it
 # off for that repo. `fleet-repo.sh get <KEY> <owner/repo>` prints what a repo sees.
@@ -325,7 +325,10 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 #
 # COST: each auto-spawn launches a real Claude session that spends LLM tokens and
 # opens a PR — it is aggressive, so it is opt-in per fleet. Set to 1 to enable
-# (best per-fleet in $FLEET_CONF_DIR/<session>.conf).
+# (best per-fleet in $FLEET_CONF_DIR/<session>.conf). A fleet hosting several repos
+# reads it PER REPO (issue #799): a repo's overlay may set 0 to opt that repo out,
+# or 1 to arm just that repo; unset, the repo follows the fleet's value. The caps
+# and FLEET_AUTOFILL_MAX_PER_TICK stay per fleet.
 # @label=Auto-fill idle slots from labelled backlog @group=autofill @tier=common @scope=fleet @edit=bool
 #FLEET_AUTOFILL=0
 # Max issues auto-spawned per fleet per tick (rate-limit against a thundering
