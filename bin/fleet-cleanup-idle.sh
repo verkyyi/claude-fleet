@@ -6,7 +6,8 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-lib.sh"
 FLEET_SESSION="${1:?session required}"; shift
 fleet_load_conf "$FLEET_SESSION"
-[ "${FLEET_CLEANUP:-1}" != 0 ] || exit 0
+# A multi-repo fleet switches this per repo (issue #978) — in the loop below.
+fleet_has_repo_overlays "$FLEET_SESSION" || [ "${FLEET_CLEANUP:-1}" != 0 ] || exit 0
 # Automatic sleep retains idle tasks in their original windows. Do not race its
 # observation/exit policy with the older raw-window disposal timer.
 [ "${FLEET_SLEEP:-observe}" != on ] || exit 0
@@ -40,6 +41,7 @@ while IFS= read -r repo; do
   [ -n "$repo" ] || continue
   [ "$limit" -gt 0 ] || break
   out=$( fleet_load_repo_conf "$FLEET_SESSION" "$repo" || exit 0
+    [ "${FLEET_CLEANUP:-1}" != 0 ] || exit 0
     python3 "$BIN/fleet-cleanup-idle.py" --session "$FLEET_SESSION" \
       --socket-name "$(fleet_socket "$FLEET_SESSION")" --main "${FLEET_MAIN:-}" \
       --repo "$repo" --base "${FLEET_BASE_BRANCH:-master}" --window-repo \

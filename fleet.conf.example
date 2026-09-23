@@ -46,6 +46,20 @@ FLEET_BASE_BRANCH="main"
 # @label=Repo short tag @group=identity @tier=advanced @scope=fleet @edit=no
 #FLEET_REPO_SHORT=""
 
+# ── Per-repo settings (issue #978) ──────────────────────────────────────────
+# A fleet hosting 2+ repos keeps each further repo's conf at
+# fleets/<session>/repos/<slug>.conf (bin/fleet-repo.sh add). Beyond identity
+# (FLEET_REPO / FLEET_MAIN / FLEET_BASE_BRANCH / FLEET_REPO_SHORT), the deploy knobs
+# (FLEET_DEPLOY_REF / FLEET_DEPLOY_CHECK) and the launch knobs (FLEET_MODEL /
+# FLEET_AGENT / FLEET_MCP_CONFIG), these keys are honored PER REPO — set one in a
+# repo's overlay and that repo's windows, worktrees and daemons passes use it; leave
+# it unset there and the repo gets the fleet conf's value (then this file's):
+#   per-repo: FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET_BASE_DEPS FLEET_SLEEP_MCP_RESTARTABLE FLEET_SCRATCH_POOL FLEET_ISSUE_BRIDGE FLEET_CLEANUP
+# (That line is kept in lockstep with _FLEET_REPO_OVERRIDABLE in bin/fleet-lib.sh
+# by bin/repo-settings-selftest.sh.) Setting one to "" in an overlay switches it
+# off for that repo. `fleet-repo.sh get <KEY> <owner/repo>` prints what a repo sees.
+# A fleet with no repos/ overlay reads every key exactly as it always has.
+
 # Branches the worktree janitor must never touch (extended regex).
 # @label=Protected-branch pattern @group=janitor @tier=advanced @scope=fleet @edit=regex
 FLEET_PROTECTED_RE="^(master|main|develop|test)$"

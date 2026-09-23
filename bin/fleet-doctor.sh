@@ -508,6 +508,11 @@ _conf_val() {
   sed -n 's/^[[:space:]]*'"$2"'[[:space:]]*=[[:space:]]*\([^#]*\).*/\1/p' "$1" | tail -1 | tr -d "\"' 	"
 }
 
+# _conf_has <file> <KEY> → 0 iff the file assigns KEY (uncommented), even to "".
+_conf_has() {
+  [ -f "$1" ] && grep -Eq "^[[:space:]]*(export[[:space:]]+)?$2[[:space:]]*=" "$1"
+}
+
 # --- autofill dispatcher (optional: auto-spawn `autofill`-labelled backlog, #70/#421) ---
 # OFF unless a fleet's conf sets FLEET_AUTOFILL=1. When ON, the dispatch daemon
 # auto-spawns eligible `autofill`-labelled backlog issues — which spends LLM tokens —
@@ -604,6 +609,13 @@ if [ -d "$conf_dir" ]; then
   while IFS= read -r cf; do
     [ -n "$cf" ] || continue
     val=$(sed -n 's/^[[:space:]]*FLEET_CLEANUP[[:space:]]*=[[:space:]]*//p' "$cf" | head -1 | tr -d "\"' 	")
+    # A repo overlay may switch cleanup back on for its repo (issue #978): the
+    # fleet still needs the daemon then.
+    case "$cf" in */fleets/*/conf)
+      for rf in "${cf%/conf}/repos"/*.conf; do
+        [ -f "$rf" ] && _conf_has "$rf" FLEET_CLEANUP && [ "$(_conf_val "$rf" FLEET_CLEANUP)" != 0 ] && val=1
+      done ;;
+    esac
     if [ "$val" = 0 ]; then optout=$((optout+1)); else cleaning=$((cleaning+1)); fi
   done <<EOF
 $(_fleet_confs "$conf_dir")
@@ -1233,25 +1245,40 @@ fi
 # does not match its lockfile, so a stale / unstamped base silently turns every
 # spawn back into a full install. Count them per fleet.
 dl_sh="$(dirname "$0")/fleet-deps-link.sh"
+# _deps_row <label> <main> — one verdict for one base checkout
+_deps_row() {
+  bd_sum=$("$dl_sh" --base-status "$2" 2>/dev/null | sed -n 's/^summary //p')
+  [ -n "$bd_sum" ] || return 0
+  bd_get() { printf '%s\n' "$bd_sum" | tr ' ' '\n' | sed -n "s/^$1=//p"; }
+  bd_f=$(bd_get fresh); bd_s=$(( $(bd_get stale) + $(bd_get installing) )); bd_u=$(bd_get unstamped); bd_n=$(bd_get not-installed)
+  bd_txt="$1: base deps $bd_f fresh / $bd_s stale / $bd_u unstamped / $bd_n not installed"
+  if [ "$bd_s" -gt 0 ] || [ "$bd_u" -gt 0 ]; then
+    warn deps "$bd_txt — worktrees there install from zero instead of linking; fix: $(dirname "$0")/fleet-deps-link.sh --prime-base '$2' (per dir: --base-status)"
+  else
+    pass deps "$bd_txt — new worktrees link the base's current tree"
+  fi
+}
 if [ -d "$conf_dir" ] && [ -x "$dl_sh" ]; then
   while IFS= read -r cf; do
     [ -n "$cf" ] || continue
     case "$cf" in */fleets/*/conf) sess=${cf%/conf}; sess=${sess##*/} ;; *) sess=$(basename "$cf" .conf) ;; esac
     bd_on=$(_conf_val "$cf" FLEET_BASE_DEPS); [ -n "$bd_on" ] || bd_on=$(_conf_val "$gconf" FLEET_BASE_DEPS)
     bd_ws=$(_conf_val "$cf" FLEET_WORKTREE_SETUP); [ -n "$bd_ws" ] || bd_ws=$(_conf_val "$gconf" FLEET_WORKTREE_SETUP)
-    case "$bd_on:$bd_ws" in 1:*|:*fleet-deps-link*) ;; *) continue ;; esac
-    main=$(sh -c '. "$1" 2>/dev/null; printf %s "${FLEET_MAIN:-}"' _ "$cf")
-    [ -d "$main" ] || continue
-    bd_sum=$("$dl_sh" --base-status "$main" 2>/dev/null | sed -n 's/^summary //p')
-    [ -n "$bd_sum" ] || continue
-    bd_get() { printf '%s\n' "$bd_sum" | tr ' ' '\n' | sed -n "s/^$1=//p"; }
-    bd_f=$(bd_get fresh); bd_s=$(( $(bd_get stale) + $(bd_get installing) )); bd_u=$(bd_get unstamped); bd_n=$(bd_get not-installed)
-    bd_txt="$sess: base deps $bd_f fresh / $bd_s stale / $bd_u unstamped / $bd_n not installed"
-    if [ "$bd_s" -gt 0 ] || [ "$bd_u" -gt 0 ]; then
-      warn deps "$bd_txt — worktrees there install from zero instead of linking; fix: $(dirname "$0")/fleet-deps-link.sh --prime-base '$main' (per dir: --base-status)"
-    else
-      pass deps "$bd_txt — new worktrees link the base's current tree"
-    fi
+    case "$bd_on:$bd_ws" in 1:*|:*fleet-deps-link*)
+      main=$(sh -c '. "$1" 2>/dev/null; printf %s "${FLEET_MAIN:-}"' _ "$cf")
+      [ -d "$main" ] && _deps_row "$sess" "$main" ;;
+    esac
+    # Each hosted repo keeps its own setup (issue #978): an overlay's
+    # FLEET_BASE_DEPS / FLEET_WORKTREE_SETUP win for its base, else the fleet's.
+    for rf in "$conf_dir/fleets/$sess/repos"/*.conf; do
+      [ -f "$rf" ] || continue
+      # Set at all (even to "") ⇒ the overlay's; `FLEET_WORKTREE_SETUP=""` turns it off.
+      r_on=$bd_on; _conf_has "$rf" FLEET_BASE_DEPS && r_on=$(_conf_val "$rf" FLEET_BASE_DEPS)
+      r_ws=$bd_ws; _conf_has "$rf" FLEET_WORKTREE_SETUP && r_ws=$(_conf_val "$rf" FLEET_WORKTREE_SETUP)
+      case "$r_on:$r_ws" in 1:*|:*fleet-deps-link*) ;; *) continue ;; esac
+      main=$(sh -c '. "$1" 2>/dev/null; printf %s "${FLEET_MAIN:-}"' _ "$rf")
+      [ -d "$main" ] && _deps_row "$sess [$(basename "$rf" .conf)]" "$main"
+    done
   done <<EOF
 $(_fleet_confs "$conf_dir")
 EOF

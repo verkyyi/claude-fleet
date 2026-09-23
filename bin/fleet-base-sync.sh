@@ -99,10 +99,24 @@ LEASE_DIR="${LAND_LEASE_DIR:-${FLEET_LAND_LEASE_DIR:-$HOME/.claude/leases}}"
 # All progress goes to stderr — a daemon's stdout is /dev/null; stderr is the log.
 log() { printf '%s fleet-base-sync: %s\n' "$(date '+%H:%M:%S' 2>/dev/null || echo '--:--:--')" "$*" >&2; }
 
-# --- extract ONE fleet's base identity (subshelled so its conf never leaks into
-# the discovery loop). Prints TSV: on-flag \t repo \t main \t base-branch \t deps.
+# --- extract ONE fleet's base identities (subshelled so its conf never leaks into
+# the discovery loop). Prints TSV: on-flag \t repo \t main \t base-branch \t deps
+# — one row, or in a multi-repo fleet one row PER HOSTED REPO, each read through
+# that repo's overlay (issue #978): its own base checkout, and its own
+# FLEET_WORKTREE_SETUP / FLEET_BASE_DEPS deciding whether its deps are refreshed.
 fleet_ident() { (
   fleet_load_conf "$1"
+  if fleet_has_repo_overlays "$1"; then
+    while IFS= read -r r; do
+      [ -n "$r" ] || continue
+      ( fleet_load_repo_conf "$1" "$r" || exit 0
+        deps=0; fleet_base_deps_on && deps=1
+        printf '%s\t%s\t%s\t%s\t%s\n' "${FLEET_BASE_SYNC:-1}" "$r" "${FLEET_MAIN:-}" "${FLEET_BASE_BRANCH:-master}" "$deps" )
+    done <<EOF
+$(fleet_repos "$1")
+EOF
+    exit 0
+  fi
   off="${FLEET_BASE_SYNC:-1}"
   repo="${FLEET_REPO:-}"
   _r=$(fleet_repo_cached "$1"); [ -n "$_r" ] && repo="$_r"
@@ -121,6 +135,7 @@ sync_repo() { (
   # it moves only FETCH_HEAD / remote-tracking refs), report, take no lease, and
   # never pull. This previews EXACTLY what a real tick would fast-forward.
   if [ "$DRY" = 1 ]; then
+    [ "$deps" = 1 ] && log "$sess: would keep $main's shared deps current (dry-run)"
     if ! git -C "$main" fetch origin "$base" --quiet 2>/dev/null; then
       log "$sess: fetch failed for $repo ($base) — skip (dry-run)"; exit 0
     fi
@@ -200,21 +215,22 @@ fi
 # the same repo (one shared base checkout) never double-move it in a tick.
 synced=$'\n'
 for sess in ${SESSIONS[@]+"${SESSIONS[@]}"}; do
-  IFS=$'\t' read -r off repo main base deps < <(fleet_ident "$sess")
-  if [ "$off" = 0 ]; then
-    log "$sess: base-sync off (FLEET_BASE_SYNC=0) — skip"
-    continue
-  fi
-  [ -z "$repo" ] && { log "$sess: no repo resolved — skip"; continue; }
-  [ -d "$main/.git" ] || { log "$sess: FLEET_MAIN is not a git checkout — skip"; continue; }
-  cmain=$(cd "$main" 2>/dev/null && pwd -P); [ -z "$cmain" ] && cmain="$main"
-  case "$synced" in
-    *$'\n'"$cmain"$'\n'*)
-      log "$sess: base $cmain already synced this tick (same repo as an earlier fleet) — skip"
-      continue ;;
-  esac
-  synced="${synced}${cmain}"$'\n'
-  slug=$(fleet_slug "$(fleet_norm_repo "$repo")")
-  sync_repo "$sess" "$repo" "$main" "$base" "$slug" "$deps"
+  while IFS=$'\t' read -r off repo main base deps; do
+    if [ "$off" = 0 ]; then
+      log "$sess: base-sync off (FLEET_BASE_SYNC=0) — skip"
+      continue
+    fi
+    [ -z "$repo" ] && { log "$sess: no repo resolved — skip"; continue; }
+    [ -d "$main/.git" ] || { log "$sess: FLEET_MAIN is not a git checkout — skip"; continue; }
+    cmain=$(cd "$main" 2>/dev/null && pwd -P); [ -z "$cmain" ] && cmain="$main"
+    case "$synced" in
+      *$'\n'"$cmain"$'\n'*)
+        log "$sess: base $cmain already synced this tick (same repo as an earlier fleet) — skip"
+        continue ;;
+    esac
+    synced="${synced}${cmain}"$'\n'
+    slug=$(fleet_slug "$(fleet_norm_repo "$repo")")
+    sync_repo "$sess" "$repo" "$main" "$base" "$slug" "$deps" </dev/null
+  done < <(fleet_ident "$sess")
 done
 exit 0

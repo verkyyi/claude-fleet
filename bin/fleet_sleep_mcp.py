@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 
 INCOMPLETE = 'MCP configuration/runtime inventory is incomplete'
 
@@ -286,15 +287,45 @@ def matched_services(pid, configured, rows, argv_reader, exe_reader):
              or npm_title_process(pid, conf, rows, argv_reader, exe_reader))]
 
 
-def contract_hint(source, approved, name):
+def restartable(source):
+    """The approved restartable-MCP names for THIS worker, and the conf holding them.
+
+    Per repo (issue #978): in a fleet with repo overlays the list is the worker's
+    repo's FLEET_SLEEP_MCP_RESTARTABLE, falling back to the fleet value — resolved
+    by `fleet-repo.sh get` from the window (else the worktree), never guessed here.
+    A fleet with no overlay reads the inherited fleet value, exactly as before.
+    """
+    fleet = os.environ.get('FLEET_SLEEP_MCP_RESTARTABLE', '')
+    session = source.get('session') or ''
+    conf_dir = Path(os.environ.get('FLEET_CONF_DIR') or Path.home() / '.config' / 'claude-fleet')
+    conf = conf_dir / 'fleets' / (session or '<fleet>') / 'conf'
+    value = fleet
+    if session and any((conf_dir / 'fleets' / session / 'repos').glob('*.conf')):
+        where = (['--window', source['window']] if source.get('window')
+                 else ['--worktree', source['worktree']] if source.get('worktree') else [])
+        try:
+            out = subprocess.run(['bash', str(Path(__file__).absolute().parent / 'fleet-repo.sh'), 'get',
+                                  'FLEET_SLEEP_MCP_RESTARTABLE', '--session', session, *where, '--tsv'],
+                                 capture_output=True, text=True, timeout=20)
+            fields = out.stdout.rstrip('\n').split('\t')
+            if out.returncode == 0 and len(fields) == 3:
+                _, conf, value = fields
+                conf = Path(conf)
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return {name.strip() for name in value.split(',') if name.strip()}, conf
+
+
+def contract_hint(source, approved, name, conf=None):
     """The one conf line that would lift this refusal, and where it goes (#786).
 
     Sleep and quota failover share this classifier, and a failover refusal lives
     only in its request.json detail, so the fix must be in the message itself.
     """
     listed = sorted(approved) + [name]
-    conf = Path(os.environ.get('FLEET_CONF_DIR') or Path.home() / '.config' / 'claude-fleet')
-    conf = conf / 'fleets' / (source.get('session') or '<fleet>') / 'conf'
+    if conf is None:
+        conf = Path(os.environ.get('FLEET_CONF_DIR') or Path.home() / '.config' / 'claude-fleet')
+        conf = conf / 'fleets' / (source.get('session') or '<fleet>') / 'conf'
     return ('if %s survives a restart, add FLEET_SLEEP_MCP_RESTARTABLE=%s to %s'
             % (name, ','.join(listed), conf))
 
@@ -306,7 +337,7 @@ def classify(source, inventory, rows, server_pid, argv_reader, exe_reader, stric
     # MCP service, so its whole subtree is infrastructure; only the exact-match
     # identification itself is kept.
     configured, statuses = inventory
-    approved = {name.strip() for name in os.environ.get('FLEET_SLEEP_MCP_RESTARTABLE', '').split(',') if name.strip()}
+    approved, contract_conf = restartable(source) if strict else (set(), None)
     allowed = set()
     proof = {}
     for pid, (parent, _) in rows.items():
@@ -327,7 +358,7 @@ def classify(source, inventory, rows, server_pid, argv_reader, exe_reader, stric
             continue
         if name not in approved:
             raise ValueError('MCP service %s has no restartability contract (FLEET_SLEEP_MCP_RESTARTABLE); %s'
-                             % (name, contract_hint(source, approved, name)))
+                             % (name, contract_hint(source, approved, name, contract_conf)))
         # Codex reports a runtime status per server. Claude has no such channel:
         # the exactly matching live process is the evidence, and a server still
         # initializing is as restartable as a ready one.

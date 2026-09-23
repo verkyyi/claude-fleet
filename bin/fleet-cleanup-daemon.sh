@@ -17,7 +17,7 @@
 #
 # Design (mirrors the other single-writer, disk-gated fleet daemons):
 #   for each live fleet session (or the ones named on argv):
-#     load its conf; skip if FLEET_CLEANUP=0
+#     load its conf; skip if FLEET_CLEANUP=0 (a multi-repo fleet: per repo, #978)
 #     acquire a per-REPO LEASE (mkdir, steal-if-stale)      → single-writer
 #     honor the diskguard GATE (fleet-diskguard.sh --gate)  → never reap on a full disk
 #     read the prmap_<slug> cache pr-refresh already writes  → ZERO extra gh
@@ -288,6 +288,7 @@ EOF
 cleanup_repo() { (
   repo="$1"
   fleet_load_repo_conf "$sess" "$repo" || { log "$sess: $repo is not hosted — skip"; echo 0; exit 0; }
+  [ "${FLEET_CLEANUP:-1}" != 0 ] || { log "$sess: [$repo] cleanup off (FLEET_CLEANUP=0) — skip"; echo 0; exit 0; }
   main="${FLEET_MAIN:-}"
   [ -d "$main/.git" ] || { log "$sess: [$repo] FLEET_MAIN is not a git checkout — skip"; echo 0; exit 0; }
   slug=$(fleet_slug "$repo")
@@ -313,11 +314,13 @@ cleanup_repo() { (
 cleanup_fleet() { (
   sess="$1"
   fleet_load_conf "$sess"
-  if [ "${FLEET_CLEANUP:-1}" = 0 ]; then
+  multi=0; fleet_has_repo_overlays "$sess" && multi=1
+  # A multi-repo fleet switches cleanup per repo (issue #978) — in cleanup_repo,
+  # where each repo's overlay may override the fleet's FLEET_CLEANUP.
+  if [ "$multi" = 0 ] && [ "${FLEET_CLEANUP:-1}" = 0 ]; then
     log "$sess: cleanup off (FLEET_CLEANUP=0) — skip"
     exit 0
   fi
-  multi=0; fleet_has_repo_overlays "$sess" && multi=1
 
   if [ "$multi" = 0 ]; then
     repo="${FLEET_REPO:-}"
