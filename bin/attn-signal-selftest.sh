@@ -13,9 +13,10 @@
 #                         needy window you're already on — plan included).
 #   @attn_other_windows — how many needy WINDOWS wait across OTHER live fleets
 #                         (same unit as the local badge; replaces the old
-#                         @attn_other_fleets fleet-count). status-left renders it as
-#                         a second, ORANGE "● N" dot; clicking it one-tap jumps to
-#                         the waiting fleet (fleet-xfleet-jump.sh).
+#                         @attn_other_fleets fleet-count). #980 retired its ORANGE
+#                         "● N" dot and one-tap jump (one fleet per login, EPIC
+#                         #977); the spinner still publishes it (its fleet loop is
+#                         left as is), nothing renders it.
 #
 # This drives the REAL code end-to-end on isolated -L sockets (never the user's live
 # server), so it tests the shipped logic, not a copy:
@@ -36,11 +37,9 @@
 #     PLAN also discounts (issue #368); an active needy dash/backlog does NOT (it is
 #     not in the badge); and a discount that reaches 0 hides the whole chip.
 #
-#   PART D — the ORANGE cross-fleet ● dot: renders @attn_other_windows as a "● N" in
-#     fg=#ff9e64 (distinct from the red local ●), from ANY window, hidden at 0.
-#
-#   PART E — jump-target resolution: fleet-xfleet-jump.sh --list resolves the OTHER
-#     fleets with @attn_needs > 0 — exactly one (single jump) vs several (picker).
+#   PART D — NO other-fleet dot (#980): even with @attn_other_windows > 0 the
+#     status-left renders no orange ● (fg=#ff9e64), and neither the status-left
+#     range nor the jump script survives.
 #
 # tmux absent → SKIP cleanly (exit 0), per the run-selftests convention.
 # Exit 0 = pass. Non-zero = fail (prints which assertion diverged).
@@ -49,10 +48,8 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 SPINNER="$BIN/tmux-spinner.sh"
 CONF="$BIN/../conf/tmux-attention.conf"
-XJUMP="$BIN/fleet-xfleet-jump.sh"
 [ -f "$SPINNER" ] || { printf 'selftest: %s not found\n' "$SPINNER" >&2; exit 2; }
 [ -f "$CONF" ]    || { printf 'selftest: %s not found\n' "$CONF" >&2; exit 2; }
-[ -f "$XJUMP" ]   || { printf 'selftest: %s not found\n' "$XJUMP" >&2; exit 2; }
 
 REAL_TMUX="$(command -v tmux 2>/dev/null)"
 [ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
@@ -62,7 +59,7 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/attn-selftest.XXXXXX")" || exit 2
 # Each fleet is its OWN tmux server on a named socket (issue #159): drive the real
 # spinner exactly as production does. An isolated TMUX_TMPDIR keeps every `-L
 # <fleet>` socket in this test's scratch dir (never the user's live servers), and a
-# per-fleet conf is what fleet_sockets (spinner AND fleet-xfleet-jump.sh) enumerates.
+# per-fleet conf is what fleet_sockets (the spinner) enumerates.
 export TMUX_TMPDIR="$WORK/tmt"; mkdir -p "$TMUX_TMPDIR"
 export FLEET_CONF_DIR="$WORK/conf"; mkdir -p "$FLEET_CONF_DIR"
 for f in fleetA fleetB fleetC fleetD; do printf 'FLEET_REPO="acme/%s"\n' "$f" > "$FLEET_CONF_DIR/$f.conf"; done
@@ -251,39 +248,17 @@ tf fleetB set-option -t fleetB @attn_needs 1
 case "$(sl_at fleetB issue-9)" in *"●"*) fail "discount(e): the sole needy active worker must HIDE the badge" ;; *) : ;; esac
 printf 'PART C ok: ● discount — full off-target, -1 on a needy worker/plan, none on dash/backlog, hidden at 0\n'
 
-# --- PART D: the ORANGE cross-fleet ● dot (issues #236, #368) ------------------
-# @attn_other_windows > 0 → a "● N" in orange (fg=#ff9e64, distinct from the red
-# local ●), from ANY window; hidden at 0. Zero the local badge so the only ● is the
-# cross-fleet dot.
+# --- PART D: no other-fleet dot (issue #980) ---------------------------------
+# One fleet per login: nothing renders @attn_other_windows any more. Zero the
+# local badge, set the other-fleet count, and the status-left carries no ● at all.
 tf fleetB set-option -t fleetB @attn_needs 0
 tf fleetB set-option -t fleetB @attn_other_windows 3
 out="$(sl_at fleetB plan)"
-case "$out" in *"fg=#ff9e64"*) : ;; *) fail "cross-fleet ●: expected orange fg=#ff9e64 when @attn_other_windows=3" ;; esac
-case "$out" in *"● 3"*)        : ;; *) fail "cross-fleet ●: expected the window count ● 3" ;; esac
-case "$(sl_at fleetB issue-9)" in *"● 3"*) : ;; *) fail "cross-fleet ●: must render from a worker window too" ;; esac
-tf fleetB set-option -t fleetB @attn_other_windows 0
-case "$(sl_at fleetB plan)" in *"fg=#ff9e64"*) fail "cross-fleet ●: must be HIDDEN when @attn_other_windows=0" ;; *) : ;; esac
-printf 'PART D ok: orange cross-fleet ● — fg=#ff9e64 window count, from any window, hidden at 0 (#368)\n'
+case "$out" in *"fg=#ff9e64"*) fail "other-fleet ●: the orange dot must be gone (#980)" ;; *) : ;; esac
+case "$out" in *"●"*)          fail "other-fleet ●: no ● may render from @attn_other_windows (#980)" ;; *) : ;; esac
+grep -q 'range=user|xfleet\|attn_other_windows' "$CONF" && fail "other-fleet ●: conf still carries the xfleet range / @attn_other_windows"
+[ -e "$BIN/fleet-xfleet-jump.sh" ] && fail "other-fleet ●: fleet-xfleet-jump.sh must be removed (#980)"
+printf 'PART D ok: no other-fleet dot — @attn_other_windows renders nothing, range + jump gone (#980)\n'
 
-# --- PART E: jump-target resolution (fleet-xfleet-jump.sh --list) --------------
-# --list resolves the OTHER live fleets with @attn_needs > 0. Set A=3, B=1, C=D=0:
-# only A and B wait, so from A's view exactly B waits (single jump), from B's view
-# exactly A, and from a calm fleet BOTH wait (→ the scoped picker). XFLEET_CUR names
-# the "current" fleet (no attached client to read #S from in this headless test).
-tf fleetA set-option -t fleetA @attn_needs 3
-tf fleetB set-option -t fleetB @attn_needs 1
-tf fleetC set-option -t fleetC @attn_needs 0
-tf fleetD set-option -t fleetD @attn_needs 0
-
-list="$(XFLEET_CUR=fleetA "$XJUMP" --list)"
-[ "$list" = fleetB ] || fail "jump(single): from fleetA expected exactly 'fleetB', got '${list}'"
-list="$(XFLEET_CUR=fleetB "$XJUMP" --list)"
-[ "$list" = fleetA ] || fail "jump(single): from fleetB expected exactly 'fleetA', got '${list}'"
-list="$(XFLEET_CUR=fleetC "$XJUMP" --list | sort | tr '\n' ' ')"
-[ "$list" = "fleetA fleetB " ] || fail "jump(multi): from calm fleetC expected 'fleetA fleetB ', got '${list}'"
-list="$(XFLEET_CUR=fleetA "$XJUMP" --list)"   # sanity: A never lists itself
-case "$list" in *fleetA*) fail "jump: a fleet must never resolve ITSELF as a target" ;; *) : ;; esac
-printf 'PART E ok: jump-target resolution — single (A→B, B→A) vs multiple (calm→A+B), never self (#368)\n'
-
-printf 'selftest PASS: unified ● badge (#368) — plan-in-badge + active-window discount + orange cross-fleet ● + one-tap jump\n'
+printf 'selftest PASS: unified ● badge (#368) — plan-in-badge + active-window discount + no other-fleet dot (#980)\n'
 exit 0

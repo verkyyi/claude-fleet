@@ -1,6 +1,9 @@
 #!/bin/bash
 # fleet-list.sh — list fleets: configured (a per-fleet conf) and/or live (a tmux
-# session). Columns: ● live/○ down · name · repo · checkout.
+# session). Columns: ● live/○ down · name · repo · checkout. A fleet hosting 2+
+# repos (issue #788) lists each further repo under its row as `↳ owner/name
+# checkout` (issue #980: the fleet and its repos — one fleet per login holds them
+# all); a one-repo fleet prints its single row exactly as before.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
@@ -23,6 +26,12 @@ while IFS=$'\t' read -r name cf; do
   [ -n "$name" ] || continue
   IFS=$'\t' read -r r m < <( . "$cf" >/dev/null 2>&1; printf '%s\t%s' "${FLEET_REPO:-}" "${FLEET_MAIN:-}" )
   emit "$name" "$r" "$m"
+  # further hosted repos (the fleet conf's FLEET_REPO is the row above)
+  while IFS= read -r hr; do
+    [ -n "$hr" ] && [ "$hr" != "$(fleet_norm_repo "$r")" ] || continue
+    hm=$( unset FLEET_MAIN; . "$(fleet_repo_conf_file "$name" "$hr")" >/dev/null 2>&1; printf '%s' "${FLEET_MAIN:-}" )
+    printf '%-2s %-22s %-40s %s\n' '' '  ↳' "$hr" "${hm:-·}"
+  done < <(fleet_repos "$name")
 done < <(fleet_each_conf)
 
 # live sessions the collector resolved to a repo but that have no conf

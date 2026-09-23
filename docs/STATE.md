@@ -211,7 +211,7 @@ status, and context %. It animates the `working` spinner from **its own** frame
 clock (perl `Time::HiRes`, quarter-second frames), independent of the spinner
 daemon. This is where you actually *see* per-window state.
 
-### 2. The needs badge + cross-fleet dot (the spinner daemon)
+### 2. The needs badge (the spinner daemon)
 
 [`bin/tmux-spinner.sh`](../bin/tmux-spinner.sh) is an always-on daemon (launchd
 `com.claude-fleet.spinner`) that scans every window ~8×/second (`SPIN_INTERVAL`,
@@ -222,8 +222,9 @@ live jobs today:
 - **The needs tally.** It counts windows whose `@claude_state == needs` per
   session and publishes `@attn_needs`; the status-left renders it as the red
   **`● N`** badge (see [`conf/tmux-attention.conf`](../conf/tmux-attention.conf)).
-  It also publishes `@attn_other_windows` so a fleet you are attached to shows an
-  **orange `● N`** when a *different* fleet has needy windows.
+  It also still publishes `@attn_other_windows` (needy windows in OTHER fleets),
+  but nothing renders it: one fleet per login retired the orange other-fleet dot
+  and its jump (#980); the loop is left as is, and with one fleet it reads 0.
 - **Per-window styling options** `@spin` / `@sfg` / `@nfg` — historically these
   drove an inline per-window status strip, but that strip was **removed in #105**
   (`window-status-format` is now empty). The options are still tracked; they are
@@ -498,7 +499,7 @@ set-claude-state.sh  ─►  @claude_state + @claude_state_ts + @claude_needs  (
 LLM classifier (haiku)         │                 self-contained glyph renderer
   classify-sessions.sh         ├──────────────► spinner daemon (tmux-spinner.sh, 0.12s)
   · on Stop (classify-hook.sh) │                 needs tally  →  ● N badge  (@attn_needs)
-  · change-gated + locked      └──────────────► cross-fleet  →  ● N orange (@attn_other_windows)
+  · change-gated + locked      └──────────────► (@attn_other_windows — unrendered since #980)
       ▲
       │
    native-truth reconcile (sleep daemon, #806): a working window whose agent's own

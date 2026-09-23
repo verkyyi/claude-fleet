@@ -65,7 +65,7 @@
 # a common prefix or already a row — ⌃f was the mnemonic, but its ⌥ twin alt-f is
 # fzf's forward-word. fzf binds nothing to ⌃z (it reads the byte in raw mode, so
 # the terminal never suspends it), and nobody makes it a tmux prefix. It opens
-# the fleet/repo picker — the same one the footer's fleet name opens.
+# the repo picker (#980: no fleet level) — the same one the footer's fleet name opens.
 set -uo pipefail
 
 PANEL=dash

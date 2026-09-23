@@ -8,8 +8,10 @@ overloaded (looking at you, "session"), that's called out explicitly.
 claude-fleet runs entirely inside **tmux**, the terminal multiplexer. tmux
 nests three levels, and this is where the confusing vocabulary starts:
 
-- **tmux session** — a whole workspace. In the multi-fleet model, **one tmux
-  session = one fleet = one GitHub repo** (see [ARCHITECTURE](ARCHITECTURE.md)).
+- **tmux session** — a whole workspace. **One tmux session = one fleet**, and a
+  fleet hosts one or more GitHub repos. **One fleet per login** holds every repo
+  that login works on — you pick a repo, you never switch fleets (#980); several
+  fleets on one machine means several logins (see [ARCHITECTURE](ARCHITECTURE.md)).
 - **tmux window** — a tab inside a session. Each window usually holds one Claude
   session working one task in its own worktree, plus a few special windows (the
   dashboard, the hub).
@@ -38,7 +40,7 @@ nests three levels, and this is where the confusing vocabulary starts:
   **operator's own Claude session** in the base checkout (a plain `claude`, no
   charter). This is where you file, triage, spawn workers, hand work back and
   land whatever a worker couldn't — a worker lands its own PR on a green gate
-  (issue #441), so the hub only steps in for the strays. **One hub per fleet** (per repo); its pane carries `@hub=1` and F9 /
+  (issue #441), so the hub only steps in for the strays. **One hub per fleet**; its pane carries `@hub=1` and F9 /
   the ⌂ icon jump to it. There is no resident orchestrator agent — the fleet is
   operator-driven (issue #439). Built by
   [`bin/hub-session.sh`](../bin/hub-session.sh).
@@ -202,7 +204,11 @@ they repaint instantly:
 - **`fleet-down.sh <session> [--purge]`** — kill the session (the checkout is
   always left on disk); `--purge` also removes the conf + this fleet's slug'd
   cache.
-- **`fleet-list.sh`** — list fleets: `●` live / `○` down · name · repo · checkout.
+- **`fleet-list.sh`** — list fleets: `●` live / `○` down · name · repo · checkout,
+  then `↳` each further repo a fleet hosts.
+- **Repo picker** — `fleet-pick.sh`, behind a tap on the footer's fleet name and
+  the dash's ⌃z: `all repos` + each hosted repo; the pick is the fleet's current
+  repo, which the dash and backlog show. It has no fleet level (#980).
 - **`fleet-lib.sh`** — the shared helper library the above (and the collector /
   read-side producers) source: session→repo resolution, slug helpers, per-fleet
   conf overlay.

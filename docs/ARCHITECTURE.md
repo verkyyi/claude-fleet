@@ -11,11 +11,14 @@ in a single global `fleet.conf`, one collector on launchd, one flat cache dir
 That's the whole single-repo assumption — it lives in exactly one place (the
 global `fleet.conf`), consumed by ~7 scripts.
 
-## Target: many fleets on one machine
+## Target: one fleet per login, every repo in it
 
-**Use case:** on one machine, run several fleets at once. Each fleet is a
-distinct tmux session pinned to one GitHub repo, with its own local checkout
-(existing or freshly cloned). Fleets must coexist without clobbering each other.
+**Use case:** one login runs exactly one fleet, and that fleet hosts every repo the
+login works on, each with its own local checkout (existing or freshly cloned) — you
+pick a repo, you never switch fleets (EPIC #977; the switching UI went in #980).
+Several fleets on one machine means several logins, each with its own, and they
+must coexist without clobbering each other: each fleet keeps its own tmux socket,
+conf and caches.
 
 ### The model: a fleet ≡ a tmux session, hosting one or more repos
 
@@ -521,17 +524,23 @@ origin column, and keeps one fold file per repo), and the Fleet Hub adapter
 key). A one-repo fleet keeps the bare keys everywhere —
 `bin/multirepo-identity-selftest.sh` pins both halves.
 
-**Pick fleet and repo in one place (issue #793).** The fleet's **current repo**
+**The repo picker (issues #793, #980).** The fleet's **current repo**
 (`fleet_current_repo`, default `all`) is one value per fleet, shared by every screen
-attached to it. It is picked in the SAME popup that switches fleets —
-`bin/fleet-pick.sh`, behind the footer's fleet name and the dash's pick key (⌃z,
-`PICK` in `dash-keymap.sh`). Each live fleet row is followed, when that fleet hosts
-2+ repos, by `all repos` + one row per repo, its current one marked `← viewing`.
-A repo row in this fleet calls `fleet_current_repo_set` and returns: the dash
-repaints on its next 1Hz tick, no reattach. A repo row in another fleet sets THAT
-fleet's current repo, then detach-and-reattaches as a fleet row does. The cross-fleet
-● jump (`FLEET_PICK_ONLY`) stays fleet-level. A one-repo fleet shows only its fleet
-row, as before.
+attached to it. It is picked in `bin/fleet-pick.sh`, behind the footer's fleet name
+and the dash's pick key (⌃z, `PICK` in `dash-keymap.sh`): `all repos` + one row per
+hosted repo, the current one marked `← viewing`. A pick calls
+`fleet_current_repo_set` and returns — the dash repaints on its next 1Hz tick. A
+one-repo fleet has nothing to pick: a note, no list.
+
+**No fleet switching (issue #980).** One fleet per login holds every repo (EPIC
+#977), so the picker has no fleet level, nothing detaches and reattaches to another
+socket, and the orange other-fleet `● N` and its one-tap jump are gone (the spinner
+still publishes `@attn_other_windows` from its per-socket loop; nothing renders
+it). `fleet-attach.sh` lands a leftover second fleet on the most recently active
+one instead of offering a picker, and `dash-raw-session.sh` refuses to spawn into
+another fleet from a fleet pane (a headless caller still names its fleet). Several
+fleets on one machine means several logins, each with its own — the per-fleet
+sockets (#159) remain the blast-radius rail between them.
 
 Every writer of the current repo republishes the footer label
 (`fleet_repo_label_sync` → the server-global `@fleet_repo_label`). So does each dash
@@ -856,9 +865,9 @@ state) + this fleet's `fleets/<slug>/` runtime cache.
 | Command | What it does |
 |---|---|
 | `fleet-up.sh [<owner/repo>] [<dir>] [--name <s>] [--base <b>]` | bring up a fleet: reuse-or-clone the checkout, write the per-fleet conf, open `work`+`dash` windows, kick the collector. No `<owner/repo>` → infer from the current checkout (see `cf`) |
-| `fleet-attach.sh` | fast-path (re)attach to an already-running fleet — the no-arg `cf` tries this first (single → straight in, several → picker, cross-socket detach+attach); exits 10 when nothing is live so `cf` falls through to `fleet-up.sh` (issue #212) |
+| `fleet-attach.sh` | fast-path (re)attach to an already-running fleet — the no-arg `cf` tries this first (single → straight in, a leftover second → the most recently active, never a picker #980); exits 10 when nothing is live so `cf` falls through to `fleet-up.sh` (issue #212) |
 | `fleet-down.sh <session> [--purge]` | kill the session; `--purge` also drops the conf + slug'd cache |
-| `fleet-list.sh` | list fleets — `●` live / `○` down · name · repo · checkout |
+| `fleet-list.sh` | list fleets — `●` live / `○` down · name · repo · checkout, then `↳` each further repo the fleet hosts |
 
 `FLEET_CONF_DIR` (default `~/.config/claude-fleet`) is the knob.
 (`FLEET_HUB_CMD` is retired — the hub is dash-only and runs no command of yours.)

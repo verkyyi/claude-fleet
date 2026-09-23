@@ -14,8 +14,8 @@
 #   ⌃s raw scratch session (instant — no prompt) · ⌃e rename the highlighted
 #   window (inline on the query line; ↵ commits, esc cancels) · ⌃x reap a
 #   finished worker (confirms when the row isn't merged+clean) · ⌃t live⇄landed ·
-#   ⌃o restore a landed session · ⌃z the fleet/repo picker (#793 — the popup the
-#   footer's fleet name opens: switch fleet, or pick which repo this dash shows) ·
+#   ⌃o restore a landed session · ⌃z the repo picker (#793/#980 — the popup the
+#   footer's fleet name opens: pick which repo this dash shows) ·
 #   ⌃y pin/unpin the highlighted window to the top
 #   of the list (#623 — a pin outranks the status sort, floats the window's
 #   children with it, and marks the row 📌) ·
@@ -52,7 +52,7 @@ REFRESH="${REFRESH:-1}"   # 1Hz repaint: 4Hz burned ~10% CPU per dash in steady 
 # THE FLAG IS AN EPOCH, NOT A BOOLEAN (issue #431). Each popup OPEN stamps it with
 # `date +%s`; the wait trusts the flag only while it is FRESH (now - flag < MAX_AGE).
 # The one path that leaks the flag is the popup dying before its trailing `set 0`
-# — the client detaches / switches fleets / disconnects mid-popup (a Termius drop,
+# — the client detaches / disconnects mid-popup (a Termius drop,
 # a `detach-client -E` fleet-switch) and the whole key-command chain is cut, so the
 # flag STRANDS at a value that used to be a bare 1 and every subsequent reload
 # stalled ~20s (the reported freeze, issue #323/#431). Now a `client-detached` hook

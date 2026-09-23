@@ -1,19 +1,18 @@
 #!/bin/bash
-# fleet-pick-repo-selftest.sh — pick fleet and repo in one place (issue #793).
+# fleet-pick-repo-selftest.sh — the repo picker (issues #793, #980).
 #
 # One picker (bin/fleet-pick.sh, behind the footer's fleet name and the dash's pick
-# key) lists every live fleet and, under a fleet hosting 2+ repos, `all repos` +
-# each repo. Pinned here:
-#   A. TWO-LEVEL ROWS — a 2-repo fleet is followed by its repo rows, the current
-#      fleet and each fleet's current repo marked; a one-repo fleet has none.
-#   B. PICK IN THIS FLEET — a repo row sets this fleet's current repo, republishes
-#      the footer label, and does NOT reattach.
-#   C. PICK IN ANOTHER FLEET — a repo row sets THAT fleet's current repo, then
-#      reattaches there (detach-client -E … -L <fleet>); a plain fleet row still
-#      reattaches without touching any current repo.
-#   D. DEGENERATE — one-repo fleets render the fleet rows exactly as before (same
-#      text, same header, the `only this fleet` exit); FLEET_PICK_ONLY (the
-#      cross-fleet ● jump) stays fleet-level even over a 2-repo fleet.
+# key) lists `all repos` + each repo THIS fleet hosts — no fleet rows: one fleet per
+# login (EPIC #977), so there is nothing to switch to. Pinned here:
+#   A. REPO-ONLY ROWS — `all repos` then each hosted repo, the current one marked;
+#      no fleet row, not even for another live fleet on the machine.
+#   B. PICK — a repo row sets this fleet's current repo, republishes the footer
+#      label, and never reattaches.
+#   C. NO SWITCHING — no row, key or header offers another fleet; nothing in the
+#      picker detaches, and FLEET_PICK_ONLY (the retired ● jump) is not read.
+#   D. DEGENERATE — a one-repo fleet gets a note and no picker; --repo-only still
+#      asks for a repo (the new-issue path); fleet-list.sh shows a fleet's further
+#      repos as ↳ rows and a one-repo fleet as its single row.
 #   E. DASH — the rows follow the current repo: a picked repo shows its own
 #      windows only; `all` badges every row with its repo's short tag, puts no-repo
 #      sessions in their own group at the foot; a child whose @origin is
@@ -65,7 +64,7 @@ cat > "$WORK/bin/fzf" <<EOF
 cat > "$WORK/fzf.in"
 printf '%s\n' "\$*" > "$WORK/fzf.args"
 [ -n "\${FZF_PICK:-}" ] || exit 130
-tail -n +2 "$WORK/fzf.in" | awk -F '\037' -v p="\$FZF_PICK" '\$3 ~ p { print; exit }'
+awk -F '\037' -v p="\$FZF_PICK" '\$2 ~ p { print; exit }' "$WORK/fzf.in"
 EOF
 printf '#!/bin/sh\nexit 1\n' > "$WORK/bin/gh"
 chmod +x "$WORK/bin/"*
@@ -90,24 +89,21 @@ pick() {   # $1 = current fleet, $2 = FZF_PICK pattern ('' = esc); rest = env
   : > "$WORK/tmux.log"; rm -f "$WORK/fzf.in"
   env TMUX=/fake,1,0 FAKE_CUR="$cur" FZF_PICK="$pat" "$@" bash "$PICK" >"$WORK/pick.out" 2>&1
 }
-disp() { tail -n +2 "$WORK/fzf.in" | awk -F '\037' '{ print $3 }'; }
-keys() { tail -n +2 "$WORK/fzf.in" | awk -F '\037' '{ print $1 "|" $2 }'; }
+disp() { awk -F '\037' '{ print $2 }' "$WORK/fzf.in"; }
+keys() { awk -F '\037' '{ print $1 }' "$WORK/fzf.in"; }
 
-# --- A. two-level rows ---------------------------------------------------------
+# --- A. repo-only rows ---------------------------------------------------------
 pick alpha ''
 d=$(disp); k=$(keys)
-has   "A: alpha fleet row marked current"         "$d" "alpha"
-has   "A: alpha is current"                        "$(printf '%s\n' "$d" | grep ' alpha ')" "← current"
-has   "A: 'all repos' row under alpha"             "$k" "alpha|all"
-has   "A: claude-fleet row under alpha"            "$k" "alpha|o/claude-fleet"
-has   "A: tokenledger row under alpha"             "$k" "alpha|o/tokenledger"
-has   "A: the default current repo (all) marked"   "$(printf '%s\n' "$d" | grep 'all repos')" "← viewing"
-hasnt "A: one-repo beta has no repo rows"          "$k" "beta|o/"
-eq    "A: rows in order (fleet, then its repos)"   "$(printf '%s\n' "$k" | head -4 | tr '\n' ' ')" "alpha| alpha|all alpha|o/claude-fleet alpha|o/tokenledger "
-has   "A: header says fleet OR repo"               "$(cat "$WORK/fzf.args")" "pick a fleet or a repo"
-has   "A: display only (keys hidden)"              "$(cat "$WORK/fzf.args")" "--with-nth=3"
+eq    "A: rows = all + each repo, in order"       "$(printf '%s\n' "$k" | tr '\n' ' ')" "all o/claude-fleet o/tokenledger "
+has   "A: the default current repo (all) marked"  "$(printf '%s\n' "$d" | grep 'all repos')" "← viewing"
+hasnt "A: no fleet row for this fleet"            "$d" "alpha"
+hasnt "A: no fleet row for another live fleet"    "$d" "beta"
+hasnt "A: …nor its repo"                          "$k" "o/cee"
+has   "A: header says repo"                       "$(cat "$WORK/fzf.args")" "pick a repo"
+has   "A: display only (key hidden)"              "$(cat "$WORK/fzf.args")" "--with-nth=2"
 
-# --- B. pick a repo in THIS fleet: set, label, no reattach ----------------------
+# --- B. pick a repo: set, label, no reattach -----------------------------------
 pick alpha 'tokenledger'
 eq    "B: alpha's current repo"   "$(fleet_current_repo alpha)" "o/tokenledger"
 has   "B: label republished"      "$(cat "$WORK/tmux.log")" "set-option -g @fleet_repo_label tokenledger"
@@ -116,37 +112,33 @@ pick alpha 'tokenledger'
 has   "B: new current repo marked" "$(disp | grep tokenledger)" "← viewing"
 pick alpha 'all repos'
 eq    "B: back to all"            "$(fleet_current_repo alpha)" "all"
-pick alpha ' alpha '
-hasnt "B: own fleet row is a no-op" "$(cat "$WORK/tmux.log")" "detach-client"
-
-# --- C. pick in ANOTHER fleet: set there, then reattach ------------------------
-pick beta 'tokenledger'
-eq    "C: alpha's repo set from beta" "$(fleet_current_repo alpha)" "o/tokenledger"
-has   "C: reattaches to alpha"        "$(cat "$WORK/tmux.log")" "detach-client -E exec tmux -L 'alpha' attach -t 'alpha'"
-has   "C: alpha's label, on alpha's socket" "$(cat "$WORK/tmux.log")" "-L alpha set-option -g @fleet_repo_label tokenledger"
-fleet_current_repo_set alpha all
-pick alpha ' gamma '
-has   "C: plain fleet row reattaches" "$(cat "$WORK/tmux.log")" "-L 'gamma' attach -t 'gamma'"
-eq    "C: …touching no current repo" "$(fleet_current_repo alpha)" "all"
-
-# --- D. degenerate + scoped ------------------------------------------------------
-mv "$FLEET_CONF_DIR/fleets/alpha/repos" "$WORK/repos.off"
-pick beta ''
-d=$(disp)
-eq    "D: one-repo fleets → fleet rows only" "$(keys | grep -c '|.')" "0"
-eq    "D: row text as before" "$(printf '%s\n' "$d" | grep ' beta ' | sed 's/  *$//')" \
-      "$(bash "$BIN/fleet-list.sh" | grep '^●' | grep ' beta ')  ← current"
-has   "D: header unchanged" "$(cat "$WORK/fzf.args")" "jump to a running fleet"
-tmux kill-session -t beta; tmux kill-session -t gamma
-pick alpha 'x'
-has   "D: lone one-repo fleet → note, no picker" "$(cat "$WORK/pick.out")" "nothing to switch to"
-mv "$WORK/repos.off" "$FLEET_CONF_DIR/fleets/alpha/repos"
 pick alpha ''
-has   "D: lone 2-repo fleet still opens (repo rows)" "$(keys)" "alpha|o/tokenledger"
-tmux new-session -d -s beta -x 200 -y 40
-pick beta '' FLEET_PICK_ONLY='alpha beta'
-eq    "D: FLEET_PICK_ONLY stays fleet-level" "$(keys | grep -c '|.')" "0"
-has   "D: scoped header" "$(cat "$WORK/fzf.args")" "jump to a waiting fleet"
+eq    "B: esc changes nothing"    "$(fleet_current_repo alpha)" "all"
+
+# --- C. no switching -----------------------------------------------------------
+pick alpha '' FLEET_PICK_ONLY='beta gamma'
+eq    "C: FLEET_PICK_ONLY is ignored (same repo rows)" "$(keys | tr '\n' ' ')" "all o/claude-fleet o/tokenledger "
+hasnt "C: no switch wording in the header" "$(cat "$WORK/fzf.args")" "switch"
+for pat in 'detach-client' 'attach -t'; do
+  CHECKS=$((CHECKS+1)); grep -qF -- "$pat" "$PICK" && fail "C: fleet-pick.sh still carries '$pat' (a fleet switch)"
+done
+CHECKS=$((CHECKS+1)); grep -q 'FLEET_PICK_ONLY\|fleet-list.sh' "$PICK" && fail "C: fleet-pick.sh still reads the fleet list / FLEET_PICK_ONLY"
+CHECKS=$((CHECKS+1)); [ -e "$BIN/fleet-xfleet-jump.sh" ] && fail "C: fleet-xfleet-jump.sh must be gone (#980)"
+
+# --- D. degenerate --------------------------------------------------------------
+pick beta 'x'
+has   "D: one-repo fleet → note, no picker" "$(cat "$WORK/pick.out")" "nothing to pick"
+CHECKS=$((CHECKS+1)); [ -e "$WORK/fzf.in" ] && fail "D: a one-repo fleet must not open fzf"
+: > "$WORK/tmux.log"
+env TMUX=/fake,1,0 FAKE_CUR=alpha FZF_PICK='tokenledger' bash "$PICK" --repo-only >"$WORK/pick.out" 2>&1
+eq    "D: --repo-only prints the picked repo" "$(cat "$WORK/pick.out")" "o/tokenledger"
+hasnt "D: --repo-only offers no all"      "$(keys)" "all"
+# fleet-list.sh shows the fleet and its repos: a ↳ row per further hosted repo
+fl=$(bash "$BIN/fleet-list.sh")
+has   "D: fleet-list lists alpha's second repo under it" "$(printf '%s\n' "$fl" | grep -A1 ' alpha ')" "↳"
+has   "D: …with its checkout" "$(printf '%s\n' "$fl" | grep 'o/tokenledger')" "$WORK/tl"
+eq    "D: one-repo fleets print one row each (no ↳)" "$(printf '%s\n' "$fl" | grep -c '↳')" "1"
+tmux kill-session -t beta; tmux kill-session -t gamma
 
 # --- E. the dash follows the current repo --------------------------------------
 tmux new-window -d -t alpha -n 'cf·issue-1'

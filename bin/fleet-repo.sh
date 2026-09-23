@@ -87,7 +87,7 @@ norm_repo_arg() {
 #      not already have is carried into it (model, agent, MCP, deploy, #978's
 #      setup/switches). A differing key with NO per-repo form is not carried: it is
 #      WARNED, because only <sess>'s fleet conf could hold it.
-#   2. each worker window (issue-N / scratch-N) takes the cross-fleet move path:
+#   2. each worker window (issue-N / scratch-N) is moved across:
 #      fleet-worker-stop.sh (a graceful /exit — its ledger row keeps it resumable),
 #      then dash-restore-session.sh --repo into <sess> (same transcript, same
 #      worktree, @repo stamped). A hibernating worker is woken first. A busy one

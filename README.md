@@ -266,8 +266,8 @@ The full hub list also hides worker IDs and gives that space to task description
 Mouse mode is shipped **on** by the fleet baseline (see below), so the footer is
 clickable too: the **`⌂` hub icon** (leftmost) is a consistent **home** tap — it
 always lands on this fleet's hub, unzoomed
-(never a pane zoom, unlike `F9`) — the **fleet name** (`#S`) opens a picker of running
-fleets and switches to the chosen one, the red **`● N` needs badge** cycles to the
+(never a pane zoom, unlike `F9`) — the **fleet name** (`#S`) opens the repo picker
+(in a fleet hosting 2+ repos: which repo the dash shows), the red **`● N` needs badge** cycles to the
 next window that needs you, and the **usage stat** opens the consolidated
 **usage + account modal** (usage/limit detail on top, the account pool as a
 selectable body below). (Comment out `set -g mouse on` in
@@ -281,16 +281,10 @@ doesn't always reach tmux over touch and `prefix z` is a chord on a soft keyboar
 so the reliable single-tap footer ranges are the `⌂` hub icon and the `● N` needs
 badge above — not a pane zoom.
 
-The status-left also carries the **cross-fleet** cue: when you're attached to one
-fleet and a **different** live fleet has needy windows, a second **`● N` dot in
-orange** appears — `N` = how many needy *windows* are waiting across all *other*
-fleets (the same dot and unit as the local red `●`, color alone saying
-"elsewhere"). It's its own clickable range that **one-tap jumps** to the waiting
-fleet: exactly one fleet waiting detaches-and-reattaches straight to it; several
-open the fleet-picker scoped to just the waiting fleets. Orange `●` means "another
-fleet needs you"; the red `●` means "*this* fleet needs you." The signal is
-produced by the spinner daemon, which already reads every live fleet's state
-across sockets.
+There is no other-fleet cue and no fleet switching: **one fleet per login** holds
+every repo you work on (EPIC #977), so the red `●` is the one needs signal and the
+repo picker is the one place you change what you look at. Several fleets on one
+machine means several logins, each with its own.
 
 ### tmux baseline
 
@@ -331,7 +325,7 @@ several repos** on one hub and one tmux server (`bin/fleet-repo.sh`, below).
 cf                                         # already running? (re)attach fast. else: infer the repo + bring it up
 bin/fleet-up.sh you/webapp                 # clone-or-reuse ~/projects/webapp, open a 'webapp' session
 bin/fleet-up.sh you/infra ~/src/infra      # explicit checkout dir
-bin/fleet-list.sh                          # ● live / ○ down · name · repo · checkout
+bin/fleet-list.sh                          # ● live / ○ down · name · repo · checkout (+ ↳ each further repo)
 tmux attach -t webapp
 bin/fleet-down.sh webapp --purge           # kill session (+ drop its conf/cache); checkout stays
 ```
@@ -342,7 +336,7 @@ registers a second repo with the fleet you are in (clone-or-reuse, like
 are equal — there is no main repo. Once a fleet hosts two:
 
 - every session carries its repo (`@repo`) and wears a short tag (`tl·issue-12`);
-- the fleet picker (tap the fleet name, or the dash's pick key) also lists
+- the repo picker (tap the fleet name, or the dash's pick key) lists
   `all repos` + each repo, and the pick filters the dash and the backlog;
 - a new session under `all` has no repo and starts in `$HOME`, and the hub opens
   in `$HOME` too;
@@ -365,9 +359,9 @@ isolated in its own fleet.
 
 `cf` (from `shell/cw.zsh`) is your one-key way to a fleet. With **no args** it
 first tries to (re)attach to an already-running fleet (`bin/fleet-attach.sh`,
-issue #212): one live fleet → straight in; several → the switch picker; already
-inside the only one → a no-op. Crossing from another fleet is a detach+reattach
-(each fleet is its own tmux server, issue #159), not a `switch-client`. Only when
+issue #212): one live fleet → straight in; a leftover second one → the
+most recently active (there is no fleet picker, issue #980); already inside the
+only one → a no-op. Only when
 **nothing** is running does it fall through to `fleet-up.sh` — inferring the repo
 from the current checkout's `origin` and reusing that worktree (no clone). With
 args it forwards them straight to `fleet-up.sh` to bring a named fleet up.

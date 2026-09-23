@@ -28,10 +28,15 @@ Do not install from memory: read the doc and work from it.
     `fleet_sockets`. See `bin/fleet-lib.sh`
     (`fleet_socket`/`fleet_sockets`/`fleet_list_windows_all`).
   - **No shared `tmux ls`.** Cross-fleet views iterate the sockets; the dash is
-    per-fleet (scoped by `FLEET_SESSION`). Switching fleets is a detach-and-reattach
-    to the other socket (`detach-client -E`), not `switch-client` (single-server).
+    per-fleet (scoped by `FLEET_SESSION`).
     **Ad-hoc sessions on the `default` socket are NOT fleets** — a fleet is created
     by `fleet-up` (which writes its conf + spins its socket).
+  - **One fleet per login; there is no fleet switching** (EPIC #977, issue #980).
+    Every repo a login works on lives in its one fleet, so moving between repos is
+    the repo picker (`fleet-pick.sh`), never a detach-and-reattach. Several fleets
+    on one machine means several logins — the per-fleet sockets are what keeps
+    them apart. Don't add a fleet picker, an other-fleet cue, or a spawn into
+    another fleet: `dash-raw-session.sh` refuses one from a fleet pane.
 - **The base checkout is edit-read-only** (hook-enforced): a worker edits inside
   its `issue-<N>` git worktree and lands via PR; the operator files/triages from
   the hub and hands implementation to a worker. Never commit to the base checkout.
