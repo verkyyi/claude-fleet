@@ -126,7 +126,7 @@ chmod +x "$WORK/fakepath/tmux"
 # Each fleet is a conf named after its session/socket (issue #159): fleet_sockets
 # keys the socket off the conf BASENAME (not its repo), so this makes the "s1"
 # fleet discoverable. FLEET_REPO="" (explicitly empty) OVERRIDES the ambient
-# FLEET_REPO in the conf-sourcing subshell, so bridge_sess_for_slug does NOT
+# FLEET_REPO in the conf-sourcing subshell, so bridge_state_subdir does NOT
 # resolve fake-repo→s1 — the bridge's per-fleet state (issue #181) therefore stays
 # on the legacy flat path this test asserts. (bridge_find_window still resolves the
 # window via the global FLEET_REPO env, which the resolver falls through to.)
@@ -436,6 +436,135 @@ for spawn_rc in 2 3 1 0; do
 done
 printf 'selftest: revive leg PASS (capacity/claim/infra reasons preserved, stdout discarded — #683)\n' >&2
 
+# ============================== two-repo leg (issue #798) ======================
+# Fleet "mr" hosts acme/a (its conf's FLEET_REPO) and acme/b (a repos/ overlay).
+# Both repos have an issue #12, bound to @1 (acme/a) and @2 (acme/b) in the SAME
+# session. One poll must: list BOTH repos' comment streams, type A#12's comment
+# into @1 only and B#12's into @2 only, and keep each repo's watermark + seen-set
+# in its own (session, slug) file. A busy @2 holds B's watermark while A's
+# advances; an overlay setting FLEET_ISSUE_BRIDGE=0 drops B from the poll; a
+# webhook naming repository acme/b routes as B's #12; revive passes --repo.
+MR="$WORK/mr"
+mkdir -p "$MR/fakepath" "$MR/conf/fleets/mr/repos" "$MR/state" "$MR/leases"
+printf 'FLEET_REPO="acme/a"\nFLEET_ISSUE_BRIDGE=1\n' > "$MR/conf/fleets/mr/conf"
+printf 'FLEET_REPO="acme/b"\n'                       > "$MR/conf/fleets/mr/repos/acme-b.conf"
+cat > "$MR/fakepath/gh" <<FAKE
+#!/bin/bash
+if [ "\$1" = api ]; then
+  expr='' path=''
+  while [ "\$#" -gt 0 ]; do case "\$1" in --jq) shift; expr="\$1";; repos/*) path="\$1";; esac; shift; done
+  printf '%s\n' "\$path" >> "$MR/gh.log"
+  r=\${path#repos/}; r=\${r%%/issues/*}
+  [ -n "\$expr" ] && [ -f "$MR/canned_\${r%%/*}_\${r#*/}.json" ] && jq -r "\$expr" "$MR/canned_\${r%%/*}_\${r#*/}.json"
+  exit 0
+fi
+if [ "\$1" = issue ] && [ "\$2" = view ]; then echo OPEN; exit 0; fi
+exit 0
+FAKE
+cat > "$MR/fakepath/tmux" <<FAKE
+#!/bin/bash
+if [ "\${1:-}" = "-L" ] || [ "\${1:-}" = "-S" ]; then shift 2; fi
+args="\$*" t=''
+prev=''; for a in "\$@"; do [ "\$prev" = -t ] && t="\$a"; prev="\$a"; done
+case "\$1" in
+  info|has-session) exit 0 ;;
+  list-windows)
+    case "\$args" in
+      *@claude_state*) [ -z "\$MR_NO_WINDOWS" ] && printf 'mr\t@1\tdone\t12\nmr\t@2\t%s\t12\n' "\${MR_B_STATE:-done}" ;;
+      *window_name*)   printf 'mr plan\n' ;;
+    esac ;;
+  display-message)
+    case "\$args" in
+      *'@repo'*) case "\$t" in @1) echo 'acme/a||' ;; @2) echo 'acme/b||' ;; *) echo '||' ;; esac ;;
+      *) echo '' ;;
+    esac ;;
+  capture-pane) printf 'a past user turn\n❯ \n  status\n' ;;
+  set-buffer) printf '%s' "\${@: -1}" | tr '\n' ' ' > "$MR/buf" ;;
+  paste-buffer) printf '%s: %s\n' "\$t" "\$(cat "$MR/buf")" >> "$MR/inject.log" ;;
+esac
+exit 0
+FAKE
+chmod +x "$MR/fakepath/gh" "$MR/fakepath/tmux"
+runmr() {
+  env -u TMUX -u TMUX_PANE -u FLEET_REPO -u FLEET_ISSUE_BRIDGE \
+    PATH="$MR/fakepath:$PATH" TMPDIR="$MR" FLEET_CONF_DIR="$MR/conf" \
+    FLEET_ISSUE_BRIDGE_STATE_DIR="$MR/state" FLEET_DISPATCH_LEASE_DIR="$MR/leases" \
+    MR_B_STATE="${MR_B_STATE:-done}" MR_NO_WINDOWS="${MR_NO_WINDOWS:-}" \
+    SPAWN_LOG="$MR/spawn.log" FLEET_ISSUE_BRIDGE_REVIVE="${FLEET_ISSUE_BRIDGE_REVIVE:-0}" \
+    FLEET_ISSUE_BRIDGE_SECRET="${FLEET_ISSUE_BRIDGE_SECRET:-}" FLEET_DELIVERY_SIG="${FLEET_DELIVERY_SIG:-}" \
+    bash "$WORK/bin/fleet-issue-bridge.sh" "$@" 2>>"$MR/log"
+}
+mrfail() { printf -- '--- mr log ---\n' >&2; cat "$MR/log" >&2 2>/dev/null
+           printf -- '--- mr inject ---\n' >&2; cat "$MR/inject.log" >&2 2>/dev/null
+           printf -- '--- gh ---\n' >&2; cat "$MR/gh.log" >&2 2>/dev/null; fail "two-repo: $1"; }
+SA="$MR/conf/fleets/mr/bridge" SB="$MR/conf/fleets/mr/bridge/acme-b"
+mkdir -p "$SA" "$SB"
+printf '2026-07-09T05:00:00Z\n' > "$SA/since"; printf '2026-07-09T05:00:00Z\n' > "$SB/since"
+cat > "$MR/canned_acme_a.json" <<'JSON'
+[{"id":700,"author_association":"OWNER","user":{"login":"boss"},"issue_url":"https://api.github.com/repos/acme/a/issues/12","updated_at":"2026-07-09T05:00:01Z","body":"for A twelve"}]
+JSON
+cat > "$MR/canned_acme_b.json" <<'JSON'
+[{"id":800,"author_association":"OWNER","user":{"login":"boss"},"issue_url":"https://api.github.com/repos/acme/b/issues/12","updated_at":"2026-07-09T05:00:02Z","body":"for B twelve"}]
+JSON
+: > "$MR/log"; : > "$MR/inject.log"; : > "$MR/gh.log"
+runmr --poll || mrfail "poll exited non-zero"
+grep -q '^repos/acme/a/issues/comments' "$MR/gh.log" || mrfail "acme/a was not polled"
+grep -q '^repos/acme/b/issues/comments' "$MR/gh.log" || mrfail "acme/b (the overlay repo) was not polled"
+grep -q '^@1: .*for A twelve' "$MR/inject.log" || mrfail "A#12's comment must land in @1"
+grep -q '^@2: .*for B twelve' "$MR/inject.log" || mrfail "B#12's comment must land in @2"
+grep -q '^@1: .*for B twelve' "$MR/inject.log" && mrfail "B#12's comment leaked into A#12's window"
+grep -q '^@2: .*for A twelve' "$MR/inject.log" && mrfail "A#12's comment leaked into B#12's window"
+[ "$(grep -c . "$MR/inject.log")" = 2 ] || mrfail "expected exactly two injections"
+grep -qF 'acme-a #12 c700: relayed(#12->mr:@1)' "$MR/log" || mrfail "log must name A's target window"
+grep -qF 'acme-b #12 c800: relayed(#12->mr:@2)' "$MR/log" || mrfail "log must name B's target window"
+[ "$(cat "$SA/since")" = 2026-07-09T05:00:01Z ] || mrfail "A's watermark should advance to c700"
+[ "$(cat "$SB/since")" = 2026-07-09T05:00:02Z ] || mrfail "B's watermark should advance to c800"
+[ "$(cat "$SA/seen")" = 700 ] && [ "$(cat "$SB/seen")" = 800 ] || mrfail "each repo keeps its own seen-set"
+[ -e "$MR/state/bridge_acme-a.since" ] || [ -e "$MR/state/bridge_acme-b.since" ] && mrfail "state must not fall to the flat dir"
+
+# B's worker busy: A's watermark advances, B's is held at its pre-tick value.
+cat > "$MR/canned_acme_a.json" <<'JSON'
+[{"id":701,"author_association":"OWNER","user":{"login":"boss"},"issue_url":"https://api.github.com/repos/acme/a/issues/12","updated_at":"2026-07-09T06:00:01Z","body":"A again"}]
+JSON
+cat > "$MR/canned_acme_b.json" <<'JSON'
+[{"id":801,"author_association":"OWNER","user":{"login":"boss"},"issue_url":"https://api.github.com/repos/acme/b/issues/12","updated_at":"2026-07-09T06:00:02Z","body":"B while busy"}]
+JSON
+: > "$MR/inject.log"
+MR_B_STATE=working runmr --poll || mrfail "busy poll exited non-zero"
+[ "$(cat "$SA/since")" = 2026-07-09T06:00:01Z ] || mrfail "A's watermark must advance while B is busy"
+[ "$(cat "$SB/since")" = 2026-07-09T05:00:02Z ] || mrfail "B's watermark must hold while B's comment is queued"
+grep -q 'B while busy' "$MR/inject.log" && mrfail "a busy B worker must not be typed into"
+grep -q '^@1: .*A again' "$MR/inject.log" || mrfail "A must still relay while B is busy"
+
+# Revive: B#12's window gone → the spawn names B's repo (a multi-repo fleet's
+# spawn refuses without --repo, issue #789).
+cat > "$MR/canned_acme_a.json" <<'JSON'
+[]
+JSON
+: > "$MR/spawn.log"; mkdir -p "$MR/.claude-dash"
+MR_NO_WINDOWS=1 FLEET_ISSUE_BRIDGE_REVIVE=1 runmr --poll || mrfail "revive poll exited non-zero"
+grep -qxF '12 mr --repo acme/b --origin bridge' "$MR/spawn.log" || mrfail "revive must spawn B#12 with --repo acme/b"
+
+# Per-repo off: an overlay's FLEET_ISSUE_BRIDGE=0 takes acme/b out of the poll.
+printf 'FLEET_ISSUE_BRIDGE=0\n' >> "$MR/conf/fleets/mr/repos/acme-b.conf"
+: > "$MR/gh.log"
+runmr --poll || mrfail "per-repo-off poll exited non-zero"
+grep -q '^repos/acme/b/' "$MR/gh.log" && mrfail "an overlay with FLEET_ISSUE_BRIDGE=0 must not be polled"
+grep -q '^repos/acme/a/' "$MR/gh.log" || mrfail "turning B off must leave A polled"
+
+# Webhook: the delivery's repository routes it (B#12 → @2), not FLEET_REPO.
+if command -v python3 >/dev/null 2>&1; then
+  MSEC=s3cr3t
+  MPAY='{"action":"created","repository":{"full_name":"acme/b"},"issue":{"number":12},"comment":{"id":900,"author_association":"OWNER","user":{"login":"boss"},"body":"webhook for B"}}'
+  MSIG="sha256=$(printf '%s' "$MPAY" | openssl dgst -sha256 -hmac "$MSEC" 2>/dev/null | awk '{print $NF}')"
+  : > "$MR/inject.log"
+  printf '%s' "$MPAY" | FLEET_ISSUE_BRIDGE_SECRET="$MSEC" FLEET_DELIVERY_SIG="$MSIG" runmr --deliver \
+    || mrfail "--deliver for acme/b exited non-zero"
+  grep -q '^@2: .*webhook for B' "$MR/inject.log" || mrfail "a delivery naming acme/b must land in @2"
+  grep -q '^@1:' "$MR/inject.log" && mrfail "a delivery naming acme/b must not touch @1"
+fi
+printf 'selftest: two-repo leg PASS (A#12/B#12 routed to their own windows, independent watermarks, per-repo off, revive --repo, webhook repo — #798)\n' >&2
+
 # ============================== --deliver HMAC leg =============================
 if ! command -v python3 >/dev/null 2>&1; then
   printf 'selftest: python3 absent — SKIP the --deliver HMAC leg\n' >&2
@@ -490,19 +619,34 @@ grep -qF 'delivered via webhook' "$INJECT" && fail "a tmux-down delivery must NO
   : "$FLEET_CONF_DIR" "$STATE"   # read via the eval'd functions below (opaque to shellcheck)
   rm -rf "$WORK/conf/fleets" "$WORK/state"
   printf 'FLEET_REPO="fake/repo"\nFLEET_ISSUE_BRIDGE=1\n' > "$WORK/conf/fake.conf"
-  eval "$(awk '/^bridge_sess_for_slug\(\) \{/,/^}/' "$SRC")"
+  eval "$(awk '/^bridge_state_subdir\(\) \{/,/^}/' "$SRC")"
   eval "$(awk '/^bridge_state_file\(\) \{/,/^}/'   "$SRC")"
-  _BR_SLUG=''; _BR_SESS=''
+  _BR_SLUG=''; _BR_SUB=''
   got=$(bridge_state_file fake-repo seen)
   [ "$got" = "$WORK/conf/fleets/fake/bridge/seen" ] \
     || { echo "layout: bridge_state_file should resolve to fleets/<sess>/bridge/ (got $got)" >&2; exit 1; }
   # dual-read: a legacy flat file present is returned in place (until the migrator moves it)
-  mkdir -p "$WORK/state"; : > "$WORK/state/bridge_fake-repo.since"; _BR_SLUG=''; _BR_SESS=''
+  mkdir -p "$WORK/state"; : > "$WORK/state/bridge_fake-repo.since"; _BR_SLUG=''; _BR_SUB=''
   gots=$(bridge_state_file fake-repo since)
   [ "$gots" = "$WORK/state/bridge_fake-repo.since" ] \
     || { echo "layout: a legacy flat file must be dual-read in place (got $gots)" >&2; exit 1; }
+  # issue #798: a repo hosted through an overlay keeps its OWN (session, slug) dir;
+  # the conf's own repo stays at bridge/ even when it carries an overlay of its own.
+  rm -f "$WORK/state/bridge_fake-repo.since"; rm -rf "$WORK/conf/fleets"
+  mkdir -p "$WORK/conf/fleets/fake/repos"; mv "$WORK/conf/fake.conf" "$WORK/conf/fleets/fake/conf"
+  printf 'FLEET_REPO="fake/other"\n' > "$WORK/conf/fleets/fake/repos/fake-other.conf"
+  printf 'FLEET_MODEL=opus\n'        > "$WORK/conf/fleets/fake/repos/fake-repo.conf"
+  _BR_SLUG=''; _BR_SUB=''
+  goto=$(bridge_state_file fake-other since)
+  [ "$goto" = "$WORK/conf/fleets/fake/bridge/fake-other/since" ] \
+    || { echo "layout: an overlay repo needs its own bridge/<slug>/ dir (got $goto)" >&2; exit 1; }
+  _BR_SLUG=''; _BR_SUB=''
+  gotc=$(bridge_state_file fake-repo since)
+  [ "$gotc" = "$WORK/conf/fleets/fake/bridge/since" ] \
+    || { echo "layout: the conf's own repo must keep bridge/ (got $gotc)" >&2; exit 1; }
+  mv "$WORK/conf/fleets/fake/conf" "$WORK/conf/fake.conf"
   # a slug with NO configured fleet → flat issue-bridge/ fallback
-  rm -f "$WORK/conf/fake.conf"; rm -rf "$WORK/conf/fleets"; _BR_SLUG=''; _BR_SESS=''
+  rm -f "$WORK/conf/fake.conf"; rm -rf "$WORK/conf/fleets"; _BR_SLUG=''; _BR_SUB=''
   gotn=$(bridge_state_file other-repo seen)
   [ "$gotn" = "$WORK/state/bridge_other-repo.seen" ] \
     || { echo "layout: an unconfigured slug must fall to the flat path (got $gotn)" >&2; exit 1; }
