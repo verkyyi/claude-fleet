@@ -54,7 +54,9 @@
 # `needs`); quiet = worth knowing (MERGED, FAILED while fixing, other reaps);
 # silent = a turn boundary (WAITING, IDLE) — RECORDED, never sent, never stamped.
 # FLEET_CHILD_REPORT=immediate (the default; legacy `1`) delivers loud + quiet one
-# by one, exactly as before; `batch` is the digest's (C5, #939).
+# by one, exactly as before. `batch` (C5, #939) only RECORDS a quiet report; the
+# digest (bin/fleet-children-flush.sh) delivers it later, merged with its siblings
+# into one `[children-digest]`, and a loud report flushes that digest at once.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -80,7 +82,7 @@ while [ "$#" -gt 0 ]; do
     -L*)        SOCK="${1#-L}" ;;
     --only-once) ONCE=1 ;;
     --dry-run)  DRY=1 ;;
-    -h|--help)  sed -n '2,58p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)  sed -n '2,59p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *)          printf 'fleet-report-parent: unknown argument %s\n' "$1" >&2; exit 2 ;;
   esac
   shift
@@ -242,6 +244,25 @@ fi
 # The `child busy (<reason>)` wording is #864's, kept for whoever greps for it.
 [ "$TIER" = silent ] && quiet "tier=silent · $UST${busy:+ · child busy ($busy)} — ledger only"
 
+# --- batch (issue #939): the ledger IS the delivery queue -----------------------
+# FLEET_CHILD_REPORT=batch hands delivery to the digest (bin/fleet-children-flush.sh,
+# run on the cleanup daemon's 60s tick): a quiet report stops here, recorded; a loud
+# one flushes NOW, and the digest it sends carries the quiet news queued ahead of it.
+# The child is stamped @reported once its report is in the book — the reaper's
+# backstop exists for sessions that never reported, and this one did.
+if [ "$MODE" = batch ]; then
+  if [ "$DRY" = 1 ]; then
+    printf 'fleet-report-parent: batch · tier=%s · %s — ledgered for the %s digest\n' \
+      "$TIER" "$UST" "$worigin"
+    exit 0
+  fi
+  TM set-window-option -t "$selfwin" @reported 1 2>/dev/null
+  if [ "$TIER" = loud ] && [ -f "$BIN/fleet-children-flush.sh" ]; then
+    bash "$BIN/fleet-children-flush.sh" -L "${SOCK:-$sess}" --parent "$worigin" 2>/dev/null
+  fi
+  exit 0
+fi
+
 # --- rail 2: the parent window, and a live Claude under it ---------------------
 pwin=$(fleet_win_for_key "$worigin" "$SOCK") \
   || quiet "parent $worigin has no window on this fleet (reaped, or another fleet)"
@@ -300,6 +321,12 @@ if [ "$DRY" = 1 ]; then
 fi
 
 send_report() {
+  # The lib's copy is the one the digest shares; this body is the half-synced
+  # install's fallback (a lib without children_send).
+  if command -v children_send >/dev/null 2>&1; then
+    children_send "$sess" "$SOCK" "$pwin" "$msg"
+    return $?
+  fi
   if [ -n "$parent_sleep$parent_evidence" ] && [ -f "$BIN/fleet-sleep.py" ]; then
     printf '%s' "$msg" | python3 "$BIN/fleet-sleep.py" deliver --session "$sess" "$pwin"
     return $?
@@ -314,6 +341,9 @@ if send_report; then
   # The stamp is what keeps the reaper fallback from sending a second, blunter
   # report for the same session ~a minute later.
   TM set-window-option -t "$selfwin" @reported 1 2>/dev/null
+  # Keep the digest cursor current (issue #939): this report reached the parent, so
+  # a later switch to batch must not replay it.
+  command -v children_cursor_set >/dev/null 2>&1 && children_cursor_set "$worigin" "$sess"
   printf 'reported → %s (%s): %s\n' "$worigin" "$pwin" "$st"
   exit 0
 fi
