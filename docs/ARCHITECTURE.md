@@ -17,8 +17,10 @@ global `fleet.conf`), consumed by ~7 scripts.
 distinct tmux session pinned to one GitHub repo, with its own local checkout
 (existing or freshly cloned). Fleets must coexist without clobbering each other.
 
-### The model: a fleet ≡ a tmux session ≡ one repo
+### The model: a fleet ≡ a tmux session, hosting one or more repos
 
+A fleet starts with one repo (its conf's `FLEET_REPO`) and can host more — see
+[A fleet can host several repos](#a-fleet-can-host-several-repos-issue-788).
 Each fleet has an identity **`FLEET_ID` = its tmux session name** (e.g.
 `webapp`, `infra`, `docs-site`). Every fleet script derives `FLEET_ID` from
 `#{session_name}` and scopes itself to that fleet.
@@ -35,6 +37,8 @@ bridge and the migrator all agree on:
 | `@issue` | the GitHub issue this worker is bound to (absent ⇒ not a worker) |
 | `@raw` | `1` ⇒ a scratch session: no issue, its own `scratch-<N>` worktree |
 | `@worktree` | the git worktree the window owns (survives the pane `cd`-ing away) |
+| `@repo` | the hosted repo (`owner/name`) the window belongs to — stamped at spawn, derived once from `@worktree` for an older window (#789) |
+| `@norepo` | `1` ⇒ a session that deliberately belongs to no repo: runs in `$HOME`, no worktree, never reaped automatically (#789) |
 | `@origin` | spawn provenance — `issue-<N>` / `scratch-<N>` / `autofill` / … — and, since #574, an **address**: `fleet_win_for_key` resolves it back to the parent's live window. The parent's key also names its children ledger (`$FLEET_STATE/children/<key>.ndjson`, #937), which `bin/fleet-children.sh` reads — the one command a parent uses to check its children (#940) |
 | `@reported` | `1` ⇒ this window already pushed its outcome to its `@origin` parent (the reap-time backstop skips it) |
 | `@expand` | `1` ⇒ this window's `@origin` children are UNFOLDED on the dash. Absent ⇒ folded, which is the default: the dash shows one line per parent and `←`/`→` open and shut the block. Inverted against `@pin` on purpose — a window nobody has touched must start collapsed |
@@ -380,8 +384,9 @@ registry entry** — no migration. Each further repo is an overlay at
 `fleets/<session>/repos/<slug>.conf` with the same three keys plus any per-repo
 override (`FLEET_MODEL`, `FLEET_AGENT`, `FLEET_MCP_CONFIG`, `FLEET_DEPLOY_*`); the
 fleet conf keeps the fleet-wide defaults. All hosted repos are equal — there is no
-main repo. `bin/fleet-repo.sh add|remove|list` manages them; `add` refuses unless
-`FLEET_MULTIREPO=1` (the gate the batch's end-to-end check, #795, lifts).
+main repo. `bin/fleet-repo.sh add|remove|list` manages them. (`add` refused unless
+`FLEET_MULTIREPO=1` until the two-repo end-to-end check landed — #795 removed the
+gate and the key.)
 
 A window names its repo with `@repo=<owner/name>`; `@norepo 1` marks a session
 that deliberately belongs to none. Resolution goes through `bin/fleet-lib.sh`
@@ -520,6 +525,25 @@ current repo. `fleet-issue-file.sh` prefers the calling window's repo. Under `al
 the same popup). `fleet-issue-file.sh` refuses without `--repo` there. A one-repo
 fleet takes none of these branches: three-field rows, the per-session cache, and
 binds with no `--repo`. `bin/backlog-repo-selftest.sh` pins both halves.
+
+**Proven end to end, then switched on (issue #795).** `bin/multirepo-e2e-selftest.sh`
+runs the whole path on one throwaway fleet hosting two repos — `fleet-repo.sh add`
+(no gate), issue #12 and a scratch in both repos plus a no-repo session, a real
+collector + pr-refresh tick, A's PR merging, one cleanup tick, the dash and backlog
+under `all` and under a picked repo, and a snapshot → kill → restore round-trip —
+with a one-repo fleet beside it as the degenerate control. It gives each of the nine
+leak classes EPIC #787 counted (PR/CI by branch, cleanup by bare number, issue-number
+collisions, scratch/origin keys, one MAIN per reaper, worktree-name clash,
+guard/trust, collector/backlog/hub, restore) at least one assertion, and prints
+`leaks: <n>/9`. Its first run found a real one: two hosted checkouts that share a
+basename (`…/a/app`, `…/b/app`) under one `FLEET_WORKTREE_ROOT` both map to
+`<root>/app-issue-12`, and the spawner reuses an existing dir, so B's worker opened
+in A's worktree. `fleet_worktree_dir` now diverts a clashing checkout to
+`<basename>-r<cksum of main>-<slug>` (the `-issue-N`/`-scratch-N` suffix every
+reader parses is kept) and keeps using that dir while it exists; a free path, or
+one that is already this checkout's, is unchanged. The same fix covers two FLEETS
+that share a root. In a 2+ repo fleet the hub (`hub-session.sh`) opens in `$HOME`,
+because there is no main repo; a one-repo fleet's hub stays in its checkout.
 
 ### The launcher pre-trusts the fleet's checkout (issue #563)
 

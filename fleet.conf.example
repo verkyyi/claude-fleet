@@ -39,15 +39,6 @@ FLEET_BASE_BRANCH="main"
 # @label=Per-fleet config dir @group=identity @tier=advanced @scope=identity @edit=no
 #FLEET_CONF_DIR="$HOME/.config/claude-fleet"
 
-# Let a fleet host more than one repo (issue #788). The repo above is the first;
-# `bin/fleet-repo.sh add <owner/repo>` registers another as an overlay at
-# $FLEET_CONF_DIR/fleets/<session>/repos/<slug>.conf, and refuses unless this is 1.
-# OFF until the multi-repo batch's end-to-end check (#795) lands — set it only on a
-# throwaway test fleet before then. A fleet with no repos/ overlay behaves exactly
-# as a one-repo fleet always has.
-# @label=Host several repos @group=identity @tier=advanced @scope=fleet @edit=no
-#FLEET_MULTIREPO=0
-
 # A repo's short tag in a fleet that hosts 2+ repos (issue #793): the dash badge
 # under "all" and the window-name prefix (`tl·issue-12`). Set it in the repo's own
 # conf — this fleet conf for its repo, repos/<slug>.conf for any other. Empty = the
