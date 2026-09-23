@@ -70,6 +70,29 @@ if [ "$nav" = 0 ] &&
 fi
 
 target=$(fleet_dash_pane "$SESS")
+
+# No task bar on screen (issue #902): the bar hid itself on a narrow client or
+# was switched off, so the first press opens the same list as a POPUP
+# (fleet-task-pick.sh) instead of the trip to the hub; F9 / [⌂ hub] inside it is
+# the second press. Only in a TASK window — not the hub's own window, not a panel
+# (dash/plan/backlog) — and not zoomed, which keeps going home as above.
+# Same knob as the bar-first branch: FLEET_HOME_SIDEBAR_FIRST=0 ⇒ today's jump.
+if [ "$nav" = 0 ] && [ -n "$target" ] &&
+   [ "$(tmux display-message -p '#{&&:#{!=:#{@sidebar_worker},1},#{!=:#{window_zoomed_flag},1}}' 2>/dev/null)" = 1 ]; then
+  curw=$(tmux display-message -p '#{window_id}' 2>/dev/null)
+  case "$(tmux display-message -p '#{window_name}' 2>/dev/null)" in dash|plan|backlog) curw='' ;; esac
+  if [ -n "$curw" ] && [ "$curw" != "$(tmux display-message -p -t "$target" '#{window_id}' 2>/dev/null)" ]; then
+    [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
+    fleet_load_conf "$SESS"
+    if [ "${FLEET_HOME_SIDEBAR_FIRST:-1}" != 0 ]; then
+      if [ "$mode" = --home ]; then cause=home; else cause=f9; fi
+      # 3 = the popup could not open (no client, another overlay up): fall
+      # through to the jump below rather than leave the key dead.
+      bash "$BIN/fleet-task-pick.sh" --popup --session "$SESS" --cause "$cause" ${client:+--client "$client"} >/dev/null 2>&1
+      [ $? = 3 ] || exit 0
+    fi
+  fi
+fi
 if [ -z "$target" ]; then
   exec env HUB_SESSION="$SESS" bash "$(dirname "$0")/hub-session.sh"
 fi

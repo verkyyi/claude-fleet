@@ -58,7 +58,7 @@ done
 # Keys after "prefix " in each sheet row (a, j, G, b, A, c, r, ?). Set as text,
 # one key per line — compared with grep -Fxq so metachars like ? stay literal.
 sheet_prefix_keys="$(printf '%s\n' "$SHEET" \
-  | sed -n 's/^  prefix \([^ ]\) .*/\1/p' | sort -u)"
+  | sed -nE 's/^  prefix ([^ ]|Space) .*/\1/p' | sort -u)"   # one char, or a named key (Space, #902)
 [ -n "$sheet_prefix_keys" ] || fail "no 'prefix X' rows parsed from the sheet"
 # Prefix binds shipped in the conf: `bind <key> ...` or `bind-key <key> ...`,
 # excluding root-table `bind -n ...` ($2 == "-n"). F9/mouse are surfaced as the

@@ -982,7 +982,10 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 
 # ⌂ / F9 land on the task bar first (issue #899): in a task that shows the task
 # bar, the first press gives the bar the keyboard (like prefix E) and stays in the
-# task; a second press goes on to the hub. 0 = both always go straight to the hub.
+# task; a second press goes on to the hub. In a task with NO task bar on screen
+# (narrow client, or prefix e turned it off) the first press opens the task picker
+# popup instead (issue #902), where F9 / [⌂ hub] goes on to the hub. A zoomed task
+# still goes straight home. 0 = both always go straight to the hub.
 # @label=⌂/F9 go to the task bar first @group=status @tier=common @scope=fleet @edit=bool
 #FLEET_HOME_SIDEBAR_FIRST=1
 

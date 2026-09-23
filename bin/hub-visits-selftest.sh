@@ -205,6 +205,15 @@ printf '%s\n' "$sx" | grep -q ': 1 (+2 kept on the task bar, not counted)$' || f
 printf '%s\n' "$sx" | grep -Eq '^  home-sidebar +1  \(stayed on the task bar, not counted\)$' || fail "home-sidebar row missing: $sx"
 printf '%s\n' "$sx" | grep -Eq '^  f9-sidebar +1  \(stayed' || fail "f9-sidebar row missing: $sx"
 
+# The task picker (issue #902): ⌂ / F9 in a task with NO bar open the popup —
+# also a trip that did not happen, counted apart from the bar's.
+{ printf '%s\ta1\tf9\n%s\ta1\tf9-pick\n' "$now" "$now"; printf '%s\ta1\thome-pick\n' "$now"; } > "$WORK/pick.log"
+px="$(bash "$HV" --since 24h --log "$WORK/pick.log")"
+printf '%s\n' "$px" | grep -q ': 1 (+2 via the task picker, not counted)$' || fail "picker openings counted as trips: $px"
+printf '%s\n' "$px" | grep -Eq '^  f9-pick +1  \(task picker instead of the hub, not counted\)$' || fail "f9-pick row missing: $px"
+bx="$(bash "$HV" --brief --since 24h --log "$WORK/pick.log")"
+printf '%s\n' "$bx" | cut -f2 | grep -qx 1 || fail "--brief counted a picker opening: $bx"
+
 # No log at all, and a bad --since.
 empty="$(FLEET_HUB_VISITS_LOGDIR="$WORK/none" bash "$HV" --brief --all)"
 [ -z "$empty" ] || fail "--brief with no logs should print nothing, got '$empty'"
