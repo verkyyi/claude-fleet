@@ -88,7 +88,7 @@ old_count_for() {
 
 # ── B. no sleepers: identical to the old count ──────────────────────────────────
 W1=$(mk_win work1 301)
-W2=$(mk_win "spaced name sleeping" 302)
+mk_win "spaced name sleeping" 302 >/dev/null
 W3=$(mk_win work3 303)
 W4=$(mk_win work4 304)
 tmux new-window -d -t "$S:" -n backlog 'sleep 300'
