@@ -14,10 +14,11 @@
 # window that carries no handle yet — once in that window's life, not per tick.)
 set -uo pipefail
 export LANG="${LANG:-en_US.UTF-8}" LC_ALL="${LC_ALL:-en_US.UTF-8}"   # ${#s} must count chars, not bytes
-BIN="$(cd "$(dirname "$0")" && pwd)"
+case "$0" in */*) BIN="${0%/*}" ;; *) BIN=. ;; esac   # forkless dirname (issue #888)
+BIN="$(cd "${BIN:-/}" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"   # fleet_cache: route prmap through THIS fleet's slug'd cache
-C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
+C="${TMPDIR:-/tmp}/.claude-dash"; [ -d "$C" ] || mkdir -p "$C"   # 1Hz path: no exec once it exists (#888)
 G="$C/global"                       # machine-wide caches (git_/ctx_) — issue #181
 SIDEBAR=0; [ "${1:-}" = --sidebar ] && SIDEBAR=1
 
@@ -26,7 +27,8 @@ SIDEBAR=0; [ "${1:-}" = --sidebar ] && SIDEBAR=1
 # finished (merged + cleaned-up) sessions are one keystroke away with the same row
 # ergonomics (#130). Keyed by FLEET_SESSION so one fleet's toggle can't flip
 # another's dash (they share $C); FLEET_SESSION is exported by tmux-dashboard.sh.
-if [ "$SIDEBAR" = 0 ] && [ "$(cat "$G/dash_view_${FLEET_SESSION:-default}" 2>/dev/null)" = landed ]; then
+_view=''; [ -f "$G/dash_view_${FLEET_SESSION:-default}" ] && IFS= read -r _view < "$G/dash_view_${FLEET_SESSION:-default}" 2>/dev/null
+if [ "$SIDEBAR" = 0 ] && [ "$_view" = landed ]; then
   exec bash "$BIN/fleet-history.sh" rows
 fi
 

@@ -48,9 +48,19 @@ _FLEET_GLOBAL_ONLY="FLEET_GLOBAL_MAX_SESSIONS FLEET_ISSUE_BRIDGE_SECRET FLEET_IS
 # zsh), so a dev checkout / test bin with NO sibling fleet.conf is a clean no-op.
 # FLEET_SKIP_GLOBAL_CONF=1 opts a hermetic caller out of both the source and the export
 # (run-selftests.sh sets it so the gate stays install-independent).
+# THIS file's directory, resolved once per source and shared by the two blocks
+# below. `${p%/*}` rather than `dirname` (issue #888): fleet-lib.sh is sourced by
+# nearly every fleet script, so each `dirname` here was an exec on every dash
+# repaint, every status render and every daemon tick.
+# Inside the $(…) on purpose: `${BASH_SOURCE[0]}` is a "Bad substitution" under
+# dash, and there it must kill only this subshell (→ empty, both blocks no-op),
+# never the source — exactly as the old per-block `$(cd "$(dirname …)")` did.
+_flib_here="$(_s="${BASH_SOURCE[0]:-$0}"; [ "${_s#*/}" = "$_s" ] && _s="./$_s"
+  cd "${_s%/*}/" 2>/dev/null && pwd)" 2>/dev/null
+
 if [ -z "${_FLEET_GLOBAL_CONF_SOURCED:-}" ] && [ -z "${FLEET_SKIP_GLOBAL_CONF:-}" ]; then
   _FLEET_GLOBAL_CONF_SOURCED=1
-  _flib_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+  _flib_dir="$_flib_here"
   if [ -n "$_flib_dir" ] && [ -f "$_flib_dir/../fleet.conf" ]; then
     . "$_flib_dir/../fleet.conf"
   fi
@@ -70,11 +80,12 @@ fi
 # bin/ without it is a clean no-op, and the ${VAR:-} defaults at every call site
 # keep a missing file from breaking an injection.
 if [ -z "${FLEET_LANG_RULE_SEED:-}" ]; then
-  _flang_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+  _flang_dir="$_flib_here"
   # shellcheck source=/dev/null
   [ -n "$_flang_dir" ] && [ -r "$_flang_dir/fleet-lang.sh" ] && . "$_flang_dir/fleet-lang.sh"
   unset _flang_dir
 fi
+unset _flib_here
 
 # ----------------------------------------------------------------- layout (#181)
 # ONE DIRECTORY PER FLEET. A fleet's DURABLE state is keyed by its tmux SESSION
@@ -93,7 +104,7 @@ fi
 # Durable per-fleet state dir for <sess> (created on demand). WRITERS use this.
 fleet_state_dir() {
   local d="$FLEET_CONF_DIR/fleets/${1:-_}"
-  mkdir -p "$d" 2>/dev/null
+  [ -d "$d" ] || mkdir -p "$d" 2>/dev/null   # test first: no exec once it exists (#888)
   printf '%s' "$d"
 }
 
@@ -132,7 +143,7 @@ fleet_each_conf() {
   fi
   for conf in "$FLEET_CONF_DIR"/*.conf; do
     [ -f "$conf" ] || continue
-    sess=$(basename "$conf" .conf)
+    sess=${conf##*/}; sess=${sess%.conf}          # basename … .conf, no fork (#888)
     # dedup only when the NEW-layout conf FILE exists — a fleets/<sess>/ dir that
     # holds just restore.map/bridge/watch (no conf yet) must NOT hide the legacy conf.
     [ -f "$FLEET_CONF_DIR/fleets/$sess/conf" ] && continue
@@ -163,7 +174,7 @@ EOF
 # hand-building "$FLEET_C/issues_$slug".
 fleet_cache_dir() {
   local d="$FLEET_C/fleets/${1:-_}"
-  mkdir -p "$d" 2>/dev/null
+  [ -d "$d" ] || mkdir -p "$d" 2>/dev/null   # test first: no exec once it exists (#888)
   printf '%s' "$d"
 }
 
@@ -171,7 +182,7 @@ fleet_cache_dir() {
 # window caches, usage, ratelimit, collapsed, config scratch. Created on demand.
 fleet_cache_global() {
   local d="$FLEET_C/global"
-  mkdir -p "$d" 2>/dev/null
+  [ -d "$d" ] || mkdir -p "$d" 2>/dev/null   # test first: no exec once it exists (#888)
   printf '%s' "$d"
 }
 
@@ -243,8 +254,19 @@ fleet_sessmap_file() {
 }
 
 # git remote URL (or owner/name) → owner/name. Empty if it isn't GitHub-ish.
+# Forkless (issue #888) — the same four edits, in the same order, as the
+#   sed -E 's#^git@[^:]*:##; s#^https?://[^/]*/##; s#\.git$##; s#/+$##'
+# it replaces: pr-refresh normalizes every queued repo on every 15s tick. A value
+# with a newline in it keeps the sed, whose edits are per LINE.
 fleet_norm_repo() {
-  printf '%s' "$1" | sed -E 's#^git@[^:]*:##; s#^https?://[^/]*/##; s#\.git$##; s#/+$##'
+  local r="${1:-}"
+  case "$r" in *"
+"*) printf '%s' "$r" | sed -E 's#^git@[^:]*:##; s#^https?://[^/]*/##; s#\.git$##; s#/+$##'; return ;; esac
+  case "$r" in git@*:*) r="${r#*:}" ;; esac
+  case "$r" in http://*/*|https://*/*) r="${r#*://}"; r="${r#*/}" ;; esac
+  r="${r%.git}"
+  while :; do case "$r" in */) r="${r%/}" ;; *) break ;; esac; done
+  printf '%s' "$r"
 }
 
 # The tmux session the caller is running in (pane-targeted, client fallback).
@@ -275,7 +297,7 @@ fleet_load_conf() {
   # substitution, as the dispatch/watch subshell-capture paths do). Confs are
   # trusted assignments-only content, so eval-ing the filtered text is exactly what
   # sourcing would do, minus the stripped keys.
-  local _ore; _ore=$(printf '%s' "$_FLEET_GLOBAL_ONLY" | tr ' ' '|')
+  local _ore="${_FLEET_GLOBAL_ONLY// /|}"   # space → `|`, no `tr` fork (#888)
   eval "$(grep -Ev "^[[:space:]]*(export[[:space:]]+)?(${_ore})=" "$conf")"
   # Window-aware (issue #788): inside a pane of THIS fleet whose window belongs to a
   # hosted repo, that repo's overlay goes on top — so every in-pane consumer (hooks,
@@ -2425,8 +2447,16 @@ fleet_reap_record() {
 }
 
 # owner/name → filesystem-safe slug (owner-name).
+# Forkless for the common case (issue #888): a value already made only of ASCII
+# letters, digits, `.`, `_`, `-` and `/` loses nothing to `tr -cd`, so swapping
+# `/` → `-` is the whole job. Anything else keeps the original two `tr`s, so
+# their locale's idea of [:alnum:] still decides.
 fleet_slug() {
-  printf '%s' "$1" | tr '/' '-' | tr -cd '[:alnum:]._-'
+  case "${1:-}" in
+    *[!abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._/-]*)
+      printf '%s' "$1" | tr '/' '-' | tr -cd '[:alnum:]._-' ;;
+    *) printf '%s' "${1//\//-}" ;;
+  esac
 }
 
 # --- fleet provenance: role + the `<!-- fleet:from … -->` marker (issue #224) --
@@ -2682,17 +2712,31 @@ EOF
 
 # CHEAP: session → slug from the collector's sessmap (single awk, no forks into
 # git/tmux). Prints slug or empty.
-fleet_slug_cached() {
-  local sm; sm=$(fleet_sessmap_file)
-  [ -f "$sm" ] || return 0
-  awk -F'\t' -v s="$1" '$1==s{print $2; exit}' "$sm"
-}
+fleet_slug_cached() { _fleet_sessmap_field 2 "${1:-}"; }
 
 # CHEAP: session → repo (owner/name) from the sessmap. Prints repo or empty.
-fleet_repo_cached() {
-  local sm; sm=$(fleet_sessmap_file)
+fleet_repo_cached() { _fleet_sessmap_field 3 "${1:-}"; }
+
+# _fleet_sessmap_field <2|3> <session> — field N of the first sessmap row whose
+# field 1 is <session> (what `awk -F'\t' '$1==s{print $N; exit}'` printed). Pure
+# builtins (issue #888): the sessmap is a handful of rows and these are asked per
+# window per tick (pr-refresh, the dash), so an awk exec each was the cost. Split
+# with parameter expansion, not `read`: IFS=<tab> would fold an EMPTY field away.
+_fleet_sessmap_field() {
+  local sm line rest tab
+  sm=$(fleet_sessmap_file)
   [ -f "$sm" ] || return 0
-  awk -F'\t' -v s="$1" '$1==s{print $3; exit}' "$sm"
+  tab=$(printf '\t')
+  while IFS= read -r line || [ -n "$line" ]; do
+    [ "${line%%"$tab"*}" = "$2" ] || continue
+    case "$line" in *"$tab"*) rest="${line#*"$tab"}" ;; *) rest='' ;; esac
+    if [ "$1" = 3 ]; then
+      case "$rest" in *"$tab"*) rest="${rest#*"$tab"}" ;; *) rest='' ;; esac
+    fi
+    printf '%s\n' "${rest%%"$tab"*}"
+    return 0
+  done < "$sm"
+  return 0
 }
 
 # CHEAP: list the tmux sessions that are FLEETS — i.e. own a 'plan' or 'dash' hub

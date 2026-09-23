@@ -29,7 +29,8 @@
 # and git_<key> (window branch). Run from launchd (com.claude-fleet.pr-refresh,
 # StartInterval FLEET_PR_REFRESH_INTERVAL) or a systemd user timer.
 set -uo pipefail
-BIN="$(cd "$(dirname "$0")" && pwd)"
+case "$0" in */*) BIN="${0%/*}" ;; *) BIN=. ;; esac   # forkless dirname (issue #888)
+BIN="$(cd "${BIN:-/}" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 # --- scheduling heartbeat (issue #639) ---------------------------------------
 # Stamped at the TOP, before any early exit, so "launchd never spawned me" stays
@@ -47,8 +48,11 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # missing the lib then costs this unit its alarm (it reads `never`, which is
 # silent by design) instead of costing the fleet the daemon.
 # shellcheck source=/dev/null
-if [ "$#" = 0 ] && [ -f "$BIN/fleet-daemon-lib.sh" ]; then
-  . "$BIN/fleet-daemon-lib.sh"; fleet_daemon_stamp_tick pr-refresh "$BIN/.."
+# Sourced in BOTH modes now (issue #888: its fleet_now pins this run's clock);
+# the stamp stays no-arg-only.
+[ -f "$BIN/fleet-daemon-lib.sh" ] && . "$BIN/fleet-daemon-lib.sh"
+if [ "$#" = 0 ] && command -v fleet_daemon_stamp_tick >/dev/null 2>&1; then
+  fleet_daemon_stamp_tick pr-refresh "$BIN/.."
 fi
 
 . "$BIN/fleet-lib.sh"
@@ -59,7 +63,14 @@ G="$C/global"                       # machine-wide caches (git_<key>) — issue 
 # prmap.<pid> forever).
 trap 'find "$C" -maxdepth 3 -name "*.'"$$"'" -delete 2>/dev/null || true' EXIT
 REPO="${FLEET_REPO:-}"
-now() { date +%s; }
+# One `date` per run (issue #888): fleet_now advances the pinned clock with
+# $SECONDS, so `now` stays live (±1s) through a slow gh fetch without forking
+# `date` per repo. No daemon lib (a stripped bin/) → plain `date`, as before.
+if command -v fleet_now_pin >/dev/null 2>&1; then
+  fleet_now_pin; now() { fleet_now; }
+else
+  now() { date +%s; }
+fi
 
 # Targeted mode (issue #315): `--repo <owner/repo>` refreshes JUST that one repo's
 # PR/CI state NOW, bypassing both the broad session/conf fetch-queue and the TTL —
@@ -193,7 +204,8 @@ while [ "$i" -lt "${#Q_REPO[@]}" ]; do
   rp="${Q_REPO[$i]}"; sg="${Q_SLUG[$i]}"; se="${Q_SESS[$i]}"; i=$((i+1))
   command -v gh >/dev/null 2>&1 || break
   FD=$(fleet_cache_dir "$sg")          # fleets/<slug>/ (issue #181)
-  pts=$(cat "$FD/prmap.ts" 2>/dev/null || echo 0)
+  pts=0; [ -f "$FD/prmap.ts" ] && IFS= read -r pts < "$FD/prmap.ts" 2>/dev/null   # no `cat` (#888)
+  case "$pts" in ''|*[!0-9]*) pts=0 ;; esac
   if [ "$FORCE" = 1 ] || [ $(( $(now) - pts )) -ge "$PR_TTL" ]; then
     # The fold from PR JSON → prmap TSV is FLEET_PRMAP_JQ (fleet-lib.sh), the one
     # program the dash, the merge gate's taxonomy and pr-refresh-jq-selftest.sh
@@ -229,6 +241,11 @@ done
 # as before, with no extra tmux call.
 US=$'\x1f'
 MR_SEEN=' ' MR_MULTI=' '
+# Per window, builtins only except the one awk lookup (issue #888: this loop was
+# ~10 execs a window every 15s — a `cut` for the branch, and an `echo | cut` per
+# field of the hit). The single-repo prmap resolves once per SESSION: `list-windows
+# -a` lists a session's windows together.
+last_sess=$US; sess_prmf=''
 for sock in $SOCKETS; do
 wl=$(tmux -L "$sock" list-windows -a -F "#{session_name}${US}#{session_name}:#{window_index}${US}#{pane_current_path}${US}#{@prci}${US}#{@repo}${US}#{@norepo}" 2>/dev/null)
 # tmux 3.4 escapes a control separator as the literal four bytes `\037`;
@@ -252,10 +269,12 @@ while IFS="$US" read -r sess win path cur wrepo wnorepo; do
       # each window matches against ITS fleet's prmap — routed through fleet_cache so
       # the read side has a single slug-resolution truth (issue #180). Cold-start
       # fallback is the un-slug'd name, which simply won't exist ⇒ no glyph.
-      prmf=$(fleet_cache prmap "$sess") ;;
+      if [ "$sess" != "$last_sess" ]; then sess_prmf=$(fleet_cache prmap "$sess"); last_sess=$sess; fi
+      prmf=$sess_prmf ;;
   esac
   key=$(cache_key "$path")
-  branch=$(cut -f1 "$G/git_$key" 2>/dev/null)
+  branch=''; [ -f "$G/git_$key" ] && IFS= read -r branch < "$G/git_$key" 2>/dev/null
+  branch=${branch%%$'\t'*}                       # field 1, no `cut`
   glyph=""; pfg=""
   if [ -n "$prmf" ] && [ -n "$branch" ] && [ "$branch" != "-" ]; then
     # The cache branch may carry +ahead/-behind decorations. Try it EXACTLY first,
@@ -264,19 +283,22 @@ while IFS="$US" read -r sess win path cur wrepo wnorepo; do
     # `issue-3` into `issue`, so an undecorated issue branch never got a glyph.
     b2=$branch; case "$b2" in *-[0-9]|*-[0-9][0-9]|*-[0-9][0-9][0-9]|*-[0-9][0-9][0-9][0-9]) b2=${b2%-*};; esac
     b3=$b2; case "$b3" in *+[0-9]|*+[0-9][0-9]|*+[0-9][0-9][0-9]|*+[0-9][0-9][0-9][0-9]) b3=${b3%+*};; esac
+    # …and hand back just the hit's state / CI / readiness / merge sha, US-joined
+    # (US is not IFS whitespace, so an EMPTY field survives the read below).
     hit=$(awk -F'\t' -v x1="$branch" -v x2="$b3" -v x3="$b2" '
-      $1==x1 && h1=="" {h1=$0} $1==x2 && h2=="" {h2=$0} $1==x3 && h3=="" {h3=$0}
+      { r = $3 "\037" $4 "\037" $5 "\037" $6 }
+      $1==x1 && h1=="" {h1=r} $1==x2 && h2=="" {h2=r} $1==x3 && h3=="" {h3=r}
       END { if (h1!="") print h1; else if (h2!="") print h2; else if (h3!="") print h3 }' "$prmf" 2>/dev/null)
+    st=''; ci=''; ready=''; msha=''
+    [ -n "$hit" ] && IFS="$US" read -r st ci ready msha <<< "$hit"
     # a live window sitting on a MERGED branch is a deploy-state candidate (#541):
     # hand its merge sha to the deploy pass below, as a PID-unique temp file swept by
     # the EXIT trap (keyed by the prmap's dir, so each repo's candidates stay its own).
-    if [ -n "$hit" ] && [ "$(echo "$hit"|cut -f3)" = "MERGED" ]; then
-      msha=$(echo "$hit"|cut -f6)
+    if [ -n "$hit" ] && [ "$st" = "MERGED" ]; then
       [ -n "$msha" ] && printf '%s\t%s\n' "${prmf%/*}" "$msha" >> "$C/deploy-live.$$"
     fi
-    if [ -n "$hit" ] && [ "$(echo "$hit"|cut -f3)" = "OPEN" ]; then
-      ready=$(echo "$hit"|cut -f5)
-      case "$(echo "$hit"|cut -f4)" in
+    if [ -n "$hit" ] && [ "$st" = "OPEN" ]; then
+      case "$ci" in
         ✗) glyph="✗"; pfg="#f7768e";;   # real CI failure → attention
         ✓) case "$ready" in             # green: decorate by land-readiness (#533)
              behind)   glyph="✓↑"; pfg="#e0af68";;   # green but behind base → update-branch

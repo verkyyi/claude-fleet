@@ -10,7 +10,8 @@
 # container's ●/○ running indicator.
 set -uo pipefail
 
-BIN="$(cd "$(dirname "$0")" && pwd)"
+case "$0" in */*) BIN="${0%/*}" ;; *) BIN=. ;; esac   # forkless dirname (issue #888)
+BIN="$(cd "${BIN:-/}" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/usage-lib.sh"
 # The interval-daemon liveness registry + relative-interval thresholds (issue
@@ -18,6 +19,14 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # own directory: it is also what makes fleet_collect_stale_secs relative rather
 # than the absolute 600s that read `fresh` through a 7–14-minute collector.
 . "$BIN/fleet-daemon-lib.sh"
+# One clock per render (issue #888): every stale/kick age below is read against
+# this, instead of each one forking its own `date` (26 per render before). This
+# script is one-shot — tmux runs it anew every status-interval — so a pinned clock
+# is never older than the render itself.
+fleet_now_pin
+
+# The OS from $OSTYPE, not two `uname` forks per render (issue #888).
+case "${OSTYPE:-}" in darwin*) IS_DARWIN=1 ;; *) IS_DARWIN=0 ;; esac
 
 # Palette (Tokyo Night)
 RED="#[fg=#f7768e]"
@@ -37,10 +46,15 @@ if [ -n "${FLEET_STATUS_CONTAINER:-}" ]; then
 fi
 
 # --- CPU usage ---
-if [[ "$(uname)" == "Darwin" ]]; then
+if [ "$IS_DARWIN" = 1 ]; then
+    # hw.ncpu / hw.memsize / hw.pagesize in ONE sysctl (was three forks).
+    sysv=$(sysctl -n hw.ncpu hw.memsize hw.pagesize 2>/dev/null)
+    read -r ncpu memsize page_size <<< "${sysv//$'\n'/ }"
+    case "${ncpu:-}" in ''|*[!0-9]*|0) ncpu=1 ;; esac
+    case "${memsize:-}" in ''|*[!0-9]*) memsize=0 ;; esac
+    case "${page_size:-}" in ''|*[!0-9]*|0) page_size=16384 ;; esac
     # macOS: aggregate CPU from ps + core count
     cpu_sum=$(ps -A -o %cpu | awk '{s+=$1} END {printf "%.0f", s}')
-    ncpu=$(sysctl -n hw.ncpu 2>/dev/null || echo 1)
     cpu=$((cpu_sum / ncpu))
 else
     # Linux: from /proc/stat, cumulative since boot
@@ -59,16 +73,27 @@ else
     cpu_out="${DIM}–"
 fi
 
+# mb_to_g1 <MB> — MB as GB with one decimal, byte-identical to awk's
+# printf "%.1f" of MB/1024 (issue #888: was one awk fork per render). MB/1024 is
+# exact in binary, so the only rounding is %.1f's own: nearest, ties to even.
+mb_to_g1() {
+    local t=$(( $1 * 10 )) q r
+    q=$(( t / 1024 )); r=$(( t % 1024 ))
+    if [ "$r" -gt 512 ] || { [ "$r" -eq 512 ] && [ $(( q % 2 )) -eq 1 ]; }; then q=$(( q + 1 )); fi
+    printf '%d.%d' $(( q / 10 )) $(( q % 10 ))
+}
+
 # --- Memory ---
 used="" total=""
-if [[ "$(uname)" == "Darwin" ]]; then
-    total=$(( $(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1024 / 1024 ))
-    page_size=$(sysctl -n hw.pagesize 2>/dev/null || echo 16384)
-    # Pages: active + wired + compressed ≈ used
-    active=$(vm_stat 2>/dev/null | awk '/Pages active/ {gsub(/\./,"",$3); print $3}')
-    wired=$(vm_stat 2>/dev/null | awk '/Pages wired/ {gsub(/\./,"",$4); print $4}')
-    compressed=$(vm_stat 2>/dev/null | awk '/Pages occupied by compressor/ {gsub(/\./,"",$5); print $5}')
-    used_pages=$(( ${active:-0} + ${wired:-0} + ${compressed:-0} ))
+if [ "$IS_DARWIN" = 1 ]; then
+    total=$(( memsize / 1024 / 1024 ))
+    # Pages: active + wired + compressed ≈ used — one vm_stat, one awk (was 3 + 3)
+    used_pages=$(vm_stat 2>/dev/null | awk '
+      /Pages active/                 {gsub(/\./,"",$3); u+=$3}
+      /Pages wired/                  {gsub(/\./,"",$4); u+=$4}
+      /Pages occupied by compressor/ {gsub(/\./,"",$5); u+=$5}
+      END {printf "%d", u}')
+    case "${used_pages:-}" in ''|*[!0-9]*) used_pages=0 ;; esac
     used=$(( used_pages * page_size / 1024 / 1024 ))
 elif command -v free &>/dev/null; then
     read -r used total <<< "$(free -m | awk '/Mem:/ {print $3, $2}')"
@@ -76,7 +101,7 @@ fi
 
 if [ -n "${used:-}" ] && [ -n "${total:-}" ] && [ "${total:-0}" -gt 0 ]; then
     mem_pct=$((used * 100 / total))
-    mem_display=$(awk "BEGIN {printf \"%.1fG/%.1fG\", $used/1024, $total/1024}")
+    mem_display="$(mb_to_g1 "$used")G/$(mb_to_g1 "$total")G"
     if [ "$mem_pct" -ge 85 ]; then
         mem_out="${RED}${mem_display}"
     elif [ "$mem_pct" -ge 60 ]; then
@@ -127,7 +152,7 @@ INDIGO="#[fg=#bb9af7]"
 usage=$(fleet_usage_proxy)
 usage_seg=""
 if [ -n "$usage" ]; then
-    rl_pct="$(fleet_usage_ratelimit | cut -f1)"
+    rl_pct="$(fleet_usage_ratelimit)"; rl_pct="${rl_pct%%	*}"   # field 1, no `cut`
     case "$(fleet_usage_severity "$rl_pct")" in
         crit) usage_col="$RED" ;;
         warn) usage_col="$YELLOW" ;;

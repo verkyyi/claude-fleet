@@ -81,7 +81,8 @@
 #   FLEET_DISPATCH_LEASE_DIR    lease dir (shared)    (default ~/.claude/leases)
 set -uo pipefail
 
-BIN="$(cd "$(dirname "$0")" && pwd)"
+case "$0" in */*) BIN="${0%/*}" ;; *) BIN=. ;; esac   # forkless dirname (issue #888)
+BIN="$(cd "${BIN:-/}" && pwd)"
 # shellcheck source=/dev/null
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 # --- scheduling heartbeat (issue #639) ---------------------------------------
