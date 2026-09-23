@@ -231,9 +231,10 @@ def open_help(screen, env):
     a popup via dash-popup.sh (explicit client, the @popup_open epoch), exactly
     as the hub's `?` opens its own. Blocks until q/Esc closes it, which is the
     pause: nothing repaints under the popup. Leave curses meanwhile for the same
-    reason new_task does — with no client the sheet runs INLINE in this pane."""
+    reason new_task does — with no client the sheet runs INLINE in this pane.
+    Sized to the sheet (issue #963): title + blank + six rows + the border."""
     curses.endwin()
-    subprocess.call(["bash", str(BIN / "dash-popup.sh"), "-w", "72%", "-h", "80%", "--",
+    subprocess.call(["bash", str(BIN / "dash-popup.sh"), "-w", "46", "-h", "10", "--",
                      "bash", str(BIN / "fleet-keys.sh"), "--context", "sidebar"], env=env)
     screen.clear()
 

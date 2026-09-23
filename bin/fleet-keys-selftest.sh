@@ -259,35 +259,45 @@ while read -r action _ _ def _; do
 done <<EOF
 $side_table
 EOF
-# The sidebar's own `?` sheet (issue #948): only what concerns the sidebar —
-# prefix E + ⌂/F9, the task sidebar group, and the row menu's letters, read from
-# the menu's own table (fleet-sidebar-menu.sh --keys), never a copy of it.
+# The sidebar's own `?` sheet (issue #948, cut to one screen by #963): its
+# popup cannot scroll, so it is the six everyday keys + a title and nothing
+# else. Every sidebar action and every row-menu letter still has a row — in the
+# FULL sheet (prefix ?), which is what the checks above and below read.
 SSHEET="$(NO_COLOR=1 bash "$KEYS" --context sidebar --plain)" || fail "fleet-keys.sh --context sidebar exited non-zero"
-for g in "task sidebar" "row menu" "reach the sidebar"; do
-  printf '%s\n' "$SSHEET" | grep -q "^$g " || fail "the sidebar sheet lacks its '$g' group"
+[ "$(printf '%s\n' "$SSHEET" | wc -l | tr -d ' ')" -le 9 ] \
+  || fail "the sidebar sheet is $(printf '%s\n' "$SSHEET" | wc -l | tr -d ' ') lines — it must fit its popup (≤ 9)"
+printf '%s\n' "$SSHEET" | head -1 | grep -q '任务栏快捷键' || fail "the sidebar sheet lacks its 任务栏快捷键 title"
+for k in "打字 ↵" "↑ ↓" ". / 再点一次" "esc" "⌂ / F9" "prefix ?"; do
+  printf '%s\n' "$SSHEET" | grep -qF "  $k " || fail "the sidebar sheet does not list '$k'"
 done
-for g in "tmux prefix" "dashboard" "backlog" "config modal"; do
-  printf '%s\n' "$SSHEET" | grep -q "^$g " && fail "the sidebar sheet shows the '$g' group — it is scoped to the sidebar"
+for k in "←" "→" "⌃o" "⌃n" "prefix E" "prefix Space"; do
+  printf '%s\n' "$SSHEET" | grep -qF "$k" && fail "the sidebar sheet lists '$k' — only the six everyday keys belong there"
 done
-for k in "prefix E" "⌂ / F9"; do
-  printf '%s\n' "$SSHEET" | grep -qF "  $k " || fail "the sidebar sheet does not list $k"
-done
+printf '%s\n' "$SSHEET" | grep -Eq '^(task sidebar|row menu|tmux prefix|dashboard|backlog|config modal) ' \
+  && fail "the sidebar sheet shows a full-sheet group"
 menu_keys="$(bash "$BIN/fleet-sidebar-menu.sh" --keys)" || fail "fleet-sidebar-menu.sh --keys exited non-zero"
 [ "$(printf '%s\n' "$menu_keys" | cut -f1 | tr -d '\n')" = rtpavxno ] \
   || fail "the row menu's key table is not r t p a v x n o: $(printf '%s' "$menu_keys" | cut -f1 | tr '\n' ' ')"
-menu_block="$(printf '%s\n' "$SSHEET" | awk '/^row menu /{f=1;next} f && NF && /^[^ ]/{f=0} f')"
 while IFS='	' read -r mk _; do
   [ -n "$mk" ] || continue
-  printf '%s\n' "$menu_block" | grep -q "^  $mk  " || fail "the sidebar sheet's row menu lacks '$mk'"
+  printf '%s\n' "$SSHEET" | grep -Eq "^  $mk +" && fail "the sidebar sheet lists the row menu letter '$mk'"
+done <<EOF
+$menu_keys
+EOF
+FULL_SHEET="$(NO_COLOR=1 bash "$KEYS" --plain)"
+printf '%s\n' "$FULL_SHEET" | grep -q '^task sidebar ' || fail "the full sheet lost the task sidebar group"
+menu_block="$(printf '%s\n' "$FULL_SHEET" | awk '/^row menu /{f=1;next} f && NF && /^[^ ]/{f=0} f')"
+[ -n "$menu_block" ] || fail "the full sheet lost the row menu group"
+while IFS='	' read -r mk _; do
+  [ -n "$mk" ] || continue
+  printf '%s\n' "$menu_block" | grep -q "^  $mk  " || fail "the full sheet's row menu lacks '$mk'"
 done <<EOF
 $menu_keys
 EOF
 grep -Eq '^ *add "[^"]*" [a-z] ' "$BIN/fleet-sidebar-menu.sh" \
   && fail "fleet-sidebar-menu.sh hardcodes a menu letter — read it from MENU_KEYS (mk)"
-FULL_SHEET="$(NO_COLOR=1 bash "$KEYS" --plain)"
-printf '%s\n' "$FULL_SHEET" | grep -q '^row menu ' || fail "the full sheet lost the row menu group"
 DSHEET="$(NO_COLOR=1 bash "$KEYS" --context dash --plain)"
-printf '%s\n' "$DSHEET" | grep -Eq '^(row menu|task sidebar|reach the sidebar) ' \
+printf '%s\n' "$DSHEET" | grep -Eq '^(row menu|task sidebar) ' \
   && fail "the dash sheet shows a sidebar group"
 
 NSHEET="$(FLEET_TMUX_PREFIX=C-n NO_COLOR=1 bash "$KEYS" --plain)" || fail "fleet-keys.sh under a C-n prefix exited non-zero"
