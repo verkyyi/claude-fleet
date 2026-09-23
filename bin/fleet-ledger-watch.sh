@@ -198,6 +198,13 @@ watch_fleet() { (
   # still parses (6 columns) across the land→sync window.
   cur=$(fleet_state_dir "$sess")/.ledgerwatch.$$.snap
   cur_keys=$'\n'
+  # A fleet hosting 2+ repos (issue #790): two repos can both have a #12 (and a
+  # scratch-3), so the snapshot key is repo-qualified, `<owner/name>#<key>`, and a
+  # vanished row is recorded into ITS repo's ledger. A window whose repo is
+  # unknown is skipped — never recorded under a guessed repo. A one-repo fleet
+  # keeps the bare key (and a bare key read back from an older snapshot means the
+  # fleet's repo, below).
+  multi=0; fleet_multirepo "$sess" && multi=1
   : > "$cur"
   while IFS='|' read -r wid iss rawf wt cwd wname worigin wagent wowner widentity; do
     local_wt="$wt"; [ -z "$local_wt" ] && local_wt="$cwd"   # @worktree, else the pane cwd
@@ -211,6 +218,11 @@ watch_fleet() { (
     else
       case "$iss" in ''|*[!0-9]*) continue ;; esac    # numeric @issue only (skips panels)
       key="$iss"
+    fi
+    if [ "$multi" = 1 ]; then
+      wrepo=$(fleet_window_repo "$sess" "$wid")
+      [ -z "$wrepo" ] && continue
+      key="$wrepo#${key##*:}"      # a `<slug>:scratch-N` key (#789) → its bare form
     fi
     # dedup within a tick: one window ≡ one key — first seen wins.
     case "$cur_keys" in *$'\n'"$key"$'\n'*) continue ;; esac
@@ -239,9 +251,21 @@ EOF
     while IFS=$'\037' read -r p_key p_wid p_wt p_title p_smry p_origin p_agent p_owner p_identity; do
       [ -z "$p_key" ] && continue
       case "$cur_keys" in *$'\n'"$p_key"$'\n'*) continue ;; esac   # still live → not vanished
+      # The tick a fleet gains (or drops) its second repo, the prior snapshot is in
+      # the other spelling (#790): match on the bare key too, so no live window
+      # reads as vanished across the switch. ONLY on a spelling mismatch: in steady
+      # state o/a#12 must still vanish while o/b#12 lives.
+      case "$multi:$p_key" in
+        1:*'#'*) ;;                                               # same spelling
+        0:*'#'*|1:*) case "$cur_keys" in *$'\n'"${p_key##*'#'}"$'\n'*|*"#${p_key##*'#'}"$'\n'*) continue ;; esac ;;
+      esac
       vanished=$((vanished + 1))
+      # `<owner/name>#<key>` (multi-repo, #790) → that repo's ledger, bare key.
+      p_repo=$repo
+      case "$p_key" in *'#'*) p_repo=${p_key%'#'*}; p_key=${p_key##*'#'} ;; esac
       # log label: `#<issue>` for a worker, the bare `scratch-<N>` for a scratch (#466).
       lbl="$p_key"; case "$p_key" in [0-9]*) lbl="#$p_key" ;; esac
+      [ "$p_repo" = "$repo" ] || lbl="$p_repo $lbl"
       if [ "$DRY" = 1 ]; then
         log "$sess: would record closed-unlanded $lbl (win $p_wid, wt ${p_wt##*/})"
         recorded=$((recorded + 1))
@@ -252,7 +276,7 @@ EOF
       # dedups (idempotent); a window with no transcript (a Codex worker, #547) is
       # recorded transcript-less rather than skipped.
       tok=$(bash "$BIN/fleet-history.sh" record-closed \
-              --repo "$repo" --session "$sess" --key "$p_key" \
+              --repo "$p_repo" --session "$sess" --key "$p_key" \
               --worktree "$p_wt" --win "$p_wid" \
               --title "$p_title" --summary "$p_smry" \
               --agent "${p_agent:-claude}" --launcher-pid "${p_owner:-}" --agent-identity "${p_identity:-}" \

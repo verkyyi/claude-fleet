@@ -70,7 +70,7 @@ SESS="${FLEET_SESSION:-}"
 # --- the window table: key → window_id · origin · expand ----------------------
 # ONE tmux read, same field set and same key derivation the renderer uses, so the
 # two can never disagree about who a row's parent is.
-WFMT="#{session_name}${US}#{window_id}${US}#{window_name}${US}#{pane_current_path}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{@expand}"
+WFMT="#{session_name}${US}#{window_id}${US}#{window_name}${US}#{pane_current_path}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{@expand}${US}#{@repo}"
 WLIST=$(tmux list-windows -a -F "$WFMT" 2>/dev/null) || exit 0
 
 # okey_v — byte-for-byte the renderer's key derivation (@issue, else the
@@ -78,7 +78,7 @@ WLIST=$(tmux list-windows -a -F "$WFMT" 2>/dev/null) || exit 0
 # issue #529). Kept identical on purpose; a divergence here would fold the
 # wrong block.
 okey_v() { okey=''
-  if [ -n "$1" ]; then okey="issue-$1"; return; fi
+  if [ -n "$1" ]; then okey="${okp}issue-$1"; return; fi
   local cand bn sn
   for cand in "$2" "$3"; do
     bn=${cand##*/}
@@ -87,8 +87,19 @@ okey_v() { okey=''
       *-scratch-*) sn=${bn##*-scratch-} ;;
       *)           continue ;;
     esac
-    case "$sn" in ''|*[!0-9]*) continue;; *) okey="scratch-$sn"; return;; esac
+    case "$sn" in ''|*[!0-9]*) continue;; *) okey="${okp}scratch-$sn"; return;; esac
   done
+}
+# okp_v — the renderer's repo key prefix (issue #790), byte-for-byte: `<slug>:` of
+# @repo in a fleet hosting 2+ repos, `?:` when @repo is unset (unknown/@norepo;
+# pr-refresh stamps a derivable one within a tick), else nothing.
+okp=''
+MULTI=0
+[ -n "$SESS" ] && command -v fleet_multirepo >/dev/null 2>&1 && fleet_multirepo "$SESS" && MULTI=1
+okp_v() { okp=''
+  [ "$MULTI" = 1 ] || return 0
+  local r="$1"
+  if [ -n "$r" ]; then r=${r//\//-}; okp="${r//[^[:alnum:]._-]/}:"; else okp='?:'; fi
 }
 
 # self's window_id, so the table lookup below is by identity, not by index.
@@ -97,10 +108,11 @@ selfwid=$(tmux display-message -p -t "$target" '#{window_id}' 2>/dev/null) || ex
 
 KEYTAB=''      # key \t window_id \t origin \t expand
 selfkey=''
-while IFS=$US read -r wsess wid wname wpath wiss worig wwt wexp; do
+while IFS=$US read -r wsess wid wname wpath wiss worig wwt wexp wrepo; do
   [ -n "$wname" ] || continue
   [ -n "$SESS" ] && [ "$wsess" != "$SESS" ] && continue
   case "$wname" in dash|plan|backlog) continue ;; esac
+  okp_v "$wrepo"
   okey_v "$wiss" "$wwt" "$wpath"
   [ -n "$okey" ] || continue
   KEYTAB+="$okey"$'\t'"$wid"$'\t'"$worig"$'\t'"$wexp"$'\n'
@@ -125,7 +137,7 @@ lookup "$selfkey" || exit 0
 hwid=$lwid; hexp=$lexp; horig=$lorig
 hops=0
 while [ "$hops" -lt 4 ]; do
-  case "$horig" in issue-*|scratch-*) ;; *) break ;; esac
+  case "$horig" in issue-*|scratch-*|*:issue-*|*:scratch-*) ;; *) break ;; esac
   lookup "$horig" || { holder=''; break; }        # chain left this dash ⇒ ORPHAN
   holder=$horig; hwid=$lwid; hexp=$lexp; horig=$lorig
   hops=$((hops+1))

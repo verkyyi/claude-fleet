@@ -434,6 +434,24 @@ owner/name`). `fleet_origin_key` mints them, `fleet_origin_canon` keeps them and
 `fleet_win_for_key` resolves them only to a window of that repo. A one-repo fleet's
 keys are unchanged. `bin/fleet-repo-session-selftest.sh` pins all of it.
 
+**Identity is (repo, issue), never a bare number (issue #790).** Two hosted repos
+can both have an issue #12, so every join that finds a session by its issue
+number keys on the pair once the fleet hosts 2+ repos (`fleet_multirepo`):
+`fleet_issue_key` / `fleet_window_key` spell it `<owner/name>#<N>`, and
+`fleet_bound_windows` lists a fleet's bound windows by that key. A window whose
+repo is unknown gets `#<N>` — equal to no real key, so no join picks it by
+guesswork (autofill dedup matches it on purpose: a skipped spawn retries, a
+double spawn costs twice). The joins: autofill dedup, the backlog's bound map,
+the issue bridge's target window, ledger-watch (snapshot keyed by the pair, the
+row written to its own repo's ledger), the destructive reap target (a bare `#12`
+that matches two windows is refused; `<repo>#12` names one), the dash's grouping
+keys (`<slug>:issue-<N>`, the spelling a multi-repo spawn stamps into `@origin`),
+the landed view (a ledger is one repo's, so it drops its own `<slug>:` from the
+origin column, and keeps one fold file per repo), and the Fleet Hub adapter
+(message/resume use the window's or the ledger's repo, refusing an ambiguous bare
+key). A one-repo fleet keeps the bare keys everywhere —
+`bin/multirepo-identity-selftest.sh` pins both halves.
+
 ### The launcher pre-trusts the fleet's checkout (issue #563)
 
 Claude Code asks "Quick safety check: Is this a project you created or one you

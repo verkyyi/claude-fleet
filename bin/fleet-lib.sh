@@ -536,6 +536,93 @@ fleet_current_repo_set() {
   printf '%s\n' "$want" > "$d/current-repo.$$" && mv -f "$d/current-repo.$$" "$d/current-repo"
 }
 
+# ---- (repo, issue) identity (issue #790) -------------------------------------
+# Two repos in one fleet can both have an issue #12, so nothing that finds a
+# session by its issue number may join on the bare number there. The join key is
+# (repo, N), spelled `<owner/name>#<N>`. A ONE-repo fleet keeps the bare N it has
+# always used — the degenerate case, byte-for-byte — so every existing cache,
+# snapshot and ledger row still matches. (The dash's grouping keys are a
+# different spelling of the same idea, `<slug>:issue-<N>`, because they must equal
+# what a spawn stamps into @origin — see fleet_okey_prefix.)
+
+# fleet_multirepo <sess> → 0 iff the fleet hosts 2+ repos. A fleet with no repos/
+# dir answers from one [ -d ] — no fork, no tmux — so a 4Hz path may ask it.
+fleet_multirepo() {
+  [ -d "$FLEET_CONF_DIR/fleets/${1:-_}/repos" ] || return 1
+  [ "$(fleet_repos "$1" | grep -c .)" -ge 2 ]
+}
+
+# fleet_issue_key <sess> <repo> <N> → the join key for issue N of <repo>.
+fleet_issue_key() {
+  if fleet_multirepo "${1:-}"; then printf '%s#%s' "$(fleet_norm_repo "${2:-}")" "${3:-}"
+  else printf '%s' "${3:-}"; fi
+}
+
+# fleet_window_key <sess> <window-target> → the window's join key, the same
+# spelling fleet_issue_key gives its (repo, N): nothing for a window with no
+# @issue; `#<N>` for a multi-repo window whose repo is unknown (see below).
+fleet_window_key() {
+  local n
+  n=$(_fleet_tmux "${1:-}" display-message -p -t "${2:-}" '#{@issue}' 2>/dev/null)
+  [ -n "$n" ] || return 0
+  if fleet_multirepo "${1:-}"; then printf '%s#%s' "$(fleet_window_repo "$1" "$2")" "$n"
+  else printf '%s' "$n"; fi
+}
+
+# fleet_repo_for_slug <sess> <repo|slug|name> → the hosted owner/name it names,
+# or nothing (1) when it names none or more than one. Lets an operator-typed
+# `<slug>#12` / `<slug>:issue-12` resolve without spelling the owner.
+fleet_repo_for_slug() {
+  local want="${2:-}" r hit='' n=0
+  [ -n "$want" ] || return 1
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    case "$want" in "$r"|"$(fleet_slug "$r")"|"${r#*/}") hit=$r; n=$((n+1)) ;; esac
+  done <<EOF
+$(fleet_repos "${1:-}")
+EOF
+  [ "$n" = 1 ] || return 1
+  printf '%s' "$hit"
+}
+
+# fleet_okey_prefix <sess> <repo> → `<slug>:` in a multi-repo fleet, else nothing:
+# what goes in front of `issue-<N>` / `scratch-<N>` in a dash grouping key, so a
+# key built here equals the @origin a multi-repo spawn stamps (issue #789).
+fleet_okey_prefix() {
+  fleet_multirepo "${1:-}" || return 0
+  printf '%s:' "$(fleet_slug "$(fleet_norm_repo "${2:-}")")"
+}
+
+# fleet_bound_windows <sess> → one `<key>\t<window_id>\t<window_name>` line per
+# window of the fleet bound to an issue — by @issue, else by a bare `issue-<N>`
+# window NAME (a window whose binding was cleared is still that issue's session).
+# <key> is fleet_issue_key's spelling; a multi-repo window whose repo is unknown
+# gets `#<N>` — equal to no real key, so a join never picks it by guesswork (a
+# caller that must be conservative, e.g. spawn dedup, matches `#<N>` on purpose).
+# (fleet_issue_windows, #791, answers the narrower question: the ids bound to ONE
+# given (repo, issue).)
+fleet_bound_windows() {
+  local sess="${1:-}" multi=0 wid iss name r n
+  fleet_multirepo "$sess" && multi=1
+  while IFS='|' read -r wid iss name; do
+    [ -n "$wid" ] || continue
+    n=$iss
+    if [ -z "$n" ]; then
+      case "$name" in issue-*) n=${name#issue-} ;; *) continue ;; esac
+    fi
+    case "$n" in ''|*[!0-9]*) continue ;; esac
+    if [ "$multi" = 1 ]; then
+      r=$(fleet_window_repo "$sess" "$wid")
+      printf '%s#%s\t%s\t%s\n' "$r" "$n" "$wid" "$name"
+    else
+      printf '%s\t%s\t%s\n' "$n" "$wid" "$name"
+    fi
+  done <<EOF
+$(_fleet_tmux "$sess" list-windows -t "$sess" -F '#{window_id}|#{@issue}|#{window_name}' 2>/dev/null)
+EOF
+  return 0
+}
+
 # Resolve the operator-facing BODY of an implementing worker's seed prompt
 # (issue #234). A spawned worker is seeded (in dash-issue-session.sh) with:
 #   Work GitHub issue #<n> in this repo. <run /fleet-claim …> <BODY><ship+stop tail>

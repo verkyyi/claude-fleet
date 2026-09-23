@@ -144,7 +144,29 @@ landed_target() { # <ledger key> <pr>
 # dash_view_<session>, so the landed peek always opens folded and the file can
 # never accumulate keys for sessions nobody will look at again.
 landed_fold_file() {
-  printf '%s/global/dash_fold_landed_%s' "${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}" "${FLEET_SESSION:-default}"
+  printf '%s/global/dash_fold_landed_%s%s' "${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}" "${FLEET_SESSION:-default}" \
+    "${LANDED_FOLD_SLUG:+.$LANDED_FOLD_SLUG}"
+}
+
+# landed_scope <repo> — a fleet hosting 2+ repos (issue #790). One ledger is one
+# repo's, so its keys never collide with each other; what crosses repos is the
+# ORIGIN column, which a multi-repo spawn stamps as `<slug>:issue-<N>` (#789), and
+# the per-fleet fold file, which two repos' `issue-12` rows would share. So: the
+# fold file gets the repo's slug as a suffix, and landed_local_origins drops THIS
+# ledger's own `<slug>:` from col 11 — a parent in the same repo then joins by the
+# bare key it always has, and a parent in ANOTHER repo keeps its prefix, matches no
+# row here, and renders as the ↳ tag of an orphan. A one-repo fleet: both empty.
+LANDED_FOLD_SLUG=''
+landed_scope() {
+  LANDED_FOLD_SLUG=''
+  [ -n "${FLEET_SESSION:-}" ] && command -v fleet_multirepo >/dev/null 2>&1 \
+    && fleet_multirepo "$FLEET_SESSION" || return 0
+  LANDED_FOLD_SLUG=$(fleet_slug "$(fleet_norm_repo "${1:-}")")
+}
+landed_local_origins() {
+  if [ -z "$LANDED_FOLD_SLUG" ]; then cat; return; fi
+  awk -F'\t' -v OFS='\t' -v p="$LANDED_FOLD_SLUG:" \
+    'NF >= 11 && index($11, p) == 1 { $11 = substr($11, length(p) + 1) } { print }'
 }
 landed_is_open() { # <root key, @origin spelling> → 0 when its block is unfolded
   local f; f=$(landed_fold_file)
@@ -565,7 +587,8 @@ cmd_rows() {
     else printf -v fld_out "%s%*s" "$s" $((w-n)) ''; fi; }
   local now; now=$(date +%s 2>/dev/null)
 
-  local out; out=$(read_ledger "$repo")
+  landed_scope "$repo"
+  local out; out=$(read_ledger "$repo" | landed_local_origins)
 
   # --- nesting (issue #503, applied to the closed list) ------------------------
   # Ledger col 11 IS the spawning session — recorded at land/close time from the
@@ -956,7 +979,8 @@ cmd_fold() {
   case "$target" in landed:*) ;; *) return 0 ;; esac
 
   local repo; repo=$(rows_repo)
-  local out; out=$(read_ledger "$repo"); [ -n "$out" ] || return 0
+  landed_scope "$repo"
+  local out; out=$(read_ledger "$repo" | landed_local_origins); [ -n "$out" ] || return 0
 
   # the same key table cmd_rows builds — and, in the same pass, which key the
   # keystroke landed on, matched through landed_target so the mapping from a row to

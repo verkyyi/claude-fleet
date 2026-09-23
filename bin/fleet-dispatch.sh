@@ -273,6 +273,14 @@ dispatch_fleet() { (
     { if ($1 != "") print $1
       if ($2 ~ /^issue-[0-9]+$/) { n=$2; sub(/^issue-/, "", n); print n } }' | sort -u)
   is_live() { printf '%s\n' "$live" | grep -qxF "$1"; }
+  # A fleet hosting 2+ repos keys the live set by (repo, N) (issue #790): repo A's
+  # #12 window must not block spawning repo B's #12. A window whose repo is unknown
+  # (`#N`) still blocks N in every repo — a skipped spawn retries next tick, a
+  # double spawn spends tokens twice. A one-repo fleet keeps the set above as is.
+  if fleet_multirepo "$sess"; then
+    live=$(fleet_bound_windows "$sess" | cut -f1 | sort -u)
+    is_live() { printf '%s\n' "$live" | grep -qxF -e "$(fleet_norm_repo "$repo")#$1" -e "#$1"; }
+  fi
 
   spawned=0; considered=0
   while IFS=$(printf '\t') read -r tier num; do
