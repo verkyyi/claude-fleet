@@ -22,7 +22,7 @@ import unicodedata
 
 BIN = Path(__file__).absolute().parent  # preserve the selftest shadow root
 US = "\x1f"
-VIEW_VERSION = "9"  # #965: 。．？ on an empty line act as . ?; replace live v8 views once
+VIEW_VERSION = "10"  # #996: no-repo ($HOME) sessions get the view; replace live v9 views once
 # ↑↓ follow (issue #822): an arrow moves the highlight at once and switches to
 # it only after this much quiet. A held key on a slow link is one switch, not
 # one per row, and a row passed over is never selected — so the wake hook's
@@ -108,15 +108,16 @@ def leave_navigation(session):
 def sync(session, enabled, width, lock):
     info = fields(session + ":", US.join(("#{window_id}", "#{window_name}",
                   "#{window_width}", "#{session_attached}", "#{@issue}",
-                  "#{@raw}", "#{@worktree}", "#{window_zoomed_flag}")))
-    if len(info) != 8:
+                  "#{@raw}", "#{@worktree}", "#{@norepo}", "#{window_zoomed_flag}")))
+    if len(info) != 9:
         return
-    window, name, cols, attached, issue, raw, worktree, zoomed = info
+    window, name, cols, attached, issue, raw, worktree, norepo, zoomed = info
     all_panes = panes(session)
     workers = [p for p in all_panes if p[1] == window and p[2] != "1" and p[4] != "1"]
     wanted = (enabled == "1" and attached != "0" and
               name not in ("plan", "dash", "backlog") and
-              bool(issue or raw == "1" or worktree) and bool(workers) and
+              # A task: issue worker, repo scratch, or a no-repo session in $HOME (#996).
+              bool(issue or raw == "1" or worktree or norepo == "1") and bool(workers) and
               int(cols) >= width + 1 + 80)
     if not wanted or zoomed == "1":
         leave_navigation(session)

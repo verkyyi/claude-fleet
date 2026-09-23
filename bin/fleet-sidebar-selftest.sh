@@ -838,6 +838,43 @@ try:
     wait_for(lambda: painted('not reaped'), 'a refused reap was silent')
     check(hub in windows(), 'the menu reap disposed of the hub')
 
+    # A no-repo session in $HOME (issue #996) carries `@norepo 1` and none of
+    # @issue / @raw / @worktree — it still gets the view, and prefix e hides and
+    # brings it back there. A plain window with none of the four marks: none.
+    before = set(windows())
+    spawned = command(['bash', str(bin_dir / 'dash-raw-session.sh'), '--no-repo',
+                       '--name', 'home-work', 'fleet-test'], stdin=subprocess.DEVNULL)
+    check(spawned.returncode == 0, 'the no-repo spawn failed: ' + spawned.stderr)
+    wait_for(lambda: set(windows()) - before, 'dash-raw-session.sh --no-repo made no window')
+    home = (set(windows()) - before).pop()
+    check(tm('show-options', '-wqv', '-t', home, '@norepo') == '1' and
+          tm('display-message', '-p', '-t', home, '#{@issue}#{@raw}#{@worktree}') == '',
+          'the no-repo fixture carries a repo mark')
+    tm('select-window', '-t', home)
+    snap = os.environ.get('FLEET_SIDEBAR_SNAPSHOT')  # evidence only: the window as seen
+    if snap:
+        time.sleep(2)
+        Path(snap).write_text(''.join(
+            '[%s]\n%s\n' % (pane, tm('capture-pane', '-p', '-t', pane.split()[0]))
+            for pane in tm('list-panes', '-t', home, '-F',
+                           '#{pane_id} left=#{pane_left} width=#{pane_width} sidebar=#{@sidebar}').splitlines()))
+    wait_for(lambda: view_on(home) == [side], 'a no-repo ($HOME) session got no task bar')
+    os.write(terminal, b'\x02e')
+    wait_for(lambda: not views(), 'prefix e did not hide the task bar in a no-repo session')
+    os.write(terminal, b'\x02e')
+    wait_for(lambda: bool(view_on(home)),
+             'prefix e did not bring the task bar back in a no-repo session')
+    side = view_on(home)[0]
+    plain = tm('new-window', '-d', '-P', '-F', '#{window_id}', '-n', 'plain', 'sleep 600')
+    tm('select-window', '-t', plain)
+    call()
+    wait_for(lambda: not view_on(plain), 'a window with no @issue/@raw/@worktree/@norepo got a task bar')
+    tm('kill-window', '-t', plain)
+    tm('kill-window', '-t', home)
+    tm('select-window', '-t', w1)
+    wait_for(lambda: bool(view_on(w1)), 'the view did not return after the no-repo leg')
+    side = view_on(w1)[0]
+
     # Hide is prefix e — from the sidebar's own key table too — never a click and
     # never a letter.
     os.write(terminal, b'\x02E')
