@@ -54,7 +54,7 @@ FLEET_BASE_BRANCH="main"
 # FLEET_AGENT / FLEET_MCP_CONFIG), these keys are honored PER REPO — set one in a
 # repo's overlay and that repo's windows, worktrees and daemons passes use it; leave
 # it unset there and the repo gets the fleet conf's value (then this file's):
-#   per-repo: FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET_BASE_DEPS FLEET_SLEEP_MCP_RESTARTABLE FLEET_SCRATCH_POOL FLEET_ISSUE_BRIDGE FLEET_CLEANUP FLEET_AUTOFILL
+#   per-repo: FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET_BASE_DEPS FLEET_SLEEP_MCP_RESTARTABLE FLEET_SCRATCH_POOL FLEET_ISSUE_BRIDGE FLEET_CLEANUP FLEET_AUTOFILL FLEET_WEBHOOK
 # (That line is kept in lockstep with _FLEET_REPO_OVERRIDABLE in bin/fleet-lib.sh
 # by bin/repo-settings-selftest.sh.) Setting one to "" in an overlay switches it
 # off for that repo. `fleet-repo.sh get <KEY> <owner/repo>` prints what a repo sees.
@@ -549,9 +549,10 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # missed delivery costs only freshness, never correctness.
 #
 # PREREQ: `gh extension install cli/gh-webhook` (it registers a repo webhook — needs
-# repo admin). One machine-wide daemon forwards one stream per opted-in LIVE fleet
-# repo. Spends no LLM tokens, but keeps a `gh webhook forward` process per repo. See
-# docs/WEBHOOK.md.
+# repo admin). One machine-wide daemon forwards one stream per opted-in repo of each
+# LIVE fleet — EVERY repo the fleet hosts (issue #800); a repos/<slug>.conf may set
+# its own FLEET_WEBHOOK to differ. Spends no LLM tokens, but keeps a `gh webhook
+# forward` process per repo. See docs/WEBHOOK.md.
 # @label=Fresh status via gh webhook forward @group=bridge @tier=common @scope=fleet @edit=bool
 #FLEET_WEBHOOK=0
 # The localhost port the handler binds (127.0.0.1 ONLY) and every forward re-POSTs to.

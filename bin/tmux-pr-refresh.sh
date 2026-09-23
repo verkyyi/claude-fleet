@@ -148,6 +148,13 @@ if [ -n "$TARGET_REPO" ]; then
   _tr=$(fleet_norm_repo "$TARGET_REPO"); _ts=''
   SESSMAP=$(fleet_sessmap_file)
   [ -f "$SESSMAP" ] && _ts=$(awk -F'\t' -v r="$_tr" '$3==r {print $1; exit}' "$SESSMAP" 2>/dev/null)
+  # The sessmap names a session's conf repo only; a repo a fleet hosts through a
+  # repos/ overlay (issue #800) resolves to the fleet that hosts it instead.
+  if [ -z "$_ts" ]; then
+    while IFS=$'\t' read -r _s _; do
+      [ -n "$_s" ] && fleet_repo_hosted "$_s" "$_tr" && { _ts=$_s; break; }
+    done < <(fleet_each_conf)
+  fi
   queue "$_tr" "$_ts"
 else
   [ -n "$REPO" ] && queue "$(fleet_norm_repo "$REPO")" "${FLEET_SESSION:-}"

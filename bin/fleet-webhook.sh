@@ -17,8 +17,10 @@
 # SHAPE — one long-lived (KeepAlive) supervisor, like the spinner, running:
 #   • ONE local handler on http://127.0.0.1:<port> (python3, a fleet dep) that
 #     receives each delivery and hands it to `--route`.
-#   • ONE `gh webhook forward` per opted-in LIVE fleet repo, all pointed at that
-#     same --url. Fanned out over every live fleet, deduped per
+#   • ONE `gh webhook forward` per opted-in repo of every LIVE fleet — each repo
+#     the fleet HOSTS (issue #800: the fleet conf's + every repos/ overlay's, opt-in
+#     resolved per repo), all pointed at that same --url. Fanned out over every
+#     live fleet, deduped per
 #     repo (single forward per repo), dead forwards auto-restarted each rescan.
 #     SLEEP-SURVIVAL (issue #391): before each (re)spawn we REAP the repo's orphaned
 #     forwarder hook (a prior forward's hook that GitHub's relay left registered when
@@ -47,7 +49,9 @@
 # correctness. This daemon is a freshness optimization, not a replacement.
 #
 # OFF BY DEFAULT — a fleet opts in with FLEET_WEBHOOK=1 (like the other
-# token/infra-spending daemons). No opted-in live fleet ⇒ this idles cheaply.
+# token/infra-spending daemons), which covers every repo it hosts; a repo's own
+# repos/<slug>.conf may set FLEET_WEBHOOK=0 (or =1) to differ (issue #800). No
+# opted-in live fleet ⇒ this idles cheaply.
 #
 # Modes (default = the supervisor):
 #   (none)              supervise: handler + forwards, restart-on-death, rescan loop
@@ -55,8 +59,9 @@
 #                       set), and kick the targeted refresh for its repo. NO cache
 #                       write of its own. Ignores unknown event types.
 #   --handler           run the localhost python3 receiver (spawned by supervise)
-#   --desired [sess..]  print the repos to forward (opted-in, deduped); default set
-#                       is the live fleet sockets, or the given sessions
+#   --desired [sess..]  print the repos to forward (every hosted repo that opts in,
+#                       deduped); default set is the live fleet sockets, or the
+#                       given sessions
 #   --reconcile [sess..] one reconcile pass: start missing forwards (each paired
 #                       with a catch-up refresh on (re)connect), reap departed
 #   --once              with supervise: run a single handler-start + reconcile, then
@@ -178,7 +183,7 @@ wh_debounced() { # $1=class $2=slug
 # cache directly — it invokes the owner (pr-refresh / collector), which are the
 # single writers. Unknown event types are ignored.
 wh_route() { # $1=event
-  local event="${1:-}" class row repo num slug
+  local event="${1:-}" class row repo num slug fleet at
   case "$event" in
     pull_request|check_run|check_suite|status) class="pr" ;;
     issues)                                    class="issues" ;;
@@ -196,9 +201,12 @@ EOF
   if wh_debounced "$class" "$slug"; then
     log "route: $event $repo${num:+ #$num} — debounced (<${DEBOUNCE}s)"; return 0
   fi
+  # (fleet, repo) — which fleet hosts it, and the slug whose caches the kick
+  # refreshes (issue #800): one line per delivery says where it went.
+  fleet=$(wh_repo_fleet "$repo"); at="[${fleet:-no fleet} · $slug]"
   case "$class" in
-    pr)     log "route: $event $repo${num:+ #$num} → pr-refresh --repo";  "$PR_REFRESH_CMD" --repo "$repo" >/dev/null 2>&1 || log "route: pr-refresh kick failed for $repo" ;;
-    issues) log "route: $event $repo${num:+ #$num} → collect --issues";  "$ISSUES_REFRESH_CMD" --issues "$repo" >/dev/null 2>&1 || log "route: issues kick failed for $repo" ;;
+    pr)     log "route: $event $repo${num:+ #$num} $at → pr-refresh --repo";  "$PR_REFRESH_CMD" --repo "$repo" >/dev/null 2>&1 || log "route: pr-refresh kick failed for $repo" ;;
+    issues) log "route: $event $repo${num:+ #$num} $at → collect --issues";  "$ISSUES_REFRESH_CMD" --issues "$repo" >/dev/null 2>&1 || log "route: issues kick failed for $repo" ;;
   esac
   return 0
 }
@@ -248,16 +256,21 @@ PY
 }
 
 # ============================ fleet selection ==================================
-# session → its FLEET_REPO IFF that fleet opts in (FLEET_WEBHOOK=1), else empty.
-# Read in a subshell so the per-fleet conf never leaks into ours (we don't
-# fleet_load_conf: FLEET_WEBHOOK is a plain per-fleet bool, FLEET_REPO is identity).
-wh_opted_in_repo() { # $1=session
-  local sess="${1:-}" conf on repo
+# session → every repo it HOSTS (issue #788) that opts in, one per line (issue #800).
+# Opt-in is per repo: FLEET_WEBHOOK resolves through fleet_repo_conf_get, so a
+# repos/<slug>.conf overlay may set its own 1/0 and a repo whose overlay leaves it
+# unset inherits the fleet conf's value (then the global fleet.conf's). Subshelled
+# there, so no conf leaks into ours. Degenerate (no overlay): the fleet conf's one
+# FLEET_REPO iff that conf opts in — exactly what a one-repo fleet always forwarded.
+wh_opted_in_repos() { # $1=session
+  local sess="${1:-}" conf repo
   conf=$(fleet_conf_file "$sess"); [ -f "$conf" ] || return 0
-  IFS=$'\t' read -r on repo < <( ( . "$conf" >/dev/null 2>&1
-    printf '%s\t%s\n' "${FLEET_WEBHOOK:-0}" "$(fleet_norm_repo "${FLEET_REPO:-}")" ) )
-  [ "$on" = 1 ] || return 0
-  [ -n "$repo" ] && printf '%s\n' "$repo"
+  while IFS= read -r repo; do
+    [ -n "$repo" ] || continue
+    [ "$(fleet_repo_conf_get "$sess" "$repo" FLEET_WEBHOOK)" = 1 ] && printf '%s\n' "$repo"
+  done <<EOF
+$(fleet_repos "$sess")
+EOF
   return 0
 }
 
@@ -269,13 +282,32 @@ wh_desired_repos() { # [session...]
   if [ "$#" -gt 0 ]; then sessions=$(printf '%s\n' "$@"); else sessions=$(fleet_sockets); fi
   while IFS= read -r sess; do
     [ -n "$sess" ] || continue
-    repo=$(wh_opted_in_repo "$sess"); [ -n "$repo" ] || continue
-    case "$seen" in *" $repo "*) continue;; esac
-    seen="$seen$repo "
-    printf '%s\n' "$repo"
+    while IFS= read -r repo; do
+      [ -n "$repo" ] || continue
+      case "$seen" in *" $repo "*) continue;; esac
+      seen="$seen$repo "
+      printf '%s\n' "$repo"
+    done <<INNER
+$(wh_opted_in_repos "$sess")
+INNER
   done <<EOF
 $sessions
 EOF
+}
+
+# repo → the fleet that hosts it (issue #800), for the route log: a delivery is
+# routed to (fleet, repo) — the caches it kicks are the repo's own fleets/<slug>/.
+# First hosting fleet wins; empty when no configured fleet hosts it (the refresh
+# still runs — polling-equivalent, localhost-only — but the log says so).
+wh_repo_fleet() { # $1=repo
+  local s _cf
+  while IFS=$'\t' read -r s _cf; do
+    [ -n "$s" ] || continue
+    fleet_repo_hosted "$s" "$1" && { printf '%s' "$s"; return 0; }
+  done <<EOF
+$(fleet_each_conf)
+EOF
+  return 0
 }
 
 # =================== forwarder-hook reconcile (issue #391) =====================
@@ -505,7 +537,7 @@ while [ "$#" -gt 0 ]; do
     --desired)    MODE=desired;   shift; ARGS=("$@"); break ;;
     --reconcile)  MODE=reconcile; shift; ARGS=("$@"); break ;;
     --once)       WEBHOOK_ONCE=1 ;;
-    -h|--help)    sed -n '2,52p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)    sed -n '2,68p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)           log "unknown flag: $1"; exit 2 ;;
     *)            log "unexpected argument: $1"; exit 2 ;;
   esac
