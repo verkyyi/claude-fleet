@@ -214,6 +214,10 @@ spawn() {  # <name> <runner> <sid> <cwd> → window id (a claude-bearing window 
 w1=$(spawn w1 runner-hook sid-1111 "$WORK/wt1")
 w2=$(spawn w2 runner-stuck sid-2222 "$WORK/wt2")
 w3=$(spawn w3 runner-nohook sid-3333 "$WORK/wt3")
+# issue #936: w1's outcome already reached its parent (fleet-report-parent.sh
+# stamps exactly this); w2 and w3 never reported. The move must hand each window
+# back its OWN value, not a blanket clear.
+TM set-window-option -t "$w1" @reported 1
 sleep 1.5
 diag() { printf 'windows: %s\nlaunched: %s\ntyped: %s\n' "$(TM list-windows -t "$SESS" -F '#{window_id}:#{window_name}' | tr '\n' ' ')" "$(cat "$WORK/launched" 2>/dev/null)" "$(cat "$WORK/typed" 2>/dev/null)"; }
 
@@ -283,16 +287,25 @@ ok; [ "$(TM display-message -p -t "$nw1" '#{history_size}')" = 0 ] || fail "new 
 ok; grep -q -- '--resume sid-1111 Your previous turn was interrupted' "$WORK/launched" 2>/dev/null \
   || fail "the launcher must get --resume <sid> + the interrupted-turn nudge (launched: $(cat "$WORK/launched" 2>/dev/null))"
 ok; printf '%s' "$out" | grep -q 'w1 .*acctA → acctB' || fail "the report must verify A → B off the new process's token: $out"
+# #936: a DELIVERED report survives the move — cleared, the resumed session's next
+# Stop sends the parent a late "stopped" duplicate after its MERGED
+ok; [ "$(TM display-message -p -t "$nw1" '#{@reported}')" = 1 ] \
+  && printf 'case #936 reported: new w1 @reported=%s (was 1)\n' "$(TM display-message -p -t "$nw1" '#{@reported}')" \
+  || fail "a window that already reported must keep @reported 1 after the move (got '$(TM display-message -p -t "$nw1" '#{@reported}')')"
 # w2: stuck claude → left alone, still there, not launched
 ok; TM display-message -p -t "$w2" '#{pane_pid}' >/dev/null 2>&1 || fail "a claude that ignores /exit must be left as is (window gone) — $out"
 ok; printf '%s' "$out" | grep -q 'w2 .*did not exit' || fail "the stuck window must be reported: $out"
 ok; ! grep -q 'sid-2222' "$WORK/launched" 2>/dev/null || fail "a stuck session must never be relaunched"
+ok; [ -z "$(TM display-message -p -t "$w2" '#{@reported}')" ] \
+  || fail "#936: a window left as is must not keep the move's @reported suppression — it would never report (got '$(TM display-message -p -t "$w2" '#{@reported}')')"
 # w3: no hook → relaunch typed IN PLACE into the surviving shell, same window
 ok; TM display-message -p -t "$w3" '#{pane_pid}' >/dev/null 2>&1 || fail "no-hook path must keep the window — $out $(diag)"
 for _ in $(seq 1 20); do grep -q 'sid-3333' "$WORK/typed" 2>/dev/null && break; sleep 0.3; done
 ok; grep -q -- "--resume 'sid-3333'" "$WORK/typed" 2>/dev/null || fail "no-hook path must type the resume line into the shell (typed: $(cat "$WORK/typed" 2>/dev/null))"
 ok; [ "$(TM display-message -p -t "$w3" '#{@migrated_banner}')" = "$WALL" ] && [ -n "$(TM display-message -p -t "$w3" '#{@migrated_at}')" ] \
   || fail "no-hook path must stamp @migrated_at + @migrated_banner on the reused window"
+ok; [ -z "$(TM display-message -p -t "$w3" '#{@reported}')" ] \
+  || fail "#936: an unreported session relaunched in place still owes its report — @reported must be empty (got '$(TM display-message -p -t "$w3" '#{@reported}')')"
 ok; printf '%s' "$out" | grep -q 'moved 2, skipped 1' || fail "summary must be 'moved 2, skipped 1': $out"
 
 # --- a second pass finds nothing benched (w1 is on B now; w2's truth is still A but
@@ -317,6 +330,10 @@ ok; kill -0 "$bgpid" 2>/dev/null || fail "--dry-run must not stop anything"
 : > "$WORK/launched"
 out=$(bash "$SCRIPT" --session "$SESS" --force-bg "$w5" 2>&1)
 ok; printf '%s' "$out" | grep -q 'w5 .*acctA → acctB' || fail "--force-bg must move w5 A → B: $out $(diag)"
+nw5=$(TM list-windows -t "$SESS" -F '#{window_id} #{window_name}' | awk '$2=="w5"{print $1}' | head -1)
+ok; [ -n "$nw5" ] && [ "$nw5" != "$w5" ] && [ -z "$(TM display-message -p -t "$nw5" '#{@reported}')" ] \
+  && printf 'case #936 unreported: new w5 @reported=%s (was empty)\n' "'$(TM display-message -p -t "$nw5" '#{@reported}')'" \
+  || fail "#936: an unreported session's NEW window must have @reported empty (window '$nw5', got '$(TM display-message -p -t "$nw5" '#{@reported}')')"
 ok; printf '%s' "$out" | grep -q "stopped 1 background command" || fail "the move must report what it stopped: $out"
 for _ in $(seq 1 20); do kill -0 "$bgpid" 2>/dev/null || break; sleep 0.3; done
 ok; ! kill -0 "$bgpid" 2>/dev/null || fail "--force-bg must stop the background command Claude left running (pid $bgpid)"
