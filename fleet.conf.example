@@ -1530,6 +1530,12 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # are parked in a `<fleet>-pool` holding session, which has no plan/dash window, so
 # they are invisible to the dash and to every session count. Warming refuses to
 # start one when the fleet is already at its session cap.
+#
+# In a fleet hosting 2+ repos this is PER REPO (issue #797): each hosted repo keeps
+# its own warm entries (stamped @repo, all in the one holding session), and a
+# scratch only ever claims one of its own repo's. A repo overlay
+# (fleets/<sess>/repos/<slug>.conf) may set its own FLEET_SCRATCH_POOL; unset
+# there, it takes this fleet value — so N here means N per hosted repo.
 # @label=Warm scratch sessions @group=spawn @tier=common @scope=fleet @edit=int
 #FLEET_SCRATCH_POOL=0
 

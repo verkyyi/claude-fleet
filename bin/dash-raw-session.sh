@@ -301,11 +301,12 @@ fi
 # argument, which only a cold spawn can carry (see the header).
 warm=0; win=""; slug=""; wt=""
 claimed=""
-# The pool is built from the fleet conf's own repo, so in a 2+ repo fleet only a
-# scratch for THAT repo may claim one (per-repo pools: #797); a no-repo one never.
+# One pool per hosted repo (issue #797): in a 2+ repo fleet the claim names the
+# scratch's repo, so it only ever gets a window warmed from THAT repo's worktree.
+# A no-repo scratch never claims. A one-repo fleet passes no --repo: unchanged.
 _pool_ok=1; [ "$NOREPO" = 1 ] && _pool_ok=0
-[ "$MULTI" = 1 ] && [ "$REPO_ARG" != "$(fleet_repos "$SESS" | head -n1)" ] && _pool_ok=0
-[ "$_pool_ok" = 1 ] && [ -z "$PROMPT" ] && { [ -z "$AGENT" ] || [ "$AGENT" = "${FLEET_AGENT:-claude}" ]; } && claimed=$(bash "$BIN/scratch-pool.sh" claim "$SESS" 2>/dev/null | head -1)
+_pool_repo=''; [ "$MULTI" = 1 ] && _pool_repo="$REPO_ARG"
+[ "$_pool_ok" = 1 ] && [ -z "$PROMPT" ] && { [ -z "$AGENT" ] || [ "$AGENT" = "${FLEET_AGENT:-claude}" ]; } && claimed=$(bash "$BIN/scratch-pool.sh" claim "$SESS" ${_pool_repo:+--repo "$_pool_repo"} 2>/dev/null | head -1)
 if [ -n "$claimed" ]; then
   warm=1
   win=${claimed%%	*}; _rest=${claimed#*	}; slug=${_rest%%	*}; wt=${_rest#*	}

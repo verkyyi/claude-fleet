@@ -657,9 +657,9 @@ watching.
 ## Assumptions & limitations
 
 - **A fleet hosts one or more repos, all on one tmux server.** Each window's repo
-  is `@repo`; PR/issue state is fetched per hosted repo. The issue bridge,
-  webhooks, autofill and the warm scratch pool cover the fleet conf's own repo
-  only for now (EPIC #787 reserve).
+  is `@repo`; PR/issue state is fetched per hosted repo. The warm scratch pool
+  keeps one pool per hosted repo (#797). The issue bridge, webhooks and autofill
+  cover the fleet conf's own repo only for now (EPIC #787 reserve).
 - Windows named `dash`, `plan`, or `backlog` are treated as panels, not
   Claude sessions.
 - The dashboard/hub sits at the lowest index (slot 1), placed once at spawn.
