@@ -40,6 +40,9 @@ SESSMAP=$(fleet_sessmap_file)
 if [ -f "$SESSMAP" ]; then
   while IFS=$'\t' read -r s _sl r; do
     [ -z "$s" ] && continue
+    # the collector rows every session on a fleet's socket — its warm-pool holding
+    # session included, which is not a fleet (issue #1020)
+    fleet_is_pool_session "$s" && continue
     case "$seen" in *" $s "*) continue;; esac
     emit "$s" "$r" ''
   done < "$SESSMAP"
