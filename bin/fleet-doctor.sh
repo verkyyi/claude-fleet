@@ -554,28 +554,41 @@ EOF
 fi
 
 # --- webhook daemon (optional: fresh ~1s PR/issue/CI status via gh webhook forward) ---
-# OFF unless a fleet's conf sets FLEET_WEBHOOK=1 (issue #315). When ON it needs the
-# cli/gh-webhook extension (registers the repo webhook against GitHub's hosted relay
-# — no public endpoint) + gh + python3 (the localhost handler). Flag an armed fleet
-# missing any of them; the extension is the one that's easy to forget.
-if [ -d "$conf_dir" ]; then
-  wharmed=0
-  while IFS= read -r cf; do
-    [ -n "$cf" ] || continue
-    val=$(sed -n 's/^[[:space:]]*FLEET_WEBHOOK[[:space:]]*=[[:space:]]*//p' "$cf" | head -1 | tr -d "\"' 	")
-    [ "$val" = 1 ] && wharmed=$((wharmed+1))
-  done <<EOF
-$(_fleet_confs "$conf_dir")
-EOF
-  if [ "$wharmed" -gt 0 ]; then
+# OFF unless a hosted repo opts in with FLEET_WEBHOOK=1 (issue #315; per repo since
+# #800). When ON it needs the cli/gh-webhook extension (registers the repo webhook
+# against GitHub's hosted relay — no public endpoint) + gh + python3 (the localhost
+# handler). Flag an armed setup missing any of them; the extension is the one
+# that's easy to forget.
+# The count is the daemon's OWN resolution (issue #1004): every hosted repo of every
+# configured fleet whose FLEET_WEBHOOK resolves to 1 through fleet_repo_conf_get —
+# its repos/<slug>.conf overlay, else the fleet conf, else the login-wide settings /
+# the install's fleet.conf — deduped, exactly as `fleet-webhook.sh --desired` does.
+# A grep of each fleet conf for a literal FLEET_WEBHOOK=1 missed both a global
+# opt-in (the live install sets it there: no webhook line at all while the daemon
+# forwarded) and an overlay-only one. KEEP IN SYNC with wh_opted_in_repos in
+# bin/fleet-webhook.sh. Configured fleets, not live sockets: doctor runs anywhere.
+if [ -d "$conf_dir" ] && [ -f "$(dirname "$0")/fleet-lib.sh" ] && command -v bash >/dev/null 2>&1; then
+  wh_sessions=$(_fleet_confs "$conf_dir" | sed -e 's#/conf$##' -e 's#\.conf$##' -e 's#.*/##')
+  wh_repos=''
+  [ -n "$wh_sessions" ] && wh_repos=$(FLEET_CONF_DIR="$conf_dir" bash -c '
+    . "$1" >/dev/null 2>&1 || exit 0; shift
+    for s in "$@"; do
+      fleet_repos "$s" | while IFS= read -r r; do
+        [ -n "$r" ] || continue
+        [ "$(fleet_repo_conf_get "$s" "$r" FLEET_WEBHOOK)" = 1 ] && printf "%s\n" "$r"
+      done
+    done' _ "$(dirname "$0")/fleet-lib.sh" $wh_sessions 2>/dev/null | awk 'NF && !seen[$0]++')
+  whn=$(printf '%s\n' "$wh_repos" | grep -c .)
+  if [ "$whn" -gt 0 ]; then
+    whlist=$(printf '%s\n' "$wh_repos" | paste -sd, - | sed 's/,/, /g')
     if ! command -v gh >/dev/null 2>&1; then
-      warn webhook "$wharmed fleet(s) set FLEET_WEBHOOK=1 but gh is missing — nothing to forward"
+      warn webhook "$whn repo(s) opt in (FLEET_WEBHOOK=1: $whlist) but gh is missing — nothing to forward"
     elif ! gh extension list 2>/dev/null | grep -q 'gh-webhook'; then
-      warn webhook "$wharmed fleet(s) set FLEET_WEBHOOK=1 but the cli/gh-webhook extension is missing — \`gh extension install cli/gh-webhook\`"
+      warn webhook "$whn repo(s) opt in (FLEET_WEBHOOK=1: $whlist) but the cli/gh-webhook extension is missing — \`gh extension install cli/gh-webhook\`"
     elif ! command -v python3 >/dev/null 2>&1; then
-      warn webhook "$wharmed fleet(s) set FLEET_WEBHOOK=1 but python3 is missing — the localhost handler can't run"
+      warn webhook "$whn repo(s) opt in (FLEET_WEBHOOK=1: $whlist) but python3 is missing — the localhost handler can't run"
     else
-      pass webhook "$wharmed fleet(s) with FLEET_WEBHOOK=1 — fresh ~1s PR/issue/CI status (no public endpoint)"
+      pass webhook "$whn repo(s) forwarded ($whlist) — fresh ~1s PR/issue/CI status (no public endpoint)"
     fi
     printf '        note: needs com.claude-fleet.webhook installed (KeepAlive) + `gh extension install cli/gh-webhook`; polling (collector + pr-refresh) stays the backstop.\n'
   fi
