@@ -667,21 +667,30 @@ try:
     wait_for(menu_open, 'a second `.` did not reopen the menu')
     os.write(terminal, b't')
     wait_for(lambda: tm('show-options', '-wqv', '-t', w1, '@pin') == '', 'the menu\'s unpin did not unpin')
-    # Rename: tmux's command-prompt, the name parked on the window and applied
-    # by dash-rename.sh --wid — quotes, $, # and ; survive, no shell sees them.
+    # Rename: the input line becomes the name editor, pre-filled; Enter hands
+    # the name to dash-rename.sh --wid as argv — quotes, $, # and ; survive.
     odd = "名'$HOME\"#;x"
     del screen_out[:]
     os.write(terminal, b'.')
     wait_for(menu_open, 'the menu did not open for rename')
     os.write(terminal, b'r')
-    wait_for(lambda: painted('改名:'), 'rename did not open its prompt')
+    wait_for(lambda: input_line(side) == '改名› worker-one▏',
+             'rename did not pre-fill the input line: %r' % input_line(side))
+    check(navigation(), 'rename did not keep the keyboard on the sidebar')
     os.write(terminal, b'\x15')  # C-u: clear the pre-filled current name
-    time.sleep(.2)
-    os.write(terminal, odd.encode() + b'\r')
-    wait_for(lambda: tm('display-message', '-p', '-t', w1, '#{window_name}') == odd,
-             'the menu rename did not apply: %r' % tm('display-message', '-p', '-t', w1, '#{window_name}'))
-    check(current() == w1 and tm('show-options', '-wqv', '-t', w1, '@rename_to') == '',
-          'rename switched windows or left its parked name behind')
+    wait_for(lambda: input_line(side) == '改名› ▏', '⌃u did not clear the rename line')
+    type_keys(odd)
+    wait_for(lambda: input_line(side) == '改名› ' + odd + '▏', 'the odd name did not type: %r' % input_line(side))
+    os.write(terminal, b'\r')
+    # tmux <=3.4 vis-escapes a window name, and again in format output (`$`
+    # reads back backslashed; the hub's own rename included). `odd` has no
+    # backslash, so dropping them compares the name itself — $HOME unexpanded.
+    renamed = lambda: tm('display-message', '-p', '-t', w1, '#{window_name}')
+    wait_for(lambda: renamed() == odd or (server_version() < (3, 5) and renamed().replace('\\', '') == odd),
+             'the menu rename did not apply')
+    check(current() == w1 and tm('show-options', '-pqv', '-t', side, '@sidebar_rename') == '',
+          'rename switched windows or left its parked id behind')
+    wait_for(lambda: tasks_cue(side), 'the input line did not return to the placeholder after rename')
     tm('rename-window', '-t', w1, 'worker-one')
     os.write(terminal, b'\x1b')
     wait_for(lambda: not navigation(), 'Esc after the menu did not hand input back')

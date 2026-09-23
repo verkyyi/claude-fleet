@@ -67,7 +67,11 @@ sh_run() { printf 'run-shell -b %s' "$(sq "$ctx $1 >/dev/null 2>&1 || :")"; }
 
 items=()
 add() { items+=("$1" "$2" "$3"); }   # name key command
-add "改名…" r "command-prompt -l -I $(sq "$(fe "$name")") -p '改名:' $(sq "set-option -w -t $wid @rename_to \"%%%\" ; $(sh_run "bash $(sq "$BIN/dash-rename.sh") --wid $wid")")"
+# Rename edits in the view's own input line (fleet-sidebar.py `renaming`): park
+# the row's id on the view, keep the keyboard there, and wake it with F12.
+if [ -n "$side" ]; then
+  add "改名…" r "set-option -p -t $side @sidebar_rename $wid ; switch-client -T fleet-sidebar ; send-keys -t $side F12"
+else add "-改名…" r ''; fi
 if [ "$pin" = 1 ]; then add "取消置顶" t "$(sh_run "bash $(sq "$BIN/dash-pin-toggle.sh") $wid")"
 else add "置顶" t "$(sh_run "bash $(sq "$BIN/dash-pin-toggle.sh") $wid")"; fi
 if [ -n "$pr" ]; then add "打开 PR $(fe "$pr")" p "$(sh_run "bash $(sq "$BIN/dash-open-pr.sh") --wid $wid")"

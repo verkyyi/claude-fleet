@@ -31,11 +31,11 @@
 # a landed row, no target, or a row that is not a live window.
 #
 # `--wid <@id|handle> [name]` is the SECOND entry (issue #898): the task sidebar's
-# row menu has no fzf query line, so it opens a tmux `command-prompt` whose
-# template parks the typed name on the window (`@rename_to`) and calls this —
-# the name never passes through a shell. Renames that window by its stable id
-# (never an index) with the same rule as dash-enter.sh's rename branch: an EMPTY
-# name cancels. An explicit [name] argument wins over `@rename_to` (scripts).
+# row menu edits the name in the sidebar's own input line and hands it here as
+# an argv word — no tmux or shell parser ever sees it. Renames that window by its
+# stable id (never an index) with the same rule as dash-enter.sh's rename
+# branch: an EMPTY name cancels. Without [name] it reads `@rename_to` off the
+# window (and clears it) — a seam for callers that can only set an option.
 set -uo pipefail
 C="${TMPDIR:-/tmp}/.claude-dash"; flag="$C/rename_target"
 

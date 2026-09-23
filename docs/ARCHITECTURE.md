@@ -158,9 +158,11 @@ The row menu (issue #898) is the hub list's per-row actions without the hub:
 row — the second tap on a row the first one switched to — opens a tmux
 `display-menu` built by `fleet-sidebar.sh menu <session> <@id>`
 (`bin/fleet-sidebar-menu.sh`; the Python never spells tmux syntax). Every item is
-the hub's own script handed the row's `@id`: rename (`command-prompt`, the name
-parked on the window as `@rename_to` and applied by `dash-rename.sh --wid`, so no
-shell ever sees it), pin (`dash-pin-toggle.sh`), open PR (`dash-open-pr.sh --wid`,
+the hub's own script handed the row's `@id`: rename (the view's own input line
+becomes the name editor, as the hub's ⌃e turns its query line into one — the menu
+parks the `@id` on the view and wakes it with F12; Enter hands the name to
+`dash-rename.sh --wid` as an argv word. Not tmux's `command-prompt`: its template
+re-parses the reply, and tmux 3.4 and 3.7 unescape `%%%` differently), pin (`dash-pin-toggle.sh`), open PR (`dash-open-pr.sh --wid`,
 the worktree's branch looked up in the prmap; greyed with none), answer
 (`dash-popup.sh … dash-answer.sh <sess>:<@id>`; greyed unless the row is
 `needs`), flip new sessions claude⇄codex (`dash-agent-toggle.sh`), reap
