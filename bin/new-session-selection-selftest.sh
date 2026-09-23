@@ -14,10 +14,11 @@
 #   C. real spawns under `all`: highlighted beta row → new window @repo=o/beta;
 #      beta's `(0)` heading → @repo=o/beta; a no-repo row → @norepo 1; nothing
 #      resolvable → today's no-repo scratch.
-#   D. a FILTERED view (current repo = alpha): the selection is ignored, alpha wins.
+#   D. a stale current-repo file (the retired picker's filter, #1034): the selection
+#      still wins — there is no filtered view any more.
 #   E. DEGENERATE — a one-repo fleet: the selection is ignored, byte for byte.
 #   F. the hub's ⌃s / ⌃n / Enter binds pass `{1}:{4}` / `{4}`; ⌃n resolves the
-#      highlighted repo instead of opening the repo picker.
+#      highlighted repo instead of asking which repo.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -150,11 +151,11 @@ has "C: ⌃s (--bg) dispatches with the resolved repo" "$(cat "$WORK/bg.cmd" 2>/
 PATH="$WORK/rs:$PATH" raw --bg --name c10 --selection "$wN:" "$S"
 has "C: ⌃s (--bg) on a no-repo row dispatches --no-repo" "$(cat "$WORK/bg.cmd" 2>/dev/null)" " --no-repo"
 
-# ==== D. a filtered view ============================================================
-fleet_current_repo_set "$S" o/alpha >/dev/null 2>&1 || fail "D: could not pick o/alpha"
-eq "D: filtered to alpha, the resolver says nothing" "$(fleet_selection_repo "$S" "$wB")" ""
-eq "D: filtered to alpha, a beta row still spawns in alpha" "$(spawned "$S" --name d1 --selection "$wB:")" "o/alpha|"
-fleet_current_repo_set "$S" all >/dev/null 2>&1
+# ==== D. a stale current-repo file ==================================================
+printf 'o/alpha\n' > "$FLEET_CONF_DIR/fleets/$S/current-repo"
+eq "D: a stale current-repo file — the resolver still reads the row" "$(fleet_selection_repo "$S" "$wB")" o/beta
+eq "D: …and a beta row spawns in beta" "$(spawned "$S" --name d1 --selection "$wB:")" "o/beta|"
+rm -f "$FLEET_CONF_DIR/fleets/$S/current-repo"
 
 # ==== E. degenerate: one repo =======================================================
 eq "E: one-repo fleet — the resolver says nothing" "$(fleet_selection_repo "$D" hdr:o/solo)" ""
@@ -173,7 +174,6 @@ cat > "$WORK/fz/fzf" <<EOF
 for a in "\$@"; do case "\$a" in --header=*) printf '%s\n' "\${a#--header=}" > "$WORK/fzf.header" ;; esac; done
 exit 130
 EOF
-printf '#!/bin/sh\nprintf picker > "%s/picker"\n' "$WORK" > "$WORK/fz/fleet-pick.sh"
 chmod +x "$WORK/fz/fzf"
 newi() { rm -f "$WORK/fzf.header"; TMUX="$SOCK,1,0" TMUX_PANE="$(opt "$S:plan" pane_id)" PATH="$WORK/fz:$PATH" \
   bash "$BIN/dash-issue-new.sh" confirm --spawn "$@" </dev/null >/dev/null 2>&1; cat "$WORK/fzf.header" 2>/dev/null; }

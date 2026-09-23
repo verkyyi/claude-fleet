@@ -273,7 +273,7 @@ There is no title row inside the sidebar; task descriptions start at row zero.
 **Empty screens (issue #998).** A frame with no session row is never blank: the
 row producer emits ONE inert `hdr` hint row at the top — the hub list reads
 `No sessions — type a name to start one · ⌃n new task` (the key off
-`dash-keymap.sh`), `No sessions in tokenledger — …` for a picked repo; the
+`dash-keymap.sh`); the
 30-column sidebar keeps it short (`No sessions — type a name`, its input line sits
 right below). Under `all` every hosted repo keeps its heading at `(0)`, so an idle
 repo still has a row to start work from. When the LAST session closes there is no
@@ -410,7 +410,6 @@ name, so a fleet is a self-contained, equal unit (`ls .../fleets/` = the fleets)
   fleets/<session>/
     conf              # per-fleet overlay — same keys as fleet.conf.example
     repos/<slug>.conf # a further repo this fleet hosts (issue #788) — see below
-    current-repo      # the repo the dash/backlog is filtered to (`all` = none)
     restore.map       # crash-recovery snapshot (fleet-restore.sh)
     bridge/{seen,since}   # issue-bridge dedup set + watermark (per repo)
     sweep.due         # /sweep scheduling ledger
@@ -501,8 +500,8 @@ Degenerate: every caller takes its historic path when the fleet has no overlay (
 `--repo owner/name` and loads that repo's overlay (`fleet_load_repo_conf`), so the
 worktree comes off that repo's checkout: `dash-issue-session.sh` requires it once
 the fleet hosts 2+ repos (a one-repo fleet defaults to its only repo);
-`dash-raw-session.sh` falls back to the fleet's current repo, and under `all` makes
-a **no-repo** session; `dash-restore-session.sh` falls back to the current repo.
+`dash-raw-session.sh` takes the highlighted row's or heading's repo, else makes
+a **no-repo** session; `dash-restore-session.sh` takes the row's repo.
 Every worker window is stamped `@repo` + `@worktree`. In a 2+ repo fleet the window
 stamps them on ITSELF as the first thing its command runs (`fleet_win_stamp_cmd`),
 because the launcher's window-aware `fleet_load_conf` would otherwise race a
@@ -542,16 +541,18 @@ origin column, and keeps one fold file per repo), and the Fleet Hub adapter
 key). A one-repo fleet keeps the bare keys everywhere —
 `bin/multirepo-identity-selftest.sh` pins both halves.
 
-**The repo picker (issues #793, #980).** The fleet's **current repo**
-(`fleet_current_repo`, default `all`) is one value per fleet, shared by every screen
-attached to it. It is picked in `bin/fleet-pick.sh`, behind the footer's fleet name
-and the dash's pick key (⌃z, `PICK` in `dash-keymap.sh`): `all repos` + one row per
-hosted repo, the current one marked `← viewing`. A pick calls
-`fleet_current_repo_set` and returns — the dash repaints on its next 1Hz tick. A
-one-repo fleet has nothing to pick: a note, no list.
+**One view: `all` (issues #793, #980, #1034).** Every hosted repo shows at once,
+grouped under a heading per repo; a heading (or the highlighted row) picks where a
+new session goes. #793 added a footer repo picker (`fleet-pick.sh`, behind a tap on
+the fleet name and the dash's ⌃z) that narrowed the view to one repo; #1034 removed
+it, since everything since #977/#997 assumes `all`. `fleet_current_repo` survives
+as a function that always answers `all`, so its readers (new session, restore,
+history, issue-file, backlog, raw-session) keep their `all` path unchanged; a stale
+`current-repo` file on disk is ignored, and `fleet-up.sh` deletes it. The footer is
+the bare `#S` in every fleet, and not a tap target.
 
 **No fleet switching (issue #980).** One fleet per login holds every repo (EPIC
-#977), so the picker has no fleet level, nothing detaches and reattaches to another
+#977), so nothing detaches and reattaches to another
 socket, and the orange other-fleet `● N` and its one-tap jump are gone (the spinner
 still publishes `@attn_other_windows` from its per-socket loop; nothing renders
 it). `fleet-attach.sh` lands a leftover second fleet on the most recently active
@@ -560,14 +561,8 @@ another fleet from a fleet pane (a headless caller still names its fleet). Sever
 fleets on one machine means several logins, each with its own — the per-fleet
 sockets (#159) remain the blast-radius rail between them.
 
-Every writer of the current repo republishes the footer label
-(`fleet_repo_label_sync` → the server-global `@fleet_repo_label`). So does each dash
-launch and `fleet-repo.sh add`/`remove`. status-left then reads `<fleet> · <repo
-name>` or `<fleet> · all`, and a one-repo fleet has the option unset (bare `#S`).
 The dash renderers (`tmux-dashboard-rows.sh`, and with it the sidebar, plus
 `dash-fold-toggle.sh`) read one `fleet_dash_repo_frame` per frame:
-- a picked repo shows only its own windows, and a hidden window is no one's parent
-  there;
 - `all` groups the rows by repo (issue #974): one inert heading row per hosted
   repo — idle ones too, as `tokenledger (0)` (issue #998) — `tokenledger (1)`,
   the repo's bare name (`fleet_repo_name`; owner/name
@@ -580,30 +575,31 @@ The dash renderers (`tmux-dashboard-rows.sh`, and with it the sidebar, plus
   new-session path may read. A heading's
   key fields read `hdr`, so every dash bind target no-ops on it and the sidebar's
   cursor steps over it; its count includes children a collapsed parent hides;
-- grouping keeps #790's repo-qualified keys, and the filter runs before them, so a
-  child whose parent is hidden renders as an orphan rather than folding away.
+- grouping keeps #790's repo-qualified keys, so a child folds under its parent
+  across repos.
 
 The short tag (`fleet_repo_short`: `FLEET_REPO_SHORT` in the repo's conf, else its
 initials or first two letters, full name on a collision) is the dash badge only.
 Window names stay bare in a 2+ repo fleet too (`issue-12`, issue #1023 — #793
 used to prefix them `tl·issue-12`); identity is `@repo`/`@issue`, never the name,
 so a bare `issue-12` of repo A never blocks repo B's #12.
-`bin/fleet-pick-repo-selftest.sh` pins the picker, dash and label.
+`bin/repo-view-all-selftest.sh` pins the one view: the picker gone, the footer
+byte-identical in a one-repo fleet, a stale `current-repo` ignored, the dash
+grouping, and the per-spawn ask.
 
-**Backlog for any repo (issue #794).** The backlog follows the current repo too.
-`fleet_backlog_repos` names what it lists — the current repo, or every hosted repo
-under `all` — and `tmux-issues-rows.sh` reads each one's own
+**Backlog for any repo (issue #794).** The backlog lists every hosted repo
+(`fleet_backlog_repos`, in `fleet_repos` order) and `tmux-issues-rows.sh` reads each one's own
 `fleets/<slug>/issues|labels|parents` (`fleet_backlog_cache`), one sorted block per
 repo, each title led by its short tag under `all`. A row gains a 4th field, its
 repo; only that repo's windows mark it bound, so repo A's #12 never hides repo B's.
 Every row action passes the row's repo on as `--repo=` (`{4}` in the fzf binds):
 the preview, ⌃x close, ⌃y priority, comment, ⌃o open, and Enter/⌃g spawn
 (`dash-issue-session.sh --repo`). `fleet_backlog_repo` resolves an action's repo:
-the row's (it must be hosted), else `CF_REPO` through a popup, else the current repo.
-A new issue has no row, so ⌃n, the sidebar and `fleet-issue-file.sh` file into the
-current repo. `fleet-issue-file.sh` prefers the calling window's repo. Under `all`,
-⌃n asks first with `fleet-pick.sh --repo-only` (the same picker, repo rows only, in
-the same popup). `fleet-issue-file.sh` refuses without `--repo` there. A one-repo
+the row's (it must be hosted), else `CF_REPO` through a popup, else nothing — the
+caller refuses. A new issue has no row: `fleet-issue-file.sh` takes the calling
+window's repo and refuses without `--repo` when there is none; the hub's ⌃n takes
+the highlighted row's or heading's repo, and with neither asks first with
+`fleet-repo-ask.sh` (repo rows only, in the same popup). A one-repo
 fleet takes none of these branches: three-field rows, the per-session cache, and
 binds with no `--repo`. `bin/backlog-repo-selftest.sh` pins both halves.
 
@@ -611,7 +607,7 @@ binds with no `--repo`. `bin/backlog-repo-selftest.sh` pins both halves.
 runs the whole path on one throwaway fleet hosting two repos — `fleet-repo.sh add`
 (no gate), issue #12 and a scratch in both repos plus a no-repo session, a real
 collector + pr-refresh tick, A's PR merging, one cleanup tick, the dash and backlog
-under `all` and under a picked repo, and a snapshot → kill → restore round-trip —
+under `all` (a stale `current-repo` file changing nothing), and a snapshot → kill → restore round-trip —
 with a one-repo fleet beside it as the degenerate control. It gives each of the nine
 leak classes EPIC #787 counted (PR/CI by branch, cleanup by bare number, issue-number
 collisions, scratch/origin keys, one MAIN per reaper, worktree-name clash,

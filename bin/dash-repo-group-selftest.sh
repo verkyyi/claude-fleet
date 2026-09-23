@@ -20,21 +20,21 @@
 #   C. INERT — every dash bind target (enter, ⌃x reap, ⌃p PR, ⌃o restore, fold
 #      ←/→, pin, rename, answer, migrate) is a no-op on a heading row's `hdr` keys:
 #      no window selected, set, renamed, killed or restored, and no status nag.
-#   D. DEGENERATE — a one-repo fleet and a picked repo render BYTE-IDENTICAL to a
-#      producer with the grouping switched off (both frames, hub + sidebar).
+#   D. DEGENERATE — a one-repo fleet renders BYTE-IDENTICAL to a producer with the
+#      grouping switched off (both frames, hub + sidebar); a stale current-repo
+#      file (the retired picker's, #1034) changes neither frame.
 #   E. IDLE + EMPTY (issue #998) — under `all` every HOSTED repo keeps its
 #      heading at `(0)` (the `?`/`no repo` ones still hide at 0), the sidebar
 #      heading carries its repo in the state field, and a frame with no session
 #      row gets ONE inert `hdr` hint row: `No sessions — …` under `all` and in a
-#      one-repo fleet, `No sessions in <name> — …` for a picked repo, in both
-#      frames; a frame WITH sessions never draws it.
+#      one-repo fleet, in both frames; a frame WITH sessions never draws it.
 #   F. CROSS-REPO CHILD (issue #1031) — a child whose parent lives in ANOTHER
 #      hosted repo follows its parent: under `all` it renders directly under the
 #      parent, in the parent's group, with `└` and a short repo tag (`⇢tok`) in
 #      both frames; the parent's heading counts it, its own repo's does not; the
 #      parent's default fold hides it and the caret there unfolds it. A same-repo
 #      child wears no tag; an orphan (parent gone) drops back into its own group
-#      with no `└` and no tag; a picked repo and a one-repo fleet stay
+#      with no `└` and no tag; a one-repo fleet stays
 #      byte-identical to grouping switched off with the cross-repo child present.
 # tmux runs on a PRIVATE socket via a PATH shim that logs every call; gh fails.
 set -uo pipefail
@@ -93,7 +93,6 @@ names() { awk -F'|' '{ l = $2; if ($1 == "hdr") { print l; next }
                        sub(/^ *[^ ]+ +(#[0-9]+ +)?. +/, "", l); sub(/ .*/, "", l); print l }'; }
 
 # --- A. headings under `all` ----------------------------------------------------
-fleet_current_repo_set alpha all
 r=$(rows)
 eq    "A: the tl parent is collapsed by default (kid hidden)" "$(printf '%s\n' "$r" | grep -c 'kid')" "0"
 eq    "A: groups in fleet_repos order, no-repo last" "$(printf '%s\n' "$r" | names | tr '\n' ' ')" \
@@ -179,11 +178,12 @@ cmp -s "$ROWS" "$WORK/nogrp/tmux-dashboard-rows.sh" && fail "D: could not switch
 OFF="$WORK/nogrp/tmux-dashboard-rows.sh"
 CHECKS=$((CHECKS+1))
 [ "$(rows)" != "$(rows "$OFF")" ] || fail "D: the switch is real — \`all\` differs with grouping off"
-fleet_current_repo_set alpha o/tokenledger
-eq  "D: picked repo — hub list identical"  "$(rows)" "$(rows "$OFF")"
-eq  "D: picked repo — sidebar identical"   "$(side)" "$(side "$OFF")"
-hasnt "D: picked repo — no heading"        "$(rows)" "──"
-fleet_current_repo_set alpha all
+# a stale current-repo file (the retired picker's, #1034) filters nothing
+all_rows=$(rows); all_side=$(side)
+printf 'o/tokenledger\n' > "$FLEET_CONF_DIR/fleets/alpha/current-repo"
+eq  "D: stale current-repo — hub list unchanged" "$(rows)" "$all_rows"
+eq  "D: stale current-repo — sidebar unchanged"  "$(side)" "$all_side"
+rm -f "$FLEET_CONF_DIR/fleets/alpha/current-repo"
 mv "$FLEET_CONF_DIR/fleets/alpha/repos" "$WORK/repos.off"
 eq  "D: one-repo fleet — hub list identical" "$(rows)" "$(rows "$OFF")"
 eq  "D: one-repo fleet — sidebar identical"  "$(side)" "$(side "$OFF")"
@@ -192,7 +192,6 @@ eq  "D: one-repo fleet — raw bytes identical" "$(FLEET_SESSION=alpha bash "$RO
 mv "$WORK/repos.off" "$FLEET_CONF_DIR/fleets/alpha/repos"
 
 # --- E. idle repos keep a heading; an empty frame says how to start (#998) -----
-fleet_current_repo_set alpha all
 for w in $(tmux list-windows -t alpha -F '#{window_name}' | grep -v '^plan$'); do tmux kill-window -t "alpha:$w"; done
 win 'issue-1' @repo o/claude-fleet @issue 1
 eq    "E: an idle hosted repo keeps its (0) heading" "$(rows | names | tr '\n' ' ')" \
@@ -217,11 +216,9 @@ rows = [l.split("|", 4) for l in sys.stdin.read().split("\n") if len(l.split("|"
 print(len(rows), " ".join(m.selectable(rows)), len(m.sessions(rows)))' "$BIN/fleet-sidebar.py")
 eq    "E: an empty sidebar offers only its repo headings (never the hint)" "$sel" \
       "3 hdr:o/claude-fleet hdr:o/tokenledger 0"
-fleet_current_repo_set alpha o/tokenledger
-eq    "E: picked repo, no sessions — the hint names it" "$(rows)" \
-      "hdr|  No sessions in tokenledger — type a name to start one · ⌃n new task"
-eq    "E: …and in the sidebar" "$(side)" "hdr|||No sessions in tokenledger| "
-fleet_current_repo_set alpha all
+printf 'o/tokenledger\n' > "$FLEET_CONF_DIR/fleets/alpha/current-repo"
+eq    "E: a stale current-repo file keeps every heading (#1034)" "$(rows)" "$r"
+rm -f "$FLEET_CONF_DIR/fleets/alpha/current-repo"
 mv "$FLEET_CONF_DIR/fleets/alpha/repos" "$WORK/repos.off"
 eq    "E: one-repo fleet, no sessions — the bare hint" "$(rows)" \
       "hdr|  No sessions — type a name to start one · ⌃n new task"
@@ -232,7 +229,6 @@ hasnt "E: …no heading"                             "$(rows)" "──"
 mv "$WORK/repos.off" "$FLEET_CONF_DIR/fleets/alpha/repos"
 
 # --- F. a cross-repo child follows its parent (#1031) --------------------------
-fleet_current_repo_set alpha all
 for w in $(tmux list-windows -t alpha -F '#{window_name}' | grep -v '^plan$'); do tmux kill-window -t "alpha:$w"; done
 win 'issue-1' @repo o/claude-fleet @issue 1
 win 'issue-2' @repo o/tokenledger  @issue 2
@@ -263,11 +259,10 @@ hasnt "F: …no └"                            "$(printf '%s\n' "$r" | grep 'xk
 hasnt "F: …no repo tag"                     "$(printf '%s\n' "$r" | grep 'xkid')" "⇢"
 has   "F: …the ↳ provenance stays"          "$(printf '%s\n' "$r" | grep 'xkid')" "↳#1"
 win 'issue-1' @repo o/claude-fleet @issue 1 @expand 1
-fleet_current_repo_set alpha o/tokenledger
-eq    "F: picked repo — hub list identical"  "$(rows)" "$(rows "$OFF")"
-eq    "F: picked repo — sidebar identical"   "$(side)" "$(side "$OFF")"
-hasnt "F: picked repo — no tag"              "$(rows)" "⇢"
-fleet_current_repo_set alpha all
+all_rows=$(rows)
+printf 'o/tokenledger\n' > "$FLEET_CONF_DIR/fleets/alpha/current-repo"   # the retired picker's (#1034)
+eq    "F: a stale current-repo file changes no row" "$(rows)" "$all_rows"
+rm -f "$FLEET_CONF_DIR/fleets/alpha/current-repo"
 mv "$FLEET_CONF_DIR/fleets/alpha/repos" "$WORK/repos.off"
 eq    "F: one-repo fleet — raw bytes identical" "$(FLEET_SESSION=alpha bash "$ROWS" | od -c)" "$(FLEET_SESSION=alpha bash "$OFF" | od -c)"
 eq    "F: one-repo fleet — sidebar identical"   "$(side)" "$(side "$OFF")"

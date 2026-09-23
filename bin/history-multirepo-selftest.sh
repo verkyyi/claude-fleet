@@ -12,7 +12,7 @@
 #   rows      the dash's landed view merges both, badges each row, and every target
 #             ends in `@<repo>`; the cross-repo parent owns its child's block
 #   fold      expanding `landed:issue:30@o/a` writes o/a's own fold file
-#   picked    a picked current repo shows only its rows, with no badge
+#   stale     a stale current-repo file (the retired picker's, #1034) filters nothing
 #   restore   dash-restore-session.sh resumes a row in the repo its target names;
 #             dash-open-pr.sh opens THAT repo's PR
 #   one-repo  fleet D: no legend, no badge, no `@` on a target
@@ -109,18 +109,12 @@ act=$(FLEET_SESSION=$M bash "$H" fold collapse 'landed:scratch:nope@o/a' 2>/dev/
 [ -z "$act" ] || fail "fold: an unknown row is a dead keystroke, got [$act]"
 leg fold
 
-# --- a picked current repo ----------------------------------------------------------
+# --- a stale current-repo file ------------------------------------------------------
+all_rows=$(rows "$M")
 printf 'o/b\n' > "$FLEET_CONF_DIR/fleets/$M/current-repo"
-out=$(rows "$M"); vis=$(printf '%s\n' "$out" | strip)
-has "picked: its own rows" "$vis" "beta-twelve"
-hasnt "picked: not the other repo's" "$vis" "alpha"
-hasnt "picked: no badge" "$vis" "b beta-twelve"
-has "picked: targets still name the repo" "$out" "landed:101@o/b"
-has "picked: the parent in another repo is a tagged orphan" "$vis" "↳a#30 beta-child"
-out=$(FLEET_SESSION=$M bash "$H" list 2>&1)
-has "picked: list still merges every repo" "$out" "alpha-twelve"
+[ "$(rows "$M")" = "$all_rows" ] || fail "stale: a stale current-repo file changed the rows (#1034)"
 rm -f "$FLEET_CONF_DIR/fleets/$M/current-repo"
-leg picked
+leg stale
 
 # --- restore + open-PR: the row's repo ------------------------------------------------
 HB="$WORK/hb"; mkdir -p "$HB"

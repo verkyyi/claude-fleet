@@ -617,18 +617,14 @@ EOF
   return 0
 }
 
-# The fleet's CURRENT repo — what the dash and backlog are filtered to. One value
-# per fleet, shared by every screen attached to it; `all` (the default) = no
-# filter. A stored repo the fleet no longer hosts reads back as `all`.
+# The fleet's CURRENT repo — always `all` (issue #1034). The footer repo picker that
+# used to narrow it (#793) is gone: the grouped `all` list is the only
+# view, and a repo heading (or the highlighted row) picks where a new session goes.
+# A stale `current-repo` file on disk is ignored here and deleted by fleet-up.sh.
+# Kept as a function so its readers (new session / restore / history / issue-file /
+# backlog / raw-session) keep their `all` path unchanged.
 fleet_current_repo() {
-  local f r
-  f="$FLEET_CONF_DIR/fleets/${1:-_}/current-repo"
-  [ -f "$f" ] && r=$(head -n1 "$f" 2>/dev/null)
-  if [ -n "${r:-}" ] && [ "$r" != all ] && fleet_repo_hosted "${1:-}" "$r"; then
-    printf '%s\n' "$r"
-  else
-    printf 'all\n'
-  fi
+  printf 'all\n'
 }
 
 # fleet_selection_repo <sess> <row-id> → where a session started FROM the highlighted
@@ -659,21 +655,7 @@ fleet_selection_repo() {
   return 0
 }
 
-# fleet_current_repo_set <sess> <repo|all> — refuses (1) a repo the fleet does not host.
-fleet_current_repo_set() {
-  local sess="${1:-}" want="${2:-}" d
-  [ -n "$sess" ] || return 1
-  if [ "$want" != all ]; then
-    want=$(fleet_norm_repo "$want")
-    fleet_repo_hosted "$sess" "$want" || return 1
-  fi
-  d=$(fleet_state_dir "$sess")
-  printf '%s\n' "$want" > "$d/current-repo.$$" && mv -f "$d/current-repo.$$" "$d/current-repo" || return 1
-  fleet_repo_label_sync "$sess"
-  return 0
-}
-
-# ---- the current repo on screen (issue #793) --------------------------------
+# ---- a repo's names on screen (issue #793) ----------------------------------
 # fleet_repo_short <owner/name> [<override>] → the short tag a repo wears on the
 # dash badge (window names no longer carry it — issue #1023): <override> when given
 # (FLEET_REPO_SHORT in the repo's conf/overlay), else the initials of the name's
@@ -742,32 +724,6 @@ _fleet_repo_name_v() {
   local p=$'\t'"${2##*/}"$'\t' t
   t=${1//"$p"/}
   if [ $(( (${#1} - ${#t}) / ${#p} )) -gt 1 ]; then _frn=$2; else _frn=${2##*/}; fi
-}
-
-# fleet_repo_label <sess> → the status bar's repo half: EMPTY in a one-repo fleet
-# (the label stays the bare fleet name, as it always was), else the current repo's
-# name (`tokenledger`) or `all`.
-fleet_repo_label() {
-  local cur
-  _fleet_hosts_many "${1:-}" || return 0
-  cur=$(fleet_current_repo "${1:-}")
-  printf '%s' "${cur##*/}"
-}
-
-# fleet_repo_label_sync <sess> — publish fleet_repo_label as the server-global
-# @fleet_repo_label on THAT fleet's server (status-left draws `<fleet> · <label>`
-# when it is set). Unset in a one-repo fleet. Called by every writer of the
-# current repo and at each dash launch; never fails its caller.
-fleet_repo_label_sync() {
-  local sess="${1:-}" lbl here=''
-  [ -n "$sess" ] || return 0
-  lbl=$(fleet_repo_label "$sess")
-  [ -n "${TMUX:-}" ] && here=$(tmux display-message -p '#{session_name}' 2>/dev/null)
-  if [ "$here" = "$sess" ]; then set -- tmux
-  else set -- tmux -L "$(fleet_socket "$sess")"; fi
-  if [ -n "$lbl" ]; then "$@" set-option -g @fleet_repo_label "$lbl" 2>/dev/null
-  else "$@" set-option -gu @fleet_repo_label 2>/dev/null; fi
-  return 0
 }
 
 # fleet_dash_repo_frame <sess> — once per dash frame, for the row renderers (the
@@ -839,7 +795,7 @@ fleet_backlog_cache() {
 # NOTHING (the caller refuses) — never a guess:
 #   2+ repos: the row's repo (must be hosted), else $CF_REPO (carried through a
 #             popup), else the current repo; under `all` with no row repo, nothing
-#             (a new issue asks — fleet-pick.sh --repo-only);
+#             (a new issue asks — fleet-repo-ask.sh);
 #   one repo: the historic chain — $CF_REPO, else the sessmap's, else FLEET_REPO.
 fleet_backlog_repo() {
   local sess="${1:-}" r c
@@ -880,7 +836,7 @@ fleet_multirepo() {
 #   1. <repo>, when given — it must be hosted (exit 1 otherwise);
 #   2. a one-repo fleet: its repo (FLEET_REPO, else the collector's cached one);
 #   3. the caller pane's own window repo (a worker, a scratch bound to a repo);
-#   4. the fleet's current repo (the dash filter), when it is not `all`;
+#   4. the fleet's current repo, when it is not `all` (always `all` since #1034);
 #   5. else exit 4 — AMBIGUOUS: the caller ASKS (fleet_repos lists the choices),
 #      never guesses. Exit 1 = <repo> not hosted / nothing resolvable.
 # Degenerate (no repos/ overlay): 1 → the conf's own repo, unvalidated, as before.

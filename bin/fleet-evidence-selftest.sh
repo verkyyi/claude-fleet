@@ -292,13 +292,15 @@ eq "H3 no --repo under \`all\` → exit 2" 2 "$RC"
 has "H3 names the choices" "$ERR" "o/b"
 run TMUX= -- dir --session fevmulti --repo o/zzz --issue 42
 eq "H4 a repo the fleet does not host → exit 2" 2 "$RC"
-printf 'o/b\n' > "$MC/current-repo"
-: > "$GH_LOG"
+printf 'o/b\n' > "$MC/current-repo"   # left by the retired picker (#1034)
 run TMUX= GH_SUBS='42\n' -- list --session fevmulti --epic 7
-eq "H5 list follows the current repo" 0 "$RC"
+eq "H5 a stale current-repo file picks no repo" 2 "$RC"
+: > "$GH_LOG"
+run TMUX= GH_SUBS='42\n' -- list --session fevmulti --repo o/b --epic 7
+eq "H5 list --repo o/b" 0 "$RC"
 has "H5 sub-issues read from repo B" "$(cat "$GH_LOG")" "repos/o/b/issues/7/sub_issues"
 printf 'BSHOT' > "$WORK/src/b.png"
-run TMUX= GH_PARENT=7 -- before --session fevmulti --issue 42 --note 'b shot' "$WORK/src/b.png"
+run TMUX= GH_PARENT=7 -- before --session fevmulti --repo o/b --issue 42 --note 'b shot' "$WORK/src/b.png"
 eq "H6 capture into B" 0 "$RC"
 has "H6 stored under B's store" "$OUT" "$MC/by-repo/$bslug/epic/7/evidence/42/"
 run TMUX= -- dir --session fevmulti --repo o/r --issue 42

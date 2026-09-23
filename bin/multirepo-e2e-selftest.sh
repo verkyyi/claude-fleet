@@ -171,8 +171,8 @@ out=$(bash "$BIN/fleet-repo.sh" add --session "$S" o/beta "$MB" --base master 2>
   && ok "setup: fleet-repo.sh add o/beta — no FLEET_MULTIREPO needed" \
   || fail "setup: fleet-repo.sh add refused: $out"
 [ "$(fleet_repos "$S" | tr '\n' ' ')" = "o/alpha o/beta " ] || fail "setup: fleet_repos: $(fleet_repos "$S")"
-lbl=$(tmux show-option -gqv @fleet_repo_label)
-[ "$lbl" = all ] && ok "setup: the footer reads '$S · all'" || fail "setup: footer label [$lbl]"
+[ -z "$(tmux show-option -gqv @fleet_repo_label)" ] && ok "setup: the footer grows no repo label (#1034)" \
+  || fail "setup: footer label [$(tmux show-option -gqv @fleet_repo_label)]"
 
 hub_cwd() { HUB_SESSION="$1" HUB_PRINT_CMD=cwd bash "$BIN/hub-session.sh" 2>/dev/null; }
 [ "$(hub_cwd "$S")" = "$HOME" ] && ok "setup: a 2-repo fleet's hub opens in \$HOME (no main repo)" \
@@ -252,20 +252,17 @@ hasnt a "B#12's row shows no A PR"     "$rB" "#101"
 rN=$(row_of "$wN")
 hasnt a "the no-repo row shows no PR"  "$rN" "#"
 
-# ==== (h) collector/backlog/hub: `all` and a picked repo ===============================
+# ==== (h) collector/backlog/hub: `all`, the only view (#1034) ==========================
 backlog() { FLEET_SESSION="$1" bash "$BIN/tmux-issues-rows.sh" all 2>/dev/null; }
 f14() { tail -n +2 | awk -F '\037' '{ print $1 "|" $4 }' | tr '\n' ' '; }
 chk h "backlog under all: both repos, bound #12s hidden" "$(backlog "$S" | f14)" "30|o/alpha 31|o/beta "
 has h "dash under all: A's scratch listed" "$(row_of "$sA")" "$(opt "$sA" window_name)"
 has h "dash under all: B's scratch listed" "$(row_of "$sB")" "$(opt "$sB" window_name)"
-fleet_current_repo_set "$S" o/beta
-chk h "the footer follows the pick" "$(tmux show-option -gqv @fleet_repo_label)" beta
-chk h "backlog with B picked: B only" "$(backlog "$S" | f14)" "31|o/beta "
+printf 'o/beta\n' > "$FLEET_CONF_DIR/fleets/$S/current-repo"   # the retired picker's
+chk h "a stale current-repo file: backlog still both" "$(backlog "$S" | f14)" "30|o/alpha 31|o/beta "
 rows=$(dash)
-has   h "dash with B picked: B#12 shown"  "$(row_of "$wB")" "$(opt "$wB" window_name)"
-chk   h "dash with B picked: A#12 hidden" "$(row_of "$wA")" ""
-chk   h "dash with B picked: A's scratch hidden" "$(row_of "$sA")" ""
-fleet_current_repo_set "$S" all
+has h "a stale current-repo file: A's scratch still listed" "$(row_of "$sA")" "$(opt "$sA" window_name)"
+rm -f "$FLEET_CONF_DIR/fleets/$S/current-repo"
 
 # ==== (b)+(e) A's PR merges → one cleanup tick ==========================================
 old=$(( $(date +%s) - 7200 )); now=$(date +%s)
