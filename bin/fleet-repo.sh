@@ -4,6 +4,7 @@
 #   fleet-repo.sh list   [--session <sess>]
 #   fleet-repo.sh add    [--session <sess>] <owner/repo> [<checkout-dir>] [--base <branch>]
 #   fleet-repo.sh remove [--session <sess>] <owner/repo> [--force]
+#   fleet-repo.sh get    [--session <sess>] <KEY> [<owner/repo> | --window <w> | --worktree <dir>] [--tsv]
 #
 # A fleet hosts its conf's own FLEET_REPO plus one overlay per further repo at
 # $FLEET_CONF_DIR/fleets/<sess>/repos/<slug>.conf (see fleet_repos in fleet-lib.sh).
@@ -18,6 +19,15 @@
 # removable here. A repo that still has live windows (@repo) is refused without
 # --force: those sessions would lose their repo's MAIN/base mid-flight.
 #
+# `get` prints one setting AS A REPO SEES IT (issue #978): the repo's overlay value,
+# else the fleet conf's — fleet_repo_conf_get. The repo is the one named, or the
+# window's (fleet_window_repo), or the one whose base registers <dir>
+# (fleet_worktree_repo), or — with none of those — this pane's window. A repo that
+# cannot be resolved reads the fleet value (the documented fallback, never a
+# guess at a repo). `--tsv` prints `<repo>\t<conf file holding it>\t<value>`: the
+# out-of-process readers (the sleep/failover MCP contract) use it to name the file
+# a fix belongs in.
+#
 # --session defaults to the fleet this pane runs in. Exit 0 ok, 1 refused/failed,
 # 2 usage.
 set -uo pipefail
@@ -25,14 +35,18 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-lib.sh"
 
 die()   { echo "fleet-repo: $*" >&2; exit 1; }
-usage() { sed -n '4,6p' "$0" | sed 's/^# //' >&2; exit 2; }
+usage() { sed -n '4,7p' "$0" | sed 's/^# //' >&2; exit 2; }
 
 cmd="${1:-}"; [ -n "$cmd" ] || usage; shift
-SESS=""; REPO=""; DIR=""; BASE=""; FORCE=0
+SESS=""; REPO=""; DIR=""; BASE=""; FORCE=0; KEY=""; WIN=""; WT=""; TSV=0
+if [ "$cmd" = get ]; then KEY="${1:-}"; [ -n "$KEY" ] || usage; shift; fi
 while [ $# -gt 0 ]; do
   case "$1" in
     --session) [ $# -ge 2 ] || usage; SESS="$2"; shift 2 ;;
     --base)    [ $# -ge 2 ] || usage; BASE="$2"; shift 2 ;;
+    --window)  [ $# -ge 2 ] || usage; WIN="$2"; shift 2 ;;
+    --worktree) [ $# -ge 2 ] || usage; WT="$2"; shift 2 ;;
+    --tsv)     TSV=1; shift ;;
     --force)   FORCE=1; shift ;;
     -h|--help) usage ;;
     -*)        echo "fleet-repo: unknown flag $1" >&2; usage ;;
@@ -135,6 +149,28 @@ EOF
       echo "fleet-repo: $SESS no longer hosts $REPO"
     fi
     fleet_repo_label_sync "$SESS"      # back to the bare fleet name at one repo (#793)
+    ;;
+
+  get)
+    case "$KEY" in [A-Z_]*) ;; *) usage ;; esac
+    case "$KEY" in *[!A-Za-z0-9_]*) usage ;; esac
+    if [ -n "$REPO" ]; then
+      norm_repo_arg
+      fleet_repo_hosted "$SESS" "$REPO" || die "$SESS does not host $REPO"
+    elif [ -n "$WIN" ]; then
+      REPO=$(fleet_window_repo "$SESS" "$WIN")
+    elif [ -n "$WT" ]; then
+      REPO=$(fleet_worktree_repo "$SESS" "$WT"); REPO=${REPO%%$'\t'*}
+    elif [ -n "${TMUX_PANE:-}" ] \
+         && [ "$(tmux display-message -p -t "$TMUX_PANE" '#{session_name}' 2>/dev/null)" = "$SESS" ]; then
+      REPO=$(fleet_window_repo "$SESS" "$TMUX_PANE")
+    fi
+    if [ -n "$REPO" ]; then
+      val=$(fleet_repo_conf_get "$SESS" "$REPO" "$KEY"); src=$(fleet_repo_conf_file_for "$SESS" "$REPO")
+    else   # unresolved: the fleet value, from the fleet conf alone
+      val=$( fleet_load_repo_conf "$SESS" '' >/dev/null 2>&1; eval "printf '%s' \"\${$KEY:-}\"" ); src=$CONF
+    fi
+    if [ "$TSV" = 1 ]; then printf '%s\t%s\t%s\n' "$REPO" "$src" "$val"; else printf '%s\n' "$val"; fi
     ;;
 
   *) usage ;;

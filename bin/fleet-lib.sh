@@ -450,11 +450,67 @@ _fleet_repo_overlay() {
 # when the fleet does not host <repo> (the fleet conf is still loaded).
 fleet_load_repo_conf() {
   local conf _ore; conf=$(fleet_conf_file "${1:-}")
+  # A multi-repo fleet first puts the per-repo keys back to what they were before
+  # ANY conf was loaded (issue #978): else, in a shell that already applied repo B's
+  # overlay (a pane of B spawning for A), a key A's overlay leaves unset would keep
+  # B's value instead of falling back to the fleet's. One-repo fleet: untouched.
+  fleet_has_repo_overlays "${1:-}" && _fleet_repo_keys_reset
   if [ -f "$conf" ]; then
     _ore="${_FLEET_GLOBAL_ONLY// /|}"   # no `tr` fork: pr-refresh loads per repo (#888/#805)
     eval "$(grep -Ev "^[[:space:]]*(export[[:space:]]+)?(${_ore})=" "$conf")"
   fi
   _fleet_repo_overlay "${1:-}" "${2:-}"
+}
+
+# ---- per-repo settings (issue #978) -----------------------------------------
+# Every key a repo overlay sets wins for THAT repo, falling back to the fleet
+# conf's value when the overlay leaves it unset (then the global fleet.conf's, then
+# the reader's own default). The keys readers DOCUMENTEDLY resolve per repo — keep
+# in step with the "per-repo settings" block in fleet.conf.example:
+#   identity/deploy (_FLEET_REPO_SCOPED)  FLEET_REPO FLEET_MAIN FLEET_BASE_BRANCH
+#                                         FLEET_DEPLOY_REF FLEET_DEPLOY_CHECK FLEET_REPO_SHORT
+#   launch                                FLEET_MODEL FLEET_AGENT FLEET_MCP_CONFIG
+#   setup + switches (#978)               $_FLEET_REPO_OVERRIDABLE
+# An in-pane reader gets its window's repo for free (fleet_load_conf is window-
+# aware); a reader OUTSIDE the window (daemon, spawner, sleep/failover) resolves the
+# repo first — fleet_window_repo / fleet_worktree_repo — then asks
+# fleet_repo_conf_get, or loads fleet_load_repo_conf itself. A fleet with no
+# repos/ overlay answers with the fleet conf's value, byte for byte.
+_FLEET_REPO_OVERRIDABLE="FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET_BASE_DEPS FLEET_SLEEP_MCP_RESTARTABLE FLEET_SCRATCH_POOL FLEET_ISSUE_BRIDGE FLEET_CLEANUP"
+
+# The per-repo keys as they stood when this lib was sourced (global fleet.conf +
+# the caller's environment): the baseline _fleet_repo_keys_reset restores. A key set
+# then is re-ASSIGNED (keeps its export flag); one unset then is unset again.
+_fleet_repo_keys_snapshot() {
+  local _k
+  for _k in $(printf '%s' "$_FLEET_REPO_OVERRIDABLE"); do
+    if eval "[ -n \"\${$_k+x}\" ]"; then
+      eval "printf '%s=%q\n' \"\$_k\" \"\${$_k}\""
+    else
+      printf 'unset %s\n' "$_k"
+    fi
+  done
+}
+_fleet_repo_keys_base=$(_fleet_repo_keys_snapshot)
+_fleet_repo_keys_reset() { eval "$_fleet_repo_keys_base"; }
+
+# fleet_repo_conf_get <sess> <repo> <KEY> → KEY's value as a reader loading <repo>'s
+# conf sees it (overlay, else fleet conf, else inherited); empty when unset — the
+# caller applies its own default. rc 1 (nothing printed) when the fleet does not
+# host <repo>; rc 2 on a malformed KEY. Subshelled: the caller's env is untouched.
+fleet_repo_conf_get() {
+  case "${3:-}" in ''|[!A-Z_]*|*[!A-Za-z0-9_]*) return 2 ;; esac
+  ( fleet_load_repo_conf "${1:-}" "${2:-}" >/dev/null 2>&1 || exit 1
+    eval "printf '%s' \"\${$3:-}\"" )
+}
+
+# fleet_repo_conf_file_for <sess> <repo> → where <repo>'s own value of a key lives:
+# its overlay when one exists, else the fleet conf (the conf repo without an
+# overlay). What a "set KEY=… in <file>" hint should name.
+fleet_repo_conf_file_for() {
+  local f; f=$(fleet_repo_conf_file "${1:-}" "${2:-}")
+  [ -f "$f" ] || f=$(fleet_conf_file "${1:-}")
+  printf '%s' "$f"
 }
 
 # ---- reapers stay inside their own repo (issue #791) ------------------------

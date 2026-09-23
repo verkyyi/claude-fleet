@@ -70,9 +70,10 @@ case "$mode" in
     # the fleet has not opted into the bridge — a post would look delivered and
     # reach nobody (issue #489).
     fleet_load_conf "$sess"
-    [ "${FLEET_ISSUE_BRIDGE:-0}" = 1 ] || exit 5
     repo=${FLEET_REPO:-}
-    if fleet_multirepo "$sess"; then
+    if ! fleet_multirepo "$sess"; then
+      [ "${FLEET_ISSUE_BRIDGE:-0}" = 1 ] || exit 5
+    else
       key_repo_split "${3:-}"; n=${kbare#issue-}
       case "$n" in ''|*[!0-9]*) exit 2 ;; esac
       if [ -n "$krepo" ]; then repo=$krepo
@@ -85,6 +86,8 @@ case "$mode" in
           END { if (c == 1 && last != "") print last }')
         [ -n "$repo" ] || { printf 'message: #%s is not live in exactly one repo; name it <repo>:issue-%s\n' "$n" "$n" >&2; exit 2; }
       fi
+      # The bridge is switched per repo (issue #978): the target repo's own value.
+      [ "$(fleet_repo_conf_get "$sess" "$repo" FLEET_ISSUE_BRIDGE)" = 1 ] || exit 5
       set -- "$1" "$2" "$n"
     fi
     case "${3:-}" in ''|*[!0-9]*) exit 2 ;; esac
