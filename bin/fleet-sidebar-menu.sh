@@ -1,3 +1,5 @@
+# shellcheck shell=bash
+# shellcheck disable=SC2154  # $sess $verb come from fleet-sidebar.sh, which sources this
 # fleet-sidebar-menu.sh — sourced by fleet-sidebar.sh for `menu` / `reap`
 # (issue #898). The task sidebar's per-row action menu: the six things that used
 # to need a trip to the hub list — rename, pin, open PR, answer, flip agent,
