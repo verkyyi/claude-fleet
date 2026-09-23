@@ -94,10 +94,13 @@ case "$INTERVAL" in ''|*[!0-9]*|0) die "--interval wants a positive number of se
 # covers one last read after the $SECONDS bound fires; if perl is missing the
 # $SECONDS bound below is the whole deadline.
 if [ -z "${FLEET_AWAIT_ARMED:-}" ] && command -v perl >/dev/null 2>&1; then
+  rearg=("$NUM" --timeout "$TIMEOUT" --interval "$INTERVAL")
+  [ -n "$KEY" ] && rearg+=(--parent "$KEY")
+  [ -n "$REPO_ARG" ] && rearg+=(--repo "$REPO_ARG")
+  [ -n "$SOCK" ] && rearg+=(-L "$SOCK")
+  [ "$SPAWN" = 0 ] && rearg+=(--no-spawn)
   FLEET_AWAIT_ARMED=1 exec perl -e 'alarm shift; exec @ARGV or exit 127' \
-    "$((TIMEOUT + INTERVAL + 60))" bash "$0" "$NUM" --timeout "$TIMEOUT" --interval "$INTERVAL" \
-    ${KEY:+--parent "$KEY"} ${REPO_ARG:+--repo "$REPO_ARG"} ${SOCK:+-L "$SOCK"} \
-    $([ "$SPAWN" = 0 ] && printf -- '--no-spawn')
+    "$((TIMEOUT + INTERVAL + 60))" bash "$0" "${rearg[@]}"
 fi
 SECONDS=0
 
