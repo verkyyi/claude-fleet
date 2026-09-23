@@ -55,7 +55,13 @@ is required independently of this application-level identity check.
   survives a `/fleet-handoff` (same window, new native session), an account
   migration (new window, `@issue` re-bound), `renumber-windows` and a tmux server
   restart. A window whose scratch worktree cannot be resolved has `worker_id`
-  `null` and cannot be addressed.
+  `null` and cannot be addressed. In a fleet hosting **two or more repos** the key
+  carries the window's repo slug — `<fleet UUID>/<owner-name>:issue-<N>` (issue
+  #1018; the `<slug>:issue-<N>` spelling of #789) — because two hosted repos can
+  both have an issue-12; each worker also reports its `repo`. A window whose repo
+  is unknown there gets `worker_id` `null`, never a guessed one. A one-repo
+  fleet's keys stay bare. A bare `issue-<N>` sent to a multi-repo fleet matches
+  every repo's window and is refused as `AMBIGUOUS` when more than one holds it.
 - `window_id`, `handle` — **observations** of where that identity lives right
   now. They are re-minted by every migration, restore and warm-pool claim and are
   never accepted as a target.

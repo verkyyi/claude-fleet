@@ -14,7 +14,7 @@ import uuid
 from fleet_config_write import revision, write
 from fleet_hub_common import (CONFIG_KEYS, PROTOCOL, WORKER_ACTIONS, Database, Fault,
                               canonical, fields, identifier, name, now, operation,
-                              parse_worker_id, read_request, run, validate_write,
+                              parse_worker_id, read_request, repo_named, run, validate_write,
                               worker_identity, worker_key)
 
 BIN = Path(__file__).absolute().parent
@@ -85,25 +85,31 @@ class Control:
         workers = []
         for line in output.decode("utf-8").splitlines():
             parts = line.split("\t")
-            if len(parts) != 8 or not re.fullmatch(r"@[0-9]+", parts[0]):
+            if len(parts) != 9 or not re.fullmatch(r"@[0-9]+", parts[0]):
                 raise Fault("PROTOCOL_ERROR", "Invalid worker inventory")
-            window, issue, scratch, worktree, state, agent, handle, lifecycle = parts
+            window, issue, scratch, worktree, state, agent, handle, lifecycle, repo = parts
             if not issue and scratch != "1":
                 continue
             number = int(issue) if issue.isdigit() and int(issue) > 0 else None
-            key = worker_key(number, scratch == "1", worktree)
+            # repo: empty = a one-repo fleet (its keys stay bare); else the
+            # window's own repo, which a multi-repo key carries (issue #1018).
+            key = worker_key(number, scratch == "1", worktree, repo)
             # worker_id is the durable identity (issue #834); window_id and handle
             # are observations of where it lives right now.
             workers.append(dict(worker_id=worker_identity(fleet["fleet_id"], key), key=key,
                                 window_id=window, issue=number,
+                                repo=repo if repo and repo != "?" else (None if repo else fleet.get("repo")),
                                 scratch=scratch == "1", worktree=worktree, state=state or "unknown",
                                 lifecycle=lifecycle or "awake",
                                 agent=agent or fleet["agent"], handle=handle))
         return {"state": "running", "workers": workers, "observed_at": now()}
 
     def find_workers(self, fleet, key):
+        """Windows holding `key`. A bare key in a multi-repo fleet matches every
+        repo's (issue #1018) — so two of them resolve as AMBIGUOUS, never a pick."""
         snapshot = self.workers(fleet)
-        return [w for w in snapshot["workers"] if w["key"] == key], snapshot
+        return [w for w in snapshot["workers"] if w["key"] == key
+                or (":" not in key and (w["key"] or "").endswith(":" + key))], snapshot
 
     def target(self, fleet, key, action):
         """Resolve a durable key to exactly one live window, or raise. The
@@ -186,10 +192,11 @@ class Control:
         if fleet_id != fleet["fleet_id"]:
             raise Unattempted("INVALID_ARGUMENT", "worker_id belongs to a different fleet")
         if action == "worker_message":
-            if not key.startswith("issue-"):
+            if not key.rsplit(":", 1)[-1].startswith("issue-"):
                 raise Unattempted("INVALID_ARGUMENT", "A scratch session has no issue channel to message")
             matches, _ = self.target(fleet, key, action)
-            code, output, err = self.adapter("message", fleet["name"], key[len("issue-"):],
+            # A repo-qualified key goes whole: the adapter resolves its repo (#1018).
+            code, output, err = self.adapter("message", fleet["name"], key if ":" in key else key[len("issue-"):],
                                              payload=params["text"].encode("utf-8"), timeout=60)
             if code == 5:
                 raise Unattempted("UNAVAILABLE", "The issue bridge is not enabled on this fleet")
@@ -257,7 +264,10 @@ class Control:
                     attempted = code not in reasons
                     raise Fault(reasons.get(code, "EXECUTION_FAILED"), "Fleet refused to start the worker; inspect local Fleet logs")
                 snapshot = self.workers(fleet)
-                matches = [w for w in snapshot["workers"] if w["issue"] == params["issue"]]
+                # Match the spawned repo too (issue #1018): another repo's issue-N
+                # is a different worker.
+                matches = [w for w in snapshot["workers"] if w["issue"] == params["issue"]
+                           and (not params.get("repo") or repo_named(w["repo"], params["repo"]))]
                 if not matches:
                     raise Fault("UNKNOWN_OUTCOME", "Spawn returned but no matching worker is visible")
                 result = {"workers": matches, "observed_at": snapshot["observed_at"]}

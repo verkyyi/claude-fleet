@@ -40,7 +40,22 @@ case "$mode" in
     # replaces tabs/non-ASCII in format output with underscores.
     # @worker_lifecycle (issue #808): empty = awake; preparing|sleeping|waking|failed
     # while hibernation owns the pane — a stop must not type into a parked pane.
-    tmux -u -L "$sock" list-windows -t "=$sess" -F $'#{window_id}\t#{@issue}\t#{@raw}\t#{@worktree}\t#{@claude_state}\t#{@cc_agent}\t#{@wid}\t#{@worker_lifecycle}'
+    fmt=$'#{window_id}\t#{@issue}\t#{@raw}\t#{@worktree}\t#{@claude_state}\t#{@cc_agent}\t#{@wid}\t#{@worker_lifecycle}\t'
+    # Column 9 = the window's repo (issue #1018), so a multi-repo fleet's keys
+    # carry it: two hosted repos can both have an issue-12. EMPTY in a one-repo
+    # fleet (its keys stay bare `issue-N`, as always); `?` = a multi-repo window
+    # whose repo is unknown or @norepo — the controller never guesses one.
+    if ! fleet_multirepo "$sess"; then
+      tmux -u -L "$sock" list-windows -t "=$sess" -F "$fmt"
+    else
+      rows=$(tmux -u -L "$sock" list-windows -t "=$sess" -F "$fmt#{@repo}") || exit 1
+      while IFS= read -r row; do
+        [ -n "$row" ] || continue
+        r=${row##*$'\t'}; row=${row%$'\t'*}
+        [ -n "$r" ] || r=$(fleet_window_repo "$sess" "${row%%$'\t'*}")
+        printf '%s\t%s\n' "$row" "${r:-?}"
+      done <<<"$rows"
+    fi
     ;;
   config)
     fleet_load_conf "$sess"

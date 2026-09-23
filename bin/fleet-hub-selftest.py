@@ -52,8 +52,14 @@ import os, pathlib, sys
 root=pathlib.Path(os.environ["FLEET_CONF_DIR"])
 if "has-session" in sys.argv: sys.exit(0)
 if "list-windows" in sys.argv:
+    # Rows carry @repo in column 9; a format that does not ask for it (a one-repo
+    # fleet, issue #1018) gets that column empty, exactly as real tmux prints it.
     data=root/"workers.tsv"
-    if data.exists(): print(data.read_text(),end="")
+    keep=sys.argv[sys.argv.index("-F") + 1].endswith("#{@repo}")
+    if data.exists():
+        for row in data.read_text().splitlines():
+            cols=row.split("\t")
+            print("\t".join(cols[:8] + [cols[8] if keep else ""]))
     sys.exit(0)
 sys.exit(9)
 ''')
@@ -63,7 +69,8 @@ sys.exit(9)
 ''')
         self.script(self.bin / "dash-issue-session.sh", '''#!/bin/bash
 printf '%s\\n' "$*" >> "$FLEET_CONF_DIR/spawn.calls"
-printf '@12\\t%s\\t0\\t/fixture/issue-%s\\tdone\\tclaude\\ta1\\t\\n' "$1" "$1" > "$FLEET_CONF_DIR/workers.tsv"
+repo=''; [ "${7:-}" = --repo ] && repo=$8
+printf '@12\\t%s\\t0\\t/fixture/issue-%s\\tdone\\tclaude\\ta1\\t\\t%s\\n' "$1" "$1" "$repo" >> "$FLEET_CONF_DIR/workers.tsv"
 ''')
         # Lifecycle fakes (issue #834): each records its argv, acts on the
         # window table the fake tmux serves, and answers with the real script's
@@ -77,8 +84,9 @@ echo "https://github.com/example/project/issues/$1#issuecomment-42"
         self.script(self.bin / "fleet-worker-stop.sh", '''#!/bin/bash
 printf '%s\\n' "$*" >> "$FLEET_CONF_DIR/stop.calls"
 [ ! -f "$FLEET_CONF_DIR/stop-hang" ] || { echo failed:no-exit; exit 7; }
-n="${2#issue-}"
-awk -F'\t' -v n="$n" '$2!=n' "$FLEET_CONF_DIR/workers.tsv" > "$FLEET_CONF_DIR/workers.new"
+k="${2##*:}"; n="${k#issue-}"; p=''; case "$2" in *:*) p="${2%%:*}" ;; esac
+awk -F'\t' -v n="$n" -v p="$p" '{ s = $9; gsub("/", "-", s) } !($2 == n && (p == "" || s == p))' \
+  "$FLEET_CONF_DIR/workers.tsv" > "$FLEET_CONF_DIR/workers.new"
 mv "$FLEET_CONF_DIR/workers.new" "$FLEET_CONF_DIR/workers.tsv"
 echo stopped:exit
 ''')
@@ -90,7 +98,8 @@ printf 'RESUME\\t/fixture/issue-%s\\tsid-%s\\tclaude --resume sid-%s --fork-sess
         self.script(self.bin / "dash-restore-session.sh", '''#!/bin/bash
 printf '%s\\n' "$*" >> "$FLEET_CONF_DIR/restore.calls"
 n="${1#landed:issue:}"
-printf '@40\\t%s\\t0\\t/fixture/issue-%s\\tdone\\tclaude\\tb2\\t\\n' "$n" "$n" >> "$FLEET_CONF_DIR/workers.tsv"
+repo=''; [ "${3:-}" = --repo ] && repo=$4
+printf '@40\\t%s\\t0\\t/fixture/issue-%s\\tdone\\tclaude\\tb2\\t\\t%s\\n' "$n" "$n" "$repo" >> "$FLEET_CONF_DIR/workers.tsv"
 ''')
         self.controller = control.Control(self.conf, self.bin)
         self.fleet_id = self.controller.inventory()[0]["fleet_id"]
@@ -101,12 +110,14 @@ printf '@40\\t%s\\t0\\t/fixture/issue-%s\\tdone\\tclaude\\tb2\\t\\n' "$n" "$n" >
         path.chmod(0o755)
 
     def windows(self, *rows):
-        """Serve these windows from the fake tmux: (window, issue, raw, worktree[, lifecycle])."""
+        """Serve these windows from the fake tmux: (window, issue, raw, worktree[, lifecycle[, @repo]])."""
         lines = []
         for row in rows:
             window, issue, raw, worktree = row[:4]
             lifecycle = row[4] if len(row) > 4 else ""
-            lines.append("\t".join([window, str(issue or ""), "1" if raw else "0", worktree, "done", "claude", "a1", lifecycle]))
+            repo = row[5] if len(row) > 5 else ""
+            lines.append("\t".join([window, str(issue or ""), "1" if raw else "0", worktree, "done", "claude", "a1",
+                                    lifecycle, repo]))
         (self.conf / "workers.tsv").write_text("".join(line + "\n" for line in lines))
 
     def calls(self, name):
@@ -220,7 +231,8 @@ class HubTests(HubFixture):
         self.node.windows(("@99", 123, False, "/fixture/issue-123"))
         after = self.call("fleet_status", {"fleet_id": self.fleet})["workers"][0]
         self.assertEqual((after["worker_id"], after["window_id"]), (before["@12"]["worker_id"], "@99"))
-        for bad in ("issue-123", self.fleet + "/issue-0", self.fleet + "/window-12", self.fleet + "/issue-1;x", 12):
+        for bad in ("issue-123", self.fleet + "/issue-0", self.fleet + "/window-12", self.fleet + "/issue-1;x", 12,
+                    self.fleet + "/:issue-1", self.fleet + "/a/b:issue-1", self.fleet + "/-x:issue-1"):
             with self.subTest(bad=bad), self.assertRaises(Fault):
                 self.call("worker_stop", {"worker_id": bad, "idempotency_key": "bad"})
 
@@ -417,6 +429,47 @@ class HubTests(HubFixture):
         self.assertEqual(self.node.wait(named["operation_id"])["status"], "succeeded")
         self.assertEqual((self.node.conf / "spawn.calls").read_text(),
                          "123 demo --agent claude --origin hub --repo example/other\n")
+
+    def test_multi_repo_worker_keys_carry_the_repo(self):
+        # issue #1018: two hosted repos can both have an issue-123, so a multi-repo
+        # fleet's worker_id carries the window's repo; a one-repo fleet's does not.
+        self.node.windows(("@12", 123, False, "/fixture/issue-123", "", "example/project"))
+        one = self.call("fleet_status", {"fleet_id": self.fleet})["workers"]
+        self.assertEqual([(w["worker_id"], w["repo"]) for w in one], [(self.worker("issue-123"), "example/project")])
+        repos = self.node.conf / "fleets/demo/repos"
+        repos.mkdir()
+        (repos / "example-other.conf").write_text('FLEET_REPO="example/other"\nFLEET_ISSUE_BRIDGE=1\n')
+        self.node.windows(("@12", 123, False, "/fixture/issue-123", "", "example/project"),
+                          ("@13", 123, False, "/fixture/issue-123", "", "example/other"),
+                          ("@14", 124, False, "/fixture/issue-124"))
+        status = {w["window_id"]: w for w in self.call("fleet_status", {"fleet_id": self.fleet})["workers"]}
+        self.assertEqual(status["@12"]["worker_id"], self.worker("example-project:issue-123"))
+        self.assertEqual((status["@13"]["worker_id"], status["@13"]["repo"]),
+                         (self.worker("example-other:issue-123"), "example/other"))
+        self.assertEqual((status["@14"]["worker_id"], status["@14"]["repo"]), (None, None))
+        # A bare key is held by both repos' windows: refused, never a pick.
+        bare = self.lifecycle("worker_stop", "issue-123", idem="stop-bare")
+        self.assertEqual((bare["status"], bare["result"]["error"]["code"]), ("failed", "AMBIGUOUS"))
+        self.assertEqual(self.node.calls("stop"), [])
+        done = self.lifecycle("worker_stop", "example-other:issue-123")
+        self.assertEqual((done["status"], done["result"]["stopped"]["window_id"]), ("succeeded", "@13"))
+        self.assertEqual(self.node.calls("stop"), ["demo example-other:issue-123"])
+        self.assertEqual([w["window_id"] for w in self.call("fleet_status", {"fleet_id": self.fleet})["workers"]],
+                         ["@12", "@14"])
+        sent = self.lifecycle("worker_message", "example-project:issue-123", text="hi")
+        self.assertEqual(sent["status"], "succeeded")
+        self.assertEqual(self.node.calls("comment"), ["123 --repo example/project --to-worker --from hub --body-file -"])
+        back = self.lifecycle("worker_resume", "example-other:issue-123")
+        self.assertEqual(back["status"], "succeeded")
+        self.assertEqual(self.node.calls("restore"), ["landed:issue:123 demo --repo example/other"])
+        self.assertEqual([w["worker_id"] for w in back["result"]["workers"]], [self.worker("example-other:issue-123")])
+        # worker_start's post-spawn read matches the spawned repo, not the number:
+        # @14 (issue-124, repo unknown) is not the worker it started.
+        started = self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="start-124",
+                                                 params={"issue": 124, "repo": "other"}))
+        started = self.node.wait(started["operation_id"])
+        self.assertEqual(started["status"], "succeeded")
+        self.assertEqual([w["worker_id"] for w in started["result"]["workers"]], [self.worker("example-other:issue-124")])
 
     def test_concurrent_same_key_routes_once(self):
         with ThreadPoolExecutor(max_workers=4) as pool:
