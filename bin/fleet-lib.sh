@@ -701,6 +701,36 @@ fleet_repo_short_of() {
   fleet_repo_shorts "${1:-}" | awk -F'\t' -v r="$want" '$1 == r && !f { print $3; f = 1 }'
 }
 
+# fleet_repo_name <sess> <repo> → how the dash NAMES a hosted repo (issue #995):
+# its bare name (`tokenledger`), or `owner/name` when another hosted repo shares
+# that bare name — for those repos only, so a name never points at the wrong
+# repo. The group headings wear it; '' when <repo> is not hosted.
+# fleet_repo_names <sess> → "<repo>\t<name>" per hosted repo, in fleet_repos order.
+fleet_repo_names() {
+  local list all='' r
+  list=$(fleet_repos "${1:-}")
+  while IFS= read -r r; do [ -n "$r" ] && all+=$'\t'"${r##*/}"$'\t'; done <<EOF
+$list
+EOF
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    _fleet_repo_name_v "$all" "$r"; printf '%s\t%s\n' "$r" "$_frn"
+  done <<EOF
+$list
+EOF
+}
+fleet_repo_name() {
+  local want; want=$(fleet_norm_repo "${2:-}")
+  fleet_repo_names "${1:-}" | awk -F'\t' -v r="$want" '$1 == r && !f { print $2; f = 1 }'
+}
+# _fleet_repo_name_v <all> <repo> → $_frn, fork-free: <all> is every hosted
+# repo's bare name wrapped as TAB<name>TAB; 2+ copies of <repo>'s = a collision.
+_fleet_repo_name_v() {
+  local p=$'\t'"${2##*/}"$'\t' t
+  t=${1//"$p"/}
+  if [ $(( (${#1} - ${#t}) / ${#p} )) -gt 1 ]; then _frn=$2; else _frn=${2##*/}; fi
+}
+
 # fleet_repo_label <sess> → the status bar's repo half: EMPTY in a one-repo fleet
 # (the label stays the bare fleet name, as it always was), else the current repo's
 # name (`tokenledger`) or `all`.
@@ -736,22 +766,27 @@ fleet_repo_label_sync() {
 #   RGRPMAP   $'\n'<slug>\t<i>$'\n'… — the repo's group under `all` (issue #974):
 #             its 0-based place in fleet_repos order, so the heading rows sort
 #             the way the repos are registered;
-#   RHEADS    <i>\t<short>\t<owner/name>$'\n'… — the text each group heading names;
+#   RHEADS    <i>\t<name>\t<owner/name>$'\n'… — each group heading names its repo
+#             by fleet_repo_name (bare, owner/name on a collision; issue #995);
 #   RNREPO    how many repos are hosted (the unknown/no-repo groups sort after).
 # A fleet with no repos/ dir costs nothing: the directory test returns first.
 # shellcheck disable=SC2034  # RMANY/RCUR/RSHORTMAP/RGRPMAP/RHEADS/RNREPO are caller-facing OUTPUT globals
 fleet_dash_repo_frame() {
-  local sess="${1:-}" shorts cur r s sh
+  local sess="${1:-}" shorts cur r s sh all=''
   RMANY=0; RCUR=''; RSHORTMAP=$'\n'; RGRPMAP=$'\n'; RHEADS=''; RNREPO=0
   [ -d "$FLEET_CONF_DIR/fleets/${sess:-_}/repos" ] || return 0
   shorts=$(fleet_repo_shorts "$sess")
   case "$shorts" in *$'\n'*) ;; *) return 0 ;; esac          # one repo: nothing to filter
   RMANY=1
+  while IFS=$'\t' read -r r s sh; do [ -n "$r" ] && all+=$'\t'"${r##*/}"$'\t'; done <<EOF
+$shorts
+EOF
   while IFS=$'\t' read -r r s sh; do
     [ -n "$r" ] || continue
     RSHORTMAP+="$s"$'\t'"$sh"$'\n'
     RGRPMAP+="$s"$'\t'"$RNREPO"$'\n'
-    RHEADS+="$RNREPO"$'\t'"$sh"$'\t'"$r"$'\n'
+    _fleet_repo_name_v "$all" "$r"
+    RHEADS+="$RNREPO"$'\t'"$_frn"$'\t'"$r"$'\n'
     RNREPO=$((RNREPO + 1))
   done <<EOF
 $shorts

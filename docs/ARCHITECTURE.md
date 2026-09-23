@@ -551,9 +551,10 @@ The dash renderers (`tmux-dashboard-rows.sh`, and with it the sidebar, plus
 `dash-fold-toggle.sh`) read one `fleet_dash_repo_frame` per frame:
 - a picked repo shows only its own windows, and a hidden window is no one's parent
   there;
-- `all` badges every row with its repo's short tag and groups the rows by repo
-  (issue #974): one inert heading row per non-empty group,
-  `── to · verkyyi/tokenledger (1)`, in `fleet_repos` order, then a `?` group for
+- `all` groups the rows by repo (issue #974): one inert heading row per non-empty
+  group, `── tokenledger (1)` — the repo's bare name (`fleet_repo_name`; owner/name
+  only for two hosted repos sharing one), which is the only repo mark a row gets
+  under `all` (issue #995: the sidebar is 30 columns) — in `fleet_repos` order, then a `?` group for
   a repo the fleet does not host, and the no-repo group at the foot. A heading's
   key fields read `hdr`, so every dash bind target no-ops on it and the sidebar's
   cursor steps over it; its count includes children a collapsed parent hides;

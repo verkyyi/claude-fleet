@@ -22,7 +22,7 @@ import unicodedata
 
 BIN = Path(__file__).absolute().parent  # preserve the selftest shadow root
 US = "\x1f"
-VIEW_VERSION = "10"  # #996: no-repo ($HOME) sessions get the view; replace live v9 views once
+VIEW_VERSION = "11"  # #995: repo headings read `── tokenledger (n)`; replace live v10 views once
 # ↑↓ follow (issue #822): an arrow moves the highlight at once and switches to
 # it only after this much quiet. A held key on a slow link is one switch, not
 # one per row, and a row passed over is never selected — so the wake hook's

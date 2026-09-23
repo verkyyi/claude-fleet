@@ -190,9 +190,9 @@ rslug_v() { rslug=''
 
 # The fleet's CURRENT repo (issue #793) — what this dash shows. RMANY=1 only in a
 # fleet hosting 2+ repos; then RCUR is the picked repo's slug or `all`, and
-# RSHORTMAP its badge per repo (fleet_dash_repo_frame, once a frame). A one-repo
+# RHEADS its group headings (fleet_dash_repo_frame, once a frame). A one-repo
 # fleet has RMANY=0 and every branch below keeps today's path.
-RMANY=0; RCUR=''; RSHORTMAP=''; RGRPMAP=''; RHEADS=''; RNREPO=0
+RMANY=0; RCUR=''; RGRPMAP=''; RHEADS=''; RNREPO=0
 [ "$RMULTI" = 1 ] && fleet_dash_repo_frame "$FLEET_SESSION"
 # RGRP=1 iff this frame groups its rows by repo (issue #974): `all` in a 2+ repo
 # fleet. A picked repo and a one-repo fleet never group — their frames stay as
@@ -644,19 +644,9 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   [ "$depth" -gt 0 ] && [ -n "$croot" ] && [ "$origin" = "$croot" ] && provd=''
   tagd="$provd"
   [ -n "$agentd" ] && tagd="${tagd:+$tagd }$agentd"
-  # repo badge (issue #793): under `all` in a 2+ repo fleet every row names its
-  # repo's short tag first — kept inside #974's groups too, since a scrolled list
-  # can put a row far below its heading; a no-repo session says so, an unknown
-  # one reads `?`. ($rgrp, the group it sorts into, was taken above.)
-  if [ "$RGRP" = 1 ]; then
-    if [ "$wnorepo" = 1 ]; then repod='no repo'
-    elif [ -n "$rslug" ]; then
-      repod=${RSHORTMAP#*$'\n'"$rslug"$'\t'}
-      if [ "$repod" = "$RSHORTMAP" ]; then repod=$rslug; else repod=${repod%%$'\n'*}; fi
-    else repod='?'; fi
-    repod=${repod//[^A-Za-z0-9._ ?-]/}                  # ASCII: ${#} stays the width
-    tagd="$repod${tagd:+ $tagd}"
-  fi
+  # repo badge (issue #793): DROPPED under `all` (issue #995) — the only frame
+  # that ever drew it is the grouped one (#974), where the heading above already
+  # names the row's repo. A picked repo and a one-repo fleet never had one.
   # A request retrying on the same reason past FLEET_FAILOVER_STUCK_ATTEMPTS is
   # stamped @quota_stuck, which WFMT folds in as a `stuck:` prefix (issue #872):
   # it reads `⚠ stuck`, not the ordinary `quota:waiting` it would otherwise be.
@@ -793,7 +783,9 @@ printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_i}   ${h_n} ${h_gap}${
 fi
 
 # group headings (issue #974): under `all` in a 2+ repo fleet, one INERT row opens
-# each non-empty repo group — `── to · verkyyi/tokenledger (1)`. Its sort key is
+# each non-empty repo group — `── tokenledger (1)`: the repo's bare name
+# (owner/name only for two hosted repos sharing one, fleet_repo_name; issue
+# #995 — the sidebar is 30 columns and the old `to · owner/name` never fit). Its sort key is
 # (group, -1): above every row of its group whatever their pin tier. Both of its
 # key fields read `hdr`, the marker every dash bind target (enter, ⌃x, ⌃p, ⌃o,
 # fold, pin, rename, answer, migrate) and the sidebar already treat as not-a-row,
@@ -809,8 +801,8 @@ if [ "$RGRP" = 1 ]; then
       buf+="$1	-1	0	0	0	0	0	hdr${US}hdr${US}${IN}${t}${R}"$'\n'
     fi
   }
-  while IFS=$'\t' read -r g sh r; do
-    [ -n "$g" ] && hd_v "$g" "$sh · $r"
+  while IFS=$'\t' read -r g nm _; do
+    [ -n "$g" ] && hd_v "$g" "$nm"
   done <<< "$RHEADS"
   hd_v "$RNREPO" '? · unknown repo'
   hd_v "$((RNREPO + 1))" 'no repo'

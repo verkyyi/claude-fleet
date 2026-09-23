@@ -14,8 +14,9 @@
 #      asks for a repo (the new-issue path); fleet-list.sh shows a fleet's further
 #      repos as ↳ rows and a one-repo fleet as its single row.
 #   E. DASH — the rows follow the current repo: a picked repo shows its own
-#      windows only; `all` badges every row with its repo's short tag, puts no-repo
-#      sessions in their own group at the foot; a child whose @origin is
+#      windows only; `all` groups the rows under a heading naming each repo
+#      (issue #995: no per-row tag), puts no-repo sessions in their own group
+#      at the foot; a child whose @origin is
 #      repo-qualified (`<slug>:issue-N`, #789) folds under its parent in the rows
 #      AND the fold toggle; a one-repo fleet ignores a stale current-repo file.
 #   F. LABEL + NAMES — fleet_repo_label[_sync] (`· all` / `· <name>`, unset at one
@@ -154,9 +155,10 @@ tmux set -w -t alpha:norepo @norepo 1
 rows() { FLEET_SESSION=alpha FZF_COLUMNS=120 bash "$ROWS" | tail -n +2 | awk -F '\037' '{ print $3 }' | sed "s/$(printf '\033')\[[0-9;]*m//g"; }
 fleet_current_repo_set alpha all
 r=$(rows)
-has   "E: all → claude-fleet row badged cf" "$(printf '%s\n' "$r" | grep 'cf·issue-1')" " cf"
-has   "E: all → tokenledger row badged tl (override)" "$(printf '%s\n' "$r" | grep 'tl·issue-2')" " tl"
-has   "E: all → no-repo row says so" "$(printf '%s\n' "$r" | grep norepo)" "no repo"
+eq    "E: all → claude-fleet row under its heading" "$(printf '%s\n' "$r" | grep -A1 '^── claude-fleet (1)' | tail -n1 | grep -c 'cf·issue-1')" "1"
+eq    "E: all → tokenledger row under its heading" "$(printf '%s\n' "$r" | grep -A1 '^── tokenledger (2)' | tail -n1 | grep -c 'tl·issue-2')" "1"
+eq    "E: all → no-repo row under its heading" "$(printf '%s\n' "$r" | grep -A1 '^── no repo (1)' | tail -n1 | grep -c norepo)" "1"
+hasnt "E: all → no per-row tag on the no-repo row" "$(printf '%s\n' "$r" | grep norepo | sed 's/.*norepo//')" "no repo"
 eq    "E: all → no-repo group at the foot" "$(printf '%s\n' "$r" | tail -n1 | grep -c norepo)" "1"
 has   "E: qualified origin folds as a child (└)" "$(printf '%s\n' "$r" | grep 'tl·kid')" "└"
 has   "E: its parent carries the subtree badge" "$(printf '%s\n' "$r" | grep 'tl·issue-2')" "0/1 ✓"
