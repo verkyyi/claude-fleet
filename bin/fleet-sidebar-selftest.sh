@@ -242,6 +242,25 @@ try:
     check(status_block('bind -n MouseDown1Status ') ==
           status_block('bind -T fleet-sidebar MouseDown1Status ').replace(' --nav', '', 1),
           'the fleet-sidebar status-bar tap drifted from the root one')
+    # Movement keys never fork (issue #1033): each goes straight to the view at
+    # `{top-left}` behind the same @sidebar gate as `Any`, and all six bodies are
+    # one body with the key swapped — so a fix to one cannot miss the others.
+    moves = ('Up', 'Down', 'Home', 'End', 'Left', 'Right')
+    move_body = {}
+    for line in shipped.splitlines():
+        parts = line.split(' ', 4)
+        if line.startswith('bind -T fleet-sidebar ') and len(parts) == 5 and parts[3] in moves:
+            move_body[parts[3]] = parts[4].replace(' ' + parts[3] + ' }', ' KEY }')
+    check(sorted(move_body) == sorted(moves), 'a sidebar movement bind is missing: %r' % sorted(move_body))
+    check(len(set(move_body.values())) == 1, 'sidebar movement binds drifted apart: %r' % move_body)
+    check(all('run-shell' not in body and "send-keys -t '{top-left}' KEY" in body
+              for body in move_body.values()),
+          'a sidebar movement bind forks a shell again: %r' % move_body.get('Up'))
+    swc = next(line for line in shipped.splitlines()
+               if line.startswith('set-hook -g session-window-changed[71] '))
+    swc_skip = swc.split("if -F '", 1)[1].split("'", 1)[0] if "if -F '" in swc else ''
+    check(swc_skip.startswith('#{?') and 'fleet-sidebar.sh sync' in swc,
+          'session-window-changed sync lost its already-there fast path')
     selected = [line for line in shipped.splitlines() if not line.startswith('#') and
                 'MouseDown1Status' not in line and
                 ('fleet-sidebar' in line or 'after-select-pane[71]' in line or 'client-detached' in line or
@@ -396,8 +415,11 @@ try:
     tm('set-hook', '-g', 'session-window-changed[73]', "set-option -gaF @switches '#{window_id} '")
     switches = lambda: tm('show-options', '-gv', '@switches').split()
     worker_before = tm('capture-pane', '-p', '-t', p1)
+    started = time.monotonic()
     os.write(terminal, b'\x1b[B')
     wait_for(lambda: bool(view_on(w2)), 'Down after a click did not follow to the highlighted worker')
+    # Informational (issue #1033): the arrow → switched latency on this box.
+    print('sidebar timing: Down → view on the next worker in %.2fs' % (time.monotonic() - started))
     check(tm('capture-pane', '-p', '-t', p1) == worker_before, 'sidebar arrow leaked into worker input')
     check(view_on(w2) == [side] and tm('display-message', '-p', '-t', side, '#{pane_pid}') == side_pid,
           'follow recreated the sidebar instead of moving its populated grid')
@@ -420,6 +442,63 @@ try:
     check(view_on(w1) == [side], 'a pass-over moved the sidebar')
     wait_for(navigation, 'a pass-over left the sidebar key table')
     tm('set-hook', '-gu', 'session-window-changed[73]')
+
+    # The window-changed fast path (issue #1033): a window that already holds a
+    # live view naming its worker skips the sync fork; one without a view syncs.
+    check(tm('display-message', '-p', '-t', w1, swc_skip) == '',
+          'the hook would re-sync a window the jump already moved the view into')
+    check(tm('display-message', '-p', '-t', w2, swc_skip) == '1',
+          'the hook would skip the sync for a window with no view')
+
+    # The row producer runs BESIDE the UI loop (issue #1033): with it stalled,
+    # an arrow still moves the highlight, the follow still switches, and the
+    # moved view repaints `▶` on its new row from the rows it already has.
+    stall = work / 'rows-stall'
+    rows_bin = bin_dir / 'tmux-dashboard-rows.sh'
+    (bin_dir / 'tmux-dashboard-rows-real.sh').symlink_to(real_bin / 'tmux-dashboard-rows.sh')
+    staged = work / 'rows-wrapper'
+    staged.write_text('#!/bin/bash\nn=0\nwhile [ -f %s ] && [ $n -lt 300 ]; do sleep .1; n=$((n+1)); done\n'
+                      'exec bash %s "$@"\n' % (shlex.quote(str(stall)),
+                                               shlex.quote(str(bin_dir / 'tmux-dashboard-rows-real.sh'))))
+    stall.write_text('')
+    os.replace(staged, rows_bin)
+    time.sleep(1.5)  # the view's next refresh is now stuck in the producer
+    started = time.monotonic()
+    os.write(terminal, b'\x1b[B')
+    wait_for(lambda: bool(view_on(w2)), 'a stalled producer blocked the arrow follow')
+    moved = time.monotonic() - started
+    wait_for(lambda: any(l.startswith('▶') and '修复侧栏' in l
+                         for l in tm('capture-pane', '-p', '-t', side).splitlines()),
+             'the moved view did not repaint ▶ from its cached rows')
+    repainted = time.monotonic() - started
+    check(stall.exists(), 'the producer stall ended before the repaint was checked')
+    check(repainted < 3, 'input waited on the row producer: follow %.2fs, repaint %.2fs' % (moved, repainted))
+    stall.unlink()
+    rows_bin.unlink()
+    rows_bin.symlink_to(real_bin / 'tmux-dashboard-rows.sh')
+    (bin_dir / 'tmux-dashboard-rows-real.sh').unlink()
+    os.write(terminal, b'\x1b[A')
+    wait_for(lambda: bool(view_on(w1)), 'Up did not follow back after the stalled-producer leg')
+    wait_for(navigation, 'the stalled-producer leg left the sidebar key table')
+
+    # Degenerate case (a one-repo fleet, no repos/ overlay): the async producer
+    # paints exactly what the painter always has — `marker glyph tree label`,
+    # one row per producer row, `▶` on the window in view.
+    def painted_rows():
+        want = []
+        for wid, state, glyph, label, tree in row_data(current=w1):
+            text = label if wid == 'hdr' else (
+                ('▶' if wid == w1 else ' ') + ' ' + glyph + ' ' + (tree or ' ') + ' ' + label)
+            want.append(sidebar.clip(text, 29).rstrip())
+        return want
+    # A working row's glyph is the spinner, which animates between the two reads:
+    # compare every cell but that one.
+    spin = lambda l: l[:2] + '*' + l[3:] if l[:1] in ('▶', ' ') and len(l) > 3 else l
+    def same_frame():
+        lines = [spin(l.rstrip()) for l in tm('capture-pane', '-p', '-t', side).splitlines()]
+        want = [spin(l) for l in painted_rows()]
+        return lines[:len(want)] == want and not any(l.strip() for l in lines[len(want):-2])
+    wait_for(same_frame, 'a one-repo sidebar frame differs from its rows: %r' % painted_rows())
 
     # The right pane was already tmux-active: clicking it must still leave the
     # navigation table. Actual typing then reaches that pane, not the sidebar.

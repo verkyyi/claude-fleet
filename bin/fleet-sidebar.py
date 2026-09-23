@@ -26,8 +26,14 @@ VIEW_VERSION = "14"  # #1032: a tap selects a repo heading, a 2nd tap opens ⌃n
 # ↑↓ follow (issue #822): an arrow moves the highlight at once and switches to
 # it only after this much quiet. A held key on a slow link is one switch, not
 # one per row, and a row passed over is never selected — so the wake hook's
-# dwell (fleet-sleep.py) never sees it either.
-FOLLOW_SECS = 0.25
+# dwell (fleet-sleep.py) never sees it either. 0.12s since the arrow binds stopped
+# forking (issue #1033): a held key still repeats faster than this.
+FOLLOW_SECS = 0.12
+# The row producer runs BESIDE the UI loop (issue #1033) — it takes 0.3–0.5s, and
+# run inline it froze input for a third of every second. The loop polls it this
+# often while it runs, and kills one that hangs.
+PRODUCER_POLL = 0.05
+PRODUCER_TIMEOUT = 10
 # The input line (issue #896): a refused spawn's reason stays this long, then
 # the typed name — which is kept — shows again.
 TOAST_SECS = 4
@@ -399,6 +405,35 @@ def acts(key):
     return "" if key.startswith("hdr") else key
 
 
+def start_rows(env):
+    """Launch the row producer without waiting for it (issue #1033). Output goes
+    to a file, not a pipe: a full pipe would stall a producer this loop only
+    polls. `started` bounds a hung one."""
+    out = tempfile.TemporaryFile("w+")
+    proc = subprocess.Popen(["bash", str(BIN / "tmux-dashboard-rows.sh"), "--sidebar"],
+                            env=dict(env), stdin=subprocess.DEVNULL, stdout=out,
+                            stderr=subprocess.DEVNULL, text=True)
+    proc.out, proc.started = out, time.monotonic()
+    proc.current = env["FLEET_SIDEBAR_CURRENT"]
+    return proc
+
+
+def collect_rows(proc):
+    """A finished producer's rows, or None (failed, killed, still running)."""
+    if proc.poll() is None:
+        if time.monotonic() - proc.started < PRODUCER_TIMEOUT:
+            return None
+        proc.kill()
+        proc.wait()
+    proc.out.seek(0)
+    text = proc.out.read()
+    proc.out.close()
+    if proc.returncode != 0:
+        return None
+    return [line.split(US, 4) for line in text.split("\n")
+            if len(line.split(US, 4)) == 5]
+
+
 def visible(info, now):
     if len(info) != 4:
         return False
@@ -446,8 +481,32 @@ def ui(screen, session, worker, lock):
     decoder = codecs.getincrementaldecoder("utf-8")("ignore")
     mark_input(pane, "")
     published = None  # the (window, candidates) last written to @sidebar_next
+    # The row producer in flight (issue #1033), and whether any run has landed:
+    # only the FIRST frame waits for one — every later frame paints the last
+    # good rows, so a jump's `▶` moves as soon as the pane has.
+    producer, loaded = None, False
     while True:
         now = time.monotonic()
+        if producer is not None and (producer.poll() is not None or
+                                     now - producer.started >= PRODUCER_TIMEOUT):
+            fresh, current = collect_rows(producer), producer.current
+            producer = None
+            if current != window:
+                # Read against a window this view has since left: its fold
+                # exemptions are for the wrong row. Drop it, read again now.
+                refresh_at = 0
+            elif fresh is not None:
+                rows, loaded = fresh, True
+                # Publish the close-landing candidates for THIS window (issue
+                # #900) — only on change, so an idle view forks nothing extra.
+                # `@sidebar_next_of` pins them to the window they were read
+                # against: the hub-arrival hook uses them only when THAT is
+                # the window that just closed.
+                nxt = " ".join(landing(sessions(rows), window))
+                if (window, nxt) != published and window in [row[0] for row in rows]:
+                    tmux("set-option", "-t", "=" + session + ":", "@sidebar_next", nxt, ";",
+                         "set-option", "-t", "=" + session + ":", "@sidebar_next_of", window)
+                    published = (window, nxt)
         if spawning is not None and spawning.poll() is not None:
             # The spawn selected its window; the hook has moved (or is moving)
             # this view there. Input goes to the new session's agent.
@@ -496,21 +555,16 @@ def ui(screen, session, worker, lock):
             if fields(worker, "#{pane_dead}") != ["0"]:
                 return
             shown = visible(info[:4], time.time())
-            if shown:
-                result = run(["bash", str(BIN / "tmux-dashboard-rows.sh"), "--sidebar"], env=env)
-                if result.returncode == 0:
-                    rows = [line.split(US, 4) for line in result.stdout.split("\n")
-                            if len(line.split(US, 4)) == 5]
-                    # Publish the close-landing candidates for THIS window (issue
-                    # #900) — only on change, so an idle view forks nothing extra.
-                    # `@sidebar_next_of` pins them to the window they were read
-                    # against: the hub-arrival hook uses them only when THAT is
-                    # the window that just closed.
-                    nxt = " ".join(landing(sessions(rows), window))
-                    if (window, nxt) != published and window in [row[0] for row in rows]:
-                        tmux("set-option", "-t", "=" + session + ":", "@sidebar_next", nxt, ";",
-                             "set-option", "-t", "=" + session + ":", "@sidebar_next_of", window)
-                        published = (window, nxt)
+            if shown and producer is None:
+                producer = start_rows(env)
+                if not loaded:
+                    # The first frame waits for real rows rather than flash an
+                    # empty list; input has nothing to act on before it anyway.
+                    try:
+                        producer.wait(timeout=PRODUCER_TIMEOUT)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    continue
         if not shown:
             follow_at = None  # a hidden view never switches windows
             screen.timeout(1000)
@@ -523,7 +577,10 @@ def ui(screen, session, worker, lock):
         # follow all ignore it (`acts`). `where` is the selection's place in the
         # PAINTED list, which the scroll offset is measured in.
         ids = selectable(rows)
-        if selected not in ids:
+        # Rows still in flight for a window just jumped to may not hold it yet (a
+        # folded child shows only as the current row): keep the selection until
+        # they land, rather than reset it to the top for one frame.
+        if selected not in ids and producer is None:
             selected = window if window in ids else (ids[0] if ids else "")
         index = ids.index(selected) if selected in ids else 0
         where = next((i for i, row in enumerate(rows) if key_of(row) == selected), 0)
@@ -595,6 +652,8 @@ def ui(screen, session, worker, lock):
             wait = min(wait, follow_at - time.monotonic())
         if spawning is not None:
             wait = min(wait, 0.2)
+        if producer is not None:
+            wait = min(wait, PRODUCER_POLL)
         screen.timeout(max(1, min(1000, int(wait * 1000))))
         key = screen.getch()
         if key == curses.KEY_F12:
