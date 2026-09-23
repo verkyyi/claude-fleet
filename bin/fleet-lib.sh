@@ -631,6 +631,21 @@ fleet_current_repo() {
   fi
 }
 
+# fleet_anchor_repo <sess> <window-target> → the repo a session started FROM that
+# window should take (issue #1009): only in a 2+ repo fleet viewing `all`, and only
+# the window's own repo (fleet_window_repo — @repo, never a guess). Prints nothing
+# otherwise — a one-repo fleet, a single repo in view (it still wins), or a
+# window with no repo — and the caller keeps its behavior (no repo / ask).
+fleet_anchor_repo() {
+  local r
+  [ -n "${2:-}" ] || return 0
+  fleet_multirepo "${1:-}" || return 0
+  [ "$(fleet_current_repo "$1")" = all ] || return 0
+  r=$(fleet_window_repo "$1" "$2")
+  [ -n "$r" ] && fleet_repo_hosted "$1" "$r" && printf '%s\n' "$r"
+  return 0
+}
+
 # fleet_current_repo_set <sess> <repo|all> — refuses (1) a repo the fleet does not host.
 fleet_current_repo_set() {
   local sess="${1:-}" want="${2:-}" d

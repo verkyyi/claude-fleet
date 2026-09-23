@@ -195,7 +195,19 @@ def clip(text, width):
     return "".join(out)
 
 
-def new_task(screen, env):
+def anchor_repo(session, wid, env):
+    """The repo a session started from this row takes (issue #1009): under `all`
+    in a 2+ repo fleet, the row's own repo (fleet_anchor_repo → @repo, never a
+    guess); "" otherwise, and the caller keeps today's behavior — a scratch with
+    no repo, ⌃n's repo picker. A single repo in view still wins downstream."""
+    if not wid.startswith("@"):
+        return ""
+    result = run(["bash", "-c", '. "$0/fleet-lib.sh" && fleet_anchor_repo "$1" "$2"',
+                  str(BIN), session, wid], env=env)
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def new_task(screen, env, repo=""):
     """The hub's ⌃n popup, launched from this pane by ⌃n (issue #821; a letter
     since #896 types into the input line instead): file an issue
     and spawn its worker. dash-popup.sh resolves the client, raises @popup_open
@@ -204,10 +216,13 @@ def new_task(screen, env):
     Leave curses meanwhile: a popup draws on the client, not on this pane, but
     when none can open (no client, an overlay already up) dash-popup.sh runs the
     command INLINE here, and its fzf title prompt then needs a sane tty. No
-    timeout — the popup lives as long as the operator types."""
+    timeout — the popup lives as long as the operator types. `repo` (the
+    anchor row's, issue #1009) rides CF_REPO on the popup's command line: a
+    popup's shell takes the server's environment, not this one."""
     curses.endwin()
-    subprocess.call(["bash", str(BIN / "dash-popup.sh"), "-w", "90%", "-h", "12", "--",
-                     "bash", str(BIN / "dash-issue-new.sh"), "confirm", "--spawn"], env=env)
+    pin = ["env", "CF_REPO=" + repo] if repo else []
+    subprocess.call(["bash", str(BIN / "dash-popup.sh"), "-w", "90%", "-h", "12", "--"] + pin +
+                    ["bash", str(BIN / "dash-issue-new.sh"), "confirm", "--spawn"], env=env)
     screen.clear()  # the next refresh resumes curses and repaints the whole grid
 
 
@@ -282,16 +297,19 @@ def mark_input(pane, text):
         tmux("set-option", "-up", "-t", pane, "@sidebar_input")
 
 
-def spawn_scratch(name, env):
+def spawn_scratch(name, env, repo=""):
     """The hub's ⌃s with a name (issue #896): the same script and the same
     provenance (`--origin hub` — the sidebar sits in a worker's window, and a
     session started here is not that worker's child). Focus follows the new
     window, and the window-changed hook moves this view there. stderr (the
     refusal reason) goes to a file, not a pipe: whatever the spawn leaves running
-    would hold a pipe open, and reading it would freeze this view."""
+    would hold a pipe open, and reading it would freeze this view. `repo` (the
+    anchor row's, issue #1009) goes as --repo; empty keeps dash-raw-session.sh's
+    own resolution."""
     log = tempfile.TemporaryFile("w+")
     proc = subprocess.Popen(
-        ["bash", str(BIN / "dash-raw-session.sh"), "--name", name, "--origin", "hub"],
+        ["bash", str(BIN / "dash-raw-session.sh"), "--name", name, "--origin", "hub"] +
+        (["--repo", repo] if repo else []),
         env=dict(env, FLEET_SPAWN_FOCUS="1"), stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL, stderr=log)
     proc.log = log
@@ -587,7 +605,8 @@ def ui(screen, session, worker, lock):
             follow_at = None
             if spawning is None:
                 toast = ""
-                spawning = spawn_scratch(text.strip(), env)
+                spawning = spawn_scratch(text.strip(), env,
+                                         anchor_repo(session, selected or window, env))
         elif key in (10, 13, curses.KEY_ENTER):
             # The Enter bind already returned the client to root; the key reaches
             # here a run-shell hop later. If the follow (or anyone) has moved the
@@ -607,7 +626,7 @@ def ui(screen, session, worker, lock):
             # just before must not fire after it and switch away from the window
             # the spawn made current.
             follow_at = None
-            new_task(screen, env)
+            new_task(screen, env, anchor_repo(session, selected or window, env))
             refresh_at = 0
         elif key == 15:
             # ⌃o (`restore`; its ⌥o fallback is rewritten to ⌃o by the bind). The
