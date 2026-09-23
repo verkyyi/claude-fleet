@@ -30,7 +30,10 @@
 # defense-in-depth), the pull refuses; we surface it once like fleet-cleanup.sh
 # ("base checkout would not fast-forward — resolve by hand") and move on. Never
 # merge, never rebase, never force. An already-current base is a cheap no-op, so
-# a quiet repo costs one `fetch` per tick and nothing else.
+# a quiet repo costs one `fetch` per tick and nothing else. A base checkout that
+# is not ON $BASE (a side branch, a detached HEAD) is never pulled at all — the
+# pull would follow the wrong branch and report "already current" forever; the
+# tick logs "base … is on <branch>, not <base> — not syncing" instead (#1044).
 #
 # BASE ONLY. It never touches worktrees, windows, branches, issues, or PRs —
 # pure `fetch` + `pull --ff-only` on $FLEET_MAIN. Runs OUTSIDE any session (a
@@ -131,48 +134,61 @@ sync_repo() { (
   lease="$LEASE_DIR/land-$slug.lock"
   old=$(git -C "$main" rev-parse --short HEAD 2>/dev/null)
 
-  # DRY-RUN: fetch to learn the remote tip (read-only w.r.t. the base branch —
-  # it moves only FETCH_HEAD / remote-tracking refs), report, take no lease, and
-  # never pull. This previews EXACTLY what a real tick would fast-forward.
-  if [ "$DRY" = 1 ]; then
-    [ "$deps" = 1 ] && log "$sess: would keep $main's shared deps current (dry-run)"
-    if ! git -C "$main" fetch origin "$base" --quiet 2>/dev/null; then
-      log "$sess: fetch failed for $repo ($base) — skip (dry-run)"; exit 0
-    fi
-    new=$(git -C "$main" rev-parse --short FETCH_HEAD 2>/dev/null)
-    if [ -z "$new" ] || [ "$new" = "$old" ]; then
-      log "$sess: base $main already current at ${old:-?} (dry-run)"
-    else
-      log "$sess: would ff $main ${old:-?}..$new (dry-run)"
-    fi
-    exit 0
-  fi
-
-  # Shared land lease — the SAME lock every base-mover holds. NON-BLOCKING: if a
-  # cleaner (or another base-syncer) holds it, the base is already being advanced
-  # under it, so skip this tick instead of queueing behind it.
-  if ! land_lease_acquire "$lease" "$LEASE_TTL" "base-sync:$sess:$$@$(land_lease_host)"; then
-    log "$sess: land lease busy (held by $(land_lease_holder "$lease")) — another base-mover has $repo, skip"
-    exit 0
-  fi
-  # shellcheck disable=SC2329  # invoked via the EXIT/INT/TERM traps below
-  drop_lease() { land_lease_release "$lease"; }
-  trap drop_lease EXIT
-  trap 'drop_lease; exit 130' INT
-  trap 'drop_lease; exit 143' TERM
-
-  git -C "$main" fetch origin "$base" --quiet 2>/dev/null
-  if git -C "$main" pull --ff-only >/dev/null 2>&1; then
-    new=$(git -C "$main" rev-parse --short HEAD 2>/dev/null)
-    if [ "$new" = "$old" ]; then
-      log "$sess: base $main already current at ${old:-?}"
-    else
-      log "$sess: ff $main ${old:-?}..${new:-?}"
-    fi
+  # WRONG BRANCH (issue #1044): `pull --ff-only` follows whatever is checked out,
+  # so a base left on a side branch is level with its OWN upstream and would read
+  # "already current" every tick while $base runs away. Never pull it — fetch only
+  # (keeps origin/$base current, so the behind count here and in the doctor is
+  # real), say so, and leave the checkout to the operator. The deps refresh below
+  # still runs against the tree that IS checked out; the doctor flags it.
+  if cur=$(fleet_base_off_branch "$main" "$base"); then
+    git -C "$main" fetch origin "$base" --quiet 2>/dev/null
+    behind=$(git -C "$main" rev-list --count "HEAD..refs/remotes/origin/$base" 2>/dev/null)
+    log "$sess: base $main is on $cur, not $base${behind:+ ($behind behind origin/$base)} — not syncing; git -C $main checkout $base"
+    [ "$DRY" = 1 ] && exit 0
   else
-    log "$sess: base checkout $main would not fast-forward — resolve it by hand (something diverged locally)."
+    # DRY-RUN: fetch to learn the remote tip (read-only w.r.t. the base branch —
+    # it moves only FETCH_HEAD / remote-tracking refs), report, take no lease, and
+    # never pull. This previews EXACTLY what a real tick would fast-forward.
+    if [ "$DRY" = 1 ]; then
+      [ "$deps" = 1 ] && log "$sess: would keep $main's shared deps current (dry-run)"
+      if ! git -C "$main" fetch origin "$base" --quiet 2>/dev/null; then
+        log "$sess: fetch failed for $repo ($base) — skip (dry-run)"; exit 0
+      fi
+      new=$(git -C "$main" rev-parse --short FETCH_HEAD 2>/dev/null)
+      if [ -z "$new" ] || [ "$new" = "$old" ]; then
+        log "$sess: base $main already current at ${old:-?} (dry-run)"
+      else
+        log "$sess: would ff $main ${old:-?}..$new (dry-run)"
+      fi
+      exit 0
+    fi
+
+    # Shared land lease — the SAME lock every base-mover holds. NON-BLOCKING: if a
+    # cleaner (or another base-syncer) holds it, the base is already being advanced
+    # under it, so skip this tick instead of queueing behind it.
+    if ! land_lease_acquire "$lease" "$LEASE_TTL" "base-sync:$sess:$$@$(land_lease_host)"; then
+      log "$sess: land lease busy (held by $(land_lease_holder "$lease")) — another base-mover has $repo, skip"
+      exit 0
+    fi
+    # shellcheck disable=SC2329  # invoked via the EXIT/INT/TERM traps below
+    drop_lease() { land_lease_release "$lease"; }
+    trap drop_lease EXIT
+    trap 'drop_lease; exit 130' INT
+    trap 'drop_lease; exit 143' TERM
+
+    git -C "$main" fetch origin "$base" --quiet 2>/dev/null
+    if git -C "$main" pull --ff-only >/dev/null 2>&1; then
+      new=$(git -C "$main" rev-parse --short HEAD 2>/dev/null)
+      if [ "$new" = "$old" ]; then
+        log "$sess: base $main already current at ${old:-?}"
+      else
+        log "$sess: ff $main ${old:-?}..${new:-?}"
+      fi
+    else
+      log "$sess: base checkout $main would not fast-forward — resolve it by hand (something diverged locally)."
+    fi
+    land_lease_release "$lease"
   fi
-  land_lease_release "$lease"
 
   # Shared deps (issue #961): the base's node_modules must follow its lockfiles, or
   # every worktree fleet-deps-link points at it borrows a stale tree. Reinstall what

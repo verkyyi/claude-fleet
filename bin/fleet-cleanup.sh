@@ -597,7 +597,10 @@ until land_lease_acquire "$LEASE" "$LEASE_TTL" "${FLEET_SESSION:-$USER}:$$"; do
 done
 
 git -C "$MAIN" fetch origin "$BASE" --quiet 2>/dev/null
-if ! git -C "$MAIN" pull --ff-only >/dev/null 2>&1; then
+# A base left on a side branch would pull THAT branch, not $BASE (issue #1044).
+if off=$(fleet_base_off_branch "$MAIN" "$BASE"); then
+  note "  base $MAIN is on $off, not $BASE — not syncing; git -C $MAIN checkout $BASE"
+elif ! git -C "$MAIN" pull --ff-only >/dev/null 2>&1; then
   note "  base checkout $MAIN would not fast-forward — resolve it by hand (something diverged locally)."
 fi
 land_lease_release "$LEASE"

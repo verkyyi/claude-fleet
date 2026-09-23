@@ -78,6 +78,7 @@ case "\${1:-}" in
   pull)    printf 'pull\n' >> "$PULL_LOG"
            [ "\${FAKE_RESUME_ON_PULL:-0}" = 1 ] && touch "$WORK/resumed"
            : ;;          # git pull --ff-only
+  symbolic-ref) printf '%s\n' "\${FAKE_BASE_ON:-master}" ;;   # base checkout's branch (#1044)
   status)  [ "\${FAKE_DIRTY:-0}" = 1 ] && printf ' M some/file\n'; : ;;
   rev-parse)
     case "\$*" in *origin/*) printf '%s\n' "\${FAKE_BASE_TIP:-deadbeef}"; exit 0 ;; esac
@@ -393,6 +394,15 @@ grep -q 'wt-issue-42' "$LEDGER" || fail "1 ledger row missing the worktree path 
 # base fast-forward happened
 [ -s "$PULL_LOG" ] || fail "1 merged cleanup must fast-forward the base (git pull --ff-only)" "$err"
 ok "1 MERGED → cleaned + ledger-before-teardown + ordered teardown + base pull"
+
+# --- 1b. MERGED, base checkout on a side branch → reaped, base NOT pulled (#1044)
+: > "$LEDGER"
+tok="$(FAKE_BASE_ON=ops/side run_clean merged)"; err="$(cat "$WORK/err")"
+[ "$tok" = "cleaned:deadbeef" ] || fail "1b expected cleaned:deadbeef, got '$tok'" "$err"
+[ -s "$PULL_LOG" ] && fail "1b a base on a side branch must NOT be pulled (it would pull the side branch)" "$err"
+printf '%s' "$err" | grep -q "base $WORK/main is on ops/side, not master — not syncing" \
+  || fail "1b the wrong-branch base must be reported" "$err"
+ok "1b MERGED + base on a side branch → reaped, no base pull, reported"
 
 # ======= CLOSED-unmerged: the liveness gate, issue #544 ========================
 # The default fixture is an ABANDONED session: the transcript went quiet an hour

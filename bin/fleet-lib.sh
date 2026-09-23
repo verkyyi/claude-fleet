@@ -2370,6 +2370,22 @@ fleet_base_deps_on() {
   return 1
 }
 
+# fleet_base_off_branch <main> <base> — rc 0 iff the base checkout at <main> is
+# NOT on <base> (issue #1044), printing what it IS on: the branch name, or
+# `detached HEAD`. rc 1 = on <base> (prints nothing) or <main> is unreadable.
+# Every base-mover (base-sync, the cleaner) asks this BEFORE `pull --ff-only`,
+# because the pull follows whatever branch is checked out: a base left on a side
+# branch is level with ITS OWN upstream, so the pull is a clean no-op that reads
+# "already current" forever while the real base branch runs away (2026-09-23: the
+# monorepo base sat 834 commits behind for 10 days on an ops/* branch).
+fleet_base_off_branch() {
+  git -C "$1" rev-parse --git-dir >/dev/null 2>&1 || return 1
+  local cur
+  cur=$(git -C "$1" symbolic-ref --quiet --short HEAD 2>/dev/null) || cur="detached HEAD"
+  [ "$cur" = "$2" ] && return 1
+  printf '%s\n' "$cur"
+}
+
 # fleet_worktree_drop <main> <worktree-dir> [--force] — retire a worktree WITHOUT
 # paying for its bytes. Prints exactly one token; rc 0 ⇔ the worktree is gone from
 # `git worktree list`:

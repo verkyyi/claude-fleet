@@ -22,6 +22,10 @@
 #                  lockfile's sha; a failing install is logged, the ff still lands.
 #                  Unset (and no fleet-deps-link hook) → no install, no `deps` line:
 #                  the tick is what it was before.
+#   • WRONG BRANCH (issue #1044) a base checkout left on a side branch (or a
+#                  detached HEAD) is NOT pulled — not even its own upstream — and
+#                  the tick says so, naming the branch + commits behind origin/<base>
+#                  and the checkout fix; it never logs "already current".
 #
 # Exit 0 = pass. Non-zero = fail (prints the captured log + the base/remote tips).
 # repo fake/repo → slug fake-repo → shared lease land-fake-repo.lock.
@@ -212,5 +216,32 @@ drun s1
 grep -q ': deps ' "$WORK/log" && fail "base-deps-off: no deps line may be logged with the feature off"
 [ ! -e "$MAIN/node_modules" ] || fail "base-deps-off: node_modules appeared"
 
-printf 'selftest PASS: behind·current·diverged · one-per-repo · single-writer · disk-gate · off-switch · dry-run · base-deps on/off\n'
+# 11) WRONG BRANCH: the base sits on a side branch that tracks its own upstream.
+reset; scene behind; conf s1
+g -C "$MAIN" checkout -q -b ops/side
+commit_in "$MAIN" s S; g -C "$MAIN" push -q -u origin ops/side 2>/dev/null
+g -C "$SEED" fetch -q origin; g -C "$SEED" checkout -q ops/side 2>/dev/null
+commit_in "$SEED" s2 S2; g -C "$SEED" push -q origin ops/side 2>/dev/null   # side's upstream moved
+g -C "$SEED" checkout -q master
+before="$(main_tip)"
+run s1 || fail "wrong-branch: must be non-fatal"
+[ "$(main_tip)" = "$before" ] || fail "wrong-branch: a base on a side branch must not be pulled (not even its own upstream)"
+[ "$(g -C "$MAIN" symbolic-ref --short HEAD)" = ops/side ] || fail "wrong-branch: the checkout must be left alone"
+grep -q "base $MAIN is on ops/side, not master (1 behind origin/master) — not syncing; git -C $MAIN checkout master" "$WORK/log" \
+  || fail "wrong-branch: should log the side branch, the behind count and the fix"
+grep -q 'already current' "$WORK/log" && fail "wrong-branch: must never read 'already current'"
+ls "$WORK/leases"/land-*.lock >/dev/null 2>&1 && fail "wrong-branch: no lease may be left behind"
+reset; run --dry-run s1
+grep -q 'is on ops/side, not master' "$WORK/log" || fail "wrong-branch: --dry-run should report it too"
+grep -q 'would ff' "$WORK/log" && fail "wrong-branch: --dry-run must not preview a pull"
+# detached HEAD is the same refusal
+reset; g -C "$MAIN" checkout -q --detach
+run s1
+grep -q "base $MAIN is on detached HEAD, not master" "$WORK/log" || fail "wrong-branch: a detached HEAD should be reported"
+# back on master → the ordinary ff resumes
+reset; g -C "$MAIN" checkout -q master
+run s1
+[ "$(main_tip)" = "$(remote_tip)" ] || fail "wrong-branch: back on master the base should fast-forward again"
+
+printf 'selftest PASS: behind·current·diverged · one-per-repo · single-writer · disk-gate · off-switch · dry-run · base-deps on/off · wrong-branch\n'
 exit 0
