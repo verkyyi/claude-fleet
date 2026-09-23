@@ -194,8 +194,15 @@ lock_commit 2; reset; FAKE_RC=1 drun s1
 [ "$(main_tip)" = "$(remote_tip)" ] || fail "base-deps: a failing install must not block the ff"
 grep -q ': deps install-failed:rc=1 \.' "$WORK/log" || fail "base-deps: failed install should be logged"
 [ ! -e "$MAIN/node_modules/.fleet-lock-sha" ] || fail "base-deps: a failed install must leave the dir unstamped"
+# Issue #1026: the next tick does NOT re-run it (same lockfile, same failure) —
+# one skip line, then silence; a lockfile move retries it.
+: > "$WORK/npm.calls"; reset; drun s1
+[ ! -s "$WORK/npm.calls" ] || fail "base-deps: the next tick must not re-run a failing dir on the same lockfile"
+grep -q ": deps skipped:failing \.\$" "$WORK/log" || fail "base-deps: the first skip should be logged"
 reset; drun s1
-grep -q ": deps installed \.\$" "$WORK/log" || fail "base-deps: the next tick must retry the failed dir"
+grep -q ': deps ' "$WORK/log" && fail "base-deps: a parked failing dir must be silent after the first skip"
+lock_commit 2b; reset; drun s1
+grep -q ": deps installed \.\$" "$WORK/log" || fail "base-deps: a lockfile change must retry the failed dir"
 
 # 10) BASE-DEPS off (the default): same lockfile ff, no install, no deps line.
 reset; scene current; lock_commit 3; conf s1; : > "$WORK/npm.calls"

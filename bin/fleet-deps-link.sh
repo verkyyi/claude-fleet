@@ -6,6 +6,7 @@
 #   fleet-deps-link.sh --unlink <dir>
 #   fleet-deps-link.sh --prime-base [<main>]         install + stamp every base dir
 #   fleet-deps-link.sh --refresh-base <main> [<old> <new>]   reinstall the stale ones
+#   fleet-deps-link.sh --refresh-base <main> <dir>   retry one dir, failing or not
 #   fleet-deps-link.sh --base-status [<main>]        fresh / stale / … per base dir
 #
 # Why: every worktree used to install its dependencies from zero — on the monorepo
@@ -33,6 +34,9 @@
 #                             lockfiles match, but the base's node_modules carries
 #                             no stamp at all, so nothing proves it is current —
 #                             `--prime-base` once stamps it
+#   installed-needed:base-failing <dir>
+#                             lockfiles match, but the base's own install of that
+#                             lockfile FAILED (issue #1026) — install as usual
 #   skipped:<why> <dir>       not linked, for <why>:
 #       no-lockfile           no lockfile here or above it to compare
 #       local-link            the base's node_modules links back into repo SOURCE
@@ -69,14 +73,30 @@
 #                             tool has stamped whose stamp no longer matches, plus
 #                             every directory whose lockfile changed in <old>..<new>.
 #                             A no-op tick costs a sha per stamped lockfile.
+#   --refresh-base <main> <dir>
+#                             force one directory (relative to <main>) — the retry
+#                             for a `failing` one once its repo-side cause is fixed.
 #   --base-status [<main>]    `<state> <dir>` per lockfile directory (fresh / stale /
-#                             unstamped / installing / not-installed) and a closing
-#                             `summary fresh=… stale=… unstamped=… not-installed=…`.
+#                             failing / unstamped / installing / not-installed) and a
+#                             closing `summary fresh=… stale=… failing=… unstamped=…
+#                             … failing-since=<oldest ts>|-`.
 #
 # Installs are `nice -n 10`, serial, each under fleet_timebox
 # (FLEET_BASE_DEPS_TIMEOUT, default 900 s), output appended to
 # <install>/logs/base-deps.log (FLEET_BASE_DEPS_LOG). A failed or timed-out install
-# leaves the directory UNSTAMPED — i.e. not linked — and is retried next tick. Any
+# leaves the directory UNSTAMPED — i.e. not linked — and FAILING: a marker
+# (node_modules/.fleet-install-failed = `<lock sha> <ts>`) keyed by the lockfile's
+# sha (issue #1026). A repo-side failure (lockfile drift, a native build, a
+# postinstall download) fails the same way every time, and retrying it each tick
+# hammered the monorepo 535×/day — so a failing dir is skipped, with ONE
+# `still failing since <ts>` log line, until its lockfile changes, a --prime-base,
+# or a `--refresh-base <main> <dir>` forces it.
+#
+# A manager missing from the daemon's PATH (launchd's is not a login shell's — on a
+# Mac pnpm lives beside a keg-only node@NN) is resolved once per run: the login
+# shell's PATH ($SHELL -lc, FLEET_DEPS_LOGIN_SHELL), then known Homebrew / nvm /
+# volta / pnpm-home dirs, then `corepack <pm>`. It runs with its own dir first on
+# PATH, so its `#!/usr/bin/env node` finds the node it was installed beside. Any
 # TRACKED file under the directory that the install rewrote (yarn v1 does, even
 # with --frozen-lockfile) is restored with `git checkout --`, so the base never
 # goes dirty and base-sync's ff never stalls. One run per base at a time (a mkdir
@@ -181,18 +201,28 @@ lock_sha() {
   else sha256sum < "$1" 2>/dev/null; fi | cut -d' ' -f1
 }
 
-STAMP=.fleet-lock-sha INSTALLING=.fleet-installing
+STAMP=.fleet-lock-sha INSTALLING=.fleet-installing FAILED=.fleet-install-failed
 
-# base_state <base-dir> <lockfile-basename> → fresh | stale | unstamped |
+# base_state <base-dir> <lockfile-basename> → fresh | stale | failing | unstamped |
 # installing | not-installed: is <base-dir>/node_modules the tree <lockfile> installs?
 base_state() {
   local d="$1" lk="$2" st
   [ -d "$d/node_modules" ] || { echo not-installed; return; }
   [ -e "$d/node_modules/$INSTALLING" ] && { echo installing; return; }
-  [ -f "$d/node_modules/$STAMP" ] || { echo unstamped; return; }
+  [ -f "$d/node_modules/$STAMP" ] || {
+    [ -f "$d/node_modules/$FAILED" ] && echo failing || echo unstamped; return; }
   IFS= read -r st < "$d/node_modules/$STAMP" 2>/dev/null || st=""
   [ -n "$st" ] && [ "$st" = "$(lock_sha "$d/$lk")" ] && { echo fresh; return; }
   echo stale
+}
+
+# failed_field <base-dir> <n> → field n of its failure marker (1 = lock sha,
+# 2 = first-failure ts, 3 = `noted` once the skip has been logged), or empty.
+failed_field() {
+  local a="" b="" c=""
+  [ -f "$1/node_modules/$FAILED" ] || return 0
+  read -r a b c < "$1/node_modules/$FAILED" || [ -n "$a" ] || return 0
+  case "$2" in 1) printf '%s' "$a" ;; 2) printf '%s' "$b" ;; 3) printf '%s' "$c" ;; esac
 }
 
 manifest_add() {  # <manifest> <rel>
@@ -238,24 +268,37 @@ if [ -n "$BASE_MODE" ]; then
   }
 
   if [ "$BASE_MODE" = status ]; then
-    nf=0 ns=0 nu=0 ni=0 nn=0
+    nf=0 ns=0 nx=0 nu=0 ni=0 nn=0 oldest=""
     while IFS= read -r r; do
       [ -n "$r" ] || continue
       st=$(base_state "$(at "$r")" "$(lock_of "$(at "$r")")")
       case "$st" in fresh) nf=$((nf+1)) ;; stale) ns=$((ns+1)) ;; unstamped) nu=$((nu+1)) ;;
-                    installing) ni=$((ni+1)) ;; *) nn=$((nn+1)) ;; esac
+                    installing) ni=$((ni+1)) ;;
+                    failing) nx=$((nx+1))
+                             fts=$(failed_field "$(at "$r")" 2)
+                             { [ -z "$oldest" ] || { [ -n "$fts" ] && [[ "$fts" < "$oldest" ]]; }; } && oldest="$fts" ;;
+                    *) nn=$((nn+1)) ;;
+      esac
       printf '%s %s\n' "$st" "$r"
     done <<EOF
 $(base_dirs)
 EOF
-    printf 'summary fresh=%s stale=%s unstamped=%s installing=%s not-installed=%s\n' "$nf" "$ns" "$nu" "$ni" "$nn"
+    printf 'summary fresh=%s stale=%s failing=%s unstamped=%s installing=%s not-installed=%s failing-since=%s\n' \
+      "$nf" "$ns" "$nx" "$nu" "$ni" "$nn" "${oldest:--}"
     exit 0
   fi
 
   # The work list: prime = every lockfile dir; refresh = every stamped-by-us dir
   # that is no longer fresh + every dir whose lockfile changed in <old>..<new>.
+  FORCE=0
   if [ "$BASE_MODE" = prime ]; then
-    TODO=$(base_dirs)
+    TODO=$(base_dirs); FORCE=1
+  elif [ -n "${POS[1]:-}" ] && [ -z "${POS[2]:-}" ]; then
+    # --refresh-base <main> <dir>: retry exactly that dir, a failing one included.
+    r="${POS[1]%/}"; case "$r" in "$MAIN") r=. ;; "$MAIN"/*) r="${r#"$MAIN"/}" ;; ''|./) r=. ;; esac
+    lock_of "$(at "$r")" >/dev/null && [ -f "$(at "$r")/package.json" ] \
+      || { echo "fleet-deps-link: no lockfile dir $r under $MAIN" >&2; exit 2; }
+    TODO="$r"; FORCE=1
   else
     TODO=""
     if [ -f "$MANAGED" ]; then
@@ -281,6 +324,38 @@ EOF
   fi
   [ -n "$TODO" ] || exit 0
 
+  LOG="${FLEET_BASE_DEPS_LOG:-$BIN/../logs/base-deps.log}"
+  ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+  # Failing dirs whose lockfile has not moved are not retried (issue #1026): the
+  # same lockfile fails the same way. One log line the first time it is skipped,
+  # then silence — neither the log nor base-sync's hears about it every tick.
+  if [ "$FORCE" = 0 ]; then
+    keep=""
+    while IFS= read -r r; do
+      [ -n "$r" ] || continue
+      d=$(at "$r"); fsha=$(failed_field "$d" 1)
+      if [ -n "$fsha" ] && [ ! -f "$d/node_modules/$STAMP" ] && lk=$(lock_of "$d") \
+         && [ "$fsha" = "$(lock_sha "$d/$lk")" ]; then
+        [ "$DRY" = 1 ] && { printf 'skipped:failing %s\n' "$r"; continue; }
+        if [ "$(failed_field "$d" 3)" != noted ]; then
+          mkdir -p "$(dirname "$LOG")" 2>/dev/null
+          printf '%s %s still failing since %s, lock %s — not retried until the lockfile changes (--refresh-base %s %s forces it)\n' \
+            "$(ts)" "$d" "$(failed_field "$d" 2)" "${fsha%"${fsha#????????????}"}" "$MAIN" "$r" >> "$LOG"
+          printf '%s %s noted\n' "$fsha" "$(failed_field "$d" 2)" > "$d/node_modules/$FAILED"
+          printf 'skipped:failing %s\n' "$r"
+        fi
+        continue
+      fi
+      keep="$keep$r
+"
+    done <<EOF
+$TODO
+EOF
+    TODO=$(printf '%s' "$keep")
+    [ -n "$TODO" ] || exit 0
+  fi
+
   if [ "$DRY" = 1 ]; then
     printf '%s\n' "$TODO" | sed 's/^/would-install /'; exit 0
   fi
@@ -304,9 +379,48 @@ EOF
   command -v fleet_timebox >/dev/null 2>&1 || fleet_timebox() { shift; "$@"; }
   TMO="${FLEET_BASE_DEPS_TIMEOUT:-900}"
   case "$TMO" in ''|*[!0-9]*) TMO=900 ;; esac
-  LOG="${FLEET_BASE_DEPS_LOG:-$BIN/../logs/base-deps.log}"
   mkdir -p "$(dirname "$LOG")" 2>/dev/null
-  ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+  # pm_resolve <name> → sets PM_RUN (the command: <name>, a path, or corepack's),
+  # PM_SUB (`<name>` under corepack, else empty) and PM_DIR (prepended to PATH for
+  # the install, or empty). Cached per run, the resolved path logged
+  # once (issue #1026). rc 1 = nowhere.
+  LOGIN_PATH="" LOGIN_PROBED=0 PMC_npm="" PMC_yarn="" PMC_pnpm=""
+  login_path() {
+    [ "$LOGIN_PROBED" = 1 ] && return 0
+    LOGIN_PROBED=1
+    local sh="${FLEET_DEPS_LOGIN_SHELL:-${SHELL:-}}"
+    [ -n "$sh" ] && [ -x "$sh" ] || return 0
+    LOGIN_PATH=$(fleet_timebox 15 "$sh" -lc 'printf "\n__FLEET_PATH__=%s\n" "$PATH"' </dev/null 2>/dev/null \
+      | sed -n 's/^__FLEET_PATH__=//p' | tail -1)
+  }
+  pm_resolve() {
+    local n="$1" hit="" c g
+    PM_DIR="" PM_SUB=""
+    command -v "$n" >/dev/null 2>&1 && { PM_RUN="$n"; return 0; }
+    case "$n" in npm|yarn|pnpm) eval "hit=\${PMC_$n:-}" ;; esac   # the per-run cache
+    if [ -z "$hit" ]; then
+      login_path
+      [ -n "$LOGIN_PATH" ] && hit=$(PATH="$LOGIN_PATH" command -v "$n" 2>/dev/null)
+      case "$hit" in /*) ;; *) hit="" ;; esac
+      if [ -z "$hit" ]; then
+        g="${FLEET_DEPS_TOOL_DIRS:-${HOMEBREW_PREFIX:-/opt/homebrew}/opt/node*/bin /usr/local/opt/node*/bin $HOME/.nvm/versions/node/*/bin $HOME/.volta/bin $HOME/Library/pnpm $HOME/.local/share/pnpm}"
+        for c in $g; do [ -x "$c/$n" ] && { hit="$c/$n"; break; }; done
+      fi
+      if [ -z "$hit" ] && [ "$n" != npm ]; then
+        for c in $g; do [ -x "$c/corepack" ] && { hit="corepack:$c/corepack"; break; }; done
+        [ -z "$hit" ] && [ -n "$LOGIN_PATH" ] && c=$(PATH="$LOGIN_PATH" command -v corepack 2>/dev/null) \
+          && case "$c" in /*) hit="corepack:$c" ;; esac
+      fi
+      [ -n "$hit" ] || return 1
+      case "$n" in npm|yarn|pnpm) eval "PMC_$n=\$hit" ;; esac
+      printf '%s %s not on PATH — resolved %s\n' "$(ts)" "$n" "$hit" >> "$LOG"
+    fi
+    case "$hit" in
+      corepack:*) PM_RUN="${hit#corepack:}"; PM_SUB="$n"; PM_DIR="${PM_RUN%/*}" ;;
+      *)          PM_RUN="$hit"; PM_DIR="${hit%/*}" ;;
+    esac
+  }
 
   while IFS= read -r r; do
     [ -n "$r" ] || continue
@@ -321,10 +435,13 @@ EOF
                       fi ;;
       *)              set -- npm ci ;;
     esac
-    if ! command -v "$1" >/dev/null 2>&1; then
+    if ! pm_resolve "$1"; then
       printf '%s %s skipped: %s not on PATH\n' "$(ts)" "$d" "$1" >> "$LOG"
       printf 'skipped:no-%s %s\n' "$1" "$r"; continue
     fi
+    shift
+    if [ -n "$PM_SUB" ]; then set -- "$PM_RUN" "$PM_SUB" "$@"; else set -- "$PM_RUN" "$@"; fi
+    [ -n "$PM_DIR" ] && RUNPATH="$PM_DIR:$PATH" || RUNPATH="$PATH"
     sha=$(lock_sha "$d/$lk")
     manifest_add "$MANAGED" "$r"          # before the install: a killed run is retried
     mkdir -p "$d/node_modules" 2>/dev/null
@@ -332,7 +449,7 @@ EOF
     : > "$d/node_modules/$INSTALLING"
     printf '%s %s start: %s (lock %s)\n' "$(ts)" "$d" "$*" "${sha%"${sha#????????????}"}" >> "$LOG"
     pre=$(git -C "$MAIN" diff --name-only HEAD -- "$d" 2>/dev/null)
-    ( cd "$d" && fleet_timebox "$TMO" nice -n 10 "$@" ) </dev/null >> "$LOG" 2>&1; rc=$?
+    ( cd "$d" && PATH="$RUNPATH" && export PATH && fleet_timebox "$TMO" nice -n 10 "$@" ) </dev/null >> "$LOG" 2>&1; rc=$?
     rm -f "$d/node_modules/$INSTALLING"
     # An install must never leave the base dirty: a dirty base blocks base-sync's
     # ff. `yarn install --frozen-lockfile` was seen rewriting a tracked yarn.lock
@@ -348,11 +465,18 @@ $(git -C "$MAIN" diff --name-only HEAD -- "$d" 2>/dev/null)
 RESTORE
     if [ "$rc" = 0 ] && [ -d "$d/node_modules" ]; then
       printf '%s\n' "$sha" > "$d/node_modules/$STAMP"
+      rm -f "$d/node_modules/$FAILED"
       printf '%s %s ok\n' "$(ts)" "$d" >> "$LOG"
       printf 'installed %s\n' "$r"
     else
       [ "$rc" = 124 ] && why=timeout || why="rc=$rc"
-      printf '%s %s FAILED (%s) — left unstamped, retried next tick\n' "$(ts)" "$d" "$why" >> "$LOG"
+      # Keep the FIRST failure's ts while the lock is unchanged (a forced retry that
+      # fails again is still the same failure); a new lock starts a new one.
+      fts=$(failed_field "$d" 2); [ "$(failed_field "$d" 1)" = "$sha" ] && [ -n "$fts" ] || fts=$(ts)
+      mkdir -p "$d/node_modules" 2>/dev/null
+      printf '%s %s\n' "$sha" "$fts" > "$d/node_modules/$FAILED"
+      printf '%s %s FAILED (%s) — left unstamped; not retried until the lockfile changes (lock %s)\n' \
+        "$(ts)" "$d" "$why" "${sha%"${sha#????????????}"}" >> "$LOG"
       printf 'install-failed:%s %s\n' "$why" "$r"
     fi
   done <<EOF
@@ -444,6 +568,7 @@ decide() {  # <rel> → prints the token
     case "$(base_state "$m" "$lk")" in
       fresh)     ;;
       unstamped) echo installed-needed:base-unstamped; return ;;
+      failing)   echo installed-needed:base-failing; return ;;
       *)         echo installed-needed:base-stale; return ;;
     esac
     local_link "$MAIN" "$m/node_modules" && { echo skipped:local-link; return; }

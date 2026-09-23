@@ -34,10 +34,15 @@
 #   REFRESH    --refresh-base <main> <old> <new> reinstalls exactly the dir whose
 #              lockfile changed, stamps it, and a new worktree then LINKS; a quiet
 #              second run does nothing; a failing install leaves it unstamped (not
-#              linked) and the next --refresh-base retries it.
+#              linked) and FAILING (issue #1026): the next ticks do NOT re-run it
+#              while its lockfile is unchanged (one `still failing since` line, then
+#              silence), a lockfile change retries it, `--refresh-base <main> <dir>`
+#              forces it, and a success clears the marker.
 #   PRIME      --prime-base installs + stamps every lockfile dir (npm / yarn / pnpm
 #              each with its frozen-lockfile form); --base-status counts them; a
 #              tracked lockfile the install rewrote is restored (base stays clean).
+#              pnpm absent from the (daemon's) PATH is resolved from the login
+#              shell's PATH and run from there (issue #1026).
 #
 # Real git, temp dirs, fake node_modules — no network, no npm, no tmux.
 set -uo pipefail
@@ -255,13 +260,35 @@ out=$(FAKE_RC=1 "$DL" --refresh-base "$MAIN" "$OLD" "$NEW")
 printf '%s\n' "$out" | grep -qx 'install-failed:rc=1 .' || fail "REFRESH: failing install verdict" "$out"
 [ ! -e "$MAIN/node_modules/.fleet-lock-sha" ] || fail "REFRESH: a failed install left a stamp"
 [ ! -e "$MAIN/node_modules/.fleet-installing" ] || fail "REFRESH: a failed install left the in-flight marker"
+[ "$(cut -d' ' -f1 "$MAIN/node_modules/.fleet-install-failed" 2>/dev/null)" = "$(sha "$MAIN/package-lock.json")" ] \
+  || fail "REFRESH: failure marker must carry the lockfile's sha" "$(cat "$MAIN/node_modules/.fleet-install-failed" 2>&1)"
 out=$("$DL" --dry-run "$WORK/wt-stale" "$MAIN")
-printf '%s\n' "$out" | grep -qx 'installed-needed:base-unstamped .' || fail "REFRESH: failed install must not link" "$out"
-# The retry needs no diff: the dir is recorded as ours and not fresh.
+printf '%s\n' "$out" | grep -qx 'installed-needed:base-failing .' || fail "REFRESH: failed install must not link" "$out"
+out=$("$DL" --base-status "$MAIN")
+printf '%s\n' "$out" | grep -qx 'failing .' || fail "REFRESH: status must say failing" "$out"
+printf '%s\n' "$out" | grep -q '^summary .* failing=1 .* failing-since=20[0-9-]*T' || fail "REFRESH: summary failing count + since" "$out"
+# The next ticks: same lockfile ⇒ NOT re-run (issue #1026). One log line, then silence.
+: > "$WORK/pm.calls"
+out=$(FAKE_RC=1 "$DL" --refresh-base "$MAIN")
+[ "$out" = "skipped:failing ." ] && [ ! -s "$WORK/pm.calls" ] || fail "REFRESH: a failing dir with an unchanged lock was re-run" "$out / $(cat "$WORK/pm.calls")"
+out=$(FAKE_RC=1 "$DL" --refresh-base "$MAIN")
+[ -z "$out" ] && [ ! -s "$WORK/pm.calls" ] || fail "REFRESH: 2nd skip must be silent and install nothing" "$out / $(cat "$WORK/pm.calls")"
+[ "$(grep -c "$MAIN still failing since" "$WORK/base-deps.log")" = 1 ] || fail "REFRESH: expected ONE still-failing log line" "$(cat "$WORK/base-deps.log")"
+# A lockfile change is a new attempt.
+cp "$MAIN/package-lock.json" "$WORK/lock.bak"; printf '{"lockfileVersion":3,"bump":2}\n' > "$MAIN/package-lock.json"
+out=$(FAKE_RC=1 "$DL" --refresh-base "$MAIN")
+printf '%s\n' "$out" | grep -qx 'install-failed:rc=1 .' && grep -qx "$MAIN npm ci" "$WORK/pm.calls" \
+  || fail "REFRESH: a lockfile change must retry a failing dir" "$out / $(cat "$WORK/pm.calls")"
+cp "$WORK/lock.bak" "$MAIN/package-lock.json"
+# The explicit retry: --refresh-base <main> <dir> forces a failing dir, lock unchanged.
+out=$(FAKE_RC=1 "$DL" --refresh-base "$MAIN")    # back on the committed lock ⇒ a change ⇒ one run
 : > "$WORK/pm.calls"
 out=$("$DL" --refresh-base "$MAIN")
-[ "$out" = "installed ." ] || fail "REFRESH: retry did not reinstall exactly the root" "$out"
+[ "$out" = "skipped:failing ." ] && [ ! -s "$WORK/pm.calls" ] || fail "REFRESH: re-failed dir must be parked again" "$out"
+out=$("$DL" --refresh-base "$MAIN" .)
+[ "$out" = "installed ." ] || fail "REFRESH: --refresh-base <main> <dir> must force the retry" "$out"
 grep -qx "$MAIN npm ci" "$WORK/pm.calls" || fail "REFRESH: expected npm ci in the base root" "$(cat "$WORK/pm.calls")"
+[ ! -e "$MAIN/node_modules/.fleet-install-failed" ] || fail "REFRESH: a success must clear the failure marker"
 [ "$(cat "$MAIN/node_modules/.fleet-lock-sha")" = "$(sha "$MAIN/package-lock.json")" ] || fail "REFRESH: stamp is not the new lockfile's sha"
 grep -q "$MAIN ok" "$WORK/base-deps.log" || fail "REFRESH: install not logged" "$(cat "$WORK/base-deps.log")"
 out=$("$DL" "$WORK/wt-stale" "$MAIN")
@@ -269,24 +296,34 @@ printf '%s\n' "$out" | grep -qx 'linked .' || fail "REFRESH: reinstalled base mu
 : > "$WORK/pm.calls"
 out=$("$DL" --refresh-base "$MAIN" "$NEW" "$NEW")
 [ -z "$out" ] && [ ! -s "$WORK/pm.calls" ] || fail "REFRESH: a quiet run must install nothing" "$out"
-ok "REFRESH: changed lockfile ⇒ reinstall + stamp ⇒ link; failure ⇒ unstamped + retried; quiet run is a no-op"
+ok "REFRESH: changed lockfile ⇒ reinstall + stamp ⇒ link; failure ⇒ parked until the lock changes or a forced retry; quiet run is a no-op"
 
 # ---- PRIME + STATUS ---------------------------------------------------------
 rm -f "$MAIN/tools/node_modules/.fleet-lock-sha"
 printf 'lockfileVersion: 10\n' > "$MAIN/web/pnpm-lock.yaml"     # stale web stamp
 git -C "$MAIN" commit -qam 'bump web deps'
 out=$("$DL" --base-status "$MAIN")
-printf '%s\n' "$out" | grep -qx 'summary fresh=1 stale=1 unstamped=1 installing=0 not-installed=0' || fail "STATUS: counts" "$out"
+printf '%s\n' "$out" | grep -qx 'summary fresh=1 stale=1 failing=0 unstamped=1 installing=0 not-installed=0 failing-since=-' || fail "STATUS: counts" "$out"
+# pnpm is NOT on this (daemon-like) PATH — only on the login shell's (issue #1026).
+LB="$WORK/loginbin"; mkdir -p "$LB"; mv "$FB/pnpm" "$LB/pnpm"
+NOPM=""
+while IFS= read -r p; do
+  [ -n "$p" ] && [ ! -x "$p/pnpm" ] && [ ! -x "$p/corepack" ] && NOPM="$NOPM${NOPM:+:}$p"
+done <<EOF
+$(printf '%s\n' "$PATH" | tr ':' '\n')
+EOF
+printf '#!/bin/sh\necho "motd noise"\nprintf "\\n__FLEET_PATH__=%%s\\n" "%s:$NOPM"\n' "$LB" > "$WORK/loginsh"; chmod +x "$WORK/loginsh"
 : > "$WORK/pm.calls"
-out=$("$DL" --prime-base "$MAIN")
+out=$(PATH="$NOPM" FLEET_DEPS_LOGIN_SHELL="$WORK/loginsh" FLEET_DEPS_TOOL_DIRS="$WORK/none" "$DL" --prime-base "$MAIN")
 [ "$(printf '%s\n' "$out" | grep -c '^installed ')" = 3 ] || fail "PRIME: expected 3 installs" "$out"
 grep -qx "$MAIN/tools yarn install --frozen-lockfile" "$WORK/pm.calls" || fail "PRIME: yarn v1 form" "$(cat "$WORK/pm.calls")"
 grep -qx "$MAIN/web pnpm install --frozen-lockfile" "$WORK/pm.calls" || fail "PRIME: pnpm form" "$(cat "$WORK/pm.calls")"
+grep -q "pnpm not on PATH — resolved $LB/pnpm" "$WORK/base-deps.log" || fail "PRIME: pnpm resolved from the login PATH, logged" "$(cat "$WORK/base-deps.log")"
 out=$("$DL" --base-status "$MAIN")
-printf '%s\n' "$out" | grep -qx 'summary fresh=3 stale=0 unstamped=0 installing=0 not-installed=0' || fail "PRIME: status after prime" "$out"
+printf '%s\n' "$out" | grep -qx 'summary fresh=3 stale=0 failing=0 unstamped=0 installing=0 not-installed=0 failing-since=-' || fail "PRIME: status after prime" "$out"
 [ -z "$(git -C "$MAIN" status --porcelain --untracked-files=no)" ] \
   || fail "PRIME: an install left the base dirty (yarn rewrote its lockfile)" "$(git -C "$MAIN" status --porcelain)"
 grep -q 'restored tracked tools/yarn.lock' "$WORK/base-deps.log" || fail "PRIME: restore not logged" "$(cat "$WORK/base-deps.log")"
-ok "PRIME: every lockfile dir installed with its frozen form + stamped; --base-status counts; a rewritten lockfile is restored"
+ok "PRIME: every lockfile dir installed with its frozen form + stamped; --base-status counts; a rewritten lockfile is restored; pnpm resolved off the login PATH"
 
 printf 'fleet-deps-link-selftest: %d checks passed\n' "$pass"
