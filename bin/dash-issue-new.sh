@@ -24,6 +24,8 @@
 #
 # Args (order-independent): `confirm` = phase 2 (running inside the popup);
 # `--spawn` = quick-dispatch mode (spawn the worker after create);
+# `--selection=<row-id>` = the hub row highlighted under `all` (issue #997) names
+# the repo instead of asking (fleet_selection_repo);
 # `--title-file=<f>` = the BACKGROUND create pass (issue #304) — the interactive
 # popup has already read the title into <f> and re-execs us via fleet_bg, so we
 # skip the read and just do the (slow) create. The path comes from mktemp (no
@@ -46,12 +48,13 @@
 # the non-interactive create/naming paths.)
 export LANG="${LANG:-en_US.UTF-8}" LC_ALL="${LC_ALL:-en_US.UTF-8}"
 
-mode=""; spawn=0; title_file=""
+mode=""; spawn=0; title_file=""; sel=""
 for _a in "$@"; do
   case "$_a" in
     confirm)        mode=confirm ;;
     --spawn)        spawn=1 ;;
     --title-file=*) title_file="${_a#--title-file=}" ;;
+    --selection=*)  sel="${_a#--selection=}" ;;
   esac
 done
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -71,6 +74,13 @@ fleet_load_conf "$FLEET_SESSION"
 # which the popup hands a repo, still refuses without one.
 MULTI=0; fleet_multirepo "$FLEET_SESSION" && MULTI=1
 REPO=$(fleet_backlog_repo "$FLEET_SESSION")
+# Under `all`, the hub's highlighted row names the repo (issue #997): a session's
+# repo or a repo heading's, via the one resolver the sidebar shares. `none` (a
+# no-repo row) and anything unresolved still ask below — an issue needs a repo.
+if [ -z "$REPO" ] && [ "$MULTI" = 1 ] && [ -n "$sel" ]; then
+  REPO=$(fleet_selection_repo "$FLEET_SESSION" "$sel")
+  [ "$REPO" = none ] && REPO=''
+fi
 if [ -z "$REPO" ] && { [ "$MULTI" = 0 ] || [ -n "$title_file" ]; }; then
   tmux display-message "backlog: no repo resolved — cannot create issue"; exit 1
 fi

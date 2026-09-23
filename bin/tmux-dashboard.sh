@@ -200,8 +200,8 @@ run_dash() {
     --bind "$DASH_KEY_RELOAD:reload(bash $ROWS)+transform(bash $AGENT_PROMPT actions)" \
     --bind "$DASH_KEY_AGENT:transform(bash $BIN/dash-agent-toggle.sh)" \
     --bind "?:transform:[ -n \"\$FZF_QUERY\" ] && echo 'put(?)' || echo 'execute(bash $BIN/dash-popup.sh -w 72% -h 80% -- bash $BIN/fleet-keys.sh --context dash)'" \
-    --bind "$DASH_KEY_NEW:execute(bash $BIN/dash-popup.sh -w 90% -h 12 -- bash $BIN/dash-issue-new.sh confirm --spawn)+reload(bash $ROWS)" \
-    --bind "$DASH_KEY_SCRATCH:execute-silent(bash $BIN/dash-raw-session.sh --bg)+reload(bash $ROWS)" \
+    --bind "$DASH_KEY_NEW:execute(bash $BIN/dash-popup.sh -w 90% -h 12 -- bash $BIN/dash-issue-new.sh confirm --spawn --selection={1}:{4})+reload(bash $ROWS)" \
+    --bind "$DASH_KEY_SCRATCH:execute-silent(bash $BIN/dash-raw-session.sh --bg --selection={1}:{4})+reload(bash $ROWS)" \
     --bind "$DASH_KEY_VIEW:execute-silent(sh $BIN/dash-view-toggle.sh)+reload(bash $ROWS)" \
     --bind "$DASH_KEY_RESTORE:execute-silent(bash $BIN/dash-restore-session.sh {1})+reload(bash $ROWS)" \
     --bind "$DASH_KEY_PR:execute(bash $BIN/dash-open-pr.sh {1})" \
@@ -213,7 +213,7 @@ run_dash() {
     --bind "$DASH_KEY_ANSWER:execute(bash $BIN/dash-popup.sh -w 84% -h 70% -- bash $BIN/dash-answer.sh {1})+reload(bash $ROWS)" \
     --bind "left:transform(bash $BIN/dash-fold-toggle.sh collapse {1} {q})" \
     --bind "right:transform(bash $BIN/dash-fold-toggle.sh expand {1} {q})" \
-    --bind "enter:transform(bash $BIN/dash-enter.sh {1} {q})$ENTER_TAIL" \
+    --bind "enter:transform(bash $BIN/dash-enter.sh {1} {q} {4})$ENTER_TAIL" \
     --bind "esc:transform(bash $BIN/dash-esc.sh {q})" \
     >/dev/null 2>&1
 }

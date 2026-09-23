@@ -2,15 +2,16 @@
 # sidebar-anchor-repo-selftest.sh — under `all`, a session started from the
 # sidebar takes the selected/focused row's repo (issue #1009).
 #
-#   A. DEGENERATE — a one-repo fleet: fleet_anchor_repo prints nothing for any
+#   A. DEGENERATE — a one-repo fleet: fleet_selection_repo prints nothing for any
 #      window, and the sidebar's Enter / ⌃n spawn exactly as before (no --repo,
 #      no CF_REPO).
 #   B. 2-repo fleet viewing `all`: a row in repo B (@repo, or @worktree derived)
 #      → the scratch gets `--repo o/b` and ⌃n's popup `CF_REPO=o/b`; a @norepo
-#      row, the hub, an unknown window → today's behavior (nothing passed).
+#      row → `--no-repo` ($HOME, issue #997), ⌃n still asks; the hub, an unknown
+#      window → today's behavior (nothing passed).
 #   C. 2-repo fleet viewing ONE repo: nothing passed — that repo still wins.
 #
-# The sidebar half imports fleet-sidebar.py and runs its real anchor_repo /
+# The sidebar half imports fleet-sidebar.py and runs its real selection_repo /
 # spawn_scratch / new_task against a shadow bin/ whose dash-raw-session.sh and
 # dash-popup.sh only record their argv. Every tmux call goes to a private socket
 # via a PATH shim (never the live server); `gh` is shimmed to fail.
@@ -93,7 +94,7 @@ class Stub:
     def clear(self): pass
 mod.curses = Stub()
 env = dict(os.environ)
-repo = mod.anchor_repo(sys.argv[3], sys.argv[4], env)
+repo = mod.selection_repo(sys.argv[3], sys.argv[4], env)
 mod.spawn_scratch("n", env, repo).wait()
 mod.new_task(Stub(), env, repo)
 PY
@@ -106,7 +107,7 @@ TO_B="--name n --origin hub --repo o/b|-w 90% -h 12 -- env CF_REPO=o/b bash $SH/
 
 # --- A. degenerate: one repo ------------------------------------------------------
 for w in wA wB wWT wNO wUNK plan; do
-  eq "A: one-repo fleet anchors nothing ($w)" "$(fleet_anchor_repo "$S" "$(wid $w)")" ""
+  eq "A: one-repo fleet anchors nothing ($w)" "$(fleet_selection_repo "$S" "$(wid $w)")" ""
 done
 eq "A: one-repo sidebar spawns unchanged" "$(sidebar wA)" "$PLAIN"
 eq "A: one-repo sidebar spawns unchanged (norepo row)" "$(sidebar wNO)" "$PLAIN"
@@ -117,23 +118,23 @@ mkdir -p "$FLEET_CONF_DIR/fleets/$S/repos"
 printf 'FLEET_REPO="o/b"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="main"\n' "$WORK/mainB" \
   > "$FLEET_CONF_DIR/fleets/$S/repos/o-b.conf"
 eq "B: current repo is all" "$(fleet_current_repo "$S")" all
-eq "B: @repo row anchors its repo"        "$(fleet_anchor_repo "$S" "$(wid wB)")"  o/b
-eq "B: @repo row in A anchors A"          "$(fleet_anchor_repo "$S" "$(wid wA)")"  o/a
-eq "B: @worktree row anchors its derived repo" "$(fleet_anchor_repo "$S" "$(wid wWT)")" o/b
-eq "B: @norepo row anchors nothing"       "$(fleet_anchor_repo "$S" "$(wid wNO)")" ""
-eq "B: unknown row anchors nothing"       "$(fleet_anchor_repo "$S" "$(wid wUNK)")" ""
-eq "B: hub anchors nothing"               "$(fleet_anchor_repo "$S" "$(wid plan)")" ""
-eq "B: no window anchors nothing"         "$(fleet_anchor_repo "$S" "")" ""
+eq "B: @repo row anchors its repo"        "$(fleet_selection_repo "$S" "$(wid wB)")"  o/b
+eq "B: @repo row in A anchors A"          "$(fleet_selection_repo "$S" "$(wid wA)")"  o/a
+eq "B: @worktree row anchors its derived repo" "$(fleet_selection_repo "$S" "$(wid wWT)")" o/b
+eq "B: @norepo row resolves to none (#997)" "$(fleet_selection_repo "$S" "$(wid wNO)")" none
+eq "B: unknown row anchors nothing"       "$(fleet_selection_repo "$S" "$(wid wUNK)")" ""
+eq "B: hub anchors nothing"               "$(fleet_selection_repo "$S" "$(wid plan)")" ""
+eq "B: no window anchors nothing"         "$(fleet_selection_repo "$S" "")" ""
 tmux set-option -w -t "$S:wUNK" @repo o/gone
-eq "B: a repo the fleet does not host anchors nothing" "$(fleet_anchor_repo "$S" "$(wid wUNK)")" ""
+eq "B: a repo the fleet does not host anchors nothing" "$(fleet_selection_repo "$S" "$(wid wUNK)")" ""
 tmux set-option -wu -t "$S:wUNK" @repo
 eq "B: sidebar on a B row → scratch + ⌃n go to B" "$(sidebar wB)" "$TO_B"
-eq "B: sidebar on a norepo row → today's behavior" "$(sidebar wNO)" "$PLAIN"
+eq "B: sidebar on a norepo row → --no-repo scratch, ⌃n asks" "$(sidebar wNO)" "--name n --origin hub --no-repo|${PLAIN#*|}"
 eq "B: sidebar on an unknown row → today's behavior" "$(sidebar wUNK)" "$PLAIN"
 
 # --- C. two repos, viewing one ----------------------------------------------------
 fleet_current_repo_set "$S" o/a >/dev/null 2>&1 || fail "C: could not set current repo"
-eq "C: single repo in view anchors nothing" "$(fleet_anchor_repo "$S" "$(wid wB)")" ""
+eq "C: single repo in view anchors nothing" "$(fleet_selection_repo "$S" "$(wid wB)")" ""
 eq "C: sidebar on a B row keeps the viewed repo's path" "$(sidebar wB)" "$PLAIN"
 
 if [ "$FAILS" -gt 0 ]; then

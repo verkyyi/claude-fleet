@@ -1,5 +1,5 @@
 #!/bin/bash
-# dash-enter.sh <target sess:idx> <query> — Enter handler for the dash.
+# dash-enter.sh <target sess:idx> <query> [<heading-repo>] — Enter handler for the dash.
 # Emits fzf actions on stdout (called from an fzf `transform` binding) and does
 # the tmux side-effect. Modes:
 #   bind mode    (bind flag, set by ctrl-g): bind/unbind <target> to issue query
@@ -16,6 +16,12 @@
 set -uo pipefail
 C="${TMPDIR:-/tmp}/.claude-dash"; flag="$C/rename_target"; bindflag="$C/bind_target"
 target="${1:-}"; q="${2:-}"
+# The highlighted row, as fleet_selection_repo reads it (issue #997): `<id>:<{4}>`
+# — a repo heading's spawn target rides fzf's hidden 4th field. It is embedded in
+# the deferred spawn's command string below, so anything but an id/repo charset
+# drops it (the spawn then keeps today's repo rule).
+sel="$target:${3:-}"
+case "$sel" in *[!A-Za-z0-9@:/._-]*) sel="" ;; esac
 # `rebind(?)` pairs with the `unbind(?)` dash-rename.sh emits when it arms: `?` is
 # the dash's cheatsheet bind, and a bound printable key keeps firing its action
 # instead of typing (fzf 0.74.3), so it is unbound for the length of the edit and
@@ -76,7 +82,7 @@ if [ ! -f "$flag" ] && [ ! -f "$bindflag" ] && [ -n "${q//[[:space:]]/}" ]; then
     qf=$(mktemp "$gdir/spawn_q.XXXXXX" 2>/dev/null)
     if [ -n "$qf" ]; then
       printf '%s' "$q" > "$qf" 2>/dev/null
-      fleet_bg "sleep $GUARD_SLEEP; _l=\$(cat '$lastf' 2>/dev/null); case \"\$_l\" in ''|*[!0-9]*) _l=0;; esac; if [ \"\$_l\" -le $now ]; then bash '$BIN/dash-raw-session.sh' --name-file='$qf' >/dev/null 2>&1; else rm -f '$qf'; tmux display-message 'dash: pasted text is not a name — the prompt line takes ONE scratch name. Paste long text into a Claude window or the file inbox (see ONBOARDING).' 2>/dev/null; fi"
+      fleet_bg "sleep $GUARD_SLEEP; _l=\$(cat '$lastf' 2>/dev/null); case \"\$_l\" in ''|*[!0-9]*) _l=0;; esac; if [ \"\$_l\" -le $now ]; then bash '$BIN/dash-raw-session.sh' --name-file='$qf' --selection='$sel' >/dev/null 2>&1; else rm -f '$qf'; tmux display-message 'dash: pasted text is not a name — the prompt line takes ONE scratch name. Paste long text into a Claude window or the file inbox (see ONBOARDING).' 2>/dev/null; fi"
     fi
   fi
   echo "clear-query+reload(bash $ROWS)"; exit 0

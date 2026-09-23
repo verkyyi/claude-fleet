@@ -74,7 +74,11 @@
 # --repo <owner/name> / --no-repo (issue #789): which repo the scratch belongs to.
 # In a fleet hosting 2+ repos an omitted --repo takes the fleet's CURRENT repo
 # (fleet_current_repo), and under `all` the session gets NO repo — the operator's
-# rule: view a repo first for repo work. A one-repo fleet takes its only repo.
+# rule: view a repo first for repo work — unless the caller names the row the
+# operator has highlighted: --selection <row-id> (issue #997; `@<wid>`,
+# `hdr:<owner/name>`, `hdr:none`, fleet_selection_repo) takes THAT row's repo, or
+# $HOME for a no-repo row, and anything it cannot resolve keeps the rule above.
+# A one-repo fleet takes its only repo.
 # --no-repo starts the agent in $HOME with no worktree, for work that spans repos:
 # stamped `@norepo 1` (never mistaken for a legacy untagged window) with no
 # @repo/@worktree/@raw, so no reaper ever resolves a worktree to remove; a Claude
@@ -107,7 +111,7 @@ set -uo pipefail
 # and input draft; --prompt <t> / --prompt=<t> is the optional submitted seed;
 # --bg backgrounds the slow half of the spawn (the dash ⌃s / typed-↵ path — see
 # below); the lone positional is the headless <fleet-session>.
-NAME=""; PROMPT=""; TARGET_SESS=""; BG=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0
+NAME=""; PROMPT=""; TARGET_SESS=""; BG=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --name)        NAME="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
@@ -137,6 +141,8 @@ while [ "$#" -gt 0 ]; do
     --repo)        REPO_ARG="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --repo=*)      REPO_ARG="${1#--repo=}"; shift ;;
     --no-repo)     NOREPO=1; shift ;;
+    --selection)   SEL="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
+    --selection=*) SEL="${1#--selection=}"; shift ;;
     *)             TARGET_SESS="$1"; shift ;;
   esac
 done
@@ -202,7 +208,11 @@ if ! cap_msg=$(fleet_session_cap_ok "$SESS"); then refuse "$cap_msg"; exit 2; fi
 # fleet_load_conf resolved (possibly the CALLER window's repo).
 MULTI=0; _fleet_hosts_many "$SESS" && MULTI=1
 if [ "$NOREPO" != 1 ]; then
-  if [ -z "$REPO_ARG" ] && [ "$MULTI" = 1 ]; then
+  if [ -z "$REPO_ARG" ] && [ "$MULTI" = 1 ] && [ -n "$SEL" ]; then
+    REPO_ARG=$(fleet_selection_repo "$SESS" "$SEL")
+    [ "$REPO_ARG" = none ] && { REPO_ARG=''; NOREPO=1; }
+  fi
+  if [ -z "$REPO_ARG" ] && [ "$NOREPO" != 1 ] && [ "$MULTI" = 1 ]; then
     REPO_ARG=$(fleet_current_repo "$SESS")
     [ "$REPO_ARG" = all ] && { REPO_ARG=''; NOREPO=1; }
   fi

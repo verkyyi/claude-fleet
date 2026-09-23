@@ -22,7 +22,7 @@ import unicodedata
 
 BIN = Path(__file__).absolute().parent  # preserve the selftest shadow root
 US = "\x1f"
-VIEW_VERSION = "12"  # #998: bare repo headings, idle `(0)` ones + the empty-state hint; replace live v11 views once
+VIEW_VERSION = "13"  # #997: the cursor may rest on a repo heading (new-session target); replace live v12 views once
 # ↑↓ follow (issue #822): an arrow moves the highlight at once and switches to
 # it only after this much quiet. A held key on a slow link is one switch, not
 # one per row, and a row passed over is never selected — so the wake hook's
@@ -195,15 +195,17 @@ def clip(text, width):
     return "".join(out)
 
 
-def anchor_repo(session, wid, env):
-    """The repo a session started from this row takes (issue #1009): under `all`
-    in a 2+ repo fleet, the row's own repo (fleet_anchor_repo → @repo, never a
-    guess); "" otherwise, and the caller keeps today's behavior — a scratch with
-    no repo, ⌃n's repo picker. A single repo in view still wins downstream."""
-    if not wid.startswith("@"):
+def selection_repo(session, key, env):
+    """Where a session started from this row goes (issues #1009/#997): under `all`
+    in a 2+ repo fleet, a window row's own repo or a repo heading's (`hdr:<repo>`),
+    `none` for a no-repo row or the `no repo` heading — fleet_selection_repo, the
+    resolver the hub shares, never a guess. "" otherwise, and the caller keeps
+    today's behavior — a scratch with no repo, ⌃n's repo picker. A single repo in
+    view still wins downstream."""
+    if not (key.startswith("@") or key.startswith("hdr:")):
         return ""
-    result = run(["bash", "-c", '. "$0/fleet-lib.sh" && fleet_anchor_repo "$1" "$2"',
-                  str(BIN), session, wid], env=env)
+    result = run(["bash", "-c", '. "$0/fleet-lib.sh" && fleet_selection_repo "$1" "$2"',
+                  str(BIN), session, key], env=env)
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
@@ -220,7 +222,7 @@ def new_task(screen, env, repo=""):
     anchor row's, issue #1009) rides CF_REPO on the popup's command line: a
     popup's shell takes the server's environment, not this one."""
     curses.endwin()
-    pin = ["env", "CF_REPO=" + repo] if repo else []
+    pin = ["env", "CF_REPO=" + repo] if repo and repo != "none" else []
     subprocess.call(["bash", str(BIN / "dash-popup.sh"), "-w", "90%", "-h", "12", "--"] + pin +
                     ["bash", str(BIN / "dash-issue-new.sh"), "confirm", "--spawn"], env=env)
     screen.clear()  # the next refresh resumes curses and repaints the whole grid
@@ -304,12 +306,12 @@ def spawn_scratch(name, env, repo=""):
     window, and the window-changed hook moves this view there. stderr (the
     refusal reason) goes to a file, not a pipe: whatever the spawn leaves running
     would hold a pipe open, and reading it would freeze this view. `repo` (the
-    anchor row's, issue #1009) goes as --repo; empty keeps dash-raw-session.sh's
-    own resolution."""
+    highlighted row's, issues #1009/#997) goes as --repo, `none` as --no-repo;
+    empty keeps dash-raw-session.sh's own resolution."""
     log = tempfile.TemporaryFile("w+")
     proc = subprocess.Popen(
         ["bash", str(BIN / "dash-raw-session.sh"), "--name", name, "--origin", "hub"] +
-        (["--repo", repo] if repo else []),
+        (["--no-repo"] if repo == "none" else ["--repo", repo] if repo else []),
         env=dict(env, FLEET_SPAWN_FOCUS="1"), stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL, stderr=log)
     proc.log = log
@@ -329,10 +331,30 @@ def landing(ids, window, limit=8):
     return (ids[at + 1:] + ids[:at][::-1])[:limit]
 
 
+def key_of(row):
+    """A row's cursor key: its window id, or `hdr:<target>` for a repo heading that
+    names where a new session goes (issue #997 — the producer puts owner/name, or
+    `none` for `no repo`, in a heading's state field). Every other `hdr` row (the
+    `?` heading, the empty-state hint) stays bare `hdr`: never a cursor stop."""
+    return "hdr:" + row[1] if row[0] == "hdr" and row[1] else row[0]
+
+
 def selectable(rows):
-    """The ids a cursor can rest on: every row but a repo group heading (issue
-    #974), which the rows producer marks with `hdr` in its id field."""
+    """The keys a cursor can rest on: every session row, plus a repo heading with a
+    spawn target (issue #997) — the new-session path reads it, and every other
+    action ignores it (`acts`). Other `hdr` rows (#974) are painted, never landed on."""
+    return [key_of(row) for row in rows if key_of(row) != "hdr"]
+
+
+def sessions(rows):
+    """The window ids alone — what a close lands on (#900), never a heading."""
     return [row[0] for row in rows if row[0] != "hdr"]
+
+
+def acts(key):
+    """The highlighted row as a target for any action but a new session: a heading
+    (`hdr:…`) is none — jump, menu, fold, tap all stay no-ops on it (EPIC #994)."""
+    return "" if key.startswith("hdr") else key
 
 
 def visible(info, now):
@@ -407,7 +429,7 @@ def ui(screen, session, worker, lock):
             # before their key arrives, so ↑↓ keep browsing after the switch;
             # Enter/Escape (whose binds do not re-enter) still hand input back.
             follow_at = None
-            if selected and selected != window:
+            if acts(selected) and selected != window:
                 jump(session, selected, pane, lock)
                 refresh_at = 0
                 continue
@@ -442,7 +464,7 @@ def ui(screen, session, worker, lock):
                     # `@sidebar_next_of` pins them to the window they were read
                     # against: the hub-arrival hook uses them only when THAT is
                     # the window that just closed.
-                    nxt = " ".join(landing(selectable(rows), window))
+                    nxt = " ".join(landing(sessions(rows), window))
                     if (window, nxt) != published and window in [row[0] for row in rows]:
                         tmux("set-option", "-t", "=" + session + ":", "@sidebar_next", nxt, ";",
                              "set-option", "-t", "=" + session + ":", "@sidebar_next_of", window)
@@ -453,15 +475,16 @@ def ui(screen, session, worker, lock):
             screen.getch()
             continue
         height, width = screen.getmaxyx()
-        # A repo group heading (issue #974) is inert: `hdr` in the id field, so it
-        # is painted but never selectable — ↑/↓, Home/End and the wheel step over
-        # it, a tap on it does nothing. `where` is the selection's place in the
+        # A repo group heading (issue #974) is inert to every action: `hdr` in the
+        # id field. One with a spawn target is a cursor stop since #997 — ↑/↓ land
+        # on it so a typed name starts THERE — but a tap, Enter, `.`, ←/→ and the
+        # follow all ignore it (`acts`). `where` is the selection's place in the
         # PAINTED list, which the scroll offset is measured in.
         ids = selectable(rows)
         if selected not in ids:
             selected = window if window in ids else (ids[0] if ids else "")
         index = ids.index(selected) if selected in ids else 0
-        where = next((i for i, row in enumerate(rows) if row[0] == selected), 0)
+        where = next((i for i, row in enumerate(rows) if key_of(row) == selected), 0)
         # The `? 快捷键` row sits above the input line whenever a task row
         # still fits above it; the list loses that one row.
         help_y = height - 2 if height >= 3 else None
@@ -487,7 +510,10 @@ def ui(screen, session, worker, lock):
         colors = {"working": 1, "needs": 2, "done": 3, "looping": 4}
         for y, (wid, state, glyph, label, tree) in enumerate(rows[offset:offset + page]):
             if wid == "hdr":
-                put(y, label, curses.A_DIM | curses.A_BOLD)
+                if navigation and key_of((wid, state)) == selected:
+                    put(y, "› " + label, curses.color_pair(6) | curses.A_BOLD, fill=True)
+                else:
+                    put(y, label, curses.A_DIM | curses.A_BOLD)
                 continue
             attr = curses.color_pair(colors.get(state, 0))
             if wid == window:
@@ -550,7 +576,7 @@ def ui(screen, session, worker, lock):
         byte = 0 <= key < 256 and key not in (8, 9, 10, 13, 14, 15, 27, 127)
         chars = "".join(c for c in decoder.decode(bytes([key])) if typed(c)) if byte else ""
         press = KEY_ALIASES.get(chars, chars)
-        if press == "." and not text and renaming is None and spawning is None and selected:
+        if press == "." and not text and renaming is None and spawning is None and acts(selected):
             # `.` on an EMPTY line is the row menu (dash-keymap.sh --panel sidebar
             # `menu`); inside a name it types. The follow is dropped: the menu
             # acts on the highlighted row and the window in view stays put.
@@ -606,17 +632,17 @@ def ui(screen, session, worker, lock):
             if spawning is None:
                 toast = ""
                 spawning = spawn_scratch(text.strip(), env,
-                                         anchor_repo(session, selected or window, env))
+                                         selection_repo(session, selected or window, env))
         elif key in (10, 13, curses.KEY_ENTER):
             # The Enter bind already returned the client to root; the key reaches
             # here a run-shell hop later. If the follow (or anyone) has moved the
             # session since, a switch back to the row it was read against would
             # yank the operator — with nothing to jump to, Enter only hands over.
             follow_at = None
-            if selected != window:
+            if acts(selected) and selected != window:
                 jump(session, selected, pane, lock)
             refresh_at = 0
-        elif key in (curses.KEY_LEFT, curses.KEY_RIGHT) and selected:
+        elif key in (curses.KEY_LEFT, curses.KEY_RIGHT) and acts(selected):
             verb = "collapse" if key == curses.KEY_LEFT else "expand"
             run(["bash", str(BIN / "dash-fold-toggle.sh"), verb, selected], env=env)
             refresh_at = 0
@@ -626,7 +652,7 @@ def ui(screen, session, worker, lock):
             # just before must not fire after it and switch away from the window
             # the spawn made current.
             follow_at = None
-            new_task(screen, env, anchor_repo(session, selected or window, env))
+            new_task(screen, env, selection_repo(session, selected or window, env))
             refresh_at = 0
         elif key == 15:
             # ⌃o (`restore`; its ⌥o fallback is rewritten to ⌃o by the bind). The
