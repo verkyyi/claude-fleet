@@ -111,6 +111,8 @@ eq "A an unhosted --repo → refused" "$rc" 1
 spawn 12 "$S" --repo o/b || fail "A --repo o/b spawn failed: $(cat "$WORK/err")"
 wB=$(wins_for "$S" 12 | head -1)
 eq "A @repo stamped" "$(opt "$wB" @repo)" o/b
+case "$(opt "$wB" window_name)" in 'b·'*) ok "A the window name wears B's short tag (#793)" ;;
+  *) fail "A window name has no repo tag: $(opt "$wB" window_name)" ;; esac
 eq "A @worktree under B's checkout" "$(opt "$wB" @worktree)" "$WORK/mainB-issue-12"
 [ -d "$WORK/mainB-issue-12" ] || fail "A B's worktree was not created"
 eq "A the worktree is B's" "$(git -C "$WORK/mainB-issue-12" remote get-url origin)" https://github.com/o/b.git
@@ -150,6 +152,10 @@ eq "C repo scratch @repo" "$(opt "$wS" @repo)" o/b
 case "$(opt "$wS" @worktree)" in "$WORK/mainB-scratch-"*) ok "C repo scratch worktree under B" ;;
   *) fail "C repo scratch worktree: $(opt "$wS" @worktree)" ;; esac
 eq "C repo scratch @raw" "$(opt "$wS" @raw)" 1
+case "$(opt "$wS" window_name)" in 'b·scratch-'*) ok "C repo scratch name wears B's short tag (#793)" ;;
+  *) fail "C repo scratch name: $(opt "$wS" window_name)" ;; esac
+case "$(opt "$wN" window_name)" in *·*) fail "C a no-repo session has no repo tag: $(opt "$wN" window_name)" ;;
+  *) ok "C no-repo name untagged" ;; esac
 
 raw "$S"; w=$(newest "$S")
 eq "C current repo all → no-repo" "$(opt "$w" @norepo)" 1

@@ -70,7 +70,7 @@ SESS="${FLEET_SESSION:-}"
 # --- the window table: key → window_id · origin · expand ----------------------
 # ONE tmux read, same field set and same key derivation the renderer uses, so the
 # two can never disagree about who a row's parent is.
-WFMT="#{session_name}${US}#{window_id}${US}#{window_name}${US}#{pane_current_path}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{@expand}${US}#{@repo}"
+WFMT="#{session_name}${US}#{window_id}${US}#{window_name}${US}#{pane_current_path}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{@expand}${US}#{@repo}${US}#{@norepo}"
 WLIST=$(tmux list-windows -a -F "$WFMT" 2>/dev/null) || exit 0
 # tmux ≤3.4 escapes the control separator as the literal four bytes `\037` (the
 # renderer normalizes the same way); without this every field lands in $wsess.
@@ -109,14 +109,24 @@ okp_v() { okp=''
 selfwid=$(tmux display-message -p -t "$target" '#{window_id}' 2>/dev/null) || exit 0
 [ -n "$selfwid" ] || exit 0
 
+# The renderer's repo view (issue #793): in a 2+ repo fleet only the current repo's
+# windows are on the dash — the same frame and filter tmux-dashboard-rows.sh applies.
+RMANY=0; RCUR=''
+[ -n "$SESS" ] && fleet_has_repo_overlays "$SESS" && fleet_dash_repo_frame "$SESS"
+
 KEYTAB=''      # key \t window_id \t origin \t expand
 selfkey=''
-while IFS=$US read -r wsess wid wname wpath wiss worig wwt wexp wrepo; do
+while IFS=$US read -r wsess wid wname wpath wiss worig wwt wexp wrepo wnorepo; do
   [ -n "$wname" ] || continue
   [ -n "$SESS" ] && [ "$wsess" != "$SESS" ] && continue
   case "$wname" in dash|plan|backlog) continue ;; esac
   okp_v "$wrepo"
   okey_v "$wiss" "$wwt" "$wpath"
+  # hidden by the current repo (issue #793): off the dash, so no one's parent here
+  if [ "$RMANY" = 1 ] && [ "$RCUR" != all ]; then
+    wslug=''; [ "$wnorepo" = 1 ] || wslug=$(fleet_slug "$wrepo")
+    [ "$wslug" != "$RCUR" ] && continue
+  fi
   [ -n "$okey" ] || continue
   KEYTAB+="$okey"$'\t'"$wid"$'\t'"$worig"$'\t'"$wexp"$'\n'
   [ "$wid" = "$selfwid" ] && selfkey=$okey

@@ -61,6 +61,11 @@
 # `migrate` (issue #873) took ctrl-l on the same basis: fzf's ⌃l is
 # `clear-screen`, a repaint the dash's 1Hz reload already does every second.
 # (Mnemonic: Leave this account's wall.)
+# `pick` (issue #793) is ctrl-z: every other ⌃<letter> is now an fzf edit key,
+# a common prefix or already a row — ⌃f was the mnemonic, but its ⌥ twin alt-f is
+# fzf's forward-word. fzf binds nothing to ⌃z (it reads the byte in raw mode, so
+# the terminal never suspends it), and nobody makes it a tmux prefix. It opens
+# the fleet/repo picker — the same one the footer's fleet name opens.
 set -uo pipefail
 
 PANEL=dash
@@ -79,7 +84,8 @@ reap ctrl-x alt-x
 rename ctrl-e alt-e
 answer ctrl-k alt-k
 pin ctrl-y alt-y
-migrate ctrl-l alt-l' ;;
+migrate ctrl-l alt-l
+pick ctrl-z alt-z' ;;
 backlog) TABLE='new ctrl-n alt-n
 close ctrl-x alt-x
 priority ctrl-y alt-y

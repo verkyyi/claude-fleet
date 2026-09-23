@@ -115,6 +115,7 @@ EOF
       printf 'FLEET_BASE_BRANCH="%s"\n' "$BASE"
     } > "$f.tmp.$$" && mv -f "$f.tmp.$$" "$f" || { rm -f "$f.tmp.$$"; die "failed to write $f"; }
     echo "fleet-repo: $SESS now hosts $REPO (main=$DIR base=$BASE) — $f"
+    fleet_repo_label_sync "$SESS"      # the footer grows `· all` (issue #793)
     ;;
 
   remove)
@@ -137,6 +138,7 @@ EOF
     else
       echo "fleet-repo: $SESS no longer hosts $REPO"
     fi
+    fleet_repo_label_sync "$SESS"      # back to the bare fleet name at one repo (#793)
     ;;
 
   *) usage ;;

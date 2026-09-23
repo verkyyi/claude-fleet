@@ -188,6 +188,22 @@ rslug_v() { rslug=''
   r=${r//\//-}; rslug=${r//[^[:alnum:]._-]/}               # = fleet_slug, fork-free
 }
 
+# The fleet's CURRENT repo (issue #793) — what this dash shows. RMANY=1 only in a
+# fleet hosting 2+ repos; then RCUR is the picked repo's slug or `all`, and
+# RSHORTMAP its badge per repo (fleet_dash_repo_frame, once a frame). A one-repo
+# fleet has RMANY=0 and every branch below keeps today's path.
+RMANY=0; RCUR=''; RSHORTMAP=''
+[ "$RMULTI" = 1 ] && fleet_dash_repo_frame "$FLEET_SESSION"
+# rview_v <@repo> <@norepo> → 1 when the current repo hides this window: a picked
+# repo shows ITS windows only (no-repo and unknown ones wait under `all`). Leaves
+# $rslug set for the caller — the window's repo slug, '' for none/unknown — which
+# the badge below reads. Keys are #790's okp_v, never re-qualified here.
+rview_v() { [ "$RMANY" = 1 ] || return 0              # one-repo fleet: no fork, no filter
+  rslug_v "$1" "$2"
+  [ "$RCUR" != all ] && [ "$rslug" != "$RCUR" ] && return 1
+  return 0
+}
+
 # branch → the three spellings the PR cell looks a row up by, in the order it
 # tries them: the branch EXACTLY as the git cache has it, then with a trailing
 # `+<ahead>` stripped, then with a trailing `-<behind>` stripped. Exact comes
@@ -248,6 +264,9 @@ while IFS=$US read -r sess idx name path state _ _ iss origin wt _ _ nsub exp pi
   [ -z "$name" ] && continue
   [ -n "${FLEET_SESSION:-}" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
   case "$name" in dash|plan|backlog) continue;; esac
+  # filtered out by the current repo (issue #793): not on this dash at all, so it
+  # is no one's parent here either — a child whose parent is hidden is an orphan.
+  rview_v "$wrepo" "$wnorepo" || continue
   # Collect the branch spellings this frame will look up in the prmap (issue
   # #662) — BEFORE the okey filter below, because a window with no addressable
   # key still RENDERS in pass B and still gets a PR cell. Its only cost is the
@@ -362,6 +381,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # FLEET_SESSION exported by tmux-dashboard.sh; unset ⇒ show all (single-fleet).
   [ -n "${FLEET_SESSION:-}" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
   case "$name" in dash|plan|backlog) continue;; esac   # panels, not Claude sessions
+  rview_v "$wrepo" "$wnorepo" || continue              # current repo (issue #793)
   ckey_v "$path"; key=$ckey
   ctxkey="$key"
   case "$agent" in
@@ -604,6 +624,19 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   [ "$depth" -gt 0 ] && [ -n "$croot" ] && [ "$origin" = "$croot" ] && provd=''
   tagd="$provd"
   [ -n "$agentd" ] && tagd="${tagd:+$tagd }$agentd"
+  # repo badge (issue #793): under `all` in a 2+ repo fleet every row names its
+  # repo's short tag first; a no-repo session says so and sorts into its own group
+  # at the foot of the list ($rgrp, the first sort key); an unknown one reads `?`.
+  rgrp=0
+  if [ "$RMANY" = 1 ] && [ "$RCUR" = all ]; then
+    if [ "$wnorepo" = 1 ]; then repod='no repo'; rgrp=1
+    elif [ -n "$rslug" ]; then
+      repod=${RSHORTMAP#*$'\n'"$rslug"$'\t'}
+      if [ "$repod" = "$RSHORTMAP" ]; then repod=$rslug; else repod=${repod%%$'\n'*}; fi
+    else repod='?'; fi
+    repod=${repod//[^A-Za-z0-9._ ?-]/}                  # ASCII: ${#} stays the width
+    tagd="$repod${tagd:+ $tagd}"
+  fi
   # A request retrying on the same reason past FLEET_FAILOVER_STUCK_ATTEMPTS is
   # stamped @quota_stuck, which WFMT folds in as a `stuck:` prefix (issue #872):
   # it reads `⚠ stuck`, not the ordinary `quota:waiting` it would otherwise be.
@@ -659,7 +692,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     label="$dname"
     [ "$pin" = 1 ] && label="* $label"
     [ -n "$kidd" ] && label="$label · $kidd"
-    buf+="$pinned	$grk	$gidx	$depth	$rk	$idx	$wid$US$state$US$gl$US$label$US${treed:- }"$'\n'
+    buf+="$rgrp	$pinned	$grk	$gidx	$depth	$rk	$idx	$wid$US$state$US$gl$US$label$US${treed:- }"$'\n'
     continue
   fi
   # full row: glyph1·issue5·tree1·window26·⟨flex: ↳tag or empty⟩·act8·PR7·ctx4
@@ -721,7 +754,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # act/PR/ctx block put whatever the terminal measures.
   disp="${gc}${gl}${R} ${icol}${f_iss}${R} ${GY}${treed:- }${R} ${nmcol}${f_name}${R} ${pinpfx}${tagpfx}${gap}${acol}${f_act}${R} ${pcol}${f_pr}${R} ${pcolr}${f_pct}${R}"
 
-  buf+="$pinned	$grk	$gidx	$depth	$rk	$idx	$sess:$idx$US$wid$US$disp"$'\n'
+  buf+="$rgrp	$pinned	$grk	$gidx	$depth	$rk	$idx	$sess:$idx$US$wid$US$disp"$'\n'
 done <<< "$WLIST"
 
 # column header — pinned at top of the list by fzf --header-lines=1. Same
@@ -739,7 +772,9 @@ printf -v h_gap '%*s' "$h_pad" ''
 printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_i}   ${h_n} ${h_gap}${h_a} ${h_p} ${h_c}${R}"
 fi
 
-# emit pinned-first (issue #623), then grouped by spawn provenance (issue #503):
+# emit by repo group first (issue #793: no-repo sessions sit in their own group at
+# the foot of an `all` view; everything else is group 0, so a one-repo fleet sorts
+# exactly as before), then pinned-first (issue #623), then grouped by spawn provenance (issue #503):
 # pinned windows (and the subtrees that float with them) take the whole top of the
 # list whatever their status; below them, roots (hub/autofill/bridge spawns) keep
 # the status-rank order they always had; each root's children sort directly below
@@ -747,8 +782,8 @@ fi
 # whose parent window closed — sink below every live group. Pins sort AMONG
 # themselves by the same (grk, gidx) they always had, so the pinned block is the
 # ordinary list in miniature.
-printf '%s' "$buf" | sort -t'	' -k1,1n -k2,2n -k3,3n -k4,4n -k5,5n -k6,6n \
-| while IFS='	' read -r _ _ _ _ _ _ line; do
+printf '%s' "$buf" | sort -t'	' -k1,1n -k2,2n -k3,3n -k4,4n -k5,5n -k6,6n -k7,7n \
+| while IFS='	' read -r _ _ _ _ _ _ _ line; do
   [ -z "$line" ] && continue
   printf '%s\n' "$line"
 done
