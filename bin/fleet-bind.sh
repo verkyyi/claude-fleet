@@ -113,7 +113,16 @@ cur_branch=$(git -C "$WT" symbolic-ref --short HEAD 2>/dev/null)
 SESS=$(fleet_current_session)
 fleet_load_conf "$SESS"
 REPO="${FLEET_REPO:-}"
-_r=$(fleet_repo_cached "$SESS"); [ -n "$_r" ] && REPO="$_r"
+# The sessmap caches ONE repo per session; a fleet hosting 2+ repos (issue #789)
+# must keep the WINDOW's repo, which fleet_load_conf already resolved in this pane.
+MULTI=0; _fleet_hosts_many "$SESS" && MULTI=1
+if [ "$MULTI" = 1 ]; then
+  REPO=$(fleet_window_repo "$SESS" "$WIN")
+  [ -n "$REPO" ] || die "this scratch's repo is unknown — cannot tell which repo's #$num to bind" 3
+  fleet_load_repo_conf "$SESS" "$REPO" || die "$REPO is not a repo this fleet hosts" 1
+else
+  _r=$(fleet_repo_cached "$SESS"); [ -n "$_r" ] && REPO="$_r"
+fi
 MAIN="${FLEET_MAIN:-}"
 [ -d "$MAIN/.git" ] || die "FLEET_MAIN is not a git checkout — set it in fleet.conf" 1
 branch="issue-$num"
@@ -129,6 +138,16 @@ git -C "$MAIN" show-ref --verify --quiet "refs/heads/$branch" \
 # but the id compare keeps this honest if that ever changes.
 dup=$(tmux list-windows -F '#{@issue} #{window_id}' 2>/dev/null \
         | awk -v n="$num" -v self="$WIN" '$1==n && $2!=self {print $2; exit}')
+# 2+ repos (issue #789): identity is (repo, N) — only a window of THIS repo, or of an
+# unknown one (never guess), is a duplicate.
+if [ "$MULTI" = 1 ]; then
+  dup=''
+  for _w in $(tmux list-windows -F '#{@issue} #{window_id}' 2>/dev/null \
+                | awk -v n="$num" -v self="$WIN" '$1==n && $2!=self {print $2}'); do
+    _wr=$(fleet_window_repo "$SESS" "$_w")
+    if [ -z "$_wr" ] || [ "$_wr" = "$REPO" ]; then dup=$_w; break; fi
+  done
+fi
 [ -n "$dup" ] && die "#$num is already bound to a live window in this fleet — nothing to bind" 4
 
 # Cross-machine claim gate — the same read dash-issue-session.sh makes at spawn.
@@ -170,6 +189,7 @@ wname=$(fleet_win_name "$title"); [ -z "$wname" ] && wname="$branch"
 # the worktree through it, and the dir is still named -scratch-K, so the usual
 # issue-<N> path guess would miss it).
 tmux set-window-option -t "$WIN" @issue "$num" 2>/dev/null
+[ -n "$REPO" ] && tmux set-window-option -t "$WIN" @repo "$(fleet_norm_repo "$REPO")" 2>/dev/null
 tmux set-window-option -t "$WIN" -u @raw 2>/dev/null
 tmux rename-window -t "$WIN" -- "$wname" 2>/dev/null
 

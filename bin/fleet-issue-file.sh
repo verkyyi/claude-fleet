@@ -96,10 +96,17 @@ fi
 # Repo resolution mirrors bin/fleet-comment.sh / bin/dash-issue-new.sh: an explicit
 # --repo wins, else $CF_REPO (passed through a popup), else this fleet's cached
 # repo, else the global FLEET_REPO.
+# A fleet hosting 2+ repos (issue #789) caches no single repo worth trusting: the
+# CALLING window's repo is the default there, and an unknown one refuses.
 repo="${repo:-${CF_REPO:-}}"
+_fs=$(fleet_current_session)
+if [ -z "$repo" ] && [ -n "$_fs" ] && _fleet_hosts_many "$_fs"; then
+  [ -n "${TMUX_PANE:-}" ] && repo=$(fleet_window_repo "$_fs" "$TMUX_PANE")
+  [ -z "$repo" ] && { printf 'fleet-issue-file: this fleet hosts several repos — pass --repo <owner/name>\n' >&2; exit 1; }
+fi
 if [ -z "$repo" ]; then
   repo="${FLEET_REPO:-}"
-  _r=$(fleet_repo_cached "$(fleet_current_session)"); [ -n "$_r" ] && repo="$_r"
+  _r=$(fleet_repo_cached "$_fs"); [ -n "$_r" ] && repo="$_r"
 fi
 [ -z "$repo" ] && { printf 'fleet-issue-file: no repo resolved (set --repo or FLEET_REPO)\n' >&2; exit 1; }
 command -v gh >/dev/null 2>&1 || { printf 'fleet-issue-file: gh not on PATH\n' >&2; exit 1; }
@@ -200,7 +207,9 @@ fi
 # below, say on stderr that the number is on the backlog, so a headless caller
 # that only reads the URL on stdout still learns no worker took it.
 if [ "$spawn" = 1 ] && [ -n "$num" ]; then
-  bash "$BIN/dash-issue-session.sh" "$num" --title "$title" \
+  # --repo only where it is needed (issue #789): a one-repo fleet's call is unchanged.
+  _sr=''; [ -n "$_fs" ] && _fleet_hosts_many "$_fs" && _sr=$repo
+  bash "$BIN/dash-issue-session.sh" "$num" --title "$title" ${_sr:+--repo "$_sr"} \
     || printf 'fleet-issue-file: filed #%s but the spawn was refused — it is on the backlog\n' "$num" >&2
 fi
 

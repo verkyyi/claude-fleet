@@ -55,12 +55,21 @@ fi
 # via fleet_bg — the same run, minus the "dispatch to bg" step. A real 2nd positional
 # is the headless cross-session <target-session>, which stays synchronous (no $TMUX to
 # run-shell onto). The bg re-exec carries the resolved session in FLEET_RESTORE_SESS.
-TARGET="${1:-}"; TARGET_SESS=""; BG_EXEC=0
-case "${2:-}" in
-  --exec-bg) BG_EXEC=1 ;;
-  "")        : ;;
-  *)         TARGET_SESS="$2" ;;
-esac
+# --repo <owner/name> (issue #789), anywhere after <target>: which hosted repo's
+# ledger + checkout the session belongs to. A fleet hosting 2+ repos needs it (or a
+# current repo other than `all`); a one-repo fleet takes its only repo.
+TARGET="${1:-}"; TARGET_SESS=""; BG_EXEC=0; REPO_ARG=""
+[ "$#" -gt 0 ] && shift
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --exec-bg) BG_EXEC=1 ;;
+    --repo)    REPO_ARG="${2:-}"; [ "$#" -gt 1 ] && shift ;;
+    --repo=*)  REPO_ARG="${1#--repo=}" ;;
+    "")        : ;;
+    *)         TARGET_SESS="$1" ;;
+  esac
+  shift
+done
 key=$(restore_key_for "$TARGET") || {
   printf 'dash-restore-session: not a landed session — nothing to restore for %s\n' "$TARGET" >&2
   tmux display-message "restore: not a landed session — ⌃t for the landed view, then ⌃o" 2>/dev/null
@@ -85,6 +94,16 @@ refuse() { printf 'dash-restore-session: %s\n' "${1#restore: }" >&2; TM display-
 # Session cap (issues #28/#70): a restored session holds a slot like any spawn.
 if ! cap_msg=$(fleet_session_cap_ok "$SESS"); then refuse "$cap_msg"; exit 2; fi
 
+MULTI=0; _fleet_hosts_many "$SESS" && MULTI=1
+if [ -z "$REPO_ARG" ] && [ "$MULTI" = 1 ]; then
+  REPO_ARG=$(fleet_current_repo "$SESS")
+  [ "$REPO_ARG" = all ] && { refuse "restore: this fleet hosts several repos — pick a repo first (or pass --repo)"; exit 1; }
+fi
+if [ -n "$REPO_ARG" ]; then
+  REPO_ARG=$(fleet_norm_repo "$REPO_ARG")
+  fleet_load_repo_conf "$SESS" "$REPO_ARG" \
+    || { refuse "restore: $REPO_ARG is not a repo this fleet hosts"; exit 1; }
+fi
 MAIN="${FLEET_MAIN:-}"; REPO="${FLEET_REPO:-}"
 [ -d "$MAIN/.git" ] || { refuse "restore: FLEET_MAIN is not a git checkout"; exit 1; }
 
@@ -97,7 +116,7 @@ MAIN="${FLEET_MAIN:-}"; REPO="${FLEET_REPO:-}"
 # The bind runs in the dash pane so bare fleet_bg lands on THIS fleet's server; the
 # headless cross-session path (TARGET_SESS set) stays synchronous.
 if [ "$BG_EXEC" != 1 ] && [ -z "$TARGET_SESS" ]; then
-  fleet_bg "FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' FLEET_RESTORE_SESS='$SESS' bash '$0' '$TARGET' --exec-bg" \
+  fleet_bg "FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' FLEET_RESTORE_SESS='$SESS' bash '$0' '$TARGET' --exec-bg${REPO_ARG:+ --repo '$REPO_ARG'}" \
     || { refuse "restore: background dispatch failed for $key"; exit 1; }
   exit 0
 fi
@@ -144,6 +163,9 @@ bind_marks() {  # $1 = window-id, $2 = worktree (may be empty) — mark the rest
   # a resumed session keeps its dash grouping; '-'/empty (pre-#503 row) → skip.
   { [ -n "${led_origin:-}" ] && [ "$led_origin" != "-" ]; } \
     && TM set-window-option -t "$1" @origin "$led_origin" 2>/dev/null
+  # The session's repo (issue #789); @worktree lets fleet_window_repo re-derive it.
+  [ -n "$REPO" ] && TM set-window-option -t "$1" @repo "$(fleet_norm_repo "$REPO")" 2>/dev/null
+  [ -n "${2:-}" ] && TM set-window-option -t "$1" @worktree "$2" 2>/dev/null
   # Window handle (issue #566): a restored session is a NEW window, so it gets a
   # FRESH handle rather than the one its original window held — that handle was
   # freed for reuse the moment the original closed, and may well be someone
@@ -154,6 +176,8 @@ bind_marks() {  # $1 = window-id, $2 = worktree (may be empty) — mark the rest
 # Spawn is non-invasive by default: -d keeps the active window put; opt into the
 # jump with FLEET_SPAWN_FOCUS=1 on an interactive (no TARGET_SESS) restore.
 detach=(-d); [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && [ -z "$TARGET_SESS" ] && detach=()
+# 2+ repos: the window stamps @repo before its launcher reads the conf (issue #789).
+stamp=''; [ "$MULTI" = 1 ] && stamp=$(fleet_win_stamp_cmd @repo "$REPO")
 
 announce() {  # $1 = window-id, $2 = message
   if [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && [ -z "$TARGET_SESS" ]; then TM select-window -t "$1"
@@ -168,7 +192,7 @@ case "$kind" in
     printf -v codex_cmd '%q --agent codex --codex-home %q %q %q' "$BIN/fleet-claude.sh" "$chome" "$mode" "$sid"
     name="$rname"; [ -n "$name" ] || name="resume-${key#\#}"
     win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$wt" \
-      "$codex_cmd; exec \$SHELL") || { refuse "restore: Codex new-window failed for $key"; exit 1; }
+      "$stamp$codex_cmd; exec \$SHELL") || { refuse "restore: Codex new-window failed for $key"; exit 1; }
     bind_marks "$win" "$wt"
     TM set-window-option -t "$win" @restored 1 2>/dev/null
     announce "$win" "restored $key → $name (Codex)"
@@ -188,7 +212,7 @@ case "$kind" in
     # fall back to resume-<key> when the title is missing (issue #319).
     name="$rname"; [ -z "$name" ] && name="resume-${key#\#}"
     win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$wt" \
-      "'$BIN/fleet-claude.sh' $args; exec \$SHELL") \
+      "$stamp'$BIN/fleet-claude.sh' $args; exec \$SHELL") \
       || { refuse "restore: new-window failed for $key"; exit 1; }
     # Mark the window from the ledger for EVERY resume — including #PR-keyed rows,
     # which resolve to their key via the ledger (issue #319) — so the row reads like
@@ -207,7 +231,7 @@ case "$kind" in
     # (issue #319); fall back to resume-pr<PR> when the ledger has no title.
     name="$rname"; [ -z "$name" ] && name="resume-pr${pr}"
     win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$MAIN" \
-      "'$BIN/fleet-claude.sh' $args; exec \$SHELL") \
+      "$stamp'$BIN/fleet-claude.sh' $args; exec \$SHELL") \
       || { refuse "restore: new-window failed for PR $pr"; exit 1; }
     bind_marks "$win" ""
     TM set-window-option -t "$win" @restored 1 2>/dev/null

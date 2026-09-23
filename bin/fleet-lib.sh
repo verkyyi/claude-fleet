@@ -2093,6 +2093,40 @@ fleet_scratch_key() {
   printf 'scratch-%s' "$s"
 }
 
+# ---- repo-qualified keys + self-stamping windows (issue #789) ----------------
+# _fleet_hosts_many <sess> → 0 iff the fleet hosts 2+ repos. No repos/ dir ⇒ 1 before
+# reading any conf, so a one-repo fleet pays nothing (the degenerate case).
+_fleet_hosts_many() {
+  [ -d "$FLEET_CONF_DIR/fleets/${1:-_}/repos" ] || return 1
+  [ "$(fleet_repos "${1:-}" | grep -c .)" -ge 2 ]
+}
+
+# _fleet_key_prefix <sess> <window-target> → "" in a one-repo fleet, "<slug>:" of the
+# window's repo in a 2+ repo fleet; exit 1 there when the window's repo is unknown or
+# it is a no-repo session — the caller then mints no key rather than guess.
+_fleet_key_prefix() {
+  local r
+  _fleet_hosts_many "${1:-}" || return 0
+  r=$(fleet_window_repo "${1:-}" "${2:-}")
+  [ -n "$r" ] || return 1
+  printf '%s:' "$(fleet_slug "$r")"
+}
+
+# fleet_win_stamp_cmd <opt> <val> [<opt> <val>…] → shell text a new window's OWN
+# command runs first, stamping window options on itself before the launcher reads
+# them. fleet_load_conf is window-aware (#788), so a spawner's set-option AFTER
+# new-window races the launcher: a repo-B session would load repo A's trust, model and
+# MCP. Bare tmux + $TMUX_PANE: inside the pane both name its own server and window.
+fleet_win_stamp_cmd() {
+  local out='' v
+  while [ "$#" -ge 2 ]; do
+    v=$(printf '%s' "$2" | sed "s/'/'\\\\''/g")
+    out="${out}tmux set-option -w -t \"\$TMUX_PANE\" $1 '$v' 2>/dev/null; "
+    shift 2
+  done
+  printf '%s' "$out"
+}
+
 # fleet_origin_key — spawn provenance (issue #503): which fleet session is running
 # THIS script? Prints the CALLER's own ledger key — `issue-<N>` when the calling
 # pane's window carries @issue, `scratch-<N>` when it sits in a scratch worktree
@@ -2105,16 +2139,23 @@ fleet_scratch_key() {
 # tail has no caller pane, so the detected value must ride a --origin flag into
 # any backgrounded re-invocation. Bare tmux on purpose: inside a pane $TMUX
 # already names the right per-fleet socket (the CLAUDE.md socket rail).
+#
+# In a fleet that hosts 2+ repos (issue #789) the key is repo-qualified —
+# `<slug>:issue-<N>` / `<slug>:scratch-<N>`, slug = fleet_slug(owner/name) — since
+# issue-12 and scratch-4 exist once PER REPO there. A window whose repo is unknown
+# yields NOTHING (≡ hub) rather than a bare key that could name the other repo's
+# window. A one-repo fleet's keys are unchanged.
 fleet_origin_key() {
   [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] || return 0
-  local o iss owt path k
+  local o iss owt path k pre
   o=$(tmux display-message -p -t "$TMUX_PANE" \
         '#{@issue}|#{@worktree}|#{pane_current_path}' 2>/dev/null)
   [ -n "$o" ] || return 0
   iss=${o%%|*}; o=${o#*|}; owt=${o%%|*}; path=${o#*|}
+  pre=$(_fleet_key_prefix "$(fleet_current_session)" "$TMUX_PANE") || return 0
   case "$iss" in
     ''|*[!0-9]*) : ;;
-    *) printf 'issue-%s' "$iss"; return 0 ;;
+    *) printf '%sissue-%s' "$pre" "$iss"; return 0 ;;
   esac
   # Scratch: @worktree first (the stamped path), else the pane cwd — deliberately
   # WITHOUT an @raw=1 gate. A crash-restored scratch carries neither @raw nor
@@ -2126,7 +2167,7 @@ fleet_origin_key() {
   # cwd is the base checkout never keys as a scratch.
   k=$(fleet_scratch_key "$owt")
   [ -z "$k" ] && k=$(fleet_scratch_key "$path")
-  [ -n "$k" ] && printf '%s' "$k"
+  [ -n "$k" ] && printf '%s%s' "$pre" "$k"
   return 0
 }
 
@@ -2155,8 +2196,20 @@ fleet_origin_key() {
 #                an explicit key (honoured as given, per #516).
 # Always sanitized to the key charset (window option + run-shell embed), ≤32 chars.
 fleet_origin_canon() {
-  local ex="${1:-}" det="${2:-}" tgt="${3:-}" src="${4:-}" k n
+  local ex="${1:-}" det="${2:-}" tgt="${3:-}" src="${4:-}" k n pre=''
+  # A repo-qualified key (issue #789, `<slug>:issue-<N>` / `<slug>:scratch-<N>`) keeps
+  # its prefix; the rest canonicalizes as below. ':' survives ONLY in that shape.
+  case "$ex" in
+    ?*:?*) pre=$(printf '%s' "${ex%%:*}" | LC_ALL=C tr -cd 'A-Za-z0-9._-' | cut -c1-96)
+           [ -n "$pre" ] && ex=${ex#*:} ;;
+  esac
   ex=$(printf '%s' "$ex" | LC_ALL=C tr -cd 'A-Za-z0-9._-' | cut -c1-32)
+  if [ -n "$pre" ]; then
+    k=$(fleet_scratch_key "$ex")
+    case "$ex" in issue-*) n=${ex#issue-}; case "$n" in ''|*[!0-9]*) : ;; *) k="issue-$n" ;; esac ;; esac
+    if [ -n "$k" ]; then printf '%s:%s' "$pre" "$k"; return 0; fi
+    ex=$(printf '%s%s' "$pre" "$ex" | cut -c1-32)   # not a key: fold back, as before
+  fi
   [ -n "$det" ] && [ -n "$tgt" ] && [ -n "$src" ] && [ "$src" != "$tgt" ] && det=$src
   [ -z "$ex" ] && { printf '%s' "$det"; return 0; }
   case "$ex" in autofill|bridge) printf '%s' "$ex"; return 0 ;; esac
@@ -2176,6 +2229,15 @@ fleet_origin_canon() {
     printf '%s' "$det"; return 0
   fi
   printf '%s' "$ex"
+}
+
+# fleet_win_for_key's repo gate (issue #789), run only on a window whose bare key
+# already matched: no prefix ⇒ any window; a prefix ⇒ the window's repo must be KNOWN
+# and carry that slug. Reads the caller's $pre/$wsess/$wid (bash dynamic scope).
+_fleet_wfk_repo_ok() {
+  [ -n "$pre" ] || return 0
+  local r; r=$(fleet_window_repo "$wsess" "$wid")
+  [ -n "$r" ] && [ "$(fleet_slug "$r")" = "$pre" ]
 }
 
 # fleet_win_for_key <key> [socket] — the INVERSE of fleet_origin_key (issue #574):
@@ -2202,7 +2264,9 @@ fleet_origin_canon() {
 #                per window)
 # First match wins; the spawners already refuse a second window for a bound issue.
 fleet_win_for_key() {
-  local key="${1:-}" sock="${2:-}" wl line wid rest iss wt path cand bn sn
+  local key="${1:-}" sock="${2:-}" wl line wid rest iss wt path cand bn sn pre='' wsess wr
+  # `<slug>:<key>` (issue #789): match the bare key, then require the window's repo.
+  case "$key" in ?*:?*) pre=${key%%:*}; key=${key#*:} ;; esac
   case "$key" in
     issue-*|scratch-*) sn=${key#*-}; case "$sn" in ''|*[!0-9]*) return 1 ;; esac ;;
     *) return 1 ;;
@@ -2210,19 +2274,20 @@ fleet_win_for_key() {
   # window_name is NOT read here: the free-text field would have to ride the same
   # `|` separator (a tab/0x1f separator prints as a literal `\037` on tmux ≤3.4).
   if [ -n "$sock" ]; then
-    wl=$(tmux -L "$sock" list-windows -a -F '#{window_id}|#{@issue}|#{@worktree}|#{pane_current_path}' 2>/dev/null)
+    wl=$(tmux -L "$sock" list-windows -a -F '#{window_id}|#{session_name}|#{@issue}|#{@worktree}|#{pane_current_path}' 2>/dev/null)
   else
-    wl=$(tmux list-windows -a -F '#{window_id}|#{@issue}|#{@worktree}|#{pane_current_path}' 2>/dev/null)
+    wl=$(tmux list-windows -a -F '#{window_id}|#{session_name}|#{@issue}|#{@worktree}|#{pane_current_path}' 2>/dev/null)
   fi
   [ -n "$wl" ] || return 1
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     wid=${line%%|*};  rest=${line#*|}
+    wsess=${rest%%|*}; rest=${rest#*|}
     iss=${rest%%|*};  rest=${rest#*|}
     wt=${rest%%|*};   path=${rest#*|}
     case "$key" in
       issue-*)
-        [ -n "$iss" ] && [ "issue-$iss" = "$key" ] && { printf '%s' "$wid"; return 0; }
+        [ -n "$iss" ] && [ "issue-$iss" = "$key" ] && _fleet_wfk_repo_ok && { printf '%s' "$wid"; return 0; }
         ;;
       scratch-*)
         for cand in "$wt" "$path"; do
@@ -2233,7 +2298,7 @@ fleet_win_for_key() {
             *)           continue ;;
           esac
           case "$sn" in ''|*[!0-9]*) continue ;; esac
-          [ "scratch-$sn" = "$key" ] && { printf '%s' "$wid"; return 0; }
+          [ "scratch-$sn" = "$key" ] && _fleet_wfk_repo_ok && { printf '%s' "$wid"; return 0; }
         done
         ;;
     esac

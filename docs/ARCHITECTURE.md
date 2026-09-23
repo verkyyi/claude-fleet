@@ -403,6 +403,33 @@ and a SessionEnd there closes the window without touching any worktree.
 Degenerate: every caller takes its historic path when the fleet has no overlay (`fleet_has_repo_overlays`);
 `bin/fleet-cleanup-multirepo-selftest.sh` pins both.
 
+**Every session is born knowing its repo (issue #789).** Each spawner takes
+`--repo owner/name` and loads that repo's overlay (`fleet_load_repo_conf`), so the
+worktree comes off that repo's checkout: `dash-issue-session.sh` requires it once
+the fleet hosts 2+ repos (a one-repo fleet defaults to its only repo);
+`dash-raw-session.sh` falls back to the fleet's current repo, and under `all` makes
+a **no-repo** session; `dash-restore-session.sh` falls back to the current repo.
+Every worker window is stamped `@repo` + `@worktree`. In a 2+ repo fleet the window
+stamps them on ITSELF as the first thing its command runs (`fleet_win_stamp_cmd`),
+because the launcher's window-aware `fleet_load_conf` would otherwise race a
+set-option from the spawner and pick up the wrong repo's trust, model and MCP.
+Spawn dedup is keyed on (repo, N); a window whose repo is unknown still blocks.
+
+A **no-repo** session (`dash-raw-session.sh --no-repo`) runs in `$HOME` with no
+worktree and is stamped `@norepo 1` — never `@raw`/`@worktree`, so no reaper can
+resolve a worktree to remove, and no ledger row is written. A Claude one launches
+with `--session-id <uuid>` (`@norepo_sid`), so restore resumes exactly that
+conversation rather than whatever else ran last in `$HOME`.
+
+`restore.map` WIN rows gain column 16, the repo (`-` = no-repo). It is written only
+in a 2+ repo fleet or for a no-repo session, so a one-repo fleet's map is
+byte-identical; an old row without it gets `@worktree` stamped, and
+`fleet_window_repo` derives the repo from that. In a 2+ repo fleet provenance keys
+are repo-qualified: `<slug>:issue-N` / `<slug>:scratch-N` (slug = `fleet_slug
+owner/name`). `fleet_origin_key` mints them, `fleet_origin_canon` keeps them and
+`fleet_win_for_key` resolves them only to a window of that repo. A one-repo fleet's
+keys are unchanged. `bin/fleet-repo-session-selftest.sh` pins all of it.
+
 ### The launcher pre-trusts the fleet's checkout (issue #563)
 
 Claude Code asks "Quick safety check: Is this a project you created or one you
