@@ -266,7 +266,7 @@ fleet_current_repo_set "$S" all
 # ==== (b)+(e) A's PR merges → one cleanup tick ==========================================
 old=$(( $(date +%s) - 7200 )); now=$(date +%s)
 for w in "$wA" "$wB"; do
-  tmux set-option -w -t "$w" @claude_state done
+  tmux set-option -w -t "$w" @claude_state "done"
   tmux set-option -w -t "$w" @claude_state_ts "$old"
 done
 # The notice the daemon shows one tick before it reaps (#565) — already served on A.
