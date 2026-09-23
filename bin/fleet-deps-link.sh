@@ -76,8 +76,11 @@
 # Installs are `nice -n 10`, serial, each under fleet_timebox
 # (FLEET_BASE_DEPS_TIMEOUT, default 900 s), output appended to
 # <install>/logs/base-deps.log (FLEET_BASE_DEPS_LOG). A failed or timed-out install
-# leaves the directory UNSTAMPED — i.e. not linked — and is retried next tick. One
-# run per base at a time (a mkdir lock in the base's git dir); a second one skips.
+# leaves the directory UNSTAMPED — i.e. not linked — and is retried next tick. Any
+# TRACKED file under the directory that the install rewrote (yarn v1 does, even
+# with --frozen-lockfile) is restored with `git checkout --`, so the base never
+# goes dirty and base-sync's ff never stalls. One run per base at a time (a mkdir
+# lock in the base's git dir); a second one skips.
 #
 # The shared tree must never be written through the link: hooks/bash-guard.py
 # refuses `npm|pnpm|yarn|bun install/add/remove/ci/…` inside a linked directory.
@@ -328,8 +331,21 @@ EOF
     rm -f "$d/node_modules/$STAMP"
     : > "$d/node_modules/$INSTALLING"
     printf '%s %s start: %s (lock %s)\n' "$(ts)" "$d" "$*" "${sha%"${sha#????????????}"}" >> "$LOG"
+    pre=$(git -C "$MAIN" diff --name-only HEAD -- "$d" 2>/dev/null)
     ( cd "$d" && fleet_timebox "$TMO" nice -n 10 "$@" ) </dev/null >> "$LOG" 2>&1; rc=$?
     rm -f "$d/node_modules/$INSTALLING"
+    # An install must never leave the base dirty: a dirty base blocks base-sync's
+    # ff. `yarn install --frozen-lockfile` was seen rewriting a tracked yarn.lock
+    # (~2.3k lines) on the monorepo, so restore every tracked file under <d> the
+    # install changed — only those; anything dirty before it is not ours to touch.
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      printf '%s\n' "$pre" | grep -qxF -- "$f" && continue
+      git -C "$MAIN" checkout -q -- "$f" 2>/dev/null \
+        && printf '%s %s restored tracked %s (the install rewrote it)\n' "$(ts)" "$d" "$f" >> "$LOG"
+    done <<RESTORE
+$(git -C "$MAIN" diff --name-only HEAD -- "$d" 2>/dev/null)
+RESTORE
     if [ "$rc" = 0 ] && [ -d "$d/node_modules" ]; then
       printf '%s\n' "$sha" > "$d/node_modules/$STAMP"
       printf '%s %s ok\n' "$(ts)" "$d" >> "$LOG"

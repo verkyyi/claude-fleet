@@ -36,7 +36,8 @@
 #              second run does nothing; a failing install leaves it unstamped (not
 #              linked) and the next --refresh-base retries it.
 #   PRIME      --prime-base installs + stamps every lockfile dir (npm / yarn / pnpm
-#              each with its frozen-lockfile form); --base-status counts them.
+#              each with its frozen-lockfile form); --base-status counts them; a
+#              tracked lockfile the install rewrote is restored (base stays clean).
 #
 # Real git, temp dirs, fake node_modules — no network, no npm, no tmux.
 set -uo pipefail
@@ -244,6 +245,7 @@ for pm in npm yarn pnpm; do
 printf '%s %s %s\n' "\$(pwd -P)" "$pm" "\$*" >> "$WORK/pm.calls"
 [ "\${FAKE_RC:-0}" = 0 ] || exit "\$FAKE_RC"
 mkdir -p node_modules/fresh-from-$pm
+[ "$pm" != yarn ] || printf '# rewritten by yarn\\n' >> yarn.lock   # yarn v1 does this for real
 FAKE
   chmod +x "$FB/$pm"
 done
@@ -272,6 +274,7 @@ ok "REFRESH: changed lockfile ⇒ reinstall + stamp ⇒ link; failure ⇒ unstam
 # ---- PRIME + STATUS ---------------------------------------------------------
 rm -f "$MAIN/tools/node_modules/.fleet-lock-sha"
 printf 'lockfileVersion: 10\n' > "$MAIN/web/pnpm-lock.yaml"     # stale web stamp
+git -C "$MAIN" commit -qam 'bump web deps'
 out=$("$DL" --base-status "$MAIN")
 printf '%s\n' "$out" | grep -qx 'summary fresh=1 stale=1 unstamped=1 installing=0 not-installed=0' || fail "STATUS: counts" "$out"
 : > "$WORK/pm.calls"
@@ -281,6 +284,9 @@ grep -qx "$MAIN/tools yarn install --frozen-lockfile" "$WORK/pm.calls" || fail "
 grep -qx "$MAIN/web pnpm install --frozen-lockfile" "$WORK/pm.calls" || fail "PRIME: pnpm form" "$(cat "$WORK/pm.calls")"
 out=$("$DL" --base-status "$MAIN")
 printf '%s\n' "$out" | grep -qx 'summary fresh=3 stale=0 unstamped=0 installing=0 not-installed=0' || fail "PRIME: status after prime" "$out"
-ok "PRIME: every lockfile dir installed with its frozen form + stamped; --base-status counts"
+[ -z "$(git -C "$MAIN" status --porcelain --untracked-files=no)" ] \
+  || fail "PRIME: an install left the base dirty (yarn rewrote its lockfile)" "$(git -C "$MAIN" status --porcelain)"
+grep -q 'restored tracked tools/yarn.lock' "$WORK/base-deps.log" || fail "PRIME: restore not logged" "$(cat "$WORK/base-deps.log")"
+ok "PRIME: every lockfile dir installed with its frozen form + stamped; --base-status counts; a rewritten lockfile is restored"
 
 printf 'fleet-deps-link-selftest: %d checks passed\n' "$pass"
