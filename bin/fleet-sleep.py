@@ -101,6 +101,23 @@ def process_start(pid):
     return process_state(pid)[1]
 
 
+# The code a park process runs: its entry point plus every module it loads.
+PARK_CODE=('fleet-sleep.py','fleet_sleep_park.py','.fleet-transfer.py','fleet-input.py','fleet-codex-session.py',
+           'fleet-codex-rpc.py','fleet_sleep_argv.py','fleet-loop.py','fleet_sleep_mcp.py')
+
+
+def process_age_start(pid):
+    # Epoch start from `etime` ([[dd-]hh:]mm:ss): lstart is locale-formatted.
+    try: text=run(['ps','-p',str(pid),'-o','etime=']).strip()
+    except subprocess.CalledProcessError: return None
+    days,_,clock=text.rpartition('-')
+    try: parts=[int(x) for x in clock.split(':')]
+    except ValueError: return None
+    seconds=0
+    for x in parts: seconds=seconds*60+x
+    return time.time()-seconds-int(days or 0)*86400
+
+
 def source_alive(data):
     # An exited agent stays a zombie until its parent (tmux) reaps it. BSD ps
     # renames the command to <defunct>; Linux procps prints the zombie's
@@ -473,6 +490,40 @@ class Worker:
             if str(BIN/'fleet-sleep.py') in command and ' park ' in command: return
             time.sleep(.2)
         raise ValueError('pane still owns processes; refusing to replace it')
+
+    def repark(self,force=False):
+        """Put the CURRENT sleeping page on a retained pane (issue #1064). A park
+        process runs the code it was exec'd with, so after /fleet-sync-install a
+        worker that was already asleep keeps the old page — its input gate shut,
+        no Wake button, no `@sleep_since`. Respawns park only (never an agent),
+        and only over a park process older than the installed park code, a dead
+        pane, or any park page with force; back-fills `since` from `created`."""
+        with lock(self.lockfile):
+            path,data=self.record()
+            if data['state'] not in ('sleeping','failed'): return {'skip':'not asleep ('+data['state']+')'}
+            stale='dead pane'
+            if self.opt('pane_dead')!='1':
+                pid=int(self.opt('pane_pid'))
+                try: command=run(['ps','-p',str(pid),'-o','command='])
+                except subprocess.CalledProcessError: command=''
+                if 'fleet-sleep.py' not in command or ' park ' not in command:
+                    return {'skip':'pane is not a sleeping page; not replaced'}
+                started=process_age_start(pid)
+                code=max((BIN/n).stat().st_mtime for n in PARK_CODE if (BIN/n).exists())
+                stale='' if started is None or started>=code else 'park predates the installed code'
+                if not stale and not force and data.get('since'): return {'current':str(path)}
+                stale=stale or ('forced' if force else '')
+            if data['state']=='sleeping':
+                if not data.get('since'): data['since']=int(data.get('created') or time.time())
+                self.phase(path,data,'sleeping')
+            if not stale: return {'current':str(path),'since':data.get('since','')}
+            # A cleared marker makes the new page re-open the input gate for itself.
+            self.stamp('@sleep_park_ready','')
+            self.tm('set-option','-p','-t',self.pane,'remain-on-exit','on')
+            self.tm('respawn-pane','-k','-t',self.pane,'-c',data['source']['worktree'],self.command('park'))
+            ready=time.monotonic()+5
+            while self.opt('@sleep_park_ready')!=path.stem and time.monotonic()<ready: time.sleep(.05)
+            return {'reparked':str(path),'why':stale,'ready':self.opt('@sleep_park_ready')==path.stem}
 
     def wake_locked(self,path,data,over_cap=True):
         """Resume the saved conversation. True once awake, False when an automatic
@@ -1118,7 +1169,7 @@ def park_frame(w,data,footer_lines=None,facts=None):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('action',choices=('hook','scan','status','sleep','wake','park','launch','keep-awake','allow-sleep','holds-exit','deliver','restore','why','busy'))
+    p.add_argument('action',choices=('hook','scan','status','sleep','wake','park','launch','keep-awake','allow-sleep','holds-exit','deliver','restore','why','busy','repark'))
     p.add_argument('--session',default='')
     p.add_argument('window',nargs='?')
     p.add_argument('--dry-run',action='store_true')
@@ -1126,11 +1177,23 @@ def main():
     p.add_argument('--pid',type=int,default=0,help='busy: the Claude pid already resolved for this pane')
     p.add_argument('--dwell',type=float,default=0,help='wake only if the window is still current after this many seconds')
     p.add_argument('--nav',action='store_true',help='wake: from a navigation/attach hook; a no-op unless FLEET_SLEEP_WAKE=dwell')
+    p.add_argument('--force',action='store_true',help='repark: replace every sleeping page, not only stale ones')
     p.add_argument('--over-cap',action='store_true',help='wake: the operator\'s own wake — goes even at the session limit (issue #1058)')
     a=p.parse_intermixed_args()
     if a.action=='hook':
         try: hook()
         except (ValueError,KeyError,OSError,subprocess.SubprocessError): pass
+        return 0
+    if a.action=='repark' and not a.window:
+        # Every retained worker of this fleet (issue #1064): run after a sync.
+        for window in run(['tmux','-L',a.session,'list-windows','-t',a.session,'-F','#{window_id}']).splitlines():
+            try:
+                w=Worker(a.session,window)
+                if w.opt('@worker_lifecycle') not in ('sleeping','failed'): continue
+                result=w.repark(force=a.force)
+            except NotAWorker: continue
+            except (ValueError,OSError,KeyError,subprocess.SubprocessError) as exc: result={'skip':str(exc)}
+            print(json.dumps(dict(session=a.session,window=window,**result),ensure_ascii=False),flush=True)
         return 0
     if a.action in ('scan','status'):
         mode=os.environ.get('FLEET_SLEEP','observe')
@@ -1197,6 +1260,7 @@ def main():
         command=w.command('park')
         w.replaceable()
         w.tm('respawn-pane','-k','-t',w.pane,'-c',data['source']['worktree'],command)
+    elif a.action=='repark': print(json.dumps(w.repark(force=a.force),ensure_ascii=False))
     elif a.action=='park': park(w)
     elif a.action=='launch': launch(w)
     else: w.stamp('@sleep_keep_awake','1' if a.action=='keep-awake' else '')
