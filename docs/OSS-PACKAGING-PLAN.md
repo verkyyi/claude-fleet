@@ -581,6 +581,9 @@ tmux socket 本来就 per-uid；ccquota 明确要求每个 OS login 一个 agent
 （*"on most systems it could not read the others anyway"*）。
 现在共用一个 login 的话，**配额归因是错的**。这是配方不是代码，但必须先改。
 
+**Runbook：[SHARED-MACHINE.md](SHARED-MACHINE.md)**（#609）—— 建 login → Claude 首登 → hub enroll →
+每人一个 ccquota LaunchAgent → 每 login 一个 fleet → 验收清单。
+
 ## 十一、执行与落地
 
 ### 排序原则
