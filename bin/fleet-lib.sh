@@ -2264,7 +2264,7 @@ _fleet_wfk_repo_ok() {
 #                per window)
 # First match wins; the spawners already refuse a second window for a bound issue.
 fleet_win_for_key() {
-  local key="${1:-}" sock="${2:-}" wl line wid rest iss wt path cand bn sn pre='' wsess wr
+  local key="${1:-}" sock="${2:-}" wl line wid rest iss wt path cand bn sn pre='' wsess
   # `<slug>:<key>` (issue #789): match the bare key, then require the window's repo.
   case "$key" in ?*:?*) pre=${key%%:*}; key=${key#*:} ;; esac
   case "$key" in

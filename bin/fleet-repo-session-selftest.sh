@@ -90,7 +90,7 @@ tmux new-session -d -s "$D" -n plan
 
 opt()  { tmux display-message -p -t "$1" "#{$2}"; }
 wait_rec() {   # $1=window-id — the recorder has run
-  local i; for i in $(seq 1 100); do [ -s "$WORK/rec/$1.seen" ] && return 0; sleep 0.1; done; return 1
+  local _; for _ in $(seq 1 100); do [ -s "$WORK/rec/$1.seen" ] && return 0; sleep 0.1; done; return 1
 }
 wins_for() {   # $1=sess $2=issue → window ids bound to it
   tmux list-windows -t "$1" -F '#{@issue} #{window_id}' | awk -v n="$2" '$1==n{print $2}'
