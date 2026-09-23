@@ -27,8 +27,27 @@
 # Machine-wide cache dir (global/, issue #181). Honors $TMPDIR like the rest.
 fleet_usage_cache_dir() { printf '%s/.claude-dash/global' "${TMPDIR:-/tmp}"; }
 
+# fleet_usage_now — epoch seconds for the age math below (issue #888). Delegates
+# to fleet-daemon-lib.sh's fleet_now when that is loaded, so a caller that pinned
+# its clock (the status bar, one render every 5s per client) pays ONE `date` per
+# render instead of one per age; plain `date` otherwise — unchanged for everyone
+# else. `command -v` is a builtin: the probe itself forks nothing.
+fleet_usage_now() {
+  if command -v fleet_now >/dev/null 2>&1; then fleet_now; else date +%s; fi
+}
+
+# _fleet_usage_line1 <file> <var> — the file's FIRST line into <var> (empty when
+# the file is absent), via builtin `read` — no `cat` fork. Every cache file read
+# this way is a one-line stamp its writer never gives a second line; a missing
+# trailing newline still assigns (read's non-zero at EOF is ignored).
+_fleet_usage_line1() {
+  _ful=''
+  [ -f "${1:-}" ] && IFS= read -r _ful < "$1" 2>/dev/null
+  eval "$2=\$_ful"
+}
+
 # Echo the local 5h/7d token-usage proxy line (empty when the cache is absent).
-fleet_usage_proxy() { cat "$(fleet_usage_cache_dir)/usage" 2>/dev/null; }
+fleet_usage_proxy() { _fleet_usage_line1 "$(fleet_usage_cache_dir)/usage" _fup; printf '%s' "$_fup"; }
 
 # Echo "pct<TAB>line" for the official ratelimit scrape when present AND fresh
 # (within FLEET_RATELIMIT_TTL). `pct` is the leading integer % of `line` (empty
@@ -45,7 +64,7 @@ fleet_usage_ratelimit() {
   IFS="$tab" read -r ts line < "$f" 2>/dev/null
   case "$ts" in ''|*[!0-9]*) return 0 ;; esac   # missing / non-numeric epoch → skip
   [ -n "$line" ] || return 0
-  [ "$(( $(date +%s) - ts ))" -lt "${FLEET_RATELIMIT_TTL:-21600}" ] || return 0
+  [ "$(( $(fleet_usage_now) - ts ))" -lt "${FLEET_RATELIMIT_TTL:-21600}" ] || return 0
   pct="${line%%[!0-9]*}"                          # leading run of digits ("85% …" → 85)
   printf '%s\t%s' "$pct" "$line"
 }
@@ -184,11 +203,12 @@ fleet_limit_axis() {
 # FLEET_ACCOUNT_QUOTA_VIA_BANNER_SECS (default 600) — the status bar's
 # `⚠ quota via banner`. Nothing otherwise.
 fleet_quota_via_banner() {
-  _qvb=$(cat "$(fleet_usage_cache_dir)/quota.via-banner" 2>/dev/null) || return 0
+  _fleet_usage_line1 "$(fleet_usage_cache_dir)/quota.via-banner" _qvb
+  [ -n "$_qvb" ] || return 0
   _qvbt=${_qvb%%	*}; _qvbl=""
   case "$_qvb" in *'	'*) _qvbl=${_qvb#*	} ;; esac
   case "$_qvbt" in ''|*[!0-9]*) return 0 ;; esac
-  _qvba=$(( $(date +%s) - _qvbt ))
+  _qvba=$(( $(fleet_usage_now) - _qvbt ))
   [ "$_qvba" -lt 0 ] && _qvba=0
   [ "$_qvba" -lt "${FLEET_ACCOUNT_QUOTA_VIA_BANNER_SECS:-600}" ] || return 0
   printf '%s\t%s' "$_qvbl" "$_qvba"
@@ -217,9 +237,9 @@ fleet_quota_watch_configured() {
 # has never been watched — that is stale too). Prints nothing when fresh or off.
 fleet_quota_stale_age() {
   fleet_quota_watch_configured || return 0
-  _qts=$(cat "$(fleet_usage_cache_dir)/account.quota.ts" 2>/dev/null)
+  _fleet_usage_line1 "$(fleet_usage_cache_dir)/account.quota.ts" _qts
   case "$_qts" in ''|*[!0-9]*) _qts=0 ;; esac
-  _qage=$(( $(date +%s) - _qts ))
+  _qage=$(( $(fleet_usage_now) - _qts ))
   [ "$_qage" -ge "${FLEET_ACCOUNT_QUOTA_STALE:-600}" ] && printf '%s' "$_qage"
   return 0
 }
@@ -250,14 +270,14 @@ fleet_quota_blind() {
   _qbmin="${FLEET_ACCOUNT_QUOTA_BLIND_STREAK:-3}"
   case "$_qbmin" in ''|*[!0-9]*) _qbmin=3 ;; esac
   [ "$_qbmin" -eq 0 ] && return 0                      # 0 = alarm off
-  _qbe=$(cat "$(fleet_usage_cache_dir)/account.quota.empty" 2>/dev/null)
+  _fleet_usage_line1 "$(fleet_usage_cache_dir)/account.quota.empty" _qbe
   _qbn=${_qbe%%	*}; _qbs=0
   case "$_qbe" in *'	'*) _qbs=${_qbe#*	} ;; esac
   case "$_qbn" in ''|*[!0-9]*) return 0 ;; esac
   case "$_qbs" in ''|*[!0-9]*) _qbs=0 ;; esac
   [ "$_qbn" -ge "$_qbmin" ] || return 0
   _qbage=0
-  [ "$_qbs" -gt 0 ] && _qbage=$(( $(date +%s) - _qbs ))
+  [ "$_qbs" -gt 0 ] && _qbage=$(( $(fleet_usage_now) - _qbs ))
   [ "$_qbage" -lt 0 ] && _qbage=0
   printf '%s\t%s' "$_qbn" "$_qbage"
   return 0
@@ -341,7 +361,7 @@ fleet_collect_stale_age() {
   fi
   _cts=$(fleet_collect_hb_ts)
   [ "$_cts" -gt 0 ] || return 0
-  _cage=$(( $(date +%s) - _cts ))
+  _cage=$(( $(fleet_usage_now) - _cts ))
   [ "$_cage" -ge "$(fleet_collect_stale_secs)" ] && printf '%s' "$_cage"
   return 0
 }
@@ -351,9 +371,9 @@ fleet_collect_stale_age() {
 # the TRACE: the bar keeps showing it for FLEET_COLLECT_KICK_TRACE after the
 # collector recovers, so a self-heal is never a silent one.
 fleet_collect_kick_age() {
-  _kts=$(cat "$(fleet_usage_cache_dir)/collect.kick.ts" 2>/dev/null)
+  _fleet_usage_line1 "$(fleet_usage_cache_dir)/collect.kick.ts" _kts
   case "$_kts" in ''|*[!0-9]*) return 0 ;; esac
-  printf '%s' $(( $(date +%s) - _kts ))
+  printf '%s' $(( $(fleet_usage_now) - _kts ))
   return 0
 }
 

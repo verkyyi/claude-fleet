@@ -122,7 +122,51 @@ fleet_daemon_field() {
 
 # _fleet_daemon_key <unit> — the unit name as an env-var suffix (`-` → `_`), so a
 # per-unit override reads FLEET_DAEMON_STALE_BASE_SYNC for `base-sync`.
-_fleet_daemon_key() { printf '%s' "${1:-}" | tr 'a-z-' 'A-Z_'; }
+# Forkless (issue #888): it was `printf | tr 'a-z-' 'A-Z_'`, and the status bar
+# asks it twice per unit per render — 22 `tr` every 5s per attached client. POSIX
+# sh has no case conversion, so it walks the name a character at a time; anything
+# outside a-z and `-` passes through untouched, exactly as `tr` left it.
+_fleet_daemon_key() {
+  _fdk_in="${1:-}"; _fdk_out=''
+  while [ -n "$_fdk_in" ]; do
+    _fdk_rest="${_fdk_in#?}"; _fdk_c="${_fdk_in%"$_fdk_rest"}"; _fdk_in="$_fdk_rest"
+    case "$_fdk_c" in
+      a) _fdk_c=A ;; b) _fdk_c=B ;; c) _fdk_c=C ;; d) _fdk_c=D ;; e) _fdk_c=E ;;
+      f) _fdk_c=F ;; g) _fdk_c=G ;; h) _fdk_c=H ;; i) _fdk_c=I ;; j) _fdk_c=J ;;
+      k) _fdk_c=K ;; l) _fdk_c=L ;; m) _fdk_c=M ;; n) _fdk_c=N ;; o) _fdk_c=O ;;
+      p) _fdk_c=P ;; q) _fdk_c=Q ;; r) _fdk_c=R ;; s) _fdk_c=S ;; t) _fdk_c=T ;;
+      u) _fdk_c=U ;; v) _fdk_c=V ;; w) _fdk_c=W ;; x) _fdk_c=X ;; y) _fdk_c=Y ;;
+      z) _fdk_c=Z ;; -) _fdk_c=_ ;;
+    esac
+    _fdk_out="$_fdk_out$_fdk_c"
+  done
+  printf '%s' "$_fdk_out"
+}
+
+# fleet_now — epoch seconds. `date +%s` unless the calling script PINNED its clock
+# with fleet_now_pin: then the pin plus the shell's own $SECONDS since pinning, so
+# every age this lib (and usage-lib.sh, which delegates here) computes shares ONE
+# `date` fork per script run instead of paying one per age (issue #888: the status
+# bar forked `date` 26 times per render). It stays live — accurate to ±1s — however
+# long the script runs; a shell without $SECONDS (dash) holds the pinned value,
+# which only a one-shot script should rely on. Neither bash 3.2 nor POSIX sh has
+# $EPOCHSECONDS.
+#
+# The pin is keyed on $$ (unchanged in a subshell, different in any child process),
+# so an accidentally exported pin cannot leak into a child script: the child's
+# $SECONDS restarted at 0, and it simply falls back to `date`.
+fleet_now() {
+  if [ -n "${_FLEET_NOW:-}" ] && [ "${_FLEET_NOW_PID:-}" = "$$" ]; then
+    if [ -n "${_FLEET_NOW_S0:-}" ]; then
+      printf '%s' $(( _FLEET_NOW + SECONDS - _FLEET_NOW_S0 ))
+    else
+      printf '%s' "$_FLEET_NOW"
+    fi
+  else
+    date +%s
+  fi
+}
+fleet_now_pin() { _FLEET_NOW=$(date +%s); _FLEET_NOW_S0="${SECONDS:-}"; _FLEET_NOW_PID=$$; }
 
 # fleet_daemon_state_dir [root] — where this install's daemon stamps live.
 # The LIVE install (or an unknown root) gets the shared machine-wide global/ dir
@@ -275,7 +319,7 @@ _fleet_daemon_hb_ts() {
 # die because a stamp could not be written.
 fleet_daemon_stamp_tick() {
   _fd_d=$(fleet_daemon_state_dir "${2:-}")
-  mkdir -p "$_fd_d" 2>/dev/null || return 0
+  [ -d "$_fd_d" ] || mkdir -p "$_fd_d" 2>/dev/null || return 0   # test first: no exec once it exists (#888)
   date +%s > "$_fd_d/${1:-unknown}.tick" 2>/dev/null || return 0
   return 0
 }
@@ -323,7 +367,7 @@ _fleet_daemon_inflight() {
   case "$_fd_pid" in ''|*[!0-9]*) printf '0'; return 0 ;; esac
   case "$_fd_pts" in ''|*[!0-9]*) printf '0'; return 0 ;; esac
   kill -0 "$_fd_pid" 2>/dev/null || { printf '0'; return 0; }
-  _fd_nw=$(date +%s)
+  _fd_nw=$(fleet_now)
   if [ "$(( _fd_nw - _fd_pts ))" -lt "${FLEET_COLLECT_DEADLINE:-600}" ]; then
     printf '%s' "$_fd_nw"
   else
@@ -337,7 +381,7 @@ _fleet_daemon_inflight() {
 fleet_daemon_overdue() {
   _fd_t=$(fleet_daemon_tick_ts "${1:-}" "${2:-}")
   [ "$_fd_t" -gt 0 ] || return 0
-  _fd_a=$(( $(date +%s) - _fd_t ))
+  _fd_a=$(( $(fleet_now) - _fd_t ))
   [ "$_fd_a" -ge "$(fleet_daemon_stale_secs "${1:-}")" ] && printf '%s' "$_fd_a"
   return 0
 }
@@ -348,7 +392,7 @@ fleet_daemon_overdue() {
 fleet_daemon_kick_age() {
   _fd_k=$(_fleet_daemon_epoch "$(fleet_daemon_state_dir "${2:-}")/${1:-}.kick.ts")
   [ "$_fd_k" -gt 0 ] || return 0
-  printf '%s' $(( $(date +%s) - _fd_k ))
+  printf '%s' $(( $(fleet_now) - _fd_k ))
   return 0
 }
 
@@ -524,7 +568,7 @@ fleet_daemon_probe_age() {
   [ -n "$_fd_pline" ] || return 0
   _fd_pt=${_fd_pline%%	*}
   case "$_fd_pt" in ''|*[!0-9]*) return 0 ;; esac
-  printf '%s' $(( $(date +%s) - _fd_pt ))
+  printf '%s' $(( $(fleet_now) - _fd_pt ))
 }
 
 # fleet_daemon_probe_verdict [root] [ttl] — the cached verdict iff it is younger

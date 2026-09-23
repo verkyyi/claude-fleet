@@ -43,7 +43,8 @@
 # NB: the values go INSIDE fzf `change-prompt(…)` — fzf stops at the FIRST ')' — so
 # parens/newlines are stripped from a conf value before it is rendered.
 set -uo pipefail
-BIN="$(cd "$(dirname "$0")" && pwd)"
+case "$0" in */*) BIN="${0%/*}" ;; *) BIN=. ;; esac   # forkless dirname (issue #888)
+BIN="$(cd "${BIN:-/}" && pwd)"
 mode="${1:-actions}"
 C="${TMPDIR:-/tmp}/.claude-dash"
 
