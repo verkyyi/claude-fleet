@@ -216,24 +216,60 @@ done
 # --- PR/CI attention signal ---
 # Maps each window's branch → its open PR's CI state; writes @prci (glyph) +
 # @pfg (color) — surfaced on the dash's PR column. Single writer of @prci/@pfg.
+#
+# WHICH prmap a window is matched against (issue #792): identity is (repo, branch),
+# never a bare branch — two repos can each have an `issue-3`, and joining on the
+# name alone painted repo A's green check on repo B's unfinished work. So a window
+# in a fleet that hosts more than one repo (a repos/ overlay exists) reads its OWN
+# repo's prmap, resolved through fleet_window_repo — @repo, else derived once from
+# @worktree and STAMPED (which is also what lets the dash's fork-free producer
+# read @repo straight off the window list), else the fleet's only repo, else
+# unknown → no glyph, never a guess. `@norepo 1` → no repo → no glyph.
+# A fleet with no overlay (every fleet today) keeps the per-session prmap exactly
+# as before, with no extra tmux call.
 US=$'\x1f'
+MR_SEEN=' ' MR_MULTI=' '
 for sock in $SOCKETS; do
-tmux -L "$sock" list-windows -a -F "#{session_name}${US}#{session_name}:#{window_index}${US}#{pane_current_path}${US}#{@prci}" 2>/dev/null | \
-while IFS="$US" read -r sess win path cur; do
+wl=$(tmux -L "$sock" list-windows -a -F "#{session_name}${US}#{session_name}:#{window_index}${US}#{pane_current_path}${US}#{@prci}${US}#{@repo}${US}#{@norepo}" 2>/dev/null)
+# tmux 3.4 escapes a control separator as the literal four bytes `\037`;
+# newer versions return the byte. Accept both (same as tmux-dashboard-rows.sh).
+wl=${wl//\\037/$US}
+while IFS="$US" read -r sess win path cur wrepo wnorepo; do
   [ -z "$path" ] && continue
-  # each window matches against ITS fleet's prmap — routed through fleet_cache so
-  # the read side has a single slug-resolution truth (issue #180). Cold-start
-  # fallback is the un-slug'd name, which simply won't exist ⇒ no glyph.
-  prmf=$(fleet_cache prmap "$sess")
+  case "$MR_SEEN" in *" $sess "*) ;; *)
+    MR_SEEN="$MR_SEEN$sess "
+    fleet_has_repo_overlays "$sess" && MR_MULTI="$MR_MULTI$sess " ;;
+  esac
+  case "$MR_MULTI" in
+    *" $sess "*)
+      # multi-repo fleet: this window's OWN repo's prmap, or none at all
+      prmf=''
+      if [ "$wnorepo" != 1 ]; then
+        [ -n "$wrepo" ] || wrepo=$(fleet_window_repo "$sess" "$win")
+        [ -n "$wrepo" ] && prmf="$FLEET_C/fleets/$(fleet_slug "$(fleet_norm_repo "$wrepo")")/prmap"
+      fi ;;
+    *)
+      # each window matches against ITS fleet's prmap — routed through fleet_cache so
+      # the read side has a single slug-resolution truth (issue #180). Cold-start
+      # fallback is the un-slug'd name, which simply won't exist ⇒ no glyph.
+      prmf=$(fleet_cache prmap "$sess") ;;
+  esac
   key=$(cache_key "$path")
   branch=$(cut -f1 "$G/git_$key" 2>/dev/null)
-  bare=$(printf '%s' "$branch" | sed -E 's/(\+[0-9]+)?(-[0-9]+)?$//')
   glyph=""; pfg=""
-  if [ -n "$bare" ] && [ "$bare" != "-" ]; then
-    hit=$(awk -F'\t' -v x="$bare" '$1==x{print;exit}' "$prmf" 2>/dev/null)
+  if [ -n "$prmf" ] && [ -n "$branch" ] && [ "$branch" != "-" ]; then
+    # The cache branch may carry +ahead/-behind decorations. Try it EXACTLY first,
+    # then decoration-stripped — the same three spellings, in the same order, as
+    # prcands_v in tmux-dashboard-rows.sh. A strip-only lookup turned a clean
+    # `issue-3` into `issue`, so an undecorated issue branch never got a glyph.
+    b2=$branch; case "$b2" in *-[0-9]|*-[0-9][0-9]|*-[0-9][0-9][0-9]|*-[0-9][0-9][0-9][0-9]) b2=${b2%-*};; esac
+    b3=$b2; case "$b3" in *+[0-9]|*+[0-9][0-9]|*+[0-9][0-9][0-9]|*+[0-9][0-9][0-9][0-9]) b3=${b3%+*};; esac
+    hit=$(awk -F'\t' -v x1="$branch" -v x2="$b3" -v x3="$b2" '
+      $1==x1 && h1=="" {h1=$0} $1==x2 && h2=="" {h2=$0} $1==x3 && h3=="" {h3=$0}
+      END { if (h1!="") print h1; else if (h2!="") print h2; else if (h3!="") print h3 }' "$prmf" 2>/dev/null)
     # a live window sitting on a MERGED branch is a deploy-state candidate (#541):
-    # hand its merge sha to the deploy pass below (this loop is a pipeline subshell,
-    # so the hand-off is a PID-unique temp file, swept by the EXIT trap).
+    # hand its merge sha to the deploy pass below, as a PID-unique temp file swept by
+    # the EXIT trap (keyed by the prmap's dir, so each repo's candidates stay its own).
     if [ -n "$hit" ] && [ "$(echo "$hit"|cut -f3)" = "MERGED" ]; then
       msha=$(echo "$hit"|cut -f6)
       [ -n "$msha" ] && printf '%s\t%s\n' "${prmf%/*}" "$msha" >> "$C/deploy-live.$$"
@@ -257,7 +293,7 @@ while IFS="$US" read -r sess win path cur; do
     tmux -L "$sock" set-window-option -t "$win" @prci "$glyph" 2>/dev/null
     tmux -L "$sock" set-window-option -t "$win" @pfg "$pfg" 2>/dev/null
   fi
-done
+done <<< "$wl"
 done
 
 # --- deploy state for MERGED PRs (issue #541) ---

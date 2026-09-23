@@ -333,6 +333,20 @@ fleet_repos() {
   return 0
 }
 
+# fleet_has_repo_overlays <sess> → 0 iff fleets/<sess>/repos/ holds an overlay —
+# the CHEAP "might this fleet host more than one repo?" gate for hot paths (the
+# dash's 4Hz row producer, pr-refresh's per-window pass; issue #792). Builtins
+# only, no fork. 1 = the degenerate one-repo fleet: callers keep today's
+# per-session code path byte for byte.
+fleet_has_repo_overlays() {
+  local f
+  [ -n "${ZSH_VERSION:-}" ] && setopt local_options null_glob
+  for f in "$FLEET_CONF_DIR/fleets/${1:-_}/repos"/*.conf; do
+    [ -f "$f" ] && return 0
+  done
+  return 1
+}
+
 # fleet_repo_hosted <sess> <repo> → 0 iff the fleet hosts <repo>.
 fleet_repo_hosted() {
   local want; want=$(fleet_norm_repo "${2:-}")
