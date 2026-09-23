@@ -1,5 +1,5 @@
 #!/bin/bash
-# tmux-issue-preview.sh <issue-number> — render a GitHub issue's detail (state,
+# tmux-issue-preview.sh <issue-number> [--repo=<owner/name>] — render a GitHub issue's detail (state,
 # title, labels, milestone, assignees, body, recent comments) for the backlog
 # panel's fzf --preview, so you can READ an issue without leaving tmux or
 # spawning a session. Fetched via `gh issue view` and cached per-issue with a
@@ -25,8 +25,10 @@ c(){ printf '\033[38;2;%sm' "$1"; }; R=$'\033[0m'
 
 # same session→repo resolution as the rows producer (FLEET_SESSION is exported
 # by tmux-issues.sh so this inherits it under the fzf preview subprocess).
-REPO="${FLEET_REPO:-}"
-_r=$(fleet_repo_cached "${FLEET_SESSION:-}"); [ -n "$_r" ] && REPO="$_r"
+# A 2+ repo fleet (issue #794): the row's repo (--repo=), else the current repo.
+ROWREPO=''
+for _a in "$@"; do case "$_a" in --repo=*) ROWREPO="${_a#--repo=}" ;; esac; done
+REPO=$(CF_REPO='' fleet_backlog_repo "${FLEET_SESSION:-}" "$ROWREPO")
 [ -z "$REPO" ] && { printf '%s  (no repo resolved for this fleet)%s\n' "$(c "$GY")" "$R"; exit 0; }
 command -v gh >/dev/null 2>&1 || { printf '%s  gh not found — cannot preview%s\n' "$(c "$GY")" "$R"; exit 0; }
 

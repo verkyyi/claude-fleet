@@ -21,6 +21,29 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 
 cur=$(tmux display-message -p '#S' 2>/dev/null)
 
+# --repo-only [<sess>] (issue #794): the same picker, ASKING rather than switching —
+# <sess>'s (default: this fleet's) hosted repos only, no fleet rows and no `all`;
+# prints the picked owner/name on stdout, nothing on Esc. Filing a new issue under
+# `all` runs it (dash-issue-new.sh), since an issue always belongs to one repo.
+if [ "${1:-}" = --repo-only ]; then
+  rsess="${2:-$cur}"
+  US=$'\x1f'; listing=''
+  while IFS= read -r r; do
+    [ -n "$r" ] && listing+="$r$US  $r"$'\n'
+  done <<EOF
+$(fleet_repos "$rsess")
+EOF
+  [ -n "$listing" ] || exit 1
+  pick=$(printf '%s' "$listing" \
+    | fzf --ansi --no-sort --layout=reverse-list --info=hidden --border=rounded --height=100% --no-input \
+          --delimiter="$US" --with-nth=2 \
+          --header="which repo?  ·  enter=pick · esc=cancel · [✕ close]" \
+          --bind 'click-header:transform:case "$FZF_CLICK_HEADER_WORD" in *✕*|*close*) echo abort ;; esac')
+  [ -n "$pick" ] || exit 1
+  printf '%s\n' "${pick%%"$US"*}"
+  exit 0
+fi
+
 # fleet-list.sh emits an aligned column header as its line 1 (`FLEET REPO
 # CHECKOUT`) then one row per fleet — header and rows share the SAME printf, so the
 # labels sit over their columns. Capture the header to pin it at the TOP of the

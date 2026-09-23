@@ -19,9 +19,23 @@ FLEET_SESSION=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{session_name}' 2>
 [ -z "$FLEET_SESSION" ] && FLEET_SESSION=$(tmux display-message -p '#{session_name}' 2>/dev/null)
 export FLEET_SESSION
 _r=$(fleet_repo_cached "$FLEET_SESSION"); [ -n "$_r" ] && REPO="$_r"
+# A fleet hosting 2+ repos (issue #794): the rows carry their repo as field 4, and
+# every row action passes it on (RARG) — close/priority/preview/open/spawn act on
+# THAT row's repo, never the fleet conf's. One-repo: RARG is empty, binds unchanged.
+MULTI=0; RARG=''
+if [ -n "$FLEET_SESSION" ] && fleet_multirepo "$FLEET_SESSION"; then MULTI=1; RARG=' --repo={4}'; fi
 ROWS="$BIN/tmux-issues-rows.sh"
 command -v fzf >/dev/null 2>&1 || { echo "fzf required"; sleep 5; exit 1; }
 case "$MODE" in roadmap) LABEL=' roadmap · milestoned ';; unplanned) LABEL=' unplanned · no milestone ';; *) LABEL=' backlog · GitHub issues ';; esac
+# 2+ repos: the border names what the list shows — the current repo, or `all repos`.
+# Re-read at every fzf (re)launch, so a repo picked meanwhile is named on the next.
+blabel() {
+  local cur
+  if [ "$MULTI" = 1 ]; then
+    cur=$(fleet_current_repo "$FLEET_SESSION"); [ "$cur" = all ] && cur='all repos'
+    printf '%s· %s ' "$LABEL" "$cur"
+  else printf '%s' "$LABEL"; fi
+}
 
 # The ⌃n new · ⌃x close · ? keys sub-actions each open a small
 # `tmux display-popup` (input dialog / cheatsheet). That works from a windowed
@@ -77,7 +91,8 @@ if [ -n "${POPUP:-}" ]; then
   HDR="$SLOTS · ↵ work · [＋ new] · ? keys · esc · [✕ close]"
   mkdir -p "$(dirname "$ACT")" 2>/dev/null || true
   N_BIND="$DASH_KEY_NEW:execute-silent(printf 'new' > '$ACT')+abort"
-  X_BIND="$DASH_KEY_CLOSE:execute-silent(printf 'close %s' {1} > '$ACT')+abort"
+  X_ARGS='{1}'; [ "$MULTI" = 1 ] && X_ARGS='{1} {4}'   # + the row's repo (issue #794)
+  X_BIND="$DASH_KEY_CLOSE:execute-silent(printf 'close %s' $X_ARGS > '$ACT')+abort"
   K_BIND="?:execute-silent(printf 'keys' > '$ACT')+abort"
   # The clicked header word is a single whitespace token, so a bracketed multi-word
   # chip `[＋ new]` arrives as `[＋` OR `new]` — glob both (issue #381).
@@ -85,7 +100,7 @@ if [ -n "${POPUP:-}" ]; then
 else
   ENTER_TAIL=''
   N_BIND="$DASH_KEY_NEW:execute(bash $BIN/dash-issue-new.sh)+reload(sleep 2; bash $ROWS $MODE)"
-  X_BIND="$DASH_KEY_CLOSE:execute(bash $BIN/dash-issue-close.sh {1})+reload(sleep 2; bash $ROWS $MODE)"
+  X_BIND="$DASH_KEY_CLOSE:execute(bash $BIN/dash-issue-close.sh {1}$RARG)+reload(sleep 2; bash $ROWS $MODE)"
   K_BIND="?:execute(bash $BIN/dash-popup.sh -w 72% -h 80% -- bash $BIN/fleet-keys.sh --context backlog)"
   # Windowed carries no tap chips; keep the close-only click-header (inert here).
   CH_BIND='click-header:transform:case "$FZF_CLICK_HEADER_WORD" in *✕*|*close*) echo abort ;; esac'
@@ -103,7 +118,9 @@ fi
 # it needs no popup and uses ONE bind in both windowed + popup modes (execute-silent
 # blocks fzf until the label edit + optimistic cache write finish, so the reload
 # repaints with the fresh tag). {1} is the row's issue number.
-P_BIND="$DASH_KEY_PRIORITY:execute-silent(bash $BIN/dash-issue-priority.sh {1} cycle)+reload(bash $ROWS $MODE)"
+P_BIND="$DASH_KEY_PRIORITY:execute-silent(bash $BIN/dash-issue-priority.sh {1} cycle$RARG)+reload(bash $ROWS $MODE)"
+# ⌃o opens the row's issue on GitHub — the row's own repo in a 2+ repo fleet.
+O_URL="https://github.com/$REPO/issues/{1}"; [ "$MULTI" = 1 ] && O_URL="https://github.com/{4}/issues/{1}"
 
 # The panel is list-only by default (search off, issue #156). `--no-input` also
 # DROPS the query/prompt input row entirely (issue #361) — one less line of
@@ -126,21 +143,21 @@ run_fzf() {
     --no-sort --disabled --no-input \
     --header-lines=1 \
     --layout=reverse-list --info=hidden --border=rounded \
-    --border-label="$LABEL" --border-label-pos=3 \
+    --border-label="$(blabel)" --border-label-pos=3 \
     --prompt='backlog ▸ ' \
     --header="$HDR" \
-    --preview "bash $BIN/tmux-issue-preview.sh {1}" \
+    --preview "bash $BIN/tmux-issue-preview.sh {1}$RARG" \
     --preview-window='right,46%,wrap,border-left,hidden' \
     --bind "load:reload-sync(sleep $REFRESH; bash $ROWS $MODE)" \
     --bind "$DASH_KEY_RELOAD:reload(bash $ROWS $MODE)" \
     --bind "$K_BIND" \
     --bind "space:toggle-preview" \
     --bind "/:show-input+enable-search+change-prompt(filter ▸ )" \
-    --bind "$DASH_KEY_OPEN:execute(bash $BIN/open-url.sh https://github.com/$REPO/issues/{1})" \
+    --bind "$DASH_KEY_OPEN:execute(bash $BIN/open-url.sh $O_URL)" \
     --bind "$N_BIND" \
     --bind "$X_BIND" \
     --bind "$P_BIND" \
-    --bind "enter:execute-silent(bash $BIN/dash-issue-session.sh {1} --async)${ENTER_TAIL}" \
+    --bind "enter:execute-silent(bash $BIN/dash-issue-session.sh {1} --async$RARG)${ENTER_TAIL}" \
     --bind "$CH_BIND" \
     >/dev/null 2>&1
 }
@@ -150,11 +167,11 @@ run_fzf() {
 # the enter spawn, both of which leave no sentinel and should close the popup.
 run_action() {
   [ -s "$ACT" ] || return 1
-  local act arg; read -r act arg < "$ACT"; rm -f "$ACT"
+  local act arg arepo; read -r act arg arepo < "$ACT"; rm -f "$ACT"
   case "$act" in
     new)     bash "$BIN/dash-issue-new.sh" confirm ;;
     keys)    bash "$BIN/fleet-keys.sh" --context backlog ;;
-    close)   bash "$BIN/dash-issue-close.sh" "$arg" confirm ;;
+    close)   bash "$BIN/dash-issue-close.sh" "$arg" confirm ${arepo:+"--repo=$arepo"} ;;
     *)       return 1 ;;
   esac
   return 0

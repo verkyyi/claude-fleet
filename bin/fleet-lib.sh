@@ -655,6 +655,57 @@ EOF
   if [ "$cur" = all ]; then RCUR=all; else RCUR=$(fleet_slug "$cur"); fi
 }
 
+# ---- the backlog for any repo (issue #794) ----------------------------------
+# The backlog (tmux-issues.sh + its rows producer, preview and row actions) reads
+# the CURRENT repo's issues in a 2+ repo fleet, and under `all` every hosted repo's,
+# each row carrying its repo. A one-repo fleet never enters any helper's multi
+# branch: its backlog keeps the per-session cache and repo chain it always had.
+
+# fleet_backlog_repos <sess> → the repos the backlog lists, one per line: NOTHING in
+# a one-repo fleet (the caller keeps today's path), the current repo when one is
+# picked, every hosted repo (fleet_repos order) under `all`.
+fleet_backlog_repos() {
+  local cur
+  fleet_multirepo "${1:-}" || return 0
+  cur=$(fleet_current_repo "$1")
+  if [ "$cur" = all ]; then fleet_repos "$1"; else printf '%s\n' "$cur"; fi
+}
+
+# fleet_backlog_cache <base> <sess> <repo> → the runtime cache file <base>
+# (issues / labels / parents) the backlog reads for <repo>: that repo's own
+# fleets/<slug>/ dir in a 2+ repo fleet, else fleet_cache's per-session file.
+fleet_backlog_cache() {
+  if [ -n "${3:-}" ] && fleet_multirepo "${2:-}"; then
+    printf '%s/%s' "$(fleet_cache_dir "$(fleet_slug "$(fleet_norm_repo "$3")")")" "${1:-}"
+  else
+    fleet_cache "${1:-}" "${2:-}"
+  fi
+}
+
+# fleet_backlog_repo <sess> [<row-repo>] → the repo a backlog action targets, or
+# NOTHING (the caller refuses) — never a guess:
+#   2+ repos: the row's repo (must be hosted), else $CF_REPO (carried through a
+#             popup), else the current repo; under `all` with no row repo, nothing
+#             (a new issue asks — fleet-pick.sh --repo-only);
+#   one repo: the historic chain — $CF_REPO, else the sessmap's, else FLEET_REPO.
+fleet_backlog_repo() {
+  local sess="${1:-}" r c
+  r=$(fleet_norm_repo "${2:-}")
+  if fleet_multirepo "$sess"; then
+    if [ -n "$r" ]; then fleet_repo_hosted "$sess" "$r" && printf '%s' "$r"; return 0; fi
+    if [ -n "${CF_REPO:-}" ]; then
+      r=$(fleet_norm_repo "$CF_REPO"); fleet_repo_hosted "$sess" "$r" && printf '%s' "$r"; return 0
+    fi
+    r=$(fleet_current_repo "$sess")
+    [ "$r" = all ] || printf '%s' "$r"
+    return 0
+  fi
+  r="${FLEET_REPO:-}"
+  [ -n "$sess" ] && c=$(fleet_repo_cached "$sess") && [ -n "$c" ] && r=$c
+  [ -n "${CF_REPO:-}" ] && r=$CF_REPO
+  printf '%s' "$r"
+}
+
 # ---- (repo, issue) identity (issue #790) -------------------------------------
 # Two repos in one fleet can both have an issue #12, so nothing that finds a
 # session by its issue number may join on the bare number there. The join key is
