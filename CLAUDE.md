@@ -47,8 +47,18 @@ Do not install from memory: read the doc and work from it.
   `Explore` / `Plan` / `claude-code-guide`, and never `isolation: worktree`
   (a fork worktree is edit-blocked by the base guard). `FLEET_ALLOW_SUBAGENT=1`
   is the operator's escape hatch.
-- **One tmux session ↔ one GitHub repo.** The PR map is one repo-wide
-  `gh pr list`; multi-repo fleets need per-window repo detection (not built).
+- **A fleet hosts one or more GitHub repos** (issue #788, switched on in #795).
+  The fleet conf's `FLEET_REPO` is the first; `bin/fleet-repo.sh add` registers
+  more as `fleets/<sess>/repos/<slug>.conf`. **There is no main repo.** A window's
+  repo is `@repo` (`@norepo 1` = deliberately none), resolved ONLY through
+  `fleet_repos` / `fleet_window_repo` / `fleet_load_repo_conf` /
+  `fleet_current_repo` — never an ad-hoc `git remote` parse — and every join is
+  on (repo, issue) or (repo, branch), never a bare number or branch name. A
+  window whose repo is unknown is skipped, never guessed. In a 2+ repo fleet the
+  hub opens in `$HOME`. **Degenerate case is sacred:** a fleet with no `repos/`
+  overlay must behave byte for byte as a one-repo fleet always has, and any
+  change here ships a selftest leg that asserts it. `bin/multirepo-e2e-selftest.sh`
+  is the end-to-end check (`leaks: 0/9`).
 - **Panel windows, not sessions.** Windows named `dash`, `plan`, `backlog` are
   treated as panels and excluded from the dash session list.
 - **Navigate by name, not index.** The hub/dashboard is placed at the lowest

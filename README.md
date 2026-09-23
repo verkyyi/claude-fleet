@@ -322,9 +322,10 @@ FLEET_AGENT="claude"                  # or "codex" — see the capability matrix
 
 ## Multiple fleets on one machine
 
-A **fleet ≡ a tmux session ≡ one repo**. Run several at once — each pinned to a
-different repo with its own checkout — and they share one collector without
-clobbering each other (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)).
+A **fleet ≡ a tmux session**, starting with one repo. Run several at once — each
+with its own checkout — and they share one collector without clobbering each other
+(see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)). One fleet can also **host
+several repos** on one hub and one tmux server (`bin/fleet-repo.sh`, below).
 
 ```sh
 cf                                         # already running? (re)attach fast. else: infer the repo + bring it up
@@ -334,6 +335,23 @@ bin/fleet-list.sh                          # ● live / ○ down · name · repo
 tmux attach -t webapp
 bin/fleet-down.sh webapp --purge           # kill session (+ drop its conf/cache); checkout stays
 ```
+
+**Several repos in one fleet.** `bin/fleet-repo.sh add you/infra [<checkout>]`
+registers a second repo with the fleet you are in (clone-or-reuse, like
+`fleet-up.sh`); `list` shows what it hosts and `remove` drops one. All hosted repos
+are equal — there is no main repo. Once a fleet hosts two:
+
+- every session carries its repo (`@repo`) and wears a short tag (`tl·issue-12`);
+- the fleet picker (tap the fleet name, or the dash's pick key) also lists
+  `all repos` + each repo, and the pick filters the dash and the backlog;
+- a new session under `all` has no repo and starts in `$HOME`, and the hub opens
+  in `$HOME` too;
+- cleanup, PR status, restore and every issue lookup are keyed on (repo, number),
+  so repo A's #12 never touches repo B's #12.
+
+`bin/multirepo-e2e-selftest.sh` proves the whole path end to end. One crash of
+the fleet's tmux server takes every repo in it down, so keep a repo you want
+isolated in its own fleet.
 
 `cf` (from `shell/cw.zsh`) is your one-key way to a fleet. With **no args** it
 first tries to (re)attach to an already-running fleet (`bin/fleet-attach.sh`,
@@ -638,8 +656,10 @@ watching.
 
 ## Assumptions & limitations
 
-- **One tmux session ↔ one GitHub repo.** The PR/issue map is one repo-wide
-  `gh` call. Multi-repo fleets would need per-window repo detection.
+- **A fleet hosts one or more repos, all on one tmux server.** Each window's repo
+  is `@repo`; PR/issue state is fetched per hosted repo. The issue bridge,
+  webhooks, autofill and the warm scratch pool cover the fleet conf's own repo
+  only for now (EPIC #787 reserve).
 - Windows named `dash`, `plan`, or `backlog` are treated as panels, not
   Claude sessions.
 - The dashboard/hub sits at the lowest index (slot 1), placed once at spawn.

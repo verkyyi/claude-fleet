@@ -2100,15 +2100,38 @@ fleet_worktree_root() {
 }
 
 # fleet_worktree_dir <main> <slug> — the path a worktree for <slug> lives at.
+#
+# A shared root can hold two checkouts with the SAME basename — two hosted repos
+# (issue #795: …/a/app and …/b/app both map to <root>/app-issue-12), or two
+# fleets sharing one FLEET_WORKTREE_ROOT. The spawner reuses an existing dir, so
+# the second repo's worker would open inside the FIRST repo's worktree. So when
+# the plain path is a worktree of a DIFFERENT checkout, this main takes
+# `<basename main>-r<cksum of main>-<slug>` instead, and keeps it for as long as
+# that dir exists (a respawn finds its worktree again after the plain path frees
+# up). The basename still ends `-issue-N` / `-scratch-N`, which is all any reader
+# parses. A path that is free, or already this main's, is unchanged — so every
+# fleet without a clash lays out exactly as before.
 fleet_worktree_dir() {
-  local main="${1:-}" slug="${2:-}" root
+  local main="${1:-}" slug="${2:-}" root dir alt
   [ -n "$main" ] && [ -n "$slug" ] || return 1
   root="$(fleet_worktree_root)"
-  if [ -n "$root" ]; then
-    printf '%s/%s-%s\n' "$root" "$(basename "$main")" "$slug"
-  else
-    printf '%s/%s-%s\n' "$(dirname "$main")" "$(basename "$main")" "$slug"
-  fi
+  [ -n "$root" ] || root="$(dirname "$main")"
+  dir="$root/$(basename "$main")-$slug"
+  alt="$root/$(basename "$main")-r$(printf '%s' "${main%/}" | cksum | awk '{print $1}')-$slug"
+  if [ -e "$alt" ] || { [ -e "$dir" ] && ! _fleet_wt_of "$dir" "$main"; }; then dir="$alt"; fi
+  printf '%s\n' "$dir"
+}
+
+# _fleet_wt_of <dir> <main> — 0 unless <dir> is a git checkout/worktree whose
+# common git dir is NOT <main>'s. A plain dir (no git) counts as <main>'s: that is
+# the historic reuse, and nothing else can claim it.
+_fleet_wt_of() {
+  local a b
+  [ -e "$1/.git" ] || return 0      # not a checkout/worktree root of its own
+  a=$(cd "$1" 2>/dev/null && d=$(git rev-parse --git-common-dir 2>/dev/null) && cd "$d" 2>/dev/null && pwd -P) || return 0
+  [ -n "$a" ] || return 0
+  b=$(cd "$2" 2>/dev/null && d=$(git rev-parse --git-common-dir 2>/dev/null) && cd "$d" 2>/dev/null && pwd -P) || return 0
+  [ "$a" = "$b" ]
 }
 
 # fleet_worktree_create <main> <slug> <base> [--reuse] [--branch <b>] — create the

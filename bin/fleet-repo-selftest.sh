@@ -4,7 +4,7 @@
 # Pins the foundation every multi-repo slice builds on:
 #   A. DEGENERATE — with no repos/ dir, fleet_load_conf yields byte-identical env
 #      to the pre-#788 body, and makes NO tmux call (even inside a pane).
-#   B. fleet-repo.sh add REFUSES without FLEET_MULTIREPO=1; with it, writes the
+#   B. fleet-repo.sh add REFUSES without=1; with it, writes the
 #      overlay; list shows both repos; a duplicate add is refused.
 #   C. helpers — fleet_repos, fleet_repo_hosted, fleet_load_repo_conf,
 #      fleet_current_repo/_set, fleet_repo_mains.
@@ -44,7 +44,7 @@ trap 'exit 130' INT TERM HUP
 
 export FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1 TMPDIR="$WORK/tmp"
 mkdir -p "$FLEET_CONF_DIR" "$TMPDIR"
-unset TMUX TMUX_PANE FLEET_MULTIREPO FLEET_MAIN FLEET_REPO FLEET_BASE_BRANCH FLEET_MODEL FLEET_DEPLOY_REF FLEET_GLOBAL_MAX_SESSIONS
+unset TMUX TMUX_PANE FLEET_MAIN FLEET_REPO FLEET_BASE_BRANCH FLEET_MODEL FLEET_DEPLOY_REF FLEET_GLOBAL_MAX_SESSIONS
 . "$BIN/fleet-lib.sh"
 
 FAILS=0
@@ -102,18 +102,15 @@ eq "A: one-repo fleet window resolves to its only repo" "$(fleet_window_repo "$S
 eq "A: ...and is not stamped" "$(tmux display-message -p -t "$S:wUNK" '#{@repo}')" ""
 
 # --- B. add: gate, then write ------------------------------------------------------
-out=$(bash "$BIN/fleet-repo.sh" add --session "$S" o/b "$WORK/mainB" --base main 2>&1); rc=$?
-eq "B: add without FLEET_MULTIREPO exits 1" "$rc" 1
-case "$out" in *"refused"*FLEET_MULTIREPO=1*) ;; *) fail "B: refusal line missing: $out" ;; esac
-[ -e "$FLEET_CONF_DIR/fleets/$S/repos" ] && fail "B: refused add still created repos/"
-out=$(FLEET_MULTIREPO=1 bash "$BIN/fleet-repo.sh" add --session "$S" o/b "$WORK/mainB" --base main 2>&1) \
-  || fail "B: gated add failed: $out"
+# No gate since #795: is gone, an unset one no longer refuses.
+out=$(bash "$BIN/fleet-repo.sh" add --session "$S" o/b "$WORK/mainB" --base main 2>&1) \
+  || fail "B: add failed: $out"
 f="$FLEET_CONF_DIR/fleets/$S/repos/o-b.conf"
 [ -f "$f" ] || fail "B: overlay not written at $f"
 printf 'FLEET_MODEL="sonnet"\n' >> "$f"
-FLEET_MULTIREPO=1 bash "$BIN/fleet-repo.sh" add --session "$S" o/b "$WORK/mainB" >/dev/null 2>&1 \
+bash "$BIN/fleet-repo.sh" add --session "$S" o/b "$WORK/mainB" >/dev/null 2>&1 \
   && fail "B: duplicate add accepted"
-FLEET_MULTIREPO=1 bash "$BIN/fleet-repo.sh" add --session "$S" o/c "$WORK/mainA" >/dev/null 2>&1 \
+bash "$BIN/fleet-repo.sh" add --session "$S" o/c "$WORK/mainA" >/dev/null 2>&1 \
   && fail "B: add accepted a checkout of a different repo"
 list=$(bash "$BIN/fleet-repo.sh" list --session "$S")
 case "$list" in *"o/a"*"main=$WORK/mainA"*"o/b"*"main=$WORK/mainB"*"base=main"*) ;; *) fail "B: list: $list" ;; esac

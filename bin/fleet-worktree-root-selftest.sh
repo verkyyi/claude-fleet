@@ -25,6 +25,9 @@
 #              fleet owning <main>; an unowned checkout keeps the sibling layout.
 #   CW         `cw` / `cwrm` (zsh) create and remove under ROOT through the shim.
 #   ONE-EXIT   no fourth hand-built worktree path in bin/ or shell/.
+#   CLASH      two checkouts sharing a basename under one ROOT (two hosted repos,
+#              issue #795): the second diverts to `<base>-r<cksum>-<slug>` and keeps
+#              it after the plain path frees up; a free / own path is unchanged.
 #
 # Real git, a temp HOME + FLEET_CONF_DIR, a PATH-shimmed tmux — no network, no gh,
 # no live tmux server. Exit 0 = pass; non-zero = fail.
@@ -160,5 +163,24 @@ hits="$(cd "$BIN/.." && grep -nE '\$\(dirname "\$(MAIN|main)"\)/\$\(basename|/\.
   | grep -v -- '-selftest\.sh:' | grep -v '^bin/fleet-lib\.sh:')"
 [ -z "$hits" ] || fail "8 a hand-built worktree path outside fleet_worktree_dir" "$hits"
 ok "8 every new worktree goes through fleet_worktree_create / fleet_worktree_dir"
+
+# --- 9. CLASH: a same-basename checkout never lands in another repo's worktree ---
+export FLEET_WORKTREE_ROOT="$WORK/wt9"
+OTHER="$WORK/elsewhere/repo"; mkdir -p "$WORK/elsewhere"
+git init -q "$OTHER" >/dev/null 2>&1; git -C "$OTHER" checkout -q -B master >/dev/null 2>&1
+git -C "$OTHER" commit -q --allow-empty -m seed >/dev/null 2>&1 || fail "9 cannot seed $OTHER"
+[ "$(fleet_worktree_dir "$MAIN" issue-12)" = "$WORK/wt9/repo-issue-12" ] || fail "9 a free path diverted"
+a="$(fleet_worktree_create "$MAIN" issue-12 master)" || fail "9 create MAIN issue-12"
+[ "$(fleet_worktree_dir "$MAIN" issue-12)" = "$a" ] || fail "9 MAIN's own worktree path moved"
+b="$(fleet_worktree_create "$OTHER" issue-12 master)" || fail "9 create OTHER issue-12"
+[ "$a" != "$b" ] || fail "9 OTHER reused MAIN's worktree $a"
+case "$b" in "$WORK/wt9/repo-r"*-issue-12) ;; *) fail "9 OTHER's worktree: '$b'" ;; esac
+git -C "$OTHER" worktree list --porcelain | grep -qx "worktree $b" || fail "9 OTHER's worktree not OTHER's"
+git -C "$MAIN" worktree remove --force "$a" >/dev/null 2>&1 || fail "9 cannot drop MAIN's issue-12"
+[ "$(fleet_worktree_dir "$OTHER" issue-12)" = "$b" ] || fail "9 OTHER's path did not stick once the plain path freed"
+mkdir -p "$WORK/wt9/repo-scratch-9"          # a plain dir, no git: the historic reuse
+[ "$(fleet_worktree_dir "$OTHER" scratch-9)" = "$WORK/wt9/repo-scratch-9" ] || fail "9 a non-git dir diverted"
+ok "9 CLASH: same basename under one ROOT → distinct worktrees, the divert sticks"
+unset FLEET_WORKTREE_ROOT
 
 printf 'fleet-worktree-root selftest: %d passed\n' "$pass"

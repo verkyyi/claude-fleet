@@ -19,7 +19,7 @@
 # the cw.zsh kill-window exemption (#177/#202), the session-end-hook bail and the
 # 'operator' provenance stamp. Nothing about those rails changed.
 #
-# Multi-fleet (a fleet ≡ a tmux session ≡ one repo): SESS defaults to the CURRENT
+# Multi-fleet (a fleet ≡ a tmux session, hosting one or more repos): SESS defaults to the CURRENT
 # session so every fleet gets its OWN hub, and BASE defaults to that fleet's
 # FLEET_MAIN (its per-session conf). Both overridable via HUB_SESSION / HUB_CWD —
 # fleet-up.sh passes them explicitly when it builds a fresh fleet.
@@ -43,8 +43,13 @@ SESS="${HUB_SESSION:-$(fleet_current_session)}"
 # explicit -L resolves to the same socket either way.
 SOCK=$(fleet_socket "$SESS")
 # BASE: explicit override → this fleet's FLEET_MAIN (per-session conf) →
-# the session's first window cwd → HOME.
-if [ -n "${HUB_CWD:-}" ]; then
+# the session's first window cwd → HOME. A fleet hosting 2+ repos has no main
+# repo (issue #795), so its hub starts in $HOME — a shell or claude the operator
+# opens beside the dash lands there, not inside one repo's base checkout.
+if fleet_multirepo "$SESS"; then
+  BASE="$HOME"
+  fleet_load_conf "$SESS"
+elif [ -n "${HUB_CWD:-}" ]; then
   BASE="$HUB_CWD"
   fleet_load_conf "$SESS"   # per-fleet conf; BASE stays pinned above
 else
@@ -63,7 +68,8 @@ DASH_CMD="bash '$BIN/tmux-dashboard.sh'"
 # spawn, so the launch logic (hub-session-selftest.sh) can be asserted
 # hermetically without a live tmux/dash. Never set in normal use.
 if [ -n "${HUB_PRINT_CMD:-}" ]; then
-  printf '%s\n' "$DASH_CMD"
+  # `cwd` prints where the hub would open instead (issue #795's selftest).
+  if [ "$HUB_PRINT_CMD" = cwd ]; then printf '%s\n' "$BASE"; else printf '%s\n' "$DASH_CMD"; fi
   exit 0
 fi
 

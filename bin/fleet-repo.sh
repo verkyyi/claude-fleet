@@ -11,9 +11,8 @@
 #
 # `add` reuses the checkout if it already is that repo, else clones it — the same
 # rule as fleet-up.sh — resolves the base branch the same way (#603), and writes the
-# overlay. It REFUSES unless FLEET_MULTIREPO=1 (env, global fleet.conf or this
-# fleet's conf): a second repo stays switched off for real fleets until the batch's
-# end-to-end check (#795) lifts the gate.
+# overlay. (It used to refuse without FLEET_MULTIREPO=1; the two-repo end-to-end
+# check, bin/multirepo-e2e-selftest.sh, lifted that gate in #795.)
 #
 # `remove` deletes an overlay. The conf's own repo lives in the fleet conf and is not
 # removable here. A repo that still has live windows (@repo) is refused without
@@ -75,9 +74,6 @@ EOF
   add)
     [ -n "$REPO" ] || usage
     norm_repo_arg
-    # The gate reads what a spawn would: env ▸ global fleet.conf ▸ this fleet's conf.
-    gate=$( fleet_load_conf "$SESS" >/dev/null 2>&1; printf '%s' "${FLEET_MULTIREPO:-0}" )
-    [ "$gate" = 1 ] || die "refused: hosting a second repo is switched off (set FLEET_MULTIREPO=1 to enable — #788/#795)"
     fleet_repo_hosted "$SESS" "$REPO" && die "$SESS already hosts $REPO"
     DIR="${DIR:-$HOME/projects/$(basename "$REPO")}"
     # --- checkout: reuse if it's already that repo, else clone (as fleet-up.sh) ---
