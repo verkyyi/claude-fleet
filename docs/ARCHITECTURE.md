@@ -169,6 +169,15 @@ after the overlay closes: `select-window` by stable id, the bar's
 `hub-zoom.sh --nav` (the second press). @popup_open brackets the popup like
 every modal bind. ⌂ / F9 opening it log `home-pick` / `f9-pick` to the hub-visit
 meter — kept out of the trip count like `*-sidebar`.
+One dim ` ? 快捷键` row sits directly above the input line (issue #948; the
+operator's explicit exception to EPIC #894's no-resident-rows rule — on an iPad a
+whole row is a tap target). A tap on it (opened on the release, like the menu
+below), or `?` on an EMPTY line (inside a name it types), opens
+`fleet-keys.sh --context sidebar` through `dash-popup.sh`: prefix E and ⌂/F9, the
+"task sidebar" group, and the row menu's letters, read from
+`fleet-sidebar-menu.sh --keys` — the same `MENU_KEYS` table the menu is built
+from. The view blocks on the popup, so nothing repaints under it; q/Esc closes it
+and the keyboard is still on the sidebar.
 The row menu (issue #898) is the hub list's per-row actions without the hub:
 `.` on an EMPTY line (inside a name it types a dot), or a tap on the highlighted
 row — the second tap on a row the first one switched to — opens a tmux

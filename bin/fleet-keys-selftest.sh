@@ -259,6 +259,37 @@ while read -r action _ _ def _; do
 done <<EOF
 $side_table
 EOF
+# The sidebar's own `?` sheet (issue #948): only what concerns the sidebar —
+# prefix E + ⌂/F9, the task sidebar group, and the row menu's letters, read from
+# the menu's own table (fleet-sidebar-menu.sh --keys), never a copy of it.
+SSHEET="$(NO_COLOR=1 bash "$KEYS" --context sidebar --plain)" || fail "fleet-keys.sh --context sidebar exited non-zero"
+for g in "task sidebar" "row menu" "reach the sidebar"; do
+  printf '%s\n' "$SSHEET" | grep -q "^$g " || fail "the sidebar sheet lacks its '$g' group"
+done
+for g in "tmux prefix" "dashboard" "backlog" "config modal"; do
+  printf '%s\n' "$SSHEET" | grep -q "^$g " && fail "the sidebar sheet shows the '$g' group — it is scoped to the sidebar"
+done
+for k in "prefix E" "⌂ / F9"; do
+  printf '%s\n' "$SSHEET" | grep -qF "  $k " || fail "the sidebar sheet does not list $k"
+done
+menu_keys="$(bash "$BIN/fleet-sidebar-menu.sh" --keys)" || fail "fleet-sidebar-menu.sh --keys exited non-zero"
+[ "$(printf '%s\n' "$menu_keys" | cut -f1 | tr -d '\n')" = rtpavxno ] \
+  || fail "the row menu's key table is not r t p a v x n o: $(printf '%s' "$menu_keys" | cut -f1 | tr '\n' ' ')"
+menu_block="$(printf '%s\n' "$SSHEET" | awk '/^row menu /{f=1;next} f && NF && /^[^ ]/{f=0} f')"
+while IFS='	' read -r mk _; do
+  [ -n "$mk" ] || continue
+  printf '%s\n' "$menu_block" | grep -q "^  $mk  " || fail "the sidebar sheet's row menu lacks '$mk'"
+done <<EOF
+$menu_keys
+EOF
+grep -Eq '^ *add "[^"]*" [a-z] ' "$BIN/fleet-sidebar-menu.sh" \
+  && fail "fleet-sidebar-menu.sh hardcodes a menu letter — read it from MENU_KEYS (mk)"
+FULL_SHEET="$(NO_COLOR=1 bash "$KEYS" --plain)"
+printf '%s\n' "$FULL_SHEET" | grep -q '^row menu ' || fail "the full sheet lost the row menu group"
+DSHEET="$(NO_COLOR=1 bash "$KEYS" --context dash --plain)"
+printf '%s\n' "$DSHEET" | grep -Eq '^(row menu|task sidebar|reach the sidebar) ' \
+  && fail "the dash sheet shows a sidebar group"
+
 NSHEET="$(FLEET_TMUX_PREFIX=C-n NO_COLOR=1 bash "$KEYS" --plain)" || fail "fleet-keys.sh under a C-n prefix exited non-zero"
 printf '%s\n' "$NSHEET" | awk '/^task sidebar /{f=1;next} f && NF && /^[^ ]/{f=0} f' \
   | grep -q '^  ⌥n .*⌃n is your tmux prefix C-n' \
