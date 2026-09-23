@@ -61,6 +61,28 @@ eq "a repeat of the latest (child,state,pr) adds nothing" 1 "$(wc -l < "$F" | tr
 printf '%s' '{"child":"issue-1","state":"SHIPPED"}' | python3 "$BIN/fleet-children.py" append --file "$F" >/dev/null 2>&1
 eq "an unknown state is refused" 2 "$?"
 
+# --- TIER (issue #938): report_tier is the ONE place the bands are decided -------
+# Every state → its band, plus the three modifiers (a fixing FAILED, an unlanded
+# reap, a child in `needs`). C5's digest and R1's wait read this same function.
+( . "$BIN/fleet-lib.sh"; . "$BIN/fleet-children-lib.sh"
+  t() { printf '%s=%s ' "$1" "$(report_tier "$@")"; }
+  t BLOCKED; t FAILED 'tests red'; t FAILED 'RED: CI failure or merge conflict; fixing it'
+  t FAILED 'CI 挂了，正在修'; t REAPED '' unmerged; t REAPED '' dirty; t REAPED '' merged
+  t REAPED '' keep; t STOPPED; t MERGED; t merged; t WAITING '' pr-open; t IDLE '' pr-unknown
+  t MERGED '' '' needs; t WAITING '' bg needs; t SHIPPED ) > "$WORK/tiers"
+eq "report_tier bands every state" \
+  'BLOCKED=loud FAILED=loud FAILED=quiet FAILED=quiet REAPED=loud REAPED=loud REAPED=quiet REAPED=quiet STOPPED=loud MERGED=quiet merged=quiet WAITING=silent IDLE=silent MERGED=loud WAITING=loud SHIPPED=loud ' \
+  "$(cat "$WORK/tiers")"
+modes=$( . "$BIN/fleet-lib.sh"; . "$BIN/fleet-children-lib.sh"
+  for v in '' 1 immediate batch 0 off bogus; do printf '%s ' "$(FLEET_CHILD_REPORT="$v" children_report_mode)"; done )
+eq "children_report_mode: legacy 1/unset/unknown ⇒ immediate" \
+  'immediate immediate immediate batch 0 0 immediate ' "$modes"
+F2="$WORK/tier.ndjson"
+printf '%s' '{"child":"issue-2","state":"WAITING","tier":"silent"}' | python3 "$BIN/fleet-children.py" append --file "$F2" >/dev/null
+printf '%s' '{"child":"issue-3","state":"MERGED","tier":"LOUDER"}' | python3 "$BIN/fleet-children.py" append --file "$F2" >/dev/null
+eq "append keeps a valid tier and blanks an invalid one" 'silent|' \
+  "$(python3 -c 'import json,sys; print("|".join(json.loads(l)["tier"] for l in open(sys.argv[1])))' "$F2")"
+
 command -v tmux >/dev/null 2>&1 || { printf 'fleet-children selftest: tmux absent — pure layer only (%d checks)\n' "$CHECKS"; rm -rf "$WORK"; exit 0; }
 
 # --- 2. end to end on a dedicated server ----------------------------------------

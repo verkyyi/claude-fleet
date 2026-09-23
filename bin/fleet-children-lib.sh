@@ -7,8 +7,12 @@
 #   children_file <parent-key> <sess>    → that parent's <parent-key>.ndjson
 #   children_append <parent-key> <json> [<sess>]
 #                                        → append one event, deduped + seq'd
+#   report_tier <STATE> [summary] [verdict] [child @claude_state]
+#                                        → loud | quiet | silent (issue #938)
+#   children_report_mode [value]         → immediate | batch | 0 — the
+#                                          FLEET_CHILD_REPORT switch, normalised
 #
-# <json> carries {child, state, pr, verdict, summary, title}; seq and ts are
+# <json> carries {child, state, pr, verdict, summary, title, tier}; seq and ts are
 # stamped here, under a lock, so two children reporting at once never share a seq.
 # state ∈ MERGED BLOCKED FAILED STOPPED REAPED WAITING IDLE. A write whose
 # (child, state, pr) equals that child's LATEST event is a no-op — the reaper's
@@ -48,4 +52,47 @@ children_append() {
   f=$(children_file "${1:-}" "${3:-}") || return 1
   command -v python3 >/dev/null 2>&1 || return 1
   printf '%s' "${2:-}" | python3 "$_CHILDREN_BIN/fleet-children.py" append --file "$f" >/dev/null 2>&1
+}
+
+# report_tier — how loudly a child report may interrupt its parent (issue #938).
+# The ONE place the bands are decided: fleet-report-parent.sh stamps it into the
+# ledger and gates delivery on it, and the batch digest (C5 #939) and the blocking
+# wait (R1 #812) read the same answer rather than re-deriving it.
+#   loud    someone must act: BLOCKED; FAILED that is not being fixed; REAPED with
+#           unlanded work (unmerged/dirty); a true STOPPED (no bg job, no open PR,
+#           done — unshipped work nobody is carrying); any child whose own
+#           @claude_state is `needs`.
+#   quiet   an outcome worth knowing, nothing to do: MERGED; FAILED while the child
+#           says it is fixing it (fleet-claim's `RED: … fixing it`); any other reap.
+#   silent  a turn boundary, not an outcome: WAITING (bg job / open PR — #864's
+#           busy verdict) and IDLE (the gate could not be read). Ledger only.
+# An unknown state is loud: a band this function does not know must fail toward
+# delivery, never toward a swallowed report.
+report_tier() {
+  local st sum="${2:-}" v="${3:-}" cs="${4:-}"
+  st=$(printf '%s' "${1:-}" | tr '[:lower:]' '[:upper:]')
+  case "$cs" in needs*) printf 'loud\n'; return 0 ;; esac
+  case "$st" in
+    WAITING|IDLE) printf 'silent\n' ;;
+    MERGED)       printf 'quiet\n' ;;
+    FAILED)
+      case "$(printf '%s' "$sum" | tr '[:upper:]' '[:lower:]')" in
+        *fixing*|*正在修*) printf 'quiet\n' ;;
+        *)                 printf 'loud\n' ;;
+      esac ;;
+    REAPED)
+      case "$v" in unmerged|dirty) printf 'loud\n' ;; *) printf 'quiet\n' ;; esac ;;
+    *)            printf 'loud\n' ;;   # BLOCKED, STOPPED, anything new
+  esac
+}
+
+# children_report_mode — FLEET_CHILD_REPORT (or $1) as one of immediate|batch|0.
+# The legacy `1` (and unset, and anything unrecognised) is `immediate`: the switch
+# fails toward the historic per-report delivery, never toward silence.
+children_report_mode() {
+  case "${1-${FLEET_CHILD_REPORT:-}}" in
+    0|no|off|false) printf '0\n' ;;
+    batch)          printf 'batch\n' ;;
+    *)              printf 'immediate\n' ;;
+  esac
 }

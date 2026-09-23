@@ -343,6 +343,16 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # `no reply needed`. Hub-spawned work is unaffected either way (no parent ⇒ nothing
 # is ever sent), so turn this off only if you fan out widely AND find the interrupts
 # cost more than the polling they replace.
+#
+# TIERS (issue #938): not every report wakes the parent. Each is banded by
+# report_tier (bin/fleet-children-lib.sh) and the band is written into the
+# children ledger: loud (BLOCKED, FAILED not being fixed, REAPED unmerged/dirty, a
+# true STOPPED, a child in `needs`) and quiet (MERGED, FAILED while fixing, other
+# reaps) are delivered; silent (WAITING / IDLE — a child that ended its turn on an
+# open PR or a background job) is ledger-only, never sent.
+#   immediate (default; the legacy `1`) — loud + quiet delivered one by one.
+#   batch     — the digest mode (EPIC #935 C5, #939).
+#   0         — off: nothing is sent and nothing is ledgered.
 # @label=Child reports outcome to parent @group=spawn @tier=advanced @scope=fleet @edit=bool
 #FLEET_CHILD_REPORT=1
 

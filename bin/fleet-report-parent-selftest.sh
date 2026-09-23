@@ -350,6 +350,63 @@ eq 'an idle done child with no open PR reports once' $((b + 1)) "$(frames)"
 PATH="$WORK/ghbin:$PATH" RUN --win "$PRCHILD542" --state stopped --only-once >/dev/null
 eq '…and only once' $((b + 1)) "$(frames)"
 
+# --- TIERS (issue #938): only a report someone must act on may wake the parent ---
+# A STUB fleet_peer_send counts every send attempt: a shadow bin/ whose fleet-lib.sh
+# sources the real one, then overrides the send. So "silent never calls the send"
+# is asserted on the call itself, not inferred from an inbox that stayed empty.
+SBIN="$WORK/stubbin"; mkdir -p "$SBIN"
+for f in "$BIN"/*; do ln -sf "$f" "$SBIN/${f##*/}"; done
+rm -f "$SBIN/fleet-lib.sh"
+SENDS="$WORK/sends"; : > "$SENDS"
+cat > "$SBIN/fleet-lib.sh" <<STUB
+. "$BIN/fleet-lib.sh"
+fleet_peer_send() { printf '%s\n' "\$1" >> "$SENDS"; }
+STUB
+sends() { wc -l < "$SENDS" | tr -d ' '; }
+SRUN() { PATH="$WORK/ghbin:$PATH" bash "$SBIN/fleet-report-parent.sh" -L "$LBL" "$@" 2>&1; }
+LEDGER="$FLEET_CONF_DIR/fleets/$LBL/children/issue-483.ndjson"
+latest() {   # latest <child-key> → STATE|tier|verdict of that child's newest event
+  python3 - "$LEDGER" "$1" <<'LAST'
+import json, sys
+ev = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+ev = [e for e in ev if e.get("child") == sys.argv[2]]
+print("%s|%s|%s" % (ev[-1]["state"], ev[-1].get("tier", ""), ev[-1].get("verdict", "")) if ev else "none")
+LAST
+}
+
+# The evidence line (上线证据): a WAITING child's dry run names the band and the fate.
+out=$(SRUN --win "$PRCHILD540" --state stopped --only-once --dry-run)
+ok; has 'tier=silent' "$out" && has 'ledger only' "$out" && has 'WAITING' "$out" \
+  || fail "a WAITING child's dry run must say tier=silent · ledger only" "$out"
+# silent: RECORDED, never sent, never stamped — in immediate mode, the default.
+SRUN --win "$PRCHILD540" --state stopped --only-once >/dev/null
+SRUN --win "$PRCHILD541" --state stopped --only-once >/dev/null
+SRUN --win "$BGCHILD"    --state stopped --only-once >/dev/null
+SRUN --win "$PRCHILD540" --state waiting >/dev/null
+eq 'silent (WAITING/IDLE) never calls fleet_peer_send' 0 "$(sends)"
+eq 'an open-PR Stop is ledgered WAITING, tier silent'  'WAITING|silent|pr-open'    "$(latest issue-540)"
+eq 'an unreadable gate is ledgered IDLE, tier silent'  'IDLE|silent|pr-unknown'    "$(latest issue-541)"
+eq 'a bg-job Stop is ledgered WAITING, tier silent'    'WAITING|silent|bg'         "$(latest issue-530)"
+eq 'a silent report stamps nothing' '' "$(TM display-message -p -t "$PRCHILD540" '#{@reported}')"
+# quiet and loud still go out one by one in immediate mode (behaviour unchanged).
+SRUN --win "$PRCHILD540" --state failed --pr 77 --summary 'RED: CI failure or merge conflict; fixing it' >/dev/null
+eq 'quiet (FAILED while fixing) is still sent in immediate' 1 "$(sends)"
+eq '…and ledgered tier quiet' 'FAILED|quiet|' "$(latest issue-540)"
+SRUN --win "$PRCHILD540" --state merged --pr 77 >/dev/null
+eq 'quiet (MERGED) is sent' 2 "$(sends)"
+eq '…ledgered tier quiet' 'MERGED|quiet|' "$(latest issue-540)"
+SRUN --win "$PRCHILD541" --state blocked --summary 'needs an operator token' >/dev/null
+eq 'loud (BLOCKED) is sent' 3 "$(sends)"
+eq '…ledgered tier loud' 'BLOCKED|loud|' "$(latest issue-541)"
+SRUN --win "$PRCHILD541" --state reaped --verdict unmerged >/dev/null
+eq 'loud (REAPED unmerged) is sent' 4 "$(sends)"
+# A child in `needs` lifts even a silent state: someone has to answer it.
+TM set-window-option -t "$PRCHILD541" @claude_state needs 2>/dev/null
+out=$(SRUN --win "$PRCHILD541" --state waiting --verdict pr-open --dry-run)
+ok; has 'tier=loud' "$out" && has 'state: WAITING (pr-open)' "$out" \
+  || fail "a needs child's WAITING must be loud, and render its state" "$out"
+TM set-window-option -t "$PRCHILD541" @claude_state 'done' 2>/dev/null
+
 mkdir -p "$FLEET_CONF_DIR/fleets/$LBL"
 printf 'FLEET_CHILD_REPORT=0\n' > "$FLEET_CONF_DIR/fleets/$LBL/conf"
 b=$(frames)
