@@ -86,7 +86,8 @@ Before writing any chart, load the `dataviz` skill; before the page itself, load
 Start from the shared frame — `cat ~/.claude/skills/epic-page/template.html` —
 the same `<style>` and section ids the batch's design page used (issue #809), so
 the operator reads plan and report as one document; keep the report's sections
-(`#delivered` `#metrics` `#members` `#gaps` `#obstacles` `#next` `#ops`), drop the
+(`#delivered` `#metrics` `#members` `#gaps` `#ops`; `#next` is an anchor inside
+`#gaps`), drop the
 plan-only ones (`#preflight` `#charter` `#order` `#risks` `#signoff`), and fill
 the report-only block inside each member card — the `.proof` grid under its
 `上线证据` line (issue #810, below).
@@ -110,10 +111,9 @@ step 4 lists; the report takes five of them):
 - **Execution detail is folded** — PR numbers, merge times, 占用时长, 依赖,
   来源单号, the whole of `#ops`.
 - **No keys on the surface** — `C1` / `R1` and issue / PR numbers live in a
-  card's 技术细节 (its 编号 / 来源 and PR fields); `#delivered`, `#gaps`,
-  `#obstacles` and every card title name the member by its **name**. The one
-  surface exception is the fleet-side issue line in `#obstacles` — those numbers
-  ARE the pointer.
+  card's 技术细节 (its 编号 / 来源 and PR fields); `#delivered`, `#gaps` and
+  every card title name the member by its **name**. Fleet-side issue numbers
+  appear only in the durable comment (step 3), never on the page.
 
 Members use the same one-line card as the design page (`<details class="card">`,
 grouped by the plan's themes): the summary line is the name, one sentence and the
@@ -158,32 +158,36 @@ What earns its place, in page order:
    For anything unfinished, *why* — quoted from the tick log or the `blocked`
    reason, not paraphrased — is the summary line's sentence, not buried in the
    fold: a reader must not have to click to find out something did not ship.
-4. **还差什么** (`#gaps`) — 待部署 / 要人做的 / 没验证的, split by who has to act.
-   This is where an honest 「要注册一个全新微信账号才看得到首次种入，本次未造号」
-   lives, in those words. Restate 这批不做 here so an out-of-scope item is not read
-   as a miss, and repeat that **储备层未动不算欠**.
-5. **障碍** (`#obstacles`) — see the split below.
-6. **建议下一批** (`#next`) — the theme's leftovers plus what this batch surfaced,
-   as input to `/fleet-epic-plan`, **explicitly not a decision**; keep the wording
-   that says so.
-7. **运行情况** (`#ops`) — **folded, complete, last.** 墙钟 · 执行会话占用时长 ·
+4. **还差什么 · 下一步** (`#gaps`, carrying the `<span id="next">` anchor) — ONE
+   two-column table, **还差什么 | 建议下一步**, one row per gap, **one short clause
+   per cell** (issue #929; the layout of EPIC #875's report). The gaps are 待部署 /
+   要人做的 / 没验证的 — an honest 「要注册一个全新微信账号才看得到首次种入，本次未造号」
+   is a row, in those words — and **an empty kind is no row at all**. The
+   next-batch suggestion is a row too (「下一批主题：…」), not a list of its own:
+   the theme's leftovers plus what this batch surfaced, as input to
+   `/fleet-epic-plan`. **No lede, no trailing note** — no 这批不做 (the charter
+   carries it), no 有空再做未动不算欠 (untouched reserve is simply not a row), no
+   「建议，不是决定」 (the durable comment's heading may say 下一步是建议). The
+   band's 还差什么 = this table's row count.
+5. **运行情况** (`#ops`) — **folded, complete, last.** 墙钟 · 执行会话占用时长 ·
    额度曲线（annotated where an account was benched or a window was waited out —
    the waits are where the batch's wall-clock went）· 甘特, plus the PR-merge
    count. Nothing here is cut — including step 1's occupancy-not-tokens caveat,
    which sits beside the numbers it qualifies and **keeps its wording**. Folding
    is about position, not about softening.
 
-**Obstacles split by one test** (issue #839): *would this obstacle still exist in
-another repo, on another theme?*
+**No obstacles section** (issue #929; it was #839's split). The test still sorts
+what you found — *would this obstacle still exist in another repo, on another
+theme?*
 
-- **No → 产品侧**, it stays in the body, in full: why this change was hard, which
-  red was the change and which was the gate, which 待决 parked a member.
-- **Yes → fleet 侧** (并发上限, 回收拒收, dash-reap 目标写法, 占用时长口径…) —
-  it is a fleet defect, not this batch's story. **File it as an issue on the fleet
-  repo** and leave exactly one line in the body: *「fleet 侧问题已开 issue #N #M」*.
-  A report whose four obstacles are all fleet plumbing has spent its most valuable
-  section on something the reader cannot act on — and the defect gets fixed by
-  being an issue, not by being a paragraph.
+- **Yes → fleet 侧** (并发上限, 回收拒收, dash-reap 目标写法, 占用时长口径…) — a
+  fleet defect, not this batch's story. **File it as an issue on the fleet repo**;
+  its number goes in the durable comment, never on the page (「fleet 侧：#N #M」
+  was unreadable to the 发起人). If the reader should know, it is a 下一步 row in
+  plain words.
+- **No → 产品侧** — what made a member hard lives in that member's card (its
+  one-line why, or its fold); what is still missing because of it is a 还差什么
+  row.
 
 Item 3 in detail — the evidence grid (issue #810):
 
@@ -232,8 +236,8 @@ Relay the READY tailnet URL to the operator.
 
 Then post the **durable half** as one comment on the EPIC issue, **in the page's
 order** (issue #839): 交付了什么 · 指标（filled, 「还读不出来 ⟨date⟩ 再看」, or
-「本批未声明指标」） · 还差什么 · 产品侧障碍 + the one fleet-side issue line ·
-建议下一批 — then the counts, the completed/unfinished/blocked lists, the run
+「本批未声明指标」） · 还差什么 · 下一步（建议） · the fleet-side issues filed
+(their numbers — the one place they appear) — then the counts, the completed/unfinished/blocked lists, the run
 figures with their caveat, the URL, and per member which evidence exists — the
 `dir:` path from its worker's 📎 comment, or **无证据**. The tailnet URL dies with
 the next reboot; the comment is what survives, so it must stand on its own without

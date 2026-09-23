@@ -75,7 +75,9 @@ numbered rules; the frame's comment block and slots already follow them:
   paths in its 「怎么量」 fold.
 - **Execution folded** — 先后, 依赖, 来源单号, 复读时间, 预检原文, 共同约定.
 - **Decisions in one table** — 需要你定的事: 事项 / 建议, a default on every row,
-  「（批后）」 for what waits for approval; 能不能开跑 comes after it.
+  「（批后）」 for what waits for approval; 能不能开跑 comes after it — and only
+  when there is something to handle (#929): 「可以。不用先处理什么」 is not
+  information, so a clean preflight drops the section and the zero tile.
 
 The folds change the page, never the issue — write-back is unchanged.
 
@@ -148,18 +150,20 @@ whether 有空再做 is on theme. Those are yours.
 | `#metrics` | both | 指标 — surface 指标 / 现在 / 目标 (report: 之前 / 现在 / 目标), numbers only; the 「怎么量」 fold carries 成员 / 多久能读出来 / 读数口径. The plan writes it from the theme's diagnosis (「本批不量」 when there is none, never blank, never invented); the report fills 现在 row by row (「⟨date⟩ 再看」 / 「本批未声明指标」, never back-filled) |
 | `#charter` | plan | 先回答 (optional — only when the theme is a question: 别人怎么做 / 我们怎么做 table + 我们的价值, sources folded), then 范围 — 做 / 不做 as short plain items; 共同约定 folded — verbatim into the parent body |
 | `#members` | both | 要做的事 — one `.ob` per member, `id="m-<key>"`, wrapping a `<details class="card">` that is ONE line (名称 + 一句) until tapped, grouped by theme (`h3.grp`), 有空再做 last. Tap 1: 目标 / 为谁 / 解决什么 / 怎么算成功 (+ the report's `.proof` grid); tap 2, `<details class="fold">`: 编号 / 来源 · 方案 · 接口·约定 · 依赖 · 完成判据 · **上线证据** — the card IS the sub-issue body, both layers |
-| `#gaps` | report | 还差什么 — 待部署 / 要人做的 / 没验证的 / 这批不做; 有空再做未动不算欠 |
-| `#obstacles` | report | product-side obstacles in full; fleet-side ones become ONE line pointing at filed issues (*would it still exist in another repo, on another theme?*) |
+| `#gaps` | report | **还差什么 · 下一步** (issue #929) — one two-column table 还差什么 / 建议下一步, one row per gap, one short clause per cell; an empty kind (待部署, 要人做的) is no row; the next-batch suggestion is a row (「下一批主题：…」); no lede, no trailing note, no 这批不做. Carries the `#next` anchor. The band's 还差什么 = its row count |
 | `#risks` | plan | 可能出的问题 — one plain sentence each; technical risks + why this split in the fold |
 | `#signoff` | plan | 需要你定的事 — 待决 + 发起人拍板 in one 事项 / 建议 table, a default on every row, 「（批后）」 marks; carries the `#open` anchor. Recorded with the date after the nod |
-| `#preflight` | plan | 能不能开跑 — one sentence; the `fleet-epic-preflight.sh` screen verbatim in the fold |
-| `#next` | report | 建议下一批 — a suggestion for `/fleet-epic-plan`, explicitly not a decision |
+| `#preflight` | plan | **only when there is something to handle** (issue #929: FIXABLE, or a warning the 发起人 must act on) — 能不能开跑 in one sentence, the `fleet-epic-preflight.sh` screen verbatim in the fold. Nothing to handle ⇒ the section and the band's 开跑前要处理 tile are dropped, and the screen moves to the end of the `#order` fold |
+| `#next` | report | an anchor only — `<span id="next">` inside `#gaps`; the suggestion is that table's last row(s) |
 | `#order` | plan | 执行安排 — the whole section folded, last: waves, who waits for whom, what runs in parallel |
 | `#ops` | report | 运行情况, **the whole section folded and last**: 墙钟 · 占用时长 · 额度曲线 · 甘特, with the #625 occupancy-not-tokens caveat kept word for word |
 
 Reading orders that fall out of the file order — plan: `#metrics` `#charter`
 `#members` `#risks` `#signoff` `#preflight` `#order`; report: `#delivered`
-`#metrics` `#members` `#gaps` `#obstacles` `#next` `#ops`.
+`#metrics` `#members` `#gaps` `#ops`. `#preflight` is optional (above); there is
+no obstacles section — a fleet-side defect is FILED as an issue, its number goes in
+the durable comment only, and if the reader needs it, it is a 下一步 row in plain
+words.
 
 The **上线证据** line is the seam with `/fleet-epic-report` (issue #810): one
 line a worker can follow before landing and the report can collect afterwards —

@@ -165,7 +165,11 @@ not someone executing — same rules as `skills/epic-page/SKILL.md`'s
 11. **要做的事 and the member cards are ONE list** — grouped by theme (e.g.
     少写文件 / 少起进程 / 看得见 / 有空再做, `<h3 class="grp">`), each card one line
     (名称 + one sentence of 解决什么) until tapped. No separate overview table.
-12. **能不能开跑 comes last** among the visible sections — after 需要你定的事.
+12. **能不能开跑 comes last** among the visible sections — after 需要你定的事 —
+    and **only when there is something to handle** (issue #929): FIXABLE, or a
+    warning the 发起人 has to act on. READY with nothing to do ⇒ drop the whole
+    `#preflight` section AND the band's 开跑前要处理 tile (a 0 says nothing); the
+    screen moves to the end of the `#order` fold as 预检原文, so nothing is lost.
 13. **范围 in plain words** — short items, no code, no tool names
     (「清掉不用的工作文件夹」「后台少干没用的活」「机器快扛不住时提前提醒」).
 14. **Risks in plain words** — each one sentence, 「会出什么事 — 我们怎么兜住」;
@@ -203,7 +207,8 @@ not someone executing — same rules as `skills/epic-page/SKILL.md`'s
     a question, not a verdict, and rules 16, 17 and 21 are yours to read.
 
 Visible order, top to bottom: title → number band → `#metrics` → `#charter` →
-`#members` → `#risks` → `#signoff` → `#preflight` → `#order` (folded whole).
+`#members` → `#risks` → `#signoff` → `#preflight` (only with something to
+handle, rule 12) → `#order` (folded whole).
 The template's file order already is this order — fill it, don't rearrange it.
 
 The sections, as the template lays them out:
@@ -284,7 +289,8 @@ The sections, as the template lays them out:
    line under it: 「点头即全部按建议。」 After the nod these are recorded with the
    date and workers do not re-open them — the section is the template for what
    #7773's charter did by hand.
-6. **`#preflight`** — **能不能开跑**: one sentence — can it run, and what to
+6. **`#preflight`** — **omitted when there is nothing to handle** (rule 12).
+   Otherwise **能不能开跑**: one sentence — can it run, and what to
    handle first. The step-1 screen, verbatim, in the fold, plus (on FIXABLE) the
    labels `--fix` would seed.
 7. **`#order`** — the whole section folded, last: **执行安排** — waves, who waits
@@ -300,7 +306,7 @@ Self-check the surface (rule 23), fix what it shows, then host it and put
 ```
 
 *"设计方案页 <READY url> — 要做的事 N · 有空再做 M · 指标 j 条（或「本批不量」）·
-开跑前要处理 w。改哪条直接说；点头即全部按建议，照页面建单。"* On a fleet that runs tap-first (`FLEET_TAP_FIRST=1`), the nod is a
+开跑前要处理 w（为 0 时不写）。改哪条直接说；点头即全部按建议，照页面建单。"* On a fleet that runs tap-first (`FLEET_TAP_FIRST=1`), the nod is a
 bounded choice — an `AskUserQuestion` menu of *照页面建单 / 改清单 / 放弃* is the
 right shape; keep free text for what they want changed.
 
