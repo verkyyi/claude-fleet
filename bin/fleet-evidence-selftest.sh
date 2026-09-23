@@ -20,6 +20,7 @@
 #      heading with the line under it (#841); neither → exit 1, silent. Plus one
 #      END-TO-END round trip of /fleet-epic-plan's own template through the reader
 #   G. issue resolution: --issue › @issue › issue-<N> worktree in cwd; usage codes
+#   H. a 2+ repo fleet: the EPIC's repo, by-repo/<slug>/ stores, ask under `all`
 # The whole file re-runs itself once under /bin/bash when that is a 3.x bash (the
 # operator's macOS), because #703's class of bug is only observable there.
 set -uo pipefail
@@ -272,6 +273,37 @@ eq "G6 unknown flag → exit 2" 2 "$RC"
 run -- --help
 eq "G7 --help exits 0" 0 "$RC"
 has "G7 help text" "$OUT" "fleet-evidence.sh before|after|live"
+
+# ---------- H. a fleet hosting 2+ repos (issue #803) ---------------------------
+# The repo is the EPIC's — B's sub-issues, B's parent link — and B's store is its
+# own (by-repo/<slug>/): issue numbers repeat across repos, so B's #42 must never
+# answer A's lookup. The conf's own repo keeps the paths it always had.
+mkdir -p "$WORK/conf/fleets/fevmulti/repos"
+printf 'FLEET_REPO=o/r\n' > "$WORK/conf/fleets/fevmulti/conf"
+MC="$WORK/conf/fleets/fevmulti"
+bslug=$(FLEET_CONF_DIR="$WORK/conf"; . "$WORK/bin/fleet-lib.sh"; fleet_slug o/b)
+printf 'FLEET_REPO=o/b\n' > "$MC/repos/$bslug.conf"
+run TMUX= GH_PARENT=7 -- dir --session fevmulti --repo o/b --issue 42
+eq "H1 repo B → its own by-repo store" "$MC/by-repo/$bslug/epic/7/evidence/42" "$OUT"
+run TMUX= GH_PARENT=7 -- dir --session fevmulti --repo o/r --issue 42
+eq "H2 the conf's own repo keeps its historic path" "$MC/epic/7/evidence/42" "$OUT"
+run TMUX= -- dir --session fevmulti --issue 42
+eq "H3 no --repo under \`all\` → exit 2" 2 "$RC"
+has "H3 names the choices" "$ERR" "o/b"
+run TMUX= -- dir --session fevmulti --repo o/zzz --issue 42
+eq "H4 a repo the fleet does not host → exit 2" 2 "$RC"
+printf 'o/b\n' > "$MC/current-repo"
+: > "$GH_LOG"
+run TMUX= GH_SUBS='42\n' -- list --session fevmulti --epic 7
+eq "H5 list follows the current repo" 0 "$RC"
+has "H5 sub-issues read from repo B" "$(cat "$GH_LOG")" "repos/o/b/issues/7/sub_issues"
+printf 'BSHOT' > "$WORK/src/b.png"
+run TMUX= GH_PARENT=7 -- before --session fevmulti --issue 42 --note 'b shot' "$WORK/src/b.png"
+eq "H6 capture into B" 0 "$RC"
+has "H6 stored under B's store" "$OUT" "$MC/by-repo/$bslug/epic/7/evidence/42/"
+run TMUX= -- dir --session fevmulti --repo o/r --issue 42
+eq "H6 A's #42 never picks up B's populated dir" "$MC/evidence/42" "$OUT"
+rm -f "$MC/current-repo"
 
 printf 'fleet-evidence-selftest OK (%d checks, %s)\n' "$pass" "$SH"
 

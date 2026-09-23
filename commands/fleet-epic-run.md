@@ -12,14 +12,35 @@ quota ceilings, and stops when the core layer is empty. It mutates this fleet's
 the newest OPEN issue labelled `epic` in this fleet; if there is more than one,
 list them and ask rather than guessing which batch the operator meant.
 
+**Which repo** (issue #803): a fleet may host several repos, and an EPIC lives in
+ONE of them. `--repo <owner/name>` anywhere in `$ARGUMENTS` names it; without it
+the preamble resolves the pane's own repo, then the dash's current repo. A
+one-repo fleet always gets its repo — nothing to pass, nothing changes.
+
 ## 0. Resolve fleet + guard seat (run FIRST, every time)
 
 ```sh
 source ~/.claude/fleet/bin/fleet-lib.sh
-S=$(fleet_current_session); fleet_load_conf "$S"   # → FLEET_REPO / FLEET_MAIN / FLEET_BASE_BRANCH
+S=$(fleet_current_session); fleet_load_conf "$S"
+REPO=$(fleet_target_repo "$S" "<the --repo value, or empty>"); RC=$?   # issue #803
+[ "$RC" = 0 ] && fleet_multirepo "$S" && fleet_load_repo_conf "$S" "$REPO"   # → that repo's FLEET_REPO / FLEET_MAIN / FLEET_BASE_BRANCH / deploy
 SEAT=$(fleet_seat)
-echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master} seat=${SEAT:-unknown}"
+echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master} seat=${SEAT:-unknown} rc=$RC"
 ```
+
+- **`RC=4` — several repos, none current** (the dash is on `all`): list them
+  (`fleet_repos "$S"`) and ASK which one in an `AskUserQuestion` menu — never
+  guess — then re-run this block with the answer as `--repo`.
+- **`RC=1`** — the named `--repo` is not one this fleet hosts: ABORT in one line.
+- From here on **every** `$FLEET_REPO` below is the resolved repo, and every
+  `gh` call names it with `--repo` — the hub pane of a multi-repo fleet sits in
+  `$HOME`, where a bare `gh` has no repo to infer.
+- **The charter's `<!-- fleet:epic repo=… -->` marker** (an EPIC planned since
+  #803 has one) must equal `$FLEET_REPO`; a mismatch means this run resolved the
+  wrong repo — stop and say so, spawn nothing. No marker: an older EPIC; go on.
+- **Carry `--repo "$FLEET_REPO"` in every `/loop` / wake-up prompt** that
+  re-enters this skill (`/fleet-epic-run <N> --repo <owner/name>`): the next tick
+  resolves the repo afresh, and the dash's current repo may have moved.
 
 - **No fleet** → **ABORT**: *"not inside a fleet — run this from a fleet session."*
 - **Wrong seat** — `owner: hub`: refuse when `$SEAT` is `worker`. A worker driving
@@ -90,7 +111,7 @@ that finished and went idle without merging.
 For each EPIC member with an open PR (the ledger read above names them):
 
 ```sh
-bash ~/.claude/fleet/bin/fleet-pr-verdict.sh <PR> -q
+bash ~/.claude/fleet/bin/fleet-pr-verdict.sh <PR> --repo "$FLEET_REPO" -q
 ```
 
 - `READY` → first ask whether the worker still owns it (issue #921):
@@ -108,9 +129,9 @@ bash ~/.claude/fleet/bin/fleet-pr-verdict.sh <PR> -q
   merge**, copy that line into this tick's comment, next tick. Exit `0`
   (`clear: …` — idle / done, window gone, or its own MERGED ship report is in
   the ledger) → merge it, **one command, never chained**:
-  `gh pr merge <PR> --squash --delete-branch`. A chained `push --delete` once
+  `gh pr merge <PR> --repo "$FLEET_REPO" --squash --delete-branch`. A chained `push --delete` once
   closed the wrong issue and got the worker reaped.
-- `BEHIND` → `gh pr update-branch <PR>`.
+- `BEHIND` → `gh pr update-branch <PR> --repo "$FLEET_REPO"`.
 - `PENDING` → nothing; next tick.
 - `FAILING` / `CONFLICT` → step 2d (it is a failure, not a merge decision).
 - `BLOCKED` → branch protection said no. Not yours to force: note it on the
@@ -141,8 +162,12 @@ changes them, suggests changing them, or asks (issue #881). A full cap is
 normal: the spawn exits `2` and the next tick retries.
 
 ```sh
-bash ~/.claude/fleet/bin/dash-issue-session.sh <N> --title "<the issue's own title>"
+bash ~/.claude/fleet/bin/dash-issue-session.sh <N> --repo "$FLEET_REPO" --title "<the issue's own title>"
 ```
+
+`--repo` is not optional: a fleet hosting 2+ repos refuses a spawn without it
+(exit 1 — `this fleet hosts several repos`, issue #972), and in a one-repo fleet
+it names the only repo, so it is always correct to pass.
 
 Always the **live install** path (`~/.claude/fleet/bin/…`), never the base
 checkout — the checkout's copy defaults the global cap to 8 instead of reading
@@ -240,7 +265,7 @@ survives a context boundary the same way everything else here does:
 1. **Write the closing tick first, carrying `report: pending`** (step 1's
    format). Before running the report, not after: if this session dies between
    the two, `pending` is what tells the next one there is work left.
-2. **Run `/fleet-epic-report <N>` right here.** Not «hand off to», not «suggest
+2. **Run `/fleet-epic-report <N> --repo "$FLEET_REPO"` right here.** Not «hand off to», not «suggest
    the operator run» — execute it, this tick. It gathers, builds the page, hosts
    it via doc-preview, posts the durable comment, and closes the EPIC when every
    member is resolved. Its own rails still apply; you are just its caller.

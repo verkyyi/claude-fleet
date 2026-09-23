@@ -18,6 +18,11 @@ one and stop. Never infer a theme from the backlog; the whole point of a theme i
 that it is the operator's judgment about what matters this week, and a cluster the
 model picks is a cluster nobody chose.
 
+**Which repo** (issue #803): a fleet may host several repos, and an EPIC lives in
+ONE of them. `--repo <owner/name>` anywhere in `$ARGUMENTS` names it; without it
+the preamble resolves the pane's own repo, then the dash's current repo. A
+one-repo fleet always gets its repo — nothing to pass, nothing changes.
+
 ## 0. Resolve fleet + guard seat (run FIRST, every time)
 
 Env vars do NOT persist across separate Bash tool calls — run this once, then
@@ -25,10 +30,20 @@ reuse the literal values it prints:
 
 ```sh
 source ~/.claude/fleet/bin/fleet-lib.sh
-S=$(fleet_current_session); fleet_load_conf "$S"   # → FLEET_REPO / FLEET_MAIN / FLEET_BASE_BRANCH
+S=$(fleet_current_session); fleet_load_conf "$S"
+REPO=$(fleet_target_repo "$S" "<the --repo value, or empty>"); RC=$?   # issue #803
+[ "$RC" = 0 ] && fleet_multirepo "$S" && fleet_load_repo_conf "$S" "$REPO"   # → that repo's FLEET_REPO / FLEET_MAIN / FLEET_BASE_BRANCH / deploy
 SEAT=$(fleet_seat)                                 # → worker | "" (the hub pane / a stray shell)
-echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master} seat=${SEAT:-unknown}"
+echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master} seat=${SEAT:-unknown} rc=$RC"
 ```
+
+- **`RC=4` — several repos, none current** (the dash is on `all`): list them
+  (`fleet_repos "$S"`) and ASK which one in an `AskUserQuestion` menu — never
+  guess — then re-run this block with the answer as `--repo`.
+- **`RC=1`** — the named `--repo` is not one this fleet hosts: ABORT in one line.
+- From here on **every** `$FLEET_REPO` below is the resolved repo, and every
+  `gh` call names it with `--repo` — the hub pane of a multi-repo fleet sits in
+  `$HOME`, where a bare `gh` has no repo to infer.
 
 - **No fleet** (`FLEET_REPO` empty) → **ABORT** in one line: *"not inside a fleet
   — run this from a fleet session."* Never guess a repo.
@@ -42,7 +57,7 @@ echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master
 assume nothing about the target repo. Ask before planning, not at 03:00:
 
 ```sh
-bash ~/.claude/fleet/bin/fleet-epic-preflight.sh; echo "verdict=$?"
+bash ~/.claude/fleet/bin/fleet-epic-preflight.sh --repo "$FLEET_REPO"; echo "verdict=$?"
 ```
 
 Branch on the exit code — it is the whole point of the script:
@@ -341,7 +356,7 @@ the bodies they always did. Only now, and in this order:
 1. **Record the nod on the page** — `#signoff` gets the operator's login and the
    date, and any change they asked for goes into the page first
    (`share.sh --refresh`).
-2. **Seed labels** if the operator approved it: `fleet-epic-preflight.sh --fix`.
+2. **Seed labels** if the operator approved it: `fleet-epic-preflight.sh --repo "$FLEET_REPO" --fix`.
 3. **Create the parent**, labelled `epic`, titled after the theme. Its body is
    the charter, in this shape — the **page URL pinned at the top**, and the
    Core / Reserve list lines in exactly the form `/fleet-epic-run` reads
@@ -349,6 +364,7 @@ the bodies they always did. Only now, and in this order:
 
    ```markdown
    > 设计方案页：<READY url>（tailnet 内可达，重启即失效；页面内容已全部写回本 issue 与各子单，页面失效不丢信息）
+   <!-- fleet:epic repo=<owner/name> -->
 
    ## 主题
    <the page's subtitle>
@@ -388,6 +404,11 @@ the bodies they always did. Only now, and in this order:
    gh issue create --repo "$FLEET_REPO" --label epic \
      --title "EPIC: <theme>" --body-file <charter.md>
    ```
+
+   The `fleet:epic repo=` marker records which repo the batch belongs to
+   (issue #803): `/fleet-epic-run` and `/fleet-epic-report` check it against the
+   repo they resolved, so a run started against the wrong repo stops at tick 0
+   instead of spawning repo A's workers for repo B's issue numbers.
 
    The charter body is load-bearing. `/fleet-epic-run` seeds each worker to read
    the parent before it starts, so a charter edited mid-batch reaches every worker
@@ -464,7 +485,8 @@ the bodies they always did. Only now, and in this order:
 ## 6. Report (keep it short)
 
 One line: the EPIC number and URL, the design page URL, core/reserve counts, the
-preflight verdict, and the single next command — `/fleet-epic-run <N>`. If you
+preflight verdict, and the single next command — `/fleet-epic-run <N>` (in a
+fleet hosting 2+ repos: `/fleet-epic-run <N> --repo <owner/name>`). If you
 stopped at step 1 (BLOCKED) or step 4 (awaiting the nod — the page URL is the
 whole report then), say that instead, with the reason.
 

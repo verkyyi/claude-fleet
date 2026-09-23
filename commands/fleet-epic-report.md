@@ -11,6 +11,11 @@ Read-only against the repo except for that one closing comment.
 the most recently updated `epic` issue in this fleet. Works on any past EPIC, not
 just the one that just ended, so a report can be re-run after the fact.
 
+**Which repo** (issue #803): a fleet may host several repos, and an EPIC lives in
+ONE of them. `--repo <owner/name>` anywhere in `$ARGUMENTS` names it; without it
+the preamble resolves the pane's own repo, then the dash's current repo. A
+one-repo fleet always gets its repo — nothing to pass, nothing changes.
+
 **Its usual caller is not a human.** `/fleet-epic-run`'s closing tick runs this
 skill itself, in the same hub session, the moment the core layer empties
 (issue #852) — a batch is not finished until it has. So this skill is written to
@@ -33,9 +38,22 @@ the bottom of the page too, with the date, so the operator knows to come back.
 ```sh
 source ~/.claude/fleet/bin/fleet-lib.sh
 S=$(fleet_current_session); fleet_load_conf "$S"
+REPO=$(fleet_target_repo "$S" "<the --repo value, or empty>"); RC=$?   # issue #803
+[ "$RC" = 0 ] && fleet_multirepo "$S" && fleet_load_repo_conf "$S" "$REPO"   # → that repo's FLEET_REPO / FLEET_MAIN / FLEET_BASE_BRANCH / deploy
 SEAT=$(fleet_seat)
-echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master} seat=${SEAT:-unknown}"
+echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master} seat=${SEAT:-unknown} rc=$RC"
 ```
+
+- **`RC=4` — several repos, none current** (the dash is on `all`): list them
+  (`fleet_repos "$S"`) and ASK which one in an `AskUserQuestion` menu — never
+  guess — then re-run this block with the answer as `--repo`.
+- **`RC=1`** — the named `--repo` is not one this fleet hosts: ABORT in one line.
+- From here on **every** `$FLEET_REPO` below is the resolved repo, and every
+  `gh` call names it with `--repo` — the hub pane of a multi-repo fleet sits in
+  `$HOME`, where a bare `gh` has no repo to infer.
+- **The charter's `<!-- fleet:epic repo=… -->` marker**, when present, must equal
+  `$FLEET_REPO` — else stop: a report built from the wrong repo's issue #N is
+  a page about someone else's batch.
 
 - **No fleet** → **ABORT**: *"not inside a fleet — run this from a fleet session."*
 - **Wrong seat** — `owner: hub`: refuse when `$SEAT` is `worker`.
@@ -61,7 +79,7 @@ echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master
   (spawn → reap) as recorded in `/fleet-history` and the tick log.
 - **The quota trace**: the 5h% / week% snapshots the tick lines carry.
 - **The evidence**: what each member looks like live, as its own worker captured
-  it (issue #810) — `~/.claude/fleet/bin/fleet-evidence.sh list --epic <N>`
+  it (issue #810) — `~/.claude/fleet/bin/fleet-evidence.sh list --repo "$FLEET_REPO" --epic <N>`
   prints one row per capture (`member · stage · ts · path · note`) and a `none`
   row for a member with nothing. The stages are `before` / `after` — the
   worker's, taken at the same URL / command / pane the member's `上线证据:` line
@@ -207,7 +225,7 @@ Item 3 in detail — the evidence grid (issue #810):
     (`FLEET_DEPLOY_REF` / `FLEET_DEPLOY_CHECK`, #541) and the member's deploy state
     is green, capture ONE shot from prod along the same line the worker followed,
     and store it where a re-run of this report finds it again:
-    `~/.claude/fleet/bin/fleet-evidence.sh live --issue <M> --epic <N> --note '…' <file>`
+    `~/.claude/fleet/bin/fleet-evidence.sh live --repo "$FLEET_REPO" --issue <M> --epic <N> --note '…' <file>`
     (`-` for a command's output on stdin, `--pane <t>` for a TUI). No deploy
     signal, not yet green, or prod unreachable from this machine → a `.none` cell
     reading **未取到** and the reason. Reachability is an egress fact, not a
@@ -215,7 +233,7 @@ Item 3 in detail — the evidence grid (issue #810):
     while a 2026-09-19 probe from the macbook got HTTP 200 — try once, report what
     happened.
   - **Getting the files into the page**:
-    `~/.claude/fleet/bin/fleet-evidence.sh export --epic <N> <dir-of-the-report-html>`
+    `~/.claude/fleet/bin/fleet-evidence.sh export --repo "$FLEET_REPO" --epic <N> <dir-of-the-report-html>`
     copies every file to `<dir>/evidence/<M>/…` and prints the same rows with
     RELATIVE paths — reference those (`<img src="evidence/42/after-….png">`).
     doc-preview copies a relative `<img src>` file beside the served page (as it
