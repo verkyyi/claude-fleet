@@ -57,6 +57,7 @@ FLEET_EMIT_DIR                     path: state/log location override (fleet-emit
 FLEET_EMIT_QUEUE_MAX               knob: internal pacing/limit, safe in-code default (fleet-emit.sh)
 FLEET_EMIT_TIMEOUT                 knob: internal pacing/limit, safe in-code default (fleet-emit.sh)
 FLEET_EPIC_BACKSTOP_BUSY_CMD       seam: a fake "is the box busy" probe for the EPIC backstop
+FLEET_EPIC_RUNNING_TTL             knob: how long the epic-running heartbeat stays fresh (2700 s, fleet-epic-heartbeat.sh / fleet_epic_running, #953)
 FLEET_FOLD_POLL                    knob: internal pacing/limit, safe in-code default (fleet-repo.sh)
 FLEET_FOLD_WAIT                    knob: internal pacing/limit, safe in-code default (fleet-repo.sh)
 FLEET_FSEVENTSD_WARN_CPU           knob: internal pacing/limit, safe in-code default (fleet-diskguard.sh)
