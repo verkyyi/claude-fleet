@@ -107,7 +107,9 @@ fi
 # --- the context window denominator (resolved below, after the stamps are read) -
 # Only ever used for the DERIVED percentage (the @ctx_pct stamp needs none). The
 # conf value is the MIDDLE of the chain — see resolve-the-limit further down.
-CONF_LIMIT="${FLEET_CONTEXT_LIMIT:-}"
+# FLEET_CTX_WINDOW is THE context-window key; FLEET_CONTEXT_LIMIT is its retired
+# twin (issue #1101), still read and still winning when set so an old conf is unchanged.
+CONF_LIMIT="${FLEET_CONTEXT_LIMIT:-${FLEET_CTX_WINDOW:-}}"
 case "$CONF_LIMIT" in ''|*[!0-9]*) CONF_LIMIT="" ;; esac
 [ -n "$CONF_LIMIT" ] && [ "$CONF_LIMIT" -le 0 ] && CONF_LIMIT=""
 

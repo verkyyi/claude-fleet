@@ -176,7 +176,7 @@ fcfg_tag() {
 fcfg_label() { local v; v=$(fcfg_tag "$1" label); [ -n "$v" ] && printf '%s' "$v" || printf '%s' "$1"; }
 # Section bucket (@group), default "other".
 fcfg_group() { local v; v=$(fcfg_tag "$1" group); [ -n "$v" ] && printf '%s' "$v" || printf 'other'; }
-# Visibility tier (@tier): common | advanced. Default common.
+# Visibility tier (@tier): common | advanced | internal. Default common.
 fcfg_tier()  { local v; v=$(fcfg_tag "$1" tier);  [ -n "$v" ] && printf '%s' "$v" || printf 'common'; }
 # Allowed write scope (@scope): identity | global | fleet. Default fleet.
 fcfg_scope() { local v; v=$(fcfg_tag "$1" scope); [ -n "$v" ] && printf '%s' "$v" || printf 'fleet'; }
@@ -218,8 +218,16 @@ fcfg_type() {
 # Same rules as the per-key accessors above (label/group/tier/scope default to
 # key/other/common/fleet; edit inferred when untagged; default unquoted) — the
 # selftest cross-checks the two so they can never drift.
+#
+# @tier=internal rows (issue #1101) — collector budgets, daemon kick/stale
+# pacing, TTLs, timeouts — are LEFT OUT unless `fcfg_table --all` or
+# FLEET_CONFIG_SHOW_INTERNAL=1: the default view is the settings you might
+# change. Leaving a row out hides it from the modal only; its key is still read
+# at runtime, still overridable by hand, and fcfg_default still finds it.
 fcfg_table() {
-  awk -v US="$FCFG_US" '
+  local all="${FLEET_CONFIG_SHOW_INTERNAL:-0}"
+  [ "${1:-}" = --all ] && all=1
+  awk -v US="$FCFG_US" -v ALL="$all" '
     function unq(rhs,   v) {
       v = rhs
       if (v ~ /^"/)  { sub(/^"/,  "", v); sub(/".*/,  "", v); return v }
@@ -251,6 +259,7 @@ fcfg_table() {
         label = tagval(tl, "label"); if (label == "") label = key
         group = tagval(tl, "group"); if (group == "") group = "other"
         tier  = tagval(tl, "tier");  if (tier  == "") tier  = "common"
+        if (tier == "internal" && ALL != "1") continue
         scope = tagval(tl, "scope"); if (scope == "") scope = "fleet"
         edit  = tagval(tl, "edit")
         unit  = tagval(tl, "unit")

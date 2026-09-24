@@ -945,10 +945,12 @@ EOF
 # differently. Resolution (highest precedence
 # first), from the ALREADY-SOURCED conf env (per-fleet ▸ global ▸ default — the
 # caller runs fleet_load_conf first):
-#   1. FLEET_WORKER_PROMPT_FILE — path to a file whose contents are the body (for a
-#      long/multi-line template the single-line config modal can't hold); a leading
-#      ~/ is expanded. Set-but-unreadable ⇒ warn on stderr and fall through.
-#   2. FLEET_WORKER_PROMPT — an inline body string.
+#   1. FLEET_WORKER_PROMPT_FILE — the RETIRED twin of the @path form below (issue
+#      #1101), still read so an old conf is unchanged.
+#   2. FLEET_WORKER_PROMPT — an inline body string, or "@<path>": a file whose
+#      contents are the body (for a long/multi-line template the single-line config
+#      modal can't hold). A path's leading ~/ is expanded; set-but-unreadable ⇒
+#      warn on stderr and fall through to the default.
 #   3. the built-in default.
 # {issue}/{repo} placeholders are substituted (plain parameter expansion, no eval).
 # The result is trimmed and a single trailing sentence-ender (. ! ?) removed, so
@@ -959,6 +961,7 @@ fleet_worker_prompt_body() {
   local num="${1:-}" repo="${2:-}" body="" f
   local def='Implement and verify per the repo conventions'
   f="${FLEET_WORKER_PROMPT_FILE:-}"
+  case "$f:${FLEET_WORKER_PROMPT:-}" in :@?*) f="${FLEET_WORKER_PROMPT#@}" ;; esac
   if [ -n "$f" ]; then
     # A leading ~/ from the conf/modal is a LITERAL tilde (the shell never
     # expanded it in a quoted assignment), so match it literally and expand by
@@ -968,10 +971,10 @@ fleet_worker_prompt_body() {
     if [ -r "$f" ]; then
       body=$(cat "$f")
     else
-      printf 'fleet: FLEET_WORKER_PROMPT_FILE not readable (%s) — using inline/default\n' "$f" >&2
+      printf 'fleet: worker prompt file not readable (%s) — using inline/default\n' "$f" >&2
     fi
   fi
-  [ -n "$body" ] || body="${FLEET_WORKER_PROMPT:-}"
+  case "${FLEET_WORKER_PROMPT:-}" in @?*) : ;; *) [ -n "$body" ] || body="${FLEET_WORKER_PROMPT:-}" ;; esac
   body="${body//\{issue\}/$num}"
   body="${body//\{repo\}/$repo}"
   # trim leading + trailing whitespace, then one trailing sentence-ender, then any

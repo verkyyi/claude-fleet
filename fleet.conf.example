@@ -9,7 +9,11 @@
 #   @scope  where it may be set:  identity (view-only) · global (writes this
 #           fleet.conf, no per-fleet override) · fleet (per-fleet overlay on top
 #           of the global default, via the modal's g/f write-scope toggle).
-#   @tier   modal visibility:     common (default view) · advanced (collapsed).
+#   @tier   modal visibility:     common (default view) · advanced (collapsed) ·
+#           internal (pacing/budget/timeout knobs, issue #1101: NOT listed by the
+#           modal or `fcfg_table` unless you open "show all" — the modal's
+#           INTERNAL header, or FLEET_CONFIG_SHOW_INTERNAL=1. Still read at
+#           runtime, still hand-overridable in any conf; defaults stay here).
 #   @edit   editor + validation:  no · bool · int · enum · path · str · regex.
 # @label is the friendly name shown in the modal; @group buckets rows into
 # sections; @unit is an optional display suffix. Adding a key here (with a tag
@@ -36,7 +40,7 @@ FLEET_BASE_BRANCH="main"
 # Directory holding the per-fleet config overlays (<session>.conf), which the
 # modal writes when its scope is set to per-fleet. Defaults to
 # $HOME/.config/claude-fleet; override only if you relocate the fleet state dir.
-# @label=Per-fleet config dir @group=identity @tier=advanced @scope=identity @edit=no
+# @label=Per-fleet config dir @group=identity @tier=internal @scope=identity @edit=no
 #FLEET_CONF_DIR="$HOME/.config/claude-fleet"
 
 # A repo's short tag in a fleet that hosts 2+ repos (issue #793): the dash badge
@@ -79,7 +83,7 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 # argv, so a live session's transient command that merely NAMES the worktree path
 # must not be eligible; only something that has genuinely settled in is. Prune-time
 # reaping is unaffected (the directory is going away anyway). Default 600.
-# @label=Kept-worktree reap min age @group=janitor @tier=advanced @scope=global @edit=int @unit=seconds
+# @label=Kept-worktree reap min age @group=janitor @tier=internal @scope=global @edit=int @unit=seconds
 #FLEET_REAP_KEPT_MINAGE=600
 
 # --- Idle scratch reclaim (issue #884) ------------------------------------------
@@ -107,7 +111,7 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 # the reapers leave a leased worktree alone. This is how long an unreleased lease
 # stays believed: long enough for the slowest move (exit wait + cold boot), short
 # enough that a mover killed mid-move cannot park a worktree forever. Default 900.
-# @label=Rotation lease TTL @group=janitor @tier=advanced @scope=global @edit=int @unit=seconds
+# @label=Rotation lease TTL @group=janitor @tier=internal @scope=global @edit=int @unit=seconds
 #FLEET_ROTATE_LEASE_TTL=900
 
 # --- Helper `claude -p` calls carry no MCP (issue #468) -------------------------
@@ -119,11 +123,16 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 # unlike --bare, which drops the login). Set to 0 to restore the unflagged calls if a
 # future CLI changes what those flags mean — both call sites swallow stderr, so a
 # silent breakage would simply stop the summaries.
-# @label=Strip MCP from helper claude -p @group=status @tier=advanced @scope=global @edit=bool
+# @label=Strip MCP from helper claude -p @group=status @tier=internal @scope=global @edit=bool
 #FLEET_HELPER_NO_MCP=1
 
 # Context window used for the dash's ctx% column (tokens). 200000 for standard
-# plans; 1000000 if your sessions run 1M-context models.
+# plans; 1000000 if your sessions run 1M-context models. Also the FALLBACK
+# denominator bin/fleet-context.sh (/fleet-context) uses when it DERIVES a
+# percentage for a pane with no @ctx_limit stamp (issue #477; conf/statusline.sh
+# stamps the real size every render, so a fleet running it needs no value here).
+# FLEET_CONTEXT_LIMIT is the retired twin of this key (issue #1101): still read,
+# and it wins over this one when set, so an old conf keeps working unchanged.
 # @label=Context window size @group=cache @tier=advanced @scope=fleet @edit=int @unit=tokens
 FLEET_CTX_WINDOW=200000
 
@@ -163,7 +172,7 @@ FLEET_CTX_WINDOW=200000
 # How long a per-model cap stays recorded when its banner carries no parseable
 # reset instant (the sticky "reached your Fable limit" line has none). Model caps
 # are weekly, so the default is 7 days (seconds); a banner WITH a reset wins.
-# @label=Model-cap TTL @group=spawn @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Model-cap TTL @group=spawn @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_MODEL_LIMIT_TTL=604800
 
 # Per-model utilization (%) at which ccquota's per-model window (the Fable cap,
@@ -296,7 +305,7 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 #FLEET_CODEX_QUOTA_GATE=0
 # @label=Codex quota floor percent @group=spawn @tier=advanced @scope=fleet @edit=int
 #FLEET_CODEX_QUOTA_FLOOR=5
-# @label=Codex quota cache seconds @group=spawn @tier=advanced @scope=fleet @edit=int
+# @label=Codex quota cache seconds @group=spawn @tier=internal @scope=fleet @edit=int
 #FLEET_CODEX_QUOTA_TTL=300
 # Opt-in idle-only quota recovery through the durable handoff controller.
 # @label=Codex quota migration @group=spawn @tier=advanced @scope=fleet @edit=bool
@@ -358,7 +367,7 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 #FLEET_AUTOFILL=0
 # Max issues auto-spawned per fleet per tick (rate-limit against a thundering
 # herd; the ~60s interval is the cooldown between ticks). Default 1.
-# @label=Auto-fill batch size @group=autofill @tier=advanced @scope=fleet @edit=int @unit=per tick
+# @label=Auto-fill batch size @group=autofill @tier=internal @scope=fleet @edit=int @unit=per tick
 #FLEET_AUTOFILL_MAX_PER_TICK=1
 
 # --- Child → parent outcome reports (bin/fleet-report-parent.sh, issue #574) -----
@@ -457,7 +466,7 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # partial is never clobbered. TRADE-OFF: keep it GENEROUS enough that a human pausing
 # mid-type for a few minutes is respected, small enough that a bad read can't wedge.
 # Default 20 ≈ 5 min at the 15s poll. Per-comment, persisted in the bridge state dir.
-# @label=Bridge: max typing-defers @group=bridge @tier=advanced @scope=fleet @edit=int @unit=ticks
+# @label=Bridge: max typing-defers @group=bridge @tier=internal @scope=fleet @edit=int @unit=ticks
 #FLEET_BRIDGE_MAX_TYPING_DEFERS=20
 
 # --- Cleanup daemon (bin/fleet-cleanup-daemon.sh, com.claude-fleet.cleanup) ------
@@ -478,6 +487,12 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # Values outside 0..31536000 fall back to 600. This is not an idle-time policy.
 # @label=Cleanup merged grace @group=bridge @tier=advanced @scope=fleet @edit=int @unit=s
 #FLEET_CLEANUP_MERGED_GRACE=600
+# Seconds a CLOSED-unmerged PR's window must have been SILENT before cleanup may
+# reap it (issue #544); the other half of that gate — "it has not spoken since the
+# PR closed" — has no timeout. Also the restore picker's closed-PR cutoff. See
+# docs/CLEANUP.md.
+# @label=Cleanup closed grace @group=bridge @tier=advanced @scope=fleet @edit=int @unit=s
+#FLEET_CLEANUP_CLOSED_GRACE=900
 # Reclaim clean raw/scratch windows that remain explicitly done this many minutes.
 # The daemon records and verifies a resumable history entry first, and keeps the
 # worktree, branch and transcript. 0 disables done-raw reaping. Default 30.
@@ -504,7 +519,7 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 #FLEET_SLEEP_WAKE=confirm
 # Seconds the sleeping page's Wake button stays armed after the first press;
 # the second press must land inside it (and ≥0.3s after the first).
-# @label=Worker wake confirm window @group=bridge @tier=advanced @scope=fleet @edit=int @unit=s
+# @label=Worker wake confirm window @group=bridge @tier=internal @scope=fleet @edit=int @unit=s
 #FLEET_SLEEP_WAKE_ARM=3
 # Comma-separated native MCP server names whose volatile state may be discarded.
 # Empty by default. Exact configured stdio launchers/package entrypoints only;
@@ -517,7 +532,7 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 #FLEET_SLEEP_MCP_RESTARTABLE=
 # Max PRs reaped per fleet per tick (a stampede guard; the ~60s interval is the
 # cooldown). Default 4.
-# @label=Cleanup batch size @group=bridge @tier=advanced @scope=fleet @edit=int @unit=per tick
+# @label=Cleanup batch size @group=bridge @tier=internal @scope=fleet @edit=int @unit=per tick
 #FLEET_CLEANUP_MAX_PER_TICK=4
 # Wall-clock budget for ONE candidate's fleet-cleanup.sh call (issue #587). The daemon
 # is a single process on a ~60s interval, so a candidate that wedges (a hung `gh pr
@@ -525,7 +540,7 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # did, for 67 minutes. On expiry the whole process tree is TERMed then KILLed and the
 # tick moves to the next candidate. A timeout spends a slot, so a tick is bounded by
 # batch size x this. Default 120; 0 runs unbudgeted. See docs/CLEANUP.md.
-# @label=Cleanup per-candidate timeout @group=bridge @tier=advanced @scope=fleet @edit=int @unit=s
+# @label=Cleanup per-candidate timeout @group=bridge @tier=internal @scope=fleet @edit=int @unit=s
 #FLEET_CLEANUP_CANDIDATE_TIMEOUT=120
 # Also reap a MERGED PR whose head branch is NOT `issue-<N>` (issue #589). OFF by
 # default, and the default is the historic behavior byte for byte. The whole reap
@@ -671,7 +686,7 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # used to run 1–3 min); keep this well above whatever yours does. The
 # per-phase seconds of the last tick are in global/collect.heartbeat
 # (fleet-doctor prints the slowest phase). GLOBAL: one daemon, one deadline.
-# @label=Collector tick deadline @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Collector tick deadline @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_COLLECT_DEADLINE=600
 
 # Collector GIT-PHASE budget (issue #552). The git phase reads each live
@@ -685,14 +700,14 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # expiry the phase's process tree is killed, the tick RUNS ON (the remaining
 # worktrees keep last tick's branch) and the blown budget is logged. A healthy
 # 26-worktree phase is ~2s, so the default is ~15x headroom. GLOBAL.
-# @label=Collector git budget @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Collector git budget @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_COLLECT_GIT_BUDGET=30
 
 # Name a SLOW worktree on stderr (logs/collect.launchd.log) when its git work
 # takes at least this long. The heartbeat only carries the phase total, so
 # without this a phase creeping toward the budget above says nothing about WHICH
 # worktree is dragging it. GLOBAL.
-# @label=Collector git slow-log @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Collector git slow-log @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_COLLECT_GIT_SLOW=10
 
 # Collector WHOLE-TICK budget (issue #653) — the backstop over every phase.
@@ -734,7 +749,7 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # for FLEET_DAEMON_STALE_MULT x 60s (300s by default), so past ~250s the collector
 # starts tripping its own alarm — which is what the 454s ticks were doing. Raise the
 # offending phase's budget instead, or find out why it got slow. GLOBAL.
-# @label=Collector tick budget @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Collector tick budget @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_COLLECT_TICK_BUDGET=120
 
 # Per-phase collector budgets (issue #653). One knob each, so a phase that is
@@ -760,25 +775,25 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 #   banner      multi-account limit banner → mark-limited + rotate
 #   escalate    detached-attention notifications
 #   snapshot    the crash-recovery layout snapshot
-# @label=Collector quotawatch budget @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Collector quotawatch budget @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_COLLECT_QUOTAWATCH_BUDGET=30
-# @label=Collector sockets budget @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Collector sockets budget @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_COLLECT_SOCKETS_BUDGET=20
-# @label=Collector sessmap budget @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Collector sessmap budget @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_COLLECT_SESSMAP_BUDGET=30
-# @label=Collector issues budget @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Collector issues budget @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_COLLECT_ISSUES_BUDGET=45
-# @label=Collector ctx budget @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Collector ctx budget @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_COLLECT_CTX_BUDGET=45
-# @label=Collector usage budget @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Collector usage budget @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_COLLECT_USAGE_BUDGET=60
-# @label=Collector scrape budget @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Collector scrape budget @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_COLLECT_SCRAPE_BUDGET=30
-# @label=Collector banner budget @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Collector banner budget @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_COLLECT_BANNER_BUDGET=30
-# @label=Collector escalate budget @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Collector escalate budget @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_COLLECT_ESCALATE_BUDGET=30
-# @label=Collector snapshot budget @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Collector snapshot budget @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_COLLECT_SNAPSHOT_BUDGET=30
 
 # Collector STALENESS threshold (issue #636) — when the dash starts saying so.
@@ -801,14 +816,14 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # FLEET_COLLECT_DEADLINE above) counts as evidence of life on its own, so a fleet
 # whose single git phase runs for minutes — 551s is on record from a monorepo —
 # still never trips the alarm. GLOBAL: one collector, one threshold.
-# @label=Dash staleness alarm @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Dash staleness alarm @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_COLLECT_STALE=600
 
 # Collector SELF-HEAL (issue #636). `launchctl kickstart -k` unsticks a pended
 # collector instantly, so whoever notices the staleness above kicks the daemon:
 # the status bar (while attached) and the quotawatch daemon (headless). Set 0 to
 # keep the alarm but never kick.
-# @label=Dash self-heal @group=cache @tier=advanced @scope=global @edit=bool
+# @label=Dash self-heal @group=cache @tier=internal @scope=global @edit=bool
 #FLEET_COLLECT_KICK=1
 
 # Minimum seconds between two self-heal kicks. This is the rail that keeps a
@@ -816,13 +831,13 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # 5s, per attached client): the kick claims the stamp atomically and one kick
 # costs the whole cooldown even if it fails. Every kick is logged to
 # logs/collect-kick.log. GLOBAL.
-# @label=Self-heal cooldown @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Self-heal cooldown @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_COLLECT_KICK_COOLDOWN=600
 
 # How long the status bar keeps the self-heal TRACE up (`↻ dash kicked 4m`) after
 # the collector recovers. A silent recovery would hide the very outage this
 # exists to surface, so the trace outlives the alarm by design. GLOBAL.
-# @label=Self-heal trace window @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Self-heal trace window @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_COLLECT_KICK_TRACE=1800
 
 # ---- interval-daemon liveness: EVERY unit, not just the collector (#639) ----
@@ -848,12 +863,12 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # clean stop — is the usual shape, which no single absolute number can see. 5 is
 # well clear of one slow tick yet far below the 7–14-minute cadence #639
 # measured; raise it on a fleet whose ticks are genuinely long. GLOBAL.
-# @label=Daemon staleness multiplier @group=cache @tier=advanced @scope=global @edit=int
+# @label=Daemon staleness multiplier @group=cache @tier=internal @scope=global @edit=int
 #FLEET_DAEMON_STALE_MULT=5
 
 # Floor under that multiple, so the 15s units (issue-bridge, pr-refresh) do not
 # alarm on one slow `gh` round-trip. GLOBAL.
-# @label=Daemon staleness floor @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Daemon staleness floor @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_DAEMON_STALE_FLOOR=180
 
 # Idle gate (issue #1077): once this login has had NO live fleet for this many
@@ -862,7 +877,7 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # Any live fleet socket, or a spawn (fleet-up, the dash, dispatch, cw), wakes all
 # three at once. launchd's `runs =` still counts every start — a gated tick exits
 # after one stamp. 0 = off: every tick works, as before #1077. GLOBAL.
-# @label=Idle daemon gate @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Idle daemon gate @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_DAEMON_IDLE_AFTER=300
 
 # Per-unit ABSOLUTE override, in place of the multiple: add a line of the form
@@ -876,7 +891,7 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 
 # Daemon SELF-HEAL master switch. 0 keeps every alarm and kicks nothing — the
 # right setting while you are diagnosing WHY a unit stalls. GLOBAL.
-# @label=Daemon self-heal @group=cache @tier=advanced @scope=global @edit=bool
+# @label=Daemon self-heal @group=cache @tier=internal @scope=global @edit=bool
 #FLEET_DAEMON_KICK=1
 
 # Minimum seconds between two kicks OF THE SAME UNIT, as a MULTIPLE of that
@@ -894,22 +909,22 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # built after an 85% window was missed entirely became one look per ten minutes.
 # 3 keeps the cooldown at or below every unit's staleness threshold, which hands
 # the rate-limiting back to that already-per-unit number. GLOBAL.
-# @label=Daemon self-heal cooldown multiplier @group=cache @tier=advanced @scope=global @edit=int
+# @label=Daemon self-heal cooldown multiplier @group=cache @tier=internal @scope=global @edit=int
 #FLEET_DAEMON_KICK_COOLDOWN_MULT=3
 
 # Floor under that multiple, so the 15s units do not get kicked every few seconds
 # while the domain is down. GLOBAL.
-# @label=Daemon self-heal cooldown floor @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Daemon self-heal cooldown floor @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_DAEMON_KICK_COOLDOWN_FLOOR=60
 
 # ABSOLUTE cooldown, in place of the multiple — one number for every unit, which
 # is what this knob meant before #711. Unset by default. GLOBAL.
-# @label=Daemon self-heal cooldown (absolute) @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Daemon self-heal cooldown (absolute) @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_DAEMON_KICK_COOLDOWN=600
 
 # How long the status bar keeps the aggregate trace up (`↻ daemon kicked 3m`)
 # after the units recover. GLOBAL.
-# @label=Daemon trace window @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Daemon trace window @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_DAEMON_KICK_TRACE=1800
 
 # Ineffective kicks before ESCALATING to a real unload + reload of the unit
@@ -918,7 +933,7 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # every dead unit had been hand-kicked minutes before and never ran again. The
 # counter resets the moment the unit ticks. 0 disables the escalation and leaves
 # kickstart as the only remedy. GLOBAL.
-# @label=Daemon reload after N kicks @group=cache @tier=advanced @scope=global @edit=int
+# @label=Daemon reload after N kicks @group=cache @tier=internal @scope=global @edit=int
 #FLEET_DAEMON_RELOAD_AFTER=3
 
 # Minimum seconds between two reloads of the same unit — much longer than the
@@ -926,7 +941,7 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # back. A reload that leaves it UNLOADED does NOT consume this: the next pass
 # bootstraps it again at once, since an unloaded unit is worse than a pended one.
 # GLOBAL.
-# @label=Daemon reload cooldown @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Daemon reload cooldown @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_DAEMON_RELOAD_COOLDOWN=1800
 
 # --- the launchd DOMAIN probe (issue #711) -------------------------------------
@@ -942,32 +957,32 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 
 # Master switch for the probe. 0 keeps every per-unit line and never measures the
 # domain — which also means never ruling the machine out. GLOBAL.
-# @label=launchd domain probe @group=cache @tier=advanced @scope=global @edit=bool
+# @label=launchd domain probe @group=cache @tier=internal @scope=global @edit=bool
 #FLEET_LAUNCHD_PROBE=1
 
 # How long the probe watches its throwaway agent. This is WALL CLOCK inside a
 # fleet-doctor run, so it is the one number here with a felt cost; it must stay
 # comfortably above two StartIntervals or a healthy domain can read as degraded.
 # GLOBAL.
-# @label=launchd probe window @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+# @label=launchd probe window @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_LAUNCHD_PROBE_WINDOW=40
 
 # The throwaway agent's own StartInterval. Floored at 10s in the script: launchd
 # throttles a job to one spawn per 10s, so anything smaller measures the throttle
 # instead of the domain. GLOBAL.
-# @label=launchd probe interval @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+# @label=launchd probe interval @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_LAUNCHD_PROBE_INTERVAL=15
 
 # How long a verdict is reused before it is measured again, so repeated doctor
 # runs during one incident pay the window once. GLOBAL.
-# @label=launchd probe verdict TTL @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+# @label=launchd probe verdict TTL @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_LAUNCHD_PROBE_TTL=900
 
 # How many interval units must be stalled AT ONCE before the stall counts as
 # domain-shaped and the probe is worth running (it must also be at least half of
 # the units that have ever ticked on this host). Below this, a stalled unit is
 # treated as its own problem — which it usually is. GLOBAL.
-# @label=Domain-stall unit threshold @group=cache @tier=advanced @scope=global @edit=int
+# @label=Domain-stall unit threshold @group=cache @tier=internal @scope=global @edit=int
 #FLEET_DAEMON_DOMAIN_MIN=3
 
 # …or that many units KICKED inside this window. The second signature, and the
@@ -976,7 +991,7 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # right now" collapses to one or two while every daemon on the box is really
 # running at its cooldown. On a healthy machine this count is 0 — a kick only ever
 # happens because something stopped being scheduled. GLOBAL.
-# @label=Domain-stall kick window @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Domain-stall kick window @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_DAEMON_DOMAIN_KICK_WINDOW=3600
 
 # PR-status refresh cadence (bin/tmux-pr-refresh.sh, com.claude-fleet.pr-refresh).
@@ -998,7 +1013,7 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # to 15. 60 is the recommended value: a merged PR still reaches the dash within a
 # minute (at once with the webhook installed). Default 15 = no backoff, as before.
 # GLOBAL: one daemon of each serves every fleet.
-# @label=Poll backoff ceiling @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Poll backoff ceiling @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_POLL_MAX_BACKOFF=15
 
 # --- "merged" ≠ "live": deploy state for merged PRs (issue #541) ------------------
@@ -1042,7 +1057,7 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # FLEET_STUCK_WORKING_SECS + 20s must stay well below FLEET_HANDOFF_IDLE_TIMEOUT
 # (above), or auto-handoff silently stops working. Setting it to 0 DISABLES the
 # demoter, which disables auto-handoff along with it — fleet-doctor.sh says so.
-# @label=Demote stuck-working after @group=status @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Demote stuck-working after @group=status @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_STUCK_WORKING_SECS=120
 # Native-truth reconcile (issue #806): a `working` window whose Claude session
 # registry (~/.claude/sessions/<pid>.json) or bound Codex thread reports idle for
@@ -1050,7 +1065,7 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # re-classified — the floor the activity demoter above cannot provide for an idle
 # TUI that keeps repainting its footer. Runs first on the sleep daemon's 60s tick,
 # independent of the spinner. 0 disables the pass.
-# @label=Reconcile native-idle working after @group=status @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Reconcile native-idle working after @group=status @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_STATE_IDLE_SECS=30
 
 # Show a compact live hub list on the left of worker/scratch windows. prefix+e
@@ -1096,7 +1111,7 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # ${TMPDIR}/fleet-status.cache, and the rest read it. Default 5 = status-interval.
 # 0 = no sharing (every client measures, the pre-#890 behaviour). GLOBAL, like the
 # container above.
-# @label=Status-bar stats sharing (s) @group=status @tier=advanced @scope=global @edit=int
+# @label=Status-bar stats sharing (s) @group=status @tier=internal @scope=global @edit=int
 #FLEET_STATUS_CACHE_SECS=5
 
 # Subscription-limit coloring of the footer usage stat (issue #239). The
@@ -1113,22 +1128,8 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # Staleness window for the scraped official limit % (seconds; default 21600 =
 # 6h). Past this the color falls back to indigo and the popup drops the line — a
 # stale limit % is worse than none. Shared with the collector's scrape.
-# @label=Ratelimit staleness @group=status @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Ratelimit staleness @group=status @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_RATELIMIT_TTL=21600
-
-# RETIRED — FLEET_HUB_CMD is no longer read; leaving it set does nothing.
-# It named the command the hub's bottom pane ran (default: a plain `claude`).
-# The hub is now the DASH AND NOTHING ELSE: that Claude pane restored itself
-# unasked — the ⌂ home tap, F9 and prefix+g all rebuild the hub when they find no
-# pane to focus, and fleet-up/fleet-restore rebuilt it on every fresh fleet and
-# every crash recovery — so a pane you closed came back on the next tap. Run your
-# own `claude` in whatever window you like instead; nothing will replace it, and
-# nothing spawns one for you.
-#
-# No assignment line follows ON PURPOSE: a `#FLEET_*=` line here is a REGISTRY
-# entry for the prefix+c config modal (it must carry @label/@group/@edit tags, and
-# tmux-config-selftest.sh enforces that). Listing a retired key would put a dead
-# knob in the modal. bin/hub-session-selftest.sh pins that setting it does nothing.
 
 # Handoff destination (/fleet-handoff, commands/fleet-handoff.md, issue #275).
 # Where the handoff doc is STORED so a cleared session can resume from it:
@@ -1173,7 +1174,7 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # at the deadline ⇒ it aborts without clearing and says so). Ceiling: at
 # threshold+10 the nudge fires anyway, or a long conversation would defer itself
 # into autocompact. 0 = off (clear under the operator's fingers, the pre-#571 way).
-# @label=Handoff typing hold @group=handoff @tier=advanced @scope=fleet @edit=int @unit=sec
+# @label=Handoff typing hold @group=handoff @tier=internal @scope=fleet @edit=int @unit=sec
 #FLEET_HANDOFF_DEFER_SECS=30     # keypress at the pane's window within N s holds the handoff; 0 = off
 
 # The wait-idle ceiling of the handoff cycle (bin/fleet-handoff-cycle.sh): how long
@@ -1193,24 +1194,8 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # (25s), or the cycle's own watchdog kills it after /clear but before the pickup.
 # `bin/fleet-handoff-invariant.sh` is the check, fleet-doctor.sh prints its verdict,
 # and a selftest reds if either default is edited into a dangerous relation.
-# @label=Handoff wait-idle ceiling @group=handoff @tier=advanced @scope=fleet @edit=int @unit=sec
+# @label=Handoff wait-idle ceiling @group=handoff @tier=internal @scope=fleet @edit=int @unit=sec
 #FLEET_HANDOFF_IDLE_TIMEOUT=240   # must stay well above FLEET_STUCK_WORKING_SECS + 20
-
-# The size of the model's context window, in tokens — the denominator
-# bin/fleet-context.sh (/fleet-context, issue #464) uses when it DERIVES a
-# percentage from the session transcript. Only a fallback: when conf/statusline.sh
-# has stamped @ctx_pct on the pane, Claude Code's own percentage wins and this is
-# ignored. Raise it for a long-context model (e.g. 1000000) so the derived figure
-# and the WATCH/HANDOFF bands stay honest; the default matches the standard window.
-# @label=Context window tokens @group=handoff @tier=advanced @scope=fleet @edit=int
-#FLEET_CONTEXT_LIMIT=200000      # FALLBACK context-window size for the derived %
-# Only consulted when this pane carries no @ctx_limit stamp (issue #477).
-# conf/statusline.sh stamps the REAL window size every render — Claude Code hands
-# it to the statusline and to nothing else — so a fleet whose panes run that
-# statusline needs no value here, and one set by hand goes stale the moment the
-# model changes. Set it only for panes with no stamping statusline; with neither,
-# bin/fleet-context.sh falls back to 200000 and SAYS so (`limit=default`), because
-# a 1M-window session measured against 200k reads 197% and a false HANDOFF.
 
 # Multiple subscription accounts, with auto-failover when one hits its usage
 # limit (the rolling 5-hour "session" window or the weekly cap). Register each
@@ -1220,7 +1205,7 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # so NEW sessions launch on a fresh subscription. Empty/absent dir → OFF (the
 # fleet uses your single logged-in account exactly as before). See
 # docs/MULTI-ACCOUNT.md.
-# @label=Account tokens dir @group=identity @tier=advanced @scope=identity @edit=no
+# @label=Account tokens dir @group=identity @tier=internal @scope=identity @edit=no
 #FLEET_ACCOUNTS_DIR="$HOME/.config/claude-fleet/accounts"
 # Optional: pin the account order/subset (space-separated labels); default is
 # every token file, sorted by name.
@@ -1249,11 +1234,11 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # ~60s tick) is stuck: FLEET_NOTIFY_CMD fires once per stuck episode (window,
 # account, reason, the unstick command), the dash row shows `⚠ stuck` and
 # fleet-doctor counts it. A new reason restarts the count (issue #872).
-# @label=Failover stuck after @group=accounts @tier=advanced @scope=fleet @edit=int @unit=attempts
+# @label=Failover stuck after @group=accounts @tier=internal @scope=fleet @edit=int @unit=attempts
 #FLEET_FAILOVER_STUCK_ATTEMPTS=5
 # How long a limited account stays out of rotation before it's eligible again
 # (seconds; default 18000 = the 5-hour session window).
-# @label=Account limit re-check @group=accounts @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Account limit re-check @group=accounts @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_ACCOUNT_LIMIT_TTL=18000
 # Pre-emptive rotation via ccquota (issue #513). The banner path above is
 # reactive — a session has to be walled first. With a ccquota hub reachable
@@ -1279,7 +1264,7 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 #FLEET_ACCOUNT_CEILING=85
 # @label=Warn sessions at @group=accounts @tier=advanced @scope=global @edit=int @unit=%
 #FLEET_ACCOUNT_WARN_PCT=70
-# @label=ccquota cache TTL @group=accounts @tier=advanced @scope=global @edit=int @unit=sec
+# @label=ccquota cache TTL @group=accounts @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_ACCOUNT_QUOTA_TTL=60
 # Staleness alarm for the watch (issue #551): every fleet-quotawatch tick restamps
 # the ccquota cache (account.quota.ts) — even an unreachable hub restamps — so a
@@ -1287,7 +1272,7 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # rotation is blind (2026-09-11: 2.5h blind ⇒ a whole 5h window lost). Surfaced
 # as `⚠ quota stale 47m` on the status bar, a FAIL in fleet-doctor, and a one-off
 # FLEET_NOTIFY_CMD from the next tick that does run. Default 600 = 10× the TTL.
-# @label=Quota watch stale after @group=accounts @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Quota watch stale after @group=accounts @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_ACCOUNT_QUOTA_STALE=600
 # The OTHER way that watch goes blind (issue #684): the fetch restamps the cache
 # even when it came back with nothing, so a hub answering with zero rows leaves a
@@ -1298,19 +1283,19 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # many consecutive empty fetches with a pool + hub configured raises
 # `⚠ quota blind 6m` on the status bar, a FAIL on fleet-doctor's qwatch line, and
 # one FLEET_NOTIFY_CMD per episode. Default 3 ≈ 3 min at the 60s TTL. 0 = off.
-# @label=Quota watch blind after @group=accounts @tier=advanced @scope=global @edit=int @unit=reads
+# @label=Quota watch blind after @group=accounts @tier=internal @scope=global @edit=int @unit=reads
 #FLEET_ACCOUNT_QUOTA_BLIND_STREAK=3
 # A subscription limit banner is a HINT when ccquota has a fresh reading (issue
 # #874): it forces one refetch, and `fleet-account.sh quota-verdict` decides. That
 # refetch is skipped while the cache is younger than this, so N walled windows in
 # one collector tick (or the failover controller right after it) cost one fetch.
-# @label=Banner refetch dedupe @group=accounts @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Banner refetch dedupe @group=accounts @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_ACCOUNT_VERDICT_REFETCH=20
 # When ccquota has NO fresh reading (stale / blind / account not on the hub), a
 # banner still benches by itself — the path that false-benched healthy accounts
 # twice — so the status bar shows `⚠ quota via banner` for this long after the
 # last time it happened (issue #874).
-# @label=Quota via banner shown for @group=accounts @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Quota via banner shown for @group=accounts @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_ACCOUNT_QUOTA_VIA_BANNER_SECS=600
 # How a new spawn RANKS the eligible accounts once the ceiling has thrown out the
 # ones that are too hot to use at all (issue #598):
@@ -1464,7 +1449,7 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # also SIGTERM→SIGKILLs the runaway. OFF by default — set PCT>0 to enable.
 # @label=Runaway CPU percent @group=disk @tier=advanced @scope=global @edit=int @unit=%
 #FLEET_RUNAWAY_CPU_PCT=0        # %CPU that counts as hot; 0 = watchdog OFF
-# @label=Runaway CPU seconds @group=disk @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Runaway CPU seconds @group=disk @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_RUNAWAY_CPU_SECS=300     # seconds sustained-hot before it's a runaway
 # @label=Runaway CPU action @group=disk @tier=advanced @scope=global @edit=str
 #FLEET_RUNAWAY_CPU_ACTION=notify  # notify (forensics+notify only) | kill (also SIGTERM/KILL)
@@ -1486,13 +1471,13 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # worse than missing one. Incidents land in ~/.config/claude-fleet/diskguard/
 # and fire FLEET_NOTIFY_CMD; bin/fleet-doctor.sh shows the live state on its
 # `machine` line, and `bin/fleet-diskguard.sh --orphans` lists them on demand.
-# @label=Orphan runaway CPU percent @group=disk @tier=advanced @scope=global @edit=int @unit=%
+# @label=Orphan runaway CPU percent @group=disk @tier=internal @scope=global @edit=int @unit=%
 #FLEET_ORPHAN_CPU_PCT=50        # %CPU that counts as hot; 0 = watchdog OFF
-# @label=Orphan runaway seconds @group=disk @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Orphan runaway seconds @group=disk @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_ORPHAN_CPU_SECS=300      # seconds sustained-hot before it's flagged
 # @label=Orphan runaway action @group=disk @tier=advanced @scope=global @edit=str
 #FLEET_ORPHAN_CPU_ACTION=notify # notify (report only — the default) | kill (SIGTERM/KILL the process GROUP)
-# @label=Extra orphan fingerprint @group=disk @tier=advanced @scope=global @edit=str
+# @label=Extra orphan fingerprint @group=disk @tier=internal @scope=global @edit=str
 #FLEET_ORPHAN_EXTRA_RE=         # an ERE OR'd into the built-in fleet fingerprint
 
 # The load line on `fleet-doctor`'s `machine` check (issue #697): 1-minute load
@@ -1557,9 +1542,9 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # orphans above. Each burner carries its OWN deadline (a kernel alarm(2) armed
 # before the exec, plus a $SECONDS bound), so SIGKILLing the parent — or closing
 # the pane — cannot leak it. These caps bound a typo:
-# @label=Load-gen max burners @group=disk @tier=advanced @scope=global @edit=int
+# @label=Load-gen max burners @group=disk @tier=internal @scope=global @edit=int
 #FLEET_LOADGEN_MAX_PROCS=64
-# @label=Load-gen max seconds @group=disk @tier=advanced @scope=global @edit=int @unit=sec
+# @label=Load-gen max seconds @group=disk @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_LOADGEN_MAX_SECS=900
 
 # Host gates on top of those caps (issue #922): a charter's `8 900`, run beside
@@ -1568,9 +1553,9 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # LOAD_PER_CORE (0 = off), and CLAMPS the burner count to CORE_PCT% of the cores
 # (min 1; 0 = no clamp). `fleet-loadgen.sh --force` passes both for a deliberate
 # saturation run; it never lifts the two caps above.
-# @label=Load-gen refuse above load per core @group=disk @tier=advanced @scope=global @edit=str
+# @label=Load-gen refuse above load per core @group=disk @tier=internal @scope=global @edit=str
 #FLEET_LOADGEN_LOAD_PER_CORE=1
-# @label=Load-gen max share of cores @group=disk @tier=advanced @scope=global @edit=int @unit=%
+# @label=Load-gen max share of cores @group=disk @tier=internal @scope=global @edit=int @unit=%
 #FLEET_LOADGEN_CORE_PCT=50
 
 # --- Spawn ergonomics -------------------------------------------------------
@@ -1634,7 +1619,7 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 
 # Wall-clock budget for FLEET_WORKTREE_SETUP (fleet_timebox). The spawn waits this
 # long at most; a hook still running is killed and logged, the spawn continues.
-# @label=Worktree setup timeout @group=spawn @tier=advanced @scope=fleet @edit=int @unit=sec
+# @label=Worktree setup timeout @group=spawn @tier=internal @scope=fleet @edit=int @unit=sec
 #FLEET_WORKTREE_SETUP_TIMEOUT=120
 
 # Keep the BASE checkout's dependencies current with master (issue #961). The link
@@ -1654,7 +1639,7 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 
 # Wall-clock budget for ONE base-dir reinstall (fleet_timebox); a timed-out install
 # is killed, logged, left unstamped (so nothing links to it) and retried next tick.
-# @label=Base deps install timeout @group=spawn @tier=advanced @scope=fleet @edit=int @unit=sec
+# @label=Base deps install timeout @group=spawn @tier=internal @scope=fleet @edit=int @unit=sec
 #FLEET_BASE_DEPS_TIMEOUT=900
 
 # --- Warm scratch pool (bin/scratch-pool.sh) ---------------------------------
@@ -1684,13 +1669,13 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # Seconds before an unclaimed warm entry is retired and rebuilt. Its worktree is a
 # snapshot of origin/<base> taken when it was created, so handing out an old one
 # silently branches your work off a stale master.
-# @label=Warm entry max age (s) @group=spawn @tier=advanced @scope=fleet @edit=int
+# @label=Warm entry max age (s) @group=spawn @tier=internal @scope=fleet @edit=int
 #FLEET_POOL_MAX_AGE=1800
 
 # How long ⌃s waits before rebuilding the entry it just consumed. Warming is a full
 # cold claude boot; firing it at the instant you start typing into the window you
 # just claimed is the one moment that contention is felt.
-# @label=Warm pool refill delay (s) @group=spawn @tier=advanced @scope=fleet @edit=int
+# @label=Warm pool refill delay (s) @group=spawn @tier=internal @scope=fleet @edit=int
 #FLEET_POOL_REFILL_DELAY=45
 
 # --- Dash prompt-line paste guard (bin/dash-enter.sh, issue #531) -----------------
@@ -1702,14 +1687,14 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # Enter that trails the previous one by less than this many ms is treated as a
 # paste line and dropped; an isolated Enter defers this long, then spawns. Raising
 # it drops more of a fast-typed second task; lowering it lets a slow paste through.
-# @label=Prompt-line debounce (ms) @group=spawn @tier=advanced @scope=global @edit=int @unit=ms
+# @label=Prompt-line debounce (ms) @group=spawn @tier=internal @scope=global @edit=int @unit=ms
 #FLEET_SPAWN_GUARD_MS=1000
 
 # How long an in-progress scratch spawn (issue #531) counts against the session cap
 # before its window exists — so a flood of spawns can't all pass the cap check
 # before any of them lands a window. A crashed spawn's marker ages out after this
 # many seconds rather than wedging the cap.
-# @label=In-flight spawn TTL (s) @group=spawn @tier=advanced @scope=global @edit=int @unit=seconds
+# @label=In-flight spawn TTL (s) @group=spawn @tier=internal @scope=global @edit=int @unit=seconds
 #FLEET_INFLIGHT_TTL=180
 
 # --- Cross-machine pre-spawn dedup (bin/dash-issue-session.sh, issue #258) --------
@@ -1787,14 +1772,9 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # built-in default below. Placeholders {issue} and {repo} are substituted; a
 # trailing sentence-ender is stripped so the body flows into the tail. Per-fleet ▸
 # global ▸ default like any @scope=fleet key.
+# A value of the form "@<path>" names a FILE whose contents are the body instead —
+# for a long or multi-line template the single-line modal editor can't hold (a
+# leading ~/ is expanded; unreadable ⇒ the spawn warns and uses the default). The
+# retired FLEET_WORKER_PROMPT_FILE=<path> is still read and wins when set (#1101).
 # @label=Worker seed prompt @group=spawn @tier=common @scope=fleet @edit=str
 #FLEET_WORKER_PROMPT="Implement and verify per the repo conventions"
-
-# A FILE whose contents are the worker seed BODY (above) — use this instead of
-# FLEET_WORKER_PROMPT for a long or multi-line template the single-line modal
-# editor can't hold. A leading ~/ is expanded. Takes precedence over
-# FLEET_WORKER_PROMPT when set and readable; if the path is set but unreadable the
-# spawn warns and falls back to the inline value / default. Same {issue}/{repo}
-# placeholders.
-# @label=Worker seed prompt file @group=spawn @tier=advanced @scope=fleet @edit=path
-#FLEET_WORKER_PROMPT_FILE="$HOME/.config/claude-fleet/worker-prompt.txt"

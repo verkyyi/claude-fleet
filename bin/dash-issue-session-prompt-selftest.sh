@@ -187,9 +187,27 @@ case "$got" in *'Second line for acme/widgets'*) : ;; *) fail "H prompt file lin
 got=$(FLEET_WORKER_PROMPT_FILE="$WORK/nope.txt" fleet_worker_prompt_body 234 acme/widgets 2>"$WORK/body.err")
 [ "$got" = 'Implement and verify per the repo conventions' ] \
   || fail "H an unreadable prompt file should fall back to the default body" "$got"
-grep -q 'FLEET_WORKER_PROMPT_FILE not readable' "$WORK/body.err" \
+grep -q 'worker prompt file not readable' "$WORK/body.err" \
   || fail "H an unreadable prompt file should warn on stderr" "$(cat "$WORK/body.err")"
 ok "H prompt FILE wins + is multi-line; an unreadable file warns and falls back"
+
+# I: FLEET_WORKER_PROMPT="@<path>" is the one-key form of the retired _FILE twin
+#    (issue #1101): same file read, same subst; an unreadable @path warns and
+#    falls back to the DEFAULT (never to the literal "@…" string); and the old
+#    _FILE key, when an old conf still sets it, keeps winning.
+got=$(FLEET_WORKER_PROMPT="@$WORK/tmpl.txt" fleet_worker_prompt_body 234 acme/widgets)
+case "$got" in *'First custom line for 234.'*'Second line for acme/widgets'*) : ;;
+  *) fail "I @path should read the file (multi-line + subst)" "$got" ;; esac
+got=$(FLEET_WORKER_PROMPT="@$WORK/nope.txt" fleet_worker_prompt_body 234 acme/widgets 2>"$WORK/body.err")
+[ "$got" = 'Implement and verify per the repo conventions' ] \
+  || fail "I an unreadable @path should fall back to the default body" "$got"
+grep -q 'worker prompt file not readable' "$WORK/body.err" \
+  || fail "I an unreadable @path should warn on stderr" "$(cat "$WORK/body.err")"
+printf 'legacy file body\n' > "$WORK/legacy.txt"
+got=$(FLEET_WORKER_PROMPT="@$WORK/tmpl.txt" FLEET_WORKER_PROMPT_FILE="$WORK/legacy.txt" \
+        fleet_worker_prompt_body 234 acme/widgets)
+[ "$got" = 'legacy file body' ] || fail "I the retired _FILE key must still win when set" "$got"
+ok "I @path form reads the file; unreadable → default; retired _FILE still honored"
 
 printf '\nselftest OK: %s assertions passed (collapsed /fleet-claim seed + per-fleet body)\n' "$pass"
 exit 0

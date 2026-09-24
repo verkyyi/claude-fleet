@@ -97,6 +97,12 @@ has "peak folds main-thread rows"                   "$out" '"peak_tokens":42802'
 case "$out" in *900000*) bad "sidechain tokens leak into the fold" "no 900000 anywhere" "$out" ;; *) ok "sidechain tokens never leak" ;; esac
 out=$(FLEET_CONTEXT_LIMIT=100000 run --transcript "$T" --json)
 has "FLEET_CONTEXT_LIMIT sets the denominator" "$out" '"derived_pct":43'
+# FLEET_CTX_WINDOW is the ONE context-window key; FLEET_CONTEXT_LIMIT its retired
+# twin, which still wins when an old conf sets both (issue #1101).
+out=$(FLEET_CTX_WINDOW=100000 run --transcript "$T" --json)
+has "FLEET_CTX_WINDOW sets the denominator" "$out" '"derived_pct":43'
+out=$(FLEET_CTX_WINDOW=1000000 FLEET_CONTEXT_LIMIT=100000 run --transcript "$T" --json)
+has "retired FLEET_CONTEXT_LIMIT still wins over FLEET_CTX_WINDOW" "$out" '"derived_pct":43'
 
 printf '\n-- BANDS --\n'
 # 42802/200000 = 21% → OK on the default bands.

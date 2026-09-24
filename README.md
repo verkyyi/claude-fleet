@@ -232,7 +232,7 @@ line, which exits silently without it.)
 | `prefix E` | focus the sidebar (or click it): ↑↓ switch tasks (follows once you pause), Home/End ends, ←→ fold, Enter/Esc give input back to the worker, `n` (or a tap on the bottom row) new task — files an issue and spawns its worker, `q` hide (keyboard-only; nothing in the sidebar hides on a tap) |
 | `prefix Space` | task picker — the sidebar's task list as a popup, for when the sidebar is hidden (a window under ~111 columns) or off: ↵ switches, a typed name + `⌃s` (or ↵ on no match) starts a scratch session, F9 / `[⌂ hub]` goes on to the hub. `prefix E`, `F9` and the ⌂ tap open it too in a task with no sidebar on screen |
 | `prefix b` | backlog modal — near-fullscreen popup; enter spawns the issue session |
-| `prefix c` | config modal — view/edit `FLEET_*` by friendly label, grouped + collapsible; identity keys locked, global-only vs per-fleet scoped; `⌃s` toggles the write layer, `?` reveals raw keys, enter edits |
+| `prefix c` | config modal — view/edit `FLEET_*` by friendly label, grouped + collapsible; pacing/budget/timeout knobs live under a collapsed INTERNAL "show all" header (#1101); identity keys locked, global-only vs per-fleet scoped; `⌃s` toggles the write layer, `?` reveals raw keys, enter edits |
 | `prefix ?` | keymap cheatsheet — a popup listing **every** fleet shortcut (tmux prefix · dash · backlog · config modal), each with a one-line description; `q`/`esc` closes it (also reachable via `?` in the dash and the backlog) |
 | `F9` | (no prefix) jump back to this session's hub — in a task, the first press lands on the sidebar (or, with no sidebar on screen, the task picker) and the second goes to the hub (`FLEET_HOME_SIDEBAR_FIRST=0` turns that off) |
 
@@ -404,7 +404,7 @@ still works as a one-fleet default. **One settings file per login** (issue #979)
 fleet `conf`, so an unmerged login loads exactly as before. Every fleet gets a **`plan` hub** window holding
 the **dash alone**. The hub used to split a persistent `claude` in below it, but
 that pane rebuilt itself on every ⌂ tap, `F9`, fresh fleet and crash recovery —
-closing it never stuck — so it is gone, along with the `FLEET_HUB_CMD` knob that
+closing it never stuck — so it is gone, along with the knob that
 configured it. Run your own `claude` in whatever window you like: that is where
 you file, triage, spawn workers, hand work back and land whatever a worker
 couldn't (workers land their own PRs on green, #441). There is no resident

@@ -11,7 +11,9 @@
 # effective value came from (green ▸ per-fleet · blue · global · dim default).
 # Scope is carried by color + a short aligned word, not by emoji. Rows are
 # grouped common-first;
-# Advanced / Global-only-advanced / Identity sit behind Tab-expandable headers.
+# Advanced / Global-only-advanced / Identity sit behind Tab-expandable headers;
+# the INTERNAL header (issue #1101) is the "show all" switch — collapsed, it hides
+# the @tier=internal pacing/budget/timeout knobs fcfg_table leaves out by default.
 # `?` reveals the raw FLEET_* key inline; ⌃s toggles which layer a per-fleet edit
 # WRITES to; enter on an editable key edits it, on a section header expands it.
 #
@@ -158,14 +160,16 @@ emit_bucket() {
 # a render no longer re-parses the file per key.
 emit_rows() {
   local key label group tier scope edit unit def og
-  local common_t='' adv_t='' gadv_t='' id_t='' order='' line
+  local common_t='' adv_t='' gadv_t='' id_t='' int_t='' order='' line
   RCONF_F=$(fcfg_fleet_conf "$SESSION"); RCONF_G=$(fcfg_global_conf)
   # Repo scope: the per-repo rows resolve for THIS repo (empty = fleet/global).
   RREPO=$(fcfg_scope_repo "$SESSION" "$(fcfg_wscope "$SESSION")" || true)
   while IFS="$US" read -r key label group tier scope edit unit def; do
     [ -n "$key" ] || continue
     line="$key$US$label$US$group$US$tier$US$scope$US$edit$US$unit$US$def"
-    if [ "$scope" = identity ]; then                            id_t="$id_t$line
+    if [ "$tier" = internal ]; then                             int_t="$int_t$line
+"
+    elif [ "$scope" = identity ]; then                          id_t="$id_t$line
 "
     elif [ "$tier" = advanced ] && [ "$scope" = global ]; then  gadv_t="$gadv_t$line
 "
@@ -177,7 +181,7 @@ emit_rows() {
       case "$US$order$US" in *"$US$group$US"*) : ;; *) order="${order:+$order$US}$group" ;; esac
     fi
   done <<EOF
-$(fcfg_table)
+$(fcfg_table --all)
 EOF
 
   emit_context
@@ -196,6 +200,7 @@ EOF
   emit_bucket advanced   "ADVANCED"               "$adv_t"
   emit_bucket global-adv "GLOBAL-ONLY · ADVANCED"  "$gadv_t"
   emit_bucket identity   "IDENTITY (locked)"       "$id_t"
+  emit_bucket internal   "INTERNAL · show all (pacing, budgets, timeouts)" "$int_t"
 }
 
 # ---- preview: the detail pane for one key -----------------------------------
