@@ -31,6 +31,24 @@ site-absolute refs are left alone.
 directory via a loopback `server.py` (a `http.server` + a tiny control API), and fronts it
 with `tailscale serve` (HTTPS on the tailnet). The viewing browser needs internet for the CDN libs.
 
+**Two serving modes** (recorded in `~/.cache/claude-doc-preview/mode`, issue #1093):
+
+- **`https`** — the default: `server.py` on loopback, fronted by `tailscale serve`. URL
+  `https://<magicdns>[:<port>]/`.
+- **`http-direct`** — the fallback when this login is **not tailscale's operator** (a machine
+  has exactly one; `tailscale debug prefs` → `OperatorUser`) and has no root, so `tailscale
+  serve` is refused. `server.py` binds the machine's tailscale IPv4 instead and the URL is
+  `http://<magicdns>:<port>/` — plain http, but reachable only inside the tailnet, whose link
+  is WireGuard-encrypted. The `READY` line says so. Sticky until `--stop`. Public (Funnel)
+  links need serve rights, so `--publish` refuses in this mode. `fleet-doctor`'s `docprev`
+  row says which mode this login gets, and the one-time `sudo tailscale serve …` command to
+  get HTTPS instead (then `--stop` and re-share — `share.sh` adopts an existing route to its
+  loopback port). Don't move the operator: it would break the login that holds it.
+
+The local port is picked by a real `bind()` probe (not `lsof`, which can't see another
+login's server), and a server that fails to start leaves no `server.pid`/`server.port` and
+no half-added entries behind.
+
 **Multi-session safe — this is the key property.** Every share **appends** to one shared
 collection behind a **single fixed URL**. A new share never removes other docs and never
 changes the URL. The root page (`/`) lists everything currently shared, across all sessions
@@ -107,6 +125,7 @@ you share on behalf of a distinct task/session, pass a short label so the user c
 - The doc page is reading/print-first by design: GitHub-styled, auto light/dark, print-friendly
   tables. The only interactive control is the header **"公开链接" public-link switch** (tailnet
   view only); don't add other UX chrome (filter/sort/theme toggles).
+- A `READY http://…` URL with the `(http-direct: …)` note is a normal success — relay it as is.
 - On error, read the printed message (usually: tailscale logged out, HTTPS certs not enabled, or
   — for `--publish` — the Funnel node attribute not granted in the tailnet ACLs) and tell the fix.
 - Override the static server's starting port with `DOC_PREVIEW_PORT=NNNN`.
