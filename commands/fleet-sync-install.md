@@ -168,6 +168,18 @@ Act on the exit code — it is the reason:
 - **6** — a sync or its verification failed; the line names the backup to
   restore from.
 
+A login the table shows as shape `copy` is a file-copy install: it cannot say
+which commit it holds (only a sync marker can) and cannot update itself. Turn it
+into a clone once — `bash ~/.claude/fleet/bin/fleet-sync-logins.sh --to-git`
+(`--dry-run` first; `--logins a,b` to pick) — and it becomes an ordinary
+checkout at the version it had, origin = the public repo over https, with
+`fleet.conf`, `logs/` and its local files carried across and the old dir kept
+whole as `~u/.claude/fleet.copy-<date>` (issue #1121). Logins that are already
+checkouts are skipped; a copy with local edits is blocked (`--force` converts,
+the old dir keeps the edits). The same exit codes apply; `--to-git` never runs
+the sync itself — run the plain command afterwards to bring the new checkout
+forward.
+
 `--dry-run` previews. Relay its last line
 (`other logins on this machine: N synced / M skipped · K already current`) in
 step 5.

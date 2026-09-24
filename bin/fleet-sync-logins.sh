@@ -1,8 +1,8 @@
 #!/bin/bash
 # fleet-sync-logins.sh [--dry-run] [--logins a,b] [--force] [--source <dir>]
-#                      [--homes <dir>] [--summary]
+#                      [--homes <dir>] [--summary] [--to-git [--origin <url>]]
 #   — keep every login's ~/.claude/fleet on ONE machine at the same commit
-#     (issue #1069).
+#     (issue #1069); --to-git turns a copy install into a git clone (issue #1121).
 #
 # `/fleet-sync-install` is per-machine AND manual, and `fleet-install-version.sh`
 # measures one install. On a shared machine the unit is not the machine but the
@@ -51,14 +51,39 @@
 #   - No passwordless sudo → nothing is changed for that login; the exact
 #     command to run it as an admin is printed instead.
 #
+# --to-git (issue #1121) — convert, instead of sync. A copy install cannot say
+# which version it is (only its marker can, and only if a sync wrote one) and
+# cannot update itself; every login should be a clone that follows the public
+# repo on its own. For each COPY-shaped login, as that login:
+#   1. build a clone beside it (`~u/.claude/fleet.to-git.<pid>`): `git init`,
+#      fetch the source's HEAD from a bundle (no network, no credentials), check
+#      out the commit the copy holds — its marker, or the source's HEAD for an
+#      unmarked copy — and set `origin` to the public repo's https URL (the
+#      source's own origin rewritten to https, or `--origin <url>`).
+#   2. copy into the clone every file the commit does NOT track — fleet.conf and
+#      its backups, logs/, any local file — with rsync, modes kept. Caches
+#      (__pycache__, *.pyc, .DS_Store, *.sock) and the marker stay behind.
+#   3. swap: the copy dir becomes `~u/.claude/fleet.copy-<date>` (a complete
+#      backup, nothing is deleted from it), the clone becomes ~u/.claude/fleet.
+#   4. kickstart that login's daemons; verify HEAD, a clean tracked tree, and
+#      that fleet.conf / logs came along.
+# A login that is already a checkout is skipped. A copy whose tracked files hold
+# content the source repo has never seen is someone's work and is blocked (the
+# note names the files); `--force` converts anyway — the old copy dir keeps the
+# edits. The steps run in ONE owner-side shell (`umask 022`, the owner's HOME):
+# `sudo -u` keeps the caller's umask, which on macOS is 077, and a clone built
+# that way is unreadable to every other login. --to-git never runs the ordinary
+# sync: the converted login sits at the version it had; a following plain run
+# brings it forward like any other checkout.
+#
 # Exit status is the reason, worst first:
-#   6  a sync or its verification failed for at least one login
+#   6  a sync / conversion or its verification failed for at least one login
 #   5  at least one login needs sudo — the commands to run are printed
 #   4  at least one login is blocked (local edits / newer than the source)
-#   3  the source is unusable (not a git checkout)
-#   2  usage error (bad flag, --logins names no install)
-#   1  --dry-run only: drift found
-#   0  every selected login is at the source commit
+#   3  the source is unusable (not a git checkout; --to-git: no https origin)
+#   2  usage error (bad flag, --logins names no install, --summary --to-git)
+#   1  --dry-run only: drift found (--to-git: a copy install to convert)
+#   0  every selected login is at the source commit (--to-git: is a checkout)
 #
 # --summary prints ONE line (`4 other · 1 current · 3 drifted (…)`) and nothing
 # else; it implies --dry-run. `fleet-install-version.sh` reads it for its
@@ -85,14 +110,17 @@ SUDO="${FLEET_SYNC_LOGINS_SUDO-sudo -n}"
 LAUNCHCTL="${FLEET_SYNC_LOGINS_LAUNCHCTL:-launchctl}"
 DAEMON_DIR="${FLEET_SYNC_LOGINS_DAEMON_DIR:-/Library/LaunchDaemons}"
 TMPROOT="${FLEET_SYNC_LOGINS_TMP:-/tmp}"
-dry=0 force=0 only='' summary=0
+dry=0 force=0 only='' summary=0 togit=0 origin=''
 
-usage() { sed -n '2,70p' "$SELF" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,/^set -u/p' "$SELF" | sed '$d' | sed 's/^# \{0,1\}//'; }
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run|-n) dry=1 ;;
     --force)      force=1 ;;
     --summary)    summary=1; dry=1 ;;
+    --to-git)     togit=1 ;;
+    --origin)     shift; origin="${1:-}" ;;
+    --origin=*)   origin="${1#--origin=}" ;;
     --logins)     shift; only="${1:-}" ;;
     --logins=*)   only="${1#--logins=}" ;;
     --source)     shift; src="${1:-}" ;;
@@ -102,6 +130,9 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
+if [ "$summary" -eq 1 ] && [ "$togit" -eq 1 ]; then
+  echo 'fleet-sync-logins: --summary and --to-git are exclusive (the summary line counts drift, not shape)' >&2; exit 2
+fi
 
 me="${FLEET_SYNC_LOGINS_ME:-$(id -un)}"
 PGREP="${FLEET_SYNC_LOGINS_PGREP:-pgrep}"
@@ -131,6 +162,22 @@ ogit() {
   if as_owner "$_og"; then $SUDO -u "$_og" git -c safe.directory='*' -C "$@"
   else gitq "$@"; fi
 }
+# oread <owner> <file> — a file's contents, as the owner when the caller cannot
+# read it (the copy marker is written as the owner, under sudo's 077 umask).
+oread() {
+  if [ -r "$2" ]; then cat "$2" 2>/dev/null
+  elif as_owner "$1"; then $SUDO -u "$1" cat "$2" 2>/dev/null
+  fi
+}
+# to_https <url> — an origin URL as its https form (git@host:path, ssh://…)
+to_https() {
+  case "$1" in
+    https://*) printf '%s' "$1" ;;
+    ssh://*)   _u=${1#ssh://}; _u=${_u#*@}; printf 'https://%s' "$_u" ;;
+    *@*:*)     _u=${1#*@}; printf 'https://%s/%s' "${_u%%:*}" "${_u#*:}" ;;
+    *)         printf '%s' "$1" ;;
+  esac
+}
 
 # --- the source --------------------------------------------------------------
 [ -n "$src" ] && [ -d "$src" ] || { printf 'fleet-sync-logins: no source install at %s\n' "$src" >&2; exit 3; }
@@ -142,6 +189,20 @@ fi
 src_sha=$(gitq "$src" rev-parse --verify --quiet HEAD) || { printf 'fleet-sync-logins: %s has no HEAD commit\n' "$src" >&2; exit 3; }
 src_short=$(gitq "$src" rev-parse --short HEAD)
 src_subject=$(gitq "$src" log -1 --format=%s HEAD 2>/dev/null)
+# --to-git: the clone's origin is the PUBLIC repo over https — reachable by every
+# login without credentials. The source's own origin, rewritten; --origin wins.
+branch=''
+if [ "$togit" -eq 1 ]; then
+  branch=$(gitq "$src" symbolic-ref --short HEAD 2>/dev/null); branch=${branch:-master}
+  if [ -z "$origin" ]; then
+    src_origin=$(gitq "$src" remote get-url origin 2>/dev/null)
+    origin=$(to_https "$src_origin")
+    case "$origin" in
+      https://*) ;;
+      *) printf 'fleet-sync-logins: --to-git needs an https origin for the clones, and the source'"'"'s origin is %s — pass --origin <https-url>\n' "${src_origin:-unset}" >&2; exit 3 ;;
+    esac
+  fi
+fi
 
 # The tracked top-level entries at HEAD. fleet.conf / logs / .git are never
 # tracked; they are dropped here again so a future mistake cannot sync one.
@@ -194,6 +255,34 @@ local_edits() {
   done
 }
 
+# --- --to-git helpers (issue #1121) ------------------------------------------
+# tracked_at <sha> → a file listing every path the commit tracks (cached per sha)
+tracked_at() {
+  [ -s "$STAGE/tracked.$1" ] || { gitq "$src" ls-tree -r --name-only "$1" > "$STAGE/tracked.$1"; chmod a+r "$STAGE/tracked.$1"; }
+  printf '%s' "$STAGE/tracked.$1"
+}
+# copy_files <dir> <owner> → every file / symlink under a copy install, relative,
+# minus .git, caches and the sync marker — listed as the owner when reachable.
+copy_files() {
+  ( cd / && if as_owner "$2"; then $SUDO -u "$2" find "$1" \( -name .git -o -name __pycache__ \) -prune -o \( -type f -o -type l \) ! -name '*.pyc' ! -name .DS_Store ! -name '*.sock' -print
+    else find "$1" \( -name .git -o -name __pycache__ \) -prune -o \( -type f -o -type l \) ! -name '*.pyc' ! -name .DS_Store ! -name '*.sock' -print; fi ) 2>/dev/null \
+    | sed "s|^$1/||" | grep -v -x -e '.fleet-synced-from'
+}
+# copy_edits <dir> <owner> <sha> → the copy's tracked files whose content the
+# source repo has never seen (space-separated): the copy-install twin of
+# local_edits. One hash batch + one cat-file batch, not one git call per file.
+# A batch that could not hash every file (an unreadable one) names nothing —
+# the old copy dir keeps whatever was there either way.
+copy_edits() {
+  copy_files "$1" "$2" | grep -F -x -f "$(tracked_at "$3")" > "$STAGE/ce.files"
+  [ -s "$STAGE/ce.files" ] || return 0
+  ( cd "$1" && git hash-object --no-filters --stdin-paths < "$STAGE/ce.files" 2>/dev/null ) > "$STAGE/ce.hashes"
+  [ "$(wc -l < "$STAGE/ce.hashes")" -eq "$(wc -l < "$STAGE/ce.files")" ] || return 0
+  paste -d' ' "$STAGE/ce.hashes" "$STAGE/ce.files" > "$STAGE/ce.pairs"
+  gitq "$src" cat-file --batch-check < "$STAGE/ce.hashes" 2>/dev/null \
+    | awk 'NR==FNR { if ($2 == "missing") m[$1] = 1; next } ($1 in m) { printf "%s ", $2 }' - "$STAGE/ce.pairs"
+}
+
 # --- discover the other logins ----------------------------------------------
 # Pre-pass: is ANY checkout on this machine newer than the source? Then the
 # source is demonstrably not the newest install, and a copy install with no
@@ -211,7 +300,7 @@ for d in "$homes"/*/.claude/fleet; do
 done
 newer_than_src=${newer_than_src# }
 
-plan=''  # one line per login: login|dir|owner|shape|head|drift|state|note|entries(,)
+plan=''  # one line per login: login|dir|owner|shape|head|drift|state|note|entries(,)|to-git target
 found=''
 for d in "$homes"/*/.claude/fleet; do
   [ -d "$d" ] || continue
@@ -231,7 +320,7 @@ for d in "$homes"/*/.claude/fleet; do
   else
     shape=copy; ents=''
     for e in $entries; do { [ -e "$d/$e" ] || [ -L "$d/$e" ]; } && ents="$ents $e"; done
-    head=$(awk 'NR==1{print $1}' "$d/.fleet-synced-from" 2>/dev/null)
+    head=$(oread "$owner" "$d/.fleet-synced-from" | awk 'NR==1{print $1}')
   fi
   n=$(drift "$d" "$ents")
   rel=''; [ -n "$head" ] && rel=$(relation "$head")
@@ -250,7 +339,36 @@ for d in "$homes"/*/.claude/fleet; do
     case "$rel" in behind:*) note="${rel#behind:} commit(s) behind" ;; newer) note="newer than the source — forced" ;; esac
     [ -n "$edits" ] && note="${note:+$note · }local edits overwritten (forced): ${edits% }"
   fi
-  plan="$plan$login|$rd|$owner|$shape|$head|$n|$state|$note|$(echo $ents | tr ' ' ',')
+  # --to-git re-reads the same plan as a conversion: a checkout is skipped, a
+  # blocked copy stays blocked (its version is unknown or not in the source), and
+  # a convertible copy is checked for work the source has never seen.
+  target=''
+  if [ "$togit" -eq 1 ]; then
+    if [ "$shape" = git ]; then
+      state=skip; note='already a git checkout'
+    elif [ "$state" != blocked ]; then
+      # the commit the clone checks out: the marker's, or the source HEAD for an
+      # unmarked copy. A marker the source cannot resolve (a copy synced from a
+      # newer login) has no tree to clone; --force takes the source HEAD.
+      target=${head:-$src_sha} tnote=''
+      if [ -n "$head" ] && [ "$rel" = newer ]; then
+        hs=${head%"${head#???????}"}
+        if [ "$force" -eq 1 ]; then target=$src_sha; tnote="marker $hs unknown to the source → "
+        else state=blocked; note="its marker names $hs, a commit the source does not have — run --to-git from a newer login, or --force (clone at the source HEAD)"; fi
+      elif [ -z "$head" ]; then tnote='unversioned copy → '
+      fi
+      if [ "$state" != blocked ]; then
+        cedits=$(copy_edits "$d" "$owner" "$target")
+        if [ -n "$cedits" ] && [ "$force" -eq 0 ]; then
+          state=blocked; note="local edits: ${cedits% } — --force converts anyway (the old copy dir keeps them)"
+        else
+          state=to-git; note="${tnote}clone at $(gitq "$src" rev-parse --short "$target") · origin $origin"
+          [ -n "$cedits" ] && note="$note · local edits left in the old copy (forced): ${cedits% }"
+        fi
+      fi
+    fi
+  fi
+  plan="$plan$login|$rd|$owner|$shape|$head|$n|$state|$note|$(echo $ents | tr ' ' ',')|$target
 "
 done
 
@@ -260,12 +378,13 @@ if [ -n "$only" ]; then
   done
 fi
 
-total=0 ncur=0 ndrift=0 nblock=0 driftlist=''
-while IFS='|' read -r login rd owner shape head n state note ents; do
+total=0 ncur=0 ndrift=0 nblock=0 nskipgit=0 driftlist=''
+while IFS='|' read -r login rd owner shape head n state note ents target; do
   [ -n "$login" ] || continue
   total=$((total + 1))
   case "$state" in
     current) ncur=$((ncur + 1)) ;;
+    skip)    nskipgit=$((nskipgit + 1)) ;;
     blocked) nblock=$((nblock + 1)); driftlist="$driftlist $login:$n(blocked)" ;;
     *)       ndrift=$((ndrift + 1)); driftlist="$driftlist $login:$n" ;;
   esac
@@ -287,7 +406,7 @@ if [ "$total" -eq 0 ]; then
   exit 0
 fi
 say "$(printf '%-12s %-5s %-8s %6s  %s' login shape head drift state)"
-while IFS='|' read -r login rd owner shape head n state note ents; do
+while IFS='|' read -r login rd owner shape head n state note ents target; do
   [ -n "$login" ] || continue
   hs=${head%"${head#???????}"}
   say "$(printf '%-12s %-5s %-8s %6s  %s%s' "$login" "$shape" "${hs:--}" "$n" "$state" "${note:+ — $note}")"
@@ -296,16 +415,135 @@ $plan
 EOF
 
 if [ "$dry" -eq 1 ]; then
-  say "other logins on this machine: $total · $ncur current · $ndrift to sync · $nblock blocked (dry run — nothing changed)"
+  if [ "$togit" -eq 1 ]; then
+    say "other logins on this machine: $total · $ndrift to convert · $nskipgit already git checkouts · $nblock blocked (dry run — nothing changed)"
+  else
+    say "other logins on this machine: $total · $ncur current · $ndrift to sync · $nblock blocked (dry run — nothing changed)"
+  fi
   if [ "$nblock" -gt 0 ]; then exit 4; elif [ "$ndrift" -gt 0 ]; then exit 1; else exit 0; fi
 fi
 
 # --- act ---------------------------------------------------------------------
 root_ok() { [ -z "$SUDO" ] || $SUDO true 2>/dev/null; }
 bundle_made=0
+make_bundle() {
+  [ "$bundle_made" -eq 1 ] && return 0
+  gitq "$src" bundle create "$STAGE/fleet.bundle" HEAD >/dev/null 2>&1 && chmod a+r "$STAGE/fleet.bundle" && bundle_made=1
+}
+# kick_daemons <login> <owner> <home> — restart that login's daemons: the
+# system-domain com.claude-fleet.<login>.* LaunchDaemons and any gui-domain
+# LaunchAgents under its home. Sets kicked / kickfail / spin.
+kick_daemons() {
+  kicked=0 kickfail=0 spin=0
+  for p in "$DAEMON_DIR"/com.claude-fleet."$1".*.plist; do
+    [ -f "$p" ] || continue
+    label=$(basename "$p" .plist)
+    case "$label" in *.spinner) spin=1 ;; esac
+    if root_ok && $SUDO $LAUNCHCTL kickstart -k "system/$label" >/dev/null 2>&1; then kicked=$((kicked + 1)); else kickfail=$((kickfail + 1)); fi
+  done
+  uid=$(id -u "$2" 2>/dev/null)
+  for p in "$3"/Library/LaunchAgents/com.claude-fleet.*.plist; do
+    [ -f "$p" ] && [ -n "$uid" ] || continue
+    label=$(basename "$p" .plist)
+    case "$label" in *.spinner) spin=1 ;; esac
+    pre=$SUDO; [ "$2" = "$me" ] && pre=''
+    if $pre $LAUNCHCTL kickstart -k "gui/$uid/$label" >/dev/null 2>&1; then kicked=$((kicked + 1)); else kickfail=$((kickfail + 1)); fi
+  done
+}
+# spinner_msg <owner> → " · WARN …" unless exactly one tmux-spinner.sh is alive
+spinner_msg() {
+  spinmsg=''
+  [ "$spin" -eq 1 ] && command -v "$PGREP" >/dev/null 2>&1 || return 0
+  tries=0 alive=0
+  while [ "$tries" -lt 5 ]; do
+    alive=$($PGREP -u "$1" -f 'tmux-spinner\.sh' 2>/dev/null | wc -l | tr -d ' ')
+    [ "$alive" -eq 1 ] && break
+    tries=$((tries + 1)); sleep 1
+  done
+  [ "$alive" -eq 1 ] || spinmsg=" · WARN $alive tmux-spinner.sh alive (want 1)"
+}
+
+# The owner-side half of --to-git: one shell, run AS THE LOGIN, so the clone is
+# built with a sane umask and the login's own HOME (sudo -u keeps the caller's
+# umask — 077 on macOS — and a clone built under it is unreadable to every other
+# login, this script included). Nothing under the copy dir is deleted: a failure
+# before the swap removes only the half-built clone; a failed second rename puts
+# the copy back.
+if [ "$togit" -eq 1 ]; then
+  cat > "$STAGE/to-git.sh" <<'EOS'
+#!/bin/sh
+# to-git.sh <old> <new> <bundle> <target> <branch> <origin> <carry-list> <backup> <mode>
+set -u
+old=$1 new=$2 bundle=$3 target=$4 branch=$5 origin=$6 carry=$7 bak=$8 mode=$9
+umask 022
+cd / || exit 1
+HOME=$(dirname "$(dirname "$old")"); export HOME
+fail() { printf 'to-git: %s\n' "$1" >&2; rm -rf "$new"; exit 1; }
+[ -e "$new" ] && fail "$new already exists"
+mkdir "$new" && chmod "$mode" "$new" || fail "cannot create $new"
+g() { git -c safe.directory='*' -C "$new" "$@"; }
+git -c safe.directory='*' init -q "$new" || fail 'git init failed'
+g symbolic-ref HEAD "refs/heads/$branch" || fail 'cannot name the branch'
+g fetch --quiet "$bundle" HEAD || fail 'fetch from the bundle failed'
+g reset -q --hard "$target" || fail "checkout of $target failed"
+g remote add origin "$origin" || fail 'cannot set origin'
+g config "branch.$branch.remote" origin && g config "branch.$branch.merge" "refs/heads/$branch" || fail 'cannot set upstream'
+if [ -s "$carry" ]; then
+  rsync -a --files-from="$carry" "$old/" "$new/" || fail 'carrying the local files failed'
+fi
+mkdir -p "$new/logs"
+mv "$old" "$bak" || fail "cannot move $old aside"
+mv "$new" "$old" || { mv "$bak" "$old"; rm -rf "$new"; printf 'to-git: cannot move the clone into place; %s restored\n' "$old" >&2; exit 1; }
+exit 0
+EOS
+  chmod a+r "$STAGE/to-git.sh"
+fi
+# convert_login — --to-git for the login the act loop stands on (its variables).
+convert_login() {
+  tshort=$(gitq "$src" rev-parse --short "$target")
+  ok=1 why='' swapped=0
+  make_bundle || { ok=0; why='bundling the source failed'; }
+  carry="$STAGE/carry.$login"
+  if [ "$ok" -eq 1 ]; then
+    copy_files "$rd" "$owner" | grep -v -F -x -f "$(tracked_at "$target")" > "$carry"
+    chmod a+r "$carry"
+  fi
+  new="$home/.claude/fleet.to-git.$$"
+  bak="$home/.claude/fleet.copy-$(date +%Y%m%d)"
+  i=1 base=$bak
+  while [ -e "$bak" ]; do i=$((i + 1)); bak="$base-$i"; done
+  # GNU stat FIRST: on GNU `stat -f` is filesystem status and exits 0 with the
+  # wrong output; `stat -c` errors cleanly on BSD (see fleet-lib.sh's mtime read)
+  mode=$(stat -c %a "$rd" 2>/dev/null || stat -f %Lp "$rd" 2>/dev/null); mode=${mode:-755}
+  if [ "$ok" -eq 1 ]; then
+    if ( cd / && $as sh "$STAGE/to-git.sh" "$rd" "$new" "$STAGE/fleet.bundle" "$target" "$branch" "$origin" "$carry" "$bak" "$mode" ); then
+      swapped=1
+    else ok=0; why='the conversion failed before the swap'; fi
+  fi
+  kicked=0 kickfail=0 spin=0
+  [ "$ok" -eq 1 ] && kick_daemons "$login" "$owner" "$home"
+  if [ "$ok" -eq 1 ]; then
+    [ "$(ogit "$owner" "$rd" rev-parse HEAD 2>/dev/null)" = "$target" ] || { ok=0; why="HEAD is not $tshort"; }
+    [ -z "$(ogit "$owner" "$rd" status --porcelain --untracked-files=no 2>/dev/null)" ] || { ok=0; why="${why:+$why · }tracked files dirty"; }
+    for f in fleet.conf logs; do
+      [ -e "$bak/$f" ] && [ ! -e "$rd/$f" ] && { ok=0; why="${why:+$why · }$f did not carry over"; }
+    done
+  fi
+  spinner_msg "$owner"
+  if [ "$ok" -eq 1 ]; then
+    nsync=$((nsync + 1))
+    kf=''; [ "$kickfail" -gt 0 ] && kf=" ($kickfail not loaded/failed)"
+    say "$login: converted to a git checkout @ $tshort · origin $origin · old copy kept at $bak · daemons kicked $kicked$kf$spinmsg"
+  else
+    nfail=$((nfail + 1))
+    if [ "$swapped" -eq 1 ]; then say "$login: FAILED — $why; the old copy is at $bak"
+    else say "$login: FAILED — $why; the copy install is untouched"; fi
+  fi
+}
+
 nsync=0 nskip=$nblock nfail=0 nsudo=0 sudo_cmds=''
-while IFS='|' read -r login rd owner shape head n state note ents <&3; do
-  [ "$state" = sync ] || continue
+while IFS='|' read -r login rd owner shape head n state note ents target <&3; do
+  case "$state" in sync|to-git) ;; *) continue ;; esac
   ents=$(printf '%s' "$ents" | tr ',' ' ')
   if [ "$owner" = "$me" ]; then as=''
   elif as_owner "$owner"; then as="$SUDO -u $owner"
@@ -313,11 +551,13 @@ while IFS='|' read -r login rd owner shape head n state note ents <&3; do
     nsudo=$((nsudo + 1)); nskip=$((nskip + 1))
     say "$login: needs sudo — skipped"
     fflag=''; [ "$force" -eq 1 ] && fflag=' --force'
+    [ "$togit" -eq 1 ] && fflag="$fflag --to-git --origin $origin"
     sudo_cmds="$sudo_cmds  sudo $SELF --source $src --logins $login$fflag
 "
     continue
   fi
   home=$(dirname "$(dirname "$rd")")
+  if [ "$togit" -eq 1 ]; then convert_login; continue; fi
   ok=1
 
   # 1. backup the entries about to change
@@ -347,10 +587,7 @@ while IFS='|' read -r login rd owner shape head n state note ents <&3; do
 
   # 3. align HEAD (git) / write the marker (copy)
   if [ "$ok" -eq 1 ] && [ "$shape" = git ]; then
-    if [ "$bundle_made" -eq 0 ]; then
-      gitq "$src" bundle create "$STAGE/fleet.bundle" HEAD >/dev/null 2>&1 && chmod a+r "$STAGE/fleet.bundle" && bundle_made=1
-    fi
-    { [ "$bundle_made" -eq 1 ] \
+    { make_bundle \
       && $as git -c safe.directory='*' -C "$rd" fetch --quiet "$STAGE/fleet.bundle" HEAD \
       && $as git -c safe.directory='*' -C "$rd" reset --quiet "$src_sha"; } || ok=0
   elif [ "$ok" -eq 1 ]; then
@@ -359,22 +596,7 @@ while IFS='|' read -r login rd owner shape head n state note ents <&3; do
 
   # 4. restart that login's daemons
   kicked=0 kickfail=0 spin=0
-  if [ "$ok" -eq 1 ]; then
-    for p in "$DAEMON_DIR"/com.claude-fleet."$login".*.plist; do
-      [ -f "$p" ] || continue
-      label=$(basename "$p" .plist)
-      case "$label" in *.spinner) spin=1 ;; esac
-      if root_ok && $SUDO $LAUNCHCTL kickstart -k "system/$label" >/dev/null 2>&1; then kicked=$((kicked + 1)); else kickfail=$((kickfail + 1)); fi
-    done
-    uid=$(id -u "$owner" 2>/dev/null)
-    for p in "$home"/Library/LaunchAgents/com.claude-fleet.*.plist; do
-      [ -f "$p" ] && [ -n "$uid" ] || continue
-      label=$(basename "$p" .plist)
-      case "$label" in *.spinner) spin=1 ;; esac
-      pre=$SUDO; [ "$owner" = "$me" ] && pre=''
-      if $pre $LAUNCHCTL kickstart -k "gui/$uid/$label" >/dev/null 2>&1; then kicked=$((kicked + 1)); else kickfail=$((kickfail + 1)); fi
-    done
-  fi
+  [ "$ok" -eq 1 ] && kick_daemons "$login" "$owner" "$home"
 
   # 5. verify
   why=''
@@ -386,16 +608,7 @@ while IFS='|' read -r login rd owner shape head n state note ents <&3; do
     [ -z "$(ogit "$owner" "$rd" status --porcelain --untracked-files=no 2>/dev/null)" ] || { ok=0; why="${why:+$why · }tracked files dirty"; }
   fi
   [ "$ok" -eq 1 ] || [ -n "$why" ] || why="a sync step failed"
-  spinmsg=''
-  if [ "$spin" -eq 1 ] && command -v "$PGREP" >/dev/null 2>&1; then
-    tries=0 alive=0
-    while [ "$tries" -lt 5 ]; do
-      alive=$($PGREP -u "$owner" -f 'tmux-spinner\.sh' 2>/dev/null | wc -l | tr -d ' ')
-      [ "$alive" -eq 1 ] && break
-      tries=$((tries + 1)); sleep 1
-    done
-    [ "$alive" -eq 1 ] || spinmsg=" · WARN $alive tmux-spinner.sh alive (want 1)"
-  fi
+  spinner_msg "$owner"
   if [ "$ok" -eq 1 ]; then
     nsync=$((nsync + 1))
     kf=''; [ "$kickfail" -gt 0 ] && kf=" ($kickfail not loaded/failed)"
@@ -408,7 +621,11 @@ done 3<<EOF
 $plan
 EOF
 
-say "other logins on this machine: $nsync synced / $nskip skipped · $ncur already current"
+if [ "$togit" -eq 1 ]; then
+  say "other logins on this machine: $nsync converted / $nskip skipped · $nskipgit already git checkouts"
+else
+  say "other logins on this machine: $nsync synced / $nskip skipped · $ncur already current"
+fi
 if [ -n "$sudo_cmds" ]; then
   say "no passwordless sudo for $nsudo login(s) — run as an admin:"
   printf '%s' "$sudo_cmds"

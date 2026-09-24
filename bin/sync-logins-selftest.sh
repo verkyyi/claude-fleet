@@ -26,6 +26,15 @@
 #                  synced (not FAILED) and --summary reports current (issue #1115)
 #   G. usage       --logins filter, an unknown login (exit 2), a non-git source
 #                  (exit 3)
+#   I. --to-git    a copy install becomes a clone at the commit its marker names
+#                  (an unmarked one at the source's HEAD): origin = the source's
+#                  origin as https (or --origin), fleet.conf / logs / local files
+#                  carried, caches + marker left behind, the old dir kept whole as
+#                  fleet.copy-<date>, daemons kicked, clean status; a checkout is
+#                  skipped; local edits block (--force converts); the plain sync
+#                  then moves the new checkout forward; sudo / no-sudo paths;
+#                  --summary --to-git and a source without an https origin refuse
+#                  (issue #1121)
 #
 # Exit 0 = pass.
 set -uo pipefail
@@ -312,5 +321,116 @@ hrun_nosudo() { OUT=$(PATH="$WORK/gshim:$PATH" FLEET_SYNC_LOGINS_ME=someone-else
 hrun_nosudo
 not_contains "no sudo: does not claim current" "$OUT" "1 current"
 eq "no sudo: an unread checkout is drifted, not a copy" "1 other · 0 current · 1 drifted (alice:0)" "$OUT"
+
+# ============================================================================
+# I. --to-git — a copy install becomes a clone (issue #1121)
+# ============================================================================
+# bob is a copy whose marker names C5 (two behind C7); give it the local state a
+# real copy install carries: conf, a conf backup, logs, an untracked local file,
+# caches. erin is an UNMARKED copy of the current tree. frank has a local edit
+# the source never saw; gina's marker names a commit the source lacks.
+C5=$(g "$SRC" rev-parse HEAD~2)
+eq "to-git: bob's marker is C5" "$C5" "$(awk '{print $1}' "$B/.fleet-synced-from")"
+echo 'log line' > "$B/logs/x.log"; echo 'mine' > "$B/conf/local.txt"; echo 'old conf' > "$B/fleet.conf.bak-x"
+mkdir -p "$B/bin/__pycache__"; echo 'c' > "$B/bin/__pycache__/m.pyc"; echo 'ds' > "$B/bin/.DS_Store"
+touch "$WORK/daemons/com.claude-fleet.bob.spinner.plist"
+E="$H/erin/.claude/fleet"; mkdir -p "$E"; for e in bin conf; do cp -Rp "$SRC/$e" "$E/"; done
+echo 'FLEET_REPO=erin/z' > "$E/fleet.conf"
+F="$H/frank/.claude/fleet"; mkdir -p "$F"; for e in bin conf; do cp -Rp "$SRC/$e" "$F/"; done
+printf '%s me now\n' "$C7" > "$F/.fleet-synced-from"; echo 'my edit' > "$F/bin/a.sh"
+GI="$H/gina/.claude/fleet"; mkdir -p "$GI"; cp -Rp "$SRC/bin" "$GI/"
+printf '%s me now\n' 0123456789abcdef0123456789abcdef01234567 > "$GI/.fleet-synced-from"
+
+run --source "$SRC" --to-git --summary
+eq "to-git --summary: exclusive, exit 2" 2 "$RC"
+run --source "$SRC" --to-git --dry-run
+eq "to-git: no https origin on the source → exit 3" 3 "$RC"
+contains "to-git: says how" "$OUT" "pass --origin"
+g "$SRC" remote add origin git@github.com:o/r.git
+
+before=$(snap)
+run --source "$SRC" --to-git --dry-run
+eq "to-git dry-run: blocked logins → exit 4" 4 "$RC"
+ok "to-git dry-run: a checkout is skipped" 'printf "%s\n" "$OUT" | grep -q "^alice  *git .* skip — already a git checkout"'
+ok "to-git dry-run: bob converts at its marker, origin rewritten to https" 'printf "%s\n" "$OUT" | grep -q "^bob  *copy .* to-git — clone at $(g "$SRC" rev-parse --short "$C5") · origin https://github.com/o/r.git"'
+ok "to-git dry-run: an unmarked copy converts at the source HEAD" 'printf "%s\n" "$OUT" | grep -q "^erin  *copy .* to-git — unversioned copy → clone at $(g "$SRC" rev-parse --short "$C7")"'
+ok "to-git dry-run: a local edit blocks, named" 'printf "%s\n" "$OUT" | grep -q "^frank  *copy .* blocked — local edits: bin/a.sh"'
+ok "to-git dry-run: a marker the source lacks blocks" 'printf "%s\n" "$OUT" | grep -q "^gina  *copy .* blocked — its marker names 0123456, a commit the source does not have"'
+contains "to-git dry-run: tail counts" "$OUT" "5 · 2 to convert · 1 already git checkouts · 2 blocked (dry run — nothing changed)"
+eq "to-git dry-run: nothing changed" "$before" "$(snap)"
+
+: > "$WORK/launchctl.log"
+run --source "$SRC" --to-git --logins bob,erin
+ok "to-git act: exit 0" '[ "$RC" -eq 0 ]'
+contains "to-git act: bob line" "$OUT" "bob: converted to a git checkout @ $(g "$SRC" rev-parse --short "$C5") · origin https://github.com/o/r.git · old copy kept at $H/bob/.claude/fleet.copy-"
+contains "to-git act: final line" "$OUT" "other logins on this machine: 2 converted / 0 skipped · 0 already git checkouts"
+ok "bob: is a checkout now" '[ -d "$B/.git" ]'
+eq "bob: HEAD = its marker's commit" "$C5" "$(g "$B" rev-parse HEAD)"
+eq "bob: on the source's branch" "master" "$(g "$B" symbolic-ref --short HEAD)"
+eq "bob: origin is the public https URL" "https://github.com/o/r.git" "$(g "$B" remote get-url origin)"
+eq "bob: upstream set" "origin" "$(g "$B" config branch.master.remote)"
+eq "bob: tracked tree clean" "" "$(g "$B" status --porcelain --untracked-files=no)"
+eq "bob: tracked file at the marker's version" "v5" "$(cat "$B/bin/a.sh")"
+ok "bob: the full tree, not the copy's subset" '[ -f "$B/commands/c.md" ] && [ -f "$B/README.md" ]'
+eq "bob: fleet.conf carried" "FLEET_REPO=bob/y" "$(cat "$B/fleet.conf")"
+eq "bob: conf backup carried" "old conf" "$(cat "$B/fleet.conf.bak-x")"
+eq "bob: logs carried" "log line" "$(cat "$B/logs/x.log")"
+eq "bob: untracked local file carried" "mine" "$(cat "$B/conf/local.txt")"
+ok "bob: local file is untracked, not lost" 'g "$B" status --porcelain | grep -q "^?? conf/local.txt"'
+ok "bob: marker and caches left behind" '[ ! -e "$B/.fleet-synced-from" ] && [ ! -e "$B/bin/__pycache__" ] && [ ! -e "$B/bin/.DS_Store" ]'
+bakc=$(ls -d "$H"/bob/.claude/fleet.copy-* | head -1)
+eq "bob: old copy kept whole" "" "$(for f in bin/a.sh fleet.conf .fleet-synced-from logs/x.log bin/__pycache__/m.pyc; do [ -f "$bakc/$f" ] || echo "missing $f"; done)"
+ok "bob: no half-built clone left" '[ -z "$(ls -d "$H"/bob/.claude/fleet.to-git.* 2>/dev/null)" ]'
+eq "erin: HEAD = source HEAD (unmarked copy)" "$C7" "$(g "$E" rev-parse HEAD)"
+eq "erin: fleet.conf carried" "FLEET_REPO=erin/z" "$(cat "$E/fleet.conf")"
+ok "erin: logs dir exists even though the copy had none" '[ -d "$E/logs" ]'
+contains "to-git: bob's daemons kicked" "$(cat "$WORK/launchctl.log")" "kickstart -k system/com.claude-fleet.bob.spinner"
+ok "to-git: staging cleaned up" '[ -z "$(ls "$WORK/tmp")" ]'
+
+run --source "$SRC" --to-git --dry-run --logins bob,erin
+eq "to-git rerun: nothing to convert, exit 0" 0 "$RC"
+contains "to-git rerun: both skipped as checkouts" "$OUT" "2 · 0 to convert · 2 already git checkouts · 0 blocked"
+
+# the converted login is an ordinary checkout to the plain sync
+run --source "$SRC" --dry-run --logins bob
+eq "after to-git: plain dry-run sees a checkout behind" 1 "$RC"
+ok "after to-git: bob is git, 2 behind" 'printf "%s\n" "$OUT" | grep -q "^bob  *git .* sync — 2 commit(s) behind"'
+run --source "$SRC" --logins bob
+eq "after to-git: plain sync lands" 0 "$RC"
+eq "after to-git: bob at the source HEAD" "$C7" "$(g "$B" rev-parse HEAD)"
+eq "after to-git: fleet.conf still there" "FLEET_REPO=bob/y" "$(cat "$B/fleet.conf")"
+
+# local edits: blocked, then forced — the old copy keeps the edit
+run --source "$SRC" --to-git --logins frank
+eq "to-git edit: exit 4" 4 "$RC"
+ok "to-git edit: untouched" '[ ! -e "$F/.git" ] && [ "$(cat "$F/bin/a.sh")" = "my edit" ]'
+run --source "$SRC" --to-git --logins frank --force
+ok "to-git edit forced: exit 0" '[ "$RC" -eq 0 ]'
+contains "to-git edit forced: says what it left behind" "$OUT" "local edits left in the old copy (forced): bin/a.sh"
+eq "to-git edit forced: the clone's file wins" "v7" "$(cat "$F/bin/a.sh")"
+ok "to-git edit forced: the old copy keeps the edit" 'grep -qx "my edit" "$H"/frank/.claude/fleet.copy-*/bin/a.sh'
+
+# another owner: through the sudo prefix; without sudo nothing changes, exit 5
+HK="$H/hank/.claude/fleet"; mkdir -p "$HK"; cp -Rp "$SRC/bin" "$HK/"; printf '%s me now\n' "$C7" > "$HK/.fleet-synced-from"
+: > "$WORK/sudo.log"
+OUT=$(FLEET_SYNC_LOGINS_ME=someone-else FLEET_SYNC_LOGINS_SUDO="$WORK/shim/sudo -n" bash "$SL" --source "$SRC" --to-git --logins hank 2>&1); RC=$?
+ok "to-git sudo: exit 0" '[ "$RC" -eq 0 ]'
+eq "to-git sudo: converted" "$C7" "$(g "$HK" rev-parse HEAD)"
+ok "to-git sudo: the owner-side shell ran as the owner" 'grep -q -- "-n -u $(id -un) sh $WORK/tmp/.*/to-git.sh" "$WORK/sudo.log"'
+ok "to-git sudo: the copy was listed as the owner" 'grep -q -- "-n -u $(id -un) find $HK" "$WORK/sudo.log"'
+IV="$H/ivy/.claude/fleet"; mkdir -p "$IV"; cp -Rp "$SRC/bin" "$IV/"; printf '%s me now\n' "$C7" > "$IV/.fleet-synced-from"
+OUT=$(FLEET_SYNC_LOGINS_ME=someone-else FLEET_SYNC_LOGINS_SUDO="false" bash "$SL" --source "$SRC" --to-git --logins ivy 2>&1); RC=$?
+eq "to-git no sudo: exit 5" 5 "$RC"
+contains "to-git no sudo: prints the admin command with the mode" "$OUT" "sudo $SL --source $SRC --logins ivy --to-git --origin https://github.com/o/r.git"
+ok "to-git no sudo: nothing changed" '[ ! -e "$IV/.git" ]'
+# a marker the source cannot resolve: --force clones at the source HEAD
+run --source "$SRC" --to-git --logins gina --force
+ok "to-git unknown marker forced: exit 0" '[ "$RC" -eq 0 ]'
+contains "to-git unknown marker forced: says so" "$OUT" "gina: converted to a git checkout @ $(g "$SRC" rev-parse --short "$C7")"
+eq "to-git unknown marker forced: at the source HEAD" "$C7" "$(g "$GI" rev-parse HEAD)"
+# --origin overrides the source's origin
+run --source "$SRC" --to-git --origin https://example.com/x.git --logins ivy
+ok "to-git --origin: exit 0" '[ "$RC" -eq 0 ]'
+eq "to-git --origin: used as given" "https://example.com/x.git" "$(g "$IV" remote get-url origin)"
 
 echo "sync-logins-selftest OK ($CHECKS checks)"
