@@ -178,6 +178,13 @@ commands: `bin/fleet-doctor.sh` scans the head of each `~/.claude/commands/*.md`
 for `fleet skill · owner:` to report how many are installed. Keep it near the
 top (within the first few lines) so the scan finds it.
 
+The installer (`bin/fleet-install-apply.sh`, run by `/fleet-sync-install`) is
+stricter (issue #858): a file is installed only when one of its lines **is** the
+marker, exactly, with a single concrete owner word (`worker`, `hub`, `either`),
+outside any code fence. So this README, which only quotes the marker, and
+`_template.md`, whose owner is the `worker|hub|either` placeholder, are never
+installed as `/README` or `/_template`. Put the marker on its own line.
+
 ## `fleet-lib.sh` helpers a skill may use
 
 Already exposed (all cheap, `set -u`-safe — see `bin/fleet-lib.sh`):

@@ -6,10 +6,9 @@ The live-install maintenance skill: after claude-fleet's *own*
 changes land on master, this re-applies them to the **live install**
 (`~/.claude/fleet` — the checkout the daemons, hooks, and dash actually read).
 It **mutates the live install and this machine's Claude config**: fast-forwards
-`~/.claude/fleet`, reloads only the daemons that changed, re-merges the
-`settings-hooks.json` delta into `~/.claude/settings.json`, and installs
-new/changed `commands/*.md` into `~/.claude/commands/` (removing any renamed or
-retired ones). Idempotent — safe to
+`~/.claude/fleet`, then hands the move to `bin/fleet-install-apply.sh` — which
+reloads only the daemons that changed, re-merges the `settings-hooks.json` delta,
+and installs new/changed commands and skills (removing retired ones). Idempotent — safe to
 re-run; a no-op when the live install is already at master. Normally run from the
 hub pane, but it has no seat gate (issue #439) — the live install is machine-global.
 
@@ -17,7 +16,7 @@ hub pane, but it has no seat gate (issue #439) — the live install is machine-g
 #611): commands, `skills/` and the hook table ship as the `fleet` plugin, and
 `/plugin update` replaces them. What stays here either way is the half no plugin
 can do — `bin/`, `conf/` and the daemons, which live at the stable
-`~/.claude/fleet` the daemons and tmux binds read. Step 3b decides which.
+`~/.claude/fleet` the daemons and tmux binds read. The apply step decides which.
 
 The live install is **shared, machine-global tooling** every fleet uses, so this
 **runs from ANY fleet** — not only the one whose `$FLEET_REPO` is claude-fleet
@@ -87,316 +86,62 @@ checkout. That's what makes it safe to run from a fleet bound to a different rep
 
 ```sh
 before=$(git -C ~/.claude/fleet rev-parse HEAD)
-# Snapshot the PRE-SYNC conf right here — while HEAD is still `before` and the sha
-# is freshly in hand — into a durable FILE. Step 8's unbind-aware reload needs the
-# OLD conf to diff which binds were removed. Capturing it now (not re-deriving it
-# from `$before` several Bash calls later) is the fix for issue #295: a lost/empty
-# snapshot silently degraded the reload to "0 removed" while dropped binds (A/R/u)
-# stayed live on both servers. A conf that didn't exist at `before` (brand-new file)
-# legitimately yields an empty snapshot.
-beforeconf=$(mktemp)
-# BRACE the ref: this snippet runs in the operator's shell (zsh), and unbraced
-# "$before:conf/…" makes zsh apply history/variable MODIFIER parsing to `:c`,
-# mangling the ref to `<sha>onf/…` → `git show` fails → the `|| :` truncates the
-# snapshot to EMPTY → step 8 reports "no readable before-conf" and can't diff
-# removed binds (issue #325). "${before}:…" is safe in both zsh and bash.
-git -C ~/.claude/fleet show "${before}:conf/tmux-attention.conf" > "$beforeconf" 2>/dev/null || : > "$beforeconf"
 git -C ~/.claude/fleet pull --ff-only
 after=$(git -C ~/.claude/fleet rev-parse HEAD)
-echo "before=$before after=$after beforeconf=$beforeconf"
+echo "before=$before after=$after"
 ```
 
 If it refuses to fast-forward, **stop and report** — the live install diverged
 (someone edited it in place); resolve that by hand before re-running. If
 `before == after`, the live install was already current — say "already at master,
-nothing to sync" and **jump to step 8c** (the other logins can drift while this
-one is current); steps 3–8b are a no-op.
+nothing to sync" and **jump to step 4** (the other logins can drift while this
+one is current).
 
-Compute what changed between the two revs — this drives steps 3–8, so nothing
-reloads or re-merges unless it actually moved. Use `--name-status -M` so
-**renames** (`R old → new`) and **deletions** (`D old`) surface, not just the new
-paths — step 5 needs the old path to remove a retired command:
+## 3. Apply the move — ONE command (issue #1119)
 
-```sh
-git -C ~/.claude/fleet diff --name-status -M "$before" "$after"
-```
-
-## 2b. Migrate durable state to the per-fleet layout (idempotent — issue #181)
-
-The fleet keeps its durable state as **one directory per fleet** —
-`~/.config/claude-fleet/fleets/<session>/{conf,restore.map,bridge/,watch/,sweep.due}`.
-Run the migrator once, right after the fast-forward, so an estate written in the
-old flat layout (`<session>.conf`, `restore/<session>.map`,
-`issue-bridge/bridge_<slug>.*`, …) moves to the new one. It is **idempotent and
-safe to re-run** (already-migrated files are left in place), and the new bins
-DUAL-READ both layouts, so a fleet keeps working across the land→migrate window.
+Everything a move implies beyond the files themselves is one non-interactive
+script, the same one the install-sync daemon runs, so a hand sync and an
+automatic one cannot drift apart:
 
 ```sh
-bash ~/.claude/fleet/bin/fleet-migrate-layout.sh          # or --dry-run first to preview
+bash ~/.claude/fleet/bin/fleet-install-apply.sh --from "$before" --to "$after"
 ```
 
-## 3. Reload only the daemons that changed
+Driven by the `before..after` diff, so nothing reloads or re-merges unless it
+actually moved. One line per step (`<step>: …`), in this order:
 
-Most script-body changes need **no reload**: an *interval* daemon
-(collector / pr-refresh / diskguard) re-reads its script
-from disk on its next tick. Reload only when the diff (step 2) touched:
+- **layout** — the per-fleet state migrator (`fleet-migrate-layout.sh`, #181).
+- **daemons** — a changed `launchd/*.plist.tmpl` (or `systemd/` unit) is
+  re-rendered and reloaded (`bootout`+`bootstrap`; `daemon-reload`+restart); an
+  added one installed + loaded; a retired one unloaded + its plist removed; a
+  changed `bin/tmux-spinner.sh` kickstarts the KeepAlive spinner. A script-only
+  change reloads nothing — an interval daemon re-reads its script each tick. A
+  changed unit this login never installed is left alone. A login whose daemons
+  are system LaunchDaemons (`UserName`) keeps that shape; without passwordless
+  sudo it prints the admin commands instead.
+- **plugin** — on a plugin install, `claude plugin update fleet` replaces the
+  three passes below (both run when a copy install sits beside it). The update
+  reaches the NEXT session, not this one.
+- **hooks** — `settings-hooks.json` changed → `fleet-hooks-merge.py merge`
+  (identity merge, #818); its `replaced` / `removed …` / `appended` lines follow.
+- **commands** — added/changed fleet commands installed into
+  `~/.claude/commands/`, retired ones removed, personal ones never touched. The
+  gate (#858) is a line that **is** `<!-- fleet skill · owner: <owner> -->`,
+  outside a code fence — so `commands/README.md`, which only quotes the marker,
+  is never installed as a `/README` skill (and one an older sync left behind is
+  removed).
+- **skills** — each changed `skills/<name>/` mirrored whole (scripts + exec
+  bits); a personal skill that diverges is warned about and left alone.
+- **ui** — dash launcher or `conf/tmux-attention.conf` changed →
+  `fleet-ui-refresh.sh --all` on every live fleet, with `--from`'s conf as the
+  before-file for the unbind diff (#248, #295).
+- **repark** — stale sleeping-worker pages re-parked on every live fleet (#1064).
 
-- a **plist/timer** under `launchd/` or `systemd/` (an interval or arguments
-  changed) — reload that unit (macOS: `launchctl bootout` then `bootstrap`;
-  Linux: `systemctl --user daemon-reload` + restart the timer), **or**
-- the **KeepAlive spinner** (`bin/tmux-spinner.sh` /
-  `com.claude-fleet.spinner`) — it's long-lived, so
-  `launchctl kickstart -k gui/$(id -u)/com.claude-fleet.spinner`
-  (Linux: `systemctl --user restart claude-fleet-spinner.service`).
+The last line is `apply: ok …`, or `apply: PARTIAL …` with exit 1 — the `FAIL`
+lines above it name the step and what to do. Exit 2 is a usage error (`--to`
+must be the install's HEAD). `--dry-run` previews without changing anything.
 
-A **retired** daemon is the third case: a `D launchd/com.claude-fleet.<x>.plist.tmpl`
-(and its `systemd/claude-fleet-<x>.{service,timer}`) in the step-2 diff means the
-script it ran is gone too, so the loaded unit must be torn down, not reloaded —
-macOS: `launchctl bootout gui/$(id -u)/com.claude-fleet.<x>` then
-`rm -f ~/Library/LaunchAgents/com.claude-fleet.<x>.plist`; Linux:
-`systemctl --user disable --now claude-fleet-<x>.timer` then remove the unit files
-and `daemon-reload`. (Worked example: the #535 retirement of
-`com.claude-fleet.summarize` — the dash summarizer.) Report which unit you removed.
-
-An **added** daemon is the fourth case: an `A launchd/com.claude-fleet.<x>.plist.tmpl`
-(and its `systemd/claude-fleet-<x>.{service,timer}`) in the step-2 diff means a
-unit exists upstream that this machine has never loaded — it is NOT installed
-retroactively by the fast-forward, and `fleet-doctor.sh` will WARN on it until it
-is. Template + bootstrap it exactly like the install step (docs/INSTALL.md §6):
-macOS: substitute `__HOME__` + `__BREW_PREFIX__` (`$(brew --prefix)`, else
-`/opt/homebrew`) into `~/Library/LaunchAgents/com.claude-fleet.<x>.plist`, then
-`launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude-fleet.<x>.plist`;
-Linux: `sed s|__HOME__|$HOME|g` the unit files into `~/.config/systemd/user/`,
-`systemctl --user daemon-reload`, `systemctl --user enable --now claude-fleet-<x>.timer`.
-(Worked example: the #551 addition of `com.claude-fleet.quotawatch` — the
-pre-emptive account rotation's own 60s tick; it is a no-op on a machine without
-`CCQUOTA_HUB_URL` + an accounts pool, so loading it everywhere is safe.) Report
-which unit you added, then confirm with `bin/fleet-doctor.sh`.
-
-If the diff touched none of these, say "no daemon reload needed" and move on.
-
-## 3b. Plugin install? Then steps 4, 5 and 5b collapse to `/plugin update`
-
-The Claude-Code-side surface — the fleet commands, the `skills/` tree and the
-hook table — also ships as a **Claude Code plugin** (issue #611). When it is
-installed, Claude Code owns updating all three and the three hand-rolled passes
-below are not just unnecessary, they would fight it. Check once:
-
-```sh
-# the cache path is <config>/plugins/cache/<marketplace>/<plugin>/<version>/ and
-# the version dir moves on every update, so glob it
-ls -d ~/.claude/plugins/cache/*/fleet/*/commands/fleet-claim.md 2>/dev/null | head -1
-```
-
-- **A path printed → plugin install.** Run `/plugin update fleet` (or
-  `claude plugin update fleet`) and **skip steps 4, 5 and 5b entirely**. Steps 2,
-  3 and 7+8 still apply: `bin/`, `conf/` and the daemons are machine-level and
-  live at the stable `~/.claude/fleet`, which no plugin can update. Say in the
-  report which passes the plugin covered.
-  - ⚠️ **The current session keeps the version it started with.** A plugin update
-    reaches the session *after* this one — so a command whose text changed in this
-    sync takes effect on the next session, not this turn.
-  - If the fleet's own marketplace is registered with `"autoUpdate": true` (see
-    `docs/INSTALL.md`), a later session picks the update up on its own; the
-    explicit `/plugin update` is how you get it NOW.
-- **Nothing printed → copy install** (the historic path, still fully supported).
-  Run steps 4, 5 and 5b as written below.
-
-Both install paths may be present at once; they coexist, and the bare
-`/fleet-claim` of the copy install wins. In that case run the passes below — the
-copy is what those sessions resolve — and `/plugin update` as well.
-
-## 4. Re-merge the settings-hooks delta (only if it changed)
-
-If the diff (step 2) touched `hooks/settings-hooks.json`, re-merge the table into
-`~/.claude/settings.json` with the ONE merge script — never a hand-rolled jq `+=`:
-
-```sh
-python3 ~/.claude/fleet/bin/fleet-hooks-merge.py merge
-```
-
-It merges by **identity** — `(event, matcher, script basename)` — not by command
-string (issue #818). A fleet hook whose command text changed (say its interpreter
-went from `/opt/homebrew/bin/python3` to `python3`) is **replaced in place**, not
-appended beside the old one; extra copies of one identity collapse to one; a
-fleet-path hook the table no longer wires (a retired script, or a matcher that
-changed) is removed; anything that is not a `~/.claude/fleet/{hooks,bin}/` hook
-— the user's own — is left byte-for-byte. It backs up to
-`settings.json.bak.<epoch>` before writing, writes nothing when nothing changed,
-and prints one line per entry it `replaced` / `removed dup` / `removed stale` /
-`appended` — relay those lines in the report. `--dry-run` previews.
-
-(The string-keyed append it replaces is how #818 happened: three guards each
-registered twice, every Bash / Edit / Artifact call ran its guard two times.)
-`fleet-doctor`'s `hooks` line reads the same identity rule and WARNs on a
-duplicate, a missing entry or a stale one, so run the merge even when the diff
-didn't touch the table if the doctor says so. Otherwise, if
-`settings-hooks.json` didn't change, skip this step.
-
-## 5. Install new/changed fleet commands — and remove retired ones
-
-If the step-2 diff touched any `commands/*.md`:
-
-- **Install** each added/modified skill — every `A`/`M` path, plus the **new**
-  path of each `R` rename — by copying it into `~/.claude/commands/`
-  (overwriting). Only files carrying the `<!-- fleet skill · owner: … -->`
-  marker; never touch the user's personal commands.
-- **Remove** each retired skill from `~/.claude/commands/` — the **old** path of
-  every `R` rename **and** every `D` deletion. A plain pull+copy only ever adds
-  files, so a renamed skill would linger under **both** names; delete the stale
-  bare-named one with `rm -f ~/.claude/commands/<old-basename>`. (Worked examples:
-  the #283 renames `claim.md → fleet-claim.md`, likewise `ship.md`, `blocked.md`,
-  `land.md`, `land-train.md` → `fleet-*.md`; and the #439 **deletion** of
-  `fleet-steward.md` — whose live copy must be `rm -f`'d, same D-pass.)
-
-If no `commands/*.md` changed, skip.
-
-## 5b. Install new/changed fleet skills — the `skills/` tree (issue #311)
-
-Fleet also ships **skills** (`skills/<name>/` dirs) — repo-versioned base
-skills that a fleet command or the agent may delegate to (e.g. `/fleet-handoff`
-runs the base `handoff` skill verbatim). They install into Claude Code's user
-skills dir `~/.claude/skills/`, the mirror of the `commands/` install — same
-marker gate, same never-clobber-personal rule.
-
-**A skill is a whole directory, not just its `SKILL.md`.** `skills/handoff/` is
-SKILL.md-only, but `skills/doc-preview/` ships `share.sh` + `server.py` +
-`render.mjs` beside its SKILL.md — and that SKILL.md invokes them at
-`~/.claude/skills/doc-preview/…`, so the scripts must land alongside it or the
-skill is a broken stub (issue #354). The unit of install/removal is therefore the
-whole `skills/<name>/` dir.
-
-If the step-2 diff touched any `skills/**` path, resolve the affected skill
-`<name>`s (the second path segment) and, for each:
-
-- **Install** each added/modified skill — any skill dir with an `A`/`M` file
-  (or the **new** path of an `R` rename) — by mirroring the **entire**
-  `skills/<name>/` dir into `~/.claude/skills/<name>/` (`mkdir -p` first, copy
-  every file with `cp -p` to preserve executable bits like `share.sh`). Gate on
-  the skill's `SKILL.md` carrying the `<!-- fleet skill -->` marker — that marker
-  (which lives in the SKILL.md) is how sync recognises a repo-managed skill among
-  the operator's **personal** skills, so it never touches a personal skill.
-- **Never clobber a personal skill.** Before overwriting an existing
-  `~/.claude/skills/<name>/`, check its `SKILL.md` for the `<!-- fleet skill -->`
-  marker:
-  - marker present → it's already fleet-managed; overwrite (a normal update).
-  - marker **absent** → it's a personal skill (or, on THIS machine's **first**
-    sync, the operator's pre-import copy an adoption issue absorbed). Overwrite
-    it **only if its `SKILL.md` is byte-identical to the repo's imported version**
-    (`cmp -s`); otherwise **warn and skip** the whole dir: surface that a personal
-    skill diverges from the repo copy and let the
-    operator reconcile by hand, never silently replacing their edits.
-
-  ```sh
-  # per changed skill dir (e.g. rel="doc-preview" or "handoff"):
-  src=~/.claude/fleet/skills/$rel          # source skill DIR (marker lives in SKILL.md)
-  dst=~/.claude/skills/$rel                # dest skill DIR
-  grep -qF '<!-- fleet skill -->' "$src/SKILL.md" || continue      # source gate
-  if [ -f "$dst/SKILL.md" ] && ! grep -qF '<!-- fleet skill -->' "$dst/SKILL.md" \
-       && ! cmp -s "$src/SKILL.md" "$dst/SKILL.md"; then
-    echo "skills: $rel is a personal skill that diverges from the repo copy — leaving it; reconcile by hand (e.g. adopt the marked repo version), then re-run" >&2
-  else
-    mkdir -p "$dst" && cp -p "$src"/* "$dst"/                      # mirror SKILL.md + any scripts
-  fi
-  ```
-
-- **Remove** each retired skill from `~/.claude/skills/` — a skill is retired
-  when its `SKILL.md` is deleted (`D`) or renamed away (the **old** path of an
-  `R`) — but, same gate as install, only when the live
-  `~/.claude/skills/<name>/SKILL.md` still carries the `<!-- fleet skill -->`
-  marker (never remove a personal skill). Remove the whole dir
-  (`rm -rf ~/.claude/skills/<name>` — the marker confirms it's fleet-managed) so
-  the supporting scripts go with it.
-
-If no `skills/**` path changed, skip.
-
-## 7 + 8. Refresh the UI on ALL live fleet servers — only what changed
-
-Steps 7 (respawn stale dash panes) and 8 (unbind-aware conf reload) both re-apply
-a landed **per-server** UI change — and the live install (`~/.claude/fleet`) is
-**shared by every fleet**, yet each fleet runs on its OWN tmux socket (issue #159).
-So a sync that touches the dash launcher or the conf must reach **every** live
-fleet's server, not just this one — otherwise every OTHER fleet keeps a stale dash
-pane + stale server binds until respawned by hand (issue #248). `bin/fleet-ui-refresh.sh
---all` fans BOTH refreshes out over `fleet_sockets` (the live fleets), running each
-per-server against its own `-L <label>`.
-
-**Why fan out here but nowhere else:** the one-fleet scoping rail stays for
-everything NON-UI (daemons in step 3, settings in step 4, commands + skills in
-step 5) — those touch machine-global or current-fleet state. Only the
-open dash pane and the server binds are held *per tmux server*, so only these two
-refreshes fan out across sockets.
-
-**What each refresh fixes:**
-- **Dash panes (step 7):** an already-open dash keeps running the **old**
-  `bin/tmux-dashboard.sh` — fzf reads its `--bind`/`--header` **once at launch**, so
-  new binds don't appear until it's reopened. The most-used dash is often the
-  **embedded pane in the hub/`plan` split** (not a `dash` window), so panes are
-  found by the `@dash=1` marker (`bin/tmux-dashboard.sh` sets it on launch), not a
-  name. NOTE: the `dash-*.sh` bind **targets** are re-exec'd on each keypress (fresh
-  `bash`), so they're live without a respawn — only the launcher needs one. The
-  backlog/config modals are `display-popup`s (reopened fresh), never stale.
-- **Conf binds (step 8):** `tmux source-file` only **adds/overwrites** bindings — it
-  **cannot remove** a `bind` deleted from the conf, so a dropped `bind` stays live in
-  every existing session until an explicit `unbind` (issue #139; #135 removed
-  `bind j` but `prefix+j` stayed bound). `fleet-ui-refresh.sh --conf` drives the same
-  `bin/tmux-conf-reload.sh` (now with `--socket`) per server: diff before/after,
-  `unbind-key` every removed `(table, key)`, **then** re-source.
-
-**Trigger — call it once, passing only the refreshes whose inputs changed:**
-
-```sh
-dash_changed=$(git -C ~/.claude/fleet diff --name-only "$before" "$after" \
-  | grep -qE '^bin/tmux-dashboard(-rows)?\.sh$' && echo 1)
-conf_changed=$(git -C ~/.claude/fleet diff --name-only "$before" "$after" \
-  | grep -qx 'conf/tmux-attention.conf' && echo 1)
-
-args=()
-[ -n "$dash_changed" ] && args+=(--dash)
-if [ -n "$conf_changed" ]; then
-  # Use the durable pre-sync snapshot captured in step 2 ($beforeconf) — do NOT
-  # re-derive it from `$before` here (a var that may be empty by now, or a git show
-  # that silently yields the post-sync conf → "0 removed" + stale binds, issue #295).
-  # If it came up empty while the conf DID change, the pre-sync conf was lost: the
-  # reload can't diff removals, so say so — don't leave it silent.
-  [ -s "$beforeconf" ] || echo "sync: pre-sync conf snapshot empty but conf/tmux-attention.conf changed — removed binds can't be diffed; the reload will report it, re-run with the real pre-change conf if a bind was dropped" >&2
-  args+=(--conf "$beforeconf" ~/.claude/fleet/conf/tmux-attention.conf ~/.tmux.conf)
-fi
-
-if [ ${#args[@]} -gt 0 ]; then
-  bash ~/.claude/fleet/bin/fleet-ui-refresh.sh --all "${args[@]}"
-fi
-[ -n "${beforeconf:-}" ] && rm -f "$beforeconf"
-```
-
-It prints a per-fleet line plus a summary (`refreshed N fleet(s); dash panes: X;
-conf reloaded: Y`) — surface those counts in step 9. `--dry-run` previews without
-touching anything. If neither the launcher nor the conf changed, skip this step
-entirely (leave every fleet's dash + binds alone). Note the fan-out reaches only
-CONFIGURED, live fleets (`fleet_sockets`) — never the user's ad-hoc default-socket
-tmux; the same before-conf is handed to every server (a fleet may have sourced a
-different vintage, but the live install is one checkout and the unbind is harmless
-when a key is already gone).
-
-## 8b. Re-park the already-sleeping workers on every live fleet (issue #1064)
-
-A sleeping worker's page is a `fleet-sleep.py park` process, exec'd when it fell
-asleep — so it keeps running the code it started with. After a sync that changed
-the page, those workers stay on the OLD page: input gate shut, no Wake button, no
-`@sleep_since` (a bare `z`). `repark` respawns only a page whose process predates
-the installed park code (or a dead pane), back-fills the age from the record's
-`created`, and never starts an agent. It is a no-op when every page is current, so
-run it on every sync:
-
-```sh
-for s in $(fleet_sockets); do bash ~/.claude/fleet/bin/fleet-sleep.sh repark "$s"; done
-```
-
-One JSON line per sleeping worker (`reparked` / `current` / `skip`) — surface the
-`reparked` count in step 9. `repark <sess> <@wid> --force` replaces a current page
-by hand.
-
-## 8c. Bring the machine's other logins along (issue #1069)
+## 4. Bring the machine's other logins along (issue #1069)
 
 A shared machine has one `~/.claude/fleet` **per login**, each with its own
 daemons — and this command only ever moved yours. On 2026-09-23 four of the Mac
@@ -425,17 +170,15 @@ Act on the exit code — it is the reason:
 
 `--dry-run` previews. Relay its last line
 (`other logins on this machine: N synced / M skipped · K already current`) in
-step 9.
+step 5.
 
-## 9. Report — keep it short
+## 5. Report — keep it short
 
-One line naming what synced: the `before → after` sha, and which of
-{daemons reloaded, settings re-merged, commands installed/removed, skills
-installed/removed (with any
-personal-skill-diverged warning), dash panes refreshed (with the count),
-conf reloaded (with the unbound count), sleeping pages re-parked (with the count),
-other logins synced / skipped (step 8c's line)} actually ran.
-If you stopped at step 1 (wrong fleet) or step 2 (diverged / already current),
+One line naming what synced: the `before → after` sha, the apply's final line,
+any of its lines that did something (a daemon reloaded / added / retired, hooks
+re-merged, commands or skills installed / removed, a personal-skill WARN, dash
+panes refreshed, conf reloaded, pages re-parked) or FAILed, and step 4's line.
+If you stopped at step 1 (not a checkout) or step 2 (diverged / already current),
 report that instead with the one-line reason.
 
 ---
