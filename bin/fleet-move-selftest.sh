@@ -220,7 +220,8 @@ spawn_source() {
 # (Claude Code's own encoding: / and . → -), so the tar-copy has something real.
 seed_transcript() {
   local home="$1" cwd="$2" sid="$3"
-  local pdir="$home/.claude/projects/$(printf '%s' "$cwd" | tr '/.' '--')"
+  local pdir
+  pdir="$home/.claude/projects/$(printf '%s' "$cwd" | tr '/.' '--')"
   mkdir -p "$pdir"
   printf '{"line":1}\n{"line":2}\n' > "$pdir/$sid.jsonl"
 }
@@ -286,7 +287,7 @@ WT3="$WORK/src-home/projects/repo-issue-44"
 git -C "$WORK/src-home/projects/repo" worktree add -q -b issue-44 "$WT3" origin/master
 git -C "$WT3" config user.email t@t.com; git -C "$WT3" config user.name Test
 seed_transcript "$WORK/src-home" "$WT3" "$SID3"
-w3=$(spawn_source b3 issue-44 "$SID3" "$WT3" 44 done)
+w3=$(spawn_source b3 issue-44 "$SID3" "$WT3" 44 'done')
 sleep 1
 out=$(HOME="$WORK/src-home" "$MOVE" b3 --to "$TO" --session "$LSRC" --keep-source 2>&1); rc=$?
 [ "$rc" -eq 0 ] || fail "--keep-source should still exit 0 on a verified move, got $rc: $out"
