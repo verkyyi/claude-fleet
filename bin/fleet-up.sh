@@ -268,6 +268,11 @@ if [ -n "$ADD_REPO" ]; then
     echo "fleet-up: added $ADD_REPO to fleet '$NAME'"
   fi
 fi
+# Whose fleet this is (issue #1099): the footer and the hub's border title draw
+# the login name from the server-level @login, stamped once here instead of a
+# `#(id -un)` fork every status-interval (#888). tmux's own #{user} would do it,
+# but only from 3.3 — the conf falls back to it when @login is unset.
+tmux -L "$SOCK" set -g @login "$(id -un)" 2>/dev/null || true
 # The retired repo filter (issue #1034): the dash always shows `all`, so a
 # `current-repo` file left by the old footer picker is dead state — drop it.
 rm -f "$FLEET_CONF_DIR/fleets/$NAME/current-repo" 2>/dev/null

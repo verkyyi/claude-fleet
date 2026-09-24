@@ -574,8 +574,10 @@ the fleet name and the dash's ⌃z) that narrowed the view to one repo; #1034 re
 it, since everything since #977/#997 assumes `all`. `fleet_current_repo` survives
 as a function that always answers `all`, so its readers (new session, restore,
 history, issue-file, backlog, raw-session) keep their `all` path unchanged; a stale
-`current-repo` file on disk is ignored, and `fleet-up.sh` deletes it. The footer is
-the bare `#S` in every fleet, and not a tap target.
+`current-repo` file on disk is ignored, and `fleet-up.sh` deletes it. The footer's
+middle chip is not a tap target, and since #1099 it names the login (`@login`,
+stamped by `fleet-up.sh` / `tmux-conf-reload.sh`; tmux 3.3's `#{user}` as the
+fallback), not the fleet — one fleet per login makes `#S` redundant.
 
 **No fleet switching (issue #980).** One fleet per login holds every repo (EPIC
 #977), so nothing detaches and reattaches to another
