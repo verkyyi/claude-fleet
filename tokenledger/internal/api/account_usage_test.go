@@ -60,7 +60,7 @@ func seedAccountUsageLedger(t testing.TB, st *store.Store, accounts int, hoursPe
 		if err := st.Enroll(ep, ep, "hash-"+ep); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := st.TouchEndpoint(ep, id, "test", true); err != nil {
+		if _, _, err := st.TouchEndpoint(ep, id, "test", true, nil); err != nil {
 			t.Fatal(err)
 		}
 		for si, src := range sources {

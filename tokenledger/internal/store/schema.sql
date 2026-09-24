@@ -97,6 +97,31 @@ CREATE TABLE IF NOT EXISTS endpoints (
   -- credentials, and on a shared box the other homes are unreadable.
   os_user       TEXT NOT NULL DEFAULT '',
 
+  -- This login's claude-fleet install, as reported by the agent from
+  -- fleet-install-version.sh (issue #157). An endpoint is the right row for it
+  -- for the same reason os_user is: the install lives in that login's
+  -- ~/.claude/fleet, and the machine you never log into is precisely the one
+  -- whose install falls behind unnoticed.
+  --
+  -- fleet_behind is NULLABLE ON PURPOSE. The script emits null when the count
+  -- could not be read (no upstream, fetch refused, not a checkout) and NULL is
+  -- the only honest storage for it: a 0 here would say "current" about an
+  -- install nobody could measure, which is claude-fleet#635 all over again.
+  -- fleet_fetched says whether that count was read against a freshly fetched
+  -- remote or the remote-tracking ref the install already had. fleet_seen_at
+  -- is when the AGENT ran the script, so a login that stopped reporting the
+  -- install (Claude logged out; agent downgraded) shows as stale rather than
+  -- presenting the last reading as current. Every column keeps its last value
+  -- across batches that do not carry the reading; see Store.TouchEndpoint.
+  fleet_head        TEXT NOT NULL DEFAULT '',
+  fleet_behind      INTEGER,
+  fleet_verdict     TEXT NOT NULL DEFAULT '',
+  fleet_follow      TEXT NOT NULL DEFAULT '',
+  fleet_follow_text TEXT NOT NULL DEFAULT '',
+  fleet_error       TEXT NOT NULL DEFAULT '',
+  fleet_fetched     INTEGER NOT NULL DEFAULT 0,
+  fleet_seen_at     TEXT,
+
   -- What this enrollment is FOR. 'agent' is a machine collecting usage;
   -- 'repo_shipper' is a cron job pushing repo progress and nothing else.
   --

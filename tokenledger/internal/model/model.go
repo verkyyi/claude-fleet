@@ -287,9 +287,17 @@ type Batch struct {
 	Collector    *CollectorStatus `json:"collector,omitempty"`
 	AccountUsage *AccountUsage    `json:"account_usage,omitempty"`
 	AgentVersion string           `json:"agent_version"`
-	Identity     Identity         `json:"identity"`
-	Events       []UsageEvent     `json:"events"`
-	Limits       *LimitsSnapshot  `json:"limits,omitempty"`
+	// FleetVersion is how far this login's claude-fleet install is behind its
+	// trunk, read from fleet-install-version.sh. On Batch, next to
+	// AgentVersion, rather than on Identity: Identity is reused by the guest
+	// batches for every subscription seen on the machine, and this is a
+	// property of the endpoint (the OS login), not of any subscription. Only
+	// the login-origin scan batch carries it; absent means "this batch does
+	// not say", never "no fleet" -- see FleetVersion.
+	FleetVersion *FleetVersion   `json:"fleet_version,omitempty"`
+	Identity     Identity        `json:"identity"`
+	Events       []UsageEvent    `json:"events"`
+	Limits       *LimitsSnapshot `json:"limits,omitempty"`
 
 	// Attribution travels on the first chunk of a scan, like Limits.
 	Attribution *Attribution `json:"attribution,omitempty"`
@@ -307,6 +315,43 @@ type Batch struct {
 	// two accounts at once", and treats the second as an endless stream of the
 	// first — 83 fabricated switches in four hours, here, before it was added.
 	AccountOrigin AccountOrigin `json:"account_origin,omitempty"`
+}
+
+// FleetVersion is one reading of `fleet-install-version.sh --json` on the
+// login the agent runs as: the claude-fleet install's head and how far it
+// trails the trunk, plus whether the install-sync daemon is still following.
+//
+// The key set and value shapes are the ones claude-fleet's
+// install-version-selftest.sh pins; this side does not re-derive any of them
+// (no second git comparison lives in this repository). Two contract points
+// matter here:
+//
+//   - Behind / Ahead are pointers because the script emits JSON null when the
+//     count could not be read (no upstream, fetch refused, not a checkout),
+//     with Verdict "UNKNOWN". A nil MUST stay nil through the hub: rendering
+//     it as 0 re-creates the "fetch failed, therefore current" bug
+//     (claude-fleet#635).
+//   - Fetched false means Behind was read against the remote-tracking ref the
+//     install already had, which can be up to a sync period old. Carried so
+//     the hub can say "12 (not fetched)" instead of presenting a stale count
+//     as fresh.
+//
+// Follow and Error are the script's own sentences for a reader and are never
+// parsed; they exist so the hub can put them in a tooltip.
+type FleetVersion struct {
+	Head          string `json:"head"`
+	Branch        string `json:"branch"`
+	Behind        *int   `json:"behind"`
+	Ahead         *int   `json:"ahead"`
+	Dirty         bool   `json:"dirty"`
+	Fetched       bool   `json:"fetched"`
+	Verdict       string `json:"verdict"`        // CURRENT BEHIND AHEAD DIVERGED UNKNOWN
+	FollowVerdict string `json:"follow_verdict"` // OK STUCK OFF UNSEEN UNKNOWN, or "" from an install too old to say
+	Follow        string `json:"follow,omitempty"`
+	Error         string `json:"error,omitempty"`
+	// ObservedAt is when the agent ran the script, which is not when the
+	// batch reached the hub: a spooled batch can be hours late.
+	ObservedAt time.Time `json:"observed_at"`
 }
 
 // AccountOrigin distinguishes the endpoint's own Claude Code login from a

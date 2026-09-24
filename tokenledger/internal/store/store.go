@@ -135,6 +135,17 @@ func migrate(db *sql.DB) error {
 		// Nullable with no default: NULL is "active", which is the correct
 		// state for every endpoint enrolled before retiring existed.
 		{"endpoints", "retired_at", "TEXT"},
+		// The login's claude-fleet install (issue #157). '' / NULL / 0 on every
+		// row written before the agent could report it, and the roster renders
+		// that as "never reported" rather than as a reading.
+		{"endpoints", "fleet_head", "TEXT NOT NULL DEFAULT ''"},
+		{"endpoints", "fleet_behind", "INTEGER"},
+		{"endpoints", "fleet_verdict", "TEXT NOT NULL DEFAULT ''"},
+		{"endpoints", "fleet_follow", "TEXT NOT NULL DEFAULT ''"},
+		{"endpoints", "fleet_follow_text", "TEXT NOT NULL DEFAULT ''"},
+		{"endpoints", "fleet_error", "TEXT NOT NULL DEFAULT ''"},
+		{"endpoints", "fleet_fetched", "INTEGER NOT NULL DEFAULT 0"},
+		{"endpoints", "fleet_seen_at", "TEXT"},
 	}
 	for _, a := range adds {
 		has, err := hasColumn(db, a.table, a.column)
@@ -357,6 +368,19 @@ type Endpoint struct {
 	BackfillLimit         string     `json:"backfill_limit,omitempty"`
 
 	LimitsUnavailable string `json:"limits_unavailable,omitempty"`
+
+	// The login's claude-fleet install, last reported by the agent (issue
+	// #157). FleetHead == "" is "never reported", which the roster draws as a
+	// dash; it is not the same thing as FleetBehind == nil, which is a reading
+	// whose count could not be taken and MUST render as "unknown", never as 0.
+	FleetHead       string     `json:"fleet_head"`
+	FleetBehind     *int       `json:"fleet_behind"`
+	FleetVerdict    string     `json:"fleet_verdict"`
+	FleetFollow     string     `json:"fleet_follow"`
+	FleetFollowText string     `json:"fleet_follow_text,omitempty"`
+	FleetError      string     `json:"fleet_error,omitempty"`
+	FleetFetched    bool       `json:"fleet_fetched"`
+	FleetSeenAt     *time.Time `json:"fleet_seen_at"`
 }
 
 // Enroll registers a new endpoint and stores only the hash of its token.
@@ -496,22 +520,32 @@ const endpointColumns = `
 	SELECT endpoint_id, account_uuid, label, hostname, os, arch, machine_id,
 	       cc_version, agent_version, os_user, team, enrolled_at, last_seen,
 	       dropped_pre_account, earliest_dropped, dropped_beyond_backfill,
-	       backfill_limit, limits_unavailable, retired_at`
+	       backfill_limit, limits_unavailable, retired_at,
+	       fleet_head, fleet_behind, fleet_verdict, fleet_follow, fleet_follow_text,
+	       fleet_error, fleet_fetched, fleet_seen_at`
 
 type rowScanner interface{ Scan(...any) error }
 
 func scanEndpoint(row rowScanner) (*Endpoint, error) {
 	var e Endpoint
 	var enrolled string
-	var lastSeen, account, earliest, retired sql.NullString
+	var lastSeen, account, earliest, retired, fleetSeen sql.NullString
+	var fleetBehind sql.NullInt64
 	err := row.Scan(&e.ID, &account, &e.Label, &e.Hostname, &e.OS, &e.Arch,
 		&e.MachineID, &e.CCVersion, &e.AgentVersion, &e.OSUser, &e.Team, &enrolled, &lastSeen,
 		&e.DroppedPreAccount, &earliest, &e.DroppedBeyondBackfill,
-		&e.BackfillLimit, &e.LimitsUnavailable, &retired)
+		&e.BackfillLimit, &e.LimitsUnavailable, &retired,
+		&e.FleetHead, &fleetBehind, &e.FleetVerdict, &e.FleetFollow, &e.FleetFollowText,
+		&e.FleetError, &e.FleetFetched, &fleetSeen)
 	if err != nil {
 		return nil, err
 	}
 	e.RetiredAt = parseNullTime(retired)
+	if fleetBehind.Valid {
+		n := int(fleetBehind.Int64)
+		e.FleetBehind = &n
+	}
+	e.FleetSeenAt = parseNullTime(fleetSeen)
 	e.AccountUUID = account.String
 	e.EnrolledAt, _ = time.Parse(rfc, enrolled)
 	if lastSeen.Valid {
@@ -539,7 +573,13 @@ func scanEndpoint(row rowScanner) (*Endpoint, error) {
 // prevWasLogin says whether the outgoing account had itself been established by
 // a login batch. Only then is a change a real logout/login; otherwise it is a
 // provisional guess being corrected, which is not a seam in the history.
-func (s *Store) TouchEndpoint(endpointID string, id model.Identity, agentVersion string, login bool) (prevAccount string, prevWasLogin bool, err error) {
+//
+// fleet is the login's claude-fleet reading when this batch carries one, and
+// nil when it does not. nil leaves the fleet_* columns exactly as they were:
+// the guest, limits and Codex batches of the same endpoint never carry it, and
+// letting them blank it would make the column flicker to "never reported"
+// several times a minute -- the same reason cc_version is COALESCEd above.
+func (s *Store) TouchEndpoint(endpointID string, id model.Identity, agentVersion string, login bool, fleet *model.FleetVersion) (prevAccount string, prevWasLogin bool, err error) {
 	var prev sql.NullString
 	if err := s.read.QueryRow(`SELECT account_uuid FROM endpoints WHERE endpoint_id = ?`,
 		endpointID).Scan(&prev); err != nil {
@@ -587,7 +627,40 @@ func (s *Store) TouchEndpoint(endpointID string, id model.Identity, agentVersion
 	if err != nil {
 		return "", false, fmt.Errorf("touch endpoint: %w", err)
 	}
+	if fleet != nil {
+		if err := s.touchFleetVersion(endpointID, fleet); err != nil {
+			return "", false, err
+		}
+	}
 	return prevAccount, prevWasLogin, nil
+}
+
+// touchFleetVersion writes one fleet-install-version reading onto the
+// endpoint, whole. A separate statement from the touch above on purpose: the
+// "absent batch keeps the old value" rule is then structural (the statement
+// does not run) rather than a COALESCE per column -- and fleet_behind could
+// not use that trick anyway, because for it NULL is a value the reading can
+// legitimately carry, not the marker for "did not say".
+func (s *Store) touchFleetVersion(endpointID string, fv *model.FleetVersion) error {
+	var behind any
+	if fv.Behind != nil {
+		behind = *fv.Behind
+	}
+	seen := fv.ObservedAt
+	if seen.IsZero() {
+		seen = time.Now()
+	}
+	_, err := s.write.Exec(`
+		UPDATE endpoints SET fleet_head = ?, fleet_behind = ?, fleet_verdict = ?,
+		       fleet_follow = ?, fleet_follow_text = ?, fleet_error = ?,
+		       fleet_fetched = ?, fleet_seen_at = ?
+		WHERE endpoint_id = ?`,
+		fv.Head, behind, fv.Verdict, fv.FollowVerdict, fv.Follow, fv.Error,
+		fv.Fetched, fmtTime(seen), endpointID)
+	if err != nil {
+		return fmt.Errorf("touch endpoint fleet version: %w", err)
+	}
+	return nil
 }
 
 // RecordEndpointAccount notes that this endpoint was seen running account,

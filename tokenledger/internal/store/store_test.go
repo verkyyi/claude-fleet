@@ -43,7 +43,7 @@ func seedAccount(t *testing.T, s *Store, account, endpoint string) {
 	if err := s.Enroll(endpoint, endpoint, "hash-"+endpoint); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.TouchEndpoint(endpoint, ident(account), "test", true); err != nil {
+	if _, _, err := s.TouchEndpoint(endpoint, ident(account), "test", true, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -165,7 +165,7 @@ func TestTouchEndpoint_ReportsPreviousAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	prev, prevWasLogin, err := s.TouchEndpoint("ep-1", ident("acct-a"), "v1", true)
+	prev, prevWasLogin, err := s.TouchEndpoint("ep-1", ident("acct-a"), "v1", true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestTouchEndpoint_ReportsPreviousAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	prev, prevWasLogin, err = s.TouchEndpoint("ep-1", ident("acct-b"), "v1", true)
+	prev, prevWasLogin, err = s.TouchEndpoint("ep-1", ident("acct-b"), "v1", true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

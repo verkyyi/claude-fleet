@@ -128,7 +128,7 @@ func enrollLabelled(t *testing.T, s *Store, account, endpoint, label string) {
 	if err := s.Enroll(endpoint, label, "hash-"+endpoint); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.TouchEndpoint(endpoint, ident(account), "test", true); err != nil {
+	if _, _, err := s.TouchEndpoint(endpoint, ident(account), "test", true, nil); err != nil {
 		t.Fatal(err)
 	}
 }

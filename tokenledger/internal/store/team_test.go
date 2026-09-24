@@ -110,7 +110,7 @@ func TestTouchEndpoint_CannotSetOrClearTeam(t *testing.T) {
 	if err := s.SetEndpointTeam("ep-1", "platform"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.TouchEndpoint("ep-1", ident("acct-1"), "v-test", true); err != nil {
+	if _, _, err := s.TouchEndpoint("ep-1", ident("acct-1"), "v-test", true, nil); err != nil {
 		t.Fatal(err)
 	}
 	eps, err := s.ListEndpoints("")

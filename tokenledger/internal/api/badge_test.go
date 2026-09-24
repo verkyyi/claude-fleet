@@ -27,7 +27,7 @@ func badgeServer(t *testing.T, public bool) *Server {
 	if err := st.Enroll("ep-1", "ep-1", "h1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := st.TouchEndpoint("ep-1", id, "test", true); err != nil {
+	if _, _, err := st.TouchEndpoint("ep-1", id, "test", true, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.SetEndpointTeam("ep-1", "platform"); err != nil {

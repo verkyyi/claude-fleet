@@ -26,7 +26,7 @@ func seedBadgeDB(t *testing.T, path string) {
 	if err := st.Enroll("ep-1", "ep-1", "hash-1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := st.TouchEndpoint("ep-1", id, "test", true); err != nil {
+	if _, _, err := st.TouchEndpoint("ep-1", id, "test", true, nil); err != nil {
 		t.Fatal(err)
 	}
 	cost := 1.5

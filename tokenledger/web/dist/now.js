@@ -34,6 +34,7 @@ import { collectorsCard, accountUsageCard, selectLive, liveUnknown } from './pro
 // cards, and #ops is already the fold.
 import { el, $ } from './lib/dom.js';
 import { fmtInt, fmtFull, shortProject, ago, windowOf } from './lib/format.js';
+import { fleetCell } from './lib/fleet.js';
 import { withChip } from './lib/state.js';
 import { ownerLine, splitMuted, worstSeverity } from './lib/findings.js';
 import { muteControls } from './lib/mute.js';
@@ -684,6 +685,7 @@ function rosterTable(endpoints, app, view) {
     el('thead', {}, el('tr', {},
       el('th', {}, t('endpoints.col.name')), el('th', {}, t('endpoints.col.subscription')), el('th', {}, t('endpoints.col.platform')),
       el('th', {}, t('endpoints.col.cc')), el('th', {}, t('endpoints.col.agent')),
+      el('th', { title: t('endpoints.fleetHint') }, t('endpoints.col.fleet')),
       el('th', {}, t('endpoints.col.lastSeen')),
       seam ? el('th', {}, t('endpoints.col.lastSwitch')) : null,
       el('th', {}, t('endpoints.col.excluded')))),
@@ -698,6 +700,7 @@ function rosterTable(endpoints, app, view) {
         el('td', {}, e.os ? `${e.os}/${e.arch}` : '—'),
         el('td', {}, e.cc_version || '—'),
         el('td', {}, e.agent_version || '—'),
+        fleetTd(e),
         el('td', { style: stale || retired ? 'color:var(--ink-3)' : '' },
           retired
             ? t('endpoints.retiredOn', { date: new Date(e.retired_at).toLocaleDateString() })
@@ -706,6 +709,20 @@ function rosterTable(endpoints, app, view) {
         el('td', { style: dropped ? '' : 'color:var(--ink-3)' },
           dropped ? t('endpoints.droppedTurns', { n: fmtInt(dropped) }) : '—'));
     }))));
+}
+
+// fleetTd is the claude-fleet column for one row: the login's install and how
+// far it trails the trunk (lib/fleet.js decides the words). A login that never
+// reported one gets a dash; a reading much older than the row's own last
+// report is greyed, the way "last seen" is, because the agent is still talking
+// and the install is not. STUCK / OFF from the install-sync daemon is a
+// warning glyph with the daemon's own sentence behind it.
+function fleetTd(e) {
+  const c = fleetCell(e);
+  if (!c) return el('td', { style: 'color:var(--ink-3)' }, '—');
+  return el('td', { title: c.title, style: c.stale ? 'color:var(--ink-3)' : '' },
+    c.text,
+    c.flag ? el('span', { style: 'color:var(--warning)', title: c.title }, ' ⚠') : null);
 }
 
 /** endpointRosterCard lists the fleet, hiding retired endpoints behind a

@@ -103,7 +103,7 @@ func (s *Server) ingest(ep *store.Endpoint, batch *model.Batch) (*model.IngestRe
 	// it turns every scan cycle into a fabricated switch.
 	login := batch.AccountOrigin == model.OriginLogin && id.Source == model.SourceClaude
 
-	prev, prevWasLogin, err := s.Store.TouchEndpoint(ep.ID, id, batch.AgentVersion, login)
+	prev, prevWasLogin, err := s.Store.TouchEndpoint(ep.ID, id, batch.AgentVersion, login, batch.FleetVersion)
 	if err != nil {
 		return nil, err
 	}

@@ -176,6 +176,9 @@ type Agent struct {
 	// sessions sit in the same checkouts.
 	repos repoResolver
 
+	// fleet caches this login's claude-fleet install reading between scans.
+	fleet fleetProbe
+
 	// consecutiveFailures backs the scan cadence off while the hub is
 	// unreachable. A failed cycle leaves the cursor unmoved, so the next scan
 	// re-reads everything — cheap once, wasteful every minute for an hour.
@@ -610,6 +613,11 @@ func (a *Agent) cycleClaude(ctx context.Context, id *model.Identity) error {
 			if !attribution.IsZero() {
 				batch.Attribution = &attribution
 			}
+			// So does the login's claude-fleet reading: it describes this OS
+			// login, which is what a login-origin batch speaks for. The guest
+			// batches below say nothing about it, and the hub keeps the last
+			// reading across them.
+			batch.FleetVersion = a.fleet.reading(ctx, a.cfg.Home)
 		}
 
 		err := a.spool.Enqueue(batch)

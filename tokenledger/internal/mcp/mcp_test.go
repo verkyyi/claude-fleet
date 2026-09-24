@@ -43,7 +43,7 @@ func seed(t *testing.T, st *store.Store, account, endpoint, cwd string, uuids ..
 			t.Fatal(err)
 		}
 	}
-	if _, _, err := st.TouchEndpoint(endpoint, id, "test", true); err != nil {
+	if _, _, err := st.TouchEndpoint(endpoint, id, "test", true, nil); err != nil {
 		t.Fatal(err)
 	}
 	evs := make([]model.UsageEvent, len(uuids))

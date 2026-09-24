@@ -286,6 +286,21 @@ export const en = {
   'endpoints.col.platform': 'Platform',
   'endpoints.col.cc': 'Claude Code',
   'endpoints.col.agent': 'Agent',
+  'endpoints.col.fleet': 'claude-fleet',
+  'endpoints.fleetHint': 'Which commit each login\'s claude-fleet install is on and how far that trails '
+    + 'the trunk, as that login\'s own fleet-install-version.sh reports it. "unknown" means the count '
+    + 'could not be read, which is not the same as zero; "(not fetched)" means it was read against the '
+    + 'remote ref the install already had, up to a sync period old. A dash is a login with no claude-fleet.',
+  'endpoints.fleet.behind': '{head} · {n} behind',
+  'endpoints.fleet.current': '{head} · current',
+  'endpoints.fleet.ahead': '{head} · ahead',
+  'endpoints.fleet.diverged': '{head} · diverged, {n} behind',
+  'endpoints.fleet.unknown': '{head} · unknown',
+  'endpoints.fleet.noFetch': '(not fetched)',
+  'endpoints.fleet.stuck': 'install-sync is stuck',
+  'endpoints.fleet.off': 'install-sync is off',
+  'endpoints.fleet.seenAgo': 'reported {ago}',
+  'endpoints.fleet.stale': 'reported {ago}, and not since — the agent is still reporting, the install is not',
   'endpoints.col.lastSeen': 'Last seen',
   'endpoints.col.excluded': 'Excluded',
   'endpoints.neverReported': 'never reported',
