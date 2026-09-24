@@ -12,7 +12,12 @@
 #   - that the run survives to the doctor's last check and prints nothing on
 #     stderr (see fleet-doctor-machine-selftest.sh for why both matter).
 #
-# Hermetic: fake uname/mdutil/launchctl/pmset/defaults/pgrep on PATH, scratch
+# The network row (issue #1081) is the one row that also runs on Linux: it is
+# pinned on both, and the Linux block asserts it renders there while the rest stay
+# silent.
+#
+# Hermetic: fake uname/mdutil/launchctl/pmset/defaults/pgrep/netstat/networksetup/ip
+# on PATH, scratch
 # HOME/TMPDIR/conf. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -87,6 +92,30 @@ fi
 exec /usr/bin/pgrep "\$@"
 SH
 chmod +x "$WORK/fakepath/uname" "$WORK/fakepath/mdutil" "$WORK/fakepath/pmset" "$WORK/fakepath/defaults" "$WORK/fakepath/pgrep"
+# --- fake netstat / networksetup / ip (issue #1081): the routing table and the
+# hardware-port list come from fixtures; every argv is recorded so the test can
+# prove the doctor only READ them (networksetup -listallhardwareports, never -set…).
+cat > "$WORK/fakepath/netstat" <<SH
+#!/bin/sh
+printf '%s\n' "\$*" >> "$WORK/netstat.argv"
+cat "$WORK/netstat.out"
+SH
+cat > "$WORK/fakepath/networksetup" <<SH
+#!/bin/sh
+printf '%s\n' "\$*" >> "$WORK/networksetup.argv"
+cat "$WORK/networksetup.out"
+SH
+cat > "$WORK/fakepath/ip" <<SH
+#!/bin/sh
+printf '%s\n' "\$*" >> "$WORK/ip.argv"
+cat "$WORK/ip.out"
+SH
+chmod +x "$WORK/fakepath/netstat" "$WORK/fakepath/networksetup" "$WORK/fakepath/ip"
+# A wired-only host: one default route.
+nsone() { printf 'Routing tables\n\nInternet:\nDestination        Gateway            Flags               Netif Expire\ndefault            192.168.1.254      UGScg                 en0       \ndefault            link#26            UCSIg           bridge100      !\n127                127.0.0.1          UCS                   lo0       \n' > "$WORK/netstat.out"; }
+nsone
+printf 'Hardware Port: Ethernet\nDevice: en0\nEthernet Address: bc:74:ea:ca:e9:95\n\nHardware Port: Wi-Fi\nDevice: en1\nEthernet Address: bc:74:ea:b6:25:1c\n' > "$WORK/networksetup.out"
+printf 'default via 10.0.0.1 dev eth0 proto dhcp src 10.0.0.5 metric 100\n' > "$WORK/ip.out"
 # Baseline fixtures for the #1076 rows — a tidy headless host — so the spotlight
 # cases above them see a complete section; each row's own block overrides these.
 printf ' sleep                0 (sleep prevented by powerd)\n autorestart          1\n womp                 1\n' > "$WORK/pmset.out"
@@ -302,6 +331,62 @@ none "$(row icloud "$(run_doctor)")" "12c-b: FLEET_DOCTOR_ICLOUD=0 in fleet.sett
 rm -f "$WORK/conf/fleet.settings"
 
 # ============================================================================
+# network (issue #1081)
+# ============================================================================
+# 13. Wired + Wi-Fi on one subnet: two default routes to one gateway → WARN naming
+#    the gateway, both interfaces, the Wi-Fi switch-off (its device read off
+#    networksetup), the undo, the doc and the silencer. Read-only tool use.
+: > "$WORK/netstat.argv"; : > "$WORK/networksetup.argv"
+printf 'Internet:\nDestination        Gateway            Flags               Netif Expire\ndefault            192.168.1.254      UGScg                 en0       \ndefault            192.168.1.254      UGScIg                en1       \ndefault            link#26            UCSIg           bridge100      !\n' > "$WORK/netstat.out"
+out="$(run_doctor)"; l="$(row network "$out")"
+has "WARN" "$l" "13: one gateway through two interfaces must WARN"
+has "192.168.1.254" "$l" "13: the WARN must name the gateway"
+has "en0 + en1" "$l" "13: the WARN must name both interfaces"
+has "networksetup -setairportpower en1 off" "$l" "13: the WARN must name the Wi-Fi switch-off, on the Wi-Fi device"
+has "networksetup -setairportpower en1 on" "$l" "13: the WARN must say how to undo it"
+has "docs/HOST.md#network" "$l" "13: the WARN must point at the host doc"
+has "FLEET_DOCTOR_NETWORK=0" "$l" "13: the WARN must say how to silence it (EPIC rule 9)"
+case "$l" in *bridge100*|*link#*) fail "13: an interface-only (link#) default must not be counted" "$l";; esac
+has "-rn -f inet" "$(cat "$WORK/netstat.argv" 2>/dev/null)" "13: the doctor must READ the routing table"
+case "$(cat "$WORK/networksetup.argv")" in *-set*) fail "13: the doctor ran a state-changing networksetup" "$(cat "$WORK/networksetup.argv")";; esac
+survived "$out" || fail "13: the doctor did not reach its last check" "$l"
+quiet "13: the network WARN must print nothing on stderr"
+
+# 13b. One default route (plus a link# bridge) → PASS naming it.
+nsone
+out="$(run_doctor)"; l="$(row network "$out")"
+has "PASS" "$l" "13b: one default route must PASS"
+has "192.168.1.254 via en0" "$l" "13b: the PASS must name the route"
+case "$l" in *bridge100*) fail "13b: the link# bridge must not be listed" "$l";; esac
+quiet "13b: the network PASS must print nothing on stderr"
+
+# 13c. Two defaults to DIFFERENT gateways (two networks, deliberate failover) → PASS:
+#     the signature is one gateway through two links, not two routes.
+printf 'Internet:\nDestination        Gateway            Flags               Netif Expire\ndefault            192.168.1.254      UGScg                 en0       \ndefault            10.0.0.1           UGScIg                en1       \n' > "$WORK/netstat.out"
+l="$(row network "$(run_doctor)")"
+has "PASS" "$l" "13c: two defaults to different gateways must PASS"
+
+# 13d. Same gateway through two wired links, no Wi-Fi among them → WARN without a
+#     Wi-Fi command (never name a switch-off for an interface that is not Wi-Fi).
+printf 'Internet:\nDestination        Gateway            Flags               Netif Expire\ndefault            192.168.1.254      UGScg                 en0       \ndefault            192.168.1.254      UGScIg                en4       \n' > "$WORK/netstat.out"
+l="$(row network "$(run_doctor)")"
+has "WARN" "$l" "13d: two wired links to one gateway must WARN"
+has "keep only one of them" "$l" "13d: with no Wi-Fi among them the WARN must give the generic fix"
+case "$l" in *setairportpower*) fail "13d: must not name a Wi-Fi switch-off for wired links" "$l";; esac
+
+# 13e. No gateway route at all (offline, or only link#) → no row, never a guess.
+printf 'Internet:\nDestination        Gateway            Flags               Netif Expire\ndefault            link#26            UCSIg           bridge100      !\n' > "$WORK/netstat.out"
+none "$(row network "$(run_doctor)")" "13e: no gateway route must print no network row"
+
+# 13f. Silenced → no row, from the env and from fleet.settings.
+printf 'Internet:\ndefault            192.168.1.254      UGScg                 en0       \ndefault            192.168.1.254      UGScIg                en1       \n' > "$WORK/netstat.out"
+none "$(row network "$(FLEET_DOCTOR_NETWORK=0 run_doctor)")" "13f: FLEET_DOCTOR_NETWORK=0 (env) must drop the row"
+echo 'FLEET_DOCTOR_NETWORK=0' > "$WORK/conf/fleet.settings"
+none "$(row network "$(run_doctor)")" "13f-b: FLEET_DOCTOR_NETWORK=0 in fleet.settings must drop the row"
+rm -f "$WORK/conf/fleet.settings"
+nsone
+
+# ============================================================================
 # 6. Linux: the whole section is silent — no spotlight, no wtroot, no nofile, no sleep, no
 #    siri, no icloud, no error — and none of the macOS tools is even called.
 # ============================================================================
@@ -321,5 +406,21 @@ none "$(cat "$WORK/defaults.argv")" "6: Linux must not even call defaults"
 none "$(cat "$WORK/pgrep.argv")" "6: Linux must not probe the iCloud daemons"
 survived "$out" || fail "6: the doctor did not reach its last check on Linux" ""
 quiet "6: the Linux run must print nothing on stderr"
+
+# 14. network on Linux (issue #1081): the one host row that renders there, off
+#     `ip -4 route show default` — never netstat.
+: > "$WORK/netstat.argv"; : > "$WORK/ip.argv"
+printf 'default via 192.168.1.1 dev eth0 proto dhcp metric 100\ndefault via 192.168.1.1 dev wlan0 proto dhcp metric 600\n' > "$WORK/ip.out"
+out="$(run_doctor)"; l="$(row network "$out")"
+has "WARN" "$l" "14: Linux wired + Wi-Fi to one gateway must WARN"
+has "eth0 + wlan0" "$l" "14: the WARN must name both interfaces"
+has "nmcli radio wifi off" "$l" "14: the Linux WARN must name the nmcli switch-off"
+has "route show default" "$(cat "$WORK/ip.argv" 2>/dev/null)" "14: Linux must read ip route"
+none "$(cat "$WORK/netstat.argv")" "14: Linux must not call netstat"
+quiet "14: the Linux network WARN must print nothing on stderr"
+printf 'default via 10.0.0.1 dev eth0 proto dhcp src 10.0.0.5 metric 100\n' > "$WORK/ip.out"
+l="$(row network "$(run_doctor)")"
+has "PASS" "$l" "14b: one Linux default route must PASS"
+has "10.0.0.1 via eth0" "$l" "14b: the PASS must name the route"
 
 printf 'fleet-doctor-host-selftest: PASS (%d checks)\n' "$CHECKS"
