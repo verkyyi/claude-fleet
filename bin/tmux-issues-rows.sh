@@ -8,9 +8,9 @@
 # Line: <#num>US<colored display>US<milestone>. The FIRST line is always the
 # column-title header row (issue #374) — empty field1, dim titles in field2 —
 # which the backlog pins at the top via --header-lines=1.
-# A fleet hosting 2+ repos (issue #794) lists its CURRENT repo's issues
-# (fleet_backlog_repos), or under `all` every hosted repo's — one block per repo,
-# each title led by the repo's short tag — and every row gains a 4th field, its
+# A fleet hosting 2+ repos (issue #794) lists every hosted repo's issues
+# (fleet_backlog_repos) — one block per repo, each title led by the repo's short
+# tag — and every row gains a 4th field, its
 # repo (owner/name), which every backlog action passes on as --repo=. A one-repo
 # fleet renders byte-for-byte as before: three fields, the per-session cache.
 set -uo pipefail
@@ -40,7 +40,7 @@ NOMS='· no milestone'
 printf '%s%s%s\n' "$US" "$(fleet_backlog_col_header)" "$US"
 
 # The repos this backlog lists (issue #794): none = the one-repo fleet, which keeps
-# the per-session SRC above; else the current repo, or every hosted repo under `all`.
+# the per-session SRC above; else every hosted repo.
 BLREPOS=''
 [ -n "${FLEET_SESSION:-}" ] && BLREPOS=$(fleet_backlog_repos "$FLEET_SESSION")
 BADGE=0; case "$BLREPOS" in *$'\n'*) BADGE=1 ;; esac      # `all` over 2+ repos: tag each title

@@ -205,35 +205,28 @@ rslug_v() { rslug=''
   r=${r//\//-}; rslug=${r//[^[:alnum:]._-]/}               # = fleet_slug, fork-free
 }
 
-# The fleet's CURRENT repo (issue #793) — what this dash shows. RMANY=1 only in a
-# fleet hosting 2+ repos; then RCUR is the picked repo's slug or `all`, and
-# RHEADS its group headings (fleet_dash_repo_frame, once a frame). A one-repo
-# fleet has RMANY=0 and every branch below keeps today's path.
-RMANY=0; RCUR=''; RGRPMAP=''; RHEADS=''; RNREPO=0
+# The repos this dash shows (issue #793): every hosted one, under `all` (#1034).
+# RMANY=1 only in a fleet hosting 2+ repos; then RHEADS is its group headings
+# (fleet_dash_repo_frame, once a frame). A one-repo fleet has RMANY=0 and every
+# branch below keeps today's path.
+RMANY=0; RGRPMAP=''; RHEADS=''; RNREPO=0
 [ "$RMULTI" = 1 ] && fleet_dash_repo_frame "$FLEET_SESSION"
-# RGRP=1 iff this frame groups its rows by repo (issue #974): `all` in a 2+ repo
-# fleet. A picked repo and a one-repo fleet never group — their frames stay as
-# they were, heading-free, byte for byte.
-RGRP=0; [ "$RMANY" = 1 ] && [ "$RCUR" = all ] && RGRP=1
+# RGRP=1 iff this frame groups its rows by repo (issue #974): a 2+ repo fleet. A
+# one-repo fleet never groups — its frame stays as it was, heading-free, byte
+# for byte.
+RGRP=$RMANY
 RGCNT=()                               # rows per repo group, for the heading's (n)
 NSESS=0                                # session rows this frame; 0 → the empty-state hint (#998)
-# rview_v <@repo> <@norepo> → 1 when the current repo hides this window: a picked
-# repo shows ITS windows only (no-repo and unknown ones wait under `all`). Leaves
-# $rslug set for the caller — the window's repo slug, '' for none/unknown — which
-# the badge below reads. Keys are #790's okp_v, never re-qualified here.
-rview_v() { [ "$RMANY" = 1 ] || return 0              # one-repo fleet: no fork, no filter
-  rslug_v "$1" "$2"
-  [ "$RCUR" != all ] && [ "$rslug" != "$RCUR" ] && return 1
-  return 0
-}
-# rgrp_v <@norepo> → $rgrp, the window's OWN repo group (issues #793/#974), read
-# off the $rslug rview_v just left: each hosted repo is its own group in
-# fleet_repos order (RGRPMAP, one lookup, no fork), a window whose repo is not
-# hosted is `?` (RNREPO), a no-repo session last. 0 whenever this frame does not
-# group (RGRP=0), so a one-repo fleet and a picked repo never see anything else.
+# rgrp_v <@repo> <@norepo> → $rgrp, the window's OWN repo group (issues
+# #793/#974), off its $rslug (rslug_v; keys are #790's okp_v, never re-qualified
+# here): each hosted repo is its own group in fleet_repos order (RGRPMAP, one
+# lookup, no fork), a window whose repo is not hosted is `?` (RNREPO), a no-repo
+# session last. 0 whenever this frame does not group (RGRP=0), so a one-repo
+# fleet never sees anything else — no fork, $rslug untouched.
 rgrp_v() { rgrp=0
   [ "$RGRP" = 1 ] || return 0
-  if [ "$1" = 1 ]; then rgrp=$((RNREPO + 1))
+  rslug_v "$1" "$2"
+  if [ "$2" = 1 ]; then rgrp=$((RNREPO + 1))
   elif [ -n "$rslug" ]; then
     rgrp=${RGRPMAP#*$'\n'"$rslug"$'\t'}
     if [ "$rgrp" = "$RGRPMAP" ]; then rgrp=$RNREPO; else rgrp=${rgrp%%$'\n'*}; fi
@@ -313,10 +306,7 @@ while IFS=$US read -r sess idx name path state _ _ iss origin wt _ _ nsub exp pi
   [ -z "$name" ] && continue
   [ -n "${FLEET_SESSION:-}" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
   case "$name" in dash|plan|backlog) continue;; esac
-  # filtered out by the current repo (issue #793): not on this dash at all, so it
-  # is no one's parent here either — a child whose parent is hidden is an orphan.
-  rview_v "$wrepo" "$wnorepo" || continue
-  rgrp_v "$wnorepo"
+  rgrp_v "$wrepo" "$wnorepo"
   # Collect the branch spellings this frame will look up in the prmap (issue
   # #662) — BEFORE the okey filter below, because a window with no addressable
   # key still RENDERS in pass B and still gets a PR cell. Its only cost is the
@@ -436,13 +426,12 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # FLEET_SESSION exported by tmux-dashboard.sh; unset ⇒ show all (single-fleet).
   [ -n "${FLEET_SESSION:-}" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
   case "$name" in dash|plan|backlog) continue;; esac   # panels, not Claude sessions
-  rview_v "$wrepo" "$wnorepo" || continue              # current repo (issue #793)
   NSESS=$((NSESS + 1))                                 # a session row this frame (#998)
   # repo group (issues #793/#974) — the FIRST sort key: the row's OWN group here
   # (rgrp_v); a cross-repo child swaps in its root's once the chain walk below
   # has run (#1031), and the heading's count is taken there. Everything else is
   # group 0, so a one-repo fleet sorts exactly as before.
-  rgrp_v "$wnorepo"; ownrgrp=$rgrp
+  rgrp_v "$wrepo" "$wnorepo"; ownrgrp=$rgrp
   ckey_v "$path"; key=$ckey
   ctxkey="$key"
   case "$agent" in
@@ -710,7 +699,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   [ -n "$agentd" ] && tagd="${tagd:+$tagd }$agentd"
   # repo badge (issue #793): DROPPED under `all` (issue #995) — the only frame
   # that ever drew it is the grouped one (#974), where the heading above already
-  # names the row's repo. A picked repo and a one-repo fleet never had one.
+  # names the row's repo. A one-repo fleet never had one.
   # A request retrying on the same reason past FLEET_FAILOVER_STUCK_ATTEMPTS is
   # stamped @quota_stuck, which WFMT folds in as a `stuck:` prefix (issue #872):
   # it reads `⚠ stuck`, not the ordinary `quota:waiting` it would otherwise be.
@@ -892,23 +881,16 @@ fi
 
 # the empty state (issue #998): a frame with no session row says so, and how to
 # start one, in ONE inert `hdr` row at the top — never a blank list under the
-# column header. A picked repo names itself (`No sessions in tokenledger`). The
-# hub list spells out both ways in (the query line, the new-task key off
-# dash-keymap.sh); the 30-column sidebar keeps it short, its input line sits
-# right below. Only an empty frame pays the keymap fork.
+# column header. The hub list spells out both ways in (the query line, the
+# new-task key off dash-keymap.sh); the 30-column sidebar keeps it short, its
+# input line sits right below. Only an empty frame pays the keymap fork.
 if [ "$NSESS" = 0 ]; then
-  e_in=''
-  if [ "$RMANY" = 1 ] && [ "$RCUR" != all ]; then
-    e_in=${RGRPMAP#*$'\n'"$RCUR"$'\t'}
-    if [ "$e_in" = "$RGRPMAP" ]; then e_in=''
-    else e_in=${e_in%%$'\n'*}; e_in=${RHEADS#*"$e_in"$'\t'}; e_in=${e_in%%$'\t'*}; e_in=" in $e_in"; fi
-  fi
   if [ "$SIDEBAR" = 1 ]; then
-    if [ -n "$e_in" ]; then t="No sessions$e_in"; else t='No sessions — type a name'; fi
+    t='No sessions — type a name'
     buf+="-1	-1	0	0	0	0	0	hdr$US$US$US$t$US "$'\n'
   else
     DASH_GLYPH_NEW='⌃n'; eval "$(bash "$BIN/dash-keymap.sh" env 2>/dev/null)"
-    t="No sessions$e_in — type a name to start one · $DASH_GLYPH_NEW new task"
+    t="No sessions — type a name to start one · $DASH_GLYPH_NEW new task"
     buf+="-1	-1	0	0	0	0	0	hdr${US}hdr${US}${GY}  ${t}${R}"$'\n'
   fi
 fi

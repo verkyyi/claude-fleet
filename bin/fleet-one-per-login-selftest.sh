@@ -97,7 +97,6 @@ has "2 added" "$out" "added o/b to fleet 'fleet'"
 hasnt "2 no current-repo pick" "$out" "current repo →"
 [ -e "$FLEET_CONF_DIR/fleets/fleet/current-repo" ] && fail "2: fleet-up left the stale current-repo file (#1034)"
 eq "2 hosts" "$(lib 'fleet_repos fleet' | tr '\n' ' ')" "o/a o/b "
-eq "2 current-repo" "$(lib 'fleet_current_repo fleet')" all
 eq "2 conf keeps its repo" "$(val "$FLEET_CONF_DIR/fleets/fleet/conf" FLEET_REPO)" o/a
 eq "2 overlay main" "$(val "$(lib 'fleet_repo_conf_file fleet o/b')" FLEET_MAIN)" "$WORK/src/b"
 eq "2 servers" "$(live)" 1
@@ -143,7 +142,6 @@ has "4 added" "$out" "added o/d to fleet 'fleet-cf'"
 [ -S "$SOCKD/fleet-cf" ] || fail "4: fleet-cf's server is not up"
 eq "4 conf keeps repo" "$(val "$FLEET_CONF_DIR/fleets/fleet-cf/conf" FLEET_REPO)" o/a
 eq "4 conf keeps its keys" "$(val "$FLEET_CONF_DIR/fleets/fleet-cf/conf" FLEET_MODEL)" opus
-eq "4 current-repo" "$(lib 'fleet_current_repo fleet-cf')" all
 [ -d "$FLEET_CONF_DIR/fleets/fleet" ] && fail "4: a fleet named 'fleet' was created"
 out=$(cd "$WORK/tmp" && bash "$UP" </dev/null 2>&1); rc=$?
 eq "4 outside a checkout rc" "$rc" 0

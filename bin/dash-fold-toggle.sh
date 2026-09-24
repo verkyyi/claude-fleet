@@ -109,24 +109,14 @@ okp_v() { okp=''
 selfwid=$(tmux display-message -p -t "$target" '#{window_id}' 2>/dev/null) || exit 0
 [ -n "$selfwid" ] || exit 0
 
-# The renderer's repo view (issue #793): in a 2+ repo fleet only the current repo's
-# windows are on the dash — the same frame and filter tmux-dashboard-rows.sh applies.
-RMANY=0; RCUR=''
-[ -n "$SESS" ] && fleet_has_repo_overlays "$SESS" && fleet_dash_repo_frame "$SESS"
-
 KEYTAB=''      # key \t window_id \t origin \t expand
 selfkey=''
-while IFS=$US read -r wsess wid wname wpath wiss worig wwt wexp wrepo wnorepo; do
+while IFS=$US read -r wsess wid wname wpath wiss worig wwt wexp wrepo _; do
   [ -n "$wname" ] || continue
   [ -n "$SESS" ] && [ "$wsess" != "$SESS" ] && continue
   case "$wname" in dash|plan|backlog) continue ;; esac
   okp_v "$wrepo"
   okey_v "$wiss" "$wwt" "$wpath"
-  # hidden by the current repo (issue #793): off the dash, so no one's parent here
-  if [ "$RMANY" = 1 ] && [ "$RCUR" != all ]; then
-    wslug=''; [ "$wnorepo" = 1 ] || wslug=$(fleet_slug "$wrepo")
-    [ "$wslug" != "$RCUR" ] && continue
-  fi
   [ -n "$okey" ] || continue
   KEYTAB+="$okey"$'\t'"$wid"$'\t'"$worig"$'\t'"$wexp"$'\n'
   [ "$wid" = "$selfwid" ] && selfkey=$okey

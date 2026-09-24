@@ -96,7 +96,6 @@ spawned() {
 # Two sessions to highlight: a beta scratch and a no-repo one.
 raw --repo o/beta "$S" || fail "setup: beta scratch: $(cat "$WORK/err")"; wB=$(newest "$S")
 raw --no-repo "$S"     || fail "setup: no-repo: $(cat "$WORK/err")";      wN=$(newest "$S")
-eq "setup: viewing all" "$(fleet_current_repo "$S")" all
 
 # ==== A. the resolver ================================================================
 eq "A: a beta row → o/beta"                "$(fleet_selection_repo "$S" "$wB")" o/beta

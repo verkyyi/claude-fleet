@@ -98,14 +98,11 @@ fi
 # repo, else the global FLEET_REPO.
 # A fleet hosting 2+ repos (issue #789) caches no single repo worth trusting: the
 # CALLING window's repo is the default there, else (a hub / no-repo pane, issue
-# #794) the fleet's CURRENT repo; under `all` it refuses — an issue belongs to one repo.
+# #794) it refuses — an issue belongs to one repo.
 repo="${repo:-${CF_REPO:-}}"
 _fs=$(fleet_current_session)
 if [ -z "$repo" ] && [ -n "$_fs" ] && _fleet_hosts_many "$_fs"; then
   [ -n "${TMUX_PANE:-}" ] && repo=$(fleet_window_repo "$_fs" "$TMUX_PANE")
-  if [ -z "$repo" ]; then
-    repo=$(fleet_current_repo "$_fs"); [ "$repo" = all ] && repo=''
-  fi
   [ -z "$repo" ] && { printf 'fleet-issue-file: this fleet hosts several repos and shows all — pass --repo <owner/name>\n' >&2; exit 1; }
 fi
 if [ -z "$repo" ]; then

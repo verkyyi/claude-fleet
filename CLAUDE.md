@@ -59,8 +59,8 @@ Do not install from memory: read the doc and work from it.
   The fleet conf's `FLEET_REPO` is the first; `bin/fleet-repo.sh add` registers
   more as `fleets/<sess>/repos/<slug>.conf`. **There is no main repo.** A window's
   repo is `@repo` (`@norepo 1` = deliberately none), resolved ONLY through
-  `fleet_repos` / `fleet_window_repo` / `fleet_load_repo_conf` /
-  `fleet_current_repo` — never an ad-hoc `git remote` parse — and every join is
+  `fleet_repos` / `fleet_window_repo` / `fleet_load_repo_conf` — never an
+  ad-hoc `git remote` parse — and every join is
   on (repo, issue) or (repo, branch), never a bare number or branch name. A
   window whose repo is unknown is skipped, never guessed. In a 2+ repo fleet the
   hub opens in `$HOME`. **Degenerate case is sacred:** a fleet with no `repos/`
