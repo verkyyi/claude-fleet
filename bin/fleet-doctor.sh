@@ -1068,6 +1068,30 @@ else
   fi
 fi
 
+# --- codex CLI version vs the rollout format fleet reads (issue #1079) ---
+# fleet reads a Codex worker's context% out of Codex's session file (rollout),
+# an upstream INTERNAL format verified only on the versions pinned in
+# bin/fleet-codex-runtime.py (SUPPORTED_ROLLOUT_VERSIONS). An upgrade can change
+# it and the dash would show a wrong number with no error anywhere — so name the
+# drift here. Cross-platform, so it sits OUTSIDE the macOS-only host section
+# below (and after _gconf_val is defined). Not installed = INFO (Codex is
+# optional). WARN, not FAIL: a newer Codex may well be compatible; the line says
+# how to pin and how to silence it (FLEET_CODEX_VERSION_CHECK=0).
+cvchk="${FLEET_CODEX_VERSION_CHECK:-$(_gconf_val FLEET_CODEX_VERSION_CHECK)}"
+cvrt="$(dirname "$0")/fleet-codex-runtime.py"
+if [ "$cvchk" != 0 ]; then
+  if ! command -v codex >/dev/null 2>&1; then
+    info codex "not installed — optional (FLEET_AGENT=codex workers)"
+  elif [ -f "$cvrt" ] && command -v python3 >/dev/null 2>&1; then
+    cvout=$(python3 "$cvrt" version-check 2>&1); cvrc=$?
+    case "$cvrc" in
+      0) pass codex "$cvout" ;;
+      1) warn codex "$cvout" ;;
+      *) info codex "$cvout" ;;
+    esac
+  fi
+fi
+
 # --- host: a machine that works only for its sessions (EPIC #1074) --------------
 # Checks on the HOST itself — things that burn this machine's CPU/IO on work no
 # session asked for, which no other line here can see. macOS only: the whole

@@ -18,6 +18,43 @@ import sys
 import tempfile
 import time
 
+# The Codex versions whose rollout (session JSONL) shape fleet's context reader
+# is verified against (docs/CODEX-RUNTIME.md#context). The rollout is an upstream
+# internal interface, so an upgrade can change it silently and the dashboard
+# would then show a wrong context% with no error anywhere (issue #1079). Each
+# entry is a version PREFIX matched on whole components: "0.154" covers 0.154.0
+# and 0.154.3, never 0.1540. Add a version here only after the fixture tests
+# (fleet-codex-session-selftest.sh) pass against its real rollout files.
+SUPPORTED_ROLLOUT_VERSIONS = ("0.154",)
+PIN_COMMAND = "npm i -g @openai/codex@0.154.0"
+
+
+def version_supported(version):
+    parts = version.split(".")
+    return any(parts[:len(p.split("."))] == p.split(".") for p in SUPPORTED_ROLLOUT_VERSIONS)
+
+
+def version_check(codex="codex"):
+    """(rc, one line): 0 supported, 1 unverified version, 2 not installed/unreadable."""
+    try:
+        out = subprocess.run([codex, "--version"], stdin=subprocess.DEVNULL,
+                             capture_output=True, text=True, timeout=20)
+    except FileNotFoundError:
+        return 2, "codex not installed"
+    except (OSError, subprocess.SubprocessError) as exc:
+        return 2, "codex --version failed: " + str(exc)
+    text = (out.stdout or out.stderr or "").strip()
+    match = re.search(r"(\d+\.\d+(?:\.\d+)*)", text)
+    if out.returncode != 0 or not match:
+        return 2, "could not read codex --version: " + (text.splitlines() or ["(no output)"])[0][:120]
+    version = match.group(1)
+    verified = "/".join(SUPPORTED_ROLLOUT_VERSIONS)
+    if version_supported(version):
+        return 0, "codex " + version + " (rollout format verified for " + verified + ")"
+    return 1, ("codex " + version + ": fleet only verified the " + verified +
+               " session-file (rollout) format, so context% may be wrong; pin it: `" +
+               PIN_COMMAND + "`, or set FLEET_CODEX_VERSION_CHECK=0 to silence")
+
 
 def stop(process):
     if process is None or process.poll() is not None:
@@ -194,6 +231,10 @@ def run(argv, prepare=None, tick=None):
 
 if __name__ == '__main__':
     try:
+        if sys.argv[1:2] == ['version-check']:
+            rc, line = version_check()
+            print(line)
+            sys.exit(rc)
         if sys.argv[1:2] == ['--guard']:
             sys.exit(guard(int(sys.argv[2]), sys.argv[3], sys.argv[4:]))
         args = sys.argv[1:]

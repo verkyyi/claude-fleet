@@ -320,6 +320,8 @@ ok "F2 failures, interruption, and non-tmux launches never request window cleanu
 # lifecycle tests. Stub just this hop, preserving the exact downstream argv.
 cat > "$IBIN/fleet-codex-runtime.py" <<PY
 import os,sys
+if sys.argv[1:2] == ['version-check']:  # the launch-time version check (#1079)
+    print('codex 0.154.0'); sys.exit(0)
 open('$WORK/runtime-used','w').write('yes')
 os.execvp('codex',['codex']+sys.argv[2:])
 PY

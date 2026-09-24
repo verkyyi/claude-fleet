@@ -21,6 +21,17 @@ window, launcher and root UUID, so a new session never displays Claude's cwd
 cache or a predecessor's context. The rollout format is an upstream internal
 interface; fixture tests pin the supported 0.154 shape.
 
+**Version pin.** The verified versions live in one constant,
+`SUPPORTED_ROLLOUT_VERSIONS` in `fleet-codex-runtime.py` (prefix match on whole
+components: `0.154` covers `0.154.x`). `fleet-codex-runtime.py version-check`
+compares `codex --version` against it — exit 0 verified, 1 unverified, 2 not
+installed or unreadable, one line of explanation. `fleet-doctor.sh` shows it as
+the `codex` row (PASS / WARN / INFO). `fleet-codex.sh` runs the same check once
+per launch: an unverified version still launches, with one stderr warning and
+`version_warning` in `@codex_identity`. Pin with
+`npm i -g @openai/codex@0.154.0`; `FLEET_CODEX_VERSION_CHECK=0` silences the
+check. Add a version to the constant only after the rollout fixtures pass on it.
+
 `FLEET_AUTO_HANDOFF_PCT` requests a native Codex context cycle at a clean Stop.
 Write durable notes and run `fleet-transfer.sh --window PANE --to codex
 --handoff NOTES --after-turn`. The existing transfer controller retains the
