@@ -1473,6 +1473,13 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=fseventsd warn MB @group=disk @tier=advanced @scope=global @edit=int @unit=MB
 #FLEET_FSEVENTSD_WARN_MB=1024
 
+# `fleet-doctor`'s `spotlight` line (host section, macOS only, issue #1075): WARNs
+# while Spotlight still indexes the data volume, naming `sudo mdutil -a -i off`
+# (docs/HOST.md#spotlight). Report-only — the doctor never changes system state.
+# Set to 0 on a host where you keep Spotlight on deliberately. Linux: unused.
+# @label=Doctor Spotlight check @group=disk @tier=advanced @scope=global @edit=bool
+#FLEET_DOCTOR_SPOTLIGHT=1
+
 # Load experiments (bin/fleet-loadgen.sh) — the sanctioned way to put a box under
 # CPU pressure, because the hand-written `trap … EXIT` form is what leaked the
 # orphans above. Each burner carries its OWN deadline (a kernel alarm(2) armed
