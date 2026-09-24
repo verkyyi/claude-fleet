@@ -187,6 +187,24 @@ What earns its place, in page order:
    carries it), no 有空再做未动不算欠 (untouched reserve is simply not a row), no
    「建议，不是决定」 (the durable comment's heading may say 下一步是建议). The
    band's 还差什么 = this table's row count.
+
+   **One more candidate row on the fleet tooling repo: 挪稳定版** (issue #1124,
+   EPIC #1117 R2). Every login follows `refs/tags/stable`, not master (#1118),
+   and the operator has to remember to move it — the end of a batch is the
+   moment. ONE read, never a move:
+
+   ```sh
+   ~/.claude/fleet/bin/fleet-epic-stable-row.sh --repo "$FLEET_REPO" --main "$FLEET_MAIN" --base "$FLEET_BASE_BRANCH" --epic <N>
+   ```
+
+   Exit 0 prints a `row:` line (the two cells, TAB-separated) and its `tr:` —
+   add that row to the table **verbatim** (the `tr:` on the page, the two cells
+   in the durable comment). Exit 1 prints `kind: current` / `skip` / `nomerge`
+   and there is **no row**: stable already contains the batch's last merge, or
+   this is not the repo that carries `bin/fleet-stable.sh` (a team repo's own
+   `stable` tag is not ours to talk about). The row hands the operator
+   `fleet-stable.sh move <sha>` to paste; **the report never runs it** — moving
+   stable is what puts a version on every login, and that call is theirs.
 5. **运行情况** (`#ops`) — **folded, complete, last.** 墙钟 · 执行会话占用时长 ·
    额度曲线（annotated where an account was benched or a window was waited out —
    the waits are where the batch's wall-clock went）· 甘特, plus the PR-merge
@@ -255,7 +273,8 @@ Relay the READY tailnet URL to the operator.
 
 Then post the **durable half** as one comment on the EPIC issue, **in the page's
 order** (issue #839): 交付了什么 · 指标（filled, 「还读不出来 ⟨date⟩ 再看」, or
-「本批未声明指标」） · 还差什么 · 下一步（建议） · the fleet-side issues filed
+「本批未声明指标」） · 还差什么 · 下一步（建议; the 挪稳定版 row too, when step 2
+printed one） · the fleet-side issues filed
 (their numbers — the one place they appear) — then the counts, the completed/unfinished/blocked lists, the run
 figures with their caveat, the URL, and per member which evidence exists — the
 `dir:` path from its worker's 📎 comment, or **无证据**. The tailnet URL dies with
