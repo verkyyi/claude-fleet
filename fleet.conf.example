@@ -991,6 +991,16 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=PR status refresh @group=cache @tier=common @scope=global @edit=int @unit=sec
 #FLEET_PR_REFRESH_INTERVAL=15
 
+# Poll backoff (issue #892): the two ~15s GitHub pollers — pr-refresh and the
+# issue-bridge poll — slow down per repo while nothing changes. A poll that comes
+# back identical doubles that repo's wait (15 → 30 → 60), capped at this many
+# seconds; any change, a webhook kick or a bridge delivery drops it straight back
+# to 15. 60 is the recommended value: a merged PR still reaches the dash within a
+# minute (at once with the webhook installed). Default 15 = no backoff, as before.
+# GLOBAL: one daemon of each serves every fleet.
+# @label=Poll backoff ceiling @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_POLL_MAX_BACKOFF=15
+
 # --- "merged" ≠ "live": deploy state for merged PRs (issue #541) ------------------
 # Once a PR is MERGED the dash PR cell reads `merged`. With one of the two knobs
 # below set for THIS fleet, bin/tmux-pr-refresh.sh also probes where the merge

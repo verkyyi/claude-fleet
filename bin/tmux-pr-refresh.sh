@@ -213,7 +213,16 @@ while [ "$i" -lt "${#Q_REPO[@]}" ]; do
   FD=$(fleet_cache_dir "$sg")          # fleets/<slug>/ (issue #181)
   pts=0; [ -f "$FD/prmap.ts" ] && IFS= read -r pts < "$FD/prmap.ts" 2>/dev/null   # no `cat` (#888)
   case "$pts" in ''|*[!0-9]*) pts=0 ;; esac
-  if [ "$FORCE" = 1 ] || [ $(( $(now) - pts )) -ge "$PR_TTL" ]; then
+  # Poll backoff (issue #892): with FLEET_POLL_MAX_BACKOFF above INT, a repo whose
+  # prmap came back unchanged waits 2× longer (capped); off (the default) → bo_on
+  # stays 0 and this is the historic PR_TTL gate, byte for byte.
+  bo="$FD/prmap.backoff" bo_on=0 due=0
+  if fleet_poll_backoff_read "$bo" "$INT"; then
+    bo_on=1; fleet_poll_backoff_due "$bo" "$INT" "$(now)" && due=1
+  elif [ $(( $(now) - pts )) -ge "$PR_TTL" ]; then
+    due=1
+  fi
+  if [ "$FORCE" = 1 ] || [ "$due" = 1 ]; then
     # The fold from PR JSON → prmap TSV is FLEET_PRMAP_JQ (fleet-lib.sh), the one
     # program the dash, the merge gate's taxonomy and pr-refresh-jq-selftest.sh
     # share (issue #533) — it lived inline here and drifted from fleet-pr-verdict.sh
@@ -223,6 +232,11 @@ while [ "$i" -lt "${#Q_REPO[@]}" ]; do
       --jq "$FLEET_PRMAP_JQ" \
       > "$FD/prmap.$$" 2>/dev/null \
       && { emit_pr_transitions "$FD/prmap" "$FD/prmap.$$" "$rp" "$se"
+           # a webhook kick (FORCE) is itself news: reset, whatever the diff says
+           if [ "$bo_on" = 1 ]; then
+             chg=1; [ "$FORCE" = 1 ] || { cmp -s "$FD/prmap" "$FD/prmap.$$" && chg=0; }
+             fleet_poll_backoff_note "$bo" "$INT" "$chg" "$(now)"
+           fi
            mv "$FD/prmap.$$" "$FD/prmap"; }
     now > "$FD/prmap.ts"
   fi

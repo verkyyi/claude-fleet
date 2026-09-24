@@ -19,6 +19,7 @@ bash ~/.claude/fleet/bin/fleet-doctor.sh 2>&1 | grep -E '^\s*\S+\s+(spotlight|wt
 - [Turn off Spotlight](#spotlight)
 - [MCP servers on demand](#mcp)
 - [File limits for daemons](#nofile)
+- [Slower GitHub polls when nothing changes](#poll-backoff)
 - [An unattended Mac](#headless) — auto-login, never sleep, Siri, iCloud, no GUI apps on the console
 - [Container VMs](#containers) — how much of the machine Colima / Docker Desktop may take
 - [Verify](#verify)
@@ -136,6 +137,27 @@ process on the machine. Per-job limits are the lighter alternative.
 
 **Undo:** delete the two keys from a plist and reload it. The job falls back to
 the system default.
+<a id="poll-backoff"></a>
+## Slower GitHub polls when nothing changes
+
+Two daemons ask GitHub about every repo every 15 seconds: pr-refresh (PR and CI
+state for the dash) and the issue bridge (new issue comments). Most of those
+polls return what the last one did, and each one is a `gh` process.
+
+Let them slow down while nothing changes (issue #892):
+
+```sh
+# ~/.config/claude-fleet/fleet.settings
+FLEET_POLL_MAX_BACKOFF=60
+```
+
+A poll that returns the same result doubles that repo's wait: 15, 30, then 60
+seconds. Any change drops it back to 15, and so does a webhook event or a bridge
+delivery. A merged PR still shows on the dash within a minute, or right away
+when the webhook daemon is installed.
+
+**Undo:** unset the key, or set it to 15. Both daemons poll every 15 seconds again.
+
 <a id="headless"></a>
 ## An unattended Mac
 
