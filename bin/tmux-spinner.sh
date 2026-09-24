@@ -54,7 +54,9 @@ BIN=$(cd "$(dirname "$0")" && pwd)
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 mkdir -p "$BIN/../logs" 2>/dev/null
 # One line per start into the daemon log: the file limit this process really got
-# (issue #1080; the plist/unit raise it from the 256 default).
+# (issue #1080; the plist/unit raise it from the 256 default). `ulimit -n` is
+# not POSIX but every sh this runs under (bash-as-sh, dash, zsh) has it.
+# shellcheck disable=SC3045
 printf '%s tmux-spinner: nofile=%s\n' "$(date '+%Y-%m-%dT%H:%M:%S' 2>/dev/null)" "$(ulimit -n 2>/dev/null || echo '?')" >&2
 
 # --- per-fleet sockets (issue #159) -----------------------------------------
