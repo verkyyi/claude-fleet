@@ -74,6 +74,15 @@ FLEET_HOST_TUNE_MAXFILES_PLIST     seam: the maxfiles LaunchDaemon plist path (f
 FLEET_HUB                          handoff: marks the hub pane (operator seat), set at hub spawn
 FLEET_HUB_VISITS_LOGDIR            path: state/log location override (fleet-hub-visits.sh)
 FLEET_HUB_VISITS_MAX               knob: internal pacing/limit, safe in-code default (fleet-hub-visits.sh)
+FLEET_INSTALL_BREW_PREFIX          seam: brew prefix substituted into plists (fleet-install-apply.sh)
+FLEET_INSTALL_CLAUDE               seam: an injectable command/path for tests (fleet-install-apply.sh)
+FLEET_INSTALL_DAEMON_DIR           path: system LaunchDaemons dir override (fleet-install-apply.sh)
+FLEET_INSTALL_LAUNCHCTL            seam: an injectable command/path for tests (fleet-install-apply.sh)
+FLEET_INSTALL_LOGIN                seam: the login whose system LaunchDaemons are rendered (fleet-install-apply.sh)
+FLEET_INSTALL_PLATFORM             seam: launchd|systemd|none instead of uname (fleet-install-apply.sh)
+FLEET_INSTALL_ROOT                 path: the install to apply to (fleet-install-apply.sh)
+FLEET_INSTALL_SUDO                 seam: the sudo prefix for system LaunchDaemons (fleet-install-apply.sh)
+FLEET_INSTALL_SYSTEMCTL            seam: an injectable command/path for tests (fleet-install-apply.sh)
 FLEET_ISSUES_REFRESH_CMD           seam: an injectable command/path for tests (fleet-webhook.sh)
 FLEET_ISSUE_BRIDGE_STATE_DIR       path: state/log location override (fleet-issue-bridge.sh)
 FLEET_LAND_LEASE_DIR               path: state/log location override (fleet-base-sync.sh)
@@ -150,6 +159,7 @@ FLEET_SYNC_LOGINS_ME               seam: an injectable command/path for tests (f
 FLEET_SYNC_LOGINS_PGREP            seam: an injectable command/path for tests (fleet-sync-logins.sh)
 FLEET_SYNC_LOGINS_SUDO             seam: an injectable command/path for tests (fleet-sync-logins.sh)
 FLEET_SYNC_LOGINS_TMP              seam: an injectable command/path for tests (fleet-sync-logins.sh)
+FLEET_SYSTEMD_USER_DIR             path: systemd user unit dir override (fleet-install-apply.sh)
 FLEET_TMUX_PREFIX                  handoff: the operator's tmux prefix, read by fleet-up into the keymap
 FLEET_TMUX_PREFIX2                 handoff: the operator's second tmux prefix, read by fleet-up into the keymap
 FLEET_TOKEN_PROBE                  seam: a fake token-probe command
