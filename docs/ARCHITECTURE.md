@@ -476,6 +476,21 @@ override (`FLEET_MODEL`, `FLEET_AGENT`, `FLEET_MCP_CONFIG`, `FLEET_DEPLOY_*`); t
 fleet conf keeps the fleet-wide defaults. All hosted repos are equal — there is no
 main repo. `bin/fleet-repo.sh add|remove|list` manages them.
 
+`add` is `fleet_repo_register` in `bin/fleet-lib.sh` (issue #1104) — the one
+implementation of "add a repo", and the checkout step (`fleet_repo_checkout`) and
+trust warning (`fleet_repo_trust_warn`) are shared with `fleet-up.sh`'s first repo,
+so a repo added later gets the same follow-through: clone-or-reuse, the base branch
+resolved as in #603, the overlay written atomically, then the trust warning, a
+daemon wake (#1077) and a collector kick — the collector walks `fleet_repos`, so
+that tick already fetches the new repo instead of waiting out an idle cycle. Its
+stdout is ONE result token, the shape `dash-reap.sh` uses, which the add-repo
+popup (#1103) reads: `added:<slug>` (exit 0), `refused:hosted`,
+`refused:origin-mismatch`, `refused:not-a-checkout`, `refused:invalid-repo`,
+`failed:clone`, `failed:write` (exit 1; nothing written). `fleet-doctor.sh` prints
+a `repos` row per fleet — every hosted repo with ✓, or ✗ naming the failing item
+(`main`: checkout missing or origin mismatch · `base`: unset or absent ·
+`trust`) — a one-repo fleet included, after that fleet's per-repo blocks.
+
 `fleet-repo.sh fold <from> --into <sess> [--dry-run] [--wait]` (#796) retires a
 one-repo fleet into another. It is the hand fold of tokenledger done as one
 plan/execute pair: `add` the repo, carrying every per-repo key `<from>` sets
@@ -881,7 +896,7 @@ Where "existing or newly-created checkout" is handled:
    fleet (it keeps its name), else `fleet` for a brand-new one — never derived
    from a repo. When that fleet is configured and `<owner/repo>` is not its own
    repo, the fleet comes up on its OWN repo (if down) and the named repo is added
-   (`fleet-repo.sh add`) and made current. A `--name` that is not the login's
+   (`fleet_repo_register`, what `fleet-repo.sh add` runs). A `--name` that is not the login's
    fleet is refused: a second fleet means a second login. Already up on its own
    repo → attach, no rewrite.
 2. Checkout: if `<dir>` exists and is that repo → use it; else clone it. This

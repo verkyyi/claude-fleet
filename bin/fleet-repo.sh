@@ -11,10 +11,13 @@
 # $FLEET_CONF_DIR/fleets/<sess>/repos/<slug>.conf (see fleet_repos in fleet-lib.sh).
 # All hosted repos are equal; the conf's repo is simply the first one.
 #
-# `add` reuses the checkout if it already is that repo, else clones it — the same
-# rule as fleet-up.sh — resolves the base branch the same way (#603), and writes the
-# overlay. (It used to refuse without FLEET_MULTIREPO=1; the two-repo end-to-end
-# check, bin/multirepo-e2e-selftest.sh, lifted that gate in #795.)
+# `add` is fleet_repo_register (fleet-lib.sh, issue #1104) — the one implementation
+# fleet-up.sh shares: reuse the checkout if it already is that repo, else clone it;
+# resolve the base branch (#603); write the overlay; then the same follow-through
+# the first repo gets — trust warning, daemon wake, collector kick. Its stdout is
+# ONE result token (added:<slug> · refused:hosted · refused:origin-mismatch ·
+# refused:not-a-checkout · refused:invalid-repo · failed:clone · failed:write);
+# every human line goes to stderr.
 #
 # `remove` deletes an overlay. The conf's own repo lives in the fleet conf and is not
 # removable here. A repo that still has live windows (@repo) is refused without
@@ -348,7 +351,10 @@ PLAN
     die "$SESS is not running — fleet-up it first (the sessions resume into it)"
   fi
   if [ "$hosted" = 0 ]; then
-    bash "$0" add --session "$SESS" "$SRC_REPO" "$src_main" --base "$src_base" || die "add failed"
+    # No collector kick (fleet_repo_register): its restore snapshot would race the
+    # side-store archive below. Its stdout token is for scripts.
+    _FLEET_REGISTER_NO_KICK=1 bash "$0" add --session "$SESS" "$SRC_REPO" "$src_main" --base "$src_base" >/dev/null \
+      || die "add failed"
     if [ -n "$carry" ]; then
       local f; f=$(fleet_repo_conf_file "$SESS" "$SRC_REPO")
       { printf '# carried from fleet %s by fold (issue #796)\n' "$FROM"; printf '%s' "$carry"; } >> "$f" \
@@ -434,44 +440,10 @@ EOF
 
   add)
     [ -n "$REPO" ] || usage
-    norm_repo_arg
-    fleet_repo_hosted "$SESS" "$REPO" && die "$SESS already hosts $REPO"
-    DIR="${DIR:-$HOME/projects/$(basename "$REPO")}"
-    # --- checkout: reuse if it's already that repo, else clone (as fleet-up.sh) ---
-    if [ -d "$DIR/.git" ]; then
-      have=$(fleet_norm_repo "$(git -C "$DIR" remote get-url origin 2>/dev/null)")
-      [ "$have" = "$REPO" ] || die "$DIR is a checkout of '$have', not '$REPO'"
-      echo "fleet-repo: reusing existing checkout $DIR"
-    elif [ -e "$DIR" ]; then
-      die "$DIR exists but is not a git checkout"
-    else
-      echo "fleet-repo: cloning $REPO → $DIR"
-      mkdir -p "$(dirname "$DIR")"
-      if command -v gh >/dev/null 2>&1; then gh repo clone "$REPO" "$DIR" || die "clone failed"
-      else git clone "https://github.com/$REPO.git" "$DIR" || die "clone failed"; fi
-    fi
-    DIR=$(cd "$DIR" && pwd)
-    IFS=$'\t' read -r BASE BASE_SRC BASE_DEFAULT \
-      < <(fleet_resolve_base_branch "$REPO" "$DIR" "$BASE")
-    case "$BASE_SRC" in
-      default) : ;;
-      flag) if [ -n "$BASE_DEFAULT" ] && [ "$BASE" != "$BASE_DEFAULT" ]; then
-              echo "fleet-repo: WARNING — --base '$BASE' is NOT $REPO's default branch ('$BASE_DEFAULT')." >&2
-            fi ;;
-      *) echo "fleet-repo: WARNING — could not read $REPO's default branch from GitHub; using '$BASE' ($BASE_SRC) — verify it is the trunk." >&2 ;;
-    esac
-    f=$(fleet_repo_conf_file "$SESS" "$REPO")
-    mkdir -p "$(dirname "$f")" || die "cannot create $(dirname "$f")"
-    {
-      printf "# claude-fleet: repo '%s' hosted by fleet '%s' — written by fleet-repo.sh %s\n" \
-        "$REPO" "$SESS" "$(date '+%Y-%m-%d %H:%M:%S')"
-      printf '# Overlays the fleet conf for this repo'\''s windows. Optional overrides:\n'
-      printf '# FLEET_MODEL, FLEET_AGENT, FLEET_MCP_CONFIG, FLEET_DEPLOY_*.\n'
-      printf 'FLEET_REPO="%s"\n' "$REPO"
-      printf 'FLEET_MAIN="%s"\n' "$DIR"
-      printf 'FLEET_BASE_BRANCH="%s"\n' "$BASE"
-    } > "$f.tmp.$$" && mv -f "$f.tmp.$$" "$f" || { rm -f "$f.tmp.$$"; die "failed to write $f"; }
-    echo "fleet-repo: $SESS now hosts $REPO (main=$DIR base=$BASE) — $f"
+    # One implementation (fleet_repo_register, issue #1104): stdout is its result
+    # token, the human lines are on stderr.
+    fleet_repo_register "$SESS" "$REPO" ${DIR:+"$DIR"} ${BASE:+--base "$BASE"}
+    exit $?
     ;;
 
   remove)

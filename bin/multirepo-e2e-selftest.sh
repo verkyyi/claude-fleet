@@ -10,7 +10,9 @@
 #   setup  fleet-repo.sh add registers the second repo with NO gate (FLEET_MULTIREPO
 #          is gone). Both checkouts share a basename (…/a/app, …/b/app) and the
 #          fleet sets FLEET_WORKTREE_ROOT, so a worktree path keyed on the basename
-#          alone would collide.
+#          alone would collide. The add prints its result token, refreshes the
+#          daemon wake marker (issue #1104), and fleet-doctor's `repos` row then
+#          lists both repos — the one-repo fleet beside it gets its one-repo row.
 #   spawn  issue #12 in BOTH repos, a scratch in both, a no-repo session.
 #   (a) PR/CI by branch name     each issue-12 row shows its OWN repo's PR.
 #   (b) cleanup by bare number   A's PR merges; one cleanup tick reaps A's #12
@@ -167,9 +169,31 @@ inpane() { local w="$1"; shift; TMUX="$SOCK,1,0" TMUX_PANE="$(opt "$w" pane_id)"
 strip()  { sed $'s/\x1b\\[[0-9;]*m//g'; }
 
 # ==== setup: the second repo, with no gate ==========================================
-out=$(bash "$BIN/fleet-repo.sh" add --session "$S" o/beta "$MB" --base master 2>&1) \
+wake_file="$( . "$BIN/fleet-daemon-lib.sh"; fleet_daemon_state_dir "$BIN/.." )/wake"
+rm -f "$wake_file"; t0=$(date +%s)
+out=$(bash "$BIN/fleet-repo.sh" add --session "$S" o/beta "$MB" --base master 2>"$WORK/add.err") \
   && ok "setup: fleet-repo.sh add o/beta — no FLEET_MULTIREPO needed" \
-  || fail "setup: fleet-repo.sh add refused: $out"
+  || fail "setup: fleet-repo.sh add refused: $out $(cat "$WORK/add.err")"
+[ "$out" = "added:o-beta" ] && ok "setup: add prints its result token (#1104)" || fail "setup: add token [$out]"
+[ "$(cat "$wake_file" 2>/dev/null || echo 0)" -ge "$t0" ] && ok "setup: add woke the daemons (#1104)" \
+  || fail "setup: no fresh wake marker at $wake_file"
+# The kicked collector tick queues o/beta — and is waited out, so it can neither race
+# the test's own `collect` below (the overlap guard would skip that one) nor outlive it.
+kicked=0
+for _ in $(seq 1 600); do
+  grep -q '^o/beta' "$TMPDIR/.claude-dash/global/collect.repoqueue" 2>/dev/null \
+    && [ ! -s "$TMPDIR/.claude-dash/global/collect.pid" ] && { kicked=1; break; }
+  sleep 0.1
+done
+[ "$kicked" = 1 ] && ok "setup: the collector kick queued o/beta (#1104)" \
+  || fail "setup: no collector tick queued o/beta: $(cat "$TMPDIR/.claude-dash/global/collect.repoqueue" 2>&1)"
+out=$(bash "$BIN/fleet-repo.sh" add --session "$S" o/beta "$MB" 2>/dev/null); rc=$?
+[ "$out:$rc" = "refused:hosted:1" ] && ok "setup: a repeat add is refused:hosted, non-zero" || fail "setup: repeat add [$out:$rc]"
+sh "$BIN/fleet-doctor.sh" 2>/dev/null | sed $'s/\x1b\\[[0-9;]*m//g' | grep -E '^ +(PASS|WARN) +repos ' > "$WORK/doctor.repos"
+grep -Eq 'repos +2 hosted \(ft\): o/alpha . .*· o/beta .' "$WORK/doctor.repos" \
+  && ok "setup: doctor's repos row lists both repos (#1104)" || fail "setup: doctor repos rows: $(cat "$WORK/doctor.repos")"
+grep -Eq 'repos +1 hosted \(fd\): o/solo .' "$WORK/doctor.repos" \
+  && ok "(z) the one-repo fleet still gets its repos row" || fail "(z) doctor repos rows: $(cat "$WORK/doctor.repos")"
 [ "$(fleet_repos "$S" | tr '\n' ' ')" = "o/alpha o/beta " ] || fail "setup: fleet_repos: $(fleet_repos "$S")"
 [ -z "$(tmux show-option -gqv @fleet_repo_label)" ] && ok "setup: the footer grows no repo label (#1034)" \
   || fail "setup: footer label [$(tmux show-option -gqv @fleet_repo_label)]"

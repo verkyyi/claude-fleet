@@ -1769,9 +1769,10 @@ _repo_block() {
   dchk=$(_repo_key "$rb_cf" "$rb_ov" "$rb_own" FLEET_DEPLOY_CHECK)
 
   # main — the checkout every worktree for this repo branches from
-  main_ok=0
+  main_ok=0; rb_bad=''   # rb_bad: this repo's failing items, for the `repos` row
   if [ -z "$main" ]; then
     warn main "$r: no FLEET_MAIN — a spawn for this repo has no checkout to branch from; set it in $rb_src"
+    rb_bad="main"
   elif [ ! -d "$main" ]; then
     warn main "$r: FLEET_MAIN $main does not exist — every spawn for this repo fails; clone it there or fix FLEET_MAIN in $rb_src"
   elif ! git -C "$main" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -1787,10 +1788,12 @@ _repo_block() {
       pass main "$r: $main (origin matches)"
     fi
   fi
+  [ -n "$main" ] && [ "$main_ok" = 0 ] && rb_bad="main"
 
   # base + labels — one gh read: the default branch, then every label name
   if [ -z "$bbase" ]; then
     warn base "$r: no FLEET_BASE_BRANCH — the tooling has to guess this repo's trunk; set it in $rb_src"
+    rb_bad="${rb_bad:+$rb_bad, }base"
   fi
   gh_out=''
   command -v gh >/dev/null 2>&1 \
@@ -1800,6 +1803,7 @@ _repo_block() {
     if [ "$main_ok" = 1 ] && ! git -C "$main" rev-parse --verify -q "refs/heads/$bbase" >/dev/null 2>&1 \
          && ! git -C "$main" rev-parse --verify -q "refs/remotes/origin/$bbase" >/dev/null 2>&1; then
       warn base "$r: base \"$bbase\" does not exist in $main — no worktree can branch from it"
+      rb_bad="${rb_bad:+$rb_bad, }base"
     elif [ -z "$bdef" ]; then
       printf '        note: %s: could not read the default branch (gh missing/unauthed/offline) — base "%s" left unverified.\n' "$r" "$bbase"
     elif [ "$bbase" = "$bdef" ]; then
@@ -1847,6 +1851,7 @@ EOF
       trusted)
         pass trust "$r: $main is trusted in $(sh "$tr_sh" file) — workers skip the trust dialog" ;;
       untrusted)
+        rb_bad="${rb_bad:+$rb_bad, }trust"
         if [ "$pretrust" = 0 ]; then
           warn trust "$r: $main is NOT trusted and FLEET_PRETRUST=0 — every spawned worker will hang at Claude Code's \"trust this folder?\" dialog; fix: sh $tr_sh grant --main '$main'"
         else
@@ -1895,17 +1900,39 @@ EOF
       warn labels "$r: missing fleet labels:$missing — filing an issue with one fails; fix: $(dirname "$0")/fleet-labels-seed.sh --repo $r"
     fi
   fi
+
+  rs_n=$((rs_n + 1))
+  if [ -z "$rb_bad" ]; then rs_list="${rs_list:+$rs_list · }$r ✓"
+  else rs_list="${rs_list:+$rs_list · }$r ✗ ($rb_bad)"; rs_bad=1; fi
+}
+
+# _repos_row <sess> <fleet-count> — the one-line `repos` summary (issue #1104): every
+# repo the fleet hosts, and whether its checkout (exists, origin matches), base
+# branch (set, exists) and trust are healthy — the one line that answers "which
+# repos does this fleet run, and are they all usable". A one-repo fleet shows it
+# too. The failing items were each already reported (and counted) as their own
+# row in the block above, so a WARN here names them without counting again.
+_repos_row() {
+  rr_tag=''; [ "$2" -gt 1 ] && rr_tag=" ($1)"
+  if [ "$rs_n" = 0 ]; then
+    warn repos "0 hosted$rr_tag — no conf FLEET_REPO and no repos/ overlay"
+  elif [ "$rs_bad" = 0 ]; then
+    pass repos "$rs_n hosted$rr_tag: $rs_list"
+  else
+    printf '  %sWARN%s  %-8s %s\n' "$Y" "$Z" repos "$rs_n hosted$rr_tag: $rs_list"
+  fi
 }
 
 if [ ! -f "$tr_sh" ]; then
   warn trust "bin/fleet-trust.sh missing — spawns cannot pre-trust the checkout; a worker may park on Claude Code's \"trust this folder?\" dialog (#563); run /fleet-sync-install"
 fi
 if [ -d "$conf_dir" ]; then
+  rs_fleets=$(_fleet_confs "$conf_dir" | grep -c .)
   while IFS= read -r cf; do
     [ -n "$cf" ] || continue
     case "$cf" in */fleets/*/conf) sess=${cf%/conf}; sess=${sess##*/} ;; *) sess=$(basename "$cf" .conf) ;; esac
     own=$(_norm_repo "$(_conf_val "$cf" FLEET_REPO)")
-    seen=' '
+    seen=' '; rs_n=0; rs_bad=0; rs_list=''
     if [ -n "$own" ]; then
       ov="$conf_dir/fleets/$sess/repos/$(_repo_slug "$own").conf"; [ -f "$ov" ] || ov=''
       _repo_block "$sess" "$cf" "$own" "$ov" 1
@@ -1921,6 +1948,7 @@ if [ -d "$conf_dir" ]; then
       seen="$seen$r "
       _repo_block "$sess" "$cf" "$r" "$ov" 0
     done
+    _repos_row "$sess" "$rs_fleets"
   done <<EOF
 $(_fleet_confs "$conf_dir")
 EOF
