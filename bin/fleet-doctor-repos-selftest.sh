@@ -111,7 +111,7 @@ ok
 # 8. (issue #1104) the `repos` summary row: both repos, beta's broken main named
 row WARN repos '2 hosted: o/alpha ✓ · o/beta ✗ \(main\)$' || fail "repos row did not list o/alpha ✓ and o/beta ✗ (main)"
 [ "$(grep -c '^[[:space:]]*[^[:space:]]*WARN[^[:space:]]*[[:space:]]*repos ' "$WORK/stdout")" = 1 ] || fail "expected exactly one repos row"
-nwarn=$(grep -c 'WARN' "$WORK/stdout"); said=$(sed -n 's/^[^0-9]*\([0-9][0-9]*\) warn.*/\1/p' "$WORK/stdout" | tail -1)
+nwarn=$(grep -c 'WARN' "$WORK/stdout"); said=$(tail -1 "$WORK/stdout" | grep -oE '[0-9]+ warn' | cut -d' ' -f1)   # "N warn" or "M fail, N warn"
 [ "$said" = "$((nwarn - 1))" ] || fail "the repos WARN counted again: $nwarn WARN rows, summary says $said"
 ok
 # … an untrusted main is named as trust, a missing base as base
