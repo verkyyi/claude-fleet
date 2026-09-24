@@ -62,12 +62,12 @@ fi
 # Start with the dash table; backlog/config load their own before rendering.
 eval "$(bash "$BIN/dash-keymap.sh" env 2>/dev/null)"
 dg() {
-  local v; v="DASH_GLYPH_$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"
+  local v; v="DASH_GLYPH_$(printf '%s' "$1" | tr '[:lower:]-' '[:upper:]_')"
   printf '%s' "${!v:-⌃?}"
 }
 dn() {
   local a s r g gl
-  a=$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')
+  a=$(printf '%s' "$1" | tr '[:lower:]-' '[:upper:]_')
   s="DASH_KEYSTATE_$a"; r="DASH_REMAP_$a"; g="DASH_GLYPH_$a"; gl="${!g:-}"
   case "${!s:-ok}" in
     remapped)    printf ' — (⌥ fallback: ⌃%s is your tmux prefix %s)' "${gl#⌥}" "${!r:-}" ;;
@@ -195,6 +195,7 @@ EOF
   key "$(dg reap)" "reap a finished worker (window + worktree + issue) — confirms when the row isn't merged+clean. Targets: @window-id, %pane-id, registered handle, issue-N or scratch-N; indexes/names are refused. From a SCRIPT: \`dash-reap.sh <handle> --yes\` takes that confirm branch unasked (a dirty worktree is still KEPT) and prints a result token (\`reaped:full\`/\`reaped:keep\`/\`skip:needs-confirm\`/\`refused:<slug>\`); with no client attached it never pops a box at you$(dn reap)"
   key "$(dg migrate)" "move the highlighted session onto another subscription account NOW — the unstick for a \`⚠ stuck\` row (issue #873). A confirm popup shows the target account and every background command the move will stop; y closes it (/exit), stops those commands, and resumes the same transcript in a new window on the account with headroom, the stopped commands named in its first prompt. Refuses when no account has room (every one benched) — it never bounces a session onto another wall. Same as \`fleet-account.sh migrate --force-bg <window>\`; \`migrate --stuck\` moves every stuck row$(dn migrate)"
   key "$(dg pin)" "pin/unpin the highlighted window to the TOP of the list — a pin beats the status sort (a pinned idle row sits above a red one), so the session you are deliberately watching stays where you left it. Pinning a PARENT floats its children with it, still nested; a pinned row is marked 📌. The pin lives on the tmux window, so it vanishes with the window — nothing to clean up$(dn pin)"
+  key "$(dg repo-add)" "add a repo to this fleet (issue #1103) — a popup asks just owner/name (a GitHub URL is fine) and runs \`fleet-repo.sh add\`: the checkout is ~/projects/<name>, reused when it already is that repo, cloned when missing (the clone's progress shows in the popup); the verdict stays up until you dismiss it (↵ / esc / [✕ close]) — added · already hosted · the dir is another repo · clone failed. No restart: the repo's heading is on the dash's next frame and the background daemons pick it up within a tick. Also the task sidebar's row menu \`g\`. A different checkout dir still needs the shell form, \`bin/fleet-repo.sh add <owner/name> <dir>\`$(dn repo-add)"
   key "$(dg view)" "toggle live ⇄ closed (finished sessions + scratch)$(dn view)"
   key "$(dg restore)" "restore the highlighted landed session into a new window (claude --resume)$(dn restore)"
   key "enter (landed)" "resume the highlighted landed session — same as $(dg restore)"

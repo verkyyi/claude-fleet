@@ -21,6 +21,8 @@
 #   ⌃v flip this fleet's default agent for NEW sessions (claude ⇄ codex, #554 —
 #   written to the fleet's conf, so every spawn path follows; the prompt line
 #   reads `claude ▸ ` / `codex ▸ ` from the same conf, dash-agent-prompt.sh) ·
+#   ⌃z add a repo to this fleet (issue #1103 — a popup asks owner/name and runs
+#   fleet-repo.sh add; the new repo's heading is on the next frame) ·
 #   Ctrl-R refresh now · Esc/q relaunch (it's always-on).
 #   Every ⌃-key above is the DEFAULT: tmux never delivers its prefix to a pane,
 #   so each launch resolves the bind table in bin/dash-keymap.sh against the
@@ -176,7 +178,7 @@ run_dash() {
   # unbound floor for an install missing the helper.
   DASH_KEY_AGENT=ctrl-v DASH_KEY_RELOAD=ctrl-r DASH_KEY_NEW=ctrl-n DASH_KEY_SCRATCH=ctrl-s DASH_KEY_VIEW=ctrl-t
   DASH_KEY_RESTORE=ctrl-o DASH_KEY_PR=ctrl-p DASH_KEY_REAP=ctrl-x DASH_KEY_RENAME=ctrl-e DASH_KEY_ANSWER=ctrl-k
-  DASH_KEY_PIN=ctrl-y DASH_KEY_MIGRATE=ctrl-l
+  DASH_KEY_PIN=ctrl-y DASH_KEY_MIGRATE=ctrl-l DASH_KEY_REPO_ADD=ctrl-z
   DASH_GLYPH_AGENT='⌃v'
   eval "$(bash "$KEYMAP" env 2>/dev/null)"
   # The ghost names the agent-flip key (issue #559): export the LAUNCH-TIME glyph
@@ -203,6 +205,7 @@ run_dash() {
     --bind "$DASH_KEY_REAP:execute(bash $BIN/dash-reap.sh {2})+reload(bash $ROWS)" \
     --bind "$DASH_KEY_PIN:execute-silent(bash $BIN/dash-pin-toggle.sh {1})+reload(bash $ROWS)" \
     --bind "$DASH_KEY_MIGRATE:execute(bash $BIN/dash-migrate.sh {1})+reload(bash $ROWS)" \
+    --bind "$DASH_KEY_REPO_ADD:execute(bash $BIN/dash-popup.sh -w 80% -h 16 -- bash $BIN/dash-repo-add.sh)+reload(bash $ROWS)" \
     --bind "$DASH_KEY_RENAME:transform(bash $BIN/dash-rename.sh {1})" \
     --bind "$DASH_KEY_ANSWER:execute(bash $BIN/dash-popup.sh -w 84% -h 70% -- bash $BIN/dash-answer.sh {1})+reload(bash $ROWS)" \
     --bind "left:transform(bash $BIN/dash-fold-toggle.sh collapse {1} {q})" \

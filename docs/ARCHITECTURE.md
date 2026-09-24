@@ -498,7 +498,13 @@ registry entry** — no migration. Each further repo is an overlay at
 `fleets/<session>/repos/<slug>.conf` with the same three keys plus any per-repo
 override (`FLEET_MODEL`, `FLEET_AGENT`, `FLEET_MCP_CONFIG`, `FLEET_DEPLOY_*`); the
 fleet conf keeps the fleet-wide defaults. All hosted repos are equal — there is no
-main repo. `bin/fleet-repo.sh add|remove|list` manages them.
+main repo. `bin/fleet-repo.sh add|remove|list` manages them; from inside the fleet,
+the dash's ⌃z (`repo-add` in `dash-keymap.sh`) and the task sidebar's row menu `g`
+open the same popup, `bin/dash-repo-add.sh` (issue #1103): it asks only
+`owner/name`, runs `fleet-repo.sh add --session <sess>` with the checkout defaulted
+to `~/projects/<name>`, reads the result token off its stdout and holds the verdict
+until dismissed. The two entries are a UI over the one registration — nothing is
+gated on the fleet already hosting two, since the popup is how the second gets in.
 
 `add` is `fleet_repo_register` in `bin/fleet-lib.sh` (issue #1104) — the one
 implementation of "add a repo", and the checkout step (`fleet_repo_checkout`) and
@@ -620,7 +626,8 @@ key). A one-repo fleet keeps the bare keys everywhere —
 grouped under a heading per repo; a heading (or the highlighted row) picks where a
 new session goes. #793 added a footer repo picker (`fleet-pick.sh`, behind a tap on
 the fleet name and the dash's ⌃z) that narrowed the view to one repo; #1034 removed
-it, since everything since #977/#997 assumes `all`. `fleet_current_repo` survives
+it, since everything since #977/#997 assumes `all` (⌃z is the add-a-repo popup
+since #1103). `fleet_current_repo` survives
 as a function that always answers `all`, so its readers (new session, restore,
 history, issue-file, backlog, raw-session) keep their `all` path unchanged; a stale
 `current-repo` file on disk is ignored, and `fleet-up.sh` deletes it. The footer's

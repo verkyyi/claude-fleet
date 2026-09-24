@@ -159,7 +159,8 @@ table_keys="$(printf '%s\n' "$table" | awk '{print $3}' | sed -n 's/^⌃\(.\)$/\
 [ "$(printf '%s\n' "$table_keys" | grep -c .)" = "$(printf '%s\n' "$table_actions" | grep -c .)" ] \
   || fail "under C-b every table glyph must be a plain ⌃<letter> (got: $(printf '%s' "$table" | awk '{print $3}' | tr '\n' ' '))"
 # the dash's binds: `--bind "$DASH_KEY_<ACTION>:` → action, lowercased
-dash_actions="$(grep -oE -- '--bind "\$DASH_KEY_[A-Z]+:' "$DASH" | sed 's/.*DASH_KEY_\([A-Z]*\):.*/\1/' | tr '[:upper:]' '[:lower:]' | sort -u)"
+# an action name's `-` is `_` in its env name (repo-add → DASH_KEY_REPO_ADD, #1103)
+dash_actions="$(grep -oE -- '--bind "\$DASH_KEY_[A-Z_]+:' "$DASH" | sed 's/.*DASH_KEY_\([A-Z_]*\):.*/\1/' | tr '[:upper:]_' '[:lower:]-' | sort -u)"
 [ -n "$dash_actions" ] || fail "no '\$DASH_KEY_<ACTION>' --binds parsed from tmux-dashboard.sh"
 grep -Eq -- '--bind "(ctrl|alt)-' "$DASH" \
   && fail "tmux-dashboard.sh binds a literal ctrl/alt chord — add the action to dash-keymap.sh and bind \$DASH_KEY_<ACTION> (#556)"
@@ -168,14 +169,14 @@ grep -Eq -- '--bind "(ctrl|alt)-' "$DASH" \
 while IFS= read -r k; do
   [ -n "$k" ] || continue
   printf '%s\n' "$table_actions" | grep -Fxq "$k" \
-    || fail "tmux-dashboard.sh binds \$DASH_KEY_$(printf '%s' "$k" | tr '[:lower:]' '[:upper:]') but dash-keymap.sh's table has no '$k' action"
+    || fail "tmux-dashboard.sh binds \$DASH_KEY_$(printf '%s' "$k" | tr '[:lower:]-' '[:upper:]_') but dash-keymap.sh's table has no '$k' action"
 done <<EOF
 $dash_actions
 EOF
 while IFS= read -r k; do
   [ -n "$k" ] || continue
   printf '%s\n' "$dash_actions" | grep -Fxq "$k" \
-    || fail "dash-keymap.sh lists '$k' but tmux-dashboard.sh has no --bind \"\$DASH_KEY_$(printf '%s' "$k" | tr '[:lower:]' '[:upper:]'):…\""
+    || fail "dash-keymap.sh lists '$k' but tmux-dashboard.sh has no --bind \"\$DASH_KEY_$(printf '%s' "$k" | tr '[:lower:]-' '[:upper:]_'):…\""
   grep -q "key \"\$(dg $k)" "$KEYS" \
     || fail "dash-keymap.sh lists '$k' but fleet-keys.sh has no \$(dg $k) row for it"
 done <<EOF
@@ -284,8 +285,8 @@ done
 printf '%s\n' "$SSHEET" | grep -Eq '^(task sidebar|row menu|tmux prefix|dashboard|backlog|config modal) ' \
   && fail "the sidebar sheet shows a full-sheet group"
 menu_keys="$(bash "$BIN/fleet-sidebar-menu.sh" --keys)" || fail "fleet-sidebar-menu.sh --keys exited non-zero"
-[ "$(printf '%s\n' "$menu_keys" | cut -f1 | tr -d '\n')" = rtpawkvxno ] \
-  || fail "the row menu's key table is not r t p a w k v x n o: $(printf '%s' "$menu_keys" | cut -f1 | tr '\n' ' ')"
+[ "$(printf '%s\n' "$menu_keys" | cut -f1 | tr -d '\n')" = rtpawkvxnog ] \
+  || fail "the row menu's key table is not r t p a w k v x n o g: $(printf '%s' "$menu_keys" | cut -f1 | tr '\n' ' ')"
 while IFS='	' read -r mk _; do
   [ -n "$mk" ] || continue
   printf '%s\n' "$SSHEET" | grep -Eq "^  $mk +" && fail "the sidebar sheet lists the row menu letter '$mk'"
