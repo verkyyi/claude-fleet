@@ -214,20 +214,36 @@ CHECKS=$((CHECKS + 1))
 [ -z "$(fsline "$out")" ] || fail "5f: no fseventsd running must print no line" "$(fsline "$out")"
 
 # ============================================================================
-# 6. Session caps vs cores (issue #889).
+# 6. Session caps vs cores (issue #889) — STATED, never warned (issue #952).
+#    The operator owns FLEET_MAX_SESSIONS / FLEET_GLOBAL_MAX_SESSIONS; the line
+#    reports the numbers and never counts as a WARN or tells them what to set.
 # ============================================================================
+# The line may state numbers only: no verdict phrase, no knob to turn.
+lacks() { CHECKS=$((CHECKS + 1)); case "$2" in *"$1"*) fail "$3" "$2";; esac; }
+stated_only() {
+  lacks "lower "  "$1" "$2: the sessions line must not advise lowering a cap"
+  lacks "set FLEET_GLOBAL_MAX_SESSIONS" "$1" "$2: the sessions line must not advise setting a cap"
+  lacks "over the" "$1" "$2: the sessions line must not draw a line to be over"
+  lacks "≤" "$1" "$2: the sessions line must not name a ceiling to aim for"
+}
 mkdir -p "$WORK/conf/fleets/fa" "$WORK/conf/fleets/fb" "$WORK/conf/fleets/fc"
 echo 10 > "$WORK/cores"
 printf 'FLEET_REPO=o/a\nFLEET_MAX_SESSIONS=9\n' > "$WORK/conf/fleets/fa/conf"
 printf 'FLEET_REPO=o/b\nFLEET_MAX_SESSIONS=20   # a comment\n' > "$WORK/conf/fleets/fb/conf"
 printf 'FLEET_REPO=o/c\nFLEET_MAX_SESSIONS="6"\n' > "$WORK/conf/fleets/fc/conf"
 out="$(GMAX=30 run_doctor)"; l="$(capline "$out")"
-has "WARN" "$l" "6a: global 30 on 10 cores must WARN"
-has "sum to 35" "$l" "6a: the WARN must state the per-fleet sum (9+20+6)"
-has "3.0x" "$l" "6a: the WARN must state sessions per core"
-has "FLEET_GLOBAL_MAX_SESSIONS" "$l" "6a: the WARN must name the knob"
-survived "$out" || fail "6a: the doctor did not survive the caps WARN" "$l"
-quiet "6a: the caps WARN must print NOTHING on stderr"
+has "PASS" "$l" "6a: global 30 on 10 cores (3.0x) must PASS — the cap is the operator's, not a finding (#952)"
+has "global cap 30" "$l" "6a: the line must state the global cap"
+has "sum to 35" "$l" "6a: the line must state the per-fleet sum (9+20+6)"
+has "10 cores" "$l" "6a: the line must state the core count"
+has "3.0x" "$l" "6a: the line must state sessions per core"
+stated_only "$l" "6a"
+survived "$out" || fail "6a: the doctor did not survive the caps line" "$l"
+quiet "6a: the caps line must print NOTHING on stderr"
+# ...and it must not be counted: a box whose only 'finding' is its cap is healthy.
+CHECKS=$((CHECKS + 1))
+printf '%s\n' "$out" | grep -qa 'sessions:' || fail "6a: the sessions line must be printed at all" "$out"
+[ "$(mlines "$out" | grep -ac 'WARN.*sessions:')" -eq 0 ] || fail "6a: the sessions line must never be a WARN" "$l"
 out="$(GMAX=16 run_doctor)"; l="$(capline "$out")"
 has "PASS" "$l" "6b: global 16 on 10 cores must PASS"
 has "1.6x" "$l" "6b: the PASS must state sessions per core"
@@ -236,13 +252,20 @@ printf 'FLEET_REPO=o/b\nFLEET_MAX_SESSIONS=2\n' > "$WORK/conf/fleets/fb/conf"
 out="$(GMAX=40 run_doctor)"; l="$(capline "$out")"
 has "PASS" "$l" "6c: caps summing to 17 under a global 40 must PASS — the sum is the real ceiling"
 has "up to 17" "$l" "6c: the line must name the effective ceiling"
-# an uncapped fleet means the global cap is the ceiling again
+# an uncapped fleet means the global cap is the ceiling again — still stated, not warned
 printf 'FLEET_REPO=o/b\n' > "$WORK/conf/fleets/fb/conf"
 out="$(GMAX=40 run_doctor)"; l="$(capline "$out")"
-has "WARN" "$l" "6d: with an uncapped fleet the global 40 is the ceiling and must WARN"
+has "PASS" "$l" "6d: with an uncapped fleet the global 40 (4.0x) is the ceiling and must still PASS (#952)"
 has "1 uncapped" "$l" "6d: the line must say a fleet is uncapped"
+has "4.0x" "$l" "6d: the line must state sessions per core"
+stated_only "$l" "6d"
+# no global cap + an uncapped fleet = unbounded: a fact the line names, not a finding
 out="$(GMAX=0 run_doctor)"; l="$(capline "$out")"
-has "WARN" "$l" "6e: no global cap + an uncapped fleet = unbounded, must WARN"
+has "PASS" "$l" "6e: no global cap + an uncapped fleet = unbounded, must PASS (#952)"
+has "no global cap" "$l" "6e: the line must state there is no global cap"
+has "unbounded" "$l" "6e: the line must name the box as unbounded"
+stated_only "$l" "6e"
+quiet "6e: the unbounded line must print NOTHING on stderr"
 rm -rf "$WORK/conf/fleets"
 
 # ============================================================================
