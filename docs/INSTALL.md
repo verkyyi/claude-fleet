@@ -79,7 +79,9 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    with its own `~/.claude/fleet`, a `logins:` line reports the others' drift
    against this install, and `bin/fleet-sync-logins.sh` (`--dry-run` to preview)
    brings them to this commit, as each login, and restarts their daemons —
-   `/fleet-sync-install` runs it as its last step (issue #1069). A login whose
+   `/fleet-sync-install` runs it as the apply's `--sync-logins` step (issues
+   #1069, #1122), skipping a login that set `FLEET_INSTALL_SYNC=0` in its own
+   settings unless it is named (`--logins <login>` / `--include-off`). A login whose
    `~/.claude/fleet` is a file COPY (step 2's shape) cannot say which version it
    holds or update itself; `fleet-sync-logins.sh --to-git` turns it into a git
    clone at the commit it holds — origin = the public repo over https, no

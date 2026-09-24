@@ -28,18 +28,36 @@
 #             never clobber a personal (unmarked, divergent) skill
 #   ui        dash launcher / tmux conf changed -> fleet-ui-refresh.sh --all
 #   repark    re-park stale sleeping-worker pages on every live fleet (#1064)
+#   logins    --sync-logins only (issue #1122): bring this machine's OTHER
+#             logins to this commit — fleet-sync-logins.sh, the second command
+#             /fleet-sync-install used to end with, folded into this one. A
+#             login that set FLEET_INSTALL_SYNC=0 is left alone unless
+#             --sync-logins=<a,b> names it. Runs only when every step above
+#             passed (never push a version this login could not apply), also on
+#             the from==to no-op (this login current, the others may not be).
+#             Its lines land here under `logins:`; its exit maps to ok, WARN
+#             (blocked / needs sudo — nothing changed there, the rows say what
+#             to do) or FAIL (a sync failed → PARTIAL). The install-sync daemon
+#             never passes it: each login follows `stable` on its own, and a
+#             daemon pushing one login's HEAD onto the others would fight that.
 #
-# /fleet-sync-install is: ff -> this -> report. The install-sync daemon (C3)
-# calls it the same way — one implementation of "sync once".
+# /fleet-sync-install is: ff -> this (--sync-logins) -> report. The install-sync
+# daemon (C3) calls it the same way, minus the flag — one implementation of
+# "sync once".
 #
 # Usage:
 #   fleet-install-apply.sh --from <sha> --to <sha> [--dry-run] [--root <dir>]
+#                          [--sync-logins[=a,b]]
 #   fleet-install-apply.sh --is-command <file>    # exit 0 iff the #858 gate passes
 #
 #   --from     the rev the install was at before the move
 #   --to       the rev it is at now — must resolve to the install's HEAD
-#   --dry-run  print what each step WOULD do; change nothing
+#   --dry-run  print what each step WOULD do; change nothing (passed on to the
+#              logins step: it plans and prints, syncs nothing)
 #   --root     the install (default $FLEET_INSTALL_ROOT, else ~/.claude/fleet)
+#   --sync-logins[=a,b]
+#              also bring the machine's other logins to --to (all that have
+#              auto-update on; `=a,b` exactly those, on or off)
 #
 # Output: one line per step (and one per action inside a step), `<step>: …`, so a
 # daemon can log it verbatim. The last line is `apply: ok …` or `apply: PARTIAL …`.
@@ -56,7 +74,7 @@
 set -uo pipefail
 
 SELF="${BASH_SOURCE[0]}"
-usage() { sed -n '2,52p' "$SELF" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,/^set -uo pipefail/p' "$SELF" | sed '$d' | sed 's/^# \{0,1\}//'; }
 
 # --- the #858 marker gate ---------------------------------------------------
 # A fleet command carries the marker as a line of its own, outside any fenced
@@ -72,12 +90,14 @@ is_command() {
   ' "$1"
 }
 
-FROM='' TO='' DRY=0 ROOT="${FLEET_INSTALL_ROOT:-$HOME/.claude/fleet}"
+FROM='' TO='' DRY=0 ROOT="${FLEET_INSTALL_ROOT:-$HOME/.claude/fleet}" SYNCL=0 SYNCL_ONLY=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --from) FROM="${2:-}"; shift 2 || { usage >&2; exit 2; } ;;
     --to) TO="${2:-}"; shift 2 || { usage >&2; exit 2; } ;;
     --dry-run) DRY=1; shift ;;
+    --sync-logins) SYNCL=1; shift ;;
+    --sync-logins=*) SYNCL=1; SYNCL_ONLY="${1#--sync-logins=}"; shift ;;
     --root) ROOT="${2:-}"; shift 2 || { usage >&2; exit 2; } ;;
     --is-command) is_command "${2:-}"; exit $? ;;
     -h|--help) usage; exit 0 ;;
@@ -116,10 +136,47 @@ fail() { FAILS=$((FAILS + 1)); say "$1: FAIL $2"; }
 # run <cmd...> — execute, or print under --dry-run
 run() { if [ "$DRY" = 1 ]; then say "    would: $*"; return 0; fi; "$@" >/dev/null 2>&1; }
 
+# --- logins (issue #1122) — the last step, on both paths below ---------------
+# Opt-in, and silent when not asked for: the daemon's log stays one line per
+# thing that happened. The other logins get THIS install's HEAD (--to); a login
+# with FLEET_INSTALL_SYNC=0 is skipped unless --sync-logins=<a,b> names it.
+logins_step() {
+  [ "$SYNCL" = 1 ] || return 0
+  sl="$ROOT/bin/fleet-sync-logins.sh"
+  [ -f "$sl" ] || { say 'logins: skip — no fleet-sync-logins.sh in this version'; return 0; }
+  if [ "$FAILS" -gt 0 ]; then
+    say "logins: skip — $FAILS step(s) failed above; fix them, then: bash $sl"; return 0
+  fi
+  slargs=(--source "$ROOT")
+  [ -n "$SYNCL_ONLY" ] && slargs+=(--logins "$SYNCL_ONLY")
+  [ "$DRY" = 1 ] && slargs+=(--dry-run)
+  out=$(bash "$sl" ${slargs[@]+"${slargs[@]}"} 2>&1); rc=$?
+  printf '%s\n' "$out" | sed '/^$/d; s/^/logins:   /'
+  tail_=$(printf '%s\n' "$out" | grep -E '^(other logins on this machine: |no other login)' | tail -1)
+  tail_=${tail_#other logins on this machine: }
+  case "$rc" in
+    0|1) say "logins: ok — ${tail_:-nothing to sync}" ;;   # 1 = --dry-run found drift
+    4) say "logins: WARN — ${tail_:-a login is blocked}; a blocked login is untouched (local edits, or newer than this install — its row says which; sync from there, or --force by hand)" ;;
+    5) say "logins: WARN — ${tail_:-a login needs sudo}; nothing changed for it — run the printed sudo command as an admin" ;;
+    *) # the FAILED rows are the message — the tail line does not count failures
+       failed=$(printf '%s\n' "$out" | grep -E '^[^ ]+: FAILED — ' | tr '\n' '|' | sed 's/|$//; s/|/ · /g')
+       fail logins "${failed:-$(printf '%s\n' "$out" | tail -1)} (exit $rc — a FAILED row names the backup to restore from)" ;;
+  esac
+}
+finish() {   # $1 — what "apply: ok —" says
+  if [ "$FAILS" -gt 0 ]; then
+    say "apply: PARTIAL — $FAILS step(s) failed at ${to:0:7} (the FAIL lines above name them)"
+    exit 1
+  fi
+  say "apply: ok — $1"
+  exit 0
+}
+
 say "range: ${from:0:7}..${to:0:7}$([ "$DRY" = 1 ] && printf ' (dry-run)')"
 if [ "$from" = "$to" ]; then
-  say "apply: ok — install already at ${to:0:7}, nothing to apply"
-  exit 0
+  # nothing moved for THIS login — the machine's other logins may still be behind it
+  logins_step
+  finish "install already at ${to:0:7}, nothing to apply"
 fi
 
 # name-status with renames: "<S>\t<path>" or "R<n>\t<old>\t<new>". Flattened to
@@ -469,9 +526,5 @@ else
   say 'repark: skip — no sleep pages in this version'
 fi
 
-if [ "$FAILS" -gt 0 ]; then
-  say "apply: PARTIAL — $FAILS step(s) failed at ${to:0:7} (the FAIL lines above name them)"
-  exit 1
-fi
-say "apply: ok — ${from:0:7}..${to:0:7}$([ "$DRY" = 1 ] && printf ' (dry-run, nothing changed)')"
-exit 0
+logins_step
+finish "${from:0:7}..${to:0:7}$([ "$DRY" = 1 ] && printf ' (dry-run, nothing changed)')"

@@ -82,7 +82,8 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 # rolls the install back and that version is not retried until stable moves. It
 # never moves backward and never touches an install with tracked local changes.
 # Set to 0 to switch it off for this login (a hand /fleet-sync-install still
-# works; fleet-sync-logins.sh skips a login that opted out unless named). State:
+# works; fleet-sync-logins.sh — the last step of /fleet-sync-install, issue #1122 — skips a
+# login that opted out unless named, or --include-off). State:
 # $FLEET_CONF_DIR/global/install-sync.state; log: logs/install-sync.log.
 # @label=Follow stable automatically @group=janitor @tier=common @scope=global @edit=bool
 #FLEET_INSTALL_SYNC=1
