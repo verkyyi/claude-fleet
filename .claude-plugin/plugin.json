@@ -9,6 +9,7 @@
     "./commands/fleet-epic-run.md",
     "./commands/fleet-handoff.md",
     "./commands/fleet-history.md",
+    "./commands/fleet-move.md",
     "./commands/fleet-sync-install.md"
   ],
   "author": {

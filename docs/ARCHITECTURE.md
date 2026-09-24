@@ -78,6 +78,29 @@ and hide these handles. The full list gives the reclaimed four columns to names.
   there. A *restored* landed session is a genuinely new window and gets a fresh
   handle — the old one was released when the original closed.
 
+### Four ways to move a session (issue #1067)
+
+"Move this session" means four different things depending on what changes —
+the agent, the subscription account, the machine, or nothing at all:
+
+| Script | What moves | Stays fixed | Mechanism |
+|---|---|---|---|
+| `fleet-migrate.sh` | subscription **account** | machine, agent, window's cwd | close (`/exit`, wait) + a NEW window running `claude --resume <sid>` under the target account's token — an account bakes into the process at launch, so it can only ever be a close+resume, never an in-place swap |
+| `fleet-transfer.sh` | **agent** (Claude ↔ Codex) | machine, pane, worktree | one pane, one worktree: package the source's provenance, `/exit` it, launch the other agent in the SAME pane |
+| `/fleet-handoff` (cycle mode) | nothing runs anywhere else — the context window empties | machine, agent, process (same pid) | `/clear`, not `/exit`: the process never stops, only the conversation does; a doc (issue comment or local file) carries the pickup prompt |
+| `fleet-move.sh` | **login/machine** | agent, account choice on the target (it re-resolves its own) | close the source, tar-pipe the transcript to the target's `~/.claude/projects/`, then a NEW window there running `claude --resume <sid>` — the only one of the four that crosses a machine, so it is the only one that needs ssh, and the only one where "resume" runs on a fleet this script does not itself control (see `bin/fleet-move-remote.sh`, the half that runs there) |
+
+`fleet-move.sh` is the newest and structurally the odd one out: the other
+three complete inside ONE fleet's own tmux socket, so a failure at any step
+just leaves that fleet's own state to inspect. A cross-machine move cannot
+assume that — see [the rotation gap](CLEANUP.md#the-rotation-gap--a-window-that-is-deliberately-missing-issue-550)
+for the single-machine version of "a worktree with no window is briefly
+indistinguishable from abandoned", which `fleet-move.sh` guards with the same
+lease while its own gap is open, and see its own header for the fork hazard
+that is unique to crossing a machine boundary: two live agents can end up
+resuming the same session id, one on each side, unless the source is verified
+stopped before the target is verified alive (and closed only after).
+
 ### What is shared vs. per-fleet
 
 The key insight: the collector's work is **~80% machine-global** and only the
