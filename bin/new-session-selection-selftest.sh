@@ -17,8 +17,16 @@
 #   D. a stale current-repo file (the retired picker's filter, #1034): the selection
 #      still wins — there is no filtered view any more.
 #   E. DEGENERATE — a one-repo fleet: the selection is ignored, byte for byte.
-#   F. the hub's ⌃s / ⌃n / Enter binds pass `{1}:{4}` / `{4}`; ⌃n resolves the
-#      highlighted repo instead of asking which repo.
+#   F. the hub's ⌃s / ⌃n / Enter binds pass `{2}:{4}` — a session row's WINDOW
+#      ID (field 1 is its `sess:idx` jump target, which the resolver cannot read,
+#      issue #1010) + a heading's spawn target; ⌃n resolves the highlighted repo
+#      instead of asking which repo.
+#   G. the binds' field shape applied to the REAL hub rows (issue #1010 — #997's
+#      legs fed `@<wid>` by hand and only grepped the bind text, so ⌃s on a
+#      session row spawned a no-repo window while every leg was green): the beta
+#      row's fields → o/beta and a real spawn off them lands in beta; beta's
+#      heading → o/beta; the no-repo row → none; the column header → nothing.
+#      ⌃s, ⌃n and Enter carry one shape.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -94,8 +102,8 @@ spawned() {
 }
 
 # Two sessions to highlight: a beta scratch and a no-repo one.
-raw --repo o/beta "$S" || fail "setup: beta scratch: $(cat "$WORK/err")"; wB=$(newest "$S")
-raw --no-repo "$S"     || fail "setup: no-repo: $(cat "$WORK/err")";      wN=$(newest "$S")
+raw --name beta-row --repo o/beta "$S" || fail "setup: beta scratch: $(cat "$WORK/err")"; wB=$(newest "$S")
+raw --name norepo-row --no-repo "$S"   || fail "setup: no-repo: $(cat "$WORK/err")";      wN=$(newest "$S")
 
 # ==== A. the resolver ================================================================
 eq "A: a beta row → o/beta"                "$(fleet_selection_repo "$S" "$wB")" o/beta
@@ -163,9 +171,9 @@ eq "E: one-repo fleet — a selection changes nothing" \
 
 # ==== F. the hub binds ==============================================================
 dash=$(cat "$BIN/tmux-dashboard.sh")
-has "F: ⌃s passes the highlighted row" "$dash" 'dash-raw-session.sh --bg --selection={1}:{4})'
-has "F: ⌃n passes the highlighted row" "$dash" 'dash-issue-new.sh confirm --spawn --selection={1}:{4})'
-has "F: Enter passes the heading target" "$dash" 'dash-enter.sh {1} {q} {4})'
+has "F: ⌃s passes the highlighted row"    "$dash" 'dash-raw-session.sh --bg --selection={2}:{4})'
+has "F: ⌃n passes the highlighted row"    "$dash" 'dash-issue-new.sh confirm --spawn --selection={2}:{4})'
+has "F: Enter passes the highlighted row" "$dash" 'dash-enter.sh {1} {q} {2}:{4})'
 # ⌃n: fzf is shimmed to record its header and cancel, so the popup's repo shows.
 mkdir -p "$WORK/fz"
 cat > "$WORK/fz/fzf" <<EOF
@@ -178,6 +186,32 @@ newi() { rm -f "$WORK/fzf.header"; TMUX="$SOCK,1,0" TMUX_PANE="$(opt "$S:plan" p
   bash "$BIN/dash-issue-new.sh" confirm --spawn "$@" </dev/null >/dev/null 2>&1; cat "$WORK/fzf.header" 2>/dev/null; }
 has "F: ⌃n on beta's heading files in o/beta" "$(newi --selection=hdr:o/beta)" "in o/beta"
 has "F: ⌃n on a beta row files in o/beta"     "$(newi --selection="$wB:")" "in o/beta"
+
+# ==== G. the binds' shape against the REAL rows (issue #1010) ========================
+# Read the shape off the ⌃s bind itself — `{A}:{B}` — and compose the selection the
+# way fzf does, from the producer's own fields, so a renumbered field, or a field A
+# that is not a window id (#1010: `{1}` is the `sess:idx` jump target), fails HERE
+# and not on the operator's dash. ⌃n and Enter must carry the identical shape.
+shape=$(printf '%s\n' "$dash" | sed -n 's/.*dash-raw-session\.sh --bg --selection=\({[0-9]}:{[0-9]}\)).*/\1/p' | head -1)
+if [ -n "$shape" ]; then ok "G: ⌃s selection is two fzf fields: $shape"
+else fail "G: could not read a {A}:{B} selection off the ⌃s bind"; shape='{2}:{4}'; fi
+has "G: ⌃n carries the same shape"   "$dash" "dash-issue-new.sh confirm --spawn --selection=$shape)"
+has "G: Enter carries the same shape" "$dash" "dash-enter.sh {1} {q} $shape)"
+fa=${shape#\{}; fa=${fa%%\}*}; fb=${shape##*\{}; fb=${fb%\}}
+hub=$(FLEET_SESSION=$S bash "$BIN/tmux-dashboard-rows.sh" 2>/dev/null | sed $'s/\x1b\\[[0-9;]*m//g')
+# row_sel <text> → `<field A>:<field B>` of the first hub row whose text has <text>;
+# hdr_sel → the same off the column header (line 1, fzf's --header-lines=1).
+row_sel() { printf '%s\n' "$hub" | awk -F"$US" -v m="$1" -v a="$fa" -v b="$fb" 'index($0, m) { print $a ":" $b; exit }'; }
+hdr_sel() { printf '%s\n' "$hub" | head -1 | awk -F"$US" -v a="$fa" -v b="$fb" '{ print $a ":" $b }'; }
+eq "G: the beta row's fields read as a window id" "$(row_sel beta-row)" "$wB:"
+eq "G: the beta row's fields → o/beta"          "$(fleet_selection_repo "$S" "$(row_sel beta-row)")" o/beta
+eq "G: beta's heading fields → o/beta"          "$(fleet_selection_repo "$S" "$(row_sel 'beta (')")" o/beta
+eq "G: the no-repo row's fields → none"         "$(fleet_selection_repo "$S" "$(row_sel norepo-row)")" none
+eq "G: the column header's fields → nothing"    "$(fleet_selection_repo "$S" "$(hdr_sel)")" ""
+eq "G: a spawn off the beta row's fields lands in beta (⌃s on a session row)" \
+   "$(spawned "$S" --name g1 --selection "$(row_sel beta-row)")" "o/beta|"
+eq "G: …and off the no-repo row's fields, in no repo" \
+   "$(spawned "$S" --name g2 --selection "$(row_sel norepo-row)")" "|1"
 
 if [ "$FAILS" -gt 0 ]; then
   printf 'new-session-selection-selftest: %s failure(s)\n' "$FAILS" >&2; exit 1

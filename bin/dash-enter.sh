@@ -1,5 +1,5 @@
 #!/bin/bash
-# dash-enter.sh <target sess:idx> <query> [<heading-repo>] — Enter handler for the dash.
+# dash-enter.sh <target sess:idx> <query> [<selection>] — Enter handler for the dash.
 # Emits fzf actions on stdout (called from an fzf `transform` binding) and does
 # the tmux side-effect. Modes:
 #   bind mode    (bind flag, set by ctrl-g): bind/unbind <target> to issue query
@@ -16,11 +16,14 @@
 set -uo pipefail
 C="${TMPDIR:-/tmp}/.claude-dash"; flag="$C/rename_target"; bindflag="$C/bind_target"
 target="${1:-}"; q="${2:-}"
-# The highlighted row, as fleet_selection_repo reads it (issue #997): `<id>:<{4}>`
-# — a repo heading's spawn target rides fzf's hidden 4th field. It is embedded in
-# the deferred spawn's command string below, so anything but an id/repo charset
-# drops it (the spawn then keeps today's repo rule).
-sel="$target:${3:-}"
+# The highlighted row, as fleet_selection_repo reads it (issues #997/#1010): the
+# bind passes `{2}:{4}` — a session row's WINDOW ID (`@12`; field 1 is the
+# `sess:idx` jump target, which the resolver cannot read — #1010 was the binds
+# sending that) and a repo heading's spawn target off fzf's hidden 4th field
+# (`hdr:<owner/name>` / `hdr:none`). The same string ⌃s/⌃n hand --selection. It
+# is embedded in the deferred spawn's command string below, so anything but an
+# id/repo charset drops it (the spawn then keeps today's repo rule).
+sel="${3:-}"
 case "$sel" in *[!A-Za-z0-9@:/._-]*) sel="" ;; esac
 # `rebind(?)` pairs with the `unbind(?)` dash-rename.sh emits when it arms: `?` is
 # the dash's cheatsheet bind, and a bound printable key keeps firing its action

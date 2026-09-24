@@ -628,7 +628,8 @@ EOF
 # window (`@12` — its repo via fleet_window_repo, never a guess; `none` for a
 # deliberate `@norepo 1` window) or a repo heading, `hdr:<owner/name>` (a hosted
 # repo) or `hdr:none` (the `no repo` group). A trailing `:<anything>` after a window
-# id is ignored, so a caller may always send `<id>:<heading-repo>`. Prints the repo,
+# id is ignored, so a caller may always send `<id>:<heading-repo>` (the hub's id is
+# fzf field 2 — field 1 is the `sess:idx` jump target, issue #1010). Prints the repo,
 # `none` (start in $HOME, --no-repo), or NOTHING — a one-repo fleet, an unknown
 # window, the `?` heading, a landed row — and the caller keeps today's behavior.
 # The one resolver the sidebar and hub share.
