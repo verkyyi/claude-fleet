@@ -1068,6 +1068,60 @@ else
   fi
 fi
 
+# --- host: a machine that works only for its sessions (EPIC #1074) --------------
+# Checks on the HOST itself — things that burn this machine's CPU/IO on work no
+# session asked for, which no other line here can see. macOS only: the whole
+# section is skipped on Linux, silently (there is no Spotlight, no pmset). Each
+# line is report-only — the doctor NEVER changes system state; it names the
+# command and says how to silence the line. Later members append rows here and
+# sections to docs/HOST.md; pinned by bin/fleet-doctor-host-selftest.sh.
+if [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then
+
+# 1. spotlight (issue #1075). On 2026-09-23 the busiest process on the fleet's
+#    Mac mini was not a session but mds_stores: 71 CPU-minutes in 4.5h of uptime,
+#    74% at the instant, re-indexing worktrees that live for minutes. An unattended
+#    host has nobody to search it, so the first host recommendation is to turn
+#    indexing off (docs/HOST.md#spotlight). WARN, not FAIL: it is a cost, not a
+#    broken install. FLEET_DOCTOR_SPOTLIGHT=0 (env or fleet.settings) silences it.
+spchk="${FLEET_DOCTOR_SPOTLIGHT:-$(_gconf_val FLEET_DOCTOR_SPOTLIGHT)}"
+if [ "$spchk" != 0 ] && command -v mdutil >/dev/null 2>&1; then
+  spvol=/System/Volumes/Data; [ -d "$spvol" ] || spvol=/
+  spout=$(mdutil -s "$spvol" 2>&1 | tr '\n' ' ')
+  case "$spout" in
+    *"Indexing enabled"*)
+      warn spotlight "Spotlight is still indexing $spvol — an unattended host should turn it off: \`sudo mdutil -a -i off\` (undo: \`sudo mdutil -a -i on\`; see docs/HOST.md#spotlight). Silence: FLEET_DOCTOR_SPOTLIGHT=0" ;;
+    *disabled*)
+      pass spotlight "Spotlight indexing off on $spvol" ;;
+    *)
+      info spotlight "could not read Spotlight state for $spvol (mdutil -s: $(printf '%s' "$spout" | cut -c1-120)) — see docs/HOST.md#spotlight" ;;
+  esac
+fi
+
+# 2. wtroot — the lighter alternative to turning Spotlight off host-wide.
+# FLEET_WORKTREE_ROOT exists to get the fleet's short-lived worktrees (and their
+# dependency trees) out of the Spotlight index; Spotlight skips a directory whose
+# name ends in `.noindex`, so a root without that suffix is moved but still indexed.
+# Advice, not a fault — some roots are excluded another way (Privacy list, a volume
+# with indexing off) — so it is INFO. Unset = the sibling layout, nothing to say.
+if [ -d "$conf_dir" ]; then
+  groot=$(_gconf_val FLEET_WORKTREE_ROOT)
+  while IFS= read -r cf; do
+    [ -n "$cf" ] || continue
+    case "$cf" in */fleets/*/conf) sess=${cf%/conf}; sess=${sess##*/} ;; *) sess=$(basename "$cf" .conf) ;; esac
+    wroot=$(_conf_val "$cf" FLEET_WORKTREE_ROOT)   # per-fleet, else the global line
+    [ -n "$wroot" ] || wroot="$groot"
+    [ -n "$wroot" ] || continue
+    case "${wroot%/}" in
+      *.noindex) pass wtroot "$sess: worktrees under $wroot (Spotlight skips *.noindex)" ;;
+      *) info wtroot "$sess: FLEET_WORKTREE_ROOT=$wroot does not end in .noindex — Spotlight still indexes every worktree there; rename it (e.g. ~/projects/.fleet-worktrees.noindex) unless it is excluded another way" ;;
+    esac
+  done <<EOF
+$(_fleet_confs "$conf_dir")
+EOF
+fi
+
+fi  # Darwin host section
+
 # --- status line (optional: conf/statusline.sh is jq-gated) ---
 # The optional Claude Code status line (conf/statusline.sh, wired install-time
 # into settings.json's statusLine — see docs/INSTALL.md step 8b) renders a
@@ -1571,29 +1625,6 @@ if [ -d "$conf_dir" ]; then
       seen="$seen$r "
       _repo_block "$sess" "$cf" "$r" "$ov" 0
     done
-  done <<EOF
-$(_fleet_confs "$conf_dir")
-EOF
-fi
-
-# --- worktree root: is it a directory Spotlight skips? (issue #886) --------------
-# FLEET_WORKTREE_ROOT exists to get the fleet's short-lived worktrees (and their
-# dependency trees) out of the Spotlight index; Spotlight skips a directory whose
-# name ends in `.noindex`, so a root without that suffix is moved but still indexed.
-# Advice, not a fault — some roots are excluded another way (Privacy list, a volume
-# with indexing off) — so it is INFO. Unset = the sibling layout, nothing to say.
-if [ -d "$conf_dir" ]; then
-  groot=$(_gconf_val FLEET_WORKTREE_ROOT)
-  while IFS= read -r cf; do
-    [ -n "$cf" ] || continue
-    case "$cf" in */fleets/*/conf) sess=${cf%/conf}; sess=${sess##*/} ;; *) sess=$(basename "$cf" .conf) ;; esac
-    wroot=$(_conf_val "$cf" FLEET_WORKTREE_ROOT)   # per-fleet, else the global line
-    [ -n "$wroot" ] || wroot="$groot"
-    [ -n "$wroot" ] || continue
-    case "${wroot%/}" in
-      *.noindex) pass wtroot "$sess: worktrees under $wroot (Spotlight skips *.noindex)" ;;
-      *) info wtroot "$sess: FLEET_WORKTREE_ROOT=$wroot does not end in .noindex — Spotlight still indexes every worktree there; rename it (e.g. ~/projects/.fleet-worktrees.noindex) unless it is excluded another way" ;;
-    esac
   done <<EOF
 $(_fleet_confs "$conf_dir")
 EOF

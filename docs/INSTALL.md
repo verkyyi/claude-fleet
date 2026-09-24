@@ -611,6 +611,14 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    reliability rather than time: several of these tests assert on real-time
    windows that only hold while nothing else is competing for the box.
 
+### Host setup (unattended machine)
+
+   If this machine runs unattended, walk **[HOST.md](HOST.md)** with the user —
+   starting with [turning off Spotlight](HOST.md#spotlight). Every item there is a
+   system setting the user decides on: show the command, never run a `sudo` change
+   without an explicit yes. `fleet-doctor`'s `host` section (macOS only) reports
+   each one.
+
 ## Uninstall
 
 Remove the LaunchAgents (`launchctl bootout gui/$(id -u)/com.claude-fleet.*`,
