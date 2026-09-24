@@ -2,11 +2,17 @@
 # fleet-config-lib.sh — shared helpers for the prefix+c config modal (issue #83).
 # Sourced by bin/tmux-config.sh, bin/dash-config-edit.sh and the selftest.
 #
-# The modal makes the fleet's TWO-LAYER config visible + editable:
-#   per-fleet overlay ($FLEET_CONF_DIR/<session>.conf)  ▸ wins
-#   global            (<install>/fleet.conf)            · inherited
-#   code default      (documented in fleet.conf.example)  fallback
-# — exactly the precedence fleet_load_conf applies at runtime.
+# The modal makes the fleet's config visible + editable, read in this order:
+#   per-fleet conf    ($FLEET_CONF_DIR/fleets/<session>/conf)  ▸ wins
+#   login settings    ($FLEET_CONF_DIR/fleet.settings)         ▸ this fleet too
+#   legacy install    (<install>/fleet.conf)                   · read-only fallback
+#   code default      (documented in fleet.conf.example)         fallback
+# — exactly the precedence fleet_load_conf applies at runtime. One login runs one
+# fleet (#977), so the first two ARE one layer to the user — "this fleet" — and
+# the modal writes only them (or a hosted repo's overlay, issue #1102): a key's
+# @scope=global tag just picks fleet.settings over the fleet conf, because
+# fleet_load_conf strips those keys from a fleet conf. The install's fleet.conf is
+# still READ (old installs load byte for byte) but never written.
 #
 # The KEY LIST, per-key help, AND per-key attributes are all PARSED from
 # fleet.conf.example (the single source of truth — never a hardcoded divergent
@@ -29,15 +35,13 @@ FCFG_US="$(printf '\037')"
 
 # --- file locations (all overridable for tests) -----------------------------
 fcfg_example()     { printf '%s' "${FCFG_EXAMPLE:-$FCFG_DIR/../fleet.conf.example}"; }
-# The machine-wide layer. Since issue #979 a login keeps ONE settings file,
-# $FLEET_CONF_DIR/fleet.settings: once it exists, global writes land there and it
-# wins over the install's fleet.conf, which stays a read-only fallback (dual-read).
+# The login layer. Since issue #979 a login keeps ONE settings file,
+# $FLEET_CONF_DIR/fleet.settings, which wins over the install's fleet.conf. Since
+# issue #1102 every global-only write lands there — the first one creates it — and
+# the install's fleet.conf is a READ-ONLY legacy layer (still read, never written).
 fcfg_install_conf() { printf '%s' "${FCFG_GLOBAL_CONF:-$FCFG_DIR/../fleet.conf}"; }
 fcfg_settings_conf() { printf '%s' "${FCFG_SETTINGS_CONF:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleet.settings}"; }
-fcfg_global_conf() {
-  local s; s=$(fcfg_settings_conf)
-  if [ -f "$s" ]; then printf '%s' "$s"; else fcfg_install_conf; fi
-}
+fcfg_global_conf() { fcfg_settings_conf; }
 # The per-fleet overlay for a session. FCFG_FLEET_CONF overrides (tests); else the
 # per-fleet layout fleets/<session>/conf (issue #181), falling back to a legacy
 # flat <session>.conf when only that exists (edit it in place until migrated). A
@@ -288,31 +292,59 @@ fcfg_file_value() {
   return 0
 }
 
-# Effective value + winning layer for KEY, as "<value><US>fleet|global|default".
+# Effective value + winning layer for KEY, as "<value><US>fleet|legacy|default".
+# `fleet` = the fleet conf or the login's fleet.settings (one layer to the user);
+# `legacy` = the install's read-only fleet.conf. A global-only key (@scope=global)
+# skips the fleet conf, exactly as fleet_load_conf strips it from there — so a
+# stale per-fleet value never shows as the one in effect. SCOPE (optional) saves
+# the tag lookup when the caller already has it.
 fcfg_effective() {
-  local key="$1" sess="${2:-}" v
-  if v=$(fcfg_file_value "$(fcfg_fleet_conf "$sess")" "$key"); then printf '%s%sfleet'  "$v" "$FCFG_US"; return; fi
-  if v=$(fcfg_file_value "$(fcfg_settings_conf)"    "$key"); then printf '%s%sglobal' "$v" "$FCFG_US"; return; fi
-  if v=$(fcfg_file_value "$(fcfg_install_conf)"     "$key"); then printf '%s%sglobal' "$v" "$FCFG_US"; return; fi
+  local key="$1" sess="${2:-}" scope="${3:-}" v
+  [ -n "$scope" ] || scope=$(fcfg_scope "$key")
+  if [ "$scope" != global ] && v=$(fcfg_file_value "$(fcfg_fleet_conf "$sess")" "$key"); then
+    printf '%s%sfleet' "$v" "$FCFG_US"; return
+  fi
+  if v=$(fcfg_file_value "$(fcfg_settings_conf)" "$key"); then printf '%s%sfleet'  "$v" "$FCFG_US"; return; fi
+  if v=$(fcfg_file_value "$(fcfg_install_conf)"  "$key"); then printf '%s%slegacy' "$v" "$FCFG_US"; return; fi
   printf '%s%sdefault' "$(fcfg_default "$key")" "$FCFG_US"
 }
 
-# The conf file a write targets for SESSION at SCOPE (global|fleet|repo:<slug>).
+# The conf file a write targets for SESSION at an internal write scope:
+#   global      → the login's fleet.settings (a global-only key's home)
+#   fleet       → the fleet conf; outside a fleet, the login's fleet.settings
+#   repo:<slug> → that repo's overlay (fcfg_repo_conf)
 # A repo scope whose repo the fleet no longer hosts resolves to NOTHING, so the
-# editor refuses instead of writing an overlay nobody reads.
+# editor refuses instead of writing an overlay nobody reads. Never the install's
+# fleet.conf: that is a read-only legacy layer (issue #1102).
 fcfg_target_conf() {
   case "$2" in
-    global) fcfg_global_conf ;;
+    global) fcfg_settings_conf ;;
     repo:*) fcfg_repo_conf "$1" "${2#repo:}" ;;
-    *)      fcfg_fleet_conf "$1" ;;
+    *)      if [ -n "${1:-}" ]; then fcfg_fleet_conf "$1"; else fcfg_settings_conf; fi ;;
   esac
+}
+
+# fcfg_key_wscope SESS KEY [SCOPE] → the internal write scope an edit of KEY lands
+# in, given the modal's toggle (fcfg_wscope): repo:<slug> for a per-repo key under
+# a repo scope; global for a global-only key; else fleet. Never a refusal — a key
+# that is not per-repo edited under a repo scope simply writes this fleet (issue
+# #1102). rc 1 (nothing printed) for an identity key, which is view-only.
+fcfg_key_wscope() {
+  local sess="${1:-}" key="$2" scope="${3:-}" ws
+  [ -n "$scope" ] || scope=$(fcfg_scope "$key")
+  [ "$scope" = identity ] && return 1
+  ws=$(fcfg_wscope "$sess")
+  case "$ws" in repo:*) fcfg_is_repo_key "$key" && { printf '%s' "$ws"; return 0; } ;; esac
+  if [ "$scope" = global ]; then printf 'global'; else printf 'fleet'; fi
 }
 
 # --- repo scope (issue #802) -------------------------------------------------
 # A fleet hosting 2+ repos (issue #788) keeps each repo's own settings in
-# fleets/<sess>/repos/<slug>.conf. The modal edits them through a third write
-# scope, `repo:<slug>`, reached by the same ⌃s toggle. Only in a fleet that HAS
-# a repos/ overlay: a one-repo fleet keeps the fleet⇄global toggle byte for byte.
+# fleets/<sess>/repos/<slug>.conf. The modal edits them through the second write
+# scope, `repo:<slug>`, reached by the ⌃s toggle (fleet ⇄ repo, issue #1102).
+# A one-repo fleet has a repo scope too, for its one repo — but with no repos/
+# overlay its repo layer IS the fleet conf (fcfg_repo_conf / fcfg_repo_write), so
+# an edit there never creates repos/ and the degenerate fleet stays byte for byte.
 # These helpers need fleet-lib (fleet_repos & co.) in scope — the modal and the
 # editor source it; without it there are simply no repo scopes.
 #
@@ -330,12 +362,11 @@ fcfg_is_repo_key() {
 }
 
 # fcfg_repo_scopes SESS → "repo:<slug><US><owner/name>" per hosted repo, in
-# fleet_repos order; nothing for a fleet without a repos/ overlay.
+# fleet_repos order — one row for a one-repo fleet; nothing outside a fleet.
 fcfg_repo_scopes() {
   local sess="${1:-}" r
   [ -n "$sess" ] || return 0
-  declare -F fleet_has_repo_overlays >/dev/null 2>&1 || return 0
-  fleet_has_repo_overlays "$sess" || return 0
+  declare -F fleet_repos >/dev/null 2>&1 || return 0
   while IFS= read -r r; do
     [ -n "$r" ] && printf 'repo:%s%s%s\n' "$(fleet_slug "$r")" "$FCFG_US" "$r"
   done <<EOF
@@ -357,10 +388,12 @@ EOF
 }
 
 # fcfg_repo_conf SESS SLUG → that repo's overlay path (may not exist yet — the
-# first write creates it), or nothing when the fleet does not host it.
+# first write creates it), or nothing when the fleet does not host it. A fleet
+# with no repos/ overlay hosts one repo, whose repo layer IS the fleet conf.
 fcfg_repo_conf() {
   local r; r=$(fcfg_scope_repo "${1:-}" "repo:${2:-}") || return 0
-  fleet_repo_conf_file "$1" "$r"
+  if fleet_has_repo_overlays "$1"; then fleet_repo_conf_file "$1" "$r"
+  else fcfg_fleet_conf "$1"; fi
 }
 
 # fcfg_repo_effective KEY SESS REPO → "<value><US>repo|fleet|global|default": what
@@ -387,9 +420,11 @@ fcfg_repo_effective() {
 
 # fcfg_repo_write SESS SLUG KEY VALUE TYPE — fcfg_write into the repo's overlay.
 # A brand-new overlay is seeded with its FLEET_REPO first, so fleet_repos still
-# lists it (the conf repo's own overlay is created this way on its first edit).
+# lists it (the conf repo's own overlay is created this way on its first edit in
+# a multi-repo fleet). A one-repo fleet writes its fleet conf (fcfg_repo_conf).
 fcfg_repo_write() {
   local r f; r=$(fcfg_scope_repo "${1:-}" "repo:${2:-}") || return 1
+  fleet_has_repo_overlays "$1" || { fcfg_write "$(fcfg_fleet_conf "$1")" "$3" "$4" "$5"; return; }
   f=$(fleet_repo_conf_file "$1" "$r")
   [ -f "$f" ] && { fcfg_write "$f" "$3" "$4" "$5"; return; }
   fcfg_write "$f" FLEET_REPO "$r" str >/dev/null || return 1
@@ -399,30 +434,35 @@ fcfg_repo_write() {
 
 # --- write-scope state (which layer edits write to) -------------------------
 # NOTE: distinct from a KEY's @scope attribute (fcfg_scope above). This is the
-# modal's g/f WRITE-SCOPE toggle — which conf an edit lands in. Persisted
-# per-session in the dash cache dir so it survives fzf reloads.
+# modal's ⌃s WRITE-SCOPE toggle — fleet or repo:<slug> (issue #1102; there is no
+# user-facing global scope any more). Persisted per-session in the dash cache dir
+# so it survives fzf reloads.
 fcfg_wscope_file()   { printf '%s/global/config_scope_%s' "${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}" "${1:-_}"; }
-# A stored repo:<slug> whose repo is no longer hosted (removed, or the overlay
-# gone) reads back as fleet, so a stale scope can never route an edit nowhere.
+# A stored repo:<slug> whose repo is no longer hosted reads back as fleet, so a
+# stale scope can never route an edit nowhere; so does a `global` left by an
+# older modal (the fleet⇄global toggle it came from is gone).
 fcfg_wscope() {
   local f s; f=$(fcfg_wscope_file "${1:-}")
   if [ -f "$f" ]; then s=$(cat "$f"); else s=fleet; fi
-  case "$s" in repo:*) fcfg_scope_repo "${1:-}" "$s" >/dev/null || s=fleet ;; esac
+  case "$s" in
+    repo:*) fcfg_scope_repo "${1:-}" "$s" >/dev/null || s=fleet ;;
+    *)      s=fleet ;;
+  esac
   printf '%s' "$s"
 }
 fcfg_wscope_set()    { local f; f=$(fcfg_wscope_file "${1:-}"); mkdir -p "$(dirname "$f")" 2>/dev/null; printf '%s' "$2" > "$f"; }
-# The ⌃s cycle: fleet → global → repo:<each hosted repo> → fleet. Without a repos/
-# overlay there are no repo scopes, so it is the historic fleet⇄global flip.
+# The ⌃s cycle: fleet → repo:<each hosted repo> → fleet (issue #1102) — a
+# one-repo fleet flips fleet ⇄ repo:<its repo>; outside a fleet it stays fleet.
 fcfg_wscope_toggle() {
   local cur next='' prev='' s
   cur=$(fcfg_wscope "${1:-}")
-  for s in fleet global $(fcfg_repo_scopes "${1:-}" | cut -d"$FCFG_US" -f1); do
+  for s in fleet $(fcfg_repo_scopes "${1:-}" | cut -d"$FCFG_US" -f1); do
     [ "$prev" = "$cur" ] && { next=$s; break; }
     prev=$s
   done
   fcfg_wscope_set "${1:-}" "${next:-fleet}"
 }
-# fcfg_wscope_label SESS → the scope as the modal names it: FLEET · GLOBAL · REPO owner/name.
+# fcfg_wscope_label SESS → the scope as the modal names it: FLEET · REPO owner/name.
 fcfg_wscope_label() {
   local s r; s=$(fcfg_wscope "${1:-}")
   case "$s" in

@@ -479,6 +479,18 @@ estate (`<session>.conf`, `restore/<session>.map`, `issue-bridge/bridge_<slug>.*
 …) into this layout **idempotently**, and every reader **dual-reads** both layouts
 so a fleet keeps working across the land→migrate window.
 
+**Config layers, as the `prefix+c` modal sees them (issue #1102).** Read order is
+install `fleet.conf` < `~/.config/claude-fleet/fleet.settings` (the login's one
+settings file, #979) < the fleet `conf` < a hosted repo's `repos/<slug>.conf`.
+One login runs one fleet (#977), so `fleet.settings` and the fleet `conf` are one
+layer to the user — **this fleet** — and the modal's ⌃s picks only *this fleet ⇄ a
+repo*. A key's `@scope=global` tag still picks the FILE (such keys go to
+`fleet.settings`, because `fleet_load_conf` strips them from a fleet `conf`), but
+it is never a scope to switch to nor a reason to refuse an edit. The install's
+`fleet.conf` is a read-only legacy layer: read, so an old install loads unchanged,
+never written. In a one-repo fleet the repo layer IS the fleet `conf`, so a repo
+edit never creates `repos/` and the degenerate fleet stays byte for byte.
+
 ### A fleet can host several repos (issue #788)
 
 The fleet conf's own `FLEET_REPO`/`FLEET_MAIN`/`FLEET_BASE_BRANCH` are **one

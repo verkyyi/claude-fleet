@@ -5,17 +5,16 @@
 # nested popup-inside-a-popup, which never opened reliably (issue #122). Shows
 # context, reads one line, validates by @edit type, and writes to the routed conf.
 #
-# Scope routing (issue #89), from the key's @scope tag:
+# Scope routing (issues #89, #1102) — fcfg_key_wscope, from the modal's ⌃s toggle
+# (THIS FLEET ⇄ a hosted REPO) and the key's @scope tag:
 #   identity → REFUSED (view-only; set in fleet.conf and re-provision).
-#   global   → always writes the global fleet.conf (the g/f write-scope toggle
-#              is ignored — a global-only key can't land in a per-fleet overlay).
-#   fleet    → follows the modal's write-scope toggle (global fleet.conf ⇄ the
-#              per-fleet <session>.conf ⇄ a hosted repo's overlay), backing up first.
-#
-# Repo scope (issue #802): in a multi-repo fleet the toggle also reaches
-# repo:<slug>, which writes fleets/<sess>/repos/<slug>.conf. Only the keys a repo
-# overlay documentedly carries (fcfg_repo_keys) are editable there; any other
-# per-fleet key is refused with a pointer back to the FLEET scope.
+#   a per-repo key (fcfg_repo_keys) under a repo scope → that repo's overlay
+#              (fleets/<sess>/repos/<slug>.conf; a one-repo fleet's is its conf).
+#   anything else → THIS FLEET: a global-only key writes the login's
+#              fleet.settings (fleet_load_conf strips it from a fleet conf), every
+#              other key the fleet conf. Never refused for being in the "wrong"
+#              layer, and never the install's fleet.conf — that is read-only legacy.
+# Every write backs the file up first.
 set -uo pipefail
 KEY="${1:-}"
 case "$KEY" in FLEET_[A-Z0-9_]*) : ;; *) exit 0 ;; esac   # ignore blank/junk/header rows
@@ -43,27 +42,14 @@ if [ "$KSCOPE" = identity ] || [ "$EDIT" = no ]; then
   refuse "$KEY is an identity key — set it in fleet.conf and re-provision."
   exit 0
 fi
-# Global-only keys always write the global conf; per-fleet keys follow the toggle.
-if [ "$KSCOPE" = global ]; then
-  SCOPE=global
-else
-  SCOPE=$(fcfg_wscope "$SESSION")
-fi
+SCOPE=$(fcfg_key_wscope "$SESSION" "$KEY" "$KSCOPE")
 REPO=''
-case "$SCOPE" in
-  repo:*)
-    REPO=$(fcfg_scope_repo "$SESSION" "$SCOPE")
-    if ! fcfg_is_repo_key "$KEY"; then
-      tmux display-message "config: $KEY is not a per-repo setting — ⌃s to the FLEET scope" 2>/dev/null || true
-      refuse "$KEY is not a per-repo setting — press ⌃s to write the FLEET (or GLOBAL) layer."
-      exit 0
-    fi ;;
-esac
+case "$SCOPE" in repo:*) REPO=$(fcfg_scope_repo "$SESSION" "$SCOPE") ;; esac
 TARGET=$(fcfg_target_conf "$SESSION" "$SCOPE")
 
-if [ -z "$TARGET" ]; then
-  tmux display-message "config: no per-fleet conf here (not in a fleet) — press ⌃s to write GLOBAL" 2>/dev/null || true
-  refuse "no per-fleet conf here (not in a fleet) — press ⌃s to write the GLOBAL layer."
+if [ -z "$TARGET" ]; then   # defensive: a repo scope that stopped resolving mid-edit
+  tmux display-message "config: no conf to write $KEY to — nothing changed" 2>/dev/null || true
+  refuse "no conf to write $KEY to — nothing changed."
   exit 0
 fi
 
@@ -72,7 +58,7 @@ cur=$(fcfg_file_value "$TARGET" "$KEY" || true)
 if [ -n "$REPO" ]; then
   ev=$(fcfg_repo_effective "$KEY" "$SESSION" "$REPO"); scope_up="REPO $REPO"
 else
-  ev=$(fcfg_effective "$KEY" "$SESSION"); scope_up=$(printf '%s' "$SCOPE" | tr '[:lower:]' '[:upper:]')
+  ev=$(fcfg_effective "$KEY" "$SESSION" "$KSCOPE"); scope_up=FLEET
 fi
 effval=${ev%"$FCFG_US"*}; effsrc=${ev##*"$FCFG_US"}
 
