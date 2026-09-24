@@ -617,3 +617,113 @@ fleet_daemon_kicked_recently() {
   done
   printf '%s' "$_fd_kn"
 }
+
+# --- the IDLE GATE (issue #1077) ----------------------------------------------
+# A fleet with no live tmux server has nothing for collect / quotawatch to look
+# at, yet launchd still starts each of them every 60s: on 2026-09-24 two logins
+# with zero sessions (vincent, zx) did 2 fleets × 2 units × 60 = 240 full ticks an
+# hour, plus a spinner stamping a heartbeat every 2s, all of it for nobody.
+#
+# launchd cannot be asked to slow a StartInterval down, so the daemon asks
+# ITSELF, first thing, whether this tick has any work: `fleet_idle_gate <unit>`.
+#   · any live fleet socket          → work (and forget the idle spell);
+#   · no socket, idle < IDLE_AFTER    → work (a grace window: a fleet that was
+#                                       just brought down still settles its caches);
+#   · no socket, idle ≥ IDLE_AFTER    → work only when the last WORKING tick is
+#                                       IDLE_AFTER old — so a 60s unit does ≤ 12
+#                                       real ticks an hour instead of 60;
+#   · a WAKE marker newer than the spell (fleet_daemon_wake, touched by every
+#     spawn path and by fleet-up) → work now and restart the grace window, so a
+#     session that is coming up never waits out a 5-minute gap.
+# launchd's own `runs =` still counts every START — a gated tick is a process
+# start, one stamp and a few file reads, then exit 0. What the gate removes is
+# the WORK (gh fetches, git/ctx/usage scans, the model-cap sweep). The idle file
+# counts both (`worked=` / `skipped=`) so the saving is readable after the fact.
+#
+# Knob: FLEET_DAEMON_IDLE_AFTER (seconds, default 300; 0 = off, the pre-#1077
+# behaviour of working every tick). Fail OPEN everywhere: no socket enumerator,
+# an unreadable state dir, a malformed stamp — each means "work", because a skipped
+# tick is a saving and a wrongly-skipped one is a blind dash.
+#
+# The scheduling stamp (fleet_daemon_stamp_tick) is written BEFORE this gate by
+# every caller, so a gated tick still proves launchd spawned it: the idle gate can
+# never make a unit read `stale` to fleet-daemon-watch.
+
+# fleet_idle_after — the knob, sanitized: seconds, 0 = gate off.
+fleet_idle_after() {
+  _fi_a="${FLEET_DAEMON_IDLE_AFTER-300}"
+  case "$_fi_a" in ''|*[!0-9]*) _fi_a=300 ;; esac
+  printf '%s' "$_fi_a"
+}
+
+# fleet_daemon_wake [root] — "a session is on its way": stamp <state>/wake with
+# now, so every gated daemon works on its very next tick. Called by fleet-up and
+# the spawn choke points. Never fatal, never prints.
+fleet_daemon_wake() {
+  _fw_d=$(fleet_daemon_state_dir "${1:-}")
+  [ -d "$_fw_d" ] || mkdir -p "$_fw_d" 2>/dev/null || return 0
+  fleet_now > "$_fw_d/wake.$$" 2>/dev/null && mv -f "$_fw_d/wake.$$" "$_fw_d/wake" 2>/dev/null
+  return 0
+}
+
+# fleet_idle_gate <unit> [root] [live] — exit 0 = do this tick's work, 1 = skip it.
+# `live` is the number of live fleet sockets when the caller already knows it;
+# omitted, the gate asks fleet_sockets itself (the caller must have sourced
+# fleet-lib.sh — without it the gate fails open). State: <state>/<unit>.idle, one
+# line `since last worked skipped` (epochs, then counts), present only while idle.
+fleet_idle_gate() {
+  _fi_u="${1:-unknown}"
+  _fi_after=$(fleet_idle_after)
+  [ "$_fi_after" -gt 0 ] || return 0
+  _fi_live="${3:-}"
+  if [ -z "$_fi_live" ]; then
+    command -v fleet_sockets >/dev/null 2>&1 || return 0
+    # Boxed when fleet-lib's fleet_timebox is there (issue #653): a wedged tmux
+    # server can hang `has-session`, and a probe that timed out found a server —
+    # so a timeout counts as live, i.e. work.
+    if command -v fleet_timebox >/dev/null 2>&1; then
+      _fi_list=$(fleet_timebox "${FLEET_DAEMON_IDLE_PROBE_BUDGET:-20}" fleet_sockets 2>/dev/null)
+      [ "$?" = 124 ] && return 0
+    else
+      _fi_list=$(fleet_sockets 2>/dev/null)
+    fi
+    _fi_live=0
+    for _fi_s in $_fi_list; do _fi_live=$(( _fi_live + 1 )); done
+  fi
+  case "$_fi_live" in ''|*[!0-9]*) return 0 ;; esac
+  _fi_d=$(fleet_daemon_state_dir "${2:-}")
+  _fi_f="$_fi_d/$_fi_u.idle"
+  if [ "$_fi_live" -gt 0 ]; then
+    [ -f "$_fi_f" ] && rm -f "$_fi_f" 2>/dev/null   # test first: no fork on the busy path
+    return 0
+  fi
+  [ -d "$_fi_d" ] || mkdir -p "$_fi_d" 2>/dev/null || return 0
+  _fi_now=$(fleet_now)
+  _fi_since='' _fi_last='' _fi_w='' _fi_k=''
+  [ -f "$_fi_f" ] && read -r _fi_since _fi_last _fi_w _fi_k < "$_fi_f" 2>/dev/null
+  case "$_fi_since" in ''|*[!0-9]*) _fi_since=$_fi_now _fi_last=0 _fi_w=0 _fi_k=0 ;; esac
+  case "$_fi_last" in ''|*[!0-9]*) _fi_last=0 ;; esac
+  case "$_fi_w" in ''|*[!0-9]*) _fi_w=0 ;; esac
+  case "$_fi_k" in ''|*[!0-9]*) _fi_k=0 ;; esac
+  _fi_wake=$(_fleet_daemon_epoch "$_fi_d/wake")
+  _fi_go=0
+  if [ "$_fi_wake" -gt 0 ] && [ "$_fi_wake" -ge "$_fi_since" ] && [ "$_fi_wake" -ge "$_fi_last" ]; then
+    _fi_since=$_fi_now                                # a spawn: restart the grace window
+  elif [ $(( _fi_now - _fi_since )) -lt "$_fi_after" ]; then
+    :                                                 # grace: still settling
+  elif [ $(( _fi_now - _fi_last )) -ge "$_fi_after" ]; then
+    :                                                 # the quiet fleet's once-per-IDLE_AFTER tick
+  else
+    _fi_go=1
+  fi
+  if [ "$_fi_go" = 0 ]; then
+    _fi_last=$_fi_now; _fi_w=$(( _fi_w + 1 ))
+  else
+    [ "$_fi_k" -eq 0 ] && printf 'fleet-idle: %s — no live fleet for %ss; working once every %ss until a session appears (FLEET_DAEMON_IDLE_AFTER=0 turns this off)\n' \
+      "$_fi_u" $(( _fi_now - _fi_since )) "$_fi_after" >&2
+    _fi_k=$(( _fi_k + 1 ))
+  fi
+  printf '%s %s %s %s\n' "$_fi_since" "$_fi_last" "$_fi_w" "$_fi_k" > "$_fi_f.$$" 2>/dev/null \
+    && mv -f "$_fi_f.$$" "$_fi_f" 2>/dev/null
+  return "$_fi_go"
+}

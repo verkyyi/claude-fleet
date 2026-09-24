@@ -341,6 +341,16 @@ if [ "$CALLER" != collect ] && [ "$DRY" = 0 ] && fleet_collect_kick_due; then
   fi
 fi
 
+# Idle gate (issue #1077): no live fleet socket for FLEET_DAEMON_IDLE_AFTER ⇒ a
+# full tick only once every IDLE_AFTER — there is no session to rotate and no
+# window to sweep. Only the daemon's OWN tick is gated: the collector's fallback
+# call rides the collector, which is gated itself. After the collector self-heal
+# errand above, which stays on every tick because it is two file reads.
+if [ "$CALLER" != collect ] && [ "$DRY" = 0 ] && command -v fleet_idle_gate >/dev/null 2>&1 \
+   && ! fleet_idle_gate quotawatch "$BIN/.."; then
+  exit 0
+fi
+
 # Fail-open gates — one per job (#569). The MODEL sweep needs only an accounts
 # pool: a per-model cap is recorded per account and recovered in place, neither of
 # which touches ccquota. The ccquota POLICY additionally needs a hub URL — that is

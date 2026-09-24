@@ -241,6 +241,9 @@ fi
 # fleet's own hub.
 workwin=$(tmux -L "$SOCK" new-session -d -P -F '#{window_id}' -s "$NAME" -c "$DIR" -n work) \
   || die "tmux new-session failed for '$NAME'"
+# A session is on its way: wake the idle-gated daemons so the dash is fresh on
+# their very next tick, not up to FLEET_DAEMON_IDLE_AFTER later (issue #1077).
+[ -f "$BIN/fleet-daemon-lib.sh" ] && ( . "$BIN/fleet-daemon-lib.sh" && fleet_daemon_wake "$BIN/.." ) 2>/dev/null || true
 # hub-session.sh builds the hub against this fleet's socket. It resolves the
 # same SOCK from the session name, so it needs no explicit socket argument.
 HUB_SESSION="$NAME" HUB_CWD="$DIR" bash "$BIN/hub-session.sh"

@@ -48,6 +48,8 @@ cw() {
   # the existing one of that name.
   dir=$("$bin/fleet-worktree.sh" create "$root" "${branch//\//-}" "" --reuse --branch "$branch") \
     || { echo "cw: could not create a worktree for $branch"; return 1; }
+  # wake the idle-gated daemons: a session is on its way (issue #1077)
+  [ -f "$bin/fleet-daemon-lib.sh" ] && ( . "$bin/fleet-daemon-lib.sh" && fleet_daemon_wake "$bin/.." ) 2>/dev/null
   if [ -n "$TMUX" ]; then
     # reuse the current window: rename it, move into the worktree, run claude
     tmux rename-window "$name"

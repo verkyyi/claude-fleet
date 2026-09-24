@@ -217,6 +217,17 @@ if [ -n "$TARGET_ISSUES_REPO" ]; then
   exit 0
 fi
 
+# --- idle gate (issue #1077) ---------------------------------------------------
+# No live fleet socket for FLEET_DAEMON_IDLE_AFTER (300s) ⇒ do a full tick only
+# once every IDLE_AFTER, not every 60s; a spawn's wake marker or any live socket
+# reopens it at once. After the targeted --issues mode (a webhook kick is always
+# wanted) and after the scheduling stamp at the top (so a gated tick still proves
+# launchd ran it). Guarded like that stamp: a half-synced install without the
+# lib just works every tick.
+if command -v fleet_idle_gate >/dev/null 2>&1 && ! fleet_idle_gate collect "$BIN/.."; then
+  exit 0
+fi
+
 # --- overlap guard (issue #551): one full tick at a time -------------------------
 # global/collect.pid holds "pid<TAB>start-epoch" of the running tick. A live
 # holder that really IS a collector (pid recycling: verify the command line, never
