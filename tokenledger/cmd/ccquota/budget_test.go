@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/verkyyi/ccquota/internal/model"
 )
 
 func acct(label string, five, seven float64) BudgetAccount {
@@ -157,5 +159,26 @@ func TestBudget_ReadsTheHubAndFlattensBothWindows(t *testing.T) {
 	}
 	if rep.Verdict != verdictHold {
 		t.Errorf("verdict = %q (%s), want hold", rep.Verdict, rep.Reason)
+	}
+}
+
+// With several claims on one model, a blocking one binds over a fuller one that
+// does not block, and a spent claim past its reset blocks nothing.
+func TestModelCaps_PicksTheBindingClaim(t *testing.T) {
+	now := time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)
+	later, earlier := now.Add(time.Hour), now.Add(-time.Hour)
+	models, avail := modelCaps([]model.ModelClaim{
+		{Model: "m", Claim: "a", Utilization: 95, Status: "allowed_warning", ResetsAt: &later},
+		{Model: "m", Claim: "b", Utilization: 60, Status: "rejected", ResetsAt: &later},
+		{Model: "n", Claim: "a", Utilization: 100, Status: "rejected", ResetsAt: &earlier},
+	}, now)
+	if models["m"].Claim != "b" || avail["m"] {
+		t.Errorf("m = %+v available=%v, want the rejected claim b, unavailable", models["m"], avail["m"])
+	}
+	if !avail["n"] {
+		t.Error("n's only claim has reset, so n must be available")
+	}
+	if m, a := modelCaps(nil, now); m != nil || a != nil {
+		t.Error("no claims must be no maps, so the JSON keys are omitted")
 	}
 }

@@ -49,6 +49,12 @@ type LimitsView struct {
 
 	Scoped []ScopedView `json:"scoped,omitempty"`
 
+	// ModelClaims are per-model caps (the weekly Fable cap) read by probing that
+	// model. Each carries its own observed_at: they are refreshed by a different
+	// source than the windows above, on a different cadence. They never feed
+	// HighestUtilization — a model cap is not a subscription wall.
+	ModelClaims []model.ModelClaim `json:"model_claims,omitempty"`
+
 	// EndpointShares apportions the five-hour window across endpoints. The
 	// account total is exact; these shares are estimates.
 	EndpointShares []recon.Share `json:"endpoint_shares,omitempty"`
@@ -213,6 +219,10 @@ func (s *Server) LimitsFor(account string) (*LimitsView, error) {
 			Model: sc.Model, Surface: sc.Surface,
 			Utilization: sc.Utilization, ResetsAt: sc.ResetsAt, IsActive: sc.IsActive,
 		})
+	}
+
+	if view.ModelClaims, err = s.Store.LatestModelClaims(account); err != nil {
+		return nil, err
 	}
 
 	evs, err := s.Store.EventsInRange(account, fiveWin.Start, fiveWin.End)

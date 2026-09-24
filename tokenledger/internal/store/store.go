@@ -762,6 +762,33 @@ func (s *Store) InsertLimits(snap *model.LimitsSnapshot) error {
 	if err != nil {
 		return fmt.Errorf("insert limits snapshot: %w", err)
 	}
+	for _, c := range snap.ModelClaims {
+		if c.Model == "" || c.Claim == "" {
+			continue
+		}
+		at := c.ObservedAt
+		if at.IsZero() {
+			at = snap.ObservedAt
+		}
+		// Latest wins, and only a NEWER reading replaces one: a spooled batch
+		// delivered late must not roll a cap back to what it used to be.
+		_, err = s.write.Exec(`
+			INSERT INTO model_claims (
+			  account_uuid, model, claim, utilization, status, resets_at,
+			  surpassed_threshold, observed_at
+			) VALUES (?,?,?,?,?,?,?,?)
+			ON CONFLICT(account_uuid, model, claim) DO UPDATE SET
+			  utilization = excluded.utilization, status = excluded.status,
+			  resets_at = excluded.resets_at,
+			  surpassed_threshold = excluded.surpassed_threshold,
+			  observed_at = excluded.observed_at
+			WHERE excluded.observed_at >= model_claims.observed_at`,
+			snap.AccountUUID, c.Model, c.Claim, c.Utilization, c.Status,
+			fmtTimePtr(c.ResetsAt), c.SurpassedThreshold, fmtTime(at))
+		if err != nil {
+			return fmt.Errorf("record model claim %s/%s: %w", c.Model, c.Claim, err)
+		}
+	}
 	return nil
 }
 

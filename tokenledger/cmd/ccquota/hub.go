@@ -150,7 +150,7 @@ func runHub(args []string) error {
 		log.Printf("no database at %s yet; creating an empty one", dbFile)
 	}
 
-	addrs := splitAddrs(*addr)
+	addrs := splitList(*addr)
 	if len(addrs) == 0 {
 		return errors.New("--addr is empty")
 	}
@@ -376,8 +376,8 @@ func runHub(args []string) error {
 	return nil
 }
 
-// splitAddrs parses a comma-separated listen list, ignoring blanks.
-func splitAddrs(s string) []string {
+// splitList parses a comma-separated flag value, ignoring blanks.
+func splitList(s string) []string {
 	var out []string
 	for _, p := range strings.Split(s, ",") {
 		if p = strings.TrimSpace(p); p != "" {
@@ -546,6 +546,12 @@ func runAgent(args []string) error {
 			"an idle account, or one whose local credentials have expired. Each\n"+
 			"reading costs one minimal inference call against that subscription,\n"+
 			"so it is opt-in and only runs when no cheaper source has reported")
+	probeModels := fs.String("probe-model", os.Getenv("CCQUOTA_PROBE_MODELS"),
+		"models to probe each --accounts-dir subscription with, comma-separated\n"+
+			"(e.g. claude-fable-5-1). A per-model cap such as the weekly Fable limit\n"+
+			"only shows up on a request for that model, so this is the only way to\n"+
+			"read it. A capped account answers with a 429 and costs nothing; an\n"+
+			"uncapped one costs one output token of that model")
 	spoolMB := fs.Int64("spool-mb", 64, "cap on the on-disk queue, in MB")
 	maxBackfill := fs.Duration("max-backfill", 0,
 		"ignore turns older than this (e.g. 720h). Turns older than the account\n"+
@@ -593,6 +599,7 @@ func runAgent(args []string) error {
 		Version:             Version,
 		Once:                *once,
 		AccountsDir:         *accountsDir,
+		ProbeModels:         splitList(*probeModels),
 	})
 	if err != nil {
 		return err

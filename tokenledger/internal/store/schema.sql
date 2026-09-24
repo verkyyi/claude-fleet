@@ -238,6 +238,23 @@ CREATE TABLE IF NOT EXISTS limit_snapshots (
 CREATE INDEX IF NOT EXISTS idx_snapshots_account_time
   ON limit_snapshots(account_uuid, observed_at DESC);
 
+-- The latest reading of each per-model cap (the weekly Fable cap: claim
+-- "7d_oi"), per account. A table of its own, not a column on the snapshot, and
+-- latest-only: most snapshots come from a session's statusLine, which never sees
+-- these, so "the freshest snapshot" would hide a cap read five minutes earlier
+-- behind one that could not have seen it.
+CREATE TABLE IF NOT EXISTS model_claims (
+  account_uuid        TEXT NOT NULL,
+  model               TEXT NOT NULL,
+  claim               TEXT NOT NULL,
+  utilization         REAL NOT NULL DEFAULT 0,
+  status              TEXT NOT NULL DEFAULT '',
+  resets_at           TEXT,
+  surpassed_threshold REAL,
+  observed_at         TEXT NOT NULL,
+  PRIMARY KEY (account_uuid, model, claim)
+);
+
 -- Which subscriptions an endpoint has been seen running, and when.
 --
 -- This is many-to-many on purpose. Claude Code takes its account from the

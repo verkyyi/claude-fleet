@@ -181,6 +181,38 @@ func (s *Store) LatestLimits(account string) (*model.LimitsSnapshot, error) {
 	return &snap, nil
 }
 
+// LatestModelClaims returns the freshest reading of every per-model claim ever
+// seen for an account, ordered by model then claim. Empty means no probe has
+// asked about a capped model — which is "unknown", not "uncapped".
+func (s *Store) LatestModelClaims(account string) ([]model.ModelClaim, error) {
+	rows, err := s.read.Query(`
+		SELECT model, claim, utilization, status, resets_at, surpassed_threshold, observed_at
+		FROM model_claims WHERE account_uuid = ?
+		ORDER BY model, claim`, account)
+	if err != nil {
+		return nil, fmt.Errorf("model claims: %w", err)
+	}
+	defer rows.Close()
+	var out []model.ModelClaim
+	for rows.Next() {
+		var c model.ModelClaim
+		var reset sql.NullString
+		var surpassed sql.NullFloat64
+		var observed string
+		if err := rows.Scan(&c.Model, &c.Claim, &c.Utilization, &c.Status, &reset, &surpassed, &observed); err != nil {
+			return nil, fmt.Errorf("model claims: %w", err)
+		}
+		c.ResetsAt = parseNullTime(reset)
+		if surpassed.Valid {
+			v := surpassed.Float64
+			c.SurpassedThreshold = &v
+		}
+		c.ObservedAt, _ = time.Parse(rfc, observed)
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 func parseNullTime(ns sql.NullString) *time.Time {
 	if !ns.Valid || ns.String == "" {
 		return nil

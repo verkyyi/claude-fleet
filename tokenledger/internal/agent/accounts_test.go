@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -122,5 +123,105 @@ func TestProbeAccounts_DoesNothingWithoutADirectory(t *testing.T) {
 	a := &Agent{cfg: Config{}, limits: limits.New()}
 	if got := a.probeAccounts(context.Background(), map[string]bool{}); got != nil {
 		t.Errorf("probed %d accounts with no directory configured", len(got))
+	}
+}
+
+// fableServer answers like the real endpoint did on 2026-09-23: a request for
+// the capped model carries a 7d_oi window (and is a 429 once it is spent); a
+// request for anything else carries only the account windows; an unknown model
+// is a 400 with no headers at all.
+func fableServer(t *testing.T, seen *[]string, sevenReset time.Time, oiFrac string, rejected bool) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct{ Model string }
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		*seen = append(*seen, req.Model)
+		if req.Model == "no-such-model" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("anthropic-ratelimit-unified-5h-utilization", "0.10")
+		w.Header().Set("anthropic-ratelimit-unified-7d-utilization", "0.80")
+		w.Header().Set("anthropic-ratelimit-unified-7d-reset", itoa(sevenReset.Unix()))
+		if req.Model == "claude-fable-5-1" {
+			w.Header().Set("anthropic-ratelimit-unified-7d_oi-utilization", oiFrac)
+			w.Header().Set("anthropic-ratelimit-unified-7d_oi-reset", itoa(sevenReset.Add(-40*time.Hour).Unix()))
+			if rejected {
+				w.Header().Set("anthropic-ratelimit-unified-7d_oi-status", "rejected")
+				w.WriteHeader(http.StatusTooManyRequests)
+				return
+			}
+			w.Header().Set("anthropic-ratelimit-unified-7d_oi-status", "allowed")
+		}
+		_, _ = w.Write([]byte(`{"id":"msg_x"}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// With a probe model configured, the probe asks for THAT model, the capped
+// account's 429 is a reading, and the cap is keyed by the model asked for.
+func TestProbeAccounts_ProbeModelRecordsItsCap(t *testing.T) {
+	dir := t.TempDir()
+	writeToken(t, dir, "capped@example.com")
+	seven := time.Now().UTC().Add(72 * time.Hour).Truncate(time.Minute)
+	var seen []string
+	srv := fableServer(t, &seen, seven, "1.0", true)
+	a := agentWithAccounts(t, dir, srv.URL)
+	a.cfg.ProbeModels = []string{"claude-fable-5-1", "claude-opus-5-5"}
+
+	got := a.probeAccounts(context.Background(), map[string]bool{})
+	if len(got) != 1 {
+		t.Fatalf("got %d readings, want 1", len(got))
+	}
+	if len(seen) != 2 || seen[0] != "claude-fable-5-1" || seen[1] != "claude-opus-5-5" {
+		t.Errorf("probed %v, want one request per probe model and no default probe", seen)
+	}
+	snap := got[0]
+	if snap.SevenDay.Utilization != 80 {
+		t.Errorf("seven-day = %v, want 80 from the model probe", snap.SevenDay.Utilization)
+	}
+	if len(snap.ModelClaims) != 1 {
+		t.Fatalf("model claims = %+v, want only fable's 7d_oi (opus carries none)", snap.ModelClaims)
+	}
+	if c := snap.ModelClaims[0]; c.Model != "claude-fable-5-1" || c.Claim != "7d_oi" || c.Utilization != 100 || c.Status != "rejected" {
+		t.Errorf("claim = %+v", c)
+	}
+}
+
+// A free source covering the account this cycle normally makes the probe's
+// reading redundant — but not when it carries a cap no free source can see.
+func TestProbeAccounts_ACapSurvivesAnObservedAccount(t *testing.T) {
+	dir := t.TempDir()
+	writeToken(t, dir, "busy@example.com")
+	seven := time.Now().UTC().Add(72 * time.Hour).Truncate(time.Minute)
+	var seen []string
+	srv := fableServer(t, &seen, seven, "0.09", false)
+	a := agentWithAccounts(t, dir, srv.URL)
+	a.cfg.ProbeModels = []string{"claude-fable-5-1"}
+
+	observed := map[string]bool{sessions.FingerprintFor(&seven): true}
+	got := a.probeAccounts(context.Background(), observed)
+	if len(got) != 1 || len(got[0].ModelClaims) != 1 || got[0].ModelClaims[0].Utilization != 9 {
+		t.Fatalf("readings = %+v, want the fable cap at 9%% kept", got)
+	}
+}
+
+// A mistyped probe model costs the per-model cap, never the account reading.
+func TestProbeAccounts_BadProbeModelFallsBackToTheDefaultProbe(t *testing.T) {
+	dir := t.TempDir()
+	writeToken(t, dir, "acct@example.com")
+	seven := time.Now().UTC().Add(72 * time.Hour).Truncate(time.Minute)
+	var seen []string
+	srv := fableServer(t, &seen, seven, "0.09", false)
+	a := agentWithAccounts(t, dir, srv.URL)
+	a.cfg.ProbeModels = []string{"no-such-model"}
+
+	got := a.probeAccounts(context.Background(), map[string]bool{})
+	if len(got) != 1 || got[0].SevenDay.Utilization != 80 {
+		t.Fatalf("readings = %+v, want the default probe's account reading", got)
+	}
+	if len(seen) != 2 || seen[1] == "no-such-model" {
+		t.Errorf("probed %v, want the bad model then the default", seen)
 	}
 }

@@ -89,6 +89,15 @@ type Config struct {
 	// operator has explicitly handed over, and only when nothing cheaper has
 	// observed them.
 	AccountsDir string
+
+	// ProbeModels are models whose own caps are worth reading — the weekly
+	// Fable cap only appears on a response to a request FOR Fable. Each account
+	// in AccountsDir is probed with each of these, at the same cadence, instead
+	// of with the default cheapest model. Empty keeps the default probe.
+	//
+	// A capped account answers with a 429, which costs nothing; an uncapped one
+	// costs a single output token of that model.
+	ProbeModels []string
 }
 
 // Defaults for the intervals.

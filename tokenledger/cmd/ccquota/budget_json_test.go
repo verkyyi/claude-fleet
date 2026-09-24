@@ -232,3 +232,83 @@ func TestBudgetJSON_VerdictDomain(t *testing.T) {
 		}
 	}
 }
+
+// Per-model caps (issue #155), as claude-fleet reads them to avoid launching on
+// a Fable-capped account: `models` keyed by model id with the binding claim,
+// and `model_available` as the ready-made gate. A model cap must NOT move
+// headroom_pct or the verdict — the subscription still works on other models.
+func TestBudgetJSON_ModelCaps(t *testing.T) {
+	future := time.Now().UTC().Add(48 * time.Hour).Truncate(time.Second)
+	past := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	hub := `{"per_account":[
+	  {"account_uuid":"u-capped","label":"capped","limits":{"account_uuid":"u-capped","available":true,
+	   "five_hour":{"utilization":10},"seven_day":{"utilization":80},
+	   "model_claims":[
+	     {"model":"claude-fable-5-1","claim":"7d_oi","utilization":100,"status":"rejected",
+	      "resets_at":"` + future.Format(time.RFC3339) + `","observed_at":"2026-09-23T10:00:00Z"}]}},
+	  {"account_uuid":"u-open","label":"open","limits":{"account_uuid":"u-open","available":true,
+	   "five_hour":{"utilization":10},"seven_day":{"utilization":68},
+	   "model_claims":[
+	     {"model":"claude-fable-5-1","claim":"7d_oi","utilization":9,"status":"allowed",
+	      "resets_at":"` + future.Format(time.RFC3339) + `","observed_at":"2026-09-23T10:00:00Z"}]}},
+	  {"account_uuid":"u-reset","label":"reset","limits":{"account_uuid":"u-reset","available":true,
+	   "five_hour":{"utilization":10},"seven_day":{"utilization":50},
+	   "model_claims":[
+	     {"model":"claude-fable-5-1","claim":"7d_oi","utilization":100,"status":"rejected",
+	      "resets_at":"` + past.Format(time.RFC3339) + `","observed_at":"2026-09-20T10:00:00Z"}]}},
+	  {"account_uuid":"u-never","label":"never","limits":{"account_uuid":"u-never","available":true,
+	   "five_hour":{"utilization":10},"seven_day":{"utilization":20}}}]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(hub))
+	}))
+	defer srv.Close()
+
+	raw, err := json.Marshal(budget(srv.URL, "tok", "all", "", 90, 2*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var top struct {
+		Verdict  string           `json:"verdict"`
+		Accounts []map[string]any `json:"accounts"`
+	}
+	if err := json.Unmarshal(raw, &top); err != nil {
+		t.Fatalf("%v\n%s", err, raw)
+	}
+	if top.Verdict != "go" {
+		t.Errorf("verdict = %q: a Fable cap must not hold the subscription", top.Verdict)
+	}
+	byID := map[string]map[string]any{}
+	for _, a := range top.Accounts {
+		byID[a["account_uuid"].(string)] = a
+	}
+
+	capped := byID["u-capped"]
+	if capped["headroom_pct"].(float64) != 20 {
+		t.Errorf("headroom_pct = %v, want 20 from the 7d window alone", capped["headroom_pct"])
+	}
+	fable := capped["models"].(map[string]any)["claude-fable-5-1"].(map[string]any)
+	if fable["claim"] != "7d_oi" || fable["utilization"].(float64) != 100 || fable["status"] != "rejected" {
+		t.Errorf("models[fable] = %v", fable)
+	}
+	if s, ok := fable["resets_at"].(string); !ok || s != future.Format(time.RFC3339) {
+		t.Errorf("resets_at = %#v, want an RFC3339 string", fable["resets_at"])
+	}
+	if _, ok := fable["observed_at"].(string); !ok {
+		t.Errorf("observed_at missing: %v", fable)
+	}
+
+	for id, want := range map[string]bool{"u-capped": false, "u-open": true, "u-reset": true} {
+		got, ok := byID[id]["model_available"].(map[string]any)["claude-fable-5-1"].(bool)
+		if !ok || got != want {
+			t.Errorf("%s model_available[fable] = %v, want %v", id, byID[id]["model_available"], want)
+		}
+	}
+	// Never probed is unknown — the key is absent, not an empty "uncapped" map.
+	if _, ok := byID["u-never"]["models"]; ok {
+		t.Errorf("an account never probed has models: %v", byID["u-never"]["models"])
+	}
+	if _, ok := byID["u-never"]["model_available"]; ok {
+		t.Errorf("an account never probed has model_available: %v", byID["u-never"]["model_available"])
+	}
+}

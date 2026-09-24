@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -65,9 +66,24 @@ const utilizationScale = 100
 // Returns ErrUnavailable when the response carries no rate-limit headers, which
 // is what an API-key (non-plan) token looks like: it has invoices, not windows.
 func (c *Client) FetchViaInference(ctx context.Context, token string) (*model.LimitsSnapshot, error) {
+	return c.FetchForModel(ctx, token, probeModel)
+}
+
+// FetchForModel is FetchViaInference with the request made for a chosen model.
+//
+// It exists for the per-model caps. A request for a capped model (Fable) comes
+// back with an extra unified window — "7d_oi" — that a request for any other
+// model does not carry, so the only way to read that cap is to ask for that
+// model. Whatever claims the response carries beyond the account-wide 5h/7d are
+// recorded on the snapshot as ModelClaims keyed by m.
+//
+// A 429 carrying the headers is a reading, not a failure: it is what a capped
+// account answers with, and it is the cheapest reading there is — nothing is
+// generated.
+func (c *Client) FetchForModel(ctx context.Context, token, m string) (*model.LimitsSnapshot, error) {
 	body := strings.NewReader(fmt.Sprintf(
 		`{"model":%q,"max_tokens":%d,"messages":[{"role":"user","content":"."}]}`,
-		probeModel, probeTokens))
+		m, probeTokens))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, messagesEndpoint, body)
 	if err != nil {
@@ -87,13 +103,14 @@ func (c *Client) FetchViaInference(ctx context.Context, token string) (*model.Li
 	// drained for the connection to be reused.
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxBody))
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusTooManyRequests {
 		return nil, fmt.Errorf("%w: HTTP %d from the messages endpoint", ErrUnavailable, resp.StatusCode)
 	}
 	snap := SnapshotFromHeaders(resp.Header)
 	if snap == nil {
-		return nil, fmt.Errorf("%w: the response carried no rate-limit headers", ErrUnavailable)
+		return nil, fmt.Errorf("%w: HTTP %d carried no rate-limit headers", ErrUnavailable, resp.StatusCode)
 	}
+	snap.ModelClaims = ModelClaimsFromHeaders(resp.Header, m, snap.ObservedAt)
 	return snap, nil
 }
 
@@ -112,6 +129,58 @@ func SnapshotFromHeaders(h http.Header) *model.LimitsSnapshot {
 		FiveHour:   five,
 		SevenDay:   seven,
 	}
+}
+
+const unifiedPrefix = "anthropic-ratelimit-unified-"
+
+// accountClaims are the windows every response carries whatever the model. They
+// already live on the snapshot as FiveHour/SevenDay; repeating them per model
+// would read as a per-model cap that does not exist.
+var accountClaims = map[string]bool{"5h": true, "7d": true}
+
+// ModelClaimsFromHeaders returns every unified claim on a response other than the
+// account-wide 5h/7d, attributed to the model the request was for.
+//
+// Parsed generically — any `anthropic-ratelimit-unified-<claim>-utilization`
+// header is a claim — because the header is undocumented. Hard-coding "7d_oi"
+// would go silently blind the day it is renamed, or a second model gets a cap.
+func ModelClaimsFromHeaders(h http.Header, m string, at time.Time) []model.ModelClaim {
+	var names []string
+	for k := range h {
+		lk := strings.ToLower(k)
+		if !strings.HasPrefix(lk, unifiedPrefix) || !strings.HasSuffix(lk, "-utilization") {
+			continue
+		}
+		name := strings.TrimSuffix(strings.TrimPrefix(lk, unifiedPrefix), "-utilization")
+		if name == "" || accountClaims[name] {
+			continue
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var out []model.ModelClaim
+	for _, name := range names {
+		w, ok := windowFromHeaders(h, name)
+		if !ok {
+			continue
+		}
+		c := model.ModelClaim{
+			Model:       m,
+			Claim:       name,
+			Utilization: w.Utilization,
+			ResetsAt:    w.ResetsAt,
+			Status:      h.Get(unifiedPrefix + name + "-status"),
+			ObservedAt:  at,
+		}
+		if raw := h.Get(unifiedPrefix + name + "-surpassed-threshold"); raw != "" {
+			if v, err := strconv.ParseFloat(raw, 64); err == nil {
+				c.SurpassedThreshold = &v
+			}
+		}
+		out = append(out, c)
+	}
+	return out
 }
 
 func windowFromHeaders(h http.Header, window string) (model.Window, bool) {

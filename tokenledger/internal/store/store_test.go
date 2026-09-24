@@ -222,6 +222,58 @@ func TestInsertLimits(t *testing.T) {
 	}
 }
 
+// A per-model cap outlives the snapshot that carried it. Most snapshots come
+// from a statusLine that never sees the Fable window, so if the cap only lived
+// on its snapshot, the next free reading would hide it. And a late-delivered
+// older reading must not roll it back.
+func TestInsertLimits_ModelClaimsKeepTheLatestPerModel(t *testing.T) {
+	s := newStore(t)
+	seedAccount(t, s, "acct-a", "ep-1")
+
+	t0 := time.Date(2026, 9, 23, 10, 0, 0, 0, time.UTC)
+	reset := time.Date(2026, 9, 28, 18, 0, 0, 0, time.UTC)
+	snapAt := func(at time.Time, claims ...model.ModelClaim) *model.LimitsSnapshot {
+		return &model.LimitsSnapshot{
+			AccountUUID: "acct-a", EndpointID: "ep-1", ObservedAt: at,
+			SevenDay: model.Window{Utilization: 80}, ModelClaims: claims,
+		}
+	}
+	fable := func(at time.Time, pct float64, status string) model.ModelClaim {
+		return model.ModelClaim{Model: "claude-fable-5-1", Claim: "7d_oi",
+			Utilization: pct, Status: status, ResetsAt: &reset, ObservedAt: at}
+	}
+
+	for _, snap := range []*model.LimitsSnapshot{
+		snapAt(t0, fable(t0, 90, "allowed_warning")),
+		snapAt(t0.Add(5*time.Minute), fable(t0.Add(5*time.Minute), 100, "rejected")),
+		snapAt(t0.Add(6 * time.Minute)),                                                // a statusLine reading: no claims
+		snapAt(t0.Add(time.Minute), fable(t0.Add(time.Minute), 91, "allowed_warning")), // late
+	} {
+		if err := s.InsertLimits(snap); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := s.LatestModelClaims("acct-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d claims, want 1: %+v", len(got), got)
+	}
+	c := got[0]
+	if c.Utilization != 100 || c.Status != "rejected" || !c.ObservedAt.Equal(t0.Add(5*time.Minute)) {
+		t.Errorf("claim = %+v, want the 100%% rejected reading from t0+5m", c)
+	}
+	if c.ResetsAt == nil || !c.ResetsAt.Equal(reset) {
+		t.Errorf("reset = %v, want %v", c.ResetsAt, reset)
+	}
+
+	if none, err := s.LatestModelClaims("acct-b"); err != nil || len(none) != 0 {
+		t.Errorf("an account never probed has claims %+v (err %v)", none, err)
+	}
+}
+
 func TestPruneEvents(t *testing.T) {
 	s := newStore(t)
 	seedAccount(t, s, "acct-a", "ep-1")

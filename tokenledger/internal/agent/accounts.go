@@ -68,7 +68,7 @@ func (a *Agent) probeAccounts(ctx context.Context, observed map[string]bool) []*
 			continue
 		}
 
-		snap, err := a.limits.FetchViaInference(ctx, token)
+		snap, err := a.probeToken(ctx, label, token)
 		if err != nil {
 			log.Printf("could not read the meter for %s: %v", label, err)
 			a.noteProbe(label, now) // do not retry in a tight loop
@@ -87,8 +87,9 @@ func (a *Agent) probeAccounts(ctx context.Context, observed map[string]bool) []*
 		}
 		// Something fresher already covered this subscription this cycle — a
 		// running session's statusLine, or this machine's own login. Those cost
-		// nothing, so they win.
-		if observed[key] {
+		// nothing, so they win — unless this reading carries a per-model cap,
+		// which no free source can see and which is already paid for.
+		if observed[key] && len(snap.ModelClaims) == 0 {
 			continue
 		}
 		snap.AccountUUID = key
@@ -102,4 +103,32 @@ func (a *Agent) noteProbe(label string, at time.Time) {
 		a.lastAccountProbe = map[string]time.Time{}
 	}
 	a.lastAccountProbe[label] = at
+}
+
+// probeToken reads one account's meter.
+//
+// With no probe models it is the default one-token probe. With probe models,
+// each is asked in turn: every response carries the account-wide 5h/7d as well,
+// so the first one that answers stands in for the default probe, and the
+// per-model claims of all of them are gathered onto it. Only if none answers —
+// a mistyped model name is a 400 — does the default probe run, so a bad
+// --probe-model costs the per-model cap and never the account reading.
+func (a *Agent) probeToken(ctx context.Context, label, token string) (*model.LimitsSnapshot, error) {
+	var snap *model.LimitsSnapshot
+	for _, m := range a.cfg.ProbeModels {
+		s, err := a.limits.FetchForModel(ctx, token, m)
+		if err != nil {
+			log.Printf("could not read the %s cap for %s: %v", m, label, err)
+			continue
+		}
+		if snap == nil {
+			snap = s
+			continue
+		}
+		snap.ModelClaims = append(snap.ModelClaims, s.ModelClaims...)
+	}
+	if snap != nil {
+		return snap, nil
+	}
+	return a.limits.FetchViaInference(ctx, token)
 }

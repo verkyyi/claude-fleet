@@ -899,6 +899,24 @@ caller decides what to do. Giving a monitor a control channel back to every
 machine it watches is a much larger security surface than "tell me what my fleet
 spent", and the scheduler knows its own priorities better anyway.
 
+**Per-model caps are reported, not judged.** Some models carry a weekly cap of
+their own on top of the account's windows — the Fable limit, which the rate-limit
+headers call `7d_oi`. `budget --json` lists every such cap per account, keyed by
+the model it was read for, plus a ready-made gate:
+
+```json
+"models": {
+  "claude-fable-5-1": {"claim": "7d_oi", "utilization": 100, "status": "rejected",
+                       "resets_at": "2026-09-28T18:00:00Z", "observed_at": "…"}
+},
+"model_available": {"claude-fable-5-1": false}
+```
+
+A model cap never moves `headroom_pct` or the verdict: the subscription still
+works, just not on that model. A model missing from `models` is **unknown**, not
+uncapped — the cap is only visible to an agent probing that model (see
+`--probe-model` below).
+
 [claude-fleet](https://github.com/verkyyi/claude-fleet) consumes exactly this,
 through its own `fleet-quotaguard.sh --gate`; it runs fine without ccquota
 installed.
@@ -1345,6 +1363,20 @@ at a directory of tokens:
 ```bash
 ccquota agent --accounts-dir ~/.config/claude-fleet/accounts   # label -> token, one file each
 ```
+
+A per-model cap only shows up on a response to a request **for that model** —
+ask for Opus and the Fable window is simply absent. To keep one fresh when no
+session happens to be using it, name the model:
+
+```bash
+ccquota agent --accounts-dir ~/.config/claude-fleet/accounts --probe-model claude-fable-5-1
+```
+
+Each account is then probed with that model instead of the default one. A capped
+account answers with a 429, which costs nothing; an uncapped one costs a single
+output token of that model. Every `anthropic-ratelimit-unified-<claim>-*` window
+beyond the account's own 5h/7d is recorded, whatever its name, because the header
+is undocumented and a renamed claim must not make the cap invisible.
 
 Those headers are **account-wide**, not per-connection: read one account through
 two different credentials at the same moment and the endpoint says 18.0% / 4.0%

@@ -20,9 +20,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -30,6 +32,7 @@ import (
 	"github.com/verkyyi/ccquota/internal/api"
 	"github.com/verkyyi/ccquota/internal/codex"
 	"github.com/verkyyi/ccquota/internal/identity"
+	"github.com/verkyyi/ccquota/internal/model"
 	"github.com/verkyyi/ccquota/internal/scan"
 	"github.com/verkyyi/ccquota/internal/store"
 )
@@ -72,6 +75,25 @@ type BudgetAccount struct {
 	HeadroomPct float64       `json:"headroom_pct"`
 	FiveHour    *BudgetWindow `json:"five_hour,omitempty"`
 	SevenDay    *BudgetWindow `json:"seven_day,omitempty"`
+
+	// Models are per-model caps (the weekly Fable cap), keyed by model id, as
+	// last read by a probe for that model. They do NOT feed HeadroomPct or the
+	// verdict: a model cap is not a subscription wall — the account still works,
+	// just not on that model. A model absent here is unknown, not uncapped.
+	Models map[string]BudgetModel `json:"models,omitempty"`
+	// ModelAvailable is the gate a consumer would otherwise compute itself:
+	// false while the model's binding claim is rejected or spent and has not
+	// yet reset.
+	ModelAvailable map[string]bool `json:"model_available,omitempty"`
+}
+
+// BudgetModel is the binding claim on one model.
+type BudgetModel struct {
+	Claim       string     `json:"claim"`
+	Utilization float64    `json:"utilization"`
+	Status      string     `json:"status,omitempty"`
+	ResetsAt    *time.Time `json:"resets_at,omitempty"`
+	ObservedAt  time.Time  `json:"observed_at"`
 }
 
 // BudgetReport is the whole answer.
@@ -363,6 +385,7 @@ func flatten(uuid, label string, v *api.LimitsView) BudgetAccount {
 	if !v.Available {
 		return a
 	}
+	a.Models, a.ModelAvailable = modelCaps(v.ModelClaims, time.Now())
 	used := 0.0
 	if v.Source == "codex" {
 		if v.StaleSeconds > 600 {
@@ -407,6 +430,43 @@ func flatten(uuid, label string, v *api.LimitsView) BudgetAccount {
 	return a
 }
 
+// modelCaps reduces every claim seen per model to the one that binds.
+//
+// A rejected claim binds over an allowed one, then the fuller one. A claim whose
+// reset has already passed no longer blocks anything — the window it measured is
+// over — so it cannot make a model unavailable, however full it read.
+func modelCaps(claims []model.ModelClaim, now time.Time) (map[string]BudgetModel, map[string]bool) {
+	if len(claims) == 0 {
+		return nil, nil
+	}
+	models := map[string]BudgetModel{}
+	avail := map[string]bool{}
+	blocks := func(c model.ModelClaim) bool {
+		if c.ResetsAt != nil && !c.ResetsAt.After(now) {
+			return false
+		}
+		return c.Status == "rejected" || c.Utilization >= 100
+	}
+	binding := map[string]model.ModelClaim{}
+	for _, c := range claims {
+		cur, seen := binding[c.Model]
+		switch {
+		case !seen,
+			blocks(c) && !blocks(cur),
+			blocks(c) == blocks(cur) && c.Utilization > cur.Utilization:
+			binding[c.Model] = c
+		}
+	}
+	for m, c := range binding {
+		models[m] = BudgetModel{
+			Claim: c.Claim, Utilization: c.Utilization, Status: c.Status,
+			ResetsAt: c.ResetsAt, ObservedAt: c.ObservedAt,
+		}
+		avail[m] = !blocks(c)
+	}
+	return models, avail
+}
+
 func printBudget(rep BudgetReport) {
 	fmt.Printf("%s — %s\n\n", strings.ToUpper(rep.Verdict), rep.Reason)
 	for _, a := range rep.Accounts {
@@ -426,6 +486,12 @@ func printBudget(rep BudgetReport) {
 		}
 		for _, w := range a.Windows {
 			fmt.Printf("   %s (%dm) %.1f%%", w.ID, w.Minutes, w.Utilization)
+		}
+		for _, m := range slices.Sorted(maps.Keys(a.Models)) {
+			fmt.Printf("   %s %.1f%%", m, a.Models[m].Utilization)
+			if !a.ModelAvailable[m] {
+				fmt.Print(" (capped)")
+			}
 		}
 		fmt.Println()
 	}

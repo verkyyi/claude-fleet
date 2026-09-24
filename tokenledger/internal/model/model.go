@@ -209,6 +209,25 @@ type ScopedWindow struct {
 	IsActive    bool       `json:"is_active"`
 }
 
+// ModelClaim is one unified rate-limit claim seen on a response to a request
+// for one specific model — the per-model weekly cap being the reason it exists.
+//
+// It is keyed by the model the request was FOR, never by a mapping from the
+// claim name: the header ("7d_oi") does not say which model it covers, and it
+// only appears at all on a request for the capped model. A request for another
+// model carries no such header, so the same account reads uncapped there.
+type ModelClaim struct {
+	Model       string     `json:"model"`
+	Claim       string     `json:"claim"`       // the header's own name, e.g. "7d_oi"
+	Utilization float64    `json:"utilization"` // percent, 0-100
+	Status      string     `json:"status,omitempty"`
+	ResetsAt    *time.Time `json:"resets_at,omitempty"`
+	// SurpassedThreshold is the fraction the server says was crossed, once one
+	// has been. Nil until then.
+	SurpassedThreshold *float64  `json:"surpassed_threshold,omitempty"`
+	ObservedAt         time.Time `json:"observed_at"`
+}
+
 // LimitsSnapshot is one observation of an account's true, account-wide quota
 // state. This is the only exact number in the system; everything the scanner
 // produces is an estimate by comparison.
@@ -221,6 +240,10 @@ type LimitsSnapshot struct {
 	SevenDay Window `json:"seven_day"`
 
 	Scoped []ScopedWindow `json:"scoped"`
+
+	// ModelClaims are the per-model windows a probe for a specific model saw,
+	// e.g. the weekly Fable cap. Empty unless a probe model is configured.
+	ModelClaims []ModelClaim `json:"model_claims,omitempty"`
 
 	ExtraUsageJSON string `json:"extra_usage_json"`
 	SpendJSON      string `json:"spend_json"`
