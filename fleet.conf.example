@@ -1536,6 +1536,14 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Doctor iCloud check @group=disk @tier=advanced @scope=global @edit=bool
 #FLEET_DOCTOR_ICLOUD=1
 
+# `fleet-doctor`'s `network` line (host section, issue #1081 — macOS AND Linux):
+# WARN when one gateway is the default route through two or more interfaces
+# (wired + Wi-Fi on one subnet: replies leave by the wrong link, "connected, but
+# nothing answers"), naming the Wi-Fi switch-off (docs/HOST.md#network).
+# Report-only. Set to 0 on a host that is multi-homed on purpose.
+# @label=Doctor network check @group=disk @tier=advanced @scope=global @edit=bool
+#FLEET_DOCTOR_NETWORK=1
+
 # Load experiments (bin/fleet-loadgen.sh) — the sanctioned way to put a box under
 # CPU pressure, because the hand-written `trap … EXIT` form is what leaked the
 # orphans above. Each burner carries its OWN deadline (a kernel alarm(2) armed

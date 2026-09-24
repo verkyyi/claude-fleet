@@ -1098,7 +1098,8 @@ fi
 # section is skipped on Linux, silently (there is no Spotlight, no pmset). Each
 # line is report-only — the doctor NEVER changes system state; it names the
 # command and says how to silence the line. Later members append rows here and
-# sections to docs/HOST.md; pinned by bin/fleet-doctor-host-selftest.sh.
+# sections to docs/HOST.md; pinned by bin/fleet-doctor-host-selftest.sh. The
+# `network` row (#1081) sits just after the section: Linux has that fact too.
 if [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then
 
 # 1. spotlight (issue #1075). On 2026-09-23 the busiest process on the fleet's
@@ -1239,6 +1240,51 @@ if [ "$icchk" != 0 ] && command -v pgrep >/dev/null 2>&1; then
 fi
 
 fi  # Darwin host section
+
+# 7. network (issue #1081). The one host row that is NOT macOS-only: Linux reads
+#    the same fact off `ip route`. On 2026-09-23 the fleet's Mac mini had been on
+#    wired AND Wi-Fi for weeks — two interfaces on one subnet, two default routes
+#    to one gateway — so a connection could come in on one interface and its
+#    replies leave by the other: "connected, but nothing answers", from the phone
+#    and the laptop alike. The signature is one gateway reached as the default
+#    route through 2+ interfaces. A `link#N` / interface-only default (a VM
+#    bridge, a VPN utun) names no gateway and is not counted. WARN names the Wi-Fi
+#    switch-off (the wired link is the one an unattended host keeps). Read-only.
+#    FLEET_DOCTOR_NETWORK=0 silences it.
+nwchk="${FLEET_DOCTOR_NETWORK:-$(_gconf_val FLEET_DOCTOR_NETWORK)}"
+if [ "$nwchk" != 0 ]; then
+  nwos=$(uname -s 2>/dev/null); nwroutes=""
+  # One "<gateway> <interface>" line per default route that names an IPv4 gateway.
+  if [ "$nwos" = Darwin ] && command -v netstat >/dev/null 2>&1; then
+    nwroutes=$(netstat -rn -f inet 2>/dev/null | awk '$1=="default" && $2 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ { print $2, $4 }')
+  elif command -v ip >/dev/null 2>&1; then
+    nwroutes=$(ip -4 route show default 2>/dev/null | awk '{ g=""; d=""; for (i=1; i<NF; i++) { if ($i=="via") g=$(i+1); if ($i=="dev") d=$(i+1) } if (g != "" && d != "") print g, d }')
+  fi
+  nwroutes=$(printf '%s\n' "$nwroutes" | awk 'NF==2' | sort -u)
+  # The first gateway reached through 2+ interfaces, and those interfaces.
+  nwdup=$(printf '%s\n' "$nwroutes" | awk 'NF==2 { n[$1]++; ifs[$1]=ifs[$1] " " $2 } END { for (g in n) if (n[g] > 1) { print g ifs[g]; exit } }')
+  if [ -n "$nwdup" ]; then
+    nwgw=${nwdup%% *}; nwifs=${nwdup#* }
+    nwwifi=""
+    if [ "$nwos" = Darwin ]; then
+      nwwifi=$(networksetup -listallhardwareports 2>/dev/null | awk '/^Hardware Port: (Wi-Fi|AirPort)$/ { w=1; next } w && /^Device:/ { print $2; exit }')
+    else
+      for nwif in $nwifs; do case "$nwif" in wl*) nwwifi=$nwif; break ;; esac; done
+    fi
+    case " $nwifs " in *" $nwwifi "*) ;; *) nwwifi="" ;; esac
+    if [ -n "$nwwifi" ] && [ "$nwos" = Darwin ]; then
+      nwfix="keep only the wired link: \`networksetup -setairportpower $nwwifi off\` (undo: \`networksetup -setairportpower $nwwifi on\`)"
+    elif [ -n "$nwwifi" ]; then
+      nwfix="keep only the wired link: \`nmcli radio wifi off\` (undo: \`nmcli radio wifi on\`)"
+    else
+      nwfix="keep only one of them connected"
+    fi
+    warn network "default route to $nwgw through $(printf '%s' "$nwifs" | sed 's/ / + /g') — two interfaces on one subnet: replies can leave by a different interface than the connection came in on (\"connected, but nothing answers\"); $nwfix; see docs/HOST.md#network. Silence: FLEET_DOCTOR_NETWORK=0"
+  elif [ -n "$nwroutes" ]; then
+    nwn=$(printf '%s\n' "$nwroutes" | grep -c .)
+    pass network "$nwn default route(s), no gateway shared by two interfaces: $(printf '%s\n' "$nwroutes" | awk '{ printf "%s%s via %s", (NR>1 ? ", " : ""), $1, $2 }')"
+  fi
+fi
 
 # --- status line (optional: conf/statusline.sh is jq-gated) ---
 # The optional Claude Code status line (conf/statusline.sh, wired install-time

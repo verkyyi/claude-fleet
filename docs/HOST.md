@@ -6,12 +6,13 @@ the one place the host recommendations live (EPIC #1074). Each section says
 **why**, gives the **command**, the **lighter alternative** where there is one,
 and **how to undo it**.
 
-`fleet-doctor` has a matching `host` section (macOS only; skipped on Linux) with
-one line per recommendation. The doctor only **reports** — it never changes a
+`fleet-doctor` has a matching `host` section (macOS only; skipped on Linux —
+except the `network` line, which reads `ip route` there) with one line per
+recommendation. The doctor only **reports** — it never changes a
 system setting. Every change below is yours to run.
 
 ```sh
-bash ~/.claude/fleet/bin/fleet-doctor.sh 2>&1 | grep -E '^\s*\S+\s+(spotlight|wtroot|nofile|sleep|siri|icloud)'
+bash ~/.claude/fleet/bin/fleet-doctor.sh 2>&1 | grep -E '^\s*\S+\s+(spotlight|wtroot|nofile|sleep|siri|icloud|network)'
 ```
 
 ## Contents
@@ -22,6 +23,7 @@ bash ~/.claude/fleet/bin/fleet-doctor.sh 2>&1 | grep -E '^\s*\S+\s+(spotlight|wt
 - [Slower GitHub polls when nothing changes](#poll-backoff)
 - [An unattended Mac](#headless) — auto-login, never sleep, Siri, iCloud, no GUI apps on the console
 - [Container VMs](#containers) — how much of the machine Colima / Docker Desktop may take
+- [One network link](#network) — wired only, a fixed address, Tailscale as the way back in
 - [Verify](#verify)
 
 <a id="spotlight"></a>
@@ -325,14 +327,60 @@ Docker Desktop: *Settings → Resources → Advanced*, then *Apply & restart*.
 **Undo:** the same command with the previous numbers (`colima list` showed
 them).
 
+<a id="network"></a>
+## One network link
+
+**Why.** With wired and Wi-Fi both up, a Mac gets two addresses on the same
+subnet and two default routes to the same gateway. A connection that arrives on
+one interface can have its replies leave by the other — the router or the
+client drops them, and it looks like "connected, but nothing answers": SSH
+hangs after the handshake, a web page never loads, from the phone and the
+laptop alike. On 2026-09-23 this host had been in that state for weeks, and it
+reads as a flaky network, not as a setting.
+
+**Check:**
+
+```sh
+netstat -rn -f inet | grep '^default'   # Linux: ip -4 route show default
+```
+
+Two lines with the same gateway on different interfaces (`en0` wired, `en1`
+Wi-Fi) is the problem. A `link#N` line (a VM bridge, a VPN) names no gateway
+and is fine.
+
+**Fix: keep only the wired link.** An unattended host does not move, so
+Wi-Fi is only a second path:
+
+```sh
+networksetup -listallhardwareports             # which device is Wi-Fi (usually en1)
+networksetup -setairportpower en1 off
+```
+
+Linux: `nmcli radio wifi off`.
+
+**Undo:** `networksetup -setairportpower en1 on` (Linux: `nmcli radio wifi on`).
+
+**A fixed address.** Remote devices reach the host by address; a DHCP lease
+that changes breaks every saved SSH host and bookmark. Reserve the wired
+interface's address on the router (a DHCP reservation keyed on its MAC), or
+set it on the host: *System Settings → Network → Ethernet → Details → TCP/IP →
+Configure IPv4: Manually* (Linux: your distribution's network config).
+
+**Tailscale as the way back in.** Keep [Tailscale](https://tailscale.com) (or
+another overlay) running on the host: its address stays the same whatever the
+LAN does, it works from outside the house, and when the LAN side is confused —
+two links, a new router, a changed lease — the tailnet address is how you get
+in to fix it. The fleet's doc-preview already serves on the tailnet.
+
 <a id="verify"></a>
 ## Verify
 
 Every item above with a measurable state is one line of `fleet-doctor`'s `host`
-section (macOS only — on Linux the section is skipped silently):
+section (macOS only — on Linux the section is skipped silently, except
+`network`):
 
 ```sh
-bash ~/.claude/fleet/bin/fleet-doctor.sh 2>&1 | grep -E '^\s*\S+\s+(spotlight|wtroot|nofile|sleep|siri|icloud)'
+bash ~/.claude/fleet/bin/fleet-doctor.sh 2>&1 | grep -E '^\s*\S+\s+(spotlight|wtroot|nofile|sleep|siri|icloud|network)'
 ```
 
 | line | reads | verdicts |
@@ -343,6 +391,7 @@ bash ~/.claude/fleet/bin/fleet-doctor.sh 2>&1 | grep -E '^\s*\S+\s+(spotlight|wt
 | `sleep` | `pmset -g` | `sleep` ≠ 0 → WARN · 0 → PASS (+ `autorestart`, `womp`) · unreadable → INFO |
 | `siri` | `defaults read com.apple.assistant.support "Assistant Enabled"` | 1 → INFO · 0 / no key → PASS |
 | `icloud` | `pgrep -x bird cloudd fileproviderd` | any alive → INFO (named) · none → PASS |
+| `network` | `netstat -rn -f inet` (Linux: `ip -4 route show default`) | one gateway as default through 2+ interfaces → WARN · else PASS · no gateway route → no row |
 
 WARN counts toward the doctor's summary; INFO is advice and never counted. Each
 line says how to silence itself (`FLEET_DOCTOR_<LINE>=0`, in the environment or
