@@ -72,6 +72,26 @@ FLEET_BASE_BRANCH="main"
 # @label=Protected-branch pattern @group=janitor @tier=advanced @scope=fleet @edit=regex
 FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 
+# --- Follow the stable mark automatically (issue #1120, EPIC #1117) --------------
+# ON by default, per LOGIN. Every 30 min com.claude-fleet.install-sync
+# (bin/fleet-install-sync.sh) fetches refs/tags/stable from the public repo (https,
+# no credentials) and, when this login's HEAD is behind it and no window on any of
+# this login's fleets is working / looping / waking, fast-forwards ~/.claude/fleet
+# to it, runs bin/fleet-install-apply.sh (daemons reloaded, hooks merged,
+# commands/skills installed) and bin/fleet-doctor.sh — a NEW doctor FAIL line
+# rolls the install back and that version is not retried until stable moves. It
+# never moves backward and never touches an install with tracked local changes.
+# Set to 0 to switch it off for this login (a hand /fleet-sync-install still
+# works; fleet-sync-logins.sh skips a login that opted out unless named). State:
+# $FLEET_CONF_DIR/global/install-sync.state; log: logs/install-sync.log.
+# @label=Follow stable automatically @group=janitor @tier=common @scope=global @edit=bool
+#FLEET_INSTALL_SYNC=1
+# How long one fetch of refs/tags/stable may stall before the tick gives up and
+# records `fetch-failed` (git's own low-speed abort; the tag is fetched once per
+# tick over https). Not seen ≠ refused: nothing moves, nothing alarms. GLOBAL.
+# @label=Install-sync fetch timeout @group=janitor @tier=internal @scope=global @edit=int @unit=seconds
+#FLEET_INSTALL_SYNC_TIMEOUT=30
+
 # --- Orphan-process reap for KEPT worktrees (issue #469) ------------------------
 # ON by default, GLOBALLY. #151 already reaps a worktree's detached processes when
 # the janitor PRUNES it. But a dirty/unmerged worktree is KEPT forever (a scratch

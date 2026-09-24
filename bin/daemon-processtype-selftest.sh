@@ -43,6 +43,9 @@ ok()   { CHECKS=$((CHECKS + 1)); }
 #                                 checkout) synchronously as a CHILD process
 #   sleep                         transcript inspection and native resume on
 #                                 the user's entry/message path
+#   install-sync                  `git merge --ff-only` rewrites the live
+#                                 install's bin/ that every daemon and hook
+#                                 execs from, then reloads the changed daemons
 # CADENCE: not bulk I/O, but a FORK-HEAVY tick whose cadence IS the product —
 # must NOT be Background either (issue #651).
 #   collect                       every dash cache; launchd never overlaps a
@@ -55,7 +58,7 @@ ok()   { CHECKS=$((CHECKS + 1)); }
 #                                 snapshot alone ate 50s of a 61s tick, and the
 #                                 unit ran every 3.5-5 min instead of every 1.
 # POLL: gh / tmux / network polling only — Background is correct and stays.
-IO_UNITS='cleanup worktree-autoclean diskguard base-sync dispatch sleep'
+IO_UNITS='cleanup worktree-autoclean diskguard base-sync dispatch sleep install-sync'
 CADENCE_UNITS='collect'
 POLL_UNITS='pr-refresh spinner quotawatch issue-bridge ledger-watch webhook'
 
