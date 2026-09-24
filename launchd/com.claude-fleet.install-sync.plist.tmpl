@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.claude-fleet.install-sync</string>
+  <key>ProgramArguments</key><array>
+    <string>/bin/bash</string><string>__HOME__/.claude/fleet/bin/fleet-install-sync.sh</string>
+  </array>
+  <key>EnvironmentVariables</key><dict>
+    <key>HOME</key><string>__HOME__</string>
+    <key>LANG</key><string>en_US.UTF-8</string>
+    <key>PATH</key><string>__HOME__/.local/bin:__BREW_PREFIX__/bin:__BREW_PREFIX__/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <!-- ProcessType=Standard, NOT Background (issue #588). Background puts the whole
+       process TREE at QoS BACKGROUND, i.e. throttled disk I/O: measured on macOS 26,
+       20k unlinks ran at 104 files/s under Background vs 10967 files/s under
+       Standard (~100x, and the gap widens as the machine gets busier).
+       This daemon's `git merge --ff-only` rewrites the live install's bin/ that
+       every other daemon and every hook execs from, then fleet-install-apply.sh
+       reloads the changed daemons; a throttled checkout leaves that tree
+       half-written for longer under everything that reads it.
+       Its natural throttle is its StartInterval, not the I/O scheduler. -->
+  <key>ProcessType</key><string>Standard</string>
+  <key>RunAtLoad</key><true/>
+  <key>StartInterval</key><integer>1800</integer>
+  <key>StandardErrorPath</key><string>__HOME__/.claude/fleet/logs/install-sync.launchd.log</string>
+  <key>StandardOutPath</key><string>/dev/null</string>
+</dict></plist>

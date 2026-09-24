@@ -1,0 +1,12 @@
+# Fires claude-fleet-install-sync.service. Parity with the launchd plist:
+# StartInterval=1800 + RunAtLoad=true.
+[Unit]
+Description=claude-fleet install-sync daemon timer (every 30 min)
+
+[Timer]
+OnStartupSec=120
+OnUnitActiveSec=1800
+AccuracySec=60s
+
+[Install]
+WantedBy=timers.target

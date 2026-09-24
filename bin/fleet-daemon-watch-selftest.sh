@@ -312,7 +312,8 @@ for pair in 'tmux-dash-collect.sh collect' 'fleet-quotawatch.sh quotawatch' \
             'fleet-cleanup-daemon.sh cleanup' 'fleet-dispatch.sh dispatch' \
             'fleet-base-sync.sh base-sync' 'fleet-diskguard.sh diskguard' \
             'fleet-ledger-watch.sh ledger-watch' 'fleet-issue-bridge.sh issue-bridge' \
-            'tmux-pr-refresh.sh pr-refresh' 'worktree-autoclean.sh worktree-autoclean'; do
+            'tmux-pr-refresh.sh pr-refresh' 'worktree-autoclean.sh worktree-autoclean' \
+            'fleet-install-sync.sh install-sync'; do
   set -- $pair
   [ "$(stamps_for "$1" "$2")" -ge 1 ] \
     || fail "10: $1 no longer stamps its scheduling heartbeat (unit $2) — its alarm is unarmed"; ok
@@ -331,7 +332,7 @@ grep -q 'CALLER" != collect \] && \[ "\$STATUS" = 0 \] && \[ "\$DRY" = 0 \]' "$B
 # the daemon it instruments if an install is ever half-synced.
 for f in tmux-dash-collect.sh fleet-quotawatch.sh fleet-cleanup-daemon.sh fleet-dispatch.sh \
          fleet-base-sync.sh fleet-diskguard.sh fleet-ledger-watch.sh fleet-issue-bridge.sh \
-         tmux-pr-refresh.sh worktree-autoclean.sh; do
+         tmux-pr-refresh.sh worktree-autoclean.sh fleet-install-sync.sh; do
   grep -q 'fleet_daemon_stamp_tick' "$BIN/$f" || fail "10: $f lost its stamp"
   grep -qF '[ -f "$BIN/fleet-daemon-lib.sh" ]' "$BIN/$f" \
     || fail "10: $f sources fleet-daemon-lib.sh UNGUARDED — a half-synced install would kill the daemon instead of just losing its alarm"; ok

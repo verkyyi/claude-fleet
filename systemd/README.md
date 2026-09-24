@@ -18,6 +18,7 @@ webhook daemon) plus the `.timer` + `.service` pairs matching the launchd
 | `claude-fleet-ledger-watch.timer` | every 60s, +30s after start | `com.claude-fleet.ledger-watch` | recommended (index every closed worker session for `/fleet-history` resume) |
 | `claude-fleet-base-sync.timer` | every 60s, +35s after start | `com.claude-fleet.base-sync` | recommended (keep the local base fast-forwarded to the remote, merge-independent; ON per fleet unless `FLEET_BASE_SYNC=0`) |
 | `claude-fleet-worktree-autoclean.timer` | hourly, no run at start | `com.claude-fleet.worktree-autoclean` | optional |
+| `claude-fleet-install-sync.timer` | every 30 min, +2 min after start | `com.claude-fleet.install-sync` | recommended (follow `refs/tags/stable` when this login's fleets are idle, roll back on a failed doctor; ON per login unless `FLEET_INSTALL_SYNC=0`, issue #1120) |
 
 Every file is `__HOME__`-templated exactly like the plists — substitute the
 real home dir at install time.
@@ -42,6 +43,7 @@ systemctl --user enable --now claude-fleet-pr-refresh.timer  # recommended: fast
 systemctl --user enable --now claude-fleet-cleanup.timer    # recommended: reap worktrees after merges (it merges nothing itself); ON per fleet unless FLEET_CLEANUP=0
 systemctl --user enable --now claude-fleet-ledger-watch.timer # recommended: index every closed worker session for resume; ON per fleet unless FLEET_LEDGER_WATCH=0
 systemctl --user enable --now claude-fleet-base-sync.timer  # recommended: keep the local base fast-forwarded to the remote (merge-independent); ON per fleet unless FLEET_BASE_SYNC=0
+systemctl --user enable --now claude-fleet-install-sync.timer # recommended: follow refs/tags/stable every 30 min when idle, roll back on a failed doctor; ON per login unless FLEET_INSTALL_SYNC=0
 # optional:
 systemctl --user enable --now claude-fleet-dispatch.timer   # autofill — needs FLEET_AUTOFILL=1 per fleet + the `autofill` label on issues
 systemctl --user enable --now claude-fleet-issue-bridge.timer # issue→worker relay — needs FLEET_ISSUE_BRIDGE=1 per fleet
@@ -65,7 +67,7 @@ journalctl --user -u claude-fleet-collect.service --since '5 min ago'
 ```sh
 for u in spinner.service webhook.service collect.timer diskguard.timer pr-refresh.timer \
          dispatch.timer issue-bridge.timer watch.timer cleanup.timer ledger-watch.timer \
-         base-sync.timer worktree-autoclean.timer; do
+         base-sync.timer install-sync.timer worktree-autoclean.timer; do
   systemctl --user disable --now "claude-fleet-$u" 2>/dev/null
 done
 rm -f ~/.config/systemd/user/claude-fleet-*.{service,timer}

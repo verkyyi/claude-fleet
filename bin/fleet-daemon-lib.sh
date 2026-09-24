@@ -94,6 +94,7 @@ fleet_daemon_units() {
     'sleep 60 tick' \
     'dispatch 60 tick' \
     'base-sync 60 tick' \
+    'install-sync 1800 tick' \
     'diskguard 60 tick' \
     'ledger-watch 60 tick' \
     'issue-bridge 15 tick' \
