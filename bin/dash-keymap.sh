@@ -113,10 +113,19 @@ preview ctrl-p alt-p' ;;
 # Aliases, not rows (issue #965): a Chinese IME sends full-width 。/． for `.`
 # and ？ for `?`; the view folds them onto `menu` / `help` on an empty line
 # (fleet-sidebar.py KEY_ALIASES), so no second key is registered here.
+# The input line's editing keys (issue #1097), readline's and Claude's prompt's:
+# `bol`/`eol` cursor to the start/end, `kill_word` deletes the word before it,
+# `kill_eol` everything after it. ⌃a is a common tmux prefix, so each takes its
+# ⌥ fallback the same way. ←→ Home End ⌥←→ ⌃u are not rows: they are named
+# keys (or, for ⌃u, predate this table), handled in fleet-sidebar.py edit_of.
 sidebar) TABLE='new ctrl-n alt-n
 menu . .
 restore ctrl-o alt-o
-help ? ?' ;;
+help ? ?
+bol ctrl-a alt-a
+eol ctrl-e alt-e
+kill_word ctrl-w alt-w
+kill_eol ctrl-k alt-k' ;;
 *) echo "dash-keymap.sh: unknown panel '$PANEL' (dash|backlog|config|sidebar)" >&2; exit 2 ;;
 esac
 

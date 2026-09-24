@@ -36,6 +36,34 @@ assert sidebar.visible(['1', '0', '1', '1'], 100)
 assert sidebar.tail('abc修复', 5) == 'c修复' and sidebar.tail('abc', 9) == 'abc'
 assert sidebar.typed('q') and sidebar.typed('修') and sidebar.typed(' ')
 assert not sidebar.typed('\x0e') and not sidebar.typed('\x7f')
+# The input line's editor (issue #1097): a cursor, readline's moves and kills.
+Line = sidebar.Line
+line = Line('ab'); line.left(); line.insert('c')
+assert (line.text, line.pos) == ('acb', 2)
+line.home(); assert line.pos == 0; line.end(); assert line.pos == 3
+line.home(); line.backspace(); assert line.text == 'acb'  # nothing before the cursor
+line.delete(); assert (line.text, line.pos) == ('cb', 0)
+line = Line('foo bar  baz'); line.word_left(); assert line.pos == 9
+line.word_left(); assert line.pos == 4
+line.word_right(); assert line.pos == 7
+line.kill_eol(); assert line.text == 'foo bar'
+line.kill_word(); assert (line.text, line.pos) == ('foo ', 4)
+line = Line('新会话 测试'); line.word_left(); line.insert('x')
+assert line.text == '新会话 x测试' and line.view(30) == '新会话 x▏测试'
+# CJK takes two cells: the cursor keeps its place in a view too narrow for all.
+line = Line('修复仪表盘侧栏'); line.pos = 3
+assert line.view(7) == '复仪▏表', line.view(7)
+line.end(); assert line.view(7) == '盘侧栏▏'; line.home(); assert line.view(7) == '▏修复仪'
+assert Line('abc').view(9) == 'abc▏' and Line().view(5) == '▏'
+# The keys' double meaning: ←→ Home End edit only a NON-empty line — on an empty
+# one they are the list's fold / first-last row. ↑↓ never edit; ⌃ keys always do.
+import curses
+for key in (curses.KEY_LEFT, curses.KEY_RIGHT, curses.KEY_HOME, curses.KEY_END):
+    assert sidebar.edit_of(key, '') == '' and sidebar.edit_of(key, 'x'), key
+assert sidebar.edit_of(curses.KEY_UP, 'x') == '' and sidebar.edit_of(curses.KEY_DOWN, 'x') == ''
+assert [sidebar.edit_of(k, '') for k in (1, 5, 23, 11, 21)] == \
+    ['home', 'end', 'kill_word', 'kill_eol', 'clear']
+assert sidebar.edit_of(sidebar.WORD_LEFT, '') == 'word_left' and sidebar.edit_of(ord('a'), 'x') == ''
 
 real_tmux = shutil.which('tmux')
 work = Path(tempfile.mkdtemp(prefix='sidebar-selftest.'))
@@ -719,6 +747,44 @@ try:
           'a letter still acted as a command (q hid / n opened a popup)')
     type_keys('\x7f\x7f\x7f\x7f')
     wait_for(lambda: tasks_cue(side), 'backspace did not delete the typed name')
+    # A cursor on the input line (issue #1097): ←→ Home End ⌥←→ ⌃a ⌃e ⌃w ⌃k
+    # edit in place, as on Claude's prompt — and the worker sees none of them.
+    worker_before = tm('capture-pane', '-p', '-t', p1)
+    def line_is(want, why):
+        wait_for(lambda: input_line(side) == ('› ' + want).rstrip(),
+                 why + ': %r' % input_line(side))
+    for keys, want, why in (
+            (b'ab', 'ab▏', 'a b did not type'),
+            (b'\x1b[D', 'a▏b', '← on a typed name did not move the cursor'),
+            (b'c', 'ac▏b', 'a key typed after ← did not insert at the cursor'),
+            (b'\x1b[H', '▏acb', 'Home on a typed name did not go to the line start'),
+            (b'\x1b[F', 'acb▏', 'End on a typed name did not go to the line end'),
+            (b'\x01', '▏acb', '⌃a did not go to the line start'),
+            (b'\x1b[C', 'a▏cb', '→ on a typed name did not move the cursor'),
+            (b'\x05', 'acb▏', '⌃e did not go to the line end'),
+            (b'\x15foo bar baz', 'foo bar baz▏', '⌃u + typing did not refill the line'),
+            (b'\x17', 'foo bar ▏', '⌃w did not delete the word before the cursor'),
+            (b'\x1bb', 'foo ▏bar ', '⌥← (ESC b) did not move a word left'),
+            (b'\x1b[1;3D', '▏foo bar ', '⌥← (ESC[1;3D) did not move a word left'),
+            (b'\x1bf', 'foo▏ bar ', '⌥→ (ESC f) did not move a word right'),
+            (b'\x1b[1;3C', 'foo bar▏ ', '⌥→ (ESC[1;3C) did not move a word right'),
+            (b'\x1bb\x0b', 'foo ▏', '⌃k did not delete to the line end')):
+        os.write(terminal, keys)
+        line_is(want, why)
+    check(navigation(), 'the editing keys gave the keyboard back')
+    check(tm('capture-pane', '-p', '-t', p1) == worker_before, 'an editing key leaked into the worker')
+    # CJK: the cursor lands between the right characters — the go-live evidence.
+    os.write(terminal, b'\x15')
+    type_keys('新会话 测试')
+    os.write(terminal, b'\x1bb')
+    line_is('新会话 ▏测试', '⌥← did not move over a CJK word')
+    type_keys('x')
+    line_is('新会话 x▏测试', 'a key typed mid-CJK landed in the wrong place')
+    if os.environ.get('FLEET_SIDEBAR_EVIDENCE'):
+        Path(os.environ['FLEET_SIDEBAR_EVIDENCE'], 'cursor.txt').write_text(
+            tm('capture-pane', '-p', '-t', side) + '\n')
+    os.write(terminal, b'\x15')
+    wait_for(lambda: tasks_cue(side), '⌃u did not clear the edited line')
     # An IME commit (issue #1098): 「你好世界」 in ONE write lands whole on the
     # input line and not a character of it on the worker — on tmux < 3.7 too,
     # where only assume-paste-time 0 + the root `Any` keep the later keys here.
@@ -895,6 +961,11 @@ try:
     wait_for(lambda: input_line(side) == '改名› worker-one▏',
              'rename did not pre-fill the input line: %r' % input_line(side))
     check(navigation(), 'rename did not keep the keyboard on the sidebar')
+    # The rename line edits like the typed one (issue #1097).
+    os.write(terminal, b'\x1b[D')
+    wait_for(lambda: input_line(side) == '改名› worker-on▏e', '← did not move the rename cursor: %r' % input_line(side))
+    os.write(terminal, b'\x1bb')
+    wait_for(lambda: input_line(side) == '改名› worker-▏one', '⌥← did not move the rename cursor a word: %r' % input_line(side))
     os.write(terminal, b'\x15')  # C-u: clear the pre-filled current name
     wait_for(lambda: input_line(side) == '改名› ▏', '⌃u did not clear the rename line')
     type_keys(odd)

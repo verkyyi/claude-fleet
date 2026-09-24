@@ -100,8 +100,9 @@ want() {
   esac
 }
 
-# The task sidebar's `?` sheet (issue #963): the six keys an operator uses on
-# the sidebar, one short Chinese line each, so the whole sheet fits its popup
+# The task sidebar's `?` sheet (issue #963): the seven keys an operator uses on
+# the sidebar (the input line's editing keys share one row, #1097), one short
+# Chinese line each, so the whole sheet fits its popup
 # (fleet-sidebar.py's open_help sizes it to this) — the popup cannot scroll.
 # `skey <key> <extra> <desc>`: the key column is 14 CELLS; <extra> is how many
 # of the key's characters are double-width (CJK), which ${#k} counts once.
@@ -117,6 +118,7 @@ print_sidebar_sheet() {
   printf '%s%s 任务栏快捷键 %s  %sq / esc 关闭%s\n\n' "$B" "$CYAN" "$R" "$DIM" "$R"
   skey "打字 ↵" 2 "起新会话"
   skey "↑ ↓" 0 "切换任务"
+  skey "编辑" 2 "←→ Home End ⌥←→ $(dg bol) $(dg eol) $(dg kill_word) $(dg kill_eol) ⌃u"
   skey "$(dg menu) / 再点一次" 4 "任务菜单$(dn menu)"
   skey "esc" 0 "键盘还给任务"
   skey "⌂ / F9" 0 "进任务栏，再按去 hub"
@@ -151,11 +153,16 @@ print_sheet() {
   if want sidebar; then
   eval "$(bash "$BIN/dash-keymap.sh" --panel sidebar env 2>/dev/null)"
   group "task sidebar" "— once prefix E or a tap puts the keyboard on it"
-  key "type a name" "fills the ONE input line at the bottom — every letter types (q n j k too), CJK fine; backspace deletes, ⌃u clears"
+  key "type a name" "fills the ONE input line at the bottom at its cursor ▏ — every letter types (q n j k too), CJK fine; backspace deletes before the cursor, delete after it, ⌃u clears. Rename edits the same way"
   key "enter" "with a name: start a scratch session named after it (the hub's ⌃s) and switch to it — no popup, no hub. A refusal (cap, worktree) shows on the line and keeps the name. Empty line: give input back to the worker"
   key "esc" "clear the typed name; on an empty line give input back to the worker"
-  key "↑ / ↓" "switch to the highlighted task (follows once you pause, ~¼s; a held key is one switch, a row passed over is never selected); home/end the ends"
-  key "← / →" "fold / unfold the highlighted row's subtree"
+  key "↑ / ↓" "switch to the highlighted task (follows once you pause, ~¼s; a held key is one switch, a row passed over is never selected); on an EMPTY line home/end the ends"
+  key "← / →" "with text: move the cursor (home/end: to the line's start/end). On an EMPTY line: fold / unfold the highlighted row's subtree — the hub's rule"
+  key "⌥← / ⌥→" "move the cursor a word left / right (the terminal's ESC b / ESC f or ⌥-arrow)"
+  key "$(dg bol)" "cursor to the start of the line$(dn bol)"
+  key "$(dg eol)" "cursor to the end of the line$(dn eol)"
+  key "$(dg kill_word)" "delete the word before the cursor$(dn kill_word)"
+  key "$(dg kill_eol)" "delete from the cursor to the end of the line$(dn kill_eol)"
   key "tap a heading" "2+ repos, viewing all: a tap on a repo heading selects it (no switch) and the input line names it — a typed name or new task starts THERE; tap it again for the new-task popup pinned to that repo. 'no repo' = \$HOME; esc or a tap on a task clears it"
   key "$(dg new)" "new task — file an issue AND spawn its worker (the hub's ⌃n popup)$(dn new)"
   key "$(dg menu)" "on an EMPTY line: the highlighted task's menu — rename (edits on this line: ↵ applies, esc/empty cancels) · pin · open PR · answer its question · flip new sessions claude⇄codex · reap (asks y/n first) · new task. Inside a name it types a dot. Touch: tap the highlighted row again$(dn menu)"
