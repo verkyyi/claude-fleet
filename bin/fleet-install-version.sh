@@ -1,5 +1,5 @@
 #!/bin/sh
-# fleet-install-version.sh [--json] [--no-fetch] [--dir <path>] [--timeout <s>] [-q]
+# fleet-install-version.sh [--json] [--no-fetch] [--no-logins] [--dir <path>] [--timeout <s>] [-q]
 #   — how far is THIS machine's live install behind the trunk? (issue #635)
 #
 # `/fleet-sync-install` is per-machine AND manual, so the second machine goes
@@ -49,22 +49,32 @@
 # re-deriving it. Nothing is uploaded from here — this script makes no network
 # call beyond its own `git fetch`.
 #
+# Other logins (issue #1069): on a shared machine the unit that goes stale is
+# not the machine but the LOGIN — each has its own ~/.claude/fleet and daemons,
+# and on 2026-09-23 four of the Mac mini's five sat 5–13 days behind the fifth
+# with every daemon green. So when other logins' installs exist, a `logins:` line
+# reports their drift against THIS install, read from
+# `fleet-sync-logins.sh --summary` (one source of truth; it is also the fix).
+# It never changes the verdict or the exit code — those stay about this install.
+# `--no-logins` skips it; a machine with one login prints nothing.
+#
 # Read-only: it fetches (a remote-tracking ref update) and reads. It never
 # checks out, merges, or writes the working tree.
 set -u
 
 LIVE_DEFAULT="${FLEET_LIVE_DIR:-$HOME/.claude/fleet}"
 dir="$LIVE_DEFAULT"
-as_json=0 quiet=0 do_fetch=1 timeout=15
+as_json=0 quiet=0 do_fetch=1 timeout=15 do_logins=1
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --json)      as_json=1 ;;
     --no-fetch)  do_fetch=0 ;;
+    --no-logins) do_logins=0 ;;
     --dir)       shift; dir="${1:-}" ;;
     --timeout)   shift; timeout="${1:-15}" ;;
     -q|--quiet)  quiet=1 ;;
-    -h|--help)   sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)   sed -n '2,60p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --*)         printf 'fleet-install-version: unknown flag %s\n' "$1" >&2; exit 2 ;;
     *)           printf 'fleet-install-version: unexpected argument %s\n' "$1" >&2; exit 2 ;;
   esac
@@ -144,6 +154,18 @@ else
   fi
 fi
 
+# --- the other logins on this machine (issue #1069) --------------------------
+logins=''
+sl="$(dirname "$0")/fleet-sync-logins.sh"
+if [ "$do_logins" -eq 1 ] && [ -n "$head" ] && [ -f "$sl" ]; then
+  logins=$(bash "$sl" --summary --source "$dir" 2>/dev/null)
+  case "$logins" in
+    ''|'0 other'*) logins='' ;;
+    *' 0 drifted') ;;
+    *) logins="$logins — sync them: bash $sl" ;;
+  esac
+fi
+
 # --- the one-line fix, printed for every non-CURRENT verdict -----------------
 # `pull --ff-only` is deliberate: a live install must never grow a merge commit,
 # and on AHEAD/DIVERGED the refusal IS the signal. It is also only HALF a sync —
@@ -154,12 +176,13 @@ fix="git -C $dir pull --ff-only   (then /fleet-sync-install — it also reloads 
 if [ "$as_json" -eq 1 ]; then
   jnum() { [ -n "$1" ] && printf '%s' "$1" || printf 'null'; }
   jstr() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
-  printf '{"dir":"%s","host":"%s","head":"%s","branch":"%s","upstream":"%s","behind":%s,"ahead":%s,"dirty":%s,"fetched":%s,"verdict":"%s","error":"%s"}\n' \
+  printf '{"dir":"%s","host":"%s","head":"%s","branch":"%s","upstream":"%s","behind":%s,"ahead":%s,"dirty":%s,"fetched":%s,"verdict":"%s","error":"%s","logins":%s}\n' \
     "$(jstr "$dir")" "$(jstr "$host")" "$(jstr "$head")" "$(jstr "$branch")" "$(jstr "$upstream")" \
     "$(jnum "$behind")" "$(jnum "$ahead")" \
     "$( [ "$dirty" = yes ] && echo true || echo false )" \
     "$( [ "$fetched" = yes ] && echo true || echo false )" \
-    "$verdict" "$(jstr "$err")"
+    "$verdict" "$(jstr "$err")" \
+    "$( [ -n "$logins" ] && printf '"%s"' "$(jstr "$logins")" || printf 'null')"
 elif [ "$quiet" -eq 0 ]; then
   printf 'install:  %s\n' "$dir"
   printf 'host:     %s\n' "$host"
@@ -169,6 +192,7 @@ elif [ "$quiet" -eq 0 ]; then
   printf 'ahead:    %s\n' "${ahead:-unknown}"
   [ -n "$dirty" ] && printf 'dirty:    %s\n' "$dirty"
   [ -n "$err" ] && printf 'note:     %s\n' "$err"
+  [ -n "$logins" ] && printf 'logins:   %s\n' "$logins"
   printf 'verdict:  %s\n' "$verdict"
   case "$verdict" in BEHIND|AHEAD|DIVERGED) printf 'fix:      %s\n' "$fix" ;; esac
 fi

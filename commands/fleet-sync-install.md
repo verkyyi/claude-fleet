@@ -109,7 +109,8 @@ echo "before=$before after=$after beforeconf=$beforeconf"
 If it refuses to fast-forward, **stop and report** — the live install diverged
 (someone edited it in place); resolve that by hand before re-running. If
 `before == after`, the live install was already current — say "already at master,
-nothing to sync" and stop; the rest is a no-op.
+nothing to sync" and **jump to step 8c** (the other logins can drift while this
+one is current); steps 3–8b are a no-op.
 
 Compute what changed between the two revs — this drives steps 3–8, so nothing
 reloads or re-merges unless it actually moved. Use `--name-status -M` so
@@ -395,13 +396,45 @@ One JSON line per sleeping worker (`reparked` / `current` / `skip`) — surface 
 `reparked` count in step 9. `repark <sess> <@wid> --force` replaces a current page
 by hand.
 
+## 8c. Bring the machine's other logins along (issue #1069)
+
+A shared machine has one `~/.claude/fleet` **per login**, each with its own
+daemons — and this command only ever moved yours. On 2026-09-23 four of the Mac
+mini's five logins sat 5–13 days behind the fifth, 120–130 scripts each, with every
+daemon green. So finish by syncing them from this install:
+
+```sh
+bash ~/.claude/fleet/bin/fleet-sync-logins.sh
+```
+
+It plans first (per login: shape, head, drift, local edits), then — as each login
+— backs up what will change, rsyncs the git-tracked entries of THIS install's
+HEAD (a guest install gets only the entries it already has; `fleet.conf`, `logs/`
+and `.git/` are never touched), moves a checkout's HEAD to match, and kickstarts
+that login's daemons. A machine with one login prints "nothing to sync" (exit 0).
+Act on the exit code — it is the reason:
+
+- **0** — every other login is at this commit.
+- **4** — a login was **blocked**: it has local edits, or its install is NEWER
+  than this one. Don't `--force` it blindly — newer means run the sync from THAT
+  login instead; edits are someone's work (the plan line names the files).
+- **5** — no passwordless sudo for another login's files. Nothing changed for it;
+  relay the printed `sudo … --logins <u>` command to the operator.
+- **6** — a sync or its verification failed; the line names the backup to
+  restore from.
+
+`--dry-run` previews. Relay its last line
+(`other logins on this machine: N synced / M skipped · K already current`) in
+step 9.
+
 ## 9. Report — keep it short
 
 One line naming what synced: the `before → after` sha, and which of
 {daemons reloaded, settings re-merged, commands installed/removed, skills
 installed/removed (with any
 personal-skill-diverged warning), dash panes refreshed (with the count),
-conf reloaded (with the unbound count), sleeping pages re-parked (with the count)} actually ran.
+conf reloaded (with the unbound count), sleeping pages re-parked (with the count),
+other logins synced / skipped (step 8c's line)} actually ran.
 If you stopped at step 1 (wrong fleet) or step 2 (diverged / already current),
 report that instead with the one-line reason.
 

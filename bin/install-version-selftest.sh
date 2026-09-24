@@ -18,6 +18,9 @@
 #   F. doctor             the `install` line: PASS when current, WARN carrying the
 #                         count + fix command when behind, and never a silent pass
 #                         when the fetch failed
+#   G. other logins       the `logins:` line (issue #1069): absent with one login,
+#                         the drift of other logins' installs when they exist,
+#                         in --json too — and never a change to verdict or exit
 #
 # Exit 0 = pass.
 set -uo pipefail
@@ -44,6 +47,9 @@ export GIT_CONFIG_GLOBAL="$WORK/gitconfig" GIT_CONFIG_SYSTEM=/dev/null
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 : > "$WORK/gitconfig"
 export FLEET_SKIP_GLOBAL_CONF=1
+# The `logins:` line scans a homes root (/Users, /home) — never the real one here.
+export FLEET_SYNC_LOGINS_HOMES="$WORK/homes" FLEET_SYNC_LOGINS_TMP="$WORK"
+mkdir -p "$WORK/homes"
 
 g() { git -C "$1" "${@:2}"; }
 
@@ -208,5 +214,31 @@ out=$(doc_install "$C3")
 contains "doctor: unreadable trunk is reported, not passed" "$out" "unknown"
 not_contains "doctor: offline is never a PASS" "$out" "PASS"
 mv "$WORK/upstream.gone2" "$UP"
+
+# ============================================================================
+# G. other logins (issue #1069)
+# ============================================================================
+G="$WORK/logins-live"; clone "$G"
+run --dir "$G" --no-fetch
+not_contains "logins: one login prints no line" "$OUT" "logins:"
+mkdir -p "$WORK/homes/other/.claude"; git clone -q "$UP" "$WORK/homes/other/.claude/fleet"
+g "$WORK/homes/other/.claude/fleet" reset -q --hard HEAD~1
+run --dir "$G" --no-fetch
+eq "logins: verdict/exit unchanged" 0 "$RC"
+contains "logins: drift reported" "$OUT" "logins:   1 other · 0 current · 1 drifted"
+contains "logins: names the fix" "$OUT" "fleet-sync-logins.sh"
+run --dir "$G" --no-fetch --json
+contains "logins: in json" "$OUT" '"logins":"1 other · 0 current · 1 drifted'
+run --dir "$G" --no-fetch --no-logins
+not_contains "logins: --no-logins skips it" "$OUT" "logins:"
+bash "$BIN/fleet-sync-logins.sh" --source "$G" >/dev/null 2>&1
+run --dir "$G" --no-fetch
+contains "logins: current after a sync" "$OUT" "logins:   1 other · 1 current · 0 drifted"
+not_contains "logins: no fix once current" "$OUT" "sync them"
+run --dir "$G" --no-fetch --json
+contains "logins: json null-free when present" "$OUT" '"logins":"1 other'
+rm -rf "$WORK/homes/other"
+run --dir "$G" --no-fetch --json
+contains "logins: json null with one login" "$OUT" '"logins":null'
 
 printf 'install-version-selftest OK (%d checks)\n' "$CHECKS"

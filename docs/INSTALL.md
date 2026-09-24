@@ -73,7 +73,11 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    commits behind master with a fully green doctor on both machines, and silence
    reading as green is the whole failure. `bin/fleet-install-version.sh` is the
    same check standalone (`--json` for a reporter, `--no-fetch` for anything that
-   must not touch the network). Notes: standalone `jq` is **not** needed
+   must not touch the network). On a machine shared by several logins, each
+   with its own `~/.claude/fleet`, a `logins:` line reports the others' drift
+   against this install, and `bin/fleet-sync-logins.sh` (`--dry-run` to preview)
+   brings them to this commit, as each login, and restarts their daemons —
+   `/fleet-sync-install` runs it as its last step (issue #1069). Notes: standalone `jq` is **not** needed
    (the collector only uses `gh --jq`, which is built in); perl `Time::HiRes` is
    a soft dep (without it the dash spinner ticks at whole-second granularity).
    If `gh` is not authed, the backlog/PR features silently show nothing — tell
