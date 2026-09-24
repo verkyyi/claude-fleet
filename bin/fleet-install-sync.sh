@@ -57,13 +57,32 @@
 #              `skip: <stable>` recorded, so this version is not retried until
 #              stable moves.
 #
+# STUCK → ONE notification (R4 #1125). The doctor's install row (C7 #1123) WARNs
+# on a stuck login, but nobody runs the doctor on the days nobody is looking, so
+# the tick that turns stuck says so itself — over FLEET_NOTIFY_CMD, the same
+# channel quotawatch / diskguard / the collector use (nothing when it is unset).
+# Stuck is what the doctor calls STUCK: `refused`, `rolled-back` (and the
+# `skipped` ticks that follow it — the same episode), `failed`, or `deferred`
+# longer than FLEET_INSTALL_FOLLOW_STUCK_SECS (24h; a shorter deferral is normal).
+# Dedup key = login + why + stable (`notified:` in the state): the same stuck
+# tick again is silent; a tick that is NOT stuck (`current`, `updated`, `off`, a
+# short `deferred`) clears the key, so a login that followed and then stuck
+# again — even for the same reason — is announced again. `fetch-failed` / `none`
+# say nothing about the login and leave the key as it was. A send that fails is
+# not recorded, so the next tick retries; the message names the login, the
+# reason and how to silence it (FLEET_INSTALL_SYNC=0). Never under --dry-run
+# (it prints `notify: would send` instead).
+#
 # State (for the doctor, C7): $FLEET_CONF_DIR/global/install-sync.state, one
 # `key: value` per line, rewritten atomically every tick —
 #   last_check: <epoch>  last_check_iso: <UTC>  result: <token above>
 #   head: <sha>  stable: <sha>|none  from: <sha>  to: <sha>  reason: <text>
 #   deferred_since: <epoch>|-  skip: <sha>|-  apply: <apply's last line>|-
-# Log: $ROOT/logs/install-sync.log, ONE line per tick:
+#   notified: <login> <why> <stable>|-  notified_at: <epoch>|-
+# Log: $ROOT/logs/install-sync.log, ONE line per tick —
 #   <UTC> <result> <from>..<to> <reason>
+# — plus ONE `notified` line per notification that went out (the send log):
+#   <UTC> notified <from>..<to> <login> <why> <stable> via <FLEET_NOTIFY_CMD>
 # The apply and doctor transcripts go to stderr (the launchd/systemd log).
 #
 # Ships as launchd/com.claude-fleet.install-sync.plist.tmpl (StartInterval 1800,
@@ -95,8 +114,14 @@ REMOTE=origin TAG=stable TIMEOUT="${FLEET_INSTALL_SYNC_TIMEOUT:-30}"
 DRY=0 STATUS=0
 BUSY_STATES='working|looping|waking'
 LOCK_TTL=3600   # an apply + two doctor runs take well under a minute; older = a dead tick
+# A deferral this long is STUCK (the doctor's own threshold, C7) — and the alarm's.
+STUCK_SECS="${FLEET_INSTALL_FOLLOW_STUCK_SECS:-86400}"
+case "$STUCK_SECS" in ''|*[!0-9]*) STUCK_SECS=86400 ;; esac
+NOTIFY_BUDGET=30   # a notifier that hangs must not hold the tick lock
+LOGIN=$(id -un 2>/dev/null || printf '%s' "${USER:-?}")
+HOST=$(hostname -s 2>/dev/null || hostname 2>/dev/null || printf '?')
 
-usage() { sed -n '2,82p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,101p' "$0" | sed 's/^# \{0,1\}//'; }
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run|-n) DRY=1 ;;
@@ -119,6 +144,7 @@ LOGF="$ROOT/logs/install-sync.log"
 
 now() { date +%s; }
 utc() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+iso_of() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '%s' "$1"; }
 short() { printf '%.7s' "${1:-}"; }
 say() { printf 'fleet-install-sync: %s\n' "$*" >&2; }
 
@@ -129,7 +155,7 @@ g() { git -C "$ROOT" -c http.lowSpeedLimit=1000 -c "http.lowSpeedTime=$TIMEOUT" 
 state_get() { [ -f "$STATE" ] && sed -n "s/^$1: //p" "$STATE" | head -1; }
 
 # The whole record, rewritten atomically. Globals: HEAD_SHA STABLE_SHA FROM TO
-# DEFERRED_SINCE SKIP APPLY_LINE.
+# DEFERRED_SINCE SKIP APPLY_LINE NOTIFIED NOTIFIED_AT.
 write_state() { # $1 result $2 reason
   local tmp t
   t=$(now)
@@ -147,6 +173,8 @@ write_state() { # $1 result $2 reason
     printf 'deferred_since: %s\n' "${DEFERRED_SINCE:--}"
     printf 'skip: %s\n' "${SKIP:--}"
     printf 'apply: %s\n' "${APPLY_LINE:--}"
+    printf 'notified: %s\n' "${NOTIFIED:--}"
+    printf 'notified_at: %s\n' "${NOTIFIED_AT:--}"
   } > "$tmp" 2>/dev/null && mv -f "$tmp" "$STATE" 2>/dev/null
   rm -f "$tmp" 2>/dev/null
 }
@@ -157,9 +185,69 @@ log_line() { # $1 result $2 reason
     "$(short "${TO:-${HEAD_SHA:-?}}")" "$2" >> "$LOGF" 2>/dev/null
 }
 
-# finish <result> <reason> — record + log + leave. Under --dry-run, print only.
+# stuck_key <result> <why> — the dedup key of a STUCK tick (login + why + the
+# stable it cannot reach), nothing when the tick is not stuck. `why` is the
+# refusal's kind (behind / diverged / dirty / nogit / nohead / ff), so a dirty
+# tree whose file list changes is still one episode; a deferral is one episode
+# whatever keeps it waiting (busy, then the disk gate — deferred_since is one
+# clock), so `deferred` carries no kind; the ticks after a rollback (`skipped`)
+# are the rollback's own episode.
+stuck_key() {
+  local why=''
+  case "$1" in
+    refused)     why="refused${2:+/$2}" ;;
+    rolled-back) why=rolled-back ;;
+    skipped)     why=rolled-back ;;
+    failed)      why=failed ;;
+    deferred)    [ -n "$DEFERRED_SINCE" ] && [ $(( $(now) - DEFERRED_SINCE )) -ge "$STUCK_SECS" ] && why=deferred ;;
+  esac
+  [ -n "$why" ] || return 0
+  printf '%s %s %s\n' "$LOGIN" "$why" "${STABLE_SHA:-?}"
+}
+
+# notify_stuck <result> <reason> — ONE FLEET_NOTIFY_CMD per stuck episode
+# (issue #1125): sets NOTIFIED / NOTIFIED_AT for write_state and appends the
+# `notified` line to the log when a message went out. A non-stuck tick clears
+# the key; fetch-failed / none leave it. A failed or budget-killed send is not
+# recorded, so the next tick tries again. Never exits, never fails the tick.
+notify_stuck() {
+  local key hint msg rc cmd
+  case "$1" in fetch-failed|none) return 0 ;; esac
+  key=$(stuck_key "$1" "${3:-}")
+  if [ -z "$key" ]; then NOTIFIED=''; NOTIFIED_AT=''; return 0; fi
+  [ "$key" = "$NOTIFIED" ] && return 0                    # this episode was announced
+  if [ "$DRY" = 1 ]; then printf 'notify: would send (%s)\n' "$key"; return 0; fi
+  NOTIFIED=''; NOTIFIED_AT=''
+  if [ -z "${FLEET_NOTIFY_CMD:-}" ]; then
+    say "stuck ($key) and no FLEET_NOTIFY_CMD — nobody to tell (fleet-doctor.sh → install shows it)"; return 0
+  fi
+  case "$1" in
+    deferred) hint="Waited $(( ($(now) - DEFERRED_SINCE) / 3600 ))h so far (since $(iso_of "$DEFERRED_SINCE")) — a session busy this long is usually a stuck one: check \`fleet-doctor.sh\`, or its dash." ;;
+    skipped)  hint="It rolled back after the doctor failed on this version; nothing is retried until stable moves (\`fleet-stable.sh move\`)." ;;
+    *)        hint="The reason above says what to do; \`fleet-install-sync.sh --status\` has the whole record." ;;
+  esac
+  msg="# install-sync stuck — ${LOGIN}@${HOST}
+**${LOGIN}**'s fleet install ($ROOT) is at $(short "${HEAD_SHA:-?}") and not following stable $(short "${STABLE_SHA:-?}") — **$1**: $2
+$hint
+One notice per (login · reason · stable); it re-arms once this login follows again. Silence it for this login with \`FLEET_INSTALL_SYNC=0\` in ~/.config/claude-fleet/fleet.settings."
+  # shellcheck disable=SC2086  # FLEET_NOTIFY_CMD is a command line, split on purpose (quotawatch does the same)
+  fleet_timebox "$NOTIFY_BUDGET" $FLEET_NOTIFY_CMD "$msg" >/dev/null 2>&1; rc=$?
+  if [ "$rc" != 0 ]; then
+    say "notify ($key) failed: $FLEET_NOTIFY_CMD exit $rc — retried next tick"; return 0
+  fi
+  NOTIFIED="$key"; NOTIFIED_AT=$(now)
+  cmd=${FLEET_NOTIFY_CMD%% *}; cmd=${cmd##*/}
+  [ -d "$ROOT/logs" ] || mkdir -p "$ROOT/logs" 2>/dev/null || return 0
+  printf '%s notified %s..%s %s via %s\n' "$(utc)" "$(short "${FROM:-${HEAD_SHA:-?}}")" \
+    "$(short "${TO:-${HEAD_SHA:-?}}")" "$key" "$cmd" >> "$LOGF" 2>/dev/null
+  say "notified ($key) via $cmd"
+}
+
+# finish <result> <reason> [why] — notify if newly stuck, record, log, leave.
+# Under --dry-run, print only (and what a real tick would notify).
 finish() {
-  if [ "$DRY" = 1 ]; then printf '%s: %s\n' "$1" "$2"; exit 0; fi
+  if [ "$DRY" = 1 ]; then printf '%s: %s\n' "$1" "$2"; notify_stuck "$1" "$2" "${3:-}"; exit 0; fi
+  notify_stuck "$1" "$2" "${3:-}"
   write_state "$1" "$2"
   log_line "$1" "$2"
   say "$1 — $2"
@@ -203,16 +291,18 @@ run_apply() { # $1 from $2 to → APPLY_LINE + rc; transcript to stderr
 }
 
 main() {
-  HEAD_SHA='' STABLE_SHA='' FROM='' TO='' DEFERRED_SINCE='' SKIP='' APPLY_LINE=''
+  HEAD_SHA='' STABLE_SHA='' FROM='' TO='' DEFERRED_SINCE='' SKIP='' APPLY_LINE='' NOTIFIED='' NOTIFIED_AT=''
 
   if [ "$STATUS" = 1 ]; then
     if [ -f "$STATE" ]; then cat "$STATE"; exit 0; fi
     printf 'no state yet (%s) — no tick has run on this login\n' "$STATE"; exit 1
   fi
 
-  # Carry the two durable fields forward; every other line is this tick's.
+  # Carry the durable fields forward; every other line is this tick's.
   DEFERRED_SINCE=$(state_get deferred_since); [ "$DEFERRED_SINCE" = - ] && DEFERRED_SINCE=''
   SKIP=$(state_get skip); [ "$SKIP" = - ] && SKIP=''
+  NOTIFIED=$(state_get notified); [ "$NOTIFIED" = - ] && NOTIFIED=''
+  NOTIFIED_AT=$(state_get notified_at); [ "$NOTIFIED_AT" = - ] && NOTIFIED_AT=''
   HEAD_SHA=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || :)
 
   # --- off ---------------------------------------------------------------------
@@ -222,8 +312,8 @@ main() {
   fi
 
   git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1 \
-    || finish refused "$ROOT is not a git checkout — a file-copy install cannot follow stable (fleet-sync-logins.sh --to-git converts it)"
-  [ -n "$HEAD_SHA" ] || finish refused "$ROOT has no HEAD commit"
+    || finish refused "$ROOT is not a git checkout — a file-copy install cannot follow stable (fleet-sync-logins.sh --to-git converts it)" nogit
+  [ -n "$HEAD_SHA" ] || finish refused "$ROOT has no HEAD commit" nohead
 
   # --- one tick at a time (an apply + doctor may outlive a short interval) -----
   if [ "$DRY" = 0 ]; then
@@ -274,13 +364,13 @@ main() {
   # --- the two refusals --------------------------------------------------------------
   if ! git -C "$ROOT" merge-base --is-ancestor "$HEAD_SHA" "$STABLE_SHA" 2>/dev/null; then
     DEFERRED_SINCE=''
-    local rel
+    local rel why
     if git -C "$ROOT" merge-base --is-ancestor "$STABLE_SHA" "$HEAD_SHA" 2>/dev/null; then
-      rel="behind this install ($(git -C "$ROOT" rev-list --count "$STABLE_SHA..$HEAD_SHA" 2>/dev/null) commit(s)) — a hand sync pushed HEAD past it"
+      rel="behind this install ($(git -C "$ROOT" rev-list --count "$STABLE_SHA..$HEAD_SHA" 2>/dev/null) commit(s)) — a hand sync pushed HEAD past it"; why=behind
     else
-      rel="not on this install's history (diverged)"
+      rel="not on this install's history (diverged)"; why=diverged
     fi
-    finish refused "stable $(short "$STABLE_SHA") is not a descendant of HEAD $(short "$HEAD_SHA") — $rel; only ever fast-forwards, never moves back; the next stable move past HEAD aligns it"
+    finish refused "stable $(short "$STABLE_SHA") is not a descendant of HEAD $(short "$HEAD_SHA") — $rel; only ever fast-forwards, never moves back; the next stable move past HEAD aligns it" "$why"
   fi
   local dirty ndirty more=''
   dirty=$(git -C "$ROOT" status --porcelain --untracked-files=no 2>/dev/null | awk 'NF {print $NF}')
@@ -289,7 +379,7 @@ main() {
     [ "$ndirty" -gt 3 ] && more=" +$((ndirty - 3)) more"
     dirty=$(printf '%s\n' "$dirty" | head -3 | tr '\n' ' ')
     DEFERRED_SINCE=''
-    finish refused "tracked local changes in $ROOT (${dirty% }$more) — not touching an edited install; commit or discard them, then the next tick follows"
+    finish refused "tracked local changes in $ROOT (${dirty% }$more) — not touching an edited install; commit or discard them, then the next tick follows" dirty
   fi
 
   # --- quiet? ----------------------------------------------------------------------------
@@ -326,7 +416,7 @@ main() {
   say "updating $(short "$HEAD_SHA") -> $(short "$STABLE_SHA")"
   pre=$(doctor_fail_tags)
   if ! merr=$(git -C "$ROOT" merge --ff-only -q "$STABLE_SHA" 2>&1 </dev/null); then
-    finish refused "git merge --ff-only $(short "$STABLE_SHA") failed: $(printf '%s\n' "$merr" | tail -1)"
+    finish refused "git merge --ff-only $(short "$STABLE_SHA") failed: $(printf '%s\n' "$merr" | tail -1)" ff
   fi
   run_apply "$HEAD_SHA" "$STABLE_SHA" || :
   post=$(doctor_fail_tags)

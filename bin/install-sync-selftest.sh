@@ -32,6 +32,16 @@
 #   J. dry-run       prints the move, changes nothing, writes no state
 #   N. lock          a live lock skips the tick
 #   L. --status      prints the state file
+#   P. notify        (issue #1125) a stuck tick sends ONE FLEET_NOTIFY_CMD per
+#                    (login, why, stable): the same refusal three ticks = one
+#                    message naming the login, the reason and the off switch;
+#                    fetch-failed keeps the episode; following again clears it
+#                    and the same reason on the next stable is announced again;
+#                    another reason on the same stable is its own message; a
+#                    deferral past FLEET_INSTALL_FOLLOW_STUCK_SECS is one, a
+#                    short one none; rolled-back once (its skipped ticks are
+#                    silent); a failed send is retried; no channel / dry-run /
+#                    off send nothing; the send is a `notified` log line
 #   K. registry      plist StartInterval / systemd timer / daemon table agree
 #
 # Exit 0 = pass.
@@ -317,6 +327,107 @@ run --status
 eq "L: exits 0" 0 "$RC"; contains "L: prints the state" "$OUT" "result: updated"
 OUT=$(FLEET_CONF_DIR="$WORK/empty" bash "$IS" --root "$CO" --status 2>&1); RC=$?
 eq "L: no state exits 1" 1 "$RC"; contains "L: says none" "$OUT" "no state yet"
+
+# --- P. notify once per stuck episode (issue #1125) ---------------------------------------------------------
+NOTE="$WORK/notify.sh" NLOG="$WORK/notify.log"
+cat > "$NOTE" <<EOF
+#!/bin/sh
+[ -f "$WORK/notify-fail" ] && exit 1
+printf '%s\n---\n' "\$1" >> "$NLOG"
+EOF
+chmod +x "$NOTE"; : > "$NLOG"
+sends() { grep -c '^---$' "$NLOG"; }
+nlog() { grep -c ' notified ' "$CO/logs/install-sync.log"; }
+nrun() { OUT=$(FLEET_NOTIFY_CMD="$NOTE" bash "$IS" --root "$CO" "$@" 2>&1); RC=$?; }
+me=$(id -un)
+C8=$(commit eight); C9=$(commit nine); C10=$(commit ten)
+doctor_stub '  FAIL  gh       boom (this version is broken)'; C11=$(commit eleven-broken)
+doctor_stub '';                                              C12=$(commit twelve-fixed)
+C13=$(commit thirteen)
+git -C "$SEED" push -q origin master
+# the same refusal three ticks → ONE message
+stable "$C8"; echo edited >> "$CO/f"; nrun; nrun; nrun
+eq "P: refused" refused "$(st result)"
+eq "P: three ticks, one send" 1 "$(sends)"
+contains "P: names the login" "$(cat "$NLOG")" "**$me**'s fleet install ($CO)"
+contains "P: says the result + reason" "$(cat "$NLOG")" "**refused**: tracked local changes in $CO (f)"
+contains "P: says how to silence it" "$(cat "$NLOG")" "FLEET_INSTALL_SYNC=0"
+eq "P: key = login why stable" "$me refused/dirty $C8" "$(st notified)"
+t=$(st notified_at); case "$t" in ''|-|*[!0-9]*) fail "P: notified_at not an epoch: [$t]" ;; esac; CHECKS=$((CHECKS + 1))
+contains "P: the send log line" "$(grep ' notified ' "$CO/logs/install-sync.log" | tail -1)" " notified $(short "$C7")..$(short "$C8") $me refused/dirty $C8 via notify.sh"
+eq "P: one send log line" 1 "$(nlog)"
+# fetch-failed in between neither sends nor forgets
+git -C "$CO" remote set-url origin "$WORK/nowhere.git"; nrun
+eq "P: fetch-failed" fetch-failed "$(st result)"
+eq "P: fetch-failed keeps the key" "$me refused/dirty $C8" "$(st notified)"
+git -C "$CO" remote set-url origin "$url"; nrun
+eq "P: still one send after fetch-failed" 1 "$(sends)"
+# following again clears it; the same reason on the NEXT stable is announced again
+git -C "$CO" checkout -q -- f; nrun
+eq "P: followed" updated "$(st result)"; eq "P: HEAD at C8" "$C8" "$(hd)"
+eq "P: key cleared" - "$(st notified)"; eq "P: notified_at cleared" - "$(st notified_at)"
+eq "P: recovery sends nothing" 1 "$(sends)"
+stable "$C9"; echo edited >> "$CO/f"; nrun; nrun
+eq "P: stuck again → announced again" 2 "$(sends)"
+eq "P: the new episode's key" "$me refused/dirty $C9" "$(st notified)"
+# another reason on the SAME stable is its own episode
+git -C "$CO" checkout -q -- f; git -C "$CO" fetch -q origin master; git -C "$CO" reset -q --hard "$C10"; nrun; nrun
+eq "P: refused (behind)" refused "$(st result)"
+contains "P: says not a descendant" "$(st reason)" "is not a descendant of HEAD"
+eq "P: a different why sends once more" 3 "$(sends)"
+eq "P: key names the why" "$me refused/behind $C9" "$(st notified)"
+# a short deferral is normal (clears); past the threshold it is stuck (once)
+git -C "$CO" reset -q --hard "$C8"; printf 'working\n' > "$WORK/tmux-states/f1"; nrun
+eq "P: deferred" deferred "$(st result)"
+eq "P: a short deferral sends nothing" 3 "$(sends)"; eq "P: a short deferral clears the key" - "$(st notified)"
+sleep 2
+OUT=$(FLEET_NOTIFY_CMD="$NOTE" FLEET_INSTALL_FOLLOW_STUCK_SECS=1 bash "$IS" --root "$CO" 2>&1)
+OUT=$(FLEET_NOTIFY_CMD="$NOTE" FLEET_INSTALL_FOLLOW_STUCK_SECS=1 bash "$IS" --root "$CO" 2>&1)
+eq "P: still deferred" deferred "$(st result)"
+eq "P: a long deferral sends once" 4 "$(sends)"
+eq "P: deferred key carries no why" "$me deferred $C9" "$(st notified)"
+contains "P: says how long" "$(tail -6 "$NLOG")" "Waited 0h so far (since "
+contains "P: says deferred + why" "$(tail -6 "$NLOG")" "**deferred**: busy window(s) on f1:1"
+printf 'done\n' > "$WORK/tmux-states/f1"; nrun
+eq "P: idle → followed" updated "$(st result)"; eq "P: HEAD at C9" "$C9" "$(hd)"; eq "P: key cleared after the deferral" - "$(st notified)"
+# rolled-back once; the skipped ticks after it are the same episode
+stable "$C11"; nrun
+eq "P: rolled-back" rolled-back "$(st result)"; eq "P: rollback sends once" 5 "$(sends)"
+eq "P: rollback key" "$me rolled-back $C11" "$(st notified)"
+contains "P: says rolled-back + why" "$(tail -6 "$NLOG")" "**rolled-back**: doctor FAIL after update: gh"
+nrun; nrun
+eq "P: skipped" skipped "$(st result)"; eq "P: skipped ticks are silent" 5 "$(sends)"
+eq "P: skipped keeps the rollback key" "$me rolled-back $C11" "$(st notified)"
+stable "$C12"; nrun
+eq "P: the fix is followed" updated "$(st result)"; eq "P: key cleared after the fix" - "$(st notified)"
+# a send that fails is not recorded → the next tick retries
+stable "$C13"; echo edited >> "$CO/f"; touch "$WORK/notify-fail"; nrun
+eq "P: refused (send failed)" refused "$(st result)"
+eq "P: failed send not counted" 5 "$(sends)"; eq "P: failed send not recorded" - "$(st notified)"
+contains "P: says the send failed" "$OUT" "failed: $NOTE exit 1 — retried next tick"
+eq "P: no send log line for a failure" 5 "$(nlog)"
+rm "$WORK/notify-fail"; nrun
+eq "P: retried and sent" 6 "$(sends)"; eq "P: recorded on the retry" "$me refused/dirty $C13" "$(st notified)"
+# no channel → nothing to send: an announced episode stays announced (the channel
+# coming back must not repeat it), a new one is not recorded
+run
+eq "P: no FLEET_NOTIFY_CMD → nothing sent" 6 "$(sends)"
+eq "P: an announced episode is kept without a channel" "$me refused/dirty $C13" "$(st notified)"
+OUT=$(FLEET_INSTALL_SYNC=0 bash "$IS" --root "$CO" 2>&1)
+eq "P: off clears the key" - "$(st notified)"
+run
+eq "P: no channel records nothing" - "$(st notified)"; eq "P: still nothing sent" 6 "$(sends)"
+contains "P: says nobody to tell" "$OUT" "no FLEET_NOTIFY_CMD"
+# dry-run prints what a real tick would send, sends nothing, writes nothing
+before=$(st last_check); nrun --dry-run
+contains "P: dry-run says what it would send" "$OUT" "notify: would send ($me refused/dirty $C13)"
+eq "P: dry-run sends nothing" 6 "$(sends)"; eq "P: dry-run writes no state" "$before" "$(st last_check)"
+# off clears an announced episode (the documented way to silence it)
+nrun; eq "P: armed again" "$me refused/dirty $C13" "$(st notified)"; eq "P: sent" 7 "$(sends)"
+OUT=$(FLEET_NOTIFY_CMD="$NOTE" FLEET_INSTALL_SYNC=0 bash "$IS" --root "$CO" 2>&1)
+eq "P: off" off "$(st result)"; eq "P: off clears an announced key" - "$(st notified)"; eq "P: off sends nothing" 7 "$(sends)"
+eq "P: seven send log lines" 7 "$(nlog)"
+git -C "$CO" checkout -q -- f
 
 # --- K. registry lockstep ------------------------------------------------------------------------------------
 ROOT="$(cd "$BIN/.." && pwd)"

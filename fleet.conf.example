@@ -85,7 +85,12 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 # stamps $FLEET_CONF_DIR/global/epic-running every tick (bin/fleet-epic-heartbeat.sh,
 # issue #953) and the tick defers while that mark is fresh (a 45-min lease, cleared
 # at the batch's closing tick).
-# Set to 0 to switch it off for this login (a hand /fleet-sync-install still
+# When it gets STUCK — refused, rolled back, or deferred past
+# FLEET_INSTALL_FOLLOW_STUCK_SECS — the doctor's install row WARNs, and the tick
+# that turned stuck sends ONE FLEET_NOTIFY_CMD message (issue #1125), deduped on
+# login + reason + stable and re-armed once the login follows again; a failed
+# fetch (offline) never alarms. Set to 0 to switch it off for this login —
+# no following, no warning, no message (a hand /fleet-sync-install still
 # works; fleet-sync-logins.sh — the last step of /fleet-sync-install, issue #1122 — skips a
 # login that opted out unless named, or --include-off). State:
 # $FLEET_CONF_DIR/global/install-sync.state; log: logs/install-sync.log.
@@ -1399,10 +1404,12 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # runs FLEET_NOTIFY_CMD with the message as $1. Plug in any notifier:
 # A ready-made WeCom 群机器人 notifier ships in extras/ (put the webhook URL in
 # ~/.config/claude-fleet-webhook, chmod 600):
-# GLOBAL: the two readers — the collector (bin/tmux-dash-collect.sh) and the
-# disk guard (bin/fleet-diskguard.sh) — are single machine-wide daemons that read
-# this from the global env; a per-fleet override never reaches them (silent no-op),
-# so it is machine-wide like its companion FLEET_ESCALATE_AFTER.
+# GLOBAL: its readers — the collector (bin/tmux-dash-collect.sh), the disk guard
+# (bin/fleet-diskguard.sh), the quota watch (bin/fleet-quotawatch.sh) and the
+# install-sync daemon (bin/fleet-install-sync.sh: one message when this login
+# stops following stable, issue #1125) — are single machine-wide daemons that
+# read this from the global env; a per-fleet override never reaches them (silent
+# no-op), so it is machine-wide like its companion FLEET_ESCALATE_AFTER.
 # @label=Notification command @group=notify @tier=common @scope=global @edit=path
 #FLEET_NOTIFY_CMD="$HOME/.claude/fleet/extras/wecom-webhook-notify.sh"
 # @label=Escalate unattended after @group=notify @tier=advanced @scope=global @edit=int @unit=sec
