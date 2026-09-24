@@ -120,6 +120,12 @@ MAX_TYPING_DEFERS="${FLEET_BRIDGE_MAX_TYPING_DEFERS:-20}"
 case "$MAX_TYPING_DEFERS" in ''|*[!0-9]*) MAX_TYPING_DEFERS=20 ;; esac
 [ "$MAX_TYPING_DEFERS" -gt 0 ] 2>/dev/null || MAX_TYPING_DEFERS=20
 
+# The --poll unit's StartInterval — the floor the poll backoff (issue #892) grows
+# from. Read from the daemon registry when the lib is loaded (poll mode), else 15.
+BRIDGE_INT=15
+command -v fleet_daemon_interval >/dev/null 2>&1 && BRIDGE_INT=$(fleet_daemon_interval issue-bridge)
+case "$BRIDGE_INT" in ''|*[!0-9]*) BRIDGE_INT=15 ;; esac
+
 now() { date +%s 2>/dev/null || echo 0; }
 utcnow() { date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '1970-01-01T00:00:00Z'; }
 log() { printf '%s issue-bridge: %s\n' "$(date '+%H:%M:%S' 2>/dev/null || echo '--:--:--')" "$*" >&2; }
@@ -524,6 +530,8 @@ EOF
   tmux info >/dev/null 2>&1 || { log "deliver #$num c$cid: tmux not running — retry"; exit 75; }
   body=$(bridge_b64d "$b64")
   slug=$(fleet_slug "$(fleet_norm_repo "$repo")")
+  # A delivery is news (issue #892): the next poll of this repo runs at the base.
+  fleet_poll_backoff_read '' "$BRIDGE_INT" && fleet_poll_backoff_reset "$(bridge_state_file "$slug" backoff)"
   # Take the per-repo lease so this delivery can't interleave with a poll tick
   # (or another delivery) and double-relay the same comment. Held for the whole
   # relay+seen; released on exit. A held lease ⇒ retry (EX_TEMPFAIL).
@@ -569,6 +577,14 @@ poll_worker_channel() {
   since=$(cat "$sincef" 2>/dev/null)
   # First run: seed to NOW so enabling the bridge never floods with history.
   [ -z "$since" ] && { utcnow > "$sincef"; log "$slug: first run — worker watermark seeded, no backfill"; return 0; }
+  # Poll backoff (issue #892): an empty listing waits 2× longer before the next
+  # one (capped at FLEET_POLL_MAX_BACKOFF); a --deliver resets it. Off (the
+  # default) → always due, no state file: the historic every-tick poll.
+  local bof=''
+  if fleet_poll_backoff_read '' "$BRIDGE_INT"; then
+    bof=$(bridge_state_file "$slug" backoff)
+    fleet_poll_backoff_due "$bof" "$BRIDGE_INT" "$(now)" || return 0
+  fi
 
   # shellcheck disable=SC2016  # $-vars below are jq bindings, not shell
   rows=$(gh api -H "Accept: application/vnd.github+json" \
@@ -604,6 +620,11 @@ EOF
   # seen-set, and the queued one is retried. When all clear, jump past the newest.
   if [ -z "$pending" ] && [ -n "$max_ts" ]; then
     printf '%s\n' "$max_ts" > "$sincef"
+  fi
+  # anything listed (or still queued) is activity → back to the base cadence
+  if [ -n "$bof" ]; then
+    local chg=0; { [ "$n" -gt 0 ] || [ -n "$pending" ]; } && chg=1
+    fleet_poll_backoff_note "$bof" "$BRIDGE_INT" "$chg" "$(now)"
   fi
   [ "$n" -gt 0 ] && log "$slug: examined $n comment(s)$([ -n "$pending" ] && printf ' (some queued — watermark held)')"
   return 0
