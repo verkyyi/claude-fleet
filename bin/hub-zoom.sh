@@ -60,6 +60,8 @@ if [ "$nav" = 0 ] &&
   fleet_load_conf "$SESS"
   if [ "${FLEET_HOME_SIDEBAR_FIRST:-1}" != 0 ] &&
      tmux switch-client ${client:+-c "$client"} -T fleet-sidebar 2>/dev/null; then
+    # The view pins the client's own pane to the bar on its next poll (#1105):
+    # a terminal paste of a session name then lands on the input line, not Claude.
     sid=$(tmux display-message -p '#{session_id}' 2>/dev/null)
     bash "$BIN/fleet-sidebar.sh" key "$sid" Escape >/dev/null 2>&1 || :
     tmux display-message ${client:+-c "$client"} 'Tasks: type a name ↵ = new session · ↑↓ switch · ↵/Esc worker · ⌂/F9 again → hub' 2>/dev/null || :

@@ -96,7 +96,9 @@ sh_run() { printf 'run-shell -b %s' "$(sq "$ctx $1 >/dev/null 2>&1 || :")"; }
 items=()
 add() { items+=("$1" "$2" "$3"); }   # name key command
 # Rename edits in the view's own input line (fleet-sidebar.py `renaming`): park
-# the row's id on the view, keep the keyboard there, and wake it with F12.
+# the row's id on the view, keep the keyboard there, and wake it with F12. The
+# view pins the client to itself on its next poll (#1105), so a paste of the new
+# name lands on the input line.
 if [ -n "$side" ]; then
   add "改名…" "$(mk rename)" "set-option -p -t $side @sidebar_rename $wid ; switch-client -T fleet-sidebar ; send-keys -t $side F12"
 else add "-改名…" "$(mk rename)" ''; fi
