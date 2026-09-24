@@ -20,6 +20,9 @@
 #      left on a side branch is a WARN checkout row naming the branch + commits
 #      behind origin/<base>, and the base-deps row stops passing ("fresh" is
 #      against the wrong tree); another worktree holding the base branch is named.
+#   8. (issue #1104) ONE `repos` summary row per fleet lists every hosted repo with
+#      ✓, or ✗ plus the failing item (main / base / trust); the WARN form does not
+#      count again (its items were already counted); a one-repo fleet shows it too.
 # Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -70,7 +73,7 @@ CHECKS=0
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; printf -- '--- stdout ---\n%s\n--- stderr ---\n%s\n' "$(cat "$WORK/stdout" 2>/dev/null)" "$(cat "$WORK/stderr" 2>/dev/null)" >&2; exit 1; }
 ok() { CHECKS=$((CHECKS + 1)); }
 run_doctor() {
-  env HOME="$WORK/home" TMPDIR="$WORK" FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1 \
+  env HOME="$WORK/home" CLAUDE_CONFIG_DIR="$WORK/home" TMPDIR="$WORK" FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1 \
     PATH="$WORK/shim:$PATH" sh "$WORK/bin/fleet-doctor.sh" >"$WORK/stdout" 2>"$WORK/stderr"
   return 0
 }
@@ -103,6 +106,24 @@ ok
 
 # 5. missing labels are named, per repo
 row WARN labels 'o/beta: missing fleet labels: enhancement' || fail "o/beta's missing labels were not reported"
+ok
+
+# 8. (issue #1104) the `repos` summary row: both repos, beta's broken main named
+row WARN repos '2 hosted: o/alpha ✓ · o/beta ✗ \(main\)$' || fail "repos row did not list o/alpha ✓ and o/beta ✗ (main)"
+[ "$(grep -c '^[[:space:]]*[^[:space:]]*WARN[^[:space:]]*[[:space:]]*repos ' "$WORK/stdout")" = 1 ] || fail "expected exactly one repos row"
+nwarn=$(grep -c 'WARN' "$WORK/stdout"); said=$(sed -n 's/^[^0-9]*\([0-9][0-9]*\) warn.*/\1/p' "$WORK/stdout" | tail -1)
+[ "$said" = "$((nwarn - 1))" ] || fail "the repos WARN counted again: $nwarn WARN rows, summary says $said"
+ok
+# … an untrusted main is named as trust, a missing base as base
+printf '{"projects":{}}\n' > "$WORK/home/.claude.json"
+printf 'FLEET_REPO="o/beta"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="nope"\n' "$WORK/alpha" > "$WORK/conf/fleets/fleet-t/repos/o-beta.conf"
+git -C "$WORK/alpha" remote set-url origin "git@github.com:o/beta.git"
+run_doctor
+row WARN repos '2 hosted: o/alpha ✗ \(main, trust\) · o/beta ✗ \(base, trust\)$' || fail "repos row did not name main/base/trust"
+git -C "$WORK/alpha" remote set-url origin "git@github.com:o/alpha.git"
+rm -f "$WORK/home/.claude.json"
+printf 'FLEET_REPO="o/beta"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="main"\n' "$WORK/no-such-beta" > "$WORK/conf/fleets/fleet-t/repos/o-beta.conf"
+run_doctor
 ok
 
 # 7. (issue #1044) the base checkout must sit ON its base branch
@@ -139,6 +160,8 @@ rm -rf "$WORK/conf/fleets/fleet-t/repos"
 run_doctor
 [ "$(grep -c '── fleet-t · ' "$WORK/stdout")" = 1 ] || fail "a one-repo fleet printed other than one block"
 grep -q 'o/beta' "$WORK/stdout" && fail "o/beta still reported after its overlay was removed"
+row PASS repos '1 hosted: o/alpha ✓$' || fail "a one-repo fleet has no PASS repos row"
+[ "$(grep -c 'repos ' "$WORK/stdout")" = 1 ] || fail "a one-repo fleet printed other than one repos row"
 ok
 
 printf 'fleet-doctor-repos-selftest: %d checks passed\n' "$CHECKS"

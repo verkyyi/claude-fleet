@@ -145,18 +145,8 @@ if [ "$LIVE" = 1 ]; then
   echo "fleet-up: fleet '$NAME' is already up"
 else
 # --- checkout: reuse if it's already that repo, else clone ---
-if [ -d "$DIR/.git" ]; then
-  have=$(fleet_norm_repo "$(git -C "$DIR" remote get-url origin 2>/dev/null)")
-  [ "$have" = "$REPO" ] || die "$DIR is a checkout of '$have', not '$REPO'"
-  echo "fleet-up: reusing existing checkout $DIR"
-elif [ -e "$DIR" ]; then
-  die "$DIR exists but is not a git checkout"
-else
-  echo "fleet-up: cloning $REPO → $DIR"
-  mkdir -p "$(dirname "$DIR")"
-  if command -v gh >/dev/null 2>&1; then gh repo clone "$REPO" "$DIR" || die "clone failed";
-  else git clone "https://github.com/$REPO.git" "$DIR" || die "clone failed"; fi
-fi
+# The one clone-or-reuse, shared with fleet-repo.sh add (fleet-lib.sh, issue #1104).
+fleet_repo_checkout "$REPO" "$DIR" fleet-up || exit 1
 
 # --- base branch: the repo's TRUNK, not "whatever branch we're standing on" ---
 # Order + the full why: fleet_resolve_base_branch() in fleet-lib.sh (issue #603).
@@ -225,14 +215,8 @@ echo "fleet-up: wrote $CONF"
 # fleet spawns parks on that dialog with nobody to answer it. The launcher
 # pre-trusts at spawn, but a live install predating #563 (or FLEET_PRETRUST=0) does
 # not: say it loudly here, at the one moment the operator is watching, with the fix.
-if [ -f "$BIN/fleet-trust.sh" ]; then
-  case "$(sh "$BIN/fleet-trust.sh" check "$DIR" 2>/dev/null)" in
-    untrusted)
-      echo "fleet-up: WARNING — $DIR is not trusted in $(sh "$BIN/fleet-trust.sh" file):" >&2
-      echo "          workers spawned by a pre-#563 launcher hang at Claude Code's \"trust this folder?\" dialog." >&2
-      echo "          fix now:  sh $BIN/fleet-trust.sh grant --main '$DIR'" >&2 ;;
-  esac
-fi
+# Shared with every repo added later (fleet_repo_trust_warn, issue #1104).
+fleet_repo_trust_warn "$DIR" fleet-up
 
 # --- create the session + the HUB ---
 # 'work' is the plain work shell; the 'plan' hub (the dash, and ONLY the dash —
@@ -263,7 +247,9 @@ if [ -n "$ADD_REPO" ]; then
   if fleet_repo_hosted "$NAME" "$ADD_REPO"; then
     echo "fleet-up: fleet '$NAME' already hosts $ADD_REPO"
   else
-    bash "$BIN/fleet-repo.sh" add --session "$NAME" "$ADD_REPO" ${ADD_DIR:+"$ADD_DIR"} ${ADD_BASE:+--base "$ADD_BASE"} \
+    # fleet_repo_register (issue #1104): its token on stdout is for scripts — here
+    # the human lines on stderr already say what happened.
+    fleet_repo_register "$NAME" "$ADD_REPO" ${ADD_DIR:+"$ADD_DIR"} ${ADD_BASE:+--base "$ADD_BASE"} >/dev/null \
       || die "could not add $ADD_REPO to fleet '$NAME'"
     echo "fleet-up: added $ADD_REPO to fleet '$NAME'"
   fi

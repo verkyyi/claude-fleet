@@ -352,8 +352,11 @@ whether it is running, each repo it hosts with its live session count, and the
 
 **Several repos in one fleet.** `bin/fleet-repo.sh add you/infra [<checkout>]`
 registers a second repo with the fleet you are in (clone-or-reuse, like
-`fleet-up.sh`); `list` shows what it hosts and `remove` drops one. All hosted repos
-are equal — there is no main repo. Once a fleet hosts two:
+`fleet-up.sh`); `list` shows what it hosts and `remove` drops one. The rest follows
+on its own, as it does for the first repo: a warning if Claude Code has not trusted
+the checkout, and the background daemons woken so the dash picks the repo up within
+a tick; `fleet-doctor.sh`'s `repos` row lists every hosted repo and whether it is
+healthy. All hosted repos are equal — there is no main repo. Once a fleet hosts two:
 
 - every session carries its repo (`@repo`), shown on the dash as a repo heading /
   short-tag badge (window names stay bare: `issue-12`);

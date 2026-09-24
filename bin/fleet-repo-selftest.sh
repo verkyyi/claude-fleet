@@ -103,15 +103,26 @@ eq "A: ...and is not stamped" "$(tmux display-message -p -t "$S:wUNK" '#{@repo}'
 
 # --- B. add: gate, then write ------------------------------------------------------
 # No gate since #795: is gone, an unset one no longer refuses.
-out=$(bash "$BIN/fleet-repo.sh" add --session "$S" o/b "$WORK/mainB" --base main 2>&1) \
-  || fail "B: add failed: $out"
+# stdout is ONE result token (issue #1104) — the contract the add-repo popup reads.
+out=$(bash "$BIN/fleet-repo.sh" add --session "$S" o/b "$WORK/mainB" --base main 2>"$WORK/add.err") \
+  || fail "B: add failed: $out $(cat "$WORK/add.err")"
+eq "B: add prints the added token, alone" "$out" "added:o-b"
 f="$FLEET_CONF_DIR/fleets/$S/repos/o-b.conf"
 [ -f "$f" ] || fail "B: overlay not written at $f"
 printf 'FLEET_MODEL="sonnet"\n' >> "$f"
-bash "$BIN/fleet-repo.sh" add --session "$S" o/b "$WORK/mainB" >/dev/null 2>&1 \
-  && fail "B: duplicate add accepted"
-bash "$BIN/fleet-repo.sh" add --session "$S" o/c "$WORK/mainA" >/dev/null 2>&1 \
-  && fail "B: add accepted a checkout of a different repo"
+tok() { bash "$BIN/fleet-repo.sh" add --session "$S" "$@" 2>/dev/null; echo "rc=$?"; }
+eq "B: duplicate add refused" "$(tok o/b "$WORK/mainB")" "refused:hosted
+rc=1"
+eq "B: a checkout of a different repo refused" "$(tok o/c "$WORK/mainA")" "refused:origin-mismatch
+rc=1"
+mkdir -p "$WORK/plain"
+eq "B: a non-checkout dir refused" "$(tok o/d "$WORK/plain")" "refused:not-a-checkout
+rc=1"
+eq "B: a non owner/name refused" "$(tok 'bad repo')" "refused:invalid-repo
+rc=1"
+eq "B: a failed clone" "$(tok o/e "$WORK/clone-here")" "failed:clone
+rc=1"
+for r in o-c o-d o-e; do [ -e "$FLEET_CONF_DIR/fleets/$S/repos/$r.conf" ] && fail "B: a refused add wrote $r.conf"; done
 list=$(bash "$BIN/fleet-repo.sh" list --session "$S")
 case "$list" in *"o/a"*"main=$WORK/mainA"*"o/b"*"main=$WORK/mainB"*"base=main"*) ;; *) fail "B: list: $list" ;; esac
 

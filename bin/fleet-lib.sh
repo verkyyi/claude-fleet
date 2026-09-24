@@ -1152,6 +1152,139 @@ fleet_write_conf() {
   mv -f "$tmp" "$conf" || { rm -f "$tmp"; return 1; }
 }
 
+# ---- adding a repo: the ONE implementation (issue #1104) ---------------------
+# fleet-up.sh (a fleet's first repo) and fleet-repo.sh add (every further one) used
+# to hand-write the checkout step twice, and only fleet-up followed it through: the
+# trust warning, the daemon wake, the collector kick. A repo added later got none of
+# them — its first worker could park on "trust this folder?", and the daemons could
+# sleep a whole idle cycle before looking at it. Both now go through the pieces below.
+
+# fleet_repo_checkout <repo> <dir> [tag] — reuse <dir> when it already IS <repo>'s
+# checkout, else clone it there. Progress on stdout, the reason on stderr as
+# "<tag>: …". rc 0 ok · 3 <dir> is another repo's checkout · 4 <dir> exists but is
+# not a checkout · 5 the clone failed.
+fleet_repo_checkout() {
+  local repo="${1:-}" dir="${2:-}" tag="${3:-fleet}" have
+  if [ -d "$dir/.git" ]; then
+    have=$(fleet_norm_repo "$(git -C "$dir" remote get-url origin 2>/dev/null)")
+    [ "$have" = "$repo" ] || { echo "$tag: $dir is a checkout of '$have', not '$repo'" >&2; return 3; }
+    echo "$tag: reusing existing checkout $dir"
+  elif [ -e "$dir" ]; then
+    echo "$tag: $dir exists but is not a git checkout" >&2; return 4
+  else
+    echo "$tag: cloning $repo → $dir"
+    mkdir -p "$(dirname "$dir")"
+    if command -v gh >/dev/null 2>&1; then gh repo clone "$repo" "$dir" || { echo "$tag: clone failed" >&2; return 5; }
+    else git clone "https://github.com/$repo.git" "$dir" || { echo "$tag: clone failed" >&2; return 5; }; fi
+  fi
+  return 0
+}
+
+# fleet_repo_trust_warn <dir> [tag] — say it loudly (stderr) when Claude Code has
+# not trusted <dir> (issue #563): it keys trust on a worktree's MAIN checkout, so an
+# untrusted one parks every worker a pre-#563 launcher spawns on the trust dialog.
+# Silent when trusted, unknown, or fleet-trust.sh is absent. Always returns 0.
+fleet_repo_trust_warn() {
+  local dir="${1:-}" tag="${2:-fleet}" bin pad
+  bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+  [ -n "$bin" ] && [ -f "$bin/fleet-trust.sh" ] || return 0
+  case "$(sh "$bin/fleet-trust.sh" check "$dir" 2>/dev/null)" in
+    untrusted)
+      pad=$(printf '%*s' "$(( ${#tag} + 2 ))" '')
+      echo "$tag: WARNING — $dir is not trusted in $(sh "$bin/fleet-trust.sh" file):" >&2
+      echo "${pad}workers spawned by a pre-#563 launcher hang at Claude Code's \"trust this folder?\" dialog." >&2
+      echo "${pad}fix now:  sh $bin/fleet-trust.sh grant --main '$dir'" >&2 ;;
+  esac
+  return 0
+}
+
+# fleet_repo_register <sess> <owner/name> [<dir>] [--base <branch>] — add a repo to
+# a fleet: validate, clone-or-reuse (<dir> defaults to ~/projects/<name>), resolve
+# the base branch (#603), write repos/<slug>.conf atomically, then the same follow-
+# through fleet-up gives the first repo — the trust warning, a daemon wake (#1077)
+# and a collector kick, so the daemons look at it within their next tick instead of
+# an idle cycle later. (No label seed: fleet-up seeds none either; doctor's labels
+# row names a repo that lacks them.)
+# stdout is ONE result token — the contract the dash's add-repo popup reads (#1103),
+# the same shape as dash-reap.sh's; everything human goes to stderr:
+#   added:<slug>              0  overlay written, daemons woken
+#   refused:invalid-repo      1  not owner/name
+#   refused:hosted            1  the fleet already hosts it
+#   refused:origin-mismatch   1  <dir> is a checkout of another repo
+#   refused:not-a-checkout    1  <dir> exists and is not a git checkout
+#   failed:clone              1  the clone failed
+#   failed:write              1  the overlay could not be written
+# Nothing is written unless the token is added:*.
+fleet_repo_register() {
+  local sess="" repo="" dir="" base="" base_src="" base_default="" tab f bin rc
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --base) base="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
+      *) if [ -z "$sess" ]; then sess="$1"; elif [ -z "$repo" ]; then repo="$1"
+         elif [ -z "$dir" ]; then dir="$1"; fi; shift ;;
+    esac
+  done
+  repo=$(fleet_norm_repo "$repo")
+  case "$repo" in
+    *[!A-Za-z0-9_./-]* | */*/* | /* | */) repo="" ;;
+    ?*/?*) : ;;
+    *) repo="" ;;
+  esac
+  if [ -z "$repo" ]; then
+    echo "fleet-repo: invalid repo — expected owner/repo" >&2; echo "refused:invalid-repo"; return 1
+  fi
+  if fleet_repo_hosted "$sess" "$repo"; then
+    echo "fleet-repo: $sess already hosts $repo" >&2; echo "refused:hosted"; return 1
+  fi
+  dir="${dir:-$HOME/projects/$(basename "$repo")}"
+  fleet_repo_checkout "$repo" "$dir" fleet-repo >&2; rc=$?
+  case "$rc" in
+    0) : ;;
+    3) echo "refused:origin-mismatch"; return 1 ;;
+    4) echo "refused:not-a-checkout"; return 1 ;;
+    *) echo "failed:clone"; return 1 ;;
+  esac
+  dir=$(cd "$dir" && pwd)
+  # Split base<TAB>source<TAB>default by hand: this file must stay POSIX-sh parseable,
+  # so no `read … < <(…)` here.
+  tab=$(printf '\t')
+  base=$(fleet_resolve_base_branch "$repo" "$dir" "$base")
+  base_default=${base#*"$tab"}; base=${base%%"$tab"*}
+  base_src=${base_default%%"$tab"*}; base_default=${base_default#*"$tab"}
+  case "$base_src" in
+    default) : ;;
+    flag) if [ -n "$base_default" ] && [ "$base" != "$base_default" ]; then
+            echo "fleet-repo: WARNING — --base '$base' is NOT $repo's default branch ('$base_default')." >&2
+          fi ;;
+    *) echo "fleet-repo: WARNING — could not read $repo's default branch from GitHub; using '$base' ($base_src) — verify it is the trunk." >&2 ;;
+  esac
+  f=$(fleet_repo_conf_file "$sess" "$repo")
+  if ! mkdir -p "$(dirname "$f")" 2>/dev/null || ! {
+      printf "# claude-fleet: repo '%s' hosted by fleet '%s' — written by fleet-repo.sh %s\n" \
+        "$repo" "$sess" "$(date '+%Y-%m-%d %H:%M:%S')"
+      printf '# Overlays the fleet conf for this repo'\''s windows. Optional overrides:\n'
+      printf '# FLEET_MODEL, FLEET_AGENT, FLEET_MCP_CONFIG, FLEET_DEPLOY_*.\n'
+      printf 'FLEET_REPO="%s"\n' "$repo"
+      printf 'FLEET_MAIN="%s"\n' "$dir"
+      printf 'FLEET_BASE_BRANCH="%s"\n' "$base"
+    } > "$f.tmp.$$" || ! mv -f "$f.tmp.$$" "$f"; then
+    rm -f "$f.tmp.$$"; echo "fleet-repo: failed to write $f" >&2; echo "failed:write"; return 1
+  fi
+  echo "fleet-repo: $sess now hosts $repo (main=$dir base=$base) — $f" >&2
+  # --- the follow-through fleet-up gives its first repo ---
+  fleet_repo_trust_warn "$dir" fleet-repo
+  bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+  [ -f "$bin/fleet-daemon-lib.sh" ] && ( . "$bin/fleet-daemon-lib.sh" && fleet_daemon_wake "$bin/.." ) 2>/dev/null
+  # The collector walks fleet_repos per live fleet, so this tick already fetches the
+  # new repo's backlog — no need to wait out its 60s interval (or an idle cycle).
+  # _FLEET_REGISTER_NO_KICK=1 skips it for `fleet-repo.sh fold`: the tick's restore
+  # snapshot would rewrite <from>'s restore maps while fold is archiving them.
+  [ "${_FLEET_REGISTER_NO_KICK:-0}" = 1 ] || [ ! -f "$bin/tmux-dash-collect.sh" ] \
+    || ( GH_TTL=0 bash "$bin/tmux-dash-collect.sh" >/dev/null 2>&1 & )
+  echo "added:$(fleet_slug "$repo")"
+  return 0
+}
+
 # ---- per-fleet tmux socket (issue #159) -------------------------------------
 # A fleet ≡ a tmux SESSION ≡ its OWN tmux server on a NAMED socket, so one
 # fleet's fatal crash — or a bypass-permissions worker's stray `tmux kill-server`
