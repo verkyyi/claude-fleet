@@ -16,6 +16,14 @@
 #                  a real bind() probe skips it; no EADDRINUSE death.
 #   • NO HALF-STATE the server cannot start at all → exit 1 with no server.pid /
 #                  server.port / mode left behind and no new entries.
+#   • TUNNEL       (issue #1151) --tunnel → a fake `cloudflared` quick tunnel fronts
+#                  the loopback server: READY is the trycloudflare URL + the PUBLIC
+#                  note, mode = tunnel (sticky), the server is in `public` mode
+#                  (doc header + index source paths stripped, /_ctl 404), a second
+#                  share reuses the one tunnel, --unpublish refuses; a live tailnet
+#                  share is never turned public; a tunnel that never reports a URL
+#                  → exit 1 with nothing left behind; tailscale down → the error
+#                  names --tunnel.
 #   • DOCTOR       fleet-doctor's `docprev` row: operator = this login → PASS;
 #                  another login → INFO naming the http-direct fallback and the
 #                  one-time `sudo tailscale serve` command; unreadable → no row.
@@ -38,6 +46,7 @@ cleanup() {
   local p
   for p in ${PIDS[@]+"${PIDS[@]}"}; do kill "$p" 2>/dev/null; done
   [ -f "$ROOT/server.pid" ] && kill "$(cat "$ROOT/server.pid")" 2>/dev/null
+  [ -f "$ROOT/tunnel.pid" ] && kill "$(cat "$ROOT/tunnel.pid")" 2>/dev/null
   rm -rf "$WORK"
 }
 trap cleanup EXIT INT TERM
@@ -55,7 +64,7 @@ cat > "$WORK/fake/tailscale" <<SH
 #!/bin/sh
 case "\$1 \${2:-}" in
   "status --json") echo '{"Self":{"DNSName":"box.tailnet.ts.net."}}' ;;
-  "status "*)      exit 0 ;;
+  "status "*)      [ ! -e "$WORK/ts.down" ] ;;
   "ip -4")         cat "$WORK/ts.ip" ;;
   "serve status")  exit 0 ;;
   "serve --bg")
@@ -72,7 +81,17 @@ esac
 SH
 # blind lsof: sees no listener at all — what a port held by ANOTHER login looks like.
 printf '#!/bin/sh\nexit 1\n' > "$WORK/fake/lsof"
-chmod +x "$WORK/fake/tailscale" "$WORK/fake/lsof"
+# fake cloudflared: logs the quick-tunnel banner (mode ok) or nothing (mode never), then idles.
+cat > "$WORK/fake/cloudflared" <<SH
+#!/bin/sh
+printf '%s\n' "\$*" >> "$WORK/cf.argv"
+if [ "\$(cat "$WORK/cf.mode")" = ok ]; then
+  echo 'INF |  Your quick Tunnel has been created! Visit it at:' >&2
+  echo 'INF |  https://brave-fox-tunnel.trycloudflare.com  |' >&2
+fi
+exec sleep 120
+SH
+chmod +x "$WORK/fake/tailscale" "$WORK/fake/lsof" "$WORK/fake/cloudflared"
 echo 127.0.0.1 > "$WORK/ts.ip"
 
 # a free start port for this run (bind-probed), so a live doc-preview can't collide
@@ -80,7 +99,8 @@ BASEPORT="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));
 share() { HOME="$WORK/home" PATH="$WORK/fake:$PATH" DOC_PREVIEW_PORT="$BASEPORT" DOC_PREVIEW_SESSION=t "$SH" "$@" 2>&1; }
 reset_state() {
   [ -f "$ROOT/server.pid" ] && kill "$(cat "$ROOT/server.pid")" 2>/dev/null
-  rm -rf "$ROOT"; : > "$WORK/serve.argv"
+  [ -f "$ROOT/tunnel.pid" ] && kill "$(cat "$ROOT/tunnel.pid")" 2>/dev/null
+  rm -rf "$ROOT"; : > "$WORK/serve.argv"; : > "$WORK/cf.argv"
 }
 entries() { ls "$ROOT/entries" 2>/dev/null | wc -l | tr -d ' '; }
 printf '# Doc one\n\nhi\n' > "$WORK/a.md"
@@ -153,6 +173,59 @@ nofile "$ROOT/mode" "5: no mode may be recorded"
 ok [ "$(entries)" = 0 ]
 has "nothing is being shared" "$(share --list)" "5: --list must say nothing is shared"
 echo 127.0.0.1 > "$WORK/ts.ip"
+
+# --- 7. --tunnel → public cloudflared quick tunnel (issue #1151) ------------
+get() { python3 -c 'import sys,urllib.request,urllib.error
+try:
+  r=urllib.request.urlopen("http://127.0.0.1:"+sys.argv[1]+sys.argv[2]); print(r.status); print(r.read().decode())
+except urllib.error.HTTPError as e: print(e.code)' "$1" "$2" 2>&1; }
+reset_state; echo ok > "$WORK/cf.mode"; touch "$WORK/ts.down"
+out="$(share "$WORK/a.md")"; rc=$?
+[ "$rc" = 1 ] || fail "7: tailscale down without --tunnel must still fail (rc=$rc)" "$out"
+has "share.sh --tunnel" "$out" "7: tailscale down must point at --tunnel"
+out="$(share --tunnel "$WORK/a.md")"; rc=$?
+[ "$rc" = 0 ] || fail "7: --tunnel must share without a tailnet (rc=$rc)" "$out"
+PORT="$(cat "$ROOT/server.port" 2>/dev/null)"
+has "READY https://brave-fox-tunnel.trycloudflare.com/d/" "$out" "7: READY must be the trycloudflare URL"
+has "PUBLIC" "$out" "7: the READY line must say the tunnel is public"
+ok [ "$(cat "$ROOT/mode")" = tunnel ]
+has "--url http://127.0.0.1:$PORT" "$(cat "$WORK/cf.argv")" "7: cloudflared must front the loopback server"
+path="/${out#*trycloudflare.com/}"; path="${path%% *}"; path="${path%%$'\n'*}"
+page="$(get "$PORT" "$path")"
+has 200 "$page" "7: the tunnel server must serve the doc"
+lacks 'class="hdr"' "$page" "7: a public doc page must have its header stripped"
+lacks "$WORK" "$page" "7: a public doc page must not carry the source path"
+idx="$(get "$PORT" /)"
+has "Doc one" "$idx" "7: the public index still lists the doc"
+lacks 'class="src"' "$idx" "7: the public index must drop source paths"
+has 404 "$(get "$PORT" "/_ctl/status?id=${path#/d/}")" "7: /_ctl must be 404 on a public server"
+rm -f "$WORK/ts.down"
+: > "$WORK/cf.argv"
+out="$(share "$WORK/b.md")"
+has "READY https://brave-fox-tunnel.trycloudflare.com/d/" "$out" "7b: tunnel mode is sticky and reuses the URL"
+ok [ ! -s "$WORK/cf.argv" ]
+ok [ ! -s "$WORK/serve.argv" ]
+id1="$(ls "$ROOT/entries" | head -1 | sed "s/\.json$//")"
+has '"public":true' "$(share --pubstatus "$id1" --json)" "7c: every tunnel doc reports public"
+has "--remove it instead" "$(share --unpublish "$id1")" "7c: --unpublish must refuse in tunnel mode"
+has "Shared docs at: https://brave-fox-tunnel.trycloudflare.com/" "$(share --list)" "7c: --list reports the tunnel URL"
+# a live tailnet share is never silently made public
+reset_state; echo ok > "$WORK/serve.mode"
+share "$WORK/a.md" >/dev/null
+out="$(share --tunnel "$WORK/b.md")"; rc=$?
+[ "$rc" = 1 ] || fail "7d: --tunnel over a live tailnet share must refuse (rc=$rc)" "$out"
+has "--stop first" "$out" "7d: the refusal must say how to switch"
+ok [ "$(cat "$ROOT/mode")" = https ]
+ok [ ! -s "$WORK/cf.argv" ]
+# the tunnel never reports a URL → nothing left behind
+reset_state; echo never > "$WORK/cf.mode"
+out="$(DOC_PREVIEW_TUNNEL_WAIT=1 share --tunnel "$WORK/a.md")"; rc=$?
+[ "$rc" = 1 ] || fail "7e: a tunnel with no URL must exit 1 (rc=$rc)" "$out"
+has "did not come up" "$out" "7e: the failure must say the tunnel did not come up"
+nofile "$ROOT/tunnel.pid" "7e: no tunnel.pid may be left behind"
+nofile "$ROOT/server.pid" "7e: no server.pid may be left behind"
+nofile "$ROOT/mode" "7e: no mode may be recorded"
+ok [ "$(entries)" = 0 ]
 
 # --- 6. fleet-doctor's docprev row ------------------------------------------
 mkdir -p "$WORK/skills/doc-preview" "$WORK/conf"; : > "$WORK/skills/doc-preview/SKILL.md"
