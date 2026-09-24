@@ -251,6 +251,22 @@ if [ -f "$iv" ] && [ -d "$live_dir" ]; then
       warn install "could not tell whether $live_dir is current — reporting unknown, NOT up to date (${iv_note:-no reason given})"
       ;;
   esac
+  # The stable mark (issue #1118): installs follow refs/tags/stable, not master,
+  # so say how far the mark itself trails trunk — the operator's cue to move it.
+  # INFO, never counted: a stable that trails master is a choice, not a fault.
+  st="$(dirname "$0")/fleet-stable.sh"
+  if [ -f "$st" ]; then
+    stout=$(sh "$st" show --dir "$live_dir" 2>/dev/null)
+    _stf() { printf '%s\n' "$stout" | sed -n "s/^$1:  *//p"; }
+    st_sha=$(_stf stable); st_behind=$(_stf behind); st_trunk=$(_stf trunk)
+    case "$(_stf verdict)" in
+      CURRENT)  info install "stable (refs/tags/stable) at $st_sha — same commit as ${st_trunk%% *}" ;;
+      BEHIND)   info install "stable (refs/tags/stable) at $st_sha is $st_behind commit(s) behind ${st_trunk%% *} — installs follow stable; move it with \`fleet-stable.sh move\` (forward only, CI-green only)" ;;
+      NONE)     info install "no stable tag (refs/tags/stable) on the remote yet — nothing for installs to follow; set it with \`fleet-stable.sh move <sha>\`" ;;
+      OFFTRUNK) info install "stable (refs/tags/stable) at $st_sha is not on ${st_trunk%% *} — the next \`fleet-stable.sh move\` must come from trunk" ;;
+      *)        info install "could not read the stable tag — its distance from trunk is unknown, NOT 0" ;;
+    esac
+  fi
 fi
 
 # --- config modal (prefix+c: view/edit per-fleet + global fleet config) ---
