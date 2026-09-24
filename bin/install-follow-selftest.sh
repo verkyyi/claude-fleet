@@ -56,6 +56,9 @@ H="$WORK/home" CONF="$WORK/conf" HOMES="$WORK/homes"
 mkdir -p "$H" "$CONF" "$HOMES" "$WORK/tmp"
 export HOME="$H" FLEET_CONF_DIR="$CONF" TMPDIR="$WORK/tmp" FLEET_SKIP_GLOBAL_CONF=1
 export FLEET_SYNC_LOGINS_HOMES="$HOMES" FLEET_SYNC_LOGINS_SUDO='' FLEET_SYNC_LOGINS_TMP="$WORK/tmp"
+# a fixed name for THIS login: the table pads it to a column, and CI's `runner`
+# is not the operator's name
+export FLEET_SYNC_LOGINS_ME=selfme
 unset FLEET_INSTALL_SYNC FLEET_INSTALL_FOLLOW_STUCK_SECS 2>/dev/null || :
 
 # The live install: a clone of a local trunk, carrying the daemon script.
@@ -283,7 +286,7 @@ not_contains "J: bob (off) never stuck" "$OUT" "bob off ⚠"
 eq "J: one line" 1 "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')"
 OUT=$(sh "$FL" 2>&1)
 contains "J: table header" "$OUT" "login        follow result"
-contains "J: table self first" "$OUT" "$(id -un)      on     current"
+contains "J: table self first" "$OUT" "selfme       on     current"
 contains "J: table carol" "$OUT" "carol        on     deferred"
 # an unreadable state (no passwordless sudo here) reads `?`, and is NOT stuck
 if [ "$(id -u)" != 0 ]; then
