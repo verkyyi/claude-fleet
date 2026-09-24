@@ -14,12 +14,7 @@ fleet_load_conf "$SESS"                        # multi-fleet: target THIS fleet'
 REPO="${FLEET_REPO:-}"
 # A fleet hosting 2+ repos (issue #789): the view is always `all` (#1034), so
 # there is no repo to file into here — say so rather than guess.
-RARG=''
-if _fleet_hosts_many "$SESS"; then
-  REPO=$(fleet_current_repo "$SESS")
-  [ "$REPO" = all ] && { tmux display-message "new session: this fleet hosts several repos — use ⌃n, which asks which repo"; exit 1; }
-  RARG=$REPO
-fi
+_fleet_hosts_many "$SESS" && { tmux display-message "new session: this fleet hosts several repos — use ⌃n, which asks which repo"; exit 1; }
 [ -z "$REPO" ] && { tmux display-message "fleet.conf: FLEET_REPO not set — cannot create issue"; exit 1; }
 command -v gh >/dev/null 2>&1 || { tmux display-message "gh not found — cannot create issue"; exit 1; }
 
@@ -80,4 +75,4 @@ tmp="$ISSUES.opt.$$"
 # Pass the title as --title so the window is named after the WORK directly, rather
 # than depending on the optimistic cache row above surviving the background
 # collector refetch we just kicked (issue #216).
-exec bash "$BIN/dash-issue-session.sh" "$num" --title "$title" ${RARG:+--repo "$RARG"}
+exec bash "$BIN/dash-issue-session.sh" "$num" --title "$title"

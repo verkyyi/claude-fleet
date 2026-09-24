@@ -72,10 +72,9 @@
 # spawn-into-another-fleet move is gone — pick the repo with --repo instead.
 #
 # --repo <owner/name> / --no-repo (issue #789): which repo the scratch belongs to.
-# In a fleet hosting 2+ repos an omitted --repo takes the fleet's CURRENT repo
-# (fleet_current_repo), and under `all` the session gets NO repo — the operator's
-# rule: view a repo first for repo work — unless the caller names the row the
-# operator has highlighted: --selection <row-id> (issue #997; `@<wid>`,
+# In a fleet hosting 2+ repos an omitted --repo gives the session NO repo (the
+# view is always `all`, #1034) — unless the caller names the row the operator
+# has highlighted: --selection <row-id> (issue #997; `@<wid>`,
 # `hdr:<owner/name>`, `hdr:none`, fleet_selection_repo) takes THAT row's repo, or
 # $HOME for a no-repo row, and anything it cannot resolve keeps the rule above.
 # A one-repo fleet takes its only repo.
@@ -212,10 +211,7 @@ if [ "$NOREPO" != 1 ]; then
     REPO_ARG=$(fleet_selection_repo "$SESS" "$SEL")
     [ "$REPO_ARG" = none ] && { REPO_ARG=''; NOREPO=1; }
   fi
-  if [ -z "$REPO_ARG" ] && [ "$NOREPO" != 1 ] && [ "$MULTI" = 1 ]; then
-    REPO_ARG=$(fleet_current_repo "$SESS")
-    [ "$REPO_ARG" = all ] && { REPO_ARG=''; NOREPO=1; }
-  fi
+  [ -z "$REPO_ARG" ] && [ "$MULTI" = 1 ] && NOREPO=1
   if [ -n "$REPO_ARG" ]; then
     REPO_ARG=$(fleet_norm_repo "$REPO_ARG")
     fleet_load_repo_conf "$SESS" "$REPO_ARG" \
@@ -258,8 +254,8 @@ if [ "$BG" = 1 ]; then
     printf '%s' "$PROMPT" > "$pf"
     pfarg=" --prompt-file='$pf'"
   fi
-  # The RESOLVED repo rides along (issue #789), so the bg pass cannot re-resolve a
-  # current repo the operator switched in between.
+  # The RESOLVED repo rides along (issue #789), so the bg pass cannot re-resolve
+  # the highlighted row the operator moved off in between.
   rarg=''; [ "$NOREPO" = 1 ] && rarg=' --no-repo'; [ -n "$REPO_ARG" ] && rarg=" --repo='$REPO_ARG'"
   fleet_bg "FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg$pfarg${ORIGIN:+ --origin='$ORIGIN'}${AGENT:+ --agent=$AGENT}$rarg${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1" \
     || { [ -n "$nfarg" ] && rm -f "$nf"; [ -n "$pfarg" ] && rm -f "$pf"

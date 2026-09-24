@@ -11,8 +11,8 @@
 #      one-repo fleet (the degenerate case) except that the middle chip names the
 #      LOGIN (@login, issue #1099) instead of the fleet (#S); no "· all" tail in
 #      a 2+ repo one; tmux-conf-reload.sh stamps @login.
-#   C. ALWAYS ALL — fleet_current_repo answers `all`, a stale current-repo file
-#      (a repo this fleet hosts) is ignored, and fleet-up.sh deletes it.
+#   C. ALWAYS ALL — fleet_current_repo is gone (#1038): nothing in bin/ reads the
+#      retired picker's current-repo file, and fleet-up.sh deletes it.
 #   D. PER-SPAWN ASK — fleet-repo-ask.sh (the ⌃n "which repo?" prompt) lists the
 #      hosted repos only, prints the pick, exits 1 on esc; fleet-list.sh shows a
 #      fleet's further repos as ↳ rows and a one-repo fleet as its single row.
@@ -102,7 +102,7 @@ refs=$(grep -rlE 'fleet-pick\.sh|fleet_repo_label|fleet_current_repo_set|DASH_KE
          "$ROOT/bin" "$ROOT/conf" "$ROOT/hooks" "$ROOT/commands" 2>/dev/null \
        | grep -v -- '-selftest\.sh$')
 eq    "A: nothing in bin/conf/hooks/commands names the picker" "$refs" ""
-for fn in fleet_current_repo_set fleet_repo_label fleet_repo_label_sync; do
+for fn in fleet_current_repo_set fleet_repo_label fleet_repo_label_sync fleet_current_repo; do
   CHECKS=$((CHECKS+1)); declare -F "$fn" >/dev/null && fail "A: fleet-lib.sh still defines $fn"
 done
 hasnt "A: the dash keymap has no pick action" "$(bash "$BIN/dash-keymap.sh" env 2>/dev/null)" "PICK"
@@ -150,11 +150,13 @@ for tbl in root fleet-sidebar; do
 done
 
 # --- C. always all ------------------------------------------------------------
-eq    "C: default is all" "$(fleet_current_repo alpha)" "all"
-printf 'o/tokenledger\n' > "$FLEET_CONF_DIR/fleets/alpha/current-repo"
-eq    "C: a stale file naming a hosted repo is ignored" "$(fleet_current_repo alpha)" "all"
-eq    "C: …in a one-repo fleet too" "$(printf 'o/cee\n' > "$FLEET_CONF_DIR/fleets/beta/current-repo"; fleet_current_repo beta)" "all"
-has   "C: fleet-up.sh deletes the stale file" "$(cat "$BIN/fleet-up.sh")" 'rm -f "$FLEET_CONF_DIR/fleets/$NAME/current-repo"'
+# No script reads the retired picker's `current-repo` file (#1038): the one live
+# mention is fleet-up.sh deleting it. (E below and the other multi-repo selftests
+# pin the behaviour — a stale file changes no row, anchor, backlog or ledger.)
+refs=$(grep -l 'current-repo' "$BIN"/*.sh 2>/dev/null \
+       | grep -v -- '-selftest\.sh$' | sed 's#.*/##' | sort | tr '\n' ' ')
+eq    "C: fleet-up.sh is the only script that names current-repo" "$refs" "fleet-up.sh "
+has   "C: …to delete the stale file" "$(cat "$BIN/fleet-up.sh")" 'rm -f "$FLEET_CONF_DIR/fleets/$NAME/current-repo"'
 
 # --- D. the per-spawn ask ------------------------------------------------------
 ask alpha ''
@@ -165,7 +167,7 @@ has   "D: display only (key hidden)" "$(cat "$WORK/fzf.args")" "--with-nth=2"
 eq    "D: esc prints nothing" "$(cat "$WORK/ask.out")" ""
 ask alpha 'tokenledger'
 eq    "D: a pick prints the repo" "$(cat "$WORK/ask.out")" "o/tokenledger"
-eq    "D: …and sets nothing" "$(fleet_current_repo alpha)" "all"
+CHECKS=$((CHECKS+1)); [ -e "$FLEET_CONF_DIR/fleets/alpha/current-repo" ] && fail "D: …and sets nothing (a current-repo file was written)"
 hasnt "D: …nor touches the footer" "$(cat "$WORK/tmux.log")" "set-option"
 : > "$WORK/tmux.log"
 env TMUX=/fake,1,0 FAKE_CUR=beta FZF_PICK='tokenledger' bash "$ASK" alpha >"$WORK/ask.out" 2>&1

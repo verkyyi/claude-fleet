@@ -25,7 +25,7 @@ c(){ printf '\033[38;2;%sm' "$1"; }; R=$'\033[0m'
 
 # same session→repo resolution as the rows producer (FLEET_SESSION is exported
 # by tmux-issues.sh so this inherits it under the fzf preview subprocess).
-# A 2+ repo fleet (issue #794): the row's repo (--repo=), else the current repo.
+# A 2+ repo fleet (issue #794): the row's repo (--repo=), else nothing (refused).
 ROWREPO=''
 for _a in "$@"; do case "$_a" in --repo=*) ROWREPO="${_a#--repo=}" ;; esac; done
 REPO=$(CF_REPO='' fleet_backlog_repo "${FLEET_SESSION:-}" "$ROWREPO")

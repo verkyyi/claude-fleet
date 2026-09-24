@@ -617,30 +617,25 @@ EOF
   return 0
 }
 
-# The fleet's CURRENT repo — always `all` (issue #1034). The footer repo picker that
-# used to narrow it (#793) is gone: the grouped `all` list is the only
-# view, and a repo heading (or the highlighted row) picks where a new session goes.
-# A stale `current-repo` file on disk is ignored here and deleted by fleet-up.sh.
-# Kept as a function so its readers (new session / restore / history / issue-file /
-# backlog / raw-session) keep their `all` path unchanged.
-fleet_current_repo() {
-  printf 'all\n'
-}
+# There is no CURRENT repo (issue #1034): the grouped `all` list is the only view,
+# and a repo heading (or the highlighted row) picks where a new session goes. The
+# footer picker that used to narrow it (#793) and the `fleet_current_repo` that
+# answered `all` for its readers (#1038) are both gone; the picker's stale state
+# file on disk is read by nothing and deleted by fleet-up.sh.
 
 # fleet_selection_repo <sess> <row-id> → where a session started FROM the highlighted
-# row goes (issues #1009/#997): only in a 2+ repo fleet viewing `all`. <row-id> is a
+# row goes (issues #1009/#997): only in a 2+ repo fleet. <row-id> is a
 # window (`@12` — its repo via fleet_window_repo, never a guess; `none` for a
 # deliberate `@norepo 1` window) or a repo heading, `hdr:<owner/name>` (a hosted
 # repo) or `hdr:none` (the `no repo` group). A trailing `:<anything>` after a window
 # id is ignored, so a caller may always send `<id>:<heading-repo>`. Prints the repo,
-# `none` (start in $HOME, --no-repo), or NOTHING — a one-repo fleet, a single repo
-# in view (it still wins), an unknown window, the `?` heading, a landed row — and
-# the caller keeps today's behavior. The one resolver the sidebar and hub share.
+# `none` (start in $HOME, --no-repo), or NOTHING — a one-repo fleet, an unknown
+# window, the `?` heading, a landed row — and the caller keeps today's behavior.
+# The one resolver the sidebar and hub share.
 fleet_selection_repo() {
   local sess="${1:-}" id="${2:-}" r
   [ -n "$id" ] || return 0
   fleet_multirepo "$sess" || return 0
-  [ "$(fleet_current_repo "$sess")" = all ] || return 0
   case "$id" in
     hdr:none) r=none ;;
     hdr:?*/?*) r=$(fleet_norm_repo "${id#hdr:}"); fleet_repo_hosted "$sess" "$r" || r='' ;;
@@ -729,8 +724,7 @@ _fleet_repo_name_v() {
 # fleet_dash_repo_frame <sess> — once per dash frame, for the row renderers (the
 # dash, the sidebar, the fold toggle). Sets globals, no output:
 #   RMANY     1 iff the fleet hosts 2+ repos; 0 = a one-repo fleet, and then the
-#             other two stay empty and every renderer takes today's path;
-#   RCUR      the current repo's cache slug, or `all`;
+#             others stay empty and every renderer takes today's path;
 #   RSHORTMAP $'\n'<slug>\t<short>$'\n'… — the badge per repo;
 #   RGRPMAP   $'\n'<slug>\t<i>$'\n'… — the repo's group under `all` (issue #974):
 #             its 0-based place in fleet_repos order, so the heading rows sort
@@ -739,10 +733,10 @@ _fleet_repo_name_v() {
 #             by fleet_repo_name (bare, owner/name on a collision; issue #995);
 #   RNREPO    how many repos are hosted (the unknown/no-repo groups sort after).
 # A fleet with no repos/ dir costs nothing: the directory test returns first.
-# shellcheck disable=SC2034  # RMANY/RCUR/RSHORTMAP/RGRPMAP/RHEADS/RNREPO are caller-facing OUTPUT globals
+# shellcheck disable=SC2034  # RMANY/RSHORTMAP/RGRPMAP/RHEADS/RNREPO are caller-facing OUTPUT globals
 fleet_dash_repo_frame() {
-  local sess="${1:-}" shorts cur r s sh all=''
-  RMANY=0; RCUR=''; RSHORTMAP=$'\n'; RGRPMAP=$'\n'; RHEADS=''; RNREPO=0
+  local sess="${1:-}" shorts r s sh all=''
+  RMANY=0; RSHORTMAP=$'\n'; RGRPMAP=$'\n'; RHEADS=''; RNREPO=0
   [ -d "$FLEET_CONF_DIR/fleets/${sess:-_}/repos" ] || return 0
   shorts=$(fleet_repo_shorts "$sess")
   case "$shorts" in *$'\n'*) ;; *) return 0 ;; esac          # one repo: nothing to filter
@@ -760,24 +754,20 @@ EOF
   done <<EOF
 $shorts
 EOF
-  cur=$(fleet_current_repo "$sess")
-  if [ "$cur" = all ]; then RCUR=all; else RCUR=$(fleet_slug "$cur"); fi
 }
 
 # ---- the backlog for any repo (issue #794) ----------------------------------
 # The backlog (tmux-issues.sh + its rows producer, preview and row actions) reads
-# the CURRENT repo's issues in a 2+ repo fleet, and under `all` every hosted repo's,
-# each row carrying its repo. A one-repo fleet never enters any helper's multi
-# branch: its backlog keeps the per-session cache and repo chain it always had.
+# every hosted repo's issues in a 2+ repo fleet, each row carrying its repo. A
+# one-repo fleet never enters any helper's multi branch: its backlog keeps the
+# per-session cache and repo chain it always had.
 
 # fleet_backlog_repos <sess> → the repos the backlog lists, one per line: NOTHING in
-# a one-repo fleet (the caller keeps today's path), the current repo when one is
-# picked, every hosted repo (fleet_repos order) under `all`.
+# a one-repo fleet (the caller keeps today's path), every hosted repo (fleet_repos
+# order) otherwise.
 fleet_backlog_repos() {
-  local cur
   fleet_multirepo "${1:-}" || return 0
-  cur=$(fleet_current_repo "$1")
-  if [ "$cur" = all ]; then fleet_repos "$1"; else printf '%s\n' "$cur"; fi
+  fleet_repos "$1"
 }
 
 # fleet_backlog_cache <base> <sess> <repo> → the runtime cache file <base>
@@ -794,8 +784,7 @@ fleet_backlog_cache() {
 # fleet_backlog_repo <sess> [<row-repo>] → the repo a backlog action targets, or
 # NOTHING (the caller refuses) — never a guess:
 #   2+ repos: the row's repo (must be hosted), else $CF_REPO (carried through a
-#             popup), else the current repo; under `all` with no row repo, nothing
-#             (a new issue asks — fleet-repo-ask.sh);
+#             popup), else nothing (a new issue asks — fleet-repo-ask.sh);
 #   one repo: the historic chain — $CF_REPO, else the sessmap's, else FLEET_REPO.
 fleet_backlog_repo() {
   local sess="${1:-}" r c
@@ -805,8 +794,6 @@ fleet_backlog_repo() {
     if [ -n "${CF_REPO:-}" ]; then
       r=$(fleet_norm_repo "$CF_REPO"); fleet_repo_hosted "$sess" "$r" && printf '%s' "$r"; return 0
     fi
-    r=$(fleet_current_repo "$sess")
-    [ "$r" = all ] || printf '%s' "$r"
     return 0
   fi
   r="${FLEET_REPO:-}"
@@ -836,8 +823,7 @@ fleet_multirepo() {
 #   1. <repo>, when given — it must be hosted (exit 1 otherwise);
 #   2. a one-repo fleet: its repo (FLEET_REPO, else the collector's cached one);
 #   3. the caller pane's own window repo (a worker, a scratch bound to a repo);
-#   4. the fleet's current repo, when it is not `all` (always `all` since #1034);
-#   5. else exit 4 — AMBIGUOUS: the caller ASKS (fleet_repos lists the choices),
+#   4. else exit 4 — AMBIGUOUS: the caller ASKS (fleet_repos lists the choices),
 #      never guesses. Exit 1 = <repo> not hosted / nothing resolvable.
 # Degenerate (no repos/ overlay): 1 → the conf's own repo, unvalidated, as before.
 fleet_target_repo() {
@@ -859,8 +845,6 @@ fleet_target_repo() {
     r=$(fleet_norm_repo "$(fleet_window_repo "$sess" "$TMUX_PANE")")
     if [ -n "$r" ] && fleet_repo_hosted "$sess" "$r"; then printf '%s\n' "$r"; return 0; fi
   fi
-  r=$(fleet_current_repo "$sess")
-  [ "$r" != all ] && { printf '%s\n' "$r"; return 0; }
   return 4
 }
 

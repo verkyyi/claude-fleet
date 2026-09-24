@@ -27,15 +27,8 @@ if [ -n "$FLEET_SESSION" ] && fleet_multirepo "$FLEET_SESSION"; then MULTI=1; RA
 ROWS="$BIN/tmux-issues-rows.sh"
 command -v fzf >/dev/null 2>&1 || { echo "fzf required"; sleep 5; exit 1; }
 case "$MODE" in roadmap) LABEL=' roadmap · milestoned ';; unplanned) LABEL=' unplanned · no milestone ';; *) LABEL=' backlog · GitHub issues ';; esac
-# 2+ repos: the border names what the list shows — the current repo, or `all repos`.
-# Re-read at every fzf (re)launch, so a repo picked meanwhile is named on the next.
-blabel() {
-  local cur
-  if [ "$MULTI" = 1 ]; then
-    cur=$(fleet_current_repo "$FLEET_SESSION"); [ "$cur" = all ] && cur='all repos'
-    printf '%s· %s ' "$LABEL" "$cur"
-  else printf '%s' "$LABEL"; fi
-}
+# 2+ repos: the border names what the list shows — `all repos`.
+[ "$MULTI" = 1 ] && LABEL="${LABEL}· all repos "
 
 # The ⌃n new · ⌃x close · ? keys sub-actions each open a small
 # `tmux display-popup` (input dialog / cheatsheet). That works from a windowed
@@ -143,7 +136,7 @@ run_fzf() {
     --no-sort --disabled --no-input \
     --header-lines=1 \
     --layout=reverse-list --info=hidden --border=rounded \
-    --border-label="$(blabel)" --border-label-pos=3 \
+    --border-label="$LABEL" --border-label-pos=3 \
     --prompt='backlog ▸ ' \
     --header="$HDR" \
     --preview "bash $BIN/tmux-issue-preview.sh {1}$RARG" \

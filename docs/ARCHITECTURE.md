@@ -533,8 +533,8 @@ pool windows retire with the server. `bin/fleet-fold-selftest.sh` pins it.
 
 A window names its repo with `@repo=<owner/name>`; `@norepo 1` marks a session
 that deliberately belongs to none. Resolution goes through `bin/fleet-lib.sh`
-only — `fleet_repos`, `fleet_window_repo`, `fleet_load_repo_conf`,
-`fleet_current_repo`/`_set` — never an ad-hoc `git remote` parse.
+only — `fleet_repos`, `fleet_window_repo`, `fleet_load_repo_conf` — never an
+ad-hoc `git remote` parse.
 `fleet_window_repo` reads `@repo`, else derives it once from `@worktree`'s git
 origin and stamps it, else takes the fleet's only repo, else answers **nothing**
 — and the consumer skips the window rather than guess.
@@ -627,10 +627,11 @@ grouped under a heading per repo; a heading (or the highlighted row) picks where
 new session goes. #793 added a footer repo picker (`fleet-pick.sh`, behind a tap on
 the fleet name and the dash's ⌃z) that narrowed the view to one repo; #1034 removed
 it, since everything since #977/#997 assumes `all` (⌃z is the add-a-repo popup
-since #1103). `fleet_current_repo` survives
-as a function that always answers `all`, so its readers (new session, restore,
-history, issue-file, backlog, raw-session) keep their `all` path unchanged; a stale
-`current-repo` file on disk is ignored, and `fleet-up.sh` deletes it. The footer's
+since #1103). #1038 then pruned every "a single repo is picked" branch its readers
+(new session, restore, history, issue-file, backlog, raw-session, the dash rows
+and fold toggle) still carried, and `fleet_current_repo` with them — there is no
+current repo, only `all`; a stale `current-repo` file on disk is read by nothing,
+and `fleet-up.sh` deletes it. The footer's
 middle chip is not a tap target, and since #1099 it names the login (`@login`,
 stamped by `fleet-up.sh` / `tmux-conf-reload.sh`; tmux 3.3's `#{user}` as the
 fallback), not the fleet — one fleet per login makes `#S` redundant.

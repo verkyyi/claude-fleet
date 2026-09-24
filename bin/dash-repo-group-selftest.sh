@@ -172,9 +172,9 @@ eq  "C: the bind targets under test are the dash's" "$binds" \
 mkdir -p "$WORK/nogrp"
 for f in "$BIN"/*; do ln -s "$f" "$WORK/nogrp/${f##*/}"; done
 rm "$WORK/nogrp/tmux-dashboard-rows.sh"
-sed 's/&& RGRP=1$/\&\& :/' "$ROWS" > "$WORK/nogrp/tmux-dashboard-rows.sh"
+sed 's/^RGRP=\$RMANY$/RGRP=0/' "$ROWS" > "$WORK/nogrp/tmux-dashboard-rows.sh"
 CHECKS=$((CHECKS+1))
-cmp -s "$ROWS" "$WORK/nogrp/tmux-dashboard-rows.sh" && fail "D: could not switch the grouping off (RGRP=1 line moved?)"
+cmp -s "$ROWS" "$WORK/nogrp/tmux-dashboard-rows.sh" && fail "D: could not switch the grouping off (RGRP=\$RMANY line moved?)"
 OFF="$WORK/nogrp/tmux-dashboard-rows.sh"
 CHECKS=$((CHECKS+1))
 [ "$(rows)" != "$(rows "$OFF")" ] || fail "D: the switch is real — \`all\` differs with grouping off"

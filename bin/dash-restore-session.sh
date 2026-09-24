@@ -59,8 +59,8 @@ fi
 # is the headless cross-session <target-session>, which stays synchronous (no $TMUX to
 # run-shell onto). The bg re-exec carries the resolved session in FLEET_RESTORE_SESS.
 # --repo <owner/name> (issue #789), anywhere after <target>: which hosted repo's
-# ledger + checkout the session belongs to. A fleet hosting 2+ repos needs it (or a
-# current repo other than `all`); a one-repo fleet takes its only repo.
+# ledger + checkout the session belongs to. A fleet hosting 2+ repos needs it; a
+# one-repo fleet takes its only repo.
 TARGET="${1:-}"; TARGET_SESS=""; BG_EXEC=0; REPO_ARG=""
 [ "$#" -gt 0 ] && shift
 while [ "$#" -gt 0 ]; do
@@ -103,8 +103,7 @@ if ! cap_msg=$(fleet_session_cap_ok "$SESS"); then refuse "$cap_msg"; exit 2; fi
 
 MULTI=0; _fleet_hosts_many "$SESS" && MULTI=1
 if [ -z "$REPO_ARG" ] && [ "$MULTI" = 1 ]; then
-  REPO_ARG=$(fleet_current_repo "$SESS")
-  [ "$REPO_ARG" = all ] && { refuse "restore: this fleet hosts several repos and the row names none — pass --repo"; exit 1; }
+  refuse "restore: this fleet hosts several repos and the row names none — pass --repo"; exit 1
 fi
 if [ -n "$REPO_ARG" ]; then
   REPO_ARG=$(fleet_norm_repo "$REPO_ARG")

@@ -39,7 +39,7 @@ if [ "${2:-}" = "--commit" ]; then mode=commit; commit_target="${3:-}"
 else mode=interactive; action="${2:-cycle}"; case "$action" in --repo=*) action=cycle ;; esac; fi
 
 FLEET_SESSION=$(fleet_current_session); export FLEET_SESSION
-# In a 2+ repo fleet: the row's repo, else CF_REPO, else the current repo.
+# In a 2+ repo fleet: the row's repo, else CF_REPO, else nothing (refused).
 REPO=$(fleet_backlog_repo "$FLEET_SESSION" "$ROWREPO")
 [ -z "$REPO" ] && { tmux display-message "backlog: no repo resolved — cannot set priority on #$num"; exit 1; }
 command -v gh >/dev/null 2>&1 || { tmux display-message "gh not found — cannot set priority on #$num"; exit 1; }

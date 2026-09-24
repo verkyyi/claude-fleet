@@ -157,10 +157,10 @@ landed_fold_file() { # [<slug>]
 # --- the merged landed view (issue #804) ---------------------------------------
 # A fleet hosting 2+ repos keeps one ledger PER REPO (landed_<slug>.tsv). The
 # landed view (`rows`, `fold`) and `list` merge every repo on screen into ONE
-# newest-first list — the current repo when one is picked, every hosted repo
-# under `all` — and each row keeps its repo: a leading column on the stream,
-# the `@<repo>` on its target (so a resume lands in its own repo), and a short
-# repo badge on the row under `all`, the live dash's own (#793).
+# newest-first list — every hosted repo, under `all` — and each row keeps its
+# repo: a leading column on the stream, the `@<repo>` on its target (so a resume
+# lands in its own repo), and a short repo badge on the row, the live dash's own
+# (#793).
 # Inside the merged view every session key is REPO-QUALIFIED, `<slug>:issue-<N>`
 # — the spelling a multi-repo spawn already stamps into @origin (#789) — so two
 # repos' `issue-12` never join, and a parent in ANOTHER hosted repo still nests
@@ -168,20 +168,18 @@ landed_fold_file() { # [<slug>]
 # qualified with the row's own repo on the way in.
 # One-repo fleet: LANDED_MERGED=0, the stream is that one ledger, keys stay bare
 # and every renderer takes the path it always took, byte for byte.
-LANDED_MERGED=0; LANDED_BADGE=0; LANDED_REPOS=''; LANDED_SHORTMAP=$'\n'
-landed_scope() { # [all] — `all` merges every hosted repo, whatever the current repo
-  LANDED_MERGED=0; LANDED_BADGE=0; LANDED_REPOS=''; LANDED_SHORTMAP=$'\n'
+LANDED_MERGED=0; LANDED_REPOS=''; LANDED_SHORTMAP=$'\n'
+landed_scope() { # merges every hosted repo
+  LANDED_MERGED=0; LANDED_REPOS=''; LANDED_SHORTMAP=$'\n'
   [ -z "${FLEET_HISTORY_LEDGER:-}" ] || return 0     # a pinned ledger IS one ledger
   [ -n "${FLEET_SESSION:-}" ] && command -v fleet_multirepo >/dev/null 2>&1 \
     && fleet_multirepo "$FLEET_SESSION" || return 0
   LANDED_MERGED=1
-  local cur r s sh
-  cur=all; [ "${1:-}" = all ] || cur=$(fleet_current_repo "$FLEET_SESSION")
-  [ "$cur" = all ] && LANDED_BADGE=1
+  local r s sh
   while IFS=$'\t' read -r r s sh; do
     [ -n "$r" ] || continue
     LANDED_SHORTMAP+="$s"$'\t'"$sh"$'\n'
-    if [ "$cur" = all ] || [ "$cur" = "$r" ]; then LANDED_REPOS+="$r"$'\n'; fi
+    LANDED_REPOS+="$r"$'\n'
   done <<EOF
 $(fleet_repo_shorts "$FLEET_SESSION")
 EOF
@@ -568,7 +566,7 @@ cmd_list() {
   # merge never switches on, and the list below is the one it always printed.
   if [ -n "$all" ] || [ -z "$repo" ]; then
     [ -n "${FLEET_SESSION:-}" ] || FLEET_SESSION=$(fleet_current_session 2>/dev/null)
-    landed_scope all
+    landed_scope
   fi
   local out; out=$(landed_stream "$repo" "$filter")
   if [ -z "$out" ]; then
@@ -924,9 +922,9 @@ cmd_rows() {
     fi
     # repo badge (issue #804): under `all` in a 2+ repo fleet every row names its
     # repo's short tag first — the live dash's #793 badge, same place, same ASCII
-    # clamp (so ${#} stays its width). A picked repo shows its rows only: no badge.
+    # clamp (so ${#} stays its width).
     local repod=''
-    if [ "$LANDED_BADGE" = 1 ]; then lshort_v "$lslug"; repod=${lshort//[^A-Za-z0-9._ ?-]/}; fi
+    if [ "$LANDED_MERGED" = 1 ]; then lshort_v "$lslug"; repod=${lshort//[^A-Za-z0-9._ ?-]/}; fi
     local avail=$(( USABLE - LEFTW - RIGHTW - 1 )); [ "$avail" -lt 0 ] && avail=0
     [ -n "$repod" ] && { avail=$(( avail - ${#repod} - 1 )); [ "$avail" -lt 0 ] && avail=0; }
     [ -n "$tagd" ] && { avail=$(( avail - ${#tagd} - 1 )); [ "$avail" -lt 0 ] && avail=0; }

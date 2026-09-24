@@ -168,7 +168,6 @@ tmux set-option -wu -t "$S:wWT" @repo
 mkdir -p "$FLEET_CONF_DIR/fleets/$S/repos"
 printf 'FLEET_REPO="o/b"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="main"\n' "$WORK/mainB" \
   > "$FLEET_CONF_DIR/fleets/$S/repos/o-b.conf"
-eq "B: current repo is all" "$(fleet_current_repo "$S")" all
 eq "B: @repo row anchors its repo"        "$(fleet_selection_repo "$S" "$(wid wB)")"  o/b
 eq "B: @repo row in A anchors A"          "$(fleet_selection_repo "$S" "$(wid wA)")"  o/a
 eq "B: @worktree row anchors its derived repo" "$(fleet_selection_repo "$S" "$(wid wWT)")" o/b
