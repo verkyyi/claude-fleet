@@ -361,7 +361,7 @@ eq "to-git dry-run: nothing changed" "$before" "$(snap)"
 
 : > "$WORK/launchctl.log"
 run --source "$SRC" --to-git --logins bob,erin
-eq "to-git act: exit 0" 0 "$RC"
+ok "to-git act: exit 0" '[ "$RC" -eq 0 ]'
 contains "to-git act: bob line" "$OUT" "bob: converted to a git checkout @ $(g "$SRC" rev-parse --short "$C5") · origin https://github.com/o/r.git · old copy kept at $H/bob/.claude/fleet.copy-"
 contains "to-git act: final line" "$OUT" "other logins on this machine: 2 converted / 0 skipped · 0 already git checkouts"
 ok "bob: is a checkout now" '[ -d "$B/.git" ]'
@@ -405,7 +405,7 @@ run --source "$SRC" --to-git --logins frank
 eq "to-git edit: exit 4" 4 "$RC"
 ok "to-git edit: untouched" '[ ! -e "$F/.git" ] && [ "$(cat "$F/bin/a.sh")" = "my edit" ]'
 run --source "$SRC" --to-git --logins frank --force
-eq "to-git edit forced: exit 0" 0 "$RC"
+ok "to-git edit forced: exit 0" '[ "$RC" -eq 0 ]'
 contains "to-git edit forced: says what it left behind" "$OUT" "local edits left in the old copy (forced): bin/a.sh"
 eq "to-git edit forced: the clone's file wins" "v7" "$(cat "$F/bin/a.sh")"
 ok "to-git edit forced: the old copy keeps the edit" 'grep -qx "my edit" "$H"/frank/.claude/fleet.copy-*/bin/a.sh'
@@ -414,7 +414,7 @@ ok "to-git edit forced: the old copy keeps the edit" 'grep -qx "my edit" "$H"/fr
 HK="$H/hank/.claude/fleet"; mkdir -p "$HK"; cp -Rp "$SRC/bin" "$HK/"; printf '%s me now\n' "$C7" > "$HK/.fleet-synced-from"
 : > "$WORK/sudo.log"
 OUT=$(FLEET_SYNC_LOGINS_ME=someone-else FLEET_SYNC_LOGINS_SUDO="$WORK/shim/sudo -n" bash "$SL" --source "$SRC" --to-git --logins hank 2>&1); RC=$?
-eq "to-git sudo: exit 0" 0 "$RC"
+ok "to-git sudo: exit 0" '[ "$RC" -eq 0 ]'
 eq "to-git sudo: converted" "$C7" "$(g "$HK" rev-parse HEAD)"
 ok "to-git sudo: the owner-side shell ran as the owner" 'grep -q -- "-n -u $(id -un) sh $WORK/tmp/.*/to-git.sh" "$WORK/sudo.log"'
 ok "to-git sudo: the copy was listed as the owner" 'grep -q -- "-n -u $(id -un) find $HK" "$WORK/sudo.log"'
@@ -425,12 +425,12 @@ contains "to-git no sudo: prints the admin command with the mode" "$OUT" "sudo $
 ok "to-git no sudo: nothing changed" '[ ! -e "$IV/.git" ]'
 # a marker the source cannot resolve: --force clones at the source HEAD
 run --source "$SRC" --to-git --logins gina --force
-eq "to-git unknown marker forced: exit 0" 0 "$RC"
+ok "to-git unknown marker forced: exit 0" '[ "$RC" -eq 0 ]'
 contains "to-git unknown marker forced: says so" "$OUT" "gina: converted to a git checkout @ $(g "$SRC" rev-parse --short "$C7")"
 eq "to-git unknown marker forced: at the source HEAD" "$C7" "$(g "$GI" rev-parse HEAD)"
 # --origin overrides the source's origin
 run --source "$SRC" --to-git --origin https://example.com/x.git --logins ivy
-eq "to-git --origin: exit 0" 0 "$RC"
+ok "to-git --origin: exit 0" '[ "$RC" -eq 0 ]'
 eq "to-git --origin: used as given" "https://example.com/x.git" "$(g "$IV" remote get-url origin)"
 
 echo "sync-logins-selftest OK ($CHECKS checks)"
