@@ -281,6 +281,26 @@ rm -f "$WORK/disk_closed"
 grep -q 'worktree trash swept:1 left:0' "$WORK/log" || fail "the sweep should log what it freed"
 [ -s "$CLEAN_LOG" ] && fail "a closed disk gate must still reap nothing"
 
+# 9b) SLOW PURGE (issue #893): the fleet's FLEET_TRASH_PURGE_PER_TICK reaches the
+#     sweep through the per-fleet conf read — one entry per tick with the gate open
+#     (MAX_LOAD=0 so the real box's load cannot defer it) — and a CLOSED gate makes
+#     the sweep urgent: the cap is dropped, because the trash is what frees the disk.
+reset
+conf 'FLEET_TRASH_PURGE_PER_TICK=1' 'FLEET_TRASH_PURGE_MAX_LOAD=0'
+mkdir -p "$WORK/.fleet-trash/main-issue-97.1700000000.1" "$WORK/.fleet-trash/main-issue-98.1700000000.2"
+run s1
+grep -q 'worktree trash swept:1 left:1' "$WORK/log" \
+  || fail "PER_TICK=1 from the fleet conf should sweep one entry a tick" "$(cat "$WORK/log")"
+reset
+conf 'FLEET_TRASH_PURGE_PER_TICK=1' 'FLEET_TRASH_PURGE_MAX_LOAD=0'
+mkdir -p "$WORK/.fleet-trash/main-issue-97.1700000000.1" "$WORK/.fleet-trash/main-issue-98.1700000000.2"
+touch "$WORK/disk_closed"
+run s1
+rm -f "$WORK/disk_closed"
+grep -q 'worktree trash swept:2 left:0' "$WORK/log" \
+  || fail "a closed disk gate must lift the per-tick cap" "$(cat "$WORK/log")"
+rm -rf "$WORK/.fleet-trash"
+
 # 10) SCRATCH HEADS, DEFAULT OFF: a MERGED non-issue head is never a candidate.
 reset
 conf   # FLEET_CLEANUP_SCRATCH_HEADS unset → default OFF

@@ -1590,6 +1590,19 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Worktree root directory @group=spawn @tier=advanced @scope=fleet @edit=path
 #FLEET_WORKTREE_ROOT=""
 
+# --- Slow trash purge (bin/fleet-lib.sh fleet_trash_sweep, issue #893) --------
+# A retired worktree is renamed into .fleet-trash and deleted later by the cleanup
+# daemon's sweep — by default everything in the trash, in one go. One worktree with
+# its dependencies is ~200k file deletions, and several at once flood the file-event
+# daemon (fseventsd) the same way an install does. Set N to delete at most N trash
+# entries per tick, at `nice -n 19`, and to skip the tick while the 1-minute load per
+# core is over FLEET_TRASH_PURGE_MAX_LOAD (default 1; 0 = never skip). A closed disk
+# gate overrides both — the trash is what frees a full disk. Unset/0 = purge all.
+# @label=Trash entries purged per tick @group=janitor @tier=advanced @scope=fleet @edit=int @unit=per tick
+#FLEET_TRASH_PURGE_PER_TICK=""
+# @label=Trash purge load ceiling (per core) @group=janitor @tier=advanced @scope=fleet @edit=str
+#FLEET_TRASH_PURGE_MAX_LOAD=""
+
 # --- Worktree setup hook (bin/fleet-lib.sh fleet_worktree_setup, issue #885) --
 # A command every NEW worktree runs right after `git worktree add` (issue spawns and
 # scratch sessions), as `<cmd> <worktree> <main>` with cwd = the worktree. Empty
