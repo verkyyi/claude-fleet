@@ -78,7 +78,13 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    with its own `~/.claude/fleet`, a `logins:` line reports the others' drift
    against this install, and `bin/fleet-sync-logins.sh` (`--dry-run` to preview)
    brings them to this commit, as each login, and restarts their daemons —
-   `/fleet-sync-install` runs it as its last step (issue #1069). Notes: standalone `jq` is **not** needed
+   `/fleet-sync-install` runs it as its last step (issue #1069). A login whose
+   `~/.claude/fleet` is a file COPY (step 2's shape) cannot say which version it
+   holds or update itself; `fleet-sync-logins.sh --to-git` turns it into a git
+   clone at the commit it holds — origin = the public repo over https, no
+   credentials — carrying `fleet.conf`, `logs/` and every local file across and
+   keeping the old dir whole as `~/.claude/fleet.copy-<date>` (issue #1121).
+   Notes: standalone `jq` is **not** needed
    (the collector only uses `gh --jq`, which is built in); perl `Time::HiRes` is
    a soft dep (without it the dash spinner ticks at whole-second granularity).
    If `gh` is not authed, the backlog/PR features silently show nothing — tell
@@ -94,7 +100,11 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
 
 2. **Copy to the install dir.** Canonical: `~/.claude/fleet/`. Copy `bin/`,
    `conf/`, `shell/`, `fleet.conf.example`, `requirements-mcp.txt` there; `mkdir -p ~/.claude/fleet/logs`;
-   `chmod +x ~/.claude/fleet/bin/*.sh`. If the user wants a different dir,
+   `chmod +x ~/.claude/fleet/bin/*.sh`. Prefer a **git clone** of the public repo
+   at that path over a copy when `git` is available: a clone knows its commit
+   and can follow the repo on its own; a copy can be turned into one later with
+   `bin/fleet-sync-logins.sh --to-git` from any login that is a checkout
+   (issue #1121). If the user wants a different dir,
    also rewrite the `~/.claude/fleet` paths inside `conf/tmux-attention.conf`
    and `hooks/settings-hooks.json` to match.
 
