@@ -69,6 +69,20 @@ else:
         self.assertNotIn('secret-fixture', '\n'.join(args))
         self.assertEqual(args[-1], 'seed'); self.assertNotIn('--mcp-config', args)
 
+    def test_shipped_worker_set_inherited_by_codex(self):
+        # issue #1078: FLEET_MCP_CONFIG -> the shipped conf/mcp-worker.json, with no
+        # Codex-specific key, must trim a Codex worker to the same (empty) set:
+        # every enumerated server disabled, apps + skill MCP installs closed.
+        path = BIN.parent / 'conf' / 'mcp-worker.json'
+        self.assertTrue(path.is_file(), path)
+        p = self.launch('seed', FLEET_MCP_CONFIG=str(path))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        args = json.loads((self.root/'launched.json').read_text())['args']
+        self.assertIn('features.apps=false', args)
+        self.assertIn('features.skill_mcp_dependency_install=false', args)
+        self.assertIn('mcp_servers={"legacy"={"command"="fixture-server","enabled"=false},"other.server"={"url"="https://example.invalid/mcp","enabled"=false}}', args)
+        self.assertEqual(args[-1], 'seed'); self.assertNotIn('--mcp-config', args)
+
     def test_shared_allowlist_and_explicit_caller_override(self):
         value = json.dumps({'mcpServers': {'docs': {'type': 'http', 'url': 'https://example.invalid/mcp', 'headers': {'X-Test': 'fixture'}}}})
         override = 'mcp_servers.legacy.enabled=true'

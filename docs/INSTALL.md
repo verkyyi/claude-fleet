@@ -103,6 +103,11 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    (owner/name of the backlog repo), `FLEET_MAIN` (its main checkout path),
    `FLEET_BASE_BRANCH`, and whether their plan runs 1M-context models
    (`FLEET_CTX_WINDOW`).
+   **Recommend** `FLEET_MCP_CONFIG="$HOME/.claude/fleet/conf/mcp-worker.json"`
+   too — the minimal MCP set the fleet ships for worker sessions (issue #1078).
+   Without it every session boots every MCP server on the machine. Offer it, say
+   what it drops, and leave it unset only if the user declines — see
+   [MCP servers on demand](#mcp-servers-on-demand).
 
 4. **Hook up tmux.** Run `sh ~/.claude/fleet/bin/reapply-tmux-attention.sh`
    (idempotently appends one `source-file` line to `~/.tmux.conf`). Warn the
@@ -618,6 +623,62 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    system setting the user decides on: show the command, never run a `sudo` change
    without an explicit yes. `fleet-doctor`'s `host` section (macOS only) reports
    each one.
+
+## MCP servers on demand
+
+Without `FLEET_MCP_CONFIG`, every spawned session starts **every** MCP server
+configured on the machine — the operator's own `~/.claude.json` servers, every
+enabled plugin's servers, and the claude.ai remote connectors. On the machine this
+was measured on that was ~2s of startup and 4-5 resident `node` children per
+session, for servers most worker tasks never call (issue #473's census: all MCP use
+in 30 days came from three servers, in one fleet). A host that runs 36 sessions
+pays that 36 times.
+
+The fleet ships a minimal worker set, **`conf/mcp-worker.json`**, installed with
+`conf/` and kept current by `/fleet-sync-install` like every other tracked file.
+Today it is the empty set:
+
+```json
+{"mcpServers":{}}
+```
+
+Point a fleet at it (in `fleet.conf`, or per fleet in
+`~/.config/claude-fleet/fleets/<session>/conf` — the key is `@scope=fleet`):
+
+```sh
+FLEET_MCP_CONFIG="$HOME/.claude/fleet/conf/mcp-worker.json"
+```
+
+`bin/fleet-claude.sh` then launches with `--strict-mcp-config
+--mcp-config=<file>`: only the servers in the file load, and the remote connectors
+are dropped too. Codex workers inherit the same value unless
+`FLEET_CODEX_MCP_CONFIG` is set; the Codex launcher disables every other
+configured server plus apps/connectors (`bin/fleet-codex-policy.py`).
+
+**A repo that needs more** — don't edit the shipped file (the next sync would
+overwrite it). Copy it next to that fleet's conf, add only what that repo's
+workers use, and point that fleet's `FLEET_MCP_CONFIG` at the copy. Common
+add-backs:
+
+```json
+{"mcpServers":{
+  "playwright": {"command": "npx", "args": ["@playwright/mcp@latest"]},
+  "mcp-image":  {"command": "npx", "args": ["-y", "mcp-image"]}
+}}
+```
+
+A browser-driven UI repo wants `playwright`; an image-generating one wants its
+image server. HTTP servers use `{"type": "http", "url": "…"}`. The other values:
+`none` is the same empty set without a file, and unset/empty keeps the old
+everything-loads behaviour. It takes effect on the next spawned session; a plain
+`claude` outside the fleet is untouched, so the full set stays one ordinary
+session away. A caller's explicit `--mcp-config` / `--strict-mcp-config` wins.
+
+To see the saving, count one worker's children before and after:
+
+```sh
+pgrep -lP "$(pgrep -P "$(tmux display -p -t <pane> '#{pane_pid}')" | head -1)"
+```
 
 ## Uninstall
 
