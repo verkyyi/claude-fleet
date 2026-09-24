@@ -43,11 +43,24 @@
 # untracked litter (`fleet.conf.bak*`), which neither blocks a fast-forward nor
 # means anything drifted.
 #
-# --json is the cross-machine half's producer (issue #635 part 2): it emits
-# hostname + head sha + behind count as one object, so whatever ships the fact to
-# the TokenLedger hub (or anything else) reads ONE source of truth rather than
-# re-deriving it. Nothing is uploaded from here — this script makes no network
-# call beyond its own `git fetch`.
+# --json is the cross-machine half's producer (issue #635 part 2; TokenLedger's
+# agent is the consumer, issue #644): it emits hostname + head sha + behind count
+# as one object, so whatever ships the fact to the hub (or anything else) reads
+# ONE source of truth rather than re-deriving it. Nothing is uploaded from here —
+# this script makes no network call beyond its own `git fetch`.
+#   The CONTRACT a consumer may hard-code — pinned by install-version-selftest.sh
+#   leg H, so a renamed key or a re-quoted number goes red HERE, not blank on a
+#   roster nobody is looking at:
+#     host head branch upstream   strings ("" when unknown)
+#     behind ahead                integers, or null when unknown — NEVER 0
+#     dirty fetched               booleans
+#     verdict                     CURRENT | BEHIND | AHEAD | DIVERGED | UNKNOWN
+#     follow_verdict              OK | STUCK | OFF | UNSEEN | UNKNOWN, or null
+#     error                       why behind is null — prose, for a tooltip
+#   `logins` and `follow` are sentences for a human: parse neither. A collector
+#   calls `--json --no-fetch --no-logins` (~0.2s, no network, no sudo); the
+#   fetching form (~1s, one branch, --timeout) belongs on a minute-scale tick
+#   at most. Render null as "unknown" — treating it as 0 re-creates #635.
 #
 # Other logins (issue #1069): on a shared machine the unit that goes stale is
 # not the machine but the LOGIN — each has its own ~/.claude/fleet and daemons,
