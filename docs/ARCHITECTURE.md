@@ -422,9 +422,10 @@ not a hand-maintained list**:
 > names its `FLEET_REPO` → union them.
 
 Open a fleet (session) → its repo enters the fetch loop automatically. Close it
-→ it drops out. An optional `FLEET_REPOS` pin covers the rare case of wanting a
-repo fetched with **no** session open (e.g. a repo you're watching but
-not actively working).
+→ it drops out. Every configured fleet conf — and each repo it hosts through its
+`repos/` overlays — is pinned too, which covers a repo fetched with **no** session
+open (e.g. a repo you're watching but not actively working). The old `FLEET_REPOS`
+pin list is superseded by those overlays and undocumented (#1101).
 
 ### Config + durable-state layout — one directory per fleet (issue #181)
 
@@ -462,9 +463,7 @@ registry entry** — no migration. Each further repo is an overlay at
 `fleets/<session>/repos/<slug>.conf` with the same three keys plus any per-repo
 override (`FLEET_MODEL`, `FLEET_AGENT`, `FLEET_MCP_CONFIG`, `FLEET_DEPLOY_*`); the
 fleet conf keeps the fleet-wide defaults. All hosted repos are equal — there is no
-main repo. `bin/fleet-repo.sh add|remove|list` manages them. (`add` refused unless
-`FLEET_MULTIREPO=1` until the two-repo end-to-end check landed — #795 removed the
-gate and the key.)
+main repo. `bin/fleet-repo.sh add|remove|list` manages them.
 
 `fleet-repo.sh fold <from> --into <sess> [--dry-run] [--wait]` (#796) retires a
 one-repo fleet into another. It is the hand fold of tokenledger done as one
@@ -923,7 +922,6 @@ state) + this fleet's `fleets/<slug>/` runtime cache.
 | `fleet-list.sh` | list fleets — `●` live / `○` down · name · repo · checkout, then `↳` each further repo the fleet hosts |
 
 `FLEET_CONF_DIR` (default `~/.config/claude-fleet`) is the knob.
-(`FLEET_HUB_CMD` is retired — the hub is dash-only and runs no command of yours.)
 
 ## Migration phases — all shipped ✅
 
@@ -937,9 +935,9 @@ fallback and is never written.
 **Phase 2 ✅ — per-fleet config + bootstrap.** `$FLEET_CONF_DIR/<id>.conf`
 overlay (`fleet_load_conf`); `fleet-up.sh` / `fleet-down.sh` / `fleet-list.sh`;
 session-spawn (`dash-new-session`/`dash-issue-session`) targets the current
-fleet's repo+checkout. (The `FLEET_HUB_CMD` hub-command override is retired.)
+fleet's repo+checkout.
 
-**Phase 3 ✅ — reach + robustness.** `FLEET_REPOS` + configured-conf **pin**
+**Phase 3 ✅ — reach + robustness.** Configured-conf **pin**
 (fetch repos with no live session); the janitor loops every fleet's checkout;
 collector temp files are PID-unique (safe if two collectors overlap).
 

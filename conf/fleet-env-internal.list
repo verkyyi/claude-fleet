@@ -1,0 +1,175 @@
+# conf/fleet-env-internal.list — FLEET_* names the scripts read that are NOT
+# settings (issue #1101). bin/conf-surface-selftest.sh holds bin/ to: every
+# ${FLEET_X:-…} a script reads is either a key in fleet.conf.example (any @tier,
+# including internal) or listed here — so an undocumented knob cannot quietly
+# join the config surface again. One name per line, then its kind and a reason:
+#   handoff  env one fleet process sets for another (never in a conf)
+#   seam     a test-injection point (fake command, fixed clock, sandbox path)
+#   path     a state/log/cache location override
+#   knob     a hand-override tuning value with a safe in-code default
+#   alias    a retired twin of a documented key, still read for old confs
+#   legacy / doc  see the reason
+# Adding a line here is a decision: a knob an operator would plausibly change
+# belongs in fleet.conf.example (with a tag line) instead.
+
+FLEET_ACCOUNT_LABEL                handoff: the Claude account label a launch was assigned
+FLEET_ACCOUNT_PHASE_WINDOW         knob: internal pacing/limit, safe in-code default (fleet-account.sh)
+FLEET_ACCOUNT_SELECTED             handoff: the account pick already ran for this launch
+FLEET_ACCOUNT_TARGET               handoff: the account a migrate/move relaunches on
+FLEET_ANSWER_POLL                  knob: internal pacing/limit, safe in-code default (fleet-answer.sh)
+FLEET_ANSWER_TIMEOUT               knob: internal pacing/limit, safe in-code default (fleet-answer.sh)
+FLEET_AWAIT_ARMED                  handoff: fleet-await re-exec guard (alarm armed once)
+FLEET_BASE_DEPS_LOG                path: state/log location override (fleet-deps-link.sh)
+FLEET_BASE_DEPS_RETRY_BASE         knob: internal pacing/limit, safe in-code default (fleet-deps-link.sh)
+FLEET_BASE_DEPS_RETRY_CAP          knob: internal pacing/limit, safe in-code default (fleet-deps-link.sh)
+FLEET_BASE_SYNC                    knob: per-repo 0 opts a repo out of base-branch sync
+FLEET_BASE_SYNC_LEASE_TTL          knob: internal pacing/limit, safe in-code default (fleet-base-sync.sh)
+FLEET_BG_SOCK                      handoff: the background peer socket a message is sent over
+FLEET_C                            path: the dash cache root ($TMPDIR/.claude-dash) — tests point it at a sandbox
+FLEET_CC_PROJECTS_DIR              path: state/log location override (fleet-migrate.sh)
+FLEET_CC_SESSIONS_DIR              path: state/log location override (fleet-lib.sh)
+FLEET_CLAUDE_COMM                  seam: the process name pane scans treat as Claude
+FLEET_CLEANUP_LEASE_TTL            knob: internal pacing/limit, safe in-code default (fleet-cleanup-daemon.sh)
+FLEET_CODEX_ACCOUNT                handoff: the codex account a launch was assigned
+FLEET_CODEX_MANAGED                handoff: marks a codex launch as fleet-managed
+FLEET_CODEX_PROFILE                handoff: an explicit codex profile for this launch
+FLEET_COLLECT_QUOTAWATCH           knob: auto|never — whether the collector runs the quotawatch phase inline
+FLEET_CONFIG_SHOW_INTERNAL         knob: fcfg_table lists @tier=internal rows too (#1101) — a per-call switch, not a conf setting
+FLEET_CONTEXT_LIMIT                alias: retired twin of FLEET_CTX_WINDOW (#1101) — still read, wins when set
+FLEET_DAEMON_IDLE_PROBE_BUDGET     knob: internal pacing/limit, safe in-code default (fleet-daemon-lib.sh)
+FLEET_DAEMON_ROOT                  path: state/log location override (fleet-daemon-lib.sh)
+FLEET_DAEMON_WEDGED_MULT           knob: internal pacing/limit, safe in-code default (fleet-daemon-lib.sh)
+FLEET_DASH_LAUNCHER                seam: an injectable command/path for tests (fleet-ui-refresh.sh)
+FLEET_DASH_MIGRATE_BIN             seam: an injectable command/path for tests (dash-migrate.sh)
+FLEET_DASH_POPUP_MAX_AGE           knob: internal pacing/limit, safe in-code default (dash-popup-wait.sh)
+FLEET_DASH_POPUP_POLL              knob: internal pacing/limit, safe in-code default (dash-popup-wait.sh)
+FLEET_DELIVERY_SIG                 handoff: the webhook delivery signature the bridge verifies
+FLEET_DEPLOY_TTL                   knob: internal pacing/limit, safe in-code default (tmux-pr-refresh.sh)
+FLEET_DEPS_LOGIN_SHELL             seam: the login shell the deps probe asks for PATH (fleet-deps-link.sh)
+FLEET_DEPS_NOW                     seam: a fixed clock for the deps retry backoff
+FLEET_DEPS_TOOL_DIRS               seam: extra node/tool dirs the deps linker searches (fleet-deps-link.sh)
+FLEET_DISKGUARD_SOURCE             seam: source fleet-diskguard.sh as a library without running it
+FLEET_DISK_COOLDOWN                knob: internal pacing/limit, safe in-code default (fleet-diskguard.sh)
+FLEET_DISK_TARGET                  path: the volume diskguard measures (default $TMPDIR)
+FLEET_DISPATCH_LEASE_DIR           path: state/log location override (fleet-cleanup-daemon.sh)
+FLEET_DISPATCH_LEASE_TTL           knob: internal pacing/limit, safe in-code default (fleet-dispatch.sh)
+FLEET_EMIT_DIR                     path: state/log location override (fleet-emit.sh)
+FLEET_EMIT_QUEUE_MAX               knob: internal pacing/limit, safe in-code default (fleet-emit.sh)
+FLEET_EMIT_TIMEOUT                 knob: internal pacing/limit, safe in-code default (fleet-emit.sh)
+FLEET_EPIC_BACKSTOP_BUSY_CMD       seam: a fake "is the box busy" probe for the EPIC backstop
+FLEET_FOLD_POLL                    knob: internal pacing/limit, safe in-code default (fleet-repo.sh)
+FLEET_FOLD_WAIT                    knob: internal pacing/limit, safe in-code default (fleet-repo.sh)
+FLEET_FSEVENTSD_WARN_CPU           knob: internal pacing/limit, safe in-code default (fleet-diskguard.sh)
+FLEET_HANDOFF_DIR                  path: state/log location override (fleet-handoff-file.sh)
+FLEET_HANDOFF_HARD_TIMEOUT         knob: internal pacing/limit, safe in-code default (fleet-handoff-cycle.sh)
+FLEET_HANDOFF_LOG_DIR              path: state/log location override (fleet-handoff-cycle.sh)
+FLEET_HANDOFF_MANIFEST             handoff: the handoff manifest a relaunch resumes from
+FLEET_HANDOFF_MARGIN_MIN           knob: internal pacing/limit, safe in-code default (fleet-handoff-invariant.sh)
+FLEET_HANDOFF_PICKUP_CMD           seam: an injectable command/path for tests (fleet-handoff-cycle.sh)
+FLEET_HANDOFF_POLL                 knob: internal pacing/limit, safe in-code default (fleet-handoff-cycle.sh)
+FLEET_HANDOFF_RETRY_AFTER          knob: internal pacing/limit, safe in-code default (fleet-handoff-cycle.sh)
+FLEET_HANDOFF_VERIFY_TIMEOUT       knob: internal pacing/limit, safe in-code default (fleet-handoff-cycle.sh)
+FLEET_HISTORY_LEDGER               path: state/log location override (fleet-history.sh)
+FLEET_HUB                          handoff: marks the hub pane (operator seat), set at hub spawn
+FLEET_HUB_VISITS_LOGDIR            path: state/log location override (fleet-hub-visits.sh)
+FLEET_HUB_VISITS_MAX               knob: internal pacing/limit, safe in-code default (fleet-hub-visits.sh)
+FLEET_ISSUES_REFRESH_CMD           seam: an injectable command/path for tests (fleet-webhook.sh)
+FLEET_ISSUE_BRIDGE_STATE_DIR       path: state/log location override (fleet-issue-bridge.sh)
+FLEET_LAND_LEASE_DIR               path: state/log location override (fleet-base-sync.sh)
+FLEET_LANG_RULE_RESUME             handoff: the one-language rule text injected into a resume
+FLEET_LANG_RULE_SEED               handoff: the one-language rule text injected into a seed
+FLEET_LATCH_RESET_SOURCE           seam: source the latch-reset hook as a library without running it
+FLEET_LAUNCHD_AGENTS_DIR           path: state/log location override (fleet-daemon-watch.sh)
+FLEET_LAUNCH_SESSION               handoff: the fleet session a launch is for (pool adapter check)
+FLEET_LEDGER_WATCH                 knob: 0 turns the ledger-watch daemon into a no-op
+FLEET_LEDGER_WATCH_LEASE_TTL       knob: internal pacing/limit, safe in-code default (fleet-ledger-watch.sh)
+FLEET_LIVE_DIR                     path: state/log location override (fleet-doctor.sh)
+FLEET_LIVE_ROOT                    path: state/log location override (fleet-daemon-lib.sh)
+FLEET_LOOP_AGENT                   handoff: which agent the /loop spec belongs to
+FLEET_LOOP_SPEC                    handoff: the /loop spec a relaunched agent restores
+FLEET_MIGRATE_BOOT_WAIT            knob: internal pacing/limit, safe in-code default (fleet-migrate.sh)
+FLEET_MIGRATE_CLOSE_WAIT           knob: internal pacing/limit, safe in-code default (fleet-migrate.sh)
+FLEET_MIGRATE_EXIT_WAIT            knob: internal pacing/limit, safe in-code default (fleet-migrate.sh)
+FLEET_MIGRATE_FAILOVER_PY          seam: an injectable command/path for tests (fleet-migrate.sh)
+FLEET_MIGRATE_LAUNCH               seam: an injectable command/path for tests (fleet-migrate.sh)
+FLEET_MIGRATION_LOCKED             handoff: a transition lock the caller already holds
+FLEET_MODEL_SWITCH_DIALOG          knob: internal pacing/limit, safe in-code default (fleet-model-switch.sh)
+FLEET_MODEL_SWITCH_SCROLL          knob: internal pacing/limit, safe in-code default (fleet-model-switch.sh)
+FLEET_MODEL_SWITCH_TRACE           knob: debug trace for the model switch
+FLEET_MODEL_SWITCH_VERIFY          knob: internal pacing/limit, safe in-code default (fleet-model-switch.sh)
+FLEET_MOVE_BOOT_WAIT               knob: internal pacing/limit, safe in-code default (fleet-move-remote.sh)
+FLEET_MOVE_CLOSE_WAIT              knob: internal pacing/limit, safe in-code default (fleet-move.sh)
+FLEET_MOVE_EXIT_WAIT               knob: internal pacing/limit, safe in-code default (fleet-move.sh)
+FLEET_MOVE_LAUNCH                  seam: an injectable command/path for tests (fleet-move-remote.sh)
+FLEET_MOVE_TERM_WAIT               knob: internal pacing/limit, safe in-code default (fleet-move.sh)
+FLEET_NEEDS_PLAIN_SECS             knob: internal pacing/limit, safe in-code default (tmux-spinner.sh)
+FLEET_NEEDS_RECONCILE_SECS         knob: internal pacing/limit, safe in-code default (tmux-spinner.sh)
+FLEET_NEEDS_STRIKE_TTL             knob: internal pacing/limit, safe in-code default (tmux-spinner.sh)
+FLEET_NEEDS_TRACE                  knob: debug trace for the needs-reconcile spinner
+FLEET_PEER_MODE                    handoff: the sender's permission mode stamped on a cross-session message
+FLEET_PICK_MODEL                   handoff: the model an account pick is evaluated for
+FLEET_PLUGIN_NAME                  knob: the Claude plugin namespace fleet commands resolve under
+FLEET_POOL_PROBE_TIMEOUT           knob: internal pacing/limit, safe in-code default (scratch-pool.sh)
+FLEET_POOL_SETTLE_MIN              knob: internal pacing/limit, safe in-code default (scratch-pool.sh)
+FLEET_POOL_STABLE_HITS             knob: internal pacing/limit, safe in-code default (scratch-pool.sh)
+FLEET_POOL_WARM_TIMEOUT            knob: internal pacing/limit, safe in-code default (scratch-pool.sh)
+FLEET_PR_REFRESH_CMD               seam: an injectable command/path for tests (fleet-webhook.sh)
+FLEET_QUOTAWATCH_DEADLINE          knob: internal pacing/limit, safe in-code default (fleet-quotawatch.sh)
+FLEET_QUOTAWATCH_FETCH_BUDGET      knob: internal pacing/limit, safe in-code default (fleet-quotawatch.sh)
+FLEET_QUOTAWATCH_KICK_BUDGET       knob: internal pacing/limit, safe in-code default (fleet-quotawatch.sh)
+FLEET_QUOTAWATCH_MODELCAP_STREAK   knob: internal pacing/limit, safe in-code default (fleet-doctor.sh)
+FLEET_QUOTAWATCH_POLICY_BUDGET     knob: internal pacing/limit, safe in-code default (fleet-quotawatch.sh)
+FLEET_QUOTAWATCH_PROBE_BUDGET      knob: internal pacing/limit, safe in-code default (fleet-doctor.sh)
+FLEET_QUOTAWATCH_SWEEP_BUDGET      knob: internal pacing/limit, safe in-code default (fleet-quotawatch.sh)
+FLEET_QUOTAWATCH_TICK_BUDGET       knob: internal pacing/limit, safe in-code default (fleet-quotawatch.sh)
+FLEET_QUOTAWATCH_TMUX_BUDGET       knob: internal pacing/limit, safe in-code default (fleet-quotawatch.sh)
+FLEET_REAP_MIN_AGE                 knob: internal pacing/limit, safe in-code default (dash-reap.sh)
+FLEET_REFUSE_MS                    knob: internal pacing/limit, safe in-code default (dash-issue-session.sh)
+FLEET_REPORT_FROM                  handoff: the from-name a child report is sent under
+FLEET_REPOS                        legacy: pre-#788 cache pin list, superseded by repos/ overlays; kept as the collector selftests' repo seam
+FLEET_RESTORE_LOG                  path: state/log location override (fleet-restore.sh)
+FLEET_RESTORE_REJECT_ALARM         knob: internal pacing/limit, safe in-code default (fleet-restore.sh)
+FLEET_RESTORE_SESS                 handoff: the session a restore targets
+FLEET_RESTORE_STALE_MAP_AGE        knob: internal pacing/limit, safe in-code default (fleet-restore.sh)
+FLEET_RESTORE_TMP_MAX_MIN          knob: internal pacing/limit, safe in-code default (fleet-restore.sh)
+FLEET_SESSION                      handoff: the fleet session a pane/popup belongs to, exported by the spawner
+FLEET_SESSION_END_REASON           handoff: why the SessionEnd hook fired (set by the stopper)
+FLEET_SIDEBAR_CURRENT              handoff: the window id the sidebar is rendering for
+FLEET_SKIP_GLOBAL_CONF             seam: fleet-lib skips the install fleet.conf (tests / isolated tools)
+FLEET_SPAWN_GUARD_SLEEP            knob: internal pacing/limit, safe in-code default (dash-enter.sh)
+FLEET_SPAWN_TAIL                   handoff: spawn only the seed tail (used by the handoff/resume path)
+FLEET_STATUS_CACHE                 path: status-bar render cache file
+FLEET_STATUS_DISK                  knob: 0 drops the disk segment from the status bar
+FLEET_STOP_CLOSE_WAIT              knob: internal pacing/limit, safe in-code default (fleet-worker-stop.sh)
+FLEET_STOP_EXIT_WAIT               knob: internal pacing/limit, safe in-code default (fleet-worker-stop.sh)
+FLEET_SYNC_LOGINS_DAEMON_DIR       seam: an injectable command/path for tests (fleet-sync-logins.sh)
+FLEET_SYNC_LOGINS_HOMES            seam: an injectable command/path for tests (fleet-sync-logins.sh)
+FLEET_SYNC_LOGINS_LAUNCHCTL        seam: an injectable command/path for tests (fleet-sync-logins.sh)
+FLEET_SYNC_LOGINS_ME               seam: an injectable command/path for tests (fleet-sync-logins.sh)
+FLEET_SYNC_LOGINS_PGREP            seam: an injectable command/path for tests (fleet-sync-logins.sh)
+FLEET_SYNC_LOGINS_SUDO             seam: an injectable command/path for tests (fleet-sync-logins.sh)
+FLEET_SYNC_LOGINS_TMP              seam: an injectable command/path for tests (fleet-sync-logins.sh)
+FLEET_TMUX_PREFIX                  handoff: the operator's tmux prefix, read by fleet-up into the keymap
+FLEET_TMUX_PREFIX2                 handoff: the operator's second tmux prefix, read by fleet-up into the keymap
+FLEET_TOKEN_PROBE                  seam: a fake token-probe command
+FLEET_TRANSFER_BOOT_WAIT           knob: internal pacing/limit, safe in-code default (fleet-transfer.sh)
+FLEET_TRANSFER_EXIT_WAIT           knob: internal pacing/limit, safe in-code default (fleet-transfer.sh)
+FLEET_TRANSFER_IDLE_WAIT           knob: internal pacing/limit, safe in-code default (fleet-transfer.sh)
+FLEET_TRASH_SWEEP_BUDGET           knob: internal pacing/limit, safe in-code default (fleet-cleanup-daemon.sh)
+FLEET_WEBHOOK_DEBOUNCE             knob: internal pacing/limit, safe in-code default (fleet-webhook.sh)
+FLEET_WEBHOOK_EVENTS               knob: the GitHub events the webhook forwarder subscribes to (fleet-webhook.sh)
+FLEET_WEBHOOK_RESCAN               knob: internal pacing/limit, safe in-code default (fleet-webhook.sh)
+FLEET_WEBHOOK_STATE_DIR            path: state/log location override (fleet-webhook.sh)
+FLEET_WEBHOOK_WAKE_SLACK           knob: internal pacing/limit, safe in-code default (fleet-webhook.sh)
+FLEET_WEBHOOK_WAKE_TICK            knob: internal pacing/limit, safe in-code default (fleet-webhook.sh)
+FLEET_WH_BACKOFF_BASE              knob: internal pacing/limit, safe in-code default (fleet-webhook.sh)
+FLEET_WH_BACKOFF_CAP               knob: internal pacing/limit, safe in-code default (fleet-webhook.sh)
+FLEET_WH_FORWARD_CMD               seam: an injectable command/path for tests (fleet-webhook.sh)
+FLEET_WH_HOOKS_LIST_CMD            seam: an injectable command/path for tests (fleet-webhook.sh)
+FLEET_WH_HOOK_DEL_CMD              seam: an injectable command/path for tests (fleet-webhook.sh)
+FLEET_WH_HOOK_HOST                 seam: the relay host a forwarder hook is recognised by (fleet-webhook.sh)
+FLEET_WH_NOW_FILE                  seam: a fixed clock for the webhook backoff
+FLEET_WH_SLEEP_CMD                 seam: an injectable command/path for tests (fleet-webhook.sh)
+FLEET_WORKER_PROMPT_FILE           alias: retired twin of FLEET_WORKER_PROMPT="@<path>" (#1101) — still read, wins when set
+FLEET_WORKTREE_SETUP_LOG           path: state/log location override (fleet-lib.sh)
+FLEET_X                            doc: the placeholder name in a comment, not a key

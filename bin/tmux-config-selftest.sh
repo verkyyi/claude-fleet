@@ -62,7 +62,7 @@ while IFS= read -r k; do
   [ -n "$(fcfg_tag "$k" label)" ] || fail "$k has no @label"
   case "$(fcfg_scope "$k")" in identity|global|fleet) : ;; *) fail "$k @scope invalid: $(fcfg_scope "$k")" ;; esac
   case "$(fcfg_edit  "$k")" in no|bool|int|enum|path|str|regex) : ;; *) fail "$k @edit invalid: $(fcfg_edit "$k")" ;; esac
-  case "$(fcfg_tier  "$k")" in common|advanced) : ;; *) fail "$k @tier invalid: $(fcfg_tier "$k")" ;; esac
+  case "$(fcfg_tier  "$k")" in common|advanced|internal) : ;; *) fail "$k @tier invalid: $(fcfg_tier "$k")" ;; esac
   ok
 done <<EOF
 $keys
@@ -100,8 +100,26 @@ while IFS="$FCFG_US" read -r k label group tier scope edit unit def; do
   eq "table unit  $k" "$unit"  "$(fcfg_unit  "$k")"
   eq "table def   $k" "$def"   "$(fcfg_default "$k")"
 done <<EOF
-$(fcfg_table)
+$(fcfg_table --all)
 EOF
+
+# --- INTERNAL TIER (issue #1101) ----------------------------------------------
+# The default table is the settings you might change: @tier=internal rows (pacing,
+# budgets, timeouts) are left out, and the panel face stays ≤ 120 rows so the list
+# cannot quietly grow back. `--all` / FLEET_CONFIG_SHOW_INTERNAL=1 is every key;
+# an internal key still resolves its default (callers' ${FLEET_X:-d} untouched).
+n_def=$(fcfg_table | grep -c .); n_all=$(fcfg_table --all | grep -c .)
+[ "$n_def" -le 120 ] || fail "default fcfg_table has $n_def rows — the panel face is capped at 120"; ok
+eq 'fcfg_table --all = every key' "$n_all" "$(printf '%s\n' "$keys" | grep -c .)"
+eq 'FLEET_CONFIG_SHOW_INTERNAL=1 = --all' "$(FLEET_CONFIG_SHOW_INTERNAL=1 fcfg_table | grep -c .)" "$n_all"
+fcfg_table | cut -d"$FCFG_US" -f4 | grep -qx internal && fail 'default fcfg_table lists an internal row'; ok
+eq 'tier FLEET_COLLECT_GIT_BUDGET' "$(fcfg_tier FLEET_COLLECT_GIT_BUDGET)" internal
+eq 'internal default still resolves' "$(fcfg_default FLEET_COLLECT_GIT_BUDGET)" 30
+fcfg_table | cut -d"$FCFG_US" -f1 | grep -qx FLEET_COLLECT_GIT_BUDGET && fail 'internal key in the default view'; ok
+# The two settings the charter pins must stay on the face.
+for k in FLEET_MAX_SESSIONS FLEET_GLOBAL_MAX_SESSIONS FLEET_REPO FLEET_MAIN FLEET_BASE_BRANCH; do
+  fcfg_table | cut -d"$FCFG_US" -f1 | grep -qx "$k" || fail "$k must stay in the default view"; ok
+done
 # the global daemon settings must be @scope=global (a per-fleet override is a
 # silent no-op — the modal must not show a `fleet` per-fleet tag for them).
 eq 'scope FLEET_GH_TTL'              "$(fcfg_scope FLEET_GH_TTL)"              global
@@ -331,6 +349,17 @@ SHIM="$WORK/shim"; mkdir -p "$SHIM"
 printf '#!/bin/sh\ncase "$1" in display-message) echo s2 ;; esac\nexit 0\n' > "$SHIM/tmux"; chmod +x "$SHIM/tmux"
 rows() { PATH="$SHIM:$PATH" bash "$BIN/tmux-config.sh" rows | sed 's/\x1b\[[0-9;]*m//g'; }
 ROWS1=$(rows)
+# The INTERNAL header is the modal's "show all" switch (issue #1101): collapsed,
+# no internal key is a row; expanded, every one is.
+printf '%s\n' "$ROWS1" | grep -q '^@@TOGGLE@@internal.*INTERNAL' || fail 'modal lacks the INTERNAL (show all) header'; ok
+printf '%s\n' "$ROWS1" | grep -q '^FLEET_COLLECT_GIT_BUDGET' && fail 'collapsed modal lists an internal key'; ok
+PATH="$SHIM:$PATH" bash "$BIN/tmux-config.sh" toggle-bucket @@TOGGLE@@internal
+R=$(rows)
+eq 'expanded INTERNAL lists every internal key' \
+  "$(printf '%s\n' "$R" | grep -cE '^FLEET_[A-Z0-9_]+'"$FCFG_US")" \
+  "$(fcfg_table --all | cut -d"$FCFG_US" -f1,4 | grep -c "${FCFG_US}internal$" | awk -v n="$(printf '%s\n' "$ROWS1" | grep -cE '^FLEET_[A-Z0-9_]+'"$FCFG_US")" '{print $1+n}')"
+PATH="$SHIM:$PATH" bash "$BIN/tmux-config.sh" toggle-bucket @@TOGGLE@@internal
+eq 'collapsing INTERNAL restores the rows' "$(rows)" "$ROWS1"
 
 mkdir -p "$FLEET_CONF_DIR/fleets/s2/repos"
 printf 'FLEET_REPO="o/b"\nFLEET_MAIN="/tmp/b"\nFLEET_MODEL="opus"\n' > "$FLEET_CONF_DIR/fleets/s2/repos/o-b.conf"

@@ -69,7 +69,7 @@ against 200k reads 197%** and a false `HANDOFF`. So the `context` line ends with
 | `limit=` | Where it came from | Trust |
 |---|---|---|
 | `stamp` | `@ctx_limit`, stamped by `conf/statusline.sh` from Claude Code's own `context_window_size` | authoritative — follows the model with no operator action |
-| `conf` | `FLEET_CONTEXT_LIMIT` in this fleet's conf | as good as whoever set it; goes stale when the model changes |
+| `conf` | `FLEET_CTX_WINDOW` in this fleet's conf (its retired twin `FLEET_CONTEXT_LIMIT` still wins when an old conf sets it) | as good as whoever set it; goes stale when the model changes |
 | `default` | the built-in 200000 | **suspect on any long-context model** — treat a `HANDOFF` here as unproven |
 
 When both sources exist and disagree, the `cross` line says which explanation
