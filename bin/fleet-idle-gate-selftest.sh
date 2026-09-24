@@ -42,8 +42,8 @@ gate() {
     _ "$LIB" "$1" "$2" "$WORK/gate.err"
 }
 # ticks <start> <count> [step] — a run of zero-socket ticks; prints e.g. WSSSSW.
-ticks() { local t="$1" n="$2" st="${3:-60}" i out=''
-  for i in $(seq 1 "$n"); do out="$out$(gate "$t" 0)"; t=$((t + st)); done; printf '%s' "$out"; }
+ticks() { local t="$1" n="$2" st="${3:-60}" out=''
+  while [ "$n" -gt 0 ]; do n=$((n - 1)); out="$out$(gate "$t" 0)"; t=$((t + st)); done; printf '%s' "$out"; }
 wake_at() { sh -c '. "$1"; _FLEET_NOW=$2; _FLEET_NOW_PID=$$; _FLEET_NOW_S0=; fleet_daemon_wake ""' _ "$LIB" "$1"; }
 reset() { rm -f "$G"/*.idle "$G/wake" "$WORK/gate.err"; }
 
