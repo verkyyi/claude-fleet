@@ -314,21 +314,32 @@ FLEET_GLOBAL_MAX_SESSIONS=8          # system-wide cap on live Claude sessions; 
 FLEET_AGENT="claude"                  # or "codex" — see the capability matrix below
 ```
 
-## Multiple fleets on one machine
+## One fleet per login
 
-A **fleet ≡ a tmux session**, starting with one repo. Run several at once — each
-with its own checkout — and they share one collector without clobbering each other
-(see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)). One fleet can also **host
-several repos** on one hub and one tmux server (`bin/fleet-repo.sh`, below).
+A **fleet ≡ a tmux session** on its own tmux server, and a login runs exactly
+**one** (issues #977/#979/#980). Every repo that login works on lives in that one
+fleet — add them with `bin/fleet-repo.sh add` — so moving between repos is the
+dash's grouped list, never a switch between fleets. There is no fleet picker.
+
+**Several fleets on one machine means several logins.** Each login has its own
+`~/.config/claude-fleet/`, its own fleet and its own tmux socket, so a crash in
+one never touches another. They share one collector without clobbering each other
+(see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)). A repo you want isolated
+from the rest goes to a second login. A login that ended up with two fleets folds
+one into the other with `bin/fleet-repo.sh fold` (below).
 
 ```sh
 cf                                         # already running? (re)attach fast. else: infer the repo + bring it up
-bin/fleet-up.sh you/webapp                 # clone-or-reuse ~/projects/webapp, open a 'webapp' session
-bin/fleet-up.sh you/infra ~/src/infra      # explicit checkout dir
+bin/fleet-up.sh you/webapp                 # first repo: clone-or-reuse ~/projects/webapp, bring the fleet up
+bin/fleet-repo.sh add you/infra ~/src/infra   # another repo in the same fleet (explicit checkout dir)
 bin/fleet-list.sh                          # ● live / ○ down · name · repo · checkout (+ ↳ each further repo)
-tmux attach -t webapp
-bin/fleet-down.sh webapp --purge           # kill session (+ drop its conf/cache); checkout stays
+bin/fleet-down.sh fleet --purge            # kill the fleet (+ drop its conf/cache); checkouts stay
 ```
+
+On SSH login, `shell/fleet-intro.sh` prints a short banner: this login's fleet,
+whether it is running, each repo it hosts with its live session count, and the
+`cf` line to get in. See [docs/INSTALL.md](docs/INSTALL.md) step 7 for the
+`~/.zshrc` block.
 
 **Several repos in one fleet.** `bin/fleet-repo.sh add you/infra [<checkout>]`
 registers a second repo with the fleet you are in (clone-or-reuse, like
