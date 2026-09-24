@@ -134,7 +134,7 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    that intercept the key/mouse in every pane *before* the app, so flag each: `F9`
    jumps back to this session's hub (`hub-zoom.sh`) — safe because the
    Claude TUI/shells don't use function keys; `MouseDown1Status` owns the clickable
-   footer ranges (hub/fleet/needs/account/usage); and **double-click-to-zoom**
+   footer ranges (`hub` / `attn` on the left, `usage` on the right); and **double-click-to-zoom**
    (`DoubleClick1Pane` → `resize-pane -Z -t=`, `DoubleClick1Border` on the divider)
    toggles a pane's fullscreen as the mouse counterpart to `prefix+g`/`F9` — its
    trade-off is losing tmux's default double-click = select-word (copy), so call it

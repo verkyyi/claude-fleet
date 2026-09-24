@@ -275,7 +275,8 @@ The full hub list also hides worker IDs and gives that space to task description
 Mouse mode is shipped **on** by the fleet baseline (see below), so the footer is
 clickable too: the **`⌂` hub icon** (leftmost) is a consistent **home** tap — it
 always lands on this fleet's hub, unzoomed
-(never a pane zoom, unlike `F9`) — the red **`● N` needs badge** cycles to the
+(never a pane zoom, unlike `F9`) — next to it your **login name** says whose
+fleet this is (not a tap target) — the red **`● N` needs badge** cycles to the
 next window that needs you, and the **usage stat** opens the consolidated
 **usage + account modal** (usage/limit detail on top, the account pool as a
 selectable body below). (Comment out `set -g mouse on` in
