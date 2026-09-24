@@ -1,13 +1,12 @@
 #!/bin/bash
 # usage-modal.sh — the consolidated Claude usage + subscription-account modal
 # (issue #289; merges the old usage-popup.sh + account-pick.sh into ONE surface).
-# Opened by clicking the footer usage stat (MouseDown1Status in
-# conf/tmux-attention.conf) — there is no keyboard path any more (prefix A/u
-# were dropped in the shortcut prune) and no ◉ account chip either (dropped: see
-# the "no fixed account" note below). It shows:
+# Opened by `prefix u` (conf/tmux-attention.conf). Its old door, a click on the
+# footer's 5h/7d usage stat, went with the stat (issue #1100); there is no ◉
+# account chip either (dropped: see the "no fixed account" note below). It shows:
 #   • usage DETAIL as the header — the local 5h/7d proxy + the official
 #     weekly/N-hour limit line (which limit + reset), read via usage-lib.sh — the
-#     SAME shared reader that colors the footer, so they can't drift;
+#     SAME shared reader the status bar's limit alarms use, so they can't drift;
 #   • the account POOL as the selectable body — Enter sets the account new
 #     sessions START FROM (via bin/fleet-claude.sh) AND moves this fleet's
 #     IDLE Claude windows onto it (`fleet-account.sh migrate --idle`: close +

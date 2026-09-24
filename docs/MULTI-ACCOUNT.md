@@ -103,9 +103,10 @@ API credits, **not** your subscription — the opposite of what this is for.)
 
 That's it — the next session you spawn launches under the active account.
 
-**Switch by hand.** Click the footer usage stat to open the usage + account
-modal — the account pool is the selectable body under the usage detail (issue
-#289 merged the old `prefix A` picker + `prefix u` popup into one). Enter sets
+**Switch by hand.** Press `prefix u` to open the usage + account modal — the
+account pool is the selectable body under the usage detail (issue #289 merged
+the old `prefix A` picker + `prefix u` popup into one; #1100 moved it back onto
+`prefix u` when the footer usage stat it was clicked from left the bar). Enter sets
 the account new sessions start from **and moves this fleet's idle Claude
 windows onto it** (`fleet-account.sh migrate --idle`, issue #512: close +
 `--resume` in a new window, so each resumes its own transcript under the new
@@ -206,13 +207,13 @@ until its bench ends (or you clear it with `fleet-account.sh clear <label>`). If
   subscription OAuth token fed through it just 401-loops, while the *same* token
   works via `CLAUDE_CODE_OAUTH_TOKEN`; env vars are never re-read mid-session.
   So both switch paths go through `fleet-account.sh migrate` (issue #512, below):
-  the manual picker (the footer usage stat → usage + account modal)
+  the manual picker (`prefix u` → usage + account modal)
   moves idle windows (`--idle`), and the automatic limit-hit rotation moves every
   window still on the benched account (`--limited`) — mid-turn ones included,
   their turn is already dead — with a nudge so each re-orients and continues.
   Sessions mid-turn on *other* accounts, and `/loop` windows, keep their
   account until their next natural restart.
-- ⚠️ **The usage proxy (`5h/7d` in the status bar) is aggregate**, summed across
+- ⚠️ **The usage proxy (`5h/7d` in the usage modal) is aggregate**, summed across
   *all* accounts' transcripts — it can't attribute past tokens to an account
   after the fact. Treat it as total fleet consumption, not per-subscription.
 - ⚠️ **Hooks/settings are shared** across accounts (one `~/.claude`). That's the

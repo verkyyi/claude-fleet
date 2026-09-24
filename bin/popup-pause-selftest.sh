@@ -71,16 +71,16 @@ grep -Eq '\-ge "\$MAX_AGE"' "$WAIT" \
 
 # --- PRODUCER (static): every modal popup is epoch-stamped + closed ------------
 # Count in CODE lines only (skip the comment block, which names the flag in prose).
-# One epoch stamp and one clear per display-popup surface; there are 4 (prefix
-# b/c/? + the usage mouse popup — the acct one went with the ◉ account chip, #521;
-# the other-fleet ● jump with fleet switching, #980; the fleet-name repo picker
-# with the picker itself, #1034) — and the mouse one is bound TWICE, the
-# status-bar tap living in the task sidebar's key table too (#896), so 5 in code.
+# One epoch stamp and one clear per display-popup surface; there are 4, all
+# prefix binds (b/c/u/?) — the acct one went with the ◉ account chip, #521; the
+# other-fleet ● jump with fleet switching, #980; the fleet-name repo picker with
+# the picker itself, #1034; and the status-bar usage tap (bound twice, root +
+# the task sidebar's table) with the 5h/7d stat, #1100, its modal now prefix u.
 # The clears number one MORE than the popups: the client-detached hook also sets
 # 0 (#431).
 code_only() { grep -v '^[[:space:]]*#' "$CONF"; }
 npop=$(code_only | grep -c 'display-popup')
-[ "$npop" -eq 5 ] || fail "expected 5 display-popup binds in conf code (4 surfaces, the mouse one also in fleet-sidebar), found $npop"
+[ "$npop" -eq 4 ] || fail "expected 4 display-popup binds in conf code (prefix b/c/u/?), found $npop"
 nstamp=$(code_only | grep -c '@popup_open \$(date +%s)')
 nclose=$(code_only | grep -c '@popup_open 0')
 [ "$nstamp" -eq "$npop" ] \
@@ -121,12 +121,12 @@ tmux new-session -d -s t -x 200 -y 50 </dev/null >/dev/null 2>&1 \
 # --- PRODUCER (live): the conf parses AND registers the flagged binds ---------
 tmux source-file "$CONF" 2>"$WORK/src.err" \
   || { printf '%s\n' "$(cat "$WORK/src.err" 2>/dev/null)" >&2; fail "conf/tmux-attention.conf failed to source (syntax error in the popup-bind wrap)"; }
-for k in b c '?'; do
+for k in b c u '?'; do
   tmux list-keys -T prefix 2>/dev/null | grep -F -- " $k " | grep -q 'date +%s' \
     || fail "prefix '$k' bind lost its @popup_open epoch stamp after sourcing (issue #431)"
 done
-tmux list-keys -T root 2>/dev/null | grep -i 'MouseDown1Status' | grep -q 'date +%s' \
-  || fail "MouseDown1Status mouse popups lost their @popup_open epoch stamp after sourcing (issue #431)"
+# The footer no longer opens a popup: the usage-stat click range went with the
+# stat (issue #1100) and the modal is `prefix u`, stamped in the loop above.
 
 # --- PRODUCER (live): the client-detached hook is installed AND resets on detach
 tmux show-hooks -g 2>/dev/null | grep -i 'client-detached' | grep -q '@popup_open 0' \

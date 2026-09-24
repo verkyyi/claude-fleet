@@ -1,6 +1,6 @@
 #!/bin/bash
 # tmux-status.sh — right side of the tmux status bar.
-# Shows: [● container] │ CPU 23% │ MEM 1.2G/4G │ DSK 34G │ <usage stat>
+# Shows: [● container] │ CPU 23% │ MEM 1.2G/4G │ DSK 34G
 #        [│ ⚠ quota stale 47m | ⚠ quota blind 6m] [│ ⚠ quota via banner] [│ ⚠ dash stale 12m ↻2m | ↻ dash kicked 2m]
 #        [│ ⚠ daemon stale cleanup,dispatch+2 ↻3m | ↻ daemon kicked 3m]
 # Color coding: CPU green <50%, yellow 50-80%, red >80%;
@@ -201,29 +201,12 @@ status_machine_cached() {
 machine=""
 status_machine_cached
 
-# --- Claude token consumption (5h/7d proxy, written by the dash collector) ---
-# The official weekly/N-hour limit % (scraped into $C/ratelimit) is no longer a
-# separate always-on footer segment — that text was noise on the status bar
-# (issue #239). Instead it COLORS this one usage stat: indigo = ok, yellow =
-# approaching the limit (≥FLEET_USAGE_WARN_PCT), red = at/near it
-# (≥FLEET_USAGE_CRIT_PCT). The full story — which limit, reset time, which
-# account — lives in the usage popup, opened on demand: click this stat
-# (range=user|usage) or press prefix+u. Severity math + freshness gate are
-# shared with the popup via usage-lib.sh so they can't drift.
-INDIGO="#[fg=#bb9af7]"
-usage=$(fleet_usage_proxy)
-usage_seg=""
-if [ -n "$usage" ]; then
-    rl_pct="$(fleet_usage_ratelimit)"; rl_pct="${rl_pct%%	*}"   # field 1, no `cut`
-    case "$(fleet_usage_severity "$rl_pct")" in
-        crit) usage_col="$RED" ;;
-        warn) usage_col="$YELLOW" ;;
-        *)    usage_col="$INDIGO" ;;
-    esac
-    # Clickable range → the usage popup (a MouseDown1Status bind opens it; same
-    # target as prefix+u). Emitted only when a stat exists, so no dead click.
-    usage_seg="${DIM}│ #[range=user|usage]${usage_col}${usage} #[norange]"
-fi
+# --- No usage stat (issue #1100). The `5h … · 7d …` token-proxy figure used to
+# sit here, colored by the scraped limit % — but the signal was the color, the
+# digits were noise on a bar read dozens of times a day, and the limit ALARMS
+# below (quota stale / blind / banner-only) are what actually carry the bad news.
+# The usage + account modal it opened on click moved to `prefix u`
+# (conf/tmux-attention.conf); usage-lib.sh stays, the modal still reads it. ---
 
 # --- quota-watch staleness (issue #551): the ONE always-on alarm on the bar.
 # The pre-emptive rotation's cache (account.quota.ts) is restamped by every
@@ -323,9 +306,9 @@ fi
 # Since #513 that pointer is RE-PICKED on every spawn from ccquota headroom, so
 # there is no fixed or default account to show — the chip was a stale snapshot
 # of a moving target. The truth is per window (@cc_account, shown by the dash and
-# `fleet-account.sh whoami`); the usage + account modal it opened stays one tap
-# away on the usage stat below. ---
+# `fleet-account.sh whoami`); the usage + account modal it opened stays one key
+# away on `prefix u`. ---
 
 # --- Output --- (claude count + hostname dropped — the window list and dash cover those;
 # name your tmux session after your fleet so status-left carries the title)
-printf '%s%s%s%s%s' "$machine" "$usage_seg" "$quota_seg" "$collect_seg" "$daemon_seg"
+printf '%s%s%s%s' "$machine" "$quota_seg" "$collect_seg" "$daemon_seg"

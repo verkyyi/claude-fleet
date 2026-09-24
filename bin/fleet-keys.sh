@@ -144,6 +144,7 @@ print_sheet() {
   key "prefix Space" "task picker — the task sidebar's list as a popup, for when the sidebar is hidden (narrow screen) or off: ↵ switch · type a name + $(dg scratch) (or ↵ on no match) = new scratch session · F9 / [⌂ hub] = the hub · esc / [✕ close]$(dn scratch)"
   key "prefix b" "backlog modal — GitHub issues; enter spawns the issue's session"
   key "prefix c" "config modal — view/edit FLEET_* across layers"
+  key "prefix u" "usage + account modal — 5h/7d usage and limit detail, and (with an account pool) pick the account new sessions use"
   key "prefix ?" "this cheatsheet"
   key "F9" "(no prefix) jump back to this session's hub — from a task showing the task bar, the first press focuses the bar (like prefix E) and a second press goes to the hub; the ⌂ tap does the same. A task with NO sidebar on screen opens the task picker instead (prefix Space), F9 in it goes on to the hub (FLEET_HOME_SIDEBAR_FIRST=0 turns both off)"
   key "click ● N" "the needs badge (bottom-left) cycles to the next 'needs' window"

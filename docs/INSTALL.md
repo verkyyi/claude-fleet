@@ -139,12 +139,12 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    spawn via the dash/backlog and navigate by name, so both defaults are rarely
    needed — but call them out. The shortcut prune (#289) left `prefix+n` and
    `prefix+r` bound back to tmux's stock `next-window` / `refresh-client`, so they
-   clobber nothing; the usage/account controls live on the footer clicks (the
-   usage stat → `bin/usage-modal.sh`), not the keyboard. There are also **root-table** binds (`bind -n …`)
+   clobber nothing; `prefix+u` opens the usage/account modal (`bin/usage-modal.sh`)
+   — a free key in stock tmux. There are also **root-table** binds (`bind -n …`)
    that intercept the key/mouse in every pane *before* the app, so flag each: `F9`
    jumps back to this session's hub (`hub-zoom.sh`) — safe because the
    Claude TUI/shells don't use function keys; `MouseDown1Status` owns the clickable
-   footer ranges (`hub` / `attn` on the left, `usage` on the right); and **double-click-to-zoom**
+   footer ranges (`hub` / `attn`, both on the left); and **double-click-to-zoom**
    (`DoubleClick1Pane` → `resize-pane -Z -t=`, `DoubleClick1Border` on the divider)
    toggles a pane's fullscreen as the mouse counterpart to `prefix+g`/`F9` — its
    trade-off is losing tmux's default double-click = select-word (copy), so call it

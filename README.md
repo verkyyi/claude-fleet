@@ -233,13 +233,14 @@ line, which exits silently without it.)
 | `prefix Space` | task picker — the sidebar's task list as a popup, for when the sidebar is hidden (a window under ~111 columns) or off: ↵ switches, a typed name + `⌃s` (or ↵ on no match) starts a scratch session, F9 / `[⌂ hub]` goes on to the hub. `prefix E`, `F9` and the ⌂ tap open it too in a task with no sidebar on screen |
 | `prefix b` | backlog modal — near-fullscreen popup; enter spawns the issue session |
 | `prefix c` | config modal — view/edit `FLEET_*` by friendly label, grouped + collapsible; pacing/budget/timeout knobs live under a collapsed INTERNAL "show all" header (#1101); identity keys locked; `⌃s` toggles where edits land — this fleet ⇄ one hosted repo (#1102), `?` reveals raw keys, enter edits |
+| `prefix u` | usage + account modal — local 5h/7d usage and the official limit line on top, the account pool (when configured) as a selectable body below; enter picks the account new sessions start from |
 | `prefix ?` | keymap cheatsheet — a popup listing **every** fleet shortcut (tmux prefix · dash · backlog · config modal), each with a one-line description; `q`/`esc` closes it (also reachable via `?` in the dash and the backlog) |
 | `F9` | (no prefix) jump back to this session's hub — in a task, the first press lands on the sidebar (or, with no sidebar on screen, the task picker) and the second goes to the hub (`FLEET_HOME_SIDEBAR_FIRST=0` turns that off) |
 
 The shortcut surface was pruned in #289 (one keyboard home per action): raw
 scratch sessions live on the dash's `⌃s`, and the usage / account controls (once
-`prefix u` / `prefix A`) merged into one modal reachable by clicking the footer
-usage stat. `prefix n` / `prefix r` are back to tmux's
+`prefix u` / `prefix A`) merged into one modal — back on `prefix u` since the
+footer usage stat it was clicked from left the bar (#1100). `prefix n` / `prefix r` are back to tmux's
 stock `next-window` / `refresh-client`.
 
 The dash (`prefix g`) and backlog (`prefix b`) each list their own fzf binds
@@ -277,7 +278,9 @@ clickable too: the **`⌂` hub icon** (leftmost) is a consistent **home** tap �
 always lands on this fleet's hub, unzoomed
 (never a pane zoom, unlike `F9`) — next to it your **login name** says whose
 fleet this is (not a tap target) — the red **`● N` needs badge** cycles to the
-next window that needs you, and the **usage stat** opens the consolidated
+next window that needs you. The right side carries machine vitals plus the
+limit **alarms** (`⚠ quota stale` / `⚠ quota blind` / `⚠ quota via banner`,
+daemon/dash staleness) — no usage figures; `prefix u` opens the consolidated
 **usage + account modal** (usage/limit detail on top, the account pool as a
 selectable body below). (Comment out `set -g mouse on` in
 `conf/tmux-attention.conf` to keep native select-to-copy.)
@@ -484,7 +487,7 @@ are in [docs/MULTI-ACCOUNT.md](docs/MULTI-ACCOUNT.md#setup). Tokens stay outside
 the repository. Account choice is per launch through `CLAUDE_CODE_OAUTH_TOKEN`;
 settings, hooks and transcripts continue to use the shared Claude configuration.
 
-Click the footer usage stat to open the **usage + account modal**. Selecting an
+Press `prefix u` to open the **usage + account modal**. Selecting an
 account changes the starting choice and migrates this fleet's idle Claude
 windows; working and looping windows are left alone by this manual path. A new
 spawn can reselect an account using the quota policy, so the selection is not a
@@ -720,8 +723,8 @@ watching.
   accounts, not a subscription quota or bill. Weights: output×1 + input×0.25 +
   cache-write×0.25 + cache-read×0.02 over rolling 5h/7d windows. With TokenLedger
   configured, the account pool additionally uses **account-wide quota readings**
-  from ccquota; these are separate from that local estimate. Click the footer
-  usage stat for usage/limit details and the account pool.
+  from ccquota; these are separate from that local estimate. `prefix u` opens
+  the usage/limit details and the account pool.
 - The classifier spends real (haiku-sized, change-gated) tokens. It is
   optional; everything else works without it.
 - Daemon units ship for both macOS launchd (`launchd/`) and Linux systemd
