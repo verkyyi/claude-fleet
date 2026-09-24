@@ -22,7 +22,7 @@ import unicodedata
 
 BIN = Path(__file__).absolute().parent  # preserve the selftest shadow root
 US = "\x1f"
-VIEW_VERSION = "14"  # #1032: a tap selects a repo heading, a 2nd tap opens ⌃n there; replace live v13 views once
+VIEW_VERSION = "15"  # #1097: the input line has a cursor; replace live v14 views once
 # ↑↓ follow (issue #822): an arrow moves the highlight at once and switches to
 # it only after this much quiet. A held key on a slow link is one switch, not
 # one per row, and a row passed over is never selected — so the wake hook's
@@ -261,9 +261,10 @@ def open_help(screen, env):
     as the hub's `?` opens its own. Blocks until q/Esc closes it, which is the
     pause: nothing repaints under the popup. Leave curses meanwhile for the same
     reason new_task does — with no client the sheet runs INLINE in this pane.
-    Sized to the sheet (issue #963): title + blank + six rows + the border."""
+    Sized to the sheet (issue #963): title + blank + seven rows + the border,
+    as wide as the editing row (#1097)."""
     curses.endwin()
-    subprocess.call(["bash", str(BIN / "dash-popup.sh"), "-w", "46", "-h", "10", "--",
+    subprocess.call(["bash", str(BIN / "dash-popup.sh"), "-w", "50", "-h", "11", "--",
                      "bash", str(BIN / "fleet-keys.sh"), "--context", "sidebar"], env=env)
     screen.clear()
 
@@ -289,16 +290,182 @@ def open_menu(session, wid, env):
                          stderr=subprocess.DEVNULL)
 
 
+def cells(char):
+    return 2 if unicodedata.east_asian_width(char) in "WF" else 1
+
+
 def tail(text, width):
-    """The END of the typed name in `width` cells: the cursor end stays visible."""
+    """The END of `text` in `width` cells."""
     out, used = [], 0
     for char in reversed(text):
-        size = 2 if unicodedata.east_asian_width(char) in "WF" else 1
-        if used + size > width:
+        if used + cells(char) > width:
             break
         out.append(char)
-        used += size
+        used += cells(char)
     return "".join(reversed(out))
+
+
+def head(text, width):
+    """The START of `text` in `width` cells."""
+    out, used = [], 0
+    for char in text:
+        if used + cells(char) > width:
+            break
+        out.append(char)
+        used += cells(char)
+    return "".join(out)
+
+
+def wordy(char):
+    # A word is a run of letters/digits — CJK included — or `_`, as Claude's
+    # prompt and readline's ⌥b/⌥f see one; spaces and punctuation separate.
+    return char.isalnum() or char == "_"
+
+
+class Line:
+    """The input line as a line editor (issue #1097): the text and a cursor on it.
+    Typing, rename and the typed-name spawn all edit through this, so ←→ Home End
+    ⌥←→ ⌃a ⌃e ⌃w ⌃k ⌃u behave the same in each. The keys' double meaning (an
+    EMPTY line keeps ←→ fold and Home/End first/last row) is the caller's."""
+
+    def __init__(self, text=""):
+        self.set(text)
+
+    def set(self, text):
+        self.text, self.pos = text, len(text)
+
+    def clear(self):
+        self.set("")
+
+    def insert(self, chars):
+        self.text = self.text[:self.pos] + chars + self.text[self.pos:]
+        self.pos += len(chars)
+
+    def backspace(self):
+        if self.pos:
+            self.text = self.text[:self.pos - 1] + self.text[self.pos:]
+            self.pos -= 1
+
+    def delete(self):
+        self.text = self.text[:self.pos] + self.text[self.pos + 1:]
+
+    def left(self):
+        self.pos = max(0, self.pos - 1)
+
+    def right(self):
+        self.pos = min(len(self.text), self.pos + 1)
+
+    def home(self):
+        self.pos = 0
+
+    def end(self):
+        self.pos = len(self.text)
+
+    def _word_start(self):
+        at = self.pos
+        while at and not wordy(self.text[at - 1]):
+            at -= 1
+        while at and wordy(self.text[at - 1]):
+            at -= 1
+        return at
+
+    def word_left(self):
+        self.pos = self._word_start()
+
+    def word_right(self):
+        at, size = self.pos, len(self.text)
+        while at < size and not wordy(self.text[at]):
+            at += 1
+        while at < size and wordy(self.text[at]):
+            at += 1
+        self.pos = at
+
+    def kill_word(self):
+        at = self._word_start()
+        self.text, self.pos = self.text[:at] + self.text[self.pos:], at
+
+    def kill_eol(self):
+        self.text = self.text[:self.pos]
+
+    def view(self, width, cursor="▏"):
+        """`width` cells of the line around the cursor, `cursor` drawn at it.
+        Wide (CJK) characters take two cells. Short text shows whole; a long one
+        keeps the cursor in view, text after it getting at least half the room."""
+        room = max(0, width - len(cursor))
+        before, after = self.text[:self.pos], self.text[self.pos:]
+        right = head(after, max(room // 2, room - sum(map(cells, before))))
+        return tail(before, room - sum(map(cells, right))) + cursor + right
+
+
+# ⌥←/⌥→ read off the raw escape sequence (issue #1097): the pseudo-keys
+# escape_word returns for them, next to curses' own codes.
+WORD_LEFT, WORD_RIGHT = -2, -3
+
+
+def escape_word(screen):
+    """After an ESC byte: ⌥← / ⌥→ as the terminal spelled them, else the ESC.
+    They reach this pane through the fleet-sidebar table's `Any` as whatever tmux
+    writes for M-b / M-f / M-Left / M-Right (⌃← / ⌃→ too): ESC b, ESC f,
+    ESC[1;3D … — which keypad parsing only knows when the terminfo does. A lone
+    Escape (the Escape bind's) has nothing behind it and stays 27; an unknown
+    CSI sequence is swallowed (-1) rather than typed as `[1;2A`."""
+    screen.nodelay(True)
+    try:
+        nxt = screen.getch()
+        if nxt in (ord("b"), ord("f")):
+            return WORD_LEFT if nxt == ord("b") else WORD_RIGHT
+        if nxt != ord("["):
+            if nxt != -1:
+                curses.ungetch(nxt)
+            return 27
+        seq = ""
+        while len(seq) < 8:
+            nxt = screen.getch()
+            if not 0 <= nxt < 128:
+                break
+            seq += chr(nxt)
+            if chr(nxt).isalpha() or seq.endswith("~"):
+                break
+        if re.fullmatch(r"1;[3579][CD]", seq):
+            return WORD_LEFT if seq.endswith("D") else WORD_RIGHT
+        return -1
+    finally:
+        screen.nodelay(False)
+
+
+def edit_of(key, text):
+    """The Line method `key` runs on the input line (issue #1097), or "" when the
+    key is the list's. The ⌃ bytes are dash-keymap.sh --panel sidebar `bol`
+    `eol` `kill_word` `kill_eol` (their ⌥ fallbacks are rewritten to these bytes
+    by the conf); ⌃u clears, as before. ←→ and Home/End edit only while the line
+    holds text: on an EMPTY line they stay the list's fold and first/last row —
+    the hub's rule (dash-fold-toggle.sh), shared on purpose. ↑↓ never edit."""
+    if key == 1:
+        return "home"
+    if key == 5:
+        return "end"
+    if key == 23:
+        return "kill_word"
+    if key == 11:
+        return "kill_eol"
+    if key == 21:
+        return "clear"
+    if key in (curses.KEY_BACKSPACE, 8, 127):
+        return "backspace"
+    if key == curses.KEY_DC:
+        return "delete"
+    try:
+        name = curses.keyname(key) if key > 255 else b""
+    except (curses.error, ValueError):
+        name = b""
+    if key == WORD_LEFT or name in (b"kLFT3", b"kLFT5"):
+        return "word_left"
+    if key == WORD_RIGHT or name in (b"kRIT3", b"kRIT5"):
+        return "word_right"
+    if not text:
+        return ""
+    return {curses.KEY_LEFT: "left", curses.KEY_RIGHT: "right",
+            curses.KEY_HOME: "home", curses.KEY_END: "end"}.get(key, "")
 
 
 def typed(char):
@@ -467,7 +634,7 @@ def ui(screen, session, worker, lock):
     # The input line (issue #896). Keys arrive as BYTES through the fleet-sidebar
     # table's Any bind; decode them here, so a CJK name survives whatever locale
     # tmux started this pane under.
-    text, toast, toast_until, spawning = "", "", 0.0, None
+    line, toast, toast_until, spawning = Line(), "", 0.0, None
     # A press on the already-highlighted row arms the menu; its RELEASE opens it
     # (issue #898). Opening on the press would lose the menu at once: tmux closes
     # a menu on a button release outside it, and that release is this tap's own.
@@ -514,8 +681,8 @@ def ui(screen, session, worker, lock):
             error = spawning.log.read().strip().splitlines()
             spawning.log.close()
             if spawning.returncode == 0:
-                text = ""
-                mark_input(pane, text)
+                line.clear()
+                mark_input(pane, line.text)
                 leave_navigation(session)
             else:
                 # Keep the name: a cap refusal is retried once a slot frees.
@@ -634,13 +801,14 @@ def ui(screen, session, worker, lock):
         # Hide is keyboard-only (prefix e): no tap here hides anything (#821).
         room = max(0, width - 3)
         if renaming is not None:
-            put(height - 1, "改名› " + tail(text, max(0, room - 5)) + "▏", curses.A_BOLD)
+            put(height - 1, "改名› " + line.view(max(0, room - 4)), curses.A_BOLD)
         elif spawning is not None:
-            put(height - 1, "› " + tail(text, max(0, room - 2)) + " …", curses.A_DIM)
+            put(height - 1, "› " + line.view(max(0, room - 2), "") + " …", curses.A_DIM)
         elif toast and time.monotonic() < toast_until:
             put(height - 1, "› " + toast, curses.color_pair(7))
-        elif text:
-            put(height - 1, "› " + tail(text, room - 1) + ("▏" if navigation else ""),
+        elif line.text:
+            put(height - 1, "› " + line.view(room if navigation else room - 1,
+                                             "▏" if navigation else ""),
                 curses.A_BOLD if navigation else curses.A_DIM)
         else:
             put(height - 1, "› " + placeholder(selected) if navigation else "›", curses.A_DIM)
@@ -663,28 +831,34 @@ def ui(screen, session, worker, lock):
             tmux("set-option", "-up", "-t", pane, "@sidebar_rename")
             if wid.startswith("@") and spawning is None:
                 follow_at, renaming, toast = None, wid, ""
-                text = fields(wid, "#{window_name}")[0]
+                line.set(fields(wid, "#{window_name}")[0])
                 mark_input(pane, "1")
             continue
-        if key == 21:
-            # ⌃u clears the line (fix a pre-filled name without holding backspace).
+        if key == 27:
+            key = escape_word(screen)
+        op = edit_of(key, line.text)
+        if op:
+            # The input line's own keys (issue #1097). A spawn in flight owns
+            # the name, so they wait like typing does.
             if spawning is None:
-                text, toast = "", ""
-                mark_input(pane, renaming or text)
+                was, toast = line.text, ""
+                getattr(line, op)()
+                if bool(was) != bool(line.text):
+                    mark_input(pane, renaming or line.text)
             continue
         # A typed key is a byte; a multi-byte one (。 ？, CJK) completes over
         # several getch calls, and only the last one yields its character.
         byte = 0 <= key < 256 and key not in (8, 9, 10, 13, 14, 15, 27, 127)
         chars = "".join(c for c in decoder.decode(bytes([key])) if typed(c)) if byte else ""
         press = KEY_ALIASES.get(chars, chars)
-        if press == "." and not text and renaming is None and spawning is None and acts(selected):
+        if press == "." and not line.text and renaming is None and spawning is None and acts(selected):
             # `.` on an EMPTY line is the row menu (dash-keymap.sh --panel sidebar
             # `menu`); inside a name it types. The follow is dropped: the menu
             # acts on the highlighted row and the window in view stays put.
             follow_at = None
             open_menu(session, selected, env)
             continue
-        if press == "?" and not text and renaming is None and spawning is None:
+        if press == "?" and not line.text and renaming is None and spawning is None:
             # `?` on an EMPTY line is the sidebar's key sheet (dash-keymap.sh
             # --panel sidebar `help`, issue #948); inside a name it types.
             follow_at = None
@@ -695,17 +869,13 @@ def ui(screen, session, worker, lock):
             # A (piece of a) typed character. Every letter types — j k q n
             # included; movement is ↑↓ only, hide is prefix e.
             if chars and spawning is None:
-                was, text, toast = text, text + chars, ""
+                was, toast = line.text, ""
+                line.insert(chars)
                 if not was:
-                    mark_input(pane, text)
+                    mark_input(pane, line.text)
             continue
         decoder.reset()
-        if key in (curses.KEY_BACKSPACE, 8, 127):
-            if text and spawning is None:
-                text, toast = text[:-1], ""
-                if not text:
-                    mark_input(pane, renaming or text)
-        elif key == curses.KEY_UP and ids:
+        if key == curses.KEY_UP and ids:
             selected = ids[max(0, index - 1)]
             follow_at = time.monotonic() + FOLLOW_SECS
         elif key == curses.KEY_DOWN and ids:
@@ -719,20 +889,22 @@ def ui(screen, session, worker, lock):
             follow_at = time.monotonic() + FOLLOW_SECS
         elif key in (10, 13, curses.KEY_ENTER) and renaming is not None:
             # An empty name cancels, as in the hub (dash-rename.sh decides).
-            run(["bash", str(BIN / "dash-rename.sh"), "--wid", renaming, text.strip()], env=env)
-            renaming, text = None, ""
-            mark_input(pane, text)
+            run(["bash", str(BIN / "dash-rename.sh"), "--wid", renaming, line.text.strip()], env=env)
+            renaming = None
+            line.clear()
+            mark_input(pane, line.text)
             refresh_at = 0
         elif key == 27 and renaming is not None:
-            renaming, text = None, ""
-            mark_input(pane, text)
-        elif key in (10, 13, curses.KEY_ENTER) and text.strip():
+            renaming = None
+            line.clear()
+            mark_input(pane, line.text)
+        elif key in (10, 13, curses.KEY_ENTER) and line.text.strip():
             # A typed name: start its scratch session (the bind kept the
             # keyboard here while @sidebar_input was set). One spawn at a time.
             follow_at = None
             if spawning is None:
                 toast = ""
-                spawning = spawn_scratch(text.strip(), env,
+                spawning = spawn_scratch(line.text.strip(), env,
                                          selection_repo(session, selected or window, env))
         elif key in (10, 13, curses.KEY_ENTER):
             # The Enter bind already returned the client to root; the key reaches
@@ -761,10 +933,11 @@ def ui(screen, session, worker, lock):
             follow_at = None
             restore_pick(screen, session, env)
             refresh_at = 0
-        elif key == 27 and text and spawning is None:
+        elif key == 27 and line.text and spawning is None:
             # Escape clears a typed name first; the keyboard stays here.
-            text, toast = "", ""
-            mark_input(pane, text)
+            line.clear()
+            toast = ""
+            mark_input(pane, line.text)
         elif key == 27:
             # Escape bails out of a pending follow too: the worker in view keeps input.
             follow_at = None

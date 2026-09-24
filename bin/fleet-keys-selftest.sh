@@ -246,7 +246,7 @@ while read -r action _ _ def _; do
   # input line, so it reaches the view through the `Any` bind as its own byte
   # (read as `press`, which also folds an IME's full-width 。/？ onto it, #965).
   case "$def" in [[:punct:]])
-    grep -qF "press == \"$def\" and not text" "$SIDEBAR_PY" \
+    grep -qF "press == \"$def\" and not line.text" "$SIDEBAR_PY" \
       || fail "sidebar action '$action' ($def) must act only on an empty input line in fleet-sidebar.py"
     continue ;;
   esac
@@ -261,18 +261,25 @@ done <<EOF
 $side_table
 EOF
 # The sidebar's own `?` sheet (issue #948, cut to one screen by #963): its
-# popup cannot scroll, so it is the six everyday keys + a title and nothing
-# else. Every sidebar action and every row-menu letter still has a row — in the
+# popup cannot scroll, so it is the seven everyday keys + a title and nothing
+# else — the input line's editing keys share ONE row (#1097). Every sidebar action and every row-menu letter still has a row — in the
 # FULL sheet (prefix ?), which is what the checks above and below read.
 SSHEET="$(NO_COLOR=1 bash "$KEYS" --context sidebar --plain)" || fail "fleet-keys.sh --context sidebar exited non-zero"
-[ "$(printf '%s\n' "$SSHEET" | wc -l | tr -d ' ')" -le 9 ] \
-  || fail "the sidebar sheet is $(printf '%s\n' "$SSHEET" | wc -l | tr -d ' ') lines — it must fit its popup (≤ 9)"
+[ "$(printf '%s\n' "$SSHEET" | wc -l | tr -d ' ')" -le 10 ] \
+  || fail "the sidebar sheet is $(printf '%s\n' "$SSHEET" | wc -l | tr -d ' ') lines — it must fit its popup (≤ 10)"
 printf '%s\n' "$SSHEET" | head -1 | grep -q '任务栏快捷键' || fail "the sidebar sheet lacks its 任务栏快捷键 title"
-for k in "打字 ↵" "↑ ↓" ". / 再点一次" "esc" "⌂ / F9" "prefix ?"; do
+for k in "打字 ↵" "↑ ↓" "编辑" ". / 再点一次" "esc" "⌂ / F9" "prefix ?"; do
   printf '%s\n' "$SSHEET" | grep -qF "  $k " || fail "the sidebar sheet does not list '$k'"
 done
-for k in "←" "→" "⌃o" "⌃n" "prefix E" "prefix Space"; do
-  printf '%s\n' "$SSHEET" | grep -qF "$k" && fail "the sidebar sheet lists '$k' — only the six everyday keys belong there"
+for k in "⌃o" "⌃n" "prefix E" "prefix Space"; do
+  printf '%s\n' "$SSHEET" | grep -qF "$k" && fail "the sidebar sheet lists '$k' — only the seven everyday keys belong there"
+done
+# The editing row names every edit key, each keymap one as it resolves (#1097).
+edit_row="$(printf '%s\n' "$SSHEET" | grep -F '  编辑 ')"
+for k in "←→" "Home" "End" "⌥←→" "$(bash "$KEYMAP" --panel sidebar glyph bol)" \
+         "$(bash "$KEYMAP" --panel sidebar glyph eol)" "$(bash "$KEYMAP" --panel sidebar glyph kill_word)" \
+         "$(bash "$KEYMAP" --panel sidebar glyph kill_eol)" "⌃u"; do
+  printf '%s\n' "$edit_row" | grep -qF " $k" || fail "the sidebar sheet's 编辑 row lacks '$k': $edit_row"
 done
 printf '%s\n' "$SSHEET" | grep -Eq '^(task sidebar|row menu|tmux prefix|dashboard|backlog|config modal) ' \
   && fail "the sidebar sheet shows a full-sheet group"

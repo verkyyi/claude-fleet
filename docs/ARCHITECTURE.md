@@ -196,6 +196,18 @@ refusal (the cap, a worktree failure) shows its reason on the line for four
 seconds and keeps the name. Escape clears a typed name and keeps the keyboard;
 Enter and Escape on an EMPTY line behave exactly as before. `@sidebar_input=1` on
 the view pane marks a non-empty line.
+The line is a line editor (issue #1097, `Line` in `fleet-sidebar.py`): a cursor
+`▏` drawn where it is, a view that scrolls to keep it on screen (CJK = two
+cells), and readline's keys — ←→, Home/End, ⌥←/⌥→ by word (read off the raw
+`ESC b`/`ESC f`/`ESC[1;3D` when the terminfo does not name it), ⌃a/⌃e, ⌃w the
+word before, ⌃k to the end, ⌃u the whole line, Delete/Backspace either side.
+Typing, rename and the typed-name spawn all go through it. **An empty line is
+navigation, a typed one is editing** — the convention the sidebar shares with
+the hub (`dash-fold-toggle.sh`): with no text ←/→ fold, Home/End jump to the
+first/last row; with text they move the cursor. ↑↓ always switch tasks. The ⌃
+keys are `dash-keymap.sh --panel sidebar` rows (`bol` `eol` `kill_word`
+`kill_eol`), so a tmux prefix on one of them moves it to its ⌥ fallback, which
+the conf rewrites to the ⌃ byte.
 With NO sidebar on screen — a window under ~111 columns hides it, prefix e turns
 it off — the same list opens as a popup: `bin/fleet-task-pick.sh` (issue #902),
 from `prefix Space`, from `prefix E`, and from ⌂ / F9 in a task window (the
