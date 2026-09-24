@@ -619,10 +619,13 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
 ### Host setup (unattended machine)
 
    If this machine runs unattended, walk **[HOST.md](HOST.md)** with the user —
-   starting with [turning off Spotlight](HOST.md#spotlight). Every item there is a
-   system setting the user decides on: show the command, never run a `sudo` change
-   without an explicit yes. `fleet-doctor`'s `host` section (macOS only) reports
-   each one.
+   [turning off Spotlight](HOST.md#spotlight), then the
+   [unattended-Mac checklist](HOST.md#headless) (auto-login + never sleep, Siri
+   off, iCloud sync off, no GUI apps on the console) and the
+   [container VM's share of the machine](HOST.md#containers). Every item there
+   is a system setting the user decides on: show the command, never run a `sudo`
+   change without an explicit yes. `fleet-doctor`'s `host` section (macOS only)
+   reports each one — [HOST.md → Verify](HOST.md#verify) lists the lines.
 
 ## MCP servers on demand
 

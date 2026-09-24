@@ -1498,6 +1498,27 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Doctor Spotlight check @group=disk @tier=advanced @scope=global @edit=bool
 #FLEET_DOCTOR_SPOTLIGHT=1
 
+# `fleet-doctor`'s `sleep` line (host section, macOS only, issue #1076): WARNs
+# while `pmset -g` shows a non-zero idle-sleep, naming `sudo pmset -a sleep 0
+# autorestart 1 womp 1` (docs/HOST.md#headless). Report-only. Set to 0 on a host
+# that is meant to sleep (a laptop you carry). Linux: unused.
+# @label=Doctor sleep check @group=disk @tier=advanced @scope=global @edit=bool
+#FLEET_DOCTOR_SLEEP=1
+
+# `fleet-doctor`'s `siri` line (host section, macOS only, issue #1076): INFO while
+# Siri is on for the console user (its helpers stay resident, ~400 MB), pointing
+# at the Settings toggle (docs/HOST.md#headless). Report-only. Set to 0 on a host
+# where you use Siri. Linux: unused.
+# @label=Doctor Siri check @group=disk @tier=advanced @scope=global @edit=bool
+#FLEET_DOCTOR_SIRI=1
+
+# `fleet-doctor`'s `icloud` line (host section, macOS only, issue #1076): INFO
+# while an iCloud sync daemon (bird / cloudd / fileproviderd) is resident, pointing
+# at the sign-out / iCloud Drive toggle (docs/HOST.md#headless). Report-only. Set
+# to 0 on a host that keeps its iCloud account deliberately. Linux: unused.
+# @label=Doctor iCloud check @group=disk @tier=advanced @scope=global @edit=bool
+#FLEET_DOCTOR_ICLOUD=1
+
 # Load experiments (bin/fleet-loadgen.sh) — the sanctioned way to put a box under
 # CPU pressure, because the hand-written `trap … EXIT` form is what leaked the
 # orphans above. Each burner carries its OWN deadline (a kernel alarm(2) armed
