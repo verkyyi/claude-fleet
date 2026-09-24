@@ -254,7 +254,7 @@ for script in dash-reap dash-issue-new dash-issue-close dash-issue-comment open-
   grep -q 'dash-popup.sh' "$BIN/$script.sh" || fail "$script bypasses dash-popup.sh"
 done
 # Interactive fallback requires execute(), including the indirect PR URL opener.
-for spec in 'tmux-dashboard.sh REAP' 'tmux-dashboard.sh PR' 'tmux-issues.sh OPEN'; do
+for spec in 'tmux-dashboard.sh REAP' 'tmux-dashboard.sh PR' 'tmux-dashboard.sh REPO_ADD' 'tmux-issues.sh OPEN'; do
   read -r script action <<< "$spec"
   grep -Fq "\$DASH_KEY_$action:execute(" "$BIN/$script" \
     || fail "$script $action does not hand the terminal to the fallback"

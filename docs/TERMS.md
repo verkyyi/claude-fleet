@@ -210,6 +210,11 @@ they repaint instantly:
   in a 2+ repo fleet when neither the highlighted row nor a heading names one. It
   picks a destination, not a view: the dash and backlog always show every hosted
   repo, grouped (issue #1034 removed the footer repo picker, `fleet-pick.sh`).
+- **Repo add** — `dash-repo-add.sh`, the add-a-repo popup (issue #1103): the
+  dash's ⌃z and the task sidebar's row menu `g`, one script behind both. Asks only
+  `owner/name`, runs `fleet-repo.sh add` (checkout `~/projects/<name>`, cloned if
+  missing) and holds the verdict — added · already hosted · the dir is another
+  repo · clone failed — until dismissed. The dash regroups on its next frame.
 - **`fleet-lib.sh`** — the shared helper library the above (and the collector /
   read-side producers) source: session→repo resolution, slug helpers, per-fleet
   conf overlay.

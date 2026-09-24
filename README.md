@@ -340,7 +340,7 @@ one into the other with `bin/fleet-repo.sh fold` (below).
 ```sh
 cf                                         # already running? (re)attach fast. else: infer the repo + bring it up
 bin/fleet-up.sh you/webapp                 # first repo: clone-or-reuse ~/projects/webapp, bring the fleet up
-bin/fleet-repo.sh add you/infra ~/src/infra   # another repo in the same fleet (explicit checkout dir)
+bin/fleet-repo.sh add you/infra ~/src/infra   # another repo in the same fleet (explicit checkout dir) — or ⌃z on the dash
 bin/fleet-list.sh                          # ● live / ○ down · name · repo · checkout (+ ↳ each further repo)
 bin/fleet-down.sh fleet --purge            # kill the fleet (+ drop its conf/cache); checkouts stay
 ```
@@ -350,12 +350,19 @@ whether it is running, each repo it hosts with its live session count, and the
 `cf` line to get in. See [docs/INSTALL.md](docs/INSTALL.md) step 7 for the
 `~/.zshrc` block.
 
-**Several repos in one fleet.** `bin/fleet-repo.sh add you/infra [<checkout>]`
-registers a second repo with the fleet you are in (clone-or-reuse, like
-`fleet-up.sh`); `list` shows what it hosts and `remove` drops one. The rest follows
-on its own, as it does for the first repo: a warning if Claude Code has not trusted
-the checkout, and the background daemons woken so the dash picks the repo up within
-a tick; `fleet-doctor.sh`'s `repos` row lists every hosted repo and whether it is
+**Several repos in one fleet.** From inside the fleet, **⌃z on the dash** or the
+task sidebar's row menu (`.`) item **`g` ＋ 仓库…** opens a popup that asks just
+`owner/name` (a GitHub URL is fine) and adds it — `bin/dash-repo-add.sh`, the same
+script behind both, issue #1103 — so on an iPad nothing leaves the screen: the
+checkout is `~/projects/<name>` (reused if it already is that repo, cloned if
+missing, the clone's progress in the popup), the verdict stays up until you dismiss
+it, and the new repo's heading is on the dash's next frame — no restart. The shell
+form, `bin/fleet-repo.sh add you/infra [<checkout>]`, is the same registration
+(clone-or-reuse, like `fleet-up.sh`) and the one that takes a different checkout
+dir; `list` shows what it hosts and `remove` drops one. The rest follows on its
+own, as it does for the first repo: a warning if Claude Code has not trusted the
+checkout, and the background daemons woken so the dash picks the repo up within a
+tick; `fleet-doctor.sh`'s `repos` row lists every hosted repo and whether it is
 healthy. All hosted repos are equal — there is no main repo. Once a fleet hosts two:
 
 - every session carries its repo (`@repo`), shown on the dash as a repo heading /

@@ -4,8 +4,8 @@
 # (issue #898). The task sidebar's per-row action menu: the six things that used
 # to need a trip to the hub list — rename, pin, open PR, answer, flip agent,
 # reap — plus a sleeping row's Wake and the Keep awake / Allow sleep toggle
-# (issue #1051), plus the row-less "new task (file an issue)" and "restore a finished
-# task" (#901). Every item calls the SAME
+# (issue #1051), plus the row-less "new task (file an issue)", "restore a finished
+# task" (#901) and "add a repo" (#1103). Every item calls the SAME
 # script the hub binds (EPIC #894 convention 1) with the window's stable `@id`,
 # never an index or a name. The view (fleet-sidebar.py) opens it on `.` (empty
 # input line) or a second tap on the highlighted row; this file owns the tmux
@@ -40,7 +40,8 @@ awake	k	keep it awake ⇄ allow it to sleep again
 agent	v	flip new sessions claude ⇄ codex
 reap	x	reap it — asks y/n first
 new	n	new task — file an issue AND spawn its worker
-restore	o	restore a finished task (the hub landed list, in a popup)'
+restore	o	restore a finished task (the hub landed list, in a popup)
+repo	g	add a repo to this fleet — asks owner/name; ~/projects/<name>, cloned if missing (the hub ⌃z)'
 mk() { printf '%s\n' "$MENU_KEYS" | awk -F '\t' -v a="$1" '$1 == a { print $2; exit }'; }
 if [ "${1:-}" = --keys ]; then
   printf '%s\n' "$MENU_KEYS" | awk -F '\t' '{ print $2 "\t" $3 }'
@@ -121,6 +122,9 @@ add "" "" ""
 add "新建任务（建 issue）…" "$(mk new)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") -w 90% -h 12 -- bash $(sq "$BIN/dash-issue-new.sh") confirm --spawn")"
 # Row-less too (issue #901): the hub's ⌃t landed list + ⌃o, as one popup.
 add "恢复已收工…" "$(mk restore)" "$(sh_run "bash $(sq "$BIN/fleet-restore-pick.sh") --session $(sq "$sess")")"
+# Row-less (issue #1103): the hub's ⌃z — the same popup, the same script. Listed
+# in a one-repo fleet too: it is how the second repo gets in.
+add "＋ 仓库…" "$(mk repo)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") -w 80% -h 16 -- bash $(sq "$BIN/dash-repo-add.sh")")"
 
 if [ "${4:-}" = --print ]; then
   i=0

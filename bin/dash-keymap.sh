@@ -24,6 +24,7 @@
 #                                   # env names stay DASH_KEY_* within each panel
 #   dash-keymap.sh env              # shell assignments, one fork for the table —
 #                                   #   DASH_KEY_<ACTION>=<fzf key>  DASH_GLYPH_<ACTION>=⌃x|⌥x
+#                                   #   (<ACTION> upper-cased, a `-` in the name as `_`)
 #                                   #   DASH_REMAP_<ACTION>=<prefix dodged, or empty>
 #                                   #   DASH_KEYSTATE_<ACTION>=ok|remapped|unreachable
 #                                   #   DASH_KEYMAP_PREFIX=C-a  DASH_KEYMAP_PREFIX2=  (tmux names)
@@ -61,8 +62,10 @@
 # `migrate` (issue #873) took ctrl-l on the same basis: fzf's ⌃l is
 # `clear-screen`, a repaint the dash's 1Hz reload already does every second.
 # (Mnemonic: Leave this account's wall.)
-# ctrl-z is free again: it held `pick`, the repo picker (#793), removed with it in
-# #1034 — the grouped `all` list is the only view.
+# `repo-add` (issue #1103) took ctrl-z: it held `pick`, the repo picker (#793),
+# removed with it in #1034 (the grouped `all` list is the only view), so the key
+# was free and fzf claims nothing on it. A hyphen in an action name becomes `_` in
+# its env names (DASH_KEY_REPO_ADD); `dg`/`dn` in fleet-keys.sh fold it the same way.
 set -uo pipefail
 
 PANEL=dash
@@ -81,7 +84,8 @@ reap ctrl-x alt-x
 rename ctrl-e alt-e
 answer ctrl-k alt-k
 pin ctrl-y alt-y
-migrate ctrl-l alt-l' ;;
+migrate ctrl-l alt-l
+repo-add ctrl-z alt-z' ;;
 backlog) TABLE='new ctrl-n alt-n
 close ctrl-x alt-x
 priority ctrl-y alt-y
@@ -219,7 +223,7 @@ cmd="${1:-env}"; shift 2>/dev/null || true
 case "$cmd" in
   env)
     resolve | while read -r action key glyph def remap state; do
-      up=$(printf '%s' "$action" | tr '[:lower:]' '[:upper:]')
+      up=$(printf '%s' "$action" | tr '[:lower:]-' '[:upper:]_')
       [ "$remap" = "-" ] && remap=""
       printf "DASH_KEY_%s='%s'\nDASH_GLYPH_%s='%s'\nDASH_REMAP_%s='%s'\nDASH_KEYSTATE_%s='%s'\n" \
         "$up" "$key" "$up" "$glyph" "$up" "$remap" "$up" "$state"

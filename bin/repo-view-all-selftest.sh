@@ -106,7 +106,9 @@ for fn in fleet_current_repo_set fleet_repo_label fleet_repo_label_sync; do
   CHECKS=$((CHECKS+1)); declare -F "$fn" >/dev/null && fail "A: fleet-lib.sh still defines $fn"
 done
 hasnt "A: the dash keymap has no pick action" "$(bash "$BIN/dash-keymap.sh" env 2>/dev/null)" "PICK"
-hasnt "A: ctrl-z is not bound on the dash" "$(bash "$BIN/dash-keymap.sh" env 2>/dev/null)" "ctrl-z"
+# ctrl-z was freed with the picker; #1103 gave it to repo-add (the one dash key that
+# touches a fleet's repo list) — assert it is that and nothing pick-shaped.
+eq    "A: ctrl-z on the dash is repo-add (#1103), not pick" "$(bash "$BIN/dash-keymap.sh" key repo-add 2>/dev/null)" "ctrl-z"
 
 # --- B. the footer -------------------------------------------------------------
 # Render status-left's TEXT (style/range markup stripped: it draws nothing) on a
