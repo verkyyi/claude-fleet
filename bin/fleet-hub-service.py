@@ -14,6 +14,10 @@ import time
 from urllib.parse import urlsplit
 
 LABEL = "com.claude-fleet.hub"
+# launchd starts a job at the machine's default file limit, 256 on macOS. The hub
+# holds a socket per connected session plus its state files, and running out shows
+# up only as events that silently stop arriving (issue #1080).
+NOFILE = 65536
 BIN = Path(__file__).absolute().parent
 
 
@@ -33,6 +37,7 @@ def launch_agent(home, python, entrypoint, state_dir, resource_url, port):
         "EnvironmentVariables": {"HOME": str(home), "PATH": path, "LANG": "en_US.UTF-8",
                                  "TMPDIR": tempfile.gettempdir(), "PYTHONDONTWRITEBYTECODE": "1"},
         "WorkingDirectory": str(state_dir), "RunAtLoad": True, "KeepAlive": True,
+        "SoftResourceLimits": {"NumberOfFiles": NOFILE}, "HardResourceLimits": {"NumberOfFiles": NOFILE},
         "ThrottleInterval": 5, "ExitTimeOut": 20, "ProcessType": "Standard", "Umask": 0o077,
         "StandardOutPath": str(state_dir / "logs/hub.stdout.log"),
         "StandardErrorPath": str(state_dir / "logs/hub.stderr.log"),

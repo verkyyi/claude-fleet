@@ -12,7 +12,7 @@
 #   - that the run survives to the doctor's last check and prints nothing on
 #     stderr (see fleet-doctor-machine-selftest.sh for why both matter).
 #
-# Hermetic: fake uname/mdutil on PATH, scratch HOME/TMPDIR/conf. Exit 0 = pass.
+# Hermetic: fake uname/mdutil/launchctl on PATH, scratch HOME/TMPDIR/conf. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 for f in fleet-doctor.sh fleet-daemon-lib.sh; do
@@ -45,7 +45,16 @@ cat > "$WORK/fakepath/mdutil" <<SH
 printf '%s\n' "\$*" >> "$WORK/mdutil.argv"
 cat "$WORK/mdutil.out"
 SH
-chmod +x "$WORK/fakepath/uname" "$WORK/fakepath/mdutil"
+# --- fake launchctl: `limit maxfiles` prints the fixture; anything else goes to
+# the real one when there is one (the daemon probe elsewhere in the doctor).
+cat > "$WORK/fakepath/launchctl" <<SH
+#!/bin/sh
+if [ "\$1" = limit ]; then printf '%s\n' "\$*" >> "$WORK/launchctl.argv"; cat "$WORK/maxfiles.out"; exit 0; fi
+[ -x /bin/launchctl ] && exec /bin/launchctl "\$@"
+exit 1
+SH
+printf '\tmaxfiles    256            unlimited      \n' > "$WORK/maxfiles.out"
+chmod +x "$WORK/fakepath/uname" "$WORK/fakepath/mdutil" "$WORK/fakepath/launchctl"
 
 # A fleet whose worktree root carries .noindex — the wtroot row lives in this section too.
 printf 'FLEET_REPO="o/r"\nFLEET_WORKTREE_ROOT="%s/wt.noindex"\n' "$WORK" > "$WORK/conf/fleets/tfleet/conf"
@@ -108,12 +117,37 @@ out="$(run_doctor)"; l="$(row wtroot "$out")"
 has "PASS" "$l" "5: a .noindex worktree root must still PASS inside the host section"
 
 # ============================================================================
+# nofile (issue #1080)
+# ============================================================================
+# 7. The macOS default (256) → INFO: advice for every OTHER LaunchAgent, since the
+#    fleet's own daemons raise their limit in their plists.
+printf '\tmaxfiles    256            unlimited      \n' > "$WORK/maxfiles.out"
+out="$(run_doctor)"; l="$(row nofile "$out")"
+has "INFO" "$l" "7: a 256 system default must be INFO"
+has "256" "$l" "7: the INFO must quote the soft limit it read"
+has "65536" "$l" "7: the INFO must say the fleet daemons carry their own limit"
+has "docs/HOST.md#nofile" "$l" "7: the INFO must point at the host doc"
+has "limit maxfiles" "$(cat "$WORK/launchctl.argv" 2>/dev/null)" "7: the doctor must only READ the limit"
+quiet "7: the nofile INFO must print nothing on stderr"
+
+# 8. A raised default → PASS.
+printf '\tmaxfiles    65536          524288         \n' > "$WORK/maxfiles.out"
+l="$(row nofile "$(run_doctor)")"
+has "PASS" "$l" "8: a raised system default must PASS"
+
+# 9. Unreadable → no row, never a guess.
+printf 'garbage\n' > "$WORK/maxfiles.out"
+none "$(row nofile "$(run_doctor)")" "9: an unreadable limit must print no row"
+printf '\tmaxfiles    256            unlimited      \n' > "$WORK/maxfiles.out"
+
+# ============================================================================
 # 6. Linux: the whole section is silent — no spotlight, no wtroot, no error.
 # ============================================================================
 echo Linux > "$WORK/os"; : > "$WORK/mdutil.argv"
 out="$(run_doctor)"
 none "$(row spotlight "$out")" "6: Linux must print no spotlight row"
 none "$(row wtroot "$out")" "6: Linux must print no wtroot row"
+none "$(row nofile "$out")" "6: Linux must print no nofile row"
 none "$(cat "$WORK/mdutil.argv")" "6: Linux must not even call mdutil"
 survived "$out" || fail "6: the doctor did not reach its last check on Linux" ""
 quiet "6: the Linux run must print nothing on stderr"

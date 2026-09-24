@@ -11,13 +11,14 @@ one line per recommendation. The doctor only **reports** — it never changes a
 system setting. Every change below is yours to run.
 
 ```sh
-bash ~/.claude/fleet/bin/fleet-doctor.sh 2>&1 | grep -E '^\s*\S+\s+(spotlight|wtroot)'
+bash ~/.claude/fleet/bin/fleet-doctor.sh 2>&1 | grep -E '^\s*\S+\s+(spotlight|wtroot|nofile)'
 ```
 
 ## Contents
 
 - [Turn off Spotlight](#spotlight)
 - [MCP servers on demand](#mcp)
+- [File limits for daemons](#nofile)
 
 <a id="spotlight"></a>
 ## Turn off Spotlight
@@ -94,3 +95,41 @@ file with that server added. [INSTALL.md → MCP servers on demand](INSTALL.md#m
 has the common add-backs, and Codex workers inherit the same value.
 
 **Undo:** unset the key. The next spawned session loads everything again.
+
+<a id="nofile"></a>
+## File limits for daemons
+
+**Why.** launchd starts every job at the machine's default open-file limit, which
+is 256 on macOS. A long-lived network daemon holds a socket per connected session
+plus its pipes and state files. When it reaches the limit it does not crash. It
+just stops receiving events, and no log says why.
+
+**What the fleet already does.** Its three always-on daemons raise their own
+limit to 65536 (issue #1080). The hub, the webhook supervisor and the spinner
+carry `NumberOfFiles` in their launchd plists and `LimitNOFILE` in their systemd
+units. Each prints one `nofile=<n>` line to its log at every start, so you can
+check that the limit took:
+
+```sh
+grep -h 'nofile=' ~/.config/claude-fleet/hub/logs/hub.stderr.log \
+  ~/.claude/fleet/logs/webhook.launchd.log ~/.claude/fleet/logs/spinner.launchd.log | tail -3
+```
+
+A plist change only applies after the daemon is reloaded. Re-run the install
+step for it, or `/fleet-sync-install`, then look for the new line.
+
+**Other LaunchAgents on the host.** The doctor's `nofile` row reads the system
+default with `launchctl limit maxfiles` and shows INFO when it is below 4096.
+Any other long-lived agent you run gets the same fix in its own plist:
+
+```xml
+<key>SoftResourceLimits</key><dict><key>NumberOfFiles</key><integer>65536</integer></dict>
+<key>HardResourceLimits</key><dict><key>NumberOfFiles</key><integer>65536</integer></dict>
+```
+
+Raising the host-wide default instead (`sudo launchctl limit maxfiles …`) does
+not survive a reboot without a LaunchDaemon of its own, and changes every
+process on the machine. Per-job limits are the lighter alternative.
+
+**Undo:** delete the two keys from a plist and reload it. The job falls back to
+the system default.

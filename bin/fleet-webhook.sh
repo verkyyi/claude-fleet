@@ -502,6 +502,7 @@ wh_supervise() {
   # loudly in the handler log. Clear any stale handler pid up front.
   wh_handler_alive || rm -f "$HANDLER_PIDF" 2>/dev/null || :
   trap 'wh_shutdown' EXIT INT TERM
+  log "nofile=$(ulimit -n 2>/dev/null || echo '?')"   # the file limit this start really got (issue #1080)
   wh_start_handler
   local woke=0
   while :; do

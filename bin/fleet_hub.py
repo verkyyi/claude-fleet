@@ -424,6 +424,9 @@ def main(argv=None):
                 result = [dict(row) for row in db.execute("SELECT * FROM audit ORDER BY id DESC LIMIT 100")]
         else:
             from fleet_hub_mcp import serve as serve_mcp
+            # One line per start: the file limit this process really got (issue #1080).
+            import resource
+            print("nofile=" + str(resource.getrlimit(resource.RLIMIT_NOFILE)[0]), file=sys.stderr, flush=True)
             serve_mcp(hub, args)
             return 0
         print(json.dumps(result, ensure_ascii=False, indent=2))
