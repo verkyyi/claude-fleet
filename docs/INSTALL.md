@@ -686,7 +686,12 @@ everything-loads behaviour. It takes effect on the next spawned session; a plain
 `claude` outside the fleet is untouched, so the full set stays one ordinary
 session away. A caller's explicit `--mcp-config` / `--strict-mcp-config` wins.
 
-To see the saving, count one worker's children before and after:
+`fleet-doctor`'s `mcp` lines show it for every fleet at once (issue #891): the
+allowlist and its server count, a WARN for a fleet with none, and — while the
+fleet is up — how many MCP processes its live sessions carry and their RSS, plus
+one total row. `FLEET_DOCTOR_MCP=0` drops them.
+
+To see the saving for a single worker, count its children before and after:
 
 ```sh
 pgrep -lP "$(pgrep -P "$(tmux display -p -t <pane> '#{pane_pid}')" | head -1)"

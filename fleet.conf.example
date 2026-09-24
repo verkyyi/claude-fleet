@@ -1544,6 +1544,14 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Doctor network check @group=disk @tier=advanced @scope=global @edit=bool
 #FLEET_DOCTOR_NETWORK=1
 
+# `fleet-doctor`'s `mcp` lines (issue #891): per fleet, its MCP allowlist
+# (FLEET_MCP_CONFIG) and what its live claude sessions carry in MCP processes +
+# RSS — MCP servers are one copy per session, so the cost multiplies. WARNs for a
+# fleet with no allowlist (its sessions inherit every server in ~/.claude.json).
+# Report-only. Set to 0 to drop the lines. Cross-platform.
+# @label=Doctor MCP check @group=disk @tier=advanced @scope=global @edit=bool
+#FLEET_DOCTOR_MCP=1
+
 # Load experiments (bin/fleet-loadgen.sh) — the sanctioned way to put a box under
 # CPU pressure, because the hand-written `trap … EXIT` form is what leaked the
 # orphans above. Each burner carries its OWN deadline (a kernel alarm(2) armed
