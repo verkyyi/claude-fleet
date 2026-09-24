@@ -632,6 +632,9 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    is a system setting the user decides on: show the command, never run a `sudo`
    change without an explicit yes. `fleet-doctor`'s `host` section (macOS only)
    reports each one — [HOST.md → Verify](HOST.md#verify) lists the lines.
+   `bash ~/.claude/fleet/bin/fleet-host-tune.sh` prints the whole checklist as
+   now → target → command ([HOST.md → All at once](HOST.md#tune)); show the user
+   that plan, and run `--apply` (it asks per item) only on their yes.
 
 ## MCP servers on demand
 
