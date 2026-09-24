@@ -1126,6 +1126,104 @@ if [ "$cvchk" != 0 ]; then
   fi
 fi
 
+# --- mcp: what each fleet's sessions carry in MCP servers (issue #891) ---------
+# An MCP server is per SESSION: every live claude boots its own copy of each one,
+# so the cost multiplies by the session count and nothing else put the number on
+# screen (measured 2026-09: 76 node/python children, 1.3 GB RSS under the
+# sessions, one fleet with no allowlist inheriting the host's whole MCP set).
+# One row per fleet: its allowlist (FLEET_MCP_CONFIG, resolved the way a spawn
+# resolves it — install fleet.conf, then fleet.settings, then the fleet conf, then
+# any repo overlay that sets the key; see bin/fleet-claude.sh) and, when its tmux
+# server is up, what its live claude processes carry right now: the direct
+# children of each claude that are not a tool shell, their whole subtree counted
+# (npm exec → node). Unset allowlist → WARN, the only counted verdict; the census
+# is a number, never a fault. Read-only: changes no config. Cross-platform (ps +
+# tmux only), so it sits outside the macOS host section. FLEET_DOCTOR_MCP=0
+# (env or fleet.settings) silences it.
+mcpchk="${FLEET_DOCTOR_MCP:-$(_gconf_val FLEET_DOCTOR_MCP)}"
+if [ "$mcpchk" != 0 ] && [ -d "$conf_dir" ] && [ -n "$(_fleet_confs "$conf_dir")" ]; then
+  mcp_inst="$(dirname "$0")/../fleet.conf"
+  # _mcp_eff <fleet conf> [overlay] → the effective FLEET_MCP_CONFIG (a bash
+  # subshell: confs are shell, and an inline-JSON value's quotes must survive).
+  _mcp_eff() {
+    bash -c 'unset FLEET_MCP_CONFIG
+      for f in "$@"; do [ -f "$f" ] && . "$f" >/dev/null 2>&1; done
+      printf "%s" "${FLEET_MCP_CONFIG-}"' _ "$mcp_inst" "$conf_dir/fleet.settings" "$@" 2>/dev/null
+  }
+  # _mcp_count <value> → how many servers it allows ("?" if unreadable).
+  _mcp_count() {
+    [ "$1" = none ] && { echo 0; return; }
+    python3 - "$1" 2>/dev/null <<'PY' || echo '?'
+import json, os, sys
+v = sys.argv[1].strip()
+d = json.loads(v) if v.startswith('{') else json.load(open(os.path.expanduser(v)))
+print(len(d.get('mcpServers') or {}))
+PY
+  }
+  # Servers every unlisted session inherits: ~/.claude.json's user-scope set
+  # (plugin and remote connectors come on top and are not counted here).
+  mcp_host=$(python3 - "$HOME/.claude.json" 2>/dev/null <<'PY'
+import json, sys
+print(len(json.load(open(sys.argv[1])).get('mcpServers') or {}))
+PY
+)
+  [ -n "$mcp_host" ] || mcp_host='?'
+  # One process snapshot for every fleet: pid ppid rss(KB) comm (comm may hold spaces).
+  mcp_ps=$(ps -Ao pid=,ppid=,rss=,comm= 2>/dev/null)
+  mcp_ts=0; mcp_tp=0; mcp_tk=0
+  while IFS= read -r cf; do
+    [ -n "$cf" ] || continue
+    case "$cf" in */fleets/*/conf) sess=${cf%/conf}; sess=${sess##*/} ;; *) sess=$(basename "$cf" .conf) ;; esac
+    # allowlist: the fleet's own value, then each repo overlay that sets the key.
+    mv=$(_mcp_eff "$cf")
+    unl=""; lst=""
+    if [ -z "$mv" ]; then unl="fleet"; else lst="$(_mcp_count "$mv") server(s) via FLEET_MCP_CONFIG=$mv"; fi
+    for ov in "$conf_dir/fleets/$sess/repos"/*.conf; do
+      [ -f "$ov" ] && _conf_has "$ov" FLEET_MCP_CONFIG || continue
+      ovn=$(basename "$ov" .conf); ovv=$(_mcp_eff "$cf" "$ov")
+      if [ -z "$ovv" ]; then unl="${unl:+$unl, }repo $ovn"
+      else lst="${lst:+$lst; }repo $ovn: $(_mcp_count "$ovv") server(s)"; fi
+    done
+    # live census: this fleet's panes → the claude in each → its non-shell children.
+    live=""
+    if tmux -L "$sess" has-session -t "$sess" 2>/dev/null; then
+      pids=$(tmux -L "$sess" list-panes -s -t "$sess" -F '#{pane_pid}' 2>/dev/null | tr '\n' ' ')
+      live=$(printf '%s\n' "$mcp_ps" | awk -v roots="$pids" '
+        function base(c) { sub(/^.*\//, "", c); return c }
+        function isclaude(c) { return base(c) == "claude" || c ~ /\/claude\/versions\// }
+        function isshell(c,  b) { b = base(c); sub(/^-/, "", b)
+          return b ~ /^(sh|bash|zsh|dash|fish|caffeinate|claude)$/ }
+        function sub_tree(p,  i) { np++; rss += r[p]; for (i = 1; i <= nk[p]; i++) sub_tree(k[p, i]) }
+        function find(p,  i, j) {
+          if (isclaude(c[p])) { ns++
+            for (i = 1; i <= nk[p]; i++) { j = k[p, i]; if (!isshell(c[j])) { nsrv++; sub_tree(j) } }
+            return }
+          for (i = 1; i <= nk[p]; i++) find(k[p, i])
+        }
+        { pid = $1; pp = $2; r[pid] = $3; $1 = $2 = $3 = ""; sub(/^ +/, ""); c[pid] = $0
+          nk[pp]++; k[pp, nk[pp]] = pid }
+        END { n = split(roots, rt, " "); for (i = 1; i <= n; i++) find(rt[i])
+              printf "%d %d %d %d\n", ns, nsrv, np, rss }')
+    fi
+    ltxt=""
+    if [ -n "$live" ]; then
+      read -r lns lnv lnp lnk <<EOF2
+$live
+EOF2
+      ltxt="; live: $lns claude session(s) carry $lnp MCP process(es) ($lnv server(s)), $((lnk/1024)) MB RSS"
+      mcp_ts=$((mcp_ts+lns)); mcp_tp=$((mcp_tp+lnp)); mcp_tk=$((mcp_tk+lnk))
+    fi
+    if [ -n "$unl" ]; then
+      warn mcp "$sess: no MCP allowlist ($unl) — its sessions inherit every MCP server in ~/.claude.json ($mcp_host, plus plugins + remote connectors), one copy per session (bin/fleet-claude.sh, FLEET_MCP_CONFIG)${lst:+; $lst}$ltxt. Fix: FLEET_MCP_CONFIG=~/.claude/fleet/conf/mcp-worker.json in the fleet conf. Silence: FLEET_DOCTOR_MCP=0"
+    else
+      pass mcp "$sess: $lst$ltxt"
+    fi
+  done <<EOF
+$(_fleet_confs "$conf_dir")
+EOF
+  [ "$mcp_ts" -gt 0 ] && info mcp "all fleets: $mcp_ts claude session(s) carry $mcp_tp MCP process(es), $((mcp_tk/1024)) MB RSS"
+fi
+
 # --- host: a machine that works only for its sessions (EPIC #1074) --------------
 # Checks on the HOST itself — things that burn this machine's CPU/IO on work no
 # session asked for, which no other line here can see. macOS only: the whole
