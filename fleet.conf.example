@@ -86,6 +86,11 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 # $FLEET_CONF_DIR/global/install-sync.state; log: logs/install-sync.log.
 # @label=Follow stable automatically @group=janitor @tier=common @scope=global @edit=bool
 #FLEET_INSTALL_SYNC=1
+# How long one fetch of refs/tags/stable may stall before the tick gives up and
+# records `fetch-failed` (git's own low-speed abort; the tag is fetched once per
+# tick over https). Not seen ≠ refused: nothing moves, nothing alarms. GLOBAL.
+# @label=Install-sync fetch timeout @group=janitor @tier=internal @scope=global @edit=int @unit=seconds
+#FLEET_INSTALL_SYNC_TIMEOUT=30
 
 # --- Orphan-process reap for KEPT worktrees (issue #469) ------------------------
 # ON by default, GLOBALLY. #151 already reaps a worktree's detached processes when
