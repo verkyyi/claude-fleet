@@ -160,6 +160,9 @@ EOF
 fi
 
 if "${tmux_cmd[@]}" source-file "$tmux_conf"; then
+  # The footer's login name (issue #1099) — fleet-up stamps it on a new server;
+  # restamp here so a server that predates it picks it up on the next sync.
+  "${tmux_cmd[@]}" set -g @login "$(id -un)" 2>/dev/null || true
   if [ "$before_usable" -eq 0 ]; then
     # No before-conf to diff → removals could NOT be detected. Do not report a
     # bare "unbound 0" that reads like a clean reload (issue #295): say so plainly

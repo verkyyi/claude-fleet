@@ -134,7 +134,7 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    that intercept the key/mouse in every pane *before* the app, so flag each: `F9`
    jumps back to this session's hub (`hub-zoom.sh`) — safe because the
    Claude TUI/shells don't use function keys; `MouseDown1Status` owns the clickable
-   footer ranges (hub/fleet/needs/account/usage); and **double-click-to-zoom**
+   footer ranges (`hub` / `attn` on the left, `usage` on the right); and **double-click-to-zoom**
    (`DoubleClick1Pane` → `resize-pane -Z -t=`, `DoubleClick1Border` on the divider)
    toggles a pane's fullscreen as the mouse counterpart to `prefix+g`/`F9` — its
    trade-off is losing tmux's default double-click = select-word (copy), so call it
@@ -632,6 +632,9 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    is a system setting the user decides on: show the command, never run a `sudo`
    change without an explicit yes. `fleet-doctor`'s `host` section (macOS only)
    reports each one — [HOST.md → Verify](HOST.md#verify) lists the lines.
+   `bash ~/.claude/fleet/bin/fleet-host-tune.sh` prints the whole checklist as
+   now → target → command ([HOST.md → All at once](HOST.md#tune)); show the user
+   that plan, and run `--apply` (it asks per item) only on their yes.
 
 ## MCP servers on demand
 
@@ -683,7 +686,12 @@ everything-loads behaviour. It takes effect on the next spawned session; a plain
 `claude` outside the fleet is untouched, so the full set stays one ordinary
 session away. A caller's explicit `--mcp-config` / `--strict-mcp-config` wins.
 
-To see the saving, count one worker's children before and after:
+`fleet-doctor`'s `mcp` lines show it for every fleet at once (issue #891): the
+allowlist and its server count, a WARN for a fleet with none, and — while the
+fleet is up — how many MCP processes its live sessions carry and their RSS, plus
+one total row. `FLEET_DOCTOR_MCP=0` drops them.
+
+To see the saving for a single worker, count its children before and after:
 
 ```sh
 pgrep -lP "$(pgrep -P "$(tmux display -p -t <pane> '#{pane_pid}')" | head -1)"

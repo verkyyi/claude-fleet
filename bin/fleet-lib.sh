@@ -29,7 +29,7 @@ FLEET_CONF_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
 # global-scoped key into a per-fleet conf (bin/dash-config-edit.sh). Keep this list
 # in step with the @scope=global tags in fleet.conf.example — tmux-config-selftest.sh
 # cross-checks the two so they can't drift.
-_FLEET_GLOBAL_ONLY="FLEET_GLOBAL_MAX_SESSIONS FLEET_ISSUE_BRIDGE_SECRET FLEET_ISSUE_TTL FLEET_GH_TTL FLEET_PR_REFRESH_INTERVAL FLEET_STUCK_WORKING_SECS FLEET_STATE_IDLE_SECS FLEET_ACCOUNTS FLEET_ACCOUNT_LIMIT_TTL FLEET_ACCOUNT_CEILING FLEET_ACCOUNT_WARN_PCT FLEET_ACCOUNT_QUOTA_TTL FLEET_ACCOUNT_QUOTA_STALE FLEET_ACCOUNT_QUOTA_BLIND_STREAK FLEET_ACCOUNT_QUOTA_VIA_BANNER_SECS FLEET_ACCOUNT_VERDICT_REFETCH FLEET_ACCOUNT_PICK FLEET_ACCOUNT_PICK_HYST FLEET_ACCOUNT_PHASE FLEET_ACCOUNT_PHASE_AUTO FLEET_COLLECT_DEADLINE FLEET_COLLECT_GIT_BUDGET FLEET_COLLECT_GIT_SLOW FLEET_COLLECT_TICK_BUDGET FLEET_COLLECT_QUOTAWATCH_BUDGET FLEET_COLLECT_SOCKETS_BUDGET FLEET_COLLECT_SESSMAP_BUDGET FLEET_COLLECT_ISSUES_BUDGET FLEET_COLLECT_CTX_BUDGET FLEET_COLLECT_USAGE_BUDGET FLEET_COLLECT_SCRAPE_BUDGET FLEET_COLLECT_BANNER_BUDGET FLEET_COLLECT_ESCALATE_BUDGET FLEET_COLLECT_SNAPSHOT_BUDGET FLEET_COLLECT_STALE FLEET_COLLECT_KICK FLEET_COLLECT_KICK_COOLDOWN FLEET_COLLECT_KICK_TRACE FLEET_DAEMON_STALE_MULT FLEET_DAEMON_STALE_FLOOR FLEET_DAEMON_KICK FLEET_DAEMON_KICK_COOLDOWN FLEET_DAEMON_KICK_COOLDOWN_MULT FLEET_DAEMON_KICK_COOLDOWN_FLOOR FLEET_DAEMON_KICK_TRACE FLEET_DAEMON_RELOAD_AFTER FLEET_DAEMON_RELOAD_COOLDOWN FLEET_DAEMON_DOMAIN_MIN FLEET_DAEMON_DOMAIN_KICK_WINDOW FLEET_DAEMON_IDLE_AFTER FLEET_POLL_MAX_BACKOFF FLEET_LAUNCHD_PROBE FLEET_LAUNCHD_PROBE_WINDOW FLEET_LAUNCHD_PROBE_INTERVAL FLEET_LAUNCHD_PROBE_TTL FLEET_MODEL_FALLBACK FLEET_MODEL_LIMIT_TTL FLEET_MODEL_CAP_PCT FLEET_CLOSE_ON_EXIT FLEET_NOTIFY_CMD FLEET_ESCALATE_AFTER FLEET_STATUS_CONTAINER FLEET_STATUS_CACHE_SECS FLEET_DISK_FLOOR_GB FLEET_DISK_WARN_GB FLEET_QUOTA_GATE FLEET_QUOTA_CEILING FLEET_QUOTA_ACCOUNT FLEET_QUOTA_BIN FLEET_RUNAWAY_CPU_PCT FLEET_RUNAWAY_CPU_SECS FLEET_RUNAWAY_CPU_ACTION FLEET_ORPHAN_CPU_PCT FLEET_ORPHAN_CPU_SECS FLEET_ORPHAN_CPU_ACTION FLEET_ORPHAN_EXTRA_RE FLEET_LOAD_WARN_PER_CORE FLEET_FSEVENTSD_WARN_MB FLEET_DOCTOR_SPOTLIGHT FLEET_CODEX_VERSION_CHECK FLEET_DOCTOR_SLEEP FLEET_DOCTOR_SIRI FLEET_DOCTOR_ICLOUD FLEET_DOCTOR_NETWORK FLEET_LOADGEN_MAX_PROCS FLEET_LOADGEN_MAX_SECS FLEET_LOADGEN_LOAD_PER_CORE FLEET_LOADGEN_CORE_PCT FLEET_USAGE_WARN_PCT FLEET_USAGE_CRIT_PCT FLEET_RATELIMIT_TTL FLEET_WEBHOOK_PORT FLEET_WEBHOOK_SECRET FLEET_REAP_KEPT_PROCS FLEET_REAP_KEPT_MINAGE FLEET_ROTATE_LEASE_TTL FLEET_HELPER_NO_MCP FLEET_SPAWN_GUARD_MS FLEET_INFLIGHT_TTL"
+_FLEET_GLOBAL_ONLY="FLEET_GLOBAL_MAX_SESSIONS FLEET_ISSUE_BRIDGE_SECRET FLEET_ISSUE_TTL FLEET_GH_TTL FLEET_PR_REFRESH_INTERVAL FLEET_STUCK_WORKING_SECS FLEET_STATE_IDLE_SECS FLEET_ACCOUNTS FLEET_ACCOUNT_LIMIT_TTL FLEET_ACCOUNT_CEILING FLEET_ACCOUNT_WARN_PCT FLEET_ACCOUNT_QUOTA_TTL FLEET_ACCOUNT_QUOTA_STALE FLEET_ACCOUNT_QUOTA_BLIND_STREAK FLEET_ACCOUNT_QUOTA_VIA_BANNER_SECS FLEET_ACCOUNT_VERDICT_REFETCH FLEET_ACCOUNT_PICK FLEET_ACCOUNT_PICK_HYST FLEET_ACCOUNT_PHASE FLEET_ACCOUNT_PHASE_AUTO FLEET_COLLECT_DEADLINE FLEET_COLLECT_GIT_BUDGET FLEET_COLLECT_GIT_SLOW FLEET_COLLECT_TICK_BUDGET FLEET_COLLECT_QUOTAWATCH_BUDGET FLEET_COLLECT_SOCKETS_BUDGET FLEET_COLLECT_SESSMAP_BUDGET FLEET_COLLECT_ISSUES_BUDGET FLEET_COLLECT_CTX_BUDGET FLEET_COLLECT_USAGE_BUDGET FLEET_COLLECT_SCRAPE_BUDGET FLEET_COLLECT_BANNER_BUDGET FLEET_COLLECT_ESCALATE_BUDGET FLEET_COLLECT_SNAPSHOT_BUDGET FLEET_COLLECT_STALE FLEET_COLLECT_KICK FLEET_COLLECT_KICK_COOLDOWN FLEET_COLLECT_KICK_TRACE FLEET_DAEMON_STALE_MULT FLEET_DAEMON_STALE_FLOOR FLEET_DAEMON_KICK FLEET_DAEMON_KICK_COOLDOWN FLEET_DAEMON_KICK_COOLDOWN_MULT FLEET_DAEMON_KICK_COOLDOWN_FLOOR FLEET_DAEMON_KICK_TRACE FLEET_DAEMON_RELOAD_AFTER FLEET_DAEMON_RELOAD_COOLDOWN FLEET_DAEMON_DOMAIN_MIN FLEET_DAEMON_DOMAIN_KICK_WINDOW FLEET_DAEMON_IDLE_AFTER FLEET_POLL_MAX_BACKOFF FLEET_LAUNCHD_PROBE FLEET_LAUNCHD_PROBE_WINDOW FLEET_LAUNCHD_PROBE_INTERVAL FLEET_LAUNCHD_PROBE_TTL FLEET_MODEL_FALLBACK FLEET_MODEL_LIMIT_TTL FLEET_MODEL_CAP_PCT FLEET_CLOSE_ON_EXIT FLEET_NOTIFY_CMD FLEET_ESCALATE_AFTER FLEET_STATUS_CONTAINER FLEET_STATUS_CACHE_SECS FLEET_DISK_FLOOR_GB FLEET_DISK_WARN_GB FLEET_QUOTA_GATE FLEET_QUOTA_CEILING FLEET_QUOTA_ACCOUNT FLEET_QUOTA_BIN FLEET_RUNAWAY_CPU_PCT FLEET_RUNAWAY_CPU_SECS FLEET_RUNAWAY_CPU_ACTION FLEET_ORPHAN_CPU_PCT FLEET_ORPHAN_CPU_SECS FLEET_ORPHAN_CPU_ACTION FLEET_ORPHAN_EXTRA_RE FLEET_LOAD_WARN_PER_CORE FLEET_FSEVENTSD_WARN_MB FLEET_DOCTOR_SPOTLIGHT FLEET_CODEX_VERSION_CHECK FLEET_DOCTOR_SLEEP FLEET_DOCTOR_SIRI FLEET_DOCTOR_ICLOUD FLEET_DOCTOR_NETWORK FLEET_DOCTOR_MCP FLEET_LOADGEN_MAX_PROCS FLEET_LOADGEN_MAX_SECS FLEET_LOADGEN_LOAD_PER_CORE FLEET_LOADGEN_CORE_PCT FLEET_USAGE_WARN_PCT FLEET_USAGE_CRIT_PCT FLEET_RATELIMIT_TTL FLEET_WEBHOOK_PORT FLEET_WEBHOOK_SECRET FLEET_REAP_KEPT_PROCS FLEET_REAP_KEPT_MINAGE FLEET_ROTATE_LEASE_TTL FLEET_HELPER_NO_MCP FLEET_SPAWN_GUARD_MS FLEET_INFLIGHT_TTL"
 
 # Source the GLOBAL fleet.conf on load + EXPORT the global-only keys (issue #399).
 # ---------------------------------------------------------------------------------
@@ -2486,11 +2486,26 @@ fleet_worktree_drop() {
 # Budget: $2, else $FLEET_TRASH_SWEEP_BUDGET, else 20 s; 0 ⇒ unbudgeted.
 # Prints "swept:<n> left:<m>" and always returns 0 — a janitor never fails its
 # caller. Dotfiles are skipped, which is what keeps the trash's own .gitignore.
+#
+# SLOW PURGE (issue #893), off unless $FLEET_TRASH_PURGE_PER_TICK is a positive N.
+# A trashed worktree with its node_modules is ~200k unlinks, and emptying several
+# in one go floods the file-event daemon (fseventsd) exactly the way an install
+# does. Set, the sweep deletes at most N entries per call (the rest are `left:`),
+# each under `nice -n 19`, and defers the WHOLE call — "swept:0 left:<m>
+# deferred:load <x>/core" — when the 1-minute load per core is over
+# $FLEET_TRASH_PURGE_MAX_LOAD (default 1; 0 ⇒ never defer). Deferral is the one
+# thing an urgent caller must be able to override: $FLEET_TRASH_PURGE_URGENT=1
+# (the cleanup daemon sets it when the disk gate is closed) drops both the cap and
+# the load check, because the bytes in the trash are what frees a full disk.
 fleet_trash_sweep() {
   local main="${1:-}" budget="${2:-${FLEET_TRASH_SWEEP_BUDGET:-20}}"
   case "$budget" in ''|*[!0-9]*) budget=20 ;; esac
   [ "$budget" -gt 0 ] || budget=86400
   [ -n "$main" ] || { printf 'swept:0 left:0\n'; return 0; }
+  local cap="${FLEET_TRASH_PURGE_PER_TICK:-0}" maxload="${FLEET_TRASH_PURGE_MAX_LOAD:-1}"
+  case "$cap" in ''|*[!0-9]*) cap=0 ;; esac
+  case "$maxload" in ''|*[!0-9.]*) maxload=1 ;; esac
+  [ "${FLEET_TRASH_PURGE_URGENT:-0}" = 1 ] && cap=0
   # Two trashes when FLEET_WORKTREE_ROOT is set (issue #886): the root's, where
   # every worktree created since lives and is dropped, and the base's sibling one,
   # which still holds whatever was created before the root was switched on.
@@ -2499,16 +2514,30 @@ fleet_trash_sweep() {
   rtrash=""; [ -n "$root" ] && rtrash="$root/.fleet-trash"
   [ "$rtrash" = "$trash" ] && rtrash=""
 
-  local deadline swept=0 left=0 t e remaining
+  local deadline swept=0 left=0 t e remaining per="" nice_n=0
+  if [ "$cap" -gt 0 ]; then
+    nice_n=19
+    per="$(_fleet_load_per_core)"
+    if [ -n "$per" ] && awk -v p="$per" -v m="$maxload" 'BEGIN{ exit !(m > 0 && p > m) }'; then
+      for t in "$trash" "$rtrash"; do
+        case "${t##*/}" in .fleet-trash) ;; *) continue ;; esac
+        for e in "$t"/*; do [ -e "$e" ] && left=$((left + 1)); done
+      done
+      [ "$left" -gt 0 ] || { printf 'swept:0 left:0\n'; return 0; }
+      printf 'swept:0 left:%s deferred:load %s/core\n' "$left" "$per"
+      return 0
+    fi
+  fi
   deadline=$(( $(date +%s 2>/dev/null || echo 0) + budget ))
   for t in "$trash" "$rtrash"; do
     case "${t##*/}" in .fleet-trash) ;; *) continue ;; esac
     [ -d "$t" ] || continue
     for e in "$t"/*; do
       [ -e "$e" ] || continue                     # empty trash → the glob is literal
+      if [ "$cap" -gt 0 ] && [ "$swept" -ge "$cap" ]; then left=$((left + 1)); continue; fi
       remaining=$(( deadline - $(date +%s 2>/dev/null || echo 0) ))
       if [ "$remaining" -le 0 ]; then left=$((left + 1)); continue; fi
-      if fleet_timebox "$remaining" rm -rf "$e" >/dev/null 2>&1; then
+      if fleet_timebox "$remaining" nice -n "$nice_n" rm -rf "$e" >/dev/null 2>&1; then
         swept=$((swept + 1))
       else
         left=$((left + 1))                        # timed out mid-delete — next sweep
@@ -2517,6 +2546,20 @@ fleet_trash_sweep() {
   done
   printf 'swept:%s left:%s\n' "$swept" "$left"
   return 0
+}
+
+# _fleet_load_per_core → the 1-minute load average divided by the core count, two
+# decimals, or empty when the load is unreadable (the caller then does not defer).
+# Same sources as fleet-diskguard.sh's machine_load/machine_cores (macOS sysctl,
+# Linux /proc).
+_fleet_load_per_core() {
+  local c l
+  c=$({ sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null; } \
+      | head -1 | awk '{ n=$1+0; print (n>0 ? n : 1) }')
+  l=$({ sysctl -n vm.loadavg 2>/dev/null | tr -d '{}' || awk '{print $1}' /proc/loadavg 2>/dev/null; } \
+      | head -1 | awk '{ print $1 }')
+  case "$l" in ''|*[!0-9.]*) return 0 ;; esac
+  awk -v l="$l" -v c="${c:-1}" 'BEGIN{ printf "%.2f", l / c }'
 }
 
 # path-or-branch → the /fleet-history ledger KEY for a SCRATCH (@raw) session, or
