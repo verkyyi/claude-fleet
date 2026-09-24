@@ -6,6 +6,7 @@
 # lists everything currently being shared (across every session).
 #
 #   share.sh <file.md|file.html> [more ...]   # add doc(s)/page(s) to the shared list; prints READY <url>
+#   share.sh --tunnel <file> [more ...]  # same, but on a PUBLIC cloudflared quick tunnel — no tailnet
 #                                      # (.md → GitHub-styled viewer; .html → served as-is, #526)
 #   share.sh --list                    # show what is currently shared
 #   share.sh --remove <substr>         # drop entries whose id/title/path matches <substr>
@@ -27,6 +28,13 @@
 #                IPv4 directly and the URL is http://<magicdns>:<port>/ — plain http, but
 #                only reachable inside the tailnet, whose link is WireGuard-encrypted.
 #                Sticky until --stop; public (Funnel) links need serve rights, so none here.
+#   tunnel       no tailnet at all (issue #1151): opt-in with --tunnel or DOC_PREVIEW_MODE=tunnel.
+#                server.py on loopback in its `public` mode, fronted by `cloudflared tunnel
+#                --url` (a quick tunnel: no account, no config). The URL is a random
+#                https://<words>.trycloudflare.com — PUBLIC to anyone who has it, index
+#                included; doc headers + source paths are stripped and /_ctl is 404.
+#                Sticky until --stop. The hostname changes whenever cloudflared restarts
+#                (reboot, --stop), so old links die with it: a live preview, not hosting.
 #
 # Set DOC_PREVIEW_SESSION to label your session in the list (default: hostname).
 # No npm install needed: rendering is client-side (CDN libs in the viewer's browser).
@@ -40,7 +48,10 @@ PIDFILE="$ROOT/server.pid"
 PORTFILE="$ROOT/server.port"
 HTTPSFILE="$ROOT/https.port"
 FUNNELPORTFILE="$ROOT/funnel.port"   # tailnet HTTPS port used for public (Funnel) doc mounts
-MODEFILE="$ROOT/mode"                # https | http-direct (see the header)
+MODEFILE="$ROOT/mode"                # https | http-direct | tunnel (see the header)
+TUNNELPIDFILE="$ROOT/tunnel.pid"     # tunnel mode: the cloudflared process
+TUNNELURLFILE="$ROOT/tunnel.url"     # …its https://*.trycloudflare.com origin
+TUNNELPORTFILE="$ROOT/tunnel.port"   # …and the loopback port it fronts
 LOCK="$ROOT/.lock"
 SESSION="${DOC_PREVIEW_SESSION:-$(hostname -s 2>/dev/null || echo session)}"
 
@@ -52,8 +63,9 @@ rebuild_index() { node "$HERE/render.mjs" index "$SERVE_DIR/index.html" "$ENTRIE
 mode() {
   if [ -f "$MODEFILE" ]; then cat "$MODEFILE"; elif [ -f "$HTTPSFILE" ]; then echo https; fi
 }
-sharing() { [ -f "$HTTPSFILE" ] || [ "$(mode)" = http-direct ]; }
+sharing() { [ -f "$HTTPSFILE" ] || [ "$(mode)" = http-direct ] || [ "$(mode)" = tunnel ]; }
 current_url() {
+  if [ "$(mode)" = tunnel ]; then echo "$(cat "$TUNNELURLFILE" 2>/dev/null)/"; return; fi
   if [ "$(mode)" = http-direct ]; then echo "http://$(host):$(cat "$PORTFILE" 2>/dev/null)/"; return; fi
   local hp sfx=""; hp="$(cat "$HTTPSFILE" 2>/dev/null || echo 443)"
   [ "$hp" = 443 ] || sfx=":$hp"
@@ -77,14 +89,14 @@ sys.exit(0 if s.connect_ex((sys.argv[1],int(sys.argv[2])))==0 else 1)' "$1" "$2"
 }
 # Start ONE server.py on <addr> at the first free port from DOC_PREVIEW_PORT. pid/port are
 # recorded only once it ANSWERS, so a failed start never leaves a half-written state.
-start_server() { # <addr>; sets PORT
-  local addr="$1" p="${DOC_PREVIEW_PORT:-8765}" end launches=0 pid
+start_server() { # <addr> [public]; sets PORT
+  local addr="$1" pub="${2:-}" p="${DOC_PREVIEW_PORT:-8765}" end launches=0 pid
   end=$((p + 50))
   rm -f "$PIDFILE" "$PORTFILE"
   while [ "$p" -lt "$end" ] && [ "$launches" -lt 5 ]; do
     if port_free "$addr" "$p"; then
       launches=$((launches + 1))
-      nohup python3 "$HERE/server.py" "$p" "$SERVE_DIR" "$HERE" "$addr" >"$ROOT/server.log" 2>&1 &
+      nohup python3 "$HERE/server.py" "$p" "$SERVE_DIR" "$HERE" "$addr" $pub >"$ROOT/server.log" 2>&1 &
       pid=$!
       for _ in $(seq 1 50); do
         kill -0 "$pid" 2>/dev/null || break
@@ -137,6 +149,34 @@ resolve_id() { # <arg> -> the single matching entry id, or empty
   done
   [ "${#hit[@]}" = 1 ] && echo "${hit[0]}"
 }
+stop_tunnel() {
+  [ -f "$TUNNELPIDFILE" ] && kill "$(cat "$TUNNELPIDFILE")" 2>/dev/null || true
+  rm -f "$TUNNELPIDFILE" "$TUNNELURLFILE" "$TUNNELPORTFILE"
+}
+# Tunnel mode: ONE cloudflared quick tunnel fronting 127.0.0.1:<port>. Reused while it is
+# alive and still points at <port> (keeps the URL fixed); else (re)started, and recorded
+# only once its trycloudflare URL shows up in the log.
+ensure_tunnel() { # <port>
+  local port="$1" pid url
+  if [ -f "$TUNNELPIDFILE" ] && kill -0 "$(cat "$TUNNELPIDFILE")" 2>/dev/null \
+     && [ "$(cat "$TUNNELPORTFILE" 2>/dev/null)" = "$port" ] && [ -s "$TUNNELURLFILE" ]; then
+    return 0
+  fi
+  stop_tunnel
+  nohup cloudflared tunnel --no-autoupdate --url "http://127.0.0.1:$port" >"$ROOT/tunnel.log" 2>&1 &
+  pid=$!
+  for _ in $(seq 1 $(( ${DOC_PREVIEW_TUNNEL_WAIT:-30} * 5 ))); do
+    kill -0 "$pid" 2>/dev/null || break
+    url="$(grep -Eo 'https://[a-z0-9-]+\.trycloudflare\.com' "$ROOT/tunnel.log" 2>/dev/null | head -1 || true)"
+    if [ -n "$url" ]; then
+      echo "$pid" >"$TUNNELPIDFILE"; echo "$url" >"$TUNNELURLFILE"; echo "$port" >"$TUNNELPORTFILE"
+      return 0
+    fi
+    sleep 0.2
+  done
+  kill "$pid" 2>/dev/null || true
+  return 1
+}
 # Turn off every /p/<id> Funnel mount (used by --stop and --remove).
 unpublish_all() {
   command -v tailscale >/dev/null 2>&1 || return 0
@@ -148,12 +188,13 @@ unpublish_all() {
 
 stop() {
   unpublish_all
+  stop_tunnel
   tailscale serve reset >/dev/null 2>&1 || true
   [ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE")" 2>/dev/null || true
   pkill -f "http.server" 2>/dev/null || true
   pkill -f "doc-preview/server.py" 2>/dev/null || true
   rm -rf "$SERVE_DIR" "$ENTRIES_DIR" "$PIDFILE" "$PORTFILE" "$HTTPSFILE" "$FUNNELPORTFILE" "$MODEFILE"
-  echo "doc-preview stopped (all shared docs removed, public links off, tailscale serve reset)."
+  echo "doc-preview stopped (all shared docs removed, public links off, tunnel closed, tailscale serve reset)."
 }
 
 case "${1:-}" in
@@ -170,6 +211,15 @@ case "${1:-}" in
         [ "$1" = true ] && echo "public ON:  $2" || echo "public OFF ($id)"
       fi
     }
+    if [ "$(mode)" = tunnel ]; then
+      # Every doc on a tunnel is already public — there is nothing to toggle.
+      id="$(resolve_id "$arg")"; [ -n "$id" ] || fail "no shared doc matches '$arg'"
+      case "$act" in
+        --unpublish) fail "tunnel mode: every shared doc is public — --remove it instead" ;;
+        *) emit true "$(current_url)d/$id/" ;;
+      esac
+      exit 0
+    fi
     command -v tailscale >/dev/null 2>&1 || fail "tailscale not installed"
     id="$(resolve_id "$arg")"; [ -n "$id" ] || fail "no shared doc matches '$arg'"
     case "$act" in
@@ -225,9 +275,25 @@ case "${1:-}" in
     exit 0 ;;
 esac
 
-[ $# -ge 1 ] || { echo "usage: share.sh <file.md|file.html> [more ...] | --list | --remove <substr> | --publish <id> | --unpublish <id> | --stop" >&2; exit 1; }
-command -v tailscale >/dev/null || { echo "tailscale not installed" >&2; exit 1; }
-tailscale status >/dev/null 2>&1 || { echo "tailscale is not running / logged out" >&2; exit 1; }
+WANT_TUNNEL=0
+[ "${DOC_PREVIEW_MODE:-}" = tunnel ] && WANT_TUNNEL=1
+if [ "${1:-}" = --tunnel ]; then WANT_TUNNEL=1; shift; fi
+[ $# -ge 1 ] || { echo "usage: share.sh [--tunnel] <file.md|file.html> [more ...] | --list | --remove <substr> | --publish <id> | --unpublish <id> | --stop" >&2; exit 1; }
+# Tunnel mode is sticky (like http-direct); a live tailnet share is never silently made public.
+MODE="$(mode)"
+if [ "$WANT_TUNNEL" = 1 ] && [ "$MODE" != tunnel ] && sharing; then
+  echo "doc-preview: already sharing on the tailnet ($MODE) — refusing to turn it into a public tunnel." >&2
+  echo "Run share.sh --stop first (removes every session's shares), then share.sh --tunnel <file>." >&2
+  exit 1
+fi
+[ "$WANT_TUNNEL" = 1 ] && MODE=tunnel
+NO_TAILNET_HINT="no tailnet? share.sh --tunnel <file> hosts it on a PUBLIC https://*.trycloudflare.com URL instead (needs cloudflared; anyone with the link can read it)"
+if [ "$MODE" = tunnel ]; then
+  command -v cloudflared >/dev/null || { echo "doc-preview: tunnel mode needs cloudflared (brew install cloudflared)" >&2; exit 1; }
+else
+  command -v tailscale >/dev/null || { echo "tailscale not installed — $NO_TAILNET_HINT" >&2; exit 1; }
+  tailscale status >/dev/null 2>&1 || { echo "tailscale is not running / logged out — $NO_TAILNET_HINT" >&2; exit 1; }
+fi
 
 # Serialize concurrent shares (port pick / index rebuild) across sessions.
 for _ in $(seq 1 100); do mkdir "$LOCK" 2>/dev/null && break || sleep 0.2; done
@@ -278,23 +344,32 @@ server_fail() { # <addr>
   rollback; exit 1
 }
 
-MODE="$(mode)"
+PUB=""
 if [ "$MODE" = http-direct ]; then
   ADDR="$(ts_ip4)"; [ -n "$ADDR" ] || { echo "doc-preview: no tailscale IPv4 (tailscale ip -4)" >&2; rollback; exit 1; }
 else
   ADDR=127.0.0.1
+  [ "$MODE" = tunnel ] && PUB=public
 fi
 
 # Ensure ONE static server is running (reuse the existing one — keeps the port/URL fixed).
 if [ -f "$PIDFILE" ] && [ -f "$PORTFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
   PORT="$(cat "$PORTFILE")"
 else
-  start_server "$ADDR" || server_fail "$ADDR"
+  start_server "$ADDR" $PUB || server_fail "$ADDR"
+fi
+
+if [ "$MODE" = tunnel ] && ! ensure_tunnel "$PORT"; then
+  echo "doc-preview: cloudflared quick tunnel did not come up within ${DOC_PREVIEW_TUNNEL_WAIT:-30}s — see $ROOT/tunnel.log:" >&2
+  tail -3 "$ROOT/tunnel.log" 2>/dev/null >&2 || true
+  [ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE")" 2>/dev/null || true
+  rm -f "$PIDFILE" "$PORTFILE"
+  rollback; exit 1
 fi
 
 # https mode: ensure tailscale serve points at it. Reuse the existing route (never
 # `reset`, so other sessions' sharing keeps working); only configure one if it's missing.
-if [ "$MODE" != http-direct ]; then
+if [ "$MODE" = https ] || [ -z "$MODE" ]; then
   HP="$(serve_route_port "$PORT")"
   if [ -z "$HP" ]; then
     HP="$(cat "$HTTPSFILE" 2>/dev/null || true)"
@@ -327,6 +402,7 @@ if [ "$MODE" != http-direct ]; then
 fi
 echo "$MODE" >"$MODEFILE"
 NOTE=""
+[ "$MODE" = tunnel ] && NOTE="  (tunnel: PUBLIC — anyone with this link can read it and the index; the URL changes if cloudflared restarts)"
 [ "$MODE" = http-direct ] && NOTE="  (http-direct: plain http inside the tailnet — this login is not tailscale's operator, so no tailscale serve/HTTPS)"
 
 URL="$(current_url)"; BASE="${URL%/}"

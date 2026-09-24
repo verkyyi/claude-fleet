@@ -15,12 +15,18 @@ mounts individual `/p/<id>/` document paths, never `/_ctl`, so a public viewer
 cannot reach the control API. The toggle UI itself is hidden on the public view
 (the page detects the `/p/` path prefix).
 
-Usage: server.py <port> <serve_dir> <skill_dir> [bind_addr]
+Usage: server.py <port> <serve_dir> <skill_dir> [bind_addr] [public]
 
 bind_addr defaults to 127.0.0.1 (the `tailscale serve` HTTPS mode, which proxies
 to loopback). share.sh passes this login's tailscale IPv4 in its http-direct
 fallback — a login that is not tailscale's operator cannot `tailscale serve`, so
 the server listens on the tailnet address itself (issue #1093).
+
+`public` is share.sh's tunnel mode (issue #1151): a cloudflared quick tunnel fronts
+this loopback server on a public https://*.trycloudflare.com URL, so EVERY request
+is a public one. The control API is then 404 (there is no private origin to toggle
+from), every doc page is served with its header stripped exactly like `/_pub/`,
+and the index drops each row's source path — no internal metadata leaves the box.
 """
 import json
 import os
@@ -34,6 +40,8 @@ PORT = int(sys.argv[1])
 SERVE_DIR = sys.argv[2]
 SKILL_DIR = sys.argv[3]
 BIND_ADDR = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] else "127.0.0.1"
+PUBLIC = len(sys.argv) > 5 and sys.argv[5] == "public"
+DOC_RE = re.compile(r"^/d/([0-9]{8}-[0-9]{6}-[0-9]+)/(index\.html)?$")
 SHARE = os.path.join(SKILL_DIR, "share.sh")
 ID_RE = re.compile(r"^[0-9]{8}-[0-9]{6}-[0-9]+$")
 
@@ -88,8 +96,29 @@ class Handler(SimpleHTTPRequestHandler):
             return None
         return doc_id
 
+    def _html(self, html):
+        body = html.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        return self.wfile.write(body)
+
     def do_GET(self):
         route = urlparse(self.path).path
+        if PUBLIC:
+            if route.startswith("/_ctl/"):
+                return self.send_error(404)
+            m = DOC_RE.match(route)
+            if m:
+                return self._serve_public("/_pub/" + m.group(1) + "/")
+            if route in ("/", "/index.html"):
+                try:
+                    html = open(os.path.join(SERVE_DIR, "index.html"), encoding="utf-8").read()
+                except OSError:
+                    return self.send_error(404)
+                return self._html(re.sub(r'<div class="src"[^>]*>.*?</div>', "", html, flags=re.S))
         if route == "/_ctl/status":
             doc_id = self._read_id()
             if not doc_id:
@@ -113,20 +142,15 @@ class Handler(SimpleHTTPRequestHandler):
                 html = open(fp, encoding="utf-8").read()
             except OSError:
                 return self.send_error(404)
-            html = re.sub(r'<div class="hdr">.*?</div>', "", html, count=1, flags=re.S)
-            body = html.encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            return self.wfile.write(body)
+            return self._html(re.sub(r'<div class="hdr">.*?</div>', "", html, count=1, flags=re.S))
         # non-index assets (e.g. locally-referenced images): pass through, static.
         self.path = "/d/" + doc_id + "/" + sub
         return super().do_GET()
 
     def do_POST(self):
         route = urlparse(self.path).path
+        if PUBLIC:
+            return self.send_error(404)
         if route in ("/_ctl/publish", "/_ctl/unpublish"):
             doc_id = self._read_id()
             if not doc_id:

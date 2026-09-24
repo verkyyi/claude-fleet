@@ -1,6 +1,6 @@
 ---
 name: doc-preview
-description: Render a Markdown document to GitHub-styled HTML and host it on this machine's Tailscale tailnet URL so the user can read it in a browser before committing. Use after writing or substantially editing a Markdown doc the user may want to preview — a guide, README, design doc, runbook, report, or research writeup — especially when they ask to "preview", "share", "host", or "see" a doc. Multi-session safe: shares append to one fixed URL. Personal to this machine's tailnet (the host is derived from tailscale at runtime).
+description: Render a Markdown document to GitHub-styled HTML and host it on this machine's Tailscale tailnet URL so the user can read it in a browser before committing. Use after writing or substantially editing a Markdown doc the user may want to preview — a guide, README, design doc, runbook, report, or research writeup — especially when they ask to "preview", "share", "host", or "see" a doc. Multi-session safe: shares append to one fixed URL. Personal to this machine's tailnet (the host is derived from tailscale at runtime); with no tailnet, `--tunnel` serves it on a public cloudflared quick-tunnel URL instead.
 ---
 
 # doc-preview — host Markdown docs on a fixed tailnet URL
@@ -31,7 +31,7 @@ site-absolute refs are left alone.
 directory via a loopback `server.py` (a `http.server` + a tiny control API), and fronts it
 with `tailscale serve` (HTTPS on the tailnet). The viewing browser needs internet for the CDN libs.
 
-**Two serving modes** (recorded in `~/.cache/claude-doc-preview/mode`, issue #1093):
+**Three serving modes** (recorded in `~/.cache/claude-doc-preview/mode`, issues #1093/#1151):
 
 - **`https`** — the default: `server.py` on loopback, fronted by `tailscale serve`. URL
   `https://<magicdns>[:<port>]/`.
@@ -44,6 +44,17 @@ with `tailscale serve` (HTTPS on the tailnet). The viewing browser needs interne
   row says which mode this login gets, and the one-time `sudo tailscale serve …` command to
   get HTTPS instead (then `--stop` and re-share — `share.sh` adopts an existing route to its
   loopback port). Don't move the operator: it would break the login that holds it.
+- **`tunnel`** — **no tailnet needed** (issue #1151). Opt-in only: `share.sh --tunnel <file>`
+  or `DOC_PREVIEW_MODE=tunnel`. `server.py` runs on loopback in its `public` mode and a
+  `cloudflared` quick tunnel (no account, no config; `brew install cloudflared`) fronts it at
+  a random `https://<words>.trycloudflare.com/`. **Everything shared is PUBLIC** to anyone
+  holding that link — the index too — so the server strips each doc's header (session,
+  date, source path), drops source paths from the index, and 404s `/_ctl/*` (no toggle:
+  `--publish`/`--pubstatus` just report the tunnel URL, `--unpublish` refuses — `--remove`
+  the doc instead). Sticky until `--stop`; `--tunnel` refuses while a tailnet share is live
+  (it would make every session's docs public). The hostname changes whenever cloudflared
+  restarts (reboot, `--stop`), so earlier links die with it. Use it only when the user
+  wants a link without the tailnet — it is public-by-obscurity, not private.
 
 The local port is picked by a real `bind()` probe (not `lsof`, which can't see another
 login's server), and a server that fails to start leaves no `server.pid`/`server.port` and
@@ -126,6 +137,9 @@ you share on behalf of a distinct task/session, pass a short label so the user c
   tables. The only interactive control is the header **"公开链接" public-link switch** (tailnet
   view only); don't add other UX chrome (filter/sort/theme toggles).
 - A `READY http://…` URL with the `(http-direct: …)` note is a normal success — relay it as is.
+- A `READY https://….trycloudflare.com/…` URL carries the `(tunnel: PUBLIC …)` note — relay it
+  and say it is public. Never switch to `--tunnel` on your own when tailscale is down: the
+  error names it; ask the user first, since it makes the shared docs public.
 - On error, read the printed message (usually: tailscale logged out, HTTPS certs not enabled, or
   — for `--publish` — the Funnel node attribute not granted in the tailnet ACLs) and tell the fix.
 - Override the static server's starting port with `DOC_PREVIEW_PORT=NNNN`.
