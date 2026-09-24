@@ -80,7 +80,11 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 # to it, runs bin/fleet-install-apply.sh (daemons reloaded, hooks merged,
 # commands/skills installed) and bin/fleet-doctor.sh — a NEW doctor FAIL line
 # rolls the install back and that version is not retried until stable moves. It
-# never moves backward and never touches an install with tracked local changes.
+# never moves backward and never touches an install with tracked local changes,
+# and it waits while an EPIC batch is running on this login: /fleet-epic-run
+# stamps $FLEET_CONF_DIR/global/epic-running every tick (bin/fleet-epic-heartbeat.sh,
+# issue #953) and the tick defers while that mark is fresh (a 45-min lease, cleared
+# at the batch's closing tick).
 # Set to 0 to switch it off for this login (a hand /fleet-sync-install still
 # works; fleet-sync-logins.sh — the last step of /fleet-sync-install, issue #1122 — skips a
 # login that opted out unless named, or --include-off). State:

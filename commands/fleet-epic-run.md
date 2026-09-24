@@ -53,6 +53,20 @@ echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master
 A 12-hour loop outlives any context window, so a loop that remembers is a loop
 that dies at the boundary. Therefore:
 
+- **The first command of every tick stamps the heartbeat** (issue #953):
+
+  ```sh
+  bash ~/.claude/fleet/bin/fleet-epic-heartbeat.sh <N> --tick <n> --repo "$FLEET_REPO"
+  ```
+
+  It rewrites `$FLEET_CONF_DIR/global/epic-running`, and the install-sync daemon
+  (`bin/fleet-install-sync.sh`, C3 of #1117) defers while that mark is fresh.
+  Without it the daemon cannot see this batch: between ticks this pane is idle and
+  the workers sit idle while CI runs, so its busy-window gate reads a quiet
+  machine and fast-forwards the live install under a batch that is still merging
+  onto it. A lease, not a lock — fresh for 45 min, past the longest planned gap in
+  step 3 — so a loop that dies without its closing tick holds nothing forever;
+  the closing tick clears it (step 4).
 - **Each tick begins by re-reading the EPIC** — the parent body (the charter), the
   sub-issue list and their states, and the repo's open PRs. Never carry a plan
   from the previous tick.
@@ -143,7 +157,10 @@ multi-repo fleet, from its `repos/<slug>.conf` — #805), a member counts as
 complete only when its deploy state goes green. With neither set, merged ≡ done.
 Do **not** run `/fleet-sync-install` mid-batch — the loop runs on the live install,
 and swapping the floor under running workers is how one bad merge takes the batch
-with it. Sync once, at the end.
+with it. Sync once, at the end (step 4). The same rule binds the workers through
+`/fleet-claim` (issue #953: on EPIC #883 one synced right after its own merge and
+reloaded a daemon under the rest of the batch), and the install-sync daemon holds
+off on its own while this loop's heartbeat is fresh (step 1).
 
 ### b. Reclaim finished slots
 
@@ -274,6 +291,13 @@ survives a context boundary the same way everything else here does:
    carries the tailnet URL in place of `pending` — one grep now separates a
    reported EPIC from an unreported one. Then push the done notification, with
    the URL in it.
+4. **Clear the heartbeat** — `bash ~/.claude/fleet/bin/fleet-epic-heartbeat.sh --clear`
+   (issue #953). Only now may the live install move: the batch-end sync is
+   `/fleet-sync-install` by hand, or `fleet-stable.sh move` and every login's
+   install-sync daemon follows on its next tick. After the report, not before —
+   the closing sequence is one tick, and a floor that moves while the report is
+   still building is the mid-batch bug in miniature. A loop that never reaches
+   this line leaves a mark that expires on its own, 45 min after its last tick.
 
 **Resuming into a `report: pending`.** The stateless rule (step 1) covers this
 with no extra bookkeeping: a tick that re-reads the parent, finds the core empty

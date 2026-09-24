@@ -19,6 +19,10 @@
 #   E. busy          a working window on any live fleet → deferred, with
 #                    deferred_since kept across ticks; idle → the move happens
 #   M. disk gate     gate closed → deferred
+#   O. epic running  a fresh epic-running mark (fleet-epic-heartbeat.sh, #953) →
+#                    deferred, names the epic, before the disk gate is asked; a
+#                    stale (ttl passed) or --clear'ed mark → the next gate
+#                    decides; a bare touch counts from mtime; --status 0/1/2
 #   F. rollback      a FAIL line the new doctor prints → reset --hard + the OLD
 #                    version's apply back; that version is skipped until stable
 #                    moves; the next stable move is followed
@@ -184,6 +188,48 @@ stable "$C4"; touch "$WORK/gate-closed"; n=$(applies); run
 eq "M: result deferred" deferred "$(st result)"
 contains "M: says disk gate" "$(st reason)" "disk gate closed"
 eq "M: HEAD untouched" "$C3" "$(hd)"; eq "M: no apply" "$n" "$(applies)"
+
+# --- O. a running EPIC batch (issue #953) ------------------------------------------------------
+# stable C4 is still ahead and M's disk gate is still closed, so WHICH reason wins
+# is the assertion: a fresh mark defers for the EPIC before the disk gate is even
+# asked; a stale or cleared one falls through to it — HEAD never moves either way.
+HB="$BIN/fleet-epic-heartbeat.sh"
+T1=$(st deferred_since)
+OUT=$(bash "$HB" 1117 --tick 3 --repo o/r --session f1 2>&1); RC=$?
+eq "O: stamp exits 0" 0 "$RC"; contains "O: stamp says what it wrote" "$OUT" "stamped epic=1117 session=f1 tick=3 ttl=2700s"
+[ -f "$CONF/global/epic-running" ] || fail "O: no epic-running mark written"; CHECKS=$((CHECKS + 1))
+eq "O: mark carries the epic" 1117 "$(sed -n 's/^epic: //p' "$CONF/global/epic-running")"
+n=$(applies); run
+eq "O: result deferred" deferred "$(st result)"
+contains "O: names the epic, before the disk gate" "$(st reason)" "EPIC batch running on this login (epic=1117 session=f1 tick=3"
+contains "O: says why" "$(st reason)" "issue #953"
+not_contains "O: the disk gate was not reached" "$(st reason)" "disk gate"
+eq "O: HEAD untouched" "$C3" "$(hd)"; eq "O: no apply" "$n" "$(applies)"
+eq "O: deferred_since kept from the disk-gate deferral" "$T1" "$(st deferred_since)"
+contains "O: log line" "$(lastlog)" "deferred $(short "$C3")..$(short "$C4") EPIC batch running"
+OUT=$(bash "$HB" --status 2>&1); RC=$?
+eq "O: --status fresh exits 0" 0 "$RC"; contains "O: --status prints the mark" "$OUT" "fresh epic=1117 session=f1 tick=3"
+# a LEASE: written with a 1 s ttl it expires, and the tick goes on to the next gate
+bash "$HB" 1117 --ttl 1 --session f1 >/dev/null 2>&1; sleep 2; run
+eq "O: a stale mark still defers (the disk gate)" deferred "$(st result)"
+contains "O: … for the disk gate, not the EPIC" "$(st reason)" "disk gate closed"
+not_contains "O: stale mark is not the reason" "$(st reason)" "EPIC"
+OUT=$(bash "$HB" --status 2>&1); RC=$?
+eq "O: --status stale exits 1" 1 "$RC"; contains "O: --status says stale" "$OUT" "stale epic=1117"
+# --clear lifts it outright
+bash "$HB" 1117 --session f1 >/dev/null 2>&1; OUT=$(bash "$HB" --clear 2>&1); RC=$?
+eq "O: --clear exits 0" 0 "$RC"; contains "O: --clear says so" "$OUT" "cleared"
+[ -f "$CONF/global/epic-running" ] && fail "O: --clear left the mark"; CHECKS=$((CHECKS + 1))
+run; contains "O: cleared → the disk gate decides" "$(st reason)" "disk gate closed"
+OUT=$(bash "$HB" --status 2>&1); RC=$?; eq "O: --status with no mark exits 2" 2 "$RC"
+# a bare touch (no epoch:) is a hand override, counted from mtime
+: > "$CONF/global/epic-running"; run
+contains "O: a bare touch defers too" "$(st reason)" "EPIC batch running on this login (epic=- session=- tick=-"
+rm -f "$CONF/global/epic-running"
+# usage
+OUT=$(bash "$HB" 2>&1); RC=$?; eq "O: no epic is a usage error" 2 "$RC"
+OUT=$(bash "$HB" 1117 --ttl 0 2>&1); RC=$?; eq "O: --ttl 0 is a usage error" 2 "$RC"
+[ -f "$CONF/global/epic-running" ] && fail "O: a usage error must not stamp"; CHECKS=$((CHECKS + 1))
 rm "$WORK/gate-closed"
 
 # --- F. rollback ----------------------------------------------------------------------------------

@@ -36,7 +36,13 @@
 #              working / looping / waking (the same busy trio
 #              fleet-epic-backstop.sh uses) → wait; `deferred_since` keeps the
 #              first deferral's time so the doctor (C7 #1123) can say
-#              "waiting 26h". Also deferred while the disk gate is closed.
+#              "waiting 26h". Also deferred while an EPIC batch is running on
+#              this login — /fleet-epic-run stamps $FLEET_CONF_DIR/global/
+#              epic-running as its first command every tick
+#              (bin/fleet-epic-heartbeat.sh, issue #953; a 45-min lease, cleared
+#              at the closing tick): the loop's pane and its workers are idle
+#              between ticks, so the busy trio alone would let this tick swap the
+#              floor under a running batch. And while the disk gate is closed.
 #   updated    `git merge --ff-only <stable>` → the NEW version's
 #              bin/fleet-install-apply.sh --from <old> --to <stable> (C2 #1119:
 #              the one implementation of "sync once" — daemons reloaded, hooks
@@ -90,7 +96,7 @@ DRY=0 STATUS=0
 BUSY_STATES='working|looping|waking'
 LOCK_TTL=3600   # an apply + two doctor runs take well under a minute; older = a dead tick
 
-usage() { sed -n '2,76p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,82p' "$0" | sed 's/^# \{0,1\}//'; }
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run|-n) DRY=1 ;;
@@ -287,6 +293,14 @@ main() {
   fi
 
   # --- quiet? ----------------------------------------------------------------------------
+  # A running EPIC batch first (issue #953): its pane and its workers are idle
+  # between ticks, so the busy trio below sees a quiet machine while the loop is
+  # still merging onto this install.
+  local epic
+  if epic=$(fleet_epic_running 2>/dev/null); then
+    [ -n "$DEFERRED_SINCE" ] || DEFERRED_SINCE=$(now)
+    finish deferred "EPIC batch running on this login ($epic) — not swapping the floor under a running batch (issue #953); the run loop clears the mark at its closing tick, else it expires"
+  fi
   local busy
   busy=$(busy_fleets | tr '\n' ' ')
   if [ -n "$busy" ]; then

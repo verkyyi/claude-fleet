@@ -136,6 +136,17 @@ fail() { FAILS=$((FAILS + 1)); say "$1: FAIL $2"; }
 # run <cmd...> — execute, or print under --dry-run
 run() { if [ "$DRY" = 1 ]; then say "    would: $*"; return 0; fi; "$@" >/dev/null 2>&1; }
 
+# --- a running EPIC batch? (issue #953) — a warning, never a gate ---------------
+# The batch-end /fleet-sync-install is exactly this call, made after the run loop
+# cleared its heartbeat; the install-sync daemon defers on a fresh one before it
+# ever gets here. So a FRESH mark at this point is a hand sync under a batch that
+# is still running — a worker /fleet-claim told not to, or a hub that skipped the
+# clear. Say so; the operator decides. An older version's lib has no reader → quiet.
+if [ -f "$ROOT/bin/fleet-lib.sh" ] \
+   && er=$( . "$ROOT/bin/fleet-lib.sh" >/dev/null 2>&1 && fleet_epic_running 2>/dev/null ); then
+  say "epic: WARN a batch is running on this login ($er) — syncing mid-batch swaps the floor under its workers (issue #953); the run loop syncs once, at its closing tick (fleet-epic-heartbeat.sh --clear lifts the mark)"
+fi
+
 # --- logins (issue #1122) — the last step, on both paths below ---------------
 # Opt-in, and silent when not asked for: the daemon's log stays one line per
 # thing that happened. The other logins get THIS install's HEAD (--to); a login

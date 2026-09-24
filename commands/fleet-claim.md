@@ -313,7 +313,24 @@ override them):
      and liveness checks; the dash marks pending cleanup with `rNm`.
      Don't start new work in a
      landed worktree; a follow-up gets its own issue (and, if it's worth one now,
-     its own worker via `--spawn` above).
+     its own worker via `--spawn` above). And don't make your merge *live*: no
+     `/fleet-sync-install` from a worker — next bullet.
+- **Merged is not live, and making it live is not yours** (issue #953). Never run
+  `/fleet-sync-install` — nor `bin/fleet-install-apply.sh` or
+  `fleet-sync-logins.sh` by hand — from a worker: not after your own merge, not to
+  «see it live», not for evidence. The live install (`~/.claude/fleet`) is the
+  floor every other session on this login stands on; during EPIC #883 a worker
+  synced right after its merge and swapped the scripts and a daemon under the rest
+  of the batch. This binds doubly when your issue is an EPIC member
+  (`<!-- fleet:epic-member -->` in its body): the run loop syncs **once, at its
+  closing tick**, and the install-sync daemon follows `stable` when the operator
+  moves it — it defers on its own while the loop's heartbeat is fresh
+  (`bin/fleet-epic-heartbeat.sh`). When the `上线证据:` line asks for something
+  only the live install shows (a daemon's log, a doctor row, an installed
+  command), your `after` is the **branch's** — run the script from this
+  worktree's `bin/`, grep the file here — and its note says
+  「已上线证据待 hub 批末同步后取」: the 已上线 column is `/fleet-epic-report`'s
+  to take after the batch-end sync, never yours to stage.
 - **Host for the operator with doc-preview, never an Artifact.** A report, plan,
   design doc, dashboard or mockup the operator should open in a browser goes
   through the fleet's doc-preview skill —
