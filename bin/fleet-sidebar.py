@@ -4,7 +4,10 @@
 The worker keeps tmux's active-pane identity even during keyboard navigation.
 That matters: collectors, messages and recovery tools resolve a window to its
 active agent pane. Mouse forwarding and the fleet-sidebar key table deliver
-input explicitly to this view without changing that identity.
+input explicitly to this view without changing that identity. A terminal paste
+is the one input tmux forwards with no table lookup, to the CLIENT's pane: while
+the keyboard is here that pane is this view (issue #1105, PIN_KEY below) — a
+per-client pointer, so the window's active pane is still the worker.
 """
 import codecs
 import curses
@@ -22,7 +25,7 @@ import unicodedata
 
 BIN = Path(__file__).absolute().parent  # preserve the selftest shadow root
 US = "\x1f"
-VIEW_VERSION = "15"  # #1097: the input line has a cursor; replace live v14 views once
+VIEW_VERSION = "16"  # #1105: a paste lands on the input line; replace live v15 views once
 # ↑↓ follow (issue #822): an arrow moves the highlight at once and switches to
 # it only after this much quiet. A held key on a slow link is one switch, not
 # one per row, and a row passed over is never selected — so the wake hook's
@@ -48,6 +51,16 @@ HELP_ROW = " ? 快捷键"
 # key sheet — so the operator need not switch to English first; inside a name
 # they type as themselves, like `.` and `?` do.
 KEY_ALIASES = {"。": ".", "．": ".", "？": "?"}
+# The paste route's PIN (issue #1105). tmux forwards a bracketed paste to the
+# CLIENT's pane before any key table, so no bind can catch one; under the
+# `active-pane` client flag `select-pane` moves that client's own pane instead of
+# the window's. Only a command run AS the client can do that — a `select-pane`
+# from this process is a session-less CLI client and would move the window's —
+# so the conf binds this unpressable key in the fleet-sidebar table to set the
+# flag and pin `{top-left}`, and `send-keys -K -c <client> PIN_KEY` runs it as
+# the client. `join-pane` forgets a moved pane's client entries: re-pin after a
+# follow. In root the same key only drops a stale flag (conf/tmux-attention.conf).
+PIN_KEY = "C-M-S-F12"
 
 
 def run(args, **kwargs):
@@ -102,13 +115,66 @@ def move_view(pane, worker, width, select=False):
     return not commands or run(["tmux", *commands]).returncode == 0
 
 
-def leave_navigation(session):
-    # A hidden sidebar must not keep intercepting a client's arrow keys.
+def clients(session):
+    """(name, key table, pinned) of every client attached to the session."""
+    out = []
     for line in tmux("list-clients", "-t", session, "-F",
-                     US.join(("#{client_name}", "#{client_key_table}"))).splitlines():
-        client, _, table = line.partition(US)
+                     US.join(("#{client_name}", "#{client_key_table}",
+                              "#{client_flags}"))).splitlines():
+        parts = line.split(US)
+        if len(parts) == 3:
+            out.append((parts[0], parts[1], "active-pane" in parts[2].split(",")))
+    return out
+
+
+_pin_bound = None
+
+
+def pin_bound():
+    """Whether the server's conf binds PIN_KEY. Unbound — a live server not yet
+    reloaded after an upgrade, a selftest fixture — the key would fall through
+    to root and reach the worker as bytes, so nothing injects it. Read once: a
+    conf reload also replaces this view (VIEW_VERSION)."""
+    global _pin_bound
+    if _pin_bound is None:
+        _pin_bound = run(["tmux", "list-keys", "-T", "fleet-sidebar", PIN_KEY]).returncode == 0
+    return _pin_bound
+
+
+def pin_view(session):
+    """Point each navigating client's own pane at the view again (issue #1105):
+    the view just moved (join-pane) or was just created, and tmux keeps no
+    client entry for either. Run as the client, through PIN_KEY (see it)."""
+    if not pin_bound():
+        return
+    for client, table, _ in clients(session):
+        if table == "fleet-sidebar":
+            tmux("send-keys", "-K", "-c", client, PIN_KEY)
+
+
+def route_input(session):
+    """The 1s reconcile of the paste route (issue #1105). The binds set the pin
+    on every take and drop it on every hand-back they own; a prefix command
+    (prefix i, a popup) leaves the table with neither, and its stale pin would
+    send a paste — and the first typed key — to this view: drop it. A client
+    that is navigating unpinned (an older bind, a hand-rolled switch-client)
+    gets pinned, so its paste lands here."""
+    for client, table, pinned in clients(session):
+        if table == "fleet-sidebar" and not pinned:
+            if pin_bound():
+                tmux("send-keys", "-K", "-c", client, PIN_KEY)
+        elif table == "root" and pinned:
+            tmux("refresh-client", "-t", client, "-f", "!active-pane")
+
+
+def leave_navigation(session):
+    # A hidden sidebar must not keep intercepting a client's arrow keys — nor
+    # keep its pane pinned as the client's own (issue #1105).
+    for client, table, pinned in clients(session):
         if table == "fleet-sidebar":
             tmux("switch-client", "-c", client, "-T", "root")
+        if pinned:
+            tmux("refresh-client", "-t", client, "-f", "!active-pane")
 
 
 def sync(session, enabled, width, lock):
@@ -145,6 +211,7 @@ def sync(session, enabled, width, lock):
     worker = next((p[0] for p in workers if p[3] == "1"), workers[0][0])
     if reusable:
         if move_view(reusable[0][0], worker, width):
+            pin_view(session)
             return
         remove_view(reusable[0][0])
     # A reused view must not keep its first worker's worktree alive after moving.
@@ -159,6 +226,7 @@ def sync(session, enabled, width, lock):
          "set-option", "-p", "-t", pane, "@sidebar_version", VIEW_VERSION, ";",
          "set-option", "-w", "-t", pane, "@sidebar_worker", worker, ";",
          "set-option", "-p", "-t", pane, "remain-on-exit", "off")
+    pin_view(session)
 
 
 def send_key(session, key):
@@ -183,6 +251,8 @@ def jump(session, window, pane, lock):
             worker = next((p[0] for p in workers if p[3] == "1"), workers[0][0])
             width = fields(pane, "#{pane_width}")[0]
             if width.isdigit() and move_view(pane, worker, int(width), select=True):
+                # join-pane forgot the client's pin on the moved view (#1105).
+                pin_view(session)
                 return
             tmux("select-window", "-t", window, ";", "select-pane", "-t", worker)
 
@@ -408,7 +478,9 @@ def escape_word(screen):
     writes for M-b / M-f / M-Left / M-Right (⌃← / ⌃→ too): ESC b, ESC f,
     ESC[1;3D … — which keypad parsing only knows when the terminfo does. A lone
     Escape (the Escape bind's) has nothing behind it and stays 27; an unknown
-    CSI sequence is swallowed (-1) rather than typed as `[1;2A`."""
+    CSI sequence is swallowed (-1) rather than typed as `[1;2A`. ESC[200~ opens
+    a bracketed paste (issue #1105; the view asks for it): its text, up to the
+    ESC[201~ tmux writes after the last byte, comes back as a str."""
     screen.nodelay(True)
     try:
         nxt = screen.getch()
@@ -428,9 +500,45 @@ def escape_word(screen):
                 break
         if re.fullmatch(r"1;[3579][CD]", seq):
             return WORD_LEFT if seq.endswith("D") else WORD_RIGHT
+        if seq == "200~":
+            return pasted(screen)
         return -1
     finally:
         screen.nodelay(False)
+
+
+PASTE_END = b"\x1b[201~"
+
+
+def pasted(screen):
+    """The body of a bracketed paste, read to its end marker. tmux writes the
+    paste in pieces (one per key on 3.4), so wait a little between them; a paste
+    with no end within a second is taken as it stands."""
+    body, deadline = bytearray(), time.monotonic() + 1.0
+    screen.nodelay(False)
+    screen.timeout(100)
+    while not body.endswith(PASTE_END) and time.monotonic() < deadline:
+        nxt = screen.getch()
+        if nxt == -1:
+            if body:
+                break
+            continue
+        if 0 <= nxt < 256:
+            body.append(nxt)
+        if len(body) > 1 << 16:
+            break
+    if body.endswith(PASTE_END):
+        del body[-len(PASTE_END):]
+    return body.decode("utf-8", "ignore")
+
+
+def paste_text(text):
+    """A paste as ONE name for the input line: line breaks and tabs become
+    spaces (a pasted paragraph must not submit at its first newline), the end
+    of the paste loses its newline, other controls are dropped."""
+    text = text.rstrip("\r\n")
+    text = re.sub(r"[\r\n\t]+", " ", text)
+    return "".join(c for c in text if typed(c))
 
 
 def edit_of(key, text):
@@ -637,6 +745,11 @@ def ui(screen, session, worker, lock):
     curses.init_pair(7, curses.COLOR_RED, -1)
     screen.keypad(True)
     curses.meta(True)
+    # Bracketed paste (issue #1105): with it on, tmux writes a paste as
+    # ESC[200~ … ESC[201~ (input_key drops the markers for a pane without it),
+    # so a pasted paragraph is one insert, not a line typed and submitted per
+    # newline. Written past curses: it never touches this private mode.
+    os.write(1, b"\x1b[?2004h")
     rows, selected, offset, refresh_at = [], window, 0, 0.0
     shown, navigation, follow_at = False, False, None
     # The input line (issue #896). Keys arrive as BYTES through the fleet-sidebar
@@ -725,6 +838,7 @@ def ui(screen, session, worker, lock):
                 env["FLEET_SIDEBAR_CURRENT"] = window
             worker = info[5] or worker
             navigation = info[6] == "fleet-sidebar"
+            route_input(session)
             # kill-pane does not emit pane-exited on every supported tmux.
             # Never let this view keep an otherwise closed worker window alive.
             if fields(worker, "#{pane_dead}") != ["0"]:
@@ -845,6 +959,16 @@ def ui(screen, session, worker, lock):
             continue
         if key == 27:
             key = escape_word(screen)
+        if isinstance(key, str):
+            # A bracketed paste (issue #1105): one insert at the cursor, on the
+            # name or the rename alike. A spawn in flight owns the name.
+            chars = paste_text(key)
+            if chars and spawning is None:
+                was, toast = line.text, ""
+                line.insert(chars)
+                if not was:
+                    mark_input(pane, line.text)
+            continue
         op = edit_of(key, line.text)
         if op:
             # The input line's own keys (issue #1097). A spawn in flight owns

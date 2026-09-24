@@ -148,7 +148,9 @@ The pane carries `@sidebar=1`, never `@dash`, and reads
 and folds, with the current worker also exempt from folding. Rows target stable
 window IDs. Mouse forwarding and the `fleet-sidebar` keyboard table keep the
 agent pane active, so window-targeted messaging, capture and process discovery
-still resolve the worker. `@sidebar_worker` records that pane while the view is
+still resolve the worker (a per-client pointer — tmux's `active-pane` client
+flag — points at the view while it holds the keyboard, for the paste route
+below; the window's active pane is untouched). `@sidebar_worker` records that pane while the view is
 present and is cleared from the source window when the view moves. The UI follows
 this binding after each move. Clicking the sidebar enters its key table, including
 clicks on blank space; tmux 3.6+ also reports clicks on the top pane border.
@@ -202,7 +204,8 @@ The line is a line editor (issue #1097, `Line` in `fleet-sidebar.py`): a cursor
 cells), and readline's keys — ←→, Home/End, ⌥←/⌥→ by word (read off the raw
 `ESC b`/`ESC f`/`ESC[1;3D` when the terminfo does not name it), ⌃a/⌃e, ⌃w the
 word before, ⌃k to the end, ⌃u the whole line, Delete/Backspace either side.
-Typing, rename and the typed-name spawn all go through it. **An empty line is
+Typing, rename, a terminal paste (one insert, line breaks as spaces — below)
+and the typed-name spawn all go through it. **An empty line is
 navigation, a typed one is editing** — the convention the sidebar shares with
 the hub (`dash-fold-toggle.sh`): with no text ←/→ fold (a row's subtree, or on a
 repo heading that repo's whole group, #1037), Home/End jump to the
@@ -302,6 +305,55 @@ move, so a mere nudge of the mouse lands on `Any` — the presses that should
 leave navigation (left, right, middle on a worker; the wheel) are bound
 explicitly instead. Enter and Escape
 test `@sidebar_input` on `{top-left}` to keep the keyboard on a non-empty line.
+
+A terminal PASTE is the one input neither `Any` can see (issue #1105). Bracketed
+(`ESC[200~ … ESC[201~`, which tmux asks every terminal for), it is forwarded to
+the CLIENT's pane before any key table on tmux 3.4 and 3.6a alike
+(`server-client.c`: bracket pasting → `forward_key` / `paste_key`), so with the
+keyboard on the sidebar it still went to Claude; `assume-paste-time 0` is about a
+different guess. Verified on an isolated socket before the design: no bind runs
+for the pasted bytes, and 3.4 routes even the markers past the tables. The one
+per-client lever tmux has is the `active-pane` client flag: under it
+`select-pane` moves that CLIENT's own pane and leaves the window's alone (the
+identity every background script resolves — decision 4 of EPIC #1096 stands).
+So every take of the keyboard — prefix E, a click on the view, the row menu's
+rename, ⌂/F9's bar-first — runs `refresh-client -f active-pane ; select-pane -t
+'{top-left}'` as the client, and every hand-back the binds own (Enter/Escape on
+an empty line, a click on the worker, the wheel, the divider's double-click,
+`leave_navigation`) drops the flag; with it off tmux reads the window's pane
+again, so nothing is selected back. A `select-pane` from a tmux CLI is a
+session-less client and would move the WINDOW's pane, so the view and
+`hub-zoom.sh` pin through an unpressable key instead: `send-keys -K -c <client>
+C-M-S-F12` runs the fleet-sidebar bind for it AS that client. `join-pane`
+forgets a moved pane's client entries, so `jump()` and `sync` re-pin after every
+follow, move or create. The `after-select-pane` bounce (any select onto the
+view goes `last-pane`) skips a pinned client, whose select is client-level.
+What the flag cannot cover is a prefix command: tmux switches to the prefix
+table before any bind sees the key, and resets to root after the command, so
+prefix i / a popup / `:` leave the pin set with the keyboard back on Claude.
+Three guards bound that: the root `Any` drops a stale pin on the first key it
+sees (that key was already aimed at the view when it was looked up; the rest of
+the burst reaches the worker in order — a re-send with `send-keys -K` would
+reorder it), the view's 1s poll (`route_input`) drops it without a key and pins
+a client found navigating unpinned, and the two prefix commands that would act on
+the pinned view as the client's "current pane" are bound to act on the worker
+and hand the keyboard back: `prefix z` (`window_zoom` would also make the zoomed
+view the window's ACTIVE pane) and `prefix [`. `select-pane -d` on the worker
+was the fallback the issue named; it drops the paste instead of routing it and
+is not used. The view asks its pane for bracketed paste, so the paste arrives
+as one `ESC[200~ … ESC[201~` unit (in that order on both versions: the bytes are
+written to the pinned pane as they arrive and the start marker's bind runs
+before the first of them) and is one insert at the cursor — line breaks become
+spaces, the paste's trailing newline is dropped, nothing is submitted. Costs: a
+`refresh-client -f` per take and hand-back (a flag message to the client
+process), one `list-clients` per second per view, and that while the keyboard is
+on the sidebar every other prefix pane command (`x`, `"`, `%`, `!`, `{`) acts on
+the view — the client's current pane — where it used to act on the worker.
+`fleet-sidebar-selftest.sh` pastes with the keyboard on the view (the input line
+shows it, the worker sees none, the window's active pane is unchanged), a
+paragraph (one line, nothing spawned), after the hand-back (the worker gets it,
+bracketed), after a follow (the moved view), and asserts prefix z zooms the
+worker and that prefix i's stale pin is dropped before the next typing.
 
 Every letter types now — `q`, `n`, `j`, `k` included — so movement is ↑↓ only
 and hiding is prefix e only: no click and no letter hides the sidebar or writes

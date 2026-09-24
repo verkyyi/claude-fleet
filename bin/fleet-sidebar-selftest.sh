@@ -287,7 +287,8 @@ try:
                 'MouseDown1Status' not in line and
                 ('fleet-sidebar' in line or 'after-select-pane[71]' in line or 'client-detached' in line or
                  'MouseDown1Pane' in line or 'MouseDown1Border' in line or 'DoubleClick1Pane' in line or
-                 line.startswith('bind -n F9 ') or
+                 line.startswith('bind -n F9 ') or line.startswith('bind -n C-M-S-F12 ') or
+                 line.startswith('bind z ') or line.startswith('bind [ ') or
                  line.startswith('set -g pane-border') or line.startswith('set -g default-terminal') or
                  line.startswith('set -g assume-paste-time ') or
                  line == 'set -g mouse on')]
@@ -817,6 +818,109 @@ try:
     tm('send-keys', '-t', p1, 'C-u')
     click(side, row=height - 3)
     wait_for(navigation, 'clicking sidebar blank space did not re-enter navigation')
+
+    # A terminal paste (issue #1105). Bracketed (ESC[200~ … ESC[201~), tmux
+    # forwards it to the CLIENT's pane before any key table — the two `Any`
+    # binds above never see it. While the keyboard is here the client's OWN pane
+    # is the view (`refresh-client -f active-pane` + a client-level select-pane,
+    # set by every take), so the paste lands on the input line; the WINDOW's
+    # active pane — what every background script resolves — stays the worker.
+    def paste(text):
+        os.write(terminal, b'\x1b[200~' + text.encode() + b'\x1b[201~')
+    def pinned():
+        return 'active-pane' in tm('list-clients', '-F', '#{client_flags}')
+    with open(tm('display-message', '-p', '-t', p1, '#{pane_tty}'), 'w') as tty:
+        tty.write('\x1b[?2004h')   # the worker asks for bracketed paste, as Claude does
+    wait_for(pinned, 'taking the keyboard did not pin the client to the view')
+    worker_before = tm('capture-pane', '-p', '-t', p1)
+    paste('issue 12 修登录')
+    wait_for(lambda: input_line(side) == '› issue 12 修登录▏',
+             'a paste did not land on the input line: %r' % input_line(side))
+    time.sleep(.3)
+    worker_now = tm('capture-pane', '-p', '-t', p1)
+    if os.environ.get('FLEET_SIDEBAR_EVIDENCE'):
+        for name, pane_ in (('paste-sidebar', side), ('paste-worker', p1)):
+            Path(os.environ['FLEET_SIDEBAR_EVIDENCE'], name + '.txt').write_text(
+                tm('capture-pane', '-p', '-t', pane_) + '\n')
+    check(worker_now == worker_before and 'issue 12' not in worker_now,
+          'a paste leaked into the worker: %r' % worker_now.splitlines()[-3:])
+    check(tm('display-message', '-p', '-t', w1, '#{pane_id}') == p1,
+          'routing the paste to the view changed the window\'s active pane')
+    check(navigation(), 'a paste gave the keyboard back')
+    # A pasted paragraph is ONE name: line breaks become spaces and nothing is
+    # submitted at them; the paste's own trailing newline is dropped.
+    os.write(terminal, b'\x15')
+    wait_for(lambda: tasks_cue(side), '⌃u did not clear the pasted line')
+    before = set(windows())
+    paste('issue 12\n修登录\n')
+    wait_for(lambda: input_line(side) == '› issue 12 修登录▏',
+             'a multi-line paste did not land as one line: %r' % input_line(side))
+    time.sleep(.3)
+    check(set(windows()) == before, 'a multi-line paste submitted the line')
+    # Handed back (⌃u, Esc), the pin goes with the keyboard: the same paste
+    # reaches the worker — still bracketed — and the input line stays empty.
+    os.write(terminal, b'\x15')
+    wait_for(lambda: tasks_cue(side), '⌃u did not clear the multi-line paste')
+    os.write(terminal, b'\x1b')
+    wait_for(lambda: not navigation(), 'Esc on an empty input line kept the keyboard (paste leg)')
+    wait_for(lambda: not pinned(), 'handing the keyboard back left the client pinned to the view')
+    paste('issue 12 修登录')
+    wait_for(lambda: 'issue 12 修登录' in tm('capture-pane', '-p', '-t', p1),
+             'after the hand-back a paste did not reach the worker')
+    check('200~' in tm('capture-pane', '-p', '-t', p1), 'the worker\'s paste lost its brackets')
+    wait_for(lambda: worker_cue(side), 'the input line did not return to the worker cue after the paste hand-back')
+    check('issue 12' not in input_line(side), 'after the hand-back a paste was pulled into the sidebar')
+    tm('send-keys', '-t', p1, 'C-u')
+    # A follow moves the view with join-pane, and tmux forgets a moved pane's
+    # client entries: the view re-pins itself after the jump, so a paste right
+    # after ↓ lands on it in the NEW window, not on that window's worker.
+    click(side, row=height - 3)
+    wait_for(navigation, 'clicking sidebar blank space did not re-enter navigation (follow paste leg)')
+    wait_for(pinned, 'a click on the sidebar did not pin the client to the view')
+    os.write(terminal, b'\x1b[B')
+    wait_for(lambda: bool(view_on(w2)), 'Down did not follow to the second worker (follow paste leg)')
+    wait_for(navigation, 'the follow left the sidebar key table (follow paste leg)')
+    time.sleep(.3)
+    paste('issue 12 修登录')
+    wait_for(lambda: input_line(side) == '› issue 12 修登录▏',
+             'after a follow the paste did not land on the moved view: %r' % input_line(side))
+    time.sleep(.3)
+    check('issue 12' not in tm('capture-pane', '-p', '-t', p2), 'after a follow the paste leaked into the new worker')
+    check(tm('display-message', '-p', '-t', w2, '#{pane_id}') == p2, 'the re-pin changed the new window\'s active pane')
+    os.write(terminal, b'\x15')
+    wait_for(lambda: tasks_cue(side), '⌃u did not clear the pasted line (follow paste leg)')
+    os.write(terminal, b'\x1b[A')
+    wait_for(lambda: bool(view_on(w1)), 'Up did not follow back (follow paste leg)')
+    wait_for(navigation, 'Up follow left the sidebar key table (follow paste leg)')
+    # prefix z from the sidebar zooms the WORKER and hands the keyboard back —
+    # tmux's stock resize-pane -Z would zoom the pinned view and, worse, make it
+    # the window's active pane. prefix [ is bound the same way.
+    os.write(terminal, b'\x02z')
+    wait_for(lambda: zoomed(w1) == '1', 'prefix z from the sidebar did not zoom')
+    check(tm('display-message', '-p', '-t', w1, '#{pane_id}') == p1,
+          'prefix z from the sidebar zoomed the view, not the worker')
+    wait_for(lambda: not navigation() and not pinned(), 'prefix z left the keyboard (or the pin) on the sidebar')
+    os.write(terminal, b'\x02z')
+    wait_for(lambda: zoomed(w1) == '0', 'prefix z did not unzoom')
+    wait_for(lambda: view_on(w1) == [side], 'unzoom after prefix z lost the sidebar view')
+    # A prefix command with no hand-back of its own (prefix i, display-message)
+    # leaves the table pinned; the view's 1s reconcile drops the pin, and the
+    # root `Any` drops it on the first key regardless — typing reaches the worker.
+    click(side, row=height - 3)
+    wait_for(navigation, 'clicking sidebar blank space did not re-enter navigation (prefix i leg)')
+    wait_for(pinned, 'a click on the sidebar did not pin the client (prefix i leg)')
+    os.write(terminal, b'\x02i')
+    wait_for(lambda: not navigation(), 'prefix i did not leave the sidebar key table')
+    wait_for(lambda: not pinned(), 'the reconcile did not drop the pin after prefix i')
+    type_keys('after-prefix-i')
+    wait_for(lambda: 'after-prefix-i' in tm('capture-pane', '-p', '-t', p1),
+             'after prefix i typing did not reach the worker')
+    check('after-prefix-i' not in input_line(side), 'after prefix i typing was pulled into the sidebar')
+    tm('send-keys', '-t', p1, 'C-u')
+    with open(tm('display-message', '-p', '-t', p1, '#{pane_tty}'), 'w') as tty:
+        tty.write('\x1b[?2004l')
+    click(side, row=height - 3)
+    wait_for(navigation, 'clicking sidebar blank space did not re-enter navigation (after the paste legs)')
 
     # Enter on a name the fleet refuses (the per-fleet cap): the reason shows on
     # the input line, the name stays, nothing spawns, the keyboard stays.
