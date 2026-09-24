@@ -140,6 +140,33 @@ contains "json: carries a head sha" "$OUT" '"head":"'
 eq "json: single line" 1 "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')"
 
 # ============================================================================
+# H. the consumer contract (issue #644) — the key SET and the value SHAPES a
+#    cross-machine reader hard-codes (TokenLedger's agent parses this object;
+#    its hub renders it) are pinned here, so a renamed key or a re-quoted number
+#    goes red in this gate before it goes blank on a roster nobody is watching.
+#    Keys are taken from the object itself: jstr escapes every quote inside a
+#    value, so a `"word":` inside prose cannot pose as a key.
+# ============================================================================
+run --json --no-fetch --no-logins --dir "$J"
+eq "contract: exit 0" 0 "$RC"
+KEYS=$(printf '%s' "$OUT" | grep -o '"[a-z_]*":' | tr -d '":' | tr '\n' ' ')
+eq "contract: key set + order" "dir host head branch upstream behind ahead dirty fetched verdict error logins follow follow_verdict " "$KEYS"
+contains "contract: behind is a bare integer" "$OUT" '"behind":0,'
+contains "contract: ahead is a bare integer" "$OUT" '"ahead":0,'
+contains "contract: dirty is a bare boolean" "$OUT" '"dirty":false,'
+contains "contract: fetched is a bare boolean, false under --no-fetch" "$OUT" '"fetched":false,'
+contains "contract: verdict is a quoted token" "$OUT" '"verdict":"CURRENT"'
+contains "contract: error is a string" "$OUT" '"error":"'
+contains "contract: logins is null under --no-logins" "$OUT" '"logins":null'
+# follow_verdict: a quoted token from the fixed set, or null on an install that
+# predates install-sync — never an empty string, never an unlisted word.
+CHECKS=$((CHECKS + 1))
+case "$OUT" in
+  *'"follow_verdict":"OK"}'*|*'"follow_verdict":"STUCK"}'*|*'"follow_verdict":"OFF"}'*|*'"follow_verdict":"UNSEEN"}'*|*'"follow_verdict":"UNKNOWN"}'*|*'"follow_verdict":null}'*) ;;
+  *) fail "contract: follow_verdict is a token from the fixed set or null — got:\n$OUT" ;;
+esac
+
+# ============================================================================
 # C. shapes that cannot be measured
 # ============================================================================
 mkdir -p "$WORK/plain"; echo x > "$WORK/plain/file"
