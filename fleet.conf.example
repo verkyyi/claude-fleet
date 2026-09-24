@@ -92,6 +92,13 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 # tick over https). Not seen ≠ refused: nothing moves, nothing alarms. GLOBAL.
 # @label=Install-sync fetch timeout @group=janitor @tier=internal @scope=global @edit=int @unit=seconds
 #FLEET_INSTALL_SYNC_TIMEOUT=30
+# How long a login may sit `deferred` (a session busy) — or go without any
+# install-sync tick at all — before the doctor's install row and
+# fleet-install-follow.sh call it STUCK (WARN) instead of following normally.
+# A day: a session busy that long is usually a stuck one, and a daemon silent
+# that long is not ticking. GLOBAL; read as a plain seconds count.
+# @label=Install-follow stuck threshold @group=janitor @tier=internal @scope=global @edit=int @unit=seconds
+#FLEET_INSTALL_FOLLOW_STUCK_SECS=86400
 
 # --- Orphan-process reap for KEPT worktrees (issue #469) ------------------------
 # ON by default, GLOBALLY. #151 already reaps a worktree's detached processes when

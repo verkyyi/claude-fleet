@@ -87,6 +87,19 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    clone at the commit it holds — origin = the public repo over https, no
    credentials — carrying `fleet.conf`, `logs/` and every local file across and
    keeping the old dir whole as `~/.claude/fleet.copy-<date>` (issue #1121).
+   Since each login follows `refs/tags/stable` on its own (install-sync, #1120),
+   the doctor's next two `install` rows say whether that is still happening
+   (issue #1123): **this login** — `PASS … install-sync on — at stable <sha>`,
+   or a `WARN` naming why it stopped (`refused` with the daemon's reason,
+   `rolled-back` / `skipped` until stable moves, `deferred` for over a day, no
+   tick yet, or a state older than a day) and the opt-out
+   (`FLEET_INSTALL_SYNC=0` in `fleet.settings`, which also silences the row) —
+   and **the other logins**, one `login on/result age` token each read as its
+   owner (`?` without passwordless sudo; `off` is never warned about), a `WARN`
+   when any is stuck. `bin/fleet-install-follow.sh` is the reader behind both
+   (a table by default, `--self`, `--others --summary`, `--json`), and
+   `fleet-install-version.sh` carries the same as its `follow:` line plus the
+   tokens on `logins:`.
    Notes: standalone `jq` is **not** needed
    (the collector only uses `gh --jq`, which is built in); perl `Time::HiRes` is
    a soft dep (without it the dash spinner ticks at whole-second granularity).

@@ -267,6 +267,34 @@ if [ -f "$iv" ] && [ -d "$live_dir" ]; then
       *)        info install "could not read the stable tag — its distance from trunk is unknown, NOT 0" ;;
     esac
   fi
+  # Is THIS login following stable, and are the others (issue #1123, EPIC #1117
+  # C7)? The install-sync daemon (#1120) moves each login on its own, and when it
+  # stops — refused, rolled back, deferred for a day, never ticked — nothing said
+  # so. bin/fleet-install-follow.sh is the one reader of its state file: OK is a
+  # PASS, STUCK a WARN (with the opt-out named, the documented way to silence it),
+  # OFF / UNSEEN an INFO. Other logins are read as their owner (sudo -n); without
+  # passwordless sudo they read `?`, never a WARN. Nothing counts a FAIL here: the
+  # daemon's own post-update doctor compares FAIL lines, and a fresh install
+  # waiting for its first tick must not roll a version back.
+  fl="$(dirname "$0")/fleet-install-follow.sh"
+  if [ -f "$fl" ]; then
+    flout=$(sh "$fl" --self --dir "$live_dir" --conf-dir "$conf_dir" 2>/dev/null)
+    _flf() { printf '%s\n' "$flout" | sed -n "s/^$1:  *//p"; }
+    fl_off="opt out with FLEET_INSTALL_SYNC=0 in $conf_dir/fleet.settings — then this login neither follows nor warns"
+    case "$(_flf verdict)" in
+      OK)     pass install "install-sync on — $(_flf why) (last tick $(_flf checked))" ;;
+      STUCK)  warn install "install-sync on but this login is NOT following stable: $(_flf why) (last tick $(_flf checked)); $fl_off" ;;
+      OFF)    info install "install-sync off — $(_flf why)" ;;
+      UNSEEN) info install "install-sync on — stable not seen at the last tick ($(_flf checked)): $(_flf why)" ;;
+      *)      warn install "install-sync state unreadable — $(_flf why); $fl_off" ;;
+    esac
+    flo=$(sh "$fl" --others --summary --dir "$live_dir" --conf-dir "$conf_dir" 2>/dev/null); flrc=$?
+    if [ "$flrc" -eq 1 ]; then
+      warn install "other login(s) on this machine NOT following stable: $flo — each follows on its own once synced (bash $(dirname "$0")/fleet-sync-logins.sh --logins <login>); a login that opted out (FLEET_INSTALL_SYNC=0) reads \`off\` and is never warned about"
+    elif [ -n "$flo" ]; then
+      info install "other logins on this machine: $flo (\`?\` = unreadable without passwordless sudo; $(dirname "$0")/fleet-install-follow.sh for the table)"
+    fi
+  fi
 fi
 
 # --- config modal (prefix+c: view/edit per-fleet + global fleet config) ---

@@ -58,6 +58,15 @@
 # It never changes the verdict or the exit code — those stay about this install.
 # `--no-logins` skips it; a machine with one login prints nothing.
 #
+# Following stable (issue #1123, EPIC #1117 C7): since #1120 each login's
+# install-sync daemon moves it to `refs/tags/stable` by itself, so being behind
+# TRUNK is expected (the mark trails master by design) and the question that
+# matters is whether the daemon is still moving it. `follow:` is this login's
+# answer (bin/fleet-install-follow.sh --self: on/off, the last tick's result and
+# age, OK / STUCK / OFF / UNSEEN / UNKNOWN), and the `logins:` line carries one
+# `login on/result age` token per other login (`⚠` = stuck), read as its owner.
+# `--no-logins` skips the others; `--json` carries both (`follow`, `follow_verdict`).
+#
 # Read-only: it fetches (a remote-tracking ref update) and reads. It never
 # checks out, merges, or writes the working tree.
 set -u
@@ -166,6 +175,27 @@ if [ "$do_logins" -eq 1 ] && [ -n "$head" ] && [ -f "$sl" ]; then
   esac
 fi
 
+# --- following stable: this login, then the others (issue #1123) -------------
+# One reader for the daemon's state file (bin/fleet-install-follow.sh); the
+# verdict/exit code above stay about trunk drift — this is a second, separate
+# fact, and `head` empty (not a checkout) means there is nothing to follow with.
+follow='' follow_verdict=''
+fl="$(dirname "$0")/fleet-install-follow.sh"
+if [ -n "$head" ] && [ -f "$fl" ]; then
+  flout=$(sh "$fl" --self --dir "$dir" 2>/dev/null)
+  _flf() { printf '%s\n' "$flout" | sed -n "s/^$1:  *//p"; }
+  follow_verdict=$(_flf verdict)
+  case "$follow_verdict" in
+    '') ;;
+    OFF) follow="off — $(_flf why)" ;;
+    *)   follow="$(_flf follow) · $(_flf result) · $(_flf why) · last tick $(_flf checked) [$follow_verdict]" ;;
+  esac
+  if [ "$do_logins" -eq 1 ]; then
+    flo=$(sh "$fl" --others --summary --dir "$dir" 2>/dev/null)
+    [ -n "$flo" ] && logins="${logins:+$logins · }follow: $flo"
+  fi
+fi
+
 # --- the one-line fix, printed for every non-CURRENT verdict -----------------
 # `pull --ff-only` is deliberate: a live install must never grow a merge commit,
 # and on AHEAD/DIVERGED the refusal IS the signal. It is also only HALF a sync —
@@ -176,13 +206,15 @@ fix="git -C $dir pull --ff-only   (then /fleet-sync-install — it also reloads 
 if [ "$as_json" -eq 1 ]; then
   jnum() { [ -n "$1" ] && printf '%s' "$1" || printf 'null'; }
   jstr() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
-  printf '{"dir":"%s","host":"%s","head":"%s","branch":"%s","upstream":"%s","behind":%s,"ahead":%s,"dirty":%s,"fetched":%s,"verdict":"%s","error":"%s","logins":%s}\n' \
+  printf '{"dir":"%s","host":"%s","head":"%s","branch":"%s","upstream":"%s","behind":%s,"ahead":%s,"dirty":%s,"fetched":%s,"verdict":"%s","error":"%s","logins":%s,"follow":%s,"follow_verdict":%s}\n' \
     "$(jstr "$dir")" "$(jstr "$host")" "$(jstr "$head")" "$(jstr "$branch")" "$(jstr "$upstream")" \
     "$(jnum "$behind")" "$(jnum "$ahead")" \
     "$( [ "$dirty" = yes ] && echo true || echo false )" \
     "$( [ "$fetched" = yes ] && echo true || echo false )" \
     "$verdict" "$(jstr "$err")" \
-    "$( [ -n "$logins" ] && printf '"%s"' "$(jstr "$logins")" || printf 'null')"
+    "$( [ -n "$logins" ] && printf '"%s"' "$(jstr "$logins")" || printf 'null')" \
+    "$( [ -n "$follow" ] && printf '"%s"' "$(jstr "$follow")" || printf 'null')" \
+    "$( [ -n "$follow_verdict" ] && printf '"%s"' "$follow_verdict" || printf 'null')"
 elif [ "$quiet" -eq 0 ]; then
   printf 'install:  %s\n' "$dir"
   printf 'host:     %s\n' "$host"
@@ -192,6 +224,7 @@ elif [ "$quiet" -eq 0 ]; then
   printf 'ahead:    %s\n' "${ahead:-unknown}"
   [ -n "$dirty" ] && printf 'dirty:    %s\n' "$dirty"
   [ -n "$err" ] && printf 'note:     %s\n' "$err"
+  [ -n "$follow" ] && printf 'follow:   %s\n' "$follow"
   [ -n "$logins" ] && printf 'logins:   %s\n' "$logins"
   printf 'verdict:  %s\n' "$verdict"
   case "$verdict" in BEHIND|AHEAD|DIVERGED) printf 'fix:      %s\n' "$fix" ;; esac
