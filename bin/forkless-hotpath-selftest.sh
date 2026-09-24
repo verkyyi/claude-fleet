@@ -124,7 +124,10 @@ printf '0\t0\n' > "$G/account.quota.empty"
 : > "$WORK/exec.log"
 out=$(TMPDIR="$TMPD/" FLEET_LIVE_ROOT="$BIN/.." FLEET_ACCOUNTS_DIR="$WORK/acc" CCQUOTA_HUB_URL=http://127.0.0.1:9 \
       PATH="$WORK/bin:$PATH" bash "$BIN/tmux-status.sh" 2>&1) || fail "tmux-status.sh exited non-zero" "$out"
-case "$out" in *"CPU "*"MEM "*"5h 1.0M · 7d 2.0M"*) ;; *) fail "tmux-status.sh lost a segment" "$out" ;; esac; CHECKS=$((CHECKS+1))
+case "$out" in *"CPU "*"MEM "*) ;; *) fail "tmux-status.sh lost a segment" "$out" ;; esac; CHECKS=$((CHECKS+1))
+# The 5h/7d usage stat is gone from the bar (issue #1100) — a usage cache on
+# disk must NOT resurface it; the modal (prefix u) is its only reader now.
+case "$out" in *"5h "*|*"7d "*|*"range=user|usage"*) fail "tmux-status.sh still renders the 5h/7d usage stat (issue #1100)" "$out" ;; esac; CHECKS=$((CHECKS+1))
 case "$out" in *"⚠ quota stale 16m"*) ;; *) fail "tmux-status.sh: the stale quota watch must still show" "$out" ;; esac; CHECKS=$((CHECKS+1))
 case "$out" in *"⚠ daemon stale cleanup"*) ;; *) fail "tmux-status.sh: the overdue unit must still show" "$out" ;; esac; CHECKS=$((CHECKS+1))
 [ "$(count date)" -le 1 ] || fail "tmux-status.sh forked date $(count date)× — one pinned clock per render (#888)"; CHECKS=$((CHECKS+1))

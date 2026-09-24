@@ -1,8 +1,9 @@
 #!/bin/bash
 # usage-lib.sh — shared helpers for the Claude usage / subscription-limit signal
-# (issue #239). Sourced by three consumers so the freshness gate, the % parse,
+# (issue #239). Sourced by its consumers so the freshness gate, the % parse,
 # and the warn/crit thresholds live in ONE place and can't drift:
-#   • bin/tmux-status.sh   — colors the footer usage stat by severity (no text)
+#   • bin/tmux-status.sh   — the limit ALARMS on the bar (quota stale / blind /
+#                            via banner); its 5h/7d usage stat is gone (#1100)
 #   • bin/usage-modal.sh   — the usage/limit detail header + account picker body
 #                            (issue #289 merged the old usage-popup + account-pick)
 #
@@ -19,7 +20,7 @@
 #                   daemon (bin/fleet-collect-kick.sh) — rate limit + dash trace.
 #
 # Knobs (fleet.conf, read at call time so callers just need it sourced first):
-#   FLEET_USAGE_WARN_PCT  (default 75) — usage stat turns yellow at/above this %
+#   FLEET_USAGE_WARN_PCT  (default 75) — the limit line turns yellow at/above this %
 #   FLEET_USAGE_CRIT_PCT  (default 90) — … turns red at/above this %
 #   FLEET_RATELIMIT_TTL   (default 21600 = 6h) — staleness window, shared with
 #                          the collector + the old footer segment.
