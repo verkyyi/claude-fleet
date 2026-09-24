@@ -166,6 +166,15 @@ FLEET_CTX_WINDOW=200000
 # @label=Model-cap TTL @group=spawn @tier=advanced @scope=global @edit=int @unit=sec
 #FLEET_MODEL_LIMIT_TTL=604800
 
+# Per-model utilization (%) at which ccquota's per-model window (the Fable cap,
+# `models` in `ccquota budget --json`, issue #1073) counts as CAPPED even while its
+# status still reads allowed. Every quota fetch seeds the model-cap ledger from it,
+# with ccquota's REAL reset — so a spawn picks an account that still has headroom
+# for FLEET_MODEL (or launches on the fallback) before any session hits the wall.
+# Default 100: only a full window. An older ccquota without `models` changes nothing.
+# @label=Model-cap threshold @group=spawn @tier=advanced @scope=global @edit=int @unit=%
+#FLEET_MODEL_CAP_PCT=100
+
 # SYSTEM-WIDE ceiling on how many Claude working sessions may run at once across
 # ALL fleets on this machine. Every spawn path — the new-session box and the
 # backlog's Enter — refuses once this many are live (panels — the dash/plan/

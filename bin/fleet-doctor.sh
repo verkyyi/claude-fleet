@@ -451,6 +451,19 @@ if [ -d "$acct_dir" ] && [ -n "$(find "$acct_dir" -maxdepth 1 -type f ! -name '.
       else
         warn quota "$qtag → hub $CCQUOTA_HUB_URL unreachable or unknown — rotation is banner-driven only (fail-open)"
       fi
+      # Per-MODEL headroom (issue #1073) — the Fable cap is its own weekly window
+      # (7d_oi), invisible in 5h/7d. PASS/INFO only, never counted: without it
+      # the fleet is exactly as it was before (banner-driven model caps).
+      if [ "$qn" -gt 0 ]; then
+        qmodels=$(bash "$(dirname "$0")/fleet-account.sh" model-quota 2>/dev/null)
+        if [ -n "$qmodels" ]; then
+          pass modelcap "$qtag per-model windows: $(printf '%s\n' "$qmodels" | awk -F'\t' '
+            { u=($6=="-") ? "?" : $6"%"; s=$1" "$2" "u; if ($3=="capped") s=s" CAPPED"; o=o (o?" · ":"") s }
+            END { print o }') — spawns prefer an account with headroom; capped ones launch on the fallback"
+        else
+          info modelcap "$qtag reports no per-model windows (\`models\` in \`budget --json\`, verkyyi/tokenledger#155) — a model cap (Fable) is still found only by its banner, after a session hits it"
+        fi
+      fi
     else
       warn quota "CCQUOTA_HUB_URL set but ccquota not on PATH — pre-emptive rotation off; install it with \`go install github.com/verkyyi/ccquota/cmd/ccquota@latest\` (needs Go 1.25+; the product is TokenLedger, https://github.com/verkyyi/tokenledger, the binary is still \`ccquota\`)"
     fi

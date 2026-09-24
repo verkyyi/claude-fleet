@@ -134,8 +134,11 @@ fi
 # explicit caller --model wins, an empty knob disables it, and a fallback equal
 # to FLEET_MODEL is a no-op (the cap IS the fallback — nothing to swap to). The
 # active account is resolved here (the token export below reuses it).
+# FLEET_PICK_MODEL: this fleet's model, resolved here with its per-fleet overlay
+# (fleet-account.sh re-sources only the global conf) — the account pick prefers
+# one whose cap ledger leaves it free (issue #1073).
 label="${FLEET_ACCOUNT_LABEL:-}"
-[ -n "$label" ] || label=$("$BIN/fleet-account.sh" active 2>/dev/null)
+[ -n "$label" ] || label=$(FLEET_PICK_MODEL="${FLEET_MODEL-opus}" "$BIN/fleet-account.sh" active 2>/dev/null)
 model_flag=()
 launch_model=""
 if [ -z "${FLEET_MODEL+x}" ]; then FLEET_MODEL="opus"; fi

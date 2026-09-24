@@ -329,6 +329,42 @@ bin/fleet-account.sh model-clear work fable           # lift it by hand
 bin/fleet-account.sh migrate --model opus <window>    # relaunch one window on opus
 ```
 
+### Knowing the cap before the wall (ccquota's per-model window, #1073)
+
+A banner is the LAST symptom of a model cap: it prints only after a session has
+walked into it, a session idle when the cap landed never prints one, and the
+ledger's until is a TTL guess. The cap itself is a window of its own — a Fable
+response carries `anthropic-ratelimit-unified-7d_oi-{utilization,reset,status}`
+beside the account's 5h/7d (on 2026-09-23 three of four pool accounts were at
+7d_oi 1.0 while their 7d read 0.68–0.80). TokenLedger records it and states it in
+`ccquota budget --json` as `accounts[].models[<model-id>]` (tokenledger#155).
+
+Every quota fetch (`quota_fetch` — the quotawatch tick, `quota --refresh`, a
+banner's forced refetch) now also runs `model_quota_sync`:
+
+- **capped** (`status: rejected`, utilization ≥ `FLEET_MODEL_CAP_PCT`, or
+  `model_available` false) → the `(account, model)` ledger row, until ccquota's
+  **real** reset (+60 s), replacing a banner's TTL guess for the same model.
+- **available again** → ccquota's own row is dropped, and so is a banner row
+  written *before* the reading was observed. A banner that landed after it is
+  newer evidence and stands until ccquota catches up: a banner is now a hint that
+  the next reading confirms or clears, as #874 made the subscription banner.
+
+With the ledger seeded, everything downstream already reads it: `pick_active`
+runs a **model pass** first (an account whose FLEET_MODEL is uncapped beats one
+whose phase slot is due), the provider-aware selector ranks `model_primary`
+accounts first, `fleet-claude.sh` launches on `FLEET_MODEL_FALLBACK` when every
+account is capped, and quotawatch's `fleet-model-switch.sh --capped` flips idle
+sessions on a newly capped account on its next tick — no banner anywhere.
+
+An older ccquota with no `models` field seeds nothing and opens no ledger: the
+fleet behaves exactly as before, and `fleet-doctor` says so on its `modelcap`
+line (INFO), or lists each account's per-model utilization (PASS).
+
+```sh
+bin/fleet-account.sh model-quota      # label · model · capped|ok|unknown · reset · observed · util% · status
+```
+
 ## Pre-emptive rotation with ccquota
 
 The banner path is reactive: an account has to be walled — and a session stuck
