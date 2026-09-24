@@ -217,7 +217,7 @@ EOF
   group "config modal" "— inside prefix c"
   key "enter" "edit the highlighted key / expand the section"
   key "tab" "expand/collapse a section"
-  key "$(dg scope)" "toggle the write scope (global ⇄ per-fleet)$(dn scope)"
+  key "$(dg scope)" "toggle the write scope (this fleet ⇄ repo)$(dn scope)"
   key "space / $(dg preview)" "toggle the detail preview$(dn preview)"
   key "?" "reveal the raw FLEET_* keys inline"
   key "$(dg reload)" "refresh now$(dn reload)"

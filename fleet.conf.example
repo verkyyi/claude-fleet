@@ -6,9 +6,13 @@
 # config modal (issue #89). One reviewable file drives the whole UI — there is
 # no hardcoded key list in the scripts. Each key carries three independent
 # attributes:
-#   @scope  where it may be set:  identity (view-only) · global (writes this
-#           fleet.conf, no per-fleet override) · fleet (per-fleet overlay on top
-#           of the global default, via the modal's g/f write-scope toggle).
+#   @scope  which file holds it:  identity (view-only) · global (the login's
+#           ~/.config/claude-fleet/fleet.settings; stripped from a fleet conf) ·
+#           fleet (the fleet's conf). To you both are "this fleet" — one login
+#           runs one fleet — so the modal's ⌃s only picks THIS FLEET ⇄ a hosted
+#           REPO (issue #1102) and routes each key to its file itself. This
+#           install fleet.conf is still read, as a legacy layer under both,
+#           but the modal never writes it.
 #   @tier   modal visibility:     common (default view) · advanced (collapsed) ·
 #           internal (pacing/budget/timeout knobs, issue #1101: NOT listed by the
 #           modal or `fcfg_table` unless you open "show all" — the modal's

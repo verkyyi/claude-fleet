@@ -1,28 +1,34 @@
 #!/bin/bash
-# tmux-config.sh — prefix+c CONFIG MODAL: view + edit this fleet's config across
-# both layers (per-fleet overlay ▸ global ▸ default), mirroring the prefix+g dash
+# tmux-config.sh — prefix+c CONFIG MODAL: view + edit this fleet's config
+# (this fleet ▸ legacy install fleet.conf ▸ default), mirroring the prefix+g dash
 # and prefix+b backlog fzf popups (issues #83, #89).
 #
 # Rows are DECLARATIVELY driven by the @label/@group/@tier/@scope/@edit/@unit
 # tags in fleet.conf.example (parsed via fleet-config-lib.sh) — there is no
 # hardcoded key list here. Each key shows its FRIENDLY LABEL, effective value,
-# and TWO text tags: the allowed write scope (dim `locked` identity view-only ·
-# blue `global`-only · green `fleet` per-fleet overridable) and the layer the
-# effective value came from (green ▸ per-fleet · blue · global · dim default).
-# Scope is carried by color + a short aligned word, not by emoji. Rows are
-# grouped common-first;
-# Advanced / Global-only-advanced / Identity sit behind Tab-expandable headers;
+# and TWO text tags: what it is (dim `locked` identity view-only · magenta `repo`
+# settable per repo · blank otherwise) and the layer the effective value came
+# from (magenta ▸ repo · green ▸ fleet · blue · legacy · dim default). Scope is
+# carried by color + a short aligned word, not by emoji. Rows are grouped
+# common-first; Advanced / Identity sit behind Tab-expandable headers;
 # the INTERNAL header (issue #1101) is the "show all" switch — collapsed, it hides
 # the @tier=internal pacing/budget/timeout knobs fcfg_table leaves out by default.
-# `?` reveals the raw FLEET_* key inline; ⌃s toggles which layer a per-fleet edit
-# WRITES to; enter on an editable key edits it, on a section header expands it.
+# `?` reveals the raw FLEET_* key inline; ⌃s toggles the write scope; enter on an
+# editable key edits it, on a section header expands it.
 #
-# Repo scope (issue #802): in a fleet hosting 2+ repos, ⌃s also steps through
-# `repo:<slug>` — one per hosted repo. There the per-repo keys (model, agent, MCP
+# Two write scopes, never a third (issue #1102): THIS FLEET ⇄ a hosted REPO. One
+# login runs one fleet (#977), so the old fleet⇄global split was one layer seen
+# twice; the @scope=global tag still decides the FILE (fleet.settings vs the fleet
+# conf — fcfg_key_wscope) but is no longer a scope you pick or a reason to refuse.
+# The install's fleet.conf is read (`· legacy`) and never written.
+#
+# Repo scope (issue #802): ⌃s steps through `repo:<slug>` — one per hosted repo,
+# one for a one-repo fleet too. There the per-repo keys (model, agent, MCP
 # servers, deploy, setup…; fcfg_repo_keys) show the value THAT repo's windows read,
 # with a magenta `▸ repo` source when its own overlay sets it, and enter writes the
-# repo's overlay. A one-repo fleet never sees the scope: the toggle stays
-# fleet⇄global and every row renders exactly as before.
+# repo's overlay; every other key still edits this fleet. In a one-repo fleet the
+# repo layer IS the fleet conf, and in the fleet scope every row renders exactly
+# as before a repo was ever added.
 #
 # enter mirrors the ⌃s abort→act→relaunch pattern rather than nesting a popup:
 # a `transform` bind (emit_enter_action) branches on the row type — a section
@@ -47,9 +53,6 @@ SELF="$BIN/$(basename "$0")"
 . "$BIN/fleet-config-lib.sh"
 
 SESSION=$(fleet_current_session)
-# Outside a fleet (no session ⇒ no per-fleet conf) only the global layer is
-# writable — pin the write scope there so an edit can't dead-end.
-[ -n "$SESSION" ] || fcfg_wscope_set "" global
 
 US="$FCFG_US"
 
@@ -58,8 +61,8 @@ US="$FCFG_US"
 CFG_R=$'\033[0m'; CFG_B=$'\033[1m'
 CFG_KEY=$'\033[38;2;125;207;255m'     # cyan   — label / key name
 CFG_TX=$'\033[38;2;169;177;214m'      # text   — value
-CFG_FLEET=$'\033[38;2;158;206;106m'   # green  — per-fleet overlay wins
-CFG_GLOBAL=$'\033[38;2;122;162;247m'  # blue   — inherited from global
+CFG_FLEET=$'\033[38;2;158;206;106m'   # green  — this fleet sets it
+CFG_LEGACY=$'\033[38;2;122;162;247m'  # blue   — the install's read-only fleet.conf
 CFG_DIM=$'\033[38;2;86;95;137m'       # dim    — unset → code default
 CFG_REPO=$'\033[38;2;187;154;247m'    # magenta — the repo's own overlay wins
 
@@ -90,31 +93,33 @@ exp_toggle() {
 # --with-nth output, so the old `--nth=2,3` referenced fields that no longer exist
 # and silently matched NOTHING (every filter came up empty). Searching the visible
 # field2 works on every fzf version; the raw FLEET_* key is still searchable via
-# the `?` raw-key toggle, which appends it to field2. RCONF_F/RCONF_G are set once
-# by emit_rows so the effective-value lookup only greps the two (small) confs.
+# the `?` raw-key toggle, which appends it to field2. RCONF_F/RCONF_S/RCONF_I are
+# set once by emit_rows so the effective-value lookup only greps the (small) confs
+# — the same ladder as fcfg_effective, minus a tag lookup per row.
 # Layout: label · value · scope-tag · source-layer, each in a fixed-width column
-# so the eye scans straight down. Scope is a short word (locked/global/fleet)
+# so the eye scans straight down. Scope is a short word (locked/repo/blank)
 # colored by CFG_* — color carries the emphasis emoji used to. The tag + markers
 # are pure ASCII, so `printf %-Ns` byte-padding == cell-width here: alignment holds
 # with no wcwidth pass needed (unlike the old 2-cell emoji that broke column math).
 render_row() {
   local key="$1" label="$2" scope="$3" unit="$4" def="$5"
-  local stag scol col src srcmark val v lf vf tf sf raw disp
+  local stag scol col src srcmark val v lf vf tf sf raw disp isrepo=''
+  case "$RKEYS" in *" $key "*) isrepo=1 ;; esac
   case "$scope" in
-    identity) stag='locked'; scol="$CFG_DIM"    ;;
-    global)   stag='global'; scol="$CFG_GLOBAL" ;;
-    *)        stag='fleet';  scol="$CFG_FLEET"  ;;
+    identity) stag='locked'; scol="$CFG_DIM" ;;
+    *)        stag=${isrepo:+repo}; scol="$CFG_REPO" ;;
   esac
-  if [ -n "$RREPO" ] && fcfg_is_repo_key "$key"; then
+  if [ -n "$RREPO" ] && [ -n "$isrepo" ]; then
     v=$(fcfg_repo_effective "$key" "$SESSION" "$RREPO"); val=${v%"$US"*}; src=${v##*"$US"}
-  elif v=$(fcfg_file_value "$RCONF_F" "$key"); then val="$v"; src=fleet
-  elif v=$(fcfg_file_value "$RCONF_G" "$key"); then val="$v"; src=global
+  elif [ "$scope" != global ] && v=$(fcfg_file_value "$RCONF_F" "$key"); then val="$v"; src=fleet
+  elif v=$(fcfg_file_value "$RCONF_S" "$key"); then val="$v"; src=fleet
+  elif v=$(fcfg_file_value "$RCONF_I" "$key"); then val="$v"; src=legacy
   else val="$def"; src=default
   fi
   case "$src" in
     repo)   col="$CFG_REPO";   srcmark='▸ repo' ;;
-    fleet)  col="$CFG_FLEET";  srcmark='▸ per-fleet' ;;
-    global) col="$CFG_GLOBAL"; srcmark='· global' ;;
+    fleet)  col="$CFG_FLEET";  srcmark='▸ fleet' ;;
+    legacy) col="$CFG_LEGACY"; srcmark='· legacy' ;;
     *)      col="$CFG_DIM";    srcmark='  default' ;;
   esac
   if [ -n "$val" ]; then [ -n "$unit" ] && val="$val $unit"; else val='(empty)'; fi
@@ -160,9 +165,10 @@ emit_bucket() {
 # a render no longer re-parses the file per key.
 emit_rows() {
   local key label group tier scope edit unit def og
-  local common_t='' adv_t='' gadv_t='' id_t='' int_t='' order='' line
-  RCONF_F=$(fcfg_fleet_conf "$SESSION"); RCONF_G=$(fcfg_global_conf)
-  # Repo scope: the per-repo rows resolve for THIS repo (empty = fleet/global).
+  local common_t='' adv_t='' id_t='' int_t='' order='' line
+  RCONF_F=$(fcfg_fleet_conf "$SESSION"); RCONF_S=$(fcfg_settings_conf); RCONF_I=$(fcfg_install_conf)
+  RKEYS=" $(fcfg_repo_keys | tr '\n' ' ') "   # per-repo keys, once — not a fork per row
+  # Repo scope: the per-repo rows resolve for THIS repo (empty = this fleet).
   RREPO=$(fcfg_scope_repo "$SESSION" "$(fcfg_wscope "$SESSION")" || true)
   while IFS="$US" read -r key label group tier scope edit unit def; do
     [ -n "$key" ] || continue
@@ -170,8 +176,6 @@ emit_rows() {
     if [ "$tier" = internal ]; then                             int_t="$int_t$line
 "
     elif [ "$scope" = identity ]; then                          id_t="$id_t$line
-"
-    elif [ "$tier" = advanced ] && [ "$scope" = global ]; then  gadv_t="$gadv_t$line
 "
     elif [ "$tier" = advanced ]; then                           adv_t="$adv_t$line
 "
@@ -198,45 +202,48 @@ EOF
 
   emit_spacer
   emit_bucket advanced   "ADVANCED"               "$adv_t"
-  emit_bucket global-adv "GLOBAL-ONLY · ADVANCED"  "$gadv_t"
   emit_bucket identity   "IDENTITY (locked)"       "$id_t"
   emit_bucket internal   "INTERNAL · show all (pacing, budgets, timeouts)" "$int_t"
 }
 
 # ---- preview: the detail pane for one key -----------------------------------
 emit_preview() {
-  local key="${1:-}" B="$CFG_B" R="$CFG_R" DIM="$CFG_DIM" GN="$CFG_FLEET" BL="$CFG_GLOBAL"
+  local key="${1:-}" B="$CFG_B" R="$CFG_R" DIM="$CFG_DIM" GN="$CFG_FLEET"
   case "$key" in
     FLEET_[A-Z0-9_]*) : ;;
     @@TOGGLE@@*) printf '  %ssection%s\n\n  enter / tab expands or collapses this section.\n' "$DIM" "$R"; return ;;
     *)           printf '  %s(select a key)%s\n' "$DIM" "$R"; return ;;
   esac
-  local edit label unit dv ev val src scope fconf gconf fv gv ws tgt repo row r rv
+  local edit label unit dv ev val src scope fv iv kws tgt repo row r rv
   edit=$(fcfg_edit "$key"); label=$(fcfg_label "$key"); unit=$(fcfg_unit "$key")
   scope=$(fcfg_scope "$key"); dv=$(fcfg_default "$key")
-  fconf=$(fcfg_fleet_conf "$SESSION"); gconf=$(fcfg_global_conf)
-  ws=$(fcfg_wscope "$SESSION"); repo=''
-  case "$ws" in repo:*) fcfg_is_repo_key "$key" && repo=$(fcfg_scope_repo "$SESSION" "$ws") ;; esac
+  kws=$(fcfg_key_wscope "$SESSION" "$key" "$scope"); repo=''
+  case "$kws" in repo:*) repo=$(fcfg_scope_repo "$SESSION" "$kws") ;; esac
   if [ -n "$repo" ]; then ev=$(fcfg_repo_effective "$key" "$SESSION" "$repo")
-  else ev=$(fcfg_effective "$key" "$SESSION"); fi
+  else ev=$(fcfg_effective "$key" "$SESSION" "$scope"); fi
   val=${ev%"$FCFG_US"*}; src=${ev##*"$FCFG_US"}
   printf '%s%s%s   %s[%s%s]%s\n  %s%s%s\n\n' \
     "$B" "$label" "$R" "$DIM" "$edit" "${unit:+ · $unit}" "$R" "$DIM" "$key" "$R"
   fcfg_full "$key" | sed 's/^/  /'
   printf '\n  %s────────%s\n' "$DIM" "$R"
-  case "$scope" in
-    identity) printf '  %slocked%s — identity, view-only; set in fleet.conf and re-provision.\n' "$DIM" "$R" ;;
-    global)   printf '  %s%sglobal%s — global-only; writes fleet.conf; applies to ALL fleets.\n' "$B" "$BL" "$R" ;;
-    *)        printf '  %s%sfleet%s — per-fleet; g writes the global default, f this fleet'\''s overlay.\n' "$B" "$GN" "$R" ;;
-  esac
+  if [ "$scope" = identity ]; then
+    printf '  %slocked%s — identity, view-only; set in fleet.conf and re-provision.\n' "$DIM" "$R"
+  elif fcfg_is_repo_key "$key"; then
+    printf '  %s%srepo%s — this fleet, or ⌃s to set it for one repo only.\n' "$B" "$CFG_REPO" "$R"
+  else
+    printf '  %s%sfleet%s — a setting of this fleet.\n' "$B" "$GN" "$R"
+  fi
   printf '  %seffective%s : %s%s%s   %s(%s%s)%s\n' "$B" "$R" "$GN" "${val:-<empty>}" "$R" "$DIM" "$src" "${repo:+ · $repo}" "$R"
   printf '  %sdefault%s   : %s\n' "$DIM" "$R" "${dv:-<empty>}"
-  if fv=$(fcfg_file_value "$fconf" "$key"); then printf '  per-fleet : %s\n' "$fv"
-  else printf '  %sper-fleet : (unset)%s\n' "$DIM" "$R"; fi
-  if gv=$(fcfg_file_value "$gconf" "$key"); then printf '  global    : %s\n' "$gv"
-  else printf '  %sglobal    : (unset)%s\n' "$DIM" "$R"; fi
+  fv=$(fcfg_effective "$key" "$SESSION" "$scope")
+  if [ "${fv##*"$FCFG_US"}" = fleet ]; then printf '  this fleet: %s\n' "${fv%"$FCFG_US"*}"
+  else printf '  %sthis fleet: (unset)%s\n' "$DIM" "$R"; fi
+  # The install's fleet.conf: shown only when it still carries the key (read-only).
+  if iv=$(fcfg_file_value "$(fcfg_install_conf)" "$key"); then
+    printf '  %slegacy    : %s  (install fleet.conf, read-only)%s\n' "$DIM" "$iv" "$R"
+  fi
   # A per-repo key in a multi-repo fleet: what EACH hosted repo reads.
-  if fcfg_is_repo_key "$key" && [ -n "$(fcfg_repo_scopes "$SESSION")" ]; then
+  if fcfg_is_repo_key "$key" && fleet_has_repo_overlays "$SESSION"; then
     printf '\n  %sper repo%s\n' "$B" "$R"
     while IFS= read -r row; do
       [ -n "$row" ] || continue
@@ -248,15 +255,10 @@ EOF
   fi
   if [ "$scope" = identity ]; then
     printf '\n  %senter is disabled for identity keys%s\n' "$DIM" "$R"
-  elif [ "$scope" = global ]; then
-    printf '\n  %senter writes the GLOBAL layer%s\n  %s%s%s\n' "$B" "$R" "$DIM" "$gconf" "$R"
-  elif [ "${ws#repo:}" != "$ws" ] && [ -z "$repo" ]; then
-    printf '\n  %snot a per-repo setting%s — ⌃s to the FLEET scope to edit it\n' "$B" "$R"
   else
-    tgt=$(fcfg_target_conf "$SESSION" "$ws")
-    printf '\n  %senter edits the %s layer%s\n  %s%s%s\n' \
-      "$B" "$(fcfg_wscope_label "$SESSION")" "$R" \
-      "$DIM" "${tgt:-<not in a fleet — global only>}" "$R"
+    tgt=$(fcfg_target_conf "$SESSION" "$kws")
+    printf '\n  %senter edits %s%s\n  %s%s%s\n' \
+      "$B" "$(if [ -n "$repo" ]; then printf 'REPO %s' "$repo"; else printf 'THIS FLEET'; fi)" "$R" "$DIM" "$tgt" "$R"
   fi
 }
 
@@ -299,7 +301,7 @@ case "${1:-loop}" in
   preview)      emit_preview "${2:-}"; exit 0 ;;
   enter-action) emit_enter_action "${2:-}" "${3:-}" "${4:-}" "${5:-}"; exit 0 ;;
   toggle-scope) fcfg_wscope_toggle "$SESSION"
-                tmux display-message "config: per-fleet edits now write to the $(fcfg_wscope_label "$SESSION") layer" 2>/dev/null || true
+                tmux display-message "config: edits now write to $(fcfg_wscope_label "$SESSION")" 2>/dev/null || true
                 exit 0 ;;
   toggle-raw)   raw_toggle; exit 0 ;;
   toggle-bucket) case "${2:-}" in @@TOGGLE@@*) exp_toggle "${2#@@TOGGLE@@}" ;; esac
@@ -336,9 +338,9 @@ run_fzf() {
   bash "$SELF" rows | fzf --ansi --delimiter="$FCFG_US" --with-nth=2 \
     --no-sort --layout=reverse-list --info=hidden --border=rounded \
     --query="$savedq" \
-    --border-label=" fleet config · per-fleet edits write to the $scope layer " --border-label-pos=3 \
+    --border-label=" fleet config · edits write to $scope " --border-label-pos=3 \
     --prompt='filter ▸ ' \
-    --header="enter=edit/expand · tab=expand section · space=detail · $DASH_GLYPH_SCOPE=write-scope (global⇄per-fleet) · ?=raw keys · $DASH_GLYPH_RELOAD=refresh · esc · [✕ close]" \
+    --header="enter=edit/expand · tab=expand section · space=detail · $DASH_GLYPH_SCOPE=write-scope (fleet⇄repo) · ?=raw keys · $DASH_GLYPH_RELOAD=refresh · esc · [✕ close]" \
     --preview "bash $SELF preview {1}" \
     --preview-window='right,54%,wrap,border-left,hidden' \
     --bind "$DASH_KEY_RELOAD:reload(bash $SELF rows)" \

@@ -4,24 +4,31 @@
 #
 # Asserts the modal's core contract against the REAL fleet.conf.example (so it
 # also guards that the example stays parseable + fully annotated) plus TEMP
-# global/per-fleet confs:
+# install/login/per-fleet confs:
 #   • KEY LIST      every FLEET_* key in the example is discovered.
 #   • TAGS          @label/@group/@tier/@scope/@edit/@unit parse per key, and
 #                   EVERY key carries a full tag line (no un-annotated drift).
 #   • TYPING        @edit maps to the coarse validation class (int→num, etc.).
 #   • DEFAULTS      parsed from the example (commented + uncommented lines).
-#   • LAYERING      effective value + winning layer = per-fleet ▸ global ▸ default.
+#   • LAYERING      effective value + winning layer = this fleet (fleet conf ▸
+#                   fleet.settings) ▸ legacy install fleet.conf ▸ default; a
+#                   global-only key skips the fleet conf (fleet_load_conf strips it).
 #   • VALIDATION    bad values by type are rejected; good ones pass; identity
 #                   (@edit=no) always refuses; regex validity is enforced; a
 #                   value that would break `source`-ing is refused.
 #   • WRITE         create-on-first-write, in-place upsert (no dup lines), backup
 #                   on update, prefix-safe keys, int bare / str quoted, and the
 #                   written conf sources back to the value.
-#   • WRITE-SCOPE   the g/f write-scope toggle persists + flips.
-#   • REPO SCOPE    (issue #802) a fleet with a repos/ overlay adds repo:<slug>
-#                   scopes to the toggle; per-repo keys resolve + write per repo;
-#                   the modal's rows show the repo's value; a one-repo fleet's
-#                   toggle and rows are unchanged.
+#   • WRITE-SCOPE   (issue #1102) the ⌃s toggle is fleet ⇄ repo:<slug> only —
+#                   no global scope; a key's write lands by fcfg_key_wscope
+#                   (global-only → fleet.settings, else the fleet conf, per-repo
+#                   under a repo scope → the repo), never the install fleet.conf.
+#   • REPO SCOPE    (issue #802) every hosted repo is a repo:<slug> scope — a
+#                   one-repo fleet's too, whose repo layer IS its fleet conf (no
+#                   repos/ is ever created); per-repo keys resolve + write per repo;
+#                   the modal's rows show the repo's value; the editor writes a
+#                   non-repo key under a repo scope to the fleet instead of refusing,
+#                   and a global-only key to fleet.settings, which fleet-lib reads.
 #
 # Exit 0 = pass. Non-zero = fail (prints which assertion).
 set -uo pipefail
@@ -34,6 +41,7 @@ trap 'rm -rf "$WORK"' EXIT
 
 # Isolate every writable path into $WORK; parse the REAL example.
 export FCFG_GLOBAL_CONF="$WORK/fleet.conf"
+export FCFG_SETTINGS_CONF="$WORK/fleet.settings"
 export FCFG_FLEET_CONF="$WORK/s1.conf"
 export FLEET_C="$WORK/cache"
 mkdir -p "$FLEET_C"
@@ -175,10 +183,22 @@ case "$(fcfg_full  FLEET_REPO)" in *@label=*) fail 'full help leaked the tag lin
 ev=$(fcfg_effective FLEET_CTX_WINDOW s1)
 eq 'effective(default) val' "${ev%"$FCFG_US"*}" 200000
 eq 'effective(default) src' "${ev##*"$FCFG_US"}" default
+# The install's fleet.conf is still READ — an old install loads unchanged — and
+# shows as the read-only legacy layer.
 printf 'FLEET_CTX_WINDOW=300000\n' > "$FCFG_GLOBAL_CONF"
 ev=$(fcfg_effective FLEET_CTX_WINDOW s1)
-eq 'effective(global) val' "${ev%"$FCFG_US"*}" 300000
-eq 'effective(global) src' "${ev##*"$FCFG_US"}" global
+eq 'effective(legacy) val' "${ev%"$FCFG_US"*}" 300000
+eq 'effective(legacy) src' "${ev##*"$FCFG_US"}" legacy
+# The login's fleet.settings wins over it, and is "this fleet" to the user.
+printf 'FLEET_CTX_WINDOW=400000\n' > "$FCFG_SETTINGS_CONF"
+ev=$(fcfg_effective FLEET_CTX_WINDOW s1)
+eq 'effective(settings) val' "${ev%"$FCFG_US"*}" 400000
+eq 'effective(settings) src' "${ev##*"$FCFG_US"}" fleet
+rm -f "$FCFG_SETTINGS_CONF"
+# A global-only key in a fleet conf is stripped at load, so it is never "in effect".
+printf 'FLEET_GH_TTL=5\n' > "$FCFG_FLEET_CONF"
+ev=$(fcfg_effective FLEET_GH_TTL s1)
+eq 'global-only skips fleet conf' "$ev" "90${FCFG_US}default"
 printf 'FLEET_CTX_WINDOW=1000000\n' > "$FCFG_FLEET_CONF"
 ev=$(fcfg_effective FLEET_CTX_WINDOW s1)
 eq 'effective(fleet) val' "${ev%"$FCFG_US"*}" 1000000
@@ -303,12 +323,25 @@ fcfg_write "$NEW" FLEET_MODEL '' enum >/dev/null
 grep -qxF 'FLEET_MODEL=""' "$NEW" || fail 'empty enum should write KEY=""'; ok
 v=$( . "$NEW"; printf '%s' "${FLEET_MODEL-unset}" ); eq 'empty enum sources to empty' "$v" ''
 
-# --- WRITE-SCOPE toggle (the g/f layer selector) ----------------------------
+# --- WRITE-SCOPE toggle (fleet ⇄ repo, issue #1102) --------------------------
 eq 'default write-scope' "$(fcfg_wscope s1)" fleet
+# No fleet-lib in scope here ⇒ no repo scopes ⇒ ⌃s has nowhere else to go —
+# and in particular never to a global scope.
 fcfg_wscope_toggle s1
-eq 'toggled write-scope' "$(fcfg_wscope s1)" global
+eq 'toggle without repos stays fleet' "$(fcfg_wscope s1)" fleet
+# A `global` persisted by an older modal reads back as fleet.
+fcfg_wscope_set s1 global
+eq 'stale global scope → fleet' "$(fcfg_wscope s1)" fleet
 fcfg_wscope_set s1 fleet
-eq 'set write-scope back' "$(fcfg_wscope s1)" fleet
+eq 'scope label' "$(fcfg_wscope_label s1)" FLEET
+# Where an edit lands: global-only → the login's fleet.settings, identity → none,
+# everything else → the fleet conf. Never the install's (legacy) fleet.conf.
+eq 'key wscope global-only' "$(fcfg_key_wscope s1 FLEET_GLOBAL_MAX_SESSIONS)" global
+eq 'key wscope per-fleet'   "$(fcfg_key_wscope s1 FLEET_MAX_SESSIONS)" fleet
+fcfg_key_wscope s1 FLEET_REPO >/dev/null && fail 'identity key has a write scope'; ok
+eq 'global target = fleet.settings' "$(fcfg_target_conf s1 global)" "$FCFG_SETTINGS_CONF"
+eq 'fleet target = fleet conf'      "$(fcfg_target_conf s1 fleet)"  "$FCFG_FLEET_CONF"
+eq 'no-session target = settings'   "$(FCFG_FLEET_CONF='' fcfg_target_conf '' fleet)" "$FCFG_SETTINGS_CONF"
 
 # WRITE FAILURE must be reported (not a false success). A read-only dir makes the
 # tmp-write/rename fail; fcfg_write must return non-zero and leave no orphan tmp.
@@ -336,13 +369,22 @@ printf 'FLEET_REPO="o/a"\nFLEET_MODEL="sonnet"\nFLEET_DEPLOY_CHECK="actions"\n' 
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
 
-# Degenerate: no repos/ overlay → no repo scopes, the historic fleet⇄global flip.
-eq 'one-repo: no repo scopes' "$(fcfg_repo_scopes s2)" ''
-fcfg_wscope_toggle s2; eq 'one-repo toggle → global' "$(fcfg_wscope s2)" global
-fcfg_wscope_toggle s2; eq 'one-repo toggle → fleet'  "$(fcfg_wscope s2)" fleet
-fcfg_wscope_set s2 repo:o-a
-eq 'one-repo: a repo scope reads back as fleet' "$(fcfg_wscope s2)" fleet
-fcfg_wscope_set s2 fleet
+# One-repo fleet (no repos/ overlay): one repo scope, for its one repo, so ⌃s is
+# fleet ⇄ repo:o-a — and that repo layer IS the fleet conf: an edit there writes
+# F2 and never creates repos/, so the degenerate fleet stays a degenerate fleet.
+eq 'one-repo: one repo scope' "$(fcfg_repo_scopes s2 | cut -d"$FCFG_US" -f1)" repo:o-a
+fcfg_wscope_toggle s2; eq 'one-repo toggle → repo' "$(fcfg_wscope s2)" repo:o-a
+eq 'one-repo scope label' "$(fcfg_wscope_label s2)" 'REPO o/a'
+eq 'one-repo repo target = fleet conf' "$(fcfg_target_conf s2 repo:o-a)" "$F2"
+eq 'one-repo per-repo key → repo'      "$(fcfg_key_wscope s2 FLEET_MODEL)" repo:o-a
+eq 'one-repo non-repo key → fleet'     "$(fcfg_key_wscope s2 FLEET_MAX_SESSIONS)" fleet
+eq 'one-repo global-only key → global' "$(fcfg_key_wscope s2 FLEET_GLOBAL_MAX_SESSIONS)" global
+cp "$F2" "$WORK/F2.keep"
+eq 'one-repo repo write' "$(fcfg_repo_write s2 o-a FLEET_AGENT codex enum)" updated
+eq 'one-repo write lands in fleet conf' "$(fcfg_file_value "$F2" FLEET_AGENT)" codex
+[ -e "$FLEET_CONF_DIR/fleets/s2/repos" ] && fail 'one-repo repo write created repos/'; ok
+mv "$WORK/F2.keep" "$F2"; rm -f "$F2.bak"
+fcfg_wscope_toggle s2; eq 'one-repo toggle → fleet' "$(fcfg_wscope s2)" fleet
 
 # Shim tmux so the modal resolves session s2 with no server.
 SHIM="$WORK/shim"; mkdir -p "$SHIM"
@@ -366,12 +408,11 @@ printf 'FLEET_REPO="o/b"\nFLEET_MAIN="/tmp/b"\nFLEET_MODEL="opus"\n' > "$FLEET_C
 eq 'repo scopes' "$(fcfg_repo_scopes s2 | cut -d"$FCFG_US" -f1 | paste -sd' ' -)" 'repo:o-a repo:o-b'
 eq 'scope → repo' "$(fcfg_scope_repo s2 repo:o-b)" o/b
 fcfg_scope_repo s2 repo:nope >/dev/null && fail 'unhosted scope resolved'; ok
-# The cycle: fleet → global → repo:o-a → repo:o-b → fleet.
-fcfg_wscope_toggle s2; eq 'cycle 1' "$(fcfg_wscope s2)" global
-fcfg_wscope_toggle s2; eq 'cycle 2' "$(fcfg_wscope s2)" repo:o-a
-fcfg_wscope_toggle s2; eq 'cycle 3' "$(fcfg_wscope s2)" repo:o-b
+# The cycle: fleet → repo:o-a → repo:o-b → fleet — no global stop (issue #1102).
+fcfg_wscope_toggle s2; eq 'cycle 1' "$(fcfg_wscope s2)" repo:o-a
+fcfg_wscope_toggle s2; eq 'cycle 2' "$(fcfg_wscope s2)" repo:o-b
 eq 'scope label' "$(fcfg_wscope_label s2)" 'REPO o/b'
-fcfg_wscope_toggle s2; eq 'cycle 4' "$(fcfg_wscope s2)" fleet
+fcfg_wscope_toggle s2; eq 'cycle 3' "$(fcfg_wscope s2)" fleet
 fcfg_wscope_set s2 repo:gone; eq 'stale repo scope → fleet' "$(fcfg_wscope s2)" fleet
 
 # Keys + targets.
@@ -412,6 +453,40 @@ printf '%s\n' "$R" | grep '^@@NOOP@@' | head -1 | grep -q 'o/b.*REPO o/b' || fai
 PATH="$SHIM:$PATH" bash "$BIN/tmux-config.sh" preview FLEET_MODEL | sed 's/\x1b\[[0-9;]*m//g' > "$WORK/pv"
 grep -q 'per repo' "$WORK/pv" && grep -qE 'o/a +haiku' "$WORK/pv" && grep -qE 'o/b +opus' "$WORK/pv" \
   || fail "preview lacks the per-repo values: $(cat "$WORK/pv")"; ok
+# The EDITOR end to end (issue #1102): under a repo scope, a key that is not
+# per-repo is WRITTEN to this fleet — never refused for the "wrong layer" — and a
+# global-only key lands in the login's fleet.settings, which fleet_load_conf's
+# caller (fleet-lib) then reads. The install's fleet.conf is read, never written.
+edit() { printf '%s\n' "$2" | PATH="$SHIM:$PATH" bash "$BIN/dash-config-edit.sh" "$1" >/dev/null 2>&1; }
+unset FCFG_SETTINGS_CONF
+printf 'FLEET_GLOBAL_MAX_SESSIONS=5\nFLEET_MAX_SESSIONS=4\n' > "$FCFG_GLOBAL_CONF"
+cp "$FCFG_GLOBAL_CONF" "$WORK/install.keep"
+fcfg_wscope_set s2 repo:o-b
+edit FLEET_MAX_SESSIONS 6
+eq 'repo scope: non-repo key → fleet conf' "$(fcfg_file_value "$F2" FLEET_MAX_SESSIONS)" 6
+eq 'repo scope: o/b overlay untouched' "$(fcfg_file_value "$FLEET_CONF_DIR/fleets/s2/repos/o-b.conf" FLEET_MAX_SESSIONS || echo unset)" unset
+edit FLEET_GLOBAL_MAX_SESSIONS 9
+eq 'global-only → fleet.settings' "$(fcfg_file_value "$FLEET_CONF_DIR/fleet.settings" FLEET_GLOBAL_MAX_SESSIONS)" 9
+eq 'global-only not in fleet conf' "$(fcfg_file_value "$F2" FLEET_GLOBAL_MAX_SESSIONS || echo unset)" unset
+eq 'install fleet.conf never written' "$(cat "$FCFG_GLOBAL_CONF")" "$(cat "$WORK/install.keep")"
+edit FLEET_DEPLOY_REF origin/prod
+eq 'repo scope: per-repo key → o/b overlay' "$(fcfg_file_value "$FLEET_CONF_DIR/fleets/s2/repos/o-b.conf" FLEET_DEPLOY_REF)" origin/prod
+# What the fleet actually loads: settings beat the legacy install value; the
+# legacy per-fleet key still comes through where nothing overrides it.
+v=$( unset _FLEET_GLOBAL_CONF_SOURCED FLEET_SKIP_GLOBAL_CONF FLEET_GLOBAL_MAX_SESSIONS
+     . "$BIN/fleet-lib.sh"; . "$FCFG_GLOBAL_CONF"; . "$FLEET_CONF_DIR/fleet.settings"
+     fleet_load_conf s2; printf '%s %s' "$FLEET_GLOBAL_MAX_SESSIONS" "$FLEET_MAX_SESSIONS" )
+eq 'loaded: settings global-only + fleet key' "$v" '9 6'
+v=$( unset _FLEET_GLOBAL_CONF_SOURCED FLEET_SKIP_GLOBAL_CONF FLEET_GLOBAL_MAX_SESSIONS
+     . "$BIN/fleet-lib.sh"; printf '%s' "${FLEET_GLOBAL_MAX_SESSIONS:-}" )
+eq 'fleet-lib reads fleet.settings' "$v" 9
+ev=$(fcfg_effective FLEET_GLOBAL_MAX_SESSIONS s2)
+eq 'modal agrees' "$ev" "9${FCFG_US}fleet"
+rm -f "$FLEET_CONF_DIR/fleet.settings" "$FLEET_CONF_DIR/fleet.settings.bak" "$F2.bak"
+: > "$FCFG_GLOBAL_CONF"
+printf 'FLEET_REPO="o/a"\nFLEET_MODEL="sonnet"\nFLEET_DEPLOY_CHECK="actions"\n' > "$F2"
+fcfg_wscope_set s2 fleet
+
 # Degenerate rows: drop the overlays and the rows are byte-identical to before.
 rm -rf "$FLEET_CONF_DIR/fleets/s2/repos"
 eq 'one-repo rows unchanged' "$(rows)" "$ROWS1"
