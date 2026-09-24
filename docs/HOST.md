@@ -17,6 +17,7 @@ bash ~/.claude/fleet/bin/fleet-doctor.sh 2>&1 | grep -E '^\s*\S+\s+(spotlight|wt
 ## Contents
 
 - [Turn off Spotlight](#spotlight)
+- [MCP servers on demand](#mcp)
 
 <a id="spotlight"></a>
 ## Turn off Spotlight
@@ -72,3 +73,24 @@ to be busy for a while).
 **Silence the doctor line** on a host where you keep Spotlight on deliberately:
 `FLEET_DOCTOR_SPOTLIGHT=0` in the environment or in
 `~/.config/claude-fleet/fleet.settings`.
+
+<a id="mcp"></a>
+## MCP servers on demand
+
+Unless a fleet sets `FLEET_MCP_CONFIG`, every session it spawns starts every MCP
+server on the machine. Each one is a resident process per session: the measured
+default here was 4 `node` processes under one `claude`. A host running 36 sessions
+pays for that 36 times, whether or not a task ever calls those servers.
+
+Point each fleet at the minimal worker set the fleet ships (issue #1078):
+
+```sh
+# ~/.config/claude-fleet/fleet.settings (or a fleet's conf)
+FLEET_MCP_CONFIG="$HOME/.claude/fleet/conf/mcp-worker.json"
+```
+
+Today it is the empty set. A repo that needs a server gets its own copy of the
+file with that server added. [INSTALL.md → MCP servers on demand](INSTALL.md#mcp-servers-on-demand)
+has the common add-backs, and Codex workers inherit the same value.
+
+**Undo:** unset the key. The next spawned session loads everything again.

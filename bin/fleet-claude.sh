@@ -184,6 +184,9 @@ if [ -z "${FLEET_SUBAGENT_MODEL+x}" ]; then FLEET_SUBAGENT_MODEL="${launch_model
 #   none         no MCP at all
 #   <path|json>  ONLY these servers (the CLI takes a file path or inline JSON)
 #
+# Recommended: the shipped minimal worker set, ~/.claude/fleet/conf/mcp-worker.json
+# (issue #1078; docs/INSTALL.md "MCP servers on demand").
+#
 # --strict-mcp-config is what drops the REMOTE connectors too, not just local stdio.
 # An explicit --mcp-config/--strict-mcp-config from the caller wins, same as --model.
 mcp_flag=()

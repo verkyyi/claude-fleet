@@ -143,6 +143,32 @@ argv="$(run)"
 has "$argv" "--mcp-config=$WORK/mcp.json" || fail "a file path was not passed through verbatim" "$argv"
 ok "a file path passes through verbatim, in the =form (the CLI takes either value shape)"
 
+# --- #1078: the shipped minimal worker set, conf/mcp-worker.json ---------------
+# fleet.conf.example + docs/INSTALL.md RECOMMEND pointing FLEET_MCP_CONFIG at this
+# file, so pin both halves: the file itself (present, valid, ONLY an mcpServers
+# object — the shape bin/fleet-codex-policy.py also accepts — and, in the initial
+# cut, EMPTY), and that pointing the key at it launches strict with that file and
+# the seed intact. "Survives /fleet-sync-install" == tracked in git, because the
+# live install IS a checkout that sync fast-forwards.
+WORKER_MCP="$BIN/../conf/mcp-worker.json"
+[ -f "$WORKER_MCP" ] || fail "conf/mcp-worker.json is missing — the recommended FLEET_MCP_CONFIG target"
+python3 - "$WORKER_MCP" <<'PY' || fail "conf/mcp-worker.json is not {\"mcpServers\":{}}"
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert isinstance(d, dict) and set(d) == {"mcpServers"} and d["mcpServers"] == {}, d
+PY
+if git -C "$BIN/.." rev-parse --git-dir >/dev/null 2>&1; then
+  git -C "$BIN/.." ls-files --error-unmatch conf/mcp-worker.json >/dev/null 2>&1 \
+    || fail "conf/mcp-worker.json is not tracked — /fleet-sync-install would never deliver it"
+fi
+printf 'FLEET_MODEL="fable"\nFLEET_MCP_CONFIG="%s"\n' "$WORKER_MCP" > "$WORK/conf/fleets/f1/conf"
+argv="$(run /fleet-claim)"
+has "$argv" "--strict-mcp-config" || fail "FLEET_MCP_CONFIG=conf/mcp-worker.json did not launch strict" "$argv"
+has "$argv" "--mcp-config=$WORKER_MCP" || fail "conf/mcp-worker.json was not the ONLY config passed" "$argv"
+[ "$(printf '%s\n' "$argv" | grep -c -- '--mcp-config')" = 1 ] || fail "more than one --mcp-config alongside mcp-worker.json" "$argv"
+has "$argv" "/fleet-claim" || fail "the seed prompt was swallowed with mcp-worker.json" "$argv"
+ok "conf/mcp-worker.json ships (tracked, empty mcpServers) and FLEET_MCP_CONFIG→it launches strict with only that file"
+
 # an explicit caller flag wins over the conf
 printf 'FLEET_MODEL="fable"\nFLEET_MCP_CONFIG="none"\n' > "$WORK/conf/fleets/f1/conf"
 argv="$(run --mcp-config "$WORK/other.json")"

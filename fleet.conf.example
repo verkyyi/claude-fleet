@@ -201,12 +201,20 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 #   (unset/empty)  every configured MCP server loads — today's behaviour
 #   none           no MCP server at all
 #   <path|JSON>    ONLY these servers; the CLI takes a file path OR inline JSON
+# RECOMMENDED (issue #1078): point it at the minimal worker set the fleet ships,
+#   (e.g.)  FLEET_MCP_CONFIG="$HOME/.claude/fleet/conf/mcp-worker.json"
+# — today an empty server set (`{"mcpServers":{}}`), so it behaves like `none`, but
+# as a FILE: a fleet that needs a server copies it to its own conf dir, adds what
+# it needs (docs/INSTALL.md "MCP servers on demand" has the common add-backs), and
+# points this key there. On a machine running dozens of sessions every server is
+# one resident process per session, so this is the biggest per-session saving.
 # --strict-mcp-config is what also drops the REMOTE (claude.ai connector) servers,
 # not just local stdio ones. An explicit --mcp-config/--strict-mcp-config from the
 # caller always wins. Trade-off worth knowing: a census measures what was USED, not
 # what may be NEEDED — a trimmed fleet session won't have the server it never asked
 # for before. It takes effect on the next spawned session, and plain `claude` outside
 # a fleet is untouched, so the full set is always one ordinary session away.
+# Codex workers read the same value unless FLEET_CODEX_MCP_CONFIG is set (below).
 # @label=MCP servers for this fleet @group=spawn @tier=advanced @scope=fleet @edit=str
 #FLEET_MCP_CONFIG=""
 
@@ -287,8 +295,9 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Codex quota migration @group=spawn @tier=advanced @scope=fleet @edit=bool
 #FLEET_CODEX_QUOTA_MIGRATE=0
 
-# Codex MCP policy: unset inherits FLEET_MCP_CONFIG; explicitly empty preserves
-# Codex defaults. `none` disables all configured MCP servers and apps/connectors.
+# Codex MCP policy: unset inherits FLEET_MCP_CONFIG — so pointing that key at
+# ~/.claude/fleet/conf/mcp-worker.json (recommended, issue #1078) also trims Codex
+# workers to the same minimal set; explicitly empty preserves Codex defaults. `none` disables all configured MCP servers and apps/connectors.
 # Otherwise use a JSON file/inline object with mcpServers (stdio/HTTP translation)
 # or native mcp_servers; a native .toml file requires Python 3.11+. Strict policies
 # disable unlisted servers, apps and automatic skill-driven MCP installation.
