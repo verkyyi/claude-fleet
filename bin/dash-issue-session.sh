@@ -437,6 +437,9 @@ detach=(-d); [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && [ -z "$TARGET_SESS" ] && detac
 stamp=''; [ "$MULTI" = 1 ] && stamp=$(fleet_win_stamp_cmd @repo "$REPO" @worktree "$wt")
 win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "$stamp'$BIN/fleet-claude.sh'${AGENT:+ --agent $AGENT} \"\$(cat '$tf')\"; exec \$SHELL") \
   || { refuse "spawn failed for #$num: new-window"; exit "$RC_INFRA"; }
+# A session is on its way: wake the idle-gated daemons so the dash is fresh on
+# their very next tick, not up to FLEET_DAEMON_IDLE_AFTER later (issue #1077).
+[ -f "$BIN/fleet-daemon-lib.sh" ] && ( . "$BIN/fleet-daemon-lib.sh" && fleet_daemon_wake "$BIN/.." ) 2>/dev/null || true
 TM set-window-option -t "$win" @issue "$num" 2>/dev/null   # bind window ↔ issue
 # The window's repo + worktree (issue #789) — every worker carries both, so any
 # consumer resolves its repo via fleet_window_repo without a git read.

@@ -403,6 +403,9 @@ else
   win=$(TM new-window -d -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$wt" "$stamp$launch; exec \$SHELL") \
     || { [ "$NOREPO" = 1 ] || fleet_scratch_free "$MAIN" "$slug" "$wt"
          refuse "raw: new-window failed in $SESS"; exit 1; }
+# A session is on its way: wake the idle-gated daemons so the dash is fresh on
+# their very next tick, not up to FLEET_DAEMON_IDLE_AFTER later (issue #1077).
+[ -f "$BIN/fleet-daemon-lib.sh" ] && ( . "$BIN/fleet-daemon-lib.sh" && fleet_daemon_wake "$BIN/.." ) 2>/dev/null || true
   if [ "$NOREPO" = 1 ]; then
     TM set-window-option -t "$win" @norepo 1 2>/dev/null    # deliberately no repo, no worktree
     [ -n "$nsid" ] && TM set-window-option -t "$win" @norepo_sid "$nsid" 2>/dev/null

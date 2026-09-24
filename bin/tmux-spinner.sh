@@ -199,6 +199,37 @@ hb_stamp() {
   fi
   printf '%s%s\n' "$_now" "$_rate" > "$SPIN_HB.tmp" 2>/dev/null && mv -f "$SPIN_HB.tmp" "$SPIN_HB" 2>/dev/null
 }
+# --- idle nap (issue #1077) ----------------------------------------------------
+# With no live fleet the loop below used to turn every 2s for ever — a socket
+# probe, a heartbeat fork and a `sleep` 1800 times an hour on a login nobody is
+# using. Past FLEET_DAEMON_IDLE_AFTER (default 300s; 0 = off) of no fleet it naps
+# IDLE_NAP_SECS (60) instead: still well inside the 180s the heartbeat readers
+# allow (fleet-doctor, fleet-handoff-cycle), and a fleet brought up mid-nap is
+# picked up within that minute. A spawn's wake marker (fleet_daemon_wake) restarts
+# the 2s grace, and any live socket ends the spell. The lib is POSIX and pure —
+# sourced guarded, like every daemon's use of it: without it the nap is off.
+IDLE_NAP_SECS=60
+IDLE_AFTER=0 WAKE_F='' IDLE_T0=''
+# shellcheck source=/dev/null
+if [ -f "$BIN/fleet-daemon-lib.sh" ] && . "$BIN/fleet-daemon-lib.sh" 2>/dev/null; then
+  IDLE_AFTER=$(fleet_idle_after)
+  WAKE_F="$(fleet_daemon_state_dir "$BIN/..")/wake"
+fi
+# idle_nap — how long the no-fleet branch sleeps: 2 in the grace window, else the
+# nap. Reads `_now` from the hb_stamp just before it (no fork of its own).
+idle_nap() {
+  NAP=2
+  [ "$IDLE_AFTER" -gt 0 ] 2>/dev/null || return 0
+  case "${_now:-}" in ''|*[!0-9]*) return 0 ;; esac
+  [ -n "$IDLE_T0" ] || IDLE_T0=$_now
+  _iw=''
+  [ -f "$WAKE_F" ] && IFS= read -r _iw < "$WAKE_F" 2>/dev/null
+  case "$_iw" in ''|*[!0-9]*) _iw=0 ;; esac
+  [ "$_iw" -gt 0 ] && [ "$_iw" -ge "$IDLE_T0" ] && IDLE_T0=$_now   # a spawn: restart the grace
+  [ $(( _now - IDLE_T0 )) -ge "$IDLE_AFTER" ] && NAP=$IDLE_NAP_SECS
+  return 0
+}
+
 hb_stamp   # once at startup, so a freshly (re)started spinner is never read as dead
            # during the first throttle window — on a KeepAlive unit that window is
            # every restart, and "no heartbeat at all" is the doctor's loudest verdict.
@@ -597,7 +628,9 @@ while :; do
   # and a heartbeat that went stale every time the machine was quiet would be a
   # false alarm exactly when the operator is least able to check (issue #677).
   # This branch already sleeps 2s, so an unthrottled stamp here costs one fork/2s.
-  if [ -z "$SOCKETS" ]; then hb_stamp; sleep 2; LAST='|'; LAST_NEEDS='|'; LAST_OTHER='|'; ANIM_SOCKS=''; NEEDS_SOCKS=''; step=1; continue; fi
+  # Past the idle grace the sleep is a NAP (issue #1077, idle_nap above).
+  if [ -z "$SOCKETS" ]; then hb_stamp; idle_nap; sleep "$NAP"; LAST='|'; LAST_NEEDS='|'; LAST_OTHER='|'; ANIM_SOCKS=''; NEEDS_SOCKS=''; step=1; continue; fi
+  IDLE_T0=''   # a live fleet ends the idle spell
 
   hbc=$((hbc + step))
   [ "$hbc" -ge "$HB_EVERY" ] && { hbc=0; hb_stamp; }

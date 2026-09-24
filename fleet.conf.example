@@ -849,6 +849,15 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Daemon staleness floor @group=cache @tier=advanced @scope=global @edit=int @unit=sec
 #FLEET_DAEMON_STALE_FLOOR=180
 
+# Idle gate (issue #1077): once this login has had NO live fleet for this many
+# seconds, collect and quotawatch do a full tick only once per this many seconds
+# (≤ 12 an hour at 300, instead of 60), and the spinner naps 60s instead of 2s.
+# Any live fleet socket, or a spawn (fleet-up, the dash, dispatch, cw), wakes all
+# three at once. launchd's `runs =` still counts every start — a gated tick exits
+# after one stamp. 0 = off: every tick works, as before #1077. GLOBAL.
+# @label=Idle daemon gate @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_DAEMON_IDLE_AFTER=300
+
 # Per-unit ABSOLUTE override, in place of the multiple: add a line of the form
 # FLEET_DAEMON_STALE_<UNIT>=<seconds>, the unit name uppercased with `-` → `_`
 # (so `base-sync` is FLEET_DAEMON_STALE_BASE_SYNC). Use it for a unit whose real
