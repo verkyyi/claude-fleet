@@ -2483,11 +2483,26 @@ fleet_worktree_drop() {
 # Budget: $2, else $FLEET_TRASH_SWEEP_BUDGET, else 20 s; 0 ⇒ unbudgeted.
 # Prints "swept:<n> left:<m>" and always returns 0 — a janitor never fails its
 # caller. Dotfiles are skipped, which is what keeps the trash's own .gitignore.
+#
+# SLOW PURGE (issue #893), off unless $FLEET_TRASH_PURGE_PER_TICK is a positive N.
+# A trashed worktree with its node_modules is ~200k unlinks, and emptying several
+# in one go floods the file-event daemon (fseventsd) exactly the way an install
+# does. Set, the sweep deletes at most N entries per call (the rest are `left:`),
+# each under `nice -n 19`, and defers the WHOLE call — "swept:0 left:<m>
+# deferred:load <x>/core" — when the 1-minute load per core is over
+# $FLEET_TRASH_PURGE_MAX_LOAD (default 1; 0 ⇒ never defer). Deferral is the one
+# thing an urgent caller must be able to override: $FLEET_TRASH_PURGE_URGENT=1
+# (the cleanup daemon sets it when the disk gate is closed) drops both the cap and
+# the load check, because the bytes in the trash are what frees a full disk.
 fleet_trash_sweep() {
   local main="${1:-}" budget="${2:-${FLEET_TRASH_SWEEP_BUDGET:-20}}"
   case "$budget" in ''|*[!0-9]*) budget=20 ;; esac
   [ "$budget" -gt 0 ] || budget=86400
   [ -n "$main" ] || { printf 'swept:0 left:0\n'; return 0; }
+  local cap="${FLEET_TRASH_PURGE_PER_TICK:-0}" maxload="${FLEET_TRASH_PURGE_MAX_LOAD:-1}"
+  case "$cap" in ''|*[!0-9]*) cap=0 ;; esac
+  case "$maxload" in ''|*[!0-9.]*) maxload=1 ;; esac
+  [ "${FLEET_TRASH_PURGE_URGENT:-0}" = 1 ] && cap=0
   # Two trashes when FLEET_WORKTREE_ROOT is set (issue #886): the root's, where
   # every worktree created since lives and is dropped, and the base's sibling one,
   # which still holds whatever was created before the root was switched on.
@@ -2496,16 +2511,30 @@ fleet_trash_sweep() {
   rtrash=""; [ -n "$root" ] && rtrash="$root/.fleet-trash"
   [ "$rtrash" = "$trash" ] && rtrash=""
 
-  local deadline swept=0 left=0 t e remaining
+  local deadline swept=0 left=0 t e remaining per="" nice_n=0
+  if [ "$cap" -gt 0 ]; then
+    nice_n=19
+    per="$(_fleet_load_per_core)"
+    if [ -n "$per" ] && awk -v p="$per" -v m="$maxload" 'BEGIN{ exit !(m > 0 && p > m) }'; then
+      for t in "$trash" "$rtrash"; do
+        case "${t##*/}" in .fleet-trash) ;; *) continue ;; esac
+        for e in "$t"/*; do [ -e "$e" ] && left=$((left + 1)); done
+      done
+      [ "$left" -gt 0 ] || { printf 'swept:0 left:0\n'; return 0; }
+      printf 'swept:0 left:%s deferred:load %s/core\n' "$left" "$per"
+      return 0
+    fi
+  fi
   deadline=$(( $(date +%s 2>/dev/null || echo 0) + budget ))
   for t in "$trash" "$rtrash"; do
     case "${t##*/}" in .fleet-trash) ;; *) continue ;; esac
     [ -d "$t" ] || continue
     for e in "$t"/*; do
       [ -e "$e" ] || continue                     # empty trash → the glob is literal
+      if [ "$cap" -gt 0 ] && [ "$swept" -ge "$cap" ]; then left=$((left + 1)); continue; fi
       remaining=$(( deadline - $(date +%s 2>/dev/null || echo 0) ))
       if [ "$remaining" -le 0 ]; then left=$((left + 1)); continue; fi
-      if fleet_timebox "$remaining" rm -rf "$e" >/dev/null 2>&1; then
+      if fleet_timebox "$remaining" nice -n "$nice_n" rm -rf "$e" >/dev/null 2>&1; then
         swept=$((swept + 1))
       else
         left=$((left + 1))                        # timed out mid-delete — next sweep
@@ -2514,6 +2543,20 @@ fleet_trash_sweep() {
   done
   printf 'swept:%s left:%s\n' "$swept" "$left"
   return 0
+}
+
+# _fleet_load_per_core → the 1-minute load average divided by the core count, two
+# decimals, or empty when the load is unreadable (the caller then does not defer).
+# Same sources as fleet-diskguard.sh's machine_load/machine_cores (macOS sysctl,
+# Linux /proc).
+_fleet_load_per_core() {
+  local c l
+  c=$({ sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null; } \
+      | head -1 | awk '{ n=$1+0; print (n>0 ? n : 1) }')
+  l=$({ sysctl -n vm.loadavg 2>/dev/null | tr -d '{}' || awk '{print $1}' /proc/loadavg 2>/dev/null; } \
+      | head -1 | awk '{ print $1 }')
+  case "$l" in ''|*[!0-9.]*) return 0 ;; esac
+  awk -v l="$l" -v c="${c:-1}" 'BEGIN{ printf "%.2f", l / c }'
 }
 
 # path-or-branch → the /fleet-history ledger KEY for a SCRATCH (@raw) session, or

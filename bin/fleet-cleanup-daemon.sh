@@ -431,6 +431,17 @@ fi
 # It runs BEFORE the disk gate on purpose. A closed gate means the volume is full,
 # and emptying the trash is exactly what unsticks it — gating the sweep on free disk
 # would be the one ordering that can deadlock.
+#
+# The gate is read ONCE here and reused below: a fleet that slows its purge
+# (FLEET_TRASH_PURGE_PER_TICK, issue #893) must not keep deferring on load while
+# the volume is full, so a closed gate makes the sweep URGENT — no cap, no load
+# check.
+DISK_OPEN=1
+if [ "$DRY" = 0 ] && [ -x "$BIN/fleet-diskguard.sh" ] \
+   && ! "$BIN/fleet-diskguard.sh" --gate >/dev/null 2>&1; then
+  DISK_OPEN=0
+fi
+SWEEP_URGENT=0; [ "$DISK_OPEN" = 1 ] || SWEEP_URGENT=1
 SWEEP_BUDGET="${FLEET_TRASH_SWEEP_BUDGET:-20}"
 case "$SWEEP_BUDGET" in ''|*[!0-9]*) SWEEP_BUDGET=20 ;; esac
 if [ "$DRY" = 0 ] && [ "$SWEEP_BUDGET" -gt 0 ]; then
@@ -441,14 +452,23 @@ if [ "$DRY" = 0 ] && [ "$SWEEP_BUDGET" -gt 0 ]; then
     # into the next one's cleanup.
     # The worktree root rides along (issue #886): a fleet that parks its worktrees
     # under FLEET_WORKTREE_ROOT drops them into THAT root's trash.
-    mr=$(fleet_load_conf "$s" >/dev/null 2>&1; printf '%s\t%s' "${FLEET_MAIN:-}" "${FLEET_WORKTREE_ROOT:-}")
-    m=${mr%%$'\t'*}; r=${mr#*$'\t'}
+    # So does the slow-purge pair (issue #893): per-fleet knobs, read the same way.
+    mr=$(fleet_load_conf "$s" >/dev/null 2>&1
+         printf '%s\037%s\037%s\037%s' "${FLEET_MAIN:-}" "${FLEET_WORKTREE_ROOT:-}" \
+           "${FLEET_TRASH_PURGE_PER_TICK:-}" "${FLEET_TRASH_PURGE_MAX_LOAD:-}")
+    # \037, not a tab: IFS whitespace would collapse an empty field (no root set)
+    # and shift the knobs one to the left.
+    IFS=$'\037' read -r m r pcap pload <<EOF
+$mr
+EOF
     [ -n "$m" ] || continue
     case " $swept_mains " in *" $m "*) continue ;; esac
     swept_mains="$swept_mains $m"
     budget_left=$(( sweep_deadline - $(now) ))
     [ "$budget_left" -gt 0 ] || break
-    sweep=$(FLEET_WORKTREE_ROOT="$r" fleet_trash_sweep "$m" "$budget_left")
+    sweep=$(FLEET_WORKTREE_ROOT="$r" FLEET_TRASH_PURGE_PER_TICK="$pcap" \
+            FLEET_TRASH_PURGE_MAX_LOAD="$pload" FLEET_TRASH_PURGE_URGENT="$SWEEP_URGENT" \
+            fleet_trash_sweep "$m" "$budget_left")
     case "$sweep" in "swept:0 left:0") ;; *) log "$s: worktree trash $sweep ($m)" ;; esac
   done
 fi
@@ -470,8 +490,11 @@ fi
 # Diskguard gate is a MACHINE-WIDE (per-volume) condition, so answer it ONCE per
 # tick. A cleanup does a base-checkout pull + worktree teardown; don't add that
 # I/O below the floor. Mirrors the other single-writer, disk-gated fleet daemons.
-if [ "$DRY" = 0 ] && [ -x "$BIN/fleet-diskguard.sh" ] \
-   && ! "$BIN/fleet-diskguard.sh" --gate >/dev/null 2>&1; then
+# Re-read a closed gate: the sweep above may just have freed the volume.
+if [ "$DISK_OPEN" = 0 ] && "$BIN/fleet-diskguard.sh" --gate >/dev/null 2>&1; then
+  DISK_OPEN=1
+fi
+if [ "$DISK_OPEN" = 0 ]; then
   log "disk gate closed — skipping all fleets this tick"
   exit 0
 fi
