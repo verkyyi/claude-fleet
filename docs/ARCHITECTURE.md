@@ -258,14 +258,25 @@ letters, digits and multi-byte UTF-8 (CJK from an IME) whole, and the active
 pane never changes. `{top-left}` is the view — it is always the full-height
 leftmost pane — and a guard on `@sidebar` sends the key to the worker instead
 when it is not there. The view reads raw bytes and decodes UTF-8 itself, so a
-CJK name survives whatever locale tmux started the pane under. Verified on an
-isolated socket, on tmux 3.7 locally and on CI's tmux 3.4, by
-`fleet-sidebar-selftest.sh` — with one version limit: tmux 3.7 handles a BURST
-of keys (one terminal write: an IME commit, a paste-speed typist) key by key in
-the table, but 3.4 looks the later keys of a burst up before the bind's queued
-`switch-client` re-enters it, so they reach the worker instead. Keys typed one
-at a time work on both; the live installs run 3.7, and the selftest types a
-burst only there. Its costs, each handled in the conf: tmux still
+CJK name survives whatever locale tmux started the pane under. A BURST — one
+terminal write: an IME committing 「你好世界」 in one go, a paste-speed typist —
+needs two more pieces (issue #1098), because it used to leave only the first
+character in the sidebar and put the rest in Claude. (a) `assume-paste-time 0`:
+at tmux's default 1ms, keys arriving together are judged a paste and sent to the
+active pane (the worker) with no table lookup at all. (b) A root `bind -n Any`:
+tmux < 3.7 — the live installs' 3.6a, CI's 3.4 — looks every key of a burst up
+before running any of their commands, and the first key's bind reset the client
+to root at lookup, so the rest are looked up in root. The root `Any` tests
+`#{client_key_table}` when its command RUNS — after the first key's queued
+`switch-client -T fleet-sidebar` — so it reads `fleet-sidebar` exactly for a key
+that should have been looked up there, and sends it to the view; a key typed at
+the worker reads `root` and passes through with a bare `send-keys`. The decision
+lives in the client's own key table, not a marker set on the way in and cleared
+on the way out, so there is nothing to go stale and pull the worker's keys into
+the sidebar. Verified on an isolated socket, on tmux 3.6a locally and on CI's
+tmux 3.4, by `fleet-sidebar-selftest.sh`, which types every string as one write
+and asserts the worker saw none of it — and, once the keyboard is handed back,
+that the same burst reaches the worker. Its costs, each handled in the conf: tmux still
 honours the prefix inside a custom table, so prefix binds (prefix e hides) keep
 working; but `Any` also matches keys and mouse events the root table used to
 pick up for an unbound key, so F9, the wheel and the status-bar tap are bound

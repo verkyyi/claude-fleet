@@ -169,17 +169,11 @@ def server_version():
     return tuple(map(int, found.groups())) if found else (0, 0)
 
 def type_keys(text):
-    """Type into the attached terminal as a burst (one write — an IME commit, a
-    fast typist), which tmux 3.7+ keeps in the sidebar table key by key. Older
-    tmux looks up a burst's later keys BEFORE the Any bind's queued switch-client
-    re-enters the table, so they fall to the worker (documented in
-    ARCHITECTURE.md); there the test types one character at a time."""
-    if server_version() >= (3, 7):
-        os.write(terminal, text.encode())
-        return
-    for char in text:
-        os.write(terminal, char.encode())
-        time.sleep(.15)
+    """Type into the attached terminal as a burst: ONE write, as an IME commit
+    (「你好世界」 in one go) or a paste-speed typist sends it. Every key must
+    land in the sidebar on every supported tmux (issue #1098) — see
+    ARCHITECTURE.md for the two mechanisms that make that hold on < 3.7."""
+    os.write(terminal, text.encode())
 
 def row_data(current='', compact=True):
     row_env = dict(env, FLEET_SESSION='fleet-test', FLEET_SIDEBAR_CURRENT=current)
@@ -267,6 +261,7 @@ try:
                  'MouseDown1Pane' in line or 'MouseDown1Border' in line or 'DoubleClick1Pane' in line or
                  line.startswith('bind -n F9 ') or
                  line.startswith('set -g pane-border') or line.startswith('set -g default-terminal') or
+                 line.startswith('set -g assume-paste-time ') or
                  line == 'set -g mouse on')]
     fixture = work / 'sidebar.conf'
     # `run-shell "sh …hub-zoom.sh"` (the F9 binds): production /bin/sh is bash in
@@ -724,6 +719,38 @@ try:
           'a letter still acted as a command (q hid / n opened a popup)')
     type_keys('\x7f\x7f\x7f\x7f')
     wait_for(lambda: tasks_cue(side), 'backspace did not delete the typed name')
+    # An IME commit (issue #1098): 「你好世界」 in ONE write lands whole on the
+    # input line and not a character of it on the worker — on tmux < 3.7 too,
+    # where only assume-paste-time 0 + the root `Any` keep the later keys here.
+    worker_before = tm('capture-pane', '-p', '-t', p1)
+    type_keys('你好世界')
+    wait_for(lambda: input_line(side) == '› 你好世界▏',
+             'an IME commit did not land whole on the input line: %r' % input_line(side))
+    time.sleep(.3)
+    worker_now = tm('capture-pane', '-p', '-t', p1)
+    # FLEET_SIDEBAR_EVIDENCE=<dir>: keep both panes as they stand (fleet-evidence.sh).
+    if os.environ.get('FLEET_SIDEBAR_EVIDENCE'):
+        for name, pane in (('sidebar', side), ('worker', p1)):
+            Path(os.environ['FLEET_SIDEBAR_EVIDENCE'], name + '.txt').write_text(
+                tm('capture-pane', '-p', '-t', pane) + '\n')
+    check(worker_now == worker_before and not any(c in worker_now for c in '你好世界'),
+          'an IME commit leaked into the worker: %r' % worker_now.splitlines()[-3:])
+    # Handed back (Esc clears, Esc again returns the keyboard), the root `Any`
+    # lets go: the same burst reaches the worker, and the input line stays empty.
+    os.write(terminal, b'\x1b')
+    wait_for(lambda: tasks_cue(side), 'Esc did not clear the IME commit')
+    os.write(terminal, b'\x1b')
+    wait_for(lambda: not navigation(), 'Esc on an empty input line kept the keyboard')
+    type_keys('你好世界')
+    wait_for(lambda: '你好世界' in tm('capture-pane', '-p', '-t', p1),
+             'after the hand-back an IME commit did not reach the worker')
+    # The view repaints its cue on a 1s poll of the key table — wait it out.
+    wait_for(lambda: worker_cue(side), 'the input line did not return to the worker cue: %r' % input_line(side))
+    check(not navigation() and not any(c in input_line(side) for c in '你好世界'),
+          'after the hand-back the root Any pulled a key into the sidebar: %r' % input_line(side))
+    tm('send-keys', '-t', p1, 'C-u')
+    click(side, row=height - 3)
+    wait_for(navigation, 'clicking sidebar blank space did not re-enter navigation')
 
     # Enter on a name the fleet refuses (the per-fleet cap): the reason shows on
     # the input line, the name stays, nothing spawns, the keyboard stays.
