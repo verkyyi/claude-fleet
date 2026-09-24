@@ -86,7 +86,7 @@ skip: -
 apply: -
 EOF
 }
-fself() { OUT=$(sh "$FL" --self "$@" 2>&1); RC=$?; }
+fself() { OUT=$(sh "$FL" --self 2>&1); RC=$?; }
 fv() { printf '%s\n' "$OUT" | sed -n "s/^$1:  *//p"; }
 # the doctor's install-sync rows only (PASS/WARN/FAIL/INFO), `[[:space:]]` not
 # `\s` — BSD grep has no \s
