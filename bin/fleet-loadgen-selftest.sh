@@ -33,10 +33,30 @@ cleanup() { bash "$LG" --stop "${TAG}a" >/dev/null 2>&1
             bash "$LG" --stop "${TAG}b" >/dev/null 2>&1
             bash "$LG" --stop "${TAG}c" >/dev/null 2>&1
             bash "$LG" --stop "${TAG}10" >/dev/null 2>&1
-            bash "$LG" --stop "${TAG}1"  >/dev/null 2>&1; }
+            bash "$LG" --stop "${TAG}1"  >/dev/null 2>&1
+            bash "$LG" --stop "${TAG}d" >/dev/null 2>&1
+            rm -rf "$SHIM"; }
 trap cleanup EXIT
 
 live() { bash "$LG" --status "$1" 2>/dev/null | grep -c '^[0-9]'; }
+
+# The host gates (issue #922) read the real core count + load average, so every
+# section runs behind a `sysctl` PATH shim: a quiet 8-core box by default, so
+# sections 1-5 hold on a busy dev Mac or a 2-core runner alike, and section 6
+# fakes the busy/small host. sysctl answers first on Linux too, so the
+# /proc fallback is never reached.
+SHIM="$(mktemp -d "${TMPDIR:-/tmp}/lgshim.XXXXXX")"
+cat >"$SHIM/sysctl" <<'SH'
+#!/bin/sh
+[ "$1" = -n ] && shift
+case "$1" in
+  hw.ncpu)    echo "${SHIM_NCPU:-8}" ;;
+  vm.loadavg) echo "{ ${SHIM_LOAD:-0.00} 0.00 0.00 }" ;;
+  *)          exit 1 ;;
+esac
+SH
+chmod +x "$SHIM/sysctl"
+export PATH="$SHIM:$PATH"
 
 # ============================================================================
 # 1. Caps + usage. A typo must not be able to ask for hours of load.
@@ -109,4 +129,40 @@ eq "cmd: exit status is the command's" 7 "$?"
 ok
 eq "cmd: burners stopped with the command" 0 "$(live "${TAG}c")"
 
-printf 'selftest OK: fleet-loadgen (%s assertions — caps, SIGKILL-proof expiry, status/stop, tag exactness, -- cmd)\n' "$CHECKS"
+# ============================================================================
+# 6. Host gates (issue #922). An `8 900` planned without a view of the box took
+#    load to 152 and stalled every fleet daemon — so a busy host REFUSES (exit 3,
+#    nothing started), a small one CLAMPS to half its cores, and --force passes
+#    both. The count is read from INSIDE the `--` command, while the load runs.
+# ============================================================================
+count='sleep 1; bash "$0" --status "$1" 2>/dev/null | grep -c "^[0-9]"'
+out="$(SHIM_NCPU=8 SHIM_LOAD=16 bash "$LG" 1 5 --tag "${TAG}d" -- true 2>&1)"
+eq "gate: 2.0/core over the default 1/core refused, exit 3" 3 "$?"
+case "$out" in *"host busy"*FLEET_LOADGEN_LOAD_PER_CORE*--force*) ok ;;
+  *) fail "gate: refusal must name the load, the knob and --force — got [$out]" ;; esac
+eq "gate: a refusal started no burner" 0 "$(live "${TAG}d")"
+SHIM_NCPU=8 SHIM_LOAD=7.9 bash "$LG" 1 2 -- true >/dev/null 2>&1
+eq "gate: under 1/core passes" 0 "$?"
+SHIM_NCPU=8 SHIM_LOAD=16 FLEET_LOADGEN_LOAD_PER_CORE=0 bash "$LG" 1 2 -- true >/dev/null 2>&1
+eq "gate: FLEET_LOADGEN_LOAD_PER_CORE=0 turns it off" 0 "$?"
+SHIM_NCPU=8 SHIM_LOAD=16 FLEET_LOADGEN_LOAD_PER_CORE=3 bash "$LG" 1 2 -- true >/dev/null 2>&1
+eq "gate: a raised threshold is honored" 0 "$?"
+SHIM_NCPU=8 SHIM_LOAD=16 bash "$LG" 1 2 --force -- true >/dev/null 2>&1
+eq "gate: --force passes a busy host" 0 "$?"
+FLEET_LOADGEN_MAX_PROCS=2 SHIM_LOAD=99 bash "$LG" 3 2 --force >/dev/null 2>&1
+eq "gate: --force never lifts the typo cap" 2 "$?"
+
+err="$SHIM/clamp.err"
+got="$(SHIM_NCPU=2 bash "$LG" 3 30 --tag "${TAG}d" -- bash -c "$count" "$LG" "${TAG}d" 2>"$err")"
+eq "clamp: 3 burners on 2 cores run as ncpu/2 = 1" 1 "$got"
+grep -q 'clamped 3 burner(s) to 1' "$err" || fail "clamp: no stderr note — got [$(cat "$err")]"
+ok
+got="$(SHIM_NCPU=2 FLEET_LOADGEN_CORE_PCT=100 bash "$LG" 3 30 --tag "${TAG}d" -- bash -c "$count" "$LG" "${TAG}d" 2>/dev/null)"
+eq "clamp: FLEET_LOADGEN_CORE_PCT=100 raises it to ncpu" 2 "$got"
+got="$(SHIM_NCPU=2 bash "$LG" 3 30 --tag "${TAG}d" --force -- bash -c "$count" "$LG" "${TAG}d" 2>/dev/null)"
+eq "clamp: --force takes the full 3" 3 "$got"
+got="$(SHIM_NCPU=1 bash "$LG" 1 30 --tag "${TAG}d" -- bash -c "$count" "$LG" "${TAG}d" 2>/dev/null)"
+eq "clamp: a 1-core host still gets 1 burner" 1 "$got"
+eq "clamp: every batch stopped with its command" 0 "$(live "${TAG}d")"
+
+printf 'selftest OK: fleet-loadgen (%s assertions — caps, SIGKILL-proof expiry, status/stop, tag exactness, -- cmd, host gates)\n' "$CHECKS"

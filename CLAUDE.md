@@ -95,9 +95,12 @@ Do not install from memory: read the doc and work from it.
   parent outright takes the cleanup with it. `fleet-loadgen.sh` moves the
   deadline into each BURNER instead — a kernel `alarm(2)` armed before the exec
   (preserved across `execve`), with a `$SECONDS` bound under it — so a SIGKILLed
-  parent or a closed pane still cannot leak one. `fleet-loadgen.sh 8 120 -- <cmd>`
+  parent or a closed pane still cannot leak one. `fleet-loadgen.sh 4 120 -- <cmd>`
   runs the experiment under the load and stops it when `<cmd>` exits;
-  `--status`/`--stop` manage a detached batch.
+  `--status`/`--stop` manage a detached batch. It also **refuses (exit 3) on a
+  host already above 1 load/core and clamps to half the cores** unless `--force`
+  (issue #922): a bounded `8 900` beside three fleets still took load to 152 and
+  stalled every fleet daemon — the burners' deadlines bound a leak, not a size.
   The backstop is the **orphaned-runaway watchdog** on the diskguard tick
   (`--watch`, 60s): `PPID=1` + sustained CPU + a Claude/fleet argv fingerprint,
   **ON by default and report-only**. It is the only defense here that is NOT keyed

@@ -283,7 +283,13 @@ The sections, as the template lays them out:
      conf key, a file layout, a marker. This is the horizontal information the
      old charter kept as one line in "共同约定 7"; it belongs on the member.
    - **依赖** — who it waits for, who waits for it (keys are fine down here).
-   - **完成判据** — testable acceptance.
+   - **完成判据** — testable acceptance. **A load criterion names a short,
+     bounded run** — `fleet-loadgen.sh 4 300 -- …`, not `8 900` — **or defers to
+     the CI runner** (issue #922). The criterion runs on the operator's shared
+     machine beside every other fleet's work; an `8 900` did exactly that on
+     2026-09-23, took load to 152, and stalled every fleet daemon for 14-20 min.
+     Loadgen now refuses on a busy host and clamps to half the cores, so an
+     oversized criterion can't be met as written — size it to what it proves.
    - **上线证据** — **ONE line a worker and the report can both follow**: which
      URL to screenshot, which command's output to keep, which pane to
      `capture-pane`. E.g. *`tmux capture-pane -p` of the dash after `⌃r`, showing

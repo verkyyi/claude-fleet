@@ -392,11 +392,14 @@ is real work. Hand-rolled ones are how the machine dies: on 2026-09-15 a worker'
 (issue #697). The trap never fired — a trap lives in the parent, and the parent
 died. Every worker sharing the machine paid for it.
 
-    ~/.claude/fleet/bin/fleet-loadgen.sh 8 120 -- <your experiment>   # load only while it runs
+    ~/.claude/fleet/bin/fleet-loadgen.sh 4 120 -- <your experiment>   # load only while it runs
     ~/.claude/fleet/bin/fleet-loadgen.sh --status / --stop            # a detached batch
 
 Each burner carries its own kernel deadline, so SIGKILLing the parent or closing
-your pane cannot leak one, and the caps refuse an absurd `n`/duration. If you
+your pane cannot leak one, and the caps refuse an absurd `n`/duration. It also
+refuses (exit 3) while the box is already above 1 load/core and clamps to half
+the cores (issue #922) — that is the fleet daemons' headroom, not an obstacle;
+keep the run short, or `--force` only for a deliberate saturation run. If you
 suspect something already leaked — yours or anyone's —
 `~/.claude/fleet/bin/fleet-diskguard.sh --orphans` lists the `PPID=1` runaways
 the worktree- and pane-keyed reapers structurally cannot see.

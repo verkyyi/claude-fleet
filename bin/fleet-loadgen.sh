@@ -42,6 +42,8 @@
 #   fleet-loadgen.sh --stop [tag]            kill them now (all, or one tag's)
 #   fleet-loadgen.sh --help
 #
+#   --force     skip the two HOST gates below (never the typo caps)
+#
 #   --tag <t>   label this batch (default: pid-epoch) so --status/--stop can
 #               select it. The tag is in each burner's argv, which is also what
 #               makes a leaked burner identifiable in `ps` — and what
@@ -52,7 +54,24 @@
 #   FLEET_LOADGEN_MAX_PROCS    default 64   refuse more burners than this
 #   FLEET_LOADGEN_MAX_SECS     default 900  refuse a longer deadline than this
 #
-# Exit: 0 ok · 2 bad usage/over a cap · otherwise the `--` command's status.
+# Host gates (issue #922) — the caps above bound a TYPO; these bound a plan.
+# On 2026-09-23 a charter criterion of `8 900`, run beside three fleets' normal
+# work, drove load to 152: launchd stopped scheduling and every fleet daemon
+# (quotawatch, spinner, issue-bridge — the failover control plane) went 14-20
+# minutes without a tick. The tool's own bounds held; the SIZE was the problem,
+# picked at plan time with no view of what else the box was running. So:
+#   FLEET_LOADGEN_LOAD_PER_CORE default 1    REFUSE (exit 3) while the 1-min load
+#                                            per core is already above this —
+#                                            the box is busy; the daemons need
+#                                            the headroom more than you do.
+#                                            0 = gate off.
+#   FLEET_LOADGEN_CORE_PCT      default 50   CLAMP the burner count to this % of
+#                                            the cores (min 1), with a note on
+#                                            stderr. 0 = no clamp.
+# `--force` passes both, for a deliberate saturation run on a box you own.
+#
+# Exit: 0 ok · 2 bad usage/over a cap · 3 host busy (load gate) · otherwise the
+# `--` command's status.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
@@ -61,6 +80,8 @@ _fs="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleet.settings"; [ -f "$_fs" 
 
 MAX_PROCS="${FLEET_LOADGEN_MAX_PROCS:-64}"
 MAX_SECS="${FLEET_LOADGEN_MAX_SECS:-900}"
+LOAD_PER_CORE="${FLEET_LOADGEN_LOAD_PER_CORE:-1}"
+CORE_PCT="${FLEET_LOADGEN_CORE_PCT:-50}"
 
 # The marker every burner carries in its argv. Deliberately distinctive: the `#`
 # keeps it from matching this script's own command line, so --status/--stop can
@@ -68,7 +89,7 @@ MAX_SECS="${FLEET_LOADGEN_MAX_SECS:-900}"
 MARK='FLEET_LOADGEN_BURNER'
 
 die() { printf 'fleet-loadgen: %s\n' "$1" >&2; exit "${2:-2}"; }
-usage() { sed -n '2,55p' "$0"; }
+usage() { sed -n '2,74p' "$0"; }
 
 # Every live burner of this user, as "pid ppid pcpu etime command". Reads ps
 # directly rather than pgrep: it is portable across macOS/Linux without flag
@@ -91,7 +112,7 @@ burners() {   # [tag] → rows on stdout
           for (i=6; i<=NF; i++) printf " %s", $i; print "" }' || true
 }
 
-mode=run; tag=""; n=""; secs=""
+mode=run; tag=""; n=""; secs=""; force=0
 args=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -99,6 +120,7 @@ while [ $# -gt 0 ]; do
     --status)    mode=status; shift; tag="${1:-}"; break ;;
     --stop)      mode=stop;   shift; tag="${1:-}"; break ;;
     --detach)    mode=detach; shift ;;
+    --force)     force=1; shift ;;
     --tag)       shift; tag="${1:-}"; [ -n "$tag" ] || die "--tag needs a value"; shift ;;
     --)          shift; args=("$@"); mode=cmd; break ;;
     -*)          die "unknown option '$1' (see --help)" ;;
@@ -144,6 +166,32 @@ case "$secs" in ''|*[!0-9]*) die "seconds must be a positive integer, got '$secs
 [ "$secs" -le "$MAX_SECS" ] || die "refusing a ${secs}s deadline — cap is FLEET_LOADGEN_MAX_SECS=$MAX_SECS"
 [ -n "$tag" ] || tag="$$-$(date +%s)"
 case "$tag" in *[!A-Za-z0-9._-]*) die "--tag must be [A-Za-z0-9._-], got '$tag'" ;; esac
+
+# Host gates (issue #922, see the header). Same probes as fleet-doctor's
+# `machine` line, so "the doctor says the box is busy" and "loadgen refuses"
+# are one reading, not two.
+if [ "$force" != 1 ]; then
+  ncpu=$( { sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null; } \
+          | head -1 | awk '{ n=$1+0; print (n>0 ? n : 1) }' )
+  load=$( { sysctl -n vm.loadavg 2>/dev/null | tr -d '{}' || awk '{print $1}' /proc/loadavg 2>/dev/null; } \
+          | head -1 | awk '{ if (NF) printf "%.2f", $1+0 }' )
+  # An unreadable load average fails OPEN: the gate is headroom advice, and a
+  # host that cannot report its load is not evidence the load is high.
+  if [ -n "$load" ] && awk -v g="$LOAD_PER_CORE" -v l="$load" -v c="$ncpu" \
+       'BEGIN{ exit !(g+0 > 0 && l/c > g+0) }'; then
+    die "$(printf 'host busy — 1-min load %s on %s cores = %.2f/core, over FLEET_LOADGEN_LOAD_PER_CORE=%s. Adding load now starves launchd and the fleet daemons (issue #922). Wait for it to drop, run on a CI runner, or pass --force for a deliberate saturation run.' \
+         "$load" "$ncpu" "$(awk -v l="$load" -v c="$ncpu" 'BEGIN{print l/c}')" "$LOAD_PER_CORE")" 3
+  fi
+  case "$CORE_PCT" in ''|*[!0-9]*) CORE_PCT=50 ;; esac
+  if [ "$CORE_PCT" -gt 0 ]; then
+    cap=$(( ncpu * CORE_PCT / 100 )); [ "$cap" -ge 1 ] || cap=1
+    if [ "$n" -gt "$cap" ]; then
+      printf 'fleet-loadgen: clamped %d burner(s) to %d — %d%% of %d cores (FLEET_LOADGEN_CORE_PCT); --force to take more\n' \
+        "$n" "$cap" "$CORE_PCT" "$ncpu" >&2
+      n="$cap"
+    fi
+  fi
+fi
 
 # The burn loop. Pure builtins — no forks, so N burners are N processes, not a
 # fork storm. The inner counter does the burning; the outer `$SECONDS` test is

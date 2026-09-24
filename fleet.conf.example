@@ -1536,6 +1536,17 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Load-gen max seconds @group=disk @tier=advanced @scope=global @edit=int @unit=sec
 #FLEET_LOADGEN_MAX_SECS=900
 
+# Host gates on top of those caps (issue #922): a charter's `8 900`, run beside
+# three fleets, took load to 152 and stalled every fleet daemon for 14-20 min.
+# Loadgen REFUSES (exit 3) while the 1-min load per core is already above
+# LOAD_PER_CORE (0 = off), and CLAMPS the burner count to CORE_PCT% of the cores
+# (min 1; 0 = no clamp). `fleet-loadgen.sh --force` passes both for a deliberate
+# saturation run; it never lifts the two caps above.
+# @label=Load-gen refuse above load per core @group=disk @tier=advanced @scope=global @edit=str
+#FLEET_LOADGEN_LOAD_PER_CORE=1
+# @label=Load-gen max share of cores @group=disk @tier=advanced @scope=global @edit=int @unit=%
+#FLEET_LOADGEN_CORE_PCT=50
+
 # --- Spawn ergonomics -------------------------------------------------------
 # By default a newly spawned worker window is created in the background (tmux
 # new-window -d) and NOT selected — you stay on your current window, and the new
