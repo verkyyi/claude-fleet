@@ -1078,10 +1078,14 @@ fi
 tcps=''
 [ -f "$hbf_m" ] && tcps=$(sed -n 's/.*tmux_calls_per_s=\([0-9.]*\).*/\1/p' "$hbf_m" 2>/dev/null | head -1)
 [ -n "$tcps" ] && pass machine "spinner forks ${tcps} tmux call(s)/s (logs/spinner.heartbeat)"
-# 3. Session caps vs cores. The ceiling that matters is the one a spawn actually
-#    hits: the global cap, or the per-fleet caps' sum when every fleet has one and
-#    they add up to less. Past 2 sessions per core the box is overcommitted before
-#    a single session does anything expensive.
+# 3. Session caps vs cores — STATED, never warned (issue #952). The ceiling that
+#    matters is the one a spawn actually hits: the global cap, or the per-fleet
+#    caps' sum when every fleet has one and they add up to less. #889 used to WARN
+#    past 2 sessions per core and tell the operator to lower
+#    FLEET_GLOBAL_MAX_SESSIONS; the operator owns both caps and fleet neither
+#    advises nor changes them (#881 pt 16 → the epic preflight's `slots` line in
+#    #895). So this line only reports the numbers, and an unbounded box is a fact
+#    it names, not a finding it counts.
 gmax="${FLEET_GLOBAL_MAX_SESSIONS:-$(_gconf_val FLEET_GLOBAL_MAX_SESSIONS)}"
 case "$gmax" in ''|*[!0-9]*) gmax=8 ;; esac
 gfmax=$(_gconf_val FLEET_MAX_SESSIONS)
@@ -1108,14 +1112,10 @@ csumtxt="per-fleet caps sum to $csum across $cn fleet(s)"
 [ "$cunl" -gt 0 ] && csumtxt="$csumtxt ($cunl uncapped)"
 gtxt="global cap $gmax"; [ "$gmax" -gt 0 ] || gtxt="no global cap"
 if [ -z "$cceil" ]; then
-  warn machine "sessions: $gtxt, $csumtxt — nothing bounds concurrent sessions on these $mcores cores; set FLEET_GLOBAL_MAX_SESSIONS (≤ $((mcores*2)))"
+  pass machine "sessions: $gtxt, $csumtxt — unbounded on $mcores cores"
 else
   cratio=$(awk -v n="$cceil" -v c="$mcores" 'BEGIN{ printf "%.1f", n/c }')
-  if [ "$cceil" -gt $((mcores*2)) ]; then
-    warn machine "sessions: $gtxt, $csumtxt — up to $cceil concurrent on $mcores cores = ${cratio}x, over the 2x line; lower FLEET_GLOBAL_MAX_SESSIONS to ≤ $((mcores*2)) (issue #889)"
-  else
-    pass machine "sessions: $gtxt, $csumtxt — up to $cceil concurrent on $mcores cores (${cratio}x)"
-  fi
+  pass machine "sessions: $gtxt, $csumtxt — up to $cceil concurrent on $mcores cores (${cratio}x)"
 fi
 
 # --- codex CLI version vs the rollout format fleet reads (issue #1079) ---
