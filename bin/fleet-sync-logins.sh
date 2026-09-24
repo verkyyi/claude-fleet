@@ -512,7 +512,9 @@ convert_login() {
   bak="$home/.claude/fleet.copy-$(date +%Y%m%d)"
   i=1 base=$bak
   while [ -e "$bak" ]; do i=$((i + 1)); bak="$base-$i"; done
-  mode=$(stat -f %Lp "$rd" 2>/dev/null || stat -c %a "$rd" 2>/dev/null); mode=${mode:-755}
+  # GNU stat FIRST: on GNU `stat -f` is filesystem status and exits 0 with the
+  # wrong output; `stat -c` errors cleanly on BSD (see fleet-lib.sh's mtime read)
+  mode=$(stat -c %a "$rd" 2>/dev/null || stat -f %Lp "$rd" 2>/dev/null); mode=${mode:-755}
   if [ "$ok" -eq 1 ]; then
     if ( cd / && $as sh "$STAGE/to-git.sh" "$rd" "$new" "$STAGE/fleet.bundle" "$target" "$branch" "$origin" "$carry" "$bak" "$mode" ); then
       swapped=1
