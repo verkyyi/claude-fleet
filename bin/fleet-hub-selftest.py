@@ -344,6 +344,8 @@ class HubTests(HubFixture):
         self.assertTrue(manifest["RunAtLoad"])
         self.assertIn("127.0.0.1", manifest["ProgramArguments"])
         self.assertNotIn("FLEET_HUB_TOKEN", manifest["EnvironmentVariables"])
+        self.assertEqual(manifest["SoftResourceLimits"], {"NumberOfFiles": 65536})
+        self.assertEqual(manifest["HardResourceLimits"], {"NumberOfFiles": 65536})
         with self.assertRaises(ValueError):
             service.launch_agent(self.root, Path("python"), Path("hub"), self.root, "http://mini/mcp", 8766)
         reopened = hub_module.Hub(self.hub.store.root)

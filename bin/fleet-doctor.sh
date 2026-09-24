@@ -1120,6 +1120,24 @@ $(_fleet_confs "$conf_dir")
 EOF
 fi
 
+# 3. nofile (issue #1080). launchd starts every job at the machine's default file
+#    limit — 256 on macOS unless someone raised it — and a long-lived network
+#    daemon that hits it just stops receiving events, with nothing in any log.
+#    The fleet's own always-on daemons (hub, webhook, spinner) carry
+#    NumberOfFiles 65536 in their plists and log `nofile=<n>` at every start, so
+#    this row is ADVICE for every other LaunchAgent on the host: INFO, uncounted.
+if command -v launchctl >/dev/null 2>&1; then
+  nfsoft=$(launchctl limit maxfiles 2>/dev/null | awk '$1 == "maxfiles" { print $2; exit }')
+  case "$nfsoft" in
+    ''|*[!0-9]*) ;;   # unreadable (or "unlimited"): nothing useful to say
+    *) if [ "$nfsoft" -lt 4096 ]; then
+         info nofile "system default file limit is $nfsoft (launchctl limit maxfiles); fleet daemons raise their own to 65536 (see nofile= in their logs), other LaunchAgents: docs/HOST.md#nofile"
+       else
+         pass nofile "system default file limit is $nfsoft (launchctl limit maxfiles)"
+       fi ;;
+  esac
+fi
+
 fi  # Darwin host section
 
 # --- status line (optional: conf/statusline.sh is jq-gated) ---
