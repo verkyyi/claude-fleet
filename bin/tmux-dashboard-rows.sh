@@ -858,7 +858,9 @@ fi
 # Each heading carries its spawn target — owner/name, `none` for `no repo`, ''
 # for `?` — the one thing the new-session path may read (EPIC #994, issue #997):
 # the sidebar in its otherwise-unused state field, the hub in a 4th field fzf
-# never shows (--with-nth=3) and only its ⌃s/⌃n/Enter binds pass on as `{4}`.
+# never shows (--with-nth=3) and only its ⌃s/⌃n/Enter binds pass on, as
+# `{2}:{4}` — field 2 is a session row's window id (`@12`) and a heading's `hdr`;
+# field 1 is the `sess:idx` jump target, which the resolver does not read (#1010).
 # Both key fields stay `hdr`, so every other bind still ignores it. One pass over the repos —
 # the per-window cost is the RGCNT increment above, and #662's per-frame bound
 # holds.
