@@ -15,7 +15,12 @@ mounts individual `/p/<id>/` document paths, never `/_ctl`, so a public viewer
 cannot reach the control API. The toggle UI itself is hidden on the public view
 (the page detects the `/p/` path prefix).
 
-Usage: server.py <port> <serve_dir> <skill_dir>
+Usage: server.py <port> <serve_dir> <skill_dir> [bind_addr]
+
+bind_addr defaults to 127.0.0.1 (the `tailscale serve` HTTPS mode, which proxies
+to loopback). share.sh passes this login's tailscale IPv4 in its http-direct
+fallback — a login that is not tailscale's operator cannot `tailscale serve`, so
+the server listens on the tailnet address itself (issue #1093).
 """
 import json
 import os
@@ -28,6 +33,7 @@ from urllib.parse import urlparse, parse_qs
 PORT = int(sys.argv[1])
 SERVE_DIR = sys.argv[2]
 SKILL_DIR = sys.argv[3]
+BIND_ADDR = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] else "127.0.0.1"
 SHARE = os.path.join(SKILL_DIR, "share.sh")
 ID_RE = re.compile(r"^[0-9]{8}-[0-9]{6}-[0-9]+$")
 
@@ -131,4 +137,4 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+    ThreadingHTTPServer((BIND_ADDR, PORT), Handler).serve_forever()

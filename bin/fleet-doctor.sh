@@ -174,6 +174,40 @@ if [ -f "$skills_dir/doc-preview/SKILL.md" ] && ! command -v tailscale >/dev/nul
   warn skills "doc-preview skill installed but tailscale not on PATH — the skill is a no-op without it (it serves docs over the tailnet); install/enable Tailscale to use it"
 fi
 
+# Can THIS login `tailscale serve`? Only the machine's ONE tailscale operator (or
+# root) can; any other login's doc-preview falls back to plain http bound on the
+# tailscale IPv4 ("http-direct", issue #1093). That is a supported mode, not a
+# fault — the operator can't be shared, and moving it would break the login that
+# holds it — so it is INFO, with the one-time root command for anyone who wants
+# HTTPS for this login instead. The ports in it are bind-probed the way share.sh
+# picks them (loopback server port from DOC_PREVIEW_PORT; a tailnet HTTPS port no
+# serve route and no listener holds). Operator unreadable/unset → no row, never a guess.
+if [ -f "$skills_dir/doc-preview/SKILL.md" ] && command -v tailscale >/dev/null 2>&1; then
+  _dp_me="$(id -un 2>/dev/null || echo "${USER:-}")"
+  _dp_op="$(tailscale debug prefs 2>/dev/null | python3 -c 'import sys,json
+try: print(json.load(sys.stdin).get("OperatorUser") or "")
+except Exception: pass' 2>/dev/null || true)"
+  if [ "$(id -u 2>/dev/null)" = 0 ] || { [ -n "$_dp_op" ] && [ "$_dp_op" = "$_dp_me" ]; }; then
+    pass docprev "this login ($_dp_me) can tailscale serve — doc-preview shares over tailnet HTTPS"
+  elif [ -n "$_dp_op" ]; then
+    _dp_ports="$(tailscale serve status --json 2>/dev/null | python3 -c 'import sys,json,socket
+def free(a,p):
+    s=socket.socket()
+    try: s.bind((a,p)); return True
+    except OSError: return False
+    finally: s.close()
+try: used=set(((json.load(sys.stdin) or {}).get("TCP") or {}).keys())
+except Exception: used=set()
+ip=sys.argv[2]; p=int(sys.argv[1])
+while p < int(sys.argv[1])+50 and not free("127.0.0.1",p): p+=1
+h=8443
+while h < 8543 and (str(h) in used or (ip and not free(ip,h))): h+=1
+print(h, p)' "${DOC_PREVIEW_PORT:-8765}" "$(tailscale ip -4 2>/dev/null | head -1)" 2>/dev/null || echo "8443 ${DOC_PREVIEW_PORT:-8765}")"
+    _dp_hp="${_dp_ports% *}"; _dp_lp="${_dp_ports#* }"
+    info docprev "this login ($_dp_me) is not tailscale's operator ($_dp_op), so it cannot tailscale serve — doc-preview falls back to http-direct: plain http on the tailscale IP, reachable only inside the tailnet (WireGuard-encrypted). For HTTPS instead, once: sudo tailscale serve --bg --https=$_dp_hp http://127.0.0.1:$_dp_lp, then share.sh --stop and re-share (it adopts that route). Don't move the operator — that breaks $_dp_op's doc-preview"
+  fi
+fi
+
 # --- live install freshness: is THIS machine's ~/.claude/fleet current? (#635) ---
 # The commands/skills checks above answer "is it installed". This answers "is it
 # CURRENT", which nothing used to. `/fleet-sync-install` is per-machine and

@@ -20,6 +20,14 @@
 # when the doc is viewed over the tailnet). Tailnet sharing stays private; only explicitly
 # published docs are reachable on the public internet, each at its own /p/<id>/ path.
 #
+# Two serving modes, recorded in $ROOT/mode (issue #1093):
+#   https        the loopback server.py fronted by `tailscale serve` (HTTPS on the tailnet).
+#   http-direct  the login is NOT tailscale's operator (one per machine) and has no root,
+#                so `tailscale serve` is refused: server.py binds this machine's tailscale
+#                IPv4 directly and the URL is http://<magicdns>:<port>/ — plain http, but
+#                only reachable inside the tailnet, whose link is WireGuard-encrypted.
+#                Sticky until --stop; public (Funnel) links need serve rights, so none here.
+#
 # Set DOC_PREVIEW_SESSION to label your session in the list (default: hostname).
 # No npm install needed: rendering is client-side (CDN libs in the viewer's browser).
 set -euo pipefail
@@ -32,6 +40,7 @@ PIDFILE="$ROOT/server.pid"
 PORTFILE="$ROOT/server.port"
 HTTPSFILE="$ROOT/https.port"
 FUNNELPORTFILE="$ROOT/funnel.port"   # tailnet HTTPS port used for public (Funnel) doc mounts
+MODEFILE="$ROOT/mode"                # https | http-direct (see the header)
 LOCK="$ROOT/.lock"
 SESSION="${DOC_PREVIEW_SESSION:-$(hostname -s 2>/dev/null || echo session)}"
 
@@ -39,10 +48,67 @@ mkdir -p "$ROOT" "$SERVE_DIR/d" "$ENTRIES_DIR"
 
 host() { tailscale status --json | python3 -c "import sys,json;print(json.load(sys.stdin)['Self']['DNSName'].rstrip('.'))"; }
 rebuild_index() { node "$HERE/render.mjs" index "$SERVE_DIR/index.html" "$ENTRIES_DIR" >/dev/null; }
+# Serving mode; an install from before the mode file existed is https iff it has a route.
+mode() {
+  if [ -f "$MODEFILE" ]; then cat "$MODEFILE"; elif [ -f "$HTTPSFILE" ]; then echo https; fi
+}
+sharing() { [ -f "$HTTPSFILE" ] || [ "$(mode)" = http-direct ]; }
 current_url() {
+  if [ "$(mode)" = http-direct ]; then echo "http://$(host):$(cat "$PORTFILE" 2>/dev/null)/"; return; fi
   local hp sfx=""; hp="$(cat "$HTTPSFILE" 2>/dev/null || echo 443)"
   [ "$hp" = 443 ] || sfx=":$hp"
   echo "https://$(host)$sfx/"
+}
+
+ts_ip4() { tailscale ip -4 2>/dev/null | head -1; }
+# A real bind() probe, NOT lsof: lsof lists only this login's sockets, so a port held by
+# ANOTHER login's doc-preview server looked free and our server.py died on EADDRINUSE
+# after share.sh had already recorded its pid/port (issue #1093).
+port_free() { # <addr> <port>
+  python3 -c 'import socket,sys
+s=socket.socket()
+try: s.bind((sys.argv[1],int(sys.argv[2])))
+except OSError: sys.exit(1)' "$1" "$2"
+}
+port_up() { # <addr> <port> — is something accepting connections there?
+  python3 -c 'import socket,sys
+s=socket.socket(); s.settimeout(0.5)
+sys.exit(0 if s.connect_ex((sys.argv[1],int(sys.argv[2])))==0 else 1)' "$1" "$2"
+}
+# Start ONE server.py on <addr> at the first free port from DOC_PREVIEW_PORT. pid/port are
+# recorded only once it ANSWERS, so a failed start never leaves a half-written state.
+start_server() { # <addr>; sets PORT
+  local addr="$1" p="${DOC_PREVIEW_PORT:-8765}" end launches=0 pid
+  end=$((p + 50))
+  rm -f "$PIDFILE" "$PORTFILE"
+  while [ "$p" -lt "$end" ] && [ "$launches" -lt 5 ]; do
+    if port_free "$addr" "$p"; then
+      launches=$((launches + 1))
+      nohup python3 "$HERE/server.py" "$p" "$SERVE_DIR" "$HERE" "$addr" >"$ROOT/server.log" 2>&1 &
+      pid=$!
+      for _ in $(seq 1 50); do
+        kill -0 "$pid" 2>/dev/null || break
+        if port_up "$addr" "$p"; then echo "$pid" >"$PIDFILE"; echo "$p" >"$PORTFILE"; PORT="$p"; return 0; fi
+        sleep 0.1
+      done
+      kill "$pid" 2>/dev/null || true   # lost a race for the port, or never came up: next one
+    fi
+    p=$((p + 1))
+  done
+  return 1
+}
+# The tailnet HTTPS port whose "/" already proxies to 127.0.0.1:<port>, if any — e.g. a
+# route an admin set up once with `sudo tailscale serve` for a non-operator login.
+serve_route_port() { # <port>
+  tailscale serve status --json 2>/dev/null | python3 -c '
+import sys, json
+want = "http://127.0.0.1:" + sys.argv[1]
+try: web = (json.load(sys.stdin) or {}).get("Web") or {}
+except Exception: sys.exit(0)
+for hostport, cfg in web.items():
+    if (((cfg or {}).get("Handlers") or {}).get("/") or {}).get("Proxy", "").rstrip("/") == want:
+        print(hostport.rsplit(":", 1)[1] if ":" in hostport else "443"); break
+' "$1" 2>/dev/null || true
 }
 
 # --- public (Funnel) helpers: expose ONE document at a time via a per-doc path mount ---
@@ -86,7 +152,7 @@ stop() {
   [ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE")" 2>/dev/null || true
   pkill -f "http.server" 2>/dev/null || true
   pkill -f "doc-preview/server.py" 2>/dev/null || true
-  rm -rf "$SERVE_DIR" "$ENTRIES_DIR" "$PIDFILE" "$PORTFILE" "$HTTPSFILE" "$FUNNELPORTFILE"
+  rm -rf "$SERVE_DIR" "$ENTRIES_DIR" "$PIDFILE" "$PORTFILE" "$HTTPSFILE" "$FUNNELPORTFILE" "$MODEFILE"
   echo "doc-preview stopped (all shared docs removed, public links off, tailscale serve reset)."
 }
 
@@ -110,6 +176,7 @@ case "${1:-}" in
       --pubstatus)
         if is_published "$id"; then emit true "$(funnel_url "$id" "$(pick_funnel_port)")"; else emit false ""; fi ;;
       --publish)
+        [ "$(mode)" = http-direct ] && fail "public links need tailscale serve rights — this login is not tailscale's operator (http-direct mode)"
         SERVEPORT="$(cat "$PORTFILE" 2>/dev/null || true)"; [ -n "$SERVEPORT" ] || fail "server not running"
         FP="$(pick_funnel_port)"
         if tailscale funnel --bg --https="$FP" --set-path="/p/$id" "http://127.0.0.1:$SERVEPORT/_pub/$id/" >/dev/null 2>&1; then
@@ -124,7 +191,7 @@ case "${1:-}" in
     esac
     exit 0 ;;
   --list)
-    if [ ! -f "$HTTPSFILE" ]; then echo "nothing is being shared."; exit 0; fi
+    if ! sharing; then echo "nothing is being shared."; exit 0; fi
     echo "Shared docs at: $(current_url)"
     node "$HERE/render.mjs" list "$ENTRIES_DIR"
     exit 0 ;;
@@ -137,7 +204,7 @@ case "${1:-}" in
     done
     rebuild_index
     echo "re-rendered $n doc(s) with the current template."
-    [ -f "$HTTPSFILE" ] && echo "still sharing at: $(current_url)"
+    if sharing; then echo "still sharing at: $(current_url)"; fi
     exit 0 ;;
   --remove)
     pat="${2:-}"; [ -n "$pat" ] || { echo "usage: share.sh --remove <substr>" >&2; exit 1; }
@@ -154,7 +221,7 @@ case "${1:-}" in
     done
     rebuild_index
     echo "removed $n entr$( [ "$n" = 1 ] && echo y || echo ies ) matching '$pat'."
-    [ -f "$HTTPSFILE" ] && echo "still sharing at: $(current_url)"
+    if sharing; then echo "still sharing at: $(current_url)"; fi
     exit 0 ;;
 esac
 
@@ -167,7 +234,7 @@ for _ in $(seq 1 100); do mkdir "$LOCK" 2>/dev/null && break || sleep 0.2; done
 trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
 
 # Render each input as a NEW entry. Existing entries are left untouched.
-new=()
+new=(); ids=()
 for f in "$@"; do
   if [ ! -f "$f" ]; then echo "skip (not found): $f" >&2; continue; fi
   abs="$(cd "$(dirname "$f")" && pwd)/$(basename "$f")"
@@ -194,45 +261,81 @@ for f in "$@"; do
   id="$(date '+%Y%m%d-%H%M%S')-$RANDOM"
   ID="$id" HREF="/d/$id/" ADDED="$(date '+%Y-%m-%d %H:%M')" SESSION="$SESSION" DISP="$disp" SRC="$abs" \
     node "$HERE/render.mjs" page "$f" "$SERVE_DIR/d/$id/index.html" "$ENTRIES_DIR/$id.json" >/dev/null
-  new+=("/d/$id/")
+  new+=("/d/$id/"); ids+=("$id")
 done
 rebuild_index
+
+# A failed share leaves nothing behind: drop the entries this run added.
+rollback() {
+  local id
+  for id in ${ids[@]+"${ids[@]}"}; do rm -f "$ENTRIES_DIR/$id.json"; rm -rf "${SERVE_DIR:?}/d/$id"; done
+  rebuild_index
+}
+server_fail() { # <addr>
+  rm -f "$PIDFILE" "$PORTFILE"
+  echo "doc-preview: could not start server.py on $1 (ports ${DOC_PREVIEW_PORT:-8765}+ busy or bind refused) — see $ROOT/server.log:" >&2
+  tail -3 "$ROOT/server.log" 2>/dev/null >&2 || true
+  rollback; exit 1
+}
+
+MODE="$(mode)"
+if [ "$MODE" = http-direct ]; then
+  ADDR="$(ts_ip4)"; [ -n "$ADDR" ] || { echo "doc-preview: no tailscale IPv4 (tailscale ip -4)" >&2; rollback; exit 1; }
+else
+  ADDR=127.0.0.1
+fi
 
 # Ensure ONE static server is running (reuse the existing one — keeps the port/URL fixed).
 if [ -f "$PIDFILE" ] && [ -f "$PORTFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
   PORT="$(cat "$PORTFILE")"
 else
-  PORT="${DOC_PREVIEW_PORT:-8765}"
-  while lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; do PORT=$((PORT + 1)); done
-  nohup python3 "$HERE/server.py" "$PORT" "$SERVE_DIR" "$HERE" >"$ROOT/server.log" 2>&1 &
-  echo $! >"$PIDFILE"; echo "$PORT" >"$PORTFILE"; sleep 1
+  start_server "$ADDR" || server_fail "$ADDR"
 fi
 
-# Ensure tailscale serve points at it. Reuse the existing route (never `reset`, so other
-# sessions' sharing keeps working). Only (re)configure if the route is missing.
-if ! { tailscale serve status 2>/dev/null | grep -q "127.0.0.1:$PORT"; } || [ ! -f "$HTTPSFILE" ]; then
-  HP="$(cat "$HTTPSFILE" 2>/dev/null || true)"
-  if [ -z "$HP" ] || lsof -nP -iTCP:"$HP" -sTCP:LISTEN >/dev/null 2>&1; then
-    HP=443
-    if lsof -nP -iTCP:"$HP" -sTCP:LISTEN >/dev/null 2>&1; then
-      HP=8443; while lsof -nP -iTCP:"$HP" -sTCP:LISTEN >/dev/null 2>&1; do HP=$((HP + 1)); done
+# https mode: ensure tailscale serve points at it. Reuse the existing route (never
+# `reset`, so other sessions' sharing keeps working); only configure one if it's missing.
+if [ "$MODE" != http-direct ]; then
+  HP="$(serve_route_port "$PORT")"
+  if [ -z "$HP" ]; then
+    HP="$(cat "$HTTPSFILE" 2>/dev/null || true)"
+    if [ -z "$HP" ] || lsof -nP -iTCP:"$HP" -sTCP:LISTEN >/dev/null 2>&1; then
+      HP=443
+      if lsof -nP -iTCP:"$HP" -sTCP:LISTEN >/dev/null 2>&1; then
+        HP=8443; while lsof -nP -iTCP:"$HP" -sTCP:LISTEN >/dev/null 2>&1; do HP=$((HP + 1)); done
+      fi
+    fi
+    if ! err="$(tailscale serve --bg --https="$HP" "http://127.0.0.1:$PORT" 2>&1 >/dev/null)"; then
+      case "$err" in
+        *--operator*|*sudo*)
+          # Not tailscale's operator (and no root): serve is refused, not misconfigured.
+          # Fall back to http-direct — nothing proxies to the loopback server, so retire it.
+          ADDR="$(ts_ip4)"
+          [ -n "$ADDR" ] || { echo "doc-preview: tailscale serve refused ($err) and no tailscale IPv4 to fall back to" >&2; rollback; exit 1; }
+          [ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE")" 2>/dev/null || true
+          rm -f "$PIDFILE" "$PORTFILE" "$HTTPSFILE"
+          start_server "$ADDR" || server_fail "$ADDR"
+          MODE=http-direct ;;
+        *)
+          echo "tailscale serve failed: ${err:-no output}" >&2
+          echo "If HTTPS certs are off, enable them (admin console -> DNS -> HTTPS Certificates)," >&2
+          echo "then run: tailscale serve --bg --https=$HP http://127.0.0.1:$PORT" >&2
+          rollback; exit 1 ;;
+      esac
     fi
   fi
-  if ! tailscale serve --bg --https="$HP" "http://127.0.0.1:$PORT" >/dev/null 2>&1; then
-    echo "tailscale serve failed. Enable HTTPS certs (admin console -> DNS -> HTTPS Certificates)," >&2
-    echo "then run: tailscale serve --bg --https=$HP http://127.0.0.1:$PORT" >&2
-    exit 1
-  fi
-  echo "$HP" >"$HTTPSFILE"
+  [ "$MODE" = http-direct ] || { echo "$HP" >"$HTTPSFILE"; MODE=https; }
 fi
+echo "$MODE" >"$MODEFILE"
+NOTE=""
+[ "$MODE" = http-direct ] && NOTE="  (http-direct: plain http inside the tailnet — this login is not tailscale's operator, so no tailscale serve/HTTPS)"
 
 URL="$(current_url)"; BASE="${URL%/}"
 # Lead with the specific doc URL when this share added exactly one doc; only show the
 # directory/index when multiple docs were added (or none, e.g. all paths were missing).
 if [ "${#new[@]}" -eq 1 ]; then
-  echo "READY ${BASE}${new[0]}"   # direct link to the shared doc
+  echo "READY ${BASE}${new[0]}${NOTE}"   # direct link to the shared doc
   echo "INDEX ${URL}"             # full list (other shared docs), for reference
 else
-  echo "READY ${URL}"             # directory/index listing
-  for h in "${new[@]}"; do echo "ADDED ${BASE}$h"; done
+  echo "READY ${URL}${NOTE}"             # directory/index listing
+  for h in ${new[@]+"${new[@]}"}; do echo "ADDED ${BASE}$h"; done
 fi
