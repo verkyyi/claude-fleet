@@ -45,7 +45,12 @@ R="${E}0m"; US=$'\x1f'
 # for that reason.
 # Keep the column count stable. Codex's agent cell carries an exact cache suffix;
 # the display loop separates it before drawing the ordinary `codex` tag.
-WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{@claude_needs}${US}#{@expand}${US}#{@pin}${US}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}"
+# @repo_fold (LAST, issue #1037) is a SESSION option, not a window one: tmux
+# resolves a `#{@…}` format through the window's session when the window has no
+# option of that name, so the per-repo fold set rides the one list-windows call
+# every frame already makes — same value on every line, no extra fork. Both
+# passes name it so nothing lands glued to @sleep_since.
+WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{@claude_needs}${US}#{@expand}${US}#{@pin}${US}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -300,11 +305,15 @@ WLIST=${WLIST//\\037/$US}
 # `scratch-<digits>` test could never match a @worktree-stamped scratch — the
 # #529 blind spot, reopened in pass A only (pass B reads every field by name).
 # $pin (#623) is named for the same reason: this pass needs it; so are @repo/
-# @norepo (#792), which trail WFMT, with a final `_` to swallow anything after.
-KEYTAB=''; PRWANT=''; RSLUGS=' '
-while IFS=$US read -r sess idx name path state _ _ iss origin wt _ _ nsub exp pin _ _ _ _ wrepo wnorepo _; do
+# @norepo (#792), which trail WFMT, with a `_` to swallow @sleep_since, and
+# @repo_fold (#1037) last — the session's folded repo groups, one value on every
+# line of this fleet, taken off the first (panels included: a fleet whose only
+# windows are panels still draws its `(0)` headings, folded or not).
+KEYTAB=''; PRWANT=''; RSLUGS=' '; RFOLD=''
+while IFS=$US read -r sess idx name path state _ _ iss origin wt _ _ nsub exp pin _ _ _ _ wrepo wnorepo _ rfold; do
   [ -z "$name" ] && continue
   [ -n "${FLEET_SESSION:-}" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
+  RFOLD=$rfold
   case "$name" in dash|plan|backlog) continue;; esac
   rgrp_v "$wrepo" "$wnorepo"
   # Collect the branch spellings this frame will look up in the prmap (issue
@@ -419,8 +428,26 @@ while IFS=$'\t' read -r _ krk _ _ _ _ korig; do
   [ -n "$croot" ] && KIDTAB+=$'\n'"$croot"$'\t'"$krk"$'\n'
 done <<< "$KEYTAB"
 
+# RGFOLD[g]=1 — the repo groups this frame draws FOLDED (issue #1037): @repo_fold
+# is the space-separated slugs of the folded groups (a repo's fleet_slug, `none`
+# for the no-repo group), set by dash-fold-toggle.sh from ←/→ on a heading and
+# UNSET once the last one opens — so a fleet nobody folded reads exactly as
+# before. Resolved through RGRPMAP once a frame; a slug the fleet no longer
+# hosts resolves to nothing and folds nothing. Only a grouping frame has
+# headings to fold, so a one-repo fleet never reads it (RGRP=0).
+RGFOLD=()
+if [ "$RGRP" = 1 ] && [ -n "$RFOLD" ]; then
+  for _s in $RFOLD; do
+    if [ "$_s" = none ]; then RGFOLD[RNREPO + 1]=1
+    else
+      _g=${RGRPMAP#*$'\n'"$_s"$'\t'}
+      [ "$_g" = "$RGRPMAP" ] || RGFOLD[${_g%%$'\n'*}]=1
+    fi
+  done
+fi
+
 buf=""
-while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp wrepo wnorepo slept; do
+while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp wrepo wnorepo slept _; do
   [ -z "$name" ] && continue
   # strict per-fleet: only windows from the viewing dash's own tmux session.
   # FLEET_SESSION exported by tmux-dashboard.sh; unset ⇒ show all (single-fleet).
@@ -653,6 +680,19 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     [ "$rgrp" != "$ownrgrp" ] && repod=${RGTAG[ownrgrp]-}
     RGCNT[rgrp]=$(( ${RGCNT[rgrp]:-0} + 1 ))
   fi
+  # --- repo fold: a folded heading hides its whole group (issue #1037) --------
+  # ←/→ on a repo heading fold and unfold the group under it — the per-repo
+  # focus now that the picker is gone (#1034). The SAME two rails as the parent
+  # fold below, on purpose: a `needs` row (`rk`=0) never folds away — the quiet
+  # layer folds, the loud one does not — and the sidebar keeps its current
+  # window on the list. Counted already (RGCNT above), so the heading's `(n)`
+  # still says how many rows it is hiding; NSESS too, so a fully folded frame
+  # never draws the empty-state hint. The group is the row's RENDERED one — a
+  # cross-repo child folds with the parent it renders under (#1031).
+  if [ "$RGRP" = 1 ] && [ "${RGFOLD[rgrp]:-0}" = 1 ] && [ "$rk" != 0 ] &&
+     { [ "$SIDEBAR" = 0 ] || [ "$wid" != "${FLEET_SIDEBAR_CURRENT:-}" ]; }; then
+    continue
+  fi
   # --- fold: a collapsed holder hides its subtree ------------------------------
   # Default-collapsed (the @expand polarity in exp_v): a row only survives here if
   # the row it renders UNDER is expanded. Three rails keep that from hiding
@@ -861,13 +901,18 @@ fi
 # never shows (--with-nth=3) and only its ⌃s/⌃n/Enter binds pass on, as
 # `{2}:{4}` — field 2 is a session row's window id (`@12`) and a heading's `hdr`;
 # field 1 is the `sess:idx` jump target, which the resolver does not read (#1010).
-# Both key fields stay `hdr`, so every other bind still ignores it. One pass over the repos —
+# Both key fields stay `hdr`, so every other bind still ignores it — except ←/→
+# (issue #1037): dash-fold-toggle.sh reads that same 4th field (the sidebar its
+# `hdr:<target>` key) and folds the group, and a FOLDED heading wears the
+# parent rows' `▸` — `▸ tokenledger (2)`, its count still the rows it hides. An
+# open one is drawn exactly as before. One pass over the repos —
 # the per-window cost is the RGCNT increment above, and #662's per-frame bound
 # holds.
 if [ "$RGRP" = 1 ]; then
   hd_v() { local n=${RGCNT[$1]:-0} t tg=${4-$3}
     [ "$n" -gt 0 ] || [ -n "$3" ] || return 0
     t="$2 ($n)"
+    [ "${RGFOLD[$1]:-0}" = 1 ] && t="▸ $t"
     if [ "$SIDEBAR" = 1 ]; then
       buf+="$1	-1	0	0	0	0	0	hdr$US$tg$US$US$t$US "$'\n'
     else

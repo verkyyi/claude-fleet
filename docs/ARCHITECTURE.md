@@ -45,6 +45,7 @@ bridge and the migrator all agree on:
 | `@origin` | spawn provenance — `issue-<N>` / `scratch-<N>` / `autofill` / … — and, since #574, an **address**: `fleet_win_for_key` resolves it back to the parent's live window. The parent's key also names its children ledger (`$FLEET_STATE/children/<key>.ndjson`, #937), which `bin/fleet-children.sh` reads — the one command a parent uses to check its children (#940); `bin/fleet-report-stats.sh` reads every ledger plus the delivered reports in the transcripts back into EPIC #935's five report-quality metrics (#941) |
 | `@reported` | `1` ⇒ this window already pushed its outcome to its `@origin` parent (the reap-time backstop skips it) |
 | `@expand` | `1` ⇒ this window's `@origin` children are UNFOLDED on the dash. Absent ⇒ folded, which is the default: the dash shows one line per parent and `←`/`→` open and shut the block. Inverted against `@pin` on purpose — a window nobody has touched must start collapsed |
+| `@repo_fold` | the one **session** option in this table (issue #1037): the space-separated slugs of the repo groups FOLDED on the dash (`o-tokenledger none`), set by `←` on a repo heading and unset once `→` opens the last one. Absent ⇒ every group open, the list as it always was. A session option so it is per-fleet for free, dies with the fleet, and — because tmux resolves `#{@repo_fold}` through a window's session — rides the renderer's one `list-windows` call with no extra fork |
 | `@claude_state`, `@claude_state_ts` | the state glyph + when it last changed |
 | `@cc_account`, `@cc_agent` | which subscription account / which agent it runs |
 
@@ -203,7 +204,8 @@ cells), and readline's keys — ←→, Home/End, ⌥←/⌥→ by word (read of
 word before, ⌃k to the end, ⌃u the whole line, Delete/Backspace either side.
 Typing, rename and the typed-name spawn all go through it. **An empty line is
 navigation, a typed one is editing** — the convention the sidebar shares with
-the hub (`dash-fold-toggle.sh`): with no text ←/→ fold, Home/End jump to the
+the hub (`dash-fold-toggle.sh`): with no text ←/→ fold (a row's subtree, or on a
+repo heading that repo's whole group, #1037), Home/End jump to the
 first/last row; with text they move the cursor. ↑↓ always switch tasks. The ⌃
 keys are `dash-keymap.sh --panel sidebar` rows (`bol` `eol` `kill_word`
 `kill_eol`), so a tmux prefix on one of them moves it to its ⌥ fallback, which
@@ -660,6 +662,17 @@ The dash renderers (`tmux-dashboard-rows.sh`, and with it the sidebar, plus
   new-session path may read. A heading's
   key fields read `hdr`, so every dash bind target no-ops on it and the sidebar's
   cursor steps over it; its count includes children a collapsed parent hides;
+- **a heading folds its group** (issue #1037) — the per-repo focus now that the
+  picker is gone (#1034): `←` on a heading hides every row under it and leaves
+  `▸ tokenledger (2)`, its count still the rows it hides; `→` brings them back.
+  The same helper as the parent fold, `dash-fold-toggle.sh` — the hub hands it
+  `hdr` + the heading's 4th-field spawn target, the sidebar its `hdr:<target>`
+  cursor key (`folds()`) — and the same two rails: a `needs` row shows through,
+  and the sidebar keeps its current window. The bit is the `@repo_fold` session
+  option (window-identity table above); a parent's own `@expand` is untouched
+  underneath, so unfolding the group restores it as it was left. A one-repo
+  fleet has no heading and writes nothing: `bin/dash-repo-fold-selftest.sh`
+  pins both frames byte-identical with the option set by hand;
 - grouping keeps #790's repo-qualified keys, so a child folds under its parent
   across repos.
 

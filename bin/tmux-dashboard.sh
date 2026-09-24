@@ -3,7 +3,8 @@
 # Rows come from tmux-dashboard-rows.sh (footer glyphs+palette; issue · model ·
 # context% · one-line LLM summary). Reads like the tmux status bar with columns,
 # but you can drive it:
-#   ↑/↓ move · ←/→ fold/unfold the highlighted row's subtree (children are
+#   ↑/↓ move · ←/→ fold/unfold the highlighted row's subtree — or, on a repo
+#   heading, that repo's whole group (issue #1037) — (children are
 #   COLLAPSED BY DEFAULT — the parent's `3/5 ✓ · 1!` badge speaks for the block;
 #   a child in `needs` stays visible anyway; on a non-empty prompt line ←/→ are
 #   the query line's cursor keys, as always) ·
@@ -164,7 +165,9 @@ run_dash() {
   # what you type into it. dash-fold-toggle.sh looks at {q} first — non-empty ⇒ it
   # prints the cursor move back and nothing folds; empty ⇒ it shuts or opens the
   # block the cursor is in and prints the reload. Every "nothing to fold here"
-  # branch prints nothing, which fzf treats as a dead keystroke.
+  # branch prints nothing, which fzf treats as a dead keystroke. {4} rides along
+  # for a repo heading (issue #1037): `hdr` in {1}, its spawn target in {4} — the
+  # field ⌃s/⌃n/Enter already read — and ←/→ there fold the whole repo group.
   # ⌃v is a transform (issue #554): dash-agent-toggle.sh flips FLEET_AGENT in the
   # fleet's conf via the config-modal write path, toasts, and emits the
   # change-prompt/change-ghost that relabels the line at once. `load`/⌃r re-derive
@@ -208,8 +211,8 @@ run_dash() {
     --bind "$DASH_KEY_REPO_ADD:execute(bash $BIN/dash-popup.sh -w 80% -h 16 -- bash $BIN/dash-repo-add.sh)+reload(bash $ROWS)" \
     --bind "$DASH_KEY_RENAME:transform(bash $BIN/dash-rename.sh {1})" \
     --bind "$DASH_KEY_ANSWER:execute(bash $BIN/dash-popup.sh -w 84% -h 70% -- bash $BIN/dash-answer.sh {1})+reload(bash $ROWS)" \
-    --bind "left:transform(bash $BIN/dash-fold-toggle.sh collapse {1} {q})" \
-    --bind "right:transform(bash $BIN/dash-fold-toggle.sh expand {1} {q})" \
+    --bind "left:transform(bash $BIN/dash-fold-toggle.sh collapse {1} {q} {4})" \
+    --bind "right:transform(bash $BIN/dash-fold-toggle.sh expand {1} {q} {4})" \
     --bind "enter:transform(bash $BIN/dash-enter.sh {1} {q} {2}:{4})$ENTER_TAIL" \
     --bind "esc:transform(bash $BIN/dash-esc.sh {q})" \
     >/dev/null 2>&1

@@ -38,9 +38,27 @@
 # window handle (`a1`, #566) — normalised through fleet_wid_target like every other
 # target-taking script, so `dash-fold-toggle.sh collapse b3` works from a shell.
 # The header row, an empty target and a landed-view row are silent no-ops.
+#
+# A REPO HEADING folds its whole group (issue #1037). Under `all` in a 2+ repo
+# fleet the list opens each repo with an inert `tokenledger (2)` heading (#974),
+# and ←/→ on it shut and open every row under it — the per-repo focus now that
+# the picker is gone (#1034). The heading spells itself two ways, both accepted:
+# the hub hands `hdr` in {1} and the heading's spawn target in {4} (owner/name,
+# `none` for the no-repo group — the same 4th field ⌃s/⌃n/Enter already read),
+# the sidebar its cursor key `hdr:<target>`. The `?` heading has no target and
+# the column header / empty-state hint no 4th field, so those stay the silent
+# no-ops they were. The bit is ONE session option, `@repo_fold`: the
+# space-separated slugs of the FOLDED groups (a repo's fleet_slug, or `none`).
+# The renderer reads it off the same list-windows call it already makes (a
+# session option resolves through every window's format), so a frame pays no
+# fork for it; it lives on the tmux server, so it is per-fleet for free (#159),
+# dies with the fleet, and leaves nothing to clean up. Polarity is the
+# heading's: absent ⇒ every group open, the list exactly as it always was —
+# opening the last folded group UNSETS it rather than parking an empty string.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 US=$'\x1f'
+ROWS="$BIN/tmux-dashboard-rows.sh"
 
 verb="${1:-}"; target="${2:-}"; query="${3:-}"
 
@@ -51,14 +69,15 @@ if [ -n "$query" ]; then
 fi
 
 case "$verb" in expand|collapse) ;; *) exit 0 ;; esac
-case "$target" in ''|hdr|none) exit 0 ;; esac
+# the hub's heading shape ({1}=hdr, {4}=target) folds onto the sidebar's `hdr:<target>`
+[ "$target" = hdr ] && target="hdr:${4:-}"
+case "$target" in ''|hdr:|none) exit 0 ;; esac
 # landed rows have no tmux window to hang @expand on — fleet-history.sh owns that
 # view's fold, keyed by ledger key in a per-fleet file.
 case "$target" in landed:*) exec bash "$BIN/fleet-history.sh" fold "$verb" "$target" ;; esac
 
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh" 2>/dev/null || true
-command -v fleet_wid_target >/dev/null 2>&1 && target="$(fleet_wid_target "$target")"
 
 # Strict per-fleet, the renderer's own rule: FLEET_SESSION is exported by
 # tmux-dashboard.sh, so a transform child already has it; a shell invocation falls
@@ -66,6 +85,44 @@ command -v fleet_wid_target >/dev/null 2>&1 && target="$(fleet_wid_target "$targ
 # single-fleet back-compat case).
 SESS="${FLEET_SESSION:-}"
 [ -n "$SESS" ] || SESS=$(tmux display-message -p '#{session_name}' 2>/dev/null) || SESS=''
+
+# --- a repo heading: fold / unfold its group (issue #1037) ---------------------
+if [ "${target#hdr:}" != "$target" ]; then
+  hkey=${target#hdr:}
+  [ -n "$SESS" ] || exit 0
+  # Only the frame that draws headings has one to fold: a fleet hosting 2+ repos
+  # (fleet_dash_repo_frame — the renderer's own read of it). A one-repo fleet
+  # writes nothing, so its frame stays byte-identical to one that never heard of
+  # the option; a target the fleet does not host folds nothing either.
+  RMANY=0; RGRPMAP=''
+  fleet_dash_repo_frame "$SESS"
+  [ "$RMANY" = 1 ] || exit 0
+  case "$hkey" in
+    none) slug=none ;;
+    *)    slug=$(fleet_slug "$hkey")
+          case "$RGRPMAP" in *$'\n'"$slug"$'\t'*) ;; *) exit 0 ;; esac ;;
+  esac
+  cur=$(tmux show-option -t "=$SESS:" -qv @repo_fold 2>/dev/null) || cur=''
+  case " $cur " in *" $slug "*) folded=1 ;; *) folded=0 ;; esac
+  if [ "$verb" = collapse ]; then
+    # `←` on an open heading shuts it; on a folded one it is a dead key.
+    [ "$folded" = 0 ] || exit 0
+    tmux set-option -t "=$SESS:" @repo_fold "${cur:+$cur }$slug" 2>/dev/null || exit 0
+  else
+    # `→` opens a folded heading; on an open one it is a dead key.
+    [ "$folded" = 1 ] || exit 0
+    new=''
+    for s in $cur; do [ "$s" = "$slug" ] || new="${new:+$new }$s"; done
+    if [ -n "$new" ]; then tmux set-option -t "=$SESS:" @repo_fold "$new" 2>/dev/null || exit 0
+    else tmux set-option -t "=$SESS:" -u @repo_fold 2>/dev/null || exit 0; fi
+  fi
+  # The heading keeps its index either way (only rows BELOW it come and go), so
+  # a plain reload leaves the cursor on it.
+  echo "reload(bash $ROWS)"
+  exit 0
+fi
+
+command -v fleet_wid_target >/dev/null 2>&1 && target="$(fleet_wid_target "$target")"
 
 # --- the window table: key → window_id · origin · expand ----------------------
 # ONE tmux read, same field set and same key derivation the renderer uses, so the
@@ -157,7 +214,6 @@ while IFS=$'\t' read -r _ _ korig _; do
 done <<< "$KEYTAB"
 [ "$haskids" = 1 ] || exit 0
 
-ROWS="$BIN/tmux-dashboard-rows.sh"
 case "$hexp" in 1) hexp=1 ;; *) hexp=0 ;; esac
 
 if [ "$verb" = expand ]; then
