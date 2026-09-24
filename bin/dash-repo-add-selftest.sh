@@ -117,7 +117,7 @@ eq "B: the fleet conf is byte-identical after three adds" "$(cat "$FLEET_CONF_DI
 S1=one; mkdir -p "$FLEET_CONF_DIR/fleets/$S1"; cp "$FLEET_CONF_DIR/fleets/$S/conf" "$FLEET_CONF_DIR/fleets/$S1/conf"
 fleet_multirepo "$S1" && fail "B: the one-repo fixture reads as multi-repo"
 eq "B: a one-repo fleet's dash keymap has repo-add on ctrl-z" \
-   "$(FLEET_TMUX_PREFIX=C-b FLEET_TMUX_PREFIX2= bash "$BIN/dash-keymap.sh" key repo-add)" "ctrl-z"
+   "$(FLEET_TMUX_PREFIX=C-b FLEET_TMUX_PREFIX2='' bash "$BIN/dash-keymap.sh" key repo-add)" "ctrl-z"
 has "B: a one-repo fleet's row menu lists the item" "$(bash "$BIN/fleet-sidebar-menu.sh" --keys | cut -f1 | tr '\n' ' ')" " g "
 grep -q 'fleet_multirepo' "$ADD" && fail "B: dash-repo-add.sh gates on fleet_multirepo — a one-repo fleet must get the popup"
 mkrepo "$HOME/projects/two" o/two
@@ -126,23 +126,23 @@ eq "B: … and it is a two-repo fleet now" "$(fleet_repos "$S1" | tr '\n' ' ')" 
 
 # --- C. the wiring: keymap ⇄ dash bind ⇄ sheet ⇄ sidebar menu --------------------------
 KM="$BIN/dash-keymap.sh"; DASH="$BIN/tmux-dashboard.sh"; KEYS="$BIN/fleet-keys.sh"; MENU="$BIN/fleet-sidebar-menu.sh"
-eq "C: repo-add resolves to ⌃z under C-b" "$(FLEET_TMUX_PREFIX=C-b FLEET_TMUX_PREFIX2= bash "$KM" glyph repo-add)" "⌃z"
-eq "C: … and dodges a C-z prefix to alt-z" "$(FLEET_TMUX_PREFIX=C-z FLEET_TMUX_PREFIX2= bash "$KM" key repo-add)" "alt-z"
-has "C: env spells the action REPO_ADD" "$(FLEET_TMUX_PREFIX=C-b FLEET_TMUX_PREFIX2= bash "$KM" env)" "DASH_KEY_REPO_ADD='ctrl-z'"
+eq "C: repo-add resolves to ⌃z under C-b" "$(FLEET_TMUX_PREFIX=C-b FLEET_TMUX_PREFIX2='' bash "$KM" glyph repo-add)" "⌃z"
+eq "C: … and dodges a C-z prefix to alt-z" "$(FLEET_TMUX_PREFIX=C-z FLEET_TMUX_PREFIX2='' bash "$KM" key repo-add)" "alt-z"
+has "C: env spells the action REPO_ADD" "$(FLEET_TMUX_PREFIX=C-b FLEET_TMUX_PREFIX2='' bash "$KM" env)" "DASH_KEY_REPO_ADD='ctrl-z'"
 grep -Eq -- '--bind "\$DASH_KEY_REPO_ADD:execute\(bash \$BIN/dash-popup\.sh [^)]*-- bash \$BIN/dash-repo-add\.sh\)\+reload\(' "$DASH" \
   || fail "C: tmux-dashboard.sh does not bind \$DASH_KEY_REPO_ADD to execute(dash-popup.sh … dash-repo-add.sh)+reload"
 grep -Eq '^ *DASH_KEY_[A-Z_ =a-z-]*DASH_KEY_REPO_ADD=ctrl-z' "$DASH" \
   || fail "C: tmux-dashboard.sh lacks the DASH_KEY_REPO_ADD=ctrl-z launch floor"
-SHEET=$(FLEET_TMUX_PREFIX=C-b FLEET_TMUX_PREFIX2= NO_COLOR=1 bash "$KEYS" --plain --context dash)
+SHEET=$(FLEET_TMUX_PREFIX=C-b FLEET_TMUX_PREFIX2='' NO_COLOR=1 bash "$KEYS" --plain --context dash)
 printf '%s\n' "$SHEET" | grep -q '^  ⌃z .*add a repo to this fleet' || fail "C: the dash sheet has no ⌃z add-a-repo row"
 printf '%s\n' "$SHEET" | grep '^  ⌃z ' | grep -q 'fleet-repo.sh add' || fail "C: the ⌃z row does not name the shell form"
-RSHEET=$(FLEET_TMUX_PREFIX=C-z FLEET_TMUX_PREFIX2= NO_COLOR=1 bash "$KEYS" --plain --context dash)
+RSHEET=$(FLEET_TMUX_PREFIX=C-z FLEET_TMUX_PREFIX2='' NO_COLOR=1 bash "$KEYS" --plain --context dash)
 printf '%s\n' "$RSHEET" | grep -q '^  ⌥z .*⌃z is your tmux prefix C-z' || fail "C: under a C-z prefix the sheet must list ⌥z and say why"
 eq "C: the row menu's letter for repo is g" "$(printf '%s\n' "$(bash "$MENU" --keys)" | awk -F '\t' '$1=="g"{print $2}' | grep -c 'add a repo')" 1
 grep -Eq '^add "＋ 仓库…" "\$\(mk repo\)" .*dash-popup\.sh.*dash-repo-add\.sh' "$MENU" \
   || fail "C: fleet-sidebar-menu.sh has no ＋ 仓库… item on dash-popup.sh → dash-repo-add.sh via \$(mk repo)"
 grep -qE 'dash-repo-add\.sh' "$BIN/../README.md" || fail "C: README does not mention the popup"
-FULL=$(FLEET_TMUX_PREFIX=C-b FLEET_TMUX_PREFIX2= NO_COLOR=1 bash "$KEYS" --plain)
+FULL=$(FLEET_TMUX_PREFIX=C-b FLEET_TMUX_PREFIX2='' NO_COLOR=1 bash "$KEYS" --plain)
 printf '%s\n' "$FULL" | awk '/^row menu /{f=1;next} f && NF && /^[^ ]/{f=0} f' | grep -q '^  g  .*add a repo' \
   || fail "C: the full sheet's row menu group lacks the g row"
 
