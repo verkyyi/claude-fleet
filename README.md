@@ -183,7 +183,8 @@ Running it on an unattended machine (a Mac mini you reach over SSH)? Read
 with its sessions: [turning off Spotlight](docs/HOST.md#spotlight), the
 [unattended-Mac checklist](docs/HOST.md#headless) (never sleep, no Siri, no
 iCloud sync, no GUI apps on the console) and [how much a container VM may
-take](docs/HOST.md#containers). `fleet-doctor`'s `host` section checks each item.
+take](docs/HOST.md#containers). `fleet-doctor`'s `host` section checks each item;
+[`fleet-host-tune.sh`](docs/HOST.md#tune) plans them all (`--apply` asks per item).
 
 ### The Claude-Code side ships as a plugin
 

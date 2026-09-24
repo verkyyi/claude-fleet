@@ -9,7 +9,8 @@ and **how to undo it**.
 `fleet-doctor` has a matching `host` section (macOS only; skipped on Linux —
 except the `network` line, which reads `ip route` there) with one line per
 recommendation. The doctor only **reports** — it never changes a
-system setting. Every change below is yours to run.
+system setting. Every change below is yours to run — one by one from this page,
+or all at once with [`fleet-host-tune.sh`](#tune).
 
 ```sh
 bash ~/.claude/fleet/bin/fleet-doctor.sh 2>&1 | grep -E '^\s*\S+\s+(spotlight|wtroot|nofile|sleep|siri|icloud|network)'
@@ -25,6 +26,7 @@ bash ~/.claude/fleet/bin/fleet-doctor.sh 2>&1 | grep -E '^\s*\S+\s+(spotlight|wt
 - [Container VMs](#containers) — how much of the machine Colima / Docker Desktop may take
 - [One network link](#network) — wired only, a fixed address, Tailscale as the way back in
 - [Verify](#verify)
+- [All at once: fleet-host-tune.sh](#tune)
 
 <a id="spotlight"></a>
 ## Turn off Spotlight
@@ -398,3 +400,35 @@ line says how to silence itself (`FLEET_DOCTOR_<LINE>=0`, in the environment or
 in `~/.config/claude-fleet/fleet.settings`) so a deliberate choice does not
 become a standing warning. The doctor never changes a setting: every command on
 this page is yours to run, and the line goes green on the next run.
+
+<a id="tune"></a>
+## All at once: fleet-host-tune.sh
+
+The checklist is only as good as the one item you forget on the next machine.
+`bin/fleet-host-tune.sh` walks every item on this page that a command can do, in
+the doctor's order and under the doctor's line names (issue #1082):
+
+```sh
+bash ~/.claude/fleet/bin/fleet-host-tune.sh            # = --plan: now → target → command, changes nothing
+bash ~/.claude/fleet/bin/fleet-host-tune.sh --apply    # asks y/N per item (sudo prompts for your password)
+bash ~/.claude/fleet/bin/fleet-host-tune.sh --apply --yes   # no questions
+```
+
+| row | now is read from | `--apply` runs |
+|---|---|---|
+| `spotlight` | `mdutil -s` | `sudo mdutil -a -i off` |
+| `nofile` | `launchctl limit maxfiles` + the boot plist | writes `/Library/LaunchDaemons/com.claude-fleet.maxfiles.plist` (runs `launchctl limit maxfiles 65536 200000` at every boot) + `sudo launchctl limit maxfiles 65536 200000` now |
+| `sleep` | `pmset -g` | `sudo pmset -a` with only the keys that are off: `sleep 0` · `autorestart 1` · `womp 1` |
+| `siri` | `defaults read com.apple.assistant.support "Assistant Enabled"` | `defaults write … -bool false` (per user, no sudo; the helpers exit at the next login, or flip the Settings toggle now) |
+| `network` | `netstat -rn` + `networksetup -getairportpower` | `networksetup -setairportpower <dev> off` — offered when one gateway is the default route through wired **and** Wi-Fi (the doctor's WARN); otherwise only with `--wifi-off`, and refused while every default route is on Wi-Fi |
+| `icloud`, `gui` | `pgrep` | nothing — a sign-in and what runs on the console are Settings decisions; the row only reminds |
+
+Every `CHANGE` row prints its undo. An item already at target reads `OK` and is
+never asked about. Not covered, because no command sets it cleanly: automatic
+login, FileVault, `systemsetup -setrestartfreeze`, the container VM's size and
+`FLEET_WORKTREE_ROOT` — do those from the sections above.
+
+**Done =** `--plan` says `nothing to change`, and the doctor's host lines read
+PASS (the `icloud` line stays INFO until you sign out). `--plan` never changes
+state; `bin/fleet-host-tune-selftest.sh` pins that with a recording shim for
+every tool it can reach.
