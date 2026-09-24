@@ -57,8 +57,7 @@ case "$(uname -s 2>/dev/null)" in Darwin) homes_default=/Users ;; *) homes_defau
 homes="${FLEET_SYNC_LOGINS_HOMES:-$homes_default}"
 SUDO="${FLEET_SYNC_LOGINS_SUDO-sudo -n}"
 me="${FLEET_SYNC_LOGINS_ME:-$(id -un 2>/dev/null || echo me)}"
-STUCK_SECS="${FLEET_INSTALL_FOLLOW_STUCK_SECS:-86400}"
-case "$STUCK_SECS" in ''|*[!0-9]*) STUCK_SECS=86400 ;; esac
+STUCK_SECS="${FLEET_INSTALL_FOLLOW_STUCK_SECS:-}"
 scope=all summary=0 as_json=0
 
 usage() { sed -n '2,/^set -u/p' "$SELF" | sed '$d' | sed 's/^# \{0,1\}//'; }
@@ -81,6 +80,20 @@ done
 
 now=$(date +%s)
 self_real=''; [ -d "$dir" ] && self_real=$(cd "$dir" && pwd -P)
+
+# The stuck threshold: the env (a bash caller that sourced fleet-lib.sh exports
+# every global key), else THIS login's settings file / the install's fleet.conf
+# — this is /bin/sh and cannot source the lib, so it reads the same two files
+# the lib would. One threshold for every login on the machine: the judgement is
+# the reader's, not the login's.
+if [ -z "$STUCK_SECS" ]; then
+  for f in "$conf_dir/fleet.settings" "$dir/fleet.conf"; do
+    [ -r "$f" ] || continue
+    STUCK_SECS=$(sed -n 's/^[[:space:]]*FLEET_INSTALL_FOLLOW_STUCK_SECS[[:space:]]*=[[:space:]]*\([^#]*\).*/\1/p' "$f" | tail -1 | tr -d "\"' 	")
+    [ -n "$STUCK_SECS" ] && break
+  done
+fi
+case "$STUCK_SECS" in ''|*[!0-9]*) STUCK_SECS=86400 ;; esac
 
 # --- reading another login's files ---------------------------------------------
 # as_owner <owner> — can this shell act as <owner> through $SUDO? Probed once.

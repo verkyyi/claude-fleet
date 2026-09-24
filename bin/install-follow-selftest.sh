@@ -137,6 +137,12 @@ contains "B: opt-out names the file" "$D" "$CONF/fleet.settings"
 # the knob moves the line
 OUT=$(FLEET_INSTALL_FOLLOW_STUCK_SECS=$((48 * 3600)) sh "$FL" --self 2>&1)
 eq "B: 26h under a 48h knob is OK" OK "$(fv verdict)"
+# the knob also comes from this login's settings file (this reader is /bin/sh
+# and cannot source fleet-lib.sh, so it reads the file itself)
+printf 'FLEET_INSTALL_FOLLOW_STUCK_SECS="%s"\n' "$((48 * 3600))" > "$CONF/fleet.settings"
+fself
+eq "B: 26h under a 48h knob from fleet.settings is OK" OK "$(fv verdict)"
+rm -f "$CONF/fleet.settings"
 
 # ============================================================================
 # C. refused
