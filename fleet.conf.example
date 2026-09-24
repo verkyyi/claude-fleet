@@ -275,6 +275,13 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Codex private worker server @group=spawn @tier=advanced @scope=fleet @edit=bool
 #FLEET_CODEX_SERVER=1
 
+# Check `codex --version` against the versions whose session (rollout) file
+# format fleet's context% reader is verified on (0.154; issue #1079). A mismatch
+# never blocks a launch: fleet-doctor shows a `codex` WARN and each Codex launch
+# prints one warning. Set 0 once you have checked a newer Codex yourself.
+# @label=Codex version check @group=spawn @tier=advanced @scope=global @edit=bool
+#FLEET_CODEX_VERSION_CHECK=1
+
 # Optional account home for this Codex fleet. It must already exist and contain
 # that account's native login/config; saved-session recovery retains its own home.
 # @label=Codex account home @group=spawn @tier=advanced @scope=fleet @edit=str
