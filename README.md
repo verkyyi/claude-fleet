@@ -215,9 +215,11 @@ use `transform`) · [gh](https://cli.github.com/) (authed) · python3 ·
 the two optional LLM daemons). Soft: perl `Time::HiRes` (sharper dash spinner).
 
 Run [`bin/fleet-doctor.sh`](bin/fleet-doctor.sh) to check all of these at once.
-Its `install` line also answers *"is this machine's live install current?"* — the
+Its `install` lines also answer *"is this machine's live install current?"* — the
 `~/.claude/fleet` half is a hand-run `git pull` per machine, so it goes stale in
-silence (see [`bin/fleet-install-version.sh`](bin/fleet-install-version.sh)).
+silence (see [`bin/fleet-install-version.sh`](bin/fleet-install-version.sh)) —
+and *"is each login still following `refs/tags/stable` on its own, and if not,
+why?"* (see [`bin/fleet-install-follow.sh`](bin/fleet-install-follow.sh)).
 (No standalone `jq` for the core — the collector only uses `gh --jq`, which is
 built in; `jq` is a soft dep only for the optional `conf/statusline.sh` status
 line, which exits silently without it.)
