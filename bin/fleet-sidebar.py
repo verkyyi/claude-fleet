@@ -567,9 +567,17 @@ def tap(hit, highlighted):
 
 
 def acts(key):
-    """The highlighted row as a target for any action but a new session: a heading
-    (`hdr:…`) is none — jump, menu, fold, tap all stay no-ops on it (EPIC #994)."""
+    """The highlighted row as a target for any action but a new session or a fold:
+    a heading (`hdr:…`) is none — jump, menu, tap all stay no-ops on it (EPIC #994)."""
     return "" if key.startswith("hdr") else key
+
+
+def folds(key):
+    """The highlighted row as a ←/→ target: a session row (its subtree), or a repo
+    heading with a spawn target — `hdr:<target>`, which dash-fold-toggle.sh reads
+    as that repo's whole group (issue #1037). A bare `hdr` (the `?` heading, the
+    empty-state hint) or no row at all: nothing to fold."""
+    return key if key and key != "hdr" else ""
 
 
 def start_rows(env):
@@ -740,8 +748,9 @@ def ui(screen, session, worker, lock):
         height, width = screen.getmaxyx()
         # A repo group heading (issue #974) is inert to every action: `hdr` in the
         # id field. One with a spawn target is a cursor stop since #997 — ↑/↓ land
-        # on it so a typed name starts THERE — but a tap, Enter, `.`, ←/→ and the
-        # follow all ignore it (`acts`). `where` is the selection's place in the
+        # on it so a typed name starts THERE — but a tap, Enter, `.` and the
+        # follow all ignore it (`acts`); ←/→ on it fold and unfold its whole repo
+        # group (`folds`, issue #1037). `where` is the selection's place in the
         # PAINTED list, which the scroll offset is measured in.
         ids = selectable(rows)
         # Rows still in flight for a window just jumped to may not hold it yet (a
@@ -915,9 +924,11 @@ def ui(screen, session, worker, lock):
             if acts(selected) and selected != window:
                 jump(session, selected, pane, lock)
             refresh_at = 0
-        elif key in (curses.KEY_LEFT, curses.KEY_RIGHT) and acts(selected):
+        elif key in (curses.KEY_LEFT, curses.KEY_RIGHT) and folds(selected):
+            # A session row folds its subtree; a repo heading its whole group
+            # (issue #1037) — one helper, the hub's, for both.
             verb = "collapse" if key == curses.KEY_LEFT else "expand"
-            run(["bash", str(BIN / "dash-fold-toggle.sh"), verb, selected], env=env)
+            run(["bash", str(BIN / "dash-fold-toggle.sh"), verb, folds(selected)], env=env)
             refresh_at = 0
         elif key == 14:
             # ⌃n (dash-keymap.sh --panel sidebar `new`; its ⌥n fallback is
