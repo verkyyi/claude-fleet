@@ -109,6 +109,28 @@ say() { [ "$summary" -eq 1 ] || printf '%s\n' "$*"; }
 # git on another login's checkout trips "dubious ownership"; a command-line
 # safe.directory is honoured, and scoping it to one call keeps it off disk.
 gitq() { git -c safe.directory='*' -C "$@"; }
+# ogit <owner> <dir> <git args…> — read ANOTHER login's checkout as its owner
+# (issue #1115). safe.directory only waives the ownership check, not file
+# permissions: a `.git` the caller cannot read makes `rev-parse HEAD` / `status`
+# fail, so a sync that landed reported FAILED and --summary called it drifted.
+# Steps 1–4 already write as the owner; the reads match them. Falls back to the
+# caller when it IS the owner or the owner cannot be reached through $SUDO.
+# The probe is cached per owner — one `sudo -n true` each, not one per git call;
+# ogit mostly runs in a `$(…)` subshell, so warm the cache in the main shell
+# (`as_owner <owner> || :`) wherever an owner is first known.
+owner_ok='' owner_no=''
+as_owner() {
+  [ "$1" != "$me" ] && [ -n "$SUDO" ] || return 1
+  case " $owner_ok " in *" $1 "*) return 0 ;; esac
+  case " $owner_no " in *" $1 "*) return 1 ;; esac
+  if $SUDO -u "$1" true 2>/dev/null; then owner_ok="$owner_ok $1"; return 0; fi
+  owner_no="$owner_no $1"; return 1
+}
+ogit() {
+  _og=$1; shift
+  if as_owner "$_og"; then $SUDO -u "$_og" git -c safe.directory='*' -C "$@"
+  else gitq "$@"; fi
+}
 
 # --- the source --------------------------------------------------------------
 [ -n "$src" ] && [ -d "$src" ] || { printf 'fleet-sync-logins: no source install at %s\n' "$src" >&2; exit 3; }
@@ -160,11 +182,11 @@ relation() {
   fi
 }
 
-# local_edits <dir> → tracked files modified in place whose content the source
+# local_edits <dir> <owner> → tracked files modified in place whose content the source
 # repo has never seen (space-separated). A file matching ANY version the source
 # knows is an earlier sync's footprint, not work.
 local_edits() {
-  gitq "$1" status --porcelain --untracked-files=no 2>/dev/null | while IFS= read -r _l; do
+  ogit "$2" "$1" status --porcelain --untracked-files=no 2>/dev/null | while IFS= read -r _l; do
     _f=${_l#???}; _f=${_f#*-> }
     [ -f "$1/$_f" ] || continue
     _b=$(git hash-object --no-filters -- "$1/$_f" 2>/dev/null) || continue
@@ -182,8 +204,9 @@ for d in "$homes"/*/.claude/fleet; do
   [ -d "$d" ] || continue
   rd=$(cd "$d" && pwd -P)
   [ "$rd" = "$src" ] && continue
-  [ "$(gitq "$d" rev-parse --show-toplevel 2>/dev/null)" = "$rd" ] || continue
-  h=$(gitq "$d" rev-parse --verify --quiet HEAD 2>/dev/null) || continue
+  o=$(ls -ld "$d" | awk '{print $3}'); as_owner "$o" || :
+  [ "$(ogit "$o" "$d" rev-parse --show-toplevel 2>/dev/null)" = "$rd" ] || continue
+  h=$(ogit "$o" "$d" rev-parse --verify --quiet HEAD 2>/dev/null) || continue
   [ "$(relation "$h")" = newer ] && newer_than_src="$newer_than_src $(basename "$(dirname "$(dirname "$d")")")"
 done
 newer_than_src=${newer_than_src# }
@@ -199,10 +222,12 @@ for d in "$homes"/*/.claude/fleet; do
   if [ -n "$only" ]; then
     case ",$only," in *",$login,"*) ;; *) continue ;; esac
   fi
-  owner=$(ls -ld "$d" | awk '{print $3}')
-  if [ "$(gitq "$d" rev-parse --show-toplevel 2>/dev/null)" = "$rd" ]; then
+  owner=$(ls -ld "$d" | awk '{print $3}'); as_owner "$owner" || :
+  # a `.git` present is a checkout even when nobody here can read it (issue
+  # #1115) — never a copy install, whose empty drift would call it current
+  if [ -e "$d/.git" ] || [ "$(ogit "$owner" "$d" rev-parse --show-toplevel 2>/dev/null)" = "$rd" ]; then
     shape=git; ents=$entries
-    head=$(gitq "$d" rev-parse --verify --quiet HEAD 2>/dev/null)
+    head=$(ogit "$owner" "$d" rev-parse --verify --quiet HEAD 2>/dev/null)
   else
     shape=copy; ents=''
     for e in $entries; do { [ -e "$d/$e" ] || [ -L "$d/$e" ]; } && ents="$ents $e"; done
@@ -210,7 +235,7 @@ for d in "$homes"/*/.claude/fleet; do
   fi
   n=$(drift "$d" "$ents")
   rel=''; [ -n "$head" ] && rel=$(relation "$head")
-  edits=''; [ "$shape" = git ] && edits=$(local_edits "$d")
+  edits=''; [ "$shape" = git ] && edits=$(local_edits "$d" "$owner")
   note=''
   if [ "$n" -eq 0 ] && { [ "$shape" = copy ] || [ "$rel" = same ]; } && [ -z "$edits" ]; then
     state=current
@@ -283,7 +308,7 @@ while IFS='|' read -r login rd owner shape head n state note ents <&3; do
   [ "$state" = sync ] || continue
   ents=$(printf '%s' "$ents" | tr ',' ' ')
   if [ "$owner" = "$me" ]; then as=''
-  elif [ -n "$SUDO" ] && $SUDO -u "$owner" true 2>/dev/null; then as="$SUDO -u $owner"
+  elif as_owner "$owner"; then as="$SUDO -u $owner"
   else
     nsudo=$((nsudo + 1)); nskip=$((nskip + 1))
     say "$login: needs sudo — skipped"
@@ -352,12 +377,15 @@ while IFS='|' read -r login rd owner shape head n state note ents <&3; do
   fi
 
   # 5. verify
+  why=''
   left=$(drift "$rd" "$ents")
-  [ "$left" -eq 0 ] || ok=0
+  [ "$left" -eq 0 ] || { ok=0; why="$left entr(ies) still differ"; }
   if [ "$shape" = git ]; then
-    [ "$(gitq "$rd" rev-parse HEAD 2>/dev/null)" = "$src_sha" ] || ok=0
-    [ -z "$(gitq "$rd" status --porcelain --untracked-files=no 2>/dev/null)" ] || ok=0
+    # as the owner, like the writes above (issue #1115)
+    [ "$(ogit "$owner" "$rd" rev-parse HEAD 2>/dev/null)" = "$src_sha" ] || { ok=0; why="${why:+$why · }HEAD is not $src_short"; }
+    [ -z "$(ogit "$owner" "$rd" status --porcelain --untracked-files=no 2>/dev/null)" ] || { ok=0; why="${why:+$why · }tracked files dirty"; }
   fi
+  [ "$ok" -eq 1 ] || [ -n "$why" ] || why="a sync step failed"
   spinmsg=''
   if [ "$spin" -eq 1 ] && command -v "$PGREP" >/dev/null 2>&1; then
     tries=0 alive=0
@@ -374,7 +402,7 @@ while IFS='|' read -r login rd owner shape head n state note ents <&3; do
     say "$login: synced to $src_short · backup $bak · daemons kicked $kicked$kf$spinmsg"
   else
     nfail=$((nfail + 1))
-    say "$login: FAILED — $left entr(ies) still differ; the backup is at $bak"
+    say "$login: FAILED — $why; the backup is at $bak"
   fi
 done 3<<EOF
 $plan

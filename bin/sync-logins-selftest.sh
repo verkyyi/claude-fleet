@@ -21,6 +21,9 @@
 #                  unmarked copy install beside it
 #   F. sudo        another owner goes through the sudo prefix; with no sudo,
 #                  nothing changes, exit 5, the admin command is printed
+#   H. unreadable .git  another login's `.git` the caller cannot read: the
+#                  reads go through the owner too, so a sync that landed reports
+#                  synced (not FAILED) and --summary reports current (issue #1115)
 #   G. usage       --logins filter, an unknown login (exit 2), a non-git source
 #                  (exit 3)
 #
@@ -257,5 +260,57 @@ eq "non-git source: exit 3" 3 "$RC"
 run --source "$SRC" --homes "$WORK/nohomes"
 eq "no other logins: exit 0" 0 "$RC"
 contains "no other logins: says so" "$OUT" "nothing to sync"
+
+# ============================================================================
+# H. unreadable .git — reads as the owner (issue #1115)
+# ============================================================================
+# A git shim stands in for file permissions: it refuses any `-C <alice's
+# install>` call unless it arrived through the owner-sudo shim (which marks it).
+# Every other git call — the source, hash-object on the tree — passes through.
+REALGIT=$(command -v git)
+mkdir -p "$WORK/gshim"
+cat > "$WORK/gshim/git" <<EOF
+#!/bin/sh
+if [ -z "\${AS_OWNER:-}" ]; then
+  prev=''
+  for a in "\$@"; do
+    if [ "\$prev" = -C ]; then
+      case "\$a" in "$A"|"$A"/*) echo "fatal: .git/index: index file open failed: Permission denied" >&2; exit 128 ;; esac
+    fi
+    prev=\$a
+  done
+fi
+exec "$REALGIT" "\$@"
+EOF
+cat > "$WORK/gshim/osudo" <<EOF
+#!/bin/sh
+echo "\$*" >> "$WORK/sudo.log"
+[ "\$1" = -n ] && shift
+[ "\$1" = -u ] && shift 2
+AS_OWNER=1 exec "\$@"
+EOF
+chmod +x "$WORK/gshim/"*
+echo 'v7' > "$SRC/bin/a.sh"; g "$SRC" commit -qam seven
+C7=$(g "$SRC" rev-parse HEAD)
+hrun() { OUT=$(PATH="$WORK/gshim:$PATH" FLEET_SYNC_LOGINS_ME=someone-else FLEET_SYNC_LOGINS_SUDO="$WORK/gshim/osudo -n" bash "$SL" --source "$SRC" --logins alice "$@" 2>&1); RC=$?; }
+ok "unreadable: the shim really refuses the caller" '! PATH="$WORK/gshim:$PATH" git -C "$A" rev-parse HEAD >/dev/null 2>&1'
+hrun --summary
+eq "unreadable summary: behind = drifted" "1 other · 0 current · 1 drifted (alice:1)" "$OUT"
+: > "$WORK/sudo.log"
+hrun
+eq "unreadable: exit 0" 0 "$RC"
+contains "unreadable: synced, not FAILED" "$OUT" "alice: synced to"
+not_contains "unreadable: no FAILED" "$OUT" "FAILED"
+eq "unreadable: HEAD aligned" "$C7" "$(g "$A" rev-parse HEAD)"
+contains "unreadable: verify read HEAD as the owner" "$(cat "$WORK/sudo.log")" "-u $(id -un) git -c safe.directory=* -C $A rev-parse HEAD"
+eq "unreadable: owner probed once, not per git call" 1 "$(grep -c -- '-u [^ ]* true$' "$WORK/sudo.log")"
+hrun --summary
+eq "unreadable summary: current" "1 other · 1 current · 0 drifted" "$OUT"
+eq "unreadable summary: exit 0" 0 "$RC"
+# no reachable owner (no sudo): the caller's read is all there is — unchanged
+hrun_nosudo() { OUT=$(PATH="$WORK/gshim:$PATH" FLEET_SYNC_LOGINS_ME=someone-else FLEET_SYNC_LOGINS_SUDO=false bash "$SL" --source "$SRC" --logins alice --summary 2>&1); RC=$?; }
+hrun_nosudo
+not_contains "no sudo: does not claim current" "$OUT" "1 current"
+eq "no sudo: an unread checkout is drifted, not a copy" "1 other · 0 current · 1 drifted (alice:0)" "$OUT"
 
 echo "sync-logins-selftest OK ($CHECKS checks)"
