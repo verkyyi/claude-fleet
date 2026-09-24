@@ -636,6 +636,30 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    now → target → command ([HOST.md → All at once](HOST.md#tune)); show the user
    that plan, and run `--apply` (it asks per item) only on their yes.
 
+## Publishing to installs — the `stable` tag (发布到各安装)
+
+Merging to `master` does not, by itself, reach any machine. What installs follow
+is `refs/tags/stable` on `verkyyi/claude-fleet` (issue #1118, EPIC #1117): a
+lightweight tag the operator moves forward, one command at a time, to the
+version they vouch for.
+
+```sh
+bash ~/.claude/fleet/bin/fleet-stable.sh show              # where stable points, how far it trails origin/master
+bash ~/.claude/fleet/bin/fleet-stable.sh move --dry-run    # every check, no push
+bash ~/.claude/fleet/bin/fleet-stable.sh move [<sha>]      # default: origin/master
+```
+
+`move` refuses (exit 3) unless the target is a commit on `origin/master`, it
+descends from the current `stable` (forward only — never back, never sideways),
+and every CI check run on it is green. A commit with zero check runs (push CI is
+path-filtered, so a docs-only commit has none) is refused too unless you pass
+`--allow-no-checks`. The push uses `--force-with-lease` pinned to the value it
+read, so two concurrent moves cannot both win (the loser exits 4).
+
+`fleet-doctor.sh`'s `install` row carries an INFO line with how many commits
+`stable` trails master — the cue to move it. The first placement was `0164208`,
+the version every login on the Mac mini was synced to on 2026-09-24.
+
 ## MCP servers on demand
 
 Without `FLEET_MCP_CONFIG`, every spawned session starts **every** MCP server
