@@ -70,6 +70,7 @@ FLEET_HANDOFF_POLL                 knob: internal pacing/limit, safe in-code def
 FLEET_HANDOFF_RETRY_AFTER          knob: internal pacing/limit, safe in-code default (fleet-handoff-cycle.sh)
 FLEET_HANDOFF_VERIFY_TIMEOUT       knob: internal pacing/limit, safe in-code default (fleet-handoff-cycle.sh)
 FLEET_HISTORY_LEDGER               path: state/log location override (fleet-history.sh)
+FLEET_HOST_TUNE_MAXFILES_PLIST     seam: the maxfiles LaunchDaemon plist path (fleet-host-tune.sh)
 FLEET_HUB                          handoff: marks the hub pane (operator seat), set at hub spawn
 FLEET_HUB_VISITS_LOGDIR            path: state/log location override (fleet-hub-visits.sh)
 FLEET_HUB_VISITS_MAX               knob: internal pacing/limit, safe in-code default (fleet-hub-visits.sh)
@@ -155,6 +156,7 @@ FLEET_TOKEN_PROBE                  seam: a fake token-probe command
 FLEET_TRANSFER_BOOT_WAIT           knob: internal pacing/limit, safe in-code default (fleet-transfer.sh)
 FLEET_TRANSFER_EXIT_WAIT           knob: internal pacing/limit, safe in-code default (fleet-transfer.sh)
 FLEET_TRANSFER_IDLE_WAIT           knob: internal pacing/limit, safe in-code default (fleet-transfer.sh)
+FLEET_TRASH_PURGE_URGENT           handoff: the cleanup daemon marks an urgent trash purge (skips the load cap)
 FLEET_TRASH_SWEEP_BUDGET           knob: internal pacing/limit, safe in-code default (fleet-cleanup-daemon.sh)
 FLEET_WEBHOOK_DEBOUNCE             knob: internal pacing/limit, safe in-code default (fleet-webhook.sh)
 FLEET_WEBHOOK_EVENTS               knob: the GitHub events the webhook forwarder subscribes to (fleet-webhook.sh)
