@@ -119,6 +119,38 @@ fleet_state_dir() {
   printf '%s' "$d"
 }
 
+# --- «an EPIC batch is running on this login» (issue #953) -----------------------
+# /fleet-epic-run stamps $FLEET_CONF_DIR/global/epic-running as the first command of
+# every tick (bin/fleet-epic-heartbeat.sh); bin/fleet-install-sync.sh defers while
+# it is fresh, so the live install is never fast-forwarded under a running batch —
+# the loop's pane and its workers are idle between ticks, so the busy-window gate
+# alone cannot see the batch. A LEASE, not a lock: fresh for its own `ttl:` (default
+# 2700 s) counted from its `epoch:`, else from the file's mtime (a bare `touch` is a
+# hand override). No gh, no tmux: the daemon that reads it has neither.
+fleet_epic_running_file() { printf '%s/global/epic-running' "$FLEET_CONF_DIR"; }
+# fleet_epic_running [<file>] — 0 fresh / 1 stale / 2 no mark; prints one line:
+#   epic=<N> session=<sess> tick=<n> age=<s>s ttl=<s>s
+fleet_epic_running() {
+  local f="${1:-}" epoch ttl age epic sess tick
+  [ -n "$f" ] || f=$(fleet_epic_running_file)
+  [ -f "$f" ] || return 2
+  epoch=$(sed -n 's/^epoch: //p' "$f" | head -1)
+  case "$epoch" in ''|*[!0-9]*)
+    # GNU stat FIRST: `stat -f %m` on GNU means "filesystem status" and exits 0
+    # with non-mtime output, so it must not win (fleet_inflight_count, same trap).
+    epoch=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo 0) ;;
+  esac
+  case "$epoch" in ''|*[!0-9]*) epoch=0 ;; esac
+  ttl=$(sed -n 's/^ttl: //p' "$f" | head -1)
+  case "$ttl" in ''|*[!0-9]*|0) ttl="${FLEET_EPIC_RUNNING_TTL:-2700}" ;; esac
+  epic=$(sed -n 's/^epic: //p' "$f" | head -1)
+  sess=$(sed -n 's/^session: //p' "$f" | head -1)
+  tick=$(sed -n 's/^tick: //p' "$f" | head -1)
+  age=$(( $(date +%s) - epoch )); [ "$age" -lt 0 ] && age=0
+  printf 'epic=%s session=%s tick=%s age=%ss ttl=%ss' "${epic:--}" "${sess:--}" "${tick:--}" "$age" "$ttl"
+  [ "$age" -lt "$ttl" ]
+}
+
 # A session's conf path for READING, dual-layout: the new fleets/<sess>/conf if it
 # exists, else the legacy flat <sess>.conf, else the NEW path (so passing this to a
 # create still lands in the new layout). Never creates directories.
