@@ -29,6 +29,12 @@
 #   K. usage            --to must be HEAD, both revs required, from==to no-ops
 #   L. the skill        /fleet-sync-install calls apply (ff -> apply -> report)
 #                       rather than carrying its own copy of the steps
+#   N. --sync-logins    (issue #1122) opt-in and silent otherwise; the other
+#                       logins get --source <install> (+ --logins a,b, --dry-run);
+#                       every line lands under `logins:`; exit 0/1 -> ok,
+#                       4/5 -> WARN (exit 0), 6 -> FAIL + PARTIAL; runs on the
+#                       from==to no-op too; a failed step above skips it; the
+#                       skill passes the flag
 #
 # Exit 0 = pass.
 set -uo pipefail
@@ -340,6 +346,69 @@ if [ -f "$SKILL" ]; then
   contains 'L skill calls apply' "$s" 'fleet-install-apply.sh --from "$before" --to "$after"'
   not_contains 'L no hand-copied command pass' "$s" 'cp -p "$src"/*'
   not_contains 'L no hand-rolled bootstrap' "$s" 'launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude-fleet.<x>.plist'
+fi
+
+# --- N. --sync-logins (issue #1122) ----------------------------------------------
+# fleet-sync-logins.sh is a stub here (what it does is sync-logins-selftest's):
+# this pins the plumbing around it.
+cat > "$R/bin/fleet-sync-logins.sh" <<EOF
+#!/bin/bash
+echo "fleet-sync-logins.sh \$*" >> "$LOG"
+[ -n "\${STUB_SL_OUT:-}" ] && printf '%s\n' "\$STUB_SL_OUT"
+exit "\${STUB_SL_RC:-0}"
+EOF
+N0=$(git -C "$R" rev-parse HEAD)
+echo 'echo collect3' > "$R/bin/tmux-dash-collect.sh"
+N1=$(commit 'sync-logins stub + a script change')
+run_ap --from "$N0" --to "$N1"
+eq 'N not requested: exit 0' 0 "$RC"
+not_contains 'N not requested: silent' "$OUT" 'logins:'
+ok 'N not requested: not called' "! grep -q '^fleet-sync-logins.sh' '$LOG'"
+SLO=$'source:  x @ abc1234\nlogin  shape head  drift  state\njudy   git  abc1234  0  off — auto-update off\nliam: synced to abc1234 · backup /b · daemons kicked 1\nother logins on this machine: 1 synced / 0 skipped · 0 already current · 1 off'
+STUB_SL_OUT="$SLO" run_ap --from "$N0" --to "$N1" --sync-logins
+eq 'N requested: exit 0' 0 "$RC"
+ok 'N requested: --source <install>, nothing else' "grep -qx 'fleet-sync-logins.sh --source $R' '$LOG'"
+contains 'N requested: rows land under logins:' "$OUT" 'logins:   liam: synced to abc1234'
+contains 'N requested: verdict carries the tail' "$OUT" 'logins: ok — 1 synced / 0 skipped · 0 already current · 1 off'
+contains 'N requested: apply ok' "$OUT" 'apply: ok —'
+STUB_SL_OUT="$SLO" run_ap --from "$N0" --to "$N1" --sync-logins=judy,liam --dry-run
+ok 'N named + dry-run: both passed through' "grep -qx 'fleet-sync-logins.sh --source $R --logins judy,liam --dry-run' '$LOG'"
+STUB_SL_OUT='other logins on this machine: 2 · 1 current · 1 to sync · 0 blocked (dry run — nothing changed)' STUB_SL_RC=1 run_ap --from "$N0" --to "$N1" --sync-logins --dry-run
+eq 'N dry-run drift (exit 1): ok' 0 "$RC"
+contains 'N dry-run drift: the tail' "$OUT" 'logins: ok — 2 · 1 current · 1 to sync · 0 blocked (dry run — nothing changed)'
+STUB_SL_OUT='other logins on this machine: 0 synced / 1 skipped · 0 already current' STUB_SL_RC=4 run_ap --from "$N0" --to "$N1" --sync-logins
+eq 'N blocked (4): exit 0' 0 "$RC"
+contains 'N blocked: WARN, untouched' "$OUT" 'logins: WARN — 0 synced / 1 skipped · 0 already current; a blocked login is untouched'
+STUB_SL_RC=5 run_ap --from "$N0" --to "$N1" --sync-logins
+eq 'N needs sudo (5): exit 0' 0 "$RC"
+contains 'N needs sudo: WARN names the fix' "$OUT" 'run the printed sudo command as an admin'
+STUB_SL_OUT='judy: FAILED — HEAD is not abc1234; the backup is at /b' STUB_SL_RC=6 run_ap --from "$N0" --to "$N1" --sync-logins
+eq 'N failed (6): exit 1' 1 "$RC"
+contains 'N failed: FAIL line' "$OUT" 'logins: FAIL judy: FAILED — HEAD is not abc1234; the backup is at /b (exit 6'
+contains 'N failed: PARTIAL' "$OUT" 'apply: PARTIAL — 1 step(s) failed'
+STUB_SL_RC=0 run_ap --from "$N0" --to "$N1" --sync-logins
+contains 'N no tail line at all: still a verdict' "$OUT" 'logins: ok — nothing to sync'
+# from==to: nothing to apply for this login; the others still come along
+STUB_SL_OUT="$SLO" run_ap --from "$N1" --to "$N1" --sync-logins
+eq 'N no-op + logins: exit 0' 0 "$RC"
+ok 'N no-op + logins: called' "grep -qx 'fleet-sync-logins.sh --source $R' '$LOG'"
+contains 'N no-op + logins: verdict' "$OUT" 'logins: ok — 1 synced'
+contains 'N no-op + logins: apply line kept' "$OUT" 'apply: ok — install already at'
+STUB_SL_RC=6 run_ap --from "$N1" --to "$N1" --sync-logins
+eq 'N no-op + logins failed: exit 1' 1 "$RC"
+contains 'N no-op + logins failed: PARTIAL' "$OUT" 'apply: PARTIAL'
+run_ap --from "$N1" --to "$N1"
+ok 'N no-op, not requested: touched nothing' "[ ! -s '$LOG' ]"
+# a failed step above: never push a version this login could not apply
+tmpl zeta 60
+N2=$(commit 'a unit that will fail to bootstrap')
+FAIL_ON=bootstrap run_ap --from "$N1" --to "$N2" --sync-logins
+eq 'N after a FAIL: exit 1' 1 "$RC"
+contains 'N after a FAIL: the daemons step failed' "$OUT" 'daemons: FAIL'
+contains 'N after a FAIL: skipped, says why' "$OUT" "logins: skip — 1 step(s) failed above; fix them, then: bash $R/bin/fleet-sync-logins.sh"
+ok 'N after a FAIL: not called' "! grep -q '^fleet-sync-logins.sh' '$LOG'"
+if [ -f "$SKILL" ]; then
+  contains 'N the skill passes --sync-logins' "$(cat "$SKILL")" 'fleet-install-apply.sh --from "$before" --to "$after" --sync-logins'
 fi
 
 printf 'install-apply-selftest: PASS (%d checks)\n' "$CHECKS"

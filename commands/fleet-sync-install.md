@@ -8,7 +8,9 @@ changes land on master, this re-applies them to the **live install**
 It **mutates the live install and this machine's Claude config**: fast-forwards
 `~/.claude/fleet`, then hands the move to `bin/fleet-install-apply.sh` — which
 reloads only the daemons that changed, re-merges the `settings-hooks.json` delta,
-and installs new/changed commands and skills (removing retired ones). Idempotent — safe to
+installs new/changed commands and skills (removing retired ones), and then brings
+this machine's **other logins** to the same commit (issue #1122), skipping any
+that turned auto-update off. Idempotent — safe to
 re-run; a no-op when the live install is already at master. Normally run from the
 hub pane, but it has no seat gate (issue #439) — the live install is machine-global.
 
@@ -93,18 +95,19 @@ echo "before=$before after=$after"
 
 If it refuses to fast-forward, **stop and report** — the live install diverged
 (someone edited it in place); resolve that by hand before re-running. If
-`before == after`, the live install was already current — say "already at master,
-nothing to sync" and **jump to step 4** (the other logins can drift while this
-one is current).
+`before == after`, the live install was already current — say so, and **still run
+step 3**: apply is a no-op for this login then, but its `--sync-logins` step is
+what brings the machine's other logins along (issue #1122), and they can drift
+while this one is current.
 
 ## 3. Apply the move — ONE command (issue #1119)
 
 Everything a move implies beyond the files themselves is one non-interactive
-script, the same one the install-sync daemon runs, so a hand sync and an
-automatic one cannot drift apart:
+script, the same one the install-sync daemon runs (minus the last flag), so a
+hand sync and an automatic one cannot drift apart:
 
 ```sh
-bash ~/.claude/fleet/bin/fleet-install-apply.sh --from "$before" --to "$after"
+bash ~/.claude/fleet/bin/fleet-install-apply.sh --from "$before" --to "$after" --sync-logins
 ```
 
 Driven by the `before..after` diff, so nothing reloads or re-merges unless it
@@ -136,60 +139,73 @@ actually moved. One line per step (`<step>: …`), in this order:
   `fleet-ui-refresh.sh --all` on every live fleet, with `--from`'s conf as the
   before-file for the unbind diff (#248, #295).
 - **repark** — stale sleeping-worker pages re-parked on every live fleet (#1064).
+- **logins** — `--sync-logins` (issue #1122): the machine's other logins are
+  brought to this commit by `fleet-sync-logins.sh`, as the last step and only
+  when every step above passed. Step 4 says how to read its lines. The
+  install-sync daemon runs apply *without* this flag — each login follows
+  `stable` on its own; only a hand sync pushes.
 
 The last line is `apply: ok …`, or `apply: PARTIAL …` with exit 1 — the `FAIL`
 lines above it name the step and what to do. Exit 2 is a usage error (`--to`
-must be the install's HEAD). `--dry-run` previews without changing anything.
+must be the install's HEAD). `--dry-run` previews without changing anything
+(the logins step then plans and prints, syncing nothing).
 
-## 4. Bring the machine's other logins along (issue #1069)
+## 4. The other logins — read the `logins:` lines (issues #1069, #1122)
 
 A shared machine has one `~/.claude/fleet` **per login**, each with its own
-daemons — and this command only ever moved yours. On 2026-09-23 four of the Mac
+daemons — and steps 2–3 only ever moved yours. On 2026-09-23 four of the Mac
 mini's five logins sat 5–13 days behind the fifth, 120–130 scripts each, with every
-daemon green. So finish by syncing them from this install:
+daemon green — and the second command that fixed it was the one nobody remembered
+to run. So `--sync-logins` runs it for you, as the apply's last step:
+`fleet-sync-logins.sh` plans first (per login: shape, head, drift, local edits,
+whether it turned auto-update off), then — as each login — backs up what will
+change, rsyncs the git-tracked entries of THIS install's HEAD (a guest install
+gets only the entries it already has; `fleet.conf`, `logs/` and `.git/` are never
+touched), moves a checkout's HEAD to match, and kickstarts that login's daemons.
+Its every line lands under `logins:   `, and the verdict line is the reason:
 
-```sh
-bash ~/.claude/fleet/bin/fleet-sync-logins.sh
-```
+- **`logins: ok — N synced / M skipped · K already current [· J off]`** — every
+  login that has auto-update on is at this commit. A machine with one login
+  reads `nothing to sync`.
+- **`off` rows** (issue #1122) — that login set `FLEET_INSTALL_SYNC=0` (in its
+  `~/.config/claude-fleet/fleet.settings`, or its install's `fleet.conf`). It is
+  listed, left alone, and counted apart — never drifted, never blocked, never an
+  error: a login's own choice is not yours to overrule from here. To push it
+  anyway, name it — `--sync-logins=<login>` (or by hand,
+  `fleet-sync-logins.sh --logins <login>`; `--include-off` for all of them).
+- **`logins: WARN — … blocked`** — a login has local edits, or its install is
+  NEWER than this one. Nothing changed for it. Don't `--force` it blindly — newer
+  means run the sync from THAT login instead; edits are someone's work (the row
+  names the files).
+- **`logins: WARN — … needs sudo`** — no passwordless sudo for another login's
+  files. Nothing changed for it; relay the printed `sudo … --logins <u>` command
+  to the operator.
+- **`logins: FAIL …`** (with `apply: PARTIAL`, exit 1) — a sync or its
+  verification failed; the `FAILED` row names the backup to restore from.
+- **`logins: skip — N step(s) failed above`** — a step of YOUR apply failed, so
+  nothing was pushed to the others (never push a version this login could not
+  apply). Fix the `FAIL` lines, re-run step 3.
 
-It plans first (per login: shape, head, drift, local edits), then — as each login
-— backs up what will change, rsyncs the git-tracked entries of THIS install's
-HEAD (a guest install gets only the entries it already has; `fleet.conf`, `logs/`
-and `.git/` are never touched), moves a checkout's HEAD to match, and kickstarts
-that login's daemons. A machine with one login prints "nothing to sync" (exit 0).
-Act on the exit code — it is the reason:
-
-- **0** — every other login is at this commit.
-- **4** — a login was **blocked**: it has local edits, or its install is NEWER
-  than this one. Don't `--force` it blindly — newer means run the sync from THAT
-  login instead; edits are someone's work (the plan line names the files).
-- **5** — no passwordless sudo for another login's files. Nothing changed for it;
-  relay the printed `sudo … --logins <u>` command to the operator.
-- **6** — a sync or its verification failed; the line names the backup to
-  restore from.
-
-A login the table shows as shape `copy` is a file-copy install: it cannot say
+A login the rows show as shape `copy` is a file-copy install: it cannot say
 which commit it holds (only a sync marker can) and cannot update itself. Turn it
-into a clone once — `bash ~/.claude/fleet/bin/fleet-sync-logins.sh --to-git`
+into a clone once, by hand — `bash ~/.claude/fleet/bin/fleet-sync-logins.sh --to-git`
 (`--dry-run` first; `--logins a,b` to pick) — and it becomes an ordinary
 checkout at the version it had, origin = the public repo over https, with
 `fleet.conf`, `logs/` and its local files carried across and the old dir kept
 whole as `~u/.claude/fleet.copy-<date>` (issue #1121). Logins that are already
 checkouts are skipped; a copy with local edits is blocked (`--force` converts,
-the old dir keeps the edits). The same exit codes apply; `--to-git` never runs
-the sync itself — run the plain command afterwards to bring the new checkout
-forward.
-
-`--dry-run` previews. Relay its last line
-(`other logins on this machine: N synced / M skipped · K already current`) in
-step 5.
+the old dir keeps the edits); an `off` copy is left alone like any other off
+login. `--to-git` never runs the sync itself — re-run step 3 afterwards to bring
+the new checkout forward.
 
 ## 5. Report — keep it short
 
 One line naming what synced: the `before → after` sha, the apply's final line,
 any of its lines that did something (a daemon reloaded / added / retired, hooks
 re-merged, commands or skills installed / removed, a personal-skill WARN, dash
-panes refreshed, conf reloaded, pages re-parked) or FAILed, and step 4's line.
+panes refreshed, conf reloaded, pages re-parked) or FAILed, and the `logins:`
+verdict line — with any `off` row and any WARN, since each names something only
+the operator can decide.
 If you stopped at step 1 (not a checkout) or step 2 (diverged / already current),
 report that instead with the one-line reason.
 

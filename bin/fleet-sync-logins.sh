@@ -1,6 +1,7 @@
 #!/bin/bash
-# fleet-sync-logins.sh [--dry-run] [--logins a,b] [--force] [--source <dir>]
-#                      [--homes <dir>] [--summary] [--to-git [--origin <url>]]
+# fleet-sync-logins.sh [--dry-run] [--logins a,b] [--include-off] [--force]
+#                      [--source <dir>] [--homes <dir>] [--summary]
+#                      [--to-git [--origin <url>]]
 #   — keep every login's ~/.claude/fleet on ONE machine at the same commit
 #     (issue #1069); --to-git turns a copy install into a git clone (issue #1121).
 #
@@ -50,6 +51,18 @@
 #     what it replaces).
 #   - No passwordless sudo → nothing is changed for that login; the exact
 #     command to run it as an admin is printed instead.
+#   - A login that turned auto-update OFF is listed and left alone (issue
+#     #1122): FLEET_INSTALL_SYNC=0 in its settings file
+#     (`$FLEET_CONF_DIR/fleet.settings`, FLEET_CONF_DIR per its install conf,
+#     default ~u/.config/claude-fleet) or, under that, its ~u/.claude/fleet/
+#     fleet.conf — the same precedence fleet-lib.sh gives the login's own reads;
+#     unset = on. The conf is read as text (as the owner when unreadable), never
+#     sourced. Its state is `off`: not current, not drifted, not blocked, and
+#     never an error — /fleet-sync-install ends with this sync, and a login's
+#     own choice is not the operator's to overrule from another login. Naming
+#     it in --logins syncs it anyway (that login was asked for); --include-off
+#     syncs every off login. Off wins over blocked: an off login is not this
+#     run's to unblock either.
 #
 # --to-git (issue #1121) — convert, instead of sync. A copy install cannot say
 # which version it is (only its marker can, and only if a sync wrote one) and
@@ -85,8 +98,9 @@
 #   1  --dry-run only: drift found (--to-git: a copy install to convert)
 #   0  every selected login is at the source commit (--to-git: is a checkout)
 #
-# --summary prints ONE line (`4 other · 1 current · 3 drifted (…)`) and nothing
-# else; it implies --dry-run. `fleet-install-version.sh` reads it for its
+# --summary prints ONE line (`4 other · 1 current · 1 off · 2 drifted (…)`; the
+# `off` count is there only when some login is off, so a machine with none reads
+# as before) and nothing else; it implies --dry-run. `fleet-install-version.sh` reads it for its
 # `logins:` line, so the per-login drift of a multi-login machine is on the same
 # read as the machine's own.
 #
@@ -110,13 +124,14 @@ SUDO="${FLEET_SYNC_LOGINS_SUDO-sudo -n}"
 LAUNCHCTL="${FLEET_SYNC_LOGINS_LAUNCHCTL:-launchctl}"
 DAEMON_DIR="${FLEET_SYNC_LOGINS_DAEMON_DIR:-/Library/LaunchDaemons}"
 TMPROOT="${FLEET_SYNC_LOGINS_TMP:-/tmp}"
-dry=0 force=0 only='' summary=0 togit=0 origin=''
+dry=0 force=0 only='' summary=0 togit=0 origin='' incoff=0
 
 usage() { sed -n '2,/^set -u/p' "$SELF" | sed '$d' | sed 's/^# \{0,1\}//'; }
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run|-n) dry=1 ;;
     --force)      force=1 ;;
+    --include-off) incoff=1 ;;
     --summary)    summary=1; dry=1 ;;
     --to-git)     togit=1 ;;
     --origin)     shift; origin="${1:-}" ;;
@@ -168,6 +183,32 @@ oread() {
   if [ -r "$2" ]; then cat "$2" 2>/dev/null
   elif as_owner "$1"; then $SUDO -u "$1" cat "$2" 2>/dev/null
   fi
+}
+# conf_val <text> <KEY> — the last plain `KEY=value` assignment in a conf's
+# text, unquoted, trailing comment dropped. A conf is READ, never sourced:
+# another login's file is not code to run here.
+conf_val() {
+  printf '%s\n' "$1" | sed -n "s/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}$2=//p" | tail -1 \
+    | sed "s/[[:space:]]*#.*$//; s/^[\"']//; s/[\"'][[:space:]]*$//"
+}
+# autosync_off <owner> <dir> <home> → true iff that login turned auto-update off
+# (FLEET_INSTALL_SYNC=0; issue #1122). Its settings file wins over the install's
+# fleet.conf, as in fleet-lib.sh; unset anywhere = on. FLEET_CONF_DIR is taken
+# from the install conf when set there (a `$HOME`/`~` prefix means that login's
+# home), default ~u/.config/claude-fleet.
+autosync_off() {
+  _c=$(oread "$1" "$2/fleet.conf")
+  _v=$(conf_val "$_c" FLEET_INSTALL_SYNC)
+  _cd=$(conf_val "$_c" FLEET_CONF_DIR)
+  case "$_cd" in
+    '')          _cd="$3/.config/claude-fleet" ;;
+    '$HOME'/*)   _cd="$3/${_cd#\$HOME/}" ;;
+    '${HOME}'/*) _cd="$3/${_cd#\$\{HOME\}/}" ;;
+    '~'/*)       _cd="$3/${_cd#\~/}" ;;
+  esac
+  _s=$(conf_val "$(oread "$1" "$_cd/fleet.settings")" FLEET_INSTALL_SYNC)
+  [ -n "$_s" ] && _v=$_s
+  [ "$_v" = 0 ]
 }
 # to_https <url> — an origin URL as its https form (git@host:path, ssh://…)
 to_https() {
@@ -368,6 +409,19 @@ for d in "$homes"/*/.claude/fleet; do
       fi
     fi
   fi
+  # A login that turned auto-update off is listed and left alone (issue #1122)
+  # unless --logins names it or --include-off is given. Decided last, over
+  # blocked / sync / current alike: an off login is not this run's to touch,
+  # unblock, or count toward the machine's drift.
+  if [ "$incoff" -eq 0 ] && [ "$state" != skip ]; then
+    case ",$only," in
+      *",$login,"*) ;;
+      *) if autosync_off "$owner" "$rd" "$(dirname "$(dirname "$d")")"; then
+           state=off target=''
+           note="auto-update off (FLEET_INSTALL_SYNC=0) — left alone; --logins $login or --include-off syncs it anyway"
+         fi ;;
+    esac
+  fi
   plan="$plan$login|$rd|$owner|$shape|$head|$n|$state|$note|$(echo $ents | tr ' ' ',')|$target
 "
 done
@@ -378,13 +432,14 @@ if [ -n "$only" ]; then
   done
 fi
 
-total=0 ncur=0 ndrift=0 nblock=0 nskipgit=0 driftlist=''
+total=0 ncur=0 ndrift=0 nblock=0 nskipgit=0 noff=0 driftlist=''
 while IFS='|' read -r login rd owner shape head n state note ents target; do
   [ -n "$login" ] || continue
   total=$((total + 1))
   case "$state" in
     current) ncur=$((ncur + 1)) ;;
     skip)    nskipgit=$((nskipgit + 1)) ;;
+    off)     noff=$((noff + 1)) ;;
     blocked) nblock=$((nblock + 1)); driftlist="$driftlist $login:$n(blocked)" ;;
     *)       ndrift=$((ndrift + 1)); driftlist="$driftlist $login:$n" ;;
   esac
@@ -392,8 +447,11 @@ done <<EOF
 $plan
 EOF
 
+# `· N off` only when some login is off — before `drifted`, so a reader keyed on
+# the ` 0 drifted` tail (fleet-install-version.sh) is unchanged either way.
+offtail=''; [ "$noff" -gt 0 ] && offtail=" · $noff off"
 if [ "$summary" -eq 1 ]; then
-  line="$total other · $ncur current · $ndrift drifted"
+  line="$total other · $ncur current$offtail · $ndrift drifted"
   [ "$nblock" -gt 0 ] && line="$line · $nblock blocked"
   [ -n "$driftlist" ] && line="$line (${driftlist# })"
   printf '%s\n' "$line"
@@ -416,9 +474,9 @@ EOF
 
 if [ "$dry" -eq 1 ]; then
   if [ "$togit" -eq 1 ]; then
-    say "other logins on this machine: $total · $ndrift to convert · $nskipgit already git checkouts · $nblock blocked (dry run — nothing changed)"
+    say "other logins on this machine: $total · $ndrift to convert · $nskipgit already git checkouts · $nblock blocked$offtail (dry run — nothing changed)"
   else
-    say "other logins on this machine: $total · $ncur current · $ndrift to sync · $nblock blocked (dry run — nothing changed)"
+    say "other logins on this machine: $total · $ncur current · $ndrift to sync · $nblock blocked$offtail (dry run — nothing changed)"
   fi
   if [ "$nblock" -gt 0 ]; then exit 4; elif [ "$ndrift" -gt 0 ]; then exit 1; else exit 0; fi
 fi
@@ -622,9 +680,9 @@ $plan
 EOF
 
 if [ "$togit" -eq 1 ]; then
-  say "other logins on this machine: $nsync converted / $nskip skipped · $nskipgit already git checkouts"
+  say "other logins on this machine: $nsync converted / $nskip skipped · $nskipgit already git checkouts$offtail"
 else
-  say "other logins on this machine: $nsync synced / $nskip skipped · $ncur already current"
+  say "other logins on this machine: $nsync synced / $nskip skipped · $ncur already current$offtail"
 fi
 if [ -n "$sudo_cmds" ]; then
   say "no passwordless sudo for $nsudo login(s) — run as an admin:"

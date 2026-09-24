@@ -35,6 +35,12 @@
 #                  then moves the new checkout forward; sudo / no-sudo paths;
 #                  --summary --to-git and a source without an https origin refuse
 #                  (issue #1121)
+#   J. off         FLEET_INSTALL_SYNC=0 (issue #1122): an off login is listed
+#                  as `off`, never touched, never blocked, never an error, and
+#                  counted apart in --summary / the tails; --logins <it> or
+#                  --include-off syncs it; the settings file wins over the
+#                  install conf (a relocated FLEET_CONF_DIR honoured); --to-git
+#                  skips an off copy the same way
 #
 # Exit 0 = pass.
 set -uo pipefail
@@ -432,5 +438,95 @@ eq "to-git unknown marker forced: at the source HEAD" "$C7" "$(g "$GI" rev-parse
 run --source "$SRC" --to-git --origin https://example.com/x.git --logins ivy
 ok "to-git --origin: exit 0" '[ "$RC" -eq 0 ]'
 eq "to-git --origin: used as given" "https://example.com/x.git" "$(g "$IV" remote get-url origin)"
+
+# ============================================================================
+# J. auto-update off — FLEET_INSTALL_SYNC=0 (issue #1122)
+# ============================================================================
+# A fresh homes root, everyone one commit behind: judy is a checkout that set
+# FLEET_INSTALL_SYNC=0 in its install conf, liam a checkout with it unset (on),
+# mia a copy install (marker at C7) that set it, quoted, in its conf.
+echo 'v8' > "$SRC/bin/a.sh"; g "$SRC" commit -qam eight
+C8=$(g "$SRC" rev-parse HEAD)
+H2="$WORK/homes2"; mkdir -p "$H2"
+for u in judy liam; do git clone -q "$SRC" "$H2/$u/.claude/fleet"; g "$H2/$u/.claude/fleet" reset -q --hard "$C7"; done
+J="$H2/judy/.claude/fleet"; LM="$H2/liam/.claude/fleet"; MI="$H2/mia/.claude/fleet"
+printf 'FLEET_REPO=judy/x\nFLEET_INSTALL_SYNC=0   # my call\n' > "$J/fleet.conf"
+echo 'FLEET_REPO=liam/x' > "$LM/fleet.conf"
+mkdir -p "$MI"; cp -Rp "$SRC/bin" "$MI/"; echo 'v7' > "$MI/bin/a.sh"
+printf '%s me now\n' "$C7" > "$MI/.fleet-synced-from"; printf 'FLEET_INSTALL_SYNC="0"\n' > "$MI/fleet.conf"
+jrun() { OUT=$(bash "$SL" --source "$SRC" --homes "$H2" "$@" 2>&1); RC=$?; }
+snap2() { (cd "$H2" && find . -type f -exec cksum {} + | sort) ; }
+
+before=$(snap2)
+jrun --dry-run
+eq "off dry-run: exit 1 — liam drifts; off is no error" 1 "$RC"
+ok "off dry-run: judy listed off, with the way in" 'printf "%s\n" "$OUT" | grep -q "^judy  *git .* off — auto-update off (FLEET_INSTALL_SYNC=0) — left alone; --logins judy or --include-off syncs it anyway"'
+ok "off dry-run: a quoted 0 in a copy install's conf counts" 'printf "%s\n" "$OUT" | grep -q "^mia  *copy .* off — auto-update off"'
+ok "off dry-run: liam (unset = on) still syncs" 'printf "%s\n" "$OUT" | grep -q "^liam  *git .* sync — 1 commit(s) behind"'
+contains "off dry-run: tail counts off apart" "$OUT" "3 · 0 current · 1 to sync · 0 blocked · 2 off (dry run — nothing changed)"
+eq "off dry-run: nothing changed" "$before" "$(snap2)"
+jrun --summary
+eq "off summary: off before drifted, neither current nor drifted" "3 other · 0 current · 2 off · 1 drifted (liam:1)" "$OUT"
+eq "off summary: exit 1 (liam)" 1 "$RC"
+
+: > "$WORK/launchctl.log"
+jrun
+eq "off act: exit 0" 0 "$RC"
+ok "off act: tail" 'printf "%s\n" "$OUT" | grep -qx "other logins on this machine: 1 synced / 0 skipped · 0 already current · 2 off"'
+eq "off act: liam synced" "$C8" "$(g "$LM" rev-parse HEAD)"
+eq "off act: judy untouched" "$C7" "$(g "$J" rev-parse HEAD)"
+eq "off act: mia untouched" "v7" "$(cat "$MI/bin/a.sh")"
+ok "off act: no backup made for an off login" '[ -z "$(ls -d "$H2"/judy/.claude/fleet.bak-* "$H2"/mia/.claude/fleet.bak-* 2>/dev/null)" ]'
+jrun --summary
+eq "off summary, liam current: still 0 drifted" "3 other · 1 current · 2 off · 0 drifted" "$OUT"
+eq "off summary, liam current: exit 0" 0 "$RC"
+
+# off wins over blocked: judy's local edit is not this run's to report
+echo 'judy work' > "$J/bin/b.sh"
+jrun --dry-run
+eq "off + edit: exit 0, not 4" 0 "$RC"
+ok "off + edit: still off, not blocked" 'printf "%s\n" "$OUT" | grep -q "^judy  *git .* off — auto-update off"'
+# named in --logins: off is overruled — and now the edit is what blocks
+jrun --dry-run --logins judy
+eq "named: --logins overrules off, so the edit blocks (exit 4)" 4 "$RC"
+ok "named: blocked row names the file" 'printf "%s\n" "$OUT" | grep -q "^judy  *git .* blocked — local edits: bin/b.sh"'
+g "$J" checkout -q -- bin/b.sh
+jrun --logins judy
+eq "named: synced" 0 "$RC"
+eq "named: judy at the source commit" "$C8" "$(g "$J" rev-parse HEAD)"
+
+# --include-off: every off login, named or not
+g "$J" reset -q --hard "$C7"
+jrun --include-off
+eq "include-off: exit 0" 0 "$RC"
+ok "include-off: both off logins synced, none reported off" 'printf "%s\n" "$OUT" | grep -qx "other logins on this machine: 2 synced / 0 skipped · 1 already current"'
+eq "include-off: judy at the source commit" "$C8" "$(g "$J" rev-parse HEAD)"
+eq "include-off: mia synced" "v8" "$(cat "$MI/bin/a.sh")"
+
+# the settings file wins over the install conf, both ways; a relocated
+# FLEET_CONF_DIR ($HOME-prefixed) is followed; `export KEY=` counts
+g "$J" reset -q --hard "$C7"
+mkdir -p "$H2/judy/.config/claude-fleet"; echo 'FLEET_INSTALL_SYNC=1' > "$H2/judy/.config/claude-fleet/fleet.settings"
+jrun --dry-run
+ok "settings 1 over conf 0: judy syncs" 'printf "%s\n" "$OUT" | grep -q "^judy  *git .* sync — 1 commit(s) behind"'
+echo 'FLEET_REPO=judy/x' > "$J/fleet.conf"; echo 'FLEET_INSTALL_SYNC=0' > "$H2/judy/.config/claude-fleet/fleet.settings"
+jrun --dry-run
+ok "settings 0 over conf unset: judy off" 'printf "%s\n" "$OUT" | grep -q "^judy  *git .* off — auto-update off"'
+rm -rf "$H2/judy/.config"
+printf 'FLEET_REPO=judy/x\nFLEET_CONF_DIR="$HOME/cfg"\n' > "$J/fleet.conf"
+mkdir -p "$H2/judy/cfg"; echo 'export FLEET_INSTALL_SYNC=0' > "$H2/judy/cfg/fleet.settings"
+jrun --dry-run
+ok "relocated FLEET_CONF_DIR: its settings file is the one read" 'printf "%s\n" "$OUT" | grep -q "^judy  *git .* off — auto-update off"'
+eq "off never moves the exit code: judy + mia off, liam current → 0" 0 "$RC"
+
+# --to-git leaves an off copy alone the same way
+jrun --to-git --dry-run
+eq "to-git: an off copy is not converted, exit 0" 0 "$RC"
+ok "to-git: mia off" 'printf "%s\n" "$OUT" | grep -q "^mia  *copy .* off — auto-update off"'
+contains "to-git: tail counts off" "$OUT" "3 · 0 to convert · 2 already git checkouts · 0 blocked · 1 off (dry run — nothing changed)"
+ok "to-git: mia still a copy" '[ ! -e "$MI/.git" ]'
+jrun --to-git --dry-run --logins mia
+eq "to-git named: a copy to convert (dry-run exit 1)" 1 "$RC"
+ok "to-git named: mia converts at its marker" 'printf "%s\n" "$OUT" | grep -q "^mia  *copy .* to-git — clone at $(g "$SRC" rev-parse --short "$C8")"'
 
 echo "sync-logins-selftest OK ($CHECKS checks)"
