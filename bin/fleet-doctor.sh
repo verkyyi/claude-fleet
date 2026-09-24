@@ -1138,6 +1138,82 @@ if command -v launchctl >/dev/null 2>&1; then
   esac
 fi
 
+# 4. sleep (issue #1076). A host that sleeps is a host whose sessions stop
+#    mid-turn, whose daemons miss their ticks and whose SSH drops — with nobody
+#    at the keyboard to wake it. `pmset -g` prints the ACTIVE power profile; its
+#    `sleep` line is idle-minutes-until-sleep (0 = never). Non-zero → WARN naming
+#    the fix, `sudo pmset -a sleep 0`, with the two companions that keep an
+#    unattended box coming back (autorestart 1 after a power cut, womp 1 for
+#    wake-on-LAN) read from the same output and shown on the row. Report-only:
+#    the doctor never runs `pmset -a`. FLEET_DOCTOR_SLEEP=0 silences it.
+slchk="${FLEET_DOCTOR_SLEEP:-$(_gconf_val FLEET_DOCTOR_SLEEP)}"
+if [ "$slchk" != 0 ] && command -v pmset >/dev/null 2>&1; then
+  pmout=$(pmset -g 2>/dev/null)
+  slval=$(printf '%s\n' "$pmout" | awk '$1=="sleep"{print $2; exit}')
+  arval=$(printf '%s\n' "$pmout" | awk '$1=="autorestart"{print $2; exit}')
+  wompval=$(printf '%s\n' "$pmout" | awk '$1=="womp"{print $2; exit}')
+  slnote=""
+  [ -n "$arval" ] && slnote="$slnote autorestart=$arval"
+  [ -n "$wompval" ] && slnote="$slnote womp=$wompval"
+  [ -n "$slnote" ] && slnote=" (${slnote# })"
+  slhint=""
+  [ "$arval" = 0 ] && slhint="$slhint; autorestart is 0 — after a power cut the box stays down: \`sudo pmset -a autorestart 1\`"
+  [ "$wompval" = 0 ] && slhint="$slhint; womp is 0 — no wake-on-LAN: \`sudo pmset -a womp 1\`"
+  case "$slval" in
+    0)
+      pass sleep "never sleeps: pmset sleep 0$slnote$slhint${slhint:+ (see docs/HOST.md#headless)}" ;;
+    ''|*[!0-9]*)
+      info sleep "could not read the sleep setting (pmset -g: $(printf '%s' "$pmout" | tr '\n' ' ' | cut -c1-120)) — see docs/HOST.md#headless" ;;
+    *)
+      warn sleep "host sleeps after $slval min idle — an unattended host should never sleep: \`sudo pmset -a sleep 0 autorestart 1 womp 1\` (undo: \`sudo pmset -a sleep $slval\`; see docs/HOST.md#headless)$slnote. Silence: FLEET_DOCTOR_SLEEP=0" ;;
+  esac
+fi
+
+# 5. siri (issue #1076). Siri on keeps a family of helpers resident for the
+#    console user — sirittsd, siriactionsd, assistantd, siriknowledged, Siri AI —
+#    ~400 MB measured on 2026-09-24 on a host nobody talks to. It is a per-user
+#    setting: `defaults read com.apple.assistant.support "Assistant Enabled"` is
+#    1 while on; 0, or no key at all (never enabled), while off. INFO, not WARN:
+#    it costs memory, not CPU, and the fix is a Settings toggle
+#    (docs/HOST.md#headless). Read-only — never `defaults write`.
+#    FLEET_DOCTOR_SIRI=0 silences it.
+sichk="${FLEET_DOCTOR_SIRI:-$(_gconf_val FLEET_DOCTOR_SIRI)}"
+if [ "$sichk" != 0 ] && command -v defaults >/dev/null 2>&1; then
+  sival=$(defaults read com.apple.assistant.support "Assistant Enabled" 2>/dev/null | tr -d '[:space:]')
+  case "$sival" in
+    1)
+      info siri "Siri is on — its helpers (sirittsd, siriactionsd, assistantd, Siri AI) stay resident (~400 MB for the speech service alone) on a host nobody talks to; turn it off: System Settings → Apple Intelligence & Siri → Siri off (see docs/HOST.md#headless). Silence: FLEET_DOCTOR_SIRI=0" ;;
+    0)
+      pass siri "Siri off" ;;
+    '')
+      pass siri "Siri off (never enabled — no Assistant Enabled key)" ;;
+    *)
+      info siri "could not read the Siri setting (Assistant Enabled=$sival) — see docs/HOST.md#headless" ;;
+  esac
+fi
+
+# 6. icloud (issue #1076). Signed into iCloud, the host runs the sync daemons for
+#    an account no session uses: bird (iCloud Drive), cloudd (CloudKit) and
+#    fileproviderd (the File Provider host iCloud Drive syncs through). On
+#    2026-09-24 contactsd alone had 4.5 CPU-minutes syncing a server's contacts.
+#    INFO, not WARN: a signed-in account can be deliberate (Find My, Screen
+#    Sharing sign-in), and signing out is a Settings decision
+#    (docs/HOST.md#headless). The row names which daemons are alive so a partial
+#    sign-out (iCloud Drive off, account kept) reads as progress.
+#    FLEET_DOCTOR_ICLOUD=0 silences it.
+icchk="${FLEET_DOCTOR_ICLOUD:-$(_gconf_val FLEET_DOCTOR_ICLOUD)}"
+if [ "$icchk" != 0 ] && command -v pgrep >/dev/null 2>&1; then
+  iclive=""
+  for icd in bird cloudd fileproviderd; do
+    pgrep -x "$icd" >/dev/null 2>&1 && iclive="$iclive $icd"
+  done
+  if [ -n "$iclive" ]; then
+    info icloud "iCloud sync daemons resident:$iclive — they sync an account no session uses; sign out of iCloud, or turn off iCloud Drive + Contacts: System Settings → Apple Account → iCloud (see docs/HOST.md#headless). Silence: FLEET_DOCTOR_ICLOUD=0"
+  else
+    pass icloud "no iCloud sync daemon resident (bird / cloudd / fileproviderd)"
+  fi
+fi
+
 fi  # Darwin host section
 
 # --- status line (optional: conf/statusline.sh is jq-gated) ---

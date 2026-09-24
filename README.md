@@ -180,8 +180,10 @@ plain shell scripts with no hidden state.
 
 Running it on an unattended machine (a Mac mini you reach over SSH)? Read
 **[docs/HOST.md](docs/HOST.md)** — the host setup that keeps the machine busy only
-with its sessions, starting with [turning off Spotlight](docs/HOST.md#spotlight).
-`fleet-doctor`'s `host` section checks each item.
+with its sessions: [turning off Spotlight](docs/HOST.md#spotlight), the
+[unattended-Mac checklist](docs/HOST.md#headless) (never sleep, no Siri, no
+iCloud sync, no GUI apps on the console) and [how much a container VM may
+take](docs/HOST.md#containers). `fleet-doctor`'s `host` section checks each item.
 
 ### The Claude-Code side ships as a plugin
 
