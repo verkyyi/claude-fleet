@@ -198,14 +198,18 @@ def inventory(refresh=False):
             args.append('--refresh')
         for line in run(args, timeout=20).splitlines():
             fields = line.split('\t')
-            if len(fields) != 10:
+            if len(fields) not in (10, 11):
                 continue
-            label, account, used, score, limited, hold, reset, fresh, token, model_ok = fields
+            label, account, used, score, limited, hold, reset, fresh, token, model_ok = fields[:10]
+            # Field 11 (issue #1073): FLEET_MODEL itself has headroom here, not
+            # just its fallback. Absent = the pre-#1073 row = no preference.
+            primary = fields[10] != '0' if len(fields) > 10 else True
             available = fresh == '1' and number(used) is not None
             accounts.append(dict(agent='claude', label=label, account=account or label,
                 key='claude/' + (account or label), available=available, utilization=number(used),
                 score=number(score), limited_until=int(limited), hold_until=int(hold), reset_at=int(reset),
                 login='valid' if token == '1' else 'no_credentials', model_ok=model_ok == '1',
+                model_primary=primary,
                 reason='available' if available else 'unreadable'))
     except (OSError, ValueError, subprocess.SubprocessError):
         errors.append('Claude account inventory unavailable')
@@ -272,9 +276,13 @@ def choose(data, agent, exclude=(), current='', allowed=('claude', 'codex')):
         candidates = held or candidates  # Existing phase preference is fail-open.
         if not candidates:
             continue
-        candidates.sort(key=lambda a: (-a['score'], not a.get('default', False)))
+        # An account that runs the fleet's model beats one that only has its
+        # fallback (issue #1073); hysteresis never keeps a fallback-only current.
+        candidates.sort(key=lambda a: (not a.get('model_primary', True), -a['score'], not a.get('default', False)))
         best = candidates[0]
         for row in candidates:
+            if row.get('model_primary', True) != best.get('model_primary', True):
+                continue
             if row['key'] == current and best['score'] - row['score'] <= 2 * float(os.environ.get('FLEET_ACCOUNT_PICK_HYST', '10')):
                 best = row
                 break

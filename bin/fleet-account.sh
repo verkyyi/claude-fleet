@@ -104,6 +104,11 @@
 #                          only then does anything change. --clear drops it. See
 #                          phase_plan() for the grid, and pick_active() for how a pending
 #                          slot is honoured (fail-open: it can never starve the pool).
+#   model-quota          — ccquota's per-MODEL windows from the cached payload (issue
+#                          #1073): label · model · capped|ok|unknown · reset · observed ·
+#                          util% · status. Every fetch also seeds the model-limited
+#                          ledger from them (model_quota_sync); an older ccquota with no
+#                          `models` prints nothing and seeds nothing.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
@@ -368,16 +373,21 @@ acct_eligible() { [ "$(acct_limited_until "$1")" -le "$(now)" ]; }
 # Both diagnostics go to stderr, which quota_fetch lets through: the quotawatch
 # tick logs them (deduped, see fleet-quotawatch.sh) and `quota --refresh` hands
 # them to the doctor. Silence here is what made this a 2026-09-11-shaped bug.
-quota_parse() {
-  local map="" l conf u
+# quota_label_map — "label<TAB>pinned-uuid" per pool label: how quota_parse and
+# quota_models_parse find each label's account in the payload.
+quota_label_map() {
+  local l conf u
   while IFS= read -r l; do
     [ -n "$l" ] || continue
     conf="$ACCT_DIR/$l.conf"; u=""
     [ -f "$conf" ] && u=$(sed -n 's/^[[:space:]]*CCQUOTA_ACCOUNT[[:space:]]*=[[:space:]]*//p' "$conf" | head -1 | tr -d '[:space:]"')
-    map="${map}${l}"$'\t'"${u}"$'\n'
+    printf '%s\t%s\n' "$l" "$u"
   done <<EOF
 $(acct_labels)
 EOF
+}
+quota_parse() {
+  local map; map=$(quota_label_map)
   # the JSON rides the environment: `python3 -` takes its PROGRAM from stdin
   local js; js=$(cat)
   QP_MAP="$map" QP_JSON="$js" python3 - <<'PY'
@@ -439,6 +449,81 @@ for line in os.environ.get("QP_MAP", "").splitlines():
           ep(fh.get("resets_at")), ep(sd.get("resets_at")), round(num(fh.get("percent_per_hour")) or 0)))
 PY
 }
+
+# --- per-MODEL windows from ccquota (issue #1073) --------------------------------
+# A Fable request's response carries its own weekly window
+# (anthropic-ratelimit-unified-7d_oi-*), separate from the account's 5h/7d, and
+# 3 of 4 pool accounts were at 7d_oi 1.0 on 2026-09-23 while their 7d sat at
+# 0.68–0.80. TokenLedger (tokenledger#155) exposes it per account as
+#   "models": {"claude-fable-5-1": {"claim":"7d_oi","utilization":9,
+#              "status":"allowed","resets_at":"…","observed_at":"…"}},
+#   "model_available": {"claude-fable-5-1": true}
+# quota_models_parse: that payload on stdin → one TSV row per (POOL label, model):
+#   label  model  verdict  reset-epoch  observed-epoch  util%|-  status|-
+# verdict: capped   — status rejected, utilization ≥ FLEET_MODEL_CAP_PCT, or
+#                     model_available false
+#          ok       — status allowed/allowed_warning, or model_available true
+#          unknown  — a model entry that says neither
+# An account with NO `models` object prints nothing: an older ccquota build has
+# no opinion about per-model caps, and "no opinion" must never read as
+# "available" — nothing downstream changes for it (the degenerate case).
+MODEL_CAP_PCT="${FLEET_MODEL_CAP_PCT:-100}"
+quota_models_parse() {
+  local map; map=$(quota_label_map)
+  local js; js=$(cat)
+  QP_MAP="$map" QP_JSON="$js" QP_CAP="$MODEL_CAP_PCT" python3 - <<'PY'
+import json, os, sys, datetime
+try:
+    d = json.loads(os.environ.get("QP_JSON", ""))
+except Exception:
+    sys.exit(0)
+accts = d.get("accounts") if isinstance(d, dict) else None
+if not isinstance(accts, list):
+    sys.exit(0)
+try: cap = float(os.environ.get("QP_CAP") or 100)
+except ValueError: cap = 100.0
+def num(v):
+    if v is None or isinstance(v, bool): return None
+    try: return float(v)
+    except (TypeError, ValueError): return None
+def ep(v):
+    if v is None or v == "" or isinstance(v, bool): return 0
+    if isinstance(v, (int, float)): return int(v)
+    try:
+        return int(datetime.datetime.fromisoformat(str(v).replace("Z", "+00:00")).timestamp())
+    except Exception:
+        return 0
+accts = [a for a in accts if isinstance(a, dict)]
+by_uuid = {a.get("account_uuid"): a for a in accts}
+by_label = {a.get("label"): a for a in accts}
+for line in os.environ.get("QP_MAP", "").splitlines():
+    if not line.strip(): continue
+    label, _, uuid = line.partition("\t")
+    a = by_uuid.get(uuid) if uuid else by_label.get(label)
+    if not a: continue
+    av = a.get("available")
+    if av is not None and not av: continue             # no reading at all (quota_parse says why)
+    models = a.get("models")
+    if not isinstance(models, dict): continue          # older ccquota: no opinion
+    flags = a.get("model_available")
+    if not isinstance(flags, dict): flags = {}
+    for mid, w in models.items():
+        if not isinstance(w, dict): continue
+        m = str(mid).strip().lower()
+        if not m or any(c.isspace() for c in m): continue
+        st = str(w.get("status") or "").strip().lower()
+        u = num(w.get("utilization"))
+        flag = flags.get(mid)
+        if st == "rejected" or (u is not None and u >= cap) or flag is False:
+            v = "capped"
+        elif st in ("allowed", "allowed_warning") or flag is True:
+            v = "ok"
+        else:
+            v = "unknown"
+        print("%s\t%s\t%s\t%d\t%d\t%s\t%s" % (label, m, v, ep(w.get("resets_at")),
+              ep(w.get("observed_at")), "-" if u is None else "%d" % round(u), st or "-"))
+PY
+}
 # quota_empty_streak <rows> — maintain the consecutive-EMPTY-fetch counter, which
 # is the only reading anything has of the BLIND axis (issue #684). The stamp is
 # refreshed unconditionally by design (see quota_fetch), so a hub that answers
@@ -490,12 +575,13 @@ quota_fetch() {
   printf '%s' "$rows" | atomic_write "$STATE_QUOTA"
   now | atomic_write "$STATE_QUOTA_TS"
   quota_empty_streak "$rows"
+  model_quota_sync "$raw"
 }
 
 # Metadata-only adapter for the provider-aware selector. Keep Claude's scores,
 # phase preference, model fallback and benches in their existing policy owner.
 cmd_claude_inventory() {
-  local rows ts fresh=0 l conf uuid used score u5 u7 r5 r7 reset token model_ok until fallback
+  local rows ts fresh=0 l conf uuid used score u5 u7 r5 r7 reset token model_ok primary until fallback
   rows=$(quota_rows "$([ "${1:-}" = --refresh ] && printf refresh || :)")
   ts=$(cat "$STATE_QUOTA_TS" 2>/dev/null || echo 0)
   case "$ts" in ''|*[!0-9]*) ts=0;; esac
@@ -524,14 +610,16 @@ PY
     fi
     score=$(pick_score "$rows" "$l"); token=0
     [ -n "$(acct_token "$l")" ] && token=1
-    model_ok=1; until=$(acct_model_limited_until "$l" "${FLEET_MODEL:-opus}")
+    model_ok=1; primary=1; until=$(acct_model_limited_until "$l" "${FLEET_MODEL:-opus}")
     if [ "$until" -gt "$(now)" ]; then
-      fallback="${FLEET_MODEL_FALLBACK-opus}"
+      primary=0; fallback="${FLEET_MODEL_FALLBACK-opus}"
       if [ -z "$fallback" ] || [ "$fallback" = "${FLEET_MODEL:-opus}" ] \
         || [ "$(acct_model_limited_until "$l" "$fallback")" -gt "$(now)" ]; then model_ok=0; fi
     fi
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$l" "$uuid" "$used" "$score" \
-      "$(acct_limited_until "$l")" "$(acct_phase_hold "$l")" "$reset" "$fresh" "$token" "$model_ok"
+    # Field 11, model_primary (issue #1073): 1 = FLEET_MODEL itself has headroom
+    # here, 0 = only the fallback does. The selector ranks the 1s first.
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$l" "$uuid" "$used" "$score" \
+      "$(acct_limited_until "$l")" "$(acct_phase_hold "$l")" "$reset" "$fresh" "$token" "$model_ok" "$primary"
   done <<EOF
 $(acct_labels)
 EOF
@@ -682,11 +770,12 @@ pick_score() {
 # also disqualifies it. The current account is KEPT while it is within PICK_HYST
 # points of the best, so near-equal accounts don't flip-flop between spawns.
 pick_best() {
-  local rows="$1" cur="$2" holds="$3" best="" bestsc=-1 cursc=-1 l sc u5 u7 util
+  local rows="$1" cur="$2" holds="$3" model="${4:-0}" best="" bestsc=-1 cursc=-1 l sc u5 u7 util
   while IFS= read -r l; do
     [ -n "$l" ] || continue
     acct_eligible "$l" || continue
     [ "$holds" = 1 ] && [ "$(acct_phase_hold "$l")" -gt "$(now)" ] && continue
+    [ "$model" = 1 ] && [ "$(acct_model_limited_until "$l" "$(pick_model)")" -gt 0 ] && continue
     u5=$(quota_field "$rows" "$l" 2); u7=$(quota_field "$rows" "$l" 3)
     [ -n "$u5" ] || continue                          # not in ccquota → no opinion
     util=$u5; [ "$u7" -gt "$util" ] && util=$u7
@@ -713,14 +802,37 @@ EOF
 # current (best effort) so sessions still launch. Reads the quota CACHE only —
 # this runs on the spawn path.
 pick_active() {
-  local cur="$1" rows best
+  local cur="$1" rows best=""
   rows=$(quota_rows cached)
   if [ -n "$rows" ]; then
-    best=$(pick_best "$rows" "$cur" 1)
+    if model_pref_on; then
+      best=$(pick_best "$rows" "$cur" 1 1)
+      [ -n "$best" ] || best=$(pick_best "$rows" "$cur" 0 1)
+    fi
+    [ -n "$best" ] || best=$(pick_best "$rows" "$cur" 1)
     [ -n "$best" ] || best=$(pick_best "$rows" "$cur" 0)
     [ -n "$best" ] && { printf '%s' "$best"; return 0; }
   fi
   pick_active_rr "$cur"
+}
+# model_pref_on — 0 iff the MODEL passes above apply (issue #1073): the fleet's
+# model (FLEET_PICK_MODEL from fleet-claude.sh, else FLEET_MODEL) is set and the
+# ledger holds a live cap for it on at least one account. Those passes run FIRST, ahead of the phase preference: an account that can run the
+# fleet's model beats one whose phase slot is due, because the other lands the
+# worker on the fallback for the whole session. With every account capped they
+# find nothing and the ordinary passes pick — fleet-claude.sh then launches on
+# FLEET_MODEL_FALLBACK. No live cap ⇒ the passes never run: nothing changes.
+pick_model() { printf '%s' "${FLEET_PICK_MODEL-${FLEET_MODEL:-}}"; }
+model_pref_on() {
+  [ -n "$(pick_model)" ] && [ -s "$STATE_MODEL_LIMITED" ] || return 1
+  local l
+  while IFS= read -r l; do
+    [ -n "$l" ] || continue
+    [ "$(acct_model_limited_until "$l" "$(pick_model)")" -gt 0 ] && return 0
+  done <<EOF
+$(acct_labels)
+EOF
+  return 1
 }
 pick_active_rr() {
   local cur="$1" i n start from idx
@@ -853,6 +965,11 @@ cmd_clear() {
 # FLEET_MODEL_FALLBACK while the cap holds) and the collector (relaunch the walled
 # window). <model> is FLEET_MODEL's alias grammar (fable/opus/…), lowercased; the
 # lookup matches an alias against a full model id either way (fable ~ claude-fable-5-1).
+#
+# Row: label<TAB>model<TAB>until<TAB>banner<TAB>set-at. set-at (issue #1073) is
+# when the row was written — what lets a LATER ccquota reading clear a banner's
+# row without an OLDER one doing so (see model_quota_sync). Readers take fields
+# 1-3 only, so a legacy 4-field row still reads the same.
 cmd_model_limited() {   # <label> <model> [banner] → prints the until-epoch
   local label="$1" model="${2:-}" banner="${3:-}" until
   [ -n "$label" ] && [ -n "$model" ] || { echo "model-limited: usage: model-limited <label> <model> [banner]" >&2; return 1; }
@@ -861,11 +978,89 @@ cmd_model_limited() {   # <label> <model> [banner] → prints the until-epoch
   until=$(banner_reset_epoch "$banner" "$(now)")
   if [ -n "$until" ]; then until=$(( until + RESET_BUFFER ))
   else                    until=$(( $(now) + MODEL_TTL )); fi
+  banner=$(printf '%s' "$banner" | tr '\t\n\r' '   ')   # one field, whatever the pane held
   mkdir -p "$STATE_DIR"; acct_lock
   { [ -f "$STATE_MODEL_LIMITED" ] && awk -F'\t' -v l="$label" -v m="$model" -v now="$(now)" '!($1==l && $2==m) && ($3+0)>now' "$STATE_MODEL_LIMITED"
-    printf '%s\t%s\t%s\t%s\n' "$label" "$model" "$until" "$banner"; } | atomic_write "$STATE_MODEL_LIMITED"
+    printf '%s\t%s\t%s\t%s\t%s\n' "$label" "$model" "$until" "$banner" "$(now)"; } | atomic_write "$STATE_MODEL_LIMITED"
   acct_unlock
   printf '%s' "$until"
+}
+
+# model_quota_sync <raw budget JSON> — seed the ledger above from ccquota's
+# per-model windows (issue #1073), so a cap is known BEFORE a session walks into
+# it: a spawn picks an account with headroom (pick_best's model pass, and the
+# inventory's model_primary), fleet-claude.sh launches on the fallback where
+# there is none, and quotawatch's `fleet-model-switch.sh --capped` flips idle
+# sessions on a newly capped account — none of which needs a banner any more.
+# Per (label, model) row from quota_models_parse:
+#   capped  → replace every row for that label whose model matches (either way,
+#             like the lookup — so a banner's `fable` row gives way too) with
+#             until = ccquota's reset + RESET_BUFFER, or now + MODEL_TTL when it
+#             states none. A reset already in the past is a stale reading: skip.
+#   ok      → drop the matching rows ccquota wrote, and any banner row written
+#             BEFORE this reading was observed. A banner that landed after the
+#             observation is newer evidence than it, so it stands until ccquota
+#             catches up — the banner is a refresh hint (as #874 made the
+#             subscription banner), not a second verdict that an older reading
+#             could overrule. No observed_at ⇒ it clears only ccquota's own rows.
+#   unknown → nothing.
+# No `models` anywhere in the payload ⇒ no rows ⇒ the ledger is not even opened.
+model_quota_sync() {
+  local rows out
+  rows=$(printf '%s' "${1:-}" | quota_models_parse 2>/dev/null)
+  [ -n "$rows" ] || return 0
+  mkdir -p "$STATE_DIR"; acct_lock
+  out=$(MQ_ROWS="$rows" MQ_NOW="$(now)" MQ_BUF="$RESET_BUFFER" MQ_TTL="$MODEL_TTL" \
+    python3 - "$STATE_MODEL_LIMITED" <<'PY'
+import os, sys
+now = int(os.environ["MQ_NOW"]); buf = int(os.environ["MQ_BUF"]); ttl = int(os.environ["MQ_TTL"])
+led = []
+try:
+    for line in open(sys.argv[1]).read().splitlines():
+        f = line.split("\t")
+        if len(f) < 3: continue
+        try: until = int(f[2])
+        except ValueError: continue
+        if until > now: led.append(f)
+except OSError:
+    pass
+def same(a, b): return bool(a) and bool(b) and (a in b or b in a)
+def set_at(f):
+    try: return int(f[4]) if len(f) > 4 else 0
+    except ValueError: return 0
+changed = False
+for line in os.environ.get("MQ_ROWS", "").splitlines():
+    f = line.split("\t")
+    if len(f) < 7: continue
+    label, model, verdict, reset, obs, util, status = f[:7]
+    reset, obs = int(reset), int(obs)
+    mine = lambda r: r[0] == label and same(r[1], model)
+    if verdict == "capped":
+        if reset and reset <= now: continue
+        until = reset + buf if reset else now + ttl
+        row = [label, model, str(until), "ccquota: %s %s %s%%" % (model, status, util), str(now)]
+        old = [r for r in led if mine(r)]
+        if len(old) == 1 and old[0][:4] == row[:4]: continue   # same reading: no rewrite
+        led = [r for r in led if not mine(r)] + [row]; changed = True
+    elif verdict == "ok":
+        keep = [r for r in led if not (mine(r) and (
+            (len(r) > 3 and r[3].startswith("ccquota:")) or (obs and obs > set_at(r))))]
+        if len(keep) != len(led): changed = True
+        led = keep
+print("changed" if changed else "same")
+for r in led: print("\t".join(r))
+PY
+)
+  if [ "${out%%$'\n'*}" = changed ]; then
+    case "$out" in *$'\n'*) printf '%s\n' "${out#*$'\n'}" ;; *) : ;; esac | atomic_write "$STATE_MODEL_LIMITED"
+  fi
+  acct_unlock
+}
+# model_quota_rows — the parsed per-model windows from the CACHED payload
+# (quota_models_parse's TSV), no fetch: fleet-doctor's headroom line.
+model_quota_rows() {
+  [ -f "$STATE_DIR/account.quota.json" ] || return 0
+  quota_models_parse < "$STATE_DIR/account.quota.json"
 }
 acct_model_limited_until() {   # <label> <model|model-id> → epoch, 0 = not capped
   local m fleet_model_until=0; m=$(printf '%s' "${2:-}" | tr '[:upper:]' '[:lower:]')
@@ -1179,9 +1374,10 @@ case "${1:-active}" in
   model-limited) cmd_model_limited "${2:-}" "${3:-}" "${4:-}" ;;
   model-limited-until) acct_model_limited_until "${2:-}" "${3:-}" ;;
   model-clear)   cmd_model_clear "${2:-}" "${3:-}" ;;
+  model-quota)   model_quota_rows ;;
   migrate)       shift; exec bash "$BIN/fleet-migrate.sh" "$@" ;;
   whoami)        shift; exec bash "$BIN/fleet-migrate.sh" whoami "$@" ;;
   phase)         shift; cmd_phase "$@" ;;
-  *) echo "fleet-account.sh: unknown command '$1' (active|token|env|list|use|rotate|mark-limited|clear|limited-until|quota|quota-verdict|bench|phase|model-limited|model-limited-until|model-clear|migrate|whoami)" >&2; exit 2 ;;
+  *) echo "fleet-account.sh: unknown command '$1' (active|token|env|list|use|rotate|mark-limited|clear|limited-until|quota|quota-verdict|bench|phase|model-limited|model-limited-until|model-clear|model-quota|migrate|whoami)" >&2; exit 2 ;;
 esac
 fi
