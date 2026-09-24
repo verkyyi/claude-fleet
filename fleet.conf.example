@@ -425,8 +425,8 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 #               every child is terminal, when the parent is idle, or when the oldest
 #               has waited FLEET_CHILD_REPORT_BATCH_SECS.
 #   0         — off: nothing is sent and nothing is ledgered.
-# @label=Child reports outcome to parent @group=spawn @tier=advanced @scope=fleet @edit=bool
-#FLEET_CHILD_REPORT=1
+# @label=Child reports outcome to parent @group=spawn @tier=advanced @scope=fleet @edit=enum
+#FLEET_CHILD_REPORT=immediate
 
 # How long a quiet child report may wait for its digest in FLEET_CHILD_REPORT=batch
 # (issue #939), in seconds. The digest goes out earlier on a loud report, when every

@@ -530,6 +530,13 @@ fcfg_enum_options() {
       printf '%s%s%s\n' \
         claude "$FCFG_US" 'Claude Code (default)' \
         codex  "$FCFG_US" 'OpenAI Codex CLI (bin/fleet-codex.sh, issue #547)' ;;
+    FLEET_CHILD_REPORT)
+      # immediate|batch|0 (issues #938/#939); the modal edited this as a bool until
+      # #968, so `batch` could only ever be hand-written into the conf.
+      printf '%s%s%s\n' \
+        immediate "$FCFG_US" 'loud + quiet reports delivered one by one (default; the legacy 1)' \
+        batch     "$FCFG_US" 'quiet reports merged into ONE digest on the cleanup tick (#939)' \
+        0         "$FCFG_US" 'off: nothing sent, nothing ledgered' ;;
     *) fcfg_model_aliases "$1" ;;
   esac
 }
@@ -605,6 +612,19 @@ fcfg_validate() {
         case "$val" in
           ''|claude|codex) : ;;
           *) printf '%s must be claude|codex or empty (got: %s)' "$key" "$val"; return 1 ;;
+        esac
+        return 0
+      fi
+      # FLEET_CHILD_REPORT is an enum over the child-report modes (issues #938/#939,
+      # modal-editable since #968) — its own set, not a model alias. The legacy `1`
+      # still validates (children_report_mode reads it as immediate), so a conf
+      # written before the switch grew its third value is never refused by the
+      # free-text path; the picker offers only the three canonical tokens. Empty
+      # defers to immediate.
+      if [ "$key" = FLEET_CHILD_REPORT ]; then
+        case "$val" in
+          ''|immediate|batch|0|1) : ;;
+          *) printf '%s must be immediate|batch|0 or empty (got: %s)' "$key" "$val"; return 1 ;;
         esac
         return 0
       fi

@@ -158,6 +158,7 @@ eq 'type FLEET_MODEL'          "$(fcfg_type FLEET_MODEL)"          enum
 eq 'type FLEET_SUBAGENT_MODEL' "$(fcfg_type FLEET_SUBAGENT_MODEL)" enum
 eq 'type FLEET_MERGE_METHOD'   "$(fcfg_type FLEET_MERGE_METHOD)"   enum
 eq 'type FLEET_AGENT'          "$(fcfg_type FLEET_AGENT)"          enum
+eq 'type FLEET_CHILD_REPORT'   "$(fcfg_type FLEET_CHILD_REPORT)"   enum   # not bool (issue #968)
 eq 'type FLEET_CODEX_MODEL'    "$(fcfg_type FLEET_CODEX_MODEL)"    str
 eq 'type FLEET_CTX_WINDOW'     "$(fcfg_type FLEET_CTX_WINDOW)"     num
 eq 'type FLEET_MAX_SESSIONS'   "$(fcfg_type FLEET_MAX_SESSIONS)"   num
@@ -173,6 +174,7 @@ eq 'default FLEET_CLEANUP'            "$(fcfg_default FLEET_CLEANUP)"           
 eq 'default FLEET_MODEL'               "$(fcfg_default FLEET_MODEL)"               opus
 eq 'default FLEET_DISK_FLOOR_GB'       "$(fcfg_default FLEET_DISK_FLOOR_GB)"       12
 eq 'default FLEET_GH_TTL'              "$(fcfg_default FLEET_GH_TTL)"              90
+eq 'default FLEET_CHILD_REPORT'        "$(fcfg_default FLEET_CHILD_REPORT)"        immediate
 [ -n "$(fcfg_short FLEET_REPO)" ] || fail 'short help for FLEET_REPO is empty'; ok
 # short help must NOT leak the tag line
 case "$(fcfg_short FLEET_REPO)" in *@label=*) fail 'short help leaked the tag line' ;; esac; ok
@@ -242,6 +244,18 @@ fcfg_validate enum codex     FLEET_AGENT >/dev/null || fail 'codex valid for FLE
 fcfg_validate enum ''        FLEET_AGENT >/dev/null || fail 'empty valid for FLEET_AGENT'; ok
 fcfg_validate enum opus      FLEET_AGENT >/dev/null && fail 'model alias invalid for FLEET_AGENT'; ok
 fcfg_validate enum gemini    FLEET_AGENT >/dev/null && fail 'unknown agent invalid for FLEET_AGENT'; ok
+# FLEET_CHILD_REPORT is an enum over its OWN set (immediate|batch|0|empty), issue
+# #968 — it was tagged @edit=bool, so the modal could only toggle 0/1 and `batch`
+# (issue #939) had to be hand-written. The legacy `1` still validates.
+fcfg_validate enum immediate FLEET_CHILD_REPORT >/dev/null || fail 'immediate valid for FLEET_CHILD_REPORT'; ok
+fcfg_validate enum batch     FLEET_CHILD_REPORT >/dev/null || fail 'batch valid for FLEET_CHILD_REPORT'; ok
+fcfg_validate enum 0         FLEET_CHILD_REPORT >/dev/null || fail '0 valid for FLEET_CHILD_REPORT'; ok
+fcfg_validate enum 1         FLEET_CHILD_REPORT >/dev/null || fail 'legacy 1 valid for FLEET_CHILD_REPORT'; ok
+fcfg_validate enum ''        FLEET_CHILD_REPORT >/dev/null || fail 'empty valid for FLEET_CHILD_REPORT'; ok
+fcfg_validate enum on        FLEET_CHILD_REPORT >/dev/null && fail 'on invalid for FLEET_CHILD_REPORT'; ok
+fcfg_validate enum opus      FLEET_CHILD_REPORT >/dev/null && fail 'model alias invalid for FLEET_CHILD_REPORT'; ok
+cr_opts=$(fcfg_enum_options FLEET_CHILD_REPORT | cut -d"$FCFG_US" -f1 | paste -sd' ' -)
+eq 'picker offers immediate/batch/0 for FLEET_CHILD_REPORT' "$cr_opts" 'immediate batch 0'
 fcfg_validate regex '^(a|b)$' FLEET_PROTECTED_RE >/dev/null || fail 'valid regex should pass'; ok
 fcfg_validate regex '^(a'    FLEET_PROTECTED_RE >/dev/null && fail 'invalid regex should fail'; ok
 fcfg_validate regex 'a`b'    FLEET_PROTECTED_RE >/dev/null && fail 'regex with backtick should fail'; ok
@@ -274,7 +288,7 @@ case " $ma_sub "   in *' inherit '*) ok ;; *) fail "FLEET_SUBAGENT_MODEL must of
 # PICKER ⇔ VALIDATOR: every token the picker can offer for an enum key (from
 # fcfg_enum_options, what dash-config-edit reads) must also validate for that key.
 # Ties the offered set to the accepted set for EVERY enum key so they can't drift.
-for k in FLEET_MODEL FLEET_SUBAGENT_MODEL FLEET_HANDOFF_DEST FLEET_MERGE_METHOD FLEET_AGENT FLEET_SLEEP FLEET_SLEEP_WAKE; do
+for k in FLEET_MODEL FLEET_SUBAGENT_MODEL FLEET_HANDOFF_DEST FLEET_MERGE_METHOD FLEET_AGENT FLEET_SLEEP FLEET_SLEEP_WAKE FLEET_CHILD_REPORT; do
   while IFS="$FCFG_US" read -r tok _ann; do
     [ -n "$tok" ] || continue
     fcfg_validate enum "$tok" "$k" >/dev/null || fail "picker offers '$tok' for $k but the validator rejects it"
@@ -471,6 +485,26 @@ eq 'global-only not in fleet conf' "$(fcfg_file_value "$F2" FLEET_GLOBAL_MAX_SES
 eq 'install fleet.conf never written' "$(cat "$FCFG_GLOBAL_CONF")" "$(cat "$WORK/install.keep")"
 edit FLEET_DEPLOY_REF origin/prod
 eq 'repo scope: per-repo key → o/b overlay' "$(fcfg_file_value "$FLEET_CONF_DIR/fleets/s2/repos/o-b.conf" FLEET_DEPLOY_REF)" origin/prod
+# The enum PICKER end to end (issue #968): FLEET_CHILD_REPORT is chosen from the
+# fzf menu, not toggled as a bool. A stand-in fzf hands back the row whose token
+# is $FCFG_TEST_PICK, so this drives the editor's real enum branch (rows → fzf →
+# token → validate → write), and the write is the quoted enum form the digest
+# reads: FLEET_CHILD_REPORT="batch".
+PICK="$WORK/pick"; mkdir -p "$PICK"
+cat > "$PICK/fzf" <<'EOF'
+#!/bin/sh
+awk -v want="$FCFG_TEST_PICK" 'BEGIN{FS="\037"} $1==want{print; exit}'
+EOF
+chmod +x "$PICK/fzf"
+pick() { FCFG_TEST_PICK="$2" PATH="$PICK:$SHIM:$PATH" bash "$BIN/dash-config-edit.sh" "$1" </dev/null >/dev/null 2>&1; }
+pick FLEET_CHILD_REPORT batch
+grep -qxF 'FLEET_CHILD_REPORT="batch"' "$F2" || fail "picking batch did not write FLEET_CHILD_REPORT=\"batch\" to the fleet conf: $(grep FLEET_CHILD_REPORT "$F2" || echo '<no line>')"; ok
+eq 'picked batch → fleet conf (not the o/b overlay)' "$(fcfg_file_value "$FLEET_CONF_DIR/fleets/s2/repos/o-b.conf" FLEET_CHILD_REPORT || echo unset)" unset
+pick FLEET_CHILD_REPORT 0
+grep -qxF 'FLEET_CHILD_REPORT="0"' "$F2" || fail "picking 0 did not write FLEET_CHILD_REPORT=\"0\": $(grep FLEET_CHILD_REPORT "$F2" || echo '<no line>')"; ok
+v=$( . "$F2"; . "$BIN/fleet-children-lib.sh"; children_report_mode ); eq 'picked 0 reads back as off' "$v" 0
+pick FLEET_CHILD_REPORT immediate
+v=$( . "$F2"; . "$BIN/fleet-children-lib.sh"; children_report_mode ); eq 'picked immediate reads back' "$v" immediate
 # What the fleet actually loads: settings beat the legacy install value; the
 # legacy per-fleet key still comes through where nothing overrides it.
 v=$( unset _FLEET_GLOBAL_CONF_SOURCED FLEET_SKIP_GLOBAL_CONF FLEET_GLOBAL_MAX_SESSIONS
