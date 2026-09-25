@@ -83,6 +83,7 @@ FLEET_INSTALL_CLAUDE               seam: an injectable command/path for tests (f
 FLEET_INSTALL_DAEMON_DIR           path: system LaunchDaemons dir override (fleet-install-apply.sh)
 FLEET_INSTALL_LAUNCHCTL            seam: an injectable command/path for tests (fleet-install-apply.sh)
 FLEET_INSTALL_LOGIN                seam: the login whose system LaunchDaemons are rendered (fleet-install-apply.sh)
+FLEET_INSTALL_HOME                 seam: the __HOME__ a daemon template renders to — another login's when rendering for it (fleet-install-apply.sh --render-system, #1192)
 FLEET_INSTALL_PLATFORM             seam: launchd|systemd|none instead of uname (fleet-install-apply.sh)
 FLEET_INSTALL_ROOT                 path: the install to apply to (fleet-install-apply.sh)
 FLEET_INSTALL_SUDO                 seam: the sudo prefix for system LaunchDaemons (fleet-install-apply.sh)

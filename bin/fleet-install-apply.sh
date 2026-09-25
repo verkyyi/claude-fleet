@@ -52,6 +52,12 @@
 #   fleet-install-apply.sh --from <sha> --to <sha> [--dry-run] [--root <dir>]
 #                          [--sync-logins[=a,b]]
 #   fleet-install-apply.sh --is-command <file>    # exit 0 iff the #858 gate passes
+#   fleet-install-apply.sh --render-system <unit> [--root <dir>]
+#                            # the system-shape plist for <unit> on stdout (#1192):
+#                            # Label com.claude-fleet.$FLEET_INSTALL_LOGIN.<unit>,
+#                            # UserName that login, __HOME__ = $FLEET_INSTALL_HOME —
+#                            # what fleet-login-new.sh --apply installs for a new
+#                            # login before it ever signs in
 #
 #   --from     the rev the install was at before the move
 #   --to       the rev it is at now — must resolve to the install's HEAD
@@ -73,7 +79,9 @@
 # FLEET_SYSTEMD_USER_DIR (~/.config/systemd/user), FLEET_INSTALL_PLATFORM
 # (launchd|systemd|none; default from uname), FLEET_INSTALL_LAUNCHCTL,
 # FLEET_INSTALL_SYSTEMCTL, FLEET_INSTALL_SUDO ("sudo -n"), FLEET_INSTALL_CLAUDE
-# (claude), FLEET_INSTALL_BREW_PREFIX, FLEET_INSTALL_LOGIN ($USER).
+# (claude), FLEET_INSTALL_BREW_PREFIX, FLEET_INSTALL_LOGIN ($USER),
+# FLEET_INSTALL_HOME ($HOME — the __HOME__ a template renders to; another
+# login's when rendering FOR it, #1192).
 set -uo pipefail
 
 SELF="${BASH_SOURCE[0]}"
@@ -93,7 +101,36 @@ is_command() {
   ' "$1"
 }
 
-FROM='' TO='' DRY=0 ROOT="${FLEET_INSTALL_ROOT:-$HOME/.claude/fleet}" SYNCL=0 SYNCL_ONLY=''
+# --- rendering a daemon template (used by the daemons step and --render-system) --
+brew_prefix() {
+  if [ -n "${FLEET_INSTALL_BREW_PREFIX:-}" ]; then printf '%s' "$FLEET_INSTALL_BREW_PREFIX"
+  else brew --prefix 2>/dev/null || printf '/opt/homebrew'; fi
+}
+render_tmpl() { # $1 template -> stdout, the gui-shape plist / user unit
+  sed -e "s|__HOME__|$RHOME|g" -e "s|__BREW_PREFIX__|$BREW|g" "$1"
+}
+# system shape: the gui plist + Label com.claude-fleet.<login>.<x>, UserName /
+# GroupName, and argv wrapped so the job gets the user's own TMPDIR (a
+# LaunchDaemon does not inherit one) — the shape the installed ones carry.
+render_system() { # $1 template $2 unit $3 out
+  local tmp n i a argv=''
+  tmp="$3"
+  render_tmpl "$1" > "$tmp" || return 1
+  n=$(plutil -extract ProgramArguments raw -o - "$tmp" 2>/dev/null) || return 1
+  i=0
+  while [ "$i" -lt "$n" ]; do
+    a=$(plutil -extract "ProgramArguments.$i" raw -o - "$tmp") || return 1
+    argv="$argv '$(printf '%s' "$a" | sed "s/'/'\\\\''/g")'"
+    i=$((i + 1))
+  done
+  plutil -replace Label -string "com.claude-fleet.$LOGIN.$2" "$tmp" \
+    && plutil -replace UserName -string "$LOGIN" "$tmp" \
+    && plutil -replace GroupName -string staff "$tmp" \
+    && plutil -replace ProgramArguments -json '["/bin/sh","-c"]' "$tmp" \
+    && plutil -insert ProgramArguments.2 -string "TMPDIR=\"\$(getconf DARWIN_USER_TEMP_DIR)\"; export TMPDIR; exec$argv" "$tmp"
+}
+
+FROM='' TO='' DRY=0 ROOT="${FLEET_INSTALL_ROOT:-$HOME/.claude/fleet}" SYNCL=0 SYNCL_ONLY='' RENDER=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --from) FROM="${2:-}"; shift 2 || { usage >&2; exit 2; } ;;
@@ -103,10 +140,30 @@ while [ $# -gt 0 ]; do
     --sync-logins=*) SYNCL=1; SYNCL_ONLY="${1#--sync-logins=}"; shift ;;
     --root) ROOT="${2:-}"; shift 2 || { usage >&2; exit 2; } ;;
     --is-command) is_command "${2:-}"; exit $? ;;
+    --render-system) RENDER="${2:-}"; shift 2 || { usage >&2; exit 2; } ;;
     -h|--help) usage; exit 0 ;;
     *) printf 'fleet-install-apply: unknown arg %s\n' "$1" >&2; usage >&2; exit 2 ;;
   esac
 done
+LOGIN="${FLEET_INSTALL_LOGIN:-${USER:-$(id -un)}}"
+RHOME="${FLEET_INSTALL_HOME:-$HOME}"
+
+# --- --render-system <unit>: one system-shape plist on stdout, nothing else ------
+# fleet-login-new.sh --apply (issue #1192) renders a NEW login's daemons from the
+# clone it just made for that login, as the admin, and installs them under
+# /Library/LaunchDaemons — so the login's own first-login apply finds every unit
+# "already current" and never needs root. Needs no HEAD, no diff: just the template.
+if [ -n "$RENDER" ]; then
+  tmpl="$ROOT/launchd/com.claude-fleet.$RENDER.plist.tmpl"
+  [ -f "$tmpl" ] || { printf 'fleet-install-apply: --render-system: no template %s\n' "$tmpl" >&2; exit 2; }
+  command -v plutil >/dev/null 2>&1 || { echo 'fleet-install-apply: --render-system needs plutil' >&2; exit 2; }
+  BREW=$(brew_prefix)
+  tmp=$(mktemp "${TMPDIR:-/tmp}/fleet-render.XXXXXX") || exit 1
+  if render_system "$tmpl" "$RENDER" "$tmp"; then cat "$tmp"; rc=0
+  else printf 'fleet-install-apply: --render-system %s failed\n' "$RENDER" >&2; rc=1; fi
+  rm -f "$tmp"; exit "$rc"
+fi
+
 [ -n "$FROM" ] && [ -n "$TO" ] || { echo 'fleet-install-apply: --from and --to are required' >&2; exit 2; }
 git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1 \
   || { printf 'fleet-install-apply: %s is not a git checkout\n' "$ROOT" >&2; exit 2; }
@@ -125,7 +182,6 @@ LAUNCHCTL="${FLEET_INSTALL_LAUNCHCTL:-launchctl}"
 SYSTEMCTL="${FLEET_INSTALL_SYSTEMCTL:-systemctl}"
 SUDO="${FLEET_INSTALL_SUDO-sudo -n}"
 CLAUDE="${FLEET_INSTALL_CLAUDE:-claude}"
-LOGIN="${FLEET_INSTALL_LOGIN:-${USER:-$(id -un)}}"
 UID_=$(id -u)
 PLATFORM="${FLEET_INSTALL_PLATFORM:-}"
 if [ -z "$PLATFORM" ]; then
@@ -218,33 +274,6 @@ else
 fi
 
 # --- daemons ------------------------------------------------------------------
-brew_prefix() {
-  if [ -n "${FLEET_INSTALL_BREW_PREFIX:-}" ]; then printf '%s' "$FLEET_INSTALL_BREW_PREFIX"
-  else brew --prefix 2>/dev/null || printf '/opt/homebrew'; fi
-}
-render_tmpl() { # $1 template -> stdout, the gui-shape plist / user unit
-  sed -e "s|__HOME__|$HOME|g" -e "s|__BREW_PREFIX__|$BREW|g" "$1"
-}
-# system shape: the gui plist + Label com.claude-fleet.<login>.<x>, UserName /
-# GroupName, and argv wrapped so the job gets the user's own TMPDIR (a
-# LaunchDaemon does not inherit one) — the shape the installed ones carry.
-render_system() { # $1 template $2 unit $3 out
-  local tmp n i a argv=''
-  tmp="$3"
-  render_tmpl "$1" > "$tmp" || return 1
-  n=$(plutil -extract ProgramArguments raw -o - "$tmp" 2>/dev/null) || return 1
-  i=0
-  while [ "$i" -lt "$n" ]; do
-    a=$(plutil -extract "ProgramArguments.$i" raw -o - "$tmp") || return 1
-    argv="$argv '$(printf '%s' "$a" | sed "s/'/'\\\\''/g")'"
-    i=$((i + 1))
-  done
-  plutil -replace Label -string "com.claude-fleet.$LOGIN.$2" "$tmp" \
-    && plutil -replace UserName -string "$LOGIN" "$tmp" \
-    && plutil -replace GroupName -string staff "$tmp" \
-    && plutil -replace ProgramArguments -json '["/bin/sh","-c"]' "$tmp" \
-    && plutil -insert ProgramArguments.2 -string "TMPDIR=\"\$(getconf DARWIN_USER_TEMP_DIR)\"; export TMPDIR; exec$argv" "$tmp"
-}
 same_plist() { # semantic equality — the installed file may be binary or reformatted
   [ -f "$2" ] || return 1
   if command -v plutil >/dev/null 2>&1; then
@@ -321,6 +350,12 @@ daemons_launchd() {
     if [ "$shape" = gui ]; then label=com.claude-fleet.spinner; dst="$AGENTS/$label.plist"; dom="gui/$UID_"; pre=''
     else label="com.claude-fleet.$LOGIN.spinner"; dst="$DDIR/$label.plist"; dom=system; pre="$SUDO"; fi
     if [ ! -f "$dst" ]; then say 'daemons: skip spinner kick — not installed'
+    elif [ "$shape" = system ] && [ "$sudo_ok" = 0 ] && is_new bin/tmux-spinner.sh; then
+      # A first install (#1192): the script is NEW in this range, so no unit was
+      # ever running an older one — the LaunchDaemon the admin installed for this
+      # login (RunAtLoad) already runs it. A kick here would only need root the
+      # login does not have, and turn a clean first apply into PARTIAL.
+      say "daemons: ok spinner — script new since ${from:0:7}, the installed unit runs it (no kick)"
     elif [ "$shape" = system ] && [ "$sudo_ok" = 0 ]; then need_root="$need_root; sudo launchctl kickstart -k system/$label"
     elif [ "$DRY" = 1 ]; then say "daemons: would kickstart -k $dom/$label (spinner script changed)"; acted=1
     elif $pre "$LAUNCHCTL" kickstart -k "$dom/$label" >/dev/null 2>&1; then say 'daemons: kicked spinner (script changed)'; acted=1

@@ -26,6 +26,14 @@
 #   I. failure          a failed bootstrap -> PARTIAL, exit 1
 #   J. systemd          modified -> daemon-reload + restart; added -> enable --now;
 #                       retired -> disable --now + removed
+#   O. first install    (#1192) system shape, every plist pre-installed by the
+#                       admin (--render-system), no sudo, --from the empty tree:
+#                       every unit "already current", the spinner kick is NOT a
+#                       root-needing failure (its script is new in the range) ->
+#                       apply: ok, exit 0, no launchctl call. With sudo, or a
+#                       spinner script that merely changed, the kick still happens.
+#                       --render-system: Label / UserName / __HOME__ of the login
+#                       asked for, nothing else on stdout, no HEAD needed
 #   K. usage            --to must be HEAD, both revs required, from==to no-ops
 #   L. the skill        /fleet-sync-install calls apply (ff -> apply -> report)
 #                       rather than carrying its own copy of the steps
@@ -340,6 +348,54 @@ if command -v plutil >/dev/null 2>&1; then
   ok 'M system reload' "grep -qx 'launchctl bootout system/com.claude-fleet.tester.collect' '$LOG' && grep -qx 'launchctl bootstrap system $D' '$LOG'"
   FLEET_LAUNCHD_AGENTS_DIR="$WORK/noagents" run_ap --from "$M0" --to "$M1"
   contains 'M re-run is a no-op' "$OUT" 'daemons: ok collect — installed plist already current'
+fi
+
+# --- O. first install, system shape, no sudo (#1192) --------------------------------
+if command -v plutil >/dev/null 2>&1; then
+  O1=$(git -C "$R" rev-parse HEAD)
+  EMPTY=$(git -C "$R" commit-tree "$(git -C "$R" hash-object -t tree -w /dev/null)" -m empty)
+  OD="$WORK/LaunchDaemons-first"; mkdir -p "$OD"
+  # --render-system: the admin renders FOR another login, from its clone, no HEAD involved
+  : > "$LOG"
+  OUT=$(FLEET_INSTALL_LOGIN=newbie FLEET_INSTALL_HOME=/Users/newbie bash "$AP" --render-system spinner --root "$R" 2>&1); RC=$?
+  eq 'O render exit' 0 "$RC"
+  printf '%s\n' "$OUT" > "$OD/com.claude-fleet.newbie.spinner.plist"
+  eq 'O render Label' com.claude-fleet.newbie.spinner "$(plutil -extract Label raw -o - "$OD/com.claude-fleet.newbie.spinner.plist")"
+  eq 'O render UserName' newbie "$(plutil -extract UserName raw -o - "$OD/com.claude-fleet.newbie.spinner.plist")"
+  contains 'O render __HOME__ = the login asked for' "$(plutil -extract ProgramArguments.2 raw -o - "$OD/com.claude-fleet.newbie.spinner.plist")" "exec '/bin/bash' '/Users/newbie/.claude/fleet/bin/spinner.sh'"
+  ok 'O render calls nothing' "[ ! -s '$LOG' ]"
+  OUT=$(bash "$AP" --render-system nosuch --root "$R" 2>&1); RC=$?
+  eq 'O render unknown unit -> 2' 2 "$RC"
+  # the admin pre-installed every unit for THIS login (tester), rendered the same way
+  for t in "$R"/launchd/com.claude-fleet.*.plist.tmpl; do
+    u=${t##*/com.claude-fleet.}; u=${u%.plist.tmpl}
+    FLEET_INSTALL_HOME="$H" bash "$AP" --render-system "$u" --root "$R" > "$OD/com.claude-fleet.tester.$u.plist" || fail "O render $u"
+  done
+  # the login's own first apply: system shape (its daemons exist, no agents), no sudo, from the empty tree
+  FLEET_INSTALL_SUDO=false FLEET_LAUNCHD_AGENTS_DIR="$WORK/noagents" FLEET_INSTALL_DAEMON_DIR="$OD" run_ap --from "$EMPTY" --to "$O1"
+  eq 'O first install, no sudo -> exit 0' 0 "$RC"
+  contains 'O every unit current' "$OUT" 'daemons: ok spinner — installed plist already current'
+  contains 'O spinner kick is not a failure' "$OUT" "daemons: ok spinner — script new since ${EMPTY:0:7}, the installed unit runs it (no kick)"
+  not_contains 'O no need-root FAIL' "$OUT" 'no passwordless sudo'
+  not_contains 'O no daemons FAIL' "$OUT" 'daemons: FAIL'
+  contains 'O apply ok' "$OUT" 'apply: ok'
+  ok 'O no launchctl' "! grep -q '^launchctl' '$LOG'"
+  # unchanged: WITH sudo the same first install still kicks the spinner
+  FLEET_INSTALL_SUDO='' FLEET_LAUNCHD_AGENTS_DIR="$WORK/noagents" FLEET_INSTALL_DAEMON_DIR="$OD" run_ap --from "$EMPTY" --to "$O1"
+  eq 'O with sudo -> exit 0' 0 "$RC"
+  contains 'O with sudo still kicks' "$OUT" 'daemons: kicked spinner'
+  ok 'O with sudo kickstart' "grep -qx 'launchctl kickstart -k system/com.claude-fleet.tester.spinner' '$LOG'"
+  # unchanged: a spinner script that CHANGED (existed at --from) still needs the root kick
+  echo 'echo spin v3' > "$R/bin/tmux-spinner.sh"
+  O2=$(commit 'spinner v3')
+  FLEET_INSTALL_SUDO=false FLEET_LAUNCHD_AGENTS_DIR="$WORK/noagents" FLEET_INSTALL_DAEMON_DIR="$OD" run_ap --from "$O1" --to "$O2"
+  eq 'O changed script, no sudo -> exit 1' 1 "$RC"
+  contains 'O changed script still needs root' "$OUT" 'run as an admin: sudo launchctl kickstart -k system/com.claude-fleet.tester.spinner'
+  # unchanged: gui shape from the empty tree, spinner already installed -> kicks as before (no root needed)
+  render "$R/launchd/com.claude-fleet.spinner.plist.tmpl" > "$H/Library/LaunchAgents/com.claude-fleet.spinner.plist"
+  run_ap --from "$EMPTY" --to "$O2"
+  eq 'O gui first install -> exit 0' 0 "$RC"
+  contains 'O gui still kicks' "$OUT" 'daemons: kicked spinner'
 fi
 
 # --- K. usage -------------------------------------------------------------------------
