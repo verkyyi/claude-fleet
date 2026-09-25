@@ -210,6 +210,13 @@ INSTALL.md step 1).
 Run these once all logins are set up. Each check matches one acceptance item
 of #609.
 
+For a login with `~/.config/claude-fleet/global/bootstrapped`, run
+`~/.claude/fleet/bin/fleet-doctor.sh | grep onboard` as that login. The single
+`onboard` row names any missing Claude CLI, private nonempty pool tokens,
+GitHub login, valid Codex login, SSH key, loaded fleet services, or live/completed
+guide. A key whose comment contains `temporary` or `临时` gets a reminder to
+replace it. Missing steps are WARNs and do not change the doctor's FAIL exit code.
+
 **Each login has its own `~/.claude`.** As each user:
 
 ```sh
