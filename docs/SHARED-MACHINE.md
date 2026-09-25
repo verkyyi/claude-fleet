@@ -43,13 +43,49 @@ home directory, the login Keychain, and the `gui/<uid>` launchd domain. Steps
 In a shell running as `alice` (their own GUI Terminal, or `ssh alice@mini`):
 
 ```sh
-claude          # complete the /login flow with alice's own subscription
+claude          # complete the /login flow (their own subscription, or a pool account — see 2b)
 ```
 
 This writes `~alice/.claude/` and stores the OAuth credential in **alice's**
-Keychain. Don't copy another login's `~/.claude` or credentials over. Doing so
-brings back the shared-identity problem this runbook exists to fix. If the
-person also uses Codex, run `codex login` here too.
+Keychain. Don't copy another login's `~/.claude` directory over: it carries that
+login's transcripts, settings and hook state, which is the shared-identity
+problem this runbook exists to fix. If the person also uses Codex, run
+`codex login` here too.
+
+## 2b. (Optional) Join the machine's shared account pool
+
+A login can bring its own subscription (step 2), or draw from the same
+subscription pool the operator's login uses. Both are supported; which
+subscriptions a machine's logins share is the operator's decision, and the
+tooling neither requires nor refuses either setup. Sharing the pool still keeps
+one login per person, so usage stays attributed per login on the hub.
+
+**Claude pool** — the tokens are plain `claude setup-token` files, so copy them
+(admin, since the source files are `600` in the operator's home):
+
+```sh
+src=/Users/operator/.config/claude-fleet/accounts
+dst=/Users/alice/.config/claude-fleet/accounts
+sudo mkdir -p "$dst"
+sudo cp "$src"/* "$dst"/                 # each <label> token + its <label>.conf (CCQUOTA_ACCOUNT)
+sudo chown -R alice:staff /Users/alice/.config/claude-fleet
+sudo chmod 700 "$dst"; sudo chmod 600 "$dst"/*
+```
+
+Then, as `alice`, `~/.claude/fleet/bin/fleet-account.sh list` shows the pool.
+Each login keeps its own copy, so a token added to or revoked from the pool
+later has to be copied to every sharing login again. Rotation state
+(`account.limited`) is per login: a limit one login hits is learned by the
+others from their own banners or from the ccquota hub.
+
+**Codex** — do **not** copy `~/.codex/auth.json`. Codex rotates its refresh
+token on use, so two homes holding one copy race each other and one gets logged
+out. Give the login its own session on the same account instead, as `alice`:
+
+```sh
+ccquota codex login personal --device-auth   # approve the device code while signed in to the shared ChatGPT account
+ccquota codex list                            # LOGIN valid
+```
 
 ## 3. Enroll the login with the hub (admin, on the hub)
 
