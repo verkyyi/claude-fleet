@@ -50,6 +50,9 @@ trap 'exit 130' INT TERM HUP
 
 export HOME="$WORK/home" FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1 TMPDIR="$WORK/tmp"
 export _FLEET_REGISTER_NO_KICK=1
+# The sheet + menu are localized since #1188 (bin/fleet-ui-lang.sh: FLEET_UI_LANG,
+# else the login locale) — pin the English the rows below assert.
+export FLEET_UI_LANG=en
 unset TMUX TMUX_PANE FLEET_SESSION FLEET_MAIN FLEET_REPO FLEET_BASE_BRANCH
 . "$BIN/fleet-lib.sh"
 
@@ -139,8 +142,10 @@ printf '%s\n' "$SHEET" | grep '^  ⌃z ' | grep -q 'fleet-repo.sh add' || fail "
 RSHEET=$(FLEET_TMUX_PREFIX=C-z FLEET_TMUX_PREFIX2='' NO_COLOR=1 bash "$KEYS" --plain --context dash)
 printf '%s\n' "$RSHEET" | grep -q '^  ⌥z .*⌃z is your tmux prefix C-z' || fail "C: under a C-z prefix the sheet must list ⌥z and say why"
 eq "C: the row menu's letter for repo is g" "$(printf '%s\n' "$(bash "$MENU" --keys)" | awk -F '\t' '$1=="g"{print $2}' | grep -c 'add a repo')" 1
-grep -Eq '^add "＋ 仓库…" "\$\(mk repo\)" .*dash-popup\.sh.*dash-repo-add\.sh' "$MENU" \
-  || fail "C: fleet-sidebar-menu.sh has no ＋ 仓库… item on dash-popup.sh → dash-repo-add.sh via \$(mk repo)"
+grep -Eq '^add "\$m_repo" "\$\(mk repo\)" .*dash-popup\.sh.*dash-repo-add\.sh' "$MENU" \
+  || fail "C: fleet-sidebar-menu.sh has no \$m_repo item on dash-popup.sh → dash-repo-add.sh via \$(mk repo)"
+grep -q "m_repo='＋ 仓库…'" "$MENU" && grep -q "m_repo='Add repo…'" "$MENU" \
+  || fail "C: fleet-sidebar-menu.sh must name the repo item in both UI languages (＋ 仓库… / Add repo…, #1188)"
 grep -qE 'dash-repo-add\.sh' "$BIN/../README.md" || fail "C: README does not mention the popup"
 FULL=$(FLEET_TMUX_PREFIX=C-b FLEET_TMUX_PREFIX2='' NO_COLOR=1 bash "$KEYS" --plain)
 printf '%s\n' "$FULL" | awk '/^row menu /{f=1;next} f && NF && /^[^ ]/{f=0} f' | grep -q '^  g  .*add a repo' \
