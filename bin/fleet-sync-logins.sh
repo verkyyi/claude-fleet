@@ -163,7 +163,8 @@ gitq() { git -c safe.directory='*' -C "$@"; }
 # caller when it IS the owner or the owner cannot be reached through $SUDO.
 # The probe is cached per owner — one `sudo -n true` each, not one per git call;
 # ogit mostly runs in a `$(…)` subshell, so warm the cache in the main shell
-# (`as_owner <owner> || :`) wherever an owner is first known.
+# (`as_owner <owner> || :`) wherever an owner is first known. From /, like ofs
+# below: the owner cannot stand in the caller's 0700 cwd (issue #1162).
 owner_ok='' owner_no=''
 as_owner() {
   [ "$1" != "$me" ] && [ -n "$SUDO" ] || return 1
@@ -174,7 +175,7 @@ as_owner() {
 }
 ogit() {
   _og=$1; shift
-  if as_owner "$_og"; then $SUDO -u "$_og" git -c safe.directory='*' -C "$@"
+  if as_owner "$_og"; then ( cd / && $SUDO -u "$_og" git -c safe.directory='*' -C "$@" )
   else gitq "$@"; fi
 }
 # ofs <owner> <cmd…> — any other read of an install, as its owner when reachable
@@ -191,7 +192,7 @@ ofs() {
 # read it (the copy marker is written as the owner, under sudo's 077 umask).
 oread() {
   if [ -r "$2" ]; then cat "$2" 2>/dev/null
-  elif as_owner "$1"; then $SUDO -u "$1" cat "$2" 2>/dev/null
+  elif as_owner "$1"; then ( cd / && $SUDO -u "$1" cat "$2" 2>/dev/null )
   fi
 }
 # conf_val <text> <KEY> — the last plain `KEY=value` assignment in a conf's
@@ -262,6 +263,7 @@ entries=$(gitq "$src" ls-tree --name-only HEAD | grep -v -x -e 'fleet.conf' -e '
 # Stage HEAD once, world-readable, so every login's own rsync can read it.
 STAGE=$(mktemp -d "$TMPROOT/fleet-sync-logins.XXXXXX") || { echo 'fleet-sync-logins: mktemp failed' >&2; exit 3; }
 trap 'rm -rf "$STAGE"' EXIT INT TERM HUP
+STAGE=$(cd "$STAGE" && pwd)   # absolute: the act runs from / (issue #1162)
 mkdir -p "$STAGE/tree"
 gitq "$src" archive --format=tar HEAD | tar -xf - -C "$STAGE/tree"
 # Both halves: an archive that dies early can hand tar a clean-looking EOF.
@@ -347,6 +349,8 @@ copy_edits() {
 # `unreadable` — never taken for a login without an install.
 installs=''    # one install dir per line (the path as found, unresolved)
 unreadable=''  # logins whose home could not be looked into
+# absolute, like every other path: the act runs from / (issue #1162)
+case "$homes" in /*) ;; *) _h=$(cd "$homes" 2>/dev/null && pwd) && homes=$_h ;; esac
 for h in "$homes"/*; do
   [ -d "$h" ] || continue
   d="$h/.claude/fleet"
@@ -566,6 +570,25 @@ if [ "$dry" -eq 1 ]; then
 fi
 
 # --- act ---------------------------------------------------------------------
+# From / (issue #1162): every write below runs as ANOTHER login, which inherits
+# this cwd — and the caller's cwd is usually inside its own 0700 home, where the
+# owner cannot stand. BSD `cp -R` opens "." first and fails outright
+# ("cp: current working directory: Permission denied"), git dies before it reads
+# a thing, and the backup step's `2>/dev/null` hid it: every login FAILED with
+# only the consequences in the row. Every path from here on is absolute.
+cd / || exit 1
+# step <what> <cmd…> — run one act command; on failure clear $ok and, for the
+# FIRST failure of this login, keep its own stderr in $fwhy for the FAILED row.
+step() {
+  _st=$1; shift
+  "$@" 2>"$STAGE/step.err" && return 0
+  ok=0
+  if [ -z "$fwhy" ]; then
+    _se=$(grep -v '^[[:space:]]*$' "$STAGE/step.err" | tail -n 1)
+    fwhy="$_st failed${_se:+: $_se}"
+  fi
+  return 1
+}
 root_ok() { [ -z "$SUDO" ] || $SUDO true 2>/dev/null; }
 bundle_made=0
 make_bundle() {
@@ -663,9 +686,10 @@ convert_login() {
   # wrong output; `stat -c` errors cleanly on BSD (see fleet-lib.sh's mtime read)
   mode=$($as stat -c %a "$rd" 2>/dev/null || $as stat -f %Lp "$rd" 2>/dev/null); mode=${mode:-755}
   if [ "$ok" -eq 1 ]; then
-    if ( cd / && $as sh "$STAGE/to-git.sh" "$rd" "$new" "$STAGE/fleet.bundle" "$target" "$branch" "$origin" "$carry" "$bak" "$mode" ); then
+    fwhy=''
+    if step 'the conversion' $as sh "$STAGE/to-git.sh" "$rd" "$new" "$STAGE/fleet.bundle" "$target" "$branch" "$origin" "$carry" "$bak" "$mode"; then
       swapped=1
-    else ok=0; why='the conversion failed before the swap'; fi
+    else why="$fwhy — before the swap"; fi
   fi
   kicked=0 kickfail=0 spin=0
   [ "$ok" -eq 1 ] && kick_daemons "$login" "$owner" "$home"
@@ -692,8 +716,11 @@ nsync=0 nskip=$nblock nfail=0 nsudo=0 sudo_cmds=''
 while IFS='|' read -r login rd owner shape head n state note ents target <&3; do
   case "$state" in sync|to-git) ;; *) continue ;; esac
   ents=$(printf '%s' "$ents" | tr ',' ' ')
+  home=$(dirname "$(dirname "$rd")")
+  # as the owner, with the owner's HOME: sudo keeps the caller's on macOS, so
+  # git read the caller's (0700) ~/.config/git and warned on every call
   if [ "$owner" = "$me" ]; then as=''
-  elif as_owner "$owner"; then as="$SUDO -u $owner"
+  elif as_owner "$owner"; then as="$SUDO -u $owner env HOME=$home"
   else
     nsudo=$((nsudo + 1)); nskip=$((nskip + 1))
     say "$login: needs sudo — skipped"
@@ -703,20 +730,22 @@ while IFS='|' read -r login rd owner shape head n state note ents target <&3; do
 "
     continue
   fi
-  home=$(dirname "$(dirname "$rd")")
   if [ "$togit" -eq 1 ]; then convert_login; continue; fi
-  ok=1
+  ok=1 fwhy=''
 
   # 1. backup the entries about to change
   bak="$home/.claude/fleet.bak-$(date +%Y%m%d)"
   i=1 base=$bak
   while $as test -e "$bak"; do i=$((i + 1)); bak="$base-$i"; done
-  $as mkdir -p "$bak" || ok=0
+  step 'creating the backup dir' $as mkdir -p "$bak"
   for e in $ents; do
+    [ "$ok" -eq 1 ] || break
     $as test -e "$rd/$e" || $as test -L "$rd/$e" || continue
-    $as cp -Rp "$rd/$e" "$bak/" 2>/dev/null || ok=0
+    step "backing up $e" $as cp -Rp "$rd/$e" "$bak/"
   done
-  [ -n "$head" ] && printf '%s\n' "$head" | $as tee "$bak/.fleet-prior-head" >/dev/null
+  [ -n "$head" ] && [ "$ok" -eq 1 ] && step 'recording the prior HEAD' $as tee "$bak/.fleet-prior-head" >/dev/null <<EOF
+$head
+EOF
 
   # 2. rsync each tracked entry from the staged HEAD. --checksum, not the
   #    size+mtime quick check: `git archive` stamps every file with the COMMIT
@@ -725,20 +754,22 @@ while IFS='|' read -r login rd owner shape head n state note ents target <&3; do
   if [ "$ok" -eq 1 ]; then
     for e in $ents; do
       if [ -d "$STAGE/tree/$e" ]; then
-        $as rsync -a --checksum --delete --exclude-from="$STAGE/exclude" "$STAGE/tree/$e/" "$rd/$e/" || ok=0
+        step "rsync $e" $as rsync -a --checksum --delete --exclude-from="$STAGE/exclude" "$STAGE/tree/$e/" "$rd/$e/"
       else
-        $as rsync -a --checksum "$STAGE/tree/$e" "$rd/$e" || ok=0
+        step "rsync $e" $as rsync -a --checksum "$STAGE/tree/$e" "$rd/$e"
       fi
     done
   fi
 
   # 3. align HEAD (git) / write the marker (copy)
   if [ "$ok" -eq 1 ] && [ "$shape" = git ]; then
-    { make_bundle \
-      && $as git -c safe.directory='*' -C "$rd" fetch --quiet "$STAGE/fleet.bundle" HEAD \
-      && $as git -c safe.directory='*' -C "$rd" reset --quiet "$src_sha"; } || ok=0
+    step 'bundling the source' make_bundle \
+      && step 'git fetch' $as git -c safe.directory='*' -C "$rd" fetch --quiet "$STAGE/fleet.bundle" HEAD \
+      && step 'git reset' $as git -c safe.directory='*' -C "$rd" reset --quiet "$src_sha"
   elif [ "$ok" -eq 1 ]; then
-    printf '%s %s %s\n' "$src_sha" "$me" "$(date +%Y-%m-%dT%H:%M:%S)" | $as tee "$rd/.fleet-synced-from" >/dev/null || ok=0
+    step 'writing the marker' $as tee "$rd/.fleet-synced-from" >/dev/null <<EOF
+$src_sha $me $(date +%Y-%m-%dT%H:%M:%S)
+EOF
   fi
 
   # 4. restart that login's daemons
@@ -754,6 +785,8 @@ while IFS='|' read -r login rd owner shape head n state note ents target <&3; do
     [ "$(ogit "$owner" "$rd" rev-parse HEAD 2>/dev/null)" = "$src_sha" ] || { ok=0; why="${why:+$why · }HEAD is not $src_short"; }
     [ -z "$(ogit "$owner" "$rd" status --porcelain --untracked-files=no 2>/dev/null)" ] || { ok=0; why="${why:+$why · }tracked files dirty"; }
   fi
+  # the step that failed first, in its own words, ahead of its consequences
+  [ -n "$fwhy" ] && why="$fwhy${why:+ · $why}"
   [ "$ok" -eq 1 ] || [ -n "$why" ] || why="a sync step failed"
   spinner_msg "$owner"
   if [ "$ok" -eq 1 ]; then
