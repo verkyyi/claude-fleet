@@ -44,6 +44,13 @@
 #      each unit "already current" and passes as a non-admin. `--no-daemons`
 #      skips this step for someone who WILL sign in at the GUI: their first
 #      graphical login installs gui LaunchAgents the historic way.
+#      The clone sits in the login's home, which macOS creates 700 — the admin
+#      cannot read it (issue #1213: the first real run listed "0 background
+#      services … nothing to install" and exited 0). So the templates and the
+#      clone's apply script are read AS THE LOGIN (`sudo -u <login> -H cat`)
+#      into this run's temp dir and rendered from there; the step prints
+#      `installed N/N`, and 0 templates is a FAILURE (exit 1) that names the
+#      dir and who read it, never a quiet success.
 #
 # and then prints what only a human can do (the Codex device code, the person's
 # own `gh auth login`, the ccquota enrollment) — and where the password went.
@@ -280,33 +287,62 @@ run sudo -u "$LOGIN" -H mkdir -p "$ROOT/logs"
 
 # 8. the background services, system shape, as the admin
 if [ "$DAEMONS" = 1 ]; then
-  # Under --apply the clone exists: render ITS templates with ITS apply script
-  # when that version knows --render-system (the same render the login's own
-  # first-login apply will compare against), else with this install's. A dry run
-  # has no clone yet — it previews the unit list from this install's templates.
+  # Under --apply the clone exists — inside the login's home, which macOS made
+  # 700, so the admin's own process can neither list nor read it (issue #1213;
+  # #1210 ①). Everything in it is read AS THE LOGIN: `sudo -u <login> -H ls`
+  # for the unit list, `sudo -u <login> -H cat` for each template and for the
+  # clone's own fleet-install-apply.sh, each copied into this run's temp dir
+  # (the admin's; stdout is ours). The render then runs here, as the admin,
+  # with the clone's script when that version knows --render-system (the same
+  # render the login's own first-login apply will compare against), else with
+  # this install's — and root installs + bootstraps the result. A dry run has
+  # no clone yet — it previews the unit list from this install's templates.
+  STAGE="$TMPD/stage"; mkdir -p "$STAGE/launchd" "$STAGE/bin" "$TMPD/plists"
+  unit_names() { sed -n 's/^com\.claude-fleet\.\(.*\)\.plist\.tmpl$/\1/p' | sort; }
   if [ "$APPLY" = 1 ]; then
-    TMPL_DIR="$ROOT/launchd"; APPLY_SH="$ROOT/bin/fleet-install-apply.sh"
-    grep -q -- '--render-system' "$APPLY_SH" 2>/dev/null || APPLY_SH="$BIN/fleet-install-apply.sh"
+    TMPL_DIR="$ROOT/launchd"
+    UNITS=$(sudo -u "$LOGIN" -H ls -1 "$TMPL_DIR" 2>"$TMPD/ls.err" | unit_names)
   else
-    TMPL_DIR="$BIN/../launchd"; APPLY_SH="$BIN/fleet-install-apply.sh"
+    TMPL_DIR="$BIN/../launchd"
+    UNITS=$(ls -1 "$TMPL_DIR" 2>/dev/null | unit_names)
   fi
-  UNITS=$(ls "$TMPL_DIR"/com.claude-fleet.*.plist.tmpl 2>/dev/null | sed 's#.*/com\.claude-fleet\.\(.*\)\.plist\.tmpl$#\1#' | sort)
   NU=$(printf '%s\n' "$UNITS" | sed '/^$/d' | wc -l | tr -d ' ')
   step "install $LOGIN's $NU background services as system LaunchDaemons (com.claude-fleet.$LOGIN.*, UserName $LOGIN — no GUI sign-in needed)"
-  if [ "$NU" = 0 ]; then
-    say "  (no launchd/*.plist.tmpl in $TMPL_DIR — nothing to install)"
+  if [ "$APPLY" = 1 ]; then
+    show sudo -u "$LOGIN" -H ls -1 "$TMPL_DIR"
+    if [ "$NU" = 0 ]; then
+      err=$(sed 's/^/: /' "$TMPD/ls.err" | head -n 1)
+      printf '%s: no launchd/com.claude-fleet.*.plist.tmpl in %s (read as %s)%s — 0 background services to install: the clone at stable carries no daemon templates\n' \
+        "$PROG" "$TMPL_DIR" "$LOGIN" "$err" >&2
+      fail
+    fi
+    say "  (the clone is in $LOGIN's 700 home: $NU templates + bin/fleet-install-apply.sh read as $LOGIN, rendered here as the admin)"
+    # shellcheck disable=SC2024  # the point: the login reads, the redirect is ours (admin-owned temp)
+    for u in $UNITS; do
+      t="launchd/com.claude-fleet.$u.plist.tmpl"
+      sudo -u "$LOGIN" -H cat "$ROOT/$t" > "$STAGE/$t" \
+        || { printf '%s: cannot read %s as %s\n' "$PROG" "$ROOT/$t" "$LOGIN" >&2; fail; }
+    done
+    APPLY_SH="$STAGE/bin/fleet-install-apply.sh"
+    # shellcheck disable=SC2024  # same: read as the login, written here
+    sudo -u "$LOGIN" -H cat "$ROOT/bin/fleet-install-apply.sh" > "$APPLY_SH" 2>/dev/null \
+      && grep -q -- '--render-system' "$APPLY_SH" || APPLY_SH="$BIN/fleet-install-apply.sh"
+  elif [ "$NU" = 0 ]; then
+    say "  WARN: no launchd/*.plist.tmpl in $TMPL_DIR — nothing to preview here; --apply reads the clone's (as $LOGIN) and fails on 0"
   fi
-  mkdir -p "$TMPD/plists"
+  NI=0
   for u in $UNITS; do
     label="com.claude-fleet.$LOGIN.$u"; dst="$DDIR/$label.plist"; src="$TMPD/plists/$label.plist"
     if [ "$APPLY" = 1 ]; then
-      FLEET_INSTALL_LOGIN="$LOGIN" FLEET_INSTALL_HOME="$H" bash "$APPLY_SH" --render-system "$u" --root "$ROOT" > "$src" \
+      FLEET_INSTALL_LOGIN="$LOGIN" FLEET_INSTALL_HOME="$H" bash "$APPLY_SH" --render-system "$u" --root "$STAGE" > "$src" \
         || { printf '%s: render %s failed (%s --render-system)\n' "$PROG" "$u" "$APPLY_SH" >&2; fail; }
     fi
     run_shown "sudo install -m 644 <$label.plist, rendered from launchd/com.claude-fleet.$u.plist.tmpl> $(printf %q "$dst")" \
       -- sudo install -m 644 "$src" "$dst"
     run sudo launchctl bootstrap system "$dst"
+    NI=$((NI + 1))
   done
+  [ "$APPLY" = 1 ] && say "  installed $NI/$NU"
 fi
 
 say ""

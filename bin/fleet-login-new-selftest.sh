@@ -7,6 +7,13 @@
 # sandbox, against a local fixture "GitHub" (FLEET_BOOTSTRAP_GIT_BASE) holding
 # the real launchd/ templates + fleet-install-apply.sh, tagged stable.
 #
+# The home is UNREADABLE to the admin (issue #1213): macOS creates it 700, so
+# the admin's own process cannot list or read the clone inside it — only root
+# (`sudo …`) and the login (`sudo -u <login>`) can. The createhomedir shim
+# makes the fake home mode 000 and the sudo shim unlocks it around each call
+# it runs, so a bare read of the home by the script fails here exactly as it
+# does on the real machine (#1210 ①: step 8 listed 0 templates and exited 0).
+#
 # What it pins:
 #   A. dry run    lists every command (addUser, home, ssh group, key, pool, clone,
 #                 the daemons), runs NONE of them, creates nothing — not even the
@@ -24,8 +31,11 @@
 #                 + logs/); every launchd template rendered in system shape —
 #                 Label com.claude-fleet.<login>.<unit>, UserName <login>, __HOME__
 #                 = its home — installed 644 under FLEET_INSTALL_DAEMON_DIR and
-#                 `launchctl bootstrap system`'d, 14 of them from the real repo;
-#                 --no-daemons skips that step and prints the GUI sign-in step
+#                 `launchctl bootstrap system`'d, 14 of them from the real repo
+#                 — read AS THE LOGIN out of its 700 home (#1213), `installed
+#                 N/N` printed, the home still unreadable to the admin at the
+#                 end; --no-daemons skips that step and prints the GUI sign-in
+#                 step
 #   C. exists     a known login → exit 3 in both modes, nothing run; an existing
 #                 home dir alone → exit 3
 #   D. no group   no com.apple.access_ssh → step skipped, dseditgroup never run
@@ -39,6 +49,11 @@
 #                 (#1210 ④) — with a RELATIVE --pubkey / --pool-src /
 #                 --password-file: --apply goes through, every relative path is
 #                 found, the transcript shows them absolute; a dry run likewise
+#   I. 0 units    (#1213) a stable with no launchd/*.plist.tmpl → --apply fails
+#                 at step 8 (exit 1) naming the dir + the login it read as,
+#                 nothing installed, nothing bootstrapped — never "nothing to
+#                 install" + exit 0; a dry run from an install without launchd/
+#                 warns and exits 0
 #
 # Exit 0 = pass.
 set -uo pipefail
@@ -50,7 +65,7 @@ BASH_BIN=/bin/bash; [ -x "$BASH_BIN" ] || BASH_BIN=bash
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/login-new-selftest.XXXXXX")" || exit 2
 WORK=$(cd "$WORK" && pwd -P)
-trap 'rm -rf "$WORK"' EXIT INT TERM HUP
+trap 'chmod -R u+rwX "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT INT TERM HUP
 
 CHECKS=0
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
@@ -68,6 +83,8 @@ mkdir -p "$WORK/shim"
 # docs/SHARED-MACHINE.md's example is typed) "the login" cannot stand — a
 # `sudo -u` run from there dies the way git did on getcwd (issue #1216)
 CALLER="$WORK/admin/projects/claude-fleet"
+# root and the login can read the home; the admin's bare process cannot (#1213):
+# unlock every fake home around the command, relock after — never exec.
 cat > "$WORK/shim/sudo" <<EOF
 #!/bin/sh
 # sudo -u <login> -H <cmd…>: as "the login" = us (the sandbox home is ours)
@@ -76,7 +93,10 @@ if [ "\$1" = -u ]; then
   shift 2; [ "\$1" = -H ] && shift
 fi
 echo "sudo \$1" >> "$LOG"
-exec "\$@"
+for h in "\$FLEET_LOGIN_HOMES"/*; do [ -d "\$h" ] && chmod 700 "\$h"; done
+"\$@"; rc=\$?
+for h in "\$FLEET_LOGIN_HOMES"/*; do [ -d "\$h" ] && chmod 000 "\$h"; done
+exit \$rc
 EOF
 for t in sysadminctl dseditgroup chown launchctl; do
   cat > "$WORK/shim/$t" <<EOF
@@ -89,7 +109,7 @@ done
 cat > "$WORK/shim/createhomedir" <<EOF
 #!/bin/sh
 echo "createhomedir \$*" >> "$LOG"
-mkdir -p "\$FLEET_LOGIN_HOMES/\$3"
+mkdir -p "\$FLEET_LOGIN_HOMES/\$3" && chmod 000 "\$FLEET_LOGIN_HOMES/\$3"
 EOF
 cat > "$WORK/shim/dscl" <<EOF
 #!/bin/sh
@@ -130,6 +150,17 @@ for l in alpha beta; do echo "tok-$l" > "$POOL/$l"; echo "CCQUOTA_ACCOUNT=$l" > 
 echo junk > "$POOL/.DS_Store"; echo old > "$POOL/alpha~"; mkdir "$POOL/subdir"
 chmod 600 "$POOL"/*
 
+# the lock (#1213): a home the script made must still be unreadable to us when
+# it returns — the sudo shim relocked after its last call — and a bare read of
+# a file inside it fails; the assertions below then need it open.
+# LOCK_BITES=0: running as root, where mode 000 stops nothing (not a fleet box).
+LOCK_BITES=1; mkdir -p "$WORK/probe/x"; chmod 000 "$WORK/probe"
+ls "$WORK/probe" >/dev/null 2>&1 && LOCK_BITES=0
+chmod 700 "$WORK/probe"
+locked() { # $1 home: still mode 000 (0), or open / missing (1)
+  [ -d "$1" ] && [ "$(mode "$1")" = 0 ]
+}
+unlock_homes() { for h in "$FLEET_LOGIN_HOMES"/*; do [ -d "$h" ] && chmod 700 "$h"; done; return 0; }
 run() { : > "$LOG"; OUT=$("$BASH_BIN" "$S" "$@" 2>&1); RC=$?; CALLS=$(cat "$LOG"); }
 mutations() { printf '%s\n' "$CALLS" | grep -v '^dscl ' | grep -c . ; }
 
@@ -176,6 +207,13 @@ contains "A --no-daemons installs itself" "$OUT" "claude-fleet + Claude Code ins
 run victor --full-name 'Victor V' --pubkey "$KEY" --share-pool --pool-src "$POOL" --machine box --apply $DAEMONS
 eq "B apply exit" 0 "$RC"
 H="$FLEET_LOGIN_HOMES/victor"
+# the home was never opened to the admin's own process (#1213): still 000, and a
+# bare read of the clone inside it fails — the script got everything via sudo
+locked "$H" || fail "B home is readable to the admin after the run (mode $(mode "$H")) — the sudo shim did not relock it"
+if [ "$LOCK_BITES" = 1 ]; then
+  ls "$H/.claude/fleet/launchd" >/dev/null 2>&1 && fail "B the admin can list the clone's launchd/ in a locked home — the lock model is broken"
+fi
+unlock_homes
 ORDER=$(printf '%s\n' "$CALLS" | grep -Ev '^(sudo|dscl) ' | awk '{print $1}' | uniq | tr '\n' ' ')
 eq "B call order" "sysadminctl createhomedir dseditgroup chown$([ -z "$DAEMONS" ] && echo " launchctl") " "$ORDER"
 # B2. the password (#1192): generated into the admin's home, 600, on argv, never in the output
@@ -219,6 +257,13 @@ if [ -z "$DAEMONS" ]; then
     contains "B3 $u runs the login's clone" "$(plutil -extract ProgramArguments.2 raw -o - "$f")" "$H/.claude/fleet/"
     ok_bs=$(grep -c "^launchctl bootstrap system $f$" "$LOG"); eq "B3 $u bootstrapped once" 1 "$ok_bs"
   done
+  # #1213: the templates were listed + read AS THE LOGIN (the admin cannot read a
+  # 700 home), rendered here, and the count printed matches what was installed
+  contains "B3 templates listed as the login" "$OUT" "sudo -u victor -H ls -1 $H/.claude/fleet/launchd"
+  contains "B3 read as the login" "$OUT" "read as victor"
+  eq "B3 $NTMPL templates + the apply script read as the login" "$((NTMPL + 1))" "$(grep -c '^sudo cat$' "$LOG")"
+  contains "B3 installed N/N" "$OUT" "installed $NTMPL/$NTMPL"
+  not_contains "B3 never 'nothing to install'" "$OUT" "nothing to install"
   # the login's own first-login apply must find them current: same render, from its clone
   same=$(FLEET_INSTALL_LOGIN=victor FLEET_INSTALL_HOME="$H" bash "$H/.claude/fleet/bin/fleet-install-apply.sh" --render-system spinner --root "$H/.claude/fleet" | plutil -convert xml1 -o - -)
   eq "B3 render matches the bootstrap's" "$same" "$(plutil -convert xml1 -o - "$FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.victor.spinner.plist")"
@@ -235,7 +280,7 @@ contains "B zshrc chown" "$CALLS" "chown victor:staff $H/.zshrc"
 # B2. --password-file: its first line, nothing generated
 printf 'hunter2-from-file\nsecond line ignored\n' > "$WORK/pw.txt"
 : > "$LOG"; OUT=$("$BASH_BIN" "$S" pam --full-name P --pubkey "$KEY" --password-file "$WORK/pw.txt" --apply --no-daemons 2>&1); RC=$?
-CALLS=$(cat "$LOG")
+CALLS=$(cat "$LOG"); unlock_homes
 eq "B2 --password-file exit" 0 "$RC"
 contains "B2 --password-file argv" "$CALLS" "sysadminctl -addUser pam -fullName P -password hunter2-from-file"
 not_contains "B2 --password-file never printed" "$OUT" "hunter2-from-file"
@@ -249,7 +294,7 @@ eq "C home exists → 3" 3 "$RC"
 eq "C home exists nothing run" 0 "$(mutations)"
 for m in "" --apply; do
   : > "$LOG"; OUT=$(FAKE_EXISTING='root victor2' "$BASH_BIN" "$S" victor2 --full-name V --pubkey "$KEY" $m 2>&1); RC=$?
-  CALLS=$(cat "$LOG")
+  CALLS=$(cat "$LOG"); unlock_homes
   eq "C login exists → 3 ($m)" 3 "$RC"
   contains "C says exists ($m)" "$OUT" "already exists"
   eq "C nothing run ($m)" 0 "$(mutations)"
@@ -258,7 +303,7 @@ done
 
 # --- D. no ssh access group --------------------------------------------------
 : > "$LOG"; OUT=$(FAKE_SSH_GROUP=0 "$BASH_BIN" "$S" dora --full-name D --pubkey "$KEY" --apply $DAEMONS 2>&1); RC=$?
-CALLS=$(cat "$LOG")
+CALLS=$(cat "$LOG"); unlock_homes
 eq "D exit" 0 "$RC"
 contains "D skipped" "$OUT" "skipped: no com.apple.access_ssh"
 not_contains "D no dseditgroup" "$CALLS" "dseditgroup"
@@ -293,6 +338,7 @@ contains "E empty key warns" "$OUT" "WARN"
 
 # --- F. a failing step stops the run ------------------------------------------
 : > "$LOG"; OUT=$(FAKE_FAIL=dseditgroup "$BASH_BIN" "$S" fay --full-name F --pubkey "$KEY" --apply $DAEMONS 2>&1); RC=$?
+unlock_homes
 eq "F exit 1" 1 "$RC"
 contains "F says where" "$OUT" "FAILED at step 3"
 [ -e "$FLEET_LOGIN_HOMES/fay/.ssh" ] && fail "F kept going after a failed step"
@@ -312,7 +358,7 @@ eq "G no pool exit" 0 "$RC"
 cp "$KEY" "$CALLER/hal.pub"; mkdir -p "$CALLER/pool"; cp -p "$POOL"/alpha "$POOL"/alpha.conf "$POOL"/beta "$POOL"/beta.conf "$CALLER/pool/"; printf 'pw-from-cwd\n' > "$CALLER/pw.txt"
 ( cd "$CALLER" && "$WORK/shim/sudo" -u hal -H git --version >/dev/null 2>&1 ) && fail "H the shim does not refuse a -u run from the closed cwd"
 ( cd "$CALLER" && "$WORK/shim/sudo" tee /dev/null </dev/null >/dev/null 2>&1 ) || fail "H the shim refuses a root (no -u) run from the closed cwd"
-hrun() { : > "$LOG"; OUT=$(cd "$CALLER" && "$BASH_BIN" "$S" "$@" 2>&1); RC=$?; CALLS=$(cat "$LOG"); }
+hrun() { : > "$LOG"; OUT=$(cd "$CALLER" && "$BASH_BIN" "$S" "$@" 2>&1); RC=$?; CALLS=$(cat "$LOG"); unlock_homes; }
 hrun hal --full-name 'Hal H' --pubkey hal.pub --share-pool --pool-src ./pool --password-file pw.txt --apply $DAEMONS
 eq "H apply from the closed cwd: exit 0" 0 "$RC"
 not_contains "H no getcwd death" "$OUT" "Unable to read current working directory"
@@ -338,5 +384,34 @@ eq "H dry run nothing executed" 0 "$(mutations)"
 hrun jo --full-name J --pubkey nope.pub
 eq "H missing relative key → 2" 2 "$RC"
 not_contains "H bash32" "$OUT" "unbound variable"
+# --- I. 0 templates (#1213) -----------------------------------------------------
+# a stable whose clone carries no launchd/*.plist.tmpl: --apply FAILS at step 8,
+# names the dir it read (as the login) — never "nothing to install" + exit 0
+FX2="$WORK/fx2"; mkdir -p "$FX2/bin"; cp "$BIN/fleet-install-apply.sh" "$FX2/bin/"
+git init -q -b master "$FX2" && git -C "$FX2" add -A && git -C "$FX2" commit -qm stable && git -C "$FX2" tag stable
+GB2="$WORK/gh2"; mkdir -p "$GB2/verkyyi"; git clone -q --bare "$FX2" "$GB2/verkyyi/claude-fleet.git"
+if [ -z "$DAEMONS" ]; then
+  : > "$LOG"; OUT=$(FLEET_BOOTSTRAP_GIT_BASE="$GB2" "$BASH_BIN" "$S" kim --full-name K --pubkey "$KEY" --share-pool --pool-src "$POOL" --apply 2>&1); RC=$?
+  CALLS=$(cat "$LOG"); unlock_homes
+  eq "I 0 templates → exit 1" 1 "$RC"
+  contains "I fails at step 8" "$OUT" "FAILED at step 8"
+  contains "I names the dir + who read it" "$OUT" "no launchd/com.claude-fleet.*.plist.tmpl in $FLEET_LOGIN_HOMES/kim/.claude/fleet/launchd (read as kim)"
+  contains "I says 0" "$OUT" "0 background services"
+  not_contains "I never 'nothing to install'" "$OUT" "nothing to install"
+  for f in "$FLEET_INSTALL_DAEMON_DIR"/com.claude-fleet.kim.*; do [ -e "$f" ] && fail "I installed $f with 0 templates"; done
+  not_contains "I nothing bootstrapped" "$CALLS" "launchctl bootstrap"
+  eq "I clone happened first" "$(git -C "$FX2" rev-parse stable)" "$(git -C "$FLEET_LOGIN_HOMES/kim/.claude/fleet" rev-parse HEAD 2>/dev/null)"
+fi
+# a dry run has no clone: it previews from THIS install's launchd/ — none there
+# is a WARN, not a failure (--apply reads the clone's)
+NL="$WORK/nolaunchd/bin"; mkdir -p "$NL"; ln -s "$BIN"/* "$NL/"
+: > "$LOG"; OUT=$("$BASH_BIN" "$NL/fleet-login-new.sh" lou --full-name L --pubkey "$KEY" 2>&1); RC=$?
+CALLS=$(cat "$LOG")
+eq "I dry run without launchd/ exits 0" 0 "$RC"
+contains "I dry run warns" "$OUT" "WARN: no launchd/*.plist.tmpl in $NL/../launchd"
+contains "I dry run says 0" "$OUT" "[7] install lou's 0 background services"
+not_contains "I dry run never 'nothing to install'" "$OUT" "nothing to install"
+eq "I dry run nothing executed" 0 "$(mutations)"
+[ -e "$FLEET_LOGIN_HOMES/lou" ] && fail "I dry run created a home"
 
 echo "fleet-login-new-selftest PASS ($CHECKS checks, $("$BASH_BIN" -c 'echo $BASH_VERSION'))"

@@ -54,7 +54,10 @@ exists — without it Remote Login admits every user), installs `--pubkey` as
 `/Library/LaunchDaemons/com.claude-fleet.alice.<unit>.plist`, `UserName alice`,
 rendered from that clone by `fleet-install-apply.sh --render-system` and
 `launchctl bootstrap system`'d — the shape every guest login on a shared mini
-runs. It stops at the first failed step, refuses (exit 3) when the login or
+runs. Her home is 700, so the templates are read out of the clone **as alice**
+(`sudo -u alice -H cat`, issue #1213) and rendered in the admin's temp dir; the
+step ends `installed 14/14`, and a clone with no templates fails the run (exit
+1) instead of installing nothing. It stops at the first failed step, refuses (exit 3) when the login or
 `/Users/alice` already exists, never overwrites, and writes nothing in alice's
 home outside `.ssh/`, `.config/claude-fleet/accounts/`, `.zshrc` and
 `.claude/fleet/`. That `.zshrc` is the `~/.local/bin` PATH line (where Claude
