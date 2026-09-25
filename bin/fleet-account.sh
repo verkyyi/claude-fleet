@@ -732,7 +732,10 @@ cmd_quota_verdict() {
   done
   echo "quota-verdict: $label —$hits (ceiling ${CEILING}%, cache ${age}s old)" >&2
   if [ "$lim" = 1 ]; then
-    [ "$until" -gt "$(now)" ] || until=$(( $(now) + $(acct_ttl "$label") ))
+    # A just-expired ccquota window can still report its OLD utilization for a
+    # brief hub lag. Recheck soon; extending it by the 5h fallback TTL would
+    # strand an account that has already reset for another full window.
+    [ "$until" -gt "$(now)" ] || until=$(( $(now) + 60 ))
     echo "limited $until"
   else
     echo ok

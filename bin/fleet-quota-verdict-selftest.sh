@@ -44,6 +44,7 @@ row() { printf '{"account_uuid":"u-%s","label":"%s","headroom_pct":%s,"five_hour
 case "\$(cat "$MODE" 2>/dev/null)" in
   empty) printf '{"verdict":"unknown","accounts":[]}\n' ;;
   hot)   printf '{"verdict":"go","accounts":[%s,%s]}\n' "\$(row a 2 99)" "\$(row b 20 10)" ;;
+  expired) printf '{"verdict":"go","accounts":[{"account_uuid":"u-a","label":"a","headroom_pct":2,"five_hour":{"utilization":98,"resets_at":"2020-01-01T00:00:00Z"},"seven_day":{"utilization":10,"resets_at":"$R7ISO"}}]}\n' ;;
   only-b) printf '{"verdict":"go","accounts":[%s]}\n' "\$(row b 20 10)" ;;
   *)     printf '{"verdict":"go","accounts":[%s,%s]}\n' "\$(row a 2 34)" "\$(row b 20 10)" ;;
 esac
@@ -81,6 +82,13 @@ eq "7d 99% on the weekly axis → limited until ccquota's 7d reset" "limited $R7
 eq "…the 5h axis of the same account is ok (2%)"   ok "$(verdict a --axis 5h)"
 eq "…no axis weighs both → limited"               "limited $R7" "$(verdict a)"
 eq "a healthy account in the same payload → ok"   ok "$(verdict b)"
+echo expired > "$MODE"; age_cache 30
+expired_until="$(verdict a --axis 5h --refresh)"
+case "$expired_until" in "limited "*) expired_until="${expired_until#limited }" ;; *) fail "expired high reading did not remain a short limit" "$expired_until" ;; esac
+now_s="$(date +%s)"
+[ "$expired_until" -ge "$((now_s + 55))" ] && [ "$expired_until" -le "$((now_s + 65))" ] \
+  || fail "expired reset was extended too far instead of retried in ~60s" "$expired_until"
+CHECKS=$((CHECKS+1))
 age_cache 700
 eq "stale cache (> FLEET_ACCOUNT_QUOTA_STALE) → unknown" unknown "$(verdict a)"
 echo only-b > "$MODE"; age_cache 30
