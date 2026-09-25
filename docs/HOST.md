@@ -7,13 +7,13 @@ the one place the host recommendations live (EPIC #1074). Each section says
 and **how to undo it**.
 
 `fleet-doctor` has a matching `host` section (macOS only; skipped on Linux —
-except the `network` line, which reads `ip route` there) with one line per
-recommendation. The doctor only **reports** — it never changes a
+except the `network` line, which reads `ip route` there, and the `ingress`
+line, which asks a machine outside) with one line per recommendation. The doctor only **reports** — it never changes a
 system setting. Every change below is yours to run — one by one from this page,
 or all at once with [`fleet-host-tune.sh`](#tune).
 
 ```sh
-bash ~/.claude/fleet/bin/fleet-doctor.sh 2>&1 | grep -E '^\s*\S+\s+(spotlight|wtroot|nofile|sleep|siri|icloud|network)'
+bash ~/.claude/fleet/bin/fleet-doctor.sh 2>&1 | grep -E '^\s*\S+\s+(spotlight|wtroot|nofile|sleep|siri|icloud|network|ingress)'
 ```
 
 ## Contents
@@ -25,6 +25,7 @@ bash ~/.claude/fleet/bin/fleet-doctor.sh 2>&1 | grep -E '^\s*\S+\s+(spotlight|wt
 - [An unattended Mac](#headless) — auto-login, never sleep, Siri, iCloud, no GUI apps on the console
 - [Container VMs](#containers) — how much of the machine Colima / Docker Desktop may take
 - [One network link](#network) — wired only, a fixed address, Tailscale as the way back in
+- [Reachable from outside](#ingress) — a probe host abroad checks the public SSH entry lands here
 - [Verify](#verify)
 - [All at once: fleet-host-tune.sh](#tune)
 
@@ -374,15 +375,58 @@ LAN does, it works from outside the house, and when the LAN side is confused —
 two links, a new router, a changed lease — the tailnet address is how you get
 in to fix it. The fleet's doc-preview already serves on the tailnet.
 
+<a id="ingress"></a>
+## Reachable from outside
+
+**Why.** The one thing a newcomer's welcome letter promises is `ssh -p <port>
+<login>@<host>` — and that promise cannot be checked from here. From this
+machine, or from a laptop on the same LAN, the public entry either fails (NAT
+hairpin) or lands on the LAN address whatever the router forwards; on
+2026-09-25 opening a new login was stuck for an evening because neither could
+tell that the entry was port 22022, and only a box in another country could.
+Meanwhile a router that has forgotten its forward, or forwards the port to a
+different machine now, looks fine from inside.
+
+**Command.** Give the fleet a probe host on the far side of the internet — a
+VPS, a machine in another network — as an ssh alias with key auth and its host
+key already in `known_hosts` (the probe runs in `BatchMode`, so it can never
+ask), then set the three keys once per machine (`prefix+c` → 身份/identity, or
+three lines in `~/.config/claude-fleet/fleet.settings`):
+
+```sh
+FLEET_SSH_PUBLIC_HOST=ssh.example.com   # what the welcome letter says (#1195)
+FLEET_SSH_PUBLIC_PORT=22022
+FLEET_SSH_PROBE_HOST=my-vps             # `ssh my-vps` must work without a prompt
+```
+
+`fleet-doctor`'s `ingress` line then asks the probe host to
+`ssh-keyscan -t ed25519 -p 22022 ssh.example.com` and compares the host key it
+gets with the one sshd presents on `127.0.0.1` here. Same key → PASS: the entry
+is open **and** it is this machine. A different key → WARN: the entry lands on
+another machine (the router forwards elsewhere). Nothing back → WARN: closed, or
+the forward is gone — the line names the port to check. The probe itself
+unreachable → WARN naming the probe, and nothing is claimed about the entry.
+Every step is bounded (`FLEET_INGRESS_TIMEOUT`, 20s per step) so a stalled link
+ends in a WARN, not a hung doctor; the verdict is cached for `FLEET_INGRESS_TTL`
+(1h; a WARN for at most 5 min) so re-running the doctor does not re-cross the
+internet — `FLEET_INGRESS_TTL=0` re-probes now.
+
+**Lighter alternative.** None from inside. Without a probe host, leave
+`FLEET_SSH_PROBE_HOST` unset (no line) and check the entry by hand from a phone
+off Wi-Fi: `nc -vz ssh.example.com 22022`.
+
+**Undo.** Unset `FLEET_SSH_PROBE_HOST` (the letter keeps its host and port), or
+`FLEET_DOCTOR_INGRESS=0`.
+
 <a id="verify"></a>
 ## Verify
 
 Every item above with a measurable state is one line of `fleet-doctor`'s `host`
 section (macOS only — on Linux the section is skipped silently, except
-`network`):
+`network` and `ingress`):
 
 ```sh
-bash ~/.claude/fleet/bin/fleet-doctor.sh 2>&1 | grep -E '^\s*\S+\s+(spotlight|wtroot|nofile|sleep|siri|icloud|network)'
+bash ~/.claude/fleet/bin/fleet-doctor.sh 2>&1 | grep -E '^\s*\S+\s+(spotlight|wtroot|nofile|sleep|siri|icloud|network|ingress)'
 ```
 
 | line | reads | verdicts |
@@ -394,6 +438,7 @@ bash ~/.claude/fleet/bin/fleet-doctor.sh 2>&1 | grep -E '^\s*\S+\s+(spotlight|wt
 | `siri` | `defaults read com.apple.assistant.support "Assistant Enabled"` | 1 → INFO · 0 / no key → PASS |
 | `icloud` | `pgrep -x bird cloudd fileproviderd` | any alive → INFO (named) · none → PASS |
 | `network` | `netstat -rn -f inet` (Linux: `ip -4 route show default`) | one gateway as default through 2+ interfaces → WARN · else PASS · no gateway route → no row |
+| `ingress` | `ssh <probe> ssh-keyscan -p <port> <host>` vs `ssh-keyscan 127.0.0.1` (`FLEET_SSH_PUBLIC_HOST/PORT` + `FLEET_SSH_PROBE_HOST`) | same ed25519 key → PASS · different key / closed / probe unreachable / no local sshd → WARN (named) · keys unset → no row · verdict cached `FLEET_INGRESS_TTL` |
 
 WARN counts toward the doctor's summary; INFO is advice and never counted. Each
 line says how to silence itself (`FLEET_DOCTOR_<LINE>=0`, in the environment or

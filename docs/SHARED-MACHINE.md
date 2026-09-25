@@ -83,6 +83,15 @@ port are `FLEET_SSH_PUBLIC_HOST` / `FLEET_SSH_PUBLIC_PORT`, machine-wide
 (default Chinese); `--no-welcome` skips it (then `--pubkey` is required). You
 send the letter; the script mails nothing and never prints the key.
 
+**Check the entry from outside before you send it** (issue #1196): from this
+machine or its LAN the public entry cannot be verified (NAT hairpin — that is
+how a newcomer's port was found only from a box abroad). Set
+`FLEET_SSH_PROBE_HOST` to an ssh alias on the far side of the internet (key
+auth, host key known) and `fleet-doctor`'s `ingress` line asks it to
+`ssh-keyscan` the entry and compares the host key with sshd's here: PASS means
+open **and** this machine; a WARN names what is wrong — closed, forwarded to
+another machine, or the probe itself unreachable. See docs/HOST.md#ingress.
+
 **No GUI sign-in is needed** (issue #1192): the daemons are system
 LaunchDaemons, so alice's first `ssh alice@mini` lands in a working fleet. The
 one exception is `--no-daemons`, for someone who will use the console: their
