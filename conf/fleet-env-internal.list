@@ -43,6 +43,7 @@ FLEET_DAEMON_IDLE_PROBE_BUDGET     knob: internal pacing/limit, safe in-code def
 FLEET_DAEMON_ROOT                  path: state/log location override (fleet-daemon-lib.sh)
 FLEET_DAEMON_WEDGED_MULT           knob: internal pacing/limit, safe in-code default (fleet-daemon-lib.sh)
 FLEET_DASH_LAUNCHER                seam: an injectable command/path for tests (fleet-ui-refresh.sh)
+FLEET_DASH_MANUAL_SUB_BIN           seam: fake manual quota gate for picker tests (dash-migrate.sh)
 FLEET_DASH_MIGRATE_BIN             seam: an injectable command/path for tests (dash-migrate.sh)
 FLEET_DASH_POPUP_MAX_AGE           knob: internal pacing/limit, safe in-code default (dash-popup-wait.sh)
 FLEET_DASH_POPUP_POLL              knob: internal pacing/limit, safe in-code default (dash-popup-wait.sh)
@@ -95,6 +96,7 @@ FLEET_LANG_RULE_SEED               handoff: the one-language rule text injected 
 FLEET_LATCH_RESET_SOURCE           seam: source the latch-reset hook as a library without running it
 FLEET_LAUNCHD_AGENTS_DIR           path: state/log location override (fleet-daemon-watch.sh)
 FLEET_LAUNCH_SESSION               handoff: the fleet session a launch is for (pool adapter check)
+FLEET_MANUAL_ACCOUNT_BIN           seam: fake fresh quota reader for manual target tests (fleet-manual-sub.sh)
 FLEET_LEDGER_WATCH                 knob: 0 turns the ledger-watch daemon into a no-op
 FLEET_LEDGER_WATCH_LEASE_TTL       knob: internal pacing/limit, safe in-code default (fleet-ledger-watch.sh)
 FLEET_LIVE_DIR                     path: state/log location override (fleet-doctor.sh)
