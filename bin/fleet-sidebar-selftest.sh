@@ -23,6 +23,7 @@ import threading
 import time
 
 real_bin = Path(sys.argv[1])
+os.environ['FLEET_UI_LANG'] = 'zh'
 spec = importlib.util.spec_from_file_location('sidebar', real_bin / 'fleet-sidebar.py')
 sidebar = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(sidebar)
@@ -92,7 +93,8 @@ base = subprocess.run(['git', '-C', str(main), 'branch', '--show-current'], text
 fleet_conf = 'FLEET_SIDEBAR=1\nFLEET_MAIN=%s\nFLEET_BASE_BRANCH=%s\n' % (main, base)
 sock = str(work / 'fleet-test')
 env = dict(os.environ, TMPDIR=str(work), FLEET_CONF_DIR=str(work / 'conf'),
-           FLEET_HUB_VISITS_LOGDIR=str(work / 'logs'), TERM='xterm-256color')
+           FLEET_HUB_VISITS_LOGDIR=str(work / 'logs'), TERM='xterm-256color',
+           FLEET_UI_LANG='zh')
 shim = work / 'path'
 shim.mkdir()
 (shim / 'tmux').write_text('#!/bin/sh\nexec ' + shlex.quote(real_tmux) +
@@ -1139,11 +1141,11 @@ try:
             time.sleep(1)
             check(w3 in windows(), 'declining the reap confirm still reaped the window')
     wait_for(lambda: w3 not in windows(), 'a confirmed menu reap did not close the window')
-    wait_for(lambda: painted('fleet: reaped'), 'a confirmed reap did not toast its outcome')
+    wait_for(lambda: painted('fleet: 已回收'), 'a confirmed reap did not toast its outcome')
     check(current() == w1 and w1 in windows(), 'the reap touched the window in view')
     del screen_out[:]
     call('reap', hub)
-    wait_for(lambda: painted('not reaped'), 'a refused reap was silent')
+    wait_for(lambda: painted('未回收'), 'a refused reap was silent')
     check(hub in windows(), 'the menu reap disposed of the hub')
 
     # A no-repo session in $HOME (issue #996) carries `@norepo 1` and none of

@@ -8,6 +8,7 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -n "${TMUX:-}" ] || exit 0
 . "$BIN/fleet-lib.sh"
+. "$BIN/fleet-ui-lang.sh"
 verb="${1:-sync}"; target="${2:-}"
 if [ -n "$target" ]; then
   sess=$(tmux display-message -p -t "$target" '#{session_name}' 2>/dev/null) || exit 0
@@ -20,6 +21,7 @@ socket_path=$(tmux display-message -p -t "$sess" '#{socket_path}' 2>/dev/null) |
 conf=$(fleet_conf_file "$sess")
 [ -f "$conf" ] || exit 0
 fleet_load_conf "$sess"
+export FLEET_UI_LANG="${FLEET_UI_LANG:-}"
 
 case "$verb" in
   toggle|hide)
@@ -27,14 +29,14 @@ case "$verb" in
     { [ "$verb" = hide ] || [ "${FLEET_SIDEBAR:-1}" = 1 ]; } && enabled=0
     . "$BIN/fleet-config-lib.sh"
     if ! fcfg_write "$conf" FLEET_SIDEBAR "$enabled" bool >/dev/null; then
-      tmux display-message 'fleet: could not save sidebar preference' 2>/dev/null || :
+      tmux display-message "$(fleet_ui_t sidebar_save_failed)" 2>/dev/null || :
       exit 0
     fi
     FLEET_SIDEBAR=$enabled
     if [ "$enabled" = 1 ]; then
-      tmux display-message 'fleet: task sidebar on — shown when the worker has room' 2>/dev/null || :
+      tmux display-message "$(fleet_ui_t sidebar_on)" 2>/dev/null || :
     else
-      tmux display-message 'fleet: task sidebar hidden' 2>/dev/null || :
+      tmux display-message "$(fleet_ui_t sidebar_hidden)" 2>/dev/null || :
     fi
     verb=sync ;;
   sync|key) ;;

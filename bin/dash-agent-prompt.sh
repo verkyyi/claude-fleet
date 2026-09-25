@@ -52,6 +52,7 @@ C="${TMPDIR:-/tmp}/.claude-dash"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
+. "$BIN/fleet-ui-lang.sh"
 sess="${FLEET_SESSION:-}"
 [ -n "$sess" ] || sess=$(fleet_current_session 2>/dev/null)
 [ -n "$sess" ] && fleet_load_conf "$sess"
@@ -72,7 +73,7 @@ glyph="${DASH_GLYPH_AGENT:-}"
 [ -n "$glyph" ] || glyph=$(bash "$BIN/dash-keymap.sh" glyph agent 2>/dev/null)
 [ -n "$glyph" ] || glyph='⌃v'
 glyph=${glyph//[()]/}; glyph=${glyph//[$'\n\r']/}   # goes inside change-ghost(…) too
-ghost="↵ 新开 scratch（预填不发送） · 切换 agent: ${glyph}"
+ghost=$(fleet_ui_t dash_ghost_fmt "$glyph")
 
 case "$mode" in
   agent)  printf '%s\n' "$agent" ;;

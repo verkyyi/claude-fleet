@@ -25,7 +25,7 @@ import unicodedata
 
 BIN = Path(__file__).absolute().parent  # preserve the selftest shadow root
 US = "\x1f"
-VIEW_VERSION = "16"  # #1105: a paste lands on the input line; replace live v15 views once
+VIEW_VERSION = "19"  # pass FLEET_UI_LANG into tmux-spawned sidebar panes
 # ↑↓ follow (issue #822): an arrow moves the highlight at once and switches to
 # it only after this much quiet. A held key on a slow link is one switch, not
 # one per row, and a row passed over is never selected — so the wake hook's
@@ -40,7 +40,48 @@ PRODUCER_TIMEOUT = 10
 # The input line (issue #896): a refused spawn's reason stays this long, then
 # the typed name — which is kept — shows again.
 TOAST_SECS = 4
-PLACEHOLDER = "新会话名…"
+
+
+def ui_lang():
+    value = os.environ.get("FLEET_UI_LANG", "auto")
+    if value.startswith("zh") or value in ("cn", "CN", "Chinese", "chinese"):
+        return "zh"
+    if value.startswith("en") or value in ("English", "english"):
+        return "en"
+    locale = (os.environ.get("LC_ALL") or os.environ.get("LC_MESSAGES") or
+              os.environ.get("LC_CTYPE") or os.environ.get("LANG") or "")
+    if locale.startswith(("zh", "ZH")):
+        return "zh"
+    if locale.startswith(("en", "EN")):
+        return "en"
+    return "zh"
+
+
+TEXT = {
+    "zh": {
+        "placeholder": "新会话名…",
+        "help_row": " ? 快捷键",
+        "no_repo": "无仓库",
+        "new_to": "新会话 → {name}…",
+        "rename": "改名› ",
+        "spawn_failed": "创建失败",
+    },
+    "en": {
+        "placeholder": "New session name…",
+        "help_row": " ? keys",
+        "no_repo": "no repo",
+        "new_to": "New session → {name}…",
+        "rename": "rename› ",
+        "spawn_failed": "spawn failed",
+    },
+}
+
+
+def tr(key, **kwargs):
+    return TEXT[ui_lang()][key].format(**kwargs)
+
+
+PLACEHOLDER = tr("placeholder")
 # The 置顶 group's heading key (issue #1170): selectable so ←/→ can fold it, but
 # it names no repo — a tap only highlights it, never opens the new-session popup.
 PIN_HEADING = "hdr:pin"
@@ -48,7 +89,7 @@ PIN_HEADING = "hdr:pin"
 # input line, opens this sidebar's key sheet — Claude Code's "? for shortcuts".
 # An explicit exception to EPIC #894 convention 5 (no resident rows), chosen by
 # the operator: on an iPad a whole row is a tap target a hint glyph is not.
-HELP_ROW = " ? 快捷键"
+HELP_ROW = tr("help_row")
 # A Chinese IME turns the `.` and `?` keys into full-width 。/． and ？ (issue
 # #965). On an EMPTY input line they are the same keys — the row menu and the
 # key sheet — so the operator need not switch to English first; inside a name
@@ -219,7 +260,10 @@ def sync(session, enabled, width, lock):
         remove_view(reusable[0][0])
     # A reused view must not keep its first worker's worktree alive after moving.
     cwd = str(BIN.parent)
+    # tmux spawns the pane from the server environment, not this process's
+    # sourced shell environment, so pass UI language explicitly.
     cmd = " ".join(shlex.quote(arg) for arg in (
+        "env", "FLEET_UI_LANG=" + os.environ.get("FLEET_UI_LANG", ""),
         "python3", str(BIN / "fleet-sidebar.py"), "ui", session, worker, lock))
     pane = tmux("split-window", "-d", "-h", "-b", "-f", "-l", str(width),
                 "-t", worker, "-c", cwd, "-P", "-F", "#{pane_id}", cmd)
@@ -653,14 +697,14 @@ def target_name(key):
     if not key.startswith("hdr:") or key == PIN_HEADING:
         return ""
     repo = key[4:]
-    return "no repo" if repo == "none" else repo.rsplit("/", 1)[-1]
+    return tr("no_repo") if repo == "none" else repo.rsplit("/", 1)[-1]
 
 
 def placeholder(key):
     """The empty input line's hint: it names the destination whenever a heading
     is selected (issue #1032), so where a typed name goes is never a guess."""
     name = target_name(key)
-    return "新会话 → " + name + "…" if name else PLACEHOLDER
+    return tr("new_to", name=name) if name else PLACEHOLDER
 
 
 def tap(hit, highlighted):
@@ -813,7 +857,7 @@ def ui(screen, session, worker, lock):
                 leave_navigation(session)
             else:
                 # Keep the name: a cap refusal is retried once a slot frees.
-                reason = error[-1] if error else "spawn failed"
+                reason = error[-1] if error else tr("spawn_failed")
                 toast = "✗ " + reason.split(": ", 1)[-1]
                 toast_until = now + TOAST_SECS
             spawning = None
@@ -930,7 +974,9 @@ def ui(screen, session, worker, lock):
         # Hide is keyboard-only (prefix e): no tap here hides anything (#821).
         room = max(0, width - 3)
         if renaming is not None:
-            put(height - 1, "改名› " + line.view(max(0, room - 4)), curses.A_BOLD)
+            prefix = tr("rename")
+            put(height - 1, prefix + line.view(max(0, room - sum(map(cells, prefix)))),
+                curses.A_BOLD)
         elif spawning is not None:
             put(height - 1, "› " + line.view(max(0, room - 2), "") + " …", curses.A_DIM)
         elif toast and time.monotonic() < toast_until:

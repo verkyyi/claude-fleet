@@ -176,8 +176,252 @@ fcfg_tag() {
   '
 }
 
+# The config modal keeps fleet.conf.example as the English source of truth, then
+# translates only the tmux-facing labels when the fleet asks for a Chinese UI.
+_fcfg_ui_is_zh() {
+  case "${FLEET_UI_LANG:-auto}" in
+    zh|zh_*|zh-*|ZH|ZH_*|ZH-*|cn|CN|chinese|Chinese) return 0 ;;
+    en|en_*|en-*|EN|EN_*|EN-*|english|English) return 1 ;;
+  esac
+  case "${LC_ALL:-${LC_MESSAGES:-${LC_CTYPE:-${LANG:-}}}}" in
+    zh*|ZH*) return 0 ;;
+    *)       return 1 ;;
+  esac
+}
+
+fcfg_group_i18n() {
+  local g="${1:-other}"
+  _fcfg_ui_is_zh || { printf '%s' "$g"; return; }
+  case "$g" in
+    identity) printf '身份' ;;
+    spawn)    printf '启动' ;;
+    janitor)  printf '清理' ;;
+    status)   printf '界面' ;;
+    cache)    printf '缓存' ;;
+    caps)     printf '上限' ;;
+    autofill) printf '自动填充' ;;
+    backlog)  printf 'Backlog' ;;
+    bridge)   printf '桥接' ;;
+    handoff)  printf '交接' ;;
+    accounts) printf '账号' ;;
+    notify)   printf '通知' ;;
+    disk)     printf '磁盘/守护' ;;
+    quota)    printf '配额' ;;
+    other)    printf '其他' ;;
+    *)        printf '%s' "$g" ;;
+  esac
+}
+
+fcfg_label_i18n() {
+  local key="$1" fallback="${2:-$1}"
+  _fcfg_ui_is_zh || { printf '%s' "$fallback"; return; }
+  case "$key" in
+    FLEET_REPO) printf 'GitHub 仓库' ;;
+    FLEET_MAIN) printf '基础 checkout 路径' ;;
+    FLEET_BASE_BRANCH) printf '基础分支（锁定）' ;;
+    FLEET_CONF_DIR) printf '每个 fleet 的配置目录' ;;
+    FLEET_REPO_SHORT) printf '仓库短标签' ;;
+    FLEET_SEED) printf '种子仓库（只读取）' ;;
+    FLEET_ONBOARD) printf '首次启动时打开指南' ;;
+    FLEET_PROTECTED_RE) printf '受保护分支规则' ;;
+    FLEET_INSTALL_SYNC) printf '自动跟随 stable' ;;
+    FLEET_INSTALL_SYNC_TIMEOUT) printf '安装同步 fetch 超时' ;;
+    FLEET_INSTALL_FOLLOW_STUCK_SECS) printf '安装跟随卡住阈值' ;;
+    FLEET_REAP_KEPT_PROCS) printf '清理保留 worktree 的孤儿进程' ;;
+    FLEET_REAP_KEPT_MINAGE) printf '保留 worktree 清理最小年龄' ;;
+    FLEET_SCRATCH_MAX_IDLE) printf '回收空闲 scratch' ;;
+    FLEET_ROTATE_LEASE_TTL) printf '轮换租约 TTL' ;;
+    FLEET_HELPER_NO_MCP) printf 'helper claude -p 去掉 MCP' ;;
+    FLEET_CTX_WINDOW) printf '上下文窗口大小' ;;
+    FLEET_MODEL) printf 'Worker 模型' ;;
+    FLEET_SUBAGENT_MODEL) printf 'Subagent 模型' ;;
+    FLEET_MODEL_FALLBACK) printf '模型额度 fallback' ;;
+    FLEET_MODEL_LIMIT_TTL) printf '模型额度 TTL' ;;
+    FLEET_MODEL_CAP_PCT) printf '模型额度阈值' ;;
+    FLEET_GLOBAL_MAX_SESSIONS) printf '最大会话数 - 所有 fleets' ;;
+    FLEET_MAX_SESSIONS) printf '最大会话数 - 当前 fleet' ;;
+    FLEET_MCP_CONFIG) printf '当前 fleet 的 MCP 服务器' ;;
+    FLEET_AGENT) printf 'Worker agent 命令' ;;
+    FLEET_CODEX_MODEL) printf 'Codex worker 模型' ;;
+    FLEET_CODEX_MODEL_FALLBACK) printf 'Codex fallback 模型' ;;
+    FLEET_CODEX_MODEL_LIMIT_IDS) printf 'Codex 模型配额限制 ID' ;;
+    FLEET_CODEX_SERVER) printf 'Codex 私有 worker server' ;;
+    FLEET_CODEX_VERSION_CHECK) printf 'Codex 版本检查' ;;
+    FLEET_CODEX_HOME) printf 'Codex 账号 home' ;;
+    FLEET_CODEX_ACCOUNTS) printf 'Codex 账号池' ;;
+    FLEET_CODEX_QUOTA_GATE) printf 'Codex 配额门禁' ;;
+    FLEET_CODEX_QUOTA_FLOOR) printf 'Codex 配额下限百分比' ;;
+    FLEET_CODEX_QUOTA_TTL) printf 'Codex 配额缓存秒数' ;;
+    FLEET_CODEX_QUOTA_MIGRATE) printf 'Codex 配额迁移' ;;
+    FLEET_CODEX_MCP_CONFIG) printf 'Codex MCP 策略' ;;
+    FLEET_CODEX_SUBAGENT_MODEL) printf 'Codex subagent 模型' ;;
+    FLEET_CODEX_SUBAGENT_EFFORT) printf 'Codex subagent 推理强度' ;;
+    FLEET_PRETRUST) printf '启动时预信任 checkout' ;;
+    FLEET_AUTOFILL) printf '从带标签 backlog 自动填充空位' ;;
+    FLEET_AUTOFILL_MAX_PER_TICK) printf '自动填充批量大小' ;;
+    FLEET_CHILD_REPORT) printf '子任务向父任务报告结果' ;;
+    FLEET_CHILD_REPORT_BATCH_SECS) printf '子报告摘要最大等待' ;;
+    FLEET_DEFAULT_MILESTONE) printf '新建 issue 默认里程碑' ;;
+    FLEET_ISSUE_BRIDGE) printf '把 issue 评论转发给 worker' ;;
+    FLEET_ISSUE_BRIDGE_ASSOC_FLOOR) printf 'Bridge：可信关联级别' ;;
+    FLEET_ISSUE_BRIDGE_SECRET) printf 'Bridge：webhook HMAC 密钥' ;;
+    FLEET_ISSUE_BRIDGE_REVIVE) printf 'Bridge：唤醒 dormant issues' ;;
+    FLEET_BRIDGE_MAX_TYPING_DEFERS) printf 'Bridge：最大输入延迟次数' ;;
+    FLEET_CLEANUP) printf '清理守护进程（merge 后回收）' ;;
+    FLEET_CLEANUP_MERGED_GRACE) printf '清理 merged 宽限期' ;;
+    FLEET_CLEANUP_CLOSED_GRACE) printf '清理 closed 宽限期' ;;
+    FLEET_REAP_IDLE_DONE_MIN) printf '清理空闲完成的 raw 会话' ;;
+    FLEET_SLEEP) printf 'Worker 休眠' ;;
+    FLEET_SLEEP_AFTER) printf 'Worker 休眠空闲宽限' ;;
+    FLEET_SLEEP_WAKE) printf 'Worker 到达时唤醒' ;;
+    FLEET_SLEEP_WAKE_ARM) printf 'Worker 唤醒确认窗口' ;;
+    FLEET_SLEEP_MCP_RESTARTABLE) printf '可重启 MCP 服务' ;;
+    FLEET_CLEANUP_MAX_PER_TICK) printf '清理批量大小' ;;
+    FLEET_CLEANUP_CANDIDATE_TIMEOUT) printf '单个清理候选超时' ;;
+    FLEET_CLEANUP_SCRATCH_HEADS) printf '清理非 issue（scratch）heads' ;;
+    FLEET_CLOSE_ON_EXIT) printf '手动退出时关闭窗口并回收' ;;
+    FLEET_WEBHOOK) printf '通过 gh webhook forward 刷新状态' ;;
+    FLEET_WEBHOOK_PORT) printf 'Webhook handler 端口' ;;
+    FLEET_WEBHOOK_SECRET) printf 'Webhook HMAC 密钥' ;;
+    FLEET_EMIT_URL) printf '会话生命周期 endpoint' ;;
+    FLEET_EMIT_TOKEN) printf '会话生命周期 token' ;;
+    FLEET_ISSUE_TTL) printf 'Issue 缓存有效期' ;;
+    FLEET_GH_TTL) printf 'GitHub 缓存有效期' ;;
+    FLEET_COLLECT_DEADLINE) printf 'Collector tick 截止时间' ;;
+    FLEET_COLLECT_GIT_BUDGET) printf 'Collector git 预算' ;;
+    FLEET_COLLECT_GIT_SLOW) printf 'Collector git 慢日志' ;;
+    FLEET_COLLECT_TICK_BUDGET) printf 'Collector tick 预算' ;;
+    FLEET_COLLECT_QUOTAWATCH_BUDGET) printf 'Collector quotawatch 预算' ;;
+    FLEET_COLLECT_SOCKETS_BUDGET) printf 'Collector sockets 预算' ;;
+    FLEET_COLLECT_SESSMAP_BUDGET) printf 'Collector sessmap 预算' ;;
+    FLEET_COLLECT_ISSUES_BUDGET) printf 'Collector issues 预算' ;;
+    FLEET_COLLECT_CTX_BUDGET) printf 'Collector ctx 预算' ;;
+    FLEET_COLLECT_USAGE_BUDGET) printf 'Collector usage 预算' ;;
+    FLEET_COLLECT_SCRAPE_BUDGET) printf 'Collector scrape 预算' ;;
+    FLEET_COLLECT_BANNER_BUDGET) printf 'Collector banner 预算' ;;
+    FLEET_COLLECT_ESCALATE_BUDGET) printf 'Collector escalate 预算' ;;
+    FLEET_COLLECT_SNAPSHOT_BUDGET) printf 'Collector snapshot 预算' ;;
+    FLEET_COLLECT_STALE) printf 'Dash 陈旧告警' ;;
+    FLEET_COLLECT_KICK) printf 'Dash 自愈' ;;
+    FLEET_COLLECT_KICK_COOLDOWN) printf '自愈冷却时间' ;;
+    FLEET_COLLECT_KICK_TRACE) printf '自愈 trace 窗口' ;;
+    FLEET_DAEMON_STALE_MULT) printf 'Daemon 陈旧倍数' ;;
+    FLEET_DAEMON_STALE_FLOOR) printf 'Daemon 陈旧下限' ;;
+    FLEET_DAEMON_IDLE_AFTER) printf 'Daemon 空闲门槛' ;;
+    FLEET_DAEMON_KICK) printf 'Daemon 自愈' ;;
+    FLEET_DAEMON_KICK_COOLDOWN_MULT) printf 'Daemon 自愈冷却倍数' ;;
+    FLEET_DAEMON_KICK_COOLDOWN_FLOOR) printf 'Daemon 自愈冷却下限' ;;
+    FLEET_DAEMON_KICK_COOLDOWN) printf 'Daemon 自愈冷却（绝对）' ;;
+    FLEET_DAEMON_KICK_TRACE) printf 'Daemon trace 窗口' ;;
+    FLEET_DAEMON_RELOAD_AFTER) printf 'N 次 kick 后重载 daemon' ;;
+    FLEET_DAEMON_RELOAD_COOLDOWN) printf 'Daemon 重载冷却' ;;
+    FLEET_LAUNCHD_PROBE) printf 'launchd domain 探测' ;;
+    FLEET_LAUNCHD_PROBE_WINDOW) printf 'launchd 探测窗口' ;;
+    FLEET_LAUNCHD_PROBE_INTERVAL) printf 'launchd 探测间隔' ;;
+    FLEET_LAUNCHD_PROBE_TTL) printf 'launchd 探测结论 TTL' ;;
+    FLEET_DAEMON_DOMAIN_MIN) printf 'Domain 卡住 unit 阈值' ;;
+    FLEET_DAEMON_DOMAIN_KICK_WINDOW) printf 'Domain 卡住 kick 窗口' ;;
+    FLEET_PR_REFRESH_INTERVAL) printf 'PR 状态刷新' ;;
+    FLEET_POLL_MAX_BACKOFF) printf '轮询 backoff 上限' ;;
+    FLEET_DEPLOY_REF) printf 'Deploy ref（本地 checkout）' ;;
+    FLEET_DEPLOY_CHECK) printf 'Deploy 检查（Actions runs）' ;;
+    FLEET_STUCK_WORKING_SECS) printf '卡在 working 后降级' ;;
+    FLEET_STATE_IDLE_SECS) printf '原生 idle 后 reconcile working' ;;
+    FLEET_SIDEBAR) printf 'Worker 任务栏' ;;
+    FLEET_UI_LANG) printf 'Tmux UI 语言' ;;
+    FLEET_SIDEBAR_WIDTH) printf '任务栏宽度' ;;
+    FLEET_CLOSE_LANDS_NEXT) printf '关闭任务后落到下一个任务' ;;
+    FLEET_HOME_SIDEBAR_FIRST) printf '⌂/F9 先去任务栏' ;;
+    FLEET_STATUS_CONTAINER) printf '状态栏容器' ;;
+    FLEET_STATUS_CACHE_SECS) printf '状态栏统计共享秒数' ;;
+    FLEET_USAGE_WARN_PCT) printf '用量警告百分比' ;;
+    FLEET_USAGE_CRIT_PCT) printf '用量严重百分比' ;;
+    FLEET_RATELIMIT_TTL) printf 'Ratelimit 陈旧时间' ;;
+    FLEET_HANDOFF_DEST) printf '交接目标（comment|file）' ;;
+    FLEET_AUTO_HANDOFF_PCT) printf '自动交接百分比' ;;
+    FLEET_HANDOFF_DEFER_SECS) printf '交接输入保持时间' ;;
+    FLEET_HANDOFF_IDLE_TIMEOUT) printf '交接等待 idle 上限' ;;
+    FLEET_ACCOUNTS_DIR) printf '账号 token 目录' ;;
+    FLEET_ACCOUNTS) printf '订阅账号' ;;
+    FLEET_FAILOVER) printf '订阅 failover' ;;
+    FLEET_FAILOVER_AGENTS) printf '允许 failover 的 agents' ;;
+    FLEET_FAILOVER_BG_GRACE) printf '硬墙后台宽限' ;;
+    FLEET_FAILOVER_STUCK_ATTEMPTS) printf 'Failover 卡住尝试数' ;;
+    FLEET_ACCOUNT_LIMIT_TTL) printf '账号限制重查间隔' ;;
+    FLEET_ACCOUNT_CEILING) printf '提前轮换阈值' ;;
+    FLEET_ACCOUNT_WARN_PCT) printf '会话警告百分比' ;;
+    FLEET_ACCOUNT_QUOTA_TTL) printf 'ccquota 缓存 TTL' ;;
+    FLEET_ACCOUNT_QUOTA_STALE) printf '配额监控陈旧时间' ;;
+    FLEET_ACCOUNT_QUOTA_BLIND_STREAK) printf '配额监控连续盲读' ;;
+    FLEET_ACCOUNT_VERDICT_REFETCH) printf 'Banner refetch 去重' ;;
+    FLEET_ACCOUNT_QUOTA_VIA_BANNER_SECS) printf '通过 banner 显示配额的秒数' ;;
+    FLEET_ACCOUNT_PICK) printf '启动排名策略' ;;
+    FLEET_ACCOUNT_PICK_HYST) printf '启动排名 hysteresis' ;;
+    FLEET_ACCOUNT_PHASE) printf '遵循 phase plan' ;;
+    FLEET_ACCOUNT_PHASE_AUTO) printf '自动重新规划 phase' ;;
+    FLEET_MIGRATE_NUDGE) printf '迁移 resume nudge' ;;
+    FLEET_MIGRATE_NUDGE_MODEL) printf '迁移 resume nudge（模型额度）' ;;
+    FLEET_NOTIFY_CMD) printf '通知命令' ;;
+    FLEET_ESCALATE_AFTER) printf '无人处理后升级提醒' ;;
+    FLEET_ALLOW_AUTO_DENY) printf '允许自动拒绝权限提示' ;;
+    FLEET_DISK_FLOOR_GB) printf '磁盘低于 GB 时停止启动' ;;
+    FLEET_QUOTA_GATE) printf '接近配额上限时停止 autofill' ;;
+    FLEET_QUOTA_CEILING) printf '配额上限' ;;
+    FLEET_QUOTA_ACCOUNT) printf '用于判断的订阅' ;;
+    FLEET_QUOTA_BIN) printf 'ccquota 路径' ;;
+    FLEET_DISK_WARN_GB) printf '磁盘警告 GB' ;;
+    FLEET_RUNAWAY_CPU_PCT) printf 'Runaway CPU 百分比' ;;
+    FLEET_RUNAWAY_CPU_SECS) printf 'Runaway CPU 秒数' ;;
+    FLEET_RUNAWAY_CPU_ACTION) printf 'Runaway CPU 动作' ;;
+    FLEET_ORPHAN_CPU_PCT) printf '孤儿 runaway CPU 百分比' ;;
+    FLEET_ORPHAN_CPU_SECS) printf '孤儿 runaway 秒数' ;;
+    FLEET_ORPHAN_CPU_ACTION) printf '孤儿 runaway 动作' ;;
+    FLEET_ORPHAN_EXTRA_RE) printf '额外孤儿进程指纹' ;;
+    FLEET_ORPHAN_LISTEN_SECS) printf '孤儿监听器年龄' ;;
+    FLEET_ORPHAN_LISTEN_ACTION) printf '孤儿监听器动作' ;;
+    FLEET_ORPHAN_LISTEN_EVERY) printf '孤儿监听器扫描间隔' ;;
+    FLEET_LISTEN_EXEMPT_RE) printf '监听器豁免规则' ;;
+    FLEET_LOAD_WARN_PER_CORE) printf 'Doctor 每核心负载警告' ;;
+    FLEET_FSEVENTSD_WARN_MB) printf 'fseventsd 警告 MB' ;;
+    FLEET_DOCTOR_SPOTLIGHT) printf 'Doctor Spotlight 检查' ;;
+    FLEET_DOCTOR_SLEEP) printf 'Doctor sleep 检查' ;;
+    FLEET_DOCTOR_SIRI) printf 'Doctor Siri 检查' ;;
+    FLEET_DOCTOR_ICLOUD) printf 'Doctor iCloud 检查' ;;
+    FLEET_DOCTOR_NETWORK) printf 'Doctor 网络检查' ;;
+    FLEET_DOCTOR_MCP) printf 'Doctor MCP 检查' ;;
+    FLEET_LOADGEN_MAX_PROCS) printf 'Load-gen 最大 burners' ;;
+    FLEET_LOADGEN_MAX_SECS) printf 'Load-gen 最大秒数' ;;
+    FLEET_LOADGEN_LOAD_PER_CORE) printf 'Load-gen 高于每核心负载时拒绝' ;;
+    FLEET_LOADGEN_CORE_PCT) printf 'Load-gen 最大核心占比' ;;
+    FLEET_SPAWN_FOCUS) printf '跳到新 worker 窗口' ;;
+    FLEET_WORKTREE_ROOT) printf 'Worktree 根目录' ;;
+    FLEET_TRASH_PURGE_PER_TICK) printf '每 tick 清理 trash 数量' ;;
+    FLEET_TRASH_PURGE_MAX_LOAD) printf 'Trash 清理负载上限（每核心）' ;;
+    FLEET_WORKTREE_SETUP) printf 'Worktree setup 命令' ;;
+    FLEET_WORKTREE_SETUP_TIMEOUT) printf 'Worktree setup 超时' ;;
+    FLEET_BASE_DEPS) printf '保持 base deps 最新' ;;
+    FLEET_BASE_DEPS_TIMEOUT) printf 'Base deps 安装超时' ;;
+    FLEET_SCRATCH_POOL) printf '预热 scratch 会话' ;;
+    FLEET_POOL_MAX_AGE) printf '预热条目最大年龄' ;;
+    FLEET_POOL_REFILL_DELAY) printf '预热池补充延迟' ;;
+    FLEET_SPAWN_GUARD_MS) printf 'Prompt 行防抖' ;;
+    FLEET_INFLIGHT_TTL) printf '启动中 TTL' ;;
+    FLEET_PRESPAWN_DEDUP) printf '跨机器预启动去重' ;;
+    FLEET_MERGE_METHOD) printf '自动 merge 方法' ;;
+    FLEET_REPO_CHARTER) printf '加载仓库 charters' ;;
+    FLEET_TAP_FIRST) printf '菜单先响应 tap' ;;
+    FLEET_WORKER_PROMPT) printf 'Worker 初始提示词' ;;
+    *) printf '%s' "$fallback" ;;
+  esac
+}
+
 # Friendly label for KEY (@label), falling back to the raw key name.
-fcfg_label() { local v; v=$(fcfg_tag "$1" label); [ -n "$v" ] && printf '%s' "$v" || printf '%s' "$1"; }
+fcfg_label() {
+  local v
+  v=$(fcfg_tag "$1" label)
+  [ -n "$v" ] || v="$1"
+  fcfg_label_i18n "$1" "$v"
+}
 # Section bucket (@group), default "other".
 fcfg_group() { local v; v=$(fcfg_tag "$1" group); [ -n "$v" ] && printf '%s' "$v" || printf 'other'; }
 # Visibility tier (@tier): common | advanced | internal. Default common.
@@ -530,6 +774,11 @@ fcfg_enum_options() {
       printf '%s%s%s\n' \
         claude "$FCFG_US" 'Claude Code (default)' \
         codex  "$FCFG_US" 'OpenAI Codex CLI (bin/fleet-codex.sh, issue #547)' ;;
+    FLEET_UI_LANG)
+      printf '%s%s%s\n' \
+        auto "$FCFG_US" 'follow this login locale (zh* => Chinese, en* => English; C/unset keeps Chinese)' \
+        en   "$FCFG_US" 'force English tmux UI labels' \
+        zh   "$FCFG_US" 'force Chinese tmux UI labels' ;;
     FLEET_CHILD_REPORT)
       # immediate|batch|0 (issues #938/#939); the modal edited this as a bool until
       # #968, so `batch` could only ever be hand-written into the conf.
@@ -612,6 +861,15 @@ fcfg_validate() {
         case "$val" in
           ''|claude|codex) : ;;
           *) printf '%s must be claude|codex or empty (got: %s)' "$key" "$val"; return 1 ;;
+        esac
+        return 0
+      fi
+      # FLEET_UI_LANG is an enum over the tmux UI language modes. Empty defers to
+      # auto so old confs and hand-edits can omit it.
+      if [ "$key" = FLEET_UI_LANG ]; then
+        case "$val" in
+          ''|auto|en|zh) : ;;
+          *) printf '%s must be auto|en|zh or empty (got: %s)' "$key" "$val"; return 1 ;;
         esac
         return 0
       fi

@@ -39,13 +39,16 @@ C="${TMPDIR:-/tmp}/.claude-dash"
 . "$BIN/fleet-lib.sh"
 # shellcheck source=/dev/null
 . "$BIN/fleet-config-lib.sh"
+# shellcheck source=/dev/null
+. "$BIN/fleet-ui-lang.sh"
 
 sess="${FLEET_SESSION:-}"
 [ -n "$sess" ] || sess=$(fleet_current_session 2>/dev/null)
 if [ -z "$sess" ]; then
-  tmux display-message "fleet: not inside a fleet — no per-fleet conf to flip FLEET_AGENT in (set it in fleet.conf)" 2>/dev/null || true
+  tmux display-message "$(fleet_ui_t agent_no_fleet)" 2>/dev/null || true
   exit 0
 fi
+[ -n "$sess" ] && fleet_load_conf "$sess"
 
 cur=$(bash "$BIN/dash-agent-prompt.sh" agent 2>/dev/null)
 case "$cur" in
@@ -55,13 +58,16 @@ esac
 
 target=$(fcfg_target_conf "$sess" fleet)
 if ! reason=$(fcfg_validate enum "$new" FLEET_AGENT); then
-  tmux display-message "fleet: FLEET_AGENT not flipped — $reason" 2>/dev/null || true
+  msg=$(fleet_ui_t agent_not_flipped_fmt "$reason")
+  tmux display-message "$msg" 2>/dev/null || true
   exit 0
 fi
 if ! fcfg_write "$target" FLEET_AGENT "$new" enum >/dev/null; then
-  tmux display-message "fleet: write to ${target##*/} FAILED (full/read-only volume?) — FLEET_AGENT unchanged" 2>/dev/null || true
+  msg=$(fleet_ui_t agent_write_failed_fmt "${target##*/}")
+  tmux display-message "$msg" 2>/dev/null || true
   exit 0
 fi
 glyph=$(bash "$BIN/dash-keymap.sh" glyph agent 2>/dev/null); [ -n "$glyph" ] || glyph='⌃v'
-tmux display-message "fleet: new sessions → $new · $glyph flips back" 2>/dev/null || true
+msg=$(fleet_ui_t agent_flipped_fmt "$new" "$glyph")
+tmux display-message "$msg" 2>/dev/null || true
 bash "$BIN/dash-agent-prompt.sh" actions

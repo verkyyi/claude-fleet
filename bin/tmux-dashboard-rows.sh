@@ -18,6 +18,8 @@ case "$0" in */*) BIN="${0%/*}" ;; *) BIN=. ;; esac   # forkless dirname (issue 
 BIN="$(cd "${BIN:-/}" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"   # fleet_cache: route prmap through THIS fleet's slug'd cache
+. "$BIN/fleet-ui-lang.sh"
+[ -n "${FLEET_SESSION:-}" ] && fleet_load_conf "$FLEET_SESSION" 2>/dev/null || true
 C="${TMPDIR:-/tmp}/.claude-dash"; [ -d "$C" ] || mkdir -p "$C"   # 1Hz path: no exec once it exists (#888)
 G="$C/global"                       # machine-wide caches (git_/ctx_) — issue #181
 SIDEBAR=0; [ "${1:-}" = --sidebar ] && SIDEBAR=1
@@ -101,7 +103,7 @@ esac; }
 # column, so the count stays stable) — an automatic wake waiting for a slot;
 # $zwait is then the row's `z · waiting for a slot` text.
 zage_v() { zage=''; zwait=''
-  case "$1" in *:cap) zwait='z · waiting for a slot' ;; esac
+  case "$1" in *:cap) zwait=$(fleet_ui_t wait_slot) ;; esac
   set -- "${1%%:*}"
   case "$1" in ''|*[!0-9]*) return 0;; esac
   local d=$(( NOW - $1 )); [ "$d" -lt 0 ] && d=0
@@ -247,7 +249,7 @@ if [ "$RGRP" = 1 ]; then
   while IFS=$'\t' read -r _g _nm _; do
     [ -n "$_g" ] || continue; _nm=${_nm##*/}; RGTAG[_g]="⇢${_nm:0:3}"
   done <<< "$RHEADS"
-  RGTAG[RNREPO]='⇢?'; RGTAG[RNREPO + 1]='⇢none'
+  RGTAG[RNREPO]='⇢?'; RGTAG[RNREPO + 1]="$(fleet_ui_t repo_none_tag)"
 fi
 
 # branch → the three spellings the PR cell looks a row up by, in the order it
@@ -908,7 +910,7 @@ fi
 # sidebar's rule is longer than any pane and the view clips it to its width;
 # the hub's is the list's own width, in the column header's grey.
 if [ "$PINCNT" -gt 0 ]; then
-  t="置顶 ($PINCNT)"; [ "$PINFOLD" = 1 ] && t="▸ $t"
+  t=$(fleet_ui_t pin_heading_fmt "$PINCNT"); [ "$PINFOLD" = 1 ] && t="▸ $t"
   printf -v rule '%*s' $(( USABLE > 200 ? USABLE : 200 )) ''; rule=${rule// /─}
   if [ "$SIDEBAR" = 1 ]; then
     buf+="$PGRP	-1	0	0	0	0	0	hdr${US}pin$US$US$t$US "$'\n'
@@ -958,8 +960,8 @@ if [ "$RGRP" = 1 ]; then
   while IFS=$'\t' read -r g nm rp; do
     [ -n "$g" ] && hd_v "$g" "$nm" "$rp"
   done <<< "$RHEADS"
-  hd_v "$RNREPO" '? · unknown repo' ''
-  hd_v "$((RNREPO + 1))" 'no repo' '' none
+  hd_v "$RNREPO" "$(fleet_ui_t unknown_repo_heading)" ''
+  hd_v "$((RNREPO + 1))" "$(fleet_ui_t no_repo)" '' none
 fi
 
 # the empty state (issue #998): a frame with no session row says so, and how to
@@ -969,11 +971,11 @@ fi
 # input line sits right below. Only an empty frame pays the keymap fork.
 if [ "$NSESS" = 0 ]; then
   if [ "$SIDEBAR" = 1 ]; then
-    t='No sessions — type a name'
+    t=$(fleet_ui_t empty_sidebar)
     buf+="-1	-1	0	0	0	0	0	hdr$US$US$US$t$US "$'\n'
   else
     DASH_GLYPH_NEW='⌃n'; eval "$(bash "$BIN/dash-keymap.sh" env 2>/dev/null)"
-    t="No sessions — type a name to start one · $DASH_GLYPH_NEW new task"
+    t=$(fleet_ui_t empty_dash_fmt "$DASH_GLYPH_NEW")
     buf+="-1	-1	0	0	0	0	0	hdr${US}hdr${US}${GY}  ${t}${R}"$'\n'
   fi
 fi
