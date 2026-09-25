@@ -279,6 +279,10 @@ tmux -L "$SOCK" kill-window -t "$workwin" 2>/dev/null || true
 # created just now asks — restoring or re-attaching an existing one never opens
 # it here. The pending marker lets the collector retry ONLY a first fleet that
 # tried to open a guide; old fleets without an onboarded marker are unaffected.
+# «Stayed running» is not enough (issue #1215): onboarded is written only once the
+# guide has SPOKEN — fleet-onboard.sh brief left global/guide.spoke — and is still
+# up. A claude that only printed `Unknown command` is left for the collector,
+# which confirms a late speaker or reopens a silent one (fleet_guide_tick).
 ONBOARDED="$FLEET_CONF_DIR/global/onboarded"
 if [ "$NEWFLEET" = 1 ] && [ "${FLEET_ONBOARD:-1}" != 0 ] && [ ! -e "$ONBOARDED" ]; then
   mkdir -p "${ONBOARDED%/*}"
@@ -289,7 +293,7 @@ if [ "$NEWFLEET" = 1 ] && [ "${FLEET_ONBOARD:-1}" != 0 ] && [ ! -e "$ONBOARDED" 
     rm -f "$FLEET_CONF_DIR/global/onboard.pending"
     echo "fleet-up: opened the onboarding guide (/fleet-onboard), pinned to the top"
   else
-    echo "fleet-up: onboarding guide did not stay running — collector will retry" >&2
+    echo "fleet-up: onboarding guide has not spoken yet — collector will confirm it, or retry" >&2
   fi
 fi
 

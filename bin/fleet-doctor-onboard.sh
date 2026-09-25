@@ -61,8 +61,10 @@ else
 fi
 
 if [ ! -e "$conf_dir/global/onboarded" ]; then
-  # fleet_guide_alive distinguishes an agent from a guide window left at a
-  # bare shell. The marker also counts: it survives the guide being closed.
+  # fleet_guide_alive = the guide has SPOKEN (fleet-onboard.sh brief left
+  # global/guide.spoke, issue #1215) AND its agent is still running — a window
+  # left at a bare shell, or a claude that only printed `Unknown command`, is
+  # not a guide. The onboarded marker also counts: it survives the guide closing.
   # shellcheck source=/dev/null
   . "$bin/fleet-lib.sh"
   guide=0
