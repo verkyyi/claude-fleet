@@ -29,8 +29,38 @@
 #
 # Expects fleet-sidebar.sh's context: $BIN, $sess, $verb, $@, the conf loaded.
 
+[ -n "${BIN:-}" ] || BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/fleet-ui-lang.sh"
+
 # The menu's letters: ONE table, read by the menu below (`mk <action>`) and by
 # the `?` sheet (--keys), so the sheet can never name a letter the menu lacks.
+case "$(fleet_ui_lang)" in
+  zh)
+MENU_KEYS='rename	r	改名 — 在输入行编辑（↵ 应用，esc / 空名称取消）
+pin	t	置顶 / 取消置顶
+pr	p	打开 PR（没有时置灰）
+answer	a	回答提问（红色 ? 行；否则置灰）
+wake	w	唤醒睡眠中的 z 行（仅睡眠时显示）
+awake	k	保持唤醒 ⇄ 允许再次休眠
+agent	v	新会话 claude ⇄ codex
+reap	x	回收 — 先确认 y/n
+new	n	新任务 — 建 issue 并启动 worker
+restore	o	恢复已收工任务（hub landed 列表，弹窗）
+repo	g	添加仓库到这个 fleet — 询问 owner/name；~/projects/<name>，缺失时 clone（hub ⌃z）'
+    m_rename='改名…'; m_unpin='取消置顶'; m_pin='置顶'
+    m_open_pr='打开 PR'; m_open_pr_none='打开 PR（没有）'
+    m_answer='回答它的提问…'; m_answer_none='回答它的提问（没有）'
+    m_wake='唤醒'; m_allow_sleep='允许休眠'; m_keep_awake='保持唤醒'
+    m_agent_fmt='新会话改用 %s'; m_reap='回收…'; m_reap_confirm_fmt='回收「%s」？(y/n)'
+    m_new='新建任务（建 issue）…'; m_restore='恢复已收工…'; m_repo='＋ 仓库…'
+    msg_reaped='fleet: 已回收'
+    msg_reaped_keep='fleet: 已回收 — 脏 worktree 已保留在磁盘'
+    msg_skip_live='fleet: 未回收 — agent 仍在运行（或太新）'
+    msg_skip_fmt='fleet: 未回收（%s）'
+    msg_refused_fmt='fleet: 未回收 — %s'
+    msg_no_result='fleet: 回收没有返回结果 — 请查看 hub'
+    ;;
+  *)
 MENU_KEYS='rename	r	rename — edits on the input line (↵ applies, esc / an empty name cancels)
 pin	t	pin / unpin the row to the top
 pr	p	open its PR (greyed when it has none)
@@ -42,6 +72,20 @@ reap	x	reap it — asks y/n first
 new	n	new task — file an issue AND spawn its worker
 restore	o	restore a finished task (the hub landed list, in a popup)
 repo	g	add a repo to this fleet — asks owner/name; ~/projects/<name>, cloned if missing (the hub ⌃z)'
+    m_rename='Rename…'; m_unpin='Unpin'; m_pin='Pin'
+    m_open_pr='Open PR'; m_open_pr_none='Open PR (none)'
+    m_answer='Answer question…'; m_answer_none='Answer question (none)'
+    m_wake='Wake'; m_allow_sleep='Allow sleep'; m_keep_awake='Keep awake'
+    m_agent_fmt='New sessions use %s'; m_reap='Reap…'; m_reap_confirm_fmt='Reap "%s"? (y/n)'
+    m_new='New task (file issue)…'; m_restore='Restore finished task…'; m_repo='Add repo…'
+    msg_reaped='fleet: reaped'
+    msg_reaped_keep='fleet: reaped — dirty worktree kept on disk'
+    msg_skip_live='fleet: not reaped — the agent is still live (or too young)'
+    msg_skip_fmt='fleet: not reaped (%s)'
+    msg_refused_fmt='fleet: not reaped — %s'
+    msg_no_result='fleet: reap gave no result — check the hub'
+    ;;
+esac
 mk() { printf '%s\n' "$MENU_KEYS" | awk -F '\t' -v a="$1" '$1 == a { print $2; exit }'; }
 if [ "${1:-}" = --keys ]; then
   printf '%s\n' "$MENU_KEYS" | awk -F '\t' '{ print $2 "\t" $3 }'
@@ -56,6 +100,9 @@ case "$wid" in @[0-9]*) ;; *) exit 0 ;; esac
 # sq <text> → one word for BOTH /bin/sh and tmux's command parser: single quotes
 # (no $ ~ expansion in either), an embedded quote closed, escaped and reopened.
 sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+# dq <text> → one double-quoted tmux command string; used when the nested command
+# already contains shell single quotes and confirm-before should receive it whole.
+dq() { printf '"%s"' "$(printf '%s' "$1" | sed 's/["\\]/\\&/g')"; }
 # fe <text> → literal inside a tmux FORMAT (menu names/title, -I input): ## = #.
 fe() { printf '%s' "$1" | sed 's/#/##/g'; }
 
@@ -64,19 +111,7 @@ client=$(tmux list-clients -t "$sess" -F '#{client_activity} #{client_name}' 2>/
   | sort -rn | head -1 | cut -d' ' -f2-)
 
 if [ "$verb" = reap ]; then
-  # --yes: the confirm-before that led here IS the confirm (EPIC decision 5).
-  # dash-reap.sh still never removes a dirty worktree, and still refuses a live
-  # agent (skip:live) whatever --yes says.
-  out=$(bash "$BIN/dash-reap.sh" "$wid" --yes 2>/dev/null </dev/null)
-  token=$(printf '%s\n' "$out" | grep -E '^(reaped|skip|refused):' | tail -1)
-  case "$token" in
-    reaped:full) toast "fleet: reaped" ;;
-    reaped:keep) toast "fleet: reaped — dirty worktree kept on disk" ;;
-    skip:live)   toast "fleet: not reaped — the agent is still live (or too young)" ;;
-    skip:*)      toast "fleet: not reaped (${token#skip:})" ;;
-    refused:*)   toast "fleet: not reaped — ${token#refused:}" ;;
-    *)           toast "fleet: reap gave no result — check the hub" ;;
-  esac
+  bash "$BIN/fleet-sidebar-reap.sh" "$sess" "$wid" "$client"
   exit 0
 fi
 
@@ -91,6 +126,8 @@ case "${FLEET_AGENT:-claude}" in codex) next=Claude ;; *) next=Codex ;; esac
 # popup-opening scripts the context they read inside a pane (dash-popup.sh).
 side=$(tmux list-panes -t "$sess:" -F '#{pane_id} #{@sidebar}' 2>/dev/null | awk '$2==1{print $1; exit}')
 ctx="FLEET_SESSION=$(sq "$sess") TMUX_PANE=$(sq "${side:-}")"
+[ -n "${FLEET_CONF_DIR:-}" ] && ctx="$ctx FLEET_CONF_DIR=$(sq "$FLEET_CONF_DIR")"
+[ -n "${FLEET_UI_LANG:-}" ] && ctx="$ctx FLEET_UI_LANG=$(sq "$FLEET_UI_LANG")"
 sh_run() { printf 'run-shell -b %s' "$(sq "$ctx $1 >/dev/null 2>&1 || :")"; }
 
 items=()
@@ -100,33 +137,36 @@ add() { items+=("$1" "$2" "$3"); }   # name key command
 # view pins the client to itself on its next poll (#1105), so a paste of the new
 # name lands on the input line.
 if [ -n "$side" ]; then
-  add "改名…" "$(mk rename)" "set-option -p -t $side @sidebar_rename $wid ; switch-client -T fleet-sidebar ; send-keys -t $side F12"
-else add "-改名…" "$(mk rename)" ''; fi
-if [ "$pin" = 1 ]; then add "取消置顶" "$(mk pin)" "$(sh_run "bash $(sq "$BIN/dash-pin-toggle.sh") $wid")"
-else add "置顶" "$(mk pin)" "$(sh_run "bash $(sq "$BIN/dash-pin-toggle.sh") $wid")"; fi
-if [ -n "$pr" ]; then add "打开 PR $(fe "$pr")" "$(mk pr)" "$(sh_run "bash $(sq "$BIN/dash-open-pr.sh") --wid $wid")"
-else add "-打开 PR（没有）" "$(mk pr)" ''; fi
+  add "$m_rename" "$(mk rename)" "set-option -p -t $side @sidebar_rename $wid ; switch-client -T fleet-sidebar ; send-keys -t $side F12"
+else add "-$m_rename" "$(mk rename)" ''; fi
+if [ "$pin" = 1 ]; then add "$m_unpin" "$(mk pin)" "$(sh_run "bash $(sq "$BIN/dash-pin-toggle.sh") $wid")"
+else add "$m_pin" "$(mk pin)" "$(sh_run "bash $(sq "$BIN/dash-pin-toggle.sh") $wid")"; fi
+if [ -n "$pr" ]; then add "$m_open_pr $(fe "$pr")" "$(mk pr)" "$(sh_run "bash $(sq "$BIN/dash-open-pr.sh") --wid $wid")"
+else add "-$m_open_pr_none" "$(mk pr)" ''; fi
 if [ "$state" = needs ]; then
-  add "回答它的提问…" "$(mk answer)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") -w 84% -h 70% -- bash $(sq "$BIN/dash-answer.sh") $(sq "$sess:$wid")")"
-else add "-回答它的提问（没有）" "$(mk answer)" ''; fi
+  add "$m_answer" "$(mk answer)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") -w 84% -h 70% -- bash $(sq "$BIN/dash-answer.sh") $(sq "$sess:$wid")")"
+else add "-$m_answer_none" "$(mk answer)" ''; fi
 # Wake (issue #1051): only a sleeping row gets it, and it wakes at once — opening
 # the menu and picking it is already the second deliberate step (EPIC #1048
 # decision 4). Detached, because the wake respawns the pane. Keep awake flips the
 # sleep controller's own @sleep_keep_awake hold; the label says what a pick does.
 # --over-cap (issue #1058): the operator's own wake goes even at the session limit.
 slp="bash $(sq "$BIN/fleet-sleep.sh")"
-[ "$life" = sleeping ] && add "唤醒" "$(mk wake)" "$(sh_run "$slp wake $(sq "$sess") $wid --over-cap")"
-if [ "$keep" = 1 ]; then add "允许休眠" "$(mk awake)" "$(sh_run "$slp allow-sleep $(sq "$sess") $wid")"
-else add "保持唤醒" "$(mk awake)" "$(sh_run "$slp keep-awake $(sq "$sess") $wid")"; fi
-add "新会话改用 $next" "$(mk agent)" "$(sh_run "bash $(sq "$BIN/dash-agent-toggle.sh")")"
-add "回收…" "$(mk reap)" "confirm-before -p $(sq "回收「$(fe "$name")」？(y/n)") $(sq "$(sh_run "bash $(sq "$BIN/fleet-sidebar.sh") reap $(sq "$sess") $wid")")"
+[ "$life" = sleeping ] && add "$m_wake" "$(mk wake)" "$(sh_run "$slp wake $(sq "$sess") $wid --over-cap")"
+if [ "$keep" = 1 ]; then add "$m_allow_sleep" "$(mk awake)" "$(sh_run "$slp allow-sleep $(sq "$sess") $wid")"
+else add "$m_keep_awake" "$(mk awake)" "$(sh_run "$slp keep-awake $(sq "$sess") $wid")"; fi
+printf -v m_agent "$m_agent_fmt" "$next"
+add "$m_agent" "$(mk agent)" "$(sh_run "bash $(sq "$BIN/dash-agent-toggle.sh")")"
+printf -v m_reap_confirm "$m_reap_confirm_fmt" "$(fe "$name")"
+reap_args="$(sq "$sess") $wid"; [ -n "$client" ] && reap_args="$reap_args $(sq "$client")"
+add "$m_reap" "$(mk reap)" "confirm-before -p $(sq "$m_reap_confirm") $(dq "$(sh_run "bash $(sq "$BIN/fleet-sidebar-reap.sh") $reap_args")")"
 add "" "" ""
-add "新建任务（建 issue）…" "$(mk new)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") -w 90% -h 12 -- bash $(sq "$BIN/dash-issue-new.sh") confirm --spawn")"
+add "$m_new" "$(mk new)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") -w 90% -h 12 -- bash $(sq "$BIN/dash-issue-new.sh") confirm --spawn")"
 # Row-less too (issue #901): the hub's ⌃t landed list + ⌃o, as one popup.
-add "恢复已收工…" "$(mk restore)" "$(sh_run "bash $(sq "$BIN/fleet-restore-pick.sh") --session $(sq "$sess")")"
+add "$m_restore" "$(mk restore)" "$(sh_run "bash $(sq "$BIN/fleet-restore-pick.sh") --session $(sq "$sess")")"
 # Row-less (issue #1103): the hub's ⌃z — the same popup, the same script. Listed
 # in a one-repo fleet too: it is how the second repo gets in.
-add "＋ 仓库…" "$(mk repo)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") -w 80% -h 16 -- bash $(sq "$BIN/dash-repo-add.sh")")"
+add "$m_repo" "$(mk repo)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") -w 80% -h 16 -- bash $(sq "$BIN/dash-repo-add.sh")")"
 
 if [ "${4:-}" = --print ]; then
   i=0

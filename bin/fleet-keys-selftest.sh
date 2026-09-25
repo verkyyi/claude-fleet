@@ -26,6 +26,7 @@
 #
 # Exit 0 = pass. Non-zero = fail (prints what diverged). No network / no tmux.
 set -uo pipefail
+export FLEET_UI_LANG=en
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$BIN/.." && pwd)"
@@ -265,7 +266,7 @@ EOF
 # popup cannot scroll, so it is the seven everyday keys + a title and nothing
 # else — the input line's editing keys share ONE row (#1097). Every sidebar action and every row-menu letter still has a row — in the
 # FULL sheet (prefix ?), which is what the checks above and below read.
-SSHEET="$(NO_COLOR=1 bash "$KEYS" --context sidebar --plain)" || fail "fleet-keys.sh --context sidebar exited non-zero"
+SSHEET="$(FLEET_UI_LANG=zh NO_COLOR=1 bash "$KEYS" --context sidebar --plain)" || fail "fleet-keys.sh --context sidebar exited non-zero"
 [ "$(printf '%s\n' "$SSHEET" | wc -l | tr -d ' ')" -le 10 ] \
   || fail "the sidebar sheet is $(printf '%s\n' "$SSHEET" | wc -l | tr -d ' ') lines — it must fit its popup (≤ 10)"
 printf '%s\n' "$SSHEET" | head -1 | grep -q '任务栏快捷键' || fail "the sidebar sheet lacks its 任务栏快捷键 title"

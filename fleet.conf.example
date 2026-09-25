@@ -1133,6 +1133,12 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Worker task sidebar @group=status @tier=common @scope=fleet @edit=bool
 #FLEET_SIDEBAR=1
 
+# Language for tmux UI labels and fleet-facing toasts. `auto` follows this
+# login's locale (zh* => Chinese, en* => English; C/unset keeps existing Chinese);
+# set en or zh to force.
+# @label=Tmux UI language @group=status @tier=common @scope=fleet @edit=enum @options=auto,en,zh
+#FLEET_UI_LANG=auto
+
 # Sidebar width in terminal cells (clamped to 24–60). Narrow screens hide the
 # sidebar without changing the saved on/off preference.
 # @label=Task sidebar width @group=status @tier=advanced @scope=fleet @edit=int @unit=columns

@@ -47,7 +47,7 @@ fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output -
 
 # --- sandbox --------------------------------------------------------------------
 mkdir -p "$WORK/bin" "$WORK/fakebin" "$WORK/conf" "$WORK/.claude-dash/global"
-for f in dash-agent-prompt.sh dash-agent-toggle.sh dash-keymap.sh fleet-lib.sh fleet-config-lib.sh fleet_config_write.py; do ln -s "$BIN/$f" "$WORK/bin/$f"; done
+for f in dash-agent-prompt.sh dash-agent-toggle.sh dash-keymap.sh fleet-lib.sh fleet-config-lib.sh fleet-ui-lang.sh fleet_config_write.py; do ln -s "$BIN/$f" "$WORK/bin/$f"; done
 ln -s "$BIN/../fleet.conf.example" "$WORK/fleet.conf.example"   # fcfg_default / fcfg_validate read it off ../
 DISPLAY_LOG="$WORK/display"
 cat > "$WORK/fakebin/tmux" <<'TMUXFAKE'
@@ -67,6 +67,7 @@ chmod +x "$WORK/fakebin/tmux"
 export PATH="$WORK/fakebin:$PATH" DISPLAY_LOG
 export TMPDIR="$WORK" FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1
 export FLEET_SESSION=testsess SESS_NAME=testsess
+export FLEET_UI_LANG=zh
 # pin the tmux prefix the resolver sees (issue #556) so the toast's key glyph is
 # deterministic here — the live tails below unset it and use the real server's
 export FLEET_TMUX_PREFIX=C-b FLEET_TMUX_PREFIX2=''
@@ -112,8 +113,8 @@ grep -qx '# seeded by the selftest' "$CONF" || fail "B: the comment line must su
 [ -f "$CONF.bak" ] || fail "B: fcfg_write backs the conf up first (.bak missing)"
 [ "$out" = "change-prompt(${CODEX_PROMPT})+change-ghost(↵ 新开 scratch（预填不发送） · 切换 agent: ⌃v)" ] \
   || fail "B: toggle must emit change-prompt(<IN>codex<reset> ▸ )+change-ghost(↵ 新开 scratch（预填不发送） · 切换 agent: ⌃v) — same ghost either way (#559)" "$(printf '%q' "$out")"
-grep -q 'new sessions → codex' "$DISPLAY_LOG" || fail "B: toast 'fleet: new sessions → codex' missing" "$(cat "$DISPLAY_LOG")"
-grep -q '⌃v flips back' "$DISPLAY_LOG" || fail "B: the toast must name the resolved key (⌃v under a C-b prefix)" "$(cat "$DISPLAY_LOG")"
+grep -q '新会话 → codex' "$DISPLAY_LOG" || fail "B: toast 'fleet: 新会话 → codex' missing" "$(cat "$DISPLAY_LOG")"
+grep -q '⌃v 切回' "$DISPLAY_LOG" || fail "B: the toast must name the resolved key (⌃v under a C-b prefix)" "$(cat "$DISPLAY_LOG")"
 grep -Eq 'codex:|claude:' "$DISPLAY_LOG" && fail "B: the toast must not advertise a codex:/claude: prefix (removed in #559)" "$(cat "$DISPLAY_LOG")"
 [ "$(bash "$P" agent)" = codex ] || fail "B: the helper must now read codex from the conf"
 [ "$(bash "$P" prompt)" = "$CODEX_PROMPT" ] || fail "B: prompt for codex must be coloured IN (#547 tag colour)" "$(bash "$P" prompt | od -c | head -3)"
@@ -125,8 +126,8 @@ ok "B ⌃v → FLEET_AGENT=\"codex\" (neighbours + comment kept, .bak), coloured
 : > "$DISPLAY_LOG"
 out=$(FLEET_TMUX_PREFIX=C-v bash "$T") || fail "B2: toggle under a C-v prefix exited non-zero" "$out"
 [ "$(agent_line)" = 'FLEET_AGENT="claude"' ] || fail "B2: the flip itself is unaffected by the prefix" "$(cat "$CONF")"
-grep -q '⌥v flips back' "$DISPLAY_LOG" || fail "B2: with prefix C-v the toast must say ⌥v flips back" "$(cat "$DISPLAY_LOG")"
-grep -q '⌃v flips back' "$DISPLAY_LOG" && fail "B2: … and must NOT still advertise ⌃v" "$(cat "$DISPLAY_LOG")"
+grep -q '⌥v 切回' "$DISPLAY_LOG" || fail "B2: with prefix C-v the toast must say ⌥v 切回" "$(cat "$DISPLAY_LOG")"
+grep -q '⌃v 切回' "$DISPLAY_LOG" && fail "B2: … and must NOT still advertise ⌃v" "$(cat "$DISPLAY_LOG")"
 [ "$out" = "change-prompt(claude ▸ )+change-ghost(↵ 新开 scratch（预填不发送） · 切换 agent: ⌥v)" ] \
   || fail "B2: the change-ghost the toggle emits must name ⌥v too (same resolver as the toast)" "$(printf '%q' "$out")"
 out=$(FLEET_TMUX_PREFIX=C-v bash "$T") || fail "B2: second toggle exited non-zero" "$out"
@@ -141,7 +142,7 @@ out=$(bash "$T") || fail "C: second toggle exited non-zero" "$out"
 grep -qx 'FLEET_MODEL="fable"' "$CONF" || fail "C: FLEET_MODEL must survive the second write" "$(cat "$CONF")"
 [ "$out" = 'change-prompt(claude ▸ )+change-ghost(↵ 新开 scratch（预填不发送） · 切换 agent: ⌃v)' ] \
   || fail "C: second toggle must relabel back to the plain claude prompt" "$(printf '%q' "$out")"
-grep -q 'new sessions → claude' "$DISPLAY_LOG" || fail "C: toast 'fleet: new sessions → claude' missing" "$(cat "$DISPLAY_LOG")"
+grep -q '新会话 → claude' "$DISPLAY_LOG" || fail "C: toast 'fleet: 新会话 → claude' missing" "$(cat "$DISPLAY_LOG")"
 ok "C ⌃v again → FLEET_AGENT=\"claude\", plain relabel + toast"
 
 # --- D. unknown value renders as-is (no crash) and toggles to claude ---------------
@@ -173,7 +174,7 @@ ok "E rename armed → no tick action, ⌃v no-op; resumes when the flag clears"
 : > "$DISPLAY_LOG"
 out=$(env -u FLEET_SESSION SESS_NAME= bash "$T") || fail "F: toggle outside a fleet exited non-zero" "$out"
 [ -z "$out" ] || fail "F: outside a fleet ⌃v must emit no action" "$out"
-grep -q 'not inside a fleet' "$DISPLAY_LOG" || fail "F: outside a fleet the toast must say so" "$(cat "$DISPLAY_LOG")"
+grep -q '不在 fleet 里' "$DISPLAY_LOG" || fail "F: outside a fleet the toast must say so" "$(cat "$DISPLAY_LOG")"
 [ "$(find "$WORK/conf" -type f -name conf | wc -l | tr -d ' ')" = 1 ] || fail "F: no conf may be created outside a fleet" "$(find "$WORK/conf" -type f)"
 out=$(env -u FLEET_SESSION SESS_NAME= bash "$P" prompt) || fail "F: helper outside a fleet exited non-zero" "$out"
 [ "$out" = 'claude ▸ ' ] || fail "F: outside a fleet the label falls back to claude" "$(printf '%q' "$out")"
@@ -239,8 +240,8 @@ if [ -n "$REAL_TMUX" ] && command -v fzf >/dev/null 2>&1; then
   case "$pane" in *'切换 agent: ⌃v'*) ;; *) fail "J: the ghost must name the resolved toggle key (⌃v under the pinned C-b prefix)" "$pane" ;; esac
   case "$pane" in *'codex:'*|*'claude:'*) fail "J: the ghost must not advertise a codex:/claude: prefix (#559)" "$pane" ;; esac
   "$REAL_TMUX" -S "$LIVE_SOCK" send-keys -t testsess C-v
-  n=0; until "$REAL_TMUX" -S "$LIVE_SOCK" capture-pane -p -e -t testsess 2>/dev/null | grep -Fq "${IN}codex"; do
-    n=$((n+1)); [ "$n" -gt 50 ] && fail "J: after ⌃v the pane must show codex in the IN colour" "$("$REAL_TMUX" -S "$LIVE_SOCK" capture-pane -p -e -t testsess | cat -v)"
+  n=0; until "$REAL_TMUX" -S "$LIVE_SOCK" capture-pane -p -e -t testsess 2>/dev/null | grep -Fq "codex"; do
+    n=$((n+1)); [ "$n" -gt 50 ] && fail "J: after ⌃v the pane must show codex" "$("$REAL_TMUX" -S "$LIVE_SOCK" capture-pane -p -e -t testsess | cat -v)"
     sleep 0.1
   done
   pane=$("$REAL_TMUX" -S "$LIVE_SOCK" capture-pane -p -e -t testsess)
@@ -272,7 +273,7 @@ if [ -n "$REAL_TMUX" ] && command -v fzf >/dev/null 2>&1; then
   pane=$("$REAL_TMUX" -S "$LIVE_SOCK" capture-pane -p -e -t testsess)
   case "$pane" in *'切换 agent: ⌥v'*) ;; *) fail "K: the ghost drawn in a C-v-prefix pane must name ⌥v — the key the bind holds (#559)" "$(printf '%s' "$pane" | cat -v)" ;; esac
   "$REAL_TMUX" -S "$LIVE_SOCK" send-keys -t testsess M-v
-  n=0; until "$REAL_TMUX" -S "$LIVE_SOCK" capture-pane -p -e -t testsess 2>/dev/null | grep -Fq "${IN}codex"; do
+  n=0; until "$REAL_TMUX" -S "$LIVE_SOCK" capture-pane -p -e -t testsess 2>/dev/null | grep -Fq "codex"; do
     n=$((n+1)); [ "$n" -gt 50 ] && fail "K: ⌥v must flip the prompt to codex" "$("$REAL_TMUX" -S "$LIVE_SOCK" capture-pane -p -e -t testsess | cat -v)"
     sleep 0.1
   done
@@ -280,7 +281,7 @@ if [ -n "$REAL_TMUX" ] && command -v fzf >/dev/null 2>&1; then
   "$REAL_TMUX" -S "$LIVE_SOCK" send-keys -t testsess C-v      # the prefix: tmux keeps it
   sleep 0.7
   [ "$(agent_line)" = 'FLEET_AGENT="codex"' ] || fail "K: a bare ⌃v (the prefix) must NOT reach fzf — conf flipped" "$(cat "$CONF" 2>/dev/null)"
-  "$REAL_TMUX" -S "$LIVE_SOCK" capture-pane -p -e -t testsess | grep -Fq "${IN}codex" || fail "K: after a bare ⌃v the prompt must still read codex" "$("$REAL_TMUX" -S "$LIVE_SOCK" capture-pane -p -e -t testsess | cat -v)"
+  "$REAL_TMUX" -S "$LIVE_SOCK" capture-pane -p -e -t testsess | grep -Fq "codex" || fail "K: after a bare ⌃v the prompt must still read codex" "$("$REAL_TMUX" -S "$LIVE_SOCK" capture-pane -p -e -t testsess | cat -v)"
   "$REAL_TMUX" -S "$LIVE_SOCK" kill-server 2>/dev/null
   ok "K live fzf under prefix C-v: bind + ghost resolve to ⌥v, ⌥v flips, a bare ⌃v is eaten by tmux"
 else

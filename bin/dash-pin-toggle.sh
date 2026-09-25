@@ -30,6 +30,8 @@ case "$target" in ''|hdr|landed:*) exit 0 ;; esac
 
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh" 2>/dev/null || true
+# shellcheck source=/dev/null
+. "$BIN/fleet-ui-lang.sh" 2>/dev/null || true
 if command -v fleet_wid_target >/dev/null 2>&1; then
   target="$(fleet_wid_target "$target")"
 fi
@@ -38,6 +40,8 @@ fi
 # fleet's socket (the CLAUDE.md rail) — never another fleet's windows.
 name=$(tmux display-message -p -t "$target" '#{window_name}' 2>/dev/null) || exit 0
 [ -n "$name" ] || exit 0
+sess=$(tmux display-message -p -t "$target" '#{session_name}' 2>/dev/null || true)
+[ -n "$sess" ] && command -v fleet_load_conf >/dev/null 2>&1 && fleet_load_conf "$sess" 2>/dev/null || true
 
 cur=$(tmux show-options -wqv -t "$target" @pin 2>/dev/null) || cur=''
 if [ "$cur" = 1 ]; then
@@ -45,9 +49,11 @@ if [ "$cur" = 1 ]; then
   # ordinary state everywhere else (a window that was never pinned has none), so
   # unpinning must leave the window byte-identical to one that never was.
   tmux set-option -w -t "$target" -u @pin 2>/dev/null || exit 0
-  tmux display-message "unpinned: $name" 2>/dev/null || true
+  msg=$(fleet_ui_t pin_unpinned_fmt "$name")
+  tmux display-message "$msg" 2>/dev/null || true
 else
   tmux set-option -w -t "$target" @pin 1 2>/dev/null || exit 0
-  tmux display-message "pinned to the top: $name" 2>/dev/null || true
+  msg=$(fleet_ui_t pin_pinned_fmt "$name")
+  tmux display-message "$msg" 2>/dev/null || true
 fi
 exit 0

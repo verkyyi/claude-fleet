@@ -158,6 +158,7 @@ eq 'type FLEET_MODEL'          "$(fcfg_type FLEET_MODEL)"          enum
 eq 'type FLEET_SUBAGENT_MODEL' "$(fcfg_type FLEET_SUBAGENT_MODEL)" enum
 eq 'type FLEET_MERGE_METHOD'   "$(fcfg_type FLEET_MERGE_METHOD)"   enum
 eq 'type FLEET_AGENT'          "$(fcfg_type FLEET_AGENT)"          enum
+eq 'type FLEET_UI_LANG'        "$(fcfg_type FLEET_UI_LANG)"        enum
 eq 'type FLEET_CHILD_REPORT'   "$(fcfg_type FLEET_CHILD_REPORT)"   enum   # not bool (issue #968)
 eq 'type FLEET_CODEX_MODEL'    "$(fcfg_type FLEET_CODEX_MODEL)"    str
 eq 'type FLEET_CTX_WINDOW'     "$(fcfg_type FLEET_CTX_WINDOW)"     num
@@ -175,6 +176,7 @@ eq 'default FLEET_MODEL'               "$(fcfg_default FLEET_MODEL)"            
 eq 'default FLEET_DISK_FLOOR_GB'       "$(fcfg_default FLEET_DISK_FLOOR_GB)"       12
 eq 'default FLEET_GH_TTL'              "$(fcfg_default FLEET_GH_TTL)"              90
 eq 'default FLEET_CHILD_REPORT'        "$(fcfg_default FLEET_CHILD_REPORT)"        immediate
+eq 'default FLEET_UI_LANG'             "$(fcfg_default FLEET_UI_LANG)"             auto
 [ -n "$(fcfg_short FLEET_REPO)" ] || fail 'short help for FLEET_REPO is empty'; ok
 # short help must NOT leak the tag line
 case "$(fcfg_short FLEET_REPO)" in *@label=*) fail 'short help leaked the tag line' ;; esac; ok
@@ -244,6 +246,12 @@ fcfg_validate enum codex     FLEET_AGENT >/dev/null || fail 'codex valid for FLE
 fcfg_validate enum ''        FLEET_AGENT >/dev/null || fail 'empty valid for FLEET_AGENT'; ok
 fcfg_validate enum opus      FLEET_AGENT >/dev/null && fail 'model alias invalid for FLEET_AGENT'; ok
 fcfg_validate enum gemini    FLEET_AGENT >/dev/null && fail 'unknown agent invalid for FLEET_AGENT'; ok
+# FLEET_UI_LANG is an enum over the UI language selector.
+fcfg_validate enum auto      FLEET_UI_LANG >/dev/null || fail 'auto valid for FLEET_UI_LANG'; ok
+fcfg_validate enum en        FLEET_UI_LANG >/dev/null || fail 'en valid for FLEET_UI_LANG'; ok
+fcfg_validate enum zh        FLEET_UI_LANG >/dev/null || fail 'zh valid for FLEET_UI_LANG'; ok
+fcfg_validate enum ''        FLEET_UI_LANG >/dev/null || fail 'empty valid for FLEET_UI_LANG'; ok
+fcfg_validate enum claude    FLEET_UI_LANG >/dev/null && fail 'agent invalid for FLEET_UI_LANG'; ok
 # FLEET_CHILD_REPORT is an enum over its OWN set (immediate|batch|0|empty), issue
 # #968 — it was tagged @edit=bool, so the modal could only toggle 0/1 and `batch`
 # (issue #939) had to be hand-written. The legacy `1` still validates.
@@ -288,7 +296,7 @@ case " $ma_sub "   in *' inherit '*) ok ;; *) fail "FLEET_SUBAGENT_MODEL must of
 # PICKER ⇔ VALIDATOR: every token the picker can offer for an enum key (from
 # fcfg_enum_options, what dash-config-edit reads) must also validate for that key.
 # Ties the offered set to the accepted set for EVERY enum key so they can't drift.
-for k in FLEET_MODEL FLEET_SUBAGENT_MODEL FLEET_HANDOFF_DEST FLEET_MERGE_METHOD FLEET_AGENT FLEET_SLEEP FLEET_SLEEP_WAKE FLEET_CHILD_REPORT; do
+for k in FLEET_MODEL FLEET_SUBAGENT_MODEL FLEET_HANDOFF_DEST FLEET_MERGE_METHOD FLEET_AGENT FLEET_UI_LANG FLEET_SLEEP FLEET_SLEEP_WAKE FLEET_CHILD_REPORT; do
   while IFS="$FCFG_US" read -r tok _ann; do
     [ -n "$tok" ] || continue
     fcfg_validate enum "$tok" "$k" >/dev/null || fail "picker offers '$tok' for $k but the validator rejects it"
@@ -403,19 +411,26 @@ fcfg_wscope_toggle s2; eq 'one-repo toggle → fleet' "$(fcfg_wscope s2)" fleet
 # Shim tmux so the modal resolves session s2 with no server.
 SHIM="$WORK/shim"; mkdir -p "$SHIM"
 printf '#!/bin/sh\ncase "$1" in display-message) echo s2 ;; esac\nexit 0\n' > "$SHIM/tmux"; chmod +x "$SHIM/tmux"
-rows() { PATH="$SHIM:$PATH" bash "$BIN/tmux-config.sh" rows | sed 's/\x1b\[[0-9;]*m//g'; }
+rows() { PATH="$SHIM:$PATH" bash "$BIN/tmux-config.sh" rows "${1:-}" | sed 's/\x1b\[[0-9;]*m//g'; }
 ROWS1=$(rows)
-# The INTERNAL header is the modal's "show all" switch (issue #1101): collapsed,
-# no internal key is a row; expanded, every one is.
-printf '%s\n' "$ROWS1" | grep -q '^@@TOGGLE@@internal.*INTERNAL' || fail 'modal lacks the INTERNAL (show all) header'; ok
-printf '%s\n' "$ROWS1" | grep -q '^FLEET_COLLECT_GIT_BUDGET' && fail 'collapsed modal lists an internal key'; ok
+# The default face is intentionally small and search-first: common operator
+# settings only. Advanced/identity/internal rows enter the candidate set once the
+# operator starts typing, where fzf is the discovery surface.
+printf '%s\n' "$ROWS1" | grep -q '^@@TOGGLE@@internal' && fail 'default config face shows the INTERNAL bucket'; ok
+printf '%s\n' "$ROWS1" | grep -q '^FLEET_UI_LANG' || fail 'default config face lacks FLEET_UI_LANG'; ok
+printf '%s\n' "$ROWS1" | grep -q '^FLEET_AGENT' || fail 'default config face lacks FLEET_AGENT'; ok
+printf '%s\n' "$ROWS1" | grep -q '^FLEET_COLLECT_GIT_BUDGET' && fail 'default config face lists an internal key'; ok
+[ "$(printf '%s\n' "$ROWS1" | grep -cE '^FLEET_[A-Z0-9_]+'"$FCFG_US")" -le 30 ] || fail 'default config face grew past 30 keys'; ok
+SEARCH1=$(rows internal)
+printf '%s\n' "$SEARCH1" | grep -q '^@@TOGGLE@@internal.*INTERNAL' || fail 'search mode lacks the INTERNAL bucket'; ok
+printf '%s\n' "$SEARCH1" | grep -q '^FLEET_COLLECT_GIT_BUDGET' && fail 'collapsed search mode lists an internal key'; ok
 PATH="$SHIM:$PATH" bash "$BIN/tmux-config.sh" toggle-bucket @@TOGGLE@@internal
-R=$(rows)
+R=$(rows internal)
 eq 'expanded INTERNAL lists every internal key' \
   "$(printf '%s\n' "$R" | grep -cE '^FLEET_[A-Z0-9_]+'"$FCFG_US")" \
-  "$(fcfg_table --all | cut -d"$FCFG_US" -f1,4 | grep -c "${FCFG_US}internal$" | awk -v n="$(printf '%s\n' "$ROWS1" | grep -cE '^FLEET_[A-Z0-9_]+'"$FCFG_US")" '{print $1+n}')"
+  "$(fcfg_table --all | cut -d"$FCFG_US" -f1,4 | grep -c "${FCFG_US}internal$" | awk -v n="$(printf '%s\n' "$SEARCH1" | grep -cE '^FLEET_[A-Z0-9_]+'"$FCFG_US")" '{print $1+n}')"
 PATH="$SHIM:$PATH" bash "$BIN/tmux-config.sh" toggle-bucket @@TOGGLE@@internal
-eq 'collapsing INTERNAL restores the rows' "$(rows)" "$ROWS1"
+eq 'collapsing INTERNAL restores the search rows' "$(rows internal)" "$SEARCH1"
 
 mkdir -p "$FLEET_CONF_DIR/fleets/s2/repos"
 printf 'FLEET_REPO="o/b"\nFLEET_MAIN="/tmp/b"\nFLEET_MODEL="opus"\n' > "$FLEET_CONF_DIR/fleets/s2/repos/o-b.conf"

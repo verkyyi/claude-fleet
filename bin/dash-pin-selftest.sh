@@ -43,6 +43,7 @@ fi
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/dash-pin-selftest.XXXXXX")" || exit 2
 export FLEET_SKIP_GLOBAL_CONF=1
+export FLEET_UI_LANG=zh
 export FLEET_CONF_DIR="$WORK/conf"     # keep #566's @wid allocation lock in the sandbox
 mkdir -p "$WORK/conf" "$WORK/bin"
 

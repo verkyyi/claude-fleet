@@ -29,6 +29,14 @@
 # backlog fzf --binds, so this sheet can't silently go stale.
 set -u
 BIN="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=/dev/null
+. "$BIN/fleet-lib.sh" 2>/dev/null || true
+if command -v fleet_load_conf >/dev/null 2>&1; then
+  sess="${FLEET_SESSION:-}"
+  [ -n "$sess" ] || sess=$(fleet_current_session 2>/dev/null || true)
+  [ -n "$sess" ] && fleet_load_conf "$sess" 2>/dev/null || true
+fi
+. "$BIN/fleet-ui-lang.sh"
 
 PLAIN=""
 CONTEXT="all"
@@ -115,19 +123,140 @@ skey() {
 }
 print_sidebar_sheet() {
   eval "$(bash "$BIN/dash-keymap.sh" --panel sidebar env 2>/dev/null)"
-  printf '%s%s 任务栏快捷键 %s  %sq / esc 关闭%s\n\n' "$B" "$CYAN" "$R" "$DIM" "$R"
-  skey "打字 ↵" 2 "起新会话"
-  skey "↑ ↓" 0 "切换任务"
-  skey "编辑" 2 "←→ Home End ⌥←→ $(dg bol) $(dg eol) $(dg kill_word) $(dg kill_eol) ⌃u"
-  skey "$(dg menu) / 再点一次" 4 "任务菜单$(dn menu)"
-  skey "esc" 0 "键盘还给任务"
-  skey "⌂ / F9" 0 "进任务栏，再按去 hub"
-  skey "prefix ?" 0 "全部按键（prefix = ${DASH_KEYMAP_PREFIX:-C-b}）"
+  printf '%s%s %s %s  %s%s%s\n\n' "$B" "$CYAN" "$(fleet_ui_t keys_sidebar_title)" "$R" "$DIM" "$(fleet_ui_t keys_close)" "$R"
+  if [ "$(fleet_ui_lang)" = zh ]; then
+    skey "打字 ↵" 2 "起新会话"
+    skey "↑ ↓" 0 "切换任务"
+    skey "编辑" 2 "←→ Home End ⌥←→ $(dg bol) $(dg eol) $(dg kill_word) $(dg kill_eol) ⌃u"
+    skey "$(dg menu) / 再点一次" 4 "任务菜单$(dn menu)"
+    skey "esc" 0 "键盘还给任务"
+    skey "⌂ / F9" 0 "进任务栏，再按去 hub"
+    skey "prefix ?" 0 "全部按键（prefix = ${DASH_KEYMAP_PREFIX:-C-b}）"
+  else
+    skey "type ↵" 0 "new session"
+    skey "↑ ↓" 0 "switch task"
+    skey "edit" 0 "←→ Home End ⌥←→ $(dg bol) $(dg eol) $(dg kill_word) $(dg kill_eol) ⌃u"
+    skey "$(dg menu) / tap again" 0 "task menu$(dn menu)"
+    skey "esc" 0 "return keys to task"
+    skey "⌂ / F9" 0 "enter sidebar, then hub"
+    skey "prefix ?" 0 "all keys (prefix = ${DASH_KEYMAP_PREFIX:-C-b})"
+  fi
+}
+
+print_sheet_zh() {
+  local sub
+  if [ "$CONTEXT" = sidebar ]; then print_sidebar_sheet; return; fi
+  case "$CONTEXT" in
+    dash)    sub="（仪表盘面板 · tmux 前缀键也可用 · q/esc 关闭）" ;;
+    backlog) sub="（议题列表面板 · tmux 前缀键也可用 · q/esc 关闭）" ;;
+    *)       sub="（prefix = tmux 前缀键，本机为 ${DASH_KEYMAP_PREFIX:-C-b} · q/esc 关闭）" ;;
+  esac
+  printf '%s%s fleet 快捷键 %s  %s%s%s\n' "$B" "$CYAN" "$R" "$DIM" "$sub" "$R"
+
+  if want prefix; then
+  group "tmux 前缀" "— 任意窗口可用"
+  key "prefix a" "跳到下一个需要你处理的窗口（红色优先，其次绿色）"
+  key "prefix g" "聚焦 hub 的仪表盘；再按一次放大"
+  key "prefix e" "显示/隐藏 worker 任务栏（保存到当前 fleet；窄屏自动隐藏）"
+  key "prefix E" "聚焦任务栏；没有任务栏时打开任务选择器"
+  key "prefix Space" "任务选择器：切换任务，或输入名称新建 scratch；F9 / ⌂ 回 hub"
+  key "prefix b" "议题列表：GitHub issues，回车启动该 issue 的 worker"
+  key "prefix c" "配置弹窗：查看/编辑 FLEET_* 设置"
+  key "prefix z" "缩放当前 worker（tmux 原生 zoom）"
+  key "prefix [" "查看 worker 滚屏（tmux copy-mode）"
+  key "prefix u" "用量 + 账号弹窗：查看 5h/7d 用量，选择新会话账号"
+  key "prefix ?" "打开这份快捷键"
+  key "F9" "无前缀：回到本 fleet 的 hub；在带任务栏的任务里先聚焦任务栏，再按回 hub"
+  key "click ● N" "点击左下角 needs 数字：跳到下一个需要处理的窗口"
+  key "click usage" "点击底部用量：打开用量 + 账号弹窗"
+  fi
+
+  if want sidebar; then
+  eval "$(bash "$BIN/dash-keymap.sh" --panel sidebar env 2>/dev/null)"
+  group "任务栏" "— prefix E 或点击任务栏后可用"
+  key "输入名称" "在底部输入行编辑；支持中文、空格、粘贴；回车新建 scratch 并切过去"
+  key "enter" "有名称：新建 scratch；空行：把键盘还给 worker"
+  key "esc" "清空输入；空行时把键盘还给 worker"
+  key "↑ / ↓" "选择任务；停顿后切换到选中任务"
+  key "← / →" "有文字时移动光标；空行时折叠/展开选中行或仓库组"
+  key "⌥← / ⌥→" "按词移动光标"
+  key "$(dg bol)" "光标到行首$(dn bol)"
+  key "$(dg eol)" "光标到行尾$(dn eol)"
+  key "$(dg kill_word)" "删除光标前一个词$(dn kill_word)"
+  key "$(dg kill_eol)" "删除光标到行尾$(dn kill_eol)"
+  key "$(dg new)" "新任务：创建 issue 并启动 worker$(dn new)"
+  key "$(dg menu)" "空行时打开选中任务菜单；输入名称时就是普通点号$(dn menu)"
+  key "$(dg restore)" "恢复已收工任务$(dn restore)"
+  key "$(dg help)" "空行时打开任务栏快捷键；输入名称时就是普通问号$(dn help)"
+  key "prefix e" "隐藏任务栏"
+  fi
+
+  if want menu; then
+  group "行菜单" "— 在任务栏按 . 或再次点击选中行"
+  local mk what
+  while IFS='	' read -r mk what; do
+    [ -n "$mk" ] && key "$mk" "$what"
+  done <<EOF
+$(FLEET_UI_LANG=zh bash "$BIN/fleet-sidebar-menu.sh" --keys 2>/dev/null)
+EOF
+  fi
+
+  if want dashboard; then
+  group "仪表盘" "— hub 的 dash 面板内（prefix g）"
+  key "enter" "跳到高亮窗口"
+  key "→ / ←" "展开/折叠高亮行的子树；在仓库标题上折叠/展开整个仓库组"
+  key "id a1 b7" "左侧 id 是窗口句柄，可给 fleet-migrate.sh / dash-reap.sh 等命令使用"
+  key "输入名称, enter" "按输入文本新建 scratch，文本会预填为未发送草稿；中文和空格都支持"
+  key "$(dg new)" "新 issue：创建 issue 并启动 worker$(dn new)"
+  key "$(dg scratch)" "立即新建 raw scratch 会话$(dn scratch)"
+  key "$(dg agent)" "切换新会话默认 agent（claude ⇄ codex），写入当前 fleet 配置$(dn agent)"
+  key "$(dg rename)" "重命名高亮窗口；在查询行内编辑$(dn rename)"
+  key "$(dg answer)" "处理红色 needs 行：回答问题或查看权限阻塞详情$(dn answer)"
+  key "$(dg reap)" "回收完成的 worker；必要时确认，脏 worktree 会保留$(dn reap)"
+  key "$(dg migrate)" "把高亮会话迁移到另一个有余量的账号$(dn migrate)"
+  key "$(dg pin)" "置顶/取消置顶高亮窗口；置顶行显示在最上方$(dn pin)"
+  key "$(dg repo-add)" "给当前 fleet 添加仓库$(dn repo-add)"
+  key "$(dg view)" "切换 live / closed 视图$(dn view)"
+  key "$(dg restore)" "恢复高亮的已收工会话$(dn restore)"
+  key "enter (landed)" "恢复高亮 landed 会话"
+  key "$(dg pr) (landed)" "在浏览器打开 landed 行的 PR$(dn pr)"
+  key "$(dg reload)" "立即刷新$(dn reload)"
+  key "?" "空查询行时打开这份快捷键"
+  key "esc" "重启 dash（hub 面板常驻）"
+  fi
+
+  if want backlog; then
+  eval "$(bash "$BIN/dash-keymap.sh" --panel backlog env 2>/dev/null)"
+  group "议题列表" "— prefix b 内"
+  key "space" "显示/隐藏预览窗（正文、标签、评论）"
+  key "/" "筛选 issues"
+  key "enter" "启动高亮 issue 的 worker"
+  key "$(dg new)" "创建新 issue$(dn new)"
+  key "$(dg close)" "关闭高亮 issue（y/n 确认）$(dn close)"
+  key "$(dg priority)" "循环优先级标签（无→p2→p1→p0→无）$(dn priority)"
+  key "$(dg open)" "在网页打开 issue$(dn open)"
+  key "$(dg reload)" "立即刷新$(dn reload)"
+  key "?" "打开这份快捷键"
+  key "esc" "关闭"
+  fi
+
+  if want config; then
+  eval "$(bash "$BIN/dash-keymap.sh" --panel config env 2>/dev/null)"
+  group "配置弹窗" "— prefix c 内"
+  key "enter" "编辑高亮配置项 / 展开分组"
+  key "tab" "展开/折叠分组"
+  key "$(dg scope)" "切换写入范围（当前 fleet ⇄ repo）$(dn scope)"
+  key "space / $(dg preview)" "显示/隐藏详情预览$(dn preview)"
+  key "?" "显示原始 FLEET_* 键名"
+  key "$(dg reload)" "立即刷新$(dn reload)"
+  key "esc" "关闭"
+  fi
 }
 
 print_sheet() {
   local sub
   if [ "$CONTEXT" = sidebar ]; then print_sidebar_sheet; return; fi
+  if [ "$(fleet_ui_lang)" = zh ]; then print_sheet_zh; return; fi
   case "$CONTEXT" in
     dash)    sub="(dashboard panel · prefix binds work here too · q/esc to close)" ;;
     backlog) sub="(backlog panel · prefix binds work here too · q/esc to close)" ;;
