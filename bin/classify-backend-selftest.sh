@@ -283,7 +283,8 @@ assert r["jev_err"] is None and r["capture"] == sys.argv[4], "capture missing on
 assert r["ts"].endswith("Z")
 PY
 ok "shadow: haiku decides; one row {ts, window, hook_state, haiku, jev, conf, hash, latencies} + capture on disagreement"
-[ "$(stat -f %Lp "$WORK/shadow.ndjson" 2>/dev/null || stat -c %a "$WORK/shadow.ndjson")" = 600 ] || fail "shadow log not 0600 — screen text is in it"
+mode="$(python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))' "$WORK/shadow.ndjson")"   # GNU stat -f means something else
+[ "$mode" = 0o600 ] || fail "shadow log not 0600 — screen text is in it (mode $mode)"
 ok "shadow: the log is created 0600"
 
 fresh looping; printf 'LOOPING\n' > "$WORK/claude-out"; jev_answer LOOPING 0.9
