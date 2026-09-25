@@ -384,8 +384,9 @@ fleet_load_conf() {
 # ad-hoc `git remote` parse.
 
 # Keys that describe the fleet conf's OWN repo, so they must not leak into another
-# repo's view when its overlay is applied: identity, and where it deploys.
-_FLEET_REPO_SCOPED="FLEET_REPO FLEET_MAIN FLEET_BASE_BRANCH FLEET_DEPLOY_REF FLEET_DEPLOY_CHECK FLEET_REPO_SHORT"
+# repo's view when its overlay is applied: identity, where it deploys, and whether
+# it is the login's seed repo (FLEET_SEED, issue #1167 — a later repo is the user's).
+_FLEET_REPO_SCOPED="FLEET_REPO FLEET_MAIN FLEET_BASE_BRANCH FLEET_DEPLOY_REF FLEET_DEPLOY_CHECK FLEET_REPO_SHORT FLEET_SEED"
 
 # fleet_repo_conf_file <sess> <repo> → the overlay path for <repo> (may not exist).
 fleet_repo_conf_file() {
@@ -559,6 +560,35 @@ fleet_repo_conf_get() {
   case "${3:-}" in ''|[!A-Z_]*|*[!A-Za-z0-9_]*) return 2 ;; esac
   ( fleet_load_repo_conf "${1:-}" "${2:-}" >/dev/null 2>&1 || exit 1
     eval "printf '%s' \"\${$3:-}\"" )
+}
+
+# ---- the seed repo (issue #1167) --------------------------------------------
+# A new login's fleet comes up on claude-fleet itself (`fleet-up.sh --seed`) only so
+# the fleet works from its first minute; the login has no write access there, and
+# the operator's own fleet watches the same backlog. So the seed repo only LOOKS:
+# FLEET_SEED=1 in the fleet conf marks the conf's OWN repo (it is repo-scoped above,
+# so a repo added later never inherits it), and the dispatcher + issue-bridge skip
+# it whatever FLEET_AUTOFILL / FLEET_ISSUE_BRIDGE say. The one marker every consumer
+# reads — the onboarding wizard included — through fleet_repo_is_seed.
+
+# fleet_repo_is_seed <sess> <repo> → 0 iff <repo> is <sess>'s seed repo.
+fleet_repo_is_seed() {
+  [ "$(fleet_repo_conf_get "${1:-}" "${2:-}" FLEET_SEED)" = 1 ]
+}
+
+# fleet_conf_set <conf> <KEY> <value> — set one assignment in a conf file: every
+# existing KEY= line (optionally `export`ed) is dropped and ONE `KEY="value"` line
+# appended; everything else is kept verbatim. Atomic (temp + mv). rc 2 on a bad KEY.
+fleet_conf_set() {
+  local conf="${1:-}" key="${2:-}" val="${3:-}" tmp
+  case "$key" in ''|[!A-Z_]*|*[!A-Za-z0-9_]*) return 2 ;; esac
+  [ -n "$conf" ] || return 2
+  tmp="$conf.tmp.$$"
+  {
+    [ -f "$conf" ] && grep -Ev "^[[:space:]]*(export[[:space:]]+)?${key}[[:space:]]*=" "$conf"
+    printf '%s="%s"\n' "$key" "$val"
+  } > "$tmp" || { rm -f "$tmp"; return 1; }
+  mv -f "$tmp" "$conf" || { rm -f "$tmp"; return 1; }
 }
 
 # fleet_repo_conf_file_for <sess> <repo> → where <repo>'s own value of a key lives:

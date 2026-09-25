@@ -57,7 +57,8 @@ CONF=$(fleet_conf_file "$sess")
 INST="$BIN/../fleet.conf"
 [ -f "$INST" ] || INST=""
 
-identity='^[[:space:]]*(export[[:space:]]+)?FLEET_(REPO|MAIN|BASE_BRANCH)='
+# FLEET_SEED names the conf's OWN repo as the seed (issue #1167) — it stays with it.
+identity='^[[:space:]]*(export[[:space:]]+)?FLEET_(REPO|MAIN|BASE_BRANCH|SEED)='
 ourhdr='^# (claude-fleet: fleet .* written by fleet-up\.sh|Overlays the global fleet\.conf|FLEET_\* keys \(see fleet\.conf\.example\))'
 globals="^[[:space:]]*(export[[:space:]]+)?(${_FLEET_GLOBAL_ONLY// /|})="
 dropped=$(grep -E "$globals" "$CONF" 2>/dev/null | sed -E 's/^[[:space:]]*(export[[:space:]]+)?([A-Z0-9_]+)=.*/\2/' | tr '\n' ' ')
@@ -94,7 +95,9 @@ base=$( . "$CONF" >/dev/null 2>&1; printf '%s' "${FLEET_BASE_BRANCH:-}" )
 # lost one.
 mv -f "$tmp" "$S" || { rm -f "$tmp"; die "failed to write $S"; }
 cp -p "$CONF" "$CONF.pre-merge" 2>/dev/null
+seed=$( . "$CONF" >/dev/null 2>&1; printf '%s' "${FLEET_SEED:-}" )
 fleet_write_conf "$CONF.new.$$" "$sess" "$repo" "$main" "$base" "$(date '+%Y-%m-%d %H:%M:%S')" \
+  && { [ "$seed" != 1 ] || fleet_conf_set "$CONF.new.$$" FLEET_SEED 1; } \
   && mv -f "$CONF.new.$$" "$CONF" || { rm -f "$CONF.new.$$"; die "wrote $S but could not trim $CONF"; }
 if [ -n "$INST" ]; then
   mv -f "$INST" "$INST.pre-merge" || die "wrote $S but could not move $INST aside"

@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-up.sh [<owner/repo>] [<checkout-dir>] [--name <session>] [--base <branch>]
+# fleet-up.sh [<owner/repo>] [<checkout-dir>] [--name <session>] [--base <branch>] [--seed]
 #
 # ONE FLEET PER LOGIN (issue #979). A login runs exactly one fleet holding all its
 # repos, so this brings up THE fleet — or, when the login already has one, adds the
@@ -18,20 +18,28 @@
 #
 # A fleet ≡ a tmux session ≡ one login. Run it for every repo you want to work:
 # the first brings the fleet up, each further one adds its repo.
+#
+# --seed (issue #1167): this repo is only the login's STARTER — the fleet comes up
+# on it so it works at once, but it never takes work: the conf also gets
+# FLEET_SEED=1 + FLEET_AUTOFILL=0 + FLEET_ISSUE_BRIDGE=0, so the dispatcher never
+# auto-spawns from its backlog and the issue-bridge never relays its comments (see
+# fleet_repo_is_seed). It marks the fleet conf's OWN repo only — a --seed for a repo
+# the fleet would merely ADD is refused. Without --seed the conf is byte-identical.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"
 
 die() { echo "fleet-up: $*" >&2; exit 1; }
-usage() { echo "usage: fleet-up.sh [<owner/repo>] [<checkout-dir>] [--name <session>] [--base <branch>]" >&2; }
+usage() { echo "usage: fleet-up.sh [<owner/repo>] [<checkout-dir>] [--name <session>] [--base <branch>] [--seed]" >&2; }
 need_arg() { [ "$1" -ge 2 ] || { usage; die "$2 needs an argument"; }; }   # $1=$#, $2=flag
 
-REPO=""; DIR=""; NAME=""; BASE=""; FROM_CONF=0
+REPO=""; DIR=""; NAME=""; BASE=""; FROM_CONF=0; SEED=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --name) need_arg "$#" --name; NAME="$2"; shift 2;;
     --base) need_arg "$#" --base; BASE="$2"; shift 2;;
+    --seed) SEED=1; shift;;
     -h|--help) usage; exit 0;;
     -*) usage; die "unknown flag $1";;
     *) if [ -z "$REPO" ]; then REPO="$1"; elif [ -z "$DIR" ]; then DIR="$1"; else die "extra arg $1"; fi; shift;;
@@ -140,9 +148,23 @@ if [ -f "$CONF_R" ]; then
     fi
   fi
 fi
+# --seed marks the fleet conf's own repo, never one it would add (issue #1167).
+[ "$SEED" = 1 ] && [ -n "$ADD_REPO" ] \
+  && die "--seed marks a fleet's OWN repo — '$NAME' is on $REPO, so $ADD_REPO would only be added; drop --seed"
+
+# The seed repo only looks (issue #1167): mark it in the conf the moment the conf
+# exists — before the hub, so no daemon tick ever reads it unmarked.
+seed_conf() {
+  local conf kv; conf="$(fleet_state_dir "$NAME")/conf"
+  for kv in FLEET_SEED=1 FLEET_AUTOFILL=0 FLEET_ISSUE_BRIDGE=0; do
+    fleet_conf_set "$conf" "${kv%%=*}" "${kv#*=}" || die "failed to write ${kv%%=*} to $conf"
+  done
+  echo "fleet-up: $REPO is this fleet's seed repo — no autofill, no issue-bridge (FLEET_SEED=1)"
+}
 
 if [ "$LIVE" = 1 ]; then
   echo "fleet-up: fleet '$NAME' is already up"
+  [ "$SEED" = 1 ] && seed_conf
 else
 # --- checkout: reuse if it's already that repo, else clone ---
 # The one clone-or-reuse, shared with fleet-repo.sh add (fleet-lib.sh, issue #1104).
@@ -208,6 +230,7 @@ legacy="$FLEET_CONF_DIR/$NAME.conf"
 fleet_write_conf "$CONF" "$NAME" "$REPO" "$DIR" "$BASE" "$(date '+%Y-%m-%d %H:%M:%S')" \
   || die "failed to write $CONF"
 echo "fleet-up: wrote $CONF"
+[ "$SEED" = 1 ] && seed_conf
 
 # --- project trust (issue #563) ---
 # Claude Code asks "trust this folder?" once per project root and a worktree
