@@ -60,6 +60,8 @@ FLEET_BASE_BRANCH="main"
 # relays its comments, whatever FLEET_AUTOFILL / FLEET_ISSUE_BRIDGE say. Marks the
 # fleet conf's OWN repo only: a repo added later is never the seed. fleet-up writes
 # it (with FLEET_AUTOFILL=0 + FLEET_ISSUE_BRIDGE=0); readers ask fleet_repo_is_seed.
+# Once the login hosts a repo of its own, `fleet-repo.sh remove <seed>` takes the
+# starter out: that repo is promoted into this slot and the seed keys go (#1172).
 # @label=Seed repo (look only) @group=identity @tier=advanced @scope=identity @edit=no
 #FLEET_SEED=0
 

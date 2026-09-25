@@ -560,7 +560,9 @@ registry entry** — no migration. Each further repo is an overlay at
 `fleets/<session>/repos/<slug>.conf` with the same three keys plus any per-repo
 override (`FLEET_MODEL`, `FLEET_AGENT`, `FLEET_MCP_CONFIG`, `FLEET_DEPLOY_*`); the
 fleet conf keeps the fleet-wide defaults. All hosted repos are equal — there is no
-main repo. `bin/fleet-repo.sh add|remove|list` manages them; from inside the fleet,
+main repo. `bin/fleet-repo.sh add|remove|list` manages them (`remove` takes an
+overlay; the conf's own repo only when it is the login's seed, issue #1172 — then
+another hosted repo is promoted into the conf's slot); from inside the fleet,
 the dash's ⌃z (`repo-add` in `dash-keymap.sh`) and the task sidebar's row menu `g`
 open the same popup, `bin/dash-repo-add.sh` (issue #1103): it asks only
 `owner/name`, runs `fleet-repo.sh add --session <sess>` with the checkout defaulted
