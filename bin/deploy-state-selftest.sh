@@ -106,12 +106,16 @@ eq "probe-ref: ref wins over check"                  live    "$(fleet_deploy_pro
 
 # ============================================================ PROBE-GH (fake gh)
 # fake gh: `api repos/<repo>/actions/runs?head_sha=<sha>…` → the word in $WORK/api/<sha>
-# (missing file ⇒ exit 1, the transient-failure shape); `pr list` → the canned prmap
-# TSV in $WORK/prmap.tsv (the --jq is gh's built-in — the shim just answers as gh would).
+# (missing file ⇒ exit 1, the transient-failure shape); the batch listing
+# `api repos/<repo>/actions/runs?branch=<b>…` → the `<sha>\t<state>` TSV in
+# $WORK/api/_batch (missing ⇒ exit 1); `pr list` → the canned prmap TSV in
+# $WORK/prmap.tsv (the --jq is gh's built-in — the shim just answers as gh would).
 cat > "$WORK/bin/gh" <<SHIM
 #!/bin/bash
 printf '%s\n' "\$*" >> "$WORK/gh.log"
 case "\${1:-} \${2:-}" in
+  "api "*"?branch="*) [ -f "$WORK/api/_batch" ] || exit 1
+           cat "$WORK/api/_batch"; exit 0 ;;
   "api "*) q="\$2"; sha="\${q##*head_sha=}"; sha="\${sha%%&*}"
            [ -f "$WORK/api/\$sha" ] || exit 1
            cat "$WORK/api/\$sha"; exit 0 ;;
@@ -153,6 +157,24 @@ eq "probe-gh: a nonsense answer → no verdict" "" "$out"; eq "probe-gh: … and
 out=$(fleet_deploy_probe fake/repo zzzz '' actions); rc=$?
 eq "probe-gh: gh failing → no verdict" "" "$out"; eq "probe-gh: … and rc 1" 1 "$rc"
 has "probe-gh: asks for the merge sha's runs" "$(cat "$WORK/gh.log")" "actions/runs?head_sha=aaaa"
+# the batch listing: one read, folded per sha with the same rule (claude-fleet#1211)
+if command -v jq >/dev/null 2>&1; then
+  rm -f "$WORK/api/_batch"
+  out=$(fleet_deploy_probe_batch fake/repo master); rc=$?
+  eq "probe-batch: a failing listing → rc 1, no output" "1:" "$rc:$out"
+  printf 'aaaa\tlive\nbbbb\tdeploying\n' > "$WORK/api/_batch"
+  eq "probe-batch: prints <sha><TAB><state> per sha" "$(printf 'aaaa\tlive\nbbbb\tdeploying')" "$(fleet_deploy_probe_batch fake/repo master)"
+  has "probe-batch: lists the base branch's runs" "$(cat "$WORK/gh.log")" "actions/runs?branch=master"
+  eq "probe-batch: no branch → rc 1" 1 "$(fleet_deploy_probe_batch fake/repo ''; echo $?)"
+  rm -f "$WORK/api/_batch"
+  # the real fold (BATCH-JQ) over a canned listing: red beats running beats green, per sha
+  listing='{"workflow_runs":[
+    {"head_sha":"g1","status":"completed","conclusion":"success"},{"head_sha":"g1","status":"completed","conclusion":"skipped"},
+    {"head_sha":"r1","status":"completed","conclusion":"success"},{"head_sha":"r1","status":"in_progress","conclusion":null},
+    {"head_sha":"f1","status":"in_progress","conclusion":null},{"head_sha":"f1","status":"completed","conclusion":"failure"}]}'
+  eq "batch-jq: per-sha fold (green / running / red)" "$(printf 'f1\tfailed\ng1\tlive\nr1\tdeploying')" "$(printf '%s' "$listing" | jq -r "$FLEET_DEPLOY_BATCH_JQ" | sort)"
+  eq "batch-jq: empty listing → nothing" "" "$(printf '{"workflow_runs":[]}' | jq -r "$FLEET_DEPLOY_BATCH_JQ")"
+fi
 
 # ============================================================ PRODUCER
 printf 's1\tfake-repo\tfake/repo\n' > "$C/global/sessmap"
@@ -198,29 +220,60 @@ run_refresh
 eq "producer-ref: after the ref caught up → live" live "$(dep "$SHA_Y")"
 
 # --- actions mode: TTL-gated gh reads ------------------------------------------
+# (no $WORK/api/_batch here: the listing fails, so every due sha takes the per-sha
+# read — the historic shape, with the per-tick cap lifted so the TTL rules show.)
 printf 'b-a\t#21\tMERGED\t✓\t\taaaa\nb-b\t#22\tMERGED\t✓\t\tbbbb\nb-c\t#23\tMERGED\t✓\t\tcccc\nb-z\t#24\tMERGED\t✓\t\tzzzz\n' > "$WORK/prmap.tsv"
 conf 'FLEET_DEPLOY_CHECK="actions"'
+export FLEET_DEPLOY_PROBE_MAX=99
 reset_dep; run_refresh
 eq "producer-gh: live"      live      "$(dep aaaa)"
 eq "producer-gh: deploying" deploying "$(dep bbbb)"
 eq "producer-gh: failed"    failed    "$(dep cccc)"
 [ ! -f "$FD/deploy_zzzz" ] || fail "producer-gh: a failing gh read must leave NO file (nothing to downgrade to)"
 CHECKS=$((CHECKS+1))
-eq "producer-gh: one api read per candidate" 4 "$(grep -c 'actions/runs' "$WORK/gh.log")"
+eq "producer-gh: ≥2 due → the batch listing is tried once" 1 "$(grep -c 'actions/runs?branch=' "$WORK/gh.log")"
+eq "producer-gh: listing failed → one per-sha read per candidate" 4 "$(grep -c 'head_sha=' "$WORK/gh.log")"
 # within the TTL nothing is re-read even though the world changed…
 printf 'live\n' > "$WORK/api/bbbb"; : > "$WORK/gh.log"
 run_refresh
 eq "producer-gh: inside the TTL → no re-read (still deploying)" deploying "$(dep bbbb)"
 eq "producer-gh: inside the TTL → only the never-answered sha is retried" 1 "$(grep -c 'actions/runs' "$WORK/gh.log")"
 has "producer-gh: … and that retry is the unanswered one" "$(cat "$WORK/gh.log")" "head_sha=zzzz"
-# …past the TTL the non-terminal ones are, live stays untouched.
+hasnt "producer-gh: one due sha → no batch listing" "$(cat "$WORK/gh.log")" "?branch="
+# …past the TTL the non-terminal ones are, live stays untouched — and `failed` waits
+# for ITS OWN, longer TTL (FLEET_DEPLOY_TTL_FAILED) before it is looked at again.
 : > "$WORK/gh.log"
 FLEET_DEPLOY_TTL=0 run_refresh
 eq "producer-gh: past the TTL → deploying re-read → live" live "$(dep bbbb)"
 hasnt "producer-gh: a live sha is never re-read" "$(cat "$WORK/gh.log")" "head_sha=aaaa"
-has   "producer-gh: a failed sha is re-read"     "$(cat "$WORK/gh.log")" "head_sha=cccc"
+hasnt "producer-gh: a failed sha backs off (inside FLEET_DEPLOY_TTL_FAILED)" "$(cat "$WORK/gh.log")" "head_sha=cccc"
+: > "$WORK/gh.log"
+FLEET_DEPLOY_TTL=0 FLEET_DEPLOY_TTL_FAILED=0 run_refresh
+has   "producer-gh: past the failed TTL → the failed sha is re-read" "$(cat "$WORK/gh.log")" "head_sha=cccc"
+
+# --- the batch listing answers a due set with ONE read (claude-fleet#1211) --------
+printf 'c-1\t#31\tMERGED\t✓\t\tp1\nc-2\t#32\tMERGED\t✓\t\tp2\nc-3\t#33\tMERGED\t✓\t\tp3\nc-4\t#34\tMERGED\t✓\t\tp4\n' > "$WORK/prmap.tsv"
+printf 'p1\tlive\np2\tdeploying\np3\tfailed\n' > "$WORK/api/_batch"     # p4 is older than the window
+printf 'live\n' > "$WORK/api/p4"
+reset_dep; run_refresh
+eq "producer-batch: covered shas take the listing's verdict" "live deploying failed" "$(dep p1) $(dep p2) $(dep p3)"
+eq "producer-batch: the uncovered sha falls back to a per-sha read" live "$(dep p4)"
+eq "producer-batch: one listing…" 1 "$(grep -c '?branch=master' "$WORK/gh.log")"
+eq "producer-batch: …plus exactly one per-sha read (the uncovered one)" "1 head_sha=p4" "$(grep -c 'head_sha=' "$WORK/gh.log") $(grep -o 'head_sha=[a-z0-9]*' "$WORK/gh.log")"
+# the per-sha fallback is capped per tick, oldest read first; the rest wait a tick
+rm -f "$WORK/api/_batch"; for s in q1 q2 q3; do printf 'live\n' > "$WORK/api/$s"; done
+printf 'd-1\t#41\tMERGED\t✓\t\tq1\nd-2\t#42\tMERGED\t✓\t\tq2\nd-3\t#43\tMERGED\t✓\t\tq3\n' > "$WORK/prmap.tsv"
+reset_dep; printf 'deploying\t5\n' > "$FD/deploy_q1"; printf 'deploying\t1\n' > "$FD/deploy_q2"   # q2 read longest ago
+FLEET_DEPLOY_TTL=0 FLEET_DEPLOY_PROBE_MAX=2 run_refresh
+eq "producer-cap: at most FLEET_DEPLOY_PROBE_MAX per-sha reads a tick" 2 "$(grep -c 'head_sha=' "$WORK/gh.log")"
+has   "producer-cap: the stalest cached sha goes first" "$(cat "$WORK/gh.log")" "head_sha=q2"
+hasnt "producer-cap: the freshest one waits for the next tick" "$(cat "$WORK/gh.log")" "head_sha=q1"
+: > "$WORK/gh.log"; FLEET_DEPLOY_TTL=0 FLEET_DEPLOY_PROBE_MAX=2 run_refresh
+has   "producer-cap: …and is served on the next tick" "$(cat "$WORK/gh.log")" "head_sha=q1"
+export FLEET_DEPLOY_PROBE_MAX=99
 
 # --- the newest-20 cap: 22 MERGED rows → the 2 lowest PR numbers are not probed ---
+rm -f "$WORK/api/_batch"
 : > "$WORK/prmap.tsv"
 i=1; while [ "$i" -le 22 ]; do printf 'br-%s\t#%s\tMERGED\t✓\t\ts%02d\n' "$i" "$((100+i))" "$i" >> "$WORK/prmap.tsv"; printf 'live\n' > "$WORK/api/$(printf 's%02d' "$i")"; i=$((i+1)); done
 reset_dep; run_refresh

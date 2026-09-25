@@ -351,6 +351,15 @@ done
 # git each — cheap); actions mode re-probes only entries older than FLEET_DEPLOY_TTL
 # (60s) — so a merged PR that went live minutes ago costs ZERO gh calls from then on.
 # Neither knob set ⇒ nothing written, and the readers keep rendering `merged`.
+#
+# Cost discipline in actions mode (claude-fleet#1211, measured 2026-09-25): a `failed`
+# sha is not terminal but almost never flips (only a re-run does), and on a day the
+# conductor is red EVERY fresh merge reads failed — 57 of 128 cached shas here — so
+# the newest-20 window was ~18 per-sha REST reads per minute per login, on one shared
+# 5000/h token. Now: `failed` backs off to FLEET_DEPLOY_TTL_FAILED (900s); when two or
+# more shas are due, ONE listing of the base branch's newest runs answers all of them
+# (fleet_deploy_probe_batch); only shas older than that window still get a per-sha
+# read, capped at FLEET_DEPLOY_PROBE_MAX (4) per tick. Steady state: 0–1 read a tick.
 deploy_conf_for() {   # $1=repo → DEP_REF / DEP_CHECK from the fleet hosting it
   # Per REPO, not per fleet (issue #805): the knobs are repo-scoped keys
   # (_FLEET_REPO_SCOPED), so a fleet hosting claude-fleet (FLEET_DEPLOY_REF) AND the
@@ -360,27 +369,31 @@ deploy_conf_for() {   # $1=repo → DEP_REF / DEP_CHECK from the fleet hosting i
   # repo's knobs. A fleet with no repos/ overlay is the historic read, unchanged.
   local want _s cf r
   want=$(fleet_norm_repo "$1")
-  DEP_REF=''; DEP_CHECK=''
+  DEP_REF=''; DEP_CHECK=''; DEP_BASE=''
   while IFS=$'\t' read -r _s cf; do
     [ -f "$cf" ] || continue
     fleet_repo_hosted "$_s" "$want" || continue
     # unset first: the global fleet.conf sourced at the top may carry these keys for
     # ITS repo, and a per-fleet conf that doesn't set them must not inherit them.
-    r=$( unset FLEET_REPO FLEET_DEPLOY_REF FLEET_DEPLOY_CHECK
+    r=$( unset FLEET_REPO FLEET_DEPLOY_REF FLEET_DEPLOY_CHECK FLEET_BASE_BRANCH
          fleet_load_repo_conf "$_s" "$want" >/dev/null 2>&1 || exit 0
-         printf '%s\t%s' "${FLEET_DEPLOY_REF:-}" "${FLEET_DEPLOY_CHECK:-}" )
+         printf '%s\t%s\t%s' "${FLEET_DEPLOY_REF:-}" "${FLEET_DEPLOY_CHECK:-}" "${FLEET_BASE_BRANCH:-}" )
     case "$r" in
-      *$'\t'*) DEP_REF=${r%%$'\t'*}; DEP_CHECK=${r#*$'\t'}
+      *$'\t'*$'\t'*) DEP_REF=${r%%$'\t'*}; r=${r#*$'\t'}; DEP_CHECK=${r%%$'\t'*}; DEP_BASE=${r#*$'\t'}
                [ -n "$DEP_REF$DEP_CHECK" ] && return 0 ;;
     esac
   done < <(fleet_each_conf)
   # the global fleet.conf's knobs apply to the global FLEET_REPO only
   if [ -n "$REPO" ] && [ "$(fleet_norm_repo "$REPO")" = "$want" ]; then
-    DEP_REF="${FLEET_DEPLOY_REF:-}"; DEP_CHECK="${FLEET_DEPLOY_CHECK:-}"
+    DEP_REF="${FLEET_DEPLOY_REF:-}"; DEP_CHECK="${FLEET_DEPLOY_CHECK:-}"; DEP_BASE="${FLEET_BASE_BRANCH:-}"
   fi
   return 0
 }
 DEP_TTL="${FLEET_DEPLOY_TTL:-60}"; case "$DEP_TTL" in ''|*[!0-9]*) DEP_TTL=60;; esac
+DEP_TTL_FAILED="${FLEET_DEPLOY_TTL_FAILED:-900}"; case "$DEP_TTL_FAILED" in ''|*[!0-9]*) DEP_TTL_FAILED=900;; esac
+[ "$DEP_TTL_FAILED" -ge "$DEP_TTL" ] || DEP_TTL_FAILED="$DEP_TTL"       # never faster than the base TTL
+DEP_PROBE_MAX="${FLEET_DEPLOY_PROBE_MAX:-4}"; case "$DEP_PROBE_MAX" in ''|*[!0-9]*) DEP_PROBE_MAX=4;; esac
+dep_write() { printf '%s\t%s\n' "$2" "$3" > "$1.$$" && mv "$1.$$" "$1"; }   # <file> <state> <epoch>
 i=0
 while [ "$i" -lt "${#Q_REPO[@]}" ]; do
   rp="${Q_REPO[$i]}"; sg="${Q_SLUG[$i]}"; i=$((i+1))
@@ -392,18 +405,52 @@ while [ "$i" -lt "${#Q_REPO[@]}" ]; do
           | sort -t"$(printf '\t')" -k1,1nr | head -20 | cut -f2)
   [ -f "$C/deploy-live.$$" ] && cands="$cands"$'\n'"$(awk -F'\t' -v d="$FD" '$1==d{print $2}' "$C/deploy-live.$$" 2>/dev/null)"
   nowts=$(now)
-  printf '%s\n' "$cands" | sort -u | while read -r sha; do
+  # 1) what is due this tick: never `live`; in actions mode only past its TTL
+  #    (`failed` waits FLEET_DEPLOY_TTL_FAILED). Ordered oldest-read first so a cap
+  #    below always serves the staler sha.
+  due=$(printf '%s\n' "$cands" | sort -u | while read -r sha; do
     [ -n "$sha" ] || continue
     f="$FD/deploy_$sha"; st=''; ts=0
     [ -f "$f" ] && { IFS=$'\t' read -r st ts < "$f" || :; }
     [ "$st" = live ] && continue                               # terminal — never re-probed
+    [ "$ts" -eq "$ts" ] 2>/dev/null || ts=0                    # (no `case` here: bash 3.2 + $(…))
     if [ -z "$DEP_REF" ]; then                                 # actions mode: TTL-gated gh read
-      case "$ts" in ''|*[!0-9]*) ts=0;; esac
-      [ $(( nowts - ts )) -ge "$DEP_TTL" ] || continue
+      ttl="$DEP_TTL"; [ "$st" = failed ] && ttl="$DEP_TTL_FAILED"
+      [ $(( nowts - ts )) -ge "$ttl" ] || continue
     fi
+    printf '%s\t%s\n' "$ts" "$sha"
+  done | sort -n | cut -f2)
+  [ -n "$due" ] || continue
+  if [ -n "$DEP_REF" ]; then
+    # ref mode: one local git per sha — cheap, no cap, no batch
+    printf '%s\n' "$due" | while read -r sha; do
+      new=$(fleet_deploy_probe "$rp" "$sha" "$DEP_REF" "$DEP_CHECK") || continue
+      [ -n "$new" ] && dep_write "$FD/deploy_$sha" "$new" "$nowts"
+    done
+    continue
+  fi
+  # 2) actions mode: two or more due → ONE listing of the base branch's newest runs
+  #    answers every sha it covers (claude-fleet#1211). A sha it does not cover — or
+  #    every sha when the listing itself failed — falls through to the per-sha read.
+  left="$due"
+  if [ "$(printf '%s\n' "$due" | grep -c .)" -ge 2 ]; then
+    if batch=$(fleet_deploy_probe_batch "$rp" "${DEP_BASE:-master}"); then
+      left=$(printf '%s\n' "$due" | while read -r sha; do
+        [ -n "$sha" ] || continue
+        new=$(printf '%s\n' "$batch" | awk -F'\t' -v s="$sha" '$1==s{print $2; exit}')
+        if [ "$new" = live ] || [ "$new" = deploying ] || [ "$new" = failed ]; then
+          dep_write "$FD/deploy_$sha" "$new" "$nowts"
+        else
+          printf '%s\n' "$sha"                                  # not in the window → per-sha
+        fi
+      done)
+    fi
+  fi
+  # 3) per-sha reads for whatever is left, at most FLEET_DEPLOY_PROBE_MAX a tick —
+  #    the rest wait for the next tick (15s), still oldest first.
+  printf '%s\n' "$left" | grep . | head -n "$DEP_PROBE_MAX" | while read -r sha; do
     new=$(fleet_deploy_probe "$rp" "$sha" "$DEP_REF" "$DEP_CHECK") || continue   # gh failed → keep the cached state
-    [ -n "$new" ] || continue
-    printf '%s\t%s\n' "$new" "$nowts" > "$f.$$" && mv "$f.$$" "$f"
+    [ -n "$new" ] && dep_write "$FD/deploy_$sha" "$new" "$nowts"
   done
   # a sha's file outlives its PR's 100-row prmap window by a fortnight, then goes.
   find "$FD" -maxdepth 1 -name 'deploy_*' -mtime +14 -delete 2>/dev/null || true
