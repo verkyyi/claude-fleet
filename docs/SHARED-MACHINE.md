@@ -263,9 +263,19 @@ login sets it. The rule is the same either way: the directory is per-uid and
 
 ## Offboarding a person
 
-As that login: `fleet-down.sh`, then `launchctl bootout gui/$(id -u)` each
-`com.claude-fleet.*` and `com.ccquota.agent` plist. The hub has no command
-to delete an endpoint. Once the agent stops, `mini-<login>` goes stale and
-stops reporting. Then an admin runs
-`sudo sysadminctl -deleteUser <login>` (add `-keepHome` to archive the home
-directory). The login's past usage stays on the hub under its `os_user`.
+As the admin login, preview and then offboard the person:
+
+```sh
+~/.claude/fleet/bin/fleet-login-remove.sh alice
+~/.claude/fleet/bin/fleet-login-remove.sh alice --apply
+```
+
+The command stops alice's fleet under her login, boots out and removes her
+system LaunchDaemons and GUI LaunchAgents (including ccquota), removes the
+copied Claude account pool, stops remaining processes, and deletes her OS
+account. It refuses the current login and admin group members. The home is
+kept by default with `sysadminctl -keepHome`; add `--delete-home` only when its
+files should be removed too.
+The hub has no endpoint deletion command: once the ccquota agent stops,
+`mini-alice` goes stale and stops reporting. Past usage stays under its
+`os_user`.
