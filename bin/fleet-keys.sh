@@ -167,6 +167,7 @@ print_sheet_zh() {
   key "prefix u" "用量 + 账号弹窗：查看 5h/7d 用量，选择新会话账号"
   key "prefix ?" "打开这份快捷键"
   key "F9" "无前缀：回到本 fleet 的 hub；在带任务栏的任务里先聚焦任务栏，再按回 hub"
+  key "cf --guide" "在 shell 叫回上手向导，从上次进度继续"
   key "click ● N" "点击左下角 needs 数字：跳到下一个需要处理的窗口"
   key "click usage" "点击底部用量：打开用量 + 账号弹窗"
   fi
@@ -278,6 +279,7 @@ print_sheet() {
   key "prefix u" "usage + account modal — 5h/7d usage and limit detail, and (with an account pool) pick the account new sessions use"
   key "prefix ?" "this cheatsheet"
   key "F9" "(no prefix) jump back to this session's hub — from a task showing the task bar, the first press focuses the bar (like prefix E) and a second press goes to the hub; the ⌂ tap does the same. A task with NO sidebar on screen opens the task picker instead (prefix Space), F9 in it goes on to the hub (FLEET_HOME_SIDEBAR_FIRST=0 turns both off)"
+  key "cf --guide" "from a shell, reopen the onboarding guide at its saved progress"
   key "click ● N" "the needs badge (bottom-left) cycles to the next 'needs' window"
   key "click usage" "footer usage stat — opens the usage + account modal"
   fi

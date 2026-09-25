@@ -5,6 +5,7 @@
 # cwrm <branch>              — remove a worktree + its branch
 # cwclean [--prune]          — audit worktrees; --prune removes merged+clean+idle ones
 # cf [<owner/repo>] [dir]    — go to your fleet; with a repo, add it + make it current
+# cf --guide                 — reopen or jump to the onboarding guide
 #
 # It also installs a tmux() destroy-guard (issue #158) — see the bottom of the
 # file — so an accidental `tmux kill-server` from a bypass-perms worker can't
@@ -16,9 +17,15 @@
 # it, named "fleet", when this login has none; inferring the repo from this
 # checkout, else using the fleet's own). `cf <owner/repo>` goes straight to
 # fleet-up, which ADDS that repo to the fleet (fleet-repo.sh add) and makes it the
-# current repo — it never creates a second fleet. Any fleet-up flag passes through.
+# current repo — it never creates a second fleet. Any fleet-up flag except
+# --guide passes through; --guide recalls the pinned onboarding window.
 cf() {
   local bin="${${(%):-%x}:h:h}/bin"   # this file lives at <fleet>/shell/cw.zsh
+  if [ "$#" -eq 1 ] && [ "$1" = --guide ]; then
+    [ -x "$bin/fleet-guide.sh" ] || { echo "cf: $bin/fleet-guide.sh not found" >&2; return 1; }
+    "$bin/fleet-guide.sh"
+    return $?
+  fi
   if [ $# -eq 0 ] && [ -x "$bin/fleet-attach.sh" ]; then
     "$bin/fleet-attach.sh" && return 0
     local rc=$?
