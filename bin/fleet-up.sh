@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-up.sh [<owner/repo>] [<checkout-dir>] [--name <session>] [--base <branch>] [--seed]
+# fleet-up.sh [<owner/repo>] [<checkout-dir>] [--name <session>] [--base <branch>] [--seed] [--no-attach]
 #
 # ONE FLEET PER LOGIN (issue #979). A login runs exactly one fleet holding all its
 # repos, so this brings up THE fleet — or, when the login already has one, adds the
@@ -25,21 +25,26 @@
 # auto-spawns from its backlog and the issue-bridge never relays its comments (see
 # fleet_repo_is_seed). It marks the fleet conf's OWN repo only — a --seed for a repo
 # the fleet would merely ADD is refused. Without --seed the conf is byte-identical.
+#
+# --no-attach (issue #1165): bring the fleet up and stop — no attach, no client
+# switch. For a script that sets a login up (fleet-login-bootstrap.sh) and must
+# carry on past this line; the login's next `cf` attaches.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"
 
 die() { echo "fleet-up: $*" >&2; exit 1; }
-usage() { echo "usage: fleet-up.sh [<owner/repo>] [<checkout-dir>] [--name <session>] [--base <branch>] [--seed]" >&2; }
+usage() { echo "usage: fleet-up.sh [<owner/repo>] [<checkout-dir>] [--name <session>] [--base <branch>] [--seed] [--no-attach]" >&2; }
 need_arg() { [ "$1" -ge 2 ] || { usage; die "$2 needs an argument"; }; }   # $1=$#, $2=flag
 
-REPO=""; DIR=""; NAME=""; BASE=""; FROM_CONF=0; SEED=0
+REPO=""; DIR=""; NAME=""; BASE=""; FROM_CONF=0; SEED=0; NOATTACH=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --name) need_arg "$#" --name; NAME="$2"; shift 2;;
     --base) need_arg "$#" --base; BASE="$2"; shift 2;;
     --seed) SEED=1; shift;;
+    --no-attach) NOATTACH=1; shift;;
     -h|--help) usage; exit 0;;
     -*) usage; die "unknown flag $1";;
     *) if [ -z "$REPO" ]; then REPO="$1"; elif [ -z "$DIR" ]; then DIR="$1"; else die "extra arg $1"; fi; shift;;
@@ -293,7 +298,9 @@ rm -f "$FLEET_CONF_DIR/fleets/$NAME/current-repo" 2>/dev/null
 # Outside tmux, just attach the new socket.
 # Already inside this fleet: nothing to switch.
 _here=${TMUX:-}; _here=${_here%%,*}; _here=${_here##*/}
-if [ -n "${TMUX:-}" ] && [ "$_here" = "$SOCK" ]; then
+if [ "$NOATTACH" = 1 ]; then
+  echo "fleet-up: not attaching (--no-attach) — later: cf"
+elif [ -n "${TMUX:-}" ] && [ "$_here" = "$SOCK" ]; then
   :
 elif [ -n "${TMUX:-}" ]; then
   tmux detach-client -E "exec tmux -L '$SOCK' attach -t '$NAME'" 2>/dev/null \

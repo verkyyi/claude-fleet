@@ -25,6 +25,7 @@ FLEET_BASE_DEPS_RETRY_CAP          knob: internal pacing/limit, safe in-code def
 FLEET_BASE_SYNC                    knob: per-repo 0 opts a repo out of base-branch sync
 FLEET_BASE_SYNC_LEASE_TTL          knob: internal pacing/limit, safe in-code default (fleet-base-sync.sh)
 FLEET_BG_SOCK                      handoff: the background peer socket a message is sent over
+FLEET_BOOTSTRAP_GIT_BASE           seam: an injectable command/path for tests (fleet-login-bootstrap.sh)
 FLEET_C                            path: the dash cache root ($TMPDIR/.claude-dash) — tests point it at a sandbox
 FLEET_CC_PROJECTS_DIR              path: state/log location override (fleet-migrate.sh)
 FLEET_CC_SESSIONS_DIR              path: state/log location override (fleet-lib.sh)
@@ -145,6 +146,7 @@ FLEET_RESTORE_REJECT_ALARM         knob: internal pacing/limit, safe in-code def
 FLEET_RESTORE_SESS                 handoff: the session a restore targets
 FLEET_RESTORE_STALE_MAP_AGE        knob: internal pacing/limit, safe in-code default (fleet-restore.sh)
 FLEET_RESTORE_TMP_MAX_MIN          knob: internal pacing/limit, safe in-code default (fleet-restore.sh)
+FLEET_SEED_REPO                    knob: the starter repo a new login's first-login bootstrap brings its fleet up on; read before any conf exists (fleet-login-bootstrap.sh)
 FLEET_SESSION                      handoff: the fleet session a pane/popup belongs to, exported by the spawner
 FLEET_SESSION_END_REASON           handoff: why the SessionEnd hook fired (set by the stopper)
 FLEET_SIDEBAR_CURRENT              handoff: the window id the sidebar is rendering for
