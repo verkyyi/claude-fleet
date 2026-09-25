@@ -10,7 +10,8 @@
 #   B. --apply    call order addUser → createhomedir → dseditgroup → key → pool;
 #                 .ssh 700 + authorized_keys 600 holding the key; chown to the
 #                 login; the pool copy = exactly the source's tokens + .conf
-#                 (no dotfiles, no editor backups), dir 700, files 600
+#                 (no dotfiles, no editor backups), dir 700, files 600; ~/.zshrc =
+#                 the bootstrap block (#1165), 644, owned by the login
 #   C. exists     a known login → exit 3 in both modes, nothing run; an existing
 #                 home dir alone → exit 3
 #   D. no group   no com.apple.access_ssh → step skipped, dseditgroup never run
@@ -104,6 +105,8 @@ contains "A manual gui" "$OUT" "GUI"
 contains "A manual codex" "$OUT" "ccquota codex login personal --device-auth"
 contains "A manual gh" "$OUT" "gh auth login"
 contains "A manual enroll" "$OUT" "ccquota enroll --name mini-victor"
+contains "A zshrc" "$OUT" "sudo chown victor:staff $FLEET_LOGIN_HOMES/victor/.zshrc"
+contains "A installs itself" "$OUT" "claude-fleet installs itself"
 eq "A nothing executed" 0 "$(mutations)"
 eq "A nothing created" "" "$(ls "$FLEET_LOGIN_HOMES")"
 
@@ -127,7 +130,11 @@ for f in alpha alpha.conf beta beta.conf; do eq "B pool $f mode" 600 "$(mode "$D
 contains "B pool chown" "$CALLS" "chown -R victor:staff $D"
 contains "B config chown" "$CALLS" "chown victor:staff $H/.config $H/.config/claude-fleet"
 contains "B machine" "$OUT" "ccquota enroll --name box-victor"
-eq "B only .ssh + .config written" ".config .ssh" "$(ls -A "$H" | tr '\n' ' ' | sed 's/ $//')"
+eq "B only .ssh + .config + .zshrc written" ".config .ssh .zshrc" "$(ls -A "$H" | tr '\n' ' ' | sed 's/ $//')"
+# the first-login block (issue #1165): exactly what the bootstrap prints, owned by the login
+eq "B zshrc = bootstrap block" "$(bash "$BIN/fleet-login-bootstrap.sh" --print-zshrc)" "$(cat "$H/.zshrc")"
+eq "B zshrc mode" 644 "$(mode "$H/.zshrc")"
+contains "B zshrc chown" "$CALLS" "chown victor:staff $H/.zshrc"
 
 # --- C. already exists -------------------------------------------------------
 run victor --full-name V --pubkey "$KEY"

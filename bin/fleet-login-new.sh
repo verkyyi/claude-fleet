@@ -20,6 +20,10 @@
 #      dir 700 / files 600, owned by <login> — SHARED-MACHINE step 2b. Never
 #      ~/.codex/auth.json: Codex rotates its refresh token, so the new login gets
 #      its own device-code session instead (printed as a manual step).
+#   6. ~<login>/.zshrc ← the claude-fleet block (fleet-login-bootstrap.sh
+#      --print-zshrc, issue #1165), owned by <login>: its first interactive login
+#      clones claude-fleet at `stable`, installs it and brings its fleet up on the
+#      starter repo — nobody installs anything by hand.
 #
 # and then prints what only a human can do (first GUI login, the Codex device
 # code, the person's own `gh auth login`, the ccquota enrollment).
@@ -30,8 +34,9 @@
 # comes from.
 #
 # Only ever ADDS: it refuses (exit 3) when the login or its home already exists,
-# never overwrites, and writes nothing in the new home outside `.ssh/` and
-# `.config/claude-fleet/accounts/` (plus owning the `.config` dirs it creates).
+# never overwrites, and writes nothing in the new home outside `.ssh/`,
+# `.config/claude-fleet/accounts/` (plus owning the `.config` dirs it creates)
+# and `.zshrc`.
 #
 # Exit: 0 ok · 1 a step failed under --apply · 2 bad arguments · 3 the login
 #       (or its home) already exists
@@ -169,6 +174,15 @@ if [ "$SHARE" = 1 ]; then
   run sudo chmod 600 ${DST[@]+"${DST[@]}"}
 fi
 
+step "set up claude-fleet on first login (~/.zshrc — fleet-login-bootstrap.sh)"
+ZRC=$(mktemp "${TMPDIR:-/tmp}/fleet-login-zshrc.XXXXXX") || { printf '%s: mktemp failed\n' "$PROG" >&2; exit 1; }
+trap 'rm -f "$ZRC"' EXIT
+bash "$(dirname "$0")/fleet-login-bootstrap.sh" --print-zshrc > "$ZRC" \
+  || { printf '%s: fleet-login-bootstrap.sh --print-zshrc failed\n' "$PROG" >&2; exit 1; }
+append "$ZRC" "$H/.zshrc"
+run sudo chown "$LOGIN:staff" "$H/.zshrc"
+run sudo chmod 644 "$H/.zshrc"
+
 say ""
 if [ "$APPLY" = 1 ]; then
   say "done: login '$LOGIN' created. Left for a human:"
@@ -181,5 +195,6 @@ say "  2. as $LOGIN: ccquota codex login personal --device-auth   — approve th
 say "     (never copy ~/.codex/auth.json between logins)"
 say "  3. as $LOGIN: gh auth login   — their own GitHub identity"
 say "  4. on the hub: ccquota enroll --name $MACHINE-$LOGIN   — give $LOGIN the token privately"
-say "     (then docs/SHARED-MACHINE.md steps 4–5: ccquota agent + install claude-fleet)"
+say "     (then docs/SHARED-MACHINE.md step 4: the ccquota agent)"
+say "  claude-fleet installs itself on $LOGIN's first terminal login after step 1 — no step here"
 exit 0

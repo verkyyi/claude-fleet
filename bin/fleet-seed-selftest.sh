@@ -4,7 +4,8 @@
 #   1. degenerate: `fleet-up o/a` WITHOUT --seed writes exactly the conf it always
 #      has — header + the derived three, byte for byte — and says nothing of a seed.
 #   2. `fleet-up o/a --seed` adds FLEET_SEED=1 + FLEET_AUTOFILL=0 +
-#      FLEET_ISSUE_BRIDGE=0; a re-run is idempotent (no duplicate keys).
+#      FLEET_ISSUE_BRIDGE=0; a re-run is idempotent (no duplicate keys), and with
+#      --no-attach (issue #1165) never tries to attach.
 #   3. one dispatch tick on the seed fleet is a no-op — even with FLEET_AUTOFILL=1
 #      flipped on afterwards (the seed check wins); the same conf minus FLEET_SEED
 #      goes on past the gate (control).
@@ -86,6 +87,7 @@ C="$FLEET_CONF_DIR/fleets/fleet/conf"
 # ---- 1. degenerate: no --seed → the conf fleet-up has always written ----
 out=$(up o/a "$WORK/src/a"); eq "1 rc" "$?" 0
 hasnt "1 no seed line" "$out" "seed repo"
+hasnt "1 attaches as always (no --no-attach)" "$out" "not attaching"
 want=$(printf '%s\n' \
   "# Overlays the global fleet.conf for this fleet's tmux session. Add any other" \
   '# FLEET_* keys (see fleet.conf.example) — e.g. FLEET_CTX_WINDOW, FLEET_PROTECTED_RE.' \
@@ -106,7 +108,9 @@ eq "2 seed" "$(val "$C" FLEET_SEED)" 1
 eq "2 autofill" "$(val "$C" FLEET_AUTOFILL)" 0
 eq "2 bridge" "$(val "$C" FLEET_ISSUE_BRIDGE)" 0
 lib 'fleet_repo_is_seed fleet o/a' || fail "2: o/a is not read as the seed"
-out=$(up o/a "$WORK/src/a" --seed); eq "2 re-run rc" "$?" 0
+out=$(up o/a "$WORK/src/a" --seed --no-attach); eq "2 re-run rc" "$?" 0
+has "2 --no-attach stops short (#1165)" "$out" "not attaching (--no-attach)"
+hasnt "2 --no-attach never tries" "$out" "attach:  tmux"
 eq "2 no dup keys" "$(grep -cE '^FLEET_(SEED|AUTOFILL|ISSUE_BRIDGE)=' "$C")" 3
 [ -e "$C.tmp.$$" ] && fail "2: temp file left behind"
 leg "2 --seed writes SEED=1 AUTOFILL=0 ISSUE_BRIDGE=0"
