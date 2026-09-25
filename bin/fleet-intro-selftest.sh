@@ -14,6 +14,13 @@
 #        a worker); a repo with none shows no count; the "回到 fleet" action;
 #        and at most 2 tmux calls.
 #
+#   E. shell/fleet-login.zsh (issue #1166), the ~/.zshrc block that shows the
+#      banner and then auto-attaches an SSH login: no $SSH_TTY / inside $TMUX /
+#      non-interactive / ~/.hushfleet / ~/.hushfleet-attach → cf NOT called;
+#      interactive SSH → cf called exactly once, and the shell carries on after
+#      it (a failing cf too); a login without $SSH_TTY prints the banner byte for
+#      byte as fleet-intro.sh itself does. zsh absent → E SKIPs.
+#
 # tmux never touches the operator's server: a PATH shim drops the script's
 # `-L <sess>` and routes every call onto one throwaway -S socket, killed at exit.
 # tmux absent → case D SKIPs (the rest still run). Exit 0 = pass.
@@ -117,6 +124,65 @@ a/third|main|2"
   hasnot "main repo" "no main-repo label"
   calls=$(wc -l < "$T/calls" | tr -d ' ')
   [ "$calls" -le 2 ] && ok "tmux calls: $calls (≤2)" || bad "tmux calls: $calls (>2)"
+fi
+
+echo "E. fleet-login.zsh — banner + SSH auto-attach"
+if ! command -v zsh >/dev/null 2>&1; then
+  echo "  SKIP: zsh not installed"
+else
+  LOGIN="$here/../shell/fleet-login.zsh"
+  # a stand-in shell/ dir: the real fleet-login.zsh beside a stub intro + a stub
+  # cw.zsh whose cf only counts itself, so nothing attaches or spawns
+  mkdir -p "$T/sh" "$T/home"
+  cp "$LOGIN" "$T/sh/fleet-login.zsh"
+  printf '#!/bin/sh\necho INTRO\n' > "$T/sh/fleet-intro.sh"; chmod +x "$T/sh/fleet-intro.sh"
+  printf 'cf() { echo CF >> "%s/cf"; return "${CF_RC:-0}"; }\n' "$T" > "$T/sh/cw.zsh"
+  # login <interactive:-i|""> [VAR=val…] → output in $out, cf calls in $cfn
+  login() {
+    local i=$1; shift
+    : > "$T/cf"; rm -f "$T/home/.hushfleet" "$T/home/.hushfleet-attach"
+    out=$(env -u TMUX -u SSH_TTY HOME="$T/home" "$@" \
+          zsh -f $i -c ". '$T/sh/fleet-login.zsh'; echo AFTER" 2>&1)
+    cfn=$(grep -c CF "$T/cf")
+  }
+  login -i SSH_TTY=/dev/ttys999
+  [ "$cfn" = 1 ] && ok "SSH interactive → cf once" || bad "SSH interactive → cf ${cfn}×"
+  case "$out" in INTRO*AFTER) ok "banner first, shell continues after cf" ;; *) bad "order: $out" ;; esac
+  login -i SSH_TTY=/dev/ttys999 CF_RC=1
+  [ "$cfn" = 1 ] && case "$out" in *AFTER) true ;; *) false ;; esac \
+    && ok "a failing cf still leaves the shell" || bad "failing cf: $out"
+  login -i
+  [ "$cfn" = 0 ] && ok "no SSH_TTY → no cf" || bad "no SSH_TTY → cf ${cfn}×"
+  [ "$out" = "INTRO
+AFTER" ] && ok "no SSH_TTY → banner only" || bad "no SSH_TTY out: $out"
+  login -i SSH_TTY=/dev/ttys999 TMUX=/tmp/x,1,0
+  [ "$cfn" = 0 ] && [ "$out" = AFTER ] && ok "inside tmux → nothing" || bad "in tmux: cf ${cfn}× out=$out"
+  login "" SSH_TTY=/dev/ttys999
+  [ "$cfn" = 0 ] && [ "$out" = AFTER ] && ok "non-interactive (scp/rsync/ssh cmd) → nothing" \
+    || bad "non-interactive: cf ${cfn}× out=$out"
+  : > "$T/cf"; touch "$T/home/.hushfleet"
+  out=$(env -u TMUX HOME="$T/home" SSH_TTY=/dev/ttys999 zsh -f -i -c ". '$T/sh/fleet-login.zsh'; echo AFTER" 2>&1)
+  [ "$(grep -c CF "$T/cf")" = 0 ] && [ "$out" = AFTER ] && ok "~/.hushfleet → nothing" || bad "hushfleet: $out"
+  rm -f "$T/home/.hushfleet"; : > "$T/cf"; touch "$T/home/.hushfleet-attach"
+  out=$(env -u TMUX HOME="$T/home" SSH_TTY=/dev/ttys999 zsh -f -i -c ". '$T/sh/fleet-login.zsh'; echo AFTER" 2>&1)
+  [ "$(grep -c CF "$T/cf")" = 0 ] && [ "$out" = "INTRO
+AFTER" ] && ok "~/.hushfleet-attach → banner, no cf" || bad "hushfleet-attach: $out"
+  rm -f "$T/home/.hushfleet-attach"
+  # a cf already defined (cw.zsh sourced earlier in .zshrc) is used, not re-sourced
+  : > "$T/cf"
+  out=$(env -u TMUX HOME="$T/home" SSH_TTY=/dev/ttys999 zsh -f -i -c \
+        "cf() { echo MINE; }; . '$T/sh/fleet-login.zsh'" 2>&1)
+  [ "$(grep -c CF "$T/cf")" = 0 ] && [ "$out" = "INTRO
+MINE" ] && ok "an existing cf is kept" || bad "existing cf: $out"
+  # nothing but cf leaks into the login shell
+  out=$(env -u TMUX HOME="$T/home" zsh -f -i -c ". '$T/sh/fleet-login.zsh' >/dev/null; echo \"\${here-unset}\"" 2>&1)
+  [ "$out" = unset ] && ok "no helper variable leaks" || bad "leaked here=$out"
+  # the real pair: a non-SSH login's banner is fleet-intro.sh's, byte for byte
+  mkdir -p "$T/e/fleets"
+  want=$(env -u TMUX FLEET_CONF_DIR="$T/e" sh "$INTRO" 2>&1)
+  got=$(env -u TMUX -u SSH_TTY HOME="$T/home" FLEET_CONF_DIR="$T/e" zsh -f -i -c ". '$LOGIN'" 2>&1)
+  [ "$got" = "$want" ] && ok "real fleet-login.zsh: non-SSH banner byte-identical to fleet-intro.sh" \
+    || { bad "real banner differs"; printf 'got:\n%s\nwant:\n%s\n' "$got" "$want"; }
 fi
 
 [ "$fail" -eq 0 ] && echo "PASS: fleet-intro-selftest" || echo "FAIL: fleet-intro-selftest"
