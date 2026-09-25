@@ -109,13 +109,16 @@ exit 0
 TMUXFAKE
 chmod +x "$WORK/fakebin/tmux"
 
-# --- fake gh: merged list = issue-500; branch→PR resolution = 5500; issues OPEN ---
+# --- fake gh: merged list = issue-500; branch→PR resolution = 5500; issues CLOSED
+# unless listed in WAC_OPEN_ISSUES (the bound-issue gate, issue #1156) ---------------
 cat > "$WORK/fakebin/gh" <<'GHFAKE'
 #!/bin/bash
 case "$*" in
   *"pr list"*"--head"*) printf '5500\n' ;;   # fleet_reap_record resolves the branch's merged PR
   *"pr list"*)          printf 'issue-500\n' ;;   # clean_fleet MERGED_PRS (merged head-refs)
-  *"issue view"*)       printf 'OPEN\n' ;;
+  *"issue view"*)       printf '%s\n' "$*" >> "$WAC_GH_LOG"
+                        n=$(printf '%s\n' "$*" | sed -n 's/.*issue view \([0-9]*\).*/\1/p')
+                        case " ${WAC_OPEN_ISSUES:-} " in *" $n "*) printf 'OPEN\n' ;; *) printf 'CLOSED\n' ;; esac ;;
   *"issue close"*)      printf '%s\n' "$*" >> "$WAC_GH_LOG" ;;
   *) : ;;
 esac
@@ -149,6 +152,21 @@ printf '%s\n' "$out" | grep -Eq 'KEEP +scratch-902 ' || fail "zero-commit scratc
 [ -d "$WT600" ] || fail "dry-run must not remove the issue-600 worktree"
 [ -d "$SWT900" ] || fail "dry-run must not remove the scratch-900 worktree"
 ok "dry-run previews only — no history row written, no worktree removed"
+
+# ================= PART 0b: a merged worktree whose issue is OPEN is KEPT =======
+# Issue #1156: a branch issue-<N> merging (a side-fix PR) is not task #N done. With
+# #500 (merged-PR) and #600 (ancestor) still OPEN the janitor keeps both, and it
+# never closes an issue — the old "auto-close #N on prune" net is gone.
+out=$(WAC_OPEN_ISSUES="500 600" run_wac --dry-run)
+printf '%s\n' "$out" | grep -Eq 'KEEP +issue-500 .*skip:issue-open' || fail "dry-run: #500 open must KEEP (skip:issue-open)" "$out"
+printf '%s\n' "$out" | grep -Eq 'KEEP +issue-600 .*skip:issue-open' || fail "dry-run: #600 open must KEEP (skip:issue-open)" "$out"
+WAC_OPEN_ISSUES="500 600" run_wac >/dev/null
+[ -d "$WT500" ] && [ -d "$WT600" ] || fail "merged worktrees whose issue is OPEN must survive"
+git -C "$BASE" show-ref --verify -q refs/heads/issue-500 || fail "issue-500 branch must survive while #500 is open"
+awk -F'\t' '$2==500 || $2==600 {found=1} END{exit !found}' "$LEDGER" \
+  && fail "a held worktree must not get a disposal row" "$(cat "$LEDGER")"
+grep -q 'issue close' "$WORK/ghlog" && fail "the janitor must never close an issue" "$(cat "$WORK/ghlog")"
+ok "merged-PR/ancestor issue worktrees with the issue OPEN → KEPT, no issue close"
 
 # ================= PART 1: real reap writes the row, THEN removes ==============
 run_wac >/dev/null
@@ -192,6 +210,7 @@ ok "conversation scratch → closed-unlanded row keyed scratch-900, with the sha
 
 # the rows were written BEFORE removal: both ISSUE worktrees + branches are now
 # gone; the conversation scratch worktree is KEPT (surfaced for a deliberate ⌃x).
+grep -q 'issue close' "$WORK/ghlog" && fail "prune of a merged+CLOSED issue must not close anything" "$(cat "$WORK/ghlog")"
 [ -d "$WT500" ] && fail "issue-500 worktree must be reaped after its row is recorded"
 [ -d "$WT600" ] && fail "issue-600 worktree must be reaped after its row is recorded"
 [ -d "$SWT900" ] || fail "the conversation scratch-900 worktree must be KEPT (a session ran in it)"

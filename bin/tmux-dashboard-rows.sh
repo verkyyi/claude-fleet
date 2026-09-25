@@ -564,7 +564,14 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # A fresh daemon notice is tied to this exact done turn. Activity invalidates
   # it immediately; a stopped daemon cannot leave a misleading permanent marker.
   if [ "$state" = "done" ] && [ "$reap_stamp" = "$state_ts" ]; then
-    case "$reap_due:$reap_seen" in *[!0-9:]*|:*|*:) : ;;
+    case "$reap_due:$reap_seen" in
+      # Held (issue #1156): the PR merged/closed but the bound issue is still
+      # open, so cleanup will NOT reap — continue the task or close the issue.
+      hold:*[!0-9]*|hold:) : ;;
+      hold:*) if [ "$reap_seen" -le "$NOW" ] && [ "$((NOW - reap_seen))" -le 180 ]; then
+                act='iss open'; acol=$AM
+              fi ;;
+      *[!0-9:]*|:*|*:) : ;;
       *) if [ "$reap_seen" -le "$NOW" ] && [ "$((NOW - reap_seen))" -le 180 ]; then
            remain=$(( (reap_due - NOW + 59) / 60 )); [ "$remain" -ge 0 ] || remain=0
            act="r${remain}m"; acol=$AM

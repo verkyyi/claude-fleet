@@ -104,7 +104,7 @@ cat > "$WORK/fakebin/gh" <<'GHFAKE'
 #!/bin/bash
 case "$*" in
   *"pr list"*)    : ;;
-  *"issue view"*) printf 'OPEN\n' ;;
+  *"issue view"*) printf 'CLOSED\n' ;;   # the bound-issue gate (#1156) lets it through
   *) : ;;
 esac
 exit 0

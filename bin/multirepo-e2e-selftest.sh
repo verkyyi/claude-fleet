@@ -74,7 +74,8 @@ iss() { printf '{"number":%s,"title":"%s","labels":[],"assignees":[],"milestone"
 case "$1 $2" in
   "pr view")
     [ "$repo" = o/alpha ] && [ "$3" = 101 ] || exit 1
-    printf 'MERGED\t%s\tissue-12\t-\t2020-01-01T00:00:00Z\n' "$(cat "$GH_SHA_A")" ;;
+    # 6th field: the issues it closes (issue #1156) — (o/alpha, 12), never B's #12.
+    printf 'MERGED\t%s\tissue-12\t-\t2020-01-01T00:00:00Z\to/alpha#12\n' "$(cat "$GH_SHA_A")" ;;
   "pr list")
     case "$repo" in
       o/alpha) printf '[{"number":101,"headRefName":"issue-12","state":"MERGED","isDraft":false,"statusCheckRollup":[],"mergeCommit":{"oid":"%s"}}]' \

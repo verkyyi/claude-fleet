@@ -111,12 +111,12 @@ exit 0
 LSOFFAKE
 chmod +x "$WORK/fakebin/lsof"
 
-# --- fake gh: no merged PRs (every reap here is via ancestor), issues OPEN -----
+# --- fake gh: no merged PRs (every reap here is via ancestor), issues CLOSED (#1156 gate)
 cat > "$WORK/fakebin/gh" <<'GHFAKE'
 #!/bin/bash
 case "$*" in
   *"pr list"*)     : ;;                  # no merged PRs — reaps go through ancestor
-  *"issue view"*)  printf 'OPEN\n' ;;
+  *"issue view"*)  printf 'CLOSED\n' ;;   # the bound-issue gate (#1156) lets it through
   *"issue close"*) : ;;
   *) : ;;
 esac
