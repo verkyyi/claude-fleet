@@ -14,6 +14,11 @@
 #      it always has; fleet-settings.sh merge folds it into fleet.settings with
 #      every value unchanged, drops the fleet conf's (never-read) global-only key,
 #      and the settings file is never listed as a fleet.
+#   7. the first fleet on a login opens the onboarding guide (issue #1169): ONE
+#      `guide` window seeded /fleet-onboard, @pin=1, and global/onboarded written.
+#      A later new fleet (marker present), an existing fleet coming back up, and
+#      FLEET_ONBOARD=0 open none — and a later new fleet prints exactly what
+#      FLEET_ONBOARD=0 does. Legs 1-6 run with FLEET_ONBOARD=0: their old outputs.
 # The hub, collector, disk gate and trust check are stubbed in a sandbox bin/;
 # tmux: a PATH shim maps every `-L <label>` to a private socket under $SOCKD.
 set -uo pipefail
@@ -49,6 +54,7 @@ export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
 export HOME="$WORK/home" FLEET_CONF_DIR="$WORK/conf" TMPDIR="$WORK/tmp" FLEET_C="$WORK/cache"
 unset TMUX TMUX_PANE FLEET_MAIN FLEET_REPO FLEET_BASE_BRANCH FLEET_SESSION FLEET_SKIP_GLOBAL_CONF
 unset _FLEET_GLOBAL_CONF_SOURCED FLEET_GLOBAL_MAX_SESSIONS
+export FLEET_ONBOARD=0     # legs 1-6: no guide (#1169) — leg 7 turns it back on
 
 FAILS=0
 fail() { printf 'FAIL: %s\n' "$*" >&2; FAILS=$((FAILS+1)); }
@@ -197,6 +203,53 @@ out=$(bash "$SB/fleet-settings.sh" merge 2>&1); rc=$?
 eq "6 two fleets rc" "$rc" 1
 has "6 two fleets" "$out" "several fleets"
 leg "6 one settings file per login (dual-read)"
+
+# ---- 7. the first fleet on a login opens the guide, pinned (issue #1169) ----
+export FLEET_CONF_DIR="$WORK/conf7"; unset FLEET_ONBOARD
+# The guide is a real scratch: it needs a checkout with a commit + origin/master,
+# and its agent is a stub that records its seed and sleeps.
+g="$WORK/src/g"; mkrepo "$g" o/g
+git -C "$g" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+git -C "$g" update-ref refs/remotes/origin/master HEAD
+rm -f "$SB/fleet-claude.sh"
+cat > "$SB/fleet-claude.sh" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" > "$WORK/guide-seed"; exec sleep 3600
+EOF
+chmod +x "$SB/fleet-claude.sh"
+wins() { "$REAL_TMUX" -S "$SOCKD/fleet" list-windows -t fleet -F "$1" 2>/dev/null; }
+nohms() { sed 's/[0-9][0-9]:[0-9][0-9]:[0-9][0-9]//'; }
+marker="$FLEET_CONF_DIR/global/onboarded"
+out=$(up o/g "$g"); rc=$?
+[ -n "${FLEET_SELFTEST_SHOW:-}" ] && printf '$ fleet-up o/g (first fleet)\n%s\n' "$out"
+eq "7 rc" "$rc" 0
+has "7 says so" "$out" "opened the onboarding guide"
+eq "7 one guide" "$(wins '#{window_name}' | grep -cx guide)" 1
+eq "7 guide pinned" "$(wins '#{window_name} #{@pin} #{@raw}' | grep '^guide ')" "guide 1 1"
+[ -f "$marker" ] || fail "7: global/onboarded not written"
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$WORK/guide-seed" ] && break; sleep 0.3; done
+eq "7 seeded" "$(cat "$WORK/guide-seed" 2>/dev/null)" "/fleet-onboard"
+"$REAL_TMUX" -S "$SOCKD/fleet" kill-server 2>/dev/null
+# an existing fleet coming back up never reads the marker — even with none
+rm -f "$marker"
+out=$(up o/g "$g"); eq "7 existing rc" "$?" 0
+eq "7 existing: no guide" "$(wins '#{window_name}' | grep -cx guide)" 0
+[ -e "$marker" ] && fail "7: an existing fleet wrote the marker"
+"$REAL_TMUX" -S "$SOCKD/fleet" kill-server 2>/dev/null
+# a second NEW fleet on an onboarded login vs FLEET_ONBOARD=0: same bytes, no guide
+date > "$marker"; rm -rf "$FLEET_CONF_DIR/fleets"
+out2=$(up o/g "$g" | nohms)
+eq "7 second: no guide" "$(wins '#{window_name}' | grep -cx guide)" 0
+"$REAL_TMUX" -S "$SOCKD/fleet" kill-server 2>/dev/null
+rm -f "$marker"; rm -rf "$FLEET_CONF_DIR/fleets"
+out3=$(FLEET_ONBOARD=0 up o/g "$g" | nohms)
+eq "7 off: no guide" "$(wins '#{window_name}' | grep -cx guide)" 0
+[ -e "$marker" ] && fail "7: FLEET_ONBOARD=0 wrote the marker"
+has "7 off: up" "$out3" "fleet 'fleet' is up (repo=o/g"
+eq "7 second == off, byte for byte" "$out2" "$out3"
+hasnt "7 off: silent" "$out3" "guide"
+"$REAL_TMUX" -S "$SOCKD/fleet" kill-server 2>/dev/null
+leg "7 first fleet opens the pinned guide, once"
 
 [ "$FAILS" = 0 ] && { echo "fleet-one-per-login-selftest: all passed"; exit 0; }
 echo "fleet-one-per-login-selftest: $FAILS failure(s)"; exit 1

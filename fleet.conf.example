@@ -63,6 +63,14 @@ FLEET_BASE_BRANCH="main"
 # @label=Seed repo (look only) @group=identity @tier=advanced @scope=identity @edit=no
 #FLEET_SEED=0
 
+# First-fleet guide (issue #1169). The first time this login's fleet is created,
+# fleet-up opens the /fleet-onboard wizard as a `guide` scratch pinned to the top
+# of the session list, and writes $FLEET_CONF_DIR/global/onboarded so it happens
+# once. Only a brand-new fleet asks — bringing an existing fleet back up never
+# does. Set to 0 to create fleets without it. GLOBAL (read before any fleet exists).
+# @label=Open the guide on a first fleet @group=spawn @tier=advanced @scope=global @edit=bool
+#FLEET_ONBOARD=1
+
 # ── Per-repo settings (issue #978) ──────────────────────────────────────────
 # A fleet hosting 2+ repos keeps each further repo's conf at
 # fleets/<session>/repos/<slug>.conf (bin/fleet-repo.sh add). Beyond identity

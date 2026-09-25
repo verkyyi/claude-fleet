@@ -1,5 +1,5 @@
 #!/bin/bash
-# dash-raw-session.sh [--name <name>] [--prompt <text>] [--agent <a>] [<fleet-session>] — open a
+# dash-raw-session.sh [--name <name>] [--prompt <text>] [--agent <a>] [--pin] [<fleet-session>] — open a
 # RAW (non-issue-bound) scratch Claude window in a fleet: plain `claude` on the
 # fleet's socket, with NO GitHub issue and (unless --prompt) NO seed prompt, but in
 # its OWN git worktree off the base branch (issue #290). It is the counterpart to the issue-bound spawners
@@ -110,7 +110,7 @@ set -uo pipefail
 # and input draft; --prompt <t> / --prompt=<t> is the optional submitted seed;
 # --bg backgrounds the slow half of the spawn (the dash ⌃s / typed-↵ path — see
 # below); the lone positional is the headless <fleet-session>.
-NAME=""; PROMPT=""; TARGET_SESS=""; BG=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""
+NAME=""; PROMPT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --name)        NAME="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
@@ -137,6 +137,9 @@ while [ "$#" -gt 0 ]; do
     --agent)       AGENT="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --agent=*)     AGENT="${1#--agent=}"; shift ;;
     --bg)          BG=1; shift ;;
+    # --pin (issue #1169): stamp @pin 1 so the window sorts to the top of the
+    # dash (dash-pin-toggle.sh's tier) — fleet-up's first-fleet guide.
+    --pin)         PIN=1; shift ;;
     --repo)        REPO_ARG="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --repo=*)      REPO_ARG="${1#--repo=}"; shift ;;
     --no-repo)     NOREPO=1; shift ;;
@@ -257,7 +260,8 @@ if [ "$BG" = 1 ]; then
   # The RESOLVED repo rides along (issue #789), so the bg pass cannot re-resolve
   # the highlighted row the operator moved off in between.
   rarg=''; [ "$NOREPO" = 1 ] && rarg=' --no-repo'; [ -n "$REPO_ARG" ] && rarg=" --repo='$REPO_ARG'"
-  fleet_bg "FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg$pfarg${ORIGIN:+ --origin='$ORIGIN'}${AGENT:+ --agent=$AGENT}$rarg${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1" \
+  pinarg=''; [ "$PIN" = 1 ] && pinarg=' --pin'
+  fleet_bg "FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg$pfarg$pinarg${ORIGIN:+ --origin='$ORIGIN'}${AGENT:+ --agent=$AGENT}$rarg${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1" \
     || { [ -n "$nfarg" ] && rm -f "$nf"; [ -n "$pfarg" ] && rm -f "$pf"
          refuse "raw: background dispatch failed"; exit 1; }
   exit 0
@@ -414,6 +418,7 @@ fi
 [ -n "$REPO_ARG" ] && TM set-window-option -t "$win" @repo "$REPO_ARG" 2>/dev/null
 [ "$NOREPO" != 1 ] && [ "$MULTI" = 0 ] && [ -n "${FLEET_REPO:-}" ] \
   && TM set-window-option -t "$win" @repo "$(fleet_norm_repo "$FLEET_REPO")" 2>/dev/null
+[ "$PIN" = 1 ] && TM set-window-option -t "$win" @pin 1 2>/dev/null
 # Spawn provenance (issue #503) — stamped on the WARM path too: a pool window was
 # pre-warmed with no requester, so its origin is decided at CLAIM time, here.
 [ -n "$ORIGIN" ] && TM set-window-option -t "$win" @origin "$ORIGIN" 2>/dev/null
