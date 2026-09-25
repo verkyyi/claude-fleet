@@ -1353,6 +1353,38 @@ fleet_repo_register() {
 #     per-fleet logic against each socket (writes stay on the same `-L` label).
 fleet_socket() { printf '%s' "$1"; }
 
+# ~/.local/bin on the PATH a fleet's tmux server runs under (issue #1191). Claude
+# Code is a per-login NATIVE install — ~/.local/bin/claude, nothing system-wide.
+# Where a new pane's PATH comes from (tmux 3.6, measured): a pane spawned BY A
+# CLIENT (`tmux new-window` from a shell, a daemon) gets THAT CLIENT's PATH — the
+# zshrc line and the launchd plists' PATH cover those; a pane spawned SERVER-SIDE
+# (a dash bind's run-shell, a hook, anything the server itself runs) gets the
+# server's GLOBAL environment, which is the PATH of the process that started the
+# server, for the server's whole life. A server started from a login whose PATH
+# lacked the dir never found claude on that path again (#1183: the guide window
+# died at spawn with `exec: claude: not found`). Two halves, both exact no-ops
+# when the dir is already there:
+#   fleet_local_bin_path        — this process: PATH with $HOME/.local/bin in
+#                                 front (export it BEFORE the server forks, and
+#                                 before this process spawns any window)
+#   fleet_server_local_bin <s>  — a server already running on socket <s>: stamp
+#                                 it onto the global environment, for every
+#                                 server-side spawn from now on (an older
+#                                 fleet-up, a daemon's PATH); open panes keep theirs
+fleet_local_bin_path() {
+  case ":$PATH:" in
+    *":$HOME/.local/bin:"*) printf '%s' "$PATH" ;;
+    *) printf '%s' "$HOME/.local/bin:$PATH" ;;
+  esac
+}
+fleet_server_local_bin() {
+  local sock="$1" cur
+  cur=$(tmux -L "$sock" show-environment -g PATH 2>/dev/null) || cur=''
+  case "$cur" in PATH=*) cur=${cur#PATH=} ;; *) cur=$PATH ;; esac
+  case ":$cur:" in *":$HOME/.local/bin:"*) return 0 ;; esac
+  tmux -L "$sock" set-environment -g PATH "$HOME/.local/bin:$cur" 2>/dev/null
+}
+
 # fleet_bg [-L <socket>] <shell-command> — the shared "background this bind body"
 # helper (issue #304). Dispatch <shell-command> as a DETACHED, server-side
 # background job (via `tmux run-shell -b`) so the interactive fzf bind / popup that

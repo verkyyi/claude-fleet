@@ -30,6 +30,7 @@ FLEET_C                            path: the dash cache root ($TMPDIR/.claude-da
 FLEET_CC_PROJECTS_DIR              path: state/log location override (fleet-migrate.sh)
 FLEET_CC_SESSIONS_DIR              path: state/log location override (fleet-lib.sh)
 FLEET_CLAUDE_COMM                  seam: the process name pane scans treat as Claude
+FLEET_CLAUDE_INSTALL_CMD           seam: the Claude Code installer command (fleet-login-bootstrap.sh) — tests swap in a stub
 FLEET_CLAUDE_TMP_ROOT              seam: the Claude scratchpad root the listener sweep anchors on (selftest sandbox)
 FLEET_CLEANUP_LEASE_TTL            knob: internal pacing/limit, safe in-code default (fleet-cleanup-daemon.sh)
 FLEET_CODEX_ACCOUNT                handoff: the codex account a launch was assigned

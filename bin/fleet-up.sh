@@ -254,6 +254,12 @@ fleet_repo_trust_warn "$DIR" fleet-up
 # a fresh fleet no longer comes up with a hub Claude session) is built by
 # hub-session.sh, scoped to THIS fleet's session + checkout so F9 toggles this
 # fleet's own hub.
+# The server inherits THIS process's PATH for its whole life, and every window it
+# spawns server-side (a bind, a hook) runs under it; the hub + guide spawned right
+# below get it as this client's — so ~/.local/bin (Claude Code's native install)
+# goes on it BEFORE the fork, or a login whose PATH lacked the dir never finds
+# claude on a respawn (issue #1191, #1183; fleet_local_bin_path in fleet-lib.sh).
+PATH=$(fleet_local_bin_path); export PATH
 workwin=$(tmux -L "$SOCK" new-session -d -P -F '#{window_id}' -s "$NAME" -c "$DIR" -n work) \
   || die "tmux new-session failed for '$NAME'"
 # A session is on its way: wake the idle-gated daemons so the dash is fresh on
@@ -289,6 +295,10 @@ fi
 
 echo "fleet-up: fleet '$NAME' is up (repo=$REPO base=$BASE [$BASE_SRC])"
 fi
+# A server already running — an older fleet-up, or one a daemon started from its
+# own PATH — gets ~/.local/bin stamped onto its global environment, so the next
+# window it spawns server-side finds claude too (issue #1191). A no-op when there.
+fleet_server_local_bin "$SOCK"
 
 # --- a repo the fleet does not host yet: add it ---
 if [ -n "$ADD_REPO" ]; then
