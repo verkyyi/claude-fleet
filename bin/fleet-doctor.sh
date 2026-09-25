@@ -109,6 +109,14 @@ else
   warn claude "not found — the CLI you run per window and the optional classify hook"
 fi
 
+# Only enrolled logins need the one-line readiness verdict. This is a WARN,
+# never a FAIL: install-sync uses the doctor's FAIL count as its rollback gate.
+if [ -f "$conf_dir/global/bootstrapped" ]; then
+  if onboard=$(FLEET_CONF_DIR="$conf_dir" bash "$(dirname "$0")/fleet-doctor-onboard.sh" 2>/dev/null); then
+    pass onboard "$onboard"
+  else warn onboard "${onboard:-readiness probe failed}"; fi
+fi
+
 # --- fleet quality-of-life commands (optional: repo-shipped /skills) ---
 # TWO install paths reach a session with these (issue #611), and the fleet runs
 # without either, so a missing set is a warn and never a fail:
