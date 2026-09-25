@@ -177,6 +177,16 @@ ogit() {
   if as_owner "$_og"; then $SUDO -u "$_og" git -c safe.directory='*' -C "$@"
   else gitq "$@"; fi
 }
+# ofs <owner> <cmd…> — any other read of an install, as its owner when reachable
+# (issue #1158). A macOS home is 0700: the caller cannot even stat what lies
+# inside another login's home, so a `[ -e ]`, a `cd`, a `diff` run here saw
+# nothing — every install was invisible and the verdict read "nothing to sync".
+# From / so the owner is never asked to stand in the caller's own 0700 cwd.
+ofs() {
+  _of=$1; shift
+  if as_owner "$_of"; then ( cd / && $SUDO -u "$_of" "$@" )
+  else "$@"; fi
+}
 # oread <owner> <file> — a file's contents, as the owner when the caller cannot
 # read it (the copy marker is written as the owner, under sudo's 077 umask).
 oread() {
@@ -262,16 +272,20 @@ gitq "$src" archive --format=tar HEAD | tar -xf - -C "$STAGE/tree"
 { cat "$STAGE/tree/.gitignore" 2>/dev/null; printf '%s\n' '__pycache__/' '*.pyc' '.DS_Store' 'fleet.conf' 'fleet.conf.bak*'; } > "$STAGE/exclude"
 chmod -R a+rX "$STAGE"
 
-# drift <dir> <entries> → the number of differing paths (diff -rq lines).
+# drift <dir> <entries> <owner> → the number of differing paths (diff -rq
+# lines). One owner-side shell (issue #1158): the stage is world-readable, the
+# install may be readable only by its owner.
 drift() {
-  _d=$1 _n=0
-  for _e in $2; do
-    if [ ! -e "$_d/$_e" ] && [ ! -L "$_d/$_e" ]; then _n=$((_n + 1)); continue; fi
-    _c=$(diff -rq -x __pycache__ -x '*.pyc' -x .DS_Store -x '*.log' -x '*.sock' \
-           "$STAGE/tree/$_e" "$_d/$_e" 2>/dev/null | wc -l | tr -d ' ')
-    _n=$((_n + ${_c:-0}))
-  done
-  printf '%s' "$_n"
+  # shellcheck disable=SC2016,SC2086  # $2 splits into the entries on purpose
+  ofs "$3" sh -c '
+    s=$1 d=$2 n=0; shift 2
+    for e in "$@"; do
+      if [ ! -e "$d/$e" ] && [ ! -L "$d/$e" ]; then n=$((n + 1)); continue; fi
+      c=$(diff -rq -x __pycache__ -x "*.pyc" -x .DS_Store -x "*.log" -x "*.sock" \
+            "$s/$e" "$d/$e" 2>/dev/null | wc -l | tr -d " ")
+      n=$((n + ${c:-0}))
+    done
+    printf %s "$n"' _ "$STAGE/tree" "$1" $2
 }
 
 # relation <sha> → same | behind:<n> | newer   (as seen from the source)
@@ -290,8 +304,7 @@ relation() {
 local_edits() {
   ogit "$2" "$1" status --porcelain --untracked-files=no 2>/dev/null | while IFS= read -r _l; do
     _f=${_l#???}; _f=${_f#*-> }
-    [ -f "$1/$_f" ] || continue
-    _b=$(git hash-object --no-filters -- "$1/$_f" 2>/dev/null) || continue
+    _b=$(ogit "$2" "$1" hash-object --no-filters -- "$_f" 2>/dev/null) || continue
     gitq "$src" cat-file -e "$_b" 2>/dev/null || printf '%s ' "$_f"
   done
 }
@@ -317,7 +330,8 @@ copy_files() {
 copy_edits() {
   copy_files "$1" "$2" | grep -F -x -f "$(tracked_at "$3")" > "$STAGE/ce.files"
   [ -s "$STAGE/ce.files" ] || return 0
-  ( cd "$1" && git hash-object --no-filters --stdin-paths < "$STAGE/ce.files" 2>/dev/null ) > "$STAGE/ce.hashes"
+  # shellcheck disable=SC2016
+  ofs "$2" sh -c 'cd "$1" && git hash-object --no-filters --stdin-paths' _ "$1" < "$STAGE/ce.files" 2>/dev/null > "$STAGE/ce.hashes"
   [ "$(wc -l < "$STAGE/ce.hashes")" -eq "$(wc -l < "$STAGE/ce.files")" ] || return 0
   paste -d' ' "$STAGE/ce.hashes" "$STAGE/ce.files" > "$STAGE/ce.pairs"
   gitq "$src" cat-file --batch-check < "$STAGE/ce.hashes" 2>/dev/null \
@@ -325,45 +339,88 @@ copy_edits() {
 }
 
 # --- discover the other logins ----------------------------------------------
+# Every home under $homes, not a `$homes/*/.claude/fleet` glob (issue #1158): a
+# glob expands as the CALLER, and a macOS home is 0700 — it never matched another
+# login's install, so none was planned and the verdict was a silent "nothing to
+# sync". A home the caller can look into answers for itself; one it cannot is
+# asked through its owner (`sudo -n -u`); one nobody here can read is counted
+# `unreadable` — never taken for a login without an install.
+installs=''    # one install dir per line (the path as found, unresolved)
+unreadable=''  # logins whose home could not be looked into
+for h in "$homes"/*; do
+  [ -d "$h" ] || continue
+  d="$h/.claude/fleet"
+  if [ -d "$d" ]; then installs="$installs$d
+"; continue; fi
+  # the caller can see all the way down: there is no install
+  [ -x "$h" ] && { [ ! -e "$h/.claude" ] || [ -x "$h/.claude" ]; } && continue
+  ho=$(ls -ld "$h" 2>/dev/null | awk '{print $3}')
+  if as_owner "$ho"; then
+    ofs "$ho" test -d "$d" && installs="$installs$d
+"
+  elif [ -n "$ho" ] && [ "$ho" != "$me" ]; then
+    login=$(basename "$h")
+    if [ -z "$only" ]; then unreadable="$unreadable $login"
+    else case ",$only," in *",$login,"*) unreadable="$unreadable $login" ;; esac
+    fi
+  fi
+done
+unreadable=${unreadable# }
+nunread=0; for u in $unreadable; do nunread=$((nunread + 1)); done
+# install_owner <dir> → the owner of an install, statted as its home's owner.
+# Sets `iowner` in THIS shell (not `$(…)`), so as_owner's cache stays warm.
+install_owner() {
+  _ho=$(ls -ld "$(dirname "$(dirname "$1")")" 2>/dev/null | awk '{print $3}')
+  as_owner "$_ho" || :
+  iowner=$(ofs "$_ho" ls -ld "$1" 2>/dev/null | awk '{print $3}')
+  as_owner "$iowner" || :
+}
+# realdir <owner> <dir> → the resolved path, as the owner
+# shellcheck disable=SC2016
+realdir() { ofs "$1" sh -c 'cd "$1" && pwd -P' _ "$2" 2>/dev/null; }
+
 # Pre-pass: is ANY checkout on this machine newer than the source? Then the
 # source is demonstrably not the newest install, and a copy install with no
 # marker — whose version nobody can tell — is blocked too rather than risk a
 # downgrade.
 newer_than_src=''
-for d in "$homes"/*/.claude/fleet; do
-  [ -d "$d" ] || continue
-  rd=$(cd "$d" && pwd -P)
+while IFS= read -r d; do
+  [ -n "$d" ] || continue
+  install_owner "$d"; o=$iowner
+  rd=$(realdir "$o" "$d"); [ -n "$rd" ] || continue
   [ "$rd" = "$src" ] && continue
-  o=$(ls -ld "$d" | awk '{print $3}'); as_owner "$o" || :
   [ "$(ogit "$o" "$d" rev-parse --show-toplevel 2>/dev/null)" = "$rd" ] || continue
   h=$(ogit "$o" "$d" rev-parse --verify --quiet HEAD 2>/dev/null) || continue
   [ "$(relation "$h")" = newer ] && newer_than_src="$newer_than_src $(basename "$(dirname "$(dirname "$d")")")"
-done
+done <<EOF
+$installs
+EOF
 newer_than_src=${newer_than_src# }
 
 plan=''  # one line per login: login|dir|owner|shape|head|drift|state|note|entries(,)|to-git target
 found=''
-for d in "$homes"/*/.claude/fleet; do
-  [ -d "$d" ] || continue
-  rd=$(cd "$d" && pwd -P)
+while IFS= read -r d <&4; do
+  [ -n "$d" ] || continue
+  install_owner "$d"; owner=$iowner
+  rd=$(realdir "$owner" "$d"); [ -n "$rd" ] || continue
   [ "$rd" = "$src" ] && continue
   login=$(basename "$(dirname "$(dirname "$d")")")
   found="$found $login"
   if [ -n "$only" ]; then
     case ",$only," in *",$login,"*) ;; *) continue ;; esac
   fi
-  owner=$(ls -ld "$d" | awk '{print $3}'); as_owner "$owner" || :
   # a `.git` present is a checkout even when nobody here can read it (issue
   # #1115) — never a copy install, whose empty drift would call it current
-  if [ -e "$d/.git" ] || [ "$(ogit "$owner" "$d" rev-parse --show-toplevel 2>/dev/null)" = "$rd" ]; then
+  if ofs "$owner" test -e "$d/.git" || [ "$(ogit "$owner" "$d" rev-parse --show-toplevel 2>/dev/null)" = "$rd" ]; then
     shape=git; ents=$entries
     head=$(ogit "$owner" "$d" rev-parse --verify --quiet HEAD 2>/dev/null)
   else
     shape=copy; ents=''
-    for e in $entries; do { [ -e "$d/$e" ] || [ -L "$d/$e" ]; } && ents="$ents $e"; done
+    # shellcheck disable=SC2016,SC2086
+    ents=$(ofs "$owner" sh -c 'd=$1; shift; for e in "$@"; do if [ -e "$d/$e" ] || [ -L "$d/$e" ]; then printf " %s" "$e"; fi; done' _ "$d" $entries)
     head=$(oread "$owner" "$d/.fleet-synced-from" | awk 'NR==1{print $1}')
   fi
-  n=$(drift "$d" "$ents")
+  n=$(drift "$d" "$ents" "$owner")
   rel=''; [ -n "$head" ] && rel=$(relation "$head")
   edits=''; [ "$shape" = git ] && edits=$(local_edits "$d" "$owner")
   note=''
@@ -424,11 +481,13 @@ for d in "$homes"/*/.claude/fleet; do
   fi
   plan="$plan$login|$rd|$owner|$shape|$head|$n|$state|$note|$(echo $ents | tr ' ' ',')|$target
 "
-done
+done 4<<EOF
+$installs
+EOF
 
 if [ -n "$only" ]; then
   for want in $(printf '%s' "$only" | tr ',' ' '); do
-    case " $found " in *" $want "*) ;; *) printf 'fleet-sync-logins: no install for login %s under %s\n' "$want" "$homes" >&2; exit 2 ;; esac
+    case " $found $unreadable " in *" $want "*) ;; *) printf 'fleet-sync-logins: no install for login %s under %s\n' "$want" "$homes" >&2; exit 2 ;; esac
   done
 fi
 
@@ -450,15 +509,39 @@ EOF
 # `· N off` only when some login is off — before `drifted`, so a reader keyed on
 # the ` 0 drifted` tail (fleet-install-version.sh) is unchanged either way.
 offtail=''; [ "$noff" -gt 0 ] && offtail=" · $noff off"
+# `· N login(s) unreadable: a,b` whenever a home could not be looked into
+# (issue #1158) — on every tail, last, so "nothing to sync" can never stand in
+# for "could not see"; it is a needs-sudo outcome (exit 5), dry run included.
+unrtail=''; [ "$nunread" -gt 0 ] && unrtail=" · $nunread login(s) unreadable: $(printf '%s' "$unreadable" | tr ' ' ',')"
 if [ "$summary" -eq 1 ]; then
   line="$total other · $ncur current$offtail · $ndrift drifted"
   [ "$nblock" -gt 0 ] && line="$line · $nblock blocked"
   [ -n "$driftlist" ] && line="$line (${driftlist# })"
-  printf '%s\n' "$line"
-  if [ "$nblock" -gt 0 ]; then exit 4; elif [ "$ndrift" -gt 0 ]; then exit 1; else exit 0; fi
+  printf '%s\n' "$line$unrtail"
+  if [ "$nunread" -gt 0 ]; then exit 5; elif [ "$nblock" -gt 0 ]; then exit 4; elif [ "$ndrift" -gt 0 ]; then exit 1; else exit 0; fi
 fi
 
+# unread_cmds — the admin command per unreadable login: as root the homes open
+unread_cmds=''
+for u in $unreadable; do
+  unread_cmds="$unread_cmds  sudo $SELF --source $src --logins $u
+"
+done
+unread_rows() {
+  for u in $unreadable; do
+    say "$(printf '%-12s %-5s %-8s %6s  %s' "$u" '?' '-' '?' "unreadable — its home is closed to $me and there is no passwordless sudo to look inside; whether it has an install is unknown")"
+  done
+}
+
 say "source:  $src @ $src_short ($src_subject)"
+if [ "$total" -eq 0 ] && [ "$nunread" -gt 0 ]; then
+  say "$(printf '%-12s %-5s %-8s %6s  %s' login shape head drift state)"
+  unread_rows
+  say "other logins on this machine: 0 readable$unrtail — needs sudo"
+  say "no passwordless sudo for $nunread login(s) — run as an admin:"
+  printf '%s' "$unread_cmds"
+  exit 5
+fi
 if [ "$total" -eq 0 ]; then
   say "no other login's install under $homes${only:+ matching --logins $only} — nothing to sync"
   exit 0
@@ -471,14 +554,15 @@ while IFS='|' read -r login rd owner shape head n state note ents target; do
 done <<EOF
 $plan
 EOF
+unread_rows
 
 if [ "$dry" -eq 1 ]; then
   if [ "$togit" -eq 1 ]; then
-    say "other logins on this machine: $total · $ndrift to convert · $nskipgit already git checkouts · $nblock blocked$offtail (dry run — nothing changed)"
+    say "other logins on this machine: $total · $ndrift to convert · $nskipgit already git checkouts · $nblock blocked$offtail$unrtail (dry run — nothing changed)"
   else
-    say "other logins on this machine: $total · $ncur current · $ndrift to sync · $nblock blocked$offtail (dry run — nothing changed)"
+    say "other logins on this machine: $total · $ncur current · $ndrift to sync · $nblock blocked$offtail$unrtail (dry run — nothing changed)"
   fi
-  if [ "$nblock" -gt 0 ]; then exit 4; elif [ "$ndrift" -gt 0 ]; then exit 1; else exit 0; fi
+  if [ "$nunread" -gt 0 ]; then exit 5; elif [ "$nblock" -gt 0 ]; then exit 4; elif [ "$ndrift" -gt 0 ]; then exit 1; else exit 0; fi
 fi
 
 # --- act ---------------------------------------------------------------------
@@ -500,13 +584,18 @@ kick_daemons() {
     if root_ok && $SUDO $LAUNCHCTL kickstart -k "system/$label" >/dev/null 2>&1; then kicked=$((kicked + 1)); else kickfail=$((kickfail + 1)); fi
   done
   uid=$(id -u "$2" 2>/dev/null)
-  for p in "$3"/Library/LaunchAgents/com.claude-fleet.*.plist; do
-    [ -f "$p" ] && [ -n "$uid" ] || continue
+  # the agents live in the login's (0700) home — listed as the owner (#1158)
+  # shellcheck disable=SC2016
+  agents=$(ofs "$2" sh -c 'for p in "$1"/Library/LaunchAgents/com.claude-fleet.*.plist; do [ -f "$p" ] && printf "%s\n" "$p"; done' _ "$3" 2>/dev/null)
+  while IFS= read -r p; do
+    [ -n "$p" ] && [ -n "$uid" ] || continue
     label=$(basename "$p" .plist)
     case "$label" in *.spinner) spin=1 ;; esac
     pre=$SUDO; [ "$2" = "$me" ] && pre=''
     if $pre $LAUNCHCTL kickstart -k "gui/$uid/$label" >/dev/null 2>&1; then kicked=$((kicked + 1)); else kickfail=$((kickfail + 1)); fi
-  done
+  done <<EOF
+$agents
+EOF
 }
 # spinner_msg <owner> → " · WARN …" unless exactly one tmux-spinner.sh is alive
 spinner_msg() {
@@ -569,10 +658,10 @@ convert_login() {
   new="$home/.claude/fleet.to-git.$$"
   bak="$home/.claude/fleet.copy-$(date +%Y%m%d)"
   i=1 base=$bak
-  while [ -e "$bak" ]; do i=$((i + 1)); bak="$base-$i"; done
+  while $as test -e "$bak"; do i=$((i + 1)); bak="$base-$i"; done
   # GNU stat FIRST: on GNU `stat -f` is filesystem status and exits 0 with the
   # wrong output; `stat -c` errors cleanly on BSD (see fleet-lib.sh's mtime read)
-  mode=$(stat -c %a "$rd" 2>/dev/null || stat -f %Lp "$rd" 2>/dev/null); mode=${mode:-755}
+  mode=$($as stat -c %a "$rd" 2>/dev/null || $as stat -f %Lp "$rd" 2>/dev/null); mode=${mode:-755}
   if [ "$ok" -eq 1 ]; then
     if ( cd / && $as sh "$STAGE/to-git.sh" "$rd" "$new" "$STAGE/fleet.bundle" "$target" "$branch" "$origin" "$carry" "$bak" "$mode" ); then
       swapped=1
@@ -584,7 +673,7 @@ convert_login() {
     [ "$(ogit "$owner" "$rd" rev-parse HEAD 2>/dev/null)" = "$target" ] || { ok=0; why="HEAD is not $tshort"; }
     [ -z "$(ogit "$owner" "$rd" status --porcelain --untracked-files=no 2>/dev/null)" ] || { ok=0; why="${why:+$why · }tracked files dirty"; }
     for f in fleet.conf logs; do
-      [ -e "$bak/$f" ] && [ ! -e "$rd/$f" ] && { ok=0; why="${why:+$why · }$f did not carry over"; }
+      $as test -e "$bak/$f" && ! $as test -e "$rd/$f" && { ok=0; why="${why:+$why · }$f did not carry over"; }
     done
   fi
   spinner_msg "$owner"
@@ -621,10 +710,10 @@ while IFS='|' read -r login rd owner shape head n state note ents target <&3; do
   # 1. backup the entries about to change
   bak="$home/.claude/fleet.bak-$(date +%Y%m%d)"
   i=1 base=$bak
-  while [ -e "$bak" ]; do i=$((i + 1)); bak="$base-$i"; done
+  while $as test -e "$bak"; do i=$((i + 1)); bak="$base-$i"; done
   $as mkdir -p "$bak" || ok=0
   for e in $ents; do
-    { [ -e "$rd/$e" ] || [ -L "$rd/$e" ]; } || continue
+    $as test -e "$rd/$e" || $as test -L "$rd/$e" || continue
     $as cp -Rp "$rd/$e" "$bak/" 2>/dev/null || ok=0
   done
   [ -n "$head" ] && printf '%s\n' "$head" | $as tee "$bak/.fleet-prior-head" >/dev/null
@@ -658,7 +747,7 @@ while IFS='|' read -r login rd owner shape head n state note ents target <&3; do
 
   # 5. verify
   why=''
-  left=$(drift "$rd" "$ents")
+  left=$(drift "$rd" "$ents" "$owner")
   [ "$left" -eq 0 ] || { ok=0; why="$left entr(ies) still differ"; }
   if [ "$shape" = git ]; then
     # as the owner, like the writes above (issue #1115)
@@ -680,10 +769,11 @@ $plan
 EOF
 
 if [ "$togit" -eq 1 ]; then
-  say "other logins on this machine: $nsync converted / $nskip skipped · $nskipgit already git checkouts$offtail"
+  say "other logins on this machine: $nsync converted / $nskip skipped · $nskipgit already git checkouts$offtail$unrtail"
 else
-  say "other logins on this machine: $nsync synced / $nskip skipped · $ncur already current$offtail"
+  say "other logins on this machine: $nsync synced / $nskip skipped · $ncur already current$offtail$unrtail"
 fi
+sudo_cmds="$sudo_cmds$unread_cmds" nsudo=$((nsudo + nunread))
 if [ -n "$sudo_cmds" ]; then
   say "no passwordless sudo for $nsudo login(s) — run as an admin:"
   printf '%s' "$sudo_cmds"

@@ -180,6 +180,12 @@ Its every line lands under `logins:   `, and the verdict line is the reason:
 - **`logins: WARN — … needs sudo`** — no passwordless sudo for another login's
   files. Nothing changed for it; relay the printed `sudo … --logins <u>` command
   to the operator.
+- **`logins: WARN — … N login(s) unreadable: a,b`** (issue #1158) — a home is
+  closed (macOS homes are `0700`) and there is no passwordless sudo to look
+  inside, so whether that login HAS an install is unknown. Never read it as
+  "nothing to sync": relay the printed `sudo … --logins <u>` command. With
+  passwordless sudo the closed homes are read as their owners and this never
+  shows.
 - **`logins: FAIL …`** (with `apply: PARTIAL`, exit 1) — a sync or its
   verification failed; the `FAILED` row names the backup to restore from.
 - **`logins: skip — N step(s) failed above`** — a step of YOUR apply failed, so
