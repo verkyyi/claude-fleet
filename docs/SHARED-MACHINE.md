@@ -35,25 +35,39 @@ own admin login — **not** under `sudo`; it sudo's each step itself:
 ~/.claude/fleet/bin/fleet-login-new.sh alice --full-name "Alice Example" \
   --pubkey alice.pub --share-pool          # a dry run: prints every command, runs none
 ~/.claude/fleet/bin/fleet-login-new.sh alice --full-name "Alice Example" \
-  --pubkey alice.pub --share-pool --apply  # the same plan, executed (prompts for alice's password)
+  --pubkey alice.pub --share-pool --apply  # the same plan, executed — no prompt, works over ssh
 ```
 
-In order, it runs `sysadminctl -addUser` (no `-admin`: a fleet doesn't need it),
+In order, it runs `sysadminctl -addUser` (no `-admin`: a fleet doesn't need it)
+with a **random password it writes to `~/alice-onboard/password.txt`** in your
+own home (mode 600, printed as a path, never as text — alice signs in with her
+key; `--password-file <f>` uses f's first line instead, issue #1192),
 `createhomedir`, adds the login to `com.apple.access_ssh` (only when that group
 exists — without it Remote Login admits every user), installs `--pubkey` as
 `~alice/.ssh/authorized_keys` (`.ssh` 700, key 600, owned by alice), and with
-`--share-pool` copies the Claude pool as step 2b below describes. It stops at the
-first failed step, refuses (exit 3) when the login or `/Users/alice` already
-exists, never overwrites, and writes nothing in alice's home outside `.ssh/`,
-`.config/claude-fleet/accounts/` and `.zshrc`. That `.zshrc` is the `~/.local/bin`
-PATH line (where Claude Code installs, issue #1191) followed by the claude-fleet
-block (issue #1165): alice's first terminal login installs Claude Code and
-claude-fleet by itself — step 5 below. It ends by printing the steps left for a
-human — the ones below that it can't do:
+`--share-pool` copies the Claude pool as step 2b below describes. Then it
+**clones claude-fleet at `stable` into `~alice/.claude/fleet` as alice** and
+**installs her 14 background services as system LaunchDaemons** —
+`/Library/LaunchDaemons/com.claude-fleet.alice.<unit>.plist`, `UserName alice`,
+rendered from that clone by `fleet-install-apply.sh --render-system` and
+`launchctl bootstrap system`'d — the shape every guest login on a shared mini
+runs. It stops at the first failed step, refuses (exit 3) when the login or
+`/Users/alice` already exists, never overwrites, and writes nothing in alice's
+home outside `.ssh/`, `.config/claude-fleet/accounts/`, `.zshrc` and
+`.claude/fleet/`. That `.zshrc` is the `~/.local/bin` PATH line (where Claude
+Code installs, issue #1191) followed by the claude-fleet block (issue #1165):
+alice's first terminal login installs Claude Code and finishes the claude-fleet
+install by itself — step 5 below. It ends by printing the steps left for a
+human — the ones below that it can't do.
 
-Sign in as `alice` **once in the GUI** (at the console, or through Screen
-Sharing with fast user switching). That first graphical login creates the
-login Keychain and the `gui/<uid>` launchd domain. Steps 2 and 4 depend on both.
+**No GUI sign-in is needed** (issue #1192): the daemons are system
+LaunchDaemons, so alice's first `ssh alice@mini` lands in a working fleet. The
+one exception is `--no-daemons`, for someone who will use the console: their
+first graphical login creates the `gui/<uid>` launchd domain, and the bootstrap
+installs gui LaunchAgents into it the historic way. A GUI sign-in is also what
+creates alice's login Keychain — only needed if she brings her own subscription
+in step 2 (a `--share-pool` login reads token files, not the Keychain) or runs
+the per-user ccquota agent of step 4.
 
 ## 2. First Claude Code login, as that person
 
@@ -152,16 +166,19 @@ per-user agent needs no `--home` flag. The equivalent explicit form is
 
 **A login opened with `fleet-login-new.sh` (step 1) needs nothing here** (issue
 #1165). Its `~/.zshrc` carries a one-time block: on alice's first interactive
-login (after the GUI sign-in above) `bin/fleet-login-bootstrap.sh` clones
-claude-fleet at `refs/tags/stable` into `~/.claude/fleet`, installs Claude Code
+login (`ssh alice@mini` is enough — no GUI sign-in, issue #1192)
+`bin/fleet-login-bootstrap.sh` finds the clone step 1 made in `~/.claude/fleet`
+(and makes one at `refs/tags/stable` if it is missing), installs Claude Code
 when she has none (`~/.local/bin/claude`, the official native installer, run as
 her — issue #1191), runs
-`fleet-install-apply.sh` from an empty tree (every hook, command, skill and
-LaunchAgent, install-sync included), hooks up tmux, and brings her fleet up on the
+`fleet-install-apply.sh` from an empty tree (every hook, command and skill;
+the system LaunchDaemons step 1 installed come out "already current", so
+nothing there needs root), hooks up tmux, and brings her fleet up on the
 starter repo — `fleet-up.sh verkyyi/claude-fleet --seed`, which only looks
 (override with `FLEET_SEED_REPO`) — then prints `fleet-doctor.sh`. A step that
-fails (no GUI session yet, offline) is retried on her next login, alone; once all
-pass it writes `~/.config/claude-fleet/global/bootstrapped` and never runs again.
+fails (offline; or, for a `--no-daemons` login, no GUI session yet) is retried
+on her next login, alone; once all pass it writes
+`~/.config/claude-fleet/global/bootstrapped` and never runs again.
 It leaves a login that already has a fleet untouched. She adds her own repos with
 `fleet-up.sh owner/repo`, and once one is in, takes the starter out with
 `fleet-repo.sh remove verkyyi/claude-fleet` (issue #1172 — the wizard offers it

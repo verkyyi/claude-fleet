@@ -17,9 +17,12 @@
 #   tmux      reapply-tmux-attention.sh (one idempotent source-file line).
 #   apply     bin/fleet-install-apply.sh --from <empty tree> --to HEAD: every
 #             hook, command, skill and LaunchAgent (install-sync included) is an
-#             "addition", so the one apply path installs all of it. On macOS it
-#             waits for the login's first GUI sign-in (no gui/<uid> launchd domain
-#             before it — agents cannot load); `global/bootstrap.applied` records
+#             "addition", so the one apply path installs all of it. On macOS a
+#             login whose daemons fleet-login-new.sh --apply already installed as
+#             system LaunchDaemons (/Library/LaunchDaemons/com.claude-fleet.<login>.*,
+#             issue #1192) applies at once — no GUI session needed; any other
+#             login waits for its first GUI sign-in (no gui/<uid> launchd domain
+#             before it — agents cannot load). `global/bootstrap.applied` records
 #             the sha once it passed, so it never runs twice.
 #   zshrc     the claude-fleet block (--print-zshrc) appended to ~/.zshrc unless
 #             it already sources shell/fleet-login.zsh — with the ~/.local/bin
@@ -48,7 +51,8 @@
 #      (~/.claude/fleet) · FLEET_CONF_DIR (~/.config/claude-fleet) ·
 #      FLEET_BOOTSTRAP_GIT_BASE (https://github.com — test seam) ·
 #      FLEET_CLAUDE_INSTALL_CMD (the claude installer — test seam) ·
-#      FLEET_INSTALL_PLATFORM / FLEET_INSTALL_LAUNCHCTL (as fleet-install-apply.sh)
+#      FLEET_INSTALL_PLATFORM / FLEET_INSTALL_LAUNCHCTL / FLEET_INSTALL_DAEMON_DIR /
+#      FLEET_INSTALL_LOGIN (as fleet-install-apply.sh)
 # Exit: 0 bootstrapped (now or before) or left alone · 1 a step failed (the
 #       lines say which; the next login retries) · 2 usage
 set -uo pipefail
@@ -163,11 +167,18 @@ fi
 head=$(git -C "$ROOT" rev-parse HEAD)
 platform="${FLEET_INSTALL_PLATFORM:-}"
 [ -n "$platform" ] || { [ "$(uname -s)" = Darwin ] && platform=launchd; }
+# System-shape daemons already installed for this login (fleet-login-new.sh
+# --apply, issue #1192): apply keeps that shape and loads nothing into gui/<uid>,
+# so the GUI sign-in the gui shape needs is not a gate here.
+login="${FLEET_INSTALL_LOGIN:-${USER:-$(id -un)}}"
+sysd=0
+ls "${FLEET_INSTALL_DAEMON_DIR:-/Library/LaunchDaemons}/com.claude-fleet.$login".*.plist >/dev/null 2>&1 && sysd=1
 if [ -f "$APPLIED" ]; then
   say "apply: ok — applied before ($(cat "$APPLIED"))"
-elif [ "$platform" = launchd ] && ! "${FLEET_INSTALL_LAUNCHCTL:-launchctl}" print "gui/$(id -u)" >/dev/null 2>&1; then
+elif [ "$platform" = launchd ] && [ "$sysd" = 0 ] && ! "${FLEET_INSTALL_LAUNCHCTL:-launchctl}" print "gui/$(id -u)" >/dev/null 2>&1; then
   fail apply "no GUI session for $(id -un) yet — sign in once at the console (or Screen Sharing), then log in again"
 else
+  [ "$sysd" = 1 ] && say "apply: system LaunchDaemons com.claude-fleet.$login.* are installed — no GUI sign-in needed"
   # The empty tree as a commit: --from it, every file of HEAD is an addition.
   empty=$(GIT_AUTHOR_NAME=fleet GIT_AUTHOR_EMAIL=fleet@localhost \
           GIT_COMMITTER_NAME=fleet GIT_COMMITTER_EMAIL=fleet@localhost \

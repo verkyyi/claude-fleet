@@ -11,6 +11,9 @@
 #   D. a failed apply: exit 1, no marker, the other steps still done; the next run
 #      re-applies only (fleet-up not called again, the zshrc block still once).
 #   E. launchd with no GUI session yet: apply is not attempted, says why, exit 1.
+#   E2. (#1192) the same, but this login's system LaunchDaemons are installed
+#      (FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.<login>.*.plist): apply runs,
+#      says no GUI sign-in is needed, bootstrap.applied written, exit 0.
 #   F. --print-zshrc parses as zsh; its guard names the marker the script writes;
 #      --print-path-line is one zsh line that puts ~/.local/bin on PATH once.
 #   G. claude (issue #1191): one on PATH → no install; none → the install command
@@ -80,6 +83,10 @@ echo later > "$FX/later" && git -C "$FX" add later && git -C "$FX" commit -qm ma
 GB="$WORK/gh"; mkdir -p "$GB/verkyyi"
 git clone -q --bare "$FX" "$GB/verkyyi/claude-fleet.git"
 export FLEET_BOOTSTRAP_GIT_BASE="$GB" FLEET_INSTALL_PLATFORM=none
+# no system daemons for this login unless a leg installs some (the operator's
+# /Library/LaunchDaemons may hold com.claude-fleet.<login>.* for real)
+export FLEET_INSTALL_DAEMON_DIR="$WORK/LaunchDaemons" FLEET_INSTALL_LOGIN=tester
+mkdir -p "$FLEET_INSTALL_DAEMON_DIR"
 
 newhome() { # newhome <dir> — a fresh login: HOME + its conf dir
   export HOME="$1" FLEET_CONF_DIR="$1/.config/claude-fleet"
@@ -174,6 +181,22 @@ has "E says why" "$out" "no GUI session"
 grep -q '^fleet-install-apply.sh ' "$CALLS" && fail "E: apply ran with no gui domain"
 [ -e "$FLEET_CONF_DIR/global/bootstrapped" ] && fail "E: marked done"
 leg "E no GUI session → apply waits"
+
+# ---- E2. system-shape daemons installed by the admin (#1192): no GUI needed ----
+newhome "$WORK/e2"
+mkdir -p "$WORK/sysd" && : > "$WORK/sysd/com.claude-fleet.tester.spinner.plist"
+out=$(FLEET_INSTALL_PLATFORM=launchd FLEET_INSTALL_LAUNCHCTL=false FLEET_INSTALL_DAEMON_DIR="$WORK/sysd" boot); eq "E2 rc" "$?" 0
+has "E2 says why" "$out" "apply: system LaunchDaemons com.claude-fleet.tester.* are installed — no GUI sign-in needed"
+hasnt "E2 no GUI complaint" "$out" "no GUI session"
+grep -q '^fleet-install-apply.sh ' "$CALLS" || fail "E2: apply did not run"
+eq "E2 applied stamp" "$(cat "$FLEET_CONF_DIR/global/bootstrap.applied" 2>/dev/null)" "$STABLE"
+[ -s "$FLEET_CONF_DIR/global/bootstrapped" ] || fail "E2: not marked done"
+# another login's daemons do not count
+newhome "$WORK/e3"
+mkdir -p "$WORK/sysd3" && : > "$WORK/sysd3/com.claude-fleet.someoneelse.spinner.plist"
+out=$(FLEET_INSTALL_PLATFORM=launchd FLEET_INSTALL_LAUNCHCTL=false FLEET_INSTALL_DAEMON_DIR="$WORK/sysd3" boot); eq "E2 other login rc" "$?" 1
+has "E2 other login still waits" "$out" "no GUI session"
+leg "E2 system LaunchDaemons installed → apply runs without a GUI session"
 
 # ---- F. the zshrc block ----
 z=$(boot --print-zshrc)
