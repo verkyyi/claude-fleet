@@ -54,6 +54,16 @@
 #                 nothing installed, nothing bootstrapped — never "nothing to
 #                 install" + exit 0; a dry run from an install without launchd/
 #                 warns and exits 0
+#   J. welcome    (#1195) no --pubkey → a temporary ed25519 pair in the admin's
+#                 ~/<login>-onboard/ (700; key 600), its public half installed,
+#                 its private half in welcome.txt (600) with the ssh line + config
+#                 snippet from FLEET_SSH_PUBLIC_HOST/PORT (env, or the login's
+#                 fleet.settings), the swap-the-key steps, cf --guide, the human
+#                 steps — never the password, never the key on the terminal;
+#                 --pubkey + --lang en → their own key's public line, no private
+#                 block, English; host unset → `<HOST>` in the letter + a WARN;
+#                 --no-welcome without --pubkey / a bad --lang / a bad port → 2;
+#                 --no-welcome writes no letter; a dry run plans both, writes none
 #
 # Exit 0 = pass.
 set -uo pipefail
@@ -285,7 +295,7 @@ eq "B2 --password-file exit" 0 "$RC"
 contains "B2 --password-file argv" "$CALLS" "sysadminctl -addUser pam -fullName P -password hunter2-from-file"
 not_contains "B2 --password-file never printed" "$OUT" "hunter2-from-file"
 contains "B2 --password-file redacted" "$OUT" "-password <redacted: $WORK/pw.txt>"
-[ -e "$HOME/pam-onboard" ] && fail "B2 --password-file still generated one"
+[ -e "$HOME/pam-onboard/password.txt" ] && fail "B2 --password-file still generated one"
 contains "B2 --password-file at the end" "$OUT" "password: the first line of $WORK/pw.txt (--password-file)"
 
 # --- C. already exists -------------------------------------------------------
@@ -372,7 +382,7 @@ contains "H relative --password-file found" "$CALLS" "sysadminctl -addUser hal -
 contains "H transcript: key path absolute" "$OUT" "sudo tee -a $HH/.ssh/authorized_keys < $CALLER/hal.pub"
 contains "H transcript: pool path absolute" "$OUT" "sudo cp -p $CALLER/pool/alpha $CALLER/pool/alpha.conf $CALLER/pool/beta $CALLER/pool/beta.conf $HH/.config/claude-fleet/accounts/"
 contains "H transcript: password path absolute" "$OUT" "-password <redacted: $CALLER/pw.txt>"
-[ -e "$HOME/hal-onboard" ] && fail "H --password-file still generated one"
+[ -e "$HOME/hal-onboard/password.txt" ] && fail "H --password-file still generated one"
 # a dry run from there: the same absolute paths on screen, nothing executed
 hrun ian --full-name I --pubkey hal.pub --share-pool --pool-src pool
 eq "H dry run exit" 0 "$RC"
@@ -414,4 +424,127 @@ not_contains "I dry run never 'nothing to install'" "$OUT" "nothing to install"
 eq "I dry run nothing executed" 0 "$(mutations)"
 [ -e "$FLEET_LOGIN_HOMES/lou" ] && fail "I dry run created a home"
 
+# --- J. the welcome letter + the temporary key (issue #1195) --------------------
+# No --pubkey: a temporary ed25519 pair in the ADMIN's onboard dir (700), its
+# public half installed as the login's authorized_keys, its private half INSIDE
+# ~/<login>-onboard/welcome.txt (600) — with the ssh line + config snippet from
+# FLEET_SSH_PUBLIC_HOST/PORT, the swap-the-key steps, the guide + cf, the human
+# steps; NEVER the password, and the private key never on the terminal.
+if command -v ssh-keygen >/dev/null 2>&1; then
+  : > "$LOG"; OUT=$(FLEET_SSH_PUBLIC_HOST=ssh.example.test FLEET_SSH_PUBLIC_PORT=22022 "$BASH_BIN" "$S" wen --full-name 'Wen W' --machine box --apply --no-daemons 2>&1); RC=$?
+  CALLS=$(cat "$LOG"); unlock_homes
+  eq "J apply with no --pubkey: exit 0" 0 "$RC"
+  not_contains "J no failed step" "$OUT" "FAILED at step"
+  not_contains "J bash32" "$OUT" "unbound variable"
+  OB="$HOME/wen-onboard"; KF="$OB/id_ed25519"; WF="$OB/welcome.txt"; KH="$FLEET_LOGIN_HOMES/wen"
+  [ -f "$KF" ] && [ -f "$KF.pub" ] || fail "J no temporary key pair at $KF"
+  eq "J onboard dir mode" 700 "$(mode "$OB")"
+  eq "J private key mode" 600 "$(mode "$KF")"
+  eq "J welcome mode" 600 "$(mode "$WF")"
+  eq "J password file beside it" 600 "$(mode "$OB/password.txt")"
+  eq "J the onboard dir holds exactly the four" "id_ed25519 id_ed25519.pub password.txt welcome.txt" "$(ls -A "$OB" | tr '\n' ' ' | sed 's/ $//')"
+  eq "J the pub half is the installed key" "$(cat "$KF.pub")" "$(cat "$KH/.ssh/authorized_keys")"
+  eq "J key mode" 600 "$(mode "$KH/.ssh/authorized_keys")"
+  contains "J key comment (greppable for the swap)" "$(cat "$KF.pub")" " wen-onboard-temp"
+  eq "J private key parses back to the public line" "$(ssh-keygen -y -f "$KF" | cut -d' ' -f1,2)" "$(cut -d' ' -f1,2 "$KF.pub")"
+  eq "J only .claude + .ssh + .zshrc in the login's home" ".claude .ssh .zshrc" "$(ls -A "$KH" | tr '\n' ' ' | sed 's/ $//')"
+  contains "J transcript: the temp pub is what tee'd" "$OUT" "sudo tee -a $KH/.ssh/authorized_keys < $KF.pub"
+  contains "J transcript: key=temporary" "$OUT" "key=temporary (generated)  welcome=zh"
+  contains "J transcript: step 9" "$OUT" "write the welcome letter (zh) → $WF (mode 600"
+  contains "J transcript: the letter at the end" "$OUT" "welcome letter: $WF (mode 600, yours only)"
+  PRIV=$(cat "$KF")
+  not_contains "J private key never on the terminal" "$OUT" "PRIVATE KEY"
+  not_contains "J private key body never on the terminal" "$OUT" "$(printf '%s\n' "$PRIV" | sed -n 2p)"
+  W=$(cat "$WF")
+  contains "J letter: ssh line = host + port" "$W" "ssh -p 22022 wen@ssh.example.test"
+  contains "J letter: the private key, verbatim" "$W" "$PRIV"
+  contains "J letter: the public line" "$W" "$(cat "$KF.pub")"
+  contains "J letter: where to save the key" "$W" "chmod 600 ~/.ssh/box-wen"
+  contains "J letter: config Host" "$W" "Host box"
+  contains "J letter: config HostName" "$W" "HostName ssh.example.test"
+  contains "J letter: config Port" "$W" "Port 22022"
+  contains "J letter: config User" "$W" "User wen"
+  contains "J letter: config IdentityFile" "$W" "IdentityFile ~/.ssh/box-wen"
+  contains "J letter: swap — ssh-copy-id the new key over the temp one" "$W" "ssh-copy-id -i ~/.ssh/box-wen-own.pub -o IdentityFile=~/.ssh/box-wen -p 22022 wen@ssh.example.test"
+  contains "J letter: swap — drop the temp line" "$W" "grep -v ' wen-onboard-temp\$' ~/.ssh/authorized_keys"
+  contains "J letter: guide" "$W" "cf --guide"
+  contains "J letter: codex step" "$W" "ccquota codex login personal --device-auth"
+  contains "J letter: gh step" "$W" "gh auth login"
+  contains "J letter: Chinese by default" "$W" "怎么连"
+  contains "J letter: names the admin" "$W" "开号人 ${USER:-未知}"
+  not_contains "J letter: no placeholder when configured" "$W" "<HOST>"
+  PWK=$(cat "$OB/password.txt")
+  not_contains "J letter: never the password" "$W" "$PWK"
+  not_contains "J letter: never even the password path" "$W" "password.txt"
+  # the swap step's grep really drops that line and only that line
+  printf '%s\nssh-ed25519 AAAAOWN wen@own\n' "$(cat "$KF.pub")" > "$WORK/ak"
+  eq "J swap grep keeps the own key only" "ssh-ed25519 AAAAOWN wen@own" "$(grep -v ' wen-onboard-temp$' "$WORK/ak")"
+  # J2. --pubkey + --lang en: their own key, no private key block, English
+  : > "$LOG"; OUT=$(FLEET_SSH_PUBLIC_HOST=ssh.example.test FLEET_SSH_PUBLIC_PORT=22022 "$BASH_BIN" "$S" lee --full-name 'Lee L' --pubkey "$KEY" --lang en --apply --no-daemons 2>&1); RC=$?
+  unlock_homes
+  eq "J2 --pubkey --lang en exit" 0 "$RC"
+  [ -e "$HOME/lee-onboard/id_ed25519" ] && fail "J2 generated a temporary key although --pubkey was given"
+  eq "J2 onboard dir: password + letter only" "password.txt welcome.txt" "$(ls -A "$HOME/lee-onboard" | tr '\n' ' ' | sed 's/ $//')"
+  W=$(cat "$HOME/lee-onboard/welcome.txt")
+  contains "J2 English" "$W" "How to connect"
+  not_contains "J2 not Chinese" "$W" "怎么连"
+  not_contains "J2 no private key" "$W" "PRIVATE KEY"
+  contains "J2 their own public line" "$W" "$(cat "$KEY")"
+  contains "J2 nothing to swap" "$W" "nothing to swap"
+  not_contains "J2 no temp-line removal" "$W" "onboard-temp"
+  contains "J2 ssh line" "$W" "ssh -p 22022 lee@ssh.example.test"
+  contains "J2 IdentityFile is theirs to fill" "$W" "IdentityFile ~/.ssh/<your-private-key>"
+  contains "J2 transcript: key=<file>" "$OUT" "key=$KEY  welcome=en"
+  # J3. host unset: a visible placeholder in the letter + a WARN on the terminal; port 22
+  : > "$LOG"; OUT=$(env -u FLEET_SSH_PUBLIC_HOST -u FLEET_SSH_PUBLIC_PORT "$BASH_BIN" "$S" max --full-name M --pubkey "$KEY" --apply --no-daemons 2>&1); RC=$?
+  unlock_homes
+  eq "J3 host unset: exit 0" 0 "$RC"
+  contains "J3 WARN names the key" "$OUT" "WARN: FLEET_SSH_PUBLIC_HOST is unset"
+  W=$(cat "$HOME/max-onboard/welcome.txt")
+  contains "J3 placeholder + default port" "$W" "ssh -p 22 max@<HOST>"
+  contains "J3 tells the reader whom to ask" "$W" "开号人还没配"
+  # J4. the keys come from the login's fleet.settings (the one resolution path, #561)
+  mkdir -p "$HOME/.config/claude-fleet"
+  printf 'FLEET_SSH_PUBLIC_HOST=mini.example.test\nFLEET_SSH_PUBLIC_PORT=2222\n' > "$HOME/.config/claude-fleet/fleet.settings"
+  : > "$LOG"; OUT=$(env -u FLEET_SKIP_GLOBAL_CONF -u FLEET_SSH_PUBLIC_HOST -u FLEET_SSH_PUBLIC_PORT FLEET_CONF_DIR="$HOME/.config/claude-fleet" "$BASH_BIN" "$S" ned --full-name N --pubkey "$KEY" --apply --no-daemons 2>&1); RC=$?
+  unlock_homes; rm -f "$HOME/.config/claude-fleet/fleet.settings"
+  eq "J4 from fleet.settings: exit 0" 0 "$RC"
+  not_contains "J4 no WARN" "$OUT" "WARN: FLEET_SSH_PUBLIC_HOST"
+  contains "J4 letter reads fleet.settings" "$(cat "$HOME/ned-onboard/welcome.txt")" "ssh -p 2222 ned@mini.example.test"
+  # a bad port is a usage error before anything runs
+  : > "$LOG"; OUT=$(FLEET_SSH_PUBLIC_PORT=abc "$BASH_BIN" "$S" oda --full-name O --pubkey "$KEY" 2>&1); RC=$?; CALLS=$(cat "$LOG")
+  eq "J4 bad port → 2" 2 "$RC"
+  contains "J4 bad port named" "$OUT" "FLEET_SSH_PUBLIC_PORT: not a port number: 'abc'"
+  eq "J4 bad port: nothing run" 0 "$(mutations)"
+else
+  echo "selftest: ssh-keygen not installed — SKIP leg J (temporary key + welcome letter)" >&2
+fi
+# J5. usage: --no-welcome needs --pubkey (nothing would carry a temp key); --lang is zh|en
+run oli --full-name O --no-welcome
+eq "J5 --no-welcome without --pubkey → 2" 2 "$RC"
+contains "J5 says why" "$OUT" "--pubkey <file> is required with --no-welcome"
+run oli --full-name O --pubkey "$KEY" --lang fr
+eq "J5 --lang fr → 2" 2 "$RC"
+contains "J5 --lang names the choices" "$OUT" "--lang: zh or en (got 'fr')"
+eq "J5 nothing run" 0 "$(mutations)"
+[ -e "$HOME/oli-onboard" ] && fail "J5 a usage error created the onboard dir"
+# --no-welcome with a key: no step 9, no letter, everything else as before
+: > "$LOG"; OUT=$("$BASH_BIN" "$S" pat --full-name P --pubkey "$KEY" --no-welcome --apply --no-daemons 2>&1); RC=$?
+unlock_homes
+eq "J5 --no-welcome --apply exit" 0 "$RC"
+not_contains "J5 --no-welcome: no letter step" "$OUT" "welcome letter"
+contains "J5 --no-welcome: banner" "$OUT" "welcome=no"
+[ -e "$HOME/pat-onboard/welcome.txt" ] && fail "J5 --no-welcome still wrote the letter"
+eq "J5 --no-welcome: password only" "password.txt" "$(ls -A "$HOME/pat-onboard" | tr '\n' ' ' | sed 's/ $//')"
+# J6. a dry run without --pubkey plans the key + the letter and creates nothing
+run quin --full-name Q
+eq "J6 dry run exit" 0 "$RC"
+contains "J6 plans the keygen" "$OUT" "would run: ssh-keygen -q -t ed25519 -N '' -C quin-onboard-temp -f $HOME/quin-onboard/id_ed25519"
+contains "J6 plans the key install from the temp pub" "$OUT" "sudo tee -a $FLEET_LOGIN_HOMES/quin/.ssh/authorized_keys < $HOME/quin-onboard/id_ed25519.pub"
+contains "J6 plans the letter" "$OUT" "would write it — a dry run writes nothing"
+not_contains "J6 no empty-key warning for a planned key" "$OUT" "holds no public key line"
+eq "J6 nothing executed" 0 "$(mutations)"
+[ -e "$HOME/quin-onboard" ] && fail "J6 dry run created the onboard dir"
+[ -e "$FLEET_LOGIN_HOMES/quin" ] && fail "J6 dry run created a home"
+not_contains "J6 bash32" "$OUT" "unbound variable"
 echo "fleet-login-new-selftest PASS ($CHECKS checks, $("$BASH_BIN" -c 'echo $BASH_VERSION'))"
