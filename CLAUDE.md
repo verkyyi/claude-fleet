@@ -186,5 +186,17 @@ Do not install from memory: read the doc and work from it.
     public repos**; the 10× macOS multiplier applies to private ones. **Make this
     repo private and this workflow starts billing ~150 min/night** — cut `shard:`
     to one entry or drop the schedule.
+- **A fleet temp server binds `127.0.0.1`, never `*`** (issue #1154). An agent's
+  `python3 -m http.server` / dev server defaults to every interface and outlives
+  its window as a `PPID=1` orphan — the 2026-09-24 audit found one serving the
+  whole scratchpad root (`/private/tmp/claude-<uid>`) to the LAN. Three rails,
+  all in `bin/fleet-lib.sh` (`fleet_listen_rows` / `fleet_orphan_listeners`):
+  teardown kills a kept worktree's listeners (`fleet_reap_worktree_listeners`),
+  the diskguard tick reaps orphaned fleet-anchored listeners older than
+  `FLEET_ORPHAN_LISTEN_SECS` (6h; kill by default), and `fleet-doctor`'s `listen`
+  line WARNs on any fleet process on the LAN. "Fleet-anchored" = cwd in a Claude
+  scratchpad root, a `*-issue-N`/`*-scratch-N` worktree (even a removed one) or
+  `~/.claude` — never a machine-wide hunt. Claude Code names a session dir by
+  turning EVERY non-alphanumeric into `-` (`fleet_mangle_path`), not just `/`.
 - Claude Code re-reads `settings.json` hooks per turn, so running sessions pick
   up hook changes without a restart.

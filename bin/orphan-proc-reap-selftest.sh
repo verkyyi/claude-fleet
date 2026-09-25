@@ -73,8 +73,11 @@ fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--
 # shellcheck source=/dev/null
 . "$LIB"
 
-# mangled scratchpad dir for a worktree path, exactly as Claude Code names it
-padfor() { printf '%s/pads/%s/%s/scratchpad' "$WORK" "$(printf '%s' "$1" | tr '/' '-')" "${2:-11111111-2222-3333-4444-555555555555}"; }
+# mangled scratchpad dir for a worktree path, exactly as Claude Code names it —
+# EVERY non-alphanumeric becomes `-` (issue #1154). $WORK itself carries a `.`
+# (mktemp's `orphan-reap.XXXXXX`), so a `/`-only mangle here would drift from
+# Claude Code's real names and every scratchpad case below would test fiction.
+padfor() { printf '%s/pads/%s/%s/scratchpad' "$WORK" "$(printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9' '-')" "${2:-11111111-2222-3333-4444-555555555555}"; }
 
 # Start a detached `sleep` with cwd inside $1 — RELATIVE argv on purpose, so only
 # the cwd matcher can see it (this is the shape the real orphans had). Sets

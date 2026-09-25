@@ -188,6 +188,8 @@ reap_keep() {
   guard_live
   tmux kill-window -t "$target" 2>/dev/null || true   # drop the row first (#313)
   reap_record                                          # the KEPT worktree is resumable (#471)
+  # kept tree, but its detached LISTENERS go now — a `*` bind serves it to the LAN (#1154)
+  [ -n "${wtdir:-}" ] && fleet_reap_worktree_listeners "$wtdir" >/dev/null 2>&1
   close_issue
   tmux display-message "reaped #$iss ✓ (window + issue) — worktree kept (dirty)" 2>/dev/null || true
 }

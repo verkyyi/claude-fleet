@@ -40,6 +40,11 @@
 #                     filter and no state written — what bin/fleet-doctor.sh reads,
 #                     and what a human runs when the machine feels wrong. Exit 0
 #                     with no output = nothing flagged.
+#   --listeners       print fleet-anchored TCP listeners bound to the LAN (`*`,
+#                     0.0.0.0, a LAN address) — "pid\taddrs\tage_s\tcwd\targv" —
+#                     what bin/fleet-doctor.sh WARNs on (issue #1154)
+#   --orphan-listeners print the orphaned-listener reap candidates (dry run)
+#   --listen-watch    run only the orphaned-listener sweep (what --watch also does)
 #   --probe           capture an incident right now regardless of free space
 #   --help
 #
@@ -59,6 +64,11 @@
 #   FLEET_ORPHAN_CPU_ACTION notify | kill                (default notify)
 #   FLEET_ORPHAN_EXTRA_RE   extra ERE OR'd into the fleet fingerprint
 #   FLEET_FSEVENTSD_WARN_MB fseventsd RSS that counts as bloated (default 1024)
+#   FLEET_ORPHAN_LISTEN_SECS  an orphaned fleet listener older than this is reaped
+#                           (default 21600 = 6h; 0 = sweep OFF) — issue #1154
+#   FLEET_ORPHAN_LISTEN_ACTION kill | notify              (default kill)
+#   FLEET_ORPHAN_LISTEN_EVERY  min seconds between sweeps (default 300)
+#   FLEET_LISTEN_EXEMPT_RE  extra ERE of argv never counted/reaped as a listener
 #   FLEET_FSEVENTSD_WARN_CPU fseventsd %CPU that counts as pegged (default 90)
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -106,6 +116,9 @@ ORPHAN_ACTION="${FLEET_ORPHAN_CPU_ACTION:-notify}"
 ORPHAN_RE_DEFAULT='shell-snapshots/snapshot-|FLEET_LOADGEN_BURNER#|/\.claude/fleet/bin/|claude-fleet'
 ORPHAN_RE="$ORPHAN_RE_DEFAULT${FLEET_ORPHAN_EXTRA_RE:+|$FLEET_ORPHAN_EXTRA_RE}"
 FSEV_MB="${FLEET_FSEVENTSD_WARN_MB:-1024}"
+LISTEN_SECS="${FLEET_ORPHAN_LISTEN_SECS:-21600}"
+LISTEN_ACTION="${FLEET_ORPHAN_LISTEN_ACTION:-kill}"
+LISTEN_EVERY="${FLEET_ORPHAN_LISTEN_EVERY:-300}"
 FSEV_CPU="${FLEET_FSEVENTSD_WARN_CPU:-90}"
 FSEV_REMIND=86400   # one reminder per bloat episode per day — it is not ours to fix
 GDIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/diskguard"
@@ -430,6 +443,44 @@ Stop leaked load experiments with \`bin/fleet-loadgen.sh --stop\`."
   return 0
 }
 
+# --- orphaned listeners (issue #1154) ----------------------------------------
+# An agent's `python3 -m http.server` / dev server outlives its window, is
+# reparented to init, and keeps serving — by default on `*:<port>`, i.e. to the
+# whole LAN. The 2026-09-24 audit found one serving the ENTIRE scratchpad root
+# (every session's scratch dir) for two days. Worktree-keyed reapers cannot see a
+# cwd that belongs to no session, or one whose worktree is already gone; this
+# starts from the LISTEN sockets instead (the matcher lives in fleet-lib.sh:
+# fleet_orphan_listeners — anchored cwd, orphaned tree, no live pane there, older
+# than LISTEN_SECS).
+#
+# Unlike the CPU watchdogs this one KILLS by default: its matcher is narrow (a
+# listening socket + a fleet/Claude cwd + no tmux/claude ancestor + hours old),
+# and what it finds is not waste but exposure. `notify` reports only.
+# Throttled to LISTEN_EVERY: the tick is 60s and nothing here is urgent to the
+# minute, while a machine under load is exactly when an lsof sweep costs most.
+listen_watch() {
+  { [ "$LISTEN_SECS" -gt 0 ]; } 2>/dev/null || return 0
+  type fleet_reap_orphan_listeners >/dev/null 2>&1 || return 0
+  mkdir -p "$GDIR" 2>/dev/null || return 0
+  local st="$GDIR/last-listen-sweep" last nowt mode=kill out
+  nowt="$(now)"; last="$(cat "$st" 2>/dev/null || echo 0)"
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  [ $((nowt - last)) -ge "${LISTEN_EVERY:-300}" ] 2>/dev/null || return 0
+  printf '%s\n' "$nowt" > "$st" 2>/dev/null
+  [ "$LISTEN_ACTION" = kill ] || mode=dry
+  out="$(fleet_reap_orphan_listeners "$mode" "$LISTEN_SECS" 2>/dev/null)"
+  [ -n "$out" ] || return 0
+  printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$out" >> "$GDIR/listen-reaped.log" 2>/dev/null
+  notify "# ⚠ fleet orphaned listener(s)
+A detached server from a closed fleet/Claude session was still listening $((LISTEN_SECS/3600))h+ later
+(issue #1154) — a \`*:\` bind serves its cwd to the whole LAN. Action: \`${LISTEN_ACTION}\`.
+\`\`\`
+$out
+\`\`\`
+Bind temp servers to 127.0.0.1; share with the operator through doc-preview."
+  return 0
+}
+
 # --- machine load (issue #697) ----------------------------------------------
 # Shared by --orphans and the incident capture, and re-read by bin/fleet-doctor.sh
 # through --orphans. Portable across macOS (sysctl) and Linux (/proc).
@@ -528,6 +579,18 @@ case "${1:-}" in
   --fseventsd)
     fseventsd_probe
     ;;
+  --listeners)
+    # Only the LAN-exposed ones: loopback is private and a tailnet bind is deliberate.
+    type fleet_listen_fleet_rows >/dev/null 2>&1 || exit 0
+    fleet_listen_fleet_rows | awk -F'\t' '$4=="lan" { printf "%s\t%s\t%s\t%s\t%s\n", $1, $5, $3, $6, $7 }'
+    ;;
+  --orphan-listeners)
+    type fleet_reap_orphan_listeners >/dev/null 2>&1 || exit 0
+    fleet_reap_orphan_listeners dry "$LISTEN_SECS"
+    ;;
+  --listen-watch)
+    listen_watch
+    ;;
   --orphans)
     # No sustain filter and no state: "what is hot RIGHT NOW". A human (or the
     # doctor) asking this question wants the current truth, not a 5-minute-old
@@ -542,6 +605,7 @@ case "${1:-}" in
     cpu_watch                                     # runaway-CPU check runs every tick
     orphan_watch                                  # orphaned-runaway check (#697), likewise
     fseventsd_watch                               # fseventsd bloat reminder (#889), report-only
+    listen_watch                                  # orphaned-listener sweep (#1154), throttled
     free=$(free_gb)
     [ -z "$free" ] && exit 0                      # measurement failed — stay quiet
     [ "$free" -ge "$WARN_GB" ] && exit 0          # healthy
@@ -562,7 +626,7 @@ Volume backing \`$TARGET\` is under the ${WARN_GB}GB warn line. Forensic snapsho
 Fleet spawn/auto-restore is now gated at ${FLOOR_GB}GB — inspect the incident for the runaway writer."
     ;;
   -h|--help|"")
-    sed -n '2,58p' "$0"
+    sed -n '2,72p' "$0"
     ;;
   *)
     echo "fleet-diskguard: unknown mode '$1' (see --help)" >&2; exit 2
