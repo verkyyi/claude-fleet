@@ -113,9 +113,9 @@ for s in $(grep -o 'step=[a-z]*' "$SKILL" | sed 's/step=//' | sort -u); do
   case " $steps " in *" $s "*) ;; *) fail "skill uses step=$s, the script accepts: $steps" ;; esac
 done
 for s in $steps; do
-  grep -q "^## [0-9]\. \`$s\`" "$SKILL" || [ "$s" = done ] || fail "step $s has no section in the skill"
+  grep -q "^## [0-9]\. \`$s\`" "$SKILL" || [ "$s" = "done" ] || fail "step $s has no section in the skill"
 done
-for f in $(grep -o '~/\.claude/fleet/bin/[A-Za-z0-9_.-]*' "$SKILL" | sed 's|.*/||' | sort -u); do
+for f in $(grep -o '[~]/\.claude/fleet/bin/[A-Za-z0-9_.-]*' "$SKILL" | sed 's|.*/||' | sort -u); do
   [ -f "$BIN/$f" ] || fail "skill names bin/$f, which does not exist"
 done
 ok "skill steps, sections and script references match"
