@@ -161,19 +161,18 @@ codex-cli 0.154 实测）：
 | hook 状态信号 → dash 上色 | ✅ | ✅ | 同 schema；`-c hooks.<Event>=[…]` 内联到本 install 路径 |
 | 两条 bypass-permissions 护栏 | ✅ | ✅ | `--dangerously-bypass-approvals-and-sandbox` + `--dangerously-bypass-hook-trust` |
 | 项目文档 | CLAUDE.md | AGENTS.md | `project_doc_fallback_filenames` 让 Codex 读 CLAUDE.md |
-| slash command 种子 | 原生展开 | 转译 | Codex 无 slash；`conf/codex-preamble.md` + `commands/<name>.md` 展开成散文 |
-| SessionEnd 关窗 | ✅ | ❌ | Codex 每次结束都报 `reason=other`，分不出 `/exit` 与 `/clear` → 退化到 cleanup daemon 轮询 |
-| `/fleet-handoff` + 自动 nudge | ✅ | ❌ | 读 Claude transcript |
-| `/fleet-context` + dash ctx % | ✅ | ❌ | 同上 |
-| 账号轮转 / 配额采集 | ✅ | ❌ | Codex 认证是 `codex login`，无 `CLAUDE_CODE_OAUTH_TOKEN` 等价物 |
-| per-model cap 就地 `/model` 切换 | ✅ | ❌ | Codex 模型名 ≠ Claude alias；`FLEET_CODEX_MODEL → -m` |
-| Stop 分类器 | ✅ | ❌ | 读 Claude transcript |
-| MCP 配置 / subagent model | ✅ | ❌ | 有意跳过 |
+| fleet command 种子 | 原生展开 | 原生 skill | Codex 从 `$CODEX_HOME/skills/<name>/SKILL.md` 触发 `$fleet-claim`；旧版/未同步 home 才回退到 `conf/codex-preamble.md` + `commands/<name>.md` |
+| SessionEnd 关窗 | ✅ | ✅ | Codex thread end 仍不关窗；launcher 等 CLI 成功退出后走共享 close-on-exit |
+| `/fleet-handoff` + 自动 nudge | ✅ | ✅ | Codex 直接跑 transfer/controller 脚本；自动 nudge 走同一条 native handoff path |
+| `/fleet-context` + dash ctx % | ✅ | ✅ | SessionStart 记录 Codex UUID/CODEX_HOME，rollout token telemetry 提供读数 |
+| 账号轮转 / 配额采集 | ✅ | ✅ | 多 CODEX_HOME + native quota collector；认证仍是 `codex login` |
+| per-model cap 就地 `/model` 切换 | ✅ | ✅ | Codex 用 native thread/settings/update；显式 limit-id 映射后验证 |
+| Stop 分类器 | ✅ | ✅ | 共享 Stop hook + agent-aware rubric；native attention / explicit blocker 优先 |
+| MCP 配置 / subagent model | ✅ | ✅ | `FLEET_MCP_CONFIG`/`FLEET_CODEX_MCP_CONFIG` 转成 Codex policy；subagent knobs 独立 |
 
-**两条真缺口**（值得当 roadmap 写出来，而不是含糊过去）：
-1. **跨 context 续命在 Codex 上没有** —— 而这是我们三个差异化之一。
-2. **配额治理在 Codex 上没有** —— Codex 的额度模型与 Claude 订阅不同构，
-   跨 provider 只能靠**裁决接口**中立，数据层各做各的。
+> 历史备注：本计划早期把「Codex 跨 context 续命」和「Codex 配额治理」
+> 视为真缺口；后续实现已经补上，当前能力以 `bin/fleet-codex.sh` 的
+> MATRIX block 和 README 生成表为准。
 
 ## 四之二、配额编排:团队额度池(核心卖点)
 
@@ -915,4 +914,3 @@ monorepo worktree 要跑几分钟，拖长整个 tick）→ [#653](https://githu
 
 第 4 条是给打包方案的直接结论：**「任何一个 session 都能当场 file issue（必要时直接 spawn）」
 不是便利功能，它是上面那条产出主线的前提** —— 打包时不能把它当可选件砍掉。
-

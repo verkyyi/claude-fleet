@@ -201,6 +201,10 @@ That replaces the copy-and-merge passes above for those three, and
 teammate's, nobody has to remember `/fleet-sync-install` for them. Plugin
 commands are namespaced (`/fleet:fleet-claim`); the fleet detects which install
 path a machine has and seeds the form that resolves, so spawns work either way.
+Codex does not consume Claude plugin commands directly; `/fleet-sync-install`
+generates native Codex skills from `commands/*.md` under each known
+`$CODEX_HOME/skills/<name>/SKILL.md`, so the same worker seed becomes
+`$fleet-claim` there.
 
 It does **not** replace the playbook: `bin/`, `conf/`, the tmux layer and the
 daemons are machine-level and stay at `~/.claude/fleet`. A plugin's install path
@@ -590,8 +594,10 @@ bar and doctor expose both failures. Full policies and recovery commands:
 Optional repo-shipped Claude Code slash commands that operate on the current
 fleet (its `$FLEET_REPO` only), installed either as [the plugin](#the-claude-code-side-ships-as-a-plugin)
 (typed `/fleet:fleet-claim`) or by appending `commands/*.md` into
-`~/.claude/commands/` (typed `/fleet-claim`). Each declares an owner seat
-(`worker` / `hub` / `either`) and refuses from the wrong one. Live so far:
+`~/.claude/commands/` (typed `/fleet-claim`). The same files are generated as
+Codex skills under `$CODEX_HOME/skills/` and invoked as `$fleet-claim`,
+`$fleet-context`, and so on. Each declares an owner seat (`worker` / `hub` /
+`either`) and refuses from the wrong one. Live so far:
 
 - **`/fleet-claim`** (worker) — the whole worker lifecycle, and the one skill a
   freshly-spawned worker runs. Its whole preamble is ONE call
@@ -609,7 +615,8 @@ fleet (its `$FLEET_REPO` only), installed either as [the plugin](#the-claude-cod
   boundary: write a durable handoff, then `/clear` and pick it up clean.
 - **`/fleet-sync-install`** (either, any fleet) — after claude-fleet's
   own PRs land, re-applies them to the shared live install (`~/.claude/fleet`): pull +
-  reload changed daemons + re-merge the hooks delta + install changed commands.
+  reload changed daemons + re-merge the hooks delta + install changed commands
+  and Codex skill mirrors.
   Maintains machine-global tooling, so it runs from any fleet; refuses only if
   `~/.claude/fleet` isn't a git checkout. See [`commands/README.md`](commands/README.md).
 
@@ -673,7 +680,7 @@ degrading to a pane-content heuristic.
 | project instructions file | `CLAUDE.md` | `AGENTS.md` | `-c project_doc_fallback_filenames=["CLAUDE.md"]` makes a Codex worker read this repo's `CLAUDE.md` when it has no `AGENTS.md`. |
 | worker model pinned at spawn | `FLEET_MODEL` | `FLEET_CODEX_MODEL` | Two knobs on purpose: Codex model names are not Claude aliases, so `FLEET_MODEL` never reaches a Codex pane. |
 | transferred recurring loop | Fleet adapter / native `/loop` | Fleet adapter | Active Fleet loops keep their ID, cadence and ownership generation across agent/account transfers. Codex uses private RPC; Claude inbox delivery requires transcript acknowledgement. Exact crash restore can reattach active owners; stopped or ambiguous deliveries never replay. Calendar cron is not converted. |
-| slash-command seed (`/fleet-claim`) | native | translated | Codex has no slash commands — it takes a positional prompt, so the launcher expands `conf/codex-preamble.md` + `commands/<name>.md` into prose. The lifecycle text stays single-sourced in `commands/`. |
+| fleet command seed (`/fleet-claim`) | native | native | Claude Code expands `/fleet-claim`; Codex invokes the installed `$fleet-claim` skill from `$CODEX_HOME/skills/fleet-claim/SKILL.md`. If an old Codex build has no skills, or that home has not been synced, the launcher falls back to the prose expansion. |
 | per-repo trust prompt | pre-granted | one manual Yes | `bin/fleet-trust.sh` pre-answers Claude's dialog. Codex persists trust in `~/.codex/config.toml` and no flag or `-c` override satisfies it, so the base checkout needs one manual Yes; the launcher pre-reads it and turns the pane red rather than letting the first spawn stall silently. |
 | red `needs` + bell when a session is blocked on you | ✅ | ✅ | The private-server monitor reads native waitingOnUserInput/waitingOnApproval flags and marks the exact launcher/thread. No Notification hook is needed. Resolved native attention clears only its own subtype; explicit worker blockers survive. |
 | `AskUserQuestion` + the dash’s answer key | ✅ | ✅ | Codex has native request_user_input. The dashboard replies to the replayed server request, including choices and free text; exact launcher/thread/request fingerprints prevent stale answers. Esc sends nothing; native resolution confirms completion. |

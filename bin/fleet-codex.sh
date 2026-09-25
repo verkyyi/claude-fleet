@@ -13,12 +13,13 @@
 # cleanup daemon, the session cap):
 #
 #   * The seed is a bare SLASH COMMAND (`/fleet-claim`, issue #299) because Claude
-#     Code expands one supplied as the initial prompt. Codex has no slash commands
-#     — it takes a positional [PROMPT] — so a `/name [args]` seed is EXPANDED here
-#     into prose: conf/codex-preamble.md (how to read a Claude Code skill as a
-#     Codex agent: no /fleet-handoff, no AskUserQuestion, run the scripts) followed
-#     by commands/name.md with `$ARGUMENTS` substituted. The lifecycle text stays
-#     single-sourced in commands/; a non-slash prompt passes through verbatim.
+#     Code expands one supplied as the initial prompt. Modern Codex has native
+#     skills under $CODEX_HOME/skills, invoked as `$name`, so a `/name [args]`
+#     seed becomes `$name [args]` when the installed Codex home carries that skill.
+#     Older Codex builds — or a home that has not been synced yet — still get the
+#     historic prose expansion from conf/codex-preamble.md + commands/name.md.
+#     The lifecycle text stays single-sourced in commands/; a non-slash prompt
+#     passes through verbatim.
 #   * Hooks. Codex's hook system IS Claude Code's schema (verified on codex-cli
 #     0.154: the same event names, the same stdin JSON — `tool_name` "Bash" with
 #     `tool_input.command`, "apply_patch" with the patch text in `command` — exit 2
@@ -79,7 +80,7 @@
 # project instructions file | `CLAUDE.md` | `AGENTS.md` | `-c project_doc_fallback_filenames=["CLAUDE.md"]` makes a Codex worker read this repo's `CLAUDE.md` when it has no `AGENTS.md`.
 # worker model pinned at spawn | `FLEET_MODEL` | `FLEET_CODEX_MODEL` | Two knobs on purpose: Codex model names are not Claude aliases, so `FLEET_MODEL` never reaches a Codex pane.
 # transferred recurring loop | Fleet adapter / native `/loop` | Fleet adapter | Active Fleet loops keep their ID, cadence and ownership generation across agent/account transfers. Codex uses private RPC; Claude inbox delivery requires transcript acknowledgement. Exact crash restore can reattach active owners; stopped or ambiguous deliveries never replay. Calendar cron is not converted.
-# slash-command seed (`/fleet-claim`) | native | translated | Codex has no slash commands — it takes a positional prompt, so the launcher expands `conf/codex-preamble.md` + `commands/<name>.md` into prose. The lifecycle text stays single-sourced in `commands/`.
+# fleet command seed (`/fleet-claim`) | native | native | Claude Code expands `/fleet-claim`; Codex invokes the installed `$fleet-claim` skill from `$CODEX_HOME/skills/fleet-claim/SKILL.md`. If an old Codex build has no skills, or that home has not been synced, the launcher falls back to the prose expansion.
 # per-repo trust prompt | pre-granted | one manual Yes | `bin/fleet-trust.sh` pre-answers Claude's dialog. Codex persists trust in `~/.codex/config.toml` and no flag or `-c` override satisfies it, so the base checkout needs one manual Yes; the launcher pre-reads it and turns the pane red rather than letting the first spawn stall silently.
 # red `needs` + bell when a session is blocked on you | ✅ | ✅ | The private-server monitor reads native waitingOnUserInput/waitingOnApproval flags and marks the exact launcher/thread. No Notification hook is needed. Resolved native attention clears only its own subtype; explicit worker blockers survive.
 # `AskUserQuestion` + the dash’s answer key | ✅ | ✅ | Codex has native request_user_input. The dashboard replies to the replayed server request, including choices and free text; exact launcher/thread/request fingerprints prevent stale answers. Esc sends nothing; native resolution confirms completion.
@@ -205,7 +206,32 @@ for a in "$@"; do
   fi
 done
 
-# --- expand a `/name [args]` seed into prose (Codex has no slash commands) -----
+# --- convert a `/name [args]` seed to a native Codex skill when available -------
+codex_skills_supported() {
+  case "${FLEET_CODEX_NATIVE_SKILLS:-auto}" in
+    1|true|yes) return 0 ;;
+    0|false|no) return 1 ;;
+  esac
+  command -v codex >/dev/null 2>&1 || return 1
+  # codex-cli 0.157 exposes the model-visible skill list through this debug read.
+  # Old builds lack the subcommand; failures mean "use the historic expansion".
+  codex debug prompt-input '$fleet-context' 2>/dev/null | grep -q '<skills_instructions>'
+}
+native_slash() {
+  local p="$1" name rest home
+  case "$p" in /*) : ;; *) return 1 ;; esac
+  name="${p%%[[:space:]]*}"; name="${name#/}"
+  case "$name" in ''|*[!A-Za-z0-9_-]*) return 1 ;; esac
+  rest="${p#/"$name"}"
+  rest="${rest#"${rest%%[![:space:]]*}"}"       # trim leading whitespace
+  home="${CODEX_HOME:-$HOME/.codex}"
+  [ -r "$home/skills/$name/SKILL.md" ] || return 1
+  codex_skills_supported || return 1
+  EXPANDED="\$$name${rest:+ $rest}"
+  return 0
+}
+
+# --- expand a `/name [args]` seed into prose (old Codex / unsynced home) -------
 # Sets EXPANDED; returns 1 (prompt untouched) when it isn't a slash command or the
 # skill file is missing — then the literal text is still handed to codex, and a
 # one-line note says why, so a typo'd skill name is visible in the pane.
@@ -230,7 +256,11 @@ expand_slash() {
 }
 if [ "$have_prompt" = 1 ]; then
   EXPANDED=''
-  expand_slash "$prompt" && prompt="$EXPANDED"
+  if native_slash "$prompt"; then
+    prompt="$EXPANDED"
+  elif expand_slash "$prompt"; then
+    prompt="$EXPANDED"
+  fi
 fi
 
 # --- hooks, inline (Codex reads `-c hooks.<Event>=[…]` as TOML) ----------------
