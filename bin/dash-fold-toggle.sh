@@ -94,11 +94,13 @@ if [ "${target#hdr:}" != "$target" ]; then
   # (fleet_dash_repo_frame — the renderer's own read of it). A one-repo fleet
   # writes nothing, so its frame stays byte-identical to one that never heard of
   # the option; a target the fleet does not host folds nothing either.
+  # The 置顶 heading (issue #1170) is the exception: it folds as the token `pin`,
+  # in a fleet of any size — the renderer draws it whenever a row is pinned.
   RMANY=0; RGRPMAP=''
-  fleet_dash_repo_frame "$SESS"
-  [ "$RMANY" = 1 ] || exit 0
+  [ "$hkey" = pin ] || fleet_dash_repo_frame "$SESS"
+  [ "$RMANY" = 1 ] || [ "$hkey" = pin ] || exit 0
   case "$hkey" in
-    none) slug=none ;;
+    none|pin) slug=$hkey ;;
     *)    slug=$(fleet_slug "$hkey")
           case "$RGRPMAP" in *$'\n'"$slug"$'\t'*) ;; *) exit 0 ;; esac ;;
   esac

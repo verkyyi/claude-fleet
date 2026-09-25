@@ -41,6 +41,9 @@ PRODUCER_TIMEOUT = 10
 # the typed name — which is kept — shows again.
 TOAST_SECS = 4
 PLACEHOLDER = "新会话名…"
+# The 置顶 group's heading key (issue #1170): selectable so ←/→ can fold it, but
+# it names no repo — a tap only highlights it, never opens the new-session popup.
+PIN_HEADING = "hdr:pin"
 # The one row above the input line (issue #948): a tap on it, or `?` on an empty
 # input line, opens this sidebar's key sheet — Claude Code's "? for shortcuts".
 # An explicit exception to EPIC #894 convention 5 (no resident rows), chosen by
@@ -645,8 +648,9 @@ def sessions(rows):
 def target_name(key):
     """The repo a selected heading names, as the input line shows it (issue
     #1032): `owner/name` → `name`, the `no repo` heading → `no repo` (its session
-    opens in $HOME). "" for anything that is not a heading with a spawn target."""
-    if not key.startswith("hdr:"):
+    opens in $HOME). "" for anything that is not a heading with a spawn target —
+    the 置顶 heading (`hdr:pin`, issue #1170) included: it folds, it names no repo."""
+    if not key.startswith("hdr:") or key == PIN_HEADING:
         return ""
     repo = key[4:]
     return "no repo" if repo == "none" else repo.rsplit("/", 1)[-1]
@@ -669,6 +673,8 @@ def tap(hit, highlighted):
     headings never sees `select` or `new`, so it taps exactly as before."""
     if not hit or hit == "hdr":
         return None
+    if hit == PIN_HEADING:
+        return "select"  # a fold stop only (issue #1170): no repo to open a session in
     if hit.startswith("hdr:"):
         return "new" if hit == highlighted else "select"
     return "menu" if hit == highlighted else "jump"

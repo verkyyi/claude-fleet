@@ -18,7 +18,7 @@
 #   ⌃o restore a landed session ·
 #   ⌃y pin/unpin the highlighted window to the top
 #   of the list (#623 — a pin outranks the status sort, floats the window's
-#   children with it, and marks the row 📌) ·
+#   children with it, into the 置顶 group at the top — #1170) ·
 #   ⌃v flip this fleet's default agent for NEW sessions (claude ⇄ codex, #554 —
 #   written to the fleet's conf, so every spawn path follows; the prompt line
 #   reads `claude ▸ ` / `codex ▸ ` from the same conf, dash-agent-prompt.sh) ·

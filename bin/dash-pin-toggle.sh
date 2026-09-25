@@ -5,8 +5,9 @@
 # right for triage and wrong for the one session you are deliberately keeping an
 # eye on — a long-running parent scratch, a worker you are babysitting. A pin is a
 # tier ABOVE the status rank: tmux-dashboard-rows.sh sorts `@pin=1` windows before
-# every unpinned one whatever their state, draws a 📌 on the row so it says why it
-# is up there, and floats a pinned parent's CHILDREN with it (the pin bit rides the
+# every unpinned one whatever their state, into a `置顶 (n)` group of their own at
+# the top of the list (issue #1170 — the group says why they are up there; no row
+# carries a mark), and floats a pinned parent's CHILDREN with it (the pin bit rides the
 # same @origin inheritance the grouping already uses).
 #
 # State lives on the WINDOW (a tmux window option), which is the whole point:
@@ -47,6 +48,6 @@ if [ "$cur" = 1 ]; then
   tmux display-message "unpinned: $name" 2>/dev/null || true
 else
   tmux set-option -w -t "$target" @pin 1 2>/dev/null || exit 0
-  tmux display-message "📌 pinned to the top: $name" 2>/dev/null || true
+  tmux display-message "pinned to the top: $name" 2>/dev/null || true
 fi
 exit 0

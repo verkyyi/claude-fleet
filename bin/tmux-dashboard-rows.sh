@@ -383,7 +383,7 @@ fi
 #   $crootexp the root's @expand fold bit, 0 when there is no live root
 #   $crgrp    the root's repo group (#1031) — the group a cross-repo child renders
 #             in — 0 when there is no live root (unused then: an orphan keeps its own)
-#   $cpnrk/$cpnidx/$cpnrgrp  the NEAREST pinned ANCESTOR's rank/idx/repo group,
+#   $cpnrk/$cpnidx  the NEAREST pinned ANCESTOR's rank/idx,
 #             empty if none. Self is
 #             not considered here — the caller checks its own @pin first, so a
 #             pinned row is always its own pin root (#623's rule, unchanged).
@@ -391,7 +391,7 @@ fi
 # can never disagree about who a row belongs to: one walker, now five readers
 # (sort, fold, caret, pin, badge — and the repo group since #1031).
 chain_v() { croot=''; crk=9; cidx=99999; chops=0; crootpin=0; crootexp=0; crgrp=0
-  cpnrk=''; cpnidx=''; cpnrgrp=''
+  cpnrk=''; cpnidx=''
   local cur="$1" t m prow prest porig prk pidx ppin pexp pgrp
   t=$'\n'"$KEYTAB"
   while [ "$chops" -lt 4 ]; do
@@ -403,7 +403,7 @@ chain_v() { croot=''; crk=9; cidx=99999; chops=0; crootpin=0; crootexp=0; crgrp=
     ppin=${prest%%$'\t'*}; prest=${prest#*$'\t'}
     pexp=${prest%%$'\t'*}; prest=${prest#*$'\t'}
     pgrp=${prest%%$'\t'*}; porig=${prest#*$'\t'}
-    [ "$ppin" = 1 ] && [ -z "$cpnrk" ] && { cpnrk=$prk; cpnidx=$pidx; cpnrgrp=$pgrp; }
+    [ "$ppin" = 1 ] && [ -z "$cpnrk" ] && { cpnrk=$prk; cpnidx=$pidx; }
     case "$porig" in
       issue-*|scratch-*|*:issue-*|*:scratch-*) cur=$porig; chops=$((chops+1)) ;;  # a child too — keep climbing
       *) croot=$cur; crk=$prk; cidx=$pidx; crootpin=$ppin; crootexp=$pexp; crgrp=$pgrp; return ;;   # hub/autofill/none
@@ -436,6 +436,11 @@ done <<< "$KEYTAB"
 # hosts resolves to nothing and folds nothing. Only a grouping frame has
 # headings to fold, so a one-repo fleet never reads it (RGRP=0).
 RGFOLD=()
+# The 置顶 group (issue #1170) folds through the same option, as the token `pin`
+# (a repo slug is always `owner-name`, so it can never collide) — in a one-repo
+# fleet too, where it is the only heading there is.
+PGRP=-2; PINCNT=0; PINFOLD=0
+case " $RFOLD " in *' pin '*) PINFOLD=1 ;; esac
 if [ "$RGRP" = 1 ] && [ -n "$RFOLD" ]; then
   for _s in $RFOLD; do
     if [ "$_s" = none ]; then RGFOLD[RNREPO + 1]=1
@@ -668,22 +673,31 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     pinned=0; grk=$pnrk; gidx=$pnidx; depth=$pndepth
     [ "$pndepth" = 0 ] && treed=''      # promoted to a group root → empty tree cell
   fi
+  # --- the 置顶 group: every pinned row, above every repo group (issue #1170) ---
+  # A row in the pin tier (`pinned`=0 — it carries @pin, or floats with a pinned
+  # ancestor) leaves its repo group for ONE group at the very top, headed
+  # `置顶 (n)` and closed by a thin rule, so the tier is said by WHERE the row
+  # sits, never by a mark on it. Its group key is PGRP (-2), below every repo
+  # group and the empty-state hint (-1), and the only negative one a row ever
+  # gets — which is why the fold test below never indexes RGFOLD with it. Its
+  # rows do not count toward their repo heading: `(n)` is still the rows that
+  # render under it. In a 2+ repo fleet the heading above no longer names a
+  # repo, so a pinned row wears its repo tag — #1031's rule, applied as written.
   # --- repo group: a child FOLLOWS ITS PARENT (issue #1031) ---------------------
   # A child nested under a live root renders in that root's repo group — the same
-  # attribution the sort, fold, caret, pin and badge already take off chain_v —
-  # or it would land in its own repo's group with a `└` under an unrelated row,
-  # folded away by a caret that sits in another group. A row nested under a
-  # pinned MIDDLE ancestor follows that ancestor, which is its own pin root and
-  # so keeps its own group. Orphans (no live root) and pin-promoted roots are
-  # depth 0 and keep their own. Where the group is not the row's own, a short
-  # repo tag says so — the heading above no longer names its repo. Counted HERE,
-  # once the group is resolved and still BEFORE the fold filter, so a heading's
-  # `(n)` is the rows that render under it, a collapsed parent's hidden ones too.
+  # attribution the sort, fold, caret and badge already take off chain_v — or it
+  # would land in its own repo's group with a `└` under an unrelated row, folded
+  # away by a caret that sits in another group. Orphans (no live root) are depth
+  # 0 and keep their own. Where the group is not the row's own, a short repo tag
+  # says so — the heading above no longer names its repo. Counted HERE, once the
+  # group is resolved and still BEFORE the fold filter, so a heading's `(n)` is
+  # the rows that render under it, a collapsed parent's hidden ones too.
   repod=''
-  if [ "$RGRP" = 1 ]; then
-    if [ "$depth" -gt 0 ] && [ -n "$croot" ]; then
-      if [ "$pndepth" = 1 ] && [ "$rootpin" != 1 ]; then rgrp=$cpnrgrp; else rgrp=$crgrp; fi
-    fi
+  if [ "$pinned" = 0 ]; then
+    rgrp=$PGRP; PINCNT=$((PINCNT + 1))
+    [ "$RGRP" = 1 ] && repod=${RGTAG[ownrgrp]-}
+  elif [ "$RGRP" = 1 ]; then
+    [ "$depth" -gt 0 ] && [ -n "$croot" ] && rgrp=$crgrp
     [ "$rgrp" != "$ownrgrp" ] && repod=${RGTAG[ownrgrp]-}
     RGCNT[rgrp]=$(( ${RGCNT[rgrp]:-0} + 1 ))
   fi
@@ -695,8 +709,12 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # window on the list. Counted already (RGCNT above), so the heading's `(n)`
   # still says how many rows it is hiding; NSESS too, so a fully folded frame
   # never draws the empty-state hint. The group is the row's RENDERED one — a
-  # cross-repo child folds with the parent it renders under (#1031).
-  if [ "$RGRP" = 1 ] && [ "${RGFOLD[rgrp]:-0}" = 1 ] && [ "$rk" != 0 ] &&
+  # cross-repo child folds with the parent it renders under (#1031), a pinned
+  # row with the 置顶 heading (#1170), which folds in a one-repo fleet too.
+  gfold=0
+  if [ "$pinned" = 0 ]; then gfold=$PINFOLD
+  elif [ "$RGRP" = 1 ]; then gfold=${RGFOLD[rgrp]:-0}; fi
+  if [ "$gfold" = 1 ] && [ "$rk" != 0 ] &&
      { [ "$SIDEBAR" = 0 ] || [ "$wid" != "${FLEET_SIDEBAR_CURRENT:-}" ]; }; then
     continue
   fi
@@ -787,7 +805,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
       # which is why a caret is guaranteed present for every subtree the filter
       # above can hide.
       # It rides the TREE COLUMN (issue #836), directly left of the name it folds,
-      # rather than the flex span it used to share with 📌/↳/agent/badge. `ktot>0`
+      # rather than the flex span it used to share with the pin mark/↳/agent/badge. `ktot>0`
       # implies depth 0, so the caret and the `└` can never both want the cell.
       if [ "$exp" = 1 ]; then carg='▾'; else carg='▸'; fi
       treed=$carg
@@ -804,7 +822,6 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     # sleeping row reads its age before the name, where a narrow pane can't clip it.
     if [ "$state" = sleeping ]; then zage_v "$slept"; [ -n "$zage" ] && gl=$zage; fi
     [ -n "$repod" ] && label="$label $repod"       # cross-repo child (#1031)
-    [ "$pin" = 1 ] && label="* $label"
     [ -n "$kidd" ] && label="$label · $kidd"
     [ -n "$zwait" ] && label="$label · ${zwait#z · }"   # glyph already reads `z <age>`
     buf+="$rgrp	$pinned	$grk	$gidx	$depth	$rk	$idx	$wid$US$state$US$gl$US$label$US${treed:- }"$'\n'
@@ -818,8 +835,8 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # flex gap between them absorbing the width so the metadata block stays pinned
   # right. The flex span used to carry the LLM one-liner (summary column, retired
   # in issue #535 — it was the dash's only token-spending column); the ↳
-  # provenance tag, the #623 pin mark and the #624 subtree-progress badge live
-  # there now.
+  # provenance tag and the #624 subtree-progress badge live there now. (The #623
+  # pin mark opened it until issue #1170 moved the pin into its own group.)
   fld 5  "$issd"; f_iss=$fld_out
   # window column (issue #534): pad/clip by DISPLAY width, not code points. A CJK
   # name is the everyday case now that the prompt line NAMES a scratch, and a CJK
@@ -846,31 +863,17 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # lives in the fixed tree column, so the flex span carries no caret width at all.)
   [ -n "$kidd" ] && { [ -n "$tagpfx" ] && { tagpfx+=' '; dwidth=$((dwidth+1)); }
                       tagpfx+="$kidpfx"; dwidth=$(( dwidth + ${#kidd} )); }
-  # 📌 marks a pinned row (issue #623): without it the operator sees a row sitting
-  # above a red `needs` one and has no idea why. It OPENS the flex span, ahead of
-  # any ↳ tag, so every pin sits at the same column and the eye can scan for them.
-  # This is the file's one deliberate 2-cell glyph, and it is safe here precisely
-  # because the flex span is a COMPUTED pad, not an fld() cell: its width is the
-  # constant 3 below (glyph 2 + space), never a ${#} count, so the right-pinned
-  # act/PR/ctx block stays put whatever the terminal thinks the emoji measures.
-  # The mark follows @pin, NOT the inherited `pinned` tier: it means "this window
-  # carries the pin, ⌃y here takes it off". A child floated by its parent is
-  # explained by the └ indent under the marked row above it, and marking those too
-  # would make the top of the list a wall of pins with no way to see which one is
-  # the real handle.
   # An automatic wake held at the session limit (issue #1058) says so here.
   [ -n "$zwait" ] && { [ -n "$tagpfx" ] && { tagpfx+=' '; dwidth=$((dwidth+1)); }
                        tagpfx+="${AM}${zwait}${R}"; dwidth=$(( dwidth + ${#zwait} )); }
-  pinpfx=''
-  [ "$pin" = 1 ] && { pinpfx='📌 '; dwidth=$(( dwidth + 3 )); }
   pad=$(( USABLE - LEFTW - dwidth - RIGHTW )); [ "$pad" -lt 1 ] && pad=1
   printf -v gap '%*s' "$pad" ''
   # tree cell: exactly one cell of source text — the glyph, or a space when the row
-  # is a root/orphan/pin-root. Like 📌 and the old caret it is a CONSTANT width, not
+  # is a root/orphan/pin-root. Like the old caret it is a CONSTANT width, not
   # a ${#} count: `└`/`▸`/`▾` are East-Asian AMBIGUOUS, so a CJK-wide terminal may
   # draw them 2 cells; folding the cell into the fixed LEFTW keeps the right-pinned
   # act/PR/ctx block put whatever the terminal measures.
-  disp="${gc}${gl}${R} ${icol}${f_iss}${R} ${GY}${treed:- }${R} ${nmcol}${f_name}${R} ${pinpfx}${tagpfx}${gap}${acol}${f_act}${R} ${pcol}${f_pr}${R} ${pcolr}${f_pct}${R}"
+  disp="${gc}${gl}${R} ${icol}${f_iss}${R} ${GY}${treed:- }${R} ${nmcol}${f_name}${R} ${tagpfx}${gap}${acol}${f_act}${R} ${pcol}${f_pr}${R} ${pcolr}${f_pct}${R}"
 
   buf+="$rgrp	$pinned	$grk	$gidx	$depth	$rk	$idx	$sess:$idx$US$wid$US$disp"$'\n'
 done <<< "$WLIST"
@@ -888,6 +891,32 @@ fld 4  "ctx";    h_c=$fld_out
 h_pad=$(( USABLE - LEFTW - RIGHTW )); [ "$h_pad" -lt 1 ] && h_pad=1
 printf -v h_gap '%*s' "$h_pad" ''
 printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_i}   ${h_n} ${h_gap}${h_a} ${h_p} ${h_c}${R}"
+fi
+
+# the 置顶 group's frame (issue #1170): a `置顶 (n)` heading above the pinned rows
+# and ONE thin rule below them, the pin tier's only mark — no row carries one.
+# Both exist only while a row is pinned, so a fleet with no pin renders byte for
+# byte as before; a one-repo fleet gets them too (it has no other heading). The
+# heading is drawn the way a repo heading is (the sidebar's dim bold hdr row,
+# the hub's IN purple) and its fold target is `pin` — the sidebar's `hdr:pin`
+# key, the hub's 4th field — so ←/→ fold it like one (#1037); `pin` names no
+# repo, so a new session started from it keeps the fleet's default. The rule is
+# an inert hdr row with BOTH key fields `hdr` (the sidebar's state field empty):
+# no count, no cursor stop, no fold, no bind. It is #998's one deliberate
+# exception — headings still draw no `──` of their own; this line closes the
+# pinned block, where the tier would otherwise run straight into the list. The
+# sidebar's rule is longer than any pane and the view clips it to its width;
+# the hub's is the list's own width, in the column header's grey.
+if [ "$PINCNT" -gt 0 ]; then
+  t="置顶 ($PINCNT)"; [ "$PINFOLD" = 1 ] && t="▸ $t"
+  printf -v rule '%*s' $(( USABLE > 200 ? USABLE : 200 )) ''; rule=${rule// /─}
+  if [ "$SIDEBAR" = 1 ]; then
+    buf+="$PGRP	-1	0	0	0	0	0	hdr${US}pin$US$US$t$US "$'\n'
+    buf+="$PGRP	2	0	0	0	0	0	hdr$US$US$US$rule$US "$'\n'
+  else
+    buf+="$PGRP	-1	0	0	0	0	0	hdr${US}hdr${US}${IN}${t}${R}${US}pin"$'\n'
+    buf+="$PGRP	2	0	0	0	0	0	hdr${US}hdr${US}${GY}${rule:0:USABLE}${R}"$'\n'
+  fi
 fi
 
 # group headings (issue #974): under `all` in a 2+ repo fleet, one INERT row opens
@@ -951,7 +980,8 @@ fi
 
 # emit by repo group first (issues #793/#974: each hosted repo's rows in their own
 # group under `all`, no-repo sessions at the foot; everything else is group 0, so
-# a one-repo fleet sorts exactly as before), then pinned-first (issue #623), then grouped by spawn provenance (issue #503):
+# a one-repo fleet sorts exactly as before; the 置顶 group, PGRP, heads them all —
+# issue #1170), then pinned-first (issue #623), then grouped by spawn provenance (issue #503):
 # pinned windows (and the subtrees that float with them) take the whole top of the
 # list whatever their status; below them, roots (hub/autofill/bridge spawns) keep
 # the status-rank order they always had; each root's children sort directly below
