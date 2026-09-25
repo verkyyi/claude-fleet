@@ -257,6 +257,31 @@ set. It is heavily gated so it is cheap and safe:
 - **Per-window lock** — a `mkdir` lock so a Stop-hook fire and a spinner demote
   can't double-run the same window.
 
+**Which model reads the screen is a switch** (issue #1229): `CLASSIFY_BACKEND`,
+set in the install's `fleet.conf` / `fleet.settings` or the environment.
+
+- `haiku` (default) — `claude -p --model haiku`, today's behaviour byte for byte
+  (measured p50 6.7s / p95 18s per call, accuracy 0.79 on 39 hand-labelled screens).
+- `jev` — Jev (TypeSafe System One, `POST /v1/systemone`) with the same five rubric
+  lines as choice criteria and the same capture as its state: 0.90 on the same
+  screens at 124ms p50, and 100% on the 28/39 it was ≥0.7 confident about — so a
+  verdict under `CLASSIFY_JEV_MIN_CONF` (0.7) **falls back to haiku**, as does a
+  missing key (`TYPESAFE_API_KEY`, else `~/.config/typesafe/api_key`), a request
+  that fails or exceeds `CLASSIFY_JEV_TIMEOUT` (1s), or an unparseable answer — each
+  with one `classify.log` line. With no key it is exactly `haiku`. A verdict line
+  Jev decided carries `via=jev conf=…`; the #846 rule (a WORKING read never promotes
+  a quiet window) applies to it too.
+- `shadow` — haiku decides exactly as `haiku`; Jev is asked the same capture and
+  `{ts, window, hook_state, haiku, jev, conf, hash, latencies}` is appended to
+  `logs/classify-shadow.ndjson` (0600; the capture text only on a disagreement, so
+  the rows to hand-label are self-contained). Window state is never touched by
+  the Jev half. `bin/classify-shadow-report.py [--labels FILE]` prints agreement,
+  per-confidence buckets, WORKING misreads per side and the disagreement list —
+  the week-long shadow run the issue asks for before the default moves.
+
+`bin/classify-backend-selftest.sh` pins all three legs against a loopback fake
+Jev (never a real key or network).
+
 Two things trigger it:
 
 1. **`classify-hook.sh` on `Stop`** — the real-time path. The moment
