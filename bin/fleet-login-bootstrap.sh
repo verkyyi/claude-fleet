@@ -17,13 +17,19 @@
 #   tmux      reapply-tmux-attention.sh (one idempotent source-file line).
 #   apply     bin/fleet-install-apply.sh --from <empty tree> --to HEAD: every
 #             hook, command, skill and LaunchAgent (install-sync included) is an
-#             "addition", so the one apply path installs all of it. On macOS a
-#             login whose daemons fleet-login-new.sh --apply already installed as
-#             system LaunchDaemons (/Library/LaunchDaemons/com.claude-fleet.<login>.*,
-#             issue #1192) applies at once — no GUI session needed; any other
-#             login waits for its first GUI sign-in (no gui/<uid> launchd domain
-#             before it — agents cannot load). `global/bootstrap.applied` records
-#             the sha once it passed, so it never runs twice.
+#             "addition", so the one apply path installs all of it. Where this
+#             login's daemons can go decides HOW it runs, never whether (issue
+#             #1214): on macOS a login whose daemons fleet-login-new.sh --apply
+#             already installed as system LaunchDaemons
+#             (/Library/LaunchDaemons/com.claude-fleet.<login>.*, issue #1192)
+#             applies at once and finds them current — no GUI session needed; a
+#             login with a gui/<uid> launchd domain (it has signed in at the
+#             console) gets gui LaunchAgents loaded into it; a login with NEITHER
+#             — SSH-only, and the admin's step 8 installed nothing (#1210 ①②) —
+#             still gets every hook, command, skill and setting (apply
+#             --no-daemons), and its daemons are one `daemons: WARN` line naming
+#             who installs them, never a failed step. `global/bootstrap.applied`
+#             records the sha once it passed, so it never runs twice.
 #   zshrc     the claude-fleet block (--print-zshrc) appended to ~/.zshrc unless
 #             it already sources shell/fleet-login.zsh — with the ~/.local/bin
 #             PATH line (--print-path-line) BEFORE it, unless the file has one.
@@ -34,10 +40,12 @@
 #             Its checkout is cloned over https first, so no `gh auth` is needed.
 #   doctor    fleet-doctor.sh, output passed through — a report, never a gate.
 #
-# Done ⇔ every step before doctor passed → `$FLEET_CONF_DIR/global/bootstrapped`.
-# With that marker it exits 0 at once. A login that already HAS a fleet this
-# script did not start (no `global/bootstrap.started`) is left alone: exit 0,
-# nothing written.
+# Done ⇔ every step before doctor passed → `$FLEET_CONF_DIR/global/bootstrapped`
+# — the commands and skills are in and the fleet is up; missing daemons are a
+# WARN, not a step (the doctor's `onboard` row keeps naming them, and the WARN
+# says who installs them). With that marker it exits 0 at once. A login that
+# already HAS a fleet this script did not start (no `global/bootstrap.started`)
+# is left alone: exit 0, nothing written.
 #
 # Not here: ccquota enroll (a hub admin's job), `gh auth login`, the Codex device
 # code — fleet-login-new.sh prints those for a human.
@@ -167,16 +175,24 @@ fi
 head=$(git -C "$ROOT" rev-parse HEAD)
 platform="${FLEET_INSTALL_PLATFORM:-}"
 [ -n "$platform" ] || { [ "$(uname -s)" = Darwin ] && platform=launchd; }
-# System-shape daemons already installed for this login (fleet-login-new.sh
-# --apply, issue #1192): apply keeps that shape and loads nothing into gui/<uid>,
-# so the GUI sign-in the gui shape needs is not a gate here.
+# Where this login's daemons can go decides HOW apply runs, never WHETHER (issue
+# #1214). System-shape daemons the admin installed (fleet-login-new.sh --apply,
+# issue #1192): apply keeps that shape, loads nothing into gui/<uid>, and finds
+# every unit current. A gui/<uid> launchd domain (a console sign-in happened):
+# apply loads gui LaunchAgents into it. NEITHER, on launchd — an SSH-only login
+# whose admin-side step 8 installed nothing (#1210 ①②): the tools still install
+# (apply --no-daemons) and the daemons are the WARN below. Until #1214 that case
+# was `apply: FAIL no GUI session`, so no command or skill landed and the guide's
+# first words were «Unknown command: /fleet-onboard».
 login="${FLEET_INSTALL_LOGIN:-${USER:-$(id -un)}}"
 sysd=0
 ls "${FLEET_INSTALL_DAEMON_DIR:-/Library/LaunchDaemons}/com.claude-fleet.$login".*.plist >/dev/null 2>&1 && sysd=1
+nodaemons=''
+if [ "$platform" = launchd ] && [ "$sysd" = 0 ] && ! "${FLEET_INSTALL_LAUNCHCTL:-launchctl}" print "gui/$(id -u)" >/dev/null 2>&1; then
+  nodaemons=1
+fi
 if [ -f "$APPLIED" ]; then
   say "apply: ok — applied before ($(cat "$APPLIED"))"
-elif [ "$platform" = launchd ] && [ "$sysd" = 0 ] && ! "${FLEET_INSTALL_LAUNCHCTL:-launchctl}" print "gui/$(id -u)" >/dev/null 2>&1; then
-  fail apply "no GUI session for $(id -un) yet — sign in once at the console (or Screen Sharing), then log in again"
 else
   [ "$sysd" = 1 ] && say "apply: system LaunchDaemons com.claude-fleet.$login.* are installed — no GUI sign-in needed"
   # The empty tree as a commit: --from it, every file of HEAD is an addition.
@@ -185,14 +201,25 @@ else
           git -C "$ROOT" commit-tree "$(git -C "$ROOT" hash-object -t tree -w /dev/null)" -m 'empty (fleet-login-bootstrap)' 2>/dev/null)
   if [ -z "$empty" ]; then
     fail apply "could not make the empty-tree commit in $ROOT"
-  elif out=$(bash "$ROOT/bin/fleet-install-apply.sh" --from "$empty" --to "$head" 2>&1); then
+  elif out=$(bash "$ROOT/bin/fleet-install-apply.sh" --from "$empty" --to "$head" ${nodaemons:+--no-daemons} 2>&1); then
     printf '%s\n' "$out" | sed 's/^/    /'
     printf '%s\n' "$head" > "$APPLIED"
-    say "apply: ok — installed at ${head:0:7}"
+    if [ -n "$nodaemons" ]; then
+      say "apply: ok — installed at ${head:0:7} (hooks, commands, skills, settings — the daemons are the line below)"
+    else
+      say "apply: ok — installed at ${head:0:7}"
+    fi
   else
     printf '%s\n' "$out" | sed 's/^/    /'
     fail apply "fleet-install-apply.sh did not pass (lines above)"
   fi
+fi
+# The daemons, when apply could not place them: a WARN that names who installs
+# them, never a failed step — the commands and the guide work without them, and
+# a step that fails here is what kept every tool out (#1210 ②).
+if [ -n "$nodaemons" ]; then
+  t='~'   # the two markers, ~-relative, for the human reading the line
+  say "daemons: WARN — not installed: no system LaunchDaemons com.claude-fleet.$login.* and no GUI session for $login (no gui/$(id -u) launchd domain). The commands and the guide work without them; the background services (dash refresh, cleanup, dispatch, install-sync, …) do not run until an admin installs them for $login — fleet-login-new.sh --apply's step 8, or docs/SHARED-MACHINE.md «Add the daemons to an existing login» — or you sign in once at the console (or Screen Sharing), then \`rm -f ${APPLIED/#$HOME/$t} ${DONE/#$HOME/$t}\` and log in again"
 fi
 
 # --- zshrc --------------------------------------------------------------------

@@ -15,6 +15,13 @@
 #             A login whose daemons are system LaunchDaemons (`UserName`, label
 #             com.claude-fleet.<login>.<x>) keeps that shape; it needs root, and
 #             without passwordless sudo the exact commands are printed instead.
+#             `--no-daemons` skips this step whole (issue #1214): nothing is
+#             rendered, loaded or removed, and its one line says so — for a
+#             caller that has already found this login's daemons have nowhere
+#             to go yet (fleet-login-bootstrap.sh on launchd with neither a
+#             gui/<uid> domain nor system LaunchDaemons) and reports them itself,
+#             so the hooks, commands and skills still land instead of the whole
+#             apply going PARTIAL on a `launchctl bootstrap` that cannot work.
 #   plugin    a plugin install owns commands/skills/hooks: `claude plugin update
 #             fleet` replaces the three passes below (unless a copy install sits
 #             beside it, in which case both run)
@@ -50,7 +57,7 @@
 #
 # Usage:
 #   fleet-install-apply.sh --from <sha> --to <sha> [--dry-run] [--root <dir>]
-#                          [--sync-logins[=a,b]]
+#                          [--sync-logins[=a,b]] [--no-daemons]
 #   fleet-install-apply.sh --is-command <file>    # exit 0 iff the #858 gate passes
 #   fleet-install-apply.sh --render-system <unit> [--root <dir>]
 #                            # the system-shape plist for <unit> on stdout (#1192):
@@ -67,6 +74,8 @@
 #   --sync-logins[=a,b]
 #              also bring the machine's other logins to --to (all that have
 #              auto-update on; `=a,b` exactly those, on or off)
+#   --no-daemons
+#              skip the daemons step (every other step runs as usual)
 #
 # Output: one line per step (and one per action inside a step), `<step>: …`, so a
 # daemon can log it verbatim. The last line is `apply: ok …` or `apply: PARTIAL …`.
@@ -130,7 +139,7 @@ render_system() { # $1 template $2 unit $3 out
     && plutil -insert ProgramArguments.2 -string "TMPDIR=\"\$(getconf DARWIN_USER_TEMP_DIR)\"; export TMPDIR; exec$argv" "$tmp"
 }
 
-FROM='' TO='' DRY=0 ROOT="${FLEET_INSTALL_ROOT:-$HOME/.claude/fleet}" SYNCL=0 SYNCL_ONLY='' RENDER=''
+FROM='' TO='' DRY=0 ROOT="${FLEET_INSTALL_ROOT:-$HOME/.claude/fleet}" SYNCL=0 SYNCL_ONLY='' RENDER='' NODAEMONS=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --from) FROM="${2:-}"; shift 2 || { usage >&2; exit 2; } ;;
@@ -138,6 +147,7 @@ while [ $# -gt 0 ]; do
     --dry-run) DRY=1; shift ;;
     --sync-logins) SYNCL=1; shift ;;
     --sync-logins=*) SYNCL=1; SYNCL_ONLY="${1#--sync-logins=}"; shift ;;
+    --no-daemons) NODAEMONS=1; shift ;;
     --root) ROOT="${2:-}"; shift 2 || { usage >&2; exit 2; } ;;
     --is-command) is_command "${2:-}"; exit $? ;;
     --render-system) RENDER="${2:-}"; shift 2 || { usage >&2; exit 2; } ;;
@@ -430,11 +440,17 @@ daemons_systemd() {
 }
 
 BREW=$(brew_prefix)
-case "$PLATFORM" in
-  launchd) daemons_launchd ;;
-  systemd) daemons_systemd ;;
-  *) say "daemons: skip — no launchd/systemd on this platform" ;;
-esac
+if [ "$NODAEMONS" = 1 ]; then
+  # issue #1214: the caller has found these daemons have nowhere to go yet and
+  # reports them itself — render, load and remove nothing here
+  say 'daemons: skip — --no-daemons (nothing rendered, loaded or removed; the caller reports them)'
+else
+  case "$PLATFORM" in
+    launchd) daemons_launchd ;;
+    systemd) daemons_systemd ;;
+    *) say "daemons: skip — no launchd/systemd on this platform" ;;
+  esac
+fi
 
 # --- plugin -------------------------------------------------------------------
 PLUGIN=0 COPY=1

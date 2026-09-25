@@ -34,6 +34,10 @@
 #                       spinner script that merely changed, the kick still happens.
 #                       --render-system: Label / UserName / __HOME__ of the login
 #                       asked for, nothing else on stdout, no HEAD needed
+#   P. --no-daemons     (#1214) the daemons step is skipped whole and says so;
+#                       every other step runs; no plist rendered, no launchctl —
+#                       what fleet-login-bootstrap.sh passes on launchd with
+#                       neither a gui domain nor system LaunchDaemons
 #   K. usage            --to must be HEAD, both revs required, from==to no-ops
 #   L. the skill        /fleet-sync-install calls apply (ff -> apply -> report)
 #                       rather than carrying its own copy of the steps
@@ -397,6 +401,33 @@ if command -v plutil >/dev/null 2>&1; then
   eq 'O gui first install -> exit 0' 0 "$RC"
   contains 'O gui still kicks' "$OUT" 'daemons: kicked spinner'
 fi
+
+# --- P. --no-daemons (issue #1214) ---------------------------------------------------
+P1=$(git -C "$R" rev-parse HEAD)
+PEMPTY=$(git -C "$R" commit-tree "$(git -C "$R" hash-object -t tree -w /dev/null)" -m empty)
+tmpl pnew 20
+P2=$(commit 'a unit nothing can load yet')
+snapA=$(ls "$H/Library/LaunchAgents" | sort | tr '\n' ' ')
+run_ap --from "$PEMPTY" --to "$P2" --no-daemons
+eq 'P first install, no daemons -> exit 0' 0 "$RC"
+contains 'P daemons skipped, says why' "$OUT" 'daemons: skip — --no-daemons (nothing rendered, loaded or removed; the caller reports them)'
+not_contains 'P no daemons FAIL' "$OUT" 'daemons: FAIL'
+not_contains 'P no daemon action' "$OUT" 'daemons: added'
+ok 'P no launchctl' "! grep -q '^launchctl' '$LOG'"
+eq 'P no plist written' "$snapA" "$(ls "$H/Library/LaunchAgents" | sort | tr '\n' ' ')"
+contains 'P the commands step still runs' "$OUT" 'commands:'
+ok 'P the command landed' "[ -f '$H/.claude/commands/fleet-claim.md' ]"
+ok 'P the hooks still merge' "grep -q '^fleet-hooks-merge.py merge' '$LOG'"
+contains 'P the skills step still runs' "$OUT" 'skills: installed'
+contains 'P apply ok' "$OUT" 'apply: ok'
+run_ap --from "$P1" --to "$P2" --no-daemons --dry-run
+contains 'P dry-run keeps the skip line' "$OUT" 'daemons: skip — --no-daemons'
+ok 'P dry-run no launchctl' "! grep -q '^launchctl' '$LOG'"
+# unchanged: the same range WITHOUT the flag installs + bootstraps the new unit
+run_ap --from "$P1" --to "$P2"
+eq 'P without the flag -> exit 0' 0 "$RC"
+contains 'P without the flag adds the unit' "$OUT" 'daemons: added pnew'
+ok 'P without the flag bootstraps it' "grep -qx 'launchctl bootstrap gui/$(id -u) $H/Library/LaunchAgents/com.claude-fleet.pnew.plist' '$LOG'"
 
 # --- K. usage -------------------------------------------------------------------------
 run_ap --from "$C0" --to "$C1"; eq 'K --to not HEAD' 2 "$RC"

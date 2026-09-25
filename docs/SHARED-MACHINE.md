@@ -87,10 +87,16 @@ send the letter; the script mails nothing and never prints the key.
 LaunchDaemons, so alice's first `ssh alice@mini` lands in a working fleet. The
 one exception is `--no-daemons`, for someone who will use the console: their
 first graphical login creates the `gui/<uid>` launchd domain, and the bootstrap
-installs gui LaunchAgents into it the historic way. A GUI sign-in is also what
-creates alice's login Keychain — only needed if she brings her own subscription
-in step 2 (a `--share-pool` login reads token files, not the Keychain) or runs
-the per-user ccquota agent of step 4.
+installs gui LaunchAgents into it the historic way. **Either way the tools
+land on the first login** (issue #1214): when the bootstrap finds neither the
+system LaunchDaemons nor a `gui/<uid>` domain — an SSH-only login whose step 8
+installed nothing, which is how EPIC #1190's test login got a guide that opened
+with «Unknown command: /fleet-onboard» (#1210) — it still installs every hook,
+command, skill and setting, and prints one `daemons: WARN` line saying who adds
+the daemons (below) instead of failing the whole step. A GUI sign-in is also
+what creates alice's login Keychain — only needed if she brings her own
+subscription in step 2 (a `--share-pool` login reads token files, not the
+Keychain) or runs the per-user ccquota agent of step 4.
 
 ## 2. First Claude Code login, as that person
 
@@ -199,9 +205,18 @@ the system LaunchDaemons step 1 installed come out "already current", so
 nothing there needs root), hooks up tmux, and brings her fleet up on the
 starter repo — `fleet-up.sh verkyyi/claude-fleet --seed`, which only looks
 (override with `FLEET_SEED_REPO`) — then prints `fleet-doctor.sh`. A step that
-fails (offline; or, for a `--no-daemons` login, no GUI session yet) is retried
-on her next login, alone; once all pass it writes
-`~/.config/claude-fleet/global/bootstrapped` and never runs again.
+fails (offline) is retried on her next login, alone; once all pass it writes
+`~/.config/claude-fleet/global/bootstrapped` and never runs again. Daemons
+that have nowhere to go yet — no system LaunchDaemons for her and no GUI
+session — are **not** a failed step (issue #1214): the apply runs
+`--no-daemons`, so the commands and the guide are in, the marker is written,
+and the output carries `apply: ok — … (hooks, commands, skills, settings — the
+daemons are the line below)` followed by one `daemons: WARN — not installed: …`
+line that names the two ways to add them: an admin installs the system shape
+(next section), or she signs in once at the console, removes
+`~/.config/claude-fleet/global/bootstrap.applied` and `…/bootstrapped`, and logs
+in again — the bootstrap re-applies, this time loading gui LaunchAgents. Until
+then the doctor's `onboard` row keeps naming the missing fleet services.
 It leaves a login that already has a fleet untouched. She adds her own repos with
 `fleet-up.sh owner/repo`, and once one is in, takes the starter out with
 `fleet-repo.sh remove verkyyi/claude-fleet` (issue #1172 — the wizard offers it
@@ -227,6 +242,31 @@ Each login's live install updates on its own schedule. After a
 INSTALL.md step 1).
 
 ---
+
+### Add the daemons to an existing login
+
+For a login that exists but has no `com.claude-fleet.<login>.*` under
+`/Library/LaunchDaemons` (the bootstrap's `daemons: WARN`, or the doctor's
+`onboard` row naming missing fleet services): step 8 of `fleet-login-new.sh`
+by hand, as the admin. Her clone is 0700 to you, so render from YOUR checkout —
+ideally at the same commit as her `stable` clone, so her next apply finds every
+unit "already current":
+
+```sh
+L=alice; H=/Users/$L
+for t in ~/.claude/fleet/launchd/com.claude-fleet.*.plist.tmpl; do
+  u=${t##*/com.claude-fleet.}; u=${u%.plist.tmpl}
+  FLEET_INSTALL_LOGIN=$L FLEET_INSTALL_HOME=$H \
+    ~/.claude/fleet/bin/fleet-install-apply.sh --render-system "$u" > "/tmp/com.claude-fleet.$L.$u.plist"
+  sudo install -m 644 "/tmp/com.claude-fleet.$L.$u.plist" /Library/LaunchDaemons/
+  sudo launchctl bootstrap system "/Library/LaunchDaemons/com.claude-fleet.$L.$u.plist"
+done
+sudo launchctl list | grep -c "com.claude-fleet.$L."   # = the number of templates
+```
+
+Nothing on her side needs re-running: the units start at bootstrap, and they
+run the scripts of her own `~/.claude/fleet`. (One command for this loop —
+`fleet-login-new.sh <login> --daemons-only` — is #1223.)
 
 ## 6. Verify the machine
 
