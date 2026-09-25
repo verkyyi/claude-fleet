@@ -10,10 +10,18 @@
 #      not one file changed — not even the zshrc it lacks.
 #   D. a failed apply: exit 1, no marker, the other steps still done; the next run
 #      re-applies only (fleet-up not called again, the zshrc block still once).
-#   E. launchd with no GUI session yet: apply is not attempted, says why, exit 1.
+#   E. (#1214) launchd with neither a GUI session nor this login's system
+#      LaunchDaemons — #1210 ①②: apply still runs, with --no-daemons, so every
+#      hook, command and skill lands; bootstrap.applied + bootstrapped written,
+#      exit 0; the `apply: ok` line names what went in and ONE `daemons: WARN`
+#      line follows it naming the admin's onboarding command and the console
+#      sign-in path. Another login's LaunchDaemons do not count (same WARN). With
+#      a gui domain: apply runs without the flag and no WARN (the historic gui
+#      path); on a platform without launchd: neither the flag nor the WARN.
 #   E2. (#1192) the same, but this login's system LaunchDaemons are installed
-#      (FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.<login>.*.plist): apply runs,
-#      says no GUI sign-in is needed, bootstrap.applied written, exit 0.
+#      (FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.<login>.*.plist): apply runs in
+#      full, says no GUI sign-in is needed, bootstrap.applied written, exit 0 —
+#      no --no-daemons, no WARN line: the pre-#1214 output, unchanged.
 #   F. --print-zshrc parses as zsh; its guard names the marker the script writes;
 #      --print-path-line is one zsh line that puts ~/.local/bin on PATH once.
 #   G. claude (issue #1191): one on PATH → no install; none → the install command
@@ -110,6 +118,8 @@ eq "A master tracks origin/master" "$(git -C "$R" rev-parse --abbrev-ref 'master
 ap=$(grep '^fleet-install-apply.sh ' "$CALLS")
 from=$(printf '%s' "$ap" | sed -n 's/.*--from \([0-9a-f]*\) .*/\1/p')
 eq "A apply --to HEAD" "${ap##*--to }" "$STABLE"
+hasnt "A no launchd: apply without --no-daemons" "$ap" "--no-daemons"
+hasnt "A no launchd: no daemons WARN" "$out" "daemons: WARN"
 eq "A apply --from the empty tree" "$(git -C "$R" rev-parse "$from^{tree}" 2>/dev/null)" 4b825dc642cb6eb9a060e54bf8d69288fbee4904
 eq "A applied stamp" "$(cat "$FLEET_CONF_DIR/global/bootstrap.applied" 2>/dev/null)" "$STABLE"
 eq "A tmux line once" "$(grep -c tmux-attention.conf "$HOME/.tmux.conf")" 1
@@ -174,13 +184,47 @@ eq "D tmux line still once" "$(grep -c tmux-attention.conf "$HOME/.tmux.conf")" 
 [ -s "$FLEET_CONF_DIR/global/bootstrapped" ] || fail "D: re-run did not mark done"
 leg "D a failed step is retried alone"
 
-# ---- E. macOS before the first GUI sign-in ----
+# ---- E. macOS, neither a GUI session nor system LaunchDaemons (#1214, #1210 ①②) ----
 newhome "$WORK/e"
-out=$(FLEET_INSTALL_PLATFORM=launchd FLEET_INSTALL_LAUNCHCTL=false boot); eq "E rc" "$?" 1
-has "E says why" "$out" "no GUI session"
-grep -q '^fleet-install-apply.sh ' "$CALLS" && fail "E: apply ran with no gui domain"
-[ -e "$FLEET_CONF_DIR/global/bootstrapped" ] && fail "E: marked done"
-leg "E no GUI session → apply waits"
+out=$(FLEET_INSTALL_PLATFORM=launchd FLEET_INSTALL_LAUNCHCTL=false boot); eq "E rc" "$?" 0
+ap=$(grep '^fleet-install-apply.sh ' "$CALLS")
+[ -n "$ap" ] || fail "E: apply did not run without a gui domain — the tools never land"
+has "E apply --no-daemons" "$ap" " --no-daemons"
+eq "E apply --to HEAD" "$(printf '%s' "$ap" | sed -n 's/.*--to \([0-9a-f]*\).*/\1/p')" "$STABLE"
+has "E apply ok names the tools" "$out" "apply: ok — installed at ${STABLE:0:7} (hooks, commands, skills, settings"
+has "E daemons WARN" "$out" "daemons: WARN — not installed: no system LaunchDaemons com.claude-fleet.tester.* and no GUI session for tester"
+has "E WARN names the admin's command" "$out" "fleet-login-new.sh"
+has "E WARN names the doc" "$out" "docs/SHARED-MACHINE.md"
+has "E WARN names the console path" "$out" "sign in once at the console"
+has "E WARN names the re-apply, ~-relative" "$out" "rm -f ~/.config/claude-fleet/global/bootstrap.applied ~/.config/claude-fleet/global/bootstrapped"
+hasnt "E no FAIL" "$out" "FAIL"
+eq "E one daemons line" "$(printf '%s\n' "$out" | grep -c '^fleet-login-bootstrap: daemons: WARN')" 1
+eq "E apply line, then daemons line, then zshrc" \
+  "$(printf '%s\n' "$out" | grep -oE '^fleet-login-bootstrap: (apply: ok|daemons: WARN|zshrc: ok)' | sed 's/^fleet-login-bootstrap: //' | tr '\n' '|')" "apply: ok|daemons: WARN|zshrc: ok|"
+eq "E applied stamp" "$(cat "$FLEET_CONF_DIR/global/bootstrap.applied" 2>/dev/null)" "$STABLE"
+[ -s "$FLEET_CONF_DIR/global/bootstrapped" ] || fail "E: not marked done — the tools are in and the fleet is up"
+eq "E fleet up" "$(grep -c '^fleet-up.sh ' "$CALLS")" 1
+# the second login: nothing to do, the WARN is not a retry loop
+: > "$CALLS"
+out=$(FLEET_INSTALL_PLATFORM=launchd FLEET_INSTALL_LAUNCHCTL=false boot); eq "E re-run rc" "$?" 0
+has "E re-run says done" "$out" "already bootstrapped"
+eq "E re-run nothing called" "$(cat "$CALLS")" ""
+# the printed re-apply: after a console sign-in (a gui domain now), the two
+# markers removed and one more login — apply runs again, this time with daemons
+rm -f "$FLEET_CONF_DIR/global/bootstrap.applied" "$FLEET_CONF_DIR/global/bootstrapped"
+out=$(FLEET_INSTALL_PLATFORM=launchd FLEET_INSTALL_LAUNCHCTL=true boot); eq "E re-apply rc" "$?" 0
+eq "E re-apply: apply + doctor only" "$(awk '{print $1}' "$CALLS" | tr '\n' ' ')" "fleet-install-apply.sh fleet-doctor.sh "
+hasnt "E re-apply: with daemons" "$(grep '^fleet-install-apply.sh ' "$CALLS")" "--no-daemons"
+hasnt "E re-apply: no WARN" "$out" "daemons: WARN"
+[ -s "$FLEET_CONF_DIR/global/bootstrapped" ] || fail "E: re-apply did not mark done"
+# a gui domain from the start: the historic gui path — no flag, no WARN, plain apply line
+newhome "$WORK/e-gui"
+out=$(FLEET_INSTALL_PLATFORM=launchd FLEET_INSTALL_LAUNCHCTL=true boot); eq "E gui rc" "$?" 0
+hasnt "E gui: apply without --no-daemons" "$(grep '^fleet-install-apply.sh ' "$CALLS")" "--no-daemons"
+hasnt "E gui: no WARN" "$out" "daemons: WARN"
+has "E gui: plain apply line" "$out" "apply: ok — installed at ${STABLE:0:7}"
+hasnt "E gui: no tools parenthesis" "$out" "(hooks, commands"
+leg "E no GUI session, no system daemons → the tools install, the daemons are a WARN"
 
 # ---- E2. system-shape daemons installed by the admin (#1192): no GUI needed ----
 newhome "$WORK/e2"
@@ -188,15 +232,21 @@ mkdir -p "$WORK/sysd" && : > "$WORK/sysd/com.claude-fleet.tester.spinner.plist"
 out=$(FLEET_INSTALL_PLATFORM=launchd FLEET_INSTALL_LAUNCHCTL=false FLEET_INSTALL_DAEMON_DIR="$WORK/sysd" boot); eq "E2 rc" "$?" 0
 has "E2 says why" "$out" "apply: system LaunchDaemons com.claude-fleet.tester.* are installed — no GUI sign-in needed"
 hasnt "E2 no GUI complaint" "$out" "no GUI session"
+hasnt "E2 no daemons WARN (#1214 leaves this path as it was)" "$out" "daemons: WARN"
+hasnt "E2 apply in full, no --no-daemons" "$(grep '^fleet-install-apply.sh ' "$CALLS")" "--no-daemons"
+has "E2 plain apply line" "$out" "apply: ok — installed at ${STABLE:0:7}
+"
 grep -q '^fleet-install-apply.sh ' "$CALLS" || fail "E2: apply did not run"
 eq "E2 applied stamp" "$(cat "$FLEET_CONF_DIR/global/bootstrap.applied" 2>/dev/null)" "$STABLE"
 [ -s "$FLEET_CONF_DIR/global/bootstrapped" ] || fail "E2: not marked done"
-# another login's daemons do not count
+# another login's daemons do not count: the tools install, this login's daemons are the WARN
 newhome "$WORK/e3"
 mkdir -p "$WORK/sysd3" && : > "$WORK/sysd3/com.claude-fleet.someoneelse.spinner.plist"
-out=$(FLEET_INSTALL_PLATFORM=launchd FLEET_INSTALL_LAUNCHCTL=false FLEET_INSTALL_DAEMON_DIR="$WORK/sysd3" boot); eq "E2 other login rc" "$?" 1
-has "E2 other login still waits" "$out" "no GUI session"
-leg "E2 system LaunchDaemons installed → apply runs without a GUI session"
+out=$(FLEET_INSTALL_PLATFORM=launchd FLEET_INSTALL_LAUNCHCTL=false FLEET_INSTALL_DAEMON_DIR="$WORK/sysd3" boot); eq "E2 other login rc" "$?" 0
+has "E2 other login: --no-daemons" "$(grep '^fleet-install-apply.sh ' "$CALLS")" " --no-daemons"
+has "E2 other login: the WARN" "$out" "daemons: WARN — not installed: no system LaunchDaemons com.claude-fleet.tester.*"
+hasnt "E2 other login: not the admin's line" "$out" "are installed — no GUI sign-in needed"
+leg "E2 system LaunchDaemons installed → apply runs in full without a GUI session"
 
 # ---- F. the zshrc block ----
 z=$(boot --print-zshrc)
@@ -303,4 +353,4 @@ PY
 leg "I Claude first-run state preserves values; wizard commands are allowed"
 
 [ "$FAILS" = 0 ] || { printf 'selftest FAIL: %s failure(s)\n' "$FAILS"; exit 1; }
-printf 'selftest PASS: a new login sets itself up once, and only once — Claude Code included (issues #1165, #1191) — bash %s\n' "$("$BASH_BIN" -c 'echo $BASH_VERSION')"
+printf 'selftest PASS: a new login sets itself up once, and only once — Claude Code included, the tools even without daemons (issues #1165, #1191, #1214) — bash %s\n' "$("$BASH_BIN" -c 'echo $BASH_VERSION')"
