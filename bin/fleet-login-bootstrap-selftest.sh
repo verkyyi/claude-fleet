@@ -64,7 +64,7 @@ newhome() { # newhome <dir> — a fresh login: HOME + its conf dir
 boot() { "$BASH_BIN" "$BIN/fleet-login-bootstrap.sh" "$@" </dev/null 2>&1; }
 # every path + content hash + mtime under HOME (git internals included)
 snap() { ( cd "$HOME" || exit 1; find . -print | sort
-           { find . -type f -exec stat -f '%N %m %z' {} + 2>/dev/null || find . -type f -exec stat -c '%n %Y %s' {} +; } | sort
+           { find . -type f -exec stat -c '%n %Y %s' {} + 2>/dev/null || find . -type f -exec stat -f '%N %m %z' {} +; } | sort
            find . -type f -exec cksum {} + | sort ); }
 
 # ---- A. first run ----
