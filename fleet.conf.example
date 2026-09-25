@@ -1110,9 +1110,12 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # B) GitHub Actions: the merge sha's post-merge workflow runs (the push-to-master
 # runs plus any workflow_dispatch deploys a conductor fans out with the same
 # head_sha). All green → live; any still running → deploying; any red → failed;
-# none → unknown. Costs one `gh api` per un-live merge sha at most every
-# FLEET_DEPLOY_TTL seconds (default 60); a sha that reached `live` is never
-# re-read. Only `actions` is understood.
+# none → unknown. A sha that reached `live` is never re-read; the others are
+# looked at again after FLEET_DEPLOY_TTL seconds (default 60), a `failed` one
+# only after FLEET_DEPLOY_TTL_FAILED (900). When two or more are due, ONE listing
+# of the base branch's newest runs answers all of them; shas older than that
+# window take a per-sha `gh api`, at most FLEET_DEPLOY_PROBE_MAX (4) a tick
+# (claude-fleet#1211). Only `actions` is understood.
 # @label=Deploy check (Actions runs) @group=cache @tier=advanced @scope=fleet @edit=str
 #FLEET_DEPLOY_CHECK=""
 
