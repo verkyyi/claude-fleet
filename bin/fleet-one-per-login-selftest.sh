@@ -21,6 +21,8 @@
 #      FLEET_ONBOARD=0 does. Legs 1-6 run with FLEET_ONBOARD=0: their old outputs.
 #   8. a failed guide stays unmarked; a cooled-down collector tick restarts it
 #      once in the same scratch, then records onboarded after the agent runs.
+#   9. cf --guide opens/focuses one guide, reuses a live guide, and respawns a
+#      guide that fell back to a bare shell.
 # The hub, collector, disk gate and trust check are stubbed in a sandbox bin/;
 # tmux: a PATH shim maps every `-L <label>` to a private socket under $SOCKD.
 set -uo pipefail
@@ -38,7 +40,15 @@ mkdir -p "$WORK/shim" "$WORK/root/bin" "$WORK/home" "$WORK/tmp"
 SOCKD="$(mktemp -d /tmp/f979.XXXXXX)" || exit 2
 cat > "$WORK/shim/tmux" <<EOF
 #!/bin/bash
-if [ "\${1:-}" = -L ]; then s="$SOCKD/\$2"; shift 2; exec "$REAL_TMUX" -S "\$s" "\$@"; fi
+if [ "\${1:-}" = -L ]; then
+  s="$SOCKD/\$2"; shift 2
+  if [ "\${1:-}" = attach ] && [ -n "\${FLEET_TEST_ATTACH_LOG:-}" ]; then
+    printf '%s\n' "\$*" > "\$FLEET_TEST_ATTACH_LOG"
+    exit 0
+  fi
+  exec "$REAL_TMUX" -S "\$s" "\$@"
+fi
+if [ -n "\${TMUX:-}" ]; then exec "$REAL_TMUX" "\$@"; fi
 exec "$REAL_TMUX" -S "$SOCKD/none" "\$@"
 EOF
 printf '#!/bin/sh\nexit 1\n' > "$WORK/shim/gh"
@@ -69,6 +79,8 @@ leg()  { if [ "$FAILS" = "${_legf:-0}" ]; then printf 'PASS %s\n' "$1"; else pri
 # (a REAL root dir holding bin/, so fleet-lib's <bin>/../fleet.conf is $WORK/root/)
 SB="$WORK/root/bin"
 for f in "$BIN"/*; do ln -s "$f" "$SB/$(basename "$f")"; done
+mkdir -p "$WORK/root/shell"
+cp "$BIN/../shell/cw.zsh" "$WORK/root/shell/cw.zsh"
 rm -f "$SB/hub-session.sh" "$SB/tmux-dash-collect.sh" "$SB/fleet-diskguard.sh" "$SB/fleet-trust.sh"
 cat > "$SB/hub-session.sh" <<'EOF'
 #!/bin/bash
@@ -295,6 +307,64 @@ FLEET_GUIDE_COOLDOWN=3600 lib 'fleet_guide_tick fleet'
 eq "8 no extra restart" "$(wc -l < "$launches" | tr -d ' ')" 2
 "$REAL_TMUX" -S "$SOCKD/fleet" kill-server 2>/dev/null
 leg "8 failed guide restarts once after cooldown"
+
+# ---- 9. cf --guide recalls the existing or failed guide (issue #1171) ----
+export FLEET_CONF_DIR="$WORK/conf9" FLEET_ONBOARD=0
+: > "$launches"
+out=$(up o/g "$g"); eq "9 up rc" "$?" 0
+eq "9 starts without guide" "$(wins '#{window_name}' | grep -cx guide)" 0
+guide() {
+  local pane
+  pane=$(tmux -L fleet list-panes -t fleet:plan -F '#{pane_id}' | head -n1)
+  if command -v zsh >/dev/null 2>&1; then
+    TMUX="$SOCKD/fleet,0,0" TMUX_PANE="$pane" zsh -f -c ". '$WORK/root/shell/cw.zsh'; cf --guide" 2>&1
+  else
+    TMUX="$SOCKD/fleet,0,0" TMUX_PANE="$pane" bash "$SB/fleet-guide.sh" 2>&1
+  fi
+}
+tmux -L fleet select-window -t fleet:plan
+out=$(guide); eq "9 open rc" "$?" 0
+eq "9 one guide" "$(wins '#{window_name}' | grep -cx guide)" 1
+eq "9 guide pinned" "$(wins '#{window_name} #{@pin}' | grep '^guide ')" "guide 1"
+eq "9 focused" "$(wins '#{window_name} #{window_active}' | grep ' 1$')" "guide 1"
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  [ "$(wc -l < "$launches" | tr -d ' ')" = 1 ] && break
+  sleep 0.2
+done
+eq "9 first launch" "$(wc -l < "$launches" | tr -d ' ')" 1
+tmux -L fleet select-window -t fleet:plan
+out=$(guide); eq "9 live rc" "$?" 0
+eq "9 live reused" "$(wc -l < "$launches" | tr -d ' ')" 1
+eq "9 live focused" "$(wins '#{window_name} #{window_active}' | grep ' 1$')" "guide 1"
+
+# From an ordinary login shell, select the guide before attaching to the fleet.
+tmux -L fleet select-window -t fleet:plan
+out=$(FLEET_TEST_ATTACH_LOG="$WORK/attach" bash "$SB/fleet-guide.sh" 2>&1)
+eq "9 outside rc" "$?" 0
+eq "9 outside attach" "$(cat "$WORK/attach")" "attach -t fleet"
+eq "9 outside focused" "$(wins '#{window_name} #{window_active}' | grep ' 1$')" "guide 1"
+eq "9 outside reused" "$(wc -l < "$launches" | tr -d ' ')" 1
+
+# The launched agent exits while its original pane shell stays open.
+pane_pid=$(tmux -L fleet display-message -p -t fleet:guide '#{pane_pid}')
+child=$(pgrep -P "$pane_pid" | head -n1)
+[ -n "$child" ] && kill "$child"
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  lib 'fleet_guide_alive fleet' || break
+  sleep 0.2
+done
+lib 'fleet_guide_alive fleet' && fail "9: killed agent still considered alive"
+tmux -L fleet select-window -t fleet:plan
+out=$(guide); eq "9 bare-shell rc" "$?" 0
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  [ "$(wc -l < "$launches" | tr -d ' ')" = 2 ] && break
+  sleep 0.2
+done
+eq "9 respawned once" "$(wc -l < "$launches" | tr -d ' ')" 2
+eq "9 reused window" "$(wins '#{window_name}' | grep -cx guide)" 1
+eq "9 respawn focused" "$(wins '#{window_name} #{window_active}' | grep ' 1$')" "guide 1"
+"$REAL_TMUX" -S "$SOCKD/fleet" kill-server 2>/dev/null
+leg "9 cf --guide opens, focuses, and repairs the guide"
 
 [ "$FAILS" = 0 ] && { echo "fleet-one-per-login-selftest: all passed"; exit 0; }
 echo "fleet-one-per-login-selftest: $FAILS failure(s)"; exit 1
