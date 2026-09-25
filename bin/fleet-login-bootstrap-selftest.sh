@@ -11,7 +11,13 @@
 #   D. a failed apply: exit 1, no marker, the other steps still done; the next run
 #      re-applies only (fleet-up not called again, the zshrc block still once).
 #   E. launchd with no GUI session yet: apply is not attempted, says why, exit 1.
-#   F. --print-zshrc parses as zsh; its guard names the marker the script writes.
+#   F. --print-zshrc parses as zsh; its guard names the marker the script writes;
+#      --print-path-line is one zsh line that puts ~/.local/bin on PATH once.
+#   G. claude (issue #1191): one on PATH → no install; none → the install command
+#      once (FLEET_CLAUDE_INSTALL_CMD), before fleet-up, which then runs with
+#      ~/.local/bin first on PATH; a failed install → exit 1, retried alone.
+#   H. the ~/.local/bin PATH line: before the block, once — put first in an older
+#      zshrc that has the block without it; a login's own line is kept, not doubled.
 # Every step past the clone is a stub in the fixture repo's bin/ that logs its
 # argv — the real scripts have their own selftests.
 set -uo pipefail
@@ -34,8 +40,23 @@ leg()  { if [ "$FAILS" = "${_legf:-0}" ]; then printf 'PASS %s\n' "$1"; else pri
 
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
-unset TMUX TMUX_PANE FLEET_INSTALL_ROOT FLEET_SEED_REPO FLEET_INSTALL_LAUNCHCTL
+unset TMUX TMUX_PANE FLEET_INSTALL_ROOT FLEET_SEED_REPO FLEET_INSTALL_LAUNCHCTL FLEET_CLAUDE_INSTALL_CMD
 CALLS="$WORK/calls"; export CALLS
+# No `claude` anywhere on PATH — the runner's own ~/.local/bin included — so the
+# fixture login looks like one that has none (issue #1191); the "installer" is a
+# stub that logs its call and drops a fake claude where the real one does.
+_p=''; _ifs=$IFS; IFS=:; for _d in $PATH; do [ -x "$_d/claude" ] || _p="$_p${_p:+:}$_d"; done; IFS=$_ifs
+export PATH="$_p"
+cat > "$WORK/claude-install" <<'STUB'
+#!/bin/bash
+echo "claude-install $*" >> "$CALLS"
+[ -n "${CLAUDE_INSTALL_RC:-}" ] && exit "$CLAUDE_INSTALL_RC"
+mkdir -p "$HOME/.local/bin" && printf '#!/bin/sh\necho claude-stub\n' > "$HOME/.local/bin/claude" && chmod +x "$HOME/.local/bin/claude"
+echo "installer: stub"
+STUB
+chmod +x "$WORK/claude-install"
+export FLEET_CLAUDE_INSTALL_CMD="$WORK/claude-install"
+UPPATH="$WORK/up.path"; export UPPATH        # the PATH fleet-up was run with
 
 # ---- the fixture GitHub: verkyyi/claude-fleet with stubs, stable one behind master ----
 FX="$WORK/fx"; mkdir -p "$FX/bin" "$FX/shell"
@@ -46,7 +67,7 @@ stub() { # stub <name> <body…> — logs "<name> <argv>" to $CALLS, then runs <
 }
 stub fleet-install-apply.sh 'echo "apply: stub"; exit "${APPLY_RC:-0}"'
 stub reapply-tmux-attention.sh 'echo "source-file ~/.claude/fleet/conf/tmux-attention.conf" >> "$HOME/.tmux.conf"'
-stub fleet-up.sh 'mkdir -p "$FLEET_CONF_DIR/fleets/fleet" && printf "FLEET_REPO=\"%s\"\n" "$1" > "$FLEET_CONF_DIR/fleets/fleet/conf"; echo "fleet-up: stub up"'
+stub fleet-up.sh 'printf "%s\n" "$PATH" > "$UPPATH"; mkdir -p "$FLEET_CONF_DIR/fleets/fleet" && printf "FLEET_REPO=\"%s\"\n" "$1" > "$FLEET_CONF_DIR/fleets/fleet/conf"; echo "fleet-up: stub up"'
 stub fleet-doctor.sh 'echo "PASS doctor-stub all green"'
 echo '# stub' > "$FX/shell/fleet-login.zsh"
 git init -q -b master "$FX" && git -C "$FX" add -A && git -C "$FX" commit -qm stable-one
@@ -82,7 +103,15 @@ eq "A apply --to HEAD" "${ap##*--to }" "$STABLE"
 eq "A apply --from the empty tree" "$(git -C "$R" rev-parse "$from^{tree}" 2>/dev/null)" 4b825dc642cb6eb9a060e54bf8d69288fbee4904
 eq "A applied stamp" "$(cat "$FLEET_CONF_DIR/global/bootstrap.applied" 2>/dev/null)" "$STABLE"
 eq "A tmux line once" "$(grep -c tmux-attention.conf "$HOME/.tmux.conf")" 1
-eq "A zshrc = the block" "$(cat "$HOME/.zshrc")" "$(boot --print-zshrc)"
+eq "A zshrc = the PATH line, then the block" "$(cat "$HOME/.zshrc")" "$(boot --print-path-line; boot --print-zshrc)"
+eq "A PATH line once" "$(grep -c '\.local/bin' "$HOME/.zshrc")" 1
+eq "A PATH line first, block second" "$(grep -n -e '\.local/bin' -e '>>> claude-fleet' "$HOME/.zshrc" | cut -d: -f1 | tr '\n' ' ')" "1 2 "
+# claude (issue #1191): installed once, before fleet-up, which runs with ~/.local/bin first
+eq "A claude installed once" "$(grep -c '^claude-install' "$CALLS")" 1
+has "A claude ok line" "$out" "claude: ok — installed $HOME/.local/bin/claude"
+[ -x "$HOME/.local/bin/claude" ] || fail "A: no ~/.local/bin/claude after the install"
+eq "A claude before fleet-up" "$(awk '{print $1}' "$CALLS" | grep -Ex 'claude-install|fleet-up\.sh' | tr '\n' ' ')" "claude-install fleet-up.sh "
+case "$(cat "$UPPATH")" in "$HOME/.local/bin:"*) ;; *) fail "A: fleet-up ran without ~/.local/bin first on PATH: $(cat "$UPPATH")" ;; esac
 eq "A fleet-up quiet + no attach" "$(grep '^fleet-up.sh ' "$CALLS")" \
   "fleet-up.sh verkyyi/claude-fleet $HOME/projects/claude-fleet --seed --no-attach"
 eq "A seed checkout cloned" "$(git -C "$HOME/projects/claude-fleet" rev-parse --is-inside-work-tree 2>/dev/null)" true
@@ -142,8 +171,59 @@ fi
 has "F guard = the marker" "$z" '[[ ! -f ~/.config/claude-fleet/global/bootstrapped ]]'
 has "F clones stable" "$z" "clone -q -b stable https://github.com/verkyyi/claude-fleet.git"
 has "F sources fleet-login.zsh" "$z" 'source ~/.claude/fleet/shell/fleet-login.zsh'
+pl=$(boot --print-path-line)
+eq "F path line is one line" "$(printf '%s\n' "$pl" | wc -l | tr -d ' ')" 1
+has "F path line exports the dir" "$pl" 'export PATH="$HOME/.local/bin:$PATH"'
+if command -v zsh >/dev/null 2>&1; then
+  printf '%s\n' "$pl" | zsh -n || fail "F: path line does not parse as zsh"
+  n=$(HOME=/h PATH=/usr/bin:/bin zsh -f -c "$pl
+$pl
+print -r -- \"\$PATH\"" 2>/dev/null | tr ':' '\n' | grep -cx /h/.local/bin)
+  eq "F path line: sourced twice, on PATH once (zsh)" "$n" 1
+fi
+n=$(HOME=/h PATH=/usr/bin:/bin "$BASH_BIN" -c "$pl
+$pl
+printf '%s' \"\$PATH\"" 2>/dev/null | tr ':' '\n' | grep -cx /h/.local/bin)
+eq "F path line: sourced twice, on PATH once (bash)" "$n" 1
 out=$(boot --bogus); eq "F bad arg rc" "$?" 2
-leg "F --print-zshrc"
+leg "F --print-zshrc / --print-path-line"
+
+# ---- G. claude: on PATH → nothing; a failed install → retried alone (#1191) ----
+newhome "$WORK/g"
+mkdir -p "$WORK/g-bin"; printf '#!/bin/sh\necho elsewhere\n' > "$WORK/g-bin/claude"; chmod +x "$WORK/g-bin/claude"
+out=$(PATH="$WORK/g-bin:$PATH" boot); eq "G rc" "$?" 0
+has "G found, left alone" "$out" "claude: ok — $WORK/g-bin/claude"
+grep -q '^claude-install' "$CALLS" && fail "G: installed over a claude already on PATH"
+[ -e "$HOME/.local/bin/claude" ] && fail "G: a second claude dropped in ~/.local/bin"
+newhome "$WORK/g2"
+out=$(CLAUDE_INSTALL_RC=7 boot); eq "G2 rc" "$?" 1
+has "G2 names the step" "$out" "claude: FAIL"
+has "G2 names the command" "$out" "$WORK/claude-install"
+[ -e "$FLEET_CONF_DIR/global/bootstrapped" ] && fail "G2: marked done without claude"
+eq "G2 the rest still ran" "$(grep -c '^fleet-up.sh ' "$CALLS")" 1
+: > "$CALLS"
+out=$(boot); eq "G2 re-run rc" "$?" 0
+eq "G2 re-run: claude + doctor only" "$(awk '{print $1}' "$CALLS" | tr '\n' ' ')" "claude-install fleet-doctor.sh "
+has "G2 re-run installed" "$out" "claude: ok — installed $HOME/.local/bin/claude"
+[ -s "$FLEET_CONF_DIR/global/bootstrapped" ] || fail "G2: re-run did not mark done"
+leg "G claude: on PATH → nothing; failed install → retried alone"
+
+# ---- H. the PATH line: before the block, once (#1191) ----
+newhome "$WORK/h"
+{ echo '# mine'; boot --print-zshrc; } > "$HOME/.zshrc"        # an older login: the block, no PATH line
+out=$(boot); eq "H rc" "$?" 0
+has "H says so" "$out" "PATH line before the claude-fleet block"
+eq "H line put first" "$(head -1 "$HOME/.zshrc")" "$(boot --print-path-line)"
+eq "H PATH line once" "$(grep -c '\.local/bin' "$HOME/.zshrc")" 1
+eq "H block once" "$(grep -c '>>> claude-fleet' "$HOME/.zshrc")" 1
+eq "H the rest intact" "$(tail -n +2 "$HOME/.zshrc")" "$(echo '# mine'; boot --print-zshrc)"
+newhome "$WORK/h2"
+echo 'export PATH="$HOME/.local/bin:$PATH"' > "$HOME/.zshrc"   # a line of the login's own
+out=$(boot); eq "H2 rc" "$?" 0
+has "H2 block only" "$out" "zshrc: ok — added the claude-fleet block to ~/.zshrc"
+eq "H2 PATH line once" "$(grep -c '\.local/bin' "$HOME/.zshrc")" 1
+eq "H2 = own line, blank, block" "$(cat "$HOME/.zshrc")" "$(printf 'export PATH="$HOME/.local/bin:$PATH"\n\n'; boot --print-zshrc)"
+leg "H the PATH line goes before the block, once"
 
 [ "$FAILS" = 0 ] || { printf 'selftest FAIL: %s failure(s)\n' "$FAILS"; exit 1; }
-printf 'selftest PASS: a new login sets itself up once, and only once (issue #1165) — bash %s\n' "$("$BASH_BIN" -c 'echo $BASH_VERSION')"
+printf 'selftest PASS: a new login sets itself up once, and only once — Claude Code included (issues #1165, #1191) — bash %s\n' "$("$BASH_BIN" -c 'echo $BASH_VERSION')"

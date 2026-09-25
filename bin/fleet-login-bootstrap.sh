@@ -9,6 +9,11 @@
 #   install   ~/.claude/fleet — cloned at refs/tags/stable (the hook's clone, or
 #             this script's own), on a `master` branch so install-sync can
 #             fast-forward it from there.
+#   claude    Claude Code, when no `claude` is on PATH (issue #1191): the official
+#             native installer (`curl -fsSL https://claude.ai/install.sh | bash`
+#             → ~/.local/bin/claude), run as this login; FLEET_CLAUDE_INSTALL_CMD
+#             overrides the command (a test seam). ~/.local/bin goes on THIS run's
+#             PATH first, so the tmux server fleet-up starts below inherits it.
 #   tmux      reapply-tmux-attention.sh (one idempotent source-file line).
 #   apply     bin/fleet-install-apply.sh --from <empty tree> --to HEAD: every
 #             hook, command, skill and LaunchAgent (install-sync included) is an
@@ -17,7 +22,8 @@
 #             before it — agents cannot load); `global/bootstrap.applied` records
 #             the sha once it passed, so it never runs twice.
 #   zshrc     the claude-fleet block (--print-zshrc) appended to ~/.zshrc unless
-#             it already sources shell/fleet-login.zsh.
+#             it already sources shell/fleet-login.zsh — with the ~/.local/bin
+#             PATH line (--print-path-line) BEFORE it, unless the file has one.
 #   fleet     fleet-up.sh <FLEET_SEED_REPO> --seed --no-attach, when this login
 #             has no fleet yet: the starter repo, which only looks (issue #1167).
 #             Its checkout is cloned over https first, so no `gh auth` is needed.
@@ -33,11 +39,13 @@
 #
 # Usage:
 #   fleet-login-bootstrap.sh              # set this login up (idempotent)
-#   fleet-login-bootstrap.sh --print-zshrc
+#   fleet-login-bootstrap.sh --print-zshrc        # the one-time block
+#   fleet-login-bootstrap.sh --print-path-line    # the ~/.local/bin PATH line
 #
 # Env: FLEET_SEED_REPO (verkyyi/claude-fleet) · FLEET_INSTALL_ROOT
 #      (~/.claude/fleet) · FLEET_CONF_DIR (~/.config/claude-fleet) ·
 #      FLEET_BOOTSTRAP_GIT_BASE (https://github.com — test seam) ·
+#      FLEET_CLAUDE_INSTALL_CMD (the claude installer — test seam) ·
 #      FLEET_INSTALL_PLATFORM / FLEET_INSTALL_LAUNCHCTL (as fleet-install-apply.sh)
 # Exit: 0 bootstrapped (now or before) or left alone · 1 a step failed (the
 #       lines say which; the next login retries) · 2 usage
@@ -64,10 +72,16 @@ fi
 # <<< claude-fleet <<<
 ZSH
 }
+# One line, idempotent (sourced again in every tmux pane's shell), POSIX so it
+# reads the same in a .bashrc: Claude Code's native install dir, first on PATH.
+print_path_line() {
+  printf '%s\n' 'case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH";; esac  # claude-fleet: Claude Code lives in ~/.local/bin (issue #1191)'
+}
 
 case "${1:-}" in
   '') ;;
   --print-zshrc) print_zshrc; exit 0 ;;
+  --print-path-line) print_path_line; exit 0 ;;
   -h|--help) sed -n '2,/^set -uo pipefail/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
   *) printf '%s: unknown arg %s\n' "$PROG" "$1" >&2; exit 2 ;;
 esac
@@ -115,6 +129,25 @@ fi
 [ "$FAILS" = 0 ] || { say "stopped — nothing else can run without the install"; exit 1; }
 mkdir -p "$ROOT/logs"
 
+# --- claude -------------------------------------------------------------------
+# Claude Code is a per-login native install (~/.local/bin/claude) that nothing
+# system-wide provides, and the guide window dies at spawn without it (#1183).
+# ~/.local/bin goes on THIS run's PATH first: the check below, the fleet-up further
+# down (whose tmux server keeps this PATH for life) and the doctor all see it.
+PATH=$(fleet_local_bin_path); export PATH
+if cbin=$(command -v claude 2>/dev/null) && [ -n "$cbin" ]; then
+  say "claude: ok — $cbin"
+else
+  cmd="${FLEET_CLAUDE_INSTALL_CMD:-curl -fsSL https://claude.ai/install.sh | bash}"
+  out=$(bash -c "$cmd" </dev/null 2>&1); rc=$?
+  [ -n "$out" ] && printf '%s\n' "$out" | sed 's/^/    /'
+  if [ "$rc" = 0 ] && cbin=$(command -v claude 2>/dev/null) && [ -n "$cbin" ]; then
+    say "claude: ok — installed $cbin"
+  else
+    fail claude "no claude on PATH after \`$cmd\` (rc=$rc — offline?)"
+  fi
+fi
+
 # --- tmux ---------------------------------------------------------------------
 if grep -q 'tmux-attention.conf' "$HOME/.tmux.conf" 2>/dev/null; then
   say "tmux: ok — ~/.tmux.conf already sources the fleet conf"
@@ -150,10 +183,29 @@ else
 fi
 
 # --- zshrc --------------------------------------------------------------------
-if grep -q 'fleet-login\.zsh' "$HOME/.zshrc" 2>/dev/null; then
+# The PATH line goes BEFORE the block (issue #1191): the block's bootstrap call,
+# and the fleet-up it runs, must already see ~/.local/bin. A file that has the
+# block but no PATH line (a login opened before #1191) gets the line at the top;
+# a PATH line of the login's own is kept, never doubled.
+zrc="$HOME/.zshrc"
+has_block=0; grep -q 'fleet-login\.zsh' "$zrc" 2>/dev/null && has_block=1
+has_path=0;  grep -qF '.local/bin' "$zrc" 2>/dev/null && has_path=1
+if [ "$has_block" = 1 ] && [ "$has_path" = 1 ]; then
   say "zshrc: ok — ~/.zshrc already sources fleet-login.zsh"
-elif { [ ! -s "$HOME/.zshrc" ] || printf '\n'; print_zshrc; } >> "$HOME/.zshrc"; then
-  say "zshrc: ok — added the claude-fleet block to ~/.zshrc"
+elif [ "$has_block" = 1 ]; then
+  if { print_path_line; cat "$zrc"; } > "$zrc.tmp.$$" && cat "$zrc.tmp.$$" > "$zrc"; then
+    rm -f "$zrc.tmp.$$"
+    say "zshrc: ok — put the ~/.local/bin PATH line before the claude-fleet block in ~/.zshrc"
+  else
+    rm -f "$zrc.tmp.$$"
+    fail zshrc "could not write ~/.zshrc"
+  fi
+elif { [ ! -s "$zrc" ] || printf '\n'; [ "$has_path" = 1 ] || print_path_line; print_zshrc; } >> "$zrc"; then
+  if [ "$has_path" = 1 ]; then
+    say "zshrc: ok — added the claude-fleet block to ~/.zshrc"
+  else
+    say "zshrc: ok — added the ~/.local/bin PATH line + the claude-fleet block to ~/.zshrc"
+  fi
 else
   fail zshrc "could not write ~/.zshrc"
 fi

@@ -45,10 +45,11 @@ exists — without it Remote Login admits every user), installs `--pubkey` as
 `--share-pool` copies the Claude pool as step 2b below describes. It stops at the
 first failed step, refuses (exit 3) when the login or `/Users/alice` already
 exists, never overwrites, and writes nothing in alice's home outside `.ssh/`,
-`.config/claude-fleet/accounts/` and `.zshrc`. That `.zshrc` is the claude-fleet
-block (issue #1165): alice's first terminal login installs claude-fleet by itself —
-step 5 below. It ends by printing the steps left for a human — the ones below that
-it can't do:
+`.config/claude-fleet/accounts/` and `.zshrc`. That `.zshrc` is the `~/.local/bin`
+PATH line (where Claude Code installs, issue #1191) followed by the claude-fleet
+block (issue #1165): alice's first terminal login installs Claude Code and
+claude-fleet by itself — step 5 below. It ends by printing the steps left for a
+human — the ones below that it can't do:
 
 Sign in as `alice` **once in the GUI** (at the console, or through Screen
 Sharing with fast user switching). That first graphical login creates the
@@ -152,7 +153,9 @@ per-user agent needs no `--home` flag. The equivalent explicit form is
 **A login opened with `fleet-login-new.sh` (step 1) needs nothing here** (issue
 #1165). Its `~/.zshrc` carries a one-time block: on alice's first interactive
 login (after the GUI sign-in above) `bin/fleet-login-bootstrap.sh` clones
-claude-fleet at `refs/tags/stable` into `~/.claude/fleet`, runs
+claude-fleet at `refs/tags/stable` into `~/.claude/fleet`, installs Claude Code
+when she has none (`~/.local/bin/claude`, the official native installer, run as
+her — issue #1191), runs
 `fleet-install-apply.sh` from an empty tree (every hook, command, skill and
 LaunchAgent, install-sync included), hooks up tmux, and brings her fleet up on the
 starter repo — `fleet-up.sh verkyyi/claude-fleet --seed`, which only looks
