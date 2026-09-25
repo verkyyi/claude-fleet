@@ -335,7 +335,7 @@ PHASE_MIN=5     # less headroom than this left in the tick ⇒ don't start a pha
 # cadence never rides the tick's gh/git latency, and rotating it would hand it back
 # the variable position it was moved out of. It runs in the head, budgeted like
 # everything else, and the tick budget still bounds it.
-PHASE_LIST=(sessmap issues git ctx usage scrape banner escalate snapshot)
+PHASE_LIST=(guide sessmap issues git ctx usage scrape banner escalate snapshot)
 
 # phase_budget NAME — seconds. Each has its own knob so one slow phase can be given
 # room without loosening the others; the tick budget is the backstop over all of them.
@@ -343,6 +343,7 @@ phase_budget() {
   case "$1" in
     quotawatch) printf '%s' "${FLEET_COLLECT_QUOTAWATCH_BUDGET:-30}" ;;
     sockets)    printf '%s' "${FLEET_COLLECT_SOCKETS_BUDGET:-20}" ;;
+    guide)      printf '%s' "${FLEET_COLLECT_GUIDE_BUDGET:-30}" ;;
     sessmap)    printf '%s' "${FLEET_COLLECT_SESSMAP_BUDGET:-30}" ;;
     issues)     printf '%s' "${FLEET_COLLECT_ISSUES_BUDGET:-45}" ;;
     git)        printf '%s' "${FLEET_COLLECT_GIT_BUDGET:-30}" ;;
@@ -489,6 +490,10 @@ fi
 # cached $SOCKETS (no re-probe). Read-only callers use this; writers loop $SOCKETS
 # themselves so they hold the -L label to target (see the escalation block).
 lw_all() { local s; for s in $SOCKETS; do tmux -L "$s" list-windows -a -F "$1" 2>/dev/null; done; }
+
+# First-login recovery is a library operation so isolated socket tests can run
+# the exact tick without invoking the collector's GitHub/cache phases.
+ph_guide() { fleet_guide_tick "$SOCKETS"; }
 
 # python3 powers the context% and usage caches (below). It's a hard dep for
 # those, so guard it once with a diagnostic to stderr (StandardErrorPath →

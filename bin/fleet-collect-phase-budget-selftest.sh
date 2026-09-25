@@ -173,7 +173,7 @@ hang_survivors() { sleep 2; pgrep -f "$HANGMARK" 2>/dev/null | wc -l | tr -d ' '
 # 1. CLEAN TICK — every phase runs, in the historical order, nothing deferred ------
 run_collector || fail "1: a full tick must exit 0"
 [ "$(hbget phase)" = "done" ] || fail "1: the tick must reach phase=done"
-exp='quotawatch sockets sessmap issues git ctx usage scrape banner escalate snapshot '
+exp='quotawatch sockets guide sessmap issues git ctx usage scrape banner escalate snapshot '
 [ "$(order)" = "$exp" ] || fail "1: phase order wrong.
   want: $exp
   got : $(order)"
@@ -212,7 +212,7 @@ ok "…and leaves NO residue: the wedged child is gone once the tick returns"
 # phases each inside its own budget can still sum past the interval.
 #
 # HEADFREE=1 is what makes "where it stopped" a fact about the mechanism (issue
-# #725): the four phases ahead of the wedge spend nothing, so `git` meets the tick
+# #725): the phases ahead of the wedge spend nothing, so `git` meets the tick
 # with all 10s of it, is CLAMPED to that (its own budget is 20), and `ctx` is the
 # first phase the tick has no room for — on any machine, not just an idle one.
 rm -f "$G/collect.phase.cursor"
@@ -239,7 +239,7 @@ ok "…and the wedge was clamped to the tick's room (${clamp}s of its own 20s), 
 TICK=120 run_collector || fail "5: the resuming tick must exit 0"
 # The deferred phases run FIRST, then the wrap picks up the ones this rotation has
 # not served yet — including `git`, which ran last tick and is now last in line.
-exp='quotawatch sockets ctx usage scrape banner escalate snapshot sessmap issues git '
+exp='quotawatch sockets ctx usage scrape banner escalate snapshot guide sessmap issues git '
 [ "$(order)" = "$exp" ] || fail "5: the tick must resume at the cursor and wrap.
   want: $exp
   got : $(order)"
