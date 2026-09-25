@@ -36,6 +36,10 @@
 #      child wears no tag; an orphan (parent gone) drops back into its own group
 #      with no `└` and no tag; a one-repo fleet stays
 #      byte-identical to grouping switched off with the cross-repo child present.
+#   G. 置顶 (issue #1170) — a pinned row leaves its repo group for `置顶 (n)` at
+#      the top, closed by one rule, wearing its repo tag (the heading names no
+#      repo); its repo heading no longer counts it; unpinning restores the frame
+#      byte for byte.
 # tmux runs on a PRIVATE socket via a PATH shim that logs every call; gh fails.
 set -uo pipefail
 
@@ -116,6 +120,33 @@ tmux set -wu -t 'alpha:issue-2' @expand
 # a repo with no session on screen draws no heading
 tmux kill-window -t 'alpha:issue-4'
 hasnt "A: an empty group has no heading" "$(rows)" "unknown repo"
+
+# --- G. the 置顶 group in a 2+ repo fleet (issue #1170) ---------------------------
+# Its OWN windows, so nothing the legs above left behind shapes it: pinme
+# (tokenledger) owns an expanded same-repo child, pkid — both float.
+tlhead() { printf '%s\n' "$1" | names | grep '^tokenledger (' ; }
+g_start=$(rows); tl_before=$(tlhead "$g_start")
+win pinme @repo o/tokenledger @issue 20 @expand 1
+win pkid  @repo o/tokenledger @issue 21 @origin o-tokenledger:issue-20
+before_raw=$(FLEET_SESSION=alpha bash "$ROWS"); before_side=$(side)
+tmux set -w -t 'alpha:pinme' @pin 1
+r=$(rows)
+eq    "G: 置顶 heads the list with its subtree, then one rule" \
+      "$(printf '%s\n' "$r" | names | sed 's/^──*$/RULE/' | sed -n '1,4p' | tr '\n' ' ')" \
+      "置顶 (2) pinme pkid RULE "
+eq    "G: exactly one rule" "$(printf '%s\n' "$r" | names | grep -c '^──*$')" "1"
+eq    "G: its repo heading no longer counts it" "$(tlhead "$r")" "$tl_before"
+has   "G: …the pinned row wears its repo tag" "$(printf '%s\n' "$r" | grep 'pinme')" "⇢tok"
+hasnt "G: …and no pin mark" "$r" "📌"
+s=$(side)
+eq    "G: sidebar — heading keyed hdr:pin, then the unmarked row" \
+      "$(printf '%s\n' "$s" | sed -n '1,2p' | awk -F'|' '{ print $1 ":" $2 ":" $4 }' | tr '\n' '/')" \
+      "hdr:pin:置顶 (2)/$(tmux display -p -t 'alpha:pinme' '#{window_id}')::pinme ⇢tok · 0/1 ✓/"
+tmux set -w -t 'alpha:pinme' -u @pin
+eq    "G: unpinned — raw bytes identical to before" "$(FLEET_SESSION=alpha bash "$ROWS")" "$before_raw"
+eq    "G: unpinned — sidebar identical to before"   "$(side)" "$before_side"
+tmux kill-window -t 'alpha:pkid'; tmux kill-window -t 'alpha:pinme'   # the legs below never saw them
+eq    "G: …and the frame is A's again" "$(rows)" "$g_start"
 
 # --- A2. a bare-name collision falls back to owner/name — for those two only ---
 fconf "$FLEET_CONF_DIR/fleets/alpha/repos/p-tokenledger.conf" p/tokenledger tl2

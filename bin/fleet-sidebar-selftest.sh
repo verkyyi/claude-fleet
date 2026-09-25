@@ -363,8 +363,20 @@ try:
           'sidebar order diverges from hub')
     check(compact[0][0] == w2 and compact[0][2] == '?', 'needs/question cue was lost')
     tm('set-option', '-w', '-t', w1, '@pin', '1')
-    check(row_data()[0][0] == w1, 'sidebar ignored hub pin')
+    # The 置顶 group (issue #1170): its heading, then the pinned row — bare, no
+    # `* ` — then ONE inert rule the view clips to its width.
+    pinned = row_data()
+    check(pinned[0][:2] == ['hdr', 'pin'] and pinned[0][3] == '置顶 (1)', 'no 置顶 heading above the pin')
+    check(pinned[1][0] == w1, 'sidebar ignored hub pin')
+    check(not pinned[1][3].startswith('* '), 'a pinned row still wears the old `* ` mark')
+    check(pinned[2][:2] == ['hdr', ''] and set(pinned[2][3]) == {'─'}, 'no rule closes the 置顶 group')
+    check(sum(1 for r in pinned if r[0] == 'hdr' and r[3].startswith('─')) == 1, 'more than one rule')
+    check(sidebar.key_of(pinned[0]) == 'hdr:pin' and sidebar.key_of(pinned[2]) == 'hdr',
+          'the 置顶 heading must be a fold stop and the rule never a cursor stop')
+    check(sidebar.tap('hdr:pin', 'hdr:pin') == 'select' and sidebar.placeholder('hdr:pin') == sidebar.PLACEHOLDER,
+          'the 置顶 heading names no repo: a tap only selects it')
     tm('set-option', '-uw', '-t', w1, '@pin')
+    check(not any(r[0] == 'hdr' for r in row_data()), 'the 置顶 frame outlived the pin')
     tm('set-option', '-w', '-t', w2, '@origin', 'issue-1')
     tm('set-option', '-w', '-t', w2, '@claude_state', 'done')
     check(w2 not in [r[0] for r in row_data()], 'folded child visible without current/needs exemption')

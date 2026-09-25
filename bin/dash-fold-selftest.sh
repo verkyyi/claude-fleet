@@ -211,7 +211,7 @@ tmux set-window-option -t "$W_root" @pin 1
 out=$(rows)
 eq "a pinned FOLDED parent floats with nothing but its exempt child" \
   "$(printf 'root\nred\nlonely\norph')" "$(order "$out")"
-contains "the pinned row is still marked 📌" "$(row_of root "$out")" "📌"
+not_contains "the pinned row wears no 📌 (issue #1170)" "$(row_of root "$out")" "📌"
 eq "… and still marked folded" "▸" "$(tree_of "$(row_of root "$out")")"
 tmux set-window-option -t "$W_root" -u @pin
 

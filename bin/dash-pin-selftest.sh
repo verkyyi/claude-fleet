@@ -13,8 +13,11 @@
 #      and grandchildren with it, indentation intact; a pinned CHILD of an
 #      unpinned root floats with ITS OWN descendants and sheds the └ indent;
 #      several pins sort among themselves by the order they'd have had anyway;
-#      only the window that carries @pin is marked 📌; unpinning leaves the list
-#      byte-identical to before it was pinned (no residue).
+#      unpinning leaves the list byte-identical to before it was pinned (no residue).
+#   C. the 置顶 group (issue #1170): the pinned rows sit under ONE `置顶 (n)`
+#      heading at the very top, closed by a single rule, in a one-repo fleet too;
+#      no row carries a pin mark (no 📌, no sidebar `* `) on either surface; no pin
+#      ⇒ no heading, no rule, output byte-identical.
 #
 # Needs a real tmux, on an ISOLATED socket via the PATH shim (never the live
 # server — see dash-marker-selftest.sh). tmux absent → SKIP cleanly. Exit 0 = pass.
@@ -152,6 +155,10 @@ base_out=$(rows); base_order=$(order "$base_out")
 eq "baseline: #503 grouping, window order" \
   "$(printf 'pA\ncA\ngA\npB\ncB')" "$base_order"
 not_contains "baseline: nothing is marked" "$base_out" "📌"
+not_contains "baseline: no 置顶 heading without a pin" "$base_out" "置顶"
+not_contains "baseline: no rule without a pin" "$base_out" "─"
+base_raw=$(FLEET_SESSION=fleetP FZF_COLUMNS=180 bash "$ROWS" 2>/dev/null)
+base_side=$(FLEET_SESSION=fleetP bash "$ROWS" --sidebar 2>/dev/null)
 
 # --- B1. a pin beats the status rank -----------------------------------------
 # pB goes RED (needs, rank 0) — it would normally head the list. pA is idle
@@ -163,11 +170,44 @@ pin "$W_pA"
 out=$(rows)
 eq "pin beats the status rank: pinned idle pA above red pB" \
   "$(printf 'pA\ncA\ngA\npB\ncB')" "$(order "$out")"
-contains "the pinned window is marked" "$(printf '%s\n' "$out" | grep ' pA ')" "📌"
-not_contains "a floated CHILD is not marked (the indent says why it is up there)" \
-  "$(printf '%s\n' "$out" | grep 'cA ')" "📌"
+not_contains "no row wears a 📌 (issue #1170 — the group says it)" "$out" "📌"
+# C. the 置顶 group: heading first, then the pinned block, then ONE rule, then
+# the rest — the heading counts the rows under it, the floated subtree included.
+dout=$(drows)
+eq "the list opens with the 置顶 heading" "置顶 (3)" "$(printf '%s\n' "$dout" | sed -n 1p)"
+rule_ln=$(printf '%s\n' "$dout" | awk '/^─+$/{print NR}')
+eq "exactly one rule, right after the pinned block (heading + pA cA gA)" "5" "$rule_ln"
+eq "the rule spans the list width (FZF_COLUMNS 180 − 4)" "176" \
+  "$(printf '%s\n' "$dout" | sed -n 5p | awk '{gsub(/─/,"x"); print length}')"
+eq "an unpinned row follows the rule" "pB" "$(order "$(printf '%s\n' "$dout" | sed -n '6,$p')" | head -1)"
+hdr_raw=$(FLEET_SESSION=fleetP FZF_COLUMNS=180 bash "$ROWS" 2>/dev/null | grep '置顶')
+eq "the heading is inert (hdr keys) and folds as \`pin\`" "hdr hdr pin" \
+  "$(printf '%s' "$hdr_raw" | awk -F"$US" '{print $1, $2, $4}')"
+rule_raw=$(FLEET_SESSION=fleetP FZF_COLUMNS=180 bash "$ROWS" 2>/dev/null | grep '───')
+eq "the rule is an inert hdr row with no 4th field" "hdr hdr 3" \
+  "$(printf '%s' "$rule_raw" | awk -F"$US" '{print $1, $2, NF}')"
+side=$(FLEET_SESSION=fleetP bash "$ROWS" --sidebar 2>/dev/null)
+eq "sidebar: 置顶 heading first, keyed hdr:pin" "hdr pin 置顶 (3)" \
+  "$(printf '%s\n' "$side" | sed -n 1p | awk -F"$US" '{print $1, $2, $4}')"
+eq "sidebar: the pinned row's label opens with its name (no \`* \`)" "pA · 0/2 ✓" \
+  "$(printf '%s\n' "$side" | sed -n 2p | awk -F"$US" '{print $4}')"
+eq "sidebar: the rule closes the block, key fields hdr + empty" "hdr||200" \
+  "$(printf '%s\n' "$side" | sed -n 5p | awk -F"$US" '{n=$4; gsub(/─/,"x",n); print $1 "|" $2 "|" length(n)}')"
 eq "a floated child keeps its └ tree cell" "└" "$(tree_of cA)"
 eq "a floated grandchild keeps its └ tree cell" "└" "$(tree_of gA)"
+# C2. ←/→ on the 置顶 heading folds the group (#1037's rail, one-repo fleet
+# too): the rows go, the red `needs` one would stay, the heading keeps its count.
+FOLD="$BIN/dash-fold-toggle.sh"
+bash "$FOLD" collapse hdr '' pin >/dev/null 2>&1
+eq "collapse on the 置顶 heading writes the \`pin\` token" "pin" \
+  "$(tmux show-option -t '=fleetP:' -qv @repo_fold)"
+dout=$(drows)
+eq "a folded 置顶 heading wears ▸ and keeps its count" "▸ 置顶 (3)" "$(printf '%s\n' "$dout" | sed -n 1p)"
+eq "… and hides the pinned rows (the rule stays)" "$(printf 'pB\ncB')" "$(order "$dout")"
+bash "$FOLD" expand 'hdr:pin' >/dev/null 2>&1
+eq "expand (sidebar key form) unsets the option again" "" \
+  "$(tmux show-option -t '=fleetP:' -qv @repo_fold)"
+eq "… and the pinned rows are back" "$(printf 'pA\ncA\ngA\npB\ncB')" "$(order "$(rows)")"
 tmux set-window-option -t "$W_pB" -u @claude_state
 
 # --- B2. pinning a parent floats its whole subtree ----------------------------
@@ -205,6 +245,10 @@ unpin "$W_cA"
 after_out=$(rows)
 eq "unpinning everything restores the baseline order" "$base_order" "$(order "$after_out")"
 not_contains "unpinning removes the mark" "$after_out" "📌"
+eq "no pin ⇒ the list is byte-identical to before (hub)" "$base_raw" \
+  "$(FLEET_SESSION=fleetP FZF_COLUMNS=180 bash "$ROWS" 2>/dev/null)"
+eq "no pin ⇒ the sidebar is byte-identical to before" "$base_side" \
+  "$(FLEET_SESSION=fleetP bash "$ROWS" --sidebar 2>/dev/null)"
 eq "unpinning leaves no @pin option behind" "" \
   "$(opt "$W_pA")$(opt "$W_pB")$(opt "$W_cA")$(opt "$W_cB")$(opt "$W_gA")"
 # closing a pinned window takes its pin with it — the option lives on the window.
