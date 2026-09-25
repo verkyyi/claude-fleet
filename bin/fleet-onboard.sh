@@ -32,9 +32,9 @@
 # `set step=<x>` refuses anything else (exit 2), so a typo can't strand the resume.
 #
 # THE STARTER REPO. A newcomer's fleet is started on claude-fleet itself
-# (`fleet-up.sh --seed`, C4 #1167), marked by FLEET_SEED=1 in the fleet conf. That
-# mark applies to the conf's OWN repo only — an added repo lives in an overlay and
-# is never the seed. `brief` tags it `[seed]` so the wizard can say plainly
+# (`fleet-up.sh --seed`, C4 #1167), marked by FLEET_SEED=1 in the fleet conf and
+# read ONLY through fleet_repo_is_seed — it marks the conf's OWN repo, never an
+# overlay. `brief` tags it `[seed]` so the wizard can say plainly
 # «this is the tool itself, not your repo» and never offer it as a place to work.
 #
 # Exit: 0 ok · 1 no such key (get) / write failed · 2 usage.
@@ -98,7 +98,7 @@ state_set() {
 }
 
 brief() {
-  local sess="" gh=1 conf seed_repo="" seed=0 r tag me="" step
+  local sess="" gh=1 conf r tag me="" step
   while [ $# -gt 0 ]; do
     case "$1" in
       --session) shift; sess="${1:-}" ;;
@@ -112,8 +112,6 @@ brief() {
     echo "fleet-onboard: not inside a fleet (session='${sess:-}')" >&2
     exit 3
   fi
-  seed=$( unset FLEET_SEED; . "$conf" >/dev/null 2>&1; printf '%s' "${FLEET_SEED:-0}" )
-  [ "$seed" = 1 ] && seed_repo=$( unset FLEET_REPO; . "$conf" >/dev/null 2>&1; fleet_norm_repo "${FLEET_REPO:-}" )
 
   echo "===== fleet ====="
   echo "session=$sess"
@@ -125,7 +123,7 @@ brief() {
   while IFS= read -r r; do
     [ -n "$r" ] || continue
     tag=""
-    [ -n "$seed_repo" ] && [ "$r" = "$seed_repo" ] && tag="  [seed] 起步仓库 = 工具本身，不是新人的仓库"
+    fleet_repo_is_seed "$sess" "$r" && tag="  [seed] 起步仓库 = 工具本身，不是新人的仓库"
     [ -n "$me" ] && [ -z "$tag" ] && [ "${r%%/*}" = "$me" ] && tag="  [mine]"
     echo "  $r$tag"
   done <<EOF
