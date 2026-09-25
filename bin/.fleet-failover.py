@@ -321,8 +321,8 @@ def settled(session, pane):
         raise ValueError('source is not a looping Codex worker between rounds')
 
 
-def validate(request, session, pane, sid):
-    """Recheck immediately before /exit; quota never means arbitrary needs=idle."""
+def validate(request, session, pane, sid, recovery=False):
+    """Recheck source identity and input; process quiescence is only for /exit."""
     r = read(request / 'request.json', {})
     expected = r.get('source', {})
     if (session, pane, sid) != (expected.get('session'), expected.get('pane'), expected.get('session_id')):
@@ -353,13 +353,14 @@ def validate(request, session, pane, sid):
     # wall cannot act on its background shells anyway, so after the grace they
     # are recorded (and stopped after /exit) instead of pinning it walled until
     # the reset — 89 vetoed retries over 2h on 2026-09-22 (#871).
-    if background_override(r, hard):
-        entries = background_inventory(source)
-        if entries: save(request / 'background.json', entries)
-        else: (request / 'background.json').unlink(missing_ok=True)
-    else:
-        (request / 'background.json').unlink(missing_ok=True)
-        quiet_processes(source)
+    if not recovery:
+        if background_override(r, hard):
+            entries = background_inventory(source)
+            if entries: save(request / 'background.json', entries)
+            else: (request / 'background.json').unlink(missing_ok=True)
+        else:
+            (request / 'background.json').unlink(missing_ok=True)
+            quiet_processes(source)
     for line in tm(session,'list-clients','-F','#{client_activity}|#{window_id}').splitlines():
         activity, win = line.split('|',1)
         if win == source['window'] and time.time()-int(activity) <= 30:
@@ -374,7 +375,7 @@ def validate(request, session, pane, sid):
         save(request / 'input.json', snapshot)
         if snapshot['state'] == 'draft':
             (request / 'unsent-draft.txt').write_text(snapshot['text'], encoding='utf-8')
-    if r.get('hard') and not hard:
+    if r.get('hard') and not hard and not recovery:
         raise ValueError('the observed quota failure is no longer current')
 
 
@@ -584,7 +585,7 @@ def recover(path, r):
     try:
         for name in ('input.json','unsent-draft.txt'):
             (path/name).unlink(missing_ok=True)
-        validate(path, source['session'], source['pane'], source['session_id'])
+        validate(path, source['session'], source['pane'], source['session_id'], recovery=True)
         if read(path/'input.json', {}).get('state') != 'empty':
             raise ValueError('quota recovered; waiting for the unsent draft to be handled')
         # The existing inbox/queue transport has exact pane/session guards. A
