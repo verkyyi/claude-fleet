@@ -1505,6 +1505,99 @@ if [ "$nwchk" != 0 ]; then
   fi
 fi
 
+# --- ingress: is the PUBLIC SSH entry reachable from OUTSIDE, and is it this host? (#1196) --
+# Opening victor's login (EPIC #1190) the public entry could not be verified from
+# this machine or from a laptop beside it — NAT hairpin, same subnet — and only a
+# box on the far side of the internet showed that the entry was port 22022. So
+# this row asks a PROBE host — FLEET_SSH_PROBE_HOST, an ssh destination that
+# reaches this machine only over the public internet (an alias in ~/.ssh/config
+# with key auth) — to `ssh-keyscan` the public entry FLEET_SSH_PUBLIC_HOST :
+# FLEET_SSH_PUBLIC_PORT (the two keys the welcome letter uses, #1195) and compares
+# the ed25519 host key it gets with the one sshd presents on 127.0.0.1 here: the
+# entry is open AND lands on THIS machine, not on whatever the router forwards
+# to today. Unset host or probe ⇒ no row (nothing to check). WARN, never FAIL: a
+# closed entry, one forwarded elsewhere, or a probe that cannot be reached is a
+# condition of the network, not a broken install. Every ssh / keyscan is bounded
+# — ConnectTimeout + keyscan -T under one wall-clock cap (`timeout`, else a perl
+# alarm armed in the child BEFORE the exec, which the kernel keeps across execve:
+# the #697 pattern, so a stalled link cannot stall the doctor) — and the verdict
+# is cached in global/ingress.probe: a PASS for FLEET_INGRESS_TTL (1h), a WARN
+# for at most 5 min so a fix shows on the next run; FLEET_INGRESS_TTL=0 re-probes
+# now. Cross-platform (macOS + Linux). FLEET_DOCTOR_INGRESS=0 silences it.
+igchk="${FLEET_DOCTOR_INGRESS:-$(_gconf_val FLEET_DOCTOR_INGRESS)}"
+ighost="${FLEET_SSH_PUBLIC_HOST:-$(_gconf_val FLEET_SSH_PUBLIC_HOST)}"
+igport="${FLEET_SSH_PUBLIC_PORT:-$(_gconf_val FLEET_SSH_PUBLIC_PORT)}"; igport=${igport:-22}
+igprobe="${FLEET_SSH_PROBE_HOST:-$(_gconf_val FLEET_SSH_PROBE_HOST)}"
+# _ig_bounded <secs> <cmd…> — run <cmd> under a hard wall-clock cap; 124 on expiry.
+_ig_bounded() {
+  _igb=$1; shift
+  if command -v timeout >/dev/null 2>&1; then timeout "$_igb" "$@"
+  elif command -v perl >/dev/null 2>&1; then
+    # The child arms its own alarm before exec (kept across execve); perl waits
+    # with a one-second-later backstop and exits 124 itself, so the shell never
+    # sees a signalled child (bash would print "Alarm clock" to stderr).
+    perl -e '
+      my $t = shift @ARGV; my $pid = fork; defined $pid or exit 127;
+      if ($pid == 0) { alarm $t; exec @ARGV; exit 127 }
+      $SIG{ALRM} = sub { kill "TERM", $pid; exit 124 }; alarm $t + 1;
+      waitpid $pid, 0; my $st = $?; exit(($st & 127) ? 124 : $st >> 8)' "$_igb" "$@"
+  else "$@"; fi
+}
+if [ "$igchk" != 0 ] && [ -n "$ighost" ] && [ -n "$igprobe" ]; then
+  igttl="${FLEET_INGRESS_TTL:-$(_gconf_val FLEET_INGRESS_TTL)}"; case "$igttl" in ''|*[!0-9]*) igttl=3600 ;; esac
+  igto="${FLEET_INGRESS_TIMEOUT:-$(_gconf_val FLEET_INGRESS_TIMEOUT)}"; case "$igto" in ''|*[!0-9]*|0) igto=20 ;; esac
+  igkey="$ighost:$igport@$igprobe"; igcache="$conf_dir/global/ingress.probe"
+  ignow=$(date +%s); igst=''; igmsg=''; igage=''
+  # 1. The cache: line 1 `<epoch> <host:port@probe> <pass|warn>`, line 2 the
+  #    message. Honoured for the same entry + probe only, inside its TTL.
+  if [ "$igttl" -gt 0 ] && [ -f "$igcache" ]; then
+    igc1=$(sed -n 1p "$igcache" 2>/dev/null)
+    igc_ts=${igc1%% *}; igc_rest=${igc1#* }; igc_key=${igc_rest%% *}; igc_st=${igc_rest#* }
+    case "$igc_ts" in ''|*[!0-9]*) igc_ts=0 ;; esac
+    case "$igc_st" in pass) igc_max=$igttl ;; warn) igc_max=$igttl; [ "$igc_max" -gt 300 ] && igc_max=300 ;; *) igc_max=0 ;; esac
+    igc_age=$((ignow - igc_ts))
+    if [ "$igc_key" = "$igkey" ] && [ "$igc_age" -ge 0 ] && [ "$igc_age" -lt "$igc_max" ]; then
+      igst=$igc_st; igmsg=$(sed -n 2p "$igcache" 2>/dev/null); igage=$igc_age
+    fi
+  fi
+  # 2. No usable cache: probe. Both scans are bounded; a hung link is a WARN, not
+  #    a hung doctor.
+  if [ -z "$igst" ] && ! printf '%s' "$igport" | grep -Eq '^[0-9]{1,5}$'; then
+    igst=warn; igmsg="FLEET_SSH_PUBLIC_PORT is not a port number: '$igport' — fix it in ~/.config/claude-fleet/fleet.settings (prefix+c); nothing probed"
+  elif [ -z "$igst" ] && { ! command -v ssh >/dev/null 2>&1 || ! command -v ssh-keyscan >/dev/null 2>&1; }; then
+    igst=warn; igmsg="ssh / ssh-keyscan not on PATH — cannot probe the public entry $ighost:$igport from $igprobe; install OpenSSH client tools. Silence: FLEET_DOCTOR_INGRESS=0"
+  elif [ -z "$igst" ]; then
+    # The key sshd presents HERE: 127.0.0.1 on ssh's own port, else on the public
+    # port (a host whose sshd listens on the public port directly, no NAT).
+    iglocal=$(_ig_bounded $((igto + 5)) ssh-keyscan -t ed25519 -T 5 127.0.0.1 2>/dev/null | awk '$2=="ssh-ed25519" { print $2, $3; exit }')
+    [ -n "$iglocal" ] || [ "$igport" = 22 ] || iglocal=$(_ig_bounded $((igto + 5)) ssh-keyscan -t ed25519 -T 5 -p "$igport" 127.0.0.1 2>/dev/null | awk '$2=="ssh-ed25519" { print $2, $3; exit }')
+    # The key the ENTRY presents to the probe host. BatchMode: never a prompt — a
+    # probe that wants a password or whose host key is unknown is a WARN naming it.
+    igcap=$((igto * 2 + 10))
+    igrem=$(_ig_bounded "$igcap" ssh -o BatchMode=yes -o ConnectTimeout="$igto" -o ServerAliveInterval=5 -o ServerAliveCountMax=3 "$igprobe" \
+      "ssh-keyscan -t ed25519 -T $igto -p $igport $ighost 2>&1" 2>&1); igrc=$?
+    igrkey=$(printf '%s\n' "$igrem" | awk '$2=="ssh-ed25519" { print $2, $3; exit }')
+    # Everything that is neither a key line nor a keyscan `#` comment is the reason.
+    igwhy=$(printf '%s\n' "$igrem" | grep -v '^#' | awk '$2!="ssh-ed25519" && NF' | head -2 | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+    [ -n "$igwhy" ] || { [ "$igrc" -eq 124 ] && igwhy="timed out after ${igcap}s"; }
+    igfix="check the router / firewall forward for port $igport and that sshd (Remote Login) is on; the probe is \`ssh $igprobe ssh-keyscan -p $igport $ighost\` (docs/HOST.md#ingress). Silence: FLEET_DOCTOR_INGRESS=0"
+    if [ -n "$igrkey" ] && [ -z "$iglocal" ]; then
+      igst=warn; igmsg="public entry $ighost:$igport answers from $igprobe, but no sshd answers on 127.0.0.1 here (port 22 or $igport) — cannot tell whether that is this host; turn on Remote Login (System Settings → General → Sharing) and re-run. Silence: FLEET_DOCTOR_INGRESS=0"
+    elif [ -n "$igrkey" ] && [ "$igrkey" = "$iglocal" ]; then
+      igst=pass; igmsg="public entry $ighost:$igport reachable from $igprobe and is THIS host (ed25519 host key matches sshd on 127.0.0.1) — what a newcomer's \`ssh -p $igport <login>@$ighost\` reaches"
+    elif [ -n "$igrkey" ]; then
+      igst=warn; igmsg="public entry $ighost:$igport answers from $igprobe with a DIFFERENT host key than sshd on 127.0.0.1 — the entry lands on ANOTHER machine (the router forwards port $igport elsewhere?); $igfix"
+    elif [ "$igrc" -eq 255 ]; then
+      igst=warn; igmsg="probe host $igprobe unreachable (${igwhy:-ssh exit 255}) — nothing can be said about the public entry; fix the probe (a ~/.ssh/config alias with key auth and its host key already known, on a machine OUTSIDE this network) or point FLEET_SSH_PROBE_HOST elsewhere. Silence: FLEET_DOCTOR_INGRESS=0"
+    else
+      igst=warn; igmsg="public entry $ighost:$igport NOT reachable from $igprobe (${igwhy:-keyscan returned nothing, exit $igrc}) — a newcomer's \`ssh -p $igport <login>@$ighost\` will not connect; $igfix"
+    fi
+    mkdir -p "$conf_dir/global" 2>/dev/null && printf '%s %s %s\n%s\n' "$ignow" "$igkey" "$igst" "$igmsg" > "$igcache.tmp.$$" 2>/dev/null && mv -f "$igcache.tmp.$$" "$igcache" 2>/dev/null
+  fi
+  [ -n "$igage" ] && igmsg="$igmsg (cached ${igage}s ago; FLEET_INGRESS_TTL=0 re-probes)"
+  if [ "$igst" = pass ]; then pass ingress "$igmsg"; else warn ingress "$igmsg"; fi
+fi
+
 # --- status line (optional: conf/statusline.sh is jq-gated) ---
 # The optional Claude Code status line (conf/statusline.sh, wired install-time
 # into settings.json's statusLine — see docs/INSTALL.md step 8b) renders a
