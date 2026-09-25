@@ -58,6 +58,9 @@
 #                             planner's hard-wall grace (#871). Without it the move
 #                             does not look at background work at all (the historic
 #                             behaviour). --dry-run lists what it would stop.
+#         --target-account L  operator-selected destination for ONE explicit window;
+#                             requires fresh 5h and 7d quota below 95% (the 85%
+#                             automatic ceiling is unchanged).
 #
 # Never touched: panels (dash/plan/backlog), the operator hub (@hub), windows with no
 # Claude process, raw scratch windows whose cwd is FLEET_MAIN without a registry
@@ -305,6 +308,12 @@ migrate_one_body() {
     fi
     return 0
   fi
+  # The preview and the actual move are separate invocations. Re-read the chosen
+  # account after inventory, immediately before the first state change or /exit.
+  if [ -n "$TARGET_ACCOUNT" ] && ! bash "$BIN/fleet-manual-sub.sh" check "$SESS" "$TARGET_ACCOUNT"; then
+    say "  – $name ($wid): target quota changed or cannot be verified — left running"
+    skipped=$((skipped+1)); return 0
+  fi
   if [ -n "$bgjson" ]; then
     bgdir="$MIGRATE_TMP/bg-${wid//[^A-Za-z0-9]/_}"; mkdir -p "$bgdir"
     printf '%s' "$bgjson" > "$bgdir/background.json"
@@ -369,7 +378,15 @@ migrate_one_body() {
   # --model rides BEFORE --resume (and on the fresh-launch fallback too) so
   # fleet-claude.sh sees an explicit model and skips its FLEET_MODEL default.
   local mflag=""; [ -n "$MODEL" ] && mflag=" --model '$MODEL'"
-  local cmd="'$LAUNCH'$mflag --resume '$sid'${nudge:+ '$nudge'} || '$LAUNCH'$mflag; exec \$SHELL"
+  local pin=''
+  # A per-window binding also clears any ambient API-key auth in fleet-claude.sh
+  # and replaces an inherited Codex FLEET_ACCOUNT_TARGET from the caller.
+  if [ -n "$TARGET_ACCOUNT" ]; then
+    local target_json
+    printf -v target_json '{"agent":"claude","label":"%s"}' "$ACTIVE"
+    pin="FLEET_ACCOUNT_SELECTED=1 FLEET_ACCOUNT_LABEL='$ACTIVE' FLEET_ACCOUNT_TARGET='$target_json' "
+  fi
+  local cmd="${pin}'$LAUNCH'$mflag --resume '$sid'${nudge:+ '$nudge'} || ${pin}'$LAUNCH'$mflag; exec \$SHELL"
   # 3. the SessionEnd hook closes the window (and records the ledger row) …
   for ((i=1; i<=CLOSE_WAIT; i++)); do
     window_closed "$wid" && break
@@ -456,7 +473,7 @@ migrate_one_body() {
 # Sourced (fleet-migrate-selftest.sh pins the pure matrices) → define only; a
 # direct run dispatches. Same guard idiom as fleet-account.sh.
 migrate_main() {
-  MODE=""; ACCOUNT=""; NUDGE=""; NUDGE_SET=0; DRY=0; TOAST=0; SESS=""; MODEL=""; WIDS=(); FORCE_BG=0
+  MODE=""; ACCOUNT=""; TARGET_ACCOUNT=""; NUDGE=""; NUDGE_SET=0; DRY=0; TOAST=0; SESS=""; MODEL=""; WIDS=(); FORCE_BG=0
   local pinned_target='' quota_request='' verified=0
   FLEET_MIGRATION_LOCKED=''
   MIGRATE_TMP=''
@@ -467,6 +484,8 @@ migrate_main() {
       --force-bg) FORCE_BG=1; shift ;;
       --account) MODE=account; ACCOUNT="${2:-}"; shift 2 ;;
       --account=*) MODE=account; ACCOUNT="${1#--account=}"; shift ;;
+      --target-account) [ -n "${2:-}" ] || { echo 'fleet-migrate: --target-account needs a label' >&2; return 2; }; TARGET_ACCOUNT="$2"; shift 2 ;;
+      --target-account=*) TARGET_ACCOUNT="${1#--target-account=}"; [ -n "$TARGET_ACCOUNT" ] || { echo 'fleet-migrate: --target-account needs a label' >&2; return 2; }; shift ;;
       --session) SESS="${2:-}"; shift 2 ;;
       --session=*) SESS="${1#--session=}"; shift ;;
       --target-file) pinned_target="${2:-}"; shift 2 ;;
@@ -486,6 +505,10 @@ migrate_main() {
   done
   [ -n "$MODE" ] || [ "${#WIDS[@]}" -gt 0 ] || { sed -n '30,59p' "$0" >&2; return 2; }
   [ "$MODE" = account ] && [ -z "$ACCOUNT" ] && { echo "fleet-migrate: --account needs a label" >&2; return 2; }
+  if [ -n "$TARGET_ACCOUNT" ]; then
+    [ -z "$MODE" ] && [ "${#WIDS[@]}" = 1 ] && [ -z "$pinned_target" ] \
+      || { echo 'fleet-migrate: --target-account needs exactly one explicit window' >&2; return 2; }
+  fi
   MODEL=$(printf '%s' "$MODEL" | LC_ALL=C tr -cd 'A-Za-z0-9._-')   # embedded single-quoted in the launch line
 
   [ -n "$SESS" ] || SESS=$(fleet_current_session)
@@ -536,6 +559,11 @@ migrate_main() {
   done
   ACTIVE=$("$BIN/fleet-account.sh" active 2>/dev/null)
   ACTIVE_BENCHED=0; [ -n "$ACTIVE" ] && acct_benched "$ACTIVE" && ACTIVE_BENCHED=1   # ⇒ no account is eligible (#567)
+  if [ -n "$TARGET_ACCOUNT" ]; then
+    bash "$BIN/fleet-manual-sub.sh" check "$SESS" "$TARGET_ACCOUNT" || return 1
+    ACTIVE="$TARGET_ACCOUNT"
+    ACTIVE_BENCHED=0 # operator confirmed the fresh 85–95% exception
+  fi
 
   moved=0; skipped=0; REPORT=""
   MIGRATE_TMP=$(mktemp -d "${TMPDIR:-/tmp}/fleet-migrate.XXXXXX") || return 1
