@@ -8,7 +8,7 @@ trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/bin" "$WORK/launchd" "$WORK/shim" "$WORK/core" "$WORK/home/.ssh" "$WORK/conf/global" "$WORK/conf/fleets/fleet" "$WORK/accounts"
 cp "$BIN/fleet-doctor-onboard.sh" "$BIN/fleet-lib.sh" "$WORK/bin/"
 touch "$WORK/launchd/com.claude-fleet.collect.plist.tmpl" "$WORK/launchd/com.claude-fleet.spinner.plist.tmpl"
-for cmd in awk stat id dirname; do ln -s "$(command -v "$cmd")" "$WORK/core/$cmd"; done
+for cmd in awk find id dirname; do ln -s "$(command -v "$cmd")" "$WORK/core/$cmd"; done
 
 cat > "$WORK/shim/gh" <<'EOF'
 #!/bin/sh

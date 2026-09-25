@@ -16,8 +16,7 @@ for f in "$accounts"/*; do
   [ -f "$f" ] || continue
   case "${f##*/}" in .*|*~|*.conf) continue ;; esac
   tokens=$((tokens + 1))
-  mode=$(stat -f %Lp "$f" 2>/dev/null || stat -c %a "$f" 2>/dev/null || true)
-  [ -s "$f" ] && [ "$mode" = 600 ] || bad_tokens=1
+  [ -s "$f" ] && [ -n "$(find "$f" -type f -perm 600 2>/dev/null)" ] || bad_tokens=1
 done
 [ "$tokens" -gt 0 ] && [ "$bad_tokens" = 0 ] || add 'Claude accounts (nonempty 600 token files)'
 
