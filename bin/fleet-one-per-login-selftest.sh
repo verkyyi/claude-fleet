@@ -15,12 +15,16 @@
 #      every value unchanged, drops the fleet conf's (never-read) global-only key,
 #      and the settings file is never listed as a fleet.
 #   7. the first fleet on a login opens the onboarding guide (issue #1169): ONE
-#      `guide` window seeded /fleet-onboard, @pin=1, and global/onboarded written.
+#      `guide` window seeded /fleet-onboard, @pin=1, and — once the agent has run
+#      `fleet-onboard.sh brief` (global/guide.spoke, issue #1215) — onboarded.
 #      A later new fleet (marker present), an existing fleet coming back up, and
 #      FLEET_ONBOARD=0 open none — and a later new fleet prints exactly what
 #      FLEET_ONBOARD=0 does. Legs 1-6 run with FLEET_ONBOARD=0: their old outputs.
-#   8. a failed guide stays unmarked; a cooled-down collector tick restarts it
-#      once in the same scratch, then records onboarded after the agent runs.
+#   8. a guide that never SPOKE stays unmarked (issue #1215): a claude that only
+#      prints `Unknown command` is running, not alive — no onboarded; a tick
+#      inside its speak grace leaves it be, a cooled-down tick restarts it once
+#      in the same scratch, a dead agent likewise; onboarded lands only after an
+#      agent runs brief, and then no tick restarts anything.
 #   9. cf --guide opens/focuses one guide, reuses a live guide, and respawns a
 #      guide that fell back to a bare shell.
 # The hub, collector, disk gate and trust check are stubbed in a sandbox bin/;
@@ -221,14 +225,16 @@ leg "6 one settings file per login (dual-read)"
 # ---- 7. the first fleet on a login opens the guide, pinned (issue #1169) ----
 export FLEET_CONF_DIR="$WORK/conf7"; unset FLEET_ONBOARD
 # The guide is a real scratch: it needs a checkout with a commit + origin/master,
-# and its agent is a stub that records its seed and sleeps.
+# and its agent is a stub that records its seed, runs the wizard's step 0 (the
+# brief — that is what makes it ALIVE, issue #1215) and sleeps.
 g="$WORK/src/g"; mkrepo "$g" o/g
 git -C "$g" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
 git -C "$g" update-ref refs/remotes/origin/master HEAD
 rm -f "$SB/fleet-claude.sh"
 cat > "$SB/fleet-claude.sh" <<EOF
 #!/bin/bash
-printf '%s\n' "\$*" > "$WORK/guide-seed"; exec sleep 3600
+printf '%s\n' "\$*" > "$WORK/guide-seed"
+bash "$SB/fleet-onboard.sh" brief --no-gh; exec sleep 3600
 EOF
 chmod +x "$SB/fleet-claude.sh"
 wins() { "$REAL_TMUX" -S "$SOCKD/fleet" list-windows -t fleet -F "$1" 2>/dev/null; }
@@ -241,6 +247,8 @@ has "7 says so" "$out" "opened the onboarding guide"
 eq "7 one guide" "$(wins '#{window_name}' | grep -cx guide)" 1
 eq "7 guide pinned" "$(wins '#{window_name} #{@pin} #{@raw}' | grep '^guide ')" "guide 1 1"
 [ -f "$marker" ] || fail "7: global/onboarded not written"
+[ -f "$FLEET_CONF_DIR/global/guide.spoke" ] || fail "7: brief did not leave global/guide.spoke"
+[ ! -e "$FLEET_CONF_DIR/global/onboard.pending" ] || fail "7: pending marker left behind a spoken guide"
 for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$WORK/guide-seed" ] && break; sleep 0.3; done
 eq "7 seeded" "$(cat "$WORK/guide-seed" 2>/dev/null)" "/fleet-onboard"
 "$REAL_TMUX" -S "$SOCKD/fleet" kill-server 2>/dev/null
@@ -265,48 +273,99 @@ hasnt "7 off: silent" "$out3" "guide"
 "$REAL_TMUX" -S "$SOCKD/fleet" kill-server 2>/dev/null
 leg "7 first fleet opens the pinned guide, once"
 
-# ---- 8. failed agent stays unmarked; one cooled-down tick restarts it ----
+# ---- 8. a guide that never spoke stays unmarked; ticks restart it (#1204/#1215) ----
 export FLEET_CONF_DIR="$WORK/conf8"; unset FLEET_ONBOARD
 launches="$WORK/guide-launches"
+# #1210 ③ verbatim: claude comes up, the command is not installed, it prints
+# `Unknown command` and sits at its prompt — RUNNING, never SPOKE.
+cat > "$SB/fleet-claude.sh" <<EOF
+#!/bin/bash
+printf 'attempt\n' >> "$launches"
+printf 'Unknown command: %s\n' "\$*"; exec sleep 3600
+EOF
+chmod +x "$SB/fleet-claude.sh"
+out=$(FLEET_GUIDE_WAIT_SECS=2 up o/g "$g"); rc=$?
+eq "8 rc" "$rc" 0
+has "8 silence explained" "$out" "has not spoken yet"
+has "8 collector named" "$out" "collector will"
+marker="$FLEET_CONF_DIR/global/onboarded"
+[ ! -e "$marker" ] || fail "8: silent agent wrote onboarded"
+[ ! -e "$FLEET_CONF_DIR/global/guide.spoke" ] || fail "8: silent agent left guide.spoke"
+[ -f "$FLEET_CONF_DIR/global/onboard.pending" ] || fail "8: missing retry marker"
+eq "8 first attempt" "$(wc -l < "$launches" | tr -d ' ')" 1
+eq "8 one guide window" "$(wins '#{window_name}' | grep -cx guide)" 1
+lib 'fleet_guide_running fleet' || fail "8: silent agent not seen as running"
+lib 'fleet_guide_alive fleet' && fail "8: silent agent counted as alive"
+has "8 pane shows the failure" "$(tmux -L fleet capture-pane -p -t fleet:guide)" "Unknown command: /fleet-onboard"
+
+# A tick inside the speak grace leaves the silent agent alone — a real claude may
+# just be slow to reach its brief. cf --guide reuses it too, never kills it.
+FLEET_GUIDE_COOLDOWN=3600 FLEET_GUIDE_SPEAK_SECS=3600 lib 'fleet_guide_tick fleet'
+eq "8 in grace" "$(wc -l < "$launches" | tr -d ' ')" 1
+lib 'fleet_guide_open fleet' || fail "8: open refused a running guide"
+eq "8 open reuses a running guide" "$(wc -l < "$launches" | tr -d ' ')" 1
+# The grace elapsed (retry=0) and it still has not spoken: respawn in the same
+# window and scratch — and a still-silent restart is STILL not onboarded.
+printf '0\n' > "$FLEET_CONF_DIR/global/onboard.retry"
+FLEET_GUIDE_COOLDOWN=3600 FLEET_GUIDE_SPEAK_SECS=3600 lib 'fleet_guide_tick fleet'
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  [ "$(wc -l < "$launches" | tr -d ' ')" = 2 ] && break
+  sleep 0.2
+done
+eq "8 silent: restarted once" "$(wc -l < "$launches" | tr -d ' ')" 2
+eq "8 reused guide window" "$(wins '#{window_name}' | grep -cx guide)" 1
+sleep 1.2
+FLEET_GUIDE_COOLDOWN=3600 FLEET_GUIDE_SPEAK_SECS=3600 lib 'fleet_guide_tick fleet'
+[ ! -e "$marker" ] || fail "8: restarted silent agent wrote onboarded"
+eq "8 silent restart stays put" "$(wc -l < "$launches" | tr -d ' ')" 2
+
+# A DEAD agent (exits at once, window at a bare shell) takes the shorter clock;
+# a cooled-down tick restarts it in the same window.
 cat > "$SB/fleet-claude.sh" <<EOF
 #!/bin/bash
 printf 'attempt\n' >> "$launches"
 exit 7
 EOF
 chmod +x "$SB/fleet-claude.sh"
-out=$(FLEET_GUIDE_WAIT_SECS=2 up o/g "$g"); rc=$?
-eq "8 rc" "$rc" 0
-has "8 failure explained" "$out" "collector will retry"
-marker="$FLEET_CONF_DIR/global/onboarded"
-[ ! -e "$marker" ] || fail "8: failed agent wrote onboarded"
-[ -f "$FLEET_CONF_DIR/global/onboard.pending" ] || fail "8: missing retry marker"
-eq "8 first attempt" "$(wc -l < "$launches" | tr -d ' ')" 1
-eq "8 one guide window" "$(wins '#{window_name}' | grep -cx guide)" 1
+printf '0\n' > "$FLEET_CONF_DIR/global/onboard.retry"
+FLEET_GUIDE_COOLDOWN=3600 FLEET_GUIDE_SPEAK_SECS=3600 lib 'fleet_guide_tick fleet'
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  [ "$(wc -l < "$launches" | tr -d ' ')" = 3 ] && break
+  sleep 0.2
+done
+eq "8 dead: restarted once" "$(wc -l < "$launches" | tr -d ' ')" 3
+for _ in 1 2 3 4 5 6 7 8 9 10; do lib 'fleet_guide_running fleet' || break; sleep 0.2; done
+lib 'fleet_guide_running fleet' && fail "8: exited agent still seen as running"
+[ ! -e "$marker" ] || fail "8: dead agent wrote onboarded"
+FLEET_GUIDE_COOLDOWN=3600 FLEET_GUIDE_SPEAK_SECS=3600 lib 'fleet_guide_tick fleet'
+eq "8 dead: cooldown holds" "$(wc -l < "$launches" | tr -d ' ')" 3
 
-# A tick inside the cooldown leaves the failed window alone. After the clock
-# advances, respawn reuses that window and its scratch worktree.
-FLEET_GUIDE_COOLDOWN=3600 lib 'fleet_guide_tick fleet'
-eq "8 cooldown" "$(wc -l < "$launches" | tr -d ' ')" 1
+# An agent that runs the brief: the next cooled-down tick restarts into it, it
+# leaves guide.spoke, the tick after that records onboarded — and no tick
+# restarts anything again.
 cat > "$SB/fleet-claude.sh" <<EOF
 #!/bin/bash
 printf 'attempt\n' >> "$launches"
-exec sleep 3600
+bash "$SB/fleet-onboard.sh" brief --no-gh; exec sleep 3600
 EOF
 chmod +x "$SB/fleet-claude.sh"
 printf '0\n' > "$FLEET_CONF_DIR/global/onboard.retry"
-FLEET_GUIDE_COOLDOWN=3600 lib 'fleet_guide_tick fleet'
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-  [ "$(wc -l < "$launches" | tr -d ' ')" = 2 ] && break
+FLEET_GUIDE_COOLDOWN=3600 FLEET_GUIDE_SPEAK_SECS=3600 lib 'fleet_guide_tick fleet'
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+  [ -f "$FLEET_CONF_DIR/global/guide.spoke" ] && break
   sleep 0.2
 done
-eq "8 restarted once" "$(wc -l < "$launches" | tr -d ' ')" 2
+eq "8 speaking: restarted once" "$(wc -l < "$launches" | tr -d ' ')" 4
+[ -f "$FLEET_CONF_DIR/global/guide.spoke" ] || fail "8: brief did not leave guide.spoke"
 eq "8 reused guide window" "$(wins '#{window_name}' | grep -cx guide)" 1
-FLEET_GUIDE_COOLDOWN=3600 lib 'fleet_guide_tick fleet'
-[ -f "$marker" ] || fail "8: recovered agent not marked onboarded"
+FLEET_GUIDE_COOLDOWN=3600 FLEET_GUIDE_SPEAK_SECS=3600 lib 'fleet_guide_tick fleet'
+[ -f "$marker" ] || fail "8: spoken agent not marked onboarded"
 [ ! -e "$FLEET_CONF_DIR/global/onboard.pending" ] || fail "8: pending marker not cleared"
-eq "8 no extra restart" "$(wc -l < "$launches" | tr -d ' ')" 2
+printf '0\n' > "$FLEET_CONF_DIR/global/onboard.retry"
+lib 'fleet_guide_tick fleet'
+eq "8 no extra restart" "$(wc -l < "$launches" | tr -d ' ')" 4
 "$REAL_TMUX" -S "$SOCKD/fleet" kill-server 2>/dev/null
-leg "8 failed guide restarts once after cooldown"
+leg "8 a guide that never spoke is not onboarded; ticks restart silent and dead guides"
 
 # ---- 9. cf --guide recalls the existing or failed guide (issue #1171) ----
 export FLEET_CONF_DIR="$WORK/conf9" FLEET_ONBOARD=0
@@ -357,10 +416,10 @@ pane_pid=$(tmux -L fleet display-message -p -t fleet:guide '#{pane_pid}')
 child=$(pgrep -P "$pane_pid" | head -n1)
 [ -n "$child" ] && kill "$child"
 for _ in 1 2 3 4 5 6 7 8 9 10; do
-  lib 'fleet_guide_alive fleet' || break
+  lib 'fleet_guide_running fleet' || break
   sleep 0.2
 done
-lib 'fleet_guide_alive fleet' && fail "9: killed agent still considered alive"
+lib 'fleet_guide_running fleet' && fail "9: killed agent still considered running"
 tmux -L fleet select-window -t fleet:plan
 out=$(guide); eq "9 bare-shell rc" "$?" 0
 for _ in 1 2 3 4 5 6 7 8 9 10; do

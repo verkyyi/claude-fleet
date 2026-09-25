@@ -45,6 +45,13 @@ start over (`~/.claude/fleet/bin/fleet-onboard.sh reset`, then continue at step 
 ~/.claude/fleet/bin/fleet-onboard.sh brief
 ```
 
+Running it is also how the fleet learns the guide is really up (issue #1215):
+the first `brief` inside a fleet leaves `$FLEET_CONF_DIR/global/guide.spoke`,
+and until that exists a guide window counts as *not yet spoken* — `onboarded` is
+never recorded over it, `fleet-doctor` keeps naming the guide as missing, and
+the collector reopens it after a grace. So this is the first thing you do, before
+any greeting.
+
 - **No fleet** (`FLEET_REPO` empty, or `brief` exits 3) → one line: *"not inside
   a fleet — open this from a fleet window."* Stop.
 - **Worker seat** (`seat=worker`) → one line: *"/fleet-onboard runs in its own

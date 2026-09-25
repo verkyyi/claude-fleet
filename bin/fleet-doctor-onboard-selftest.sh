@@ -75,7 +75,14 @@ needs 'replace temporary SSH key'
 printf 'ssh-ed25519 AAAA normal-key\n' > "$WORK/home/.ssh/authorized_keys"
 rm "$WORK/conf/global/onboarded"
 needs 'onboarding guide'
+# A running guide that never spoke (no guide.spoke — `Unknown command`, #1215)
+# is not a guide; one that spoke and is still running is; one that spoke and
+# then died is not (only onboarded survives the guide closing).
+needs 'onboarding guide' TEST_GUIDE=live
+touch "$WORK/conf/global/guide.spoke"
 ready TEST_GUIDE=live
+needs 'onboarding guide'
+rm "$WORK/conf/global/guide.spoke"
 touch "$WORK/conf/global/onboarded"
 
 # Exercise the real doctor dispatch as well as the helper: enrollment controls

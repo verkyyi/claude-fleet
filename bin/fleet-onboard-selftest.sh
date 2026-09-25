@@ -17,6 +17,10 @@
 #   6. THE SKILL MATCHES THE SCRIPT — every `set step=<x>` in the skill is a step
 #      the script accepts, every fleet script it names exists in bin/, and it
 #      carries the installer's marker line.
+#   7. SPOKE MARKER (issue #1215) — the first `brief` inside a fleet writes
+#      global/guide.spoke (0600-ish, a timestamp), a later brief leaves the
+#      first stamp alone, `reset` keeps it, and a brief outside a fleet never
+#      writes one.
 #
 # Hermetic: a temp FLEET_CONF_DIR, --session + --no-gh (no tmux, no network).
 set -uo pipefail
@@ -103,6 +107,21 @@ ok "reset starts over"
 bash "$OB" brief --session no-such-fleet --no-gh >/dev/null 2>&1; rc=$?
 [ "$rc" = 3 ] || fail "brief outside a fleet: exit $rc, want 3"
 ok "brief outside a fleet exits 3"
+
+# --- 7. the spoke marker (issue #1215) ---------------------------------------
+SPOKE="$FLEET_CONF_DIR/global/guide.spoke"
+[ -f "$SPOKE" ] || fail "brief inside a fleet did not write global/guide.spoke"
+first=$(cat "$SPOKE")
+[ -n "$first" ] || fail "guide.spoke is empty — it should carry when the guide first spoke"
+sleep 1.1
+brief >/dev/null || fail "second brief failed"
+[ "$(cat "$SPOKE")" = "$first" ] || fail "a later brief overwrote the first spoke stamp"
+bash "$OB" reset
+[ -f "$SPOKE" ] || fail "reset removed guide.spoke — it forgets progress, not that the guide spoke"
+rm -f "$SPOKE"
+bash "$OB" brief --session no-such-fleet --no-gh >/dev/null 2>&1
+[ ! -e "$SPOKE" ] || fail "brief outside a fleet wrote guide.spoke"
+ok "brief writes guide.spoke once; reset keeps it; no fleet, no marker"
 
 # --- 6. the skill matches the script -----------------------------------------
 [ -r "$SKILL" ] || fail "commands/fleet-onboard.md missing"

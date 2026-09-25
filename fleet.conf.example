@@ -67,16 +67,22 @@ FLEET_BASE_BRANCH="main"
 
 # First-fleet guide (issue #1169). The first time this login's fleet is created,
 # fleet-up opens the /fleet-onboard wizard as a `guide` scratch pinned to the top
-# of the session list, and writes $FLEET_CONF_DIR/global/onboarded only after its
-# agent stays running. A failed first attempt is retried by the collector. Only a
-# brand-new fleet enables this — an existing fleet without the marker does not.
-# Set to 0 to create fleets without it. GLOBAL (read before any fleet exists).
+# of the session list, and writes $FLEET_CONF_DIR/global/onboarded only after the
+# guide has SPOKEN — its `fleet-onboard.sh brief` left global/guide.spoke (issue
+# #1215) — and its agent is still running. A first attempt that died, or that
+# came up and only printed `Unknown command`, is retried by the collector: a dead
+# guide after FLEET_GUIDE_COOLDOWN, a running-but-silent one after
+# FLEET_GUIDE_SPEAK_SECS. Only a brand-new fleet enables this — an existing fleet
+# without the marker does not. Set to 0 to create fleets without it. GLOBAL
+# (read before any fleet exists).
 # @label=Open the guide on a first fleet @group=spawn @tier=advanced @scope=global @edit=bool
 #FLEET_ONBOARD=1
 # @label=Guide startup wait @group=spawn @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_GUIDE_WAIT_SECS=30
 # @label=Guide retry cooldown @group=spawn @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_GUIDE_COOLDOWN=60
+# @label=Guide grace to speak before restart @group=spawn @tier=internal @scope=global @edit=int @unit=sec
+#FLEET_GUIDE_SPEAK_SECS=180
 
 # ── Per-repo settings (issue #978) ──────────────────────────────────────────
 # A fleet hosting 2+ repos keeps each further repo's conf at

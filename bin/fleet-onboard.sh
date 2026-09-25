@@ -31,6 +31,14 @@
 #   done    finished — calling the wizard back just offers the handoff again
 # `set step=<x>` refuses anything else (exit 2), so a typo can't strand the resume.
 #
+# THE SPOKE MARKER (issue #1215). The first `brief` that runs inside a fleet also
+# writes $FLEET_CONF_DIR/global/guide.spoke — the wizard has genuinely reached
+# its step 0 on this login. fleet-lib's fleet_guide_alive requires it: a guide
+# window whose claude came up but only printed `Unknown command: /fleet-onboard`
+# (#1210 ③) is running and has NOT spoken, so fleet-up / the collector never
+# record `onboarded` over it and the collector reopens it instead. Written here
+# ONLY, read everywhere else; `reset` forgets the progress, not that it spoke.
+#
 # THE STARTER REPO. A newcomer's fleet is started on claude-fleet itself
 # (`fleet-up.sh --seed`, C4 #1167), marked by FLEET_SEED=1 in the fleet conf and
 # read ONLY through fleet_repo_is_seed — it marks the conf's OWN repo, never an
@@ -50,6 +58,16 @@ STEPS="repo issue watch merge handoff done"
 usage() { sed -n '5,9p' "$0" | sed 's/^# //' >&2; exit 2; }
 
 state_file() { printf '%s/global/onboard.state' "$FLEET_CONF_DIR"; }
+spoke_file() { printf '%s/global/guide.spoke' "$FLEET_CONF_DIR"; }
+
+# The wizard reached step 0: record it once (the first time it spoke stays).
+# Best effort — a brief that could not leave the marker is still a brief.
+mark_spoke() {
+  local f; f=$(spoke_file)
+  [ -e "$f" ] && return 0
+  mkdir -p "${f%/*}" 2>/dev/null && date '+%Y-%m-%d %H:%M:%S' > "$f" 2>/dev/null
+  return 0
+}
 
 # Print the saved state (nothing when there is none).
 state_dump() {
@@ -116,6 +134,7 @@ brief() {
   fi
   fleet_load_conf "$sess"
   seat=$(fleet_seat)
+  mark_spoke
 
   echo "===== fleet ====="
   echo "repo=${FLEET_REPO:-} session=$sess seat=${seat:-none}"
