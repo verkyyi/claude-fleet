@@ -45,13 +45,16 @@ for a in "$@"; do [ "$prev" = --repo ] || [ "$prev" = -R ] && repo="$a"; prev="$
 case "$1 $2" in
   "pr view")
     [ "$repo" = o/a ] && [ "$3" = 101 ] || exit 1
-    printf 'MERGED\t%s\tissue-12\t-\t2020-01-01T00:00:00Z\n' "$(cat "$GH_SHA_A")" ;;
+    printf 'MERGED\t%s\tissue-12\t-\t2020-01-01T00:00:00Z\t%s\n' "$(cat "$GH_SHA_A")" "${GH_CLOSES_A:-o/a#12}" ;;
   "pr list") printf '[]\n' ;;
+  "issue view")   # the bound-issue gate (issue #1156) — logged so the leg can check the join
+    printf '%s %s\n' "$repo" "$3" >> "$GH_ISSUE_LOG"
+    printf '%s\n' "${GH_ISSUE_STATE:-CLOSED}" ;;
   *) exit 1 ;;
 esac
 EOF
 chmod +x "$WORK/bin/tmux" "$WORK/bin/gh"
-export PATH="$WORK/bin:$PATH" GH_SHA_A="$WORK/sha-a"
+export PATH="$WORK/bin:$PATH" GH_SHA_A="$WORK/sha-a" GH_ISSUE_LOG="$WORK/gh-issue.log"
 
 cleanup() { "$REAL_TMUX" -S "$SOCK" kill-server 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT
@@ -142,6 +145,15 @@ eq "A: @norepo window refused" "$got" "1|unset"
 eq "A: worktree → repo" "$(fleet_worktree_repo "$S" "$WORK/b-issue-12")" "o/b	$WORK/main-b"
 eq "A: base checkout is no worktree" "$(fleet_worktree_repo "$S" "$WORK/main-a")" ""
 eq "A: resolved repo ignores the sessmap" "$( fleet_load_window_conf "$S" "$wB"; fleet_resolved_repo "$S" )" o/b
+
+# --- A2. the bound-issue gate joins on (repo, issue) (issue #1156) -------------------
+# o/a#101 closing o/b's #12 is NOT proof o/a#12 is done; the fallback read is o/a#12.
+# Dry-run: it classifies without writing the notice B's tick depends on.
+: > "$GH_ISSUE_LOG"
+tok=$(GH_CLOSES_A='o/b#12' GH_ISSUE_STATE=OPEN FLEET_SESSION="$S" \
+  bash "$BIN/fleet-cleanup.sh" 101 --repo o/a --auto --dry-run 2>/dev/null)
+eq "A2: o/a#101 closing o/b#12 + o/a#12 OPEN" "$tok" "skip:issue-open"
+eq "A2: issue read joined on (repo, issue)" "$(cat "$GH_ISSUE_LOG")" "o/a 12"
 
 # --- B. one cleanup tick -------------------------------------------------------------
 before=$(rows)

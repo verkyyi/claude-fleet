@@ -48,6 +48,30 @@ class NoticeTests(unittest.TestCase):
             notice(tm, "@1", "raw", 1000, 3100)
         self.assertNotIn("@reap_due", opts)
 
+    def test_hold_notice_has_no_countdown_and_yields_to_one(self):
+        # Issue #1156: a merged PR whose bound issue is still open is HELD, not due.
+        opts = {"@claude_state": "done", "@claude_state_ts": "100"}
+        def tm(*args):
+            if args[0] == "display-message":
+                return opts.get(args[-1][2:-1], "")
+            if args[1] == "-wu":
+                opts.pop(args[-1], None)
+            else:
+                opts[args[-2]] = args[-1]
+            return ""
+        self.assertEqual(notice(tm, "@1", "issue-open:9:8", 0, 500, dry=True, hold="x"), "hold")
+        self.assertNotIn("@reap_due", opts)
+        self.assertEqual(notice(tm, "@1", "issue-open:9:8", 0, 500, hold="PR #9 merged"), "hold")
+        self.assertEqual((opts["@reap_due"], opts["@reap_seen"], opts["@reap_state_ts"],
+                          opts["@reap_hold"]), ("hold", "500", "100", "PR #9 merged"))
+        # the issue closed → an ordinary countdown takes over, with a fresh visible tick
+        self.assertEqual(notice(tm, "@1", "merged:9:abc", 0, 560), 620)
+        self.assertNotIn("@reap_hold", opts)
+        opts["@claude_state"] = "working"
+        with self.assertRaises(ValueError):
+            notice(tm, "@1", "issue-open:9:8", 0, 600, hold="x")
+        self.assertNotIn("@reap_hold", opts)
+
 
 @unittest.skipUnless(shutil.which("tmux"), "tmux absent")
 class RoundTrip(unittest.TestCase):

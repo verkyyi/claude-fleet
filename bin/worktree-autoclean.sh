@@ -21,9 +21,12 @@
 #     way plain `git worktree remove` (no -f) does
 #   * it is merged: a MERGED PR exists for the branch on GitHub, OR the branch
 #     tip is a strict ancestor of origin/<base> (equal tips need a merged PR)
-# On prune of a merged `issue-<N>` worktree, the bound issue #N is AUTO-CLOSED
-# (if still open) with a pointer to the merge — the net for a PR that landed
-# without a `Closes #N` keyword.
+#   * for an `issue-<N>` worktree, the bound issue #N is no longer OPEN (issue
+#     #1156). A merged branch is not a finished task: a worker can ship a side-fix
+#     PR from its own branch while #N stays open. Unknown state (gh failed) KEEPs.
+# The janitor never closes an issue (issue #1156 removed the old "auto-close #N
+# on prune" net): GitHub closes a properly linked issue on merge, and the only
+# issues that net ever closed were ones the PR did NOT claim to close.
 # A KEPT worktree still gets its detached processes swept (issue #469): the
 # liveness gate above has already established that no window is bound to it, so a
 # dev/mock server still anchored to the worktree — or to that session's scratchpad
@@ -33,7 +36,7 @@
 # never reaches the liveness gate and is never touched. Set FLEET_REAP_KEPT_PROCS=0
 # to leave an intentionally long-lived preview server alone.
 # Fail-safe: if tmux is not running we cannot tell what's attached, so we SKIP.
-# Pass --dry-run to print decisions (incl. would-close) without removing anything.
+# Pass --dry-run to print decisions without removing anything.
 #
 # Multi-fleet: cleans EVERY fleet — the global fleet.conf default fleet plus each
 # per-fleet conf in $FLEET_CONF_DIR (~/.config/claude-fleet/*.conf). The "live
@@ -194,7 +197,7 @@ reap_detached() {   # $1=worktree-dir  $2=branch
   case "$rp" in no\ orphan\ procs) ;; *) log "REAP  $2 — $rp (kept worktree, window gone)" ;; esac
 }
 
-removed=0; kept=0; closed=0
+removed=0; kept=0
 dir=""; head=""; branch=""
 REPO_ROOT=""; REPO=""; BASE=""; PROTECTED_RE=""; MASTER=""; MERGED_PRS=""
 
@@ -320,12 +323,18 @@ process() {
   # issue number bound to this worktree (branch convention: issue-<N>)
   local inum=""
   case "$branch" in issue-[0-9]*) inum="${branch#issue-}"; inum="${inum%%[!0-9]*}" ;; esac
+  # The bound-issue gate (issue #1156): prune an issue worktree only once #N is
+  # CLOSED. One `gh issue view`, spent only on a candidate every gate above let by.
+  if [ -n "$inum" ]; then
+    local ist=""
+    [ -n "$REPO" ] && ist="$(gh -R "$REPO" issue view "$inum" --json state -q .state 2>/dev/null)"
+    if [ "$ist" != CLOSED ]; then
+      reap_detached "$dir" "$branch"   # past the liveness gate: no window, so orphans (#469)
+      say "KEEP  $branch  (skip:issue-open — $merged but #$inum is ${ist:-unknown})"; kept=$((kept+1)); return
+    fi
+  fi
   if [ "$DRY" = 1 ]; then
     local ex=""
-    if [ -n "$inum" ] && [ -n "$REPO" ]; then
-      local st; st="$(gh -R "$REPO" issue view "$inum" --json state -q .state 2>/dev/null)"
-      [ "$st" = "OPEN" ] && ex="  + close #$inum" || ex="  (#$inum already ${st:-?})"
-    fi
     local dr; dr="$(fleet_reap_worktree_procs "$dir" dry)"
     case "$dr" in would\ reap:*) ex="$ex  [$dr]" ;; esac
     [ "$idle_prune" = 1 ] && ex="$ex  [scratch idle $idle_d]"
@@ -365,16 +374,6 @@ process() {
     [ "$idle_prune" = 1 ] && log "autoclean: scratch idle $idle_d → trash ${drop#*:}"
     removed=$((removed+1))
     rm -f "$SURF_DIR/$(scratch_key "$dir")" 2>/dev/null || true   # drop any scratch surface marker (#290)
-    # auto-close the bound issue if still open (net for a PR lacking Closes #N)
-    if [ -n "$inum" ] && [ -n "$REPO" ]; then
-      local st; st="$(gh -R "$REPO" issue view "$inum" --json state -q .state 2>/dev/null)"
-      if [ "$st" = "OPEN" ]; then
-        if gh -R "$REPO" issue close "$inum" \
-             --comment "Auto-closed: branch \`$branch\` merged ($merged) and its worktree session was reaped by worktree-autoclean." >/dev/null 2>&1; then
-          log "CLOSED #$inum ($REPO) — merged+reaped"; closed=$((closed+1))
-        fi
-      fi
-    fi
   else
     log "FAIL  could not drop $dir (branch $branch) — $drop"
   fi
@@ -445,7 +444,7 @@ EOF
 done < <(fleet_each_conf)
 scratch_digest_flush   # #884 — one message for every idle scratch holding work
 
-say "done: pruned=$removed closed=$closed kept=$kept"
+say "done: pruned=$removed kept=$kept"
 # keep the log from growing unbounded
 if [ "$DRY" = 0 ] && [ -f "$LOG" ]; then tail -n 500 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"; fi
 exit 0

@@ -92,6 +92,14 @@ GITFAKE
 cat > "$WORK/fakebin/gh" <<GHFAKE
 #!/bin/bash
 sub="\${1:-}"; action="\${2:-}"; num="\${3:-}"
+# issue view (issue #1156): the bound-issue gate's one read. FAKE_ISSUE_STATE
+# defaults to CLOSED so every pre-#1156 scenario reaps as it always did.
+if [ "\$sub" = issue ]; then
+  printf 'issue %s\n' "\$*" >> "$WORK/gh-issue.log"
+  [ "\$action" = view ] || exit 0
+  [ "\${FAKE_ISSUE_FAIL:-0}" = 1 ] && exit 1
+  printf '%s\n' "\${FAKE_ISSUE_STATE:-CLOSED}"; exit 0
+fi
 [ "\$sub" = pr ] || exit 0
 case "\$action" in
   view)
@@ -100,7 +108,7 @@ case "\$action" in
         # 4th field = closedAt (issue #544) — the clock the closed gate compares
         # transcript activity against. Empty for a PR that never closed.
         case "\${GH_SCENARIO:-merged}" in
-          merged)        printf 'MERGED\tdeadbeef\tissue-42\t-\t%s\n' "\${FAKE_MERGED_AT-}" ;;
+          merged)        printf 'MERGED\tdeadbeef\tissue-42\t-\t%s\t%s\n' "\${FAKE_MERGED_AT-}" "\${FAKE_CLOSES-acme/widgets#42}" ;;
           closed)        printf 'CLOSED\tsha-%s\tissue-42\t%s\n' "\$num" "\${FAKE_CLOSED_AT:-}" ;;
           open)          printf 'OPEN\tsha-%s\tissue-42\t\n' "\$num" ;;
           scratch)       printf 'MERGED\tcafe1234\tscratch-99\t-\t%s\n' "\${FAKE_MERGED_AT-}" ;;
@@ -156,6 +164,7 @@ case "\${1:-}" in
     case "\$*" in *window_id*) echo "\${FAKE_SELF_WIN:-@1}" ;; *session_name*) echo 'testsess' ;; *) echo '' ;; esac ;;
   kill-window)   printf 'kill-window %s\n' "\${!#}" >> "$ORDER_LOG" ;;
   run-shell)     printf 'run-shell\n' >> "$ORDER_LOG" ;;
+  set-option)    printf '%s\n' "\$*" >> "$WORK/tmux-set.log" ;;
   *) : ;;
 esac
 exit 0
@@ -370,6 +379,58 @@ tok="$(FAKE_TIP=new-work run_clean merged --auto)"
 [ "$tok" = skip:unmerged ] || fail 'automatic merged issue must preserve post-merge commits'
 [ ! -s "$ORDER_LOG" ] || fail 'new commits after merge were disposed'
 ok 'automatic merged issue requires clean worktree and exact merged head'
+
+# --- the bound-issue gate (issue #1156) ---------------------------------------
+# A side-fix PR shipped from branch issue-42 that closes a DIFFERENT issue is not
+# task #42 done: automatic cleanup must leave the window/worktree alone while #42
+# is open (or unknown), and reap on the next tick once #42 closes.
+# (1) the PR closes #42 → reaps as ever, and the issue is never even read.
+: > "$WORK/gh-issue.log"
+tok="$(FAKE_ISSUE_STATE=OPEN FAKE_CLOSES='Acme/Widgets#42' run_clean merged --auto)"
+case "$tok" in cleaned:*) ;; *) fail "(1156-1) PR closing #42 must reap, got '$tok'" "$(cat "$WORK/err")" ;; esac
+[ ! -s "$WORK/gh-issue.log" ] || fail '(1156-1) proof A must cost no issue read' "$(cat "$WORK/gh-issue.log")"
+ok 'bound-issue gate: PR closes (repo, #42) → reaped, zero issue reads'
+# (2) closes a different issue (and a same-number issue in ANOTHER repo), #42 open.
+for closes in 'acme/widgets#43' 'other/repo#42' '-' 'acme/widgets#420,acme/widgets#4'; do
+  : > "$WORK/gh-issue.log"; : > "$WORK/tmux-set.log"; : > "$LEDGER"
+  tok="$(FAKE_ISSUE_STATE=OPEN FAKE_CLOSES="$closes" run_clean merged --auto)"
+  [ "$tok" = skip:issue-open ] || fail "(1156-2) closes='$closes' + #42 OPEN must defer, got '$tok'" "$(cat "$WORK/err")"
+  [ ! -s "$ORDER_LOG" ] && [ ! -s "$PULL_LOG" ] && [ ! -s "$LEDGER" ] \
+    && [ -f "$WORK/wt-issue-42/keep.txt" ] || fail "(1156-2) closes='$closes' mutated the worker"
+  grep -q 'issue view 42 --repo acme/widgets' "$WORK/gh-issue.log" || fail '(1156-2) issue read not on (repo, issue)' "$(cat "$WORK/gh-issue.log")"
+  grep -q 'issue close' "$WORK/gh-issue.log" && fail '(1156-2) cleanup must never close an issue'
+done
+grep -q '@reap_due hold' "$WORK/tmux-set.log" && grep -q '@reap_hold PR #42 merged · #42 still open' "$WORK/tmux-set.log" \
+  || fail '(1156-2) the dash hold notice was not written' "$(cat "$WORK/tmux-set.log")"
+grep -q '@reap_due [0-9]' "$WORK/tmux-set.log" && fail '(1156-2) a held window must not get a countdown'
+ok 'bound-issue gate: PR closes another issue, #42 OPEN → skip:issue-open, held dash notice, nothing touched'
+# the hold wins over the grace: a fresh merge never shows a countdown it cannot keep
+tok="$(FAKE_ISSUE_STATE=OPEN FAKE_CLOSES='acme/widgets#43' FAKE_MERGED_AT="$(iso_ago 60)" run_clean merged --auto)"
+[ "$tok" = skip:issue-open ] || fail "(1156-2b) within grace must still report the hold, got '$tok'"
+: > "$WORK/tmux-set.log"
+tok="$(FAKE_ISSUE_STATE=OPEN FAKE_CLOSES='acme/widgets#43' run_clean merged --auto --dry-run)"
+[ "$tok" = skip:issue-open ] || fail "(1156-2c) dry-run must classify the hold, got '$tok'"
+[ ! -s "$WORK/tmux-set.log" ] || fail '(1156-2c) dry-run wrote the notice' "$(cat "$WORK/tmux-set.log")"
+ok 'bound-issue gate: precedes the grace countdown; dry-run classifies without writing'
+# (3) same PR, #42 now CLOSED → the next tick reaps.
+tok="$(FAKE_ISSUE_STATE=CLOSED FAKE_CLOSES='acme/widgets#43' run_clean merged --auto)"
+case "$tok" in cleaned:*) ;; *) fail "(1156-3) #42 CLOSED must reap, got '$tok'" "$(cat "$WORK/err")" ;; esac
+grep -qx 'kill-window @7' "$ORDER_LOG" || fail '(1156-3) the window was not reaped'
+ok 'bound-issue gate: #42 closed → reaped on the next tick'
+# (4) gh issue view fails → unknown reads as OPEN.
+tok="$(FAKE_ISSUE_FAIL=1 FAKE_CLOSES='acme/widgets#43' run_clean merged --auto)"
+[ "$tok" = skip:issue-open ] || fail "(1156-4) unknown issue state must defer, got '$tok'"
+[ ! -s "$ORDER_LOG" ] || fail '(1156-4) unknown state reaped'
+ok 'bound-issue gate: gh issue view failure → skip:issue-open (fail safe)'
+# CLOSED-unmerged (B): a closed PR proves nothing about the task.
+tok="$(FAKE_ISSUE_STATE=OPEN FAKE_BASE_TIP=baseahead run_clean closed --auto)"
+[ "$tok" = skip:issue-open ] || fail "(1156-5) CLOSED PR + #42 OPEN must defer, got '$tok'"
+[ ! -s "$ORDER_LOG" ] || fail '(1156-5) closed-unmerged reaped an open issue'
+ok 'bound-issue gate: CLOSED-unmerged + #42 OPEN → skip:issue-open'
+# Manual cleanup stays as is: the operator asked for it.
+tok="$(FAKE_ISSUE_STATE=OPEN FAKE_CLOSES='acme/widgets#43' run_clean merged)"
+case "$tok" in cleaned:*) ;; *) fail "(1156-6) manual cleanup must ignore the gate, got '$tok'" ;; esac
+ok 'bound-issue gate: manual cleanup unaffected'
 
 : > "$LEDGER"
 tok="$(run_clean merged)"; err="$(cat "$WORK/err")"

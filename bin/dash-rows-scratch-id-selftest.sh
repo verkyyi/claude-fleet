@@ -159,7 +159,7 @@ hasnt "live: a 28-col CJK name must not leak past 26 cols" "$r6" "名字很长"
 # Countdown uses appended metadata; stable targeting remains row field 2.
 now=$(date +%s)
 notice_row() {
-  printf '%s\n' "$SESS${US}1${US}reap-candidate${US}/w/repo-scratch-9${US}$1${US}$now${US}@91${US}${US}${US}/w/repo-scratch-9${US}claude${US}a1${US}${US}${US}${US}${US}$((now + 300))${US}$2${US}$3" > "$WLIST_FILE"
+  printf '%s\n' "$SESS${US}1${US}reap-candidate${US}/w/repo-scratch-9${US}$1${US}$now${US}@91${US}${US}${US}/w/repo-scratch-9${US}claude${US}a1${US}${US}${US}${US}${US}${4:-$((now + 300))}${US}$2${US}$3" > "$WLIST_FILE"
   out=$(FLEET_SESSION="$SESS" FZF_COLUMNS=120 bash "$ROWS")
 }
 notice_row "done" "$now" "$now"
@@ -171,6 +171,14 @@ notice_row "done" "$((now - 181))" "$now"
 hasnt 'stale daemon notice disappears' "$out" 'r5m'
 notice_row "done" "$now" "$((now - 1))"
 hasnt 'new done turn cannot inherit prior countdown' "$out" 'r5m'
+# A HELD reap (issue #1156: PR merged, bound issue still open) shows no countdown.
+notice_row "done" "$now" "$now" hold
+has   'held reap shows iss open' "$out" 'iss open'
+hasnt 'held reap shows no countdown' "$out" 'r0m'
+notice_row "done" "$((now - 181))" "$now" hold
+hasnt 'stale held notice disappears' "$out" 'iss open'
+notice_row working "$now" "$now" hold
+hasnt 'working state hides the held notice' "$out" 'iss open'
 
 # --- the landed view (⌃t) keeps the #529 two-colour grammar -------------------
 # A landed row has no live window and therefore no #566 handle, so `~<N>` is the

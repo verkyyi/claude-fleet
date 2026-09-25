@@ -48,6 +48,9 @@
 #   skip:live        automatic MERGED or CLOSED-unmerged reap deferred: live/unknown
 #   skip:grace       automatic MERGED cleanup deferred until its grace expires
 #   skip:notice      automatic cleanup waiting for the visible dashboard notice
+#   skip:issue-open  automatic reap deferred: the bound issue #N is still OPEN and
+#                    the PR does not close it (issue #1156) — a side-fix PR shipped
+#                    from branch issue-<N> is not task #N done. Unknown state defers.
 #   error:<reason>   a precondition failed (no repo/main/gh/PR) — rc 2
 #
 # A CLOSED PR IS NOT PROOF THE WORK WAS ABANDONED (issue #544). This path used to
@@ -113,7 +116,7 @@ while [ "$#" -gt 0 ]; do
     --repo) shift; REPO_ARG="${1:-}" ;;
     --dry-run|-n) DRY=1 ;;
     --auto) AUTO=1 ;;
-    -h|--help) sed -n '2,63p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,66p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) printf 'fleet-cleanup: unknown flag %s\n' "$1" >&2; exit 2 ;;
     *)  PR="${1//[^0-9]/}" ;;
   esac
@@ -155,19 +158,23 @@ ftmux() {
 }
 
 # --- PR state -----------------------------------------------------------------
-# TSV: state headOid headRef closedAt mergedAt (we don't merge).
+# TSV: state headOid headRef closedAt mergedAt closes (we don't merge).
+# closes = the issues the PR closes on merge, `owner/name#N` comma-joined (issue
+# #1156) — the same round-trip, so proving "this PR closes the bound issue" is free.
 # closedAt is what the closed-unmerged gate compares transcript activity against
 # (issue #544): a session that spoke AFTER its PR closed is working ON the close,
 # not abandoned by it. Use sentinels: Bash read collapses empty TSV fields.
 pr_fields() {
   gh pr view "$1" --repo "$REPO" \
-    --json state,headRefOid,headRefName,closedAt,mergedAt \
-    --jq '[.state, .headRefOid, .headRefName, (.closedAt // "-"), (.mergedAt // "-")] | @tsv' 2>/dev/null
+    --json state,headRefOid,headRefName,closedAt,mergedAt,closingIssuesReferences \
+    --jq '[.state, .headRefOid, .headRefName, (.closedAt // "-"), (.mergedAt // "-"),
+           ([.closingIssuesReferences[]? | "\(.repository.owner.login)/\(.repository.name)#\(.number)"]
+            | if length == 0 then "-" else join(",") end)] | @tsv' 2>/dev/null
 }
 
 fields=$(pr_fields "$PR")
 [ -z "$fields" ] && { note "fleet-cleanup: PR #$PR not found on $REPO."; done_token "error:pr-not-found"; exit 2; }
-IFS=$'\t' read -r st oid href closed_at merged_at <<<"$fields"
+IFS=$'\t' read -r st oid href closed_at merged_at closes <<<"$fields"
 # BRANCH is what the teardown addresses; ISSUE stays the issue-<N> identity (the
 # @issue window binding, the ledger key, the branch name). They coincide for a
 # worker; for an opted-in non-issue head BRANCH is the PR's head and ISSUE empty.
@@ -211,6 +218,45 @@ if [ -n "$BRANCH" ]; then
           awk -v w="$WIN" '$1 == w { print $2; exit }')
   fi
 fi
+
+# --- the bound-issue gate (issue #1156) ---------------------------------------
+# "A PR from branch issue-<N> merged" is NOT "task #N is done": a research worker
+# on issue-9206 shipped side-fix PR #9208 (closing #9207), and --auto reaped the
+# live window mid-EPIC-plan. So an AUTOMATIC reap of an issue head must prove the
+# task is over, one of two ways:
+#   A. the MERGED PR's own closingIssuesReferences names (repo, issue) — free, it
+#      rode in on the PR read above; or
+#   B. the bound issue is not OPEN any more — ONE `gh issue view`, spent only on a
+#      final PR that still has debris and did not pass A.
+# Unknown (gh failed) reads as OPEN: deferring costs a window until the next tick,
+# reaping costs a session. Manual cleanup and non-issue heads never get here. Runs
+# BEFORE the grace countdown, so the dash never counts down a reap that cannot
+# happen; instead the window carries a held notice until #N closes.
+issue_open_gate() {
+  [ "$AUTO" = 1 ] && [ -n "$ISSUE" ] || return 0
+  { [ -n "$WT" ] || [ -n "$WIN" ]; } || return 0
+  local want c ist verb
+  want=$(printf '%s#%s' "$(fleet_norm_repo "$REPO")" "$ISSUE" | tr '[:upper:]' '[:lower:]')
+  if [ "$st" = MERGED ]; then
+    for c in $(printf '%s' "${closes:--}" | tr ',' ' ' | tr '[:upper:]' '[:lower:]'); do
+      [ "$c" = "$want" ] && return 0
+    done
+  fi
+  ist=$(gh issue view "$ISSUE" --repo "$REPO" --json state --jq .state 2>/dev/null)
+  [ "$ist" = CLOSED ] && return 0
+  verb=merged; [ "$st" = CLOSED ] && verb=closed
+  note "  #$PR $verb but bound issue #$ISSUE is ${ist:-unknown} and the PR does not close it — automatic cleanup deferred until #$ISSUE closes."
+  if [[ "$WIN" =~ ^@[0-9]+$ ]]; then
+    local hold_args=()
+    [ -n "${TMUX:-}" ] || hold_args=(--socket-name "$(fleet_socket "$FLEET_SESSION")")
+    [ "$DRY" = 1 ] && hold_args+=(--dry-run)
+    python3 "$BIN/fleet_reap_notice.py" "$WIN" "issue-open:$PR:$ISSUE" 0 \
+      --hold "PR #$PR $verb · #$ISSUE still open — continue or close?" \
+      ${hold_args[@]+"${hold_args[@]}"} >/dev/null 2>&1 || true
+  fi
+  done_token "skip:issue-open"; return 1
+}
+issue_open_gate || exit 0
 
 # A daemon must give a newly merged worker time to finish its report (#565).
 # This only narrows automatic cleanup: all existing gates still apply, manual
