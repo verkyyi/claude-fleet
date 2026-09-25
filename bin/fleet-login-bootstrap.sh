@@ -24,6 +24,8 @@
 #   zshrc     the claude-fleet block (--print-zshrc) appended to ~/.zshrc unless
 #             it already sources shell/fleet-login.zsh — with the ~/.local/bin
 #             PATH line (--print-path-line) BEFORE it, unless the file has one.
+#   onboard   seed Claude's first-run theme + onboarding state, and append only
+#             the wizard's commands to ~/.claude/settings.json permissions.allow.
 #   fleet     fleet-up.sh <FLEET_SEED_REPO> --seed --no-attach, when this login
 #             has no fleet yet: the starter repo, which only looks (issue #1167).
 #             Its checkout is cloned over https first, so no `gh auth` is needed.
@@ -208,6 +210,13 @@ elif { [ ! -s "$zrc" ] || printf '\n'; [ "$has_path" = 1 ] || print_path_line; p
   fi
 else
   fail zshrc "could not write ~/.zshrc"
+fi
+
+# --- onboarding defaults ------------------------------------------------------
+if out=$(python3 "$ROOT/bin/fleet-onboard-defaults.py" "$HOME" 2>&1); then
+  say "$out"
+else
+  fail onboard "$out"
 fi
 
 # --- fleet --------------------------------------------------------------------
