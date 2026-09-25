@@ -640,7 +640,9 @@ poll() {
   # fleet enables the bridge in its conf (FLEET_ISSUE_BRIDGE=1); mirror pr-refresh's
   # cheap resolution — the primary FLEET_REPO (global knobs), plus each per-fleet
   # conf that opts in (its per-fleet FLEET_ISSUE_BRIDGE_ASSOC_FLOOR/…_REVIVE).
-  declare -a REPOS R_FLOOR R_REVIVE; local seen=' '
+  # `=()`: a bare `declare -a` leaves them UNSET, so `${#REPOS[@]}` below is fatal
+  # under set -u on bash 5.0 when no repo opts in (surfaced by #1167's selftest).
+  declare -a REPOS=() R_FLOOR=() R_REVIVE=(); local seen=' '
   queue() { # $1=repo $2=assoc-floor $3=revive
     local rp="$1" sg; [ -z "$rp" ] && return
     sg=$(fleet_slug "$(fleet_norm_repo "$rp")")
