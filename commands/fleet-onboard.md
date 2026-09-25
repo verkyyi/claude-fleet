@@ -42,10 +42,6 @@ start over (`~/.claude/fleet/bin/fleet-onboard.sh reset`, then continue at step 
 ## 0. Resolve fleet + guard seat + read the progress (run FIRST, every time)
 
 ```sh
-source ~/.claude/fleet/bin/fleet-lib.sh
-S=$(fleet_current_session); fleet_load_conf "$S"
-SEAT=$(fleet_seat)
-echo "repo=${FLEET_REPO:-} session=$S seat=${SEAT:-none}"
 ~/.claude/fleet/bin/fleet-onboard.sh brief
 ```
 
@@ -72,8 +68,7 @@ echo "repo=${FLEET_REPO:-} session=$S seat=${SEAT:-none}"
 2. List their repos:
 
    ```sh
-   gh repo list --limit 30 --json nameWithOwner,description,pushedAt,isArchived \
-     --jq '.[] | select(.isArchived|not) | "\(.nameWithOwner)\t\(.pushedAt[:10])\t\(.description // "")"'
+   gh repo list --limit 30 --json nameWithOwner,description,pushedAt,isArchived --jq '.[] | select(.isArchived|not) | "\(.nameWithOwner)\t\(.pushedAt[:10])\t\(.description // "")"'
    ```
 
    Show the most recently pushed few (a repo `brief` already tagged `[mine]` is

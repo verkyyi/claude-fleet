@@ -18,6 +18,8 @@
 #      ~/.local/bin first on PATH; a failed install → exit 1, retried alone.
 #   H. the ~/.local/bin PATH line: before the block, once — put first in an older
 #      zshrc that has the block without it; a login's own line is kept, not doubled.
+#   I. first-run Claude UI state and wizard permissions: seed missing keys, keep
+#      existing values/rules, and cover every shell command in the wizard.
 # Every step past the clone is a stub in the fixture repo's bin/ that logs its
 # argv — the real scripts have their own selftests.
 set -uo pipefail
@@ -60,6 +62,7 @@ UPPATH="$WORK/up.path"; export UPPATH        # the PATH fleet-up was run with
 
 # ---- the fixture GitHub: verkyyi/claude-fleet with stubs, stable one behind master ----
 FX="$WORK/fx"; mkdir -p "$FX/bin" "$FX/shell"
+cp "$BIN/fleet-onboard-defaults.py" "$FX/bin/fleet-onboard-defaults.py"
 stub() { # stub <name> <body…> — logs "<name> <argv>" to $CALLS, then runs <body>
   local n="$1"; shift
   { printf '#!/bin/bash\nprintf "%%s %%s\\n" %s "$*" >> "$CALLS"\n' "$n"; printf '%s\n' "$@"; } > "$FX/bin/$n"
@@ -117,6 +120,15 @@ eq "A fleet-up quiet + no attach" "$(grep '^fleet-up.sh ' "$CALLS")" \
 eq "A seed checkout cloned" "$(git -C "$HOME/projects/claude-fleet" rev-parse --is-inside-work-tree 2>/dev/null)" true
 has "A doctor passed through" "$out" "    PASS doctor-stub all green"
 [ -s "$FLEET_CONF_DIR/global/bootstrapped" ] || fail "A: no global/bootstrapped"
+python3 - "$HOME" <<'PY' || fail 'A first-run Claude defaults absent'
+import json, pathlib, sys
+home = pathlib.Path(sys.argv[1])
+state = json.loads((home / '.claude.json').read_text())
+settings = json.loads((home / '.claude/settings.json').read_text())
+assert state['hasCompletedOnboarding'] is True
+assert state['theme'] == 'dark'
+assert settings['permissions']['allow']
+PY
 leg "A first run installs everything, fleet-up --seed --no-attach"
 
 # ---- B. second run: zero changes ----
@@ -224,6 +236,48 @@ has "H2 block only" "$out" "zshrc: ok — added the claude-fleet block to ~/.zsh
 eq "H2 PATH line once" "$(grep -c '\.local/bin' "$HOME/.zshrc")" 1
 eq "H2 = own line, blank, block" "$(cat "$HOME/.zshrc")" "$(printf 'export PATH="$HOME/.local/bin:$PATH"\n\n'; boot --print-zshrc)"
 leg "H the PATH line goes before the block, once"
+
+# ---- I. preserve existing values; all wizard shell lines have a rule ----
+newhome "$WORK/i"
+mkdir -p "$HOME/.claude"
+printf '{"hasCompletedOnboarding":false,"theme":"light","mine":7}\n' > "$HOME/.claude.json"
+printf '{"permissions":{"allow":["Bash(my-command)"]},"mine":8}\n' > "$HOME/.claude/settings.json"
+out=$(boot); eq "I rc" "$?" 0
+python3 - "$HOME" "$BIN/../commands/fleet-onboard.md" "$BIN/fleet-onboard-defaults.py" <<'PY' || fail 'I values/rules or wizard coverage'
+import fnmatch, importlib.util, json, pathlib, re, sys
+home, md, module = map(pathlib.Path, sys.argv[1:])
+state = json.loads((home / '.claude.json').read_text())
+settings = json.loads((home / '.claude/settings.json').read_text())
+assert state['hasCompletedOnboarding'] is False and state['theme'] == 'light' and state['mine'] == 7
+assert settings['mine'] == 8
+allow = settings['permissions']['allow']
+assert allow[0] == 'Bash(my-command)' and len(allow) == len(set(allow))
+spec = importlib.util.spec_from_file_location('defaults', module)
+defaults = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(defaults)
+assert all(rule in allow for rule in defaults.ALLOW)
+commands = []
+in_shell = False
+for line in md.read_text().splitlines():
+    stripped = line.strip()
+    if stripped.startswith('```'):
+        in_shell = stripped == '```sh'
+        continue
+    if in_shell:
+        command = stripped.split('  #', 1)[0].strip()
+        if command and not command.startswith('#'):
+            commands.append(command)
+    # Some one-line calls are printed inline in prose rather than a shell fence.
+    for command in re.findall(r'`([^`]+)`', line):
+        if command.startswith(('~/.claude/fleet/bin/', 'gh repo ', 'gh pr ')):
+            commands.append(command)
+assert len(commands) >= 20, f'only {len(commands)} wizard commands extracted'
+for command in commands:
+    if not any(fnmatch.fnmatchcase(command, rule[5:-1]) for rule in allow if rule.startswith('Bash(')):
+        raise AssertionError(f'no allow rule for wizard command: {command}')
+print(f'PASS wizard allow rules cover {len(commands)} shell lines from fleet-onboard.md')
+PY
+leg "I Claude first-run state preserves values; wizard commands are allowed"
 
 [ "$FAILS" = 0 ] || { printf 'selftest FAIL: %s failure(s)\n' "$FAILS"; exit 1; }
 printf 'selftest PASS: a new login sets itself up once, and only once — Claude Code included (issues #1165, #1191) — bash %s\n' "$("$BASH_BIN" -c 'echo $BASH_VERSION')"

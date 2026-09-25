@@ -100,7 +100,7 @@ state_set() {
 }
 
 brief() {
-  local sess="" gh=1 conf r tag me="" step
+  local sess="" gh=1 conf r tag me="" step seat
   while [ $# -gt 0 ]; do
     case "$1" in
       --session) shift; sess="${1:-}" ;;
@@ -114,9 +114,11 @@ brief() {
     echo "fleet-onboard: not inside a fleet (session='${sess:-}')" >&2
     exit 3
   fi
+  fleet_load_conf "$sess"
+  seat=$(fleet_seat)
 
   echo "===== fleet ====="
-  echo "session=$sess"
+  echo "repo=${FLEET_REPO:-} session=$sess seat=${seat:-none}"
   if [ "$gh" = 1 ]; then
     me=$(gh api user --jq .login 2>/dev/null)
     echo "gh=${me:-NOT-LOGGED-IN}"
