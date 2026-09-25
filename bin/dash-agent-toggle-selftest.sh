@@ -214,7 +214,7 @@ for f in dash-enter.sh dash-esc.sh; do
 done
 grep -q 'key "$(dg agent)"' "$BIN/fleet-keys.sh" || fail "H: fleet-keys.sh dashboard sheet must document the flip via dg agent"
 sheet=$(NO_COLOR=1 bash "$BIN/fleet-keys.sh" --plain --context dash)   # capture first: grep -q + pipefail would SIGPIPE the sheet
-printf '%s\n' "$sheet" | grep -q '^  ⌃v  *flip this fleet' || fail "H: the rendered sheet must show ⌃v for the flip" "$sheet"
+printf '%s\n' "$sheet" | grep -q '^  ⌃v  *切换新会话默认 agent' || fail "H: the rendered sheet must show ⌃v for the flip (zh — this test pins FLEET_UI_LANG=zh)" "$sheet"
 ok "H dash wiring: \$DASH_KEY_AGENT (ctrl-v) bind, helper-derived --prompt/--ghost, DASH_GLYPH_AGENT exported, load/⌃r re-derive, enter/esc restore, ? sheet, no prefix hint"
 
 # --- I. shellcheck (when present) -------------------------------------------------------

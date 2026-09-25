@@ -36,7 +36,7 @@
 #      child wears no tag; an orphan (parent gone) drops back into its own group
 #      with no `└` and no tag; a one-repo fleet stays
 #      byte-identical to grouping switched off with the cross-repo child present.
-#   G. 置顶 (issue #1170) — a pinned row leaves its repo group for `置顶 (n)` at
+#   G. Pinned (issue #1170) — a pinned row leaves its repo group for `Pinned (n)` at
 #      the top, closed by one rule, wearing its repo tag (the heading names no
 #      repo); its repo heading no longer counts it; unpinning restores the frame
 #      byte for byte.
@@ -70,6 +70,9 @@ EOF
 printf '#!/bin/sh\nexit 1\n' > "$WORK/bin/gh"
 chmod +x "$WORK/bin/"*
 export PATH="$WORK/bin:$PATH" FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1 TMPDIR="$WORK/tmp"
+# Headings are localized since #1188 (bin/fleet-ui-lang.sh: FLEET_UI_LANG, else the
+# login locale) — pin the English every heading below asserts.
+export FLEET_UI_LANG=en
 unset TMUX TMUX_PANE FLEET_SESSION FLEET_REPO FLEET_MAIN FLEET_SIDEBAR_CURRENT 2>/dev/null || true
 mkdir -p "$TMPDIR" "$FLEET_CONF_DIR/fleets/alpha/repos"
 . "$BIN/fleet-lib.sh"
@@ -121,7 +124,7 @@ tmux set -wu -t 'alpha:issue-2' @expand
 tmux kill-window -t 'alpha:issue-4'
 hasnt "A: an empty group has no heading" "$(rows)" "unknown repo"
 
-# --- G. the 置顶 group in a 2+ repo fleet (issue #1170) ---------------------------
+# --- G. the Pinned group in a 2+ repo fleet (issue #1170) ---------------------------
 # Its OWN windows, so nothing the legs above left behind shapes it: pinme
 # (tokenledger) owns an expanded same-repo child, pkid — both float.
 tlhead() { printf '%s\n' "$1" | names | grep '^tokenledger (' ; }
@@ -131,9 +134,9 @@ win pkid  @repo o/tokenledger @issue 21 @origin o-tokenledger:issue-20
 before_raw=$(FLEET_SESSION=alpha bash "$ROWS"); before_side=$(side)
 tmux set -w -t 'alpha:pinme' @pin 1
 r=$(rows)
-eq    "G: 置顶 heads the list with its subtree, then one rule" \
+eq    "G: Pinned heads the list with its subtree, then one rule" \
       "$(printf '%s\n' "$r" | names | sed 's/^──*$/RULE/' | sed -n '1,4p' | tr '\n' ' ')" \
-      "置顶 (2) pinme pkid RULE "
+      "Pinned (2) pinme pkid RULE "
 eq    "G: exactly one rule" "$(printf '%s\n' "$r" | names | grep -c '^──*$')" "1"
 eq    "G: its repo heading no longer counts it" "$(tlhead "$r")" "$tl_before"
 has   "G: …the pinned row wears its repo tag" "$(printf '%s\n' "$r" | grep 'pinme')" "⇢tok"
@@ -141,7 +144,7 @@ hasnt "G: …and no pin mark" "$r" "📌"
 s=$(side)
 eq    "G: sidebar — heading keyed hdr:pin, then the unmarked row" \
       "$(printf '%s\n' "$s" | sed -n '1,2p' | awk -F'|' '{ print $1 ":" $2 ":" $4 }' | tr '\n' '/')" \
-      "hdr:pin:置顶 (2)/$(tmux display -p -t 'alpha:pinme' '#{window_id}')::pinme ⇢tok · 0/1 ✓/"
+      "hdr:pin:Pinned (2)/$(tmux display -p -t 'alpha:pinme' '#{window_id}')::pinme ⇢tok · 0/1 ✓/"
 tmux set -w -t 'alpha:pinme' -u @pin
 eq    "G: unpinned — raw bytes identical to before" "$(FLEET_SESSION=alpha bash "$ROWS")" "$before_raw"
 eq    "G: unpinned — sidebar identical to before"   "$(side)" "$before_side"

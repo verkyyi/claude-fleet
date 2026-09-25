@@ -62,12 +62,14 @@ ok
 # what ↵ does + the RESOLVED agent-toggle key (`↵ 新开 scratch（预填不发送） · 切换 agent: ⌃v`),
 # no `<agent>:` prefix hint — so pin (a) that the dash takes it from the helper,
 # not a literal, and (b) the helper's wording, run from a sandboxed bin (no
-# ../fleet.conf, no conf estate, tmux prefix pinned to C-b so the key is ⌃v).
+# ../fleet.conf, no conf estate, tmux prefix pinned to C-b so the key is ⌃v,
+# FLEET_UI_LANG pinned to zh — the wording is localized since #1188, through
+# fleet-ui-lang.sh, which the sandbox must mirror too).
 grep -qF -- '--ghost="$GHOST_NOW"' "$DASH" \
   || fail "dash: the prompt-line ghost must come from dash-agent-prompt.sh (#554), not a literal"
 GW="$(mktemp -d "${TMPDIR:-/tmp}/chip-ghost.XXXXXX")" || fail "mktemp failed"
-mkdir -p "$GW/bin"; for f in dash-agent-prompt.sh dash-keymap.sh fleet-lib.sh; do ln -s "$BIN/$f" "$GW/bin/"; done
-ghost="$(FLEET_SESSION=chipsess FLEET_CONF_DIR="$GW/conf" FLEET_SKIP_GLOBAL_CONF=1 TMPDIR="$GW" FLEET_TMUX_PREFIX=C-b FLEET_TMUX_PREFIX2='' bash "$GW/bin/dash-agent-prompt.sh" ghost)"
+mkdir -p "$GW/bin"; for f in dash-agent-prompt.sh dash-keymap.sh fleet-lib.sh fleet-ui-lang.sh; do ln -s "$BIN/$f" "$GW/bin/"; done
+ghost="$(FLEET_SESSION=chipsess FLEET_CONF_DIR="$GW/conf" FLEET_SKIP_GLOBAL_CONF=1 TMPDIR="$GW" FLEET_TMUX_PREFIX=C-b FLEET_TMUX_PREFIX2='' FLEET_UI_LANG=zh bash "$GW/bin/dash-agent-prompt.sh" ghost)"
 rm -rf "$GW"
 [ "$ghost" = '↵ 新开 scratch（预填不发送） · 切换 agent: ⌃v' ] \
   || fail "dash: the prompt-line ghost text must describe unsent prefill and the resolved toggle key — got: $ghost"

@@ -55,6 +55,9 @@ REAL_TMUX="$(command -v tmux 2>/dev/null)"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/sidebar-sleep-selftest.XXXXXX")" || exit 2
 export FLEET_SKIP_GLOBAL_CONF=1
 export FLEET_CONF_DIR="$WORK/conf"
+# The row menu is localized since #1188 (bin/fleet-ui-lang.sh: FLEET_UI_LANG, else
+# the login locale) — pin the Chinese the items below assert.
+export FLEET_UI_LANG=zh
 S=fleetZ
 mkdir -p "$WORK/conf/fleets/$S" "$WORK/bin"
 : > "$WORK/conf/fleets/$S/conf"

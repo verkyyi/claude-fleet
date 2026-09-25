@@ -26,6 +26,11 @@
 # tmux absent → case D SKIPs (the rest still run). Exit 0 = pass.
 set -uo pipefail
 
+# The banner is localized since #1188 (bin/fleet-ui-lang.sh: FLEET_UI_LANG, else the
+# login locale) — pin the Chinese every case below asserts, so the runner's LANG
+# is moot. Case E inherits it on both sides of its byte-for-byte pair.
+export FLEET_UI_LANG=zh
+
 here=$(cd "$(dirname "$0")" && pwd)
 INTRO="$here/../shell/fleet-intro.sh"
 [ -f "$INTRO" ] || { echo "FAIL: $INTRO missing"; exit 1; }
