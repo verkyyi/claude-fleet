@@ -1,7 +1,8 @@
 #!/bin/bash
 # fleet-login-remove.sh <login> [--keep-home|--delete-home] [--apply]
-# Offboard one shared-machine login. Dry run by default; run as an admin login.
-# --keep-home is the default (EPIC #1190). --delete-home is explicit.
+# Offboard one shared-machine login. Dry run by default; run as an admin login,
+# from any directory (issue #1216). --keep-home is the default (EPIC #1190).
+# --delete-home is explicit.
 set -uo pipefail
 
 PROG=fleet-login-remove
@@ -31,10 +32,17 @@ case " $GROUPS_TARGET " in
   *' admin '*) refuse "deleting admin group member '$LOGIN'" ;;
 esac
 
-HOMES=${FLEET_LOGIN_HOMES:-/Users}
+# Run from / (issue #1216): step 1 runs as the login (`sudo -u`), which inherits
+# the cwd and cannot stand in the admin's 0700 home — from ~/projects/… its bash
+# died on `getcwd: … Permission denied` before fleet-down ran (the same family as
+# fleet-login-new's step 7, #1210 ④). No path argument here; the two env knobs
+# are made absolute first, and $BIN already is.
+abs_dir() { case "$1" in /*) printf '%s\n' "$1" ;; *) ( cd -- "$1" 2>/dev/null && pwd -P ) || printf '%s/%s\n' "$PWD" "$1" ;; esac; }
+HOMES=$(abs_dir "${FLEET_LOGIN_HOMES:-/Users}")
 H="$HOMES/$LOGIN"
-DDIR=${FLEET_INSTALL_DAEMON_DIR:-/Library/LaunchDaemons}
+DDIR=$(abs_dir "${FLEET_INSTALL_DAEMON_DIR:-/Library/LaunchDaemons}")
 ACCOUNTS="$H/.config/claude-fleet/accounts"
+cd / || die 'cannot cd / (every step runs from there; issue #1216)'
 [ ! -L "$H" ] || refuse "symlinked home '$H'"
 [ ! -L "$H/.config" ] && [ ! -L "$H/.config/claude-fleet" ] || refuse "symlinked config under '$H'"
 if [ "$APPLY" = 1 ]; then

@@ -1,9 +1,13 @@
 #!/bin/bash
 # fleet-login-remove-selftest.sh — offboarding is tested with PATH shims only.
 # No real account, tmux server, launchd domain or /Library path is touched.
+# The last leg runs --apply from the admin's own 0700 home (issue #1216): the
+# sudo shim refuses any `sudo -u` from under it, as the login's bash dies on
+# getcwd there — the script must run step 1 from /.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/login-remove-selftest.XXXXXX") || exit 2
+WORK=$(cd "$WORK" && pwd -P)   # one spelling of the path: $PWD is compared against it (#1216)
 trap 'rm -rf "$WORK"' EXIT INT TERM HUP
 mkdir -p "$WORK/bin" "$WORK/shim" "$WORK/homes" "$WORK/LaunchDaemons"
 cp "$BIN/fleet-login-remove.sh" "$BIN/fleet-lib.sh" "$BIN/fleet-down.sh" "$WORK/bin/"
@@ -21,7 +25,8 @@ export FLEET_LOGIN_HOMES="$WORK/homes" FLEET_INSTALL_DAEMON_DIR="$WORK/LaunchDae
 export FLEET_CONF_DIR="$WORK/homes/alice/.config/claude-fleet" FLEET_SKIP_GLOBAL_CONF=1
 export FLEET_TEST_LOG="$WORK/calls.log" FLEET_TEST_LIVE="$WORK/live"
 export HOME="$WORK/admin" PATH="$WORK/shim:$PATH"
-mkdir -p "$HOME" "$FLEET_CONF_DIR/fleets/alice-fleet" "$WORK/homes/alice/Library/LaunchAgents" "$FLEET_CONF_DIR/accounts"
+export FLEET_TEST_CALLER="$HOME/projects/claude-fleet"   # inside the admin's 0700 home (#1216)
+mkdir -p "$HOME" "$FLEET_TEST_CALLER" "$FLEET_CONF_DIR/fleets/alice-fleet" "$WORK/homes/alice/Library/LaunchAgents" "$FLEET_CONF_DIR/accounts"
 printf 'FLEET_REPO=example/repo\n' > "$FLEET_CONF_DIR/fleets/alice-fleet/conf"
 printf 'alive\n' > "$FLEET_TEST_LIVE"
 printf 'token\n' > "$FLEET_CONF_DIR/accounts/alpha"
@@ -48,7 +53,11 @@ EOF
 cat > "$WORK/shim/sudo" <<'EOF'
 #!/bin/sh
 printf 'sudo %s\n' "$*" >> "$FLEET_TEST_LOG"
-if [ "$1" = -u ]; then shift 2; [ "$1" = -H ] && shift; fi
+if [ "$1" = -u ]; then
+  # the login cannot stand in the admin's home (#1216): from under it, die as bash does
+  case "$PWD/" in "$FLEET_TEST_CALLER/"*) echo "shell-init: error retrieving current directory: getcwd: cannot access parent directories: Permission denied" >&2; exit 1 ;; esac
+  shift 2; [ "$1" = -H ] && shift
+fi
 exec "$@"
 EOF
 cat > "$WORK/shim/tmux" <<'EOF'
@@ -138,4 +147,16 @@ FAKE_BOOTOUT_FAIL=1 FAKE_LOADED=1 run alice --apply
 has "$WORK/out" 'remains loaded; stopped' 'loaded-service failure not explained'
 [ -f "$FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.alice.spinner.plist" ] || fail 'loaded plist was removed'
 not_has "$FLEET_TEST_LOG" 'sysadminctl -deleteUser' 'account deleted with a loaded service'
+# From the admin's own 0700 home (issue #1216) — where the admin actually types
+# it — step 1 runs as the login, which cannot stand there: bash died on getcwd
+# and the offboarding stopped at once. The script runs it from /.
+printf 'alive\n' > "$FLEET_TEST_LIVE"; mkdir -p "$FLEET_CONF_DIR/accounts"; printf 'token\n' > "$FLEET_CONF_DIR/accounts/alpha"
+( cd "$FLEET_TEST_CALLER" && "$WORK/shim/sudo" -u alice -H true 2>/dev/null ) && fail 'the shim does not refuse a -u run from the closed cwd'
+( cd "$FLEET_TEST_CALLER" && "$WORK/shim/sudo" true 2>/dev/null ) || fail 'the shim refuses a root (no -u) run from the closed cwd'
+: > "$FLEET_TEST_LOG"; ( cd "$FLEET_TEST_CALLER" && bash "$S" alice --apply ) > "$WORK/out" 2>&1; RC=$?
+[ "$RC" = 0 ] || { cat "$WORK/out" >&2; fail 'apply from the closed cwd failed'; }
+not_has "$WORK/out" 'Permission denied' 'closed cwd: a getcwd death leaked into the run'
+has "$FLEET_TEST_LOG" 'tmux -L alice-fleet kill-session -t alice-fleet' 'closed cwd: fleet was not stopped'
+has "$FLEET_TEST_LOG" 'sysadminctl -deleteUser alice -keepHome' 'closed cwd: account was not deleted'
+[ ! -e "$FLEET_CONF_DIR/accounts" ] || fail 'closed cwd: pool was not removed'
 printf 'fleet-login-remove-selftest: PASS\n'

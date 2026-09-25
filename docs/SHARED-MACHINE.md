@@ -29,7 +29,10 @@ Repeat steps 1–5 for each person. Step 6 checks the whole machine.
 ## 1. Create the OS login (admin, on the machine)
 
 One command does the admin half of steps 1 and 2b (issue #1164). Run it as your
-own admin login — **not** under `sudo`; it sudo's each step itself:
+own admin login — **not** under `sudo`; it sudo's each step itself — from any
+directory: a relative `--pubkey` is resolved where you typed it, and the steps
+run from `/`, so the new login (which cannot see into your `0700` home) never
+inherits your cwd (issue #1216):
 
 ```sh
 ~/.claude/fleet/bin/fleet-login-new.sh alice --full-name "Alice Example" \
