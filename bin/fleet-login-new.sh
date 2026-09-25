@@ -19,6 +19,7 @@
 #   3. sudo dseditgroup … com.apple.access_ssh   (only when that group exists —
 #                                     without it Remote Login admits every user)
 #   4. ~/.ssh/authorized_keys ← --pubkey, .ssh 700 / key file 600, owned by <login>
+#      (a relative path is resolved against where you typed it — see below)
 #   5. --share-pool: every Claude pool token + its <label>.conf from --pool-src
 #      (default: YOUR accounts dir) → ~<login>/.config/claude-fleet/accounts,
 #      dir 700 / files 600, owned by <login> — SHARED-MACHINE step 2b. Never
@@ -50,7 +51,13 @@
 # DEFAULT IS A DRY RUN: it prints every command it would run and runs none.
 # --apply runs them, stopping at the first failure. Run it as the admin login,
 # NOT under sudo — it sudo's each step itself, and your $HOME is where the pool
-# comes from (and where the password file lands).
+# comes from (and where the password file lands). Run it from ANY directory
+# (issue #1216): the steps run from `/`, because a `sudo -u <login>` inherits
+# the cwd and the new login cannot stand in your 0700 home — from
+# ~/projects/… step 7's clone died on `Unable to read current working
+# directory` (#1210 ④; sync-logins had the same in #1162). --pubkey /
+# --pool-src / --password-file are made absolute first, so a relative
+# `--pubkey alice.pub` (docs/SHARED-MACHINE.md's example) is still found.
 #
 # Only ever ADDS: it refuses (exit 3) when the login or its home already exists,
 # never overwrites, and writes nothing in the new home outside `.ssh/`,
@@ -104,11 +111,26 @@ if [ "$KEYS" -eq 0 ] && [ "$APPLY" = 1 ]; then
   die2 "--pubkey '$PUBKEY' holds no public key line (ssh-… / ecdsa-… / sk-…)"
 fi
 
-HOMES=${FLEET_LOGIN_HOMES:-/Users}
-H="$HOMES/$LOGIN"
-DDIR="${FLEET_INSTALL_DAEMON_DIR:-/Library/LaunchDaemons}"
-GITURL="${FLEET_BOOTSTRAP_GIT_BASE:-https://github.com}/$FLEET_REPO_SELF.git"
 BIN="$(cd "$(dirname "$0")" && pwd)"
+GITURL="${FLEET_BOOTSTRAP_GIT_BASE:-https://github.com}/$FLEET_REPO_SELF.git"
+
+# Every path this script was handed, made absolute against the directory the
+# admin typed it in — then run from / (issue #1216). Every `sudo -u <login>`
+# below inherits the cwd, and the new login cannot stand in the admin's 0700
+# home: from ~/projects/… step 7's clone died on `fatal: Unable to read current
+# working directory: Permission denied` (#1210 ④) and only a `cd /` rerun went
+# through — the same family as sync-logins' #1162. Resolved BEFORE the cd, so a
+# relative `--pubkey alice.pub` (the docs' example) is still found; shown
+# absolute in the transcript, so the plan reads the same from anywhere.
+abs_dir()  { case "$1" in /*) printf '%s\n' "$1" ;; *) ( cd -- "$1" 2>/dev/null && pwd -P ) || printf '%s/%s\n' "$PWD" "$1" ;; esac; }
+abs_file() { case "$1" in /*) printf '%s\n' "$1" ;; */*) printf '%s/%s\n' "$(abs_dir "${1%/*}")" "${1##*/}" ;; *) printf '%s/%s\n' "$PWD" "$1" ;; esac; }
+PUBKEY=$(abs_file "$PUBKEY")
+[ -z "$POOL_SRC" ] || POOL_SRC=$(abs_dir "$POOL_SRC")
+[ -z "$PWFILE" ] || PWFILE=$(abs_file "$PWFILE")
+HOMES=$(abs_dir "${FLEET_LOGIN_HOMES:-/Users}")
+H="$HOMES/$LOGIN"
+DDIR=$(abs_dir "${FLEET_INSTALL_DAEMON_DIR:-/Library/LaunchDaemons}")
+cd / || die2 'cannot cd / (every step runs from there; issue #1216)'
 
 # The password (#1192): a file, never a prompt and never argv on the screen.
 # --password-file's first line, or a random one written to the admin's own

@@ -34,6 +34,11 @@
 #   F. failure    a failing step under --apply stops there (exit 1)
 #   G. bash 3.2   no `unbound variable` on any path (runs under /bin/bash, 3.2 on
 #                 macOS), with and without --share-pool
+#   H. cwd        (#1216) run from the admin's own 0700 home — the sudo shim
+#                 refuses any `sudo -u` from under it the way git died on getcwd
+#                 (#1210 ④) — with a RELATIVE --pubkey / --pool-src /
+#                 --password-file: --apply goes through, every relative path is
+#                 found, the transcript shows them absolute; a dry run likewise
 #
 # Exit 0 = pass.
 set -uo pipefail
@@ -59,10 +64,17 @@ mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
 # --- shims ------------------------------------------------------------------
 LOG="$WORK/calls.log"
 mkdir -p "$WORK/shim"
+# the admin's own home is 0700: from under CALLER (their repo checkout, where
+# docs/SHARED-MACHINE.md's example is typed) "the login" cannot stand — a
+# `sudo -u` run from there dies the way git did on getcwd (issue #1216)
+CALLER="$WORK/admin/projects/claude-fleet"
 cat > "$WORK/shim/sudo" <<EOF
 #!/bin/sh
 # sudo -u <login> -H <cmd…>: as "the login" = us (the sandbox home is ours)
-if [ "\$1" = -u ]; then shift 2; [ "\$1" = -H ] && shift; fi
+if [ "\$1" = -u ]; then
+  case "\$PWD/" in "$CALLER/"*) echo "fatal: Unable to read current working directory: Permission denied" >&2; exit 128 ;; esac
+  shift 2; [ "\$1" = -H ] && shift
+fi
 echo "sudo \$1" >> "$LOG"
 exec "\$@"
 EOF
@@ -95,7 +107,7 @@ export FLEET_LOGIN_HOMES="$WORK/homes"
 mkdir -p "$FLEET_LOGIN_HOMES"
 # the admin's HOME (the password file lands there) + the daemons dir (#1192)
 export HOME="$WORK/admin" FLEET_INSTALL_DAEMON_DIR="$WORK/LaunchDaemons" FLEET_INSTALL_BREW_PREFIX=/opt/homebrew
-mkdir -p "$HOME" "$FLEET_INSTALL_DAEMON_DIR"
+mkdir -p "$HOME" "$FLEET_INSTALL_DAEMON_DIR" "$CALLER"
 # the fixture GitHub: the real launchd/ templates + fleet-install-apply.sh, at stable
 command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP\n' >&2; exit 0; }
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
@@ -290,5 +302,41 @@ not_contains "G bash32 failed step" "$OUT" "unbound variable"
 run gus --full-name G --pubkey "$KEY"
 not_contains "G bash32 no pool" "$OUT" "unbound variable"
 eq "G no pool exit" 0 "$RC"
+
+# --- H. a cwd the login cannot read (issue #1216) ------------------------------
+# docs/SHARED-MACHINE.md's example, typed where the admin actually is: inside
+# their own 0700 home, with a relative `--pubkey alice.pub`. Every `sudo -u`
+# inherits that cwd, and step 7's clone died on getcwd (#1210 ④, the same
+# family as sync-logins' #1162). The script runs them from / — and resolves
+# every relative path argument first, so they are still found.
+cp "$KEY" "$CALLER/hal.pub"; mkdir -p "$CALLER/pool"; cp -p "$POOL"/alpha "$POOL"/alpha.conf "$POOL"/beta "$POOL"/beta.conf "$CALLER/pool/"; printf 'pw-from-cwd\n' > "$CALLER/pw.txt"
+( cd "$CALLER" && "$WORK/shim/sudo" -u hal -H git --version >/dev/null 2>&1 ) && fail "H the shim does not refuse a -u run from the closed cwd"
+( cd "$CALLER" && "$WORK/shim/sudo" tee /dev/null </dev/null >/dev/null 2>&1 ) || fail "H the shim refuses a root (no -u) run from the closed cwd"
+hrun() { : > "$LOG"; OUT=$(cd "$CALLER" && "$BASH_BIN" "$S" "$@" 2>&1); RC=$?; CALLS=$(cat "$LOG"); }
+hrun hal --full-name 'Hal H' --pubkey hal.pub --share-pool --pool-src ./pool --password-file pw.txt --apply $DAEMONS
+eq "H apply from the closed cwd: exit 0" 0 "$RC"
+not_contains "H no getcwd death" "$OUT" "Unable to read current working directory"
+not_contains "H no failed step" "$OUT" "FAILED at step"
+HH="$FLEET_LOGIN_HOMES/hal"
+contains "H the clone ran as the login" "$CALLS" "sudo git"
+eq "H clone at stable" "$(git -C "$FX" rev-parse stable)" "$(git -C "$HH/.claude/fleet" rev-parse HEAD 2>/dev/null)"
+eq "H relative --pubkey found" "$(cat "$KEY")" "$(cat "$HH/.ssh/authorized_keys")"
+eq "H relative --pool-src found" "alpha alpha.conf beta beta.conf" "$(ls -A "$HH/.config/claude-fleet/accounts" | tr '\n' ' ' | sed 's/ $//')"
+contains "H relative --password-file found" "$CALLS" "sysadminctl -addUser hal -fullName Hal H -password pw-from-cwd"
+contains "H transcript: key path absolute" "$OUT" "sudo tee -a $HH/.ssh/authorized_keys < $CALLER/hal.pub"
+contains "H transcript: pool path absolute" "$OUT" "sudo cp -p $CALLER/pool/alpha $CALLER/pool/alpha.conf $CALLER/pool/beta $CALLER/pool/beta.conf $HH/.config/claude-fleet/accounts/"
+contains "H transcript: password path absolute" "$OUT" "-password <redacted: $CALLER/pw.txt>"
+[ -e "$HOME/hal-onboard" ] && fail "H --password-file still generated one"
+# a dry run from there: the same absolute paths on screen, nothing executed
+hrun ian --full-name I --pubkey hal.pub --share-pool --pool-src pool
+eq "H dry run exit" 0 "$RC"
+contains "H dry run: key path absolute" "$OUT" "sudo tee -a $FLEET_LOGIN_HOMES/ian/.ssh/authorized_keys < $CALLER/hal.pub"
+contains "H dry run: pool path absolute" "$OUT" "sudo cp -p $CALLER/pool/alpha "
+eq "H dry run nothing executed" 0 "$(mutations)"
+[ -e "$FLEET_LOGIN_HOMES/ian" ] && fail "H dry run created a home"
+# a relative path that does not exist is still the usual exit 2, from there too
+hrun jo --full-name J --pubkey nope.pub
+eq "H missing relative key → 2" 2 "$RC"
+not_contains "H bash32" "$OUT" "unbound variable"
 
 echo "fleet-login-new-selftest PASS ($CHECKS checks, $("$BASH_BIN" -c 'echo $BASH_VERSION'))"
