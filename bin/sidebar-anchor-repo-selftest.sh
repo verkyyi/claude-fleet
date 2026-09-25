@@ -46,6 +46,9 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
 
 export FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1 TMPDIR="$WORK/tmp"
+# The hint line is localized since #1188 (fleet-sidebar.py: FLEET_UI_LANG, else the
+# login locale) — pin the Chinese the hints below assert.
+export FLEET_UI_LANG=zh
 mkdir -p "$FLEET_CONF_DIR" "$TMPDIR"
 unset TMUX TMUX_PANE FLEET_MAIN FLEET_REPO FLEET_BASE_BRANCH FLEET_SESSION CF_REPO
 . "$BIN/fleet-lib.sh"
@@ -186,7 +189,7 @@ T_B="$(taps wA)"
 eq "T: heading B — 1st tap selects, 2nd opens new, hint names it" \
    "$(printf '%s\n' "$T_B" | grep '^hdr:o/b ')" "hdr:o/b select new 新会话 → b…"
 eq "T: no-repo heading selects as \$HOME" \
-   "$(printf '%s\n' "$T_B" | grep '^hdr:none ')" "hdr:none select new 新会话 → no repo…"
+   "$(printf '%s\n' "$T_B" | grep '^hdr:none ')" "hdr:none select new 新会话 → 无仓库…"
 eq "T: the ? heading stays inert" \
    "$(printf '%s\n' "$T_B" | grep -c '^hdr None None 新会话名…$')" 1
 eq "T: a session row still jumps, then opens its menu" \

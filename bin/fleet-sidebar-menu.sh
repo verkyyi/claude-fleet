@@ -53,12 +53,6 @@ repo	g	添加仓库到这个 fleet — 询问 owner/name；~/projects/<name>，�
     m_wake='唤醒'; m_allow_sleep='允许休眠'; m_keep_awake='保持唤醒'
     m_agent_fmt='新会话改用 %s'; m_reap='回收…'; m_reap_confirm_fmt='回收「%s」？(y/n)'
     m_new='新建任务（建 issue）…'; m_restore='恢复已收工…'; m_repo='＋ 仓库…'
-    msg_reaped='fleet: 已回收'
-    msg_reaped_keep='fleet: 已回收 — 脏 worktree 已保留在磁盘'
-    msg_skip_live='fleet: 未回收 — agent 仍在运行（或太新）'
-    msg_skip_fmt='fleet: 未回收（%s）'
-    msg_refused_fmt='fleet: 未回收 — %s'
-    msg_no_result='fleet: 回收没有返回结果 — 请查看 hub'
     ;;
   *)
 MENU_KEYS='rename	r	rename — edits on the input line (↵ applies, esc / an empty name cancels)
@@ -78,12 +72,6 @@ repo	g	add a repo to this fleet — asks owner/name; ~/projects/<name>, cloned i
     m_wake='Wake'; m_allow_sleep='Allow sleep'; m_keep_awake='Keep awake'
     m_agent_fmt='New sessions use %s'; m_reap='Reap…'; m_reap_confirm_fmt='Reap "%s"? (y/n)'
     m_new='New task (file issue)…'; m_restore='Restore finished task…'; m_repo='Add repo…'
-    msg_reaped='fleet: reaped'
-    msg_reaped_keep='fleet: reaped — dirty worktree kept on disk'
-    msg_skip_live='fleet: not reaped — the agent is still live (or too young)'
-    msg_skip_fmt='fleet: not reaped (%s)'
-    msg_refused_fmt='fleet: not reaped — %s'
-    msg_no_result='fleet: reap gave no result — check the hub'
     ;;
 esac
 mk() { printf '%s\n' "$MENU_KEYS" | awk -F '\t' -v a="$1" '$1 == a { print $2; exit }'; }

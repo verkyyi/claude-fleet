@@ -10,9 +10,9 @@ eq() { [ "$2" = "$3" ] || fail "$1: got [$2] want [$3]"; ok "$1"; }
 
 eq 'en forced' "$(FLEET_UI_LANG=en "$BIN/fleet-ui-lang.sh" lang)" en
 eq 'zh forced' "$(FLEET_UI_LANG=zh "$BIN/fleet-ui-lang.sh" lang)" zh
-eq 'auto follows zh locale' "$(LC_ALL= LC_MESSAGES= LC_CTYPE= FLEET_UI_LANG=auto LANG=zh_CN.UTF-8 "$BIN/fleet-ui-lang.sh" lang)" zh
-eq 'auto follows en locale' "$(LC_ALL= LC_MESSAGES= LC_CTYPE= FLEET_UI_LANG=auto LANG=en_US.UTF-8 "$BIN/fleet-ui-lang.sh" lang)" en
-eq 'auto preserves Chinese in C locale' "$(LC_ALL= LC_MESSAGES= LC_CTYPE= FLEET_UI_LANG=auto LANG=C "$BIN/fleet-ui-lang.sh" lang)" zh
+eq 'auto follows zh locale' "$(LC_ALL='' LC_MESSAGES='' LC_CTYPE='' FLEET_UI_LANG=auto LANG=zh_CN.UTF-8 "$BIN/fleet-ui-lang.sh" lang)" zh
+eq 'auto follows en locale' "$(LC_ALL='' LC_MESSAGES='' LC_CTYPE='' FLEET_UI_LANG=auto LANG=en_US.UTF-8 "$BIN/fleet-ui-lang.sh" lang)" en
+eq 'auto preserves Chinese in C locale' "$(LC_ALL='' LC_MESSAGES='' LC_CTYPE='' FLEET_UI_LANG=auto LANG=C "$BIN/fleet-ui-lang.sh" lang)" zh
 
 # Importing fleet-sidebar.py would run none of its main loop, but its filename has
 # a dash. Probe through a tiny importlib shim so the constants are tested as used.
@@ -32,7 +32,7 @@ PY
 
 eq 'sidebar English strings' "$(probe_sidebar en | paste -sd'|' -)" 'New session name…| ? keys|no repo|New session → no repo…'
 eq 'sidebar Chinese strings' "$(probe_sidebar zh | paste -sd'|' -)" '新会话名…| ? 快捷键|无仓库|新会话 → 无仓库…'
-eq 'ghost English' "$(FLEET_UI_LANG=en FLEET_SESSION= "$BIN/dash-agent-prompt.sh" ghost 2>/dev/null)" '↵ new scratch (prefilled, unsent) · switch agent: ⌃v'
-eq 'ghost Chinese' "$(FLEET_UI_LANG=zh FLEET_SESSION= "$BIN/dash-agent-prompt.sh" ghost 2>/dev/null)" '↵ 新开 scratch（预填不发送） · 切换 agent: ⌃v'
+eq 'ghost English' "$(FLEET_UI_LANG=en FLEET_SESSION='' "$BIN/dash-agent-prompt.sh" ghost 2>/dev/null)" '↵ new scratch (prefilled, unsent) · switch agent: ⌃v'
+eq 'ghost Chinese' "$(FLEET_UI_LANG=zh FLEET_SESSION='' "$BIN/dash-agent-prompt.sh" ghost 2>/dev/null)" '↵ 新开 scratch（预填不发送） · 切换 agent: ⌃v'
 
 printf 'selftest OK: %s assertions passed (FLEET_UI_LANG)\n' "$pass"
