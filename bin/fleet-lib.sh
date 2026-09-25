@@ -2079,6 +2079,16 @@ _fleet_timebox_run() {
 # question, and it must be answered by the process table, not by tmux metadata.
 # Prints one numeric pid per line, sorted + deduped; prints NOTHING for an empty
 # dir or a broad root (each caller does its own refusing).
+# fleet_mangle_path <path> — the directory name Claude Code derives from a path
+# for its per-session scratch + transcript dirs: EVERY non-alphanumeric byte
+# becomes `-`, not just `/` (issue #1154). `tr '/' '-'` alone left the dots in, so
+# every worktree under a `*.noindex` FLEET_WORKTREE_ROOT (#886's recommended
+# layout — `/…/.fleet-worktrees.noindex/…` is `-…--fleet-worktrees-noindex-…` on
+# disk) silently fell out of matcher (3) below.
+fleet_mangle_path() {
+  printf '%s' "${1:-}" | LC_ALL=C tr -c 'A-Za-z0-9' '-'
+}
+
 _fleet_worktree_anchored_pids() {
   local dir="${1:-}"
   [ -n "$dir" ] || return 0
@@ -2098,8 +2108,8 @@ _fleet_worktree_anchored_pids() {
   # inside a -v assignment ("awk: newline in string"), which silently killed the whole
   # cwd matcher when the two forms diverged.
   local mp1 mp2
-  mp1="/$(printf '%s' "$cdir" | tr '/' '-')/"
-  mp2="/$(printf '%s' "$dir" | tr '/' '-')/"
+  mp1="/$(fleet_mangle_path "$cdir")/"
+  mp2="/$(fleet_mangle_path "$dir")/"
   [ "$mp2" = "$mp1" ] && mp2=""
 
   local pids="" p re pat
@@ -2332,6 +2342,249 @@ fleet_reap_worktree_procs() {
   for p in $list; do kill -0 "$p" 2>/dev/null && survivors="$survivors $p"; done
   [ -n "$survivors" ] && kill -KILL $survivors 2>/dev/null
   printf 'reaped:%s%s\n' " $list" "${survivors:+ (SIGKILL$survivors)}"
+}
+
+# ---- orphaned LISTENERS: the LAN leak (issue #1154) ----------------------------
+# The reapers above find their targets THROUGH a worktree or a session scratchpad,
+# and only at the moments a worktree is pruned or swept. A 2026-09-24 audit still
+# found three agent-started `python3 -m http.server` orphans (PPID=1) bound to
+# `*:<port>` — one serving the WHOLE scratchpad root /private/tmp/claude-<uid>
+# (every session's scratch dir, to anyone on the LAN), one in a scratchpad whose
+# window was long gone, one in a worktree built weeks earlier — plus four node dev
+# servers on another host. Three shapes no worktree matcher can reach: a cwd that
+# belongs to NO single session (the scratchpad root), a cwd whose worktree was
+# already removed (lsof still reports the old path), and a KEPT worktree whose
+# process outlived its window by weeks.
+#
+# So this half asks the question from the other end: start from the sockets. A
+# LISTEN socket is rare, cheap to enumerate (one lsof for this user), and the one
+# kind of orphan that is not just waste but exposure.
+#
+# fleet_claude_tmp_roots — Claude Code's scratchpad roots (claude-<uid>), physical
+# form, one per line. FLEET_CLAUDE_TMP_ROOT overrides (the selftest's sandbox).
+fleet_claude_tmp_roots() {
+  if [ -n "${FLEET_CLAUDE_TMP_ROOT:-}" ]; then
+    printf '%s\n' "${FLEET_CLAUDE_TMP_ROOT%/}"; return 0
+  fi
+  local uid d r; uid="$(id -u 2>/dev/null)"; [ -n "$uid" ] || return 0
+  for d in /tmp /private/tmp "${TMPDIR:-/tmp}"; do
+    r="$(cd "${d%/}/claude-$uid" 2>/dev/null && pwd -P)" && printf '%s\n' "$r"
+  done | sort -u
+}
+
+# fleet_listen_anchor <cwd> — is <cwd> a place only a fleet/Claude session puts a
+# process? Prints "<kind>\t<key>", or nothing:
+#   scratchroot  <root>        the claude-<uid> root ITSELF — no session owns it
+#   session      <mangled>     inside one session's dir under that root; <mangled>
+#                              is the worktree path with / turned to - (how Claude
+#                              Code names it), the key a live pane is matched on
+#   worktree     <dir>         inside a fleet worktree (`…-issue-N` / `…-scratch-N`,
+#                              existing or already removed) or a .fleet-trash
+#   home         ~/.claude     under the Claude/fleet config tree
+# A path anywhere else (an operator's own project, launchd's `/`) prints nothing —
+# this is never a machine-wide listener hunt.
+fleet_listen_anchor() {
+  local c="${1:-}" r rest
+  c="${c% (deleted)}"   # Linux /proc spells a removed cwd this way
+  [ -n "$c" ] || return 0
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    case "$c" in
+      "$r") printf 'scratchroot\t%s\n' "$r"; return 0 ;;
+      "$r"/*) rest="${c#"$r"/}"; printf 'session\t%s\n' "${rest%%/*}"; return 0 ;;
+    esac
+  done <<EOF
+$(fleet_claude_tmp_roots)
+EOF
+  local wt
+  wt="$(printf '%s' "$c" | awk -F/ '{
+      out=""; for (i=2;i<=NF;i++) { out=out "/" $i
+        if ($i ~ /-(issue|scratch)-[0-9]+$/ || $i == ".fleet-trash") { print out; exit } } }')"
+  [ -n "$wt" ] && { printf 'worktree\t%s\n' "$wt"; return 0; }
+  case "$c" in "$HOME/.claude"|"$HOME/.claude/"*) printf 'home\t%s\n' "$HOME/.claude" ;; esac
+  return 0
+}
+
+# Legitimate fleet listeners that must never be counted or reaped: doc-preview's
+# server (sticky until --stop, cwd = wherever share.sh ran), its tunnel, the fleet
+# webhook receiver. FLEET_LISTEN_EXEMPT_RE extends it.
+FLEET_LISTEN_EXEMPT_RE_DEFAULT='doc-preview/server\.py|cloudflared|fleet-webhook|tailscale'
+
+# fleet_listen_rows — every TCP LISTEN socket this user owns, one row per PROCESS:
+#   pid \t ppid \t age_s \t exposure \t addrs \t cwd \t argv
+# exposure is the WORST of its sockets: lan (`*`, 0.0.0.0, [::], a LAN address)
+# > tailnet (100.64/10, fd7a:115c:a1e0::/48 — tailscale's ranges, deliberate) >
+# local (loopback). Three process-table reads, whatever the number of listeners.
+fleet_listen_rows() {
+  command -v lsof >/dev/null 2>&1 || return 0
+  local me socks pids
+  me="$(id -un 2>/dev/null)"; [ -n "$me" ] || return 0
+  socks="$(lsof -nP -w -a -u "$me" -iTCP -sTCP:LISTEN -Fpn 2>/dev/null \
+    | awk '/^p/{p=substr($0,2)} /^n/{print p "\t" substr($0,2)}')"
+  [ -n "$socks" ] || return 0
+  pids="$(printf '%s\n' "$socks" | cut -f1 | sort -un | paste -sd, -)"
+  {
+    printf '%s\n' "$socks" | sed 's/^/S\t/'
+    lsof -w -a -p "$pids" -d cwd -Fpn 2>/dev/null \
+      | awk '/^p/{p=substr($0,2)} /^n/{print "C\t" p "\t" substr($0,2)}'
+    ps -o pid=,ppid=,etime=,command= -p "$pids" 2>/dev/null \
+      | awk '{ a=""; for (i=4;i<=NF;i++) a=a (i>4?" ":"") $i
+               print "P\t" $1 "\t" $2 "\t" $3 "\t" a }'
+  } | awk -F'\t' '
+    function cls(n,   a) {
+      a = n; sub(/:[0-9]+$/, "", a)
+      if (a ~ /^127\./ || a == "[::1]" || a == "localhost") return 1
+      if (a ~ /^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\./ || a ~ /^\[fd7a:115c:a1e0:/) return 2
+      return 3 }
+    function secs(et,   f, n) {
+      n = split(et, f, /[-:]/)
+      if (n == 4) return f[1]*86400 + f[2]*3600 + f[3]*60 + f[4]
+      if (n == 3) return f[1]*3600 + f[2]*60 + f[3]
+      if (n == 2) return f[1]*60 + f[2]
+      return 0 }
+    $1 == "S" { c = cls($3); if (c > w[$2]) w[$2] = c
+                ad[$2] = (ad[$2] == "" ? $3 : ad[$2] "," $3); next }
+    $1 == "C" { cw[$2] = $3; next }
+    $1 == "P" { pp[$2] = $3; ag[$2] = secs($4); av[$2] = $5; next }
+    END { for (p in w) {
+            if (!(p in pp)) continue          # exited between the reads
+            e = (w[p] == 3 ? "lan" : (w[p] == 2 ? "tailnet" : "local"))
+            printf "%s\t%s\t%d\t%s\t%s\t%s\t%s\n", p, pp[p], ag[p], e, ad[p], cw[p], av[p] } }' \
+    | sort -n
+}
+
+# fleet_listen_fleet_rows — fleet_listen_rows narrowed to fleet-ANCHORED, non-exempt
+# listeners, with the anchor appended: … \t argv \t kind \t key. The doctor's list.
+fleet_listen_fleet_rows() {
+  local re="$FLEET_LISTEN_EXEMPT_RE_DEFAULT${FLEET_LISTEN_EXEMPT_RE:+|$FLEET_LISTEN_EXEMPT_RE}"
+  local pid ppid age exp addrs cwd argv anc
+  fleet_listen_rows | while IFS="$(printf '\t')" read -r pid ppid age exp addrs cwd argv; do
+    [ -n "$pid" ] || continue
+    printf '%s' "$argv" | grep -Eq "$re" && continue
+    anc="$(fleet_listen_anchor "$cwd")"; [ -n "$anc" ] || continue
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$pid" "$ppid" "$age" "$exp" "$addrs" "$cwd" "$argv" "$anc"
+  done
+}
+
+# _fleet_pane_cwd_keys — for every process running under a live tmux pane, and
+# every live `claude` anywhere (a session outside tmux still owns its scratchpad),
+# its cwd (physical) AND that cwd mangled the way Claude Code names a session dir,
+# one per line. The liveness question for a worktree/session anchor: "is some
+# session still working there?" Only asked when there is a candidate, so the full
+# cwd read is rare.
+_fleet_pane_cwd_keys() {
+  local tree; tree="$(ps -eo pid=,ppid=,comm= 2>/dev/null | awk '
+    { p=$1+0; par[p]=$2+0; c=$3; sub(/.*\//,"",c); if (c=="tmux"||c~/^tmux:/) srv[p]=1
+      if (c=="claude" || $3 ~ /\/claude\/versions\//) cl[p]=1 }
+    END { for (p in par) { if (cl[p]) { print p; continue }; q=p; h=0
+            while (q>1 && h++<64) { if (srv[par[q]]) { print p; break }; q=par[q] } } }' \
+    | paste -sd, -)"
+  [ -n "$tree" ] || return 0
+  lsof -w -a -p "$tree" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | sort -u \
+    | while IFS= read -r c; do
+        printf 'D\t%s\n' "$c"
+        printf 'M\t%s\n' "$(fleet_mangle_path "$c")"
+      done
+}
+
+# fleet_orphan_listeners <minage-secs> — the reap candidates: a fleet-anchored,
+# non-exempt listener that has been up >= minage AND whose process tree is
+# ORPHANED: walking up from it reaches init without passing a tmux server or a
+# `claude` (a live pane / a live session outside tmux owns it), and the topmost
+# process below init is itself fleet-anchored (so a server started from the
+# operator's own terminal — Terminal.app sits below launchd with cwd `/` — is
+# never taken). A worktree/session anchor is also spared while any live pane
+# still has its cwd there. Rows: … \t kind \t key \t top (the pid to kill the tree of).
+fleet_orphan_listeners() {
+  local minage="${1:-0}" rows tops panes
+  case "$minage" in ''|*[!0-9]*) minage=0 ;; esac
+  rows="$(fleet_listen_fleet_rows | awk -F'\t' -v m="$minage" '$3+0 >= m')"
+  [ -n "$rows" ] || return 0
+  # top-below-init for each candidate, or "" when a tmux/claude ancestor owns it
+  tops="$(ps -eo pid=,ppid=,comm= 2>/dev/null | awk -v want="$(printf '%s\n' "$rows" | cut -f1 | tr '\n' ' ')" '
+    { p=$1+0; par[p]=$2+0; c=$3; sub(/.*\//,"",c); cm[p]=c
+      # the native build runs as …/claude/versions/<semver>, so its comm is a version
+      if ($3 ~ /\/claude\/versions\//) cm[p]="claude" }
+    END { n=split(want, w, / +/)
+      for (i=1;i<=n;i++) { p=w[i]+0; if (p<=1) continue; q=p; h=0; top=""; owned=0
+        while (q>1 && h++<64) {
+          if (cm[q]=="tmux" || cm[q] ~ /^tmux:/ || cm[q]=="claude") { owned=1; break }
+          if (!(q in par)) break
+          if (par[q]==1) { top=q; break }
+          q=par[q] }
+        if (!owned && top!="") print p "\t" top } }')"
+  [ -n "$tops" ] || return 0
+  panes="$(_fleet_pane_cwd_keys)"
+  local pid ppid age exp addrs cwd argv kind key top tcwd live
+  printf '%s\n' "$rows" | while IFS="$(printf '\t')" read -r pid ppid age exp addrs cwd argv kind key; do
+    top="$(printf '%s\n' "$tops" | awk -F'\t' -v p="$pid" '$1==p{print $2; exit}')"
+    [ -n "$top" ] || continue
+    if [ "$top" != "$pid" ]; then
+      tcwd="$(lsof -w -a -p "$top" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
+      [ -n "$(fleet_listen_anchor "$tcwd")" ] || continue
+    fi
+    live=0
+    case "$kind" in
+      worktree) printf '%s\n' "$panes" | awk -F'\t' -v k="$key" '
+                  $1=="D" && ($2==k || index($2, k "/")==1) {f=1} END{exit !f}' && live=1 ;;
+      session)  printf '%s\n' "$panes" | awk -F'\t' -v k="$key" '
+                  $1=="M" && ($2==k || index($2, k "-")==1) {f=1} END{exit !f}' && live=1 ;;
+    esac
+    [ "$live" = 1 ] && continue
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$pid" "$ppid" "$age" "$exp" "$addrs" "$cwd" "$argv" "$kind" "$key" "$top"
+  done
+}
+
+# fleet_reap_orphan_listeners [kill|dry] [minage-secs] — the periodic backstop
+# (diskguard's tick). Kills each candidate's WHOLE tree from its top (an `npm run
+# dev` wrapper and its node child go together). Prints one line per candidate:
+# "reaped|would reap <pid> <exposure> <addrs> cwd=<cwd> age=<s>s top=<top>".
+fleet_reap_orphan_listeners() {
+  local mode="${1:-kill}" minage="${2:-0}" pid ppid age exp addrs cwd argv kind key top
+  fleet_orphan_listeners "$minage" | while IFS="$(printf '\t')" read -r pid ppid age exp addrs cwd argv kind key top; do
+    [ -n "$pid" ] || continue
+    [ "$top" -gt 1 ] 2>/dev/null || continue
+    [ "$top" = "$$" ] && continue
+    if [ "$mode" = dry ]; then
+      printf 'would reap %s %s %s cwd=%s age=%ss top=%s\n' "$pid" "$exp" "$addrs" "$cwd" "$age" "$top"
+    else
+      fleet_kill_tree "$top" 2 >/dev/null 2>&1
+      printf 'reaped %s %s %s cwd=%s age=%ss top=%s\n' "$pid" "$exp" "$addrs" "$cwd" "$age" "$top"
+    fi
+  done
+}
+
+# fleet_reap_worktree_listeners <dir> [wait-secs] — TEARDOWN half (issue #1154):
+# called right after a worker's window is closed on a path that KEEPS its worktree
+# (dirty/unmerged), where fleet_reap_worktree_procs does not run. Kills only the
+# LISTENERS anchored to <dir> or its session scratchpad — the exposure — and leaves
+# every other process to the kept-worktree sweep's age-gated judgement. A listener
+# still under a tmux pane is spared as ever (#550); since the window was JUST
+# killed, its tree may not have reparented yet, so this waits up to [wait] seconds
+# (default 5) for that before giving up — the diskguard sweep is the backstop.
+fleet_reap_worktree_listeners() {
+  local dir="${1:-}" wait="${2:-5}" anchored lpids cand live i=0 p out=""
+  [ -n "$dir" ] || return 0
+  case "$wait" in ''|*[!0-9]*) wait=5 ;; esac
+  while :; do
+    anchored="$(_fleet_worktree_anchored_pids "$dir")"
+    [ -n "$anchored" ] || break
+    lpids="$(fleet_listen_rows | cut -f1)"
+    cand="$(printf '%s\n' $anchored $lpids | sort -n | uniq -d)"
+    [ -n "$cand" ] || break
+    # shellcheck disable=SC2086
+    live="$(fleet_pids_under_tmux $cand)"
+    cand="$(printf '%s\n' $cand $live $live | sort -n | uniq -u)"
+    for p in $cand; do
+      [ "$p" -gt 1 ] 2>/dev/null || continue
+      [ "$p" = "$$" ] && continue
+      fleet_kill_tree "$p" 2 >/dev/null 2>&1; out="$out $p"
+    done
+    [ -n "$live" ] && [ "$i" -lt "$wait" ] || break
+    i=$((i+1)); sleep 1
+  done
+  [ -n "$out" ] && printf 'reaped listeners:%s\n' "$out"
+  return 0
 }
 
 # ---- retiring a worktree without paying for its bytes (issue #586) ------------

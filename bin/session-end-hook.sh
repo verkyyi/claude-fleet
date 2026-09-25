@@ -180,6 +180,9 @@ if [ "${1:-}" = "--exec" ]; then
         >/dev/null 2>&1 || :
     fi
     [ -n "$win" ] && tmux kill-window -t "$win" 2>/dev/null
+    # The scratch worktree stays for the janitor, but its LISTENERS go now (#1154):
+    # a temp server left bound to `*` would serve the dir to the LAN until then.
+    [ -n "${wtdir:-}" ] && fleet_reap_worktree_listeners "$wtdir" >/dev/null 2>&1
     exit 0
   fi
 
@@ -265,6 +268,11 @@ if [ "${1:-}" = "--exec" ]; then
       fi
       ;;
     *)  # unmerged | dirty → KEEP the worktree + issue (resumable); window already closed.
+      # Its detached LISTENERS go now, though (issue #1154): the kept-worktree sweep
+      # is hourly and age-gated, and a dev server bound to `*` serves the tree to
+      # the LAN until it gets there. Listeners only — everything else keeps the
+      # sweep's judgement.
+      [ -n "${wtdir:-}" ] && fleet_reap_worktree_listeners "$wtdir" >/dev/null 2>&1
       : ;;
   esac
   exit 0

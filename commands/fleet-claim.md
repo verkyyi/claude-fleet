@@ -341,6 +341,16 @@ override them):
   would show yours; the Artifact tool's publish is hook-blocked in fleet sessions
   (issue #526). Reading or commenting on an artifact someone shared with you is
   fine.
+- **A temp server binds 127.0.0.1 and dies with your work** (issue #1154).
+  `python3 -m http.server`, `vite`, `next dev`, a mock API — all bind `*` by
+  default, which serves their cwd to the whole LAN, and a backgrounded one
+  outlives your window as a `PPID=1` orphan (a 2026-09-24 audit found one serving
+  the entire scratchpad root for two days). Bind loopback
+  (`python3 -m http.server --bind 127.0.0.1`, `vite --host 127.0.0.1`,
+  `next dev -H 127.0.0.1`), stop it when you're done, and when the operator needs
+  to see it, host through doc-preview (above) — never widen the bind. Orphans are
+  reaped at teardown and by the diskguard tick; `fleet-doctor` WARNs on any
+  fleet process still listening on the LAN.
 - **Blocked = say why, never stall silently.** Blocked means *actually* stuck —
   a required review you can't grant, credentials you don't have, a decision only
   the operator can make — not "I'd like a second opinion". Post a

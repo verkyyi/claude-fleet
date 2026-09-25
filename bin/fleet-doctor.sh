@@ -1078,6 +1078,31 @@ else
   pass machine "load $mload on $mcores cores (${mper}/core), no orphaned runaways"
 fi
 
+# --- fleet listeners exposed to the LAN (issue #1154) ---------------------------
+# An agent's temp server (`python3 -m http.server`, a node dev server) binds `*` by
+# default, and outlives its window: the 2026-09-24 audit found one serving the
+# whole scratchpad root to the LAN for two days. The diskguard tick reaps the
+# ORPHANED ones after FLEET_ORPHAN_LISTEN_SECS; this line names every exposed one
+# NOW — orphaned or still owned by a live session — because the exposure is the
+# finding either way. Only fleet/Claude-anchored cwds count (a scratchpad, a fleet
+# worktree, ~/.claude): the operator's own apps (AirPlay, rapportd) are not ours.
+# WARN, never FAIL, like every machine line: a condition, not a broken install.
+lsn=''
+[ -f "$_dg" ] && lsn="$(bash "$_dg" --listeners 2>/dev/null)"
+lsnn=$(printf '%s' "$lsn" | awk 'NF{n++} END{print n+0}')
+if [ "$lsnn" -gt 0 ]; then
+  warn listen "$lsnn fleet process(es) listening on the LAN — a temp server bound to \`*\` serves its cwd to anyone on the network (issue #1154). Bind 127.0.0.1 (\`python3 -m http.server --bind 127.0.0.1\`); share with the operator through doc-preview. Orphans are reaped after \${FLEET_ORPHAN_LISTEN_SECS:-21600}s by the diskguard tick; \`bin/fleet-diskguard.sh --orphan-listeners\` lists them"
+  printf '%s\n' "$lsn" | head -5 | while IFS="$(printf '\t')" read -r lpid laddr lage lcwd largv; do
+    [ -n "$lpid" ] || continue
+    lup=$(awk -v s="$lage" 'BEGIN{ s+=0; d=int(s/86400); h=int(s%86400/3600); m=int(s%3600/60)
+      if (d) printf "%dd%dh", d, h; else if (h) printf "%dh%dm", h, m; else printf "%dm", m }')
+    printf '        pid %s  %s  up %s  cwd=%s  %s\n' "$lpid" "$laddr" "$lup" "$lcwd" \
+      "$(printf '%s' "$largv" | awk '{ print substr($0,1,60) }')"
+  done
+else
+  pass listen "no fleet process listening on the LAN"
+fi
+
 # --- machine pressure the load average cannot see (issue #889) -----------------
 # On 2026-09-22 every new session froze 6-8s at spawn and it took an hour of
 # manual digging to find three causes this screen could have named: macOS's
