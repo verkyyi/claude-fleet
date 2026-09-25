@@ -110,6 +110,7 @@ FLEET_MIGRATE_CLOSE_WAIT           knob: internal pacing/limit, safe in-code def
 FLEET_MIGRATE_EXIT_WAIT            knob: internal pacing/limit, safe in-code default (fleet-migrate.sh)
 FLEET_MIGRATE_FAILOVER_PY          seam: an injectable command/path for tests (fleet-migrate.sh)
 FLEET_MIGRATE_LAUNCH               seam: an injectable command/path for tests (fleet-migrate.sh)
+FLEET_OFFBOARD_ARCHIVE_DIR         path: offboarding home-archive dir override; --archive-dir is the CLI form (fleet-login-remove.sh)
 FLEET_MIGRATION_LOCKED             handoff: a transition lock the caller already holds
 FLEET_MODEL_SWITCH_DIALOG          knob: internal pacing/limit, safe in-code default (fleet-model-switch.sh)
 FLEET_MODEL_SWITCH_SCROLL          knob: internal pacing/limit, safe in-code default (fleet-model-switch.sh)
