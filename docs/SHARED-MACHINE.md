@@ -295,10 +295,29 @@ As the admin login, preview and then offboard the person:
 
 The command stops alice's fleet under her login, boots out and removes her
 system LaunchDaemons and GUI LaunchAgents (including ccquota), removes the
-copied Claude account pool, stops remaining processes, and deletes her OS
-account. It refuses the current login and admin group members. The home is
-kept by default with `sysadminctl -keepHome`; add `--delete-home` only when its
-files should be removed too.
+copied Claude account pool, stops remaining processes, archives her home,
+deletes her OS account, and takes her name out of every `com.apple.access_*`
+service group. It refuses the current login and admin group members, and it
+never passes `sysadminctl -keepHome` — on this macOS that option answers
+`'-keepHome' options is not available on this system`, which is how the
+default offboarding used to die (#1210 ⑤).
+
+- **`--keep-home` (default):** her home is packed first as a `600` tar.gz owned
+  by you under `/Users/Shared/offboarded/` (`--archive-dir <dir>`, or
+  `FLEET_OFFBOARD_ARCHIVE_DIR`), and the login is then deleted home and all.
+  The archive path is the last line of the output. The account pool is removed
+  before the archive is taken, so the shared tokens are never inside it. A
+  failed archive stops the run before the login is touched.
+- **`--delete-home`:** no archive; the login and its home go outright.
+
+After the account is gone, `dseditgroup -d` can no longer remove alice from
+`com.apple.access_ssh` (`Record was not found`), so her name would stay in the
+Remote Login allow-list forever; the command removes her name and GUID from
+every `com.apple.access_*` group with `dscl . -delete` instead. Check with:
+
+```sh
+dscl . -read /Groups/com.apple.access_ssh GroupMembership
+```
 The hub has no endpoint deletion command: once the ccquota agent stops,
 `mini-alice` goes stale and stops reporting. Past usage stays under its
 `os_user`.
