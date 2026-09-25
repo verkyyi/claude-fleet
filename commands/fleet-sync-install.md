@@ -135,6 +135,10 @@ actually moved. One line per step (`<step>: …`), in this order:
   removed).
 - **skills** — each changed `skills/<name>/` mirrored whole (scripts + exec
   bits); a personal skill that diverges is warned about and left alone.
+- **codex-skills** — the same fleet commands are generated as native Codex
+  skills under every known `$CODEX_HOME/skills/<name>/SKILL.md`, and repo
+  `skills/<name>/` dirs are mirrored there too. This is how a Codex worker starts
+  from `$fleet-claim` instead of a prose-expanded seed.
 - **ui** — dash launcher or `conf/tmux-attention.conf` changed →
   `fleet-ui-refresh.sh --all` on every live fleet, with `--from`'s conf as the
   before-file for the unbind diff (#248, #295).
@@ -208,8 +212,9 @@ the new checkout forward.
 
 One line naming what synced: the `before → after` sha, the apply's final line,
 any of its lines that did something (a daemon reloaded / added / retired, hooks
-re-merged, commands or skills installed / removed, a personal-skill WARN, dash
-panes refreshed, conf reloaded, pages re-parked) or FAILed, and the `logins:`
+re-merged, commands / skills / codex-skills installed or removed, a
+personal-skill WARN, dash panes refreshed, conf reloaded, pages re-parked) or
+FAILed, and the `logins:`
 verdict line — with any `off` row and any WARN, since each names something only
 the operator can decide.
 If you stopped at step 1 (not a checkout) or step 2 (diverged / already current),

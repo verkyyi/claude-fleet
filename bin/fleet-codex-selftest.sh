@@ -18,9 +18,11 @@
 #     bash-guard / base-readonly-guard on PreToolUse; working; done) as TOML that
 #     actually parses; NO --model / --mcp-config / CLAUDE_CODE_SUBAGENT_MODEL leak;
 #     FLEET_CODEX_MODEL → -m (caller -m wins); @cc_agent codex (+ @cc_model) stamped.
-#   * SEED EXPANSION — a bare `/fleet-claim` seed becomes prose: the preamble
-#     (conf/codex-preamble.md) + commands/fleet-claim.md; `/name args` substitutes
-#     $ARGUMENTS; a non-slash prompt and an unknown skill pass through verbatim;
+#   * SEED SKILLS — a bare `/fleet-claim` seed becomes Codex's native
+#     `$fleet-claim` skill when $CODEX_HOME has it and Codex exposes skills;
+#     older Codex or an unsynced home falls back to the historic prose expansion:
+#     conf/codex-preamble.md + commands/fleet-claim.md with $ARGUMENTS
+#     substituted. Non-slash prompts and unknown skills pass through verbatim;
 #     the prompt stays the LAST argument; no prompt → no positional.
 #   * cwd is the worktree (codex runs where the pane runs); `codex` missing from
 #     PATH → exit 127 and claude is NOT launched in its place.
@@ -78,6 +80,10 @@ printf '#!/bin/sh\nexit 0\n' > "$IBIN/fleet-account.sh"; chmod +x "$IBIN/fleet-a
 for agent in claude codex; do
   cat > "$WORK/fakebin/$agent" <<EOS
 #!/bin/sh
+if [ "$agent" = codex ] && [ "\${1:-}" = debug ] && [ "\${2:-}" = prompt-input ]; then
+  printf '%s\n' '<skills_instructions>'
+  exit 0
+fi
 printf '%s\n' "$agent" > "$WORK/ran"
 : > "$WORK/argv"; for a in "\$@"; do printf '%s\036' "\$a" >> "$WORK/argv"; done
 pwd -P > "$WORK/cwd"
@@ -120,6 +126,10 @@ printf 'FLEET_MODEL="opus"\n' > "$WORK/install/fleet.conf"     # the global conf
 export CODEX_HOME="$WORK/codexhome"; mkdir -p "$CODEX_HOME" "$WORK/wt/repo"
 FAKE_MAIN="$(cd "$WORK/wt/repo" && pwd -P)"
 printf 'model = "x"\n\n[projects."%s"]\ntrust_level = "trusted"\n' "$FAKE_MAIN" > "$CODEX_HOME/config.toml"
+for s in fleet-claim fleet-handoff; do
+  mkdir -p "$CODEX_HOME/skills/$s"
+  printf -- '---\nname: %s\ndescription: fake %s\n---\n\n<!-- fleet codex command skill -->\n' "$s" "$s" > "$CODEX_HOME/skills/$s/SKILL.md"
+done
 
 run() {   # run the launcher from the fake worktree with a fresh env; args pass through
   rm -f "$WORK/ran" "$WORK/argv" "$WORK/cwd" "$WORK/subm" "$WORK/tmuxlog" "$WORK/close" "$WORK/agent-exited"
@@ -260,11 +270,16 @@ grep -q 'set-option -wu -t %0 @cc_model' "$WORK/tmuxlog" || fail "E new launch m
 ok "E FLEET_CODEX_MODEL → -m + @cc_model; caller -m wins; empty defers to codex"
 
 # ============================================================================
-# F. seed expansion: /fleet-claim → preamble + skill prose, LAST arg
+# F. seed skill: /fleet-claim → native $fleet-claim when installed, else fallback
 # ============================================================================
 run '/fleet-claim'
 p="$(last)"
-case "$p" in /fleet-claim) fail "F the bare slash seed must be EXPANDED for codex (it has no slash commands)" ;; esac
+case "$p" in '$fleet-claim') : ;; *) fail "F the bare slash seed must become the native Codex skill trigger" "$(argv1l)" ;; esac
+ok "F /fleet-claim becomes native \$fleet-claim, as the last argument"
+
+FLEET_CODEX_NATIVE_SKILLS=0 run '/fleet-claim'
+p="$(last)"
+case "$p" in /fleet-claim|'$fleet-claim') fail "F old-Codex fallback must expand the slash seed into prose" ;; esac
 case "$p" in *'running on OpenAI Codex CLI'*) : ;; *) fail "F the expanded seed must start with the Codex preamble" "$(printf '%s' "$p" | head -5)" ;; esac
 case "$p" in *'fleet-claim-brief.sh'*) : ;; *) fail "F the expanded seed must carry the /fleet-claim skill body (the brief command)" "$(printf '%s' "$p" | head -20)" ;; esac
 case "$p" in *'fleet-pr-verdict.sh'*) : ;; *) fail "F the expanded seed must carry the ship+land step" ;; esac
@@ -273,14 +288,17 @@ case "$p" in *'$ARGUMENTS'*) fail "F \$ARGUMENTS must be substituted (empty here
 pre_at=$(printf '%s' "$p" | grep -n 'running on OpenAI Codex CLI' | head -1 | cut -d: -f1)
 body_at=$(printf '%s' "$p" | grep -n 'fleet-claim-brief.sh' | head -1 | cut -d: -f1)
 [ "$pre_at" -lt "$body_at" ] || fail "F the preamble must precede the skill body" "pre=$pre_at body=$body_at"
-ok "F /fleet-claim expands to preamble + skill prose, as the last argument"
+ok "F old-Codex /fleet-claim fallback expands to preamble + skill prose"
 
 # /name args → $ARGUMENTS substituted
 run '/fleet-handoff pickup /tmp/h.md'
 p="$(last)"
-case "$p" in *'pickup /tmp/h.md'*) : ;; *) fail "F /name args must substitute \$ARGUMENTS" "$(printf '%s' "$p" | grep -n 'Argument' | head -3)" ;; esac
+case "$p" in '$fleet-handoff pickup /tmp/h.md') : ;; *) fail "F /name args must stay on the native skill trigger" "$(argv1l)" ;; esac
+FLEET_CODEX_NATIVE_SKILLS=0 run '/fleet-handoff pickup /tmp/h.md'
+p="$(last)"
+case "$p" in *'pickup /tmp/h.md'*) : ;; *) fail "F old-Codex /name args must substitute \$ARGUMENTS" "$(printf '%s' "$p" | grep -n 'Argument' | head -3)" ;; esac
 case "$p" in *'/fleet-handoff'*) : ;; *) fail "F the expanded skill should be fleet-handoff's" ;; esac
-ok "F /fleet-handoff pickup <file> expands with \$ARGUMENTS substituted"
+ok "F /fleet-handoff pickup <file> is native when available; fallback substitutes \$ARGUMENTS"
 
 # a non-slash prompt passes through verbatim; an unknown skill too (with a note)
 run 'plain prose seed with $(injection) and "quotes"'
@@ -358,7 +376,7 @@ ok "G codex missing → exit 127 with a clear error, no silent claude fallback"
 # on the pane's window (red on the dash), and codex is STILL exec'd (it is the
 # authority). The operator's config is never written.
 # (G removed the fake codex — put a minimal one back: records that it ran + argv.)
-printf '#!/bin/sh\nprintf "%%s\\n" codex > "%s/ran"\n: > "%s/argv"; for a in "$@"; do printf "%%s\\036" "$a" >> "%s/argv"; done\nexit 0\n' "$WORK" "$WORK" "$WORK" > "$WORK/fakebin/codex"; chmod +x "$WORK/fakebin/codex"
+printf '#!/bin/sh\nif [ "${1:-}" = debug ] && [ "${2:-}" = prompt-input ]; then printf "%%s\\n" "<skills_instructions>"; exit 0; fi\nprintf "%%s\\n" codex > "%s/ran"\n: > "%s/argv"; for a in "$@"; do printf "%%s\\036" "$a" >> "%s/argv"; done\nexit 0\n' "$WORK" "$WORK" "$WORK" > "$WORK/fakebin/codex"; chmod +x "$WORK/fakebin/codex"
 printf 'FLEET_AGENT="codex"\n' > "$WORK/conf/fleets/f1/conf"
 run '/fleet-claim'
 [ "$(ran)" = codex ] || fail "H (setup) codex must run" "$(cat "$WORK/err")"
