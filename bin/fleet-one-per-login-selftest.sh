@@ -311,6 +311,13 @@ leg "8 failed guide restarts once after cooldown"
 # ---- 9. cf --guide recalls the existing or failed guide (issue #1171) ----
 export FLEET_CONF_DIR="$WORK/conf9" FLEET_ONBOARD=0
 : > "$launches"
+cat > "$SB/fleet-claude.sh" <<EOF
+#!/bin/bash
+printf 'attempt\n' >> "$launches"
+printf 'test guide: /fleet-onboard\n'
+exec sleep 3600
+EOF
+chmod +x "$SB/fleet-claude.sh"
 out=$(up o/g "$g"); eq "9 up rc" "$?" 0
 eq "9 starts without guide" "$(wins '#{window_name}' | grep -cx guide)" 0
 guide() {
@@ -363,6 +370,9 @@ done
 eq "9 respawned once" "$(wc -l < "$launches" | tr -d ' ')" 2
 eq "9 reused window" "$(wins '#{window_name}' | grep -cx guide)" 1
 eq "9 respawn focused" "$(wins '#{window_name} #{window_active}' | grep ' 1$')" "guide 1"
+if [ -n "${GUIDE_EVIDENCE_FILE:-}" ]; then
+  tmux -L fleet capture-pane -p -t fleet:guide > "$GUIDE_EVIDENCE_FILE"
+fi
 "$REAL_TMUX" -S "$SOCKD/fleet" kill-server 2>/dev/null
 leg "9 cf --guide opens, focuses, and repairs the guide"
 
