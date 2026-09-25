@@ -591,6 +591,25 @@ fleet_conf_set() {
   mv -f "$tmp" "$conf" || { rm -f "$tmp"; return 1; }
 }
 
+# fleet_conf_unset <conf> <KEY>... — drop every assignment of each KEY (optionally
+# `export`ed) from a conf file; everything else is kept verbatim. Atomic (temp +
+# mv). A KEY that is not there is a no-op; rc 2 on a bad KEY.
+fleet_conf_unset() {
+  local conf="${1:-}" key re='' tmp
+  [ -n "$conf" ] || return 2
+  shift
+  for key in "$@"; do
+    case "$key" in ''|[!A-Z_]*|*[!A-Za-z0-9_]*) return 2 ;; esac
+    re="$re${re:+|}$key"
+  done
+  [ -n "$re" ] && [ -f "$conf" ] || return 0
+  tmp="$conf.tmp.$$"
+  # `|| true`: grep exits 1 when NOTHING is left, which is a legal (empty) conf.
+  { grep -Ev "^[[:space:]]*(export[[:space:]]+)?(${re})[[:space:]]*=" "$conf" || true; } > "$tmp" \
+    || { rm -f "$tmp"; return 1; }
+  mv -f "$tmp" "$conf" || { rm -f "$tmp"; return 1; }
+}
+
 # fleet_repo_conf_file_for <sess> <repo> → where <repo>'s own value of a key lives:
 # its overlay when one exists, else the fleet conf (the conf repo without an
 # overlay). What a "set KEY=… in <file>" hint should name.

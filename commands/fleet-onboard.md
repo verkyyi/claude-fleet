@@ -97,6 +97,21 @@ echo "repo=${FLEET_REPO:-} session=$S seat=${SEAT:-none}"
    ~/.claude/fleet/bin/fleet-onboard.sh set repo=<owner/name> step=issue
    ```
 
+5. **The starter repo can go now** (issue #1172). If `brief` tagged a `[seed]`
+   repo, say so once, right after the add: it was only there so the fleet worked
+   before they had a repo of their own, and now it is dead weight in their session
+   list — then offer, in one line, to take it out («起步仓库 claude-fleet 现在可以
+   拿掉了，会话列表里就只剩你的仓库——要拿掉吗？»). On yes:
+
+   ```sh
+   ~/.claude/fleet/bin/fleet-repo.sh remove <seed owner/name>
+   ```
+
+   It promotes their repo into the fleet's own slot; this `guide` window keeps
+   running (a scratch of the starter never blocks it). A `refused:` on stderr
+   (an issue window still open on the starter) → leave it and go on — the same
+   command works later from any window. On no → go on; nothing depends on it.
+
 ## 2. `issue` — turn the wish into an issue and open a session for it
 
 1. Ask them to say, in their own words, the first thing they want changed — one
@@ -211,7 +226,8 @@ Then `fleet-onboard.sh set step=done` and say goodbye in one line.
 ---
 
 Rails: this fleet only, and only repos the newcomer names — never the `[seed]`
-starter repo, never another fleet's. Read-only everywhere except the four
+starter repo (taking it OUT of the fleet, step 1.5, is the one thing you do to
+it), never another fleet's. Read-only everywhere except the five
 confirmed writes above; code is a worker's job, and the worker is a spawned
 session (`fleet-issue-file.sh --spawn`), never a subagent. No `tmux send-keys`
 into another pane (hook-blocked; `fleet-peer-send.sh issue:<N>` is the channel).

@@ -3,7 +3,7 @@
 #
 #   fleet-repo.sh list   [--session <sess>]
 #   fleet-repo.sh add    [--session <sess>] <owner/repo> [<checkout-dir>] [--base <branch>]
-#   fleet-repo.sh remove [--session <sess>] <owner/repo> [--force]
+#   fleet-repo.sh remove [--session <sess>] <owner/repo> [--force] [--promote <owner/repo>]
 #   fleet-repo.sh get    [--session <sess>] <KEY> [<owner/repo> | --window <w> | --worktree <dir>] [--tsv]
 #   fleet-repo.sh fold   <from-session> --into <session> [--dry-run] [--wait]
 #
@@ -20,7 +20,9 @@
 # every human line goes to stderr.
 #
 # `remove` deletes an overlay. The conf's own repo lives in the fleet conf and is not
-# removable here. A repo that still has live windows (@repo) is refused without
+# removable here — unless it is the login's SEED (FLEET_SEED=1, issue #1167): then
+# another hosted repo is promoted into the conf's slot and the seed goes (remove_seed
+# below, issue #1172). A repo that still has live windows (@repo) is refused without
 # --force: those sessions would lose their repo's MAIN/base mid-flight.
 #
 # `get` prints one setting AS A REPO SEES IT (issue #978): the repo's overlay value,
@@ -45,7 +47,7 @@ usage() { sed -n '4,8p' "$0" | sed 's/^# //' >&2; exit 2; }
 
 cmd="${1:-}"; [ -n "$cmd" ] || usage; shift
 SESS=""; REPO=""; DIR=""; BASE=""; FORCE=0; KEY=""; WIN=""; WT=""; TSV=0
-INTO=""; DRY=0; WAIT=0
+INTO=""; DRY=0; WAIT=0; PROMOTE=""
 if [ "$cmd" = get ]; then KEY="${1:-}"; [ -n "$KEY" ] || usage; shift; fi
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -56,6 +58,7 @@ while [ $# -gt 0 ]; do
     --tsv)     TSV=1; shift ;;
     --force)   FORCE=1; shift ;;
     --into)    [ $# -ge 2 ] || usage; INTO="$2"; shift 2 ;;
+    --promote) [ $# -ge 2 ] || usage; PROMOTE="$2"; shift 2 ;;
     --dry-run) DRY=1; shift ;;
     --wait)    WAIT=1; shift ;;
     -h|--help) usage ;;
@@ -421,11 +424,104 @@ PEND
   [ -n "$side" ] && echo "fold: $FROM side state archived at $dest/side"
 }
 
+# conf_repo → the fleet conf's OWN repo (owner/name), read from the file alone.
+conf_repo() { fleet_norm_repo "$( unset FLEET_REPO; . "$CONF" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )"; }
+# conf_val <file> <KEY> → KEY as <file> alone assigns it (empty when it does not).
+conf_val() { ( unset "$2"; . "$1" >/dev/null 2>&1; eval "printf '%s' \"\${$2:-}\"" ); }
+
+# ---- removing the seed (issue #1172) --------------------------------------------
+# The conf's own repo is not removable — except when it is the login's seed
+# (FLEET_SEED=1, #1167): the starter a new login's fleet came up on, which only
+# looks. Once the newcomer has a repo of their own it is dead weight in their
+# session list, so `remove <seed>` PROMOTES another hosted repo into the conf's own
+# slot and drops the seed. A non-seed conf repo is refused exactly as before.
+#   • the promoted repo: --promote <owner/repo>, else the first other hosted repo
+#     in fleet_repos order. None → refused: a fleet must host a repo, so the one
+#     that replaces the seed is added first.
+#   • the fleet conf is rewritten with the promoted repo's identity
+#     (fleet_write_conf — the header + FLEET_REPO/MAIN/BASE_BRANCH, every other key
+#     preserved), minus what described the SEED: its repo-scoped keys
+#     (_FLEET_REPO_SCOPED: FLEET_SEED itself, deploy, short name) and the two
+#     switches `fleet-up --seed` wrote, when they still read 0 (FLEET_AUTOFILL /
+#     FLEET_ISSUE_BRIDGE: 0 is what unset means to their readers; a 1 the operator
+#     set since is theirs and stays).
+#   • the promoted overlay: when it is the LAST overlay, every key it sets is
+#     folded into the conf and the file + the then-empty repos/ dir go — the fleet
+#     is a one-repo fleet again, its conf byte for byte what `fleet-up <repo>`
+#     writes (no repos/ dir ⇒ every degenerate path; fleet-seed-selftest asserts
+#     it). With other overlays left, an identity-only overlay goes too, but one
+#     carrying overrides is KEPT: a conf repo may carry an overlay, and folding its
+#     overrides into the conf would leak them into the other repos' fallbacks.
+#   • live windows: an ISSUE-bound window of the seed refuses without --force, as
+#     for any repo. A scratch (no @issue) of the seed does not: the seed hosts no
+#     issue work by construction (no autofill, no bridge, the wizard never files
+#     there), and the fleet's own `guide` — the wizard that prompts this very
+#     command — is a scratch of the seed, so refusing on it would refuse from the
+#     window that asks. They keep running; their worktrees stay the seed's.
+# Windows keep their @repo stamps: the promoted repo's resolve as the fleet's own
+# repo, the seed's resolve to nothing (skipped, never reaped — the --force semantic).
+remove_seed() {
+  local others promote pf pmain pbase bound n k v left
+  others=$(fleet_repos "$SESS" | grep -vxF "$REPO")
+  [ -n "$others" ] || die "refused: $REPO is this fleet's only repo — add the one that replaces it first (fleet-repo.sh add <owner/repo>), then remove the seed"
+  if [ -n "$PROMOTE" ]; then
+    promote=$(fleet_norm_repo "$PROMOTE")
+    printf '%s\n' "$others" | grep -qxF "$promote" \
+      || die "--promote $PROMOTE: not a repo $SESS hosts beside $REPO ($(printf '%s' "$others" | tr '\n' ' '))"
+  else
+    promote=$(printf '%s\n' "$others" | head -n 1)
+  fi
+  if [ "$FORCE" != 1 ]; then
+    bound=$(_fleet_tmux "$SESS" list-windows -t "=$SESS" -F '#{@repo}	#{@issue}	#{window_name}' 2>/dev/null \
+            | awk -F'\t' -v r="$REPO" '$1 == r && $2 != "" { printf "%s ", $3 }')
+    [ -z "$bound" ] || die "refused: live issue windows still belong to $REPO: $bound(--force to remove anyway)"
+  fi
+  n=$(_fleet_tmux "$SESS" list-windows -t "=$SESS" -F '#{@repo}	#{@issue}' 2>/dev/null \
+      | awk -F'\t' -v r="$REPO" '$1 == r && $2 == "" { c++ } END { print c + 0 }')
+  pf=$(fleet_repo_conf_file "$SESS" "$promote")
+  [ -f "$pf" ] || die "$promote has no overlay at $pf — nothing to promote from"
+  pmain=$(conf_val "$pf" FLEET_MAIN); pbase=$(conf_val "$pf" FLEET_BASE_BRANCH)
+  [ -n "$pmain" ] && [ -n "$pbase" ] || die "$pf sets no FLEET_MAIN / FLEET_BASE_BRANCH — cannot promote $promote"
+  # 1. the conf's identity → the promoted repo; the seed's own keys go.
+  fleet_write_conf "$CONF" "$SESS" "$promote" "$pmain" "$pbase" "$(date '+%Y-%m-%d %H:%M:%S')" \
+    || die "cannot rewrite $CONF"
+  fleet_conf_unset "$CONF" FLEET_SEED FLEET_DEPLOY_REF FLEET_DEPLOY_CHECK FLEET_REPO_SHORT \
+    || die "cannot rewrite $CONF"
+  for k in FLEET_AUTOFILL FLEET_ISSUE_BRIDGE; do
+    [ "$(conf_val "$CONF" "$k")" = 0 ] && { fleet_conf_unset "$CONF" "$k" || die "cannot rewrite $CONF"; }
+  done
+  # 2. the promoted overlay: fold (last one) · drop (identity only) · keep (overrides).
+  left=$(printf '%s\n' "$others" | grep -vxF "$promote" | grep -c .)
+  local extra=''
+  for k in $(fold_sets "$pf"); do
+    case "$k" in FLEET_REPO|FLEET_MAIN|FLEET_BASE_BRANCH|FLEET_SEED) continue ;; esac
+    extra="$extra $k"
+  done
+  if [ "$left" = 0 ]; then
+    for k in $extra; do
+      v=$(conf_val "$pf" "$k")
+      fleet_conf_set "$CONF" "$k" "$v" || die "cannot carry $k into $CONF"
+    done
+    rm -f "$pf" || die "cannot remove $pf"
+    rmdir "$(dirname "$pf")" 2>/dev/null   # empty ⇒ a one-repo fleet again, no repos/ dir
+    echo "fleet-repo: removed seed $REPO — $promote is now $SESS's own repo ($CONF); its overlay folded in, no repos/ left"
+  elif [ -z "$extra" ]; then
+    rm -f "$pf" || die "cannot remove $pf"
+    echo "fleet-repo: removed seed $REPO — $promote is now $SESS's own repo ($CONF); $left other repo(s) stay hosted"
+  else
+    echo "fleet-repo: removed seed $REPO — $promote is now $SESS's own repo ($CONF); its overrides stay in $pf, $left other repo(s) stay hosted"
+  fi
+  [ "$n" -gt 0 ] && echo "fleet-repo: $n scratch window(s) of $REPO keep running (their worktrees stay the seed's)"
+  # The conf changed under the daemons: wake them so the dash reads it on its next
+  # tick rather than an idle cycle later (#1077).
+  [ -f "$BIN/fleet-daemon-lib.sh" ] && ( . "$BIN/fleet-daemon-lib.sh" && fleet_daemon_wake "$BIN/.." ) 2>/dev/null
+  return 0
+}
+
 case "$cmd" in
   list)
     [ -z "$REPO" ] || usage
-    confrepo=$( unset FLEET_REPO; . "$CONF" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )
-    confrepo=$(fleet_norm_repo "$confrepo")
+    confrepo=$(conf_repo)
     printf 'fleet %s hosts:\n' "$SESS"
     while IFS= read -r r; do
       [ -n "$r" ] || continue
@@ -449,6 +545,10 @@ EOF
   remove)
     [ -n "$REPO" ] || usage
     norm_repo_arg
+    [ -z "$PROMOTE" ] || fleet_repo_is_seed "$SESS" "$REPO" || die "--promote only goes with removing the seed repo (FLEET_SEED=1)"
+    if [ "$REPO" = "$(conf_repo)" ] && fleet_repo_is_seed "$SESS" "$REPO"; then
+      remove_seed; exit $?
+    fi
     f=$(fleet_repo_conf_file "$SESS" "$REPO")
     if [ ! -f "$f" ]; then
       fleet_repo_hosted "$SESS" "$REPO" \
@@ -456,7 +556,7 @@ EOF
       die "$SESS does not host $REPO"
     fi
     if [ "$FORCE" != 1 ]; then
-      live=$(_fleet_tmux "$SESS" list-windows -t "$SESS" -F '#{window_name} #{@repo}' 2>/dev/null \
+      live=$(_fleet_tmux "$SESS" list-windows -t "=$SESS" -F '#{window_name} #{@repo}' 2>/dev/null \
              | awk -v r="$REPO" '$2 == r { print $1 }' | tr '\n' ' ')
       [ -z "$live" ] || die "refused: live windows still belong to $REPO: $live(--force to remove anyway)"
     fi

@@ -170,7 +170,8 @@ fi
 # --- F. remove ----------------------------------------------------------------------
 bash "$BIN/fleet-repo.sh" remove --session "$S" o/b >/dev/null 2>&1 && fail "F: remove with live @repo windows accepted"
 [ -f "$f" ] || fail "F: refused remove deleted the overlay"
-bash "$BIN/fleet-repo.sh" remove --session "$S" o/a >/dev/null 2>&1 && fail "F: removed the fleet conf's own repo"
+# A NON-seed conf repo is never removable (the seed is: fleet-seed-selftest, #1172).
+bash "$BIN/fleet-repo.sh" remove --session "$S" o/a >/dev/null 2>&1 && fail "F: removed the fleet conf's own (non-seed) repo"
 bash "$BIN/fleet-repo.sh" remove --session "$S" o/b --force >/dev/null 2>&1 || fail "F: --force remove failed"
 eq "F: after remove" "$(fleet_repos "$S")" "o/a"
 

@@ -36,6 +36,8 @@
 # read ONLY through fleet_repo_is_seed — it marks the conf's OWN repo, never an
 # overlay. `brief` tags it `[seed]` so the wizard can say plainly
 # «this is the tool itself, not your repo» and never offer it as a place to work.
+# Once another repo is hosted the tag also names the way out — `fleet-repo.sh
+# remove <seed>` (issue #1172), which the wizard offers right after the add.
 #
 # Exit: 0 ok · 1 no such key (get) / write failed · 2 usage.
 set -uo pipefail
@@ -120,10 +122,14 @@ brief() {
     echo "gh=${me:-NOT-LOGGED-IN}"
   fi
   echo "repos:"
+  local nrepos; nrepos=$(fleet_repos "$sess" | grep -c .)
   while IFS= read -r r; do
     [ -n "$r" ] || continue
     tag=""
-    fleet_repo_is_seed "$sess" "$r" && tag="  [seed] 起步仓库 = 工具本身，不是新人的仓库"
+    if fleet_repo_is_seed "$sess" "$r"; then
+      tag="  [seed] 起步仓库 = 工具本身，不是新人的仓库"
+      [ "$nrepos" -gt 1 ] && tag="$tag · 可拿掉: fleet-repo.sh remove $r"
+    fi
     [ -n "$me" ] && [ -z "$tag" ] && [ "${r%%/*}" = "$me" ] && tag="  [mine]"
     echo "  $r$tag"
   done <<EOF

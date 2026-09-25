@@ -160,7 +160,9 @@ starter repo — `fleet-up.sh verkyyi/claude-fleet --seed`, which only looks
 fails (no GUI session yet, offline) is retried on her next login, alone; once all
 pass it writes `~/.config/claude-fleet/global/bootstrapped` and never runs again.
 It leaves a login that already has a fleet untouched. She adds her own repos with
-`fleet-up.sh owner/repo`. Still hers to do: `gh auth login` and the Codex device
+`fleet-up.sh owner/repo`, and once one is in, takes the starter out with
+`fleet-repo.sh remove verkyyi/claude-fleet` (issue #1172 — the wizard offers it
+right after the add). Still hers to do: `gh auth login` and the Codex device
 code (step 2b); still the hub admin's: `ccquota enroll` (step 3).
 
 For a login made by hand, as `alice`, follow [INSTALL.md](INSTALL.md) from the top. Nothing in it is
