@@ -218,6 +218,12 @@ trust_sweep() { # $1 = session
 # Returns 1 (logged) when this conf may not autofill now.
 autofill_gate() {
   local sess="$1" label="$2" codex_quota
+  # The seed repo only looks (issue #1167): never autofilled, whatever
+  # FLEET_AUTOFILL says — FLEET_SEED is repo-scoped, so only the conf's own repo.
+  if [ "${FLEET_SEED:-0}" = 1 ]; then
+    log "$label: seed repo (FLEET_SEED=1) — never autofills, skip"
+    return 1
+  fi
   if [ "${FLEET_AUTOFILL:-0}" != 1 ]; then
     log "$label: autofill off (FLEET_AUTOFILL≠1) — skip"
     return 1

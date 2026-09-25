@@ -97,6 +97,7 @@ FLEET_LEDGER_WATCH                 knob: 0 turns the ledger-watch daemon into a 
 FLEET_LEDGER_WATCH_LEASE_TTL       knob: internal pacing/limit, safe in-code default (fleet-ledger-watch.sh)
 FLEET_LIVE_DIR                     path: state/log location override (fleet-doctor.sh)
 FLEET_LIVE_ROOT                    path: state/log location override (fleet-daemon-lib.sh)
+FLEET_LOGIN_HOMES                  seam: an injectable command/path for tests (fleet-login-new.sh)
 FLEET_LOOP_AGENT                   handoff: which agent the /loop spec belongs to
 FLEET_LOOP_SPEC                    handoff: the /loop spec a relaunched agent restores
 FLEET_MIGRATE_BOOT_WAIT            knob: internal pacing/limit, safe in-code default (fleet-migrate.sh)

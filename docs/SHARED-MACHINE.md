@@ -28,15 +28,29 @@ Repeat steps 1–5 for each person. Step 6 checks the whole machine.
 
 ## 1. Create the OS login (admin, on the machine)
 
+One command does the admin half of steps 1 and 2b (issue #1164). Run it as your
+own admin login — **not** under `sudo`; it sudo's each step itself:
+
 ```sh
-sudo sysadminctl -addUser alice -fullName "Alice Example" -password -   # prompts for the password
-# add -admin only if this person must install system software; a fleet doesn't need it
+~/.claude/fleet/bin/fleet-login-new.sh alice --full-name "Alice Example" \
+  --pubkey alice.pub --share-pool          # a dry run: prints every command, runs none
+~/.claude/fleet/bin/fleet-login-new.sh alice --full-name "Alice Example" \
+  --pubkey alice.pub --share-pool --apply  # the same plan, executed (prompts for alice's password)
 ```
 
-Then sign in as `alice` **once in the GUI** (at the console, or through Screen
+In order, it runs `sysadminctl -addUser` (no `-admin`: a fleet doesn't need it),
+`createhomedir`, adds the login to `com.apple.access_ssh` (only when that group
+exists — without it Remote Login admits every user), installs `--pubkey` as
+`~alice/.ssh/authorized_keys` (`.ssh` 700, key 600, owned by alice), and with
+`--share-pool` copies the Claude pool as step 2b below describes. It stops at the
+first failed step, refuses (exit 3) when the login or `/Users/alice` already
+exists, never overwrites, and writes nothing in alice's home outside `.ssh/` and
+`.config/claude-fleet/accounts/`. It ends by printing the steps left for a human
+— the ones below that it can't do:
+
+Sign in as `alice` **once in the GUI** (at the console, or through Screen
 Sharing with fast user switching). That first graphical login creates the
-home directory, the login Keychain, and the `gui/<uid>` launchd domain. Steps
-2 and 4 depend on all three.
+login Keychain and the `gui/<uid>` launchd domain. Steps 2 and 4 depend on both.
 
 ## 2. First Claude Code login, as that person
 
@@ -60,8 +74,12 @@ subscriptions a machine's logins share is the operator's decision, and the
 tooling neither requires nor refuses either setup. Sharing the pool still keeps
 one login per person, so usage stays attributed per login on the hub.
 
-**Claude pool** — the tokens are plain `claude setup-token` files, so copy them
-(admin, since the source files are `600` in the operator's home):
+**Claude pool** — the tokens are plain `claude setup-token` files, so copy them.
+`fleet-login-new.sh --share-pool` (step 1) does exactly this: every `<label>`
+token and its `<label>.conf` (`CCQUOTA_ACCOUNT`) from your accounts dir
+(`--pool-src` to pick another), dir 700 / files 600, owned by the new login. For
+an existing login, by hand (admin, since the source files are `600` in the
+operator's home):
 
 ```sh
 src=/Users/operator/.config/claude-fleet/accounts

@@ -45,7 +45,10 @@
 #                  glob cannot see its install. With sudo it is found and read
 #                  THROUGH the owner (discovery, drift, the act, the verify, its
 #                  LaunchAgents); without, it is `unreadable` — a needs-sudo
-#                  exit 5 with the admin command — never "nothing to sync"
+#                  exit 5 with the admin command — never "nothing to sync".
+#                  The caller's cwd closed to the owner (issue #1162) — the act
+#                  still syncs; a failing owner command's own stderr is in the
+#                  FAILED row, not just "N entr(ies) still differ"
 #
 # Exit 0 = pass.
 set -uo pipefail
@@ -261,7 +264,7 @@ echo 'v5' > "$SRC/bin/a.sh"; g "$SRC" commit -qam five
 OUT=$(FLEET_SYNC_LOGINS_ME=someone-else FLEET_SYNC_LOGINS_SUDO="$WORK/shim/sudo -n" bash "$SL" --source "$SRC" --logins bob 2>&1); RC=$?
 eq "sudo: exit 0" 0 "$RC"
 eq "sudo: synced" "v5" "$(cat "$B/bin/a.sh")"
-contains "sudo: rsync ran as the owner" "$(cat "$WORK/sudo.log")" "-n -u $(id -un) rsync"
+contains "sudo: rsync ran as the owner, with the owner's HOME" "$(cat "$WORK/sudo.log")" "-n -u $(id -un) env HOME=$H/bob rsync"
 
 echo 'v6' > "$SRC/bin/a.sh"; g "$SRC" commit -qam six
 OUT=$(FLEET_SYNC_LOGINS_ME=someone-else FLEET_SYNC_LOGINS_SUDO="false" bash "$SL" --source "$SRC" --logins bob 2>&1); RC=$?
@@ -428,7 +431,7 @@ HK="$H/hank/.claude/fleet"; mkdir -p "$HK"; cp -Rp "$SRC/bin" "$HK/"; printf '%s
 OUT=$(FLEET_SYNC_LOGINS_ME=someone-else FLEET_SYNC_LOGINS_SUDO="$WORK/shim/sudo -n" bash "$SL" --source "$SRC" --to-git --logins hank 2>&1); RC=$?
 ok "to-git sudo: exit 0" '[ "$RC" -eq 0 ]'
 eq "to-git sudo: converted" "$C7" "$(g "$HK" rev-parse HEAD)"
-ok "to-git sudo: the owner-side shell ran as the owner" 'grep -q -- "-n -u $(id -un) sh $WORK/tmp/.*/to-git.sh" "$WORK/sudo.log"'
+ok "to-git sudo: the owner-side shell ran as the owner" 'grep -q -- "-n -u $(id -un) env HOME=$H/hank sh $WORK/tmp/.*/to-git.sh" "$WORK/sudo.log"'
 ok "to-git sudo: the copy was listed as the owner" 'grep -q -- "-n -u $(id -un) find $HK" "$WORK/sudo.log"'
 IV="$H/ivy/.claude/fleet"; mkdir -p "$IV"; cp -Rp "$SRC/bin" "$IV/"; printf '%s me now\n' "$C7" > "$IV/.fleet-synced-from"
 OUT=$(FLEET_SYNC_LOGINS_ME=someone-else FLEET_SYNC_LOGINS_SUDO="false" bash "$SL" --source "$SRC" --to-git --logins ivy 2>&1); RC=$?
@@ -548,11 +551,20 @@ K="$H3/kim/.claude/fleet"
 g "$K" reset -q --hard HEAD~1
 mkdir -p "$H3/kim/Library/LaunchAgents"; touch "$H3/kim/Library/LaunchAgents/com.claude-fleet.collect.plist"
 mkdir -p "$WORK/klocks"
+# KCWD stands for the caller's own 0700 home (issue #1162): a real owner cannot
+# stand in it — BSD cp -R opens "." first, git dies on getcwd — so any owner
+# command but the `true` probe run from there fails the way cp does. KFAIL=<cmd>
+# makes that owner command fail with its own stderr.
+KCWD="$WORK/kcaller"; mkdir -p "$KCWD"
 cat > "$WORK/shim/ksudo" <<EOF
 #!/bin/sh
 echo "\$*" >> "$WORK/sudo.log"
 [ "\$1" = -n ] && shift
 [ "\$1" = -u ] && shift 2
+case "\$PWD/" in "$KCWD/"*)
+  [ "\$1" = true ] || { echo "\$1: current working directory: Permission denied" >&2; exit 1; } ;;
+esac
+case " \$* " in *" \${KFAIL:-//} "*) echo "\$KFAIL: boom from the owner side" >&2; exit 23 ;; esac
 : > "$WORK/klocks/\$\$"; chmod 700 "$H3/kim"
 "\$@"; rc=\$?
 rm -f "$WORK/klocks/\$\$"
@@ -564,7 +576,10 @@ KH="$H3/kim"; chmod 000 "$KH"
 if [ -x "$KH" ]; then
   echo "sync-logins-selftest: K skipped — running as root, a mode-000 home stays open"
 else
-  krun() { OUT=$(FLEET_SYNC_LOGINS_HOMES="$H3" FLEET_SYNC_LOGINS_ME=someone-else bash "$SL" --source "$SRC" "$@" 2>&1); RC=$?; }
+  # from the caller's closed cwd, as /fleet-sync-install runs it from a worktree
+  krun() { OUT=$(cd "$KCWD" && FLEET_SYNC_LOGINS_HOMES="$H3" FLEET_SYNC_LOGINS_ME=someone-else bash "$SL" --source "$SRC" "$@" 2>&1); RC=$?; }
+  ok "closed cwd: the shim really refuses an owner command there" '! (cd "$KCWD" && "$WORK/shim/ksudo" -n -u x cp -Rp "$SRC/bin" "$WORK/kcp" 2>/dev/null)'
+
   ok "closed: the caller really cannot see the install" '[ ! -d "$K" ]'
 
   # no sudo: unreadable, never "nothing to sync"
@@ -587,6 +602,12 @@ else
   : > "$WORK/sudo.log"; : > "$WORK/launchctl.log"
   FLEET_SYNC_LOGINS_SUDO="$WORK/shim/ksudo -n" krun --summary
   eq "closed sudo summary: kim is planned, behind" "1 other · 0 current · 1 drifted (kim:1)" "$OUT"
+
+  # a failing owner command: the FAILED row carries ITS stderr (issue #1162)
+  KFAIL=rsync FLEET_SYNC_LOGINS_SUDO="$WORK/shim/ksudo -n" krun
+  eq "closed act failure: exit 6 (a login failed)" 6 "$RC"
+  ok "closed act failure: the row names the step and its stderr" 'printf "%s\n" "$OUT" | grep -q "^kim: FAILED — rsync [^ ]* failed: rsync: boom from the owner side"'
+  eq "closed act failure: nothing moved" "$(g "$SRC" rev-parse HEAD~1)" "$(chmod 700 "$KH"; g "$K" rev-parse HEAD; chmod 000 "$KH")"
   contains "closed sudo: discovery asked the owner" "$(cat "$WORK/sudo.log")" "-u $(id -un) test -d $K"
   FLEET_SYNC_LOGINS_SUDO="$WORK/shim/ksudo -n" krun
   eq "closed sudo act: exit 0" 0 "$RC"

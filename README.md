@@ -352,8 +352,11 @@ bin/fleet-down.sh fleet --purge            # kill the fleet (+ drop its conf/cac
 
 On SSH login, `shell/fleet-intro.sh` prints a short banner: this login's fleet,
 whether it is running, each repo it hosts with its live session count, and the
-`cf` line to get in. See [docs/INSTALL.md](docs/INSTALL.md) step 7 for the
-`~/.zshrc` block.
+`cf` line to get in — and then goes straight in: an interactive SSH login runs
+`cf` itself, starting the fleet first if it isn't up (scp / rsync / `ssh host cmd`
+are never touched; `~/.hushfleet-attach` keeps the banner only). See
+[docs/INSTALL.md](docs/INSTALL.md) step 7 for the one `~/.zshrc` line,
+`source ~/.claude/fleet/shell/fleet-login.zsh`.
 
 **Several repos in one fleet.** From inside the fleet, **⌃z on the dash** or the
 task sidebar's row menu (`.`) item **`g` ＋ 仓库…** opens a popup that asks just

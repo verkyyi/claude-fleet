@@ -640,7 +640,9 @@ poll() {
   # fleet enables the bridge in its conf (FLEET_ISSUE_BRIDGE=1); mirror pr-refresh's
   # cheap resolution — the primary FLEET_REPO (global knobs), plus each per-fleet
   # conf that opts in (its per-fleet FLEET_ISSUE_BRIDGE_ASSOC_FLOOR/…_REVIVE).
-  declare -a REPOS R_FLOOR R_REVIVE; local seen=' '
+  # `=()`: a bare `declare -a` leaves them UNSET, so `${#REPOS[@]}` below is fatal
+  # under set -u on bash 5.0 when no repo opts in (surfaced by #1167's selftest).
+  declare -a REPOS=() R_FLOOR=() R_REVIVE=(); local seen=' '
   queue() { # $1=repo $2=assoc-floor $3=revive
     local rp="$1" sg; [ -z "$rp" ] && return
     sg=$(fleet_slug "$(fleet_norm_repo "$rp")")
@@ -649,7 +651,8 @@ poll() {
   }
 
   # Global opt-in covers the primary repo (global knobs).
-  [ "${FLEET_ISSUE_BRIDGE:-0}" = 1 ] && [ -n "${FLEET_REPO:-}" ] \
+  # A seed repo (FLEET_SEED=1, issue #1167) is never relayed, whatever the switch.
+  [ "${FLEET_ISSUE_BRIDGE:-0}" = 1 ] && [ -n "${FLEET_REPO:-}" ] && [ "${FLEET_SEED:-0}" != 1 ] \
     && queue "$FLEET_REPO" "$ASSOC_FLOOR" "$REVIVE"
   # Per-fleet confs opt in individually, each carrying its own floor/revive. Source
   # in a subshell and emit repo<TAB>floor<TAB>revive so the values can't leak.
@@ -664,7 +667,7 @@ poll() {
     if fleet_has_repo_overlays "$_s"; then
       line=$(fleet_repos "$_s" | while IFS= read -r rp; do
                ( fleet_load_repo_conf "$_s" "$rp" >/dev/null 2>&1 || exit 0
-                 [ "${FLEET_ISSUE_BRIDGE:-0}" = 1 ] && printf '%s\t%s\t%s\n' "$rp" \
+                 [ "${FLEET_ISSUE_BRIDGE:-0}" = 1 ] && [ "${FLEET_SEED:-0}" != 1 ] && printf '%s\t%s\t%s\n' "$rp" \
                    "${FLEET_ISSUE_BRIDGE_ASSOC_FLOOR:-$ASSOC_FLOOR}" \
                    "${FLEET_ISSUE_BRIDGE_REVIVE:-$REVIVE}" )
              done)
@@ -672,7 +675,7 @@ poll() {
       # An empty FLEET_REPO emits nothing: tab is IFS whitespace, so `read` would
       # swallow the empty field and poll the assoc floor as a repo name.
       line=$( . "$cf" >/dev/null 2>&1
-              [ "${FLEET_ISSUE_BRIDGE:-0}" = 1 ] && [ -n "${FLEET_REPO:-}" ] && printf '%s\t%s\t%s' \
+              [ "${FLEET_ISSUE_BRIDGE:-0}" = 1 ] && [ -n "${FLEET_REPO:-}" ] && [ "${FLEET_SEED:-0}" != 1 ] && printf '%s\t%s\t%s' \
                 "${FLEET_REPO:-}" \
                 "${FLEET_ISSUE_BRIDGE_ASSOC_FLOOR:-$ASSOC_FLOOR}" \
                 "${FLEET_ISSUE_BRIDGE_REVIVE:-$REVIVE}" )

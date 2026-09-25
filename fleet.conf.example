@@ -54,6 +54,15 @@ FLEET_BASE_BRANCH="main"
 # @label=Repo short tag @group=identity @tier=advanced @scope=fleet @edit=no
 #FLEET_REPO_SHORT=""
 
+# The login's SEED repo (issue #1167): `fleet-up.sh --seed` brings a new login's
+# fleet up on a starter repo (claude-fleet itself) so it works at once — and that
+# repo only LOOKS. 1 = the dispatcher never autofills it and the issue-bridge never
+# relays its comments, whatever FLEET_AUTOFILL / FLEET_ISSUE_BRIDGE say. Marks the
+# fleet conf's OWN repo only: a repo added later is never the seed. fleet-up writes
+# it (with FLEET_AUTOFILL=0 + FLEET_ISSUE_BRIDGE=0); readers ask fleet_repo_is_seed.
+# @label=Seed repo (look only) @group=identity @tier=advanced @scope=identity @edit=no
+#FLEET_SEED=0
+
 # ── Per-repo settings (issue #978) ──────────────────────────────────────────
 # A fleet hosting 2+ repos keeps each further repo's conf at
 # fleets/<session>/repos/<slug>.conf (bin/fleet-repo.sh add). Beyond identity
