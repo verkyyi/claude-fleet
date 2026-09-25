@@ -1388,7 +1388,8 @@ fleet_guide_agent_child() {
 }
 
 fleet_guide_alive() {
-  local sess="$1" name pin cmd pid sep=$'\037'
+  # tmux on Linux escapes control bytes in -F output; keep the separator printable.
+  local sess="$1" name pin cmd pid sep='|'
   while IFS="$sep" read -r name pin cmd pid; do
     [ "$name" = guide ] && [ "$pin" = 1 ] || continue
     case "${cmd##*/}" in
@@ -1406,7 +1407,7 @@ EOF
 # original command in its existing scratch when the agent fell back to a shell.
 # Respawning reuses the worktree instead of leaking one on every failed attempt.
 fleet_guide_open() {
-  local sess="$1" bin name wid pin sep=$'\037'
+  local sess="$1" bin name wid pin sep='|'
   fleet_guide_alive "$sess" && return 0
   while IFS="$sep" read -r name wid pin; do
     [ "$name" = guide ] || continue
