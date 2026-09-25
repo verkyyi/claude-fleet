@@ -1522,6 +1522,25 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Extra orphan fingerprint @group=disk @tier=internal @scope=global @edit=str
 #FLEET_ORPHAN_EXTRA_RE=         # an ERE OR'd into the built-in fleet fingerprint
 
+# Orphaned-LISTENER sweep (issue #1154), on the same diskguard --watch tick. An
+# agent's `python3 -m http.server` / dev server binds `*` by default and outlives
+# its window as a PPID=1 orphan — one was found serving the whole Claude
+# scratchpad root to the LAN for two days. The sweep takes a TCP listener whose
+# cwd is fleet/Claude-anchored (a scratchpad, a `*-issue-N`/`*-scratch-N`
+# worktree even once removed, ~/.claude), whose tree has no tmux/claude ancestor,
+# where no live session still works, once it is older than this. It KILLS by
+# default (a narrow match, and what it finds is exposure, not waste); `notify`
+# only reports. Log: ~/.config/claude-fleet/diskguard/listen-reaped.log.
+# `fleet-doctor`'s `listen` line WARNs on any fleet listener on the LAN.
+# @label=Orphan listener age @group=disk @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_ORPHAN_LISTEN_SECS=21600    # 6h; 0 = sweep OFF
+# @label=Orphan listener action @group=disk @tier=advanced @scope=global @edit=str
+#FLEET_ORPHAN_LISTEN_ACTION=kill   # kill (the default) | notify
+# @label=Orphan listener sweep interval @group=disk @tier=internal @scope=global @edit=int @unit=sec
+#FLEET_ORPHAN_LISTEN_EVERY=300     # min seconds between sweeps
+# @label=Listener exemptions @group=disk @tier=internal @scope=global @edit=str
+#FLEET_LISTEN_EXEMPT_RE=           # an ERE of argv never counted/reaped (doc-preview, cloudflared, webhook built in)
+
 # The load line on `fleet-doctor`'s `machine` check (issue #697): 1-minute load
 # average divided by core count. Warns at or above this, so the number means the
 # same thing on a 4-core and a 16-core box.
