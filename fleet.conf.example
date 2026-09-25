@@ -351,6 +351,13 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Codex version check @group=spawn @tier=advanced @scope=global @edit=bool
 #FLEET_CODEX_VERSION_CHECK=1
 
+# Codex fleet commands launch as native `$fleet-*` skills when the selected
+# CODEX_HOME has those skills installed and the Codex CLI advertises skills in
+# `debug prompt-input`. Default `auto` keeps the old prose-expanded seed as the
+# compatibility fallback; set 0/1 only for rollback or verification.
+# @label=Codex native skills @group=spawn @tier=advanced @scope=fleet @edit=enum @options=auto,0,1
+#FLEET_CODEX_NATIVE_SKILLS=auto
+
 # Optional account home for this Codex fleet. It must already exist and contain
 # that account's native login/config; saved-session recovery retains its own home.
 # @label=Codex account home @group=spawn @tier=advanced @scope=fleet @edit=str
