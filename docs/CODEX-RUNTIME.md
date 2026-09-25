@@ -126,6 +126,10 @@ new workers by available quota. `FLEET_CODEX_HOME` pins a home instead; an expli
 keep separate native homes. Each home needs its own login and repository trust.
 An account label names a home, not an assertion that two logins have different
 subscriptions; register separate accounts to gain separate quota.
+To use one Codex subscription from another OS login, log that login in on its
+own (`ccquota codex login <name> --device-auth`) rather than copying
+`auth.json`: the refresh token rotates on use, so two copies log each other out.
+See [SHARED-MACHINE.md step 2b](SHARED-MACHINE.md#2b-optional-join-the-machines-shared-account-pool).
 
 The collector reads `account/rateLimits/read` from bounded, short-lived native
 app servers, including homes with no live worker. It submits no turns. Cached

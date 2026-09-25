@@ -660,10 +660,11 @@ deny dialog in the pane — the very stall this tooling exists to prevent.
 - Token files are secrets: keep them `600`; `fleet-doctor.sh` warns if not. They
   sit under `~/.config/claude-fleet/`, never in the repo. `.gitignore` covers the
   in-repo `fleet.conf`, and tokens live outside the tree regardless.
-- **Respect Anthropic's terms for your subscriptions.** This feature is for an
-  operator who legitimately holds multiple subscriptions (e.g. a personal Max +
-  a work Max) and wants to spread their own fleet's load across them. It is not a
-  way to pool or share one subscription among multiple people.
+- **Which subscriptions go in the pool, and which logins share it, is the
+  operator's decision.** The tooling spreads load over whatever tokens it finds
+  and neither checks nor enforces who holds them. On a machine with several
+  logins, each login can bring its own subscriptions or copy the operator's
+  pool — see [SHARED-MACHINE.md step 2b](SHARED-MACHINE.md#2b-optional-join-the-machines-shared-account-pool).
 
 ## Troubleshooting
 
