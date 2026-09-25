@@ -28,6 +28,7 @@ ln -s "$(command -v perl)" "$WORK/claude"
 cat > "$WORK/fake-migrate" <<EOS
 #!/bin/bash
 printf '%s\n' "\$*" >> "$WORK/calls"
+if [ "\${1:-}" = whoami ]; then echo acctA; exit 0; fi
 case " \$* " in
   *' --dry-run '*)
     if [ -n "\${FAKE_NOMOVE:-}" ]; then echo "  – w (@x): nowhere to move (acctA → acctA, benched too) — skipped"
@@ -37,6 +38,15 @@ esac
 EOS
 chmod +x "$WORK/fake-migrate"
 export FLEET_DASH_MIGRATE_BIN="$WORK/fake-migrate"
+cat > "$WORK/fake-manual-sub" <<'EOS'
+#!/bin/bash
+case "$1" in
+  list) printf 'Account\t5h\t7d\tStatus\nacctA\t10%%\t20%%\tavailable\nacctB\t3%%\t89%%\tmanual confirmation (above 85%% auto limit)\nacctC\t1%%\t95%%\tat 95%% limit\n' ;;
+  check) case "$3" in acctB) echo 'manual sub: acctB  5h 3% · 7d 89% — manual confirmation (above 85% auto limit)' ;; *) echo 'manual sub: target unavailable' >&2; exit 1 ;; esac ;;
+esac
+EOS
+chmod +x "$WORK/fake-manual-sub"
+export FLEET_DASH_MANUAL_SUB_BIN="$WORK/fake-manual-sub"
 
 TM new-session -d -s "$LBL" -n dash 'sleep 600' || fail "isolated server"
 wc=$(TM new-window -d -t "$LBL": -n worker -P -F '#{window_id}' "$WORK/claude -e 'sleep 600'") || fail "claude window"
@@ -75,5 +85,22 @@ out=$(FAKE_NOMOVE=1 FLEET_DASH_MIGRATE_ANSWER=y run "$wc" confirm); sleep 1
 printf '%s' "$out" | grep -q 'No move available' || fail "a refused plan must say so: $out"
 ! printf '%s' "$out" | grep -q '\[y\] migrate' || fail "a refused plan must offer no y: $out"
 ! grep -q -- '--toast' "$WORK/calls" || fail "a refused plan must dispatch nothing: $(cat "$WORK/calls")"
+
+# 6. Sidebar picker shows quotas, pins the chosen target in both preview and move.
+: > "$WORK/calls"
+out=$(FLEET_DASH_MIGRATE_TARGET=acctB FLEET_DASH_MIGRATE_ANSWER=y run "$wc" choose-confirm)
+printf '%s' "$out" | grep -q '7d 89%' || fail "picker must show live quota: $out"
+printf '%s' "$out" | grep -q 'manual confirmation' || fail "picker must disclose the 85–95% exception: $out"
+grep -q -- "--target-account acctB --dry-run --force-bg $wc" "$WORK/calls" || fail "picker preview must pin chosen account: $(cat "$WORK/calls")"
+for _ in $(seq 1 30); do grep -q -- '--target-account acctB --force-bg --toast' "$WORK/calls" && break; sleep 0.2; done
+grep -q -- "--target-account acctB --force-bg --toast $wc" "$WORK/calls" || fail "picker move must pin chosen account: $(cat "$WORK/calls")"
+
+# 7. Same-source and blocked choices must never preview or move.
+: > "$WORK/calls"
+FLEET_DASH_MIGRATE_TARGET=acctA FLEET_DASH_MIGRATE_ANSWER=y run "$wc" choose-confirm >/dev/null
+! grep -q -- '--dry-run' "$WORK/calls" || fail "same account must not preview"
+: > "$WORK/calls"
+FLEET_DASH_MIGRATE_TARGET=acctC FLEET_DASH_MIGRATE_ANSWER=y run "$wc" choose-confirm >/dev/null
+! grep -q -- '--dry-run' "$WORK/calls" || fail "95% target must not preview"
 
 echo 'dash-migrate selftest: OK'

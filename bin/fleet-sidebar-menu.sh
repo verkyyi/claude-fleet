@@ -40,7 +40,7 @@ MENU_KEYS='rename	r	改名 — 在输入行编辑（↵ 应用，esc / 空名称
 pin	t	置顶 / 取消置顶
 pr	p	打开 PR（没有时置灰）
 answer	a	回答提问（红色 ? 行；否则置灰）
-sub	s	切换 sub — 预览目标账号与后台命令后确认（仅 Claude worker）
+sub	s	切换 sub — 选中运行中的 Claude worker，按 . 后按 s；显示额度并确认
 wake	w	唤醒睡眠中的 z 行（仅睡眠时显示）
 awake	k	保持唤醒 ⇄ 允许再次休眠
 agent	v	新会话 claude ⇄ codex
@@ -51,7 +51,7 @@ repo	g	添加仓库到这个 fleet — 询问 owner/name；~/projects/<name>，�
     m_rename='改名…'; m_unpin='取消置顶'; m_pin='置顶'
     m_open_pr='打开 PR'; m_open_pr_none='打开 PR（没有）'
     m_answer='回答它的提问…'; m_answer_none='回答它的提问（没有）'
-    m_sub='切换 sub…'; m_sub_none='切换 sub（仅 Claude worker）'
+    m_sub='切换 sub（选账号）…'; m_sub_none='切换 sub（先选运行中的 Claude worker）'
     m_wake='唤醒'; m_allow_sleep='允许休眠'; m_keep_awake='保持唤醒'
     m_agent_fmt='新会话改用 %s'; m_reap='回收…'; m_reap_confirm_fmt='回收「%s」？(y/n)'
     m_new='新建任务（建 issue）…'; m_restore='恢复已收工…'; m_repo='＋ 仓库…'
@@ -61,7 +61,7 @@ MENU_KEYS='rename	r	rename — edits on the input line (↵ applies, esc / an em
 pin	t	pin / unpin the row to the top
 pr	p	open its PR (greyed when it has none)
 answer	a	answer its question (a red ? row; greyed otherwise)
-sub	s	switch subscription — preview target account and background commands, then confirm (Claude workers only)
+sub	s	switch subscription — select a running Claude worker, press . then s; review quota and confirm
 wake	w	wake a sleeping (z) row now — only listed on one
 awake	k	keep it awake ⇄ allow it to sleep again
 agent	v	flip new sessions claude ⇄ codex
@@ -72,7 +72,7 @@ repo	g	add a repo to this fleet — asks owner/name; ~/projects/<name>, cloned i
     m_rename='Rename…'; m_unpin='Unpin'; m_pin='Pin'
     m_open_pr='Open PR'; m_open_pr_none='Open PR (none)'
     m_answer='Answer question…'; m_answer_none='Answer question (none)'
-    m_sub='Switch subscription…'; m_sub_none='Switch subscription (Claude workers only)'
+    m_sub='Switch subscription (choose account)…'; m_sub_none='Switch subscription (select a running Claude worker)'
     m_wake='Wake'; m_allow_sleep='Allow sleep'; m_keep_awake='Keep awake'
     m_agent_fmt='New sessions use %s'; m_reap='Reap…'; m_reap_confirm_fmt='Reap "%s"? (y/n)'
     m_new='New task (file issue)…'; m_restore='Restore finished task…'; m_repo='Add repo…'
@@ -139,7 +139,7 @@ if [ "$state" = needs ]; then
   add "$m_answer" "$(mk answer)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") -w 84% -h 70% -- bash $(sq "$BIN/dash-answer.sh") $(sq "$sess:$wid")")"
 else add "-$m_answer_none" "$(mk answer)" ''; fi
 if fleet_pane_claude_pid "$wid" >/dev/null 2>&1; then
-  add "$m_sub" "$(mk sub)" "$(sh_run "bash $(sq "$BIN/dash-migrate.sh") $wid")"
+  add "$m_sub" "$(mk sub)" "$(sh_run "bash $(sq "$BIN/dash-migrate.sh") $wid choose")"
 else add "-$m_sub_none" "$(mk sub)" ''; fi
 # Wake (issue #1051): only a sleeping row gets it, and it wakes at once — opening
 # the menu and picking it is already the second deliberate step (EPIC #1048

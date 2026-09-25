@@ -180,7 +180,8 @@ EOS
 cat > "$FB/launcher" <<EOS
 #!/bin/bash
 printf '%s\n' "\$*" >> "$WORK/launched"
-export CLAUDE_CODE_OAUTH_TOKEN="\$(bash '$BIN/fleet-account.sh' token)" FLEET_CC_SESSIONS_DIR="$FLEET_CC_SESSIONS_DIR"
+printf '%s\n%s\n' "\${FLEET_ACCOUNT_LABEL:-}" "\${FLEET_ACCOUNT_TARGET:-}" > "$WORK/manual-env"
+export CLAUDE_CODE_OAUTH_TOKEN="\$(bash '$BIN/fleet-account.sh' token "\${FLEET_ACCOUNT_LABEL:-}")" FLEET_CC_SESSIONS_DIR="$FLEET_CC_SESSIONS_DIR"
 exec "$FB/claude" "$WORK/claude.pl" "\$@"
 EOS
 # token probe seam: the fake claude wrote its token next to its registry record
@@ -264,6 +265,30 @@ rig_diag() {  # on failure: what the walk saw (CI-only failures are otherwise bl
 ok; printf '%s' "$out" | grep -q 'would /exit' || fail "dry-run must print the plan: $out $(rig_diag)"
 ok; [ ! -f "$WORK/launched" ] || fail "dry-run must not launch anything"
 ok; TM display-message -p -t "$w1" '#{pane_pid}' >/dev/null 2>&1 || fail "dry-run must not close windows"
+
+# Operator-selected destinations can cross the 85% automatic ceiling, but a
+# fresh reading at/above 95% (or an unknown reading) must refuse before /exit.
+cat > "$FB/manual-quota" <<'EOS'
+#!/bin/bash
+[ "$1" = quota ] && [ "$2" = --refresh ] || exit 2
+state="${TMPDIR}/.claude-dash/global"
+mkdir -p "$state"
+date +%s > "$state/account.quota.ts.$$"
+mv "$state/account.quota.ts.$$" "$state/account.quota.ts"
+printf 'acctA\t2\t25\t75\t0\t0\t0\nacctB\t3\t%s\t%s\t0\t0\t0\n' "${FAKE_MANUAL_PCT:-89}" "$((100 - ${FAKE_MANUAL_PCT:-89}))"
+EOS
+chmod +x "$FB/manual-quota"
+export FLEET_MANUAL_ACCOUNT_BIN="$FB/manual-quota"
+ok; out=$(FAKE_MANUAL_PCT=89 bash "$SCRIPT" --session "$SESS" --target-account acctB --dry-run "$w1")
+printf '%s' "$out" | grep -q 'would /exit' || fail "89% explicit target must be previewable: $out"
+ok; FAKE_MANUAL_PCT=95 bash "$SCRIPT" --session "$SESS" --target-account acctB "$w1" >"$WORK/manual-block.out" 2>&1 \
+  && fail '95% explicit target must be refused'
+ok; TM display-message -p -t "$w1" '#{pane_pid}' >/dev/null 2>&1 || fail '95% refusal must leave original worker alive'
+ok; bash "$SCRIPT" --session "$SESS" --target-account '../acctB' "$w1" >/dev/null 2>&1 \
+  && fail 'invalid manual target must be refused'
+ok; bash "$SCRIPT" --session "$SESS" --target-account acctB --all >/dev/null 2>&1 \
+  && fail 'manual target must reject bulk migration'
+unset FLEET_MANUAL_ACCOUNT_BIN
 
 # --- the real thing: --limited moves w1 (hook), leaves w2 (stuck), relaunches w3 in place
 out=$(bash "$SCRIPT" --session "$SESS" --limited 2>&1)
@@ -409,6 +434,16 @@ bash "$BIN/fleet-account.sh" clear acctB >/dev/null
 ok; [ "$(bash "$BIN/fleet-account.sh" active)" = acctB ] || fail "rig: B un-benched ⇒ active rotates to acctB (got $(bash "$BIN/fleet-account.sh" active))"
 out=$(bash "$SCRIPT" --session "$SESS" --dry-run --account acctA 2>&1)
 ok; printf '%s' "$out" | grep -q 'w1 .*\[acctA → acctB\] would /exit' || fail "with B eligible again, --account acctA must plan the move A → B: $out"
+
+# Manual choice can select a soft-benched A while global active stays B. The
+# resumed process must carry A's token and a Claude binding, never B or an
+# inherited Codex target.
+export FLEET_MANUAL_ACCOUNT_BIN="$FB/manual-quota"
+out=$(FAKE_MANUAL_PCT=89 bash "$SCRIPT" --session "$SESS" --target-account acctA "$w4" 2>&1)
+ok; printf '%s' "$out" | grep -q 'w4 .*acctB → acctA' || fail "manual choice must move B → soft-benched A: $out"
+ok; [ "$(sed -n '1p' "$WORK/manual-env")" = acctA ] || fail 'launcher must be pinned to the selected account'
+ok; sed -n '2p' "$WORK/manual-env" | grep -q '"agent":"claude","label":"acctA"' || fail 'launcher must receive the Claude target binding'
+ok; [ "$(bash "$BIN/fleet-account.sh" active)" = acctB ] || fail 'manual move must leave global active account unchanged'
 
 cleanup; trap - EXIT
 printf 'fleet-migrate selftest: OK (%d checks)\n' "$CHECKS"
