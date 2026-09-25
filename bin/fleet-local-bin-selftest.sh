@@ -94,7 +94,7 @@ cat > "$WORK/spawn.sh" <<EOS
 tmux -L fleet new-window -d -t fleet: "printf '%s' \"\\\$PATH\" > '$WORK/win.path'"
 EOS
 chmod +x "$WORK/spawn.sh"
-_wait() { local i; for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do [ -s "$WORK/win.path" ] && break; sleep 0.2; done; cat "$WORK/win.path" 2>/dev/null; }
+_wait() { local _; for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do [ -s "$WORK/win.path" ] && break; sleep 0.2; done; cat "$WORK/win.path" 2>/dev/null; }
 winpath()    { rm -f "$WORK/win.path"; tmux -L fleet run-shell -t fleet: "$WORK/spawn.sh"; _wait; }
 clientpath() { rm -f "$WORK/win.path"; "$WORK/spawn.sh"; _wait; }
 # fleet-up's output on this sandbox, as it has always been (the byte-for-byte leg)
