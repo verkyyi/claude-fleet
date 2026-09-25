@@ -1013,11 +1013,13 @@ try:
     tm('set-option', '-w', '-t', w1, '@claude_state', 'working')
     tm('set-option', '-w', '-t', w2, '@claude_state', 'needs')
     items = menu_items(w1)
-    check(set('rtpavxno') <= set(items), 'the row menu lacks an action: %r' % items)
+    check(set('rtpavxnos') <= set(items), 'the row menu lacks an action: %r' % items)
     check(items['o'] == '恢复已收工…' and 'fleet-restore-pick.sh' in menu_commands(w1)['o'],
           'the row menu\'s last item is not the restore picker (#901): %r' % items)
     check(items['p'].startswith('-') and items['a'].startswith('-'),
           'a row with no PR / no pending question must grey those items: %r' % items)
+    check(items['s'].startswith('-') and not menu_commands(w1)['s'],
+          'a row without a Claude process must disable subscription switching: %r' % items)
     check(not items['r'].startswith('-') and not items['x'].startswith('-'), 'rename/reap greyed: %r' % items)
     check(not menu_items(w2)['a'].startswith('-'), 'a needs row greyed its answer item')
     # A PR for the branch the worktree is on (the dash's prmap) enables the item.

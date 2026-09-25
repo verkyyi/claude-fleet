@@ -539,6 +539,14 @@ class HardWallBackground(unittest.TestCase):
         self.assertIn("/bin/zsh -c 'next dev -p 3117'",note)
         self.assertIn('/w/web',note)
 
+    def test_same_account_recovery_keeps_mcp_and_background_processes(self):
+        r=dict(source=self.source,episode='claude:e',hard=True,created_at=time.time()-60)
+        flow.save(self.request/'request.json',r)
+        with patch.object(flow,'quiet_processes',side_effect=AssertionError('recovery would stop MCP')), \
+             patch.object(flow,'background_inventory',side_effect=AssertionError('recovery inventoried background work')):
+            flow.validate(self.request,'test','%2','s',recovery=True)
+        self.assertFalse((self.request/'background.json').exists())
+
     def test_grace_counts_from_the_wall_not_a_proactive_request(self):
         with self.assertRaisesRegex(ValueError,'background/tool'):
             self.validate(7200,hard_at=time.time()-60)
