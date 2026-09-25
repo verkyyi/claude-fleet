@@ -642,6 +642,16 @@ EOF
     fi
     printf '        note: needs the com.claude-fleet.dispatch daemon installed + the `autofill` label on issues; each auto-spawn opens a real Claude session + PR.\n'
   fi
+  # The seed repo (issue #1167): `fleet-up.sh --seed` brought the fleet up on a
+  # starter repo that only LOOKS — dispatch + issue-bridge skip it whatever its
+  # switches say. Said once per seeded fleet; a fleet without FLEET_SEED says nothing.
+  while IFS= read -r cf; do
+    [ -n "$cf" ] || continue
+    [ "$(_conf_val "$cf" FLEET_SEED)" = 1 ] || continue
+    info seed "$(_conf_val "$cf" FLEET_REPO) — 起步仓库，只读: no autofill, no issue-bridge (FLEET_SEED=1)"
+  done <<EOF
+$(_fleet_confs "$conf_dir")
+EOF
 fi
 
 # --- webhook daemon (optional: fresh ~1s PR/issue/CI status via gh webhook forward) ---
