@@ -722,10 +722,21 @@ pays that 36 times.
 
 The fleet ships a minimal worker set, **`conf/mcp-worker.json`**, installed with
 `conf/` and kept current by `/fleet-sync-install` like every other tracked file.
-Today it is the empty set:
+Today it contains only the fleet-peer bridge, which gives workers `list_agents`
+and `send_message` without loading unrelated MCP servers:
 
 ```json
-{"mcpServers":{}}
+{
+  "mcpServers": {
+    "fleet-peer": {
+      "command": "bash",
+      "args": [
+        "-lc",
+        "exec python3 \"$HOME/.claude/fleet/bin/fleet-peer-mcp.py\""
+      ]
+    }
+  }
+}
 ```
 
 Point a fleet at it (in `fleet.conf`, or per fleet in
@@ -736,10 +747,10 @@ FLEET_MCP_CONFIG="$HOME/.claude/fleet/conf/mcp-worker.json"
 ```
 
 `bin/fleet-claude.sh` then launches with `--strict-mcp-config
---mcp-config=<file>`: only the servers in the file load, and the remote connectors
-are dropped too. Codex workers inherit the same value unless
-`FLEET_CODEX_MCP_CONFIG` is set; the Codex launcher disables every other
-configured server plus apps/connectors (`bin/fleet-codex-policy.py`).
+--mcp-config=<file>`: only fleet-peer loads, and the remote connectors are dropped
+too. Codex workers inherit the same value unless `FLEET_CODEX_MCP_CONFIG` is set;
+the Codex launcher disables every other configured server plus apps/connectors
+(`bin/fleet-codex-policy.py`).
 
 **A repo that needs more** — don't edit the shipped file (the next sync would
 overwrite it). Copy it next to that fleet's conf, add only what that repo's

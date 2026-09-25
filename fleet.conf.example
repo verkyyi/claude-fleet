@@ -270,9 +270,9 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 #   <path|JSON>    ONLY these servers; the CLI takes a file path OR inline JSON
 # RECOMMENDED (issue #1078): point it at the minimal worker set the fleet ships,
 #   (e.g.)  FLEET_MCP_CONFIG="$HOME/.claude/fleet/conf/mcp-worker.json"
-# — today an empty server set (`{"mcpServers":{}}`), so it behaves like `none`, but
-# as a FILE: a fleet that needs a server copies it to its own conf dir, adds what
-# it needs (docs/INSTALL.md "MCP servers on demand" has the common add-backs), and
+# — today just fleet-peer (`list_agents` / `send_message`), as a FILE: a fleet
+# that needs another server copies it to its own conf dir, adds what it needs
+# (docs/INSTALL.md "MCP servers on demand" has the common add-backs), and
 # points this key there. On a machine running dozens of sessions every server is
 # one resident process per session, so this is the biggest per-session saving.
 # --strict-mcp-config is what also drops the REMOTE (claude.ai connector) servers,
