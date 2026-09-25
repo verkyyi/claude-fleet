@@ -48,7 +48,9 @@ FLEET_DASH_MIGRATE_BIN             seam: an injectable command/path for tests (d
 FLEET_DASH_POPUP_MAX_AGE           knob: internal pacing/limit, safe in-code default (dash-popup-wait.sh)
 FLEET_DASH_POPUP_POLL              knob: internal pacing/limit, safe in-code default (dash-popup-wait.sh)
 FLEET_DELIVERY_SIG                 handoff: the webhook delivery signature the bridge verifies
+FLEET_DEPLOY_PROBE_MAX             knob: internal pacing/limit, safe in-code default (tmux-pr-refresh.sh)
 FLEET_DEPLOY_TTL                   knob: internal pacing/limit, safe in-code default (tmux-pr-refresh.sh)
+FLEET_DEPLOY_TTL_FAILED            knob: internal pacing/limit, safe in-code default (tmux-pr-refresh.sh)
 FLEET_DEPS_LOGIN_SHELL             seam: the login shell the deps probe asks for PATH (fleet-deps-link.sh)
 FLEET_DEPS_NOW                     seam: a fixed clock for the deps retry backoff
 FLEET_DEPS_TOOL_DIRS               seam: extra node/tool dirs the deps linker searches (fleet-deps-link.sh)

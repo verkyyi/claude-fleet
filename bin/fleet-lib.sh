@@ -4329,6 +4329,33 @@ FLEET_DEPLOY_RUNS_JQ='[.workflow_runs[]? | (if .status=="completed" then (.concl
   elif ($s|any(.!="success" and .!="skipped" and .!="neutral"))                          then "deploying"
   else "live" end'
 
+# The same fold, over ONE listing of the base branch's newest runs, grouped by
+# head_sha → `<sha>\t<state>` lines (claude-fleet#1211). Measured 2026-09-25: the
+# per-sha read below, once per candidate per FLEET_DEPLOY_TTL, was 32 of the 41 REST
+# calls in a 45 s sample — 18 monorepo candidates × two logins on one token ≈ the
+# whole 5000/h core bucket. A sha absent from the listing (older than its 100-run
+# window) is simply not printed; the caller falls back to the per-sha read for it.
+# shellcheck disable=SC2016  # jq vars, not shell
+FLEET_DEPLOY_BATCH_JQ='[.workflow_runs[]? | {sha: .head_sha, tok: (if .status=="completed" then (.conclusion // "unknown") else .status end)}]
+  | group_by(.sha)[] | .[0].sha as $sha | [.[].tok] as $s
+  | $sha + "\t" + (
+      if   ($s|any(.=="failure" or .=="cancelled" or .=="timed_out" or .=="action_required"
+                   or .=="startup_failure" or .=="stale"))                              then "failed"
+      elif ($s|any(.!="success" and .!="skipped" and .!="neutral"))                      then "deploying"
+      else "live" end)'
+
+# fleet_deploy_probe_batch <repo> <branch> — one read of the newest 100 runs whose
+# head_branch is <branch> (push runs + the workflow_dispatch deploys a conductor fans
+# out on the same sha), folded per sha as above. rc 1 with no output when the read
+# itself failed — the caller keeps its cache and may fall back per sha.
+fleet_deploy_probe_batch() {
+  local repo="${1:-}" branch="${2:-}" out
+  [ -n "$repo" ] && [ -n "$branch" ] || return 1
+  out=$(gh api "repos/$repo/actions/runs?branch=$branch&per_page=100" --jq "$FLEET_DEPLOY_BATCH_JQ" 2>/dev/null) || return 1
+  printf '%s' "$out"
+  return 0
+}
+
 # fleet_deploy_probe <repo> <sha> <ref> <check> — print live|deploying|failed|unknown
 # for one merge sha under the given knobs; "" (rc 0) when the feature is off for this
 # repo or the sha is empty; rc 1 with "" when the actions read itself failed (the
