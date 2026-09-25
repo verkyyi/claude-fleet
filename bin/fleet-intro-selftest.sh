@@ -162,11 +162,11 @@ AFTER" ] && ok "no SSH_TTY → banner only" || bad "no SSH_TTY out: $out"
     || bad "non-interactive: cf ${cfn}× out=$out"
   : > "$T/cf"; touch "$T/home/.hushfleet"
   out=$(env -u TMUX HOME="$T/home" SSH_TTY=/dev/ttys999 zsh -f -i -c ". '$T/sh/fleet-login.zsh'; echo AFTER" 2>&1)
-  [ "$(grep -c CF "$T/cf")" = 0 ] && [ "$out" = AFTER ] && ok "~/.hushfleet → nothing" || bad "hushfleet: $out"
+  [ "$(grep -c CF "$T/cf")" = 0 ] && [ "$out" = AFTER ] && ok "hush file .hushfleet → nothing" || bad "hushfleet: $out"
   rm -f "$T/home/.hushfleet"; : > "$T/cf"; touch "$T/home/.hushfleet-attach"
   out=$(env -u TMUX HOME="$T/home" SSH_TTY=/dev/ttys999 zsh -f -i -c ". '$T/sh/fleet-login.zsh'; echo AFTER" 2>&1)
   [ "$(grep -c CF "$T/cf")" = 0 ] && [ "$out" = "INTRO
-AFTER" ] && ok "~/.hushfleet-attach → banner, no cf" || bad "hushfleet-attach: $out"
+AFTER" ] && ok "hush file .hushfleet-attach → banner, no cf" || bad "hushfleet-attach: $out"
   rm -f "$T/home/.hushfleet-attach"
   # a cf already defined (cw.zsh sourced earlier in .zshrc) is used, not re-sourced
   : > "$T/cf"
