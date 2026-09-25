@@ -40,7 +40,18 @@
 #   token [label]        — print the OAuth token for <label> (default: active)
 #   env                  — print `CLAUDE_CODE_OAUTH_TOKEN=…` for the active acct (or nothing)
 #   list                 — aligned table: label · active(●) · rotation window · state
-#                          (state = ok | limited · back in ~Nm | NO TOKEN)
+#                          (state = ok | limited · back in ~Nm | NO TOKEN), then the
+#                          ccquota columns: 5h/7d %, the live 5h window, and the
+#                          weekly `pace ±N` (issue #1231; red = held, yellow = ahead)
+#   pace                 — the pool's weekly PACE table (issue #1231): label · 7d% ·
+#                          pace · held|ahead|ok · 7d-reset, one TSV row per account
+#                          with a ccquota row (cache only). pace = 7d% − ceiling ×
+#                          (fraction of the 7d window elapsed): + = ahead of an even
+#                          burn of the week, − = behind. The quota watch mirrors it
+#                          to global/quota.pace every tick (the status bar's
+#                          `⚠ quota pace spread`), and moves ONE idle session off the
+#                          most-ahead account when it leads the current pick by
+#                          FLEET_ACCOUNT_PACE_REBALANCE points (see PICK_MODE below)
 #   inventory [--refresh] — provider-aware local subscriptions + ccquota readings
 #   choose --agent claude|codex [--exclude KEY] [--spawn] — JSON decision
 #   reconcile --session S [--dry-run] — bounded per-session quota continuation
@@ -148,13 +159,16 @@ STATE_QUOTA_TS="$STATE_DIR/account.quota.ts"
 # whether the tick brought anything BACK. They are different failures, and until
 # #684 only the first had an alarm.
 STATE_QUOTA_EMPTY="$STATE_DIR/account.quota.empty"
-# --- which account a new spawn lands on (issue #598) ---------------------------
+# --- which account a new spawn lands on (issues #598, #1231) -------------------
 # PICK_MODE decides how the ccquota rows are RANKED once the ceiling gate has
 # thrown out the accounts that are too hot to use at all:
-#   5h      (default) 5h-headroom × 2 + 7d-headroom — the 5-HOUR window weighted
-#           double, the weekly still counted (see the score note below).
+#   pace    (default, issue #1231) 5h-headroom × 2 + (100 − weekly PACE) × PACE_W:
+#           the #598 score with its flat 7d term replaced by how far the account
+#           is AHEAD of an even burn of its week (see the pace note below).
+#   5h      the #598 ranking: 5h-headroom × 2 + 7d-headroom — the 5-HOUR window
+#           weighted double, the weekly still counted (see the score note below).
 #   minmax  the pre-#598 ranking: ccquota's own headroom_pct = 100 - max(5h, 7d).
-# Why the default changed. `minmax` reads the two windows as if they were the same
+# Why `5h` replaced `minmax` (#598). `minmax` reads the two windows as if they were the same
 # budget, and they are not: 5h capacity is USE-IT-OR-LOSE-IT — whatever a window
 # does not spend evaporates at its reset and can never be recovered — while 7d
 # capacity just sits there. So an account at `5h 0% · 7d 80%` scored 20 and an
@@ -172,11 +186,43 @@ STATE_QUOTA_EMPTY="$STATE_DIR/account.quota.empty"
 # right call — the first account is one spawn from its weekly ceiling and would be
 # benched immediately, while the second has most of a window AND a fresh week. A
 # 5h-first tie-break alone would have picked the doomed one.
-PICK_MODE="${FLEET_ACCOUNT_PICK:-5h}"
+#
+# Why `pace` replaced the 7d term (issue #1231). `room7` is a flat 0..100 under a
+# 5h term worth 0..200, so an account with a FRESH 5h window outscored one with a
+# half-spent window whatever their weeks looked like: on 2026-09-25 the three
+# accounts at 7d 86–90% scored 206–212 against gmail's 111 (`5h 72% · 7d 45%`),
+# and only the 85% ceiling ever stopped a spawn landing on them. So spawns went
+# to whichever account was CLOSEST to exhausting its week, until each hit the
+# ceiling in turn — three of four benched for 1–3 days while ~45% of the fourth's
+# week sat unused. The weekly budget is the scarcer resource: a 5h window comes
+# back in five hours, a benched week in days.
+#
+# pace = 7d-utilization − CEILING × (fraction of the 7d window already elapsed),
+# in points: how far AHEAD of (+) or BEHIND (−) an even burn of the week's
+# spendable budget the account is. At an even fleet-wide burn it is also, to a
+# constant, the hours the account would sit benched before its reset (ahead) or
+# the budget it would leave unspent AT the reset (behind) — which is why it is
+# the term that ranks, and why "behind" ranks UP: that budget evaporates at the
+# weekly reset exactly the way an idle 5h window does at its own. No 7d reset in
+# the row ⇒ pace 0 (no opinion: neither ahead nor behind).
+#
+# score = room5 × PICK_W5 + (100 − pace) × PACE_W, PACE_W = PICK_W5 × 100 / PACE_LEAD:
+# a weekly lead of PACE_LEAD points (10) is worth an ENTIRE 5h window, so within a
+# lead that size the 5h window still decides (#598's answer, untouched when the
+# paces are equal) and beyond it the week does. Two rails on top of the score,
+# both fail-open the way a phase slot is (never the reason a spawn has no
+# account): an account more than PACE_HOLD points ahead, or within PACE_MARGIN
+# of the ceiling on its 7d window, is HELD for new spawns.
+# `FLEET_ACCOUNT_PICK=5h` is the one-line rollback to #598's ranking.
+PICK_MODE="${FLEET_ACCOUNT_PICK:-pace}"
 PICK_W5=2                                    # the expiring window's weight in the score
 PICK_HYST="${FLEET_ACCOUNT_PICK_HYST:-10}"   # keep the current account while it is within
                                              # this many 5h-equivalent POINTS of the best,
                                              # so near-equal accounts don't flip-flop
+PACE_LEAD="${FLEET_ACCOUNT_PACE_LEAD:-10}"   # a weekly lead of this many points outweighs a whole 5h window
+PACE_HOLD="${FLEET_ACCOUNT_PACE_HOLD:-25}"   # further ahead than this ⇒ held for new spawns (fail-open)
+PACE_MARGIN="${FLEET_ACCOUNT_PACE_MARGIN:-5}" # 7d within this of the ceiling ⇒ held too
+WEEK_SECS=604800                             # the 7d window, for the elapsed fraction
 # --- 5h-window phase stagger (issue #598) --------------------------------------
 # PHASE=0 is the kill switch: pick_active then ignores account.phase entirely, as
 # if no plan had ever been written. PHASE_AUTO is read by bin/fleet-quotawatch.sh,
@@ -581,7 +627,7 @@ quota_fetch() {
 # Metadata-only adapter for the provider-aware selector. Keep Claude's scores,
 # phase preference, model fallback and benches in their existing policy owner.
 cmd_claude_inventory() {
-  local rows ts fresh=0 l conf uuid used score u5 u7 r5 r7 reset token model_ok primary until fallback
+  local rows ts fresh=0 l conf uuid used score u5 u7 r5 r7 reset token model_ok primary until fallback pace pheld
   rows=$(quota_rows "$([ "${1:-}" = --refresh ] && printf refresh || :)")
   ts=$(cat "$STATE_QUOTA_TS" 2>/dev/null || echo 0)
   case "$ts" in ''|*[!0-9]*) ts=0;; esac
@@ -618,8 +664,13 @@ PY
     fi
     # Field 11, model_primary (issue #1073): 1 = FLEET_MODEL itself has headroom
     # here, 0 = only the fallback does. The selector ranks the 1s first.
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$l" "$uuid" "$used" "$score" \
-      "$(acct_limited_until "$l")" "$(acct_phase_hold "$l")" "$reset" "$fresh" "$token" "$model_ok" "$primary"
+    # Fields 12–13 (issue #1231): the weekly pace (`-` without a row) and whether
+    # it HOLDS the account for new spawns (fail-open in the selector, like field 6).
+    pace=$(pace_row "$rows" "$l"); [ -n "$pace" ] || pace='-'
+    pheld=0; pace_held "$rows" "$l" && pheld=1
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$l" "$uuid" "$used" "$score" \
+      "$(acct_limited_until "$l")" "$(acct_phase_hold "$l")" "$reset" "$fresh" "$token" "$model_ok" "$primary" \
+      "$pace" "$pheld"
   done <<EOF
 $(acct_labels)
 EOF
@@ -754,26 +805,80 @@ acct_phase_hold() {
     $1==l && ($2+0)>now && ($2+0)>u { u=$2+0 } END { print u+0 }' "$STATE_PHASE"
 }
 
+# --- the weekly PACE (issue #1231; see PICK_MODE above) ------------------------
+# pace_of <u7> <r7-epoch> [now] → u7 − CEILING × elapsed, elapsed = 1 − (r7 − now)
+# / 7d clamped to [0, 1]; integer, rounded half away from zero. r7 of 0 (no reset
+# known) ⇒ 0. A reset already in the past clamps to elapsed 1 — the cache lags a
+# reset by at most a TTL, and "behind" is the right reading for a window that
+# just refreshed. Pure awk: this is on the spawn path.
+pace_of() {
+  local u7="${1:-}" r7="${2:-0}" t="${3:-$(now)}"
+  case "$u7" in ''|*[!0-9]*) printf 0; return ;; esac
+  case "$r7" in ''|*[!0-9]*) r7=0 ;; esac
+  awk -v u="$u7" -v r="$r7" -v t="$t" -v c="$CEILING" -v w="$WEEK_SECS" 'BEGIN {
+    if (r <= 0) { print 0; exit }
+    e = 1 - (r - t) / w; if (e < 0) e = 0; if (e > 1) e = 1
+    p = u - c * e; v = (p < 0) ? -int(-p + 0.5) : int(p + 0.5); print v }'
+}
+# pace_row <rows> <label> → this account's pace, or EMPTY without a ccquota row.
+pace_row() {
+  local rows="$1" l="$2" u7 r7
+  u7=$(quota_field "$rows" "$l" 3); [ -n "$u7" ] || return 0
+  r7=$(quota_field "$rows" "$l" 6)
+  pace_of "$u7" "${r7:-0}"
+}
+# pace_weight → PACE_W: the score points one pace point is worth (PICK_W5 × 100 /
+# PACE_LEAD, so a lead of PACE_LEAD points equals a whole 5h window).
+pace_weight() {
+  local lead="$PACE_LEAD"
+  case "$lead" in ''|*[!0-9]*|0) lead=10 ;; esac
+  printf '%s' $(( PICK_W5 * 100 / lead ))
+}
+# pace_held <rows> <label> → 0 iff the account is HELD for new spawns: more than
+# PACE_HOLD points ahead, or its 7d within PACE_MARGIN of the ceiling. Only in
+# the `pace` mode; never without a row. Fail-open in pick_active, like a phase slot.
+pace_held() {
+  [ "$PICK_MODE" = pace ] || return 1
+  local rows="$1" l="$2" u7 p
+  u7=$(quota_field "$rows" "$l" 3); [ -n "$u7" ] || return 1
+  [ "$u7" -ge $(( CEILING - PACE_MARGIN )) ] && return 0
+  p=$(pace_row "$rows" "$l"); [ "${p:-0}" -gt "$PACE_HOLD" ]
+}
+# pace_verdict <rows> <label> → held | ahead | ok, or `-` without a row. `ahead` =
+# more than PACE_LEAD points ahead: the score already prefers everything on or
+# behind pace over it by at least one whole 5h window.
+pace_verdict() {
+  local rows="$1" l="$2" p
+  p=$(pace_row "$rows" "$l"); [ -n "$p" ] || { printf -- '-'; return; }
+  if pace_held "$rows" "$l"; then printf held
+  elif [ "$p" -gt "$PACE_LEAD" ]; then printf ahead
+  else printf ok; fi
+}
+
 # pick_score <rows> <label> → how good this account is for a NEW session (higher
 # wins), or EMPTY when ccquota has no row for it (⇒ no opinion, not a candidate).
-# See PICK_MODE above for why 5h headroom is the primary key.
+# See PICK_MODE above for why 5h headroom is the primary key and the weekly pace
+# the term beside it. Always ≥ 0 (pace ≤ 100), which pick_best's -1 floor needs.
 pick_score() {
-  local rows="$1" l="$2" u5 u7 m
+  local rows="$1" l="$2" u5 u7 m p
   u5=$(quota_field "$rows" "$l" 2); u7=$(quota_field "$rows" "$l" 3)
   [ -n "$u5" ] && [ -n "$u7" ] || return 0
   case "$PICK_MODE" in
     minmax) m=$u5; [ "$u7" -gt "$m" ] && m=$u7; printf '%s' $(( (100 - m) * PICK_W5 )) ;;
-    *)      printf '%s' $(( (100 - u5) * PICK_W5 + (100 - u7) )) ;;
+    5h)     printf '%s' $(( (100 - u5) * PICK_W5 + (100 - u7) )) ;;
+    *)      p=$(pace_row "$rows" "$l")
+            printf '%s' $(( (100 - u5) * PICK_W5 + (100 - p) * $(pace_weight) )) ;;
   esac
 }
 
-# pick_best <rows> <cur> <honour-holds> → the winning label, or EMPTY when there
-# is no candidate at all. A candidate is ELIGIBLE (un-benched), known to ccquota,
-# and under the CEILING on both windows; with honour-holds=1 a pending phase slot
-# also disqualifies it. The current account is KEPT while it is within PICK_HYST
-# points of the best, so near-equal accounts don't flip-flop between spawns.
+# pick_best <rows> <cur> <honour-holds> [<model>] [<honour-pace>] → the winning
+# label, or EMPTY when there is no candidate at all. A candidate is ELIGIBLE
+# (un-benched), known to ccquota, and under the CEILING on both windows; with
+# honour-holds=1 a pending phase slot also disqualifies it, with honour-pace=1 a
+# pace hold does (issue #1231). The current account is KEPT while it is within
+# PICK_HYST points of the best, so near-equal accounts don't flip-flop between spawns.
 pick_best() {
-  local rows="$1" cur="$2" holds="$3" model="${4:-0}" best="" bestsc=-1 cursc=-1 l sc u5 u7 util
+  local rows="$1" cur="$2" holds="$3" model="${4:-0}" pace="${5:-0}" best="" bestsc=-1 cursc=-1 l sc u5 u7 util
   while IFS= read -r l; do
     [ -n "$l" ] || continue
     acct_eligible "$l" || continue
@@ -783,6 +888,7 @@ pick_best() {
     [ -n "$u5" ] || continue                          # not in ccquota → no opinion
     util=$u5; [ "$u7" -gt "$util" ] && util=$u7
     [ "$util" -ge "$CEILING" ] && continue            # at the ceiling → not a candidate
+    [ "$pace" = 1 ] && pace_held "$rows" "$l" && continue   # held for the week → not now
     sc=$(pick_score "$rows" "$l")
     [ -n "$sc" ] || continue
     [ "$l" = "$cur" ] && cursc=$sc
@@ -797,9 +903,12 @@ EOF
 
 # Choose the account new sessions should use, starting from $1 (the current
 # active). With ccquota rows (issue #513): the best-ranked eligible account under
-# the ceiling wins (pick_best above). Two passes: the first honours the phase plan,
-# the second ignores it — a phase hold is a PREFERENCE about when to open a window
-# and must never be the reason a spawn has no account to run on (issue #598).
+# the ceiling wins (pick_best above). Three passes: the first honours the phase
+# plan AND the pace holds, the second drops the phase plan, the third the pace
+# holds too — both are PREFERENCES (a phase slot about when to open a 5h window,
+# a pace hold about not spending a week that is already ahead) and neither may
+# ever be the reason a spawn has no account to run on (issues #598, #1231). The
+# pace hold outlasts the phase slot because it guards the scarcer budget.
 # Without rows (or with every account at the ceiling): keep the current one if
 # eligible; else the next eligible one round-robin; if ALL are limited, keep the
 # current (best effort) so sessions still launch. Reads the quota CACHE only —
@@ -809,11 +918,13 @@ pick_active() {
   rows=$(quota_rows cached)
   if [ -n "$rows" ]; then
     if model_pref_on; then
-      best=$(pick_best "$rows" "$cur" 1 1)
-      [ -n "$best" ] || best=$(pick_best "$rows" "$cur" 0 1)
+      best=$(pick_best "$rows" "$cur" 1 1 1)
+      [ -n "$best" ] || best=$(pick_best "$rows" "$cur" 0 1 1)
+      [ -n "$best" ] || best=$(pick_best "$rows" "$cur" 0 1 0)
     fi
-    [ -n "$best" ] || best=$(pick_best "$rows" "$cur" 1)
-    [ -n "$best" ] || best=$(pick_best "$rows" "$cur" 0)
+    [ -n "$best" ] || best=$(pick_best "$rows" "$cur" 1 0 1)
+    [ -n "$best" ] || best=$(pick_best "$rows" "$cur" 0 0 1)
+    [ -n "$best" ] || best=$(pick_best "$rows" "$cur" 0 0 0)
     [ -n "$best" ] && { printf '%s' "$best"; return 0; }
   fi
   pick_active_rr "$cur"
@@ -1294,7 +1405,7 @@ EOF
 #   reset time — a live bench ends at the banner's instant, shown in STATE)
 #   STATE(ok | limited · back in ~Nm | NO TOKEN)
 cmd_list() {
-  local labels active l until state tok w now_s hdr r5 hold
+  local labels active l until state tok w now_s hdr r5 hold p pc
   local fmt='%-*s  %s  %-7s %s\n'
   labels=$(acct_labels)
   if [ -z "$labels" ]; then
@@ -1341,6 +1452,14 @@ EOF
         else
           state="$state ${A_DIM}· win idle${A_RST}"
         fi
+        # The weekly PACE (issue #1231): + = ahead of an even burn of the week,
+        # − = behind; red when it holds the account for new spawns, yellow when
+        # it is more than a 5h window's worth ahead of the on-pace accounts.
+        p=$(pace_row "$qrows" "$l")
+        if [ -n "$p" ]; then
+          case "$(pace_verdict "$qrows" "$l")" in held) pc="$A_RED" ;; ahead) pc="$A_YEL" ;; *) pc="$A_GRN" ;; esac
+          state="$state ${A_DIM}·${A_RST} ${pc}pace $(printf '%+d' "$p")${A_RST}"
+        fi
       fi
     fi
     hold=$(acct_phase_hold "$l")
@@ -1350,6 +1469,23 @@ EOF
       "$(human_dur "$(acct_ttl "$l")")" "$state"
   done <<EOF
 $labels
+EOF
+}
+
+# pace — the pool's weekly pace table (issue #1231): label · 7d% · pace · verdict
+# (held|ahead|ok) · 7d-reset, one row per account with a ccquota row. Cache only
+# — the watch calls this once per tick right after its fetch and mirrors it to
+# global/quota.pace; the status bar reads that file, never this command.
+cmd_pace() {
+  local rows l u7 r7
+  rows=$(quota_rows cached); [ -n "$rows" ] || return 0
+  while IFS= read -r l; do
+    [ -n "$l" ] || continue
+    u7=$(quota_field "$rows" "$l" 3); [ -n "$u7" ] || continue
+    r7=$(quota_field "$rows" "$l" 6); case "$r7" in ''|*[!0-9]*) r7=0 ;; esac
+    printf '%s\t%s\t%s\t%s\t%s\n' "$l" "$u7" "$(pace_of "$u7" "$r7")" "$(pace_verdict "$rows" "$l")" "$r7"
+  done <<EOF
+$(acct_labels)
 EOF
 }
 
@@ -1373,6 +1509,7 @@ case "${1:-active}" in
   limited-until) acct_limited_until "${2:-}" ;;
   quota)         shift; cmd_quota "$@" ;;
   quota-verdict) shift; cmd_quota_verdict "$@" ;;
+  pace)          cmd_pace ;;
   bench)         cmd_bench "${2:-}" "${3:-}" "${4:-}" ;;
   model-limited) cmd_model_limited "${2:-}" "${3:-}" "${4:-}" ;;
   model-limited-until) acct_model_limited_until "${2:-}" "${3:-}" ;;
@@ -1381,6 +1518,6 @@ case "${1:-active}" in
   migrate)       shift; exec bash "$BIN/fleet-migrate.sh" "$@" ;;
   whoami)        shift; exec bash "$BIN/fleet-migrate.sh" whoami "$@" ;;
   phase)         shift; cmd_phase "$@" ;;
-  *) echo "fleet-account.sh: unknown command '$1' (active|token|env|list|use|rotate|mark-limited|clear|limited-until|quota|quota-verdict|bench|phase|model-limited|model-limited-until|model-clear|model-quota|migrate|whoami)" >&2; exit 2 ;;
+  *) echo "fleet-account.sh: unknown command '$1' (active|token|env|list|use|rotate|mark-limited|clear|limited-until|quota|quota-verdict|pace|bench|phase|model-limited|model-limited-until|model-clear|model-quota|migrate|whoami)" >&2; exit 2 ;;
 esac
 fi

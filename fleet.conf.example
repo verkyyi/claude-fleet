@@ -1413,12 +1413,23 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Quota via banner shown for @group=accounts @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_ACCOUNT_QUOTA_VIA_BANNER_SECS=600
 # How a new spawn RANKS the eligible accounts once the ceiling has thrown out the
-# ones that are too hot to use at all (issue #598):
-#   5h      (default) score = 5h-headroom × 2 + 7d-headroom. The 5-hour window
-#           counts double because it EXPIRES — whatever a window does not spend
-#           evaporates at its reset and can never be recovered — while weekly
-#           headroom just sits there. The 7d term still counts, so an account one
-#           spawn from its weekly ceiling does not win on a fresh 5h window alone.
+# ones that are too hot to use at all (issues #598, #1231):
+#   pace    (default) score = 5h-headroom × 2 + (100 − weekly pace) × 20. The
+#           weekly PACE is 7d% − ceiling × (fraction of the 7d window elapsed):
+#           + = ahead of an even burn of the week's spendable budget, − = behind.
+#           Behind ranks UP — that budget evaporates at the weekly reset the way
+#           an idle 5h window does at its own — and a lead of PACE_LEAD points
+#           (10) is worth an entire 5h window, so the 5h window still decides
+#           between accounts on the same pace (#598's answer) and the week
+#           decides beyond that. Why: under `5h` the flat 7d term never outweighed
+#           a fresh 5h window, so spawns went to whichever account was CLOSEST to
+#           exhausting its week until each hit the ceiling in turn — on
+#           2026-09-25 three of four accounts benched for 1–3 days while ~45% of
+#           the fourth's week sat unused.
+#   5h      the #598 ranking: score = 5h-headroom × 2 + 7d-headroom. The 5-hour
+#           window counts double because it EXPIRES — whatever a window does not
+#           spend evaporates at its reset and can never be recovered. Kept as the
+#           one-line rollback from `pace`.
 #   minmax  the pre-#598 ranking, ccquota's headroom_pct = 100 - max(5h, 7d).
 #           It reads the two windows as one budget, and on 2026-09-13 that scored
 #           `5h 0% · 7d 80%` (20) BELOW `5h 77% · 7d 51%` (23): every spawn piled
@@ -1426,12 +1437,34 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 #           whole 5-hour window went unspent and then reset. Kept as a one-line
 #           rollback, not as a recommendation.
 # @label=Spawn ranking @group=accounts @tier=advanced @scope=global @edit=str
-#FLEET_ACCOUNT_PICK=5h
+#FLEET_ACCOUNT_PICK=pace
 # Keep the CURRENT account while it is within this many points of the best, so
 # new spawns don't flip-flop between near-equal accounts. Points are 5h-headroom
 # equivalents (the score above), so 10 ≈ "10% of a 5-hour window".
 # @label=Spawn ranking hysteresis @group=accounts @tier=advanced @scope=global @edit=int
 #FLEET_ACCOUNT_PICK_HYST=10
+# The weekly PACE rails (issue #1231; `pace` mode only). LEAD: a weekly lead of
+# this many points outweighs a whole 5h window in the score. HOLD / MARGIN: an
+# account more than HOLD points ahead, or with its 7d within MARGIN of the
+# ceiling, is HELD for new spawns — fail-open, like a phase slot: it can never be
+# the reason a spawn has no account. REBALANCE: the quota watch moves ONE idle
+# session per fleet off the most-ahead account when it leads the current pick by
+# this many points (the pick must itself be on pace, with 5h room), at most once
+# per COOLDOWN seconds; 0 = no moves (the pace table is still written).
+# SPREAD_WARN: the status bar shows `⚠ quota pace spread N` when the most-ahead
+# and most-behind accounts are more than this many points apart.
+# @label=Weekly lead worth a 5h window @group=accounts @tier=internal @scope=global @edit=int @unit=points
+#FLEET_ACCOUNT_PACE_LEAD=10
+# @label=Hold spawns when ahead by @group=accounts @tier=internal @scope=global @edit=int @unit=points
+#FLEET_ACCOUNT_PACE_HOLD=25
+# @label=Hold spawns within of ceiling @group=accounts @tier=internal @scope=global @edit=int @unit=points
+#FLEET_ACCOUNT_PACE_MARGIN=5
+# @label=Rebalance an idle session at a lead of @group=accounts @tier=internal @scope=global @edit=int @unit=points
+#FLEET_ACCOUNT_PACE_REBALANCE=15
+# @label=Rebalance cooldown @group=accounts @tier=internal @scope=global @edit=int @unit=sec
+#FLEET_ACCOUNT_PACE_COOLDOWN=600
+# @label=Pace spread warning @group=accounts @tier=internal @scope=global @edit=int @unit=points
+#FLEET_ACCOUNT_PACE_SPREAD_WARN=30
 # 5h-WINDOW PHASE STAGGER (issue #598). N subscriptions first used at around the
 # same time keep their 5h windows in the same phase: they burn down together and
 # reset together, so the pool's total headroom is a sawtooth whose trough is a

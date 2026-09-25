@@ -279,6 +279,13 @@ rm -f "$ACCT_DIR/a.conf"; : > "$STATE_LIMITED"
 STATE_QUOTA="$FLEET_C/account.quota"; STATE_QUOTA_TS="$FLEET_C/account.quota.ts"
 # shellcheck disable=SC2034  # read by the sourced pick_active at call time
 CEILING=85
+# This block pre-dates the pace ranking (issue #1231) and its fixtures carry
+# epoch-1/2 (i.e. long-past) 7d resets, which `pace` reads as a fully-elapsed
+# week; it exercises the mode-independent machinery (headroom, hysteresis,
+# ceiling gate, round-robin), so pin the documented `5h` score here. The pace
+# ranking has its own block below.
+# shellcheck disable=SC2034  # read by the sourced pick_score/pick_best at call time
+PICK_MODE=5h
 : > "$STATE_LIMITED"; rm -f "$STATE_QUOTA"; printf 'a\n' > "$STATE_ACTIVE"
 # labels a b c already exist as token files; pin c to a uuid via c.conf
 printf 'CCQUOTA_ACCOUNT=uuid-cccc\n' > "$ACCT_DIR/c.conf"
@@ -393,6 +400,64 @@ tie=$(printf 'a\t10\t20\t80\t%s\t%s\t0\nb\t10\t60\t40\t%s\t%s\t0\n' "$R5" "$R7" 
 printf '%s' "$tie" > "$STATE_QUOTA"
 eq "pick_active: equal 5h → more weekly headroom wins" a "$(pick_active zzz)"
 eq "pick_score: no ccquota row → no opinion" "" "$(pick_score "$tie" nosuch)"
+
+# ============================================================================
+# the WEEKLY PACE ranking (issue #1231) — pace the 7d budget across the pool
+# ============================================================================
+# The default mode. pace = 7d% − CEILING × (fraction of the 7d window elapsed):
+# how far ahead of (+) / behind (−) an even burn of the week the account is. The
+# regression it fixes is the 2026-09-25 pool — three accounts at 7d 86–90% with
+# fresh 5h windows kept winning new spawns over gmail at 7d 45%, because the flat
+# 7d term never outweighed a fresh 5h window, until each hit the ceiling in turn.
+# shellcheck disable=SC2034  # read by the sourced pick_score/pick_best/pace_* at CALL time
+PICK_MODE=pace
+: > "$STATE_LIMITED"; : > "$STATE_PHASE"; export FLEET_ACCOUNTS="a b"
+PN=$(now)
+HALF=$(( PN + 302400 ))          # r7 half a week out → elapsed 0.5 → CEILING×0.5 = 42.5
+EARLY=$(( PN + 544320 ))         # 10% into the week (elapsed 0.1) → 8.5
+LATE=$(( PN + 60480 ))           # 90% into the week (elapsed 0.9) → 76.5
+R5=$(( PN + 3600 ))
+
+# pace_of: u7 − 85 × elapsed, integer, half away from zero
+eq "pace_of: 40% at mid-week is behind an even burn"  -3 "$(pace_of 40 "$HALF" "$PN")"
+eq "pace_of: 80% at mid-week is well ahead"           38 "$(pace_of 80 "$HALF" "$PN")"
+eq "pace_of: 90% only 10% into the week is far ahead" 82 "$(pace_of 90 "$EARLY" "$PN")"
+eq "pace_of: 45% with 90% of the week gone is behind" -32 "$(pace_of 45 "$LATE" "$PN")"
+eq "pace_of: no 7d reset → no opinion (0)"            0  "$(pace_of 45 0 "$PN")"
+
+# equal 5h, one behind pace and one far ahead → the behind account wins, and the
+# far-ahead one is HELD out of new spawns entirely (fail-open below proves it
+# still can be picked when it is the only one left).
+pace2=$(printf 'a\t10\t40\t50\t%s\t%s\t0\nb\t10\t80\t10\t%s\t%s\t0\n' "$R5" "$HALF" "$R5" "$HALF")
+printf '%s' "$pace2" > "$STATE_QUOTA"; now > "$STATE_QUOTA_TS"
+eq "pace: behind-pace account outranks a far-ahead one at equal 5h" a "$(pick_active zzz)"
+eq "pace_verdict: the far-ahead account reads held" held "$(pace_verdict "$pace2" b)"
+eq "pace_verdict: the behind account reads ok"       ok   "$(pace_verdict "$pace2" a)"
+eq "pace_held: the far-ahead account is held"        0    "$(pace_held "$pace2" b; echo $?)"
+
+# the 2026-09-25 loss: gmail (fresh-ish 5h, most of its week left in real time)
+# beats an account at 7d 90% with a brand-new 5h window — under `5h` the 90%
+# account would have won on its fresh 5h alone.
+# a = a 24helpful-style account (fresh 5h, 7d 78% — UNDER the ceiling — but only
+# 10% into its week, so far ahead of pace); b = a gmail-style account (busier 5h,
+# 7d 45% with 90% of the week gone, so behind). The ceiling never fires here: the
+# pace HOLD is the only thing keeping the spawn off a, which `5h` would pick.
+loss=$(printf 'a\t2\t78\t8\t%s\t%s\t0\nb\t72\t45\t28\t%s\t%s\t9\n' "$R5" "$EARLY" "$R5" "$LATE")
+printf '%s' "$loss" > "$STATE_QUOTA"; export FLEET_ACCOUNTS="a b"
+eq "pace: a nearly-spent week loses to a mostly-unspent one despite a fresh 5h" b "$(pick_active zzz)"
+# rollback: `5h` puts the fresh 5h window first again (the #598 answer)
+# shellcheck disable=SC2034  # read by the sourced pick_score at CALL time
+PICK_MODE=5h
+eq "pace(rollback): FLEET_ACCOUNT_PICK=5h picks the fresh 5h window" a "$(pick_active zzz)"
+# shellcheck disable=SC2034  # read by the sourced pick_score at CALL time
+PICK_MODE=pace
+
+# fail-open: EVERY account held ⇒ the pool must not starve — pick the best of them
+allhot=$(printf 'a\t10\t82\t18\t%s\t%s\t0\nb\t10\t80\t20\t%s\t%s\t0\n' "$R5" "$EARLY" "$R5" "$EARLY")
+printf '%s' "$allhot" > "$STATE_QUOTA"; export FLEET_ACCOUNTS="a b"
+eq "pace: all accounts held ⇒ fail open to the best (never starve the pool)" b "$(pick_active zzz)"
+export FLEET_ACCOUNTS="a b c"
+rm -f "$STATE_QUOTA" "$STATE_QUOTA_TS"
 
 # ============================================================================
 # the PHASE stagger (issue #598) — acct_phase_hold + phase_plan
@@ -571,4 +636,4 @@ eq "model reader: empty ledger" 0 "$(acct_model_limited_until a fable)"
 rm -f "$STATE_MODEL_LIMITED"
 eq "model reader: missing ledger" 0 "$(acct_model_limited_until a fable)"
 
-printf 'selftest OK: fleet-account rotation math (%s assertions — dur/human, acct_ttl, limited/eligible, pick_active, banner reset instant, ccquota quota/bench + #628 no-reading rail, #598 ranking + phase stagger)\n' "$CHECKS"
+printf 'selftest OK: fleet-account rotation math (%s assertions — dur/human, acct_ttl, limited/eligible, pick_active, banner reset instant, ccquota quota/bench + #628 no-reading rail, #598 ranking + phase stagger, #1231 weekly pace)\n' "$CHECKS"

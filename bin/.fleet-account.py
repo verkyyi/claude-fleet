@@ -146,6 +146,40 @@ def codex_reading(refresh=False):
     return cache
 
 
+def ceiling():
+    return float(os.environ.get('FLEET_ACCOUNT_CEILING', '85'))
+
+
+def pace_of(used, resets_at, minutes, now=None):
+    """The weekly PACE (issue #1231), the shell's pace_of for a Codex window:
+    used − ceiling × elapsed, elapsed = 1 − (resets_at − now) / window, clamped
+    to [0, 1]; integer, rounded half away from zero. No reset or no length ⇒ 0."""
+    now = time.time() if now is None else now
+    if not resets_at or not minutes or minutes <= 0:
+        return 0
+    elapsed = min(1.0, max(0.0, 1 - (resets_at - now) / (minutes * 60.0)))
+    p = used - ceiling() * elapsed
+    return -int(-p + 0.5) if p < 0 else int(p + 0.5)
+
+
+def pace_weight():
+    try:
+        lead = int(os.environ.get('FLEET_ACCOUNT_PACE_LEAD', '10'))
+    except ValueError:
+        lead = 10
+    return 2 * 100 // (lead if lead > 0 else 10)
+
+
+def pace_held(used_week, pace):
+    """The shell's pace_held: more than FLEET_ACCOUNT_PACE_HOLD ahead, or the
+    weekly window within FLEET_ACCOUNT_PACE_MARGIN of the ceiling."""
+    if os.environ.get('FLEET_ACCOUNT_PICK', 'pace') != 'pace':
+        return False
+    hold = number(os.environ.get('FLEET_ACCOUNT_PACE_HOLD', '25')) or 25
+    margin = number(os.environ.get('FLEET_ACCOUNT_PACE_MARGIN', '5')) or 5
+    return used_week >= ceiling() - margin or pace > hold
+
+
 def normalize_codex(p, reading, now=None, scope=None):
     now = time.time() if now is None else now
     row = dict(p, key='codex/' + p['account'], available=False, utilization=None,
@@ -178,15 +212,24 @@ def normalize_codex(p, reading, now=None, scope=None):
         return row
     used = 100 if blocked else max(w['utilization'] for w in windows)
     ordered = sorted(windows, key=lambda w: w['minutes'] or float('inf'))
-    if os.environ.get('FLEET_ACCOUNT_PICK') == 'minmax' or len(ordered) < 2 or any(w['minutes'] is None for w in windows):
+    mode = os.environ.get('FLEET_ACCOUNT_PICK', 'pace')
+    pace, held = 0, False
+    if mode == 'minmax' or len(ordered) < 2 or any(w['minutes'] is None for w in windows):
         score = (100 - used) * 2
-    else:
+    elif mode == '5h':
         score = (100 - ordered[0]['utilization']) * 2 + (100 - max(w['utilization'] for w in ordered[1:]))
-    ceiling = float(os.environ.get('FLEET_ACCOUNT_CEILING', '85'))
-    blocking = [w['resets_at'] for w in windows if w['utilization'] >= ceiling and w['resets_at'] > now]
+    else:
+        # The same pace ranking as fleet-account.sh pick_score (issue #1231): the
+        # shortest window is the expiring one, the longest is the week.
+        week = ordered[-1]
+        pace = pace_of(week['utilization'], week['resets_at'], week['minutes'], now)
+        held = pace_held(week['utilization'], pace)
+        score = (100 - ordered[0]['utilization']) * 2 + (100 - pace) * pace_weight()
+    blocking = [w['resets_at'] for w in windows if w['utilization'] >= ceiling() and w['resets_at'] > now]
     # All constraining windows must reset before this subscription is eligible.
     row.update(available=True, utilization=used, score=score, reset_at=max(blocking, default=0),
-               windows=windows, reason='exhausted' if used >= ceiling else 'available')
+               windows=windows, pace=pace, pace_held=held,
+               reason='exhausted' if used >= ceiling() else 'available')
     return row
 
 
@@ -198,18 +241,22 @@ def inventory(refresh=False):
             args.append('--refresh')
         for line in run(args, timeout=20).splitlines():
             fields = line.split('\t')
-            if len(fields) not in (10, 11):
+            if len(fields) not in (10, 11, 13):
                 continue
             label, account, used, score, limited, hold, reset, fresh, token, model_ok = fields[:10]
             # Field 11 (issue #1073): FLEET_MODEL itself has headroom here, not
             # just its fallback. Absent = the pre-#1073 row = no preference.
             primary = fields[10] != '0' if len(fields) > 10 else True
+            # Fields 12–13 (issue #1231): the weekly pace and whether it holds the
+            # account for new spawns. Absent = the pre-#1231 row = no hold.
+            pace = number(fields[11]) if len(fields) > 12 else None
+            pheld = fields[12] == '1' if len(fields) > 12 else False
             available = fresh == '1' and number(used) is not None
             accounts.append(dict(agent='claude', label=label, account=account or label,
                 key='claude/' + (account or label), available=available, utilization=number(used),
                 score=number(score), limited_until=int(limited), hold_until=int(hold), reset_at=int(reset),
                 login='valid' if token == '1' else 'no_credentials', model_ok=model_ok == '1',
-                model_primary=primary,
+                model_primary=primary, pace=0 if pace is None else int(pace), pace_held=pheld,
                 reason='available' if available else 'unreadable'))
     except (OSError, ValueError, subprocess.SubprocessError):
         errors.append('Claude account inventory unavailable')
@@ -274,6 +321,10 @@ def choose(data, agent, exclude=(), current='', allowed=('claude', 'codex')):
                       and a['key'] not in excluded and eligible(a, now)]
         held = [a for a in candidates if a.get('hold_until', 0) <= now]
         candidates = held or candidates  # Existing phase preference is fail-open.
+        # A pace hold (issue #1231) is fail-open the same way, and outlasts the
+        # phase preference: it guards a week, the slot guards a 5h window.
+        paced = [a for a in candidates if not a.get('pace_held', False)]
+        candidates = paced or candidates
         if not candidates:
             continue
         # An account that runs the fleet's model beats one that only has its

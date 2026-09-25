@@ -234,6 +234,13 @@ fi
 # account by itself — the path that false-benched healthy accounts twice — so it
 # says so, beside (not instead of) the stale/blind alarm that usually explains it.
 [ -n "$(fleet_quota_via_banner)" ] && quota_seg="${quota_seg}${DIM}│ ${RED}⚠ quota via banner "
+# The weekly PACE spread (issue #1231): the pool's most-ahead and most-behind
+# accounts more than FLEET_ACCOUNT_PACE_SPREAD_WARN (30) points apart — one
+# week is being drained while another sits unused; `fleet-account.sh list`
+# names them. Yellow, not red: the watch's rebalance is already working on it,
+# and nothing is blind. Read off $G/quota.pace, which the watch writes per tick.
+qspread=$(fleet_quota_pace_spread)
+[ -n "$qspread" ] && quota_seg="${quota_seg}${DIM}│ ${YELLOW}⚠ quota pace spread ${qspread%%	*} "
 
 # --- collector staleness + self-heal trace (issue #636): the SECOND always-on
 # alarm. Every number the dash draws comes out of the collector's caches, so a
