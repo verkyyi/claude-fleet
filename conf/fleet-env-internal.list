@@ -186,6 +186,7 @@ FLEET_WEBHOOK_STATE_DIR            path: state/log location override (fleet-webh
 FLEET_WEBHOOK_WAKE_SLACK           knob: internal pacing/limit, safe in-code default (fleet-webhook.sh)
 FLEET_WEBHOOK_WAKE_TICK            knob: internal pacing/limit, safe in-code default (fleet-webhook.sh)
 FLEET_WH_BACKOFF_BASE              knob: internal pacing/limit, safe in-code default (fleet-webhook.sh)
+FLEET_WH_CATCHUP_MIN               knob: internal pacing/limit, safe in-code default (fleet-webhook.sh)
 FLEET_WH_BACKOFF_CAP               knob: internal pacing/limit, safe in-code default (fleet-webhook.sh)
 FLEET_WH_FORWARD_CMD               seam: an injectable command/path for tests (fleet-webhook.sh)
 FLEET_WH_HOOKS_LIST_CMD            seam: an injectable command/path for tests (fleet-webhook.sh)

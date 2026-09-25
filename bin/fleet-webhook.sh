@@ -116,6 +116,15 @@ WH_HOOKS_LIST_CMD="${FLEET_WH_HOOKS_LIST_CMD:-}"  # <repo> → TSV rows: id \t a
 WH_HOOK_DEL_CMD="${FLEET_WH_HOOK_DEL_CMD:-}"      # <repo> <id> → delete that hook
 WH_BACKOFF_BASE="${FLEET_WH_BACKOFF_BASE:-5}";  case "$WH_BACKOFF_BASE" in ''|*[!0-9]*) WH_BACKOFF_BASE=5;; esac
 WH_BACKOFF_CAP="${FLEET_WH_BACKOFF_CAP:-300}";  case "$WH_BACKOFF_CAP"  in ''|*[!0-9]*) WH_BACKOFF_CAP=300;; esac
+# Catch-up throttle (claude-fleet#1211). `gh webhook forward` v0.2.0 exits on the
+# relay's periodic 1006 close instead of reconnecting (cli/gh-webhook#43) — on the
+# Mac mini that is a death every ~80 s per repo (129 in 3 h for one repo), and each
+# respawn used to kick a FULL pr-refresh + collect --issues: ~45 catch-ups an hour
+# per repo on the shared 5000/h token, reconciling a gap of a few seconds that the
+# 15 s / 60 s pollers cover anyway. A catch-up now runs at most once per
+# FLEET_WH_CATCHUP_MIN seconds per repo (default 600); a host wake (issue #410)
+# clears the stamp so the first respawn after a real outage still catches up.
+WH_CATCHUP_MIN="${FLEET_WH_CATCHUP_MIN:-600}"; case "$WH_CATCHUP_MIN" in ''|*[!0-9]*) WH_CATCHUP_MIN=600;; esac
 
 # Wake-triggered reconcile (issue #410). The supervisor idles between reconcile
 # passes in WH_TICK-second chunks and treats a chunk whose WALL-clock overran its
@@ -407,7 +416,15 @@ wh_spawn_forward() { # $1=repo $2=pidfile
 # kick. Best-effort (a failed kick is logged, never fatal); the ~15s/~60s pollers
 # stay the backstop.
 wh_catchup() { # $1=repo
-  local repo="$1"
+  local repo="$1" stamp last now
+  stamp="$FWD/$(fleet_slug "$repo").catchup"
+  now=$(date +%s); last=$(cat "$stamp" 2>/dev/null)
+  [ "$last" -eq "$last" ] 2>/dev/null || last=0
+  if [ "$WH_CATCHUP_MIN" -gt 0 ] && [ $((now - last)) -lt "$WH_CATCHUP_MIN" ]; then
+    log "catch-up skipped for $repo (last one $((now - last))s ago < ${WH_CATCHUP_MIN}s; the pollers cover a short gap)"
+    return 0
+  fi
+  echo "$now" > "$stamp" 2>/dev/null || :
   log "catch-up on (re)connect for $repo → pr-refresh + collect --issues"
   "$PR_REFRESH_CMD"     --repo   "$repo" >/dev/null 2>&1 || log "catch-up: pr-refresh kick failed for $repo"
   "$ISSUES_REFRESH_CMD" --issues "$repo" >/dev/null 2>&1 || log "catch-up: issues collect failed for $repo"
@@ -445,7 +462,7 @@ EOF
     case "$live" in *" $slug "*) continue;; esac
     pid=$(cat "$pidf" 2>/dev/null)
     [ -n "$pid" ] && kill "$pid" 2>/dev/null
-    rm -f "$pidf" "$base.fails" "$base.until"
+    rm -f "$pidf" "$base.fails" "$base.until" "$base.catchup"
     log "forward down: $slug (no longer a live opted-in fleet)"
   done
 }
@@ -511,8 +528,9 @@ wh_supervise() {
       # A host wake was just detected (issue #410): clear any backoff deadline so a
       # forward the sleep killed respawns immediately — not gated by a pre-sleep
       # deadline — then let wh_reconcile reap the orphan hook, recreate the forward,
-      # and catch its caches up, all within seconds of wake.
-      rm -f "$FWD"/*.until "$FWD"/*.fails 2>/dev/null || :
+      # and catch its caches up, all within seconds of wake. The catch-up stamps go
+      # too: a wake is the real outage the throttle must never swallow.
+      rm -f "$FWD"/*.until "$FWD"/*.fails "$FWD"/*.catchup 2>/dev/null || :
       woke=0
     fi
     wh_reconcile

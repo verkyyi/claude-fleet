@@ -255,9 +255,30 @@ grep -qx -- '--issues acme/widgets' "$CREC" || fail 'catch-up did not kick colle
 : > "$CREC"; crecon                               # forward already alive → NO reconnect, NO catch-up
 eq 'no catch-up when forward already alive' "$(cat "$CREC")" ''
 cwp=$(cat "$CST/forwards/acme-widgets.pid"); kill "$cwp" 2>/dev/null; wait_dead "$cwp"
-: > "$CREC"; crecon                               # restart after a death → catch-up fires again
+: > "$CREC"; FLEET_WH_CATCHUP_MIN=0 crecon        # restart after a death → catch-up fires again (throttle off)
 grep -qx -- '--repo acme/widgets'   "$CREC" || fail 'catch-up did not re-kick pr-refresh on reconnect'; ok
 grep -qx -- '--issues acme/widgets' "$CREC" || fail 'catch-up did not re-kick collect on reconnect'; ok
+# --- catch-up throttle (claude-fleet#1211): a forward that dies every ~80s (the
+# relay's 1006 close, cli/gh-webhook#43) must NOT drag a full pr-refresh + collect
+# behind every respawn — at most one catch-up per FLEET_WH_CATCHUP_MIN per repo.
+# The stamp is per repo, a wake clears it, and the departed-repo reap removes it.
+# (each death here lands inside the previous death's backoff deadline — clear it,
+# as a passing deadline would, so the respawn itself is never what is under test)
+nobackoff() { rm -f "$CST/forwards/acme-widgets.until" "$CST/forwards/acme-widgets.fails"; }
+cwp=$(cat "$CST/forwards/acme-widgets.pid"); kill "$cwp" 2>/dev/null; wait_dead "$cwp"; nobackoff
+: > "$CREC"; crecon                               # death + respawn inside the window (default 600s)
+eq 'catch-up throttled: respawn inside FLEET_WH_CATCHUP_MIN kicks nothing' "$(cat "$CREC")" ''
+[ -f "$CST/forwards/acme-widgets.pid" ] && kill -0 "$(cat "$CST/forwards/acme-widgets.pid")" 2>/dev/null \
+  || fail 'throttled catch-up must still respawn the forward'; ok
+[ -f "$CST/forwards/acme-widgets.catchup" ] || fail 'catch-up stamp missing'; ok
+cwp=$(cat "$CST/forwards/acme-widgets.pid"); kill "$cwp" 2>/dev/null; wait_dead "$cwp"; nobackoff
+echo 1 > "$CST/forwards/acme-widgets.catchup"      # last catch-up long ago → due
+: > "$CREC"; crecon
+grep -qx -- '--repo acme/widgets' "$CREC" || fail 'catch-up must fire again once FLEET_WH_CATCHUP_MIN has passed'; ok
+cwp=$(cat "$CST/forwards/acme-widgets.pid"); kill "$cwp" 2>/dev/null; wait_dead "$cwp"; nobackoff
+rm -f "$CST/forwards/acme-widgets.catchup"          # what a host wake does (issue #410)
+: > "$CREC"; crecon
+grep -qx -- '--issues acme/widgets' "$CREC" || fail 'a cleared stamp (host wake) must catch up on the next respawn'; ok
 
 # --- EVERY HOSTED REPO (issue #800) -----------------------------------------
 # A fleet hosting several repos (repos/<slug>.conf overlays, issue #788) forwards
