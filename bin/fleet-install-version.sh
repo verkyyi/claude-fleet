@@ -182,7 +182,9 @@ sl="$(dirname "$0")/fleet-sync-logins.sh"
 if [ "$do_logins" -eq 1 ] && [ -n "$head" ] && [ -f "$sl" ]; then
   logins=$(bash "$sl" --summary --source "$dir" 2>/dev/null)
   case "$logins" in
-    ''|'0 other'*) logins='' ;;
+    # a machine with no other install is silent — but `0 other · … · N login(s)
+    # unreadable` is not "none", it is "could not look" (issue #1158)
+    ''|'0 other · 0 current · 0 drifted') logins='' ;;
     *' 0 drifted') ;;
     *) logins="$logins — sync them: bash $sl" ;;
   esac

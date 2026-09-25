@@ -41,6 +41,11 @@
 #                  --include-off syncs it; the settings file wins over the
 #                  install conf (a relocated FLEET_CONF_DIR honoured); --to-git
 #                  skips an off copy the same way
+#   K. closed home a 0700 home owned by someone else (issue #1158): the caller's
+#                  glob cannot see its install. With sudo it is found and read
+#                  THROUGH the owner (discovery, drift, the act, the verify, its
+#                  LaunchAgents); without, it is `unreadable` — a needs-sudo
+#                  exit 5 with the admin command — never "nothing to sync"
 #
 # Exit 0 = pass.
 set -uo pipefail
@@ -54,7 +59,8 @@ done
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/sync-logins-selftest.XXXXXX")" || exit 2
 WORK=$(cd "$WORK" && pwd -P)
-cleanup() { rm -rf "$WORK"; }
+KH=''   # section K's closed home — reopened first, or rm -rf cannot enter it
+cleanup() { [ -n "$KH" ] && chmod 700 "$KH" 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT INT TERM HUP
 
 CHECKS=0
@@ -528,5 +534,70 @@ ok "to-git: mia still a copy" '[ ! -e "$MI/.git" ]'
 jrun --to-git --dry-run --logins mia
 eq "to-git named: a copy to convert (dry-run exit 1)" 1 "$RC"
 ok "to-git named: mia converts at its marker" 'printf "%s\n" "$OUT" | grep -q "^mia  *copy .* to-git — clone at $(g "$SRC" rev-parse --short "$C8")"'
+
+# ============================================================================
+# K. a closed (0700, someone else's) home — issue #1158
+# ============================================================================
+# The caller owns every file here, so "someone else's 0700 home" is a home at
+# mode 000: the caller cannot enter it, and the owner-sudo shim reopens it for
+# exactly the span of each command it runs as the owner (a lock per call, so
+# overlapping calls do not close it under each other).
+H3="$WORK/homes3"; mkdir -p "$H3/kim/.claude" "$H3/plain"   # plain: open, no install
+git clone -q "$SRC" "$H3/kim/.claude/fleet"
+K="$H3/kim/.claude/fleet"
+g "$K" reset -q --hard HEAD~1
+mkdir -p "$H3/kim/Library/LaunchAgents"; touch "$H3/kim/Library/LaunchAgents/com.claude-fleet.collect.plist"
+mkdir -p "$WORK/klocks"
+cat > "$WORK/shim/ksudo" <<EOF
+#!/bin/sh
+echo "\$*" >> "$WORK/sudo.log"
+[ "\$1" = -n ] && shift
+[ "\$1" = -u ] && shift 2
+: > "$WORK/klocks/\$\$"; chmod 700 "$H3/kim"
+"\$@"; rc=\$?
+rm -f "$WORK/klocks/\$\$"
+[ -n "\$(ls "$WORK/klocks")" ] || chmod 000 "$H3/kim"
+exit \$rc
+EOF
+chmod +x "$WORK/shim/ksudo"
+KH="$H3/kim"; chmod 000 "$KH"
+if [ -x "$KH" ]; then
+  echo "sync-logins-selftest: K skipped — running as root, a mode-000 home stays open"
+else
+  krun() { OUT=$(FLEET_SYNC_LOGINS_HOMES="$H3" FLEET_SYNC_LOGINS_ME=someone-else bash "$SL" --source "$SRC" "$@" 2>&1); RC=$?; }
+  ok "closed: the caller really cannot see the install" '[ ! -d "$K" ]'
+
+  # no sudo: unreadable, never "nothing to sync"
+  FLEET_SYNC_LOGINS_SUDO=false krun --summary
+  eq "closed no-sudo summary: counted unreadable" "0 other · 0 current · 0 drifted · 1 login(s) unreadable: kim" "$OUT"
+  eq "closed no-sudo summary: exit 5 (needs sudo)" 5 "$RC"
+  FLEET_SYNC_LOGINS_SUDO=false krun --dry-run
+  eq "closed no-sudo dry-run: exit 5" 5 "$RC"
+  not_contains "closed no-sudo: never nothing to sync" "$OUT" "nothing to sync"
+  ok "closed no-sudo: kim's row says unreadable" 'printf "%s\n" "$OUT" | grep -q "^kim  *? .* unreadable — "'
+  not_contains "closed no-sudo: an open home without an install is not unreadable" "$OUT" "plain"
+  contains "closed no-sudo: the tail counts it" "$OUT" "other logins on this machine: 0 readable · 1 login(s) unreadable: kim — needs sudo"
+  contains "closed no-sudo: the admin command" "$OUT" "sudo $SL --source $SRC --logins kim"
+  FLEET_SYNC_LOGINS_SUDO=false krun --dry-run --logins kim
+  eq "closed no-sudo --logins kim: needs sudo, not an unknown login" 5 "$RC"
+  FLEET_SYNC_LOGINS_SUDO=false krun --dry-run --logins plain
+  eq "closed no-sudo --logins plain: still no install (exit 2)" 2 "$RC"
+
+  # with sudo: found and read through the owner
+  : > "$WORK/sudo.log"; : > "$WORK/launchctl.log"
+  FLEET_SYNC_LOGINS_SUDO="$WORK/shim/ksudo -n" krun --summary
+  eq "closed sudo summary: kim is planned, behind" "1 other · 0 current · 1 drifted (kim:1)" "$OUT"
+  contains "closed sudo: discovery asked the owner" "$(cat "$WORK/sudo.log")" "-u $(id -un) test -d $K"
+  FLEET_SYNC_LOGINS_SUDO="$WORK/shim/ksudo -n" krun
+  eq "closed sudo act: exit 0" 0 "$RC"
+  contains "closed sudo act: synced" "$OUT" "kim: synced to"
+  not_contains "closed sudo act: no FAILED" "$OUT" "FAILED"
+  contains "closed sudo act: its LaunchAgent (listed as the owner) was kicked" "$(cat "$WORK/launchctl.log")" "com.claude-fleet.collect"
+  ok "closed: the shim closed the home again" '[ ! -x "$KH" ]'
+  FLEET_SYNC_LOGINS_SUDO="$WORK/shim/ksudo -n" krun --summary
+  eq "closed sudo: current after the sync" "1 other · 1 current · 0 drifted" "$OUT"
+  chmod 700 "$KH"
+  eq "closed sudo: HEAD at the source commit" "$(g "$SRC" rev-parse HEAD)" "$(g "$K" rev-parse HEAD)"
+fi
 
 echo "sync-logins-selftest OK ($CHECKS checks)"
