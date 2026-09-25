@@ -65,6 +65,18 @@ FLEET_BASE_BRANCH="main"
 # @label=Seed repo (look only) @group=identity @tier=advanced @scope=identity @edit=no
 #FLEET_SEED=0
 
+# --- Public SSH entry (issue #1195) ---------------------------------------
+# How a NEWCOMER reaches this machine from outside — the host and port that the
+# welcome letter fleet-login-new.sh writes (~/<login>-onboard/welcome.txt, EPIC
+# #1212) puts in its `ssh -p <port> <login>@<host>` line and ssh-config snippet.
+# Machine-wide, so global: every login opened on this box is reached the same way.
+# Unset host ⇒ the letter carries a visible `<HOST>` placeholder and the run WARNs;
+# unset port ⇒ 22 (ssh's own default). Not read anywhere else.
+# @label=Public SSH host @group=identity @tier=common @scope=global @edit=str
+#FLEET_SSH_PUBLIC_HOST=ssh.example.com
+# @label=Public SSH port @group=identity @tier=common @scope=global @edit=int
+#FLEET_SSH_PUBLIC_PORT=22
+
 # First-fleet guide (issue #1169). The first time this login's fleet is created,
 # fleet-up opens the /fleet-onboard wizard as a `guide` scratch pinned to the top
 # of the session list, and writes $FLEET_CONF_DIR/global/onboarded only after the

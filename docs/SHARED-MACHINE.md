@@ -39,6 +39,8 @@ inherits your cwd (issue #1216):
   --pubkey alice.pub --share-pool          # a dry run: prints every command, runs none
 ~/.claude/fleet/bin/fleet-login-new.sh alice --full-name "Alice Example" \
   --pubkey alice.pub --share-pool --apply  # the same plan, executed — no prompt, works over ssh
+~/.claude/fleet/bin/fleet-login-new.sh alice --full-name "Alice Example" \
+  --share-pool --apply                     # no key from alice yet: a temporary pair, carried by her welcome letter
 ```
 
 In order, it runs `sysadminctl -addUser` (no `-admin`: a fleet doesn't need it)
@@ -65,6 +67,21 @@ Code installs, issue #1191) followed by the claude-fleet block (issue #1165):
 alice's first terminal login installs Claude Code and finishes the claude-fleet
 install by itself — step 5 below. It ends by printing the steps left for a
 human — the ones below that it can't do.
+
+**It also writes alice's welcome letter** (issue #1195):
+`~/alice-onboard/welcome.txt` in your own home, mode 600 — how to connect
+(`ssh -p <port> alice@<host>`), an ssh-config snippet, how to swap in her own
+key, what the guide and `cf` do, and what is still hers (the Codex device code,
+`gh auth login`); never the password. Leave `--pubkey` out and it generates a
+**temporary** ed25519 pair into the same dir, installs the public half and puts
+the private half in the letter, so alice can connect before she ever sent you a
+key and swaps it for her own on first login (the letter says how). The host and
+port are `FLEET_SSH_PUBLIC_HOST` / `FLEET_SSH_PUBLIC_PORT`, machine-wide
+(`prefix+c` → 身份/identity, or two lines in
+`~/.config/claude-fleet/fleet.settings`) — unset, the letter carries a visible
+`<HOST>` placeholder and the run warns. `--lang en` for an English letter
+(default Chinese); `--no-welcome` skips it (then `--pubkey` is required). You
+send the letter; the script mails nothing and never prints the key.
 
 **No GUI sign-in is needed** (issue #1192): the daemons are system
 LaunchDaemons, so alice's first `ssh alice@mini` lands in a working fleet. The
