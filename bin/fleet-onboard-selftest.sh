@@ -68,8 +68,8 @@ got=$(bash "$OB" get)
 [ "$(grep -c '^step=' "$STATE")" = 1 ]    || fail "step written twice" "$got"
 [ "$(grep -c '^updated=' "$STATE")" = 1 ] || fail "updated written twice" "$got"
 bash "$OB" get nosuchkey >/dev/null && fail "get of a missing key must exit 1"
-perm=$(stat -f '%Lp' "$STATE" 2>/dev/null || stat -c '%a' "$STATE" 2>/dev/null)
-[ "$perm" = 600 ] || fail "state file mode is $perm, want 600"
+perm=$(ls -l "$STATE" | cut -c1-10)   # ls, not stat: GNU `stat -f` is filesystem status
+[ "$perm" = -rw------- ] || fail "state file mode is $perm, want -rw-------"
 ok "set merges, last value wins, one updated=, 0600"
 
 # --- 1b. resume where it left ------------------------------------------------
