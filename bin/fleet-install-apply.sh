@@ -26,6 +26,9 @@
 #             _template.md placeholder `worker|hub|either`) is not a command.
 #   skills    mirror added/changed skills/<name>/ dirs, remove retired ones;
 #             never clobber a personal (unmarked, divergent) skill
+#   codex     mirror the same fleet commands as native Codex skills under each
+#             known $CODEX_HOME/skills/<command>/SKILL.md, and mirror repo skills
+#             there too. Old Codex homes that do not exist are ignored.
 #   ui        dash launcher / tmux conf changed -> fleet-ui-refresh.sh --all
 #   repark    re-park stale sleeping-worker pages on every live fleet (#1064)
 #   logins    --sync-logins only (issue #1122): bring this machine's OTHER
@@ -463,6 +466,102 @@ if [ "$COPY" = 1 ]; then
     say "commands: $([ "$DRY" = 1 ] && echo 'would install' || echo installed) $inst · $([ "$DRY" = 1 ] && echo 'would remove' || echo removed) $rem · current $same"
   else
     say 'commands: skip — no commands/*.md changed'
+  fi
+fi
+
+# --- codex skills --------------------------------------------------------------
+codex_homes() {
+  {
+    printf '%s\n' "${CODEX_HOME:-$HOME/.codex}"
+    [ -n "${FLEET_CODEX_HOME:-}" ] && printf '%s\n' "$FLEET_CODEX_HOME"
+    python3 - "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}" <<'PY' 2>/dev/null
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1]).expanduser() / "codex" / "accounts.json"
+try:
+    data = json.loads(root.read_text())
+except Exception:
+    data = {}
+if isinstance(data, dict):
+    for value in data.values():
+        if isinstance(value, str):
+            print(value)
+PY
+  } | sed '/^$/d' | awk '!seen[$0]++'
+}
+codex_skill_marked() { [ -f "$1/SKILL.md" ] && grep -qF '<!-- fleet codex command skill -->' "$1/SKILL.md"; }
+codex_base_marked() { [ -f "$1/SKILL.md" ] && grep -qF '<!-- fleet skill -->' "$1/SKILL.md"; }
+codex_command_skill() { # $1 source command.md $2 skill-name
+  local src="$1" name="$2" title desc
+  title=$(sed -n '1s/^# //p' "$src" | sed 's/[[:space:]]\{1,\}/ /g; s/:/ -/g')
+  [ -n "$title" ] || title="/$name"
+  desc="Run the claude-fleet /$name command as a native Codex skill. Use when the user invokes /$name, \$$name, or asks for this fleet command. Source: commands/$name.md ($title)."
+  printf -- '---\nname: %s\ndescription: >-\n  %s\n---\n\n' "$name" "$desc"
+  printf '# claude-fleet Codex adapter for /%s\n\n<!-- fleet codex command skill -->\n\n' "$name"
+  if [ -r "$ROOT/conf/codex-preamble.md" ]; then
+    sed 's/\$ARGUMENTS/the text after this skill name/g' "$ROOT/conf/codex-preamble.md"
+    printf '\n---\n\n'
+  fi
+  sed 's/\$ARGUMENTS/the text after this skill name/g' "$src"
+}
+if touched conf/codex-preamble.md; then
+  codex_command_paths=$(find "$ROOT/commands" -maxdepth 1 -type f -name '*.md' | sed "s#^$ROOT/##" | sort)
+else
+  codex_command_paths=$(printf '%s\n%s\n' "$ADDED" "$GONE" | grep -E '^commands/[^/]+\.md$' | sort -u)
+fi
+codex_skill_names=$(printf '%s\n' "$CHANGED" | sed -n 's#^skills/\([^/][^/]*\)/.*#\1#p' | sort -u)
+if [ -z "$codex_command_paths$codex_skill_names" ] && ! touched conf/codex-preamble.md; then
+  say 'codex-skills: skip — no commands/*.md, skills/ or codex preamble changed'
+else
+  homes=$(codex_homes)
+  if [ -z "$homes" ]; then
+    say 'codex-skills: skip — no Codex homes known'
+  else
+    inst=0 rem=0 warn=0 homes_n=0
+    tmp_skill=$(mktemp "${TMPDIR:-/tmp}/fleet-codex-skill.XXXXXX") || { fail codex-skills "mktemp failed"; tmp_skill=''; }
+    while IFS= read -r home; do
+      [ -n "$home" ] || continue
+      case "$home" in *$'\n'*|*$'\r'*|*$'\t'*) warn=$((warn + 1)); say "codex-skills: WARN skipping unsafe CODEX_HOME path"; continue ;; esac
+      [ -d "$home" ] || { [ "$home" = "$HOME/.codex" ] || { warn=$((warn + 1)); say "codex-skills: WARN $home is not a directory — skipped"; continue; }; }
+      homes_n=$((homes_n + 1))
+      for p in $codex_command_paths; do
+        b=${p#commands/}; name=${b%.md}; src="$ROOT/$p"; dst="$home/skills/$name"
+        if [ ! -f "$src" ] || ! is_command "$src"; then
+          [ -d "$dst" ] || continue
+          if ! codex_skill_marked "$dst"; then warn=$((warn + 1)); say "codex-skills: WARN $name is retired upstream but the Codex skill is personal — left alone"; continue; fi
+          if [ "$DRY" = 1 ]; then rem=$((rem + 1)); say "codex-skills: would remove $home/skills/$name"; continue; fi
+          rm -rf "$dst" && rem=$((rem + 1)) || fail codex-skills "remove $dst"
+          continue
+        fi
+        codex_command_skill "$src" "$name" > "$tmp_skill" || { fail codex-skills "render $name"; continue; }
+        if [ -f "$dst/SKILL.md" ] && ! codex_skill_marked "$dst" && ! cmp -s "$tmp_skill" "$dst/SKILL.md"; then
+          warn=$((warn + 1)); say "codex-skills: WARN $name is a personal Codex skill — left alone"; continue
+        fi
+        if cmp -s "$tmp_skill" "$dst/SKILL.md" 2>/dev/null; then continue; fi
+        if [ "$DRY" = 1 ]; then inst=$((inst + 1)); say "codex-skills: would install $home/skills/$name"; continue; fi
+        mkdir -p "$dst" && cp -p "$tmp_skill" "$dst/SKILL.md" && inst=$((inst + 1)) || fail codex-skills "install $dst"
+      done
+      for n in $codex_skill_names; do
+        src="$ROOT/skills/$n" dst="$home/skills/$n"
+        if [ ! -f "$src/SKILL.md" ]; then
+          [ -d "$dst" ] || continue
+          if ! codex_base_marked "$dst"; then warn=$((warn + 1)); say "codex-skills: WARN $n is retired upstream but the Codex skill is personal — left alone"; continue; fi
+          if [ "$DRY" = 1 ]; then rem=$((rem + 1)); say "codex-skills: would remove $home/skills/$n"; continue; fi
+          rm -rf "$dst" && rem=$((rem + 1)) || fail codex-skills "remove $dst"
+          continue
+        fi
+        codex_base_marked "$src" || continue
+        if [ -f "$dst/SKILL.md" ] && ! codex_base_marked "$dst" && ! cmp -s "$src/SKILL.md" "$dst/SKILL.md"; then
+          warn=$((warn + 1)); say "codex-skills: WARN $n is a personal Codex skill — left alone"; continue
+        fi
+        if [ -d "$dst" ] && diff -rq "$src" "$dst" >/dev/null 2>&1; then continue; fi
+        if [ "$DRY" = 1 ]; then inst=$((inst + 1)); say "codex-skills: would install $home/skills/$n"; continue; fi
+        mkdir -p "$dst" && cp -pR "$src"/. "$dst"/ && inst=$((inst + 1)) || fail codex-skills "install $dst"
+      done
+    done <<EOF
+$homes
+EOF
+    [ -n "$tmp_skill" ] && rm -f "$tmp_skill"
+    say "codex-skills: $([ "$DRY" = 1 ] && echo 'would install' || echo installed) $inst · $([ "$DRY" = 1 ] && echo 'would remove' || echo removed) $rem · homes $homes_n$([ "$warn" -gt 0 ] && printf ' · WARN %s' "$warn")"
   fi
 fi
 

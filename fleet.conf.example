@@ -270,9 +270,9 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 #   <path|JSON>    ONLY these servers; the CLI takes a file path OR inline JSON
 # RECOMMENDED (issue #1078): point it at the minimal worker set the fleet ships,
 #   (e.g.)  FLEET_MCP_CONFIG="$HOME/.claude/fleet/conf/mcp-worker.json"
-# — today an empty server set (`{"mcpServers":{}}`), so it behaves like `none`, but
-# as a FILE: a fleet that needs a server copies it to its own conf dir, adds what
-# it needs (docs/INSTALL.md "MCP servers on demand" has the common add-backs), and
+# — today just fleet-peer (`list_agents` / `send_message`), as a FILE: a fleet
+# that needs another server copies it to its own conf dir, adds what it needs
+# (docs/INSTALL.md "MCP servers on demand" has the common add-backs), and
 # points this key there. On a machine running dozens of sessions every server is
 # one resident process per session, so this is the biggest per-session saving.
 # --strict-mcp-config is what also drops the REMOTE (claude.ai connector) servers,
@@ -290,14 +290,16 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # issue-bridge revive — funnels through bin/fleet-claude.sh, which branches here:
 #   claude   (default) Claude Code, exactly as before — the default fleet's spawn
 #            argv is byte-for-byte unchanged.
-#   codex    OpenAI Codex CLI (`codex`, 0.154+), via bin/fleet-codex.sh. Codex has
-#            no slash commands, so the bare `/fleet-claim` seed is EXPANDED into a
-#            prose prompt (conf/codex-preamble.md + commands/fleet-claim.md); the
+#   codex    OpenAI Codex CLI (`codex`, 0.154+), via bin/fleet-codex.sh. Modern
+#            Codex reads native skills from $CODEX_HOME/skills, so a bare
+#            `/fleet-claim` seed becomes `$fleet-claim` when that home has been
+#            synced; old Codex / unsynced homes still fall back to the prose
+#            prompt (conf/codex-preamble.md + commands/fleet-claim.md). The
 #            fleet's Stop / PostToolUse / PreToolUse hooks ride inline as `-c hooks.*`
 #            (dash state + the bash-guard and base-checkout guard — Codex's hook
 #            schema is Claude Code's); CLAUDE.md is read as the project doc; and
 #            Claude model aliases and OAuth tokens stay Claude-only; MCP policy
-#            is translated and Codex has native subagent knobs. Codex auth is `codex login`, not the
+#            is translated and Codex has native skills/subagent knobs. Codex auth is `codex login`, not the
 #            fleet's account files. Runs full-access (`--dangerously-bypass-
 #            approvals-and-sandbox`), the same posture as a bypassPermissions Claude
 #            worker: the hooks are the rails.
@@ -348,6 +350,13 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # prints one warning. Set 0 once you have checked a newer Codex yourself.
 # @label=Codex version check @group=spawn @tier=advanced @scope=global @edit=bool
 #FLEET_CODEX_VERSION_CHECK=1
+
+# Codex fleet commands launch as native `$fleet-*` skills when the selected
+# CODEX_HOME has those skills installed and the Codex CLI advertises skills in
+# `debug prompt-input`. Default `auto` keeps the old prose-expanded seed as the
+# compatibility fallback; set 0/1 only for rollback or verification.
+# @label=Codex native skills @group=spawn @tier=advanced @scope=fleet @edit=enum @options=auto,0,1
+#FLEET_CODEX_NATIVE_SKILLS=auto
 
 # Optional account home for this Codex fleet. It must already exist and contain
 # that account's native login/config; saved-session recovery retains its own home.

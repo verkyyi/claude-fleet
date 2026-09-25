@@ -201,6 +201,10 @@ That replaces the copy-and-merge passes above for those three, and
 teammate's, nobody has to remember `/fleet-sync-install` for them. Plugin
 commands are namespaced (`/fleet:fleet-claim`); the fleet detects which install
 path a machine has and seeds the form that resolves, so spawns work either way.
+Codex does not consume Claude plugin commands directly; `/fleet-sync-install`
+generates native Codex skills from `commands/*.md` under each known
+`$CODEX_HOME/skills/<name>/SKILL.md`, so the same worker seed becomes
+`$fleet-claim` there.
 
 It does **not** replace the playbook: `bin/`, `conf/`, the tmux layer and the
 daemons are machine-level and stay at `~/.claude/fleet`. A plugin's install path
@@ -590,8 +594,10 @@ bar and doctor expose both failures. Full policies and recovery commands:
 Optional repo-shipped Claude Code slash commands that operate on the current
 fleet (its `$FLEET_REPO` only), installed either as [the plugin](#the-claude-code-side-ships-as-a-plugin)
 (typed `/fleet:fleet-claim`) or by appending `commands/*.md` into
-`~/.claude/commands/` (typed `/fleet-claim`). Each declares an owner seat
-(`worker` / `hub` / `either`) and refuses from the wrong one. Live so far:
+`~/.claude/commands/` (typed `/fleet-claim`). The same files are generated as
+Codex skills under `$CODEX_HOME/skills/` and invoked as `$fleet-claim`,
+`$fleet-context`, and so on. Each declares an owner seat (`worker` / `hub` /
+`either`) and refuses from the wrong one. Live so far:
 
 - **`/fleet-claim`** (worker) — the whole worker lifecycle, and the one skill a
   freshly-spawned worker runs. Its whole preamble is ONE call
@@ -609,7 +615,8 @@ fleet (its `$FLEET_REPO` only), installed either as [the plugin](#the-claude-cod
   boundary: write a durable handoff, then `/clear` and pick it up clean.
 - **`/fleet-sync-install`** (either, any fleet) — after claude-fleet's
   own PRs land, re-applies them to the shared live install (`~/.claude/fleet`): pull +
-  reload changed daemons + re-merge the hooks delta + install changed commands.
+  reload changed daemons + re-merge the hooks delta + install changed commands
+  and Codex skill mirrors.
   Maintains machine-global tooling, so it runs from any fleet; refuses only if
   `~/.claude/fleet` isn't a git checkout. See [`commands/README.md`](commands/README.md).
 
@@ -673,7 +680,7 @@ degrading to a pane-content heuristic.
 | project instructions file | `CLAUDE.md` | `AGENTS.md` | `-c project_doc_fallback_filenames=["CLAUDE.md"]` makes a Codex worker read this repo's `CLAUDE.md` when it has no `AGENTS.md`. |
 | worker model pinned at spawn | `FLEET_MODEL` | `FLEET_CODEX_MODEL` | Two knobs on purpose: Codex model names are not Claude aliases, so `FLEET_MODEL` never reaches a Codex pane. |
 | transferred recurring loop | Fleet adapter / native `/loop` | Fleet adapter | Active Fleet loops keep their ID, cadence and ownership generation across agent/account transfers. Codex uses private RPC; Claude inbox delivery requires transcript acknowledgement. Exact crash restore can reattach active owners; stopped or ambiguous deliveries never replay. Calendar cron is not converted. |
-| slash-command seed (`/fleet-claim`) | native | translated | Codex has no slash commands — it takes a positional prompt, so the launcher expands `conf/codex-preamble.md` + `commands/<name>.md` into prose. The lifecycle text stays single-sourced in `commands/`. |
+| fleet command seed (`/fleet-claim`) | native | native | Claude Code expands `/fleet-claim`; Codex invokes the installed `$fleet-claim` skill from `$CODEX_HOME/skills/fleet-claim/SKILL.md`. If an old Codex build has no skills, or that home has not been synced, the launcher falls back to the prose expansion. |
 | per-repo trust prompt | pre-granted | one manual Yes | `bin/fleet-trust.sh` pre-answers Claude's dialog. Codex persists trust in `~/.codex/config.toml` and no flag or `-c` override satisfies it, so the base checkout needs one manual Yes; the launcher pre-reads it and turns the pane red rather than letting the first spawn stall silently. |
 | red `needs` + bell when a session is blocked on you | ✅ | ✅ | The private-server monitor reads native waitingOnUserInput/waitingOnApproval flags and marks the exact launcher/thread. No Notification hook is needed. Resolved native attention clears only its own subtype; explicit worker blockers survive. |
 | `AskUserQuestion` + the dash’s answer key | ✅ | ✅ | Codex has native request_user_input. The dashboard replies to the replayed server request, including choices and free text; exact launcher/thread/request fingerprints prevent stale answers. Esc sends nothing; native resolution confirms completion. |
@@ -683,12 +690,13 @@ degrading to a pane-content heuristic.
 | `/fleet-handoff` + the auto-handoff nudge | ✅ | ✅ | Codex runs `fleet-transfer.sh --to codex --handoff NOTES --after-turn` directly. The same clean-Stop, typing hold, lease and source-identity checks preserve notes, exact rollout, account home and worktree before a fresh conversation. `FLEET_AUTO_HANDOFF_PCT` nudges this native path. |
 | `/fleet-context` + the dash's ctx % | ✅ | ✅ | Run `fleet-context.sh` directly on Codex. SessionStart binds the exact root UUID, launcher lifetime and CODEX_HOME; rollout token telemetry supplies the current model/window. Missing data stays unknown; no Claude transcript or default denominator is reused. |
 | peer messages + child reports | ✅ | ✅ | Fleet pane launches give each worker a private local app-server. `codex queue` reaches that exact endpoint, UUID and CODEX_HOME; failed delivery is never stamped as success. A guardian shuts down the owned server even if the launcher is killed. `FLEET_CODEX_SERVER=0` opts back into embedded mode without live queue delivery. |
+| peer tools (`list_agents` / `send_message`) | native | fleet-peer MCP | Claude has native `ListAgents` / `SendMessage`; the shipped `conf/mcp-worker.json` mounts fleet-peer so Codex workers get tool-shaped equivalents backed by `fleet-children.sh`, tmux window options and `fleet-peer-send.sh`. |
 | Stop classifier (haiku) | ✅ | ✅ | The shared optional helper now uses an agent-aware rubric, including Codex placeholders. Codex Stop invokes it; exact native attention and explicit worker blockers outrank screen inference. Slow verdicts cannot replace a newer launcher or hook state. |
 | `--resume` paths (restore · migrate · `/fleet-history`) | ✅ | ✅ | Crash snapshots and history retain the exact Codex UUID, CODEX_HOME and rollout. Native resume/fork stays in that home; account migration uses a durable packet to start fresh in a different home with source recovery preserved. |
 | multi-account rotation + native quota collector | ✅ | ✅ | Register independent CODEX_HOME directories and select fresh launches by native quota headroom. Windows/reset times are reported by Codex. Unknown data stays unknown; gating and idle-only protected account migration are separate opt-ins. |
 | subscription failover across Coding Agents | opt-in | opt-in | `FLEET_FAILOVER=1` reuses fleet-account, ccquota, quotawatch and transfer: eligible same-agent subscription first, then the allowed other agent, otherwise durable waiting. Exact source paths, target authentication, unsent drafts and Fleet loops follow the task. |
 | per-model cap fallback (same thread) | ✅ | ✅ | Native thread/settings/update changes an idle Codex model and verifies it without keystrokes or restart. Opt-in fallback requires explicit model-to-limit IDs and fresh quota on both buckets. Only an exact native quota-failed turn receives a continuation. |
-| MCP servers + subagent model | ✅ | ✅ | `FLEET_MCP_CONFIG` translates stdio/HTTP allowlists — recommended value `~/.claude/fleet/conf/mcp-worker.json`, the minimal worker set shipped with the fleet (issue #1078); `FLEET_CODEX_MCP_CONFIG` also accepts native JSON/TOML. Strict policies disable inherited servers and apps. Codex subagent model/effort use separate native knobs; explicit caller overrides win. Both TUI and private server receive the policy. |
+| MCP servers + subagent model | ✅ | ✅ | `FLEET_MCP_CONFIG` translates stdio/HTTP allowlists — recommended value `~/.claude/fleet/conf/mcp-worker.json`, the minimal worker set shipped with the fleet (fleet-peer only: `list_agents` / `send_message`, issues #1078/#1185); `FLEET_CODEX_MCP_CONFIG` also accepts native JSON/TOML. Strict policies disable inherited servers and apps. Codex subagent model/effort use separate native knobs; explicit caller overrides win. Both TUI and private server receive the policy. |
 | warm scratch pool | ✅ | ✅ | A Codex-specific stable-screen probe checks the current launcher, echoes and clears one unsubmitted character, and never makes a model request. Claims require the matching agent, account home, dimensions and age; startup/trust failures use the cold path. |
 <!-- codex-matrix:end -->
 

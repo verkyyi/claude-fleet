@@ -65,7 +65,7 @@ export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER
 
 # --- fake HOME + shims ------------------------------------------------------------
 H="$WORK/home" R="$WORK/home/.claude/fleet" LOG="$WORK/calls.log"
-mkdir -p "$H/.claude/commands" "$H/.claude/skills" "$H/Library/LaunchAgents" "$WORK/shim" "$H/.config/systemd/user"
+mkdir -p "$H/.claude/commands" "$H/.claude/skills" "$H/.codex" "$H/Library/LaunchAgents" "$WORK/shim" "$H/.config/systemd/user"
 : > "$LOG"
 for t in launchctl systemctl claude; do
   cat > "$WORK/shim/$t" <<EOF
@@ -77,11 +77,18 @@ EOF
   chmod +x "$WORK/shim/$t"
 done
 export HOME="$H" CLAUDE_CONFIG_DIR="$H/.claude" FLEET_INSTALL_ROOT="$R"
+export CODEX_HOME="$H/.codex" FLEET_CONF_DIR="$H/.config/claude-fleet"
 export FLEET_LAUNCHD_AGENTS_DIR="$H/Library/LaunchAgents" FLEET_INSTALL_DAEMON_DIR="$WORK/LaunchDaemons"
 export FLEET_SYSTEMD_USER_DIR="$H/.config/systemd/user" FLEET_INSTALL_PLATFORM=launchd
 export FLEET_INSTALL_LAUNCHCTL="$WORK/shim/launchctl" FLEET_INSTALL_SYSTEMCTL="$WORK/shim/systemctl"
 export FLEET_INSTALL_CLAUDE="$WORK/shim/claude" FLEET_INSTALL_BREW_PREFIX=/opt/homebrew FLEET_INSTALL_SUDO=''
 export FLEET_INSTALL_LOGIN=tester
+mkdir -p "$H/.config/claude-fleet/codex" "$H/codex account"
+python3 - "$H/.config/claude-fleet/codex/accounts.json" "$H/codex account" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+path.write_text(json.dumps({"work": sys.argv[2]}) + "\n")
+PY
 
 # --- the install: a git repo with stub helpers ---------------------------------
 mkdir -p "$R/bin" "$R/launchd" "$R/systemd" "$R/commands" "$R/skills/sk" "$R/hooks" "$R/conf"
@@ -168,7 +175,7 @@ echo 'mine' > "$H/.claude/commands/personal.md"
 mkdir -p "$H/.claude/skills/sk" && cp -p "$R/skills/sk/"* "$H/.claude/skills/sk/"
 
 commit() { git -C "$R" add -A && git -C "$R" commit -qm "$1" && git -C "$R" rev-parse HEAD; }
-run_ap() { : > "$LOG"; OUT=$(bash "$AP" "$@" 2>&1); RC=$?; }
+run_ap() { : > "$LOG"; OUT=$(CODEX_HOME="$H/.codex" FLEET_CONF_DIR="$H/.config/claude-fleet" bash "$AP" "$@" 2>&1); RC=$?; }
 
 # --- A. script only ---------------------------------------------------------------
 echo 'echo collect v2' > "$R/bin/tmux-dash-collect.sh"
@@ -242,6 +249,9 @@ ok 'E _template not installed' "[ ! -f '$H/.claude/commands/_template.md' ]"
 ok 'E retired removed' "[ ! -f '$H/.claude/commands/fleet-old.md' ]"
 ok 'E personal untouched' "grep -qx mine '$H/.claude/commands/personal.md'"
 contains 'E summary' "$OUT" 'commands: installed 2 · removed 1'
+ok 'E codex command skill installed in default home' "grep -q '^name: fleet-claim$' '$H/.codex/skills/fleet-claim/SKILL.md' && grep -qx v2 '$H/.codex/skills/fleet-claim/SKILL.md'"
+ok 'E codex command skill installed in registered home with spaces' "grep -q '<!-- fleet codex command skill -->' '$H/codex account/skills/fleet-new/SKILL.md'"
+contains 'E codex summary' "$OUT" 'codex-skills: installed 4'
 bash "$AP" --is-command "$R/commands/fleet-new.md"; eq 'E gate accepts a command' 0 $?
 bash "$AP" --is-command "$R/commands/README.md"; eq 'E gate rejects README' 1 $?
 bash "$AP" --is-command "$R/commands/_template.md"; eq 'E gate rejects the placeholder' 1 $?
@@ -258,12 +268,14 @@ mkdir -p "$H/.claude/skills/mine"; printf '# mine\nmy own edits\n' > "$H/.claude
 C6=$(commit 'skills')
 run_ap --from "$C5" --to "$C6"
 ok 'F dir mirrored (script + exec bit)' "grep -q v2 '$H/.claude/skills/sk/run.sh' && [ -x '$H/.claude/skills/sk/run.sh' ]"
+ok 'F codex skill dir mirrored' "grep -q v2 '$H/.codex/skills/sk/run.sh' && [ -x '$H/codex account/skills/sk/run.sh' ]"
 contains 'F personal warned' "$OUT" 'skills: WARN mine is a personal skill'
 ok 'F personal untouched' "grep -q 'my own edits' '$H/.claude/skills/mine/SKILL.md'"
 git -C "$R" rm -rq "$R/skills/sk"
 C7=$(commit 'retire sk')
 run_ap --from "$C6" --to "$C7"
 ok 'F retired removed' "[ ! -d '$H/.claude/skills/sk' ]"
+ok 'F retired codex skill removed' "[ ! -d '$H/.codex/skills/sk' ] && [ ! -d '$H/codex account/skills/sk' ]"
 
 # --- G. hooks / ui ------------------------------------------------------------------
 echo '{"hooks":{"x":1}}' > "$R/hooks/settings-hooks.json"
