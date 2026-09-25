@@ -226,6 +226,9 @@ esac
 # so fleet_write_conf preserves its custom FLEET_* keys (issue #170) at the new path.
 CONF="$(fleet_state_dir "$NAME")/conf"
 legacy="$FLEET_CONF_DIR/$NAME.conf"
+# A fleet this login has never had (no conf, not even a legacy one): the one
+# moment the onboarding guide may open (issue #1169, below).
+NEWFLEET=0; [ ! -f "$CONF" ] && [ ! -f "$legacy" ] && NEWFLEET=1
 [ ! -f "$CONF" ] && [ -f "$legacy" ] && { mv "$legacy" "$CONF" 2>/dev/null || cp "$legacy" "$CONF"; }
 fleet_write_conf "$CONF" "$NAME" "$REPO" "$DIR" "$BASE" "$(date '+%Y-%m-%d %H:%M:%S')" \
   || die "failed to write $CONF"
@@ -258,6 +261,23 @@ HUB_SESSION="$NAME" HUB_CWD="$DIR" bash "$BIN/hub-session.sh"
 # session starts with ONLY the hub (hub-session.sh already selected it). tmux
 # needs an initial window to create the session; we drop it once the hub exists.
 tmux -L "$SOCK" kill-window -t "$workwin" 2>/dev/null || true
+
+# --- first fleet on this login: open the guide, pinned (issue #1169) ---
+# A newcomer does not know /fleet-onboard exists, so their first fleet comes up
+# with it already running, pinned to the top of the session list. Only a fleet
+# created just now asks — restoring or re-attaching an existing one never reads
+# the marker — and global/onboarded makes it once per login. FLEET_ONBOARD=0
+# turns it off. The guide is a plain seeded scratch; a spawn that fails (cap,
+# worktree) leaves no marker and the fleet up as usual.
+ONBOARDED="$FLEET_CONF_DIR/global/onboarded"
+if [ "$NEWFLEET" = 1 ] && [ "${FLEET_ONBOARD:-1}" != 0 ] && [ ! -e "$ONBOARDED" ]; then
+  if TMUX='' bash "$BIN/dash-raw-session.sh" --name guide --prompt /fleet-onboard --pin "$NAME" >/dev/null 2>&1; then
+    mkdir -p "${ONBOARDED%/*}" && date '+%Y-%m-%d %H:%M:%S' > "$ONBOARDED"
+    echo "fleet-up: opened the onboarding guide (/fleet-onboard), pinned to the top"
+  else
+    echo "fleet-up: could not open the onboarding guide — run /fleet-onboard in any session" >&2
+  fi
+fi
 
 # --- populate caches now so the dash isn't empty on first paint ---
 ( GH_TTL=0 bash "$BIN/tmux-dash-collect.sh" >/dev/null 2>&1 & )
