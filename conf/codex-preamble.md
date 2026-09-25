@@ -18,12 +18,13 @@ Follow it as written, with these translations (they are the only differences):
   "$TMUX_PANE" --to codex --handoff /absolute/path/to/notes.md --after-turn` as
   your last tool call. Check that it armed, then end the turn; Fleet starts a
   fresh Codex context in this same pane and worktree after the Stop hook.
-- **Claude-only tools you do not have:** `SendMessage`, `ListAgents`, the
-  `Explore`/`Task` subagents, and the `Artifact` tool. `AskUserQuestion` maps to
-  Codex's native user-input tool when it is available. Never wait on the operator
-  — make the call yourself. Reach another worker with `fleet-comment.sh
-  --to-worker`. A document the operator should open goes through doc-preview's
-  `share.sh`. Search the code with your own tools.
+- **Claude-only tools you do not have:** the `Explore`/`Task` subagents, and the
+  `Artifact` tool. `AskUserQuestion` maps to Codex's native user-input tool when
+  it is available. Never wait on the operator — make the call yourself. When the
+  fleet-peer MCP tools are visible, use `list_agents` / `send_message` as Codex's
+  peer equivalents; otherwise reach another worker with `fleet-peer-send.sh` or
+  `fleet-comment.sh --to-worker`. A document the operator should open goes
+  through doc-preview's `share.sh`. Search the code with your own tools.
 - **Everything the skill names under `~/.claude/fleet/bin` is a plain shell
   script** — run it exactly as written, with `bash`, from this worktree.
 - **The rails are unchanged and absolute:** edit only inside this worktree, never
