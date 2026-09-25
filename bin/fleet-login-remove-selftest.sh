@@ -219,7 +219,7 @@ has "$FLEET_TEST_LOG" "sudo tar -czf $ARCH/alice-" 'home was not archived'
 has "$FLEET_TEST_LOG" "chown 501 $ARCH/alice-" 'archive not handed to the admin'
 [ "$(archives)" = 1 ] || fail "expected one archive, found $(archives)"
 A=$(echo "$ARCH"/alice-*.tar.gz)
-m=$(stat -f %Lp "$A" 2>/dev/null || stat -c %a "$A" 2>/dev/null); [ "$m" = 600 ] || fail "archive mode is $m, not 600"
+m=$(ls -ld "$A" | cut -c1-10); [ "$m" = '-rw-------' ] || fail "archive mode is $m, not -rw------- (600)"
 tar -tzf "$A" > "$WORK/tar.lst" || fail 'archive is not a readable tar.gz'
 has "$WORK/tar.lst" 'alice/keep-me.txt' "the person's files are not in the archive"
 has "$WORK/tar.lst" 'alice/.config/claude-fleet/fleets/alice-fleet/conf' 'the fleet conf is not in the archive'
