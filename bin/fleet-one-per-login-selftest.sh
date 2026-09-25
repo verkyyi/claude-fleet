@@ -19,6 +19,8 @@
 #      A later new fleet (marker present), an existing fleet coming back up, and
 #      FLEET_ONBOARD=0 open none — and a later new fleet prints exactly what
 #      FLEET_ONBOARD=0 does. Legs 1-6 run with FLEET_ONBOARD=0: their old outputs.
+#   8. a failed guide stays unmarked; a cooled-down collector tick restarts it
+#      once in the same scratch, then records onboarded after the agent runs.
 # The hub, collector, disk gate and trust check are stubbed in a sandbox bin/;
 # tmux: a PATH shim maps every `-L <label>` to a private socket under $SOCKD.
 set -uo pipefail
@@ -250,6 +252,49 @@ eq "7 second == off, byte for byte" "$out2" "$out3"
 hasnt "7 off: silent" "$out3" "guide"
 "$REAL_TMUX" -S "$SOCKD/fleet" kill-server 2>/dev/null
 leg "7 first fleet opens the pinned guide, once"
+
+# ---- 8. failed agent stays unmarked; one cooled-down tick restarts it ----
+export FLEET_CONF_DIR="$WORK/conf8"; unset FLEET_ONBOARD
+launches="$WORK/guide-launches"
+cat > "$SB/fleet-claude.sh" <<EOF
+#!/bin/bash
+printf 'attempt\n' >> "$launches"
+exit 7
+EOF
+chmod +x "$SB/fleet-claude.sh"
+out=$(FLEET_GUIDE_WAIT_SECS=2 up o/g "$g"); rc=$?
+eq "8 rc" "$rc" 0
+has "8 failure explained" "$out" "collector will retry"
+marker="$FLEET_CONF_DIR/global/onboarded"
+[ ! -e "$marker" ] || fail "8: failed agent wrote onboarded"
+[ -f "$FLEET_CONF_DIR/global/onboard.pending" ] || fail "8: missing retry marker"
+eq "8 first attempt" "$(wc -l < "$launches" | tr -d ' ')" 1
+eq "8 one guide window" "$(wins '#{window_name}' | grep -cx guide)" 1
+
+# A tick inside the cooldown leaves the failed window alone. After the clock
+# advances, respawn reuses that window and its scratch worktree.
+FLEET_GUIDE_COOLDOWN=3600 lib 'fleet_guide_tick fleet'
+eq "8 cooldown" "$(wc -l < "$launches" | tr -d ' ')" 1
+cat > "$SB/fleet-claude.sh" <<EOF
+#!/bin/bash
+printf 'attempt\n' >> "$launches"
+exec sleep 3600
+EOF
+chmod +x "$SB/fleet-claude.sh"
+printf '0\n' > "$FLEET_CONF_DIR/global/onboard.retry"
+FLEET_GUIDE_COOLDOWN=3600 lib 'fleet_guide_tick fleet'
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  [ "$(wc -l < "$launches" | tr -d ' ')" = 2 ] && break
+  sleep 0.2
+done
+eq "8 restarted once" "$(wc -l < "$launches" | tr -d ' ')" 2
+eq "8 reused guide window" "$(wins '#{window_name}' | grep -cx guide)" 1
+FLEET_GUIDE_COOLDOWN=3600 lib 'fleet_guide_tick fleet'
+[ -f "$marker" ] || fail "8: recovered agent not marked onboarded"
+[ ! -e "$FLEET_CONF_DIR/global/onboard.pending" ] || fail "8: pending marker not cleared"
+eq "8 no extra restart" "$(wc -l < "$launches" | tr -d ' ')" 2
+"$REAL_TMUX" -S "$SOCKD/fleet" kill-server 2>/dev/null
+leg "8 failed guide restarts once after cooldown"
 
 [ "$FAILS" = 0 ] && { echo "fleet-one-per-login-selftest: all passed"; exit 0; }
 echo "fleet-one-per-login-selftest: $FAILS failure(s)"; exit 1

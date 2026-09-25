@@ -276,17 +276,20 @@ tmux -L "$SOCK" kill-window -t "$workwin" 2>/dev/null || true
 # --- first fleet on this login: open the guide, pinned (issue #1169) ---
 # A newcomer does not know /fleet-onboard exists, so their first fleet comes up
 # with it already running, pinned to the top of the session list. Only a fleet
-# created just now asks — restoring or re-attaching an existing one never reads
-# the marker — and global/onboarded makes it once per login. FLEET_ONBOARD=0
-# turns it off. The guide is a plain seeded scratch; a spawn that fails (cap,
-# worktree) leaves no marker and the fleet up as usual.
+# created just now asks — restoring or re-attaching an existing one never opens
+# it here. The pending marker lets the collector retry ONLY a first fleet that
+# tried to open a guide; old fleets without an onboarded marker are unaffected.
 ONBOARDED="$FLEET_CONF_DIR/global/onboarded"
 if [ "$NEWFLEET" = 1 ] && [ "${FLEET_ONBOARD:-1}" != 0 ] && [ ! -e "$ONBOARDED" ]; then
-  if TMUX='' bash "$BIN/dash-raw-session.sh" --name guide --prompt /fleet-onboard --pin "$NAME" >/dev/null 2>&1; then
-    mkdir -p "${ONBOARDED%/*}" && date '+%Y-%m-%d %H:%M:%S' > "$ONBOARDED"
+  mkdir -p "${ONBOARDED%/*}"
+  : > "$FLEET_CONF_DIR/global/onboard.pending"
+  date +%s > "$FLEET_CONF_DIR/global/onboard.retry"
+  if fleet_guide_open "$NAME" >/dev/null 2>&1 && fleet_guide_wait "$NAME" "${FLEET_GUIDE_WAIT_SECS:-30}"; then
+    date '+%Y-%m-%d %H:%M:%S' > "$ONBOARDED"
+    rm -f "$FLEET_CONF_DIR/global/onboard.pending"
     echo "fleet-up: opened the onboarding guide (/fleet-onboard), pinned to the top"
   else
-    echo "fleet-up: could not open the onboarding guide — run /fleet-onboard in any session" >&2
+    echo "fleet-up: onboarding guide did not stay running — collector will retry" >&2
   fi
 fi
 

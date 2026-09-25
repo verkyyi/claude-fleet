@@ -1372,6 +1372,98 @@ fleet_repo_register() {
 #     per-fleet logic against each socket (writes stay on the same `-L` label).
 fleet_socket() { printf '%s' "$1"; }
 
+# The first-login guide is a pinned scratch window. A failed agent leaves its
+# window at a bare shell, so the window's existence alone is not a success.
+fleet_guide_agent_child() {
+  local parent="$1" depth="${2:-0}" child cmd
+  [ "$depth" -lt 3 ] || return 1
+  for child in $(pgrep -P "$parent" 2>/dev/null); do
+    cmd=$(ps -o comm= -p "$child" 2>/dev/null)
+    case "${cmd##*/}" in sh|bash|zsh|dash|fish|ksh|csh|tcsh|'')
+      fleet_guide_agent_child "$child" "$((depth + 1))" && return 0 ;;
+      *) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+fleet_guide_alive() {
+  local sess="$1" name pin cmd pid sep=$'\037'
+  while IFS="$sep" read -r name pin cmd pid; do
+    [ "$name" = guide ] && [ "$pin" = 1 ] || continue
+    case "${cmd##*/}" in
+      sh|bash|zsh|dash|fish|ksh|csh|tcsh) fleet_guide_agent_child "$pid" && return 0 ;;
+      '') ;;
+      *) return 0 ;;
+    esac
+  done <<EOF
+$(tmux -L "$sess" list-windows -t "$sess" -F "#{window_name}${sep}#{@pin}${sep}#{pane_current_command}${sep}#{pane_pid}" 2>/dev/null)
+EOF
+  return 1
+}
+
+# fleet_guide_open <session> — create a seeded pinned scratch, or restart the
+# original command in its existing scratch when the agent fell back to a shell.
+# Respawning reuses the worktree instead of leaking one on every failed attempt.
+fleet_guide_open() {
+  local sess="$1" bin name wid pin sep=$'\037'
+  fleet_guide_alive "$sess" && return 0
+  while IFS="$sep" read -r name wid pin; do
+    [ "$name" = guide ] || continue
+    [ "$pin" = 1 ] || return 1
+    tmux -L "$sess" respawn-window -k -t "$wid" >/dev/null 2>&1
+    return $?
+  done <<EOF
+$(tmux -L "$sess" list-windows -t "$sess" -F "#{window_name}${sep}#{window_id}${sep}#{@pin}" 2>/dev/null)
+EOF
+  bin="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  TMUX='' bash "$bin/dash-raw-session.sh" --name guide --prompt /fleet-onboard --pin "$sess"
+}
+
+# A non-shell process has to survive a second look before onboarded is durable.
+fleet_guide_confirmed() {
+  fleet_guide_alive "$1" || return 1
+  sleep 1
+  fleet_guide_alive "$1"
+}
+
+fleet_guide_wait() {
+  local sess="$1" limit="${2:-30}" deadline
+  case "$limit" in ''|*[!0-9]*) limit=30 ;; esac
+  deadline=$(( $(date +%s) + limit ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    fleet_guide_confirmed "$sess" && return 0
+    sleep 1
+  done
+  return 1
+}
+
+# Called once per collector tick. The pending marker is created ONLY by a new
+# fleet's first guide attempt; missing onboarded alone never opts old fleets in.
+fleet_guide_tick() {
+  local sockets="$1" sock retry cooldown stamp
+  [ "${FLEET_ONBOARD:-1}" != 0 ] || return 0
+  [ -f "$FLEET_CONF_DIR/global/onboard.pending" ] || return 0
+  [ ! -e "$FLEET_CONF_DIR/global/onboarded" ] || return 0
+  for sock in $sockets; do
+    if fleet_guide_confirmed "$sock"; then
+      date '+%Y-%m-%d %H:%M:%S' > "$FLEET_CONF_DIR/global/onboarded"
+      rm -f "$FLEET_CONF_DIR/global/onboard.pending"
+      return 0
+    fi
+  done
+  [ -n "$sockets" ] || return 0
+  retry=$(cat "$FLEET_CONF_DIR/global/onboard.retry" 2>/dev/null || true)
+  case "$retry" in ''|*[!0-9]*) retry=0 ;; esac
+  cooldown="${FLEET_GUIDE_COOLDOWN:-60}"
+  case "$cooldown" in ''|*[!0-9]*) cooldown=60 ;; esac
+  stamp=$(date +%s)
+  [ $((stamp - retry)) -ge "$cooldown" ] || return 0
+  printf '%s\n' "$stamp" > "$FLEET_CONF_DIR/global/onboard.retry"
+  sock=${sockets%%$'\n'*}
+  fleet_guide_open "$sock" >/dev/null 2>&1 || printf 'fleet-guide: could not reopen onboarding guide in %s\n' "$sock" >&2
+}
+
 # ~/.local/bin on the PATH a fleet's tmux server runs under (issue #1191). Claude
 # Code is a per-login NATIVE install — ~/.local/bin/claude, nothing system-wide.
 # Where a new pane's PATH comes from (tmux 3.6, measured): a pane spawned BY A
