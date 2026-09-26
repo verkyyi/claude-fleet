@@ -563,6 +563,12 @@ teardown() {
   if [ "${CLEANUP_DRY_TEARDOWN:-0}" = 1 ]; then return 0; fi
   # Ordering is load-bearing: kill the window FIRST so the worker process dies and
   # releases the busy cwd, THEN drop the worktree, THEN delete the branch.
+  # A sleeper (issue #1244) is reaped without a wake: retire its sleep record
+  # first, and if that is refused (a wake raced us) leave everything standing.
+  if [ -n "$WIN" ] && ! fleet_sleep_dispose "$WIN" "$FLEET_SESSION"; then
+    note "  teardown: sleep record of $WIN could not be retired — deferred"
+    done_token skip:live; return 1
+  fi
   [ -n "$WIN" ] && ftmux kill-window -t "$WIN" 2>/dev/null
   if [ -n "$WT" ]; then
     # Drop, don't delete (issue #586) — a rename into .fleet-trash/ plus a prune,

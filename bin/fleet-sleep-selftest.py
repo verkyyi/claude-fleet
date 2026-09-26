@@ -448,6 +448,27 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
             self.assertEqual(self.tm('display-message','-p','-t',new,'#{@worker_lifecycle}'),'')
         finally:self.tm('kill-window','-t',new)
 
+    def test_dispose_retires_the_record_without_a_wake_and_restore_refuses_it(self):
+        # Issue #1244: a reap retires a sleeper's record, never wakes it.
+        self.cli('dispose',self.pane,ok=False)   # awake: nothing to dispose
+        self.cli('sleep',self.pane)
+        record=self.opt('@sleep_record')
+        self.cli('dispose',self.pane)
+        self.assertEqual(json.loads(Path(record).read_text())['state'],'reaped')
+        self.assertEqual(json.loads(Path(record).read_text())['resume_count'],0)   # never woken
+        self.assertEqual(self.opt('@worker_lifecycle'),'sleeping')
+        new=self.tm('new-window','-d','-P','-F','#{pane_id}','-t',self.socket,'-c',str(self.wt),'exec /bin/sh')
+        try:
+            self.tm('set-option','-w','-t',new,'@raw','1')
+            self.cli('restore',new,'--record',record,ok=False)
+        finally:self.tm('kill-window','-t',new)
+
+    def test_hold_and_release_stamp_the_reap_hold(self):
+        self.cli('hold',self.pane)
+        self.assertEqual(self.opt('@reap_hold'),'1')
+        self.cli('release',self.pane)
+        self.assertEqual(self.opt('@reap_hold'),'')
+
     def test_repark_replaces_only_a_stale_page_and_backfills_since(self):
         # Issue #1064: a sync leaves already-sleeping workers on the page they
         # were exec'd with — input off, no Wake button, no @sleep_since.

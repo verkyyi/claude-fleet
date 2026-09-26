@@ -205,7 +205,7 @@ run_dash() {
     --bind "$DASH_KEY_VIEW:execute-silent(sh $BIN/dash-view-toggle.sh)+reload(bash $ROWS)" \
     --bind "$DASH_KEY_RESTORE:execute-silent(bash $BIN/dash-restore-session.sh {1})+reload(bash $ROWS)" \
     --bind "$DASH_KEY_PR:execute(bash $BIN/dash-open-pr.sh {1})" \
-    --bind "$DASH_KEY_REAP:execute(bash $BIN/dash-reap.sh {2})+reload(bash $ROWS)" \
+    --bind "$DASH_KEY_REAP:execute(bash $BIN/dash-reap.sh {2} --bg)+reload(bash $ROWS)" \
     --bind "$DASH_KEY_PIN:execute-silent(bash $BIN/dash-pin-toggle.sh {1})+reload(bash $ROWS)" \
     --bind "$DASH_KEY_MIGRATE:execute(bash $BIN/dash-migrate.sh {1})+reload(bash $ROWS)" \
     --bind "$DASH_KEY_REPO_ADD:execute(bash $BIN/dash-popup.sh -w 80% -h 16 -- bash $BIN/dash-repo-add.sh)+reload(bash $ROWS)" \
