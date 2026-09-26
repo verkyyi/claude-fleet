@@ -153,7 +153,8 @@ elapsed() { printf '%ss' "$((SECONDS - T0))"; }
 as_login() { sudo -n -u "$LOGIN" -H "$@"; }
 login_has() { as_login test -e "$1" >/dev/null 2>&1; }
 keep_sudo() { sudo -n -v >/dev/null 2>&1 || :; }
-mode_of() { stat -f %Lp "$1" 2>/dev/null || stat -c %a "$1" 2>/dev/null; }
+# GNU stat FIRST (as fleet-lib.sh): on GNU `stat -f` is "filesystem status" and exits 0 with the wrong text
+mode_of() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1" 2>/dev/null; }
 loaded_labels() { sudo -n launchctl list 2>/dev/null | awk 'NF { print $NF }'; }
 # plists_of_login: how many com.claude-fleet.<login>.*.plist sit in the daemons dir
 plists_of_login() { local n=0 f; for f in "$DDIR"/com.claude-fleet."$LOGIN".*.plist; do [ -e "$f" ] && n=$((n + 1)); done; printf '%s' "$n"; }
