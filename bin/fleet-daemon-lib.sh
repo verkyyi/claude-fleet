@@ -8,7 +8,7 @@
 # that acts: bin/fleet-daemon-watch.sh.
 #
 # WHY WATCHING THE COLLECTOR WAS NOT ENOUGH. #636/#638 gave the collector an
-# alarm (`⚠ dash stale`) and a rate-limited self-heal. Two days later the same
+# alarm (`✖ dash · stale`) and a rate-limited self-heal. Two days later the same
 # machine showed the fault is not collector-shaped: launchd stopped scheduling
 # EVERY StartInterval unit in this user domain, all of their logs freezing inside
 # the same two minutes —
@@ -74,7 +74,7 @@
 #               read as a pended one. The collector's phase heartbeat advances at
 #               phase BOUNDARIES, and one phase can legitimately run for minutes —
 #               a 551s `git` phase is on record from a big monorepo fleet — so
-#               without this a 300s threshold would paint `⚠ dash stale` over a
+#               without this a 300s threshold would paint `✖ dash · stale` over a
 #               collector that is working perfectly well, every single tick. A tick
 #               older than FLEET_COLLECT_DEADLINE is NOT evidence: past that the
 #               collector itself calls it wedged, kills it and supersedes it.
@@ -495,7 +495,7 @@ fleet_daemon_kick_due() {
 # fleet_daemon_overdue_list [root] [skip-unit] — space-separated names of every
 # registry unit that is currently overdue, in registry order. What the status bar
 # renders and what fleet-doctor reports; empty in the healthy case. `skip-unit`
-# drops one name (the bar renders `collect` in its own `⚠ dash stale` segment,
+# drops one name (the bar renders `collect` in its own `✖ dash · stale` alert,
 # because a frozen dash is the symptom operators already know that phrase for).
 fleet_daemon_overdue_list() {
   _fd_out=''

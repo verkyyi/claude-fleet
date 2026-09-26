@@ -1,7 +1,7 @@
 #!/bin/sh
 # tmux-spinner.sh — frame-driver for the Claude session status animation.
 # The animated element is the GLYPH's FONT COLOR only (spinner fades cyan while
-# working, "!" fades red for needs). The window NAME is calm static text — no
+# working, "!" fades blue for needs — #1238). The window NAME is calm static text — no
 # background block. Per window the daemon sets three options:
 #   @spin  glyph text  (⠋… / ✓ / ! / blank)
 #   @sfg   glyph fg hex (pulsing for working/needs)
@@ -43,7 +43,7 @@ NFRAMES=10
 CMDF="${TMPDIR:-/tmp}/.claude-spin.cmds"
 NAME_WORKING='#a9b1d6'   # calm neutral name while working
 NAME_DONE='#9ece6a'
-NAME_NEEDS='#f7768e'
+NAME_NEEDS='#7aa2f7'     # blue: ● needs is its own level, not an alarm (issue #1238)
 NAME_IDLE='#565f89'
 NL='
 '   # literal newline — accumulator delimiter for the cross-fleet pass (issue #236)
@@ -774,7 +774,7 @@ while :; do
                    *)       glyph="! " ;;
                  esac
                  needy=1
-                 sfg="$NAME_NEEDS"; nfg="$NAME_NEEDS"; wst="fg=$NAME_NEEDS,bold" ;;  # urgent = red FONT (no block)
+                 sfg="$NAME_NEEDS"; nfg="$NAME_NEEDS"; wst="fg=$NAME_NEEDS,bold" ;;  # urgent = blue bold FONT (no block; #1238 recoloured, same glyphs)
         *)       glyph="  ";      sfg="$NAME_IDLE"; nfg="$NAME_IDLE";    wst="fg=#565f89" ;;
       esac
       token="$win^$glyph^$sfg^$nfg^$wst"

@@ -234,7 +234,7 @@ Now there is one entry point, `fleet-account.sh quota-verdict <label> [--axis 5h
 |---|---|---|
 | `limited <until>` | a fresh ccquota row has the named window (both, without `--axis`) at/above `FLEET_ACCOUNT_CEILING` | bench until ccquota's reset instant |
 | `ok` | a fresh row with headroom on that window | **nothing** — one line in the collector log; the next tick asks again (the hub runs ~60s behind a real wall) |
-| `unknown` | no hub/ccquota, a stale cache (`FLEET_ACCOUNT_QUOTA_STALE`), or no row for the account (blind hub, `available:false`, not on the hub) | the pre-#874 banner bench, and the status bar shows **`⚠ quota via banner`** |
+| `unknown` | no hub/ccquota, a stale cache (`FLEET_ACCOUNT_QUOTA_STALE`), or no row for the account (blind hub, `available:false`, not on the hub) | the pre-#874 banner bench, and the status bar shows **`▲ quota · from banner`** |
 
 - The banner names its window: `session`/N-hour → `5h`, `weekly` → `7d`; the
   sticky "Usage limit reached" footer names neither, so both are weighed.
@@ -492,7 +492,7 @@ session. `FLEET_ACCOUNT_PACE_REBALANCE=0` switches the moves off; the table is
 still written. A fleet on the failover planner (`FLEET_FAILOVER=1`) is left to
 the planner, as the ceiling branch leaves it.
 
-**Visibility.** The status bar shows `⚠ quota pace spread N` (yellow) when the
+**Visibility.** The status bar counts a `▲ quota · uneven · N pts` warning (yellow ▲, listed by `prefix !`) when the
 most-ahead and most-behind accounts are more than `FLEET_ACCOUNT_PACE_SPREAD_WARN`
 (30) points apart — one week is being drained while another sits unused, and
 `list` names them. Codex subscriptions get the same pace and score in the
@@ -583,7 +583,7 @@ Now:
   unreachable hub restamps too — empty rows still refresh the stamp), so its age
   is the watch's *liveness*. With a pool + hub configured and the stamp older
   than `FLEET_ACCOUNT_QUOTA_STALE` (600s = 10× the TTL) the rotation is blind,
-  and that is never silent: the tmux status bar shows **`⚠ quota stale 47m`**
+  and that is never silent: the tmux status bar shows **`✖ quota · stale · 47m` (counted as `✖ N` on the status bar, listed by `prefix !`)**
   (red, never freshness-gated), `fleet-doctor.sh` **FAILs** its `quotawatch`
   line (plus a `collect` line with the last tick's age/duration/slowest phase),
   and the next tick that does run sends one `FLEET_NOTIFY_CMD` saying how long
@@ -598,7 +598,7 @@ Now:
   `fleet-account.sh` now counts the consecutive empty fetches
   (`global/account.quota.empty`, cleared by the first fetch that returns rows),
   and `FLEET_ACCOUNT_QUOTA_BLIND_STREAK` (default 3 ≈ 3 min at the 60s TTL, 0 =
-  off) is where that becomes an alarm: **`⚠ quota blind 6m`** on the status bar,
+  off) is where that becomes an alarm: **`✖ quota · unreadable · 6m` (counted as `✖ N`, listed by `prefix !`)** on the status bar,
   a **FAIL** on `fleet-doctor`'s `qwatch` line, `--status` answering `blind`
   instead of `fresh`, and one `FLEET_NOTIFY_CMD` per episode. One empty read is
   noise (a hub blip, a fetch killed on its budget) — the streak is the verdict.

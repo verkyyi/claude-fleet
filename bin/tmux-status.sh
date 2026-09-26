@@ -1,8 +1,8 @@
 #!/bin/bash
 # tmux-status.sh — right side of the tmux status bar.
-# Shows: [● container] │ CPU 23% │ MEM 1.2G/4G │ DSK 34G
-#        [│ ⚠ quota stale 47m | ⚠ quota blind 6m] [│ ⚠ quota via banner] [│ ⚠ dash stale 12m ↻2m | ↻ dash kicked 2m]
-#        [│ ⚠ daemon stale cleanup,dispatch+2 ↻3m | ↻ daemon kicked 3m]
+# Shows: [● container] │ CPU 23% │ MEM 1.2G/4G │ DSK 34G │ ✖ 1  ▲ 2
+#        — the alert COUNTS, fixed width (issue #1238); the alerts themselves
+#        are in the `prefix !` popup (bin/fleet-alerts.sh).
 # Color coding: CPU green <50%, yellow 50-80%, red >80%;
 #               MEM green <60%, yellow 60-85%, red >85%;
 #               DSK green >1.5×floor, yellow ≤1.5×floor, red ≤FLEET_DISK_FLOOR_GB.
@@ -201,112 +201,22 @@ status_machine_cached() {
 machine=""
 status_machine_cached
 
-# --- No usage stat (issue #1100). The `5h … · 7d …` token-proxy figure used to
-# sit here, colored by the scraped limit % — but the signal was the color, the
-# digits were noise on a bar read dozens of times a day, and the limit ALARMS
-# below (quota stale / blind / banner-only) are what actually carry the bad news.
-# The usage + account modal it opened on click moved to `prefix u`
-# (conf/tmux-attention.conf); usage-lib.sh stays, the modal still reads it. ---
-
-# --- quota-watch staleness (issue #551): the ONE always-on alarm on the bar.
-# The pre-emptive rotation's cache (account.quota.ts) is restamped by every
-# fleet-quotawatch tick; with a pool + hub configured, a stamp older than
-# FLEET_ACCOUNT_QUOTA_STALE means no tick has run for that long and the 70%/85%
-# rotation is BLIND (2026-09-11: 2.5h blind ⇒ 21 sessions rode a window to 100%).
-# Silent fail-open is exactly what cost that window, so this is red and never
-# gated by freshness. Empty when fresh, or when the watch isn't configured.
-# Its twin (issue #684): the cache can also be FRESH and EMPTY. The stamp says a
-# tick RAN; it says nothing about whether the tick brought anything back, and the
-# fetch restamps either way by design — so a hub answering with zero rows leaves
-# this bar green while the rotation has nothing to act on (2026-09-15: at least
-# six minutes of it, `--status` reading `fresh 117`). One alarm at a time: stale
-# is the deeper failure (nothing is ticking at all) and fleet_quota_blind already
-# stands down while it holds.
-quota_seg=""
-qstale=$(fleet_quota_stale_age)
-if [ -n "$qstale" ]; then
-    quota_seg="${DIM}│ ${RED}⚠ quota stale $(fleet_usage_human_secs "$qstale") "
-else
-    qblind=$(fleet_quota_blind)
-    [ -n "$qblind" ] && quota_seg="${DIM}│ ${RED}⚠ quota blind $(fleet_usage_human_secs "${qblind#*	}") "
-fi
-# Its consequence (issue #874): with no fresh reading, a limit banner benched an
-# account by itself — the path that false-benched healthy accounts twice — so it
-# says so, beside (not instead of) the stale/blind alarm that usually explains it.
-[ -n "$(fleet_quota_via_banner)" ] && quota_seg="${quota_seg}${DIM}│ ${RED}⚠ quota via banner "
-# The weekly PACE spread (issue #1231): the pool's most-ahead and most-behind
-# accounts more than FLEET_ACCOUNT_PACE_SPREAD_WARN (30) points apart — one
-# week is being drained while another sits unused; `fleet-account.sh list`
-# names them. Yellow, not red: the watch's rebalance is already working on it,
-# and nothing is blind. Read off $G/quota.pace, which the watch writes per tick.
-qspread=$(fleet_quota_pace_spread)
-[ -n "$qspread" ] && quota_seg="${quota_seg}${DIM}│ ${YELLOW}⚠ quota pace spread ${qspread%%	*} "
-
-# --- collector staleness + self-heal trace (issue #636): the SECOND always-on
-# alarm. Every number the dash draws comes out of the collector's caches, so a
-# collector that stops does not empty the dash — it freezes it, confidently, with
-# no tell. On 2026-09-14 launchd pended com.claude-fleet.collect for 103 minutes
-# (`pended nondemand spawn = interval`, last exit 0) and the dash showed a
-# two-hour-old world; the only signal was one line in the hand-run fleet-doctor.
-# So: red `⚠ dash stale 47m` off the collector's own heartbeat, and — since
-# `launchctl kickstart -k` fixes it instantly — a rate-limited self-heal, whose
-# `↻` trace stays on the bar for FLEET_COLLECT_KICK_TRACE AFTER recovery so the
-# outage is never silently papered over. The kick is gated in-process first
-# (two file reads) and only then forked, detached: this runs every 5s per client.
-collect_seg=""
-cstale=$(fleet_collect_stale_age)
-ckick=$(fleet_collect_kick_age)
-ktrace="${FLEET_COLLECT_KICK_TRACE:-1800}"
-if [ -n "$cstale" ]; then
-    collect_seg="${DIM}│ ${RED}⚠ dash stale $(fleet_usage_human_secs "$cstale")"
-    if [ -n "$ckick" ] && [ "$ckick" -lt "$ktrace" ]; then
-        collect_seg="${collect_seg} ↻$(fleet_usage_human_secs "$ckick")"
-    fi
-    collect_seg="${collect_seg} "
-    if fleet_collect_kick_due; then
-        ( bash "$BIN/fleet-collect-kick.sh" </dev/null >/dev/null 2>&1 & ) >/dev/null 2>&1
-    fi
-elif [ -n "$ckick" ] && [ "$ckick" -lt "$ktrace" ]; then
-    # Recovered, but recently self-healed — leave the trace up.
-    collect_seg="${DIM}│ ${YELLOW}↻ dash kicked $(fleet_usage_human_secs "$ckick") "
-fi
-
-# --- every OTHER interval daemon (issue #639): the THIRD always-on alarm. The
-# collector was only the unit we happened to have instrumented. When launchd stops
-# scheduling this user domain it stops scheduling all of them at once — cleanup
-# stops reaping workers, dispatch stops autofilling, base-sync stops
-# fast-forwarding the base, issue-bridge stops relaying comments, ledger-watch
-# stops indexing closed sessions — and every one of those failures is INVISIBLE:
-# nothing empties, nothing errors, the fleet just quietly stops doing its
-# housekeeping. So one compact red segment naming the units, on the same
-# always-on terms as the two alarms above (never freshness-gated, never silent),
-# with the same `↻` trace that outlives the recovery.
+# --- Alerts: COUNTS only (issue #1238). The bar used to spell every alarm out as
+# a sentence (the weekly pace gap, `⚠ daemon stale cleanup,dispatch+2 ↻3m`,
+# `⚠ dash stale 12m ↻2m` …) — its width moved with the bad news, so a phone cut
+# it off exactly when there was something to read. Now the ONE producer,
+# bin/fleet-alerts.sh, writes $G/alerts.ndjson (quota stale / unreadable / from
+# banner / uneven, dash + daemon stale with their ↻ self-heal traces, disk low,
+# accounts all capped, model capped, needs), and the bar draws a FIXED-width
+# `✖ N ▲ N` off it; `prefix !` (or a click on a count) opens the table.
 #
-# `collect` is excluded because it has the segment above — a frozen dash is the
-# symptom the operator already knows `⚠ dash stale` for, and printing it twice
-# would only make the bar noisier at the moment it needs to be read. Names are
-# capped at two plus a `+N` so a whole-domain outage (all ten units) stays one
-# glance wide instead of wrapping the bar. The KICK is NOT driven from here: the
-# spinner is KeepAlive, i.e. the one daemon that cannot itself be pended, and it
-# runs the watch every 30s whether or not anybody is attached (bin/tmux-spinner.sh).
-daemon_seg=""
-dtrace="${FLEET_DAEMON_KICK_TRACE:-$ktrace}"
-dnames=""; dn=0
-for du in $(fleet_daemon_overdue_list "$BIN/.." collect); do
-    dn=$((dn + 1))
-    [ "$dn" -le 2 ] && dnames="${dnames:+$dnames,}$du"
-done
-dkick=$(fleet_daemon_recent_kick "$BIN/.." collect)
-if [ "$dn" -gt 0 ]; then
-    [ "$dn" -gt 2 ] && dnames="$dnames+$((dn - 2))"
-    daemon_seg="${DIM}│ ${RED}⚠ daemon stale $dnames"
-    if [ -n "$dkick" ] && [ "$dkick" -lt "$dtrace" ]; then
-        daemon_seg="${daemon_seg} ↻$(fleet_usage_human_secs "$dkick")"
-    fi
-    daemon_seg="${daemon_seg} "
-elif [ -n "$dkick" ] && [ "$dkick" -lt "$dtrace" ]; then
-    daemon_seg="${DIM}│ ${YELLOW}↻ daemon kicked $(fleet_usage_human_secs "$dkick") "
-fi
+# The refresh rides here, TTL-gated (FLEET_ALERTS_TTL, one writer across every
+# attached client): the collector's own stale alarm cannot come from the
+# collector, and `--kick` keeps the rate-limited collector self-heal (#636/#638)
+# on this render path, where it always lived. Every other reader only reads.
+. "$BIN/fleet-alerts.sh"
+fleet_alerts_refresh --kick
+fleet_alerts_bar
 
 # --- No account chip. The green `◉ <account>` segment (issue #289) mirrored the
 # fleet-wide global/account.active pointer, i.e. "the account new sessions use".
@@ -318,4 +228,4 @@ fi
 
 # --- Output --- (claude count + hostname dropped — the window list and dash cover those;
 # name your tmux session after your fleet so status-left carries the title)
-printf '%s%s%s%s' "$machine" "$quota_seg" "$collect_seg" "$daemon_seg"
+printf '%s%s' "$machine" "$FA_BAR"

@@ -27,7 +27,7 @@
 #                             (issue #598; only with FLEET_ACCOUNT_PHASE_AUTO=1)
 #   quota.pace              — the pool's weekly PACE table, `fleet-account.sh
 #                             pace` mirrored every tick (issue #1231): the status
-#                             bar's `⚠ quota pace spread` reads it
+#                             bar's `▲ quota · uneven` reads it
 #   quota.pace.moved        — epoch of the last pace REBALANCE move (the
 #                             FLEET_ACCOUNT_PACE_COOLDOWN gate, #1231)
 #   quotawatch.heartbeat    — key=value: pid/caller/start/phase/end/dur/rows/
@@ -52,7 +52,7 @@
 # restamps it even when the hub is unreachable (empty rows still refresh the
 # stamp). Once it is older than FLEET_ACCOUNT_QUOTA_STALE (default 600s = 10×
 # the TTL) while the pool + hub are configured, the watch is BLIND: the status
-# bar shows `⚠ quota stale 47m` (bin/tmux-status.sh via usage-lib.sh),
+# bar shows `✖ quota · stale · 47m` (bin/tmux-status.sh via usage-lib.sh),
 # fleet-doctor FAILs, and the next tick that does run notifies once that it was
 # blind for that long. `--status` prints the same verdict for scripts.
 #
@@ -815,7 +815,7 @@ fi
 # weekly PACE (7d% − ceiling × the elapsed fraction of the 7d window; + = ahead
 # of an even burn) and HOLDS an account that is far ahead; this job is the
 # running-session half of the same policy, earlier and gentler than the cliff:
-#   · mirror the pace table to $G/quota.pace (the bar's `⚠ quota pace spread`);
+#   · mirror the pace table to $G/quota.pace (the bar's `▲ quota · uneven`);
 #   · when the most-ahead un-benched account leads the CURRENT PICK
 #     (`fleet-account.sh active`, which honours the holds) by
 #     FLEET_ACCOUNT_PACE_REBALANCE (15) points or more, and that pick is itself
@@ -930,6 +930,11 @@ if [ "${FLEET_ACCOUNT_PHASE_AUTO:-0}" = 1 ] && [ "${nrows:-0}" -gt 1 ] \
 fi
 
 T_POLICY=$(( $(now) - y0 ))
+# --- Alerts (issue #1238): republish $G/alerts.ndjson off THIS tick's fresh
+# quota state, so the file stays current with nobody attached. The status bar
+# refreshes it too while a client is up; bin/fleet-alerts.sh is the one producer.
+[ "$DRY" = 1 ] || bash "$BIN/fleet-alerts.sh" write >/dev/null 2>&1 || true
+
 END=$(now)
 hb "done" "fetched=$fetched"$'\n'"rows=$nrows"$'\n'"end=$END"$'\n'"dur=$(( END - START ))"$'\n'"t_modelcap=$T_MODEL"$'\n'"t_fetch=$T_FETCH"$'\n'"t_policy=$T_POLICY"$'\n'"budget=$TICK_BUDGET"$'\n'"over=$QW_OVER"$'\n'"skipped=$QW_SKIP"$'\n'
 # One line per tick, so the launchd log can answer "which HALF was slow?" without

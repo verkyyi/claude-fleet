@@ -51,7 +51,7 @@
 # Exit 0 = pass, non-zero = fail.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
-FILES='fleet-collect-kick.sh fleet-daemon-watch.sh fleet-daemon-lib.sh usage-lib.sh tmux-status.sh'
+FILES='fleet-collect-kick.sh fleet-daemon-watch.sh fleet-daemon-lib.sh usage-lib.sh tmux-status.sh fleet-alerts.sh'
 for f in $FILES; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
@@ -135,8 +135,12 @@ kick()   { bash "$WORK/bin/fleet-collect-kick.sh" "$@" 2>>"$WORK/kick.err"; }
 # point of §10 — but it makes every other rendering assertion race the fork. So
 # the ordinary bar() renders with the self-heal disarmed, and bar_live() is the
 # one that is allowed to kick.
-bar()      { FLEET_COLLECT_KICK=0 bash "$WORK/bin/tmux-status.sh" 2>/dev/null; }
-bar_live() { bash "$WORK/bin/tmux-status.sh" 2>/dev/null; }
+# The bar only COUNTS alerts since issue #1238; the rows are in the file the
+# render (re)writes, so each helper renders, then prints the bar AND the rows.
+# FLEET_ALERTS_TTL=0: every render rewrites (the steps below move state faster
+# than the 5s status-interval the TTL is sized for).
+bar()      { local b; b=$(FLEET_ALERTS_TTL=0 FLEET_COLLECT_KICK=0 bash "$WORK/bin/tmux-status.sh" 2>/dev/null); printf '%s\n' "$b"; bash "$WORK/bin/fleet-alerts.sh" list --plain 2>/dev/null; }
+bar_live() { local b; b=$(FLEET_ALERTS_TTL=0 bash "$WORK/bin/tmux-status.sh" 2>/dev/null); printf '%s\n' "$b"; bash "$WORK/bin/fleet-alerts.sh" list --plain 2>/dev/null; }
 wait_kicks() {  # $1 = expected count; the bar's kick is a detached fork
   local i=0
   while [ "$(kicks)" -lt "$1" ] && [ "$i" -lt 50 ]; do sleep 0.2; i=$((i + 1)); done
@@ -148,7 +152,7 @@ hb 30
 [ -z "$(lib 'fleet_collect_stale_age')" ] || fail "1: a 30s-old heartbeat reported stale"; ok
 [ "$(kick --status | cut -f1)" = fresh ] || fail "1: --status not fresh"; ok
 kick; [ "$(kicks)" -eq 0 ] || fail "1: kicked a healthy collector"; ok
-case "$(bar)" in *"dash stale"*) fail "1: status bar alarmed on a fresh heartbeat" ;; esac; ok
+case "$(bar)" in *"✖  dash · stale"*) fail "1: status bar alarmed on a fresh heartbeat" ;; esac; ok
 
 # ------------------------------------------------------------- 2. inflight ----
 # start 9 minutes ago (past STALE) but the phases are still advancing: the tick is
@@ -166,14 +170,14 @@ rm -f "$HB"
 [ -z "$(lib 'fleet_collect_stale_age')" ] || fail "3: alarmed with no heartbeat at all"; ok
 [ "$(kick --status | cut -f1)" = never ] || fail "3: --status not never"; ok
 kick; [ "$(kicks)" -eq 0 ] || fail "3: kicked with no heartbeat (fresh install)"; ok
-case "$(bar)" in *"dash stale"*) fail "3: status bar alarmed on a fresh install" ;; esac; ok
+case "$(bar)" in *"✖  dash · stale"*) fail "3: status bar alarmed on a fresh install" ;; esac; ok
 
 # ---------------------------------------------------------------- 4. stale ----
 hb 900
 age=$(lib 'fleet_collect_stale_age')
 [ -n "$age" ] && [ "$age" -ge 900 ] || fail "4: stale age not reported (got '$age')"; ok
 [ "$(kick --status | cut -f1)" = stale ] || fail "4: --status not stale"; ok
-case "$(bar)" in *"⚠ dash stale 15m"*) ok ;; *) fail "4: status bar missing '⚠ dash stale 15m': $(bar)" ;; esac
+case "$(bar)" in *"✖ 1 "*"dash · stale · 15m"*) ok ;; *) fail "4: status bar missing '✖ 1' + 'dash · stale · 15m': $(bar)" ;; esac
 lib 'fleet_collect_kick_due' || fail "4: kick not due on a stale collector with no prior kick"; ok
 kick
 [ "$(kicks)" -eq 1 ] || fail "4: expected exactly 1 kickstart, got $(kicks)"; ok
@@ -193,12 +197,12 @@ kick
 [ "$(kicks)" -eq 2 ] || fail "5: no second kick past the cooldown ($(kicks) total)"; ok
 
 # ---------------------------------------------------------------- 6. trace ----
-case "$(bar)" in *"dash stale"*"↻"*) ok ;; *) fail "6: no ↻ trace while stale after a kick: $(bar)" ;; esac
+case "$(bar)" in *"✖  dash · stale"*"↻"*) ok ;; *) fail "6: no ↻ trace while stale after a kick: $(bar)" ;; esac
 hb 30                                    # the collector recovers…
 [ -z "$(lib 'fleet_collect_stale_age')" ] || fail "6: still stale after recovery"; ok
-case "$(bar)" in *"↻ dash kicked"*) ok ;; *) fail "6: recovery was silent — no kick trace: $(bar)" ;; esac
+case "$(bar)" in *"↻  dash · stale · kicked"*) ok ;; *) fail "6: recovery was silent — no kick trace: $(bar)" ;; esac
 printf '%s\n' "$(( $(now) - 2000 ))" > "$KTS"    # …and the trace window expires
-case "$(bar)" in *"dash kicked"*|*"dash stale"*) fail "6: trace outlived its window: $(bar)" ;; esac; ok
+case "$(bar)" in *"dash · stale"*) fail "6: trace outlived its window: $(bar)" ;; esac; ok
 
 # ------------------------------------------------------------------ 7. log ----
 [ -f "$KICKLOG" ] || fail "7: no logs/daemon-kick.log"; ok
@@ -209,23 +213,23 @@ grep -q 'stale=.*mgr=launchd.*rc=0' "$KICKLOG" || fail "7: log line missing stal
 hb 900; rm -f "$KTS"; : > "$FAKE_KICK_LOG"
 FLEET_COLLECT_KICK=0 kick
 [ "$(kicks)" -eq 0 ] || fail "8: kicked with FLEET_COLLECT_KICK=0"; ok
-case "$(bar)" in *"⚠ dash stale"*) ok ;; *) fail "8: FLEET_COLLECT_KICK=0 also silenced the alarm" ;; esac
+case "$(bar)" in *"✖  dash · stale"*) ok ;; *) fail "8: FLEET_COLLECT_KICK=0 also silenced the alarm" ;; esac
 
 # -------------------------------------------------------------- 9. no-unit ----
 # Nothing loaded: don't kick into the void, but say so and leave the alarm up.
 FAKE_UNIT_LOADED=0 kick
 [ "$(kicks)" -eq 0 ] || fail "9: kicked a unit that is not loaded"; ok
 grep -q '^.* no-unit ' "$KICKLOG" || fail "9: no-unit not logged: $(cat "$KICKLOG")"; ok
-case "$(bar)" in *"⚠ dash stale"*) ok ;; *) fail "9: alarm dropped when no unit is loaded" ;; esac
+case "$(bar)" in *"✖  dash · stale"*) ok ;; *) fail "9: alarm dropped when no unit is loaded" ;; esac
 
 # ------------------------------------------------------- 10. bar self-heals ----
 # The whole point of #636: nobody was watching a doctor run, so whoever DOES see
 # the staleness must act on it. Render the real status bar with the self-heal
 # armed and the kick must land on its own.
 hb 900; rm -f "$KTS"; : > "$FAKE_KICK_LOG"
-case "$(bar_live)" in *"⚠ dash stale"*) ok ;; *) fail "10: bar did not alarm" ;; esac
+case "$(bar_live)" in *"✖  dash · stale"*) ok ;; *) fail "10: bar did not alarm" ;; esac
 wait_kicks 1 || fail "10: the status bar did not self-heal a stale collector (kicks=$(kicks))"; ok
-case "$(bar)" in *"dash stale"*"↻"*) ok ;; *) fail "10: no trace after the bar's own kick: $(bar)" ;; esac
+case "$(bar)" in *"✖  dash · stale"*"↻"*) ok ;; *) fail "10: no trace after the bar's own kick: $(bar)" ;; esac
 
 # ------------------------------------------------- 11. the headless callers ----
 # The discovery paths are the design, so pin them from the source. The KeepAlive
@@ -239,7 +243,10 @@ grep -q 'KICK_EVERY' "$BIN/tmux-spinner.sh" \
   || fail "11: the spinner's self-heal lost its frame throttle"; ok
 grep -q 'fleet-collect-kick.sh' "$BIN/fleet-quotawatch.sh" \
   || fail "11: the quota watch no longer runs the collector self-heal backstop"; ok
-grep -q 'fleet_collect_kick_due' "$BIN/tmux-status.sh" \
+# The bar's kick moved into the one alerts producer (issue #1238); the bar still
+# asks for it (`--kick`) on every refresh.
+grep -q 'fleet_collect_kick_due' "$BIN/fleet-alerts.sh" \
+  && grep -q 'fleet_alerts_refresh --kick' "$BIN/tmux-status.sh" \
   || fail "11: the status bar no longer self-heals"; ok
 
 # ------------------------------------------------------------- 12. relative ----
@@ -266,17 +273,17 @@ hb 401
   || fail "12: a collector 401s behind a 60s interval still reads fresh (the #639 blind spot)"; ok
 [ -z "$(FLEET_COLLECT_STALE=600 lib 'fleet_collect_stale_age')" ] \
   || fail "12: 401s should be fresh under the OLD absolute 600s threshold — the fixture no longer reproduces #639"; ok
-case "$(bar)" in *"⚠ dash stale"*) ok ;; *) fail "12: the bar did not alarm at 401s: $(bar)" ;; esac
+case "$(bar)" in *"✖  dash · stale"*) ok ;; *) fail "12: the bar did not alarm at 401s: $(bar)" ;; esac
 
 # 12b. …and a tick that is IN FLIGHT silences it again, straight from the bar. A
 # 551s git phase is on record from a monorepo fleet: without this the tighter
 # threshold would paint the bar red through every one of that fleet's ticks.
 printf 'pid=1234\nstart=%s\nphase=git\nphase_ts=%s\n' \
   "$(( $(now) - 900 ))" "$(( $(now) - 900 ))" > "$HB"
-case "$(bar)" in *"⚠ dash stale"*) ok ;; *) fail "12b: no alarm with a 900s-silent heartbeat and no tick: $(bar)" ;; esac
+case "$(bar)" in *"✖  dash · stale"*) ok ;; *) fail "12b: no alarm with a 900s-silent heartbeat and no tick: $(bar)" ;; esac
 printf '%s\t%s\n' "$$" "$(( $(now) - 400 ))" > "$G/collect.pid"
 [ -z "$(lib 'fleet_collect_stale_age')" ] || fail "12b: a live tick 400s in was still called stale"; ok
-case "$(bar)" in *"dash stale"*) fail "12b: the bar alarmed while a tick was in flight: $(bar)" ;; esac; ok
+case "$(bar)" in *"✖  dash · stale"*) fail "12b: the bar alarmed while a tick was in flight: $(bar)" ;; esac; ok
 printf '%s\t%s\n' "$$" "$(( $(now) - 900 ))" > "$G/collect.pid"   # past the deadline ⇒ wedged
 [ -n "$(lib 'fleet_collect_stale_age')" ] || fail "12b: a tick past the supersede deadline still counted as alive"; ok
 rm -f "$G/collect.pid"

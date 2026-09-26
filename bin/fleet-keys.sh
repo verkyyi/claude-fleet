@@ -165,11 +165,12 @@ print_sheet_zh() {
   key "prefix z" "缩放当前 worker（tmux 原生 zoom）"
   key "prefix [" "查看 worker 滚屏（tmux copy-mode）"
   key "prefix u" "用量 + 账号弹窗：查看 5h/7d 用量，选择新会话账号"
+  key "prefix !" "告警弹窗：✖ 告警 / ▲ 提醒 / ● 等你 一张表，↵ 执行动作 · 1/2/3 按级别过滤 · m 静音 1 小时（✖ 不可静音）"
   key "prefix ?" "打开这份快捷键"
   key "F9" "无前缀：回到本 fleet 的 hub；在带任务栏的任务里先聚焦任务栏，再按回 hub"
   key "cf --guide" "在 shell 叫回上手向导，从上次进度继续"
   key "click ● N" "点击左下角 needs 数字：跳到下一个需要处理的窗口"
-  key "click usage" "点击底部用量：打开用量 + 账号弹窗"
+  key "click ✖ / ▲" "点击右下角告警计数：打开告警弹窗，只看该级别"
   fi
 
   if want sidebar; then
@@ -277,11 +278,12 @@ print_sheet() {
   key "prefix z" "zoom the worker (tmux's own zoom) — from the task sidebar too: it zooms the WORKER and hands the keyboard back, never the sidebar"
   key "prefix [" "scroll back the worker (tmux copy-mode) — from the task sidebar too: it opens on the WORKER and hands the keyboard back"
   key "prefix u" "usage + account modal — 5h/7d usage and limit detail, and (with an account pool) pick the account new sessions use"
+  key "prefix !" "alerts popup — every ✖ alarm / ▲ warning / ● needs the status bar counts, one row each with its action: ↵ act (go to window / restart daemon / see accounts / see disk) · 1/2/3 filter by level, 0 all · m mute 1h (never an alarm) · esc close"
   key "prefix ?" "this cheatsheet"
   key "F9" "(no prefix) jump back to this session's hub — from a task showing the task bar, the first press focuses the bar (like prefix E) and a second press goes to the hub; the ⌂ tap does the same. A task with NO sidebar on screen opens the task picker instead (prefix Space), F9 in it goes on to the hub (FLEET_HOME_SIDEBAR_FIRST=0 turns both off)"
   key "cf --guide" "from a shell, reopen the onboarding guide at its saved progress"
   key "click ● N" "the needs badge (bottom-left) cycles to the next 'needs' window"
-  key "click usage" "footer usage stat — opens the usage + account modal"
+  key "click ✖ / ▲" "the alert counts (bottom-right) — open the alerts popup filtered to that level"
   fi
 
   if want sidebar; then
