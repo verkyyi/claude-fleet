@@ -824,7 +824,7 @@ if [ -d "$acct_dir" ] && [ -n "${CCQUOTA_HUB_URL:-}" ]; then
   daemon_verdict qwatch com.claude-fleet.quotawatch \
     "com.claude-fleet.quotawatch loaded — 60s pre-emptive rotation tick, independent of the collector" \
     "the quota watch only runs at the top of each collector tick (and not at all while the collector is wedged)"
-  printf '        note: bin/fleet-quotawatch.sh — its own 60s unit; heartbeat in global/quotawatch.heartbeat, staleness on the status bar (⚠ quota stale) + above.\n'
+  printf '        note: bin/fleet-quotawatch.sh — its own 60s unit; heartbeat in global/quotawatch.heartbeat, staleness on the status bar (✖ quota · stale) + above.\n'
 fi
 
 # --- collector heartbeat (issue #551) -------------------------------------------
@@ -854,7 +854,7 @@ if [ -f "$hb" ]; then
   if [ "$hb_end" -gt 0 ]; then
     hb_age=$((hb_now - hb_end))
     if [ "$hb_age" -gt "${FLEET_COLLECT_DEADLINE:-600}" ]; then
-      warn collect "last complete tick ended $((hb_age/60))m ago (took ${hb_dur:-?}s; slowest phase ${hb_slow:-?}$hb_budget) — dash caches are stale; is com.claude-fleet.collect loaded / a tick wedged in \`$hb_phase\`? (the status bar shows \`⚠ dash stale\`; bin/fleet-daemon-watch.sh self-heals, see below)"
+      warn collect "last complete tick ended $((hb_age/60))m ago (took ${hb_dur:-?}s; slowest phase ${hb_slow:-?}$hb_budget) — dash caches are stale; is com.claude-fleet.collect loaded / a tick wedged in \`$hb_phase\`? (the status bar shows \`✖ dash · stale\`; bin/fleet-daemon-watch.sh self-heals, see below)"
     elif [ -n "$hb_skipped" ]; then
       # A truncated tick is working as designed (better a phase waits a round than
       # the whole tick drifting off its interval) but it is the signal that the
@@ -2132,6 +2132,22 @@ if [ -d "$conf_dir" ]; then
   done <<EOF
 $(_fleet_confs "$conf_dir")
 EOF
+fi
+
+# --- alerts (issue #1238): what the status bar counts, READ off the one
+# producer's file ($G/alerts.ndjson, bin/fleet-alerts.sh) — the doctor computes
+# none of it again. An alarm is a WARN; warnings and needs are listed, not counted.
+_af="${TMPDIR:-/tmp}/.claude-dash/global/alerts.ndjson"
+if [ -f "$_af" ] && command -v bash >/dev/null 2>&1; then
+  _fa="$(dirname "$0")/fleet-alerts.sh"
+  # shellcheck disable=SC2046
+  set -- $(bash "$_fa" counts 2>/dev/null) 0 0 0
+  if [ "$1" -gt 0 ]; then
+    warn alerts "✖ $1 alarm(s), ▲ $2 warning(s), ● $3 waiting — prefix ! on the status bar lists them"
+  else
+    pass alerts "no alarm (▲ $2 warning(s), ● $3 waiting)"
+  fi
+  bash "$_fa" list --plain 2>/dev/null | cut -f2- | sed 's/^/        /'
 fi
 
 # --- perl Time::HiRes (soft: dash spinner sub-second frames) ---

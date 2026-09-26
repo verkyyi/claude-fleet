@@ -25,7 +25,7 @@
 #      logs/daemon-kick.log with the unit, the staleness that triggered it and the
 #      exit code, so "did it self-heal, and did it work?" is answerable later.
 #   3. trace — a kick stamps <unit>.kick.ts, which the status bar keeps showing
-#      (`↻ dash kicked 4m`, `↻ daemon kicked 4m`) for FLEET_DAEMON_KICK_TRACE
+#      (the `↻` on the `dash · stale` / `daemon · stale` alert) for FLEET_DAEMON_KICK_TRACE
 #      after the unit recovers. A silent recovery would hide exactly the failure
 #      these issues are about.
 #   4. escalate — a kickstart buys ONE execution, not restored scheduling. Measured

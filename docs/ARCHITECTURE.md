@@ -987,7 +987,7 @@ out or a reboot, and that is the operator's call.
 
 Stamps are scoped to the **install root**: the live install writes the shared
 `global/` bucket above, and any other checkout writes a `dev-<hash>/` sibling — a
-worker testing the self-heal inside its own worktree must not put `↻ dash kicked`
+worker testing the self-heal inside its own worktree must not put a `↻ dash` trace
 on the operator's status bar.
 
 ### Bootstrap: `fleet-up.sh [<owner/repo>] [<dir>]`

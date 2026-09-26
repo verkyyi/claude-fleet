@@ -2,8 +2,9 @@
 # usage-lib.sh — shared helpers for the Claude usage / subscription-limit signal
 # (issue #239). Sourced by its consumers so the freshness gate, the % parse,
 # and the warn/crit thresholds live in ONE place and can't drift:
-#   • bin/tmux-status.sh   — the limit ALARMS on the bar (quota stale / blind /
-#                            via banner); its 5h/7d usage stat is gone (#1100)
+#   • bin/fleet-alerts.sh  — the limit ALARMS (quota · stale / unreadable /
+#                            from banner / uneven, issue #1238); the bar only
+#                            counts them, its 5h/7d usage stat is gone (#1100)
 #   • bin/usage-modal.sh   — the usage/limit detail header + account picker body
 #                            (issue #289 merged the old usage-popup + account-pick)
 #
@@ -191,14 +192,14 @@ fleet_limit_axis() {
   esac
 }
 
-# --- "quota via banner" (issue #874) ------------------------------------------
+# --- "quota · from banner" (issues #874, #1238) --------------------------------
 # A limit banner may bench an account by itself ONLY when ccquota has no fresh
 # reading for it (fleet-account.sh quota-verdict → unknown). That fallback is the
 # path that false-benched a healthy account twice, so it is never silent: the
 # collector stamps $G/quota.via-banner ("<epoch>\t<label>") each time it takes it,
 # and this prints "<label>\t<age>" while the stamp is younger than
 # FLEET_ACCOUNT_QUOTA_VIA_BANNER_SECS (default 600) — the status bar's
-# `⚠ quota via banner`. Nothing otherwise.
+# `▲ quota · from banner` alert (bin/fleet-alerts.sh). Nothing otherwise.
 fleet_quota_via_banner() {
   _qvb=''; _uf="$(fleet_usage_cache_dir)/quota.via-banner"
   [ -f "$_uf" ] && IFS= read -r _qvb < "$_uf" 2>/dev/null
@@ -219,7 +220,7 @@ fleet_quota_via_banner() {
 # fraction of the 7d window, + = ahead of an even burn). This prints
 # "<spread>\t<ahead-label>\t<behind-label>" when the most-ahead and most-behind
 # accounts are more than FLEET_ACCOUNT_PACE_SPREAD_WARN (30) points apart — the
-# status bar's `⚠ quota pace spread 34`. Nothing without the file, with fewer
+# `▲ quota · uneven · 34 pts` alert (bin/fleet-alerts.sh). Nothing without the file, with fewer
 # than two rows, or while the watch is stale (that alarm stands in: a table an
 # old tick wrote says nothing about the pool now).
 fleet_quota_pace_spread() {
@@ -242,7 +243,7 @@ fleet_quota_pace_spread() {
 # so the stamp's age is the watch's LIVENESS, not the hub's. Once the pool + hub
 # are configured and the stamp is older than FLEET_ACCOUNT_QUOTA_STALE (default
 # 600 s = 10× the fetch TTL), no tick has run for that long and the 70%/85%
-# pre-emptive rotation is blind. Surfaced by the status bar (⚠ quota stale 47m),
+# pre-emptive rotation is blind. Surfaced by the status bar (✖ quota · stale · 47m),
 # fleet-doctor, and the watch's own --status. POSIX sh (fleet-doctor sources
 # nothing bash-only; keep it that way).
 
@@ -330,7 +331,7 @@ fleet_usage_human_secs() {
 # `end`, a running tick advances it once per phase. Age past FLEET_COLLECT_STALE
 # therefore covers both failure shapes with one number: no tick started (the #636
 # pend) and a tick wedged in one phase (the #551 deadline case). Surfaced as
-# `⚠ dash stale 47m` on the status bar, self-healed by bin/fleet-collect-kick.sh,
+# `✖ dash · stale · 47m` on the status bar, self-healed by bin/fleet-collect-kick.sh,
 # and reported by fleet-doctor. POSIX sh — fleet-doctor sources nothing bash-only.
 
 # fleet_collect_stale_secs — the staleness threshold. RELATIVE to the collector's
@@ -377,7 +378,7 @@ fleet_collect_stale_age() {
   # its own, which is what lets #639's much tighter threshold (300s, not 600s) be
   # safe: the phase heartbeat only advances at phase BOUNDARIES, and a single
   # phase can legitimately run for minutes (551s on a big monorepo fleet), so
-  # without the pid guard the tighter threshold would paint `⚠ dash stale` over a
+  # without the pid guard the tighter threshold would paint `✖ dash · stale` over a
   # collector that is working perfectly well.
   if command -v fleet_daemon_overdue >/dev/null 2>&1; then
     fleet_daemon_overdue collect; return 0

@@ -37,7 +37,9 @@ printf 'Filesystem 1024-blocks Used Available Capacity Mounted\n/dev/x 1 1 10485
 : > "$WORK/df.log"
 measured() { local n; n=$(grep -c . "$WORK/df.log" 2>/dev/null); printf '%s' "${n:-0}"; }
 
-bar() { TMPDIR="$T/" FLEET_ACCOUNTS_DIR="$WORK/acc" CCQUOTA_HUB_URL=http://127.0.0.1:9 \
+# FLEET_ALERTS_DISK=0: the alerts producer (issue #1238) probes the disk with its
+# own df, which the df.log below would count as a machine measurement.
+bar() { FLEET_ALERTS_DISK=0 TMPDIR="$T/" FLEET_ACCOUNTS_DIR="$WORK/acc" CCQUOTA_HUB_URL=http://127.0.0.1:9 \
         PATH="$WORK/bin:$PATH" bash "$BIN/tmux-status.sh" 2>/dev/null; }
 # The machine segment is everything before the usage/alarm segments; Linux reads
 # CPU from /proc/stat (not shimmable), so its figure is masked there.

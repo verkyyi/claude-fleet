@@ -48,7 +48,7 @@
 #                 it dropped, releases the lock and exits 0, and the NEXT tick does
 #                 the deferred work (deferral is not starvation).
 #  12. pace     — (#1231) every tick mirrors `fleet-account.sh pace` to quota.pace
-#                 (the bar's `⚠ quota pace spread` reads it); an account far AHEAD
+#                 (the bar's `▲ quota · uneven` reads it); an account far AHEAD
 #                 of its weekly pace while the current pick is on pace with 5h room
 #                 ⇒ ONE `migrate --idle --from <leader> --max 1` per fleet + the
 #                 quota.pace.moved stamp; the next tick inside the cooldown moves

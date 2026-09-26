@@ -240,6 +240,7 @@ line, which exits silently without it.)
 | `prefix b` | backlog modal — near-fullscreen popup; enter spawns the issue session |
 | `prefix c` | config modal — view/edit `FLEET_*` by friendly label, grouped + collapsible; pacing/budget/timeout knobs live under a collapsed INTERNAL "show all" header (#1101); identity keys locked; `⌃s` toggles where edits land — this fleet ⇄ one hosted repo (#1102), `?` reveals raw keys, enter edits |
 | `prefix u` | usage + account modal — local 5h/7d usage and the official limit line on top, the account pool (when configured) as a selectable body below; enter picks the account new sessions start from |
+| `prefix !` | alerts popup — every alert the status bar counts, as one table: `✖` alarm · `▲` warning · `●` needs (then `↻` recently healed), each `subject · condition · value`, how long, and one action. `↵` acts (go to the window / restart the daemon / see accounts / see disk), `1`/`2`/`3` filter by level (`0` all), `m` mutes a warning or needs row for 1h — an alarm cannot be muted — `esc` closes. Overrides tmux's stock `break-pane` |
 | `prefix ?` | keymap cheatsheet — a popup listing **every** fleet shortcut (tmux prefix · dash · backlog · config modal), each with a one-line description; `q`/`esc` closes it (also reachable via `?` in the dash and the backlog) |
 | `F9` | (no prefix) jump back to this session's hub — in a task, the first press lands on the sidebar (or, with no sidebar on screen, the task picker) and the second goes to the hub (`FLEET_HOME_SIDEBAR_FIRST=0` turns that off) |
 
@@ -284,9 +285,15 @@ clickable too: the **`⌂` hub icon** (leftmost) is a consistent **home** tap �
 always lands on this fleet's hub, unzoomed
 (never a pane zoom, unlike `F9`) — next to it your **login name** says whose
 fleet this is (not a tap target) — the red **`● N` needs badge** cycles to the
-next window that needs you. The right side carries machine vitals plus the
-limit **alarms** (`⚠ quota stale` / `⚠ quota blind` / `⚠ quota via banner`,
-daemon/dash staleness) — no usage figures; `prefix u` opens the consolidated
+next window that needs you (blue: `●` needs is a level of its own). The right
+side carries machine vitals plus the **alert counts** — `✖ N` alarms (red: what
+you see may be wrong, e.g. `quota · stale`, `quota · unreadable`, `dash · stale`,
+`daemon · stale`, `disk · low` under the floor) and `▲ N` warnings (yellow:
+drifting or a limit ahead, e.g. `quota · uneven`, `quota · from banner`,
+`accounts · all capped`, `model · capped`). The counts are fixed width and never
+a sentence; tap one, or press `prefix !`, for the table (issue #1238; the one
+producer is `bin/fleet-alerts.sh`, which writes `$G/alerts.ndjson` for the bar,
+the popup and `fleet-doctor` alike). No usage figures; `prefix u` opens the consolidated
 **usage + account modal** (usage/limit detail on top, the account pool as a
 selectable body below). (Comment out `set -g mouse on` in
 `conf/tmux-attention.conf` to keep native select-to-copy.)
@@ -588,8 +595,8 @@ sh ~/.claude/fleet/bin/fleet-doctor.sh
 ```
 
 `--status` distinguishes `off`, `never`, `fresh`, `stale` and `blind`. By default,
-readings older than 600 seconds raise `quota stale`; three consecutive empty
-fetches raise `quota blind` even if the fetch timestamp is recent. The status
+readings older than 600 seconds raise `✖ quota · stale`; three consecutive empty
+fetches raise `✖ quota · unreadable` even if the fetch timestamp is recent. The status
 bar and doctor expose both failures. Full policies and recovery commands:
 [docs/MULTI-ACCOUNT.md](docs/MULTI-ACCOUNT.md).
 

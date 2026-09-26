@@ -338,7 +338,7 @@ def choose(data, agent, exclude=(), current='', allowed=('claude', 'codex')):
                 best = row
                 break
         return {'state': 'ready', 'target': best, 'reason': 'same-agent' if kind == agent else 'cross-agent'}
-    return {'state': 'waiting-quota', 'target': None, 'reason': 'no locally reachable, readable subscription below ceiling'}
+    return {'state': 'waiting-quota', 'target': None, 'reason': 'accounts · all capped'}
 
 
 def choose_spawn(data, agent, allowed=('claude', 'codex')):
@@ -414,15 +414,39 @@ def bench(key, until, reason):
         save(path, data)
 
 
+def stamp_all_capped(data):
+    """Record (or clear) `accounts · all capped` for bin/fleet-alerts.sh (issue
+    #1238): `<epoch>\t<next-free epoch, 0 = unknown>` in the account state dir.
+    It used to live only as a stderr line in a log."""
+    path = state_dir() / 'account.all-capped'
+    try:
+        if data is None:
+            path.unlink(missing_ok=True)
+            return
+        now = int(time.time())
+        frees = [max(int(a.get('reset_at') or 0), int(a.get('limited_until') or 0), int(a.get('hold_until') or 0))
+                 for a in data.get('accounts', [])]
+        frees = [f for f in frees if f > now]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + '.tmp')
+        tmp.write_text('%d\t%d\n' % (now, min(frees) if frees else 0))
+        tmp.replace(path)
+    except (OSError, ValueError, TypeError):
+        pass
+
+
 def launch(agent, argv):
     allowed = os.environ.get('FLEET_FAILOVER_AGENTS', 'claude,codex').split(',')
     # Provider-specific flags cannot silently become another CLI's flags.
     if len(argv) > 1 or (argv and argv[0].startswith('-')):
         allowed = [agent]
-    result = choose_spawn(inventory(), agent, allowed=allowed)
+    data = inventory()
+    result = choose_spawn(data, agent, allowed=allowed)
     if result['target'] is None:
+        stamp_all_capped(data)
         print('fleet-account: ' + result['reason'], file=sys.stderr)
         return 3
+    stamp_all_capped(None)
     target = result['target']
     env = dict(os.environ, FLEET_ACCOUNT_TARGET=json.dumps(target), FLEET_ACCOUNT_SELECTED='1')
     if target['agent'] == 'codex':

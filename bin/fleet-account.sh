@@ -49,7 +49,7 @@
 #                          (fraction of the 7d window elapsed): + = ahead of an even
 #                          burn of the week, − = behind. The quota watch mirrors it
 #                          to global/quota.pace every tick (the status bar's
-#                          `⚠ quota pace spread`), and moves ONE idle session off the
+#                          `▲ quota · uneven` alert), and moves ONE idle session off the
 #                          most-ahead account when it leads the current pick by
 #                          FLEET_ACCOUNT_PACE_REBALANCE points (see PICK_MODE below)
 #   inventory [--refresh] — provider-aware local subscriptions + ccquota readings
@@ -583,7 +583,7 @@ PY
 #               how LONG it has lasted, not just how many reads it took.
 # An EMPTY POOL is NOT blind: with no token files there is nothing for ccquota to
 # have a reading about, and the fleet says that elsewhere already (fleet-doctor's
-# `account` line). Counting it here would pin `⚠ quota blind` permanently on
+# `account` line). Counting it here would pin `✖ quota · unreadable` permanently on
 # every machine that sets a hub URL before it has any accounts — an alarm that is
 # on by default on a healthy install is one nobody reads by the second week.
 quota_empty_streak() {
@@ -606,7 +606,7 @@ quota_empty_streak() {
 # stderr is dropped, quota_parse's is NOT: its no-reading / bad-shape complaints
 # (issue #628) are the only place the chain speaks up, and the stamp below says
 # nothing about them — it is refreshed unconditionally, which is exactly why
-# #551's `⚠ quota stale` can never catch a cache full of confident zeroes.
+# #551's `✖ quota · stale` can never catch a cache full of confident zeroes.
 # quota_empty_streak is the axis that does (issue #684); it runs on EVERY fetch,
 # including the ones that succeed, because the clear-on-success half is what keeps
 # the alarm off a hub that merely blinked.

@@ -67,7 +67,7 @@
 # Exit 0 = pass, non-zero = fail.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
-FILES='fleet-daemon-watch.sh fleet-daemon-lib.sh usage-lib.sh tmux-status.sh'
+FILES='fleet-daemon-watch.sh fleet-daemon-lib.sh usage-lib.sh tmux-status.sh fleet-alerts.sh'
 for f in $FILES; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
@@ -146,7 +146,10 @@ lib()   { bash -c 'set -uo pipefail; . "$1/fleet-daemon-lib.sh"; shift; eval "$@
 watch() { bash "$WORK/bin/fleet-daemon-watch.sh" "$@" 2>>"$WORK/watch.err"; }
 # …and the same run with its stderr RETURNED (watch() files it away instead).
 watch_err() { { bash "$WORK/bin/fleet-daemon-watch.sh" "$@" >/dev/null; } 2>&1; }
-bar()   { bash "$WORK/bin/tmux-status.sh" 2>/dev/null; }
+# The bar only COUNTS alerts since issue #1238: render it (TTL 0 = rewrite the
+# alerts file every call), then print the bar, the rows, and the raw file (the
+# unit names ride in the daemon row's `detail`).
+bar()   { local b; b=$(FLEET_ALERTS_TTL=0 bash "$WORK/bin/tmux-status.sh" 2>/dev/null); printf '%s\n' "$b"; bash "$WORK/bin/fleet-alerts.sh" list --plain 2>/dev/null; cat "$G/alerts.ndjson" 2>/dev/null; }
 # tick <unit> <age-seconds> — stamp a unit as last scheduled that long ago.
 tick()  { printf '%s\n' "$(( $(now) - $2 ))" > "$G/$1.tick"; }
 
@@ -208,7 +211,7 @@ wipe
 [ -z "$(lib 'fleet_daemon_overdue cleanup '"$WORK")" ] || fail "3: alarmed with no stamp at all"; ok
 [ "$(watch --unit cleanup --status | cut -f1)" = never ] || fail "3: --status not never"; ok
 watch --unit cleanup; [ "$(kicks)" -eq 0 ] || fail "3: kicked a unit that never ticked"; ok
-case "$(bar)" in *"daemon stale"*) fail "3: bar alarmed with no stamps at all" ;; esac; ok
+case "$(bar)" in *"daemon · stale"*) fail "3: bar alarmed with no stamps at all" ;; esac; ok
 
 # --------------------------------------------------------------- 4. pended ----
 tick cleanup 900
@@ -286,23 +289,23 @@ printf '%s\n' "$tbl" | grep -q '^ledger-watch	' \
 wipe
 tick cleanup 900; tick dispatch 900; tick base-sync 900
 out="$(FLEET_DAEMON_KICK=0 bar)"
-case "$out" in *"⚠ daemon stale cleanup,dispatch+1"*) ok ;;
-  *) fail "9: bar did not name the stalled units with a +N overflow: $out" ;; esac
-# collect belongs to the `⚠ dash stale` segment and must not be listed twice.
+case "$out" in *"✖ 1 "*"daemon · stale · 3 units"*'"detail":"cleanup,dispatch,base-sync"'*) ok ;;
+  *) fail "9: bar did not count the stalled units, or the row lost their names: $out" ;; esac
+# collect belongs to the `dash · stale` row and must not be listed twice.
 wipe
 printf 'pid=1\nstart=%s\nphase=done\nphase_ts=%s\nend=%s\ndur=1\n' \
   "$(( $(now) - 900 ))" "$(( $(now) - 900 ))" "$(( $(now) - 900 ))" > "$G/collect.heartbeat"
 out="$(FLEET_DAEMON_KICK=0 bar)"
-case "$out" in *"dash stale"*) ok ;; *) fail "9: the collector segment is gone: $out" ;; esac
-case "$out" in *"daemon stale"*) fail "9: collect is named in BOTH segments: $out" ;; esac; ok
+case "$out" in *"dash · stale"*) ok ;; *) fail "9: the collector row is gone: $out" ;; esac
+case "$out" in *"daemon · stale"*) fail "9: collect is named in BOTH rows: $out" ;; esac; ok
 # Recovered, but recently kicked ⇒ the trace outlives the outage.
 rm -f "$G/collect.heartbeat"
 printf '%s\n' "$(now)" > "$G/cleanup.kick.ts"
 out="$(FLEET_DAEMON_KICK=0 bar)"
-case "$out" in *"↻ daemon kicked"*) ok ;; *) fail "9: recovery was silent — no aggregate trace: $out" ;; esac
+case "$out" in *"↻  daemon · stale · kicked"*) ok ;; *) fail "9: recovery was silent — no aggregate trace: $out" ;; esac
 printf '%s\n' "$(( $(now) - 99999 ))" > "$G/cleanup.kick.ts"
 out="$(FLEET_DAEMON_KICK=0 bar)"
-case "$out" in *"daemon kicked"*) fail "9: the trace outlived its window: $out" ;; esac; ok
+case "$out" in *"daemon · stale"*) fail "9: the trace outlived its window: $out" ;; esac; ok
 
 # --------------------------------------------------------------- 10. stamps ----
 # The alarm is only as armed as the stamps feeding it, and a daemon losing its
@@ -343,7 +346,7 @@ wipe; : > "$FAKE_KICK_LOG"
 tick cleanup 900
 FLEET_DAEMON_KICK=0 watch --unit cleanup
 [ "$(kicks)" -eq 0 ] || fail "11: kicked with FLEET_DAEMON_KICK=0"; ok
-case "$(FLEET_DAEMON_KICK=0 bar)" in *"⚠ daemon stale"*) ok ;;
+case "$(FLEET_DAEMON_KICK=0 bar)" in *"✖  daemon · stale"*) ok ;;
   *) fail "11: FLEET_DAEMON_KICK=0 also silenced the alarm" ;; esac
 # …and the collector's own #638 switch still only covers the collector.
 tick collect 900

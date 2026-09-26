@@ -71,8 +71,9 @@ grep -Eq '\-ge "\$MAX_AGE"' "$WAIT" \
 
 # --- PRODUCER (static): every modal popup is epoch-stamped + closed ------------
 # Count in CODE lines only (skip the comment block, which names the flag in prose).
-# One epoch stamp and one clear per display-popup surface; there are 4, all
-# prefix binds (b/c/u/?) — the acct one went with the ◉ account chip, #521; the
+# One epoch stamp and one clear per display-popup surface; there are 7: the
+# prefix binds b/c/u/?/! plus the alerts popup a tap on a status-bar count opens
+# (bound twice, root + the task sidebar's table — issue #1238) — the acct one went with the ◉ account chip, #521; the
 # other-fleet ● jump with fleet switching, #980; the fleet-name repo picker with
 # the picker itself, #1034; and the status-bar usage tap (bound twice, root +
 # the task sidebar's table) with the 5h/7d stat, #1100, its modal now prefix u.
@@ -80,7 +81,7 @@ grep -Eq '\-ge "\$MAX_AGE"' "$WAIT" \
 # 0 (#431).
 code_only() { grep -v '^[[:space:]]*#' "$CONF"; }
 npop=$(code_only | grep -c 'display-popup')
-[ "$npop" -eq 4 ] || fail "expected 4 display-popup binds in conf code (prefix b/c/u/?), found $npop"
+[ "$npop" -eq 7 ] || fail "expected 7 display-popup binds in conf code (prefix b/c/u/?/! + 2 alert-count taps), found $npop"
 nstamp=$(code_only | grep -c '@popup_open \$(date +%s)')
 nclose=$(code_only | grep -c '@popup_open 0')
 [ "$nstamp" -eq "$npop" ] \

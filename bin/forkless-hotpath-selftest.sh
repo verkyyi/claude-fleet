@@ -119,7 +119,7 @@ for u in $(fleet_daemon_unit_names); do printf '%s\n' "$now" > "$G/$u.tick"; don
 printf '%s\n' $((now - 10000)) > "$G/cleanup.tick"            # one overdue unit
 printf '5h 1.0M · 7d 2.0M' > "$G/usage"
 printf '%s\t42%% of weekly' "$now" > "$G/ratelimit"
-printf '%s\n' $((now - 1000)) > "$G/account.quota.ts"          # stale watch → ⚠ quota stale
+printf '%s\n' $((now - 1000)) > "$G/account.quota.ts"          # stale watch → ✖ quota · stale
 printf '0\t0\n' > "$G/account.quota.empty"
 : > "$WORK/exec.log"
 out=$(TMPDIR="$TMPD/" FLEET_LIVE_ROOT="$BIN/.." FLEET_ACCOUNTS_DIR="$WORK/acc" CCQUOTA_HUB_URL=http://127.0.0.1:9 \
@@ -128,8 +128,11 @@ case "$out" in *"CPU "*"MEM "*) ;; *) fail "tmux-status.sh lost a segment" "$out
 # The 5h/7d usage stat is gone from the bar (issue #1100) — a usage cache on
 # disk must NOT resurface it; the modal (prefix u) is its only reader now.
 case "$out" in *"5h "*|*"7d "*|*"range=user|usage"*) fail "tmux-status.sh still renders the 5h/7d usage stat (issue #1100)" "$out" ;; esac; CHECKS=$((CHECKS+1))
-case "$out" in *"⚠ quota stale 16m"*) ;; *) fail "tmux-status.sh: the stale quota watch must still show" "$out" ;; esac; CHECKS=$((CHECKS+1))
-case "$out" in *"⚠ daemon stale cleanup"*) ;; *) fail "tmux-status.sh: the overdue unit must still show" "$out" ;; esac; CHECKS=$((CHECKS+1))
+# The bar only COUNTS alerts now (issue #1238): both alarms land in one `✖ 2`,
+# and the rows themselves are in the file the render just (re)wrote.
+case "$out" in *"✖ 2 "*) ;; *) fail "tmux-status.sh: the two alarms must be counted" "$out" ;; esac; CHECKS=$((CHECKS+1))
+case "$(cat "$G/alerts.ndjson")" in *'"subject":"quota","condition":"stale","value":"16m"'*) ;; *) fail "tmux-status.sh: the stale quota watch must still be raised" "$(cat "$G/alerts.ndjson")" ;; esac; CHECKS=$((CHECKS+1))
+case "$(cat "$G/alerts.ndjson")" in *'"subject":"daemon","condition":"stale"'*'"detail":"cleanup"'*) ;; *) fail "tmux-status.sh: the overdue unit must still be raised" "$(cat "$G/alerts.ndjson")" ;; esac; CHECKS=$((CHECKS+1))
 [ "$(count date)" -le 1 ] || fail "tmux-status.sh forked date $(count date)× — one pinned clock per render (#888)"; CHECKS=$((CHECKS+1))
 for t in tr cut dirname uname cat; do
   eq "tmux-status.sh execs no $t (#888)" 0 "$(count "$t")"

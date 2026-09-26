@@ -1048,7 +1048,7 @@ account **$acct** hit its **$lm** cap (until $muntilt); the subscription itself 
     #              next tick asks again; one stderr line per banner, not per tick.
     #   limited  → bench until ccquota's own reset instant.
     #   unknown  → no fresh reading (stale / blind / not on the hub): the pre-#874
-    #              banner bench, and $G/quota.via-banner lights `⚠ quota via banner`.
+    #              banner bench, and $G/quota.via-banner raises `▲ quota · from banner`.
     axis=$(printf '%s\n' "$banner" | fleet_limit_axis)
     verdict=$("$BIN/fleet-account.sh" quota-verdict "$acct" ${axis:+--axis "$axis"} --refresh 2>/dev/null)
     case "$verdict" in

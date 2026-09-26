@@ -16,6 +16,11 @@ FLEET_ACCOUNT_LABEL                handoff: the Claude account label a launch wa
 FLEET_ACCOUNT_PHASE_WINDOW         knob: internal pacing/limit, safe in-code default (fleet-account.sh)
 FLEET_ACCOUNT_SELECTED             handoff: the account pick already ran for this launch
 FLEET_ACCOUNT_TARGET               handoff: the account a migrate/move relaunches on
+FLEET_ALERTS_ALLCAPPED_SECS        knob: how long an `accounts · all capped` stamp stays an alert (fleet-alerts.sh, 900)
+FLEET_ALERTS_DISK                  seam: 0 skips the alerts producer's own df (a selftest that counts df calls)
+FLEET_ALERTS_MUTE_SECS             knob: how long `m` in the alerts popup mutes a row (fleet-alerts.sh, 3600)
+FLEET_ALERTS_TRACE                 knob: how long a cleared alert keeps its ↻ row (fleet-alerts.sh, 1800)
+FLEET_ALERTS_TTL                   knob: status-bar refresh interval of alerts.ndjson (fleet-alerts.sh, 5; 0 = every render)
 FLEET_ANSWER_POLL                  knob: internal pacing/limit, safe in-code default (fleet-answer.sh)
 FLEET_ANSWER_TIMEOUT               knob: internal pacing/limit, safe in-code default (fleet-answer.sh)
 FLEET_AWAIT_ARMED                  handoff: fleet-await re-exec guard (alarm armed once)

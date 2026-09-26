@@ -12,7 +12,7 @@
 #   • ph_banner (the REAL phase, extracted from tmux-dash-collect.sh) against the
 #     REAL fleet-account.sh:
 #       ① fresh 7d 34% + weekly banner → no account.limited row, ONE forced fetch
-#       ② blind hub + banner → benched as before, `⚠ quota via banner` shown
+#       ② blind hub + banner → benched as before, `▲ quota · from banner` raised
 #       ③ Fable-cap banner → model-limited, whatever the reading says
 #       ④ fresh 7d at the ceiling + weekly banner → benched to ccquota's reset
 # The failover controller's half (a replayed banner is not HARD evidence) is in
@@ -136,7 +136,7 @@ tick
 eq "① fresh 7d 34% + weekly banner → NO account.limited row" "" "$(limited_row a)"
 eq "① …exactly one forced refetch" 1 "$(calls)"
 eq "① …no migrate/reconcile started" "" "$(cat "$WORK/bg.log")"
-eq "① …no ⚠ quota via banner" "" "$(via)"
+eq "① …no ▲ quota · from banner" "" "$(via)"
 grep -q 'a banner ignored — ccquota 7d reading has headroom' "$WORK/tick.err" || fail "① the ignored banner left no log line" "$(cat "$WORK/tick.err")"
 tick
 eq "① a second tick inside the dedupe window does not refetch" 1 "$(calls)"
@@ -148,8 +148,8 @@ reset_state; echo empty > "$MODE"; : > "$WORK/bg.log"
 tick
 [ -n "$(limited_row a)" ] || fail "② blind hub + banner did not bench (fallback lost)"
 eq "② …via the banner's own reset text, not ccquota" 1 "$(limited_row a | grep -c 'hit your weekly limit')"
-case "$(via)" in "a	"*) CHECKS=$((CHECKS+1)) ;; *) fail "② ⚠ quota via banner not raised" "$(via)" ;; esac
-grep -q 'quota via banner' "$BIN/tmux-status.sh" || fail "② status bar does not render ⚠ quota via banner"
+case "$(via)" in "a	"*) CHECKS=$((CHECKS+1)) ;; *) fail "② ▲ quota · from banner not raised" "$(via)" ;; esac
+grep -q "quota-banner warning quota 'from banner'" "$BIN/fleet-alerts.sh" || fail "② the alerts producer does not raise ▲ quota · from banner"
 eq "② the marker expires (VIA_BANNER_SECS)" "" "$(FLEET_ACCOUNT_QUOTA_VIA_BANNER_SECS=0 via)"
 
 # ③ a per-MODEL cap keeps its own signal, whatever ccquota says.
@@ -166,6 +166,6 @@ printf "You've hit your weekly limit · resets Sep 25, 7pm (Asia/Shanghai)\n" > 
 tick
 eq "④ fresh 7d 99% + weekly banner → benched until ccquota's 7d reset + 60s" "$(( R7 + 60 ))" "$(limited_row a | cut -f2)"
 eq "④ …the bench says ccquota decided" 1 "$(limited_row a | grep -c 'ccquota 7d at ceiling')"
-eq "④ …no ⚠ quota via banner" "" "$(via)"
+eq "④ …no ▲ quota · from banner" "" "$(via)"
 
 printf 'quota-verdict selftest: %d checks passed\n' "$CHECKS"
