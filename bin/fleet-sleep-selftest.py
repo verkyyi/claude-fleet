@@ -30,7 +30,10 @@ class SleepTest(unittest.TestCase):
         cls.wt=cls.root/'scratch-1'; cls.wt.mkdir()
         cls.sid='11111111-1111-4111-8111-111111111111'
         cls.transcript=cls.root/'history.jsonl'; cls.transcript.write_text('{}\n')
-        cls.env=dict(os.environ,FLEET_CONF_DIR=str(cls.root/'config'),FLEET_SLEEP_AFTER='1',FLEET_SLEEP='on')
+        # The page's digest never reaches a real model here (issue #1237): off by
+        # default, a fake FLEET_SLEEP_DIGEST_CMD where a test drives it; strings pinned to en.
+        cls.env=dict(os.environ,FLEET_CONF_DIR=str(cls.root/'config'),FLEET_SLEEP_AFTER='1',FLEET_SLEEP='on',
+                     FLEET_SLEEP_DIGEST='off',FLEET_UI_LANG='en')
         cls.agent=cls.root/'agent.py'
         cls.agent.write_text('''import os,sys,tty,json,subprocess,atexit
 servers=[]
@@ -283,11 +286,11 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
             self.tm('resize-window','-t',self.pane,'-x',str(cols),'-y',str(rows))
             screen=self.capture(lambda s:'─'*(cols-1) in s and 'reported back' in s)
             lines=screen.split('\n')
-            self.assertIn('Sleeping · #1049 sleeping-page',lines[0],screen)
+            self.assertIn('Sleeping · sleeping-page',lines[0],screen)
+            self.assertNotIn('#1049',screen)             # the sidebar row shows it (issue #1237)
+            self.assertRegex(lines[0],r'\d+s$')           # asleep age, right-aligned
             self.assertIn('Last reply',screen)
             self.assertIn('Shipped the fix and reported back.',screen)
-            self.assertIn('wakes on its own: incoming message',screen)
-            self.assertIn('asleep ',screen);self.assertIn('claude',screen)
             self.assertLessEqual(len(lines),rows)
             self.assertLessEqual(max(LIB['PARK']['width'](l) for l in lines),cols,screen)
         self.cli('wake',self.pane)
@@ -295,18 +298,25 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
     def test_park_card_fallback_and_states(self):
         P=LIB['PARK']
         data=dict(state='sleeping',created=time.time()-3700,evidence={'at':time.time()-5000},model='opus',
+                  rss_before_kb=900000,rss_parked_kb=1000,
                   source={'agent':'codex','label':'me@x','sleep_loop':{'record':{'status':'active','schedule':{'next_run_at':time.time()+600}}}},
                   screen='old work line\n'+'x'*300+'\n──────\n❯ \n──────\n  ◆ Opus status line')
-        out=P['render_park'](data,{'issue':'7','title':'t'},80,24)
+        out=P['render_park'](data,{'issue':'7','title':'t','repo':'o/r','prci':'✓','lang':'en'},80,24)
         plain=P['ANSI'].sub('',out).split('\n')
         self.assertEqual(len(plain),24)
         self.assertLessEqual(max(P['width'](l) for l in plain),80)
         self.assertIn('\x1b[2mold work line',out)          # the old screen, dimmed…
         self.assertIn('saved screen (old, not live)',out)  # …and marked as old
         self.assertNotIn('❯',out);self.assertNotIn('status line',out)
-        self.assertIn('asleep 1h 01m',out);self.assertIn('loop due ',out)
-        failed=P['render_park'](dict(data,state='failed',error='resume is not ready'),{},80,24)
-        self.assertIn('Wake failed',failed);self.assertIn('error: resume is not ready',failed)
+        self.assertEqual(plain[0].split(),['Sleeping','·','t','1h','01m'])
+        # Gone from the page (issue #1237): the sidebar or `status` has them.
+        for gone in ('#7','o/r','idle','asleep','codex','opus','me@x','MB freed','PR','checks','wakes on its own','incoming message'):
+            self.assertNotIn(gone,P['ANSI'].sub('',out),gone)
+        # A due loop is a NEXT item the worker does itself.
+        self.assertIn('NEXT',out);self.assertRegex(P['ANSI'].sub('',out),r'Auto +wakes by itself at \d\d:\d\d')
+        failed=P['render_park'](dict(data,state='failed',error='resume is not ready'),{'lang':'en'},80,24)
+        self.assertIn('Wake failed',failed);self.assertIn('resume is not ready',failed)
+        self.assertNotIn('error:',failed)
         self.assertIn('Waking…',P['render_park'](dict(data,state='waking'),{},80,24))
         self.assertIn('button',P['render_park'](data,{},80,24,footer_lines=['[ button ]']))
         self.assertIsNone(P['last_reply'](self.root/'no-such.jsonl'))
@@ -333,9 +343,94 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         git=lambda *a:subprocess.run(['git','-C',str(repo),'-c','user.name=t','-c','user.email=t@t',*a],check=True,capture_output=True)
         git('init','-q','-b','issue-7');(repo/'a').write_text('1');git('add','a');git('commit','-qm','a');(repo/'b').write_text('2')
         self.assertEqual(P['git_state'](repo),{'branch':'issue-7','dirty':1,'unpushed':1})
-        self.assertIn('work: 1 uncommitted, 1 unpushed on issue-7',P['render_park'](data,{'git':P['git_state'](repo)},80,24))
+        # Work at risk is ONE plain line, and only then — no branch, no counts.
+        risky=P['ANSI'].sub('',P['render_park'](data,{'git':P['git_state'](repo),'lang':'en'},80,24))
+        self.assertIn('⚠ Some changes are not saved to GitHub yet',risky);self.assertNotIn('issue-7',risky)
+        self.assertIn('⚠ 有改动还没保存到 GitHub',P['render_park'](data,{'git':{'dirty':0,'unpushed':2},'lang':'zh'},80,24))
+        safe=P['render_park'](data,{'git':{'branch':'b','dirty':0,'unpushed':0},'lang':'en'},80,24)
+        self.assertNotIn('⚠',safe);self.assertNotIn('clean',safe);self.assertNotIn('pushed',safe)
         tiny=P['ANSI'].sub('',P['render_park'](data,{'reply':'r'*500},20,5)).split('\n')
         self.assertLessEqual(len(tiny),5);self.assertLessEqual(max(P['width'](l) for l in tiny),20)
+
+    def test_park_card_digest_layout_and_fallback(self):
+        # Issue #1237: DONE / NEXT in plain words from the sleep record's digest;
+        # without one, the last reply with its markdown stripped.
+        P=LIB['PARK']
+        digest={'done':['用户可以用微信扫码登录','旧的登录入口已去掉；改动已合并，还没上线'],
+                'next':[{'who':'others','text':'还有 8 个活跃账号没绑定微信'},{'who':'you','text':'决定何时上线'}]}
+        data=dict(state='sleeping',created=time.time()-9120,digest=digest,
+                  source={'sleep_loop':{'record':{'status':'waiting-quota'}}})
+        reply='**Merged** [PR #12](https://github.com/o/r/pull/12); CI green.'
+        zh=P['ANSI'].sub('',P['render_park'](data,{'title':'只留微信登录','reply':reply,'lang':'zh'},60,20)).split('\n')
+        self.assertEqual(zh[0].split(),['Sleeping','·','只留微信登录','2h','32m'])
+        self.assertEqual(zh[2:5],['DONE','✓ 用户可以用微信扫码登录','✓ 旧的登录入口已去掉；改动已合并，还没上线'])
+        self.assertEqual(zh[5:10],['','NEXT','等别人  还有 8 个活跃账号没绑定微信','你      决定何时上线','自动    额度恢复后自动唤醒'])
+        self.assertNotIn('Last reply','\n'.join(zh));self.assertNotIn('Merged','\n'.join(zh))
+        en=P['ANSI'].sub('',P['render_park'](data,{'lang':'en'},60,20))
+        self.assertIn('Others  还有',en);self.assertIn('You     决定',en);self.assertIn('Auto    wakes by itself when quota returns',en)
+        self.assertLessEqual(max(P['width'](l) for l in zh+en.split('\n')),60)
+        # No digest — or a failed one — falls back to the plain last reply.
+        for none in (None,{'done':[],'next':[],'error':'timed out'}):
+            page=P['ANSI'].sub('',P['render_park'](dict(data,digest=none),{'reply':reply,'lang':'en'},60,20))
+            self.assertIn('Last reply',page);self.assertIn('Merged PR #12; CI green.',page)
+            self.assertNotIn('**',page);self.assertNotIn('https://',page);self.assertNotIn('DONE',page)
+            self.assertIn('Auto    wakes by itself when quota returns',page)
+        # A NEXT-only digest still draws without a DONE heading's items.
+        only=P['ANSI'].sub('',P['render_park'](dict(data,digest={'done':[],'next':[{'who':'you','text':'review'}]},source={}),{'lang':'en'},60,12))
+        self.assertIn('You     review',only)
+        # gather() skips the transcript once a digest stands in for the reply.
+        self.assertNotIn('reply',P['gather'](dict(data,source={'transcript':str(self.transcript)}),{}))
+
+    def test_digest_prompt_and_parse(self):
+        P=LIB['PARK']
+        data={'source':{'sleep_loop':{'record':{'status':'waiting-quota'}}}}
+        prompt=P['digest_prompt'](data,{'title':'wechat login','reap_key':'merged:12:x'},'I merged it.','zh')
+        for want in ('Simplified Chinese','wechat login','merged into the main line, not released yet',
+                     'wakes by itself when quota returns','I merged it.','"done"','"next"','Never mention files'):
+            self.assertIn(want,prompt)
+        self.assertIn('English',P['digest_prompt']({},{},'x','en'))
+        self.assertIn('no change submitted',P['digest_prompt']({},{},'x','en'))
+        got=P['parse_digest']('Sure!\n```json\n{"done":["a **b**","c","d","e"],"next":[{"who":"x","text":"[f](http://g)"},{"who":"you"},"h"]}\n```')
+        self.assertEqual(got,{'done':['a b','c','d'],'next':[{'who':'others','text':'f'}]})
+        for bad in ('','nope','{"done":[],"next":[]}','[1]','{"done":'):
+            self.assertIsNone(P['parse_digest'](bad),bad)
+
+    def test_page_fills_its_digest_after_park_and_redraws(self):
+        # Issue #1237: the park page launches the digest once, detached; it lands
+        # in the record and the page redraws with it. The fake model sees the
+        # prompt (with the last reply) on stdin.
+        entry={'type':'assistant','message':{'content':[{'type':'text','text':'Landed the **login** change.'}]}}
+        saved=self.transcript.read_text()
+        self.transcript.write_text(saved+json.dumps(entry)+'\n')
+        self.addCleanup(self.transcript.write_text,saved)
+        seen=self.root/'digest-prompt'
+        fake=('cat > '+str(seen)+'; echo \'{"done":["Login works with WeChat now"],'
+              '"next":[{"who":"you","text":"Pick a release day"}]}\'')
+        self.cli('sleep',self.pane,FLEET_SLEEP_DIGEST='on',FLEET_SLEEP_DIGEST_CMD=fake)
+        screen=self.capture(lambda s:'Pick a release day' in s,timeout=15)
+        self.assertIn('✓ Login works with WeChat now',screen)
+        self.assertNotIn('Last reply',screen)
+        self.assertIn('Landed the **login** change.',seen.read_text())
+        record=json.loads(Path(self.opt('@sleep_record')).read_text())
+        self.assertEqual(record['digest']['next'],[{'who':'you','text':'Pick a release day'}])
+        self.assertEqual(record['state'],'sleeping')
+        self.cli('wake',self.pane)
+
+    def test_failed_digest_is_recorded_once_and_keeps_the_reply(self):
+        entry={'type':'assistant','message':{'content':[{'type':'text','text':'Plain fallback reply.'}]}}
+        saved=self.transcript.read_text()
+        self.transcript.write_text(saved+json.dumps(entry)+'\n')
+        self.addCleanup(self.transcript.write_text,saved)
+        self.cli('sleep',self.pane,FLEET_SLEEP_DIGEST='on',FLEET_SLEEP_DIGEST_CMD='cat >/dev/null; exit 3')
+        path=Path(self.opt('@sleep_record'))
+        until=time.monotonic()+15
+        while 'digest' not in json.loads(path.read_text()) and time.monotonic()<until: time.sleep(.1)
+        self.assertEqual(json.loads(path.read_text())['digest'],{'done':[],'next':[],'error':'model exit 3'})
+        self.assertIn('Plain fallback reply.',self.capture(lambda s:'Plain fallback reply.' in s))
+        # A second run for the same record is a no-op, never a retry.
+        again=self.cli('digest',self.pane,FLEET_SLEEP_DIGEST_CMD='echo {}')
+        self.assertIn('already digested',again.stdout)
+        self.cli('wake',self.pane)
 
     def test_restore_rebinds_saved_record_without_starting_agent(self):
         self.cli('sleep',self.pane)
