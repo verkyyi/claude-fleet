@@ -304,7 +304,11 @@ override them):
      ```
 
      It reads the `origin:` line the brief printed (your window's `@origin`) and
-     pushes a fixed 4-line report to that session over the peer channel. **A
+     pushes a fixed 4-line report to that session over the peer channel.
+     `--state merged` is checked against the PR's real `.merged` first (issue
+     #1247): report only after the confirming verdict reads `MERGED` — an armed
+     auto-merge is not a landing, and the script re-files it as a silent WAITING
+     (with a `NOT reporting MERGED` note on stderr) rather than send it. **A
      hub-spawned worker needs no special case**: with no parent — or a parent that
      has already been reaped — it exits 0 silently, so this is one unconditional
      line on every ship path, never a decision. It cannot fail your merge.
