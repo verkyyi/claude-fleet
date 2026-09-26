@@ -17,6 +17,10 @@
 #                 permission / blocked / waiting / failed; empty @issue safe);
 #                 a writer with no tmux keeps the previous needs rows
 #   8. degenerate — nothing configured: no rows, blank fixed-width bar
+#  10. act      — ↵ on a kick row returns at once (the kick runs detached and
+#                 toasts its outcome); kick-daemons passes ONLY the row's
+#                 detail units as --unit, never --force; a healed row kicks
+#                 nothing; kick-collect is `--unit collect --force` (#1242)
 #   9. wording  — `pace spread` / `quota blind` / `via banner` /
 #                 `no locally reachable` appear nowhere in bin/; `prefix !` is
 #                 bound and on the cheatsheet
@@ -190,6 +194,63 @@ eq "8: nothing configured → no rows" "" "$(cat "$G/alerts.ndjson")"
 eq "8: …and the bar is blank slots of the same width" "$w0" "$(vis "$(fa bar)")"
 case "$(fa bar | sed 's/#\[[^]]*\]//g')" in *✖*|*▲*|*[0-9]*) fail "8: a count on an empty fleet" "$(fa bar)" ;; *) ok ;; esac
 
+# ------------------------------------------------------------------- 10. act ----
+# A sandbox bin/: the real producer + libs, a fake fleet-daemon-watch.sh that is
+# slow (so a blocking act shows) and answers each unit the way the real one does.
+SB="$WORK/sbin"; mkdir -p "$SB"
+for f in fleet-alerts.sh usage-lib.sh fleet-daemon-lib.sh; do ln -s "$BIN/$f" "$SB/$f"; done
+cat > "$SB/fleet-daemon-watch.sh" <<EOF
+#!/bin/bash
+printf '%s\\n' "\$*" >> "$WORK/watch.args"
+sleep 3
+while [ \$# -gt 0 ]; do
+  [ "\$1" = --unit ] && case "\$2" in
+    pr-refresh) echo "fleet-daemon-watch: pr-refresh stale 400s but a tick is RUNNING — not kicked (wedged at 900s; --force --now aborts it now)" >&2 ;;
+    cleanup)    echo "fleet-daemon-watch: cleanup — skip, kicked 20s ago (cooldown 180s); still stale 300s" >&2 ;;
+    collect)    echo "fleet-daemon-watch: collect stale 0s — kicked gui/501/com.claude-fleet.collect (launchd), rc=0" >&2 ;;
+  esac
+  shift
+done
+exit 0
+EOF
+chmod +x "$SB/fleet-daemon-watch.sh"
+cat > "$WORK/shim/tmux" <<EOF
+#!/bin/sh
+case "\$1" in
+  display-message) printf '%s\\n' "\$2" >> "$WORK/toasts" ;;
+  run-shell) [ "\$2" = -b ] && { sh -c "\$3" </dev/null >/dev/null 2>&1 & } ;;
+esac
+exit 0
+EOF
+chmod +x "$WORK/shim/tmux"
+sact() { TMUX=/tmp/fake,1,0 PATH="$WORK/shim:$PATH" bash "$SB/fleet-alerts.sh" act "$1"; }
+await_toast() {  # <pattern> — the background half's closing toast, ≤10s
+  local i=0
+  while [ "$i" -lt 50 ]; do grep -q "$1" "$WORK/toasts" 2>/dev/null && return 0; i=$((i+1)); sleep 0.2; done
+  return 1
+}
+rm -f "$G"/alerts.* "$WORK/toasts" "$WORK/watch.args"
+printf '{"id":"daemon-stale","severity":"alarm","subject":"daemon","condition":"stale","value":"2 units","since":%s,"action":"kick-daemons","healed_at":0,"target":"","detail":"pr-refresh,cleanup,bogus"}\n' "$(now)" > "$G/alerts.ndjson"
+t0=$(now); sact daemon-stale; t1=$(now)
+[ $(( t1 - t0 )) -lt 2 ] || fail "10: act blocked on the kick ($(( t1 - t0 ))s; the watch sleeps 3s)"; ok
+case "$(cat "$WORK/toasts" 2>/dev/null)" in *"requested: pr-refresh,cleanup"*) ok ;; *) fail "10: no immediate toast naming the units" "$(cat "$WORK/toasts" 2>/dev/null)" ;; esac
+await_toast 'daemon restart ·' || fail "10: the background kick never toasted its outcome" "$(cat "$WORK/toasts" 2>/dev/null)"; ok
+eq "10: only the row's units, no --force, unknown names dropped" "--unit pr-refresh --unit cleanup" "$(cat "$WORK/watch.args")"
+last=$(tail -1 "$WORK/toasts")
+case "$last" in *"running, not touched pr-refresh"*"cooldown cleanup"*) ok ;; *) fail "10: outcome toast" "$last" ;; esac
+case "$last" in *kicked*) fail "10: nothing was kicked, the toast says kicked" "$last" ;; *) ok ;; esac
+rm -f "$WORK/toasts" "$WORK/watch.args"
+printf '{"id":"daemon-stale","severity":"healed","subject":"daemon","condition":"stale","value":"kicked","since":%s,"action":"kick-daemons","healed_at":%s,"target":"","detail":"self-healed by a kick"}\n' "$(now)" "$(now)" > "$G/alerts.ndjson"
+sact daemon-stale
+case "$(cat "$WORK/toasts")" in *"nothing to do"*) ok ;; *) fail "10: a healed row should kick nothing" "$(cat "$WORK/toasts")" ;; esac
+sleep 0.5; [ ! -e "$WORK/watch.args" ] || fail "10: a healed row ran the watch" "$(cat "$WORK/watch.args")"; ok
+printf '{"id":"dash-stale","severity":"alarm","subject":"dash","condition":"stale","value":"5m","since":%s,"action":"kick-collect","healed_at":0,"target":"","detail":"x"}\n' "$(now)" > "$G/alerts.ndjson"
+t0=$(now); sact dash-stale; t1=$(now)
+[ $(( t1 - t0 )) -lt 2 ] || fail "10: kick-collect blocked ($(( t1 - t0 ))s)"; ok
+await_toast 'kicked collect' || fail "10: kick-collect outcome toast" "$(cat "$WORK/toasts" 2>/dev/null)"; ok
+eq "10: kick-collect = --unit collect --force" "--unit collect --force" "$(cat "$WORK/watch.args")"
+rm -f "$G"/alerts.* "$WORK/toasts"
+
 # ---------------------------------------------------------------- 9. wording ----
 hits=$(grep -rn 'pace spread\|quota blind\|via banner\|no locally reachable' "$BIN" 2>/dev/null | grep -v 'fleet-alerts-selftest.sh')
 eq "9: the old wording is gone from bin/" "" "$hits"
@@ -199,4 +260,4 @@ grep -q '^bind ! .*fleet-alerts.sh popup' "$BIN/../conf/tmux-attention.conf" || 
 [ "$(grep -c 'key "prefix !"' "$BIN/fleet-keys.sh")" = 2 ] || fail "9: prefix ! missing from the cheatsheet (zh + en)"; ok
 grep -q 'fleet_alerts_refresh --kick' "$BIN/tmux-status.sh" || fail "9: the bar no longer refreshes the producer"; ok
 
-printf 'selftest PASS: %d assertions (width · quota · since · mute · actions · accounts · needs · degenerate · wording)\n' "$CHECKS"
+printf 'selftest PASS: %d assertions (width · quota · since · mute · actions · accounts · needs · degenerate · act · wording)\n' "$CHECKS"

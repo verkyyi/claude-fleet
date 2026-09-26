@@ -38,7 +38,8 @@
 #   fleet-alerts.sh list [--level L] [--plain]   the popup's rows (L = alarm |
 #                                    warning | needs | all)
 #   fleet-alerts.sh mute <id>        silence a warning/needs for 1h (never an alarm)
-#   fleet-alerts.sh act <id>         run the row's action
+#   fleet-alerts.sh act <id>         run the row's action (a kick detaches:
+#                                    `kick` is its background half, #1242)
 #   fleet-alerts.sh popup [--level L]  the `prefix !` popup (fzf)
 #
 # Sourced (tmux-status.sh does, every 5s per client) it only defines functions;
@@ -406,21 +407,92 @@ fleet_alerts_mute() {
   printf '%s%s\t%s\n' "$keep" "$id" $(( now + ${FLEET_ALERTS_MUTE_SECS:-3600} )) > "$mf.$$" && mv -f "$mf.$$" "$mf"
 }
 
-# fleet_alerts_act <id> — do the row's one action.
+# _fa_detach <cmd> — run <cmd> detached from the popup, so ↵ closes it at once
+# (issue #1242: a kick run inline held a blank popup open for seconds). Inside
+# tmux it is `run-shell -b` (fleet_bg's idiom — the job belongs to the server,
+# not to the popup that is about to die); outside, a nohup'd double fork.
+_fa_detach() {
+  if [ -n "${TMUX:-}" ]; then
+    tmux run-shell -b "( $1
+) >/dev/null 2>&1 || :" 2>/dev/null && return 0
+  fi
+  ( nohup sh -c "$1" </dev/null >/dev/null 2>&1 & ) >/dev/null 2>&1
+}
+
+# _fa_kick_units <detail> — the stale units a kick-daemons row names (its detail
+# is the comma list the compute step wrote), known units only, space-separated.
+# A ↻ healed row's detail is a sentence, which yields nothing — nothing to kick.
+_fa_kick_units() {
+  local u out="" d="${1:-}"
+  # Split on the default IFS: fleet_daemon_known `read`s the registry with it.
+  for u in ${d//,/ }; do
+    [ -n "$u" ] && fleet_daemon_known "$u" 2>/dev/null && out="${out:+$out }$u"
+  done
+  printf '%s' "$out"
+}
+
+# fleet_alerts_kick <action> [unit…] — the background half of a kick (issue #1242):
+# run fleet-daemon-watch on exactly these units — NO --force for kick-daemons, so
+# the cooldown and the running-tick guard hold and a healthy unit is never kicked
+# — then toast what happened to each: kicked / running (not touched) / cooldown /
+# not loaded / fresh (already ticking again, nothing done).
+fleet_alerts_kick() {
+  local ac="${1:-}" out u line k="" r="" c="" n="" x="" f="" msg a
+  shift
+  case "$ac" in
+    kick-collect) out=$(bash "$_FA_BIN/fleet-daemon-watch.sh" --unit collect --force </dev/null 2>&1) ;;
+    kick-daemons)
+      [ $# -gt 0 ] || { tmux display-message 'fleet: daemon restart — no stale unit named, nothing to do' 2>/dev/null; return 0; }
+      a=""; for u in "$@"; do a="$a --unit $u"; done
+      # shellcheck disable=SC2086  # $a is --unit <known name> pairs, word-split on purpose
+      out=$(bash "$_FA_BIN/fleet-daemon-watch.sh" $a </dev/null 2>&1) ;;
+    *) return 1 ;;
+  esac
+  [ "$ac" = kick-collect ] && set -- collect
+  for u in "$@"; do
+    line=$(printf '%s\n' "$out" | grep "^fleet-daemon-watch: $u " | tail -1)
+    case "$line" in
+      '') f="${f:+$f,}$u" ;;
+      *'is RUNNING but WEDGED'*|*' — kicked '*|*RELOADED*|*bootstrapped*) k="${k:+$k,}$u" ;;
+      *'a tick is RUNNING'*) r="${r:+$r,}$u" ;;
+      *cooldown*) c="${c:+$c,}$u" ;;
+      *'not loaded'*|*FAILED*) n="${n:+$n,}$u" ;;
+      *) x="${x:+$x,}$u" ;;
+    esac
+  done
+  msg=""
+  [ -n "$k" ] && msg="$msg · kicked $k"
+  [ -n "$r" ] && msg="$msg · running, not touched $r"
+  [ -n "$c" ] && msg="$msg · cooldown $c"
+  [ -n "$n" ] && msg="$msg · not loaded $n"
+  [ -n "$f" ] && msg="$msg · fresh $f"
+  [ -n "$x" ] && msg="$msg · ? $x"
+  tmux display-message "fleet: daemon restart${msg}" 2>/dev/null
+  return 0
+}
+
+# fleet_alerts_act <id> — do the row's one action. A kick returns at once and
+# finishes in the background (fleet_alerts_kick toasts the outcome).
 fleet_alerts_act() {
-  local id="${1:-}" f line ac="" ta=""
+  local id="${1:-}" f line ac="" ta="" de="" units self
   f=$(fleet_alerts_file)
   [ -f "$f" ] && while IFS= read -r line; do
-    [[ $line =~ $_FA_RE ]] && [ "${BASH_REMATCH[1]}" = "$id" ] && { ac=${BASH_REMATCH[7]}; ta=${BASH_REMATCH[9]}; break; }
+    [[ $line =~ $_FA_RE ]] && [ "${BASH_REMATCH[1]}" = "$id" ] && { ac=${BASH_REMATCH[7]}; ta=${BASH_REMATCH[9]}; de=${BASH_REMATCH[10]}; break; }
   done < "$f"
+  self="bash '$_FA_BIN/fleet-alerts.sh'"
   case "$ac" in
     accounts) exec bash "$_FA_BIN/usage-modal.sh" ;;
     kick-collect)
-      bash "$_FA_BIN/fleet-collect-kick.sh" --force </dev/null >/dev/null 2>&1
-      tmux display-message 'fleet: dash (collector) restart requested' 2>/dev/null ;;
+      tmux display-message 'fleet: dash (collector) restart requested…' 2>/dev/null
+      _fa_detach "$self kick kick-collect" ;;
     kick-daemons)
-      bash "$_FA_BIN/fleet-daemon-watch.sh" --force </dev/null >/dev/null 2>&1
-      tmux display-message 'fleet: stale daemons restart requested' 2>/dev/null ;;
+      units=$(_fa_kick_units "$de")
+      if [ -z "$units" ]; then
+        tmux display-message 'fleet: daemon restart — no stale unit named, nothing to do' 2>/dev/null
+      else
+        tmux display-message "fleet: daemon restart requested: ${units// /,}…" 2>/dev/null
+        _fa_detach "$self kick kick-daemons $units"
+      fi ;;
     disk)
       df -h "${ta:-${TMPDIR:-/tmp}}" 2>/dev/null
       printf '\n'; bash "$_FA_BIN/fleet-diskguard.sh" --free 2>/dev/null
@@ -498,6 +570,7 @@ if [ "${BASH_SOURCE[0]:-}" = "$0" ]; then
     list) fleet_alerts_list "$@" ;;
     mute) fleet_alerts_mute "$@" ;;
     act) fleet_alerts_act "$@" ;;
+    kick) fleet_alerts_kick "$@" ;;             # act's detached half
     popup) fleet_alerts_popup "$@" ;;
     rows) fleet_alerts_rows "$@" ;;              # the popup's own reloads
     popup-mute) fleet_alerts_popup_mute "$@" ;;  # the popup's `m`
