@@ -333,6 +333,58 @@ login sets it. The rule is the same either way: the directory is per-uid and
 
 ---
 
+### The whole walk in one command (smoke test)
+
+Every time the onboarding flow changes, prove it on a throwaway login instead
+of walking one by hand (issue #1218 — the two batch-end runs before it each
+missed a step or left something behind, #1210). As the admin, from any
+directory, after `sudo -v`:
+
+```sh
+sudo -v
+~/.claude/fleet/bin/fleet-login-smoke.sh                 # opens smoke-<MMDDHHMM>, walks it, removes it
+~/.claude/fleet/bin/fleet-login-smoke.sh --login fleettest2 --keep   # leave it up for a look; offboard by hand later
+```
+
+It runs, in order, one `PASS` / `FAIL` line each — and a failed step still
+ends in the teardown, so nothing stays behind:
+
+1. **open** — `fleet-login-new.sh <login> --share-pool --apply`, run from your
+   own home (a 0700 directory, #1210 ④) with no `--pubkey`, so the temporary
+   key and the welcome letter are made the real way; reads `installed N/N`.
+2. **welcome** — `~/<login>-onboard/welcome.txt` is 600 and carries the ssh
+   line, the private key block, the ssh-config snippet, the key swap and
+   `cf --guide`. An unset `FLEET_SSH_PUBLIC_HOST` is a WARN, not a FAIL.
+3. **login** — `ssh -tt <login>@127.0.0.1` with that key, inside a tmux server
+   of its own (`-L fleet-smoke-<login>`, never the live one), until the login's
+   `global/bootstrapped` appears (read as the login: its home is 0700). A
+   `fleet-login-bootstrap: <step>: FAIL` in the pane fails it at once;
+   `--timeout` (900s) bounds it. `bootstrap.applied` is #1210 ②.
+4. **guide** — `global/guide.spoke` (the guide really spoke, #1215), then
+   `global/onboarded`; `onboarded` without `guide.spoke` is #1210 ③ and fails.
+5. **capture** — `tmux capture-pane -p -t fleet:guide` as the login, printed
+   inline (the EPIC's evidence line). `Unknown command` fails it.
+6. **doctor** — the login's `fleet-doctor-onboard.sh`; «manual steps left» =
+   its `needs:` items minus the person's own (Codex device code, `gh auth
+   login`, the temporary-key swap). Anything else is a FAIL naming it.
+7. **daemons** — every template of the login's clone is loaded as
+   `system/com.claude-fleet.<login>.<unit>` (#1210 ①).
+8. **offboard** — `fleet-login-remove.sh <login> --apply`, the default path
+   (archive, then delete — #1210 ⑤; `--delete-home` passes through). The
+   archive it made is checked (600) and removed: a smoke login's home holds
+   nothing. `--keep` skips this and the next step and prints the command.
+9. **residue** — no login record, home, plist, loaded service, process, or
+   `com.apple.access_*` entry is left.
+
+The summary is followed by the three readings of EPIC #1212 (manual steps
+left, #1210 defects still open out of 5, letters to write by hand). Exit 0
+means every step passed; 1 a step failed (the teardown still ran); 2 usage or
+preflight; 3 the login already exists. Every child transcript and the pane
+captures stay in the run's log dir (printed on the second line); the
+temporary key, password and letter go with the login. Never run it from a
+fleet worker — it opens a real login and needs sudo; its selftest
+(`fleet-login-smoke-selftest.sh`) runs it against PATH shims only.
+
 ## Offboarding a person
 
 As the admin login, preview and then offboard the person:

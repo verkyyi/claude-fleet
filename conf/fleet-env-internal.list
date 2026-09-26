@@ -158,6 +158,11 @@ FLEET_SESSION                      handoff: the fleet session a pane/popup belon
 FLEET_SESSION_END_REASON           handoff: why the SessionEnd hook fired (set by the stopper)
 FLEET_SIDEBAR_CURRENT              handoff: the window id the sidebar is rendering for
 FLEET_SKIP_GLOBAL_CONF             seam: fleet-lib skips the install fleet.conf (tests / isolated tools)
+FLEET_SMOKE_ONBOARD_SECS           knob: internal pacing/limit, safe in-code default (fleet-login-smoke.sh)
+FLEET_SMOKE_POLL_SECS              knob: internal pacing/limit, safe in-code default (fleet-login-smoke.sh)
+FLEET_SMOKE_SSH_HOST               seam: where the smoke run's ssh -tt connects (127.0.0.1); --ssh-host is the operator's face (fleet-login-smoke.sh)
+FLEET_SMOKE_SSH_PORT               seam: the sshd port the smoke run connects to (22); --ssh-port is the operator's face (fleet-login-smoke.sh)
+FLEET_SMOKE_TIMEOUT                knob: internal pacing/limit, safe in-code default; --timeout is the operator's face (fleet-login-smoke.sh)
 FLEET_SPAWN_GUARD_SLEEP            knob: internal pacing/limit, safe in-code default (dash-enter.sh)
 FLEET_SPAWN_TAIL                   handoff: spawn only the seed tail (used by the handoff/resume path)
 FLEET_STATUS_CACHE                 path: status-bar render cache file
