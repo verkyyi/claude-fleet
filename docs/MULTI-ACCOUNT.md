@@ -397,10 +397,17 @@ see [the ranking](#which-account-a-new-spawn-lands-on-issue-598) for what "best"
 means. Everything fails open: no ccquota on `PATH`, no URL, an unreachable hub or
 an `unknown` verdict → no rows → the banner path above, unchanged.
 
-### Which account a new spawn lands on (issue #598)
+### Which account a new spawn lands on (issues #598, #1231)
 
-The ranking is `5h-headroom × 2 + 7d-headroom`, over the eligible accounts the
-ceiling has not already thrown out. **The 5-hour window counts double because it
+The ranking is `5h-headroom × 2 + (100 − weekly pace) × 20`, over the eligible
+accounts the ceiling has not already thrown out — the #598 score below with its
+flat 7d term replaced by the **weekly pace** (next section). `FLEET_ACCOUNT_PICK=5h`
+restores the #598 score, `minmax` the one before it.
+
+#### The #598 half: the 5-hour window counts double
+
+Under `5h` the ranking is `5h-headroom × 2 + 7d-headroom`, and the 5h term is
+unchanged in `pace`. **The 5-hour window counts double because it
 expires**: whatever a window does not spend evaporates at its reset and can never
 be recovered, while weekly headroom just sits there. The 7-day term still counts,
 so an account one spawn away from its weekly ceiling does not win on a fresh 5h
@@ -424,6 +431,80 @@ window.
 
 `FLEET_ACCOUNT_PICK=minmax` restores the old answer — a one-line rollback, not a
 recommendation.
+
+### Pacing the weekly budget across the pool (issue #1231)
+
+#598 fixed the 5-hour waste and created a weekly one. Its 7d term is a flat
+0..100 under a 5h term worth 0..200, so an account with a **fresh 5h window**
+outscored one with a half-spent window whatever their weeks looked like. Live
+pool, 2026-09-25 ~15:50 PT:
+
+```
+24helpful   5h  2% · 7d 90%   score 206   (7d resets in 31h)
+icloud      5h  0% · 7d 90%   score 210   (7d resets in 67h)
+ly297       5h  1% · 7d 86%   score 212   (7d resets in 54h)
+gmail       5h 72% · 7d 45%   score 111   (7d resets in 159h)
+```
+
+Only the 85% ceiling ever stopped a spawn landing on the top three, so spawns
+went to whichever account was **closest to exhausting its week** until each hit
+the ceiling in turn: three of four benched for one to three days, the EPIC driver
+dead with them, and ~45% of gmail's week unused. The weekly budget is the scarcer
+resource — a 5h window comes back in five hours, a benched week in days.
+
+**The pace.** For each account with a ccquota row,
+
+```
+elapsed = 1 − (7d-reset − now) / 7d          (clamped to 0..1)
+pace    = 7d-utilization − CEILING × elapsed  (points; + = ahead of an even burn, − = behind)
+```
+
+is how far ahead of, or behind, an even burn of the week's *spendable* budget
+(the ceiling, not 100) the account is. At an even fleet-wide burn it is also, to a
+constant, the hours the account would sit **benched** before its reset (ahead) or
+the budget it would leave **unspent** at the reset (behind) — which is why the
+score ranks *behind* up: that budget evaporates at the weekly reset exactly the
+way an idle 5h window does at its own. No 7d reset in the row ⇒ pace 0, no
+opinion.
+
+**The score** is `5h-headroom × 2 + (100 − pace) × W`, with `W = 200 /
+FLEET_ACCOUNT_PACE_LEAD` (default 20): a weekly lead of `PACE_LEAD` points (10) is
+worth an entire 5h window, so within a lead that size the 5h window still decides
+— accounts on the same pace get exactly #598's answer — and beyond it the week
+does. Two rails sit on top of the score, both **fail-open** the way a phase slot
+is (they can never be the reason a spawn has no account): an account more than
+`FLEET_ACCOUNT_PACE_HOLD` (25) points ahead, or with its 7d within
+`FLEET_ACCOUNT_PACE_MARGIN` (5) of the ceiling, is **held** for new spawns.
+`fleet-account.sh list` shows `pace ±N` per account (red = held, yellow = more
+than a 5h window ahead); `fleet-account.sh pace` prints the table.
+
+**Running sessions move too — gently.** The ceiling branch is a cliff: nothing
+until 85%, then every session on the account at once. The quota watch now also,
+every tick, mirrors the pace table to `global/quota.pace` and, when the
+most-ahead un-benched account leads the *current pick* (`fleet-account.sh
+active`, which honours the holds) by `FLEET_ACCOUNT_PACE_REBALANCE` (15) points or
+more while that pick is itself on pace with 5h room (under `FLEET_ACCOUNT_WARN_PCT`),
+moves **one idle session** (done/needs — a working turn is worth more than the
+points it spends) off the leader per fleet — `migrate --idle --from <leader>
+--max 1` — then waits `FLEET_ACCOUNT_PACE_COOLDOWN` (600 s) before the next. A
+lead closes one cold boot at a time and a pick that flips never ping-pongs a
+session. `FLEET_ACCOUNT_PACE_REBALANCE=0` switches the moves off; the table is
+still written. A fleet on the failover planner (`FLEET_FAILOVER=1`) is left to
+the planner, as the ceiling branch leaves it.
+
+**Visibility.** The status bar shows `⚠ quota pace spread N` (yellow) when the
+most-ahead and most-behind accounts are more than `FLEET_ACCOUNT_PACE_SPREAD_WARN`
+(30) points apart — one week is being drained while another sits unused, and
+`list` names them. Codex subscriptions get the same pace and score in the
+provider-aware selector (`.fleet-account.py`), so the batch driver is placed by
+the same rule as a worker.
+
+On the 2026-09-25 rows above the three hot accounts are held (and over the
+ceiling) and gmail wins; two days earlier, when all four were under the ceiling
+(`24helpful 7d 72% · icloud 60% · ly297 65% · gmail 30%`, gmail a day from its
+reset), the old score sent the spawn to ly297 at 235 vs gmail's 160 and the pace
+score sends it to gmail at 2790 vs ly297's 1560 — which is the spawn that would
+have spent the week that went unused.
 
 ### Staggering the 5h windows so they don't all reset together (issue #598)
 

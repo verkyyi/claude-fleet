@@ -82,6 +82,14 @@ sel   "all: working off-active"       all      acctA working  acctB  0  ""
 unsel "all: on active"                all      acctB working  acctB  0  ""
 sel   "account: match"                account  acctA "done"     acctB  0  acctA
 unsel "account: other"                account  acctB "done"     acctB  0  acctA
+# --from narrows --idle / --all to windows on that label (issue #1231: the pace
+# rebalance moves one idle session off the most-ahead account). <wanted> carries
+# the --from label; empty = any (the historic --idle / --all).
+sel   "idle --from: match"            idle     acctA "done"     acctB  0  acctA
+unsel "idle --from: other label"      idle     acctC "done"     acctB  0  acctA
+unsel "idle --from: match but active" idle     acctB "done"     acctB  0  acctB
+sel   "all --from: match"             all      acctA working  acctB  0  acctA
+unsel "all --from: other label"       all      acctC working  acctB  0  acctA
 sel   "explicit: always"              explicit ""    ""       ""     0  ""
 # --stuck (issue #873) selects on the failover planner's @quota_stuck mark alone
 ok; migrate_selected stuck acctA working acctB 0 "" 1 || fail "stuck: a @quota_stuck=1 window must be selected"

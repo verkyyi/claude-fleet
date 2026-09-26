@@ -94,6 +94,49 @@ class Providers(unittest.TestCase):
         b['hold_until']=time.time()+100
         self.assertEqual(accounts.choose({'accounts':[a,b]},'claude',current='claude/b')['target']['account'],'b')
 
+    def test_pace_ranks_the_week_and_holds_far_ahead(self):
+        # issue #1231: the shortest window is the expiring one, the longest the week;
+        # pace = week% − 85 × elapsed; a lead of 10 points outweighs a whole 5h window.
+        # setUp pins the class to the #598 `5h` score; this test is the `pace` default.
+        self.patch.stop(); self.patch = patch.dict(os.environ, FLEET_C=str(self.root), FLEET_ACCOUNT_CEILING='85',
+                                                   FLEET_ACCOUNT_PICK='pace', FLEET_ACCOUNT_PICK_HYST='10')
+        self.patch.start()
+        now = 1_000_000
+        ahead = dict(available=True, windows=[dict(id='codex:primary', minutes=300, utilization=0, resets_at=now + 3600),
+                                              dict(id='codex:week', minutes=10080, utilization=65, resets_at=now + 6 * 86400)])
+        behind = dict(available=True, windows=[dict(id='codex:primary', minutes=300, utilization=60, resets_at=now + 3600),
+                                               dict(id='codex:week', minutes=10080, utilization=10, resets_at=now + 86400)])
+        a = accounts.normalize_codex(dict(self.profile, account='a'), ahead, now=now)
+        b = accounts.normalize_codex(dict(self.profile, account='b'), behind, now=now)
+        self.assertEqual((a['pace'], a['pace_held']), (53, True))
+        self.assertEqual((b['pace'], b['pace_held']), (-63, False))
+        self.assertEqual(a['score'], 200 + (100 - 53) * 20)
+        self.assertEqual(b['score'], 80 + (100 + 63) * 20)
+        # the held account loses even with a fresh 5h window; alone, it is still picked (fail-open)
+        self.assertEqual(accounts.choose({'accounts': [a, b]}, 'codex')['target']['account'], 'b')
+        self.assertEqual(accounts.choose({'accounts': [a]}, 'codex')['target']['account'], 'a')
+        # rollback: FLEET_ACCOUNT_PICK=5h is the #598 score, no pace, no hold
+        with patch.dict(os.environ, FLEET_ACCOUNT_PICK='5h'):
+            a5 = accounts.normalize_codex(dict(self.profile, account='a'), ahead, now=now)
+        self.assertEqual((a5['score'], a5['pace'], a5['pace_held']), (200 + 35, 0, False))
+
+    def test_claude_inventory_reads_pace_fields(self):
+        # fleet-account.sh _claude-inventory grew fields 12–13 (pace, held); a pre-#1231
+        # 11-field row still parses, with no hold.
+        line13 = 'x\tuuid\t40\t3000\t0\t0\t0\t1\t1\t1\t1\t-12\t0'
+        line11 = 'y\tuuid\t40\t3000\t0\t0\t0\t1\t1\t1\t1'
+        held13 = 'z\tuuid\t70\t900\t0\t0\t0\t1\t1\t1\t1\t40\t1'
+        with patch.object(accounts, 'run', return_value='\n'.join([line13, line11, held13])), \
+             patch.object(accounts, 'profiles', return_value=[]), \
+             patch.object(accounts, 'codex_reading', return_value={'accounts': [], 'reason': ''}):
+            rows = {r['label']: r for r in accounts.inventory()['accounts']}
+        self.assertEqual((rows['x']['pace'], rows['x']['pace_held']), (-12, False))
+        self.assertEqual((rows['y']['pace'], rows['y']['pace_held']), (0, False))
+        self.assertEqual((rows['z']['pace'], rows['z']['pace_held']), (40, True))
+        # the hold is fail-open in choose(): z loses to x, wins alone
+        self.assertEqual(accounts.choose({'accounts': [rows['z'], rows['x']]}, 'claude')['target']['label'], 'x')
+        self.assertEqual(accounts.choose({'accounts': [rows['z']]}, 'claude')['target']['label'], 'z')
+
     def test_local_profile_intersection_and_uuid(self):
         raw=dict(source='codex',accounts=[dict(account_uuid=self.profile['account'],available=True,
             windows=[dict(id='codex:primary',minutes=300,utilization=10)]),

@@ -357,6 +357,12 @@ fcfg_label_i18n() {
     FLEET_ACCOUNT_QUOTA_VIA_BANNER_SECS) printf '通过 banner 显示配额的秒数' ;;
     FLEET_ACCOUNT_PICK) printf '启动排名策略' ;;
     FLEET_ACCOUNT_PICK_HYST) printf '启动排名 hysteresis' ;;
+    FLEET_ACCOUNT_PACE_LEAD) printf '周额度领先几点即压过 5h 窗口' ;;
+    FLEET_ACCOUNT_PACE_HOLD) printf '周额度超前几点暂停派发' ;;
+    FLEET_ACCOUNT_PACE_MARGIN) printf '7d 距上限几点暂停派发' ;;
+    FLEET_ACCOUNT_PACE_REBALANCE) printf '周额度超前几点迁走空闲会话' ;;
+    FLEET_ACCOUNT_PACE_COOLDOWN) printf '周额度再平衡冷却秒数' ;;
+    FLEET_ACCOUNT_PACE_SPREAD_WARN) printf '周额度差距警告阈值' ;;
     FLEET_ACCOUNT_PHASE) printf '遵循 phase plan' ;;
     FLEET_ACCOUNT_PHASE_AUTO) printf '自动重新规划 phase' ;;
     FLEET_MIGRATE_NUDGE) printf '迁移 resume nudge' ;;

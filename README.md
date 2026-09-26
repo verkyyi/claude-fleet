@@ -523,7 +523,7 @@ background services inherit it. The remaining values below are the defaults:
 export CCQUOTA_HUB_URL="https://your-ccquota-hub.example"
 FLEET_ACCOUNT_WARN_PCT=70
 FLEET_ACCOUNT_CEILING=85
-FLEET_ACCOUNT_PICK=5h
+FLEET_ACCOUNT_PICK=pace
 FLEET_ACCOUNT_PHASE_AUTO=0
 ```
 
@@ -536,7 +536,11 @@ quota-triggered migration.
 The quota watch has its own roughly 60-second daemon, with a collector fallback.
 It reads each account's 5h/7d utilization and reset times across devices, sends a
 warning at the configured threshold, then rotates and migrates at the ceiling.
-Warnings and ceiling actions are deduplicated per account/reset window. With
+Warnings and ceiling actions are deduplicated per account/reset window. New spawns
+rank the accounts by the **weekly pace** — how far ahead of or behind an even burn
+of its 7-day budget each account is — so the pool's weeks drain together instead
+of worst-first, and the watch moves one idle session at a time off an account
+that is far ahead ([details](docs/MULTI-ACCOUNT.md#pacing-the-weekly-budget-across-the-pool-issue-1231)). With
 no usable quota data, the proactive policy falls back to banner-based handling;
 work is not blocked just because the optional hub is unavailable.
 

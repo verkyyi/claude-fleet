@@ -25,6 +25,11 @@
 #   quota.ceiling.<label>   — reset epoch the 85% bench+move was done for
 #   quota.phase             — reset epoch the 5h phase stagger was planned for
 #                             (issue #598; only with FLEET_ACCOUNT_PHASE_AUTO=1)
+#   quota.pace              — the pool's weekly PACE table, `fleet-account.sh
+#                             pace` mirrored every tick (issue #1231): the status
+#                             bar's `⚠ quota pace spread` reads it
+#   quota.pace.moved        — epoch of the last pace REBALANCE move (the
+#                             FLEET_ACCOUNT_PACE_COOLDOWN gate, #1231)
 #   quotawatch.heartbeat    — key=value: pid/caller/start/phase/end/dur/rows/
 #                             fetched, plus the per-phase breakdown t_modelcap/
 #                             t_fetch/t_policy (issue #582) and budget/over/
@@ -799,6 +804,90 @@ done <<< "$qrows"
 if [ -n "$QPOL_SKIP" ]; then
   QW_SKIP="${QW_SKIP}${QW_SKIP:+ }policy"
   printf 'fleet-quotawatch: policy phase spent its %ss budget — deferred to the next tick: %s\n' "$POLICY_BUDGET" "$QPOL_SKIP" >&2
+fi
+
+# --- FOURTH job: pace the WEEKLY budget across the pool (issue #1231) ----------
+# The ceiling branch above is a cliff: nothing happens until an account is at
+# 85%, and then every session on it moves at once. Under #598's spawn ranking
+# that cliff was the ONLY thing steering the weekly budget, and on 2026-09-25
+# three of four accounts went over it within a day of each other while the
+# fourth sat at 45% of its week. fleet-account.sh now ranks new spawns by the
+# weekly PACE (7d% − ceiling × the elapsed fraction of the 7d window; + = ahead
+# of an even burn) and HOLDS an account that is far ahead; this job is the
+# running-session half of the same policy, earlier and gentler than the cliff:
+#   · mirror the pace table to $G/quota.pace (the bar's `⚠ quota pace spread`);
+#   · when the most-ahead un-benched account leads the CURRENT PICK
+#     (`fleet-account.sh active`, which honours the holds) by
+#     FLEET_ACCOUNT_PACE_REBALANCE (15) points or more, and that pick is itself
+#     on pace (verdict `ok`) with 5h room (under FLEET_ACCOUNT_WARN_PCT), move ONE
+#     idle session off the leader, per fleet — `migrate --idle --from <leader>
+#     --max 1` — then wait FLEET_ACCOUNT_PACE_COOLDOWN (600 s) before the next,
+#     so a lead is closed one cold boot at a time and a pick that flips never
+#     ping-pongs a session. Idle only (done|needs): a working session's turn is
+#     worth more than the points it is spending. FLEET_ACCOUNT_PACE_REBALANCE=0
+#     switches the moves off (the table is still written). A fleet on the
+#     failover planner (FLEET_FAILOVER=1) is the planner's, as above.
+# Under the tick budget like the rest: a tick with no room writes nothing and
+# the next one tries again (deferral, never a missed bench — the ledger writes
+# that matter are the ceiling branch's, above).
+PACE_REBALANCE="${FLEET_ACCOUNT_PACE_REBALANCE:-15}"
+PACE_COOLDOWN="${FLEET_ACCOUNT_PACE_COOLDOWN:-600}"
+case "$PACE_REBALANCE" in ''|*[!0-9]*) PACE_REBALANCE=15 ;; esac
+case "$PACE_COOLDOWN" in ''|*[!0-9]*) PACE_COOLDOWN=600 ;; esac
+# qw_pace_socket <socket> <leader> — one fleet's share of a rebalance: one idle
+# window off <leader> onto the active account, backgrounded like the ceiling
+# fan-out (fleet_bg: silenced run-shell -b, #575).
+qw_pace_socket() {
+  local qs="$1" ql="$2"
+  qw_failover_enabled "$qs" && return 0
+  fleet_bg -L "$qs" "bash '$BIN/fleet-account.sh' migrate --idle --from '$ql' --max 1 --session '$qs' --toast"
+  return 0
+}
+qpace=""
+if [ "${nrows:-0}" -gt 0 ] && tick_room; then
+  qpace=$("$BIN/fleet-account.sh" pace 2>/dev/null)
+  [ "$DRY" = 1 ] || printf '%s\n' "$qpace" | atomic_write "$G/quota.pace"
+fi
+if [ "$PACE_REBALANCE" -gt 0 ] && [ "${nrows:-0}" -gt 1 ] && [ -n "$qpace" ] \
+   && { tick_room || { QW_SKIP="${QW_SKIP}${QW_SKIP:+ }pace"; false; }; }; then
+  # the leader: the most-ahead account that is not benched (a benched account's
+  # sessions are the ceiling branch's to move, and its pace is moot until reset)
+  qsrc=""; qsrcp=0
+  # shellcheck disable=SC2034  # pu7/pv/pr7: the table's other columns, read for their position
+  while IFS=$'\t' read -r pl pu7 pp pv pr7; do
+    [ -n "$pl" ] || continue
+    case "$pp" in ''|*[!0-9-]*) continue ;; esac
+    [ "$("$BIN/fleet-account.sh" limited-until "$pl" 2>/dev/null || echo 0)" -le "$(now)" ] || continue
+    if [ -z "$qsrc" ] || [ "$pp" -gt "$qsrcp" ]; then qsrc=$pl; qsrcp=$pp; fi
+  done <<< "$qpace"
+  qdst=$("$BIN/fleet-account.sh" active 2>/dev/null)
+  qdstp=$(printf '%s\n' "$qpace" | awk -F'\t' -v l="$qdst" '$1==l{print $3; exit}')
+  qdstv=$(printf '%s\n' "$qpace" | awk -F'\t' -v l="$qdst" '$1==l{print $4; exit}')
+  qdst5=$(printf '%s\n' "$qrows" | awk -F'\t' -v l="$qdst" '$1==l{print $2+0; exit}')
+  case "$qdstp" in ''|*[!0-9-]*) qdstp="" ;; esac
+  qpmk="$G/quota.pace.moved"; qlast=$(cat "$qpmk" 2>/dev/null); case "$qlast" in ''|*[!0-9]*) qlast=0 ;; esac
+  if [ -n "$qsrc" ] && [ -n "$qdst" ] && [ "$qsrc" != "$qdst" ] && [ -n "$qdstp" ] && [ "$qdstv" = ok ] \
+     && [ $(( qsrcp - qdstp )) -ge "$PACE_REBALANCE" ] && [ "${qdst5:-100}" -lt "$qwarn" ]; then
+    if [ $(( $(now) - qlast )) -lt "$PACE_COOLDOWN" ]; then
+      [ "$DRY" = 1 ] && printf 'would: rebalance %s (pace %+d) → %s (pace %+d) — held back: the last move was %ss ago (cooldown %ss)\n' \
+        "$qsrc" "$qsrcp" "$qdst" "$qdstp" "$(( $(now) - qlast ))" "$PACE_COOLDOWN"
+    elif [ "$DRY" = 1 ]; then
+      printf 'would: rebalance — move one idle session off %s (pace %+d) onto %s (pace %+d, 5h %s%%) on: %s\n' \
+        "$qsrc" "$qsrcp" "$qdst" "$qdstp" "$qdst5" "$(printf '%s' "$SOCKETS" | tr '\n' ' ')"
+    else
+      printf '%s' "$(now)" | atomic_write "$qpmk"
+      printf 'fleet-quotawatch: %s is %+d points ahead of its weekly pace against %s at %+d — moving one idle session off %s per fleet (#1231; next move in ≥%ss)\n' \
+        "$qsrc" "$qsrcp" "$qdst" "$qdstp" "$qsrc" "$PACE_COOLDOWN" >&2
+      for qs in $SOCKETS; do
+        qsb=$(qw_left "$SECONDS" "$TMUX_BUDGET"); [ "$(tick_left)" -lt "$qsb" ] && qsb=$(tick_left)
+        [ "$qsb" -lt 1 ] && { QW_SKIP="${QW_SKIP}${QW_SKIP:+ }pace:$qs"; continue; }
+        fleet_timebox "$qsb" qw_pace_socket "$qs" "$qsrc" || true
+      done
+    fi
+  elif [ "$DRY" = 1 ] && [ -n "$qsrc" ]; then
+    printf 'ok: pace — %s leads at %+d, the pick %s is at %+d (%s); rebalance at a lead of %s\n' \
+      "$qsrc" "$qsrcp" "${qdst:-?}" "${qdstp:-0}" "${qdstv:--}" "$PACE_REBALANCE"
+  fi
 fi
 
 # --- THIRD job (OPT-IN): re-plan the 5h-window PHASE stagger (issue #598) ------

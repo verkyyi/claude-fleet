@@ -33,6 +33,10 @@
 #   fleet-migrate.sh [opts] --idle              done|needs windows NOT on the active account
 #   fleet-migrate.sh [opts] --all               every window NOT on the active account
 #   fleet-migrate.sh [opts] --account <label>   every window running on <label>
+#         --from <label>    narrow --idle / --all to the windows running on <label>
+#                           (the quota watch's pace rebalance, issue #1231:
+#                           `--idle --from <ahead> --max 1`)
+#         --max <n>         move at most <n> of the selected windows (0 = all)
 #   fleet-migrate.sh [opts] --stuck             every window whose quota failover request
 #                                               is STUCK (@quota_stuck=1: the same veto
 #                                               FLEET_FAILOVER_STUCK_ATTEMPTS times, #872)
@@ -177,12 +181,14 @@ migrate_eligible() {
 # keeps its explicit-restart behaviour.
 migrate_noop() { [ -z "$3" ] && [ -n "$2" ] && { [ "$1" = "$2" ] || [ "${4:-0}" = 1 ]; }; }
 # migrate_selected <mode> <label> <state> <active> <benched> <wanted> [<stuck>] → 0 iff selected
+# <wanted> is the --account label in `account` mode and the --from label (empty
+# = any) in `idle` / `all` (issue #1231).
 migrate_selected() {
   local mode="$1" label="$2" state="$3" active="$4" benched="$5" wanted="$6"
   case "$mode" in
     limited) [ -n "$label" ] && [ "$benched" = 1 ] ;;
-    idle)    case "$state" in done|needs) [ "$label" != "$active" ] ;; *) return 1 ;; esac ;;
-    all)     [ "$label" != "$active" ] ;;
+    idle)    case "$state" in done|needs) [ "$label" != "$active" ] && { [ -z "$wanted" ] || [ "$label" = "$wanted" ]; } ;; *) return 1 ;; esac ;;
+    all)     [ "$label" != "$active" ] && { [ -z "$wanted" ] || [ "$label" = "$wanted" ]; } ;;
     account) [ -n "$label" ] && [ "$label" = "$wanted" ] ;;
     stuck)   [ "${7:-}" = 1 ] ;;
     explicit) return 0 ;;
@@ -473,7 +479,7 @@ migrate_one_body() {
 # Sourced (fleet-migrate-selftest.sh pins the pure matrices) → define only; a
 # direct run dispatches. Same guard idiom as fleet-account.sh.
 migrate_main() {
-  MODE=""; ACCOUNT=""; TARGET_ACCOUNT=""; NUDGE=""; NUDGE_SET=0; DRY=0; TOAST=0; SESS=""; MODEL=""; WIDS=(); FORCE_BG=0
+  MODE=""; ACCOUNT=""; TARGET_ACCOUNT=""; NUDGE=""; NUDGE_SET=0; DRY=0; TOAST=0; SESS=""; MODEL=""; WIDS=(); FORCE_BG=0; MAX=0
   local pinned_target='' quota_request='' verified=0
   FLEET_MIGRATION_LOCKED=''
   MIGRATE_TMP=''
@@ -484,6 +490,10 @@ migrate_main() {
       --force-bg) FORCE_BG=1; shift ;;
       --account) MODE=account; ACCOUNT="${2:-}"; shift 2 ;;
       --account=*) MODE=account; ACCOUNT="${1#--account=}"; shift ;;
+      --from) ACCOUNT="${2:-}"; [ -n "$ACCOUNT" ] || { echo 'fleet-migrate: --from needs a label' >&2; return 2; }; shift 2 ;;
+      --from=*) ACCOUNT="${1#--from=}"; [ -n "$ACCOUNT" ] || { echo 'fleet-migrate: --from needs a label' >&2; return 2; }; shift ;;
+      --max) MAX="${2:-}"; case "$MAX" in ''|*[!0-9]*) echo 'fleet-migrate: --max needs a number' >&2; return 2 ;; esac; shift 2 ;;
+      --max=*) MAX="${1#--max=}"; case "$MAX" in ''|*[!0-9]*) echo 'fleet-migrate: --max needs a number' >&2; return 2 ;; esac; shift ;;
       --target-account) [ -n "${2:-}" ] || { echo 'fleet-migrate: --target-account needs a label' >&2; return 2; }; TARGET_ACCOUNT="$2"; shift 2 ;;
       --target-account=*) TARGET_ACCOUNT="${1#--target-account=}"; [ -n "$TARGET_ACCOUNT" ] || { echo 'fleet-migrate: --target-account needs a label' >&2; return 2; }; shift ;;
       --session) SESS="${2:-}"; shift 2 ;;
@@ -498,13 +508,14 @@ migrate_main() {
       --toast) TOAST=1; shift ;;
       whoami) MODE=whoami; shift ;;
       --verified) verified=1; shift ;;
-      -h|--help) sed -n '2,59p' "$0"; return 0 ;;
+      -h|--help) sed -n '2,63p' "$0"; return 0 ;;
       --*) echo "fleet-migrate: unknown option '$1'" >&2; return 2 ;;
       *) WIDS+=("$1"); shift ;;
     esac
   done
-  [ -n "$MODE" ] || [ "${#WIDS[@]}" -gt 0 ] || { sed -n '30,59p' "$0" >&2; return 2; }
+  [ -n "$MODE" ] || [ "${#WIDS[@]}" -gt 0 ] || { sed -n '30,63p' "$0" >&2; return 2; }
   [ "$MODE" = account ] && [ -z "$ACCOUNT" ] && { echo "fleet-migrate: --account needs a label" >&2; return 2; }
+  case "$MODE" in idle|all|account|"") ;; *) [ -z "$ACCOUNT" ] || { echo "fleet-migrate: --from only narrows --idle / --all" >&2; return 2; } ;; esac
   if [ -n "$TARGET_ACCOUNT" ]; then
     [ -z "$MODE" ] && [ "${#WIDS[@]}" = 1 ] && [ -z "$pinned_target" ] \
       || { echo 'fleet-migrate: --target-account needs exactly one explicit window' >&2; return 2; }
@@ -628,10 +639,16 @@ migrate_main() {
   fi
 
   if [ "${#targets[@]}" -eq 0 ]; then
-    say "fleet-migrate: nothing to move ($MODE)"
+    say "fleet-migrate: nothing to move ($MODE${ACCOUNT:+ from $ACCOUNT})"
     return 0
   fi
-  say "fleet-migrate: $MODE → ${ACTIVE:-<no active account>} (${#targets[@]} window$([ "${#targets[@]}" = 1 ] || printf s))"
+  # --max (issue #1231): the pace rebalance moves ONE idle window per tick — a
+  # gentler fan-out than the ceiling's, on purpose. The list order is tmux's
+  # (window index), so "the next idle worker" is the lowest one.
+  if [ "$MAX" -gt 0 ] && [ "${#targets[@]}" -gt "$MAX" ]; then
+    targets=("${targets[@]:0:$MAX}")
+  fi
+  say "fleet-migrate: $MODE${ACCOUNT:+ from $ACCOUNT} → ${ACTIVE:-<no active account>} (${#targets[@]} window$([ "${#targets[@]}" = 1 ] || printf s))"
   for wid in ${targets[@]+"${targets[@]}"}; do
     cpid=$(fleet_pane_claude_pid "$wid" "$SOCK" 2>/dev/null) || { say "  – $wid: no Claude process — skipped"; skipped=$((skipped+1)); continue; }
     stamp=$(TM display-message -p -t "$wid" '#{@cc_account}' 2>/dev/null)

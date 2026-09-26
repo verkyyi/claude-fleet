@@ -272,13 +272,13 @@ token 保存在仓库外。详细步骤、指定账号子集和重置时间的�
 export CCQUOTA_HUB_URL="https://your-ccquota-hub.example"
 FLEET_ACCOUNT_WARN_PCT=70
 FLEET_ACCOUNT_CEILING=85
-FLEET_ACCOUNT_PICK=5h
+FLEET_ACCOUNT_PICK=pace
 FLEET_ACCOUNT_PHASE_AUTO=0
 ```
 
 查看凭据可保存在 `~/.ccquota/viewer-token`。ccquota 中的账号名称应与 Fleet 的账号标签一致；也可在对应的 `<标签>.conf` 中设置 `CCQUOTA_ACCOUNT=<uuid>` 显式关联。没有读数的账号会显示为缺失，不会被当成「使用了 0%」，也不会作为额度触发迁移的接收目标。
 
-独立的额度监控服务约每 60 秒检查一次，读取跨设备的账号级 5 小时／7 天用量与重置时间；预警和轮换按账号、按重置窗口去重。缺少可用数据时，提前处理策略退回到限额提示触发的路径，hub 暂时不可用不会直接阻止开发。
+独立的额度监控服务约每 60 秒检查一次，读取跨设备的账号级 5 小时／7 天用量与重置时间；预警和轮换按账号、按重置窗口去重。新会话按各账号的**周额度进度**（相对于均匀消耗领先或落后多少点）排名，让几个账号的周额度一起消耗而不是先耗尽最紧的那个；监控还会把远超进度的账号上的空闲会话每次迁走一个（详见 [docs/MULTI-ACCOUNT.md](docs/MULTI-ACCOUNT.md#pacing-the-weekly-budget-across-the-pool-issue-1231)）。缺少可用数据时，提前处理策略退回到限额提示触发的路径，hub 暂时不可用不会直接阻止开发。
 
 ### 可选：窗口错峰和自动补任务闸门
 

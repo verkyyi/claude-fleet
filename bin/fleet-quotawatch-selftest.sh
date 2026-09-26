@@ -47,6 +47,13 @@
 #                 the budget the tick WINDS DOWN — it defers the rest, records what
 #                 it dropped, releases the lock and exits 0, and the NEXT tick does
 #                 the deferred work (deferral is not starvation).
+#  12. pace     — (#1231) every tick mirrors `fleet-account.sh pace` to quota.pace
+#                 (the bar's `⚠ quota pace spread` reads it); an account far AHEAD
+#                 of its weekly pace while the current pick is on pace with 5h room
+#                 ⇒ ONE `migrate --idle --from <leader> --max 1` per fleet + the
+#                 quota.pace.moved stamp; the next tick inside the cooldown moves
+#                 nothing; --dry-run says what it would do; REBALANCE=0 moves
+#                 nothing but still writes the table.
 # Needs python3 (quota_parse). Exit 0 = pass, non-zero = fail.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -85,6 +92,12 @@ if [ -n "${FAKE_CCQ_HANG:-}" ]; then bash -c "sleep $FAKE_CCQ_HANG # $FAKE_HANG_
 # froze the cache fresh-but-empty on 2026-09-15.
 if [ -s "${FAKE_EMPTY_FILE:-/dev/null}" ]; then printf '{"verdict":"unknown","accounts":[]}\n'; exit 0; fi
 p=$(cat "$FAKE_PCT_FILE" 2>/dev/null || echo 10); pb=$(cat "$FAKE_PCT_B_FILE" 2>/dev/null || echo 20); r5=$(cat "$FAKE_RESET_FILE")
+# The 7d window per account (issue #1231): "<util> <iso-reset>" in $FAKE_7D_A_FILE /
+# $FAKE_7D_B_FILE; absent ⇒ the historic fixed row (10%, a long-past reset, which
+# every pre-#1231 case relied on reading as "no weekly pressure at all").
+u7a=10; r7a=2026-09-16T05:00:00Z; u7b=10; r7b=2026-09-16T05:00:00Z
+[ -s "${FAKE_7D_A_FILE:-/dev/null}" ] && read -r u7a r7a < "$FAKE_7D_A_FILE"
+[ -s "${FAKE_7D_B_FILE:-/dev/null}" ] && read -r u7b r7b < "$FAKE_7D_B_FILE"
 # b's SHAPE is switchable (issue #628): `unavail` is TokenLedger saying out loud
 # that it cannot read the account (available:false + reason, both omitempty
 # windows gone from the JSON), `shape` is a payload this fleet does not
@@ -92,10 +105,10 @@ p=$(cat "$FAKE_PCT_FILE" 2>/dev/null || echo 10); pb=$(cat "$FAKE_PCT_B_FILE" 2>
 case "$(cat "$FAKE_B_SHAPE_FILE" 2>/dev/null)" in
   unavail) b='{"account_uuid":"u-b","label":"b","available":false,"reason":"no reading","headroom_pct":0}' ;;
   shape)   b='{"account_uuid":"u-b","label":"b","headroom_pct":0}' ;;
-  *)       b=$(printf '{"account_uuid":"u-b","label":"b","headroom_pct":%d,"five_hour":{"utilization":%d,"resets_at":"%s"},"seven_day":{"utilization":10,"resets_at":"2026-09-16T05:00:00Z"}}' "$((100-pb))" "$pb" "$r5") ;;
+  *)       b=$(printf '{"account_uuid":"u-b","label":"b","headroom_pct":%d,"five_hour":{"utilization":%d,"resets_at":"%s"},"seven_day":{"utilization":%d,"resets_at":"%s"}}' "$((100-pb))" "$pb" "$r5" "$u7b" "$r7b") ;;
 esac
 # verdict: go|hold|unknown only (cmd/ccquota/budget.go) — never "ok" (issue #668).
-printf '{"verdict":"go","accounts":[{"account_uuid":"u-a","label":"a","headroom_pct":%d,"five_hour":{"utilization":%d,"resets_at":"%s","percent_per_hour":30},"seven_day":{"utilization":10,"resets_at":"2026-09-16T05:00:00Z"}},%s]}' "$((100-p))" "$p" "$r5" "$b"
+printf '{"verdict":"go","accounts":[{"account_uuid":"u-a","label":"a","headroom_pct":%d,"five_hour":{"utilization":%d,"resets_at":"%s","percent_per_hour":30},"seven_day":{"utilization":%d,"resets_at":"%s"}},%s]}' "$((100-p))" "$p" "$r5" "$u7a" "$r7a" "$b"
 FAKE
 # --- fake tmux: strips -L; one live fleet `sessA`; two windows (@1 on a, @2 on b);
 # display-message -p answers a pane pid (ours — no claude under it, so the peer
@@ -142,6 +155,7 @@ run_watch() {
   FAKE_LOG="$WORK/ccquota.calls" FAKE_TMUX_LOG="$WORK/tmux.calls" FAKE_NOTIFY_LOG="$WORK/notify.log" \
   FAKE_PCT_FILE="$WORK/pct" FAKE_PCT_B_FILE="$WORK/pct-b" FAKE_RESET_FILE="$WORK/reset" \
   FAKE_B_SHAPE_FILE="$WORK/b-shape" FAKE_HANG_MARK="$HANGMARK" FAKE_EMPTY_FILE="$WORK/ccq-empty" \
+  FAKE_7D_A_FILE="$WORK/7d-a" FAKE_7D_B_FILE="$WORK/7d-b" \
     bash "$WORK/bin/fleet-quotawatch.sh" "$@" >"$WORK/stdout" 2>"$WORK/stderr"
 }
 CHECKS=0
@@ -574,5 +588,61 @@ grep -q 'tick done in .*s/1s' "$WORK/stderr" || fail "11f: the tick line must pr
 [ ! -d "$G/quotawatch.lock" ] || fail "11f: it must release the lock"
 ok
 
-printf 'selftest PASS: fleet-quotawatch — %s groups (off, status, policy 50/72/90 + once-per-window, dry-run, lock skip/supersede/takeover, staleness alarm, fresh-but-empty alarm #684, human secs, nowhere-to-move #567, probe budget/tree-kill/phase breakdown/lock ownership, wedged-tick supersede #582, unreadable-account #628, tick self-budget + wind-down #698)\n' "$CHECKS"
+# 12. pace — the weekly-pace table + the gentle rebalance (issue #1231) ----------
+# A fresh pool: both 5h windows at 20% in a new reset window, no benches, no
+# markers. a is 6 days from its 7d reset at 65% (elapsed 1/7 ⇒ 85×0.14 = 12 ⇒
+# pace +53: far ahead, HELD — and under the 70% warn, so this leg is the pace
+# job alone); b is a day from its reset at 10% (elapsed 6/7 ⇒ 73 ⇒ pace −63:
+# well behind). The pick is b; a leads it by 116 ≥ 15.
+RESET5=$(( RESET4 + 14400 )); iso "$RESET5" > "$WORK/reset"
+echo 20 > "$WORK/pct"; echo 20 > "$WORK/pct-b"; : > "$WORK/b-shape"; : > "$WORK/ccq-empty"
+: > "$G/account.limited"; rm -f "$G/account.active" "$G/quota.pace" "$G/quota.pace.moved"
+printf '65 %s\n' "$(iso $(( NOW + 6*86400 )))" > "$WORK/7d-a"
+printf '10 %s\n' "$(iso $(( NOW + 86400 )))"   > "$WORK/7d-b"
+m=$(migrates); n=$(notifies)
+run_watch || fail "12: pace tick must exit 0"
+[ -s "$G/quota.pace" ] || fail "12: the tick must mirror the pace table to quota.pace"
+[ "$(grep -c . "$G/quota.pace")" = 2 ] || fail "12: quota.pace has one row per account (got: $(cat "$G/quota.pace"))"
+[ "$(awk -F'\t' '$1=="a"{print $3"/"$4}' "$G/quota.pace")" = "53/held" ] || fail "12: a reads pace +53, held (got: $(awk -F'\t' '$1=="a"' "$G/quota.pace"))"
+[ "$(awk -F'\t' '$1=="b"{print $3"/"$4}' "$G/quota.pace")" = "-63/ok" ]  || fail "12: b reads pace −63, ok (got: $(awk -F'\t' '$1=="b"' "$G/quota.pace"))"
+grep -q "run-shell -b ( bash '$WORK/bin/fleet-account.sh' migrate --idle --from 'a' --max 1 --session 'sessA' --toast" "$WORK/tmux.calls" \
+  || fail "12: a lead of 116 ⇒ ONE idle session moved off a (migrate --idle --from a --max 1, via fleet_bg on the fleet socket) — tmux.calls: $(grep migrate "$WORK/tmux.calls")"
+[ "$(grep -c "migrate --idle --from 'a'" "$WORK/tmux.calls")" = 1 ] || fail "12: exactly one rebalance move"
+[ "$(migrates)" = "$m" ] || fail "12: a rebalance is NOT a ceiling fan-out (no migrate --account)"
+[ -s "$G/quota.pace.moved" ] || fail "12: the move stamps quota.pace.moved (the cooldown gate)"
+grep -q 'ahead of its weekly pace' "$WORK/stderr" || fail "12: the tick logs the rebalance (stderr: $(cat "$WORK/stderr"))"
+[ "$(notifies)" = "$n" ] || fail "12: a gentle move does not notify (got $(( $(notifies) - n )) new)"
+grep -q '^a	' "$G/account.limited" 2>/dev/null && fail "12: nothing is benched at 20%/65% (account.limited: $(cat "$G/account.limited"))"
+# the status bar's helper reads the table the tick wrote
+sp=$( CCQUOTA_HUB_URL="$HUB" FLEET_ACCOUNTS_DIR="$WORK/accounts" TMPDIR="$WORK" bash -c '. "$0"; fleet_quota_pace_spread' "$WORK/bin/usage-lib.sh" )
+[ "$sp" = "$(printf '116\ta\tb')" ] || fail "12: fleet_quota_pace_spread prints spread + leader + laggard (got '$sp')"
+ok
+# 12b. the next tick sits inside the cooldown: table refreshed, no second move
+run_watch || fail "12b: cooldown tick must exit 0"
+[ "$(grep -c "migrate --idle --from 'a'" "$WORK/tmux.calls")" = 1 ] || fail "12b: inside the cooldown ⇒ no second move"
+run_watch --dry-run || fail "12b: --dry-run must exit 0"
+grep -q '^would: rebalance a (pace +53) → b (pace -63) — held back: the last move was' "$WORK/stdout" \
+  || fail "12b: --dry-run names the held-back move (stdout: $(cat "$WORK/stdout"))"
+ok
+# 12c. cooldown over (stamp aged past it) + --dry-run: says the move, makes none
+printf '%s' $(( $(date +%s) - 700 )) > "$G/quota.pace.moved"
+run_watch --dry-run || fail "12c: --dry-run must exit 0"
+grep -q '^would: rebalance — move one idle session off a (pace +53) onto b (pace -63, 5h 20%) on: sessA' "$WORK/stdout" \
+  || fail "12c: --dry-run plans the move (stdout: $(cat "$WORK/stdout"))"
+[ "$(grep -c "migrate --idle --from 'a'" "$WORK/tmux.calls")" = 1 ] || fail "12c: --dry-run moves nothing"
+[ "$(cat "$G/quota.pace.moved")" = "$(( $(date +%s) - 700 ))" ] || [ "$(( $(date +%s) - $(cat "$G/quota.pace.moved") ))" -ge 690 ] || fail "12c: --dry-run must not restamp the cooldown"
+ok
+# 12d. REBALANCE=0: the table is still written, nothing moves
+rm -f "$G/quota.pace"
+FLEET_ACCOUNT_PACE_REBALANCE=0 run_watch || fail "12d: REBALANCE=0 tick must exit 0"
+[ -s "$G/quota.pace" ] || fail "12d: REBALANCE=0 still writes the pace table"
+[ "$(grep -c "migrate --idle --from 'a'" "$WORK/tmux.calls")" = 1 ] || fail "12d: REBALANCE=0 moves nothing"
+# 12e. a pick with NO 5h room (b's 5h at 75% ≥ WARN) is no landing spot: the lead
+# is still 116 and the cooldown is over, yet nothing moves.
+echo 75 > "$WORK/pct-b"; printf '%s' $(( $(date +%s) - 700 )) > "$G/quota.pace.moved"
+run_watch || fail "12e: tick must exit 0"
+[ "$(grep -c "migrate --idle --from 'a'" "$WORK/tmux.calls")" = 1 ] || fail "12e: a pick without 5h room is no landing spot — nothing moves"
+ok
+
+printf 'selftest PASS: fleet-quotawatch — %s groups (off, status, policy 50/72/90 + once-per-window, dry-run, lock skip/supersede/takeover, staleness alarm, fresh-but-empty alarm #684, human secs, nowhere-to-move #567, probe budget/tree-kill/phase breakdown/lock ownership, wedged-tick supersede #582, unreadable-account #628, tick self-budget + wind-down #698, weekly pace + rebalance #1231)\n' "$CHECKS"
 exit 0

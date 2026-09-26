@@ -213,6 +213,29 @@ fleet_quota_via_banner() {
   return 0
 }
 
+# --- weekly PACE spread (issue #1231) ------------------------------------------
+# The quota watch mirrors `fleet-account.sh pace` to $G/quota.pace every tick
+# (label · 7d% · pace · verdict · 7d-reset; pace = 7d% − ceiling × the elapsed
+# fraction of the 7d window, + = ahead of an even burn). This prints
+# "<spread>\t<ahead-label>\t<behind-label>" when the most-ahead and most-behind
+# accounts are more than FLEET_ACCOUNT_PACE_SPREAD_WARN (30) points apart — the
+# status bar's `⚠ quota pace spread 34`. Nothing without the file, with fewer
+# than two rows, or while the watch is stale (that alarm stands in: a table an
+# old tick wrote says nothing about the pool now).
+fleet_quota_pace_spread() {
+  _pf="$(fleet_usage_cache_dir)/quota.pace"
+  [ -f "$_pf" ] || return 0
+  [ -z "$(fleet_quota_stale_age)" ] || return 0
+  awk -F'\t' -v w="${FLEET_ACCOUNT_PACE_SPREAD_WARN:-30}" '
+    NF >= 3 && $3 ~ /^-?[0-9]+$/ {
+      n++
+      if (n == 1 || $3 + 0 > hi) { hi = $3 + 0; hl = $1 }
+      if (n == 1 || $3 + 0 < lo) { lo = $3 + 0; ll = $1 }
+    }
+    END { if (n >= 2 && hi - lo > w + 0) printf "%d\t%s\t%s", hi - lo, hl, ll }' "$_pf"
+  return 0
+}
+
 # --- ccquota pre-emptive watch liveness (issue #551) ---------------------------
 # The quota watch (bin/fleet-quotawatch.sh) restamps $C/account.quota.ts on every
 # tick — even when the hub is unreachable (empty rows still refresh the stamp) —
