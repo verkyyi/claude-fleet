@@ -648,7 +648,7 @@ chmod +x "$WORK/fakepath/python3"
 # E1: a SLEEPING merged worker is reaped WITHOUT a wake — sleep record retired
 # before the kill, window gone, worktree removed, history row written.
 : > "$TMLOG"; : > "$GHLOG"
-LIFE=sleeping REAP_STATE=done run_reap_tok 20 @9
+LIFE=sleeping REAP_STATE="done" run_reap_tok 20 @9
 [ "$TOK" = reaped:full ] && [ "$RC" = 0 ] || fail "sleeping merged worker must reap (got [$TOK] rc $RC)" "$(cat "$TMLOG")"
 grep -q 'SLEEP .* dispose ' "$TMLOG" || fail "the sleep record must be retired before the kill"
 grep -q 'SLEEP .* wake ' "$TMLOG" && fail "a sleeper must never be woken to be reaped"
