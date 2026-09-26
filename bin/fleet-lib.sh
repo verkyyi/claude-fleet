@@ -4618,6 +4618,29 @@ fleet_child_busy() {
   esac
 }
 
+# fleet_pr_merge_state <repo> <pr> — what GitHub says a PR's merge state IS, for a
+# child about to report MERGED (issue #1247). Prints one token:
+#   merged   .merged is true — the only token that makes a MERGED report true
+#   armed    open, auto-merge armed — checks still running, NOT landed yet
+#   open     open, nothing armed
+#   closed   closed without merging
+#   unknown  gh missing / failed / timed out — undetermined, never "merged"
+# REST (the core budget), not GraphQL: a GraphQL-exhausted account still answers.
+fleet_pr_merge_state() {
+  local repo="${1:-}" n="${2//[^0-9]/}" raw
+  case "$repo" in ?*/?*) ;; *) printf 'unknown\n'; return 0 ;; esac
+  [ -n "$n" ] && command -v gh >/dev/null 2>&1 || { printf 'unknown\n'; return 0; }
+  raw=$(fleet_timebox 10 gh api "repos/$repo/pulls/$n" \
+          --jq '"\(.merged) \(.state) \(.auto_merge != null)"' 2>/dev/null)
+  case "$raw" in
+    'true '*)          printf 'merged\n' ;;
+    'false open true') printf 'armed\n' ;;
+    'false open '*)    printf 'open\n' ;;
+    'false closed '*)  printf 'closed\n' ;;
+    *)                 printf 'unknown\n' ;;
+  esac
+}
+
 # fleet_cc_session_json <pid> — path of the registry record for a Claude pid.
 fleet_cc_session_json() { local f="$FLEET_CC_SESSIONS_DIR/$1.json"; [ -f "$f" ] && printf '%s' "$f"; }
 # fleet_cc_session_field <pid> <field> — one string field off the registry record.

@@ -330,6 +330,10 @@ case "$*" in
   *head=acme:issue-540*) echo 1 ;;
   *head=acme:issue-541*) echo 'HTTP 403: API rate limit exceeded' >&2; exit 1 ;;
   *head=acme:*)          echo 0 ;;
+  *repos/acme/widgets/pulls/77\ *) echo 'true closed false' ;;   # really merged
+  *repos/acme/widgets/pulls/78\ *) echo 'false open true' ;;    # auto-merge armed (#1247)
+  *repos/acme/widgets/pulls/79\ *) echo 'false closed false' ;; # closed unmerged
+  *repos/acme/widgets/pulls/80\ *) echo 'false open false' ;;   # open, nothing armed
   *) exit 1 ;;
 esac
 GH
@@ -395,6 +399,24 @@ eq '…and ledgered tier quiet' 'FAILED|quiet|' "$(latest issue-540)"
 SRUN --win "$PRCHILD540" --state merged --pr 77 >/dev/null
 eq 'quiet (MERGED) is sent' 2 "$(sends)"
 eq '…ledgered tier quiet' 'MERGED|quiet|' "$(latest issue-540)"
+# MERGED means merged (issue #1247): an ARMED auto-merge is not a landing. A merged
+# report is checked against GitHub's .merged and re-filed when it is not true.
+TM set-window-option -t "$PRCHILD540" -u @reported 2>/dev/null   # the sends above stamped it
+out=$(SRUN --win "$PRCHILD540" --state merged --pr 78 --summary 'armed auto-merge')
+eq 'MERGED on an armed PR is NOT sent' 2 "$(sends)"
+eq '…ledgered WAITING auto-merge-armed, silent' 'WAITING|silent|auto-merge-armed' "$(latest issue-540)"
+ok; has 'NOT reporting MERGED' "$out" && has 'armed' "$out" \
+  || fail "the caller must be told its MERGED was not sent" "$out"
+eq '…and stamps nothing (the real merge still reports)' '' "$(TM display-message -p -t "$PRCHILD540" '#{@reported}')"
+SRUN --win "$PRCHILD540" --state merged --pr 80 >/dev/null
+eq 'MERGED on a plain open PR is NOT sent' 2 "$(sends)"
+eq '…ledgered WAITING pr-open' 'WAITING|silent|pr-open' "$(latest issue-540)"
+SRUN --win "$PRCHILD540" --state merged --pr 81 >/dev/null
+eq 'MERGED with an unreadable PR is NOT sent' 2 "$(sends)"
+eq '…ledgered IDLE pr-unknown' 'IDLE|silent|pr-unknown' "$(latest issue-540)"
+out=$(SRUN --win "$PRCHILD540" --state merged --pr 79 --dry-run)
+ok; has 'state: FAILED (PR #79)' "$out" && has 'closed WITHOUT merging' "$out" \
+  || fail "MERGED on a closed-unmerged PR must go out as a loud FAILED" "$out"
 SRUN --win "$PRCHILD541" --state blocked --summary 'needs an operator token' >/dev/null
 eq 'loud (BLOCKED) is sent' 3 "$(sends)"
 eq '…ledgered tier loud' 'BLOCKED|loud|' "$(latest issue-541)"

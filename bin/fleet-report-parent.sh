@@ -21,7 +21,10 @@
 #                   (required). A `stopped` whose child is still busy (issue #864)
 #                   is re-filed here as `waiting` (bg job / open PR) or `idle` (the
 #                   PR gate could not be read) — see TIERS below.
-#   --pr <N>        the PR number, for a merged or failed report
+#   --pr <N>        the PR number, for a merged or failed report. A `merged` report
+#                   is checked against GitHub's `.merged` (issue #1247): an armed
+#                   auto-merge / open PR is re-filed WAITING, a closed-unmerged one
+#                   FAILED, an unreadable one IDLE — never sent as MERGED.
 #   --verdict <v>   the reap verdict, for a `reaped` report (unmerged, dirty, …)
 #   --summary <t>   1–3 lines of what happened (the parent's whole payoff)
 #   --win <target>  the CHILD window; default: the window $TMUX_PANE sits in.
@@ -218,6 +221,38 @@ busy=''
 if [ "$STATE" = stopped ] && busy=$(fleet_child_busy "$sess" "$selfwin" "$branch_arg"); then
   case "$busy" in pr-unknown) STATE=idle ;; *) STATE=waiting ;; esac
   VERDICT="$busy"
+fi
+
+# --- MERGED means merged, not armed (issue #1247) ----------------------------
+# A child that arms auto-merge and reports MERGED while the checks still run sends
+# its parent straight into the endgame (EPIC #9447: a hub closed out on a PR that
+# landed 40 minutes later). So a merged report is checked against GitHub's own
+# `.merged` first. Not merged ⇒ it is re-filed, never sent as MERGED: WAITING
+# (armed / open — silent, unstamped, so the re-run after the real merge, or the
+# reaper's backstop, still reports), FAILED (closed unmerged — loud), IDLE (gh
+# could not answer — undetermined, silent). The caller is told on stderr either way.
+# Only with a --pr and a known repo: without one there is nothing to check.
+if [ "$STATE" = merged ] && [ -n "${PR//[^0-9]/}" ]; then
+  _prepo=''
+  [ -n "$sess" ] && [ -n "${selfwin:-}" ] && _prepo=$(fleet_window_repo "$sess" "$selfwin")
+  [ -n "$_prepo" ] || _prepo="${FLEET_REPO:-}"
+  case "$_prepo" in
+    ?*/?*)
+      _pms=$(fleet_pr_merge_state "$_prepo" "$PR")
+      case "$_pms" in
+        merged) ;;
+        armed|open)
+          STATE=waiting; VERDICT="pr-$_pms"
+          [ "$_pms" = armed ] && VERDICT=auto-merge-armed ;;
+        closed)
+          STATE=failed; VERDICT=pr-closed-unmerged
+          SUMMARY="PR #${PR//[^0-9]/} was closed WITHOUT merging${SUMMARY:+ — $SUMMARY}" ;;
+        *)
+          STATE=idle; VERDICT=pr-unknown ;;
+      esac
+      [ "$_pms" = merged ] || printf 'fleet-report-parent: NOT reporting MERGED — %s PR #%s is %s on GitHub (.merged != true); filed as %s. Re-run once it has really merged.\n' \
+        "$_prepo" "${PR//[^0-9]/}" "$_pms" "$(printf '%s' "$STATE" | tr '[:lower:]' '[:upper:]')" >&2 ;;
+  esac
 fi
 
 # --- the tier (issue #938): does this report need to wake anyone? ---------------
