@@ -18,6 +18,8 @@ if [ "$action" = wake ] && [ "$FLEET_SLEEP_WAKE" != dwell ]; then
   case " $* " in *" --nav "*) exit 0 ;; esac
 fi
 export FLEET_SLEEP_MCP_RESTARTABLE="${FLEET_SLEEP_MCP_RESTARTABLE:-}"
+# The sleeping page's language + DONE/NEXT digest knobs (issue #1237), when a conf sets them.
+export FLEET_UI_LANG FLEET_SLEEP_DIGEST FLEET_SLEEP_DIGEST_MODEL FLEET_SLEEP_DIGEST_SECS
 export FLEET_FAILOVER="${FLEET_FAILOVER:-0}"
 export FLEET_FAILOVER_AGENTS="${FLEET_FAILOVER_AGENTS:-claude,codex}"
 # The quota wake policy must see the same per-fleet inputs as reconciliation.

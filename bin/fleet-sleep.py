@@ -36,6 +36,24 @@ MCP = runpy.run_path(str(BIN / 'fleet_sleep_mcp.py'))
 PARK = runpy.run_path(str(BIN / 'fleet_sleep_park.py'))
 
 
+# Passed to the park page's own env (issue #1237) — see Worker.command.
+DIGEST_ENV=('FLEET_UI_LANG','FLEET_SLEEP_DIGEST','FLEET_SLEEP_DIGEST_CMD','FLEET_SLEEP_DIGEST_SECS',
+            'FLEET_SLEEP_DIGEST_MODEL','FLEET_HELPER_NO_MCP')
+
+
+def digest_argv():
+    """The helper model that writes a sleeping page's digest: `claude -p` on
+    haiku, no MCP (issue #468), authenticated off the account pool (#497) — the
+    classify-sessions.sh helper's shape. FLEET_SLEEP_DIGEST_CMD replaces it (a
+    shell command reading the prompt on stdin): the selftests' fake model."""
+    custom=os.environ.get('FLEET_SLEEP_DIGEST_CMD')
+    if custom: return ['bash','-c',custom]
+    nomcp='--strict-mcp-config \'--mcp-config={"mcpServers":{}}\'' if os.environ.get('FLEET_HELPER_NO_MCP','1')=='1' else ''
+    return ['bash','-c','. "$1/fleet-lib.sh" >/dev/null 2>&1; fleet_helper_claude_auth >/dev/null 2>&1; '
+            'exec claude -p '+nomcp+' --model "$2"','digest',str(BIN),
+            os.environ.get('FLEET_SLEEP_DIGEST_MODEL') or 'haiku']
+
+
 class NotAWorker(ValueError):
     """A window that structurally cannot be a worker (a panel or the hub): the
     scan skips it silently instead of logging a per-tick skip record for it."""
@@ -181,10 +199,59 @@ class Worker:
     def stamp(self, name, value):
         self.tm('set-option','-w','-t',self.window,name,str(value))
 
-    def command(self,action):
+    def command(self,action,*extra):
+        # The page's language and digest knobs (issue #1237) ride along when set:
+        # a respawned pane inherits the tmux server's environment, not ours.
+        knobs=[k+'='+os.environ[k] for k in DIGEST_ENV if os.environ.get(k)]
         return shlex.join(['env','FLEET_CONF_DIR='+str(self.directory.parents[2]),
-                          'FLEET_SLEEP_WAKE_ARM='+os.environ.get('FLEET_SLEEP_WAKE_ARM','3'),
-                          'python3',str(BIN/'fleet-sleep.py'),action,'--session',self.session,self.pane])
+                          'FLEET_SLEEP_WAKE_ARM='+os.environ.get('FLEET_SLEEP_WAKE_ARM','3'),*knobs,
+                          'python3',str(BIN/'fleet-sleep.py'),action,'--session',self.session,self.pane,*extra])
+
+    def digest(self,path,park_pid=0):
+        """Write the page's DONE/NEXT digest into sleep record `path` (issue #1237):
+        once per record, off the sleep's critical path — the park page launches
+        it detached and redraws when this signals. A failure is recorded too
+        (empty lists + `error`), so the page keeps its plain-reply fallback and
+        no later page retries a model that already failed on this reply."""
+        path=Path(path)
+        _,data=self.record()
+        if path.name!=Path(self.opt('@sleep_record')).name: return {'skip':'not the current sleep record'}
+        if 'digest' in data: return {'skip':'already digested'}
+        facts=park_facts(self,data)
+        reply=facts.get('reply')
+        digest,error=None,''
+        if not reply: error='no last reply'
+        else:
+            prompt=PARK['digest_prompt'](data,facts,reply)
+            try: secs=max(float(os.environ.get('FLEET_SLEEP_DIGEST_SECS') or 120),1.0)
+            except ValueError: secs=120.0
+            try:
+                p=subprocess.run(digest_argv(),input=prompt,text=True,capture_output=True,timeout=secs,
+                                 cwd=str(self.directory),env={k:v for k,v in os.environ.items() if k not in ('TMUX','TMUX_PANE')})
+                digest=PARK['parse_digest'](p.stdout) if p.returncode==0 else None
+                if digest is None: error='model exit '+str(p.returncode) if p.returncode else 'no usable answer'
+            except subprocess.TimeoutExpired: error='timed out'
+            except OSError as exc: error=str(exc)
+        record=digest or {'done':[],'next':[],'error':error}
+        # sleep() holds the worker lock until its page is up; wait it out,
+        # never write around it — a record save is whole-file.
+        deadline=time.monotonic()+30
+        while True:
+            try:
+                with lock(self.lockfile):
+                    current,data=self.record()
+                    if current!=path or data.get('state') not in ('sleeping','failed'): return {'skip':'no longer asleep'}
+                    if 'digest' in data: return {'skip':'already digested'}
+                    data['digest']=record
+                    save(path,data)
+                    break
+            except ValueError:
+                if time.monotonic()>deadline: return {'skip':'worker lock busy'}
+                time.sleep(.5)
+        if park_pid:
+            try: os.kill(park_pid,signal.SIGWINCH)
+            except OSError: pass
+        return {'digest':'ok' if digest else record['error']}
 
     def inspect(self):
         return json.loads(run(['bash',BIN/'fleet-transfer.sh','--session',self.session,
@@ -1065,6 +1132,14 @@ def park(w):
         termios.tcsetattr(0,termios.TCSANOW,mode)
     mouse=lambda on:sys.stdout.write('\033[?1000'+('h' if on else 'l')+'\033[?1006'+('h' if on else 'l'))
     facts,rows,fds,full,cost,blocker=None,set(),[rd,0],None,False,None
+    if 'digest' not in data and os.environ.get('FLEET_SLEEP_DIGEST','on')!='off':
+        # Once per record (issue #1237), detached: the digest writes the record
+        # and SIGWINCHes this page, which re-reads it like any resize.
+        try:
+            subprocess.Popen(shlex.split(w.command('digest','--record',str(path),'--pid',str(os.getpid()))),
+                             stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
+                             start_new_session=True)
+        except OSError: pass
     try:
         mouse(True)
         redraw=True
@@ -1169,12 +1244,12 @@ def park_frame(w,data,footer_lines=None,facts=None):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('action',choices=('hook','scan','status','sleep','wake','park','launch','keep-awake','allow-sleep','holds-exit','deliver','restore','why','busy','repark'))
+    p.add_argument('action',choices=('hook','scan','status','sleep','wake','park','launch','keep-awake','allow-sleep','holds-exit','deliver','restore','why','busy','repark','digest'))
     p.add_argument('--session',default='')
     p.add_argument('window',nargs='?')
     p.add_argument('--dry-run',action='store_true')
     p.add_argument('--record',default='')
-    p.add_argument('--pid',type=int,default=0,help='busy: the Claude pid already resolved for this pane')
+    p.add_argument('--pid',type=int,default=0,help='busy: the Claude pid already resolved for this pane; digest: the page to redraw')
     p.add_argument('--dwell',type=float,default=0,help='wake only if the window is still current after this many seconds')
     p.add_argument('--nav',action='store_true',help='wake: from a navigation/attach hook; a no-op unless FLEET_SLEEP_WAKE=dwell')
     p.add_argument('--force',action='store_true',help='repark: replace every sleeping page, not only stale ones')
@@ -1261,6 +1336,7 @@ def main():
         w.replaceable()
         w.tm('respawn-pane','-k','-t',w.pane,'-c',data['source']['worktree'],command)
     elif a.action=='repark': print(json.dumps(w.repark(force=a.force),ensure_ascii=False))
+    elif a.action=='digest': print(json.dumps(w.digest(a.record or w.opt('@sleep_record'),a.pid),ensure_ascii=False))
     elif a.action=='park': park(w)
     elif a.action=='launch': launch(w)
     else: w.stamp('@sleep_keep_awake','1' if a.action=='keep-awake' else '')

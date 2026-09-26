@@ -144,17 +144,101 @@ def git_state(worktree):
     return out
 
 
+def ui_lang():
+    """'zh' or 'en' — the same reading of FLEET_UI_LANG as the sidebar's (#1197)."""
+    value = os.environ.get('FLEET_UI_LANG', 'auto')
+    if value.startswith('zh') or value in ('cn', 'CN', 'Chinese', 'chinese'): return 'zh'
+    if value.startswith('en') or value in ('English', 'english'): return 'en'
+    locale = (os.environ.get('LC_ALL') or os.environ.get('LC_MESSAGES') or
+              os.environ.get('LC_CTYPE') or os.environ.get('LANG') or '')
+    if locale.startswith(('en', 'EN')): return 'en'
+    return 'zh'
+
+
+TEXT = {
+    'zh': {'you': '你', 'others': '等别人', 'auto': '自动',
+           'risk': '有改动还没保存到 GitHub，唤醒后会继续',
+           'loop': '{at} 按计划自动唤醒', 'quota': '额度恢复后自动唤醒'},
+    'en': {'you': 'You', 'others': 'Others', 'auto': 'Auto',
+           'risk': 'Some changes are not saved to GitHub yet; they continue on wake',
+           'loop': 'wakes by itself at {at} for its scheduled run', 'quota': 'wakes by itself when quota returns'},
+}
+
+
 def wake_reasons(data):
+    """The automatic wakes ahead of this sleeper, as (kind, 'HH:MM' or '')."""
     loop = (data.get('source') or {}).get('sleep_loop') or {}
     record = loop.get('record') or {}
-    reasons = []
     if record.get('status') == 'active':
         at = (record.get('schedule') or {}).get('next_run_at')
-        if isinstance(at, (int, float)): reasons.append('loop due ' + time.strftime('%H:%M', time.localtime(at)))
+        if isinstance(at, (int, float)): return [('loop', time.strftime('%H:%M', time.localtime(at)))]
     elif record.get('status') == 'waiting-quota':
-        reasons.append('when quota returns')
-    reasons.append('incoming message')
-    return reasons
+        return [('quota', '')]
+    return []
+
+
+def plain(text):
+    """The fallback's last reply without markdown noise (issue #1237): links read
+    as their text, emphasis/code marks and heading hashes dropped."""
+    text = re.sub(r'!?\[([^\]]*)\]\([^)]*\)', r'\1', text)
+    text = re.sub(r'(\*\*|__|`+)', '', text)
+    text = re.sub(r'(?m)^\s{0,3}#{1,6}\s+', '', text)
+    text = re.sub(r'(?m)^\s{0,3}>\s?', '', text)
+    return text.strip()
+
+
+def pr_words(opts):
+    """The change's state in plain words, for the digest prompt — or ''."""
+    pr = opts.get('prci', '')
+    if re.match(r'merged:(\d+):', opts.get('reap_key', '')): return 'merged into the main line, not released yet'
+    if not pr: return 'no change submitted for review'
+    return 'submitted for review (' + PRCI.get(pr, 'state unknown') + ')'
+
+
+DIGEST_RULES = """You write the status card of a paused coding assistant for a busy, NON-technical reader.
+Answer two questions: what got done, and what happens next.
+Reply with ONLY one JSON object, no prose, no code fence:
+{"done": ["..."], "next": [{"who": "you", "text": "..."}]}
+Rules:
+- Write every string in {language}.
+- Plain everyday words. Never mention files, branches, PRs, commits, CI, checks, tests, APIs, issue numbers, code names or links.
+- At most 3 "done" items and at most 3 "next" items; each one short sentence.
+- "done": what is now true, from the reader's point of view. A merged change is "merged, not released yet" unless it says it is live.
+- "next": what still has to happen. who="you" when the reader must decide or act, "others" when it waits on someone or something else.
+- Automatic wake-ups are shown separately: never list them.
+- Nothing left to do: "next" is [].
+"""
+
+
+def digest_prompt(data, opts, reply, lang=None):
+    lang = lang or ui_lang()
+    auto = [TEXT['en'][k].format(at=at) for k, at in wake_reasons(data)]
+    context = [DIGEST_RULES.replace('{language}', 'Simplified Chinese' if lang == 'zh' else 'English'),
+               'Task: ' + (opts.get('title') or '(untitled)'),
+               'Change: ' + pr_words(opts),
+               'Automatic wake-ups: ' + ('; '.join(auto) or 'none'),
+               'The assistant\'s last message before it paused:', '<<<', (reply or '(none)')[-6000:], '>>>']
+    return '\n'.join(context) + '\n'
+
+
+def parse_digest(text):
+    """{'done': [str], 'next': [{'who', 'text'}]} from a model's answer, or None
+    when it holds no usable object. Caps and cleans; never trusts the shape."""
+    try:
+        start, end = text.index('{'), text.rindex('}')
+        raw = json.loads(text[start:end + 1])
+    except (ValueError, AttributeError):
+        return None
+    if not isinstance(raw, dict): return None
+    line = lambda x: ' '.join(plain(x).split()) if isinstance(x, str) else ''
+    done = [line(x) for x in raw.get('done') or [] if line(x)][:3]
+    nxt = []
+    for item in raw.get('next') or []:
+        if isinstance(item, dict) and line(item.get('text')):
+            who = item.get('who') if item.get('who') in ('you', 'others', 'auto') else 'others'
+            nxt.append({'who': who, 'text': line(item['text'])})
+    if not done and not nxt: return None
+    return {'done': done, 'next': nxt[:3]}
 
 
 def trim_screen(screen):
@@ -176,68 +260,82 @@ def gather(data, opts):
     if source.get('worktree') and Path(source['worktree']).is_dir():
         facts['git'] = git_state(source['worktree'])
     agent = source.get('agent', 'claude')
+    facts.setdefault('lang', ui_lang())
+    digest = data.get('digest') if isinstance(data.get('digest'), dict) else {}
+    if digest.get('done') or digest.get('next'): return facts   # shown instead of the reply
     if agent in ('claude', 'codex') and source.get('transcript'):
         facts['reply'] = last_reply(source['transcript'], agent)
     return facts
 
 
 def render_park(data, opts, width_, height, footer_lines=None, now=None):
+    """Title + asleep age, a ⚠ line only when work is at risk, then what got done
+    and what happens next (issue #1237) — the digest written once at sleep time,
+    or the last reply in plain text until/unless there is one."""
     cols, rows = max(int(width_), 10), max(int(height), 3)
     now = time.time() if now is None else now
-    source = data.get('source') or {}
+    lang = opts.get('lang') or ui_lang()
+    words = TEXT[lang]
     fit = lambda text: clip(text, cols - 1)
     header = []
 
     state = data.get('state') or 'sleeping'
-    task = ' '.join(x for x in (('#' + opts['issue']) if opts.get('issue') else '', opts.get('title', '')) if x)
     word, color = {'waking': ('Waking…', YELLOW), 'failed': ('Wake failed', RED)}.get(state, ('Sleeping', ''))
-    first = fit(word + (' · ' + task if task else ''))
-    header.append(color + BOLD + first[:len(word)] + RESET + first[len(word):])
+    age = ago(now - data['created']) if isinstance(data.get('created'), (int, float)) else ''
+    room = cols - 1 - (width(age) + 2 if age else 0)
+    first = clip(word + (' · ' + opts['title'] if opts.get('title') else ''), max(room, len(word)))
+    gap = ' ' * max(cols - 1 - width(first) - width(age), 1) if age else ''
+    header.append(color + BOLD + first[:len(word)] + RESET + first[len(word):] + (gap + DIM + age + RESET if age else ''))
     if state == 'failed' and data.get('error'):
-        header += [RED + l + RESET for l in wrap('error: ' + data['error'], cols - 1)[:3]]
-
-    parts = []
-    if opts.get('repo'): parts.append(opts['repo'])
-    if isinstance(data.get('created'), (int, float)): parts.append('asleep ' + ago(now - data['created']))
-    at = (data.get('evidence') or {}).get('at')
-    if isinstance(at, (int, float)): parts.append('idle ' + ago(now - at))
-    if parts: header.append(fit(' · '.join(parts)))
-
-    who = [x for x in (source.get('agent'), data.get('model'), source.get('label')) if x]
-    before, parked = data.get('rss_before_kb'), data.get('rss_parked_kb')
-    if isinstance(before, int) and isinstance(parked, int) and before > parked:
-        who.append(f'{(before - parked) // 1024} MB freed')
-    if who: header.append(DIM + fit(' · '.join(who)) + RESET)
+        # One line: the most specific cause — what the launcher said, when it
+        # said anything — not the generic "resume is not ready" preamble.
+        reason = re.sub(r'^[\w ]+ said: ', '', str(data['error']).split(' · ')[-1])
+        header.append(RED + fit(' '.join(reason.split())) + RESET)
 
     git = opts.get('git') or {}
-    work = []
-    if 'dirty' in git: work.append(f"{git['dirty']} uncommitted" if git['dirty'] else 'clean')
-    if 'unpushed' in git: work.append(f"{git['unpushed']} unpushed" if git['unpushed'] else 'all pushed')
-    if work:
-        line = 'work: ' + ', '.join(work) + (f" on {git['branch']}" if git.get('branch') else '')
-        header.append((YELLOW if git.get('dirty') or git.get('unpushed') else '') + fit(line) + RESET)
+    if git.get('dirty') or git.get('unpushed'):
+        header.append(YELLOW + fit('⚠ ' + words['risk']) + RESET)
 
-    pr = opts.get('prci', '')
-    merged = re.match(r'merged:(\d+):', opts.get('reap_key', ''))
-    if pr: header.append(fit('PR: ' + pr + ' ' + PRCI.get(pr, '')))
-    elif merged: header.append(fit(f'PR #{merged.group(1)} merged'))
-    else: header.append(DIM + fit('PR: none open') + RESET)
+    footer = [fit(l) if width(l) > cols - 1 else l for l in (footer_lines if footer_lines is not None else [HINT])]
 
-    footer = [DIM + fit('wakes on its own: ' + ' · '.join(wake_reasons(data))) + RESET]
-    footer += [fit(l) if width(l) > cols - 1 else l for l in (footer_lines if footer_lines is not None else [HINT])]
+    digest = data.get('digest') if isinstance(data.get('digest'), dict) else {}
+    auto = [{'who': 'auto', 'text': words[k].format(at=at)} for k, at in wake_reasons(data)]
+    nxt = [n for n in digest.get('next') or [] if isinstance(n, dict) and n.get('text')] + auto
+    tags = {k: words[k] for k in ('you', 'others', 'auto')}
+    pad = max(width(t) for t in tags.values()) + 2
+    done = []
+    if digest.get('done') or digest.get('next'):
+        done.append(BOLD + 'DONE' + RESET)
+        for item in digest.get('done') or []:
+            lines = wrap(str(item), cols - 3)
+            done += ['✓ ' + lines[0]] + ['  ' + l for l in lines[1:]]
+    after = []   # NEXT, one blank line below whatever sits above it
+    if nxt:
+        after += ['', BOLD + 'NEXT' + RESET]
+        for item in nxt:
+            tag = tags.get(item.get('who'), tags['others'])
+            lines = wrap(str(item['text']), max(cols - 1 - pad, 4))
+            after += [DIM + tag + RESET + ' ' * (pad - width(tag)) + lines[0]] + [' ' * pad + l for l in lines[1:]]
 
     rule = DIM + '─' * (cols - 1) + RESET
     free = rows - len(header) - len(footer) - 2
     reply = opts.get('reply')
-    if reply:
-        body = [BOLD + 'Last reply' + RESET] + wrap(reply, cols - 1)
-        tail = body[1:][-max(free - 1, 0):] if free > 1 else []
-        if len(body) - 1 > len(tail) and tail: tail[0] = DIM + '…' + RESET
-        body = body[:1] + tail if free > 0 else []
+    if done:
+        above = done
     else:
-        saved = [DIM + clip(l, cols - 1) + RESET for l in trim_screen(data.get('screen'))]
-        label = DIM + fit('saved screen (old, not live)') + RESET
-        body = ([label] + saved[-(free - 1):]) if free > 1 else []
+        # No digest (none yet, or the model failed): the reply in plain words,
+        # else the screen saved at sleep time — its tail when it does not fit,
+        # so the NEXT block below stays whole.
+        room = max(free - len(after) - 1, 0)
+        if reply:
+            label, text = DIM + 'Last reply' + RESET, wrap(plain(reply), cols - 1)
+        else:
+            label = DIM + fit('saved screen (old, not live)') + RESET
+            text = [DIM + clip(l, cols - 1) + RESET for l in trim_screen(data.get('screen'))]
+        tail = text[-room:] if room else []
+        if reply and len(text) > len(tail) and tail: tail[0] = DIM + '…' + RESET
+        above = [label] + tail if room else []
+    body = (above + after if above else after[1:])[:max(free, 0)]
 
     lines = header + [rule] + body
     lines = lines[:max(rows - len(footer) - 1, 1)]

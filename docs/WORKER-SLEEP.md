@@ -241,30 +241,77 @@ new conversation.
 ### The sleeping page
 
 The placeholder process (`fleet-sleep.py park`) draws a card sized to the
-current pane, not the screen captured at sleep time (issue #1049). Top to
-bottom: the state (`Sleeping`, `Waking…`, or `Wake failed` with the error), the
-issue and window name, the repo, how long it has been asleep and idle, the agent,
-model, account and memory freed, uncommitted and unpushed work in the worktree,
-the PR's CI glyph (`@prci`) or a merged PR, then the agent's last reply, wrapped
-to the width — for Claude the last `assistant` entry of its transcript, for
-Codex the last assistant `message` item of its rollout (issue #1052). Below that is a line listing what still wakes it on its own (a due
-loop, quota coming back, an incoming message) and the Wake button.
+current pane, not the screen captured at sleep time (issue #1049). It answers
+the two questions a person asks of a sleeping worker — what got done, and what
+happens next — in plain words (issue #1237):
 
-When the last reply can't be read (an unreadable transcript, or one with no
-assistant text yet), the saved screen is shown instead, dimmed, labelled as old, and
-without the agent's input box and status line. Any field that is missing is
-left off the card. The card is redrawn on SIGWINCH and on input, and on a timer
-only while the button is armed (its countdown). The
-renderer is `render_park()` in `bin/fleet_sleep_park.py`, a pure function of
-the record, the window facts, and the size. Callers can pass their own
-`footer_lines`.
+```
+Sleeping · 只留微信登录                         2h 32m
+⚠ 有改动还没保存到 GitHub，唤醒后会继续
+──────────
+DONE
+✓ 用户可以用微信扫码登录，也能在微信里直接登录
+✓ 旧的登录入口已去掉；改动已合并，还没上线
+
+NEXT
+等别人  还有 8 个活跃账号没绑定微信，密码登录先保留
+你      全部绑定后，决定何时上线并关掉密码登录
+──────────
+ ⏎ Wake   press ⏎ (or tap) twice to resume
+```
+
+The first line is the state (`Sleeping`, `Waking…`, or `Wake failed`) and the
+window name, with how long it has been asleep on the right. A failed wake adds
+one red line with the most specific cause (what the launcher said, when it said
+anything). The `⚠` line appears only when the worktree has uncommitted or
+unpushed work, and names no branch. The issue number, repo, idle time, agent,
+model, account, memory freed and PR state are not on the page: the sidebar row
+shows the first two, and `fleet-sleep.sh status` / the record keep the rest.
+
+**DONE / NEXT** come from a digest written once per sleep record, not on
+redraw, so `render_park()` stays pure. The page launches it, detached, the
+first time it draws a record that has no `digest` key: `fleet-sleep.py digest`
+reads the last reply — for Claude the last `assistant` entry of its transcript,
+for Codex the last assistant `message` item of its rollout (issue #1052) — and
+hands it, with the PR state (`@prci` / `@reap_key`) and the automatic wakes, to
+`claude -p --model haiku` (no MCP, pool-authenticated — the
+`classify-sessions.sh` helper's shape). The prompt asks for plain, non-technical
+language, at most three items each, and each NEXT item tagged with who acts
+(`you` / `others`). The answer is stored as
+`digest: {done: [...], next: [{who, text}]}` in the record, under the worker
+lock, and the digest process sends the page SIGWINCH so it redraws. Sleep never
+waits for it; a re-parked page (issue #1064) or a Codex worker gets the same
+treatment. A model that fails, times out or answers nothing usable is recorded
+as `digest: {done: [], next: [], error: …}`, so no later page retries it.
+
+A due loop or a quota wait is always a NEXT item tagged `自动` / `Auto`, drawn
+from the record rather than the model, so its time stays exact. Tags and fixed
+lines follow `FLEET_UI_LANG` (`zh` → 你 / 等别人 / 自动, `en` → You / Others /
+Auto), resolved the way the sidebar resolves it; the model writes in the same
+language.
+
+Without a digest (not written yet, or failed), the page shows the last reply in
+plain text — links reduced to their text, `**` and backticks removed — under
+the same frame. When even that can't be read, the saved screen is shown
+instead, dimmed, labelled as old, and without the agent's input box and status
+line. The card is redrawn on SIGWINCH and on input, and on a timer only while
+the button is armed (its countdown). The renderer is `render_park()` in
+`bin/fleet_sleep_park.py`, a pure function of the record, the window facts,
+and the size. Callers can pass their own `footer_lines`.
+
+| Knob | Default | Effect |
+|---|---|---|
+| `FLEET_SLEEP_DIGEST` | `on` | `off`: no digest; the page keeps the plain last reply |
+| `FLEET_SLEEP_DIGEST_MODEL` | `haiku` | model for the helper `claude -p` |
+| `FLEET_SLEEP_DIGEST_SECS` | `120` | time box for one digest |
+| `FLEET_SLEEP_DIGEST_CMD` | — | a shell command that reads the prompt on stdin and prints the JSON (the selftests' fake model) |
 
 ### When a wake fails
 
 A wake whose launcher exits before the agent is ready (a missing tool, a
 setting the resume refuses) leaves the record `failed` and a dead pane. Fleet
 puts the sleeping page back in that pane (issue #1054): the first line reads
-`Wake failed`, then the error and the launcher's last output. The button
+`Wake failed`, then one line with the launcher's last output (or the error). The button
 reads **Retry** and takes the same double press as Wake. The sleep scan also
 re-parks a `failed` record left on a dead pane, for a wake that was killed
 before it could.
