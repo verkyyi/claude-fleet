@@ -161,6 +161,7 @@ case "\${1:-}" in
       case "\$*" in *'@9'*) printf '%s\n' "\${SCRATCH_STATE:-done}" ;;
         *) printf '%s\n' "\${WIN_STATE_FAKE-done}" ;; esac
       exit 0 ;; esac
+    case "\$*" in *@worker_lifecycle*) echo "\${FAKE_LIFE:-}"; exit 0 ;; *@reap_hold*) echo "\${FAKE_HOLD:-}"; exit 0 ;; esac
     case "\$*" in *window_id*) echo "\${FAKE_SELF_WIN:-@1}" ;; *session_name*) echo 'testsess' ;; *) echo '' ;; esac ;;
   kill-window)   printf 'kill-window %s\n' "\${!#}" >> "$ORDER_LOG" ;;
   run-shell)     printf 'run-shell\n' >> "$ORDER_LOG" ;;
@@ -178,8 +179,10 @@ cat > "$WORK/fakebin/ps" <<'PSFAKE'
 [ "${FAKE_PS_FAIL:-0}" = 1 ] && exit 1
 [ "${FAKE_PS_MISSING:-0}" = 1 ] && exit 0
 case "$*" in
-  *etime*) printf '500 1 02:00:00 zsh\n501 500 %s codex\n' "${FAKE_AGENT_AGE:-01:00:00}" ;;
-  *) printf '500 zsh\n501 codex\n' ;;
+  # FAKE_NO_AGENT=1: a sleeper's pane — the park page, no agent (issue #1244).
+  *etime*) printf '500 1 02:00:00 zsh\n'
+           [ "${FAKE_NO_AGENT:-0}" = 1 ] || printf '501 500 %s codex\n' "${FAKE_AGENT_AGE:-01:00:00}" ;;
+  *) printf '500 zsh\n'; [ "${FAKE_NO_AGENT:-0}" = 1 ] || printf '501 codex\n' ;;
 esac
 PSFAKE
 chmod +x "$WORK/fakebin/ps"
@@ -346,6 +349,36 @@ for scenario in young ps-failure missing-pid state-failure missing-window duplic
     && [ -f "$WORK/wt-issue-42/keep.txt" ] || fail "automatic $scenario mutated the worker"
 done
 ok 'young agent, failed probes and missing window/pid all fail closed'
+
+# Issue #1244: a SLEEPING merged worker is cleaned without a wake — its sleep
+# record retired (fleet-sleep.py dispose) BEFORE the kill; a hold, an agent under
+# the sleeper, or a refused dispose all leave it standing.
+REAL_PY3=$(command -v python3)
+cat > "$WORK/fakebin/python3" <<PYFAKE
+#!/bin/bash
+case "\${1:-}" in *fleet-sleep.py)
+  printf 'dispose %s\n' "\${!#}" >> "$ORDER_LOG"
+  [ "\${DISPOSE_FAILS:-0}" = 1 ] && exit 1; exit 0 ;; esac
+exec "$REAL_PY3" "\$@"
+PYFAKE
+chmod +x "$WORK/fakebin/python3"
+: > "$LEDGER"
+tok="$(FAKE_LIFE=sleeping FAKE_NO_AGENT=1 run_clean merged --auto)"
+case "$tok" in cleaned:*) ;; *) fail "a sleeping merged worker should be cleaned, got '$tok'" "$(cat "$WORK/err")" ;; esac
+case "$(tr '\n' ' ' < "$ORDER_LOG")" in "dispose @7 kill-window @7 "*) ;;
+  *) fail "sleeper teardown must dispose the record before the kill: [$(tr '\n' ' ' < "$ORDER_LOG")]" ;; esac
+[ -s "$LEDGER" ] || fail 'a sleeper cleanup must still write its history row'
+: > "$LEDGER"
+tok="$(FAKE_LIFE=sleeping FAKE_NO_AGENT=1 FAKE_HOLD=1 run_clean merged --auto)"
+[ "$tok" = skip:live ] && [ ! -s "$ORDER_LOG" ] || fail "a held sleeper must be retained, got '$tok'"
+tok="$(FAKE_LIFE=sleeping run_clean merged --auto)"
+[ "$tok" = skip:live ] && [ ! -s "$ORDER_LOG" ] || fail "an agent under a sleeper must be retained, got '$tok'"
+tok="$(FAKE_LIFE=sleeping FAKE_NO_AGENT=1 DISPOSE_FAILS=1 run_clean merged --auto)"
+[ "$tok" = skip:live ] || fail "a refused dispose must defer, got '$tok'"
+grep -q kill-window "$ORDER_LOG" && fail 'a refused dispose still killed the sleeper'
+[ -f "$WORK/wt-issue-42/keep.txt" ] || fail 'a refused dispose dropped the worktree'
+rm -f "$WORK/fakebin/python3"
+ok 'sleeping merged worker cleaned without a wake; hold / agent / refused dispose retain it'
 tok="$(WIN_STATE_FAKE=working run_clean merged --auto --dry-run)"
 [ "$tok" = skip:live ] || fail 'dry-run must apply automatic liveness'
 printf 'FLEET_REAP_MIN_AGE=7200\n' > "$WORK/conf/testsess.conf"

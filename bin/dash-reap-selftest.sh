@@ -158,14 +158,18 @@ case "$*" in
   # attached-client probe (#596): CLIENTS unset ⇒ one fake client (the interactive
   # ⌃x cases); CLIENTS="" ⇒ a headless fleet, where a popup must never be drawn.
   *list-clients*) [ -n "${CLIENTS-}" ] && printf '%s\n' "$CLIENTS" ;;
+  *@reap_hold*)   printf '%s\n' "${HOLD:-}" ;;       # issue #1244
+  *@worker_lifecycle*) printf '%s\n' "${LIFE:-}" ;;
   *@raw*)         printf '%s\n' "${RAW:-}" ;;
   *@worktree*)    printf '%s\n' "${WT:-}" ;;         # scratch worktree path (#290)
   *@issue*)       printf '%s\n' "${ISS:-}" ;;
   *pane_current_path*) printf '%s\n' "${WT:-}" ;;
-  *window_id*)    printf '%s\n' "${WID:-@9}" ;;
+  # a killed window is GONE (#1244): dash-reap re-reads window_id after the kill
+  # and reports failed:kill-window if it still resolves.
+  *window_id*)    [ -e "$TMLOG.killed" ] && exit 1; printf '%s\n' "${WID:-@9}" ;;
   *session_name*) printf 's1\n' ;;
   *window_name*) printf 'worker name\n' ;;
-  *kill-window*)  printf 'KILL %s\n' "$*" >> "$TMLOG" ;;
+  *kill-window*)  printf 'KILL %s\n' "$*" >> "$TMLOG"; [ "${KILL_FAILS:-0}" = 1 ] || : > "$TMLOG.killed" ;;
   *display-popup*)
     printf 'POPUP %s\n' "$*" >> "$TMLOG"
     # Normal popup: execute on a separate terminal (discard UI here), cancel.
@@ -226,6 +230,7 @@ transcript_for "$WORK/wt8" 8
 
 run_reap() { # <ISS> <args...> — run dash-reap with the fakes + this base checkout
   local iss="$1"; shift
+  rm -f "$TMLOG.killed"
   # RAW/WID feed the fake tmux's @raw/window_id answers (empty RAW ⇒ not a raw row).
   # TMPDIR is redirected under $WORK so fleet-lib's cache dir (FLEET_C) — and the
   # raw path's summary-cache rm — stay hermetic (never touch the real cache).
@@ -273,7 +278,7 @@ REAP_STATE=working run_reap_tok 7 @9 --exec full merged-pr
 [ -d "$WORK/wt7" ] && [ "$(srows 7)" = 0 ] && [ ! -s "$GHLOG" ] \
   || fail "active --exec changed worktree/history/issue"
 : > "$TMLOG"; : > "$GHLOG"
-REAP_BG_STATE=working run_reap 7 @9 >/dev/null
+REAP_BG_STATE=working run_reap 7 @9 --bg >/dev/null
 grep -q 'RUNSHELL .*@9.*--exec' "$TMLOG" || fail "deferred reap must pin the window id"
 grep -q KILL "$TMLOG" && fail "queued reap killed a worker that resumed working"
 [ -d "$WORK/wt7" ] && [ "$(srows 7)" = 0 ] && [ ! -s "$GHLOG" ] \
@@ -337,7 +342,7 @@ grep -q 'KILL' "$TMLOG" && fail "unmerged ⌃x must not kill the window before c
 # bind returns instantly; the fake tmux runs the dispatched command so we still see
 # the effects.
 : > "$TMLOG"; : > "$GHLOG"
-run_reap "1" "@9"
+run_reap "1" "@9" --bg
 grep -q 'RUNSHELL .*--exec full' "$TMLOG" || fail "merged reap must be dispatched via run-shell -b (--exec full)"
 [ -d "$WORK/wt1" ] && fail "merged worktree should be removed"
 git -C "$BASEDIR" show-ref --verify -q refs/heads/issue-1 && fail "issue-1 branch should be deleted"
@@ -356,7 +361,7 @@ case "$(scol 1 5)" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*)
 # a LANDED row with the PR resolved from the branch (7700), recorded before the
 # worktree is removed. This is the path that must not be re-derived in the bg pass.
 : > "$TMLOG"; : > "$GHLOG"
-run_reap "7" "@9"
+run_reap "7" "@9" --bg
 grep -qE "RUNSHELL .*--exec full '?merged-pr'?" "$TMLOG" || fail "a merged-PR reap must thread the merged-pr verdict" "$(cat "$TMLOG")"
 [ -d "$WORK/wt7" ] && fail "merged-PR worktree should be removed"
 [ "$(srows 7)" = 1 ] || fail "a merged-PR ⌃x must record ONE row" "$(cat "$LEDGER")"
@@ -366,7 +371,7 @@ grep -qE "RUNSHELL .*--exec full '?merged-pr'?" "$TMLOG" || fail "a merged-PR re
 # B4c (#471): a dispatch with NO verdict — an --exec string queued by a pre-#471
 # install — records NOTHING rather than inventing a row kind. The reap itself still
 # happens, so the upgrade is never a behavior regression.
-: > "$TMLOG"; : > "$GHLOG"
+: > "$TMLOG"; : > "$GHLOG"; rm -f "$TMLOG.killed"
 ISS=8 TMLOG="$TMLOG" GHLOG="$GHLOG" \
 FLEET_REPO="fake/repo" FLEET_MAIN="$BASEDIR" FLEET_BASE_BRANCH="$BASE_BR" \
 FLEET_CONF_DIR="$WORK/noconf" TMPDIR="$WORK/rt" \
@@ -612,12 +617,102 @@ grep -q 'KILL' "$TMLOG" || fail "--yes on a dirty scratch should close the windo
 [ "$TOK" = "reaped:keep" ] || fail "--yes on a dirty scratch must print reaped:keep (got [$TOK]) (#596)"
 [ "$(srows scratch-12)" = 1 ] || fail "a --yes scratch disposal must index the session (#466+#596)" "$(cat "$LEDGER")"
 
+# --- E. sleepers + truthful results (issue #1244) ------------------------------
+# Every fixture is a clean strict ancestor of base (merged, no confirm needed).
+for n in 20 21 22 23 24 25; do
+  git -C "$BASEDIR" worktree add -q -b "issue-$n" "$WORK/wt$n" "$H1" >/dev/null 2>&1
+  transcript_for "$WORK/wt$n" "$n"
+done
+# fake python3: `fleet-sleep.py dispose` is logged (DISPOSE_FAILS=1 refuses it);
+# REAP_LIVE_PASSES=<n> lets the first n liveness probes pass and fails the rest —
+# the shape of #1244's foreground-passes / tail-refuses split. Else the real one.
+REAL_PY=$(command -v python3)
+cat > "$WORK/fakepath/python3" <<PYFAKE
+#!/bin/bash
+case "\${1:-}" in
+  *fleet-sleep.py)
+    printf 'SLEEP %s\n' "\$*" >> "$TMLOG"
+    [ "\${DISPOSE_FAILS:-0}" = 1 ] && { echo 'fleet-sleep: a wake raced us' >&2; exit 1; }
+    exit 0 ;;
+  *fleet-reap-live.py)
+    if [ -n "\${REAP_LIVE_PASSES:-}" ]; then
+      c=\$(( \$(cat "$WORK/probes" 2>/dev/null || echo 0) + 1 )); echo "\$c" > "$WORK/probes"
+      [ "\$c" -le "\$REAP_LIVE_PASSES" ] && exit 0
+      echo 'young-agent:codex:53s<1800s'; exit 1
+    fi ;;
+esac
+exec "$REAL_PY" "\$@"
+PYFAKE
+chmod +x "$WORK/fakepath/python3"
+
+# E1: a SLEEPING merged worker is reaped WITHOUT a wake — sleep record retired
+# before the kill, window gone, worktree removed, history row written.
+: > "$TMLOG"; : > "$GHLOG"
+LIFE=sleeping REAP_STATE="done" run_reap_tok 20 @9
+[ "$TOK" = reaped:full ] && [ "$RC" = 0 ] || fail "sleeping merged worker must reap (got [$TOK] rc $RC)" "$(cat "$TMLOG")"
+grep -q 'SLEEP .* dispose ' "$TMLOG" || fail "the sleep record must be retired before the kill"
+grep -q 'SLEEP .* wake ' "$TMLOG" && fail "a sleeper must never be woken to be reaped"
+awk '/^SLEEP .* dispose /{d=NR} /^KILL/{k=NR} END{exit !(d && k && d<k)}' "$TMLOG" \
+  || fail "dispose must precede kill-window" "$(cat "$TMLOG")"
+[ -d "$WORK/wt20" ] && fail "sleeping merged worktree should be removed"
+[ "$(srows 20)" = 1 ] || fail "a sleeper reap must record ONE /fleet-history row" "$(cat "$LEDGER")"
+
+# E2: a sleeper under a reap HOLD is retained — ⌃x, --yes, everything.
+: > "$TMLOG"; : > "$GHLOG"
+LIFE=sleeping HOLD=1 run_reap_tok 21 @9 --yes 2>"$WORK/hold-err"
+[ "$TOK" = skip:live ] && [ "$RC" = 3 ] || fail "a held sleeper must be retained (got [$TOK] rc $RC)"
+grep -q 'retained:hold' "$WORK/hold-err" || fail "the refusal must name the hold" "$(cat "$WORK/hold-err")"
+grep -q KILL "$TMLOG" && fail "a held sleeper was killed"
+[ -d "$WORK/wt21" ] && [ "$(srows 21)" = 0 ] || fail "a held sleeper lost its worktree / got a row"
+# ...and the transitional phases stay retained as before.
+LIFE=waking run_reap_tok 21 @9 --yes 2>/dev/null
+[ "$TOK" = skip:live ] || fail "a waking worker must stay retained"
+
+# E3: a refused sleep-record retirement (a wake raced us) → failed, nothing killed.
+: > "$TMLOG"; : > "$GHLOG"
+LIFE=sleeping DISPOSE_FAILS=1 run_reap_tok 22 @9
+[ "$TOK" = failed:sleep-record ] && [ "$RC" = 5 ] || fail "refused dispose must fail loudly (got [$TOK] rc $RC)"
+grep -q KILL "$TMLOG" && fail "refused dispose still killed the window"
+[ -d "$WORK/wt22" ] || fail "refused dispose removed the worktree"
+
+# E4: the gate passes in the foreground but the disposal tail's own gate refuses
+# (#1244's `FLEET_REAP_MIN_AGE=0 dash-reap.sh @65`): a script caller runs the tail
+# SYNCHRONOUSLY, so it exits non-zero and never prints reaped:full.
+: > "$TMLOG"; : > "$GHLOG"; rm -f "$WORK/probes"
+REAP_LIVE_PASSES=2 run_reap_tok 23 @9 2>"$WORK/tail-err"
+[ "$RC" != 0 ] && [ "$TOK" != reaped:full ] || fail "a tail refusal was reported as success (got [$TOK] rc $RC)"
+[ "$TOK" = skip:live ] || fail "a tail refusal must print skip:live (got [$TOK])"
+grep -q 'young-agent' "$WORK/tail-err" || fail "the refusal must name its reason" "$(cat "$WORK/tail-err")"
+grep -q 'RUNSHELL' "$TMLOG" && fail "a script caller's merged reap must not be backgrounded"
+grep -q KILL "$TMLOG" && fail "a refused tail killed the window"
+[ -d "$WORK/wt23" ] || fail "a refused tail removed the worktree"
+
+# E5: the dash bind (--bg) is told `dispatched:full`, never `reaped:full`, and an
+# inline FLEET_REAP_MIN_AGE override reaches the backgrounded tail's gate.
+: > "$TMLOG"; : > "$GHLOG"
+FLEET_REAP_MIN_AGE=0 run_reap_tok 24 @9 --bg
+[ "$TOK" = dispatched:full ] || fail "--bg must print dispatched:full (got [$TOK])"
+grep -q 'RUNSHELL .*FLEET_REAP_MIN_AGE=0 bash .*--exec full' "$TMLOG" \
+  || fail "the age override must be forwarded into the bg tail" "$(cat "$TMLOG")"
+[ -d "$WORK/wt24" ] && fail "the dispatched bg reap should still remove the worktree"
+
+# E6: kill-window that leaves the window standing → failed:kill-window, the
+# worktree + issue untouched.
+: > "$TMLOG"; : > "$GHLOG"
+KILL_FAILS=1 run_reap_tok 25 @9
+[ "$TOK" = failed:kill-window ] && [ "$RC" = 5 ] || fail "a surviving window must report failed:kill-window (got [$TOK] rc $RC)"
+[ -d "$WORK/wt25" ] || fail "a failed kill must not remove the worktree"
+[ -s "$GHLOG" ] && fail "a failed kill must not close the issue"
+rm -f "$WORK/fakepath/python3"
+
 # --- C. interactive terminal handoff (#451), asynchronous cleanup (#304) ------
 # execute() yields fzf's terminal for the inline confirm. B4 above still asserts
 # that the slow teardown is dispatched via run-shell -b after authorization.
 DASH="$BIN/tmux-dashboard.sh"
 grep -Fq '$DASH_KEY_REAP:execute(' "$DASH" \
   || fail "reap bind must hand the terminal to its inline confirm (#451)"
+grep -Fq 'dash-reap.sh {2} --bg)' "$DASH" \
+  || fail "the dash bind must ask for the backgrounded tail explicitly (#1244)"
 
 printf 'selftest PASS: reap gates, confirmation/cancel, ledger, async cleanup, CLI results, refused-popup fallback\n'
 exit 0

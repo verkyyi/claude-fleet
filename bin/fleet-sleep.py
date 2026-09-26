@@ -751,6 +751,21 @@ class Worker:
         try:return MCP['verify_resume'](source,MCP['inventory'](client))
         finally:client.close()
 
+    def dispose(self):
+        """Retire this sleeper's record ahead of a reap (issue #1244): the window
+        is about to be killed WITHOUT a wake, so the record must stop describing a
+        retained worker — fleet-restore's `restore` refuses any state but the
+        retained ones. Under the worker lock, so a concurrent wake cannot start an
+        agent the reap would then kill; refuses unless the original agent is gone."""
+        with lock(self.lockfile):
+            state=self.opt('@worker_lifecycle')
+            if state not in ('sleeping','failed'): raise ValueError('not a sleeping worker: '+(state or 'awake'))
+            path,data=self.record()
+            if source_alive(data): raise ValueError('the original agent is still running')
+            data.update(state='reaped',updated=time.time())
+            save(path,data)
+            return {'state':'reaped','record':str(path)}
+
     def scheduled_wake(self,path,data):
         snapshot=data['source'].get('sleep_loop')
         if not snapshot:return False
@@ -1244,7 +1259,7 @@ def park_frame(w,data,footer_lines=None,facts=None):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('action',choices=('hook','scan','status','sleep','wake','park','launch','keep-awake','allow-sleep','holds-exit','deliver','restore','why','busy','repark','digest'))
+    p.add_argument('action',choices=('hook','scan','status','sleep','wake','park','launch','keep-awake','allow-sleep','holds-exit','deliver','restore','why','busy','repark','digest','dispose','hold','release'))
     p.add_argument('--session',default='')
     p.add_argument('window',nargs='?')
     p.add_argument('--dry-run',action='store_true')
@@ -1337,6 +1352,10 @@ def main():
         w.tm('respawn-pane','-k','-t',w.pane,'-c',data['source']['worktree'],command)
     elif a.action=='repark': print(json.dumps(w.repark(force=a.force),ensure_ascii=False))
     elif a.action=='digest': print(json.dumps(w.digest(a.record or w.opt('@sleep_record'),a.pid),ensure_ascii=False))
+    elif a.action=='dispose': print(json.dumps(w.dispose(),ensure_ascii=False))
+    # A reap HOLD (issue #1244): fleet-reap-live.py retains a held worker, so no
+    # automatic cleanup and no ⌃x takes it until `release`.
+    elif a.action in ('hold','release'): w.stamp('@reap_hold','1' if a.action=='hold' else '')
     elif a.action=='park': park(w)
     elif a.action=='launch': launch(w)
     else: w.stamp('@sleep_keep_awake','1' if a.action=='keep-awake' else '')

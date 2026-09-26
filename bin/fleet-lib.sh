@@ -1877,6 +1877,22 @@ fleet_dash_pane() {
     | awk '$2=="1"{print $1; exit}'
 }
 
+# Retire a SLEEPING worker's sleep record before its window is killed (issue
+# #1244). A sleeper is reaped WITHOUT a wake — its pane is the park page, no agent
+# — so the record must stop describing a retained worker, or a crash-restore could
+# resurrect a window whose worktree the reap just removed. A non-sleeper is a
+# no-op (rc 0). rc 1 = the record could not be retired (a wake raced us, the lock
+# is held, the original agent is somehow alive) — the caller must NOT kill.
+# Args: <@window-id> <fleet-session>
+fleet_sleep_dispose() {
+  local _win="${1:-}" _sess="${2:-}" _life _bin
+  [ -n "$_win" ] && [ -n "$_sess" ] || return 0
+  _life=$(tmux -L "$(fleet_socket "$_sess")" display-message -p -t "$_win" '#{@worker_lifecycle}' 2>/dev/null) || return 0
+  [ "$_life" = sleeping ] || return 0
+  _bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+  python3 "$_bin/fleet-sleep.py" dispose --session "$_sess" "$_win" >/dev/null
+}
+
 # The "clean + merged?" gate shared by the worktree janitor (worktree-autoclean.sh)
 # and the dash reaper (dash-reap.sh) — ONE source for identical guarantees. Given a
 # worktree, decides whether it is safe to auto-remove. Prints a reason token on

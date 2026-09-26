@@ -42,8 +42,18 @@ def live_reason(target, minimum, socket_name=None):
     if not re.fullmatch(r"@\d+", target):
         return "unknown:unstable-target"
     tmux = ["tmux"] + (["-L", socket_name] if socket_name is not None else [])
+    # A HOLD (issue #1244) is the operator's "keep this one" — e.g. a sleeper
+    # parked on post-release verification. It retains any worker, asleep or not.
+    if read(*tmux, "display-message", "-p", "-t", target, "#{@reap_hold}").strip() == "1":
+        return "retained:hold"
     lifecycle = read(*tmux, "display-message", "-p", "-t", target, "#{@worker_lifecycle}").strip()
-    if lifecycle:
+    # A SLEEPING worker has no agent at all — its pane is the park page — so it is
+    # the safest reap there is (issue #1244): no age gate, only the process walk
+    # below, which refuses ANY agent found under it (a wake mid-flight). The state
+    # gate still applies — a `looping` sleeper has a scheduled wake pending. The
+    # transitional phases (preparing/waking) and a failed wake stay retained.
+    sleeping = lifecycle == "sleeping"
+    if lifecycle and not sleeping:
         return "retained:" + lifecycle
     state = read(*tmux, "display-message", "-p", "-t", target, "#{@claude_state}").strip()
     if state not in ("", "done"):
@@ -75,6 +85,10 @@ def live_reason(target, minimum, socket_name=None):
         seen.add(pid)
         age, comm = processes[pid]
         agent = agent_name(comm, commands.get(pid, ""))
+        if agent and sleeping:
+            return f"retained:sleeping:agent-{agent}"
+        # The age gate protects a freshly spawned AWAKE agent (#565); a sleeper
+        # never reaches it — it has no agent to protect.
         if agent and age < minimum:
             return f"young-agent:{agent}:{age}s<{minimum}s"
         # A node/bun process without argv cannot be classified safely.

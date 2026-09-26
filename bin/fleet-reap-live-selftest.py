@@ -21,15 +21,32 @@ spec.loader.exec_module(live)
 
 
 class LiveTests(unittest.TestCase):
-    def probe(self, state="done", comm="claude", age="00:10", commands=None, roots="100\n", minimum=1800, lifecycle=""):
-        outputs = iter([lifecycle, state, roots, f"100 1 01:00:00 zsh\n101 100 {age} {comm}\n102 1 00:01 codex\n",
+    def probe(self, state="done", comm="claude", age="00:10", commands=None, roots="100\n", minimum=1800, lifecycle="", hold=""):
+        outputs = iter([hold, lifecycle, state, roots, f"100 1 01:00:00 zsh\n101 100 {age} {comm}\n102 1 00:01 codex\n",
                         commands if commands is not None else f"100 zsh\n101 {comm}\n102 codex\n"])
         with patch.object(live, "read", side_effect=lambda *args: next(outputs)):
             return live.live_reason("@1", minimum)
 
     def test_retained_workers_are_never_automatically_reaped(self):
-        for phase in ('preparing','sleeping','waking','failed'):
+        for phase in ('preparing','waking','failed'):
             self.assertEqual(self.probe(minimum=0,lifecycle=phase),'retained:'+phase)
+
+    def test_sleepers_are_reapable_without_a_wake(self):
+        # Issue #1244: the park page is no agent — no age gate applies.
+        self.assertIsNone(self.probe(lifecycle="sleeping", comm="python3"))
+        # ...but a looping sleeper has a scheduled wake pending: state still gates.
+        self.assertEqual(self.probe(lifecycle="sleeping", comm="python3", state="looping"), "state:looping")
+        # ...but ANY agent under a sleeper (a wake mid-flight) retains it, old or young.
+        for age in ("00:10", "10:00:00"):
+            self.assertEqual(self.probe(lifecycle="sleeping", age=age), "retained:sleeping:agent-claude")
+        self.assertEqual(self.probe(lifecycle="sleeping", comm="node", commands=""), "unknown:agent-command")
+
+    def test_hold_retains_any_worker(self):
+        for lifecycle in ("", "sleeping"):
+            self.assertEqual(self.probe(minimum=0, lifecycle=lifecycle, hold="1"), "retained:hold")
+
+    def test_awake_young_agent_still_refused(self):
+        self.assertTrue(self.probe(state="done").startswith("young-agent:claude:"))
 
     def test_state_never_overridden_by_age_knob(self):
         for state in ("working", "looping", "busy", "waiting", "unknown"):
@@ -67,11 +84,11 @@ class LiveTests(unittest.TestCase):
             self.assertEqual(live.main(), 1)
 
     def test_explicit_socket_applies_to_every_tmux_probe(self):
-        replies = iter(["", "done", "100", "100 1 01:00:00 zsh", "100 zsh"])
+        replies = iter(["", "", "done", "100", "100 1 01:00:00 zsh", "100 zsh"])
         with patch.object(live, "read", side_effect=lambda *args: next(replies)) as read:
             self.assertIsNone(live.live_reason("@1", 1800, "other-fleet"))
         calls = [call.args for call in read.call_args_list if call.args[0] == "tmux"]
-        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(calls), 4)
         self.assertTrue(all(call[:3] == ("tmux", "-L", "other-fleet") for call in calls))
 
     @unittest.skipUnless(shutil.which("tmux") and shutil.which("perl"), "tmux/perl absent")

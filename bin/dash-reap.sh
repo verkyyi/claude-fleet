@@ -57,12 +57,28 @@
 #                        reaped:full         0  wt + branch + issue + window disposed
 #                        reaped:keep         0  window + issue closed, wt KEPT (dirty)
 #                        skip:needs-confirm  3  needs a y/n the caller did not grant
-#                        skip:live           3  active/young agent or unknown liveness
+#                        skip:live           3  active/young agent, a reap hold, or
+#                                               unknown liveness (the reason is on stderr)
+#                        dispatched:full     0  `--bg` only: handed to the background
+#                                               tail, NOT yet done (the dash bind)
+#                        failed:<slug>       5  the gate passed but the disposal did not
+#                                               happen (sleep-record / kill-window)
 #                        refused:<slug>      4  nothing to reap here (no-target /
 #                                               no-git / no-issue / no-repo)
 #                      The token names the ACTION taken, not which artifacts existed:
 #                      a scratch row with no worktree reports `reaped:full` because
 #                      closing its window IS its full disposal.
+#   --bg               the dash ⌃x bind only (issue #1244): run a clean+merged reap
+#                      in the background so the bind returns instantly, and say so
+#                      (`dispatched:full`). Every OTHER caller runs synchronously, so
+#                      `reaped:full` always means the window is gone — before #1244 a
+#                      bare `dash-reap.sh @65` backgrounded the tail, printed
+#                      `reaped:full`, and the tail's own gate then refused silently.
+#
+# SLEEPING workers (issue #1244) are reaped WITHOUT a wake: fleet-reap-live.py passes
+# a sleeper with no agent under it (no state/age gate — there is nothing to
+# protect), the sleep record is retired (fleet_sleep_dispose) and the window killed.
+# A reap HOLD (`fleet-sleep.py hold <@id>`) retains any worker until `release`.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -99,8 +115,22 @@ guard_live() {
     emit skip:live
     printf 'reap: %s is live or could not be checked (%s) — leaving window and worktree alone\n' \
       "$target" "${why:-probe unavailable}" >&2
+    # Also on the status line: in the backgrounded tail stderr goes nowhere, and a
+    # refusal nobody can see is how #1244's "reaped" window was still standing.
+    tmux display-message "reap refused: $target — ${why:-probe unavailable}" 2>/dev/null || :
     exit 3
   fi
+}
+
+# Dispatch the --exec tail through the tmux server (issue #304). The tail re-runs
+# the liveness gate (#565), so it must run it under the SAME knob the foreground
+# did: run-shell does not inherit an inline `FLEET_REAP_MIN_AGE=…` (issue #1244),
+# so a numeric override is forwarded explicitly. $1 = action, $2 = verdict (both
+# fixed tokens, shell-safe to interpolate).
+bg_exec() {
+  local env=""
+  case "${FLEET_REAP_MIN_AGE:-}" in ''|*[!0-9]*) ;; *) env="FLEET_REAP_MIN_AGE=$FLEET_REAP_MIN_AGE " ;; esac
+  fleet_bg "${env}bash '$BIN/dash-reap.sh' '$target' --exec $1 '$2'"
 }
 
 # stderr keeps the public one-token stdout protocol intact. Quote free text so
@@ -157,6 +187,23 @@ reap_record() {
     "${FLEET_SESSION:-}" "" "$branch" "${wname:-}" "${worigin:-}"
 }
 
+# Close the window, truthfully (issue #1244): retire a sleeper's record first (a
+# refusal leaves everything standing), then kill, then CHECK it is gone. Exits 5
+# with a failed:<slug> token instead of letting a caller read success.
+reap_kill() {
+  if ! fleet_sleep_dispose "$target" "${FLEET_SESSION:-}"; then
+    emit failed:sleep-record
+    tmux display-message "reap failed: $target — sleep record could not be retired" 2>/dev/null || :
+    exit 5
+  fi
+  tmux kill-window -t "$target" 2>/dev/null || true
+  if tmux display-message -p -t "$target" '#{window_id}' 2>/dev/null | grep -qxF "$target"; then
+    emit failed:kill-window
+    tmux display-message "reap failed: $target — window still open" 2>/dev/null || :
+    exit 5
+  fi
+}
+
 # full reap: remove worktree + delete branch, close issue, kill window
 reap_full() {
   guard_live
@@ -165,7 +212,7 @@ reap_full() {
   # on the very next repaint instead of lingering behind the slow tail below (the
   # network `gh issue close` + `git worktree remove`). This whole function already
   # runs backgrounded (fleet_bg / run-shell -b, #304), so it never blocks the bind.
-  tmux kill-window -t "$target" 2>/dev/null || true
+  reap_kill
   reap_record                                          # index it BEFORE the remove (#471)
   if [ -n "$wtdir" ] && [ -n "$MAIN" ]; then
     # Reap any detached process anchored to this worktree first (issue #151) — a
@@ -186,7 +233,7 @@ reap_full() {
 # dirty force reap: KEEP the worktree, close issue + kill window only
 reap_keep() {
   guard_live
-  tmux kill-window -t "$target" 2>/dev/null || true   # drop the row first (#313)
+  reap_kill                                            # drop the row first (#313)
   reap_record                                          # the KEPT worktree is resumable (#471)
   # kept tree, but its detached LISTENERS go now — a `*` bind serves it to the LAN (#1154)
   [ -n "${wtdir:-}" ] && fleet_reap_worktree_listeners "$wtdir" >/dev/null 2>&1
@@ -219,7 +266,7 @@ reap_dispatch() {
 }
 
 # --- parse args ---------------------------------------------------------------
-confirm=0; yes=0
+confirm=0; yes=0; bg=0
 target="${1:-}"
 # Nothing to act on (an empty {1} from a dash with no rows) — still answer the
 # caller with a token rather than a bare success, but stay silent on the status
@@ -239,6 +286,7 @@ else
   for a in "$@"; do case "$a" in
     confirm) confirm=1 ;;
     --yes|--force) yes=1 ;;
+    --bg) bg=1 ;;
     *) refuse bad-args "one target only; unexpected argument: $a" ;;
   esac; done
 fi
@@ -514,10 +562,13 @@ if [ "$confirm" = 0 ]; then
     # refreshes.
     # The verdict rides along so the bg pass can record the right row kind (#471);
     # it is a fixed token from fleet_reap_ok, so it is shell-safe to interpolate.
-    # --yes runs the same disposal in the foreground instead, so `reaped:full`
-    # means DONE for a script caller rather than "dispatched" (#596).
-    *)  if [ "$yes" = 1 ]; then reap_dispatch full
-        else fleet_bg "bash '$BIN/dash-reap.sh' '$target' --exec full '$reason'"; fi
+    # Only the dash bind asks for that (`--bg`, issue #1244) and it is told
+    # `dispatched:full`; every other caller runs the disposal in the foreground,
+    # so `reaped:full` means DONE rather than "dispatched" (#596).
+    *)  if [ "$bg" = 1 ] && [ "$yes" = 0 ]; then
+          bg_exec full "$reason"; emit dispatched:full; exit 0
+        fi
+        reap_dispatch full
         emit reaped:full; exit 0 ;;
   esac
 fi
@@ -534,6 +585,6 @@ case "$ans" in y|Y) ;; *) exit 0;; esac
 
 # Background the confirmed reap too (issue #304) so the popup closes INSTANTLY
 # instead of blocking on the git remove + gh close.
-if [ "$reason" = dirty ]; then fleet_bg "bash '$BIN/dash-reap.sh' '$target' --exec keep '$reason'"
-else fleet_bg "bash '$BIN/dash-reap.sh' '$target' --exec full '$reason'"; fi
+if [ "$reason" = dirty ]; then bg_exec keep "$reason"
+else bg_exec full "$reason"; fi
 exit 0
