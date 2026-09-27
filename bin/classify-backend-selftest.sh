@@ -13,6 +13,8 @@
 # Asserted:
 #   • DEFAULT       no CLASSIFY_BACKEND ⇒ haiku decides, the Jev endpoint is never hit,
 #                   no shadow log; an unknown value logs one line and behaves as haiku
+#   • HOST CONF     the test runs from a conf-free re-root, so a host fleet.conf's
+#                   CLASSIFY_BACKEND cannot decide DEFAULT; a planted one would (#1251)
 #   • JEV-DECIDES   conf ≥ CLASSIFY_JEV_MIN_CONF ⇒ Jev's answer sets the state,
 #                   claude is NOT called, the log line carries via=jev, the hash is stamped
 #   • JEV-WIRE      Bearer <key> reaches the server; body.state == the capture;
@@ -32,6 +34,18 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+# Re-root onto a CONF-FREE shadow of this install (issue #1251). The classifier
+# reads its backend from `$BIN/../fleet.conf` (fleet-lib.sh), and a conf line
+# outranks the environment — so run straight from the live install, where the
+# operator set CLASSIFY_BACKEND=jev, this test measured the HOST, not the code.
+# It also keeps `$BIN/../logs` (classify.log, .classify-cache) off the live
+# fleet's state. The gate already does this (run-selftests.sh); this covers a
+# direct run, and costs one ~100ms mirror when nested.
+if [ "${_CLASSIFY_SELFTEST_ROOT:-}" != "$BIN" ]; then
+  _root="$(sh "$BIN/selftest-shadow-root.sh" "$BIN/..")" || exit 2
+  _CLASSIFY_SELFTEST_ROOT="$_root/bin" bash "$_root/bin/${0##*/}" "$@"; _rc=$?
+  rm -rf "$_root"; exit "$_rc"
+fi
 CLS="$BIN/classify-sessions.sh"
 REP="$BIN/classify-shadow-report.py"
 for f in "$CLS" "$REP" "$BIN/fleet-lib.sh"; do
@@ -153,6 +167,21 @@ run default
 [ "$(nreq)" = 0 ] || fail "default: the Jev endpoint was hit $(nreq) times with no backend set"
 [ ! -f "$WORK/shadow.ndjson" ] || fail "default: a shadow log was written"
 ok "default backend: haiku decides, Jev endpoint never touched, no shadow log"
+
+# ================================================================ HOST CONF (#1251)
+# The DEFAULT leg ran from a root with no fleet.conf — so a host's
+# CLASSIFY_BACKEND cannot have decided it. Then prove that is load-bearing: the
+# same leg with a conf line planted beside this bin/ DOES flip, so the leak is
+# real and the re-root above is what closes it (not a stale assertion).
+[ ! -e "$BIN/../fleet.conf" ] || fail "host conf: the selftest root carries a fleet.conf — the DEFAULT leg would read the host's backend"
+printf 'CLASSIFY_BACKEND=jev\n' > "$BIN/../fleet.conf"
+fresh "done"; printf 'STOPPED\n' > "$WORK/claude-out"; printf '0\n' > "$WORK/claude-rc"; jev_answer LOOPING 0.99
+# Unset the gate's own FLEET_SKIP_GLOBAL_CONF for this one run: a direct run has none.
+( unset FLEET_SKIP_GLOBAL_CONF _FLEET_GLOBAL_CONF_SOURCED; run hostconf ) || exit 1
+rm -f "$BIN/../fleet.conf"
+[ "$(wopt "$ww" @claude_state)" = "looping" ] \
+  || fail "host conf: a planted CLASSIFY_BACKEND=jev no longer reaches the classifier — the root-isolation check above proves nothing"
+ok "host conf: no fleet.conf in the selftest root, and a planted one would flip the DEFAULT leg"
 
 fresh "done"; printf 'LOOPING\n' > "$WORK/claude-out"
 CLASSIFY_BACKEND=bogus run bogus
