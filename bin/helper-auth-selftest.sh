@@ -32,6 +32,18 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+# Re-root onto a CONF-FREE shadow of this install (issue #1251). The classifier
+# reads its backend from `$BIN/../fleet.conf` (fleet-lib.sh), and a conf line
+# outranks the environment — so run straight from the live install, where the
+# operator set CLASSIFY_BACKEND=jev, this test measured the HOST, not the code.
+# It also keeps `$BIN/../logs` (classify.log, .classify-cache) off the live
+# fleet's state. The gate already does this (run-selftests.sh); this covers a
+# direct run, and costs one ~100ms mirror when nested.
+if [ "${_HELPER_AUTH_SELFTEST_ROOT:-}" != "$BIN" ]; then
+  _root="$(sh "$BIN/selftest-shadow-root.sh" "$BIN/..")" || exit 2
+  _HELPER_AUTH_SELFTEST_ROOT="$_root/bin" bash "$_root/bin/${0##*/}" "$@"; _rc=$?
+  rm -rf "$_root"; exit "$_rc"
+fi
 LIB="$BIN/fleet-lib.sh"
 CLS="$BIN/classify-sessions.sh"
 ACCT="$BIN/fleet-account.sh"
