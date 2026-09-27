@@ -22,7 +22,11 @@
 #   • JEV-DOWN      connection refused ⇒ haiku decides, one `jev unavailable` line
 #   • JEV-TIMEOUT   a server slower than CLASSIFY_JEV_TIMEOUT ⇒ haiku, bounded wait
 #   • JEV-HTTP      an http 401 ⇒ haiku
-#   • JEV-WORKING   a confident WORKING read still never promotes a quiet window (#846)
+#   • JEV-WORKING   WORKING is not a choice (#1252): a WORKING answer is outside the
+#                   criteria ⇒ haiku decides; a quiet window is never promoted (#846)
+#   • RUBRIC        the haiku prompt carries no WORKING line (#1252)
+#   • PREP          the Stop-hooks spinner + its Tip line never reach either backend;
+#                   `✻ Worked for … · done` does (#1252)
 #   • SHADOW        haiku's verdict sets the state; one ndjson row with both verdicts,
 #                   conf, hash; capture text only on a disagreement; a Jev outage
 #                   still yields a row (jev null + jev_err); the report script reads it
@@ -60,7 +64,7 @@ chmod +x "$WORK/bin/tmux"
 cat > "$WORK/bin/claude" <<EOS
 #!/bin/sh
 echo call >> "$WORK/claude-calls"
-cat >/dev/null
+cat > "$WORK/claude-in"
 cat "$WORK/claude-out" 2>/dev/null
 exit "\$(cat "$WORK/claude-rc" 2>/dev/null || echo 0)"
 EOS
@@ -180,10 +184,11 @@ b = json.load(open(sys.argv[1], encoding="utf-8")); cap = sys.argv[2]
 assert b["model"] == "jev-latest", b["model"]
 assert b["state"] == cap, "state != capture"
 q = b["questions"]["status"]; assert q["type"] == "choice"
-assert sorted(q["criteria"]) == ["ERROR", "LOOPING", "STOPPED", "WAITING", "WORKING"], sorted(q["criteria"])
+assert sorted(q["criteria"]) == ["ERROR", "LOOPING", "STOPPED", "WAITING"], sorted(q["criteria"])   # no WORKING (#1252)
+assert "ALREADY ENDED" in q["instructions"], "instructions do not say the turn has ended"
 assert "scheduled wakeup" in q["criteria"]["LOOPING"], "criteria text is not the rubric's"
 PY
-ok "jev wire: Bearer key from the key file, state == capture, five rubric criteria, model jev-latest"
+ok "jev wire: Bearer key from the key file, state == capture, four rubric criteria (no WORKING), model jev-latest"
 
 # TYPESAFE_API_KEY outranks the file
 fresh "done"; jev_answer LOOPING 0.93
@@ -248,13 +253,24 @@ run jev-badbody
 grep -q 'jev unavailable (bad-response)' "$LOGF" || fail "jev bad body: no bad-response line" "$(cat "$LOGF")"
 ok "jev: an unparseable answer falls back to haiku"
 
-# JEV-WORKING — #846 holds for Jev too
+# JEV-WORKING — WORKING is no longer a choice (#1252); #846 still holds either way
 fresh "done"; printf 'STOPPED\n' > "$WORK/claude-out"; jev_answer WORKING 0.97
 run jev-working
 [ "$(wopt "$ww" @claude_state)" = "done" ] || fail "jev WORKING promoted a quiet window to [$(wopt "$ww" @claude_state)]"
-[ "$(ncall)" = 0 ] || fail "jev WORKING: claude called $(ncall) times"
-grep -q 'working-read ignored (screen never promotes; #846)  via=jev' "$LOGF" || fail "jev WORKING: no ignored line" "$(cat "$LOGF")"
-ok "jev: a confident WORKING read is recorded and ignored (#846), no haiku call"
+[ "$(ncall)" = 1 ] || fail "jev WORKING: an out-of-criteria answer should fall back to haiku, claude called $(ncall) times"
+grep -q 'jev unavailable (bad-choice WORKING)' "$LOGF" || fail "jev WORKING: no bad-choice line" "$(cat "$LOGF")"
+ok "jev: WORKING is outside the four criteria (#1252) ⇒ haiku decides, the quiet window stays quiet"
+
+# RUBRIC — the haiku prompt offers no WORKING either (#1252)
+grep -q '^WORKING - ' "$WORK/claude-in" && fail "haiku prompt still offers WORKING" "$(head -n 8 "$WORK/claude-in")"
+grep -q '^LOOPING - ' "$WORK/claude-in" || fail "haiku prompt lost the rubric" "$(head -n 8 "$WORK/claude-in")"
+grep -q 'ALREADY ENDED' "$WORK/claude-in" || fail "haiku prompt does not say the turn has ended"
+fresh "done"; printf 'WORKING\n' > "$WORK/claude-out"; unset CLASSIFY_BACKEND
+run haiku-working
+[ "$(wopt "$ww" @claude_state)" = "done" ] || fail "haiku WORKING promoted a quiet window to [$(wopt "$ww" @claude_state)]"
+grep -q 'working-read ignored (screen never promotes; #846)' "$LOGF" || fail "haiku WORKING: no ignored line" "$(cat "$LOGF")"
+export CLASSIFY_BACKEND=jev
+ok "rubric: haiku is offered four words and told the turn ended; a stray WORKING is still ignored (#846)"
 
 # a claude failure under jev fallback still leaves the hash unwritten (issue #497)
 fresh "done"; printf 'auth error\n' > "$WORK/claude-out"; printf '1\n' > "$WORK/claude-rc"; jev_answer LOOPING 0.2
@@ -318,6 +334,26 @@ printf '{"%s":"STOPPED"}\n' "$HASH" > "$WORK/labels.json"
 out="$(python3 "$REP" --labels "$WORK/labels.json" "$WORK/shadow.ndjson" 2>&1)" || fail "report --labels failed" "$out"
 printf '%s\n' "$out" | grep -q 'labelled subset: n=2  jev-acc=  0.0%  haiku-acc= 50.0%' || fail "report: labelled accuracy wrong" "$out"
 ok "shadow report: agreement, disagreement list and labelled accuracy come out of the log"
+
+# ================================================================ PREP (#1252)
+# The Stop hook runs this classifier while Claude's own Stop-hooks spinner is still up.
+out="$(printf 'recap\n✢ Crunching… (running Stop hooks… 3/4 · 29s · ↓ 1.5k tokens)\n  ⎿  Tip: Use /permissions to pre-approve\n✻ Worked for 9s · done · 1 shell still running\n❯ \n' | bash "$CLS" --prep-capture)"
+[ "$out" = "$(printf 'recap\n✻ Worked for 9s · done · 1 shell still running\n❯ ')" ] || fail "--prep-capture: wrong output" "$out"
+tmux respawn-pane -k -t "$ww" "printf 'recap of the turn\n✢ Crunching… (running Stop hooks… 3/4 · 29s)\n  ⎿  Tip: Run /install-slack-app\n✻ Worked for 9s · done\n'; sleep 300" 2>/dev/null \
+  || fail "could not re-seed the worker pane"
+i=0; while [ "$i" -lt 40 ] && ! tmux capture-pane -p -t "$ww" | grep -q 'Worked for'; do i=$((i+1)); sleep 0.1; done
+export CLASSIFY_BACKEND=jev
+fresh "done"; printf 'STOPPED\n' > "$WORK/claude-out"; jev_answer LOOPING 0.2
+run prep
+python3 - "$WORK/req/001.json" <<'PY' || fail "prep: the capture Jev saw still carries residue" "$(cat "$WORK/req/001.json")"
+import json, sys
+st = json.load(open(sys.argv[1], encoding="utf-8"))["state"]
+assert "running Stop hooks" not in st and "Tip:" not in st, st
+assert "Worked for 9s" in st and "recap of the turn" in st, st
+PY
+grep -q 'running Stop hooks\|Tip:' "$WORK/claude-in" && fail "prep: the haiku prompt still carries residue" "$(tail -n 5 "$WORK/claude-in")"
+grep -q 'Worked for 9s' "$WORK/claude-in" || fail "prep: the haiku prompt lost the screen" "$(tail -n 5 "$WORK/claude-in")"
+ok "prep: the Stop-hooks spinner and its Tip never reach Jev or haiku; the done line does (#1252)"
 
 rm -f "$CCACHE/$ckey.hash"
 printf 'selftest OK: %s checks — CLASSIFY_BACKEND haiku|jev|shadow: Jev decides only when confident, every failure falls back to haiku, shadow only logs (issue #1229)\n' "$pass"
