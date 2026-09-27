@@ -100,10 +100,17 @@ JEV_KEY_FILE="${CLASSIFY_JEV_KEY_FILE:-$HOME/.config/typesafe/api_key}"
 SHADOW_LOG="${CLASSIFY_SHADOW_LOG:-$BIN/../logs/classify-shadow.ndjson}"
 SHADOW_MAX_MB="${CLASSIFY_SHADOW_MAX_MB:-64}"   # over this, keep the newest 20000 rows
 
-RUBRIC='You are a status classifier for a coding-agent terminal session. The agent can be Claude Code or Codex. Based ONLY on the terminal screen below, reply with EXACTLY ONE word and nothing else:
-WORKING - The agent is actively generating or a tool is running (e.g. shows "esc to interrupt", a live spinner, streaming output).
+# The rubric has NO `WORKING` choice (issue #1252). Every screen it sees is a QUIET
+# window (the state gate below: done|needs|looping) read after the turn ended — the
+# Stop hook or the spinner's stale-working demote — so WORKING is a misread by
+# construction (#846) and its verdict was already discarded. Offered as a choice it
+# was the most-picked answer: 938 shadow calls, haiku WORKING 570×, Jev 495×, on
+# post-turn residue (the Stop-hooks spinner, "1 shell still running", tool blocks in
+# scrollback). Taking it away makes both backends pick among the four that matter.
+# Holds for Codex too: the gate is agent-agnostic. norm_label still parses WORKING.
+RUBRIC='You are a status classifier for a coding-agent terminal session. The agent can be Claude Code or Codex. Its turn has ALREADY ENDED: this screen was captured after it stopped, so it is never actively working — a leftover spinner or status line, tool output in the scrollback, or a "still running" background shell is history or background, not a live turn. Based ONLY on the terminal screen below, reply with EXACTLY ONE word and nothing else:
 WAITING - The agent EXPLICITLY posed a question, requested specific input, or is blocked on a permission/confirmation prompt that stops progress until the user answers (e.g. "Do you want to proceed?", "Please provide the target path.", a numbered choice list awaiting a selection, "Allow this tool to run?"). This takes precedence: if the screen shows a real pending question OR permission prompt, it is WAITING even if a caret or chips are also visible. A bare idle prompt with only a recap and suggested commands is NOT waiting. The Codex hint "Ask Codex to do anything" is a placeholder, not a pending question.
-LOOPING - idle right now but a scheduled wakeup or next loop iteration is pending (mentions waiting N seconds, scheduled, will continue, /loop).
+LOOPING - idle right now but it will resume ON ITS OWN: a scheduled wakeup or next loop iteration is pending (mentions waiting N seconds, scheduled, will continue, /loop), or its LAST message says it is waiting in the background for something still running — a background command, CI, a check — whose result it will act on (e.g. "waiting for the CI verdict in the background", "will wake me when it finishes"). A "1 shell still running" status alone is not enough: a plain recap of finished work is STOPPED.
 STOPPED - finished; idle with nothing pending. This INCLUDES the normal post-turn idle screen: a recap/summary of the work the agent just COMPLETED, optionally followed by suggested-command chips (lines beginning "❯ ..." or "› ..."). Those chips are passive hints shown after a finished turn, not a question awaiting an answer — still STOPPED.
 ERROR - a crash or error state.
 Screen:
@@ -124,6 +131,20 @@ norm_label() {
   esac
 }
 
+# prep_capture — drop post-turn residue from the capture (stdin → stdout), issue #1252.
+# The Stop hook that fires this classifier is itself one of the Stop hooks Claude Code
+# is still running, so the frame it reads nearly always carries Claude's LIVE spinner:
+#   ✢ Crunching… (running Stop hooks… 3/4 · 29s · ↓ 1.5k tokens)
+#     ⎿  Tip: Control this session from the Claude mobile app · run /remote-control
+# — 148 of the 312 hand-labelled shadow disagreements, the textbook "a live spinner"
+# the rubric used to call WORKING. It says nothing about the turn (it has ended), so
+# it goes, and so does the rotating Tip under it (a new tip = a new hash = a wasted
+# re-call of an unchanged screen). Everything else is left alone: `✻ Worked for 9s ·
+# done`, "N shell still running" and the agent's own words are real signal.
+prep_capture() {
+  sed -e '/(running Stop hooks/d' -e '/^[[:space:]]*⎿[[:space:]]*Tip:/d'
+}
+
 # jev_ask — the capture on stdin; the RUBRIC's five `WORD - text` lines become the
 # choice criteria (ONE rubric, both backends), the capture is the `state`. Prints
 # `CHOICE CONFIDENCE MS` and exits 0 on an answer; otherwise prints a short reason
@@ -140,7 +161,7 @@ for line in rub.splitlines():
 state = sys.stdin.read()
 body = {"model": os.environ["JEV_MODEL"], "state": state,
         "questions": {"status": {"type": "choice",
-            "instructions": "You are a status classifier for a coding-agent terminal session (Claude Code or Codex). Based ONLY on the terminal screen in STATE, choose the status.",
+            "instructions": "You are a status classifier for a coding-agent terminal session (Claude Code or Codex). Its turn has ALREADY ENDED: STATE was captured after it stopped, so it is never actively working; a leftover spinner or status line, tool output in the scrollback, or a still-running background shell is history or background, not a live turn. Based ONLY on the terminal screen in STATE, choose the status.",
             "criteria": crit}}}
 req = urllib.request.Request(os.environ["JEV_URL"], data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
         headers={"Authorization": "Bearer " + os.environ["JEV_KEY"], "Content-Type": "application/json"})
@@ -237,7 +258,7 @@ classify_one() {
   # shellcheck disable=SC2064
   trap "rmdir '$lock' 2>/dev/null" RETURN
 
-  cap=$(TM capture-pane -p -t "$target" 2>/dev/null | sed '/^[[:space:]]*$/d' | tail -35)
+  cap=$(TM capture-pane -p -t "$target" 2>/dev/null | sed '/^[[:space:]]*$/d' | prep_capture | tail -35)
   [ -z "$cap" ] && return 0
 
   h=$(printf '%s' "$cap" | cksum | awk '{print $1}')
@@ -335,6 +356,9 @@ classify_one() {
 # ---- single-window mode (event / Stop-hook path) ----------------------------
 # The only mode: classify ONE window now, fired by the Stop hook (classify-hook.sh)
 # or the spinner's stuck-working demote. A bare/unknown invocation is a clean no-op.
+# --prep-capture: the capture cleanup alone, stdin → stdout — what the selftest and a
+# replay of stored captures (~/tools/jev-eval) run to see the exact screen a call sees.
+if [ "${1:-}" = "--prep-capture" ]; then prep_capture; exit 0; fi
 if [ "${1:-}" = "--window" ]; then
   [ -n "${2:-}" ] || exit 0
   sleep "$SETTLE" 2>/dev/null   # settle: let post-turn scheduling text land
