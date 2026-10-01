@@ -14,7 +14,8 @@
 #        on the shim's socket changes nothing.
 #   F. intro.d             → system dir then $CONF_DIR/intro.d, file order, lines
 #        verbatim between cf and the hide line; a failing / silent /
-#        non-executable hook prints nothing.
+#        non-executable hook prints nothing. A hook sees the banner's RESOLVED
+#        language exported as $FLEET_UI_LANG — the conf's over env/locale (#1257).
 #
 #   E. shell/fleet-login.zsh (issue #1166), the ~/.zshrc block that shows the
 #      banner and then auto-attaches an SSH login: no $SSH_TTY / inside $TMUX /
@@ -167,6 +168,25 @@ user1
 [ "$out" = "$want" ] && ok "hooks: system dir then conf dir, file order, between cf and hide; failing/empty/non-exec silent" \
   || { bad "hooks"; printf 'got:\n%s\nwant:\n%s\n' "$out" "$want"; }
 narrow F; notmux F
+rm -f "$FLEET_INTRO_SYS_D"/*
+# the hook's language is the banner's: the fleet conf beats env + locale (#1257)
+printf '#!/bin/sh\necho "lang=$FLEET_UI_LANG"\n' > "$FLEET_INTRO_SYS_D/10-lang"
+chmod +x "$FLEET_INTRO_SYS_D/10-lang"
+rm -f "$T/f/intro.d/05-u"
+mkfleet "$T/fz" zhf me/app main; echo 'FLEET_UI_LANG=zh' >> "$T/fz/fleets/zhf/conf"
+mkfleet "$T/fe" enf me/app main; echo 'FLEET_UI_LANG=en' >> "$T/fe/fleets/enf/conf"
+FLEET_UI_LANG=en LANG=en_US.UTF-8 LC_ALL= run "$T/fz"
+has "lang=zh" "zh conf under en env/locale → hook sees zh"; has "进入 fleet" "… under a zh banner"
+FLEET_UI_LANG=zh LANG=zh_CN.UTF-8 LC_ALL= run "$T/fe"
+has "lang=en" "en conf under zh env/locale → hook sees en"; has "enter fleet" "… under an en banner"
+FLEET_UI_LANG= LANG=en_US.UTF-8 LC_ALL= run "$T/f"
+has "lang=en" "no conf lang, empty env → hook sees the locale's en, not empty"
+# the reported case: FLEET_UI_LANG UNSET on an en_US login, zh conf — a plain
+# shell var never reaches the hook, which then falls back to the locale's en
+unset FLEET_UI_LANG
+LANG=en_US.UTF-8 LC_ALL= run "$T/fz"
+has "lang=zh" "zh conf, FLEET_UI_LANG unset, en_US locale → hook sees zh"
+export FLEET_UI_LANG=zh
 rm -f "$FLEET_INTRO_SYS_D"/*
 
 echo "E. fleet-login.zsh — banner + SSH auto-attach"
