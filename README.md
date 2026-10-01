@@ -361,9 +361,9 @@ bin/fleet-list.sh                          # ● live / ○ down · name · repo
 bin/fleet-down.sh fleet --purge            # kill the fleet (+ drop its conf/cache); checkouts stay
 ```
 
-On SSH login, `shell/fleet-intro.sh` prints a short banner: this login's fleet,
-whether it is running, each repo it hosts with its live session count, and the
-`cf` line to get in — and then goes straight in: an interactive SSH login runs
+On SSH login, `shell/fleet-intro.sh` prints a short, phone-width banner: this
+login's fleet and its repo count, the `cf` line to get in, and any machine-local
+`intro.d` lines — and then goes straight in: an interactive SSH login runs
 `cf` itself, starting the fleet first if it isn't up (scp / rsync / `ssh host cmd`
 are never touched; `~/.hushfleet-attach` keeps the banner only). See
 [docs/INSTALL.md](docs/INSTALL.md) step 7 for the one `~/.zshrc` line,

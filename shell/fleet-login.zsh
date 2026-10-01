@@ -2,8 +2,8 @@
 # (issues #1068, #1166). Source it from ~/.zshrc:
 #   source ~/.claude/fleet/shell/fleet-login.zsh
 #
-# 1. The login banner (shell/fleet-intro.sh): this login's fleet, its repos and
-#    the one `cf` line to get in.
+# 1. The login banner (shell/fleet-intro.sh): this login's fleet, its repo count
+#    and the one `cf` line to get in.
 # 2. An interactive SSH login then goes straight into the fleet — `cf` attaches
 #    to it, or starts it first when it isn't running. Detaching (or `cf` failing)
 #    leaves you at this shell, as before.
