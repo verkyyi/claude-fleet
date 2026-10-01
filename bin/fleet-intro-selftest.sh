@@ -15,6 +15,8 @@
 #   F. intro.d             → system dir then $CONF_DIR/intro.d, file order, lines
 #        verbatim between cf and the hide line; a failing / silent /
 #        non-executable hook prints nothing.
+#   G. intro.d language    → a hook's FLEET_UI_LANG is the resolved zh/en (conf
+#        beats login locale), #1259.
 #
 #   E. shell/fleet-login.zsh (issue #1166), the ~/.zshrc block that shows the
 #      banner and then auto-attaches an SSH login: no $SSH_TTY / inside $TMUX /
@@ -167,6 +169,28 @@ user1
 [ "$out" = "$want" ] && ok "hooks: system dir then conf dir, file order, between cf and hide; failing/empty/non-exec silent" \
   || { bad "hooks"; printf 'got:\n%s\nwant:\n%s\n' "$out" "$want"; }
 narrow F; notmux F
+rm -f "$FLEET_INTRO_SYS_D"/*
+
+echo "G. intro.d hooks get the RESOLVED banner language (#1259)"
+# the fleet conf's FLEET_UI_LANG beats an en_US login locale; the hook sees the
+# resolved zh/en, never the raw conf value or $LANG
+printf '#!/bin/sh\necho "lang=$FLEET_UI_LANG"\n' > "$FLEET_INTRO_SYS_D/10-lang"
+chmod +x "$FLEET_INTRO_SYS_D/10-lang"
+for g in zh:zh_CN en:english auto:; do
+  mkfleet "$T/g-${g%%:*}" glang me/app main
+  [ -n "${g#*:}" ] && printf 'FLEET_UI_LANG="%s"\n' "${g#*:}" >> "$T/g-${g%%:*}/fleets/glang/conf"
+done
+# a real login has NO FLEET_UI_LANG in its env (this file exports zh above) — an
+# exported one would make the script's own assignment exported and hide the bug
+unset FLEET_UI_LANG
+hasline() { printf '%s\n' "$out" | grep -qx "$1" && ok "$2" || { bad "$2 — no line [$1]"; printf '%s\n' "$out"; }; }
+LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 run "$T/g-zh"
+hasline "lang=zh" "zh conf (zh_CN) under en_US login → hook sees exactly zh"; has "进入 fleet" "  … under a zh banner"
+LANG=zh_CN.UTF-8 LC_ALL=zh_CN.UTF-8 run "$T/g-en"
+hasline "lang=en" "en conf (english) under zh_CN login → hook sees exactly en"; has "enter fleet" "  … under an en banner"
+LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 run "$T/g-auto"
+hasline "lang=en" "no conf value → hook sees the login locale's en"
+export FLEET_UI_LANG=zh
 rm -f "$FLEET_INTRO_SYS_D"/*
 
 echo "E. fleet-login.zsh — banner + SSH auto-attach"
