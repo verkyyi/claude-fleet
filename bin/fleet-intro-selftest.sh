@@ -1,18 +1,20 @@
 #!/bin/bash
-# fleet-intro-selftest.sh — the SSH login banner, shell/fleet-intro.sh (issue #1068).
+# fleet-intro-selftest.sh — the SSH login banner, shell/fleet-intro.sh (issues
+# #1068, #1255).
 #
-# Builds fake FLEET_CONF_DIR trees and runs the REAL script against each:
+# Builds fake FLEET_CONF_DIR trees and runs the REAL script against each, in zh
+# and en, asserting every line ≤ 40 terminal columns (CJK = 2) and ZERO tmux
+# calls (a PATH shim counts any):
 #
-#   A. 0 fleets            → "○ 未配置 fleet" + the INSTALL.md pointer, nothing else.
-#   B. 2 fleets            → ONE warning line pointing at `fleet-repo.sh fold` (#979).
-#   C. 1 fleet, 1 repo, no server → "○ 未启动", its repo row, the "启动" action.
-#   D. 1 fleet, 3 repos, a LIVE session on an isolated socket →
-#        "● 运行中 · 3 会话"; rows in fleet_repos order (the fleet conf's repo
-#        first, then repos/*.conf by file name, a repeat dropped; all equal — no
-#        "main" label, #788); per-repo
-#        counts from windows carrying @issue (a hub window without @issue is not
-#        a worker); a repo with none shows no count; the "回到 fleet" action;
-#        and at most 2 tmux calls.
+#   A. 0 fleets            → "○ 未配置" + the INSTALL.md pointer, nothing else.
+#   B. 2 fleets            → "⚠ 有 2 个" + `fleet-repo.sh fold` (#979), no repos.
+#   C. 1 fleet, 1 repo     → "claude fleet · 1 个仓库", the cf line, the hide
+#                            line — and nothing about running / sessions / branch.
+#   D. 1 fleet, 3 repos (+1 repeat, dropped) → "3 个仓库"; a LIVE tmux session
+#        on the shim's socket changes nothing.
+#   F. intro.d             → system dir then $CONF_DIR/intro.d, file order, lines
+#        verbatim between cf and the hide line; a failing / silent /
+#        non-executable hook prints nothing.
 #
 #   E. shell/fleet-login.zsh (issue #1166), the ~/.zshrc block that shows the
 #      banner and then auto-attaches an SSH login: no $SSH_TTY / inside $TMUX /
@@ -21,9 +23,10 @@
 #      it (a failing cf too); a login without $SSH_TTY prints the banner byte for
 #      byte as fleet-intro.sh itself does. zsh absent → E SKIPs.
 #
-# tmux never touches the operator's server: a PATH shim drops the script's
-# `-L <sess>` and routes every call onto one throwaway -S socket, killed at exit.
-# tmux absent → case D SKIPs (the rest still run). Exit 0 = pass.
+# tmux never touches the operator's server: a PATH shim counts any call (there
+# must be none), drops `-L <sess>` and routes it onto one throwaway -S socket,
+# killed at exit. tmux absent → D skips only its live-session half. The real
+# /usr/local/etc/claude-fleet/intro.d is swapped for a sandbox dir. Exit 0 = pass.
 set -uo pipefail
 
 # The banner is localized since #1188 (bin/fleet-ui-lang.sh: FLEET_UI_LANG, else the
@@ -76,60 +79,95 @@ mkrepo() { # <conf-dir> <sess> <slug> <repo> <branch>
   printf 'FLEET_REPO=%s\nFLEET_BASE_BRANCH=%s\n' "$4" "$5" > "$1/fleets/$2/repos/$3.conf"
 }
 
+# a sandbox system intro.d, so the machine's real one (this mini ships a vnc
+# hook there) never leaks into an assertion
+export FLEET_INTRO_SYS_D="$T/sysd"
+mkdir -p "$FLEET_INTRO_SYS_D"
+
+# every line of $out ≤ 40 terminal columns (East Asian Wide/Fullwidth = 2)
+narrow() {
+  local w
+  w=$(printf '%s\n' "$out" | python3 -c '
+import sys, unicodedata
+print(max([sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in l.rstrip("\n")) for l in sys.stdin] or [0]))' 2>/dev/null) \
+    || { ok "$1: width SKIP (no python3)"; return; }
+  [ "$w" -le 40 ] && ok "$1: widest line $w ≤ 40 cols" || { bad "$1: widest line $w > 40 cols"; printf '%s\n' "$out"; }
+}
+notmux() {
+  local c; c=$(wc -l < "$T/calls" | tr -d ' ')
+  [ "$c" -eq 0 ] && ok "$1: zero tmux calls" || bad "$1: $c tmux calls"
+}
+# both <label> <conf-dir> <zh-needle> <en-needle> — run zh + en, width + tmux each
+both() {
+  FLEET_UI_LANG=en run "$2"
+  has "$4" "$1 (en)"; narrow "$1 (en)"; notmux "$1 (en)"
+  run "$2"
+  has "$3" "$1 (zh)"; narrow "$1 (zh)"; notmux "$1 (zh)"
+}
+
 echo "A. no fleet"
 mkdir -p "$T/a/fleets"
-run "$T/a"
-has "○ 未配置 fleet" "unconfigured header"
-has "INSTALL.md" "points at INSTALL.md"
+both A "$T/a" "claude fleet ○ 未配置" "claude fleet ○ not set up"
+has "见 ~/.claude/fleet/docs/INSTALL.md" "points at INSTALL.md"
 hasnot "cf " "no action line"
+hasnot "hushfleet" "no hide line"
 
 echo "B. two fleets"
 mkfleet "$T/b" one o/one master; mkfleet "$T/b" two o/two master
-run "$T/b"
-has "配置了 2 个 fleet" "warns on 2 fleets"
-has "fleet-repo.sh fold" "points at fold"
+both B "$T/b" "claude fleet ⚠ 有 2 个，只能留一个" "claude fleet ⚠ 2 fleets, keep one"
+has "运行 fleet-repo.sh fold" "points at fold"
 hasnot "o/one" "lists no repos"
 
-echo "C. one fleet, one repo, not running"
+echo "C. one fleet, one repo"
 mkfleet "$T/c" idlefleet me/app main
-run "$T/c"
-has "○ 未启动" "stopped header"
-hasnot "运行中" "not marked running"
-has "me/app" "repo row"
-has "main" "base branch"
-has "启动 fleet 并进入" "start action"
+both C "$T/c" "claude fleet · 1 个仓库" "claude fleet · 1 repo
+cf   enter fleet
+hide: touch ~/.hushfleet"
+want="claude fleet · 1 个仓库
+cf   进入 fleet
+隐藏：touch ~/.hushfleet"
+[ "$out" = "$want" ] && ok "zh banner is exactly 3 lines" || { bad "zh banner"; printf 'got:\n%s\nwant:\n%s\n' "$out" "$want"; }
+for x in me/app main 运行 未启动 会话 ───; do hasnot "$x" "no [$x]"; done
 [ "$rc" -eq 0 ] && ok "exit 0" || bad "exit $rc"
 
-echo "D. one fleet, three repos, live session"
-if [ -z "$REAL_TMUX" ]; then
-  echo "  SKIP: tmux not installed"
-else
-  mkfleet "$T/d" live z/first master
-  mkrepo "$T/d" live second b/second develop
-  mkrepo "$T/d" live third a/third main
-  mkrepo "$T/d" live zdup z/first master          # repeats the conf's repo → dropped
-  tm() { "$REAL_TMUX" -S "$SOCK" "$@"; }
-  tm new-session -d -s live -n hub
-  tm new-window -d -t live -n issue-1; tm new-window -d -t live -n issue-2
-  tm new-window -d -t live -n issue-3
-  tm set-option -w -t live:issue-1 @repo a/third;  tm set-option -w -t live:issue-1 @issue 1
-  tm set-option -w -t live:issue-2 @repo a/third;  tm set-option -w -t live:issue-2 @issue 2
-  tm set-option -w -t live:issue-3 @repo z/first;  tm set-option -w -t live:issue-3 @issue 3
-  tm set-option -w -t live:hub @repo z/first       # a hub, no @issue → not a worker
-  run "$T/d"
-  has "● 运行中 · 3 会话" "running header with total"
-  has "回到 fleet" "attach action"
-  hasnot "启动 fleet 并进入" "no start action"
-  rows=$(printf '%s\n' "$out" | awk '/^   [^ ]/{print $1 "|" $2 "|" $3}')
-  want="z/first|master|1
-b/second|develop|
-a/third|main|2"
-  [ "$rows" = "$want" ] && ok "rows: conf repo first, overlays by file name, repeat dropped, per-repo counts" \
-    || { bad "rows"; printf 'got:\n%s\nwant:\n%s\n' "$rows" "$want"; }
-  hasnot "main repo" "no main-repo label"
-  calls=$(wc -l < "$T/calls" | tr -d ' ')
-  [ "$calls" -le 2 ] && ok "tmux calls: $calls (≤2)" || bad "tmux calls: $calls (>2)"
+echo "D. one fleet, three repos (+ a repeat), live session changes nothing"
+mkfleet "$T/d" live z/first master
+mkrepo "$T/d" live second b/second develop
+mkrepo "$T/d" live third a/third main
+mkrepo "$T/d" live zdup z/first master          # repeats the conf's repo → dropped
+run "$T/d"; cold=$out
+if [ -n "$REAL_TMUX" ]; then
+  "$REAL_TMUX" -S "$SOCK" new-session -d -s live -n hub
+  "$REAL_TMUX" -S "$SOCK" new-window -d -t live -n issue-1
+  "$REAL_TMUX" -S "$SOCK" set-option -w -t live:issue-1 @issue 1
 fi
+both D "$T/d" "claude fleet · 3 个仓库" "claude fleet · 3 repos"
+[ "$out" = "$cold" ] && ok "running and stopped print the same banner" || bad "banner differs when running"
+hasnot "z/first" "no repo names"
+
+echo "F. intro.d hooks"
+mkfleet "$T/f" hooked me/app main
+mkdir -p "$T/f/intro.d"
+printf '#!/bin/sh\necho "sys1"\n' > "$FLEET_INTRO_SYS_D/10-a"
+printf '#!/bin/sh\necho "sys2  两行"\necho "sys2b"\n' > "$FLEET_INTRO_SYS_D/20-b"
+printf '#!/bin/sh\necho partial; echo noise >&2; exit 3\n' > "$FLEET_INTRO_SYS_D/30-fail"
+printf '#!/bin/sh\n:\n' > "$FLEET_INTRO_SYS_D/40-empty"
+printf '#!/bin/sh\necho NOEXEC\n' > "$FLEET_INTRO_SYS_D/50-noexec"
+printf '#!/bin/sh\necho "user1"\n' > "$T/f/intro.d/05-u"     # sorts first, runs after the system dir
+chmod +x "$FLEET_INTRO_SYS_D/10-a" "$FLEET_INTRO_SYS_D/20-b" "$FLEET_INTRO_SYS_D/30-fail" \
+         "$FLEET_INTRO_SYS_D/40-empty" "$T/f/intro.d/05-u"
+run "$T/f"
+want="claude fleet · 1 个仓库
+cf   进入 fleet
+sys1
+sys2  两行
+sys2b
+user1
+隐藏：touch ~/.hushfleet"
+[ "$out" = "$want" ] && ok "hooks: system dir then conf dir, file order, between cf and hide; failing/empty/non-exec silent" \
+  || { bad "hooks"; printf 'got:\n%s\nwant:\n%s\n' "$out" "$want"; }
+narrow F; notmux F
+rm -f "$FLEET_INTRO_SYS_D"/*
 
 echo "E. fleet-login.zsh — banner + SSH auto-attach"
 if ! command -v zsh >/dev/null 2>&1; then
