@@ -22,7 +22,10 @@
 # intro.d) then $CONF_DIR/intro.d, in file order, runs with stdin closed; its
 # stdout prints verbatim between the cf line and the hide hint. A failing or
 # silent hook prints nothing. Each hook owns its gating (SSH-only, …) and must
-# keep its own lines ≤ 40 columns.
+# keep its own lines ≤ 40 columns. A hook runs with FLEET_UI_LANG set to the
+# banner's RESOLVED language — exactly `zh` or `en` (#1259): the fleet conf's
+# value wins over the login locale, so a zh fleet on an en_US login gets `zh`.
+# Localize off it; never re-read the conf or $LANG.
 # bin/fleet-intro-selftest.sh pins every branch above.
 CONF_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
 SYS_D="${FLEET_INTRO_SYS_D:-/usr/local/etc/claude-fleet/intro.d}"
@@ -71,10 +74,11 @@ else
   printf '%sclaude fleet%s · %s %s\n' "$b" "$r" "$nr" "$rw"
   printf '%scf%s   enter fleet\n' "$b" "$r"
 fi
+ui=$(fleet_ui_lang)
 for hd in "$SYS_D" "$CONF_DIR/intro.d"; do
   for h in "$hd"/*; do
     [ -f "$h" ] && [ -x "$h" ] || continue
-    hout=$("$h" </dev/null 2>/dev/null) || continue
+    hout=$(FLEET_UI_LANG=$ui "$h" </dev/null 2>/dev/null) || continue
     [ -n "$hout" ] && printf '%s\n' "$hout"
   done
 done
