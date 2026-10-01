@@ -175,16 +175,16 @@ chmod +x "$FLEET_INTRO_SYS_D/10-lang"
 rm -f "$T/f/intro.d/05-u"
 mkfleet "$T/fz" zhf me/app main; echo 'FLEET_UI_LANG=zh' >> "$T/fz/fleets/zhf/conf"
 mkfleet "$T/fe" enf me/app main; echo 'FLEET_UI_LANG=en' >> "$T/fe/fleets/enf/conf"
-FLEET_UI_LANG=en LANG=en_US.UTF-8 LC_ALL= run "$T/fz"
+FLEET_UI_LANG=en LANG=en_US.UTF-8 LC_ALL='' run "$T/fz"
 has "lang=zh" "zh conf under en env/locale → hook sees zh"; has "进入 fleet" "… under a zh banner"
-FLEET_UI_LANG=zh LANG=zh_CN.UTF-8 LC_ALL= run "$T/fe"
+FLEET_UI_LANG=zh LANG=zh_CN.UTF-8 LC_ALL='' run "$T/fe"
 has "lang=en" "en conf under zh env/locale → hook sees en"; has "enter fleet" "… under an en banner"
-FLEET_UI_LANG= LANG=en_US.UTF-8 LC_ALL= run "$T/f"
+FLEET_UI_LANG='' LANG=en_US.UTF-8 LC_ALL='' run "$T/f"
 has "lang=en" "no conf lang, empty env → hook sees the locale's en, not empty"
 # the reported case: FLEET_UI_LANG UNSET on an en_US login, zh conf — a plain
 # shell var never reaches the hook, which then falls back to the locale's en
 unset FLEET_UI_LANG
-LANG=en_US.UTF-8 LC_ALL= run "$T/fz"
+LANG=en_US.UTF-8 LC_ALL='' run "$T/fz"
 has "lang=zh" "zh conf, FLEET_UI_LANG unset, en_US locale → hook sees zh"
 export FLEET_UI_LANG=zh
 rm -f "$FLEET_INTRO_SYS_D"/*
