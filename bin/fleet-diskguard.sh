@@ -592,13 +592,14 @@ boot_since_iso() {
 # everything in range. Both record what is new, so neither repeats the other.
 # Sets HARVEST_INCIDENT to the incident file written, if any.
 harvest_crash() {
-  local since="$1" auto="$2" pf rc host
+  local since="$1" auto="$2" pf rc host newonly=''
+  [ "$auto" = 1 ] && newonly=--new-only
   mkdir -p "$MDIR" 2>/dev/null || return 1
   pf="$MDIR/.incident-path.$$"; rm -f "$pf"; host="$(hostname 2>/dev/null)"
   if [ -d "$CRASH_DIR" ] && command -v python3 >/dev/null 2>&1; then
     python3 "$BIN/fleet-crash-harvest.py" --dir "$CRASH_DIR" --since "$since" \
       --seen "$MDIR/crash-harvested" --record --machine-dir "$MDIR" --metrics-dir "$MDIR" \
-      --path-file "$pf" --host "$host" $([ "$auto" = 1 ] && echo --new-only)
+      --path-file "$pf" --host "$host" ${newonly:+"$newonly"}
     rc=$?
   elif [ -n "${FLEET_CRASH_JOURNAL_CMD:-}" ] || command -v journalctl >/dev/null 2>&1; then
     local oom f

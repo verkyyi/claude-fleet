@@ -1249,7 +1249,7 @@ if [ -n "$lc" ]; then
   lch="$(sed -n 's/^headline: //p' "$lc" 2>/dev/null | head -1)"
   lcn="${lc##*/incident-}"; lcn="${lcn%.md}"
   lcut="$(date -v-1d '+%Y%m%d-%H%M' 2>/dev/null || date -d '-1 day' '+%Y%m%d-%H%M' 2>/dev/null)"  # portable-ok: BSD/GNU both-ways
-  if [ -n "$lcut" ] && [ "$lcn" \> "$lcut" ]; then
+  if [ -n "$lcut" ] && awk -v a="$lcn" -v b="$lcut" 'BEGIN { exit !(a > b) }'; then
     warn last-crash "this machine crashed in the last day: ${lch:-see the summary} — summary: $lc"
   else
     info last-crash "${lch:-$lcn} — $lc"

@@ -3014,13 +3014,12 @@ fleet_machine_dir() { printf '%s/machine\n' "${FLEET_CONF_DIR:-$HOME/.config/cla
 # fleet_metrics_row [src] — one TSV row (no newline handling beyond the trailing \n).
 # Every reading is best-effort: an unreadable one is `-`, never a missing column.
 fleet_metrics_row() {
-  local src="${1:-diskguard}" load cores mem nf pty cl top
+  local src="${1:-diskguard}" load cores mem nf pty=0 cl top t
   load="$({ sysctl -n vm.loadavg 2>/dev/null || cat /proc/loadavg 2>/dev/null; } | tr -d '{}' | awk 'NF{print $1+0; exit}')"
   cores="$({ sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null; } | awk 'NF{print $1+0; exit}')"
   mem="$(fleet_mem_probe)"; [ -n "$mem" ] || mem='- - - -'
   nf="$({ sysctl -n kern.num_files 2>/dev/null || awk '{print $1}' /proc/sys/fs/file-nr 2>/dev/null; } | awk 'NF{print $1+0; exit}')"
-  if [ -d /dev/pts ]; then pty="$(ls /dev/pts 2>/dev/null | grep -c '^[0-9]')"
-  else pty="$(ls /dev 2>/dev/null | grep -c '^ttys[0-9]')"; fi
+  for t in /dev/pts/[0-9]* /dev/ttys[0-9]*; do [ -e "$t" ] && pty=$((pty + 1)); done
   cl="$(ps -axo comm= 2>/dev/null | awk '{ n = $0; sub(/.*\//, "", n); if (n == "claude" || $0 ~ /\/claude\/versions\//) c++ } END { print c+0 }')"
   # the three largest of OUR processes (fleet_proc_mem_rows is RSS-sorted) as name:MB
   top="$(fleet_proc_mem_rows | awk -F'\t' '$5 != "other" { split($6, w, " "); n = w[1]; sub(/.*\//, "", n)
