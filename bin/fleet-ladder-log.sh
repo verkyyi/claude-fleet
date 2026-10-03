@@ -6,7 +6,7 @@
 # logs/handoff-cycle.log, but an in-place compaction (#1269) left no record at all
 # — it lived only on tmux options that the next step overwrites, so the only way
 # to know a session had been compacted was to read its transcript. This ledger is
-# that record: five steps, each written by the one script that performs it.
+# that record: six steps, each written by the one script that performs it.
 #
 #   prep              bin/set-claude-state.sh   Stop blocked: write the recovery map
 #   compacting        bin/fleet-compact-send.sh `/compact …` typed into the pane
@@ -16,6 +16,8 @@
 #   handoff-nudge     bin/set-claude-state.sh   Stop blocked: run /fleet-handoff —
 #                                               reason `pct`, `cap` (#1316) or `codex`
 #   handoff-complete  bin/fleet-handoff-cycle.sh pane cleared and resumed
+#   hub-warn          bin/set-claude-state.sh   the HUB reached the handoff line:
+#                                               warned + notified, never blocked (#1319)
 #
 # Usage:
 #   fleet-ladder-log.sh <step> [--pane P] [--socket S] [--ctx N] [--count N] [--reason TEXT]
@@ -72,7 +74,7 @@ fi
 
 STEP="${1:-}"
 case "$STEP" in
-  prep|compacting|restored|handoff-nudge|handoff-complete) shift ;;
+  prep|compacting|restored|handoff-nudge|handoff-complete|hub-warn) shift ;;
   *) exit 0 ;;
 esac
 PANE="${TMUX_PANE:-}" SOCKET='' CTX='' COUNT='' REASON=''

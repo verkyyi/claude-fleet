@@ -254,7 +254,7 @@ if [ "$sem" = "done" ]; then
   _kv=''
   [ -n "$_bin" ] && [ -f "$_bin/fleet-hook-conf.sh" ] \
     && _kv=$(bash "$_bin/fleet-hook-conf.sh" FLEET_AUTO_HANDOFF_PCT FLEET_HANDOFF_DEFER_SECS FLEET_COMPACT_PREP_PCT FLEET_COMPACT_MAX \
-         FLEET_AUTO_HANDOFF_TOKENS FLEET_COMPACT_PREP_TOKENS 2>/dev/null)
+         FLEET_AUTO_HANDOFF_TOKENS FLEET_COMPACT_PREP_TOKENS FLEET_HUB_CTX_ACTION FLEET_NOTIFY_CMD 2>/dev/null)
   _hp=$(printf '%s\n' "$_kv" | sed -n 1p)
   _ds=$(printf '%s\n' "$_kv" | sed -n 2p)             # typing-deferral window (issue #571)
   _cp=$(printf '%s\n' "$_kv" | sed -n 3p)             # compact-prep threshold (issue #1269)
@@ -489,6 +489,45 @@ PYCODEX
                 "$_cctx" "$_cp" "$_cwhere" "$_cwhat" "${FLEET_LANG_RULE_RESUME:+ $FLEET_LANG_RULE_RESUME}"
             fi ;;
         esac
+      fi
+    fi
+  fi
+
+  # ── Hub context warning (issue #1319, EPIC #1315 C4) ────────────────────────
+  # The hub is the operator's own seat: it has no /fleet-handoff cycle to fire and
+  # a /clear there could eat what the operator is typing. So at the handoff line a
+  # hub pane (no @issue, no @raw, not a panel) is NEVER blocked — it gets
+  # @ctx_warn=1 (dash row `⚠ ctx`), one FLEET_NOTIFY_CMD message naming
+  # /fleet-handoff (the hub's doc goes to FILE storage) and one ladder row
+  # `hub-warn`. Once per climb: @ctx_warn is the latch, cleared by the first Stop
+  # that reads the context back under the line. FLEET_HUB_CTX_ACTION=off turns it
+  # off; unset ⇒ notify. The line is the configured handoff line (_hp_conf, tokens
+  # converted) — auto-handoff off ⇒ no line ⇒ nothing here. One tmux read.
+  _ha=$(printf '%s\n' "$_kv" | sed -n 7p)
+  if [ "$_hp_conf" -gt 0 ] && [ "$_ha" != off ]; then
+    _hv=$(tmux display-message -p -t "$TMUX_PANE" '#{@issue}|#{@raw}|#{@ctx_pct}|#{@ctx_warn}|#{session_name}|#{window_name}' 2>/dev/null)
+    _hiss=${_hv%%|*}; _hv=${_hv#*|}
+    _hraw=${_hv%%|*}; _hv=${_hv#*|}
+    _hctx=${_hv%%|*}; _hv=${_hv#*|}
+    _hwarn=${_hv%%|*}; _hv=${_hv#*|}
+    _hsess=${_hv%%|*}; _hname=${_hv#*|}
+    case "$_hctx" in ''|*[!0-9]*) _hctx=-1 ;; esac
+    case "$_hname" in dash|plan|backlog) _hiss=panel ;; esac
+    if [ -z "$_hiss" ] && [ "$_hraw" != 1 ] && [ "$_hctx" -ge 0 ]; then
+      if [ "$_hctx" -ge "$_hp_conf" ]; then
+        if [ "$_hwarn" != 1 ]; then
+          tmux set-window-option -t "$TMUX_PANE" @ctx_warn 1 2>/dev/null
+          [ -f "$_bin/fleet-ladder-log.sh" ] && sh "$_bin/fleet-ladder-log.sh" hub-warn \
+            --ctx "$_hctx" --reason ">= $_hp_conf%" </dev/null >/dev/null 2>&1
+          _hcmd=$(printf '%s\n' "$_kv" | sed -n 8p)
+          if [ -n "$_hcmd" ]; then
+            "$_hcmd" "# 📏 hub context at ${_hctx}%
+The operator window \`${_hsess}:${_hname}\` has reached the ${_hp_conf}% handoff line. Nothing is cleared for you: at a stopping point, run \`/fleet-handoff\` in that pane (the hub's handoff doc goes to FILE storage) and it resumes clean." \
+              </dev/null >/dev/null 2>&1 &
+          fi
+        fi
+      elif [ "$_hwarn" = 1 ]; then
+        tmux set-window-option -u -t "$TMUX_PANE" @ctx_warn 2>/dev/null
       fi
     fi
   fi

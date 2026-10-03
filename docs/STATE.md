@@ -600,6 +600,14 @@ tmux_calls_per_s=<n.n>` — the epoch stays the first token for the liveness rea
   reason — are in the file's `#` header. `fleet-doctor`'s `context` row reads it:
   the last 24h's compactions and handoffs, plus the live window highest on the
   ladder and the step it is at.
+- **The hub is warned, never cleared (#1319).** A pane with no `@issue`, no
+  `@raw` and not a panel has no `/fleet-handoff` cycle to fire and is where the
+  operator types, so at the handoff line (`FLEET_AUTO_HANDOFF_PCT` / `_TOKENS`)
+  its Stop is never blocked: it gets `@ctx_warn=1` (dash row `⚠ ctx`), ONE
+  `FLEET_NOTIFY_CMD` message naming `/fleet-handoff` (the hub's doc goes to FILE
+  storage) and one `hub-warn` ladder row. `@ctx_warn` is the once-per-climb latch:
+  the first Stop under the line, or `SessionStart(clear|startup)`, unsets it.
+  `FLEET_HUB_CTX_ACTION=off` turns it off (default `notify`).
 - [ARCHITECTURE.md](ARCHITECTURE.md) — the shared-vs-per-fleet split and the
   many-fleets-on-one-machine model.
 - [TERMS.md](TERMS.md) — definitions of collector / hub / dash.

@@ -52,7 +52,7 @@ R="${E}0m"; US=$'\x1f'
 # option of that name, so the per-repo fold set rides the one list-windows call
 # every frame already makes — same value on every line, no extra fork. Both
 # passes name it so nothing lands glued to @sleep_since.
-WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{@claude_needs}${US}#{@expand}${US}#{@pin}${US}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}"
+WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{@claude_needs}${US}#{@expand}${US}#{@pin}${US}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -790,6 +790,9 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # grown past FLEET_CLAUDE_RSS_WARN_MB. `fat=<size>:` on the same field; the badge
   # names the size (`⚠ mem 4.3G`) — the notification carries the /fleet-handoff line.
   case $qwait in fat=*:*) fatv=${qwait%%:*}; qwait=${qwait#*:}; tagd="${tagd:+$tagd }⚠ mem ${fatv#fat=}" ;; esac
+  # The hub reached the handoff line (issue #1319): the Stop hook never blocks the
+  # operator's own seat, it stamps @ctx_warn and notifies once — `ctxw:` here.
+  case $qwait in ctxw:*) qwait=${qwait#ctxw:}; tagd="${tagd:+$tagd }⚠ ctx" ;; esac
   case $qwait in
     '') ;;
     stuck:*) tagd="${tagd:+$tagd }⚠ stuck" ;;

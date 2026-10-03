@@ -340,6 +340,7 @@ fcfg_label_i18n() {
     FLEET_RATELIMIT_TTL) printf 'Ratelimit 陈旧时间' ;;
     FLEET_HANDOFF_DEST) printf '交接目标（comment|file）' ;;
     FLEET_AUTO_HANDOFF_PCT) printf '自动交接百分比' ;;
+    FLEET_HUB_CTX_ACTION) printf 'hub 上下文提醒' ;;
     FLEET_HANDOFF_DEFER_SECS) printf '交接输入保持时间' ;;
     FLEET_HANDOFF_IDLE_TIMEOUT) printf '交接等待 idle 上限' ;;
     FLEET_ACCOUNTS_DIR) printf '账号 token 目录' ;;
