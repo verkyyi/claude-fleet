@@ -92,18 +92,19 @@ eq 'shared dir is world-writable'          777 "$(stat -c %a "$SHARED" 2>/dev/nu
 
 # --- 2. leader stops → b takes over past the stale bound; a back → follows ----
 reset_logs
-STALE=2; export STALE
-sleep 3                                    # a's last beat is now stale
+# a "dies": its last beat is back-dated past the stale bound (no sleep — a slow
+# tick on a loaded box must not age b's own beat out too)
+hb=$(ls "$SHARED"/*/hb.a)
+printf 'since=1\nhb=%s\n' "$(( $(date +%s) - 120 ))" > "$hb"
+eq 'lib: a dead → b leads'                 b "$(lib b fleet_gh_leader)"
 run b collect
 eq 'b took over on its first tick past stale' 1 "$(calls b issue)"
-eq 'lib: b leads now'                      b "$(lib b fleet_gh_leader)"
-sleep 1                                    # (a same-second `since` tie breaks by name: a)
 run a collect                              # a is back: its since restarts → newest
 eq 'returning a does not displace b'       0 "$(calls a issue)"
 eq 'returning a reads b'                   $'Milestone\t#1\t·\tFresh a by b' "$(issues a acme-a)"
+eq 'lib: b still leads'                    b "$(lib a fleet_gh_leader)"
 grep -q 'share-lead login=b' "$WORK/gh-limit.log" || fail 'takeover not logged'
 pass=$((pass+1))
-STALE=60
 
 # --- 3. different repo sets share only the intersection ----------------------
 reset_logs
