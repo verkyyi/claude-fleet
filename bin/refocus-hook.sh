@@ -49,6 +49,16 @@ else
 fi
 [ "$src" = compact ] || exit 0
 
+# In-place compaction (issue #1269): when the fleet itself typed this /compact
+# (bin/fleet-compact-send.sh stamped @compact_stage=compacting), this is step 3 —
+# mark it restored and ask the worker to check the recovery map it wrote in step 1.
+# Read before any early exit below, so the stage completes even with refocus off.
+compact_check=''
+if [ "$(tmux display-message -p -t "$TMUX_PANE" '#{@compact_stage}' 2>/dev/null)" = compacting ]; then
+  tmux set-window-option -t "$TMUX_PANE" @compact_stage restored 2>/dev/null
+  compact_check=1
+fi
+
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
@@ -100,10 +110,16 @@ case "$origin" in
   *)                   origin_line="no live parent (fleet-report-parent.sh still runs on ship; it exits 0 silently)" ;;
 esac
 
+map=''
+if [ -n "$compact_check" ]; then
+  gd=$(git -C "$cwd" rev-parse --absolute-git-dir 2>/dev/null)
+  [ -n "$gd" ] && [ -f "$gd/fleet-recovery-map.md" ] && map="$gd/fleet-recovery-map.md"
+fi
+
 REFOCUS_ISSUE="$issue" REFOCUS_REPO="$repo" REFOCUS_TITLE="$title" \
 REFOCUS_CWD="$cwd" REFOCUS_BRANCH="$branch" REFOCUS_BASE="$base" \
 REFOCUS_MAIN="$main" REFOCUS_MERGE="$merge" REFOCUS_PR="$pr" \
-REFOCUS_ORIGIN="$origin_line" \
+REFOCUS_ORIGIN="$origin_line" REFOCUS_CHECK="$compact_check" REFOCUS_MAP="$map" \
 python3 - <<'PY' 2>/dev/null
 import json, os
 e = os.environ.get
@@ -114,6 +130,12 @@ n, repo = e("REFOCUS_ISSUE"), e("REFOCUS_REPO")
 lines = [
     "[fleet charter] #%s · %s%s" % (n, repo, (" — " + title) if title else ""),
     "Your context was just compacted; this restates the task you were spawned for.",
+]
+if e("REFOCUS_CHECK"):
+    lines.append("- The fleet compacted you in place to avoid a handoff. CHECK FIRST: compare your "
+                 "recovery map (%s) with `git status`, `git log -3` and the PR; fix any drift, "
+                 "then resume its next step." % (e("REFOCUS_MAP") or "in the summary above"))
+lines += [
     "- worktree %s · branch %s → base %s · PR: %s"
         % (e("REFOCUS_CWD"), e("REFOCUS_BRANCH"), e("REFOCUS_BASE"), e("REFOCUS_PR")),
     "- One issue, one worktree, one PR: work ONLY on #%s here. Adjacent work → "

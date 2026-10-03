@@ -1312,6 +1312,19 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Handoff typing hold @group=handoff @tier=internal @scope=fleet @edit=int @unit=sec
 #FLEET_HANDOFF_DEFER_SECS=30     # keypress at the pane's window within N s holds the handoff; 0 = off
 
+# Compact a worker IN PLACE before handing it off (issue #1269). A handoff makes
+# the fresh session re-read the code and re-learn the task — often dearer than the
+# work left. So when a worker's context sits at/over this % but under
+# FLEET_AUTO_HANDOFF_PCT (0 there = no upper line), the Stop hook asks it to write a
+# recovery map (branch, PR, next step), then types `/compact <keep the map>` at
+# the next idle Stop (held while the operator is typing — FLEET_HANDOFF_DEFER_SECS),
+# and after the compaction the charter comes back with a "check the map" line.
+# Once per climb: re-armed only after the context drops back below this line,
+# ≥ 10 minutes between compactions. Progress shows in the window option
+# @compact_stage (prep / compacting / restored). Workers only; 0 = off.
+# @label=Compact-in-place percent @group=handoff @tier=internal @scope=fleet @edit=int @unit=%
+#FLEET_COMPACT_PREP_PCT=70       # context % that starts an in-place /compact; 0 = OFF
+
 # Re-state a worker's task charter after a context compaction (issue #1266). The
 # SessionStart(source=compact) hook bin/refocus-hook.sh hands a WORKER pane a
 # ≤1.5 KB `[fleet charter] #<N>` block (issue, repo, branch, PR, one-issue-one-PR,

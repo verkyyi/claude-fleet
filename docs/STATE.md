@@ -564,6 +564,19 @@ tmux_calls_per_s=<n.n>` — the epoch stays the first token for the liveness rea
   `FLEET_HANDOFF_DEFER_SECS` (default 30 s; ceiling: threshold+10 fires anyway).
   `SessionStart(source=clear)` also unsets `@ctx_pct`, the stale percentage of
   the session that just ended.
+- **Compact in place before the handoff (#1269).** The same `done` edge runs a
+  three-step compaction for a **worker** whose `@ctx_pct` sits in
+  `[FLEET_COMPACT_PREP_PCT, FLEET_AUTO_HANDOFF_PCT)` (prep default 70; handoff 0 =
+  no upper line), tracked in the window option `@compact_stage`:
+  `prep` (a `block` asking for a recovery map in `<git-dir>/fleet-recovery-map.md`)
+  → `compacting` (next clean Stop: `bin/fleet-compact-send.sh`, detached, types
+  `/compact <keep the map>` once the pane is idle and nobody is typing at it)
+  → `restored` (`SessionStart(compact)`: `refocus-hook.sh` re-states the charter
+  plus a "check the map against git and the PR" line). Side options:
+  `@compact_rearm` (0 after a prep; 1 once a Stop sees the context below the prep
+  line), `@compact_prep_ts` / `@compact_send_ts` (60 s dedup each) and
+  `@compact_ts` (≥ 600 s between compactions). At or over the handoff line the
+  auto-handoff above owns the Stop and none of this runs.
 - [ARCHITECTURE.md](ARCHITECTURE.md) — the shared-vs-per-fleet split and the
   many-fleets-on-one-machine model.
 - [TERMS.md](TERMS.md) — definitions of collector / hub / dash.
