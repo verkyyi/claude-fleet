@@ -145,7 +145,7 @@ jobs:
               sed -n '/^-* slowest/,$p' selftests.log
             else
               echo 'the shard was cut short — this test started and never finished:'
-              awk '/^=== /{h=$2} /^(PASS  |FAIL  |TIMEOUT )/{h=""}
+              awk '/^=== /{h=$2} /^(PASS|FAIL)  /{h=""}
                    END{print "  " (h ? h : "(none identified — read the log)")}' \
                 selftests.log 2>/dev/null
             fi
