@@ -14,6 +14,9 @@
 # self-disables). classify-sessions.sh --window is debounced by a change-hash and
 # a per-window lock, so firing it on every Stop is safe (static screens never
 # re-call the LLM; a concurrent spinner-demote fire can't double-run the same window).
+# A window whose fleet mod is alive (issue #1336) reports its own state, so the
+# classifier skips it before any capture or model call and logs `skip:mod` — the
+# gate lives in classify-sessions.sh so the spinner's demote path honours it too.
 set -u
 [ -n "${TMUX:-}" ] || exit 0
 [ -n "${TMUX_PANE:-}" ] || exit 0

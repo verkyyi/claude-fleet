@@ -16,9 +16,10 @@
 #   D  the plugin itself: `claude plugin validate` + `claude plugin test` on
 #      mod/fleet — SKIPPED, with the reason printed, where no `claude` CLI is on
 #      PATH (CI). The plugin tests hold the version gate: out of range nothing
-#      past the gate registers (mod/fleet/tests/lifecycle.test.ts); and the
+#      past the gate registers (mod/fleet/tests/lifecycle.test.ts); the
 #      command inbox (#1337): a posted /compact reaches command.run and is
-#      answered done, and the poll outlives a /clear (tests/inbox.test.ts).
+#      answered done, and the poll outlives a /clear (tests/inbox.test.ts); and
+#      the session reports its own state (tests/state.test.ts, issue #1336).
 #
 # Hermetic for A-C: a temp bin with the real launcher + lib symlinked, fake
 # `claude` / `tmux` / `fleet-account.sh` on PATH, no tmux server touched.
@@ -146,7 +147,8 @@ else
   case "$t" in *'(fail)'*|*' 0 pass'*) fail "D: claude plugin test reported a failure" "$t" ;; esac
   case "$t" in *'out of range'*) : ;; *) fail "D: the out-of-range (no-register) test did not run" "$t" ;; esac
   case "$t" in *'outlives a /clear'*) : ;; *) fail "D: the command-inbox tests (#1337) did not run" "$t" ;; esac
-  ok "D claude plugin validate + test pass (out-of-range gate + command inbox covered)"
+  case "$t" in *'AskUserQuestion'*) : ;; *) fail "D: the state tests (#1336) did not run" "$t" ;; esac
+  ok "D claude plugin validate + test pass (out-of-range gate + command inbox + session state covered)"
 fi
 
 printf 'fleet-mod-selftest: %d passed\n' "$pass"

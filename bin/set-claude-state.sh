@@ -1,8 +1,9 @@
 #!/bin/sh
-# set-claude-state.sh <state> [bell]
+# set-claude-state.sh [--via mod] <state> [bell]
 # Stamps the current tmux window's @claude_state (semantic: working|done|needs).
 # <state> is a hook verb (busy|working|done|needs) or the worker's own `blocked`
 # (issue #704) — a red that the hook edges of the same turn do not erase; see below.
+# `--via mod` + working|done|ask is the fleet mod's own report (issue #1336).
 # The tmux-spinner.sh daemon reads @claude_state and renders ALL the visuals
 # (spinner glyph + its pulsing font color + name color) via @spin, so this hook
 # only sets the semantic state and (for needs) rings the bell.
@@ -22,6 +23,20 @@ set -u  # POSIX sh: pipefail is bash-only (dash has none)
 # TUI, `sdk-cli` for `-p` (verified on 2.1.269). Only the TUI owns the pane;
 # anything else touches nothing. Unset (an older CLI, the selftests' `env -i`) ⇒ TUI.
 case "${CLAUDE_CODE_ENTRYPOINT:-cli}" in cli) : ;; *) exit 0 ;; esac
+
+# `--via mod` (issue #1336): the writer is the fleet mod (mod/fleet/hooks/state.ts),
+# the session reporting its own state from inside the engine — turn.start, turn.end,
+# an open AskUserQuestion. Same verbs, same state write, same sticky `blocked`; but
+# the mod is NOT a hook: it has no payload (stdin is pinned to /dev/null here, so no
+# branch below can wait on one) and no Stop decision to print, so it stops right
+# after the state write. Everything past that point — auto-handoff, compaction, hub
+# warning, bell, parent report, session id — stays the Stop hook's, which still
+# fires for the same turn. Without the flag: byte for byte as before.
+via=''
+if [ "${1:-}" = --via ]; then
+  via=${2:-}; shift; [ $# -gt 0 ] && shift
+  [ "$via" = mod ] && exec </dev/null
+fi
 
 handoff_prev=''   # prior @claude_state, captured in the done branch (issue #330)
 wstate=''         # what a clean Stop WRITES when it is not `done` (issue #1331: looping)
@@ -167,6 +182,11 @@ case "${1:-}" in
       esac
     fi
     ;;
+  ask)
+    # An open AskUserQuestion, said by the mod (issue #1336) at the call itself —
+    # the same needs/ask the PreToolUse `busy` leg derives from its payload.
+    sem="needs"; sub="ask"
+    ;;
   *)     sem="working" ;;   # PostToolUse / prompt submitted
 esac
 
@@ -229,6 +249,9 @@ if [ "$sem" != "leave" ]; then
   _sockp=${TMUX%%,*}
   [ -n "$_sockp" ] && : > "$_sockp.dirty" 2>/dev/null
 fi
+
+# The mod's write ends here (issue #1336): the rest belongs to the Stop hook.
+[ "$via" = mod ] && exit 0
 
 # ── Auto-handoff nudge (issue #330) ──────────────────────────────────────────
 # At a CLEAN Stop (done), if this session's context has crossed the operator's
