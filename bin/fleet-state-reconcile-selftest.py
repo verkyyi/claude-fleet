@@ -199,6 +199,52 @@ class ReconcileTest(unittest.TestCase):
             self.assertEqual(MOD['main'](), 0)
         self.assertEqual(self.state(wid)[0], 'working')
 
+    def rung_lines(self):
+        return [l for l in self.log.read_text().splitlines() if ' rung_health ' in l] if self.log.exists() else []
+
+    def test_three_contradictions_each_log_one_event_and_the_higher_rung_wins(self):
+        # #1270: hook says working (stamp past its 15s trust), tmux has seen the
+        # pane silent > 1s, and the registry disagrees three ways. Ages are picked
+        # so the pre-#1270 rules would NOT decide: idle is inside the 5s grace,
+        # gone is inside the 60s exited grace.
+        idle_w, pane = self.window(age=30)     # its own live pid: a record file is named by pid
+        self.record(idle_w, pane, status='idle', since=time.time() - 1,
+                    pid=int(self.tm('display-message', '-p', '-t', idle_w, '#{pane_pid}')))
+        gone_w, pane = self.window(age=30); self.record(gone_w, pane, status='idle', pid=999999, started=978307200)
+        busy_w, pane = self.window(age=30); self.record(busy_w, pane, status='busy')
+        time.sleep(2.2)
+        self.run_cli('--tmux-idle-secs', '1')
+        self.assertEqual([self.state(w)[0] for w in (idle_w, gone_w, busy_w)], ['done', 'done', 'working'])
+        lines = self.rung_lines()
+        self.assertEqual(len(lines), 3, lines)
+        for wid, says, verdict in ((idle_w, 'idle', 'done'), (gone_w, 'gone', 'done'), (busy_w, 'busy', 'working')):
+            [line] = [l for l in lines if ' window=%s ' % wid in l]
+            self.assertRegex(line, r' rung_health window=%s hook=working tmux_idle=\d+s registry=%s .*-> %s$' % (wid, says, verdict))
+        hb = self.heartbeat()
+        self.assertEqual((hb['contested'], hb['rung_health'], hb['demoted']), ('3', '3', '2'))
+        # The busy contradiction persists: counted live, logged once.
+        self.run_cli('--tmux-idle-secs', '1')
+        self.assertEqual(len(self.rung_lines()), 3)
+        self.assertEqual((self.heartbeat()['contested'], self.heartbeat()['rung_health']), ('1', '0'))
+        self.assertEqual(self.state(busy_w)[0], 'working')
+
+    def test_no_contradiction_decides_exactly_as_before(self):
+        # A pane tmux saw active, or a hook stamp still inside its trust window,
+        # is not a contradiction: no event, and the pre-#1270 verdicts stand.
+        fresh_idle, pane = self.window(age=30); self.record(fresh_idle, pane, status='idle', since=time.time() - 1)
+        settled, pane = self.window(age=300); self.record(settled, pane, status='idle', since=time.time() - 10)
+        self.run_cli()                                    # default 10s tmux bar: both panes just drew
+        self.assertEqual((self.state(fresh_idle)[0], self.state(settled)[0]), ('working', 'done'))
+        self.assertIn('native idle', self.log.read_text())
+        self.assertEqual(self.rung_lines(), [])
+        self.assertEqual(self.heartbeat()['contested'], '0')
+        self.setUp()
+        trusted, pane = self.window(age=3); self.record(trusted, pane, status='idle', since=time.time() - 1)
+        time.sleep(2.2)
+        self.run_cli('--tmux-idle-secs', '1')             # silent pane, but the stamp is ~5s old: trusted
+        self.assertEqual(self.state(trusted)[0], 'working')
+        self.assertEqual(self.rung_lines(), [])
+
     def test_disabled_threshold_is_a_no_op(self):
         wid, pane = self.window()
         self.record(wid, pane, status='idle', since=time.time() - 10)
