@@ -15,13 +15,19 @@ import uuid
 PROTOCOL = 1
 MAX_REQUEST = 65536
 MAX_RESPONSE = 2 * 1024 * 1024
-SCOPES = {"fleet:read", "worker:start", "worker:message", "worker:stop", "worker:resume", "config:write"}
+SCOPES = {"fleet:read", "worker:start", "worker:message", "worker:stop", "worker:resume", "config:write",
+          "gh:read", "gh:comment"}
 # One scope per write action; a lifecycle tool is never reachable through worker:start.
 SCOPE_OF = {"worker_start": "worker:start", "config_set": "config:write",
             "worker_message": "worker:message", "worker_stop": "worker:stop",
-            "worker_resume": "worker:resume"}
+            "worker_resume": "worker:resume", "gh_comment": "gh:comment"}
 WORKER_ACTIONS = ("worker_message", "worker_stop", "worker_resume")
+# GitHub reads through the fleet's local copy (issue #1274): tool → fleet-gh.sh
+# kind. Synchronous like fleet_status; gated by gh:read, never by fleet:read alone.
+GH_READS = {"gh_issue_view": "issue", "gh_pr_view": "pr", "gh_pr_checks": "checks"}
 MAX_MESSAGE = 4000
+REPO_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}(/[A-Za-z0-9_.-]{1,100})?")
+GH_FIELDS_RE = re.compile(r"[A-Za-z]{1,40}(,[A-Za-z]{1,40}){0,29}")
 # Durable worker identity (issue #834): the fleet UUID plus the binding the fleet
 # itself keys every ledger row on — the numeric @issue of a worker, or the
 # scratch-<N> slug of an @raw scratch worktree. It survives /fleet-handoff (same
@@ -116,29 +122,54 @@ def name(value):
     return value
 
 
+def check_number(value, what="issue"):
+    if type(value) is not int or not 1 <= value <= 2147483647:
+        raise Fault("INVALID_ARGUMENT", what + " must be a positive integer")
+
+
+def check_repo(params):
+    # Which hosted repo (issue #984): owner/name, slug or bare name — resolved
+    # against the fleet's repos on the machine, never a path.
+    repo = params.get("repo", "")
+    if not isinstance(repo, str) or repo and not REPO_RE.fullmatch(repo):
+        raise Fault("INVALID_ARGUMENT", "repo must be owner/name or a hosted repo's name")
+
+
+def check_text(text, what="text"):
+    if not isinstance(text, str) or not 1 <= len(text) <= MAX_MESSAGE or not text.strip():
+        raise Fault("INVALID_ARGUMENT", "%s must be 1-%d characters" % (what, MAX_MESSAGE))
+    if "<!--" in text or any(ord(c) < 32 and c not in "\n\t" for c in text):
+        # A comment marker could forge the bridge's no-relay / provenance
+        # rails; control bytes could drive the pane once pasted.
+        raise Fault("INVALID_ARGUMENT", what + " must not contain HTML comments or control characters")
+
+
+def validate_gh_read(params):
+    fields(params, ("fleet_id", "number"), ("repo", "fields"))
+    check_number(params["number"], "number")
+    check_repo(params)
+    wanted = params.get("fields", "")
+    if not isinstance(wanted, str) or wanted and not GH_FIELDS_RE.fullmatch(wanted):
+        raise Fault("INVALID_ARGUMENT", "fields must be comma-separated gh --json field names")
+
+
 def validate_write(action, params):
     if action == "worker_start":
         fields(params, ("issue",), ("agent", "repo"))
-        if type(params["issue"]) is not int or not 1 <= params["issue"] <= 2147483647:
-            raise Fault("INVALID_ARGUMENT", "issue must be a positive integer")
+        check_number(params["issue"])
         if params.get("agent", "") not in ("", "claude", "codex"):
             raise Fault("INVALID_ARGUMENT", "agent must be claude or codex")
-        # Which hosted repo the issue is in (issue #984): owner/name, slug or bare
-        # name — resolved against the fleet's repos on the machine, never a path.
-        repo = params.get("repo", "")
-        if not isinstance(repo, str) or repo and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}(/[A-Za-z0-9_.-]{1,100})?", repo):
-            raise Fault("INVALID_ARGUMENT", "repo must be owner/name or a hosted repo's name")
+        check_repo(params)
+    elif action == "gh_comment":
+        fields(params, ("issue", "body"), ("repo",))
+        check_number(params["issue"])
+        check_repo(params)
+        check_text(params["body"], "body")
     elif action in WORKER_ACTIONS:
         fields(params, ("worker_id",), ("text",) if action == "worker_message" else ())
         parse_worker_id(params["worker_id"])
         if action == "worker_message":
-            text = params.get("text")
-            if not isinstance(text, str) or not 1 <= len(text) <= MAX_MESSAGE or not text.strip():
-                raise Fault("INVALID_ARGUMENT", "text must be 1-%d characters" % MAX_MESSAGE)
-            if "<!--" in text or any(ord(c) < 32 and c not in "\n\t" for c in text):
-                # A comment marker could forge the bridge's no-relay / provenance
-                # rails; control bytes could drive the pane once pasted.
-                raise Fault("INVALID_ARGUMENT", "text must not contain HTML comments or control characters")
+            check_text(params.get("text"))
     elif action == "config_set":
         fields(params, ("key", "value", "expected_revision"))
         key, value = params["key"], params["value"]

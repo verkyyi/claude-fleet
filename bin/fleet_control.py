@@ -12,10 +12,10 @@ import threading
 import uuid
 
 from fleet_config_write import revision, write
-from fleet_hub_common import (CONFIG_KEYS, PROTOCOL, WORKER_ACTIONS, Database, Fault,
+from fleet_hub_common import (CONFIG_KEYS, GH_READS, PROTOCOL, WORKER_ACTIONS, Database, Fault,
                               canonical, fields, identifier, name, now, operation,
-                              parse_worker_id, read_request, repo_named, run, validate_write,
-                              worker_identity, worker_key)
+                              parse_worker_id, read_request, repo_named, run, validate_gh_read,
+                              validate_write, worker_identity, worker_key)
 
 BIN = Path(__file__).absolute().parent
 SCHEMA = """
@@ -135,6 +135,26 @@ class Control:
         return dict(values=dict(zip(CONFIG_KEYS, map(int, parts[:-1]))), revision=after,
                     revision_scope="fleet_overlay", observed_at=now())
 
+    def gh_read(self, fleet, kind, params):
+        """One issue / PR / PR's checks via fleet-gh.sh: the daemons' local copy
+        when fresh (`_source: cache`), else gh, else REST — same JSON object,
+        `_source` / `_age` included (issue #1274)."""
+        code, output, err = self.adapter("gh", fleet["name"], kind, str(params["number"]),
+                                         params.get("repo", ""), params.get("fields", ""))
+        if code == 6:
+            raise Fault("INVALID_ARGUMENT", "Name a repo this fleet hosts (owner/name)")
+        if code == 2:
+            raise Fault("INVALID_ARGUMENT", "GitHub read refused: " + last_line(err))
+        if code:
+            raise Fault("UNAVAILABLE", "GitHub read failed: " + last_line(err))
+        try:
+            result = json.loads(output)
+        except (ValueError, UnicodeError) as exc:
+            raise Fault("PROTOCOL_ERROR", "GitHub read returned no JSON object") from exc
+        if not isinstance(result, dict):
+            raise Fault("PROTOCOL_ERROR", "GitHub read returned no JSON object")
+        return result
+
     def get_operation(self, op_id):
         with self.store.connect() as db:
             row = db.execute("SELECT * FROM operations WHERE id=?", (identifier(op_id),)).fetchone()
@@ -253,6 +273,19 @@ class Control:
             params = req["params"]
             if req["action"] in WORKER_ACTIONS:
                 result = self.execute_worker(fleet, req["action"], params)
+            elif req["action"] == "gh_comment":
+                # Record-only (fleet-comment.sh --note) through the per-token
+                # write queue; reaching a live worker is worker_message's job.
+                attempted = True
+                code, output, err = self.adapter("comment", fleet["name"], str(params["issue"]), params.get("repo", ""),
+                                                 payload=params["body"].encode("utf-8"), timeout=900)
+                if code == 6:
+                    raise Unattempted("INVALID_ARGUMENT", "Name a repo this fleet hosts (owner/name)")
+                if code:
+                    raise Fault("UNKNOWN_OUTCOME", "Comment post did not confirm; inspect the issue before retrying")
+                result = {"comment_url": output.decode("utf-8").strip(), "channel": "record",
+                          "delivery": "record only; a live worker on this issue does not see it (use worker_message)",
+                          "observed_at": now()}
             elif req["action"] == "worker_start":
                 # No --force, arbitrary argv, paths, environment or shell input.
                 attempted = True
@@ -305,12 +338,20 @@ class Control:
             fields(params, ("fleet_id",))
             fleet = self.fleet(params["fleet_id"])
             return self.workers(fleet) if method == "fleet_status" else self.config(fleet)
+        if method in GH_READS:
+            validate_gh_read(params)
+            return self.gh_read(self.fleet(params["fleet_id"]), GH_READS[method], params)
         if method == "operation_get":
             fields(params, ("operation_id",))
             return self.get_operation(params["operation_id"])
         if method == "submit":
             return self.submit(params)
         raise Fault("INVALID_ARGUMENT", "Unsupported control method")
+
+
+def last_line(err):
+    lines = (err or b"").decode("utf-8", "replace").strip().splitlines()
+    return lines[-1][:200] if lines else "no detail"
 
 
 def main(argv=None):

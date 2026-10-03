@@ -87,6 +87,10 @@ sleep controller owns its pane. Transfer between machines is still deferred.
 | `worker_resume(worker_id, idempotency_key)` | Reopen a stopped worker from its `/fleet-history` row in a new window (`dash-restore-session.sh`) | `worker:resume` on the worker's Fleet |
 | `config_set(fleet_id, key, value, expected_revision, idempotency_key)` | Compare-and-set one allowed configuration key | `config:write` plus an explicit key grant |
 | `operation_get(operation_id)` | Reconcile a caller's own operation with its node | `fleet:read` on the target Fleet |
+| `gh_issue_view(fleet_id, number, repo?, fields?)` | One Issue through the node's `fleet-gh.sh`: the daemons' local copy when fresh, else `gh`, else REST — the `gh --json` fields plus `_source` (`cache`/`gh`/`rest`) and `_age` seconds (#1274) | `gh:read` on that Fleet |
+| `gh_pr_view(fleet_id, number, repo?, fields?)` | One PR, same path and shape | `gh:read` on that Fleet |
+| `gh_pr_checks(fleet_id, number, repo?, fields?)` | A PR's CI rollup `bucket`; `fields` (e.g. `name,state`) adds per-check rows, which the cache does not hold | `gh:read` on that Fleet |
+| `gh_comment(fleet_id, issue, body, idempotency_key, repo?)` | Post a **record-only** comment (`fleet-comment.sh --note --from hub`) through the per-token write queue (#1264); a live worker on that issue does NOT see it — `worker_message` is the channel for that. No merge, close or label tool exists | `gh:comment` on that Fleet |
 
 All callers need `fleet:read`. Each lifecycle tool has its own scope; none of
 them is implied by `worker:start`. Tools do not expose shell commands, raw tmux
@@ -160,6 +164,13 @@ python3 ~/.claude/fleet/bin/fleet-hub.py grant scheduler \
 Lifecycle scopes are granted the same way and separately — `--scope
 worker:message`, `--scope worker:stop`, `--scope worker:resume` — so a caller
 that may nudge workers need not be able to end them.
+
+GitHub access is the same: `--scope gh:read` for the three read tools,
+`--scope gh:comment` for `gh_comment` (issue #1274). `fleet:read` alone reads
+no Issue or PR. The node answers with ITS `gh` login, through its local copy,
+rate-limit fallback and write queue — so a claude.ai or desktop session on an
+iPad gets the same rails a worker does, without the official GitHub connector.
+`repo` must be one the Fleet hosts, and is required when it hosts several.
 
 The result includes a `principal_id` and a token, printed once. Store the token
 in the MCP client's private environment as `FLEET_HUB_TOKEN`. One grant serves

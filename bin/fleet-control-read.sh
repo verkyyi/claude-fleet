@@ -118,6 +118,35 @@ case "$mode" in
     case "${3:-}" in ''|*[!0-9]*) exit 2 ;; esac
     exec bash "$BIN/fleet-comment.sh" "$3" --repo "$repo" --to-worker --from hub --body-file -
     ;;
+  # --- GitHub through the fleet's own rails (issue #1274) ----------------------
+  # gh <sess> issue|pr|checks <N> [<repo>] [<fields>] — fleet-gh.sh: the daemons'
+  # local copy first, gh/REST only when it is too old. comment <sess> <N> [<repo>]
+  # — body on stdin, record-only (--note), through the per-token write queue.
+  # <repo> must be one this fleet hosts; a 2+ repo fleet must name it (6).
+  gh|comment)
+    fleet_load_conf "$sess"
+    if [ "$mode" = gh ]; then n=${4:-}; want=${5:-}; fields=${6:-}; else n=${3:-}; want=${4:-}; fi
+    case "$n" in ''|*[!0-9]*) exit 2 ;; esac
+    if [ -n "$want" ]; then repo=$(fleet_repo_for_slug "$sess" "$want") || exit 6
+    elif fleet_multirepo "$sess"; then exit 6
+    else repo=$(fleet_target_repo "$sess") || exit 6
+    fi
+    if [ "$mode" = comment ]; then
+      exec bash "$BIN/fleet-comment.sh" "$n" --repo "$repo" --note --from hub --body-file -
+    fi
+    # An SSH forced command has no TMPDIR; the daemons that write the cache run
+    # with the per-user one (fleet-install-apply.sh), so read the same dir.
+    if [ -z "${TMPDIR:-}" ] && t=$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null) && [ -d "$t" ]; then
+      export TMPDIR="$t"
+    fi
+    case "${3:-}" in
+      issue)  set -- issue view ;;
+      pr)     set -- pr view ;;
+      checks) set -- pr checks ;;
+      *) exit 2 ;;
+    esac
+    exec bash "$BIN/fleet-gh.sh" "$1" "$2" "$n" --repo "$repo" ${fields:+--json "$fields"}
+    ;;
   stop)
     fleet_load_conf "$sess"
     exec bash "$BIN/fleet-worker-stop.sh" "$sess" "${3:-}"
