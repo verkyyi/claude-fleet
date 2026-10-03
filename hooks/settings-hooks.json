@@ -68,6 +68,12 @@
           { "type": "command", "command": "python3 ~/.claude/fleet/bin/fleet-codex-session.py hook" },
           { "type": "command", "command": "bash ~/.claude/fleet/bin/fleet-emit.sh session.start --stdin-json" }
         ]
+      },
+      {
+        "matcher": "compact",
+        "hooks": [
+          { "type": "command", "command": "bash ~/.claude/fleet/bin/refocus-hook.sh" }
+        ]
       }
     ],
     "SessionEnd": [

@@ -152,6 +152,7 @@ FLEET_QUOTAWATCH_SWEEP_BUDGET      knob: internal pacing/limit, safe in-code def
 FLEET_QUOTAWATCH_TICK_BUDGET       knob: internal pacing/limit, safe in-code default (fleet-quotawatch.sh)
 FLEET_QUOTAWATCH_TMUX_BUDGET       knob: internal pacing/limit, safe in-code default (fleet-quotawatch.sh)
 FLEET_REAP_MIN_AGE                 knob: internal pacing/limit, safe in-code default (dash-reap.sh)
+FLEET_REFOCUS_SOURCE               seam: the SessionStart source refocus-hook.sh acts on, instead of stdin
 FLEET_REFUSE_MS                    knob: internal pacing/limit, safe in-code default (dash-issue-session.sh)
 FLEET_REPORT_FROM                  handoff: the from-name a child report is sent under
 FLEET_REPOS                        legacy: pre-#788 cache pin list, superseded by repos/ overlays; kept as the collector selftests' repo seam
