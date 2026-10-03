@@ -7,6 +7,10 @@
 #   children_file <parent-key> <sess>    → that parent's <parent-key>.ndjson
 #   children_append <parent-key> <json> [<sess>]
 #                                        → append one event, deduped + seq'd
+#   children_wake <parent-key> <child> <level> <action> <outcome> [<sess>]
+#                                        → append one stall-ladder row (issue #1268)
+#   children_wake_state <parent-key> <child> [<sess>]
+#                                        → `<level> <epoch>` the ladder resumes from
 #   report_tier <STATE> [summary] [verdict] [child @claude_state]
 #                                        → loud | quiet | silent (issue #938)
 #   children_report_mode [value]         → immediate | batch | 0 — the
@@ -63,6 +67,24 @@ children_append() {
   f=$(children_file "${1:-}" "${3:-}") || return 1
   command -v python3 >/dev/null 2>&1 || return 1
   printf '%s' "${2:-}" | python3 "$_CHILDREN_BIN/fleet-children.py" append --file "$f" >/dev/null 2>&1
+}
+
+# children_wake / children_wake_state — the stall ladder's rows (issue #1268,
+# fleet-await.sh). Same file, same lock and seq counter as the reports; a reader
+# that wants reports never sees them (fleet-children.py read_events).
+children_wake() {
+  local f
+  f=$(children_file "${1:-}" "${6:-}") || return 1
+  command -v python3 >/dev/null 2>&1 || return 1
+  python3 -c 'import json,sys; print(json.dumps(dict(child=sys.argv[1], level=sys.argv[2], action=sys.argv[3], outcome=sys.argv[4])))' \
+    "${2:-}" "${3:-}" "${4:-}" "${5:-}" \
+    | python3 "$_CHILDREN_BIN/fleet-children.py" wake --file "$f" >/dev/null 2>&1
+}
+
+children_wake_state() {
+  local f
+  f=$(children_file "${1:-}" "${3:-}") || { printf '0 0\n'; return 0; }
+  python3 "$_CHILDREN_BIN/fleet-children.py" wake-state --file "$f" --child "${2:-}" 2>/dev/null || printf '0 0\n'
 }
 
 # report_tier — how loudly a child report may interrupt its parent (issue #938).

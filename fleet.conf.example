@@ -513,6 +513,15 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Child-report digest max wait @group=spawn @tier=internal @scope=fleet @edit=int @unit=seconds
 #FLEET_CHILD_REPORT_BATCH_SECS=300
 
+# How long a child awaited by bin/fleet-await.sh may sit without progress before
+# its STALL LADDER climbs a rung (issue #1268), in seconds: wake it, wake it again,
+# re-send its task, tell its parent, then raise a `● #N · stalled` alert — one rung
+# per this interval, each a `wake` row in the parent's children ledger. A new
+# report or a change in the child's worktree resets it; an unknown state, or
+# `working` with a busy process tree, never counts. 0 = off. Default 1200.
+# @label=Stalled child escalation interval @group=spawn @tier=internal @scope=fleet @edit=int @unit=seconds
+#FLEET_AWAIT_STALL_SECS=1200
+
 # --- Default milestone for filed issues (bin/fleet-issue-file.sh, issue #433) ----
 # Guarantee EVERY filed issue gets a milestone so nothing lands unsorted. When set,
 # the one issue-filer channel (⌃n, the dash new-session box, the hub's file+spawn

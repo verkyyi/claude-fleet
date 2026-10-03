@@ -215,8 +215,8 @@ class Scan:
         for path in sorted(glob.glob(os.path.join(self.ledger_root, "*", "children", "*.ndjson"))):
             sess = os.path.basename(os.path.dirname(os.path.dirname(path)))
             for ev in load_jsonl(path):
-                if not isinstance(ev, dict):
-                    continue
+                if not isinstance(ev, dict) or ev.get("type") == "wake":
+                    continue            # a stall-ladder row (#1268), not a report
                 ts = parse_ts(ev.get("ts"))
                 if not self.in_window(ts):
                     continue
