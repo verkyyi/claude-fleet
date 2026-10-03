@@ -5013,8 +5013,11 @@ fleet_cmd() {
 # fleet-heavy-selftest.sh holds the two in lockstep. The regex is a PYTHON `re`,
 # matched at a statement's command position (after VAR=val / `time` / `nohup` /
 # `timeout N` prefixes). FLEET_HEAVY_RE in the global settings replaces it.
+# shellcheck disable=SC2034  # read by bin/fleet-heavy.sh + its selftest
 FLEET_HEAVY_SLOTS_DEFAULT=3
+# shellcheck disable=SC2034
 FLEET_HEAVY_WAIT_DEFAULT=1800
+# shellcheck disable=SC2034
 FLEET_HEAVY_RE_DEFAULT='git\b(?:\s+(?:-[Cc]\s+\S+|-\S+))*\s+push\b|(?:python3?\s+-m\s+)?pytest\b|npm\s+(?:run\s+)?test\b|(?:(?:ba|z)?sh\s+)?(?:\S*/)?(?:run-selftests|local-prod-gate|pre-pr)\.sh\b'
 
 # fleet_heavy_dir — the MACHINE-level slot dir shared by every login (EPIC #1291
