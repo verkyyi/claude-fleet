@@ -175,9 +175,10 @@ for kind in ask perm blocked restore other; do
   has "D: needs/$kind → the hub's act cell names it" "$(hrow "$h" "n-$kind")" "$(fleet_ui_t "needs_$kind")"
 done
 eq "D: failed → ! + its kind" "!|$(fleet_ui_t needs_failed)" "$(gd n-failed)"
+SPIN='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
 for v in n-prep n-wake; do
   g=$(gd "$v"); g=${g%%|*}
-  case '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏' in *"$g"*) CHECKS=$((CHECKS+1)) ;; *) fail "D: $v spins like working (got '$g')" ;; esac
+  case "$SPIN" in *"$g"*) CHECKS=$((CHECKS+1)) ;; *) fail "D: $v spins like working (got '$g')" ;; esac
 done
 eq "D: a sleeper is a bare z in the sidebar" "z|" "$(gd n-sleep)"
 for g in '?' '⊘' '⊠' '↺'; do

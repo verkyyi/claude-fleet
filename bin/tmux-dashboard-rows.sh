@@ -419,7 +419,8 @@ fi
 #             in it closed, or it ran past CHAIN_MAX hops) — an ORPHAN, which
 #             sorts under the 9:99999 sink sentinel, still nested under whatever
 #             of its chain IS live
-#   $crootpin/$crootexp/$crgrp  the root's @pin / @expand / repo group (0 if none)
+#   $crootpin the root's @pin (0 if none); its @expand / repo group are
+#             AE/AG[ANC-1]
 #   $cpnlvl   level (index into A*) of the NEAREST pinned ancestor; '' if none.
 #             Self is not considered here — the caller checks its own @pin first,
 #             so a pinned row is always its own pin root (#623's rule, unchanged).
@@ -431,7 +432,7 @@ fi
 # deeper subtree still stays contiguous.
 CHAIN_MAX=16; DEPTH_MAX=4
 AK=(); AR=(); AI=(); AP=(); AE=(); AG=()
-chain_v() { croot=''; crootpin=0; crootexp=0; crgrp=0; cpnlvl=''; ANC=0
+chain_v() { croot=''; crootpin=0; cpnlvl=''; ANC=0
   local cur="$1" t m prow prest porig
   t=$'\n'"$KEYTAB"
   while [ "$ANC" -lt "$CHAIN_MAX" ]; do
@@ -448,7 +449,7 @@ chain_v() { croot=''; crootpin=0; crootexp=0; crgrp=0; cpnlvl=''; ANC=0
     ANC=$((ANC+1))
     case "$porig" in
       issue-*|scratch-*|*:issue-*|*:scratch-*) cur=$porig ;;   # a child too — keep climbing
-      *) croot=$cur; crootpin=${AP[ANC-1]}; crootexp=${AE[ANC-1]}; crgrp=${AG[ANC-1]}
+      *) croot=$cur; crootpin=${AP[ANC-1]}
          return ;;                                            # hub/autofill/none: the root
     esac
   done
