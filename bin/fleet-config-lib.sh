@@ -392,6 +392,10 @@ fcfg_label_i18n() {
     FLEET_MEM_SPIKE_GROW_MB) printf '内存暴涨增量 MB' ;;
     FLEET_MEM_SPIKE_WINDOW) printf '内存暴涨窗口' ;;
     FLEET_MEM_SPIKE_ACTION) printf '内存暴涨动作' ;;
+    FLEET_ADMIT) printf '机器紧张时暂停开新会话' ;;
+    FLEET_ADMIT_MEM_FREE_PCT) printf '开新会话所需可用内存 %%' ;;
+    FLEET_ADMIT_PRESSURE) printf '开新会话的内存压力上限' ;;
+    FLEET_ADMIT_LOAD_PER_CORE) printf '开新会话的每核心负载上限' ;;
     FLEET_MEM_PROC_HARD_PCT) printf '单进程内存上限 %%' ;;
     FLEET_MEM_EXEMPT_RE) printf '内存守护豁免规则' ;;
     FLEET_MEM_ORPHAN_MB) printf '遗留进程内存 MB' ;;

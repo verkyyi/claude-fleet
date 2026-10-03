@@ -68,6 +68,10 @@ case "$MODE" in roadmap) LABEL=' roadmap · milestoned ';; unplanned) LABEL=' un
 # render); recomputed each time the panel (re)opens, so it is current at the
 # moment you go to spawn. fzf colorizes it via --ansi.
 SLOTS=$(fleet_slots_chip)
+# …and when the machine itself is holding new sessions (issue #1090 — memory tight
+# or load high), say so beside the count: the slots may read free while Enter is
+# refused for a reason the count cannot show.
+ADMIT_TAG=$(fleet_machine_admit --short) || SLOTS="$SLOTS · $(printf '\033[38;2;247;118;142m')$ADMIT_TAG$(printf '\033[0m')"
 eval "$(bash "$BIN/dash-keymap.sh" --panel backlog env)"
 HDR="$SLOTS · ↵ work · $DASH_GLYPH_NEW new · ? keys"
 ACT="${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}/global/issues_act_${FLEET_SESSION:-_}.$$"

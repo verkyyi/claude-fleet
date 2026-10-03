@@ -176,6 +176,11 @@ cd "$script_dir" || { echo "run-selftests: cannot cd to bin dir ($script_dir)" >
 # so FLEET_SELFTEST_NO_SHADOW=1 keeps the isolation it had before.)
 export FLEET_SKIP_GLOBAL_CONF=1
 unset FLEET_GLOBAL_MAX_SESSIONS 2>/dev/null || true
+# The machine-admission gate (issue #1090) reads the HOST's real memory + load, so
+# every spawn-path test would go red on a busy box (or a busy CI runner) for a reason
+# that has nothing to do with it. Off for the suite; fleet-admit-selftest.sh turns it
+# back on against stubbed probes.
+export FLEET_ADMIT=0
 
 # The PER-FLEET confs are the same leak one directory over (issue #660): fleet_load_conf
 # reads $FLEET_CONF_DIR/fleets/<sess>/conf, defaulting to the operator's real

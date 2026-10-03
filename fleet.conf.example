@@ -1730,6 +1730,25 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Memory orphan action @group=disk @tier=internal @scope=global @edit=str
 #FLEET_MEM_ORPHAN_ACTION=report    # report (the default) | kill
 
+# Machine admission (issue #1090, EPIC #1291 C4): every path that opens a NEW
+# session (dash, backlog Enter, dispatch/autofill, bridge, /fleet-epic-run, the
+# scratch pool) asks fleet_session_cap_ok, which now also asks whether the
+# MACHINE has room — not just whether the session count does. Memory pressure at
+# or above FLEET_ADMIT_PRESSURE, avail% under FLEET_ADMIT_MEM_FREE_PCT, or 1-min
+# load/core over FLEET_ADMIT_LOAD_PER_CORE → the spawn is refused as "at
+# capacity" (exit 2), the caller retries next tick, and spawns resume on their own
+# when the reading drops. Running sessions are untouched; crash restore, quota
+# migration and a handoff's continuation never pass this gate. The backlog header
+# shows 「暂停开新：内存紧张」 / 「暂停开新：负载过高」 while it holds.
+# @label=Machine admission gate @group=disk @tier=internal @scope=global @edit=bool
+#FLEET_ADMIT=1                      # 0 = admit on session counts alone (pre-#1090)
+# @label=Admission min free memory % @group=disk @tier=internal @scope=global @edit=int @unit=%
+#FLEET_ADMIT_MEM_FREE_PCT=15        # hold new sessions below this % available; 0 = off
+# @label=Admission memory pressure @group=disk @tier=internal @scope=global @edit=str
+#FLEET_ADMIT_PRESSURE=warn          # warn (default) | critical | off — kernel pressure level that holds
+# @label=Admission load per core @group=disk @tier=internal @scope=global @edit=str
+#FLEET_ADMIT_LOAD_PER_CORE=2        # hold above this 1-min load/core; 0 = off (default: FLEET_LOADGEN_LOAD_PER_CORE if set, else 2)
+
 # The load line on `fleet-doctor`'s `machine` check (issue #697): 1-minute load
 # average divided by core count. Warns at or above this, so the number means the
 # same thing on a 4-core and a 16-core box.
