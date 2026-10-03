@@ -138,6 +138,19 @@ grouped by the plan's themes): the summary line is the name, one sentence and th
 status pill — and **for anything unfinished that one sentence is the why**, so a
 reader never has to open a card to learn something did not ship.
 
+**已合并，仍在循环** (issue #1331) is a status of its own: a member whose PR merged
+while its window still runs a `/loop` (watching production, a metric, a deploy).
+Merged is delivered — it counts as done in the band — but the reader must see
+that something of this batch is still running. ONE read, for every merged member:
+
+```sh
+~/.claude/fleet/bin/fleet-epic-loopers.sh --repo "$FLEET_REPO" <member>...   # → <N>\tlooping|idle|gone\t<reason>
+```
+
+`looping` → pill 「已合并，仍在循环」, and the card's sentence says what it is
+still watching (its last turn, not a guess). `idle` or `gone` → 「已合并」 as
+before — a window that no longer exists is simply merged.
+
 What earns its place, in page order:
 
 1. **交付了什么** (`#delivered`) — **first, and in the reader's words**: what a

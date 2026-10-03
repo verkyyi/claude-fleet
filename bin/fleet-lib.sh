@@ -452,6 +452,22 @@ EOF
   return 0
 }
 
+# fleet_window_loop <sess> <window-target> → `active <reason>` | `none <reason>`
+# (issue #1331), exit 0 iff active. "This window has a Loop pending": its @loop mark
+# (ScheduleWakeup / CronCreate, written by the PostToolUse hook, expiry judged here
+# by the reader) or a fleet-loop.py ledger that will still deliver. The ONE answer —
+# bin/fleet_loop_mark.py is the implementation, Python readers import it directly.
+# A window with neither option set answers `none unset` with one tmux read.
+fleet_window_loop() {
+  local sess="${1:-}" t="${2:-}" raw bin
+  [ -n "$t" ] || { echo 'none no-target'; return 1; }
+  raw=$(_fleet_tmux "$sess" display-message -p -t "$t" '#{@loop}#{@handoff_manifest}' 2>/dev/null)
+  [ -n "$raw" ] || { echo 'none unset'; return 1; }
+  bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+  if [ -n "${TMUX:-}" ]; then python3 "$bin/fleet_loop_mark.py" window "$t"
+  else python3 "$bin/fleet_loop_mark.py" window "$t" --socket-name "$(fleet_socket "$sess")"; fi
+}
+
 # fleet_window_repo <sess> <window-target> → the window's repo (owner/name), or
 # NOTHING when unknown — the caller then skips the window, it never guesses:
 #   1. @repo, when stamped;

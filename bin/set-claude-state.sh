@@ -24,6 +24,7 @@ set -u  # POSIX sh: pipefail is bash-only (dash has none)
 case "${CLAUDE_CODE_ENTRYPOINT:-cli}" in cli) : ;; *) exit 0 ;; esac
 
 handoff_prev=''   # prior @claude_state, captured in the done branch (issue #330)
+wstate=''         # what a clean Stop WRITES when it is not `done` (issue #1331: looping)
 
 # @claude_needs — WHY this window is red (issues #640, #704):
 #
@@ -137,6 +138,17 @@ case "${1:-}" in
     # a needs-attention state (an open operator question). Only the Stop hook
     # passes 'done', so this one extra read never touches the per-tool hot path.
     handoff_prev=$(tmux display-message -p -t "$TMUX_PANE" '#{@claude_state}' 2>/dev/null)
+    # A turn that ended with a Loop still pending (issue #1331): the agent scheduled
+    # its own next round (ScheduleWakeup / CronCreate, recorded in @loop by the
+    # PostToolUse hook) or a fleet-loop.py ledger holds one. The pane is idle but NOT
+    # finished, so it is stamped `looping` (↻) instead of `done` (✓) — the dash's
+    # k/N stops counting it and the reapers retain it. Only the WRITTEN state
+    # changes: everything below keyed on a clean Stop (`sem=done`) still runs. One
+    # tmux read when neither option is set, i.e. today's cost for every other pane.
+    if [ -n "$(tmux display-message -p -t "$TMUX_PANE" '#{@loop}#{@handoff_manifest}' 2>/dev/null)" ]; then
+      _lbin=$(cd "$(dirname "$0")" && pwd)
+      python3 "$_lbin/fleet_loop_mark.py" window "$TMUX_PANE" >/dev/null 2>&1 && wstate=looping
+    fi
     ;;
   busy)
     # PreToolUse heartbeat = working, EXCEPT the AskUserQuestion tool: it opens a
@@ -203,7 +215,7 @@ if [ "$sem" != "leave" ]; then
     tmux set-window-option -u -t "$TMUX_PANE" @agent_transfer_ready 2>/dev/null
     tmux set-window-option -u -t "$TMUX_PANE" @sleep_evidence 2>/dev/null
   fi
-  tmux set-window-option -t "$TMUX_PANE" @claude_state "$sem" 2>/dev/null
+  tmux set-window-option -t "$TMUX_PANE" @claude_state "${wstate:-$sem}" 2>/dev/null
   # the `needs` subtype, ALWAYS written beside the state it qualifies (issue #640):
   # a working/done write clears it, so no reader can ever pair a fresh state with a
   # stale reason.
@@ -538,7 +550,7 @@ fi
 # A child that stopped before ship must still wake its parent once (#565).
 # Keep this off the per-tool path and bound the complete report process tree;
 # stdout belongs to Stop's JSON response, so reports never print into it.
-if [ "$sem" = "done" ] && [ "$handoff_prev" != "looping" ]; then
+if [ "$sem" = "done" ] && [ "$handoff_prev" != "looping" ] && [ -z "$wstate" ]; then
   _origin=$(tmux display-message -p -t "$TMUX_PANE" '#{@origin}' 2>/dev/null)
   case "$_origin" in issue-*|scratch-*)
     _bin=$(cd "$(dirname "$0")" && pwd)

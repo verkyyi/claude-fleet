@@ -25,7 +25,7 @@ class SleepTest(unittest.TestCase):
         cls.root=Path(cls.tmp.name)
         cls.socket='sleep-test-'+str(os.getpid())
         cls.bin=cls.root/'bin'; cls.bin.mkdir()
-        for name in ('fleet-sleep.py','.fleet-transfer.py','fleet-input.py','fleet-codex-session.py','fleet-codex-rpc.py','fleet_sleep_argv.py','fleet-loop.py','fleet_sleep_mcp.py','fleet_sleep_park.py'):
+        for name in ('fleet-sleep.py','.fleet-transfer.py','fleet-input.py','fleet-codex-session.py','fleet-codex-rpc.py','fleet_sleep_argv.py','fleet-loop.py','fleet_sleep_mcp.py','fleet_sleep_park.py','fleet_loop_mark.py'):
             shutil.copyfile(BIN/name,cls.bin/name)
         cls.wt=cls.root/'scratch-1'; cls.wt.mkdir()
         cls.sid='11111111-1111-4111-8111-111111111111'

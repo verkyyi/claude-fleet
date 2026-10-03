@@ -10,9 +10,18 @@ import argparse
 import os
 from pathlib import Path
 import re
+import runpy
 import subprocess
 import sys
 import time
+
+# The @loop reader (issue #1331) sits beside this script — or beside its target,
+# when only this file was linked into a sandbox bin/. Missing ⇒ the import fails
+# and the probe exits non-zero: never permission to reap.
+_HERE = Path(__file__).absolute().parent
+LOOPMARK = runpy.run_path(str(next(
+    (d / "fleet_loop_mark.py" for d in (_HERE, Path(__file__).resolve().parent)
+     if (d / "fleet_loop_mark.py").is_file()), _HERE / "fleet_loop_mark.py")))
 
 
 def read(*args):
@@ -57,6 +66,16 @@ def live_reason(target, minimum, socket_name=None, merged_at=None, waived=None, 
     # parked on post-release verification. It retains any worker, asleep or not.
     if read(*tmux, "display-message", "-p", "-t", target, "#{@reap_hold}").strip() == "1":
         return "retained:hold"
+    # A pending LOOP (issue #1331) — the agent scheduled its own next round
+    # (ScheduleWakeup / CronCreate → @loop) or a fleet-loop.py ledger holds one.
+    # The window is idle between rounds, not finished: reaping it would take the
+    # Loop with it. Ahead of the lifecycle, age and state gates; a stopped or
+    # expired Loop reads `none` here and the window reaps by the ordinary rules.
+    raw = read(*tmux, "display-message", "-p", "-t", target,
+               "#{@loop}\t#{@handoff_manifest}").rstrip("\n")
+    value, _, manifest = raw.partition("\t")
+    if (value or manifest) and LOOPMARK["status"](value, manifest)[0] == "active":
+        return "retained:loop"
     lifecycle = read(*tmux, "display-message", "-p", "-t", target, "#{@worker_lifecycle}").strip()
     # A SLEEPING worker has no agent at all — its pane is the park page — so it is
     # the safest reap there is (issue #1244): no age gate, only the process walk

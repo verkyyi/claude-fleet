@@ -114,6 +114,9 @@ guard_live() {
   if ! why=$(FLEET_REAP_MIN_AGE="${FLEET_REAP_MIN_AGE:-1800}" \
     python3 "$BIN/fleet-reap-live.py" "$target" 2>/dev/null); then
     emit skip:live
+    # A pending /loop (issue #1331) is not "live" in the busy sense — say what it is:
+    # the window waits for its Loop to stop (stop:true / CronDelete / no renewal).
+    [ "$why" = retained:loop ] && why='retained:loop — a Loop is still scheduled; it reaps once the Loop stops'
     printf 'reap: %s is live or could not be checked (%s) — leaving window and worktree alone\n' \
       "$target" "${why:-probe unavailable}" >&2
     # Also on the status line: in the backgrounded tail stderr goes nowhere, and a

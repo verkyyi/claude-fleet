@@ -83,13 +83,14 @@ fi
 # One list-windows; window_name rides LAST (free text), `|` separators (tmux ≤3.4
 # prints a 0x1f separator as a literal `\037`).
 rows() {
-  local line wid rest ws st needs iss wt path repo norepo name key pre slug
-  TM list-windows -a -F '#{window_id}|#{session_name}|#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}|#{@claude_needs}|#{@issue}|#{@worktree}|#{@repo}|#{@norepo}|#{@origin}|#{pane_current_path}|#{window_name}' 2>/dev/null |
+  local line wid rest ws st needs loop iss wt path repo norepo name key pre slug
+  TM list-windows -a -F '#{window_id}|#{session_name}|#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}|#{@claude_needs}|#{@loop}|#{@issue}|#{@worktree}|#{@repo}|#{@norepo}|#{@origin}|#{pane_current_path}|#{window_name}' 2>/dev/null |
   while IFS= read -r line; do
     wid=${line%%|*};  rest=${line#*|}
     ws=${rest%%|*};   rest=${rest#*|}
     st=${rest%%|*};   rest=${rest#*|}
     needs=${rest%%|*}; rest=${rest#*|}
+    loop=${rest%%|*}; rest=${rest#*|}
     iss=${rest%%|*};  rest=${rest#*|}
     wt=${rest%%|*};   rest=${rest#*|}
     repo=${rest%%|*}; rest=${rest#*|}
@@ -112,6 +113,12 @@ rows() {
       *) key="${pre}issue-$iss" ;;
     esac
     [ -n "$key" ] || continue
+    # A `done` child whose @loop still holds a round is between /loop rounds, not
+    # finished (issue #1331) — report it as the `looping` it is.
+    if [ "$st" = 'done' ] && [ -n "$loop" ] \
+       && python3 "$BIN/fleet_loop_mark.py" status --value "$loop" >/dev/null 2>&1; then
+      st=looping
+    fi
     printf '%s|%s|%s|%s|%s|%s\n' "$wid" "$st" "$needs" "$key" "$origin" "$name"
   done
 }

@@ -177,6 +177,15 @@ window still exists, reap it —
 `bash ~/.claude/fleet/bin/dash-reap.sh <window-target>` — which records a
 `/fleet-history` row before disposing of anything.
 
+**A member still running its `/loop` is delivered, and KEPT** (issue #1331, the
+operator's ruling A on EPIC #1312). Merged is done — the DoD and the closing
+tick do not wait for the Loop — but the reap refuses it with `retained:loop`
+(its `@loop` mark or loop ledger says a round is pending). That is not a failed
+reap: write 「保留：仍在循环」 for that member in the tick line, free nothing,
+and move on. The window ends on its own when its Loop stops (`stop:true`,
+`CronDelete`, or a wakeup nobody renews), and the cleanup daemon reaps it then
+by the ordinary rules. Never clear `@loop` to force a reap.
+
 ### c. Refill to 4–6
 
 Count live EPIC worker windows. While under target and the core layer has an

@@ -52,7 +52,7 @@ R="${E}0m"; US=$'\x1f'
 # option of that name, so the per-repo fold set rides the one list-windows call
 # every frame already makes — same value on every line, no extra fork. Both
 # passes name it so nothing lands glued to @sleep_since.
-WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{@claude_needs}${US}#{@expand}${US}#{@pin}${US}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}"
+WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{@claude_needs}${US}#{@expand}${US}#{@pin}${US}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -96,6 +96,33 @@ state_v() { case "$1" in
   looping) gc=$IN; gl='↻';      rk=3;;
   *)       gc=$GY; gl='·';      rk=4;;
 esac; }
+
+# loop_live_v <@loop> — true while the window's Loop mark (issue #1331) still holds
+# a round: a wakeup not past `next + max(600, ttl/2)`, or a cron id not past its
+# `until`. The same expiry bin/fleet_loop_mark.py applies, fork-free for the 4Hz
+# path. (A fleet-loop.py ledger loop is stamped `looping` by the Stop hook, so the
+# state already keeps it out of k; this only reads the mark.)
+loop_live_v() { local v="$1" n t g e
+  [ -n "$v" ] || return 1
+  case "$v" in *next=*)
+    n=${v#*next=}; n=${n%% *}; t=''
+    case "$v" in *ttl=*) t=${v#*ttl=}; t=${t%% *} ;; esac
+    case "$t" in ''|*[!0-9]*) t=0 ;; esac
+    case "$n" in ''|*[!0-9]*) ;; *)
+      g=$(( t / 2 )); [ "$g" -lt 600 ] && g=600
+      [ $(( n + g )) -ge "$NOW" ] && return 0 ;;
+    esac ;;
+  esac
+  case "$v" in *id=*)
+    e=${v#*id=}; e=${e%% *}
+    while [ -n "$e" ]; do
+      t=${e%%,*}; t=${t##*@}
+      case "$t" in ''|*[!0-9]*) ;; *) [ "$t" -ge "$NOW" ] && return 0 ;; esac
+      case "$e" in *,*) e=${e#*,} ;; *) e='' ;; esac
+    done ;;
+  esac
+  return 1
+}
 
 # @sleep_since → "z <age>" (issue #1051): how long a sleeping row has slept, so a
 # stale sleeper reads as stale. The epoch is stamped by fleet-sleep.py's phase()
@@ -313,8 +340,8 @@ WLIST=${WLIST//\\037/$US}
 # @repo_fold (#1037) last — the session's folded repo groups, one value on every
 # line of this fleet, taken off the first (panels included: a fleet whose only
 # windows are panels still draws its `(0)` headings, folded or not).
-KEYTAB=''; PRWANT=''; RSLUGS=' '; RFOLD=''
-while IFS=$US read -r sess idx name path state _ _ iss origin wt _ _ nsub exp pin _ _ _ _ wrepo wnorepo _ rfold; do
+KEYTAB=''; PRWANT=''; RSLUGS=' '; RFOLD=''; UNFIN=$'\n'
+while IFS=$US read -r sess idx name path state _ _ iss origin wt _ _ nsub exp pin _ _ _ _ wrepo wnorepo _ rfold wloop; do
   [ -z "$name" ] && continue
   [ -n "${FLEET_SESSION:-}" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
   RFOLD=$rfold
@@ -343,6 +370,10 @@ while IFS=$US read -r sess idx name path state _ _ iss origin wt _ _ nsub exp pi
   [ -z "$okey" ] && continue
   state_v "$state" "$nsub"; pin_v "$pin"; exp_v "$exp"
   KEYTAB+="$okey"$'\t'"$rk"$'\t'"$idx"$'\t'"$pin"$'\t'"$exp"$'\t'"$rgrp"$'\t'"$origin"$'\n'
+  # rank 1 is "quiet", not "finished" (issue #1331): a sleeper, a waking/preparing
+  # worker, and a `done` window whose @loop still holds a pending round all sort
+  # with done, but only a done window with NO Loop counts toward its parent's k/N.
+  [ "$rk" = 1 ] && { [ "$state" != 'done' ] || loop_live_v "$wloop"; } && UNFIN+="$okey"$'\n'
 done <<< "$WLIST"
 
 # The PR haystack for THIS frame (issue #662). The render loop looks a branch up
@@ -426,8 +457,10 @@ chain_v() { croot=''; crk=9; cidx=99999; chops=0; crootpin=0; crootexp=0; crgrp=
 # substitutions in pass B replace non-overlapping matches, so records sharing one
 # separator newline would count `\nA\t1\n` twice in a row as ONE.
 KIDTAB=''
-while IFS=$'\t' read -r _ krk _ _ _ _ korig; do
+while IFS=$'\t' read -r kkey krk _ _ _ _ korig; do
   case "$korig" in issue-*|scratch-*|*:issue-*|*:scratch-*) ;; *) continue ;; esac
+  # quiet-but-unfinished (#1331): `1L` still counts toward the total, never the k
+  case "$UNFIN" in *$'\n'"$kkey"$'\n'*) krk=1L ;; esac
   chain_v "$korig"
   [ -n "$croot" ] && KIDTAB+=$'\n'"$croot"$'\t'"$krk"$'\n'
 done <<< "$KEYTAB"

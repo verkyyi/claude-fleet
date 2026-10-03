@@ -98,6 +98,8 @@ case "$verdict" in
   gone) printf 'clear: %s no live window\n' "$CHILD"; exit 0 ;;
 esac
 
+# `looping` includes a `done` child whose @loop mark still holds a round —
+# fleet-children.sh reports it as looping (issue #1331).
 case "$state" in working|looping|waking) busy "$state" ;; esac
 
 if [ -n "$win" ]; then

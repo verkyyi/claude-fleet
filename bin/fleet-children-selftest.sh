@@ -128,7 +128,7 @@ eq "--dry-run writes no ledger line" 3 "$(wc -l < "$LEDGER" | tr -d ' ')"
 US=$(printf '\037')
 dash_badge() {
   mkdir -p "$WORK/shim"
-  TM list-windows -a -F "#{session_name}|#{window_index}|#{window_name}|#{pane_current_path}|#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}|#{@claude_state_ts}|#{window_id}|#{@issue}|#{@origin}|#{@worktree}|#{@cc_agent}|#{@wid}|#{@claude_needs}|#{@expand}|#{@pin}||||||" \
+  TM list-windows -a -F "#{session_name}|#{window_index}|#{window_name}|#{pane_current_path}|#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}|#{@claude_state_ts}|#{window_id}|#{@issue}|#{@origin}|#{@worktree}|#{@cc_agent}|#{@wid}|#{@claude_needs}|#{@expand}|#{@pin}|||||||||#{@loop}" \
     | tr '|' "$US" > "$WORK/wlist"
   cat > "$WORK/shim/tmux" <<'SHIM'
 #!/bin/sh
@@ -194,5 +194,19 @@ TM kill-window -t "$K1"
 out=$(bash "$CLI" -L "$LBL" scratch-7 2>&1)
 eq "a reaped merged child still counts" "2/3 ✓ · 1!" "$(printf '%s\n' "$out" | tail -1)"
 has "…shown as gone" 'issue-101        gone' "$out"
+
+# QUIET IS NOT FINISHED (issue #1331): the stopped child K3 now has a /loop
+# between rounds (a live @loop on a `done` window) — not a ✓ any more; a sleeper
+# is not either. The dash's live-only badge agrees (K1 is gone from the server).
+opt "$K3" @loop "kind=wakeup next=$(( $(date +%s) + 1800 )) ttl=1800"
+eq "a done child with a live @loop is not counted done" "1/3 ✓ · 1!" "$(summ scratch-7)"
+has "…it is reported as looping" 'looping' "$(bash "$CLI" -L "$LBL" scratch-7 2>&1)"
+eq "…and the dash badge does not count it either" "0/2 ✓ · 1!" "$(dash_badge)"
+opt "$K3" @loop "kind=wakeup next=$(( $(date +%s) - 7200 )) ttl=600"
+eq "a lapsed @loop (never renewed) is done again" "2/3 ✓ · 1!" "$(summ scratch-7)"
+eq "…on the dash too" "1/2 ✓ · 1!" "$(dash_badge)"
+TM set-option -wu -t "$K3" @loop; opt "$K3" @worker_lifecycle sleeping
+eq "a sleeping child is not counted done" "1/3 ✓ · 1!" "$(summ scratch-7)"
+eq "…nor on the dash" "0/2 ✓ · 1!" "$(dash_badge)"
 
 printf 'fleet-children selftest: OK (%d checks)\n' "$CHECKS"

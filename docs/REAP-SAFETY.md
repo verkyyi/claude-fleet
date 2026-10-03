@@ -28,6 +28,10 @@ worktree and reason. Stdout retains its existing single result-token contract.
 
 The read-only `fleet-reap-live.py` gate blocks disposal when:
 
+- the window has a pending Loop (issue #1331) — its `@loop` mark (ScheduleWakeup /
+  CronCreate, not yet stopped or lapsed) or a live `fleet-loop.py` ledger:
+  `retained:loop`, checked ahead of every age and state gate. It reaps by the
+  ordinary rules once the Loop stops;
 - `@claude_state` is anything other than `done` or empty, including `working`,
   `looping`, `busy` and `waiting`;
 - any pane in that window contains a Claude or Codex process younger than

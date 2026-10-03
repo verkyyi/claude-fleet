@@ -34,6 +34,12 @@ ARGV = runpy.run_path(str(BIN / 'fleet_sleep_argv.py'))
 LOOP = runpy.run_path(str(BIN / 'fleet-loop.py'))
 MCP = runpy.run_path(str(BIN / 'fleet_sleep_mcp.py'))
 PARK = runpy.run_path(str(BIN / 'fleet_sleep_park.py'))
+LOOPMARK = runpy.run_path(str(BIN / 'fleet_loop_mark.py'))
+
+
+def loop_pending(value):
+    """True while this window's @loop (issue #1331) holds a live wakeup/cron."""
+    return LOOPMARK['status'](value)[0] == 'active'
 
 
 # Passed to the park page's own env (issue #1237) — see Worker.command.
@@ -345,6 +351,10 @@ class Worker:
             (self.opt('@sleep_keep_awake') != '1', 'keep awake enabled'),
             (not self.visible(), 'a client is viewing this worker'),
             (self.opt('@claude_state') in ('done','looping'), 'worker is not done'),
+            # A Claude-native Loop (ScheduleWakeup / CronCreate, issue #1331) lives in
+            # the CLI process: sleeping would kill it. A fleet-loop.py ledger loop is
+            # NOT vetoed here — sleep_snapshot() hibernates and reattaches that one.
+            (not loop_pending(self.opt('@loop')), 'a Loop is scheduled in this session'),
             (not self.opt('@handoff_armed') and not self.opt('@agent_transfer_request'), 'handoff/failover is pending'),
             (not until or (until.isdigit() and int(until) <= time.time()), 'transfer is active'),
         ]
