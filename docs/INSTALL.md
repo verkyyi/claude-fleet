@@ -223,6 +223,17 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    `@compact_stage=restored` and bumps `@compact_count`; after
    `FLEET_COMPACT_MAX` (default 2) compactions the next one is a `/fleet-handoff`
    instead (issue #1316). `FLEET_COMPACT_PREP_PCT=0` turns that off.
+
+   A `PreCompact` group, matcher `auto`, fires `precompact-hook.sh` (issue #1321):
+   when Claude Code's OWN auto-compaction beats the fleet's ladder, the hook writes
+   the recovery map itself just before it — window `@issue`/`@raw`, branch, HEAD,
+   `git status`, the PR from the dash's prmap, the issue's latest comment link
+   (one `fleet-gh.sh` read, bounded by `FLEET_PRECOMPACT_GH_SECS`, default 8) and
+   the operator's last prompts — to the same `fleet_recovery_map_path`, stamps
+   `@compact_native`, and logs a `native-precompact` row (`auto saved`) on the
+   context ladder; `refocus-hook.sh` reads that map back after the compaction.
+   The fleet's own `/compact` is never double-written. `FLEET_PRECOMPACT=0` turns
+   it off.
    Either line can be set in tokens used instead — `FLEET_AUTO_HANDOFF_TOKENS` /
    `FLEET_COMPACT_PREP_TOKENS` (issue #1317) — converted per Stop against the
    pane's `@ctx_limit` and winning over the `%` key, so a model with a different
@@ -835,7 +846,7 @@ pgrep -lP "$(pgrep -P "$(tmux display -p -t <pane> '#{pane_pid}')" | head -1)"
 Remove the LaunchAgents (`launchctl bootout gui/$(id -u)/com.claude-fleet.*`,
 delete the plists), delete the `source-file …tmux-attention.conf` line from
 `~/.tmux.conf`, remove the five `set-claude-state.sh` hook entries (and the
-`handoff-latch-reset-hook.sh` + `refocus-hook.sh` entries on `SessionStart`) from `~/.claude/settings.json`, remove the `statusLine` block from
+`handoff-latch-reset-hook.sh` + `refocus-hook.sh` entries on `SessionStart`, and `precompact-hook.sh` on `PreCompact`) from `~/.claude/settings.json`, remove the `statusLine` block from
 `~/.claude/settings.json` **only if** it points at `conf/statusline.sh` (leave a
 personal one), delete `~/.claude/fleet/`, remove any fleet commands
 you copied into `~/.claude/commands/` (the ones with a `<!-- fleet skill … -->`

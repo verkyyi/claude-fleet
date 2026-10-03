@@ -15,6 +15,7 @@
     "Stop": true,
     "Notification": "Codex has no Notification event.",
     "SessionStart": true,
+    "PreCompact": "Codex has no PreCompact event; precompact-hook.sh also skips a codex pane.",
     "SessionEnd": true
   },
   "matchers": {

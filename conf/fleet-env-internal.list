@@ -164,6 +164,8 @@ FLEET_POOL_PROBE_TIMEOUT           knob: internal pacing/limit, safe in-code def
 FLEET_POOL_SETTLE_MIN              knob: internal pacing/limit, safe in-code default (scratch-pool.sh)
 FLEET_POOL_STABLE_HITS             knob: internal pacing/limit, safe in-code default (scratch-pool.sh)
 FLEET_POOL_WARM_TIMEOUT            knob: internal pacing/limit, safe in-code default (scratch-pool.sh)
+FLEET_PRECOMPACT_GH_SECS           knob: internal pacing/limit, safe in-code default (precompact-hook.sh)
+FLEET_PRECOMPACT_TRIGGER           seam: the PreCompact trigger precompact-hook.sh acts on, instead of stdin
 FLEET_PR_REFRESH_CMD               seam: an injectable command/path for tests (fleet-webhook.sh)
 FLEET_PR_WAIT_BACKSTOP             knob: event-driven --wait re-reads at least this often with no delivery (fleet-pr-verdict.sh, 300, #1272)
 FLEET_PR_WAIT_TICK                 knob: seconds between event-stamp checks in an event-driven --wait (fleet-pr-verdict.sh, 1, #1272)
