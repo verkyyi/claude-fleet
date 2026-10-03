@@ -62,6 +62,10 @@
 #                 outside the pool, a codex: one and a half one are all ignored;
 #                 with ccquota EMPTY a fresh 90% stamp still benches (fallback ≠
 #                 the only source); a ccquota fetch newer than the stamp wins.
+#  14. mod      — (#1338) the fleet mod's stamps (@rl_src=mod): every pool
+#                 account fresh under one ⇒ the ccquota fetch is skipped and the
+#                 cache stands in, the policy still acts and says `mod`; a status
+#                 line stamp, an aged mod one, or a cache past STALE/2 ⇒ it fetches.
 # Needs python3 (quota_parse). Exit 0 = pass, non-zero = fail.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -708,8 +712,51 @@ run_watch || fail "13d: tick must exit 0"
 [ "$(awk -F'\t' '$1=="a"{print $2}' "$G/quota.freshness")" = ccquota ] || fail "13d: freshness says ccquota"
 : > "$WORK/rl"; run_watch || fail "13d: tick must exit 0"
 [ "$(hbget "$G/quotawatch.heartbeat" sl)" = 0 ] || fail "13d: no stamps ⇒ sl=0"
+ok
+
+# 14. in-session (mod) readings skip the fetch (#1338) --------------------------
+# The fleet mod stamps the same set off session.measure with @rl_src=mod. Every
+# pool account fresh under it + a ccquota cache younger than STALE/2 ⇒ the tick
+# reads the cache instead of calling ccquota; anything less ⇒ it fetches as before.
+: > "$G/account.limited"; rm -f "$G"/quota.ceiling.* "$G"/quota.warn.*
+run_watch || fail "14: priming tick must exit 0"
+age_at() { printf '%s' $(( $(date +%s) - $1 )) > "$G/account.quota.ts"; }
+NOW=$(date +%s)
+# 14a. both a and b carry a fresh mod stamp, cache 120 s old ⇒ no ccquota call.
+printf '%s\n' "a $NOW 30 20 $RESET7 $RESET7 mod" "b $NOW 25 20 $RESET7 $RESET7 mod" > "$WORK/rl"
+age_at 120; c0=$(ccq_calls); run_watch || fail "14a: tick must exit 0"
+[ "$(ccq_calls)" = "$c0" ] || fail "14a: every pool account fresh under the mod ⇒ the ccquota fetch is skipped (calls $c0 → $(ccq_calls))"
+grep -q 'ccquota fetch skipped' "$WORK/stderr" || fail "14a: the skip is said on stderr"
+[ "$(awk -F'\t' '$1=="a"{print $2}' "$G/quota.freshness")" = mod ] || fail "14a: quota.freshness names the mod (got: $(cat "$G/quota.freshness"))"
+[ "$(awk -F'\t' '$1=="b"{print $2}' "$G/quota.freshness")" = mod ] || fail "14a: b's reading is the mod's"
+[ "$(hbget "$G/quotawatch.heartbeat" sl)" = 2 ] || fail "14a: heartbeat sl counts mod rows too (got $(hbget "$G/quotawatch.heartbeat" sl))"
+ok
+# 14b. a mod reading at 75% still drives the policy, and names its source.
+printf '%s\n' "a $NOW 75 20 $RESET7 $RESET7 mod" "b $NOW 25 20 $RESET7 $RESET7 mod" > "$WORK/rl"
+age_at 120; run_watch || fail "14b: tick must exit 0"
+grep -q '\*\*a\*\* is at 75% of its 5-hour window.*(mod, exact)' "$WORK/notify.log" || fail "14b: the warn names the mod as the source ($(tail -3 "$WORK/notify.log"))"
+rm -f "$G"/quota.warn.*
+ok
+# 14c. b's stamp is the STATUS LINE's (no src) ⇒ not every account is mod-fresh ⇒ fetch.
+printf '%s\n' "a $NOW 30 20 $RESET7 $RESET7 mod" "b $NOW 25 20 $RESET7 $RESET7 -" > "$WORK/rl"
+age_at 120; c0=$(ccq_calls); run_watch || fail "14c: tick must exit 0"
+[ "$(ccq_calls)" -gt "$c0" ] || fail "14c: one account without a mod reading ⇒ the fetch runs"
+[ "$(awk -F'\t' '$1=="b"{print $2}' "$G/quota.freshness")" != mod ] || fail "14c: b is not the mod's"
+ok
+# 14d. mod stamps 90 s old (past one tick) ⇒ fetch.
+printf '%s\n' "a $(( NOW - 90 )) 30 20 $RESET7 $RESET7 mod" "b $(( NOW - 90 )) 25 20 $RESET7 $RESET7 mod" > "$WORK/rl"
+age_at 120; c0=$(ccq_calls); run_watch || fail "14d: tick must exit 0"
+[ "$(ccq_calls)" -gt "$c0" ] || fail "14d: an aged mod reading ⇒ the fetch runs"
+ok
+# 14e. fresh mod stamps, but the ccquota cache is past STALE/2 (300 s) ⇒ fetch,
+# so a run of skips can never age the liveness stamp out.
+NOW=$(date +%s)
+printf '%s\n' "a $NOW 30 20 $RESET7 $RESET7 mod" "b $NOW 25 20 $RESET7 $RESET7 mod" > "$WORK/rl"
+age_at 400; c0=$(ccq_calls); run_watch || fail "14e: tick must exit 0"
+[ "$(ccq_calls)" -gt "$c0" ] || fail "14e: a cache past STALE/2 ⇒ the fetch runs regardless"
+: > "$WORK/rl"
 unset FLEET_ACCOUNT_PACE_REBALANCE
 ok
 
-printf 'selftest PASS: fleet-quotawatch — %s groups (off, status, policy 50/72/90 + once-per-window, dry-run, lock skip/supersede/takeover, staleness alarm, fresh-but-empty alarm #684, human secs, nowhere-to-move #567, probe budget/tree-kill/phase breakdown/lock ownership, wedged-tick supersede #582, unreadable-account #628, tick self-budget + wind-down #698, weekly pace + rebalance #1231, statusline readings #1267)\n' "$CHECKS"
+printf 'selftest PASS: fleet-quotawatch — %s groups (off, status, policy 50/72/90 + once-per-window, dry-run, lock skip/supersede/takeover, staleness alarm, fresh-but-empty alarm #684, human secs, nowhere-to-move #567, probe budget/tree-kill/phase breakdown/lock ownership, wedged-tick supersede #582, unreadable-account #628, tick self-budget + wind-down #698, weekly pace + rebalance #1231, statusline readings #1267, mod readings skip the fetch #1338)\n' "$CHECKS"
 exit 0

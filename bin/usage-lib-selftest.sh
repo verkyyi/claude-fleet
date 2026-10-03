@@ -213,5 +213,13 @@ a $((N+3600)) 99 99 1 1" | awk -F'\t' '$8=="ccquota"' | grep -c .)"
 eq "merge: ccquota empty → statusline rows only" "a	statusline" \
    "$(fleet_quota_merge '' 0 "a $N 50 60 1 2" | awk -F'\t' '{print $1"\t"$8}')"
 eq "merge: nothing in → nothing out" "" "$(fleet_quota_merge '' 0 '')"
+# issue #1338: a 7th field `mod` (the fleet mod's @rl_src) names the source; `-`
+# or none (a pre-#1338 6-field line) is the status line's.
+eq "merge: @rl_src=mod → source mod" "a	mod" \
+   "$(fleet_quota_merge '' 0 "a $N 50 60 1 2 mod" | awk -F'\t' '{print $1"\t"$8}')"
+eq "merge: @rl_src unset ('-') → statusline" "a	statusline" \
+   "$(fleet_quota_merge '' 0 "a $N 50 60 1 2 -" | awk -F'\t' '{print $1"\t"$8}')"
+eq "merge: mod stamp with unset resets keeps its fields aligned" "100	200	mod" \
+   "$(mg $((N-100)) "a $((N-10)) 72 30 - - mod" | awk -F'\t' '$1=="a"{print $5"\t"$6"\t"$8}')"
 
 printf 'selftest OK: usage-lib severity + freshness gate + summary + limit banner + limit kind + replay + quota merge (%s assertions)\n' "$CHECKS"
