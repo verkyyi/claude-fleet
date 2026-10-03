@@ -257,6 +257,7 @@ fcfg_label_i18n() {
     FLEET_CODEX_SUBAGENT_MODEL) printf 'Codex subagent 模型' ;;
     FLEET_CODEX_SUBAGENT_EFFORT) printf 'Codex subagent 推理强度' ;;
     FLEET_PRETRUST) printf '启动时预信任 checkout' ;;
+    FLEET_MOD) printf '会话内 fleet 扩展' ;;
     FLEET_AUTOFILL) printf '从带标签 backlog 自动填充空位' ;;
     FLEET_AUTOFILL_MAX_PER_TICK) printf '自动填充批量大小' ;;
     FLEET_CHILD_REPORT) printf '子任务向父任务报告结果' ;;

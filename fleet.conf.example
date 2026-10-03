@@ -462,6 +462,18 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Pre-trust checkout at spawn @group=spawn @tier=advanced @scope=fleet @edit=bool
 #FLEET_PRETRUST=1
 
+# The fleet mod (issue #1335, EPIC #1334): every Claude session the launcher
+# (bin/fleet-claude.sh) opens loads mod/fleet/ with `--plugin-dir` — a Claude Code
+# plugin that reports from inside the session. It checks the Claude Code version
+# first (outside its supported range it registers nothing: window @mod_state
+# off:version), then writes a heartbeat @mod_alive every 15s; scripts read it with
+# fleet_mod_alive and take the mod's path only while it is fresh, today's path
+# otherwise (which stays). fleet-doctor.sh's `mod` line counts alive / out of range
+# / not loaded. 0 = no --plugin-dir at all: the launch argv is byte for byte what
+# it was before the mod, and fleet_mod_alive is false everywhere. Login-wide.
+# @label=Fleet mod in sessions @group=spawn @tier=internal @scope=global @edit=bool
+#FLEET_MOD=1
+
 # --- Autofill dispatcher (bin/fleet-dispatch.sh, com.claude-fleet.dispatch) -----
 # OFF by default. When enabled for a fleet, the dispatch daemon (~60s) keeps that
 # fleet's worker slots filled FROM ITS BACKLOG, BY PRIORITY, whenever both caps
