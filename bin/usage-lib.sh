@@ -8,7 +8,7 @@
 #   • bin/usage-modal.sh   — the usage/limit detail header + account picker body
 #                            (issue #289 merged the old usage-popup + account-pick)
 #
-# Pure: sourcing defines functions only, runs nothing (like fleet-lib.sh). No
+# Pure: sourcing defines functions (+ one format constant), runs nothing (like fleet-lib.sh). No
 # tmux, no network — every read is a cache file the collector already writes.
 #
 # State (machine-wide, one shared ~/.claude → the global/ cache dir, issue #181):
@@ -426,18 +426,17 @@ fleet_collect_kick_due() {
 #   @rl5h @rl7d   integer % used          @rl_reset "<5h-reset> <7d-reset>" (epoch s)
 #   @rl_ts        epoch s of the render
 # and the window's @cc_account says whose numbers they are. The quota watch lists
-# them (`fleet_quota_rl_format`, one line per window) and this merges them into
+# them (`$FLEET_QUOTA_RL_FMT`, one line per window) and this merges them into
 # ccquota's rows: per account, the NEWEST reading wins. ccquota stays the fallback
 # — an idle session does not re-render, so its stamp ages out after
 # FLEET_QUOTA_RL_TTL (default 600 s) and ccquota's row stands.
 # POSIX sh + awk, pure: no tmux, no network (the caller hands both inputs in).
 
-# fleet_quota_rl_format — the list-windows -F format the watch reads the stamps
+# FLEET_QUOTA_RL_FMT — the list-windows -F format the watch reads the stamps
 # with: "<account> <ts> <5h%> <7d%> <5h-reset> <7d-reset>", `-` for an unset
-# option. The reset pair goes LAST: it is the one value with a space inside.
-fleet_quota_rl_format() {
-  printf '%s' '#{?@cc_account,#{@cc_account},-} #{?@rl_ts,#{@rl_ts},-} #{?@rl5h,#{@rl5h},-} #{?@rl7d,#{@rl7d},-} #{?@rl_reset,#{@rl_reset},- -}'
-}
+# option. The reset pair goes LAST: it is the one value with a space inside. A
+# plain variable, not a function: the watch reads it every tick, fork-free.
+FLEET_QUOTA_RL_FMT='#{?@cc_account,#{@cc_account},-} #{?@rl_ts,#{@rl_ts},-} #{?@rl5h,#{@rl5h},-} #{?@rl7d,#{@rl7d},-} #{?@rl_reset,#{@rl_reset},- -}'
 
 # fleet_quota_merge <ccquota-rows> <ccquota-epoch> <statusline-lines> — print the
 # merged rows: ccquota's 7 TSV columns (label 5h 7d headroom 5h-reset 7d-reset

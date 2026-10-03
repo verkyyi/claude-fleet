@@ -629,24 +629,28 @@ fi
 # (a stale @cc_account, a codex: one) is dropped here, never acted on.
 # quota.freshness — "label<TAB>source<TAB>age-s" per account, every tick: how old
 # the number the policy used was (EPIC #1262's 「额度读数最长过期」 reads it).
-qw_rl_socket() { tmux -L "$1" list-windows -a -F "$(fleet_quota_rl_format)" 2>/dev/null; }
+# Cheap on purpose — it runs every tick, and on a loaded box every fork counts
+# against the budget legs (#582): no merge at all while no window carries a stamp.
+qw_rl_socket() { tmux -L "$1" list-windows -a -F "$FLEET_QUOTA_RL_FMT" 2>/dev/null; }
 qsl=""
 for qs in $SOCKETS; do
   tick_room || break
   qsb=$(qw_left "$SECONDS" "$TMUX_BUDGET"); [ "$qsb" -lt 1 ] && break
-  qsl="${qsl}$(fleet_timebox "$qsb" qw_rl_socket "$qs")"$'\n'
+  while read -r qa qt qrest; do
+    case "$qa" in ''|-|.*|*/*|*:*) continue ;; esac
+    case "$qt" in ''|*[!0-9]*) continue ;; esac            # never stamped (or garbage)
+    [ -f "$ACCT_DIR/$qa" ] && qsl="${qsl}${qa} ${qt} ${qrest}"$'\n'
+  done <<< "$(fleet_timebox "$qsb" qw_rl_socket "$qs")"
 done
-qsl=$(printf '%s' "$qsl" | while read -r qa qrest; do
-        case "$qa" in (''|-|.*|*/*|*:*) continue ;; esac
-        [ -f "$ACCT_DIR/$qa" ] && printf '%s %s\n' "$qa" "$qrest"
-      done)
-qrows=$(fleet_quota_merge "$qrows" "$post_ts" "$qsl")
-nsl=$(printf '%s\n' "$qrows" | awk -F'\t' '$8=="statusline"' | grep -c .)
-if [ "$DRY" = 0 ]; then
-  qfnow=$(now)
-  printf '%s\n' "$qrows" | awk -F'\t' -v now="$qfnow" '$1!=""{printf "%s\t%s\t%d\n", $1, $8, now-$9}' \
-    | atomic_write "$G/quota.freshness"
-fi
+[ -n "$qsl" ] && qrows=$(fleet_quota_merge "$qrows" "$post_ts" "$qsl")
+# One pass: count the statusline rows and (not on --dry-run) write quota.freshness.
+# Unmerged rows have no source/epoch columns — they are ccquota's, as of $post_ts.
+qfout=/dev/null; [ "$DRY" = 0 ] && qfout="$G/quota.freshness.$$"
+nsl=$(printf '%s\n' "$qrows" | awk -F'\t' -v now="$(now)" -v cts="$post_ts" -v out="$qfout" '
+  $1 != "" { src = ($8 == "" ? "ccquota" : $8); t = ($9 == "" ? cts : $9)
+             printf "%s\t%s\t%d\n", $1, src, now - t > out; if (src == "statusline") n++ }
+  END { close(out); print n + 0 }')
+[ "$DRY" = 0 ] && mv -f "$qfout" "$G/quota.freshness" 2>/dev/null
 
 # --- the policy (issue #513, verbatim from the collector's former tail block):
 #   ≥ FLEET_ACCOUNT_CEILING (85%)  bench until ccquota's reset instant (rotates
