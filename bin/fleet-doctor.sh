@@ -1237,6 +1237,35 @@ else
   pass machine "sessions: $gtxt, $csumtxt — up to $cceil concurrent on $mcores cores (${cratio}x)"
 fi
 
+# --- last crash + the record a crash would leave (issue #1294) -----------------
+# The diskguard tick harvests the system's panic / Jetsam reports into
+# machine/incident-*.md the first tick after a reboot (bin/fleet-crash-harvest.py),
+# and appends a machine-metrics row every minute. This names the last crash (WARN
+# for a day, so the reboot is seen; INFO after) and WARNs when the metrics stopped
+# — a crash then would leave nothing to read.
+mdir_m="$conf_dir/machine"
+lc="$(ls "$mdir_m"/incident-*.md 2>/dev/null | sort | tail -1)"
+if [ -n "$lc" ]; then
+  lch="$(sed -n 's/^headline: //p' "$lc" 2>/dev/null | head -1)"
+  lcn="${lc##*/incident-}"; lcn="${lcn%.md}"
+  lcut="$(date -v-1d '+%Y%m%d-%H%M' 2>/dev/null || date -d '-1 day' '+%Y%m%d-%H%M' 2>/dev/null)"  # portable-ok: BSD/GNU both-ways
+  if [ -n "$lcut" ] && awk -v a="$lcn" -v b="$lcut" 'BEGIN { exit !(a > b) }'; then
+    warn last-crash "this machine crashed in the last day: ${lch:-see the summary} — summary: $lc"
+  else
+    info last-crash "${lch:-$lcn} — $lc"
+  fi
+else
+  pass last-crash "no crash harvested (bin/fleet-diskguard.sh --harvest-crash --since <date> reads the system's reports on demand)"
+fi
+if [ -d "$mdir_m" ]; then
+  mf="$(find "$mdir_m" -name 'metrics-*.tsv' -mmin -5 2>/dev/null | head -1)"
+  if [ -n "$mf" ]; then
+    pass metrics "machine metrics recording — $(grep -vc '^#' "$mf" 2>/dev/null) row(s) today in $mf"
+  else
+    warn metrics "no machine-metrics row in 5 min ($mdir_m/metrics-*.tsv) — the diskguard tick appends one a minute; a crash now would leave no record of the run-up (issue #1294)"
+  fi
+fi
+
 # --- codex CLI version vs the rollout format fleet reads (issue #1079) ---
 # fleet reads a Codex worker's context% out of Codex's session file (rollout),
 # an upstream INTERNAL format verified only on the versions pinned in

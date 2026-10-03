@@ -60,6 +60,8 @@
 #   FLEET_MEM_ORPHAN_ACTION   report | kill                  (default report)
 #   FLEET_MEM_ORPHAN_EVERY    seconds between orphan sweeps  (default 60)
 #   FLEET_MEM_KILLED_TTL      seconds the dash keeps `@mem_killed` (default 3600)
+#   FLEET_METRICS             0 = no 10s machine-metrics rows under pressure (default 1;
+#                             the rows land beside diskguard's in machine/metrics-*.tsv, #1294)
 #   FLEET_NOTIFY_CMD          notifier run as `$CMD "<markdown>"`
 # Stubs (selftests): FLEET_MEM_PS_CMD, FLEET_MEM_PROBE_CMD, FLEET_MEM_TOTAL_MB.
 set -uo pipefail
@@ -74,6 +76,7 @@ _fs="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleet.settings"; [ -f "$_fs" 
 
 num() { case "${1:-}" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; esac; }
 INTERVAL=$(num "${FLEET_MEM_INTERVAL:-}" 2); [ "$INTERVAL" -ge 1 ] || INTERVAL=1
+METRICS_EVERY=$(( 10 / INTERVAL )); [ "$METRICS_EVERY" -ge 1 ] || METRICS_EVERY=1   # samples per ~10s metrics row
 GROW_MB=$(num "${FLEET_MEM_SPIKE_GROW_MB:-}" 4096)
 WINDOW=$(num "${FLEET_MEM_SPIKE_WINDOW:-}" 10)
 HARD_PCT=$(num "${FLEET_MEM_PROC_HARD_PCT:-}" 50)
@@ -286,7 +289,7 @@ for a in "$@"; do
     --daemon) MODE=daemon ;;
     --once) MODE=once ;;
     --dry-run) DRY=1 ;;
-    -h|--help) sed -n '2,64p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,66p' "$0"; exit 0 ;;
     *) printf 'fleet-memguard: unknown argument %s (see --help)\n' "$a" >&2; exit 2 ;;
   esac
 done
@@ -322,6 +325,11 @@ case "$MODE" in
       fi
       # FLEET_MEM_MAX_TICKS: stop after N samples (the selftest drives the ring with it)
       [ -n "${FLEET_MEM_MAX_TICKS:-}" ] && [ "$n" -ge "$FLEET_MEM_MAX_TICKS" ] && exit 0
+      # Under pressure, a machine-metrics row every ~10s beside diskguard's per-minute
+      # one (issue #1294): the minutes before a freeze are the ones worth resolving.
+      if [ $((n % METRICS_EVERY)) = 0 ] && [ "${FLEET_METRICS:-1}" != 0 ] && [ "$(pressure)" -ge 2 ]; then
+        fleet_metrics_append memguard
+      fi
       [ $((n % 30)) = 0 ] && clear_marks
       if [ $((n % 30)) = 0 ] && [ "$(cksum < "$0" 2>/dev/null)" != "$self" ]; then
         exec /bin/bash "$0" --daemon
@@ -329,6 +337,6 @@ case "$MODE" in
       sleep "$INTERVAL"
     done
     ;;
-  *) sed -n '2,64p' "$0"; exit 0 ;;
+  *) sed -n '2,66p' "$0"; exit 0 ;;
 esac
 exit 0

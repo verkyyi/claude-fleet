@@ -2999,6 +2999,55 @@ fleet_is_fleet_proc() {
   esac
 }
 
+# ---- machine metrics: the record a crash leaves behind (issue #1294) ----------
+# After the 2026-10-03 reboot the system's own reports said WHAT died, but there
+# was no curve of the minutes before it — memory, files, ptys, which of our
+# processes were growing — so the cause had to be inferred. The diskguard tick
+# appends one row a minute; memguard one every 10s while pressure is ≥ warn, so
+# the run-up to a freeze has resolution. One file a day, kept FLEET_METRICS_KEEP_DAYS
+# (7). Columns are named in the file's header comment and only ever APPENDED to,
+# so a reader written against today's file keeps working on tomorrow's.
+FLEET_METRICS_COLS='ts	load1	cores	pressure	avail_pct	compressor_pct	swap_mb	num_files	ptys	claude_procs	top_rss	src'
+
+fleet_machine_dir() { printf '%s/machine\n' "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"; }
+
+# fleet_metrics_row [src] — one TSV row (no newline handling beyond the trailing \n).
+# Every reading is best-effort: an unreadable one is `-`, never a missing column.
+fleet_metrics_row() {
+  local src="${1:-diskguard}" load cores mem nf pty=0 cl top t
+  load="$({ sysctl -n vm.loadavg 2>/dev/null || cat /proc/loadavg 2>/dev/null; } | tr -d '{}' | awk 'NF{print $1+0; exit}')"
+  cores="$({ sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null; } | awk 'NF{print $1+0; exit}')"
+  mem="$(fleet_mem_probe)"; [ -n "$mem" ] || mem='- - - -'
+  nf="$({ sysctl -n kern.num_files 2>/dev/null || awk '{print $1}' /proc/sys/fs/file-nr 2>/dev/null; } | awk 'NF{print $1+0; exit}')"
+  for t in /dev/pts/[0-9]* /dev/ttys[0-9]*; do [ -e "$t" ] && pty=$((pty + 1)); done
+  cl="$(ps -axo comm= 2>/dev/null | awk '{ n = $0; sub(/.*\//, "", n); if (n == "claude" || $0 ~ /\/claude\/versions\//) c++ } END { print c+0 }')"
+  # the three largest of OUR processes (fleet_proc_mem_rows is RSS-sorted) as name:MB
+  top="$(fleet_proc_mem_rows | awk -F'\t' '$5 != "other" { split($6, w, " "); n = w[1]; sub(/.*\//, "", n)
+      gsub(/[^A-Za-z0-9._+-]/, "", n); if (n == "") n = "?"; o = o (k++ ? "," : "") n ":" $3; if (k == 3) exit }
+      END { print (o == "" ? "-" : o) }')"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "${load:--}" "${cores:--}" \
+    "$(printf '%s' "$mem" | tr ' ' '\t')" "${nf:--}" "${pty:--}" "${cl:--}" "${top:--}" "$src"
+}
+
+# fleet_metrics_append [src] — append a row to today's metrics-YYYYMMDD.tsv (header
+# on a new file) and drop files past the retention. Never fails the caller.
+fleet_metrics_append() {
+  local d f keep cut old
+  d="$(fleet_machine_dir)"; mkdir -p "$d" 2>/dev/null || return 0
+  f="$d/metrics-$(date '+%Y%m%d').tsv"
+  [ -s "$f" ] || printf '# fleet machine metrics (issue #1294) — columns only ever appended\n# %s\n' "$FLEET_METRICS_COLS" > "$f" 2>/dev/null
+  fleet_metrics_row "${1:-diskguard}" >> "$f" 2>/dev/null
+  keep="${FLEET_METRICS_KEEP_DAYS:-7}"; case "$keep" in ''|*[!0-9]*|0) keep=7 ;; esac
+  cut="$(date -v-"${keep}"d '+%Y%m%d' 2>/dev/null || date -d "-$keep days" '+%Y%m%d' 2>/dev/null)"  # portable-ok: BSD/GNU both-ways
+  [ -n "$cut" ] || return 0
+  for old in "$d"/metrics-*.tsv; do
+    [ -f "$old" ] || continue
+    case "${old##*/metrics-}" in [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].tsv) ;; *) continue ;; esac
+    [ "${old##*/metrics-}" \< "$cut.tsv" ] && rm -f "$old" 2>/dev/null
+  done
+  return 0
+}
+
 # ---- retiring a worktree without paying for its bytes (issue #586) ------------
 # `git worktree remove` deletes the tree SYNCHRONOUSLY, one unlink at a time. In a
 # monorepo worktree that is 2.8 GB / 308k files of node_modules, and it measured

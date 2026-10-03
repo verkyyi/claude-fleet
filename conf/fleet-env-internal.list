@@ -34,6 +34,7 @@ FLEET_BASE_SYNC                    knob: per-repo 0 opts a repo out of base-bran
 FLEET_BASE_SYNC_LEASE_TTL          knob: internal pacing/limit, safe in-code default (fleet-base-sync.sh)
 FLEET_BG_SOCK                      handoff: the background peer socket a message is sent over
 FLEET_BOOTSTRAP_GIT_BASE           seam: an injectable command/path for tests (fleet-login-bootstrap.sh)
+FLEET_BOOT_ID_CMD                  seam: a fake boot-session id for the diskguard crash harvest (fleet-diskguard.sh, #1294)
 FLEET_C                            path: the dash cache root ($TMPDIR/.claude-dash) — tests point it at a sandbox
 FLEET_CC_PROJECTS_DIR              path: state/log location override (fleet-migrate.sh)
 FLEET_CC_SESSIONS_DIR              path: state/log location override (fleet-lib.sh)
@@ -49,6 +50,8 @@ FLEET_COMPACT_SEND_GRACE           knob: seconds fleet-compact-send.sh waits for
 FLEET_COMPACT_SEND_TIMEOUT         knob: how long fleet-compact-send.sh holds for an idle, untyped-at pane before giving up (90)
 FLEET_CONFIG_SHOW_INTERNAL         knob: fcfg_table lists @tier=internal rows too (#1101) — a per-call switch, not a conf setting
 FLEET_CONTEXT_LIMIT                alias: retired twin of FLEET_CTX_WINDOW (#1101) — still read, wins when set
+FLEET_CRASH_JOURNAL_CMD            seam: a fake previous-boot kernel journal for the Linux crash harvest (fleet-diskguard.sh)
+FLEET_CRASH_REPORT_DIR             path: where the system writes panic/Jetsam reports (fleet-diskguard.sh, /Library/Logs/DiagnosticReports)
 FLEET_DAEMON_IDLE_PROBE_BUDGET     knob: internal pacing/limit, safe in-code default (fleet-daemon-lib.sh)
 FLEET_DAEMON_ROOT                  path: state/log location override (fleet-daemon-lib.sh)
 FLEET_DAEMON_WEDGED_MULT           knob: internal pacing/limit, safe in-code default (fleet-daemon-lib.sh)
@@ -127,6 +130,8 @@ FLEET_MEM_ORPHAN_EVERY             knob: min seconds between memguard orphan swe
 FLEET_MEM_PROBE_CMD                seam: a fake memory-pressure reading for fleet_mem_probe ("<level> <avail%> <compressor%> <swapMB>")
 FLEET_MEM_PS_CMD                   seam: a fake process table for fleet_proc_mem_rows
 FLEET_MEM_TOTAL_MB                 seam: a fixed physical-memory figure for fleet_mem_total_mb
+FLEET_METRICS                      knob: 0 = no machine-metrics rows from diskguard/memguard (#1294, 1)
+FLEET_METRICS_KEEP_DAYS            knob: machine/metrics-*.tsv retention in days (fleet-lib.sh, 7)
 FLEET_MIGRATE_BOOT_WAIT            knob: internal pacing/limit, safe in-code default (fleet-migrate.sh)
 FLEET_MIGRATE_CLOSE_WAIT           knob: internal pacing/limit, safe in-code default (fleet-migrate.sh)
 FLEET_MIGRATE_EXIT_WAIT            knob: internal pacing/limit, safe in-code default (fleet-migrate.sh)

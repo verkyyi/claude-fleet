@@ -1,0 +1,86 @@
+{"bug_type": "298", "timestamp": "2026-10-03 09:32:55.00 -0700", "os_version": "macOS 27.0 (26A428)"}
+{
+  "bug_type": "298",
+  "date": "2026-10-03 09:32:55.63 -0700",
+  "memoryStatus": {
+    "compressorSize": 2330779,
+    "compressions": 22493237944,
+    "decompressions": 4629019102,
+    "zoneMapCap": 25394790400,
+    "largestZone": "APFS_4K_OBJS",
+    "largestZoneSize": 485015552,
+    "pageSize": 16384,
+    "uncompressed": 6119000,
+    "zoneMapSize": 2206253056,
+    "memoryPages": {
+      "active": 759331,
+      "throttled": 0,
+      "fileBacked": 550491,
+      "wired": 305562,
+      "anonymous": 967147,
+      "purgeable": 0,
+      "inactive": 757972,
+      "free": 4148,
+      "speculative": 335
+    }
+  },
+  "largestProcess": "git",
+  "processes": [
+    {
+      "pid": 44295,
+      "name": "git",
+      "rpages": 22017523,
+      "lifetimeMax": 22017523,
+      "age": 1596840712
+    },
+    {
+      "pid": 54947,
+      "name": "chrome-headless-shell",
+      "rpages": 1287943,
+      "lifetimeMax": 1289977,
+      "age": 11218480096096
+    },
+    {
+      "pid": 90751,
+      "name": "chrome-headless-shell",
+      "rpages": 1022210,
+      "lifetimeMax": 1028050,
+      "age": 11280785494068
+    },
+    {
+      "pid": 53980,
+      "name": "chrome-headless-shell",
+      "rpages": 992811,
+      "lifetimeMax": 999588,
+      "age": 11049042697235
+    },
+    {
+      "pid": 29617,
+      "name": "com.apple.Virtualization.Virtual",
+      "rpages": 132341,
+      "lifetimeMax": 132403,
+      "age": 13090337388002
+    },
+    {
+      "pid": 584,
+      "name": "cron",
+      "rpages": 46388,
+      "lifetimeMax": 46388,
+      "age": 13092107803772
+    },
+    {
+      "pid": 81457,
+      "name": "node",
+      "rpages": 33858,
+      "lifetimeMax": 33858,
+      "age": 708999368870
+    },
+    {
+      "pid": 68775,
+      "name": "Google Chrome Helper (Renderer)",
+      "rpages": 33459,
+      "lifetimeMax": 61776,
+      "age": 669727236973
+    }
+  ]
+}
