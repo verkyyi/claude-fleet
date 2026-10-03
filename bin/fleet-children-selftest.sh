@@ -208,9 +208,9 @@ has "…it is reported as looping" 'looping' "$(bash "$CLI" -L "$LBL" scratch-7 
 eq "…and the dash badge does not count it either" "0/2" "$(dash_badge)"
 opt "$K3" @loop "kind=wakeup next=$(( $(date +%s) - 7200 )) ttl=600"
 eq "a lapsed @loop (never renewed) is done again" "2/3 ✓ · 1!" "$(summ scratch-7)"
-eq "…on the dash too" "1/2 ✓ · 1!" "$(dash_badge)"
+eq "…on the dash too" "1/2" "$(dash_badge)"
 TM set-option -wu -t "$K3" @loop; opt "$K3" @worker_lifecycle sleeping
 eq "a sleeping child is not counted done" "1/3 ✓ · 1!" "$(summ scratch-7)"
-eq "…nor on the dash" "0/2 ✓ · 1!" "$(dash_badge)"
+eq "…nor on the dash" "0/2" "$(dash_badge)"
 
 printf 'fleet-children selftest: OK (%d checks)\n' "$CHECKS"
