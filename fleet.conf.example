@@ -1877,6 +1877,12 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 #FLEET_HEAVY_WAIT=1800
 # @label=Heavy-job command regex @group=disk @tier=internal @scope=global @edit=str
 #FLEET_HEAVY_RE=
+# LIGHT runs skip the queue (issue #1313), matched before RE: a pytest aimed at a
+# file / `::` node / `-k` filter (no xdist -n/--dist), `npm test -- <file|-t>`,
+# `run-selftests.sh <name>` (no glob, no option). Empty = that built-in list;
+# `(?!)` = nothing is light. `fleet-heavy.sh --status` shows the last 24h's waits.
+# @label=Heavy-job light-run regex @group=disk @tier=internal @scope=global @edit=str
+#FLEET_HEAVY_LIGHT_RE=
 
 # --- Spawn ergonomics -------------------------------------------------------
 # By default a newly spawned worker window is created in the background (tmux

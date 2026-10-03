@@ -150,12 +150,22 @@ if [ -z "${FLEET_SELFTEST_ROOT:-}" ] && [ -z "${FLEET_SELFTEST_NO_SHADOW:-}" ]; 
   # shard selftests do) must pass straight through rather than queue behind its own
   # parent. fleet-heavy-selftest.sh unsets it before it tests the queue. FLEET_HEAVY=0
   # or a missing wrapper runs ungated.
+  # A run of NAMED tests (no glob, no option) is light (issue #1313) — the same
+  # rule the hook's FLEET_HEAVY_LIGHT_RE_DEFAULT applies to a typed command — so it
+  # never queues behind three full gates; no argument, a glob or --shard still does.
+  light=0
+  if [ "$#" -gt 0 ]; then
+    light=1
+    for a in "$@"; do
+      case "$a" in -*|*'*'*|*'?'*|*'['*|'') light=0 ;; esac
+    done
+  fi
   heavy=''
-  if [ "${FLEET_HEAVY:-1}" != 0 ] && [ -x "$script_dir/fleet-heavy.sh" ]; then
+  if [ "$light" = 0 ] && [ "${FLEET_HEAVY:-1}" != 0 ] && [ -x "$script_dir/fleet-heavy.sh" ]; then
     heavy="$script_dir/fleet-heavy.sh --label selftests --"
     # The list above was read from OUR environment, before the wrapper exports its
     # own keys — so name them, or they reach the suite (the slot dir among them).
-    scrub="$scrub -u FLEET_HEAVY -u FLEET_HEAVY_SLOTS -u FLEET_HEAVY_WAIT -u FLEET_HEAVY_DIR -u FLEET_HEAVY_RE"
+    scrub="$scrub -u FLEET_HEAVY -u FLEET_HEAVY_SLOTS -u FLEET_HEAVY_WAIT -u FLEET_HEAVY_DIR -u FLEET_HEAVY_RE -u FLEET_HEAVY_LIGHT_RE"
   fi
   # shellcheck disable=SC2086  # intentional: $heavy and $scrub are argument lists
   $heavy env $scrub FLEET_HEAVY_HELD=1 FLEET_SELFTEST_ROOT="$shadow" \

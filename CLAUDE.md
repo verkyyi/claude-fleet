@@ -197,7 +197,10 @@ Do not install from memory: read the doc and work from it.
   prefix, quotes and heredocs untouched; business repos change nothing. A queue
   never blocks forever (`FLEET_HEAVY_WAIT`, and a foreground call caps at half its
   tool timeout); `FLEET_HEAVY=0` turns the rewrite off; `fleet-heavy.sh --status`
-  lists holders and waiters.
+  lists holders, waiters and the last 24h's wait median/max. **Light runs never
+  queue** (issue #1313): `FLEET_HEAVY_LIGHT_RE` is matched first — a pytest aimed
+  at a file / `::` node / `-k` (no xdist `-n`), `npm test -- <file|-t>`,
+  `run-selftests.sh <name>` (no glob, no option) pass through untouched.
 - **A fleet temp server binds `127.0.0.1`, never `*`** (issue #1154). An agent's
   `python3 -m http.server` / dev server defaults to every interface and outlives
   its window as a `PPID=1` orphan — the 2026-09-24 audit found one serving the

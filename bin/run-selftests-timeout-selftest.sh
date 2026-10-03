@@ -15,7 +15,8 @@
 #   • OFF         FLEET_SELFTEST_TEST_TIMEOUT=0 runs with no ceiling.
 #   • BACKSTOP    SIGKILL the supervisor and the test still dies, on the alarm(2) it
 #                 armed before exec (the deadline lives in the child, #697).
-#   • HEAVY       the gate runs under `fleet-heavy.sh --label selftests --`, the
+#   • HEAVY       the gate (no arg / a glob) runs under `fleet-heavy.sh --label selftests --`
+#                 — a run of NAMED tests is light and skips it (#1313) — the
 #                 suite sees FLEET_HEAVY_HELD=1 (a nested gate passes through
 #                 instead of queueing behind its parent) and none of the wrapper's
 #                 other FLEET_HEAVY_* — and FLEET_HEAVY=0 skips it.
@@ -128,7 +129,7 @@ EOF
 chmod +x "$WORK/bin/fleet-heavy.sh"
 mk env-probe 'echo "probe HELD=${FLEET_HEAVY_HELD:-unset} DIR=${FLEET_HEAVY_DIR:-unset} SLOTS=${FLEET_HEAVY_SLOTS:-unset}"'
 shadow_run() { ( cd "$WORK/bin" && env -u FLEET_SELFTEST_ROOT -u FLEET_SELFTEST_NO_SHADOW \
-  -u FLEET_CONF_DIR -u FLEET_HEAVY_HELD -u FLEET_HEAVY "$@" sh ./run-selftests.sh env-probe </dev/null 2>&1 ); }
+  -u FLEET_CONF_DIR -u FLEET_HEAVY_HELD -u FLEET_HEAVY "$@" sh ./run-selftests.sh "${PROBE_ARG:-env-probe*}" </dev/null 2>&1 ); }
 out=$(shadow_run env)
 has "the gate runs under fleet-heavy.sh --label selftests" "$(cat "$WORK/heavy.log" 2>/dev/null)" '^--label selftests -- env '
 has "the suite sees FLEET_HEAVY_HELD=1, the wrapper's other keys scrubbed" "$out" '^probe HELD=1 DIR=unset SLOTS=unset$'
@@ -136,5 +137,10 @@ rm -f "$WORK/heavy.log"
 out=$(shadow_run env FLEET_HEAVY=0)
 [ ! -e "$WORK/heavy.log" ] || fail "FLEET_HEAVY=0 must skip the queue" "$(cat "$WORK/heavy.log")"; ok "FLEET_HEAVY=0 skips the queue"
 has "…and the gate still runs" "$out" '^PASS  env-probe-selftest\.sh'
+# A NAMED run (no glob, no option) is light (issue #1313): it never queues.
+rm -f "$WORK/heavy.log"
+out=$(PROBE_ARG=env-probe shadow_run env)
+[ ! -e "$WORK/heavy.log" ] || fail "a named test run must skip the queue" "$(cat "$WORK/heavy.log")"; ok "a named test run skips the queue"
+has "…and it still runs" "$out" '^PASS  env-probe-selftest\.sh'
 
 printf 'selftest: run-selftests timeout PASS (%s checks)\n' "$CHECKS"
