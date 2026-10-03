@@ -65,6 +65,11 @@ if [ "${cstate%%|*}" = compacting ]; then
   tmux set-window-option -t "$TMUX_PANE" @compact_count $(( ccount + 1 )) 2>/dev/null
   compact_check=1
 fi
+# The context-ladder ledger (issue #1320): every compaction this pane comes back
+# from — ours (`fleet`, the count just bumped) or Claude Code's own (`auto`, which
+# used to leave no trace outside the transcript).
+[ -f "$(dirname "$0")/fleet-ladder-log.sh" ] && sh "$(dirname "$0")/fleet-ladder-log.sh" restored \
+  --reason "$([ -n "$compact_check" ] && echo fleet || echo auto)" </dev/null >/dev/null 2>&1
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null

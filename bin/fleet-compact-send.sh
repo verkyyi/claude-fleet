@@ -66,6 +66,9 @@ keep='Keep the fleet RECOVERY MAP verbatim (issue, branch, PR, done, in progress
 # compaction must never beat the stamp.
 tmux set-window-option -t "$PANE" @compact_stage compacting 2>/dev/null
 tmux set-window-option -t "$PANE" @compact_ts "$(date +%s)" 2>/dev/null
+# The context-ladder ledger (issue #1320): this script owns the `compacting` step.
+_lb="$(dirname "$0")/fleet-ladder-log.sh"
+[ -f "$_lb" ] && sh "$_lb" compacting --pane "$PANE" --reason "${MAP:+map}" </dev/null >/dev/null 2>&1
 FLEET_ALLOW_SENDKEYS=1 tmux send-keys -t "$PANE" Escape 2>/dev/null
 sleep 0.3 2>/dev/null || sleep 1
 FLEET_ALLOW_SENDKEYS=1 tmux send-keys -t "$PANE" -l -- "/compact $keep" 2>/dev/null

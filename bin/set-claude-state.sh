@@ -360,6 +360,11 @@ if [ "$sem" = "done" ]; then
       else
         # Latch FIRST (idempotent) so the next Stop skips, THEN emit the directive.
         tmux set-window-option -t "$TMUX_PANE" @handoff_armed 1 2>/dev/null
+        # The context-ladder ledger (issue #1320): one row per nudge. Silent — this
+        # hook's stdout is the JSON below.
+        _lreason=pct; [ -n "$_cmaxed" ] && _lreason=cap; [ "$_agent" = codex ] && _lreason=codex
+        [ -f "$_bin/fleet-ladder-log.sh" ] && sh "$_bin/fleet-ladder-log.sh" handoff-nudge \
+          --ctx "$_ctx" --reason "$_lreason >= $_hp%" </dev/null >/dev/null 2>&1
         # The trailing %s is the language rule: this directive is injected as the
         # LAST instruction of a turn, so without it a session held in Chinese
         # writes its handoff doc — and every turn after the pickup — in English.
@@ -443,6 +448,8 @@ PYCODEX
               tmux set-window-option -t "$TMUX_PANE" @compact_stage prep 2>/dev/null
               tmux set-window-option -t "$TMUX_PANE" @compact_prep_ts "$_cnow" 2>/dev/null
               tmux set-window-option -t "$TMUX_PANE" @compact_rearm 0 2>/dev/null
+              [ -f "$_bin/fleet-ladder-log.sh" ] && sh "$_bin/fleet-ladder-log.sh" prep \
+                --ctx "$_cctx" --reason ">= $_cp%" </dev/null >/dev/null 2>&1
               _cwhere="to $_cmap (overwrite it)"
               [ -n "$_cmap" ] || _cwhere="as your reply"
               printf '{"decision":"block","reason":"Context is at %s%% (>= %s%% compact-prep threshold). The fleet will compact this session IN PLACE instead of handing it off. First write a RECOVERY MAP %s: issue #%s, branch, PR (number + state, or none), what is done, what is in progress, the exact next step(s), and any background job still running — under 40 lines. Then end this turn; do not start new work. Once the pane is idle the fleet runs /compact keeping that map, and afterwards asks you to check it against git and the PR.%s"}\n' \

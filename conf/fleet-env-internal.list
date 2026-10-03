@@ -117,6 +117,7 @@ FLEET_LATCH_RESET_SOURCE           seam: source the latch-reset hook as a librar
 FLEET_LAUNCHD_AGENTS_DIR           path: state/log location override (fleet-daemon-watch.sh)
 FLEET_LAUNCH_SESSION               handoff: the fleet session a launch is for (pool adapter check)
 FLEET_MANUAL_ACCOUNT_BIN           seam: fake fresh quota reader for manual target tests (fleet-manual-sub.sh)
+FLEET_LADDER_LOG_MAX_BYTES         knob: size cap for context-ladder.log + handoff-cycle.log, cut to the newest rows filling half the cap (1 MiB; 0 = no cap)
 FLEET_LEDGER_WATCH                 knob: 0 turns the ledger-watch daemon into a no-op
 FLEET_LEDGER_WATCH_LEASE_TTL       knob: internal pacing/limit, safe in-code default (fleet-ledger-watch.sh)
 FLEET_LIVE_DIR                     path: state/log location override (fleet-doctor.sh)
