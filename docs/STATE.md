@@ -584,6 +584,18 @@ tmux_calls_per_s=<n.n>` — the epoch stays the first token for the liveness rea
   `prep` — same `@handoff_armed` latch and typing hold, even with auto-handoff
   OFF. `SessionStart(clear|startup)` (`handoff-latch-reset-hook.sh`) unsets the
   count; `compact` and `resume` keep it.
+- **Every step on one ledger (#1320).** `logs/context-ladder.log` (beside
+  `handoff-cycle.log`, same size cap — `FLEET_LADDER_LOG_MAX_BYTES`, default
+  1 MiB) gets one tab-separated row per step, written by the script that performs
+  it through `bin/fleet-ladder-log.sh`: `prep` / `handoff-nudge` (the Stop hook;
+  nudge reason `pct`, `cap` or `codex`), `compacting` (`fleet-compact-send.sh`),
+  `restored` (`refocus-hook.sh`; reason `fleet`, or `auto` for Claude Code's own
+  auto-compaction, which left no other trace) and `handoff-complete`
+  (`fleet-handoff-cycle.sh`, with the context % and count from before its
+  `/clear`). Columns — epoch, time, step, session, pane, window, ctx %, count,
+  reason — are in the file's `#` header. `fleet-doctor`'s `context` row reads it:
+  the last 24h's compactions and handoffs, plus the live window highest on the
+  ladder and the step it is at.
 - [ARCHITECTURE.md](ARCHITECTURE.md) — the shared-vs-per-fleet split and the
   many-fleets-on-one-machine model.
 - [TERMS.md](TERMS.md) — definitions of collector / hub / dash.

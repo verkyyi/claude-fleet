@@ -130,6 +130,8 @@ done
 
 mkdir -p "$LOG_DIR" 2>/dev/null || true
 LOG="$LOG_DIR/handoff-cycle.log"
+# The one size cap this log shares with context-ladder.log (issue #1320).
+[ -f "$BIN/fleet-ladder-log.sh" ] && sh "$BIN/fleet-ladder-log.sh" --trim "$LOG" >/dev/null 2>&1
 
 log() { printf '%s [%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S' 2>/dev/null)" "${PANE:-?}" "$*" >> "$LOG" 2>/dev/null || true; }
 
@@ -241,6 +243,9 @@ trap cleanup EXIT
 trap 'log "TERM (hard timeout ${HARD_TIMEOUT}s or signal) — exiting; doc left intact"; exit 0' TERM
 
 log "armed: store=$STORE pane=$PANE socket=${SOCKET:-\$TMUX} idle_to=${IDLE_TIMEOUT}s hard_to=${HARD_TIMEOUT}s"
+# The ladder row at completion wants the context % and compaction count the
+# session had BEFORE the /clear (whose SessionStart zeroes the count): read now.
+LADDER_AT="$(TM display-message -p -t "$PANE" '#{@ctx_pct}|#{@compact_count}' 2>/dev/null)"
 
 # ============================ 2. WAIT-IDLE =====================================
 # The arming turn is still running (this was its last tool call). Wait until the
@@ -416,4 +421,7 @@ FLEET_ALLOW_SENDKEYS=1 TM send-keys -t "$PANE" -l -- "$PICKUP" 2>/dev/null || tr
 FLEET_ALLOW_SENDKEYS=1 TM send-keys -t "$PANE" Enter 2>/dev/null || true
 
 log "cycle complete — pane $PANE cleared and resumed from $STORE"
+[ -f "$BIN/fleet-ladder-log.sh" ] && FLEET_HANDOFF_LOG_DIR="$LOG_DIR" sh "$BIN/fleet-ladder-log.sh" handoff-complete \
+  --pane "$PANE" ${SOCKET:+--socket "$SOCKET"} --ctx "${LADDER_AT%%|*}" --count "${LADDER_AT#*|}" \
+  --reason "resumed from $STORE" </dev/null >/dev/null 2>&1
 exit 0

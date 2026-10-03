@@ -201,6 +201,12 @@ case "${KEYS[3]}" in *Enter*) fail "the pickup text must not carry an inline Ent
 
 printf 'selftest: key-sequence leg PASS (Escape · /clear · Enter · pickup · Enter, all separate)\n' >&2
 
+# The context-ladder ledger (issue #1320): the completed cycle — and ONLY it; every
+# refusal/abort leg above ran first — writes one handoff-complete row beside its log.
+_lrows=$(grep -c "	handoff-complete	.*	resumed from $DOC\$" "$WORK/logs/context-ladder.log" 2>/dev/null)
+[ "$_lrows" = 1 ] || fail "a completed cycle must write exactly one handoff-complete ladder row, got ${_lrows:-0}"
+[ "$(grep -vc '^#' "$WORK/logs/context-ladder.log")" = 1 ] || fail "a refused/aborted cycle must write no ladder row"
+
 # ---- KEY-SEQUENCE-COMMENT (--issue + marker round-trip) → ARGUMENT-FREE pickup -
 # Marker present (round-trip), idle, fresh capture → clears and injects a pickup
 # with NO argument (the cleared pane's @issue self-resolves the comment, issue #275).

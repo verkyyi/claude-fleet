@@ -1972,6 +1972,49 @@ EOF
   [ "$_any" = 0 ] && _inv_line '' ''
 fi
 
+# --- context: the compaction / handoff ladder, from its ledger (issue #1320) ----
+# Every step of an in-place compaction (#1269) and of a handoff writes one row to
+# logs/context-ladder.log (bin/fleet-ladder-log.sh; columns in its `#` header).
+# This row only READS it: the last 24h's completed compactions (`restored`, with
+# the `compacting` starts beside them) and handoffs (`handoff-complete`, with the
+# nudges beside them), then the live window highest on the ladder right now — its
+# context %, the step it is at, and how often it has been compacted. Info, never a
+# verdict: a count is not pass/fail.
+ldir="${FLEET_HANDOFF_LOG_DIR:-$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)/logs}"
+lf="$ldir/context-ladder.log"
+lc=$(awk -F '\t' -v cut=$(( $(date +%s) - 86400 )) '
+  /^#/ || $1 !~ /^[0-9]+$/ || $1 < cut { next }
+  { n[$3]++ }
+  END { printf "%d %d %d %d", n["restored"], n["compacting"], n["handoff-complete"], n["handoff-nudge"] }
+' "$lf" 2>/dev/null)
+read -r lc_r lc_c lc_h lc_n <<EOF
+${lc:-0 0 0 0}
+EOF
+if [ "$lc_r$lc_c$lc_h$lc_n" = 0000 ]; then
+  lmsg="近 24h 无压缩 / 交接 (${lf})"
+else
+  lmsg="近 24h 压缩 ${lc_r} 次（发起 ${lc_c}）、交接 ${lc_h} 次（提示 ${lc_n}）(${lf})"
+fi
+# The live ladder, every fleet on this login: one tab row per window.
+lwin=''
+if [ -d "$conf_dir" ]; then
+  lwin=$(while IFS= read -r cf; do
+    [ -n "$cf" ] || continue
+    case "$cf" in (*/fleets/*/conf) sess=${cf%/conf}; sess=${sess##*/} ;; (*) sess=$(basename "$cf" .conf) ;; esac
+    tmux -L "$sess" list-windows -t "$sess" \
+      -F "#{@ctx_pct}	$sess	#{@handoff_armed}	#{@compact_stage}	#{@compact_count}	#{window_name}" 2>/dev/null
+  done <<EOF
+$(_fleet_confs "$conf_dir")
+EOF
+)
+fi
+ltop=$(printf '%s\n' "$lwin" | awk -F '\t' '$1 ~ /^[0-9]+$/ && ($1 + 0) > best { best = $1 + 0; row = $0 }
+  END { if (row == "") exit
+        split(row, f, "\t")
+        st = (f[3] == "1") ? "handoff-nudge" : (f[4] != "" ? f[4] : "—")
+        printf "%s:%s %s%% @ %s, 压过 %d 次", f[2], f[6], f[1], st, f[5] + 0 }')
+pass context "${lmsg}${ltop:+ · 当前最高 ${ltop}}"
+
 # --- shared deps: is the base's node_modules current with its lockfiles? (#961) --
 # With shared deps on (fleet_base_deps_on: FLEET_BASE_DEPS=1, or the stock
 # fleet-deps-link hook), every new worktree borrows the base checkout's
