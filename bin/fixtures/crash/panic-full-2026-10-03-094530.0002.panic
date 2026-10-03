@@ -1,0 +1,73 @@
+{"bug_type": "210", "timestamp": "2026-10-03 09:45:30.00 -0700", "os_version": "macOS 27.0 (26A428)"}
+{
+  "bug_type": "210",
+  "date": "2026-10-03 09:45:30.69 -0700",
+  "build": "macOS 27.0 (26A428)",
+  "panicString": "panic(cpu 11 caller 0xfffffe00483f89d0): watchdog timeout: no checkins from watchdogd in 90 seconds (54622 total checkins since monitoring last enabled)\nDebugger message: panic\nMemory ID: 0x1\nCompressor Info: 100% of compressed pages limit (BAD) and 41% of segments limit (OK) with 4 swapfiles and OK swap space\nPanicked task 0xf8fffe1e3806dbb0: 0 pages, 793 threads: pid 0: kernel_task",
+  "memoryStatus": {
+    "compressorSize": 2232004,
+    "compressions": 1238521602,
+    "decompressions": 443699900,
+    "busyBufferCount": 0,
+    "memoryPressureDetails": {
+      "pagesWanted": 3089,
+      "pagesReclaimed": 523
+    },
+    "pageSize": 16384,
+    "memoryPressure": false,
+    "memoryPages": {
+      "active": 812817,
+      "throttled": 0,
+      "fileBacked": 674,
+      "wired": 292818,
+      "purgeable": 0,
+      "inactive": 812616,
+      "free": 911,
+      "speculative": 201
+    }
+  },
+  "processByPid": {
+    "65334": {
+      "pid": 65334,
+      "procname": "git",
+      "parentPid": 65237,
+      "residentMemoryBytes": 175514137616
+    },
+    "75773": {
+      "pid": 75773,
+      "procname": "git",
+      "parentPid": 75309,
+      "residentMemoryBytes": 112377282768
+    },
+    "82795": {
+      "pid": 82795,
+      "procname": "git",
+      "parentPid": 81856,
+      "residentMemoryBytes": 94184639784
+    },
+    "54947": {
+      "pid": 54947,
+      "procname": "chrome-headless-shell",
+      "parentPid": 90717,
+      "residentMemoryBytes": 21085100952
+    },
+    "90751": {
+      "pid": 90751,
+      "procname": "chrome-headless-shell",
+      "parentPid": 90717,
+      "residentMemoryBytes": 16765947824
+    },
+    "53980": {
+      "pid": 53980,
+      "procname": "chrome-headless-shell",
+      "parentPid": 90717,
+      "residentMemoryBytes": 16293511608
+    },
+    "0": {
+      "pid": 0,
+      "procname": "kernel_task",
+      "parentPid": 0,
+      "residentMemoryBytes": 12140544
+    }
+  }
+}

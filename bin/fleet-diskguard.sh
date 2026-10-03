@@ -47,6 +47,13 @@
 #   --orphan-listeners print the orphaned-listener reap candidates (dry run)
 #   --listen-watch    run only the orphaned-listener sweep (what --watch also does)
 #   --probe           capture an incident right now regardless of free space
+#   --metrics         print one machine-metrics row (what --watch appends, issue #1294)
+#   --harvest-crash [--since <iso>]
+#                     summarize the system's panic-* / JetsamEvent-* reports newer
+#                     than <iso> (default: the last harvest) to stdout; reports not
+#                     harvested before are also written to machine/incident-*.md.
+#                     Exit 1 = no report in range. --watch runs it on its own when
+#                     the boot session changes (a reboot), and notifies.
 #   --help
 #
 # Config (fleet.conf; all optional):
@@ -71,6 +78,10 @@
 #   FLEET_ORPHAN_LISTEN_EVERY  min seconds between sweeps (default 300)
 #   FLEET_LISTEN_EXEMPT_RE  extra ERE of argv never counted/reaped as a listener
 #   FLEET_FSEVENTSD_WARN_CPU fseventsd %CPU that counts as pegged (default 90)
+#   FLEET_METRICS           0 = no per-minute machine-metrics row (default 1) — #1294
+#   FLEET_METRICS_KEEP_DAYS metrics-YYYYMMDD.tsv retention in days (default 7)
+#   FLEET_CRASH_REPORT_DIR  where the system writes crash reports
+#                           (default /Library/Logs/DiagnosticReports)
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
@@ -547,6 +558,91 @@ restarts it immediately. Reported once a day; the fleet never kills it."
   return 0
 }
 
+# --- crash forensics: the record a reboot leaves behind (issue #1294) ----------
+# The machine froze and rebooted on 2026-09-27 and 2026-10-03, and both times the
+# cause was dug out of /Library/Logs/DiagnosticReports by hand. Two halves:
+#   1. every --watch tick appends one machine-metrics row (fleet_metrics_append;
+#      memguard adds one every 10s under pressure) — the curve before the freeze;
+#   2. a tick that sees a NEW boot session (kern.bootsessionuuid, or Linux's
+#      boot_id) harvests the reports written since the last harvest into
+#      machine/incident-*.md and notifies. A report is harvested once, ever
+#      (machine/crash-harvested); the summary is bin/fleet-crash-harvest.py's.
+# Linux has no report dir: the previous boot's kernel OOM lines stand in.
+MDIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/machine"
+CRASH_DIR="${FLEET_CRASH_REPORT_DIR:-/Library/Logs/DiagnosticReports}"
+
+boot_id() {
+  if [ -n "${FLEET_BOOT_ID_CMD:-}" ]; then sh -c "$FLEET_BOOT_ID_CMD" 2>/dev/null | head -1; return 0; fi
+  sysctl -n kern.bootsessionuuid 2>/dev/null || cat /proc/sys/kernel/random/boot_id 2>/dev/null
+}
+
+# The local ISO time an hour before this boot — the first harvest's lower bound
+# (the reports describing the crash that caused this boot are written around it).
+boot_since_iso() {
+  local bt
+  bt="$(sysctl -n kern.boottime 2>/dev/null | sed -n 's/^{ *sec = \([0-9]*\).*/\1/p')"
+  [ -n "$bt" ] || bt="$(awk '/^btime/{print $2}' /proc/stat 2>/dev/null)"
+  case "$bt" in ''|*[!0-9]*) bt=$(( $(now) - 86400 )) ;; esac
+  bt=$((bt - 3600))
+  date -r "$bt" '+%Y-%m-%dT%H:%M:%S' 2>/dev/null || date -d "@$bt" '+%Y-%m-%dT%H:%M:%S' 2>/dev/null  # portable-ok: BSD/GNU both-ways
+}
+
+# harvest_crash <since-iso> <auto:0|1> → summary on stdout; rc 0 = reports found.
+# auto=1 selects only never-harvested reports (the boot tick); a manual run shows
+# everything in range. Both record what is new, so neither repeats the other.
+# Sets HARVEST_INCIDENT to the incident file written, if any.
+harvest_crash() {
+  local since="$1" auto="$2" pf rc host
+  mkdir -p "$MDIR" 2>/dev/null || return 1
+  pf="$MDIR/.incident-path.$$"; rm -f "$pf"; host="$(hostname 2>/dev/null)"
+  if [ -d "$CRASH_DIR" ] && command -v python3 >/dev/null 2>&1; then
+    python3 "$BIN/fleet-crash-harvest.py" --dir "$CRASH_DIR" --since "$since" \
+      --seen "$MDIR/crash-harvested" --record --machine-dir "$MDIR" --metrics-dir "$MDIR" \
+      --path-file "$pf" --host "$host" $([ "$auto" = 1 ] && echo --new-only)
+    rc=$?
+  elif [ -n "${FLEET_CRASH_JOURNAL_CMD:-}" ] || command -v journalctl >/dev/null 2>&1; then
+    local oom f
+    oom="$( { if [ -n "${FLEET_CRASH_JOURNAL_CMD:-}" ]; then sh -c "$FLEET_CRASH_JOURNAL_CMD"
+      else journalctl -k -b -1 --no-pager 2>/dev/null; fi; } \
+      | grep -iE 'out of memory|oom-kill|killed process' | tail -20)"
+    [ -n "$oom" ] || return 1
+    f="$MDIR/incident-$(date '+%Y%m%d-%H%M').md"
+    # the previous boot's journal is one fixed set: once harvested, never again
+    if [ "$auto" = 1 ] && [ "$(boot_id)" = "$(cat "$MDIR/journal-harvested" 2>/dev/null)" ]; then return 1; fi
+    printf '# 死机报告摘要 · %s · previous boot\n\nheadline: kernel OOM — %s\n\n```\n%s\n```\n' \
+      "$host" "$(printf '%s\n' "$oom" | tail -1 | cut -c1-120)" "$oom" | tee "$f"
+    boot_id > "$MDIR/journal-harvested" 2>/dev/null
+    printf '%s\n' "$f" > "$pf"; rc=0
+  else
+    return 1
+  fi
+  [ -s "$pf" ] && HARVEST_INCIDENT="$(cat "$pf")"
+  rm -f "$pf"
+  return "$rc"
+}
+
+# The --watch share: a metrics row every tick, a harvest on a boot change.
+crash_watch() {
+  if [ "${FLEET_METRICS:-1}" != 0 ] && command -v fleet_metrics_append >/dev/null 2>&1; then
+    fleet_metrics_append diskguard
+  fi
+  mkdir -p "$MDIR" 2>/dev/null || return 0
+  local bid last since
+  bid="$(boot_id)"; [ -n "$bid" ] || return 0
+  last="$(cat "$MDIR/boot-id" 2>/dev/null)"
+  [ "$bid" = "$last" ] && return 0
+  since="$(cat "$MDIR/last-harvest" 2>/dev/null)"; [ -n "$since" ] || since="$(boot_since_iso)"
+  HARVEST_INCIDENT=''
+  harvest_crash "$since" 1 >/dev/null 2>&1
+  printf '%s\n' "$bid" > "$MDIR/boot-id" 2>/dev/null
+  date '+%Y-%m-%dT%H:%M:%S' > "$MDIR/last-harvest" 2>/dev/null
+  { [ -n "$HARVEST_INCIDENT" ] && [ -f "$HARVEST_INCIDENT" ]; } || return 0
+  notify "# ⚠ this machine crashed and rebooted
+$(sed -n 's/^headline: //p' "$HARVEST_INCIDENT" | head -1)
+Summary (the system's reports + the fleet's own metrics before it): \`$HARVEST_INCIDENT\`"
+  return 0
+}
+
 # When sourced by the selftest (FLEET_DISKGUARD_SOURCE=1) stop here: expose the
 # functions above, run no mode. `return` is valid because we're being sourced.
 [ "${FLEET_DISKGUARD_SOURCE:-}" = 1 ] && return 0 2>/dev/null
@@ -573,6 +669,18 @@ case "${1:-}" in
     ;;
   --cpu-watch)
     cpu_watch
+    ;;
+  --metrics)
+    fleet_metrics_row diskguard
+    ;;
+  --harvest-crash)
+    hsince=''
+    [ "${2:-}" = --since ] && hsince="${3:-}"
+    [ -n "$hsince" ] || hsince="$(cat "$MDIR/last-harvest" 2>/dev/null)"
+    [ -n "$hsince" ] || hsince="$(boot_since_iso)"
+    HARVEST_INCIDENT=''
+    harvest_crash "$hsince" 0 || { echo "fleet-diskguard: no crash report since $hsince in $CRASH_DIR" >&2; exit 1; }
+    [ -n "$HARVEST_INCIDENT" ] && printf '\n(new — recorded in %s)\n' "$HARVEST_INCIDENT"
     ;;
   --orphan-watch)
     orphan_watch
@@ -612,6 +720,7 @@ EOF2
     orphan_watch                                  # orphaned-runaway check (#697), likewise
     fseventsd_watch                               # fseventsd bloat reminder (#889), report-only
     listen_watch                                  # orphaned-listener sweep (#1154), throttled
+    crash_watch                                   # metrics row + reboot harvest (#1294)
     free=$(free_gb)
     [ -z "$free" ] && exit 0                      # measurement failed — stay quiet
     [ "$free" -ge "$WARN_GB" ] && exit 0          # healthy
@@ -632,7 +741,7 @@ Volume backing \`$TARGET\` is under the ${WARN_GB}GB warn line. Forensic snapsho
 Fleet spawn/auto-restore is now gated at ${FLOOR_GB}GB — inspect the incident for the runaway writer."
     ;;
   -h|--help|"")
-    sed -n '2,72p' "$0"
+    sed -n '2,84p' "$0"
     ;;
   *)
     echo "fleet-diskguard: unknown mode '$1' (see --help)" >&2; exit 2
