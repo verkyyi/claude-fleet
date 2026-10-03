@@ -218,6 +218,21 @@ status_machine_cached
 fleet_alerts_refresh --kick
 fleet_alerts_bar
 
+# --- GitHub rate limit (issue #989, EPIC #1262 C2): `⚠ GitHub 受限至 HH:MM` while
+# the shared gh-limit marker (bin/fleet-gh-lib.sh, written by whichever caller saw
+# the refusal) says a bucket is limited — so "every gh call is failing" reads as
+# the account's shared limit at a glance, not as N unrelated breakages. READ only,
+# never a probe; absent (zero width, zero forks) when nothing is limited. An
+# injected limit (FLEET_GH_FAKE_LIMIT) has no reset time, so it shows bare.
+gh_seg=""
+_FLEET_GH_LIB_DIR="$BIN"
+if [ -f "$BIN/fleet-gh-lib.sh" ] && . "$BIN/fleet-gh-lib.sh" && gh_until=$(fleet_gh_limit_until 2>/dev/null); then
+    case "$gh_until" in
+        ''|*[!0-9]*) gh_seg="${DIM}│ ${YELLOW}⚠ GitHub 受限 " ;;
+        *)           gh_seg="${DIM}│ ${YELLOW}⚠ GitHub 受限至 $(fleet_gh_hhmm "$gh_until") " ;;
+    esac
+fi
+
 # --- No account chip. The green `◉ <account>` segment (issue #289) mirrored the
 # fleet-wide global/account.active pointer, i.e. "the account new sessions use".
 # Since #513 that pointer is RE-PICKED on every spawn from ccquota headroom, so
@@ -228,4 +243,4 @@ fleet_alerts_bar
 
 # --- Output --- (claude count + hostname dropped — the window list and dash cover those;
 # name your tmux session after your fleet so status-left carries the title)
-printf '%s%s' "$machine" "$FA_BAR"
+printf '%s%s%s' "$machine" "$gh_seg" "$FA_BAR"

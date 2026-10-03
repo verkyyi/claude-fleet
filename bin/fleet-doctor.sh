@@ -95,6 +95,40 @@ else
   fail gh "not found — no backlog, no PR/CI map (\`brew install gh\`)"
 fi
 
+# --- github: is the account rate-limited right now? (issue #989, EPIC #1262 C2) ---
+# READ off the shared gh-limit marker + logs/gh-limit.log (bin/fleet-gh-lib.sh) —
+# never a probe, and never `gh api rate_limit` (it reported 5000 left while every
+# GraphQL call was refused, #946 #989 #1211). The last-hour tally is the log's
+# limited / skip / fallback-ok events; a `used=` field, when a writer logs one,
+# reports the highest X-RateLimit-Used seen.
+# The lib is bash and this script is POSIX sh, so it runs in a bash child (as the
+# alerts row does), which also renders each row's HH:MM.
+_gh_lib="$(dirname "$0")/fleet-gh-lib.sh"
+_gh_rows=''; _gh_hour=''
+# shellcheck disable=SC2016
+[ -f "$_gh_lib" ] && _gh_rows=$(bash -c '. "$1" || exit 1
+  fleet_gh_limit_rows | while IFS="	" read -r b r s; do
+    case "$r" in fake) echo "$b limited (injected: FLEET_GH_FAKE_LIMIT)" ;;
+      *) echo "$b limited until $(fleet_gh_hhmm "$r") (seen by $s)" ;; esac
+  done' _ "$_gh_lib" 2>/dev/null)
+_gh_log="${FLEET_GH_LOG:-$(dirname "$0")/../logs/gh-limit.log}"
+if [ -f "$_gh_lib" ] && [ -f "$_gh_log" ]; then
+  _gh_cut=$(date -u -r $(( $(date +%s) - 3600 )) +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$(( $(date +%s) - 3600 ))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
+  _gh_hour=$(awk -v cut="$_gh_cut" '$1 >= cut {
+      n[$2]++
+      for (i = 3; i <= NF; i++) if ($i ~ /^used=[0-9]+$/) { u = substr($i, 6) + 0; if (u > mu) mu = u }
+    } END {
+      printf "last hour: %d limited · %d skipped · %d fallback-ok", n["limited"], n["skip"], n["fallback-ok"]
+      if (mu > 0) printf " · X-RateLimit-Used max %d", mu
+    }' "$_gh_log" 2>/dev/null)
+fi
+if [ -n "$_gh_rows" ]; then
+  _gh_msg=$(printf '%s\n' "$_gh_rows" | awk 'NF { printf "%s%s", (n++ ? "; " : ""), $0 }')
+  warn github "$_gh_msg — the shared account limit, not a permission problem: GraphQL calls fall back to REST until then${_gh_hour:+ · $_gh_hour}"
+elif [ -f "$_gh_lib" ]; then
+  pass github "not rate-limited${_gh_hour:+ · $_gh_hour}"
+fi
+
 # --- python3 (collector context% + usage caches) ---
 if command -v python3 >/dev/null 2>&1; then
   pass python3 "$(python3 --version 2>&1 | awk '{print $2}')"
