@@ -21,22 +21,29 @@
 #   TYPING HOLD  an operator keypress at this window holds the keystrokes; held past
 #                the deadline ⇒ nothing typed and the stage stays `prep` (#571).
 #   STALE        a prep/compacting stage seen below the line is dropped.
+#   CAP (#1316)  each fleet compaction bumps @compact_count; at the prep line a
+#                count of 0/1 preps, a count of FLEET_COMPACT_MAX (default 2) gets
+#                the handoff block instead ("compacted in place N times"), through
+#                the same latch + typing hold; SessionStart clear/startup zeroes
+#                the count (compact/resume keep it); FLEET_COMPACT_MAX=0 is
+#                byte-identical to no cap; codex / scratch untouched.
 # No real tmux server, no gh, no live Claude.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
-for f in set-claude-state.sh fleet-hook-conf.sh fleet-lib.sh fleet-lang.sh fleet-compact-send.sh refocus-hook.sh; do
+for f in set-claude-state.sh fleet-hook-conf.sh fleet-lib.sh fleet-lang.sh fleet-compact-send.sh refocus-hook.sh handoff-latch-reset-hook.sh; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/compact-prep-selftest.XXXXXX")" || exit 2
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/fakepath" "$WORK/inst/bin" "$WORK/conf/fleets/s1" "$WORK/tmp" "$WORK/widgets-issue-12"
-for f in set-claude-state.sh fleet-hook-conf.sh fleet-lib.sh fleet-lang.sh fleet-compact-send.sh refocus-hook.sh; do
+for f in set-claude-state.sh fleet-hook-conf.sh fleet-lib.sh fleet-lang.sh fleet-compact-send.sh refocus-hook.sh handoff-latch-reset-hook.sh; do
   cp "$BIN/$f" "$WORK/inst/bin/$f"
 done
 STATE="$WORK/inst/bin/set-claude-state.sh"
 REFOCUS="$WORK/inst/bin/refocus-hook.sh"
+LATCH="$WORK/inst/bin/handoff-latch-reset-hook.sh"
 GCONF="$WORK/inst/fleet.conf"
 OPTS="$WORK/opts"; SENDLOG="$WORK/send.log"
 git -C "$WORK/widgets-issue-12" init -q -b issue-12 2>/dev/null || git -C "$WORK/widgets-issue-12" init -q
@@ -88,11 +95,13 @@ fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail -
          printf -- '--- opts ---\n' >&2; cat "$OPTS" >&2 2>/dev/null
          printf -- '--- send log ---\n' >&2; cat "$SENDLOG" >&2 2>/dev/null; exit 1; }
 
-# conf <prep%> [<handoff%>] — the GLOBAL conf the hook resolves through fleet-hook-conf.
+# conf <prep%> [<handoff%>] [<compact max>] — the GLOBAL conf the hook resolves
+# through fleet-hook-conf.
 conf() {
   { printf 'FLEET_HANDOFF_DEFER_SECS=30\n'
     [ -n "${1:-}" ] && printf 'FLEET_COMPACT_PREP_PCT=%s\n' "$1"
     [ -n "${2:-}" ] && printf 'FLEET_AUTO_HANDOFF_PCT=%s\n' "$2"
+    [ -n "${3:-}" ] && printf 'FLEET_COMPACT_MAX=%s\n' "$3"
   } > "$GCONF"; }
 # reset [k=v …] — a fresh worker window #12 (claude, done), plus overrides.
 reset() {
@@ -125,6 +134,12 @@ compact_start() {
           TMUX="$WORK/sock,1,0" TMUX_PANE='%9' FLEET_SKIP_GLOBAL_CONF=1 \
           FLEET_CONF_DIR="$WORK/conf" FAKE_OPTS="$OPTS" FAKE_SENDLOG="$SENDLOG" \
           bash "$REFOCUS" 2>&1)
+}
+# session_start <source> — SessionStart(<source>): the latch-reset hook.
+session_start() {
+  OUT=$(printf '{"hook_event_name":"SessionStart","source":"%s"}' "$1" \
+        | env -i PATH="$WORK/fakepath:/usr/bin:/bin" HOME="$WORK" TMUX="$WORK/sock,1,0" TMUX_PANE='%9' \
+          FAKE_OPTS="$OPTS" FAKE_SENDLOG="$SENDLOG" sh "$LATCH" 2>&1)
 }
 # wait_sent <n> — the detached sender is async: wait (≤ 10 s) for its n-th Enter.
 wait_sent() { local i=0
@@ -163,8 +178,10 @@ compact_start
 case "$OUT" in *'[fleet charter] #12'*'CHECK FIRST'*"$MAP"*) : ;;
   *) fail "SessionStart(compact) must re-state the charter with the map check" "$OUT" ;; esac
 [ "$(getopt @compact_stage)" = restored ] || fail "step 3 must stamp @compact_stage=restored"
+[ "$(getopt @compact_count)" = 1 ] || fail "a completed fleet compaction must bump @compact_count to 1"
 compact_start
 case "$OUT" in *'CHECK FIRST'*) fail "a second (auto) compaction must not repeat the check" "$OUT" ;; esac
+[ "$(getopt @compact_count)" = 1 ] || fail "a compaction the fleet did not type must not count"
 ok "STEP 3 SessionStart(compact) → restored + check line, once"
 
 setopt @ctx_pct 30
@@ -237,5 +254,78 @@ stop
 [ -z "$(getopt @compact_stage)" ] || fail "a compacting stage seen below the line must be dropped"
 [ "$(getopt @compact_rearm)" = 1 ] || fail "below the line re-arms"
 ok "STALE compacting below the line → dropped + re-armed"
+
+# ===== CAP: compact twice, then hand off (issue #1316) ===========================
+conf '' ''                       # nothing set ⇒ prep 70, cap 2, auto-handoff OFF
+for n in 0 1; do
+  reset @ctx_pct=72 @compact_count=$n @compact_rearm=1 @compact_ts=1
+  stop
+  case "$OUT" in *'compact-prep threshold). The fleet will compact'*) : ;;
+    *) fail "count $n at the prep line must still prep" "$OUT" ;; esac
+  [ "$(getopt @compact_stage)" = prep ] || fail "count $n must stamp prep"
+done
+ok "CAP count 0/1 at the prep line → prep, as before"
+
+reset @ctx_pct=72 @compact_count=2 @compact_stage=restored @compact_rearm=1 @compact_ts=1
+stop
+printf '%s\n' "$OUT"
+blocked || fail "count 2 at the prep line must block" "$OUT"
+case "$OUT" in *'compacted in place 2 times (FLEET_COMPACT_MAX=2)'*'Run /fleet-handoff now (cycle mode'*) : ;;
+  *) fail "count 2 must get the handoff block naming the count" "$OUT" ;; esac
+case "$OUT" in *'RECOVERY MAP'*) fail "count 2 must not also ask for a recovery map" "$OUT" ;; esac
+printf '%s' "$OUT" | python3 -c 'import json,sys; json.load(sys.stdin)' || fail "cap output must be valid JSON" "$OUT"
+[ "$(getopt @handoff_armed)" = 1 ] || fail "the cap handoff must set the @handoff_armed latch"
+[ "$(getopt @compact_stage)" = restored ] || fail "the cap handoff must not start a compact stage"
+stop; blocked && fail "the latched pane must not be re-nudged" "$OUT"
+sleep 0.5; [ "$(sent)" = 0 ] || fail "past the cap no /compact may ever be typed"
+ok "CAP count 2, same 72% reading → handoff block ('compacted in place 2 times'), latched, no prep"
+
+reset @ctx_pct=60 @compact_count=2; stop
+blocked && fail "count 2 below the prep line must not block" "$OUT"
+conf 70 80
+reset @ctx_pct=75 @compact_count=2; stop
+case "$OUT" in *'compacted in place 2 times'*) : ;; *) fail "cap fires inside [prep, handoff)" "$OUT" ;; esac
+reset @ctx_pct=85 @compact_count=2; stop
+case "$OUT" in *'(>= 80% auto-handoff threshold)'*) : ;; *) fail "at the handoff line the plain handoff still owns it" "$OUT" ;; esac
+conf '' '' 3
+reset @ctx_pct=72 @compact_count=2; stop
+case "$OUT" in *'compact-prep threshold). The fleet will compact'*) : ;; *) fail "FLEET_COMPACT_MAX=3 lets a 3rd compaction prep" "$OUT" ;; esac
+reset @ctx_pct=72 @compact_count=3; stop
+case "$OUT" in *'compacted in place 3 times (FLEET_COMPACT_MAX=3)'*) : ;; *) fail "count 3 hits a cap of 3" "$OUT" ;; esac
+ok "CAP band [prep, handoff) only; the plain handoff keeps its line; FLEET_COMPACT_MAX moves the cap"
+
+conf '' ''
+reset @ctx_pct=72 @compact_count=2; FAKE_CLIENTS="$(date +%s) @1" stop
+blocked && fail "operator typing must hold the cap handoff" "$OUT"
+[ -n "$(getopt @handoff_deferred_ts)" ] && [ -z "$(getopt @handoff_armed)" ] || fail "a held cap handoff stamps the hold, no latch"
+[ -z "$(getopt @compact_stage)" ] || fail "a held cap handoff must not fall back to compacting"
+reset @ctx_pct=72 @compact_count=2; stop '{"stop_hook_active":true}'
+blocked && fail "stop_hook_active must not start the cap handoff" "$OUT"
+reset @ctx_pct=72 @compact_count=2 @cc_agent=codex; stop
+blocked && fail "a codex pane is untouched by the cap" "$OUT"
+reset @ctx_pct=72 @compact_count=2 @issue= @raw=1; stop
+blocked && fail "scratch is untouched by the cap" "$OUT"
+ok "CAP typing hold · stop_hook_active · codex · scratch"
+
+# SessionStart: clear/startup zero the count; compact/resume keep it.
+for src in compact resume; do
+  reset @compact_count=2; session_start "$src"
+  [ "$(getopt @compact_count)" = 2 ] || fail "SessionStart($src) must keep @compact_count"
+done
+for src in clear startup; do
+  reset @compact_count=2; session_start "$src"
+  [ -z "$(getopt @compact_count)" ] || fail "SessionStart($src) must zero @compact_count"
+done
+reset @ctx_pct=72 @compact_count=2; session_start clear; setopt @ctx_pct 72; stop
+case "$OUT" in *'compact-prep threshold). The fleet will compact'*) : ;; *) fail "after the handoff's clear the fresh session compacts again" "$OUT" ;; esac
+ok "CAP SessionStart clear/startup → count zeroed (fresh session preps again); compact/resume keep it"
+
+# FLEET_COMPACT_MAX=0 ⇒ byte for byte the uncapped hook, whatever the count.
+conf '' ''  0
+reset @ctx_pct=72; stop; base_out=$OUT; base_opts=$(grep -v '_ts	' "$OPTS")
+reset @ctx_pct=72 @compact_count=7; stop
+[ "$OUT" = "$base_out" ] || fail "FLEET_COMPACT_MAX=0 must emit exactly the uncapped output" "$OUT"
+[ "$(grep -v '_ts	' "$OPTS" | grep -v '^@compact_count	')" = "$base_opts" ] || fail "FLEET_COMPACT_MAX=0 must write exactly the uncapped options"
+ok "CAP FLEET_COMPACT_MAX=0 → byte-identical to no cap (count 7 still preps)"
 
 printf 'compact-prep-selftest: PASS\n'

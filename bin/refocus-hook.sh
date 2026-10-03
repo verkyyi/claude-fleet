@@ -53,9 +53,16 @@ fi
 # (bin/fleet-compact-send.sh stamped @compact_stage=compacting), this is step 3 —
 # mark it restored and ask the worker to check the recovery map it wrote in step 1.
 # Read before any early exit below, so the stage completes even with refocus off.
+# Each completed compaction also bumps @compact_count (issue #1316): the Stop hook
+# hands the session off instead once it reaches FLEET_COMPACT_MAX, and the fresh
+# session's SessionStart (handoff-latch-reset-hook.sh) zeroes it.
 compact_check=''
-if [ "$(tmux display-message -p -t "$TMUX_PANE" '#{@compact_stage}' 2>/dev/null)" = compacting ]; then
+cstate=$(tmux display-message -p -t "$TMUX_PANE" '#{@compact_stage}|#{@compact_count}' 2>/dev/null)
+if [ "${cstate%%|*}" = compacting ]; then
   tmux set-window-option -t "$TMUX_PANE" @compact_stage restored 2>/dev/null
+  ccount=${cstate#*|}
+  case "$ccount" in ''|*[!0-9]*) ccount=0 ;; esac
+  tmux set-window-option -t "$TMUX_PANE" @compact_count $(( ccount + 1 )) 2>/dev/null
   compact_check=1
 fi
 
