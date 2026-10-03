@@ -207,6 +207,14 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    (latch), only from a clean `done` (never a needs-attention turn), and never on
    panels or the hub pane.
 
+   A second `SessionStart` group, matcher `compact`, fires `refocus-hook.sh`
+   (issue #1266): right after a context compaction it hands a **worker** its task
+   charter back as `additionalContext` — a ≤1.5 KB block opening
+   `[fleet charter] #<N>` (issue, repo, branch, PR, one-issue-one-PR, how to
+   land), so a long auto-compacted worker doesn't drift out of scope. Zero gh
+   calls; silent for the hub, scratch, headless children and any other source.
+   `FLEET_REFOCUS=0` turns it off.
+
    The `SessionEnd` array fires `session-end-hook.sh` (issue #403) — the
    event-driven twin of the ledger-watch daemon. Its `matcher`
    (`prompt_input_exit|logout`) fires it only on a **real** worker exit. It is
@@ -797,7 +805,7 @@ pgrep -lP "$(pgrep -P "$(tmux display -p -t <pane> '#{pane_pid}')" | head -1)"
 Remove the LaunchAgents (`launchctl bootout gui/$(id -u)/com.claude-fleet.*`,
 delete the plists), delete the `source-file …tmux-attention.conf` line from
 `~/.tmux.conf`, remove the five `set-claude-state.sh` hook entries (and the
-`handoff-latch-reset-hook.sh` entry on `SessionStart`) from `~/.claude/settings.json`, remove the `statusLine` block from
+`handoff-latch-reset-hook.sh` + `refocus-hook.sh` entries on `SessionStart`) from `~/.claude/settings.json`, remove the `statusLine` block from
 `~/.claude/settings.json` **only if** it points at `conf/statusline.sh` (leave a
 personal one), delete `~/.claude/fleet/`, remove any fleet commands
 you copied into `~/.claude/commands/` (the ones with a `<!-- fleet skill … -->`

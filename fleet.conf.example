@@ -1301,6 +1301,15 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Handoff typing hold @group=handoff @tier=internal @scope=fleet @edit=int @unit=sec
 #FLEET_HANDOFF_DEFER_SECS=30     # keypress at the pane's window within N s holds the handoff; 0 = off
 
+# Re-state a worker's task charter after a context compaction (issue #1266). The
+# SessionStart(source=compact) hook bin/refocus-hook.sh hands a WORKER pane a
+# ≤1.5 KB `[fleet charter] #<N>` block (issue, repo, branch, PR, one-issue-one-PR,
+# how to land) as additionalContext, so a long auto-compacted session doesn't
+# drift out of scope or forget to ship. Zero gh calls; hub/scratch never get it.
+# 0 = off. Read from THIS file and the per-fleet overlay at hook time.
+# @label=Re-state charter after compact @group=handoff @tier=internal @scope=fleet @edit=bool
+#FLEET_REFOCUS=1                 # 1 = re-inject the worker charter after /compact; 0 = off
+
 # The wait-idle ceiling of the handoff cycle (bin/fleet-handoff-cycle.sh): how long
 # it waits for the arming turn to end (@claude_state leaves `working`) before it
 # ABORTS WITHOUT CLEARING. A big handoff turn can legitimately run over two minutes.
