@@ -10,6 +10,8 @@ called by hand.
   scan    --dir <children-dir>                   (keys with undelivered news)
   digest  --dir <children-dir> --parent <key> [--batch-secs N] [--parent-state S]
           [--force]              (`fleet-children.sh --json` of that parent on stdin)
+  wake    --file <ledger.ndjson>            (wake JSON on stdin: child, level, action, outcome)
+  wake-state --file <ledger.ndjson> --child <key>   → `<level> <epoch>` to resume from
 
 The ledger is one NDJSON file per PARENT KEY (`issue-N` / `scratch-N` /
 `<slug>:issue-N` — fleet_origin_canon's spelling, never a window id), so a parent
@@ -25,6 +27,18 @@ a stable interface (C4/C5/C6/R1 of EPIC #935 build on it): add fields, never ren
 The DIGEST (issue #939, FLEET_CHILD_REPORT=batch) reads the same file against a
 cursor beside it — `<parent-key>.cursor`, the highest seq already delivered — and
 decides whether this is the moment to wake the parent (see cmd_digest).
+
+A second row TYPE shares the file (issue #1268): the stall ladder of
+`fleet-await.sh` records every rung it climbs as
+
+  {"seq": 4, "ts": "…", "type": "wake", "child": "issue-101", "level": 2,
+   "action": "nudge", "outcome": "sent"}
+
+level 1-2 nudge · 3 brief · 4 parent · 5 alert; level 0 / outcome "reset" = the
+child made progress and the ladder starts over. A wake row is NOT a report:
+read_events() skips it, so show/scan/digest/dedup never see one — it only shares
+the seq counter (so "a report after this wake" is one comparison) and surfaces in
+`show --json` as the top-level `wakes` list.
 """
 import argparse
 import datetime
@@ -55,7 +69,8 @@ def clean(s, lines=3, width=200):
     return '\n'.join(l[:width] for l in s.splitlines()[:lines])
 
 
-def read_events(path):
+def read_rows(path):
+    """Every JSON object in the ledger, reports and wake rows alike."""
     out = []
     try:
         with open(path, encoding='utf-8') as fh:
@@ -72,6 +87,19 @@ def read_events(path):
     except OSError:
         pass
     return out
+
+
+def is_wake(e):
+    return e.get('type') == 'wake'
+
+
+def read_events(path):
+    """The child REPORTS — wake rows (issue #1268) are not events."""
+    return [e for e in read_rows(path) if not is_wake(e)]
+
+
+def read_wakes(path):
+    return [e for e in read_rows(path) if is_wake(e)]
 
 
 def cmd_append(a):
@@ -111,7 +139,7 @@ def cmd_append(a):
                 seq = max(seq, int(e.get('seq') or 0))
             except (TypeError, ValueError):
                 pass
-            if e.get('child') == ev['child']:
+            if e.get('child') == ev['child'] and not is_wake(e):
                 last = e
         # Dedup against the child's LATEST event, not the whole file: a reaper
         # repeating the ship path's report is a no-op, while a real transition
@@ -379,6 +407,71 @@ def cmd_digest(a):
     return 0
 
 
+def locked_append(path, row):
+    """Stamp seq + ts under the ledger's flock and append — the same critical
+    section cmd_append uses, so a wake row and a report never share a seq."""
+    os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+    with open(path, 'a+', encoding='utf-8') as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        fh.seek(0)
+        seq = 0
+        for line in fh:
+            try:
+                seq = max(seq, int(json.loads(line).get('seq') or 0))
+            except (ValueError, TypeError, AttributeError):
+                pass
+        row = dict(seq=seq + 1,
+                   ts=datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                   **row)
+        fh.seek(0, os.SEEK_END)
+        fh.write(json.dumps(row, ensure_ascii=False) + '\n')
+        fh.flush()
+    return row['seq']
+
+
+def cmd_wake(a):
+    """Append one stall-ladder row (issue #1268)."""
+    try:
+        w = json.loads(sys.stdin.read() or '{}')
+    except ValueError:
+        return 2
+    if not isinstance(w, dict):
+        return 2
+    child = ''.join(ch for ch in str(w.get('child') or '') if ch in KEY_OK)[:128]
+    try:
+        level = int(w.get('level'))
+    except (TypeError, ValueError):
+        level = -1
+    if not child or not 0 <= level <= 5:
+        print('fleet-children: wake needs child + level 0-5', file=sys.stderr)
+        return 2
+    print('seq=%d' % locked_append(a.file, dict(
+        type='wake', child=child, level=level,
+        action=clean(w.get('action'), 1, 16), outcome=clean(w.get('outcome'), 1, 120))))
+    return 0
+
+
+def cmd_wake_state(a):
+    """`<level> <epoch>`: the rung <child>'s ladder stands on and when it was
+    climbed — so a restarted wait goes on from there. 0 when there is no wake
+    row, the last one is a reset, or the child REPORTED after it (progress the
+    previous waiter never saw)."""
+    rows = [e for e in read_rows(a.file) if e.get('child') == a.child]
+    wakes = [e for e in rows if is_wake(e)]
+    if not wakes:
+        print('0 0')
+        return 0
+    w = max(wakes, key=seq_of)
+    try:
+        level = int(w.get('level') or 0)
+    except (TypeError, ValueError):
+        level = 0
+    if any(not is_wake(e) and seq_of(e) > seq_of(w) for e in rows):
+        level = 0
+    print('%d %d' % (level, int(ts_of(w)) if level else 0))
+    return 0
+
+
 def cmd_show(a):
     wins = read_windows(sys.stdin)
     parent = a.parent
@@ -438,7 +531,10 @@ def cmd_show(a):
 
     if a.json:
         out = dict(parent=parent, session=a.session, seq=seqmax, summary=summary,
-                   children=[{k: v for k, v in kid.items() if k != 'since'} for kid in kids])
+                   children=[{k: v for k, v in kid.items() if k != 'since'} for kid in kids],
+                   wakes=sorted((w for w in read_wakes(os.path.join(a.dir, parent + '.ndjson'))
+                                 if w.get('child') in events and seq_of(w) > a.since),
+                                key=seq_of))
         if a.since:
             out['events'] = sorted((e for kid in kids for e in kid['since']),
                                    key=lambda e: int(e.get('seq') or 0))
@@ -481,8 +577,14 @@ def main():
     p.add_argument('--batch-secs', type=int, default=300)
     p.add_argument('--parent-state', default='')
     p.add_argument('--force', action='store_true')
+    p = sub.add_parser('wake')
+    p.add_argument('--file', required=True)
+    p = sub.add_parser('wake-state')
+    p.add_argument('--file', required=True)
+    p.add_argument('--child', required=True)
     a = ap.parse_args()
-    return dict(append=cmd_append, show=cmd_show, scan=cmd_scan, digest=cmd_digest)[a.cmd](a)
+    return dict(append=cmd_append, show=cmd_show, scan=cmd_scan, digest=cmd_digest,
+                wake=cmd_wake, **{'wake-state': cmd_wake_state})[a.cmd](a)
 
 
 if __name__ == '__main__':
