@@ -83,7 +83,6 @@ else:
 FAKE
 chmod +x "$WORK/fakepath/tmux"
 
-fails=0
 ok()   { printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2
          printf -- '--- opts ---\n' >&2; cat "$OPTS" >&2 2>/dev/null
@@ -117,7 +116,7 @@ stop() {
         FLEET_CONF_DIR="$WORK/conf" FAKE_OPTS="$OPTS" FAKE_SENDLOG="$SENDLOG" \
         FAKE_CLIENTS="${FAKE_CLIENTS:-}" FLEET_COMPACT_SEND_GRACE=0 \
         FLEET_COMPACT_SEND_TIMEOUT="${SEND_TIMEOUT:-90}" \
-        sh "$STATE" done 2>&1)
+        sh "$STATE" 'done' 2>&1)
 }
 # compact_start — SessionStart(source=compact): the refocus hook.
 compact_start() {
