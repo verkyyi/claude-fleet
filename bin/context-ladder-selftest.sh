@@ -109,7 +109,7 @@ rows() { grep -vc '^#' "$LOG" 2>/dev/null; }
 # expect <n> <step> <ctx> <count> <reason-glob> — check the n-th row's fields.
 expect() {
   local r; r=$(row "$1")
-  IFS=$'\t' read -r e_ep e_t e_step e_sess e_pane e_win e_ctx e_cnt e_rsn <<<"$r"
+  IFS=$'\t' read -r e_ep _ e_step e_sess e_pane e_win e_ctx e_cnt e_rsn <<<"$r"
   [ "$e_step" = "$2" ] || fail "row $1 step: want $2, got '$e_step'" "$r"
   [ "$e_sess" = s1 ] && [ "$e_pane" = '%9' ] && [ "$e_win" = widgets-12 ] \
     || fail "row $1 ($2): session/pane/window must be s1 / %9 / widgets-12" "$r"
