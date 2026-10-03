@@ -12,9 +12,10 @@ import secrets
 import sys
 import uuid
 
-from fleet_hub_common import (CONFIG_KEYS, PROTOCOL, SCOPE_OF, SCOPES, WORKER_ACTIONS,
+from fleet_hub_common import (CONFIG_KEYS, GH_READS, PROTOCOL, SCOPE_OF, SCOPES, WORKER_ACTIONS,
                               Database, Fault, canonical, digest, fields, identifier,
-                              name, now, operation, parse_worker_id, run, validate_write)
+                              name, now, operation, parse_worker_id, run, validate_gh_read,
+                              validate_write)
 
 BIN = Path(__file__).absolute().parent
 REMOTE_COMMAND = ('export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"; '
@@ -327,7 +328,13 @@ class Hub:
                 fields(params, ("fleet_id",))
                 self.authorize(principal, "fleet:read", params["fleet_id"])
                 result = self.rpc(self.fleet_node(params["fleet_id"]), tool, params)
-            elif tool in ("worker_start", "config_set"):
+            elif tool in GH_READS:
+                # Answered on the fleet's machine by fleet-gh.sh: its local
+                # copy first, gh/REST only when that copy is too old (#1274).
+                validate_gh_read(params)
+                self.authorize(principal, "gh:read", params["fleet_id"])
+                result = self.rpc(self.fleet_node(params["fleet_id"]), tool, params)
+            elif tool in ("worker_start", "config_set", "gh_comment"):
                 result = self.submit(principal, tool, params)
             elif tool in WORKER_ACTIONS:
                 audit_fleet, request = self.worker_request(params)
@@ -375,7 +382,7 @@ def main(argv=None):
     grant.add_argument("name", help="Who holds it and for what, e.g. macbook-claude-read")
     grant.add_argument("--fleet", action="append", required=True, help="Fleet UUID; repeat for each Fleet this caller operates")
     grant.add_argument("--scope", action="append", choices=sorted(SCOPES), default=[],
-                       help="fleet:read is always granted and is the whole default; add worker:start / config:write only for a caller that needs them")
+                       help="fleet:read is always granted and is the whole default; add worker:start / config:write / gh:read / gh:comment only for a caller that needs them")
     grant.add_argument("--config-key", action="append", choices=sorted(CONFIG_KEYS), default=[],
                        help="With config:write, each key this caller may set")
     grant.add_argument("--ttl-hours", type=float, default=24, help="Expiry from now in hours; default 24, maximum 8760")

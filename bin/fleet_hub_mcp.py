@@ -165,6 +165,41 @@ def make_server(hub, *, token=None, oauth=None, grant_tokens=False):
         """Resume a stopped worker from its /fleet-history row in a new window under local Fleet gates. Refused while a live window holds the identity. Needs worker:resume; poll operation_get."""
         return await invoke("worker_resume", {"worker_id": worker_id, "idempotency_key": idempotency_key})
 
+    # GitHub through the fleet's own rails (issue #1274): reads come from the
+    # fleet's local copy when fresh (_source cache|gh|rest, _age seconds); a
+    # comment goes through its write queue. Descriptions stay short: every
+    # session pays for them in context.
+    def gh_params(fleet_id, number, repo, fields):
+        params = {"fleet_id": fleet_id, "number": number}
+        if repo:
+            params["repo"] = repo
+        if fields:
+            params["fields"] = fields
+        return params
+
+    @server.tool(annotations=read, structured_output=True)
+    async def gh_issue_view(fleet_id: str, number: StrictInt, repo: str = "", fields: str = "") -> dict[str, Any]:
+        """Read an issue, cache first. fields: gh --json names (default number,title,state). Needs gh:read."""
+        return await invoke("gh_issue_view", gh_params(fleet_id, number, repo, fields))
+
+    @server.tool(annotations=read, structured_output=True)
+    async def gh_pr_view(fleet_id: str, number: StrictInt, repo: str = "", fields: str = "") -> dict[str, Any]:
+        """Read a PR, cache first. fields as gh_issue_view (default number,headRefName,state). Needs gh:read."""
+        return await invoke("gh_pr_view", gh_params(fleet_id, number, repo, fields))
+
+    @server.tool(annotations=read, structured_output=True)
+    async def gh_pr_checks(fleet_id: str, number: StrictInt, repo: str = "", fields: str = "") -> dict[str, Any]:
+        """A PR's CI rollup (bucket pass|fail|pending|none); fields (e.g. name,state) adds per-check rows. Needs gh:read."""
+        return await invoke("gh_pr_checks", gh_params(fleet_id, number, repo, fields))
+
+    @server.tool(annotations=change, structured_output=True)
+    async def gh_comment(fleet_id: str, issue: StrictInt, body: str, idempotency_key: str, repo: str = "") -> dict[str, Any]:
+        """Comment on an issue/PR, queued and rate-limit safe. Record only: a live worker does not see it (use worker_message). Needs gh:comment; poll operation_get."""
+        params = {"issue": issue, "body": body}
+        if repo:
+            params["repo"] = repo
+        return await invoke("gh_comment", {"fleet_id": fleet_id, "idempotency_key": idempotency_key, "params": params})
+
     @server.tool(annotations=read, structured_output=True)
     async def operation_get(operation_id: str) -> dict[str, Any]:
         """Reconcile one of your operations with its machine. Unknown means the outcome is unconfirmed."""

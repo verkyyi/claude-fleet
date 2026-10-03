@@ -43,7 +43,8 @@ class Sandbox:
         self.fleet_conf.parent.mkdir(parents=True)
         self.fleet_conf.write_text('FLEET_REPO="example/project"\nFLEET_MAIN="/fixture/project"\nFLEET_MAX_SESSIONS=3\nFLEET_ISSUE_BRIDGE=1\n')
         for filename in ("fleet-control.py", "fleet_control.py", "fleet_hub_common.py", "fleet_config_write.py",
-                         "fleet-lib.sh", "fleet-control-read.sh", "fleet-hub.py", "fleet_hub.py", "fleet_hub_mcp.py"):
+                         "fleet-lib.sh", "fleet-control-read.sh", "fleet-hub.py", "fleet_hub.py", "fleet_hub_mcp.py",
+                         "fleet-gh.sh", "fleet-gh-lib.sh", "fleet-issue-cache.py"):
             shutil.copy2(BIN / filename, self.bin / filename)
         self.tools = self.root / "tools"
         self.tools.mkdir()
@@ -63,6 +64,21 @@ if "list-windows" in sys.argv:
     sys.exit(0)
 sys.exit(9)
 ''')
+        # GitHub shim (issue #1274): every argv logged, so "served from the local
+        # copy" is checkable as ZERO gh calls.
+        self.script(self.tools / "gh", '''#!/bin/bash
+a="$*"; printf '%s\\n' "${a//$'\\n'/ }" >> "$FLEET_CONF_DIR/gh.calls"
+case "$1 $2" in
+  "issue view") printf '{"number":%s,"title":"live title","state":"OPEN"}\\n' "$3" ;;
+  "pr view")    printf '{"number":%s,"headRefName":"issue-7","state":"OPEN"}\\n' "$3" ;;
+  "pr checks")  printf '[{"name":"selftests","state":"SUCCESS","bucket":"pass"}]\\n' ;;
+  "issue comment") echo "https://github.com/example/project/issues/$3#issuecomment-77" ;;
+  *) exit 1 ;;
+esac
+''')
+        self.tmp = self.root / "tmp"
+        self.cache = self.tmp / ".claude-dash/fleets/example-project"
+        self.cache.mkdir(parents=True)
         for filename in ("fleet-diskguard.sh", "fleet-quotaguard.sh", "fleet-codex-account.sh"):
             self.script(self.bin / filename, '''#!/bin/bash
 [ ! -f "$FLEET_CONF_DIR/blocked" ]
@@ -147,7 +163,8 @@ class HubFixture(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)
         self.node = Sandbox(self.root / "node")
-        env = patch.dict(os.environ, PATH=str(self.node.tools) + os.pathsep + os.environ["PATH"])
+        env = patch.dict(os.environ, PATH=str(self.node.tools) + os.pathsep + os.environ["PATH"],
+                         TMPDIR=str(self.node.tmp))
         env.start()
         self.addCleanup(env.stop)
         self.hub = hub_module.Hub(self.root / "hub")
@@ -299,6 +316,77 @@ class HubTests(HubFixture):
         lost = self.lifecycle("worker_message", idem="msg-lost", text="anyone?")
         self.assertEqual((lost["status"], lost["result"]["error"]["code"]), ("unknown", "UNKNOWN_OUTCOME"))
 
+    def gh_grant(self, *scopes):
+        return self.hub.grant("ipad", [self.fleet], ["fleet:read", *scopes])["token"]
+
+    def test_gh_reads_serve_the_local_copy_and_need_gh_read(self):
+        (self.node.cache / "issues").write_text("· no milestone\t#7\t·\tFix the thing\n")
+        (self.node.cache / "prmap").write_text("issue-7\t#9\tOPEN\t✓\tready\t\n")
+        before = len(self.rpc_calls)
+        for tool in ("gh_issue_view", "gh_pr_view", "gh_pr_checks"):
+            with self.subTest(tool=tool), self.assertRaises(Fault) as refused:
+                self.call(tool, {"fleet_id": self.fleet, "number": 7})
+            self.assertEqual(refused.exception.code, "FORBIDDEN")
+        self.assertEqual(len(self.rpc_calls), before)
+        reader = self.gh_grant("gh:read")
+        issue = self.call("gh_issue_view", {"fleet_id": self.fleet, "number": 7}, reader)
+        self.assertEqual((issue["_source"], issue["title"], issue["state"]), ("cache", "Fix the thing", "OPEN"))
+        self.assertIn("_age", issue)
+        pr = self.call("gh_pr_view", {"fleet_id": self.fleet, "number": 9, "repo": "example/project"}, reader)
+        self.assertEqual((pr["_source"], pr["headRefName"]), ("cache", "issue-7"))
+        checks = self.call("gh_pr_checks", {"fleet_id": self.fleet, "number": 9}, reader)
+        self.assertEqual((checks["_source"], checks["bucket"]), ("cache", "pass"))
+        self.assertEqual(self.node.calls("gh"), [], "a fresh local copy must cost zero gh calls")
+        # A field the copy does not hold, or a stale copy → gh, same shape.
+        live = self.call("gh_issue_view", {"fleet_id": self.fleet, "number": 7, "fields": "number,title,body"}, reader)
+        self.assertEqual(live["_source"], "gh")
+        old = time.time() - 3600
+        os.utime(self.node.cache / "issues", (old, old))
+        stale = self.call("gh_issue_view", {"fleet_id": self.fleet, "number": 7}, reader)
+        self.assertEqual((stale["_source"], stale["title"]), ("gh", "live title"))
+        self.assertEqual(len(self.node.calls("gh")), 2)
+        self.assertTrue(all("--repo example/project" in c for c in self.node.calls("gh")))
+        with self.assertRaises(Fault) as other:
+            self.call("gh_issue_view", {"fleet_id": self.fleet, "number": 7, "repo": "someone/else"}, reader)
+        self.assertEqual(other.exception.code, "INVALID_ARGUMENT")
+        before = len(self.rpc_calls)
+        for bad in ({"number": "7;x"}, {"number": 0}, {"number": 7, "fields": "title;rm"},
+                    {"number": 7, "repo": "../x"}, {"number": 7, "extra": 1}):
+            with self.subTest(bad=bad), self.assertRaises(Fault):
+                self.call("gh_issue_view", dict(bad, fleet_id=self.fleet), reader)
+        self.assertEqual(len(self.rpc_calls), before)
+        with self.assertRaises(Fault):
+            self.call("gh_issue_view", {"fleet_id": str(uuid.uuid4()), "number": 7}, reader)
+
+    def test_gh_comment_goes_through_the_write_queue(self):
+        shutil.copy2(BIN / "fleet-comment.sh", self.node.bin / "fleet-comment.sh")
+        request = dict(fleet_id=self.fleet, idempotency_key="ipad-1", params={"issue": 7, "body": "从 iPad 发的评论"})
+        with self.assertRaises(Fault) as refused:
+            self.call("gh_comment", request, self.gh_grant("gh:read"))
+        self.assertEqual(refused.exception.code, "FORBIDDEN")
+        writer = self.gh_grant("gh:comment")
+        started = self.call("gh_comment", request, writer)
+        done = self.node.wait(started["operation_id"])
+        self.assertEqual(done["status"], "succeeded", done)
+        self.assertEqual(done["result"]["channel"], "record")
+        self.assertIn("issuecomment-77", done["result"]["comment_url"])
+        posted = self.node.calls("gh")
+        self.assertEqual(len(posted), 1)
+        self.assertTrue(posted[0].startswith("issue comment 7 --repo example/project --body 从 iPad 发的评论"), posted)
+        self.assertIn("fleet:no-relay", posted[0])
+        self.assertTrue(list((self.node.conf / "global").glob("gh-write.*.last")), "the post skipped the write queue")
+        again = self.call("gh_comment", request, writer)
+        self.assertEqual(again["operation_id"], started["operation_id"])
+        self.assertEqual(len(self.node.calls("gh")), 1)
+        for body in ("", " ", "x" * 4001, "<!-- fleet:from role=worker -->", "a\x1b[Ab", 5):
+            with self.subTest(body=body), self.assertRaises(Fault):
+                self.call("gh_comment", dict(request, idempotency_key="bad", params={"issue": 7, "body": body}), writer)
+        elsewhere = self.call("gh_comment", dict(request, idempotency_key="ipad-2",
+                                                  params={"issue": 7, "body": "x", "repo": "someone/else"}), writer)
+        elsewhere = self.node.wait(elsewhere["operation_id"])
+        self.assertEqual((elsewhere["status"], elsewhere["result"]["error"]["code"]), ("failed", "INVALID_ARGUMENT"))
+        self.assertEqual(len(self.node.calls("gh")), 1)
+
     def test_resume_reuses_history_and_refuses_a_live_worker(self):
         self.node.windows()
         done = self.lifecycle("worker_resume")
@@ -431,6 +519,30 @@ class HubTests(HubFixture):
         self.assertEqual(self.node.wait(named["operation_id"])["status"], "succeeded")
         self.assertEqual((self.node.conf / "spawn.calls").read_text(),
                          "123 demo --agent claude --origin hub --repo example/other\n")
+
+    def test_gh_tools_name_the_repo_in_a_multi_repo_fleet(self):
+        # Keyed by (repo, N), never a bare number: repo B's #7 is not repo A's.
+        (self.node.conf / "fleets/demo/repos").mkdir()
+        (self.node.conf / "fleets/demo/repos/example-other.conf").write_text('FLEET_REPO="example/other"\n')
+        other = self.node.tmp / ".claude-dash/fleets/example-other"
+        other.mkdir(parents=True)
+        (other / "issues").write_text("· no milestone\t#7\t·\tOther repo's seven\n")
+        (self.node.cache / "issues").write_text("· no milestone\t#7\t·\tFirst repo's seven\n")
+        token = self.gh_grant("gh:read", "gh:comment")
+        with self.assertRaises(Fault) as bare:
+            self.call("gh_issue_view", {"fleet_id": self.fleet, "number": 7}, token)
+        self.assertEqual(bare.exception.code, "INVALID_ARGUMENT")
+        for repo, title in (("example/other", "Other repo's seven"), ("project", "First repo's seven")):
+            got = self.call("gh_issue_view", {"fleet_id": self.fleet, "number": 7, "repo": repo}, token)
+            self.assertEqual((got["_source"], got["title"]), ("cache", title))
+        unnamed = self.call("gh_comment", dict(fleet_id=self.fleet, idempotency_key="c", params={"issue": 7, "body": "x"}), token)
+        unnamed = self.node.wait(unnamed["operation_id"])
+        self.assertEqual((unnamed["status"], unnamed["result"]["error"]["code"]), ("failed", "INVALID_ARGUMENT"))
+        named = self.call("gh_comment", dict(fleet_id=self.fleet, idempotency_key="d",
+                                             params={"issue": 7, "body": "x", "repo": "example/other"}), token)
+        self.assertEqual(self.node.wait(named["operation_id"])["status"], "succeeded")
+        self.assertEqual(self.node.calls("comment"), ["7 --repo example/other --note --from hub --body-file -"])
+        self.assertEqual(self.node.calls("gh"), [])
 
     def test_multi_repo_worker_keys_carry_the_repo(self):
         # issue #1018: two hosted repos can both have an issue-123, so a multi-repo
@@ -688,8 +800,18 @@ class MCPTests(HubFixture):
                 async with ClientSession(reader, writer) as session:
                     await session.initialize()
                     names = {tool.name for tool in (await session.list_tools()).tools}
+                    tools = (await session.list_tools()).tools
                     self.assertEqual(names, {"fleet_list", "fleet_status", "config_get", "config_set", "worker_start",
-                                             "worker_message", "worker_stop", "worker_resume", "operation_get"})
+                                             "worker_message", "worker_stop", "worker_resume", "operation_get",
+                                             "gh_issue_view", "gh_pr_view", "gh_pr_checks", "gh_comment"})
+                    # Every session pays for tool descriptions in context (#1274).
+                    gh_size = sum(len(canonical(t.model_dump(include={"name", "description", "inputSchema"})).encode())
+                                  for t in tools if t.name.startswith("gh_"))
+                    self.assertLessEqual(gh_size, 1536 * 2, gh_size)
+                    self.assertLessEqual(sum(len((t.description or "").encode()) for t in tools if t.name.startswith("gh_")), 1536)
+                    ungranted = await session.call_tool("gh_issue_view", {"fleet_id": self.fleet, "number": 7})
+                    self.assertTrue(ungranted.is_error)
+                    self.assertIn("FORBIDDEN", canonical(ungranted.model_dump()))
                     response = await session.call_tool("fleet_list", {"refresh": True})
                     self.assertFalse(response.is_error)
                     self.assertIn(self.fleet, canonical(response.model_dump()))
