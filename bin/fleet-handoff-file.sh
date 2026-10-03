@@ -6,6 +6,8 @@
 #   fleet-handoff-file.sh path [--slug S] [opts]   # the file C2 case 3 writes
 #   fleet-handoff-file.sh repo [opts]              # the doc's `Repo:` line value
 #   fleet-handoff-file.sh find [opts]              # the file §P step 3 resumes
+#   fleet-handoff-file.sh check <doc|-> [--issue N] [--issue-body F] [--repo R]
+#                                                  # is the doc short enough to hand on?
 #
 #   opts: --session S   the fleet (default: this pane's)
 #         --repo R      the pane's repo (default: fleet_window_repo of $TMUX_PANE)
@@ -37,7 +39,21 @@
 # case, and "nothing of mine, only others'/unknowns", never guesses: exit 4 with
 # the candidates listed, for the skill to ASK.
 #
-# EXIT: 0 path printed · 1 no handoff file at all · 2 usage / no fleet ·
+# CHECK (issue #1322). Every line of a handoff is context the pickup session
+# spends before doing anything, so a doc that keeps growing — or that pastes the
+# issue body the pickup can read for itself — hands on a smaller window. `check`
+# reads the composed doc (a file, or `-` = stdin for a comment-mode doc) BEFORE it
+# is stored and prints one `HANDOFF-CHECK:` line per finding:
+#   - more than FLEET_HANDOFF_MAX_LINES lines (default 200; 0 = no line cap);
+#   - FLEET_HANDOFF_COPY_LINES (default 5; 0 = off) or more substantive lines
+#     copied from the bound issue's body (--issue N, else this pane's @issue; read
+#     through fleet-gh.sh — or --issue-body F, a file holding the body).
+#     Lines are compared after stripping list/quote/heading markers and spacing;
+#     short lines (< 16 bytes), fences and table rules never count.
+# It is advice, never a gate: the caller trims and rewrites, then stores either way.
+#
+# EXIT: 0 path printed / check clean · 1 no handoff file at all · 2 usage / no
+#       fleet · 3 check found something (lines printed) ·
 #       4 AMBIGUOUS — stdout is `<path>\t<repo|?>\t<mtime>` per candidate.
 set -uo pipefail
 
@@ -48,18 +64,86 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 die() { printf 'fleet-handoff-file: %s\n' "$1" >&2; exit "${2:-2}"; }
 
 cmd="${1:-}"; [ $# -gt 0 ] && shift
-SESS='' REPO='' REPO_SET=0 SLUG=''
+SESS='' REPO='' REPO_SET=0 SLUG='' ISSUE='' ISSUE_BODY='' DOCARG=''
 while [ $# -gt 0 ]; do
   case "$1" in
+    --issue)      ISSUE=$(printf '%s' "${2:-}" | tr -dc 0-9); shift 2 ;;
+    --issue-body) ISSUE_BODY="${2:-}"; shift 2 ;;
     --session) SESS="${2:-}"; shift 2 ;;
     --repo)    REPO=$(fleet_norm_repo "${2:-}"); REPO_SET=1; shift 2 ;;
     --norepo)  REPO=''; REPO_SET=1; shift ;;
     --slug)    SLUG="${2:-}"; shift 2 ;;
-    -h|--help) sed -n '2,44p' "$0"; exit 0 ;;
-    *) die "unknown argument: $1" ;;
+    -h|--help) sed -n '2,60p' "$0"; exit 0 ;;
+    -) [ "$cmd" = check ] && [ -z "$DOCARG" ] || die "unexpected argument: -"; DOCARG=-; shift ;;
+    -*) die "unknown argument: $1" ;;
+    *) [ "$cmd" = check ] && [ -z "$DOCARG" ] || die "unknown argument: $1"; DOCARG=$1; shift ;;
   esac
 done
-case "$cmd" in path|repo|find) ;; *) die "usage: fleet-handoff-file.sh path|repo|find [opts]" ;; esac
+case "$cmd" in path|repo|find|check) ;; *) die "usage: fleet-handoff-file.sh path|repo|find|check [opts]" ;; esac
+
+# ---- check ------------------------------------------------------------------
+# Needs no fleet: it judges a doc, and the issue body comes from a flag or the pane.
+if [ "$cmd" = check ]; then
+  [ -n "$DOCARG" ] || die "usage: fleet-handoff-file.sh check <doc|-> [--issue N] [--issue-body F]"
+  T=$(mktemp -d "${TMPDIR:-/tmp}/fhf-check.XXXXXX") || die "mktemp failed"
+  trap 'rm -rf "$T"' EXIT
+  if [ "$DOCARG" = - ]; then
+    cat > "$T/doc"; doc="$T/doc"; label='the handoff'
+  else
+    [ -r "$DOCARG" ] || die "cannot read $DOCARG"
+    doc="$DOCARG"; label="$DOCARG"
+  fi
+  max="${FLEET_HANDOFF_MAX_LINES:-200}"; case "$max" in ''|*[!0-9]*) max=200 ;; esac
+  cmax="${FLEET_HANDOFF_COPY_LINES:-5}"; case "$cmax" in ''|*[!0-9]*) cmax=5 ;; esac
+  found=0
+  n=$(awk 'END { print NR }' "$doc")
+  if [ "$max" -gt 0 ] && [ "$n" -gt "$max" ]; then
+    printf 'HANDOFF-CHECK: %s is %s lines (> FLEET_HANDOFF_MAX_LINES=%s) — the pickup session reads every line before it works; trim to the NEXT ACTION, live state and dead-ends, then rewrite it\n' "$label" "$n" "$max"
+    found=1
+  fi
+  # The issue body to compare against: a file, else the issue (flag, then @issue).
+  body=''
+  if [ "$cmax" -gt 0 ]; then
+    if [ -n "$ISSUE_BODY" ]; then
+      [ -r "$ISSUE_BODY" ] && body=$ISSUE_BODY
+    else
+      [ -z "$ISSUE" ] && [ -n "${TMUX_PANE:-}" ] \
+        && ISSUE=$(tmux display-message -p -t "$TMUX_PANE" '#{@issue}' 2>/dev/null | tr -dc 0-9)
+      if [ -n "$ISSUE" ]; then
+        set -- issue view "$ISSUE" --json body
+        [ -n "$REPO" ] && set -- "$@" --repo "$REPO"
+        if "$BIN/fleet-gh.sh" "$@" 2>/dev/null \
+             | python3 -c 'import json,sys; sys.stdout.write(json.load(sys.stdin).get("body") or "")' > "$T/body" 2>/dev/null; then
+          body="$T/body"
+        else
+          echo "fleet-handoff-file: could not read issue #$ISSUE's body — copy check skipped" >&2
+        fi
+      fi
+    fi
+  fi
+  if [ -n "$body" ]; then
+    copied=$(awk -v MIN=16 '
+      function norm(s) {
+        gsub(/\r/, "", s); sub(/^[ \t]+/, "", s)
+        while (s ~ /^([-*+>#]+|[0-9]+[.)]|\[[ xX]\])[ \t]+/) sub(/^([-*+>#]+|[0-9]+[.)]|\[[ xX]\])[ \t]+/, "", s)
+        gsub(/[ \t]+/, " ", s); sub(/ $/, "", s)
+        if (s ~ /^(```|~~~|<!--)/ || s ~ /^\|? *:?-+:? *(\||$)/ || length(s) < MIN) return ""
+        return s
+      }
+      NR == FNR { k = norm($0); if (k != "") seen[k] = 1; next }
+      { k = norm($0); if (k != "" && (k in seen)) { c++; if (c <= 3) at = at (at == "" ? "" : ",") FNR } }
+      END { if (c) print c, at }' "$body" "$doc")
+    c=${copied%% *}
+    if [ -n "$copied" ] && [ "$c" -ge "$cmax" ]; then
+      src='the issue'; [ -n "$ISSUE" ] && src="issue #$ISSUE"
+      printf 'HANDOFF-CHECK: %s copies %s lines of %s'"'"'s body (at lines %s…) — the pickup session can read the issue itself; replace the copy with a pointer to it\n' \
+        "$label" "$c" "$src" "${copied#* }"
+      found=1
+    fi
+  fi
+  [ "$found" = 0 ] && exit 0
+  exit 3
+fi
 
 [ -n "$SESS" ] || SESS=$(fleet_current_session)
 [ -n "$SESS" ] || die "not inside a fleet (pass --session)"

@@ -1296,6 +1296,15 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Handoff destination (comment|file) @group=handoff @tier=advanced @scope=fleet @edit=enum
 #FLEET_HANDOFF_DEST=comment
 
+# Handoff length line (issue #1322). Every line of a handoff doc is context the
+# pickup session spends before it works, so /fleet-handoff runs
+# `bin/fleet-handoff-file.sh check` on the composed doc before storing it: over
+# this many lines — or pasting FLEET_HANDOFF_COPY_LINES (5) lines of the issue
+# body the pickup can read for itself — prints a HANDOFF-CHECK hint so the session
+# trims and rewrites. Advice only, never a gate. 0 = no line cap.
+# @label=Handoff max lines @group=handoff @tier=internal @scope=fleet @edit=int
+#FLEET_HANDOFF_MAX_LINES=200
+
 # Auto-handoff threshold (issue #330). When a worker/scratch session's context
 # window crosses this %, its Stop hook (bin/set-claude-state.sh) nudges the model
 # to run the /fleet-handoff cycle automatically (store a durable handoff → /clear

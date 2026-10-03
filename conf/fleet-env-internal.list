@@ -81,6 +81,7 @@ FLEET_FILES_PROBE_CMD              seam: a fake open-file-table reading for flee
 FLEET_FOLD_POLL                    knob: internal pacing/limit, safe in-code default (fleet-repo.sh)
 FLEET_FOLD_WAIT                    knob: internal pacing/limit, safe in-code default (fleet-repo.sh)
 FLEET_FSEVENTSD_WARN_CPU           knob: internal pacing/limit, safe in-code default (fleet-diskguard.sh)
+FLEET_HANDOFF_COPY_LINES           knob: issue-body lines a handoff may copy before `check` hints (fleet-handoff-file.sh, 5; 0 = off)
 FLEET_HANDOFF_DIR                  path: state/log location override (fleet-handoff-file.sh)
 FLEET_HANDOFF_HARD_TIMEOUT         knob: internal pacing/limit, safe in-code default (fleet-handoff-cycle.sh)
 FLEET_HANDOFF_LOG_DIR              path: state/log location override (fleet-handoff-cycle.sh)
