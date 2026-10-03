@@ -252,10 +252,22 @@ if [ "$sem" = "done" ]; then
   [ -n "$_bin" ] && [ -r "$_bin/fleet-lang.sh" ] && . "$_bin/fleet-lang.sh"
   _kv=''
   [ -n "$_bin" ] && [ -f "$_bin/fleet-hook-conf.sh" ] \
-    && _kv=$(bash "$_bin/fleet-hook-conf.sh" FLEET_AUTO_HANDOFF_PCT FLEET_HANDOFF_DEFER_SECS 2>/dev/null)
+    && _kv=$(bash "$_bin/fleet-hook-conf.sh" FLEET_AUTO_HANDOFF_PCT FLEET_HANDOFF_DEFER_SECS FLEET_COMPACT_PREP_PCT 2>/dev/null)
   _hp=$(printf '%s\n' "$_kv" | sed -n 1p)
   _ds=$(printf '%s\n' "$_kv" | sed -n 2p)             # typing-deferral window (issue #571)
+  _cp=$(printf '%s\n' "$_kv" | sed -n 3p)             # compact-prep threshold (issue #1269)
   case "$_hp" in ''|*[!0-9]*) _hp=0 ;; esac          # unset / non-numeric → off
+  # Unset ⇒ the 70 default, but only when the conf path is intact: a missing lib
+  # resolves nothing, and that must stay fail-open OFF like the handoff knob.
+  case "$_cp" in
+    '') if [ -n "$_bin" ] && [ -f "$_bin/fleet-lib.sh" ] && [ -f "$_bin/fleet-hook-conf.sh" ]; then _cp=70; else _cp=0; fi ;;
+    *[!0-9]*) _cp=0 ;;
+  esac
+  _hp_conf=$_hp                                      # the configured line, before any suppression below
+  _sha=0                                             # this Stop continues a prior Stop-hook block
+  case "$_stop_payload" in
+    *'"stop_hook_active":true'*|*'"stop_hook_active": true'*) _sha=1 ;;
+  esac
   _agent=$(tmux display-message -p -t "$TMUX_PANE" '#{@cc_agent}' 2>/dev/null)
   case "$_ds" in ''|*[!0-9]*) _ds=30 ;; esac         # unset / non-numeric → the 30s default
   # Explicit cross-agent handoff: only this Stop may release the detached waiter.
@@ -266,7 +278,7 @@ if [ "$sem" = "done" ]; then
   if [ "$_transfer_until" -gt "$(date +%s)" ]; then
     _transfer_request=$(tmux display-message -p -t "$TMUX_PANE" '#{@agent_transfer_request}' 2>/dev/null)
     if [ -n "$_transfer_request" ]; then
-      _hp=0
+      _hp=0; _cp=0
       [ "$handoff_prev" = needs ] || tmux set-window-option -t "$TMUX_PANE" @agent_transfer_ready "$_transfer_request" 2>/dev/null
     fi
   fi
@@ -274,11 +286,7 @@ if [ "$sem" = "done" ]; then
   # ALREADY continuing because of a prior Stop-hook block — never re-block that
   # continuation (Claude Code's built-in anti-loop signal, belt-and-suspenders with
   # the @handoff_armed latch below). Read stdin only when armed and not a tty.
-  if [ "$_hp" -gt 0 ] && [ ! -t 0 ]; then
-    case "$_stop_payload" in
-      *'"stop_hook_active":true'*|*'"stop_hook_active": true'*) _hp=0 ;;
-    esac
-  fi
+  [ "$_sha" = 1 ] && _hp=0
   if [ "$_hp" -gt 0 ]; then
     # Debounce latch: arming the handoff does NOT drop the context (only the
     # post-turn /clear does), so the very next Stop would re-nudge → loop. Set
@@ -346,6 +354,73 @@ PYCODEX
         else
         printf '{"decision":"block","reason":"Context is at %s%% (>= %s%% auto-handoff threshold). Run /fleet-handoff now (cycle mode, no arguments): store a durable handoff, then this pane auto-clears and resumes clean. Do this instead of continuing — a structured handoff preserves task state better than near-limit auto-compaction.%s"}\n' "$_ctx" "$_hp" "${FLEET_LANG_RULE_RESUME:+ $FLEET_LANG_RULE_RESUME}"
         fi
+      fi
+    fi
+  fi
+
+  # ── Compact in place before handing off (issue #1269, EPIC #1262 R1) ────────
+  # A handoff makes the fresh session re-read the code and re-learn the task —
+  # often dearer than the work left. So in the band [FLEET_COMPACT_PREP_PCT,
+  # handoff %) a WORKER compacts in place first, in three steps on @compact_stage:
+  #   ''|restored → prep   block this Stop: write a recovery map, end the turn
+  #   prep → compacting    next clean Stop: bin/fleet-compact-send.sh (detached)
+  #                        types `/compact <keep the map>` once the pane is idle
+  #   compacting → restored  SessionStart(compact): bin/refocus-hook.sh re-states
+  #                        the charter + asks for a check against the map
+  # Still at/over the handoff % ⇒ none of this; the auto-handoff above owns it.
+  # Re-armed (@compact_rearm=1) only once a Stop sees the context back below the
+  # prep line, ≥ 600 s between compactions, 60 s dedup on each step, and the
+  # operator-typing hold (#571) gates the keystrokes. Claude workers only: a codex
+  # pane, scratch, hub, panels, a needs stop and a pending transfer are untouched.
+  # Unset knob ⇒ 70; 0 = off.
+  if [ "$_cp" -gt 0 ] && [ "$_agent" != codex ] && [ "$handoff_prev" != needs ]; then
+    _cissue=$(tmux display-message -p -t "$TMUX_PANE" '#{@issue}' 2>/dev/null | tr -cd '0-9')
+    if [ -n "$_cissue" ]; then
+      _cctx=$(tmux display-message -p -t "$TMUX_PANE" '#{@ctx_pct}' 2>/dev/null)
+      case "$_cctx" in ''|*[!0-9]*) _cctx=-1 ;; esac
+      _cst=$(tmux display-message -p -t "$TMUX_PANE" '#{@compact_stage}|#{@compact_rearm}|#{@compact_ts}|#{@compact_prep_ts}|#{@compact_send_ts}' 2>/dev/null)
+      _cstage=$(printf '%s' "$_cst" | cut -d'|' -f1)
+      _crearm=$(printf '%s' "$_cst" | cut -d'|' -f2)
+      _cts=$(printf '%s' "$_cst" | cut -d'|' -f3)
+      _cpts=$(printf '%s' "$_cst" | cut -d'|' -f4)
+      _csts=$(printf '%s' "$_cst" | cut -d'|' -f5)
+      case "$_cts" in ''|*[!0-9]*) _cts=0 ;; esac
+      case "$_cpts" in ''|*[!0-9]*) _cpts=0 ;; esac
+      case "$_csts" in ''|*[!0-9]*) _csts=0 ;; esac
+      _cnow=$(date +%s 2>/dev/null || echo 0)
+      if [ "$_cctx" -lt "$_cp" ]; then
+        # Back below the line (a compaction worked, a /clear, an unstamped fresh
+        # session): re-arm, and drop a step that can no longer complete.
+        [ "$_crearm" = 0 ] && tmux set-window-option -t "$TMUX_PANE" @compact_rearm 1 2>/dev/null
+        case "$_cstage" in prep|compacting) tmux set-window-option -u -t "$TMUX_PANE" @compact_stage 2>/dev/null ;; esac
+      elif [ "$_hp_conf" -eq 0 ] || [ "$_cctx" -lt "$_hp_conf" ]; then
+        _cwd=$(pwd -P 2>/dev/null)
+        _cgit=$(git -C "$_cwd" rev-parse --absolute-git-dir 2>/dev/null)
+        _cmap=''
+        [ -n "$_cgit" ] && _cmap="$_cgit/fleet-recovery-map.md"
+        case "$_cmap" in *'"'*|*'\'*) _cmap='' ;; esac   # it is printed into JSON below
+        case "$_cstage" in
+          prep)
+            # The map turn has ended: compact once the pane is idle. 60 s dedup —
+            # a sender that gave up (operator typing) is re-tried by a later Stop.
+            if [ $(( _cnow - _csts )) -ge 60 ]; then
+              tmux set-window-option -t "$TMUX_PANE" @compact_send_ts "$_cnow" 2>/dev/null
+              FLEET_HANDOFF_DEFER_SECS="$_ds" sh "$_bin/fleet-compact-send.sh" "$TMUX_PANE" "$_cmap" \
+                </dev/null >/dev/null 2>&1 &
+            fi ;;
+          compacting) : ;;   # /compact typed; SessionStart(compact) completes it
+          *)
+            if [ "$_crearm" != 0 ] && [ "$_sha" = 0 ] \
+               && [ $(( _cnow - _cts )) -ge 600 ] && [ $(( _cnow - _cpts )) -ge 60 ]; then
+              tmux set-window-option -t "$TMUX_PANE" @compact_stage prep 2>/dev/null
+              tmux set-window-option -t "$TMUX_PANE" @compact_prep_ts "$_cnow" 2>/dev/null
+              tmux set-window-option -t "$TMUX_PANE" @compact_rearm 0 2>/dev/null
+              _cwhere="to $_cmap (overwrite it)"
+              [ -n "$_cmap" ] || _cwhere="as your reply"
+              printf '{"decision":"block","reason":"Context is at %s%% (>= %s%% compact-prep threshold). The fleet will compact this session IN PLACE instead of handing it off. First write a RECOVERY MAP %s: issue #%s, branch, PR (number + state, or none), what is done, what is in progress, the exact next step(s), and any background job still running — under 40 lines. Then end this turn; do not start new work. Once the pane is idle the fleet runs /compact keeping that map, and afterwards asks you to check it against git and the PR.%s"}\n' \
+                "$_cctx" "$_cp" "$_cwhere" "$_cissue" "${FLEET_LANG_RULE_RESUME:+ $FLEET_LANG_RULE_RESUME}"
+            fi ;;
+        esac
       fi
     fi
   fi

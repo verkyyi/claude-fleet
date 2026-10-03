@@ -119,6 +119,10 @@ write_confs() {
     if [ -n "${GPCT:-}" ]; then printf 'FLEET_AUTO_HANDOFF_PCT=%s\n' "$GPCT"
     else                        printf '#FLEET_AUTO_HANDOFF_PCT=0        # context %% that triggers an auto-handoff; 0 = OFF\n'; fi
     [ -n "${GDEFER:-}" ] && printf 'FLEET_HANDOFF_DEFER_SECS=%s\n' "$GDEFER"
+    # In-place compaction (issue #1269) shares this Stop and defaults ON at 70%;
+    # these legs are about the handoff alone, so it is off here —
+    # bin/compact-prep-selftest.sh owns that path.
+    printf 'FLEET_COMPACT_PREP_PCT=0\n'
   } > "$GCONF"
   {
     printf 'FLEET_REPO="fake/repo"\nFLEET_MAIN="%s/repo"\n' "$WORK"
@@ -338,7 +342,8 @@ out="$(env -i PATH="$HOOK_PATH" HOME="$WORK/nohome" TMPDIR="$WORK/tmp" \
       FAKE_PREV='done' FAKE_ISSUE=561 FAKE_CTX=95 \
     sh "$WORK/inst/bin/set-claude-state.sh" 'done' < /dev/null 2>&1)"; rc=$?
 [ "$rc" = 0 ] || fail "with no conf anywhere the hook must still exit 0 (never block a turn), rc=$rc: '$out'"
-nudged "$out" && fail "with no conf anywhere the nudge must stay OFF, got: '$out'"
+# (Only the HANDOFF nudge: with no conf, compaction runs at its built-in 70%.)
+case "$out" in *auto-handoff*) fail "with no conf anywhere the nudge must stay OFF, got: '$out'" ;; esac
 grep -q '@claude_state done' "$SETOPT_LOG" || fail "with no conf the hook must still stamp @claude_state done"
 
 # ---- BROKEN INSTALL (fleet-lib.sh missing beside the hook) → fail-open, rc 0 -----

@@ -44,6 +44,8 @@ FLEET_CODEX_ACCOUNT                handoff: the codex account a launch was assig
 FLEET_CODEX_MANAGED                handoff: marks a codex launch as fleet-managed
 FLEET_CODEX_PROFILE                handoff: an explicit codex profile for this launch
 FLEET_COLLECT_QUOTAWATCH           knob: auto|never — whether the collector runs the quotawatch phase inline
+FLEET_COMPACT_SEND_GRACE           knob: seconds fleet-compact-send.sh waits for the Stop hook to return before its idle check (2)
+FLEET_COMPACT_SEND_TIMEOUT         knob: how long fleet-compact-send.sh holds for an idle, untyped-at pane before giving up (90)
 FLEET_CONFIG_SHOW_INTERNAL         knob: fcfg_table lists @tier=internal rows too (#1101) — a per-call switch, not a conf setting
 FLEET_CONTEXT_LIMIT                alias: retired twin of FLEET_CTX_WINDOW (#1101) — still read, wins when set
 FLEET_DAEMON_IDLE_PROBE_BUDGET     knob: internal pacing/limit, safe in-code default (fleet-daemon-lib.sh)

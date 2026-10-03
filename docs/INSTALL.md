@@ -213,7 +213,12 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    `[fleet charter] #<N>` (issue, repo, branch, PR, one-issue-one-PR, how to
    land), so a long auto-compacted worker doesn't drift out of scope. Zero gh
    calls; silent for the hub, scratch, headless children and any other source.
-   `FLEET_REFOCUS=0` turns it off.
+   `FLEET_REFOCUS=0` turns it off. When the fleet itself ran that `/compact`
+   (issue #1269 — a worker in `[FLEET_COMPACT_PREP_PCT` (default 70)`,
+   FLEET_AUTO_HANDOFF_PCT)` is asked at a clean Stop for a recovery map, then
+   compacted in place at the next idle Stop instead of handed off), the same hook
+   adds a "check the map against git and the PR" line and stamps
+   `@compact_stage=restored`. `FLEET_COMPACT_PREP_PCT=0` turns that off.
 
    The `SessionEnd` array fires `session-end-hook.sh` (issue #403) — the
    event-driven twin of the ledger-watch daemon. Its `matcher`
