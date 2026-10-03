@@ -319,16 +319,20 @@ if [ "$sem" = "done" ]; then
   # once it reaches FLEET_COMPACT_MAX (unset ⇒ 2; 0 = no cap) a worker at the
   # compact-prep line is handed off instead: the handoff below fires with the prep
   # % as its line, through the same latch and typing hold, and the compaction
-  # section skips. At/over the handoff % the plain handoff keeps its own line. Same scope as compaction — a Claude worker; codex is untouched.
+  # section skips. At/over the handoff % the plain handoff keeps its own line. Same
+  # scope as compaction — a Claude worker (@issue) or scratch (@raw=1, issue #1318);
+  # codex is untouched.
   _cmaxed=''
   if [ "$_cm" -gt 0 ] && [ "$_cp" -gt 0 ] && [ "$_sha" = 0 ] && [ "$_agent" != codex ] \
      && [ "$handoff_prev" != needs ] && { [ "$_hp" -eq 0 ] || [ "$_cp" -lt "$_hp" ]; }; then
-    _ccv=$(tmux display-message -p -t "$TMUX_PANE" '#{@compact_count}|#{@issue}|#{@ctx_pct}' 2>/dev/null)
+    _ccv=$(tmux display-message -p -t "$TMUX_PANE" '#{@compact_count}|#{@issue}|#{@raw}|#{@ctx_pct}' 2>/dev/null)
     _ccn=${_ccv%%|*}; _ccv=${_ccv#*|}
     case "$_ccn" in ''|*[!0-9]*) _ccn=0 ;; esac
+    _cci=${_ccv%%|*}; _ccv=${_ccv#*|}
+    [ "${_ccv%%|*}" = 1 ] && _cci=${_cci:-raw}
     _ccx=${_ccv#*|}
     case "$_ccx" in ''|*[!0-9]*) _ccx=-1 ;; esac
-    if [ "$_ccn" -ge "$_cm" ] && [ -n "${_ccv%%|*}" ] && [ "$_ccx" -ge "$_cp" ] \
+    if [ "$_ccn" -ge "$_cm" ] && [ -n "$_cci" ] && [ "$_ccx" -ge "$_cp" ] \
        && { [ "$_hp" -eq 0 ] || [ "$_ccx" -lt "$_hp" ]; }; then
       _cmaxed=$_ccn; _hp=$_cp
     fi
@@ -423,12 +427,16 @@ PYCODEX
   # Still at/over the handoff % ⇒ none of this; the auto-handoff above owns it.
   # Re-armed (@compact_rearm=1) only once a Stop sees the context back below the
   # prep line, ≥ 600 s between compactions, 60 s dedup on each step, and the
-  # operator-typing hold (#571) gates the keystrokes. Claude workers only: a codex
-  # pane, scratch, hub, panels, a needs stop and a pending transfer are untouched.
+  # operator-typing hold (#571) gates the keystrokes. Claude workers AND scratch
+  # (@raw=1, issue #1318 — the long-lived window that drives a whole EPIC, where a
+  # handoff's re-grounding costs most); a codex pane, hub, panels, a needs stop and
+  # a pending transfer are untouched.
   # Unset knob ⇒ 70; 0 = off. Past the compaction cap (#1316) the handoff owns it.
   if [ "$_cp" -gt 0 ] && [ -z "$_cmaxed" ] && [ "$_agent" != codex ] && [ "$handoff_prev" != needs ]; then
-    _cissue=$(tmux display-message -p -t "$TMUX_PANE" '#{@issue}' 2>/dev/null | tr -cd '0-9')
-    if [ -n "$_cissue" ]; then
+    _cissue=$(tmux display-message -p -t "$TMUX_PANE" '#{@issue}|#{@raw}' 2>/dev/null)
+    _craw=${_cissue#*|}; _cissue=$(printf '%s' "${_cissue%%|*}" | tr -cd '0-9')
+    [ -z "$_cissue" ] && [ "$_craw" = 1 ] || _craw=''
+    if [ -n "$_cissue" ] || [ -n "$_craw" ]; then
       _cctx=$(tmux display-message -p -t "$TMUX_PANE" '#{@ctx_pct}' 2>/dev/null)
       case "$_cctx" in ''|*[!0-9]*) _cctx=-1 ;; esac
       _cst=$(tmux display-message -p -t "$TMUX_PANE" '#{@compact_stage}|#{@compact_rearm}|#{@compact_ts}|#{@compact_prep_ts}|#{@compact_send_ts}' 2>/dev/null)
@@ -447,10 +455,11 @@ PYCODEX
         [ "$_crearm" = 0 ] && tmux set-window-option -t "$TMUX_PANE" @compact_rearm 1 2>/dev/null
         case "$_cstage" in prep|compacting) tmux set-window-option -u -t "$TMUX_PANE" @compact_stage 2>/dev/null ;; esac
       elif [ "$_hp_conf" -eq 0 ] || [ "$_cctx" -lt "$_hp_conf" ]; then
-        _cwd=$(pwd -P 2>/dev/null)
-        _cgit=$(git -C "$_cwd" rev-parse --absolute-git-dir 2>/dev/null)
-        _cmap=''
-        [ -n "$_cgit" ] && _cmap="$_cgit/fleet-recovery-map.md"
+        # Where the map goes: fleet_recovery_map_path (fleet-lib.sh, issue #1318) —
+        # the worktree's git dir, else (a scratch with none) the fleet's conf dir.
+        # Only this in-band path pays the bash hop.
+        _cmap=$(bash -c '. "$1/fleet-lib.sh" >/dev/null 2>&1 && fleet_recovery_map_path "$2"' \
+          recovery-map "$_bin" "$TMUX_PANE" 2>/dev/null)
         case "$_cmap" in *'"'*|*'\'*) _cmap='' ;; esac   # it is printed into JSON below
         case "$_cstage" in
           prep)
@@ -472,8 +481,12 @@ PYCODEX
                 --ctx "$_cctx" --reason ">= $_cp%" </dev/null >/dev/null 2>&1
               _cwhere="to $_cmap (overwrite it)"
               [ -n "$_cmap" ] || _cwhere="as your reply"
-              printf '{"decision":"block","reason":"Context is at %s%% (>= %s%% compact-prep threshold). The fleet will compact this session IN PLACE instead of handing it off. First write a RECOVERY MAP %s: issue #%s, branch, PR (number + state, or none), what is done, what is in progress, the exact next step(s), and any background job still running — under 40 lines. Then end this turn; do not start new work. Once the pane is idle the fleet runs /compact keeping that map, and afterwards asks you to check it against git and the PR.%s"}\n' \
-                "$_cctx" "$_cp" "$_cwhere" "$_cissue" "${FLEET_LANG_RULE_RESUME:+ $FLEET_LANG_RULE_RESUME}"
+              [ -n "$_cmap" ] && mkdir -p "$(dirname "$_cmap")" 2>/dev/null
+              _cwhat="issue #$_cissue, branch"
+              # A scratch has no issue: the map carries what it is driving instead.
+              [ -n "$_cissue" ] || _cwhat="scratch session — the goal you are driving (EPIC / issues / PRs it covers), cwd + branch if any"
+              printf '{"decision":"block","reason":"Context is at %s%% (>= %s%% compact-prep threshold). The fleet will compact this session IN PLACE instead of handing it off. First write a RECOVERY MAP %s: %s, PR (number + state, or none), what is done, what is in progress, the exact next step(s), and any background job still running — under 40 lines. Then end this turn; do not start new work. Once the pane is idle the fleet runs /compact keeping that map, and afterwards asks you to check it against git and the PR.%s"}\n' \
+                "$_cctx" "$_cp" "$_cwhere" "$_cwhat" "${FLEET_LANG_RULE_RESUME:+ $FLEET_LANG_RULE_RESUME}"
             fi ;;
         esac
       fi

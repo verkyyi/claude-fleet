@@ -23,8 +23,9 @@
 # the dash's on-disk caches (prmap for the PR, issues for the title).
 #
 # WHO GETS IT. Only a WORKER (fleet_seat, with the same issue-<N> worktree
-# fallback fleet-claim-brief.sh uses). The hub and a scratch session have no
-# @issue ⇒ zero output, as does a pane outside tmux, a headless `claude -p` child
+# fallback fleet-claim-brief.sh uses) gets the charter. A scratch session (@raw=1)
+# gets its recovery map back instead, and only after a FLEET compaction (#1318).
+# The hub has neither ⇒ zero output, as does a pane outside tmux, a headless `claude -p` child
 # (CLAUDE_CODE_ENTRYPOINT ≠ cli, same discriminator as set-claude-state.sh), and
 # a multi-repo window whose repo is unknown (skipped, never guessed — CLAUDE.md).
 # Belt and braces on the source: the settings matcher already restricts it to
@@ -77,9 +78,49 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh" 2>/dev/null || exit 0
 
-issue=$(tmux display-message -p -t "$TMUX_PANE" '#{@issue}' 2>/dev/null)
+issue=$(tmux display-message -p -t "$TMUX_PANE" '#{@issue}|#{@raw}' 2>/dev/null)
+raw="${issue#*|}"
+issue="${issue%%|*}"
 issue="${issue//[^0-9]/}"
-[ -n "$issue" ] || exit 0                       # hub / scratch / unbound ⇒ silent
+
+# A SCRATCH window (@raw=1, no @issue — issue #1318) has no charter to re-state: it
+# was never spawned for one issue. What it does have, after a fleet compaction, is
+# the recovery map it wrote at the prep step (fleet_recovery_map_path: its worktree's
+# git dir, else the fleet's conf dir) — so restate THAT, inline (the summary may have
+# dropped it), with the same "check first" line. An auto compaction (not ours) and a
+# missing map stay silent, as scratch always was. Same ≤ 1.5 KB contract.
+if [ -z "$issue" ] && [ "$raw" = 1 ]; then
+  [ -n "$compact_check" ] || exit 0
+  sess=$(fleet_current_session)
+  [ -n "$sess" ] && fleet_load_conf "$sess" 2>/dev/null
+  [ "${FLEET_REFOCUS:-1}" = 0 ] && exit 0
+  map=$(fleet_recovery_map_path "$TMUX_PANE" "$(pwd -P 2>/dev/null)")
+  [ -n "$map" ] && [ -f "$map" ] || exit 0
+  REFOCUS_MAP="$map" python3 - <<'PY' 2>/dev/null
+import json, os
+path = os.environ["REFOCUS_MAP"]
+try:
+    body = open(path, encoding="utf-8", errors="replace").read().strip()
+except OSError:
+    raise SystemExit(0)
+head = "\n".join([
+    "[fleet recovery map] scratch",
+    "The fleet compacted you in place to avoid a handoff. CHECK FIRST: compare this "
+    "recovery map (%s) with `git status`, `git log -3` and any PR it names; fix any "
+    "drift, then resume its next step." % path,
+    "--- map ---",
+])
+ctx = head + "\n" + body
+b = ctx.encode("utf-8")
+if len(b) > 1536:                     # the contract: ≤ 1.5 KB — the file holds the rest
+    ctx = b[:1533].decode("utf-8", "ignore") + "…"
+print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart",
+                                         "additionalContext": ctx}},
+                 ensure_ascii=False))
+PY
+  exit 0
+fi
+[ -n "$issue" ] || exit 0                       # hub / unbound ⇒ silent
 cwd=$(pwd -P 2>/dev/null)
 seat=$(fleet_seat)
 if [ "$seat" != worker ]; then
@@ -124,8 +165,8 @@ esac
 
 map=''
 if [ -n "$compact_check" ]; then
-  gd=$(git -C "$cwd" rev-parse --absolute-git-dir 2>/dev/null)
-  [ -n "$gd" ] && [ -f "$gd/fleet-recovery-map.md" ] && map="$gd/fleet-recovery-map.md"
+  map=$(fleet_recovery_map_path "$TMUX_PANE" "$cwd")
+  [ -n "$map" ] && [ -f "$map" ] || map=''
 fi
 
 REFOCUS_ISSUE="$issue" REFOCUS_REPO="$repo" REFOCUS_TITLE="$title" \
