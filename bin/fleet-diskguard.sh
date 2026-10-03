@@ -44,6 +44,13 @@
 #   --listeners       print fleet-anchored TCP listeners bound to the LAN (`*`,
 #                     0.0.0.0, a LAN address) — "pid\taddrs\tage_s\tcwd\targv" —
 #                     what bin/fleet-doctor.sh WARNs on (issue #1154)
+#   --resources       print the memory / file-table / pty readings the doctor's
+#                     `memory`, `files`, `pty` lines show (issue #1293):
+#                       mem <level> <avail%> <compressor%> <swapMB>
+#                       top <pid>\t<rssMB>\t<name>      (≤3 fleet processes, by RSS)
+#                       files <used> <max>
+#                       pty <used> <max>
+#                     a row is absent when the machine will not say.
 #   --orphan-listeners print the orphaned-listener reap candidates (dry run)
 #   --listen-watch    run only the orphaned-listener sweep (what --watch also does)
 #   --probe           capture an incident right now regardless of free space
@@ -82,6 +89,10 @@
 #   FLEET_METRICS_KEEP_DAYS metrics-YYYYMMDD.tsv retention in days (default 7)
 #   FLEET_CRASH_REPORT_DIR  where the system writes crash reports
 #                           (default /Library/Logs/DiagnosticReports)
+#   FLEET_FILES_WARN_PCT    file table % used that counts as over (default 80)
+#   FLEET_PTY_WARN_PCT      pty table % used that counts as over  (default 80)
+#   FLEET_MEM_NOTIFY_COOLDOWN min seconds between two notices of one kind
+#                           (memory / files / pty; default 1800) — issue #1293
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
@@ -132,6 +143,9 @@ LISTEN_SECS="${FLEET_ORPHAN_LISTEN_SECS:-21600}"
 LISTEN_ACTION="${FLEET_ORPHAN_LISTEN_ACTION:-kill}"
 LISTEN_EVERY="${FLEET_ORPHAN_LISTEN_EVERY:-300}"
 FSEV_CPU="${FLEET_FSEVENTSD_WARN_CPU:-90}"
+FILES_PCT="${FLEET_FILES_WARN_PCT:-80}"
+PTY_PCT="${FLEET_PTY_WARN_PCT:-80}"
+MEM_COOLDOWN="${FLEET_MEM_NOTIFY_COOLDOWN:-1800}"
 FSEV_REMIND=86400   # one reminder per bloat episode per day — it is not ours to fix
 GDIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/diskguard"
 STAMP="$GDIR/last-capture"
@@ -644,6 +658,88 @@ Summary (the system's reports + the fleet's own metrics before it): \`$HARVEST_I
   return 0
 }
 
+# --- memory pressure + file / pty tables (issue #1293, EPIC #1291) -------------
+# 2026-10-03 the kernel was already killing background processes for a dozen
+# minutes before the mini froze, and neither the doctor nor a notifier said a
+# word. The readings are fleet-lib's (fleet_mem_probe / fleet_files_probe /
+# fleet_pty_probe), so memguard, this tick and the doctor share one number.
+#
+# resources_report — the --resources rows (see the header). The doctor is /bin/sh
+# and cannot source fleet-lib, so it reads them through here like --fseventsd.
+resources_report() {
+  local m f p
+  # Sourced (the selftest), BIN came from $0 = bash and fleet-lib never loaded.
+  # shellcheck source=/dev/null
+  type fleet_mem_probe >/dev/null 2>&1 \
+    || { [ -f "$(dirname "${BASH_SOURCE[0]}")/fleet-lib.sh" ] && . "$(dirname "${BASH_SOURCE[0]}")/fleet-lib.sh"; }
+  type fleet_mem_probe >/dev/null 2>&1 || return 0
+  # Only all-numeric readings pass: a garbled probe is "no reading", never a level.
+  m="$(fleet_mem_probe | awk 'NF == 4 && $0 ~ /^[0-9 ]+$/')"; [ -n "$m" ] && printf 'mem %s\n' "$m"
+  fleet_proc_mem_rows 2>/dev/null | awk -F'\t' '$5 == "agent" || $5 == "fleet" {
+      split($6, a, " "); n = a[1]; sub(/.*\//, "", n)
+      if ((n == "node" || n ~ /^python/ || n == "bash" || n == "sh" || n == "zsh") && a[2] != "") {
+        m = a[2]; sub(/.*\//, "", m); n = n " " m }
+      printf "top %s\t%s\t%s\n", $1, $3, substr(n, 1, 40); if (++k >= 3) exit }'
+  f="$(fleet_files_probe | awk 'NF == 2 && $0 ~ /^[0-9 ]+$/ && $2 > 0')"; [ -n "$f" ] && printf 'files %s\n' "$f"
+  p="$(fleet_pty_probe | awk 'NF == 2 && $0 ~ /^[0-9 ]+$/ && $2 > 0')"; [ -n "$p" ] && printf 'pty %s\n' "$p"
+  return 0
+}
+# over_pct <used> <max> <pct> → rc 0 iff used/max ≥ pct%.
+over_pct() {
+  awk -v u="${1:-0}" -v m="${2:-0}" -v w="${3:-80}" 'BEGIN{ exit !(m > 0 && u * 100 >= w * m) }'
+}
+# mem_edge <kind> <now-bad 0|1|level> <message> — EDGE-triggered: notify only when
+# <kind> goes from fine to bad (or, for memory, to a WORSE level), never on every
+# tick it stays bad, and never twice inside MEM_COOLDOWN. The last state is kept
+# per kind in $GDIR/res-<kind>.state; the last notice in .notified.
+mem_edge() {
+  local kind="$1" cur="$2" msg="$3" sf prev last nowt
+  sf="$GDIR/res-$kind.state"; mkdir -p "$GDIR" 2>/dev/null
+  prev="$(cat "$sf" 2>/dev/null)"; case "$prev" in ''|*[!0-9]*) prev=0 ;; esac
+  printf '%s\n' "$cur" > "$sf" 2>/dev/null || true
+  # memory's "fine" is level 1 (normal); the tables' is 0
+  [ "$kind" = memory ] && { [ "$prev" -le 1 ] && prev=0; [ "$cur" -le 1 ] && cur=0; }
+  [ "$cur" -gt "$prev" ] || return 0
+  nowt="$(now)"; last="$(cat "$sf.notified" 2>/dev/null)"
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  [ $(( nowt - last )) -lt "$MEM_COOLDOWN" ] && return 0
+  printf '%s\n' "$nowt" > "$sf.notified" 2>/dev/null || true
+  notify "$msg"
+}
+# mem_watch — the --watch tick's share: one notice per edge, per kind.
+mem_watch() {
+  local rows mem lvl av co sw top u m w word kind
+  rows="$(resources_report)"
+  mem="$(printf '%s\n' "$rows" | awk '$1 == "mem" { print $2, $3, $4, $5; exit }')"
+  if [ -n "$mem" ]; then
+    read -r lvl av co sw <<EOF
+$mem
+EOF
+    case "$lvl" in 4) word=critical ;; 2) word=warn ;; *) word=normal ;; esac
+    top="$(printf '%s\n' "$rows" | awk -F'\t' '$1 ~ /^top / { sub(/^top /, "", $1); printf "%s%s (pid %s, %s MB)", (k++ ? ", " : ""), $3, $1, $2 }')"
+    mem_edge memory "${lvl:-1}" "# ⚠ memory pressure: ${word}
+$(hostname -s 2>/dev/null) is at memory-pressure **${word}** — ${av}% available, compressor ${co}%, swap ${sw} MB.
+Largest fleet processes: ${top:-none}.
+On 2026-10-03 the kernel was killing background processes for minutes before the machine froze (issue #1293).
+\`bin/fleet-memguard.sh --once --dry-run\` shows what memguard would stop; \`fleet-doctor\` → memory."
+  fi
+  for kind in files pty; do
+    read -r u m <<EOF
+$(printf '%s\n' "$rows" | awk -v k="$kind" '$1 == k { print $2, $3; exit }')
+EOF
+    [ -n "${u:-}" ] && [ -n "${m:-}" ] || continue
+    if [ "$kind" = files ]; then w="$FILES_PCT"; else w="$PTY_PCT"; fi
+    if over_pct "$u" "$m" "$w"; then
+      mem_edge "$kind" 1 "# ⚠ ${kind} table at $(( u * 100 / m ))%
+$(hostname -s 2>/dev/null): ${u} of ${m} $([ "$kind" = files ] && echo 'open files (kern.num_files / kern.maxfiles)' || echo 'terminals (ptys)') in use — over the ${w}% line.
+When it fills, no session can open a file or a pane: the whole machine stalls (EPIC #1291 ④). \`fleet-doctor\` → ${kind}."
+    else
+      mem_edge "$kind" 0 ""
+    fi
+  done
+  return 0
+}
+
 # When sourced by the selftest (FLEET_DISKGUARD_SOURCE=1) stop here: expose the
 # functions above, run no mode. `return` is valid because we're being sourced.
 [ "${FLEET_DISKGUARD_SOURCE:-}" = 1 ] && return 0 2>/dev/null
@@ -689,6 +785,9 @@ case "${1:-}" in
   --fseventsd)
     fseventsd_probe
     ;;
+  --resources)
+    resources_report
+    ;;
   --listeners)
     # Only the LAN-exposed ones: loopback is private and a tailnet bind is deliberate.
     type fleet_listen_fleet_rows >/dev/null 2>&1 || exit 0
@@ -722,6 +821,7 @@ EOF2
     fseventsd_watch                               # fseventsd bloat reminder (#889), report-only
     listen_watch                                  # orphaned-listener sweep (#1154), throttled
     crash_watch                                   # metrics row + reboot harvest (#1294)
+    mem_watch                                     # memory / files / pty edges (#1293), notify-only
     free=$(free_gb)
     [ -z "$free" ] && exit 0                      # measurement failed — stay quiet
     [ "$free" -ge "$WARN_GB" ] && exit 0          # healthy
@@ -742,7 +842,7 @@ Volume backing \`$TARGET\` is under the ${WARN_GB}GB warn line. Forensic snapsho
 Fleet spawn/auto-restore is now gated at ${FLOOR_GB}GB — inspect the incident for the runaway writer."
     ;;
   -h|--help|"")
-    sed -n '2,84p' "$0"
+    sed -n '2,95p' "$0"
     ;;
   *)
     echo "fleet-diskguard: unknown mode '$1' (see --help)" >&2; exit 2

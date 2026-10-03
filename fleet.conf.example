@@ -1762,6 +1762,20 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=fseventsd warn MB @group=disk @tier=advanced @scope=global @edit=int @unit=MB
 #FLEET_FSEVENTSD_WARN_MB=1024
 
+# `fleet-doctor`'s `memory` / `files` / `pty` lines and the diskguard --watch
+# notices (issue #1293, EPIC #1291): memory pressure (level, available %,
+# compressor %, swap, the fleet's three largest processes), the open-file table
+# (kern.num_files / kern.maxfiles; Linux fs/file-nr) and the pty table (/dev/ttys*
+# / kern.tty.ptmx_max; Linux /dev/pts). The doctor WARNs at pressure warn/critical
+# or a table at/over its %; the tick sends ONE FLEET_NOTIFY_CMD per edge (normal →
+# warn/critical, or a table crossing its line), at most one per kind per cooldown.
+# @label=Files table warn % @group=disk @tier=internal @scope=global @edit=int @unit=%
+#FLEET_FILES_WARN_PCT=80
+# @label=Pty table warn % @group=disk @tier=internal @scope=global @edit=int @unit=%
+#FLEET_PTY_WARN_PCT=80
+# @label=Memory notify cooldown @group=disk @tier=internal @scope=global @edit=int @unit=sec
+#FLEET_MEM_NOTIFY_COOLDOWN=1800
+
 # `fleet-doctor`'s `spotlight` line (host section, macOS only, issue #1075): WARNs
 # while Spotlight still indexes the data volume, naming `sudo mdutil -a -i off`
 # (docs/HOST.md#spotlight). Report-only — the doctor never changes system state.

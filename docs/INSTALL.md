@@ -323,7 +323,11 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
      Still no extra unit, so **installing diskguard is what arms it**; a machine
      without that unit has no machine-level runaway defense at all. Check it any
      time with `bin/fleet-diskguard.sh --orphans`, or on the `machine` line of
-     `bin/fleet-doctor.sh`.
+     `bin/fleet-doctor.sh`. The same tick also notifies (`FLEET_NOTIFY_CMD`, once
+     per edge, ≤1 per kind per `FLEET_MEM_NOTIFY_COOLDOWN` = 30 min) when memory
+     pressure leaves normal or the open-file / pty table crosses
+     `FLEET_FILES_WARN_PCT` / `FLEET_PTY_WARN_PCT` (80%) — issue #1293; the
+     doctor's `memory` / `files` / `pty` lines show the same readings.
      Beside it, the **memguard** daemon (`com.claude-fleet.memguard`, KeepAlive,
      issue #1292) is recommended: it samples every 2s and SIGKILLs a fleet
      command whose memory spikes ≥4 GB in 10s while the machine is under

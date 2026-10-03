@@ -1265,6 +1265,55 @@ if [ -d "$mdir_m" ]; then
     warn metrics "no machine-metrics row in 5 min ($mdir_m/metrics-*.tsv) — the diskguard tick appends one a minute; a crash now would leave no record of the run-up (issue #1294)"
   fi
 fi
+# --- memory pressure, the file table, the pty table (issue #1293, EPIC #1291) ---
+# 2026-10-03 the kernel was killing background processes for a dozen minutes
+# before the mini froze and rebooted, while this screen still read clean: nothing
+# here looked at memory, and the two kernel tables a big fleet can exhaust (open
+# files, terminals) were nobody's either. Read through diskguard --resources —
+# the same rows its --watch tick notifies on — so the two cannot disagree. WARN,
+# never FAIL, like every machine line; a reading the machine will not give (a
+# Linux CI box without vm_stat, a sandbox) is INFO, never a WARN.
+res=''
+[ -f "$_dg" ] && res="$(bash "$_dg" --resources 2>/dev/null)"
+rmem=$(printf '%s\n' "$res" | awk '$1 == "mem" { print $2, $3, $4, $5; exit }')
+if [ -z "$rmem" ]; then
+  info memory "no memory-pressure reading on this machine (vm_stat/sysctl or /proc/meminfo unavailable)"
+else
+  read -r rlvl ravl rcmp rswp <<EOF
+$rmem
+EOF
+  case "$rlvl" in 4) rword=critical ;; 2) rword=warn ;; *) rword=normal ;; esac
+  rtop=$(printf '%s\n' "$res" | awk -F'\t' '$1 ~ /^top / { sub(/^top /, "", $1)
+    printf "%s%s %s MB (pid %s)", (k++ ? ", " : ""), $3, $2, $1 }')
+  rtxt="pressure $rword · ${ravl}% available · compressor ${rcmp}% · swap ${rswp} MB · fleet RSS top: ${rtop:-none}"
+  if [ "$rlvl" -ge 2 ] 2>/dev/null; then
+    warn memory "$rtxt — the kernel is reclaiming memory; on 2026-10-03 this went on for minutes before the machine froze (issue #1293). \`bin/fleet-memguard.sh --once --dry-run\` names what memguard would stop"
+  else
+    pass memory "$rtxt"
+  fi
+fi
+for rk in files pty; do
+  rrow=$(printf '%s\n' "$res" | awk -v k="$rk" '$1 == k { print $2, $3; exit }')
+  if [ "$rk" = files ]; then
+    rw="${FLEET_FILES_WARN_PCT:-$(_gconf_val FLEET_FILES_WARN_PCT)}"; rwhat="open files (kern.num_files / kern.maxfiles; Linux fs/file-nr)"
+  else
+    rw="${FLEET_PTY_WARN_PCT:-$(_gconf_val FLEET_PTY_WARN_PCT)}"; rwhat="terminals in use (ptys / kern.tty.ptmx_max; Linux /dev/pts)"
+  fi
+  case "$rw" in ''|*[!0-9]*) rw=80 ;; esac
+  if [ -z "$rrow" ]; then
+    info "$rk" "no reading of $rwhat on this machine"
+    continue
+  fi
+  read -r ruse rmax <<EOF
+$rrow
+EOF
+  rpct=$(awk -v u="$ruse" -v m="$rmax" 'BEGIN{ printf "%d", (m > 0 ? u * 100 / m : 0) }')
+  if [ "$rpct" -ge "$rw" ]; then
+    warn "$rk" "$ruse / $rmax $rwhat = ${rpct}%, at or over the ${rw}% line — when it fills no session can open a file or a pane and the whole machine stalls (EPIC #1291 ④)"
+  else
+    pass "$rk" "$ruse / $rmax $rwhat (${rpct}%)"
+  fi
+done
 
 # --- codex CLI version vs the rollout format fleet reads (issue #1079) ---
 # fleet reads a Codex worker's context% out of Codex's session file (rollout),
