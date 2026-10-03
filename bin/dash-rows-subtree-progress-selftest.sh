@@ -102,7 +102,7 @@ w 6  grandkid    /w/repo-issue-105    'done'    @6  105 issue-101   /w/repo-issu
 w 7  lonely      /w/repo-issue-200    'idle'    @7  200 ''          /w/repo-issue-200
 # an ORPHAN: @origin names a window that is not on this dash → counts for nobody.
 w 8  orph        /w/repo-issue-300    'done'    @8  300 issue-999   /w/repo-issue-300
-# a CJK-named SCRATCH parent with 2 children, neither in needs → `1/2 ✓`, no `!`.
+# a CJK-named SCRATCH parent with 2 children, neither in needs → `1/2`, no `!`.
 w 9  修复仪表盘   /w/repo-scratch-7    'idle'    @9  ''  ''          /w/repo-scratch-7 1
 w 10 s-kid-done  /w/repo-issue-401    'done'    @10 401 scratch-7   /w/repo-issue-401
 w 11 s-kid-idle  /w/repo-issue-402    'idle'    @11 402 scratch-7   /w/repo-issue-402
@@ -174,7 +174,7 @@ fi
 
 # 8. QUIET IS NOT FINISHED (issue #1331). Four children that all draw a quiet glyph:
 #    done with no Loop, done with a live @loop (a /loop between rounds), a sleeper
-#    and a waking worker — only the first is a finished child, so `1/4 ✓`.
+#    and a waking worker — only the first is a finished child, so `1/4`.
 #    Field 24 is @loop (WFMT's last); fields 11-23 are left empty.
 NOWS=$(date +%s)
 wl() { printf '%s\n' "$SESS$US$1$US$2$US$3$US$4$US$US$5$US$6$US$7$US$8$US$US$US$US${9:-}$US$US$US$US$US$US$US$US$US$US${10:-}" >> "$WLIST_FILE"; }
@@ -192,8 +192,8 @@ wl 8 m-cron   /w/repo-issue-702 'done'     @8 702 issue-700 /w/repo-issue-702 ''
 out=$(FLEET_SESSION="$SESS" FZF_COLUMNS=$COLS bash "$ROWS" 2>&1) \
   || fail "rows producer exited non-zero (#1331 fixture)" "$out"
 rL=$(row_of 1); rM=$(row_of 6)
-has   "only a done child with no Loop counts toward k (#1331)" "$rL" "1/4 ✓"
+has   "only a done child with no Loop counts toward k (#1331)" "$rL" "1/4"
 hasnt "a quiet-but-unfinished child must not raise needs"      "$rL" "!"
-has   "a lapsed wakeup counts as done; a live cron id does not" "$rM" "1/2 ✓"
+has   "a lapsed wakeup counts as done; a live cron id does not" "$rM" "1/2"
 
 printf 'dash-rows-subtree-progress-selftest: OK (%d checks)\n' "$CHECKS"
