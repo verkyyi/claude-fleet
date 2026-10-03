@@ -10,6 +10,8 @@
 #   FOLDED-LEGACY     a file under a folded fleet's old name is found by that repo's pane.
 #   AMBIGUOUS-NEWER   an unattributable file newer than the pane's → exit 4, lists both.
 #   AMBIGUOUS-NONE    only another repo's files → exit 4, never picks one.
+#   CHECK-*           `check` (issue #1322): 201 lines → hint, exit 3; a doc that
+#                     copies the issue body → hint; a normal doc → silent, exit 0.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -91,6 +93,38 @@ eq HUB-OWN "$(run find --session $S --norepo)" "$FLEET_HANDOFF_DIR/$S-2026-09-16
 # No file at all → 1.
 S2=fleet-empty; mkdir -p "$FLEET_CONF_DIR/fleets/$S2"; echo 'FLEET_REPO=o/e' > "$FLEET_CONF_DIR/fleets/$S2/conf"
 run find --session $S2 --repo o/e >/dev/null; eq NONE-rc "$?" 1
+
+# ---- check (issue #1322) ----------------------------------------------------
+C="$WORK/check"; mkdir -p "$C"
+{ echo '# Handoff'; echo 'NEXT ACTION: run the selftest and push the branch.'; } > "$C/ok.md"
+awk 'BEGIN { for (i = 1; i <= 201; i++) print "line " i }' > "$C/long.md"
+awk 'BEGIN { for (i = 1; i <= 200; i++) print "line " i }' > "$C/edge.md"
+cat > "$C/body.md" <<'BODY'
+## 目标
+交接文档超过 200 行，或大段照抄 issue 时，交接当场提醒精简。
+## 解决什么
+交接文档越写越长，新会话读它就要花掉一大块上下文，接力效果打折。
+- `fleet-handoff-file.sh` 写入前检查行数与「与 issue 正文重复的段落」
+- 新键 `FLEET_HANDOFF_MAX_LINES`（默认 200）。
+- selftest：201 行文档 → 提示；照抄 issue 正文 → 提示；正常文档无提示。
+BODY
+{ echo '# Handoff'; echo 'Goal (pasted):'; sed 's/^/> /' "$C/body.md"; echo 'NEXT ACTION: push.'; } > "$C/copy.md"
+# Two lines quoted from the issue is a pointer, not a copy.
+{ echo '# Handoff'; sed -n '2p;4p' "$C/body.md"; echo 'NEXT ACTION: push.'; } > "$C/quote.md"
+ck() { "$SRC" check "$@" 2>/dev/null; }
+out=$(ck "$C/long.md" --issue-body "$C/body.md"); rc=$?
+eq CHECK-LONG-rc "$rc" 3
+case "$out" in *'HANDOFF-CHECK:'*'201 lines'*'FLEET_HANDOFF_MAX_LINES=200'*) ok CHECK-LONG-hint ;; *) bad "CHECK-LONG-hint: [$out]" ;; esac
+eq CHECK-EDGE "$(ck "$C/edge.md"; echo "rc=$?")" "rc=0"
+eq CHECK-KNOB "$(FLEET_HANDOFF_MAX_LINES=300 ck "$C/long.md"; echo "rc=$?")" "rc=0"
+out=$(ck "$C/copy.md" --issue-body "$C/body.md" --issue 7); rc=$?
+eq CHECK-COPY-rc "$rc" 3
+case "$out" in *'HANDOFF-CHECK:'*'copies 5 lines of issue #7'*) ok CHECK-COPY-hint ;; *) bad "CHECK-COPY-hint: [$out]" ;; esac
+eq CHECK-COPY-stdin "$(ck - --issue-body "$C/body.md" < "$C/copy.md" | cut -c1-34)" "HANDOFF-CHECK: the handoff copies "
+eq CHECK-QUOTE "$(ck "$C/quote.md" --issue-body "$C/body.md"; echo "rc=$?")" "rc=0"
+eq CHECK-OK "$(ck "$C/ok.md" --issue-body "$C/body.md"; echo "rc=$?")" "rc=0"
+eq CHECK-NO-ISSUE "$(ck "$C/copy.md"; echo "rc=$?")" "rc=0"
+eq CHECK-USAGE "$(ck; echo "rc=$?")" "rc=2"
 
 [ "$fails" = 0 ] && { echo "fleet-handoff-file-selftest: PASS"; exit 0; }
 echo "fleet-handoff-file-selftest: $fails failure(s)" >&2; exit 1

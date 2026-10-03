@@ -92,6 +92,22 @@ so a doc that stays silent turns a 中文 session into an English one mid-task, 
 nothing to point at (issue #620). Write the doc in the session's own language; only
 that label is fixed.
 
+**Check its length before storing it** (issue #1322). Every line is context the
+pickup session spends before it does anything, so a doc that keeps growing — or
+that pastes the issue body the pickup can read for itself — hands on a smaller
+window. Pipe the composed text through the check (the issue-bound case passes its
+`@issue`; the pane's is used when you omit it):
+
+```sh
+printf '%s\n' "$DOC_TEXT" | ~/.claude/fleet/bin/fleet-handoff-file.sh check - [--issue "$ISSUE"]; echo "rc=$?"
+```
+
+`rc=0` is clean. `rc=3` printed `HANDOFF-CHECK:` lines — over
+`FLEET_HANDOFF_MAX_LINES` (default 200), or a block copied from the issue body:
+trim to the NEXT ACTION, live state and dead-ends, replace the copy with a pointer
+to the issue, and re-run once. It is advice, never a gate — if a second pass still
+prints a line, store the doc anyway.
+
 Hold the composed doc text; **where** it is stored is C2's job.
 
 ### C2. Store the handoff durably — comment when issue-bound, else file
