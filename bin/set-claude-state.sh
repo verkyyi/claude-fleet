@@ -252,16 +252,21 @@ if [ "$sem" = "done" ]; then
   [ -n "$_bin" ] && [ -r "$_bin/fleet-lang.sh" ] && . "$_bin/fleet-lang.sh"
   _kv=''
   [ -n "$_bin" ] && [ -f "$_bin/fleet-hook-conf.sh" ] \
-    && _kv=$(bash "$_bin/fleet-hook-conf.sh" FLEET_AUTO_HANDOFF_PCT FLEET_HANDOFF_DEFER_SECS FLEET_COMPACT_PREP_PCT 2>/dev/null)
+    && _kv=$(bash "$_bin/fleet-hook-conf.sh" FLEET_AUTO_HANDOFF_PCT FLEET_HANDOFF_DEFER_SECS FLEET_COMPACT_PREP_PCT FLEET_COMPACT_MAX 2>/dev/null)
   _hp=$(printf '%s\n' "$_kv" | sed -n 1p)
   _ds=$(printf '%s\n' "$_kv" | sed -n 2p)             # typing-deferral window (issue #571)
   _cp=$(printf '%s\n' "$_kv" | sed -n 3p)             # compact-prep threshold (issue #1269)
+  _cm=$(printf '%s\n' "$_kv" | sed -n 4p)             # compactions before a handoff (issue #1316)
   case "$_hp" in ''|*[!0-9]*) _hp=0 ;; esac          # unset / non-numeric → off
   # Unset ⇒ the 70 default, but only when the conf path is intact: a missing lib
   # resolves nothing, and that must stay fail-open OFF like the handoff knob.
   case "$_cp" in
     '') if [ -n "$_bin" ] && [ -f "$_bin/fleet-lib.sh" ] && [ -f "$_bin/fleet-hook-conf.sh" ]; then _cp=70; else _cp=0; fi ;;
     *[!0-9]*) _cp=0 ;;
+  esac
+  case "$_cm" in
+    '') if [ -n "$_bin" ] && [ -f "$_bin/fleet-lib.sh" ] && [ -f "$_bin/fleet-hook-conf.sh" ]; then _cm=2; else _cm=0; fi ;;
+    *[!0-9]*) _cm=0 ;;
   esac
   _hp_conf=$_hp                                      # the configured line, before any suppression below
   _sha=0                                             # this Stop continues a prior Stop-hook block
@@ -287,6 +292,27 @@ if [ "$sem" = "done" ]; then
   # continuation (Claude Code's built-in anti-loop signal, belt-and-suspenders with
   # the @handoff_armed latch below). Read stdin only when armed and not a tty.
   [ "$_sha" = 1 ] && _hp=0
+  # Compaction cap (issue #1316). Every in-place compaction loses a little detail;
+  # by the third or fourth a session no longer remembers what it agreed to at the
+  # start. refocus-hook.sh counts each fleet compaction that completes on
+  # @compact_count (handoff-latch-reset-hook.sh zeroes it in a fresh session), and
+  # once it reaches FLEET_COMPACT_MAX (unset ⇒ 2; 0 = no cap) a worker at the
+  # compact-prep line is handed off instead: the handoff below fires with the prep
+  # % as its line, through the same latch and typing hold, and the compaction
+  # section skips. At/over the handoff % the plain handoff keeps its own line. Same scope as compaction — a Claude worker; codex is untouched.
+  _cmaxed=''
+  if [ "$_cm" -gt 0 ] && [ "$_cp" -gt 0 ] && [ "$_sha" = 0 ] && [ "$_agent" != codex ] \
+     && [ "$handoff_prev" != needs ] && { [ "$_hp" -eq 0 ] || [ "$_cp" -lt "$_hp" ]; }; then
+    _ccv=$(tmux display-message -p -t "$TMUX_PANE" '#{@compact_count}|#{@issue}|#{@ctx_pct}' 2>/dev/null)
+    _ccn=${_ccv%%|*}; _ccv=${_ccv#*|}
+    case "$_ccn" in ''|*[!0-9]*) _ccn=0 ;; esac
+    _ccx=${_ccv#*|}
+    case "$_ccx" in ''|*[!0-9]*) _ccx=-1 ;; esac
+    if [ "$_ccn" -ge "$_cm" ] && [ -n "${_ccv%%|*}" ] && [ "$_ccx" -ge "$_cp" ] \
+       && { [ "$_hp" -eq 0 ] || [ "$_ccx" -lt "$_hp" ]; }; then
+      _cmaxed=$_ccn; _hp=$_cp
+    fi
+  fi
   if [ "$_hp" -gt 0 ]; then
     # Debounce latch: arming the handoff does NOT drop the context (only the
     # post-turn /clear does), so the very next Stop would re-nudge → loop. Set
@@ -351,6 +377,8 @@ reason = (f'Context is at {pct}% (>= {threshold}% auto-handoff threshold). Write
           'Do not invoke Claude slash commands or exit the process yourself. ' + language)
 print(json.dumps({'decision': 'block', 'reason': reason}, separators=(',', ':')))
 PYCODEX
+        elif [ -n "$_cmaxed" ]; then
+        printf '{"decision":"block","reason":"Context is at %s%% (>= %s%% compact-prep threshold) and this session has already been compacted in place %s times (FLEET_COMPACT_MAX=%s) — a further compaction would lose more of what was agreed. Run /fleet-handoff now (cycle mode, no arguments): store a durable handoff, then this pane auto-clears and resumes clean. Do this instead of continuing.%s"}\n' "$_ctx" "$_hp" "$_cmaxed" "$_cm" "${FLEET_LANG_RULE_RESUME:+ $FLEET_LANG_RULE_RESUME}"
         else
         printf '{"decision":"block","reason":"Context is at %s%% (>= %s%% auto-handoff threshold). Run /fleet-handoff now (cycle mode, no arguments): store a durable handoff, then this pane auto-clears and resumes clean. Do this instead of continuing — a structured handoff preserves task state better than near-limit auto-compaction.%s"}\n' "$_ctx" "$_hp" "${FLEET_LANG_RULE_RESUME:+ $FLEET_LANG_RULE_RESUME}"
         fi
@@ -372,8 +400,8 @@ PYCODEX
   # prep line, ≥ 600 s between compactions, 60 s dedup on each step, and the
   # operator-typing hold (#571) gates the keystrokes. Claude workers only: a codex
   # pane, scratch, hub, panels, a needs stop and a pending transfer are untouched.
-  # Unset knob ⇒ 70; 0 = off.
-  if [ "$_cp" -gt 0 ] && [ "$_agent" != codex ] && [ "$handoff_prev" != needs ]; then
+  # Unset knob ⇒ 70; 0 = off. Past the compaction cap (#1316) the handoff owns it.
+  if [ "$_cp" -gt 0 ] && [ -z "$_cmaxed" ] && [ "$_agent" != codex ] && [ "$handoff_prev" != needs ]; then
     _cissue=$(tmux display-message -p -t "$TMUX_PANE" '#{@issue}' 2>/dev/null | tr -cd '0-9')
     if [ -n "$_cissue" ]; then
       _cctx=$(tmux display-message -p -t "$TMUX_PANE" '#{@ctx_pct}' 2>/dev/null)

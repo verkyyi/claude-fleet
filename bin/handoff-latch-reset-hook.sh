@@ -76,6 +76,11 @@ case "$sid" in
     tmux set-window-option -t "$TMUX_PANE" @cc_session_id "$sid" 2>/dev/null || true ;;
 esac
 
+# A fresh context — the handoff cycle's /clear, a manual /clear, a new startup —
+# starts the compaction count over (issue #1316). A compact keeps counting (that
+# IS one) and a resume continues the same conversation, so neither touches it.
+case "$src" in clear|startup) tmux set-window-option -u -t "$TMUX_PANE" @compact_count 2>/dev/null || true ;; esac
+
 # Stamp the deterministic fresh-session marker on /clear ONLY (see header job 2).
 if [ "$src" = "clear" ]; then
   now=$(date +%s 2>/dev/null || echo 0)
