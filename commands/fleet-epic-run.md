@@ -99,6 +99,11 @@ that dies at the boundary. Therefore:
   report: <pending | the report's URL>      ← closing tick only (step 4)
   ```
 
+  Post it through `~/.claude/fleet/bin/fleet-comment.sh <parent> --repo "$FLEET_REPO" --note --body-file -`,
+  never a bare `gh issue comment`: when the account's GraphQL budget is spent the
+  wrapper posts the same marked body over REST (issue #1042), where a bare call
+  just fails and the tick goes unrecorded.
+
   The `report:` line appears on the **closing** tick and nowhere else. It is the
   one piece of state that outlives the core going empty, so a session that picks
   this EPIC up after a handoff can tell «核心空了，报告还没跑» from «跑完了» by
@@ -143,7 +148,9 @@ bash ~/.claude/fleet/bin/fleet-pr-verdict.sh <PR> --repo "$FLEET_REPO" -q
   merge**, copy that line into this tick's comment, next tick. Exit `0`
   (`clear: …` — idle / done, window gone, or its own MERGED ship report is in
   the ledger) → merge it, **one command, never chained**:
-  `gh pr merge <PR> --repo "$FLEET_REPO" --squash --delete-branch`. A chained `push --delete` once
+  `~/.claude/fleet/bin/fleet-pr-merge.sh <PR> --repo "$FLEET_REPO" --squash` (re-reads the gate,
+  merges with the branch deleted, confirms `MERGED`; under a GraphQL rate limit it merges over
+  REST instead of failing, issue #1042). A chained `push --delete` once
   closed the wrong issue and got the worker reaped.
 - `BEHIND` → `gh pr update-branch <PR> --repo "$FLEET_REPO"`.
 - `PENDING` → nothing; next tick.

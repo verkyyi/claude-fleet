@@ -53,6 +53,13 @@
 # (none/fail/pending/pass), widened on the failure side — a gate must count
 # TIMED_OUT / CANCELLED / ACTION_REQUIRED as red, where a glance can shrug.
 #
+# GraphQL rate-limited (issue #1042): the read falls back to REST
+# (bin/fleet-gh-lib.sh: `pulls/N` + the head's check-runs + combined status), folded
+# by the SAME land_verdict — so READY/FAILING/… mean exactly what they mean on the
+# GraphQL path. stdout is still the one token; stderr says `via REST`. A known
+# limit (the shared gh-limit marker, or FLEET_GH_FAKE_LIMIT=graphql) skips the
+# doomed GraphQL call outright.
+#
 # Read-only: it merges nothing, arms nothing, and touches no worktree/window.
 set -uo pipefail
 
@@ -63,6 +70,8 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-lib.sh"
 # shellcheck source=/dev/null
 . "$BIN/fleet-land-lease.sh"
+# shellcheck source=/dev/null
+. "$BIN/fleet-gh-lib.sh"
 
 PR='' repo='' quiet=0 wait=0 until_merged=0
 wait_timeout=3600 nochecks_timeout=600 interval=15
@@ -114,11 +123,11 @@ command -v gh >/dev/null 2>&1 || { printf 'fleet-pr-verdict: gh not on PATH\n' >
 # read from the data, never inferred from an exit code (#950).
 # read_pr → sets st/mg/ms/dr/ck/am; returns 2 (with a message in $read_err) when
 # the PR can't be read.
-read_err=''
+read_err='' via=''
 read_pr() {
-  local row
+  local row rc
   # shellcheck disable=SC2016  # $r/$ck are jq variables, not shell — keep single-quoted
-  row=$(gh pr view "$PR" --repo "$repo" \
+  row=$(fleet_gh_run graphql pr-verdict pr view "$PR" --repo "$repo" \
           --json state,mergeable,mergeStateStatus,isDraft,statusCheckRollup,autoMergeRequest \
           --jq '(.statusCheckRollup // []) as $r |
                 (if   ($r|length)==0                       then "none"
@@ -129,8 +138,18 @@ read_pr() {
                  else "pass" end) as $ck |
                 [.state, (.mergeable // ""), (.mergeStateStatus // ""),
                  (if .isDraft then "DRAFT" else "" end), $ck,
-                 (if .autoMergeRequest then "AUTO" else "" end)] | .[]' 2>/dev/null) \
-    || { read_err="cannot read PR #$PR in $repo"; return 2; }
+                 (if .autoMergeRequest then "AUTO" else "" end)] | .[]' 2>/dev/null); rc=$?
+  if [ "$rc" -eq "$FLEET_GH_LIMITED_RC" ]; then
+    # GraphQL is rate-limited → the same six lines over REST (issue #1042).
+    row=$(fleet_gh_rest_pr_view "$repo" "$PR" 2>/dev/null) \
+      || { read_err="cannot read PR #$PR in $repo (GraphQL rate-limited, REST failed too)"; return 2; }
+    [ "$via" = REST ] || { note "GraphQL rate-limited — reading #$PR via REST"; fleet_gh_log "fallback-ok op=verdict repo=$repo pr=$PR"; }
+    via=REST
+  elif [ "$rc" -ne 0 ]; then
+    read_err="cannot read PR #$PR in $repo"; return 2
+  else
+    via=''
+  fi
   [ -z "$row" ] && { read_err="no such PR #$PR in $repo"; return 2; }
   st='' mg='' ms='' dr='' ck='' am=''
   { read -r st; read -r mg; read -r ms; read -r dr; read -r ck; read -r am; } <<< "$row"
@@ -146,7 +165,7 @@ explain() {  # explain <verdict> → the human note on stderr
     CONFLICT) note "#$PR conflicts with the base — rebase" ;;
     BLOCKED)  note "#$PR is green but branch protection blocks the merge — not yours to force" ;;
     DRAFT)    note "#$PR is a draft — gh pr ready $PR" ;;
-    MERGED)   note "#$PR is already merged" ;;
+    MERGED)   note "#$PR is already merged${via:+ (via $via)}" ;;
     CLOSED)   note "#$PR was closed unmerged" ;;
     *)        note "#$PR: $1 (state=$st mergeable=$mg mss=$ms checks=$ck)" ;;
   esac

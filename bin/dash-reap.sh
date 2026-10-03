@@ -84,6 +84,7 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"
+. "$BIN/fleet-gh-lib.sh"   # merged-PR check with the REST fallback (issue #1042)
 
 # --- script-facing result (issue #596) ----------------------------------------
 # Print ONE token on stdout for the caller. The INTERACTIVE passes print UI, not
@@ -380,8 +381,7 @@ if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
   SMASTER="$(git -C "$MAIN" rev-parse --verify -q "origin/$SBASE" 2>/dev/null \
     || git -C "$MAIN" rev-parse --verify -q "$SBASE" 2>/dev/null)"
   SMERGED=""
-  command -v gh >/dev/null 2>&1 && SMERGED="$(gh -R "${FLEET_REPO:-}" pr list \
-    --state merged --head "$sbranch" --json headRefName -q '.[].headRefName' 2>/dev/null)"
+  command -v gh >/dev/null 2>&1 && SMERGED="$(fleet_gh_merged_heads "${FLEET_REPO:-}" "$sbranch" 2>/dev/null)"
   sreason="$(fleet_reap_ok "$swt" "$MAIN" "$sbranch" "$shead" "$SMASTER" "$SMERGED")"
   [ "$sreason" != live ] || { emit skip:live; printf 'reap: another live window uses this worktree\n' >&2; exit 3; }
 
@@ -519,9 +519,10 @@ if [ -n "$MAIN" ]; then
 fi
 
 # merged PR head-refs for this branch (a --head filter keeps it to one branch).
+# GraphQL rate-limited → REST `pulls?state=closed&head=` (issue #1042): under the
+# limit this read came back empty and a MERGED PR reaped as `unmerged`.
 MERGED_PRS=""
-command -v gh >/dev/null 2>&1 && MERGED_PRS="$(gh -R "$REPO" pr list \
-  --state merged --head "$branch" --json headRefName -q '.[].headRefName' 2>/dev/null)"
+command -v gh >/dev/null 2>&1 && MERGED_PRS="$(fleet_gh_merged_heads "$REPO" "$branch" 2>/dev/null)"
 
 reason="$(fleet_reap_ok "$wtdir" "$MAIN" "$branch" "$whead" "$MASTER" "$MERGED_PRS")"
 [ "$reason" != live ] || { emit skip:live; printf 'reap: another live window uses this worktree\n' >&2; exit 3; }

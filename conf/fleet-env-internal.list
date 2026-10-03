@@ -210,3 +210,7 @@ FLEET_WH_SLEEP_CMD                 seam: an injectable command/path for tests (f
 FLEET_WORKER_PROMPT_FILE           alias: retired twin of FLEET_WORKER_PROMPT="@<path>" (#1101) — still read, wins when set
 FLEET_WORKTREE_SETUP_LOG           path: state/log location override (fleet-lib.sh)
 FLEET_X                            doc: the placeholder name in a comment, not a key
+FLEET_GH_FAKE_LIMIT                seam: inject a GitHub rate limit per bucket for tests, never touches the account (fleet-gh-lib.sh, #1042)
+FLEET_GH_LIMIT_HOLD_SECS           knob: internal pacing/limit, safe in-code default (fleet-gh-lib.sh)
+FLEET_GH_LOG                       path: state/log location override (fleet-gh-lib.sh)
+FLEET_STATE_DIR                    path: state/log location override — the shared gh-limit marker dir (fleet-gh-lib.sh)
