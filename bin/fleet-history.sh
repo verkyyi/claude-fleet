@@ -1001,6 +1001,13 @@ cmd_resume() {
   # reuse it AS-IS rather than resetting it to the squash SHA: a present worktree
   # may hold in-progress state from an open resume, and the win that matters is the
   # path (claude --resume is cwd-scoped — the transcript is keyed to this path).
+  # An idle transcript may have been archived (issue #1299). A ledger row is a
+  # reference, so the archiver never takes one — but a row from before, another
+  # install's ledger, or a hand-run archive can still miss: bring it back first.
+  if [ -n "$do_exec" ] && [ "$agent" != codex ] && [ -n "$sid" ] && [ "$sid" != "-" ] \
+     && [ -n "$tdir" ] && [ "$tdir" != "-" ] && [ ! -f "$tdir/$sid.jsonl" ]; then
+    bash "$BIN/fleet-transcript-archive.sh" --restore "$sid" --quiet >/dev/null 2>&1 || true
+  fi
   if [ -n "$sid" ] && [ "$sid" != "-" ] && [ -n "$tdir" ] && [ -d "$tdir" ]; then
     local have_wt=""
     if [ -n "$wt" ] && [ "$wt" != "-" ] && [ -d "$wt" ]; then
