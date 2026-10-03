@@ -406,6 +406,11 @@ fcfg_label_i18n() {
     FLEET_FILES_WARN_PCT) printf '文件句柄警告 %%' ;;
     FLEET_PTY_WARN_PCT) printf '终端用量警告 %%' ;;
     FLEET_MEM_NOTIFY_COOLDOWN) printf '内存通知冷却' ;;
+    FLEET_TRANSCRIPT_KEEP_DAYS) printf '会话记录保留天数' ;;
+    FLEET_TRANSCRIPT_HELPER_KEEP_HOURS) printf '辅助记录保留小时' ;;
+    FLEET_TRANSCRIPT_ARCHIVE) printf '会话记录归档' ;;
+    FLEET_TRANSCRIPT_ARCHIVE_EVERY) printf '会话记录归档间隔' ;;
+    FLEET_TRANSCRIPT_ARCHIVE_BUDGET) printf '会话记录归档单次预算' ;;
     FLEET_DOCTOR_SPOTLIGHT) printf 'Doctor Spotlight 检查' ;;
     FLEET_DOCTOR_SLEEP) printf 'Doctor sleep 检查' ;;
     FLEET_DOCTOR_SIRI) printf 'Doctor Siri 检查' ;;
