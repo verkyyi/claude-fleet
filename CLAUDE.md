@@ -186,6 +186,18 @@ Do not install from memory: read the doc and work from it.
     public repos**; the 10× macOS multiplier applies to private ones. **Make this
     repo private and this workflow starts billing ~150 min/night** — cut `shard:`
     to one entry or drop the schedule.
+- **Heavy jobs queue machine-wide** (issue #1295). `bin/fleet-heavy.sh -- <cmd>`
+  is a counting semaphore shared by EVERY login on the box (`FLEET_HEAVY_SLOTS`,
+  default 3): slots are `fcntl.flock`s on `/Users/Shared/claude-fleet/heavy/slot-K`
+  (1777 dir, 0666 files, never under a `$HOME`), held by a python3 parent that
+  runs the command as its child — so a SIGKILLed holder frees its slot at once
+  and a daemon the command leaves behind cannot keep it. `hooks/bash-guard.py`
+  PREFIXES the wrapper onto any Bash statement whose command matches
+  `FLEET_HEAVY_RE` (git push, pytest, npm test, run-selftests.sh, …) — a pure
+  prefix, quotes and heredocs untouched; business repos change nothing. A queue
+  never blocks forever (`FLEET_HEAVY_WAIT`, and a foreground call caps at half its
+  tool timeout); `FLEET_HEAVY=0` turns the rewrite off; `fleet-heavy.sh --status`
+  lists holders and waiters.
 - **A fleet temp server binds `127.0.0.1`, never `*`** (issue #1154). An agent's
   `python3 -m http.server` / dev server defaults to every interface and outlives
   its window as a `PPID=1` orphan — the 2026-09-24 audit found one serving the

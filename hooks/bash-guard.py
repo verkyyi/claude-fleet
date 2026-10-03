@@ -645,6 +645,119 @@ def _rewrite(span, new_text, note):
     _REWRITE_NOTES.append(note)
 
 
+# --- HEAVY-JOB QUEUE (issue #1295) ------------------------------------------
+# A dozen sessions pushing at once — each push running a full gate that fans out
+# `xargs -P 5` — drag the shared machine down together (EPIC #1291). So a heavy
+# statement is PREFIXED with bin/fleet-heavy.sh, a machine-wide semaphore (3
+# slots across every login), the same rewrite-not-refuse move as #483/#528:
+#     cd x && git push origin b | tail   →   cd x && <fleet-heavy.sh> --label git-push --wait 60 -- git push origin b | tail
+# Prefix only: the statement's own text, quoting, heredoc and redirections are
+# untouched (they attach to the wrapper, whose child inherits them). Scoped to
+# FLEET panes; FLEET_HEAVY=0 (env, global settings, or inline) turns it off.
+# The default regex is mirrored from fleet-lib.sh's FLEET_HEAVY_RE_DEFAULT
+# (fleet-heavy-selftest.sh holds the two in lockstep).
+HEAVY_RE_DEFAULT = (r"git\b(?:\s+(?:-[Cc]\s+\S+|-\S+))*\s+push\b"
+                    r"|(?:python3?\s+-m\s+)?pytest\b"
+                    r"|npm\s+(?:run\s+)?test\b"
+                    r"|(?:(?:ba|z)?sh\s+)?(?:\S*/)?(?:run-selftests|local-prod-gate|pre-pr)\.sh\b")
+# Shell keywords, subshell/group openers and VAR=val assignments sit BEFORE the
+# insertion point (the assignment then reaches the wrapper and so its child).
+_HEAVY_LEAD = re.compile(
+    r"\s*(?:(?:if|then|do|else|elif|while|until|!|\{|\()\s*)*"
+    r"(?:\w+=(?:\"[^\"]*\"|'[^']*'|\S)*\s+)*")
+# Transparent command prefixes: the wrapper goes before them, the match after.
+_HEAVY_PASS = r"(?:(?:time|nohup|nice(?:\s+-n\s*-?\d+)?|timeout\s+\S+)\s+)*"
+_HEAVY_KEYS = ("FLEET_HEAVY", "FLEET_HEAVY_RE", "FLEET_HEAVY_WAIT")
+_HEAVY_CONF = None
+
+
+def _heavy_conf():
+    """FLEET_HEAVY* from env > $FLEET_CONF_DIR/fleet.settings > install fleet.conf —
+    the order fleet-lib.sh reads them in, without forking a shell per Bash call."""
+    global _HEAVY_CONF
+    if _HEAVY_CONF is not None:
+        return _HEAVY_CONF
+    import shlex
+    conf = {}
+    here = os.path.dirname(os.path.abspath(__file__))
+    for path in (os.path.join(here, "..", "fleet.conf"),
+                 os.path.join(_conf_dir(), "fleet.settings")):
+        try:
+            with open(path) as f:
+                for line in f:
+                    m = re.match(r"\s*(?:export\s+)?(FLEET_HEAVY(?:_RE|_WAIT)?)=(.*)$", line)
+                    if m:
+                        try:
+                            toks = shlex.split(m.group(2), comments=True)
+                        except ValueError:
+                            continue
+                        conf[m.group(1)] = toks[0] if toks else ""
+        except OSError:
+            pass
+    for k in _HEAVY_KEYS:
+        if k in os.environ:
+            conf[k] = os.environ[k]
+    _HEAVY_CONF = conf
+    return conf
+
+
+def _heavy_bin():
+    p = os.environ.get("FLEET_HEAVY_BIN", "").strip() or os.path.expanduser(
+        "~/.claude/fleet/bin/fleet-heavy.sh")
+    return p if os.access(p, os.X_OK) else ""
+
+
+def _heavy_label(text):
+    toks = text.split()
+    if not toks:
+        return "heavy"
+    head = os.path.basename(toks[0])
+    if head in ("git", "npm", "python", "python3", "bash", "sh", "zsh") and len(toks) > 1:
+        tail = os.path.basename(toks[-1])
+        head = tail if head.endswith("sh") else head + "-" + tail
+    return re.sub(r"[^A-Za-z0-9._-]", "-", head)[:40] or "heavy"
+
+
+def check_heavy(masked_seg, span, masked_cmd, tool_input):
+    """Prefix fleet-heavy.sh onto a heavy statement. `masked_seg` keeps CASE."""
+    conf = _heavy_conf()
+    if conf.get("FLEET_HEAVY", "1").strip() == "0":
+        return
+    if re.search(r"(?:^|[\s;&|(])fleet_heavy=0(?=\s|$)", masked_cmd.lower()):
+        return
+    lead = _HEAVY_LEAD.match(masked_seg).end()
+    if re.match(r"\S*fleet-heavy\.sh(?=\s|$)", masked_seg[lead:]):
+        return                                   # already wrapped
+    user_re = conf.get("FLEET_HEAVY_RE", "").strip() or HEAVY_RE_DEFAULT
+    try:
+        m = re.match(_HEAVY_PASS + "(" + user_re + ")", masked_seg[lead:])
+    except re.error:
+        m = re.match(_HEAVY_PASS + "(" + HEAVY_RE_DEFAULT + ")", masked_seg[lead:])
+    if not m:
+        return
+    wrapper = _heavy_bin()
+    if not wrapper or not _in_fleet_pane():
+        return
+    label = _heavy_label(m.group(1))
+    args = ["--label", label]
+    if not tool_input.get("run_in_background"):
+        # A foreground call dies at the Bash tool's timeout (default 2 min), so
+        # queue for at most half of it — the command still gets to run.
+        try:
+            tmo = int(tool_input.get("timeout") or 120000)
+        except (TypeError, ValueError):
+            tmo = 120000
+        try:
+            cap = int(conf.get("FLEET_HEAVY_WAIT", "") or 1800)
+        except ValueError:
+            cap = 1800
+        args += ["--wait", str(max(10, min(cap, tmo // 2000)))]
+    import shlex
+    pos = span[0] + lead
+    _rewrite((pos, pos), "%s %s -- " % (shlex.quote(wrapper), " ".join(args)),
+             "queued heavy `%s` behind the machine-wide slot cap (fleet-heavy.sh)" % label)
+
+
 # --- OVERLAY -----------------------------------------------------------------
 # Operator-specific rules (prod hosts, DB/k8s rails, anything host-local) live in
 # ~/.claude/hooks/bash-guard-local.py and are NEVER committed here. The overlay,
@@ -737,6 +850,10 @@ def main():
             raise
         except Exception:
             pass                         # fail open, as every rail here
+        try:
+            check_heavy(masked[a:b], (a, b), masked, ti)
+        except Exception:
+            pass                         # a queue bug must never cost the command
 
     if _REWRITES:
         out = cmd

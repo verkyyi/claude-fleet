@@ -1794,6 +1794,25 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Load-gen max share of cores @group=disk @tier=internal @scope=global @edit=int @unit=%
 #FLEET_LOADGEN_CORE_PCT=50
 
+# Heavy-job queue (bin/fleet-heavy.sh, issue #1295): tests, pre-PR gates and
+# pushes run at most SLOTS at once ACROSS EVERY LOGIN on this machine — the rest
+# queue. Slots are flocks on /Users/Shared/claude-fleet/heavy/slot-K (Linux:
+# /var/tmp/claude-fleet/heavy), released the instant a holder dies. The fleet's
+# Bash hook prefixes the wrapper onto any statement whose command matches RE
+# (a Python regex; empty = the built-in default: git push, pytest, npm test,
+# run-selftests.sh, local-prod-gate.sh, pre-pr.sh) — business repos change
+# nothing. A queued job runs anyway after WAIT seconds, with a WARN; a foreground
+# Bash call queues at most half its tool timeout. `fleet-heavy.sh --status` lists
+# holders and waiters. Set FLEET_HEAVY=0 to stop rewriting.
+# @label=Heavy-job queue @group=disk @tier=internal @scope=global @edit=bool
+#FLEET_HEAVY=1
+# @label=Heavy-job slots (machine-wide) @group=disk @tier=internal @scope=global @edit=int
+#FLEET_HEAVY_SLOTS=3
+# @label=Heavy-job max queue wait @group=disk @tier=internal @scope=global @edit=int @unit=sec
+#FLEET_HEAVY_WAIT=1800
+# @label=Heavy-job command regex @group=disk @tier=internal @scope=global @edit=str
+#FLEET_HEAVY_RE=
+
 # --- Spawn ergonomics -------------------------------------------------------
 # By default a newly spawned worker window is created in the background (tmux
 # new-window -d) and NOT selected — you stay on your current window, and the new
