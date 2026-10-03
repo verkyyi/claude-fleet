@@ -56,8 +56,10 @@
 #   stalled: `done` / `waiting`, or `working` with an idle process tree
 #
 #   --timeout <s>   give up after this long (default 7200 = 2h; never unbounded)
-#   --interval <s>  seconds between ledger reads (default 60; the read is a local
-#                   file + one list-windows, but nothing here needs faster)
+#   --interval <s>  seconds between full reads (default 60; the read is a local
+#                   file + one list-windows). A report does not wait for it: the
+#                   ledger file is watched every second and a change reads at
+#                   once (issue #1272) — still no gh, no network.
 #   --no-spawn      only wait; exit 5 when #N has no live worker
 #   --parent <key>  the ledger key to report to (default: this pane's own key —
 #                   fleet_origin_key; the hub/dash has none, so run it from a
@@ -79,7 +81,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
-usage() { sed -n '2,78p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,80p' "$0" | sed 's/^# \{0,1\}//'; }
 die()   { printf 'fleet-await: %s\n' "$1" >&2; exit "${2:-2}"; }
 
 NUM='' TIMEOUT=7200 INTERVAL=60 SPAWN=1 KEY='' REPO_ARG='' SOCK=''
@@ -366,6 +368,23 @@ else
 fi
 
 # --- 2. wait ----------------------------------------------------------------------
+# pause <secs> — the gap between reads, cut short the moment the ledger changes
+# (issue #1272): a child's report is an append to $LEDGER's file, so the wait
+# answers within ~1s of it instead of up to --interval later. Watching it is a
+# local `wc -c` per FLEET_AWAIT_TICK (1s); the full read (fleet-children.sh +
+# list-windows + the ladder) still runs only once per --interval or per change.
+LFILE=$(children_file "$LEDGER" "$sess" 2>/dev/null)
+TICK="${FLEET_AWAIT_TICK:-1}"; case "$TICK" in ''|*[!0-9]*|0) TICK=1 ;; esac
+lsize() { [ -n "$LFILE" ] && wc -c < "$LFILE" 2>/dev/null | tr -d ' '; }
+pause() {
+  local n=$1 s0 t
+  s0=$(lsize)
+  while [ "$n" -gt 0 ]; do
+    t=$TICK; [ "$t" -gt "$n" ] && t=$n
+    sleep "$t"; n=$((n - t))
+    [ "$(lsize)" = "$s0" ] || return 0
+  done
+}
 # The ladder resumes from the rung a previous wait recorded (issue #1268).
 read -r L_LEVEL L_ANCHOR <<< "$(children_wake_state "$LEDGER" "$CKEY" "$sess")"
 case "$L_LEVEL" in ''|*[!0-9]*) L_LEVEL=0 ;; esac
@@ -376,7 +395,7 @@ needs_polls=0 gone_polls=0
 while :; do
   left=$((TIMEOUT - SECONDS))
   [ "$left" -gt 0 ] || finish TIMEOUT "still running — re-run fleet-await.sh $NUM to keep waiting"
-  sleep "$([ "$INTERVAL" -lt "$left" ] && echo "$INTERVAL" || echo "$left")"
+  pause "$([ "$INTERVAL" -lt "$left" ] && echo "$INTERVAL" || echo "$left")"
 
   split "$(probe)" || true
   if [ "$P_SEQ" -gt "$BASE" ] 2>/dev/null; then
