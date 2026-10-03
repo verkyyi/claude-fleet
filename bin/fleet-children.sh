@@ -115,7 +115,7 @@ rows() {
     [ -n "$key" ] || continue
     # A `done` child whose @loop still holds a round is between /loop rounds, not
     # finished (issue #1331) — report it as the `looping` it is.
-    if [ "$st" = done ] && [ -n "$loop" ] \
+    if [ "$st" = 'done' ] && [ -n "$loop" ] \
        && python3 "$BIN/fleet_loop_mark.py" status --value "$loop" >/dev/null 2>&1; then
       st=looping
     fi

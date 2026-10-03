@@ -119,7 +119,7 @@ hookpost() {   # <json> [entrypoint]
   printf '%s' "$1" | env TMUX="$TMUXV" TMUX_PANE="$PANE" CLAUDE_CODE_ENTRYPOINT="${2:-cli}" \
     python3 "$BIN/fleet_loop_mark.py" hook
 }
-stop() { env TMUX="$TMUXV" TMUX_PANE="$PANE" sh "$BIN/set-claude-state.sh" done </dev/null >/dev/null 2>&1; }
+stop() { env TMUX="$TMUXV" TMUX_PANE="$PANE" sh "$BIN/set-claude-state.sh" 'done' </dev/null >/dev/null 2>&1; }
 
 # --- 2. the PostToolUse hook ----------------------------------------------------
 hookpost '{"hook_event_name":"PostToolUse","tool_name":"ScheduleWakeup","tool_input":{"delaySeconds":1800,"prompt":"/loop check"}}'
@@ -144,7 +144,7 @@ eq "fleet_window_loop answers active" "0 active cron:ab12cd34" "$rc $out"
 out=$(python3 "$BIN/fleet-reap-live.py" "$WIN" --socket-name "$SESS"); rc=$?
 eq "fleet-reap-live.py retains it" "1 retained:loop" "$rc $out"
 # even a classifier/demote `done` stamped over it: the mark, not the state, decides
-tf set-window-option -t "$PANE" @claude_state done
+tf set-window-option -t "$PANE" @claude_state 'done'
 out=$(FLEET_REAP_MIN_AGE=0 python3 "$BIN/fleet-reap-live.py" "$WIN" --socket-name "$SESS"); rc=$?
 eq "…ahead of the state and age gates" "1 retained:loop" "$rc $out"
 out=$(bash "$BIN/fleet-epic-loopers.sh" --session "$SESS" --repo o/r 1331 4242)
@@ -154,7 +154,7 @@ eq "the EPIC report's probe: looping member + a gone one" \
 hookpost '{"tool_name":"CronDelete","tool_input":{"id":"ab12cd34"}}'
 eq "CronDelete of the last job clears @loop" "" "$(loopv)"
 stop
-eq "Stop with no Loop stamps done (today's behaviour)" done "$(st)"
+eq "Stop with no Loop stamps done (today's behaviour)" 'done' "$(st)"
 out=$(fleet_window_loop "$SESS" "$WIN"); rc=$?
 eq "fleet_window_loop answers none" "1 none unset" "$rc $out"
 out=$(FLEET_REAP_MIN_AGE=0 python3 "$BIN/fleet-reap-live.py" "$WIN" --socket-name "$SESS"); rc=$?
@@ -167,7 +167,7 @@ eq "the EPIC probe: an idle member" "1331	idle	unset" "$out"
 now=$(date +%s)
 tf set-window-option -t "$PANE" @loop "kind=wakeup next=$((now - 3600)) ttl=1800"
 stop
-eq "Stop after an unrenewed wakeup lapsed stamps done" done "$(st)"
+eq "Stop after an unrenewed wakeup lapsed stamps done" 'done' "$(st)"
 out=$(fleet_window_loop "$SESS" "$WIN"); rc=$?
 eq "fleet_window_loop: the lapsed mark reads expired" "1 none expired" "$rc $out"
 tf set-window-option -t "$PANE" @loop "kind=wakeup next=$((now + 600)) ttl=600"
@@ -183,6 +183,6 @@ stop
 eq "a live loop ledger stamps looping" looping "$(st)"
 printf '{"status":"stopped"}\n' > "$WORK/handoff/loop/state.json"
 stop
-eq "a stopped loop ledger stamps done" done "$(st)"
+eq "a stopped loop ledger stamps done" 'done' "$(st)"
 
 printf 'fleet-loop-mark-selftest: OK (%d checks)\n' "$CHECKS"

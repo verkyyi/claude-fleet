@@ -373,7 +373,7 @@ while IFS=$US read -r sess idx name path state _ _ iss origin wt _ _ nsub exp pi
   # rank 1 is "quiet", not "finished" (issue #1331): a sleeper, a waking/preparing
   # worker, and a `done` window whose @loop still holds a pending round all sort
   # with done, but only a done window with NO Loop counts toward its parent's k/N.
-  [ "$rk" = 1 ] && { [ "$state" != done ] || loop_live_v "$wloop"; } && UNFIN+="$okey"$'\n'
+  [ "$rk" = 1 ] && { [ "$state" != 'done' ] || loop_live_v "$wloop"; } && UNFIN+="$okey"$'\n'
 done <<< "$WLIST"
 
 # The PR haystack for THIS frame (issue #662). The render loop looks a branch up
