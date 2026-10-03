@@ -48,7 +48,9 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # direct run, and costs one ~100ms mirror when nested.
 if [ "${_CLASSIFY_SELFTEST_ROOT:-}" != "$BIN" ]; then
   _root="$(sh "$BIN/selftest-shadow-root.sh" "$BIN/..")" || exit 2
-  _CLASSIFY_SELFTEST_ROOT="$_root/bin" bash "$_root/bin/${0##*/}" "$@"; _rc=$?
+  # Spell the marker the way the child computes $BIN (logical pwd) — a `//` from
+  # macOS's trailing-slash $TMPDIR here once never matched, and recursed (#1305).
+  _CLASSIFY_SELFTEST_ROOT="$(cd "$_root/bin" && pwd)" bash "$_root/bin/${0##*/}" "$@"; _rc=$?
   rm -rf "$_root"; exit "$_rc"
 fi
 CLS="$BIN/classify-sessions.sh"
@@ -114,10 +116,12 @@ srv.timeout = 0.5; ppid = os.getppid(); t0 = time.time()
 while os.getppid() == ppid and time.time() - t0 < 300:
     srv.handle_request()
 PY
-python3 "$WORK/jev-server.py" "$WORK" &
+python3 "$WORK/jev-server.py" "$WORK" 2>"$WORK/jev-err" &
 JEV_PID=$!
-i=0; while [ "$i" -lt 50 ] && [ ! -s "$WORK/jev-port" ]; do i=$((i+1)); sleep 0.1; done
-[ -s "$WORK/jev-port" ] || fail "fake Jev server never bound"
+# 30s, not 5: a cold python3 on a macOS CI runner took longer than 5s to bind
+# (issue #1305). A server that DIED stops the wait at once and says why.
+i=0; while [ "$i" -lt 300 ] && [ ! -s "$WORK/jev-port" ] && kill -0 "$JEV_PID" 2>/dev/null; do i=$((i+1)); sleep 0.1; done
+[ -s "$WORK/jev-port" ] || fail "fake Jev server never bound (after $((i/10))s)" "$(cat "$WORK/jev-err" 2>/dev/null)"
 JEV_URL="http://127.0.0.1:$(cat "$WORK/jev-port")/v1/systemone"
 
 cleanup() { kill "$JEV_PID" 2>/dev/null; tmux kill-server 2>/dev/null; rm -rf "$WORK"; }

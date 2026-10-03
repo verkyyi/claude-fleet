@@ -111,6 +111,13 @@ real=${1:-$(cd -- "$self_dir/.." && pwd)} || exit 2
 [ -d "$real/bin" ] || { echo "selftest-shadow-root: $real has no bin/" >&2; exit 2; }
 
 shadow=$(mktemp -d "${TMPDIR:-/tmp}/fleet-selftest-root.XXXXXX") || exit 2
+# Print the path the way a script inside it will SEE it (issue #1305). macOS's
+# $TMPDIR ends in `/`, so mktemp hands back `…/T//fleet-selftest-root.X`, while
+# `$BIN` (a logical `cd … && pwd`) collapses the `//`. A selftest that re-roots
+# itself compares the two to break its own recursion — with them spelled
+# differently it never matched, nested shadow inside shadow until the symlink
+# chain hit ELOOP, and died exit 126 ~20s in. Logical pwd, not -P: keep `/var`.
+shadow=$(cd -- "$shadow" && pwd) || exit 2
 mkdir -p "$shadow/bin" "$shadow/logs" "$shadow/conf-dir" || exit 2
 
 # Top-level entries, dotfiles included. An unmatched glob stays literal under sh,

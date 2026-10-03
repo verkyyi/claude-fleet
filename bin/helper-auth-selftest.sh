@@ -41,7 +41,9 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # direct run, and costs one ~100ms mirror when nested.
 if [ "${_HELPER_AUTH_SELFTEST_ROOT:-}" != "$BIN" ]; then
   _root="$(sh "$BIN/selftest-shadow-root.sh" "$BIN/..")" || exit 2
-  _HELPER_AUTH_SELFTEST_ROOT="$_root/bin" bash "$_root/bin/${0##*/}" "$@"; _rc=$?
+  # Spell the marker the way the child computes $BIN (logical pwd) — a `//` from
+  # macOS's trailing-slash $TMPDIR here once never matched, and recursed (#1305).
+  _HELPER_AUTH_SELFTEST_ROOT="$(cd "$_root/bin" && pwd)" bash "$_root/bin/${0##*/}" "$@"; _rc=$?
   rm -rf "$_root"; exit "$_rc"
 fi
 LIB="$BIN/fleet-lib.sh"

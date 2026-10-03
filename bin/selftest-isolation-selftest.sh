@@ -198,6 +198,19 @@ CHECKS=$((CHECKS + 1))
 case "${SHADOW##*/}" in *selftest*) ;; *) fail "shadow temp dir '${SHADOW##*/}' has no 'selftest' in its name — fleet-selftest-reap.sh cannot collect an orphan" ;; esac
 ok "the shadow temp dir is named for the reaper"
 
+# macOS's $TMPDIR ends in `/` (issue #1305). The printed path must be spelled the
+# way a script inside it computes `$BIN` (logical pwd, `//` collapsed): the
+# self-re-rooting selftests break their recursion on that string equality, and a
+# `…/T//fleet-selftest-root.X` never matched — nested shadows until ELOOP.
+SLASHTMP="$(mktemp -d "${TMPDIR:-/tmp}/isolation-slash-selftest.XXXXXX")" || fail "mktemp"
+S2="$(TMPDIR="$SLASHTMP/" clean_env "$FAKE/bin/selftest-shadow-root.sh")" \
+  || { rm -rf "$SLASHTMP"; fail "shadow-root builder failed under a trailing-slash TMPDIR"; }
+S2_LOGICAL="$(cd "$S2/bin" && pwd)"
+rm -rf "$S2" "$SLASHTMP"
+[ "$S2/bin" = "$S2_LOGICAL" ] \
+  || fail "trailing-slash TMPDIR: shadow printed as '$S2', but its bin/ resolves to '$S2_LOGICAL'"
+ok "a trailing-slash TMPDIR yields a shadow path spelled as its own \$BIN sees it"
+
 # ============================================================================
 # D. END TO END — the runner, from an install root that HAS a conf
 # ============================================================================
