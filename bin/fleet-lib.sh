@@ -2997,19 +2997,19 @@ fleet_files_probe() {
     | awk 'NF { v[++n] = $1 + 0 } END { if (n == 2 && v[2] > 0) printf "%d %d\n", v[1], v[2] }'
 }
 fleet_pty_probe() {
-  local n max
+  local n=0 max f
   if [ -n "${FLEET_PTY_PROBE_CMD:-}" ]; then
     sh -c "$FLEET_PTY_PROBE_CMD" 2>/dev/null | awk 'NF{print; exit}'; return 0
   fi
   if [ -r /proc/sys/kernel/pty/max ]; then
     max="$(cat /proc/sys/kernel/pty/max 2>/dev/null)"
-    n="$(ls /dev/pts 2>/dev/null | grep -c '^[0-9][0-9]*$')"
+    for f in /dev/pts/[0-9]*; do [ -e "$f" ] && n=$((n + 1)); done
   else
     max="$(sysctl -n kern.tty.ptmx_max 2>/dev/null)"
-    n="$(ls /dev 2>/dev/null | grep -c '^ttys[0-9][0-9]*$')"
+    for f in /dev/ttys[0-9]*; do [ -e "$f" ] && n=$((n + 1)); done
   fi
   case "$max" in ''|*[!0-9]*|0) return 0 ;; esac
-  printf '%d %d\n' "${n:-0}" "$max"
+  printf '%d %d\n' "$n" "$max"
 }
 
 # fleet_proc_cwd <pid> — the process's working directory, or nothing.
