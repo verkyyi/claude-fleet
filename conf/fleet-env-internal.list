@@ -126,6 +126,7 @@ FLEET_LIVE_ROOT                    path: state/log location override (fleet-daem
 FLEET_LOGIN_HOMES                  seam: an injectable command/path for tests (fleet-login-new.sh)
 FLEET_LOOP_AGENT                   handoff: which agent the /loop spec belongs to
 FLEET_LOOP_SPEC                    handoff: the /loop spec a relaunched agent restores
+FLEET_CLAUDE_RSS_EVERY             knob: min seconds between memguard fat-session checks (fleet-memguard.sh, 30)
 FLEET_MEM_INTERVAL                 knob: seconds between memguard samples (fleet-memguard.sh, 2)
 FLEET_MEM_KILLED_TTL               knob: how long the dash keeps a window's @mem_killed badge (fleet-memguard.sh, 3600)
 FLEET_MEM_MAX_TICKS                seam: stop the memguard loop after N samples (the selftest drives the ring with it)

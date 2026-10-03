@@ -31,6 +31,15 @@
 #   B  orphan  PPID=1, cwd a fleet anchor, RSS > FLEET_MEM_ORPHAN_MB (2048), alive
 #              > FLEET_MEM_ORPHAN_SECS (6h) → FLEET_MEM_ORPHAN_ACTION (default
 #              report). Swept every FLEET_MEM_ORPHAN_EVERY (60s).
+#   C  fat     a claude / codex SESSION at ≥ FLEET_CLAUDE_RSS_WARN_MB (4096) →
+#              its window gets `@claude_mem_warn` (e.g. `4.3G`; dash `⚠ mem 4.3G`)
+#              and FLEET_NOTIFY_CMD one message per process naming the window, with
+#              the ready `fleet-peer-send.sh … /fleet-handoff` line that moves it to
+#              a fresh session (issue #1297). NEVER a restart — the operator decides.
+#              Cleared once it falls under 90% of the line (hysteresis, so a session
+#              sitting on the line does not flicker). Same `ps` sample, judged every
+#              FLEET_CLAUDE_RSS_EVERY (30s) — the tmux pane map is read only when a
+#              session is over the line or a badge is up.
 #
 # A kill is SIGKILL to that ONE pid — not its group, not its session: the shell
 # that ran it sees exit 137 and the session carries on. The pane's window gets
@@ -60,6 +69,8 @@
 #   FLEET_MEM_ORPHAN_ACTION   report | kill                  (default report)
 #   FLEET_MEM_ORPHAN_EVERY    seconds between orphan sweeps  (default 60)
 #   FLEET_MEM_KILLED_TTL      seconds the dash keeps `@mem_killed` (default 3600)
+#   FLEET_CLAUDE_RSS_WARN_MB  one session's RSS that earns @claude_mem_warn (default 4096; 0 = off)
+#   FLEET_CLAUDE_RSS_EVERY    seconds between those checks   (default 30)
 #   FLEET_METRICS             0 = no 10s machine-metrics rows under pressure (default 1;
 #                             the rows land beside diskguard's in machine/metrics-*.tsv, #1294)
 #   FLEET_NOTIFY_CMD          notifier run as `$CMD "<markdown>"`
@@ -90,6 +101,9 @@ GDIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/diskguard"
 SEEN="$GDIR/memguard-seen"          # "<pid>:<argv-cksum>" per line — notify once per process
 MARKS="$GDIR/memguard-marks"        # "<epoch>\t<socket>\t<window_id>" — @mem_killed to clear
 MARK_TTL=$(num "${FLEET_MEM_KILLED_TTL:-}" 3600)
+WARN_MB=$(num "${FLEET_CLAUDE_RSS_WARN_MB:-}" 4096)
+WARN_EVERY=$(num "${FLEET_CLAUDE_RSS_EVERY:-}" 30)
+WARNS="$GDIR/memguard-warns"        # "<socket>\t<window_id>\t<pid>" — windows carrying @claude_mem_warn
 TAB="$(printf '\t')"
 
 now() { date +%s; }
@@ -209,6 +223,68 @@ clear_marks() {
   printf '%s' "$keep" > "$MARKS.t" 2>/dev/null && mv "$MARKS.t" "$MARKS"
 }
 
+# fat_pass — rule C. A session (class agent) at ≥ WARN_MB, or one already badged
+# still ≥ 90% of it, keeps/gets @claude_mem_warn on its window; every other badge
+# this pass put up is cleared. One `list-panes` per fleet socket, and only when
+# there is something to badge or to clear.
+fat_pass() {
+  local low=$(( WARN_MB * 9 / 10 )) prev='' fat pmap s hits sock win pid rss name issue gb key short
+  [ -s "$WARNS" ] && prev="$(cat "$WARNS" 2>/dev/null)"
+  fat="$(printf '%s\n' "$ROWS" | awk -F'\t' -v m="$WARN_MB" -v lo="$low" -v pv="$(printf '%s\n' "$prev" | awk -F'\t' '{printf "%s ", $3}')" '
+    BEGIN { n = split(pv, a, / +/); for (i = 1; i <= n; i++) if (a[i] != "") was[a[i]] = 1 }
+    $5 == "agent" && ($3 >= m || (($1 in was) && $3 >= lo))')"
+  [ -n "$fat" ] || [ -n "$prev" ] || return 0
+  pmap=''
+  if command -v fleet_sockets >/dev/null 2>&1; then
+    for s in $(fleet_sockets 2>/dev/null); do
+      pmap="$pmap$(tmux -L "$s" list-panes -a -F '#{pane_pid}	#{window_id}	#{window_name}	#{@issue}' 2>/dev/null \
+        | awk -F'\t' -v s="$s" 'NF { print s "\t" $0 }')
+"
+    done
+  fi
+  # each fat session → its window by ancestry (the session may BE the pane pid,
+  # or sit under the pane's shell); several sessions in one window → the biggest.
+  hits="$( { printf '%s\n' "$pmap" | sed 's/^/P\t/'; printf '%s\n' "$ROWS" | sed 's/^/R\t/'; printf '%s\n' "$fat" | sed 's/^/F\t/'; } | awk -F'\t' '
+    $1 == "P" && $2 != "" { pane[$3] = $2 "\t" $4 "\t" $5 "\t" $6; next }
+    $1 == "R" { par[$2] = $3; next }
+    $1 == "F" && $2 != "" { q = $2; h = 0
+      while (q > 1 && h++ < 64) { if (q in pane) break; q = par[q] }
+      if (!(q in pane)) next
+      split(pane[q], w, "\t"); k = w[1] "\t" w[2]
+      if (!(k in best) || $4 > rs[k]) { best[k] = $2; rs[k] = $4; nm[k] = w[3]; is[k] = w[4] } }
+    END { for (k in best) printf "%s\t%s\t%s\t%s\t%s\n", k, best[k], rs[k], nm[k], is[k] }')"
+  [ "$DRY" = 1 ] || { mkdir -p "$GDIR" 2>/dev/null && : > "$WARNS.t"; }
+  while IFS="$TAB" read -r sock win pid rss name issue; do
+    [ -n "$pid" ] || continue
+    gb="$(awk -v m="$rss" 'BEGIN{ printf "%.1f", m/1024 }')"
+    if [ "$ONCE" = 1 ]; then
+      printf 'fat\t%s\t%s\t%sMB\t-\tagent\t%s:%s %s\n' "$([ "$DRY" = 1 ] && echo would-warn || echo warn)" \
+        "$pid" "$rss" "$sock" "$win" "$name"
+    fi
+    [ "$DRY" = 1 ] && continue
+    tmux -L "$sock" set-option -w -t "$win" @claude_mem_warn "${gb}G" 2>/dev/null || continue
+    printf '%s\t%s\t%s\n' "$sock" "$win" "$pid" >> "$WARNS.t"
+    key="fat:$pid:$(printf '%s' "$name" | cksum | tr -c '0-9\n' '_')"
+    seen "$key" && continue
+    short="$name${issue:+ (issue #$issue)}"
+    notify "# 🐘 fleet session \`$short\` holds ${gb} GB
+Over FLEET_CLAUDE_RSS_WARN_MB=${WARN_MB} — window $sock:$win now shows \`⚠ mem ${gb}G\` on the dash. Nothing is restarted.
+To carry on in a fresh session, run:
+\`$BIN/fleet-peer-send.sh -L $sock $pid 'Run /fleet-handoff now (cycle mode, no arguments): memguard says this session holds ${gb} GB.'\`"
+  done <<EOF
+$hits
+EOF
+  [ "$DRY" = 1 ] && { rm -f "$WARNS.t"; return 0; }
+  # clear every badge this pass did not renew (the session shrank, exited, or its window closed)
+  printf '%s\n' "$prev" | while IFS="$TAB" read -r sock win pid; do
+    [ -n "$win" ] || continue
+    grep -q "^$sock$TAB$win$TAB" "$WARNS.t" 2>/dev/null && continue
+    tmux -L "$sock" set-option -wu -t "$win" @claude_mem_warn 2>/dev/null || :
+  done
+  mv "$WARNS.t" "$WARNS" 2>/dev/null || :
+  return 0
+}
+
 exempt() { [ -n "$EXEMPT_RE" ] && printf '%s' "$1" | grep -Eq -- "$EXEMPT_RE"; }
 
 # Is an orphan row ours? Only asked for a row that has already crossed a line.
@@ -217,6 +293,7 @@ orphan_ours() { [ -n "$(fleet_listen_anchor "$(fleet_proc_cwd "$1")")" ]; }
 TOTAL_MB=$(num "$(fleet_mem_total_mb)" 0)
 HIST=''          # "<ts>\t<pid>\t<rssMB>" samples inside the window (daemon only)
 LAST_ORPHAN=0
+LAST_WARN=0
 PRIMED=0         # 1 once the ring holds a sample (see tick)
 ROWS=''
 
@@ -267,6 +344,12 @@ tick() {
 $cands
 EOF
 
+  # C — a session grown fat (issue #1297): badge + one notification, never a restart
+  if [ "$WARN_MB" -gt 0 ] && { [ "$ONCE" = 1 ] || [ $(( t - LAST_WARN )) -ge "$WARN_EVERY" ]; }; then
+    LAST_WARN=$t
+    fat_pass
+  fi
+
   # B — long-lived orphans holding memory (throttled; lsof only for the few over the line)
   if [ "$ONCE" = 1 ] || [ $(( t - LAST_ORPHAN )) -ge "$ORPHAN_EVERY" ]; then
     LAST_ORPHAN=$t
@@ -289,7 +372,7 @@ for a in "$@"; do
     --daemon) MODE=daemon ;;
     --once) MODE=once ;;
     --dry-run) DRY=1 ;;
-    -h|--help) sed -n '2,66p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,77p' "$0"; exit 0 ;;
     *) printf 'fleet-memguard: unknown argument %s (see --help)\n' "$a" >&2; exit 2 ;;
   esac
 done
@@ -337,6 +420,6 @@ case "$MODE" in
       sleep "$INTERVAL"
     done
     ;;
-  *) sed -n '2,66p' "$0"; exit 0 ;;
+  *) sed -n '2,77p' "$0"; exit 0 ;;
 esac
 exit 0

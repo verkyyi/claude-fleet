@@ -22,6 +22,9 @@
 #   9 *_ACTION=report             → never kills
 #   10 the same pid twice         → one notification
 #   11 --dry-run                  → kills nothing, writes nothing
+#   13 a claude session ≥ 4 GB    → @claude_mem_warn on its window, ONE notify naming
+#                                   it + the /fleet-handoff line; held at ≥ 90%,
+#                                   cleared below; under the line never badged (#1297)
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 MG="$BIN/fleet-memguard.sh"
@@ -215,5 +218,39 @@ cls=$(FLEET_MEM_PS_CMD="cat $WORK/t12" bash -c ". '$BIN/fleet-lib.sh'; fleet_pro
   || fail "12: classification drifted — got [$cls] (a default-socket tmux is not a fleet; the native build is an agent)"; ok
 pr=$(FLEET_MEM_PROBE_CMD='echo 4 5 97 0' bash -c ". '$BIN/fleet-lib.sh'; fleet_mem_probe")
 [ "$pr" = "4 5 97 0" ] || fail "12: FLEET_MEM_PROBE_CMD must be the reading verbatim — got [$pr]"; ok
+
+# 13. rule C — a fat SESSION: badge + one notification, never touched (#1297) -------
+if [ -n "$PANE_PID" ]; then
+  fresh 13; mkdir -p "$CONF/fleets/$SOCK"; : > "$CONF/fleets/$SOCK/conf"
+  "$REAL_TMUX" -L "$SOCK" rename-window -t "$SOCK:0" fatwin 2>/dev/null
+  warnopt() { "$REAL_TMUX" -L "$SOCK" show-options -wv -t "$SOCK:0" @claude_mem_warn 2>/dev/null; }
+  fatrow() { { row "$TMUX_SRV" 1 50 "01:00:00" "tmux -L $SOCK new-session -d"
+               row "$PANE_PID" "$TMUX_SRV" "$1" "3-01:00:00" "claude --model opus"; } > "$WORK/table.1"; }
+  nfat() { awk '/^# 🐘/{n++} END{print n+0}' "$WORK/notified"; }
+  fatrow 3800
+  out=$(run FLEET_MEM_PROBE_CMD="$NORMAL" bash "$MG" --once 2>&1)
+  [ -z "$(warnopt)" ] || fail "13: a session under the line must not be badged" "$out"; ok
+  fatrow 5000
+  out=$(run FLEET_MEM_PROBE_CMD="$NORMAL" bash "$MG" --once --dry-run 2>&1)
+  printf '%s' "$out" | grep -q "^fat	would-warn	$PANE_PID	5000MB" || fail "13: --dry-run must list the fat session" "$out"; ok
+  [ -z "$(warnopt)" ] || fail "13: --dry-run must not badge"; ok
+  out=$(run FLEET_MEM_PROBE_CMD="$NORMAL" bash "$MG" --once 2>&1)
+  alive "$PANE_PID" || fail "13: a fat session must never be killed" "$out"; ok
+  [ "$(warnopt)" = "4.9G" ] || fail "13: the window must carry @claude_mem_warn=4.9G — got [$(warnopt)]" "$out"; ok
+  [ "$(nfat)" = 1 ] || fail "13: expected one notification, got $(nfat)"; ok
+  grep -q "fatwin" "$WORK/notified" && grep -q "fleet-peer-send.sh -L $SOCK $PANE_PID .*fleet-handoff" "$WORK/notified" \
+    || fail "13: the notification must name the window and carry the /fleet-handoff line"; ok
+  run FLEET_MEM_PROBE_CMD="$NORMAL" bash "$MG" --once >/dev/null 2>&1
+  [ "$(nfat)" = 1 ] || fail "13: the same session must be notified ONCE, got $(nfat)"; ok
+  fatrow 3800
+  run FLEET_MEM_PROBE_CMD="$NORMAL" bash "$MG" --once >/dev/null 2>&1
+  [ "$(warnopt)" = "3.7G" ] || fail "13: at ≥ 90% of the line the badge holds (and says the new size) — got [$(warnopt)]"; ok
+  fatrow 3000
+  run FLEET_MEM_PROBE_CMD="$NORMAL" bash "$MG" --once >/dev/null 2>&1
+  [ -z "$(warnopt)" ] || fail "13: fallen back under 90% the badge must clear — got [$(warnopt)]"; ok
+  fatrow 9000
+  run FLEET_MEM_PROBE_CMD="$NORMAL" FLEET_CLAUDE_RSS_WARN_MB=0 bash "$MG" --once >/dev/null 2>&1
+  [ -z "$(warnopt)" ] || fail "13: FLEET_CLAUDE_RSS_WARN_MB=0 turns rule C off"; ok
+fi
 
 printf 'fleet-memguard-selftest: %d checks passed\n' "$CHECKS"
