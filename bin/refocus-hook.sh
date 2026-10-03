@@ -24,7 +24,8 @@
 #
 # WHO GETS IT. Only a WORKER (fleet_seat, with the same issue-<N> worktree
 # fallback fleet-claim-brief.sh uses) gets the charter. A scratch session (@raw=1)
-# gets its recovery map back instead, and only after a FLEET compaction (#1318).
+# gets its recovery map back instead, and only after a FLEET compaction (#1318) or
+# a native one bin/precompact-hook.sh saved a map for (#1321).
 # The hub has neither ⇒ zero output, as does a pane outside tmux, a headless `claude -p` child
 # (CLAUDE_CODE_ENTRYPOINT ≠ cli, same discriminator as set-claude-state.sh), and
 # a multi-repo window whose repo is unknown (skipped, never guessed — CLAUDE.md).
@@ -66,6 +67,17 @@ if [ "${cstate%%|*}" = compacting ]; then
   tmux set-window-option -t "$TMUX_PANE" @compact_count $(( ccount + 1 )) 2>/dev/null
   compact_check=1
 fi
+# A native compaction the fleet saw coming (issue #1321): bin/precompact-hook.sh
+# wrote the recovery map itself just before Claude Code's own compaction and
+# stamped @compact_native. Read back here like a fleet map (not for a fleet
+# compaction, which has its own), and consumed: one compaction, one read-back.
+# A stamp older than an hour is stale — the compaction it announced never came.
+native=''
+nts=$(tmux display-message -p -t "$TMUX_PANE" '#{@compact_native}' 2>/dev/null)
+case "$nts" in ''|*[!0-9]*) : ;; *)
+  tmux set-window-option -u -t "$TMUX_PANE" @compact_native 2>/dev/null
+  [ -z "$compact_check" ] && [ $(( $(date +%s) - nts )) -le 3600 ] && native=1 ;;
+esac
 # The context-ladder ledger (issue #1320): every compaction this pane comes back
 # from — ours (`fleet`, the count just bumped) or Claude Code's own (`auto`, which
 # used to leave no trace outside the transcript).
@@ -90,24 +102,27 @@ issue="${issue//[^0-9]/}"
 # dropped it), with the same "check first" line. An auto compaction (not ours) and a
 # missing map stay silent, as scratch always was. Same ≤ 1.5 KB contract.
 if [ -z "$issue" ] && [ "$raw" = 1 ]; then
-  [ -n "$compact_check" ] || exit 0
+  [ -n "$compact_check$native" ] || exit 0
   sess=$(fleet_current_session)
   [ -n "$sess" ] && fleet_load_conf "$sess" 2>/dev/null
   [ "${FLEET_REFOCUS:-1}" = 0 ] && exit 0
   map=$(fleet_recovery_map_path "$TMUX_PANE" "$(pwd -P 2>/dev/null)")
   [ -n "$map" ] && [ -f "$map" ] || exit 0
-  REFOCUS_MAP="$map" python3 - <<'PY' 2>/dev/null
+  REFOCUS_MAP="$map" REFOCUS_NATIVE="$native" python3 - <<'PY' 2>/dev/null
 import json, os
 path = os.environ["REFOCUS_MAP"]
+who = ("Claude Code auto-compacted you; the fleet saved this map just before"
+       if os.environ.get("REFOCUS_NATIVE") else
+       "The fleet compacted you in place to avoid a handoff")
 try:
     body = open(path, encoding="utf-8", errors="replace").read().strip()
 except OSError:
     raise SystemExit(0)
 head = "\n".join([
     "[fleet recovery map] scratch",
-    "The fleet compacted you in place to avoid a handoff. CHECK FIRST: compare this "
+    "%s. CHECK FIRST: compare this "
     "recovery map (%s) with `git status`, `git log -3` and any PR it names; fix any "
-    "drift, then resume its next step." % path,
+    "drift, then resume its next step." % (who, path),
     "--- map ---",
 ])
 ctx = head + "\n" + body
@@ -164,7 +179,7 @@ case "$origin" in
 esac
 
 map=''
-if [ -n "$compact_check" ]; then
+if [ -n "$compact_check$native" ]; then
   map=$(fleet_recovery_map_path "$TMUX_PANE" "$cwd")
   [ -n "$map" ] && [ -f "$map" ] || map=''
 fi
@@ -173,6 +188,7 @@ REFOCUS_ISSUE="$issue" REFOCUS_REPO="$repo" REFOCUS_TITLE="$title" \
 REFOCUS_CWD="$cwd" REFOCUS_BRANCH="$branch" REFOCUS_BASE="$base" \
 REFOCUS_MAIN="$main" REFOCUS_MERGE="$merge" REFOCUS_PR="$pr" \
 REFOCUS_ORIGIN="$origin_line" REFOCUS_CHECK="$compact_check" REFOCUS_MAP="$map" \
+REFOCUS_NATIVE="$native" \
 python3 - <<'PY' 2>/dev/null
 import json, os
 e = os.environ.get
@@ -188,6 +204,10 @@ if e("REFOCUS_CHECK"):
     lines.append("- The fleet compacted you in place to avoid a handoff. CHECK FIRST: compare your "
                  "recovery map (%s) with `git status`, `git log -3` and the PR; fix any drift, "
                  "then resume its next step." % (e("REFOCUS_MAP") or "in the summary above"))
+elif e("REFOCUS_NATIVE") and e("REFOCUS_MAP"):
+    lines.append("- Claude Code auto-compacted you; the fleet saved a recovery map just before "
+                 "(%s: git state, PR, latest issue comment, your last prompts). CHECK FIRST: read it, "
+                 "compare with `git status` and the PR, then resume." % e("REFOCUS_MAP"))
 lines += [
     "- worktree %s · branch %s → base %s · PR: %s"
         % (e("REFOCUS_CWD"), e("REFOCUS_BRANCH"), e("REFOCUS_BASE"), e("REFOCUS_PR")),

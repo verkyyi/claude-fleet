@@ -1392,6 +1392,15 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Re-state charter after compact @group=handoff @tier=internal @scope=fleet @edit=bool
 #FLEET_REFOCUS=1                 # 1 = re-inject the worker charter after /compact; 0 = off
 
+# Save a recovery map before Claude Code's OWN auto-compaction (issue #1321). With
+# the lines above set right the fleet compacts first, but a window that never took
+# the fleet's path meets the built-in one unprepared; this PreCompact(auto) hook
+# writes the map itself (git, PR, latest issue comment, last prompts), logs
+# `native-precompact` on the context ladder, and the refocus reads it back.
+# Workers + scratch; the hub only gets the ledger row. 0 = off.
+# @label=Save map before native compact @group=handoff @tier=internal @scope=fleet @edit=bool
+#FLEET_PRECOMPACT=1              # 1 = auto-save a recovery map at PreCompact(auto); 0 = off
+
 # The wait-idle ceiling of the handoff cycle (bin/fleet-handoff-cycle.sh): how long
 # it waits for the arming turn to end (@claude_state leaves `working`) before it
 # ABORTS WITHOUT CLEARING. A big handoff turn can legitimately run over two minutes.

@@ -596,7 +596,10 @@ tmux_calls_per_s=<n.n>` — the epoch stays the first token for the liveness rea
   `restored` (`refocus-hook.sh`; reason `fleet`, or `auto` for Claude Code's own
   auto-compaction, which left no other trace) and `handoff-complete`
   (`fleet-handoff-cycle.sh`, with the context % and count from before its
-  `/clear`). Columns — epoch, time, step, session, pane, window, ctx %, count,
+  `/clear`), plus `native-precompact` (`precompact-hook.sh`, #1321: Claude Code's
+  own compaction is about to run — reason `<trigger> saved` when the hook wrote
+  the recovery map itself, `kept` when the prep step's newer map stands, `no-map`
+  on the hub). Columns — epoch, time, step, session, pane, window, ctx %, count,
   reason — are in the file's `#` header. `fleet-doctor`'s `context` row reads it:
   the last 24h's compactions and handoffs, plus the live window highest on the
   ladder and the step it is at.

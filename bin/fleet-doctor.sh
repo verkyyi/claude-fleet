@@ -2047,16 +2047,20 @@ lf="$ldir/context-ladder.log"
 lc=$(awk -F '\t' -v cut=$(( $(date +%s) - 86400 )) '
   /^#/ || $1 !~ /^[0-9]+$/ || $1 < cut { next }
   { n[$3]++ }
-  END { printf "%d %d %d %d", n["restored"], n["compacting"], n["handoff-complete"], n["handoff-nudge"] }
+  $3 == "native-precompact" && $9 ~ / (saved|kept)$/ { n["native-saved"]++ }
+  END { printf "%d %d %d %d %d %d", n["restored"], n["compacting"], n["handoff-complete"], n["handoff-nudge"], n["native-precompact"], n["native-saved"] }
 ' "$lf" 2>/dev/null)
-read -r lc_r lc_c lc_h lc_n <<EOF
-${lc:-0 0 0 0}
+read -r lc_r lc_c lc_h lc_n lc_x lc_xs <<EOF
+${lc:-0 0 0 0 0 0}
 EOF
-if [ "$lc_r$lc_c$lc_h$lc_n" = 0000 ]; then
+if [ "$lc_r$lc_c$lc_h$lc_n$lc_x" = 00000 ]; then
   lmsg="近 24h 无压缩 / 交接 (${lf})"
 else
   lmsg="近 24h 压缩 ${lc_r} 次（发起 ${lc_c}）、交接 ${lc_h} 次（提示 ${lc_n}）(${lf})"
 fi
+# Claude Code's own compaction (issue #1321): how often it beat the fleet's ladder,
+# and how many of those bin/precompact-hook.sh had already saved a map for.
+[ "${lc_x:-0}" -gt 0 ] && lmsg="${lmsg} · 自带压缩 ${lc_x} 次（已提前存档 ${lc_xs}）"
 # The live ladder, every fleet on this login: one tab row per window.
 lwin=''
 if [ -d "$conf_dir" ]; then

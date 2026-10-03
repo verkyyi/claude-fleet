@@ -76,6 +76,14 @@
         ]
       }
     ],
+    "PreCompact": [
+      {
+        "matcher": "auto",
+        "hooks": [
+          { "type": "command", "command": "bash ~/.claude/fleet/bin/precompact-hook.sh" }
+        ]
+      }
+    ],
     "SessionEnd": [
       {
         "matcher": "prompt_input_exit|logout",
