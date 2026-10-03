@@ -88,7 +88,7 @@ report() { bash "$SB/fleet-report-parent.sh" -L "$LBL" "$@" >/dev/null 2>&1; }
 STALLF="$WORK/.claude-dash/global/alerts.stall/$LBL-issue-301"
 
 # --- LADDER: five rungs, in order, one row each --------------------------------------
-W=$(child 301 done)
+W=$(child 301 'done')
 await 301 --timeout 40
 until_wakes 301 5
 eq "five rungs, in order, one ledger row each" \
@@ -120,7 +120,7 @@ eq "…and --json lists the wakes" "1 2 3 4 5" \
 
 # --- RESET: progress mid-ladder ------------------------------------------------------
 : > "$PEER_LOG"
-W=$(child 302 done)
+W=$(child 302 'done')
 await 302 --timeout 40
 until_wakes 302 2
 report --win "$W" --state waiting --pr 602
@@ -148,7 +148,7 @@ eq "working with an IDLE pane is a stall" "1:nudge" "$(wakes 305 | cut -d' ' -f1
 report --win "$W" --state merged --pr 605; collect
 
 # --- RESUME: a restarted wait climbs on ----------------------------------------------
-W=$(child 306 done)
+W=$(child 306 'done')
 await 306 --timeout 40
 until_wakes 306 2
 kill "$AWAIT_PID" 2>/dev/null; wait "$AWAIT_PID" 2>/dev/null
