@@ -446,3 +446,168 @@ fleet_gh_rest_repo_perm() {
         elif .triage then "TRIAGE" elif .pull then "READ" else "" end),
       (.default_branch // ""), ((.has_issues // true) | tostring) ] | @tsv'
 }
+
+# --- R3 (#1271): one account, one set of background reads ----------------------
+# Six logins on the mini share one GitHub account, and each ran the same
+# collector / pr-refresh / issue-bridge reads — the same `gh issue list`, the same
+# `gh pr list`, the same comment listing, six times over: the account's main
+# amplifier (#1211). With FLEET_GH_SHARE=1 the logins that share a token elect ONE
+# leader; only the leader fetches, publishes what it fetched, and every follower
+# reads that copy instead of calling GitHub.
+#
+# Where: $FLEET_GH_SHARED_DIR (default /Users/Shared/.fleet-gh — every login can
+# reach it), one subdir per token fingerprint (the same fp the write queue keys
+# on). Both are 1777, so each login only ever writes files it OWNS:
+#   <fp>/hb.<login>           since=<epoch its heartbeat run began>  hb=<last beat>
+#   <fp>/pub.<login>/<slug>/  what that login published as leader (0755 / 0644)
+# Election needs no lock and no cross-login write: the collector tick beats
+# (fleet_gh_lead_tick); a beat more than FLEET_GH_LEADER_STALE old (default 180s =
+# 3 ticks of 60s) is dead, and the leader is the live login with the OLDEST
+# `since` (ties by name). So the incumbent keeps it while it beats, a newcomer
+# never displaces it, and when it dies the next-oldest takes over within 3 ticks.
+# A login whose fleet is idle beats only every idle-gated tick (300s) — stale by
+# then — so it never leads for long.
+#
+# Followers adopt a copy only when it is fresh (each caller passes its max age):
+# a stale or missing copy — the leader's daemon wedged, or the leader does not
+# poll this repo (different repo sets share only the intersection) — means the
+# follower fetches for itself, as before. Off (the default): no file, no fork,
+# every login fetches — the historic behavior byte for byte.
+#
+# API
+#   fleet_gh_share_on                     rc 0 when sharing is on
+#   fleet_gh_share_root                   print <shared>/<fp> (created 1777)
+#   fleet_gh_share_me                     this login's name (FLEET_GH_SHARE_ID seam)
+#   fleet_gh_lead_tick                    beat; print the leader; rc 0 = we lead
+#   fleet_gh_leader                       print the live leader; rc 1 = none / off
+#   fleet_gh_should_fetch                 rc 0 = fetch from GitHub (off, or we lead,
+#                                         or no live leader)
+#   fleet_gh_publish <slug> <dir> <file>… leader: copy <dir>/<file>… to its pub dir
+#   fleet_gh_adopt <slug> <maxage> <dir> <file>…
+#                                         follower: copy the leader's <file>… into
+#                                         <dir> when its FIRST file is ≤ maxage s
+#                                         old; rc 1 = no fresh copy → fetch yourself
+
+fleet_gh_share_on() { [ "${FLEET_GH_SHARE:-0}" = 1 ]; }
+
+fleet_gh_share_me() {
+  local u="${FLEET_GH_SHARE_ID:-${USER:-}}"
+  [ -n "$u" ] || u=$(id -un 2>/dev/null)
+  printf '%s' "${u//[^A-Za-z0-9._-]/_}"
+}
+
+fleet_gh_share_root() {
+  local base="${FLEET_GH_SHARED_DIR:-/Users/Shared/.fleet-gh}" r
+  r="$base/$(_fleet_gh_token_fp)"
+  if [ ! -d "$r" ]; then
+    mkdir -p "$base" 2>/dev/null && chmod 1777 "$base" 2>/dev/null
+    mkdir -p "$r" 2>/dev/null && chmod 1777 "$r" 2>/dev/null
+  fi
+  [ -d "$r" ] || return 1
+  printf '%s' "$r"
+}
+
+_fleet_gh_stale_secs() {
+  local s="${FLEET_GH_LEADER_STALE:-180}"
+  case "$s" in ''|*[!0-9]*) s=180 ;; esac
+  printf '%s' "$s"
+}
+
+# _fleet_gh_hb_read <file> — sets _hb_since/_hb_beat (0 when unreadable)
+_fleet_gh_hb_read() {
+  local k v
+  _hb_since=0 _hb_beat=0
+  [ -f "$1" ] || return 1
+  while IFS='=' read -r k v; do
+    case "$k" in since) _hb_since="$v" ;; hb) _hb_beat="$v" ;; esac
+  done < "$1" 2>/dev/null
+  case "$_hb_since" in ''|*[!0-9]*) _hb_since=0 ;; esac
+  case "$_hb_beat" in ''|*[!0-9]*) _hb_beat=0 ;; esac
+  return 0
+}
+
+fleet_gh_leader() {
+  fleet_gh_share_on || return 1
+  local r f now stale best='' bs=0 who _hb_since _hb_beat
+  r=$(fleet_gh_share_root) || return 1
+  now=$(date +%s); stale=$(_fleet_gh_stale_secs)
+  for f in "$r"/hb.*; do
+    [ -f "$f" ] || continue
+    _fleet_gh_hb_read "$f" || continue
+    [ $((now - _hb_beat)) -le "$stale" ] || continue
+    who="${f##*/hb.}"
+    if [ -z "$best" ] || [ "$_hb_since" -lt "$bs" ] \
+       || { [ "$_hb_since" -eq "$bs" ] && [[ "$who" < "$best" ]]; }; then
+      best="$who"; bs="$_hb_since"
+    fi
+  done
+  [ -n "$best" ] || return 1
+  printf '%s' "$best"
+}
+
+fleet_gh_lead_tick() {
+  fleet_gh_share_on || return 0
+  local r me f now stale since tmp lead _hb_since _hb_beat
+  r=$(fleet_gh_share_root) || return 0
+  me=$(fleet_gh_share_me); f="$r/hb.$me"
+  now=$(date +%s); stale=$(_fleet_gh_stale_secs)
+  since=$now
+  _fleet_gh_hb_read "$f" && [ $((now - _hb_beat)) -le "$stale" ] && [ "$_hb_since" -gt 0 ] && since=$_hb_since
+  tmp="$r/.hb.$me.$$"
+  printf 'since=%s\nhb=%s\n' "$since" "$now" > "$tmp" 2>/dev/null \
+    && chmod 644 "$tmp" 2>/dev/null && mv -f "$tmp" "$f" 2>/dev/null
+  rm -f "$tmp" 2>/dev/null
+  lead=$(fleet_gh_leader) || return 0
+  printf '%s\n' "$lead"
+  if [ "$lead" = "$me" ]; then
+    [ -f "$r/.lead.$me" ] || { : > "$r/.lead.$me" 2>/dev/null; fleet_gh_log "share-lead login=$me"; }
+    return 0
+  fi
+  [ -f "$r/.lead.$me" ] && { rm -f "$r/.lead.$me"; fleet_gh_log "share-follow login=$me leader=$lead"; }
+  return 1
+}
+
+fleet_gh_should_fetch() {
+  fleet_gh_share_on || return 0
+  local lead
+  lead=$(fleet_gh_leader) || return 0
+  [ "$lead" = "$(fleet_gh_share_me)" ]
+}
+
+fleet_gh_publish() {  # fleet_gh_publish <slug> <dir> <file>…
+  fleet_gh_share_on || return 0
+  local slug="$1" src="$2" r d f
+  shift 2
+  r=$(fleet_gh_share_root) || return 0
+  d="$r/pub.$(fleet_gh_share_me)/$slug"
+  [ -d "$d" ] || { mkdir -p "$d" 2>/dev/null && chmod 755 "$r/pub.$(fleet_gh_share_me)" "$d" 2>/dev/null; }
+  for f in "$@"; do
+    [ -f "$src/$f" ] || continue
+    cp "$src/$f" "$d/.$f.$$" 2>/dev/null && chmod 644 "$d/.$f.$$" 2>/dev/null \
+      && mv -f "$d/.$f.$$" "$d/$f" 2>/dev/null
+    rm -f "$d/.$f.$$" 2>/dev/null
+  done
+  return 0
+}
+
+fleet_gh_adopt() {  # fleet_gh_adopt <slug> <maxage> <dir> <file>…
+  fleet_gh_share_on || return 1
+  local slug="$1" maxage="$2" dst="$3" r lead s f mt now
+  shift 3
+  lead=$(fleet_gh_leader) || return 1
+  [ "$lead" = "$(fleet_gh_share_me)" ] && return 1
+  r=$(fleet_gh_share_root) || return 1
+  s="$r/pub.$lead/$slug"
+  [ -f "$s/$1" ] || return 1
+  mt=$(stat -f %m "$s/$1" 2>/dev/null || stat -c %Y "$s/$1" 2>/dev/null)
+  case "$mt" in ''|*[!0-9]*) return 1 ;; esac
+  now=$(date +%s)
+  [ $((now - mt)) -le "$maxage" ] || return 1
+  mkdir -p "$dst" 2>/dev/null
+  for f in "$@"; do
+    [ -f "$s/$f" ] || continue
+    cp "$s/$f" "$dst/.$f.adopt.$$" 2>/dev/null && mv -f "$dst/.$f.adopt.$$" "$dst/$f" 2>/dev/null
+    rm -f "$dst/.$f.adopt.$$" 2>/dev/null
+  done
+  return 0
+}

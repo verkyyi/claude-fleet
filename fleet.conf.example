@@ -790,6 +790,17 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=GitHub cache lifetime @group=cache @tier=common @scope=global @edit=int @unit=sec
 #FLEET_GH_TTL=90
 
+# One account, one set of background reads (issue #1271). Several logins on one
+# machine that share a GitHub token each ran the same collector / pr-refresh /
+# issue-bridge reads. With 1, they elect ONE leader (oldest live heartbeat in
+# /Users/Shared/.fleet-gh/<token-fp>/, taken over within 3 collector ticks when it
+# stops): only the leader asks GitHub, the others read its fresh copy, and a repo
+# the leader does not poll is still fetched by whoever needs it. `fleet-doctor`'s
+# github row names this login's role. Set it on EVERY login that shares the token.
+# GLOBAL: the daemons are machine-wide, so it is not per-fleet overridable.
+# @label=Share background reads across logins @group=cache @tier=internal @scope=global @edit=bool
+#FLEET_GH_SHARE=0
+
 # Collector tick deadline (issue #551). ONE collector tick runs at a time
 # (global/collect.pid): a tick started while the previous one is still running
 # skips — unless the previous one is older than this, in which case it is

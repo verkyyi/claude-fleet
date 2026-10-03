@@ -56,6 +56,11 @@ if [ "$#" = 0 ] && command -v fleet_daemon_stamp_tick >/dev/null 2>&1; then
 fi
 
 . "$BIN/fleet-lib.sh"
+# One account, one set of background reads (issue #1271) — guarded, like the
+# collector: without the gh lib every login fetches, as it always has.
+# shellcheck source=/dev/null
+[ -f "$BIN/fleet-gh-lib.sh" ] && . "$BIN/fleet-gh-lib.sh"
+command -v fleet_gh_share_on >/dev/null 2>&1 || fleet_gh_share_on() { return 1; }
 C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
 G="$C/global"                       # machine-wide caches (git_<key>) — issue #181
 # Sweep this run's PID-unique temps on exit (across the fleets/<slug>/ subdirs now;
@@ -227,6 +232,19 @@ while [ "$i" -lt "${#Q_REPO[@]}" ]; do
     # program the dash, the merge gate's taxonomy and pr-refresh-jq-selftest.sh
     # share (issue #533) — it lived inline here and drifted from fleet-pr-verdict.sh
     # (no isDraft, only FAILURE was red, StatusContext never looked at).
+    # A follower (issue #1271) folds the leader's fresh prmap through the same
+    # transition/backoff path as its own fetch; no fresh copy → fetch as before.
+    # Its prmap.ts stays the copy's age, so it re-adopts on the next due tick.
+    if [ "$FORCE" != 1 ] && fleet_gh_share_on && ! fleet_gh_should_fetch \
+       && fleet_gh_adopt "$sg" $((PR_TTL + $(_fleet_gh_stale_secs))) "$FD/.adopt.$$" prmap.ts prmap \
+       && [ -f "$FD/.adopt.$$/prmap" ]; then
+      emit_pr_transitions "$FD/prmap" "$FD/.adopt.$$/prmap" "$rp" "$se"
+      mv "$FD/.adopt.$$/prmap" "$FD/prmap"
+      mv "$FD/.adopt.$$/prmap.ts" "$FD/prmap.ts" 2>/dev/null
+      rm -rf "$FD/.adopt.$$"
+      continue
+    fi
+    fleet_gh_share_on && rm -rf "$FD/.adopt.$$" 2>/dev/null; pub=0
     gh pr list --repo "$rp" --state all --limit 100 \
       --json number,headRefName,state,mergeable,mergeStateStatus,isDraft,statusCheckRollup,mergeCommit \
       --jq "$FLEET_PRMAP_JQ" \
@@ -237,8 +255,10 @@ while [ "$i" -lt "${#Q_REPO[@]}" ]; do
              chg=1; [ "$FORCE" = 1 ] || { cmp -s "$FD/prmap" "$FD/prmap.$$" && chg=0; }
              fleet_poll_backoff_note "$bo" "$INT" "$chg" "$(now)"
            fi
-           mv "$FD/prmap.$$" "$FD/prmap"; }
+           mv "$FD/prmap.$$" "$FD/prmap"; pub=1; }
     now > "$FD/prmap.ts"
+    # the leader publishes what it really fetched; prmap.ts last = the freshness stamp
+    [ "$pub" = 1 ] && fleet_gh_share_on && fleet_gh_should_fetch && fleet_gh_publish "$sg" "$FD" prmap prmap.ts
   fi
 done
 

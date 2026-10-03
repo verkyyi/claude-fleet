@@ -81,6 +81,11 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-lib.sh"
 # shellcheck source=/dev/null
 . "$BIN/usage-lib.sh"     # fleet_limit_banner (pure lib, no dispatch)
+# One account, one set of background reads (issue #1271): guarded — an install or
+# a sandbox without the gh lib just fetches, as it always has.
+# shellcheck source=/dev/null
+[ -f "$BIN/fleet-gh-lib.sh" ] && . "$BIN/fleet-gh-lib.sh"
+command -v fleet_gh_share_on >/dev/null 2>&1 || fleet_gh_share_on() { return 1; }
 C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
 # Per-fleet cache layout (issue #181): slug-keyed fetches live under fleets/<slug>/
 # and machine-wide caches under global/. G is the global bucket.
@@ -172,6 +177,14 @@ fetch_issues_for() {
   FD=$(fleet_cache_dir "$sg")          # fleets/<slug>/ (issue #181)
   its=$(cat "$FD/issues.ts" 2>/dev/null || echo 0)
   if [ "$force" = 1 ] || [ $(( $(now) - its )) -ge "$ttl" ]; then
+    # A follower (issue #1271) takes the leader's fresh copy instead of asking
+    # GitHub; no fresh copy (leader wedged / not polling this repo) → fetch below.
+    # A webhook kick (force) still fetches: it was asked for NOW.
+    if [ "$force" != 1 ] && fleet_gh_share_on && ! fleet_gh_should_fetch \
+       && fleet_gh_adopt "$sg" $((ttl + $(_fleet_gh_stale_secs))) "$FD" issues.ts issues labels parents; then
+      return 0
+    fi
+    local fetched=0
     raw="$FD/issuesx.$$"
     if gh issue list --repo "$rp" --state open --limit 300 \
       --json number,title,milestone,assignees,labels \
@@ -181,6 +194,7 @@ fetch_issues_for() {
         && mv "$FD/issues.$$" "$FD/issues"
       awk -F'\t' '{n=$3; sub(/^#/,"",n); print n"\t"$1}' "$raw" > "$FD/labels.$$" \
         && mv "$FD/labels.$$" "$FD/labels"
+      fetched=1
     fi
     rm -f "$raw"
     # parent→child links (issue #335): sub-issues are NOT exposed by the `gh issue
@@ -204,6 +218,11 @@ fetch_issues_for() {
       rm -f "$FD/parents.$$"
     fi
     now > "$FD/issues.ts"
+    # the leader publishes only what it really fetched; issues.ts goes last — it is
+    # the copy's freshness stamp (fleet_gh_adopt)
+    if [ "$fetched" = 1 ] && fleet_gh_share_on && fleet_gh_should_fetch; then
+      fleet_gh_publish "$sg" "$FD" issues labels parents issues.ts
+    fi
   fi
 }
 
@@ -264,6 +283,9 @@ if [ -n "$opid" ] && [ "$opid" != "$$" ] && kill -0 "$opid" 2>/dev/null \
   kill_tree "$opid"
 fi
 printf '%s\t%s\n' "$$" "$(now)" > "$PIDF"
+# Leader heartbeat (issue #1271): the full collector tick IS the election tick —
+# after the idle gate, so a login with no live fleet never holds the lead for long.
+fleet_gh_share_on && fleet_gh_lead_tick >/dev/null
 
 # --- heartbeat (issue #551): where the tick is + how long each phase took ---------
 # global/collect.heartbeat, key=value lines, rewritten atomically at every phase
