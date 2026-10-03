@@ -227,6 +227,11 @@ FLEET_WEBHOOK_RESCAN               knob: internal pacing/limit, safe in-code def
 FLEET_WEBHOOK_STATE_DIR            path: state/log location override (fleet-webhook.sh)
 FLEET_WEBHOOK_WAKE_SLACK           knob: internal pacing/limit, safe in-code default (fleet-webhook.sh)
 FLEET_WEBHOOK_WAKE_TICK            knob: internal pacing/limit, safe in-code default (fleet-webhook.sh)
+FLEET_WINDOW_REAP                  knob: 0 turns the close-time orphan-tree sweep off (fleet-window-reap.sh; read from the tmux server env, not a conf)
+FLEET_WINDOW_REAP_EXEMPT_RE        knob: extra argv ERE the close-time sweep never reaps (fleet_orphan_trees)
+FLEET_WINDOW_REAP_FG               handoff: fleet-window-reap.sh --hook re-execs itself detached with this set
+FLEET_WINDOW_REAP_PASSES           knob: seconds after a close to sweep at (fleet-window-reap.sh, "2 6 20")
+FLEET_WINDOW_REAP_ROOT             seam: narrow the close-time sweep to tops whose cwd is under this dir (selftests)
 FLEET_WH_BACKOFF_BASE              knob: internal pacing/limit, safe in-code default (fleet-webhook.sh)
 FLEET_WH_CATCHUP_MIN               knob: internal pacing/limit, safe in-code default (fleet-webhook.sh)
 FLEET_WH_BACKOFF_CAP               knob: internal pacing/limit, safe in-code default (fleet-webhook.sh)

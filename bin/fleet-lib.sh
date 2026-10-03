@@ -2846,6 +2846,123 @@ fleet_reap_orphan_listeners() {
   done
 }
 
+# ---- a closed window takes its process trees with it (issue #1298) ------------
+# The reapers above all run at a worktree's REMOVAL or on a timer, so a tree a
+# window started and abandoned — a disowned job, a Bash-tool `&`, the headless
+# browser an MCP server forks — outlives the window as a PPID=1 orphan until a
+# scan finds it. On 2026-10-03 three such browsers held ~50 GB for five days.
+# So the close itself sweeps: tmux's window-unlinked / pane-exited hooks run
+# bin/fleet-window-reap.sh, which kills every ORPHANED TREE that the window
+# leaves with nobody working in its anchor.
+#
+# tmux cannot say which worktree the closed window had (window-unlinked expands
+# its formats against the session's NEW current window, and pane-exited does not
+# fire for kill-window), and macOS has no session id to follow (`ps -o sess` is
+# 0). So the question is asked from the process table, with the same three
+# guards memguard rule B and the listener reaper use:
+#   1. the tree's top is a direct child of init (PPID=1), owned by this user —
+#      a shell in Terminal.app or a launchd job's child is never a top;
+#   2. the top's cwd is a fleet anchor of kind worktree or session
+#      (fleet_listen_anchor: a `*-issue-N` / `*-scratch-N` worktree, even a
+#      removed one, or one session's scratchpad dir) — never ~/.claude, never
+#      the scratchpad root, never anywhere else on the machine;
+#   3. NO live pane process and no live `claude` has its cwd in that anchor —
+#      another window still in the worktree keeps every orphan there (a worker's
+#      own `nohup … &` server is PPID=1 from birth and must live while it does).
+# Plus: the top is not a tmux server and not an agent, no argv in its tree is exempt
+# (doc-preview, the fleet's own detached teardown scripts — FLEET_WINDOW_REAP_EXEMPT_RE
+# extends), and its worktree is not under a rotation lease (#550: a close→resume
+# move leaves the worktree briefly windowless on purpose).
+# FLEET_WINDOW_REAP_ROOT (selftests) narrows the sweep to tops whose cwd is under it.
+FLEET_WINDOW_REAP_EXEMPT_RE_DEFAULT='/bin/(session-end-hook|dash-reap|fleet-[a-z0-9-]+|worktree-autoclean|tmux-[a-z0-9-]+)\.(sh|py)'
+
+# fleet_orphan_trees — the candidates, one row per tree:
+#   top \t age_s \t kind \t key \t cwd \t argv
+fleet_orphan_trees() {
+  local me tops cwds
+  me="$(id -u 2>/dev/null)"; [ -n "$me" ] || return 0
+  command -v lsof >/dev/null 2>&1 || return 0
+  local re="$FLEET_LISTEN_EXEMPT_RE_DEFAULT|$FLEET_WINDOW_REAP_EXEMPT_RE_DEFAULT${FLEET_WINDOW_REAP_EXEMPT_RE:+|$FLEET_WINDOW_REAP_EXEMPT_RE}"
+  # PPID=1 tops of ours that are neither a tmux server nor an agent, and whose
+  # tree holds no exempt argv anywhere (doc-preview's server under a wrapper
+  # shell is still doc-preview's server).
+  tops="$(ps -eo pid=,ppid=,uid=,etime=,command= 2>/dev/null | awk -v me="$me" -v self="$$" -v re="$re" '
+    function secs(et,   f, n) {
+      n = split(et, f, /[-:]/)
+      if (n == 4) return f[1]*86400 + f[2]*3600 + f[3]*60 + f[4]
+      if (n == 3) return f[1]*3600 + f[2]*60 + f[3]
+      if (n == 2) return f[1]*60 + f[2]
+      return 0 }
+    { p = $1 + 0; par[p] = $2 + 0
+      a = ""; for (i = 5; i <= NF; i++) a = a (i > 5 ? " " : "") $i
+      if (a ~ re) ex[p] = 1
+      if ($2 != 1 || $3 != me || p == self) next
+      b = $5; sub(/.*\//, "", b)
+      if (b == "tmux" || b ~ /^tmux:/ || b == "claude" || b == "codex" || $5 ~ /\/claude\/versions\//) next
+      if (b == "node" && ($6 ~ /claude-code|\/codex/)) next
+      top[p] = 1; ag[p] = secs($4); av[p] = a; ids[++n] = p }
+    END {
+      for (p in ex) { q = p; h = 0
+        while (q > 1 && h++ < 64) { if (q in top) { bad[q] = 1; break }; if (!(q in par)) break; q = par[q] } }
+      for (i = 1; i <= n; i++) { p = ids[i]; if (!(p in bad)) printf "%d\t%d\t%s\n", p, ag[p], av[p] } }')"
+  [ -n "$tops" ] || return 0
+  cwds="$(lsof -w -a -p "$(printf '%s\n' "$tops" | cut -f1 | paste -sd, -)" -d cwd -Fpn 2>/dev/null \
+    | awk '/^p/{p=substr($0,2)} /^n/{print p "\t" substr($0,2)}')"
+  [ -n "$cwds" ] || return 0
+  local pid age argv cwd anc kind key rows="" panes="" live roots
+  # A login carries hundreds of PPID=1 processes (every launchd agent), so the
+  # cheap shape test runs once in awk and only its few survivors pay for
+  # fleet_listen_anchor's exact verdict.
+  roots="$(fleet_claude_tmp_roots | paste -sd' ' -)"
+  while IFS="$(printf '\t')" read -r pid age cwd argv; do
+    [ -n "$pid" ] || continue
+    anc="$(fleet_listen_anchor "$cwd")"
+    kind="${anc%%	*}"; key="${anc#*	}"
+    case "$kind" in worktree|session) ;; *) continue ;; esac
+    rows="$rows$pid	$age	$kind	$key	$cwd	$argv
+"
+  done <<EOT
+$({ printf '%s\n' "$cwds" | sed 's/^/C\t/'; printf '%s\n' "$tops" | sed 's/^/T\t/'; } \
+  | awk -F'\t' -v roots="$roots" -v only="${FLEET_WINDOW_REAP_ROOT:-}" '
+      BEGIN { nr = split(roots, R, / +/) }
+      function shaped(c,   i) {
+        if (only != "" && c != only && index(c, only "/") != 1) return 0
+        for (i = 1; i <= nr; i++) if (R[i] != "" && (c == R[i] "" || index(c, R[i] "/") == 1)) return 1
+        return (c ~ /-(issue|scratch)-[0-9]+(\/|$)/ || c ~ /\/\.fleet-trash(\/|$)/) }
+      $1 == "C" { cw[$2] = $3; next }
+      $1 == "T" && ($2 in cw) && shaped(cw[$2]) { print $2 "\t" $3 "\t" cw[$2] "\t" $4 }')
+EOT
+  [ -n "$rows" ] || return 0
+  panes="$(_fleet_pane_cwd_keys)"
+  printf '%s' "$rows" | while IFS="$(printf '\t')" read -r pid age kind key cwd argv; do
+    [ -n "$pid" ] || continue
+    live=0
+    case "$kind" in
+      worktree) printf '%s\n' "$panes" | awk -F'\t' -v k="$key" '
+                  $1=="D" && ($2==k || index($2, k "/")==1) {f=1} END{exit !f}' && live=1
+                [ "$live" = 0 ] && fleet_rotate_lease_held "$key" >/dev/null 2>&1 && live=1 ;;
+      session)  printf '%s\n' "$panes" | awk -F'\t' -v k="$key" '
+                  $1=="M" && ($2==k || index($2, k "-")==1) {f=1} END{exit !f}' && live=1 ;;
+    esac
+    [ "$live" = 1 ] && continue
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$pid" "$age" "$kind" "$key" "$cwd" "$argv"
+  done
+}
+
+# fleet_reap_orphan_trees [kill|dry] [grace] — kill each candidate's WHOLE tree
+# from its top (fleet_kill_tree: TERM, grace, KILL, re-enumerated). One line each:
+# "reaped|would reap <top> <kind> cwd=<cwd> age=<s>s argv=<argv>".
+fleet_reap_orphan_trees() {
+  local mode="${1:-kill}" grace="${2:-2}" top age kind key cwd argv verb=reaped
+  [ "$mode" = dry ] && verb='would reap'
+  fleet_orphan_trees | while IFS="$(printf '\t')" read -r top age kind key cwd argv; do
+    [ "$top" -gt 1 ] 2>/dev/null || continue
+    [ "$top" = "$$" ] && continue
+    [ "$mode" = dry ] || fleet_kill_tree "$top" "$grace" >/dev/null 2>&1
+    printf '%s %s %s cwd=%s age=%ss argv=%.160s\n' "$verb" "$top" "$kind" "$cwd" "$age" "$argv"
+  done
+}
+
 # fleet_reap_worktree_listeners <dir> [wait-secs] — TEARDOWN half (issue #1154):
 # called right after a worker's window is closed on a path that KEEPS its worktree
 # (dirty/unmerged), where fleet_reap_worktree_procs does not run. Kills only the

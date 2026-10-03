@@ -213,5 +213,17 @@ Do not install from memory: read the doc and work from it.
   scratchpad root, a `*-issue-N`/`*-scratch-N` worktree (even a removed one) or
   `~/.claude` — never a machine-wide hunt. Claude Code names a session dir by
   turning EVERY non-alphanumeric into `-` (`fleet_mangle_path`), not just `/`.
+- **A closed window takes its process trees with it** (issue #1298). tmux's
+  `window-unlinked` / `pane-exited` / `after-kill-pane` hooks run
+  `bin/fleet-window-reap.sh --hook`, which kills every PPID=1 tree of ours whose
+  top's cwd is a worktree / session-scratchpad anchor that NO live pane or
+  `claude` still works in (`fleet_orphan_trees`) — a disowned job, a Bash-tool
+  `&`, an MCP server's headless browser die seconds after the close, not days
+  later. tmux cannot say which worktree the closed window had and macOS has no
+  session id, so the liveness of the anchor is the whole rail: another window in
+  the same worktree spares everything there. Exempt argv (doc-preview, the
+  fleet's own detached scripts) anywhere in the tree spares it; a rotation lease
+  spares the worktree; `FLEET_WINDOW_REAP=0` turns it off; reaps are logged in
+  `diskguard/window-reap.log`.
 - Claude Code re-reads `settings.json` hooks per turn, so running sessions pick
   up hook changes without a restart.
