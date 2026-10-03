@@ -115,4 +115,22 @@ tmux set-window-option -t "$WID" -u @claude_mem_warn
 r=$(row)
 not_contains "fat cleared → no size badge"         "$r" "⚠ mem"
 
+# The hub at the handoff line (issue #1319): @ctx_warn → `⚠ ctx`, alone and beside
+# the other badges on the same field, gone when the Stop hook unsets it.
+tmux set-window-option -t "$WID" @ctx_warn 1
+r=$(row)
+contains     "ctx warn → ⚠ ctx"                    "$r" "⚠ ctx"
+not_contains "ctx warn alone → no quota tag"       "$r" "quota:"
+tmux set-window-option -t "$WID" @claude_mem_warn '4.3G'
+tmux set-window-option -t "$WID" @quota_failover 'waiting: x'
+r=$(row)
+contains     "ctx + fat → ctx badge"               "$r" "⚠ ctx"
+contains     "ctx + fat → size badge"              "$r" "⚠ mem 4.3G"
+contains     "ctx + fat → quota tag parsed"        "$r" "quota:waiting"
+tmux set-window-option -t "$WID" -u @claude_mem_warn
+tmux set-window-option -t "$WID" -u @quota_failover
+tmux set-window-option -t "$WID" -u @ctx_warn
+r=$(row)
+not_contains "ctx warn cleared → no ctx badge"     "$r" "⚠ ctx"
+
 printf 'dash-quota-stuck-selftest: %d checks passed\n' "$CHECKS"

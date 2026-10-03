@@ -79,7 +79,12 @@ esac
 # A fresh context — the handoff cycle's /clear, a manual /clear, a new startup —
 # starts the compaction count over (issue #1316). A compact keeps counting (that
 # IS one) and a resume continues the same conversation, so neither touches it.
-case "$src" in clear|startup) tmux set-window-option -u -t "$TMUX_PANE" @compact_count 2>/dev/null || true ;; esac
+# The hub's context warning (issue #1319) goes with it: a fresh context is no
+# longer at the line, and the dash should not keep `⚠ ctx` until the next Stop.
+case "$src" in clear|startup)
+  tmux set-window-option -u -t "$TMUX_PANE" @compact_count 2>/dev/null || true
+  tmux set-window-option -u -t "$TMUX_PANE" @ctx_warn 2>/dev/null || true ;;
+esac
 
 # Stamp the deterministic fresh-session marker on /clear ONLY (see header job 2).
 if [ "$src" = "clear" ]; then

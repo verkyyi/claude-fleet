@@ -227,6 +227,9 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    pane's `@ctx_limit` and winning over the `%` key, so a model with a different
    window size needs no re-tuning; `fleet-doctor.sh`'s `handoff` row shows the
    conversion and checks compact-prep < handoff < Claude's own auto-compaction.
+   The hub itself is never blocked or cleared (issue #1319): at the handoff line
+   it gets `@ctx_warn` (dash `⚠ ctx`) and one `FLEET_NOTIFY_CMD` pointing at
+   `/fleet-handoff`; `FLEET_HUB_CTX_ACTION=off` silences it.
 
    The `SessionEnd` array fires `session-end-hook.sh` (issue #403) — the
    event-driven twin of the ledger-watch daemon. Its `matcher`
