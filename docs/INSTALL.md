@@ -222,6 +222,11 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    `@compact_stage=restored` and bumps `@compact_count`; after
    `FLEET_COMPACT_MAX` (default 2) compactions the next one is a `/fleet-handoff`
    instead (issue #1316). `FLEET_COMPACT_PREP_PCT=0` turns that off.
+   Either line can be set in tokens used instead — `FLEET_AUTO_HANDOFF_TOKENS` /
+   `FLEET_COMPACT_PREP_TOKENS` (issue #1317) — converted per Stop against the
+   pane's `@ctx_limit` and winning over the `%` key, so a model with a different
+   window size needs no re-tuning; `fleet-doctor.sh`'s `handoff` row shows the
+   conversion and checks compact-prep < handoff < Claude's own auto-compaction.
 
    The `SessionEnd` array fires `session-end-hook.sh` (issue #403) — the
    event-driven twin of the ledger-watch daemon. Its `matcher`

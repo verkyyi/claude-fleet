@@ -1351,6 +1351,20 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Compactions before handoff @group=handoff @tier=internal @scope=fleet @edit=int
 #FLEET_COMPACT_MAX=2             # in-place compactions per session before a handoff; 0 = no cap
 
+# Set the two lines above in TOKENS USED instead of a % (issue #1317), so a model
+# with a different window size needs no re-tuning: every window is 1M tokens
+# today, so a 70% line meant 700k — long after quality had started to slide. Each
+# Stop converts tokens / the pane's @ctx_limit (the window size the status line
+# stamps) into that session's %, rounded up, and it WINS over the *_PCT key; a pane
+# with no @ctx_limit falls back to the *_PCT key. A line at/over the window can
+# never fire. `fleet-doctor.sh`'s `handoff` row prints "<tokens> tok → <pct>% of
+# <window>" and WARNs unless compact-prep < handoff < Claude's own auto-compaction.
+# 0/unset = use the *_PCT key.
+# @label=Auto-handoff tokens @group=handoff @tier=internal @scope=fleet @edit=int @unit=tokens
+#FLEET_AUTO_HANDOFF_TOKENS=0     # tokens used that trigger an auto-handoff; 0 = use the PCT key
+# @label=Compact-in-place tokens @group=handoff @tier=internal @scope=fleet @edit=int @unit=tokens
+#FLEET_COMPACT_PREP_TOKENS=0     # tokens used that start an in-place /compact; 0 = use the PCT key
+
 # Re-state a worker's task charter after a context compaction (issue #1266). The
 # SessionStart(source=compact) hook bin/refocus-hook.sh hands a WORKER pane a
 # ≤1.5 KB `[fleet charter] #<N>` block (issue, repo, branch, PR, one-issue-one-PR,

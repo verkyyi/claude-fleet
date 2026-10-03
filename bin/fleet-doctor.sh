@@ -1803,6 +1803,25 @@ fi
 # is a WARN on this screen instead of a silent no-op. Probed through a LIVE worker
 # pane when the fleet is up ($TMUX + $TMUX_PANE — exactly the hook's inputs, so the
 # pane→session→conf hop is exercised too), else resolved by session name.
+#
+# The row also shows the LADDER the hook will actually use (issue #1317): a line
+# set in tokens (FLEET_*_TOKENS) is printed as "<tokens> tok → <pct>% of <window>"
+# against the probed pane's @ctx_limit — the same rounded-up, clamped-to-100
+# arithmetic as fleet_ctx_line in fleet-lib.sh (this /bin/sh doctor cannot source
+# it; ctx-token-line-selftest.sh pins the lockstep) — and the order
+# compact-prep < handoff < Claude's own auto-compaction is checked: a token line
+# that converts to 100% can never fire, and a prep line at/over the handoff line
+# leaves the compact band empty. Claude's point: CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
+# (env, else settings.json env), else ~95 (approximate, not measured).
+_ctx_line() {   # <tokens> <limit> → % (KEEP IN SYNC with fleet_ctx_line)
+  case "$1$2" in *[!0-9]*|'') return 1 ;; esac
+  [ "$1" -gt 0 ] && [ "$2" -gt 0 ] || return 1
+  _cl=$(( ($1 * 100 + $2 - 1) / $2 )); [ "$_cl" -gt 100 ] && _cl=100
+  printf '%s' "$_cl"
+}
+acp="${CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:-}"
+[ -n "$acp" ] || acp=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("env",{}).get("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",""))' "$settings" 2>/dev/null)
+case "$acp" in ''|*[!0-9]*) acp=95; acp_src="~95, Claude default" ;; *) acp_src="CLAUDE_AUTOCOMPACT_PCT_OVERRIDE" ;; esac
 hc="$(dirname "$0")/fleet-hook-conf.sh"
 if [ ! -f "$hc" ]; then
   warn handoff "bin/fleet-hook-conf.sh missing — the Stop hook cannot read FLEET_AUTO_HANDOFF_PCT from the conf, so the auto-handoff nudge is inert (#561); run /fleet-sync-install"
@@ -1814,17 +1833,23 @@ elif [ -d "$conf_dir" ]; then
     want=$(_conf_val "$cf" FLEET_AUTO_HANDOFF_PCT)
     [ -n "$want" ] || want=$(_gconf_val FLEET_AUTO_HANDOFF_PCT)
     case "$want" in ''|*[!0-9]*) want=0 ;; esac
+    wantt=$(_conf_val "$cf" FLEET_AUTO_HANDOFF_TOKENS)
+    [ -n "$wantt" ] || wantt=$(_gconf_val FLEET_AUTO_HANDOFF_TOKENS)
+    case "$wantt" in ''|*[!0-9]*) wantt=0 ;; esac
+    lim=
     # what the HOOK SEES: the same resolver the hook runs.
     via="session name (fleet not running)"
-    kv=$(bash "$hc" --session "$sess" FLEET_AUTO_HANDOFF_PCT FLEET_HANDOFF_DEFER_SECS 2>/dev/null)
+    hkeys="FLEET_AUTO_HANDOFF_PCT FLEET_HANDOFF_DEFER_SECS FLEET_COMPACT_PREP_PCT FLEET_AUTO_HANDOFF_TOKENS FLEET_COMPACT_PREP_TOKENS"
+    kv=$(bash "$hc" --session "$sess" $hkeys 2>/dev/null)
     sock=$(tmux -L "$sess" display-message -p '#{socket_path}' 2>/dev/null)
     if [ -n "$sock" ]; then
       # any pane the nudge applies to: an issue-bound worker (@issue) or a scratch (@raw)
       pane=$(tmux -L "$sess" list-panes -s -t "$sess" -F '#{pane_id} i=#{@issue} r=#{@raw}' 2>/dev/null \
              | awk '$2!="i=" || $3=="r=1" {print $1; exit}')
       if [ -n "$pane" ]; then
-        kv=$(TMUX="$sock,0,0" TMUX_PANE="$pane" bash "$hc" FLEET_AUTO_HANDOFF_PCT FLEET_HANDOFF_DEFER_SECS 2>/dev/null)
+        kv=$(TMUX="$sock,0,0" TMUX_PANE="$pane" bash "$hc" $hkeys 2>/dev/null)
         via="live pane $pane"
+        lim=$(tmux -L "$sess" display-message -p -t "$pane" '#{@ctx_limit}' 2>/dev/null)
       else
         via="session name (fleet up, no worker/scratch pane to probe)"
       fi
@@ -1832,15 +1857,52 @@ elif [ -d "$conf_dir" ]; then
     sees=$(printf '%s\n' "$kv" | sed -n 1p)
     # the operator-typing hold (issue #571) rides the same resolver: unset ⇒ 30s, 0 ⇒ off
     dsees=$(printf '%s\n' "$kv" | sed -n 2p)
+    csees=$(printf '%s\n' "$kv" | sed -n 3p)
+    tsees=$(printf '%s\n' "$kv" | sed -n 4p)
+    ctsees=$(printf '%s\n' "$kv" | sed -n 5p)
     case "$sees" in ''|*[!0-9]*) sees=0 ;; esac
     case "$dsees" in ''|*[!0-9]*) dsees=30 ;; esac
+    case "$csees" in '') csees=70 ;; *[!0-9]*) csees=0 ;; esac   # the hook's unset ⇒ 70 default
+    case "$tsees" in ''|*[!0-9]*) tsees=0 ;; esac
+    case "$ctsees" in ''|*[!0-9]*) ctsees=0 ;; esac
+    case "$lim" in ''|*[!0-9]*) lim=0 ;; esac
     if [ "$dsees" -gt 0 ]; then defer="defer ${dsees}s"; else defer="defer off"; fi
-    if [ "$want" -gt 0 ] && [ "$sees" -eq "$want" ]; then
-      pass handoff "$sess: auto-handoff at ${want}% (hook sees $sees via $via) · $defer while the operator types at the pane"
-    elif [ "$want" -gt 0 ]; then
+    # the ladder the hook uses: a token line converted against the window, else the %
+    hpct=$sees; hdesc="${sees}%"
+    if [ "$tsees" -gt 0 ]; then
+      if [ "$lim" -gt 0 ]; then hpct=$(_ctx_line "$tsees" "$lim"); hdesc="$tsees tok → ${hpct}% of $lim"
+      else hdesc="$tsees tok (window size unknown → falls back to ${sees}%)"; fi
+    fi
+    hsees=$sees; [ "$tsees" -gt 0 ] && hsees="$tsees tok"
+    cpct=$csees; cdesc="${csees}%"
+    if [ "$ctsees" -gt 0 ]; then
+      if [ "$lim" -gt 0 ]; then cpct=$(_ctx_line "$ctsees" "$lim"); cdesc="$ctsees tok → ${cpct}% of $lim"
+      else cdesc="$ctsees tok (window size unknown → falls back to ${csees}%)"; fi
+    fi
+    [ "$cpct" -gt 0 ] && ladder="compact-prep $cdesc" || ladder="compact-prep off"
+    # ordering faults (issue #1317): compact-prep < handoff < Claude's auto-compaction
+    lwarn=''
+    if [ "$tsees" -gt 0 ] && [ "$lim" -gt 0 ] && [ "$hpct" -ge 100 ]; then
+      lwarn="FLEET_AUTO_HANDOFF_TOKENS=$tsees is at/over the $lim-token window — the handoff line can never fire"
+    elif [ "$ctsees" -gt 0 ] && [ "$lim" -gt 0 ] && [ "$cpct" -ge 100 ]; then
+      lwarn="FLEET_COMPACT_PREP_TOKENS=$ctsees is at/over the $lim-token window — the compact-prep line can never fire"
+    elif [ "$hpct" -gt 0 ] && [ "$cpct" -gt 0 ] && [ "$cpct" -ge "$hpct" ]; then
+      lwarn="compact-prep (${cpct}%) is not below the handoff line (${hpct}%) — the compact-in-place band is empty"
+    elif [ "$hpct" -ge "$acp" ]; then
+      lwarn="the handoff line (${hpct}%) is not below Claude's own auto-compaction (${acp}%, $acp_src) — Claude compacts first"
+    elif [ "$hpct" -eq 0 ] && [ "$cpct" -ge "$acp" ]; then
+      lwarn="compact-prep (${cpct}%) is not below Claude's own auto-compaction (${acp}%, $acp_src)"
+    fi
+    if [ "$want" -gt 0 ] && [ "$sees" -ne "$want" ]; then
       warn handoff "$sess: conf says FLEET_AUTO_HANDOFF_PCT=$want but the Stop hook sees $sees via $via — nudge inert (#561); check bin/fleet-lib.sh + the fleet.conf beside bin/"
+    elif [ "$wantt" -gt 0 ] && [ "$tsees" -ne "$wantt" ]; then
+      warn handoff "$sess: conf says FLEET_AUTO_HANDOFF_TOKENS=$wantt but the Stop hook sees $tsees via $via — nudge inert (#561); check bin/fleet-lib.sh + the fleet.conf beside bin/"
+    elif [ -n "$lwarn" ]; then
+      warn handoff "$sess: $lwarn · auto-handoff $hdesc · $ladder (via $via)"
+    elif [ "$hpct" -gt 0 ]; then
+      pass handoff "$sess: auto-handoff at $hdesc · $ladder (hook sees $hsees via $via) · $defer while the operator types at the pane"
     else
-      pass handoff "$sess: auto-handoff OFF (FLEET_AUTO_HANDOFF_PCT unset/0; hook sees $sees)"
+      pass handoff "$sess: auto-handoff OFF (FLEET_AUTO_HANDOFF_PCT/_TOKENS unset/0; hook sees $sees) · $ladder"
     fi
   done <<EOF
 $(_fleet_confs "$conf_dir")
