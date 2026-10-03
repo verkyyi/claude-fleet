@@ -595,6 +595,15 @@ younger than half `FLEET_ACCOUNT_QUOTA_STALE`, it reads that cache instead of
 calling the hub (`fleet-quotawatch: … ccquota fetch skipped`). No mod ⇒ no `mod`
 stamp ⇒ every fetch runs as before.
 
+**Tools** (`mod/fleet/hooks/tools.ts`, issue #1340): once the gate is open the
+session carries `mcp__fleet__fleet_status` (read-only: this window's binding +
+`fleet-children.sh` + `fleet-repo.sh list`), `mcp__fleet__fleet_spawn`
+(`issue`, optional `repo` → `dash-issue-session.sh`) and `mcp__fleet__fleet_await`
+(`issue`, optional `repo` / `timeout` ≤ 570s → `fleet-await.sh`). A missing,
+mistyped or unknown argument, or a repo the fleet does not host, is refused with
+the reason before anything runs; a valid call runs the script unchanged and
+returns its exit code, stdout and stderr — every cap and guard is the script's.
+
 ## Related
 
 - **Auto-handoff nudge (#330).** `set-claude-state.sh`'s `done` branch also emits
