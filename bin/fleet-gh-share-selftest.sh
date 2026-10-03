@@ -88,7 +88,7 @@ eq 'follower b has the leader PR map'      "$(prmap a acme-a)" "$(prmap b acme-a
 eq 'lib: a leads'                          a "$(lib a fleet_gh_leader)"
 eq 'lib: b agrees a leads'                 a "$(lib b fleet_gh_leader)"
 eq 'shared dir is sticky (1777)'           yes "$([ -k "$SHARED" ] && [ -k "$(ls -d "$SHARED"/*/ | head -1)" ] && echo yes)"
-eq 'shared dir is world-writable'          777 "$(stat -f %Lp "$SHARED" 2>/dev/null || stat -c %a "$SHARED" | sed 's/^1//')"
+eq 'shared dir is world-writable'          777 "$(stat -c %a "$SHARED" 2>/dev/null | sed 's/^1//' | grep . || stat -f %Lp "$SHARED")"
 
 # --- 2. leader stops → b takes over past the stale bound; a back → follows ----
 reset_logs
@@ -97,6 +97,7 @@ sleep 3                                    # a's last beat is now stale
 run b collect
 eq 'b took over on its first tick past stale' 1 "$(calls b issue)"
 eq 'lib: b leads now'                      b "$(lib b fleet_gh_leader)"
+sleep 1                                    # (a same-second `since` tie breaks by name: a)
 run a collect                              # a is back: its since restarts → newest
 eq 'returning a does not displace b'       0 "$(calls a issue)"
 eq 'returning a reads b'                   $'Milestone\t#1\t·\tFresh a by b' "$(issues a acme-a)"

@@ -599,7 +599,8 @@ fleet_gh_adopt() {  # fleet_gh_adopt <slug> <maxage> <dir> <file>…
   r=$(fleet_gh_share_root) || return 1
   s="$r/pub.$lead/$slug"
   [ -f "$s/$1" ] || return 1
-  mt=$(stat -f %m "$s/$1" 2>/dev/null || stat -c %Y "$s/$1" 2>/dev/null)
+  # GNU stat FIRST: `stat -f %m` on GNU means "filesystem status" and exits 0
+  mt=$(stat -c %Y "$s/$1" 2>/dev/null || stat -f %m "$s/$1" 2>/dev/null)
   case "$mt" in ''|*[!0-9]*) return 1 ;; esac
   now=$(date +%s)
   [ $((now - mt)) -le "$maxage" ] || return 1
