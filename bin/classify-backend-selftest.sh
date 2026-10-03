@@ -116,10 +116,12 @@ srv.timeout = 0.5; ppid = os.getppid(); t0 = time.time()
 while os.getppid() == ppid and time.time() - t0 < 300:
     srv.handle_request()
 PY
-python3 "$WORK/jev-server.py" "$WORK" &
+python3 "$WORK/jev-server.py" "$WORK" 2>"$WORK/jev-err" &
 JEV_PID=$!
-i=0; while [ "$i" -lt 50 ] && [ ! -s "$WORK/jev-port" ]; do i=$((i+1)); sleep 0.1; done
-[ -s "$WORK/jev-port" ] || fail "fake Jev server never bound"
+# 30s, not 5: a cold python3 on a macOS CI runner took longer than 5s to bind
+# (issue #1305). A server that DIED stops the wait at once and says why.
+i=0; while [ "$i" -lt 300 ] && [ ! -s "$WORK/jev-port" ] && kill -0 "$JEV_PID" 2>/dev/null; do i=$((i+1)); sleep 0.1; done
+[ -s "$WORK/jev-port" ] || fail "fake Jev server never bound (after $((i/10))s)" "$(cat "$WORK/jev-err" 2>/dev/null)"
 JEV_URL="http://127.0.0.1:$(cat "$WORK/jev-port")/v1/systemone"
 
 cleanup() { kill "$JEV_PID" 2>/dev/null; tmux kill-server 2>/dev/null; rm -rf "$WORK"; }
