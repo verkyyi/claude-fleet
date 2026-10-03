@@ -248,22 +248,26 @@ override them):
      ~/.claude/fleet/bin/fleet-pr-verdict.sh <PR> --repo "$FLEET_REPO"
      ```
 
-     - **`READY`** → merge it, with this fleet's method (`FLEET_MERGE_METHOD`,
-       default `squash`) and the remote branch deleted, then **confirm**:
+     - **`READY`** → merge it — ONE command that re-reads the gate, merges with
+       this fleet's method (`FLEET_MERGE_METHOD`, default `squash`) and the
+       remote branch deleted, then **confirms**:
 
        ```sh
-       source ~/.claude/fleet/bin/fleet-lib.sh; fleet_load_conf "$(fleet_current_session)"
-       gh pr merge <PR> --repo "$FLEET_REPO" "--$(fleet_merge_method)" --delete-branch
-       ~/.claude/fleet/bin/fleet-pr-verdict.sh <PR> --repo "$FLEET_REPO"   # → MERGED
+       ~/.claude/fleet/bin/fleet-pr-merge.sh <PR> --repo "$FLEET_REPO"   # → MERGED, exit 0
        ```
 
-       `--delete-branch` removes the *remote* branch; your local branch +
-       worktree are the cleanup daemon's to reap, and gh may decline or fail to
-       delete the local one (you're standing on it) — harmless, which is why the
-       confirming read above, not gh's exit code, is what tells you it landed.
+       It runs `gh pr merge <PR> --<method> --delete-branch`, and when GitHub's
+       **GraphQL** budget is spent (`API rate limit already exceeded`; REST still
+       answers) it does the same merge over REST — `PUT pulls/<PR>/merge`, pinned
+       to the head sha, branch deleted only after GitHub says merged (issue
+       #1042). **Never park a green PR waiting for the rate-limit reset.** It
+       refuses anything that isn't `READY` (prints the verdict, exit 1), so it
+       can't merge red. The remote branch goes; your local branch + worktree are
+       the cleanup daemon's to reap — which is why the confirming read, not gh's
+       exit code, is what decides `MERGED`.
 
        ⚠️ **ONE command. Never chain a separate `push --delete` after the merge**
-       (issue #544). `--delete-branch` is conditional on the merge succeeding;
+       (issue #544). The branch delete is conditional on the merge succeeding;
        a hand-written `gh pr merge … | tail && git push origin --delete <branch>`
        is not — and a pipeline's exit code is `tail`'s, not the merge's. #534's
        worker ran exactly that, the squash lost a conflict race, the `&&` fired

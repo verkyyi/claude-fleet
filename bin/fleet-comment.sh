@@ -78,6 +78,7 @@ NL=$'\n'
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"
+. "$BIN/fleet-gh-lib.sh"
 
 # Which fleet ROLE is posting? Resolved by the shared fleet_from_role (issue #332
 # extracted it to fleet-lib.sh so the issue-filer channel stamps the same marker):
@@ -200,12 +201,41 @@ comment_verdict() {
   fi
 }
 
+# Post / close, with the REST fallback (issue #1042): `gh issue comment` and
+# `gh issue close` are GraphQL, and when the account's GraphQL budget is spent the
+# epic tick log and every worker note used to fail outright while REST still
+# worked. A rate-limit refusal (or the shared gh-limit marker) sends the SAME
+# body — marker + footer included — through `issues/N/comments -F body=@file`.
+# stdout stays exactly the comment URL either way.
+post_comment() {
+  local out rc tmp
+  out=$(fleet_gh_run graphql comment issue comment "$num" --repo "$repo" --body "$body"); rc=$?
+  if [ "$rc" -eq 0 ]; then [ -n "$out" ] && printf '%s\n' "$out"; return 0; fi
+  [ "$rc" -eq "$FLEET_GH_LIMITED_RC" ] || return "$rc"
+  tmp=$(mktemp "${TMPDIR:-/tmp}/fleet-comment.XXXXXX") || return 1
+  printf '%s' "$body" > "$tmp"
+  out=$(fleet_gh_rest_comment "$repo" "$num" "$tmp"); rc=$?
+  rm -f "$tmp"
+  [ "$rc" -eq 0 ] || return "$rc"
+  printf 'fleet-comment: GraphQL rate-limited — posted via REST\n' >&2
+  fleet_gh_log "fallback-ok op=comment repo=$repo issue=$num"
+  [ -n "$out" ] && printf '%s\n' "$out"
+  return 0
+}
+close_issue() {
+  local rc
+  fleet_gh_run graphql comment issue close "$num" --repo "$repo"; rc=$?
+  [ "$rc" -eq "$FLEET_GH_LIMITED_RC" ] || return "$rc"
+  fleet_gh_rest_issue_close "$repo" "$num" >/dev/null || return $?
+  printf 'fleet-comment: GraphQL rate-limited — closed #%s via REST\n' "$num" >&2
+  fleet_gh_log "fallback-ok op=close repo=$repo issue=$num"
+}
 # --close: comment first (marked), THEN close — so the wrap-up note exists even if
 # the close itself fails, and the bridge never sees an unmarked close comment (#486).
 if [ "$do_close" -eq 1 ]; then
-  gh issue comment "$num" --repo "$repo" --body "$body" || exit "$?"
+  post_comment || exit "$?"
   comment_verdict
-  exec gh issue close "$num" --repo "$repo"
+  close_issue; exit "$?"
 fi
-gh issue comment "$num" --repo "$repo" --body "$body" || exit "$?"
+post_comment || exit "$?"
 comment_verdict

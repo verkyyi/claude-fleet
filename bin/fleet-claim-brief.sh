@@ -123,7 +123,7 @@ printf '===== fleet =====\n'
 printf 'session=%s  seat=%s  repo=%s  base=%s\n' "$sess" "$seat" "$repo" "$base"
 printf 'main=%s   (READ-ONLY base checkout — edit only in this worktree)\n' "${main:-?}"
 printf 'worktree=%s\n' "$cwd"
-printf 'merge=%s  (how you land: gh pr merge --%s --delete-branch on a READY verdict)\n' \
+printf 'merge=%s  (how you land: fleet-pr-merge.sh <PR> on a READY verdict — gh pr merge --%s --delete-branch, REST when GraphQL is rate-limited)\n' \
   "$(fleet_merge_method)" "$(fleet_merge_method)"
 printf 'issue=%s  (@issue=%s worktree=%s%s)\n' \
   "$issue" "${at_issue:-none}" "${wt_issue:-none}" \
