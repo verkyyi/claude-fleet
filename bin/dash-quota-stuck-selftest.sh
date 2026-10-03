@@ -11,6 +11,7 @@
 #   • @quota_stuck unset again     → back to `quota:waiting`
 #   • no @quota_failover at all    → neither tag
 #   • @mem_killed (memguard, #1292) → `⚠ mem·137`, same field, `mem:` prefix
+#   • @claude_mem_warn (memguard rule C, #1297) → `⚠ mem 4.3G`, `fat=` prefix
 #
 # Needs a real tmux, on an ISOLATED socket via the PATH shim (never the live
 # server — see dash-marker-selftest.sh). tmux absent → SKIP cleanly. Exit 0 = pass.
@@ -95,5 +96,23 @@ not_contains "mem-killed alone → no quota tag"     "$r" "quota:"
 tmux set-window-option -t "$WID" -u @mem_killed
 r=$(row)
 not_contains "cleared → no mem badge"              "$r" "mem·137"
+
+# memguard rule C (issue #1297): the session itself is fat — `⚠ mem <size>`, beside
+# a mem-killed badge and a quota tag alike, and gone when memguard unsets it.
+tmux set-window-option -t "$WID" @claude_mem_warn '4.3G'
+r=$(row)
+contains     "fat session → ⚠ mem 4.3G"            "$r" "⚠ mem 4.3G"
+not_contains "fat session alone → no quota tag"    "$r" "quota:"
+tmux set-window-option -t "$WID" @mem_killed 'x'
+tmux set-window-option -t "$WID" @quota_failover 'waiting: x'
+r=$(row)
+contains     "fat + killed → both badges"          "$r" "⚠ mem·137"
+contains     "fat + killed → size badge"           "$r" "⚠ mem 4.3G"
+contains     "fat + killed → quota tag parsed"     "$r" "quota:waiting"
+tmux set-window-option -t "$WID" -u @mem_killed
+tmux set-window-option -t "$WID" -u @quota_failover
+tmux set-window-option -t "$WID" -u @claude_mem_warn
+r=$(row)
+not_contains "fat cleared → no size badge"         "$r" "⚠ mem"
 
 printf 'dash-quota-stuck-selftest: %d checks passed\n' "$CHECKS"

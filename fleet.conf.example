@@ -1774,6 +1774,12 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 #FLEET_MEM_ORPHAN_SECS=21600       # …for longer than this (6h) is flagged
 # @label=Memory orphan action @group=disk @tier=internal @scope=global @edit=str
 #FLEET_MEM_ORPHAN_ACTION=report    # report (the default) | kill
+# One claude/codex SESSION that has grown past this many MB of RSS gets a dash
+# badge (`⚠ mem 4.3G`, window option @claude_mem_warn) and one notification
+# naming it, with the line that moves it to a fresh session via /fleet-handoff.
+# Never restarted automatically (issue #1297). Cleared under 90% of the line.
+# @label=Fat session warning MB @group=disk @tier=internal @scope=global @edit=int @unit=MB
+#FLEET_CLAUDE_RSS_WARN_MB=4096     # 0 = off
 
 # Machine admission (issue #1090, EPIC #1291 C4): every path that opens a NEW
 # session (dash, backlog Enter, dispatch/autofill, bridge, /fleet-epic-run, the
