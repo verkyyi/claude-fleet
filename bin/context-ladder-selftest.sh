@@ -201,7 +201,7 @@ ok "ROTATION: both logs cut to the newest rows filling half the cap past FLEET_L
 # ---- DOCTOR --------------------------------------------------------------------
 D="$WORK/doc"; mkdir -p "$D/bin" "$D/conf" "$D/logs"
 cp "$BIN/fleet-doctor.sh" "$BIN/fleet-daemon-lib.sh" "$D/bin/"
-doctor() { env -i PATH="$WORK/fakepath:/usr/bin:/bin" HOME="$WORK" FLEET_CONF_DIR="$D/conf" \
+doctor() { env -i LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 PATH="$WORK/fakepath:/usr/bin:/bin" HOME="$WORK" FLEET_CONF_DIR="$D/conf" \
              FAKE_OPTS="$WORK/doc-opts" FAKE_SENDLOG=/dev/null "$@" sh "$D/bin/fleet-doctor.sh" 2>&1 \
            | grep -E '^ *(PASS|WARN|FAIL) +context '; }
 line=$(doctor)

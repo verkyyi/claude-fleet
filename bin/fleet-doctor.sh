@@ -1958,9 +1958,9 @@ read -r lc_r lc_c lc_h lc_n <<EOF
 ${lc:-0 0 0 0}
 EOF
 if [ "$lc_r$lc_c$lc_h$lc_n" = 0000 ]; then
-  lmsg="近 24h 无压缩 / 交接 ($lf)"
+  lmsg="近 24h 无压缩 / 交接 (${lf})"
 else
-  lmsg="近 24h 压缩 $lc_r 次（发起 $lc_c）、交接 $lc_h 次（提示 $lc_n）($lf)"
+  lmsg="近 24h 压缩 ${lc_r} 次（发起 ${lc_c}）、交接 ${lc_h} 次（提示 ${lc_n}）(${lf})"
 fi
 # The live ladder, every fleet on this login: one tab row per window.
 lwin=''
@@ -1980,7 +1980,7 @@ ltop=$(printf '%s\n' "$lwin" | awk -F '\t' '$1 ~ /^[0-9]+$/ && ($1 + 0) > best {
         split(row, f, "\t")
         st = (f[3] == "1") ? "handoff-nudge" : (f[4] != "" ? f[4] : "—")
         printf "%s:%s %s%% @ %s, 压过 %d 次", f[2], f[6], f[1], st, f[5] + 0 }')
-pass context "$lmsg${ltop:+ · 当前最高 $ltop}"
+pass context "${lmsg}${ltop:+ · 当前最高 ${ltop}}"
 
 # --- shared deps: is the base's node_modules current with its lockfiles? (#961) --
 # With shared deps on (fleet_base_deps_on: FLEET_BASE_DEPS=1, or the stock
