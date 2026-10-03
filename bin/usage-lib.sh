@@ -436,6 +436,7 @@ fleet_collect_kick_due() {
 # with: "<account> <ts> <5h%> <7d%> <5h-reset> <7d-reset>", `-` for an unset
 # option. The reset pair goes LAST: it is the one value with a space inside. A
 # plain variable, not a function: the watch reads it every tick, fork-free.
+# shellcheck disable=SC2034  # read by bin/fleet-quotawatch.sh, which sources this lib
 FLEET_QUOTA_RL_FMT='#{?@cc_account,#{@cc_account},-} #{?@rl_ts,#{@rl_ts},-} #{?@rl5h,#{@rl5h},-} #{?@rl7d,#{@rl7d},-} #{?@rl_reset,#{@rl_reset},- -}'
 
 # fleet_quota_merge <ccquota-rows> <ccquota-epoch> <statusline-lines> — print the
