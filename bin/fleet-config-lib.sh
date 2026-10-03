@@ -388,6 +388,15 @@ fcfg_label_i18n() {
     FLEET_ORPHAN_LISTEN_ACTION) printf '孤儿监听器动作' ;;
     FLEET_ORPHAN_LISTEN_EVERY) printf '孤儿监听器扫描间隔' ;;
     FLEET_LISTEN_EXEMPT_RE) printf '监听器豁免规则' ;;
+    FLEET_MEMGUARD) printf '内存守护开关' ;;
+    FLEET_MEM_SPIKE_GROW_MB) printf '内存暴涨增量 MB' ;;
+    FLEET_MEM_SPIKE_WINDOW) printf '内存暴涨窗口' ;;
+    FLEET_MEM_SPIKE_ACTION) printf '内存暴涨动作' ;;
+    FLEET_MEM_PROC_HARD_PCT) printf '单进程内存上限 %%' ;;
+    FLEET_MEM_EXEMPT_RE) printf '内存守护豁免规则' ;;
+    FLEET_MEM_ORPHAN_MB) printf '遗留进程内存 MB' ;;
+    FLEET_MEM_ORPHAN_SECS) printf '遗留进程年龄' ;;
+    FLEET_MEM_ORPHAN_ACTION) printf '遗留进程动作' ;;
     FLEET_LOAD_WARN_PER_CORE) printf 'Doctor 每核心负载警告' ;;
     FLEET_FSEVENTSD_WARN_MB) printf 'fseventsd 警告 MB' ;;
     FLEET_DOCTOR_SPOTLIGHT) printf 'Doctor Spotlight 检查' ;;
