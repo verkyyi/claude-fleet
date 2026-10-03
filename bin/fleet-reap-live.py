@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 
 
 def read(*args):
@@ -38,7 +39,17 @@ def agent_name(comm, command):
     return None
 
 
-def live_reason(target, minimum, socket_name=None):
+def merged_in_life(merged_at, age, now):
+    """True only when the merge provably happened while THIS agent ran (#1329).
+
+    Start = now - etime. Unknown/future times never waive: an unparsed etime is
+    age 0 (start = now), and a merge at or after `now` is not in the past."""
+    if merged_at is None or now is None:
+        return False
+    return now - age < merged_at <= now
+
+
+def live_reason(target, minimum, socket_name=None, merged_at=None, waived=None, now=None):
     if not re.fullmatch(r"@\d+", target):
         return "unknown:unstable-target"
     tmux = ["tmux"] + (["-L", socket_name] if socket_name is not None else [])
@@ -88,9 +99,17 @@ def live_reason(target, minimum, socket_name=None):
         if agent and sleeping:
             return f"retained:sleeping:agent-{agent}"
         # The age gate protects a freshly spawned AWAKE agent (#565); a sleeper
-        # never reaches it — it has no agent to protect.
+        # never reaches it — it has no agent to protect. A short worker that
+        # merged its own PR is not fresh (#1329): with an explicit `done` and a
+        # mergedAt AFTER this agent started, the merge happened in its life. A
+        # worker spawned onto an already-merged branch started after the merge
+        # and keeps its protection.
         if agent and age < minimum:
-            return f"young-agent:{agent}:{age}s<{minimum}s"
+            if state == "done" and merged_in_life(merged_at, age, now):
+                if waived is not None:
+                    waived.append(f"{agent}:{age}s<{minimum}s")
+            else:
+                return f"young-agent:{agent}:{age}s<{minimum}s"
         # A node/bun process without argv cannot be classified safely.
         if re.fullmatch(r"node\d*|bun", Path(comm).name) and pid not in commands:
             return "unknown:agent-command"
@@ -104,14 +123,20 @@ def main():
     parser.add_argument("--socket-name", help="fleet socket label for callers outside tmux")
     parser.add_argument("--worktree", help="check bound windows/pane paths across registered fleets")
     parser.add_argument("--socket-names", default="", help="newline-separated registered socket labels")
+    parser.add_argument("--merged-at", help="PR merge epoch: waive the age gate for an agent alive at the merge (#1329)")
     args = parser.parse_args()
     raw = os.environ.get("FLEET_REAP_MIN_AGE", "1800")
     minimum = int(raw) if re.fullmatch(r"\d+", raw) else 1800
+    merged_at = None
+    if args.merged_at is not None and re.fullmatch(r"[1-9]\d*", args.merged_at):
+        merged_at = int(args.merged_at)
+    waived = []
     try:
         if args.worktree:
             reason = worktree_reason(args.worktree, minimum, args.socket_names.splitlines())
         elif args.target:
-            reason = live_reason(args.target, minimum, args.socket_name)
+            reason = live_reason(args.target, minimum, args.socket_name, merged_at, waived,
+                                 int(time.time()) if merged_at is not None else None)
         else:
             reason = "unknown:missing-target"
     except (OSError, ValueError, subprocess.SubprocessError):
@@ -119,6 +144,9 @@ def main():
     if reason:
         print(reason)
         return 1
+    if waived:
+        # Exit 0 still means reapable; the line only lets the caller log the waiver.
+        print("waived:young-agent:" + ",".join(waived))
     return 0
 
 

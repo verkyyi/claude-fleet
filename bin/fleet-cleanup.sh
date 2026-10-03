@@ -492,9 +492,24 @@ auto_cleanup_gate() {
         why="window state is '${state:-unset}', not done"
       else
         [ -n "${TMUX:-}" ] || socket_args=(--socket-name "$(fleet_socket "$FLEET_SESSION")")
+        # A short worker that merged its own PR must not wait out the 30-minute
+        # young-agent gate (#1329): hand the probe the merge time, and it waives
+        # the age check only for an agent that was already running at the merge.
+        case "$st:${merged_epoch:-0}" in
+          MERGED:0|MERGED:*[!0-9]*) ;;
+          MERGED:*) socket_args+=(--merged-at "$merged_epoch") ;;
+        esac
         if ! why=$(FLEET_REAP_MIN_AGE="${FLEET_REAP_MIN_AGE:-1800}" \
           python3 "$BIN/fleet-reap-live.py" "$WIN" ${socket_args[@]+"${socket_args[@]}"} 2>/dev/null); then
           why="${why:-liveness probe unavailable}"
+        else
+          case "$why" in
+            waived:*)  # the gate runs twice per reap; one log line per reap
+              [ -n "${young_waived_noted:-}" ] \
+                || note "  #$PR young-agent waived: merged during this agent's life (${why#waived:young-agent:})"
+              young_waived_noted=1 ;;
+          esac
+          why=""
         fi
       fi
     fi

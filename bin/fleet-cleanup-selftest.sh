@@ -350,6 +350,27 @@ for scenario in young ps-failure missing-pid state-failure missing-window duplic
 done
 ok 'young agent, failed probes and missing window/pid all fail closed'
 
+# Issue #1329: a short worker that merged its OWN PR (mergedAt after the agent
+# started) is reaped after the grace, not after FLEET_REAP_MIN_AGE; one spawned
+# onto an already-merged branch (agent started after the merge) keeps #565.
+: > "$LEDGER"
+tok="$(FAKE_AGENT_AGE=20:00 FAKE_MERGED_AT="$(iso_ago 900)" run_clean merged --auto)"
+case "$tok" in cleaned:*) ;; *) fail "merged-during-life young agent should clean, got '$tok'" "$(cat "$WORK/err")" ;; esac
+[ "$(grep -c "young-agent waived: merged during this agent's life" "$WORK/err")" = 1 ] \
+  || fail 'the waiver must be logged exactly once per reap' "$(cat "$WORK/err")"
+: > "$LEDGER"
+tok="$(FAKE_AGENT_AGE=10:00 FAKE_MERGED_AT="$(iso_ago 900)" run_clean merged --auto)"
+[ "$tok" = skip:live ] && grep -q 'deferred: young-agent:codex' "$WORK/err" \
+  || fail "agent started after the merge must stay protected, got '$tok'" "$(cat "$WORK/err")"
+[ ! -s "$ORDER_LOG" ] && [ ! -s "$LEDGER" ] || fail 'a protected young agent was mutated'
+tok="$(FAKE_AGENT_AGE=20:00 FAKE_MERGED_AT="$(iso_ago 900)" WIN_STATE_FAKE='' run_clean merged --auto)"
+[ "$tok" = skip:live ] || fail "unset state must never be waived, got '$tok'"
+tok="$(FAKE_AGENT_AGE=20:00 FAKE_MERGED_AT="$(iso_ago 900)" FAKE_HOLD=1 run_clean merged --auto)"
+[ "$tok" = skip:live ] || fail "a held worker must never be waived, got '$tok'"
+tok="$(FAKE_AGENT_AGE=20:00 FAKE_MERGED_AT="$(iso_ago 900)" run_clean merged)"
+case "$tok" in cleaned:*) ;; *) fail "manual cleanup unaffected, got '$tok'" ;; esac
+ok 'merged during the agent life waives young-agent; merged before, unset state or hold do not'
+
 # Issue #1244: a SLEEPING merged worker is cleaned without a wake — its sleep
 # record retired (fleet-sleep.py dispose) BEFORE the kill; a hold, an agent under
 # the sleeper, or a refused dispose all leave it standing.
@@ -382,7 +403,8 @@ ok 'sleeping merged worker cleaned without a wake; hold / agent / refused dispos
 tok="$(WIN_STATE_FAKE=working run_clean merged --auto --dry-run)"
 [ "$tok" = skip:live ] || fail 'dry-run must apply automatic liveness'
 printf 'FLEET_REAP_MIN_AGE=7200\n' > "$WORK/conf/testsess.conf"
-tok="$(run_clean merged --auto)"
+# Merged BEFORE the 1h agent started, so the #1329 waiver cannot apply.
+tok="$(FAKE_MERGED_AT="$(iso_ago 4000)" run_clean merged --auto)"
 [ "$tok" = skip:live ] || fail 'automatic process age must read non-exported fleet config'
 printf 'FLEET_REAP_MIN_AGE=0\n' > "$WORK/conf/testsess.conf"
 tok="$(FAKE_AGENT_AGE=00:10 run_clean merged --auto --dry-run)"
