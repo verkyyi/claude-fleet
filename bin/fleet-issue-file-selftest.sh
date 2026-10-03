@@ -29,6 +29,7 @@
 #
 # Exit 0 = pass; non-zero = fail (prints the failing assertion + captured output).
 set -uo pipefail
+export FLEET_GH_WRITE_GAP=0   # no write pacing here: the queue has its own test (fleet-gh-write-selftest.sh)
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 SRC="$BIN/fleet-issue-file.sh"
@@ -49,6 +50,7 @@ GH_LOG="$WORK/ghlog"; SPAWN_LOG="$WORK/spawns"; BIND_LOG="$WORK/binds"; BODY="$W
 # real channel + lib run from $WORK/bin so BIN resolves the copies and ../fleet.conf
 # is absent (env FLEET_REPO wins) — fully hermetic.
 cp "$SRC" "$WORK/bin/fleet-issue-file.sh"; cp "$LIB" "$WORK/bin/fleet-lib.sh"
+cp "$BIN/fleet-gh-lib.sh" "$WORK/bin/fleet-gh-lib.sh"   # its write queue (issue #1264)
 chmod +x "$WORK/bin/fleet-issue-file.sh"
 # Stub the spawn choke point the channel hands to on --spawn: log its args, honour
 # SPAWN_RC so a cap-refusal (non-zero) can be simulated.

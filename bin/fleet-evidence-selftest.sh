@@ -24,6 +24,7 @@
 # The whole file re-runs itself once under /bin/bash when that is a 3.x bash (the
 # operator's macOS), because #703's class of bug is only observable there.
 set -uo pipefail
+export FLEET_GH_WRITE_GAP=0   # no write pacing here: the queue has its own test (fleet-gh-write-selftest.sh)
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 SRC="$BIN/fleet-evidence.sh"; LIB="$BIN/fleet-lib.sh"

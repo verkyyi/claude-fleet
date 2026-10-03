@@ -23,6 +23,7 @@
 # tmux runs on a PRIVATE socket via a PATH shim (run-shell runs its body inline, so
 # fleet_bg is synchronous); gh, fzf and the spawn/collector scripts are stubs.
 set -uo pipefail
+export FLEET_GH_WRITE_GAP=0   # no write pacing here: the queue has its own test (fleet-gh-write-selftest.sh)
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 REAL_TMUX="$(command -v tmux 2>/dev/null)"
