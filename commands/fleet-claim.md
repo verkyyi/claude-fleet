@@ -119,6 +119,17 @@ Three habits buy most of it back:
 - **Ground from the diff, not the tree.** For a fix that builds on prior work,
   `git log -p --follow <file>` (or `git log -S '<symbol>'`) is usually smaller
   and far more informative than reading every caller.
+- **Read issue / PR state through `fleet-gh.sh`, not bare `gh`** (issue #1263).
+  The daemons already poll every repo — open issues every ~90s, every PR's state
+  + CI every ~15s — and 18-30 workers re-fetching the same facts on the one shared
+  GraphQL budget is how a rate limit stops everyone at once.
+  `~/.claude/fleet/bin/fleet-gh.sh issue view|pr view|pr checks <N> [--json f,g]
+  [--max-age S]` answers from that local copy when it holds every field you asked
+  for and is fresh enough (default 120s issue / 30s PR), else calls `gh` once, and
+  under a GraphQL limit answers over REST. Same field names as `gh --json`, plus
+  `_source` (`cache|gh|rest`) and `_age`. It is a default, not a ban: bare `gh`
+  still works — reach for it (or `--max-age 0`) when you need a field the cache
+  can't hold right this second. The merge gate stays `fleet-pr-verdict.sh`.
 
 Judgment, not a mandate: **you are a full agent, not a deckhand** (issue #441) —
 what to read is your call, and *under*-grounding ships the wrong change, which

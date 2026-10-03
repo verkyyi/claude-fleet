@@ -87,7 +87,8 @@ def main():
     if action == "clear":
         path.unlink(missing_ok=True)
         return
-    repo, number, option = sys.argv[3:6]
+    repo, number = sys.argv[3:5]
+    option = sys.argv[5] if len(sys.argv) > 5 else ""
     if action == "write":
         issue = json.load(sys.stdin)
         validate(issue, number)
@@ -105,7 +106,7 @@ def main():
         finally:
             if os.path.exists(tmp):
                 os.unlink(tmp)
-    elif action == "read":
+    elif action in ("read", "json"):
         if path.is_symlink():
             raise ValueError("symlink snapshot")
         data = json.loads(path.read_text())
@@ -113,7 +114,14 @@ def main():
                 or data["preclaimed"] is not True):
             raise ValueError("snapshot identity mismatch")
         validate(data["issue"], number)
-        print(render(data["issue"], age_at(data["fetched_at"]), option == "1"))
+        age = age_at(data["fetched_at"])
+        if action == "read":
+            print(render(data["issue"], age, option == "1"))
+        else:
+            # bin/fleet-gh.sh (#1263): the raw fields + age. `assignees` is dropped —
+            # it predates the spawn's own pre-claim, so serving it would be a lie.
+            issue = {k: v for k, v in data["issue"].items() if k != "assignees"}
+            print(json.dumps({"age": age, "issue": issue}))
     else:
         raise ValueError("unknown action")
 
