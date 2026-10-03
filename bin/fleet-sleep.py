@@ -43,14 +43,15 @@ DIGEST_ENV=('FLEET_UI_LANG','FLEET_SLEEP_DIGEST','FLEET_SLEEP_DIGEST_CMD','FLEET
 
 def digest_argv():
     """The helper model that writes a sleeping page's digest: `claude -p` on
-    haiku, no MCP (issue #468), authenticated off the account pool (#497) — the
+    haiku, no MCP (issue #468), no transcript left in the worktree (#1296),
+    authenticated off the account pool (#497) — the
     classify-sessions.sh helper's shape. FLEET_SLEEP_DIGEST_CMD replaces it (a
     shell command reading the prompt on stdin): the selftests' fake model."""
     custom=os.environ.get('FLEET_SLEEP_DIGEST_CMD')
     if custom: return ['bash','-c',custom]
     nomcp='--strict-mcp-config \'--mcp-config={"mcpServers":{}}\'' if os.environ.get('FLEET_HELPER_NO_MCP','1')=='1' else ''
     return ['bash','-c','. "$1/fleet-lib.sh" >/dev/null 2>&1; fleet_helper_claude_auth >/dev/null 2>&1; '
-            'exec claude -p '+nomcp+' --model "$2"','digest',str(BIN),
+            'exec claude -p --no-session-persistence '+nomcp+' --model "$2"','digest',str(BIN),
             os.environ.get('FLEET_SLEEP_DIGEST_MODEL') or 'haiku']
 
 

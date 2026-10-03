@@ -27,6 +27,7 @@
 #   • JEV-WORKING   WORKING is not a choice (#1252): a WORKING answer is outside the
 #                   criteria ⇒ haiku decides; a quiet window is never promoted (#846)
 #   • RUBRIC        the haiku prompt carries no WORKING line (#1252)
+#   • NO-PERSIST    the haiku call carries --no-session-persistence (#1296)
 #   • PREP          the Stop-hooks spinner + its Tip line never reach either backend;
 #                   `✻ Worked for … · done` does (#1252)
 #   • SHADOW        haiku's verdict sets the state; one ndjson row with both verdicts,
@@ -78,6 +79,7 @@ chmod +x "$WORK/bin/tmux"
 cat > "$WORK/bin/claude" <<EOS
 #!/bin/sh
 echo call >> "$WORK/claude-calls"
+printf '%s\n' "\$*" > "$WORK/claude-argv"
 cat > "$WORK/claude-in"
 cat "$WORK/claude-out" 2>/dev/null
 exit "\$(cat "$WORK/claude-rc" 2>/dev/null || echo 0)"
@@ -170,7 +172,10 @@ run default
 [ "$(ncall)" = 1 ] || fail "default: claude called $(ncall) times, expected 1"
 [ "$(nreq)" = 0 ] || fail "default: the Jev endpoint was hit $(nreq) times with no backend set"
 [ ! -f "$WORK/shadow.ndjson" ] || fail "default: a shadow log was written"
+case " $(cat "$WORK/claude-argv" 2>/dev/null) " in *" --no-session-persistence "*) : ;;
+  *) fail "default: the helper claude -p would persist a transcript into the worktree (#1296)" "$(cat "$WORK/claude-argv" 2>/dev/null)" ;; esac
 ok "default backend: haiku decides, Jev endpoint never touched, no shadow log"
+ok "the haiku helper runs with --no-session-persistence — no transcript in the worktree (#1296)"
 
 # ================================================================ HOST CONF (#1251)
 # The DEFAULT leg ran from a root with no fleet.conf — so a host's

@@ -4,8 +4,9 @@
 # issue #214; trailing `origin` = spawn provenance, issue #503)
 # stdout: TAB rows
 # "WIN<TAB>name<TAB>path<TAB>claude-session-id<TAB>issue<TAB>state<TAB>prci<TAB>pfg<TAB>origin"
-# for each work window. The session id is the stem of the NEWEST transcript in that
-# worktree's project dir (same slug convention the collector uses), or '-' if none.
+# for each work window. The session id is the window's hook-recorded @cc_session_id
+# (--sid), else the stem of the NEWEST non-helper transcript in that worktree's
+# project dir (issue #1296), or '-' if none.
 #
 # The trailing state/prci/pfg fields (issue #153) carry per-window RUNTIME state so
 # restore() can re-stamp it after `claude --resume` (otherwise a restored worker
@@ -47,31 +48,86 @@ def separate_raw_path(path):
             and os.path.commonpath((MAIN, resolved)) != MAIN)
 
 
-def newest_sid(path):
-    """Stem of the newest transcript in `path`'s project dir, or '-' if none.
+# --sid (issue #1296): each input line starts with one more field, BEFORE the
+# --lead one: the window's @cc_session_id — the pane's own session id, stamped by
+# its SessionStart and Stop hooks. Empty for a window whose CLI predates them.
+SID = "--sid" in sys.argv[2:]
+HELPER_MARKERS = (
+    # fleet_internal_transcript's rubrics + the sleep digest's — keep in lockstep
+    # with fleet_is_helper_transcript in fleet-lib.sh (fleet-restore-helper-selftest.sh).
+    b"You are a status classifier for a Claude Code",
+    b"You are a status classifier for a coding-agent",
+    b"You are labeling a Claude Code session for a dashboard",
+    b"You write the status card of a paused coding assistant",
+)
 
-    CAVEAT (hub, issue #143): a worker's `path` is its OWN issue-<N> worktree,
-    so it holds exactly one session's transcripts — newest == that worker's. The
-    hub's `path` is the SHARED base checkout (FLEET_MAIN); if something else
-    (e.g. an ad-hoc `claude` the user ran there) wrote a newer transcript, this
-    picks THAT up instead. The resume then loads the wrong conversation. The
-    restore fallback only catches an *invalid* id, not a valid-but-wrong one.
-    Acceptable for now (matches the worker heuristic and the issue's spec); a
-    fully robust fix would capture the hub pane's own session id directly
-    (SessionStart hook, or matching the pane's claude PID to its open transcript).
+
+def project_dir(path):
+    """`path`'s Claude project dir: EVERY non-alphanumeric byte becomes '-'
+    (fleet_transcript_dir in fleet-lib.sh — '/', '.', '_' AND the rest)."""
+    root = os.environ.get("CLAUDE_PROJECTS_DIR") or os.path.expanduser("~/.claude/projects")
+    return os.path.join(root, re.sub(r"[^A-Za-z0-9]", "-", path))
+
+
+def helper_reason(f):
+    """'marker' | 'thin' | '' — mirror of fleet_is_helper_transcript (issue #1296)."""
+    try:
+        with open(f, "rb") as fh:
+            head = fh.read(16384)
+            if any(m in head for m in HELPER_MARKERS):
+                return "marker"
+            # Thin = under 50 lines with no tool call; stop reading at line 50 —
+            # a long transcript is never thin, however big the file.
+            fh.seek(0)
+            n, tool = 0, False
+            for row in fh:
+                n += row.endswith(b"\n")    # newline count, exactly `wc -l`
+                if n >= 50:
+                    return ""
+                tool = tool or b'"type":"tool_use"' in row
+    except OSError:
+        return ""
+    return "" if tool else "thin"
+
+
+def newest_sid(path, hook_sid=""):
+    """The session to resume for a window in `path`, or '-' if none.
+
+    1. `hook_sid` — the pane's own id, recorded by its hooks — when its transcript
+       is in this project dir and is not a known helper prompt. Exact, so a
+       hub/base checkout shared with an ad-hoc `claude` can no longer be misread.
+    2. Else the newest transcript that is not a helper (issue #1296): the fleet's
+       own `claude -p` calls ran from inside the worktree and were usually the
+       NEWEST file there — that is how four windows came back on a classifier.
+       Only thin ones left (short, no tool call)? The newest of them beats none.
     """
-    slug = re.sub(r"[/._]", "-", path)
-    files = glob.glob(os.path.expanduser(f"~/.claude/projects/{slug}/*.jsonl"))
-    if not files:
-        return "-"
-    newest = max(files, key=os.path.getmtime)
-    return os.path.basename(newest)[:-6]  # strip .jsonl
+    d = project_dir(path)
+    if hook_sid:
+        f = os.path.join(d, hook_sid + ".jsonl")
+        if os.path.isfile(f) and helper_reason(f) != "marker":
+            return hook_sid
+    files = glob.glob(os.path.join(glob.escape(d), "*.jsonl"))
+    thin = ""
+    for f in sorted(files, key=os.path.getmtime, reverse=True)[:200]:
+        why = helper_reason(f)
+        if not why:
+            return os.path.basename(f)[:-6]
+        if why == "thin" and not thin:
+            thin = os.path.basename(f)[:-6]
+    return thin or "-"
 
 
 for line in sys.stdin:
     line = line.rstrip("\n")
     if not line:
         continue
+    hook_sid = ''
+    if SID:
+        hook_sid, _, line = line.partition(SEP)
+        try:
+            hook_sid = hook_sid if str(uuid.UUID(hook_sid)) == hook_sid.lower() else ''
+        except ValueError:
+            hook_sid = ''
     lead = ''
     if LEAD:
         lead, _, line = line.partition(SEP)
@@ -148,7 +204,7 @@ for line in sys.stdin:
         # other claude started there: never guess by mtime — its own id or nothing.
         sid = norepo_sid or '-'
     else:
-        sid = loop_record.get('thread_id') or newest_sid(path)
+        sid = loop_record.get('thread_id') or newest_sid(path, hook_sid)
     retained = {}
     if sleep_record:
         try:
