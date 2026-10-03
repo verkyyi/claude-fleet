@@ -59,6 +59,7 @@ fi
 # One account, one set of background reads (issue #1271) — guarded, like the
 # collector: without the gh lib every login fetches, as it always has.
 # shellcheck source=/dev/null
+_FLEET_GH_LIB_DIR="$BIN"   # the lib would fork dirname to find itself (#888)
 [ -f "$BIN/fleet-gh-lib.sh" ] && . "$BIN/fleet-gh-lib.sh"
 command -v fleet_gh_share_on >/dev/null 2>&1 || fleet_gh_share_on() { return 1; }
 C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
