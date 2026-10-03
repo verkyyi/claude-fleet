@@ -414,3 +414,74 @@ fleet_collect_kick_due() {
   [ -n "$_ka" ] || return 0
   [ "$_ka" -ge "${FLEET_COLLECT_KICK_COOLDOWN:-600}" ]
 }
+
+# --- quota readings off the STATUS LINE (issue #1267) --------------------------
+# ccquota is one fetch on one tick, and when that tick stalls the 70%/85%
+# rotation reads a number that stopped moving (a 2.5h-stale cache, #551). Every
+# Claude Code status-line render already carries the SAME 5h/7d numbers for the
+# account that session spends (`.rate_limits.five_hour/seven_day.{used_percentage,
+# resets_at}` — verified on 2.1.288 with a CLAUDE_CODE_OAUTH_TOKEN session; they
+# equal ccquota's row to the percent), so conf/statusline.sh stamps them on its
+# window as tmux options:
+#   @rl5h @rl7d   integer % used          @rl_reset "<5h-reset> <7d-reset>" (epoch s)
+#   @rl_ts        epoch s of the render
+# and the window's @cc_account says whose numbers they are. The quota watch lists
+# them (`fleet_quota_rl_format`, one line per window) and this merges them into
+# ccquota's rows: per account, the NEWEST reading wins. ccquota stays the fallback
+# — an idle session does not re-render, so its stamp ages out after
+# FLEET_QUOTA_RL_TTL (default 600 s) and ccquota's row stands.
+# POSIX sh + awk, pure: no tmux, no network (the caller hands both inputs in).
+
+# fleet_quota_rl_format — the list-windows -F format the watch reads the stamps
+# with: "<account> <ts> <5h%> <7d%> <5h-reset> <7d-reset>", `-` for an unset
+# option. The reset pair goes LAST: it is the one value with a space inside.
+fleet_quota_rl_format() {
+  printf '%s' '#{?@cc_account,#{@cc_account},-} #{?@rl_ts,#{@rl_ts},-} #{?@rl5h,#{@rl5h},-} #{?@rl7d,#{@rl7d},-} #{?@rl_reset,#{@rl_reset},- -}'
+}
+
+# fleet_quota_merge <ccquota-rows> <ccquota-epoch> <statusline-lines> — print the
+# merged rows: ccquota's 7 TSV columns (label 5h 7d headroom 5h-reset 7d-reset
+# %/h) plus an 8th, the SOURCE (`ccquota` | `statusline`), and a 9th, the
+# reading's epoch. A statusline line counts only when its account is a plain
+# label (not `-`, not a `codex:` one), both percentages are integers, and its
+# stamp is no older than FLEET_QUOTA_RL_TTL (and not in the future). Per account
+# the newest such line is the statusline reading; it REPLACES the ccquota row only
+# when strictly newer than <ccquota-epoch> (a tie keeps ccquota). Its headroom is
+# 100 − the larger %, its %/h is ccquota's (a single render has no rate), and a
+# reset it lacks is ccquota's. An account with a fresh statusline reading but no
+# ccquota row gets one (ccquota down ≠ blind) — the caller filters to the pool.
+fleet_quota_merge() {
+  _fqm_now=$(fleet_usage_now)
+  _fqm_ttl="${FLEET_QUOTA_RL_TTL:-600}"
+  case "$_fqm_ttl" in ''|*[!0-9]*) _fqm_ttl=600 ;; esac
+  case "${2:-}" in ''|*[!0-9]*) _fqm_cts=0 ;; *) _fqm_cts=$2 ;; esac
+  printf '%s\n' "${1:-}" | FQM_SL="${3:-}" awk -F'\t' -v now="$_fqm_now" -v ttl="$_fqm_ttl" -v cts="$_fqm_cts" '
+    function isint(v) { return v ~ /^[0-9]+$/ }
+    BEGIN {
+      n = split(ENVIRON["FQM_SL"], L, "\n")
+      for (i = 1; i <= n; i++) {
+        m = split(L[i], f, " ")
+        if (m < 4) continue
+        a = f[1]; t = f[2]
+        if (a == "" || a == "-" || index(a, ":")) continue
+        if (!isint(t) || !isint(f[3]) || !isint(f[4])) continue
+        if (t + 0 > now + 60 || now - t > ttl) continue
+        if ((a in ts) && ts[a] >= t + 0) continue
+        ts[a] = t + 0; u5[a] = f[3] + 0; u7[a] = f[4] + 0
+        r5[a] = (m >= 5 && isint(f[5])) ? f[5] + 0 : 0
+        r7[a] = (m >= 6 && isint(f[6])) ? f[6] + 0 : 0
+      }
+    }
+    function emit(l, c5, c7, pph) {
+      mx = (u5[l] > u7[l]) ? u5[l] : u7[l]
+      printf "%s\t%d\t%d\t%d\t%d\t%d\t%s\tstatusline\t%d\n", l, u5[l], u7[l], 100 - mx,
+        (r5[l] > 0 ? r5[l] : c5), (r7[l] > 0 ? r7[l] : c7), pph, ts[l]
+    }
+    $1 == "" { next }
+    {
+      seen[$1] = 1
+      if (($1 in ts) && ts[$1] > cts) emit($1, $5 + 0, $6 + 0, ($7 == "" ? 0 : $7))
+      else printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\tccquota\t%d\n", $1, $2, $3, $4, $5, $6, $7, cts
+    }
+    END { for (l in ts) if (!(l in seen)) emit(l, 0, 0, 0) }'
+}

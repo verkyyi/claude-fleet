@@ -183,4 +183,35 @@ eq "replay: no banner, no stamp → new"           new    "$(rp "" "")"
 eq "replay: banner read off a real replayed pane" replay \
    "$(rp "$(printf "  ⎿  You've %s\n     /usage-credits to finish\n" "$WK" | fleet_limit_banner)" "$WK")"
 
-printf 'selftest OK: usage-lib severity + freshness gate + summary + limit banner + limit kind + replay (%s assertions)\n' "$CHECKS"
+# --- fleet_quota_merge (issue #1267): newest reading per account wins ---------
+N=$(now)
+QR=$(printf 'a\t10\t20\t80\t100\t200\t3\nb\t5\t5\t95\t300\t400\t0')
+mg() { fleet_quota_merge "$QR" "$1" "$2" | sort; }
+eq "merge: no stamps → ccquota rows + source + epoch" \
+   "$(printf 'a\t10\t20\t80\t100\t200\t3\tccquota\t%s\nb\t5\t5\t95\t300\t400\t0\tccquota\t%s' $((N-100)) $((N-100)))" \
+   "$(mg $((N-100)) '')"
+eq "merge: newer stamp replaces %/resets, keeps %/h, headroom = 100-max" \
+   "$(printf 'a\t72\t30\t28\t111\t222\t3\tstatusline\t%s' $((N-10)))" \
+   "$(mg $((N-100)) "a $((N-10)) 72 30 111 222
+a $((N-50)) 99 99 1 1" | grep '^a')"
+eq "merge: stamp older than ccquota → ccquota" "ccquota" \
+   "$(mg $((N-5)) "a $((N-10)) 72 30 111 222" | awk -F'\t' '$1=="a"{print $8}')"
+eq "merge: tie → ccquota" "ccquota" \
+   "$(mg $((N-10)) "a $((N-10)) 72 30 111 222" | awk -F'\t' '$1=="a"{print $8}')"
+eq "merge: stamp past FLEET_QUOTA_RL_TTL → ccquota" "ccquota" \
+   "$(FLEET_QUOTA_RL_TTL=5 mg $((N-100)) "a $((N-10)) 72 30 111 222" | awk -F'\t' '$1=="a"{print $8}')"
+eq "merge: missing reset falls back to ccquota's" "100	200" \
+   "$(mg $((N-100)) "a $((N-10)) 72 30 - -" | awk -F'\t' '$1=="a"{print $5"\t"$6}')"
+eq "merge: unknown account with a fresh stamp gets a row" "$(printf 'c\t40\t88\t12\t5\t6\t0\tstatusline\t%s' $((N-5)))" \
+   "$(mg $((N-100)) "c $((N-5)) 40 88 5 6" | grep '^c')"
+eq "merge: '-', codex:, half, garbage and future stamps are ignored" "2" \
+   "$(mg $((N-100)) "- $N 1 1
+codex:x $N 99 99 1 1
+a $N 99 - 1 1
+a x 99 99 1 1
+a $((N+3600)) 99 99 1 1" | awk -F'\t' '$8=="ccquota"' | grep -c .)"
+eq "merge: ccquota empty → statusline rows only" "a	statusline" \
+   "$(fleet_quota_merge '' 0 "a $N 50 60 1 2" | awk -F'\t' '{print $1"\t"$8}')"
+eq "merge: nothing in → nothing out" "" "$(fleet_quota_merge '' 0 '')"
+
+printf 'selftest OK: usage-lib severity + freshness gate + summary + limit banner + limit kind + replay + quota merge (%s assertions)\n' "$CHECKS"

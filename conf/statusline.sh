@@ -72,6 +72,27 @@ if [[ -n "$CTX_PCT" ]]; then
   SEGMENTS+=("${CTX_COLOR}${BAR} ${CTX_INT}%${RESET}")
 fi
 
+# ── 1b. Subscription quota stamp (issue #1267) ───────────────────────────────
+# .rate_limits.five_hour/seven_day.{used_percentage,resets_at} are the account's
+# own 5h/7d numbers, re-read on every render — fresher than the quota watch's one
+# ccquota fetch per tick. Stamp them on this window (@rl5h @rl7d @rl_reset
+# "<5h-reset> <7d-reset>", @rl_ts = now) for the watch to merge per @cc_account
+# (bin/usage-lib.sh fleet_quota_merge). Both % must be present, or nothing is
+# stamped: the watch reads an aged-out stamp as "no reading", never a half one.
+if [[ -n "${TMUX:-}" && -n "${TMUX_PANE:-}" ]]; then
+  RL=$(jq -r '.rate_limits as $r | [$r.five_hour.used_percentage, $r.seven_day.used_percentage,
+              $r.five_hour.resets_at, $r.seven_day.resets_at]
+              | map(if type == "number" then (floor | tostring) else "-" end) | join(" ")' \
+         <<< "$INPUT" 2>/dev/null)
+  read -r RL5 RL7 RLR5 RLR7 <<< "$RL"
+  if [[ "$RL5" =~ ^[0-9]+$ && "$RL7" =~ ^[0-9]+$ ]]; then
+    tmux set-window-option -t "$TMUX_PANE" @rl5h "$RL5" \; \
+         set-window-option -t "$TMUX_PANE" @rl7d "$RL7" \; \
+         set-window-option -t "$TMUX_PANE" @rl_reset "$RLR5 $RLR7" \; \
+         set-window-option -t "$TMUX_PANE" @rl_ts "$(date +%s)" 2>/dev/null || true
+  fi
+fi
+
 # ── 2. Current working directory ─────────────────────────────────────────────
 CWD_RAW=$(jq -r '.workspace.current_dir // .cwd // ""' <<< "$INPUT")
 
