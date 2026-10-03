@@ -543,6 +543,29 @@ re-read every 1s, or on its next 0.25s tick when `set-claude-state.sh` has dropp
 fork/s per fleet instead of ~8. `logs/spinner.heartbeat` is `<epoch>
 tmux_calls_per_s=<n.n>` — the epoch stays the first token for the liveness readers.
 
+## The fleet mod — the session reports from inside (#1335, EPIC #1334)
+
+Every Claude session `bin/fleet-claude.sh` opens loads the repo's `mod/fleet/`
+plugin (`--plugin-dir`, while `FLEET_MOD` is on — the default). It is one more
+writer on the same bus — never a second store — and its first job is to say it
+is there:
+
+| Option | Written | Means |
+|---|---|---|
+| `@mod_state` | at `session.start` | `on`, or `off:version` — Claude Code is outside `SUPPORTED` (`mod/fleet/hooks/version.ts`) and the mod registered nothing |
+| `@mod_ver` | at `session.start` | the mod's own version |
+| `@mod_alive` | at start, then every 15s; unset on a real exit | epoch seconds of the last beat; survives `/clear` (the timer is the module's, not the session's) |
+
+`fleet_mod_alive <win> [session]` (`bin/fleet-lib.sh`) is the one reader: a beat
+within `FLEET_MOD_ALIVE_SECS` (45) → take the mod's path; stale, missing, or
+`FLEET_MOD=0` → take today's path, which is never removed. `fleet-doctor.sh`'s
+`mod` line counts each Claude window as alive / out of range / stale / not loaded.
+Feature files under `mod/fleet/hooks/` stand behind the version gate
+(`gate.ts`); `lifecycle.ts` owns `session.start` / `session.end`, since the
+engine takes one unmatched hook per event per plugin. Checks:
+`claude plugin validate mod/fleet` and `claude plugin test mod/fleet`
+(`bin/fleet-mod-selftest.sh` runs both where a `claude` CLI exists).
+
 ## Related
 
 - **Auto-handoff nudge (#330).** `set-claude-state.sh`'s `done` branch also emits

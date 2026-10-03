@@ -1,0 +1,9 @@
+{
+  "name": "fleet",
+  "version": "0.1.0",
+  "description": "claude-fleet's in-session extension: version gate + heartbeat on the window's tmux options (issue #1335, EPIC #1334).",
+  "author": {
+    "name": "claude-fleet"
+  },
+  "types": "./types/index.d.ts"
+}

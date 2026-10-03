@@ -242,7 +242,22 @@ PY
   fi
 fi
 
-if [ -n "${FLEET_LOOP_SPEC:-}" ] && [ "${FLEET_LOOP_AGENT:-}" = claude ]; then
-  exec python3 "$BIN/fleet-loop.py" bridge -- claude ${model_flag[@]+"${model_flag[@]}"} ${mcp_flag[@]+"${mcp_flag[@]}"} "$@"
+# The fleet mod (issue #1335, EPIC #1334): every Claude session this door opens
+# loads mod/fleet/ — the plugin that reports from INSIDE the session (version
+# gate + heartbeat on the window's @mod_* options; later EPIC members add state,
+# context and commands). FLEET_MOD=0, or no plugin folder beside bin/ (a lib-less
+# or pre-#1335 install, a selftest sandbox), adds nothing: the argv is byte for
+# byte what it was. The =form, like --mcp-config's above, so the value can never
+# be read off a following positional (the #476 lesson), and `--plugin-dir` loads
+# without the hot-reload question (measured on 2.1.288). A caller's own
+# --plugin-dir is additive, so it is never skipped for one.
+mod_flag=()
+if command -v fleet_mod_on >/dev/null 2>&1 && fleet_mod_on; then
+  _fc_mod=$(fleet_mod_dir 2>/dev/null) && mod_flag=("--plugin-dir=$_fc_mod")
+  unset _fc_mod
 fi
-exec claude ${model_flag[@]+"${model_flag[@]}"} ${mcp_flag[@]+"${mcp_flag[@]}"} "$@"
+
+if [ -n "${FLEET_LOOP_SPEC:-}" ] && [ "${FLEET_LOOP_AGENT:-}" = claude ]; then
+  exec python3 "$BIN/fleet-loop.py" bridge -- claude ${model_flag[@]+"${model_flag[@]}"} ${mcp_flag[@]+"${mcp_flag[@]}"} ${mod_flag[@]+"${mod_flag[@]}"} "$@"
+fi
+exec claude ${model_flag[@]+"${model_flag[@]}"} ${mcp_flag[@]+"${mcp_flag[@]}"} ${mod_flag[@]+"${mod_flag[@]}"} "$@"

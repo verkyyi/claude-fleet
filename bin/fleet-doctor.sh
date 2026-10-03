@@ -2077,6 +2077,58 @@ ltop=$(printf '%s\n' "$lwin" | awk -F '\t' '$1 ~ /^[0-9]+$/ && ($1 + 0) > best {
         printf "%s:%s %s%% @ %s, 压过 %d 次", f[2], f[6], f[1], st, f[5] + 0 }')
 pass context "${lmsg}${ltop:+ · 当前最高 ${ltop}}"
 
+# --- mod: the in-session fleet extension, per Claude window (issue #1335) --------
+# bin/fleet-claude.sh loads mod/fleet/ into every Claude session it opens while
+# FLEET_MOD is on (default 1). The mod writes @mod_state (on | off:version),
+# @mod_ver and a heartbeat @mod_alive every 15s; fleet_mod_alive (fleet-lib.sh)
+# reads a beat within FLEET_MOD_ALIVE_SECS (45) as alive. This row counts, over
+# every fleet on this login, which of the two paths each Claude window is on and
+# why: alive = the mod's; off:version = Claude Code outside the mod's supported
+# range; stale = loaded once, beat stopped; none = launched before the mod (or
+# while FLEET_MOD was 0). The last three all run today's path, which stays.
+# Read-only; a count, never a verdict — WARN only for a switched-on mod whose
+# plugin folder is missing from the install.
+mod_on="${FLEET_MOD:-$(_gconf_val FLEET_MOD)}"
+mod_dir="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)/mod/fleet"
+mod_rng=$(sed -n "s/.*SUPPORTED = { min: '\([^']*\)', below: '\([^']*\)' }.*/\1 ≤ v < \2/p" "$mod_dir/hooks/version.ts" 2>/dev/null)
+mod_max="${FLEET_MOD_ALIVE_SECS:-45}"; case "$mod_max" in ''|*[!0-9]*) mod_max=45 ;; esac
+mwin=''
+if [ -d "$conf_dir" ]; then
+  mwin=$(while IFS= read -r cf; do
+    [ -n "$cf" ] || continue
+    case "$cf" in (*/fleets/*/conf) sess=${cf%/conf}; sess=${sess##*/} ;; (*) sess=$(basename "$cf" .conf) ;; esac
+    tmux -L "$sess" list-windows -t "$sess" \
+      -F "#{window_name}	#{@cc_agent}	#{@cc_model}#{@claude_state}	#{@mod_state}	#{@mod_alive}" 2>/dev/null
+  done <<EOF
+$(_fleet_confs "$conf_dir")
+EOF
+)
+fi
+# A Claude window: not a panel, not codex, and stamped by the launcher (@cc_model)
+# or the state hooks (@claude_state). Columns: total alive off:version stale none.
+mcount=$(printf '%s\n' "$mwin" | awk -F '\t' -v now="$(date +%s)" -v max="$mod_max" '
+  NF < 5 || $1 == "dash" || $1 == "plan" || $1 == "backlog" || $2 == "codex" || $3 == "" { next }
+  { n++
+    if ($5 ~ /^[0-9]+$/ && now - $5 <= max) a++
+    else if ($4 == "off:version") v++
+    else if ($4 != "") s++
+    else x++ }
+  END { printf "%d %d %d %d %d", n, a, v, s, x }')
+read -r m_n m_a m_v m_s m_x <<EOF
+${mcount:-0 0 0 0 0}
+EOF
+m_tail="扩展存活 ${m_a}/${m_n} 个 Claude 窗口"
+[ "$m_v" -gt 0 ] && m_tail="${m_tail} · 版本不在区间 ${m_v}"
+[ "$m_s" -gt 0 ] && m_tail="${m_tail} · 心跳停了 ${m_s}"
+[ "$m_x" -gt 0 ] && m_tail="${m_tail} · 未加载 ${m_x}"
+if [ "$mod_on" = 0 ]; then
+  info mod "关 (FLEET_MOD=0) — 新会话不带扩展，全部走旧路径；${m_tail}"
+elif [ ! -f "$mod_dir/.claude-plugin/plugin.json" ]; then
+  warn mod "FLEET_MOD 开着但 ${mod_dir} 不在 — 新会话不带扩展，全部走旧路径（同步安装后补上）"
+else
+  pass mod "${m_tail}；其余走旧路径 (支持 Claude Code ${mod_rng:-?})"
+fi
+
 # --- shared deps: is the base's node_modules current with its lockfiles? (#961) --
 # With shared deps on (fleet_base_deps_on: FLEET_BASE_DEPS=1, or the stock
 # fleet-deps-link hook), every new worktree borrows the base checkout's
