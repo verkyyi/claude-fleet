@@ -442,7 +442,7 @@ restore() {
         say "    ⏸ $wname → awaiting you (no transcript found) — not starting a fresh $agent_label"
       fi
       if [ -n "$wsleep" ] && [ "$wsleep" != - ]; then
-        kind=sleep
+        kind=sleeping
         cmd='exec "$SHELL"'
         say "    z $wname → retained sleeping worker"
       fi
@@ -536,7 +536,7 @@ restore() {
             OSEQ=$((OSEQ + 1))
             mark_outcome "$OSEQ" "$sock" "$nw" "$sess" "$wname" awaiting \
               "no transcript — fleet-restore.sh --fresh $wname --session $sess" ;;
-          sleep)
+          sleeping)
             OSEQ=$((OSEQ + 1))
             OUTCOMES="$OUTCOMES$OSEQ	$sess	$wname	sleeping	sleep record restored
 " ;;

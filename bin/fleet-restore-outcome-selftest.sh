@@ -92,7 +92,7 @@ eq "issue-4 (session picker)"         attention "$(opt issue-4 @restore_outcome)
 eq "issue-5 (no transcript)"          awaiting  "$(opt issue-5 @restore_outcome)"
 
 # resumed keeps the snapshot state; every other outcome is red with the restore reason
-eq "issue-1 state untouched"          done      "$(opt issue-1 @claude_state)"
+eq "issue-1 state untouched"          "done"    "$(opt issue-1 @claude_state)"
 for w in issue-2 issue-3 issue-4 issue-5; do
   eq "$w is red"                      needs     "$(opt "$w" @claude_state)"
   eq "$w red because of restore"      restore   "$(opt "$w" @claude_needs)"
