@@ -286,6 +286,21 @@ FLEET_CTX_WINDOW=200000
 # @label=Max sessions — all fleets @group=caps @tier=common @scope=global @edit=int @unit=sessions
 FLEET_GLOBAL_MAX_SESSIONS=8
 
+# MACHINE-WIDE ceiling across every LOGIN on this box (issue #1301). The cap above
+# counts only THIS login's fleets; on a shared machine five logins at 36 each add
+# up to nothing. Each login's collector writes its live count (+ in-flight spawns)
+# once a tick to /Users/Shared/claude-fleet/sessions/<login> (1777, never under a
+# $HOME); a spawn refuses when this login's live count + the others' files reach
+# the ceiling, and the refusal lists every login's share. A file older than
+# FLEET_MACHINE_SESSIONS_STALE seconds counts 0. Default 0 = unlimited (no file is
+# read); `fleet-doctor`'s `machine` line states the total either way — read a
+# week of peaks there before picking a number. Crash restore, quota migration and
+# handoff re-house running sessions and never pass any cap.
+# @label=Max sessions — all logins @group=caps @tier=internal @scope=global @edit=int @unit=sessions
+#FLEET_MACHINE_MAX_SESSIONS=0
+# @label=Machine session file stale after @group=caps @tier=internal @scope=global @edit=int @unit=s
+#FLEET_MACHINE_SESSIONS_STALE=300
+
 # PER-FLEET ceiling on concurrent Claude working sessions in THIS fleet, enforced
 # alongside the global cap by every spawn path (a spawn needs BOTH caps to have
 # headroom). Default 0 = unlimited (only the global cap applies) — set it to give

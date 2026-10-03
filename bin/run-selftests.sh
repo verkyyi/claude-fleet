@@ -191,6 +191,12 @@ unset FLEET_GLOBAL_MAX_SESSIONS 2>/dev/null || true
 # that has nothing to do with it. Off for the suite; fleet-admit-selftest.sh turns it
 # back on against stubbed probes.
 export FLEET_ADMIT=0
+# Every collector tick publishes this login's session count to a MACHINE-level dir
+# the other logins' caps read (issue #1301). A test tick counting its own fake fleet
+# must never land there — it would overwrite the operator's real row for up to the
+# stale bound. A throwaway dir, inside the shadow root when there is one.
+FLEET_MACHINE_SESSIONS_DIR="${FLEET_SELFTEST_ROOT:-${TMPDIR:-/tmp}/fleet-selftest-$$}/machine-sessions"
+export FLEET_MACHINE_SESSIONS_DIR
 
 # The PER-FLEET confs are the same leak one directory over (issue #660): fleet_load_conf
 # reads $FLEET_CONF_DIR/fleets/<sess>/conf, defaulting to the operator's real

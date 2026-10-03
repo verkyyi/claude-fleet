@@ -1237,6 +1237,39 @@ else
   pass machine "sessions: $gtxt, $csumtxt — up to $cceil concurrent on $mcores cores (${cratio}x)"
 fi
 
+# 4. Sessions across EVERY login on this box (issue #1301). Each login's collector
+#    publishes `<count> <epoch>` to a machine-level dir (fleet_machine_sessions_*
+#    in fleet-lib.sh — KEEP IN SYNC: dir, login files, stale bound); a file past
+#    FLEET_MACHINE_SESSIONS_STALE (300s) counts 0. Stated, never warned: the cap
+#    FLEET_MACHINE_MAX_SESSIONS defaults to 0 (unlimited) until the operator has
+#    seen a week of peaks — this line is what they read to pick it.
+if [ -n "${FLEET_MACHINE_SESSIONS_DIR:-}" ]; then msdir="$FLEET_MACHINE_SESSIONS_DIR"
+elif [ "$(uname -s 2>/dev/null)" = Darwin ]; then msdir=/Users/Shared/claude-fleet/sessions
+else msdir=/var/tmp/claude-fleet/sessions; fi
+mmax="${FLEET_MACHINE_MAX_SESSIONS:-$(_gconf_val FLEET_MACHINE_MAX_SESSIONS)}"
+case "$mmax" in ''|*[!0-9]*) mmax=0 ;; esac
+mstale="${FLEET_MACHINE_SESSIONS_STALE:-$(_gconf_val FLEET_MACHINE_SESSIONS_STALE)}"
+case "$mstale" in ''|*[!0-9]*) mstale=300 ;; esac
+mrows=''
+if [ -d "$msdir" ]; then
+  mnow=$(date +%s)
+  for mf in "$msdir"/*; do
+    [ -f "$mf" ] || continue
+    mrows="$mrows$(awk -v l="${mf##*/}" -v now="$mnow" -v st="$mstale" '
+      NR == 1 { n = ($1 ~ /^[0-9]+$/) ? $1 : 0; ts = ($2 ~ /^[0-9]+$/) ? $2 : 0
+                if (now - ts > st) printf "%s 0 stale\n", l; else printf "%s %d fresh\n", l, n; exit }' "$mf" 2>/dev/null)
+"
+  done
+fi
+mcap="no machine cap (FLEET_MACHINE_MAX_SESSIONS=0)"; [ "$mmax" -gt 0 ] && mcap="machine cap $mmax"
+if [ -z "$(printf '%s' "$mrows" | tr -d '[:space:]')" ]; then
+  info machine "sessions across logins: no login has published a count yet ($msdir) — each login's collector writes one a tick; $mcap"
+else
+  msum=$(printf '%s' "$mrows" | awk 'NF { t += $2; s = $1 " " $2; if ($3 == "stale") s = s " (stale)"; o = (o == "") ? s : o " · " s; k++ }
+    END { printf "%d across %d login(s): %s", t, k, o }')
+  pass machine "sessions across logins: $msum — $mcap"
+fi
+
 # --- last crash + the record a crash would leave (issue #1294) -----------------
 # The diskguard tick harvests the system's panic / Jetsam reports into
 # machine/incident-*.md the first tick after a reboot (bin/fleet-crash-harvest.py),
