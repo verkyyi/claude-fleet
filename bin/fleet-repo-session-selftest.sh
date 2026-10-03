@@ -204,7 +204,8 @@ eq "E one-repo rows carry no repo column" "$(awk -F'\t' '$1=="WIN" && NF>15' "$M
 
 # An OLD row (pre-#789, no column 16) for B's worktree: its repo comes from @worktree.
 mkdir -p "$WORK/mainB-issue-77"; git -C "$WORK/mainB" worktree add -q -b issue-77 "$WORK/mainB-issue-77" master 2>/dev/null
-printf 'WIN\told-b\t%s\t-\t77\tdone\t-\t-\t-\n' "$WORK/mainB-issue-77" >> "$MS"
+# (with a session id: a row with none is parked `awaiting` and launches nothing, #1265)
+printf 'WIN\told-b\t%s\tsid-old77\t77\tdone\t-\t-\t-\n' "$WORK/mainB-issue-77" >> "$MS"
 
 nameN=$(opt "$wN" window_name)
 tmux kill-window -t "$wB"; tmux kill-window -t "$wN"

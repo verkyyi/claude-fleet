@@ -434,7 +434,7 @@ restore() {
       # kept on the window as @restore_fresh_cmd, for `--fresh <win>` only.
       local kind=resume fresh_cmd="$launch; exec \$SHELL"
       if [ -n "$wid" ] && [ "$wid" != "-" ]; then
-        cmd="$launch $resume_flag '$wid'${nudge:+ '$nudge'}; $(fleet_win_stamp_cmd @restore_exit 1)exec \$SHELL"
+        cmd="$launch $resume_flag '$wid'${nudge:+ '$nudge'} ; $(fleet_win_stamp_cmd @restore_exit 1)exec \$SHELL"
         say "    ↻ $wname → $agent_label $resume_flag ${wid%%-*}…${nudge:+ (auto-continue)}"
       else
         kind=awaiting
