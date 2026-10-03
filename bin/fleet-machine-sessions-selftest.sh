@@ -79,7 +79,7 @@ case "$ats" in ''|*[!0-9]*) fail "A the file's second field is an epoch (got '$a
 [ "$(cat "$SH/bob")" != "" ] && read -r bn _ < "$SH/bob"; [ "$bn" = 2 ] || fail "A bob's count (got '$bn')"
 perm=$(stat -c %a "$SH" 2>/dev/null || stat -f %Mp%Lp "$SH" 2>/dev/null)
 [ "$perm" = 1777 ] || fail "A the shared dir must be 1777 like the heavy queue (got $perm)"
-ls -A "$SH" | grep -q '^\.' && fail "A a publish must leave no temp file behind" "$(ls -A "$SH")"
+for t in "$SH"/.*; do case "${t##*/}" in .|..) ;; *) [ -e "$t" ] && fail "A a publish must leave no temp file behind" "$t" ;; esac; done
 lib alice 0 'fleet_machine_sessions_publish 7' && read -r an _ < "$SH/alice"; [ "$an" = 7 ] || fail "A an explicit count wins (got '$an')"
 lib alice 0 'fleet_machine_sessions_publish x' && fail "A a non-numeric count must be refused"
 lib alice 3 fleet_machine_sessions_publish
@@ -110,7 +110,6 @@ lib carol 1 fleet_machine_sessions_publish
 r=$(cap carol 1 FLEET_MACHINE_MAX_SESSIONS=6 FLEET_GLOBAL_MAX_SESSIONS=0)
 case "$r" in "1|machine at capacity — 全机会话已满: 6/6 Claude sessions across all logins (carol 1 · alice 3 · bob 2)"*FLEET_MACHINE_MAX_SESSIONS*) ;;
   *) fail "C at the machine ceiling the 4th spawn must be refused with each login's share (got '$r')" ;; esac
-C_MSG="${r#1|}"
 r=$(cap alice 3 FLEET_MACHINE_MAX_SESSIONS=6 FLEET_GLOBAL_MAX_SESSIONS=0); case "$r" in 1\|*"alice 3 · bob 2 · carol 1"*) ;; *) fail "C refused from alice too (got '$r')" ;; esac
 r=$(cap alice 3 FLEET_MACHINE_MAX_SESSIONS=7 FLEET_GLOBAL_MAX_SESSIONS=0); [ "$r" = "0|" ] || fail "C under the ceiling admits (got '$r')"
 # bob's collector stopped: his share frees.
