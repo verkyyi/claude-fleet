@@ -213,4 +213,7 @@ FLEET_X                            doc: the placeholder name in a comment, not a
 FLEET_GH_FAKE_LIMIT                seam: inject a GitHub rate limit per bucket for tests, never touches the account (fleet-gh-lib.sh, #1042)
 FLEET_GH_LIMIT_HOLD_SECS           knob: internal pacing/limit, safe in-code default (fleet-gh-lib.sh)
 FLEET_GH_LOG                       path: state/log location override (fleet-gh-lib.sh)
+FLEET_GH_WRITE_BACKOFF             knob: internal pacing, secondary-limit backoff base without Retry-After (fleet-gh-lib.sh write queue, #1264)
+FLEET_GH_WRITE_GAP                 knob: internal pacing, min seconds between write starts per token (fleet-gh-lib.sh write queue, #1264)
+FLEET_GH_WRITE_LOCK_WAIT           knob: internal timeout, longest a writer queues before writing unqueued (fleet-gh-lib.sh, #1264)
 FLEET_STATE_DIR                    path: state/log location override — the shared gh-limit marker dir (fleet-gh-lib.sh)
