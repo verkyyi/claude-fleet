@@ -57,6 +57,8 @@
 #   fleet_gh_wrun <bucket> <source> <gh args…>
 #                                        fleet_gh_run for a WRITE: same contract,
 #                                        but the call goes through fleet_gh_write
+#   fleet_wh_live / fleet_wh_mark / fleet_wh_sig
+#                                        webhook event stamps (issue #1272, below)
 
 FLEET_GH_LIMITED_RC=75
 # A caller that already knows its bin/ (tmux-status.sh, every 5s) presets it: no fork.
@@ -611,4 +613,66 @@ fleet_gh_adopt() {  # fleet_gh_adopt <slug> <maxage> <dir> <file>…
     rm -f "$dst/.$f.adopt.$$" 2>/dev/null
   done
   return 0
+}
+
+# --- webhook event stamps: wait on a change, not a clock (issue #1272, R4) -------
+# fleet-webhook.sh --route already hears every pull_request / check_run /
+# check_suite / status delivery for a forwarded repo. Besides kicking pr-refresh it
+# now leaves a STAMP per PR it names — so a waiter (fleet-pr-verdict.sh --wait,
+# fleet-gh.sh pr checks) reads GitHub only when something changed, plus one
+# confirming read at the end, instead of one read every 15-20s.
+#   <state>/events/<slug>/pr-<N>   a delivery naming PR #N (pull_request, or a
+#                                  check_run/check_suite's pull_requests[])
+#   <state>/events/<slug>/repo     a PR-class delivery naming NO PR (a `status`
+#                                  event, a fork PR's check_suite) — and every
+#                                  forward (re)connect, since `gh webhook forward`
+#                                  never replays what it missed while down
+# Content: `<epoch> <event> <id>` — the id makes every write a new value, so a
+# waiter compares contents, never mtimes. Written tmp+rename.
+# <state> is the webhook daemon's own dir (FLEET_WEBHOOK_STATE_DIR, default
+# ~/.config/claude-fleet/webhook — per login, like the daemon).
+#
+# AVAILABLE (fleet_wh_live) = the handler AND this repo's forward are running.
+# Anything else — no daemon, a repo not opted in, a forward mid-restart — and the
+# waiter polls exactly as before. A live forward that misses a delivery costs
+# freshness only: every waiter still re-reads on a long backstop.
+#
+#   fleet_wh_state_dir                   the webhook state dir
+#   fleet_wh_live <repo>                 rc 0 while deliveries for <repo> arrive
+#   fleet_wh_mark <repo> <key> <event>   write one stamp (key: pr-<N> | repo)
+#   fleet_wh_sig <repo> <pr>             one line that changes whenever a delivery
+#                                        for <pr> (or for the repo) lands
+fleet_wh_state_dir() { printf '%s' "${FLEET_WEBHOOK_STATE_DIR:-$HOME/.config/claude-fleet/webhook}"; }
+
+_fleet_wh_slug() {
+  if command -v fleet_slug >/dev/null 2>&1; then fleet_slug "$1"
+  else printf '%s' "$1" | tr '/' '-' | tr -cd '[:alnum:]._-'; fi
+}
+
+_fleet_wh_pid_live() {  # _fleet_wh_pid_live <pidfile>
+  local p
+  p=$(cat "$1" 2>/dev/null) || return 1
+  case "$p" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$p" 2>/dev/null
+}
+
+fleet_wh_live() {  # fleet_wh_live <repo>
+  local d; d=$(fleet_wh_state_dir)
+  [ -n "${1:-}" ] || return 1
+  _fleet_wh_pid_live "$d/handler.pid" && _fleet_wh_pid_live "$d/forwards/$(_fleet_wh_slug "$1").pid"
+}
+
+fleet_wh_mark() {  # fleet_wh_mark <repo> <key> <event>
+  local d tmp
+  case "${2:-}" in repo|pr-[0-9]*) ;; *) return 1 ;; esac
+  d="$(fleet_wh_state_dir)/events/$(_fleet_wh_slug "${1:-}")"
+  mkdir -p "$d" 2>/dev/null || return 1
+  tmp="$d/.$2.$$"
+  printf '%s %s %s.%s\n' "$(date +%s)" "${3:-event}" "$$" "${RANDOM:-0}" > "$tmp" 2>/dev/null \
+    && mv -f "$tmp" "$d/$2" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 1; }
+}
+
+fleet_wh_sig() {  # fleet_wh_sig <repo> <pr>
+  local d; d="$(fleet_wh_state_dir)/events/$(_fleet_wh_slug "${1:-}")"
+  printf '%s|%s\n' "$(cat "$d/pr-${2:-}" 2>/dev/null)" "$(cat "$d/repo" 2>/dev/null)"
 }

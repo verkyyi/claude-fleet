@@ -17,8 +17,18 @@ classifier to refine (done|needs|looping). A window with no agent process under
 its pane at all is demoted with reason `exited`. This pass only demotes; it never
 promotes, never touches needs/blocked, panels, or a window in a sleep transition.
 
+When the signals contradict each other the pass says so instead of guessing
+(issue #1270): a `working` hook stamp older than FLEET_HOOK_TRUST_SECS (15) on a
+window tmux has seen silent for more than FLEET_RUNG_TMUX_IDLE_SECS (10), while
+the registry has a verdict, writes one `rung_health window=@N hook=working
+tmux_idle=Ns registry=<idle|gone|busy>` line to the log and takes the higher
+rung's word — registry idle/gone demotes at once, registry busy keeps `working`.
+Each contradiction is logged once while it lasts (cache-dir/reconcile.rung);
+fleet-doctor's `state` line counts them.
+
 Usage: fleet-state-reconcile.py [--dry-run] [--cache-dir DIR] [--idle-secs N]
-                                [--exited-secs N] -- <fleet-session>...
+                                [--exited-secs N] [--hook-trust-secs N]
+                                [--tmux-idle-secs N] -- <fleet-session>...
 Exit status is always 0; problems go to stderr and the heartbeat's skipped= field.
 """
 import argparse
@@ -198,11 +208,11 @@ def window_rows(session):
             continue
         fields = tm(session, 'display-message', '-p', '-t', wid,
                     '#{pane_id}|#{pane_pid}|#{pane_dead}|#{@claude_state}|#{@claude_state_ts}|'
-                    '#{@cc_agent}|#{@worker_lifecycle}|#{@hub}|#{@issue}|#{@raw}|#{window_name}').split('|', 10)
-        if len(fields) != 11:
+                    '#{@cc_agent}|#{@worker_lifecycle}|#{@hub}|#{@issue}|#{@raw}|#{window_activity}|#{window_name}').split('|', 11)
+        if len(fields) != 12:
             continue
         rows.append(dict(zip(('pane', 'pane_pid', 'dead', 'state', 'state_ts', 'agent',
-                              'lifecycle', 'hub', 'issue', 'raw', 'name'), fields), window=wid))
+                              'lifecycle', 'hub', 'issue', 'raw', 'activity', 'name'), fields), window=wid))
     return rows
 
 
@@ -226,6 +236,54 @@ def demote(session, row, reason, dry, log):
     subprocess.run(['sh', '-c', '"$0" "$@" >/dev/null 2>&1 </dev/null &', 'bash',
                     str(BIN / 'classify-sessions.sh'), '--window', row['window']], env=env, timeout=10)
     return True
+
+
+def contested(row, record, verdict, state_ts, now, args, rows):
+    """The registry's word when the hook's `working` is contradicted, else None (issue #1270).
+
+    Signals rank ① the session registry ② the hook stamp (trusted for
+    hook_trust_secs) ③ the visible prompt ④ tmux window_activity. A contradiction
+    is a `working` stamp past its trust window on a window tmux has seen silent for
+    more than tmux_idle_secs — a live Claude turn animates its spinner every second
+    — while the registry has a verdict: `idle` and `gone` (no process, none under
+    the pane) outrank the hook and demote now, without the idle grace; `busy`
+    outranks tmux and keeps `working`. Every other window is decided exactly as
+    before this check existed.
+    """
+    if record is None or args.tmux_idle_secs < 1:
+        return None
+    try:
+        tmux_idle = now - float(row['activity'])
+    except ValueError:
+        return None
+    if now - state_ts < args.hook_trust_secs or tmux_idle <= args.tmux_idle_secs:
+        return None
+    if verdict in ('idle', 'fresh'):
+        return 'idle', int(tmux_idle)
+    if verdict == 'busy':
+        return record.get('status') or 'busy', int(tmux_idle)
+    if verdict == 'gone' and (row['dead'] == '1' or (row['pane_pid'].isdigit()
+                                                     and not has_agent_process(rows, row['pane_pid']))):
+        return 'gone', int(tmux_idle)
+    return None
+
+
+def rung_health(session, row, registry_says, tmux_idle, state_ts, now, args, stats):
+    """Log one `rung_health` event per (window, registry verdict) while it lasts."""
+    key = '%s:%s:%s' % (session, row['window'], registry_says)
+    stats['contested'] += 1
+    stats['seen'][key] = stats['seen_before'].get(key, int(now))
+    if key in stats['seen_before']:
+        return
+    line = '%s  rung_health window=%s hook=working tmux_idle=%ds registry=%s hook_age=%ds session=%s -> %s' % (
+        time.strftime('%H:%M:%S'), row['window'], tmux_idle, registry_says, now - state_ts, session,
+        'working' if registry_says not in ('idle', 'gone') else 'done')
+    stats['rung_health'] += 1
+    if args.dry_run:
+        print('would log ' + line)
+        return
+    with open(args.log, 'a') as out:
+        out.write(line + '\n')
 
 
 def trim(log, keep=300):
@@ -253,6 +311,16 @@ def reconcile(session, args, records, rows, now, stats):
         record = records.get(target)
         if record is not None:
             verdict, since = claude_verdict(record, state_ts, now, args.idle_secs)
+            clash = contested(row, record, verdict, state_ts, now, args, rows)
+            if clash:
+                registry_says, tmux_idle = clash
+                rung_health(session, row, registry_says, tmux_idle, state_ts, now, args, stats)
+                if registry_says not in ('idle', 'gone'):
+                    continue        # the registry says a turn runs: it outranks a silent pane
+                if demote(session, row, 'rung_health: registry %s, hook stale %ds, tmux idle %ds'
+                          % (registry_says, now - state_ts, tmux_idle), args.dry_run, args.log):
+                    stats['demoted'] += 1
+                continue
             if verdict == 'idle':
                 reason = 'native idle %ds; stop-hook missed' % (now - since)
             elif verdict != 'gone':
@@ -294,13 +362,23 @@ def main():
     p.add_argument('--registry', default=os.environ.get('FLEET_CC_SESSIONS_DIR', os.path.expanduser('~/.claude/sessions')))
     p.add_argument('--idle-secs', type=int, default=int(os.environ.get('FLEET_STATE_IDLE_SECS') or 30))
     p.add_argument('--exited-secs', type=int, default=120)
+    p.add_argument('--hook-trust-secs', type=int, default=int(os.environ.get('FLEET_HOOK_TRUST_SECS') or 15))
+    p.add_argument('--tmux-idle-secs', type=int, default=int(os.environ.get('FLEET_RUNG_TMUX_IDLE_SECS') or 10))
     p.add_argument('--log', default=str(BIN.parent / 'logs' / 'reconcile.log'))
     p.add_argument('sessions', nargs='*')
     args = p.parse_args()
     if args.idle_secs < 1:
         return 0
     started = time.time(); now = started
-    stats = {'windows': 0, 'working': 0, 'demoted': 0, 'skipped': []}
+    stats = {'windows': 0, 'working': 0, 'demoted': 0, 'skipped': [],
+             'contested': 0, 'rung_health': 0, 'seen': {}, 'seen_before': {}}
+    seen_path = Path(args.cache_dir) / 'reconcile.rung'
+    try:
+        stats['seen_before'] = json.loads(seen_path.read_text())
+        if not isinstance(stats['seen_before'], dict):
+            stats['seen_before'] = {}
+    except (OSError, ValueError):
+        pass
     records = registry(args.registry)
     rows = process_tree()
     Path(args.log).parent.mkdir(parents=True, exist_ok=True)
@@ -315,9 +393,12 @@ def main():
         try:
             Path(args.cache_dir).mkdir(parents=True, exist_ok=True)
             hb = Path(args.cache_dir) / 'reconcile.heartbeat'
-            hb.write_text('at=%d\nwindows=%d\nworking=%d\ndemoted=%d\ndur=%d\nskipped=%s\n' % (
-                int(time.time()), stats['windows'], stats['working'], stats['demoted'],
-                int(time.time() - started), ' '.join(stats['skipped'])))
+            hb.write_text('at=%d\nwindows=%d\nworking=%d\ndemoted=%d\ncontested=%d\nrung_health=%d\ndur=%d\nskipped=%s\n' % (
+                int(time.time()), stats['windows'], stats['working'], stats['demoted'], stats['contested'],
+                stats['rung_health'], int(time.time() - started), ' '.join(stats['skipped'])))
+            tmp = seen_path.with_suffix('.tmp')
+            tmp.write_text(json.dumps(stats['seen']))
+            os.replace(tmp, seen_path)
         except OSError as exc:
             print('fleet-state-reconcile: heartbeat not written: %s' % exc, file=sys.stderr)
     if stats['skipped']:

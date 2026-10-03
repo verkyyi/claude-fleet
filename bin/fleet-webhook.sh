@@ -43,6 +43,11 @@
 #     --issues <repo> (the collector OWNS issues_<slug>) for that repo, now.
 # So the write-side ownership rails (issue #180/#81) are unchanged; the webhook is a
 # freshness kick into the existing writers, routed by the repo in the payload.
+# A PR-class delivery ALSO leaves an event stamp per PR it names (issue #1272,
+# fleet_wh_mark in fleet-gh-lib.sh) — written BEFORE the debounce, so no delivery
+# is lost to it — and a forward (re)connect stamps the whole repo. That is what
+# lets fleet-pr-verdict.sh --wait / fleet-gh.sh pr checks read GitHub only when
+# something changed instead of on a clock. A stamp is a local note, not a cache.
 #
 # POLLING STAYS THE BACKSTOP. pr-refresh (~15s) + collector (~60s) keep running, so
 # a missed delivery / a dead forward / a relay hiccup can only cost freshness, never
@@ -71,6 +76,7 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"
+. "$BIN/fleet-gh-lib.sh"   # fleet_wh_mark — the event stamps a waiter blocks on (#1272)
 
 LOGP="$BIN/../logs"; mkdir -p "$LOGP" 2>/dev/null || :
 log() { printf '%s fleet-webhook: %s\n' "$(date '+%H:%M:%S' 2>/dev/null || echo '--:--:--')" "$*" >&2; }
@@ -169,9 +175,24 @@ for k in ("pull_request", "issue", "check_run", "check_suite"):
     o = d.get(k)
     if isinstance(o, dict) and o.get("number"):
         num = str(o["number"]); break
+# Every PR the delivery names (issue #1272): the PR itself, or the
+# pull_requests[] of a check_run / check_suite (empty for a fork PR; a status
+# event has none).
+prs = []
+o = d.get("pull_request")
+if isinstance(o, dict) and o.get("number"):
+    prs.append(str(o["number"]))
+for k in ("check_run", "check_suite"):
+    o = d.get(k)
+    if isinstance(o, dict):
+        for p in o.get("pull_requests") or []:
+            if isinstance(p, dict) and p.get("number") and str(p["number"]) not in prs:
+                prs.append(str(p["number"]))
+if not num and prs:
+    num = prs[0]
 if not repo:
     sys.stderr.write("no repository.full_name\n"); sys.exit(7)
-print(repo + "\t" + num)
+print(repo + "\t" + num + "\t" + " ".join(prs))
 '
 }
 
@@ -192,7 +213,7 @@ wh_debounced() { # $1=class $2=slug
 # cache directly — it invokes the owner (pr-refresh / collector), which are the
 # single writers. Unknown event types are ignored.
 wh_route() { # $1=event
-  local event="${1:-}" class row repo num slug fleet at
+  local event="${1:-}" class row repo num prs p slug fleet at
   case "$event" in
     pull_request|check_run|check_suite|status) class="pr" ;;
     issues)                                    class="issues" ;;
@@ -201,12 +222,21 @@ wh_route() { # $1=event
     *)      log "route: ignoring event '$event'"; return 0 ;;
   esac
   row=$(wh_extract) || { log "route: $event delivery rejected (HMAC/parse) — no refresh"; return 0; }
-  IFS=$'\t' read -r repo num <<EOF
+  IFS=$'\t' read -r repo num prs <<EOF
 $row
 EOF
   repo=$(fleet_norm_repo "$repo")
   [ -n "$repo" ] || { log "route: $event — no repo in delivery, ignoring"; return 0; }
   slug=$(fleet_slug "$repo")
+  # The waiters' stamps (issue #1272): before the debounce — a CI storm coalesces
+  # its refresh kicks, never the "something changed" a waiter is blocked on.
+  if [ "$class" = pr ]; then
+    if [ -n "$prs" ]; then
+      for p in $prs; do fleet_wh_mark "$repo" "pr-$p" "$event" || :; done
+    else
+      fleet_wh_mark "$repo" repo "$event" || :
+    fi
+  fi
   if wh_debounced "$class" "$slug"; then
     log "route: $event $repo${num:+ #$num} — debounced (<${DEBOUNCE}s)"; return 0
   fi
@@ -404,6 +434,9 @@ wh_spawn_forward() { # $1=repo $2=pidfile
   fi
   echo $! > "$pidf"
   log "forward up: $repo (pid $(cat "$pidf" 2>/dev/null))"
+  # Deliveries missed while it was down are never replayed: wake every waiter on
+  # this repo for one re-read (issue #1272).
+  fleet_wh_mark "$repo" repo reconnect || :
   return 0
 }
 
