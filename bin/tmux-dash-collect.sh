@@ -508,6 +508,14 @@ if [ "$sock_rc" = 124 ]; then
     "$(phase_budget sockets)" >&2
   SOCKETS=''
 fi
+# This login's session count → the machine-level dir every login reads (issue
+# #1301): fleet_session_cap_ok's machine-wide tier and fleet-doctor's `machine`
+# line add the logins up. Boxed like the socket probe — a wedged server must not
+# stall the tick — and only on a clean enumeration, so a dropped list never
+# publishes a false 0 (the file just ages; past the stale bound it reads 0 anyway).
+if [ "$sock_rc" != 124 ] && command -v fleet_machine_sessions_publish >/dev/null 2>&1; then
+  fleet_timebox "$(phase_budget sockets)" fleet_machine_sessions_publish >/dev/null 2>&1 || true
+fi
 # lw_all FMT — the per-fleet-socket replacement for the old `tmux list-windows -a
 # -F FMT`: run it against every live fleet socket and concatenate. Reuses the
 # cached $SOCKETS (no re-probe). Read-only callers use this; writers loop $SOCKETS
