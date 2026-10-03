@@ -59,7 +59,7 @@ m="$FLEET_STATE_DIR/gh-limit.graphql"
 [ "$(sed -n 's/^reset=//p' "$m")" = "$((now + 120))" ] || fail "marker reset=" "$(cat "$m")"
 [ "$(sed -n 's/^source=//p' "$m")" = unit ] || fail "marker source=" "$(cat "$m")"
 grep -q '^at=[0-9][0-9]*$' "$m" || fail "marker at=" "$(cat "$m")"
-ls -A "$FLEET_STATE_DIR" | grep -q '^\.gh-limit' && fail "atomic write left a tmp file"
+for t in "$FLEET_STATE_DIR"/.gh-limit*; do [ -e "$t" ] && fail "atomic write left a tmp file" "$t"; done
 [ "$(fleet_gh_limited graphql)" = "$((now + 120))" ] || fail "limited prints the reset epoch"
 fleet_gh_mark_limited graphql "$((now - 5))" unit
 fleet_gh_limited graphql >/dev/null && fail "an expired marker must not read limited"

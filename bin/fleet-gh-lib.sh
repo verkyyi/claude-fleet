@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # fleet-gh-lib.sh — GitHub rate-limit detection + the REST fallback (issue #1042,
 # EPIC #1262 C1; folds #946 #954).
 #
