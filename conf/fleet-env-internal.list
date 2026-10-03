@@ -156,7 +156,11 @@ FLEET_REFOCUS_SOURCE               seam: the SessionStart source refocus-hook.sh
 FLEET_REFUSE_MS                    knob: internal pacing/limit, safe in-code default (dash-issue-session.sh)
 FLEET_REPORT_FROM                  handoff: the from-name a child report is sent under
 FLEET_REPOS                        legacy: pre-#788 cache pin list, superseded by repos/ overlays; kept as the collector selftests' repo seam
+FLEET_RESTORE_DIALOG_RE            knob: ERE for a dialog awaiting a human after resume (fleet-restore.sh outcome probe, #1265)
+FLEET_RESTORE_NOCONV_RE            knob: ERE for a refused resume ("No conversation found") (fleet-restore.sh, #1265)
 FLEET_RESTORE_LOG                  path: state/log location override (fleet-restore.sh)
+FLEET_RESTORE_PROBE_SECS           knob: how long restore watches a resumed window for its outcome (fleet-restore.sh, 5)
+FLEET_RESTORE_PROMPT_RE            knob: ERE for the agent input prompt = resumed (fleet-restore.sh, #1265)
 FLEET_RESTORE_REJECT_ALARM         knob: internal pacing/limit, safe in-code default (fleet-restore.sh)
 FLEET_RESTORE_SESS                 handoff: the session a restore targets
 FLEET_RESTORE_STALE_MAP_AGE        knob: internal pacing/limit, safe in-code default (fleet-restore.sh)

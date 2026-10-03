@@ -246,7 +246,9 @@ classify_one() {
   # recap this rubric reads as STOPPED — so classifying it would wipe the red at the
   # very Stop the charter told the worker to make. Hook-declared outranks
   # screen-inferred; only a new prompt (UserPromptSubmit) or a dead pane clears it.
-  [ "$(TM display-message -p -t "$target" '#{@claude_state}/#{@claude_needs}' 2>/dev/null)" = needs/blocked ] && return 0
+  # needs/restore (issue #1265) is the same kind of declaration, written by
+  # fleet-restore.sh for a window it could not bring back on its own.
+  case "$(TM display-message -p -t "$target" '#{@claude_state}/#{@claude_needs}' 2>/dev/null)" in needs/blocked|needs/restore) return 0 ;; esac
   [ -z "$(TM display-message -p -t "$target" '#{@codex_attention}' 2>/dev/null)" ] || return 0
   observed=$(TM display-message -p -t "$target" '#{@cc_agent}|#{@cc_launcher_pid}|#{@codex_session_id}|#{@claude_state}|#{@claude_state_ts}' 2>/dev/null)
 
@@ -316,7 +318,7 @@ classify_one() {
   fi
   # The helper may have started BEFORE the worker declared its blocker. Re-check
   # after the slow call, before either the verdict or its change-hash is committed.
-  [ "$(TM display-message -p -t "$target" '#{@claude_state}/#{@claude_needs}' 2>/dev/null)" = needs/blocked ] && return 0
+  case "$(TM display-message -p -t "$target" '#{@claude_state}/#{@claude_needs}' 2>/dev/null)" in needs/blocked|needs/restore) return 0 ;; esac
   [ -z "$(TM display-message -p -t "$target" '#{@codex_attention}' 2>/dev/null)" ] || return 0
   [ "$(TM display-message -p -t "$target" '#{@cc_agent}|#{@cc_launcher_pid}|#{@codex_session_id}|#{@claude_state}|#{@claude_state_ts}' 2>/dev/null)" = "$observed" ] || return 0
   echo "$h" > "$hf"     # rc=0 but unparseable: still "seen" — the model answered, we

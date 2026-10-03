@@ -321,6 +321,9 @@ bash "$BIN/fleet-restore.sh" --snapshot >/dev/null 2>&1
 MAP="$FLEET_CONF_DIR/fleets/$S/restore.map"
 rowB=$(awk -F'\t' -v p="$tB" '$1=="WIN" && $3==p' "$MAP" 2>/dev/null)
 chk i "B#12's snapshot row carries its repo" "$(printf '%s' "$rowB" | awk -F'\t' '{print $16}')" o/beta
+# No transcript in the fixture ⇒ restore would park B#12 as `awaiting` and launch
+# nothing (issue #1265); give its row an id so the launcher leg below has a launch.
+awk -F'\t' -v OFS='\t' -v p="$tB" '$1=="WIN" && $3==p && $4=="-" {$4="sid-b12"} {print}' "$MAP" > "$MAP.t" && mv "$MAP.t" "$MAP"
 nameB=$(opt "$wB" window_name); nameS=$(opt "$sB" window_name); nameN=$(opt "$wN" window_name)
 tmux kill-window -t "$wB"; tmux kill-window -t "$sB"; tmux kill-window -t "$wN"
 rm -f "$WORK/rec/"*

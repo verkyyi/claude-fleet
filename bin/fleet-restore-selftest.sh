@@ -80,6 +80,7 @@ cat > "$WORK/bin/claude" <<EOF
 #!/bin/sh
 printf '%s\n' "\$*" >> "$WORK/claude-argv"
 case " \$* " in *" --resume "*) [ -f "$WORK/fail-resume" ] && exit 1 ;; esac
+printf '❯ \n'   # paint the input prompt, so restore's outcome probe reads resumed (#1265)
 exec /bin/sh
 EOF
 chmod +x "$WORK/bin/tmux" "$WORK/bin/claude"

@@ -80,12 +80,14 @@ FRAME=${SPINF:$(( TICK % 10 )):1}
 #                                  decide before walking over
 #   !  undifferentiated (the classifier's verdict, an unrecognised Notification)
 #   ⊠  the worker declared a blocker → read the issue and send a new prompt
+#   ↺  crash-restore could not bring the session back on its own (issue #1265:
+#      @restore_outcome awaiting/attention/failed) — the row is also tagged 「需要你」
 #
 # All four are ONE display cell, like every other state glyph: the row's leading
 # "${gc}${gl}${R} " slot is a fixed width the right-pinned act/PR/ctx block is
 # padded against, so a 2-cell emoji here (🔒) would shear every red row.
 state_v() { case "$1" in
-  needs)   gc=$RD; rk=0; case "${2:-}" in ask) gl='?';; perm) gl='⊘';; blocked) gl='⊠';; *) gl='!';; esac;;
+  needs)   gc=$RD; rk=0; case "${2:-}" in ask) gl='?';; perm) gl='⊘';; blocked) gl='⊠';; restore) gl='↺';; *) gl='!';; esac;;
   sleeping) gc=$GY; gl='z'; rk=1;;
   preparing|waking) gc=$TX; gl='↻'; rk=1;;
   failed) gc=$RD; gl='!'; rk=0;;
@@ -568,6 +570,16 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # a sleeper's act cell is how long it has slept (issue #1051), not its last turn
   zwait=''
   if [ "$state" = sleeping ]; then zage_v "$slept"; [ -n "$zage" ] && act=$zage; fi
+  # 「需要你」 (issue #1265): a window crash-restore parked for the operator. The
+  # tag's display width is measured once a frame, and only when a row needs it.
+  rtag=''
+  if [ "$state" = needs ] && [ "$nsub" = restore ]; then
+    if [ -z "${RESTORE_TAG:-}" ]; then
+      RESTORE_TAG=$(fleet_ui_t restore_needs_you); fleet_clip_display 40 "$RESTORE_TAG"
+      RESTORE_TAGW=${clip_w:-${#RESTORE_TAG}}
+    fi
+    rtag=$RESTORE_TAG
+  fi
   # A fresh daemon notice is tied to this exact done turn. Activity invalidates
   # it immediately; a stopped daemon cannot leave a misleading permanent marker.
   if [ "$state" = "done" ] && [ "$reap_stamp" = "$state_ts" ]; then
@@ -826,6 +838,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     [ -n "$repod" ] && label="$label $repod"       # cross-repo child (#1031)
     [ -n "$kidd" ] && label="$label · $kidd"
     [ -n "$zwait" ] && label="$label · ${zwait#z · }"   # glyph already reads `z <age>`
+    [ -n "$rtag" ] && label="$label · ${rtag#↺ }"       # glyph already reads `↺`
     buf+="$rgrp	$pinned	$grk	$gidx	$depth	$rk	$idx	$wid$US$state$US$gl$US$label$US${treed:- }"$'\n'
     continue
   fi
@@ -868,6 +881,8 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # An automatic wake held at the session limit (issue #1058) says so here.
   [ -n "$zwait" ] && { [ -n "$tagpfx" ] && { tagpfx+=' '; dwidth=$((dwidth+1)); }
                        tagpfx+="${AM}${zwait}${R}"; dwidth=$(( dwidth + ${#zwait} )); }
+  [ -n "$rtag" ] && { [ -n "$tagpfx" ] && { tagpfx+=' '; dwidth=$((dwidth+1)); }
+                      tagpfx+="${RD}${rtag}${R}"; dwidth=$(( dwidth + RESTORE_TAGW )); }
   pad=$(( USABLE - LEFTW - dwidth - RIGHTW )); [ "$pad" -lt 1 ] && pad=1
   printf -v gap '%*s' "$pad" ''
   # tree cell: exactly one cell of source text — the glyph, or a space when the row
