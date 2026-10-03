@@ -369,9 +369,12 @@ t1=$(date +%s); el=$(( t1 - t0 ))
 printf 'selftest: NUDGE legs PASS (global conf/off/overlay/threshold/needs/scope/scratch/latch/unstamped/event/loop-guard/no-conf/broken-lib; 20 runs in %ss)\n' "$el" >&2
 
 # ---- RESET: SessionStart latch-reset clears @handoff_armed --------------------
+# `< /dev/null` is load-bearing (issue #1150): the hook reads its JSON payload with
+# `cat` whenever stdin is not a tty, so a stdin that is an open, never-closed pipe —
+# a backgrounded gate's — blocks it forever. That is the 77-minute hang of 9-24.
 : > "$SETOPT_LOG"
 PATH="$WORK/fakepath:$PATH" TMUX='fake,1,0' TMUX_PANE="$PANE" SETOPT_LOG="$SETOPT_LOG" \
-  sh "$RESET"
+  sh "$RESET" < /dev/null
 grep -q -- '-u .*@handoff_armed' "$SETOPT_LOG" 2>/dev/null \
   || fail "SessionStart reset must UNSET (-u) @handoff_armed, log: $(cat "$SETOPT_LOG")"
 # and it must never LEAVE the latch set (no bare '@handoff_armed 1')

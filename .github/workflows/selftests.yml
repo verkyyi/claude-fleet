@@ -115,6 +115,13 @@ jobs:
         # sample maps to ~2m45s, so the suite can roughly double before the margin
         # comes back into question.
         timeout-minutes: 8
+        # Per-test ceiling (issue #1150): a hung test is killed, named TIMEOUT with
+        # its stuck process tree, and the shard RUNS ON — so the job bound above is
+        # never what catches it. ~3x the slowest test (fleet-model-switch, ~75s), and
+        # well inside the 8 minutes. macOS keeps the runner default (600s): its
+        # slowest test there is ~370s.
+        env:
+          FLEET_SELFTEST_TEST_TIMEOUT: 240
         run: |
           set -o pipefail
           bash bin/run-selftests.sh \
@@ -142,7 +149,7 @@ jobs:
               sed -n '/^-* slowest/,$p' selftests.log
             else
               echo 'the shard was cut short — this test started and never finished:'
-              awk '/^=== /{h=$2} /^(PASS|FAIL)  /{h=""}
+              awk '/^=== /{h=$2} /^(PASS  |FAIL  |TIMEOUT )/{h=""}
                    END{print "  " (h ? h : "(none identified — read the log)")}' \
                 selftests.log 2>/dev/null
             fi
