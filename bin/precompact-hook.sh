@@ -97,7 +97,7 @@ fi
 now=$(date +%s 2>/dev/null || echo 0)
 if [ -f "$map" ] && [ "$prep_ts" -gt 0 ]; then
   case "$stage" in prep|compacting)
-    mt=$(stat -f %m "$map" 2>/dev/null || stat -c %Y "$map" 2>/dev/null || echo 0)
+    mt=$(stat -c %Y "$map" 2>/dev/null || stat -f %m "$map" 2>/dev/null || echo 0)
     if [ "${mt:-0}" -ge "$prep_ts" ]; then
       tmux set-window-option -t "$TMUX_PANE" @compact_native "$now" 2>/dev/null
       ladder kept
