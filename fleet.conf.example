@@ -1698,6 +1698,38 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Listener exemptions @group=disk @tier=internal @scope=global @edit=str
 #FLEET_LISTEN_EXEMPT_RE=           # an ERE of argv never counted/reaped (doc-preview, cloudflared, webhook built in)
 
+# Memory guard (issue #1292) — com.claude-fleet.memguard, a KeepAlive daemon that
+# samples every 2s. 2026-10-03 one `git` went from nothing to ~40 GB in two
+# seconds and rebooted the machine with every session on it. It only ever touches
+# OUR processes (a command an agent / fleet pane started, or a PPID=1 orphan whose
+# cwd is a fleet anchor), and never a claude/codex session (recorded only).
+#   • SPIKE — RSS grew ≥ SPIKE_GROW_MB within SPIKE_WINDOW seconds AND the machine
+#     is at memory-pressure warn/critical → SPIKE_ACTION (SIGKILL that one pid).
+#   • HARD — a fleet process at ≥ PROC_HARD_PCT % of physical RAM → SPIKE_ACTION,
+#     whatever its growth or the pressure.
+#   • ORPHAN — PPID=1 + fleet cwd + > ORPHAN_MB + older than ORPHAN_SECS → ORPHAN_ACTION.
+# `bin/fleet-memguard.sh --once --dry-run` shows what it would do right now.
+# Evidence: ~/.config/claude-fleet/diskguard/incident-mem-*.log. All @tier=internal:
+# the defaults are the design, and the modal's default view is at its row cap.
+# @label=Memory guard on @group=disk @tier=internal @scope=global @edit=bool
+#FLEET_MEMGUARD=1                  # 0 = the daemon idles
+# @label=Memory spike growth MB @group=disk @tier=internal @scope=global @edit=int @unit=MB
+#FLEET_MEM_SPIKE_GROW_MB=4096      # growth inside the window that counts as a spike
+# @label=Memory spike window @group=disk @tier=internal @scope=global @edit=int @unit=sec
+#FLEET_MEM_SPIKE_WINDOW=10         # seconds the growth is measured over
+# @label=Memory spike action @group=disk @tier=internal @scope=global @edit=str
+#FLEET_MEM_SPIKE_ACTION=kill       # kill (the default) | report — for SPIKE and HARD
+# @label=Memory hard ceiling % @group=disk @tier=internal @scope=global @edit=int @unit=%
+#FLEET_MEM_PROC_HARD_PCT=50        # one fleet process at this % of RAM is killed; 0 = off
+# @label=Memory guard exemptions @group=disk @tier=internal @scope=global @edit=str
+#FLEET_MEM_EXEMPT_RE=              # an ERE of argv memguard never kills (recorded as exempt)
+# @label=Memory orphan MB @group=disk @tier=internal @scope=global @edit=int @unit=MB
+#FLEET_MEM_ORPHAN_MB=2048          # an orphan holding more than this…
+# @label=Memory orphan age @group=disk @tier=internal @scope=global @edit=int @unit=sec
+#FLEET_MEM_ORPHAN_SECS=21600       # …for longer than this (6h) is flagged
+# @label=Memory orphan action @group=disk @tier=internal @scope=global @edit=str
+#FLEET_MEM_ORPHAN_ACTION=report    # report (the default) | kill
+
 # The load line on `fleet-doctor`'s `machine` check (issue #697): 1-minute load
 # average divided by core count. Warns at or above this, so the number means the
 # same thing on a 4-core and a 16-core box.

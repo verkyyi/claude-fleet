@@ -63,7 +63,8 @@
 # "<unit> <StartInterval seconds> <evidence source>" — one line per daemon that
 # launchd/systemd runs ON AN INTERVAL, which is exactly the population #639 is
 # about. The two KeepAlive units (spinner, webhook) are deliberately absent: they
-# are never pended, and the spinner is the hand that kicks the rest.
+# are never pended, and the spinner is the hand that kicks the rest. The one
+# KeepAlive row here (memguard) is listed in fleet_daemon_keepalive_units below.
 #
 # Evidence source (comma-separated, all MAXed with the `<unit>.tick` stamp):
 #   `tick`      nothing beyond the scheduling stamp this lib writes
@@ -99,8 +100,19 @@ fleet_daemon_units() {
     'ledger-watch 60 tick' \
     'issue-bridge 15 tick' \
     'pr-refresh 15 tick' \
-    'worktree-autoclean 3600 tick'
+    'worktree-autoclean 3600 tick' \
+    'memguard 2 tick'
 }
+
+# fleet_daemon_keepalive_units — the registry rows that are KeepAlive loops, not
+# StartInterval units. memguard (issue #1292) is one: launchd never pends it, but
+# a loop can WEDGE (a `ps` hung on a dying machine), and a wedged memguard is the
+# one failure nobody would see — so it stamps `<unit>.tick` every ~10s and its
+# "interval" is its sample period. The spinner and webhook stay out: they are the
+# hands that kick, or carry their own supervisor. KEEP IN SYNC with the plists —
+# bin/fleet-daemon-watch-selftest.sh checks that every KeepAlive plist in the
+# registry is named here and vice versa.
+fleet_daemon_keepalive_units() { printf '%s\n' memguard; }
 
 # fleet_daemon_unit_names — just the unit names, in registry order.
 fleet_daemon_unit_names() { fleet_daemon_units | while read -r _fdn _fdi _fds; do

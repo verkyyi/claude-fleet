@@ -36,7 +36,8 @@
 #   --orphan-watch    run only the orphaned-runaway check (what --watch also does)
 #   --fseventsd       print macOS fseventsd's "<rss-MB>\t<%cpu>\t<etime>" (issue #889);
 #                     empty on Linux / when it is not running. The doctor reads it.
-#   --orphans         print the CURRENT orphan candidates, one per line, no sustain
+#   --orphans         print the CURRENT orphan candidates — "pid\t%cpu\tetime\trssMB\targv"
+#                     (RSS since issue #1292) — one per line, no sustain
 #                     filter and no state written — what bin/fleet-doctor.sh reads,
 #                     and what a human runs when the machine feels wrong. Exit 0
 #                     with no output = nothing flagged.
@@ -594,11 +595,16 @@ case "${1:-}" in
   --orphans)
     # No sustain filter and no state: "what is hot RIGHT NOW". A human (or the
     # doctor) asking this question wants the current truth, not a 5-minute-old
-    # verdict. Columns: pid / %cpu / etime / argv.
+    # verdict. Columns: pid / %cpu / etime / rss MB / argv. The RSS column (issue
+    # #1292) is what lets this list and `fleet-memguard.sh --once` be read side by
+    # side: an orphan burning CPU is often the one holding the memory too.
     orphan_candidates "$ORPHAN_PCT" | while IFS='|' read -r opid opcpu ocmd; do
       [ -n "$opid" ] || continue
-      oet="$(ps -o etime= -p "$opid" 2>/dev/null | tr -d ' ')"
-      printf '%s\t%s\t%s\t%s\n' "$opid" "$opcpu" "${oet:-?}" "$ocmd"
+      read -r oet orss <<EOF2
+$(ps -o etime=,rss= -p "$opid" 2>/dev/null)
+EOF2
+      case "${orss:-}" in ''|*[!0-9]*) orss='?' ;; *) orss=$(( orss / 1024 )) ;; esac
+      printf '%s\t%s\t%s\t%s\t%s\n' "$opid" "$opcpu" "${oet:-?}" "$orss" "$ocmd"
     done
     ;;
   --watch)

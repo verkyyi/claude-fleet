@@ -52,7 +52,7 @@ R="${E}0m"; US=$'\x1f'
 # option of that name, so the per-repo fold set rides the one list-windows call
 # every frame already makes — same value on every line, no extra fork. Both
 # passes name it so nothing lands glued to @sleep_since.
-WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{@claude_needs}${US}#{@expand}${US}#{@pin}${US}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}"
+WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{@claude_needs}${US}#{@expand}${US}#{@pin}${US}#{?@mem_killed,mem:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -782,6 +782,10 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # A request retrying on the same reason past FLEET_FAILOVER_STUCK_ATTEMPTS is
   # stamped @quota_stuck, which WFMT folds in as a `stuck:` prefix (issue #872):
   # it reads `⚠ stuck`, not the ordinary `quota:waiting` it would otherwise be.
+  # memguard (issue #1292) SIGKILLed a command in this window for a memory spike;
+  # @mem_killed rides the same WFMT field as a `mem:` prefix, so the row says so
+  # (`⚠ mem·137` — the exit code the session saw) without one more field or fork.
+  case $qwait in mem:*) qwait=${qwait#mem:}; tagd="${tagd:+$tagd }⚠ mem·137" ;; esac
   case $qwait in
     '') ;;
     stuck:*) tagd="${tagd:+$tagd }⚠ stuck" ;;

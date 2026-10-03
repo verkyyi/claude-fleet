@@ -164,9 +164,18 @@ if [ -d "$TMPL" ]; then
     iv="$(sed -n 's|.*<key>StartInterval</key><integer>\([0-9]*\)</integer>.*|\1|p' "$f" | head -1)"
     if [ -z "$iv" ]; then
       # No StartInterval ⇒ a KeepAlive unit ⇒ it must NOT be in the registry: it
-      # can't be pended, and one of them (the spinner) is the hand that kicks.
-      lib "fleet_daemon_known $unit" \
-        && fail "1: KeepAlive unit $unit is in the interval registry"
+      # can't be pended, and one of them (the spinner) is the hand that kicks —
+      # UNLESS it is a stamping KeepAlive loop named in
+      # fleet_daemon_keepalive_units (memguard, #1292: watched for a WEDGE).
+      if lib 'fleet_daemon_keepalive_units' | grep -qx "$unit"; then
+        lib "fleet_daemon_known $unit" \
+          || fail "1: KeepAlive unit $unit is in fleet_daemon_keepalive_units but not in the registry"
+        grep -q '<key>KeepAlive</key><true/>' "$f" \
+          || fail "1: $unit is listed as a KeepAlive registry unit but its plist is not KeepAlive"
+      else
+        lib "fleet_daemon_known $unit" \
+          && fail "1: KeepAlive unit $unit is in the interval registry"
+      fi
       ok; continue
     fi
     lib "fleet_daemon_known $unit" \

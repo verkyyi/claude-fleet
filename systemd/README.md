@@ -1,13 +1,14 @@
 # Linux systemd user units
 
-Parity with `launchd/` for Linux. Two always-on services (spinner + the optional
-webhook daemon) plus the `.timer` + `.service` pairs matching the launchd
+Parity with `launchd/` for Linux. Three always-on services (spinner, memguard +
+the optional webhook daemon) plus the `.timer` + `.service` pairs matching the launchd
 `StartInterval`s:
 
 | Unit | Cadence | launchd equivalent | Optional? |
 |---|---|---|---|
 | `claude-fleet-spinner.service` | always-on (`Restart=always`) | `com.claude-fleet.spinner` (KeepAlive) | required |
 | `claude-fleet-webhook.service` | always-on (`Restart=always`) | `com.claude-fleet.webhook` (KeepAlive) | optional (fresh ~1s PR/issue/CI status via `gh webhook forward`, no public endpoint; needs FLEET_WEBHOOK=1 per fleet + the `cli/gh-webhook` extension) |
+| `claude-fleet-memguard.service` | always-on (`Restart=always`), samples every 2s | `com.claude-fleet.memguard` (KeepAlive) | recommended (stops a fleet command whose memory spikes under pressure, reports memory-holding orphans; issue #1292) |
 | `claude-fleet-collect.timer` | every 60s, +10s after start | `com.claude-fleet.collect` | required |
 | `claude-fleet-diskguard.timer` | every 60s, +10s after start | `com.claude-fleet.diskguard` | recommended (disk gate + forensics; also the ON-by-default orphaned-runaway watchdog, issue #697 — a machine with no diskguard unit has no machine-level runaway defense) |
 | `claude-fleet-quotawatch.timer` | every 60s, +15s after start | `com.claude-fleet.quotawatch` | recommended with a ccquota hub (the pre-emptive account rotation's own tick, issue #551; no-op without `CCQUOTA_HUB_URL` + an accounts pool) |
@@ -38,6 +39,7 @@ systemctl --user daemon-reload
 systemctl --user enable --now claude-fleet-spinner.service
 systemctl --user enable --now claude-fleet-collect.timer
 systemctl --user enable --now claude-fleet-diskguard.timer   # recommended: crash-guard
+systemctl --user enable --now claude-fleet-memguard.service # recommended: stop a memory spike within seconds (#1292)
 systemctl --user enable --now claude-fleet-quotawatch.timer  # with a ccquota hub: pre-emptive account rotation on its own 60s tick (#551)
 systemctl --user enable --now claude-fleet-pr-refresh.timer  # recommended: fast ~15s PR/CI status
 systemctl --user enable --now claude-fleet-cleanup.timer    # recommended: reap worktrees after merges (it merges nothing itself); ON per fleet unless FLEET_CLEANUP=0
@@ -65,7 +67,7 @@ journalctl --user -u claude-fleet-collect.service --since '5 min ago'
 ## Uninstall
 
 ```sh
-for u in spinner.service webhook.service collect.timer diskguard.timer pr-refresh.timer \
+for u in spinner.service webhook.service memguard.service collect.timer diskguard.timer pr-refresh.timer \
          dispatch.timer issue-bridge.timer watch.timer cleanup.timer ledger-watch.timer \
          base-sync.timer install-sync.timer worktree-autoclean.timer; do
   systemctl --user disable --now "claude-fleet-$u" 2>/dev/null

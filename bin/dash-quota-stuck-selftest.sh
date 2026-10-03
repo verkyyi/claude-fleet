@@ -10,6 +10,7 @@
 #   • + @quota_stuck=1             → `⚠ stuck`, and the `quota:` tag is gone
 #   • @quota_stuck unset again     → back to `quota:waiting`
 #   • no @quota_failover at all    → neither tag
+#   • @mem_killed (memguard, #1292) → `⚠ mem·137`, same field, `mem:` prefix
 #
 # Needs a real tmux, on an ISOLATED socket via the PATH shim (never the live
 # server — see dash-marker-selftest.sh). tmux absent → SKIP cleanly. Exit 0 = pass.
@@ -80,5 +81,19 @@ tmux set-window-option -t "$WID" -u @quota_stuck
 r=$(row)
 contains     "unstuck → quota:waiting again" "$r" "quota:waiting"
 not_contains "unstuck → no stuck tag"        "$r" "⚠ stuck"
+
+# memguard's @mem_killed (issue #1292) rides the SAME field as a `mem:` prefix:
+# the badge shows, and the quota tag beside it survives the prefix.
+tmux set-window-option -t "$WID" @mem_killed '10:58 spike pid 4242 5.0G exit 137: git grep'
+r=$(row)
+contains     "mem-killed → ⚠ mem·137"              "$r" "⚠ mem·137"
+contains     "mem-killed → quota tag still parsed"  "$r" "quota:waiting"
+tmux set-window-option -t "$WID" -u @quota_failover
+r=$(row)
+contains     "mem-killed alone → ⚠ mem·137"        "$r" "⚠ mem·137"
+not_contains "mem-killed alone → no quota tag"     "$r" "quota:"
+tmux set-window-option -t "$WID" -u @mem_killed
+r=$(row)
+not_contains "cleared → no mem badge"              "$r" "mem·137"
 
 printf 'dash-quota-stuck-selftest: %d checks passed\n' "$CHECKS"

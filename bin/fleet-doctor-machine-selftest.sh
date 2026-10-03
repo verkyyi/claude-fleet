@@ -70,7 +70,7 @@ cat > "$WORK/fakepath/ps" <<EOF
 case "\$*" in
   *rss=,pcpu=,etime=,comm=*)    cat "$WORK/fsev"; exit 0 ;;
   *ppid=,user=,pcpu=,command=*) cat "$WORK/pstable"; exit 0 ;;
-  *etime=*-p*)                  echo "  03:20:15"; exit 0 ;;
+  *etime=*-p*)                  echo "  03:20:15  524288"; exit 0 ;;
 esac
 exec /bin/ps "\$@"
 EOF
@@ -132,6 +132,7 @@ has "WARN"    "$l" "2: an orphaned runaway must WARN"
 has "4242"    "$l" "2: the WARN must name the offending pid"
 has "98.5"    "$l" "2: the WARN must say how hot it is"
 has "03:20"   "$l" "2: the WARN must say how long it has been running — 3h20m is the whole story of #697"
+has "512 MB"  "$l" "2: the WARN must say how much memory it holds — the RSS column diskguard --orphans gained in #1292"
 has "PPID=1"  "$l" "2: the WARN must say WHY nothing else reaped it"
 has "fleet-loadgen.sh --stop" "$l" "2: the WARN must name the command that ends a leaked experiment"
 has "--orphans" "$l" "2: the WARN must point at the full list"
