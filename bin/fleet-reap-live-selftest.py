@@ -21,11 +21,12 @@ spec.loader.exec_module(live)
 
 
 class LiveTests(unittest.TestCase):
-    def probe(self, state="done", comm="claude", age="00:10", commands=None, roots="100\n", minimum=1800, lifecycle="", hold=""):
+    def probe(self, state="done", comm="claude", age="00:10", commands=None, roots="100\n", minimum=1800, lifecycle="", hold="",
+              merged_at=None, waived=None, now=None):
         outputs = iter([hold, lifecycle, state, roots, f"100 1 01:00:00 zsh\n101 100 {age} {comm}\n102 1 00:01 codex\n",
                         commands if commands is not None else f"100 zsh\n101 {comm}\n102 codex\n"])
         with patch.object(live, "read", side_effect=lambda *args: next(outputs)):
-            return live.live_reason("@1", minimum)
+            return live.live_reason("@1", minimum, None, merged_at, waived, now)
 
     def test_retained_workers_are_never_automatically_reaped(self):
         for phase in ('preparing','waking','failed'):
@@ -47,6 +48,43 @@ class LiveTests(unittest.TestCase):
 
     def test_awake_young_agent_still_refused(self):
         self.assertTrue(self.probe(state="done").startswith("young-agent:claude:"))
+
+    def test_merged_during_agent_life_waives_age_gate(self):
+        # Issue #1329: agent 600s old (started at NOW-600).
+        NOW = 1_000_000
+        waived = []
+        self.assertIsNone(self.probe(age="10:00", merged_at=NOW-300, now=NOW, waived=waived))
+        self.assertEqual(waived, ["claude:600s<1800s"])
+        # Spawned onto an already-merged branch: merge precedes the agent → protected (#565).
+        self.assertEqual(self.probe(age="10:00", merged_at=NOW-900, now=NOW), "young-agent:claude:600s<1800s")
+        self.assertEqual(self.probe(age="10:00", merged_at=NOW-600, now=NOW), "young-agent:claude:600s<1800s")
+        # Unknown etime / future merge never waive.
+        self.assertTrue(self.probe(age="bad", merged_at=NOW-1, now=NOW).startswith("young-agent:"))
+        self.assertTrue(self.probe(age="10:00", merged_at=NOW+5, now=NOW).startswith("young-agent:"))
+        # Empty state is not done: a fresh worker stays protected.
+        self.assertTrue(self.probe(state="", age="10:00", merged_at=NOW-300, now=NOW).startswith("young-agent:"))
+        # Every other gate still applies.
+        self.assertEqual(self.probe(hold="1", age="10:00", merged_at=NOW-300, now=NOW), "retained:hold")
+        self.assertEqual(self.probe(state="working", age="10:00", merged_at=NOW-300, now=NOW), "state:working")
+        self.assertEqual(self.probe(comm="node", commands="", age="10:00", merged_at=NOW-300, now=NOW), "unknown:agent-command")
+        # Without --merged-at: unchanged.
+        self.assertEqual(self.probe(age="10:00"), "young-agent:claude:600s<1800s")
+
+    def test_merged_at_cli_output(self):
+        NOW = 1_000_000
+        def run(*extra):
+            replies = iter(["", "", "done", "100", "100 1 01:00:00 zsh\n101 100 10:00 claude", "100 zsh\n101 claude"])
+            out = []
+            with patch.object(sys, "argv", ["probe", "@1", *extra]), \
+                 patch.object(live, "read", side_effect=lambda *a: next(replies)), \
+                 patch.object(live.time, "time", return_value=NOW), \
+                 patch("builtins.print", side_effect=lambda *a: out.append(" ".join(map(str, a)))):
+                return live.main(), out
+        self.assertEqual(run(), (1, ["young-agent:claude:600s<1800s"]))
+        self.assertEqual(run("--merged-at", str(NOW-300)), (0, ["waived:young-agent:claude:600s<1800s"]))
+        self.assertEqual(run("--merged-at", str(NOW-900)), (1, ["young-agent:claude:600s<1800s"]))
+        for bad in ("0", "abc", "-5", ""):
+            self.assertEqual(run("--merged-at", bad), (1, ["young-agent:claude:600s<1800s"]))
 
     def test_state_never_overridden_by_age_knob(self):
         for state in ("working", "looping", "busy", "waiting", "unknown"):
