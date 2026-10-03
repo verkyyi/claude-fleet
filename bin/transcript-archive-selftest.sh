@@ -162,7 +162,7 @@ helper "$SP/$(id 20).jsonl"; age "$SP/$(id 20).jsonl" $((2*DAY))
   helper "$SP/$(id 21).jsonl"; age "$SP/$(id 21).jsonl" $((2*DAY))
   transcript_watch
   [ -f "$SP/$(id 21).jsonl" ] || { echo "second tick the same day ran again" >&2; exit 1; }
-  FLEET_TRANSCRIPT_ARCHIVE=0; echo 0 > "$GDIR/last-transcript-archive"; transcript_watch
+  export FLEET_TRANSCRIPT_ARCHIVE=0; echo 0 > "$GDIR/last-transcript-archive"; transcript_watch
   [ -f "$SP/$(id 21).jsonl" ] || { echo "FLEET_TRANSCRIPT_ARCHIVE=0 still ran" >&2; exit 1; }
 ) || fail "diskguard transcript_watch"; ok
 
