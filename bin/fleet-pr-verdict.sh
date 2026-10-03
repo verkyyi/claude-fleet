@@ -48,6 +48,12 @@
 #     and while no checks exist, then every --interval (default 15s, floor 10s).
 #     A failed read mid-wait (network, rate limit) backs off and retries; 5 in a
 #     row is exit 2.
+#   * Webhook-driven (issue #1272): when fleet-webhook.sh is forwarding this
+#     repo, the wait makes NO gh call between reads — it blocks on the event stamp
+#     the route leaves per PR (fleet_wh_sig, fleet-gh-lib.sh) and reads once when
+#     a pull_request / check_run / check_suite delivery for this PR lands (or the
+#     forward reconnects), else every FLEET_PR_WAIT_BACKSTOP (300s). No live
+#     forward → the poll above, unchanged. FLEET_PR_WAIT_WEBHOOK=0 forces the poll.
 #
 # The CHECK ROLLUP fold mirrors bin/tmux-pr-refresh.sh's dash glyphs
 # (none/fail/pending/pass), widened on the failure side — a gate must count
@@ -85,7 +91,7 @@ while [ "$#" -gt 0 ]; do
     --timeout)           shift; wait_timeout="${1:-}" ;;
     --no-checks-timeout) shift; nochecks_timeout="${1:-}" ;;
     --interval)          shift; interval="${1:-}" ;;
-    -h|--help) sed -n '2,56p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,69p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --*)       printf 'fleet-pr-verdict: unknown flag %s\n' "$1" >&2; exit 2 ;;
     *)         PR="$1" ;;
   esac
@@ -175,6 +181,38 @@ st='' mg='' ms='' dr='' ck='' am=''
 read_pr || { printf 'fleet-pr-verdict: %s\n' "$read_err" >&2; exit 2; }
 verdict=$(land_verdict "$st" "$mg" "$ms" "$dr" "$ck")
 
+# wh_wait <poll-interval> <waiting> — the pause before the next read. With this
+# repo's webhook forward live (issue #1272) it blocks on the PR's event stamp —
+# local file reads only, ZERO gh calls — and returns the moment a delivery lands,
+# or after the backstop (FLEET_PR_WAIT_BACKSTOP, default 300s: a missed delivery
+# costs that much freshness, never correctness). No live forward, or it dies
+# mid-wait, or FLEET_PR_WAIT_WEBHOOK=0 → the plain poll, exactly as before.
+wh_said=''
+wh_wait() {
+  local iv=$1 cap sig0 waited=0
+  if [ "${FLEET_PR_WAIT_WEBHOOK:-1}" != 0 ] && fleet_wh_live "$repo"; then
+    cap=$backstop
+    # never sleep past a bound: the loop above must still get to print TIMEOUT
+    [ $((wait_timeout - $(elapsed))) -lt "$cap" ] && cap=$((wait_timeout - $(elapsed)))
+    if [ "$2" = nochecks ] && [ $((nochecks_timeout - ($(elapsed) - none_since))) -lt "$cap" ]; then
+      cap=$((nochecks_timeout - ($(elapsed) - none_since)))
+    fi
+    [ "$cap" -lt "$wh_tick" ] && cap=$wh_tick
+    [ -n "$wh_said" ] || { note "#$PR waiting on webhook events — no gh read until one lands (backstop ${backstop}s)"; wh_said=1; }
+    sig0=$(fleet_wh_sig "$repo" "$PR")
+    while [ "$waited" -lt "$cap" ]; do
+      sleep "$wh_tick"; waited=$((waited + wh_tick)); slept=$((slept + wh_tick))
+      [ "$(fleet_wh_sig "$repo" "$PR")" = "$sig0" ] || return 0
+      fleet_wh_live "$repo" || { note "#$PR webhook forward went away — polling"; wh_said=''; break; }
+    done
+    [ "$waited" -ge "$cap" ] && return 0
+    iv=$((iv - waited)); [ "$iv" -gt 0 ] || return 0
+  fi
+  sleep "$iv"; slept=$((slept + iv))
+}
+backstop=${FLEET_PR_WAIT_BACKSTOP:-300}; case "$backstop" in ''|*[!0-9]*|0) backstop=300 ;; esac
+wh_tick=${FLEET_PR_WAIT_TICK:-1};        case "$wh_tick"  in ''|*[!0-9]*|0) wh_tick=1 ;; esac
+
 if [ "$wait" = 1 ]; then
   # Elapsed time is the LARGER of the wall clock and the sum of our own sleeps:
   # the wall clock is the truth in production, the sleep sum keeps the bounds
@@ -213,7 +251,7 @@ if [ "$wait" = 1 ]; then
     iv=$interval
     if [ "$waiting" = nochecks ] || [ "$now" -lt 120 ]; then [ "$iv" -lt 20 ] && iv=20; fi
     if [ "$fails" -gt 0 ]; then iv=$((iv * (fails + 1))); [ "$iv" -gt 120 ] && iv=120; fi
-    sleep "$iv"; slept=$((slept + iv))
+    wh_wait "$iv" "$waiting"
     if read_pr; then
       fails=0
       verdict=$(land_verdict "$st" "$mg" "$ms" "$dr" "$ck")

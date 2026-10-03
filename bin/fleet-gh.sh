@@ -31,6 +31,10 @@
 #        checks the prmap's CI column → the rollup `bucket` only.
 #      Age = the cache FILE's mtime (each is replaced by mv on a good fetch), not
 #      its .ts stamp — the daemons stamp .ts on a FAILED fetch too.
+#      pr / checks with this repo's webhook forward live (issue #1272): an older
+#      prmap still serves while no delivery for #N has landed since it was
+#      written — the event stamps fleet-webhook.sh leaves — up to
+#      FLEET_GH_WH_MAX_AGE (300s). A change, not a clock, is what makes it stale.
 #   2. gh — `gh issue view|pr view|pr checks <N> --repo R --json <fields>`, through
 #      fleet_gh_run (fleet-gh-lib.sh): a known GraphQL limit skips the doomed call.
 #   3. rest — on a GraphQL limit, the same fields over `gh api repos/…`. A field
@@ -65,7 +69,7 @@ case "$1 $2" in
   "issue view") kind=issue ;;
   "pr view")    kind="pr" ;;
   "pr checks")  kind=checks ;;
-  -h*|--help*)  sed -n '2,56p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h*|--help*)  sed -n '2,54p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   *) die "unsupported: $1 $2 (issue view | pr view | pr checks)" ;;
 esac
 sub1=$1 sub2=$2; shift 2
@@ -75,7 +79,7 @@ while [ "$#" -gt 0 ]; do
     --repo|-R) shift; repo="${1:-}" ;;
     --json)    shift; fields="${1:-}"; JSON_GIVEN=1 ;;
     --max-age) shift; max_age="${1:-}" ;;
-    -h|--help) sed -n '2,56p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,54p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)        die "unknown flag $1" ;;
     *)         N="${1##*/}"; N="${N#\#}" ;;   # 12, #12, or a …/issues/12 URL
   esac
@@ -166,12 +170,28 @@ cache_issue() {
      labels: ($l | split(",") | map(select(length>0) | {name: .}))}' | emit cache "$age"
 }
 
+# wh_current <cache-mtime> <age> — an older copy is still CURRENT when the
+# webhook is forwarding this repo and no delivery for #N (or the repo) landed
+# since that copy was written — 10s of margin for a fetch already in flight when
+# the event came — up to FLEET_GH_WH_MAX_AGE (default 300s) (issue #1272).
+wh_current() {
+  local cap="${FLEET_GH_WH_MAX_AGE:-300}" st e
+  case "$cap" in ''|*[!0-9]*) cap=300 ;; esac
+  [ "$2" -le "$cap" ] && fleet_wh_live "$repo" || return 1
+  st=$(fleet_wh_sig "$repo" "$N")
+  for e in "${st%%|*}" "${st#*|}"; do
+    e=${e%% *}; case "$e" in ''|*[!0-9]*) continue ;; esac
+    [ $((e + 10)) -le "$1" ] || return 1
+  done
+  return 0
+}
+
 # prmap: branch<TAB>#num<TAB>state<TAB>ci<TAB>ready<TAB>merge-sha
 prmap_row() {
-  local age
+  local age mt
   [ -f "$FD/prmap" ] || return 1
-  age=$(( NOW - $(mtime "$FD/prmap") )); [ "$age" -lt 0 ] && age=0
-  [ "$age" -le "$max_age" ] || return 1
+  mt=$(mtime "$FD/prmap"); age=$(( NOW - mt )); [ "$age" -lt 0 ] && age=0
+  [ "$age" -le "$max_age" ] || wh_current "$mt" "$age" || return 1
   PR_ROW=$(awk -F'\t' -v n="#$N" '$2==n {print; exit}' "$FD/prmap" 2>/dev/null)
   [ -n "$PR_ROW" ] || return 1
   PR_AGE=$age

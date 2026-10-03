@@ -12,6 +12,8 @@
 #             nor does a turn-boundary WAITING.
 #   ALREADY   a MERGED report written before the wait began returns at once.
 #   ADOPT     a live worker with no parent gets the waiter's @origin.
+#   WAKE      a report mid-interval is answered within 2s, not at the next read
+#             (issue #1272: the ledger file is watched, the full read is not hurried).
 #
 # Runs on a DEDICATED tmux server on its own -L label (never the live server,
 # issue #159), from a sandbox bin/ whose dash-issue-session.sh is a stub; reports
@@ -154,6 +156,19 @@ eq "a parentless worker is adopted" scratch-7 "$(TM display-message -p -t "$A" '
 report --win "$A" --state merged --pr 505
 collect
 eq "…and its report reaches the waiter" "0 MERGED" "$RC $(printf '%s\n' "$OUT" | head -1)"
+
+# CHANGE-WAKE (issue #1272): a report wakes the wait at once — it does not sit out
+# --interval. 30s between full reads; the report must be answered within 2s.
+B=$(TM new-window -d -P -F '#{window_id}' -n issue-107 "sleep 600")
+TM set-window-option -t "$B" @issue 107; TM set-window-option -t "$B" @claude_state working
+TM set-window-option -t "$B" @origin scratch-7
+bash "$AW" 107 -L "$LBL" --parent scratch-7 --interval 1 --timeout 60 --no-spawn --interval 30 > "$WORK/out" 2> "$WORK/err" & AWAIT_PID=$!
+sleep 2
+report --win "$B" --state merged --pr 507
+SECONDS=0; collect
+eq "a report mid-interval ends the wait" "0 MERGED" "$RC $(printf '%s\n' "$OUT" | head -1)"
+[ "$SECONDS" -le 2 ] || fail "the report took ${SECONDS}s to wake a --interval 30 wait (want ≤2s)" "$(cat "$WORK/err")"
+CHECKS=$((CHECKS + 1))
 
 # NO-WORKER: --no-spawn with nothing live; a cap refusal from the choke point.
 bash "$AW" 106 -L "$LBL" --parent scratch-7 --interval 1 --timeout 5 --no-spawn > "$WORK/out" 2>&1

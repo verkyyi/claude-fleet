@@ -26,6 +26,7 @@ fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail -
 
 mkdir -p "$WORK/fakebin" "$WORK/tmp" "$WORK/fix"
 export FLEET_STATE_DIR="$WORK/state" FLEET_GH_LOG="$WORK/gh-limit.log" FLEET_CONF_DIR="$WORK/conf"
+export FLEET_WEBHOOK_STATE_DIR="$WORK/wh"   # no live forward unless a leg plants one
 unset FLEET_GH_FAKE_LIMIT
 C="$WORK/tmp/.claude-dash/fleets"
 mkdir -p "$C/o-r" "$C/o-other"
@@ -154,6 +155,30 @@ run ok pr view 8 --repo o/r --json state
 run ok issue view 5 --repo o/r --json title --max-age 999999999
 [ "$CALLS" = 0 ] && [ "$(j ._source)" = cache ] && [ "$(j '._age > 1000')" = true ] || fail "--max-age widens the window; _age is the file's" "$OUT"
 ok "miss / stale / missing field / --max-age 0 → exactly one gh call, _source=gh"
+
+# ===== WEBHOOK (issue #1272) ===================================================
+# A prmap past --max-age is still CURRENT while o/r's forward is live and no
+# delivery for the PR (or the repo) has landed since it was written.
+mkdir -p "$WORK/wh/forwards" "$WORK/wh/events/o-r"
+echo $$ > "$WORK/wh/handler.pid"; echo $$ > "$WORK/wh/forwards/o-r.pid"
+perl -e '$t = time - 100; utime $t, $t, @ARGV' "$C/o-r/prmap"
+run ok pr checks 10 --repo o/r
+[ "$CALLS" = 0 ] && [ "$(j ._source)/$(j .bucket)" = cache/pending ] \
+  || fail "webhook live + no event since the prmap → the 100s-old copy still serves" "$OUT $(cat "$WORK/err")"
+printf '%s check_run 1.1\n' "$(( $(date +%s) - 300 ))" > "$WORK/wh/events/o-r/pr-10"
+run ok pr checks 10 --repo o/r
+[ "$CALLS" = 0 ] || fail "an event OLDER than the prmap leaves it current" "$OUT"
+printf '%s check_run 1.2\n' "$(date +%s)" > "$WORK/wh/events/o-r/pr-10"
+run ok pr checks 10 --repo o/r
+[ "$CALLS" = 1 ] && [ "$(j ._source)" = gh ] || fail "a delivery since the prmap → gh" "$OUT"
+rm -f "$WORK/wh/events/o-r/pr-10"; printf '%s reconnect 1.3\n' "$(date +%s)" > "$WORK/wh/events/o-r/repo"
+run ok pr view 10 --repo o/r --json state
+[ "$CALLS" = 1 ] || fail "a forward reconnect (repo stamp) since the prmap → gh" "$OUT"
+rm -f "$WORK/wh/events/o-r/repo"; echo 999999 > "$WORK/wh/forwards/o-r.pid"
+run ok pr checks 10 --repo o/r
+[ "$CALLS" = 1 ] || fail "no live forward → the plain --max-age rule" "$OUT"
+rm -rf "$WORK/wh"
+ok "webhook live: an old prmap serves until a delivery lands; a dead forward → plain max-age"
 
 # ===== REST ====================================================================
 run limited issue view 5 --repo o/r --json title,state,body,labels,assignees,author,comments
