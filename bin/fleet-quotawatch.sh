@@ -541,6 +541,60 @@ pre_ts=$(cat "$QTS" 2>/dev/null); case "$pre_ts" in ''|*[!0-9]*) pre_ts=0;; esac
 blind=0
 if [ "$pre_ts" -gt 0 ] && [ $(( START - pre_ts )) -ge "$STALE" ]; then blind=$(( START - pre_ts )); fi
 
+# --- every window's quota stamp, read BEFORE the fetch (issues #1267, #1338) ----
+# conf/statusline.sh stamps each render's .rate_limits on its window (@rl5h @rl7d
+# @rl_reset @rl_ts); per account the newest reading — a stamp younger than
+# FLEET_QUOTA_RL_TTL, or ccquota's row as of its fetch — is what the policy below
+# acts on (usage-lib.sh fleet_quota_merge). So a ccquota that stopped moving no
+# longer blinds the 70%/85% rotation while any session on the account is talking.
+# One `list-windows` per socket, under one tmux budget each (#698);
+# a socket that blows it simply contributes no stamps. A label outside the pool
+# (a stale @cc_account, a codex: one) is dropped here, never acted on.
+# quota.freshness — "label<TAB>source<TAB>age-s" per account, every tick: how old
+# the number the policy used was (EPIC #1262's 「额度读数最长过期」 reads it).
+# Cheap on purpose — it runs every tick, and on a loaded box every fork counts
+# against the budget legs (#582): no merge at all while no window carries a stamp.
+qw_rl_socket() { tmux -L "$1" list-windows -a -F "$FLEET_QUOTA_RL_FMT" 2>/dev/null; }
+qsl=""
+for qs in $SOCKETS; do
+  tick_room || break
+  qsb=$(qw_left "$SECONDS" "$TMUX_BUDGET"); [ "$qsb" -lt 1 ] && break
+  while read -r qa qt qrest; do
+    case "$qa" in ''|-|.*|*/*|*:*) continue ;; esac
+    case "$qt" in ''|*[!0-9]*) continue ;; esac            # never stamped (or garbage)
+    [ -f "$ACCT_DIR/$qa" ] && qsl="${qsl}${qa} ${qt} ${qrest}"$'\n'
+  done <<< "$(fleet_timebox "$qsb" qw_rl_socket "$qs")"
+done
+# The fleet mod (mod/fleet/hooks/usage.ts, #1338) stamps the same set off the
+# engine's `session.measure` after EVERY turn — watched or not — as @rl_src=mod.
+# When every pool account carries a mod stamp younger than QW_MOD_FRESH (60 s,
+# one tick) the sessions have already told us what ccquota
+# would, so this tick reads ccquota's CACHE instead of the hub. Only while that
+# cache is younger than half the stale bound: account.quota.ts is every alarm's
+# liveness and quota-verdict's freshness, so a run of skips can never age it
+# out — at STALE/2 the fetch runs regardless. No mod (FLEET_MOD=0, a Codex-only
+# pool, an idle account) ⇒ no fresh mod stamp ⇒ the fetch runs exactly as before.
+QW_MOD_FRESH=60
+qw_mod_covers_pool() {
+  _qmc_now=$(now)
+  _qmc_fresh=$(printf '%s' "$qsl" | awk -v now="$_qmc_now" -v ttl="$QW_MOD_FRESH" '
+    $7 == "mod" && $2 ~ /^[0-9]+$/ && $2 + 0 <= now + 60 && now - $2 <= ttl { print $1 }')
+  _qmc_n=0
+  for _qmc_f in "$ACCT_DIR"/*; do
+    [ -f "$_qmc_f" ] || continue
+    _qmc_a=${_qmc_f##*/}
+    case "$_qmc_a" in .*|*~|*.conf|*:*) continue ;; esac
+    _qmc_n=$(( _qmc_n + 1 ))
+    printf '%s\n' "$_qmc_fresh" | grep -qxF "$_qmc_a" || return 1
+  done
+  [ "$_qmc_n" -gt 0 ]
+}
+qw_fetch_mode=""
+if [ "$pre_ts" -gt 0 ] && [ $(( START - pre_ts )) -lt $(( STALE / 2 )) ] && qw_mod_covers_pool; then
+  qw_fetch_mode="--cached"
+  printf 'fleet-quotawatch: every pool account has a fresh in-session (mod) reading — ccquota fetch skipped, its %ss-old cache stands in\n' "$(( START - pre_ts ))" >&2
+fi
+
 hb "fetch"
 f0=$(now)
 # stderr is KEPT (issue #628): quota_parse complains there about an account
@@ -560,7 +614,7 @@ if ! tick_room || [ "$fb" -lt 1 ]; then
   printf 'fleet-quotawatch: no room left in the %ss tick budget for the ccquota fetch — skipped, the next tick refetches\n' "$TICK_BUDGET" >&2
   qrows=""; : > "$qdiagf"
 else
-  qrows=$(fleet_timebox "$fb" "$BIN/fleet-account.sh" quota 2>"$qdiagf"); qrc=$?
+  qrows=$(fleet_timebox "$fb" "$BIN/fleet-account.sh" quota ${qw_fetch_mode:+"$qw_fetch_mode"} 2>"$qdiagf"); qrc=$?
   if [ "$qrc" = 124 ]; then
     QW_OVER="${QW_OVER}${QW_OVER:+ }fetch"
     printf 'fleet-quotawatch: the ccquota fetch hit its %ss budget (FLEET_QUOTAWATCH_FETCH_BUDGET) — killed, no rows this tick\n' "$fb" >&2
@@ -618,37 +672,17 @@ elif [ "$DRY" = 0 ] && [ -f "$QBLIND" ]; then
 fi
 
 # --- fresher readings off every window's STATUS LINE (issue #1267) -------------
-# conf/statusline.sh stamps each render's .rate_limits on its window (@rl5h @rl7d
-# @rl_reset @rl_ts); per account the newest reading — a stamp younger than
-# FLEET_QUOTA_RL_TTL, or ccquota's row as of its fetch — is what the policy below
-# acts on (usage-lib.sh fleet_quota_merge). So a ccquota that stopped moving no
-# longer blinds the 70%/85% rotation while any session on the account is talking.
-# Read AFTER the blind checks above on purpose: those are ccquota's own health,
-# and stay so. One `list-windows` per socket, under one tmux budget each (#698);
-# a socket that blows it simply contributes no stamps. A label outside the pool
-# (a stale @cc_account, a codex: one) is dropped here, never acted on.
-# quota.freshness — "label<TAB>source<TAB>age-s" per account, every tick: how old
-# the number the policy used was (EPIC #1262's 「额度读数最长过期」 reads it).
-# Cheap on purpose — it runs every tick, and on a loaded box every fork counts
-# against the budget legs (#582): no merge at all while no window carries a stamp.
-qw_rl_socket() { tmux -L "$1" list-windows -a -F "$FLEET_QUOTA_RL_FMT" 2>/dev/null; }
-qsl=""
-for qs in $SOCKETS; do
-  tick_room || break
-  qsb=$(qw_left "$SECONDS" "$TMUX_BUDGET"); [ "$qsb" -lt 1 ] && break
-  while read -r qa qt qrest; do
-    case "$qa" in ''|-|.*|*/*|*:*) continue ;; esac
-    case "$qt" in ''|*[!0-9]*) continue ;; esac            # never stamped (or garbage)
-    [ -f "$ACCT_DIR/$qa" ] && qsl="${qsl}${qa} ${qt} ${qrest}"$'\n'
-  done <<< "$(fleet_timebox "$qsb" qw_rl_socket "$qs")"
-done
+# The stamps ($qsl) were read BEFORE the fetch (above), so a tick on which every
+# pool account already had a fresh in-session reading could skip it (#1338); the
+# merge is here, after the blind checks: those are ccquota's own health, and
+# stay so.
 [ -n "$qsl" ] && qrows=$(fleet_quota_merge "$qrows" "$post_ts" "$qsl")
 # One pass: count the statusline rows and (not on --dry-run) write quota.freshness.
 # Unmerged rows have no source/epoch columns — they are ccquota's, as of $post_ts.
 qfout=/dev/null; [ "$DRY" = 0 ] && qfout="$G/quota.freshness.$$"
 nsl=$(printf '%s\n' "$qrows" | awk -F'\t' -v now="$(now)" -v cts="$post_ts" -v out="$qfout" '
   $1 != "" { src = ($8 == "" ? "ccquota" : $8); t = ($9 == "" ? cts : $9)
-             printf "%s\t%s\t%d\n", $1, src, now - t > out; if (src == "statusline") n++ }
+             printf "%s\t%s\t%d\n", $1, src, now - t > out; if (src != "ccquota") n++ }
   END { close(out); print n + 0 }')
 [ "$DRY" = 0 ] && mv -f "$qfout" "$G/quota.freshness" 2>/dev/null
 
@@ -776,7 +810,7 @@ while IFS=$'\t' read -r ql q5 q7 qroom qr5 qr7 qpph qsrc _qrts; do
     QPOL_SKIP="${QPOL_SKIP}${QPOL_SKIP:+ }$ql"
     continue
   fi
-  qsrc=${qsrc:-ccquota}                       # who read it (#1267): ccquota | statusline
+  qsrc=${qsrc:-ccquota}                       # who read it (#1267, #1338): ccquota | statusline | mod
   qutil=$q5; qwhich="5-hour"; qreset=$qr5
   if [ "${q7:-0}" -gt "$qutil" ]; then qutil=$q7; qwhich="7-day"; qreset=$qr7; fi
   qresett=$(date -r "$qreset" '+%H:%M' 2>/dev/null || date -d "@$qreset" '+%H:%M' 2>/dev/null || echo "?")

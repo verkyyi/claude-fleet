@@ -581,6 +581,20 @@ engine takes one unmatched hook per event per plugin. Checks:
 `claude plugin validate mod/fleet` and `claude plugin test mod/fleet`
 (`bin/fleet-mod-selftest.sh` runs both where a `claude` CLI exists).
 
+**Context + quota (#1338, `hooks/usage.ts`).** The engine pushes
+`session.measure` after every turn and when a rate-limit window moves a point —
+rendered or not, so a background window nobody watches reports too. The mod
+writes the SAME options [`conf/statusline.sh`](../conf/statusline.sh) does, on
+the same scale (newest write wins): `@ctx_pct` / `@ctx_limit`, and — only when
+both windows have a reading — `@rl5h` `@rl7d` `@rl_reset` `@rl_ts` plus
+`@rl_src mod` (a status-line stamp unsets `@rl_src`, so absent = the status
+line). The quota watch merges both per `@cc_account` as before
+(`fleet_quota_merge`, source column `mod` | `statusline` | `ccquota`), and when
+EVERY pool account has a `mod` stamp under 60s old and the ccquota cache is
+younger than half `FLEET_ACCOUNT_QUOTA_STALE`, it reads that cache instead of
+calling the hub (`fleet-quotawatch: … ccquota fetch skipped`). No mod ⇒ no `mod`
+stamp ⇒ every fetch runs as before.
+
 ## Related
 
 - **Auto-handoff nudge (#330).** `set-claude-state.sh`'s `done` branch also emits

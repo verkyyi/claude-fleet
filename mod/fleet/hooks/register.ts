@@ -16,7 +16,9 @@
 import type { Register } from 'claude-code'
 
 import { registerLifecycle } from './lifecycle'
+import { registerUsage } from './usage'
 
 export const register: Register = on => {
   registerLifecycle(on)
+  registerUsage(on)
 }

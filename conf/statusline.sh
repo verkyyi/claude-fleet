@@ -79,6 +79,8 @@ fi
 # "<5h-reset> <7d-reset>", @rl_ts = now) for the watch to merge per @cc_account
 # (bin/usage-lib.sh fleet_quota_merge). Both % must be present, or nothing is
 # stamped: the watch reads an aged-out stamp as "no reading", never a half one.
+# The fleet mod stamps the same set off `session.measure` with @rl_src=mod
+# (issue #1338); this render's stamp unsets it, so absent = the status line.
 if [[ -n "${TMUX:-}" && -n "${TMUX_PANE:-}" ]]; then
   RL=$(jq -r '.rate_limits as $r | [$r.five_hour.used_percentage, $r.seven_day.used_percentage,
               $r.five_hour.resets_at, $r.seven_day.resets_at]
@@ -89,7 +91,8 @@ if [[ -n "${TMUX:-}" && -n "${TMUX_PANE:-}" ]]; then
     tmux set-window-option -t "$TMUX_PANE" @rl5h "$RL5" \; \
          set-window-option -t "$TMUX_PANE" @rl7d "$RL7" \; \
          set-window-option -t "$TMUX_PANE" @rl_reset "$RLR5 $RLR7" \; \
-         set-window-option -t "$TMUX_PANE" @rl_ts "$(date +%s)" 2>/dev/null || true
+         set-window-option -t "$TMUX_PANE" @rl_ts "$(date +%s)" \; \
+         set-window-option -u -t "$TMUX_PANE" @rl_src 2>/dev/null || true
   fi
 fi
 

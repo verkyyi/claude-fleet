@@ -425,7 +425,11 @@ fleet_collect_kick_due() {
 # window as tmux options:
 #   @rl5h @rl7d   integer % used          @rl_reset "<5h-reset> <7d-reset>" (epoch s)
 #   @rl_ts        epoch s of the render
-# and the window's @cc_account says whose numbers they are. The quota watch lists
+# and the window's @cc_account says whose numbers they are. The fleet mod
+# (mod/fleet/hooks/usage.ts, issue #1338) stamps the SAME set off the engine's
+# `session.measure` — after every turn, watched or not — plus @rl_src=mod; the
+# status line unsets @rl_src, so a stamp without it is the status line's.
+# The quota watch lists
 # them (`$FLEET_QUOTA_RL_FMT`, one line per window) and this merges them into
 # ccquota's rows: per account, the NEWEST reading wins. ccquota stays the fallback
 # — an idle session does not re-render, so its stamp ages out after
@@ -433,15 +437,17 @@ fleet_collect_kick_due() {
 # POSIX sh + awk, pure: no tmux, no network (the caller hands both inputs in).
 
 # FLEET_QUOTA_RL_FMT — the list-windows -F format the watch reads the stamps
-# with: "<account> <ts> <5h%> <7d%> <5h-reset> <7d-reset>", `-` for an unset
-# option. The reset pair goes LAST: it is the one value with a space inside. A
-# plain variable, not a function: the watch reads it every tick, fork-free.
+# with: "<account> <ts> <5h%> <7d%> <5h-reset> <7d-reset> <src>", `-` for an
+# unset option. The reset pair always prints two words (`- -` unset), so the
+# writer (@rl_src: `mod`, or `-` = the status line) is a stable 7th field and a
+# 6-field line from before it reads as the status line's. A plain variable,
+# not a function: the watch reads it every tick, fork-free.
 # shellcheck disable=SC2034  # read by bin/fleet-quotawatch.sh, which sources this lib
-FLEET_QUOTA_RL_FMT='#{?@cc_account,#{@cc_account},-} #{?@rl_ts,#{@rl_ts},-} #{?@rl5h,#{@rl5h},-} #{?@rl7d,#{@rl7d},-} #{?@rl_reset,#{@rl_reset},- -}'
+FLEET_QUOTA_RL_FMT='#{?@cc_account,#{@cc_account},-} #{?@rl_ts,#{@rl_ts},-} #{?@rl5h,#{@rl5h},-} #{?@rl7d,#{@rl7d},-} #{?@rl_reset,#{@rl_reset},- -} #{?@rl_src,#{@rl_src},-}'
 
 # fleet_quota_merge <ccquota-rows> <ccquota-epoch> <statusline-lines> — print the
 # merged rows: ccquota's 7 TSV columns (label 5h 7d headroom 5h-reset 7d-reset
-# %/h) plus an 8th, the SOURCE (`ccquota` | `statusline`), and a 9th, the
+# %/h) plus an 8th, the SOURCE (`ccquota` | `statusline` | `mod`), and a 9th, the
 # reading's epoch. A statusline line counts only when its account is a plain
 # label (not `-`, not a `codex:` one), both percentages are integers, and its
 # stamp is no older than FLEET_QUOTA_RL_TTL (and not in the future). Per account
@@ -470,12 +476,13 @@ fleet_quota_merge() {
         ts[a] = t + 0; u5[a] = f[3] + 0; u7[a] = f[4] + 0
         r5[a] = (m >= 5 && isint(f[5])) ? f[5] + 0 : 0
         r7[a] = (m >= 6 && isint(f[6])) ? f[6] + 0 : 0
+        src[a] = (m >= 7 && f[7] == "mod") ? "mod" : "statusline"
       }
     }
     function emit(l, c5, c7, pph) {
       mx = (u5[l] > u7[l]) ? u5[l] : u7[l]
-      printf "%s\t%d\t%d\t%d\t%d\t%d\t%s\tstatusline\t%d\n", l, u5[l], u7[l], 100 - mx,
-        (r5[l] > 0 ? r5[l] : c5), (r7[l] > 0 ? r7[l] : c7), pph, ts[l]
+      printf "%s\t%d\t%d\t%d\t%d\t%d\t%s\t%s\t%d\n", l, u5[l], u7[l], 100 - mx,
+        (r5[l] > 0 ? r5[l] : c5), (r7[l] > 0 ? r7[l] : c7), pph, src[l], ts[l]
     }
     $1 == "" { next }
     {

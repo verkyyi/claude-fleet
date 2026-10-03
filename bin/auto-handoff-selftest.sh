@@ -512,7 +512,8 @@ if command -v jq >/dev/null 2>&1; then
   case "$RLLOG" in *"@rl5h 12 "*) : ;; *) fail "statusline must stamp @rl5h 12 for five_hour 12.7 (log: $RLLOG)" ;; esac
   case "$RLLOG" in *"@rl7d 2 "*) : ;; *) fail "statusline must stamp @rl7d 2 (log: $RLLOG)" ;; esac
   case "$RLLOG" in *"@rl_reset 1791031200 1791554400 "*) : ;; *) fail "statusline must stamp @rl_reset '<5h> <7d>' (log: $RLLOG)" ;; esac
-  printf '%s' "$RLLOG" | grep -Eq '@rl_ts [0-9]{10}$' || fail "statusline must stamp @rl_ts as epoch seconds (log: $RLLOG)"
+  printf '%s' "$RLLOG" | grep -Eq '@rl_ts [0-9]{10} ' || fail "statusline must stamp @rl_ts as epoch seconds (log: $RLLOG)"
+  case "$RLLOG" in *"set-window-option -u -t %9 @rl_src") : ;; *) fail "statusline must unset @rl_src — its stamp is not the mod's (#1338) (log: $RLLOG)" ;; esac
   for RLJSON in '{"model":{"display_name":"x"}}' '{"rate_limits":null}' \
                 '{"rate_limits":{"five_hour":{"used_percentage":40,"resets_at":1}}}' '{"rate_limits":"weird"}'; do
     : > "$SETOPT_LOG"
