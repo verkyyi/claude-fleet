@@ -122,6 +122,18 @@ if [ -f "$_gh_lib" ] && [ -f "$_gh_log" ]; then
       if (mu > 0) printf " · X-RateLimit-Used max %d", mu
     }' "$_gh_log" 2>/dev/null)
 fi
+# One account, one set of background reads (issue #1271): which login of this
+# token fetches (leader) and which read its copy (follower). Off → no clause.
+_gh_share=''
+# shellcheck disable=SC2016
+[ -f "$_gh_lib" ] && _gh_share=$(bash -c '[ -f "$2" ] && . "$2" >/dev/null 2>&1; . "$1" || exit 1
+  fleet_gh_share_on || exit 0
+  me=$(fleet_gh_share_me)
+  if lead=$(fleet_gh_leader); then
+    if [ "$lead" = "$me" ]; then echo "background reads: leader ($me)"
+    else echo "background reads: follower of $lead"; fi
+  else echo "background reads: no live leader — this login fetches"; fi' _ "$_gh_lib" "$(dirname "$0")/../fleet.conf" 2>/dev/null)
+_gh_hour="${_gh_hour}${_gh_share:+${_gh_hour:+ · }$_gh_share}"
 if [ -n "$_gh_rows" ]; then
   _gh_msg=$(printf '%s\n' "$_gh_rows" | awk 'NF { printf "%s%s", (n++ ? "; " : ""), $0 }')
   warn github "$_gh_msg — the shared account limit, not a permission problem: GraphQL calls fall back to REST until then${_gh_hour:+ · $_gh_hour}"
