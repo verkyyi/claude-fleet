@@ -122,7 +122,7 @@ printf '%s\t42%% of weekly' "$now" > "$G/ratelimit"
 printf '%s\n' $((now - 1000)) > "$G/account.quota.ts"          # stale watch → ✖ quota · stale
 printf '0\t0\n' > "$G/account.quota.empty"
 : > "$WORK/exec.log"
-out=$(TMPDIR="$TMPD/" FLEET_LIVE_ROOT="$BIN/.." FLEET_ACCOUNTS_DIR="$WORK/acc" CCQUOTA_HUB_URL=http://127.0.0.1:9 \
+out=$(TMPDIR="$TMPD/" FLEET_LIVE_ROOT="$BIN/.." FLEET_ACCOUNTS_DIR="$WORK/acc" FLEET_STATE_DIR="$WORK/ghstate" FLEET_GH_FAKE_LIMIT="" CCQUOTA_HUB_URL=http://127.0.0.1:9 \
       PATH="$WORK/bin:$PATH" bash "$BIN/tmux-status.sh" 2>&1) || fail "tmux-status.sh exited non-zero" "$out"
 case "$out" in *"CPU "*"MEM "*) ;; *) fail "tmux-status.sh lost a segment" "$out" ;; esac; CHECKS=$((CHECKS+1))
 # The 5h/7d usage stat is gone from the bar (issue #1100) — a usage cache on

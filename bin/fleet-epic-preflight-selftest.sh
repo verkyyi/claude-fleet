@@ -26,6 +26,9 @@
 #   K. a multi-repo fleet: --repo B probes B with B's own knobs; no --repo takes
 #      the current repo, and under `all` refuses with the list (issue #803)
 #   L. the EPIC trio's documented spawn / preflight / evidence calls carry --repo
+#   M. a GraphQL rate limit is NOT a permission problem (issue #989): perm WARNs
+#      with the REST reading, the verdict stays READY/FIXABLE (never BLOCKED),
+#      sub-issue + label reads go over REST, and a real read-only stays BLOCKED
 #
 # Exit 0 = pass; non-zero = fail (prints the failing assertion + captured output).
 set -uo pipefail
@@ -45,6 +48,11 @@ fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output -
 
 mkdir -p "$WORK/bin" "$WORK/fakebin"
 cp "$SRC" "$WORK/bin/fleet-epic-preflight.sh"; cp "$LIB" "$WORK/bin/fleet-lib.sh"
+cp "$BIN/fleet-gh-lib.sh" "$WORK/bin/fleet-gh-lib.sh"
+# The shared gh-limit marker is an INPUT too: a live one on the machine running the
+# test must not route the healthy cases over REST.
+export FLEET_STATE_DIR="$WORK/state" FLEET_GH_LOG="$WORK/gh-limit.log"
+unset FLEET_GH_FAKE_LIMIT
 chmod +x "$WORK/bin/fleet-epic-preflight.sh"
 SEED_LOG="$WORK/seedlog"
 
@@ -419,5 +427,76 @@ printf '%s' "$epicrow" | grep -qE '^epic\|[0-9A-Fa-f]{6}\|.{20,}' \
   || fail "I the epic row needs a 6-hex color and a self-explaining description" "$epicrow"
 ok "I epic/autofill/blocked are all in the canonical taxonomy --fix seeds from"
 
-printf '\nselftest OK: %s assertions passed (epic preflight: READY · FIXABLE · BLOCKED · warns · taxonomy join)\n' "$pass"
+# ============================ M: a GraphQL limit is a WARN, not BLOCKED (#989)
+# The fake gh refuses every GraphQL subcommand the way gh does under a spent
+# budget (GH_GQL_LIMIT=1), and answers the REST reads the fallback makes;
+# GH_REST_LIMIT=1 refuses those too. GH_REST_PERM is the REST permissions verdict.
+cat > "$WORK/fakebin/gh" <<'GHFAKE3'
+#!/bin/bash
+echo "$*" >> "$GH_CALLS"
+case "$1 $2" in "auth status") exit 0 ;; esac
+if [ "$1" != api ]; then
+  if [ "${GH_GQL_LIMIT:-0}" = 1 ]; then echo 'GraphQL: API rate limit already exceeded for user ID 1.' >&2; exit 1; fi
+  case "$1 $2" in
+    "repo view")  printf '%s\t%s\t%s\n' "${GH_PERM:-WRITE}" master true; exit 0 ;;
+    "issue list") echo 42; exit 0 ;;
+    "label list") for l in ${GH_LABELS-epic autofill blocked}; do echo "$l"; done; exit 0 ;;
+  esac
+  exit 0
+fi
+[ "${GH_REST_LIMIT:-0}" = 1 ] && { echo 'gh: API rate limit exceeded for user ID 1. (HTTP 403)' >&2; exit 1; }
+case "$*" in
+  *sub_issues*)          echo '[]' ;;
+  *repos/acme/widgets/issues\?*) echo 42 ;;
+  *repos/acme/widgets/labels*)   for l in ${GH_LABELS-epic autofill blocked}; do echo "$l"; done ;;
+  *"repos/acme/widgets --jq"*)   printf '%s\tmaster\ttrue\n' "${GH_REST_PERM:-ADMIN}" ;;
+esac
+exit 0
+GHFAKE3
+chmod +x "$WORK/fakebin/gh"
+export GH_CALLS="$WORK/ghcalls"
+
+: > "$GH_CALLS"; rm -rf "$FLEET_STATE_DIR"
+GH_GQL_LIMIT=1 clean_env run_pf
+[ "$RC" -eq 0 ] || fail "M1 a GraphQL limit with REST answering must stay READY (exit 0, got $RC)" "$OUT"
+printf '%s' "$OUT" | grep -qE 'WARN  *perm .*GraphQL rate-limited.*permission unverified.*REST: ADMIN' \
+  || fail "M1 perm must WARN 'GraphQL rate-limited — permission unverified (REST: ADMIN)'" "$OUT"
+printf '%s' "$OUT" | grep -q 'until [0-9][0-9]:[0-9][0-9]' || fail "M1 a real refusal marks the limit: the row says until when" "$OUT"
+printf '%s' "$OUT" | grep -q 'PASS  *subissue' || fail "M1 the sub-issue probe must still answer over REST" "$OUT"
+printf '%s' "$OUT" | grep -q 'PASS  *labels'   || fail "M1 the labels must still be read over REST" "$OUT"
+printf '%s' "$OUT" | grep -q 'PASS  *base'     || fail "M1 the default branch comes from the REST read" "$OUT"
+printf '%s' "$OUT" | grep -q 'FAIL' && fail "M1 nothing may FAIL under a GraphQL limit" "$OUT"
+grep -qE '^(issue|label) list' "$GH_CALLS" && fail "M1 once limited, no further GraphQL call is spent" "$(cat "$GH_CALLS")"
+[ -s "$FLEET_STATE_DIR/gh-limit.graphql" ] || fail "M1 the refusal must be remembered in the shared marker" "$(ls -la "$FLEET_STATE_DIR")"
+ok "M1 a GraphQL refusal → WARN perm (REST: ADMIN), READY exit 0, sub-issue + labels read over REST"
+
+rm -rf "$FLEET_STATE_DIR"
+FLEET_GH_FAKE_LIMIT=graphql clean_env run_pf
+[ "$RC" -eq 0 ] || fail "M2 FLEET_GH_FAKE_LIMIT=graphql must be READY, not BLOCKED (got $RC)" "$OUT"
+printf '%s' "$OUT" | grep -qE 'WARN  *perm .*GraphQL rate-limited.*REST: ADMIN' || fail "M2 the injected limit must WARN perm" "$OUT"
+[ -e "$FLEET_STATE_DIR/gh-limit.graphql" ] && fail "M2 an injected limit never writes the shared marker"
+ok "M2 FLEET_GH_FAKE_LIMIT=graphql (the 上线证据 command) → WARN perm, READY, no marker written"
+
+GH_LABELS='bug' FLEET_GH_FAKE_LIMIT=graphql clean_env run_pf
+[ "$RC" -eq 1 ] || fail "M3 missing labels under a limit stay FIXABLE (exit 1, got $RC)" "$OUT"
+ok "M3 a limit does not hide a real label gap (FIXABLE, read over REST)"
+
+GH_REST_PERM=READ FLEET_GH_FAKE_LIMIT=graphql clean_env run_pf
+[ "$RC" -eq 3 ] || fail "M4 a REST-confirmed read-only is still BLOCKED (got $RC)" "$OUT"
+printf '%s' "$OUT" | grep -qE 'FAIL  *perm .*READ' || fail "M4 must FAIL perm naming READ" "$OUT"
+ok "M4 a limit never excuses a real read-only permission (REST says READ → BLOCKED)"
+
+rm -rf "$FLEET_STATE_DIR"
+GH_GQL_LIMIT=1 GH_REST_LIMIT=1 clean_env run_pf
+[ "$RC" -eq 0 ] || fail "M5 both buckets limited is unverified, not BLOCKED (got $RC)" "$OUT"
+printf '%s' "$OUT" | grep -qE 'WARN  *perm .*GraphQL AND REST rate-limited' || fail "M5 must say both are limited" "$OUT"
+ok "M5 GraphQL AND REST limited → WARN unverified, never a permission FAIL"
+
+rm -rf "$FLEET_STATE_DIR"   # M5's refusals are remembered — correctly; start clean
+GH_GQL_LIMIT=0 clean_env run_pf
+printf '%s' "$OUT" | grep -qxF '  PASS  perm      acme/widgets: WRITE — can file sub-issues, label them and land their PRs' \
+  || fail "M6 unlimited, the perm row is byte-identical to before #989" "$OUT"
+ok "M6 with no limit the perm row is unchanged (GraphQL read, PASS)"
+
+printf '\nselftest OK: %s assertions passed (epic preflight: READY · FIXABLE · BLOCKED · warns · taxonomy join · rate limit)\n' "$pass"
 exit 0

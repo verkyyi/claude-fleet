@@ -54,6 +54,8 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
+# shellcheck source=/dev/null
+. "$BIN/fleet-gh-lib.sh"
 
 repo_arg='' sess_arg='' do_fix=0
 while [ "$#" -gt 0 ]; do
@@ -140,15 +142,40 @@ else
 fi
 
 # --- repo: one read, three answers (permission, trunk, issues on/off) ----------
-perm=''; defbranch=''; hasissues=''
+# A GraphQL rate limit is NOT a permission problem (issue #989): the account's
+# shared GraphQL budget runs out while REST keeps answering, and `gh repo view`
+# came back empty — which read as "no such repo / no scope" and BLOCKED the batch
+# for an hour. The read goes through fleet_gh_run, which recognizes the refusal
+# from the call's own stderr (never `gh api rate_limit`, which showed 5000 left
+# while calls were refused); a limit re-asks REST and reports a WARN. gql_limited
+# then routes the sub-issue + label reads below over REST as well.
+perm=''; defbranch=''; hasissues=''; gql_limited=''; rest_limited=''
+gh_until() {  # " (until HH:MM)" while a real marker says when the limit lifts
+  local u; u=$(fleet_gh_limit_until 2>/dev/null) || return 0
+  case "$u" in ''|*[!0-9]*) return 0 ;; esac
+  printf ' (until %s)' "$(fleet_gh_hhmm "$u")"
+}
 if [ "$gh_ok" = 1 ]; then
-  rv=$(gh repo view "$repo" --json viewerPermission,defaultBranchRef,hasIssuesEnabled \
+  rv=$(fleet_gh_run graphql preflight repo view "$repo" --json viewerPermission,defaultBranchRef,hasIssuesEnabled \
         -q '[(.viewerPermission // ""), (.defaultBranchRef.name // ""), (.hasIssuesEnabled|tostring)] | @tsv' 2>/dev/null)
+  if [ "$?" -eq "$FLEET_GH_LIMITED_RC" ]; then
+    gql_limited=1
+    rv=$(fleet_gh_rest_repo_perm "$repo" 2>/dev/null)
+    [ "$?" -eq "$FLEET_GH_LIMITED_RC" ] && rest_limited=1
+  fi
   IFS=$'\t' read -r perm defbranch hasissues <<<"$rv"
-  case "$perm" in
-    ADMIN|MAINTAIN|WRITE)
+  case "$gql_limited:$perm" in
+    1:ADMIN|1:MAINTAIN|1:WRITE)
+      warn perm "$repo: GraphQL rate-limited$(gh_until) — permission unverified over GraphQL (REST: $perm). A transient shared-quota limit, not a permission problem: the batch can run, slower" ;;
+    1:)
+      if [ -n "$rest_limited" ]; then
+        warn perm "$repo: GraphQL AND REST rate-limited$(gh_until) — permission unverified. Transient, not a permission problem: rerun the preflight once the limit lifts"
+      else
+        fail perm "$repo: GraphQL is rate-limited and REST could not read the repo either — no such repo, offline, or the token lacks \`repo\` scope"
+      fi ;;
+    *:ADMIN|*:MAINTAIN|*:WRITE)
       pass perm "$repo: $perm — can file sub-issues, label them and land their PRs" ;;
-    '')
+    *:)
       fail perm "$repo: could not read viewerPermission — no such repo, offline, or the token lacks \`repo\` scope" ;;
     *)
       fail perm "$repo: $perm — an EPIC files sub-issues and merges PRs here; that needs WRITE or better" ;;
@@ -166,7 +193,12 @@ if [ "$gh_ok" = 1 ] && [ -n "$perm" ]; then
     fail subissue "$repo has ISSUES DISABLED — an EPIC is one parent issue plus a sub-issue per slice; turn issues on first"
   else
     owner="${repo%%/*}"; name="${repo#*/}"
-    probe=$(gh issue list --repo "$repo" --state all --limit 1 --json number -q '.[0].number' 2>/dev/null)
+    if [ -n "$gql_limited" ]; then   # REST lists PRs as issues too: take a real issue
+      probe=$(fleet_gh_run core preflight api "repos/$repo/issues?state=all&per_page=20" \
+                --jq '[.[] | select(.pull_request == null)][0].number // empty' 2>/dev/null)
+    else
+      probe=$(gh issue list --repo "$repo" --state all --limit 1 --json number -q '.[0].number' 2>/dev/null)
+    fi
     probe="${probe//[^0-9]/}"
     if [ -z "$probe" ]; then
       warn subissue "no issue in $repo to probe against — sub-issue linking is UNVERIFIED here (GA on github.com; older GitHub Enterprise 404s). The first \`--parent\` filing finds out."
@@ -189,16 +221,22 @@ fi
 # in fleet_labels_canonical, so the seeder installs them; the check is whether
 # THIS repo has been seeded at all.
 EPIC_LABELS='epic autofill blocked'
-labels_missing() {
+labels_missing() {  # rc 1 = the label list could not be read under a GraphQL limit
   local have miss='' l
-  have=$(gh label list --repo "$repo" --limit 200 --json name -q '.[].name' 2>/dev/null)
+  if [ -n "$gql_limited" ]; then
+    have=$(fleet_gh_run core preflight api --paginate "repos/$repo/labels?per_page=100" --jq '.[].name' 2>/dev/null) \
+      || return 1
+  else
+    have=$(gh label list --repo "$repo" --limit 200 --json name -q '.[].name' 2>/dev/null)
+  fi
   for l in $EPIC_LABELS; do
     printf '%s\n' "$have" | grep -qxF -- "$l" || miss="$miss $l"
   done
   printf '%s' "${miss# }"
 }
-if [ "$gh_ok" = 1 ] && [ -n "$perm" ]; then
-  missing=$(labels_missing)
+if [ "$gh_ok" = 1 ] && [ -n "$perm" ] && ! missing=$(labels_missing); then
+  warn labels "GitHub rate-limited$(gh_until) — could not list $repo's labels over REST either; epic · autofill · blocked unverified"
+elif [ "$gh_ok" = 1 ] && [ -n "$perm" ]; then
   if [ -n "$missing" ] && [ "$do_fix" = 1 ]; then
     # The seeder is idempotent (`gh label create --force`) and reconciles the WHOLE
     # canonical set, not just the missing three — that breadth is exactly why this

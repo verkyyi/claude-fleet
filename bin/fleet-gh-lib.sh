@@ -59,7 +59,8 @@
 #                                        but the call goes through fleet_gh_write
 
 FLEET_GH_LIMITED_RC=75
-_FLEET_GH_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+# A caller that already knows its bin/ (tmux-status.sh, every 5s) presets it: no fork.
+_FLEET_GH_LIB_DIR="${_FLEET_GH_LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)}"
 
 fleet_gh_state_dir() {
   local d="${FLEET_STATE_DIR:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/global}"
@@ -379,4 +380,69 @@ fleet_gh_write() {  # fleet_gh_write <gh args…>
 fleet_gh_wrun() {  # fleet_gh_wrun <bucket> <source> <gh args…> — dynamic scope carries the flag
   local _FLEET_GH_WRITE=1
   fleet_gh_run "$@"
+}
+
+# --- C2 (#989): reading the limit back — the status bar, doctor and preflight ---
+# These READ the marker (and FLEET_GH_FAKE_LIMIT); they never probe GitHub
+# themselves (EPIC #1262 C2 接口约定). Forkless on the healthy path — the status
+# bar renders through here every 5s per client (issue #888): the clock comes from
+# fleet_now_pin's $_FLEET_NOW when the caller pinned one.
+
+# fleet_gh_limit_rows — one `<bucket>\t<reset>\t<source>` line per bucket that is
+# limited right now; <reset> is an epoch, or `fake` for an injected limit (which
+# has no reset). No output, rc 1, when nothing is limited.
+fleet_gh_limit_rows() {
+  local now b f k v reset src out='' d
+  d="${FLEET_STATE_DIR:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/global}"   # read-only: no mkdir
+  now="${_FLEET_NOW:-}"; case "$now" in ''|*[!0-9]*) now=$(date +%s) ;; esac
+  for b in graphql core secondary; do
+    if fleet_gh_fake_limited "$b"; then
+      out="$out$b	fake	FLEET_GH_FAKE_LIMIT
+"
+      continue
+    fi
+    f="$d/gh-limit.$b"
+    [ -f "$f" ] || continue
+    reset='' src=''
+    while IFS='=' read -r k v; do
+      case "$k" in reset) reset="$v" ;; source) src="$v" ;; esac
+    done < "$f"
+    case "$reset" in ''|*[!0-9]*) continue ;; esac
+    [ "$reset" -gt "$now" ] || continue
+    out="$out$b	$reset	${src:-?}
+"
+  done
+  [ -n "$out" ] || return 1
+  printf '%s' "$out"
+}
+
+# fleet_gh_limit_until — the epoch the LAST live limit lifts (`fake` when only an
+# injected one is live); rc 1 when nothing is limited.
+fleet_gh_limit_until() {
+  local rows b r max='' fake=''
+  rows=$(fleet_gh_limit_rows) || return 1
+  while IFS='	' read -r b r _; do
+    case "$r" in
+      fake) fake=1 ;;
+      *[!0-9]*|'') ;;
+      *) { [ -z "$max" ] || [ "$r" -gt "$max" ]; } && max="$r" ;;
+    esac
+  done <<< "$rows"
+  if [ -n "$max" ]; then printf '%s\n' "$max"; elif [ -n "$fake" ]; then echo fake; else return 1; fi
+}
+
+# fleet_gh_hhmm <epoch> — local HH:MM (BSD `date -r`, GNU `date -d @`).
+fleet_gh_hhmm() { date -r "$1" '+%H:%M' 2>/dev/null || date -d "@$1" '+%H:%M' 2>/dev/null || printf '?'; }
+
+# fleet_gh_rest_repo_perm <repo> — the REST read of what the preflight's GraphQL
+# `gh repo view` asks: `<PERM>\t<default branch>\t<has_issues>`, PERM spelled the
+# GraphQL way (ADMIN|MAINTAIN|WRITE|TRIAGE|READ) so one case judges both paths.
+# rc $FLEET_GH_LIMITED_RC when REST is limited too.
+fleet_gh_rest_repo_perm() {
+  # shellcheck disable=SC2016
+  fleet_gh_run core preflight api "repos/$1" --jq '
+    [ (.permissions // {} |
+        if .admin then "ADMIN" elif .maintain then "MAINTAIN" elif .push then "WRITE"
+        elif .triage then "TRIAGE" elif .pull then "READ" else "" end),
+      (.default_branch // ""), ((.has_issues // true) | tostring) ] | @tsv'
 }
