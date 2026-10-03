@@ -121,7 +121,8 @@ say() { [ -n "${QUIET:-}" ] || echo "$*"; }
 #                 … <TAB> repo (column 16, issue #789: owner/name, `-` = a no-repo
 #                 session; absent in a one-repo fleet's rows and in old maps)
 #   HUB     <TAB> hub-pane-cwd <TAB> claude-session-id       (0 or 1 per fleet)
-# claude-session-id = newest transcript for that worktree/pane ('-' if none).
+# claude-session-id = the window's hook-recorded @cc_session_id, else the newest
+# NON-helper transcript for that worktree/pane ('-' if none; issue #1296).
 # The HUB row (issue #143) captures the operator's persistent hub session,
 # which lives in the 'plan' PANEL window (excluded from WIN rows) — so a crash
 # can `claude --resume` the hub with its live history, like a worker.
@@ -220,9 +221,11 @@ snapshot() {
         TMUX='' fleet_window_repo "$sess" "$_w" >/dev/null
       done
     fi
-    { tmux -L "$sock" list-windows -t "$sess" -F "#{?@norepo,norepo:#{@norepo_sid},$rfmt}|"'#{window_name}|#{?@raw,#{?@worktree,#{@worktree},#{pane_current_path}},#{pane_current_path}}|#{@issue}|#{@claude_state}|#{@prci}|#{@pfg}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@handoff_manifest}|#{?@worker_lifecycle,#{@sleep_record},}|#{@codex_identity}' 2>/dev/null
-      [ -n "$spath" ] && printf '|__HUB__|%s|-\n' "$spath"
-    } | python3 "$BIN/.fleet-restore-resolve.py" "$main" --lead >> "$tmp" 2>/dev/null
+    # Leading-most field (issue #1296): @cc_session_id, the pane's own session id as
+    # its hooks recorded it — the resolver resumes THAT before guessing by mtime.
+    { tmux -L "$sock" list-windows -t "$sess" -F "#{@cc_session_id}|#{?@norepo,norepo:#{@norepo_sid},$rfmt}|"'#{window_name}|#{?@raw,#{?@worktree,#{@worktree},#{pane_current_path}},#{pane_current_path}}|#{@issue}|#{@claude_state}|#{@prci}|#{@pfg}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@handoff_manifest}|#{?@worker_lifecycle,#{@sleep_record},}|#{@codex_identity}' 2>/dev/null
+      [ -n "$spath" ] && printf '||__HUB__|%s|-\n' "$spath"
+    } | python3 "$BIN/.fleet-restore-resolve.py" "$main" --lead --sid >> "$tmp" 2>/dev/null
     # Destructive-shrink guard (issue #160): a fleet caught MID-RESTORE is
     # hub-only — fleet-up has rebuilt its panels but restore hasn't reopened the
     # work windows yet — so a snapshot taken in that window has FEWER WIN rows
@@ -386,6 +389,31 @@ restore() {
         continue
       fi
       reopened=1
+      # Never resume a HELPER's transcript (issue #1296). A map written before the
+      # snapshot learned to skip them can name one — on 2026-10-03 four windows came
+      # back on the status classifier's `claude -p` run, the newest file in their
+      # worktree's project dir. A known helper prompt is re-picked from the same dir
+      # (next newest resumable). Only `marker` here, never `thin`: the map does not
+      # say whether the id came from the pane's own hook, and a hook-recorded short
+      # session is still that window's conversation — the snapshot applied `thin`
+      # to its guesses already.
+      if [ "$wagent" != codex ] && [ -n "$wid" ] && [ "$wid" != - ] \
+         && { [ -z "$wsleep" ] || [ "$wsleep" = - ]; }; then
+        local tdir; tdir=$(fleet_transcript_dir "$wpath")
+        if fleet_is_helper_transcript "$tdir/$wid.jsonl" && [ "$FLEET_HELPER_REASON" = marker ]; then
+          local repick skips
+          skips=$( { repick=$(fleet_newest_resumable_session "$tdir"); printf 'id %s\n' "$repick"; } 2>&1 )
+          repick=$(printf '%s\n' "$skips" | sed -n 's/^id //p')
+          skips=$(printf '%s\n' "$skips" | grep '^skip ' | tr '\n' ' ')
+          log "repick $sess/$wname helper-transcript $wid → ${repick:--}${skips:+ ($skips)}"
+          if [ -n "$repick" ]; then
+            say "    ⚠ $wname: mapped session ${wid%%-*}… is a helper transcript — using ${repick%%-*}…"
+          else
+            say "    ⚠ $wname: mapped session ${wid%%-*}… is a helper transcript — none left to resume"
+          fi
+          wid=${repick:--}
+        fi
+      fi
       # Auto-continue a window that was mid-turn at crash (issue #153): a snapshot
       # state of 'working' means the turn was interrupted, and `claude --resume`
       # restores context but leaves the session idle at the prompt. Hand claude a

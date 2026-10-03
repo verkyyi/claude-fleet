@@ -440,6 +440,19 @@ if [ "$sem" = "done" ] && [ "$handoff_prev" != "looping" ]; then
   esac
 fi
 
+# The pane's OWN session id (issue #1296) — what crash-restore resumes, instead of
+# guessing "newest transcript in the worktree" (which a helper `claude -p` can be).
+# SessionStart stamps it too (handoff-latch-reset-hook.sh); this Stop leg reaches
+# CLIs started before that hook existed. Only a well-formed id is written.
+if [ "$sem" = 'done' ] && [ -n "${_stop_payload:-}" ]; then
+  _sid=$(printf '%s' "$_stop_payload" | python3 -c 'import json,sys; v=json.load(sys.stdin).get("session_id"); print(v if isinstance(v,str) else "")' 2>/dev/null)
+  case "$_sid" in *[!0-9a-fA-F-]*) _sid="" ;; esac
+  case "$_sid" in
+    ????????-????-????-????-????????????)
+      tmux set-window-option -t "$TMUX_PANE" @cc_session_id "$_sid" 2>/dev/null ;;
+  esac
+fi
+
 # A separate native proof, never populated by screen classifiers or stale-working
 # reconciliation. Reusing this installed hook also reaches already-running CLIs.
 if [ "$sem" = 'done' ] && [ -n "${_stop_payload:-}" ]; then

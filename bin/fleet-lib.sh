@@ -1717,6 +1717,64 @@ fleet_internal_transcript() {   # $1=jsonl path → 0 = fleet-internal, 1 = a re
   return 1
 }
 
+# Is this transcript one a crash-restore must NOT resume (issue #1296)? Stricter
+# than fleet_internal_transcript, which history/autoclean key off and which stays
+# as it is. On 2026-10-03 a restore reopened four windows — the memory-system
+# owner's among them — on classifier transcripts: the newest file in a worktree's
+# project dir was the fleet's own `claude -p`, not the session that lived there.
+# Two kinds, and FLEET_HELPER_REASON says which matched:
+#   marker  a known helper prompt in the head (the classifier rubrics, the
+#           retired summarizer's, the sleep digest's) — never a real session
+#   thin    under 50 lines with no tool call — a helper with an unknown prompt, or
+#           a session that never did anything. A picker MAY still fall back to a
+#           thin one when nothing substantive exists (fleet_newest_resumable_session).
+# Canonical copy; bin/.fleet-restore-resolve.py mirrors it (helper_reason),
+# and fleet-restore-helper-selftest.sh holds the two on the same fixtures.
+FLEET_HELPER_REASON=''
+fleet_is_helper_transcript() {   # $1=jsonl path → 0 = helper (see FLEET_HELPER_REASON), 1 = resumable
+  local f="${1:-}" head_bytes n
+  FLEET_HELPER_REASON=''
+  [ -f "$f" ] || return 1
+  if fleet_internal_transcript "$f"; then FLEET_HELPER_REASON=marker; return 0; fi
+  head_bytes=$(head -c 16384 "$f" 2>/dev/null)
+  case "$head_bytes" in
+    *"You write the status card of a paused coding assistant"*) FLEET_HELPER_REASON=marker; return 0 ;;
+  esac
+  n=$(wc -l < "$f" 2>/dev/null | tr -d ' ')
+  case "$n" in ''|*[!0-9]*) return 1 ;; esac
+  if [ "$n" -lt 50 ] && ! grep -q '"type":"tool_use"' "$f" 2>/dev/null; then
+    FLEET_HELPER_REASON=thin; return 0
+  fi
+  return 1
+}
+
+# Newest RESUMABLE session id in a transcript dir, or empty (issue #1296): skip
+# every helper; when only `thin` ones remain, the newest thin one beats nothing —
+# a short real chat is still that window's conversation. Each skip is printed to
+# stderr as `skip <id> <reason>` for the caller's log. Same no-`| head` rule as
+# fleet_newest_human_session below.
+fleet_newest_resumable_session() {
+  local dir="${1:-}" list f n=0 thin=''
+  [ -d "$dir" ] || return 0
+  list=$(ls -t "$dir"/*.jsonl 2>/dev/null)
+  [ -n "$list" ] || return 0
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    n=$((n + 1)); [ "$n" -gt 200 ] && break
+    if fleet_is_helper_transcript "$f"; then
+      printf 'skip %s %s\n' "$(basename "$f" .jsonl)" "$FLEET_HELPER_REASON" >&2
+      [ "$FLEET_HELPER_REASON" = thin ] && [ -z "$thin" ] && thin=$(basename "$f" .jsonl)
+      continue
+    fi
+    basename "$f" .jsonl
+    return 0
+  done <<EOF
+$list
+EOF
+  [ -n "$thin" ] && printf '%s\n' "$thin"
+  return 0
+}
+
 # newest HUMAN *.jsonl session id in a transcript dir (basename sans .jsonl), or
 # empty when the dir holds nothing but the fleet's own helper transcripts (a warm
 # scratch-pool worktree is exactly that — all 21 transcripts in one such dir were

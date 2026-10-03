@@ -64,6 +64,9 @@ command -v claude >/dev/null 2>&1 || exit 0
 # kept identical to fleet-claude.sh so the safe shape is the one shape.
 NOMCP=()
 [ "${FLEET_HELPER_NO_MCP:-1}" = 1 ] && NOMCP=(--strict-mcp-config '--mcp-config={"mcpServers":{}}')
+# …and NO transcript (issue #1296). The call runs from inside a window's worktree, so
+# a persisted helper session lands in THAT worktree's project dir as its newest
+# *.jsonl — and crash-restore resumed four windows on a classifier transcript.
 
 # Per-fleet tmux sockets (issue #159): each fleet is its own tmux server. The
 # socket is inherited from $TMUX (the Stop hook fires in-pane) or handed in via
@@ -299,7 +302,7 @@ classify_one() {
     # second rail. The capture above already happened, in tmux.
     t0=$(date +%s)
     raw=$(printf '%s\n%s\n' "$RUBRIC" "$cap" \
-          | env -u TMUX -u TMUX_PANE claude -p ${NOMCP[@]+"${NOMCP[@]}"} --model "$MODEL" 2>/dev/null)
+          | env -u TMUX -u TMUX_PANE claude -p --no-session-persistence ${NOMCP[@]+"${NOMCP[@]}"} --model "$MODEL" 2>/dev/null)
     crc=$?
     haiku_s=$(( $(date +%s) - t0 ))
     # rc != 0 is NOT an unparseable answer, it is NO answer (issue #497) — `claude`

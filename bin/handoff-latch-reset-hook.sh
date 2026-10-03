@@ -3,7 +3,8 @@
 # deterministic fresh-session marker at a session boundary (issues #330, #345).
 # Wired to the Claude Code `SessionStart` hook.
 #
-# Two jobs, in order:
+# Three jobs, in order (the third — recording the pane's session id for
+# crash-restore, issue #1296 — is at the bottom):
 #
 # 1. RESET THE LATCH (unconditional). The Stop hook (bin/set-claude-state.sh) sets
 #    @handoff_armed=1 the first time it nudges a pane to run /fleet-handoff, and
@@ -55,14 +56,25 @@ tmux set-window-option -u -t "$TMUX_PANE" @handoff_armed 2>/dev/null || true
 # 2. Resolve the SessionStart source. Prefer the test override; else parse the hook's
 #    stdin JSON ({"...","source":"clear",...}). Guard against a tty so a manual
 #    invocation without a piped payload never hangs on cat.
+payload=''
+[ -t 0 ] || payload=$(cat 2>/dev/null)
 if [ -n "${FLEET_LATCH_RESET_SOURCE:-}" ]; then
   src="$FLEET_LATCH_RESET_SOURCE"
-elif [ ! -t 0 ]; then
-  src=$(cat 2>/dev/null \
-    | sed -n 's/.*"source"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p' | head -n1)
 else
-  src=""
+  src=$(printf '%s' "$payload" \
+    | sed -n 's/.*"source"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p' | head -n1)
 fi
+
+# 3. Record WHICH session this pane now holds (issue #1296): crash-restore resumes
+#    @cc_session_id rather than the newest transcript in the worktree, which a
+#    helper `claude -p` run from that worktree can be. Every source counts — a
+#    startup, a resume, a /clear and a compact each name the pane's live session.
+sid=$(printf '%s' "$payload" | python3 -c 'import json,sys; v=json.load(sys.stdin).get("session_id"); print(v if isinstance(v,str) else "")' 2>/dev/null)
+case "$sid" in *[!0-9a-fA-F-]*) sid="" ;; esac
+case "$sid" in
+  ????????-????-????-????-????????????)
+    tmux set-window-option -t "$TMUX_PANE" @cc_session_id "$sid" 2>/dev/null || true ;;
+esac
 
 # Stamp the deterministic fresh-session marker on /clear ONLY (see header job 2).
 if [ "$src" = "clear" ]; then
