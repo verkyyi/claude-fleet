@@ -129,6 +129,7 @@ FLEET_MEM_MAX_TICKS                seam: stop the memguard loop after N samples 
 FLEET_MEM_ORPHAN_EVERY             knob: min seconds between memguard orphan sweeps (fleet-memguard.sh, 60)
 FLEET_MEM_PROBE_CMD                seam: a fake memory-pressure reading for fleet_mem_probe ("<level> <avail%> <compressor%> <swapMB>")
 FLEET_MEM_PS_CMD                   seam: a fake process table for fleet_proc_mem_rows
+FLEET_LOAD_PROBE_CMD               seam: a fake 1-min load-per-core reading for _fleet_load_per_core (machine admission, #1090)
 FLEET_MEM_TOTAL_MB                 seam: a fixed physical-memory figure for fleet_mem_total_mb
 FLEET_METRICS                      knob: 0 = no machine-metrics rows from diskguard/memguard (#1294, 1)
 FLEET_METRICS_KEEP_DAYS            knob: machine/metrics-*.tsv retention in days (fleet-lib.sh, 7)

@@ -186,6 +186,18 @@ unstarted member, spawn the next one, highest-priority first. The target is 4–
 changes them, suggests changing them, or asks (issue #881). A full cap is
 normal: the spawn exits `2` and the next tick retries.
 
+The machine is a cap too (issue #1090): the same exit `2` comes back with
+`暂停开新：内存紧张` / `暂停开新：负载过高` on stderr while memory pressure,
+free memory or load/core is over its line (`fleet_machine_admit`). Same handling —
+stop refilling this tick, say so in the tick's comment, retry next tick; it
+resumes on its own when the reading drops. Read it **before** this tick runs any
+heavy acceptance of its own (a member's 完成判据 replayed here, a loadgen run, a
+full selftest gate) and skip that too while it holds:
+
+```sh
+bash -c 'source ~/.claude/fleet/bin/fleet-lib.sh; fleet_machine_admit' || echo 'held — next tick'
+```
+
 ```sh
 bash ~/.claude/fleet/bin/dash-issue-session.sh <N> --repo "$FLEET_REPO" --title "<the issue's own title>"
 ```
