@@ -29,7 +29,8 @@
 #   --gate [floor]    exit 0 if free >= floor (default FLEET_DISK_FLOOR_GB), else
 #                     print a one-line reason to stderr and exit 3
 #   --watch           if free < FLEET_DISK_WARN_GB, capture an incident (cooldown-
-#                     gated) + notify; ALSO runs the CPU + ORPHAN watchdogs; always
+#                     gated) + notify; ALSO runs the CPU + ORPHAN watchdogs and,
+#                     once a day, the transcript archive (issue #1299); always
 #                     exit 0 (a watcher must never fail loud)
 #   --cpu-watch       run only the runaway-CPU check (what --watch also does); for
 #                     testing or a standalone timer. No-op unless the CPU knobs are set
@@ -93,6 +94,9 @@
 #   FLEET_PTY_WARN_PCT      pty table % used that counts as over  (default 80)
 #   FLEET_MEM_NOTIFY_COOLDOWN min seconds between two notices of one kind
 #                           (memory / files / pty; default 1800) — issue #1293
+#   FLEET_TRANSCRIPT_ARCHIVE 0 = no daily transcript archive pass (default 1) —
+#                           issue #1299; bin/fleet-transcript-archive.sh has the
+#                           rules and its own knobs (FLEET_TRANSCRIPT_KEEP_DAYS, …)
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
@@ -507,6 +511,26 @@ Bind temp servers to 127.0.0.1; share with the operator through doc-preview."
   return 0
 }
 
+# --- transcript archive (issue #1299) ---------------------------------------
+# ~/.claude/projects only grows; once a day, archive what is stale and unreferenced
+# (bin/fleet-transcript-archive.sh holds every rule). Each call is budgeted so it
+# never holds this tick past ~30s: a backlog (6000+ files on first run) drains over
+# a few ticks — the stamp is written only once a pass FINISHES (exit 0), so an
+# unfinished one (75) simply resumes on the next tick.
+transcript_watch() {
+  [ "${FLEET_TRANSCRIPT_ARCHIVE:-1}" = 0 ] && return 0
+  [ -x "$BIN/fleet-transcript-archive.sh" ] || return 0
+  mkdir -p "$GDIR" 2>/dev/null || return 0
+  local st="$GDIR/last-transcript-archive" last nowt out rc
+  nowt="$(now)"; last="$(cat "$st" 2>/dev/null || echo 0)"
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  [ $((nowt - last)) -ge "${FLEET_TRANSCRIPT_ARCHIVE_EVERY:-86400}" ] 2>/dev/null || return 0
+  out="$(tmo 120 "$BIN/fleet-transcript-archive.sh" --run --budget "${FLEET_TRANSCRIPT_ARCHIVE_BUDGET:-30}" 2>&1)"; rc=$?
+  [ "$rc" = 0 ] && printf '%s\n' "$nowt" > "$st" 2>/dev/null
+  [ -n "$out" ] && printf '%s rc=%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$rc" "$out" >> "$GDIR/transcript-archive.log" 2>/dev/null
+  return 0
+}
+
 # --- machine load (issue #697) ----------------------------------------------
 # Shared by --orphans and the incident capture, and re-read by bin/fleet-doctor.sh
 # through --orphans. Portable across macOS (sysctl) and Linux (/proc).
@@ -822,6 +846,7 @@ EOF2
     listen_watch                                  # orphaned-listener sweep (#1154), throttled
     crash_watch                                   # metrics row + reboot harvest (#1294)
     mem_watch                                     # memory / files / pty edges (#1293), notify-only
+    transcript_watch                              # daily transcript archive (#1299), budgeted
     free=$(free_gb)
     [ -z "$free" ] && exit 0                      # measurement failed — stay quiet
     [ "$free" -ge "$WARN_GB" ] && exit 0          # healthy
@@ -842,7 +867,7 @@ Volume backing \`$TARGET\` is under the ${WARN_GB}GB warn line. Forensic snapsho
 Fleet spawn/auto-restore is now gated at ${FLOOR_GB}GB — inspect the incident for the runaway writer."
     ;;
   -h|--help|"")
-    sed -n '2,95p' "$0"
+    sed -n '2,99p' "$0"
     ;;
   *)
     echo "fleet-diskguard: unknown mode '$1' (see --help)" >&2; exit 2

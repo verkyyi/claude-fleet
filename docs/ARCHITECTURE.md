@@ -528,6 +528,9 @@ name, so a fleet is a self-contained, equal unit (`ls .../fleets/` = the fleets)
   accounts/           # GLOBAL — multi-account tokens (unchanged)
   diskguard/          # GLOBAL — disk-guard + runaway forensics; orphan-seen /
                       #   orphan-current are the #697 watchdog's cross-tick state
+  transcript-archive/ # GLOBAL — idle, unreferenced ~/.claude/projects transcripts
+                      #   (<project>/<id>.tar.gz + archive.log), daily (#1299);
+                      #   `fleet-transcript-archive.sh --restore <id>` puts one back
   restore/            # GLOBAL — auto-restore ARM flag + restore.log
 ```
 
