@@ -50,6 +50,7 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"
+. "$BIN/fleet-gh-lib.sh"   # fleet_gh_write: every write below is queued (issue #1264)
 
 title='' body='' priority='' parent='' from='' milestone='' repo='' spawn=0 bind=0
 labels=()
@@ -161,7 +162,7 @@ if [ -z "$milestone" ] && [ -n "${FLEET_DEFAULT_MILESTONE:-}" ]; then
   # already there — confirm via the list). BEST-EFFORT (issue #297): on ANY
   # failure WARN and file WITHOUT a milestone rather than wedge the fast path —
   # ⌃n must never fail to file because of milestone plumbing.
-  if gh api --method POST "repos/$owner/$name/milestones" \
+  if fleet_gh_write api --method POST "repos/$owner/$name/milestones" \
         -f title="$default_ms" -f state=open >/dev/null 2>&1; then
     milestone="$default_ms"                       # freshly created
   elif gh api "repos/$owner/$name/milestones" --paginate -q '.[].title' 2>/dev/null \
@@ -179,7 +180,7 @@ create_args=(--repo "$repo" --title "$title" --body "$body")
 if [ "${#labels[@]}" -gt 0 ]; then
   for _l in ${labels[@]+"${labels[@]}"}; do create_args+=(--label "$_l"); done
 fi
-url=$(gh issue create "${create_args[@]}" 2>/dev/null) \
+url=$(fleet_gh_write issue create "${create_args[@]}" 2>/dev/null) \
   || { printf 'fleet-issue-file: gh issue create failed in %s\n' "$repo" >&2; exit 1; }
 [ -z "$url" ] && { printf 'fleet-issue-file: gh issue create returned no URL\n' >&2; exit 1; }
 printf '%s\n' "$url"                          # stdout = the URL (like gh), for the caller
@@ -192,7 +193,7 @@ num="${url##*/}"; num="${num//[^0-9]/}"
 if [ -n "$parent" ] && [ -n "$num" ]; then
   owner="${repo%%/*}"; name="${repo#*/}"
   child_id=$(gh api "repos/$owner/$name/issues/$num" -q '.id' 2>/dev/null)
-  if [ -n "$child_id" ] && gh api --method POST \
+  if [ -n "$child_id" ] && fleet_gh_write api --method POST \
         "repos/$owner/$name/issues/$parent/sub_issues" -F sub_issue_id="$child_id" >/dev/null 2>&1; then
     printf 'fleet-issue-file: linked #%s as a sub-issue of #%s\n' "$num" "$parent" >&2
   else

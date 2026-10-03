@@ -20,6 +20,7 @@
 # FAKE_GQL=limited, `gh api repos/…` serves fixtures through the script's REAL --jq
 # program (system jq). Never touches the network or the real account's budget.
 set -uo pipefail
+export FLEET_GH_WRITE_GAP=0   # no write pacing here: the queue has its own test (fleet-gh-write-selftest.sh)
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/ghfallback-selftest.XXXXXX")" || exit 2

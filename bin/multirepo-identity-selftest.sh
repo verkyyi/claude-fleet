@@ -27,6 +27,7 @@
 # bare call made outside a pane to a socket nothing listens on — never the live
 # server. gh is shimmed to fail, so nothing touches the network.
 set -uo pipefail
+export FLEET_GH_WRITE_GAP=0   # no write pacing here: the queue has its own test (fleet-gh-write-selftest.sh)
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 REAL_TMUX="$(command -v tmux 2>/dev/null)"
