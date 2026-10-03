@@ -152,10 +152,17 @@ source_ready() {
     # A `looping` Codex source between rounds is as settled as `done`: its idle
     # native thread, no live item and a completed last turn are checked, never
     # assumed from the tmux flag (#786).
+    # A `looping` CLAUDE source is settled only when the Stop hook wrote it off
+    # this pane's own @loop mark (issue #1331: a /loop between rounds) — never off
+    # a screen-classifier read.
     case "$(opt '#{@claude_state}')" in
       done) return 0 ;;
-      looping) [ "$SOURCE_AGENT" = codex ] \
-        && python3 "$BIN/.fleet-failover.py" settled --session "$SESS" --pane "$PANE" ;;
+      looping) if [ "$SOURCE_AGENT" = codex ]; then
+                 python3 "$BIN/.fleet-failover.py" settled --session "$SESS" --pane "$PANE"
+               else
+                 [ -n "$(opt '#{@loop}')" ] \
+                   && python3 "$BIN/fleet_loop_mark.py" status --value "$(opt '#{@loop}')" >/dev/null 2>&1
+               fi ;;
       *) return 1 ;;
     esac
   fi

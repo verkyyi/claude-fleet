@@ -36,6 +36,12 @@
         "hooks": [
           { "type": "command", "command": "sh ~/.claude/fleet/bin/set-claude-state.sh working" }
         ]
+      },
+      {
+        "matcher": "ScheduleWakeup|CronCreate|CronDelete",
+        "hooks": [
+          { "type": "command", "command": "python3 ~/.claude/fleet/bin/fleet_loop_mark.py hook" }
+        ]
       }
     ],
     "UserPromptSubmit": [

@@ -333,7 +333,14 @@ classify_one() {
   case "$label" in
     WAITING) new="needs" ;;
     LOOPING) new="looping" ;;
-    STOPPED) new="done" ;;
+    STOPPED) new="done"
+             # The screen is the AUXILIARY signal (issue #1331): a window whose @loop
+             # mark / loop ledger says a Loop is pending stays `looping`, whatever
+             # the last frame looked like; the overruled read is logged below.
+             if python3 "$BIN/fleet_loop_mark.py" window "$target" ${CLASSIFY_SOCK:+--socket-name "$CLASSIFY_SOCK"} >/dev/null 2>&1; then
+               new="looping"
+               printf '%s  %-10s stopped-read overridden by @loop (#1331)%s\n' "$(date +%H:%M:%S)" "$target" "$tag" >> "$LOG"
+             fi ;;
     ERROR)   new="needs" ;;
     WORKING) # A screen frame never PROMOTES a quiet window to working (issue
              # #846): only the UserPromptSubmit hook starts a turn, and this

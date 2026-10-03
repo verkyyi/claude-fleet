@@ -244,7 +244,9 @@ def bucket(live, last):
         # in flight. Only when the live window agrees the turn is over.
         if rk == 1 and lst == 'WAITING':
             return '⏳'
-        return '✓' if rk == 1 else '▸'
+        # Quiet is not finished (issue #1331): a sleeper, a preparing/waking worker
+        # and a `looping` one sort quiet on the dash, but only `done` is a ✓.
+        return '✓' if live['state'] == 'done' else '▸'
     if lst == 'MERGED' or (lst == 'REAPED' and (last.get('verdict') or '').startswith('merged')):
         return '✓'
     if lst in ('BLOCKED', 'FAILED'):

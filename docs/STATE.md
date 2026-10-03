@@ -238,16 +238,31 @@ live jobs today:
 
 ## The slow path — the haiku classifier (corrects what hooks can't know)
 
-A hook cannot tell a **clean finish** from a `/loop` paused **between iterations**
-— both look like `Stop` → `done`. And a `done` window may actually hold a pending
+**The deterministic half: `@loop`** (issue #1331). A `/loop` is not invisible to
+the hooks after all — the agent schedules its own next round with `ScheduleWakeup`
+or `CronCreate`, and a PostToolUse hook (`bin/fleet_loop_mark.py hook`, matcher
+`ScheduleWakeup|CronCreate|CronDelete`) records it on the window as `@loop`
+(`kind=wakeup next=<epoch> ttl=<s>` / `kind=cron id=<job>@<until>,…`; cleared by
+`stop:true` / the last `CronDelete`). Expiry is the reader's: a wakeup not renewed
+by `next + max(600, ttl/2)` has stopped; a recurring cron lapses after 7 days. A
+`fleet-loop.py` ledger that will still deliver counts too. `fleet_window_loop`
+(shell) / `fleet_loop_mark.status` (Python) is the one answer. The Stop hook stamps
+`looping` instead of `done` while it is active; the classifier's `STOPPED` read
+defers to it; `fleet-reap-live.py` answers `retained:loop` before any age or state
+gate; the dash's `k/N` and `fleet-children.sh` count only `done` with no Loop
+(sleeping / preparing / waking are quiet, not finished). A Codex worker has no
+such tools — its `@loop` stays empty and nothing changes for it.
+
+For everything the hooks cannot see, the screen classifier below stays. A hook
+cannot tell a **clean finish** from a `/loop` paused **between iterations** when
+no schedule was recorded — both look like `Stop` → `done`. And a `done` window may actually hold a pending
 question the Notification filter left untouched. So `done` / `needs` / `looping`
 are *ambiguous, quiet* states worth a second look by an LLM.
 
 [`bin/classify-sessions.sh`](../bin/classify-sessions.sh) reads the pane text and
 asks `claude -p --model haiku` to classify it as `STOPPED` / `WAITING` /
 `LOOPING` / `ERROR`, then writes the reconciled `@claude_state` (`done` / `needs`
-/ `looping` / `needs`). It is the **only** way the purple `looping` state is ever
-set. It is heavily gated so it is cheap and safe:
+/ `looping` / `needs`). It is heavily gated so it is cheap and safe:
 
 - **State gate** — it only ever classifies windows already in `done` / `needs` /
   `looping`. A `working` window is never touched (the hook heartbeat is trusted).

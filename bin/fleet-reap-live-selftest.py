@@ -22,8 +22,8 @@ spec.loader.exec_module(live)
 
 class LiveTests(unittest.TestCase):
     def probe(self, state="done", comm="claude", age="00:10", commands=None, roots="100\n", minimum=1800, lifecycle="", hold="",
-              merged_at=None, waived=None, now=None):
-        outputs = iter([hold, lifecycle, state, roots, f"100 1 01:00:00 zsh\n101 100 {age} {comm}\n102 1 00:01 codex\n",
+              merged_at=None, waived=None, now=None, loop="\t"):
+        outputs = iter([hold, loop, lifecycle, state, roots, f"100 1 01:00:00 zsh\n101 100 {age} {comm}\n102 1 00:01 codex\n",
                         commands if commands is not None else f"100 zsh\n101 {comm}\n102 codex\n"])
         with patch.object(live, "read", side_effect=lambda *args: next(outputs)):
             return live.live_reason("@1", minimum, None, merged_at, waived, now)
@@ -45,6 +45,25 @@ class LiveTests(unittest.TestCase):
     def test_hold_retains_any_worker(self):
         for lifecycle in ("", "sleeping"):
             self.assertEqual(self.probe(minimum=0, lifecycle=lifecycle, hold="1"), "retained:hold")
+
+    def test_pending_loop_retains_ahead_of_age_and_state(self):
+        # Issue #1331: a worker between /loop rounds is idle, not finished.
+        now = int(time.time())
+        wake = f"kind=wakeup next={now+1800} ttl=1800\t"
+        for lifecycle, state in (("", "done"), ("", "looping"), ("sleeping", "done"), ("waking", "done")):
+            self.assertEqual(self.probe(minimum=0, lifecycle=lifecycle, state=state, loop=wake), "retained:loop")
+        self.assertEqual(self.probe(age="10:00:00", loop=f"kind=cron id=ab12@{now+600}\t"), "retained:loop")
+        # a wakeup nobody renewed, past next + grace, no longer holds the window
+        stale = f"kind=wakeup next={now-3600} ttl=1800\t"
+        self.assertIsNone(self.probe(minimum=0, loop=stale))
+        # a hold still answers first
+        self.assertEqual(self.probe(hold="1", loop=wake), "retained:hold")
+        # a fleet-loop.py ledger that will still deliver is a Loop too
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "loop").mkdir()
+            for status, want in (("active", "retained:loop"), ("hibernating", "retained:loop"), ("stopped", None)):
+                (Path(d) / "loop/state.json").write_text('{"status": "%s"}' % status)
+                self.assertEqual(self.probe(minimum=0, loop="\t" + d + "/manifest.json"), want)
 
     def test_awake_young_agent_still_refused(self):
         self.assertTrue(self.probe(state="done").startswith("young-agent:claude:"))
@@ -73,7 +92,7 @@ class LiveTests(unittest.TestCase):
     def test_merged_at_cli_output(self):
         NOW = 1_000_000
         def run(*extra):
-            replies = iter(["", "", "done", "100", "100 1 01:00:00 zsh\n101 100 10:00 claude", "100 zsh\n101 claude"])
+            replies = iter(["", "\t", "", "done", "100", "100 1 01:00:00 zsh\n101 100 10:00 claude", "100 zsh\n101 claude"])
             out = []
             with patch.object(sys, "argv", ["probe", "@1", *extra]), \
                  patch.object(live, "read", side_effect=lambda *a: next(replies)), \
@@ -122,11 +141,11 @@ class LiveTests(unittest.TestCase):
             self.assertEqual(live.main(), 1)
 
     def test_explicit_socket_applies_to_every_tmux_probe(self):
-        replies = iter(["", "", "done", "100", "100 1 01:00:00 zsh", "100 zsh"])
+        replies = iter(["", "\t", "", "done", "100", "100 1 01:00:00 zsh", "100 zsh"])
         with patch.object(live, "read", side_effect=lambda *args: next(replies)) as read:
             self.assertIsNone(live.live_reason("@1", 1800, "other-fleet"))
         calls = [call.args for call in read.call_args_list if call.args[0] == "tmux"]
-        self.assertEqual(len(calls), 4)
+        self.assertEqual(len(calls), 5)
         self.assertTrue(all(call[:3] == ("tmux", "-L", "other-fleet") for call in calls))
 
     @unittest.skipUnless(shutil.which("tmux") and shutil.which("perl"), "tmux/perl absent")
