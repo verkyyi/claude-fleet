@@ -287,6 +287,7 @@ fcfg_label_i18n() {
     FLEET_EMIT_TOKEN) printf '会话生命周期 token' ;;
     FLEET_ISSUE_TTL) printf 'Issue 缓存有效期' ;;
     FLEET_GH_TTL) printf 'GitHub 缓存有效期' ;;
+    FLEET_GH_SHARE) printf '多个登录共享后台查询' ;;
     FLEET_COLLECT_DEADLINE) printf 'Collector tick 截止时间' ;;
     FLEET_COLLECT_GIT_BUDGET) printf 'Collector git 预算' ;;
     FLEET_COLLECT_GIT_SLOW) printf 'Collector git 慢日志' ;;
