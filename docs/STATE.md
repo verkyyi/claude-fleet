@@ -577,6 +577,13 @@ tmux_calls_per_s=<n.n>` — the epoch stays the first token for the liveness rea
   line), `@compact_prep_ts` / `@compact_send_ts` (60 s dedup each) and
   `@compact_ts` (≥ 600 s between compactions). At or over the handoff line the
   auto-handoff above owns the Stop and none of this runs.
+- **Compact at most twice, then hand off (#1316).** Each `compacting → restored`
+  bumps `@compact_count`. Once it reaches `FLEET_COMPACT_MAX` (default 2; 0 = no
+  cap), a Stop in `[FLEET_COMPACT_PREP_PCT, FLEET_AUTO_HANDOFF_PCT)` gets the
+  auto-handoff `block` ("already compacted in place N times") instead of a new
+  `prep` — same `@handoff_armed` latch and typing hold, even with auto-handoff
+  OFF. `SessionStart(clear|startup)` (`handoff-latch-reset-hook.sh`) unsets the
+  count; `compact` and `resume` keep it.
 - [ARCHITECTURE.md](ARCHITECTURE.md) — the shared-vs-per-fleet split and the
   many-fleets-on-one-machine model.
 - [TERMS.md](TERMS.md) — definitions of collector / hub / dash.

@@ -1325,6 +1325,17 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Compact-in-place percent @group=handoff @tier=internal @scope=fleet @edit=int @unit=%
 #FLEET_COMPACT_PREP_PCT=70       # context % that starts an in-place /compact; 0 = OFF
 
+# Compact a session in place at most this many times, then hand it off (issue
+# #1316). Every compaction loses a little detail; by the third or fourth a session
+# no longer remembers what it agreed to at the start. Each fleet compaction that
+# completes bumps the window option @compact_count; once it reaches this number,
+# the next time the context reaches FLEET_COMPACT_PREP_PCT the Stop hook sends the
+# auto-handoff block (`/fleet-handoff`, cycle mode, "already compacted N times")
+# instead of another recovery map. The fresh session after the handoff starts at
+# 0. Workers only (codex untouched); 0 = no cap.
+# @label=Compactions before handoff @group=handoff @tier=internal @scope=fleet @edit=int
+#FLEET_COMPACT_MAX=2             # in-place compactions per session before a handoff; 0 = no cap
+
 # Re-state a worker's task charter after a context compaction (issue #1266). The
 # SessionStart(source=compact) hook bin/refocus-hook.sh hands a WORKER pane a
 # ≤1.5 KB `[fleet charter] #<N>` block (issue, repo, branch, PR, one-issue-one-PR,
