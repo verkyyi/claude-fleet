@@ -12,7 +12,9 @@
 #               as a pure prefix (quotes, heredoc bodies, pipes, && chains keep
 #               every byte); FLEET_HEAVY=0 (env / settings / inline) and non-fleet
 #               panes are left alone; the default regex is in lockstep with
-#               fleet-lib.sh.
+#               fleet-lib.sh. Light runs (one file / node / -k, a named
+#               run-selftests.sh) pass untouched (issue #1313); --status prints
+#               the 24h wait median + max.
 #
 # Hermetic: FLEET_HEAVY_DIR points the slots at a temp dir, HOME/FLEET_CONF_DIR
 # are temp, no tmux. python3 absent → SKIP.
@@ -28,7 +30,7 @@ TMP="$(mktemp -d "${TMPDIR:-/tmp}/fleet-heavy-selftest.XXXXXX")" || exit 2
 trap 'rm -rf "$TMP"' EXIT INT TERM
 export FLEET_SKIP_GLOBAL_CONF=1 FLEET_CONF_DIR="$TMP/conf" HOME="$TMP/home"
 mkdir -p "$FLEET_CONF_DIR" "$HOME"
-unset FLEET_HEAVY FLEET_HEAVY_SLOTS FLEET_HEAVY_WAIT FLEET_HEAVY_RE FLEET_HEAVY_HELD TMUX TMUX_PANE FLEET_MAIN
+unset FLEET_HEAVY FLEET_HEAVY_SLOTS FLEET_HEAVY_WAIT FLEET_HEAVY_RE FLEET_HEAVY_LIGHT_RE FLEET_HEAVY_HELD TMUX TMUX_PANE FLEET_MAIN
 
 fails=0
 ok()   { printf 'ok   %s\n' "$1"; }
@@ -81,6 +83,17 @@ has "--wait timeout: names the holder" "hog(" "$(cat "$TMP/late.err")"
 [ $((SECONDS - t0)) -lt 4 ] && ok "--wait timeout: did not wait out the holder" || fail "--wait timeout waited the holder out"
 has "--wait timeout: logged" "	timeout	" "$(cat "$FLEET_HEAVY_DIR/events.log")"
 has "--status shows the holder" "hog" "$("$HEAVY" --slots 1 --status)"
+st="$("$HEAVY" --slots 1 --status)"
+has "--status prints the 24h wait stats" "waits 24h:" "$st"
+# Deterministic stats: a crafted log — old rows are out of the 24h window.
+SD="$TMP/stats/heavy"; mkdir -p "$SD"
+now="$(date +%Y-%m-%dT%H:%M:%S)"
+{ printf '2000-01-01T00:00:00\tacquire\tu\t1\told\tslot=1 held=1 waited=999s\n'
+  for w in 0 0 4 10; do printf '%s\tacquire\tu\t1\tx\tslot=1 held=1 waited=%ss\n' "$now" "$w"; done
+  printf '%s\ttimeout\tu\t1\tx\twaited=30s\n' "$now"
+  printf '%s\trelease\tu\t1\tx\trc=0\n' "$now"; } > "$SD/events.log"
+eq "--status 24h stats: count / queued / median / max" "  waits 24h: 5 runs · 3 queued · median 4s · max 30s" \
+   "$(FLEET_HEAVY_DIR="$SD" "$HEAVY" --status | grep 'waits 24h')"
 
 # Another login (another HOME) shares the same slots.
 out="$(HOME="$TMP/other-login" "$HEAVY" --slots 1 --wait 0 --label other -- true 2>&1)"
@@ -126,8 +139,8 @@ eq "timeout prefix goes inside the wrapper" \
    "$QW --label pytest --wait 60 -- timeout 300 pytest" "$(rewrite 'timeout 300 pytest')"
 eq "if-statement keyword stays outside" \
    "if ${P}git push; then echo ok; fi" "$(rewrite 'if git push; then echo ok; fi')"
-eq "script path form" "$QW --label run-selftests.sh --wait 60 -- bin/run-selftests.sh fleet-heavy" \
-   "$(rewrite 'bin/run-selftests.sh fleet-heavy')"
+eq "script path form" "$QW --label run-selftests.sh --wait 60 -- bin/run-selftests.sh" \
+   "$(rewrite 'bin/run-selftests.sh')"
 eq "bash <script> form" "$QW --label pre-pr.sh --wait 60 -- bash scripts/pre-pr.sh" \
    "$(rewrite 'bash scripts/pre-pr.sh')"
 HD="$(printf 'scripts/pre-pr.sh <<'"'"'EOF'"'"'\ngit push "$x" `y`\nEOF\necho done')"
@@ -136,6 +149,41 @@ eq "run_in_background → no --wait cap" "$QW --label git-push -- git push" \
    "$(rewrite 'git push' '{"run_in_background": true}')"
 eq "timeout 600000ms → --wait 300" "$QW --label git-push --wait 300 -- git push" \
    "$(rewrite 'git push' '{"timeout": 600000}')"
+
+# Light runs never queue (issue #1313); the fan-outs and full gates still do.
+for c in 'pytest tests/test_x.py' 'pytest -k foo' 'pytest a.py::T::t' 'python3 -m pytest -q tests/test_x.py' \
+         'pytest tests/::test_a' 'pytest -k "a and b" tests/' 'timeout 60 pytest tests/test_x.py' \
+         'npm test -- src/a.test.ts' 'npm run test -- -t "adds"' \
+         'bin/run-selftests.sh fleet-heavy' 'bin/run-selftests.sh fleet-heavy dash-marker 2>&1' \
+         "cd x && pytest tests/test_x.py | tail -5" "FOO=1 pytest -x tests/test_x.py; echo done"; do
+  eq "light: $c" "" "$(rewrite "$c")"
+done
+HL="$(printf 'pytest tests/test_x.py <<'"'"'EOF'"'"'
+stdin
+EOF')"
+eq "light: heredoc"                  "" "$(rewrite "$HL")"
+eq "heavy: bare pytest"              "$QW --label pytest --wait 60 -- pytest" "$(rewrite 'pytest')"
+eq "heavy: pytest -n 6"              "$QW --label pytest --wait 60 -- pytest -n 6" "$(rewrite 'pytest -n 6')"
+eq "heavy: pytest -n6 file still fans out" "$QW --label pytest --wait 60 -- pytest -n6 tests/test_x.py" \
+   "$(rewrite 'pytest -n6 tests/test_x.py')"
+eq "heavy: pytest --dist=load -k x"  "$QW --label pytest --wait 60 -- pytest --dist=load -k x" "$(rewrite 'pytest --dist=load -k x')"
+eq "heavy: pytest -p xdist a.py"     "$QW --label pytest --wait 60 -- pytest -p xdist a.py" "$(rewrite 'pytest -p xdist a.py')"
+eq "heavy: pytest tests/ (a dir)"    "$QW --label pytest --wait 60 -- pytest tests/" "$(rewrite 'pytest tests/')"
+eq "heavy: npm test"                 "$QW --label npm-test --wait 60 -- npm test" "$(rewrite 'npm test')"
+eq "heavy: run-selftests.sh glob"    "$QW --label run-selftests.sh --wait 60 -- run-selftests.sh dash-*" "$(rewrite 'run-selftests.sh dash-*')"
+eq "heavy: run-selftests.sh quoted glob" "$QW --label run-selftests.sh --wait 60 -- run-selftests.sh 'dash-*'" \
+   "$(rewrite "run-selftests.sh 'dash-*'")"
+eq "heavy: run-selftests.sh --shard" "$QW --label run-selftests.sh --wait 60 -- run-selftests.sh --shard 1/6" \
+   "$(rewrite 'run-selftests.sh --shard 1/6')"
+eq "heavy: local-prod-gate.sh"       "$QW --label local-prod-gate.sh --wait 60 -- scripts/local-prod-gate.sh" \
+   "$(rewrite 'scripts/local-prod-gate.sh')"
+eq "light then heavy in one chain"   "pytest a.py && ${P}git push" "$(rewrite 'pytest a.py && git push')"
+printf 'FLEET_HEAVY_LIGHT_RE='"'"'(?!)'"'"'\n' > "$FLEET_CONF_DIR/fleet.settings"
+eq "FLEET_HEAVY_LIGHT_RE=(?!) → light list off" "$QW --label pytest --wait 60 -- pytest a.py" "$(rewrite 'pytest a.py')"
+printf 'FLEET_HEAVY_LIGHT_RE='"'"'git\\s+push\\s+--dry-run'"'"'\n' > "$FLEET_CONF_DIR/fleet.settings"
+eq "custom FLEET_HEAVY_LIGHT_RE wins over heavy" "" "$(rewrite 'git push --dry-run')"
+eq "custom FLEET_HEAVY_LIGHT_RE replaces the default" "$QW --label pytest --wait 60 -- pytest a.py" "$(rewrite 'pytest a.py')"
+rm -f "$FLEET_CONF_DIR/fleet.settings"
 
 eq "quoted mention is data"       "" "$(rewrite 'git commit -m "then git push and pytest"')"
 eq "argument mention is data"     "" "$(rewrite 'echo git push')"
@@ -164,6 +212,11 @@ hook_re="$("$PY" -c 'import importlib.util,sys
 s=importlib.util.spec_from_file_location("g",sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
 print(m.HEAVY_RE_DEFAULT,end="")' "$GUARD")"
 eq "default FLEET_HEAVY_RE in lockstep (fleet-lib.sh == bash-guard.py)" "$lib_re" "$hook_re"
+lib_lre="$(FLEET_SKIP_GLOBAL_CONF=1 bash -c '. "$1/fleet-lib.sh"; printf %s "$FLEET_HEAVY_LIGHT_RE_DEFAULT"' _ "$BIN")"
+hook_lre="$("$PY" -c 'import importlib.util,sys
+s=importlib.util.spec_from_file_location("g",sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+print(m.HEAVY_LIGHT_RE_DEFAULT,end="")' "$GUARD")"
+eq "default FLEET_HEAVY_LIGHT_RE in lockstep (fleet-lib.sh == bash-guard.py)" "$lib_lre" "$hook_lre"
 
 if [ "$fails" -eq 0 ]; then echo "fleet-heavy-selftest: PASS"; exit 0; fi
 echo "fleet-heavy-selftest: $fails FAILED" >&2; exit 1

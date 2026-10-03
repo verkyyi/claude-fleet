@@ -660,6 +660,23 @@ HEAVY_RE_DEFAULT = (r"git\b(?:\s+(?:-[Cc]\s+\S+|-\S+))*\s+push\b"
                     r"|(?:python3?\s+-m\s+)?pytest\b"
                     r"|npm\s+(?:run\s+)?test\b"
                     r"|(?:(?:ba|z)?sh\s+)?(?:\S*/)?(?:run-selftests|local-prod-gate|pre-pr)\.sh\b")
+# LIGHT beats heavy (issue #1313): a test run aimed at one file / node / name
+# filter is seconds of work, and queuing it behind three multi-minute gates left
+# sessions idle for nothing. Matched first, at the same command position; a hit
+# passes the statement through untouched. FLEET_HEAVY_LIGHT_RE replaces it (set
+# `(?!)` to make every heavy match queue again). Mirrored from fleet-lib.sh's
+# FLEET_HEAVY_LIGHT_RE_DEFAULT. One statement is one segment (split at | && ; \n),
+# so `.*` never reaches past a pipe. Still heavy: bare pytest / a directory, any
+# xdist fan-out (-n, --numprocesses, --dist, -p xdist), npm test without a file /
+# -t filter, run-selftests.sh with no name, a glob, or an option (--shard).
+HEAVY_LIGHT_RE_DEFAULT = (
+    r"(?:python3?\s+-m\s+)?pytest\b"
+    r"(?!.*\s(?:-n|--numprocesses|--dist)(?![A-Za-z-])|.*\s-p\s*xdist\b)"
+    r"(?=.*\s(?:-k|\S*::|\S+\.py(?:\s|$)))"
+    r"|npm\s+(?:run\s+)?test\b"
+    r"(?=.*\s--\s(?:.*\s)?(?:-t\b|--testNamePattern\b|\S+\.[cm]?[jt]sx?(?:\s|$)))"
+    r"|(?:(?:ba|z)?sh\s+)?(?:\S*/)?run-selftests\.sh(?:\s+[A-Za-z][^\s*?\[<>&]*)+"
+    r"(?=\s*(?:\d*[<>&]|$))")
 # Shell keywords, subshell/group openers and VAR=val assignments sit BEFORE the
 # insertion point (the assignment then reaches the wrapper and so its child).
 _HEAVY_LEAD = re.compile(
@@ -667,7 +684,7 @@ _HEAVY_LEAD = re.compile(
     r"(?:\w+=(?:\"[^\"]*\"|'[^']*'|\S)*\s+)*")
 # Transparent command prefixes: the wrapper goes before them, the match after.
 _HEAVY_PASS = r"(?:(?:time|nohup|nice(?:\s+-n\s*-?\d+)?|timeout\s+\S+)\s+)*"
-_HEAVY_KEYS = ("FLEET_HEAVY", "FLEET_HEAVY_RE", "FLEET_HEAVY_WAIT")
+_HEAVY_KEYS = ("FLEET_HEAVY", "FLEET_HEAVY_RE", "FLEET_HEAVY_WAIT", "FLEET_HEAVY_LIGHT_RE")
 _HEAVY_CONF = None
 
 
@@ -685,7 +702,7 @@ def _heavy_conf():
         try:
             with open(path) as f:
                 for line in f:
-                    m = re.match(r"\s*(?:export\s+)?(FLEET_HEAVY(?:_RE|_WAIT)?)=(.*)$", line)
+                    m = re.match(r"\s*(?:export\s+)?(FLEET_HEAVY(?:_RE|_WAIT|_LIGHT_RE)?)=(.*)$", line)
                     if m:
                         try:
                             toks = shlex.split(m.group(2), comments=True)
@@ -728,6 +745,13 @@ def check_heavy(masked_seg, span, masked_cmd, tool_input):
     lead = _HEAVY_LEAD.match(masked_seg).end()
     if re.match(r"\S*fleet-heavy\.sh(?=\s|$)", masked_seg[lead:]):
         return                                   # already wrapped
+    light_re = conf.get("FLEET_HEAVY_LIGHT_RE", "").strip() or HEAVY_LIGHT_RE_DEFAULT
+    try:
+        light = re.match(_HEAVY_PASS + "(?:" + light_re + ")", masked_seg[lead:])
+    except re.error:
+        light = re.match(_HEAVY_PASS + "(?:" + HEAVY_LIGHT_RE_DEFAULT + ")", masked_seg[lead:])
+    if light:
+        return                                   # light test run: never queued (#1313)
     user_re = conf.get("FLEET_HEAVY_RE", "").strip() or HEAVY_RE_DEFAULT
     try:
         m = re.match(_HEAVY_PASS + "(" + user_re + ")", masked_seg[lead:])

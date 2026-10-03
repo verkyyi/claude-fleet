@@ -27,10 +27,12 @@
 #
 # Usage:
 #   fleet-heavy.sh [--slots N] [--wait S] [--label L] -- <cmd…>   (exit = cmd's)
-#   fleet-heavy.sh --status [--slots N]                            held / waiting
+#   fleet-heavy.sh --status [--slots N]                            held / waiting /
+#                                                                  24h wait median+max
 #
 # Keys (global): FLEET_HEAVY (0 = pass straight through) · FLEET_HEAVY_SLOTS (3) ·
-# FLEET_HEAVY_WAIT (1800) · FLEET_HEAVY_RE (the hook's matcher). FLEET_HEAVY_DIR
+# FLEET_HEAVY_WAIT (1800) · FLEET_HEAVY_RE (the hook's matcher) · FLEET_HEAVY_LIGHT_RE
+# (the hook's never-queue list, matched first — issue #1313). FLEET_HEAVY_DIR
 # overrides the slot dir (a selftest seam). Re-entrant: a command already holding
 # a slot (FLEET_HEAVY_HELD=1 in its env) runs nested heavies straight through, so
 # a wrapped gate that pushes cannot deadlock on itself.
@@ -207,6 +209,31 @@ def age(start):
     return "%dm%02ds" % (s // 60, s % 60) if s >= 60 else "%ds" % s
 
 
+def wait_stats(window=86400):
+    """`waits 24h:` line off events.log's `waited=Ns` (acquire + timeout rows,
+    issue #1313) — the number that says whether light runs really stopped queuing."""
+    cut = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - window))
+    w = []
+    try:
+        with open(os.path.join(DIR, "events.log")) as f:
+            for line in f:
+                p = line.rstrip("\n").split("\t")
+                if len(p) < 6 or p[0] < cut or p[1] not in ("acquire", "timeout"):
+                    continue
+                for tok in p[5].split():
+                    if tok.startswith("waited=") and tok.endswith("s") and tok[7:-1].isdigit():
+                        w.append(int(tok[7:-1]))
+    except OSError:
+        pass
+    if not w:
+        return "  waits 24h: none recorded"
+    w.sort()
+    n = len(w)
+    med = w[n // 2] if n % 2 else (w[n // 2 - 1] + w[n // 2]) // 2
+    return "  waits 24h: %d runs · %d queued · median %ds · max %ds" % (
+        n, sum(1 for x in w if x > 0), med, w[-1])
+
+
 def status(slots):
     if not os.path.isdir(DIR):
         print("heavy: 0/%d held · 0 waiting   (%s — not created yet)" % (slots, DIR))
@@ -221,6 +248,7 @@ def status(slots):
             print("  held     slot-%-2d (no metadata)" % k)
     for m in w:
         print("  waiting          pid %-7d %-12s %-20s %s" % (m[0], m[1], m[2], age(m[3])))
+    print(wait_stats())
     # A slot past --slots (another login configured more) still counts on the box.
     extra = [k for k, _ in probe_held(64) if k > slots]
     if extra:
