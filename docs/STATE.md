@@ -567,7 +567,8 @@ tmux_calls_per_s=<n.n>` — the epoch stays the first token for the liveness rea
 - **Compact in place before the handoff (#1269).** The same `done` edge runs a
   three-step compaction for a **worker** whose `@ctx_pct` sits in
   `[FLEET_COMPACT_PREP_PCT, FLEET_AUTO_HANDOFF_PCT)` (prep default 70; handoff 0 =
-  no upper line), tracked in the window option `@compact_stage`:
+  no upper line; either line set as `FLEET_*_TOKENS` is converted against the
+  pane's `@ctx_limit` and wins, #1317), tracked in the window option `@compact_stage`:
   `prep` (a `block` asking for a recovery map in `<git-dir>/fleet-recovery-map.md`)
   → `compacting` (next clean Stop: `bin/fleet-compact-send.sh`, detached, types
   `/compact <keep the map>` once the pane is idle and nobody is typing at it)

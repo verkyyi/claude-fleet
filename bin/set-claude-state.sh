@@ -225,7 +225,8 @@ fi
 # than Claude's near-limit auto-compaction. This ONLY adds the trigger; the whole
 # handoff/clear/resume machinery (commands/fleet-handoff.md + fleet-handoff-cycle.sh)
 # is reused unchanged. Knobs: FLEET_AUTO_HANDOFF_PCT (0 = OFF; mirrors
-# FLEET_RUNAWAY_CPU_PCT) and FLEET_HANDOFF_DEFER_SECS (the typing hold, issue #571).
+# FLEET_RUNAWAY_CPU_PCT), or FLEET_AUTO_HANDOFF_TOKENS to set it in tokens used
+# (issue #1317), and FLEET_HANDOFF_DEFER_SECS (the typing hold, issue #571).
 # Only 'done' (the Stop hook) reaches here, so the JSON is only ever emitted in the
 # Stop-hook context that parses it as a decision.
 #
@@ -252,7 +253,8 @@ if [ "$sem" = "done" ]; then
   [ -n "$_bin" ] && [ -r "$_bin/fleet-lang.sh" ] && . "$_bin/fleet-lang.sh"
   _kv=''
   [ -n "$_bin" ] && [ -f "$_bin/fleet-hook-conf.sh" ] \
-    && _kv=$(bash "$_bin/fleet-hook-conf.sh" FLEET_AUTO_HANDOFF_PCT FLEET_HANDOFF_DEFER_SECS FLEET_COMPACT_PREP_PCT FLEET_COMPACT_MAX 2>/dev/null)
+    && _kv=$(bash "$_bin/fleet-hook-conf.sh" FLEET_AUTO_HANDOFF_PCT FLEET_HANDOFF_DEFER_SECS FLEET_COMPACT_PREP_PCT FLEET_COMPACT_MAX \
+         FLEET_AUTO_HANDOFF_TOKENS FLEET_COMPACT_PREP_TOKENS 2>/dev/null)
   _hp=$(printf '%s\n' "$_kv" | sed -n 1p)
   _ds=$(printf '%s\n' "$_kv" | sed -n 2p)             # typing-deferral window (issue #571)
   _cp=$(printf '%s\n' "$_kv" | sed -n 3p)             # compact-prep threshold (issue #1269)
@@ -268,6 +270,24 @@ if [ "$sem" = "done" ]; then
     '') if [ -n "$_bin" ] && [ -f "$_bin/fleet-lib.sh" ] && [ -f "$_bin/fleet-hook-conf.sh" ]; then _cm=2; else _cm=0; fi ;;
     *[!0-9]*) _cm=0 ;;
   esac
+  # Lines set in TOKENS (issue #1317) win over the % keys: converted here against
+  # this pane's window size (@ctx_limit, stamped by the statusline), the same
+  # rounded-up / clamped-to-100 arithmetic as fleet_ctx_line in fleet-lib.sh (this
+  # `sh` script cannot source it; ctx-token-line-selftest.sh pins the lockstep).
+  # 0/unset ⇒ the % key; no readable @ctx_limit ⇒ the % key. One tmux read, and
+  # only when a token key is set — the unset path is byte-for-byte today's.
+  _ht=$(printf '%s\n' "$_kv" | sed -n 5p)
+  _ct=$(printf '%s\n' "$_kv" | sed -n 6p)
+  case "$_ht" in ''|*[!0-9]*) _ht=0 ;; esac
+  case "$_ct" in ''|*[!0-9]*) _ct=0 ;; esac
+  if [ "$_ht" -gt 0 ] || [ "$_ct" -gt 0 ]; then
+    _lim=$(tmux display-message -p -t "$TMUX_PANE" '#{@ctx_limit}' 2>/dev/null)
+    case "$_lim" in ''|*[!0-9]*) _lim=0 ;; esac
+    if [ "$_lim" -gt 0 ]; then
+      if [ "$_ht" -gt 0 ]; then _hp=$(( (_ht * 100 + _lim - 1) / _lim )); [ "$_hp" -gt 100 ] && _hp=100; fi
+      if [ "$_ct" -gt 0 ]; then _cp=$(( (_ct * 100 + _lim - 1) / _lim )); [ "$_cp" -gt 100 ] && _cp=100; fi
+    fi
+  fi
   _hp_conf=$_hp                                      # the configured line, before any suppression below
   _sha=0                                             # this Stop continues a prior Stop-hook block
   case "$_stop_payload" in

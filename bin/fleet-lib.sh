@@ -5555,3 +5555,31 @@ fleet_heavy_dir() {
   else printf '/var/tmp/claude-fleet/heavy\n'
   fi
 }
+
+# ------------------------------------------------- context lines in tokens (#1317)
+# The compact-prep / auto-handoff lines may be set as TOKENS USED instead of a %
+# (FLEET_COMPACT_PREP_TOKENS / FLEET_AUTO_HANDOFF_TOKENS; 0/unset = use the *_PCT
+# key). Every window is 1M tokens today, so "70%" meant 700k — long after quality
+# had started to slide, and nobody saw it. A token line survives a model whose
+# window is a different size: it is converted per Stop against the pane's
+# @ctx_limit (the window SIZE conf/statusline.sh stamps), and a pane with no
+# @ctx_limit falls back to the *_PCT key.
+#
+# fleet_ctx_line <tokens> <limit> — the % line <tokens> is in a <limit> window:
+# rounded UP (a token line never fires before that many tokens are used) and
+# clamped to 100 (a line at/over the window can never be crossed — fleet-doctor
+# WARNs on it). Prints nothing and returns 1 on a non-positive / non-numeric input,
+# so a caller keeps its *_PCT value. bin/set-claude-state.sh is `sh`-wired and
+# cannot source this file: it carries the same arithmetic inline, and
+# ctx-token-line-selftest.sh holds the two in lockstep.
+# shellcheck disable=SC2034  # read by bin/fleet-doctor.sh
+FLEET_CLAUDE_AUTOCOMPACT_PCT_DEFAULT=95   # Claude Code's own near-limit compaction (approx.; CLAUDE_AUTOCOMPACT_PCT_OVERRIDE wins)
+fleet_ctx_line() {
+  local t="${1:-}" l="${2:-}" p
+  case "$t" in ''|*[!0-9]*) return 1 ;; esac
+  case "$l" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$t" -gt 0 ] && [ "$l" -gt 0 ] || return 1
+  p=$(( (t * 100 + l - 1) / l ))
+  [ "$p" -gt 100 ] && p=100
+  printf '%s\n' "$p"
+}
