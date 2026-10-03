@@ -1134,8 +1134,10 @@ elif [ "$morphn" -gt 0 ]; then
   # awk's substr, not `cut -c`: an argv can hold multibyte bytes and cut would
   # slice one in half, and the "Illegal byte sequence" that follows would be the
   # only thing the operator ever saw of this line.
-  mcmd=$(printf '%s' "$mtop" | cut -f4 | awk '{ print substr($0,1,70) }')
-  warn machine "load $mload on $mcores cores (${mper}/core) — and $morphn ORPHANED runaway(s): PPID=1, fleet-fingerprinted, burning CPU with no worktree or pane to reap them. Worst: pid $mpid at ${mcpu}%, up $met — \`${mcmd}…\`. Full list: \`bin/fleet-diskguard.sh --orphans\`; a leaked load experiment stops with \`bin/fleet-loadgen.sh --stop\`; forensics land in \${FLEET_CONF_DIR:-~/.config/claude-fleet}/diskguard/incident-orphan-*.log"
+  # columns: pid / %cpu / etime / rssMB / argv (RSS joined at col 4 in #1292)
+  mrss=$(printf '%s' "$mtop" | cut -f4)
+  mcmd=$(printf '%s' "$mtop" | cut -f5 | awk '{ print substr($0,1,70) }')
+  warn machine "load $mload on $mcores cores (${mper}/core) — and $morphn ORPHANED runaway(s): PPID=1, fleet-fingerprinted, burning CPU with no worktree or pane to reap them. Worst: pid $mpid at ${mcpu}%, ${mrss} MB, up $met — \`${mcmd}…\`. Full list: \`bin/fleet-diskguard.sh --orphans\`; a leaked load experiment stops with \`bin/fleet-loadgen.sh --stop\`; forensics land in \${FLEET_CONF_DIR:-~/.config/claude-fleet}/diskguard/incident-orphan-*.log"
 elif awk -v p="$mper" -v w="$mwarn" 'BEGIN{ exit !(p>=w) }'; then
   warn machine "load $mload on $mcores cores = ${mper}/core, at or over the ${mwarn}/core line — every fleet on this box is sharing it. No fleet-fingerprinted orphan is responsible (\`bin/fleet-diskguard.sh --orphans\` is empty), so look at what else is running"
 else

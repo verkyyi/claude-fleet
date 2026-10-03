@@ -2879,6 +2879,126 @@ fleet_reap_worktree_listeners() {
   return 0
 }
 
+# ---- memory: the readings memguard acts on (issue #1292, EPIC #1291) -----------
+# 2026-10-03 the Mac mini froze and rebooted with every session on it: one `git`
+# went from nothing to ~40 GB in about two seconds, beside three headless-browser
+# orphans that had been holding ~50 GB for five days without anyone knowing.
+# Nothing here watched memory at all. These are the shared READINGS — the
+# watchdog (bin/fleet-memguard.sh), the doctor's memory line and the admission
+# gate all ask the same three questions through them, so they cannot disagree.
+
+# fleet_mem_probe — the machine's memory pressure, ONE line, space-separated:
+#   <level> <avail_pct> <compressor_pct> <swap_used_mb>
+# level uses the kernel's own numbering (macOS kern.memorystatus_vm_pressure_level):
+# 1 normal, 2 warn, 4 critical. On Linux it is derived from MemAvailable (<5% → 4,
+# <15% → 2). FLEET_MEM_PROBE_CMD replaces the whole reading (a selftest stub:
+# `echo 4 5 97 0`). Prints nothing when the machine will not say.
+fleet_mem_probe() {
+  if [ -n "${FLEET_MEM_PROBE_CMD:-}" ]; then
+    sh -c "$FLEET_MEM_PROBE_CMD" 2>/dev/null | awk 'NF{print; exit}'; return 0
+  fi
+  if [ -r /proc/meminfo ]; then
+    awk '/^MemTotal:/{t=$2} /^MemAvailable:/{a=$2} /^SwapTotal:/{st=$2} /^SwapFree:/{sf=$2}
+      END { if (t <= 0) exit; p = int(a * 100 / t); l = (p < 5 ? 4 : (p < 15 ? 2 : 1))
+            printf "%d %d 0 %d\n", l, p, int((st - sf) / 1024) }' /proc/meminfo 2>/dev/null
+    return 0
+  fi
+  command -v vm_stat >/dev/null 2>&1 || return 0
+  { sysctl -n kern.memorystatus_vm_pressure_level hw.memsize vm.swapusage 2>/dev/null
+    printf '%s\n' '--vm'; vm_stat 2>/dev/null; } | awk '
+    function pages(s) { s = $NF; gsub(/[^0-9]/, "", s); return s + 0 }
+    $0 == "--vm" { vm = 1; next }
+    !vm { n++
+          if (n == 1) lvl = $1 + 0
+          else if (n == 2) mem = $1 + 0
+          else if ($0 ~ /used = /) { u = $0; sub(/.*used = /, "", u); sub(/M.*/, "", u); sw = u + 0 }
+          next }
+    /page size of/ { ps = $0; sub(/.*page size of /, "", ps); ps += 0; next }
+    /^Pages free:/ { fr = pages() } /^Pages inactive:/ { in_ = pages() }
+    /^Pages speculative:/ { sp = pages() } /^Pages occupied by compressor:/ { co = pages() }
+    END { if (mem <= 0 || ps <= 0) exit
+          tp = mem / ps; if (lvl != 1 && lvl != 2 && lvl != 4) lvl = 1
+          printf "%d %d %d %d\n", lvl, int((fr + in_ + sp) * 100 / tp), int(co * 100 / tp), int(sw) }'
+}
+
+# fleet_mem_total_mb — physical memory in MB (FLEET_MEM_TOTAL_MB overrides — a
+# stub, or a host that wants its percentages taken of a smaller figure).
+fleet_mem_total_mb() {
+  case "${FLEET_MEM_TOTAL_MB:-}" in ''|*[!0-9]*) : ;; *) printf '%s\n' "$FLEET_MEM_TOTAL_MB"; return 0 ;; esac
+  if [ -r /proc/meminfo ]; then awk '/^MemTotal:/{printf "%d\n", $2/1024; exit}' /proc/meminfo; return 0; fi
+  sysctl -n hw.memsize 2>/dev/null | awk 'NF{printf "%d\n", $1/1048576; exit}'
+}
+
+# fleet_proc_mem_rows — every process of THIS user, from ONE `ps` (cheap enough to
+# run every 2s), one row each, sorted by RSS descending:
+#   pid \t ppid \t rss_mb \t age_s \t class \t argv
+# class answers "is this ours?" from the process tree alone, no lsof:
+#   agent   a claude / codex session process itself (executable basename, the
+#           native build's …/claude/versions/<semver>, or node running one) —
+#           never killed by memguard's spike rule: losing a session is the outage
+#   fleet   a DESCENDANT of an agent, or of a tmux server on a NAMED socket (`-L`
+#           — every fleet runs on one, issue #159; an ad-hoc default-socket tmux
+#           is not a fleet), so: a command some session started
+#   orphan  reparented to init (PPID=1) and not an agent — ours only if its cwd is
+#           a fleet anchor (fleet_listen_anchor); the caller decides, with lsof,
+#           only for the rare row that crosses a line
+#   other   everything else (the operator's own apps, launchd agents) — not ours
+# FLEET_MEM_PS_CMD replaces the `ps` (a selftest stub); its output is
+# `pid ppid uid rss_kb etime command…`, the shape `ps -Ao` prints below.
+fleet_proc_mem_rows() {
+  local uid; uid="$(id -u 2>/dev/null)"
+  { if [ -n "${FLEET_MEM_PS_CMD:-}" ]; then sh -c "$FLEET_MEM_PS_CMD" 2>/dev/null
+    else ps -Ao pid=,ppid=,uid=,rss=,etime=,command= 2>/dev/null; fi; } | awk -v me="$uid" '
+    function secs(et,   f, n) {
+      n = split(et, f, /[-:]/)
+      if (n == 4) return f[1]*86400 + f[2]*3600 + f[3]*60 + f[4]
+      if (n == 3) return f[1]*3600 + f[2]*60 + f[3]
+      if (n == 2) return f[1]*60 + f[2]
+      return 0 }
+    function base(s) { sub(/.*\//, "", s); return s }
+    { if ($3 != me) next
+      p = $1 + 0; par[p] = $2 + 0; rss[p] = int($4 / 1024); ag[p] = secs($5)
+      a = ""; for (i = 6; i <= NF; i++) a = a (i > 6 ? " " : "") $i; av[p] = a
+      b0 = base($6); b1 = base($7)
+      agent[p] = (b0 == "claude" || b0 == "codex" || $6 ~ /\/claude\/versions\// \
+                  || (b0 == "node" && ($7 ~ /claude-code|\/codex/ || b1 == "claude" || b1 == "codex")))
+      srv[p] = ((b0 == "tmux" || b0 ~ /^tmux:/) && a ~ / -L /)
+      ids[++n] = p }
+    END {
+      for (i = 1; i <= n; i++) { p = ids[i]
+        if (agent[p]) c = "agent"
+        else {
+          c = ""; q = par[p]; h = 0
+          while (q > 1 && h++ < 64) {
+            if (agent[q] || srv[q]) { c = "fleet"; break }
+            if (!(q in par)) break
+            q = par[q] }
+          if (c == "") c = (par[p] == 1 && !srv[p] ? "orphan" : "other") }
+        printf "%d\t%d\t%d\t%d\t%s\t%s\n", p, par[p], rss[p], ag[p], c, av[p] } }' \
+    | sort -t "$(printf '\t')" -k3,3nr
+}
+
+# fleet_proc_cwd <pid> — the process's working directory, or nothing.
+fleet_proc_cwd() {
+  if [ -d "/proc/${1:-x}" ]; then readlink "/proc/$1/cwd" 2>/dev/null; return 0; fi
+  command -v lsof >/dev/null 2>&1 || return 0
+  lsof -w -a -p "${1:-0}" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1
+}
+
+# fleet_is_fleet_proc <pid> — 0 iff <pid> is ours: an agent, a command an agent /
+# fleet pane started, or an orphan whose cwd is a fleet anchor (a scratchpad, a
+# `*-issue-N` / `*-scratch-N` worktree, ~/.claude). Never a machine-wide verdict.
+fleet_is_fleet_proc() {
+  local pid="${1:-}" cls
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  cls="$(fleet_proc_mem_rows | awk -F'\t' -v p="$pid" '$1 == p { print $5; exit }')"
+  case "$cls" in
+    agent|fleet) return 0 ;;
+    orphan) [ -n "$(fleet_listen_anchor "$(fleet_proc_cwd "$pid")")" ] ;;
+    *) return 1 ;;
+  esac
+}
+
 # ---- retiring a worktree without paying for its bytes (issue #586) ------------
 # `git worktree remove` deletes the tree SYNCHRONOUSLY, one unlink at a time. In a
 # monorepo worktree that is 2.8 GB / 308k files of node_modules, and it measured

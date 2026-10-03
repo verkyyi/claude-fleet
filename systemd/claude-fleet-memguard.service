@@ -1,0 +1,22 @@
+# claude-fleet memguard — Linux systemd user unit (parity with launchd
+# com.claude-fleet.memguard, issue #1292). Always-on: the launchd plist uses
+# KeepAlive, here Restart=always. Samples every 2s and SIGKILLs a session's
+# command whose memory spikes while the machine is under pressure. Install:
+# substitute __HOME__, drop into ~/.config/systemd/user/, then
+# `systemctl --user enable --now claude-fleet-memguard.service`.
+[Unit]
+Description=claude-fleet memguard (stops a fleet process whose memory spikes)
+
+[Service]
+Type=simple
+ExecStart=/bin/bash __HOME__/.claude/fleet/bin/fleet-memguard.sh --daemon
+Environment=LANG=en_US.UTF-8
+Environment=PATH=__HOME__/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+Restart=always
+LimitNOFILE=65536
+RestartSec=2
+StandardOutput=null
+StandardError=append:__HOME__/.claude/fleet/logs/memguard.systemd.log
+
+[Install]
+WantedBy=default.target

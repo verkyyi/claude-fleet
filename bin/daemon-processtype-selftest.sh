@@ -57,9 +57,13 @@ ok()   { CHECKS=$((CHECKS + 1)); }
 #                                 vs 2s at load 12/10 cores. git, banner and
 #                                 snapshot alone ate 50s of a 61s tick, and the
 #                                 unit ran every 3.5-5 min instead of every 1.
+#   memguard                      a 2s KeepAlive sampler whose whole job is to act
+#                                 within seconds WHILE the machine is under memory
+#                                 pressure (issue #1292) — the moment a Background
+#                                 QoS job is starved first
 # POLL: gh / tmux / network polling only — Background is correct and stays.
 IO_UNITS='cleanup worktree-autoclean diskguard base-sync dispatch sleep install-sync'
-CADENCE_UNITS='collect'
+CADENCE_UNITS='collect memguard'
 POLL_UNITS='pr-refresh spinner quotawatch issue-bridge ledger-watch webhook'
 
 ptype() {  # $1 = unit → the ProcessType string, or the empty string if absent
