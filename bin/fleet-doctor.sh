@@ -1781,7 +1781,13 @@ else
   rhb_get() { sed -n "s/^$1=//p" "$rhb" | head -n1; }
   rhb_note=''
   [ -n "$(rhb_get skipped)" ] && rhb_note="; skipped: $(rhb_get skipped)"
-  pass state "state reconcile ${rhb_age}s ago — $(rhb_get working) working window(s) checked against native idle, $(rhb_get demoted) demoted$rhb_note"
+  # Contradicting state signals (#1270): a `working` hook on a silent pane the
+  # registry calls idle/gone/busy. Counted from the (trimmed) reconcile.log, and
+  # `contested` is how many still contradict on the latest tick.
+  rlog="$(dirname "$0")/../logs/reconcile.log"
+  rung_n=$(grep -c ' rung_health ' "$rlog" 2>/dev/null) || rung_n=0
+  rung_live=$(rhb_get contested); rung_live=${rung_live:-0}
+  pass state "state reconcile ${rhb_age}s ago — $(rhb_get working) working window(s) checked against native idle, $(rhb_get demoted) demoted; rung_health: ${rung_n} contradiction(s) in reconcile.log, ${rung_live} live$rhb_note"
 fi
 # The sleep-judgment distribution over the last hour (#837). Every scan record now
 # carries an `at` timestamp (#838), so the histogram the 2026-09-19 analysis built
