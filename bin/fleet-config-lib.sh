@@ -403,6 +403,9 @@ fcfg_label_i18n() {
     FLEET_MEM_ORPHAN_ACTION) printf '遗留进程动作' ;;
     FLEET_LOAD_WARN_PER_CORE) printf 'Doctor 每核心负载警告' ;;
     FLEET_FSEVENTSD_WARN_MB) printf 'fseventsd 警告 MB' ;;
+    FLEET_FILES_WARN_PCT) printf '文件句柄警告 %%' ;;
+    FLEET_PTY_WARN_PCT) printf '终端用量警告 %%' ;;
+    FLEET_MEM_NOTIFY_COOLDOWN) printf '内存通知冷却' ;;
     FLEET_DOCTOR_SPOTLIGHT) printf 'Doctor Spotlight 检查' ;;
     FLEET_DOCTOR_SLEEP) printf 'Doctor sleep 检查' ;;
     FLEET_DOCTOR_SIRI) printf 'Doctor Siri 检查' ;;

@@ -314,4 +314,86 @@ CHECKS=$((CHECKS + 1))
 quiet "8: the watch share must print NOTHING on stderr"
 echo Darwin > "$WORK/os"
 
-printf 'selftest OK: fleet-doctor machine line (%s assertions — load, cores, orphan naming, fseventsd, session caps, tmux rate, render-survival, stderr silence)\n' "$CHECKS"
+# ============================================================================
+# 9. memory / files / pty (issue #1293) — each reading walks PASS and WARN, and a
+#    reading the machine will not give is INFO (a Linux CI box), never WARN.
+# ============================================================================
+rline() { printf '%s\n' "$2" | grep -aE "^[[:space:]]+(PASS|WARN|INFO|FAIL)[[:space:]]+$1([[:space:]]|\$)" | head -1; }
+uid_me="$(id -u)"
+printf '%s\n' \
+  "  500     1 $uid_me 3145728 01:00:00 /usr/local/bin/claude --resume x" \
+  "  501   500 $uid_me 9437184 00:10:00 /usr/bin/git gc --aggressive" \
+  "  502   500 $uid_me 1048576 00:10:00 /usr/bin/node /opt/vite/bin/vite.js" \
+  "  503   500 $uid_me 1024 00:10:00 /bin/sleep 9" \
+  "  600     1 $uid_me 20971520 05:00:00 /Applications/Safari.app/Contents/MacOS/Safari" > "$WORK/memps"
+res_doctor() {
+  FLEET_MEM_PS_CMD="cat $WORK/memps" FLEET_MEM_PROBE_CMD="$1" FLEET_FILES_PROBE_CMD="$2" \
+  FLEET_PTY_PROBE_CMD="$3" run_doctor
+}
+out="$(res_doctor 'echo 1 63 5 6' 'echo 22000 491520' 'echo 38 511')"
+l="$(rline memory "$out")"
+has "PASS" "$l" "9a: normal pressure must PASS"
+has "63% available" "$l" "9a: the memory line must state available %"
+has "compressor 5%" "$l" "9a: the memory line must state the compressor %"
+has "swap 6 MB" "$l" "9a: the memory line must state swap"
+has "git 9216 MB (pid 501)" "$l" "9a: the memory line must name the fleet's largest process first"
+has "claude 3072 MB (pid 500)" "$l" "9a: an agent counts as a fleet process"
+has "node vite.js" "$l" "9a: an interpreter is named by its script"
+CHECKS=$((CHECKS + 1)); case "$l" in *Safari*|*sleep*) fail "9a: only the top three FLEET processes are named (not the operator's apps)" "$l";; esac
+l="$(rline files "$out")"; has "PASS" "$l" "9a: a 4% file table must PASS"; has "22000 / 491520" "$l" "9a: files must state used / max"
+l="$(rline pty "$out")";   has "PASS" "$l" "9a: a 7% pty table must PASS"; has "38 / 511" "$l" "9a: pty must state used / max"
+survived "$out" || fail "9a: the doctor did not survive the resource lines" "$(rline memory "$out")"
+quiet "9a: the resource lines must print NOTHING on stderr"
+out="$(res_doctor 'echo 2 9 41 8000' 'echo 400000 491520' 'echo 450 511')"
+l="$(rline memory "$out")";  has "WARN" "$l" "9b: pressure warn must WARN"; has "pressure warn" "$l" "9b: the WARN must name the level"
+has "fleet-memguard.sh --once --dry-run" "$l" "9b: the WARN must name the next command"
+l="$(rline files "$out")";   has "WARN" "$l" "9b: an 81% file table must WARN"; has "81%" "$l" "9b: the WARN must state the %"
+l="$(rline pty "$out")";     has "WARN" "$l" "9b: an 88% pty table must WARN"
+out="$(res_doctor 'echo 4 3 60 30000' 'echo 400000 491520' 'echo 450 511')"
+l="$(rline memory "$out")";  has "WARN" "$l" "9c: critical pressure must WARN"; has "critical" "$l" "9c: the WARN must say critical"
+out="$(FLEET_FILES_WARN_PCT=90 FLEET_PTY_WARN_PCT=95 res_doctor 'echo 1 63 5 6' 'echo 400000 491520' 'echo 450 511')"
+l="$(rline files "$out")";   has "PASS" "$l" "9d: FLEET_FILES_WARN_PCT must be honored"
+l="$(rline pty "$out")";     has "PASS" "$l" "9d: FLEET_PTY_WARN_PCT must be honored"
+out="$(res_doctor 'true' 'echo garbled' 'echo 3 0')"
+for k in memory files pty; do
+  l="$(rline "$k" "$out")"; has "INFO" "$l" "9e: an unreadable $k must be INFO, never WARN (Linux CI)"
+done
+survived "$out" || fail "9e: the doctor did not survive unreadable resources" "$(rline memory "$out")"
+quiet "9e: unreadable resources must print NOTHING on stderr"
+
+# ============================================================================
+# 10. The diskguard --watch share for memory / files / pty: notify on the EDGE
+#     only, once, honor the cooldown, re-arm on recovery.
+# ============================================================================
+: > "$WORK/notified"; rm -f "$WORK/conf/diskguard/res-"*
+rwatch() {
+  PATH="$WORK/fakepath:$PATH" HOME="$WORK" FLEET_SKIP_GLOBAL_CONF=1 FLEET_CONF_DIR="$WORK/conf" \
+  FLEET_NOTIFY_CMD="$WORK/notify" FLEET_DISKGUARD_SOURCE=1 FLEET_MEM_PS_CMD="cat $WORK/memps" \
+  FLEET_MEM_PROBE_CMD="cat $WORK/rmem" FLEET_FILES_PROBE_CMD="cat $WORK/rfiles" FLEET_PTY_PROBE_CMD="cat $WORK/rpty" \
+    bash -c ". '$WORK/bin/fleet-diskguard.sh'; mem_watch" 2>>"$WORK/stderr"
+}
+nnot() { grep -c '^---$' "$WORK/notified"; }
+: > "$WORK/stderr"
+echo '1 63 5 6' > "$WORK/rmem"; echo '22000 491520' > "$WORK/rfiles"; echo '38 511' > "$WORK/rpty"
+rwatch; rwatch
+CHECKS=$((CHECKS + 1)); [ "$(nnot)" = 0 ] || fail "10a: a healthy machine must never notify" "$(cat "$WORK/notified")"
+echo '2 9 41 8000' > "$WORK/rmem"; rwatch; rwatch; rwatch
+CHECKS=$((CHECKS + 1)); [ "$(nnot)" = 1 ] || fail "10b: entering warn must notify exactly ONCE over three ticks" "$(cat "$WORK/notified")"
+has "memory pressure: warn" "$(cat "$WORK/notified")" "10b: the notice must name the level"
+has "git (pid 501, 9216 MB)" "$(cat "$WORK/notified")" "10b: the notice must name the largest fleet process"
+echo '4 3 60 30000' > "$WORK/rmem"; rwatch
+CHECKS=$((CHECKS + 1)); [ "$(nnot)" = 1 ] || fail "10c: warn → critical inside the cooldown must stay quiet" "$(cat "$WORK/notified")"
+echo '1 63 5 6' > "$WORK/rmem"; rwatch
+echo '2 9 41 8000' > "$WORK/rmem"; FLEET_MEM_NOTIFY_COOLDOWN=0 rwatch
+CHECKS=$((CHECKS + 1)); [ "$(nnot)" = 2 ] || fail "10d: recovery then a new episode past the cooldown must notify again" "$(cat "$WORK/notified")"
+echo '4 3 60 30000' > "$WORK/rmem"; FLEET_MEM_NOTIFY_COOLDOWN=0 rwatch
+CHECKS=$((CHECKS + 1)); [ "$(nnot)" = 3 ] || fail "10e: warn → critical past the cooldown is a new edge" "$(cat "$WORK/notified")"
+echo '400000 491520' > "$WORK/rfiles"; echo '450 511' > "$WORK/rpty"; rwatch; rwatch
+CHECKS=$((CHECKS + 1)); [ "$(nnot)" = 5 ] || fail "10f: files and pty crossing the line must notify once EACH" "$(cat "$WORK/notified")"
+has "files table at 81%" "$(cat "$WORK/notified")" "10f: the files notice must state the %"
+has "pty table at 88%" "$(cat "$WORK/notified")" "10f: the pty notice must state the %"
+printf 'garbled\n' > "$WORK/rmem"; : > "$WORK/rfiles"; printf 'n/a 511\n' > "$WORK/rpty"; rwatch
+CHECKS=$((CHECKS + 1)); [ "$(nnot)" = 5 ] || fail "10g: unreadable or garbled readings must never notify" "$(cat "$WORK/notified")"
+quiet "10: the memory watch must print NOTHING on stderr"
+
+printf 'selftest OK: fleet-doctor machine line (%s assertions — load, cores, orphan naming, fseventsd, session caps, tmux rate, memory/files/pty + edge notices, render-survival, stderr silence)\n' "$CHECKS"
