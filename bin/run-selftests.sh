@@ -60,7 +60,11 @@
 #               still goes through the same hermetic prelude CI uses. A NAME that
 #               matches nothing is an error, never a silent all-green.
 #
-# Env: FLEET_SELFTEST_SLOWEST  how many slow tests to list (default 10, 0 = none)
+# Env: FLEET_SELFTEST_SLOWEST       how many slow tests to list (default 10, 0 = none)
+#      FLEET_SELFTEST_TEST_TIMEOUT  per-test ceiling in seconds (default 600, 0 = none);
+#                                   a test past it is killed, counted TIMEOUT (a
+#                                   failure), and the run goes on to the next one
+#      FLEET_HEAVY=0                skip the machine-wide heavy-job queue (see below)
 set -u
 
 unset CDPATH  # keep `cd` from echoing/jumping via a user's CDPATH
@@ -127,11 +131,35 @@ if [ -z "${FLEET_SELFTEST_ROOT:-}" ] && [ -z "${FLEET_SELFTEST_NO_SHADOW:-}" ]; 
                                       -e 's/^\(CCQUOTA_[A-Za-z0-9_]*\)=.*/\1/p'); do
     case "$v" in
       FLEET_SELFTEST_ROOT|FLEET_SELFTEST_NO_SHADOW|FLEET_SELFTEST_SLOWEST) continue ;;
+      FLEET_SELFTEST_TEST_TIMEOUT) continue ;;
     esac
     scrub="$scrub -u $v"
   done
-  # shellcheck disable=SC2086  # intentional: $scrub is a list of `-u NAME` arguments
-  env $scrub FLEET_SELFTEST_ROOT="$shadow" sh "$shadow/bin/run-selftests.sh" "$@"
+  # The whole gate queues on the MACHINE-WIDE heavy-job semaphore (issue #1150, on
+  # #1295's fleet-heavy.sh): an EPIC routinely puts 3-4 workers into this gate at
+  # once, and together they drove the box to load 48 — which is how one test hung
+  # for 77 minutes (2026-09-24). Queuing beats refusing: a refused gate leaves a
+  # worker idle with nothing to wake it, a queued one simply starts later. The hook
+  # (hooks/bash-guard.py) already prefixes the wrapper onto a `run-selftests.sh`
+  # typed in a pane; this covers every other route (a script, a pre-push hook, a
+  # shell). Already holding a slot (FLEET_HEAVY_HELD=1, the hook's wrapper) → the
+  # nested call runs straight through, so the two never deadlock. The wrapper sits
+  # OUTSIDE `env $scrub`, so the FLEET_HEAVY_* it exports are scrubbed before the
+  # suite sees them — all but FLEET_HEAVY_HELD=1, set back on purpose: the suite
+  # runs INSIDE this slot, so a test that drives a nested gate (the isolation and
+  # shard selftests do) must pass straight through rather than queue behind its own
+  # parent. fleet-heavy-selftest.sh unsets it before it tests the queue. FLEET_HEAVY=0
+  # or a missing wrapper runs ungated.
+  heavy=''
+  if [ "${FLEET_HEAVY:-1}" != 0 ] && [ -x "$script_dir/fleet-heavy.sh" ]; then
+    heavy="$script_dir/fleet-heavy.sh --label selftests --"
+    # The list above was read from OUR environment, before the wrapper exports its
+    # own keys — so name them, or they reach the suite (the slot dir among them).
+    scrub="$scrub -u FLEET_HEAVY -u FLEET_HEAVY_SLOTS -u FLEET_HEAVY_WAIT -u FLEET_HEAVY_DIR -u FLEET_HEAVY_RE"
+  fi
+  # shellcheck disable=SC2086  # intentional: $heavy and $scrub are argument lists
+  $heavy env $scrub FLEET_HEAVY_HELD=1 FLEET_SELFTEST_ROOT="$shadow" \
+    sh "$shadow/bin/run-selftests.sh" "$@"
   exit $?
 fi
 
@@ -249,6 +277,62 @@ now_ms() {
 # ms → seconds with one decimal, in shell arithmetic (no bc/awk dependency).
 secs() { printf '%d.%d' $(( $1 / 1000 )) $(( ($1 % 1000) / 100 )); }
 
+# PER-TEST CEILING (issue #1150). One test that never ends used to be a gate that
+# never ends: on 2026-09-24 auto-handoff-selftest.sh sat on a `cat` of an open,
+# never-closed stdin for 77 minutes, nothing after it ran, and the worker waiting on
+# the backgrounded gate was never woken. So every test now runs under a supervisor:
+#
+#   • its own PROCESS GROUP, so a timeout kills the whole tree it started — the hung
+#     hook three levels down, not just the `bash` at the top;
+#   • stdin is /dev/null — a test that reads stdin gets EOF, never the runner's
+#     (possibly open-forever) pipe, which is exactly what hung the 9-24 run;
+#   • on the deadline it PRINTS what is still running in that group (pid, age,
+#     argv), then TERM → grace → KILL, and exits 124, which the loop counts as
+#     TIMEOUT (a failure) before moving on to the next test;
+#   • the deadline also lives IN THE TEST (fleet-loadgen.sh's principle, issue
+#     #697): the child arms alarm(2) before it execs, and that survives execve —
+#     so a SIGKILLed supervisor or runner still cannot leave a test running forever.
+#
+# perl (already this runner's clock) hosts it; with no perl, tests run unsupervised
+# exactly as before. FLEET_SELFTEST_TEST_TIMEOUT=0 turns the ceiling off.
+test_timeout=${FLEET_SELFTEST_TEST_TIMEOUT:-600}
+case "$test_timeout" in ''|*[!0-9]*) test_timeout=600 ;; esac
+supervise=0
+[ "$test_timeout" -gt 0 ] && command -v perl >/dev/null 2>&1 && supervise=1
+# shellcheck disable=SC2016  # a perl program: its $vars are perl's, not the shell's
+SUPERVISOR='
+use strict; use POSIX ();
+my ($limit, $t) = @ARGV; my $grace = 5;
+my $pid = fork(); defined $pid or die "run-selftests: fork: $!\n";
+if ($pid == 0) {
+  setpgrp(0, 0);
+  alarm($limit + 3 * $grace);          # the in-test backstop: survives execve
+  exec("bash", $t) or POSIX::_exit(127);
+}
+setpgrp($pid, $pid);                   # from both sides: no window where it is unset
+sub group_alive { waitpid($pid, POSIX::WNOHANG()); kill(0, -$pid) }   # reap first: a zombie still answers kill 0
+sub stop_group {
+  kill("TERM", -$pid);
+  for (1 .. $grace * 10) { last unless group_alive(); select(undef, undef, undef, 0.1) }
+  kill("KILL", -$pid) if group_alive();
+}
+for my $s (qw(INT TERM HUP)) {        # the runner is going away: take the test along
+  $SIG{$s} = sub { stop_group(); exit 128 + ($s eq "INT" ? 2 : $s eq "TERM" ? 15 : 1) };
+}
+my $r = eval {
+  local $SIG{ALRM} = sub { die "timeout\n" };
+  alarm($limit); my $w = waitpid($pid, 0); alarm(0); $w;
+};
+if (defined $r) { exit($? & 127 ? 128 + ($? & 127) : $? >> 8) }
+print STDERR "run-selftests: TIMEOUT — $t still running after ${limit}s; its process group:\n";
+for (`ps -A -o pid= -o ppid= -o pgid= -o etime= -o command= 2>/dev/null`) {
+  my @f = split " ", $_, 5;
+  printf STDERR "  pid %-6s ppid %-6s up %-11s %s", @f[0, 1, 3, 4] if @f == 5 && $f[2] == $pid;
+}
+stop_group(); waitpid($pid, 0);
+exit 124;
+'
+
 total=0 passed=0 failed=0
 failures='' timings=''
 run_start=$(now_ms)
@@ -258,13 +342,21 @@ for t in $tests; do
   total=$((total + 1))
   printf '\n=== %s ===\n' "$t"
   start_ms=$(now_ms)
-  if bash "./$t"; then rc=0; else rc=$?; fi
+  if [ "$supervise" -eq 1 ]; then
+    if perl -e "$SUPERVISOR" "$test_timeout" "./$t" </dev/null; then rc=0; else rc=$?; fi
+  else
+    if bash "./$t" </dev/null; then rc=0; else rc=$?; fi
+  fi
   ms=$(( $(now_ms) - start_ms ))
   timings="$timings$ms $t
 "
   if [ "$rc" -eq 0 ]; then
     printf 'PASS  %-46s %6ss\n' "$t" "$(secs "$ms")"
     passed=$((passed + 1))
+  elif [ "$supervise" -eq 1 ] && [ "$rc" -eq 124 ] && [ "$ms" -ge $((test_timeout * 1000)) ]; then
+    printf 'TIMEOUT %-44s %6ss (limit %ss)\n' "$t" "$(secs "$ms")" "$test_timeout"
+    failed=$((failed + 1))
+    failures="${failures} ${t}"
   else
     printf 'FAIL  %-46s %6ss (exit %s)\n' "$t" "$(secs "$ms")" "$rc"
     failed=$((failed + 1))
