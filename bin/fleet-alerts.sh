@@ -18,7 +18,8 @@
 # ONE GRAMMAR: `<icon> <subject> · <condition> · <value>`. Subjects are nouns the
 # operator knows (quota, dash, daemon, disk, accounts, model, #<issue>);
 # conditions come from a closed list (stale, unreadable, uneven, from banner,
-# low, capped, all capped, question, permission, blocked, failed, waiting).
+# low, capped, all capped, question, permission, blocked, failed, waiting,
+# stalled).
 #
 # A row (fixed key order — the readers parse it with ONE regex, no jq):
 #   {"id":…,"severity":alarm|warning|needs|healed,"subject":…,"condition":…,
@@ -41,6 +42,12 @@
 #   fleet-alerts.sh act <id>         run the row's action (a kick detaches:
 #                                    `kick` is its background half, #1242)
 #   fleet-alerts.sh popup [--level L]  the `prefix !` popup (fzf)
+#   fleet-alerts.sh stall <id> <subject> <target> [detail]
+#                                    raise a `● <subject> · stalled` needs row
+#                                    until `unstall <id>` (the last rung of
+#                                    fleet-await.sh's stall ladder, issue #1268;
+#                                    FLEET_ALERTS_STALL_TTL, 6h, ends a forgotten one)
+#   fleet-alerts.sh unstall <id>     clear it
 #
 # Sourced (tmux-status.sh does, every 5s per client) it only defines functions;
 # the caller must already have usage-lib.sh + fleet-daemon-lib.sh loaded.
@@ -52,6 +59,25 @@ _FA_RE='^\{"id":"([^"]*)","severity":"([^"]*)","subject":"([^"]*)","condition":"
 
 fleet_alerts_file() { printf '%s/alerts.ndjson' "$(fleet_usage_cache_dir)"; }
 fleet_alerts_mute_file() { printf '%s/alerts.mute' "$(fleet_usage_cache_dir)"; }
+fleet_alerts_stall_dir() { printf '%s/alerts.stall' "$(fleet_usage_cache_dir)"; }
+
+# fleet_alerts_stall <id> <subject> <target> [detail] / fleet_alerts_unstall <id>
+# — a stall is raised by a PROCESS (fleet-await.sh), not observed by compute, so
+# it is a file compute reads: one per id, `since<TAB>subject<TAB>target<TAB>detail`.
+_fa_stall_id() { printf '%s' "${1:-}" | LC_ALL=C tr -cd 'A-Za-z0-9._:-'; }
+fleet_alerts_stall() {
+  local id d
+  id=$(_fa_stall_id "${1:-}"); [ -n "$id" ] && [ -n "${2:-}" ] || {
+    echo 'fleet-alerts.sh stall <id> <subject> <target> [detail]' >&2; return 2; }
+  d=$(fleet_alerts_stall_dir); mkdir -p "$d" 2>/dev/null || return 1
+  [ -f "$d/$id" ] && return 0                  # already raised: keep its since
+  printf '%s\t%s\t%s\t%s\n' "$(fleet_now)" "$(_fa_clean "$2")" "$(_fa_clean "${3:-}")" \
+    "$(_fa_clean "${4:-}")" > "$d/.$id.$$" && mv -f "$d/.$id.$$" "$d/$id"
+}
+fleet_alerts_unstall() {
+  local id; id=$(_fa_stall_id "${1:-}"); [ -n "$id" ] || return 2
+  rm -f "$(fleet_alerts_stall_dir)/$id"
+}
 
 # _fa_clean <s> — a value safe inside a JSON string and a TSV field.
 _fa_clean() {
@@ -187,6 +213,19 @@ fleet_alerts_compute() {
         "capped on $label until $(_fa_hhmm "$until")"
     done < "$af"
   fi
+
+  # --- stalled: a child the stall ladder could not move (issue #1268). Raised
+  # and cleared by fleet-await.sh; the TTL only ends one whose waiter was killed.
+  local sf sid ssince ssub star sdet
+  for sf in "$(fleet_alerts_stall_dir)"/*; do
+    [ -f "$sf" ] || continue
+    IFS=$'\t' read -r ssince ssub star sdet < "$sf" 2>/dev/null || continue
+    case "$ssince" in ''|*[!0-9]*) continue ;; esac
+    if [ $(( now - ssince )) -ge "${FLEET_ALERTS_STALL_TTL:-21600}" ]; then rm -f "$sf"; continue; fi
+    sid=${sf##*/}
+    _fa_row "stall-$sid" needs "$ssub" stalled "$(fleet_usage_human_secs $(( now - ssince )))" \
+      "$ssince" jump 0 "$star" "$sdet"
+  done
 
   # --- needs: sessions waiting for a human, off each window's @claude_state.
   if [ -n "${TMUX:-}" ] && command -v tmux >/dev/null 2>&1; then
@@ -574,6 +613,8 @@ if [ "${BASH_SOURCE[0]:-}" = "$0" ]; then
     popup) fleet_alerts_popup "$@" ;;
     rows) fleet_alerts_rows "$@" ;;              # the popup's own reloads
     popup-mute) fleet_alerts_popup_mute "$@" ;;  # the popup's `m`
-    *) echo "fleet-alerts.sh: unknown command '$cmd' (write|refresh|counts|bar|list|mute|act|popup)" >&2; exit 2 ;;
+    stall) fleet_alerts_stall "$@" ;;
+    unstall) fleet_alerts_unstall "$@" ;;
+    *) echo "fleet-alerts.sh: unknown command '$cmd' (write|refresh|counts|bar|list|mute|act|popup|stall|unstall)" >&2; exit 2 ;;
   esac
 fi

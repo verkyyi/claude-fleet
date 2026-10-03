@@ -39,6 +39,22 @@
 # report_tier in fleet-children-lib.sh) and a WAITING/IDLE turn boundary are NOT
 # outcomes: the wait goes on.
 #
+# STALL LADDER (issue #1268). A live child that makes no progress for
+# FLEET_AWAIT_STALL_SECS (default 1200; 0 = off) is escalated one rung at a time,
+# each rung FLEET_AWAIT_STALL_SECS after the last:
+#   1, 2  a short wake to the child                   (fleet-peer-send.sh)
+#   3     its task again: re-run fleet-claim-brief.sh  (C6's brief once it lands)
+#   4     the parent is told the child is stuck        (fleet-peer-send.sh)
+#   5     the operator: a `● #N · stalled` alert       (fleet-alerts.sh stall)
+# Every rung is a `wake` row in the parent's ledger (fleet-children.py), so a
+# restarted wait climbs on from the recorded rung instead of starting over.
+#   progress (ladder → 0, a `reset` row): a new child report, or the child's
+#            worktree moved (HEAD or `git status`)
+#   not stalled (clock restarts, rung kept): an unknown/idle state, any state
+#            change, sleeping/preparing/waking/looping, or `working` with the
+#            pane's process tree above FLEET_AWAIT_CPU_PCT (10) % of a core
+#   stalled: `done` / `waiting`, or `working` with an idle process tree
+#
 #   --timeout <s>   give up after this long (default 7200 = 2h; never unbounded)
 #   --interval <s>  seconds between ledger reads (default 60; the read is a local
 #                   file + one list-windows, but nothing here needs faster)
@@ -63,7 +79,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
-usage() { sed -n '2,62p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,78p' "$0" | sed 's/^# \{0,1\}//'; }
 die()   { printf 'fleet-await: %s\n' "$1" >&2; exit "${2:-2}"; }
 
 NUM='' TIMEOUT=7200 INTERVAL=60 SPAWN=1 KEY='' REPO_ARG='' SOCK=''
@@ -108,6 +124,11 @@ SECONDS=0
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
+# shellcheck source=/dev/null
+. "$BIN/fleet-children-lib.sh"
+
+STALL="${FLEET_AWAIT_STALL_SECS:-1200}"; case "$STALL" in ''|*[!0-9]*) STALL=1200 ;; esac
+CPU_PCT="${FLEET_AWAIT_CPU_PCT:-10}";   case "$CPU_PCT" in ''|*[!0-9]*) CPU_PCT=10 ;; esac
 
 TM() { if [ -n "$SOCK" ]; then tmux -L "$SOCK" "$@"; else tmux "$@"; fi; }
 sess="$SOCK"; [ -n "$sess" ] || sess=$(fleet_current_session)
@@ -198,7 +219,106 @@ finish() {  # <OUTCOME> [<note>]
   [ -n "$P_SUM" ] && printf 'summary: %s\n' "$P_SUM"
   [ -n "${2:-}" ] && printf 'note: %s\n' "$2"
   printf 'waited: %s · ledger %s\n' "$(fmt_age "$SECONDS")" "${LEDGER:-$KEY}"
+  # The child moved (or is gone): the operator's stall alert is over. A TIMEOUT
+  # leaves it — the stall is still real, and a re-run picks the ladder back up.
+  [ "$1" = TIMEOUT ] || [ "${L_LEVEL:-0}" -lt 5 ] || unstall
   exit "$rc"
+}
+
+# --- the stall ladder (issue #1268) ------------------------------------------------
+L_LEVEL=0 L_ANCHOR=0 L_SIG='' L_STATE='' L_CPU='' L_CPU_T=0
+STALL_ID="$sess-$CKEY"
+
+ledger_wake() { children_wake "$LEDGER" "$CKEY" "$1" "$2" "$3" "$sess" || true; }
+unstall() { bash "$BIN/fleet-alerts.sh" unstall "$STALL_ID" >/dev/null 2>&1 || true; }
+
+# Total CPU (centiseconds) of the child pane's process tree. `ps -o time=` is
+# `M:SS.ss` on BSD and `[D-]HH:MM:SS` on procps; awk folds both.
+cpu_cs() {
+  local pp pids
+  pp=$(TM display-message -p -t "$wid" '#{pane_pid}' 2>/dev/null)
+  pids=$(_fleet_proc_tree "$pp" | tr '\n' ','); pids=${pids%,}
+  [ -n "$pids" ] || { printf '0'; return; }
+  ps -o time= -p "$pids" 2>/dev/null | awk '{
+    t = $1; d = 0
+    if (index(t, "-")) { d = substr(t, 1, index(t, "-") - 1); t = substr(t, index(t, "-") + 1) }
+    n = split(t, f, ":"); s = 0
+    for (i = 1; i <= n; i++) s = s * 60 + f[i]
+    sum += s + d * 86400
+  } END { printf "%d", sum * 100 }'
+}
+
+# What counts as progress: a new report, or the child's worktree changing.
+progress_sig() {
+  local wt h=''
+  wt=$(TM display-message -p -t "$wid" '#{@worktree}' 2>/dev/null)
+  if [ -n "$wt" ] && [ -d "$wt" ]; then
+    h="$(git -C "$wt" rev-parse HEAD 2>/dev/null)/$(git -C "$wt" status --porcelain 2>/dev/null | cksum)"
+  fi
+  printf '%s|%s' "$P_SEQ" "$h"
+}
+
+# Climb to rung <level>; prints the rung's outcome for the ledger row.
+ladder_fire() {
+  local lv=$1 idle msg pw out rc r=()
+  idle=$(fmt_age "$(( $(date +%s) - L_ANCHOR ))")
+  [ -n "$SOCK" ] && r+=(-L "$SOCK")
+  case "$lv" in
+    1|2) msg="[fleet-await] #$NUM: no progress for $idle (state: $P_STATE) — wake $lv/5. Carry on with your task; if you are stuck, say why on the issue (⛔ blocked) instead of waiting."
+         out=$(bash "$BIN/fleet-peer-send.sh" ${r[@]+"${r[@]}"} ${REPO_ARG:+--repo "$REPO_ARG"} "issue:$NUM" "$msg" 2>&1); rc=$? ;;
+    3)   msg="[fleet-await] #$NUM: still no progress after 2 wakes — wake 3/5. Re-read your task: run $BIN/fleet-claim-brief.sh (the issue + every comment), then continue, or post ⛔ blocked with the reason."
+         out=$(bash "$BIN/fleet-peer-send.sh" ${r[@]+"${r[@]}"} ${REPO_ARG:+--repo "$REPO_ARG"} "issue:$NUM" "$msg" 2>&1); rc=$? ;;
+    4)   pw=$(fleet_win_for_key "$LEDGER" "$SOCK" 2>/dev/null | head -1)
+         msg="[fleet-await] your child #$NUM${P_TITLE:+ ($P_TITLE)} has made no progress for $idle through 3 wakes (state: $P_STATE) — wake 4/5. Look at it: unblock it or make the call; the operator is alerted next."
+         if [ -n "$pw" ]; then
+           out=$(bash "$BIN/fleet-peer-send.sh" ${r[@]+"${r[@]}"} "$pw" "$msg" 2>&1); rc=$?
+         else
+           out="no live window for parent $LEDGER"; rc=1
+         fi ;;
+    *)   out=$(bash "$BIN/fleet-alerts.sh" stall "$STALL_ID" "#$NUM" "$sess:$wid" \
+               "no progress for $idle through 4 wakes (parent $LEDGER)" 2>&1); rc=$?
+         [ "$rc" = 0 ] && out="alert stall-$STALL_ID" ;;
+  esac
+  out=$(printf '%s' "$out" | tr '\n' ' ' | sed 's/ *$//' | cut -c1-110)
+  if [ "$rc" = 0 ]; then printf 'sent%s' "${out:+: $out}"; else printf 'failed%s' "${out:+: $out}"; fi
+}
+
+# One ladder step per poll, for a LIVE child.
+ladder_tick() {
+  [ "$STALL" -gt 0 ] || return 0
+  local now sig cpu dt act out lrow
+  now=$(date +%s)
+  lrow=$(child_win); [ -n "$lrow" ] && wid=${lrow%%|*}
+  sig=$(progress_sig)
+  if [ "$sig" != "$L_SIG" ]; then
+    if [ -n "$L_SIG" ] && [ "$L_LEVEL" -gt 0 ]; then
+      ledger_wake 0 reset progress
+      printf 'fleet-await: #%s made progress — stall ladder reset\n' "$NUM" >&2
+      [ "$L_LEVEL" -ge 5 ] && unstall
+      L_LEVEL=0
+    fi
+    [ -n "$L_SIG" ] && L_ANCHOR=$now
+    L_SIG=$sig
+  fi
+  # Any state change is activity: the clock restarts, the rung stays.
+  [ "$P_STATE" = "$L_STATE" ] || { L_STATE=$P_STATE; L_ANCHOR=$now; L_CPU=''; return 0; }
+  case "$P_STATE" in
+    done|waiting) : ;;
+    working)
+      cpu=$(cpu_cs); dt=$((now - L_CPU_T)); act=1
+      [ -n "$L_CPU" ] && [ "$dt" -gt 0 ] && [ $((cpu - L_CPU)) -lt $((dt * CPU_PCT)) ] && act=0
+      L_CPU=$cpu L_CPU_T=$now
+      [ "$act" = 0 ] || { L_ANCHOR=$now; return 0; } ;;
+    *) L_ANCHOR=$now; return 0 ;;   # unknown / idle / sleeping … — never a stall
+  esac
+  [ $((now - L_ANCHOR)) -ge "$STALL" ] && [ "$L_LEVEL" -lt 5 ] || return 0
+  L_LEVEL=$((L_LEVEL + 1))
+  case "$L_LEVEL" in 1|2) act=nudge ;; 3) act=brief ;; 4) act=parent ;; *) act=alert ;; esac
+  out=$(ladder_fire "$L_LEVEL")
+  ledger_wake "$L_LEVEL" "$act" "$out"
+  printf 'fleet-await: #%s stalled %s — wake %s/5 (%s): %s\n' "$NUM" \
+    "$(fmt_age $((now - L_ANCHOR)))" "$L_LEVEL" "$act" "$out" >&2
+  L_ANCHOR=$now
 }
 
 # --- 1. find the worker (or spawn one) -------------------------------------------
@@ -246,6 +366,11 @@ else
 fi
 
 # --- 2. wait ----------------------------------------------------------------------
+# The ladder resumes from the rung a previous wait recorded (issue #1268).
+read -r L_LEVEL L_ANCHOR <<< "$(children_wake_state "$LEDGER" "$CKEY" "$sess")"
+case "$L_LEVEL" in ''|*[!0-9]*) L_LEVEL=0 ;; esac
+case "$L_ANCHOR" in ''|*[!0-9]*|0) L_ANCHOR=$(date +%s) ;; esac
+[ "$L_LEVEL" -gt 0 ] && printf 'fleet-await: #%s stall ladder resumes at wake %s/5\n' "$NUM" "$L_LEVEL" >&2
 # Deadline #2: $SECONDS. Every sleep is foreground and capped at the time left.
 needs_polls=0 gone_polls=0
 while :; do
@@ -266,6 +391,7 @@ while :; do
               [ "$needs_polls" -ge 2 ] && finish NEEDS "the worker is waiting on a human${P_NEEDS:+ ($P_NEEDS)}" ;;
       *)      needs_polls=0 ;;
     esac
+    ladder_tick
   else
     # Gone with no new report: give the reaper's backstop REAPED one more poll.
     gone_polls=$((gone_polls + 1))
