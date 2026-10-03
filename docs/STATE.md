@@ -22,7 +22,7 @@ State lives in one tmux **window option**, `@claude_state`, whose value is one o
 |---|---|---|---|
 | `working` | mid-turn — a tool is running or a prompt was just submitted | braille spinner (`⠋…`, animated) | cyan |
 | `done` | turn finished cleanly, nothing pending | `✓` | green |
-| `needs` | waiting on **you** — a question, a permission/elicitation prompt, or a `⛔ blocked` | `?` / `⊘` / `⊠` / `!` (see below) | red (loud: bold + bell) |
+| `needs` | waiting on **you** — a question, a permission/elicitation prompt, or a `⛔ blocked` | `!` — one glyph for every kind since #1328; the kind is in words (see below) | red (loud: bold + bell) |
 | `looping` | stopped, but really cycling between `/loop` iterations (not truly done) | `↻` | indigo |
 | *(unset / empty)* | never ran a turn — idle/ad-hoc pane | blank | dim |
 
@@ -37,7 +37,13 @@ every state write; it drives the dashboard's *"Nm ago"* last-activity column.
 
 The subtype tells the operator how to respond to a red window:
 
-| `@claude_needs` | What is open | Dash / tab glyph | What to do |
+The dash and the sidebar draw ONE red `!` for every kind (issue #1328 — ten state
+glyphs were more than anyone could keep apart); the kind is said in words: the
+hub's act column (`在问你` / `等授权` / `被卡住` / `恢复失败` / `运行失败`) and the
+sidebar's line under the list for the selected row. The window *tab* keeps the
+glyphs below.
+
+| `@claude_needs` | What is open | Tab glyph | What to do |
 |---|---|---|---|
 | `ask` | an `AskUserQuestion` | `?` | answer it from the dash — `⌃k`, no attach |
 | `perm` | a **permission prompt** | `⊘` | only a human may approve one; `⌃k` shows you *what* is blocked |

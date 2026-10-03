@@ -28,11 +28,13 @@
 # the default is collapsed, so a window nobody has touched, and every freshly
 # spawned parent, starts folded with no writer involved.
 #
-# WHO OWNS THE FOLD: the ULTIMATE LIVE ROOT of the chain, never a middle node.
-# The dash's grouping is two-level-flat — a grandchild renders under, and counts
-# toward, the same root as its parent — so a middle node's own bit would govern
-# nothing and toggling it would look broken. Walking to the root here is what keeps
-# `←` on ANY row in a block shut the block it is actually in.
+# WHO OWNS A FOLD: every row that has a subtree owns its own (issue #1328 —
+# the list nests by real depth, so a middle row's block is its own and folds on
+# its own; before, the grouping was two-level-flat and only the root's bit
+# governed anything). `→` opens the row's own block; `←` shuts the innermost OPEN
+# block the cursor is in — the row's own when it is open, else its parent's,
+# else the next one up — which keeps `←` on ANY row in a block shutting the block
+# it is actually in.
 #
 # Target: what the dash row hands over ({1} = `sess:idx`), or the fleet's short
 # window handle (`a1`, #566) — normalised through fleet_wid_target like every other
@@ -193,45 +195,44 @@ lookup() {
   return 0
 }
 
-# --- the holder: walk to the ultimate live root (≤4 hops, the renderer's bound) -
-holder=$selfkey
+# Does a row have a subtree? A direct live child is enough: a grandchild can only
+# exist while its own parent window does, so "has children" and "has a direct
+# child" coincide on the live list.
+haskids_v() {
+  local korig
+  while IFS=$'\t' read -r _ _ korig _; do
+    [ "$korig" = "$1" ] && return 0
+  done <<< "$KEYTAB"
+  return 1
+}
 lookup "$selfkey" || exit 0
-hwid=$lwid; hexp=$lexp; horig=$lorig
-hops=0
-while [ "$hops" -lt 4 ]; do
-  case "$horig" in issue-*|scratch-*|*:issue-*|*:scratch-*) ;; *) break ;; esac
-  lookup "$horig" || { holder=''; break; }        # chain left this dash ⇒ ORPHAN
-  holder=$horig; hwid=$lwid; hexp=$lexp; horig=$lorig
-  hops=$((hops+1))
-done
-# An orphan renders top-level with no parent above it — there is no block to fold.
-[ -n "$holder" ] || exit 0
-
-# Does the holder actually have a subtree? A direct live child is enough: a
-# grandchild can only exist while its own parent window does, so "has children"
-# and "has a direct child" coincide on the live list.
-haskids=0
-while IFS=$'\t' read -r _ _ korig _; do
-  [ "$korig" = "$holder" ] && { haskids=1; break; }
-done <<< "$KEYTAB"
-[ "$haskids" = 1 ] || exit 0
-
-case "$hexp" in 1) hexp=1 ;; *) hexp=0 ;; esac
 
 if [ "$verb" = expand ]; then
-  # `→` opens the block the cursor's row OWNS. On a child it is a no-op by
-  # design: that row is only on screen because its holder is already open, and
-  # jumping the fold somewhere else under the cursor would be a surprise.
-  [ "$holder" = "$selfkey" ] || exit 0
-  [ "$hexp" = 1 ] && exit 0
-  tmux set-option -w -t "$hwid" @expand 1 2>/dev/null || exit 0
+  # `→` opens the block the cursor's row OWNS. On a leaf it is a no-op by
+  # design: jumping the fold somewhere else under the cursor would be a surprise.
+  case "$lexp" in 1) exit 0 ;; esac
+  haskids_v "$selfkey" || exit 0
+  tmux set-option -w -t "$lwid" @expand 1 2>/dev/null || exit 0
   echo "reload(bash $ROWS)"
   exit 0
 fi
 
-# `←` shuts the block the cursor is IN — from the parent row or from any row
-# inside it, which is the gesture that actually gets used.
-[ "$hexp" = 1 ] || exit 0
+# `←` — the holder is the innermost OPEN block the cursor is in: the row itself
+# when it owns an open subtree, else the nearest open ancestor (≤16 hops, the
+# renderer's cycle bound). A row whose chain leaves the dash (an orphan) stops
+# there: what is above it is not on this list.
+holder=''; hwid=''
+cur=$selfkey; cwid=$lwid; cexp=$lexp; corig=$lorig
+case "$cexp" in 1) haskids_v "$cur" && { holder=$cur; hwid=$cwid; } ;; esac
+hops=0
+while [ -z "$holder" ] && [ "$hops" -lt 16 ]; do
+  case "$corig" in issue-*|scratch-*|*:issue-*|*:scratch-*) ;; *) break ;; esac
+  lookup "$corig" || break
+  cur=$corig; cwid=$lwid; cexp=$lexp; corig=$lorig
+  case "$cexp" in 1) holder=$cur; hwid=$cwid ;; esac
+  hops=$((hops+1))
+done
+[ -n "$holder" ] || exit 0
 # -u rather than parking a 0: an unset @expand is the ordinary collapsed state
 # (a window that was never expanded has none), so shutting a block must leave the
 # window byte-identical to one that was never opened.

@@ -113,13 +113,14 @@ rows() { raw | awk -F"$US" 'NR>1 {print $3}' | strip; }
 NAMES='root kid grand red lonely orph'
 order() { printf '%s\n' "$1" | awk -v ns=" $NAMES " '{for(i=1;i<=NF;i++) if(index(ns," "$i" ")){print $i; break}}'; }
 row_of() { printf '%s\n' "$2" | awk -v n="$1" '{for(i=1;i<=NF;i++) if($i==n){print; exit}}'; }
-# The TREE COLUMN (issue #836): glyph1+sp + issue5+sp + tree1+sp, so the tree cell
-# is character 8 of a colour-stripped row and the window name starts at 10 — for
+# The TREE COLUMN (issue #836, 2 cells since #1328): glyph1+sp + issue5+sp +
+# tree2+sp, so the tree cell is characters 8-9 of a colour-stripped row and the
+# window name starts at 11 — for
 # EVERY row, root and child alike. That fixed offset is the whole point of the
 # column, so the assertions below read the cell by position rather than grepping
 # for a `└ ` prefix that a name-spliced indent would satisfy just as well.
-tree_of() { printf '%s' "${1:8:1}"; }
-name_of() { printf '%s' "${1:10}"; }
+tree_of() { printf '%s' "${1:8:2}"; }
+name_of() { printf '%s' "${1:11}"; }
 line_of() { printf '%s\n' "$2" | awk -v n="$1" '{for(i=1;i<=NF;i++) if($i==n){print NR; exit}}'; }
 opt() { tmux show-options -wqv -t "$1" @expand 2>/dev/null; }
 idx_of() { tmux display-message -p -t "$1" 'fleetF:#{window_index}' 2>/dev/null; }
@@ -140,57 +141,61 @@ not_contains "default: a quiet grandchild is folded away" "$out" "grand"
 #     exemption is on the RANK, not the glyph, so it covers all three reflexes
 #     #640 split the red row into (`?` question · `⊘` permission · `!` plain) —
 #     the two that carry a subtype are exactly the ones you must not lose.
-eq "a child in needs is EXEMPT from the fold, tree cell intact" "└" "$(tree_of "$(row_of red "$out")")"
+eq "a child in needs is EXEMPT from the fold, tree cell intact" "└ " "$(tree_of "$(row_of red "$out")")"
 for sub in ask perm; do
   tmux set-window-option -t "fleetF:$(tmux list-windows -t fleetF -F '#{window_index} #{window_name}' | awk '$2=="red"{print $1}')" @claude_needs "$sub"
-  eq "a needs child with the '$sub' subtype is exempt too" "└" "$(tree_of "$(row_of red "$(rows)")")"
+  eq "a needs child with the '$sub' subtype is exempt too" "└ " "$(tree_of "$(row_of red "$(rows)")")"
 done
 tmux set-window-option -t "fleetF:$(tmux list-windows -t fleetF -F '#{window_index} #{window_name}' | awk '$2=="red"{print $1}')" -u @claude_needs
 out=$(rows)
 
 # A3. an orphan has no parent row to unfold it from, so it is never hidden.
 contains "an orphan is never folded away" "$out" "orph"
-contains "… and keeps its ↳ provenance tag" "$(row_of orph "$out")" "↳#999"
+not_contains "… and wears no ↳ parent tag (issue #1328: position alone says it)" "$(row_of orph "$out")" "↳"
 
 eq "folded list: roots, the red child, the orphan — nothing else" \
   "$(printf 'root\nred\nlonely\norph')" "$(order "$out")"
 
 # A4. the caret marks exactly where a fold is governed.
-eq "a folded parent is marked ▸ in the tree cell" "▸" "$(tree_of "$(row_of root "$out")")"
-eq "a childless root's tree cell is blank" " " "$(tree_of "$(row_of lonely "$out")")"
-eq "an orphan's tree cell is blank too" " " "$(tree_of "$(row_of orph "$out")")"
+eq "a folded parent is marked ▸ in the tree cell" "▸ " "$(tree_of "$(row_of root "$out")")"
+eq "a childless root's tree cell is blank" "  " "$(tree_of "$(row_of lonely "$out")")"
+eq "an orphan's tree cell is blank too" "  " "$(tree_of "$(row_of orph "$out")")"
 
 # A5. the badge still describes the WHOLE subtree while it is shut — that is what
 #     makes folding by default safe: the parent row speaks for the block.
-contains "a folded parent still counts its whole subtree" "$(row_of root "$out")" "2/3 ✓"
-contains "… and still says one of them is asking for you" "$(row_of root "$out")" "1!"
+contains "a folded parent still counts its whole subtree" "$(row_of root "$out")" "2/3"
+not_contains "… as just the numbers: no trailing ✓ (issue #1328)" "$(row_of root "$out")" "2/3 ✓"
+not_contains "… and carries no child's state — the red child says it on its own row" "$(row_of root "$out")" "1!"
 
 # ============================================================================
 # A6. unfolding
 # ============================================================================
 tmux set-window-option -t "$W_root" @expand 1
 out=$(rows)
-eq "unfolded: the whole block is back, in #503 order" \
+# Each level folds on its own (issue #1328): opening the root shows its children,
+# and `kid` — itself a holder now — keeps ITS child folded until it is opened.
+eq "unfolded root: its children are back, kid's own subtree still shut" \
+  "$(printf 'root\nred\nkid\nlonely\norph')" "$(order "$out")"
+eq "an unfolded parent is marked ▾ in the tree cell" "▾ " "$(tree_of "$(row_of root "$out")")"
+eq "a restored child that holds a subtree is └ + its own caret" "└▸" "$(tree_of "$(row_of kid "$out")")"
+contains "… and counts its own subtree" "$(row_of kid "$out")" "1/1"
+tmux set-window-option -t "$W_kid" @expand 1
+out=$(rows)
+eq "unfolding kid too: the grandchild nests directly under KID, not beside it" \
   "$(printf 'root\nred\nkid\ngrand\nlonely\norph')" "$(order "$out")"
-eq "an unfolded parent is marked ▾ in the tree cell" "▾" "$(tree_of "$(row_of root "$out")")"
-eq "a restored child is marked └ in the tree cell" "└" "$(tree_of "$(row_of kid "$out")")"
-eq "a restored grandchild too" "└" "$(tree_of "$(row_of grand "$out")")"
+eq "kid's caret opens" "└▾" "$(tree_of "$(row_of kid "$out")")"
+eq "a restored grandchild sits one level deeper: └ on the right" " └" "$(tree_of "$(row_of grand "$out")")"
 # …and the hierarchy is the ONLY thing in that cell: every name — caret row, `└`
 # row, blank row — starts at the same column, with the full window field behind it.
 for n in root kid grand red lonely orph; do
   eq "the window name starts at the same column on '$n'" \
     "$n" "$(printf '%s' "$(name_of "$(row_of "$n" "$out")")" | awk '{print $1}')"
 done
-# The ↳ tag now survives only where that indent cannot say the same thing.
-not_contains "a direct child drops its ↳ tag — the indent already says it" "$(row_of kid "$out")" "↳"
-contains "a GRANDCHILD keeps its tag: it names ITS OWN parent (kid = #101), which the indent cannot — it is drawn under the ROOT, at the same depth as kid" \
-  "$(row_of grand "$out")" "↳#101"
-# the grouping is two-level-flat: `kid` owns no fold of its own, so it draws no
-# caret — otherwise the operator would press → on it and nothing would happen.
-eq "an intermediate parent draws no caret — it is a child, not a holder" \
-  "└" "$(tree_of "$(row_of kid "$out")")"
+# No ↳ parent tag anywhere (issue #1328): the indent says who a row's parent is.
+not_contains "a direct child carries no ↳ tag" "$(row_of kid "$out")" "↳"
+not_contains "a grandchild neither — it is drawn under its OWN parent now" "$(row_of grand "$out")" "↳"
 eq "the badge is unchanged by unfolding" \
-  "$(printf '%s' "$(row_of root "$out")" | grep -c '2/3 ✓')" "1"
+  "$(printf '%s' "$(row_of root "$out")" | grep -c '2/3')" "1"
 
 # A7. the tree cell must not shove the right-pinned act/PR/ctx block over. It is
 #     one cell of source text inside a CONSTANT-width LEFTW, never a ${#} count —
@@ -202,6 +207,7 @@ r_kid=$(row_of kid "$out")
 eq "a caret row is the same total width as a blank-cell one" "${#r_lone}" "${#r_open}"
 eq "… and so is a └ child row" "${#r_lone}" "${#r_kid}"
 tmux set-window-option -t "$W_root" -u @expand
+tmux set-window-option -t "$W_kid" -u @expand
 out=$(rows); r_shut=$(row_of root "$out")
 eq "folding does not change the row's width either" "${#r_shut}" "${#r_open}"
 
@@ -212,7 +218,7 @@ out=$(rows)
 eq "a pinned FOLDED parent floats with nothing but its exempt child" \
   "$(printf 'root\nred\nlonely\norph')" "$(order "$out")"
 not_contains "the pinned row wears no 📌 (issue #1170)" "$(row_of root "$out")" "📌"
-eq "… and still marked folded" "▸" "$(tree_of "$(row_of root "$out")")"
+eq "… and still marked folded" "▸ " "$(tree_of "$(row_of root "$out")")"
 tmux set-window-option -t "$W_root" -u @pin
 
 # ============================================================================
@@ -285,12 +291,22 @@ act=$(TMPDIR="$WORK/with space" bash "$FOLD" collapse "$(idx_of "$W_kid")" '')
 eq "a space in the snapshot path falls back to the plain reload"   "reload(bash $ROWS)" "$act"
 eq "… and the fold itself still happened" "" "$(opt "$W_root")"
 
-# B5. → from inside a block is a no-op: the row is only on screen because its
-#     block is already open, and folding something else under the cursor would be
-#     a surprise.
+# B5. → on a LEAF inside a block is a no-op: folding something else under the
+#     cursor would be a surprise.
 tmux set-window-option -t "$W_root" @expand 1
-eq "→ on a child does nothing" "" "$(bash "$FOLD" expand "$(idx_of "$W_kid")" '')"
+W_red=$(tmux list-windows -t fleetF -F '#{window_id} #{window_name}' | awk '$2=="red"{print $1}')
+eq "→ on a leaf child does nothing" "" "$(bash "$FOLD" expand "$(idx_of "$W_red")" '')"
 eq "… and left the block open" "1" "$(opt "$W_root")"
+# B6. every level owns its own fold (issue #1328): → on a child WITH a subtree
+#     opens that child's block, and ← from inside it shuts THAT block — the
+#     innermost open one — leaving the root open.
+act=$(bash "$FOLD" expand "$(idx_of "$W_kid")" '')
+eq "→ on a middle row opens its own block" "1" "$(opt "$W_kid")"
+contains "… and asks fzf to repaint" "$act" "reload("
+act=$(bash "$FOLD" collapse "$(idx_of "$W_grand")" '')
+eq "← from the grandchild shuts its parent's block" "" "$(opt "$W_kid")"
+eq "… and leaves the root open" "1" "$(opt "$W_root")"
+assert_cursor_lands_on_parent "$act" "$(idx_of "$W_kid")" "← from 'grand' inside kid's block"
 tmux set-window-option -t "$W_root" -u @expand
 
 # B6. a childless row and an orphan have no block to fold.

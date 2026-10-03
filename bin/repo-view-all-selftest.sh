@@ -199,7 +199,7 @@ eq    "E: all → no-repo row under its heading" "$(printf '%s\n' "$r" | grep -A
 hasnt "E: all → no per-row tag on the no-repo row" "$(printf '%s\n' "$r" | grep norepo | sed 's/.*norepo//')" "no repo"
 eq    "E: all → no-repo group at the foot" "$(printf '%s\n' "$r" | tail -n1 | grep -c norepo)" "1"
 has   "E: qualified origin folds as a child (└)" "$(printf '%s\n' "$r" | grep 'kid')" "└"
-has   "E: its parent carries the subtree badge" "$(printf '%s\n' "$r" | grep 'issue-2')" "0/1 ✓"
+has   "E: its parent carries the subtree badge" "$(printf '%s\n' "$r" | grep 'issue-2')" "0/1"
 # a stale current-repo file naming a hosted repo filters nothing any more
 printf 'o/tokenledger\n' > "$FLEET_CONF_DIR/fleets/alpha/current-repo"
 eq    "E: a stale current-repo file changes no row" "$(rows)" "$r"

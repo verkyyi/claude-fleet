@@ -126,10 +126,10 @@ if tmux list-windows -t oc -F "a${US}b" 2>/dev/null | od -An -tx1 | tr -d ' \n' 
          | LC_ALL=C sed -e $'s/\x1b\\[[0-9;]*m//g' -e $'s/\x1f/ /g')
   for w in issue-4 issue-5; do
     CHECKS=$((CHECKS + 1))
-    printf '%s\n' "$rows" | grep " $w " | grep -Eq '需要你|needs you' || fail "dash: $w should be tagged 需要你" "$rows"
+    printf '%s\n' "$rows" | grep " $w " | grep -Eq '恢复失败|restore' || fail "dash: $w should name the restore in its act cell (#1328)" "$rows"
   done
   CHECKS=$((CHECKS + 1))
-  printf '%s\n' "$rows" | grep " issue-1 " | grep -Eq '需要你|needs you' && fail "dash: resumed issue-1 must not be tagged" "$rows"
+  printf '%s\n' "$rows" | grep " issue-1 " | grep -Eq '恢复失败' && fail "dash: resumed issue-1 must not be tagged" "$rows"
 fi
 
 # ------------------------------------------------------------------ --fresh ----
@@ -159,5 +159,5 @@ printf '%s\n' "$dry" | grep 'issue-5 ' | grep -q 'awaiting you (no transcript fo
   || fail "--dry-run should announce issue-5 as awaiting" "$dry"
 CHECKS=$((CHECKS + 2))
 
-printf 'selftest PASS: restore outcomes (#1265) — %s checks: resumed / failed (refused + exited, no fresh fallback) / attention (picker untouched) / awaiting (no claude) / --fresh → fresh, dash tags 需要你, per-window table printed\n' "$CHECKS"
+printf 'selftest PASS: restore outcomes (#1265) — %s checks: resumed / failed (refused + exited, no fresh fallback) / attention (picker untouched) / awaiting (no claude) / --fresh → fresh, dash names 恢复失败, per-window table printed\n' "$CHECKS"
 exit 0

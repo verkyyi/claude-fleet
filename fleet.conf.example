@@ -1238,10 +1238,18 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Tmux UI language @group=status @tier=common @scope=fleet @edit=enum @options=auto,en,zh
 #FLEET_UI_LANG=auto
 
-# Sidebar width in terminal cells (clamped to 24–60). Narrow screens hide the
-# sidebar without changing the saved on/off preference.
+# Sidebar width in terminal cells (clamped to 24–60) — the FLOOR since issue
+# #1328: the sidebar widens itself to fit its longest row, up to
+# FLEET_SIDEBAR_WIDTH_MAX, never past a quarter of the window nor into the
+# worker's 80 columns. Drag it by hand and it keeps your width from then on.
+# Narrow screens hide the sidebar without changing the saved on/off preference.
 # @label=Task sidebar width @group=status @tier=advanced @scope=fleet @edit=int @unit=columns
 #FLEET_SIDEBAR_WIDTH=30
+
+# The widest the sidebar grows on its own to fit a long name (issue #1328).
+# Set it to FLEET_SIDEBAR_WIDTH to turn the auto-width off.
+# @label=Task sidebar max auto width @group=status @tier=internal @scope=global @edit=int @unit=columns
+#FLEET_SIDEBAR_WIDTH_MAX=44
 
 # Closing the task you are on (reap, exit, kill) lands on its NEIGHBOUR in the
 # task sidebar — the next row, or the previous one when it was the last — instead

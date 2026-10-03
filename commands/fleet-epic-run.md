@@ -234,8 +234,10 @@ items never started are **not** unfinished work.
 
 ### d. Handle red lights
 
-`bin/tmux-dash-collect.sh` classifies a stuck window into `?` (a question) and
-`⊘` (a permission), issue #640/#645. They get different treatment:
+`bin/tmux-dash-collect.sh` classifies a stuck window into `ask` (a question) and
+`perm` (a permission), issue #640/#645 — the window tab shows `?` / `⊘`, the dash
+one red `!` with the kind in words (`在问你` / `等授权`, #1328). They get different
+treatment:
 
 - **`⊘` permission** → approve it. `bash ~/.claude/fleet/bin/fleet-answer.sh …`
 - **`?` question** → answer it **only if the charter already covers it.** The

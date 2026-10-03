@@ -1,23 +1,20 @@
 #!/bin/bash
 # dash-rows-subtree-progress-selftest.sh — the parent row's subtree progress badge
-# (issue #624).
+# (issue #624; per level and numbers-only since #1328).
 #
 # scratch-as-parent (one scratch that fans out N workers) had every primitive but
 # the total: #503 resolves the @origin chain and indents the group, #574 has each
 # child push its own outcome home — and nowhere did a row say "3 of my 5 are
 # done". This pins the badge that closes that:
 #
-#   R  内容工厂方案            3/5 ✓ · 1!
-#                             ╰──┬──╯ ╰┬╯
-#                          quiet ┘     └ LOUD — a child is asking for the operator
+#   R  内容工厂方案            3/5
 #
 # The rules under test:
-#   * a row that spawned work shows `<done>/<total> ✓` over its whole subtree;
-#   * `· <n>!` appears ONLY when a descendant is in `needs`, and only that half is
-#     red — the dash's loud/quiet hierarchy (only needs is loud) must survive;
-#   * attribution is #503's grouping VERBATIM: a grandchild counts toward the
-#     ultimate live root, the row it actually renders under — so an intermediate
-#     parent shows nothing and no window is counted twice;
+#   * a row that spawned work shows `<done>/<total>` over its whole subtree — no
+#     trailing ✓ (it was on every parent whatever the state) and no `· n!`: a
+#     child that needs you is the red `!` on its own row, which no fold hides;
+#   * EVERY level does: a grandchild counts toward its parent AND the root, so
+#     each badge describes exactly the block indented beneath it;
 #   * an ORPHAN (its @origin names a window that is gone) counts toward nobody;
 #   * a row with NO children draws NOTHING — the badge must not become noise on
 #     every line;
@@ -51,8 +48,8 @@ hasnt(){ CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) fail "$1" "$2";; *) : ;; esa
 eq()   { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || fail "$1 (want '$2', got '$3')" "${4:-}"; }
 
 US=$'\x1f'
-GY='38;2;86;95;137m'        # muted grey — the quiet half of the badge
-RD='38;2;247;118;142m'      # red        — the loud half (a child needs the operator)
+GY='38;2;86;95;137m'        # muted grey — the badge
+RD='38;2;247;118;142m'      # red        — only a needs row's own glyph
 SESS=fleet-testrepo
 COLS=140                    # ⇒ every row is exactly COLS-4 display columns
 
@@ -119,38 +116,34 @@ for v in rR rKid rLone rOrph rCJK; do
 done
 CHECKS=$((CHECKS+5))
 
-# 1. the headline: 5 descendants (4 children + 1 grandchild), 3 of them done, and
-#    a loud marker for the one asking for the operator.
-has "parent row shows <done>/<total> over the WHOLE subtree" "$rR" "3/5 ✓"
-has "parent row shows the needs marker"                      "$rR" "1!"
-# …and it must be `5`, never `4` — the grandchild is part of the group under R.
-hasnt "the grandchild must be counted (total is 5, not 4)"   "$rR" "/4 ✓"
+# 1. the headline: 5 descendants (4 children + 1 grandchild), 3 of them done —
+#    as just the two numbers (issue #1328): no trailing ✓, and no `· 1!` either.
+has   "parent row shows <done>/<total> over the WHOLE subtree" "$rR" "3/5"
+hasnt "the badge carries no trailing ✓"                         "$rR" "3/5 ✓"
+hasnt "the badge carries no child state (the red child says it on its own row)" "$rR" "1!"
+# …and it must be `5`, never `4` — the grandchild is part of R's subtree.
+hasnt "the grandchild must be counted (total is 5, not 4)"   "$rR" "/4"
 
-# 2. loud/quiet: the count is muted grey, ONLY the needs marker is red. A future
-#    change that paints the whole badge red (or the needs count grey) fails here —
-#    the dash's one rule is that only `needs` is loud.
-has "the done/total half is muted grey" "$rR" $'\033['"$GY"'3/5 ✓'
-has "the needs half is RED"             "$rR" $'\033['"$RD"'1!'
-hasnt "the done/total half must not be red" "$rR" $'\033['"$RD"'3/5'
+# 2. quiet: the count is muted grey and nothing on the parent row is red — the
+#    dash's one rule is that only `needs` is loud, and the parent is not in needs.
+has   "the badge is muted grey"        "$rR" $'\033['"$GY"'3/5'
+hasnt "the parent row paints nothing red" "$rR" $'\033['"$RD"
 
-# 3. attribution = #503's grouping, verbatim. kid-done spawned grandkid, but the
-#    grandchild renders under R, so kid-done's own row must stay bare — otherwise
-#    the same window is counted on two rows and the badges no longer describe the
-#    indented block beneath them.
-hasnt "an intermediate parent draws no badge of its own" "$rKid" "1/1 ✓"
-hasnt "an intermediate parent draws no badge at all"     "$rKid" " ✓"
+# 3. EVERY level counts its own subtree (issue #1328): kid-done spawned grandkid,
+#    so its own row says `1/1` — the badge always describes exactly the block
+#    indented beneath the row that wears it, and R's `3/5` still sums the tree.
+has   "an intermediate parent draws its OWN subtree's badge" "$rKid" "1/1"
 
-# 4. a childless row draws NOTHING — not `0/0`, not an empty `✓`. (A dash row has
-#    no other `/` in it, so this also catches any stray badge.)
+# 4. a childless row draws NOTHING — not `0/0`. (A dash row has no other `/` in
+#    it, so this also catches any stray badge.)
 hasnt "a childless root draws no badge" "$rLone" "/"
-hasnt "a childless root draws no lone ✓" "$rLone" "✓"
 
 # 5. an orphan counts toward nobody and gets nothing itself.
 hasnt "an orphan draws no badge" "$rOrph" "/"
 
-# 6. the no-needs shape: `1/2 ✓` and no marker after it.
-has   "a parent with no needs child shows a bare count" "$rCJK" "1/2 ✓"
-hasnt "…and appends no needs marker"                    "$rCJK" "1/2 ✓ ·"
+# 6. the no-needs shape: `1/2` and nothing after it.
+has   "a parent with no needs child shows a bare count" "$rCJK" "1/2"
+hasnt "…and appends no needs marker"                    "$rCJK" "1/2 ·"
 hasnt "…and paints nothing red"                         "$rCJK" $'\033['"$RD"
 
 # 7. ALIGNMENT — the badge eats flex width, it must never push the right-pinned

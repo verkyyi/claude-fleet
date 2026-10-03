@@ -239,14 +239,14 @@ row_of() { printf '%s\n' "$out" | grep -- "$1" | head -1; }
 # display field, which is field 3 of the US-delimited row.
 dout=$(FLEET_SESSION=fleetC FZF_COLUMNS=180 bash "$ROWS" 2>/dev/null \
          | awk -F"$US" 'NR>1 {print $3}' | LC_ALL=C sed -e $'s/\x1b\\[[0-9;]*m//g')
-tree_of() { local r; r=$(printf '%s\n' "$dout" | grep -- "$1" | head -1); printf '%s' "${r:8:1}"; }
-eq "grouping: kidA draws └ in the tree cell" "└" "$(tree_of 'kidA')"
+tree_of() { local r; r=$(printf '%s\n' "$dout" | grep -- "$1" | head -1); printf '%s' "${r:8:2}"; }   # 2-cell tree column (#1328)
+eq "grouping: kidA draws └ in the tree cell" "└ " "$(tree_of 'kidA')"
 not_contains "grouping: a direct child drops the ↳ tag — the tree cell already says it" "$(row_of 'kidA')" "↳"
-eq "grouping: kidS draws └ under its scratch parent" "└" "$(tree_of 'kidS')"
+eq "grouping: kidS draws └ under its scratch parent" "└ " "$(tree_of 'kidS')"
 not_contains "grouping: … and drops its ↳~5 tag for the same reason" "$(row_of 'kidS')" "↳"
-eq "grouping: an orphan's tree cell is blank" " " "$(tree_of 'orphX')"
-contains "grouping: orphX KEEPS its tag — no tree cell to say it" "$out" "↳#999"
-eq "grouping: a hub root's tree cell is blank too" " " "$(tree_of ' rootB')"
+eq "grouping: an orphan's tree cell is blank" "  " "$(tree_of 'orphX')"
+not_contains "grouping: orphX wears no ↳ tag either (issue #1328)" "$out" "↳#999"
+eq "grouping: a hub root's tree cell is blank too" "  " "$(tree_of ' rootB')"
 rootA_line=$(row_of ' rootA')
 not_contains "grouping: a hub root has no tag" "$rootA_line" "↳"
 

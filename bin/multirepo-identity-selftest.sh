@@ -293,7 +293,7 @@ FLEET_SESSION="$M" bash "$BIN/fleet-history.sh" fold expand 'landed:issue:30' >/
 [ -f "$FLEET_C/global/dash_fold_landed_$M.o-a" ] || fail "landed: fold file is per repo (.o-a)"
 [ -f "$FLEET_C/global/dash_fold_landed_$M" ] && fail "landed: multi-repo wrote the shared fold file"
 out=$(lrows)
-has "landed: child nests under its same-repo parent" "$out" "└ child31"
+has "landed: child nests under its same-repo parent" "$out" "└  child31"
 hasnt "landed: origin prefix is not shown raw" "$out" "o-a:issue-30"
 leg landed
 

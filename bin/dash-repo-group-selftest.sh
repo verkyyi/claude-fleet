@@ -144,7 +144,7 @@ hasnt "G: …and no pin mark" "$r" "📌"
 s=$(side)
 eq    "G: sidebar — heading keyed hdr:pin, then the unmarked row" \
       "$(printf '%s\n' "$s" | sed -n '1,2p' | awk -F'|' '{ print $1 ":" $2 ":" $4 }' | tr '\n' '/')" \
-      "hdr:pin:Pinned (2)/$(tmux display -p -t 'alpha:pinme' '#{window_id}')::pinme ⇢tok · 0/1 ✓/"
+      "hdr:pin:Pinned (2)/$(tmux display -p -t 'alpha:pinme' '#{window_id}')::pinme ⇢tok/"
 tmux set -w -t 'alpha:pinme' -u @pin
 eq    "G: unpinned — raw bytes identical to before" "$(FLEET_SESSION=alpha bash "$ROWS")" "$before_raw"
 eq    "G: unpinned — sidebar identical to before"   "$(side)" "$before_side"
@@ -167,7 +167,7 @@ eq    "A2: …and back to bare once it goes" "$(fleet_repo_name alpha o/tokenled
 # --- B. the sidebar frame -------------------------------------------------------
 s=$(side)
 eq    "B: sidebar groups the same way" "$(printf '%s\n' "$s" | awk -F'|' '{ print $4 }' | tr '\n' ' ')" \
-      "claude-fleet (2) issue-1 issue-3 tokenledger (2) issue-2 · 0/1 ✓ no repo (1) norepo "
+      "claude-fleet (2) issue-1 issue-3 tokenledger (2) issue-2 no repo (1) norepo "
 eq    "B: sidebar headings carry five fields" "$(printf '%s\n' "$s" | grep '^hdr|' | awk -F'|' '{ print NF }' | sort -u)" "5"
 sel=$(printf '%s\n' "$s" | python3 -c '
 import importlib.util, sys
@@ -271,19 +271,19 @@ win 'skid'    @repo o/tokenledger  @issue 8 @origin o-tokenledger:issue-2
 r=$(rows)
 eq    "F: collapsed — the child is hidden, counted under its PARENT's heading" \
       "$(printf '%s\n' "$r" | names | tr '\n' ' ')" "claude-fleet (2) issue-1 tokenledger (2) issue-2 "
-has   "F: …and the caret that unfolds it sits on the parent" "$(printf '%s\n' "$r" | grep 'issue-1')" "▸ issue-1"
+has   "F: …and the caret that unfolds it sits on the parent" "$(printf '%s\n' "$r" | grep 'issue-1')" "▸  issue-1"
 tmux set -w -t 'alpha:issue-1' @expand 1
 tmux set -w -t 'alpha:issue-2' @expand 1
 r=$(rows)
 eq    "F: expanded — the child renders directly under its parent, in its group" \
       "$(printf '%s\n' "$r" | names | tr '\n' ' ')" "claude-fleet (2) issue-1 xkid tokenledger (2) issue-2 skid "
-has   "F: …drawn as a child"                "$(printf '%s\n' "$r" | grep 'xkid')" "└ xkid"
+has   "F: …drawn as a child"                "$(printf '%s\n' "$r" | grep 'xkid')" "└  xkid"
 has   "F: …with its repo tag"               "$(printf '%s\n' "$r" | grep 'xkid')" " ⇢tok"
 hasnt "F: a same-repo child wears no tag"   "$(printf '%s\n' "$r" | grep 'skid')" "⇢"
 hasnt "F: …nor does any root"               "$(printf '%s\n' "$r" | grep -E 'issue-[12]')" "⇢"
 s=$(side)
 eq    "F: sidebar — the same placement" "$(printf '%s\n' "$s" | awk -F'|' '{ print $4 }' | tr '\n' '/')" \
-      "claude-fleet (2)/issue-1 · 0/1 ✓/xkid ⇢tok/tokenledger (2)/issue-2 · 0/1 ✓/skid/"
+      "claude-fleet (2)/issue-1/xkid ⇢tok/tokenledger (2)/issue-2/skid/"
 eq    "F: sidebar — the child's tree cell" "$(printf '%s\n' "$s" | awk -F'|' '$4 ~ /^xkid/ { print $5 }')" "└"
 tmux kill-window -t 'alpha:issue-1'
 r=$(rows)
@@ -291,7 +291,7 @@ eq    "F: orphaned — back in its own group" "$(printf '%s\n' "$r" | names | tr
       "claude-fleet (0) tokenledger (3) issue-2 skid xkid "
 hasnt "F: …no └"                            "$(printf '%s\n' "$r" | grep 'xkid')" "└"
 hasnt "F: …no repo tag"                     "$(printf '%s\n' "$r" | grep 'xkid')" "⇢"
-has   "F: …the ↳ provenance stays"          "$(printf '%s\n' "$r" | grep 'xkid')" "↳#1"
+hasnt "F: …and no ↳ parent tag (issue #1328)"   "$(printf '%s\n' "$r" | grep 'xkid')" "↳"
 win 'issue-1' @repo o/claude-fleet @issue 1 @expand 1
 all_rows=$(rows)
 printf 'o/tokenledger\n' > "$FLEET_CONF_DIR/fleets/alpha/current-repo"   # the retired picker's (#1034)

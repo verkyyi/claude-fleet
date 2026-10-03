@@ -103,7 +103,7 @@ FLEET_SESSION=$M bash "$H" fold expand 'landed:issue:30@o/a' >/dev/null 2>&1
 [ -f "$FLEET_C/global/dash_fold_landed_$M.o-a" ] || fail "fold: o/a's own fold file"
 has "fold: holds the bare key" "$(cat "$FLEET_C/global/dash_fold_landed_$M.o-a" 2>/dev/null)" "issue-30"
 vis=$(rows "$M" | strip)
-has "fold: the o/b child nests under its o/a parent" "$vis" "└ beta-child"
+has "fold: the o/b child nests under its o/a parent" "$vis" "└  beta-child"
 before alpha-parent beta-child "$vis"
 act=$(FLEET_SESSION=$M bash "$H" fold collapse 'landed:scratch:nope@o/a' 2>/dev/null)
 [ -z "$act" ] || fail "fold: an unknown row is a dead keystroke, got [$act]"

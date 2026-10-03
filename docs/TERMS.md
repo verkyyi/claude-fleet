@@ -118,26 +118,24 @@ they repaint instantly:
   from where another left off.
 - **Spawn provenance / child report** — every spawned window carries `@origin`:
   the key (`issue-<N>` / `scratch-<N>`) of the session that spawned it, empty for
-  the hub. The dash GROUPS children under their parent, marking each one `└` in
-  the **tree column** (issue #836 — a fixed 2-cell column between `issue` and
-  `window`, so every name starts at the same column and gets the window field's
-  full 26 cells whatever its depth), and renders `@origin` as a `↳#483` tag — but
-  only where that cell cannot say the same thing: a direct child of the row its
-  block hangs off draws no tag (the `└` is the tag), while a **grandchild** keeps
-  one (the grouping is two-level-flat, so it is drawn under the ultimate root
-  beside its own parent, and `↳#<middle>` is the only thing naming that parent),
-  as do an **orphan** whose parent window is gone (blank tree cell) and a
-  non-window origin (`↳autofill`, `↳bridge`).
+  the hub. The dash NESTS every child directly under its own parent, one level
+  per generation (issue #1328; the indent stops growing at 4): the hub marks the
+  level in its **tree column** (issue #836 — a fixed 2-cell column between
+  `issue` and `window`: `└ ` a child, ` └` a grandchild, `┊└` deeper; a row with
+  a subtree carries its fold caret there too), the sidebar indents two cells a
+  level. Every level folds on its own. Position is the whole story — there is no
+  `↳#483` parent tag any more; an **orphan** whose parent window is gone sinks
+  below the live list (blank tree cell).
   Since #574 `@origin` is also an **address** — `bin/fleet-report-parent.sh`
   resolves it back to the parent's live window and pushes a fixed four-line
   `[child-report]` over the peer inbox when the child merges, blocks, or is
   reaped. So a worker that `--spawn`ed a follow-up hears the outcome instead of
   polling for it. Hub-spawned work sends nothing; `FLEET_CHILD_REPORT=0` turns it
   off per fleet. Since #624 the parent's own row also carries the **aggregate**
-  the individual reports never added up to — `3/5 ✓ · 1!`: three of its five
-  descendants done, one asking for you. Same attribution as the grouping, so the
-  count describes exactly the block under it; a row that spawned nothing draws
-  nothing. Since #937 every report is also **recorded**, delivered or not, in
+  the individual reports never added up to — `3/5`: three of its five
+  descendants done — on EVERY level (#1328), so each count describes exactly the
+  block under it; a child asking for you is the red `!` on its own row, which no
+  fold hides. A row that spawned nothing draws nothing. Since #937 every report is also **recorded**, delivered or not, in
   the parent's **children ledger** — `$FLEET_STATE/children/<parent-key>.ndjson`
   (keyed by the parent's key, not its window id, so a migrated parent keeps its
   book). `bin/fleet-children.sh` merges that ledger with each child's live state

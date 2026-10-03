@@ -216,29 +216,40 @@ r1=$(row_of 1); r2=$(row_of 2); r3=$(row_of 3); r4=$(row_of 4); r5=$(row_of 5); 
 [ -n "$r1" ] && [ -n "$r2" ] && [ -n "$r3" ] && [ -n "$r4" ] && [ -n "$r5" ] && [ -n "$r6" ] \
   || fail "expected a row per fixture window" "$out"
 
-# The glyph is asserted together with its colour escape, so a change that keeps the
-# character but drops the red (or vice versa) fails here rather than silently.
-has "ask  → a red ?"  "$r1" "${RD}?"
-has "perm → a red ⊘"  "$r2" "${RD}⊘"
-has "blocked → a red ⊠" "$r5" "${RD}⊠"
-has "bare → the red ! it always had" "$r3" "${RD}!"
-hasnt "ask must not render as !"  "$r1" "${RD}!"
-hasnt "perm must not render as !" "$r2" "${RD}!"
-hasnt "ask must not render as ⊘"  "$r1" "${RD}⊘"
+# ONE glyph since issue #1328: every needs kind is the same red `!` (ten glyphs
+# were more than anyone could keep apart). The KIND moved into words — the act
+# cell here, the sidebar's detail field below — so the operator still knows
+# which reflex a row wants without memorising `?`/`⊘`/`⊠`. Asserted with the
+# colour escape, so a change that keeps the character but drops the red fails.
+. "$BIN/fleet-ui-lang.sh"
+for pair in "1:ask" "2:perm" "3:other" "5:blocked"; do
+  idx=${pair%%:*}; kind=${pair#*:}
+  r=$(row_of "$idx")
+  has "needs/$kind → the one red !" "$r" "${RD}!"
+  has "needs/$kind → its act cell names the kind" "$r" "$(fleet_ui_t "needs_$kind")"
+  for old in '?' '⊘' '⊠' '↺'; do hasnt "needs/$kind never draws the retired $old" "$r" "${RD}$old"; done
+done
 
 # A stale-looking subtype on a window that is NOT red changes nothing: the reason is
 # only ever consulted under `needs`, so a `working` row keeps its spinner.
-hasnt "a working row must not take the perm glyph" "$r4" "⊘"
-hasnt "a done row must not take the blocked glyph" "$r6" "⊠"
+hasnt "a working row must not take the red !" "$r4" "${RD}!"
+hasnt "… nor a needs word" "$r4" "$(fleet_ui_t needs_perm)"
+hasnt "a done row must not take the red !" "$r6" "${RD}!"
 
-# Width: all four glyphs are ONE display cell, so the columns after them line up.
+# Width: the glyph is ONE display cell, so the columns after it line up.
 # Asserted by the `<glyph> <space> <grey handle cell>` shape every row shares.
-for pair in "1:?" "2:⊘" "3:!" "5:⊠"; do
-  idx=${pair%%:*}; g=${pair#*:}
-  r=$(row_of "$idx")
-  has "row $idx keeps the glyph slot's trailing space" "$r" "$g"$'\033'"[0m "
+for idx in 1 2 3 5; do
+  has "row $idx keeps the glyph slot's trailing space" "$(row_of "$idx")" "!"$'\033'"[0m "
 done
-printf 'selftest: GLYPH legs PASS (? / ⊘ / ⊠ / ! · same red · one cell · never on a non-needs row)\n' >&2
+# The sidebar carries the kind in its detail field (the 8th), for the selected
+# row's line under the list.
+side=$(FLEET_SESSION="$SESS" bash "$ROWS" --sidebar 2>&1)
+det_of() { printf '%s\n' "$side" | awk -F"$US" -v w="$1" '$1 == w { print $3 "|" $8; exit }'; }
+has "sidebar: ask → ! + its detail"     "$(det_of @1)" "!|$(fleet_ui_t needs_ask)"
+has "sidebar: perm → ! + its detail"    "$(det_of @2)" "!|$(fleet_ui_t needs_perm)"
+has "sidebar: blocked → ! + its detail" "$(det_of @5)" "!|$(fleet_ui_t needs_blocked)"
+case "$(det_of @4)" in *'|') CHECKS=$((CHECKS+1)) ;; *) fail "sidebar: a working row has no detail" "$(det_of @4)" ;; esac
+printf 'selftest: GLYPH legs PASS (one red ! · the kind in words · one cell · never on a non-needs row)\n' >&2
 
 printf 'selftest PASS: needs-reason — @claude_needs stamped+cleared by the hook, rendered by the dash (%s checks, #640)\n' "$CHECKS"
 exit 0

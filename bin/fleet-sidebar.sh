@@ -22,6 +22,8 @@ conf=$(fleet_conf_file "$sess")
 [ -f "$conf" ] || exit 0
 fleet_load_conf "$sess"
 export FLEET_UI_LANG="${FLEET_UI_LANG:-}"
+# the auto-width ceiling (issue #1328) rides the env into the spawned view
+export FLEET_SIDEBAR_WIDTH_MAX="${FLEET_SIDEBAR_WIDTH_MAX:-44}"
 
 case "$verb" in
   toggle|hide)

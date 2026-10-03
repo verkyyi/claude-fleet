@@ -25,7 +25,7 @@ import unicodedata
 
 BIN = Path(__file__).absolute().parent  # preserve the selftest shadow root
 US = "\x1f"
-VIEW_VERSION = "19"  # pass FLEET_UI_LANG into tmux-spawned sidebar panes
+VIEW_VERSION = "20"  # #1328: rows as name/badge/depth fields, laid out to the width
 # ↑↓ follow (issue #822): an arrow moves the highlight at once and switches to
 # it only after this much quiet. A held key on a slow link is one switch, not
 # one per row, and a row passed over is never selected — so the wake hook's
@@ -224,10 +224,14 @@ def leave_navigation(session):
 def sync(session, enabled, width, lock):
     info = fields(session + ":", US.join(("#{window_id}", "#{window_name}",
                   "#{window_width}", "#{session_attached}", "#{@issue}",
-                  "#{@raw}", "#{@worktree}", "#{@norepo}", "#{window_zoomed_flag}")))
-    if len(info) != 9:
+                  "#{@raw}", "#{@worktree}", "#{@norepo}", "#{window_zoomed_flag}",
+                  "#{@sidebar_width_manual}")))
+    if len(info) != 10:
         return
-    window, name, cols, attached, issue, raw, worktree, norepo, zoomed = info
+    window, name, cols, attached, issue, raw, worktree, norepo, zoomed, manual = info
+    # A width the operator dragged to (issue #1328) is the width from then on.
+    if manual.isdigit():
+        width = max(24, min(60, int(manual)))
     all_panes = panes(session)
     workers = [p for p in all_panes if p[1] == window and p[2] != "1" and p[4] != "1"]
     wanted = (enabled == "1" and attached != "0" and
@@ -264,6 +268,8 @@ def sync(session, enabled, width, lock):
     # sourced shell environment, so pass UI language explicitly.
     cmd = " ".join(shlex.quote(arg) for arg in (
         "env", "FLEET_UI_LANG=" + os.environ.get("FLEET_UI_LANG", ""),
+        "FLEET_SIDEBAR_WIDTH=" + str(width),
+        "FLEET_SIDEBAR_WIDTH_MAX=" + os.environ.get("FLEET_SIDEBAR_WIDTH_MAX", ""),
         "python3", str(BIN / "fleet-sidebar.py"), "ui", session, worker, lock))
     pane = tmux("split-window", "-d", "-h", "-b", "-f", "-l", str(width),
                 "-t", worker, "-c", cwd, "-P", "-F", "#{pane_id}", cmd)
@@ -431,6 +437,61 @@ def head(text, width):
         out.append(char)
         used += cells(char)
     return "".join(out)
+
+
+def width_of(text):
+    return sum(cells(char) for char in text)
+
+
+def row_left(marker, glyph, tree, name):
+    """`marker glyph tree name` (issue #836): the tree is the producer's indent +
+    `└` + caret (issue #1328), so a child's name starts two cells right of its
+    parent's, one level per generation."""
+    return marker + " " + glyph + " " + (tree or " ") + " " + name
+
+
+def row_text(marker, glyph, tree, name, badge, width):
+    """A session row laid out to `width` cells (issue #1328). The subtree badge
+    (`· k/N`) is right-aligned and ALWAYS whole; the name gets what is left and,
+    when it does not fit, ends in `…`. A narrow pane gives up name, never the
+    count — the old joined label was clipped from the right, so the count went
+    first. A row with no badge and a name that fits is exactly the old line."""
+    left = row_left(marker, glyph, tree, "")
+    right = ("· " + badge) if badge else ""
+    room = width - width_of(left) - (width_of(right) + 1 if right else 0)
+    if width_of(name) > room:
+        name = clip(name, max(0, room - 1)) + "…" if room > 0 else ""
+    text = left + name
+    if right:
+        text += " " * max(1, width - width_of(text) - width_of(right)) + right
+    return text
+
+
+def row_need(row):
+    """The cells `row` needs to show whole, plus the one the paint keeps free."""
+    wid, _state, glyph, name, tree, badge = row[:6]
+    if wid == "hdr":
+        return 0 if name.startswith("──") else width_of(name) + 1
+    need = width_of(row_left(" ", glyph, tree, name)) + 1
+    return need + (width_of("· " + badge) + 1 if badge else 0)
+
+
+def auto_width(rows, cols, base, top):
+    """The width the view wants for `rows` in a `cols`-wide window (issue #1328):
+    its longest row, between `base` (FLEET_SIDEBAR_WIDTH, 30) and `top`
+    (FLEET_SIDEBAR_WIDTH_MAX, 44), and never past a quarter of the window nor into
+    the worker's 80 columns (move_view's rule) — but never under `base`, which is
+    what the view was opened at."""
+    want = max([base] + [row_need(row) for row in rows])
+    want = min(want, top, cols // 4, cols - 81)
+    return max(base, want)
+
+
+def detail_line(row):
+    """The selected row's line above the input (issue #1328): its WHOLE name and,
+    for a `!` row, which kind of `!` — the glyph alone no longer says."""
+    name, detail = row[3], row[7]
+    return " " + name + (" · " + detail if detail else "")
 
 
 def wordy(char):
@@ -763,8 +824,50 @@ def collect_rows(proc):
     proc.out.close()
     if proc.returncode != 0:
         return None
-    return [line.split(US, 4) for line in text.split("\n")
-            if len(line.split(US, 4)) == 5]
+    return [row_fields(line) for line in text.split("\n") if line.count(US) >= 4]
+
+
+ROW_FIELDS = 8  # wid state glyph name tree badge depth detail (issue #1328)
+
+
+def row_fields(line):
+    """One producer line as its ROW_FIELDS fields: a heading's line stops at its
+    tree field (5), a session row's carries the badge / depth / detail too."""
+    parts = line.split(US, ROW_FIELDS - 1)
+    return parts + [""] * (ROW_FIELDS - len(parts))
+
+
+def env_int(name, default):
+    try:
+        return int(os.environ.get(name) or default)
+    except ValueError:
+        return default
+
+
+def fit_view(session, pane, rows, sized):
+    """Size the view to its rows (issue #1328) — auto_width, applied with one
+    resize-pane when it changed — until the operator drags it: a width that moved
+    while the view stayed in the same window at the same window width is THEIR
+    width, kept from then on as the session's `@sidebar_width_manual` (sync opens
+    every later view at it, and this stops resizing). `sized` is the (pane width,
+    window width, window) this function last left the view at; returns the next."""
+    info = fields(pane, US.join(("#{pane_width}", "#{window_width}", "#{window_id}",
+                                 "#{window_zoomed_flag}", "#{@sidebar_width_manual}")))
+    if len(info) != 5 or not info[0].isdigit() or not info[1].isdigit():
+        return sized
+    pw, ww, window, zoomed, manual = int(info[0]), int(info[1]), info[2], info[3], info[4]
+    if manual.isdigit() or zoomed == "1":
+        return sized
+    if sized is not None and sized[1:] == (ww, window) and sized[0] != pw:
+        tmux("set-option", "-t", "=" + session + ":", "@sidebar_width_manual", str(pw))
+        return sized
+    base = max(24, min(60, env_int("FLEET_SIDEBAR_WIDTH", 30)))
+    want = auto_width(rows, ww, base, max(base, env_int("FLEET_SIDEBAR_WIDTH_MAX", 44)))
+    if want != pw:
+        tmux("resize-pane", "-t", pane, "-x", str(want))
+        got = fields(pane, "#{pane_width}")[0]
+        pw = int(got) if got.isdigit() else pw
+    return (pw, ww, window)
 
 
 def visible(info, now):
@@ -801,6 +904,7 @@ def ui(screen, session, worker, lock):
     # newline. Written past curses: it never touches this private mode.
     os.write(1, b"\x1b[?2004h")
     rows, selected, offset, refresh_at = [], window, 0, 0.0
+    help_shown, sized = True, None
     shown, navigation, follow_at = False, False, None
     # The input line (issue #896). Keys arrive as BYTES through the fleet-sidebar
     # table's Any bind; decode them here, so a CJK name survives whatever locale
@@ -894,6 +998,8 @@ def ui(screen, session, worker, lock):
             if fields(worker, "#{pane_dead}") != ["0"]:
                 return
             shown = visible(info[:4], time.time())
+            if shown and loaded:
+                sized = fit_view(session, pane, rows, sized)
             if shown and producer is None:
                 producer = start_rows(env)
                 if not loaded:
@@ -947,7 +1053,7 @@ def ui(screen, session, worker, lock):
 
         screen.erase()
         colors = {"working": 1, "needs": 2, "done": 3, "looping": 4}
-        for y, (wid, state, glyph, label, tree) in enumerate(rows[offset:offset + page]):
+        for y, (wid, state, glyph, label, tree, badge, _depth, _detail) in enumerate(rows[offset:offset + page]):
             if wid == "hdr":
                 if navigation and key_of((wid, state)) == selected:
                     put(y, "› " + label, curses.color_pair(6) | curses.A_BOLD, fill=True)
@@ -964,9 +1070,21 @@ def ui(screen, session, worker, lock):
             # fixed cell between the state glyph and the name, so at 30 columns every
             # name starts in the same place instead of a child's text sitting two
             # columns right of its parent's.
-            put(y, marker + " " + glyph + " " + (tree or " ") + " " + label, attr,
+            put(y, row_text(marker, glyph, tree, label, badge, max(0, width - 1)), attr,
                 fill=wid == window or (navigation and wid == selected))
-        if help_y is not None:
+        # The selected row's whole name (and which `!` it is) takes the `?`
+        # row while the keyboard is here and that says more than the list
+        # does (issue #1328): a clipped name, or a needs detail.
+        info = None
+        if help_y is not None and navigation:
+            row = next((r for r in rows if r[0] == selected and r[0] != "hdr"), None)
+            if row is not None and (row[7] or
+                                    row_need(row) > max(0, width - 1)):
+                info = detail_line(row)
+        help_shown = help_y is not None and info is None
+        if info is not None:
+            put(help_y, info, curses.A_BOLD)
+        elif help_y is not None:
             put(help_y, HELP_ROW, curses.A_DIM)
         # ONE input line closes the list (issue #896): the hints moved to the
         # `?` sheet. Typing while the keyboard is here fills it; Enter starts a
@@ -1142,7 +1260,7 @@ def ui(screen, session, worker, lock):
             if buttons & (curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED):
                 refresh_at = 0
                 armed = None
-                if help_y is not None and y == help_y:
+                if help_y is not None and y == help_y and help_shown:
                     # The `? 快捷键` row (issue #948). Opened on the release, like
                     # the menu: the popup must not swallow this tap's own release.
                     follow_at = None
@@ -1173,7 +1291,7 @@ def ui(screen, session, worker, lock):
                 # Anywhere else (the input line included) the click only focuses:
                 # the bind already moved the keyboard here, so typing follows.
             elif buttons & curses.BUTTON1_RELEASED:
-                if armed == HELP_ROW and y == help_y:
+                if armed == HELP_ROW and y == help_y and help_shown:
                     open_help(screen, env)
                 elif armed is not None and hit == armed:
                     open_tap(screen, session, "new" if armed.startswith("hdr:") else "menu",

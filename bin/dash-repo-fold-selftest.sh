@@ -152,7 +152,7 @@ eq    "C: opening one keeps the other" "$(opt)" "none"
 eq    "C: …tokenledger back, no-repo still folded" "$(rows | names | tr '\n' ' ')" \
       "claude-fleet (2) issue-1 issue-3 tokenledger (2) issue-2 ▸ no repo (1) "
 eq    "C: the sidebar agrees" "$(side | awk -F'|' '{ print $4 }' | tr '\n' ' ')" \
-      "claude-fleet (2) issue-1 issue-3 tokenledger (2) issue-2 · 0/1 ✓ ▸ no repo (1) "
+      "claude-fleet (2) issue-1 issue-3 tokenledger (2) issue-2 ▸ no repo (1) "
 fold collapse hdr:o/claude-fleet >/dev/null
 fold collapse hdr:o/tokenledger >/dev/null
 eq    "C: every group folded — only headings, never the empty-state hint" "$(rows | tr '\n' '/')" \
@@ -175,7 +175,7 @@ eq    "D: quiet again — hidden again" "$(rows | names | tr '\n' ' ')" \
 cur=$(tmux list-windows -t alpha -F '#{window_id} #{window_name}' | awk '$2 == "issue-2" { print $1 }')
 eq    "D: the sidebar keeps its current window inside a folded group" \
       "$(FLEET_SIDEBAR_CURRENT=$cur side | awk -F'|' '{ print $4 }' | tr '\n' ' ')" \
-      "claude-fleet (2) issue-1 issue-3 ▸ tokenledger (2) issue-2 · 0/1 ✓ no repo (1) norepo "
+      "claude-fleet (2) issue-1 issue-3 ▸ tokenledger (2) issue-2 no repo (1) norepo "
 eq    "D: …the hub does not (it has no current row)" "$(rows | grep -c 'issue-2')" "0"
 fold expand hdr:o/tokenledger >/dev/null
 

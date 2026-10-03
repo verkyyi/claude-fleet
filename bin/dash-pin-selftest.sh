@@ -116,7 +116,7 @@ US=$(printf '\037')
 drows() { FLEET_SESSION=fleetP FZF_COLUMNS=180 bash "$ROWS" 2>/dev/null \
             | awk -F"$US" 'NR>1 {print $3}' | LC_ALL=C sed -e $'s/\x1b\\[[0-9;]*m//g'; }
 drow_of() { printf '%s\n' "$2" | awk -v n="$1" '{for(i=1;i<=NF;i++) if($i==n){print; exit}}'; }
-tree_of() { local r; r=$(drow_of "$1" "$(drows)"); printf '%s' "${r:8:1}"; }
+tree_of() { local r; r=$(drow_of "$1" "$(drows)"); printf '%s' "${r:8:2}"; }   # 2-cell tree column (#1328)
 
 # ============================================================================
 # A. the toggle script
@@ -190,12 +190,12 @@ eq "the rule is an inert hdr row with no 4th field" "hdr hdr 3" \
 side=$(FLEET_SESSION=fleetP bash "$ROWS" --sidebar 2>/dev/null)
 eq "sidebar: 置顶 heading first, keyed hdr:pin" "hdr pin 置顶 (3)" \
   "$(printf '%s\n' "$side" | sed -n 1p | awk -F"$US" '{print $1, $2, $4}')"
-eq "sidebar: the pinned row's label opens with its name (no \`* \`)" "pA · 0/2 ✓" \
-  "$(printf '%s\n' "$side" | sed -n 2p | awk -F"$US" '{print $4}')"
+eq "sidebar: the pinned row's label opens with its name (no \`* \`)" "pA|0/2" \
+  "$(printf '%s\n' "$side" | sed -n 2p | awk -F"$US" '{print $4 "|" $6}')"
 eq "sidebar: the rule closes the block, key fields hdr + empty" "hdr||200" \
   "$(printf '%s\n' "$side" | sed -n 5p | awk -F"$US" '{n=$4; gsub(/─/,"x",n); print $1 "|" $2 "|" length(n)}')"
-eq "a floated child keeps its └ tree cell" "└" "$(tree_of cA)"
-eq "a floated grandchild keeps its └ tree cell" "└" "$(tree_of gA)"
+eq "a floated child keeps its └ tree cell (+ its own caret)" "└▾" "$(tree_of cA)"
+eq "a floated grandchild sits one level deeper" " └" "$(tree_of gA)"
 # C2. ←/→ on the 置顶 heading folds the group (#1037's rail, one-repo fleet
 # too): the rows go, the red `needs` one would stay, the heading keeps its count.
 FOLD="$BIN/dash-fold-toggle.sh"
@@ -218,7 +218,7 @@ eq "pinned pB + its child float above the unpinned group" \
   "$(printf 'pB\ncB\npA\ncA\ngA')" "$(order "$out")"
 eq "cB sits DIRECTLY under its pinned parent" \
   "$(( $(line_of pB "$out") + 1 ))" "$(line_of cB "$out")"
-eq "cB keeps its tree cell while floated" "└" "$(tree_of cB)"
+eq "cB keeps its tree cell while floated" "└ " "$(tree_of cB)"
 
 # --- B3. several pins sort among themselves by their ordinary order -----------
 pin "$W_pA"
@@ -235,11 +235,11 @@ eq "a pinned child floats, taking its grandchild with it" \
 eq "the grandchild stays directly under it" \
   "$(( $(line_of cA "$out") + 1 ))" "$(line_of gA "$out")"
 # promoted to a group root ⇒ BLANK tree cell (its parent is no longer the line
-# above), but the ↳ provenance tag is never lost.
+# above); no ↳ tag either (issue #1328) — its parent's history is in /fleet-history.
 cA_line=$(printf '%s\n' "$out" | grep 'cA ')
-eq "a promoted pinned child blanks its tree cell" " " "$(tree_of cA)"
-contains "… but keeps its ↳ provenance tag" "$cA_line" "↳#100"
-eq "… and its own child still draws └ under it" "└" "$(tree_of gA)"
+eq "a promoted pinned child sheds its └ (keeps its caret)" "▾ " "$(tree_of cA)"
+not_contains "… and wears no ↳ parent tag" "$cA_line" "↳"
+eq "… and its own child still draws └ under it" "└ " "$(tree_of gA)"
 unpin "$W_cA"
 
 # --- B5. no residue ----------------------------------------------------------
