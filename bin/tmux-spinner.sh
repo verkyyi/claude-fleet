@@ -486,6 +486,7 @@ needs_check() {
     while read -r wid st nsub ts agent; do
       [ -n "$wid" ] || continue
       [ "$st" = needs ] || continue                       # ONLY red windows are candidates
+      [ "$nsub" = restore ] && continue                   # crash-restore's park (#1265): no turn to read; its own next turn clears it
       case "$agent" in ''|claude) : ;; *) continue ;; esac # Claude transcript oracle only (#730)
       [ "$left" -gt 0 ] || { nstarved=$((nstarved + 1)); continue; }   # budget spent; next check resumes
       case "$ts" in ''|*[!0-9]*) ts=0 ;; esac

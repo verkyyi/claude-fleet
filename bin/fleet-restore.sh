@@ -23,6 +23,25 @@
 #                     auto-restore is armed. This is what the launchd watcher runs,
 #                     so it never fights a healthy server or a deliberate shutdown.
 #   --arm / --disarm  enable/disable --if-down auto-restore (boot + crash watcher).
+#   --fresh <win> [--session <s>]
+#                     start a FRESH session in a window restore left `awaiting`
+#                     (no transcript) or `failed` (resume refused) — the only path
+#                     that opens a context-less session (issue #1265).
+#
+# Every reopened window ends with ONE outcome (issue #1265), stamped as the window
+# option @restore_outcome and printed as a one-line-per-window table at the end:
+#   resumed    the agent's input prompt came up — the conversation is back
+#   failed     the resume refused ("No conversation found") or the agent exited;
+#              the pane is parked at a shell, NO fresh session was started
+#   attention  a dialog is waiting for a human (session picker, trust prompt) or
+#              nothing settled within FLEET_RESTORE_PROBE_SECS (default 5) — never
+#              answered automatically
+#   awaiting   no transcript to resume: no agent is started at all; the window
+#              waits at a shell until the operator runs `--fresh <win>`
+#   fresh      the operator ran `--fresh` on it
+# failed/attention/awaiting also stamp @claude_state=needs + @claude_needs=restore,
+# which the dash draws as a red row tagged 「需要你」 and which the spinner and the
+# classifier leave alone; the window's own hooks clear it on its next real turn.
 #
 # The map lives under $FLEET_CONF_DIR/restore/ (durable across reboots, unlike the
 # $TMPDIR dash cache). One <session>.map per fleet so a fleet-down drops its own.
@@ -405,17 +424,25 @@ restore() {
         agent_label=codex; resume_flag=resume
         nudge=${nudge/claude --resume/codex resume}
       fi
+      # NEVER a silent fresh session (issue #1265). A stale/pruned id used to fall
+      # through `|| fleet-claude.sh` to a FRESH claude, and a window with no
+      # transcript launched one outright — either way the window looked restored
+      # while holding a session that remembered nothing, found out only when it
+      # acted on nothing or stalled. Now a failed resume parks at a shell and
+      # stamps @restore_exit (the probe below reads it as `failed`), and a window
+      # with no transcript starts NO agent at all (`awaiting`). The fresh launch is
+      # kept on the window as @restore_fresh_cmd, for `--fresh <win>` only.
+      local kind=resume fresh_cmd="$launch; exec \$SHELL"
       if [ -n "$wid" ] && [ "$wid" != "-" ]; then
-        # `|| fleet-claude.sh` fallback (mirrors hub-session.sh): a stale/pruned
-        # id makes `--resume` exit non-zero — fall back to a FRESH (parked, un-nudged)
-        # session instead of stranding the pane at a bare shell.
-        cmd="$launch $resume_flag '$wid'${nudge:+ '$nudge'} || $launch; exec \$SHELL"
+        cmd="$launch $resume_flag '$wid'${nudge:+ '$nudge'}; $(fleet_win_stamp_cmd @restore_exit 1)exec \$SHELL"
         say "    ↻ $wname → $agent_label $resume_flag ${wid%%-*}…${nudge:+ (auto-continue)}"
       else
-        cmd="$launch; exec \$SHELL"
-        say "    + $wname → fresh $agent_label (no transcript found)"
+        kind=awaiting
+        cmd='exec "$SHELL"'
+        say "    ⏸ $wname → awaiting you (no transcript found) — not starting a fresh $agent_label"
       fi
       if [ -n "$wsleep" ] && [ "$wsleep" != - ]; then
+        kind=sleep
         cmd='exec "$SHELL"'
         say "    z $wname → retained sleeping worker"
       fi
@@ -496,12 +523,164 @@ restore() {
           tmux -L "$sock" set-window-option -t "$nw" @claude_state "$wstate" 2>/dev/null
           tmux -L "$sock" set-window-option -t "$nw" @claude_state_ts "$(date +%s)" 2>/dev/null
         fi
+        # The outcome (issue #1265) — AFTER the state re-stamp above, so an awaiting
+        # window's `needs` is the last word, not the snapshot's state.
+        case "$kind" in
+          resume)
+            tmux -L "$sock" set-window-option -t "$nw" @restore_fresh_cmd "$stamp$fresh_cmd" 2>/dev/null
+            OSEQ=$((OSEQ + 1))
+            PENDING="$PENDING$OSEQ	$sock	$nw	$sess	$wname
+" ;;
+          awaiting)
+            tmux -L "$sock" set-window-option -t "$nw" @restore_fresh_cmd "$stamp$fresh_cmd" 2>/dev/null
+            OSEQ=$((OSEQ + 1))
+            mark_outcome "$OSEQ" "$sock" "$nw" "$sess" "$wname" awaiting \
+              "no transcript — fleet-restore.sh --fresh $wname --session $sess" ;;
+          sleep)
+            OSEQ=$((OSEQ + 1))
+            OUTCOMES="$OUTCOMES$OSEQ	$sess	$wname	sleeping	sleep record restored
+" ;;
+        esac
       fi
     done < <(awk -F'\t' '$1=="WIN"' "$mf")
     [ "$live" = 1 ] && [ "$reopened" = 0 ] && say "· $sess fully up — no missing work windows"
   done < <(each_restore_map)
   [ "$found" = 0 ] && say "no restore maps under $FLEET_CONF_DIR/fleets/*/ — nothing to restore"
+  [ -n "$dry" ] && return 0
+  probe_outcomes
+  print_outcomes
   return 0
+}
+
+# ---------------------------------------------------------------- outcome -----
+# Issue #1265: restore used to end the moment it had typed `claude --resume` into
+# each window, so "everything is back" was an assumption — a refused resume, a
+# session picker, or a window with no transcript all looked the same on the dash.
+# Now every reopened window is WATCHED until it says which one it is, and the run
+# ends with a table of them.
+PENDING=''     # "<seq>\t<sock>\t<window-id>\t<sess>\t<name>" lines still being probed
+OUTCOMES=''    # "<seq>\t<sess>\t<name>\t<outcome>\t<note>" lines; <seq> = restore order
+OSEQ=0
+
+# mark_outcome <seq> <sock> <win> <sess> <name> <outcome> <note> — stamp + record one.
+# Everything except `resumed`/`fresh` is something the operator must look at, so it
+# also goes red: @claude_state=needs with the `restore` subtype, which the dash tags
+# 「需要你」 and the spinner/classifier leave standing (no live turn to refute it).
+mark_outcome() {
+  local seq="$1" sock="$2" w="$3" sess="$4" name="$5" oc="$6" note="${7:-}"
+  tmux -L "$sock" set-window-option -t "$w" @restore_outcome "$oc" 2>/dev/null
+  case "$oc" in
+    failed|attention|awaiting)
+      tmux -L "$sock" set-window-option -t "$w" @claude_state needs 2>/dev/null
+      tmux -L "$sock" set-window-option -t "$w" @claude_needs restore 2>/dev/null
+      tmux -L "$sock" set-window-option -t "$w" @claude_state_ts "$(date +%s)" 2>/dev/null ;;
+  esac
+  OUTCOMES="$OUTCOMES$seq	$sess	$name	$oc	$note
+"
+  log "outcome $sess/$name $oc${note:+ — $note}"
+}
+
+# The screens a probe recognises. A dialog is checked BEFORE the prompt: a picker's
+# cursor row (`❯ 1. …`) would otherwise read as the input prompt. Claude's prompt is
+# a `❯` row with nothing numbered after it (plus the `? for shortcuts` hint); Codex's
+# is `›`. Override for a TUI that renders otherwise.
+RESTORE_NOCONV_RE="${FLEET_RESTORE_NOCONV_RE:-No conversation found|No session found|session not found}"
+RESTORE_DIALOG_RE="${FLEET_RESTORE_DIALOG_RE:-Resume Session|Resume a conversation|Select a conversation|Search sessions|Do you trust the files|trust this folder}"
+RESTORE_PROMPT_RE="${FLEET_RESTORE_PROMPT_RE:-^[[:space:]│]*(❯|›)([[:space:]]*$|[[:space:]]+[^0-9[:space:]])|for shortcuts}"
+
+# probe_outcomes — poll every pending window each 200 ms for at most
+# FLEET_RESTORE_PROBE_SECS (default 5) seconds, ALL windows in one loop so a
+# 20-window fleet costs 5 s, not 100. Unsettled at the deadline ⇒ `attention`:
+# restore could not see the session come back, so it does not claim it did.
+probe_outcomes() {
+  [ -n "$PENDING" ] || return 0
+  local secs="${FLEET_RESTORE_PROBE_SECS:-5}"
+  case "$secs" in (''|*[!0-9]*) secs=5;; esac
+  local tries=$(( secs * 5 )) i=0 left seq sock w sess name ex cap oc note
+  while :; do
+    left=''
+    while IFS=$'\t' read -r seq sock w sess name; do
+      [ -n "$w" ] || continue
+      oc=''; note=''
+      ex=$(tmux -L "$sock" display-message -p -t "$w" '#{@restore_exit}' 2>/dev/null)
+      cap=$(tmux -L "$sock" capture-pane -p -t "$w" 2>/dev/null)
+      if printf '%s\n' "$cap" | grep -Eq "$RESTORE_NOCONV_RE"; then
+        oc=failed; note="resume refused: $(printf '%s\n' "$cap" | grep -Eo "($RESTORE_NOCONV_RE).*" | head -1 | cut -c1-60)"
+      elif [ -n "$ex" ]; then
+        oc=failed; note="agent exited — pane is at a shell"
+      elif printf '%s\n' "$cap" | grep -Eq "$RESTORE_DIALOG_RE"; then
+        oc=attention; note="a dialog is waiting for you (not answered automatically)"
+      elif printf '%s\n' "$cap" | grep -Eq "$RESTORE_PROMPT_RE"; then
+        oc=resumed
+      elif [ "$i" -ge "$tries" ]; then
+        oc=attention; note="no prompt within ${secs}s — check the window"
+      fi
+      if [ -n "$oc" ]; then
+        case "$oc" in failed) note="$note — fleet-restore.sh --fresh $name --session $sess" ;; esac
+        mark_outcome "$seq" "$sock" "$w" "$sess" "$name" "$oc" "$note"
+      else
+        left="$left$seq	$sock	$w	$sess	$name
+"
+      fi
+    done <<EOF
+$PENDING
+EOF
+    PENDING=$left
+    [ -n "$PENDING" ] || break
+    i=$((i + 1))
+    sleep 0.2 2>/dev/null || sleep 1
+  done
+}
+
+# print_outcomes — the end-of-run table, one line per reopened window.
+print_outcomes() {
+  [ -n "$OUTCOMES" ] || return 0
+  local n; n=$(printf '%s' "$OUTCOMES" | grep -c .)
+  say "restore outcome ($n window$([ "$n" = 1 ] || echo s)):"
+  local _seq sess name oc note
+  while IFS=$'\t' read -r _seq sess name oc note; do
+    [ -n "$name" ] || continue
+    say "$(printf '  %-10s %-24s %-28s %s' "$oc" "$sess" "$name" "$note" | sed 's/ *$//')"
+  done <<EOF
+$(printf '%s' "$OUTCOMES" | sort -n -k1,1)
+EOF
+}
+
+# fresh_window <win> [<sess>] — the operator's explicit "start it over" (issue
+# #1265): only a window restore parked as awaiting/failed, and only with the launch
+# command restore recorded on it. `attention` is refused: an agent is still running
+# there (a dialog is open) and this would kill it.
+fresh_window() {
+  local win="${1:-}" sess="${2:-}"
+  [ -n "$win" ] || { echo "usage: fleet-restore.sh --fresh <window-name|@id> [--session <s>]" >&2; return 2; }
+  [ -n "$sess" ] || sess=$(fleet_current_session)
+  [ -n "$sess" ] || { echo "fleet-restore: --fresh needs --session <s> outside a fleet pane" >&2; return 2; }
+  local sock; sock=$(fleet_socket "$sess")
+  local rows
+  rows=$(tmux -L "$sock" list-windows -t "$sess" -F '#{window_id}|#{window_name}|#{@restore_outcome}' 2>/dev/null \
+         | awk -F'|' -v w="$win" '($1==w || $2==w) && ($3=="awaiting" || $3=="failed")')
+  if [ -z "$rows" ]; then
+    echo "fleet-restore: no window '$win' in $sess is awaiting a fresh start (only awaiting/failed restore outcomes are)" >&2
+    return 1
+  fi
+  if [ "$(printf '%s\n' "$rows" | grep -c .)" -gt 1 ]; then
+    echo "fleet-restore: '$win' matches several windows in $sess — pass a window id:" >&2
+    printf '%s\n' "$rows" | sed 's/^/  /' >&2
+    return 1
+  fi
+  local w name cmd
+  w=${rows%%|*}; name=$(printf '%s' "$rows" | cut -d'|' -f2)
+  cmd=$(tmux -L "$sock" show-options -wv -t "$w" @restore_fresh_cmd 2>/dev/null)
+  [ -n "$cmd" ] || { echo "fleet-restore: $name has no recorded launch command — start it by hand" >&2; return 1; }
+  tmux -L "$sock" respawn-pane -k -t "$w" "$cmd" 2>/dev/null \
+    || { echo "fleet-restore: could not respawn $name" >&2; return 1; }
+  tmux -L "$sock" set-window-option -t "$w" @restore_outcome fresh 2>/dev/null
+  tmux -L "$sock" set-window-option -u -t "$w" @restore_exit 2>/dev/null
+  tmux -L "$sock" set-window-option -t "$w" @claude_state '' 2>/dev/null
+  tmux -L "$sock" set-window-option -t "$w" @claude_needs '' 2>/dev/null
+  tmux -L "$sock" set-window-option -t "$w" @claude_state_ts "$(date +%s)" 2>/dev/null
+  log "outcome $sess/$name fresh (operator --fresh)"
+  echo "fleet-restore: $name → fresh session started"
 }
 
 # ------------------------------------------------------------------- main -----
@@ -534,6 +713,13 @@ case "${1:-}" in
     fi
     log "mapped fleet down + armed → auto-restore"
     QUIET=1 restore ;;
+  --fresh)
+    shift; fr_win="${1:-}"; fr_sess=''
+    [ "$#" -gt 0 ] && shift
+    while [ "$#" -gt 0 ]; do
+      case "$1" in --session) fr_sess="${2:-}"; shift 2 ;; *) echo "fleet-restore: unknown arg $1" >&2; exit 2 ;; esac
+    done
+    fresh_window "$fr_win" "$fr_sess"; exit $? ;;
   ""|--restore) restore ;;
-  *) echo "usage: fleet-restore.sh [--snapshot|--dry-run|--if-down|--arm|--disarm]" >&2; exit 2;;
+  *) echo "usage: fleet-restore.sh [--snapshot|--dry-run|--if-down|--arm|--disarm|--fresh <win> [--session <s>]]" >&2; exit 2;;
 esac

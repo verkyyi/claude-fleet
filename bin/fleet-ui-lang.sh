@@ -45,6 +45,8 @@ fleet_ui_t() {
     en:sidebar_save_failed)     printf 'fleet: could not save sidebar preference' ;;
     zh:wait_slot)               printf 'z · 等待空位' ;;
     en:wait_slot)               printf 'z · waiting for a slot' ;;
+    zh:restore_needs_you)       printf '↺ 需要你' ;;
+    en:restore_needs_you)       printf '↺ needs you' ;;
     zh:repo_none_tag)           printf '⇢无' ;;
     en:repo_none_tag)           printf '⇢none' ;;
     zh:pin_heading_fmt)         printf '置顶 (%s)' "${1:-}" ;;
