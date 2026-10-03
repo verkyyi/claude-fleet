@@ -5583,3 +5583,26 @@ fleet_ctx_line() {
   [ "$p" -gt 100 ] && p=100
   printf '%s\n' "$p"
 }
+
+# --- where a compact-in-place recovery map lives (issue #1318) -------------------
+# fleet_recovery_map_path [<pane>] [<cwd>] — the file the compact-prep Stop
+# (bin/set-claude-state.sh) asks a session to write its recovery map to, and the one
+# bin/refocus-hook.sh reads back after the /compact. A worker's or scratch's
+# worktree ⇒ `<git-dir>/fleet-recovery-map.md` (per worktree, never committed — the
+# #1269 rule, unchanged); a scratch with no git dir (opened in $HOME, a 2+ repo hub
+# dir) ⇒ `$FLEET_CONF_DIR/fleets/<sess>/recovery/w<window-id>.md` — one file per
+# window, keyed by tmux's window id (stable for the window's life; a reused id after
+# a server restart just overwrites a stale map, which every prep does anyway). The
+# directory is NOT created here: the prep step does that. Prints nothing and returns
+# 1 when neither resolves (no git dir, no fleet session or window).
+fleet_recovery_map_path() {
+  local pane="${1:-${TMUX_PANE:-}}" cwd="${2:-}" gd sess wid
+  [ -n "$cwd" ] || cwd=$(pwd -P 2>/dev/null)
+  gd=$(git -C "$cwd" rev-parse --absolute-git-dir 2>/dev/null)
+  if [ -n "$gd" ]; then printf '%s/fleet-recovery-map.md\n' "$gd"; return 0; fi
+  [ -n "$pane" ] || return 1
+  sess=$(tmux display-message -p -t "$pane" '#{session_name}' 2>/dev/null)
+  wid=$(tmux display-message -p -t "$pane" '#{window_id}' 2>/dev/null | tr -cd '0-9')
+  [ -n "$sess" ] && [ -n "$wid" ] || return 1
+  printf '%s/fleets/%s/recovery/w%s.md\n' "$FLEET_CONF_DIR" "$sess" "$wid"
+}

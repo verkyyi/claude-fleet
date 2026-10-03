@@ -213,9 +213,10 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    charter back as `additionalContext` — a ≤1.5 KB block opening
    `[fleet charter] #<N>` (issue, repo, branch, PR, one-issue-one-PR, how to
    land), so a long auto-compacted worker doesn't drift out of scope. Zero gh
-   calls; silent for the hub, scratch, headless children and any other source.
+   calls; silent for the hub, headless children and any other source (a scratch
+   gets only its recovery map back, after a fleet compaction — issue #1318).
    `FLEET_REFOCUS=0` turns it off. When the fleet itself ran that `/compact`
-   (issue #1269 — a worker in `[FLEET_COMPACT_PREP_PCT` (default 70)`,
+   (issue #1269 — a worker or scratch (#1318) in `[FLEET_COMPACT_PREP_PCT` (default 70)`,
    FLEET_AUTO_HANDOFF_PCT)` is asked at a clean Stop for a recovery map, then
    compacted in place at the next idle Stop instead of handed off), the same hook
    adds a "check the map against git and the PR" line and stamps

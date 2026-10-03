@@ -15,8 +15,13 @@
 #                it, ⇒ no new prep.
 #   HANDOFF      at/over FLEET_AUTO_HANDOFF_PCT the original handoff nudge fires and
 #                compaction stays out of it.
-#   SCOPE / OFF  scratch, a codex pane, a needs stop, stop_hook_active on a fresh
-#                prep, and FLEET_COMPACT_PREP_PCT=0 ⇒ nothing.
+#   SCOPE / OFF  the hub (no @issue, no @raw), a codex pane (worker or scratch), a
+#                needs stop, stop_hook_active on a fresh prep, and
+#                FLEET_COMPACT_PREP_PCT=0 ⇒ nothing.
+#   SCRATCH      (#1318) an @raw=1 window walks the same three steps: its map goes
+#                to its worktree's git dir, or — no git dir — to
+#                $FLEET_CONF_DIR/fleets/<sess>/recovery/w<window-id>.md; the refocus
+#                restates the MAP (not an issue charter); the cap hands it off.
 #   DEDUP        a prep stage whose sender ran < 60 s ago spawns no second sender.
 #   TYPING HOLD  an operator keypress at this window holds the keystrokes; held past
 #                the deadline ⇒ nothing typed and the stage stays `prep` (#571).
@@ -26,7 +31,7 @@
 #                the handoff block instead ("compacted in place N times"), through
 #                the same latch + typing hold; SessionStart clear/startup zeroes
 #                the count (compact/resume keep it); FLEET_COMPACT_MAX=0 is
-#                byte-identical to no cap; codex / scratch untouched.
+#                byte-identical to no cap; codex untouched; scratch capped too.
 # No real tmux server, no gh, no live Claude.
 set -uo pipefail
 
@@ -37,7 +42,8 @@ done
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/compact-prep-selftest.XXXXXX")" || exit 2
 trap 'rm -rf "$WORK"' EXIT
-mkdir -p "$WORK/fakepath" "$WORK/inst/bin" "$WORK/conf/fleets/s1" "$WORK/tmp" "$WORK/widgets-issue-12"
+mkdir -p "$WORK/fakepath" "$WORK/inst/bin" "$WORK/conf/fleets/s1" "$WORK/tmp" "$WORK/widgets-issue-12" \
+  "$WORK/widgets-scratch-3" "$WORK/nogit"
 for f in set-claude-state.sh fleet-hook-conf.sh fleet-lib.sh fleet-lang.sh fleet-compact-send.sh refocus-hook.sh handoff-latch-reset-hook.sh; do
   cp "$BIN/$f" "$WORK/inst/bin/$f"
 done
@@ -49,6 +55,10 @@ OPTS="$WORK/opts"; SENDLOG="$WORK/send.log"
 git -C "$WORK/widgets-issue-12" init -q -b issue-12 2>/dev/null || git -C "$WORK/widgets-issue-12" init -q
 GITDIR=$(git -C "$WORK/widgets-issue-12" rev-parse --absolute-git-dir)
 MAP="$GITDIR/fleet-recovery-map.md"
+git -C "$WORK/widgets-scratch-3" init -q -b scratch-3 2>/dev/null || git -C "$WORK/widgets-scratch-3" init -q
+SGITDIR=$(git -C "$WORK/widgets-scratch-3" rev-parse --absolute-git-dir)
+SMAP="$SGITDIR/fleet-recovery-map.md"
+CMAP="$WORK/conf/fleets/s1/recovery/w1.md"      # a scratch with NO git dir (#1318)
 printf 'FLEET_REPO=acme/widgets\nFLEET_MAIN=%s/main\nFLEET_BASE_BRANCH=trunk\n' "$WORK" > "$WORK/conf/fleets/s1/conf"
 
 # --- stateful fake tmux: options in $OPTS ("key<TAB>value"), send-keys logged ----
@@ -120,7 +130,7 @@ PY
 getopt() { awk -F'\t' -v k="$1" '$1 == k { print $2 }' "$OPTS"; }
 # stop [<payload>] — one Stop hook (set-claude-state.sh done) from the worktree.
 stop() {
-  OUT=$(cd "$WORK/widgets-issue-12" && printf '%s' "${1:-"{}"}" | env -i PATH="$WORK/fakepath:/usr/bin:/bin" \
+  OUT=$(cd "${CWD:-$WORK/widgets-issue-12}" && printf '%s' "${1:-"{}"}" | env -i PATH="$WORK/fakepath:/usr/bin:/bin" \
         HOME="$WORK" TMPDIR="$WORK/tmp" TMUX="$WORK/sock,1,0" TMUX_PANE='%9' \
         FLEET_CONF_DIR="$WORK/conf" FAKE_OPTS="$OPTS" FAKE_SENDLOG="$SENDLOG" \
         FAKE_CLIENTS="${FAKE_CLIENTS:-}" FLEET_COMPACT_SEND_GRACE=0 \
@@ -129,7 +139,7 @@ stop() {
 }
 # compact_start — SessionStart(source=compact): the refocus hook.
 compact_start() {
-  OUT=$(cd "$WORK/widgets-issue-12" && printf '{"hook_event_name":"SessionStart","source":"compact"}' \
+  OUT=$(cd "${CWD:-$WORK/widgets-issue-12}" && printf '{"hook_event_name":"SessionStart","source":"compact"}' \
         | env -i PATH="$WORK/fakepath:/usr/bin:/bin" HOME="$WORK" TMPDIR="$WORK/tmp" \
           TMUX="$WORK/sock,1,0" TMUX_PANE='%9' FLEET_SKIP_GLOBAL_CONF=1 \
           FLEET_CONF_DIR="$WORK/conf" FAKE_OPTS="$OPTS" FAKE_SENDLOG="$SENDLOG" \
@@ -221,14 +231,67 @@ ok "HANDOFF ctx ≥ handoff % → handoff nudge, no compaction; band = [prep, ha
 
 # ===== SCOPE / OFF ===============================================================
 conf '' ''
-reset @ctx_pct=80 @issue= @raw=1;              stop; blocked && fail "scratch must not compact" "$OUT"
+reset @ctx_pct=80 @issue=;                     stop; blocked && fail "the hub / a panel (no @issue, no @raw) must not compact" "$OUT"
+reset @ctx_pct=80 @issue= @raw=1 @cc_agent=codex; stop; blocked && fail "a codex scratch must not compact" "$OUT"
 reset @ctx_pct=80 @cc_agent=codex;             stop; blocked && fail "codex pane must not compact" "$OUT"
 reset @ctx_pct=80 @claude_state=needs;         stop; blocked && fail "a needs stop must not be hijacked" "$OUT"
 reset @ctx_pct=80; stop '{"stop_hook_active":true}'; blocked && fail "stop_hook_active must not start a prep" "$OUT"
 conf 0 ''
 reset @ctx_pct=95;                             stop; blocked && fail "FLEET_COMPACT_PREP_PCT=0 must be off" "$OUT"
 [ -z "$(getopt @compact_stage)" ] || fail "off must stamp nothing"
-ok "SCOPE/OFF scratch · codex · needs · stop_hook_active · 0 ⇒ nothing"
+ok "SCOPE/OFF hub · codex (worker + scratch) · needs · stop_hook_active · 0 ⇒ nothing"
+
+# ===== SCRATCH: compact in place too (issue #1318) ================================
+# The scratch-section output IS the 上线证据 of #1318: each line names the step.
+conf '' ''
+for leg in git nogit; do
+  if [ $leg = git ]; then CWD="$WORK/widgets-scratch-3"; M="$SMAP"; else CWD="$WORK/nogit"; M="$CMAP"; fi
+  export CWD
+  rm -f "$M"; rm -rf "$WORK/conf/fleets/s1/recovery"
+  reset @ctx_pct=72 @issue= @raw=1
+  stop
+  blocked || fail "scratch ($leg) at the prep line must block with the recovery-map request" "$OUT"
+  case "$OUT" in *'compact-prep threshold'*"$M"*'scratch session'*) : ;;
+    *) fail "scratch ($leg) prep must name $M and say scratch, not an issue" "$OUT" ;; esac
+  case "$OUT" in *'issue #'*) fail "scratch ($leg) prep must not name an issue" "$OUT" ;; esac
+  printf '%s' "$OUT" | python3 -c 'import json,sys; json.load(sys.stdin)' || fail "scratch prep output must be valid JSON" "$OUT"
+  [ "$(getopt @compact_stage)" = prep ] || fail "scratch ($leg) step 1 must stamp prep"
+  [ -d "$(dirname "$M")" ] || fail "scratch ($leg) prep must create the map's directory $(dirname "$M")"
+  ok "SCRATCH[$leg] step 1 ctx 72 → prep, map → ${M#"$WORK"/}"
+
+  printf 'goal: drive EPIC #77\nnext: merge PR #78\n' > "$M"
+  setopt @ctx_pct 75; stop '{"stop_hook_active":true}'
+  wait_sent 1
+  [ "$(sent)" = 1 ] || fail "scratch ($leg) step 2 must type exactly one /compact"
+  grep -q -- "/compact Keep the fleet RECOVERY MAP.*$M" "$SENDLOG" || fail "scratch ($leg) /compact must name the map file"
+  [ "$(getopt @compact_stage)" = compacting ] || fail "scratch ($leg) step 2 must stamp compacting"
+  ok "SCRATCH[$leg] step 2 idle → exactly one /compact naming the map, stage compacting"
+
+  compact_start
+  case "$OUT" in *'[fleet recovery map] scratch'*'CHECK FIRST'*"$M"*'drive EPIC #77'*'merge PR #78'*) : ;;
+    *) fail "scratch ($leg) SessionStart(compact) must restate the map inline" "$OUT" ;; esac
+  case "$OUT" in *'[fleet charter]'*) fail "scratch ($leg) must not get an issue charter" "$OUT" ;; esac
+  printf '%s' "$OUT" | python3 -c 'import json,sys; json.load(sys.stdin)' || fail "scratch refocus must be valid JSON" "$OUT"
+  [ "$(getopt @compact_stage)" = restored ] || fail "scratch ($leg) step 3 must stamp restored"
+  [ "$(getopt @compact_count)" = 1 ] || fail "scratch ($leg) compaction must count"
+  compact_start
+  [ -z "$OUT" ] || fail "scratch ($leg): an auto compaction (not ours) stays silent" "$OUT"
+  ok "SCRATCH[$leg] step 3 SessionStart(compact) → restored, map restated (no charter), counted"
+  unset CWD
+done
+# FLEET_REFOCUS=0 silences the scratch restatement too (stage still completes).
+CWD="$WORK/nogit"; export CWD
+reset @issue= @raw=1 @compact_stage=compacting
+printf 'FLEET_REFOCUS=0\n' >> "$WORK/conf/fleets/s1/conf"
+compact_start
+sed -i.bak '/^FLEET_REFOCUS=0$/d' "$WORK/conf/fleets/s1/conf"
+[ -z "$OUT" ] || fail "FLEET_REFOCUS=0 must silence the scratch restatement" "$OUT"
+[ "$(getopt @compact_stage)" = restored ] || fail "FLEET_REFOCUS=0 still completes the stage"
+unset CWD
+# A worker's map path is unchanged: still its worktree's git dir.
+reset @ctx_pct=72; stop
+case "$OUT" in *"$MAP"*'issue #12, branch, PR'*) : ;; *) fail "the worker prep is unchanged by #1318" "$OUT" ;; esac
+ok "SCRATCH FLEET_REFOCUS=0 silences it; a worker's map path + directive are unchanged"
 
 # ===== DEDUP =====================================================================
 conf '' ''
@@ -303,9 +366,12 @@ reset @ctx_pct=72 @compact_count=2; stop '{"stop_hook_active":true}'
 blocked && fail "stop_hook_active must not start the cap handoff" "$OUT"
 reset @ctx_pct=72 @compact_count=2 @cc_agent=codex; stop
 blocked && fail "a codex pane is untouched by the cap" "$OUT"
-reset @ctx_pct=72 @compact_count=2 @issue= @raw=1; stop
-blocked && fail "scratch is untouched by the cap" "$OUT"
-ok "CAP typing hold · stop_hook_active · codex · scratch"
+reset @ctx_pct=72 @compact_count=2 @issue=; stop
+blocked && fail "the hub is untouched by the cap" "$OUT"
+reset @ctx_pct=72 @compact_count=2 @issue= @raw=1; CWD="$WORK/widgets-scratch-3" stop
+case "$OUT" in *'compacted in place 2 times (FLEET_COMPACT_MAX=2)'*) : ;; *) fail "a scratch at the cap must get the handoff block (#1318)" "$OUT" ;; esac
+[ "$(getopt @handoff_armed)" = 1 ] || fail "the scratch cap handoff must latch"
+ok "CAP typing hold · stop_hook_active · codex · hub untouched · scratch capped (#1318)"
 
 # SessionStart: clear/startup zero the count; compact/resume keep it.
 for src in compact resume; do
