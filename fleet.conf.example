@@ -1398,6 +1398,13 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # FLEET_NOTIFY_CMD from the next tick that does run. Default 600 = 10× the TTL.
 # @label=Quota watch stale after @group=accounts @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_ACCOUNT_QUOTA_STALE=600
+# Status-line readings (issue #1267): each window's status line stamps its
+# account's 5h/7d % (@rl5h/@rl7d/@rl_reset/@rl_ts), and the watch acts on the
+# NEWEST reading per account — a stamp, or ccquota's row as of its fetch. A stamp
+# older than this is no reading (an idle session stops re-rendering), and
+# ccquota's row stands. Default 600 s.
+# @label=Status-line quota reading valid for @group=accounts @tier=internal @scope=global @edit=int @unit=sec
+#FLEET_QUOTA_RL_TTL=600
 # The OTHER way that watch goes blind (issue #684): the fetch restamps the cache
 # even when it came back with nothing, so a hub answering with zero rows leaves a
 # cache that is FRESH and EMPTY — stamp-age alarms read it as healthy while the

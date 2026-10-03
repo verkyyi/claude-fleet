@@ -494,6 +494,25 @@ if command -v jq >/dev/null 2>&1; then
   grep -q '@ctx_pct 63' "$SETOPT_LOG" 2>/dev/null \
     || fail "statusline must stamp @ctx_pct 63 for used_percentage=63.4, log: $(cat "$SETOPT_LOG")"
   printf 'selftest: MEASURE leg PASS (statusline stamps @ctx_pct)\n' >&2
+  # #1267: the account's own 5h/7d off .rate_limits, stamped as @rl5h/@rl7d/
+  # @rl_reset/@rl_ts for the quota watch — only when BOTH % are there.
+  : > "$SETOPT_LOG"
+  printf '%s' '{"rate_limits":{"five_hour":{"used_percentage":12.7,"resets_at":1791031200},"seven_day":{"used_percentage":2,"resets_at":1791554400}}}' \
+    | PATH="$WORK/fakepath:$PATH" TMUX='fake,1,0' TMUX_PANE="$PANE" SETOPT_LOG="$SETOPT_LOG" \
+        bash "$STATUSLINE" >/dev/null 2>&1
+  RLLOG=$(cat "$SETOPT_LOG")
+  case "$RLLOG" in *"@rl5h 12 "*) : ;; *) fail "statusline must stamp @rl5h 12 for five_hour 12.7 (log: $RLLOG)" ;; esac
+  case "$RLLOG" in *"@rl7d 2 "*) : ;; *) fail "statusline must stamp @rl7d 2 (log: $RLLOG)" ;; esac
+  case "$RLLOG" in *"@rl_reset 1791031200 1791554400 "*) : ;; *) fail "statusline must stamp @rl_reset '<5h> <7d>' (log: $RLLOG)" ;; esac
+  printf '%s' "$RLLOG" | grep -Eq '@rl_ts [0-9]{10}$' || fail "statusline must stamp @rl_ts as epoch seconds (log: $RLLOG)"
+  for RLJSON in '{"model":{"display_name":"x"}}' '{"rate_limits":null}' \
+                '{"rate_limits":{"five_hour":{"used_percentage":40,"resets_at":1}}}' '{"rate_limits":"weird"}'; do
+    : > "$SETOPT_LOG"
+    printf '%s' "$RLJSON" | PATH="$WORK/fakepath:$PATH" TMUX='fake,1,0' TMUX_PANE="$PANE" SETOPT_LOG="$SETOPT_LOG" \
+        bash "$STATUSLINE" >/dev/null 2>&1
+    grep -q '@rl' "$SETOPT_LOG" && fail "no/partial/odd rate_limits ($RLJSON) must stamp nothing (log: $(cat "$SETOPT_LOG"))"
+  done
+  printf 'selftest: MEASURE leg PASS (statusline stamps @rl* only with both windows, #1267)\n' >&2
 else
   printf 'selftest: MEASURE leg SKIPPED (jq not installed)\n' >&2
 fi

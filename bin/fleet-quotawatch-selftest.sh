@@ -54,6 +54,14 @@
 #                 quota.pace.moved stamp; the next tick inside the cooldown moves
 #                 nothing; --dry-run says what it would do; REBALANCE=0 moves
 #                 nothing but still writes the table.
+#  13. statusline— (#1267) each window's status line stamps @rl5h/@rl7d/@rl_reset/
+#                 @rl_ts; per account the NEWEST reading wins over ccquota's row:
+#                 a fresh stamp at 75% over ccquota's 10% ⇒ the warn fires on the
+#                 stamp's reset and says `statusline`; quota.freshness names the
+#                 source; a stamp older than FLEET_QUOTA_RL_TTL, one for a label
+#                 outside the pool, a codex: one and a half one are all ignored;
+#                 with ccquota EMPTY a fresh 90% stamp still benches (fallback ≠
+#                 the only source); a ccquota fetch newer than the stamp wins.
 # Needs python3 (quota_parse). Exit 0 = pass, non-zero = fail.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -121,7 +129,9 @@ printf '%s %s\n' "$label" "$*" >> "$FAKE_TMUX_LOG"
 case "${1:-}" in
   has-session)     exit 0 ;;
   list-sessions)   [ -n "$label" ] && printf '%s\n' "$label"; exit 0 ;;
-  list-windows)    printf '@1 a\n@2 b\n'; exit 0 ;;
+  # the #1267 status-line stamp read: one line per window from $FAKE_RL_FILE
+  list-windows)    case "$*" in *@rl_ts*) cat "$FAKE_RL_FILE" 2>/dev/null; exit 0 ;; esac
+                   printf '@1 a\n@2 b\n'; exit 0 ;;
   display-message) [ "${2:-}" = "-p" ] && printf '%s\n' "$PPID"; exit 0 ;;
   *) exit 0 ;;
 esac
@@ -150,12 +160,12 @@ BLIND=""            # per-case override of the empty-fetch streak threshold (see
 run_watch() {
   PATH="$WORK/fakepath:$PATH" TMPDIR="$WORK" HOME="$WORK" FLEET_SKIP_GLOBAL_CONF=1 \
   FLEET_CONF_DIR="$WORK/conf" FLEET_ACCOUNTS_DIR="${ACCTS:-$WORK/accounts}" CCQUOTA_HUB_URL="$HUB" \
-  FLEET_ACCOUNT_QUOTA_TTL=0 FLEET_NOTIFY_CMD="$WORK/fakepath/notify" \
+  FLEET_ACCOUNT_QUOTA_TTL="${QTTL:-0}" FLEET_NOTIFY_CMD="$WORK/fakepath/notify" \
   FLEET_ACCOUNT_QUOTA_BLIND_STREAK="${BLIND:-3}" \
   FAKE_LOG="$WORK/ccquota.calls" FAKE_TMUX_LOG="$WORK/tmux.calls" FAKE_NOTIFY_LOG="$WORK/notify.log" \
   FAKE_PCT_FILE="$WORK/pct" FAKE_PCT_B_FILE="$WORK/pct-b" FAKE_RESET_FILE="$WORK/reset" \
   FAKE_B_SHAPE_FILE="$WORK/b-shape" FAKE_HANG_MARK="$HANGMARK" FAKE_EMPTY_FILE="$WORK/ccq-empty" \
-  FAKE_7D_A_FILE="$WORK/7d-a" FAKE_7D_B_FILE="$WORK/7d-b" \
+  FAKE_7D_A_FILE="$WORK/7d-a" FAKE_7D_B_FILE="$WORK/7d-b" FAKE_RL_FILE="$WORK/rl" \
     bash "$WORK/bin/fleet-quotawatch.sh" "$@" >"$WORK/stdout" 2>"$WORK/stderr"
 }
 CHECKS=0
@@ -644,5 +654,62 @@ run_watch || fail "12e: tick must exit 0"
 [ "$(grep -c "migrate --idle --from 'a'" "$WORK/tmux.calls")" = 1 ] || fail "12e: a pick without 5h room is no landing spot — nothing moves"
 ok
 
-printf 'selftest PASS: fleet-quotawatch — %s groups (off, status, policy 50/72/90 + once-per-window, dry-run, lock skip/supersede/takeover, staleness alarm, fresh-but-empty alarm #684, human secs, nowhere-to-move #567, probe budget/tree-kill/phase breakdown/lock ownership, wedged-tick supersede #582, unreadable-account #628, tick self-budget + wind-down #698, weekly pace + rebalance #1231)\n' "$CHECKS"
+# 13. statusline readings (#1267) ---------------------------------------------
+# The ccquota cache is made 2 minutes OLD (QTTL keeps the tick from refetching),
+# the way it is between real fetches — a stamp fresher than that must win.
+: > "$G/account.limited"; rm -f "$G"/quota.warn.* "$G"/quota.ceiling.* "$G/account.active" "$WORK/7d-a" "$WORK/7d-b" "$G/quota.pace.moved"
+echo 10 > "$WORK/pct"; echo 20 > "$WORK/pct-b"
+RESET5=$(( RESET4 + 14400 )); RESET6=$(( RESET5 + 14400 )); RESET7=$(( RESET6 + 14400 ))
+iso "$RESET4" > "$WORK/reset"
+export FLEET_ACCOUNT_PACE_REBALANCE=0       # this case is about the warn/bench policy only
+: > "$WORK/rl"; run_watch || fail "13: priming tick must exit 0"   # fills account.quota (a 10%, b 20%)
+age_ccq() { printf '%s' $(( $(date +%s) - 120 )) > "$G/account.quota.ts"; }
+NOW=$(date +%s)
+# 13a. a fresh stamp for a at 75% beats ccquota's 10%; b's stamp is a HALF one
+# (no 7d %) and stays on ccquota; noise lines (unset, codex:, not in the pool) drop.
+printf '%s\n' "a $NOW 75 30 $RESET5 $RESET6" "b $NOW 99 - $RESET5 $RESET6" "- - - - - -" \
+  "codex:x $NOW 99 99 1 1" "zz $NOW 99 99 1 1" > "$WORK/rl"
+age_ccq; QTTL=3600 run_watch || fail "13a: tick must exit 0"
+[ "$(cat "$G/quota.warn.a" 2>/dev/null)" = "$RESET5" ] || fail "13a: the 75% STATUSLINE reading must warn on its own reset $RESET5 (got: $(cat "$G/quota.warn.a" 2>/dev/null); freshness: $(cat "$G/quota.freshness"))"
+grep -q '\*\*a\*\* is at 75% of its 5-hour window.*(statusline, exact)' "$WORK/notify.log" || fail "13a: the warn notify must name the statusline as the source ($(tail -3 "$WORK/notify.log"))"
+grep -q 'sessA display-message fleet: a at 75% of its 5-hour window (statusline)' "$WORK/tmux.calls" || fail "13a: the toast names the statusline"
+[ ! -e "$G/quota.warn.b" ] && [ ! -e "$G/quota.ceiling.b" ] || fail "13a: a half stamp (no 7d %) must not count — b stays on ccquota's 20%"
+[ "$(awk -F'\t' '$1=="a"{print $2}' "$G/quota.freshness")" = statusline ] || fail "13a: quota.freshness names a's source (got: $(cat "$G/quota.freshness"))"
+[ "$(awk -F'\t' '$1=="b"{print $2}' "$G/quota.freshness")" = ccquota ]    || fail "13a: b's reading is ccquota's"
+[ "$(awk -F'\t' '$1=="b"{print $3}' "$G/quota.freshness")" -ge 120 ]     || fail "13a: b's age is the ccquota cache's (≥120 s)"
+grep -q '^zz	\|^codex' "$G/quota.freshness" && fail "13a: a label outside the pool must never become a row ($(cat "$G/quota.freshness"))"
+[ "$(awk -F'\t' '$1=="a"{print $3}' "$G/quota.freshness")" -le 5 ] || fail "13a: a's reading is seconds old"
+[ "$(hbget "$G/quotawatch.heartbeat" sl)" = 1 ] || fail "13a: heartbeat sl=1 (got $(hbget "$G/quotawatch.heartbeat" sl))"
+ok
+# 13b. FLEET_QUOTA_RL_TTL bounds a stamp's life: 95% stamped 90 s ago (newer than
+# the 120 s ccquota cache) is no reading under a 60 s TTL, and benches under the
+# default 600 s.
+printf '%s\n' "a $(( $(date +%s) - 90 )) 95 95 $RESET6 $RESET7" > "$WORK/rl"
+age_ccq; FLEET_QUOTA_RL_TTL=60 QTTL=3600 run_watch || fail "13b: tick must exit 0"
+[ ! -e "$G/quota.ceiling.a" ] || fail "13b: an aged-out stamp must not bench"
+[ "$(awk -F'\t' '$1=="a"{print $2}' "$G/quota.freshness")" = ccquota ] || fail "13b: an aged-out stamp falls back to ccquota"
+age_ccq; QTTL=3600 run_watch || fail "13b: tick must exit 0"
+[ "$(cat "$G/quota.ceiling.a" 2>/dev/null)" = "$RESET6" ] || fail "13b: under the default TTL the same stamp benches on its own reset $RESET6 (got: $(cat "$G/quota.ceiling.a" 2>/dev/null))"
+[ "$(awk -F'\t' '$1=="a"{print $3}' "$G/account.limited")" = "statusline: 5-hour window at 95%" ] || fail "13b: the bench note names the statusline (account.limited: $(cat "$G/account.limited"))"
+ok
+# 13c. ccquota answers with NOTHING; a fresh 90% stamp for b still benches it.
+# ccquota is the fallback, not a gate.
+: > "$G/account.limited"; echo x > "$WORK/ccq-empty"
+printf '%s\n' "b $(date +%s) 90 40 $RESET7 $RESET7" > "$WORK/rl"
+run_watch || fail "13c: tick must exit 0"
+[ "$(awk -F'\t' '$1=="b"{print $3}' "$G/account.limited" 2>/dev/null)" = "statusline: 5-hour window at 90%" ] || fail "13c: ccquota empty + a fresh 90% stamp ⇒ benched by the statusline (account.limited: $(cat "$G/account.limited"))"
+rm -f "$WORK/ccq-empty"
+ok
+# 13d. a ccquota fetch NEWER than the stamp wins: stamp 30 s old at 99%, fetch now at 10%.
+: > "$G/account.limited"; rm -f "$G"/quota.ceiling.* "$G"/quota.warn.*
+printf '%s\n' "a $(( $(date +%s) - 30 )) 99 99 $RESET7 $RESET7" > "$WORK/rl"
+run_watch || fail "13d: tick must exit 0"
+[ ! -e "$G/quota.ceiling.a" ] && [ ! -e "$G/quota.warn.a" ] || fail "13d: a ccquota row fetched AFTER the stamp must win"
+[ "$(awk -F'\t' '$1=="a"{print $2}' "$G/quota.freshness")" = ccquota ] || fail "13d: freshness says ccquota"
+: > "$WORK/rl"; run_watch || fail "13d: tick must exit 0"
+[ "$(hbget "$G/quotawatch.heartbeat" sl)" = 0 ] || fail "13d: no stamps ⇒ sl=0"
+unset FLEET_ACCOUNT_PACE_REBALANCE
+ok
+
+printf 'selftest PASS: fleet-quotawatch — %s groups (off, status, policy 50/72/90 + once-per-window, dry-run, lock skip/supersede/takeover, staleness alarm, fresh-but-empty alarm #684, human secs, nowhere-to-move #567, probe budget/tree-kill/phase breakdown/lock ownership, wedged-tick supersede #582, unreadable-account #628, tick self-budget + wind-down #698, weekly pace + rebalance #1231, statusline readings #1267)\n' "$CHECKS"
 exit 0

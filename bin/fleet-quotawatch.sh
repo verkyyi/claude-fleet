@@ -25,6 +25,8 @@
 #   quota.ceiling.<label>   — reset epoch the 85% bench+move was done for
 #   quota.phase             — reset epoch the 5h phase stagger was planned for
 #                             (issue #598; only with FLEET_ACCOUNT_PHASE_AUTO=1)
+#   quota.freshness         — label · source (ccquota|statusline) · age-s of
+#                             the reading the policy acted on, every tick (#1267)
 #   quota.pace              — the pool's weekly PACE table, `fleet-account.sh
 #                             pace` mirrored every tick (issue #1231): the status
 #                             bar's `▲ quota · uneven` reads it
@@ -615,6 +617,41 @@ elif [ "$DRY" = 0 ] && [ -f "$QBLIND" ]; then
   rm -f "$QBLIND"
 fi
 
+# --- fresher readings off every window's STATUS LINE (issue #1267) -------------
+# conf/statusline.sh stamps each render's .rate_limits on its window (@rl5h @rl7d
+# @rl_reset @rl_ts); per account the newest reading — a stamp younger than
+# FLEET_QUOTA_RL_TTL, or ccquota's row as of its fetch — is what the policy below
+# acts on (usage-lib.sh fleet_quota_merge). So a ccquota that stopped moving no
+# longer blinds the 70%/85% rotation while any session on the account is talking.
+# Read AFTER the blind checks above on purpose: those are ccquota's own health,
+# and stay so. One `list-windows` per socket, under one tmux budget each (#698);
+# a socket that blows it simply contributes no stamps. A label outside the pool
+# (a stale @cc_account, a codex: one) is dropped here, never acted on.
+# quota.freshness — "label<TAB>source<TAB>age-s" per account, every tick: how old
+# the number the policy used was (EPIC #1262's 「额度读数最长过期」 reads it).
+# Cheap on purpose — it runs every tick, and on a loaded box every fork counts
+# against the budget legs (#582): no merge at all while no window carries a stamp.
+qw_rl_socket() { tmux -L "$1" list-windows -a -F "$FLEET_QUOTA_RL_FMT" 2>/dev/null; }
+qsl=""
+for qs in $SOCKETS; do
+  tick_room || break
+  qsb=$(qw_left "$SECONDS" "$TMUX_BUDGET"); [ "$qsb" -lt 1 ] && break
+  while read -r qa qt qrest; do
+    case "$qa" in ''|-|.*|*/*|*:*) continue ;; esac
+    case "$qt" in ''|*[!0-9]*) continue ;; esac            # never stamped (or garbage)
+    [ -f "$ACCT_DIR/$qa" ] && qsl="${qsl}${qa} ${qt} ${qrest}"$'\n'
+  done <<< "$(fleet_timebox "$qsb" qw_rl_socket "$qs")"
+done
+[ -n "$qsl" ] && qrows=$(fleet_quota_merge "$qrows" "$post_ts" "$qsl")
+# One pass: count the statusline rows and (not on --dry-run) write quota.freshness.
+# Unmerged rows have no source/epoch columns — they are ccquota's, as of $post_ts.
+qfout=/dev/null; [ "$DRY" = 0 ] && qfout="$G/quota.freshness.$$"
+nsl=$(printf '%s\n' "$qrows" | awk -F'\t' -v now="$(now)" -v cts="$post_ts" -v out="$qfout" '
+  $1 != "" { src = ($8 == "" ? "ccquota" : $8); t = ($9 == "" ? cts : $9)
+             printf "%s\t%s\t%d\n", $1, src, now - t > out; if (src == "statusline") n++ }
+  END { close(out); print n + 0 }')
+[ "$DRY" = 0 ] && mv -f "$qfout" "$G/quota.freshness" 2>/dev/null
+
 # --- the policy (issue #513, verbatim from the collector's former tail block):
 #   ≥ FLEET_ACCOUNT_CEILING (85%)  bench until ccquota's reset instant (rotates
 #                                  the active pointer past it — new spawns go
@@ -703,9 +740,9 @@ qw_ceiling_socket() {
   fi
   if [ -n "$qnew" ]; then
     fleet_bg -L "$qs" "bash '$BIN/fleet-account.sh' migrate --account '$ql' --session '$qs' --toast"
-    tmux -L "$qs" display-message "fleet: $ql at ${qutil}% of its $qwhich window (ccquota) → benched until $qresett; moving its sessions to $qnew" 2>/dev/null
+    tmux -L "$qs" display-message "fleet: $ql at ${qutil}% of its $qwhich window ($qsrc) → benched until $qresett; moving its sessions to $qnew" 2>/dev/null
   else
-    tmux -L "$qs" display-message "fleet: $ql at ${qutil}% of its $qwhich window (ccquota) → benched until $qresett; nowhere to move: no other account is readable and under the ceiling — sessions stay on $ql until $qresett" 2>/dev/null
+    tmux -L "$qs" display-message "fleet: $ql at ${qutil}% of its $qwhich window ($qsrc) → benched until $qresett; nowhere to move: no other account is readable and under the ceiling — sessions stay on $ql until $qresett" 2>/dev/null
   fi
   return 0
 }
@@ -720,7 +757,7 @@ qw_warn_socket() {
     qp=$(fleet_pane_claude_pid "$qw" "$qs" 2>/dev/null) || continue
     [ -n "$qp" ] && fleet_peer_send "$qp" "$qmsg" fleet-quotawatch && n=$((n+1))
   done < <(tmux -L "$qs" list-windows -a -F '#{window_id} #{@cc_account}' 2>/dev/null)
-  tmux -L "$qs" display-message "fleet: $ql at ${qutil}% of its $qwhich window (ccquota) — sessions warned; moves at ${qceil}%" 2>/dev/null
+  tmux -L "$qs" display-message "fleet: $ql at ${qutil}% of its $qwhich window ($qsrc) — sessions warned; moves at ${qceil}%" 2>/dev/null
   printf '%s' "$n"
 }
 POLICY_T0=$SECONDS
@@ -729,7 +766,7 @@ QPOL_SKIP=""
 # so that what it deferred survives it — a pipeline's subshell would take that with
 # it, and the wind-down line below would have nothing to report.
 # shellcheck disable=SC2034  # qroom: headroom column, read by `list`/pick_active, not here
-while IFS=$'\t' read -r ql q5 q7 qroom qr5 qr7 qpph; do
+while IFS=$'\t' read -r ql q5 q7 qroom qr5 qr7 qpph qsrc _qrts; do
   [ -n "$ql" ] || continue
   # WIND DOWN at a row boundary, never mid-account. Deferring is safe precisely
   # because the once-per-window marker is written by the branch that HANDLES the
@@ -739,6 +776,7 @@ while IFS=$'\t' read -r ql q5 q7 qroom qr5 qr7 qpph; do
     QPOL_SKIP="${QPOL_SKIP}${QPOL_SKIP:+ }$ql"
     continue
   fi
+  qsrc=${qsrc:-ccquota}                       # who read it (#1267): ccquota | statusline
   qutil=$q5; qwhich="5-hour"; qreset=$qr5
   if [ "${q7:-0}" -gt "$qutil" ]; then qutil=$q7; qwhich="7-day"; qreset=$qr7; fi
   qresett=$(date -r "$qreset" '+%H:%M' 2>/dev/null || date -d "@$qreset" '+%H:%M' 2>/dev/null || echo "?")
@@ -752,7 +790,7 @@ while IFS=$'\t' read -r ql q5 q7 qroom qr5 qr7 qpph; do
       continue
     fi
     printf '%s' "$qreset" | atomic_write "$mk"
-    "$BIN/fleet-account.sh" bench "$ql" "$qreset" "ccquota: $qwhich window at ${qutil}%" >/dev/null 2>&1
+    "$BIN/fleet-account.sh" bench "$ql" "$qreset" "$qsrc: $qwhich window at ${qutil}%" >/dev/null 2>&1
     qnew=$("$BIN/fleet-account.sh" active 2>/dev/null)
     if [ -z "$qto" ]; then
       # #567: the bench is recorded (a new spawn must know), the move is not made.
@@ -763,7 +801,7 @@ while IFS=$'\t' read -r ql q5 q7 qroom qr5 qr7 qpph; do
       done
       if [ -n "${FLEET_NOTIFY_CMD:-}" ]; then
         $FLEET_NOTIFY_CMD "# subscription at its limit — nowhere to move
-**$ql** is at ${qutil}% of its $qwhich window (ccquota, exact) — benched until $qresett, but every other account is benched, at its ceiling, or unreadable to ccquota, so its sessions were NOT moved: they stay on **$ql** until $qresett (a walled session waiting for its own reset beats one cold-booted back into the same wall)" >/dev/null 2>&1
+**$ql** is at ${qutil}% of its $qwhich window ($qsrc, exact) — benched until $qresett, but every other account is benched, at its ceiling, or unreadable to ccquota, so its sessions were NOT moved: they stay on **$ql** until $qresett (a walled session waiting for its own reset beats one cold-booted back into the same wall)" >/dev/null 2>&1
       fi
       continue
     fi
@@ -773,7 +811,7 @@ while IFS=$'\t' read -r ql q5 q7 qroom qr5 qr7 qpph; do
     done
     if [ -n "${FLEET_NOTIFY_CMD:-}" ]; then
       $FLEET_NOTIFY_CMD "# subscription near its limit — rotated early
-**$ql** is at ${qutil}% of its $qwhich window (ccquota, exact) — benched until $qresett; new sessions now use **${qnew:-?}** and every session still on it is being moved (close + \`--resume\` in a new window), before it hits the wall" >/dev/null 2>&1
+**$ql** is at ${qutil}% of its $qwhich window ($qsrc, exact) — benched until $qresett; new sessions now use **${qnew:-?}** and every session still on it is being moved (close + \`--resume\` in a new window), before it hits the wall" >/dev/null 2>&1
     fi
   elif [ "$qutil" -ge "$qwarn" ]; then
     mk="$G/quota.warn.$ql"
@@ -796,7 +834,7 @@ while IFS=$'\t' read -r ql q5 q7 qroom qr5 qr7 qpph; do
       qn=$(( qn + qsent ))
     done
     [ -n "${FLEET_NOTIFY_CMD:-}" ] && $FLEET_NOTIFY_CMD "# subscription approaching its limit
-**$ql** is at ${qutil}% of its $qwhich window${qeta} (ccquota, exact) — $qn running session(s) warned to commit WIP; at ${qceil}% the fleet benches it and moves them" >/dev/null 2>&1
+**$ql** is at ${qutil}% of its $qwhich window${qeta} ($qsrc, exact) — $qn running session(s) warned to commit WIP; at ${qceil}% the fleet benches it and moves them" >/dev/null 2>&1
   else
     [ "$DRY" = 1 ] && printf 'ok: %s at %s%% of its %s window (warn %s%%, ceiling %s%%)\n' "$ql" "$qutil" "$qwhich" "$qwarn" "$qceil"
   fi
@@ -936,7 +974,7 @@ T_POLICY=$(( $(now) - y0 ))
 [ "$DRY" = 1 ] || bash "$BIN/fleet-alerts.sh" write >/dev/null 2>&1 || true
 
 END=$(now)
-hb "done" "fetched=$fetched"$'\n'"rows=$nrows"$'\n'"end=$END"$'\n'"dur=$(( END - START ))"$'\n'"t_modelcap=$T_MODEL"$'\n'"t_fetch=$T_FETCH"$'\n'"t_policy=$T_POLICY"$'\n'"budget=$TICK_BUDGET"$'\n'"over=$QW_OVER"$'\n'"skipped=$QW_SKIP"$'\n'
+hb "done" "fetched=$fetched"$'\n'"rows=$nrows"$'\n'"sl=${nsl:-0}"$'\n'"end=$END"$'\n'"dur=$(( END - START ))"$'\n'"t_modelcap=$T_MODEL"$'\n'"t_fetch=$T_FETCH"$'\n'"t_policy=$T_POLICY"$'\n'"budget=$TICK_BUDGET"$'\n'"over=$QW_OVER"$'\n'"skipped=$QW_SKIP"$'\n'
 # One line per tick, so the launchd log can answer "which HALF was slow?" without
 # instrumenting anything after the fact (issue #582). Before this, the heartbeat
 # held only the phase currently running and overwrote it, so a tick that took
