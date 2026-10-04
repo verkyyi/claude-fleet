@@ -147,7 +147,7 @@ ok "HOOK handoff: token line beats PCT · 200k ⇒ never · no/bad @ctx_limit �
 
 conf FLEET_AUTO_HANDOFF_TOKENS=550000 FLEET_COMPACT_PREP_TOKENS=350000
 reset @ctx_pct=36 @ctx_limit=1000000; stop
-[ "$(thr)" = "35 compact-prep" ] || fail "350000 of 1M must compact-prep at 35% (not the 70 default)" "$OUT"
+[ "$(thr)" = "35 compact-prep" ] || fail "350000 of 1M must compact-prep at 35% (not the 55 default)" "$OUT"
 reset @ctx_pct=34 @ctx_limit=1000000; stop
 [ -z "$OUT" ] || fail "34% < 35% must not prep" "$OUT"
 reset @ctx_pct=60 @ctx_limit=1000000; stop

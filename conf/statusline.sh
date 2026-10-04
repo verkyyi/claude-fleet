@@ -21,7 +21,8 @@
 #                                           converted against @ctx_limit the way
 #                                           set-claude-state.sh does, #1317) the
 #                                           handoff line is red and 15 points below
-#                                           it is yellow; with neither, 80 / 50.
+#                                           it is yellow (unset ⇒ 80, #1571); with
+#                                           it 0 and no _TOKENS, 80 / 50.
 #   .model.display_name                  → @model      e.g. "Opus 5.5" (#1452)
 #   .effort.level                        → @effort     low … max — present only
 #                                           when the model has an effort level;
@@ -157,6 +158,7 @@ if [[ "$CTX_PCT" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
     SL_V=${SL_KV%%$'\n'*}; [[ -n "$SL_V" ]] && SL_PCT=$SL_V
     SL_V=${SL_KV#*$'\n'};  [[ "$SL_V" != "$SL_KV" && -n "$SL_V" ]] && SL_TOK=$SL_V
   fi
+  [[ -z "$SL_PCT" ]] && SL_PCT=80                 # the hook's unset ⇒ 80 (issue #1571)
   [[ "$SL_PCT" =~ ^[0-9]+$ ]] || SL_PCT=0
   [[ "$SL_TOK" =~ ^[0-9]+$ ]] || SL_TOK=0
   # A line set in TOKENS wins over the % key, converted against this window's

@@ -106,6 +106,7 @@ fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail -
 conf() {
   { printf 'FLEET_HANDOFF_DEFER_SECS=30\n'
     printf 'FLEET_COMPACT_PREP_PCT=%s\nFLEET_AUTO_HANDOFF_PCT=%s\n' "$1" "$2"
+    printf 'FLEET_COMPACT_MAX=2\n'   # the cap leg below counts to 2, whatever the default
   } > "$GCONF"; }
 reset() {
   printf 'session_name\ts1\n@issue\t12\n@claude_state\tdone\nwindow_id\t@1\nwindow_name\twidgets-12\n' > "$OPTS"

@@ -45,9 +45,9 @@
 #   WATCH     getting full                  → finish the current thread, then hand off
 #   HANDOFF   at/over the threshold         → run /fleet-handoff now
 #   UNKNOWN   nothing measurable yet        → no statusline stamp, no usage record
-# Bands: with FLEET_AUTO_HANDOFF_PCT set (issue #330), HANDOFF is that threshold
+# Bands: HANDOFF is FLEET_AUTO_HANDOFF_PCT (issue #330; unset ⇒ 80, issue #1571)
 # and WATCH the 15 points below it — so this read agrees with the nudge that will
-# fire anyway. With it OFF, the fallback bands are the statusline's own colours
+# fire anyway. With it OFF (=0), the fallback bands are the statusline's own colours
 # (conf/statusline.sh: yellow at 50%, red at 80%).
 #
 # Exit codes (so a caller can branch without parsing): 0 OK · 1 any other verdict
@@ -206,8 +206,15 @@ else pct=-1; src="none"
 fi
 
 # --- verdict ------------------------------------------------------------------
-thr="${FLEET_AUTO_HANDOFF_PCT:-0}"
+# The ladder's repo defaults (issue #1571): handoff 80, compact-prep 55, at most
+# 3 compactions — KEEP IN SYNC with bin/set-claude-state.sh and fleet.conf.example
+# (context-ladder-defaults-selftest.sh pins them). 0 = off, as in the hook.
+thr="${FLEET_AUTO_HANDOFF_PCT:-80}"
 case "$thr" in ''|*[!0-9]*) thr=0 ;; esac
+cprep="${FLEET_COMPACT_PREP_PCT:-55}"
+case "$cprep" in ''|*[!0-9]*) cprep=0 ;; esac
+cmax="${FLEET_COMPACT_MAX:-3}"
+case "$cmax" in ''|*[!0-9]*) cmax=0 ;; esac
 if [ "$thr" -gt 0 ]; then
   hand="$thr"; warn=$(( thr - 15 )); [ "$warn" -lt 1 ] && warn=1
 else
@@ -245,8 +252,8 @@ if [ "$as_json" = "1" ]; then
     "$verdict" "$pct" "$src" "$live" "$LIMIT" "$limit_src" "$bus"
   printf '"derived_pct":%s,"stamp_pct":%s,"turns":%s,"output_tokens":%s,"peak_tokens":%s,' \
     "$derived" "${stamp:--1}" "$turns" "$out_total" "$peak"
-  printf '"warn_pct":%s,"handoff_pct":%s,"auto_handoff_pct":%s,"armed":%s,"transcript":"%s"}\n' \
-    "$warn" "$hand" "$thr" "$([ -n "$armed" ] && echo true || echo false)" "${tpath//\"/}"
+  printf '"warn_pct":%s,"handoff_pct":%s,"auto_handoff_pct":%s,"compact_prep_pct":%s,"compact_max":%s,"armed":%s,"transcript":"%s"}\n' \
+    "$warn" "$hand" "$thr" "$cprep" "$cmax" "$([ -n "$armed" ] && echo true || echo false)" "${tpath//\"/}"
   [ "$verdict" = "OK" ] && exit 0 || exit 1
 fi
 
@@ -297,6 +304,12 @@ if [ "$thr" -gt 0 ]; then
     "$thr" "$([ -n "$armed" ] && echo ' (already armed)')" "$warn"
 else
   printf 'handoff   auto-handoff OFF (FLEET_AUTO_HANDOFF_PCT=0) · bands %s%%/%s%%\n' "$warn" "$hand"
+fi
+if [ "$cprep" -gt 0 ]; then
+  if [ "$cmax" -gt 0 ]; then _cmx="at most $cmax per session, then a handoff"; else _cmx="no cap"; fi
+  printf 'compact   in place from %s%% · %s\n' "$cprep" "$_cmx"
+else
+  printf 'compact   in-place compaction OFF (FLEET_COMPACT_PREP_PCT=0)\n'
 fi
 if [ -n "$account" ]; then
   printf 'account   %s (verified process token)\n' "$account"

@@ -24,7 +24,7 @@
 # set: outside tmux there is no fleet to overlay, so the default socket is never
 # touched. Output: one line per KEY, the resolved value ('' when nothing sets it).
 # Never fails on a missing lib / conf / server — it prints what it could resolve, so
-# a caller's `${x:-0}` default is the fail-open (auto-handoff OFF, base = master).
+# a caller's default applies to an unset key (the ladder's own, #1571; base = master).
 set -u
 BIN="$(cd "$(dirname "$0")" && pwd)"
 

@@ -751,7 +751,7 @@ after that condition has cleared and come back.
   the session that just ended.
 - **Compact in place before the handoff (#1269).** The same `done` edge runs a
   three-step compaction for a **worker** or a **scratch** (`@raw=1`, #1318) whose `@ctx_pct` sits in
-  `[FLEET_COMPACT_PREP_PCT, FLEET_AUTO_HANDOFF_PCT)` (prep default 70; handoff 0 =
+  `[FLEET_COMPACT_PREP_PCT, FLEET_AUTO_HANDOFF_PCT)` (defaults 55 / 80, #1571; handoff 0 =
   no upper line; either line set as `FLEET_*_TOKENS` is converted against the
   pane's `@ctx_limit` and wins, #1317), tracked in the window option `@compact_stage`:
   `prep` (a `block` asking for a recovery map at `fleet_recovery_map_path`:
@@ -766,8 +766,8 @@ after that condition has cleared and come back.
   line), `@compact_prep_ts` / `@compact_send_ts` (60 s dedup each) and
   `@compact_ts` (≥ 600 s between compactions). At or over the handoff line the
   auto-handoff above owns the Stop and none of this runs.
-- **Compact at most twice, then hand off (#1316).** Each `compacting → restored`
-  bumps `@compact_count`. Once it reaches `FLEET_COMPACT_MAX` (default 2; 0 = no
+- **Compact at most three times, then hand off (#1316).** Each `compacting → restored`
+  bumps `@compact_count`. Once it reaches `FLEET_COMPACT_MAX` (default 3, #1571; 0 = no
   cap), a Stop in `[FLEET_COMPACT_PREP_PCT, FLEET_AUTO_HANDOFF_PCT)` gets the
   auto-handoff `block` ("already compacted in place N times") instead of a new
   `prep` — same `@handoff_armed` latch and typing hold, even with auto-handoff
