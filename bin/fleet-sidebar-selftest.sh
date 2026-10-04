@@ -34,6 +34,14 @@ assert not sidebar.visible(['1', '1', '1', ''], 100)
 assert not sidebar.visible(['1', '0', '0', ''], 100)
 assert not sidebar.visible(['1', '0', '1', '99'], 100)
 assert sidebar.visible(['1', '0', '1', '1'], 100)
+# The popup pause is event-driven (issue #1536): `@popup_pid <epoch>:<pid>` names
+# the holder of THAT epoch, and a gone holder ends the pause at once — no 30s.
+holder = subprocess.Popen(['sleep', '30'])
+assert not sidebar.visible(['1', '0', '1', '99', '99:%d' % holder.pid], 100), 'a live holder must pause the list'
+holder.kill(); holder.wait()
+assert sidebar.visible(['1', '0', '1', '99', '99:%d' % holder.pid], 100), 'a dead holder must not pause the list'
+assert not sidebar.visible(['1', '0', '1', '99', '98:%d' % holder.pid], 100), "another epoch's holder: the 30s bound"
+assert sidebar.visible(['1', '0', '1', '60', '60:%d' % os.getpid()], 100), 'a flag past 30s never pauses'
 assert sidebar.tail('abc修复', 5) == 'c修复' and sidebar.tail('abc', 9) == 'abc'
 # The view's width is HELD (issue #1521): tmux scales every pane when a window
 # takes a client's size (210 → 189 columns), and the manual width used to stay
@@ -144,7 +152,7 @@ fleet_conf = 'FLEET_SIDEBAR=1\nFLEET_MAIN=%s\nFLEET_BASE_BRANCH=%s\n' % (main, b
 sock = str(work / 'fleet-test')
 env = dict(os.environ, TMPDIR=str(work), FLEET_CONF_DIR=str(work / 'conf'),
            FLEET_HUB_VISITS_LOGDIR=str(work / 'logs'), TERM='xterm-256color',
-           FLEET_UI_LANG='zh')
+           FLEET_UI_LANG='zh', FLEET_SIDEBAR_WATCHDOG_SECS='1')
 shim = work / 'path'
 shim.mkdir()
 (shim / 'tmux').write_text('#!/bin/sh\nexec ' + shlex.quote(real_tmux) +
@@ -626,6 +634,85 @@ try:
     rows_bin.symlink_to(real_bin / 'tmux-dashboard-rows.sh')
     (bin_dir / 'tmux-dashboard-rows-real.sh').unlink()
     wait_for(navigation, 'the fold leg left the sidebar key table')
+
+    # Never frozen on the lock (issue #1536): a hook sync holding the view lock
+    # for 2s must not freeze the list — ↓ moves the highlight at once (the local
+    # state), the switch waits, and lands once the lock frees.
+    held = open(str(conf) + '.sidebar.lock', 'w')
+    fcntl.flock(held, fcntl.LOCK_EX)
+    try:
+        started = time.monotonic()
+        os.write(terminal, b'\x1b[B')
+        wait_for(lambda: any(l.startswith('›') and '修复侧栏' in l
+                             for l in tm('capture-pane', '-p', '-t', side).splitlines()),
+                 'a held lock froze the highlight')
+        highlighted = time.monotonic() - started
+        check(highlighted < 1, 'the highlight waited %.2fs on the held lock' % highlighted)
+        time.sleep(max(0, 2 - (time.monotonic() - started)))
+        check(view_on(w1) and not view_on(w2), 'the view switched while the lock was held')
+    finally:
+        fcntl.flock(held, fcntl.LOCK_UN)
+        held.close()
+    wait_for(lambda: bool(view_on(w2)), 'the switch did not land after the lock freed')
+    print('sidebar timing: highlight %.2fs under a 2s-held lock' % highlighted)
+    os.write(terminal, b'\x1b[A')
+    wait_for(lambda: bool(view_on(w1)), 'Up did not follow back after the lock leg')
+    wait_for(navigation, 'the lock leg left the sidebar key table')
+
+    # The popup pause ends WITH the popup (issue #1536), not 30s later: a window
+    # renamed under a live holder stays unpainted, and shows within a second of
+    # the holder going — even one SIGKILLed past dash-popup.sh's trap.
+    side = view_on(w1)[0]
+    holder = subprocess.Popen(['sleep', '60'])
+    epoch = str(int(time.time()))
+    tm('set', '-g', '@popup_open', epoch, ';', 'set', '-g', '@popup_pid', '%s:%d' % (epoch, holder.pid))
+    time.sleep(1.5)  # the view's next tick sees the popup and stops painting
+    tm('rename-window', '-t', w2, '弹窗下改名')
+    time.sleep(2)
+    check('弹窗下改名' not in tm('capture-pane', '-p', '-t', side), 'the list repainted under a live popup')
+    started = time.monotonic()
+    holder.kill(); holder.wait()
+    wait_for(lambda: '弹窗下改名' in tm('capture-pane', '-p', '-t', side),
+             'the list did not resume after the popup holder died')
+    resumed = time.monotonic() - started
+    print('sidebar timing: resumed %.2fs after the popup holder died' % resumed)
+    check(resumed < (3 if os.environ.get('CI') else 1.5), 'the list resumed %.2fs after the popup closed' % resumed)
+    tm('set', '-g', '@popup_open', '0', ';', 'set', '-gu', '@popup_pid')
+    tm('rename-window', '-t', w2, '修复侧栏')
+    wait_for(lambda: '修复侧栏' in tm('capture-pane', '-p', '-t', side), 'the rename back did not paint')
+
+    # Never blank (issue #1536): a producer hung for 15s — past its own 10s kill,
+    # through a restart that hangs again — leaves the last rows painted under a
+    # 「刷新中…」 top row, and the watchdog writes ONE line for the stall.
+    stall_log = bin_dir.parent / 'logs' / 'sidebar-stall.log'
+    logged = len(stall_log.read_text().splitlines()) if stall_log.exists() else 0
+    (bin_dir / 'tmux-dashboard-rows-real.sh').symlink_to(real_bin / 'tmux-dashboard-rows.sh')
+    staged.write_text('#!/bin/bash\nn=0\nwhile [ -f %s ] && [ $n -lt 300 ]; do sleep .1; n=$((n+1)); done\n'
+                      'exec bash %s "$@"\n' % (shlex.quote(str(stall)),
+                                               shlex.quote(str(bin_dir / 'tmux-dashboard-rows-real.sh'))))
+    stall.write_text('')
+    os.replace(staged, rows_bin)
+    started, flagged, blank = time.monotonic(), None, []
+    while time.monotonic() - started < 15:
+        screen = tm('capture-pane', '-p', '-t', side)
+        if '修复侧栏' not in screen or 'worker-one' not in screen:
+            blank.append(round(time.monotonic() - started, 1))
+        if flagged is None and screen.splitlines()[:1] == ['刷新中…']:
+            flagged = time.monotonic() - started
+        time.sleep(.25)
+    check(not blank, 'the list went blank under a hung producer at %r s' % blank)
+    check(flagged is not None, 'a hung producer never showed 「刷新中…」')
+    lines = stall_log.read_text().splitlines() if stall_log.exists() else []
+    check(len(lines) == logged + 1 and 'producer' in lines[-1] and 'restarted' in lines[-1],
+          'the watchdog did not log the stall exactly once: %r' % lines[logged:])
+    print('sidebar timing: 「刷新中…」 after %.1fs of a hung producer; stall log: %s' % (flagged, lines[-1]))
+    stall.unlink()
+    wait_for(lambda: tm('capture-pane', '-p', '-t', side).splitlines()[:1] != ['刷新中…'],
+             '「刷新中…」 stayed after the producer recovered')
+    rows_bin.unlink()
+    rows_bin.symlink_to(real_bin / 'tmux-dashboard-rows.sh')
+    (bin_dir / 'tmux-dashboard-rows-real.sh').unlink()
+    wait_for(navigation, 'the hung-producer leg left the sidebar key table')
 
     # Degenerate case (a one-repo fleet, no repos/ overlay): the async producer
     # paints exactly what the painter always has — `marker glyph tree label`,
