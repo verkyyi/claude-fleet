@@ -570,22 +570,15 @@ def bridge(args):
 
 
 def from_claude(a):
-    calls = {}
+    # The transcript walk is fleet_loop_mark.py's (issue #1370): the same reading
+    # backfills a pre-#1331 session's @loop, so the two can never disagree on which
+    # ScheduleWakeup was the last successful one.
+    walk = runpy.run_path(str(Path(__file__).with_name('fleet_loop_mark.py')))['claude_tool_results']
     last = None
     scheduled_at = None
     with Path(a.transcript).open() as history:
-        for line in history:
-            row = json.loads(line)
-            if row.get('isSidechain'):
-                continue
-            content = row.get('message', {}).get('content', [])
-            for b in content if isinstance(content, list) else []:
-                if not isinstance(b, dict):
-                    continue
-                if b.get('type') == 'tool_use' and b.get('name') == 'ScheduleWakeup':
-                    calls[b['id']] = (b['input'], row.get('timestamp'))
-                if b.get('type') == 'tool_result' and b.get('tool_use_id') in calls and not b.get('is_error'):
-                    last, scheduled_at = calls[b['tool_use_id']]
+        for _name, inp, _resp, use_ts, _res_ts in walk(history, ('ScheduleWakeup',), strict=True):
+            last, scheduled_at = inp, use_ts
     if not last or last.get('stop') or not last.get('prompt'):
         raise ValueError('no successful self-paced ScheduleWakeup to import; inspect the source')
     value = {'prompt': last['prompt'], 'interval_seconds': last['delaySeconds']}

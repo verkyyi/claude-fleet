@@ -54,7 +54,7 @@ R="${E}0m"; US=$'\x1f'
 # option of that name, so the per-repo fold set rides the one list-windows call
 # every frame already makes — same value on every line, no extra fork. Both
 # passes name it so nothing lands glued to @sleep_since.
-WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{@claude_needs}${US}#{@expand}${US}#{@pin}${US}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}"
+WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -869,6 +869,17 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     [ -n "$repod" ] && label="$label $repod"       # cross-repo child (#1031)
     [ -n "$zwait" ] && label="$label · ${zwait#z · }"
     [ "$depth" -gt "$DEPTH_MAX" ] && depth=$DEPTH_MAX
+    # WHY a ↻ row is idle-but-unfinished (issue #1370): the needs field carries
+    # @claude_wait on a `looping` window (WFMT), and the selected-row line says it —
+    # `等子任务 k/N` with this row's own subtree badge. Sidebar only: the hub's act
+    # cell is the red `!` column, and a ↻ is not one.
+    if [ -z "$ndet" ] && [ "$state" = looping ]; then
+      case ",$nsub," in
+        *,children,*) [ -n "${WD_children-}" ] || WD_children=$(fleet_ui_t wait_children)
+                      ndet="$WD_children${kidd:+ $kidd}" ;;
+        *,bg,*)       [ -n "${WD_bg-}" ] || WD_bg=$(fleet_ui_t wait_bg); ndet=$WD_bg ;;
+      esac
+    fi
     buf+="$rgrp	$pinned	$gpath	$wid$US$state$US$gl$US$label$US${treed:- }$US$kidd$US$depth$US$ndet"$'\n'
     continue
   fi

@@ -40,6 +40,8 @@ fi
 
 handoff_prev=''   # prior @claude_state, captured in the done branch (issue #330)
 wstate=''         # what a clean Stop WRITES when it is not `done` (issue #1331: looping)
+wwait=''          # WHY it is looping (issue #1370): @claude_wait, loop|children|bg
+wprev=''          # the @claude_wait already on the window (cleared when it lapses)
 
 # @claude_needs — WHY this window is red (issues #640, #704):
 #
@@ -152,18 +154,27 @@ case "${1:-}" in
     # overwrites @claude_state — the nudge must not hijack a pane that stopped in
     # a needs-attention state (an open operator question). Only the Stop hook
     # passes 'done', so this one extra read never touches the per-tool hot path.
-    handoff_prev=$(tmux display-message -p -t "$TMUX_PANE" '#{@claude_state}' 2>/dev/null)
-    # A turn that ended with a Loop still pending (issue #1331): the agent scheduled
-    # its own next round (ScheduleWakeup / CronCreate, recorded in @loop by the
-    # PostToolUse hook) or a fleet-loop.py ledger holds one. The pane is idle but NOT
-    # finished, so it is stamped `looping` (↻) instead of `done` (✓) — the dash's
-    # k/N stops counting it and the reapers retain it. Only the WRITTEN state
-    # changes: everything below keyed on a clean Stop (`sem=done`) still runs. One
-    # tmux read when neither option is set, i.e. today's cost for every other pane.
-    if [ -n "$(tmux display-message -p -t "$TMUX_PANE" '#{@loop}#{@handoff_manifest}' 2>/dev/null)" ]; then
-      _lbin=$(cd "$(dirname "$0")" && pwd)
-      python3 "$_lbin/fleet_loop_mark.py" window "$TMUX_PANE" >/dev/null 2>&1 && wstate=looping
-    fi
+    handoff_prev=$(tmux display-message -p -t "$TMUX_PANE" '#{@claude_state}|#{@claude_wait}' 2>/dev/null)
+    wprev=${handoff_prev#*|}; handoff_prev=${handoff_prev%%|*}
+    # A turn that ended while the window is still WAITING on something: the pane is
+    # idle but NOT finished, so it is stamped `looping` (↻) instead of `done` (✓) —
+    # the dash's k/N stops counting it and the reapers retain it. @claude_wait says
+    # on what (bin/fleet-lib.sh fleet_window_wait):
+    #   loop      a Loop is pending (issue #1331): the agent scheduled its own next
+    #             round (ScheduleWakeup / CronCreate → @loop, by the PostToolUse hook;
+    #             backfilled from the transcript for a session that scheduled it
+    #             before the hook existed) or a fleet-loop.py ledger holds one;
+    #   children  a sub-task it spawned is not finished — the k/N its own row shows;
+    #   bg        its agent still owns a Bash-tool job (a run_in_background command).
+    # Only the WRITTEN state changes: everything below keyed on a clean Stop
+    # (`sem=done`) still runs. The transcript comes off the Stop payload; the mod's
+    # report (`--via mod`) has none, and never needs the backfill (it writes @loop).
+    _lbin=$(cd "$(dirname "$0")" && pwd)
+    _tp=$(printf '%s' "$_stop_payload" \
+      | sed -n 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sed -n 1p)
+    wwait=$(bash -c '. "$1/fleet-lib.sh"; fleet_stop_wait "$2" "$3"' stop-wait \
+              "$_lbin" "$TMUX_PANE" "$_tp" 2>/dev/null </dev/null) || wwait=''
+    [ -n "$wwait" ] && wstate=looping
     ;;
   busy)
     # PreToolUse heartbeat = working, EXCEPT the AskUserQuestion tool: it opens a
@@ -240,6 +251,12 @@ if [ "$sem" != "leave" ]; then
   # a working/done write clears it, so no reader can ever pair a fresh state with a
   # stale reason.
   tmux set-window-option -t "$TMUX_PANE" @claude_needs "$sub" 2>/dev/null
+  # …and WHY a Stop wrote `looping` (issue #1370) beside it; only a Stop decides it,
+  # and a window that waits on nothing carries no option at all.
+  if [ "$sem" = 'done' ]; then
+    if [ -n "$wwait" ]; then tmux set-window-option -t "$TMUX_PANE" @claude_wait "$wwait" 2>/dev/null
+    elif [ -n "$wprev" ]; then tmux set-window-option -u -t "$TMUX_PANE" @claude_wait 2>/dev/null; fi
+  fi
   # last-activity stamp (drives the dashboard's "Nm ago" column).
   tmux set-window-option -t "$TMUX_PANE" @claude_state_ts "$(date +%s)" 2>/dev/null
   # Wake the spinner (issue #887). It re-reads a QUIET fleet's windows only ~1/s;

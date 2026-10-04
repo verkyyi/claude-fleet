@@ -338,7 +338,7 @@ classify_one() {
   [ "$BACKEND" = shadow ] && shadow_row "$target" "$st" "$h" "$haiku_label" "$haiku_s" "$jev_label" "$jev_conf" "$jev_ms" "$jev_err" "$cap"
   tag=""; [ "$via" = jev ] && tag="  via=jev conf=$jev_conf"
 
-  new=""
+  new=""; cwait=''
   case "$label" in
     WAITING) new="needs" ;;
     LOOPING) new="looping" ;;
@@ -346,9 +346,17 @@ classify_one() {
              # The screen is the AUXILIARY signal (issue #1331): a window whose @loop
              # mark / loop ledger says a Loop is pending stays `looping`, whatever
              # the last frame looked like; the overruled read is logged below.
-             if python3 "$BIN/fleet_loop_mark.py" window "$target" ${CLASSIFY_SOCK:+--socket-name "$CLASSIFY_SOCK"} >/dev/null 2>&1; then
+             # So does one waiting on a sub-task it spawned, or on a Bash-tool job
+             # still running under it (issue #1370) — fleet_window_wait's reasons,
+             # the same @claude_wait the Stop hook writes.
+             if command -v fleet_window_wait >/dev/null 2>&1; then
+               cwait=$(fleet_window_wait "${CLASSIFY_SOCK:-}" "$target" 2>/dev/null) || cwait=''
+             elif python3 "$BIN/fleet_loop_mark.py" window "$target" ${CLASSIFY_SOCK:+--socket-name "$CLASSIFY_SOCK"} >/dev/null 2>&1; then
+               cwait=loop
+             fi
+             if [ -n "$cwait" ]; then
                new="looping"
-               printf '%s  %-10s stopped-read overridden by @loop (#1331)%s\n' "$(date +%H:%M:%S)" "$target" "$tag" >> "$LOG"
+               printf '%s  %-10s stopped-read overridden by @claude_wait=%s (#1331/#1370)%s\n' "$(date +%H:%M:%S)" "$target" "$cwait" "$tag" >> "$LOG"
              fi ;;
     ERROR)   new="needs" ;;
     WORKING) # A screen frame never PROMOTES a quiet window to working (issue
@@ -368,6 +376,12 @@ classify_one() {
     # clear whatever bin/set-claude-state.sh left behind rather than let a stale
     # `ask`/`perm` ride a brand-new state. '' ⇒ the dash's plain `!`.
     TM set-window-option -t "$target" @claude_needs "" 2>/dev/null
+    # @claude_wait explains a `looping` (issue #1370): this verdict's own reasons,
+    # or none — a screen-read LOOPING has no reason the fleet can name.
+    if [ -n "$cwait" ]; then TM set-window-option -t "$target" @claude_wait "$cwait" 2>/dev/null
+    elif [ -n "$(TM display-message -p -t "$target" '#{@claude_wait}' 2>/dev/null)" ]; then
+      TM set-window-option -u -t "$target" @claude_wait 2>/dev/null
+    fi
     TM set-window-option -t "$target" @claude_state_ts "$(date +%s)" 2>/dev/null
     printf '%s  %-10s %-8s -> %s%s\n' "$(date +%H:%M:%S)" "$target" "$st" "$new" "$tag" >> "$LOG"
   fi

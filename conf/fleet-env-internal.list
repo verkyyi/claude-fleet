@@ -265,3 +265,4 @@ FLEET_GH_WRITE_LOCK_WAIT           knob: internal timeout, longest a writer queu
 FLEET_GH_WH_MAX_AGE                knob: longest an event-quiet prmap still serves while the webhook is live (fleet-gh.sh, 300, #1272)
 FLEET_STATE_DIR                    path: state/log location override — the shared gh-limit marker dir (fleet-gh-lib.sh)
 FLEET_SHOW_OUT                     test seam: where fleet-show-send.py writes instead of /dev/tty (fleet-show-selftest.sh, #1367)
+FLEET_LOOP_BACKFILL_BYTES          knob: internal budget, transcript tail bytes the Stop hook replays to backfill a pre-hook @loop (fleet_stop_wait, 262144, #1370)

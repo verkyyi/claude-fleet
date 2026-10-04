@@ -45,6 +45,11 @@ fleet_ui_t() {
     en:sidebar_save_failed)     printf 'fleet: could not save sidebar preference' ;;
     zh:wait_slot)               printf 'z · 等待空位' ;;
     en:wait_slot)               printf 'z · waiting for a slot' ;;
+    # why a ↻ row is waiting (issue #1370, @claude_wait) — the sidebar's selected-row line
+    zh:wait_children)           printf '等子任务' ;;
+    en:wait_children)           printf 'waiting on sub-tasks' ;;
+    zh:wait_bg)                 printf '后台命令在跑' ;;
+    en:wait_bg)                 printf 'background command running' ;;
     # which `!` a row is (issue #1328) — ≤ 8 display cells: the hub's act column
     zh:needs_ask)               printf '在问你' ;;
     en:needs_ask)               printf 'asking' ;;
