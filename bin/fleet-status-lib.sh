@@ -23,6 +23,11 @@
 #   fleet_status_hub_lost <now>        → rc 0 = 失联: FSH_TS is older than
 #       FLEET_HUB_SESSIONS_STALE (60 s), FSH_AGE the seconds since; rc 1 = fresh.
 #   fleet_status_hub_node <label>      → HN_* from global/hub_nodes; rc 1: no row.
+#   fleet_status_remote_node <sess> <label> → RN_AV (online|lost|maintenance) RN_N
+#       RN_SEEN from the `#node` header line of global/remote_<sess> (#1475): the
+#       hub's word on a machine when hub_nodes has no row for it — a login whose
+#       identity is a certificate gets no /v1/nodes (until #1502), the shell on a
+#       colleague's computer first of all (#1484). rc 1: no such line.
 #   fleet_status_hub_limit <label>     → HL_* from global/hub_limits; rc 1: no row.
 #   fleet_status_age <secs>            → FSA: `3m` / `2h` / `1d` for 失联 N.
 #   fleet_status_window_list on|off    → the window list (window-status-format /
@@ -99,6 +104,20 @@ fleet_status_hub_node() {
       '#ts')   HN_TS=$a; case "$HN_TS" in ''|*[!0-9]*) HN_TS=0 ;; esac ;;
       "$want") HN_AV=$a; HN_LOAD1=$b; HN_NCPU=$c; HN_MEM=$d; HN_SESS=$e; HN_VER=$g; HN_AGE=$h; HN_USED=$i; HN_TOTAL=$j
                return 0 ;;
+    esac
+  done < "$f"
+  return 1
+}
+
+fleet_status_remote_node() {
+  local f="$FLEET_STATUS_G/remote_${1:-}" want="${2:-}" k a b c d _r
+  RN_AV='' RN_N='' RN_SEEN=''
+  [ -n "${1:-}" ] && [ -n "$want" ] && [ -s "$f" ] || return 1
+  while IFS=$_FS_US read -r k a b c d _r; do
+    case "$k" in
+      '#node') [ "$a" = "$want" ] && { RN_AV=$b; RN_N=$c; RN_SEEN=$d; return 0; } ;;
+      '#'*)    ;;
+      *)       break ;;                       # the rows: the header is over
     esac
   done < "$f"
   return 1

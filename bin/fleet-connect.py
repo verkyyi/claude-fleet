@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """fleet connect — get into your own fleet over the best route there is.
 
-    fleet [MACHINE] [--verbose] [--retest] [--print] [-- SSH-ARGS…]
-    fleet connect [MACHINE] [--verbose] [--retest] [--print] [-- SSH-ARGS…]
+    fleet [MACHINE] [--verbose] [--retest] [--print] [-o SSH-OPTION]… [-- SSH-ARGS…]
+    fleet connect [MACHINE] [--verbose] [--retest] [--print] [-o SSH-OPTION]… [-- SSH-ARGS…]
     fleet connect --proxy MACHINE
+    fleet connect --pick [MACHINE]
 
 `fleet` with nothing after it (claude-fleet#1470; `bin/fleet` runs this file
 with --enter) is the whole way in, in one go:
@@ -39,8 +40,19 @@ moves the next `fleet connect` onto another, with nothing to edit.
 MACHINE is an alias or hostname from the hub's list (default: the one you
 connected to last, else the hub's first). --verbose prints the measurement
 table and the choice; --retest ignores the remembered choice; --print prints
-the ssh command instead of running it. Anything after `--` goes to ssh (a
-remote command, -L forwards, …).
+the ssh command instead of running it. `-o KEY=VALUE` (repeatable) is an ssh
+option placed BEFORE the host — a ControlMaster/ControlPath pair, RequestTTY —
+so a caller that wants a remote command over a shared connection need not
+rebuild the route (the shell, claude-fleet#1484). Anything after `--` goes to
+ssh (a remote command, -L forwards, …).
+
+--pick [MACHINE] (claude-fleet#1484): the certificate step and the machine
+step of `fleet`, and nothing else — no measuring, no ssh. Prints one JSON
+line: {"machine": <alias>, "hostname": …, "reason": …, "login": …,
+"machines": [{"alias", "hostname"}, …]} — what the shell starts from. With
+MACHINE the hub's pick is skipped and the name is checked against the route
+list. Exit 1 when no machine is online (the candidates on stderr, as `fleet`
+prints them); 2 with no hub URL.
 
 If the hub cannot be asked, the routes come from ~/.ssh/fleet-ssh-config —
 the file `fleet login` wrote — without the relay.
@@ -573,7 +585,7 @@ def pick_machine(machines, want, last):
     return machines[0] if machines else None
 
 
-def ssh_command(machine, route, login, hub):
+def ssh_command(machine, route, login, hub, ssh_opts=()):
     alias = machine.get("alias") or machine.get("hostname")
     cmd = ["ssh", "-o", "HostKeyAlias=fleet-" + alias, "-o", "ConnectTimeout=15"]
     key, cert = cert_paths()
@@ -581,6 +593,8 @@ def ssh_command(machine, route, login, hub):
         cmd += ["-i", key, "-o", "CertificateFile=" + cert]
     if login:
         cmd += ["-l", login]
+    for o in ssh_opts:
+        cmd += ["-o", o]
     if route["kind"] == "relay":
         me = os.path.abspath(__file__)
         pc = "%s %s --proxy %s --hub %s" % (shlex.quote(sys.executable or "python3"), shlex.quote(me),
@@ -593,7 +607,7 @@ def ssh_command(machine, route, login, hub):
     return cmd
 
 
-def connect(want, hub, token, verbose, retest, print_only, ssh_args, info=None):
+def connect(want, hub, token, verbose, retest, print_only, ssh_args, info=None, ssh_opts=()):
     """info: a route list already in hand (the home answer, #1470) — the hub
     is not asked again for it."""
     probes = max(1, env_num("FLEET_CONNECT_PROBES", 3, int))
@@ -614,7 +628,7 @@ def connect(want, hub, token, verbose, retest, print_only, ssh_args, info=None):
             if verbose:
                 sys.stderr.write("fleet connect · %s · 用 %d 秒前测出的 %s（复核 %.0fms 通过；--retest 重测）\n"
                                  % (ent["label"], now - float(ent["at"]), r["name"], r["ms"][0]))
-            return run_ssh(ent["machine"], r, ent.get("login", ""), hub, print_only, ssh_args)
+            return run_ssh(ent["machine"], r, ent.get("login", ""), hub, print_only, ssh_args, ssh_opts)
         if verbose:
             sys.stderr.write("fleet connect · 记住的线路 %s 不通了（%s），全部重测\n"
                              % (r["name"], r["errors"][-1] if r["errors"] else "?"))
@@ -665,11 +679,11 @@ def connect(want, hub, token, verbose, retest, print_only, ssh_args, info=None):
         entries[want] = ent
     cache["machines"], cache["last"] = entries, name
     save_cache(cache)
-    return run_ssh(m, route, login, hub, print_only, ssh_args)
+    return run_ssh(m, route, login, hub, print_only, ssh_args, ssh_opts)
 
 
-def run_ssh(machine, route, login, hub, print_only, ssh_args):
-    cmd = ssh_command(machine, route, login, hub) + list(ssh_args)
+def run_ssh(machine, route, login, hub, print_only, ssh_args, ssh_opts=()):
+    cmd = ssh_command(machine, route, login, hub, ssh_opts) + list(ssh_args)
     if print_only:
         print(" ".join(shlex.quote(c) for c in cmd))
         return 0
@@ -745,7 +759,43 @@ def print_candidates(home):
                             ("（" + "，".join(extra) + "）") if extra else ""))
 
 
-def enter(want, hub, token, verbose, retest, print_only, ssh_args):
+def pick_json(m, info, reason=""):
+    """--pick's one line (claude-fleet#1484): the machine `fleet` would enter,
+    and every machine the person may reach — alias + hostname — so a caller
+    can label rows the way the hub does without a second question."""
+    machines = [{"alias": x.get("alias") or x.get("hostname") or "", "hostname": x.get("hostname") or ""}
+                for x in (info or {}).get("machines") or [] if isinstance(x, dict)]
+    out = {"machine": (m or {}).get("alias") or (m or {}).get("hostname") or "",
+           "hostname": (m or {}).get("hostname") or "", "reason": reason or "",
+           "login": (info or {}).get("login") or "", "machines": machines}
+    sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+    return 0
+
+
+def pick_named(want, hub, token):
+    """--pick MACHINE: the name against the hub's route list (the snippet
+    `fleet login` wrote when the hub is silent); unknown → exit 1, naming the
+    machines there are."""
+    info = None
+    try:
+        info = fetch_routes(hub, token)
+    except (Refused, OSError, ValueError) as e:
+        try:
+            with open(ssh_config_snippet_path()) as f:
+                info = parse_ssh_config_snippet(f.read())
+            sys.stderr.write("fleet · 入口连不上（%s），按 %s 里的机器\n" % (e, ssh_config_snippet_path()))
+        except OSError:
+            die("hub: %s" % e, 1)
+    machines = info.get("machines") or []
+    m = pick_machine(machines, want, None)
+    if m is None:
+        names = ", ".join(str(x.get("alias") or x.get("hostname")) for x in machines) or "（无）"
+        die("没有叫 %s 的机器；你能连：%s" % (want, names), 1)
+    return pick_json(m, info, "named")
+
+
+def enter(want, hub, token, verbose, retest, print_only, ssh_args, ssh_opts=(), pick_only=False):
     if not hub:
         die("no hub URL: run the installer (curl -fsSL <入口>/install | sh) or `fleet login --hub <入口地址>` once")
     hub = hub.rstrip("/")
@@ -753,7 +803,9 @@ def enter(want, hub, token, verbose, retest, print_only, ssh_args):
         login = load_login_module()
         ensure_cert(login, hub, verbose)
     if want:
-        return connect(want, hub, token, verbose, retest, print_only, ssh_args)
+        if pick_only:
+            return pick_named(want, hub, token)
+        return connect(want, hub, token, verbose, retest, print_only, ssh_args, ssh_opts=ssh_opts)
     cache = load_cache()
     for attempt in (1, 2):
         try:
@@ -771,10 +823,14 @@ def enter(want, hub, token, verbose, retest, print_only, ssh_args):
                 ensure_cert(load_login_module(), hub, verbose, force=True)
                 continue
             sys.stderr.write("fleet · 入口没有给出机器（%s），按上次的记录直连\n" % e)
-            return connect(None, hub, token, verbose, retest, print_only, ssh_args)
+            if pick_only:
+                return pick_named(cache.get("last") or "", hub, token) if cache.get("last") else pick_json(None, None, "hub: %s" % e)
+            return connect(None, hub, token, verbose, retest, print_only, ssh_args, ssh_opts=ssh_opts)
         except (OSError, ValueError) as e:
             sys.stderr.write("fleet · 入口连不上（%s），按上次的记录直连\n" % e)
-            return connect(None, hub, token, verbose, retest, print_only, ssh_args)
+            if pick_only:
+                return pick_named(cache.get("last") or "", hub, token) if cache.get("last") else pick_json(None, None, "hub: %s" % e)
+            return connect(None, hub, token, verbose, retest, print_only, ssh_args, ssh_opts=ssh_opts)
     m = home.get("machine") or {}
     name = m.get("alias") or m.get("hostname")
     if not name:
@@ -784,7 +840,11 @@ def enter(want, hub, token, verbose, retest, print_only, ssh_args):
     sys.stderr.write("fleet · 入口选了 %s（%s）\n" % (name, home.get("reason", "")))
     if verbose:
         print_candidates(home)
-    return connect(name, hub, token, verbose, retest, print_only, ssh_args, info=home)
+    if pick_only:
+        cache["last"] = name
+        save_cache(cache)
+        return pick_json(m, home, home.get("reason", ""))
+    return connect(name, hub, token, verbose, retest, print_only, ssh_args, info=home, ssh_opts=ssh_opts)
 
 
 def main(argv):
@@ -804,6 +864,10 @@ def main(argv):
     ap.add_argument("-v", "--verbose", action="store_true", help="print the measurement table and the choice")
     ap.add_argument("--retest", action="store_true", help="measure again even if a recent choice is remembered")
     ap.add_argument("--print", dest="print_only", action="store_true", help="print the ssh command, don't run it")
+    ap.add_argument("-o", "--ssh-option", dest="ssh_opts", action="append", default=[], metavar="KEY=VALUE",
+                    help="an ssh option placed before the host (repeatable): ControlPath=…, RequestTTY=force, …")
+    ap.add_argument("--pick", action="store_true",
+                    help="certificate + the hub's machine pick as one JSON line; no measuring, no ssh (the shell)")
     a = ap.parse_args(argv)
     conf = load_hub_conf()
     hub = a.hub or os.environ.get("FLEET_HUB_URL") or conf.get("url") or ""
@@ -813,9 +877,9 @@ def main(argv):
             die("no hub URL: pass --hub, set FLEET_HUB_URL, or put {\"url\": …} in %s"
                 % os.path.join(config_dir(), "hub.json"))
         return proxy(a.proxy, hub, token)
-    if a.enter:
-        return enter(a.machine, hub, token, a.verbose, a.retest, a.print_only, ssh_args)
-    return connect(a.machine, hub.rstrip("/"), token, a.verbose, a.retest, a.print_only, ssh_args)
+    if a.enter or a.pick:
+        return enter(a.machine, hub, token, a.verbose, a.retest, a.print_only, ssh_args, a.ssh_opts, a.pick)
+    return connect(a.machine, hub.rstrip("/"), token, a.verbose, a.retest, a.print_only, ssh_args, ssh_opts=a.ssh_opts)
 
 
 if __name__ == "__main__":

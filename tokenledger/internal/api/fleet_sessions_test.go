@@ -137,3 +137,95 @@ func TestFleetSessionsByCertificate(t *testing.T) {
 		t.Fatalf("m4 after an hour of silence = %v, want lost", out["nodes"])
 	}
 }
+
+// The shell on a person's own computer (claude-fleet#1484, EPIC #1479 C5) reads
+// the list with the certificate `fleet login` REGISTERED on that device — the
+// device flow (start / approve / poll), not a CA-minted test certificate — and
+// gets exactly its person's rows: the sessions of every login they hold an
+// ACTIVE account for, one node per such machine, and nothing of anyone else's
+// (a third machine, another login's, is neither a row nor a node) — from both
+// sides: that machine's person sees only theirs. A revoked device is refused.
+func TestFleetSessionsByDeviceOwnRowsOnly(t *testing.T) {
+	h, _, _, _, _ := homeHarness(t)
+	// A third machine, carol's: a login Alice holds no account for.
+	const machineC = "33333333-3333-4333-8333-333333333333"
+	carol := connectWriteNode(t, h, "m6")
+	carol.beatLoad("m6", "carol", machineC, 1, 1,
+		fakeFleet(t, machineC, "fleet-carol", writeRepo, "/u/carol/claude-fleet", 9))
+	waitFor(t, 3*time.Second, "carol's fleet registered", func() bool {
+		return len(getFleet(t, h, "/v1/fleet/fleet_list", 200)["fleets"].([]any)) == 3
+	})
+
+	signed := func(d *device, ts int64) map[string]any {
+		return map[string]any{"cert": d.cert, "ts": ts,
+			"sig": sshsig(t, d.signer, control.SessionsSigNamespace, []byte(control.SessionsSigMessage(ts)))}
+	}
+	read := func(d *device) (int, map[string]any, string) {
+		code, body := postJSON(t, h, control.SessionsPath, signed(d, time.Now().Unix()))
+		var out map[string]any
+		_ = json.Unmarshal(body, &out)
+		return code, out, string(body)
+	}
+
+	a := newDevice(t)
+	a.scan(t, h, "Alice", "alices-mbp")
+	code, out, raw := read(a)
+	if code != 200 {
+		t.Fatalf("alice's device: HTTP %d %s", code, raw)
+	}
+	// verk on m5 (issue 1) + verk on m4 (issue 2): hers; carol's issue 9 is not.
+	if out["count"].(float64) != 2 {
+		t.Fatalf("alice's device sees %v sessions %s, want her 2 (verk on m5 and m4)", out["count"], raw)
+	}
+	for _, s := range out["sessions"].([]any) {
+		row := s.(map[string]any)
+		if row["os_user"] != "verk" {
+			t.Fatalf("alice's device sees %v's session: %v", row["os_user"], row)
+		}
+	}
+	nodes := nodeRows(out)
+	if len(nodes) != 2 || nodes["m5"] == nil || nodes["m4"] == nil {
+		t.Fatalf("alice's nodes = %v, want m5 and m4", out["nodes"])
+	}
+	if nodes["m6"] != nil {
+		t.Fatalf("alice's nodes list carol's machine: %v", out["nodes"])
+	}
+	// The ETag door works for a device too: the shell's loop sends it back.
+	if et, _ := out["etag"].(string); et == "" {
+		t.Fatalf("no etag on a device read: %s", raw)
+	}
+
+	// Bob, carol's person (a device scan needs an active login somewhere): his
+	// device sees carol's one session on m6 and nothing of verk's.
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: "Bob", Hostname: "m6", Login: "carol"}); code != 200 {
+		t.Fatalf("adopt bob as carol: HTTP %d", code)
+	}
+	b := newDevice(t)
+	b.scan(t, h, "Bob", "bobs-laptop")
+	code, out, raw = read(b)
+	if code != 200 || out["count"].(float64) != 1 {
+		t.Fatalf("bob's device: HTTP %d %s, want carol's one session", code, raw)
+	}
+	if row := out["sessions"].([]any)[0].(map[string]any); row["os_user"] != "carol" || row["machine_name"] != "m6" {
+		t.Fatalf("bob's device sees %v, want carol on m6", row)
+	}
+	if nodes := nodeRows(out); len(nodes) != 1 || nodes["m6"] == nil {
+		t.Fatalf("bob's nodes = %v, want m6 only", out["nodes"])
+	}
+
+	// A revoked device is refused at this door like at every other.
+	body, _ := json.Marshal(map[string]string{"fingerprint": b.fp})
+	r, _ := http.NewRequest(http.MethodPost, h.http.URL+"/v1/fleet/devices/revoke", bytes.NewReader(body))
+	r.Header.Set("Authorization", "Bearer "+viewerToken)
+	resp, err := http.DefaultClient.Do(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("revoke bob's device: HTTP %d", resp.StatusCode)
+	}
+	if code, _, raw = read(b); code != http.StatusUnauthorized {
+		t.Fatalf("a revoked device: HTTP %d %s, want 401", code, raw)
+	}
+}

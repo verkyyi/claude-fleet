@@ -19,7 +19,9 @@ fi
 socket_path=$(tmux display-message -p -t "$sess" '#{socket_path}' 2>/dev/null) || exit 0
 [ "${socket_path##*/}" = "$(fleet_socket "$sess")" ] || exit 0
 conf=$(fleet_conf_file "$sess")
-[ -f "$conf" ] || exit 0
+# The SHELL's server (bin/fleet-shell.sh, issue #1484) has no fleet conf: FLEET_SHELL=1
+# in its environment is its opt-in; the list, keys and menu run as in a fleet.
+[ -f "$conf" ] || [ "${FLEET_SHELL:-0}" = 1 ] || exit 0
 fleet_load_conf "$sess"
 export FLEET_UI_LANG="${FLEET_UI_LANG:-}"
 # the auto-width ceiling (issue #1328) rides the env into the spawned view
@@ -27,6 +29,7 @@ export FLEET_SIDEBAR_WIDTH_MAX="${FLEET_SIDEBAR_WIDTH_MAX:-44}"
 
 case "$verb" in
   toggle|hide)
+    [ "${FLEET_SHELL:-0}" = 1 ] && exit 0   # the shell's list is not optional, and it has no conf to write
     enabled=1
     { [ "$verb" = hide ] || [ "${FLEET_SIDEBAR:-1}" = 1 ]; } && enabled=0
     . "$BIN/fleet-config-lib.sh"
@@ -47,5 +50,10 @@ case "$verb" in
 esac
 
 export FLEET_SESSION="$sess"
-python3 "$BIN/fleet-sidebar.py" "$verb" "$sess" "$conf.sidebar.lock" \
+# The lock sits beside the fleet's conf; the shell has none (#1484), so its lock
+# lives in its own $FLEET_C (the cache under the $TMPDIR it set) — the python's
+# open() of a path in a missing directory is a silent exit 0, never a view.
+lock="$conf.sidebar.lock"
+if [ ! -d "${conf%/*}" ]; then mkdir -p "$FLEET_C" 2>/dev/null; lock="$FLEET_C/sidebar-$sess.lock"; fi
+python3 "$BIN/fleet-sidebar.py" "$verb" "$sess" "$lock" \
   "${FLEET_SIDEBAR:-1}" "${FLEET_SIDEBAR_WIDTH:-30}" "${3:-}" "$conf" || :

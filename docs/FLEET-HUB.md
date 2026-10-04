@@ -299,6 +299,47 @@ Both menus also list **「新建到 m4…」** — one item per other machine th
 (`dash-issue-new.sh --node=<m>` → `dash-issue-session.sh --node`, #1475); no
 cache, no item.
 
+**The shell on your own computer** (issue #1484, EPIC #1479 C5). `fleet` on a
+laptop with tmux ≥ 3.2 (`bin/fleet` → `bin/fleet-shell.sh`; `FLEET_SHELL=0`
+keeps today's direct ssh, no tmux prints one line on installing it) opens the
+same three things a fleet pane shows, without a fleet on that computer: LEFT the
+hub's list, BOTTOM the hub's bar, RIGHT a direct ssh into the session you look
+at. Nothing is rendered anew — the shell is a composition: its own tmux server
+`-L fleet-shell` (the socket label is the session name, as a fleet's is) holding
+ONE proxy window per machine (`⇄m4 <name>`, `@remote=<node>:<wid>`,
+`fleet-remote-view.sh run --shell`, so the far end registers a shell client and
+hides its own list and bar, #1485); the list pane (`fleet-sidebar.py`) joins
+whichever window is current and the conf's hooks (`conf/tmux-shell.conf`) put it
+back after a close; the bar is `tmux-status.sh` in hub mode, passed the current
+window's `@remote`. The data is `fleet-hub-sessions.sh --loop` in **client mode**
+(`FLEET_HUB_SESSIONS_CLIENT=<session>`): one pseudo-fleet, every row remote
+(`local`=0, `#me` empty — this computer is a node at most by coincidence, and
+the shell reaches even its own sessions through a nested attach), signed by the
+device's certificate (`fleet-sessions@claude-fleet` — the hub answers only that
+person's rows, `TestFleetSessionsByDeviceOwnRowsOnly`), into a cache of the
+shell's own (`$TMPDIR` = `~/.cache/claude-fleet/shell/tmp`, so `$FLEET_C` never
+touches a node's). Writes are the row menu's, through `fleet-hub-write.sh`.
+Scripts run from a conf-free mirror of `bin/` (`~/.cache/claude-fleet/shell/bin`,
+one symlink per file — the selftest-shadow-root idea), so on a machine that is
+itself a node the operator's `fleet.conf` cannot override the shell's view. A
+row on the SAME machine as the right pane is selected over that pane's own ssh
+connection — `fleet-remote-view.sh select <wid>` through the ControlMaster the
+pane holds (`@remote_ctl`), no reconnect — and a row on another machine switches
+to that machine's window; the far end of every connection is `fleet connect
+<machine> -o ControlPath=…` (the measured routes, this device's certificate,
+renewed by `--enter` first), or a nested attach when the machine is this
+computer. `fleet connect --pick [MACHINE]` is the certificate + machine-pick
+half of `fleet` as one JSON line, which the shell starts from. Keys: ↑↓ / ↵ / `.`
+/ `?` on the list as in a fleet; `prefix q` (and `prefix h`) the previous
+machine; `prefix E` the keyboard onto the list; F9 zooms the right pane (this
+computer's, never sent on). `~/.config/claude-fleet/shell.conf` holds the knobs
+(`FLEET_SHELL_PREFIX`, `FLEET_NODE_ALIASES`, `FLEET_SHELL_WIDTH`, …).
+`bin/fleet-shell-selftest.sh` is the check: a fake hub, a fake `fleet connect`,
+an ssh shim, an isolated socket. The bar's machine chip reads the sessions
+cache's `#node` line when `hub_nodes` has no row (a certificate identity gets
+no `/v1/nodes` until #1502): `m4 ●` rather than `?`. Installing the shell with
+the one-line installer is C7 (#1486).
+
 **…and steps into them** (issue #1424, EPIC #1419 C5). Enter on a remote row (the
 dash's `dash-enter.sh`, the sidebar's `jump`) runs `bin/fleet-remote-view.sh open`:
 a **proxy window** `⇄m4 <name>` (its pane header carries the same `⇄m4`, so a
