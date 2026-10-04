@@ -13,8 +13,33 @@ export type FleetModStatus = {
   mod: string
 }
 
+/**
+ * The task-progress band above the prompt (issue #1339): what the last 10s
+ * refresh read from the local caches. A field is null when its source is
+ * missing (or the window has no issue), and that segment is simply not drawn.
+ */
+export type ProgressSnapshot = {
+  /** The window's @issue; null on the hub and a scratch (raw) window. */
+  issue: number | null
+  /** This issue branch's PR from the dash's prmap: ci is `✓` `✗` `…` `·`. */
+  pr: { number: number; state: string; ci: string; ready: string } | null
+  /** The parent issue (an EPIC when labelled `epic`) and its members done/seen. */
+  epic: { number: number; isEpic: boolean; done: number; total: number } | null
+  /** This window's children: done, all, and how many need you (`!`). */
+  children: { done: number; total: number; needs: number } | null
+  /** Children standing at `!`, by bare ledger key (`issue-12`, `scratch-3`). */
+  needsKids: string[]
+  /** @ctx_pct of this window. */
+  ctxPct: number | null
+}
+
 declare module 'claude-code' {
   interface PluginState {
-    fleet: { status: FleetModStatus | null }
+    fleet: {
+      status: FleetModStatus | null
+      progress: ProgressSnapshot | null
+      /** Alert keys standing now and already toasted (`kid:issue-12`, `pr:34`). */
+      alerts: string[]
+    }
   }
 }
