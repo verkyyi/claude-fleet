@@ -59,7 +59,7 @@ FALSE-POSITIVE DISCIPLINE — the hard-won engineering this skeleton keeps:
   * The guard fails OPEN on any internal error — a deny-list bug must never take
     every session down with it.
 """
-import sys, re, json, os, subprocess
+import sys, re, json, os, shlex, subprocess
 
 # The rewritten command, if a rail repaired one; emitted as updatedInput.
 _TOOL_INPUT = {}
@@ -459,8 +459,96 @@ def check_segment(masked_seg, raw_seg, orig_seg, span, masked_cmd):
                  "#%s has a live bound worker; stamped --note (no-relay) so it "
                  "cannot relay back as a spurious turn" % issue)
 
+    # 5) A pkill that would sweep up other sessions' processes. Every fleet pane
+    #    runs as the same user, so a loose pattern is a fleet-wide kill: on
+    #    2026-10-03 a worker's `pkill -f "cat" -P $$` closed 16 sibling windows.
+    #    BSD pkill (macOS) stops option parsing at the first pattern, so the
+    #    trailing `-P $$` became two more PATTERNS, and the pattern `cat` matched
+    #    every worker's `zsh -c '… "$(cat task_issue-N.txt)"'` pane shell.
+    #    FLEET_ALLOW_BROAD_PKILL=1 is the hatch.
+    if (cmd_is(masked_seg, "pkill") or cmd_is(masked_seg, "killall")) \
+            and not _hatched(masked_cmd, "FLEET_ALLOW_BROAD_PKILL"):
+        why = _broad_kill(orig_seg)
+        if why:
+            block(why + " — every fleet pane runs as this user, so this can kill "
+                  "OTHER sessions. Kill by pid (`kill <pid>`, `kill %1`), put every "
+                  "option BEFORE the pattern, and give -f a specific pattern or a "
+                  "-P/-g/-t scope. FLEET_ALLOW_BROAD_PKILL=1 if truly intended")
+
     # Operator-specific rails, if the local overlay defines any (never shipped).
     _run_overlay(masked_seg)
+
+
+# pkill options that take a value (BSD and procps), as a separate token or glued.
+_PKILL_VALUE_OPTS = set("FGMNPUcgjstu")
+# Options that confine the match to a known process set. NOT -u/-U/-G: every
+# fleet pane runs as the one user, so a user/group filter narrows nothing.
+_PKILL_SCOPE_OPTS = set("FPgjst")
+# Process names whose killall takes down fleet panes (their shells / the TUI).
+_KILLALL_FLEET = {"claude", "tmux", "zsh", "bash", "sh", "login"}
+
+
+def _broad_kill(orig_seg):
+    """Why this pkill/killall statement is too broad, or None."""
+    try:
+        toks = shlex.split(orig_seg, comments=False)
+    except ValueError:
+        return None
+    while toks and (toks[0] == "sudo" or re.match(r"\w+=", toks[0])):
+        toks.pop(0)
+    if not toks:
+        return None
+    name, args = os.path.basename(toks[0]), toks[1:]
+    if name == "killall":
+        if any(a == "-m" or (a.startswith("-") and not a.startswith("--") and "m" in a[1:]
+                             and a[1:].isalpha() and a[1:].islower()) for a in args):
+            return "killall -m (regex over every process name)"
+        hit = [a for a in args if not a.startswith("-") and a.lower() in _KILLALL_FLEET]
+        return ("killall %s" % hit[0]) if hit else None
+    full = scoped = False
+    patterns = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if patterns:
+            if a.startswith("-") and len(a) > 1:
+                return ("pkill option %r AFTER the pattern — BSD/macOS pkill reads it "
+                        "as another pattern, not an option" % a)
+            patterns.append(a)
+        elif a == "--":
+            patterns.extend(args[i + 1:])
+            break
+        elif a.startswith("--"):
+            opt = a[2:].split("=", 1)[0]
+            full = full or opt == "full"
+            scoped = scoped or opt in ("parent", "pgroup", "session", "terminal",
+                                       "pidfile")
+            if "=" not in a and opt in ("signal", "parent", "pgroup", "session",
+                                        "terminal", "euid", "uid", "group", "pidfile",
+                                        "ns", "nslist"):
+                i += 1
+        elif a.startswith("-") and len(a) > 1:
+            body = a[1:]
+            if body.isdigit() or (len(body) > 1 and body.isupper()):
+                pass                                  # a signal: -9 / -HUP / -SIGKILL
+            else:
+                for j, c in enumerate(body):
+                    full = full or c == "f"
+                    scoped = scoped or c in _PKILL_SCOPE_OPTS
+                    if c in _PKILL_VALUE_OPTS:
+                        if j == len(body) - 1:
+                            i += 1                    # value is the next token
+                        break                         # value glued on (-P123)
+        else:
+            patterns.append(a)
+        i += 1
+    if len(patterns) > 1:
+        return "pkill given several patterns %r (each one matches on its own)" % patterns
+    if full and not scoped and patterns:
+        core = re.sub(r"[\\^$.*+?()\[\]{}|]", "", patterns[0])
+        if len(core) < 8:
+            return "pkill -f %r matches any command line containing it" % patterns[0]
+    return None
 
 
 def _sendkeys_targets_fleet(masked_seg):
