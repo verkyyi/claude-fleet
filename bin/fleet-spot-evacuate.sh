@@ -9,8 +9,11 @@
 # (terminationGracePeriodSeconds, 300s by default) to act. The agent has
 # already told the hub (/v1/node/reclaim), so the hub's placement avoids this
 # node from here on and every `move plan` below answers with another machine.
-# It can also be run by hand on any fleet machine that is about to go down
-# (the planned-outage half of #1427).
+# It can also be run by hand on any fleet machine that is about to go down —
+# the planned-outage half of #1427: FIRST `fleet-node-maintenance.sh enter`
+# (so the hub stops placing on this machine and every `move plan` below
+# answers with another one), THEN this, once per login; docs/MULTI-MACHINE-OPS.md
+# is the runbook.
 #
 # What it does: for every live fleet of this login (fleet_sockets; or the
 # --session ones), `fleet-move.sh --rebalance --max all` — the ordinary hub

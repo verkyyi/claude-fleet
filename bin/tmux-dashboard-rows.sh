@@ -1245,7 +1245,8 @@ fi
 # or the hub off, adds not one line here. Two things:
 #   • the MACHINE STATUS LINE, the very first row (group below the pin tier):
 #     `● m5 22 · ● m4 3` — this machine first with its own live rows (NSESS less
-#     the remote rows), then each other machine: `●` online, `○` lost with how
+#     the remote rows), then each other machine: `●` online, `◐` 维护中 (the
+#     operator's flag, #1427: heard, no new work sent there), `○` lost with how
 #     long the hub has been without it (its last observation, else the cache's
 #     age). An inert `hdr` row: never a cursor stop, never a fold target.
 #   • one LOST-GROUP heading per lost machine that has rows this frame,
@@ -1260,6 +1261,10 @@ if [ -n "$RME" ]; then
       [ "$_seen" -gt 0 ] && [ "$NOW" -gt "$_seen" ] && _mins=$(( (NOW - _seen) / 60 ))
       _sl+=" · ○ ${RN_LABEL[_k]} ${RN_N[_k]}"
       [ "$_mins" -gt 0 ] && _sl+=" · $(fleet_ui_t node_silent_fmt "$_mins")"
+    elif [ "${RN_AV[_k]}" = maintenance ]; then
+      # 维护中 (#1427): heard, but the operator is taking it down — no new
+      # work goes there; its rows stay live (never dimmed, never a lost group)
+      _sl+=" · ◐ ${RN_LABEL[_k]} ${RN_N[_k]} $(fleet_ui_t node_maint)"
     else
       _sl+=" · ● ${RN_LABEL[_k]} ${RN_N[_k]}"
     fi

@@ -57,7 +57,11 @@ export function mine(sessions, me) {
 export function sessionView(s) {
   const w = s.worker || {};
   const state = w.state || 'unknown';
-  const lost = s.availability !== 'online';
+  // 维护中 (#1427) is still heard — its sessions are live, only new work
+  // stays away. Everything else that is not online is 失联: the hub's `lost`,
+  // and any word this page does not know (a newer hub, an empty field).
+  const maint = s.availability === 'maintenance';
+  const lost = !maint && s.availability !== 'online';
   const title = w.name
     || (w.issue ? `#${w.issue}` : (w.scratch ? '临时会话' : (w.key || '会话')));
   const meta = [];
@@ -77,7 +81,8 @@ export function sessionView(s) {
     // the badge stays, the card does not claim the top of the list.
     needsYou: !lost && NEEDS_YOU.has(state),
     lost,
-    lostText: lost ? `失联${s.age_sec != null ? ' · 最后见到 ' + ageText(s.age_sec) : ''}` : '',
+    lostText: lost ? `失联${s.age_sec != null ? ' · 最后见到 ' + ageText(s.age_sec) : ''}` : (maint ? '维护中' : ''),
+    maint,
     asleep: w.lifecycle && w.lifecycle !== 'awake' ? w.lifecycle : '',
   };
 }
@@ -96,7 +101,7 @@ export function byMachine(sessions, me) {
     g.sessions.push(v);
     // One online login makes the machine reachable; the heading only says
     // 失联 when every login on it is.
-    if (!v.lost) { g.lost = false; g.lostText = ''; } else if (g.lost && !g.lostText) g.lostText = v.lostText;
+    if (!v.lost) { g.lost = false; g.lostText = v.maint ? v.lostText : ''; } else if (g.lost && !g.lostText) g.lostText = v.lostText;
   }
   const out = [...groups.values()].sort((a, b) => a.machine.localeCompare(b.machine));
   for (const g of out) {

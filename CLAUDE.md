@@ -263,6 +263,20 @@ Do not install from memory: read the doc and work from it.
   意外下线: leases released at once, nothing re-dispatched, the record kept in
   `fleet_spot_nodes`. Off (no image) adds nothing — `TestSpotOffAddsNothing`
   and `fleet-spot-evacuate-selftest.sh` case A pin the degenerate case.
+- **A machine has three words — online, 维护中, lost — and only the middle one is
+  the operator's** (issue #1427). `maintenance` is the fleet setting
+  `fleet.node_maintenance.<machine>` on the hub (`bin/fleet-node-maintenance.sh
+  enter|leave|status` from the machine with its node token; the `/nodes` card's
+  button or `PUT /v1/fleet/settings` for any machine), read wherever a status is
+  surfaced — roster, `fleet_sessions` (sidebar `◐`), placement (excluded, auto
+  AND named), `move plan`, `fleet connect` home — and never computed from a
+  heartbeat; lost still wins, so leases lapse on the 30-minute TTL as always.
+  `docs/MULTI-MACHINE-OPS.md` is the runbook (planned outage = flag, evacuate,
+  wait, power off BY HAND; unexpected = nothing is re-dispatched). **No step
+  that takes a machine down or restarts an agent is ever automated**, and the
+  drill runs only at a time the operator confirmed. No setting ⇒ two words,
+  byte for byte: `TestMaintenanceOffAddsNothing`, `fleet-node-maintenance-selftest.sh`
+  leg A, `dash-remote-rows-selftest.sh` pin it.
 - **The measurement bus has ONE writer, `conf/statusline.sh`, and two feeders**
   (issues #1452, #1459). Every `@ctx_pct/@ctx_limit/@ctx_band/@model/@effort/@rl*`
   stamp goes through that script — Claude Code's `statusLine` feeds it the JSON on

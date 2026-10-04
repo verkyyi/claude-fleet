@@ -259,6 +259,17 @@ s=$(side)
 eq "C: the hub says the machine is lost: its last observation dates the silence" \
    "● m5 3 · ○ m4 2 · 3 分钟没联系;─ m4 失联 3 分钟 ─;" "$(shdrs "$s")"
 eq "C: …and every row of it is lost, whatever its own word" "m4!" "$(srow "$s" '侧边栏' | cut -d'|' -f5)"
+# 维护中 (#1427): the hub's third word for a machine — heard, the operator is
+# taking it down. The status line says so with ◐; nothing about its rows
+# changes: not lost, not dimmed (no m4!), no lost group, nesting intact.
+remote_cache "$NOW" maintenance "$NOW"
+s=$(side)
+eq "C: a 维护中 machine on the status line: ◐ + the word, no lost heading" \
+   "● m5 3 · ◐ m4 2 维护中;─ m4 失联 ─;" "$(shdrs "$s")"
+eq "C: …its online rows are live rows (no m4!), still nested under the local parent, their own child counted" \
+   "wid:$F/issue-1423|└▾|1/1|1|m4" "$(srow "$s" '侧边栏')"
+eq "C: …only the row the hub itself calls lost is lost" "m4!" "$(srow "$s" '草稿' | cut -d'|' -f5)"
+eq "C: …English says maintenance" "● m5 3 · ◐ m4 2 maintenance;─ m4 lost ─;" "$(shdrs "$(FLEET_UI_LANG=en side)")"
 remote_cache "$NOW"
 
 # ============================================================================
@@ -350,11 +361,12 @@ sessions = [
     s(f, "mini2.local", me, "issue-2000", wid=False, issue=2000, name="no-id"),
 ]
 nodes = [dict(machine_name="mini2.local", availability="online", sessions=12, observed_at="2026-10-04T10:07:00Z", age_sec=3),
-         dict(machine_name="box3", availability="lost", sessions=0, observed_at="2026-10-04T09:00:00Z", age_sec=4000)]
+         dict(machine_name="box3", availability="lost", sessions=0, observed_at="2026-10-04T09:00:00Z", age_sec=4000),
+         dict(machine_name="box8", availability="maintenance", sessions=2, observed_at="2026-10-04T10:06:00Z", age_sec=60)]
 json.dump({"machines": [], "sessions": sessions, "nodes": nodes}, open(path, "w"), ensure_ascii=False)
 json.dump({"machines": [], "sessions": sessions}, open(old, "w"), ensure_ascii=False)   # a hub older than #1475
 PY
-export FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'" FLEET_NODE_ALIASES="mini2=m4 box3=m9"
+export FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'" FLEET_NODE_ALIASES="mini2=m4 box3=m9 box8=m8"
 rm -f "$G/remote_$S"
 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
 CHECKS=$((CHECKS+1)); [ ! -e "$G/remote_$S" ] || fail "E: off — --refresh must write nothing"
@@ -368,8 +380,8 @@ rrow() { printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$F/$1" '$1 == w { p
 has  "E: a #ts line leads the cache" "$(printf '%s\n' "$R" | head -1)" "#ts$US"
 eq   "E: #me is this machine's label" "#me$US$MYHOST" "$(printf '%s\n' "$R" | sed -n 2p)"
 ep() { python3 -c 'from datetime import datetime, timezone; import sys; print(int(datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00")).timestamp()))' "$1"; }
-eq   "E: one #node per other machine from the hub's list: YOUR session count, its observation" \
-     "#node${US}m4${US}online${US}7$US$(ep 2026-10-04T10:07:00Z);#node${US}m9${US}lost${US}0$US$(ep 2026-10-04T09:00:00Z);" \
+eq   "E: one #node per other machine from the hub's list: YOUR session count, its observation; 维护中 (#1427) passes through as its own word" \
+     "#node${US}m4${US}online${US}7$US$(ep 2026-10-04T10:07:00Z);#node${US}m8${US}maintenance${US}0$US$(ep 2026-10-04T10:06:00Z);#node${US}m9${US}lost${US}0$US$(ep 2026-10-04T09:00:00Z);" \
      "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" '$1 == "#node" { printf "%s;", $0 }')"
 eq   "E: parent in THIS fleet → its bare key"  "m4|online|working|侧边栏|issue-1419|" "$(rrow issue-1423)"
 eq   "E: parent elsewhere → its worker_id"     "m4|online|working|孙|$F/issue-1423|" "$(rrow issue-1500)"
@@ -400,7 +412,7 @@ has  "E: …and says so on stderr"            "$(cat "$WORK/err")" "hub unreacha
 s=$(side)
 eq "E: the refreshed cache renders under the local parent" "$F/issue-1600" \
    "$(printf '%s\n' "$s" | LC_ALL=C awk -F"$US" '$4 == "epic-kid" && $7 == 1 { sub(/^wid:/, "", $1); print $1 }')"
-eq "E: …with the status line off the #node lines" "hdr|● $MYHOST 3 · ● m4 7 · ○ m9 0" \
+eq "E: …with the status line off the #node lines" "hdr|● $MYHOST 3 · ● m4 7 · ◐ m8 0 维护中 · ○ m9 0" \
    "$(FLEET_HUB_SESSIONS_STALE=99999999 side | head -1 | LC_ALL=C awk -F"$US" '{ print $1 "|" $4 }' | sed 's/ · [0-9]* 分钟没联系//')"
 
 # ============================================================================

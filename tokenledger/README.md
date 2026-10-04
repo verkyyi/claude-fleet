@@ -1241,8 +1241,8 @@ ccquota place [--node auto|<machine>] [--origin-wid <wid>] [--agent a] <owner/re
 
 `POST /v1/node/place` authenticates with the node's enrollment token, for a
 fleet that endpoint's heartbeats registered, like the lease. It runs the same
-`pickNode` as a placed `worker_start` (offline, >0.8 load/core, <1 GiB free and
-at-cap machines are out; account headroom 60% + load 40%), for the person whose
+`pickNode` as a placed `worker_start` (offline, 维护中, >0.8 load/core, <1 GiB
+free and at-cap machines are out; account headroom 60% + load 40%), for the person whose
 active fleet account is that (machine, login) — a login nobody owns places among
 the logins of the same name. The asker's own fleet ⇒ `LOCAL`, nothing journalled
 but an audit row. Another machine ⇒ the hub hands that fleet the lease (the spawn
@@ -1352,6 +1352,38 @@ Every step is a `fleet_audit` row (`hub:spot`, `spot_start` /
 `spot_online` / `spot_release` / `spot_reclaim` / `spot_lease_release` /
 `spot_released`), and the `/nodes` page's **SPOT 节点** block shows the live
 nodes and the last few records as a timeline — 起 → 报到 → 释放.
+
+### A machine is going down — 维护中 (claude-fleet#1427)
+
+A fixed machine's status was `online` or `lost`, both read off its heartbeats.
+A planned outage needs a third word the heartbeat cannot say — up, staying up
+for a while, and **nothing new should start here** — so that `fleet-move.sh
+--rebalance` on it finds every idle session a better home and the sessions
+still working there finish on their own. `maintenance` is that word, and it is
+the operator's: the fleet setting `fleet.node_maintenance.<machine>` (the same
+table as the node caps and the SPOT weight), holding `{since, reason, by}`, so
+it survives the outage and a hub restart and the machine comes back 维护中 until
+someone ends it — never a placement target the moment its agent reconnects.
+
+| Route | Auth | What |
+|---|---|---|
+| `GET /v1/node/maintenance` | the node's token | `{machine, status, maintenance: record\|null}` for its own machine |
+| `POST /v1/node/maintenance {action: enter\|leave, reason?}` | the node's token | flag / clear its own machine (`bin/fleet-node-maintenance.sh`) |
+| `PUT /v1/fleet/settings {key: fleet.node_maintenance.<m>, value: reason\|""}` | operator | flag / clear any machine (the `/nodes` card's button) |
+
+Where it is read: the roster (`/v1/nodes`: node and machine `status`
+`maintenance`, with the record), `fleet_sessions` (`availability`, which the
+sidebar's machine line draws as `◐ m5 维护中`), placement (`judge` excludes it,
+for `auto` and for a start that names it — unlike not-ready, this is a decision
+about the machine, not a report from it), `move plan` (so rebalance moves
+everything off), and `/v1/fleet/home` (`fleet connect` lands elsewhere; a 维护中
+machine is picked only when no other is online, and the reason says so). Lost
+still wins: a flagged machine whose heartbeats stop is `lost`, and its leases
+lapse on the 30-minute TTL as for any lost node. Every change is a `fleet_audit`
+row (`node_maintenance`, actor `operator` or `node:<user>@<machine>`, outcome
+`ENTER: <reason>` / `LEAVE` / `ALREADY: …` / `NOT_FLAGGED`). No setting ⇒ two
+words, as before (`TestMaintenanceOffAddsNothing`). The runbook is
+claude-fleet's `docs/MULTI-MACHINE-OPS.md`.
 
 ### The SSH relay — SSH through the hub when nothing else reaches (claude-fleet#1413)
 

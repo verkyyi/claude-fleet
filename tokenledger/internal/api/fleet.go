@@ -321,7 +321,7 @@ type FleetSession struct {
 }
 
 // FleetNode is one machine in a fleet_sessions answer (claude-fleet#1475):
-// the sidebar's machine status line draws one per machine — online or lost,
+// the sidebar's machine status line draws one per machine — online, 维护中 or lost,
 // how many of the caller's sessions it runs, and when the hub last heard it,
 // so a lost machine's line can say how long ago. A machine the caller may see
 // is listed even with no session on it.
@@ -333,15 +333,17 @@ type FleetNode struct {
 	AgeSec       float64   `json:"age_sec"`
 }
 
-// nodeAvailability maps endpoint → online|lost from the roster.
+// nodeAvailability maps endpoint → online|maintenance|lost from the roster
+// (maintenance: the operator's 维护中 flag over a heard node, claude-fleet#1427).
 func (s *Server) nodeAvailability(now time.Time) map[string]string {
 	out := map[string]string{}
 	rows, err := s.Store.Nodes()
 	if err != nil {
 		return out
 	}
+	settings, _ := s.Store.FleetSettings()
 	for _, n := range rows {
-		out[n.EndpointID] = NodeStatus(n.LastHeartbeat, n.HeartbeatMS, now)
+		out[n.EndpointID] = nodeAvail(n.Hostname, n.LastHeartbeat, n.HeartbeatMS, settings, now)
 	}
 	return out
 }
@@ -433,8 +435,10 @@ func (s *Server) FleetSessions(req *http.Request) (map[string]any, error) {
 			n = &FleetNode{MachineName: r.Hostname, Availability: "lost"}
 			nodes[r.Hostname] = n
 		}
-		if views[i].Availability == "online" {
-			n.Availability = "online"
+		if a := views[i].Availability; a != "lost" && n.Availability == "lost" {
+			// Heard through any login: online, or maintenance (#1427) — the
+			// flag is the machine's, so its heard logins all say the same.
+			n.Availability = a
 		}
 		if r.ObservedAt.After(n.ObservedAt) {
 			n.ObservedAt = r.ObservedAt

@@ -14,6 +14,9 @@
   answers "which machines are up right now", so it must not depend on the
   dashboard's boot. Everything comes from /v1/nodes, polled every few seconds;
   the hub decides online / lost (three missed heartbeats), this page only draws.
+  维护中 (claude-fleet#1427) is the operator's word, not the heartbeat's: the
+  card's button sets fleet.node_maintenance.<machine> through /v1/fleet/settings,
+  and the hub stops placing new work there while it is heard.
   Served only when the hub runs with CCQUOTA_FLEET=1.
 -->
 <style>
@@ -21,7 +24,7 @@
   color-scheme: light;
   --plane:#f9f9f7; --surface:#fcfcfb; --border:#e3e2dd;
   --ink:#0b0b0b; --ink-2:#52514e; --ink-3:#85847e;
-  --ok:#1f8f4e; --lost:#e34948; --accent:#2a78d6;
+  --ok:#1f8f4e; --lost:#e34948; --maint:#c47f0a; --accent:#2a78d6;
   --shadow: 0 1px 2px rgba(0,0,0,.05), 0 4px 12px rgba(0,0,0,.04);
 }
 @media (prefers-color-scheme: dark) {
@@ -29,7 +32,7 @@
     color-scheme: dark;
     --plane:#0d0d0d; --surface:#1a1a19; --border:#2f2f2c;
     --ink:#fff; --ink-2:#c3c2b7; --ink-3:#8b8a81;
-    --ok:#3fb871; --lost:#e66767; --accent:#3987e5;
+    --ok:#3fb871; --lost:#e66767; --maint:#d9962a; --accent:#3987e5;
     --shadow: 0 1px 2px rgba(0,0,0,.4);
   }
 }
@@ -52,12 +55,15 @@ h1 { margin:0; font-size:26px; font-weight:600; }
 .pill { font-size:12px; font-weight:600; padding:1px 9px; border-radius:999px; color:#fff; }
 .pill.online { background:var(--ok); }
 .pill.lost { background:var(--lost); }
+.pill.maintenance { background:var(--maint); }
 .pill.spot { background:var(--ink-3); }
 .pill.spot.provisioning, .pill.spot.releasing, .pill.spot.reclaiming { background:#c47f0a; }
 .tag { font-size:11px; font-weight:600; padding:0 6px; border-radius:6px; border:1px solid var(--border); color:var(--ink-2); vertical-align:middle; }
 .timeline { margin:8px 0 0; padding:0; list-style:none; }
 .timeline li { padding:4px 0; border-top:1px solid var(--border); }
 button.ghost { background:transparent; color:var(--accent); }
+button.small { padding:2px 10px; font-size:12px; margin-top:8px; }
+.maint { color:var(--maint); font-size:13px; margin:2px 0 0; }
 .kv { display:grid; grid-template-columns:auto 1fr; gap:2px 14px; color:var(--ink-2); }
 .kv b { color:var(--ink); font-weight:600; }
 table { width:100%; border-collapse:collapse; background:var(--surface); border:1px solid var(--border); border-radius:12px; overflow:hidden; }
@@ -79,7 +85,7 @@ pre.cmd { margin:10px 0 4px; padding:10px 12px; background:var(--plane); border:
 <body>
 <div class="wrap">
   <div class="topbar"><h1>机器节点</h1><div id="whoami" class="whoami" hidden></div></div>
-  <div class="sub">每台机器的每个登录主动连到入口、每几秒报到一次；连续 3 次没报到即标「失联」（只标记，不动机器上的会话）。<span id="at" class="mono"></span></div>
+  <div class="sub">每台机器的每个登录主动连到入口、每几秒报到一次；连续 3 次没报到即标「失联」（只标记，不动机器上的会话）。「维护中」是运营者标的：计划下线前先标上，入口不再往这台派新会话，<span class="mono">fleet-move.sh --rebalance</span> 把它上面空闲的会话搬走；标记一直保留到手动结束，机器重启回来也不会自动接活。<span id="at" class="mono"></span><span id="mainterr" class="err"></span></div>
   <div id="machines" class="grid"></div>
   <h2 style="font-size:16px;margin:0 0 10px">各登录</h2>
   <div class="scroll"><table>
@@ -112,7 +118,7 @@ pre.cmd { margin:10px 0 4px; padding:10px 12px; background:var(--plane); border:
 "use strict";
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const STATUS = { online: "在线", lost: "失联" };
+const STATUS = { online: "在线", maintenance: "维护中", lost: "失联" };
 function gib(b) { return b ? (b / 1073741824).toFixed(1) + " GiB" : "—"; }
 function load(l, n) { return n ? `${l.toFixed(2)} / ${n} 核` : "—"; }
 function age(s) {
@@ -121,7 +127,21 @@ function age(s) {
   if (s < 3600) return Math.round(s / 60) + " 分钟前";
   return Math.round(s / 3600) + " 小时前";
 }
-function pill(st) { return `<span class="pill ${st === "online" ? "online" : "lost"}">${STATUS[st] || esc(st)}</span>`; }
+function pill(st) { return `<span class="pill ${st === "online" || st === "maintenance" ? st : "lost"}">${STATUS[st] || esc(st)}</span>`; }
+// 维护中 (claude-fleet#1427): the record under the status, and the operator's
+// button — a fixed machine only; a SPOT node is released, not maintained.
+function maintLine(m) {
+  const r = m.maintenance;
+  if (!r) return "";
+  const who = r.by === "operator" ? "运营者" : (r.by ? r.by.replace(/^node:/, "") : "");
+  return `<div class="maint">${esc(r.reason || "维护中")}${r.since ? " · 自 " + new Date(r.since).toLocaleString() : ""}${who ? " · " + esc(who) : ""}</div>`;
+}
+function maintButton(m) {
+  if (!isOperator || m.kind === "ephemeral") return "";
+  return m.maintenance
+    ? `<button class="small ghost" type="button" data-maint-leave="${esc(m.hostname)}">结束维护</button>`
+    : `<button class="small ghost" type="button" data-maint-enter="${esc(m.hostname)}">进入维护</button>`;
+}
 const SPOT = { provisioning: "启动中", online: "在线", releasing: "释放中", reclaiming: "回收中", released: "已释放" };
 function spotPill(st) { return `<span class="pill spot ${esc(st)}">${SPOT[st] || esc(st)}</span>`; }
 function kindTag(n) { return n.kind === "ephemeral" ? ` <span class="tag" title="SPOT 节点（临时）">SPOT</span>` : ""; }
@@ -138,12 +158,14 @@ function render(snap) {
   $("machines").innerHTML = snap.machines.length ? snap.machines.map((m) => `
     <div class="card">
       <h2>${esc(m.hostname)}${kindTag(m)} ${pill(m.status)}</h2>
+      ${maintLine(m)}
       <div class="kv">
         <span>登录在线</span><b>${m.logins_online} / ${m.logins}</b>
-        <span>会话数</span><b>${m.status === "online" ? m.sessions : "—"}</b>
-        <span>负载</span><b>${m.status === "online" ? load(m.load1, m.ncpu) : "—"}</b>
-        <span>空闲内存</span><b>${m.status === "online" ? gib(m.mem_free_bytes) + " / " + gib(m.mem_total_bytes) : "—"}</b>
+        <span>会话数</span><b>${m.status !== "lost" ? m.sessions : "—"}</b>
+        <span>负载</span><b>${m.status !== "lost" ? load(m.load1, m.ncpu) : "—"}</b>
+        <span>空闲内存</span><b>${m.status !== "lost" ? gib(m.mem_free_bytes) + " / " + gib(m.mem_total_bytes) : "—"}</b>
       </div>
+      ${maintButton(m)}
     </div>`).join("") : `<div class="card empty">还没有机器报到。agent 需以 CCQUOTA_FLEET=1 启动。</div>`;
   $("nodes").innerHTML = snap.nodes.map((n) => `
     <tr>
@@ -240,6 +262,33 @@ async function spotPost(body) {
   }
 }
 $("spotstart").addEventListener("click", () => spotPost({ action: "start" }));
+// 维护中 (claude-fleet#1427): one setting per machine, a reason to enter, "" to end.
+async function maintPut(machine, value) {
+  $("mainterr").textContent = "";
+  try {
+    const r = await fetch("/v1/fleet/settings", {
+      method: "PUT", credentials: "same-origin", cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key: "fleet.node_maintenance." + machine, value }),
+    });
+    if (!r.ok) throw new Error((await r.text()) || ("HTTP " + r.status));
+    tick();
+  } catch (e) {
+    $("mainterr").textContent = " · 维护标记失败：" + e.message;
+  }
+}
+$("machines").addEventListener("click", (ev) => {
+  const t = ev.target;
+  if (!t || !t.getAttribute) return;
+  const enter = t.getAttribute("data-maint-enter"), leave = t.getAttribute("data-maint-leave");
+  if (enter) {
+    const reason = prompt(`${enter} 进入维护：原因（会显示在入口和侧边栏）`, "计划下线");
+    if (reason === null) return;
+    maintPut(enter, reason.trim() || "计划下线");
+  } else if (leave) {
+    if (confirm(`${leave} 结束维护？入口会重新往它派会话。`)) maintPut(leave, "");
+  }
+});
 $("spotlive").addEventListener("click", (ev) => {
   const id = ev.target && ev.target.getAttribute && ev.target.getAttribute("data-release");
   if (id) spotPost({ action: "release", id });
