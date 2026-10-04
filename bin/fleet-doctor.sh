@@ -1953,6 +1953,36 @@ if [ -f "$_hm" ] && [ -f "$_dj" ] && command -v python3 >/dev/null 2>&1; then
   fi
 fi
 
+# --- agent defaults: ONE MCP + Codex-posture + doc-block package for BOTH agents (issue #1559) ---
+# conf/agent-defaults/ is the one source the sync (fleet-install-apply.sh's `agents`
+# pass) fills into every login: the user-scope MCP servers context7 / playwright /
+# github / fetch (~/.claude.json AND every known $CODEX_HOME/config.toml), Codex's
+# approval_policy=never / sandbox_mode=danger-full-access / model_reasoning_effort,
+# and one fleet block in ~/.claude/CLAUDE.md / $CODEX_HOME/AGENTS.md; the repo's
+# skills/ are counted here (the skills passes install them). Fill only — an item
+# listed in ~/.config/claude-fleet/agent-overrides.json is never written and stops
+# counting. 2026-10-04 reading: 15 missing across m5 + m4 (Claude 4 each; Codex m5
+# 1, m4 6). A Codex home that does not exist reads n/a — Codex is not set up on
+# that login. The trailing hint names what a default server still needs on PATH:
+# `fetch` runs on uvx (`brew install uv`), `github` on github-mcp-server
+# (`brew install github-mcp-server`; the npx server stands in until then).
+_ad="$(dirname "$0")/fleet-agent-defaults.py"
+if [ -f "$_ad" ] && [ -d "$(dirname "$0")/../conf/agent-defaults" ] && command -v python3 >/dev/null 2>&1; then
+  _aout="$(FLEET_CONF_DIR="$conf_dir" python3 "$_ad" check --root "$(dirname "$0")/.." \
+             --claude-config "${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json" \
+             --claude-md "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/CLAUDE.md" --claude-skills "$skills_dir" \
+             --override "$conf_dir/agent-overrides.json" 2>&1)"; _arc=$?
+  _arun=''
+  command -v uvx >/dev/null 2>&1 || command -v pipx >/dev/null 2>&1 || _arun='fetch needs uvx (brew install uv)'
+  command -v github-mcp-server >/dev/null 2>&1 || _arun="${_arun:+$_arun; }github runs via npx until brew install github-mcp-server"
+  _ahead="$(printf '%s\n' "$_aout" | head -1)"
+  case "$_arc" in
+    0) pass agents "${_ahead#ok } (conf/agent-defaults)${_arun:+ — $_arun}" ;;
+    1) warn agents "$_ahead — $(printf '%s\n' "$_aout" | sed '1d; s/^missing *//; s/  */ /g' | paste -sd ';' - | sed 's/;/; /g') (fix: the next sync fills them, or now: python3 $_ad apply; keep one for this login by listing it in $conf_dir/agent-overrides.json)${_arun:+ — $_arun}" ;;
+    *) warn agents "fleet-agent-defaults.py check: $(printf '%s\n' "$_aout" | tail -1)" ;;
+  esac
+fi
+
 # --- auto-handoff nudge: does the Stop hook SEE the threshold? (issue #561) ---
 # FLEET_AUTO_HANDOFF_PCT=60 sat in the global fleet.conf for weeks while the Stop
 # hook (bin/set-claude-state.sh) read the knob from its ENVIRONMENT — which nothing

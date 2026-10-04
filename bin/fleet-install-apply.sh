@@ -54,6 +54,19 @@
 #   codex     mirror the same fleet commands as native Codex skills under each
 #             known $CODEX_HOME/skills/<command>/SKILL.md, and mirror repo skills
 #             there too. Old Codex homes that do not exist are ignored.
+#   agents    every apply that moved -> fleet-agent-defaults.py apply (issue
+#             #1559, EPIC #1524 C12): conf/agent-defaults/ is the ONE default
+#             package for BOTH agents on a managed login — the user-scope MCP
+#             servers context7 / playwright / github / fetch into ~/.claude.json
+#             AND every known $CODEX_HOME/config.toml, Codex's approval_policy=
+#             never / sandbox_mode=danger-full-access / model_reasoning_effort,
+#             and one marker-delimited fleet block in ~/.claude/CLAUDE.md and
+#             $CODEX_HOME/AGENTS.md. FILL ONLY (#1558's semantics): a server or
+#             key the login has is never rewritten, `model` is never shipped,
+#             ~/.config/claude-fleet/agent-overrides.json names what is never
+#             written. The github token is read by bin/mcp-github.sh from
+#             `gh auth token` at start — no merged file carries one. Skills are
+#             the two passes above; this one only counts them.
 #   ui        dash launcher / tmux conf changed -> fleet-ui-refresh.sh --all
 #   repark    re-park stale sleeping-worker pages on every live fleet (#1064)
 #   loopmark  give every Claude window on every live fleet the `@loop` mark its
@@ -701,6 +714,39 @@ if [ "$COPY" = 1 ]; then
     done
     say "skills: $([ "$DRY" = 1 ] && echo 'would install' || echo installed) $inst · $([ "$DRY" = 1 ] && echo 'would remove' || echo removed) $rem"
   fi
+fi
+
+# --- agents (issue #1559; EPIC #1524 C12) ------------------------------------------
+# conf/agent-defaults/ is the ONE default package for BOTH agents on a managed
+# login: the user-scope MCP servers (context7 · playwright · github · fetch) into
+# ~/.claude.json and $CODEX_HOME/config.toml, Codex's approval_policy /
+# sandbox_mode / model_reasoning_effort, and one marker-delimited fleet block in
+# ~/.claude/CLAUDE.md / $CODEX_HOME/AGENTS.md. Fill only (the #1558 semantics): a
+# server or key the login has is never rewritten; the override file names what is
+# never written. Every moving apply; every Codex home the script knows
+# (CODEX_HOME, FLEET_CODEX_HOME, codex/accounts.json). Not under $COPY — a plugin
+# cannot write these files. After the skills passes, so the skills count (the one
+# thing this pass only COUNTS) reads what they just installed.
+if [ -d "$ROOT/conf/agent-defaults" ] && [ -f "$ROOT/bin/fleet-agent-defaults.py" ]; then
+  if out=$(python3 "$ROOT/bin/fleet-agent-defaults.py" apply --root "$ROOT" --claude-config "$GCONF" \
+             --claude-md "$CDIR/CLAUDE.md" --claude-skills "$CDIR/skills" \
+             --override "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/agent-overrides.json" ${DRYFLAG:+"$DRYFLAG"} 2>&1); then
+    n=$(printf '%s\n' "$out" | grep -c '^set ')
+    kept=$(printf '%s\n' "$out" | sed -n 's/^kept    //p')
+    if [ "$n" -gt 0 ]; then
+      sum=$(printf '%s\n' "$out" | sed -n 's/^filled  \(claude [0-9]* · codex [0-9]*\).*/\1/p')
+      say "agents: $([ "$DRY" = 1 ] && echo 'would fill' || echo 'filled') — ${sum:-$n} default item(s) this login lacked${kept:+; $kept}"
+      printf '%s\n' "$out" | grep '^set ' | sed 's/^/    /'
+    else
+      say "agents: ok — every default in place, or this login's own${kept:+; $kept}"
+    fi
+    printf '%s\n' "$out" | sed -n 's/^absent  /agents: no /p'
+    printf '%s\n' "$out" | sed -n 's/^skills  /agents: skills /p'
+  else
+    fail agents "fleet-agent-defaults.py apply: $(printf '%s\n' "$out" | tail -1)"
+  fi
+else
+  say 'agents: skip — no conf/agent-defaults in this version'
 fi
 
 # --- ui -------------------------------------------------------------------------

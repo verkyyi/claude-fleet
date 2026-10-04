@@ -209,7 +209,33 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    either way; every sync re-applies it (a second run writes nothing).
    `fleet-doctor`'s `settings` line counts the keys that differ from the
    defaults (`settings: N key(s) differ …` — a key the login set deliberately
-   stops counting once it is listed in the override file). These hooks are no-ops outside
+   stops counting once it is listed in the override file). Its sibling for
+   BOTH agents is `conf/agent-defaults/` (issue #1559, EPIC #1524 C12), applied by
+   `python3 bin/fleet-agent-defaults.py apply` on every sync (the `agents`
+   pass): `claude/mcp.default.json` fills the user-scope MCP servers
+   `context7` / `playwright` / `github` / `fetch` into `~/.claude.json`,
+   `codex/config.default.toml` fills `approval_policy = "never"`,
+   `sandbox_mode = "danger-full-access"`, `model_reasoning_effort` and the same
+   four `[mcp_servers.*]` into every known `$CODEX_HOME/config.toml` (never
+   `model`), and `claude/CLAUDE.default.md` / `codex/AGENTS.default.md` put ONE
+   marker-delimited fleet block (`<!-- fleet:agent-defaults begin/end -->`) into
+   `~/.claude/CLAUDE.md` / `$CODEX_HOME/AGENTS.md` — appended when absent,
+   replaced in place when the text moved on, everything outside it the login's.
+   Same fill-only rule: a server the login already has under that name, or a
+   Codex key it set, is never rewritten; the login's `config.toml` is edited as
+   text (new keys before the first `[table]`, new servers appended as their own
+   tables), so its lines stay byte for byte. `~/.config/claude-fleet/agent-overrides.json`
+   names what is never written — a JSON array (or an object keyed by) `claude` /
+   `codex` (that agent), `claude.mcp.<name>` / `codex.mcp.<name>`, a bare
+   `<name>` (that server on both agents), `codex.<key>`, `claude.doc` /
+   `codex.doc`. The `github` server runs through `bin/mcp-github.sh`, which takes
+   the token from `gh auth token` when the server starts — no config carries one;
+   `fetch` runs through `bin/mcp-fetch.sh` on `uvx` (`brew install uv`). The
+   repo's `skills/` are the same package for both agents (installed by the
+   `skills` / `codex-skills` passes into `~/.claude/skills` and
+   `$CODEX_HOME/skills`); `fleet-doctor`'s `agents` line reads
+   `claude N missing · codex M missing · skills K missing` (2026-10-04: 15 across
+   m5 + m4), `codex n/a` on a login with no `$CODEX_HOME`. These hooks are no-ops outside
    tmux and always exit 0, so they are safe to add globally. The `Stop` entry also
    fires `classify-hook.sh`, the real-time path for state classification: it
    hands just the stopped window to `classify-sessions.sh --window`, so the
