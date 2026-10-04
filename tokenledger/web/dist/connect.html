@@ -50,10 +50,11 @@ h1 { margin:0; font-size:26px; font-weight:600; }
 .pill.online { background:var(--ok); }
 .pill.lost { background:var(--lost); }
 .kv { display:grid; grid-template-columns:auto 1fr; gap:2px 14px; color:var(--ink-2); }
-.kv b { color:var(--ink); font-weight:600; }
+.kv > span { white-space:nowrap; }
+.kv b { color:var(--ink); font-weight:600; word-break:break-all; }
 table { width:100%; border-collapse:collapse; background:var(--surface); border:1px solid var(--border); border-radius:12px; overflow:hidden; }
 th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--border); vertical-align:top; }
-th { color:var(--ink-3); font-weight:500; font-size:12px; }
+th { color:var(--ink-3); font-weight:500; font-size:12px; white-space:nowrap; }
 tr:last-child td { border-bottom:0; }
 .scroll { overflow-x:auto; }
 .muted { color:var(--ink-3); }
@@ -66,6 +67,12 @@ button { font:inherit; padding:7px 14px; border-radius:8px; border:1px solid var
 button.ghost { background:transparent; color:var(--accent); }
 .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:10px; }
 .warn { background:var(--surface); border:1px solid var(--lost); border-radius:10px; padding:10px 14px; margin-bottom:16px; }
+.install { margin-bottom:14px; border-color:var(--accent); }
+.cmdrow { display:flex; gap:10px; align-items:stretch; margin-top:8px; }
+.cmdrow pre { font-size:15px; }
+button.small { padding:3px 10px; font-size:12px; }
+button.danger { border-color:var(--lost); color:var(--lost); background:transparent; }
+.revoked { color:var(--lost); }
 </style>
 <!-- The shared page header's viewer slot (claude-fleet#1467): the same
      stylesheet, slot and script as every other human page on this hub. -->
@@ -74,20 +81,40 @@ button.ghost { background:transparent; color:var(--accent); }
 <body>
 <div class="wrap">
   <div class="topbar"><h1>连接</h1><div id="whoami" class="whoami" hidden></div></div>
-  <div class="sub">用入口签的 12 小时证书连到各台机器；证书过期后再扫一次即可。你原有的钥匙照常能用。</div>
+  <div class="sub">用入口签的 12 小时证书连到各台机器；这台电脑扫一次码就登记为设备，之后自动续证书，连续 7 天不用才需再扫。你原有的钥匙照常能用。</div>
   <div id="problem"></div>
+  <!-- claude-fleet#1470: the one line a colleague runs, then just `fleet`. -->
+  <div class="card install" id="install">
+    <h2>一行安装</h2>
+    <div>在你的电脑终端里运行（macOS / Linux；Windows 在 WSL 里）：</div>
+    <div class="cmdrow"><pre id="installcmd" style="flex:1"></pre><button class="ghost" id="copyinstall">复制</button></div>
+    <div style="margin-top:8px">之后每次只敲 <span class="mono"><b>fleet</b></span>：自动续证书（或第一次扫码）、入口选机器、测速选线路、进入你的 fleet。<span class="muted" id="installnote"></span></div>
+  </div>
   <div class="grid">
     <div class="card"><h2>入口</h2><div class="kv">
       <span>地址</span><b class="mono" id="hub">—</b>
       <span>系统账号</span><b class="mono" id="login">—</b>
       <span>证书 CA</span><b class="mono" id="ca">—</b>
     </div></div>
-    <div class="card"><h2>最快的方式</h2>
-      <div>在你的电脑上运行，然后用企业微信扫终端里的二维码：</div>
+    <div class="card"><h2>已装过？</h2>
+      <div>只领证书、自己 ssh 的老办法：</div>
       <pre id="cmd" style="margin-top:8px"></pre>
       <div class="muted" style="margin-top:6px">它会生成 <span class="mono" id="keypath"></span>、写入证书和下面的 ssh 配置，之后直接 <span class="mono">ssh m4</span>。</div>
     </div>
   </div>
+
+  <h2 class="sec">设备 <span class="muted" style="font-size:12px;font-weight:400" id="devnote"></span></h2>
+  <div class="scroll"><table>
+    <thead><tr><th>设备</th><th>属于</th><th>登记</th><th>最近使用</th><th>上次机器</th><th>续期次数</th><th>状态</th><th></th></tr></thead>
+    <tbody id="devices"></tbody>
+  </table></div>
+  <div id="devout" class="muted" style="margin-top:6px"></div>
+
+  <h2 class="sec">设备审计</h2>
+  <div class="scroll"><table>
+    <thead><tr><th>时间</th><th>动作</th><th>设备</th><th>谁</th><th>详情</th></tr></thead>
+    <tbody id="devaudit"></tbody>
+  </table></div>
 
   <h2 class="sec">各台机器与线路</h2>
   <div class="scroll"><table>
@@ -132,6 +159,8 @@ function render(d) {
   $("hub").textContent = d.hub;
   $("login").textContent = d.login || (d.signed_in ? "未开通" : "运营者视图（不对应个人）");
   $("ca").textContent = d.ca_enabled ? d.ca_fingerprint : "未配置";
+  $("installcmd").textContent = d.install_command || ("curl -fsSL " + d.hub + "/install | sh");
+  $("installnote").textContent = d.install_ready ? "" : "（入口还没配好证书 CA 或企业微信登录，这条命令暂时会 404）";
   $("cmd").textContent = "fleet login --hub " + d.hub;
   $("keypath").textContent = d.key_path;
   $("confpath").textContent = d.config_path;
@@ -155,6 +184,69 @@ function render(d) {
 }
 
 $("dlconf").onclick = () => info && download("fleet-ssh-config", info.ssh_config);
+$("copyinstall").onclick = async () => {
+  const b = $("copyinstall");
+  try {
+    await navigator.clipboard.writeText($("installcmd").textContent);
+    b.textContent = "已复制";
+  } catch (e) {
+    const r = document.createRange(); r.selectNodeContents($("installcmd"));
+    const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+    b.textContent = "已选中，⌘C";
+  }
+  setTimeout(() => { b.textContent = "复制"; }, 1500);
+};
+
+// Registered devices (claude-fleet#1470): mine, or — through the operator's
+// door — everyone's. Revoking one stops its renewals at once; the owner scans
+// again to register it afresh.
+const ACTION = { register: "登记", renew: "续期", renew_refused: "拒绝续期", revoke: "吊销", home: "选机器" };
+function renderDevices(d) {
+  const idleDays = Math.round((d.idle_sec || 604800) / 86400);
+  $("devnote").textContent = d.mine ? `你的设备；${idleDays} 天没用的要重新扫码` : `所有人的设备（运营者视图）；${idleDays} 天没用的要重新扫码`;
+  $("devices").innerHTML = d.devices.length ? d.devices.map((v) => {
+    const idle = (Date.now() - new Date(v.last_used_at)) > (d.idle_sec || 604800) * 1000;
+    const state = v.revoked_at ? `<span class="revoked">已吊销 ${t(v.revoked_at)}${v.revoked_by ? " · " + esc(v.revoked_by) : ""}</span>`
+      : idle ? '<span class="muted">闲置，需重扫</span>' : '<span class="pill online">可续期</span>';
+    return `<tr><td><b>${esc(v.name || "—")}</b><div class="mono muted" style="font-size:11px">${esc(v.fingerprint)}</div></td>
+      <td class="mono">${esc(v.principal_id)}</td><td>${t(v.registered_at)}</td><td>${t(v.last_used_at)}</td>
+      <td class="mono">${esc(v.last_machine || "—")}</td><td>${v.renewals}</td><td>${state}</td>
+      <td>${v.revoked_at ? "" : `<button class="small danger" data-fp="${esc(v.fingerprint)}">吊销</button>`}</td></tr>`;
+  }).join("") : `<tr><td colspan="8" class="empty">还没有登记过的设备${d.mine ? "：在你的电脑上运行上面那行命令" : ""}。</td></tr>`;
+  $("devaudit").innerHTML = d.audit.length ? d.audit.map((a) => `
+    <tr><td>${t(a.at)}</td><td>${esc(ACTION[a.action] || a.action)}</td><td class="mono muted" style="font-size:11px">${esc(a.fingerprint)}</td>
+    <td class="mono">${esc(a.actor || a.principal_id || "—")}</td><td>${esc(a.detail || "")}</td></tr>`).join("")
+    : `<tr><td colspan="5" class="empty">还没有记录。</td></tr>`;
+  for (const b of $("devices").querySelectorAll("button[data-fp]")) {
+    b.onclick = async () => {
+      if (!confirm(`吊销设备 ${b.dataset.fp}？它的证书续期会立即失败，要重新扫码才能再用。`)) return;
+      b.disabled = true;
+      try {
+        const r = await fetch("/v1/fleet/devices/revoke", {
+          method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ fingerprint: b.dataset.fp }),
+        });
+        const body = await r.json();
+        if (!r.ok) throw new Error(body.error || ("HTTP " + r.status));
+        $("devout").textContent = body.changed ? "已吊销。" : "本来就已吊销。";
+        loadDevices();
+      } catch (e) {
+        $("devout").innerHTML = `<span class="err">${esc(e.message)}</span>`;
+        b.disabled = false;
+      }
+    };
+  }
+}
+
+async function loadDevices() {
+  try {
+    const r = await fetch("/v1/fleet/devices", { credentials: "same-origin", cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    renderDevices(await r.json());
+  } catch (e) {
+    $("devices").innerHTML = `<tr><td colspan="8" class="err">读取 /v1/fleet/devices 失败：${esc(e.message)}</td></tr>`;
+  }
+}
 $("sign").onclick = async () => {
   $("signout").textContent = "签发中…";
   try {
@@ -183,6 +275,7 @@ async function load() {
   }
 }
 load();
+loadDevices();
 </script>
 <script type="module" src="whoami.js"></script>
 </body>

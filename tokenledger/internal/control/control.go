@@ -528,6 +528,35 @@ func RoutesSigMessage(unix int64) string {
 	return fmt.Sprintf("fleet-routes %d", unix)
 }
 
+// `fleet` with no argument (claude-fleet#1470): the device renews its
+// certificate by its own key, and asks the hub which of its machines to enter.
+// Each request signs under its own namespace, like the relay and the route
+// list, so no signature is ever good for more than the one thing it was made
+// for.
+const (
+	// RenewPath is where a registered device renews its certificate without
+	// a scan: POST {public_key, ts, sig} with sig = ssh-keygen -Y sign of
+	// RenewSigMessage(ts) under RenewSigNamespace by the DEVICE key (not the
+	// certificate — the one being renewed may have run out).
+	RenewPath         = "/v1/fleet/login/renew"
+	RenewSigNamespace = "fleet-renew@claude-fleet"
+	// HomePath is where `fleet` asks which machine to enter: POST
+	// {cert, sig, ts, last} like RoutesPath, signed under HomeSigNamespace
+	// over HomeSigMessage(ts).
+	HomePath         = "/v1/fleet/home"
+	HomeSigNamespace = "fleet-home@claude-fleet"
+)
+
+// RenewSigMessage is what a device signs to renew its certificate.
+func RenewSigMessage(unix int64) string {
+	return fmt.Sprintf("fleet-renew %d", unix)
+}
+
+// HomeSigMessage is what a client signs to ask which machine to enter.
+func HomeSigMessage(unix int64) string {
+	return fmt.Sprintf("fleet-home %d", unix)
+}
+
 // SSHRelayOpen is the payload of TypeSSHRelayOpen.
 type SSHRelayOpen struct {
 	// RelayID names the relay; the agent dials SSHRelayDataPath?id=<RelayID>.

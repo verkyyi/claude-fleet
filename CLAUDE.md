@@ -274,5 +274,14 @@ Do not install from memory: read the doc and work from it.
   every Claude window on the login runs mod ≥ 0.2.0: `bin/fleet-statusline.sh
   off` is the only thing that removes it, it refuses while a window would go
   blind, and `/fleet-sync-install` never touches the key.
+- **The hub ships the `fleet` client, and `bin/` stays canonical** (issue #1470).
+  `curl -fsSL <hub>/install | sh` serves `bin/fleet-install.sh` (hub URL filled
+  in) and `bin/fleet`, `fleet-login.py`, `fleet-connect.py` from
+  `tokenledger/internal/api/fleetclient/` — `//go:embed` copies, because the
+  Docker build context is `tokenledger/` alone and embed cannot reach `..`.
+  Edit the client in `bin/`, then `cp` the four files over; two tests pin the
+  mirror from both sides (`TestFleetClientMatchesBin` in the Go gate,
+  `bin/fleet-install-selftest.sh` leg A in the shell gate), so a drift reds
+  whichever CI the change reaches.
 - Claude Code re-reads `settings.json` hooks per turn, so running sessions pick
   up hook changes without a restart.

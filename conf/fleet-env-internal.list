@@ -102,6 +102,7 @@ FLEET_HOST_TUNE_MAXFILES_PLIST     seam: the maxfiles LaunchDaemon plist path (f
 FLEET_HUB                          handoff: marks the hub pane (operator seat), set at hub spawn
 FLEET_HUB_VISITS_LOGDIR            path: state/log location override (fleet-hub-visits.sh)
 FLEET_HUB_VISITS_MAX               knob: internal pacing/limit, safe in-code default (fleet-hub-visits.sh)
+FLEET_INSTALL_BIN                  path: where `curl <hub>/install | sh` (fleet-install.sh) puts the fleet client — ~/.local/bin by default; the installer runs before any fleet.conf exists (#1470)
 FLEET_INSTALL_BREW_PREFIX          seam: brew prefix substituted into plists (fleet-install-apply.sh)
 FLEET_INSTALL_CLAUDE               seam: an injectable command/path for tests (fleet-install-apply.sh)
 FLEET_INSTALL_DAEMON_DIR           path: system LaunchDaemons dir override (fleet-install-apply.sh)
@@ -109,6 +110,8 @@ FLEET_INSTALL_LAUNCHCTL            seam: an injectable command/path for tests (f
 FLEET_INSTALL_LOGIN                seam: the login whose system LaunchDaemons are rendered (fleet-install-apply.sh)
 FLEET_INSTALL_HOME                 seam: the __HOME__ a daemon template renders to — another login's when rendering for it (fleet-install-apply.sh --render-system, #1192)
 FLEET_INSTALL_PLATFORM             seam: launchd|systemd|none instead of uname (fleet-install-apply.sh)
+FLEET_INSTALL_NO_RUN               seam: 1 stops fleet-install.sh from exec'ing `fleet` at the end (fleet-install-selftest.sh pipes the installer)
+FLEET_INSTALL_RC                   seam: the rc file fleet-install.sh appends its PATH line to, instead of the one $SHELL implies (fleet-install-selftest.sh)
 FLEET_INSTALL_ROOT                 path: the install to apply to (fleet-install-apply.sh)
 FLEET_INSTALL_SUDO                 seam: the sudo prefix for system LaunchDaemons (fleet-install-apply.sh)
 FLEET_INSTALL_SYSTEMCTL            seam: an injectable command/path for tests (fleet-install-apply.sh)

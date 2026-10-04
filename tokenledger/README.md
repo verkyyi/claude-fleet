@@ -987,6 +987,65 @@ decrypted for anything else.
   the audit keep working. Machines keep the access tokens they already have, so
   a short KMS outage costs nothing until those run out.
 
+### One line to install, then just `fleet` (claude-fleet#1470)
+
+A colleague's whole setup is one line in their own terminal (macOS or Linux;
+Windows inside WSL), copied from the top of the 连接 page:
+
+```sh
+curl -fsSL https://<hub>/install | sh
+```
+
+`GET /install` is `bin/fleet-install.sh` with this hub's URL filled in; it
+downloads `fleet`, `fleet-login.py` and `fleet-connect.py` from
+`/install/<name>` (the copies this image was built from — embedded from
+`internal/api/fleetclient/`, byte-for-byte `bin/`, pinned by
+`TestFleetClientMatchesBin` and `bin/fleet-install-selftest.sh`; each file's
+SHA-256 rides in `X-Ccquota-Sha256` and a mismatch is refused) into
+`~/.local/bin`, writes the URL to `~/.config/claude-fleet/hub.json` (a token
+already there is kept), appends one PATH line to the shell's rc file once, and
+runs `fleet` with stdin from `/dev/tty`. Only stock tools: sh, curl, python3
+(macOS's own 3.9 is enough), ssh. These routes are public like the CA's public
+key — a script and three programs carrying no credential — and answer 404
+until the hub has both a CA and WeCom sign-in, because that is what the first
+`fleet` needs.
+
+**`fleet`** with nothing after it (`bin/fleet` → `fleet-connect.py --enter`):
+
+1. **Certificate.** None, expired, or under 6 hours left
+   (`FLEET_RENEW_BELOW_SECS`): `fleet login renew` signs `fleet-renew <ts>`
+   with the device key under `fleet-renew@claude-fleet` and POSTs
+   `/v1/fleet/login/renew {public_key, ts, sig, device_name}`. The hub checks
+   the signature against the key it **registered** (so an expired certificate
+   is no obstacle), that the device is not revoked and was used inside the
+   last **7 days** (`DeviceIdle`), and signs again — recorded as `via=renew`.
+   The hub says scan (`unknown_device`, `device_revoked`, `device_idle`, exit
+   3): the QR appears right there, and confirming it registers the device
+   (`fleet_devices`: key fingerprint → person, name, last use, last machine,
+   renewals, revocation). A scan after a revocation re-registers — the scan is
+   the proof, the revocation only forces it.
+2. **Machine.** `POST /v1/fleet/home` (certificate-signed under
+   `fleet-home@claude-fleet`, or a session/token GET, `?last=`): the hub
+   picks, in order, the machine this **device** used last if online; an online
+   machine with the person's **sessions** (most of them); the least loaded
+   online machine they have an account on (the placement `judge` of #1425,
+   online-ness only — a login needs no writable control channel or cap room).
+   None online → `503 {"code":"no_machine_online","error":"你的机器都不在线",
+   "home":{candidates…}}`, which `fleet` prints as is and exits 1. The answer
+   carries the whole route list, so no second fetch; `fleet m4` names the
+   machine and never asks.
+3. **Route**, as `fleet connect` below, then **ssh**. The hub unreachable at
+   step 2 falls back to the remembered machine.
+
+Every registration, renewal, refusal, revocation and pick is a row of
+`fleet_device_audit`. `GET /v1/fleet/devices` lists a signed-in person's own
+devices + audit (the operator's door: everyone's); `POST
+/v1/fleet/devices/revoke {fingerprint}` — the owner or the operator. A revoked
+device's renewal fails at once, and `verifySSHRelayCert` refuses its
+still-valid certificate at the relay, the route list and the pick from that
+moment. The 连接 page shows the install line (copy button), the devices with a
+吊销 button, and the audit.
+
 ### Connection certificates — scan once, 12 hours in (claude-fleet#1412)
 
 With a CA configured, the hub signs short-lived SSH **user certificates**, and
