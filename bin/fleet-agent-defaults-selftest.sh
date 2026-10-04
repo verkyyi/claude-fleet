@@ -200,7 +200,7 @@ grep -q '^wrote ' "$WORK/o4" && fail 'second apply wrote a file' "$(cat "$WORK/o
 for f in claude/.claude.json codex/config.toml claude/CLAUDE.md codex/AGENTS.md; do
   cmp -s "$WORK/c3/$f" "$WORK/c3/$(echo "$f" | tr / _).before" || fail "no-op apply rewrote $f"
 done
-ls "$WORK/c3/claude" "$WORK/c3/codex" | grep -q '\.bak\.' && fail 'apply left a backup'
+[ -z "$(find "$WORK/c3/claude" "$WORK/c3/codex" -maxdepth 1 -name '*.bak.*' 2>/dev/null)" ] || fail 'apply left a backup'
 ok '4 idempotent: second apply writes nothing, no backup'
 
 # --- 5. a stale block is replaced in place ---------------------------------------------------
