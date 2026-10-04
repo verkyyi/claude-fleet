@@ -1,0 +1,81 @@
+name: node-join
+
+# One command adds a machine (issue #1418, EPIC #1407 R3), proved on a CLEAN
+# Linux container: a bare debian image with only curl, the way a fresh SPOT box
+# arrives. The job builds ccquota, runs a real hub with the fleet module on and
+# that build in its dist dir, mints a join code over the operator API, then runs
+# bin/fleet-node-join.sh exactly as the hub's command line does (`… | bash -s --`)
+# — deps through apt, the agent from the hub, no systemd so the detached path,
+# fleet installed from this checkout — and asserts the hub's roster shows the
+# node online. The full output is the run log.
+
+on:
+  pull_request:
+    paths:
+      - 'bin/fleet-node-join.sh'
+      - 'tokenledger/internal/api/fleet_join.go'
+      - 'tokenledger/internal/store/fleet_join.go'
+      - '.github/workflows/node-join.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: node-join-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  linux-container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container: debian:bookworm
+    steps:
+      - name: A clean box has curl and nothing else
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl ca-certificates git >/dev/null
+          for c in tmux gh python3 zsh; do command -v "$c" && { echo "$c is already here — not a clean box"; exit 1; }; done; true
+      - uses: actions/checkout@v4
+      # The checkout is owned by the runner's uid, not the container's root.
+      - run: git config --global --add safe.directory '*'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+          cache-dependency-path: tokenledger/go.sum
+      - name: Build ccquota into the hub's dist dir
+        working-directory: tokenledger
+        run: |
+          mkdir -p /srv/dist
+          CGO_ENABLED=0 go build -o /srv/dist/ccquota-linux-amd64 ./cmd/ccquota
+          cp /srv/dist/ccquota-linux-amd64 /usr/local/bin/ccquota-hub
+      - name: Start the hub
+        run: |
+          CCQUOTA_FLEET=1 CCQUOTA_VIEWER_TOKEN=vt CCQUOTA_FLEET_DIST_DIR=/srv/dist \
+            nohup ccquota-hub hub --addr 127.0.0.1:8787 --db /srv/hub.db >/srv/hub.log 2>&1 &
+          for _ in $(seq 50); do curl -fs 127.0.0.1:8787/healthz && exit 0; sleep 0.2; done
+          cat /srv/hub.log; exit 1
+      - name: Join with one command
+        env:
+          FLEET_CLAUDE_INSTALL_CMD: 'true'   # no Claude download in CI; the rest of bootstrap runs
+        run: |
+          J=$(curl -fsS -X POST -H 'Authorization: Bearer vt' -H 'Content-Type: application/json' -d '{}' \
+            127.0.0.1:8787/v1/fleet/join-codes)
+          CODE=$(printf '%s' "$J" | sed -n 's/.*"code":"\([^"]*\)".*/\1/p')
+          echo "command the hub printed: $(printf '%s' "$J" | sed 's/fj_[a-z2-7]*/fj_<code>/g')"
+          start=$(date +%s)
+          bash -s -- --hub http://127.0.0.1:8787 --token "$CODE" --fleet-src "$GITHUB_WORKSPACE" \
+            < bin/fleet-node-join.sh
+          echo "joined in $(( $(date +%s) - start ))s"
+      - name: The hub lists the node online
+        run: |
+          curl -fsS -H 'Authorization: Bearer vt' 127.0.0.1:8787/v1/nodes > /tmp/nodes.json
+          cat /tmp/nodes.json; echo
+          grep -q '"status":"online"' /tmp/nodes.json
+      - name: Logs
+        if: always()
+        run: |
+          tail -n 50 /srv/hub.log || true
+          tail -n 50 ~/.ccquota/agent.log || true

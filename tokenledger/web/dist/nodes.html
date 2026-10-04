@@ -62,6 +62,9 @@ tr:last-child td { border-bottom:0; }
 .muted { color:var(--ink-3); }
 .err { color:var(--lost); }
 .empty { color:var(--ink-3); padding:24px; text-align:center; }
+button { font:inherit; padding:6px 14px; border-radius:8px; border:1px solid var(--accent); background:var(--accent); color:#fff; cursor:pointer; }
+button:disabled { opacity:.6; cursor:default; }
+pre.cmd { margin:10px 0 4px; padding:10px 12px; background:var(--plane); border:1px solid var(--border); border-radius:8px; white-space:pre-wrap; word-break:break-all; }
 </style>
 </head>
 <body>
@@ -80,6 +83,13 @@ tr:last-child td { border-bottom:0; }
     <thead><tr><th>编号</th><th>机器</th><th>登录</th><th>fleet</th><th>状态</th><th>agent</th></tr></thead>
     <tbody id="sessions"></tbody>
   </table></div>
+  <div id="join" class="card" hidden style="margin-top:28px">
+    <h2>加一台机器</h2>
+    <div class="muted">生成一个加入码（只能用一次，10 分钟内有效），在新机器上以要跑 fleet 的那个登录执行下面这条命令：装依赖、装 fleet、装并登记 agent，几分钟后它就出现在上面的列表里。</div>
+    <div style="margin-top:10px"><button id="joinbtn" type="button">生成加入码</button> <span id="joinexp" class="muted"></span></div>
+    <pre id="joincmd" class="cmd mono" hidden></pre>
+    <div id="joinerr" class="err"></div>
+  </div>
   <div id="error" class="err"></div>
 </div>
 <script>
@@ -155,6 +165,32 @@ async function tick() {
 }
 tick();
 setInterval(tick, 3000);
+
+// Join codes (claude-fleet#1418) are the operator's: a WeCom session has a
+// principal, and the hub answers 403 to it anyway.
+fetch("/v1/fleet/me", { credentials: "same-origin", cache: "no-store" })
+  .then((r) => r.ok ? r.json() : null)
+  .then((me) => { if (me && !me.principal) $("join").hidden = false; })
+  .catch(() => {});
+$("joinbtn").addEventListener("click", async () => {
+  $("joinbtn").disabled = true;
+  $("joinerr").textContent = "";
+  try {
+    const r = await fetch("/v1/fleet/join-codes", {
+      method: "POST", credentials: "same-origin", cache: "no-store",
+      headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const v = await r.json();
+    $("joincmd").textContent = v.command;
+    $("joincmd").hidden = false;
+    $("joinexp").textContent = "有效至 " + new Date(v.expires_at).toLocaleTimeString() + "，只显示这一次";
+  } catch (e) {
+    $("joinerr").textContent = "生成失败：" + e.message;
+  } finally {
+    $("joinbtn").disabled = false;
+  }
+});
 </script>
 </body>
 </html>

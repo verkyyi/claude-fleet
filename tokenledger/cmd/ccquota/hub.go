@@ -155,6 +155,8 @@ func loadFleetCerts(srv *api.Server) error {
 	}
 	srv.FleetRoutes = routes
 	srv.FleetPublicURL = os.Getenv("CCQUOTA_FLEET_PUBLIC_URL")
+	srv.FleetDistDir = os.Getenv("CCQUOTA_FLEET_DIST_DIR")
+	srv.FleetJoinScriptURL = os.Getenv("CCQUOTA_FLEET_JOIN_SCRIPT_URL")
 	path := os.Getenv("CCQUOTA_FLEET_SSH_CA_KEY")
 	if path == "" {
 		log.Printf("fleet: no CCQUOTA_FLEET_SSH_CA_KEY — connection certificates are off")
