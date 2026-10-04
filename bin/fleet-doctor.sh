@@ -726,6 +726,25 @@ if [ "$_hub_on" = 1 ]; then
   fi
 fi
 
+# --- agent (issue #1525): every login's node agent on this machine vs stable ---
+# Same reading as `fleet-node-upgrade.sh --status`: the bytes on disk AND the
+# version the hub sees running (an agent upgraded on disk but never restarted is
+# behind). A machine with no ccquota agent service prints no line at all.
+_nu="$(dirname "$0")/fleet-node-upgrade.sh"
+if [ -f "$_nu" ]; then
+  _nuo=$(bash "$_nu" "${FLEET_DOCTOR_AGENT_TARGET:-stable}" --status 2>&1)
+  _nus=$(printf '%s\n' "$_nuo" | sed -n 's/^summary: //p' | head -n 1)
+  case "$_nus" in
+    0/*)  _nun=${_nus#*/}; pass agent "${_nun%% *} login(s) on this machine run ${_nus##* } (disk + hub)" ;;
+    ?*)   _nub=$(printf '%s\n' "$_nuo" | awk '$NF == "behind" {printf "%s%s", s, $1; s=", "}')
+          warn agent "${_nus%% *} login(s) behind stable ${_nus##* }: $_nub — \`bash $_nu\` builds it, installs it and restarts them one by one (\`--dry-run\` first)" ;;
+    *)    case "$_nuo" in
+            *"no ccquota agent service"*|*"macOS (launchd) only"*) ;;
+            *) info agent "could not compare the node agents with stable: $(printf '%s' "$_nuo" | tail -n 1)" ;;
+          esac ;;
+  esac
+fi
+
 # --- autofill dispatcher (optional: auto-spawn `autofill`-labelled backlog, #70/#421) ---
 # OFF unless a fleet's conf sets FLEET_AUTOFILL=1. When ON, the dispatch daemon
 # auto-spawns eligible `autofill`-labelled backlog issues — which spends LLM tokens —
