@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
@@ -90,8 +91,25 @@ type Server struct {
 	// must have run Store.EnsureNodes.
 	Fleet bool
 
+	// FleetAdmins is the OS logins whose agents may run account ops
+	// (CCQUOTA_FLEET_ADMIN_USERS, claude-fleet#1411): the operator's login on
+	// each machine. A node must ALSO say it is an admin in its hello, and
+	// refuses the op itself if it was not started as one. Empty means no node
+	// is ever sent an account op.
+	FleetAdmins []string
+
+	// FleetAutoAssign is the machines (roster hostnames) a person gets a
+	// login on the first time they sign in through WeCom
+	// (CCQUOTA_FLEET_AUTO_ASSIGN). Empty means accounts are only ever opened
+	// by an explicit assignment.
+	FleetAutoAssign []string
+
 	// nodes holds the open node control channels.
 	nodes nodeConns
+
+	// accountsMu serialises account dispatch, so one queued op is never sent
+	// twice by two triggers racing.
+	accountsMu sync.Mutex
 }
 
 // Handler builds the router.
@@ -139,6 +157,8 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc(control.Path, s.handleNodeConnect)
 		mux.Handle("/v1/nodes", s.viewerOnly(http.HandlerFunc(s.handleNodes)))
 		mux.Handle("/nodes", s.viewerOnly(http.HandlerFunc(s.serveNodesPage)))
+		mux.Handle("/v1/fleet/me", s.viewerOnly(http.HandlerFunc(s.handleFleetMe)))
+		mux.Handle("/v1/fleet/accounts", s.viewerOnly(s.operatorOnly(http.HandlerFunc(s.handleFleetAccounts))))
 	}
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -267,7 +287,10 @@ func (s *Server) viewerOnly(next http.Handler) http.Handler {
 		// authorization service signed. Checked after the token so the token
 		// stays the fallback that works when WeCom does not.
 		if sub, ok := s.ssoViewer(r); ok {
-			next.ServeHTTP(w, r.WithContext(withViewer(r.Context(), sub)))
+			// The SSO subject is also the fleet principal: the one identity
+			// whose views are narrowed to that person's own machines.
+			ctx := context.WithValue(withViewer(r.Context(), sub), principalKey{}, sub)
+			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
 		// No token. A named tailnet peer may still be let in -- on the word

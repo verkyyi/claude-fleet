@@ -50,6 +50,16 @@ type nodeConn struct {
 	// proto is re-read on every heartbeat by the reader and checked by
 	// SendNodeWrite from other goroutines.
 	proto atomic.Int64
+	// admin is set once, at hello: this connection may be sent account ops
+	// (claude-fleet#1411).
+	admin bool
+	// host is the machine as the roster names it, refreshed by heartbeats.
+	host atomic.Value // string
+}
+
+func (c *nodeConn) hostname() string {
+	h, _ := c.host.Load().(string)
+	return h
 }
 
 func (n *nodeConns) put(id string, c *nodeConn) {
@@ -79,6 +89,25 @@ func (n *nodeConns) get(id string) *nodeConn {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return n.conns[id]
+}
+
+// adminFor returns the open, write-compatible admin connection on hostname.
+func (n *nodeConns) adminFor(hostname string) (endpointID string, ok bool) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	ids := make([]string, 0, len(n.conns))
+	for id := range n.conns {
+		ids = append(ids, id)
+	}
+	// Deterministic when a machine has two admin logins on the allowlist.
+	sort.Strings(ids)
+	for _, id := range ids {
+		c := n.conns[id]
+		if c.admin && c.hostname() == hostname && control.Compatible(int(c.proto.Load())) {
+			return id, true
+		}
+	}
+	return "", false
 }
 
 // ErrNodeOffline is returned when a write is addressed to a node with no open
@@ -175,10 +204,30 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	nc := &nodeConn{conn: conn}
+	nc := &nodeConn{conn: conn, admin: hp.Admin && s.isFleetAdmin(ep.OSUser)}
 	nc.proto.Store(int64(hello.Proto))
+	nc.host.Store(ep.Hostname)
+	if hp.Admin && !nc.admin {
+		log.Printf("node %s (%s@%s) claims admin but is not on the hub's admin list; no account ops will be sent to it",
+			ep.ID, ep.OSUser, ep.Hostname)
+	}
 	s.nodes.put(ep.ID, nc)
 	defer s.nodes.drop(ep.ID, nc)
+	if nc.admin {
+		// Anything sent down this link and not yet answered is now unknown:
+		// whether the login got made is a question only the node can answer,
+		// and it re-sends its answer when it is back.
+		defer func() {
+			// Superseded by a newer link of the same endpoint: ops sent
+			// down that one are still in flight, not lost.
+			if cur := s.nodes.get(ep.ID); cur != nil && cur != nc {
+				return
+			}
+			if err := s.Store.LoseAccountOps(ep.ID, time.Now()); err != nil {
+				log.Printf("node %s: mark in-flight account ops unknown: %v", ep.ID, err)
+			}
+		}()
+	}
 
 	// A read deadline of a few missed beats: a node whose network vanished
 	// sends no FIN, and without this the goroutine would wait on it forever.
@@ -207,6 +256,7 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 			if hb.OSUser == "" {
 				hb.OSUser = ep.OSUser
 			}
+			nc.host.Store(hb.Hostname)
 			// The heartbeat carries the version too: a node that upgrades
 			// without reconnecting is re-judged on its next beat.
 			nc.proto.Store(int64(m.Proto))
@@ -214,7 +264,19 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 				m.Proto, string(m.Payload), time.Now()); err != nil {
 				log.Printf("node %s: record heartbeat: %v", ep.ID, err)
 			}
-		case control.TypeAck, control.TypeError:
+			if nc.admin {
+				// Each admin beat is a chance to send what is queued for
+				// this machine: a person assigned while it was offline
+				// gets their login within a beat of it coming back.
+				go s.dispatchAccounts()
+			}
+		case control.TypeAccountResult:
+			s.applyAccountResult(ctx, conn, ep.ID, nc, m)
+		case control.TypeError:
+			if nc.admin && m.Error != nil {
+				s.applyAccountRefusal(ep.ID, m)
+			}
+		case control.TypeAck:
 			// Replies to hub writes. Nothing sends one yet (C3 will).
 		default:
 			refuse(ctx, conn, m.OpID, control.CodeBadMessage, "unknown message type "+m.Type)
@@ -244,6 +306,8 @@ type NodeView struct {
 	LastHeartbeat *time.Time `json:"last_heartbeat"`
 	AgeSec        float64    `json:"age_sec"`
 	AgentVersion  string     `json:"agent_version,omitempty"`
+	// Admin is a connected node the hub will send account ops to.
+	Admin bool `json:"admin,omitempty"`
 
 	Load1         float64            `json:"load1"`
 	NCPU          int                `json:"ncpu"`
@@ -303,6 +367,11 @@ func NodeStatus(last *time.Time, heartbeatMS int, now time.Time) string {
 
 // Nodes builds the roster as of now.
 func (s *Server) Nodes(now time.Time) (NodesSnapshot, error) {
+	return s.nodesWhere(now, nil)
+}
+
+// nodesWhere builds the roster from the nodes visible passes (nil: all).
+func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string) bool) (NodesSnapshot, error) {
 	rows, err := s.Store.Nodes()
 	if err != nil {
 		return NodesSnapshot{}, err
@@ -311,8 +380,13 @@ func (s *Server) Nodes(now time.Time) (NodesSnapshot, error) {
 	machines := map[string]*MachineView{}
 	order := []string{}
 	for _, n := range rows {
+		if visible != nil && !visible(n.Hostname, n.OSUser) {
+			continue
+		}
 		v := nodeView(n, now)
-		v.Connected = s.nodes.get(n.EndpointID) != nil
+		if c := s.nodes.get(n.EndpointID); c != nil {
+			v.Connected, v.Admin = true, c.admin
+		}
 		out.Nodes = append(out.Nodes, v)
 
 		m := machines[v.Hostname]
@@ -365,9 +439,15 @@ func nodeView(n store.Node, now time.Time) NodeView {
 	return v
 }
 
-// handleNodes serves the roster.
+// handleNodes serves the roster — narrowed, for a signed-in person, to the
+// logins that are theirs (claude-fleet#1411).
 func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
-	snap, err := s.Nodes(time.Now())
+	visible, err := s.FleetScope(r)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	snap, err := s.nodesWhere(time.Now(), visible)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return

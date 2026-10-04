@@ -145,6 +145,7 @@ func (a *Agent) nodeSession(ctx context.Context) (established bool, err error) {
 	hello, err := control.New(control.TypeHello, control.Hello{
 		HeartbeatMS:  int(a.cfg.LiveInterval / time.Millisecond),
 		AgentVersion: a.cfg.Version,
+		Admin:        a.cfg.FleetAdmin,
 	})
 	if err != nil {
 		return false, err
@@ -177,9 +178,9 @@ func (a *Agent) nodeSession(ctx context.Context) (established bool, err error) {
 	}
 	dcancel()
 
-	// The reader: the hub's messages (none it must act on yet — C3 adds
-	// writes), and the pongs the heartbeat's ping waits for. When it ends,
-	// the connection is gone.
+	// The reader: the hub's messages — account ops for an admin agent
+	// (claude-fleet#1411), acks of their results — and the pongs the
+	// heartbeat's ping waits for. When it ends, the connection is gone.
 	readErr := make(chan error, 1)
 	go func() {
 		for {
@@ -188,11 +189,27 @@ func (a *Agent) nodeSession(ctx context.Context) (established bool, err error) {
 				readErr <- err
 				return
 			}
-			if m.Type == control.TypeError && m.Error != nil {
-				log.Printf("control channel: hub reported %s: %s", m.Error.Code, m.Error.Message)
+			switch m.Type {
+			case control.TypeAccountOp:
+				a.handleAccountOp(ctx, conn, m)
+			case control.TypeAck:
+				a.acct.acked(m.OpID)
+			case control.TypeError:
+				if m.Error != nil {
+					log.Printf("control channel: hub reported %s: %s", m.Error.Code, m.Error.Message)
+				}
 			}
 		}
 	}()
+
+	// Results the hub has not acked — from this connection or one that
+	// dropped while a script ran — go out now and on completion.
+	a.acct.attach(func(m control.Message) error {
+		wctx, cancel := context.WithTimeout(ctx, nodeWriteTimeout)
+		defer cancel()
+		return wsjson.Write(wctx, conn, m)
+	})
+	defer a.acct.detach()
 
 	probe := &fleetProbe{}
 	beat := func() error {
