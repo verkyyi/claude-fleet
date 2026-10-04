@@ -581,7 +581,7 @@ refresh_summaries() {
   local nj lj now last=''
   mkdir -p "$G" 2>/dev/null || return 1
   now=$(date +%s)
-  read -r last < "$SUMF" 2>/dev/null || last=''
+  { read -r last < "$SUMF"; } 2>/dev/null || last=''    # braced: a missing file is silent (#1483 fix in passing)
   case "$last" in ''|*[!0-9]*) ;; *) [ $(( now - last )) -lt "$SUMMARY_EVERY" ] && return 0 ;; esac
   printf '%s\n' "$now" > "$SUMF"
   nj=$(mktemp "$G/hubnodes.json.XXXXXX") || return 1
