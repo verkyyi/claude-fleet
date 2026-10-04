@@ -759,6 +759,13 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # it out of the conf in a real deploy — the daemon reads it from the environment.
 # @label=Webhook HMAC secret @group=bridge @tier=advanced @scope=global @edit=str
 #FLEET_WEBHOOK_SECRET=""
+
+# fleet-open's laptop half (issue #1380): the ssh alias, as seen from THIS machine,
+# of the operator's computer running iTerm2. When set, fleet-doctor adds a `laptop`
+# row — is extras/iterm2/fleet_open.py installed there, and the same version? A
+# laptop that is asleep or off-network shows `?`, never a warning. Unset = no row.
+# @label=Laptop ssh alias (fleet-open) @group=notify @tier=internal @scope=global @edit=str
+#FLEET_OPEN_LAPTOP=""
 # Advanced env-only knobs (NOT in this modal; override them in the environment): the
 # forwarded event set in `FLEET_WEBHOOK_EVENTS` (default
 # pull_request,check_run,check_suite,status,issues), the supervisor rescan cadence
