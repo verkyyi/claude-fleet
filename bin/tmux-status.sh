@@ -8,6 +8,30 @@
 #               DSK green >1.5×floor, yellow ≤1.5×floor, red ≤FLEET_DISK_FLOOR_GB.
 # Optional: set FLEET_STATUS_CONTAINER in fleet.conf to show a docker
 # container's ●/○ running indicator.
+#
+# HUB MODE (issue #1482, EPIC #1479 C3) — three chips about THE SESSION YOU ARE
+# LOOKING AT, not this machine:  m4 ● │ CPU 16% │ MEM 4.0G/16.0G │ ◉ icloud 5h 63% 周 65% │ 入口 ● │ ✖ 1  ▲ 2
+#   1. the machine the current window's session is on — this one for a local
+#      window (its live CPU/MEM/DSK, as above), the OTHER machine for a proxy
+#      window (`@remote`, fleet-remote-view.sh): `● ` + its load and memory off
+#      the hub's cache, `○ 失联 3m` when the hub calls it lost, `?` when the
+#      cache has no row for it;
+#   2. the account the window runs on (`@cc_account`) with its 5h / week quota
+#      off the hub's limits cache — omitted when neither knows it;
+#   3. the hub itself: `●` while its cache is fresh, `○ 失联 Nm` once it is older
+#      than FLEET_HUB_SESSIONS_STALE (60s) — the same clock the sidebar's lost
+#      groups use.
+#   The window list goes blank in hub mode and comes back when it leaves
+#   (fleet_status_window_list). The cue is the `k=v` args the conf's status-right
+#   passes from the CLIENT'S CURRENT WINDOW (`sess= win= remote= acct= wsf= wscf=
+#   wsaved=`): tmux re-runs the job the moment the expanded command changes, so
+#   switching from a local window to an m4 proxy swaps the chip at once, not a
+#   status-interval later. Hub mode = CCQUOTA_FLEET=1 + the fleet's
+#   FLEET_SIDEBAR_SOURCE=hub + a remote_<sess> cache on disk (the sidebar's own
+#   gate, #1480); otherwise — and with no args at all, the pre-#1482 conf — the
+#   bar is byte for byte what it was. Data: bin/fleet-status-lib.sh reads the two
+#   summaries fleet-hub-sessions.sh --loop writes (hub_nodes / hub_limits); the
+#   render path never touches the network (EPIC #1479 rule 2).
 set -uo pipefail
 
 case "$0" in */*) BIN="${0%/*}" ;; *) BIN=. ;; esac   # forkless dirname (issue #888)
@@ -15,6 +39,60 @@ BIN="$(cd "${BIN:-/}" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 _fs="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleet.settings"; [ -f "$_fs" ] && . "$_fs"   # the login's settings win (#979)
 . "$BIN/usage-lib.sh"
+. "$BIN/fleet-status-lib.sh"
+
+# The current window, as the conf's status-right passes it (issue #1482). Absent
+# (an older conf) → every value empty → never hub mode.
+STATUS_SESS='' STATUS_WIN='' STATUS_REMOTE='' STATUS_ACCT='' STATUS_WSF='' STATUS_WSCF='' STATUS_WSAVED=''
+for _a in "$@"; do
+    case "$_a" in
+        sess=*)   STATUS_SESS=${_a#sess=} ;;
+        win=*)    STATUS_WIN=${_a#win=} ;;
+        remote=*) STATUS_REMOTE=${_a#remote=} ;;
+        acct=*)   STATUS_ACCT=${_a#acct=} ;;
+        wsf=*)    STATUS_WSF=${_a#wsf=} ;;
+        wscf=*)   STATUS_WSCF=${_a#wscf=} ;;
+        wsaved=*) STATUS_WSAVED=${_a#wsaved=} ;;
+    esac
+done
+
+# status_conf_key <file> <KEY> → $_sck: the key's last assignment in a conf file
+# (bare or `export`, quotes stripped), '' when absent. A builtin `read` loop, not
+# fleet_load_conf: the bar does not source fleet-lib.sh (#888), and it wants ONE
+# per-fleet key, not the fleet's whole overlay on top of fleet.conf's knobs.
+status_conf_key() {
+    local line; _sck=''
+    [ -f "$1" ] || return 0
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            "$2="*|"export $2="*)
+                line=${line#*=}; line=${line%%#*}; line=${line%"${line##*[![:space:]]}"}
+                line=${line#\"}; line=${line%\"}; line=${line#\'}; line=${line%\'}
+                _sck=$line ;;
+        esac
+    done < "$1"
+}
+
+# Hub mode (issue #1482): CCQUOTA_FLEET=1, the current session's fleet set to
+# FLEET_SIDEBAR_SOURCE=hub (its own conf wins over fleet.conf / fleet.settings),
+# and the sidebar's remote_<sess> cache on disk — no cache, no hub mode: the bar
+# renders exactly as before until the loop's first answer (as the sidebar does).
+HUB_MODE=0
+if [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ -n "$STATUS_SESS" ]; then
+    _src="${FLEET_SIDEBAR_SOURCE:-local}"
+    _cd="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
+    if [ -f "$_cd/fleets/$STATUS_SESS/conf" ]; then status_conf_key "$_cd/fleets/$STATUS_SESS/conf" FLEET_SIDEBAR_SOURCE
+    else status_conf_key "$_cd/$STATUS_SESS.conf" FLEET_SIDEBAR_SOURCE; fi
+    [ -n "$_sck" ] && _src=$_sck
+    [ "$_src" = hub ] && fleet_status_remote_head "$STATUS_SESS" && HUB_MODE=1
+fi
+# The window list: blank while in hub mode, restored on the way out (#1482). Both
+# are transitions — a tmux call only when the passed-in formats say so.
+if [ "$HUB_MODE" = 1 ]; then
+    [ -n "$STATUS_WSF$STATUS_WSCF" ] && fleet_status_window_list on
+elif [ -n "$STATUS_WSAVED" ]; then
+    fleet_status_window_list off
+fi
 # The interval-daemon liveness registry + relative-interval thresholds (issue
 # #639). Sourced HERE and not from usage-lib.sh so nothing has to guess a lib's
 # own directory: it is also what makes fleet_collect_stale_secs relative rather
@@ -241,6 +319,73 @@ fi
 # `fleet-account.sh whoami`); the usage + account modal it opened stays one key
 # away on `prefix u`. ---
 
+# --- Hub mode (issue #1482): the three chips, off the caches alone. ---
+# status_pct_color <pct> <yellow-at> <red-at> → $_spc: the palette colour for a
+# percentage, the same bands the machine segment uses.
+status_pct_color() {
+    case "${1:-}" in ''|*[!0-9]*) _spc=$DIM; return 0 ;; esac
+    if   [ "$1" -ge "$3" ]; then _spc=$RED
+    elif [ "$1" -ge "$2" ]; then _spc=$YELLOW
+    else _spc=$GREEN; fi
+}
+status_hub_render() {
+    local me h a node_seg acct_seg hub_seg cpu lp lf centi mem_out c5 cw age
+    # this machine's label: the cache's #me, else FLEET_NODE_ALIASES over $HOSTNAME
+    me=$FSR_ME
+    if [ -z "$me" ]; then
+        h=${HOSTNAME:-?}; h=${h%%.*}; me=$h
+        for a in ${FLEET_NODE_ALIASES:-}; do case "$a" in "$h="*) me=${a#*=} ;; esac; done
+    fi
+    fleet_status_node "$STATUS_REMOTE" "$me"
+    if [ "$FSN_KIND" = local ]; then
+        # here: the live readings, same numbers and colours as the plain bar
+        node_seg=" ${BLUE}${FSN_NODE} ${GREEN}● ${DIM}│${machine}"
+    elif fleet_status_hub_node "$FSN_NODE"; then
+        if [ "$HN_AV" = online ]; then
+            # load per core as a percentage, through the CPU bands: `1.57` on 10
+            # cores → 15%. Integer math on hundredths, no awk.
+            lp=${HN_LOAD1%%.*}; lf=${HN_LOAD1#*.}; [ "$lf" = "$HN_LOAD1" ] && lf=0
+            lf="${lf}00"; lf=${lf:0:2}
+            case "$lp" in ''|*[!0-9]*) lp=0 ;; esac; case "$lf" in ''|*[!0-9]*) lf=0 ;; esac
+            centi=$(( lp * 100 + 10#$lf ))
+            case "${HN_NCPU:-}" in ''|*[!0-9]*|0) cpu='' ;; *) cpu=$(( centi / HN_NCPU )) ;; esac
+            if [ -n "$cpu" ]; then status_pct_color "$cpu" 50 80; cpu="${_spc}${cpu}%"; else cpu="${DIM}–"; fi
+            case "${HN_USED:-}|${HN_TOTAL:-}" in
+                *[!0-9|]*|'|'*|*'|'|*'|0') mem_out="${DIM}–" ;;
+                *) status_pct_color "${HN_MEM:-}" 60 85
+                   mem_out="${_spc}$(mb_to_g1 "$HN_USED")G/$(mb_to_g1 "$HN_TOTAL")G" ;;
+            esac
+            node_seg=" ${BLUE}${FSN_NODE} ${GREEN}● ${DIM}│ ${BLUE}CPU ${cpu} ${DIM}│ ${BLUE}MEM ${mem_out} "
+        else
+            age=$(( ${HN_AGE:-0} + _FLEET_NOW - HN_TS )); [ "$age" -lt 0 ] && age=0
+            fleet_status_age "$age"
+            node_seg=" ${BLUE}${FSN_NODE} ${RED}○ 失联 ${FSA} "
+        fi
+    else
+        node_seg=" ${BLUE}${FSN_NODE} ${DIM}? "
+    fi
+    acct_seg=''
+    if [ -n "$STATUS_ACCT" ] && fleet_status_hub_limit "$STATUS_ACCT"; then
+        status_pct_color "$HL_5H" "${FLEET_ACCOUNT_WARN_PCT:-70}" "${FLEET_ACCOUNT_CEILING:-85}"; c5=$_spc
+        status_pct_color "$HL_WK" "${FLEET_ACCOUNT_WARN_PCT:-70}" "${FLEET_ACCOUNT_CEILING:-85}"; cw=$_spc
+        acct_seg="${DIM}│ ${BLUE}◉ ${STATUS_ACCT} ${DIM}5h ${c5}${HL_5H:-–}% ${DIM}周 ${cw}${HL_WK:-–}% "
+    fi
+    age=$(( _FLEET_NOW - FSR_TS )); [ "$age" -lt 0 ] && age=0
+    _hs="${FLEET_HUB_SESSIONS_STALE:-60}"; case "$_hs" in ''|*[!0-9]*) _hs=60 ;; esac
+    if [ "$age" -gt "$_hs" ]; then
+        fleet_status_age "$age"
+        hub_seg="${DIM}│ ${BLUE}入口 ${RED}○ 失联 ${FSA} "
+    else
+        hub_seg="${DIM}│ ${BLUE}入口 ${GREEN}● "
+    fi
+    printf -v HUB_BAR '%s%s%s' "$node_seg" "$acct_seg" "$hub_seg"
+}
+
 # --- Output --- (claude count + hostname dropped — the window list and dash cover those;
 # name your tmux session after your fleet so status-left carries the title)
-printf '%s%s%s' "$machine" "$gh_seg" "$FA_BAR"
+if [ "$HUB_MODE" = 1 ]; then
+    HUB_BAR=''; status_hub_render
+    printf '%s%s%s' "$HUB_BAR" "$gh_seg" "$FA_BAR"
+else
+    printf '%s%s%s' "$machine" "$gh_seg" "$FA_BAR"
+fi
