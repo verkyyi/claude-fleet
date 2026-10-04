@@ -53,6 +53,11 @@ type nodeConn struct {
 	// admin is set once, at hello: this connection may be sent account ops
 	// (claude-fleet#1411).
 	admin bool
+	// canRead is the hello's CapRead: this node answers TypeRequest
+	// (claude-fleet#1409). Set once, before the conn is published.
+	canRead bool
+	// pending routes read replies to their waiting NodeRead.
+	pending pendingReads
 	// host is the machine as the roster names it, refreshed by heartbeats.
 	host atomic.Value // string
 }
@@ -204,7 +209,7 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	nc := &nodeConn{conn: conn, admin: hp.Admin && s.isFleetAdmin(ep.OSUser)}
+	nc := &nodeConn{conn: conn, admin: hp.Admin && s.isFleetAdmin(ep.OSUser), canRead: hp.HasCap(control.CapRead)}
 	nc.proto.Store(int64(hello.Proto))
 	nc.host.Store(ep.Hostname)
 	if hp.Admin && !nc.admin {
@@ -260,10 +265,14 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 			// The heartbeat carries the version too: a node that upgrades
 			// without reconnecting is re-judged on its next beat.
 			nc.proto.Store(int64(m.Proto))
+			now := time.Now()
 			if err := s.Store.NodeHeartbeat(ep.ID, hb.Hostname, hb.OSUser, hb.MachineID,
-				m.Proto, string(m.Payload), time.Now()); err != nil {
+				m.Proto, string(m.Payload), now); err != nil {
 				log.Printf("node %s: record heartbeat: %v", ep.ID, err)
 			}
+			// The Fleet Hub registry (claude-fleet#1409): this login's
+			// fleets, re-derived and checked before they are registered.
+			s.recordFleets(*ep, hb, nc.canRead, now)
 			if nc.admin {
 				// Each admin beat is a chance to send what is queued for
 				// this machine: a person assigned while it was offline
@@ -272,7 +281,15 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 			}
 		case control.TypeAccountResult:
 			s.applyAccountResult(ctx, conn, ep.ID, nc, m)
+		case control.TypeResult:
+			// A reply to a hub read (claude-fleet#1409).
+			nc.pending.deliver(m)
 		case control.TypeError:
+			// A refused hub read goes to its waiter; any other error is
+			// a refused account op.
+			if nc.pending.deliver(m) {
+				break
+			}
 			if nc.admin && m.Error != nil {
 				s.applyAccountRefusal(ep.ID, m)
 			}

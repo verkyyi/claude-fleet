@@ -263,3 +263,114 @@ func TestReadSysInfo(t *testing.T) {
 		}
 	}
 }
+
+// The hello advertises live reads (claude-fleet#1409), so the hub knows it may
+// ask this node for fleet_status instead of serving its last heartbeat.
+func TestNodeHelloAdvertisesReads(t *testing.T) {
+	shrinkBackoff(t)
+	f := newFakeControlHub(t)
+	runFor(t, nodeTestAgent(t, f.srv.URL, true), 300*time.Millisecond)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.hellos) == 0 {
+		t.Fatal("no hello")
+	}
+	var h control.Hello
+	json.Unmarshal(f.hellos[0].Payload, &h)
+	if !h.HasCap(control.CapRead) {
+		t.Fatalf("hello capabilities = %v, want %q", h.Capabilities, control.CapRead)
+	}
+}
+
+// answerRequest runs only the read methods, through fleet-control.py, with
+// the node's OWN machine_id; anything else is refused before it runs.
+func TestAnswerRequestServesReadsOnly(t *testing.T) {
+	a := nodeTestAgent(t, "http://unused", true)
+	script := filepath.Join(a.cfg.Home, fleetControlScript)
+	os.MkdirAll(filepath.Dir(script), 0o755)
+	os.WriteFile(script, []byte("#!/bin/sh\n"), 0o755)
+
+	var mu sync.Mutex
+	var ran []string
+	old := fleetControlCommand
+	fleetControlCommand = func(ctx context.Context, s string, stdin []byte) ([]byte, error) {
+		var req map[string]any
+		json.Unmarshal(stdin, &req)
+		mu.Lock()
+		ran = append(ran, req["method"].(string))
+		mu.Unlock()
+		switch req["method"] {
+		case "discover":
+			return []byte(`{"protocol":1,"machine_id":"m-1","result":{"machine_id":"m-1","fleets":[]}}`), nil
+		case "fleet_status":
+			if req["machine_id"] != "m-1" {
+				return []byte(`{"error":{"code":"IDENTITY_MISMATCH","message":"x"}}`), nil
+			}
+			return []byte(`{"protocol":1,"machine_id":"m-1","result":{"state":"running","workers":[]}}`), nil
+		case "config_get":
+			return []byte(`{"error":{"code":"NOT_FOUND","message":"gone"}}`), nil
+		}
+		return nil, nil
+	}
+	t.Cleanup(func() { fleetControlCommand = old })
+
+	replies := make(chan control.Message, 8)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		for {
+			var m control.Message
+			if wsjson.Read(context.Background(), c, &m) != nil {
+				return
+			}
+			replies <- m
+		}
+	}))
+	t.Cleanup(srv.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.CloseNow()
+
+	ask := func(method string) control.Message {
+		m, _ := control.New(control.TypeRequest, control.Request{Method: method, Params: json.RawMessage(`{"fleet_id":"f"}`)})
+		a.answerRequest(ctx, conn, m)
+		select {
+		case r := <-replies:
+			if r.OpID != m.OpID {
+				t.Fatalf("reply op_id %s, want %s", r.OpID, m.OpID)
+			}
+			return r
+		case <-ctx.Done():
+			t.Fatal("no reply")
+		}
+		return control.Message{}
+	}
+
+	r := ask("fleet_status")
+	var res control.Result
+	json.Unmarshal(r.Payload, &res)
+	if r.Type != control.TypeResult || res.MachineID != "m-1" || !strings.Contains(string(res.Result), `"running"`) {
+		t.Fatalf("fleet_status reply = %+v / %s", r, res.Result)
+	}
+	if r := ask("config_get"); r.Type != control.TypeError || r.Error.Code != "NOT_FOUND" {
+		t.Fatalf("config_get refusal = %+v; want fleet-control.py's own code passed through", r)
+	}
+	mu.Lock()
+	before := len(ran)
+	mu.Unlock()
+	if r := ask("submit"); r.Type != control.TypeError || r.Error.Code != control.CodeRefused {
+		t.Fatalf("submit = %+v; want REFUSED", r)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(ran) != before {
+		t.Fatalf("a refused method still ran fleet-control.py: %v", ran[before:])
+	}
+}

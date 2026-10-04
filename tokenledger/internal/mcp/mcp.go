@@ -111,7 +111,7 @@ func (s *mcpServer) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := s.dispatch(&req)
+	resp := s.dispatch(r, &req)
 	if resp == nil {
 		// A notification (no id) gets no body, per JSON-RPC.
 		w.WriteHeader(http.StatusAccepted)
@@ -125,7 +125,7 @@ func writeRPC(w http.ResponseWriter, resp *response) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-func (s *mcpServer) dispatch(req *request) *response {
+func (s *mcpServer) dispatch(hr *http.Request, req *request) *response {
 	out := &response{JSONRPC: "2.0", ID: req.ID}
 
 	switch req.Method {
@@ -142,9 +142,13 @@ func (s *mcpServer) dispatch(req *request) *response {
 	case "ping":
 		out.Result = map[string]any{}
 	case "tools/list":
-		out.Result = map[string]any{"tools": toolSpecs()}
+		tools := toolSpecs()
+		if s.api.Fleet {
+			tools = append(tools, fleetToolSpecs()...)
+		}
+		out.Result = map[string]any{"tools": tools}
 	case "tools/call":
-		out.Result, out.Error = s.callTool(req.Params)
+		out.Result, out.Error = s.callTool(hr, req.Params)
 	default:
 		out.Error = &rpcError{codeMethodNotFound, "unknown method " + req.Method}
 	}
@@ -688,13 +692,21 @@ type callParams struct {
 	Arguments map[string]any `json:"arguments"`
 }
 
-func (s *mcpServer) callTool(raw json.RawMessage) (any, *rpcError) {
+func (s *mcpServer) callTool(hr *http.Request, raw json.RawMessage) (any, *rpcError) {
 	var p callParams
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return nil, &rpcError{codeInvalidParams, "malformed tool call: " + err.Error()}
 	}
 
-	payload, err := s.run(p.Name, p.Arguments)
+	var payload any
+	var err error
+	if s.api.Fleet && isFleetTool(p.Name) {
+		// Scoped to the caller, so it needs the request's identity — which
+		// is why it is not one more case in run.
+		payload, err = s.api.CallFleetTool(hr, p.Name, p.Arguments)
+	} else {
+		payload, err = s.run(p.Name, p.Arguments)
+	}
 	if err != nil {
 		// A tool-level failure is reported inside the result with isError, not
 		// as a protocol error: the model should see the message and adapt
@@ -1357,4 +1369,70 @@ func parseWhen(s string, now time.Time) (time.Time, bool) {
 		return now.Add(-d), true
 	}
 	return time.Time{}, false
+}
+
+// --- fleet (CCQUOTA_FLEET=1 only) ---------------------------------------
+
+// fleetCaveat rides every fleet tool: what the answer is made of, and whose.
+const fleetCaveat = " Read-only. Scoped to the caller: the shared viewer token and fleet " +
+	"admins see every machine, any other viewer only the logins granted to them. IDs are " +
+	"claude-fleet's own (fleet UUID derived from the machine; worker_id = <fleet UUID>/[<repo>:]issue-N " +
+	"or scratch-N) and are the same ones the SSH-era fleet-hub.py issued. A machine whose " +
+	"control channel went quiet is reported as availability=lost with its last-seen windows, " +
+	"never as idle."
+
+var fleetIDProp = map[string]any{"type": "string", "description": "Fleet UUID, from fleet_list."}
+
+// fleetToolSpecs are listed only when the hub runs the fleet module, so a hub
+// without it advertises exactly the tools it always did.
+func fleetToolSpecs() []toolSpec {
+	return []toolSpec{
+		{
+			Name:  "fleet_list",
+			Title: "Fleets on every machine",
+			Description: "Every claude-fleet fleet on every machine that reports to this hub, with its " +
+				"machine, login, window count and how fresh the reading is. refresh=true re-reads each " +
+				"connected machine live first." + fleetCaveat,
+			InputSchema: obj(map[string]any{"refresh": map[string]any{"type": "boolean",
+				"description": "Ask each connected machine for a fresh window list first (default false: the heartbeat registry, a few seconds old)."}}),
+		},
+		{
+			Name:  "fleet_sessions",
+			Title: "My sessions, across machines",
+			Description: "Every worker and scratch session in every visible fleet, on every machine, as one " +
+				"list — each with its durable worker_id, machine, fleet and fleet-control.py's window record." + fleetCaveat,
+			InputSchema: obj(map[string]any{}),
+		},
+		{
+			Name:  "fleet_status",
+			Title: "One fleet's windows",
+			Description: "One fleet's windows: asked of its machine live when connected (source=live), else " +
+				"the last heartbeat's list with its age (source=heartbeat)." + fleetCaveat,
+			InputSchema: obj(map[string]any{"fleet_id": fleetIDProp}, "fleet_id"),
+		},
+		{
+			Name:  "config_get",
+			Title: "One fleet's managed configuration",
+			Description: "The fleet's remotely managed settings and their revision, read live from its " +
+				"machine (UNAVAILABLE when it is not connected)." + fleetCaveat,
+			InputSchema: obj(map[string]any{"fleet_id": fleetIDProp}, "fleet_id"),
+		},
+		{
+			Name:  "operation_get",
+			Title: "One fleet operation",
+			Description: "An operation from the hub's journal, reconciled with its machine when it has not " +
+				"finished; status=unknown when that machine cannot be asked — never retried." + fleetCaveat,
+			InputSchema: obj(map[string]any{"operation_id": map[string]any{"type": "string",
+				"description": "Operation UUID returned by the write that started it."}}, "operation_id"),
+		},
+	}
+}
+
+func isFleetTool(name string) bool {
+	for _, t := range api.FleetTools {
+		if t == name {
+			return true
+		}
+	}
+	return false
 }

@@ -45,11 +45,15 @@ type Node struct {
 	StatusJSON string `json:"-"`
 }
 
-// EnsureNodes creates the node roster and the principal/account tables
-// (claude-fleet#1411). Idempotent.
+// EnsureNodes creates the node roster, the fleet registry (claude-fleet#1409)
+// and the principal/account tables (claude-fleet#1411). Idempotent.
 func (s *Store) EnsureNodes() error {
 	if _, err := s.write.Exec(nodesSchema); err != nil {
 		return fmt.Errorf("create nodes table: %w", err)
+	}
+	// The Fleet Hub registry rides the same switch (claude-fleet#1409).
+	if _, err := s.write.Exec(fleetSchema); err != nil {
+		return fmt.Errorf("create fleet registry tables: %w", err)
 	}
 	return s.ensureFleetAccounts()
 }
