@@ -353,7 +353,7 @@ fi
 if [ "$NOREPO" = 1 ]; then
   slug=norepo; wt="$HOME"                        # no worktree: the agent runs in $HOME
 elif [ "$warm" = 0 ]; then
-  alloc=$(fleet_scratch_alloc "$MAIN" "$BASE") || alloc=""
+  alloc=$(fleet_scratch_alloc "$MAIN" "$BASE" "$SESS") || alloc=""
   if [ -n "$alloc" ]; then slug=${alloc%%	*}; wt=${alloc#*	}; fi
   [ -n "$slug" ] || { refuse "raw: could not create a scratch worktree"; exit 1; }
 fi
@@ -434,6 +434,7 @@ fi
 # pre-warmed with no requester, so its origin is decided at CLAIM time, here.
 [ -n "$ORIGIN" ] && TM set-window-option -t "$win" @origin "$ORIGIN" 2>/dev/null
 [ -n "$ORIGIN" ] && fleet_stamp_origin_wid "$SESS" "$win" "$ORIGIN" "$SOCK"   # parent's worker_id (#1420)
+[ -n "$ORIGIN" ] && fleet_stamp_origin_gen "$SESS" "$win" "$ORIGIN" "$SOCK"   # …and its generation (#1538)
 # Window handle (issue #566), likewise on BOTH paths: a warm-pool window is parked
 # in the holding session with no handle, and only becomes a fleet window here at
 # claim time. Best-effort — the dash backfills a window that ends up without one.

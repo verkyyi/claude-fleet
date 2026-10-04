@@ -250,4 +250,85 @@ eq "grouping: a hub root's tree cell is blank too" "  " "$(tree_of ' rootB')"
 rootA_line=$(row_of ' rootA')
 not_contains "grouping: a hub root has no tag" "$rootA_line" "↳"
 
+# ============================================================================
+# D. GENERATIONS (issue #1538): the last holder of a recycled key is not this one
+# ============================================================================
+# scratch-6 has been allocated again (its `.gen` line); four children report:
+#   OLD      @origin_gen of the previous generation        → retired book, not sent
+#   RETIRED  @origin moved to @origin_retired at the mint  → retired book, not sent
+#   UNSTAMP  no @origin_gen (pre-#1538 / a restore)         → taken as before
+#   NEW      @origin_gen = the current generation          → the live book, gen-tagged
+# …and the parent MAP skips a link filed by the previous scratch-6, so the climb
+# never relays up the old holder's ancestry. Then the mod inbox: a new server
+# empties what the last one left.
+RP="$BIN/fleet-report-parent.sh"
+tmux new-session -d -s fleetD -x 200 -y 50 -c "$WORK" 'sleep 300' || fail "could not start 'fleetD' session"
+CDD="$FLEET_CONF_DIR/fleets/fleetD/children"; mkdir -p "$CDD" "$WORK/wt/repo-scratch-6"
+dwin() { # <name> [issue] → window id
+  local w; w=$(tmux new-window -d -P -F '#{window_id}' -t fleetD: -n "$1" -c "$WORK" 'sleep 300')
+  [ -n "${2:-}" ] && tmux set-window-option -t "$w" @issue "$2"
+  printf '%s' "$w"
+}
+gP=$(dwin gen-parent); tmux set-window-option -t "$gP" @worktree "$WORK/wt/repo-scratch-6"
+gOLD=$(dwin gen-old 601);  tmux set-window-option -t "$gOLD" @origin scratch-6; tmux set-window-option -t "$gOLD" @origin_gen 1.1
+gRET=$(dwin gen-ret 602);  tmux set-window-option -t "$gRET" @origin_retired 'scratch-6#1.1'
+gUNS=$(dwin gen-uns 603);  tmux set-window-option -t "$gUNS" @origin scratch-6
+GEN="$(date +%s).7"
+printf 'scratch-6\t1.1\nscratch-6\t%s\n' "$GEN" > "$CDD/.gen"
+gNEW=$(dwin gen-new 604);  tmux set-window-option -t "$gNEW" @origin scratch-6
+( . "$LIB"; fleet_stamp_origin_gen fleetD "$gNEW" scratch-6 fleetD )
+eq "gen: a spawn stamps the parent's current generation" "$GEN" "$(tmux display-message -p -t "$gNEW" '#{@origin_gen}')"
+eq "gen: fleet_key_gen reads the LAST mint" "$GEN" "$( . "$LIB"; fleet_key_gen fleetD scratch-6 )"
+
+rp() { bash "$RP" -L fleetD --win "$1" --state blocked --summary "gen leg" 2>&1; }
+out=$(rp "$gOLD")
+contains "gen: a previous generation's child is told why" "$out" "later generation"
+contains "gen: …its report lands in the retired book" "$(cat "$CDD/scratch-6.ndjson.1.1" 2>/dev/null)" '"child": "issue-601"'
+out=$(rp "$gRET")
+contains "gen: an @origin_retired child is not hub-spawned — it files to its book" "$(cat "$CDD/scratch-6.ndjson.1.1" 2>/dev/null)" '"child": "issue-602"'
+out=$(rp "$gUNS")
+contains "gen: an unstamped child is taken as it always was" "$(cat "$CDD/scratch-6.ndjson" 2>/dev/null)" '"child": "issue-603"'
+out=$(rp "$gNEW")
+not_contains "gen: the current generation's child is not turned away" "$out" "later generation"
+cur=$(cat "$CDD/scratch-6.ndjson" 2>/dev/null)
+contains "gen: …it lands in the live book" "$cur" '"child": "issue-604"'
+contains "gen: …tagged with the generation it was filed under" "$cur" "\"gen\": \"$GEN\""
+for k in 601 602; do not_contains "gen: the live book never takes issue-$k" "$cur" "issue-$k"; done
+# Degenerate: no `.gen` at all ⇒ a report row carries no generation field.
+mv "$CDD/.gen" "$CDD/.gen.off"
+tmux set-window-option -u -t "$gNEW" @origin_gen
+out=$(bash "$RP" -L fleetD --win "$gNEW" --state merged 2>&1)
+last=$(tail -1 "$CDD/scratch-6.ndjson")
+not_contains "gen: (no .gen) the row has no gen field" "$last" '"gen"'
+not_contains "gen: (no .gen) …nor child_gen" "$last" 'child_gen'
+mv "$CDD/.gen.off" "$CDD/.gen"
+
+# The map: issue-700 holds a link from the PREVIOUS scratch-6 (child_gen 1.1) and a
+# legacy row for scratch-8 (never re-minted ⇒ generation 0, kept).
+printf '%s\n' '{"seq":1,"child":"scratch-6","child_gen":"1.1","state":"MERGED"}' \
+  '{"seq":2,"child":"scratch-8","state":"MERGED"}' > "$CDD/issue-700.ndjson"
+gGP=$(dwin gen-gp 700)
+tmux kill-window -t "$gP"           # scratch-6 reaped: the climb goes through the map
+map=$(cat "$( . "$LIB"; fleet_origin_map fleetD )")
+not_contains "gen: the map skips the previous scratch-6's parent link" "$map" "scratch-6	issue-700"
+contains "gen: …and keeps a generation-0 key's" "$map" "scratch-8	issue-700"
+anc=$( . "$LIB"; fleet_live_ancestor scratch-6 fleetD fleetD ); rc=$?
+eq "gen: no climb up the old holder's ancestry (rc 1)" "1|" "$rc|$anc"
+printf '%s\n' "{\"seq\":3,\"child\":\"scratch-6\",\"child_gen\":\"$GEN\",\"state\":\"MERGED\"}" >> "$CDD/issue-700.ndjson"
+map=$(cat "$( . "$LIB"; fleet_origin_map fleetD )")
+contains "gen: the current scratch-6's own link is kept" "$map" "scratch-6	issue-700"
+anc=$( . "$LIB"; fleet_live_ancestor scratch-6 fleetD fleetD )
+eq "gen: …and the climb follows it" "issue-700	$gGP" "$anc"
+
+# The mod inbox (#1337): a pane id is per SERVER lifetime — a dir left by the last
+# server is emptied before anything is posted to this one.
+IB="$FLEET_CONF_DIR/global/mod-inbox/fleetD"; mkdir -p "$IB/7"
+printf '{"cmd":"/clear"}\n' > "$IB/7/1-1-1.json"; printf '1.1\n' > "$IB/.server"
+( . "$LIB"; fleet_mod_inbox_reset fleetD )
+eq "gen: a restarted server's inbox has no leftover command" no "$([ -e "$IB/7/1-1-1.json" ] && echo yes || echo no)"
+eq "gen: …and remembers the server it now belongs to" "$(tmux display-message -p '#{pid}.#{start_time}')" "$(cat "$IB/.server")"
+mkdir -p "$IB/7"; printf '{"cmd":"/clear"}\n' > "$IB/7/2-2-2.json"
+( . "$LIB"; fleet_mod_inbox_reset fleetD )
+eq "gen: the same server keeps a pending command" yes "$([ -e "$IB/7/2-2-2.json" ] && echo yes || echo no)"
+
 printf 'origin-selftest OK (%d checks)\n' "$CHECKS"

@@ -585,6 +585,10 @@ fleet_wid_stamp "$win" "$SOCK" >/dev/null 2>&1 || :
 # the parent lives on another machine, so it cannot be derived from --origin.
 if [ -n "$ORIGIN_WID" ]; then TM set-window-option -t "$win" @origin_wid "$ORIGIN_WID" 2>/dev/null
 elif [ -n "$ORIGIN" ]; then fleet_stamp_origin_wid "$SESS" "$win" "$ORIGIN" "$SOCK"; fi
+# …and the generation of that key it was spawned under (issue #1538), so a
+# recycled scratch number never takes this child's report as its own. A parent on
+# another machine (ORIGIN_WID) has no generation here.
+[ -n "$ORIGIN" ] && [ -z "$ORIGIN_WID" ] && fleet_stamp_origin_gen "$SESS" "$win" "$ORIGIN" "$SOCK"
 
 # (The sub-second cross-machine tie-break that re-read the ▶ claiming comment ids
 # was retired with the claiming marker in issue #283 — the assignee is now the

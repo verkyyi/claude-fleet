@@ -106,7 +106,7 @@ case "$cmd" in
     stale=$(git -C "$FLEET_MAIN" worktree list --porcelain \
       | awk -v b="refs/heads/$branch" '/^worktree /{wt=$2} /^branch /{if ($2==b) print wt}')
     [ -z "$stale" ] || die "branch $branch is already checked out at $stale on this target — clean that up first (a previous move may have left it)"
-    alloc=$(fleet_scratch_alloc "$FLEET_MAIN" "${FLEET_BASE_BRANCH:-master}") || die 'scratch-N allocation failed'
+    alloc=$(fleet_scratch_alloc "$FLEET_MAIN" "${FLEET_BASE_BRANCH:-master}" "$sess") || die 'scratch-N allocation failed'
     slug="${alloc%%$'\t'*}"; wt="${alloc#*$'\t'}"
     if [ "$branch" != "$slug" ]; then
       ok=0
