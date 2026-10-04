@@ -12,7 +12,13 @@
 #   --refresh   one fetch → $FLEET_C/global/remote_<sess> for every fleet on this
 #               machine, plus the C1 locator cache control/hub-workers.tsv. A failed
 #               fetch leaves the last cache in place: its rows go on rendering, and
-#               once it is older than FLEET_HUB_SESSIONS_STALE they read 失联.
+#               once global/hub_ok — the epoch of the last round that stood (a
+#               200 taken, a 304 restamped), written here and nowhere else — is
+#               older than FLEET_HUB_SESSIONS_STALE they read 失联 (issue #1483,
+#               EPIC #1479 C4: the rows, the bar and the remote-row actions all
+#               read that one file through fleet_status_hub_lost, none probes
+#               the hub; the next round that stands flips them back, nothing to
+#               restart). A cache from before hub_ok is judged by its own #ts.
 #               The same round writes the status bar's two summaries (issue
 #               #1482): global/hub_nodes (/v1/nodes) and global/hub_limits
 #               (/v1/limits) — on their own cadence, FLEET_HUB_SUMMARY_EVERY
@@ -255,9 +261,19 @@ fetch() {
   return 1
 }
 
-# restamp <local-fleets> — a 304's only write: the #ts line of every fleet's cache
+# hub_ok <epoch> — the ONE word on 「入口通不通」 (issue #1483, EPIC #1479 C4):
+# written on every round whose answer stood (a 200 taken in refresh, a 304
+# restamped below), never on a failed one — so its age IS the hub's silence.
+# fleet_status_hub_ok / fleet_status_hub_lost (fleet-status-lib.sh) are the
+# readers; a cache from before this file is judged by its own #ts there.
+hub_ok() {
+  printf '%s\n' "$1" > "$G/hub_ok.new" 2>/dev/null && mv -f "$G/hub_ok.new" "$G/hub_ok"
+  return 0
+}
+
+# restamp <local-fleets> — a 304's only writes: the #ts line of every fleet's cache
 # (the rows and the #me/#node header lines are unchanged, the hub is answering),
-# plus the C1 locator cache's mtime, which _fleet_hub_node trusts by age.
+# hub_ok, plus the C1 locator cache's mtime, which _fleet_hub_node trusts by age.
 restamp() {
   local lf="$1" now sess _c f tmp
   now=$(date +%s)
@@ -268,12 +284,13 @@ restamp() {
     if { printf '#ts\037%s\n' "$now"; tail -n +2 "$f"; } > "$tmp" 2>/dev/null; then mv -f "$tmp" "$f"; else rm -f "$tmp"; fi
   done < "$lf"
   [ -f "$FLEET_CONF_DIR/control/hub-workers.tsv" ] && touch "$FLEET_CONF_DIR/control/hub-workers.tsv" 2>/dev/null
+  hub_ok "$now"
   return 0
 }
 
 refresh() {
   hub_on || return 0
-  local json sess _c u lf mf repos m rc
+  local json sess _c u lf mf repos m rc now ok
   mkdir -p "$G" 2>/dev/null || return 1
   json=$(mktemp "$G/hubsess.json.XXXXXX") || return 1
   lf=$(mktemp "$G/hubsess.local.XXXXXX") || { rm -f "$json"; return 1; }
@@ -303,12 +320,18 @@ EOF
   fi
   if [ "$rc" != 0 ] || [ ! -s "$json" ]; then
     rm -f "$json" "$lf" "$mf"
-    printf 'fleet-hub-sessions: hub unreachable — keeping the last cache (its rows read 失联 once stale)\n' >&2
+    # one line, with how long the hub has been silent (hub_ok is left as it was)
+    ok=''; { read -r ok _c < "$G/hub_ok"; } 2>/dev/null || ok=''
+    case "$ok" in
+      ''|*[!0-9]*) printf 'fleet-hub-sessions: hub unreachable — keeping the last cache (its rows read 失联 once hub_ok is older than %ss)\n' "${FLEET_HUB_SESSIONS_STALE:-60}" >&2 ;;
+      *) printf 'fleet-hub-sessions: hub unreachable for %ss — keeping the last cache (its rows read 失联 past %ss; the next answer flips them back)\n' "$(( $(date +%s) - ok ))" "${FLEET_HUB_SESSIONS_STALE:-60}" >&2 ;;
+    esac
     return 1
   fi
+  now=$(date +%s)
   python3 - "$json" "$lf" "$G" "$FLEET_C" "$FLEET_CONF_DIR/control/hub-workers.tsv" \
     "${FLEET_HUB_SESSIONS_USER:-$(id -un 2>/dev/null)}" "$(hostname 2>/dev/null)" \
-    "${FLEET_NODE_ALIASES:-}" "$(date +%s)" "$mf" "$BIN" <<'PY'
+    "${FLEET_NODE_ALIASES:-}" "$now" "$mf" "$BIN" <<'PY'
 import json, os, re, sys, tempfile
 from datetime import datetime, timezone
 jpath, lpath, gdir, cdir, wpath, user, host, aliases, now, mpath, bindir = sys.argv[1:12]
@@ -488,7 +511,8 @@ PY
   rc=$?
   rm -f "$json" "$lf" "$mf"
   # A cache that failed to write is not vouched for: the next fetch takes the body.
-  [ "$rc" = 0 ] || rm -f "$ETAGF"
+  # One that stood is the hub answering: hub_ok (#1483).
+  if [ "$rc" = 0 ]; then hub_ok "$now"; else rm -f "$ETAGF"; fi
   return "$rc"
 }
 
@@ -557,7 +581,7 @@ refresh_summaries() {
   local nj lj now last=''
   mkdir -p "$G" 2>/dev/null || return 1
   now=$(date +%s)
-  read -r last < "$SUMF" 2>/dev/null || last=''
+  { read -r last < "$SUMF"; } 2>/dev/null || last=''    # braced: a missing file is silent (#1483 fix in passing)
   case "$last" in ''|*[!0-9]*) ;; *) [ $(( now - last )) -lt "$SUMMARY_EVERY" ] && return 0 ;; esac
   printf '%s\n' "$now" > "$SUMF"
   nj=$(mktemp "$G/hubnodes.json.XXXXXX") || return 1

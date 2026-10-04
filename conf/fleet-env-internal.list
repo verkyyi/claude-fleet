@@ -287,7 +287,7 @@ FLEET_HUB_SESSIONS_CMD             seam: command printing the hub's fleet_sessio
 FLEET_HUB_SESSIONS_EVERY           knob: internal pacing, seconds between the remote-sessions refreshes (fleet-hub-sessions.sh, 10, #1423)
 FLEET_HUB_SESSIONS_WATCHED_EVERY   knob: internal pacing, seconds between the refreshes while a client is attached to any session of this fleet — the loop sends If-None-Match so an unchanged hub answers 304 (fleet-hub-sessions.sh, 2, #1481)
 FLEET_HUB_SESSIONS_LOOP_SECS       knob: internal budget, how long one detached refresh loop lives before the next collector tick restarts it (70, #1423)
-FLEET_HUB_SESSIONS_STALE           knob: internal budget, seconds after which the dash reads every remote row as 失联 (tmux-dashboard-rows.sh, 60, #1423)
+FLEET_HUB_SESSIONS_STALE           knob: internal budget, seconds of hub silence (global/hub_ok, else the cache's #ts) after which the dash reads every remote row as 失联, the bar `入口 ○`, and a remote-row action refuses — fleet_status_hub_lost in fleet-status-lib.sh (60, #1423 #1483)
 FLEET_REMOTE_BIN                   knob: the fleet's bin/ on the other machine for a proxy window, default .claude/fleet/bin (fleet-remote-view.sh, #1424)
 FLEET_REMOTE_VIA_HUB               knob: 0 = a proxy window never falls back to the hub relay (fleet-remote-view.sh, #1424)
 FLEET_REMOTE_SSH_CMD               seam: the ssh program a proxy window runs (fleet-remote-view-selftest.sh)

@@ -341,8 +341,9 @@ WLIST=${WLIST//\\037/$US}
 #   index      90001+, after this machine's windows of the same rank
 #   @wid       the machine the row is on (`m4`; sidebar field 9, never drawn —
 #              the rows look alike), `m4!` once that machine is lost — or the
-#              cache is older than FLEET_HUB_SESSIONS_STALE (60s): the row
-#              stays, dimmed, under its machine's 失联 heading
+#              hub itself has been silent longer than FLEET_HUB_SESSIONS_STALE
+#              (60s; global/hub_ok, #1483): the row stays, dimmed, under its
+#              machine's 失联 heading
 #   @expand    1, so a remote parent never hides its subtree behind a caret no key
 #              can open
 # Off, or no cache: not one extra line, and no file read at all when off.
@@ -358,6 +359,16 @@ WLIST=${WLIST//\\037/$US}
 # the hub's. The default, `local`, is today's path: the cache's local rows are
 # skipped and this machine's rows come from tmux. Sidebar only — the hub list
 # keeps its local rows; and with the hub off, or no cache, `hub` is `local`.
+# THE HUB SILENT (issue #1483, EPIC #1479 C4): 入口通不通 is ONE word —
+# global/hub_ok, written by fleet-hub-sessions.sh on every round that stood, read
+# through fleet_status_hub_lost (fleet-status-lib.sh: the bar and the remote-row
+# actions read the same file; a cache from before hub_ok is judged by its #ts).
+# Lost ⇒ every other machine's row is 失联 (below, as before), and on the hub
+# source this machine's rows come from tmux again — the local-source code, so a
+# window opened or closed during the silence shows at once, and a row's state is
+# its live tmux state as always: the hub's word on WHICH local rows exist is as
+# old as its silence, this machine's tmux is not. The next round that stands
+# rewrites hub_ok and the hub's row set is back — nothing to restart.
 # The cache's header lines (#1475) feed the MACHINE STATUS LINE and the LOST
 # GROUPS: `#me` this machine's label; one `#node` per other machine — label,
 # online|lost, your session count there, the hub's last observation of it. A
@@ -369,13 +380,17 @@ RME=''; RN_IDX=' '; RN_K=0; RCNT=0; LGRP_BASE=1000000
 HUBSRC=0; [ "$SIDEBAR" = 1 ] && [ "${FLEET_SIDEBAR_SOURCE:-local}" = hub ] && HUBSRC=1
 if [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ -n "${FLEET_SESSION:-}" ] && [ -s "$G/remote_$FLEET_SESSION" ]; then
   RLIST=''; _rn=90000; _rts=0; _rstale=0; _rlostn=' '; _rlostw=' '; _rrows=(); _lwids=' '
-  RSTALE=${FLEET_HUB_SESSIONS_STALE:-60}; case "$RSTALE" in ''|*[!0-9]*) RSTALE=60 ;; esac
+  # 失联 is decided ONCE, off global/hub_ok (#1483) — the cache's own #ts only
+  # for a cache from before that file existed (fleet_status_hub_ok's fallback)
+  # shellcheck disable=SC2034  # FLEET_STATUS_G is read by the lib sourced on the same line
+  FLEET_STATUS_G="$G"; . "$BIN/fleet-status-lib.sh"
+  fleet_status_remote_head "$FLEET_SESSION"; fleet_status_hub_ok "$FSR_TS"
+  fleet_status_hub_lost "$NOW" && _rstale=1
   # `local` and `wid` (fields 11/12, #1480) are named so a new cache's needs field
   # stays its own; a cache older than #1480 leaves them empty.
   while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid; do
     case "$r_wid" in
-      '#ts')   _rts=$r_node; case "$_rts" in ''|*[!0-9]*) _rts=0 ;; esac
-               [ $(( NOW - _rts )) -gt "$RSTALE" ] && _rstale=1; continue ;;
+      '#ts')   _rts=$r_node; case "$_rts" in ''|*[!0-9]*) _rts=0 ;; esac; continue ;;
       '#me')   RME=$r_node; continue ;;
       '#node') [ -n "$r_node" ] || continue
                [ "$_rstale" = 1 ] && r_av=lost
@@ -415,10 +430,12 @@ if [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ -n "${FLEET_SESSION:-}" ] && [ -s "$G/remo
   done
   unset _rrows _rr
   WLIST="$RLIST$WLIST"
-  if [ "$HUBSRC" = 1 ]; then
+  if [ "$HUBSRC" = 1 ] && [ "$_rstale" != 1 ]; then
     # the hub source (#1480): of this fleet's own lines keep the windows the cache
     # names, the panels (they carry @repo_fold) and the sidebar's own window; a
-    # remote line passes, another session's line is pass B's to skip
+    # remote line passes, another session's line is pass B's to skip. Not while
+    # the hub is silent (#1483): then every one of this fleet's own lines stays,
+    # as on the local source — the cache cannot say which windows exist NOW.
     _hl=''
     while IFS= read -r _ln; do
       [ -n "$_ln" ] || continue
@@ -1258,6 +1275,8 @@ if [ -n "$RME" ]; then
     _mins=0
     if [ "${RN_AV[_k]}" = lost ]; then
       _seen=${RN_SEEN[_k]}; [ "$_seen" -gt 0 ] || _seen=$_rts
+      # the hub itself silent (#1483): unheard at least since its last answer
+      [ "${_rstale:-0}" = 1 ] && [ "${FSH_TS:-0}" -gt 0 ] && [ "$_seen" -gt "$FSH_TS" ] && _seen=$FSH_TS
       [ "$_seen" -gt 0 ] && [ "$NOW" -gt "$_seen" ] && _mins=$(( (NOW - _seen) / 60 ))
       _sl+=" · ○ ${RN_LABEL[_k]} ${RN_N[_k]}"
       [ "$_mins" -gt 0 ] && _sl+=" · $(fleet_ui_t node_silent_fmt "$_mins")"

@@ -1378,6 +1378,38 @@ try:
     r = subprocess.run(['bash', str(bin_dir / 'fleet-sidebar-remote.sh'), 'stop', 'fleet-test', w1],
                        env=env_w, text=True, capture_output=True, timeout=30)
     check(r.returncode == 0 and len(writes.read_text().splitlines()) == 3, 'a local @ id reached the hub write client')
+    # 入口失联 (issue #1483, EPIC #1479 C4): global/hub_ok older than
+    # FLEET_HUB_SESSIONS_STALE — the one word the rows and the bar read too — and
+    # no action is sent: the popups say 入口失联 on stderr before asking anything,
+    # the detached ones toast it (tmux's display-message, not asserted), the menu
+    # title carries it, «新建到 m4…» is greyed with the reason, the actions stay
+    # listed. A fresh hub_ok brings everything back — nothing restarted.
+    (cache / 'hub_ok').write_text('%d\n' % (int(time.time()) - 300))
+    n_writes = len(writes.read_text().splitlines())
+    r = subprocess.run(['bash', str(bin_dir / 'fleet-sidebar-remote.sh'), 'message', 'fleet-test', remote_wid],
+                       env=env_w, text=True, input='hello\n', capture_output=True, timeout=30)
+    check(r.returncode == 0 and '入口失联 5m，稍后再试' in r.stderr and '发给' in r.stderr,
+          'the message popup did not refuse with 入口失联 while the hub is silent: %s' % r.stderr)
+    for action in ('stop', 'reap', 'answer'):
+        r = subprocess.run(['bash', str(bin_dir / 'fleet-sidebar-remote.sh'), action, 'fleet-test', remote_wid],
+                           env=env_w, text=True, input='y', capture_output=True, timeout=30)
+        check(r.returncode == 0, 'fleet-sidebar-remote.sh %s while the hub is silent failed: %s' % (action, r.stderr))
+    check(len(writes.read_text().splitlines()) == n_writes, 'a hub write went out while the hub is silent: %r' % writes.read_text())
+    printed = command(['bash', str(bin_dir / 'fleet-sidebar.sh'), 'menu', 'fleet-test', remote_wid, '--print']).stdout
+    title = next((l.split('\t', 1)[1] for l in printed.splitlines() if l.startswith('title\t')), '')
+    check(title == '侧边栏 · 在 m4 · 入口失联 5m', 'the remote menu title does not say the hub is silent: %r' % title)
+    lost_items, lost_cmds = menu_items(remote_wid), menu_commands(remote_wid)
+    check(lost_items.get('1') == '-新建到 m4… · 入口失联 5m' and lost_cmds.get('1') == '',
+          '«new task on m4» is not greyed with the reason while the hub is silent: %r %r' % (lost_items.get('1'), lost_cmds.get('1')))
+    check({'m', 'a', 'q', 'c', 'x'} <= set(lost_items) and all('fleet-sidebar-remote.sh' in lost_cmds[k] for k in 'maqcx'),
+          'the remote row actions left the menu while the hub is silent: %r' % lost_items)
+    check(menu_items(w1).get('1') == '-新建到 m4… · 入口失联 5m', 'the local menu still offers «new task on m4» while the hub is silent: %r' % menu_items(w1).get('1'))
+    (cache / 'hub_ok').write_text('%d\n' % int(time.time()))
+    check(menu_items(remote_wid).get('1') == '新建到 m4…', '«new task on m4» did not come back with a fresh hub_ok: %r' % menu_items(remote_wid).get('1'))
+    r = subprocess.run(['bash', str(bin_dir / 'fleet-sidebar-remote.sh'), 'stop', 'fleet-test', remote_wid],
+                       env=env_w, text=True, capture_output=True, timeout=30)
+    check(r.returncode == 0 and len(writes.read_text().splitlines()) == n_writes + 1, 'a write did not go out once hub_ok is fresh again: %s' % r.stderr)
+    (cache / 'hub_ok').unlink()
     conf.write_text(saved_conf)
     (cache / 'remote_fleet-test').unlink()
     # Degenerate (CLAUDE.md): with no cache the menus are the one-machine menus —

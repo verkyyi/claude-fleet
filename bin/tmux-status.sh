@@ -14,13 +14,17 @@
 #   1. the machine the current window's session is on — this one for a local
 #      window (its live CPU/MEM/DSK, as above), the OTHER machine for a proxy
 #      window (`@remote`, fleet-remote-view.sh): `● ` + its load and memory off
-#      the hub's cache, `○ 失联 3m` when the hub calls it lost, `?` when the
-#      cache has no row for it;
+#      the hub's cache, `○ 失联 3m` when the hub calls it lost — or when the hub
+#      itself is silent (#1483): nothing here can hear that machine, so its word
+#      is as old as the silence — `?` when the cache has no row for it;
 #   2. the account the window runs on (`@cc_account`) with its 5h / week quota
 #      off the hub's limits cache — omitted when neither knows it;
-#   3. the hub itself: `●` while its cache is fresh, `○ 失联 Nm` once it is older
-#      than FLEET_HUB_SESSIONS_STALE (60s) — the same clock the sidebar's lost
-#      groups use.
+#   3. the hub itself: `●` while global/hub_ok — fleet-hub-sessions.sh's stamp of
+#      the last round that stood (issue #1483, EPIC #1479 C4) — is fresh, `○ 失联
+#      Nm` once it is older than FLEET_HUB_SESSIONS_STALE (60s): the ONE rule,
+#      fleet_status_hub_lost, that the sidebar's lost groups and the remote-row
+#      actions read too. A local window's chip keeps its live readings whatever
+#      the hub does: 本机照常.
 #   The window list goes blank in hub mode and comes back when it leaves
 #   (fleet_status_window_list). The cue is the `k=v` args the conf's status-right
 #   passes from the CLIENT'S CURRENT WINDOW (`sess= win= remote= acct= wsf= wscf=
@@ -329,7 +333,11 @@ status_pct_color() {
     else _spc=$GREEN; fi
 }
 status_hub_render() {
-    local me h a node_seg acct_seg hub_seg cpu lp lf centi mem_out c5 cw age
+    local me h a node_seg acct_seg hub_seg cpu lp lf centi mem_out c5 cw age hub_lost hub_fsa have
+    # 入口通不通, decided once (#1483): global/hub_ok, else this cache's own #ts
+    fleet_status_hub_ok "$FSR_TS"
+    hub_lost=0; hub_fsa=''
+    if fleet_status_hub_lost "$_FLEET_NOW"; then hub_lost=1; fleet_status_age "$FSH_AGE"; hub_fsa=$FSA; fi
     # this machine's label: the cache's #me, else FLEET_NODE_ALIASES over $HOSTNAME
     me=$FSR_ME
     if [ -z "$me" ]; then
@@ -337,30 +345,35 @@ status_hub_render() {
         for a in ${FLEET_NODE_ALIASES:-}; do case "$a" in "$h="*) me=${a#*=} ;; esac; done
     fi
     fleet_status_node "$STATUS_REMOTE" "$me"
+    have=0
     if [ "$FSN_KIND" = local ]; then
         # here: the live readings, same numbers and colours as the plain bar
         node_seg=" ${BLUE}${FSN_NODE} ${GREEN}● ${DIM}│${machine}"
-    elif fleet_status_hub_node "$FSN_NODE"; then
-        if [ "$HN_AV" = online ]; then
-            # load per core as a percentage, through the CPU bands: `1.57` on 10
-            # cores → 15%. Integer math on hundredths, no awk.
-            lp=${HN_LOAD1%%.*}; lf=${HN_LOAD1#*.}; [ "$lf" = "$HN_LOAD1" ] && lf=0
-            lf="${lf}00"; lf=${lf:0:2}
-            case "$lp" in ''|*[!0-9]*) lp=0 ;; esac; case "$lf" in ''|*[!0-9]*) lf=0 ;; esac
-            centi=$(( lp * 100 + 10#$lf ))
-            case "${HN_NCPU:-}" in ''|*[!0-9]*|0) cpu='' ;; *) cpu=$(( centi / HN_NCPU )) ;; esac
-            if [ -n "$cpu" ]; then status_pct_color "$cpu" 50 80; cpu="${_spc}${cpu}%"; else cpu="${DIM}–"; fi
-            case "${HN_USED:-}|${HN_TOTAL:-}" in
-                *[!0-9|]*|'|'*|*'|'|*'|0') mem_out="${DIM}–" ;;
-                *) status_pct_color "${HN_MEM:-}" 60 85
-                   mem_out="${_spc}$(mb_to_g1 "$HN_USED")G/$(mb_to_g1 "$HN_TOTAL")G" ;;
-            esac
-            node_seg=" ${BLUE}${FSN_NODE} ${GREEN}● ${DIM}│ ${BLUE}CPU ${cpu} ${DIM}│ ${BLUE}MEM ${mem_out} "
-        else
-            age=$(( ${HN_AGE:-0} + _FLEET_NOW - HN_TS )); [ "$age" -lt 0 ] && age=0
-            fleet_status_age "$age"
-            node_seg=" ${BLUE}${FSN_NODE} ${RED}○ 失联 ${FSA} "
-        fi
+    elif fleet_status_hub_node "$FSN_NODE" && have=1 && [ "$HN_AV" != online ]; then
+        # the hub's own word on it: lost — dated by its last observation plus the
+        # cache's age (longer than any silence of the hub's, so it wins the next)
+        age=$(( ${HN_AGE:-0} + _FLEET_NOW - HN_TS )); [ "$age" -lt 0 ] && age=0
+        fleet_status_age "$age"
+        node_seg=" ${BLUE}${FSN_NODE} ${RED}○ 失联 ${FSA} "
+    elif [ "$hub_lost" = 1 ]; then
+        # the hub silent (#1483): whatever it last said of that machine — online,
+        # or nothing — is as old as the silence, and this bar hears nothing itself
+        node_seg=" ${BLUE}${FSN_NODE} ${RED}○ 失联 ${hub_fsa} "
+    elif [ "$have" = 1 ]; then
+        # load per core as a percentage, through the CPU bands: `1.57` on 10
+        # cores → 15%. Integer math on hundredths, no awk.
+        lp=${HN_LOAD1%%.*}; lf=${HN_LOAD1#*.}; [ "$lf" = "$HN_LOAD1" ] && lf=0
+        lf="${lf}00"; lf=${lf:0:2}
+        case "$lp" in ''|*[!0-9]*) lp=0 ;; esac; case "$lf" in ''|*[!0-9]*) lf=0 ;; esac
+        centi=$(( lp * 100 + 10#$lf ))
+        case "${HN_NCPU:-}" in ''|*[!0-9]*|0) cpu='' ;; *) cpu=$(( centi / HN_NCPU )) ;; esac
+        if [ -n "$cpu" ]; then status_pct_color "$cpu" 50 80; cpu="${_spc}${cpu}%"; else cpu="${DIM}–"; fi
+        case "${HN_USED:-}|${HN_TOTAL:-}" in
+            *[!0-9|]*|'|'*|*'|'|*'|0') mem_out="${DIM}–" ;;
+            *) status_pct_color "${HN_MEM:-}" 60 85
+               mem_out="${_spc}$(mb_to_g1 "$HN_USED")G/$(mb_to_g1 "$HN_TOTAL")G" ;;
+        esac
+        node_seg=" ${BLUE}${FSN_NODE} ${GREEN}● ${DIM}│ ${BLUE}CPU ${cpu} ${DIM}│ ${BLUE}MEM ${mem_out} "
     else
         node_seg=" ${BLUE}${FSN_NODE} ${DIM}? "
     fi
@@ -370,11 +383,8 @@ status_hub_render() {
         status_pct_color "$HL_WK" "${FLEET_ACCOUNT_WARN_PCT:-70}" "${FLEET_ACCOUNT_CEILING:-85}"; cw=$_spc
         acct_seg="${DIM}│ ${BLUE}◉ ${STATUS_ACCT} ${DIM}5h ${c5}${HL_5H:-–}% ${DIM}周 ${cw}${HL_WK:-–}% "
     fi
-    age=$(( _FLEET_NOW - FSR_TS )); [ "$age" -lt 0 ] && age=0
-    _hs="${FLEET_HUB_SESSIONS_STALE:-60}"; case "$_hs" in ''|*[!0-9]*) _hs=60 ;; esac
-    if [ "$age" -gt "$_hs" ]; then
-        fleet_status_age "$age"
-        hub_seg="${DIM}│ ${BLUE}入口 ${RED}○ 失联 ${FSA} "
+    if [ "$hub_lost" = 1 ]; then
+        hub_seg="${DIM}│ ${BLUE}入口 ${RED}○ 失联 ${hub_fsa} "
     else
         hub_seg="${DIM}│ ${BLUE}入口 ${GREEN}● "
     fi

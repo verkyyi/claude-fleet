@@ -157,7 +157,8 @@ rows, the others come from the cache's `#node` lines (the hub's `nodes` list,
 derived from the sessions on an older hub). A machine the hub calls lost, or a
 cache older than `FLEET_HUB_SESSIONS_STALE` (60 s), keeps its rows — dimmed,
 un-nested, in their own group at the foot under a `─ m4 失联 3 分钟 ─` heading —
-never vanishes. Machine labels come from `FLEET_NODE_ALIASES`
+never vanishes — and since #1483 the same holds when the HUB is the silent one
+(`global/hub_ok`, below). Machine labels come from `FLEET_NODE_ALIASES`
 (`macmini=m5 mini2=m4`). To feed the nesting, the controller's worker inventory
 carries each window's `name`, `origin_wid` and `needs` (columns 10–12 of
 `fleet-control-read.sh workers`, optional).
@@ -187,8 +188,8 @@ OTHER machine for a proxy window (`@remote`, `fleet-remote-view.sh`): `●` with
 its load per core and memory off the hub, `○ 失联 3m` when the hub calls it
 lost, `?` when the cache has no row. The account is the window's `@cc_account`
 with its 5h / week quota (the account knobs' colour bands); omitted when neither
-side knows it. `入口 ●` while the cache is fresh, `○ 失联 Nm` once it is older
-than `FLEET_HUB_SESSIONS_STALE`. The window list (`window-status-format`) goes
+side knows it. `入口 ●` while `global/hub_ok` (#1483, below) is fresh, `○ 失联 Nm`
+once it is older than `FLEET_HUB_SESSIONS_STALE`. The window list (`window-status-format`) goes
 blank in hub mode and is restored on leaving (saved in `@status_wsf_saved` /
 `@status_wscf_saved`, flag `@status_wlist_saved`).
 The conf's `status-right` passes the client's current window as `k=v` args
@@ -206,6 +207,31 @@ neither and a certificate round never spends the token, so a login that did
 `bin/fleet-status-lib.sh` holds the one rule (`fleet_status_node`: `@remote` →
 that machine, else here) and the readers; the shell (C5) reuses it. Off hub mode
 the bar is byte for byte what it was.
+
+**The hub gone is not a blank screen** (issue #1483, EPIC #1479 C4). 入口通不通
+is ONE word: `global/hub_ok`, the epoch of the last `fleet_sessions` round that
+stood (a 200 taken, a 304 restamped), written by `fleet-hub-sessions.sh` and
+nothing else — a failed round leaves it, so its age IS the silence (the loop's
+stderr says `hub unreachable for Ns`). Every reader goes through
+`fleet_status_hub_ok` / `fleet_status_hub_lost` (`bin/fleet-status-lib.sh`; a
+cache from before the file is judged by its own `#ts`, as it always was), none
+probes the hub: older than `FLEET_HUB_SESSIONS_STALE` (60 s) ⇒ 失联. Then the
+sidebar keeps the last list — the other machines' rows dimmed in their
+`─ m4 失联 N 分钟 ─` groups, dated by the hub's silence at least — and on the hub
+source this machine's rows come from tmux again (the local-source code, so a
+window opened or closed meanwhile shows at once, and a row's state is its live
+state as always: the hub's word on WHICH local rows exist is as old as its
+silence, this machine's tmux is not); the bar reads `入口 ○ 失联 Nm`, a proxy
+window's machine `m4 ○ 失联 Nm` (nothing here can hear it; a machine the hub had
+already called lost keeps its own, longer silence) and a local window's chip its
+live readings; a remote row's menu is titled `… · 入口失联 Nm`, «新建到 m4…» is
+greyed with the reason, and every action on a remote row refuses with a toast
+(`fleet-sidebar-remote.sh`: 「入口失联 Nm，稍后再试」) instead of a 40-second
+timeout — Enter on the row (the ⇄ proxy, a direct ssh) still works. The next
+round that stands rewrites `hub_ok` and everything flips back on its own;
+nothing is restarted. Off hub mode nothing changes; with the hub off the file is
+never written. `dash-remote-rows-selftest.sh` leg L, `tmux-status-selftest.sh`
+legs E/G and `fleet-sidebar-selftest.sh` pin it.
 
 **Who the hub shows you** (issue #1475). `fleet-hub-sessions.sh` asks as **you**:
 your connection certificate (`~/.ssh/fleet-cert` + `-cert.pub`, from

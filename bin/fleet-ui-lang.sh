@@ -100,6 +100,11 @@ fleet_ui_t() {
     en:remote_pick_prompt)      printf 'Which option? (read the question in the ⇄ proxy window first; 1 / 1,3 / several questions space-separated; a permission prompt takes y or n) empty cancels:' ;;
     zh:remote_sending)          printf '已交给入口，等那台机器确认…' ;;
     en:remote_sending)          printf 'handed to the hub, waiting for that machine to confirm…' ;;
+    # the hub itself silent (issue #1483, EPIC #1479 C4): the menu's word, the action's refusal
+    zh:hub_lost_fmt)            printf '入口失联 %s' "${1:-}" ;;
+    en:hub_lost_fmt)            printf 'hub lost %s' "${1:-}" ;;
+    zh:remote_hub_lost_fmt)     printf '入口失联 %s，稍后再试' "${1:-}" ;;
+    en:remote_hub_lost_fmt)     printf 'hub lost %s — try again later' "${1:-}" ;;
     zh:pin_heading_fmt)         printf '置顶 (%s)' "${1:-}" ;;
     en:pin_heading_fmt)         printf 'Pinned (%s)' "${1:-}" ;;
     zh:unknown_repo_heading)    printf '? · 未知仓库' ;;
