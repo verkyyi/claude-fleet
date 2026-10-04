@@ -56,10 +56,17 @@ MT=$(python3 -c 'import os,sys; print(int(os.stat(sys.argv[1]).st_mtime))' "$FLE
 # --- the fake hub: records every request as one JSON line --------------------
 LOG="$WORK/hub.log"; : > "$LOG"
 python3 - "$WORK/port" "$LOG" <<'PY' 2>"$WORK/hub.err" &
-import json, signal, sys
+import json, signal, socketserver, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 portfile, log = sys.argv[1:3]
 signal.alarm(60)  # cannot outlive the test
+class Hub(HTTPServer):
+    # HTTPServer.server_bind resolves the host with socket.getfqdn(), which on a
+    # macOS CI runner can stall for longer than this whole test (reverse DNS of
+    # 127.0.0.1). Bind without it: the name is never used here.
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = '127.0.0.1', self.server_address[1]
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def do_POST(self):
@@ -76,7 +83,7 @@ class H(BaseHTTPRequestHandler):
             self.wfile.write(b'{"error":"claude setup_token must be the sk-ant-oat01-\xe2\x80\xa6 token"}')
             return
         self.send_response(200); self.end_headers(); self.wfile.write(b'{"ok":"put"}')
-srv = HTTPServer(('127.0.0.1', 0), H)
+srv = Hub(('127.0.0.1', 0), H)
 with open(portfile, 'w') as f:
     f.write(str(srv.server_address[1]))
 srv.serve_forever()
