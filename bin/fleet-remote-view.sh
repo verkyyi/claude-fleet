@@ -207,9 +207,9 @@ rv_restore() {
 # hidden values (`prefix=None`) as the originals. A holder that died keeps nobody
 # waiting; a lock older than ~5 s is taken anyway.
 rv_lock() {
-  local d="$VIEWS/.lock-$1" i pid
+  local d="$VIEWS/.lock-$1" pid
   mkdir -p "$VIEWS" 2>/dev/null
-  for i in $(seq 1 100); do
+  for _ in $(seq 1 100); do
     if mkdir "$d" 2>/dev/null; then printf '%s\n' "$$" > "$d/pid"; return 0; fi
     pid=$(cat "$d/pid" 2>/dev/null)
     case "$pid" in ''|*[!0-9]*) ;; *) kill -0 "$pid" 2>/dev/null || rm -rf "$d" ;; esac
