@@ -144,8 +144,8 @@ run)
   # The back channel: once the master connection is up, a second session on it
   # streams fleet-open requests made in the remote session; each is re-issued here.
   sidecar() {
-    local i up=''
-    for i in $(seq 1 50); do
+    local _ up=''
+    for _ in $(seq 1 50); do
       $SSH -S "$ctl" -O check "$host" >/dev/null 2>&1 && { up=1; break; }
       sleep 0.2
     done
@@ -226,7 +226,7 @@ attach)
     done
     T set-option -t "=$s:" @remote_view_saved "$saved" \; \
       set-option -t "=$s:" status off \; set-option -t "=$s:" prefix None \; set-option -t "=$s:" prefix2 None \; \
-      set-hook -t "=$s:" 'client-attached[77]' "run-shell -b 'bash $(sq "$BIN/fleet-remote-view.sh") restore $(sq "$s") --unless-view #{client_tty}'" 2>/dev/null
+      set-hook -t "=$s:" 'client-attached[77]' "run-shell -b 'bash $(sq "$BIN/fleet-remote-view.sh") restore $(sq "$s") --unless-view #{client_tty} >/dev/null 2>&1'" 2>/dev/null
   fi
   if [ -n "$view" ] && tty=$(tty 2>/dev/null); then
     case "$view" in *[!A-Za-z0-9-]*) ;; *)

@@ -142,7 +142,7 @@ has "C: what it was is saved" "$(tr_ show-options -qv -t "=$RS:" @remote_view_sa
 tl send-keys -t "$PW" 'hello-from-m5' Enter
 typed() { grep -q 'hello-from-m5' "$WORK/typed" 2>/dev/null; }
 waitfor 5 typed || fail "C: typing in the proxy window never reached the remote pane" "$(cat "$WORK/typed" 2>/dev/null)"
-nviews=$(ls "$FLEET_CONF_DIR/remote-views" 2>/dev/null | grep -vc '\.d$')
+nviews=0; for f in "$FLEET_CONF_DIR"/remote-views/*; do [ -f "$f" ] && nviews=$((nviews + 1)); done
 eq "C: one view registered (the fleet-open back channel)" "1" "$nviews"
 
 # B (cont.): another row of the same machine retargets the SAME window
