@@ -146,8 +146,14 @@ func (a *Agent) nodeSession(ctx context.Context) (established bool, err error) {
 	// Relays (claude-fleet#1421) only when this login's claude-fleet knows
 	// where its outbox and worker map live; otherwise the hub sends none.
 	rp, relayOK := relaySetup(ctx, a.cfg.Home)
+	a.moveIn = ""
 	if relayOK {
 		caps = append(caps, control.CapRelay)
+		if rp.movein != "" {
+			// A session moved here through the hub (claude-fleet#1426).
+			caps = append(caps, control.CapMove)
+			a.moveIn = rp.movein
+		}
 	}
 	hello, err := control.New(control.TypeHello, control.Hello{
 		HeartbeatMS:  int(a.cfg.LiveInterval / time.Millisecond),
@@ -513,6 +519,15 @@ func (a *Agent) answerControl(ctx context.Context, conn *websocket.Conn, m contr
 		var obj map[string]json.RawMessage
 		if json.Unmarshal(params, &obj) != nil || obj == nil {
 			fail(control.CodeBadMessage, "a write's params must be one JSON object")
+			return
+		}
+	}
+	if write {
+		// A moved-in session's transcript comes over HTTP, never the
+		// channel (claude-fleet#1426): fetch it before the controller
+		// journals the write, so a failed download is a clean refusal.
+		if code, msg := a.fetchMoveBundle(ctx, params); code != "" {
+			fail(code, msg)
 			return
 		}
 	}

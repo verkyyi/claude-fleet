@@ -62,6 +62,9 @@ type nodeConn struct {
 	// canRelay is the hello's CapRelay: this node sends and takes TypeRelay
 	// and keeps a worker map (claude-fleet#1421). Set once, before publish.
 	canRelay bool
+	// canMove is the hello's CapMove: this node downloads a moved session's
+	// transcript and takes worker_move_in (claude-fleet#1426).
+	canMove bool
 	// workersAt is when the worker map was last pushed (UnixNano).
 	workersAt atomic.Int64
 	// pending routes read and write replies to their waiter.
@@ -218,7 +221,8 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	nc := &nodeConn{conn: conn, admin: hp.Admin && s.isFleetAdmin(ep.OSUser), canRead: hp.HasCap(control.CapRead),
-		canWrite: hp.HasCap(control.CapWrite), canRelay: hp.HasCap(control.CapRelay)}
+		canWrite: hp.HasCap(control.CapWrite), canRelay: hp.HasCap(control.CapRelay),
+		canMove: hp.HasCap(control.CapMove)}
 	nc.proto.Store(int64(hello.Proto))
 	nc.host.Store(ep.Hostname)
 	if hp.Admin && !nc.admin {

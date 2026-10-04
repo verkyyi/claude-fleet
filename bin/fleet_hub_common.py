@@ -10,6 +10,7 @@ import signal
 import sqlite3
 import subprocess
 import time
+import unicodedata
 import uuid
 
 PROTOCOL = 1
@@ -164,6 +165,8 @@ def validate_write(action, params):
             # The parent on another machine (issue #1425): a worker_id, never
             # free text — it becomes an argv word and a window option.
             parse_worker_id(params["origin_wid"])
+    elif action == "worker_move_in":
+        validate_move_in(params)
     elif action == "gh_comment":
         fields(params, ("issue", "body"), ("repo",))
         check_number(params["issue"])
@@ -186,6 +189,49 @@ def validate_write(action, params):
             raise Fault("INVALID_ARGUMENT", "expected_revision must come from config_get")
     else:
         raise Fault("INVALID_ARGUMENT", "Unsupported operation")
+
+
+# worker_move_in (issue #1426): a session moved here through the hub. Every
+# value becomes an argv word of fleet-move-remote.sh movein (or a tmux window
+# option), never shell input — and each is held to the hub's own rule
+# (tokenledger/internal/api/fleet_move.go parseMoveIn), letter for letter.
+MOVE_RES = {
+    "move_id": re.compile(r"[0-9a-f]{32}"),
+    "worker_key": re.compile(WORKER_KEY_RE),
+    "branch": re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,199}"),
+    "sid": re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"),
+    "state": re.compile(r"[a-z]{1,16}"),
+    "origin": re.compile(r"[A-Za-z0-9][A-Za-z0-9._:#/-]{0,255}"),
+    "handle": re.compile(r"[a-z][1-9]"),
+    "from_node": re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}"),
+}
+
+
+def validate_move_in(params):
+    fields(params, ("move_id", "worker_key", "repo", "branch", "sid", "name"),
+           ("pushed", "raw", "state", "issue", "origin", "origin_wid", "handle", "from_node"))
+    for key, rx in MOVE_RES.items():
+        if key in params and (not isinstance(params[key], str) or not rx.fullmatch(params[key])):
+            raise Fault("INVALID_ARGUMENT", key + " is not valid")
+    branch = params["branch"]
+    if ".." in branch or branch.endswith(".lock") or branch.endswith("/"):
+        raise Fault("INVALID_ARGUMENT", "branch is not valid")
+    if params.get("state") == "working":
+        raise Fault("INVALID_STATE", "a working session is never moved; wait until it is idle")
+    if not params["repo"]:
+        raise Fault("INVALID_ARGUMENT", "repo must be owner/name")
+    check_repo(params)
+    label = params["name"]
+    if not isinstance(label, str) or not 1 <= len(label) <= 80 or any(unicodedata.category(c) == "Cc" for c in label):
+        raise Fault("INVALID_ARGUMENT", "name must be 1-80 printable characters")
+    if "pushed" in params and type(params["pushed"]) is not bool:
+        raise Fault("INVALID_ARGUMENT", "pushed must be true or false")
+    if "raw" in params and (type(params["raw"]) is not int or params["raw"] not in (0, 1)):
+        raise Fault("INVALID_ARGUMENT", "raw must be 0 or 1")
+    if "issue" in params:
+        check_number(params["issue"])
+    if "origin_wid" in params:
+        parse_worker_id(params["origin_wid"])
 
 
 def private_dir(path):

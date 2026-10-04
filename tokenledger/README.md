@@ -923,6 +923,32 @@ placement kept on the operation; a refusal from that node gives the lease back,
 so the asker can still open it itself. `auto` falls back to opening locally; a
 machine named with `--node` is honoured or refused, never swapped.
 
+### A session moves between machines — through the hub (claude-fleet#1426)
+
+`fleet-move.sh <window> --via hub --to m4` (and `--rebalance`) moves an idle
+session without the two machines ever reaching each other:
+
+```sh
+ccquota move plan [--node auto|<machine>] <owner/repo> <worker_id>
+#  LOCAL m5<TAB><reason> · REMOTE m4 movable|old<TAB><reason> · REFUSED <code><TAB><msg> (exit 4)
+ccquota move send --node m4 --bundle <tar> --branch <b> --sid <uuid> --name <n> [--pushed]
+                  [--raw 0|1] [--state s] [--origin o] [--origin-wid w] [--handle h] <owner/repo> <worker_id>
+#  MOVED m4 <window> <pid><TAB><new worker_id>  exit 0   HELD m4<TAB><msg>      exit 3
+#  REFUSED <code><TAB><msg>                     exit 4   FAILED <code><TAB><msg> exit 5
+#  UNKNOWN <operation><TAB><msg>                exit 6 — no outcome yet: never close the source
+```
+
+`send` uploads the transcript tar (`POST /v1/node/move/bundle`, ≤256 MiB), then
+`POST /v1/node/move` — the hub runs `pickNode` restricted to that machine, hands
+the issue's lease to the target fleet's worker, and journals a `worker_move_in`
+there — then polls `{"action":"status"}` (reconciled with the target) until the
+operation settles. The target's agent (it says `move` in its hello) downloads the
+bundle (`GET /v1/node/move/bundle/<id>`, served to the move's target only,
+checked against its sha256) before it hands the write to claude-fleet, which
+lands the branch, unpacks the transcript and resumes the session. A `working`
+session is refused (`INVALID_STATE`); a failed move gives the lease back to the
+source; a settled move's bundle is dropped, and every bundle expires after a day.
+
 ## The dashboard
 
 One page, no tabs — with a nav bar across the top of it. Those are not in

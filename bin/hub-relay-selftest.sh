@@ -6,7 +6,8 @@
 #   A  the degenerate case: with CCQUOTA_FLEET off a map on disk changes nothing —
 #      fleet_hub_put refuses, fleet_remote_children is empty, fleet-children.sh
 #      prints byte for byte what it did, fleet_window_waiting_children says no.
-#   B  fleet-hub-node.sh paths names the outbox + the map the agent uses.
+#   B  fleet-hub-node.sh paths names the outbox + the map the agent uses, and the
+#      move-in dir a session moved here through the hub lands in (#1426).
 #   C  fleet-hub-node.sh deliver: a remote child's report lands in the PARENT's
 #      ledger here with node + rid, exactly once however often it is pushed; a
 #      silent one too; a target fleet not on this machine, a bad id/kind/JSON
@@ -74,7 +75,7 @@ ok; ! lib fleet_window_waiting_children "$L" "$wp" >/dev/null || fail "A: CCQUOT
 
 # --- B: paths ---------------------------------------------------------------------------
 run bash "$BIN/fleet-hub-node.sh" paths
-ok; [ "$out" = "outbox	$OUTBOX"$'\n'"workers	$CACHE" ] || fail "B: paths" "$out"
+ok; [ "$out" = "outbox	$OUTBOX"$'\n'"workers	$CACHE"$'\n'"movein	$FLEET_CONF_DIR/control/move-in" ] || fail "B: paths" "$out"
 
 # --- C: deliver -------------------------------------------------------------------------
 relay() { # <id-suffix> <kind> <from> <to> <payload> [<from_node>]

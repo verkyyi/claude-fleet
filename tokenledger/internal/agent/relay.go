@@ -73,6 +73,9 @@ type relayPaths struct {
 	script  string
 	outbox  string
 	workers string
+	// movein is where moved-in transcript bundles land (claude-fleet#1426);
+	// "" on a claude-fleet that predates moves.
+	movein string
 }
 
 // relayState is the outbox's in-flight table, kept across reconnects so a
@@ -109,6 +112,10 @@ func relaySetup(ctx context.Context, home string) (relayPaths, bool) {
 			p.outbox = v
 		case "workers":
 			p.workers = v
+		case "movein":
+			if filepath.IsAbs(v) {
+				p.movein = v
+			}
 		}
 	}
 	if !filepath.IsAbs(p.outbox) || !filepath.IsAbs(p.workers) {

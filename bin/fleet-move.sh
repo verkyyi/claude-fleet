@@ -9,7 +9,17 @@
 # fleet install (bin/fleet-move-remote.sh, this script's other half).
 #
 #   fleet-move.sh <window>… --to <user>@<host> [opts]
-#   opts: --fleet <sess>    the TARGET's fleet, when that login runs more than
+#   fleet-move.sh <window>… --via hub --to <machine> [--dry-run]
+#   fleet-move.sh --rebalance [--max N] [--dry-run]
+#   opts: --via hub         move THROUGH the hub (issue #1426, EPIC #1419 C7):
+#                           the two machines never talk — see "Through the hub"
+#                           below. --to is then a machine name (m4), not ssh.
+#         --rebalance       ask the hub where sessions should run, and move the
+#                           longest-idle sessions off THIS machine while the hub
+#                           says another one is the better place — at most
+#                           --max (FLEET_MOVE_REBALANCE_MAX, 2). Only `done`
+#                           sessions move; a session mid-turn never does.
+#         --fleet <sess>    the TARGET's fleet, when that login runs more than
 #                           one (legacy multi-fleet; #979/#980 makes this rare) —
 #                           default: the target's one configured fleet.
 #         --session <sess>  the SOURCE fleet, when run outside tmux (default:
@@ -53,6 +63,18 @@
 # committing, a throwaway duplicate) — it is on you to make sure only one side
 # keeps talking to that session id.
 #
+# Through the hub (--via hub, issue #1426). Same eligibility, dirty and push
+# rules; the transport differs. The hub picks the target fleet on the named
+# machine (it must host the repo and pass the same placement gates a new
+# session does), the source checks that BEFORE stopping anything (`ccquota move
+# plan`), then stops the agent, tars the transcript and hands it to `ccquota move
+# send`, which uploads it, has the hub hand the issue's lease to the target and
+# send it a journalled worker_move_in, and waits for the outcome. The target's
+# agent downloads the bundle and runs fleet-move-remote.sh movein (provision +
+# unpack + launch + verify). Only a MOVED answer closes the source window. A
+# session whose @claude_state is `working` is refused (refused:busy) — a move
+# never cuts a turn in half. Needs CCQUOTA_FLEET=1; the ssh path is untouched.
+#
 # What this script does NOT do: it never deletes the source worktree/branch —
 # only the WINDOW closes. The worktree is left exactly where the ordinary
 # rotation-gap/janitor policy already handles an unbound worktree (docs/
@@ -80,6 +102,8 @@
 #  10   failed:verify         the target window opened but no Claude ever
 #                             appeared under its pane — SOURCE LEFT RUNNING
 #                             (never closed on an unverified target)
+#  11   refused:busy          --via hub: the session is mid-turn (@claude_state
+#                             working) — wait until it is idle
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
@@ -147,9 +171,14 @@ ssh_run() { ssh -o BatchMode=yes "$TO" "$(remote_cmd "$@")"; }
 
 # --- arg parsing -------------------------------------------------------------
 move_main() {
-  SESS='' TO='' TARGET_FLEET='' DRY=0 KEEP=0; WIDS=()
+  SESS='' TO='' TARGET_FLEET='' DRY=0 KEEP=0 VIA=ssh REBAL=0 RMAX="${FLEET_MOVE_REBALANCE_MAX:-2}"; WIDS=()
   while [ $# -gt 0 ]; do
     case "$1" in
+      --via) VIA="${2:-}"; shift 2 ;;
+      --via=*) VIA="${1#--via=}"; shift ;;
+      --rebalance) REBAL=1; shift ;;
+      --max) RMAX="${2:-}"; shift 2 ;;
+      --max=*) RMAX="${1#--max=}"; shift ;;
       --to) TO="${2:-}"; shift 2 ;;
       --to=*) TO="${1#--to=}"; shift ;;
       --fleet) TARGET_FLEET="${2:-}"; shift 2 ;;
@@ -163,8 +192,27 @@ move_main() {
       *) WIDS+=("$1"); shift ;;
     esac
   done
-  [ "${#WIDS[@]}" -gt 0 ] || die 'no window given'
-  case "$TO" in *@*) ;; *) die "--to needs <user>@<host>" ;; esac
+  [ "$REBAL" = 1 ] && VIA=hub
+  case "$VIA" in
+    ssh)
+      [ "${#WIDS[@]}" -gt 0 ] || die 'no window given'
+      case "$TO" in *@*) ;; *) die "--to needs <user>@<host>" ;; esac
+      ;;
+    hub)
+      [ "${CCQUOTA_FLEET:-0}" = 1 ] || die '--via hub needs the hub module (CCQUOTA_FLEET=1)'
+      [ "$KEEP" = 0 ] || die '--keep-source is ssh-only (a hub move never leaves two live copies)'
+      [ -z "$TARGET_FLEET" ] || die '--fleet is ssh-only (the hub picks the target fleet)'
+      case "$RMAX" in ''|*[!0-9]*) die '--max needs a number' ;; esac
+      if [ "$REBAL" = 1 ]; then
+        [ "${#WIDS[@]}" -eq 0 ] || die '--rebalance picks its own windows; name none'
+      else
+        [ "${#WIDS[@]}" -gt 0 ] || die 'no window given'
+        [ -n "$TO" ] || die '--via hub needs --to <machine>'
+        case "$TO" in *@*) die '--via hub takes a machine name (m4), not <user>@<host>' ;; esac
+      fi
+      ;;
+    *) die "--via must be ssh or hub, not '$VIA'" ;;
+  esac
 
   [ -n "$SESS" ] || SESS=$(fleet_current_session)
   [ -n "$SESS" ] || die 'no tmux session (pass --session <fleet>)'
@@ -180,11 +228,13 @@ move_main() {
   # path — no reliance on the remote shell expanding `~`/`$HOME` inside an
   # already-%q-escaped word, which would defeat the escaping) and that its
   # fleet-move-remote.sh half is actually installed.
+  if [ "$VIA" = ssh ]; then
   REMOTE_HOME=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$TO" 'printf %s "$HOME"' 2>/dev/null)
   [ -n "$REMOTE_HOME" ] || die "cannot reach $TO over ssh"
   REMOTE_BIN="$REMOTE_HOME/$REMOTE_BIN_NAME"
   ssh -o BatchMode=yes "$TO" test -x "$REMOTE_BIN" 2>/dev/null \
     || die "$TO has no $REMOTE_BIN_NAME — update its fleet install first"
+  fi
 
   moved=0; failed=0; total="${#WIDS[@]}"; LAST_RC=0
 
@@ -197,6 +247,113 @@ move_main() {
     move_one_body "$wid"; rc=$?
     [ -z "$lockdir" ] || [ ! -d "$lockdir" ] || fleet_transition_lock_drop "$lockdir"
     return "$rc"
+  }
+
+  # stop_agent <window> <pid> — Escape, `/exit`, Enter, wait; SIGTERM if that never
+  # lands. rc 0 = the agent is gone, 1 = it is still running.
+  stop_agent() {
+    local wid="$1" cpid="$2" i alive=1
+    TM set-window-option -t "$wid" @reported 1 2>/dev/null
+    SK -t "$wid" Escape 2>/dev/null; sleep 0.6
+    SK -t "$wid" -l '/exit' 2>/dev/null; sleep 0.6; SK -t "$wid" Enter 2>/dev/null
+    for ((i = 1; i <= EXIT_WAIT; i++)); do
+      agent_alive "$cpid" || { alive=0; break; }
+      [ "$i" = 6 ] && ! window_closed "$wid" && SK -t "$wid" Enter 2>/dev/null
+      sleep 1
+    done
+    if [ "$alive" = 1 ]; then
+      # A `/exit` that never lands (fleet-worker-stop.sh's failed:no-exit on an
+      # idle raw window) still yields to SIGTERM, verified by hand to leave the
+      # transcript intact.
+      if fleet_pane_claude_pid "$wid" "$SOCK" 2>/dev/null | grep -qx "$cpid"; then
+        kill -TERM "$cpid" 2>/dev/null || :
+        for ((i = 1; i <= TERM_WAIT; i++)); do agent_alive "$cpid" || { alive=0; break; }; sleep 1; done
+      fi
+    fi
+    [ "$alive" = 0 ]
+  }
+
+  # move_one_hub — the --via hub transport (issue #1426). Called from
+  # move_one_body once eligibility, the dirty check and the session id passed;
+  # reads its locals (name wid repo branch ahead ahead_msg wt cwd cpid sid state
+  # raw iss origin hnd) — bash's dynamic scope, the same way abort_target does.
+  move_one_hub() {
+    local okey u swid line rc head reason pushed_flag='' owid tmp pdir sidecar=() m nw ncp i
+    if [ "${state:-}" = working ]; then
+      say "  – $name ($wid): mid-turn (working) — wait until it is idle — refused:busy"; return 11
+    fi
+    okey=$(fleet_window_okey "$SESS" "$wid"); u=$(fleet_uuid "$SESS" 2>/dev/null)
+    [ -n "$okey" ] && [ -n "$u" ] || { say "  – $name ($wid): no worker_id here (no fleet UUID or key) — refused:not-eligible"; return 4; }
+    swid="$u/$okey"
+    say "  → $name ($wid): $repo @ $branch$ahead_msg → $TO (via hub)"
+
+    # --- 3a. ask before touching anything: is $TO a place this session can go? --
+    # (--rebalance asked a moment ago, with --node auto, and is passing its answer.)
+    if [ -n "${PLANNED:-}" ]; then line=$PLANNED; rc=0
+    else line=$(fleet_hub_move plan --node "$TO" "$repo" "$swid"); rc=$?; fi
+    IFS=$'\t' read -r head reason <<<"$line"
+    case "$rc:${head%% *}" in
+      0:REMOTE)
+        case " $head " in *" movable "*) ;; *)
+          say "    ✗ ${head#REMOTE }: its agent cannot take a moved session yet (upgrade ccquota there) — failed:target"; return 8 ;;
+        esac ;;
+      0:LOCAL) say "    ✗ $name already runs on ${head#LOCAL } — failed:target"; return 8 ;;
+      *) say "    ✗ hub: ${line:-unreachable} — failed:target"; return 8 ;;
+    esac
+    if [ "$DRY" = 1 ]; then
+      say "    ✓ hub: ${head%% movable*} — $reason"
+      [ "$ahead" -gt 0 ] 2>/dev/null && say "    would push $branch ($ahead commit(s) ahead of $base)"
+      say "    would stop pid ${cpid:-<none>}, send session ${sid%%-*}… through the hub, resume on $TO, then close this window"
+      return 0
+    fi
+
+    # --- 3b. push, if ahead of base (idempotent; before anything destructive) ----
+    if [ "$ahead" -gt 0 ] 2>/dev/null; then
+      git -C "$wt" push -u origin "$branch" >/dev/null 2>&1 \
+        || { say "  ✗ $name ($wid): git push of $branch failed — failed:push"; return 7; }
+      pushed_flag=--pushed
+    fi
+    owid=$(wopt "$wid" '#{@origin_wid}')
+    local prior_reported; prior_reported=$(wopt "$wid" '#{@reported}')
+    local ldir="$wt"; fleet_rotate_lease_take "$ldir" "move $name ($wid) → $TO via hub" 2>/dev/null || :
+
+    # --- 5. stop the source agent ------------------------------------------------
+    if [ -n "$cpid" ] && ! stop_agent "$wid" "$cpid"; then
+      fleet_rotate_lease_drop "$ldir"
+      [ "${prior_reported:-}" = 1 ] && TM set-window-option -t "$wid" @reported 1 2>/dev/null || TM set-window-option -t "$wid" -u @reported 2>/dev/null
+      say "  ✗ $name ($wid): pid $cpid did not exit — left running — failed:no-exit"; return 9
+    fi
+
+    # --- 6. bundle the transcript (Claude Code's own project-dir spelling first) --
+    pdir="${FLEET_CC_PROJECTS_DIR:-$HOME/.claude/projects}/$(fleet_mangle_path "$cwd")"
+    [ -f "$pdir/$sid.jsonl" ] || pdir="$(project_dir_for "$cwd")"
+    [ -d "$pdir/$sid" ] && sidecar=("$sid")
+    tmp=$(mktemp "${TMPDIR:-/tmp}/fleet-move.XXXXXX") || { fleet_rotate_lease_drop "$ldir"; say "  ✗ $name ($wid): no temp file — failed:target"; return 8; }
+    if ! tar -C "$pdir" -cf "$tmp" "$sid.jsonl" ${sidecar[@]+"${sidecar[@]}"} 2>/dev/null; then
+      rm -f "$tmp"; fleet_rotate_lease_drop "$ldir"
+      say "  ✗ $name ($wid): cannot read transcript $sid.jsonl — the agent here is stopped; resume it with /fleet-history — failed:target"; return 8
+    fi
+
+    # --- 7. hand it to the hub; wait for the target's verdict ---------------------
+    line=$(fleet_hub_move send --node "$TO" --bundle "$tmp" --branch "$branch" ${pushed_flag:+"$pushed_flag"} \
+      --sid "$sid" --name "$name" --raw "${raw:-0}" ${state:+--state "$state"} ${origin:+--origin "$origin"} \
+      ${owid:+--origin-wid "$owid"} ${hnd:+--handle "$hnd"} "$repo" "$swid"); rc=$?
+    rm -f "$tmp"; fleet_rotate_lease_drop "$ldir"
+    IFS=$'\t' read -r head reason <<<"$line"
+    case "$rc" in
+      0)
+        read -r _ m nw ncp <<<"$head"
+        # --- 8. verified on the target: close the source -------------------------
+        for ((i = 1; i <= CLOSE_WAIT; i++)); do window_closed "$wid" && break; sleep 1; done
+        TM kill-window -t "$wid" 2>/dev/null || :
+        say "  ✓ $name ($wid → $m:$nw, pid $ncp): moved through the hub, session ${sid%%-*}… — now ${reason:-on $m}"
+        return 0 ;;
+      6)
+        say "  ? $name ($wid): no verdict from $TO yet (${head#UNKNOWN }) — do NOT resume it here before checking $TO — failed:verify"
+        return 10 ;;
+    esac
+    say "  ✗ $name ($wid): ${line:-hub unreachable} — the agent here is stopped; resume it with /fleet-history — failed:target"
+    return 8
   }
 
   move_one_body() {
@@ -249,6 +406,7 @@ move_main() {
 
     local ahead_msg='' keep_msg=''
     [ "$ahead" -gt 0 ] 2>/dev/null && ahead_msg=" (+$ahead ahead of $base)"
+    if [ "$VIA" = hub ]; then move_one_hub; return $?; fi
     [ "$KEEP" = 1 ] && keep_msg=' [keep-source]'
     say "  → $name ($wid): $repo @ $branch$ahead_msg → $TO${TARGET_FLEET:+ (fleet $TARGET_FLEET)}$keep_msg"
 
@@ -290,26 +448,9 @@ move_main() {
     abort_target() { ssh_run "$REMOTE_BIN" discard --wt "$twt" --branch "$branch" --repo "$repo" --fleet "$rfleet" >/dev/null 2>&1 || :; }
 
     # --- 5. stop the source agent (skipped under --keep-source) -----------------
+    local i
     if [ "$KEEP" != 1 ] && [ -n "$cpid" ]; then
-      TM set-window-option -t "$wid" @reported 1 2>/dev/null
-      SK -t "$wid" Escape 2>/dev/null; sleep 0.6
-      SK -t "$wid" -l '/exit' 2>/dev/null; sleep 0.6; SK -t "$wid" Enter 2>/dev/null
-      local i alive=1
-      for ((i = 1; i <= EXIT_WAIT; i++)); do
-        agent_alive "$cpid" || { alive=0; break; }
-        [ "$i" = 6 ] && ! window_closed "$wid" && SK -t "$wid" Enter 2>/dev/null
-        sleep 1
-      done
-      if [ "$alive" = 1 ]; then
-        # A `/exit` that never lands (fleet-worker-stop.sh's failed:no-exit on an
-        # idle raw window) still yields to SIGTERM, verified by hand to leave the
-        # transcript intact.
-        if fleet_pane_claude_pid "$wid" "$SOCK" 2>/dev/null | grep -qx "$cpid"; then
-          kill -TERM "$cpid" 2>/dev/null || :
-          for ((i = 1; i <= TERM_WAIT; i++)); do agent_alive "$cpid" || { alive=0; break; }; sleep 1; done
-        fi
-      fi
-      if [ "$alive" = 1 ]; then
+      if ! stop_agent "$wid" "$cpid"; then
         fleet_rotate_lease_drop "$ldir"; abort_target
         [ "${prior_reported:-}" = 1 ] && TM set-window-option -t "$wid" @reported 1 2>/dev/null || TM set-window-option -t "$wid" -u @reported 2>/dev/null
         say "  ✗ $name ($wid): pid $cpid did not exit — left running — failed:no-exit"; return 9
@@ -348,6 +489,39 @@ move_main() {
     fi
     return 0
   }
+
+  # --rebalance (issue #1426): the hub's placement decides. Longest-idle `done`
+  # sessions first; stop at the first answer that says this machine is the best
+  # place (or that nothing can take one), and after --max moves.
+  if [ "$REBAL" = 1 ]; then
+    rwins=$(TM list-windows -t "=$SESS" -F '#{@claude_state_ts}|#{window_id}|#{@claude_state}|#{@hub}|#{window_name}|#{@worker_lifecycle}' 2>/dev/null \
+      | awk -F'|' -v pr="$PANEL_RE" '$3 == "done" && $4 != "1" && $6 == "" && $5 !~ pr { print ($1 == "" ? 0 : $1) "|" $2 }' \
+      | sort -t'|' -k1,1n | cut -d'|' -f2)
+    for wid in $rwins; do
+      [ "$moved" -ge "$RMAX" ] && break
+      rrepo=$(fleet_window_repo "$SESS" "$wid"); rkey=$(fleet_window_okey "$SESS" "$wid"); ru=$(fleet_uuid "$SESS" 2>/dev/null)
+      [ -n "$rrepo" ] && [ -n "$rkey" ] && [ -n "$ru" ] || continue
+      line=$(fleet_hub_move plan --node auto "$rrepo" "$ru/$rkey"); rc=$?
+      IFS=$'\t' read -r head reason <<<"$line"
+      case "$rc:${head%% *}" in
+        0:LOCAL) say "rebalance: this machine is the best place for $rrepo now — ${reason:-nothing to move}"; break ;;
+        0:REMOTE) ;;
+        *) say "rebalance: hub: ${line:-unreachable} — stopping"; break ;;
+      esac
+      case " $head " in *" movable "*) ;; *) say "rebalance: ${head#REMOTE } cannot take a moved session yet — stopping"; break ;; esac
+      TO=$(printf '%s' "$head" | awk '{ print $2 }')
+      total=$((total + 1))
+      PLANNED=$line move_one "$wid"; rc=$?
+      LAST_RC=$rc
+      if [ "$rc" -eq 0 ]; then moved=$((moved + 1)); else failed=$((failed + 1)); fi
+    done
+    failed_msg=''; [ "$failed" -gt 0 ] && failed_msg=", $failed failed"
+    dry_msg=''; [ "$DRY" = 1 ] && dry_msg=' (dry-run)'
+    say "fleet-move: rebalance moved $moved$failed_msg$dry_msg"
+    [ "$failed" -eq 0 ] && exit 0
+    [ "$moved" -eq 0 ] && exit "$LAST_RC"
+    exit 1
+  fi
 
   for wid in ${WIDS[@]+"${WIDS[@]}"}; do
     move_one "$wid"; rc=$?

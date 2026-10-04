@@ -16,6 +16,21 @@
 #            [--fleet <sess>]                     → open + resume + verify
 #   discard  --wt <dir> --branch <br> --repo <o/n> [--fleet <sess>]
 #                                                  → undo a failed provision
+#   movein   --fleet <sess> --bundle <tar> --repo <o/n> --branch <br> --sid <uuid>
+#            [--pushed] [--name <n>] [--wid <h>] [--issue <n>] [--raw 0|1]
+#            [--origin <o>] [--origin-wid <w>] [--state <s>]
+#                                                  → provision + receive + launch
+#                                                    in ONE call, from a bundle
+#                                                    file (issue #1426)
+#
+# `movein` is the hub path (fleet-move.sh --via hub, issue #1426): the source
+# never reaches this machine, so the hub hands the target a journalled
+# worker_move_in, this login's ccquota agent downloads the transcript tar to
+# <bundle>, and fleet_control.py runs `movein` — the same provision, receive and
+# launch the ssh path drives one call at a time, run here back to back, with a
+# failed receive undoing its provision. Prints `<window>\t<pid>\t<worktree>`.
+# Exit: 0 moved · 1 usage/refused · 7 provision failed · 8 transcript unpack
+# failed (provision undone) · 10 the window opened but no agent appeared.
 #
 # One-fleet-per-login (#979/#980): every subcommand that needs "the fleet"
 # resolves the login's ONE configured fleet unless --fleet names one (the
@@ -175,6 +190,44 @@ case "$cmd" in
     sess=$(resolve_fleet "$fleetw") || die 'no single configured fleet on this login (pass --fleet)'
     load_repo "$sess" "$repo" || die "fleet $sess does not host $repo"
     fleet_scratch_free "$FLEET_MAIN" "${branch:-}" "$wt"
+    ;;
+
+  movein)
+    fleetw='' bundle='' repo='' branch='' sid='' pushed='' name='moved' wid='' issue='' raw=0 origin='' owid='' state='done'
+    while [ $# -gt 0 ]; do case "$1" in
+      --fleet) fleetw="${2:-}"; shift 2 ;;
+      --bundle) bundle="${2:-}"; shift 2 ;;
+      --repo) repo="${2:-}"; shift 2 ;;
+      --branch) branch="${2:-}"; shift 2 ;;
+      --sid) sid="${2:-}"; shift 2 ;;
+      --pushed) pushed=--pushed; shift ;;
+      --name) name="${2:-}"; shift 2 ;;
+      --wid) wid="${2:-}"; shift 2 ;;
+      --issue) issue="${2:-}"; shift 2 ;;
+      --raw) raw="${2:-0}"; shift 2 ;;
+      --origin) origin="${2:-}"; shift 2 ;;
+      --origin-wid) owid="${2:-}"; shift 2 ;;
+      --state) state="${2:-done}"; shift 2 ;;
+      *) die "movein: unknown arg $1" ;;
+    esac; done
+    [ -n "$fleetw" ] && [ -n "$repo" ] && [ -n "$branch" ] && [ -n "$sid" ] || die 'movein: --fleet, --repo, --branch and --sid required'
+    [ -f "$bundle" ] || die "movein: no bundle at ${bundle:-<none>}"
+    prov=$(bash "$0" provision --repo "$repo" --branch "$branch" ${pushed:+"$pushed"} --fleet "$fleetw") || exit 7
+    IFS=$'\t' read -r rfleet twt _ <<<"$prov"
+    [ -n "$twt" ] || exit 7
+    # Claude Code names a project dir by turning EVERY non-alphanumeric into `-`.
+    if ! bash "$0" receive --dest "$(fleet_mangle_path "$twt")" <"$bundle"; then
+      bash "$0" discard --wt "$twt" --branch "$branch" --repo "$repo" --fleet "$rfleet" >/dev/null 2>&1 || :
+      exit 8
+    fi
+    launch=$(bash "$0" launch --wt "$twt" --sid "$sid" --name "$name" --raw "$raw" --state "$state" --fleet "$rfleet" \
+      ${wid:+--wid "$wid"} ${issue:+--issue "$issue"} ${origin:+--origin "$origin"} --repo "$repo") || exit 10
+    IFS=$'\t' read -r nw ncp _ <<<"$launch"
+    if [ -n "$nw" ] && [ -n "$owid" ]; then
+      tmux -L "$(fleet_socket "$rfleet")" set-window-option -t "$nw" @origin_wid "$owid" 2>/dev/null
+    fi
+    printf '%s\t%s\t%s\n' "$nw" "$ncp" "$twt"
+    [ -n "$ncp" ] || exit 10
     ;;
 
   *)

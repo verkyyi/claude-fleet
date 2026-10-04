@@ -4217,6 +4217,48 @@ fleet_hub_place() {
   return 1
 }
 
+# fleet_hub_move plan|send [<flag>…] <repo> <worker_id> — move a session to another
+# machine through the hub (issue #1426, EPIC #1419 C7; fleet-move.sh --via hub).
+# Off unless CCQUOTA_FLEET=1. A `--node <m>` flag naming an alias (`m5`) is turned
+# back into the hostname the hub knows; machine names in the answer go through
+# FLEET_NODE_ALIASES, as the sidebar's do. Prints the move command's one line:
+#   plan → `LOCAL <m>\t<reason>` / `REMOTE <m> movable|old\t<reason>` / `REFUSED <code>\t<msg>`
+#   send → `MOVED <m> <window> <pid>\t<new wid>` / `HELD <m>\t<msg>` /
+#          `REFUSED <code>\t<msg>` / `FAILED <code>\t<msg>` / `UNKNOWN <op>\t<msg>`
+# and returns the command's code (0 / 3 held / 4 refused / 5 failed / 6 unknown),
+# 1 when the hub could not be asked (one stderr note), 10 when the module is off.
+# The command is FLEET_HUB_MOVE_CMD, else `ccquota move`.
+fleet_hub_move() {
+  local cmd out rc a prev='' n
+  [ "${CCQUOTA_FLEET:-0}" = 1 ] || return 10
+  cmd="${FLEET_HUB_MOVE_CMD:-}"
+  if [ -z "$cmd" ]; then
+    if command -v ccquota >/dev/null 2>&1; then cmd='ccquota move'
+    else printf 'fleet: hub move unavailable (no FLEET_HUB_MOVE_CMD, no ccquota on PATH)\n' >&2; return 1; fi
+  fi
+  # Rotate the argv in place (no arrays: this lib must parse under POSIX sh).
+  n=$#
+  while [ "$n" -gt 0 ]; do
+    a=$1; shift; n=$((n - 1))
+    if [ "$prev" = --node ] && [ "$a" != auto ]; then
+      a=$(printf '%s\n' ${FLEET_NODE_ALIASES:-} | awk -F= -v n="$a" '$2 == n { print $1; f = 1; exit } END { if (!f) print n }')
+    fi
+    set -- "$@" "$a"; prev=$a
+  done
+  out=$(bash -c "$cmd \"\$@\"" move "$@" </dev/null 2>/dev/null); rc=$?
+  out=$(printf '%s\n' "$out" | head -n1 | awk -F'\t' -v al="${FLEET_NODE_ALIASES:-}" '
+    BEGIN { n = split(al, a, " "); for (i = 1; i <= n; i++) if ((p = index(a[i], "=")) > 1) m[substr(a[i], 1, p - 1)] = substr(a[i], p + 1) }
+    { k = split($1, w, " ")
+      if ((w[1] == "LOCAL" || w[1] == "REMOTE" || w[1] == "MOVED" || w[1] == "HELD") && (w[2] in m)) w[2] = m[w[2]]
+      h = w[1]; for (i = 2; i <= k; i++) h = h " " w[i]
+      $1 = h; print }' OFS='\t')
+  case "$rc" in
+    0|3|4|5|6) printf '%s\n' "$out"; return "$rc" ;;
+  esac
+  printf 'fleet: hub unreachable for the move (%s exit %s)\n' "${cmd%% *}" "$rc" >&2
+  return 1
+}
+
 # fleet_worker_locate <worker_id | wid:… | key | window> [<sess>] → ONE line:
 #   local <window_id> <sess>   live on this machine, in that window of fleet <sess>
 #   remote <node>              not here; the hub last saw it on <node>
@@ -4288,6 +4330,9 @@ fleet_stamp_origin_wid() {
 
 fleet_hub_outbox() { printf '%s/control/hub-outbox' "$FLEET_CONF_DIR"; }
 fleet_hub_cache()  { printf '%s/control/hub-workers.tsv' "$FLEET_CONF_DIR"; }
+# Where this login's ccquota agent downloads a session's transcript bundle when
+# the hub moves one HERE (issue #1426); fleet-control-read.sh movein reads it.
+fleet_hub_movein() { printf '%s/control/move-in' "$FLEET_CONF_DIR"; }
 
 # fleet_hub_wid <uuid> <key> → the FULL worker_id the hub map holds for that
 # (uuid may be empty: a bare key, matched only when exactly one row ends in it).

@@ -72,6 +72,10 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetCreds(); err != nil {
 		return err
 	}
+	// Session moves through the hub (claude-fleet#1426).
+	if err := s.ensureFleetMoves(); err != nil {
+		return err
+	}
 	// Issue leases (claude-fleet#1422).
 	return s.ensureFleetLeases()
 }

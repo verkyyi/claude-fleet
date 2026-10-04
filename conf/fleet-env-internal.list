@@ -158,6 +158,7 @@ FLEET_MOVE_BOOT_WAIT               knob: internal pacing/limit, safe in-code def
 FLEET_MOVE_CLOSE_WAIT              knob: internal pacing/limit, safe in-code default (fleet-move.sh)
 FLEET_MOVE_EXIT_WAIT               knob: internal pacing/limit, safe in-code default (fleet-move.sh)
 FLEET_MOVE_LAUNCH                  seam: an injectable command/path for tests (fleet-move-remote.sh)
+FLEET_MOVE_REBALANCE_MAX           knob: most sessions one `fleet-move.sh --rebalance` moves, default 2 (#1426)
 FLEET_MOVE_TERM_WAIT               knob: internal pacing/limit, safe in-code default (fleet-move.sh)
 FLEET_NEEDS_PLAIN_SECS             knob: internal pacing/limit, safe in-code default (tmux-spinner.sh)
 FLEET_NEEDS_RECONCILE_SECS         knob: internal pacing/limit, safe in-code default (tmux-spinner.sh)
@@ -281,3 +282,4 @@ FLEET_HUB_SESSIONS_USER            knob: whose sessions on the other machines th
 FLEET_HUB_LEASE_CMD                seam: the hub issue-lease command (default `ccquota lease`), run as `<cmd> acquire|release [--force] <repo> <issue> <worker_id>` (fleet_hub_lease, #1422)
 FLEET_HUB_RETAIN_SECS              knob: internal budget, seconds a hub worker map may age before remote children stop holding their parent (600, #1421)
 FLEET_HUB_PLACE_CMD                seam: the hub placement command (default `ccquota place`), run as `<cmd> --node <n> [--origin-wid <w>] [--agent <a>] <repo> <issue> <worker_id>` (fleet_hub_place, #1425)
+FLEET_HUB_MOVE_CMD                 seam: the hub session-move command (default `ccquota move`), run as `<cmd> plan|send [<flag>…] <repo> <worker_id>` (fleet_hub_move, #1426)

@@ -107,6 +107,12 @@ const CapWrite = "write"
 // pushes a relay or a map to a node that did not say it; relays for it wait.
 const CapRelay = "relay"
 
+// CapMove is the hello capability a node lists when it takes a session moved
+// to it through the hub (claude-fleet#1426): before it hands a
+// worker_move_in write to claude-fleet, it downloads the move's transcript
+// bundle over HTTP. The hub never moves a session to a node that did not say it.
+const CapMove = "move"
+
 // Relay kinds.
 const (
 	RelayChildReport = "child_report"

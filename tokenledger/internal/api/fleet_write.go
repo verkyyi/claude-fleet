@@ -54,6 +54,9 @@ var fleetScopeOf = map[string]string{
 	"worker_message": "worker:message",
 	"worker_stop":    "worker:stop",
 	"worker_resume":  "worker:resume",
+	// A session moved in through the hub (claude-fleet#1426) opens a worker
+	// like a start does.
+	"worker_move_in": "worker:start",
 	"config_set":     "config:write",
 	"gh_comment":     "gh:comment",
 	"gh_issue_view":  "gh:read",
@@ -319,6 +322,9 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 			// among fleets that host it.
 			err = fault("INVALID_ARGUMENT", "Name the repo (owner/name) when no fleet_id is given")
 		}
+	case "worker_move_in":
+		w.fleetID, w.params, err = parseMoveIn(args)
+		w.repo, _ = w.params["repo"].(string)
 	case "gh_comment":
 		if err = checkFields(args, []string{"fleet_id", "issue", "body", "idempotency_key"}, "repo"); err != nil {
 			break
@@ -555,7 +561,12 @@ func (s *Server) sendWrite(ctx context.Context, c *nodeConn, target store.FleetR
 	defer c.pending.remove(msg.OpID)
 	// Not the caller's context: a client that hangs up must not turn a
 	// write the node is about to acknowledge into an unknown one.
-	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), fleetWriteWait)
+	wait := fleetWriteWait
+	if op.Action == "worker_move_in" {
+		// The target's agent downloads the transcript before it answers.
+		wait = moveWriteWait
+	}
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), wait)
 	defer cancel()
 	if err := wsjson.Write(wctx, c.conn, msg); err != nil {
 		// A frame may have left before the error: unknown, not failed.
