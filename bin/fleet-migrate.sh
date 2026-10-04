@@ -567,6 +567,13 @@ migrate_main() {
     l=${f##*/}; case "$l" in .*|*~|*.conf) continue;; esac
     s=$(sed -n '1{s/[[:space:]]*$//;p;}' "$f" | tr -d '\n' | fleet_sha12)
     [ -n "$s" ] && SHA2LABEL="${SHA2LABEL}${s}"$'\t'"${l}"$'\n'
+    # A hub-managed label (#1415) also answers for the token the agent wrote
+    # beside it — a session launched on that token before the label moved to
+    # the hub (a pool setup-token, #1463) is still that account.
+    case "$(head -c 4 "$f" 2>/dev/null)" in hub:)
+      s=$(sed -n 's/.*"accessToken":"\([^"]*\)".*/\1/p' "$f.hub/.credentials.json" 2>/dev/null | head -n1 | tr -d '\n' | fleet_sha12)
+      [ -n "$s" ] && SHA2LABEL="${SHA2LABEL}${s}"$'\t'"${l}"$'\n' ;;
+    esac
   done
   ACTIVE=$("$BIN/fleet-account.sh" active 2>/dev/null)
   ACTIVE_BENCHED=0; [ -n "$ACTIVE" ] && acct_benched "$ACTIVE" && ACTIVE_BENCHED=1   # ⇒ no account is eligible (#567)

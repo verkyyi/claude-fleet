@@ -21,11 +21,24 @@ import (
 // another person: there is no principal parameter to forge. Every answer,
 // issued or refused, is an audit row; a revocation (of the machine, of the
 // person, or of the person on that machine) refuses every lease after it.
+//
+// Shared-pool accounts (claude-fleet#1463, store.PoolPrincipal): a credential
+// stored under principal_id "pool" belongs to the machines' pool, not to a
+// person, and rides along in EVERY active principal's lease — after the same
+// no-principal and revocation checks, so a revoked person or machine loses
+// the pool too. The audit row names the person who leased it, with "pool" in
+// its detail. Which accounts are pool is the operator's `put`; there is no
+// per-principal allow-list in this phase (every active principal may lease
+// every pool row — that IS the pool, docs/SHARED-MACHINE.md 2b).
 
-// NodeCredential is one leased credential in a node's answer.
+// NodeCredential is one leased credential in a node's answer. Pool marks a
+// shared-pool account (not the person's own); Kind says what was issued —
+// a setup_token is handed down as is and runs out at ExpiresAt for good.
 type NodeCredential struct {
 	Provider  string            `json:"provider"`
 	Account   string            `json:"account"`
+	Kind      string            `json:"kind,omitempty"`
+	Pool      bool              `json:"pool,omitempty"`
 	ExpiresAt *time.Time        `json:"expires_at,omitempty"`
 	Access    *credvault.Access `json:"access,omitempty"`
 	Error     string            `json:"error,omitempty"`
@@ -153,15 +166,27 @@ func (s *Server) handleNodeCredentials(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	pool, err := s.Store.Credentials(store.PoolPrincipal)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	creds = append(creds, pool...)
 	resp := NodeCredentialsResponse{PrincipalID: principal, IssuedAt: time.Now().UTC(), Credentials: []NodeCredential{}}
 	for _, c := range creds {
-		nc := NodeCredential{Provider: c.Provider, Account: c.Account}
-		acc, err := s.Vault.Lease(r.Context(), principal, c.Provider, c.Account)
+		isPool := c.PrincipalID == store.PoolPrincipal
+		nc := NodeCredential{Provider: c.Provider, Account: c.Account, Kind: c.Kind, Pool: isPool}
+		// The row is sealed to ITS principal — "pool" for a pool row — while
+		// the audit names the person who leased it.
+		acc, err := s.Vault.Lease(r.Context(), c.PrincipalID, c.Provider, c.Account)
 		audit := store.CredAudit{PrincipalID: principal, Provider: c.Provider, Account: c.Account,
 			Hostname: host, OSUser: osUser, EndpointID: ep.ID}
+		if isPool {
+			audit.Detail = "pool"
+		}
 		if err != nil {
 			nc.Error = err.Error()
-			audit.Action, audit.Detail = store.CredDeny, "lease failed: "+err.Error()
+			audit.Action, audit.Detail = store.CredDeny, optional("pool · ", isPool)+"lease failed: "+err.Error()
 		} else {
 			a := acc
 			nc.Access, nc.ExpiresAt = &a, acc.ExpiresAt
@@ -184,6 +209,8 @@ func optional(s string, ok bool) string {
 }
 
 // FleetCredentialRequest is the body of POST /v1/fleet/credentials.
+// PrincipalID is a person, or store.PoolPrincipal ("pool") for a shared-pool
+// account every active principal may lease.
 type FleetCredentialRequest struct {
 	Action      string           `json:"action"` // put | delete
 	PrincipalID string           `json:"principal_id"`
@@ -219,16 +246,18 @@ func (s *Server) handleFleetCredentials(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		if req.PrincipalID == "" || req.Account == "" || !credvault.ValidProvider(req.Provider) {
-			httpError(w, http.StatusBadRequest, "principal_id, account and a provider of claude|codex|github are required")
+			httpError(w, http.StatusBadRequest, "principal_id (a person, or \"pool\" for a shared-pool account), account and a provider of claude|codex|github are required")
 			return
 		}
 		if !validAccountLabel(req.Account) {
 			httpError(w, http.StatusBadRequest, "account must be 1-64 of [A-Za-z0-9._-], not starting with '.'")
 			return
 		}
-		if _, err := s.Store.Principal(req.PrincipalID); err != nil {
-			httpError(w, http.StatusBadRequest, "unknown principal "+req.PrincipalID)
-			return
+		if req.PrincipalID != store.PoolPrincipal {
+			if _, err := s.Store.Principal(req.PrincipalID); err != nil {
+				httpError(w, http.StatusBadRequest, "unknown principal "+req.PrincipalID)
+				return
+			}
 		}
 		audit := store.CredAudit{PrincipalID: req.PrincipalID, Provider: req.Provider, Account: req.Account}
 		switch req.Action {

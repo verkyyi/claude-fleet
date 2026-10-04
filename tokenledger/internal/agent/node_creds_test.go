@@ -183,3 +183,44 @@ func mode(t *testing.T, path string, want os.FileMode) {
 		t.Fatalf("%s mode %v, want %v", path, st.Mode().Perm(), want)
 	}
 }
+
+// A pool setup token (claude-fleet#1463) arrives like any lease — a year out,
+// marked kind/pool — and lands in the same files a short-lived one does: the
+// session reads it through CLAUDE_SECURESTORAGE_CONFIG_DIR, the label file is
+// the hub marker, and the agent's next lease is the ordinary 6h cap.
+func TestCredCycleSetupTokenIsWrittenLikeAnyLease(t *testing.T) {
+	home := t.TempDir()
+	exp := time.Now().Add(365 * 24 * time.Hour).UTC().Truncate(time.Second)
+	body := fmt.Sprintf(`{"principal_id":"wecom-alice","credentials":[
+	 {"provider":"claude","account":"icloud","kind":"setup_token","pool":true,"expires_at":%q,
+	  "access":{"access_token":"sk-ant-oat01-POOLTOKEN","scopes":["user:inference"],"expires_at":%q}}]}`,
+		exp.Format(time.RFC3339), exp.Format(time.RFC3339))
+	a := credAgent(fakeVaultHub(t, 200, body), home)
+	acct := filepath.Join(home, ".config", "claude-fleet", "accounts")
+	_ = os.MkdirAll(acct, 0o700)
+	// The same token the operator kept here by hand before the import.
+	_ = os.WriteFile(filepath.Join(acct, "icloud"), []byte("sk-ant-oat01-POOLTOKEN\n"), 0o600)
+
+	wait, err := a.credCycle(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wait != credMaxWait {
+		t.Fatalf("next lease in %s, want the %s cap for a token a year out", wait, credMaxWait)
+	}
+	var cc struct {
+		ClaudeAiOauth struct {
+			AccessToken  string  `json:"accessToken"`
+			RefreshToken *string `json:"refreshToken"`
+			ExpiresAt    int64   `json:"expiresAt"`
+		} `json:"claudeAiOauth"`
+	}
+	readJSON(t, filepath.Join(acct, "icloud.hub", ".credentials.json"), &cc)
+	if o := cc.ClaudeAiOauth; o.AccessToken != "sk-ant-oat01-POOLTOKEN" || o.RefreshToken != nil || o.ExpiresAt != exp.UnixMilli() {
+		t.Fatalf("claude credentials = %+v", o)
+	}
+	if b, _ := os.ReadFile(filepath.Join(acct, "icloud")); string(b) != "hub:icloud\n" {
+		t.Fatalf("label file = %q, want the hub marker", b)
+	}
+	mode(t, filepath.Join(acct, "icloud.hub", ".credentials.json"), 0o600)
+}

@@ -588,6 +588,10 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 
 // serveConnectPage serves the 连接 page (claude-fleet#1412).
 func (s *Server) serveConnectPage(w http.ResponseWriter, r *http.Request) {
+	// A signed-in person opening 连接 is placed first (claude-fleet#1472), so
+	// the page's /v1/fleet/connect finds their login rather than "ask the
+	// operator"; the operator's doors name no person and nothing happens.
+	s.ensurePerson(r)
 	s.serveStandalonePage(w, r, "connect.html")
 }
 

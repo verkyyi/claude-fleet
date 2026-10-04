@@ -529,6 +529,7 @@ process, and they do not share a credential.
 |---|---|---|
 | Dashboard, `/u/<login>`, `/growth` | viewer token, a WeCom session, or a named tailnet peer | every figure this hub holds |
 | `/enter` | a 90-second ticket from the authorization service | exchanges that ticket for this hub's session cookie, nothing else |
+| `POST /logout` | a same-origin form (the page header's 退出) | clears the cookies this hub minted and shows the signed-out page; the authorization service's own session stays |
 | `/v1/...` | the viewer token, as a bearer header | the same figures as JSON |
 | `POST /mcp` | the same viewer token again | the read tools, for an agent |
 | `/v1/ingest`, `/v1/ingest/repo`, `/v1/ingest/growth`, … | each shipper's own enrollment token | write: push usage, progress or the ledger |
@@ -554,6 +555,24 @@ It is a description, not a control plane. Nothing on it mints, revokes or
 widens a credential, and no command has been moved from the hub's shell onto
 HTTP. `enroll`, `team` and `plan` stay local because a machine that could name
 its own team could move its spend onto another team's budget.
+
+### The page header — who is signed in, and the way out (claude-fleet#1467)
+
+Every human page — the dashboard, 连接, 我的会话, 机器节点, 凭据发放 — carries
+the same header, top right: the signed-in person's directory name (the
+ticket's `nam`, else what the hub has on record for them, else their WeCom
+userid) with 企业微信 under it, or 管理员 · 令牌 / 内网 for the operator's own
+doors. It is drawn by `web/dist/whoami.js` from **one** answer, `/v1/me`
+(`via`: `open | token | wecom | tailnet`, `person`, `name`, `login`,
+`can_logout`), recorded by the gate as it admits the request — never inferred
+per page. Clicking it opens 姓名 / 企微账号 / 登录方式 and, when a cookie of this
+hub's is behind the request, **退出**: a plain same-origin `POST /logout` that
+clears the session and the parked viewer token, then shows a signed-out page
+whose only link is 重新登录 → the gate (or `/` without SSO). No destination
+parameter, so no open redirect. As on OPS, the authorization service's own
+8-hour session on ai.24haowan.com is not this host's to end: it has no logout
+endpoint, and while it lives 重新登录 signs a fresh ticket without a WeCom
+prompt.
 
 ## Fleet nodes — every machine reports in (`CCQUOTA_FLEET=1`)
 
@@ -653,7 +672,7 @@ before the hub has a row for them), `principal` (the row, or null) and
 `accounts`.
 
 **Whose login is whose — the explicit map.**
-`CCQUOTA_FLEET_PRINCIPAL_LOGINS=caojian=24haowan,yilianghui=verkyyi` names the
+`CCQUOTA_FLEET_PRINCIPAL_LOGINS=CaoJian=24haowan,YiLiangHui=verkyyi` names the
 OS login that belongs to each WeCom userid. At a mapped person's sign-in the
 hub records them under that login and **adopts** it (state `active`, op
 `adopt`) on every roster machine whose agent runs as that login — the roster
@@ -666,6 +685,24 @@ records them when there is somewhere to record them on. A malformed entry, a
 login outside `[a-z0-9]{2,16}` or one login claimed by two people refuses to
 start the hub. A mapped login may start with a digit (`24haowan` is real); a
 login the hub *creates* still starts with a letter.
+
+**The userid's case never matters** (claude-fleet#1472). WeCom userids are
+case-insensitive — the directory lists `YiLiangHui`, the ticket carries it
+so, and the operator typed `yilianghui` — so the map is compared to the
+ticket case-insensitively, and every lookup of a principal (the row,
+their accounts, an operator's `adopt`/`remove`/`forget` by id) folds case
+too; the row keeps the spelling it was first written with, the directory's
+when the ticket wrote it. Spelling one person two ways in the map is one
+entry when the logins agree and a startup refusal when they do not.
+
+**The placement runs at every door that needs the row, not only at `/enter`**
+(claude-fleet#1472). The session cookie lives eight hours, and a person
+mapped *after* they signed in — or whose first visit predated the map — would
+otherwise reach the `fleet login` confirmation, `/connect` and the
+certificate with no principal and be told `no active login on any machine
+yet`. `/fleet/login` (the page and the confirm), `/connect`,
+`/v1/fleet/connect` and `/v1/fleet/cert` run the same idempotent placement
+first; an unmapped person is still recorded nowhere by it.
 
 Opening a login is an op sent down the machine's control channel to its
 **admin agent** — the operator's own login there, which already has
@@ -845,7 +882,7 @@ What a machine can do with only the short-lived half was **measured first**
 |---|---|---|
 | hub | `CCQUOTA_FLEET_CRED_KEY_FILE=/secrets/cred-key` (or `CCQUOTA_FLEET_CRED_KEY`) | 32 bytes, base64 (`openssl rand -base64 32`). Unset = vault off: credential routes answer 503, the rest of the fleet module is unaffected |
 | hub | `CCQUOTA_FLEET_CRED_MIN_TTL=3h` (default) | a cached access token with less left is refreshed before it is issued |
-| agent | `CCQUOTA_FLEET_CREDS=1` | lease this login's credentials and keep them written (with `CCQUOTA_FLEET=1`) |
+| agent | `CCQUOTA_FLEET_CREDS=1` | lease this login's credentials (its own + the shared pool's) and keep them written (with `CCQUOTA_FLEET=1`) |
 | agent | `CCQUOTA_ACCOUNTS_DIR` (default `~/.config/claude-fleet/accounts`), `CCQUOTA_FLEET_CODEX_HOMES` (default `~/.codex-accounts`) | where the Claude / Codex files go |
 
 A lease (`POST /v1/node/credentials`, the node's enrollment token) is answered
@@ -869,6 +906,48 @@ refuse a WeCom session. A Claude refresh token comes from an interactive
 machine out — two holders of one refresh token rotate each other out.
 A Codex home the hub writes is registered once with
 `fleet-codex-account.sh register <label> <home>` like any other.
+
+#### Setup tokens and the shared pool (claude-fleet#1463)
+
+A Claude **setup token** — what `claude setup-token` prints, `sk-ant-oat01-…`,
+about a year, no refresh token — is the other kind the vault takes:
+
+    "secret":{"setup_token":"sk-ant-oat01-…","expires_at":"2027-10-03T00:00:00Z"}
+
+It cannot be refreshed and does not rotate, so the hub stores it as kind
+`setup_token`, **issues it as is** (no refresh, nothing cached, no row lock —
+any number of machines hold the same token without logging each other out),
+refuses to store or issue one past `expires_at`, and reminds the operator:
+a `cred_setup_token` finding on the hub page from **30 days** before the date
+(critical in the last week, and once it has passed), plus a banner on
+`/credentials`. The only remedy is a person minting a new one and importing it
+again — there is nothing the hub can renew. `expires_at` is the operator's
+word: the token endpoint does not say.
+
+**Pool accounts.** `"principal_id":"pool"` stores a credential that belongs to
+the machines' shared pool (docs/SHARED-MACHINE.md 2b), not to a person. Every
+node whose login IS some active principal gets the pool rows in its lease
+beside its own — after the same no-principal and revocation checks, so a
+revoked person or machine loses the pool too; the audit row names the person
+who leased it, with `pool` in its detail. There is no per-principal allow-list
+in this phase: the pool is for everyone the hub has let in, which is what the
+pool meant before the vault (every login got a copy of the same files). `pool`
+is a sentinel, never a row in `fleet_principals`.
+
+**Importing this machine's pool.** The operator's one command:
+
+    ~/.claude/fleet/bin/fleet-creds-import.sh [--dry-run] [--expires-at <RFC3339>] [--principal <id>] [label …]
+
+reads each plain `<accounts>/<label>` setup-token file, POSTs it as a pool
+`setup_token` over the viewer token, and prints what it did — the token goes to
+curl in a 0600 file and is never printed or put on a command line. Default
+expiry is the file's mtime + 365 days (shown per label; `--expires-at` to
+state it). Nothing on the importing machine changes: its files are left as they
+are until THAT login's agent runs with `CCQUOTA_FLEET_CREDS=1`, leases them
+back and writes `<label>.hub/.credentials.json` + the `hub:<label>` marker
+exactly as for any lease — a session already running on the token in its env
+is untouched (the env is read once), and the dash still attributes it to its
+label (`fleet-account-truth.py` indexes the hub file's token too).
 
 #### The vault key in Aliyun KMS (claude-fleet#1417)
 

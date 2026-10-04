@@ -989,3 +989,28 @@ func TestDashboard_TheDefaultViewIsNotTheWholePage(t *testing.T) {
 			"that count is what makes the next person read the three that were overturned before adding a fifth")
 	}
 }
+
+// Every human page shares ONE header (claude-fleet#1467): who is signed in,
+// and the way out. The header is a slot each page carries, filled by one
+// script from one answer (/v1/me) with one stylesheet -- so the check is that
+// every page carries all three, by id and by file name. A page that grew its
+// own "current user" line would have a second header to drift.
+func TestAssets_EveryHumanPageSharesTheHeader(t *testing.T) {
+	assets := Assets()
+	for _, name := range []string{"whoami.js", "whoami.css", "lib/whoami.js"} {
+		if _, err := fs.Stat(assets, name); err != nil {
+			t.Fatalf("%s is not embedded: %v", name, err)
+		}
+	}
+	for _, page := range []string{"index.html", "connect.html", "sessions.html", "nodes.html", "credentials.html"} {
+		b, err := fs.ReadFile(assets, page)
+		if err != nil {
+			t.Fatalf("%s unreadable: %v", page, err)
+		}
+		for _, want := range []string{`id="whoami"`, `src="whoami.js"`, `href="whoami.css"`} {
+			if !strings.Contains(string(b), want) {
+				t.Errorf("%s is missing %s -- the five pages share one header", page, want)
+			}
+		}
+	}
+}

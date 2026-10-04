@@ -132,6 +132,15 @@ root = pathlib.Path(sys.argv[2])
 (root / 'metadata.conf').write_text('not-registered\n')
 with patch.object(m, 'process_tokens', return_value={201:b'token-A',203:b'not-registered'}):
     assert m.resolve(text, root) == []
+# A hub-managed label (hub:<label>, issue #1415) answers for BOTH the marker
+# (a session on CLAUDE_SECURESTORAGE_CONFIG_DIR) and the token the agent wrote
+# beside it (a session launched on the token itself before the move, #1463).
+(root / 'duplicate').unlink()
+(root / 'hubbed').write_text('hub:hubbed\n')
+(root / 'hubbed.hub').mkdir()
+(root / 'hubbed.hub' / '.credentials.json').write_text('{"claudeAiOauth":{"accessToken":"token-H","refreshToken":null}}')
+with patch.object(m, 'process_tokens', return_value={201:b'hub:hubbed',202:b'token-H'}):
+    assert m.resolve(text, root) == [('@1', '%1', 'hubbed', '1'), ('@2', '%2', 'hubbed', '1')], m.resolve(text, root)
 print('account truth: BSD batch / Linux environ / unknown, failure and duplicate cases passed')
 PYTEST
 [ "$?" = 0 ] || fail 'production token reader contracts failed'

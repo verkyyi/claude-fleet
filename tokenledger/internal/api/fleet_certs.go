@@ -297,7 +297,7 @@ func (s *Server) handleFleetConnect(w http.ResponseWriter, r *http.Request) {
 		out.CAFingerprint = s.SSHCA.Fingerprint()
 	}
 	var hosts map[string]bool
-	if pid := principalOf(r.Context()); pid != "" {
+	if pid := s.ensurePerson(r); pid != "" {
 		out.Signed = true
 		p, _, h, err := s.fleetLoginsOf(pid)
 		switch {
@@ -340,7 +340,7 @@ func (s *Server) handleFleetCert(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	pid := principalOf(r.Context())
+	pid := s.ensurePerson(r)
 	if pid == "" {
 		httpError(w, http.StatusForbidden, "a certificate is issued to a person: sign in through WeCom")
 		return
@@ -611,14 +611,16 @@ func (s *Server) handleDevicePoll(w http.ResponseWriter, r *http.Request) {
 
 // handleFleetLoginPage is what the QR opens. It sits behind viewerOnly; a
 // browser that is not signed in yet is sent to WeCom by viewerOnly, and the
-// code rides a short cookie so /enter can bring it back here.
+// code rides a short cookie so /enter can bring it back here. A browser that
+// IS signed in never passes /enter again, so the person is placed here too
+// (ensurePerson, claude-fleet#1472) — before the page reads their logins.
 func (s *Server) handleFleetLoginPage(w http.ResponseWriter, r *http.Request) {
 	if s.SSHCA == nil {
 		http.NotFound(w, r)
 		return
 	}
 	code := strings.ToUpper(strings.TrimSpace(r.FormValue("code")))
-	pid := principalOf(r.Context())
+	pid := s.ensurePerson(r)
 	page := loginPage{Code: code}
 	now := time.Now()
 

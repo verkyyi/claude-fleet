@@ -7,6 +7,7 @@ macOS uses a single ps invocation for all PIDs, rather than one pipeline per pan
 Unknown, unreadable, ambient, and ambiguous credentials produce no account row.
 """
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -37,7 +38,28 @@ def account_index(directory):
             key = digest(token)
             # Duplicate credentials cannot identify one pool label reliably.
             labels[key] = None if key in labels else name
+            # A hub-managed label (`hub:<label>`, issue #1415) also answers for
+            # the token the agent last wrote beside it: a session launched on
+            # that token in the env BEFORE the label moved to the hub (a pool
+            # setup-token imported under issue #1463 is the same token) still
+            # resolves to its label instead of dropping off the dash.
+            if token.startswith(b'hub:'):
+                live = hub_file_token(path.parent / (name + '.hub'))
+                if live:
+                    key = digest(live)
+                    labels[key] = None if key in labels else name
     return labels
+
+
+def hub_file_token(hub_dir):
+    """The accessToken in <label>.hub/.credentials.json, or None."""
+    try:
+        with (hub_dir / '.credentials.json').open('rb') as stream:
+            data = json.load(stream)
+        token = data.get('claudeAiOauth', {}).get('accessToken')
+    except (OSError, ValueError, AttributeError):
+        return None
+    return token.encode() if isinstance(token, str) and token else None
 
 
 def run_probe(argv):

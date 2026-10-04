@@ -71,6 +71,14 @@ var findingTitles = map[string]i18n.Text{
 		i18n.EN:   "credential vault locked for {ago} — no machine is issued a credential",
 		i18n.ZhCN: "凭据库已锁 {ago} —— 没有任何机器能领到凭据",
 	},
+	findings.TmplCredSetupExpiring: {
+		i18n.EN:   "setup token {account} ({principal} · {provider}) expires in {left} — run `claude setup-token` and import it again",
+		i18n.ZhCN: "setup-token {account}（{principal} · {provider}）还有 {left} 到期 —— 请重新 `claude setup-token` 并重新导入",
+	},
+	findings.TmplCredSetupExpired: {
+		i18n.EN:   "setup token {account} ({principal} · {provider}) expired {ago} ago — run `claude setup-token` and import it again",
+		i18n.ZhCN: "setup-token {account}（{principal} · {provider}）已于 {ago} 前到期 —— 请重新 `claude setup-token` 并重新导入",
+	},
 }
 
 var findingDetails = map[string]i18n.Text{
@@ -123,6 +131,14 @@ var findingDetails = map[string]i18n.Text{
 	findings.TmplCredVaultLocked: {
 		i18n.EN:   "{reason}",
 		i18n.ZhCN: "{reason}",
+	},
+	findings.TmplCredSetupExpiring: {
+		i18n.EN:   "expires {date}",
+		i18n.ZhCN: "{date} 到期",
+	},
+	findings.TmplCredSetupExpired: {
+		i18n.EN:   "expired {date}",
+		i18n.ZhCN: "{date} 已到期",
 	},
 	// TmplWindowHigh carries no detail; a missing entry renders as none.
 }

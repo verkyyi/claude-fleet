@@ -55,6 +55,13 @@ func TestFleetPrincipalLogins(t *testing.T) {
 	if err != nil || len(m) != 2 || m["caojian"] != "24haowan" || m["yilianghui"] != "verkyyi" {
 		t.Fatalf("parsed %v, %v", m, err)
 	}
+	// The directory's own spelling (claude-fleet#1472) parses to the same
+	// map: a WeCom userid is case-insensitive, so the key is folded.
+	m, err = fleetPrincipalLogins("YiLiangHui=verkyyi,CaoJian=24haowan,HuangYongSheng=vincent,zx=zx")
+	if err != nil || len(m) != 4 || m["yilianghui"] != "verkyyi" || m["caojian"] != "24haowan" ||
+		m["huangyongsheng"] != "vincent" || m["zx"] != "zx" {
+		t.Fatalf("mixed case parsed %v, %v", m, err)
+	}
 	if m, err := fleetPrincipalLogins(""); err != nil || len(m) != 0 {
 		t.Fatalf("empty → %v, %v", m, err)
 	}
@@ -66,13 +73,17 @@ func TestFleetPrincipalLogins(t *testing.T) {
 		"caojian=24-haowan",                    // not the alphabet
 		"a=verkyyi,b=verkyyi",                  // one login, two people
 		"yilianghui=verkyyi,yilianghui=other1", // one person, two logins
+		"YiLiangHui=verkyyi,yilianghui=other1", // the same person twice, spelled two ways
 	} {
 		if _, err := fleetPrincipalLogins(bad); err == nil {
 			t.Errorf("%q was accepted", bad)
 		}
 	}
-	// The same pair twice is not a conflict.
+	// The same pair twice is not a conflict — nor is it spelled two ways.
 	if _, err := fleetPrincipalLogins("a=verkyyi,a=verkyyi"); err != nil {
 		t.Errorf("a repeated pair refused: %v", err)
+	}
+	if m, err := fleetPrincipalLogins("YiLiangHui=verkyyi,yilianghui=verkyyi"); err != nil || len(m) != 1 {
+		t.Errorf("one person spelled two ways: %v, %v", m, err)
 	}
 }

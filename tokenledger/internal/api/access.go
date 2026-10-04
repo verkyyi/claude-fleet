@@ -242,11 +242,17 @@ func (s *Server) doors(f HubFacts) []Door {
 		},
 		{
 			ID: "enter", Name: "The SSO way in", Via: "http",
-			Where:      []string{"/enter"},
+			Where:      []string{"/enter", "/logout"},
 			Credential: "a 90-second ticket the company's authorization service signed",
 			Can: "Exchange that ticket for this hub's own session cookie, and nothing else. " +
 				"It grants no read by itself. OAuth completes on ai.24haowan.com — the corp allows one " +
-				"callback domain and it is not this host — so only the ticket crosses.",
+				"callback domain and it is not this host — so only the ticket crosses. " +
+				// claude-fleet#1467: the way out sits beside the way in. It
+				// clears only what this hub minted; the authorization
+				// service keeps its own session, as it does for every site.
+				"POST /logout (same-origin, from the page header) clears the cookies this hub minted — " +
+				"the session and a parked viewer token — and shows a signed-out page; the authorization " +
+				"service's own session is not this host's to end.",
 			// NOT "public", even though it is the one route outside the viewer
 			// gate. "Public" on this page means "no credential", and /enter
 			// demands a signed ticket — labelling it public would contradict

@@ -74,10 +74,13 @@ button.small { padding:3px 10px; font-size:12px; }
 button.danger { border-color:var(--lost); color:var(--lost); background:transparent; }
 .revoked { color:var(--lost); }
 </style>
+<!-- The shared page header's viewer slot (claude-fleet#1467): the same
+     stylesheet, slot and script as every other human page on this hub. -->
+<link rel="stylesheet" href="whoami.css">
 </head>
 <body>
 <div class="wrap">
-  <h1>连接</h1>
+  <div class="topbar"><h1>连接</h1><div id="whoami" class="whoami" hidden></div></div>
   <div class="sub">用入口签的 12 小时证书连到各台机器；这台电脑扫一次码就登记为设备，之后自动续证书，连续 7 天不用才需再扫。你原有的钥匙照常能用。</div>
   <div id="problem"></div>
   <!-- claude-fleet#1470: the one line a colleague runs, then just `fleet`. -->
@@ -274,5 +277,6 @@ async function load() {
 load();
 loadDevices();
 </script>
+<script type="module" src="whoami.js"></script>
 </body>
 </html>

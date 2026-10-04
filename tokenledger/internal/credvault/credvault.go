@@ -46,25 +46,71 @@ func ValidProvider(p string) bool { return p == Claude || p == Codex || p == Git
 // matter depends on the provider:
 //
 //	claude: refresh_token (+ scopes, subscription_type, carried to the node)
+//	        — OR setup_token + expires_at (claude-fleet#1463): the long-lived
+//	        OAuth token `claude setup-token` mints (~1 year, no refresh token).
+//	        It cannot be refreshed and does not rotate, so the hub hands it
+//	        down as is and several machines may hold one without logging
+//	        each other out. The expiry is the operator's to state; the hub
+//	        reminds them 30 days before it (findings) and refuses to lease
+//	        one that has passed.
 //	codex:  refresh_token, account_id (+ id_token, kept current by refreshes)
 //	github: token, user — phase one hands the person's existing token down as
 //	        is (it has no refresh); R1 replaces it with a short-lived one.
 type Secret struct {
-	RefreshToken     string   `json:"refresh_token,omitempty"`
-	IDToken          string   `json:"id_token,omitempty"`
-	AccountID        string   `json:"account_id,omitempty"`
-	Scopes           []string `json:"scopes,omitempty"`
-	SubscriptionType string   `json:"subscription_type,omitempty"`
-	Token            string   `json:"token,omitempty"`
-	User             string   `json:"user,omitempty"`
+	RefreshToken     string     `json:"refresh_token,omitempty"`
+	SetupToken       string     `json:"setup_token,omitempty"`
+	ExpiresAt        *time.Time `json:"expires_at,omitempty"`
+	IDToken          string     `json:"id_token,omitempty"`
+	AccountID        string     `json:"account_id,omitempty"`
+	Scopes           []string   `json:"scopes,omitempty"`
+	SubscriptionType string     `json:"subscription_type,omitempty"`
+	Token            string     `json:"token,omitempty"`
+	User             string     `json:"user,omitempty"`
+}
+
+// Kinds — what the long-lived half IS, kept beside the row as metadata (the
+// sealed blob cannot be asked). "" on a row predating the column means
+// refresh_token for claude/codex and token for github.
+const (
+	KindRefreshToken = "refresh_token" // refreshed by the hub, rotates on use
+	KindSetupToken   = "setup_token"   // claude setup-token: issued as is, never refreshed
+	KindToken        = "token"         // github phase one: issued as is
+)
+
+// Kind reports s's kind for provider (after Validate).
+func (s Secret) Kind(provider string) string {
+	switch {
+	case provider == GitHub:
+		return KindToken
+	case provider == Claude && s.SetupToken != "":
+		return KindSetupToken
+	}
+	return KindRefreshToken
+}
+
+// SecretExpiry is when the long-lived half itself runs out, when it has a
+// known end: a setup token's expires_at. Nil for a refresh token (it rotates)
+// and for github phase one.
+func (s Secret) SecretExpiry(provider string) *time.Time {
+	if s.Kind(provider) == KindSetupToken {
+		return s.ExpiresAt
+	}
+	return nil
 }
 
 // Validate checks that s carries what provider needs.
 func (s Secret) Validate(provider string) error {
 	switch provider {
 	case Claude:
-		if s.RefreshToken == "" {
-			return errors.New("claude needs refresh_token")
+		switch {
+		case s.RefreshToken != "" && s.SetupToken != "":
+			return errors.New("claude takes refresh_token or setup_token, not both")
+		case s.SetupToken != "" && s.ExpiresAt == nil:
+			return errors.New("claude setup_token needs expires_at (claude setup-token mints a ~1 year token; say when it ends)")
+		case s.SetupToken != "" && !strings.HasPrefix(s.SetupToken, "sk-ant-oat01-"):
+			return errors.New("claude setup_token must be the sk-ant-oat01-… token `claude setup-token` prints")
+		case s.RefreshToken == "" && s.SetupToken == "":
+			return errors.New("claude needs refresh_token or setup_token")
 		}
 	case Codex:
 		if s.RefreshToken == "" || s.AccountID == "" {
@@ -294,10 +340,19 @@ func (v *Vault) lock(principal, provider, account string) *sync.Mutex {
 	return m
 }
 
-// Put seals and stores a credential's long-lived half.
+// ErrSetupTokenExpired is returned for a setup token past its stated expiry:
+// nothing can be issued from it, the operator must mint a new one.
+var ErrSetupTokenExpired = errors.New("setup token has expired; run `claude setup-token` and import it again")
+
+// Put seals and stores a credential's long-lived half. A setup token already
+// past its expires_at is refused: storing it could only ever issue a dead
+// token.
 func (v *Vault) Put(principal, provider, account string, s Secret) error {
 	if err := s.Validate(provider); err != nil {
 		return err
+	}
+	if exp := s.SecretExpiry(provider); exp != nil && !exp.After(v.now()) {
+		return fmt.Errorf("%w (expires_at %s)", ErrSetupTokenExpired, exp.UTC().Format(time.RFC3339))
 	}
 	sl, err := v.sealer()
 	if err != nil {
@@ -310,7 +365,7 @@ func (v *Vault) Put(principal, provider, account string, s Secret) error {
 	if err != nil {
 		return err
 	}
-	return v.Store.PutCredential(principal, provider, account, blob, v.now())
+	return v.Store.PutCredential(principal, provider, account, blob, s.Kind(provider), s.SecretExpiry(provider), v.now())
 }
 
 // ErrRefreshFailed wraps a refresh that failed with no usable token left.
@@ -325,17 +380,33 @@ func (v *Vault) Lease(ctx context.Context, principal, provider, account string) 
 	if err != nil {
 		return Access{}, err
 	}
-	if provider == GitHub {
-		// No refresh: the stored token IS the lease.
-		c, err := v.Store.Credential(principal, provider, account)
-		if err != nil {
-			return Access{}, err
-		}
+	c, err := v.Store.Credential(principal, provider, account)
+	if err != nil {
+		return Access{}, err
+	}
+	if provider == GitHub || c.Kind == KindSetupToken {
+		// No refresh: the stored token IS the lease. Nothing is written, so
+		// no row lock — any number of machines read the same token.
 		var s Secret
 		if err := sl.Open(c.SecretSealed, &s, principal, provider, account, "secret"); err != nil {
 			return Access{}, err
 		}
-		return Access{Token: s.Token, User: s.User}, nil
+		if provider == GitHub {
+			return Access{Token: s.Token, User: s.User}, nil
+		}
+		if s.ExpiresAt == nil || !s.ExpiresAt.After(v.now()) {
+			at := ""
+			if s.ExpiresAt != nil {
+				at = " at " + s.ExpiresAt.UTC().Format(time.RFC3339)
+			}
+			return Access{}, fmt.Errorf("%w%s", ErrSetupTokenExpired, at)
+		}
+		scopes := s.Scopes
+		if len(scopes) == 0 {
+			scopes = []string{"user:inference"}
+		}
+		exp := s.ExpiresAt.UTC()
+		return Access{AccessToken: s.SetupToken, Scopes: scopes, SubscriptionType: s.SubscriptionType, ExpiresAt: &exp}, nil
 	}
 
 	l := v.lock(principal, provider, account)

@@ -147,7 +147,17 @@ sudo chmod 700 "$dst"; sudo chmod 600 "$dst"/*
 
 Then, as `alice`, `~/.claude/fleet/bin/fleet-account.sh list` shows the pool.
 Each login keeps its own copy, so a token added to or revoked from the pool
-later has to be copied to every sharing login again. Rotation state
+later has to be copied to every sharing login again.
+
+**With a hub (issue #1463)** the copying goes away: the operator imports the
+pool once — `~/.claude/fleet/bin/fleet-creds-import.sh` puts every setup-token
+file into the hub's vault as a `pool` account — and every login whose agent runs
+with `CCQUOTA_FLEET_CREDS=1` leases the whole pool from the hub (its own
+person's credentials too), with each `<label>` file becoming the `hub:<label>`
+marker beside `<label>.hub/.credentials.json`. Adding, replacing or revoking a
+token is then one hub operation, and `fleet-account.sh list` says `hub` and
+when the token runs out. See `tokenledger/README.md`, "Setup tokens and the
+shared pool". Rotation state
 (`account.limited`) is per login: a limit one login hits is learned by the
 others from their own banners or from the ccquota hub.
 

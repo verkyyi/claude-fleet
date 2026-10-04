@@ -351,3 +351,47 @@ func TestOwnerFilledWhenKnownAbsentWhenNot(t *testing.T) {
 		t.Errorf("a model is used fleet-wide and has no owner: %+v", unpriced)
 	}
 }
+
+// A Claude setup token (claude-fleet#1463) cannot be refreshed: the reminder
+// starts a month out, turns critical in the last week, and stays critical once
+// it has ended — the day the lease starts being refused.
+func TestSetupTokenReminder(t *testing.T) {
+	now := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	day := 24 * time.Hour
+	fs := Now(NowInputs{Now: now, SetupTokens: []SetupToken{
+		{PrincipalID: "pool", Provider: "claude", Account: "far", ExpiresAt: now.Add(400 * day)},
+		{PrincipalID: "pool", Provider: "claude", Account: "soon", ExpiresAt: now.Add(20*day + time.Hour)},
+		{PrincipalID: "pool", Provider: "claude", Account: "week", ExpiresAt: now.Add(5 * day)},
+		{PrincipalID: "wecom-bob", Provider: "claude", Account: "gone", ExpiresAt: now.Add(-2 * day)},
+	}})
+	if kinds(fs) != "cred_setup_token,cred_setup_token,cred_setup_token" {
+		t.Fatalf("%s", kinds(fs))
+	}
+	by := map[string]Finding{}
+	for _, f := range fs {
+		by[f.Args["account"]] = f
+	}
+	if f := by["soon"]; f.Severity != "warning" || f.Template != TmplCredSetupExpiring || !strings.Contains(f.Title, "soon (pool · claude) expires in 20 days") {
+		t.Fatalf("soon: %+v", f)
+	}
+	if f := by["week"]; f.Severity != "critical" || f.Template != TmplCredSetupExpiring || f.Args["left"] != "5 days" {
+		t.Fatalf("week: %+v", f)
+	}
+	if f := by["gone"]; f.Severity != "critical" || f.Template != TmplCredSetupExpired || !strings.Contains(f.Title, "gone (wecom-bob · claude) expired 2 days ago") ||
+		f.Detail != "expired 2026-10-02" {
+		t.Fatalf("gone: %+v", f)
+	}
+	// Critical first: the ones with the least time lead the list.
+	if fs[0].Severity != "critical" || fs[2].Severity != "warning" {
+		t.Fatalf("order: %s %s %s", fs[0].Severity, fs[1].Severity, fs[2].Severity)
+	}
+	for _, f := range fs {
+		if f.Link != "/credentials" || f.ID == "" {
+			t.Fatalf("link/id: %+v", f)
+		}
+	}
+	// Two rows, two identities: muting one does not silence the other.
+	if by["soon"].ID == by["week"].ID {
+		t.Fatal("two setup tokens share a finding id")
+	}
+}
