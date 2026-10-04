@@ -19,14 +19,20 @@
 #      the merge, exit 0 after; the backup is written and the file mode kept.
 #   6. THE SOURCE TABLE ITSELF HAS UNIQUE IDENTITIES — else "replace by identity"
 #      would be ambiguous.
-#   7. GLOBAL CONFIG KEYS (issue #1528) — `keys` sets
-#      hooks/global-config-keys.json's keys (leftArrowOpensAgents=false) in
-#      Claude Code's GLOBAL config (.claude.json — the only place that key is
-#      read) and nothing else: every other key survives, a second run is a no-op
-#      (no write), a user `true` is corrected, --skip (the FLEET_KEEP_AGENTS_KEY=1
-#      opt-out) leaves the key alone, an absent file is not created, a held
-#      `.claude.json.lock` (Claude Code's own save in flight) is never stolen —
-#      exit 2, nothing written — and keys-check is the doctor's eye.
+#   7. DEFAULT CLAUDE SETTINGS (issue #1558, folding #1528) — `defaults` fills
+#      conf/claude-settings.default.json into settings.json ("settings") and
+#      Claude Code's GLOBAL config .claude.json ("globalConfig",
+#      leftArrowOpensAgents=false — the only place that key is read), FILL ONLY:
+#      an empty settings.json gets every default key; a key the login set to
+#      another value is left as it is (a user `true` is NOT corrected — #1528's
+#      pin became a fill); permissions.defaultMode lands beside the login's own
+#      permissions.allow; a key listed in settings.fleet-override.json (or
+#      --skip, the FLEET_KEEP_AGENTS_KEY=1 opt-out) is never written; a second
+#      run is a no-op (no write, no backup); an absent .claude.json is not
+#      created; a held `.claude.json.lock` (Claude Code's own save in flight) is
+#      never stolen — exit 2, nothing written there; the repo's own file ships
+#      neither model nor enabledPlugins nor hooks; and defaults-check is the
+#      doctor's `settings` eye.
 #
 # Hermetic: temp fixtures only; no tmux, no network, no writes to the repo.
 # Exit 0 = pass.
@@ -157,29 +163,73 @@ m check --settings "$S2" >"$WORK/c3" || fail "check still unhappy after the merg
 grep -q '^ok ' "$WORK/c3" || fail "check did not print ok" "$(cat "$WORK/c3")"
 ok "after merge: check passes, mode 0600 kept"
 
-# --- 7. global config keys (issue #1528) ---
-KEYS="$ROOT/hooks/global-config-keys.json"
-[ -r "$KEYS" ] || fail "hooks/global-config-keys.json missing"
-python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("leftArrowOpensAgents") is False else 1)' "$KEYS" \
-  || fail "global-config-keys.json does not pin leftArrowOpensAgents=false" "$(cat "$KEYS")"
-k() { python3 "$MERGE" "$@" --keys "$KEYS"; }
-K="$WORK/claude.json"
-k keys --config "$K" >"$WORK/k-1" || fail "keys on an absent config failed" "$(cat "$WORK/k-1")"
-[ -e "$K" ] && fail "keys created a .claude.json Claude Code never wrote"
-k keys-check --config "$K" >/dev/null && fail "keys-check passed with no config at all"
+# --- 7. default Claude settings (issue #1558) ---
+DEFS="$ROOT/conf/claude-settings.default.json"
+[ -r "$DEFS" ] || fail "conf/claude-settings.default.json missing"
+DEFS="$DEFS" python3 - <<'PY' || fail "claude-settings.default.json: wrong shape or content" "$(cat "$DEFS")"
+import json, os, sys
+d = json.load(open(os.environ["DEFS"]))
+ok = (set(d) <= {"settings", "globalConfig"}
+      and d["settings"]["permissions"]["defaultMode"] == "bypassPermissions"
+      and d["globalConfig"]["leftArrowOpensAgents"] is False
+      and not {"model", "enabledPlugins", "hooks"} & set(d["settings"]))
+sys.exit(0 if ok else 1)
+PY
+# every default leaf, as `path<TAB>json` — the oracle the legs below compare against
+DEFS="$DEFS" python3 - > "$WORK/leaves" <<'PY'
+import json, os
+d = json.load(open(os.environ["DEFS"]))
+def walk(o, pre=""):
+    for k in sorted(o):
+        if isinstance(o[k], dict) and o[k]: walk(o[k], pre + k + ".")
+        else: print("%s\t%s" % (pre + k, json.dumps(o[k])))
+walk(d["settings"])
+PY
+NS=$(wc -l < "$WORK/leaves" | tr -d ' ')
+has_leaf() { # $1 file $2 path $3 json — the file holds exactly that value at that path
+  F="$1" P="$2" V="$3" python3 -c '
+import json, os, sys
+cur = json.load(open(os.environ["F"]))
+for part in os.environ["P"].split("."):
+    if not isinstance(cur, dict) or part not in cur: sys.exit(1)
+    cur = cur[part]
+sys.exit(0 if cur == json.loads(os.environ["V"]) else 1)'
+}
+all_leaves() { while IFS=$'\t' read -r p v; do has_leaf "$1" "$p" "$v" || return 1; done < "$WORK/leaves"; }
+d() { python3 "$MERGE" "$@" --defaults "$DEFS" --override "$WORK/override.json"; }
+S7="$WORK/d/settings.json"; K="$WORK/d/claude.json"; mkdir -p "$WORK/d"
+# leg: empty settings.json + no .claude.json
+printf '{}\n' > "$S7"
+d defaults --settings "$S7" --config "$K" >"$WORK/d1" || fail "defaults on an empty settings.json failed" "$(cat "$WORK/d1")"
+all_leaves "$S7" || fail "defaults left a default key out of an empty settings.json" "$(cat "$S7")"
+[ "$(grep -c '^set            settings.json ' "$WORK/d1")" = "$NS" ] || fail "defaults did not report one set per default key" "$(cat "$WORK/d1")"
+[ -e "$K" ] && fail "defaults created a .claude.json Claude Code never wrote"
+grep -q '^absent ' "$WORK/d1" || fail "defaults did not say .claude.json is absent" "$(cat "$WORK/d1")"
+d defaults-check --settings "$S7" --config "$K" >"$WORK/d1c" && fail "defaults-check passed with no .claude.json at all"
+grep -q '^missing    claude.json leftArrowOpensAgents' "$WORK/d1c" || fail "defaults-check did not name the global key" "$(cat "$WORK/d1c")"
+ok "defaults: an empty settings.json gets every default key; an absent .claude.json is not created"
+# leg: the login's own values survive — a different effortLevel, permissions.allow beside the filled defaultMode, hooks
+printf '{"effortLevel": "high", "permissions": {"allow": ["Bash(x)"]}, "hooks": {"Stop": [{"hooks": []}]}, "model": "m"}\n' > "$S7"
 printf '{\n  "numStartups": 7,\n  "oauthAccount": {"emailAddress": "a@b"},\n  "projects": {"/x": {"hasTrustDialogAccepted": true}}\n}\n' > "$K"
 chmod 600 "$K"
-k keys-check --config "$K" >"$WORK/k0" && fail "keys-check passed with the key missing" "$(cat "$WORK/k0")"
-grep -q '^missing    leftArrowOpensAgents' "$WORK/k0" || fail "keys-check did not name the missing key" "$(cat "$WORK/k0")"
 mkdir "$K.lock"
-FLEET_KEYS_LOCK_WAIT=0.3 python3 "$MERGE" keys --keys "$KEYS" --config "$K" >"$WORK/kl" 2>&1 && fail "keys wrote through a held .claude.json.lock" "$(cat "$WORK/kl")"
-grep -q leftArrowOpensAgents "$K" && fail "keys changed the file while the lock was held"
-[ -d "$K.lock" ] || fail "keys removed someone else's lock"
+FLEET_KEYS_LOCK_WAIT=0.3 d defaults --settings "$S7" --config "$K" >"$WORK/dl" 2>&1 && fail "defaults wrote through a held .claude.json.lock" "$(cat "$WORK/dl")"
+grep -q leftArrowOpensAgents "$K" && fail "defaults changed .claude.json while the lock was held"
+[ -d "$K.lock" ] || fail "defaults removed someone else's lock"
 rmdir "$K.lock"
-ok "keys: an absent config is not created; a held lock is never stolen"
-k keys --config "$K" >"$WORK/k1" || fail "keys merge failed" "$(cat "$WORK/k1")"
-[ -e "$K.lock" ] && fail "keys left its lock behind"
-K="$K" python3 - <<'PY' || fail "keys merge touched another key or missed its own" "$(cat "$K")"
+ok "defaults: a held .claude.json.lock is never stolen"
+d defaults --settings "$S7" --config "$K" >"$WORK/d2" || fail "defaults over a login's own values failed" "$(cat "$WORK/d2")"
+[ -e "$K.lock" ] && fail "defaults left its lock behind"
+S7="$S7" python3 - <<'PY' || fail "defaults overwrote a login value, or missed a default" "$(cat "$S7")"
+import json, os, sys
+s = json.load(open(os.environ["S7"]))
+sys.exit(0 if s["effortLevel"] == "high" and s["permissions"]["allow"] == ["Bash(x)"]
+         and s["permissions"]["defaultMode"] == "bypassPermissions" and s["hooks"] == {"Stop": [{"hooks": []}]}
+         and s["model"] == "m" and s["outputStyle"] == "Concise" else 1)
+PY
+grep -q '^differs    settings.json effortLevel = "high" (default "xhigh")' "$WORK/d2" || fail "defaults did not report the login's own effortLevel" "$(cat "$WORK/d2")"
+grep -q '^set            claude.json leftArrowOpensAgents = false' "$WORK/d2" || fail "defaults did not fill leftArrowOpensAgents" "$(cat "$WORK/d2")"
+K="$K" python3 - <<'PY' || fail "defaults touched another .claude.json key or missed its own" "$(cat "$K")"
 import json, os, sys
 s = json.load(open(os.environ["K"]))
 sys.exit(0 if s == {"numStartups": 7, "oauthAccount": {"emailAddress": "a@b"},
@@ -187,22 +237,40 @@ sys.exit(0 if s == {"numStartups": 7, "oauthAccount": {"emailAddress": "a@b"},
                     "leftArrowOpensAgents": False} else 1)
 PY
 [ "$(python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' "$K")" = 600 ] \
-  || fail "keys loosened .claude.json's mode"
-ok "keys: sets leftArrowOpensAgents=false, every other key untouched, mode 0600 kept"
-cp "$K" "$WORK/k.before"
-k keys --config "$K" >"$WORK/k2" || fail "second keys merge failed"
-grep -q '^unchanged' "$WORK/k2" || fail "second keys merge was not a no-op" "$(cat "$WORK/k2")"
-cmp -s "$K" "$WORK/k.before" || fail "no-op keys merge rewrote the file"
-k keys-check --config "$K" >"$WORK/k3" || fail "keys-check unhappy after merge" "$(cat "$WORK/k3")"
-ok "keys: idempotent (no write) and keys-check passes"
+  || fail "defaults loosened .claude.json's mode"
+ok "defaults: the login's effortLevel / permissions.allow / hooks / model survive, defaultMode fills in beside them, .claude.json gets its key at mode 0600"
+# leg: idempotent — no write, no backup; check passes except for the login's own key
+cp "$S7" "$WORK/s.before"; cp "$K" "$WORK/k.before"
+d defaults --settings "$S7" --config "$K" >"$WORK/d3" || fail "second defaults run failed" "$(cat "$WORK/d3")"
+grep -q '^unchanged' "$WORK/d3" || fail "second defaults run was not a no-op" "$(cat "$WORK/d3")"
+cmp -s "$S7" "$WORK/s.before" || fail "no-op defaults rewrote settings.json"
+cmp -s "$K" "$WORK/k.before" || fail "no-op defaults rewrote .claude.json"
+[ "$(nbak settings.json)" = 0 ] && [ "$(nbak claude.json)" = 0 ] || fail "defaults wrote a backup"
+d defaults-check --settings "$S7" --config "$K" >"$WORK/d3c" && fail "defaults-check passed over the login's own effortLevel" "$(cat "$WORK/d3c")"
+head -1 "$WORK/d3c" | grep -q '^1 key(s) differ from claude-settings.default.json' || fail "defaults-check's first line is not the count" "$(cat "$WORK/d3c")"
+grep -q '^differs    settings.json effortLevel' "$WORK/d3c" || fail "defaults-check did not name the differing key" "$(cat "$WORK/d3c")"
+ok "defaults: idempotent (no write, no backup); defaults-check counts the login's own key as 1 differ"
+# leg: the override file and --skip shield keys; a user true in .claude.json is kept, not corrected
+printf '["theme", "permissions"]\n' > "$WORK/override.json"
+printf '{}\n' > "$S7"
 printf '{"leftArrowOpensAgents": true, "theme": "dark"}\n' > "$K"
-k keys --config "$K" --skip leftArrowOpensAgents >"$WORK/k4" || fail "keys --skip failed"
-grep -q '^unchanged' "$WORK/k4" || fail "keys --skip changed something" "$(cat "$WORK/k4")"
-k keys-check --config "$K" --skip leftArrowOpensAgents >/dev/null || fail "keys-check --skip still unhappy"
-k keys --config "$K" >"$WORK/k5" || fail "keys over a user true failed"
-grep -q '^set            leftArrowOpensAgents: true -> false' "$WORK/k5" || fail "keys did not report the correction" "$(cat "$WORK/k5")"
-python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); sys.exit(0 if s=={"leftArrowOpensAgents": False, "theme": "dark"} else 1)' "$K" \
-  || fail "keys over a user true: wrong result" "$(cat "$K")"
-ok "keys: --skip leaves the key to the login; without it a user true is corrected"
+d defaults --settings "$S7" --config "$K" >"$WORK/d4" || fail "defaults with an override failed" "$(cat "$WORK/d4")"
+S7="$S7" python3 - <<'PY' || fail "override did not shield theme / permissions" "$(cat "$S7")"
+import json, os, sys
+s = json.load(open(os.environ["S7"]))
+sys.exit(0 if "theme" not in s and "permissions" not in s and s["effortLevel"] == "xhigh" else 1)
+PY
+grep -q '^kept    2 key(s) left to this login: permissions.defaultMode, theme' "$WORK/d4" || fail "defaults did not list the kept keys" "$(cat "$WORK/d4")"
+grep -q '^differs    claude.json leftArrowOpensAgents = true (default false)' "$WORK/d4" || fail "defaults did not report the user's true" "$(cat "$WORK/d4")"
+python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); sys.exit(0 if s=={"leftArrowOpensAgents": True, "theme": "dark"} else 1)' "$K" \
+  || fail "defaults corrected a user true — the fill became a pin" "$(cat "$K")"
+d defaults-check --settings "$S7" --config "$K" --skip leftArrowOpensAgents >"$WORK/d4c" || fail "defaults-check with override + --skip unhappy" "$(cat "$WORK/d4c")"
+grep -q '^ok .*left to this login: permissions.defaultMode, theme, leftArrowOpensAgents' "$WORK/d4c" || fail "defaults-check did not list the shielded keys" "$(cat "$WORK/d4c")"
+d defaults-check --settings "$S7" --config "$K" >"$WORK/d4d" && fail "defaults-check ignored the user's true without --skip"
+ok "defaults: the override file and --skip shield keys; a user true is kept and reported, never corrected"
+# leg: a malformed defaults file is refused
+printf '{"settings": {}, "bogus": {}}\n' > "$WORK/bad.json"
+python3 "$MERGE" defaults-check --defaults "$WORK/bad.json" --settings "$S7" --config "$K" >/dev/null 2>&1; [ $? = 2 ] || fail "a malformed defaults file was not refused with exit 2"
+ok "defaults: a defaults file with a section other than settings/globalConfig exits 2"
 
 printf 'PASS  fleet-hooks-merge-selftest (%d checks)\n' "$pass"

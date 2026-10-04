@@ -38,9 +38,10 @@
 #                       every other step runs; no plist rendered, no launchctl —
 #                       what fleet-login-bootstrap.sh passes on launchd with
 #                       neither a gui domain nor system LaunchDaemons
-#   Q. keys (#1528)     every moving apply -> hooks-merge `keys` on this
-#                       login's GLOBAL config ($CLAUDE_CONFIG_DIR/.claude.json),
-#                       not settings.json, even when global-config-keys.json did
+#   Q. settings (#1558) every moving apply -> hooks-merge `defaults` with
+#                       conf/claude-settings.default.json on this login's
+#                       settings.json AND its GLOBAL config
+#                       ($CLAUDE_CONFIG_DIR/.claude.json), even when the file did
 #                       not change; FLEET_KEEP_AGENTS_KEY=1 -> --skip
 #                       leftArrowOpensAgents; a version without the file -> skip
 #   K. usage            --to must be HEAD, both revs required, from==to no-ops
@@ -122,8 +123,9 @@ stub fleet-migrate-layout.sh; stub fleet-hooks-merge.py; stub fleet-ui-refresh.s
 cat > "$R/bin/fleet-hooks-merge.py" <<EOF
 import sys
 open("$LOG","a").write("fleet-hooks-merge.py " + " ".join(sys.argv[1:]) + "\n")
-if sys.argv[1] == "keys":
-    print("set            leftArrowOpensAgents: (absent) -> false")
+if sys.argv[1] == "defaults":
+    print('set            settings.json permissions.defaultMode = "bypassPermissions"')
+    print("set            .claude.json leftArrowOpensAgents = false")
 else:
     print("appended PreToolUse Bash guard.sh")
 EOF
@@ -467,28 +469,29 @@ eq 'P without the flag -> exit 0' 0 "$RC"
 contains 'P without the flag adds the unit' "$OUT" 'daemons: added pnew'
 ok 'P without the flag bootstraps it' "grep -qx 'launchctl bootstrap gui/$(id -u) $H/Library/LaunchAgents/com.claude-fleet.pnew.plist' '$LOG'"
 
-# --- Q. keys (issue #1528) -------------------------------------------------------------
+# --- Q. settings (issue #1558) --------------------------------------------------------
 Q0=$(git -C "$R" rev-parse HEAD)
-printf '{"leftArrowOpensAgents": false}\n' > "$R/hooks/global-config-keys.json"
-Q1=$(commit 'global config keys')
+printf '{"settings": {"permissions": {"defaultMode": "bypassPermissions"}}, "globalConfig": {"leftArrowOpensAgents": false}}\n' > "$R/conf/claude-settings.default.json"
+Q1=$(commit 'default claude settings')
 run_ap --from "$Q0" --to "$Q1"
 eq 'Q exit' 0 "$RC"
-ok 'Q keys merged into the global config' "grep -qx 'fleet-hooks-merge.py keys --keys $R/hooks/global-config-keys.json --config $H/.claude/.claude.json' '$LOG'"
-contains 'Q keys relayed' "$OUT" "keys: set — 1 change(s) in $H/.claude/.claude.json"
-contains 'Q keys line shown' "$OUT" 'set            leftArrowOpensAgents: (absent) -> false'
+ok 'Q defaults merged into settings.json + the global config' "grep -qx 'fleet-hooks-merge.py defaults --defaults $R/conf/claude-settings.default.json --settings $H/.claude/settings.json --config $H/.claude/.claude.json' '$LOG'"
+contains 'Q settings relayed' "$OUT" 'settings: filled — 2 default key(s) this login lacked'
+contains 'Q settings line shown' "$OUT" 'set            settings.json permissions.defaultMode = "bypassPermissions"'
+contains 'Q global line shown' "$OUT" 'set            .claude.json leftArrowOpensAgents = false'
 ok 'Q hook table untouched' "! grep -q 'fleet-hooks-merge.py merge' '$LOG'"
 FLEET_KEEP_AGENTS_KEY=1 run_ap --from "$Q0" --to "$Q1"
-ok 'Q opt-out skips the key' "grep -q 'fleet-hooks-merge.py keys .* --skip leftArrowOpensAgents' '$LOG'"
+ok 'Q opt-out skips the key' "grep -q 'fleet-hooks-merge.py defaults .* --skip leftArrowOpensAgents' '$LOG'"
 contains 'Q opt-out said' "$OUT" 'FLEET_KEEP_AGENTS_KEY=1'
 echo q > "$R/bin/q.sh"
 Q2=$(commit 'unrelated')
 run_ap --from "$Q1" --to "$Q2"
-ok 'Q unrelated move still re-applies' "grep -q '^fleet-hooks-merge.py keys ' '$LOG'"
-git -C "$R" rm -q "$R/hooks/global-config-keys.json"
-Q3=$(commit 'no keys file')
+ok 'Q unrelated move still re-applies' "grep -q '^fleet-hooks-merge.py defaults ' '$LOG'"
+git -C "$R" rm -q "$R/conf/claude-settings.default.json"
+Q3=$(commit 'no defaults file')
 run_ap --from "$Q2" --to "$Q3"
-contains 'Q no file -> skip' "$OUT" 'keys: skip — no global-config-keys.json in this version'
-ok 'Q no file -> no call' "! grep -q 'fleet-hooks-merge.py keys' '$LOG'"
+contains 'Q no file -> skip' "$OUT" 'settings: skip — no conf/claude-settings.default.json in this version'
+ok 'Q no file -> no call' "! grep -q 'fleet-hooks-merge.py defaults' '$LOG'"
 
 # --- K. usage -------------------------------------------------------------------------
 run_ap --from "$C0" --to "$C1"; eq 'K --to not HEAD' 2 "$RC"

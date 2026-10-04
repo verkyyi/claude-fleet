@@ -163,12 +163,14 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 # @label=Install-follow stuck threshold @group=janitor @tier=internal @scope=global @edit=int @unit=seconds
 #FLEET_INSTALL_FOLLOW_STUCK_SECS=86400
 # ← in a Claude pane opens the agents view (and its prompt hint says
-# "← for agents"); a stray press strands you there. The sync pins
+# "← for agents"); a stray press strands you there. The sync fills
 # leftArrowOpensAgents=false into this login's ~/.claude.json — Claude Code's
-# global config, the only place that key is read (hooks/global-config-keys.json,
-# issue #1528) and the doctor's `setkeys` row checks it.
-# Set to 1 to leave that key to this login — the sync stops touching it and the
-# doctor stops asking. GLOBAL.
+# global config, the only place that key is read — from the fleet's default
+# Claude configuration, conf/claude-settings.default.json (issue #1558, which
+# folded #1528's key in); the doctor's `settings` row counts every default key
+# that differs. The fill never overwrites a value the login set; set this to 1
+# to leave the key alone entirely (the same as listing it in
+# ~/.claude/settings.fleet-override.json). GLOBAL.
 # @label=Keep ← opening the agents view @group=janitor @tier=internal @scope=global @edit=bool
 #FLEET_KEEP_AGENTS_KEY=0
 

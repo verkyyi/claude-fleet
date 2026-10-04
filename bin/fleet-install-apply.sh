@@ -26,16 +26,24 @@
 #             fleet` replaces the three passes below (unless a copy install sits
 #             beside it, in which case both run)
 #   hooks     settings-hooks.json changed -> fleet-hooks-merge.py merge
-#   keys      every apply that moved -> fleet-hooks-merge.py keys (issue
-#             #1528): hooks/global-config-keys.json pinned into Claude Code's
-#             GLOBAL config (~/.claude.json, or $CLAUDE_CONFIG_DIR/.claude.json),
-#             today `leftArrowOpensAgents: false` — the only switch for ←'s agents
-#             view; settings.json does not reach it. Not gated on the file
-#             changing: a login whose .claude.json did not exist yet, or lost the
-#             key, gets it on its next sync; an unchanged key writes nothing.
-#             Runs on a plugin install too (a plugin cannot set it).
-#             FLEET_KEEP_AGENTS_KEY=1 (env or this login's fleet.settings) leaves
-#             that key to the login.
+#   settings  every apply that moved -> fleet-hooks-merge.py defaults (issue
+#             #1558, folding #1528's keys pass): conf/claude-settings.default.json
+#             — the ONE default Claude configuration for every login on a
+#             managed machine — filled into ~/.claude/settings.json (its
+#             "settings": permissions.defaultMode=bypassPermissions, effort,
+#             output style, theme, …; never model / enabledPlugins) and into
+#             Claude Code's GLOBAL config ~/.claude.json, or
+#             $CLAUDE_CONFIG_DIR/.claude.json (its "globalConfig": today
+#             `leftArrowOpensAgents: false` — the only switch for ←'s agents
+#             view; settings.json does not reach it). FILL ONLY: a key the login
+#             lacks is set, a key it has is never overwritten, and the keys
+#             listed in ~/.claude/settings.fleet-override.json are never written
+#             at all. Not gated on the file changing: a login whose settings lost
+#             a key, or whose .claude.json did not exist yet, gets it on its next
+#             sync; a complete login writes nothing. Runs on a plugin install too
+#             (a plugin cannot set a settings key). FLEET_KEEP_AGENTS_KEY=1 (env
+#             or this login's fleet.settings) leaves leftArrowOpensAgents to the
+#             login (= listing it in the override file).
 #   commands  install added/changed fleet commands, remove retired ones. Gate
 #             (#858): a line that IS the marker — exactly
 #             `<!-- fleet skill · owner: <owner> -->` — outside a code fence. A
@@ -503,30 +511,33 @@ if [ "$COPY" = 1 ]; then
   fi
 fi
 
-# --- keys (issue #1528) ---------------------------------------------------------
-# Not under $COPY: the plugin wires hooks, but no plugin can set a global config key.
+# --- settings (issue #1558; folds the #1528 keys pass) ---------------------------
+# Not under $COPY: the plugin wires hooks, but no plugin can set a settings key.
 GCONF="${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"
-if [ -f "$ROOT/hooks/global-config-keys.json" ]; then
+DEFAULTS="$ROOT/conf/claude-settings.default.json"
+if [ -f "$DEFAULTS" ]; then
   keep="${FLEET_KEEP_AGENTS_KEY:-}"
   [ -n "$keep" ] || keep=$( . "$ROOT/bin/fleet-lib.sh" >/dev/null 2>&1; printf '%s' "${FLEET_KEEP_AGENTS_KEY:-}" )
   kskip=(); [ "$keep" = 1 ] && kskip=(--skip leftArrowOpensAgents)
   note=''; [ "$keep" = 1 ] && note=' (leftArrowOpensAgents left to this login: FLEET_KEEP_AGENTS_KEY=1)'
-  if out=$(python3 "$ROOT/bin/fleet-hooks-merge.py" keys --keys "$ROOT/hooks/global-config-keys.json" \
+  if out=$(python3 "$ROOT/bin/fleet-hooks-merge.py" defaults --defaults "$DEFAULTS" --settings "$CDIR/settings.json" \
              --config "$GCONF" ${kskip[@]+"${kskip[@]}"} ${DRYFLAG:+"$DRYFLAG"} 2>&1); then
     n=$(printf '%s\n' "$out" | grep -c '^set ')
+    kept=$(printf '%s\n' "$out" | sed -n 's/^kept    //p')
     if [ "$n" -gt 0 ]; then
-      say "keys: $([ "$DRY" = 1 ] && echo 'would set' || echo 'set') — $n change(s) in $GCONF$note"
+      say "settings: $([ "$DRY" = 1 ] && echo 'would fill' || echo 'filled') — $n default key(s) this login lacked${kept:+; $kept}$note"
       printf '%s\n' "$out" | grep '^set ' | sed 's/^/    /'
-    elif printf '%s\n' "$out" | grep -q '^absent '; then
-      say "keys: skip — no $GCONF yet (Claude Code has not run on this login; the next sync sets it)"
     else
-      say "keys: ok — already set$note"
+      say "settings: ok — every default key present, or this login's own${kept:+; $kept}$note"
+    fi
+    if printf '%s\n' "$out" | grep -q '^absent '; then
+      say "settings: no $GCONF yet (Claude Code has not run on this login; the next sync fills its key)"
     fi
   else
-    fail keys "fleet-hooks-merge.py keys: $(printf '%s\n' "$out" | tail -1)"
+    fail settings "fleet-hooks-merge.py defaults: $(printf '%s\n' "$out" | tail -1)"
   fi
 else
-  say 'keys: skip — no global-config-keys.json in this version'
+  say 'settings: skip — no conf/claude-settings.default.json in this version'
 fi
 
 # --- commands -----------------------------------------------------------------
