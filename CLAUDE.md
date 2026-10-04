@@ -241,5 +241,15 @@ Do not install from memory: read the doc and work from it.
   fleet's own detached scripts) anywhere in the tree spares it; a rotation lease
   spares the worktree; `FLEET_WINDOW_REAP=0` turns it off; reaps are logged in
   `diskguard/window-reap.log`.
+- **The operator's screen is THEIR computer, not this one** (issues #1367, #1379).
+  They SSH in from iTerm2, so `open <url|file>` here shows it to nobody.
+  `bin/fleet-open.sh <url | :port[/path] | file>` (skill `skills/fleet-open/`)
+  writes an `OSC 1337 ; Custom=id=<secret>:<base64 JSON>` escape to the client
+  they are using — a page on this machine travels as `kind=forward` + its
+  loopback port, which their side (#1380) port-forwards over its ssh; the secret
+  is `~/.config/claude-fleet/open.secret` (0600). Files go through
+  `bin/fleet-show.sh`. Both share ONE client picker + `lock-client` writer,
+  `bin/fleet-client-lib.sh` — never a second copy. No iTerm2 → `open-url.sh`
+  (2226 tunnel, else popup + OSC 52).
 - Claude Code re-reads `settings.json` hooks per turn, so running sessions pick
   up hook changes without a restart.

@@ -7,6 +7,7 @@ ONLY writer on the operator's tty and no tmux frame can land inside a FilePart.
 
   fleet-show-send.py --out <tty|file> --status <file> [--inline] [--single]
                      [--part N] [--wait-key S] [--geom C,R,CW,CH] <file>...
+  fleet-show-send.py --out <tty|file> --status <file> --raw <file>
 
   --out      where the escapes go (the client runs us with /dev/tty)
   --status   one TAB-separated line per file, written AFTER its last byte:
@@ -15,6 +16,8 @@ ONLY writer on the operator's tty and no tmux frame can land inside a FilePart.
              `err<TAB><why><TAB><name>`, then a final `done` line — fleet-show.sh
              waits on it
   --inline   draw it (inline=1) on a laid-out screen instead of inline=0 (download)
+  --raw      write the file's bytes to --out verbatim — an escape already built
+             by the caller (bin/fleet-open.sh's OSC 1337 Custom=, issue #1379)
   --single   the one-shot `File=` form (iTerm2 < 3.5) instead of Multipart
   --part     base64 bytes per FilePart (rounded down to a multiple of 4)
   --wait-key --inline: hold each screen until a key (or S seconds) — tmux repaints
@@ -273,6 +276,7 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--status", required=True)
     ap.add_argument("--inline", action="store_true")
+    ap.add_argument("--raw", action="store_true")
     ap.add_argument("--single", action="store_true")
     ap.add_argument("--part", type=int, default=768)
     ap.add_argument("--wait-key", type=int, default=0)
@@ -297,6 +301,18 @@ def main():
             st.write(f"err\tcannot open {a.out}: {e.strerror}\t-\ndone\n")
             return 1
         rc = 0
+        if a.raw:
+            for f in a.files:
+                try:
+                    data = open(f, "rb").read()
+                    write_all(fd, data)
+                    status("ok", len(data), os.path.basename(f))
+                except OSError as e:
+                    status("err", e.strerror, os.path.basename(f))
+                    rc = 1
+            st.write("done\n")
+            os.close(fd)
+            return rc
         if not a.inline:
             for f in a.files:
                 name = os.path.basename(f)

@@ -8,6 +8,10 @@
 #   share.sh <file.md|file.html> [more ...]   # add doc(s)/page(s) to the shared list; prints READY <url>
 #   share.sh --tunnel <file> [more ...]  # same, but on a PUBLIC cloudflared quick tunnel — no tailnet
 #                                      # (.md → GitHub-styled viewer; .html → served as-is, #526)
+#   share.sh --local <file> [more ...] # same, but NO tailscale: the loopback server only; prints
+#                                      # READY http://127.0.0.1:<port>/d/<id>/ — hand it to fleet-open
+#   share.sh --open [--local] <file>   # share, then bin/fleet-open.sh the doc URL: it opens in the
+#                                      # operator's OWN browser over their ssh (issue #1379)
 #   share.sh --list                    # show what is currently shared
 #   share.sh --remove <substr>         # drop entries whose id/title/path matches <substr>
 #   share.sh --refresh                 # re-render all shared docs with the current template
@@ -35,6 +39,13 @@
 #                included; doc headers + source paths are stripped and /_ctl is 404.
 #                Sticky until --stop. The hostname changes whenever cloudflared restarts
 #                (reboot, --stop), so old links die with it: a live preview, not hosting.
+#   local        no tailnet involved (issue #1379): opt-in with --local. server.py on
+#                127.0.0.1 only (#1154), the URL http://127.0.0.1:<port>/ — reachable from
+#                this machine alone, which is the point: bin/fleet-open.sh forwards it to the
+#                operator's browser over their ssh. A later share WITHOUT --local turns it
+#                into https (same loopback server, `tailscale serve` added). --local beside
+#                an https or tunnel share reuses their loopback server and only prints the
+#                loopback URL; beside http-direct (server on the tailnet IP) it refuses.
 #
 # Set DOC_PREVIEW_SESSION to label your session in the list (default: hostname).
 # No npm install needed: rendering is client-side (CDN libs in the viewer's browser).
@@ -63,8 +74,10 @@ rebuild_index() { node "$HERE/render.mjs" index "$SERVE_DIR/index.html" "$ENTRIE
 mode() {
   if [ -f "$MODEFILE" ]; then cat "$MODEFILE"; elif [ -f "$HTTPSFILE" ]; then echo https; fi
 }
-sharing() { [ -f "$HTTPSFILE" ] || [ "$(mode)" = http-direct ] || [ "$(mode)" = tunnel ]; }
+sharing() { [ -f "$HTTPSFILE" ] || [ "$(mode)" = http-direct ] || [ "$(mode)" = tunnel ] || [ "$(mode)" = local ]; }
+local_url() { echo "http://127.0.0.1:$(cat "$PORTFILE" 2>/dev/null)/"; }
 current_url() {
+  if [ "$(mode)" = local ]; then local_url; return; fi
   if [ "$(mode)" = tunnel ]; then echo "$(cat "$TUNNELURLFILE" 2>/dev/null)/"; return; fi
   if [ "$(mode)" = http-direct ]; then echo "http://$(host):$(cat "$PORTFILE" 2>/dev/null)/"; return; fi
   local hp sfx=""; hp="$(cat "$HTTPSFILE" 2>/dev/null || echo 443)"
@@ -275,10 +288,21 @@ case "${1:-}" in
     exit 0 ;;
 esac
 
-WANT_TUNNEL=0
+WANT_TUNNEL=0; WANT_LOCAL=0; WANT_OPEN=0
 [ "${DOC_PREVIEW_MODE:-}" = tunnel ] && WANT_TUNNEL=1
-if [ "${1:-}" = --tunnel ]; then WANT_TUNNEL=1; shift; fi
-[ $# -ge 1 ] || { echo "usage: share.sh [--tunnel] <file.md|file.html> [more ...] | --list | --remove <substr> | --publish <id> | --unpublish <id> | --stop" >&2; exit 1; }
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --tunnel) WANT_TUNNEL=1 ;;
+    --local)  WANT_LOCAL=1 ;;
+    --open)   WANT_OPEN=1 ;;
+    *) break ;;
+  esac
+  shift
+done
+[ $# -ge 1 ] || { echo "usage: share.sh [--tunnel|--local] [--open] <file.md|file.html> [more ...] | --list | --remove <substr> | --publish <id> | --unpublish <id> | --stop" >&2; exit 1; }
+if [ "$WANT_LOCAL" = 1 ] && [ "$WANT_TUNNEL" = 1 ]; then
+  echo "doc-preview: --local and --tunnel are opposites — pick one." >&2; exit 1
+fi
 # Tunnel mode is sticky (like http-direct); a live tailnet share is never silently made public.
 MODE="$(mode)"
 if [ "$WANT_TUNNEL" = 1 ] && [ "$MODE" != tunnel ] && sharing; then
@@ -287,8 +311,18 @@ if [ "$WANT_TUNNEL" = 1 ] && [ "$MODE" != tunnel ] && sharing; then
   exit 1
 fi
 [ "$WANT_TUNNEL" = 1 ] && MODE=tunnel
+if [ "$WANT_LOCAL" = 1 ]; then
+  if [ "$MODE" = http-direct ]; then
+    echo "doc-preview: already sharing in http-direct mode — its server binds the tailscale IP, not 127.0.0.1, so --local has no loopback URL to give." >&2
+    echo "Share without --local (the tailnet URL works with fleet-open too), or run share.sh --stop first." >&2
+    exit 1
+  fi
+  [ -n "$MODE" ] || MODE=local
+fi
 NO_TAILNET_HINT="no tailnet? share.sh --tunnel <file> hosts it on a PUBLIC https://*.trycloudflare.com URL instead (needs cloudflared; anyone with the link can read it)"
-if [ "$MODE" = tunnel ]; then
+if [ "$WANT_LOCAL" = 1 ]; then
+  :   # no tailscale, no cloudflared: the loopback server is all --local needs
+elif [ "$MODE" = tunnel ]; then
   command -v cloudflared >/dev/null || { echo "doc-preview: tunnel mode needs cloudflared (brew install cloudflared)" >&2; exit 1; }
 else
   command -v tailscale >/dev/null || { echo "tailscale not installed — $NO_TAILNET_HINT" >&2; exit 1; }
@@ -359,7 +393,7 @@ else
   start_server "$ADDR" $PUB || server_fail "$ADDR"
 fi
 
-if [ "$MODE" = tunnel ] && ! ensure_tunnel "$PORT"; then
+if [ "$WANT_LOCAL" = 0 ] && [ "$MODE" = tunnel ] && ! ensure_tunnel "$PORT"; then
   echo "doc-preview: cloudflared quick tunnel did not come up within ${DOC_PREVIEW_TUNNEL_WAIT:-30}s — see $ROOT/tunnel.log:" >&2
   tail -3 "$ROOT/tunnel.log" 2>/dev/null >&2 || true
   [ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE")" 2>/dev/null || true
@@ -369,7 +403,7 @@ fi
 
 # https mode: ensure tailscale serve points at it. Reuse the existing route (never
 # `reset`, so other sessions' sharing keeps working); only configure one if it's missing.
-if [ "$MODE" = https ] || [ -z "$MODE" ]; then
+if [ "$WANT_LOCAL" = 0 ] && { [ "$MODE" = https ] || [ "$MODE" = local ] || [ -z "$MODE" ]; }; then
   HP="$(serve_route_port "$PORT")"
   if [ -z "$HP" ]; then
     HP="$(cat "$HTTPSFILE" 2>/dev/null || true)"
@@ -405,7 +439,10 @@ NOTE=""
 [ "$MODE" = tunnel ] && NOTE="  (tunnel: PUBLIC — anyone with this link can read it and the index; the URL changes if cloudflared restarts)"
 [ "$MODE" = http-direct ] && NOTE="  (http-direct: plain http inside the tailnet — this login is not tailscale's operator, so no tailscale serve/HTTPS)"
 
-URL="$(current_url)"; BASE="${URL%/}"
+[ "$MODE" = local ] && NOTE="  (local: http on 127.0.0.1 only — open it on the operator's computer with fleet-open)"
+
+if [ "$WANT_LOCAL" = 1 ]; then URL="$(local_url)"; else URL="$(current_url)"; fi
+BASE="${URL%/}"
 # Lead with the specific doc URL when this share added exactly one doc; only show the
 # directory/index when multiple docs were added (or none, e.g. all paths were missing).
 if [ "${#new[@]}" -eq 1 ]; then
@@ -414,4 +451,18 @@ if [ "${#new[@]}" -eq 1 ]; then
 else
   echo "READY ${URL}${NOTE}"             # directory/index listing
   for h in ${new[@]+"${new[@]}"}; do echo "ADDED ${BASE}$h"; done
+fi
+
+# --open: the operator's own browser, over their ssh (bin/fleet-open.sh, issue #1379).
+if [ "$WANT_OPEN" = 1 ]; then
+  if [ "${#new[@]}" -eq 1 ]; then OPEN_URL="${BASE}${new[0]}"; else OPEN_URL="$URL"; fi
+  FO="${FLEET_OPEN_BIN:-}"
+  [ -n "$FO" ] || for c in "$HERE/../../bin/fleet-open.sh" "$HOME/.claude/fleet/bin/fleet-open.sh"; do
+    [ -x "$c" ] && { FO="$c"; break; }
+  done
+  if [ -n "$FO" ]; then
+    echo "OPEN $("$FO" "$OPEN_URL" | tail -n 1)"
+  else
+    echo "doc-preview: --open: fleet-open.sh not found (claude-fleet not installed?) — give the operator the READY URL" >&2
+  fi
 fi

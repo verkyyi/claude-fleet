@@ -9,6 +9,8 @@
 #      listener      →  run extras/laptop-url-opener.sh from this repo
 # 2) Fallback (no tunnel): tmux popup with the URL — cmd-clickable in iTerm —
 #    and OSC52-copied to your LOCAL clipboard (needs tmux set-clipboard on).
+# OPEN_URL_REPORT=1 prints which one happened as the last stdout line —
+# `sent:tunnel` or `fallback:popup` (bin/fleet-open.sh's fallback, issue #1379).
 set -u  # POSIX sh: pipefail is bash-only (dash has none)
 url="${1:-}"; [ -z "$url" ] && exit 0
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -16,6 +18,7 @@ PORT="${URL_OPENER_PORT:-2226}"
 
 # try the tunnel directly — a probe would consume the listener's accept
 if printf '%s\n' "$url" | nc 127.0.0.1 "$PORT" 2>/dev/null; then
+  [ "${OPEN_URL_REPORT:-0}" = 1 ] && echo 'sent:tunnel'
   exit 0
 fi
 
@@ -29,3 +32,6 @@ bash "$BIN/dash-popup.sh" -w 80% -h 8 -- sh -c '
   printf "\n  \033[1;36m%s\033[0m\n\n  cmd-click to open — also copied to your local clipboard.\n  (set up the ssh RemoteForward opener to skip this popup; see open-url.sh)\n\n  Enter to close." "$url"
   read -r _dummy
 ' open-url "$url"
+rc=$?
+[ "${OPEN_URL_REPORT:-0}" = 1 ] && echo 'fallback:popup'
+exit "$rc"
