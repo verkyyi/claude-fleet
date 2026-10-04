@@ -294,6 +294,13 @@ def send_key(session, key):
 
 
 def jump(session, window, pane, lock):
+    # Another machine's row (`wid:<worker_id>`, #1423): step in through a proxy
+    # window (fleet-remote-view.sh, issue #1424) — there is no window here to select.
+    if window.startswith("wid:") and "/" in window:
+        env = dict(os.environ, FLEET_SESSION=session)
+        subprocess.call(["bash", str(BIN / "fleet-remote-view.sh"), "open", window], env=env,
+                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return
     # Never resolve a stale row through a recycled index, or another fleet.
     if not window.startswith("@") or fields(window, "#{session_name}") != [session]:
         return

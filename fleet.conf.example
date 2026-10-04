@@ -1550,6 +1550,14 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # The tag is the hostname's first label unless named here, `host=label` pairs.
 # @label=Machine labels @group=accounts @tier=internal @scope=global @edit=str
 #FLEET_NODE_ALIASES="macmini=m5 mini2=m4"
+# Enter on one of those rows steps INTO it (issue #1424): a proxy window here,
+# `[m4] <name>`, attached over ssh to that session's window on m4 — typing and
+# scrolling are the remote's; closing it only drops the connection; a drop
+# reconnects (through the hub relay, `fleet connect --proxy`, when one is set up).
+# One proxy window per machine. The ssh host is the machine label itself (as your
+# ~/.ssh/config names it) unless mapped here, `label=host` pairs.
+# @label=Machine ssh hosts @group=accounts @tier=internal @scope=fleet @edit=str
+#FLEET_REMOTE_SSH="m4=m4 m5=m5"
 # @label=Rotate early at @group=accounts @tier=advanced @scope=global @edit=int @unit=%
 #FLEET_ACCOUNT_CEILING=85
 # @label=Warn sessions at @group=accounts @tier=advanced @scope=global @edit=int @unit=%

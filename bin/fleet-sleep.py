@@ -191,6 +191,8 @@ class Worker:
         self.pane = workers[0]
         if self.opt('window_name') in ('dash','plan','backlog') or self.opt('@hub') == '1':
             raise NotAWorker('panel/hub is not a worker')
+        if self.opt('@remote'):
+            raise NotAWorker('a proxy onto another machine is not a worker here')
         if not self.opt('@issue').isdigit() and self.opt('@raw') != '1':
             raise ValueError('not an issue or scratch worker')
         self.directory = root(session)
