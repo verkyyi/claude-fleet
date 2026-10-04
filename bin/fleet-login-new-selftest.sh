@@ -143,7 +143,7 @@ command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 FX="$WORK/fx"; mkdir -p "$FX/bin" "$FX/launchd"
-cp "$BIN/fleet-install-apply.sh" "$FX/bin/"
+cp "$BIN/fleet-install-apply.sh" "$BIN/fleet-daemon-lib.sh" "$FX/bin/"   # apply sources the lib beside it (#1495)
 cp "$BIN/../launchd/"com.claude-fleet.*.plist.tmpl "$FX/launchd/" 2>/dev/null
 NTMPL=$(ls "$FX/launchd" | wc -l | tr -d ' ')
 [ "$NTMPL" -gt 0 ] || fail "no launchd/*.plist.tmpl beside bin/ — the fixture needs the real templates"
@@ -271,7 +271,7 @@ if [ -z "$DAEMONS" ]; then
   # 700 home), rendered here, and the count printed matches what was installed
   contains "B3 templates listed as the login" "$OUT" "sudo -u victor -H ls -1 $H/.claude/fleet/launchd"
   contains "B3 read as the login" "$OUT" "read as victor"
-  eq "B3 $NTMPL templates + the apply script read as the login" "$((NTMPL + 1))" "$(grep -c '^sudo cat$' "$LOG")"
+  eq "B3 $NTMPL templates + the apply script + its fleet-daemon-lib.sh read as the login (#1495)" "$((NTMPL + 2))" "$(grep -c '^sudo cat$' "$LOG")"
   contains "B3 installed N/N" "$OUT" "installed $NTMPL/$NTMPL"
   not_contains "B3 never 'nothing to install'" "$OUT" "nothing to install"
   # the login's own first-login apply must find them current: same render, from its clone
@@ -397,7 +397,7 @@ not_contains "H bash32" "$OUT" "unbound variable"
 # --- I. 0 templates (#1213) -----------------------------------------------------
 # a stable whose clone carries no launchd/*.plist.tmpl: --apply FAILS at step 8,
 # names the dir it read (as the login) — never "nothing to install" + exit 0
-FX2="$WORK/fx2"; mkdir -p "$FX2/bin"; cp "$BIN/fleet-install-apply.sh" "$FX2/bin/"
+FX2="$WORK/fx2"; mkdir -p "$FX2/bin"; cp "$BIN/fleet-install-apply.sh" "$BIN/fleet-daemon-lib.sh" "$FX2/bin/"
 git init -q -b master "$FX2" && git -C "$FX2" add -A && git -C "$FX2" commit -qm stable && git -C "$FX2" tag stable
 GB2="$WORK/gh2"; mkdir -p "$GB2/verkyyi"; git clone -q --bare "$FX2" "$GB2/verkyyi/claude-fleet.git"
 if [ -z "$DAEMONS" ]; then

@@ -156,6 +156,65 @@ _fleet_daemon_key() {
   printf '%s' "$_fdk_out"
 }
 
+# --- the launchd SHAPE of a login's daemons (issue #1495) ------------------------
+# One rule, read by everyone who names a unit on macOS. A console login runs its
+# fleet daemons as gui LaunchAgents — ~/Library/LaunchAgents/com.claude-fleet.
+# <unit>.plist, domain gui/<uid>; a guest login an admin set up (fleet-login-new.sh
+# step 8, issue #1192) runs system LaunchDaemons carrying UserName —
+# /Library/LaunchDaemons/com.claude-fleet.<login>.<unit>.plist, domain system.
+# fleet-install-apply.sh keeps whichever shape the login has, and
+# fleet-daemon-loaded.sh (hence fleet-doctor) has to look in the SAME place:
+# until #1495 the probe knew only the gui `launchctl list`, so a system-shape
+# login read «com.claude-fleet.cleanup is NOT installed» three lines under «13
+# interval unit(s) ticking». Each script carried its own copy of the label rule;
+# they live here now, so the two cannot disagree again.
+# Pure: two `ls`, no launchctl — «is it loaded?» stays in the probe.
+#   FLEET_LAUNCHD_AGENTS_DIR   gui plist dir     (default ~/Library/LaunchAgents)
+#   FLEET_INSTALL_DAEMON_DIR   system plist dir  (default /Library/LaunchDaemons)
+#   FLEET_INSTALL_LOGIN        the login         (default $USER, else `id -un`)
+fleet_daemon_login()       { printf '%s' "${FLEET_INSTALL_LOGIN:-${USER:-$(id -un)}}"; }
+fleet_daemon_agents_dir()  { printf '%s' "${FLEET_LAUNCHD_AGENTS_DIR:-$HOME/Library/LaunchAgents}"; }
+fleet_daemon_daemons_dir() { printf '%s' "${FLEET_INSTALL_DAEMON_DIR:-/Library/LaunchDaemons}"; }
+
+# fleet_daemon_shape [login] → `gui` | `system`. gui while ANY gui plist is
+# installed (an agent outranks a system plist a removed guest login left behind),
+# system when none is and a system plist for this login is, gui when neither —
+# the rule fleet-install-apply.sh has always kept a login's shape by.
+fleet_daemon_shape() {
+  _fds_l="${1:-$(fleet_daemon_login)}"
+  if ! ls "$(fleet_daemon_agents_dir)"/com.claude-fleet.*.plist >/dev/null 2>&1 \
+     && ls "$(fleet_daemon_daemons_dir)/com.claude-fleet.$_fds_l".*.plist >/dev/null 2>&1; then
+    printf 'system'
+  else
+    printf 'gui'
+  fi
+}
+
+# fleet_daemon_label <unit> [shape] [login] → that unit's launchd label in that
+# shape: com.claude-fleet.<unit> (gui) or com.claude-fleet.<login>.<unit>
+# (system). Shape and login default to this login's.
+fleet_daemon_label() {
+  _fdl_l="${3:-$(fleet_daemon_login)}"
+  case "${2:-$(fleet_daemon_shape "$_fdl_l")}" in
+    system) printf 'com.claude-fleet.%s.%s' "$_fdl_l" "${1:-}" ;;
+    *)      printf 'com.claude-fleet.%s' "${1:-}" ;;
+  esac
+}
+
+# fleet_daemon_domain [shape] → the launchctl domain: gui/<uid> or system.
+fleet_daemon_domain() {
+  case "${1:-$(fleet_daemon_shape)}" in system) printf 'system' ;; *) printf 'gui/%s' "$(id -u)" ;; esac
+}
+
+# fleet_daemon_plist <unit> [shape] [login] → where that unit's plist lives.
+fleet_daemon_plist() {
+  _fdp_l="${3:-$(fleet_daemon_login)}"
+  case "${2:-$(fleet_daemon_shape "$_fdp_l")}" in
+    system) printf '%s/%s.plist' "$(fleet_daemon_daemons_dir)" "$(fleet_daemon_label "${1:-}" system "$_fdp_l")" ;;
+    *)      printf '%s/%s.plist' "$(fleet_daemon_agents_dir)"  "$(fleet_daemon_label "${1:-}" gui)" ;;
+  esac
+}
+
 # fleet_now — epoch seconds. `date +%s` unless the calling script PINNED its clock
 # with fleet_now_pin: then the pin plus the shell's own $SECONDS since pinning, so
 # every age this lib (and usage-lib.sh, which delegates here) computes shares ONE

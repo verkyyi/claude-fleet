@@ -3,6 +3,9 @@
 # "ready: ..." or a comma-separated list of missing steps.
 set -u
 bin=$(cd "$(dirname "$0")" && pwd)
+# the launchd label / domain of a unit in either shape (issue #1495) — the lib's rule
+# shellcheck source=/dev/null
+. "$bin/fleet-daemon-lib.sh"
 conf_dir=${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}
 accounts=${FLEET_ACCOUNTS_DIR:-$HOME/.config/claude-fleet/accounts}
 missing=''
@@ -45,13 +48,12 @@ fi
 # New guest logins use system LaunchDaemons with a login-qualified label;
 # console logins use gui LaunchAgents. Every shipped unit must be loaded.
 if command -v launchctl >/dev/null 2>&1; then
-  uid=$(id -u)
-  login=$(id -un)
+  login=$(fleet_daemon_login)
   for tmpl in "$bin"/../launchd/com.claude-fleet.*.plist.tmpl; do
     [ -f "$tmpl" ] || continue
     unit=${tmpl##*/com.claude-fleet.}; unit=${unit%.plist.tmpl}
-    launchctl print "gui/$uid/com.claude-fleet.$unit" >/dev/null 2>&1 ||
-      launchctl print "system/com.claude-fleet.$login.$unit" >/dev/null 2>&1 ||
+    launchctl print "$(fleet_daemon_domain gui)/$(fleet_daemon_label "$unit" gui)" >/dev/null 2>&1 ||
+      launchctl print "system/$(fleet_daemon_label "$unit" system "$login")" >/dev/null 2>&1 ||
       { add "daemon $unit"; }
   done
 elif command -v systemctl >/dev/null 2>&1; then
