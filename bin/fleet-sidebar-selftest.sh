@@ -1244,6 +1244,10 @@ try:
     wait_for(lambda: tm('display-message', '-p', '-t', 'fleet-test:', '#{window_id}') == new,
              'the ⌃s session did not become the current window')
     wait_for(lambda: view_on(new) == [side], 'the view did not follow to the ⌃s session')
+    # The spawn hands the keyboard to the new session when it EXITS, which can be
+    # after its window shows: wait for that, or it lands after the click below.
+    wait_for(lambda: worker_cue(side) and not navigation(),
+             'the ⌃s spawn did not hand the keyboard back: %r' % input_line(side))
     tm('select-window', '-t', w1)
     wait_for(lambda: view_on(w1) == [side], 'the view did not come back after ⌃s')
     tm('kill-window', '-t', new)
