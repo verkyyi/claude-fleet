@@ -55,6 +55,14 @@ with `tailscale serve` (HTTPS on the tailnet). The viewing browser needs interne
   (it would make every session's docs public). The hostname changes whenever cloudflared
   restarts (reboot, `--stop`), so earlier links die with it. Use it only when the user
   wants a link without the tailnet — it is public-by-obscurity, not private.
+- **`local`** — **no tailnet, nothing public** (issue #1379). Opt-in: `share.sh --local
+  <file>`. `server.py` on `127.0.0.1` only; `READY http://127.0.0.1:<port>/d/<id>/` — a URL
+  that works on THIS machine alone, made to be handed to `bin/fleet-open.sh`, which opens it
+  in the operator's own browser over their ssh (the `fleet-open` skill). `share.sh --open
+  [--local] <file>` does both and prints `OPEN <fleet-open's result>`. A later share without
+  `--local` turns the same server into `https`; `--local` beside an `https`/`tunnel` share
+  reuses their loopback server and only prints the loopback URL; beside `http-direct` (server
+  on the tailnet IP) it refuses.
 
 The local port is picked by a real `bind()` probe (not `lsof`, which can't see another
 login's server), and a server that fails to start leaves no `server.pid`/`server.port` and
@@ -85,6 +93,8 @@ In both cases the `READY` line is the primary URL to give the user.
 Other commands:
 
 ```bash
+~/.claude/skills/doc-preview/share.sh --open <file>       # share + open it in the operator's browser
+~/.claude/skills/doc-preview/share.sh --local <file>      # loopback only: http://127.0.0.1:<port>/d/<id>/
 ~/.claude/skills/doc-preview/share.sh --list              # show what's currently shared
 ~/.claude/skills/doc-preview/share.sh --refresh           # re-render ALL shared docs in place
                                                           #  (same URLs; picks up source-file edits

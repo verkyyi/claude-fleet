@@ -24,6 +24,14 @@
 #                  share is never turned public; a tunnel that never reports a URL
 #                  → exit 1 with nothing left behind; tailscale down → the error
 #                  names --tunnel.
+#   • LOCAL        (issue #1379) --local with tailscale DOWN → READY is
+#                  http://127.0.0.1:<port>/d/<id>/, server on loopback, mode = local,
+#                  tailscale never asked; a later plain share upgrades it to https on
+#                  the SAME server; --local beside https keeps https and prints the
+#                  loopback URL; beside http-direct refuses; --local --tunnel refuses;
+#                  --open hands the doc URL to fleet-open (FLEET_OPEN_BIN stub) and
+#                  prints OPEN <its result>. Sections 1-7 run with no --local and are
+#                  the "behaviour unchanged" half.
 #   • DOCTOR       fleet-doctor's `docprev` row: operator = this login → PASS;
 #                  another login → INFO naming the http-direct fallback and the
 #                  one-time `sudo tailscale serve` command; unreadable → no row.
@@ -226,6 +234,46 @@ nofile "$ROOT/tunnel.pid" "7e: no tunnel.pid may be left behind"
 nofile "$ROOT/server.pid" "7e: no server.pid may be left behind"
 nofile "$ROOT/mode" "7e: no mode may be recorded"
 ok [ "$(entries)" = 0 ]
+
+# --- 8. --local: loopback only, no tailscale (issue #1379) -------------------
+reset_state; echo ok > "$WORK/serve.mode"; touch "$WORK/ts.down"
+out="$(share --local "$WORK/a.md")"; rc=$?
+[ "$rc" = 0 ] || fail "8: --local must share with tailscale down (rc=$rc)" "$out"
+PORT="$(cat "$ROOT/server.port" 2>/dev/null)"
+has "READY http://127.0.0.1:$PORT/d/" "$out" "8: READY must be the loopback URL"
+has "fleet-open" "$out" "8: the READY note must point at fleet-open"
+ok [ "$(cat "$ROOT/mode")" = local ]
+ok [ ! -s "$WORK/serve.argv" ]
+path="/${out#*127.0.0.1:$PORT/}"; path="${path%% *}"; path="${path%%$'\n'*}"
+has 200 "$(get "$PORT" "$path")" "8: the loopback server must serve the doc"
+has "Shared docs at: http://127.0.0.1:$PORT/" "$(share --list)" "8: --list reports the loopback URL"
+out="$(share --local --tunnel "$WORK/b.md")"; rc=$?
+[ "$rc" = 1 ] || fail "8a: --local --tunnel must refuse (rc=$rc)" "$out"
+# a later plain share → https on the same loopback server
+rm -f "$WORK/ts.down"
+out="$(share "$WORK/b.md")"
+has "READY https://box.tailnet.ts.net" "$out" "8b: a plain share after --local must give https"
+ok [ "$(cat "$ROOT/mode")" = https ]
+ok [ "$(cat "$ROOT/server.port")" = "$PORT" ]
+has "http://127.0.0.1:$PORT" "$(cat "$WORK/serve.argv")" "8b: serve must front the same loopback server"
+# --local beside https: mode stays https, the line is the loopback URL, serve untouched
+: > "$WORK/serve.argv"
+out="$(share --local "$WORK/a.md")"
+has "READY http://127.0.0.1:$PORT/d/" "$out" "8c: --local beside https must print the loopback URL"
+ok [ "$(cat "$ROOT/mode")" = https ]
+ok [ ! -s "$WORK/serve.argv" ]
+# --open → fleet-open gets the doc URL; its last line comes back as OPEN …
+printf '#!/bin/sh\nprintf "%%s\\n" "$1" > "%s/fo.argv"\necho "fleet-open: chatter"\necho sent:iterm2\n' "$WORK" > "$WORK/fake/fleet-open"
+chmod +x "$WORK/fake/fleet-open"
+out="$(FLEET_OPEN_BIN="$WORK/fake/fleet-open" share --open --local "$WORK/a.md")"
+has "OPEN sent:iterm2" "$out" "8d: --open must print fleet-open's result"
+has "http://127.0.0.1:$PORT/d/" "$(cat "$WORK/fo.argv")" "8d: --open must hand fleet-open the doc URL"
+# beside http-direct: no loopback server to point at → refuse
+reset_state; echo operator > "$WORK/serve.mode"
+share "$WORK/a.md" >/dev/null
+out="$(share --local "$WORK/b.md")"; rc=$?
+[ "$rc" = 1 ] || fail "8e: --local beside http-direct must refuse (rc=$rc)" "$out"
+has "http-direct" "$out" "8e: the refusal must say why"
 
 # --- 6. fleet-doctor's docprev row ------------------------------------------
 mkdir -p "$WORK/skills/doc-preview" "$WORK/conf"; : > "$WORK/skills/doc-preview/SKILL.md"

@@ -1816,6 +1816,15 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Show-file part size @group=notify @tier=internal @scope=fleet @edit=int @unit=bytes
 #FLEET_SHOW_PART_BYTES=768         # base64 bytes per OSC 1337 FilePart
 
+# Opening a link on the operator's computer (issue #1379). bin/fleet-open.sh writes
+# an iTerm2 Custom= escape (signed with ~/.config/claude-fleet/open.secret) to the
+# same client fleet-show picks; the operator's side (#1380) opens it — a page on
+# this machine through an ssh port forward. No iTerm2 → bin/open-url.sh.
+# @label=Open links on the operator's iTerm2 @group=notify @tier=internal @scope=fleet @edit=bool
+#FLEET_OPEN=1                      # 0 = never write the escape; straight to open-url.sh
+# @label=This machine's ssh alias (fleet-open hint) @group=notify @tier=internal @scope=fleet @edit=str
+#FLEET_OPEN_SSH_HOST=              # the operator's ssh alias for this machine; empty = their side guesses
+
 # Transcript archive (issue #1299), once a day on the same diskguard --watch tick.
 # ~/.claude/projects only ever grows (one .jsonl per Claude session); a session
 # idle this many days — and a fleet helper `claude -p` transcript (the status

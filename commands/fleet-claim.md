@@ -377,6 +377,14 @@ override them):
   their terminal; `PATH …`
   (exit 2) = no iTerm2 attached or over the cap — tell them the path instead.
   A document to READ (Markdown/HTML) still goes through doc-preview (above).
+- **Open a page in the operator's browser with `fleet-open`, never `open`**
+  (issue #1379). A PR, a report, a doc-preview page or a dev server running here
+  (`:5173/`, `http://localhost:3000`) goes through
+  `~/.claude/fleet/bin/fleet-open.sh <url | :port[/path] | file>` — it rides
+  their SSH connection to their iTerm2, and a page on this machine is
+  port-forwarded, not exposed. `share.sh --open <file>` hosts a doc and opens it
+  in one step. It prints `sent:iterm2` / `sent:tunnel` / `fallback:popup`; see
+  the `fleet-open` skill for what each means.
 - **A temp server binds 127.0.0.1 and dies with your work** (issue #1154).
   `python3 -m http.server`, `vite`, `next dev`, a mock API — all bind `*` by
   default, which serves their cwd to the whole LAN, and a backgrounded one

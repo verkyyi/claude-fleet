@@ -1169,6 +1169,29 @@ else
   pass listen "no fleet process listening on the LAN"
 fi
 
+# --- fleet-open: the operator's browser over their ssh (issue #1379) ------------
+# bin/fleet-open.sh writes an iTerm2 Custom= escape signed with a shared secret the
+# laptop side (#1380) reads over ssh; open.last is its last result. No secret yet
+# is INFO (made on the first fleet-open); a secret others can read is a WARN — it
+# is the only thing that stops any printed text from opening URLs on the laptop.
+_os="$HOME/.config/claude-fleet/open.secret"; _ol="$HOME/.config/claude-fleet/open.last"
+if [ ! -s "$_os" ]; then
+  info open "no secret yet ($_os) — made on the first \`bin/fleet-open.sh\`; then install the laptop side (#1380)"
+else
+  _op=$(stat -c '%a' "$_os" 2>/dev/null || stat -f '%Lp' "$_os" 2>/dev/null)
+  _olast="never used"
+  if [ -s "$_ol" ]; then
+    _olast=$(awk -F '\t' -v now="$(date +%s)" 'NR == 1 { a = now - $1; u = "s"
+      if (a >= 86400) { a = int(a / 86400); u = "d" } else if (a >= 3600) { a = int(a / 3600); u = "h" } else if (a >= 60) { a = int(a / 60); u = "m" }
+      printf "last: %s (%s) %d%s ago", $2, $3, a, u }' "$_ol")
+  fi
+  if [ "$_op" != 600 ]; then
+    warn open "secret $_os is mode ${_op:-?}, not 0600 — \`chmod 600\` it (the next fleet-open does); $_olast"
+  else
+    pass open "secret 0600; $_olast"
+  fi
+fi
+
 # --- machine pressure the load average cannot see (issue #889) -----------------
 # On 2026-09-22 every new session froze 6-8s at spawn and it took an hour of
 # manual digging to find three causes this screen could have named: macOS's
