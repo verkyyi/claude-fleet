@@ -1285,14 +1285,6 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=⌂/F9 go to the task bar first @group=status @tier=common @scope=fleet @edit=bool
 #FLEET_HOME_SIDEBAR_FIRST=1
 
-# The Claude Code status line (conf/statusline.sh, issue #1361): whether it shows
-# the current directory and the git branch + dirty star. auto = hidden in a fleet
-# pane (the tmux window name and task bar already show the task and its branch,
-# and it saves 2-3 `git` runs per render), shown everywhere else; 1 = always show;
-# 0 = always hide. Read by the status line itself on every render, login-wide.
-# @label=Status line cwd + branch @group=status @tier=internal @scope=global @edit=enum @options=auto,0,1
-#FLEET_STATUSLINE_CWD=auto
-
 # Optional: a docker container name to show as ●/○ in the status bar right side.
 # GLOBAL: the status bar (bin/tmux-status.sh) reads this from the global env only
 # — a per-fleet override would be a silent no-op — so it is machine-wide (like the

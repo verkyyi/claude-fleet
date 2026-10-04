@@ -57,7 +57,7 @@ login is one fleet; a shared login gives everyone one quota record.
 | Several repos per fleet (`bin/fleet-repo.sh`, issue #788/#795) | `fleet-repo.sh add <owner/repo> [<checkout>] [--base <b>]` registers another repo with a fleet (clone-or-reuse, overlay at `fleets/<sess>/repos/<slug>.conf`); from inside the fleet the dash's ⌃z / the sidebar menu's `g` open `dash-repo-add.sh`, a popup over the same `add` that asks only `owner/name` (#1103); `list` / `remove [--force]`; `fold <old-fleet> --into <fleet> [--dry-run] [--wait]` moves a whole one-repo fleet in and archives its conf (#796). Nothing to install and no switch to set — a fleet with no overlay behaves exactly as before. Once 2+ repos are hosted, the fleet picker gains repo rows, sessions carry `@repo` (the dash badges it; window names stay bare), and the hub opens in `$HOME`. Proven by `bin/multirepo-e2e-selftest.sh` | git (+ gh to clone) |
 | Fleet commands (optional) | repo-shipped `/skill`s (`commands/`) — fleet-aware slash commands, appended to `~/.claude/commands/` | claude |
 | Fleet skills (optional) | repo-shipped base **skills** (`skills/<name>/` dirs — SKILL.md plus any supporting files) a fleet command or the agent delegates to — e.g. `/fleet-handoff` runs the base `handoff` skill verbatim; `doc-preview` ships `share.sh`/`server.py`/`render.mjs` beside its SKILL.md (issues #311, #354) and serves in one of two modes — `https` (loopback server behind `tailscale serve`) or, for a login that is not the machine's one tailscale operator, `http-direct` (server bound on the tailscale IPv4, plain http, tailnet-only; issue #1093) — `fleet-doctor`'s `docprev` row says which this login gets and the one-time `sudo tailscale serve …` for HTTPS, `epic-page` ships the `template.html` both EPIC pages render into (issue #809); installed into `~/.claude/skills/` and mirrored into each known `$CODEX_HOME/skills/` whole-dir, marker-gated (`<!-- fleet skill -->` in the SKILL.md) so a personal skill is never clobbered | claude / codex |
-| Status line (optional) | `conf/statusline.sh` — Claude Code status line: a context-window mini-bar (green < 50% < yellow < 80% < red), shortened cwd, git branch + dirty star (via `--no-optional-locks`), and model name. In a fleet pane the cwd + branch segments are hidden by default — the window name and task bar already show them (`FLEET_STATUSLINE_CWD`: `auto` / `1` / `0`, issue #1361). Wired **install-time only** by pointing `settings.json`'s `statusLine` at the **live-install** path `~/.claude/fleet/conf/statusline.sh`, so improvements flow through `land → /fleet-sync-install` with no copy step. jq-gated — exits silently (blank line) without `jq`. NOT auto-wired on sync; opt-in per install (see step 8b) | jq (soft) |
+| Status line (optional) | `conf/statusline.sh` — the Claude Code status line as the fleet's measurement bus (issue #1452): it prints nothing, and stamps the context % + window size (`@ctx_pct` / `@ctx_limit` / `@ctx_band` — the auto-handoff nudge, `fleet-context.sh`), the model + effort level (`@model` / `@effort`) and the account's rate limits (`@rl*`) onto the pane's tmux window on every render; the pane header shows `62% · Opus 5.5 · high` on its right from those stamps (`conf/tmux-attention.conf`). Wired **install-time only** by pointing `settings.json`'s `statusLine` at the **live-install** path `~/.claude/fleet/conf/statusline.sh`, so improvements flow through `land → /fleet-sync-install` with no copy step. jq-gated — inert without `jq`. NOT auto-wired on sync; opt-in per install (see step 8b) | jq (soft) |
 
 ## Install steps
 
@@ -663,7 +663,9 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    optional). See `commands/README.md` for the skill contract.
 
 8b. **Status line (optional, opt-in).** Offer to wire the Claude Code status
-   line (`conf/statusline.sh` — context-window mini-bar, cwd, git branch, model).
+   line (`conf/statusline.sh` — the measurement bus behind the pane header's
+   `62% · Opus 5.5 · high`, the auto-handoff nudge and the quota watch; it draws
+   no visible line of its own since issue #1452).
    Set `~/.claude/settings.json`'s `statusLine` to point at the **live-install**
    path (never the repo copy) so a future `land → /fleet-sync-install` flows
    improvements through with no re-copy:
@@ -677,8 +679,8 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
      `statusLine` whose `command` differs, **skip and tell the user** what is set
      — do not overwrite their status line. Only write it when the key is absent
      (or already equals the fleet path). Back up `settings.json` first.
-   - **jq is a soft dep** here: `conf/statusline.sh` exits silently (blank status
-     line) without `jq`, so offer `brew install jq` if it's missing — but it is
+   - **jq is a soft dep** here: `conf/statusline.sh` exits silently (no stamps,
+     so no `%` in the header) without `jq`, so offer `brew install jq` if it's missing — but it is
      never required to install the fleet. `fleet-doctor` soft-warns when a
      `statusLine` is wired but `jq` is absent.
    - **Not wired on sync.** `/fleet-sync-install` only re-merges the *hooks*

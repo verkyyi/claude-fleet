@@ -637,7 +637,8 @@ writes the SAME options [`conf/statusline.sh`](../conf/statusline.sh) does, on
 the same scale (newest write wins): `@ctx_pct` / `@ctx_limit`, and — only when
 both windows have a reading — `@rl5h` `@rl7d` `@rl_reset` `@rl_ts` plus
 `@rl_src mod` (a status-line stamp unsets `@rl_src`, so absent = the status
-line). The quota watch merges both per `@cc_account` as before
+line). The status line alone also stamps `@ctx_band` / `@model` / `@effort` for
+the pane header's right segment (issue #1452); the mod does not write those. The quota watch merges both per `@cc_account` as before
 (`fleet_quota_merge`, source column `mod` | `statusline` | `ccquota`), and when
 EVERY pool account has a `mod` stamp under 60s old and the ccquota cache is
 younger than half `FLEET_ACCOUNT_QUOTA_STALE`, it reads that cache instead of
