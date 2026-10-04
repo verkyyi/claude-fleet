@@ -52,6 +52,12 @@ h1 { margin:0; font-size:26px; font-weight:600; }
 .pill { font-size:12px; font-weight:600; padding:1px 9px; border-radius:999px; color:#fff; }
 .pill.online { background:var(--ok); }
 .pill.lost { background:var(--lost); }
+.pill.spot { background:var(--ink-3); }
+.pill.spot.provisioning, .pill.spot.releasing, .pill.spot.reclaiming { background:#c47f0a; }
+.tag { font-size:11px; font-weight:600; padding:0 6px; border-radius:6px; border:1px solid var(--border); color:var(--ink-2); vertical-align:middle; }
+.timeline { margin:8px 0 0; padding:0; list-style:none; }
+.timeline li { padding:4px 0; border-top:1px solid var(--border); }
+button.ghost { background:transparent; color:var(--accent); }
 .kv { display:grid; grid-template-columns:auto 1fr; gap:2px 14px; color:var(--ink-2); }
 .kv b { color:var(--ink); font-weight:600; }
 table { width:100%; border-collapse:collapse; background:var(--surface); border:1px solid var(--border); border-radius:12px; overflow:hidden; }
@@ -83,6 +89,13 @@ pre.cmd { margin:10px 0 4px; padding:10px 12px; background:var(--plane); border:
     <thead><tr><th>编号</th><th>机器</th><th>登录</th><th>fleet</th><th>状态</th><th>agent</th></tr></thead>
     <tbody id="sessions"></tbody>
   </table></div>
+  <div id="spot" class="card" hidden style="margin-top:28px">
+    <h2>SPOT 节点 <span id="spotcfg" class="muted" style="font-size:13px;font-weight:400"></span></h2>
+    <div class="muted">固定机器都忙时，入口在集群的 SPOT 机器上起一台临时执行节点并派活；空闲满设定时间自动释放；被云回收时它上面空闲的会话先搬走，没来得及的按「意外下线」处理（租约立即释放，不自动重派）。</div>
+    <div style="margin-top:10px"><button id="spotstart" type="button">起一台 SPOT 节点</button> <span id="spoterr" class="err"></span></div>
+    <div id="spotlive"></div>
+    <div id="spothist"></div>
+  </div>
   <div id="join" class="card" hidden style="margin-top:28px">
     <h2>加一台机器</h2>
     <div class="muted">生成一个加入码（只能用一次，10 分钟内有效），在新机器上以要跑 fleet 的那个登录执行下面这条命令：装依赖、装 fleet、装并登记 agent，几分钟后它就出现在上面的列表里。</div>
@@ -106,12 +119,22 @@ function age(s) {
   return Math.round(s / 3600) + " 小时前";
 }
 function pill(st) { return `<span class="pill ${st === "online" ? "online" : "lost"}">${STATUS[st] || esc(st)}</span>`; }
+const SPOT = { provisioning: "启动中", online: "在线", releasing: "释放中", reclaiming: "回收中", released: "已释放" };
+function spotPill(st) { return `<span class="pill spot ${esc(st)}">${SPOT[st] || esc(st)}</span>`; }
+function kindTag(n) { return n.kind === "ephemeral" ? ` <span class="tag" title="SPOT 节点（临时）">SPOT</span>` : ""; }
+function when(t) { return t ? new Date(t).toLocaleString() : "—"; }
+function dur(s) {
+  if (s == null) return "—";
+  if (s < 90) return Math.round(s) + " 秒";
+  if (s < 5400) return Math.round(s / 60) + " 分钟";
+  return (s / 3600).toFixed(1) + " 小时";
+}
 
 function render(snap) {
   $("at").textContent = " · 更新于 " + new Date(snap.at).toLocaleTimeString();
   $("machines").innerHTML = snap.machines.length ? snap.machines.map((m) => `
     <div class="card">
-      <h2>${esc(m.hostname)} ${pill(m.status)}</h2>
+      <h2>${esc(m.hostname)}${kindTag(m)} ${pill(m.status)}</h2>
       <div class="kv">
         <span>登录在线</span><b>${m.logins_online} / ${m.logins}</b>
         <span>会话数</span><b>${m.status === "online" ? m.sessions : "—"}</b>
@@ -121,15 +144,40 @@ function render(snap) {
     </div>`).join("") : `<div class="card empty">还没有机器报到。agent 需以 CCQUOTA_FLEET=1 启动。</div>`;
   $("nodes").innerHTML = snap.nodes.map((n) => `
     <tr>
-      <td>${esc(n.hostname)}</td>
+      <td>${esc(n.hostname)}${kindTag(n)}</td>
       <td class="mono">${esc(n.os_user)}</td>
-      <td>${pill(n.status)}</td>
+      <td>${pill(n.status)}${n.spot && n.spot !== "online" ? " " + spotPill(n.spot) : ""}</td>
       <td>${n.sessions}</td>
       <td>${n.fleets.length ? n.fleets.map((f) => `<span class="mono">${esc(f.name)}</span> <span class="muted">${f.count}</span>`).join("<br>") : (n.fleet_error ? `<span class="err">${esc(n.fleet_error)}</span>` : `<span class="muted">—</span>`)}</td>
       <td>${age(n.age_sec)}</td>
       <td>${n.proto}${n.compatible ? "" : ` <span class="err">不兼容·不派写操作</span>`}</td>
       <td class="mono muted">${esc(n.agent_version)}${n.fleet_version ? " · " + esc(n.fleet_version.slice(0, 7)) : ""}</td>
     </tr>`).join("");
+  renderSpot(snap.spot);
+}
+
+// SPOT nodes (claude-fleet#1428): the block appears once the hub has SPOT on
+// or has ever started a node; the live rows are the nodes under way (a pod
+// shows here from the moment it is created, before it has joined), the
+// history is the record — 起节点 → 派活 → 释放, one line per node.
+let spotShown = false;
+function renderSpot(sp) {
+  if (!sp) { if (!spotShown) $("spot").hidden = true; return; }
+  spotShown = true;
+  $("spot").hidden = false;
+  $("spotstart").hidden = !sp.enabled || !isOperator;
+  $("spotcfg").textContent = sp.enabled
+    ? `· 最多 ${sp.max} 台 · 空闲 ${sp.idle_minutes} 分钟释放 · 派单权重 ${sp.weight}${sp.namespace ? " · " + sp.namespace : ""}`
+    : "· 本入口未开启（CCQUOTA_FLEET_SPOT_IMAGE）";
+  $("spotlive").innerHTML = sp.nodes.length ? `<ul class="timeline">` + sp.nodes.map((n) => `
+    <li>${spotPill(n.state)} <span class="mono">${esc(n.hostname || n.pod_name)}</span>
+      <span class="muted">· 已存在 ${dur(n.age_sec)}${n.state === "online" ? " · 空闲 " + dur(n.idle_sec) + " · 会话峰值 " + n.peak_sessions : ""}${n.reason ? " · " + esc(n.reason) : ""}</span>
+      ${sp.enabled && isOperator && n.state !== "released" ? `<button class="ghost" type="button" data-release="${esc(n.id)}">释放</button>` : ""}
+    </li>`).join("") + `</ul>` : `<div class="muted" style="margin-top:8px">现在没有 SPOT 节点。</div>`;
+  $("spothist").innerHTML = sp.history.length ? `<h3 style="font-size:14px;margin:14px 0 0">最近释放</h3><ul class="timeline">` + sp.history.map((n) => `
+    <li><span class="mono">${esc(n.hostname || n.pod_name)}</span>
+      <span class="muted">· 起 ${when(n.created_at)} → 报到 ${when(n.joined_at)} → 释放 ${when(n.released_at)} · 活了 ${dur(n.age_sec)} · 会话峰值 ${n.peak_sessions}${n.sessions_lost ? ` · <span class="err">${n.sessions_lost} 个会话意外下线</span>` : ""}${n.leases_released ? ` · 释放租约 ${n.leases_released}` : ""} · ${esc(n.reason)}</span>
+    </li>`).join("") + `</ul>` : "";
 }
 
 const WSTATE = { working: "工作中", idle: "空闲", waiting: "等输入", blocked: "被卡住", done: "完成" };
@@ -166,12 +214,33 @@ async function tick() {
 tick();
 setInterval(tick, 3000);
 
-// Join codes (claude-fleet#1418) are the operator's: a WeCom session has a
-// principal, and the hub answers 403 to it anyway.
+// Join codes (claude-fleet#1418) and SPOT starts (claude-fleet#1428) are the
+// operator's: a WeCom session has a principal, and the hub answers 403 to it
+// anyway.
+let isOperator = false;
 fetch("/v1/fleet/me", { credentials: "same-origin", cache: "no-store" })
   .then((r) => r.ok ? r.json() : null)
-  .then((me) => { if (me && !me.principal) $("join").hidden = false; })
+  .then((me) => { if (me && !me.principal) { isOperator = true; $("join").hidden = false; } })
   .catch(() => {});
+async function spotPost(body) {
+  $("spoterr").textContent = "";
+  try {
+    const r = await fetch("/v1/fleet/spot", {
+      method: "POST", credentials: "same-origin", cache: "no-store",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    const v = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error((v.error && (v.error.message || v.error)) || ("HTTP " + r.status));
+    tick();
+  } catch (e) {
+    $("spoterr").textContent = "失败：" + e.message;
+  }
+}
+$("spotstart").addEventListener("click", () => spotPost({ action: "start" }));
+$("spotlive").addEventListener("click", (ev) => {
+  const id = ev.target && ev.target.getAttribute && ev.target.getAttribute("data-release");
+  if (id) spotPost({ action: "release", id });
+});
 $("joinbtn").addEventListener("click", async () => {
   $("joinbtn").disabled = true;
   $("joinerr").textContent = "";

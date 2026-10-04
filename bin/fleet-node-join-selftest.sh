@@ -20,6 +20,9 @@
 #                nothing installed
 #   E. format    a malformed code exits 2 before any request reaches the hub
 #   F. no-admin  --no-admin writes no CCQUOTA_FLEET_ADMIN line
+#   G. kind      a join the hub answers with "kind":"ephemeral" (a SPOT node,
+#                issue #1428) writes CCQUOTA_FLEET_NODE_KIND=ephemeral and says
+#                so; a fixed join (A) writes no such line
 set -u
 BIN="$(cd "$(dirname "$0")" && pwd)"
 SB="$(mktemp -d "${TMPDIR:-/tmp}/fleet-join-st.XXXXXX")"
@@ -77,7 +80,8 @@ class H(BaseHTTPRequestHandler):
             state["redeemed"] += 1; state["last_join"] = body; save()
             return self.reply(200, {"endpoint_id": "ep_1", "label": body["hostname"] + "-" + body["os_user"],
                 "token": TOKEN, "hub": "x", "admin": True, "ssh_ca": "ssh-ed25519 AAAA test-ca",
-                "dist": ["darwin-arm64", "darwin-amd64", "linux-amd64", "linux-arm64"]})
+                "dist": ["darwin-arm64", "darwin-amd64", "linux-amd64", "linux-arm64"],
+                "kind": "ephemeral" if flag("ephemeral") else "fixed"})
         self.reply(404, {"error": "no"})
     def do_GET(self):
         state["requests"] += 1
@@ -127,6 +131,7 @@ if grep -qx "CCQUOTA_HUB_URL=$HUB" "$ENVF" && grep -qx 'CCQUOTA_TOKEN=ccq_testto
    && grep -qx 'CCQUOTA_FLEET=1' "$ENVF" && grep -qx 'CCQUOTA_FLEET_ADMIN=1' "$ENVF"; then
   ok "A node.env carries hub, token, fleet + admin"
 else bad "A node.env: $(cat "$ENVF")"; fi
+grep -q NODE_KIND "$ENVF" && bad "A a fixed join wrote a node kind: $(grep NODE_KIND "$ENVF")" || ok "A a fixed join writes no node kind"
 [ "$(cat "$SB/agent-env" 2>/dev/null)" = "1 1" ] && ok "A the agent started with node.env's settings" || bad "A agent env: $(cat "$SB/agent-env" 2>/dev/null)"
 cmp -s "$SB/ccquota" "$SB/h1/.local/bin/ccquota" && grep -q '^agent: ccquota-.* from the hub (sha256 ' "$SB/out" \
   && ok "A ccquota installed from the hub, hash checked" || bad "A ccquota not from the hub: $(grep '^agent:' "$SB/out")"
@@ -172,6 +177,20 @@ run_join h5 --token "$CODE1" --no-admin
 if [ "$(cat "$SB/rc")" = 0 ] && ! grep -q ADMIN "$SB/h5/.config/claude-fleet/node.env"; then
   ok "F --no-admin writes no admin line"
 else bad "F rc=$(cat "$SB/rc"): $(cat "$SB/h5/.config/claude-fleet/node.env" 2>/dev/null)"; fi
+
+# ── G. kind ──────────────────────────────────────────────────────────────
+touch "$SB/ephemeral"
+run_join h6 --token "$CODE1"
+if [ "$(cat "$SB/rc")" = 0 ] && grep -qx 'CCQUOTA_FLEET_NODE_KIND=ephemeral' "$SB/h6/.config/claude-fleet/node.env" \
+   && grep -q 'SPOT node (ephemeral)' "$SB/out"; then
+  ok "G an ephemeral join writes CCQUOTA_FLEET_NODE_KIND=ephemeral and says so"
+else bad "G rc=$(cat "$SB/rc"): $(cat "$SB/h6/.config/claude-fleet/node.env" 2>/dev/null; grep join: "$SB/out")"; fi
+# A rerun keeps the kind: load_env reads it back before write_env rewrites.
+rm -f "$SB/ephemeral"
+run_join h6 --token "$CODE2"
+if [ "$(cat "$SB/rc")" = 0 ] && grep -qx 'CCQUOTA_FLEET_NODE_KIND=ephemeral' "$SB/h6/.config/claude-fleet/node.env"; then
+  ok "G a rerun keeps the saved kind"
+else bad "G rerun rc=$(cat "$SB/rc"): $(cat "$SB/h6/.config/claude-fleet/node.env" 2>/dev/null)"; fi
 
 [ "$fail" = 0 ] && echo "PASS fleet-node-join-selftest" || echo "FAIL fleet-node-join-selftest"
 exit "$fail"

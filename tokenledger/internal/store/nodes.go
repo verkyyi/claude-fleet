@@ -88,6 +88,11 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetJoin(); err != nil {
 		return err
 	}
+	// SPOT nodes and node kinds (claude-fleet#1428) — after the join codes,
+	// whose table it widens.
+	if err := s.ensureFleetSpot(); err != nil {
+		return err
+	}
 	// The relay audit (claude-fleet#1413).
 	return s.ensureFleetSSHRelays()
 }

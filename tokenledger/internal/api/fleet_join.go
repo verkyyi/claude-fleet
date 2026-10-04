@@ -63,6 +63,7 @@ func MintJoinCode() (string, error) {
 type JoinCodeView struct {
 	Code      string    `json:"code"`
 	Label     string    `json:"label,omitempty"`
+	Kind      string    `json:"kind"`
 	ExpiresAt time.Time `json:"expires_at"`
 	Command   string    `json:"command"`
 }
@@ -86,6 +87,9 @@ func (s *Server) handleFleetJoinCodes(w http.ResponseWriter, r *http.Request) {
 		}
 		var req struct {
 			Label string `json:"label"`
+			// Kind is fixed (default) or ephemeral: a code for a node the
+			// operator runs on a SPOT machine by hand (claude-fleet#1428).
+			Kind string `json:"kind"`
 		}
 		if r.ContentLength != 0 {
 			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
@@ -97,18 +101,26 @@ func (s *Server) handleFleetJoinCodes(w http.ResponseWriter, r *http.Request) {
 			httpError(w, http.StatusBadRequest, "label: letters, digits, . _ - only, at most 63")
 			return
 		}
+		switch req.Kind {
+		case "":
+			req.Kind = store.NodeKindFixed
+		case store.NodeKindFixed, store.NodeKindEphemeral:
+		default:
+			httpError(w, http.StatusBadRequest, "kind: fixed or ephemeral")
+			return
+		}
 		code, err := MintJoinCode()
 		if err != nil {
 			httpError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		now := s.joinNow()
-		if err := s.Store.CreateJoinCode(HashToken(code), req.Label, now, JoinCodeTTL); err != nil {
+		if err := s.Store.CreateJoinCodeKind(HashToken(code), req.Label, req.Kind, now, JoinCodeTTL); err != nil {
 			httpError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, JoinCodeView{
-			Code: code, Label: req.Label, ExpiresAt: now.Add(JoinCodeTTL).UTC(),
+			Code: code, Label: req.Label, Kind: req.Kind, ExpiresAt: now.Add(JoinCodeTTL).UTC(),
 			Command: s.joinCommand(r, code),
 		})
 	default:
@@ -149,6 +161,10 @@ type NodeJoinResponse struct {
 	SSHCA string `json:"ssh_ca,omitempty"`
 	// Dist lists the agent binaries this hub serves at /v1/node/dist/<name>.
 	Dist []string `json:"dist"`
+	// Kind is what the code was minted for (claude-fleet#1428): fixed, or
+	// ephemeral — the join script then runs the agent as a SPOT node, which
+	// on SIGTERM tells the hub and moves its idle sessions off.
+	Kind string `json:"kind"`
 }
 
 // handleNodeJoin trades a join code for an enrollment token. No credential
@@ -202,7 +218,10 @@ func (s *Server) handleNodeJoin(w http.ResponseWriter, r *http.Request) {
 	}
 	out := NodeJoinResponse{
 		EndpointID: id, Label: label, Token: tok, Hub: s.hubURL(r),
-		Admin: s.isFleetAdmin(osUser), Dist: s.distNames(),
+		Admin: s.isFleetAdmin(osUser), Dist: s.distNames(), Kind: store.NodeKindFixed,
+	}
+	if k, err := s.Store.EndpointNodeKind(id); err == nil && k != "" {
+		out.Kind = k
 	}
 	if s.SSHCA != nil {
 		out.SSHCA = s.SSHCA.PublicKey()

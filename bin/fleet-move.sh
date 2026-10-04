@@ -10,15 +10,18 @@
 #
 #   fleet-move.sh <window>… --to <user>@<host> [opts]
 #   fleet-move.sh <window>… --via hub --to <machine> [--dry-run]
-#   fleet-move.sh --rebalance [--max N] [--dry-run]
+#   fleet-move.sh --rebalance [--max N|all] [--dry-run]
 #   opts: --via hub         move THROUGH the hub (issue #1426, EPIC #1419 C7):
 #                           the two machines never talk — see "Through the hub"
 #                           below. --to is then a machine name (m4), not ssh.
 #         --rebalance       ask the hub where sessions should run, and move the
 #                           longest-idle sessions off THIS machine while the hub
 #                           says another one is the better place — at most
-#                           --max (FLEET_MOVE_REBALANCE_MAX, 2). Only `done`
-#                           sessions move; a session mid-turn never does.
+#                           --max (FLEET_MOVE_REBALANCE_MAX, 2); `--max all` is
+#                           every one of them, which is what a machine about
+#                           to go down wants (fleet-spot-evacuate.sh, #1428).
+#                           Only `done` sessions move; a session mid-turn
+#                           never does.
 #         --fleet <sess>    the TARGET's fleet, when that login runs more than
 #                           one (legacy multi-fleet; #979/#980 makes this rare) —
 #                           default: the target's one configured fleet.
@@ -202,7 +205,7 @@ move_main() {
       [ "${CCQUOTA_FLEET:-0}" = 1 ] || die '--via hub needs the hub module (CCQUOTA_FLEET=1)'
       [ "$KEEP" = 0 ] || die '--keep-source is ssh-only (a hub move never leaves two live copies)'
       [ -z "$TARGET_FLEET" ] || die '--fleet is ssh-only (the hub picks the target fleet)'
-      case "$RMAX" in ''|*[!0-9]*) die '--max needs a number' ;; esac
+      case "$RMAX" in all) RMAX=1000000 ;; ''|*[!0-9]*) die '--max needs a number, or all' ;; esac
       if [ "$REBAL" = 1 ]; then
         [ "${#WIDS[@]}" -eq 0 ] || die '--rebalance picks its own windows; name none'
       else

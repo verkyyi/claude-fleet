@@ -729,6 +729,9 @@ type Candidate struct {
 	Eligible     bool     `json:"eligible"`
 	Excluded     string   `json:"excluded,omitempty"`
 	Score        float64  `json:"score"`
+	// Kind is ephemeral for a SPOT node (claude-fleet#1428): its score is
+	// multiplied by the SPOT weight, so a fixed machine with room wins.
+	Kind string `json:"kind,omitempty"`
 }
 
 // Placement is pickNode's answer, journalled with the operation.
@@ -861,6 +864,18 @@ func (s *Server) pickNode(p fleetPrincipal, repo, node string, now time.Time) (P
 		return pl, err
 	}
 	accounts := s.loginAccounts()
+	// SPOT nodes (claude-fleet#1428): which endpoints are ephemeral, and
+	// where each is in its life. Empty maps on a hub without any.
+	kinds, _ := s.Store.EphemeralEndpoints()
+	spotState := map[string]string{}
+	if spots, err := s.Store.SpotNodes(false, 0); err == nil {
+		for _, sp := range spots {
+			if sp.EndpointID != "" {
+				spotState[sp.EndpointID] = sp.State
+			}
+		}
+	}
+	weight := s.spotWeight(settings)
 	seen := map[string]bool{}
 	for _, r := range rows {
 		if !r.Present || seen[r.EndpointID] || !repoNamed(r.Repo, repo) {
@@ -875,7 +890,17 @@ func (s *Server) pickNode(p fleetPrincipal, repo, node string, now time.Time) (P
 			continue
 		}
 		seen[r.EndpointID] = true // one fleet per login: the first by name
-		pl.Candidates = append(pl.Candidates, s.judge(r, settings, accounts, now))
+		c := s.judge(r, settings, accounts, now)
+		if k := kinds[r.EndpointID]; k != "" {
+			c.Kind = k
+			if st := spotState[r.EndpointID]; st != "" && st != store.SpotOnline && c.Eligible {
+				// Starting, releasing or being reclaimed: not a place for
+				// new work.
+				c.Eligible, c.Excluded = false, "SPOT node "+st
+			}
+			c.Score = math.Round(c.Score*weight*1000) / 1000
+		}
+		pl.Candidates = append(pl.Candidates, c)
 	}
 	if len(pl.Candidates) == 0 {
 		where := "any of your machines"
@@ -898,7 +923,13 @@ func (s *Server) pickNode(p fleetPrincipal, repo, node string, now time.Time) (P
 		for _, c := range pl.Candidates {
 			reasons = append(reasons, c.Machine+": "+c.Excluded)
 		}
-		return pl, fault("NO_ELIGIBLE_NODE", "No machine can take a new session now — "+strings.Join(reasons, "; "))
+		msg := "No machine can take a new session now — " + strings.Join(reasons, "; ")
+		if s.Spot != nil && node == "auto" {
+			// Peak: every fixed machine is out. Ask for a SPOT node
+			// (claude-fleet#1428); the next placement finds it.
+			msg += "; " + s.Spot.Want("placement for "+repo+" found no eligible machine: "+strings.Join(reasons, "; "))
+		}
+		return pl, fault("NO_ELIGIBLE_NODE", msg)
 	}
 	c := pl.Candidates[best]
 	pl.Machine, pl.FleetID = c.Machine, c.FleetID
@@ -963,6 +994,9 @@ func better(a, b Candidate) bool {
 
 func placementReason(c Candidate, all []Candidate) string {
 	parts := []string{fmt.Sprintf("chose %s (score %.3f", c.Machine, c.Score)}
+	if c.Kind == store.NodeKindEphemeral {
+		parts = append(parts, "SPOT node")
+	}
 	if c.LoadPerCore != nil {
 		parts = append(parts, fmt.Sprintf("load %.2f/core", *c.LoadPerCore))
 	}
@@ -1011,15 +1045,26 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 			httpError(w, http.StatusBadRequest, "body must be {\"key\":…,\"value\":…}")
 			return
 		}
-		if !strings.HasPrefix(body.Key, NodeCapPrefix) || !nodeNameRE.MatchString(body.Key[len(NodeCapPrefix):]) {
-			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine> is settable")
-			return
-		}
-		if body.Value != "" {
-			if n, err := strconv.Atoi(body.Value); err != nil || n < 0 || n > 256 {
-				httpError(w, http.StatusBadRequest, "a node cap is an integer 0–256, or \"\" for the default")
-				return
+		switch {
+		case body.Key == SpotWeightKey:
+			// The SPOT placement weight (claude-fleet#1428): 0–2, or ""
+			// for CCQUOTA_FLEET_SPOT_WEIGHT's value.
+			if body.Value != "" {
+				if f, err := strconv.ParseFloat(body.Value, 64); err != nil || f < 0 || f > 2 {
+					httpError(w, http.StatusBadRequest, "the SPOT weight is a number 0–2, or \"\" for the default")
+					return
+				}
 			}
+		case strings.HasPrefix(body.Key, NodeCapPrefix) && nodeNameRE.MatchString(body.Key[len(NodeCapPrefix):]):
+			if body.Value != "" {
+				if n, err := strconv.Atoi(body.Value); err != nil || n < 0 || n > 256 {
+					httpError(w, http.StatusBadRequest, "a node cap is an integer 0–256, or \"\" for the default")
+					return
+				}
+			}
+		default:
+			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine> and "+SpotWeightKey+" are settable")
+			return
 		}
 		if err := s.Store.SetFleetSetting(body.Key, body.Value, time.Now()); err != nil {
 			httpError(w, http.StatusInternalServerError, err.Error())
@@ -1035,7 +1080,7 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	eff := map[string]int{}
+	eff := map[string]any{}
 	for k, n := range defaultNodeCaps {
 		eff[NodeCapPrefix+k] = n
 	}
@@ -1044,5 +1089,6 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 			eff[k] = n
 		}
 	}
+	eff[SpotWeightKey] = s.spotWeight(settings)
 	writeJSON(w, http.StatusOK, map[string]any{"settings": settings, "effective": eff})
 }
