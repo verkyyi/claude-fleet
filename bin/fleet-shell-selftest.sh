@@ -180,7 +180,7 @@ has 'A: no tmux → connect saw --enter' "$(cat "$WORK/connect.argv")" '--enter'
 # no terminal and no seam (a pipe, a script): the shell is a tmux client and
 # cannot attach → the direct way, without the tmux hint, no server started
 : > "$WORK/connect.argv"
-out=$(FLEET_SHELL_NO_ATTACH= "$SB/fleet" 2>&1 </dev/null); rc=$?
+out=$(FLEET_SHELL_NO_ATTACH='' "$SB/fleet" 2>&1 </dev/null); rc=$?
 eq 'A: no terminal → connect --enter, exit 0' 0 "$rc"
 has 'A: no terminal → connect saw --enter' "$(cat "$WORK/connect.argv")" '--enter'
 hasnt 'A: no terminal → no tmux hint' "$out" 'tmux'
