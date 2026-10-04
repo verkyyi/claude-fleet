@@ -580,6 +580,50 @@ idle, and nothing on the machine is touched. Every control message carries a
 `proto` version; a node whose version the hub does not accept stays listed
 (with its version) but is never sent a write.
 
+### People and their logins — WeCom sign-in opens the account (claude-fleet#1411)
+
+With the fleet module on, a person signing in through WeCom (`/enter`) becomes
+a **principal**, keyed by their WeCom userid, and gets ONE login name, minted
+once (lowercase letters + digits, ≤16, de-duplicated) and used on every
+machine. The hub keeps, per (principal, machine), whether that login exists
+there: `fleet_principals` + `fleet_accounts`, created only when the switch is
+on.
+
+Opening a login is an op sent down the machine's control channel to its
+**admin agent** — the operator's own login there, which already has
+password-less sudo. Two rails, both required:
+
+| where | setting | effect |
+|---|---|---|
+| hub | `CCQUOTA_FLEET_ADMIN_USERS=verkyyi` | only nodes running as one of these OS logins are ever sent an op |
+| agent | `CCQUOTA_FLEET_ADMIN=1` (operator's login only) | the agent says so in its hello and runs ops; any other agent refuses every op (`NOT_ADMIN`) |
+
+The node accepts exactly two ops, each with argv fixed on the node — the hub
+only picks the login and display name, both re-validated there:
+
+    create  ~/.claude/fleet/bin/fleet-login-new.sh <login> --full-name <name> --share-pool --apply
+    remove  ~/.claude/fleet/bin/fleet-login-remove.sh <login> --keep-home --apply
+
+`CCQUOTA_FLEET_AUTO_ASSIGN=m4[,m5]` (roster hostnames) queues a person's login
+on those machines at their first sign-in; anything else is the operator's
+`POST /v1/fleet/accounts` (`{"action":"assign|retry|remove|adopt",
+"principal_id":…, "hostname":…, "login":… for adopt}`) — `adopt` records a
+login that already existed (a colleague onboarded by hand) without running
+anything. That route, and its `GET`, refuse a WeCom session (403): only the
+viewer token or a tailnet identity can change accounts.
+
+An op is recorded before it is sent; a link that drops with one in flight
+leaves the account `unknown` and it is **never re-sent on its own**. The node
+keeps its result until the hub acks it and re-sends it on reconnect, so the
+late answer settles it; otherwise the operator `retry`s. Exit 3 ("login
+already exists") is `failed`, never `active` — the name may be someone else's.
+
+**Only see your own (hub side).** A WeCom session's `/v1/nodes` lists only the
+(machine, login) pairs that are its own ACTIVE accounts; `/v1/fleet/me` says
+who the hub thinks you are and where your login exists. Every later fleet view
+filters through the same `Server.FleetScope`. The token and tailnet doors
+still see everything.
+
 ## The dashboard
 
 One page, no tabs — with a nav bar across the top of it. Those are not in

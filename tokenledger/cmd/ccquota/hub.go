@@ -306,6 +306,8 @@ func runHub(args []string) error {
 		UI:                  web.Assets(),
 		LiveStore:           api.NewLive(),
 		Fleet:               fleetOn,
+		FleetAdmins:         splitList(os.Getenv("CCQUOTA_FLEET_ADMIN_USERS")),
+		FleetAutoAssign:     splitList(os.Getenv("CCQUOTA_FLEET_AUTO_ASSIGN")),
 		// Where we are about to bind, so /access can print a URL instead of
 		// "some port". The HTTPS half is filled in below, once the certificate
 		// has told us the name it is actually for.
@@ -617,6 +619,9 @@ func runAgent(args []string) error {
 		AccountsDir:         *accountsDir,
 		ProbeModels:         splitList(*probeModels),
 		Fleet:               fleetEnabled(),
+		// Only meaningful with the fleet module on: the admin agent is a
+		// role on the control channel.
+		FleetAdmin: fleetEnabled() && os.Getenv("CCQUOTA_FLEET_ADMIN") == "1",
 	})
 	if err != nil {
 		return err

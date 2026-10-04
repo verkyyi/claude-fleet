@@ -103,6 +103,13 @@ type Config struct {
 	// claude-fleet#1408): a long-lived connection to the hub carrying this
 	// login's heartbeat. Off, the agent does exactly what it did before.
 	Fleet bool
+
+	// FleetAdmin makes this agent its machine's admin agent
+	// (CCQUOTA_FLEET_ADMIN=1, claude-fleet#1411): it says so in its hello and
+	// runs the hub's account ops (open / close a person's login). Set it only
+	// on the operator's own login, the one with password-less sudo. Off, every
+	// account op is refused.
+	FleetAdmin bool
 }
 
 // Defaults for the intervals.
@@ -183,6 +190,9 @@ type Agent struct {
 
 	// fleet caches this login's claude-fleet install reading between scans.
 	fleet fleetProbe
+
+	// acct is the admin agent's account-op state across connections.
+	acct accountOps
 
 	// consecutiveFailures backs the scan cadence off while the hub is
 	// unreachable. A failed cycle leaves the cursor unmoved, so the next scan

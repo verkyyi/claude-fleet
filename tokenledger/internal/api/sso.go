@@ -90,6 +90,10 @@ func (s *Server) handleEnter(w http.ResponseWriter, r *http.Request) {
 		Secure:   isHTTPS(r),
 		MaxAge:   int(s.SSO.ttl().Seconds()),
 	})
+	// The first sign-in is what gives a person their logins on the
+	// auto-assigned machines (claude-fleet#1411). It never delays or blocks
+	// the sign-in itself.
+	s.onPrincipalSignIn(p.Sub)
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 

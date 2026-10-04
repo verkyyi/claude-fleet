@@ -48,12 +48,25 @@ const (
 	TypeAck = "ack"
 	// TypeError reports a refused message by op_id.
 	TypeError = "error"
+	// TypeAccountOp is a hub→node write: open or close one person's OS login
+	// on that machine (claude-fleet#1411). Only an admin node executes it.
+	TypeAccountOp = "account_op"
+	// TypeAccountResult is the node's answer to a TypeAccountOp, carrying the
+	// op's op_id. The hub acks it; until then the node keeps it and re-sends it
+	// on its next connection, so a result is never lost to a dropped link.
+	TypeAccountResult = "account_result"
 )
 
 // Error codes.
 const (
 	CodeProtoMismatch = "PROTO_MISMATCH"
 	CodeBadMessage    = "BAD_MESSAGE"
+	// CodeNotAdmin refuses an account op on a node that is not its machine's
+	// admin agent. The node says it itself; the hub never relies on that alone.
+	CodeNotAdmin = "NOT_ADMIN"
+	// CodeBadArgs refuses an account op whose arguments fail the node's own
+	// whitelist.
+	CodeBadArgs = "BAD_ARGS"
 )
 
 // ErrIncompatible is returned when a write is addressed to a node whose
@@ -109,6 +122,11 @@ type Hello struct {
 	HeartbeatMS int `json:"heartbeat_ms"`
 	// AgentVersion is the ccquota build.
 	AgentVersion string `json:"agent_version,omitempty"`
+	// Admin is this login's claim to be its machine's admin agent — the
+	// operator's login, with password-less sudo — and so willing to run
+	// account ops (claude-fleet#1411). A claim, not a grant: the hub also
+	// requires the login on its own allowlist before it sends one.
+	Admin bool `json:"admin,omitempty"`
 }
 
 // Welcome is the payload of TypeWelcome.
@@ -166,4 +184,79 @@ type Fleet struct {
 	State   string          `json:"state,omitempty"`
 	Workers json.RawMessage `json:"workers,omitempty"`
 	Count   int             `json:"count"`
+}
+
+// Account ops (claude-fleet#1411). There are exactly two, and both run one of
+// claude-fleet's own scripts with arguments fixed by the node, not the hub:
+//
+//	create  fleet-login-new.sh <login> --full-name <name> --share-pool --apply
+//	remove  fleet-login-remove.sh <login> --keep-home --apply
+//
+// The hub chooses only the login and the display name, and both are checked
+// against ValidLogin / ValidFullName on the node before anything runs.
+const (
+	AccountCreate = "create"
+	AccountRemove = "remove"
+)
+
+// AccountOp is the payload of TypeAccountOp.
+type AccountOp struct {
+	Op       string `json:"op"`
+	Login    string `json:"login"`
+	FullName string `json:"full_name,omitempty"`
+}
+
+// AccountResult is the payload of TypeAccountResult.
+type AccountResult struct {
+	Op    string `json:"op"`
+	Login string `json:"login"`
+	// OK is the script's exit 0.
+	OK bool `json:"ok"`
+	// Exit is the script's exit status; -1 when it never ran or was killed.
+	Exit int `json:"exit"`
+	// Exists is fleet-login-new.sh's exit 3: the login (or its home) is
+	// already on this machine. Never read as success — it may be someone
+	// else's login.
+	Exists bool `json:"exists,omitempty"`
+	// Detail is the tail of the script's output, or why it did not run.
+	Detail string `json:"detail,omitempty"`
+}
+
+// MaxLoginLen bounds a hub-generated login. macOS allows longer short names;
+// a short one stays readable in `ls /Users` and in a prompt.
+const MaxLoginLen = 16
+
+// ValidLogin is the one shape of login the hub may generate and a node may
+// accept: a lowercase letter, then lowercase letters and digits. No dot, dash
+// or underscore, so it can never be mistaken for an option or a path.
+func ValidLogin(s string) bool {
+	if len(s) < 2 || len(s) > MaxLoginLen {
+		return false
+	}
+	for i, c := range s {
+		switch {
+		case c >= 'a' && c <= 'z':
+		case c >= '0' && c <= '9' && i > 0:
+		default:
+			return false
+		}
+	}
+	switch s {
+	case "root", "admin", "daemon", "nobody", "guest", "shared":
+		return false
+	}
+	return true
+}
+
+// ValidFullName bounds the display name passed to sysadminctl -fullName:
+// 1–64 characters, no control characters, and never starting with '-'.
+func ValidFullName(s string) bool {
+	n := 0
+	for _, c := range s {
+		if c < 0x20 || c == 0x7f {
+			return false
+		}
+		n++
+	}
+	return n >= 1 && n <= 64 && s[0] != '-'
 }
