@@ -529,6 +529,7 @@ process, and they do not share a credential.
 |---|---|---|
 | Dashboard, `/u/<login>`, `/growth` | viewer token, a WeCom session, or a named tailnet peer | every figure this hub holds |
 | `/enter` | a 90-second ticket from the authorization service | exchanges that ticket for this hub's session cookie, nothing else |
+| `POST /logout` | a same-origin form (the page header's 退出) | clears the cookies this hub minted and shows the signed-out page; the authorization service's own session stays |
 | `/v1/...` | the viewer token, as a bearer header | the same figures as JSON |
 | `POST /mcp` | the same viewer token again | the read tools, for an agent |
 | `/v1/ingest`, `/v1/ingest/repo`, `/v1/ingest/growth`, … | each shipper's own enrollment token | write: push usage, progress or the ledger |
@@ -554,6 +555,24 @@ It is a description, not a control plane. Nothing on it mints, revokes or
 widens a credential, and no command has been moved from the hub's shell onto
 HTTP. `enroll`, `team` and `plan` stay local because a machine that could name
 its own team could move its spend onto another team's budget.
+
+### The page header — who is signed in, and the way out (claude-fleet#1467)
+
+Every human page — the dashboard, 连接, 我的会话, 机器节点, 凭据发放 — carries
+the same header, top right: the signed-in person's directory name (the
+ticket's `nam`, else what the hub has on record for them, else their WeCom
+userid) with 企业微信 under it, or 管理员 · 令牌 / 内网 for the operator's own
+doors. It is drawn by `web/dist/whoami.js` from **one** answer, `/v1/me`
+(`via`: `open | token | wecom | tailnet`, `person`, `name`, `login`,
+`can_logout`), recorded by the gate as it admits the request — never inferred
+per page. Clicking it opens 姓名 / 企微账号 / 登录方式 and, when a cookie of this
+hub's is behind the request, **退出**: a plain same-origin `POST /logout` that
+clears the session and the parked viewer token, then shows a signed-out page
+whose only link is 重新登录 → the gate (or `/` without SSO). No destination
+parameter, so no open redirect. As on OPS, the authorization service's own
+8-hour session on ai.24haowan.com is not this host's to end: it has no logout
+endpoint, and while it lives 重新登录 signs a fresh ticket without a WeCom
+prompt.
 
 ## Fleet nodes — every machine reports in (`CCQUOTA_FLEET=1`)
 

@@ -72,10 +72,13 @@ button { font:inherit; padding:6px 14px; border-radius:8px; border:1px solid var
 button:disabled { opacity:.6; cursor:default; }
 pre.cmd { margin:10px 0 4px; padding:10px 12px; background:var(--plane); border:1px solid var(--border); border-radius:8px; white-space:pre-wrap; word-break:break-all; }
 </style>
+<!-- The shared page header's viewer slot (claude-fleet#1467): the same
+     stylesheet, slot and script as every other human page on this hub. -->
+<link rel="stylesheet" href="whoami.css">
 </head>
 <body>
 <div class="wrap">
-  <h1>机器节点</h1>
+  <div class="topbar"><h1>机器节点</h1><div id="whoami" class="whoami" hidden></div></div>
   <div class="sub">每台机器的每个登录主动连到入口、每几秒报到一次；连续 3 次没报到即标「失联」（只标记，不动机器上的会话）。<span id="at" class="mono"></span></div>
   <div id="machines" class="grid"></div>
   <h2 style="font-size:16px;margin:0 0 10px">各登录</h2>
@@ -261,5 +264,6 @@ $("joinbtn").addEventListener("click", async () => {
   }
 });
 </script>
+<script type="module" src="whoami.js"></script>
 </body>
 </html>

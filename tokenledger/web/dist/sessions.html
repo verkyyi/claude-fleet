@@ -68,10 +68,13 @@ h2 { font-size:15px; margin:20px 0 8px; display:flex; align-items:center; gap:8p
 .err { color:var(--lost); font-size:13px; margin-top:12px; }
 .empty { color:var(--ink-3); padding:28px 16px; text-align:center; }
 </style>
+<!-- The shared page header's viewer slot (claude-fleet#1467): the same
+     stylesheet, slot and script as every other human page on this hub. -->
+<link rel="stylesheet" href="whoami.css">
 </head>
 <body>
 <div class="wrap">
-  <h1>我的会话</h1>
+  <div class="topbar"><h1>我的会话</h1><div id="whoami" class="whoami" hidden></div></div>
   <div class="sub">你在所有机器上的会话，只读。每 5 秒刷新。<span id="at" class="mono"></span></div>
   <div id="chips" class="chips"></div>
   <div id="list"><div class="card empty">读取中…</div></div>
@@ -130,5 +133,6 @@ async function tick() {
 tick();
 setInterval(tick, 5000);
 </script>
+<script type="module" src="whoami.js"></script>
 </body>
 </html>
