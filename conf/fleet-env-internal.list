@@ -301,6 +301,7 @@ FLEET_HUB_CURL                     seam: the transport fleet-node-maintenance.sh
 FLEET_HUB_TIMEOUT                  knob: seconds fleet-node-maintenance.sh waits on one hub call (curl --max-time), default 15 (#1427)
 FLEET_HUB_PLACE_CMD                seam: the hub placement command (default `ccquota place`), run as `<cmd> --node <n> [--origin-wid <w>] [--agent <a>] <repo> <issue> <worker_id>` (fleet_hub_place, #1425)
 FLEET_HUB_MOVE_CMD                 seam: the hub session-move command (default `ccquota move`), run as `<cmd> plan|send [<flag>…] <repo> <worker_id>` (fleet_hub_move, #1426)
+FLEET_HUB_WRITE_CMD                seam: command run as `<cmd> <tool> <args_json>` in place of the hub write doors (viewer-token POST /v1/fleet/<tool>, device-signed POST /v1/fleet/write) — the sidebar selftest records what the remote-row menu writes (fleet-hub-write.sh, #1487)
 FLEET_HUB_NODE_SUDO                seam: the privilege prefix `fleet-hub-node.sh env --write` reads a root-owned agent plist with (default `sudo -n`; empty = none) (#1491)
 FLEET_HUB_NODE_DAEMON_DIR          seam: where `fleet-hub-node.sh env --write` looks for the system LaunchDaemon com.ccquota.agent.<login>.plist (default /Library/LaunchDaemons) (#1491)
 FLEET_JOIN_SUDO                    seam: the privilege prefix fleet-node-join.sh uses for package installs / system units (default `sudo -n`; empty = none) (#1418)

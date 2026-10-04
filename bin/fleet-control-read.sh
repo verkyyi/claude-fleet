@@ -213,6 +213,57 @@ case "$mode" in
     fleet_load_conf "$sess"
     exec bash "$BIN/fleet-worker-stop.sh" "$sess" "${3:-}"
     ;;
+  # --- answer <sess> <key> <answer> [<actor>] (issue #1487, EPIC #1479 C8) -----
+  # The hub's worker_answer: what a sidebar on another machine does to a row
+  # here that is asking. `yes` / `no` are a PERMISSION prompt's — fleet-permission.sh
+  # --allow / --deny, which press exactly the plain Yes / No row the screen shows
+  # and only in the name of a human (--by <actor>: the hub journal's actor);
+  # anything else is the option number(s) of an AskUserQuestion, fleet-answer.sh
+  # --answer's own grammar, one pick per question. Both scripts re-resolve the key
+  # to its window here (wid:<key>, fleet_worker_locate) and gate on the transcript
+  # + the screen; their exit codes pass through unchanged (fleet_control maps them:
+  # 1/3 nothing pending or refused at a gate, 2 malformed, 4 sent but unconfirmed,
+  # 5 no named human), and their last stderr line is the reason the hub shows.
+  answer)
+    fleet_load_conf "$sess"
+    key="${3:-}"; ans="${4:-}"; by="${5:-hub}"
+    case "$key" in issue-*|scratch-*|*:issue-*|*:scratch-*) ;; *) exit 2 ;; esac
+    case "$ans" in
+      yes) exec bash "$BIN/fleet-permission.sh" --allow "wid:$key" --session "$sess" --by "$by" ;;
+      no)  exec bash "$BIN/fleet-permission.sh" --deny  "wid:$key" --session "$sess" --by "$by" ;;
+      '') exit 2 ;;
+    esac
+    # picks: digits, commas and single spaces only — each becomes one argv word.
+    case "$ans" in *[!0-9,\ ]*) exit 2 ;; esac
+    # shellcheck disable=SC2086  # the split IS the grammar (one pick per question)
+    exec bash "$BIN/fleet-answer.sh" --answer "wid:$key" --session "$sess" $ans
+    ;;
+  # --- reap <sess> <key> (issue #1487) -----------------------------------------
+  # The hub's worker_reap: `dash-reap.sh <key> --yes` — the dash's confirmed ⌃x,
+  # unasked (a dirty worktree is still KEPT; a live agent still refuses). dash-reap
+  # addresses its fleet through bare `tmux`, as every pane script does, so point
+  # bare tmux at THIS fleet's server the way fleet-remote-view.sh does when it has
+  # no pane: TMUX=<socket_path>,0,0. The key goes in as itself — dash-reap.sh
+  # (fleet-reap-target.py) resolves issue-N / scratch-N to the one window holding
+  # it at that moment; a repo-qualified key (<slug>:issue-N, issue #1018) is
+  # resolved here first, since the reaper's grammar has no repo prefix. The result
+  # token on stdout is the verdict (issue #869); exit 5 = no window holds the key.
+  reap)
+    fleet_load_conf "$sess"
+    key="${3:-}"
+    case "$key" in issue-*|scratch-*|*:issue-*|*:scratch-*) ;; *) exit 2 ;; esac
+    sock=$(fleet_socket "$sess")
+    sp=$(tmux -L "$sock" display-message -p '#{socket_path}' 2>/dev/null)
+    [ -n "$sp" ] || { printf 'reap: fleet %s has no running tmux server\n' "$sess" >&2; exit 5; }
+    target="$key"
+    case "$key" in *:*)
+      target=$(fleet_win_for_key "$key" "$sock") && [ -n "$target" ] \
+        || { printf 'reap: no live window holds %s on %s\n' "$key" "$sess" >&2; exit 5; } ;;
+    esac
+    export TMUX="$sp,0,0"
+    unset TMUX_PANE
+    exec bash "$BIN/dash-reap.sh" "$target" --yes
+    ;;
   movein)
     # A session moved here through the hub (issue #1426): $3 is the move id, the
     # rest are fleet-move-remote.sh movein's own flags, each already checked by

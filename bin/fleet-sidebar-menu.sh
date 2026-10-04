@@ -11,6 +11,14 @@
 # input line) or a second tap on the highlighted row; this file owns the tmux
 # syntax so the Python never spells a tmux command string.
 #
+# A row on ANOTHER machine (`wid:<worker_id>`, issue #1487 / EPIC #1479 C8) gets
+# the actions too — message, answer, stop, resume, reap — each a hub WRITE through
+# bin/fleet-sidebar-remote.sh → bin/fleet-hub-write.sh (the one write client),
+# never a script of this machine aimed at a window it does not have; a local row's
+# items are untouched. And with the hub on, both menus list «new task on <m>…» for
+# every machine the sidebar's cache says is online (dash-issue-new.sh --node=<m>);
+# with the hub off that cache does not exist, so nothing is added.
+#
 #   menu <session> <@id>          draw it on the session's most-recently-active
 #                                 client, anchored on the sidebar pane. tmux
 #                                 holds this call until the menu closes, so a
@@ -44,12 +52,19 @@ sub	s	切换 sub — 选中运行中的 Claude worker，按 . 后按 s；显示�
 wake	w	唤醒睡眠中的 z 行（仅睡眠时显示）
 awake	k	保持唤醒 ⇄ 允许再次休眠
 agent	v	新会话 claude ⇄ codex
-reap	x	回收 — 先确认 y/n
+reap	x	回收 — 先确认 y/n（别机行：经入口让那台机器回收）
 new	n	新任务 — 建 issue 并启动 worker
+newto	1-9	新建到 <机器>… — 入口在线的别的机器各一项：建 issue，worker 开在那台机器上
 restore	o	恢复已收工任务（hub landed 列表，弹窗）
 repo	g	添加仓库到这个 fleet — 询问 owner/name；~/projects/<name>，缺失时 clone（hub ⌃z）
-open	e	进入 — 打开 ⇄ 代理窗口（只有另一台机器上的行有；菜单标题写着「· 在 m4」）'
+open	e	进入 — 打开 ⇄ 代理窗口（只有另一台机器上的行有；菜单标题写着「· 在 m4」）
+message	m	发消息… — 只有别机行有：经入口送到那台机器的 issue 桥，作为它的下一轮
+stop	q	停 — 只有别机行有：经入口让那台机器上的会话 /exit（可恢复）
+resume	c	继续 — 只有别机行有：经入口恢复刚停掉的会话（活着的会被拒绝并告诉你）'
     m_open_remote='进入（⇄ 代理窗口）…'
+    m_r_message='发消息…'; m_r_stop='停（/exit）'; m_r_resume='继续（恢复）'
+    m_r_answer='答授权 / 回答…'; m_r_answer_none='答授权 / 回答（没有在等）'
+    m_r_reap_confirm_fmt='回收「%s」（在 %s）？(y/n)'; m_newto_fmt='新建到 %s…'
     m_rename='改名…'; m_unpin='取消置顶'; m_pin='置顶'
     m_open_pr='打开 PR'; m_open_pr_none='打开 PR（没有）'
     m_answer='回答它的提问…'; m_answer_none='回答它的提问（没有）'
@@ -67,12 +82,19 @@ sub	s	switch subscription — select a running Claude worker, press . then s; re
 wake	w	wake a sleeping (z) row now — only listed on one
 awake	k	keep it awake ⇄ allow it to sleep again
 agent	v	flip new sessions claude ⇄ codex
-reap	x	reap it — asks y/n first
+reap	x	reap it — asks y/n first (a row on another machine: through the hub, there)
 new	n	new task — file an issue AND spawn its worker
+newto	1-9	new task on <machine>… — one per other machine the hub says is online: file the issue, open the worker there
 restore	o	restore a finished task (the hub landed list, in a popup)
 repo	g	add a repo to this fleet — asks owner/name; ~/projects/<name>, cloned if missing (the hub ⌃z)
-open	e	enter — open the ⇄ proxy window (a row on another machine only; the menu title says · on m4)'
+open	e	enter — open the ⇄ proxy window (a row on another machine only; the menu title says · on m4)
+message	m	message… — a row on another machine only: through the hub to the issue bridge on that machine, as its next turn
+stop	q	stop — a row on another machine only: /exit there through the hub (resumable)
+resume	c	resume — a row on another machine only: reopen a just-stopped one through the hub (a live one is refused, and says so)'
     m_open_remote='Enter (⇄ proxy window)…'
+    m_r_message='Message…'; m_r_stop='Stop (/exit)'; m_r_resume='Resume'
+    m_r_answer='Answer prompt…'; m_r_answer_none='Answer prompt (nothing waiting)'
+    m_r_reap_confirm_fmt='Reap "%s" (on %s)? (y/n)'; m_newto_fmt='New task on %s…'
     m_rename='Rename…'; m_unpin='Unpin'; m_pin='Pin'
     m_open_pr='Open PR'; m_open_pr_none='Open PR (none)'
     m_answer='Answer question…'; m_answer_none='Answer question (none)'
@@ -112,17 +134,38 @@ client=$(tmux list-clients -t "$sess" -F '#{client_activity} #{client_name}' 2>/
   | sort -rn | head -1 | cut -d' ' -f2-)
 
 if [ "$verb" = reap ]; then
-  [ -n "$remote" ] && exit 0
-  bash "$BIN/fleet-sidebar-reap.sh" "$sess" "$wid" "$client"
+  if [ -n "$remote" ]; then bash "$BIN/fleet-sidebar-remote.sh" reap "$sess" "$wid" "$client"
+  else bash "$BIN/fleet-sidebar-reap.sh" "$sess" "$wid" "$client"; fi
   exit 0
 fi
 
+# «New task on <m>…» (issue #1487 ④): one item per OTHER machine the sidebar's
+# cache (fleet-hub-sessions.sh, `#node` lines) says is online — keys 1…9 in
+# cache order. No cache (the hub off) ⇒ no items: the menu is byte for byte the
+# one-machine menu. Each files the issue and spawns its worker THERE
+# (dash-issue-new.sh --node=<m> → dash-issue-session.sh --node, #1475).
+add_newto() {
+  local n i=0 m
+  while IFS= read -r n; do
+    # a machine name is a token (dash-issue-new.sh --node= checks it again), so it
+    # travels unquoted
+    case "$n" in ''|*[!A-Za-z0-9._-]*) continue ;; esac
+    i=$((i + 1)); [ "$i" -le 9 ] || break
+    printf -v m "$m_newto_fmt" "$n"
+    add "$m" "$i" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") -w 90% -h 12 -- bash $(sq "$BIN/dash-issue-new.sh") confirm --spawn --node=$n")"
+  done <<EOF
+$(LC_ALL=C awk -F $'\037' '$1 == "#node" && $3 == "online" && $2 != "" { print $2 }' "$FLEET_C/global/remote_$sess" 2>/dev/null)
+EOF
+}
+
 if [ -n "$remote" ]; then
-  # Its machine + name come from the sidebar's own cache (never the network),
-  # as fleet-remote-view.sh reads them.
-  row=$(LC_ALL=C awk -F $'\037' -v w="$wid" '$1 == w { print $2 "\037" $8; exit }' \
+  # Its machine, name, state and what it needs come from the sidebar's own cache
+  # (never the network), as fleet-remote-view.sh reads them.
+  row=$(LC_ALL=C awk -F $'\037' -v w="$wid" '$1 == w { print $2 "\037" $8 "\037" $6 "\037" $10; exit }' \
         "$FLEET_C/global/remote_$sess" 2>/dev/null)
-  node="${row%%$'\037'*}"; name="${row#*$'\037'}"
+  node="${row%%$'\037'*}"; row="${row#*$'\037'}"
+  name="${row%%$'\037'*}"; row="${row#*$'\037'}"
+  rstate="${row%%$'\037'*}"; rneeds="${row#*$'\037'}"
   [ -n "$node" ] || exit 0
   title=$(fleet_ui_t menu_title_on_node_fmt "${name:-${wid##*/}}" "$node")
   side=$(tmux list-panes -t "$sess:" -F '#{pane_id} #{@sidebar}' 2>/dev/null | awk '$2==1{print $1; exit}')
@@ -133,8 +176,23 @@ if [ -n "$remote" ]; then
   items=()
   add() { items+=("$1" "$2" "$3"); }
   add "$m_open_remote" "$(mk open)" "$(sh_run "bash $(sq "$BIN/fleet-remote-view.sh") open $(sq "$wid")")"
+  # The actions (issue #1487): every one a hub write through fleet-sidebar-remote.sh.
+  # Popups for the two that take input (message text, the answer); the others run
+  # detached and toast. Reap confirms first, as a local row's does.
+  rmt="bash $(sq "$BIN/fleet-sidebar-remote.sh")"
+  rargs="$(sq "$sess") $(sq "$wid")"; [ -n "$client" ] && rargs="$rargs $(sq "$client")"
+  add "$m_r_message" "$(mk message)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") -w 84% -h 12 -- $rmt message $rargs")"
+  case "$rneeds:$rstate" in
+    ask:*|perm:*|*:needs) add "$m_r_answer" "$(mk answer)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") -w 84% -h 14 -- $rmt answer $rargs")" ;;
+    *) add "-$m_r_answer_none" "$(mk answer)" '' ;;
+  esac
+  add "$m_r_stop" "$(mk stop)" "$(sh_run "$rmt stop $rargs")"
+  add "$m_r_resume" "$(mk resume)" "$(sh_run "$rmt resume $rargs")"
+  printf -v m_r_reap_confirm "$m_r_reap_confirm_fmt" "$(fe "${name:-${wid##*/}}")" "$(fe "$node")"
+  add "$m_reap" "$(mk reap)" "confirm-before -p $(sq "$m_r_reap_confirm") $(dq "$(sh_run "$rmt reap $rargs")")"
   add "" "" ""
   add "$m_new" "$(mk new)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") -w 90% -h 12 -- bash $(sq "$BIN/dash-issue-new.sh") confirm --spawn")"
+  add_newto
   add "$m_restore" "$(mk restore)" "$(sh_run "bash $(sq "$BIN/fleet-restore-pick.sh") --session $(sq "$sess")")"
   add "$m_repo" "$(mk repo)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") -w 80% -h 16 -- bash $(sq "$BIN/dash-repo-add.sh")")"
   if [ "${4:-}" = --print ]; then
@@ -202,6 +260,7 @@ reap_args="$(sq "$sess") $wid"; [ -n "$client" ] && reap_args="$reap_args $(sq "
 add "$m_reap" "$(mk reap)" "confirm-before -p $(sq "$m_reap_confirm") $(dq "$(sh_run "bash $(sq "$BIN/fleet-sidebar-reap.sh") $reap_args")")"
 add "" "" ""
 add "$m_new" "$(mk new)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") -w 90% -h 12 -- bash $(sq "$BIN/dash-issue-new.sh") confirm --spawn")"
+add_newto
 # Row-less too (issue #901): the hub's ⌃t landed list + ⌃o, as one popup.
 add "$m_restore" "$(mk restore)" "$(sh_run "bash $(sq "$BIN/fleet-restore-pick.sh") --session $(sq "$sess")")"
 # Row-less (issue #1103): the hub's ⌃z — the same popup, the same script. Listed

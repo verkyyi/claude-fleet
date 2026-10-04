@@ -79,7 +79,8 @@ is required independently of this application-level identity check.
   now. They are re-minted by every migration, restore and warm-pool claim and are
   never accepted as a target.
 
-`worker_message`, `worker_stop` and `worker_resume` take the `worker_id`. The
+`worker_message`, `worker_stop`, `worker_resume`, `worker_answer` and
+`worker_reap` take the `worker_id`. The
 node re-resolves it against the fleet's live windows at the moment it acts and
 refuses (`NOT_FOUND`, `AMBIGUOUS`) unless exactly one window holds it — a window
 that merely has the number a caller last saw is never touched. `lifecycle`
@@ -214,6 +215,34 @@ the beat + up to 2 s of fetch cadence); `bin/fleet-hub-latency.sh --observer m4`
 measures it from a fleet pane on A (ten rounds, median), with the watcher half
 over one ssh to B.
 
+**…and acts on them** (issue #1487, EPIC #1479 C8). A remote row's menu (`.` /
+a second tap; `fleet-sidebar-menu.sh`) offers what a local row's does — 发消息 ·
+答授权 / 回答 · 停 · 继续 · 回收 — and every one is a hub WRITE: the item runs
+`bin/fleet-sidebar-remote.sh <action>` (the asking: a popup for the message text
+and for the answer — `[y]` 批准 / `[n]` 拒绝 on a `⊘` row, the option number on a
+`?` row; a `confirm-before` on reap, naming the machine; a toast with the
+outcome, the node's refusal verbatim), which calls **`bin/fleet-hub-write.sh
+<tool> <json>`** — the ONE client that writes to the hub, from a node or from
+the C5 shell. It fills in an idempotency key (`--idem` to name one; a retry is
+the same operation), posts, and `--wait` reads `operation_get` back until the
+operation is terminal. Who writes, in order: `FLEET_HUB_WRITE_CMD` (a seam),
+the viewer token (`POST /v1/fleet/<tool>` — the operator's door on a node), else
+**this device's connection certificate**: `POST /v1/fleet/write {cert, sig, ts,
+tool, args_json}` with `ssh-keygen -Y sign -n fleet-write@claude-fleet` over
+`fleet-write <ts> <tool> <sha256(args_json)>` (`handleFleetWrite`, outside the
+viewer gate like `fleet_sessions`) — the signature binds THIS write, so a
+captured one is good for nothing else, and the hub then acts as the
+certificate's person: their own workers only (`FleetScope`; another person's is
+`NOT_FOUND`), their grant (`DefaultPersonScopes` holds `worker:answer` and
+`worker:reap`), their principal in the journal and the audit row. The same door
+takes `operation_get`, so the shell reads its outcome with no token anywhere. A
+local row's items are untouched, and with the hub off none of this exists: the
+menu offers these only on `wid:` rows, which only the hub's cache produces.
+Both menus also list **「新建到 m4…」** — one item per other machine the cache's
+`#node` lines say is online — which files the issue and spawns its worker THERE
+(`dash-issue-new.sh --node=<m>` → `dash-issue-session.sh --node`, #1475); no
+cache, no item.
+
 **…and steps into them** (issue #1424, EPIC #1419 C5). Enter on a remote row (the
 dash's `dash-enter.sh`, the sidebar's `jump`) runs `bin/fleet-remote-view.sh open`:
 a **proxy window** `⇄m4 <name>` (its pane header carries the same `⇄m4`, so a
@@ -336,6 +365,8 @@ and is treated as ready.
 | `worker_message(worker_id, text, idempotency_key)` | Post `text` as the worker's next turn through the fleet's issue bridge (a `--to-worker` comment on its Issue; never keystrokes) | `worker:message` on the worker's Fleet |
 | `worker_stop(worker_id, idempotency_key)` | Graceful `/exit` of the live session; the fleet's own exit policy closes the window and records the `/fleet-history` row | `worker:stop` on the worker's Fleet |
 | `worker_resume(worker_id, idempotency_key)` | Reopen a stopped worker from its `/fleet-history` row in a new window (`dash-restore-session.sh`) | `worker:resume` on the worker's Fleet |
+| `worker_answer(worker_id, answer, idempotency_key)` | Answer what the worker's pane is asking (#1487): `answer` = `yes` / `no` presses the plain Yes / the No of an open **permission prompt** in the caller's name (`fleet-permission.sh --allow` / `--deny --by <actor>`; never a "don't ask again" row); option numbers (`2`, `1,3`; one per question, space-separated) answer an `AskUserQuestion` (`fleet-answer.sh --answer`). Refused — the script's own reason verbatim — when nothing is pending or the screen does not show the row | `worker:answer` on the worker's Fleet |
+| `worker_reap(worker_id, idempotency_key)` | The dash's confirmed reap (#1487): `dash-reap.sh <key> --yes` — close the window, remove the worktree when clean (a dirty one is KEPT), close the Issue; a live or too-young agent is refused with the reason (`skip:live`) | `worker:reap` on the worker's Fleet |
 | `config_set(fleet_id, key, value, expected_revision, idempotency_key)` | Compare-and-set one allowed configuration key | `config:write` plus an explicit key grant |
 | `operation_get(operation_id)` | Reconcile a caller's own operation with its node | `fleet:read` on the target Fleet |
 | `gh_issue_view(fleet_id, number, repo?, fields?)` | One Issue through the node's `fleet-gh.sh`: the daemons' local copy when fresh, else `gh`, else REST — the `gh --json` fields plus `_source` (`cache`/`gh`/`rest`) and `_age` seconds (#1274) | `gh:read` on that Fleet |
@@ -689,6 +720,34 @@ with a code, never `unknown`:
   and reopens the surviving transcript with `--resume`. The new window carries
   the same `@issue`, so the same `worker_id` is live again; its window id and
   handle are new. A resumed session holds a slot and spends tokens like a start.
+
+- `worker_answer` (issue #1487, EPIC #1479 C8) is the sidebar on ANOTHER
+  machine answering a row here. `answer` is `yes` / `no` for a **permission
+  prompt** — `fleet-permission.sh --allow` / `--deny`, run `--by <actor>` (the
+  journal's actor: the person's principal, or `operator`), which is the only
+  thing that arms a Yes (no knob ever does; `FLEET_ALLOW_AUTO_DENY` still arms an
+  unattended No). It presses exactly the row the SCREEN shows — the plain `Yes`
+  (never "Yes, and don't ask again": one Yes answers one prompt) or the `No` —
+  and the verdict is the transcript's `tool_result`. Anything else is the
+  option number(s) of an `AskUserQuestion` — `fleet-answer.sh --answer`'s own
+  grammar, one pick per question, `1,3` toggling several — and nothing else
+  passes `validate_write` (each word becomes an argv word of a script that
+  types into a pane). The scripts' refusals are a clean `failed`, their last
+  stderr line the reason: nothing pending / no live pane (`INVALID_STATE`), a
+  screen gate that did not see the row (`INVALID_STATE`, nothing sent), a
+  malformed pick (`INVALID_ARGUMENT`), no named human (`FORBIDDEN`); keys sent
+  but never confirmed are `unknown`. A hibernating worker asks nothing
+  (`INVALID_STATE`).
+- `worker_reap` is the dash's confirmed ⌃x, unasked: `dash-reap.sh <key>
+  --yes` on the fleet's own server (the adapter points bare `tmux` at it through
+  `TMUX`, as `fleet-remote-view.sh` does with no pane). Its result token on
+  stdout is the verdict (issue #869), never the exit code: `reaped:full` /
+  `reaped:keep` (a dirty worktree is KEPT — the same one-key rule as ⌃x) are
+  confirmed by re-reading the fleet (the identity must be gone), `skip:live` /
+  `skip:needs-confirm` / `refused:*` touched nothing and are a clean `failed`
+  carrying the token and dash-reap's own reason, `failed:*` (the gate passed,
+  a disposal did not) is `unknown`. A repo-qualified key (`<slug>:issue-N`) is
+  resolved to its window first — the reaper's grammar has no repo prefix.
 
 Worker starts reuse `dash-issue-session.sh` with an explicit target session and
 provider. They preserve its capacity and Issue-claim checks; the bridge also

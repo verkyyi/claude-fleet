@@ -165,6 +165,16 @@ def make_server(hub, *, token=None, oauth=None, grant_tokens=False):
         """Resume a stopped worker from its /fleet-history row in a new window under local Fleet gates. Refused while a live window holds the identity. Needs worker:resume; poll operation_get."""
         return await invoke("worker_resume", {"worker_id": worker_id, "idempotency_key": idempotency_key})
 
+    @server.tool(annotations=change, structured_output=True)
+    async def worker_answer(worker_id: str, answer: str, idempotency_key: str) -> dict[str, Any]:
+        """Answer what the worker's pane is asking (issue #1487): answer=yes|no presses the plain Yes / the No of an open permission prompt in the caller's name; option numbers (`2`, `1,3`, one per question) answer an AskUserQuestion. Refused with the node's reason when nothing is pending. Needs worker:answer; poll operation_get."""
+        return await invoke("worker_answer", {"worker_id": worker_id, "answer": answer, "idempotency_key": idempotency_key})
+
+    @server.tool(annotations=lifecycle, structured_output=True)
+    async def worker_reap(worker_id: str, idempotency_key: str) -> dict[str, Any]:
+        """The dash's confirmed reap (dash-reap.sh --yes): close the window, remove the worktree when clean (a dirty one is kept), close the issue; a live agent is refused with the reason. Needs worker:reap; poll operation_get."""
+        return await invoke("worker_reap", {"worker_id": worker_id, "idempotency_key": idempotency_key})
+
     # GitHub through the fleet's own rails (issue #1274): reads come from the
     # fleet's local copy when fresh (_source cache|gh|rest, _age seconds); a
     # comment goes through its write queue. Descriptions stay short: every

@@ -290,6 +290,10 @@ func (s *Server) Handler() http.Handler {
 		// plus a connection certificate proven by a signed timestamp — so
 		// it authenticates itself, outside the viewer gate, like the routes.
 		mux.HandleFunc(control.SessionsPath, s.handleFleetSessions)
+		// A write by connection certificate (claude-fleet#1487): the other
+		// machines' sidebars and the `fleet` shell act on their person's
+		// workers with the one credential they hold, signed per write.
+		mux.HandleFunc(control.WritePath, s.handleFleetWrite)
 		// Connection certificates (claude-fleet#1412). start/poll carry no
 		// credential — they are what a person runs before having one, and
 		// grant nothing until a signed-in person confirms the code.

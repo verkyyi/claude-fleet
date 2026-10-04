@@ -251,13 +251,19 @@ class Control:
             db.execute("UPDATE operations SET status=?,result=?,updated=? WHERE id=?",
                        (state, canonical(result), now(), op_id))
 
-    def execute_worker(self, fleet, action, params):
+    def execute_worker(self, fleet, action, params, actor=""):
         """Lifecycle tools on a durable worker identity. Every refusal before the
         adapter runs raises Unattempted (a clean `failed`); anything after it
-        is `unknown` unless the post-condition was observed."""
+        is `unknown` unless the post-condition was observed. `actor` is the
+        journal's actor — who decided — handed to the one tool whose effect is a
+        human's call (worker_answer)."""
         fleet_id, key = parse_worker_id(params["worker_id"])
         if fleet_id != fleet["fleet_id"]:
             raise Unattempted("INVALID_ARGUMENT", "worker_id belongs to a different fleet")
+        if action == "worker_answer":
+            return self.execute_answer(fleet, key, params["answer"], actor)
+        if action == "worker_reap":
+            return self.execute_reap(fleet, key)
         if action == "worker_message":
             if not key.rsplit(":", 1)[-1].startswith("issue-"):
                 raise Unattempted("INVALID_ARGUMENT", "A scratch session has no issue channel to message")
@@ -306,6 +312,58 @@ class Control:
             raise Fault("UNKNOWN_OUTCOME", "Restore returned but no matching worker is visible")
         return {"workers": matches, "observed_at": snapshot["observed_at"]}
 
+    # The two answer scripts' exit codes, both the same shape (fleet-answer.sh /
+    # fleet-permission.sh headers): 1 nothing pending or no usable pane, 2 a
+    # malformed pick, 3 refused at a screen gate with nothing sent, 5 a Yes/No
+    # without a named human. Every one of them left the pane untouched, so each
+    # is a clean `failed`; 4 = keys were sent but the transcript never confirmed.
+    ANSWER_REFUSALS = {1: "INVALID_STATE", 2: "INVALID_ARGUMENT", 3: "INVALID_STATE", 5: "FORBIDDEN"}
+
+    def execute_answer(self, fleet, key, answer, actor):
+        """worker_answer (issue #1487): answer the open prompt of the one live
+        window holding `key` — `yes` / `no` on a permission prompt through
+        fleet-permission.sh (--allow / --deny, in the name of `actor`), option
+        numbers on an AskUserQuestion through fleet-answer.sh. The scripts' own
+        gates decide: the transcript must show a pending prompt, the screen must
+        show the row, and the verdict is the transcript's tool_result. A refusal
+        comes back verbatim — its last stderr line is the reason."""
+        matches, _ = self.target(fleet, key, "worker_answer")
+        if matches[0]["lifecycle"] != "awake":
+            raise Unattempted("INVALID_STATE", "Worker is hibernating; nothing is asking")
+        code, output, err = self.adapter("answer", fleet["name"], key, answer, actor or "hub", timeout=120)
+        if code in self.ANSWER_REFUSALS:
+            raise Unattempted(self.ANSWER_REFUSALS[code], "Answer refused on the fleet: " + last_line(err))
+        if code:
+            raise Fault("UNKNOWN_OUTCOME", "Keys were sent but the answer was not confirmed: " + last_line(err))
+        return {"answered": answer, "how": last_line(output) if output.strip() else "confirmed",
+                "worker": matches[0], "by": actor or "hub", "observed_at": now()}
+
+    def execute_reap(self, fleet, key):
+        """worker_reap (issue #1487): dash-reap.sh --yes on the one live window
+        holding `key` — the confirmed ⌃x branch, so a dirty worktree is still
+        KEPT. The result token on stdout is the verdict (issue #869), never the
+        exit code: `reaped:*` landed, `skip:*` / `refused:*` touched nothing and
+        is a clean `failed` carrying the token and dash-reap's own reason,
+        `failed:*` means the gate passed but a disposal did not — unknown."""
+        matches, _ = self.target(fleet, key, "worker_reap")
+        code, output, err = self.adapter("reap", fleet["name"], key, timeout=300)
+        tokens = [l for l in output.decode("utf-8", "replace").splitlines()
+                  if re.match(r"(reaped|skip|refused|failed|dispatched):", l)]
+        token = tokens[-1].strip() if tokens else ""
+        if code == 5 and not token:
+            raise Unattempted("NOT_FOUND", "Reap refused on the fleet: " + last_line(err))
+        if token.startswith("skip:") or token.startswith("refused:"):
+            raise Unattempted("INVALID_STATE", "Reap refused on the fleet: %s — %s" % (token, last_line(err)))
+        if not token.startswith("reaped:"):
+            raise Fault("UNKNOWN_OUTCOME", "Reap did not confirm: %s" % (token or last_line(err)))
+        remaining, snapshot = self.find_workers(fleet, key)
+        if remaining:
+            raise Fault("UNKNOWN_OUTCOME", "A window still holds this identity after the reap")
+        return {"reaped": matches[0], "how": token,
+                "kept": "the worktree stays on disk when it was dirty (reaped:keep)" if token == "reaped:keep"
+                else "worktree, branch and issue disposed; the window is closed",
+                "observed_at": snapshot["observed_at"]}
+
     def execute_move_in(self, fleet, params):
         """A session moved here through the hub (issue #1426): land its branch
         in a fresh worktree, unpack the transcript the agent downloaded, open a
@@ -349,7 +407,7 @@ class Control:
             fleet = self.fleet(req["fleet_id"])
             params = req["params"]
             if req["action"] in WORKER_ACTIONS:
-                result = self.execute_worker(fleet, req["action"], params)
+                result = self.execute_worker(fleet, req["action"], params, req.get("actor", ""))
             elif req["action"] == "gh_comment":
                 # Record-only (fleet-comment.sh --note) through the per-token
                 # write queue; reaching a live worker is worker_message's job.
