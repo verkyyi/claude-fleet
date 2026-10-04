@@ -616,6 +616,10 @@ daemon_verdict() {   # $1=tag $2=label $3=pass-msg $4=what-is-lost-when-missing
   case $? in
     0) pass "$tag" "$msg" ;;
     1) warn "$tag" "$label is NOT installed — $lost (conf says on, but nothing is running)" ;;
+    # 3 (issue #1495): a system-shape login (LaunchDaemons with UserName) whose
+    # plist is on disk, but neither the unprivileged `launchctl print system/…`
+    # nor a passwordless sudo could confirm it is loaded — installed, unverified.
+    3) pass "$tag" "$msg (system LaunchDaemon $(fleet_daemon_label "${label#com.claude-fleet.}" system) installed, not verified loaded — no passwordless sudo for this login)" ;;
     *) pass "$tag" "$msg (could not verify $label is loaded on this platform)" ;;
   esac
 }

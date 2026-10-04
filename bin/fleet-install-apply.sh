@@ -141,7 +141,7 @@ render_system() { # $1 template $2 unit $3 out
     argv="$argv '$(printf '%s' "$a" | sed "s/'/'\\\\''/g")'"
     i=$((i + 1))
   done
-  plutil -replace Label -string "com.claude-fleet.$LOGIN.$2" "$tmp" \
+  plutil -replace Label -string "$(fleet_daemon_label "$2" system "$LOGIN")" "$tmp" \
     && plutil -replace UserName -string "$LOGIN" "$tmp" \
     && plutil -replace GroupName -string staff "$tmp" \
     && plutil -replace ProgramArguments -json '["/bin/sh","-c"]' "$tmp" \
@@ -166,6 +166,11 @@ while [ $# -gt 0 ]; do
 done
 LOGIN="${FLEET_INSTALL_LOGIN:-${USER:-$(id -un)}}"
 RHOME="${FLEET_INSTALL_HOME:-$HOME}"
+# The daemons' launchd SHAPE (gui LaunchAgents / system LaunchDaemons) and each
+# unit's label + plist path in it are the lib's one rule (issue #1495), shared with
+# fleet-daemon-loaded.sh — so the doctor looks where this script installs.
+# shellcheck source=/dev/null
+. "$(dirname "$SELF")/fleet-daemon-lib.sh"
 
 # --- --render-system <unit>: one system-shape plist on stdout, nothing else ------
 # fleet-login-new.sh --apply (issue #1192) renders a NEW login's daemons from the
@@ -201,7 +206,6 @@ LAUNCHCTL="${FLEET_INSTALL_LAUNCHCTL:-launchctl}"
 SYSTEMCTL="${FLEET_INSTALL_SYSTEMCTL:-systemctl}"
 SUDO="${FLEET_INSTALL_SUDO-sudo -n}"
 CLAUDE="${FLEET_INSTALL_CLAUDE:-claude}"
-UID_=$(id -u)
 PLATFORM="${FLEET_INSTALL_PLATFORM:-}"
 if [ -z "$PLATFORM" ]; then
   case "$(uname -s)" in Darwin) PLATFORM=launchd ;; Linux) PLATFORM=systemd ;; *) PLATFORM=none ;; esac
@@ -304,11 +308,10 @@ daemons_launchd() {
   local units shape tmpl u label dst dom pre tmp acted=0 sudo_ok=1 need_root=''
   units=$(printf '%s\n' "$CHANGED" | sed -n 's#^launchd/com\.claude-fleet\.\(.*\)\.plist\.tmpl$#\1#p' | sort -u)
   # shape: this login's installed daemons decide — gui LaunchAgents, or system
-  # LaunchDaemons carrying UserName (a guest login), gui when neither exists.
-  shape=gui
-  if ! ls "$AGENTS"/com.claude-fleet.*.plist >/dev/null 2>&1 \
-     && ls "$DDIR/com.claude-fleet.$LOGIN".*.plist >/dev/null 2>&1; then
-    shape=system
+  # LaunchDaemons carrying UserName (a guest login), gui when neither exists
+  # (fleet_daemon_shape, the rule fleet-daemon-loaded.sh reads by too, #1495).
+  shape=$(fleet_daemon_shape "$LOGIN")
+  if [ "$shape" = system ]; then
     { [ -z "$SUDO" ] || $SUDO true >/dev/null 2>&1; } || sudo_ok=0
   fi
   local spin=0
@@ -319,11 +322,8 @@ daemons_launchd() {
   fi
   for u in $units; do
     tmpl="$ROOT/launchd/com.claude-fleet.$u.plist.tmpl"
-    if [ "$shape" = gui ]; then
-      label="com.claude-fleet.$u"; dst="$AGENTS/$label.plist"; dom="gui/$UID_"; pre=''
-    else
-      label="com.claude-fleet.$LOGIN.$u"; dst="$DDIR/$label.plist"; dom=system; pre="$SUDO"
-    fi
+    label=$(fleet_daemon_label "$u" "$shape" "$LOGIN"); dst=$(fleet_daemon_plist "$u" "$shape" "$LOGIN")
+    dom=$(fleet_daemon_domain "$shape"); pre=''; [ "$shape" = system ] && pre="$SUDO"
     if [ ! -f "$tmpl" ]; then                                    # retired
       [ -f "$dst" ] || { say "daemons: skip $u — retired, never installed"; continue; }
       if [ "$shape" = system ] && [ "$sudo_ok" = 0 ]; then
@@ -366,8 +366,8 @@ daemons_launchd() {
     [ "$u" = spinner ] && spin=0
   done
   if [ "$spin" = 1 ]; then
-    if [ "$shape" = gui ]; then label=com.claude-fleet.spinner; dst="$AGENTS/$label.plist"; dom="gui/$UID_"; pre=''
-    else label="com.claude-fleet.$LOGIN.spinner"; dst="$DDIR/$label.plist"; dom=system; pre="$SUDO"; fi
+    label=$(fleet_daemon_label spinner "$shape" "$LOGIN"); dst=$(fleet_daemon_plist spinner "$shape" "$LOGIN")
+    dom=$(fleet_daemon_domain "$shape"); pre=''; [ "$shape" = system ] && pre="$SUDO"
     if [ ! -f "$dst" ]; then say 'daemons: skip spinner kick — not installed'
     elif [ "$shape" = system ] && [ "$sudo_ok" = 0 ] && is_new bin/tmux-spinner.sh; then
       # A first install (#1192): the script is NEW in this range, so no unit was

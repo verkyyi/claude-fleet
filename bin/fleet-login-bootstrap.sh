@@ -186,7 +186,10 @@ platform="${FLEET_INSTALL_PLATFORM:-}"
 # first words were «Unknown command: /fleet-onboard».
 login="${FLEET_INSTALL_LOGIN:-${USER:-$(id -un)}}"
 sysd=0
-ls "${FLEET_INSTALL_DAEMON_DIR:-/Library/LaunchDaemons}/com.claude-fleet.$login".*.plist >/dev/null 2>&1 && sysd=1
+# the shape rule is fleet-daemon-lib.sh's (issue #1495) — the one apply keeps by
+# shellcheck source=/dev/null
+. "$BIN/fleet-daemon-lib.sh"
+[ "$(fleet_daemon_shape "$login")" = system ] && sysd=1
 nodaemons=''
 if [ "$platform" = launchd ] && [ "$sysd" = 0 ] && ! "${FLEET_INSTALL_LAUNCHCTL:-launchctl}" print "gui/$(id -u)" >/dev/null 2>&1; then
   nodaemons=1

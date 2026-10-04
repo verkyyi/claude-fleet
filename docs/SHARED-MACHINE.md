@@ -304,6 +304,16 @@ GitHub login, valid Codex login, SSH key, loaded fleet services, or live/complet
 guide. A key whose comment contains `temporary` or `临时` gets a reminder to
 replace it. Missing steps are WARNs and do not change the doctor's FAIL exit code.
 
+The doctor's per-daemon rows (`cleanup`, `ledger`, `basesync`, `qwatch`) read a
+guest login's shape too (issue #1495): when the gui `launchctl list` has no
+`com.claude-fleet.<unit>`, `bin/fleet-daemon-loaded.sh` asks the system domain
+for `com.claude-fleet.<login>.<unit>` — unprivileged first, then through a
+passwordless `sudo -n`. A login with neither answer but the plist on disk reads
+`PASS … (system LaunchDaemon … installed, not verified loaded)`, never
+`NOT installed`. The label, plist path and shape come from one rule in
+`bin/fleet-daemon-lib.sh` (`fleet_daemon_shape` / `fleet_daemon_label`), the
+same one `fleet-install-apply.sh` keeps the login's shape by.
+
 **Each login has its own `~/.claude`.** As each user:
 
 ```sh
