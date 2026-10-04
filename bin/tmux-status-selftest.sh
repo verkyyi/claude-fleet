@@ -163,14 +163,14 @@ if [ -n "$REAL_TMUX" ]; then
   bar sess=f1 win=@1 remote= acct= 'wsf=#I:#W' 'wscf=[#I:#W]' wsaved= >/dev/null
   eq "F: entering hub mode blanks window-status-format" "" "$(tm show-options -gqv window-status-format)"
   eq "F: … and window-status-current-format" "" "$(tm show-options -gqv window-status-current-format)"
-  eq "F: … saving both" "#I:#W${US}[#I:#W]" "$(tm show-options -gqv @status_wlist_saved)"
+  eq "F: … saving both" "#I:#W|[#I:#W]|1" "$(tm show-options -gqv @status_wsf_saved)|$(tm show-options -gqv @status_wscf_saved)|$(tm show-options -gqv @status_wlist_saved)"
   n=$(setcalls)
   bar sess=f1 win=@1 remote= acct= wsf= wscf= wsaved=1 >/dev/null
   eq "F: in hub mode with the list already blank: no tmux set-option" "$n" "$(setcalls)"
   CF='' bar sess=f1 win=@1 remote= acct= wsf= wscf= wsaved=1 >/dev/null
   eq "F: leaving hub mode restores window-status-format" '#I:#W' "$(tm show-options -gqv window-status-format)"
   eq "F: … and window-status-current-format" '[#I:#W]' "$(tm show-options -gqv window-status-current-format)"
-  eq "F: … and forgets the saved pair" "" "$(tm show-options -gqv @status_wlist_saved)"
+  eq "F: … and forgets the saved pair" "||" "$(tm show-options -gqv @status_wsf_saved)|$(tm show-options -gqv @status_wscf_saved)|$(tm show-options -gqv @status_wlist_saved)"
   n=$(setcalls)
   CF='' bar sess=f1 win=@1 remote= acct= 'wsf=#I:#W' 'wscf=[#I:#W]' wsaved= >/dev/null
   eq "F: off hub mode with nothing saved: no tmux set-option" "$n" "$(setcalls)"

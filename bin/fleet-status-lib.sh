@@ -18,7 +18,8 @@
 #   fleet_status_age <secs>            → FSA: `3m` / `2h` / `1d` for 失联 N.
 #   fleet_status_window_list on|off    → the window list (window-status-format /
 #       -current-format) goes blank while the bar is in hub mode and comes back
-#       when it leaves — saved in the global @status_wlist_saved. The ONLY thing
+#       when it leaves — saved in the global @status_wsf_saved / @status_wscf_saved
+#       (flag @status_wlist_saved, what the conf's `wsaved=` reads). The ONLY thing
 #       here that runs tmux, and only at a transition: this fleet's server is its
 #       own (#159), so the global option IS this session's.
 #
@@ -99,22 +100,29 @@ fleet_status_age() {
 }
 
 fleet_status_window_list() {
-  local wsf wscf saved
+  local wsf wscf
   case "${1:-}" in
     on)
       wsf=$(tmux show-options -gqv window-status-format 2>/dev/null)
       wscf=$(tmux show-options -gqv window-status-current-format 2>/dev/null)
       [ -n "$wsf$wscf" ] || return 0
-      tmux set-option -g @status_wlist_saved "$wsf$_FS_US$wscf" \; \
+      # one option per format (a tmux prints a control character inside an
+      # option value escaped, so a joined pair would not split back), plus the
+      # flag the conf's `wsaved=` reads
+      tmux set-option -g @status_wsf_saved "$wsf" \; \
+           set-option -g @status_wscf_saved "$wscf" \; \
+           set-option -g @status_wlist_saved 1 \; \
            set-option -g window-status-format '' \; \
            set-option -g window-status-current-format '' 2>/dev/null ;;
     off)
-      saved=$(tmux show-options -gqv @status_wlist_saved 2>/dev/null)
-      [ -n "$saved" ] || return 0
-      wsf=${saved%%"$_FS_US"*}; wscf=${saved#*"$_FS_US"}
+      [ -n "$(tmux show-options -gqv @status_wlist_saved 2>/dev/null)" ] || return 0
+      wsf=$(tmux show-options -gqv @status_wsf_saved 2>/dev/null)
+      wscf=$(tmux show-options -gqv @status_wscf_saved 2>/dev/null)
       tmux set-option -g window-status-format "$wsf" \; \
            set-option -g window-status-current-format "$wscf" \; \
-           set-option -gu @status_wlist_saved 2>/dev/null ;;
+           set-option -gu @status_wlist_saved \; \
+           set-option -gu @status_wsf_saved \; \
+           set-option -gu @status_wscf_saved 2>/dev/null ;;
   esac
   return 0
 }

@@ -187,7 +187,8 @@ lost, `?` when the cache has no row. The account is the window's `@cc_account`
 with its 5h / week quota (the account knobs' colour bands); omitted when neither
 side knows it. `入口 ●` while the cache is fresh, `○ 失联 Nm` once it is older
 than `FLEET_HUB_SESSIONS_STALE`. The window list (`window-status-format`) goes
-blank in hub mode and is restored on leaving (saved in `@status_wlist_saved`).
+blank in hub mode and is restored on leaving (saved in `@status_wsf_saved` /
+`@status_wscf_saved`, flag `@status_wlist_saved`).
 The conf's `status-right` passes the client's current window as `k=v` args
 (`sess= win= remote= acct= wsf= wscf= wsaved=`), so tmux re-runs the bar the
 moment you switch windows. Data: the same refresh loop writes, every
