@@ -18,7 +18,9 @@
 #   (b) cleanup by bare number   A's PR merges; one cleanup tick reaps A's #12
 #                                window + worktree, B's #12 window + worktree live.
 #   (c) issue-number collisions  spawn dedup, the backlog's bound map and the
-#                                ledger row are keyed on (repo, 12).
+#                                ledger row are keyed on (repo, 12); a worker's
+#                                fleet-comment.sh with no (or an empty) --repo
+#                                posts on its window's repo (issue #1461).
 #   (d) scratch/origin keys      origin keys are repo-qualified and resolve back
 #                                to the right repo's window.
 #   (e) one MAIN per reaper      the cleanup tick runs a pass per hosted repo.
@@ -97,6 +99,8 @@ case "$1 $2" in
       o/solo)  printf '[%s,%s]' "$(iss 12 'SOLO twelve')" "$(iss 5 'SOLO five')" | out ;;
       *)       printf '[]' | out ;;
     esac ;;
+  # fleet-comment.sh (issue #1461): the URL names the repo the comment went to.
+  "issue comment") printf 'https://github.com/%s/issues/%s#issuecomment-1\n' "$repo" "$3" ;;
   *) exit 1 ;;
 esac
 EOF
@@ -258,6 +262,20 @@ chk d "o-beta:issue-12 resolves to B's window" "$(fleet_win_for_key o-beta:issue
 chk d "o-alpha:issue-12 resolves to A's window" "$(fleet_win_for_key o-alpha:issue-12 "$S")" "$wA"
 chk d "B's scratch key resolves to B's scratch" "$(fleet_win_for_key "$kS" "$S")" "$sB"
 
+# ==== (c) issue-number collisions: a comment lands on the WINDOW's repo (#1461) ============
+# The pane's env carries no FLEET_REPO (the claim brief resolves it from @repo, never
+# exports it), so `--repo "$FLEET_REPO"` is `--repo ""`; fleet.conf's FLEET_REPO is the
+# fleet's FIRST repo, and falling back to it posted B's #12 onto A's #12.
+cmt() { local w="$1"; shift; inpane "$w" env -u FLEET_REPO FLEET_GH_WRITE_GAP=0 bash "$BIN/fleet-comment.sh" "$@" --note --body hi 2>"$WORK/cmt.err"; }
+chk c "B#12's bare comment lands on B" "$(cmt "$wB" 12)" "https://github.com/o/beta/issues/12#issuecomment-1"
+chk c "B#12's --repo \"\" comment lands on B" "$(cmt "$wB" 12 --repo '')" "https://github.com/o/beta/issues/12#issuecomment-1"
+chk c "A#12's bare comment lands on A" "$(cmt "$wA" 12)" "https://github.com/o/alpha/issues/12#issuecomment-1"
+chk c "an explicit --repo still wins in B's pane" "$(cmt "$wB" 12 --repo o/alpha)" "https://github.com/o/alpha/issues/12#issuecomment-1"
+out=$(cmt "$wN" 12); rc=$?
+[ "$rc" = 1 ] && [ -z "$out" ] && grep -q 'pass --repo' "$WORK/cmt.err" \
+  && ok "(c) a no-repo pane's bare comment refuses and asks for --repo" \
+  || leak c "a no-repo pane's bare comment [$rc] [$out] $(cat "$WORK/cmt.err")"
+
 # ==== (id) fleet identity: the pane's repo never enters the fleet UUID (#1498) ===========
 # The UUID the hub registered is what fleet_control.py's inventory minted, under its
 # scrubbed environment. From B's worker pane — B's overlay on via @repo, and B's
@@ -385,6 +403,7 @@ if [ -n "$wD" ]; then
   case "$(opt "$wD" @worktree)" in "$WORK/d/solo-issue-12") ok "(z) one-repo worktree in the sibling layout" ;;
     *) fail "(z) one-repo worktree: $(opt "$wD" @worktree)" ;; esac
 else fail "(z) no one-repo #12 window"; fi
+chk z "a one-repo worker's bare comment lands on its repo" "$(cmt "$wD" 12)" "https://github.com/o/solo/issues/12#issuecomment-1"
 zrows=$(backlog "$D" | tail -n +2)
 [ -n "$zrows" ] && [ "$(printf '%s\n' "$zrows" | awk -F '\037' '{print NF}' | sort -u)" = 3 ] \
   && ok "(z) one-repo backlog rows keep three fields" || fail "(z) one-repo backlog rows: $zrows"

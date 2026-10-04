@@ -166,8 +166,11 @@ override them):
   `$FLEET_BASE_BRANCH`; never commit to or edit the base checkout (it's
   hook-enforced read-only). Converse with the operator/collaborators by
   **commenting on the bound issue** (via
-  `~/.claude/fleet/bin/fleet-comment.sh "<issue>" --repo "$FLEET_REPO" --note --body '…'`
-  so it carries the no-relay marker + worker footer). ⚠️ **`--note` is the DEFAULT
+  `~/.claude/fleet/bin/fleet-comment.sh "<issue>" --note --body '…'`
+  so it carries the no-relay marker + worker footer). Leave `--repo` off: the
+  wrapper posts on your WINDOW's repo (`@repo`) — the brief's `repo=` — and in a
+  fleet hosting several repos a pane's env has no `$FLEET_REPO`, so
+  `--repo "$FLEET_REPO"` used to land on the fleet's FIRST repo (issue #1461). ⚠️ **`--note` is the DEFAULT
   and it is RECORD-ONLY — a bare `fleet-comment.sh` posts something the target
   worker will NEVER see, while printing a URL and exiting 0.** To actually reach
   another worker, pick a channel: **SendMessage** for a pure instruction (direct
@@ -187,7 +190,7 @@ override them):
   ceremony either: the guard rewrites it onto the wrapper for you and lets the
   rest of your command run (#528). Closing the issue with a final comment (a
   research/no-PR task) goes through the same wrapper —
-  `fleet-comment.sh "<issue>" --repo "$FLEET_REPO" --close --body '…'` — never a
+  `fleet-comment.sh "<issue>" --close --body '…'` — never a
   bare `gh issue close --comment`: that posts an UNMARKED comment the bridge
   relays straight back into your own pane as a turn (issue #486).
 - **Spot adjacent work? File it — and spawn it if it's worth doing now.** File

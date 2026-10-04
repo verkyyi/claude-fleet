@@ -66,9 +66,11 @@
 # --no-footer is an escape hatch that drops the signature+marker but NEVER the
 # no-relay loop-safety marker (that stays independent, verbatim, and last).
 #
-# Repo resolution mirrors dash-issue-comment.sh: $CF_REPO wins, else this fleet's
-# cached repo, else the global FLEET_REPO. Prints the created comment URL on
-# success (like `gh issue comment`).
+# Repo resolution: --repo (an empty one counts as absent), else $CF_REPO; else, in a
+# fleet hosting 2+ repos, the pane's window repo (@repo, via fleet_target_repo — a
+# pane with none must pass --repo; issue #1461); else this fleet's cached repo, else
+# the global FLEET_REPO. Prints the created comment URL on success (like
+# `gh issue comment`).
 set -uo pipefail
 
 MARKER='<!-- fleet:no-relay -->'
@@ -120,10 +122,21 @@ done
 if [ "$have_body" -eq 0 ] && [ ! -t 0 ]; then body="$(cat)"; fi
 [ -z "$body" ] && { printf 'fleet-comment: empty body — nothing to post\n' >&2; exit 2; }
 
+# An EMPTY --repo is no repo (issue #1461): `--repo "$FLEET_REPO"` from a pane whose
+# env never carried FLEET_REPO must resolve like a bare call, not as a pin.
 repo="${repo:-${CF_REPO:-}}"
-if [ -z "$repo" ]; then
+_sess=$(fleet_current_session)
+if [ -z "$repo" ] && fleet_multirepo "$_sess"; then
+  # A fleet hosting 2+ repos (#788): the repo is the WINDOW's @repo — the same
+  # fleet_target_repo fleet-evidence.sh resolves through. fleet.conf's FLEET_REPO is
+  # only the first repo, and falling back to it posted B's #N onto A's #N (#1461). A
+  # pane with no @repo (the hub, a no-repo session) must say which one.
+  repo=$(fleet_target_repo "$_sess") || {
+    printf 'fleet-comment: fleet %s hosts several repos and this pane has none — pass --repo (%s)\n' \
+      "$_sess" "$(fleet_repos "$_sess" | tr '\n' ' ' | sed 's/ $//')" >&2; exit 1; }
+elif [ -z "$repo" ]; then
   repo="${FLEET_REPO:-}"
-  _r=$(fleet_repo_cached "$(fleet_current_session)"); [ -n "$_r" ] && repo="$_r"
+  _r=$(fleet_repo_cached "$_sess"); [ -n "$_r" ] && repo="$_r"
 fi
 [ -z "$repo" ] && { printf 'fleet-comment: no repo resolved (set --repo or FLEET_REPO)\n' >&2; exit 1; }
 command -v gh >/dev/null 2>&1 || { printf 'fleet-comment: gh not on PATH\n' >&2; exit 1; }
@@ -193,8 +206,13 @@ comment_verdict() {
   local sess=''
   command -v tmux >/dev/null 2>&1 && sess=$(fleet_current_session 2>/dev/null)
   if [ -n "$sess" ]; then
-    if tmux -L "$(fleet_socket "$sess")" list-panes -s -t "$sess" -F '#{@issue}' 2>/dev/null \
-         | grep -qx "$num"; then
+    # Joined on (repo, issue) — in a 2+ repo fleet another repo's #N is not this one.
+    if tmux -L "$(fleet_socket "$sess")" list-panes -s -t "$sess" -F '#{@issue} #{window_id}' 2>/dev/null \
+         | { while read -r _n _w; do
+             [ "$_n" = "$num" ] || continue
+             fleet_multirepo "$sess" || exit 0
+             [ "$(fleet_norm_repo "$(fleet_window_repo "$sess" "$_w")")" = "$(fleet_norm_repo "$repo")" ] && exit 0
+           done; exit 1; }; then
       printf '⚠️  #%s 上有活跃 worker，但本条是记录模式，它不会看到。\n' "$num" >&2
       printf '   要下达指令：--to-worker，或直接用 SendMessage 投给该 worker 会话（即时、有送达回执）。\n' >&2
     fi
