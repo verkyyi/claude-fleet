@@ -221,7 +221,8 @@ has 'B: tmux.conf names the mirror' "$(cat "$WORK/cache/tmux.conf")" "$WORK/cach
 ts set-option -g @popup_open 0 2>/dev/null
 ts resize-window -t "$w1" -x 200 -y 50 2>/dev/null
 view_of() { ts list-panes -t "$1" -F '#{pane_id} #{@sidebar}' 2>/dev/null | awk '$2 == 1 { print $1; exit }'; }
-( export TMUX="$(ts display-message -p '#{socket_path}'),0,0" FLEET_SHELL=1 FLEET_SIDEBAR_SOURCE=hub CCQUOTA_FLEET=1 TMPDIR="$WORK/cache/tmp" FLEET_HUB_SESSIONS_CLIENT="$SESS"
+sock=$(ts display-message -p '#{socket_path}')
+( export TMUX="$sock,0,0" FLEET_SHELL=1 FLEET_SIDEBAR_SOURCE=hub CCQUOTA_FLEET=1 TMPDIR="$WORK/cache/tmp" FLEET_HUB_SESSIONS_CLIENT="$SESS"
   bash "$WORK/cache/bin/fleet-sidebar.sh" sync "$w1" >/dev/null 2>&1 )
 CHECKS=$((CHECKS + 1)); waitfor 5 test -n "$(view_of "$w1")" || fail 'B: sync put a list pane in the m5 window' "$(ts list-panes -t "$w1" -F '#{pane_id} #{@sidebar} #{pane_current_command}')"
 view=$(view_of "$w1")
