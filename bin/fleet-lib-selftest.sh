@@ -52,6 +52,9 @@ eq() {  # <desc> <expected> <actual>
 }
 
 # --- fake tmux ----------------------------------------------------------------
+# A pane always has a TMUX_PANE; fleet_seat reads ITS pane only (fleet_pane_fmt,
+# issue #1537) and never falls back to "the current pane", so the rig names one.
+export TMUX_PANE='%0'
 # Answers the '#{@issue}' query fleet_seat makes, plus the per-fleet-socket
 # machinery (issue #159): a leading `-L <label>` global option (captured, then
 # stripped like real tmux), `has-session` (down iff the label is in $FAKE_DOWN),

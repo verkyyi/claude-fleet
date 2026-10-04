@@ -67,6 +67,29 @@ Do not install from memory: read the doc and work from it.
   overlay must behave byte for byte as a one-repo fleet always has, and any
   change here ships a selftest leg that asserts it. `bin/multirepo-e2e-selftest.sh`
   is the end-to-end check (`leaks: 0/9`).
+- **Cross-session addressing has ONE resolver, and it refuses rather than
+  guesses** (issue #1537, EPIC #1529 E8). A key (`issue-<N>` / `scratch-<N>` /
+  `<slug>:issue-<N>`) becomes a window only through `fleet_win_for_key`
+  (`bin/fleet-lib.sh`; `fleet_worker_locate` layers the cross-machine answer on
+  it): rc 0 + the id, rc 1 NOTFOUND, rc 2 AMBIGUOUS with one stderr line — two
+  windows answer, or a bare `issue-<N>` in a 2+ repo fleet (the key must carry
+  the repo slug). A warm-pool window (`@pool`, or parked in `<sess>-pool`) never
+  answers — a closed scratch's number is recycled there, and before this a
+  child's report "found" its gone parent in the pool; a stamped `@worktree` is
+  never second-guessed by the pane cwd. `fleet-await.sh`, `fleet-peer-send.sh`,
+  `fleet-peer-mcp.py`, the children digest, the hub relay and report-parent all
+  go through it; never add a bare `@issue` / window-name scan beside it. A
+  `<sess>:<idx>` position and a bare window NAME are not addresses:
+  `fleet-peer-send.sh`, `fleet-answer.sh`, `fleet-permission.sh` refuse them
+  (exit 2) — a closing window renumbers the index, tmux prefix-matches the name
+  (`scratch-1` → `scratch-12`); the dash pins a row to its `@id` at the
+  keypress (`dash-answer.sh`). A pane reads ITS OWN binding through
+  `fleet_pane_fmt`, never `-t "${TMUX_PANE:-}"`: an empty target is "the pane
+  the operator is looking at", so inside tmux with no `TMUX_PANE` the read is
+  nothing (and `fleet-comment.sh` refuses to post) — a popup has `$TMUX` but no
+  `TMUX_PANE`, which is why `dash-popup.sh` hands it ours. An `@wid` handle no
+  live window carries is refused by `fleet_wid_target` (nothing, rc 1) and every
+  caller checks the rc. `bin/worker-locate-selftest.sh` F pins all of it.
 - **Panel windows, not sessions.** Windows named `dash`, `plan`, `backlog` are
   treated as panels and excluded from the dash session list.
 - **A view session shares the fleet's windows; never scan or name them bare**

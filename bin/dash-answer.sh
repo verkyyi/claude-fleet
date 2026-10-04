@@ -18,9 +18,12 @@
 # attaching to the pane and reading it by hand. Answering stops at the question; a
 # permission prompt is a human decision and this popup only ever READS it.
 #
-# The row's {1} is the dash target: a live row gives `<sess>:<idx>` — exactly the
-# grammar fleet-answer.sh takes. A landed/header row has nothing to answer and is a
-# quiet no-op, so the key is safe to bind unconditionally.
+# The row's {1} is the dash target: a live row gives `<sess>:<idx>`. That is a
+# POSITION, and fleet-answer.sh / fleet-permission.sh take only an ADDRESS since
+# issue #1537 (@id / %pane / wid:), so it is pinned to the window id HERE, at the
+# keypress — the one moment the row and the window are known to be the same thing.
+# A landed/header row has nothing to answer and is a quiet no-op, so the key is
+# safe to bind unconditionally.
 #
 # Inside a pane $TMUX already points at THIS fleet's socket (issue #159), so no -L.
 set -uo pipefail
@@ -34,7 +37,10 @@ note()  { printf '%s\n' "$1" >&2; pause; exit 0; }
 
 case "$target" in
   ''|landed:*) exit 0 ;;                    # nothing to answer on a landed/empty row
-  *:*) : ;;
+  wid:*) : ;;                               # another machine's worker: fleet-answer resolves it
+  *:*) w=$(tmux display-message -p -t "$target" '#{window_id}' 2>/dev/null)
+       [ -n "$w" ] || exit 0                # the row's window is already gone
+       target=$w ;;
   *) exit 0 ;;                              # a header or anything else — quiet no-op
 esac
 [ -x "$ANSWER" ] || note "dash-answer: 找不到 $ANSWER"

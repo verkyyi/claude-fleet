@@ -34,7 +34,7 @@ case "$target" in wid:*) exit 0 ;; esac   # another machine's row: read-only (#1
 # shellcheck source=/dev/null
 . "$BIN/fleet-ui-lang.sh" 2>/dev/null || true
 if command -v fleet_wid_target >/dev/null 2>&1; then
-  target="$(fleet_wid_target "$target")"
+  target="$(fleet_wid_target "$target")" && [ -n "$target" ] || exit 0   # unknown handle: nothing to pin
 fi
 
 # Bare `tmux`: this runs inside the dash pane, so $TMUX already points at THIS

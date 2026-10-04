@@ -83,7 +83,7 @@ SOCK=$(fleet_socket "$SESS")
 TM() { tmux -L "$SOCK" "$@"; }
 opt() { TM display-message -p -t "$PANE" "$1" 2>/dev/null; }
 SK() { FLEET_ALLOW_SENDKEYS=1 TM send-keys -t "$PANE" "$@"; }
-TARGET=$(fleet_wid_target "$TARGET" "$SOCK")
+TARGET=$(fleet_wid_target "$TARGET" "$SOCK") && [ -n "$TARGET" ] || die 'no live window carries that handle'
 WIN=$(TM display-message -p -t "$TARGET" '#{window_id}' 2>/dev/null) || die 'window not found'
 # A TASKS sidebar is an auxiliary pane, never a second worker. Resolve the sole
 # worker explicitly, including when a sidebar happens to be the active pane.

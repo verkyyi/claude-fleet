@@ -634,7 +634,8 @@ migrate_main() {
   # so the self check below compares like with like (issue #1474).
   if [ "${#WIDS[@]}" -gt 0 ]; then
     _norm=(); for _w in ${WIDS[@]+"${WIDS[@]}"}; do
-      _w=$(fleet_wid_target "$_w" "$SOCK")
+      _w=$(fleet_wid_target "$_w" "$SOCK") && [ -n "$_w" ] \
+        || { echo "fleet-migrate: no live window carries that handle — nothing done" >&2; exit 2; }
       _r=$(TM display-message -p -t "$_w" '#{window_id}' 2>/dev/null) && [ -n "$_r" ] && _w="$_r"
       _norm+=("$_w")
     done

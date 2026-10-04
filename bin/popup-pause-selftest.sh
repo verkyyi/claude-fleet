@@ -87,7 +87,7 @@ code_only | grep -q 'display-popup' \
 [ "$(code_only | grep -c 'dash-popup\.sh')" -eq "$(code_only | grep 'dash-popup\.sh' | grep -c 'run-shell -b ')" ] \
   || fail "a dash-popup.sh bind is not run-shell -b — a blocking run-shell holds the client's command queue, and its keys never reach the popup"
 POP="$BIN/dash-popup.sh"
-grep -q '@popup_open "$(date +%s)"' "$POP" \
+grep -q 'epoch=$(date +%s)' "$POP" && grep -q '@popup_open "$epoch"' "$POP" \
   || fail "dash-popup.sh no longer stamps an EPOCH @popup_open (issue #431 — not a bare 1)"
 grep -q "trap 'rm -f \"\$marker\" 2>/dev/null; tmux set -g @popup_open 0" "$POP" \
   || fail "dash-popup.sh no longer clears @popup_open on every exit path"

@@ -187,15 +187,29 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    existing hook that isn't the fleet's, wires each fleet hook exactly once by
    identity `(event, matcher, script basename)` (issue #818 — never a jq `+=`,
    which stacks a second copy the first time a command string changes), and
-   backs settings.json up first. `fleet-doctor`'s `hooks` line checks the result. The same script's `keys` action
-   (issue #1528) merges `hooks/global-config-keys.json` into Claude Code's
-   GLOBAL config, `~/.claude.json` — today `leftArrowOpensAgents: false`, so a
-   stray ← in a pane never strands it in the agents view. That key is read only
-   from there (in settings.json it does nothing); the merge sets only those keys,
-   under Claude Code's own `.claude.json.lock`. The plugin cannot set it, so run
-   `python3 bin/fleet-hooks-merge.py keys` either way; every sync re-applies it.
-   `FLEET_KEEP_AGENTS_KEY=1` leaves that key to the login; `fleet-doctor`'s
-   `setkeys` line checks it. These hooks are no-ops outside
+   backs settings.json up first. `fleet-doctor`'s `hooks` line checks the result. The same script's `defaults`
+   action (issue #1558) fills `conf/claude-settings.default.json` — the ONE
+   default Claude configuration for every login on a managed machine — into
+   `~/.claude/settings.json` (its `settings` section: `permissions.defaultMode:
+   bypassPermissions`, `skipDangerousModePermissionPrompt`, `effortLevel`,
+   `outputStyle`, `theme`, `tui`, `precomputeCompactionEnabled`,
+   `agentPushNotifEnabled`; never `model` or `enabledPlugins`, those stay the
+   login's) and into Claude Code's GLOBAL config `~/.claude.json` (its
+   `globalConfig` section: `leftArrowOpensAgents: false`, issue #1528 — the only
+   place that key is read, so a stray ← in a pane never strands it in the agents
+   view). It is **fill only**: a key the login lacks is set, a key the login has
+   — whatever the value — is never overwritten, and `permissions.defaultMode`
+   lands beside the login's own `permissions.allow`. A key the login wants left
+   alone entirely goes in `~/.claude/settings.fleet-override.json` — a JSON
+   array of dotted key paths (`["effortLevel", "permissions.defaultMode"]`;
+   `"permissions"` shields the whole object), or an object keyed by them — and
+   `FLEET_KEEP_AGENTS_KEY=1` is the same for `leftArrowOpensAgents`. The
+   `.claude.json` write takes Claude Code's own `.claude.json.lock`. The plugin
+   cannot set a settings key, so run `python3 bin/fleet-hooks-merge.py defaults`
+   either way; every sync re-applies it (a second run writes nothing).
+   `fleet-doctor`'s `settings` line counts the keys that differ from the
+   defaults (`settings: N key(s) differ …` — a key the login set deliberately
+   stops counting once it is listed in the override file). These hooks are no-ops outside
    tmux and always exit 0, so they are safe to add globally. The `Stop` entry also
    fires `classify-hook.sh`, the real-time path for state classification: it
    hands just the stopped window to `classify-sessions.sh --window`, so the

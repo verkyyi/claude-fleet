@@ -216,6 +216,8 @@ fleet_ui_t() {
     en:sidebar_new_to_fmt)      printf 'New session → %s…' "${1:-}" ;;
     zh:sidebar_rename)          printf '改名› ' ;;
     en:sidebar_rename)          printf 'rename› ' ;;
+    zh:sidebar_refreshing)      printf '刷新中…' ;;
+    en:sidebar_refreshing)      printf 'refreshing…' ;;
     zh:sidebar_spawn_failed)    printf '创建失败' ;;
     en:sidebar_spawn_failed)    printf 'spawn failed' ;;
     # --- the row menu (fleet-sidebar-menu.sh). menu_keys is THE letter table:

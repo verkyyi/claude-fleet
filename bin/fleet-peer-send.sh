@@ -9,8 +9,8 @@
 #   fleet-peer-send.sh [-L <socket>] [--repo <o/r>] [--expect-issue <N>] <target> [<text> | -]
 #
 #   <target>  issue:<N> / #<N> / issue-<N>             → the window bound to that issue
-#             scratch-<N> / <window-name>               → the window with that exact name
-#             @<window-id> / %<pane-id> / <sess>:<idx>  → the Claude under that pane
+#             scratch-<N>                               → the window running that scratch
+#             @<window-id> / %<pane-id>                 → the Claude under that pane
 #             <pid>                                     → that Claude process
 #             <session-uuid>                            → the process running it
 #             wid:<worker_id> / wid:<key>               → that worker, wherever it lives
@@ -18,15 +18,18 @@
 #   -L        tmux socket label for a tmux target when run outside the fleet
 #             ($TMUX unset); inside a pane bare tmux is already the right server.
 #             An identity target with neither -L nor $TMUX searches every fleet.
-#   --repo    narrow an issue target to one repo (a multi-repo fleet can bind #N twice)
-#   --expect-issue  refuse unless the resolved window carries @issue=<N>
+#   --repo    which repo's #N (REQUIRED in a fleet hosting 2+ repos)
+#   --expect-issue  refuse unless the @id / %pane window carries @issue=<N>
+#   REFUSED (exit 2): `<sess>:<idx>` / `<sess>:<name>` positions and bare window
+#   names — a position renumbers under you, a name is prefix-matched by tmux.
 #
-# PREFER AN IDENTITY TARGET (issue #1046). `<sess>:<idx>` is a POSITION: a window
+# ONE RESOLVER (issues #1046, #1537). `<sess>:<idx>` is a POSITION: a window
 # closing renumbers every window after it (renumber-windows on), so an index read
 # a few minutes ago — or copied out of a handoff doc — silently lands on a
-# DIFFERENT worker. `issue:<N>` is resolved to exactly one live window at send
-# time; zero or several matches refuse. A positional target can still be pinned
-# with --expect-issue.
+# DIFFERENT worker; a window NAME is prefix-matched (scratch-1 → scratch-12). Both
+# refuse. `issue:<N>` / `scratch-<N>` go through fleet_win_for_key (fleet-lib.sh):
+# exactly one live window, never a warm-pool one, never another repo's #N — zero
+# or several matches refuse. `--expect-issue` pins an @id / %pane target.
 #
 # `wid:<fleet UUID>/<key>` (issue #1420) is the address that survives a machine
 # boundary (docs/FLEET-HUB.md «Worker identity»); fleet_worker_locate resolves it.
@@ -46,7 +49,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-lib.sh"
 
 die() { printf 'fleet-peer-send: %s\n' "$(printf '%s' "$2" | tr '\n' ' ' | sed 's/ *$//')" >&2; exit "$1"; }
-usage() { sed -n '9,24p' "$0" >&2; exit 2; }
+usage() { sed -n '9,26p' "$0" >&2; exit 2; }
 
 SOCK=""; EXPECT=""; REPO=""
 while [ $# -gt 0 ]; do
@@ -57,7 +60,7 @@ while [ $# -gt 0 ]; do
     --expect-issue=*) EXPECT="${1#*=}"; shift ;;
     --repo) REPO="${2:-}"; shift 2 ;;
     --repo=*) REPO="${1#*=}"; shift ;;
-    -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,43p' "$0"; exit 0 ;;
     *) break ;;
   esac
 done
@@ -96,62 +99,60 @@ case "$tgt" in
     esac ;;
 esac
 
-# --- identity → one live window (issue #1046) ------------------------------------
-# Resolved NOW, off the live server, never from a remembered index. Every
-# candidate is a (socket, window-id) pair; the window id is stable for the
-# window's whole life, so the send below can no longer drift onto a neighbour.
-want_issue=""; want_name=""
+# --- identity → one live window (issues #1046, #1537) -----------------------------
+# ONE resolver, fleet_win_for_key: issue:<N> / #<N> / issue-<N> → the key
+# `issue-<N>` (`<slug>:issue-<N>` with --repo, and a 2+ repo fleet REFUSES the bare
+# key); scratch-<N> → the window whose @worktree is that scratch. A warm-pool window
+# never answers, two windows answering is a refusal, and the id it hands back is
+# stable for the window's whole life, so the send below cannot drift onto a
+# neighbour. A `<sess>:<idx>` position and a bare window NAME are not addresses.
+key=""; want_issue=""
 case "$tgt" in
   issue:*|issue-*|'#'*)
     want_issue="${tgt#issue:}"; want_issue="${want_issue#issue-}"; want_issue="${want_issue#\#}"
-    case "$want_issue" in ''|*[!0-9]*) die 2 "bad issue target '$tgt' (want issue:<N>, #<N> or issue-<N>)" ;; esac ;;
-  @*|%*|*:*|*-*-*-*-*) ;;
-  *[!0-9]*) want_name="$tgt" ;;
+    case "$want_issue" in ''|*[!0-9]*) die 2 "bad issue target '$tgt' (want issue:<N>, #<N> or issue-<N>)" ;; esac
+    key="issue-$want_issue" ;;
+  scratch-*)
+    case "${tgt#scratch-}" in ''|*[!0-9]*) die 2 "bad scratch target '$tgt' (want scratch-<N>)" ;; esac
+    key="$tgt" ;;
+  @*|%*|*-*-*-*-*) ;;
+  *:*) die 2 "'$tgt' is a window position or name (<sess>:<idx> / <sess>:<name>) — a closing window renumbers it onto someone else; address the worker as issue:<N>, scratch-<N> or wid:<key>" ;;
+  *[!0-9]*) die 2 "'$tgt' is a window name, not an address (tmux prefix-matches names); use issue:<N>, scratch-<N> or wid:<key>" ;;
 esac
-if [ -n "$want_issue$want_name" ]; then
+if [ -n "$key" ]; then
+  [ -n "$REPO" ] && key="$(fleet_slug "$(fleet_norm_repo "$REPO")"):$key"
   if [ -n "$SOCK" ]; then socks="$SOCK"
   elif [ -n "${TMUX:-}" ]; then socks="-"          # bare tmux: this pane's own server
   else socks=$(fleet_sockets); fi
-  hits=""
+  hits=""; why=""
+  errf=$(mktemp "${TMPDIR:-/tmp}/fleet-peer-send.XXXXXX") || die 1 "mktemp failed"
+  trap 'rm -f "$errf"' EXIT
   while IFS= read -r s; do
     [ -n "$s" ] || continue
-    if [ "$s" = "-" ]; then tm=(tmux); else tm=(tmux -L "$s"); fi
-    # '|'-separated (tmux <=3.4 vis-escapes control bytes); @worktree LAST so a
-    # path containing '|' stays intact.
-    while IFS='|' read -r wid wname wiss wraw wrepo sess wwt; do
-      [ -n "$wid" ] || continue
-      if [ -n "$want_issue" ]; then
-        [ "$wiss" = "$want_issue" ] || continue
-        if [ -n "$REPO" ]; then
-          [ -n "$wrepo" ] || wrepo=$(fleet_window_repo "$sess" "$wid" 2>/dev/null)
-          [ "$wrepo" = "$REPO" ] || continue
-        fi
-      else
-        # a scratch window: its name, or (@raw) the `-scratch-<N>` worktree it runs in
-        if [ "$wname" != "$want_name" ]; then
-          case "$want_name" in scratch-[0-9]*) ;; *) continue ;; esac
-          [ "$wraw" = 1 ] || continue
-          case "$wwt" in *-"$want_name") ;; *) continue ;; esac
-        fi
-      fi
-      hits="$hits$s|$wid|$sess:$wname${wrepo:+ ($wrepo)}"$'\n'
-    done <<EOF
-$(fleet_lw '#{window_id}|#{window_name}|#{@issue}|#{@raw}|#{@repo}|#{session_name}|#{@worktree}' "${tm[@]}")
-EOF
+    if [ "$s" = "-" ]; then w=$(fleet_win_for_key "$key" '' 2>"$errf"); rc=$?
+    else w=$(fleet_win_for_key "$key" "$s" 2>"$errf"); rc=$?; fi
+    case "$rc" in
+      0) [ -n "$w" ] && hits="$hits$s|$w"$'\n' ;;
+      2) why=$(sed 's/^fleet: //' "$errf" | head -1) ;;   # AMBIGUOUS: the resolver's one line
+    esac
   done <<EOF
 $socks
 EOF
+  if [ -n "$why" ]; then
+    [ -n "$want_issue" ] && [ -z "$REPO" ] && why="$why — narrow with --repo <owner/name>"
+    die 1 "$why"
+  fi
   n=$(printf '%s' "$hits" | grep -c .)
   [ "$n" -gt 0 ] || die 1 "no live window for '$tgt'${REPO:+ in $REPO}"
-  [ "$n" -eq 1 ] || die 1 "'$tgt' is ambiguous — $n windows match: $(printf '%s' "$hits" | cut -d'|' -f3 | paste -sd',' - | sed 's/,/, /g')${want_issue:+ (narrow with --repo)}"
-  s=${hits%%|*}; rest=${hits#*|}; tgt=${rest%%|*}
+  [ "$n" -eq 1 ] || die 1 "'$tgt' is ambiguous — found in $n fleets: $(printf '%s' "$hits" | cut -d'|' -f1 | paste -sd',' - | sed 's/,/, /g') (run it inside that fleet, or pass -L)"
+  s=${hits%%|*}; rest=${hits#*|}; tgt=${rest%%$'\n'*}
   [ "$s" = "-" ] || SOCK="$s"
 fi
 
 tm=(tmux); [ -n "$SOCK" ] && tm+=(-L "$SOCK")
 label=""
 case "$tgt" in
-  @*|%*|*:*)
+  @*|%*)
     info=$("${tm[@]}" display-message -p -t "$tgt" '#{window_name}|#{@issue}|#{pane_current_path}|#{@worktree}' 2>/dev/null)
     [ -n "$info" ] || die 1 "no live window for '$tgt'"
     wname=${info%%|*}; info=${info#*|}; wiss=${info%%|*}; info=${info#*|}; pcwd=${info%%|*}; wwt=${info#*|}
@@ -159,11 +160,11 @@ case "$tgt" in
     if [ -n "$EXPECT" ] && [ "$wiss" != "$EXPECT" ]; then
       die 1 "refused: '$tgt' is $wname (@issue=${wiss:-none}), not #$EXPECT — the window moved; address it as issue:$EXPECT"
     fi ;;
-  *) [ -z "$EXPECT" ] || die 2 "--expect-issue needs a window target (issue:<N>, a name, @id, %pane or sess:idx)" ;;
+  *) [ -z "$EXPECT" ] || die 2 "--expect-issue needs an @<window-id> or %<pane-id> target" ;;
 esac
 
 case "$tgt" in
-  @*|%*|*:*)
+  @*|%*)
     lifecycle=$("${tm[@]}" display-message -p -t "$tgt" '#{@worker_lifecycle}' 2>/dev/null)
     evidence=$("${tm[@]}" display-message -p -t "$tgt" '#{@sleep_evidence}' 2>/dev/null)
     if [ -n "$lifecycle$evidence" ] && [ -f "$BIN/fleet-sleep.py" ]; then
@@ -187,7 +188,7 @@ pid=""
 case "$tgt" in
   ''|*[!0-9]*)
     case "$tgt" in
-      @*|%*|*:*) pid=$(fleet_pane_claude_pid "$tgt" "$SOCK") ;;
+      @*|%*) pid=$(fleet_pane_claude_pid "$tgt" "$SOCK") ;;
       *-*-*-*-*) pid=$(fleet_cc_pid_for_session "$tgt") ;;
     esac ;;
   *) pid="$tgt" ;;
