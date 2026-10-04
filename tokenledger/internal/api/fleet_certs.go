@@ -1,0 +1,871 @@
+package api
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"html/template"
+	"log"
+	"net/http"
+	"net/url"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"golang.org/x/crypto/ssh"
+	"rsc.io/qr"
+
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/sshca"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+)
+
+// Connection certificates (claude-fleet#1412).
+//
+// The hub is the fleet's SSH certificate authority. A person who has signed in
+// through WeCom gets a 12-hour user certificate for their own key, whose only
+// principal is their login (the one C4 opened for them on every machine), and
+// every machine trusts the CA (the admin agent installs it, node_sshca.go).
+// So nobody's key is copied to any machine, and a certificate that runs out
+// is simply refused — scan again to get the next one.
+//
+// Two ways to get one:
+//
+//   - `fleet login` (bin/fleet-login.py): the device-code
+//     flow. The client generates its key, POSTs the public half to
+//     /v1/fleet/login/start, draws the returned QR in the terminal, and polls
+//     /v1/fleet/login/poll. Scanning the QR in WeCom opens /fleet/login on
+//     the hub, which signs the person in and asks them to confirm the code
+//     their terminal shows; the next poll carries the certificate.
+//   - the 连接 page (/connect): paste a public key, download the certificate.
+//
+// Either way the hub records the issuance (store.fleet_certs) BEFORE it hands
+// the certificate out. The CA private key comes from a file
+// (CCQUOTA_FLEET_SSH_CA_KEY, a separate k8s Secret) and never touches the
+// database. No CA configured: these routes answer 404 and admin nodes are
+// sent nothing.
+
+// The fixed client-side contract — C7's `fleet connect` reads the same paths.
+const (
+	// FleetKeyPath is the person's private key; its .pub is what is signed.
+	FleetKeyPath = "~/.ssh/fleet-cert"
+	// FleetCertPath is where the certificate goes (OpenSSH's <key>-cert.pub,
+	// so `ssh -i ~/.ssh/fleet-cert` finds it without CertificateFile).
+	FleetCertPath = "~/.ssh/fleet-cert-cert.pub"
+	// FleetSSHConfigPath is the generated ssh_config snippet.
+	FleetSSHConfigPath = "~/.ssh/fleet-ssh-config"
+	// FleetSSHConfigVersion heads the snippet; bump it when its shape changes.
+	FleetSSHConfigVersion = "fleet-ssh-config v1"
+)
+
+// FleetMachine is one machine people connect to, and the ways to reach it
+// (CCQUOTA_FLEET_ROUTES). Hostname is the roster's name for it — what
+// accounts are keyed on; Alias is what people type (`ssh m4`).
+type FleetMachine struct {
+	Hostname string       `json:"hostname"`
+	Alias    string       `json:"alias,omitempty"`
+	Routes   []FleetRoute `json:"routes"`
+}
+
+// FleetRoute is one way in: LAN, tailnet, public port, later the relay (C6).
+// The first route is the default; C7's client measures and picks.
+type FleetRoute struct {
+	Name string `json:"name"`
+	Host string `json:"host"`
+	Port int    `json:"port,omitempty"`
+}
+
+func (m FleetMachine) alias() string {
+	if m.Alias != "" {
+		return m.Alias
+	}
+	return m.Hostname
+}
+
+// ParseFleetRoutes reads CCQUOTA_FLEET_ROUTES: a JSON array of FleetMachine.
+// Every name that ends up in the generated ssh config is checked to be a
+// plain token — it is a config file other programs parse.
+func ParseFleetRoutes(s string) ([]FleetMachine, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, nil
+	}
+	var ms []FleetMachine
+	if err := json.Unmarshal([]byte(s), &ms); err != nil {
+		return nil, fmt.Errorf("CCQUOTA_FLEET_ROUTES: %w", err)
+	}
+	for _, m := range ms {
+		if !sshToken(m.Hostname) || (m.Alias != "" && !sshToken(m.Alias)) {
+			return nil, fmt.Errorf("CCQUOTA_FLEET_ROUTES: bad machine name %q/%q", m.Hostname, m.Alias)
+		}
+		for _, r := range m.Routes {
+			if !sshToken(r.Name) || !sshToken(r.Host) || r.Port < 0 || r.Port > 65535 {
+				return nil, fmt.Errorf("CCQUOTA_FLEET_ROUTES: bad route %+v on %s", r, m.Hostname)
+			}
+		}
+	}
+	return ms, nil
+}
+
+// sshToken: letters, digits and . - _ : only — safe as an ssh_config word.
+func sshToken(s string) bool {
+	if s == "" || len(s) > 253 {
+		return false
+	}
+	for _, c := range s {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '.' || c == '-' || c == '_' || c == ':':
+		default:
+			return false
+		}
+	}
+	return s[0] != '-'
+}
+
+// errNoAccount: the person has no active login anywhere yet, so a
+// certificate would admit them nowhere.
+var errNoAccount = errors.New("no active login on any machine yet — ask the operator to open one")
+
+// CertResponse is a signed certificate and everything the client writes.
+type CertResponse struct {
+	Certificate string    `json:"certificate"` // the content of FleetCertPath
+	Serial      string    `json:"serial"`
+	KeyID       string    `json:"key_id"`
+	Principals  []string  `json:"principals"`
+	ValidAfter  time.Time `json:"valid_after"`
+	ValidBefore time.Time `json:"valid_before"`
+	// SSHConfig is the snippet for FleetSSHConfigPath.
+	SSHConfig string `json:"ssh_config"`
+	Hub       string `json:"hub"`
+}
+
+// fleetLoginsOf is the principals a certificate for pid may carry: the
+// distinct logins of their ACTIVE accounts, and the machines they are on.
+func (s *Server) fleetLoginsOf(pid string) (*store.Principal, []string, map[string]bool, error) {
+	p, err := s.Store.Principal(pid)
+	if errors.Is(err, store.ErrNoPrincipal) {
+		return nil, nil, nil, errNoAccount
+	}
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	accts, err := s.Store.FleetAccounts(pid)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	seen, hosts := map[string]bool{}, map[string]bool{}
+	var logins []string
+	for _, a := range accts {
+		if a.State != store.AccountActive || !control.ValidLogin(a.Login) {
+			continue
+		}
+		hosts[a.Hostname] = true
+		if !seen[a.Login] {
+			seen[a.Login] = true
+			logins = append(logins, a.Login)
+		}
+	}
+	if len(logins) == 0 {
+		return p, nil, hosts, errNoAccount
+	}
+	sort.Strings(logins)
+	return p, logins, hosts, nil
+}
+
+// issueCert signs key for pid, records it, and builds the response.
+func (s *Server) issueCert(r *http.Request, pid, keyLine, via string) (*CertResponse, error) {
+	key, err := sshca.ParseUserKey(keyLine)
+	if err != nil {
+		return nil, err
+	}
+	p, logins, hosts, err := s.fleetLoginsOf(pid)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	iss, err := s.SSHCA.Sign(sshca.Request{Key: key, PrincipalID: pid, Logins: logins}, now)
+	if err != nil {
+		return nil, err
+	}
+	serial := strconv.FormatUint(iss.Serial, 10)
+	if err := s.Store.RecordCert(store.FleetCert{
+		Serial: serial, PrincipalID: pid, KeyID: iss.KeyID, Principals: iss.Principals,
+		KeyFingerprint: iss.KeyFingerprint, Via: via, IssuedAt: now,
+		ValidAfter: iss.ValidAfter, ValidBefore: iss.ValidBefore,
+	}); err != nil {
+		return nil, fmt.Errorf("record certificate: %w", err)
+	}
+	log.Printf("fleet: issued ssh certificate %s to %s (%s) via %s, key %s, until %s",
+		serial, pid, strings.Join(iss.Principals, ","), via, iss.KeyFingerprint, iss.ValidBefore.UTC().Format(time.RFC3339))
+	return &CertResponse{
+		Certificate: iss.Line + "\n",
+		Serial:      serial,
+		KeyID:       iss.KeyID,
+		Principals:  iss.Principals,
+		ValidAfter:  iss.ValidAfter,
+		ValidBefore: iss.ValidBefore,
+		SSHConfig:   s.sshConfigFor(p.Login, hosts),
+		Hub:         s.hubURL(r),
+	}, nil
+}
+
+// hubURL is the address people know the hub by.
+func (s *Server) hubURL(r *http.Request) string {
+	if s.FleetPublicURL != "" {
+		return strings.TrimRight(s.FleetPublicURL, "/")
+	}
+	scheme := "http"
+	if isHTTPS(r) {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host
+}
+
+// sshConfigFor renders the snippet: one Host block per machine where login is
+// active (every machine when hosts is nil — the operator's view), the first
+// route as the plain alias and every route as <alias>-<route>. The format is
+// a contract (FleetSSHConfigVersion): C7's `fleet connect` reads it.
+func (s *Server) sshConfigFor(login string, hosts map[string]bool) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# %s — generated by the fleet hub; `fleet login` rewrites this file.\n", FleetSSHConfigVersion)
+	b.WriteString("# Your own entries in ~/.ssh/config come first and win.\n")
+	for _, m := range s.FleetRoutes {
+		if hosts != nil && !hosts[m.Hostname] {
+			continue
+		}
+		if len(m.Routes) == 0 {
+			continue
+		}
+		a := m.alias()
+		for i, rt := range m.Routes {
+			names := "fleet-" + a + "-" + rt.Name
+			if i == 0 {
+				names = a + " fleet-" + a + " " + names
+			}
+			fmt.Fprintf(&b, "\nHost %s\n  HostName %s\n", names, rt.Host)
+			if rt.Port > 0 {
+				fmt.Fprintf(&b, "  Port %d\n", rt.Port)
+			}
+			if login != "" {
+				fmt.Fprintf(&b, "  User %s\n", login)
+			}
+			fmt.Fprintf(&b, "  IdentityFile %s\n  CertificateFile %s\n", FleetKeyPath, FleetCertPath)
+		}
+	}
+	return b.String()
+}
+
+// ── the 连接 page's API ──────────────────────────────────────────────────
+
+// ConnectInfo is the body of GET /v1/fleet/connect.
+type ConnectInfo struct {
+	Hub           string         `json:"hub"`
+	CAEnabled     bool           `json:"ca_enabled"`
+	CAFingerprint string         `json:"ca_fingerprint,omitempty"`
+	CertTTLSec    int            `json:"cert_ttl_sec"`
+	Login         string         `json:"login,omitempty"`
+	Signed        bool           `json:"signed_in"` // a WeCom person, not an operator door
+	Machines      []FleetMachine `json:"machines"`
+	SSHConfig     string         `json:"ssh_config"`
+	KeyPath       string         `json:"key_path"`
+	CertPath      string         `json:"cert_path"`
+	ConfigPath    string         `json:"config_path"`
+	// Problem says why a signed-in person cannot get a certificate yet.
+	Problem string            `json:"problem,omitempty"`
+	Recent  []store.FleetCert `json:"recent_certs"`
+}
+
+func (s *Server) handleFleetConnect(w http.ResponseWriter, r *http.Request) {
+	out := ConnectInfo{
+		Hub: s.hubURL(r), CAEnabled: s.SSHCA != nil, CertTTLSec: int(sshca.TTL.Seconds()),
+		KeyPath: FleetKeyPath, CertPath: FleetCertPath, ConfigPath: FleetSSHConfigPath,
+		Machines: []FleetMachine{}, Recent: []store.FleetCert{},
+	}
+	if s.SSHCA != nil {
+		out.CAFingerprint = s.SSHCA.Fingerprint()
+	}
+	var hosts map[string]bool
+	if pid := principalOf(r.Context()); pid != "" {
+		out.Signed = true
+		p, _, h, err := s.fleetLoginsOf(pid)
+		switch {
+		case errors.Is(err, errNoAccount):
+			out.Problem = err.Error()
+		case err != nil:
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if p != nil {
+			out.Login = p.Login
+		}
+		hosts = h
+		if hosts == nil {
+			hosts = map[string]bool{}
+		}
+		if out.Recent, err = s.Store.FleetCerts(pid, 5); err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	for _, m := range s.FleetRoutes {
+		if hosts == nil || hosts[m.Hostname] {
+			out.Machines = append(out.Machines, m)
+		}
+	}
+	out.SSHConfig = s.sshConfigFor(out.Login, hosts)
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleFleetCert signs a pasted public key for the signed-in person.
+func (s *Server) handleFleetCert(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		httpError(w, http.StatusMethodNotAllowed, "POST")
+		return
+	}
+	if s.SSHCA == nil {
+		http.NotFound(w, r)
+		return
+	}
+	pid := principalOf(r.Context())
+	if pid == "" {
+		httpError(w, http.StatusForbidden, "a certificate is issued to a person: sign in through WeCom")
+		return
+	}
+	var req struct {
+		PublicKey string `json:"public_key"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<14)).Decode(&req); err != nil {
+		httpError(w, http.StatusBadRequest, "malformed request")
+		return
+	}
+	resp, err := s.issueCert(r, pid, req.PublicKey, "web")
+	if err != nil {
+		httpError(w, certErrStatus(err), err.Error())
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func certErrStatus(err error) int {
+	if errors.Is(err, errNoAccount) {
+		return http.StatusConflict
+	}
+	if strings.HasPrefix(err.Error(), "record certificate") {
+		return http.StatusInternalServerError
+	}
+	return http.StatusBadRequest
+}
+
+// handleSSHCAPub serves the CA public key: public material, no credential.
+func (s *Server) handleSSHCAPub(w http.ResponseWriter, r *http.Request) {
+	if s.SSHCA == nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write([]byte(s.SSHCA.PublicKey() + "\n"))
+}
+
+// ── the device-code flow (`fleet login`) ─────────────────────────────────
+
+const (
+	deviceTTL      = 10 * time.Minute
+	devicePoll     = 3 * time.Second
+	deviceMax      = 256                    // pending logins held at once; start refuses past it
+	userCodeAlpha  = "BCDFGHJKLMNPQRSTVWXZ" // no vowels: no words, no 0/O 1/I
+	loginCookie    = "ccquota_fleet_login"
+	loginCookieTTL = 10 * time.Minute
+)
+
+type deviceState int
+
+const (
+	devicePending deviceState = iota
+	deviceApproved
+	deviceDenied
+)
+
+type deviceLogin struct {
+	deviceCode string
+	userCode   string
+	keyLine    string
+	keyFP      string
+	expires    time.Time
+	state      deviceState
+	issued     *CertResponse
+	err        string
+}
+
+// deviceLogins is in memory on purpose: a pending login lives ten minutes,
+// the hub is one instance, and a restart costs the person one more scan.
+type deviceLogins struct {
+	mu     sync.Mutex
+	byCode map[string]*deviceLogin // device code → login
+	byUser map[string]*deviceLogin // user code → login
+}
+
+func (d *deviceLogins) gc(now time.Time) {
+	for k, l := range d.byCode {
+		if now.After(l.expires) {
+			delete(d.byCode, k)
+			delete(d.byUser, l.userCode)
+		}
+	}
+}
+
+func (d *deviceLogins) add(l *deviceLogin, now time.Time) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.byCode == nil {
+		d.byCode, d.byUser = map[string]*deviceLogin{}, map[string]*deviceLogin{}
+	}
+	d.gc(now)
+	if len(d.byCode) >= deviceMax {
+		return errors.New("too many logins in progress; try again in a few minutes")
+	}
+	if _, dup := d.byUser[l.userCode]; dup {
+		return errors.New("code collision; try again")
+	}
+	d.byCode[l.deviceCode] = l
+	d.byUser[l.userCode] = l
+	return nil
+}
+
+// withUser runs f on the pending login for userCode, under the lock.
+func (d *deviceLogins) withUser(userCode string, now time.Time, f func(*deviceLogin)) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.gc(now)
+	l, ok := d.byUser[userCode]
+	if !ok {
+		return false
+	}
+	f(l)
+	return true
+}
+
+// take returns the login for deviceCode; a finished one is removed, so a
+// certificate is handed out exactly once.
+func (d *deviceLogins) take(deviceCode string, now time.Time) (deviceLogin, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.gc(now)
+	l, ok := d.byCode[deviceCode]
+	if !ok {
+		return deviceLogin{}, false
+	}
+	if l.state != devicePending {
+		delete(d.byCode, deviceCode)
+		delete(d.byUser, l.userCode)
+	}
+	return *l, true
+}
+
+func randomUserCode() (string, error) {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	out := make([]byte, 0, 9)
+	for i, c := range b {
+		if i == 4 {
+			out = append(out, '-')
+		}
+		out = append(out, userCodeAlpha[int(c)%len(userCodeAlpha)])
+	}
+	return string(out), nil
+}
+
+// validUserCode: XXXX-XXXX from the alphabet — the only shape that ever
+// reaches a lookup, a cookie or a redirect.
+func validUserCode(s string) bool {
+	if len(s) != 9 || s[4] != '-' {
+		return false
+	}
+	for i, c := range s {
+		if i != 4 && !strings.ContainsRune(userCodeAlpha, c) {
+			return false
+		}
+	}
+	return true
+}
+
+// DeviceStart is the body of POST /v1/fleet/login/start.
+type DeviceStart struct {
+	DeviceCode      string `json:"device_code"`
+	UserCode        string `json:"user_code"`
+	VerificationURI string `json:"verification_uri"`
+	ExpiresIn       int    `json:"expires_in"`
+	Interval        int    `json:"interval"`
+	KeyFingerprint  string `json:"key_fingerprint"`
+	// QR is the verification URI as a QR matrix, one string per row, '#' a
+	// dark module — no quiet zone. The client draws it; no QR library there.
+	QR []string `json:"qr"`
+}
+
+// handleDeviceStart opens a pending login for a public key. No credential:
+// this is what a person runs BEFORE they have one. It grants nothing — the
+// certificate is signed only when a signed-in person confirms the code.
+func (s *Server) handleDeviceStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		httpError(w, http.StatusMethodNotAllowed, "POST")
+		return
+	}
+	if s.SSHCA == nil || !s.SSO.ready() {
+		http.NotFound(w, r)
+		return
+	}
+	var req struct {
+		PublicKey string `json:"public_key"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<14)).Decode(&req); err != nil {
+		httpError(w, http.StatusBadRequest, "malformed request")
+		return
+	}
+	key, err := sshca.ParseUserKey(req.PublicKey)
+	if err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var dc [32]byte
+	if _, err := rand.Read(dc[:]); err != nil {
+		httpError(w, http.StatusInternalServerError, "no randomness")
+		return
+	}
+	uc, err := randomUserCode()
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, "no randomness")
+		return
+	}
+	now := time.Now()
+	l := &deviceLogin{
+		deviceCode: hex.EncodeToString(dc[:]), userCode: uc,
+		keyLine: strings.TrimSpace(req.PublicKey), keyFP: ssh.FingerprintSHA256(key),
+		expires: now.Add(deviceTTL),
+	}
+	if err := s.devices.add(l, now); err != nil {
+		httpError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	uri := s.hubURL(r) + "/fleet/login?code=" + url.QueryEscape(uc)
+	writeJSON(w, http.StatusOK, DeviceStart{
+		DeviceCode: l.deviceCode, UserCode: uc, VerificationURI: uri,
+		ExpiresIn: int(deviceTTL.Seconds()), Interval: int(devicePoll.Seconds()),
+		KeyFingerprint: l.keyFP, QR: qrMatrix(uri),
+	})
+}
+
+// handleDevicePoll answers the client's wait: 202 pending, 200 with the
+// certificate (exactly once), 403 denied, 410 expired or unknown.
+func (s *Server) handleDevicePoll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		httpError(w, http.StatusMethodNotAllowed, "POST")
+		return
+	}
+	var req struct {
+		DeviceCode string `json:"device_code"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<12)).Decode(&req); err != nil {
+		httpError(w, http.StatusBadRequest, "malformed request")
+		return
+	}
+	l, ok := s.devices.take(req.DeviceCode, time.Now())
+	w.Header().Set("Cache-Control", "no-store")
+	switch {
+	case !ok:
+		httpError(w, http.StatusGone, "expired_token")
+	case l.state == devicePending:
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "authorization_pending"})
+	case l.state == deviceDenied:
+		msg := "access_denied"
+		if l.err != "" {
+			msg += ": " + l.err
+		}
+		httpError(w, http.StatusForbidden, msg)
+	default:
+		writeJSON(w, http.StatusOK, l.issued)
+	}
+}
+
+// handleFleetLoginPage is what the QR opens. It sits behind viewerOnly; a
+// browser that is not signed in yet is sent to WeCom by viewerOnly, and the
+// code rides a short cookie so /enter can bring it back here.
+func (s *Server) handleFleetLoginPage(w http.ResponseWriter, r *http.Request) {
+	if s.SSHCA == nil {
+		http.NotFound(w, r)
+		return
+	}
+	code := strings.ToUpper(strings.TrimSpace(r.FormValue("code")))
+	pid := principalOf(r.Context())
+	page := loginPage{Code: code}
+	now := time.Now()
+
+	if r.Method == http.MethodPost {
+		if !sameOrigin(r) {
+			httpError(w, http.StatusForbidden, "cross-origin form")
+			return
+		}
+		if pid == "" || !validUserCode(code) {
+			httpError(w, http.StatusBadRequest, "nothing to confirm")
+			return
+		}
+		approve := r.FormValue("action") == "approve"
+		var keyLine string
+		found := s.devices.withUser(code, now, func(l *deviceLogin) {
+			if l.state == devicePending {
+				keyLine = l.keyLine
+			}
+		})
+		switch {
+		case !found || keyLine == "":
+			page.Error = "这个验证码已过期或已用过，请在终端重新运行 fleet login。"
+		case !approve:
+			s.devices.withUser(code, now, func(l *deviceLogin) {
+				if l.state == devicePending {
+					l.state = deviceDenied
+				}
+			})
+			page.Done, page.Denied = true, true
+		default:
+			resp, err := s.issueCert(r, pid, keyLine, "device")
+			s.devices.withUser(code, now, func(l *deviceLogin) {
+				if l.state != devicePending {
+					return
+				}
+				if err != nil {
+					l.state, l.err = deviceDenied, err.Error()
+					return
+				}
+				l.state, l.issued = deviceApproved, resp
+			})
+			if err != nil {
+				page.Error = "签发失败：" + err.Error()
+			} else {
+				page.Done, page.Login, page.Until = true, strings.Join(resp.Principals, ","), resp.ValidBefore.Local().Format("01-02 15:04")
+			}
+		}
+		renderLoginPage(w, page)
+		return
+	}
+
+	// GET: show what is being confirmed.
+	if pid == "" {
+		page.Error = "领取连接证书需要用企业微信登录（运营者令牌与 tailnet 身份不对应任何人）。"
+		renderLoginPage(w, page)
+		return
+	}
+	if !validUserCode(code) || !s.devices.withUser(code, now, func(l *deviceLogin) {
+		if l.state == devicePending {
+			page.KeyFP = l.keyFP
+		}
+	}) || page.KeyFP == "" {
+		page.Error = "这个验证码已过期或已用过，请在终端重新运行 fleet login。"
+		renderLoginPage(w, page)
+		return
+	}
+	p, logins, _, err := s.fleetLoginsOf(pid)
+	if p != nil {
+		page.Who = p.DisplayName
+		if page.Who == "" {
+			page.Who = p.ID
+		}
+	}
+	if err != nil {
+		page.Error = "还不能签发：" + err.Error()
+		renderLoginPage(w, page)
+		return
+	}
+	page.Login = strings.Join(logins, ",")
+	page.Confirm = true
+	renderLoginPage(w, page)
+}
+
+// rememberLoginCode is mounted in front of viewerOnly on /fleet/login: a
+// signed-out browser is about to be sent to WeCom and loses the query string
+// on the way back, so the code waits in a short host-only cookie.
+func (s *Server) rememberLoginCode(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if code := strings.ToUpper(r.URL.Query().Get("code")); validUserCode(code) {
+			http.SetCookie(w, &http.Cookie{
+				Name: loginCookie, Value: code, Path: "/",
+				HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: isHTTPS(r),
+				MaxAge: int(loginCookieTTL.Seconds()),
+			})
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// loginReturn is where /enter sends the browser after sign-in: back to the
+// confirmation page when a fleet login is waiting, else "/". Only a fixed
+// path and a validated code — not a redirect target anyone can choose.
+func loginReturn(w http.ResponseWriter, r *http.Request) string {
+	c, err := r.Cookie(loginCookie)
+	if err != nil {
+		return "/"
+	}
+	http.SetCookie(w, &http.Cookie{Name: loginCookie, Value: "", Path: "/", MaxAge: -1})
+	code := strings.ToUpper(c.Value)
+	if !validUserCode(code) {
+		return "/"
+	}
+	return "/fleet/login?code=" + code
+}
+
+// sameOrigin: a form POST must come from this host. SameSite=Lax already keeps
+// the session cookie off a cross-site POST; this is the second lock.
+func sameOrigin(r *http.Request) bool {
+	o := r.Header.Get("Origin")
+	if o == "" || o == "null" {
+		ref := r.Header.Get("Referer")
+		if ref == "" {
+			return true // a non-browser client; the session cookie still has to be there
+		}
+		o = ref
+	}
+	u, err := url.Parse(o)
+	return err == nil && strings.EqualFold(u.Host, r.Host)
+}
+
+type loginPage struct {
+	Code    string
+	KeyFP   string
+	Who     string
+	Login   string
+	Until   string
+	Error   string
+	Confirm bool
+	Done    bool
+	Denied  bool
+}
+
+var loginTmpl = template.Must(template.New("login").Parse(`<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>领取连接证书</title>
+<style>
+:root{--bg:#fff;--fg:#1f2328;--mut:#59636e;--card:#f6f8fa;--line:#d1d9e0;--ok:#1a7f37;--bad:#cf222e;--btn:#1f6feb}
+@media (prefers-color-scheme:dark){:root{--bg:#0d1117;--fg:#e6edf3;--mut:#9198a1;--card:#151b23;--line:#3d444d;--ok:#3fb950;--bad:#f85149;--btn:#388bfd}}
+body{background:var(--bg);color:var(--fg);font:16px/1.6 -apple-system,"PingFang SC",system-ui,sans-serif;margin:0;padding:24px 16px}
+main{max-width:460px;margin:0 auto}
+h1{font-size:20px;margin:0 0 16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin:12px 0}
+.code{font:600 28px/1.2 ui-monospace,Menlo,monospace;letter-spacing:2px}
+.mut{color:var(--mut);font-size:14px}
+code{font-family:ui-monospace,Menlo,monospace;font-size:13px;word-break:break-all}
+.row{display:flex;gap:12px;margin-top:16px}
+button{flex:1;font-size:16px;padding:12px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
+button.go{background:var(--btn);border-color:var(--btn);color:#fff}
+.ok{color:var(--ok)}.bad{color:var(--bad)}
+</style></head><body><main>
+<h1>领取连接证书</h1>
+{{if .Error}}<div class="card bad">{{.Error}}</div>
+{{else if .Done}}{{if .Denied}}<div class="card">已拒绝。终端里的 fleet login 会停下来。</div>
+{{else}}<div class="card ok">已签发给 <b>{{.Login}}</b>，{{.Until}} 前有效。回到终端，fleet login 会自动写好证书。</div>{{end}}
+{{else if .Confirm}}
+<p>确认终端上显示的验证码与下面一致，再点「确认签发」。</p>
+<div class="card"><div class="mut">验证码</div><div class="code">{{.Code}}</div></div>
+<div class="card"><div class="mut">签给</div><div>{{.Who}} · 系统账号 <b>{{.Login}}</b></div>
+<div class="mut" style="margin-top:8px">密钥指纹</div><code>{{.KeyFP}}</code>
+<div class="mut" style="margin-top:8px">有效期 12 小时，过期后再扫一次即可。</div></div>
+<form method="post" action="/fleet/login"><input type="hidden" name="code" value="{{.Code}}">
+<div class="row"><button name="action" value="deny">不是我</button><button class="go" name="action" value="approve">确认签发</button></div></form>
+{{end}}
+</main></body></html>`))
+
+func renderLoginPage(w http.ResponseWriter, p loginPage) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Frame-Options", "DENY")
+	_ = loginTmpl.Execute(w, p)
+}
+
+// qrMatrix encodes s as rows of '#' (dark) and '.' (light).
+func qrMatrix(s string) []string {
+	c, err := qr.Encode(s, qr.M)
+	if err != nil {
+		return nil
+	}
+	rows := make([]string, c.Size)
+	for y := 0; y < c.Size; y++ {
+		var b strings.Builder
+		for x := 0; x < c.Size; x++ {
+			if c.Black(x, y) {
+				b.WriteByte('#')
+			} else {
+				b.WriteByte('.')
+			}
+		}
+		rows[y] = b.String()
+	}
+	return rows
+}
+
+// ── the admin node's half: send the CA ──────────────────────────────────
+
+// sendSSHCA tells an admin node to trust the CA. Idempotent on the node, so it
+// goes out on every admin connect; the answer lands in sshCAStatus.
+func (s *Server) sendSSHCA(epID string) {
+	if s.SSHCA == nil {
+		return
+	}
+	msg, err := control.New(control.TypeSSHCA, control.SSHCA{PublicKey: s.SSHCA.PublicKey()})
+	if err != nil {
+		return
+	}
+	s.setSSHCAStatus(epID, "sent")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := s.SendNodeWrite(ctx, epID, msg); err != nil {
+		s.setSSHCAStatus(epID, "not sent: "+err.Error())
+	}
+}
+
+func (s *Server) setSSHCAStatus(epID, st string) {
+	s.sshCAMu.Lock()
+	defer s.sshCAMu.Unlock()
+	if s.sshCAStatus == nil {
+		s.sshCAStatus = map[string]string{}
+	}
+	s.sshCAStatus[epID] = st
+}
+
+func (s *Server) sshCAStatusOf(epID string) string {
+	s.sshCAMu.Lock()
+	defer s.sshCAMu.Unlock()
+	return s.sshCAStatus[epID]
+}
+
+// applySSHCAResult records an admin node's answer.
+func (s *Server) applySSHCAResult(epID string, nc *nodeConn, m control.Message) {
+	if !nc.admin {
+		return
+	}
+	var res control.SSHCAResult
+	if err := json.Unmarshal(m.Payload, &res); err != nil {
+		return
+	}
+	st := "trusted"
+	if !res.OK {
+		st = "failed"
+		if res.RolledBack {
+			st = "failed (rolled back)"
+		}
+	}
+	if res.Detail != "" {
+		st += ": " + truncate(res.Detail, 300)
+	}
+	s.setSSHCAStatus(epID, st)
+	log.Printf("node %s: ssh CA %s", epID, st)
+}

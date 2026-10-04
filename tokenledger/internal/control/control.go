@@ -69,6 +69,12 @@ const (
 	// it — what the executor did is read back later with operation_get. Sent
 	// only to a node whose hello listed CapWrite.
 	TypeWrite = "write"
+	// TypeSSHCA is a hub→node write: trust this SSH user CA for new
+	// connections to this machine (claude-fleet#1412). Only an admin node
+	// executes it; it is idempotent and re-sent on every admin connect.
+	TypeSSHCA = "ssh_ca"
+	// TypeSSHCAResult is the node's answer to a TypeSSHCA, by op_id.
+	TypeSSHCAResult = "ssh_ca_result"
 )
 
 // CapRead is the hello capability a node lists when it answers TypeRequest.
@@ -347,4 +353,33 @@ func ValidFullName(s string) bool {
 		n++
 	}
 	return n >= 1 && n <= 64 && s[0] != '-'
+}
+
+// SSH user CA (claude-fleet#1412). The hub sends only the CA's public key; the
+// node fixes everything else itself — the two paths it writes, the one line
+// of sshd configuration, and the order: write, `sshd -t`, roll back on
+// failure. It never touches sshd_config itself, any authorized_keys, or a
+// running sshd.
+const (
+	// SSHCAKeyPath is where a node keeps the trusted CA public key.
+	SSHCAKeyPath = "/etc/ssh/fleet_user_ca.pub"
+	// SSHCAConfPath is the sshd_config.d drop-in that points sshd at it.
+	SSHCAConfPath = "/etc/ssh/sshd_config.d/100-fleet-user-ca.conf"
+)
+
+// SSHCA is the payload of TypeSSHCA.
+type SSHCA struct {
+	// PublicKey is the CA public key, one authorized_keys line, no options.
+	PublicKey string `json:"public_key"`
+}
+
+// SSHCAResult is the payload of TypeSSHCAResult.
+type SSHCAResult struct {
+	OK bool `json:"ok"`
+	// Changed is false when the machine already trusted exactly this key.
+	Changed bool `json:"changed"`
+	// RolledBack: the new configuration failed `sshd -t` and the previous
+	// files were put back; sshd was never asked to read the bad one.
+	RolledBack bool   `json:"rolled_back,omitempty"`
+	Detail     string `json:"detail,omitempty"`
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/mcp"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/scan"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/sshca"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 	"github.com/verkyyi/claude-fleet/tokenledger/web"
 )
@@ -42,6 +43,31 @@ func envOr(key, def string) string {
 // is today's hub and agent exactly.
 func fleetEnabled() bool {
 	return os.Getenv("CCQUOTA_FLEET") == "1"
+}
+
+// loadFleetCerts wires the SSH certificate authority (claude-fleet#1412).
+// CCQUOTA_FLEET_SSH_CA_KEY names the CA private key file — mounted from its
+// own k8s Secret, never stored in the database. Unset: no certificates. Set
+// but unreadable: the hub refuses to start rather than run half-configured.
+func loadFleetCerts(srv *api.Server) error {
+	routes, err := api.ParseFleetRoutes(os.Getenv("CCQUOTA_FLEET_ROUTES"))
+	if err != nil {
+		return err
+	}
+	srv.FleetRoutes = routes
+	srv.FleetPublicURL = os.Getenv("CCQUOTA_FLEET_PUBLIC_URL")
+	path := os.Getenv("CCQUOTA_FLEET_SSH_CA_KEY")
+	if path == "" {
+		log.Printf("fleet: no CCQUOTA_FLEET_SSH_CA_KEY — connection certificates are off")
+		return nil
+	}
+	ca, err := sshca.Load(path)
+	if err != nil {
+		return fmt.Errorf("CCQUOTA_FLEET_SSH_CA_KEY: %w", err)
+	}
+	srv.SSHCA = ca
+	log.Printf("fleet: SSH user CA %s — 12h certificates at /connect and `fleet login`", ca.Fingerprint())
+	return nil
 }
 
 func runHub(args []string) error {
@@ -315,6 +341,11 @@ func runHub(args []string) error {
 		// "some port". The HTTPS half is filled in below, once the certificate
 		// has told us the name it is actually for.
 		Listeners: api.ListenerFacts{HTTP: addrs, HTTPS: *httpsAddr, HTTPSURL: httpsURL},
+	}
+	if fleetOn {
+		if err := loadFleetCerts(srv); err != nil {
+			return err
+		}
 	}
 	srv.MCP = mcp.Handler(srv)
 

@@ -728,6 +728,65 @@ hold every scope. A person signed in through WeCom holds
 their own logins only, and `config_set` only for the keys in
 `CCQUOTA_FLEET_PERSON_CONFIG_KEYS` (default none).
 
+### Connection certificates — scan once, 12 hours in (claude-fleet#1412)
+
+With a CA configured, the hub signs short-lived SSH **user certificates**, and
+every machine's sshd trusts that CA. Nobody's key is copied to any machine; an
+expired certificate is simply refused — scan again for the next one.
+
+| setting | where | what |
+|---|---|---|
+| `CCQUOTA_FLEET_SSH_CA_KEY=/secrets/ssh-ca/ca` | hub | the CA private key (OpenSSH, unencrypted), mounted from its **own** k8s Secret — never the database. Unset: no certificates. Set but unreadable: the hub refuses to start |
+| `CCQUOTA_FLEET_ROUTES='[{"hostname":"macmini","alias":"m5","routes":[{"name":"public","host":"…","port":22022},{"name":"tailnet","host":"…"}]}]'` | hub | the machines and the ways in, for the 连接 page and the ssh config; the first route is the default |
+| `CCQUOTA_FLEET_PUBLIC_URL=https://…` | hub | the address the QR points at (default: as the request reached the hub) |
+
+Make the CA once: `ssh-keygen -t ed25519 -N '' -C fleet-user-ca -f ca`, then
+`kubectl create secret generic ccquota-ssh-ca --from-file=ca`.
+
+**What a certificate says** (`internal/sshca`): principals = the person's
+login (C4's one name, active somewhere — no active login, no certificate),
+valid 12 hours (a minute back-dated for clock skew), key id
+`wecom:<userid>` (the hub relay, C6, reads the userid after the last `:`) —
+sshd logs it on every login, and the
+hub's `fleet_certs` table turns it back into a person, a key and a moment. The
+issuance is recorded before the certificate is handed out.
+
+**Getting one.**
+
+- `fleet login --hub https://…` (`bin/fleet-login.py`; the URL is kept in
+  `~/.config/claude-fleet/hub.json` `{"url":…}`, which C6's client reads too): makes
+  `~/.ssh/fleet-cert` if needed, POSTs its public half to
+  `/v1/fleet/login/start`, draws the QR, and polls `/v1/fleet/login/poll`.
+  Scanning it in WeCom opens `/fleet/login`, which signs the person in (the
+  code survives the trip through WeCom in a short cookie) and asks them to
+  confirm the code their terminal shows; the next poll carries the
+  certificate, exactly once. start/poll carry no credential and grant nothing
+  until a signed-in person confirms; the form only accepts a same-origin POST.
+- the **连接** page (`/connect`): the hub address, every route, the ssh config
+  snippet, and paste-a-public-key → download the certificate
+  (`POST /v1/fleet/cert`, WeCom session only — the operator's token is not a
+  person and gets 403).
+
+The client paths are a contract (`fleet connect`, C7, reads them):
+`~/.ssh/fleet-cert` (key), `~/.ssh/fleet-cert-cert.pub` (certificate),
+`~/.ssh/fleet-ssh-config` (`# fleet-ssh-config v1`, one `Host <alias>
+fleet-<alias> fleet-<alias>-<route>` block per route). `fleet login` appends
+`Match all` + `Include ~/.ssh/fleet-ssh-config` to the END of `~/.ssh/config`
+once, so a person's own entries keep winning.
+
+**The machine side.** On every admin connect the hub sends `ssh_ca` with the
+CA public key; the admin agent (`internal/agent/node_sshca.go`) writes
+`/etc/ssh/fleet_user_ca.pub` and the one-line drop-in
+`/etc/ssh/sshd_config.d/100-fleet-user-ca.conf` (`TrustedUserCAKeys …`) via
+`sudo -n`, runs `sshd -t`, and checks `sshd -T` really uses that file; any
+failure puts the previous files back (or removes the new ones) and sshd never
+reads the bad configuration. It never edits `sshd_config`, any
+`authorized_keys`, or a running sshd: on macOS sshd starts per connection, so
+the change applies to the next one; elsewhere the listener gets a reload
+(SIGHUP), which leaves established sessions alone. An unchanged key is a
+no-op. `/v1/nodes` shows each admin node's answer as `ssh_ca`;
+`/v1/fleet/ssh-ca.pub` serves the public key to anyone.
+
 ## The dashboard
 
 One page, no tabs — with a nav bar across the top of it. Those are not in

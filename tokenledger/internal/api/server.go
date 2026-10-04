@@ -16,6 +16,7 @@ import (
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/fx"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/sshca"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
@@ -115,8 +116,29 @@ type Server struct {
 	// fleetScopeHook replaces fleetScope in tests (claude-fleet#1409).
 	fleetScopeHook func(*http.Request) (func(hostname, osUser string) bool, error)
 
+	// SSHCA signs people's connection certificates (claude-fleet#1412),
+	// loaded from CCQUOTA_FLEET_SSH_CA_KEY — a file from its own k8s Secret,
+	// never the database. Nil: no certificates, and no node is asked to trust
+	// a CA.
+	SSHCA *sshca.CA
+
+	// FleetRoutes is the machines people connect to and the ways in
+	// (CCQUOTA_FLEET_ROUTES), for the 连接 page and the ssh config snippet.
+	FleetRoutes []FleetMachine
+
+	// FleetPublicURL is the hub's address as people know it
+	// (CCQUOTA_FLEET_PUBLIC_URL); empty means "as this request reached us".
+	FleetPublicURL string
+
 	// nodes holds the open node control channels.
 	nodes nodeConns
+
+	// devices holds `fleet login` device-code logins in progress.
+	devices deviceLogins
+
+	// sshCAStatus is each admin node's last answer to the CA install.
+	sshCAMu     sync.Mutex
+	sshCAStatus map[string]string
 
 	// accountsMu serialises account dispatch, so one queued op is never sent
 	// twice by two triggers racing.
@@ -175,6 +197,16 @@ func (s *Server) Handler() http.Handler {
 		// The Fleet Hub's read tools (claude-fleet#1409), the same ones
 		// /mcp lists when the module is on.
 		mux.Handle("/v1/fleet/", s.viewerOnly(http.HandlerFunc(s.handleFleet)))
+		// Connection certificates (claude-fleet#1412). start/poll carry no
+		// credential — they are what a person runs before having one, and
+		// grant nothing until a signed-in person confirms the code.
+		mux.Handle("/v1/fleet/connect", s.viewerOnly(http.HandlerFunc(s.handleFleetConnect)))
+		mux.Handle("/v1/fleet/cert", s.viewerOnly(http.HandlerFunc(s.handleFleetCert)))
+		mux.HandleFunc("/v1/fleet/ssh-ca.pub", s.handleSSHCAPub)
+		mux.HandleFunc("/v1/fleet/login/start", s.handleDeviceStart)
+		mux.HandleFunc("/v1/fleet/login/poll", s.handleDevicePoll)
+		mux.Handle("/fleet/login", s.rememberLoginCode(s.viewerOnly(http.HandlerFunc(s.handleFleetLoginPage))))
+		mux.Handle("/connect", s.viewerOnly(http.HandlerFunc(s.serveConnectPage)))
 	}
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
