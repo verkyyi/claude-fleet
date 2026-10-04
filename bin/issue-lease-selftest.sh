@@ -17,6 +17,10 @@
 #          claim + spawn run as today, and the lease is NOT released.
 #   BACK   lease granted, then the GitHub check refuses → the lease is given back.
 #   DOWN   lease command fails (hub unreachable) → one stderr note, today's path.
+#   WHY    (issue #1507) the note says WHY, off the command's own stderr — never
+#          「hub unreachable」 for a hub that answered: a 403 reads 「lease refused:
+#          HTTP 403 — <its error>」, anything else 「ccquota exit N: <first line>」;
+#          a grant says 「租约已拿到」 and nothing else.
 #   NOUUID no fleet UUID on this machine → one stderr note, today's path.
 #   FORCE  --force → acquire carries --force; the takeover is announced.
 #   MULTI  a 2-repo fleet keys the lease <slug>:issue-<N>, as its heartbeat will.
@@ -117,6 +121,7 @@ case "\${1:-}" in
   release) echo RELEASED; exit 0 ;;
 esac
 [ -n "\${LEASE_ANSWER:-}" ] && printf '%s\n' "\$LEASE_ANSWER"
+[ -n "\${LEASE_STDERR:-}" ] && printf '%s\n' "\$LEASE_STDERR" >&2
 exit "\${LEASE_RC:-0}"
 LEASEFAKE
 chmod +x "$WORK/fakebin/fake-lease"
@@ -208,7 +213,7 @@ CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET=1 FLEET_HUB_LEASE_CMD="$LEASE" \
 gh_has '--add-assignee'                          || fail "GRANT the GitHub claim still runs as the second guard"
 tmux_has 'new-window'                            || fail "GRANT spawns the window"
 lease_has release                                && fail "GRANT a spawned session keeps its lease"
-[ -s "$WORK/spawn.err" ]                         && fail "GRANT a clean spawn prints nothing on stderr"
+[ "$(cat "$WORK/spawn.err")" = "dash-issue-session: #258 的入口租约已拿到 (m4)" ] || fail "GRANT a clean spawn prints only 「租约已拿到」 on stderr" "$(cat "$WORK/spawn.err")"
 ok "GRANT lease granted → GitHub claim + spawn, lease kept"
 
 # ===== BACK: granted, then GitHub refuses ⇒ lease given back =====================
@@ -219,12 +224,33 @@ lease_has "release acme/widgets 258 $UUID/issue-258" || fail "BACK a refused spa
 ok "BACK granted then GitHub-refused → lease released"
 
 # ===== DOWN: hub unreachable ⇒ note + today's path ===============================
-CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET=1 FLEET_HUB_LEASE_CMD="$LEASE" LEASE_RC=1 run_spawn 258
+CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET=1 FLEET_HUB_LEASE_CMD="$LEASE" LEASE_RC=1 \
+  LEASE_STDERR='ccquota: Post "https://hub.test/v1/node/lease": dial tcp 127.0.0.1:9: connect: connection refused' run_spawn 258
 [ "$(rc)" = 0 ]                                  || fail "DOWN an unreachable hub must not block the spawn" "$(cat "$WORK/spawn.err")"
-err_has 'hub unreachable'                        || fail "DOWN must say on stderr that the hub could not be asked"
+err_has 'fleet: hub unreachable (dial tcp 127.0.0.1:9: connect: connection refused) — no lease on #258' \
+                                                 || fail "DOWN must say on stderr that the hub could not be asked, and why" "$(cat "$WORK/spawn.err")"
 gh_has '--add-assignee'                          || fail "DOWN falls back to the GitHub claim"
 tmux_has 'new-window'                            || fail "DOWN spawns"
 ok "DOWN hub unreachable → stderr note, today's GitHub claim + spawn"
+
+# ===== WHY: a hub that ANSWERED is never 「unreachable」 (issue #1507) ============
+# The #1427 case: the hub answers 403 for a fleet UUID the node never registered.
+CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET=1 FLEET_HUB_LEASE_CMD="$LEASE" LEASE_RC=1 \
+  LEASE_STDERR='ccquota: hub answered HTTP 403: {"error":"fleet c45a2451 is not registered to this node (has its heartbeat reached the hub?)"}' run_spawn 258
+[ "$(rc)" = 0 ]                                  || fail "WHY a refused lease must not block the spawn" "$(cat "$WORK/spawn.err")"
+err_has 'fleet: lease refused: HTTP 403 — fleet c45a2451 is not registered to this node (has its heartbeat reached the hub?) — no lease on #258' \
+                                                 || fail "WHY a 403 must read 「lease refused」 with the hub's own error" "$(cat "$WORK/spawn.err")"
+err_has 'unreachable'                            && fail "WHY a hub that answered is not 「unreachable」" "$(cat "$WORK/spawn.err")"
+gh_has '--add-assignee'                          || fail "WHY falls back to the GitHub claim"
+# anything else: the command's name, its code and its first line
+CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET=1 FLEET_HUB_LEASE_CMD="$LEASE" LEASE_RC=7 \
+  LEASE_STDERR=$'\nccquota: hub answered something that is not JSON\nsecond line' run_spawn 258
+err_has "fleet: ${LEASE%% *} exit 7: hub answered something that is not JSON — no lease on #258" \
+                                                 || fail "WHY any other failure names the command, its exit and its first stderr line" "$(cat "$WORK/spawn.err")"
+err_has 'second line'                            && fail "WHY only the first stderr line is carried"
+CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET=1 FLEET_HUB_LEASE_CMD="$LEASE" LEASE_RC=1 run_spawn 258
+err_has "${LEASE%% *} exit 1: (no stderr)"       || fail "WHY a silent failure says so" "$(cat "$WORK/spawn.err")"
+ok "WHY 403 → 「lease refused: HTTP 403 — <error>」, other → 「<cmd> exit N: <line>」, never 「unreachable」"
 
 # ===== NOUUID: no control database ⇒ note + today's path =========================
 mkdir -p "$WORK/conf2"
@@ -261,7 +287,7 @@ CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET=1 FLEET_HUB_LEASE_CMD="$LEASE" LEASE_ANSWER
 [ "$(rc)" = 0 ]                                  || fail "TOKEN spawns" "$(cat "$WORK/spawn.err")"
 [ "$(cat "$WORK/lease.env" 2>/dev/null)" = tok-node ] || fail "TOKEN the lease command must see node.env's CCQUOTA_TOKEN" "lease saw: $(cat "$WORK/lease.env" 2>/dev/null)"
 [ "$(cat "$WORK/tmux.env" 2>/dev/null)" = '<unset>' ] || fail "TOKEN the spawned window must NOT inherit the node token" "tmux saw: $(cat "$WORK/tmux.env" 2>/dev/null)"
-[ -s "$WORK/spawn.err" ]                         && fail "TOKEN a token from node.env is the normal path: nothing on stderr" "$(cat "$WORK/spawn.err")"
+[ "$(cat "$WORK/spawn.err")" = "dash-issue-session: #258 的入口租约已拿到 (m5)" ] || fail "TOKEN a token from node.env is the normal path: only the grant on stderr" "$(cat "$WORK/spawn.err")"
 # an exported token wins; node.env only fills the gap
 CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET=1 FLEET_HUB_LEASE_CMD="$LEASE" LEASE_ANSWER="GRANTED m5" CCQUOTA_TOKEN=tok-env run_spawn 258
 [ "$(cat "$WORK/lease.env" 2>/dev/null)" = tok-env ] || fail "TOKEN CCQUOTA_TOKEN in the environment wins over node.env" "lease saw: $(cat "$WORK/lease.env" 2>/dev/null)"
@@ -289,7 +315,7 @@ PATH="$WORK/ccqbin:$PATH" CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET=1 run_spawn 258
 grep -qF "lease acquire acme/widgets 258 $UUID/issue-258" "$WORK/ccq.log" 2>/dev/null || fail "NOTOKEN+node.env the default ccquota lease must run" "$(cat "$WORK/ccq.log" 2>/dev/null)"
 [ "$(cat "$WORK/ccq.env" 2>/dev/null)" = tok-node ] || fail "NOTOKEN+node.env ccquota must see node.env's token" "ccquota saw: $(cat "$WORK/ccq.env" 2>/dev/null)"
 [ "$(cat "$WORK/tmux.env" 2>/dev/null)" = '<unset>' ] || fail "NOTOKEN+node.env the window still never inherits it"
-[ -s "$WORK/spawn.err" ]                         && fail "NOTOKEN+node.env prints nothing on stderr" "$(cat "$WORK/spawn.err")"
+[ "$(cat "$WORK/spawn.err")" = "dash-issue-session: #258 的入口租约已拿到 (m5)" ] || fail "NOTOKEN+node.env prints only the grant on stderr" "$(cat "$WORK/spawn.err")"
 ok "NOTOKEN default ccquota without a token → 「no node token」 + fix, no ccquota run; with node.env it runs with the token"
 
 # ===== MOVE: fleet_hub_move shares the plumbing ==================================
