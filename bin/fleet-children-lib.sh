@@ -7,6 +7,9 @@
 #   children_file <parent-key> <sess>    → that parent's <parent-key>.ndjson
 #   children_append <parent-key> <json> [<sess>]
 #                                        → append one event, deduped + seq'd
+#   children_append_retired <parent-key> <gen> <json> [<sess>]
+#                                        → the same, into a RETIRED generation's
+#                                          book <parent-key>.ndjson.<gen> (#1538)
 #   children_wake <parent-key> <child> <level> <action> <outcome> [<sess>]
 #                                        → append one stall-ladder row (issue #1268)
 #   children_wake_state <parent-key> <child> [<sess>]
@@ -67,6 +70,20 @@ children_append() {
   f=$(children_file "${1:-}" "${3:-}") || return 1
   command -v python3 >/dev/null 2>&1 || return 1
   printf '%s' "${2:-}" | python3 "$_CHILDREN_BIN/fleet-children.py" append --file "$f" >/dev/null 2>&1
+}
+
+# children_append_retired <parent-key> <gen> <json> [<sess>] — the same append, into
+# a RETIRED generation's book `<parent-key>.ndjson.<gen>` (issue #1538): a late
+# report from a child of a scratch number that has since been allocated again.
+# No reader globs `*.ndjson` into it — it is kept, never shown as the new holder's.
+children_append_retired() {
+  local f g
+  f=$(children_file "${1:-}" "${4:-}") || return 1
+  g=$(printf '%s' "${2:-}" | LC_ALL=C tr -cd '0-9.')
+  case "$g" in ''|.*) g=0 ;; esac
+  command -v python3 >/dev/null 2>&1 || return 1
+  mkdir -p "${f%/*}" 2>/dev/null
+  printf '%s' "${3:-}" | python3 "$_CHILDREN_BIN/fleet-children.py" append --file "$f.$g" >/dev/null 2>&1
 }
 
 # children_wake / children_wake_state — the stall ladder's rows (issue #1268,

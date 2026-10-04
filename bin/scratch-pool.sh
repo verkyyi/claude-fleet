@@ -347,7 +347,7 @@ spawn_one() {
   # headroom so a warm entry can't be the reason a real spawn is refused.
   fleet_session_cap_ok "$SESS" >/dev/null || return 1
   acct=$(acct_now) || return 1
-  alloc=$(fleet_scratch_alloc "$MAIN" "$BASE") || return 1
+  alloc=$(fleet_scratch_alloc "$MAIN" "$BASE" "$SESS") || return 1
   slug=${alloc%%	*}; wt=${alloc#*	}
   read -r _w _h <<EOF
 $(fleet_dims)

@@ -262,6 +262,9 @@ fleet_repo_trust_warn "$DIR" fleet-up
 PATH=$(fleet_local_bin_path); export PATH
 workwin=$(tmux -L "$SOCK" new-session -d -P -F '#{window_id}' -s "$NAME" -c "$DIR" -n work) \
   || die "tmux new-session failed for '$NAME'"
+# A fresh server recycles pane ids: drop the last server's unrun mod commands
+# before any pane exists to take them (issue #1538).
+fleet_mod_inbox_reset "$SOCK"
 # A session is on its way: wake the idle-gated daemons so the dash is fresh on
 # their very next tick, not up to FLEET_DAEMON_IDLE_AFTER later (issue #1077).
 [ -f "$BIN/fleet-daemon-lib.sh" ] && ( . "$BIN/fleet-daemon-lib.sh" && fleet_daemon_wake "$BIN/.." ) 2>/dev/null || true

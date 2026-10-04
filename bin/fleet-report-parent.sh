@@ -121,7 +121,7 @@ TM() { if [ -n "$SOCK" ]; then tmux -L "$SOCK" "$@"; else tmux "$@"; fi; }
 target="${WIN:-${TMUX_PANE:-}}"
 [ -n "$target" ] || quiet 'no child window (no --win and no $TMUX_PANE)'
 row=$(TM display-message -p -t "$target" \
-        '#{window_id}|#{@origin}|#{@issue}|#{@reported}|#{@worktree}|#{@claude_state}|#{@origin_wid}|#{window_name}' 2>/dev/null)
+        '#{window_id}|#{@origin}|#{@issue}|#{@reported}|#{@worktree}|#{@claude_state}|#{@origin_wid}|#{@origin_gen}|#{@origin_retired}|#{window_name}' 2>/dev/null)
 [ -n "$row" ] || quiet "child window '$target' is gone"
 selfwin=${row%%|*};  row=${row#*|}
 worigin=${row%%|*};  row=${row#*|}
@@ -129,7 +129,9 @@ wissue=${row%%|*};   row=${row#*|}
 wreported=${row%%|*}; row=${row#*|}
 wworktree=${row%%|*}; row=${row#*|}
 wstate=${row%%|*};   row=${row#*|}
-owid=${row%%|*};     wname=${row#*|}
+owid=${row%%|*};     row=${row#*|}
+wogen=${row%%|*};    row=${row#*|}
+wretired=${row%%|*}; wname=${row#*|}
 
 case "$ORIGIN" in
   wid:*) owid=${ORIGIN#wid:}; worigin=${owid#*/} ;;
@@ -185,6 +187,13 @@ fi
 # `autofill` / `bridge` are daemons with no session to talk to, and a bare fleet
 # NAME is #516's cross-fleet stamp — that parent lives on another socket, which
 # this fleet's tmux server cannot reach. All of them: nothing to send.
+# A child whose parent's key was allocated again while it ran (issue #1538) had its
+# @origin moved to @origin_retired `<key>#<gen>`: it still has a parent — a retired
+# one, whose book takes the report below — and is never hub-spawned.
+RETIRED_GEN=''
+if [ -z "$worigin" ] && [ -z "$ORIGIN" ] && [ -n "$wretired" ]; then
+  worigin=${wretired%#*}; RETIRED_GEN=${wretired##*#}; owid=''
+fi
 case "$worigin" in
   issue-*|scratch-*) ;;
   ?*:issue-*|?*:scratch-*) ;;    # repo-qualified (issue #789) — a fleet hosting 2+ repos
@@ -220,6 +229,37 @@ case "$label" in
 esac
 branch_arg="$BRANCH"
 [ -n "$BRANCH" ] || BRANCH="${selfkey##*:}"
+
+# --- generations (issue #1538) ---------------------------------------------------
+# A scratch child's OWN generation rides its rows (`child_gen`, under the key a
+# spawn from it stamps as @origin — `child_key` when that is repo-qualified), so
+# the parent map can tell this scratch-3 from the one before it. Nothing for an
+# issue child or a generation-0 key: the row is the one it always was.
+selfgkey='' selfgen=''
+case "$selfkey" in
+  scratch-*|?*:scratch-*)
+    selfgkey="$selfkey"
+    if [ "${selfkey#*:}" = "$selfkey" ] && [ -n "$sess" ] && [ -n "${selfwin:-}" ]; then
+      _gp=$(_fleet_key_prefix "$sess" "$selfwin" 2>/dev/null) || _gp=''
+      selfgkey="$_gp$selfkey"
+    fi
+    [ -n "$sess" ] && selfgen=$(fleet_key_gen "$sess" "$selfgkey") ;;
+esac
+# row_json <child> <state> <pr> <verdict> <summary> <title> <tier> [<relayed_from>]
+# → one ledger row. `gen` is the parent generation the child was spawned under
+# (@origin_gen); a relayed row is filed in someone else's book and carries none.
+row_json() {
+  RJ_GEN="$wogen" RJ_CGEN="$selfgen" RJ_CKEY="$selfgkey" python3 -c 'import json, os, sys
+d = dict(zip(("child","state","pr","verdict","summary","title","tier","relayed_from"), sys.argv[1:]))
+if os.environ.get("RJ_GEN") and "relayed_from" not in d:
+    d["gen"] = os.environ["RJ_GEN"]
+if os.environ.get("RJ_CGEN"):
+    d["child_gen"] = os.environ["RJ_CGEN"]
+k = os.environ.get("RJ_CKEY") or ""
+if os.environ.get("RJ_CGEN") and k and k != d.get("child"):
+    d["child_key"] = k
+print(json.dumps(d))' "$@" 2>/dev/null
+}
 
 # --- a turn boundary is not a stop (issue #864) -------------------------------
 # The Stop fallback fires on EVERY done turn of a child that has not reported. A
@@ -353,11 +393,29 @@ if [ -n "$owid" ] && ! fleet_wid_home "$owid" "$sess" >/dev/null 2>&1; then
     *) _why="is not on this machine and the hub cannot place it" ;;
   esac
   if [ "$DRY" != 1 ] && command -v children_append >/dev/null 2>&1; then
-    children_append "$worigin" "$(python3 -c 'import json,sys; print(json.dumps(dict(zip(("child","state","pr","verdict","summary","title","tier"), sys.argv[1:]))))' \
+    children_append "$worigin" "$(row_json \
       "$selfkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER" 2>/dev/null)" "$sess" || :
   fi
   _how='ledgered, not sent'; [ "$DRY" = 1 ] && _how='not sent (dry run)'
   printf 'fleet-report-parent: parent %s %s; %s\n' "$owid" "$_why" "$_how" >&2
+  exit 0
+fi
+
+# --- an earlier generation's child (issue #1538) ----------------------------------
+# The parent key has been allocated again since this child was spawned (its
+# @origin_gen is not the key's current generation, or the mint moved its @origin
+# to @origin_retired): the session that spawned it is gone, and the one now
+# answering to the key never heard of it. The report goes to the RETIRED book
+# (`<key>.ndjson.<gen>`, where that generation's other reports were moved) and
+# nowhere else — not to the new holder, and not up the new holder's ancestry.
+if [ -n "$RETIRED_GEN" ] || { [ -n "$sess" ] && fleet_key_gen_stale "$sess" "$worigin" "$wogen"; }; then
+  RETIRED_GEN=${RETIRED_GEN:-${wogen:-0}}
+  if [ "$DRY" != 1 ] && command -v children_append_retired >/dev/null 2>&1; then
+    children_append_retired "$worigin" "$RETIRED_GEN" "$(row_json \
+      "$selfkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER")" "$sess" || :
+  fi
+  printf 'fleet-report-parent: parent %s is a later generation than the one that spawned this session (%s ≠ %s) — filed in its retired book, not sent\n' \
+    "$worigin" "$RETIRED_GEN" "$(fleet_key_gen "$sess" "$worigin")" >&2
   exit 0
 fi
 
@@ -369,7 +427,7 @@ fi
 # window id, so a migrated/restored parent reads the same file. Deduped on
 # (child, state, pr) against that child's latest event; never fails, prints nothing.
 if [ "$DRY" != 1 ] && command -v children_append >/dev/null 2>&1; then
-  children_append "$worigin" "$(python3 -c 'import json,sys; print(json.dumps(dict(zip(("child","state","pr","verdict","summary","title","tier"), sys.argv[1:]))))' \
+  children_append "$worigin" "$(row_json \
     "$selfkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER" 2>/dev/null)" "$sess" || :
 fi
 
@@ -391,7 +449,7 @@ pwin=$(fleet_win_for_key "$worigin" "$SOCK") || pwin=''
 if [ -z "$pwin" ] && _anc=$(fleet_live_ancestor "$worigin" "$sess" "$SOCK"); then
   SENDKEY=${_anc%%$'\t'*}; pwin=${_anc#*$'\t'}; RELAY_FROM="$worigin"
   if [ "$DRY" != 1 ] && command -v children_append >/dev/null 2>&1; then
-    children_append "$SENDKEY" "$(python3 -c 'import json,sys; print(json.dumps(dict(zip(("child","state","pr","verdict","summary","title","tier","relayed_from"), sys.argv[1:]))))' \
+    children_append "$SENDKEY" "$(row_json \
       "$selfkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER" "$RELAY_FROM" 2>/dev/null)" "$sess" || :
   fi
 fi

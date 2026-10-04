@@ -90,6 +90,17 @@ Do not install from memory: read the doc and work from it.
   `TMUX_PANE`, which is why `dash-popup.sh` hands it ours. An `@wid` handle no
   live window carries is refused by `fleet_wid_target` (nothing, rc 1) and every
   caller checks the rc. `bin/worker-locate-selftest.sh` F pins all of it.
+- **A recycled scratch number is a new GENERATION, not the old session** (issue
+  #1538). `fleet_scratch_alloc <main> <base> <sess>` mints one per allocation
+  (`children/.gen`, `fleet_key_gen`): the last holder's child ledger retires to
+  `<key>.ndjson.<gen>` (no reader globs it), a child still running under the old
+  holder has `@origin` moved to `@origin_retired <key>#<gen>`, a spawn stamps
+  `@origin_gen`, and `fleet-report-parent.sh` files a report from an earlier
+  generation to that retired book — never delivered, never relayed. Ledger rows
+  carry `gen`/`child_gen`/`child_key` and `fleet_origin_map` skips a link filed
+  by a previous holder. Issue keys are never minted; no `.gen` ⇒ byte for byte as
+  before. The mod inbox is per server lifetime too (`fleet_mod_inbox_reset`).
+  `fleet-children-selftest.sh` §3 and `origin-selftest.sh` D pin it.
 - **Panel windows, not sessions.** Windows named `dash`, `plan`, `backlog` are
   treated as panels and excluded from the dash session list.
 - **A view session shares the fleet's windows; never scan or name them bare**

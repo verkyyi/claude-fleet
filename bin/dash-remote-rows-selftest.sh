@@ -186,8 +186,9 @@ eq "B: a remote child under a LOCAL parent: depth 1, its own subtree, its machin
 eq "B: a remote grandchild under its REMOTE parent: depth 2" \
    "wid:$F/issue-1500|  └||2|m4" "$(srow "$s" '孙')"
 eq "B: a local sibling is untouched" "@2|└||1|" "$(srow "$s" C1)"
-eq "B: a local row carries the 9th field too, empty" "9" "$(nfields "$s" C1)"
-eq "B: a remote row has it" "9" "$(nfields "$s" '侧边栏')"
+# fields 10-12 (issue #1532) are the info column's issue · PR · ctx%, after it.
+eq "B: a local row carries the 9th field too, empty" "12" "$(nfields "$s" C1)"
+eq "B: a remote row has it" "12" "$(nfields "$s" '侧边栏')"
 hasnt "B: no [m4] in any name" "$s" "[m4"
 # The operator's call (#1475): a worker row never SHOWS its machine — a local row
 # and a remote row look the same. The view's own renderer, on the remote row and

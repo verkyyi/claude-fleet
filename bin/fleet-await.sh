@@ -433,6 +433,7 @@ if [ -n "$wid" ]; then
     TM set-window-option -t "$wid" @origin "$KEY" 2>/dev/null \
       && printf 'fleet-await: #%s had no parent — adopted (@origin %s)\n' "$NUM" "$KEY" >&2
     fleet_stamp_origin_wid "$sess" "$wid" "$KEY" "$SOCK"
+    fleet_stamp_origin_gen "$sess" "$wid" "$KEY" "$SOCK"
     worigin=$KEY
   fi
   LEDGER=$(fleet_origin_canon "$worigin" '')

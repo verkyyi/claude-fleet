@@ -218,6 +218,12 @@ fleet_ui_t() {
     en:sidebar_rename)          printf 'rename› ' ;;
     zh:sidebar_refreshing)      printf '刷新中…' ;;
     en:sidebar_refreshing)      printf 'refreshing…' ;;
+    zh:sidebar_landed_heading_fmt) printf '已落地 (%s) · ↵ 恢复' "${1:-}" ;;
+    en:sidebar_landed_heading_fmt) printf 'Landed (%s) · ↵ restore' "${1:-}" ;;
+    zh:sidebar_landed_empty)    printf '（还没有已落地的会话）' ;;
+    en:sidebar_landed_empty)    printf '(no landed sessions yet)' ;;
+    zh:sidebar_landed_loading)  printf '已落地 …' ;;
+    en:sidebar_landed_loading)  printf 'Landed …' ;;
     zh:sidebar_spawn_failed)    printf '创建失败' ;;
     en:sidebar_spawn_failed)    printf 'spawn failed' ;;
     # --- the row menu (fleet-sidebar-menu.sh). menu_keys is THE letter table:
@@ -336,6 +342,8 @@ resume	c	resume — a row on another machine only: reopen a just-stopped one thr
     en:keys_sb_menu)            printf 'task menu' ;;
     zh:keys_sb_esc)             printf '键盘还给任务' ;;
     en:keys_sb_esc)             printf 'return keys to task' ;;
+    zh:keys_sb_more)            printf '临时会话 · 已落地 · 刷新 · 详情' ;;
+    en:keys_sb_more)            printf 'scratch · landed · reload · info' ;;
     zh:keys_sb_home)            printf '进任务栏，再按去 hub' ;;
     en:keys_sb_home)            printf 'enter sidebar, then hub' ;;
     zh:keys_sb_all_fmt)         printf '全部按键（prefix = %s）' "${1:-}" ;;
@@ -422,6 +430,14 @@ resume	c	resume — a row on another machine only: reopen a just-stopped one thr
     en:keys_sidebar_15)        printf %s 'restore a finished task — the hub'"'"'s ⌃t landed list in a popup; ↵ brings it back as the current window (a closed-unmerged PR asks to reopen first). Touch: the row menu'"'"'s last item' ;;
     zh:keys_sidebar_16)        printf %s '空行时打开任务栏快捷键；输入名称时就是普通问号' ;;
     en:keys_sidebar_16)        printf %s 'on an EMPTY line, or a tap on the '"'"'? 快捷键'"'"' row above it: this sidebar'"'"'s key sheet. Inside a name it types a ?' ;;
+    zh:keys_sidebar_18)         printf %s '立即开一个临时会话 — 同 hub 的 ⌃s：不命名（输入行有字就用它命名），开在选中行的仓库，并切过去。被拒（上限、worktree）写在输入行' ;;
+    en:keys_sidebar_18)         printf %s 'a scratch session NOW — the hub'"'"'s ⌃s: unnamed (a typed name, if any, names it), in the highlighted row'"'"'s repo, and it becomes the current window. A refusal (cap, worktree) shows on the input line' ;;
+    zh:keys_sidebar_19)         printf %s '运行中 ⇄ 已落地，就地切换 — 同 hub 的 ⌃t：已落地列表（fleet-history.sh rows）占用任务栏的行；在一行上 ↵（或再点一次）把它恢复为当前窗口，列表回到运行中。⌃o 弹窗照常可用' ;;
+    en:keys_sidebar_19)         printf %s 'running ⇄ landed, in place — the hub'"'"'s ⌃t: the landed list (fleet-history.sh rows) takes the sidebar'"'"'s rows; ↵ (or a second tap) on one restores it as the current window and the list goes back to running. ⌃o'"'"'s popup still works' ;;
+    zh:keys_sidebar_20)         printf %s '立即重读当前列表（已落地列表也算）— 同 hub 的 ⌃r' ;;
+    en:keys_sidebar_20)         printf %s 're-read the shown list now (the landed one included) — the hub'"'"'s ⌃r' ;;
+    zh:keys_sidebar_21)         printf %s 'Tab 键：展开 / 收起信息列 — 每行的单号 · PR · 上下文%，右对齐，同 hub 的三格。默认收起（名称优先占宽）；展开时任务栏最宽到 FLEET_SIDEBAR_WIDTH_MAX，再宽就让名称让位' ;;
+    en:keys_sidebar_21)         printf %s 'the Tab key: open / fold the info column — each row'"'"'s issue · PR · ctx%, right-aligned, the hub'"'"'s three cells. Folded by default (the names get the width); open, the sidebar widens up to FLEET_SIDEBAR_WIDTH_MAX and the names give way past that' ;;
     zh:keys_sidebar_17)        printf %s '隐藏任务栏' ;;
     en:keys_sidebar_17)        printf %s 'hide the sidebar (q types now; no tap hides it)' ;;
     zh:keys_g_menu)            printf %s '行菜单' ;;

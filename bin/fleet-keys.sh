@@ -133,6 +133,7 @@ print_sidebar_sheet() {
   skey "$(fleet_ui_t keys_sb_edit_k)" "←→ Home End ⌥←→ $(dg bol) $(dg eol) $(dg kill_word) $(dg kill_eol) ⌃u" # ui-lang-ok: key glyphs, no words
   skey "$(fleet_ui_t keys_sb_menu_k_fmt "$(dg menu)")" "$(fleet_ui_t keys_sb_menu)$(dn menu)"
   skey "esc" "$(fleet_ui_t keys_sb_esc)"
+  skey "$(dg scratch) $(dg view) $(dg reload) $(dg info)" "$(fleet_ui_t keys_sb_more)"
   skey "⌂ / F9" "$(fleet_ui_t keys_sb_home)"
   skey "prefix ?" "$(fleet_ui_t keys_sb_all_fmt "${DASH_KEYMAP_PREFIX:-C-b}")"
 }
@@ -189,6 +190,10 @@ print_sheet() {
   key "$(dg menu)" "$(fleet_ui_t keys_sidebar_14)$(dn menu)"
   key "$(dg restore)" "$(fleet_ui_t keys_sidebar_15)$(dn restore)"
   key "$(dg help)" "$(fleet_ui_t keys_sidebar_16)$(dn help)"
+  key "$(dg scratch)" "$(fleet_ui_t keys_sidebar_18)$(dn scratch)"
+  key "$(dg view)" "$(fleet_ui_t keys_sidebar_19)$(dn view)"
+  key "$(dg reload)" "$(fleet_ui_t keys_sidebar_20)$(dn reload)"
+  key "$(dg info)" "$(fleet_ui_t keys_sidebar_21)$(dn info)"
   key "prefix e" "$(fleet_ui_t keys_sidebar_17)"
   fi
 
