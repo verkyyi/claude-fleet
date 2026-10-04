@@ -1927,22 +1927,29 @@ if [ -f "$_hm" ] && command -v python3 >/dev/null 2>&1; then
   fi
 fi
 
-# --- global config keys: what the sync pins on every login (issue #1528) ---
-# ← in a Claude pane opens the agents view, and the only off switch is
-# leftArrowOpensAgents=false in Claude Code's GLOBAL config (~/.claude.json) — no
-# keybinding, no mod, and not settings.json reach it. The sync merges
-# hooks/global-config-keys.json there; this row checks it landed.
-# FLEET_KEEP_AGENTS_KEY=1 (env or fleet.settings) leaves it to the login.
-_kj="$(dirname "$0")/../hooks/global-config-keys.json"
-if [ -f "$_hm" ] && [ -f "$_kj" ] && command -v python3 >/dev/null 2>&1; then
+# --- default Claude settings: what the sync fills on every login (issue #1558) ---
+# conf/claude-settings.default.json is the ONE default Claude configuration for a
+# managed machine's logins: the sync (fleet-install-apply.sh's `settings` pass)
+# fills each key a login lacks into ~/.claude/settings.json
+# (permissions.defaultMode=bypassPermissions, effort, output style, theme, …) and
+# into Claude Code's GLOBAL config ~/.claude.json (leftArrowOpensAgents=false,
+# #1528 — the only place that key is read). Fill only: a value the login set is
+# never overwritten, and ~/.claude/settings.fleet-override.json lists keys never
+# written at all. This row counts the keys that differ from the defaults — on
+# 2026-10-04 m4's verkyyi login had 8 (no defaultMode, so every spawned session
+# ran in auto mode while m5's ran bypass). FLEET_KEEP_AGENTS_KEY=1 (env or
+# fleet.settings) leaves leftArrowOpensAgents to the login.
+_dj="$(dirname "$0")/../conf/claude-settings.default.json"
+if [ -f "$_hm" ] && [ -f "$_dj" ] && command -v python3 >/dev/null 2>&1; then
   _kcfg="${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"
   _kkeep="${FLEET_KEEP_AGENTS_KEY:-$(_gconf_val FLEET_KEEP_AGENTS_KEY)}"
-  if [ "$_kkeep" = 1 ]; then _kout="$(python3 "$_hm" keys-check --keys "$_kj" --config "$_kcfg" --skip leftArrowOpensAgents 2>&1)"; _krc=$?
-  else _kout="$(python3 "$_hm" keys-check --keys "$_kj" --config "$_kcfg" 2>&1)"; _krc=$?; fi
-  if [ "$_krc" = 0 ]; then
-    pass setkeys "${_kout#ok }"
+  _kskip=''; [ "$_kkeep" = 1 ] && _kskip='--skip leftArrowOpensAgents'
+  # shellcheck disable=SC2086  # $_kskip is two words or none
+  _sout="$(python3 "$_hm" defaults-check --defaults "$_dj" --settings "$settings" --config "$_kcfg" $_kskip 2>&1)"; _src=$?
+  if [ "$_src" = 0 ]; then
+    pass settings "${_sout#ok } (conf/claude-settings.default.json)"
   else
-    warn setkeys "$_kcfg off — $(printf '%s' "$_kout" | awk '{print $1, $2, $3, $4}' | paste -sd ';' - | sed 's/;/; /g') (fix: python3 $_hm keys; keep ← for agents with FLEET_KEEP_AGENTS_KEY=1)"
+    warn settings "$(printf '%s\n' "$_sout" | head -1) — $(printf '%s\n' "$_sout" | sed '1d; s/  */ /g' | paste -sd ';' - | sed 's/;/; /g') (fix: a missing key is filled by the next sync, or now: python3 $_hm defaults; a differing key is this login's — keep it by listing it in $(dirname "$settings")/settings.fleet-override.json, or delete it to take the default)"
   fi
 fi
 
