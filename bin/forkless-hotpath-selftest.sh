@@ -102,8 +102,9 @@ RED='' YELLOW='' GREEN='' DIM=''
 for c in '1.57 10 0.2' '9.00 10 0.9' '0.04 4 0.0' '12.5 4 3.1' '0.995 1 1.0' '3 2 1.5' '1.5 0 –' 'x 4 –' ' 4 –'; do
   set -- $c
   [ $# -eq 2 ] && set -- '' "$1" "$2"
+  status_load "$1" "$2"
   # shellcheck disable=SC2154  # _sl: status_load's result
-  status_load "$1" "$2"; eq "status_load $1 / $2 cores" "$3" "$_sl"
+  eq "status_load $1 / $2 cores" "$3" "$_sl"
 done
 
 # ================================================================ BUDGET shims

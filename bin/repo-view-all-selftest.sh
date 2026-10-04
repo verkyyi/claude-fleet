@@ -118,8 +118,9 @@ eq    "A: ctrl-z on the dash is repo-add (#1103), not pick" "$(bash "$BIN/dash-k
 BARCONF="$ROOT/conf/tmux-bar.conf"   # the bar's own file since issue #1534
 NEW_SL=$(sed -n 's/^set -g status-left "\(.*\)"$/\1/p' "$BARCONF")
 CHECKS=$((CHECKS+1)); [ -n "$NEW_SL" ] || fail "B: could not read status-left from $BARCONF"
+. "$BIN/fleet-palette.sh"; fleet_palette_load; fleet_palette_expand "$NEW_SL"
 # shellcheck disable=SC2154  # _fpe: fleet_palette_expand's result
-. "$BIN/fleet-palette.sh"; fleet_palette_load; fleet_palette_expand "$NEW_SL"; NEW_SL=$_fpe
+NEW_SL=$_fpe
 render() { tmux display-message -p -t alpha:plan "$1" | sed 's/#\[[^]]*\]//g'; }
 tmux set -gu @fleet_repo_label
 tmux set -g @login op-login
