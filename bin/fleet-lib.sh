@@ -4074,7 +4074,8 @@ _fleet_hub_node() {
   local u="${1:-}" k="${2:-}" f="$FLEET_CONF_DIR/control/hub-workers.tsv" ttl m tmp hits
   [ "${CCQUOTA_FLEET:-0}" = 1 ] || return 1
   ttl="${FLEET_HUB_CACHE_SECS:-30}"; case "$ttl" in ''|*[!0-9]*) ttl=30 ;; esac
-  m=$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null) || m=0
+  # GNU stat FIRST: `stat -f %m` on GNU means "filesystem status" and exits 0.
+  m=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null) || m=0
   if [ $(( $(date +%s) - ${m:-0} )) -gt "$ttl" ]; then
     if [ -n "${FLEET_HUB_STATUS_CMD:-}" ] && mkdir -p "${f%/*}" 2>/dev/null \
        && tmp=$(mktemp "$f.XXXXXX" 2>/dev/null); then
