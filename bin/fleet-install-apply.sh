@@ -199,8 +199,7 @@ head=$(git -C "$ROOT" rev-parse HEAD)
 [ "$to" = "$head" ] || { printf 'fleet-install-apply: --to %s is not the install HEAD %s — move the install first\n' "${to:0:7}" "${head:0:7}" >&2; exit 2; }
 
 CDIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-AGENTS="${FLEET_LAUNCHD_AGENTS_DIR:-$HOME/Library/LaunchAgents}"
-DDIR="${FLEET_INSTALL_DAEMON_DIR:-/Library/LaunchDaemons}"
+AGENTS=$(fleet_daemon_agents_dir)   # the lib's dirs (#1495); the system one is only ever reached through fleet_daemon_plist
 SDIR="${FLEET_SYSTEMD_USER_DIR:-$HOME/.config/systemd/user}"
 LAUNCHCTL="${FLEET_INSTALL_LAUNCHCTL:-launchctl}"
 SYSTEMCTL="${FLEET_INSTALL_SYSTEMCTL:-systemctl}"
