@@ -278,7 +278,13 @@ line never change with focus — only the colour moves.
 Clicking the top border itself requires tmux 3.7 or newer; on older versions,
 click inside the sidebar or use `prefix E` to focus it.
 `prefix e` saves the on/off preference as `FLEET_SIDEBAR`;
-`FLEET_SIDEBAR_WIDTH` sets the width (24–60). Closing the task you are on lands
+`FLEET_SIDEBAR_WIDTH` sets the width (24–60) — the floor: the list widens to
+its longest row up to `FLEET_SIDEBAR_WIDTH_MAX` (44; set it to the width to pin
+the list), and a drag of the divider sets the width from then on (the session's
+`@sidebar_width_manual`; `tmux set -u -t <session>: @sidebar_width_manual` goes
+back to auto). Whichever applies is held: when a window takes a narrower
+client's size tmux scales every pane, and the list snaps back on the spot
+rather than sitting where the scale left it. Closing the task you are on lands
 on its neighbour in the sidebar rather than the hub (`FLEET_CLOSE_LANDS_NEXT=0`
 turns that off).
 Below sidebar width + 81 columns (111 by default), the list hides automatically

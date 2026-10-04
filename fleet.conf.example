@@ -1268,7 +1268,10 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # Sidebar width in terminal cells (clamped to 24–60) — the FLOOR since issue
 # #1328: the sidebar widens itself to fit its longest row, up to
 # FLEET_SIDEBAR_WIDTH_MAX, never past a quarter of the window nor into the
-# worker's 80 columns. Drag it by hand and it keeps your width from then on.
+# worker's 80 columns. Drag it by hand and it keeps your width from then on
+# (the session's @sidebar_width_manual; unset it to go back to auto). Either
+# width is HELD (issue #1521): a window that takes a narrower client's size
+# scales every pane, and the sidebar snaps back rather than staying scaled.
 # Narrow screens hide the sidebar without changing the saved on/off preference.
 # @label=Task sidebar width @group=status @tier=advanced @scope=fleet @edit=int @unit=columns
 #FLEET_SIDEBAR_WIDTH=30
