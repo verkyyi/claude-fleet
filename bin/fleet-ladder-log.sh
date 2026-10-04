@@ -6,7 +6,7 @@
 # logs/handoff-cycle.log, but an in-place compaction (#1269) left no record at all
 # — it lived only on tmux options that the next step overwrites, so the only way
 # to know a session had been compacted was to read its transcript. This ledger is
-# that record: seven steps, each written by the one script that performs it.
+# that record: eight steps, each written by the one script that performs it.
 #
 #   prep              bin/set-claude-state.sh   Stop blocked: write the recovery map
 #   compacting        bin/fleet-compact-send.sh `/compact …` typed into the pane
@@ -22,6 +22,10 @@
 #                                               is about to run — reason `<trigger> saved`
 #                                               (map written: 已提前存档), `kept` (the
 #                                               prep map is newer), `no-map` (hub) (#1321)
+#   resumed           bin/fleet-compact-resume.sh the turn after a FLEET compaction was
+#                                               submitted — reason `mod` / `send-keys`, or
+#                                               `skip:<why>` (dup, stage, codex, transfer,
+#                                               needs, operator, typing) (#1441)
 #
 # Usage:
 #   fleet-ladder-log.sh <step> [--pane P] [--socket S] [--ctx N] [--count N] [--reason TEXT]
@@ -78,7 +82,7 @@ fi
 
 STEP="${1:-}"
 case "$STEP" in
-  prep|compacting|restored|handoff-nudge|handoff-complete|hub-warn|native-precompact) shift ;;
+  prep|compacting|restored|resumed|handoff-nudge|handoff-complete|hub-warn|native-precompact) shift ;;
   *) exit 0 ;;
 esac
 PANE="${TMUX_PANE:-}" SOCKET='' CTX='' COUNT='' REASON=''

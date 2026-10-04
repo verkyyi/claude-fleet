@@ -3,6 +3,7 @@
   "description": "claude-fleet's Claude Code surface: the fleet slash commands, the base skills they delegate to, and the session-state + guard hooks.",
   "commands": [
     "./commands/fleet-claim.md",
+    "./commands/fleet-compact-resume.md",
     "./commands/fleet-context.md",
     "./commands/fleet-epic-plan.md",
     "./commands/fleet-epic-report.md",

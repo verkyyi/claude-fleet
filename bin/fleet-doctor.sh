@@ -2102,7 +2102,26 @@ ltop=$(printf '%s\n' "$lwin" | awk -F '\t' '$1 ~ /^[0-9]+$/ && ($1 + 0) > best {
         split(row, f, "\t")
         st = (f[3] == "1") ? "handoff-nudge" : (f[4] != "" ? f[4] : "—")
         printf "%s:%s %s%% @ %s, 压过 %d 次", f[2], f[6], f[1], st, f[5] + 0 }')
-pass context "${lmsg}${ltop:+ · 当前最高 ${ltop}}"
+# A fleet compaction nobody resumed (issue #1441): a `restored fleet` row older than
+# 5 minutes with no `resumed` row for that pane after it — the session sat idle
+# after /compact. Only rows newer than the ledger's first `resumed` row count, so a
+# log written before the resume sender existed does not WARN for a day.
+lstuck=''
+if [ "${FLEET_COMPACT_RESUME:-1}" != 0 ]; then
+  lstuck=$(awk -F '\t' -v cut=$(( $(date +%s) - 86400 )) -v old=$(( $(date +%s) - 300 )) '
+    /^#/ || $1 !~ /^[0-9]+$/ { next }
+    $3 == "resumed" { if (first == "") first = $1; last[$4 SUBSEP $5] = $1; next }
+    $3 == "restored" && $9 == "fleet" && $1 >= cut && $1 <= old { n++; ep[n] = $1; key[n] = $4 SUBSEP $5; who[n] = $4 ":" $6 }
+    END { if (first == "") exit
+          for (i = 1; i <= n; i++) if (ep[i] >= first && !((key[i]) in last && last[key[i]] >= ep[i])) { c++; w = who[i] }
+          if (c) printf "%d %s", c, w }
+  ' "$lf" 2>/dev/null)
+fi
+if [ -n "$lstuck" ]; then
+  warn context "${lmsg} · ${lstuck%% *} 次压缩后没有续跑（最近 ${lstuck#* }）— 见 context-ladder.log 的 resumed 行 / FLEET_COMPACT_RESUME"
+else
+  pass context "${lmsg}${ltop:+ · 当前最高 ${ltop}}"
+fi
 
 # --- mod: the in-session fleet extension, per Claude window (issue #1335) --------
 # bin/fleet-claude.sh loads mod/fleet/ into every Claude session it opens while

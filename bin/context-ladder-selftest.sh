@@ -6,7 +6,8 @@
 #   PREP        a Stop in the compact-prep band (set-claude-state.sh) → `prep`
 #   COMPACTING  the next clean Stop spawns fleet-compact-send.sh → `compacting`
 #   RESTORED    SessionStart(compact) (refocus-hook.sh) → `restored` reason
-#               `fleet` with the bumped count; a compaction the fleet did NOT
+#               `fleet` with the bumped count and ctx `-` (the pane's @ctx_pct is
+#               still the pre-compaction reading, #1441); a compaction the fleet did NOT
 #               start (Claude Code's own auto-compact) → `restored` reason `auto`
 #   NUDGE       a Stop at/over the handoff % → `handoff-nudge` reason `pct`; past
 #               FLEET_COMPACT_MAX at the prep line → reason `cap` (#1316)
@@ -18,7 +19,8 @@
 #   ROTATION    over FLEET_LADDER_LOG_MAX_BYTES the ladder log is cut to the newest
 #               rows filling half the cap (header kept) — and handoff-cycle.log gets the SAME cap
 #   DOCTOR      empty/missing log ⇒ PASS 「近 24h 无」; populated ⇒ PASS with the
-#               24h counts (a >24h row excluded); the doctor never writes the log
+#               24h counts (a >24h row excluded); the doctor never writes the log;
+#               a fleet restore with no `resumed` row 5 min on ⇒ WARN (#1441)
 # No real tmux server, no gh, no live Claude.
 set -uo pipefail
 
@@ -141,10 +143,10 @@ ok "COMPACTING: fleet-compact-send.sh writes the compacting row as it types /com
 # ---- RESTORED (fleet, then auto) ----------------------------------------------
 compact_start
 [ "$(getopt @compact_count)" = 1 ] || fail "RESTORED: count not bumped" "$OUT"
-expect 3 restored 75 1 fleet
+expect 3 restored - 1 fleet
 reset '@ctx_pct=31' '@compact_count=1'
 compact_start
-expect 4 restored 31 1 auto
+expect 4 restored - 1 auto
 ok "RESTORED: SessionStart(compact) logs fleet (count bumped) and Claude's own auto-compact"
 
 # ---- NUDGE (pct, then cap) -----------------------------------------------------
@@ -224,5 +226,25 @@ case "$line" in *PASS*'近 24h 压缩 2 次（发起 1）、交接 1 次（提�
 line=$(doctor FLEET_HANDOFF_LOG_DIR="$WORK/nowhere")
 case "$line" in *PASS*'近 24h 无'*) : ;; *) fail "DOCTOR: FLEET_HANDOFF_LOG_DIR must steer the read" "$line" ;; esac
 ok "DOCTOR: context row PASSes — 「近 24h 无」 when empty, 24h counts when not, read-only"
+
+# ---- DOCTOR: a fleet compaction nobody resumed WARNs (issue #1441) --------------
+{ printf '# epoch\ttime\tstep\tsession\tpane\twindow\tctx_pct\tcount\treason\n'
+  printf '%s\tt\trestored\ts1\t%%9\tw9\t-\t1\tfleet\n' $(( now - 3000 ))
+  printf '%s\tt\tresumed\ts1\t%%9\tw9\t30\t1\tmod\n' $(( now - 2990 ))
+  printf '%s\tt\trestored\ts1\t%%7\tw7\t-\t1\tfleet\n' $(( now - 900 ))
+  printf '%s\tt\trestored\ts1\t%%8\tw8\t-\t1\tauto\n' $(( now - 900 ))
+} > "$D/logs/context-ladder.log"
+line=$(doctor)
+case "$line" in *WARN*'1 次压缩后没有续跑'*'s1:w7'*) : ;;
+  *) fail "DOCTOR: a fleet restore with no resumed row after 5 min must WARN (auto restores never)" "$line" ;; esac
+line=$(doctor FLEET_COMPACT_RESUME=0)
+case "$line" in *PASS*) : ;; *) fail "DOCTOR: FLEET_COMPACT_RESUME=0 must not WARN" "$line" ;; esac
+printf '%s\tt\tresumed\ts1\t%%7\tw7\t30\t1\tskip:operator\n' $(( now - 890 )) >> "$D/logs/context-ladder.log"
+line=$(doctor)
+case "$line" in *PASS*) : ;; *) fail "DOCTOR: a resumed row (even a skip) settles the restore" "$line" ;; esac
+grep -v resumed "$D/logs/context-ladder.log" > "$D/logs/x" && mv "$D/logs/x" "$D/logs/context-ladder.log"
+line=$(doctor)
+case "$line" in *PASS*) : ;; *) fail "DOCTOR: a ledger with no resumed row yet (pre-#1441) must not WARN" "$line" ;; esac
+ok "DOCTOR: an unresumed fleet compaction WARNs; resumed / off / pre-#1441 ledger PASS"
 
 printf 'context-ladder-selftest: all legs PASS\n'
