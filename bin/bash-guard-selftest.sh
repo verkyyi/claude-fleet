@@ -3,6 +3,7 @@
 # last-line-of-defense PreToolUse hooks shipped in hooks/ (issue #355):
 #
 #   hooks/bash-guard.py         — a GENERIC Bash deny-list (rm -rf on / ~ .git;
+#                                 a pkill/killall loose enough to hit other sessions;
 #                                 a force-push onto the base branch), with a
 #                                 personal overlay it runs if present.
 #   hooks/base-readonly-guard.py — deny Edit/Write/NotebookEdit into the fleet's
@@ -395,6 +396,31 @@ art_json() { printf '{"tool_name":"Artifact","tool_input":%s}' "$1"; }
 ( fails=0; export FLEET_ALLOW_ARTIFACT=1
   assert_exit 0 "FLEET_ALLOW_ARTIFACT=1 → publish allowed" "$ARTGUARD" "$(art_json '{"action":"publish","file_path":"/tmp/r.html"}')"
   exit $fails ); rc=$?; fails=$((fails + rc))
+
+# BLOCK: a pkill/killall loose enough to take down OTHER sessions' processes. The
+# 2026-10-03 incident: `pkill -f "cat" -P $$` — BSD pkill reads `-P $$` after the
+# pattern as two more patterns, and `cat` matched 16 worker pane shells.
+assert_exit 2 "pkill option after pattern" "$GUARD" "$(bash_json "$(jstr 'pkill -f "cat" -P $$')")"
+assert_exit 2 "pkill cat -P (no -f)"       "$GUARD" "$(bash_json "$(jstr 'pkill cat -P 123')")"
+assert_exit 2 "pkill -f short pattern"     "$GUARD" "$(bash_json "$(jstr 'pkill -f claude')")"
+assert_exit 2 "pkill --full short"         "$GUARD" "$(bash_json "$(jstr 'pkill --full sleep')")"
+assert_exit 2 "pkill -f -U <me> narrows nothing" "$GUARD" "$(bash_json "$(jstr 'pkill -U 501 -f zsh')")"
+assert_exit 2 "pkill two patterns"         "$GUARD" "$(bash_json "$(jstr 'pkill -f foo-long-one bar')")"
+assert_exit 2 "sudo pkill -f tmux"         "$GUARD" "$(bash_json "$(jstr 'sudo pkill -f tmux')")"
+assert_exit 2 "pkill -HUP -f zsh"          "$GUARD" "$(bash_json "$(jstr 'pkill -HUP -f zsh')")"
+assert_exit 2 "killall zsh"                "$GUARD" "$(bash_json "$(jstr 'killall zsh')")"
+assert_exit 2 "killall -9 claude"          "$GUARD" "$(bash_json "$(jstr 'killall -9 claude')")"
+assert_exit 2 "killall -m regex"           "$GUARD" "$(bash_json "$(jstr 'killall -m cla')")"
+# ALLOW: options first + a scope, a specific -f pattern, exact names, non-commands
+assert_exit 0 "pkill -P \$\$ -f cat"        "$GUARD" "$(bash_json "$(jstr 'pkill -P $$ -f cat')")"
+assert_exit 0 "pkill -P\$\$ cat (glued)"    "$GUARD" "$(bash_json "$(jstr 'pkill -P$$ cat')")"
+assert_exit 0 "pkill -INT -P 99 sleep"     "$GUARD" "$(bash_json "$(jstr 'pkill -INT -P 99 sleep')")"
+assert_exit 0 "pkill -f specific"          "$GUARD" "$(bash_json "$(jstr 'pkill -9 -f "python3 -m http.server 8765"')")"
+assert_exit 0 "pkill -x name"              "$GUARD" "$(bash_json "$(jstr 'pkill -x mything')")"
+assert_exit 0 "killall Finder"             "$GUARD" "$(bash_json "$(jstr 'killall Finder')")"
+assert_exit 0 "pkill inside a message"     "$GUARD" "$(bash_json "$(jstr 'git commit -m "pkill -f cat"')")"
+assert_exit 0 "kill <pid>"                 "$GUARD" "$(bash_json "$(jstr 'kill 1234')")"
+assert_exit 0 "FLEET_ALLOW_BROAD_PKILL=1"  "$GUARD" "$(bash_json "$(jstr 'FLEET_ALLOW_BROAD_PKILL=1 pkill -f cat')")"
 
 if [ "$fails" -ne 0 ]; then
   printf '\nbash-guard-selftest: %s case(s) FAILED\n' "$fails" >&2
