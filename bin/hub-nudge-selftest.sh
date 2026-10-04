@@ -161,6 +161,11 @@ def body(state):
 class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def do_GET(self):
+        # only fleet_sessions is modelled: the same round also asks /v1/nodes and
+        # /v1/limits (the status bar's summaries, #1482), which this hub does not
+        # serve — a 404 keeps them out of the log the legs read by line
+        if self.path.split("?", 1)[0] != "/v1/fleet/fleet_sessions":
+            self.send_response(404); self.end_headers(); return
         with open(os.path.join(work, "hub.mode")) as f:
             mode = f.read().strip()          # "<etag> <state>" or "noetag <state>"
         tag, state = mode.split(" ", 1)
