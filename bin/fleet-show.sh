@@ -181,11 +181,11 @@ else tmux set-option -u -t "$sess" lock-command 2>/dev/null; fi
 # Wait for the sender's `done` — generous for the size (a slow SSH link drains it).
 limit=$(( 20 + total / 100000 ))
 waited=0
-while ! grep -qx done "$status" 2>/dev/null; do
+while ! grep -qx 'done' "$status" 2>/dev/null; do
   [ "$waited" -ge $(( limit * 5 )) ] && break
   sleep 0.2; waited=$(( waited + 1 ))
 done
-grep -qx done "$status" 2>/dev/null || degrade "the client did not finish sending within ${limit}s (status: $(tr '\n' ' ' < "$status"))"
+grep -qx 'done' "$status" 2>/dev/null || degrade "the client did not finish sending within ${limit}s (status: $(tr '\n' ' ' < "$status"))"
 
 if [ "$inline" = 1 ]; then where='drawn on the operator'"'"'s screen (held until they press a key)'
 else where="offered as a download — lands in the operator's ~/Downloads once they accept iTerm2's prompt"; fi
