@@ -307,7 +307,8 @@ rm -f "$G/hubsess.etag" "$G/hubsess.pid"
 python3 "$WORK/hub2.py" "$WORK" & SRV_PID=$!
 for _ in $(seq 1 300); do [ -s "$WORK/hub2.port" ] && break; kill -0 "$SRV_PID" 2>/dev/null || break; sleep 0.1; done
 [ -s "$WORK/hub2.port" ] || fail "F: the loopback hub did not start"
-export CCQUOTA_HUB_URL="http://127.0.0.1:$(cat "$WORK/hub2.port")" FLEET_HUB_SESSIONS_WAIT=3
+hubport=$(cat "$WORK/hub2.port")
+export CCQUOTA_HUB_URL="http://127.0.0.1:$hubport" FLEET_HUB_SESSIONS_WAIT=3
 nget() { grep -c '^GET' "$WORK/hub2.log" 2>/dev/null || echo 0; }
 
 # a bare --refresh never long-polls, validator or not
