@@ -33,17 +33,28 @@
 # a few MB. The previous lock-command is restored right after the lock is issued
 # (the server hands the string over at lock time). One send per session at a time.
 #
-# WHICH client: those attached to THIS pane's session whose `#{client_termtype}`
-# (tmux's XTVERSION read of the real terminal, e.g. `iTerm2 3.6.10`) matches
-# FLEET_SHOW_TERM_RE, most recent `#{client_activity}` first. `--client <tty>`
-# names one outright and skips the match.
+# WHICH client: the one the operator is USING — the most recent `#{client_activity}`
+# of this pane's session. Its `#{client_termtype}` (tmux's XTVERSION read of the
+# real terminal, e.g. `iTerm2 3.6.10`) must match FLEET_SHOW_TERM_RE, else it
+# degrades (issue #1371): the old rule — newest client that IS iTerm2 — sent the
+# file to a stale iTerm2 still attached at home while the operator read the fleet
+# from a phone over SSH. An empty termtype (tmux < 3.4, or a terminal that never
+# answered XTVERSION) degrades too. `--client <tty>` names one outright and skips
+# the match.
 #
-# `--inline` holds the plain screen after drawing until the operator presses a key
-# (FLEET_SHOW_HOLD_SECS, default 120) — otherwise tmux's repaint would erase it.
+# `--inline` (issue #1371) clears the screen and lays it out: a title row
+# (name · size · pixels), the image scaled to fit and centered — from the client's
+# `#{client_width}x#{client_height}` cells and `#{client_cell_width}x
+# #{client_cell_height}` pixels; top-left at its own size when either is unknown —
+# and a footer counting down FLEET_SHOW_HOLD_SECS (default 30): any key returns to
+# tmux, `d` also sends it as a download. A non-image (PDF, text…) is sent as a
+# download instead — iTerm2 cannot draw it — and its SENT line says so. The screen
+# text is fixed Chinese. See bin/fleet-show-send.py.
 #
-# DEGRADE, never fail silently: no iTerm2 client, no tmux, FLEET_SHOW=0, a file
-# over FLEET_SHOW_MAX_BYTES, a client that never finished → print the path and the reason, and
-# exit 2, so the agent tells the operator where the file is instead.
+# DEGRADE, never fail silently: the active client is not iTerm2, no tmux,
+# FLEET_SHOW=0, a file over FLEET_SHOW_MAX_BYTES, a client that never finished →
+# print the path and the reason, and exit 2, so the agent tells the operator where
+# the file is instead.
 #
 # Exit: 0 sent to a client (one `SENT` line per file) · 2 degraded (one `PATH`
 # line per file + why) · 1 usage / missing file.
@@ -53,7 +64,7 @@
 #   FLEET_SHOW_MAX_BYTES=20971520 the cap per file (20 MB)
 #   FLEET_SHOW_TERM_RE='^iTerm2'  ERE a client's #{client_termtype} must match
 #   FLEET_SHOW_PART_BYTES=768     base64 bytes per FilePart
-#   FLEET_SHOW_HOLD_SECS=120      --inline: how long the drawn screen waits for a key
+#   FLEET_SHOW_HOLD_SECS=30       --inline: how long each drawn screen waits for a key
 #   FLEET_SHOW_OUT                (selftests) where the sender writes instead of /dev/tty
 set -uo pipefail
 
@@ -124,17 +135,24 @@ PY="$(command -v python3)"
 sess=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{session_name}' 2>/dev/null)
 [ -n "$sess" ] || degrade 'cannot resolve this pane'"'"'s tmux session'
 termtype=""
-rows=$(tmux list-clients -t "$sess" -F '#{client_activity}	#{client_tty}	#{client_termtype}' 2>/dev/null)
+# activity <TAB> tty <TAB> termtype <TAB> cols,rows,cell-w,cell-h
+rows=$(tmux list-clients -t "$sess" -F '#{client_activity}	#{client_tty}	#{client_termtype}	#{client_width},#{client_height},#{client_cell_width},#{client_cell_height}' 2>/dev/null)
 if [ -n "$client" ]; then
-  pick=$(printf '%s\n' "$rows" | awk -F '\t' -v c="$client" '$2 == c { print $2 "\t" $3; exit }')
+  pick=$(printf '%s\n' "$rows" | awk -F '\t' -v c="$client" '$2 == c { print $2 "\t" $3 "\t" $4; exit }')
   [ -n "$pick" ] || degrade "$client is not a client of session '$sess'"
 else
-  # activity <TAB> tty <TAB> termtype — newest first, first match wins.
-  pick=$(printf '%s\n' "$rows" | sort -t '	' -k1,1nr \
-    | awk -F '\t' -v re="$TERM_RE" '$3 ~ re { print $2 "\t" $3; exit }')
-  [ -n "$pick" ] || degrade "no client of session '$sess' is a terminal matching /$TERM_RE/ (iTerm2 attached?)"
+  # The newest client is the one the operator is at — it must BE iTerm2 (#1371).
+  pick=$(printf '%s\n' "$rows" | awk -F '\t' 'NF >= 2' | sort -t '	' -k1,1nr | head -n 1 \
+    | awk -F '\t' '{ print $2 "\t" $3 "\t" $4 }')
+  [ -n "$pick" ] || degrade "no client is attached to session '$sess'"
+  _tty="${pick%%	*}"; _tt="${pick#*	}"; _tt="${_tt%%	*}"
+  [ -n "$_tt" ] || degrade "当前活跃 client ${_tty} 的终端类型未知（tmux < 3.4，或终端没回应 XTVERSION），不是 iTerm2"
+  printf '%s\n' "$_tt" | grep -Eq -- "$TERM_RE" \
+    || degrade "当前活跃 client ${_tty} 是 ${_tt}，不是 iTerm2（/${TERM_RE}/）"
 fi
-client="${pick%%	*}"; termtype="${pick#*	}"
+client="${pick%%	*}"; termtype="${pick#*	}"; geom="${termtype#*	}"; termtype="${termtype%%	*}"
+[ "$geom" != "$termtype" ] || geom=""
+case "$geom" in *[!0-9,]*|'') geom="0,0,0,0" ;; esac
 
 # ---- what goes, what is too big ---------------------------------------------------
 send=(); total=0; rc=0
@@ -164,7 +182,8 @@ trap 'rm -rf "$job"; rmdir "$lockdir" 2>/dev/null' EXIT
 status="$job/status"; : > "$status"
 
 cmd="exec $(sq "$PY") $(sq "$BIN/fleet-show-send.py") --out $(sq "${FLEET_SHOW_OUT:-/dev/tty}") --status $(sq "$status") --part $PART"
-[ "$inline" = 1 ] && cmd="$cmd --inline --wait-key ${FLEET_SHOW_HOLD_SECS:-120}"
+HOLD="${FLEET_SHOW_HOLD_SECS:-30}"; case "$HOLD" in ''|*[!0-9]*) HOLD=30 ;; esac
+[ "$inline" = 1 ] && cmd="$cmd --inline --wait-key $HOLD --geom $geom"
 [ "$single" = 1 ] && cmd="$cmd --single"
 for f in ${send[@]+"${send[@]}"}; do cmd="$cmd $(sq "$f")"; done
 
@@ -180,6 +199,8 @@ else tmux set-option -u -t "$sess" lock-command 2>/dev/null; fi
 
 # Wait for the sender's `done` — generous for the size (a slow SSH link drains it).
 limit=$(( 20 + total / 100000 ))
+# --inline with several images: every screen but the last is held before `done`.
+[ "$inline" = 1 ] && limit=$(( limit + HOLD * (${#send[@]} - 1) ))
 waited=0
 while ! grep -qx 'done' "$status" 2>/dev/null; do
   [ "$waited" -ge $(( limit * 5 )) ] && break
@@ -187,11 +208,14 @@ while ! grep -qx 'done' "$status" 2>/dev/null; do
 done
 grep -qx 'done' "$status" 2>/dev/null || degrade "the client did not finish sending within ${limit}s (status: $(tr '\n' ' ' < "$status"))"
 
-if [ "$inline" = 1 ]; then where='drawn on the operator'"'"'s screen (held until they press a key)'
-else where="offered as a download — lands in the operator's ~/Downloads once they accept iTerm2's prompt"; fi
+dlwhere="offered as a download — lands in the operator's ~/Downloads once they accept iTerm2's prompt"
+if [ "$inline" = 1 ]; then where="drawn centered on the operator's screen (held until a key, ${HOLD}s at most)"
+else where="$dlwhere"; fi
 while IFS='	' read -r verdict detail name; do
   case "$verdict" in
     ok)  printf 'SENT %s (%s bytes) → %s%s: %s\n' "$name" "$detail" "$client" "${termtype:+ [$termtype]}" "$where" ;;
+    dl)  printf 'SENT %s (%s bytes) → %s%s: not an image iTerm2 can draw — %s\n' "$name" "$detail" "$client" "${termtype:+ [$termtype]}" "$dlwhere" ;;
+    dl+) printf 'SENT %s → the operator pressed d: also %s\n' "$name" "$dlwhere" ;;
     err) printf 'fleet-show: %s: %s\n' "$name" "$detail" >&2
          for f in ${send[@]+"${send[@]}"}; do [ "$(basename "$f")" = "$name" ] && printf 'PATH %s\n' "$f"; done
          rc=2 ;;
