@@ -20,6 +20,15 @@ ARG TARGETOS
 ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
     go build -ldflags "-s -w -X main.Version=${VERSION}" -o /out/ccquota ./cmd/ccquota
+# The agent binaries a joining machine downloads from this hub
+# (/v1/node/dist/<os>-<arch>, claude-fleet#1418) — there are no tagged releases,
+# and `go install` on a fresh SPOT box means installing Go first. Pure Go, so
+# each is a cross-compile, not an emulated build. DIST_TARGETS="" skips them.
+ARG DIST_TARGETS="darwin/arm64 darwin/amd64 linux/amd64 linux/arm64"
+RUN mkdir -p /out/dist && for t in $DIST_TARGETS; do \
+      CGO_ENABLED=0 GOOS=${t%/*} GOARCH=${t#*/} \
+      go build -ldflags "-s -w -X main.Version=${VERSION}" -o /out/dist/ccquota-${t%/*}-${t#*/} ./cmd/ccquota || exit 1; \
+    done
 
 # Run
 FROM alpine:3.20
@@ -27,6 +36,8 @@ RUN apk add --no-cache ca-certificates tzdata \
  && adduser -D -u 10001 ccquota \
  && mkdir -p /data && chown ccquota /data
 COPY --from=build /out/ccquota /usr/local/bin/ccquota
+COPY --from=build /out/dist /usr/share/ccquota/dist
+ENV CCQUOTA_FLEET_DIST_DIR=/usr/share/ccquota/dist
 USER ccquota
 VOLUME /data
 EXPOSE 8787

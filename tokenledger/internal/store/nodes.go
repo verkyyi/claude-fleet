@@ -80,6 +80,10 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetLeases(); err != nil {
 		return err
 	}
+	// Join codes (claude-fleet#1418).
+	if err := s.ensureFleetJoin(); err != nil {
+		return err
+	}
 	// The relay audit (claude-fleet#1413).
 	return s.ensureFleetSSHRelays()
 }

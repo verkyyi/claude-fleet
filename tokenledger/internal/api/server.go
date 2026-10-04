@@ -154,6 +154,16 @@ type Server struct {
 	// FleetPublicURL is the hub's address as people know it
 	// (CCQUOTA_FLEET_PUBLIC_URL); empty means "as this request reached us".
 	FleetPublicURL string
+	// FleetDistDir holds the agent binaries a joining machine downloads,
+	// named ccquota-<os>-<arch> (CCQUOTA_FLEET_DIST_DIR, claude-fleet#1418).
+	// Empty: the hub serves none and the join script falls back to a local
+	// binary or `go install`.
+	FleetDistDir string
+	// FleetJoinScriptURL is where the join command fetches the script
+	// (CCQUOTA_FLEET_JOIN_SCRIPT_URL); empty means DefaultJoinScriptURL.
+	FleetJoinScriptURL string
+	// joinClock replaces the join-code clock in tests.
+	joinClock func() time.Time
 
 	// nodes holds the open node control channels.
 	nodes nodeConns
@@ -228,6 +238,13 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("/v1/node/move", s.handleNodeMove)
 		mux.HandleFunc("/v1/node/move/bundle", s.handleNodeMoveBundle)
 		mux.HandleFunc("/v1/node/move/bundle/", s.handleNodeMoveBundle)
+		// Adding a machine in one command (claude-fleet#1418): join trades a
+		// one-time code for an enrollment token; dist and self authenticate
+		// with that token.
+		mux.HandleFunc("/v1/node/join", s.handleNodeJoin)
+		mux.HandleFunc("/v1/node/dist/", s.handleNodeDist)
+		mux.HandleFunc("/v1/node/self", s.handleNodeSelf)
+		mux.Handle("/v1/fleet/join-codes", s.viewerOnly(s.operatorOnly(http.HandlerFunc(s.handleFleetJoinCodes))))
 		mux.Handle("/v1/nodes", s.viewerOnly(http.HandlerFunc(s.handleNodes)))
 		mux.Handle("/nodes", s.viewerOnly(http.HandlerFunc(s.serveNodesPage)))
 		mux.Handle("/v1/fleet/me", s.viewerOnly(http.HandlerFunc(s.handleFleetMe)))

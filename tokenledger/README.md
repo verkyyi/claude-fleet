@@ -580,6 +580,55 @@ idle, and nothing on the machine is touched. Every control message carries a
 `proto` version; a node whose version the hub does not accept stays listed
 (with its version) but is never sent a write.
 
+### A new machine in one command — join codes (claude-fleet#1418)
+
+The `/nodes` page has an **加一台机器** panel (the operator's; a WeCom session
+gets 403): one click mints a **join code** and prints the line to paste on the
+new machine, as the login that will run the fleet:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/verkyyi/claude-fleet/stable/bin/fleet-node-join.sh \
+  | bash -s -- --hub https://hub.example.com --token fj_…
+```
+
+**The code.** `fj_` + 26 lowercase base32 characters (130 random bits); only
+its SHA-256 is stored. It redeems **once**, within **10 minutes**, into one
+`agent` enrollment — the same thing `ccquota enroll` mints, so nothing the
+code buys is new: the admin role still needs the login in
+`CCQUOTA_FLEET_ADMIN_USERS`. Unknown, used and expired all answer the same 401.
+
+| Route | Auth | What |
+|---|---|---|
+| `POST /v1/fleet/join-codes` (`{label?}`) | operator (viewer token / tailnet; same-origin) | mint a code → `{code, expires_at, command}`; the code is shown this once |
+| `GET /v1/fleet/join-codes` | operator | the last 20: label, created, expiry, who redeemed into which endpoint — never a code |
+| `POST /v1/node/join` (`{code, hostname, os_user}`) | the code | redeem + enroll in one transaction → `{endpoint_id, label, token, hub, admin, ssh_ca, dist}` |
+| `GET /v1/node/dist/<darwin\|linux>-<amd64\|arm64>` | the new token | the agent binary, `X-Ccquota-Sha256` header |
+| `GET /v1/node/self` | the new token | this endpoint's roster row (`status: online\|lost`), or `never` |
+
+The join records the reported hostname / login on the endpoint, so the admin
+gate recognises the agent's very first connection (otherwise `os_user` stays
+empty until its first usage report, and the SSH CA would wait for a reconnect).
+
+**The binaries.** The Docker image cross-compiles darwin/linux × amd64/arm64
+into `/usr/share/ccquota/dist` and sets `CCQUOTA_FLEET_DIST_DIR` to it
+(`--build-arg DIST_TARGETS=` skips them). With no dist dir the script falls
+back to `--ccquota <file>`, a `ccquota` on PATH, or `go install`.
+
+**The script** (`bin/fleet-node-join.sh`, in the claude-fleet repo) redeems the
+code first — before anything slow can outlive it — then installs git / tmux /
+gh / python3 / zsh (apt / dnf / yum / apk as root or passwordless sudo;
+Homebrew on macOS), the agent (`~/.local/bin/ccquota`, settings and token in
+`~/.config/claude-fleet/node.env`, 0600), and runs it under launchd (a gui
+LaunchAgent, or a LaunchDaemon with `UserName` for an SSH-only login) or systemd
+(user unit + linger, or a system unit with `User=`) — detached, with a warning,
+where there is neither. `CCQUOTA_FLEET=1`, plus `CCQUOTA_FLEET_ADMIN=1` unless
+`--no-admin`: the admin agent then installs the hub's SSH user CA itself
+(see *Connection certificates* below). It waits until `/v1/node/self` reads
+online, then clones claude-fleet at `stable` and runs
+`fleet-login-bootstrap.sh`. A rerun reuses the saved registration and leaves a
+new code unspent. `CCQUOTA_FLEET_JOIN_SCRIPT_URL` changes the URL the printed
+command fetches.
+
 ### People and their logins — WeCom sign-in opens the account (claude-fleet#1411)
 
 With the fleet module on, a person signing in through WeCom (`/enter`) becomes
