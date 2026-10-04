@@ -354,8 +354,12 @@ try:
     # Enter / Escape fork nothing either (issue #1530): on an empty line they hand
     # the keyboard back and send the key straight to `{top-left}`, as ↑↓ do — the
     # binds AS LOADED, not only the file's spelling.
+    # (The whole list, filtered here: `list-keys -T <table> <key>` prints nothing
+    # for a table of no default keys on tmux 3.7.)
+    all_keys = tm('list-keys').splitlines()
     for key in ('Enter', 'Escape'):
-        bound = re.sub('["\']', '', tm('list-keys', '-T', 'fleet-sidebar', key))
+        bound = re.sub('["\']', '', next((l for l in all_keys if
+                                         re.match(r'bind-key\s+(-r\s+)?-T fleet-sidebar %s\s' % key, l)), ''))
         check('run-shell' not in bound and 'fleet-sidebar.sh' not in bound and
               bound.count('send-keys -t {top-left} ' + key) == 2,
               'the sidebar %s bind forks a shell again: %r' % (key, bound))
@@ -1600,6 +1604,14 @@ fake_now=114; stuck_check
     check(w1 in tm('list-windows', '-t', 'fleet-test', '-F', '#{window_id}').splitlines(),
           'sidebar cleanup closed an unrelated worker')
 
+    tm('set-option', '-g', '@popup_open', str(int(time.time())))
+    client.terminate()
+    client.wait(timeout=5)
+    wait_for(lambda: not views(), 'detach left sidebar refresh processes')
+    check(tm('show-options', '-gv', '@popup_open') == '0', 'sidebar detach hook displaced popup cleanup')
+    # (Last, after the detach: the detach hook's `#{session_id}` is whichever
+    # session tmux ranks first, and a slow leg just before it tipped that to the
+    # `adhoc` session above.)
     # The sidebar's one refresh (issue #1530): 10 windows over a 700-line
     # child-report ledger — the shape that took 4 s on a real machine — within
     # 300 ms (600 on CI), read off the producer's own `--time`. Its own server and
@@ -1658,12 +1670,6 @@ fake_now=114; stuck_check
     finally:
         subprocess.run([real_tmux, '-S', bsock, 'kill-server'], env=benv,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-    tm('set-option', '-g', '@popup_open', str(int(time.time())))
-    client.terminate()
-    client.wait(timeout=5)
-    wait_for(lambda: not views(), 'detach left sidebar refresh processes')
-    check(tm('show-options', '-gv', '@popup_open') == '0', 'sidebar detach hook displaced popup cleanup')
     print('selftest PASS: sidebar (%d checks), isolated tmux layout/input/lifecycle and shared rows' % checks)
 finally:
     cleanup()
