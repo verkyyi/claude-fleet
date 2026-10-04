@@ -1,4 +1,4 @@
-// The task-progress band (issue #1339). The test's own hooks stand for the
+// The task-progress band (issue #1339), down to the PR segment alone (#1527). The test's own hooks stand for the
 // engine and the machine: `process.run` answers the one tmux call from a
 // fixture (this window + list-windows), `fs.read` answers the dash's caches
 // from a map (a path not in it rejects, as a missing file does), `ui.toast`
@@ -19,8 +19,8 @@ const CONF = '/Users/me/.config/claude-fleet/fleets/fleet-x/children'
 
 type Win = { id: string; state: string; issue?: string; worktree?: string; origin?: string; loop?: string; name?: string }
 
-function selfLine(issue: string, worktree: string, ctx = '18'): string {
-  return ['S', 'fleet-x', '@1', issue, 'verkyyi/claude-fleet', '', worktree, worktree, ctx, 'me'].join('\t')
+function selfLine(issue: string, worktree: string): string {
+  return ['S', 'fleet-x', '@1', issue, 'verkyyi/claude-fleet', '', worktree, worktree, 'me'].join('\t')
 }
 function winLine(w: Win): string {
   return ['W', 'fleet-x', w.id, w.state, '', w.loop ?? '', w.issue ?? '', w.worktree ?? '', w.origin ?? '', w.worktree ?? '/x', w.name ?? 'w'].join('\t')
@@ -36,8 +36,6 @@ const KIDS: Win[] = [
 ]
 const FILES: Record<string, string> = {
   [`${DASH}/prmap`]: 'issue-1338\t#1359\tOPEN\t✗\t\t\nissue-1339\t#1360\tOPEN\t✓\tconflict\t\n',
-  [`${DASH}/parents`]: '1339\t1334\n1340\t1334\n1400\t1339\n',
-  [`${DASH}/labels`]: '1334\tepic\n1339\t\n',
   [`${CONF}/issue-1339.ndjson`]:
     '{"seq": 1, "ts": "2026-10-03T08:00:00Z", "child": "issue-1402", "state": "WAITING", "pr": "", "verdict": ""}\n' +
     '{"seq": 2, "ts": "2026-10-03T08:10:00Z", "child": "issue-1402", "state": "MERGED", "pr": "1410", "verdict": "merged"}\n',
@@ -51,7 +49,7 @@ function engineBand(on: On): void {
   })
 }
 
-function machine(on: On, opts: { self?: string; windows?: Win[]; files?: Record<string, string>; store?: Record<string, unknown> } = {}) {
+function machine(on: On, opts: { self?: string; windows?: Win[]; files?: Record<string, string> } = {}) {
   const files = { ...(opts.files ?? FILES) }
   const toasts: string[] = []
   const tmux = { self: opts.self ?? WORKER, windows: opts.windows ?? KIDS }
@@ -74,7 +72,6 @@ function machine(on: On, opts: { self?: string; windows?: Win[]; files?: Record<
   engineBand(on)
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   mock.env(on, { TMUX_PANE: '%7', TMPDIR: TMP, HOME: '/Users/me' })
-  mock.store(on, opts.store ?? { 'epicSeen:verkyyi/claude-fleet#1334': [1335, 1339, 1340] })
   const clock = mock.clock(on, { now: 1_000_000_000_000 })
   return { files, toasts, tmux, clock }
 }
@@ -90,15 +87,16 @@ async function drawn($: Engine, columns: number): Promise<string | undefined> {
   return text
 }
 
-const FULL = '#1339 · PR #1360 ✓ 冲突! · EPIC #1334 1/3 · 子任务 1/3 1! · 上下文 18%'
+const FULL = 'PR #1360 ✓ 冲突!'
 
-test('30 / 45 / 80 / 160 columns: the whole row, then EPIC, context, PR drop in that order', async ($, on) => {
+test('a worker draws its PR and nothing the corner or the sidebar already shows', async ($, on) => {
   machine(on)
   await $.session.start(START)
-  expect(await drawn($, 160)).toBe(FULL)
-  expect(await drawn($, 80)).toBe(FULL)
-  expect(await drawn($, 45)).toBe('#1339 · PR #1360 ✓ 冲突! · 子任务 1/3 1!')
-  expect(await drawn($, 30)).toBe('#1339 · 子任务 1/3 1!')
+  for (const cols of [160, 30]) {
+    const text = await drawn($, cols)
+    expect(text).toBe(FULL)
+    for (const gone of ['#1339 ·', 'EPIC', '子任务', '上下文']) expect(text).not.toContain(gone)
+  }
 })
 
 test('a band drawn before session.start redraws when the first refresh lands', async ($, on) => {
@@ -110,20 +108,19 @@ test('a band drawn before session.start redraws when the first refresh lands', a
   await ui.unmount()
 })
 
-test('the pure layout: drop order down to the task alone', () => {
+test('the pure band: PR state, checks and readiness; no PR → nothing', () => {
   const s: ProgressSnapshot = {
     issue: 1339,
     pr: { number: 1360, state: 'OPEN', ci: '✓', ready: 'ready' },
-    epic: { number: 1334, isEpic: true, done: 2, total: 6 },
-    children: null,
-    needsKids: [],
-    ctxPct: 42,
+    needsKids: ['issue-1400'],
   }
-  expect(bandText(s, 160)).toBe('#1339 · PR #1360 ✓ · EPIC #1334 2/6 · 上下文 42%')
-  expect(bandText(s, 40)).toBe('#1339 · PR #1360 ✓ · 上下文 42%')
-  expect(bandText(s, 20)).toBe('#1339 · PR #1360 ✓')
-  expect(bandText(s, 5)).toBe('#1339')
-  expect(segments({ ...s, epic: { ...s.epic!, isEpic: false } }).find(x => x.id === 'epic')?.text).toBe('父 #1334 2/6')
+  expect(bandText(s)).toBe('PR #1360 ✓')
+  expect(bandText({ ...s, pr: { ...s.pr!, ci: '✗' } })).toBe('PR #1360 ✗!')
+  expect(bandText({ ...s, pr: { ...s.pr!, ci: '…', ready: 'behind' } })).toBe('PR #1360 … 落后')
+  expect(bandText({ ...s, pr: { ...s.pr!, state: 'MERGED' } })).toBe('PR #1360 已合并')
+  expect(segments({ ...s, pr: { ...s.pr!, ready: 'conflict' } })[0]?.color).toBe('red')
+  expect(bandText({ ...s, pr: null })).toBe('')
+  expect(segments({ ...s, pr: null })).toEqual([])
 })
 
 test('a child at needs toasts once, stays quiet while it stands, re-arms once it clears', async ($, on) => {
@@ -157,15 +154,15 @@ test('the PR turning red toasts once; back to green and red again toasts again',
   expect(m.toasts).toEqual(['PR #1360 检查变红了', 'PR #1360 检查变红了'])
 })
 
-test('every cache missing: no error, only the segments still known', async ($, on) => {
+test('every cache missing: no error, nothing drawn', async ($, on) => {
   machine(on, { files: {}, windows: [] })
   await $.session.start(START)
-  expect(await drawn($, 160)).toBe('#1339 · 上下文 18%')
+  expect(await drawn($, 160)).toBeUndefined()
 })
 
-test('hub and scratch windows: only children and context', async ($, on) => {
+test('hub and scratch windows: no band, but a child at needs still toasts', async ($, on) => {
   const m = machine(on, {
-    self: selfLine('', '/Users/me', '7'),
+    self: selfLine('', '/Users/me'),
     windows: [
       { id: '@2', state: 'needs', issue: '1400' }, // hub-spawned: no @origin
       { id: '@3', state: 'done', issue: '1401' },
@@ -173,23 +170,25 @@ test('hub and scratch windows: only children and context', async ($, on) => {
     ],
   })
   await $.session.start(START)
-  expect(await drawn($, 160)).toBe('子任务 1/2 1! · 上下文 7%')
-  m.tmux.self = selfLine('', '/wt/claude-fleet-scratch-6', '9')
-  m.tmux.windows = [{ id: '@2', state: 'working', issue: '1500', origin: 'verkyyi-claude-fleet:scratch-6' }]
+  expect(await drawn($, 160)).toBeUndefined()
+  expect(m.toasts).toEqual(['子任务 #1400 需要你处理'])
+  m.tmux.self = selfLine('', '/wt/claude-fleet-scratch-6')
+  m.tmux.windows = [{ id: '@2', state: 'needs', issue: '1500', origin: 'verkyyi-claude-fleet:scratch-6' }]
   await m.clock.advance(PROGRESS_MS)
-  expect(await drawn($, 160)).toBe('子任务 0/1 · 上下文 9%')
+  expect(await drawn($, 160)).toBeUndefined()
+  expect(m.toasts).toEqual(['子任务 #1400 需要你处理', '子任务 #1500 需要你处理'])
 })
 
-test('a looping child is not done; a done one is', async ($, on) => {
-  machine(on, {
+test('a looping child is not done: it never toasts, a needs one does', async ($, on) => {
+  const m = machine(on, {
     files: {},
     windows: [
       { id: '@2', state: 'done', issue: '1400', origin: 'issue-1339', loop: 'next=2000000000' },
-      { id: '@3', state: 'done', issue: '1401', origin: 'issue-1339' },
+      { id: '@3', state: 'failed', issue: '1401', origin: 'issue-1339' },
     ],
   })
   await $.session.start(START)
-  expect(await drawn($, 160)).toBe('#1339 · 子任务 1/2 · 上下文 18%')
+  expect(m.toasts).toEqual(['子任务 #1401 需要你处理'])
 })
 
 test('outside tmux: nothing drawn, no tmux call', async ($, on) => {

@@ -71,7 +71,7 @@
 `left N` 就是还留在 m5 上的：看侧边栏/`/nodes` 它们是谁，等它们完成或让它们的主人 `/fleet-handoff`，再跑一次 evacuate。
 
 2026-10-04 演练学到的三件事（修掉之前照这里绕）：
-- **`--rebalance` 遇到第一个无处可去的会话就整体停**（#1513）：输出是 `REFUSED NO_ELIGIBLE_NODE … — stopping`、`moved 0`，后面能搬的也不搬了。这时**指定会话搬**：`fleet-move.sh <窗口号> --via hub --to m4`（先 `--dry-run`），一个个来。
+- ~~**`--rebalance` 遇到第一个无处可去的会话就整体停**~~（#1513，已修）：现在无处可去的会话（`REFUSED NO_ELIGIBLE_NODE` 等）各打一行 `↷ <窗口名> (<wid>): <原因>` 跳过，接着搬下一个；只有「本机就是最佳」(`LOCAL`) 和入口问不通才停。汇总行是 `fleet-move: rebalance moved N · skipped M · left K`——`K` 是还留在本机的空闲会话（跳过 + 失败 + 没轮到的），evacuate 的 `left` 就从它来。
 - **入口只认 fleet 的主仓库**（#1512）：一台机器只能接它的 fleet 以 `FLEET_REPO` 登记的那个仓库的会话，叠层仓库（`repos/*.conf`）对入口不可见。m5 主仓库是 monorepo、m4 主仓库是 claude-fleet 的今天，monorepo 的会话搬不到 m4，claude-fleet 的会话在 m5 本来就不是候选。**下线前先看 `/nodes` 各登录表里两台机器的 fleet 仓库**，心里有数哪些会话搬得走。
 - **live install 落后的机器看不懂「维护中」**：没有 #1505 的侧边栏把 maintenance 当失联画（`○ m5 … 没联系`、行变灰进失联组），没有 #1491 的 `dash-issue-session.sh` 连入口的租约/派单都打不通（`hub unreachable (ccquota exit 1)`，#1507）。演练或下线前把两台机器都同步到 ≥ df4daf9。
 
@@ -100,7 +100,7 @@
 机器一点不动——不关机、不重启 agent、不杀 fleet、不碰 working 会话——只走「标维护中 → 验证入口拒派 → 搬一个空闲会话 → 解除」。2026-10-04 第一次演练就是这个版本（记录在 #1427）：
 
 1. `fleet-node-maintenance.sh enter --reason '演练'`（T0）→ `status` 读回 maintenance。
-2. 验证入口拒派：对 m5 上任一 **主仓库** 的空闲会话 `fleet-move.sh --rebalance --max 1 --dry-run`，应答 `REFUSED NO_ELIGIBLE_NODE … macmini: maintenance: …`（这是「维护中排除了 m5」的直接证据；解除后同一条命令应变成 `this machine is the best place`——A/B 对照）。
+2. 验证入口拒派：对 m5 上任一 **主仓库** 的空闲会话 `fleet-move.sh --rebalance --max 1 --dry-run`，输出里该会话一行 `↷ <窗口名> (<wid>): NO_ELIGIBLE_NODE — … macmini: maintenance: …`（这是「维护中排除了 m5」的直接证据；解除后同一条命令应变成 `this machine is the best place`——A/B 对照）。
 3. 新会话落别台：在能搬的仓库上开一张占位小单，`dash-issue-session.sh <N> --repo <repo>`（`FLEET_SPAWN_NODE=auto`），看另一台 20 秒内开出窗口。
 4. 搬一个空闲会话：`fleet-move.sh <窗口> --via hub --to m4 --dry-run`，再去掉 `--dry-run`；到 m4 上 `tmux -L fleet capture-pane -t fleet:<idx>` 看到 Claude 提示符即「能继续」。
 5. `fleet-node-maintenance.sh leave` → `status` 回 online → 第 2 步的对照。

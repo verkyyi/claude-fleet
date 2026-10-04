@@ -712,20 +712,20 @@ a `ui.render` hook is pure: a state write made while it is drawing is denied. A
 render hook also has to `read()` its atom on **every** draw, before any early
 return, because that read is what subscribes it to redraws.
 
-**Task-progress band** (#1339, `hooks/progress.tsx` + `progress-model.ts`).
-Above the prompt it shows one row:
-`#<issue> · PR #<n> ✓|✗!|… · EPIC #<P> k/N · 子任务 k/N n! · 上下文 %`. The row is
-laid out to `bodyColumns`. When there isn't room it drops the EPIC first, then
-context, then PR, then children. The hub and scratch windows show only
-children and context. Every 10s the band refreshes with one
-`tmux display-message ; list-windows` call. It also reads files with `$.fs`:
-the dash's `prmap`, `parents` and `labels`, the children ledger, and the EPIC
-evidence folders. It makes no network calls and writes nothing outside the mod.
-Children are the windows whose `@origin` names this one, plus any ledger rows,
-bucketed as `fleet-children.py` buckets them. EPIC k/N counts the members
-open in `parents`, plus any members seen before (kept in `$.store`) or that
-hold evidence. A member that is no longer open counts as done. A toast fires
-once when a child goes to `!` or this PR's checks go red. It fires again only
+**Task-progress band** (#1339, trimmed in #1527; `hooks/progress.tsx` +
+`progress-model.ts`). Above the prompt it shows one segment, this issue's PR:
+`PR #<n> ✓|✗!|…` (plus `冲突!` / `落后` / `待审` / `草稿`, or `已合并` /
+`已关闭`). The task number, EPIC k/N, children k/N and context % used to sit
+beside it; the top-right corner and the sidebar already show those, so the
+band no longer repeats them. A window with no PR — the hub, a scratch, an
+issue not yet pushed — draws nothing, and the row takes no height. Every 10s
+it refreshes with one `tmux display-message ; list-windows` call and `$.fs`
+reads of the dash's `prmap` and the children ledger. It makes no network
+calls and writes nothing outside the mod. Children are the windows whose
+`@origin` names this one, plus any ledger rows, bucketed as
+`fleet-children.py` buckets them — they no longer draw, but every window
+(hub and scratch included) still toasts once when a child goes to `!`, as
+does an issue window when its PR's checks go red. A toast fires again only
 after that condition has cleared and come back.
 
 ## Related

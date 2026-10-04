@@ -31,6 +31,8 @@
 #      given back to the source's worker_id.
 #   6. --rebalance moves only `done` sessions, oldest-idle first, stops at a
 #      LOCAL answer, and never touches a `working` one.
+#   7. --rebalance past a REFUSED answer (#1513): that session is skipped (↷),
+#      the next two move; summary `moved 2 · skipped 1 · left 1`.
 #
 # Exit 0 = pass, non-zero = fail (prints what diverged).
 set -uo pipefail
@@ -118,7 +120,8 @@ repo="\${pos[0]}"; wid="\${pos[1]}"; key="\${wid#*/}"
 if [ "\$sub" = plan ]; then
   line=''
   if [ "\$node" = auto ]; then line=\$(head -n1 "\$W/hub/plan" 2>/dev/null); [ -n "\$line" ] && sed -i.bak 1d "\$W/hub/plan"; fi
-  printf '%s\n' "\${line:-REMOTE dsthost movable	chose dsthost (score 0.900)}"; exit 0
+  printf '%s\n' "\${line:-REMOTE dsthost movable	chose dsthost (score 0.900)}"
+  case "\$line" in REFUSED*) exit 4 ;; esac; exit 0
 fi
 [ -f "\$bundle" ] || { echo "FAILED BUNDLE	no bundle"; exit 5; }
 cp "\$bundle" "\$W/hub/last-bundle.tar"
@@ -311,6 +314,28 @@ win_alive TSRC "$w4" || fail "rebalance must stop at the hub's LOCAL answer"
 win_alive TSRC "$w2" || fail "rebalance must never touch a working session"
 TDST list-windows -F '#{@issue}' | grep -qx 46 || fail "the moved session must be on the target"
 grep -q '^plan --node auto ' "$WORK/hub/calls" || fail "rebalance must ask the hub with --node auto"
+ok
+
+# ============================================================ 7: --rebalance skips a REFUSED one (#1513)
+# Three idle sessions; the hub refuses the longest-idle (no machine can take
+# it). That one is skipped with a ↷ line — not a stop — and the next two move.
+now=$(date +%s)
+SID6="66666666-6666-4666-8666-666666666666"; WT6=$(new_worktree 47); seed_transcript "$WT6" "$SID6" >/dev/null
+SID7="77777777-7777-4777-8777-777777777777"; WT7=$(new_worktree 48); seed_transcript "$WT7" "$SID7" >/dev/null
+w6=$(spawn_source b6 "$SID6" "$WT6" 47 'done' $((now - 7200)))   # refused (oldest); b4 is still here from 6
+w7=$(spawn_source b7 "$SID7" "$WT7" 48 'done' $((now - 60)))
+sleep 1
+: > "$WORK/hub/calls"
+printf 'REFUSED NO_ELIGIBLE_NODE\tno node is eligible for this repo\n' > "$WORK/hub/plan"
+out=$(move --rebalance --max all); rc=$?
+[ "$rc" -eq 0 ] || fail "rebalance past a REFUSED should exit 0, got $rc: $out"
+printf '%s\n' "$out" | grep -q "↷ issue-47 ($w6): NO_ELIGIBLE_NODE — no node" || fail "the refused session must print a ↷ line: $out"
+printf '%s\n' "$out" | grep -q 'stopping' && fail "a REFUSED answer must not stop the rebalance: $out"
+printf '%s\n' "$out" | grep -q 'rebalance moved 2 · skipped 1 · left 1$' || fail "summary must read moved 2 · skipped 1 · left 1: $out"
+win_alive TSRC "$w6" || fail "the refused session must stay"
+win_alive TSRC "$w4" && fail "the second session must move"
+win_alive TSRC "$w7" && fail "the third session must move"
+[ "$(grep -c '^plan --node auto ' "$WORK/hub/calls")" -eq 3 ] || fail "the hub must be asked once per session: $(cat "$WORK/hub/calls")"
 ok
 
 printf 'hub-move selftest: OK (%d checks)\n' "$CHECKS"
