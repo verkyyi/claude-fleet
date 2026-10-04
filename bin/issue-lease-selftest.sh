@@ -336,6 +336,15 @@ no_pane() { (cd "$WORK" && env -u TMUX -u TMUX_PANE FLEET_CONF_DIR="$WORK/conf" 
 u_pane=$(in_pane 'fleet_uuid testsess'); u_fleet=$(no_pane 'fleet_uuid testsess')
 [ -n "$u_fleet" ]                                || fail "UUID setup: fleet_uuid derived nothing"
 [ "$u_pane" = "$u_fleet" ]                       || fail "UUID a pane bound to the second repo must mint the FLEET's UUID, not its window's" "pane: $u_pane · fleet: $u_fleet"
+# … and == what the controller mints from `fleet-control-read.sh inventory`'s
+# [session, repo, checkout] (fleet_control.py:74) — run from the SAME fake pane.
+u_inv=$(cd "$WORK" && PATH="$WORK/ovbin:$PATH" TMUX=/tmp/fake,1,0 TMUX_PANE=%1 FLEET_CONF_DIR="$WORK/conf" \
+  bash "$BIN/fleet-control-read.sh" inventory 2>/dev/null | python3 -c '
+import json, sys, uuid
+parts = sys.stdin.buffer.read().decode("utf-8").split("\0")
+sess, repo, checkout = parts[0:3]
+print(repo + " " + str(uuid.uuid5(uuid.UUID(sys.argv[1]), json.dumps([sess, repo, checkout], ensure_ascii=False, sort_keys=True, separators=(",", ":")))))' "$MACHINE")
+[ "$u_inv" = "acme/widgets $u_fleet" ]           || fail "UUID the inventory run from that pane must name the fleet's own repo and mint the same UUID" "inventory: $u_inv · fleet: $u_fleet"
 # the conf the other legs ran under (no FLEET_MAIN line, FLEET_REPO from the env)
 # is restored so this leg leaves no footprint
 rm -rf "$WORK/conf/fleets/testsess/repos" "$WORK/conf/fleets/testsess/conf"
