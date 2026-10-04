@@ -1238,7 +1238,8 @@ try:
     except AssertionError as error:
         raise AssertionError('%s — input lines seen: %r' % (error, sorted(seen)))
     new = (set(windows()) - before).pop()
-    check(tm('show-options', '-wqv', '-t', new, '@raw') == '1', '⌃s spawned something other than a scratch')
+    wait_for(lambda: tm('show-options', '-wqv', '-t', new, '@raw') == '1',
+             '⌃s spawned something other than a scratch')
     check(tm('show-options', '-wqv', '-t', new, '@origin') == '', '⌃s nested its scratch under the worker (must be the hub ⌃s)')
     wait_for(lambda: tm('display-message', '-p', '-t', 'fleet-test:', '#{window_id}') == new,
              'the ⌃s session did not become the current window')
