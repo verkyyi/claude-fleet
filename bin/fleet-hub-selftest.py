@@ -52,9 +52,12 @@ class Sandbox:
 import os, pathlib, sys
 root=pathlib.Path(os.environ["FLEET_CONF_DIR"])
 if "has-session" in sys.argv: sys.exit(0)
-if "display-message" in sys.argv:
-    # the reap adapter's `#{socket_path}` (issue #1487): point bare tmux at this server
+if "display-message" in sys.argv and "#{socket_path}" in sys.argv:
+    # the reap adapter's `#{socket_path}` (issue #1487): point bare tmux at this server;
+    # any other display-message (a window's @repo, #1018) answers as an unset option does
     print("/tmp/fleet-hub-selftest.sock"); sys.exit(0)
+if "display-message" in sys.argv:
+    print(""); sys.exit(0)
 if "list-windows" in sys.argv:
     # Rows carry @repo in column 9; a format that does not ask for it (a one-repo
     # fleet, issue #1018) gets that column empty, exactly as real tmux prints it.
@@ -957,8 +960,8 @@ printf '@9\\t4242\\t/fixture/moved\\n'
         self.assertEqual(code, 0)
         rows = {row["name"]: row for row in listed}
         self.assertEqual(set(rows), {"scheduler", "reader"})
-        self.assertEqual(rows["scheduler"]["scopes"], ["config:write", "fleet:read", "worker:message",
-                                                       "worker:resume", "worker:start", "worker:stop"])
+        self.assertEqual(rows["scheduler"]["scopes"], ["config:write", "fleet:read", "worker:answer", "worker:message",
+                                                       "worker:reap", "worker:resume", "worker:start", "worker:stop"])
         self.assertEqual(rows["scheduler"]["config_keys"], ["FLEET_MAX_SESSIONS"])
         self.assertEqual((rows["reader"]["scopes"], rows["reader"]["fleets"], rows["reader"]["fleet_ids"]),
                          (["fleet:read"], 1, [self.fleet]))

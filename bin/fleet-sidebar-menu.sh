@@ -147,10 +147,12 @@ fi
 add_newto() {
   local n i=0 m
   while IFS= read -r n; do
-    [ -n "$n" ] || continue
+    # a machine name is a token (dash-issue-new.sh --node= checks it again), so it
+    # travels unquoted
+    case "$n" in ''|*[!A-Za-z0-9._-]*) continue ;; esac
     i=$((i + 1)); [ "$i" -le 9 ] || break
-    printf -v m "$m_newto_fmt" "$(fe "$n")"
-    add "$m" "$i" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") -w 90% -h 12 -- bash $(sq "$BIN/dash-issue-new.sh") confirm --spawn --node=$(sq "$n")")"
+    printf -v m "$m_newto_fmt" "$n"
+    add "$m" "$i" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") -w 90% -h 12 -- bash $(sq "$BIN/dash-issue-new.sh") confirm --spawn --node=$n")"
   done <<EOF
 $(LC_ALL=C awk -F $'\037' '$1 == "#node" && $3 == "online" && $2 != "" { print $2 }' "$FLEET_C/global/remote_$sess" 2>/dev/null)
 EOF
