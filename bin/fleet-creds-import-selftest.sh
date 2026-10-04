@@ -183,13 +183,13 @@ ok "NOAUTH no viewer token → exit 2, nothing sent"
 # --- CODEX (issue #1490) --------------------------------------------------------
 RT='rt-CODEXSECRETCODEXSECRETCODEXSECRET'
 IDT='eyJ-IDTOKEN-IDTOKEN-IDTOKEN'
-export FLEET_CODEX_HOMES="$WORK/codex-homes"
-mkdir -p "$HOME/.codex" "$FLEET_CODEX_HOMES/work" "$FLEET_CODEX_HOMES/hubbed" "$FLEET_CODEX_HOMES/apikey"
+export CCQUOTA_FLEET_CODEX_HOMES="$WORK/codex-homes"
+mkdir -p "$HOME/.codex" "$CCQUOTA_FLEET_CODEX_HOMES/work" "$CCQUOTA_FLEET_CODEX_HOMES/hubbed" "$CCQUOTA_FLEET_CODEX_HOMES/apikey"
 printf '{"auth_mode":"chatgpt","tokens":{"id_token":"%s","access_token":"at-x","refresh_token":"%s","account_id":"acct-1"},"last_refresh":"2026-10-04T00:00:00Z"}\n' "$IDT" "$RT" > "$HOME/.codex/auth.json"
-printf '{"tokens":{"access_token":"at-y","refresh_token":"%s-work","account_id":"acct-2"}}\n' "$RT" > "$FLEET_CODEX_HOMES/work/auth.json"
-printf '{"tokens":{"access_token":"at-z","refresh_token":"hub-managed","account_id":"acct-3"}}\n' > "$FLEET_CODEX_HOMES/hubbed/auth.json"
-printf '{"OPENAI_API_KEY":"sk-NOTATOKEN"}\n' > "$FLEET_CODEX_HOMES/apikey/auth.json"
-chmod 600 "$HOME/.codex/auth.json" "$FLEET_CODEX_HOMES"/*/auth.json
+printf '{"tokens":{"access_token":"at-y","refresh_token":"%s-work","account_id":"acct-2"}}\n' "$RT" > "$CCQUOTA_FLEET_CODEX_HOMES/work/auth.json"
+printf '{"tokens":{"access_token":"at-z","refresh_token":"hub-managed","account_id":"acct-3"}}\n' > "$CCQUOTA_FLEET_CODEX_HOMES/hubbed/auth.json"
+printf '{"OPENAI_API_KEY":"sk-NOTATOKEN"}\n' > "$CCQUOTA_FLEET_CODEX_HOMES/apikey/auth.json"
+chmod 600 "$HOME/.codex/auth.json" "$CCQUOTA_FLEET_CODEX_HOMES"/*/auth.json
 no_codex_token() { case "$2" in *"$RT"*|*"$IDT"*|*CODEXSECRET*|*IDTOKEN-IDTOKEN*) fail "$1: a codex token leaked into the output" "$2" ;; esac; }
 
 : > "$LOG"

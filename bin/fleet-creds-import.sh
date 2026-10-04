@@ -25,7 +25,7 @@
 #                  can see what was assumed. The hub refuses one already past.
 #   --codex        import CODEX refresh tokens instead (issue #1490): each
 #                  profile's auth.json — `default` = ~/.codex/auth.json, any
-#                  other = <codex-homes>/<profile>/auth.json (FLEET_CODEX_HOMES,
+#                  other = <codex-homes>/<profile>/auth.json (CCQUOTA_FLEET_CODEX_HOMES,
 #                  default ~/.codex-accounts) — gives tokens.refresh_token +
 #                  account_id + id_token; the hub account label IS the profile.
 #                  Default profile: `default`. A home whose refresh_token is
@@ -37,7 +37,7 @@
 #
 # Env: CCQUOTA_HUB_URL (required), CCQUOTA_VIEWER_TOKEN or ~/.ccquota/viewer-token
 # (the OPERATOR's — the route is operator-only), FLEET_ACCOUNTS_DIR (default
-# ~/.config/claude-fleet/accounts), FLEET_CODEX_HOMES (default ~/.codex-accounts).
+# ~/.config/claude-fleet/accounts), CCQUOTA_FLEET_CODEX_HOMES (default ~/.codex-accounts).
 #
 # Exit 0 = every selected token imported (skips are not failures, and are
 # listed); 1 = at least one import failed (the hub's answer is shown); 2 = usage.
@@ -72,7 +72,7 @@ if [ "$CODEX" = 1 ] && [ -n "$EXPIRES" ]; then
 fi
 
 ACCT_DIR="${FLEET_ACCOUNTS_DIR:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/accounts}"
-CODEX_HOMES="${FLEET_CODEX_HOMES:-$HOME/.codex-accounts}"
+CODEX_HOMES="${CCQUOTA_FLEET_CODEX_HOMES:-$HOME/.codex-accounts}"
 if [ "$CODEX" = 0 ]; then
   [ -d "$ACCT_DIR" ] || { printf 'fleet-creds-import: no accounts dir %s\n' "$ACCT_DIR" >&2; exit 2; }
 fi
