@@ -65,6 +65,12 @@
 #         --target-account L  operator-selected destination for ONE explicit window;
 #                             requires fresh 5h and 7d quota below 95% (the 85%
 #                             automatic ceiling is unchanged).
+#         --force-self        move the CALLER'S OWN window anyway (issue #1474) — from
+#                             a detached process (nohup + its own session, cwd /)
+#                             that first waits for the caller's turn to end. Without
+#                             it a target that is the caller's own window is REFUSED
+#                             (exit 3): the SessionEnd hook that closes it would kill
+#                             the caller mid-move. See «the caller's own window».
 #
 # Never touched: panels (dash/plan/backlog), the operator hub (@hub), windows with no
 # Claude process, raw scratch windows whose cwd is FLEET_MAIN without a registry
@@ -77,7 +83,8 @@
 # window is reported as a skip; only a `--model` move is exempt (it is a
 # same-account relaunch on purpose, #524).
 # Windows are moved ONE AT A TIME (each is a cold `claude` boot).
-# Exit 0 (per-window outcomes are printed); 2 = usage.
+# Exit 0 (per-window outcomes are printed); 2 = usage; 3 = the only window asked
+# for was the caller's own and nothing moved (issue #1474, below).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
@@ -93,6 +100,7 @@ LAUNCH="${FLEET_MIGRATE_LAUNCH:-$BIN/fleet-claude.sh}"   # selftest seam: a fake
 EXIT_WAIT="${FLEET_MIGRATE_EXIT_WAIT:-30}"                 # s to wait for Claude to exit
 CLOSE_WAIT="${FLEET_MIGRATE_CLOSE_WAIT:-15}"               # s to wait for the hook to close the window
 BOOT_WAIT="${FLEET_MIGRATE_BOOT_WAIT:-15}"                 # s to wait for the resumed Claude to appear
+SELF_IDLE_WAIT="${FLEET_MIGRATE_SELF_IDLE_WAIT:-1800}"     # s a --force-self move waits for the caller's turn to end
 # The resumed session's FIRST prompt. It ends with the language rule (issue #620)
 # because this text is the most recent instruction a --resume'd model sees: the
 # transcript above may be forty turns of Chinese, and an English tail with no such
@@ -160,6 +168,65 @@ window_closed() {
   local o; o=$(TM display-message -p -t "$1" '#{pane_pid}|#{pane_dead}' 2>/dev/null) || return 0
   case "$o" in ''|'|'*|*'|1') return 0;; esac
   return 1
+}
+
+# --- the caller's own window (issue #1474) ----------------------------------------
+# A migrate is a CLOSE + RESUME, and the close is the SessionEnd hook kill-window'ing
+# the pane — so a `fleet-migrate.sh <me>` run from INSIDE <me> (a Claude's Bash
+# tool, a shell in that pane) dies WITH the window, between the /exit and the
+# new-window. 2026-10-04: a scratch did exactly that (a background "wait for my
+# turn to end, then migrate a1", a1 being itself). The hook killed the job along
+# with the window, no new window opened, history recorded the live session
+# closed-unlanded, and its six children lost their parent on the dash until a hand
+# `claude --resume --fork-session` brought it back.
+#
+# So a target that IS the caller's window is REFUSED — re-opening yourself is the
+# hub's / another session's job, or /fleet-handoff — and `--force-self` runs the
+# move from a process no SessionEnd can reach: a re-exec of this script under
+# nohup in its OWN session (setsid), cwd /, stdio on a log. That process also WAITS
+# for the caller's turn to end before it types anything: the tool call that
+# started it is still running, and an Escape mid-turn interrupts the very turn the
+# move was meant to preserve.
+#
+# Two tells, either one is enough: the window $TMUX_PANE sits in (only when the
+# fleet resolved is the caller's own — pane ids are per-server, #703), and the
+# target's Claude pid among this process's ANCESTORS (a tool shell that lost
+# $TMUX_PANE still has it as a parent). FLEET_MIGRATE_DETACHED=1 marks the re-exec,
+# which skips both.
+pid_is_ancestor() {   # <anc> <pid> → 0 iff <anc> is a strict ancestor of <pid>
+  local anc="${1:-}" p="${2:-}" n=0
+  case "$anc" in ''|*[!0-9]*) return 1 ;; esac
+  case "$p" in ''|*[!0-9]*) return 1 ;; esac
+  while [ "$n" -lt 64 ]; do
+    p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')
+    case "$p" in ''|0) return 1 ;; esac
+    [ "$p" = "$anc" ] && return 0
+    [ "$p" = 1 ] && return 1
+    n=$((n + 1))
+  done
+  return 1
+}
+migrate_is_self() {   # <wid> <claude-pid> → 0 iff moving <wid> would take THIS process down
+  [ "${FLEET_MIGRATE_DETACHED:-}" = 1 ] && return 1
+  [ -n "${SELF_WIN:-}" ] && [ "${1:-}" = "$SELF_WIN" ] && return 0
+  pid_is_ancestor "${2:-}" "$$"
+}
+# migrate_detach_self <log> <arg>… — re-run this script as a process no SessionEnd
+# (nor the caller's own exit) can reach: nohup, a fresh session via setsid (python3
+# — macOS ships no setsid(1)), cwd / so no worktree-anchored reaper (#1298) owns
+# it, stdio on <log>. The argv is the fleet's own `bin/fleet-*.sh`, which every
+# orphan reaper exempts.
+migrate_detach_self() {
+  local log="$1"; shift
+  if command -v python3 >/dev/null 2>&1; then
+    ( cd / && FLEET_MIGRATE_DETACHED=1 TMUX_PANE='' nohup python3 -c 'import os, sys
+if os.fork():
+    os._exit(0)
+os.setsid()
+os.execvp(sys.argv[1], sys.argv[1:])' bash "$BIN/fleet-migrate.sh" "$@" </dev/null >>"$log" 2>&1 & )
+  else
+    ( cd / && FLEET_MIGRATE_DETACHED=1 TMUX_PANE='' nohup bash "$BIN/fleet-migrate.sh" "$@" </dev/null >>"$log" 2>&1 & )
+  fi
 }
 
 # --- eligibility (pure; pinned by fleet-migrate-selftest.sh) ---------------------
@@ -324,6 +391,22 @@ migrate_one_body() {
     bgdir="$MIGRATE_TMP/bg-${wid//[^A-Za-z0-9]/_}"; mkdir -p "$bgdir"
     printf '%s' "$bgjson" > "$bgdir/background.json"
   fi
+  # --force-self (issue #1474): this is the caller's OWN session, moved from the
+  # detached re-exec — its turn is still running (the tool call that started us
+  # has not returned), and the Escape below would INTERRUPT it. Wait for the Stop
+  # hook to mark the turn over (@claude_state leaves `working`), bounded; a session
+  # still working at the bound is left alone — the operator re-runs when it is idle.
+  if [ "${FLEET_MIGRATE_DETACHED:-}" = 1 ]; then
+    local waited=0
+    while [ "$waited" -lt "$SELF_IDLE_WAIT" ] && [ "$(wopt "$wid" '#{@claude_state}')" = working ]; do
+      sleep 2; waited=$((waited + 2))
+    done
+    if [ "$(wopt "$wid" '#{@claude_state}')" = working ]; then
+      say "  ✗ $name ($wid): still working after ${SELF_IDLE_WAIT}s — a self-move never interrupts a turn; re-run --force-self when it is idle"
+      skipped=$((skipped+1)); return 0
+    fi
+    [ "$waited" -gt 0 ] && say "  · $name ($wid): turn ended after ${waited}s — moving the caller's own window now"
+  fi
   # A migrate is a CLOSE + RESUME, not a death: mark the window as already reported
   # (issue #574) so the SessionEnd hook's child-report backstop does not tell this
   # session's PARENT that its child was reaped — seconds before the same session
@@ -479,7 +562,7 @@ migrate_one_body() {
 # Sourced (fleet-migrate-selftest.sh pins the pure matrices) → define only; a
 # direct run dispatches. Same guard idiom as fleet-account.sh.
 migrate_main() {
-  MODE=""; ACCOUNT=""; TARGET_ACCOUNT=""; NUDGE=""; NUDGE_SET=0; DRY=0; TOAST=0; SESS=""; MODEL=""; WIDS=(); FORCE_BG=0; MAX=0
+  MODE=""; ACCOUNT=""; TARGET_ACCOUNT=""; NUDGE=""; NUDGE_SET=0; DRY=0; TOAST=0; SESS=""; MODEL=""; WIDS=(); FORCE_BG=0; MAX=0; FORCE_SELF=0
   local pinned_target='' quota_request='' verified=0
   FLEET_MIGRATION_LOCKED=''
   MIGRATE_TMP=''
@@ -488,6 +571,7 @@ migrate_main() {
     case "$1" in
       --limited|--idle|--all|--stuck) MODE="${1#--}"; shift ;;
       --force-bg) FORCE_BG=1; shift ;;
+      --force-self) FORCE_SELF=1; shift ;;
       --account) MODE=account; ACCOUNT="${2:-}"; shift 2 ;;
       --account=*) MODE=account; ACCOUNT="${1#--account=}"; shift ;;
       --from) ACCOUNT="${2:-}"; [ -n "$ACCOUNT" ] || { echo 'fleet-migrate: --from needs a label' >&2; return 2; }; shift 2 ;;
@@ -540,15 +624,28 @@ migrate_main() {
   NUDGE_DEFAULT="${FLEET_MIGRATE_NUDGE:-$NUDGE_BUILTIN}"
   NUDGE_MODEL_DEFAULT="${FLEET_MIGRATE_NUDGE_MODEL:-$NUDGE_MODEL_BUILTIN}"
   SOCK=$(fleet_socket "$SESS")
+  TM() { tmux -L "$SOCK" "$@"; }
   # A positional may be the fleet's short window HANDLE (`b3`, issue #566) instead
   # of a tmux window-id/index. Normalise once, here, so every path below (whoami
   # and the explicit walk alike) works on a real target; anything that is not a
-  # handle passes through untouched, so `@382` / `3` / a name keep working.
+  # handle passes through untouched, so `@382` / `3` / a name keep working — and
+  # a target tmux can resolve (an index, a name, a pane id) becomes its window ID,
+  # so the self check below compares like with like (issue #1474).
   if [ "${#WIDS[@]}" -gt 0 ]; then
-    _norm=(); for _w in ${WIDS[@]+"${WIDS[@]}"}; do _norm+=("$(fleet_wid_target "$_w" "$SOCK")"); done
+    _norm=(); for _w in ${WIDS[@]+"${WIDS[@]}"}; do
+      _w=$(fleet_wid_target "$_w" "$SOCK")
+      _r=$(TM display-message -p -t "$_w" '#{window_id}' 2>/dev/null) && [ -n "$_r" ] && _w="$_r"
+      _norm+=("$_w")
+    done
     WIDS=(${_norm[@]+"${_norm[@]}"})
   fi
-  TM() { tmux -L "$SOCK" "$@"; }
+  # The caller's own window (issue #1474) — only when the fleet resolved IS the
+  # caller's: pane ids are per-server (#703). Empty for a daemon, a plain shell, a
+  # --session pointing elsewhere, and for the detached re-exec itself.
+  SELF_WIN=''
+  if [ "${FLEET_MIGRATE_DETACHED:-}" != 1 ] && [ -n "${TMUX_PANE:-}" ] && [ "$(fleet_current_session)" = "$SESS" ]; then
+    SELF_WIN=$(TM display-message -p -t "$TMUX_PANE" '#{window_id}' 2>/dev/null)
+  fi
   # Sanctioned keystrokes (issue #437): the ONLY keys ever typed are Escape + `/exit`
   # + Enter, and only while a Claude process is verified alive under the pane (the
   # relaunch line, when no hook closes the window, is typed only after it is gone).
@@ -656,14 +753,40 @@ migrate_main() {
     targets=("${targets[@]:0:$MAX}")
   fi
   say "fleet-migrate: $MODE${ACCOUNT:+ from $ACCOUNT} → ${ACTIVE:-<no active account>} (${#targets[@]} window$([ "${#targets[@]}" = 1 ] || printf s))"
+  self_refused=0; detached=0
   for wid in ${targets[@]+"${targets[@]}"}; do
     cpid=$(fleet_pane_claude_pid "$wid" "$SOCK" 2>/dev/null) || { say "  – $wid: no Claude process — skipped"; skipped=$((skipped+1)); continue; }
     stamp=$(TM display-message -p -t "$wid" '#{@cc_account}' 2>/dev/null)
     label=$(window_account "$wid" "$cpid" "$stamp")
+    # The caller's own window (issue #1474): refuse, or hand it to the detached
+    # re-exec; --dry-run only says so and still prints the plan.
+    if migrate_is_self "$wid" "$cpid"; then
+      _nm=$(wopt "$wid" '#{window_name}')
+      if [ "$DRY" = 1 ]; then
+        say "  ! $_nm ($wid): this is the CALLER'S OWN window — a real run refuses it (exit 3); --force-self detaches the move first (issue #1474)"
+      elif [ "$FORCE_SELF" = 1 ]; then
+        _log="$(fleet_state_dir "$SESS")/migrate-self.log"
+        _args=(--session "$SESS" --toast)
+        [ -n "$MODEL" ] && _args+=(--model "$MODEL")
+        [ "$NUDGE_SET" = 1 ] && _args+=(--nudge "$NUDGE")
+        [ "$FORCE_BG" = 1 ] && _args+=(--force-bg)
+        [ -n "$TARGET_ACCOUNT" ] && _args+=(--target-account "$TARGET_ACCOUNT")
+        _args+=("$wid")
+        printf '%s self-move of %s (%s) asked for by pid %s — detaching\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$_nm" "$wid" "$$" >> "$_log" 2>/dev/null
+        migrate_detach_self "$_log" ${_args[@]+"${_args[@]}"}
+        say "  ↻ $_nm ($wid): the caller's own window — the move runs DETACHED (log: $_log): it waits for this turn to end, /exits, and resumes ${label:-ambient login} → ${ACTIVE:-?}${MODEL:+ on $MODEL} in a new window"
+        detached=$((detached+1))
+        continue
+      else
+        say "  ✗ $_nm ($wid): this is the CALLER'S OWN window — refused: the SessionEnd hook that closes it would kill this very process mid-move (issue #1474). To re-open yourself hand it to the hub / another session, or /fleet-handoff; --force-self detaches the move first"
+        skipped=$((skipped+1)); self_refused=1
+        continue
+      fi
+    fi
     migrate_one "$wid" "$cpid" "$label"
   done
   LAST_SKIP="${LAST_SAY:-}"; LAST_SKIP="${LAST_SKIP#*: }"
-  say "fleet-migrate: moved $moved, skipped $skipped"
+  say "fleet-migrate: moved $moved, skipped $skipped$([ "$detached" = 0 ] || printf ', detached %s' "$detached")"
   if [ "$TOAST" = 1 ] && [ "$moved" -gt 0 ]; then
     TM display-message "fleet: moved $moved session$([ "$moved" = 1 ] || printf s) onto ${ACTIVE:-the active account} ($REPORT)" 2>/dev/null || :
   elif [ "$TOAST" = 1 ] && [ "$skipped" -gt 0 ]; then
@@ -671,6 +794,10 @@ migrate_main() {
     # say so, or the keypress looks dead.
     TM display-message "fleet: migrate moved nothing ($skipped skipped: ${LAST_SKIP:-see fleet-account.sh migrate --dry-run})" 2>/dev/null || :
   fi
+  # The only thing asked for was the caller's own window (issue #1474): say so in
+  # the exit code too, so a script (a Bash tool call) cannot read the refusal as
+  # a quiet success. A batch that moved or detached anything else is still 0.
+  [ "$self_refused" = 1 ] && [ "$moved" = 0 ] && [ "$detached" = 0 ] && return 3
   return 0
 }
 if [ "${BASH_SOURCE[0]:-}" = "$0" ]; then migrate_main "$@"; exit $?; fi

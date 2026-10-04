@@ -23,6 +23,10 @@
 #                       without landing (closed by hand, crashed, abandoned): no
 #                       mergedAt/pr/sha — its worktree usually still exists on disk
 #                       (worktree-autoclean keeps unmerged), so it stays resumable.
+#   * resumed         — a marker, not a session (issue #1474): the closed-unlanded
+#                       session before it came back live (`claude --resume`), so
+#                       readers skip both rows (ledger_live_rows) and dedup forgets
+#                       them (ledger_has_session) until the session ends again.
 # This closes the gap where a hand-closed / crashed worker left its transcript
 # unindexed (invisible to /fleet-history, not resumable).
 #
@@ -51,6 +55,14 @@
 #           '-' for transcript/session — review-only, deduped on key + worktree/sha.
 #           Resolves transcript-dir + session-id + summary the
 #           same way `record` does.
+#   resumed --session-id S [--repo R] [--session F] | --stdin-json
+#           The session is LIVE again (issue #1474): a migrate, /fleet-history
+#           resume or a hand `claude --resume` brought back a session the SessionEnd
+#           hook had just recorded closed-unlanded. Appends one `resumed` row that
+#           supersedes it — the list hides both, and the next close/land of that
+#           session records afresh instead of deduping away. The SessionStart hook
+#           (matcher `resume`) runs the --stdin-json form; nothing to supersede ⇒
+#           nothing written.
 #   list    [--repo R] [filter]      Human table, newest first (optional substring filter).
 #   rows                             Dash US-delimited rows (closed view of the dashboard).
 #           NESTED like the live list: ledger col 11 is the spawning session, so a
@@ -285,9 +297,15 @@ ledger_has_session() {   # $1=ledger $2=session-id $3=transcript-dir [$4=key $5=
   # row that is itself transcript-less. Key alone would be wrong: a scratch slot is
   # reused, so `scratch-1` legitimately recurs. And a row we suppress here has no
   # transcript by definition — there is nothing in it to resume.
+  #
+  # A `resumed` row (issue #1474) SUPERSEDES the closed-unlanded row before it for
+  # the same session: the session is live again, so for dedup purposes it is NOT in
+  # the ledger — the next close (or land) of that session records afresh instead
+  # of being swallowed as "already in ledger". The newest row for the session, in
+  # append order, decides; that is what `resumed` writes last.
   awk -F'\t' -v s="$sid" -v t="$tdir" -v k="$key" -v w="$wt" -v p="$pr" -v h="$sha" '
     function blank(v) { return (v == "" || v == "-") }
-    { if (!blank(s) && $8 == s) { found = 1; exit }
+    { if (!blank(s) && $8 == s) { found = ($10 != "resumed"); next }
       if (blank(s) && !blank(t) && $7 == t) { found = 1; exit }
       if (blank(s) && blank(t) && !blank(k) && $2 == k && blank($8) && blank($7) &&
           ((!blank(p) && $4 == p) || (!blank(h) && $5 == h) || (!blank(w) && $6 == w))) {
@@ -526,6 +544,21 @@ ledger_sort_desc() {
     | cut -f2-
 }
 
+# ledger_live_rows <ledger> → the ledger minus what a `resumed` row superseded
+# (issue #1474). A `resumed` row says "this session is live again": every row for
+# that session id up to and including it is history the live dash already shows,
+# so none of them is listed, resumed, or found; a row AFTER it (the session closed
+# or landed again) is the real record and shows. The ledger stays append-only —
+# nothing is rewritten — so a reader of an older install sees one extra row with
+# state `resumed` and nothing else changes.
+ledger_live_rows() {
+  awk -F'\t' '
+    NR == FNR { if ($10 == "resumed" && $8 != "" && $8 != "-") last[$8] = FNR; next }
+    { if ($10 == "resumed") next
+      if (($8 in last) && FNR <= last[$8]) next
+      print }' "$1" "$1"
+}
+
 read_ledger() {
   local repo="${1:-}" filter="${2:-}" ledger
   ledger=$(ledger_path "$repo")
@@ -536,9 +569,9 @@ read_ledger() {
   # the top of the list (a `~1 · 1 mo` row sitting above rows from 3 hours ago).
   # Ties keep append order (reversed), so same-second rows stay stable.
   if [ -n "$filter" ]; then
-    grep -iF -- "$filter" "$ledger" 2>/dev/null | ledger_sort_desc
+    ledger_live_rows "$ledger" | grep -iF -- "$filter" 2>/dev/null | ledger_sort_desc
   else
-    ledger_sort_desc < "$ledger"
+    ledger_live_rows "$ledger" | ledger_sort_desc
   fi
 }
 
@@ -1223,10 +1256,91 @@ cmd_fold() {
   esac
 }
 
+# ============================================================================
+# resumed — a closed-unlanded session is LIVE again (issue #1474)
+# ============================================================================
+# The SessionEnd hook records a worker/scratch the instant its Claude exits — and
+# a migrate (fleet-migrate.sh), /fleet-history resume, or a hand `claude --resume`
+# brings that very session back seconds later. Before this the row stayed
+# `closed-unlanded` for good: /fleet-history listed a live session as closed, and
+# the landed row the session later earned was deduped away as "already in ledger"
+# (ledger_has_session keys on the session id). This appends ONE `resumed` row —
+# the superseded row's own fields, state `resumed`, col 1 = now — which every
+# reader treats as "not in the ledger" (ledger_live_rows / ledger_has_session).
+# Append-only: the closed row is never rewritten, so two writers cannot race a
+# rewrite, and a session that is NOT in any ledger as closed-unlanded (a normal
+# resume, a landed one) writes nothing at all.
+#
+#   resumed --session-id <sid> [--repo R | every hosted repo] [--session <fleet>]
+#   resumed --stdin-json   the SessionStart hook form: session_id + source off the
+#                          Claude Code payload; acts on source=resume only; prints
+#                          NOTHING on stdout (a SessionStart hook's stdout becomes
+#                          model context), a note on stderr.
+cmd_resumed() {
+  local sid="" repo="" sess="" quiet=0 stdin=0 src="" repos="" r ledger row now n=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --session-id) sid="${2:-}"; shift 2;;
+      --repo) repo="${2:-}"; shift 2;;
+      --session) sess="${2:-}"; shift 2;;
+      --stdin-json) stdin=1; quiet=1; shift;;
+      --quiet) quiet=1; shift;;
+      *) shift;;
+    esac
+  done
+  if [ "$stdin" = 1 ] && [ ! -t 0 ]; then
+    local payload; payload=$(cat 2>/dev/null)
+    [ -n "$sid" ] || sid=$(printf '%s' "$payload" \
+      | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)
+    src=$(printf '%s' "$payload" \
+      | sed -n 's/.*"source"[[:space:]]*:[[:space:]]*"\([a-z_]*\)".*/\1/p' | head -n1)
+    # settings-hooks.json already matches `resume`; defense in depth — a startup,
+    # /clear or compact start is not a session coming back.
+    case "$src" in resume) ;; *) return 0 ;; esac
+  fi
+  sid=$(printf '%s' "$sid" | tr -cd 'A-Za-z0-9._-')
+  [ -n "$sid" ] && [ "$sid" != "-" ] || { [ "$quiet" = 1 ] || echo "fleet-history resumed: --session-id is required" >&2; return 2; }
+  [ -n "$sess" ] || sess="${FLEET_SESSION:-$(fleet_current_session 2>/dev/null)}"
+  [ -n "$sess" ] && command -v fleet_load_conf >/dev/null 2>&1 && fleet_load_conf "$sess" 2>/dev/null
+  # Which ledgers: a pinned one (tests), the named repo's, else every repo this
+  # fleet hosts (issue #804) — the resumed session's repo is not known here.
+  if [ -n "${FLEET_HISTORY_LEDGER:-}" ]; then repos='-'
+  elif [ -n "$repo" ]; then repos="$repo"
+  else
+    [ -n "$sess" ] && command -v fleet_repos >/dev/null 2>&1 && repos=$(fleet_repos "$sess" 2>/dev/null)
+    [ -n "$repos" ] || repos="${FLEET_REPO:-}"
+  fi
+  now=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    [ "$r" = '-' ] && r=''
+    ledger=$(ledger_path "$r")
+    [ -f "$ledger" ] || continue
+    # the NEWEST row for this session, in append order — only a closed-unlanded one
+    # has anything to supersede (a landed row IS the session's final word; a prior
+    # `resumed` is already in force).
+    row=$(awk -F'\t' -v s="$sid" '$8 == s { last = $0 } END { if (last != "") print last }' "$ledger")
+    [ -n "$row" ] || continue
+    [ "$(printf '%s\n' "$row" | cut -f10)" = closed-unlanded ] || continue
+    printf '%s\n' "$row" | awk -F'\t' -v OFS='\t' -v now="$now" '{ $1 = now; $10 = "resumed"; print }' >> "$ledger" || continue
+    n=$((n + 1))
+    if [ "$quiet" = 1 ]; then
+      printf 'fleet-history: resumed %s → ledger %s (session %s): closed-unlanded row superseded\n' "$(key_label "$(printf '%s\n' "$row" | cut -f2)")" "$ledger" "$sid" >&2
+    else
+      printf 'resumed %s → ledger %s (session %s): closed-unlanded row superseded\n' "$(key_label "$(printf '%s\n' "$row" | cut -f2)")" "$ledger" "$sid"
+    fi
+  done <<EOF
+$repos
+EOF
+  [ "$n" -gt 0 ] || [ "$quiet" = 1 ] || printf 'resumed: no closed-unlanded row for session %s — nothing to supersede\n' "$sid"
+  return 0
+}
+
 cmd="${1:-}"; shift 2>/dev/null || true
 case "$cmd" in
   record)        cmd_record "$@";;
   record-closed) cmd_record_closed "$@";;
+  resumed)       cmd_resumed "$@";;
   list)   cmd_list "$@";;
   rows)   cmd_rows "$@";;
   resume) cmd_resume "$@";;
@@ -1234,5 +1348,5 @@ case "$cmd" in
   meta)   cmd_meta "$@";;
   fold)   cmd_fold "$@";;
   ''|-h|--help|help) usage;;
-  *) echo "fleet-history: unknown subcommand '$cmd' (record|record-closed|list|rows|resume|path|meta|fold)" >&2; exit 2;;
+  *) echo "fleet-history: unknown subcommand '$cmd' (record|record-closed|resumed|list|rows|resume|path|meta|fold)" >&2; exit 2;;
 esac
