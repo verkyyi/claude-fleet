@@ -163,7 +163,12 @@ others from their own banners or from the ccquota hub.
 
 **Codex** — do **not** copy `~/.codex/auth.json`. Codex rotates its refresh
 token on use, so two homes holding one copy race each other and one gets logged
-out. Give the login its own session on the same account instead, as `alice`:
+out. With a hub, import the account once instead —
+`~/.claude/fleet/bin/fleet-creds-import.sh --codex` reads this login's
+`~/.codex/auth.json` into the vault as pool `codex/default` — and every leasing
+login gets a short-lived `auth.json` from the hub, which alone refreshes it
+(through an admin node when the hub's own country is refused, issue #1490).
+Without a hub, give the login its own session on the same account, as `alice`:
 
 ```sh
 ccquota codex login personal --device-auth   # approve the device code while signed in to the shared ChatGPT account

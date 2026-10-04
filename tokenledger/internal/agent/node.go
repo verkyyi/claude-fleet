@@ -159,6 +159,9 @@ func (a *Agent) nodeSession(ctx context.Context) (established bool, err error) {
 	if a.cfg.FleetSSHRelay {
 		caps = append(caps, control.CapSSHRelay)
 	}
+	if a.relaysOAuthRefresh() {
+		caps = append(caps, control.CapOAuthRefresh)
+	}
 	hello, err := control.New(control.TypeHello, control.Hello{
 		HeartbeatMS:  int(a.cfg.LiveInterval / time.Millisecond),
 		AgentVersion: a.cfg.Version,
@@ -240,6 +243,10 @@ func (a *Agent) nodeSession(ctx context.Context) (established bool, err error) {
 				if a.cfg.FleetSSHRelay {
 					go a.openSSHRelay(ctx, m)
 				}
+			case control.TypeOAuthRefresh:
+				// One token refresh posted for the hub (claude-fleet#1490),
+				// off the read loop so a slow provider never stalls it.
+				go a.answerOAuthRefresh(ctx, conn, m)
 			case control.TypeError:
 				if relayOK && a.relayRefused(rp, m.OpID, m.Error) {
 					break

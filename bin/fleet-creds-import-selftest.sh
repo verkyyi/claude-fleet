@@ -17,6 +17,11 @@
 #   • DRY       --dry-run sends nothing
 #   • FAIL      a hub 400 → exit 1, the hub's message shown
 #   • NOAUTH    no viewer token → exit 2, nothing sent
+#   • CODEX     --codex reads ~/.codex/auth.json (tokens.refresh_token +
+#               account_id + id_token) into one `put` of pool/codex/default; a
+#               named profile reads <codex-homes>/<profile>/auth.json under its
+#               own label; a `hub-managed` home is skipped; --dry-run sends
+#               nothing; no token in the output; --expires-at is refused
 #
 # Exit 0 = pass. Non-zero = fail (prints which assertion diverged).
 set -uo pipefail
@@ -174,5 +179,64 @@ out=$(env -u CCQUOTA_VIEWER_TOKEN bash "$IMPORT" alpha 2>&1); rc=$?
 [ "$rc" = 2 ] && [ "$(nreq)" = 0 ] || fail "no viewer token: rc=$rc n=$(nreq)" "$out"
 case "$out" in *"no viewer token"*) ;; *) fail "noauth message" "$out" ;; esac
 ok "NOAUTH no viewer token → exit 2, nothing sent"
+
+# --- CODEX (issue #1490) --------------------------------------------------------
+RT='rt-CODEXSECRETCODEXSECRETCODEXSECRET'
+IDT='eyJ-IDTOKEN-IDTOKEN-IDTOKEN'
+export FLEET_CODEX_HOMES="$WORK/codex-homes"
+mkdir -p "$HOME/.codex" "$FLEET_CODEX_HOMES/work" "$FLEET_CODEX_HOMES/hubbed" "$FLEET_CODEX_HOMES/apikey"
+printf '{"auth_mode":"chatgpt","tokens":{"id_token":"%s","access_token":"at-x","refresh_token":"%s","account_id":"acct-1"},"last_refresh":"2026-10-04T00:00:00Z"}\n' "$IDT" "$RT" > "$HOME/.codex/auth.json"
+printf '{"tokens":{"access_token":"at-y","refresh_token":"%s-work","account_id":"acct-2"}}\n' "$RT" > "$FLEET_CODEX_HOMES/work/auth.json"
+printf '{"tokens":{"access_token":"at-z","refresh_token":"hub-managed","account_id":"acct-3"}}\n' > "$FLEET_CODEX_HOMES/hubbed/auth.json"
+printf '{"OPENAI_API_KEY":"sk-NOTATOKEN"}\n' > "$FLEET_CODEX_HOMES/apikey/auth.json"
+chmod 600 "$HOME/.codex/auth.json" "$FLEET_CODEX_HOMES"/*/auth.json
+no_codex_token() { case "$2" in *"$RT"*|*"$IDT"*|*CODEXSECRET*|*IDTOKEN-IDTOKEN*) fail "$1: a codex token leaked into the output" "$2" ;; esac; }
+
+: > "$LOG"
+out=$(bash "$IMPORT" --codex 2>&1); rc=$?
+no_codex_token "codex default" "$out"
+[ "$rc" = 0 ] || fail "codex default exit $rc" "$out"
+[ "$(nreq)" = 1 ] || fail "codex: expected 1 put, got $(nreq)" "$out"
+[ "$(field 0 'b["action"]+" "+b["principal_id"]+" "+b["provider"]+" "+b["account"]')" = "put pool codex default" ] || fail "codex body" "$(field 0 'b')"
+[ "$(field 0 'b["secret"]["refresh_token"]')" = "$RT" ] || fail "codex refresh_token not auth.json's"
+[ "$(field 0 'b["secret"]["account_id"]+" "+b["secret"]["id_token"]')" = "acct-1 $IDT" ] || fail "codex account_id / id_token" "$(field 0 'b["secret"]')"
+[ "$(field 0 'sorted(b["secret"].keys())')" = "['account_id', 'id_token', 'refresh_token']" ] || fail "codex secret carries more than the three" "$(field 0 'b["secret"].keys()')"
+case "$out" in *"put    default"*"pool · refresh_token"*"1 imported, 0 skipped, 0 failed"*) ;; *) fail "codex summary" "$out" ;; esac
+ok "CODEX --codex: one put pool · codex · default · refresh_token + account_id + id_token from ~/.codex/auth.json"
+
+: > "$LOG"
+out=$(bash "$IMPORT" --codex --principal wecom-alice work hubbed apikey nohome 2>&1); rc=$?
+no_codex_token "codex profiles" "$out"
+[ "$rc" = 0 ] || fail "codex profiles exit $rc" "$out"
+[ "$(nreq)" = 1 ] || fail "codex profiles: expected 1 put, got $(nreq)" "$out"
+[ "$(field 0 'b["principal_id"]+" "+b["account"]+" "+b["secret"]["refresh_token"]+" "+b["secret"]["account_id"]')" = "wecom-alice work $RT-work acct-2" ] || fail "codex work body" "$(field 0 'b')"
+[ "$(field 0 '"id_token" in b["secret"]')" = "False" ] || fail "codex: an absent id_token must not be sent"
+case "$out" in *"skip   hubbed"*"hub-managed"*) ;; *) fail "hub-managed codex home not skipped" "$out" ;; esac
+case "$out" in *"skip   apikey"*"no tokens"*) ;; *) fail "API-key home not skipped" "$out" ;; esac
+case "$out" in *"skip   nohome"*"no "*"/nohome/auth.json"*) ;; *) fail "missing home not skipped by path" "$out" ;; esac
+case "$out" in *"1 imported, 3 skipped, 0 failed"*) ;; *) fail "codex profiles summary" "$out" ;; esac
+ok "CODEX named profiles under <codex-homes>/<profile>; hub-managed / API-key / missing homes skipped and named"
+
+: > "$LOG"
+out=$(bash "$IMPORT" --codex --dry-run 2>&1); rc=$?
+no_codex_token "codex dry" "$out"
+[ "$rc" = 0 ] && [ "$(nreq)" = 0 ] || fail "codex dry-run sent $(nreq) request(s)" "$out"
+case "$out" in *"would  default"*"pool · refresh_token"*"nothing sent"*) ;; *) fail "codex dry-run plan" "$out" ;; esac
+ok "CODEX --dry-run plans the one row, sends nothing"
+
+: > "$LOG"
+out=$(bash "$IMPORT" --codex --expires-at 2027-01-01T00:00:00Z 2>&1); rc=$?
+[ "$rc" = 2 ] && [ "$(nreq)" = 0 ] || fail "codex --expires-at: rc=$rc n=$(nreq)" "$out"
+case "$out" in *"does not apply to --codex"*) ;; *) fail "codex --expires-at refusal" "$out" ;; esac
+ok "CODEX --expires-at is refused (a refresh token rotates)"
+
+# The Claude mode is byte-for-byte what it was: a codex home on the machine
+# changes nothing about a plain run.
+: > "$LOG"
+out=$(bash "$IMPORT" --dry-run 2>&1); rc=$?
+[ "$rc" = 0 ] && [ "$(nreq)" = 0 ] || fail "claude dry-run after codex setup" "$out"
+case "$out" in *"would  alpha"*"setup_token · expires"*) ;; *) fail "claude plan changed" "$out" ;; esac
+case "$out" in *default*|*codex*) fail "claude mode considered a codex home" "$out" ;; esac
+ok "CODEX the Claude mode is unchanged beside a codex home"
 
 printf 'fleet-creds-import-selftest: %d checks passed\n' "$pass"

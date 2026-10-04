@@ -557,6 +557,83 @@ func HomeSigMessage(unix int64) string {
 	return fmt.Sprintf("fleet-home %d", unix)
 }
 
+// The OAuth refresh relay (claude-fleet#1490): the hub's own egress may sit
+// where a provider's token endpoint refuses it — the production hub runs in
+// Shenzhen, and auth.openai.com answers a mainland IP with 403
+// unsupported_country_region_territory — so the ONE outbound POST a refresh
+// is travels by an admin node instead. The hub stays the only holder of the
+// refresh token and the only writer per account; the node receives the form
+// for one request, posts it once from its own network and hands back the
+// provider's answer verbatim. Nothing is written or logged on the node: the
+// form and the answer live in one goroutine's memory and die with it.
+//
+//	hub  ──TypeOAuthRefresh {provider, form}──▶ admin node ──POST──▶ provider
+//	hub  ◀──TypeOAuthRefreshResult {status, body}── admin node ◀───────┘
+//
+// The node fixes the token endpoint itself, by provider (control.OAuthTokenURL
+// on the agent side): a relay is a way to refresh a Claude or Codex token,
+// never a general forwarder, so a hub can neither name a host nor send a body
+// anywhere else.
+const (
+	// TypeOAuthRefresh is the hub→node request. Sent only to a connected
+	// admin node whose hello listed CapOAuthRefresh.
+	TypeOAuthRefresh = "oauth_refresh"
+	// TypeOAuthRefreshResult is the node's answer, by op_id. A refusal (not
+	// admin, unknown provider, malformed) comes back as a TypeError instead.
+	TypeOAuthRefreshResult = "oauth_refresh_result"
+	// CapOAuthRefresh is the hello capability of an admin agent that relays
+	// refreshes. An older agent never says it and is never asked.
+	CapOAuthRefresh = "oauth_refresh"
+	// MaxOAuthRefreshBody bounds the provider answer a node hands back: a
+	// token response is a few KB; a 403 page from a proxy can be more.
+	MaxOAuthRefreshBody = 64 << 10
+)
+
+// The providers' public token endpoints — the same ones the Claude Code and
+// Codex CLIs refresh with. Here, not in credvault, because the NODE picks the
+// endpoint for a relayed refresh (never the hub), and the agent must not
+// depend on the vault.
+const (
+	ClaudeTokenURL = "https://platform.claude.com/v1/oauth/token"
+	CodexTokenURL  = "https://auth.openai.com/oauth/token"
+)
+
+// OAuthTokenURL is the token endpoint for provider; "" for one the relay does
+// not serve (github has no refresh).
+func OAuthTokenURL(provider string) string {
+	switch provider {
+	case "claude":
+		return ClaudeTokenURL
+	case "codex":
+		return CodexTokenURL
+	}
+	return ""
+}
+
+// OAuthRefresh is the payload of TypeOAuthRefresh.
+type OAuthRefresh struct {
+	// Provider is claude or codex; the node picks the endpoint from it.
+	Provider string `json:"provider"`
+	// Form is the JSON body of the token request, exactly as the hub would
+	// have posted it itself (grant_type, refresh_token, client_id, scope).
+	// A secret: the node never logs or stores it.
+	Form map[string]string `json:"form"`
+}
+
+// OAuthRefreshResult is the payload of TypeOAuthRefreshResult: what the
+// provider answered, verbatim, or why the node could not ask it.
+type OAuthRefreshResult struct {
+	// Status is the provider's HTTP status; 0 when the request never got an
+	// answer (Error says why).
+	Status int `json:"status"`
+	// Body is the provider's answer body, truncated at MaxOAuthRefreshBody.
+	// On success it carries the new tokens: a secret the hub seals at once.
+	Body string `json:"body,omitempty"`
+	// Error is a transport failure on the node (dial, TLS, timeout) — never
+	// a provider refusal, which comes back as its status and body.
+	Error string `json:"error,omitempty"`
+}
+
 // SSHRelayOpen is the payload of TypeSSHRelayOpen.
 type SSHRelayOpen struct {
 	// RelayID names the relay; the agent dials SSHRelayDataPath?id=<RelayID>.

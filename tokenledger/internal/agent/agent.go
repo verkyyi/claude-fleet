@@ -124,6 +124,19 @@ type Config struct {
 	// (CCQUOTA_FLEET_CODEX_HOMES).
 	FleetCodexHomesDir string
 
+	// FleetOAuthRefresh lets the hub relay a credential REFRESH through this
+	// machine (claude-fleet#1490): an admin agent posts the hub's one token
+	// request to the provider from its own network and hands the answer
+	// back, keeping nothing. On by default with FleetAdmin;
+	// CCQUOTA_FLEET_OAUTH_REFRESH=0 turns it off, and the hello never
+	// offers it. Never offered by a non-admin agent.
+	FleetOAuthRefresh bool
+	// OAuthTokenURLs overrides a provider's token endpoint for a relayed
+	// refresh (the same CCQUOTA_FLEET_CLAUDE_TOKEN_URL /
+	// CCQUOTA_FLEET_CODEX_TOKEN_URL the hub reads), for an end-to-end run
+	// against a fake provider. Unset = the providers' public endpoints.
+	OAuthTokenURLs map[string]string
+
 	// FleetSSHRelay lets the hub relay SSH connections to this machine
 	// (claude-fleet#1413): the agent splices a data stream it dials to the
 	// hub onto the local sshd at 127.0.0.1:22. On by default with Fleet;

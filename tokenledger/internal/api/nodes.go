@@ -70,6 +70,10 @@ type nodeConn struct {
 	// canSSHRelay is the hello's CapSSHRelay: this node splices relays onto its
 	// sshd (claude-fleet#1413). Set once, before the conn is published.
 	canSSHRelay bool
+	// canOAuthRefresh is the hello's CapOAuthRefresh: this admin node posts
+	// one token refresh to the provider from its own network and hands the
+	// answer back (claude-fleet#1490). Set once, before the conn is published.
+	canOAuthRefresh bool
 	// osUser is the login this agent runs as, refreshed by heartbeats.
 	osUser atomic.Value // string
 	// pending routes read and write replies to their waiter.
@@ -127,6 +131,21 @@ func (n *nodeConns) get(id string) *nodeConn {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return n.conns[id]
+}
+
+// each calls fn for every open connection, in endpoint order (deterministic
+// when two candidates tie). fn runs under the set's lock: look, never block.
+func (n *nodeConns) each(fn func(id string, c *nodeConn)) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	ids := make([]string, 0, len(n.conns))
+	for id := range n.conns {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		fn(id, n.conns[id])
+	}
 }
 
 // adminFor returns the open, write-compatible admin connection on hostname.
@@ -250,6 +269,9 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 	nc := &nodeConn{conn: conn, admin: hp.Admin && s.isFleetAdmin(ep.OSUser), canRead: hp.HasCap(control.CapRead),
 		canWrite: hp.HasCap(control.CapWrite), canRelay: hp.HasCap(control.CapRelay),
 		canMove: hp.HasCap(control.CapMove), canSSHRelay: hp.HasCap(control.CapSSHRelay)}
+	// The refresh relay is an ADMIN role: a node that offers it without
+	// being on the hub's admin list is never handed a refresh token's form.
+	nc.canOAuthRefresh = nc.admin && hp.HasCap(control.CapOAuthRefresh)
 	nc.osUser.Store(ep.OSUser)
 	nc.proto.Store(int64(hello.Proto))
 	nc.host.Store(ep.Hostname)
@@ -353,6 +375,10 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 			nc.pending.deliver(m)
 		case control.TypeSSHCAResult:
 			s.applySSHCAResult(ep.ID, nc, m)
+		case control.TypeOAuthRefreshResult:
+			// A relayed token refresh's answer (claude-fleet#1490) goes to
+			// the lease that is waiting on it; nothing of it is kept here.
+			nc.pending.deliver(m)
 		case control.TypeError:
 			// A refused hub read or write goes to its waiter; any other
 			// error is a refused account op.

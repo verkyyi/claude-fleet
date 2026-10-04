@@ -572,6 +572,40 @@ remain at `<conf>.bak`. Effective values include current inherited defaults.
 Arbitrary external file editors do not participate in this lock. Changes affect
 future scheduling decisions and do not terminate existing workers.
 
+## Credentials: the vault refreshes, a node carries the request
+
+Long-lived credentials (a Claude or Codex refresh token, a Claude setup token)
+live only in the hub's vault (claude-fleet#1415); a machine leases the
+short-lived half from `POST /v1/node/credentials` and never holds anything that
+can mint more. The hub is the one refresher per account, serialised per
+account, and saves the rotated refresh token before any node receives the
+result.
+
+**The refresh itself runs through a node when the hub's own network is refused
+(claude-fleet#1490).** The production hub is in Shenzhen; the OpenAI token
+endpoint answers a mainland IP with `403 unsupported_country_region_territory`,
+so with `CCQUOTA_FLEET_OAUTH_REFRESH_VIA=node` the hub sends the ONE token
+request — provider plus the form it would have posted itself — down the control
+channel to an admin node (`oauth_refresh`), the node posts it once from its own
+network to the endpoint it fixes itself for that provider, and returns the
+provider's answer verbatim (`oauth_refresh_result`). The hub unseals, saves and
+issues exactly as before.
+
+- The node chosen is a connected admin agent that offered the capability, online
+  by heartbeat, not a SPOT pod, least loaded per core; it is asked once, never
+  twice (a refresh token is single-use).
+- The node keeps nothing: form and answer stay in memory, and its log carries
+  only provider, HTTP status and duration — no token text, ever.
+- The hub's `fleet_cred_audit` refresh row says `refresh_via=<login>@<host>`.
+- No admin node online → the leasing machine gets `refresh_unavailable`, not
+  the provider's 403; a still-valid cached access token is issued meanwhile.
+
+Importing: `bin/fleet-creds-import.sh` for Claude setup tokens,
+`bin/fleet-creds-import.sh --codex [profile]` for a Codex refresh token (reads
+`~/.codex/auth.json`); neither changes a file on the importing machine. Details
+and the environment table: `tokenledger/README.md`, "Credentials live at the
+entrance".
+
 ## Validation and next increments
 
 Run the hermetic regression suite through the normal shadow-root gate:
