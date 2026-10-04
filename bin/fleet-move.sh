@@ -21,7 +21,9 @@
 #                           every one of them, which is what a machine about
 #                           to go down wants (fleet-spot-evacuate.sh, #1428).
 #                           Only `done` sessions move; a session mid-turn
-#                           never does.
+#                           never does. One no machine can take (REFUSED) is
+#                           skipped with a `↷` line, not a stop (#1513); the
+#                           summary is `moved N · skipped M · left K`.
 #         --fleet <sess>    the TARGET's fleet, when that login runs more than
 #                           one (legacy multi-fleet; #979/#980 makes this rare) —
 #                           default: the target's one configured fleet.
@@ -495,11 +497,18 @@ move_main() {
 
   # --rebalance (issue #1426): the hub's placement decides. Longest-idle `done`
   # sessions first; stop at the first answer that says this machine is the best
-  # place (or that nothing can take one), and after --max moves.
+  # place, at a hub that cannot be asked, and after --max moves. A session no
+  # machine can take (REFUSED, rc 4 — NO_ELIGIBLE_NODE, …) or whose chosen
+  # machine cannot take a move yet is SKIPPED, not a stop (issue #1513): the next
+  # one may well have somewhere to go, and an evacuation (`--max all`) must move
+  # everything that can move. Summary: `moved N · skipped M · left K`, where K is
+  # the idle sessions still here (skipped + failed + never reached).
   if [ "$REBAL" = 1 ]; then
     rwins=$(TM list-windows -t "=$SESS" -F '#{@claude_state_ts}|#{window_id}|#{@claude_state}|#{@hub}|#{window_name}|#{@worker_lifecycle}' 2>/dev/null \
       | awk -F'|' -v pr="$PANEL_RE" '$3 == "done" && $4 != "1" && $6 == "" && $5 !~ pr { print ($1 == "" ? 0 : $1) "|" $2 }' \
       | sort -t'|' -k1,1n | cut -d'|' -f2)
+    skipped=0; ncand=0
+    for wid in $rwins; do ncand=$((ncand + 1)); done
     for wid in $rwins; do
       [ "$moved" -ge "$RMAX" ] && break
       rrepo=$(fleet_window_repo "$SESS" "$wid"); rkey=$(fleet_window_okey "$SESS" "$wid"); ru=$(fleet_uuid "$SESS" 2>/dev/null)
@@ -509,9 +518,15 @@ move_main() {
       case "$rc:${head%% *}" in
         0:LOCAL) say "rebalance: this machine is the best place for $rrepo now — ${reason:-nothing to move}"; break ;;
         0:REMOTE) ;;
+        4:REFUSED)
+          say "  ↷ $(wopt "$wid" '#{window_name}') ($wid): ${head#REFUSED }${reason:+ — $reason}"
+          skipped=$((skipped + 1)); continue ;;
         *) say "rebalance: hub: ${line:-unreachable} — stopping"; break ;;
       esac
-      case " $head " in *" movable "*) ;; *) say "rebalance: ${head#REMOTE } cannot take a moved session yet — stopping"; break ;; esac
+      case " $head " in *" movable "*) ;; *)
+        say "  ↷ $(wopt "$wid" '#{window_name}') ($wid): ${head#REMOTE } cannot take a moved session yet"
+        skipped=$((skipped + 1)); continue ;;
+      esac
       TO=$(printf '%s' "$head" | awk '{ print $2 }')
       total=$((total + 1))
       PLANNED=$line move_one "$wid"; rc=$?
@@ -520,7 +535,7 @@ move_main() {
     done
     failed_msg=''; [ "$failed" -gt 0 ] && failed_msg=", $failed failed"
     dry_msg=''; [ "$DRY" = 1 ] && dry_msg=' (dry-run)'
-    say "fleet-move: rebalance moved $moved$failed_msg$dry_msg"
+    say "fleet-move: rebalance moved $moved · skipped $skipped · left $((ncand - moved))$failed_msg$dry_msg"
     [ "$failed" -eq 0 ] && exit 0
     [ "$moved" -eq 0 ] && exit "$LAST_RC"
     exit 1
