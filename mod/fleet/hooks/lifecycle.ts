@@ -23,6 +23,7 @@ import type { EngineInterface, On, Timer } from 'claude-code'
 
 import type { FleetModStatus } from '../types'
 import { isOpen, openGate } from './gate'
+import { TOOL_SPECS } from './tools'
 import { TMUX_TIMEOUT_MS, windowOptionsArgv } from './tmux'
 import { MOD_VERSION, isSupported } from './version'
 
@@ -53,6 +54,14 @@ async function beat($: EngineInterface): Promise<void> {
 
 /** Start-up work of every feature, run once the gate is open. */
 async function onReady($: EngineInterface): Promise<void> {
+  // The fleet tools (tools.ts serves them): registered before the first prompt.
+  for (const spec of TOOL_SPECS) {
+    try {
+      await $.tool.register(spec)
+    } catch {
+      // One tool that will not register costs that tool, never the session.
+    }
+  }
   await beat($)
   timer?.cancel()
   timer = $.clock.every(HEARTBEAT_MS, () => {
