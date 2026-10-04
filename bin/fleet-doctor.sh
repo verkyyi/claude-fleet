@@ -1178,7 +1178,7 @@ _os="$HOME/.config/claude-fleet/open.secret"; _ol="$HOME/.config/claude-fleet/op
 if [ ! -s "$_os" ]; then
   info open "no secret yet ($_os) — made on the first \`bin/fleet-open.sh\`; then install the laptop side (#1380)"
 else
-  _op=$(stat -f '%Lp' "$_os" 2>/dev/null || stat -c '%a' "$_os" 2>/dev/null)
+  _op=$(stat -c '%a' "$_os" 2>/dev/null || stat -f '%Lp' "$_os" 2>/dev/null)
   _olast="never used"
   if [ -s "$_ol" ]; then
     _olast=$(awk -F '\t' -v now="$(date +%s)" 'NR == 1 { a = now - $1; u = "s"

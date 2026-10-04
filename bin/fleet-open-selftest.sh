@@ -126,7 +126,7 @@ res=$("$OPEN" ':8765/d/x/' 2>"$WORK/err"); rc=$?
 [ "$rc" = 0 ] && [ "$res" = sent:iterm2 ] && ok "stdout is one line sent:iterm2" || bad "result ($rc): $res / $(cat "$WORK/err")"
 [ "$(cat "$STATE/locked")" = /dev/ttyNEW ] && ok "CHANNEL newest iTerm2 client" || bad "CHANNEL locked $(cat "$STATE/locked")"
 [ -f "$SECRET" ] && ok "SECRET created at ~/.config/claude-fleet/open.secret" || bad "SECRET missing"
-perm=$(stat -f '%Lp' "$SECRET" 2>/dev/null || stat -c '%a' "$SECRET" 2>/dev/null)
+perm=$(stat -c '%a' "$SECRET" 2>/dev/null || stat -f '%Lp' "$SECRET" 2>/dev/null)
 [ "$perm" = 600 ] && ok "SECRET mode 0600" || bad "SECRET mode $perm"
 sec=$(cat "$SECRET")
 printf '%s' "$sec" | grep -Eq '^[0-9a-f]{64}$' && ok "SECRET 64 hex" || bad "SECRET shape"
@@ -152,7 +152,7 @@ grep -q 8765 "$HOME/.config/claude-fleet/open.last" && bad "RECORD holds the add
 
 chmod 644 "$SECRET"; rm -f "$OUT"
 "$OPEN" 'https://github.com/x' >/dev/null 2>&1
-perm=$(stat -f '%Lp' "$SECRET" 2>/dev/null || stat -c '%a' "$SECRET" 2>/dev/null)
+perm=$(stat -c '%a' "$SECRET" 2>/dev/null || stat -f '%Lp' "$SECRET" 2>/dev/null)
 [ "$perm" = 600 ] && [ "$(cat "$SECRET")" = "$sec" ] && ok "SECRET loose → 0600, same secret" || bad "SECRET re-perm: $perm"
 grep -q 'Custom=id=' "$OUT" && ok "url kind sent too" || bad "url kind not sent"
 
