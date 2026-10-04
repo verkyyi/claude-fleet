@@ -94,7 +94,9 @@ func (s *Server) handleEnter(w http.ResponseWriter, r *http.Request) {
 	// auto-assigned machines (claude-fleet#1411). It never delays or blocks
 	// the sign-in itself.
 	s.onPrincipalSignIn(p.Sub)
-	http.Redirect(w, r, "/", http.StatusFound)
+	// A `fleet login` QR scanned while signed out comes back to its
+	// confirmation page (claude-fleet#1412); everything else goes to "/".
+	http.Redirect(w, r, loginReturn(w, r), http.StatusFound)
 }
 
 // ssoViewer reports the signed-in human behind this request, if any.

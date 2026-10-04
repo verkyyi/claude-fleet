@@ -223,6 +223,10 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 	s.nodes.put(ep.ID, nc)
 	defer s.nodes.drop(ep.ID, nc)
 	if nc.admin {
+		// Every admin connect re-sends the SSH user CA: the node checks
+		// what it already has, so a matching machine changes nothing
+		// (claude-fleet#1412).
+		go s.sendSSHCA(ep.ID)
 		// Anything sent down this link and not yet answered is now unknown:
 		// whether the login got made is a question only the node can answer,
 		// and it re-sends its answer when it is back.
@@ -289,6 +293,8 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 			// A reply to a hub read (claude-fleet#1409) or write
 			// (claude-fleet#1410).
 			nc.pending.deliver(m)
+		case control.TypeSSHCAResult:
+			s.applySSHCAResult(ep.ID, nc, m)
 		case control.TypeError:
 			// A refused hub read or write goes to its waiter; any other
 			// error is a refused account op.
@@ -330,6 +336,9 @@ type NodeView struct {
 	AgentVersion  string     `json:"agent_version,omitempty"`
 	// Admin is a connected node the hub will send account ops to.
 	Admin bool `json:"admin,omitempty"`
+	// SSHCA is an admin node's last answer to the SSH user CA install
+	// (claude-fleet#1412): sent | trusted… | failed….
+	SSHCA string `json:"ssh_ca,omitempty"`
 
 	Load1         float64            `json:"load1"`
 	NCPU          int                `json:"ncpu"`
@@ -408,6 +417,9 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 		v := nodeView(n, now)
 		if c := s.nodes.get(n.EndpointID); c != nil {
 			v.Connected, v.Admin = true, c.admin
+			if c.admin {
+				v.SSHCA = s.sshCAStatusOf(n.EndpointID)
+			}
 		}
 		out.Nodes = append(out.Nodes, v)
 
@@ -476,6 +488,11 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, snap)
+}
+
+// serveConnectPage serves the 连接 page (claude-fleet#1412).
+func (s *Server) serveConnectPage(w http.ResponseWriter, r *http.Request) {
+	s.serveStandalonePage(w, r, "connect.html")
 }
 
 // serveNodesPage serves the standalone roster page.

@@ -196,6 +196,8 @@ func (a *Agent) nodeSession(ctx context.Context) (established bool, err error) {
 			switch m.Type {
 			case control.TypeAccountOp:
 				a.handleAccountOp(ctx, conn, m)
+			case control.TypeSSHCA:
+				a.handleSSHCA(ctx, conn, m)
 			case control.TypeAck:
 				a.acct.acked(m.OpID)
 			case control.TypeRequest:

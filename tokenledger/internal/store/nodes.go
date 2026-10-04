@@ -45,8 +45,9 @@ type Node struct {
 	StatusJSON string `json:"-"`
 }
 
-// EnsureNodes creates the node roster, the fleet registry (claude-fleet#1409)
-// and the principal/account tables (claude-fleet#1411). Idempotent.
+// EnsureNodes creates the node roster, the fleet registry (claude-fleet#1409),
+// the principal/account tables (claude-fleet#1411) and the certificate audit
+// (claude-fleet#1412). Idempotent.
 func (s *Store) EnsureNodes() error {
 	if _, err := s.write.Exec(nodesSchema); err != nil {
 		return fmt.Errorf("create nodes table: %w", err)
@@ -58,7 +59,10 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetColumns(); err != nil {
 		return err
 	}
-	return s.ensureFleetAccounts()
+	if err := s.ensureFleetAccounts(); err != nil {
+		return err
+	}
+	return s.ensureFleetCerts()
 }
 
 // NodeConnected records that endpointID opened a control channel speaking
