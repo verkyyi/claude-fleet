@@ -11,6 +11,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -98,8 +99,8 @@ TrustedUserCAKeys %s
 		t.Skipf("this sshd will not run unprivileged here: %v %s", err, out)
 	}
 	srv := exec.Command(sshd, "-D", "-e", "-f", cfg)
-	var log strings.Builder
-	srv.Stderr = &log
+	log := &lockedLog{}
+	srv.Stderr = log
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -156,4 +157,23 @@ TrustedUserCAKeys %s
 	if !strings.Contains(log.String(), "wecom:Tester") {
 		t.Errorf("sshd's log does not name the key id: %s", log.String())
 	}
+}
+
+// lockedLog is sshd's stderr: exec copies into it from its own goroutine
+// while the test reads it.
+type lockedLog struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *lockedLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
 }
