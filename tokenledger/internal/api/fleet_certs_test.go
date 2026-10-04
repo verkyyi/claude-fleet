@@ -70,10 +70,16 @@ func postJSON(t *testing.T, h *harness, path string, body any) (int, []byte) {
 // personForm posts the confirmation form as sub, from this origin.
 func personForm(t *testing.T, h *harness, sub, origin string, form url.Values) (int, string) {
 	t.Helper()
+	return cookieForm(t, h, &http.Cookie{Name: authz.CookieName, Value: authz.SignSession(sub, ssoSessionKey, time.Now(), time.Hour)}, origin, form)
+}
+
+// cookieForm posts the confirmation form on the given session cookie.
+func cookieForm(t *testing.T, h *harness, c *http.Cookie, origin string, form url.Values) (int, string) {
+	t.Helper()
 	r, _ := http.NewRequest(http.MethodPost, h.http.URL+"/fleet/login", strings.NewReader(form.Encode()))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	r.Header.Set("Origin", origin)
-	r.AddCookie(&http.Cookie{Name: authz.CookieName, Value: authz.SignSession(sub, ssoSessionKey, time.Now(), time.Hour)})
+	r.AddCookie(c)
 	resp, err := http.DefaultClient.Do(r)
 	if err != nil {
 		t.Fatal(err)

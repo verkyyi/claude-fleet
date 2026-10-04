@@ -592,12 +592,18 @@ func fleetPersonScopes() []string {
 // login the nodes would refuse, or one login claimed by two people refuses
 // to start the hub: this map is what decides whose machine a sign-in lands
 // on, and a half-read one would place someone silently wrong.
+//
+// The userid is folded to lower case (claude-fleet#1472): WeCom's userids are
+// case-insensitive, so `YiLiangHui=verkyyi` and `yilianghui=verkyyi` are one
+// entry, and `YiLiangHui=a,yilianghui=b` is the same person mapped twice. The
+// hub compares the map to a ticket case-insensitively either way; the fold
+// here is what makes the conflict checks see one person.
 func fleetPrincipalLogins(v string) (map[string]string, error) {
 	out := map[string]string{}
 	owners := map[string]string{}
 	for _, e := range splitList(v) {
 		pid, login, ok := strings.Cut(e, "=")
-		pid, login = strings.TrimSpace(pid), strings.TrimSpace(login)
+		pid, login = strings.ToLower(strings.TrimSpace(pid)), strings.TrimSpace(login)
 		if !ok || pid == "" || login == "" {
 			return nil, fmt.Errorf("CCQUOTA_FLEET_PRINCIPAL_LOGINS: %q is not <userid>=<login>", e)
 		}

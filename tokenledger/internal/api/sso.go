@@ -103,7 +103,10 @@ func (s *Server) handleEnter(w http.ResponseWriter, r *http.Request) {
 	// The first sign-in is what records a person and, when the operator
 	// mapped them to a login (claude-fleet#1458) or auto-assigns machines
 	// (claude-fleet#1411), gives them their logins. It never delays or
-	// blocks the sign-in itself.
+	// blocks the sign-in itself. Not the only time it runs: the doors that
+	// need the row (/fleet/login, /connect, a certificate) run the same
+	// placement for a cookie minted before the row could exist
+	// (ensurePerson, claude-fleet#1472).
 	s.onPrincipalSignIn(p.Principal(), p.Name)
 	// A `fleet login` QR scanned while signed out comes back to its
 	// confirmation page (claude-fleet#1412); everything else goes to "/".
