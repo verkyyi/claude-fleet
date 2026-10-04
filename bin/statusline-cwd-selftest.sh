@@ -66,7 +66,10 @@ gitcalls() { wc -l < "$GITLOG" | tr -d ' '; }
 R=$'\033[0m'; D=$'\033[2m'; B=$'\033[1m'
 SEP="${D} │ ${R}"
 BAR=$'\033[32m████░░░░░░ 42%'"$R"
-CWDSEG="${B}"$'\033[36m~/proj'"$R"
+# Today's ${CWD/#$HOME/~}, evaluated by the same bash: bash 5.2 tilde-expands the
+# `~` in the replacement (so the line shows the full path there), 3.2 keeps `~`.
+CWDDISP=$(HOME="$WORK/home" bash -c 'c="$HOME/proj"; printf %s "${c/#$HOME/~}"')
+CWDSEG="${B}"$'\033[36m'"${CWDDISP}${R}"
 BRSEG=$'\033[33missue-9*'"$R"
 MODSEG=$'\033[35mOpus'"$R"
 FULL="${BAR}${SEP}${CWDSEG}${SEP}${BRSEG}${SEP}${MODSEG}"
