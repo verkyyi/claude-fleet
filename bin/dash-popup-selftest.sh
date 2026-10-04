@@ -181,11 +181,92 @@ if ls "$RTMP"/.dash-popup-ran.* >/dev/null 2>&1; then
   fail "refused popup: the did-it-run marker leaked into TMPDIR"
 fi
 
+# --- 6b. ONE FRAME (issue #1535, EPIC #1529 E6) -------------------------------
+# --size S|M|L, the 「动作 · 对象 · 机器 … Esc 关闭」 title row, --client, and
+# --no-inline. A logging shim records the display-popup argv (tmux offers no query
+# for a popup's title) and RUNS the command, as a popup that opened would.
+FRAME="$WORK/frame"; mkdir -p "$FRAME"; FLOG="$WORK/frame.log"
+cat > "$FRAME/tmux" <<EOF
+#!/bin/bash
+case "\$1" in
+  display-popup) shift; printf '%s\n' "\$@" > "$FLOG"; for a; do last=\$a; done; sh -c "\$last"; exit 0 ;;
+  list-clients)  echo "9 /dev/ttyF"; exit 0 ;;
+  display-message) [ "\${2:-}" = -c ] && [ "\${4:-}" != -p ] && { printf 'toast %s\n' "\$4" >> "$FLOG.toast"; exit 0; } ;;
+esac
+exec "$REAL_TMUX" -S "$SOCK" "\$@"
+EOF
+chmod +x "$FRAME/tmux"
+FTMP="$WORK/frame-tmp"; mkdir -p "$FTMP"
+frame() { PATH="$FRAME:$PATH" TMPDIR="$FTMP" FLEET_UI_LANG=zh bash "$HELPER" "$@" >/dev/null 2>&1; }
+frame --client /dev/ttyF --size L --title popup_keys -- true \
+  || fail "frame: --size/--title/--client did not run"
+want="$(printf '%s\n' -c /dev/ttyF -E -w 94% -h 86% -T '#[align=left] 快捷键 #[align=right]#[dim] Esc 关闭 ')"
+[ "$(head -9 "$FLOG")" = "$want" ] \
+  || fail "frame: the L popup is not 94%×86% titled 「快捷键 … Esc 关闭」: $(head -9 "$FLOG" | tr '\n' ' ')"
+# -w / -h beside --size win on their axis; an object joins the title; a # in it is
+# literal in the tmux format
+frame --client /dev/ttyF --size S -h 9 --title popup_reap --object '#42' -- true
+[ "$(sed -n 4,7p "$FLOG")" = "$(printf '%s\n' -w 84% -h 9)" ] || fail "frame: -h beside --size S did not win: $(tr '\n' ' ' < "$FLOG")"
+grep -qxF -- '#[align=left] 回收 · ##42 #[align=right]#[dim] Esc 关闭 ' "$FLOG" || fail "frame: the object is not 「回收 · #42」: $(tr '\n' ' ' < "$FLOG")"
+# a title that is no key shows as given; English follows FLEET_UI_LANG
+PATH="$FRAME:$PATH" TMPDIR="$FTMP" FLEET_UI_LANG=en bash "$HELPER" --client /dev/ttyF --size M --title 'Free text' -- true
+grep -qxF -- '#[align=left] Free text #[align=right]#[dim] Esc close ' "$FLOG" || fail "frame: free-text English title wrong: $(tr '\n' ' ' < "$FLOG")"
+# the machine joins the title only when the hub is on: the sidebar's remote cache
+# names this one (`#me`). Hub off (no cache, above) ⇒ 「动作 · 对象」 only.
+tmux new-session -d -s fr -x 80 -y 20 </dev/null >/dev/null 2>&1
+mkdir -p "$FTMP/.claude-dash/global"
+printf '#ts\0371\n#me\037m5\n' > "$FTMP/.claude-dash/global/remote_fr"
+TMUX_PANE=$(tmux list-panes -t fr -F '#{pane_id}' | head -1) frame --size L --title popup_keys -- true
+grep -qxF -- '#[align=left] 快捷键 · m5 #[align=right]#[dim] Esc 关闭 ' "$FLOG" \
+  || fail "frame: the hub-on title does not name this machine: $(tr '\n' ' ' < "$FLOG")"
+# --no-inline: a refused popup is never run in the caller (a bind has no pane) —
+# it toasts why on that client and exits 3, and strands nothing
+NR="$WORK/noinline"; rm -f "$FLOG.toast"
+PATH="$REFUSE:$PATH" TMPDIR="$RTMP" bash "$HELPER" --client /dev/ttyFAKE --no-inline --size S -- \
+  sh -c "echo ran >> '$NR'" >/dev/null 2>&1; rc=$?
+[ "$rc" = 3 ] || fail "--no-inline: a refused popup exited $rc, want 3"
+[ ! -e "$NR" ] || fail "--no-inline: a refused popup ran its command inline anyway"
+v="$(tmux show-option -gqv @popup_open 2>/dev/null)"
+case "$v" in ''|0) ;; *) fail "--no-inline: @popup_open left at [$v], expected 0" ;; esac
+ls "$RTMP"/.dash-popup-ran.* >/dev/null 2>&1 && fail "--no-inline: the did-it-run marker leaked"
+cat > "$FRAME/tmux" <<EOF
+#!/bin/bash
+case "\$1" in
+  display-popup) exit 0 ;;
+  display-message) [ "\${2:-}" = -c ] && [ "\${4:-}" != -p ] && { printf 'toast %s\n' "\$4" >> "$FLOG.toast"; exit 0; } ;;
+esac
+exec "$REAL_TMUX" -S "$SOCK" "\$@"
+EOF
+frame --client /dev/ttyF --no-inline --size S -- true; rc=$?
+[ "$rc" = 3 ] && grep -q '^toast fleet: 弹窗没打开' "$FLOG.toast" 2>/dev/null \
+  || fail "--no-inline: a refusal did not toast on its client (rc=$rc): $(cat "$FLOG.toast" 2>/dev/null)"
+echo "ok: one frame — sizes, 「动作 · 对象 · 机器 … Esc 关闭」, --no-inline exit 3 + toast"
+
+# --- 6c. ONE DOOR (issue #1535): nothing but dash-popup.sh calls display-popup,
+# and every caller gives its popup a title — the shipped scripts and the conf.
+ROOT="$(cd "$BIN/.." && pwd)"
+direct=$(grep -n 'display-popup' "$BIN"/*.sh "$BIN"/*.py "$ROOT"/conf/*.conf 2>/dev/null \
+  | grep -v -- '-selftest\.' | grep -v '^[^:]*/dash-popup\.sh:' | grep -Ev '^[^:]+:[0-9]+:[[:space:]]*#')
+[ -z "$direct" ] || fail "one door: display-popup called outside dash-popup.sh:
+$direct"
+# an INVOCATION (the script path then its args), not a mention in prose
+untitled=$(grep -n 'dash-popup\.sh' "$BIN"/*.sh "$BIN"/*.py "$ROOT"/conf/*.conf 2>/dev/null \
+  | grep -v -- '-selftest\.' | grep -v '^[^:]*/dash-popup\.sh:' | grep -Ev '^[^:]+:[0-9]+:[[:space:]]*#' \
+  | grep -E 'dash-popup\.sh(["'"'"')]| --| -w| -h)' | grep -v -- '--title')
+[ -z "$untitled" ] || fail "one frame: a popup without --title:
+$untitled"
+for f in tmux-dashboard.sh tmux-issues.sh fleet-sidebar-menu.sh fleet-sidebar.py fleet-task-pick.sh \
+         fleet-restore-pick.sh dash-issue-new.sh dash-issue-comment.sh dash-issue-close.sh \
+         dash-reap.sh dash-migrate.sh open-url.sh; do
+  grep -q 'dash-popup' "$BIN/$f" || fail "one door: $f opens no popup through dash-popup.sh"
+done
+echo "ok: one door — every popup in bin/ and conf/ goes through dash-popup.sh, titled"
+
 # --- 7. STATIC GUARD: the binds route through the helper ---------------------
 [ -f "$DASH" ] || fail "static guard: $DASH not found"
-grep -q 'dash-popup\.sh -w 72% -h 80% -- bash \$BIN/fleet-keys\.sh --context dash' "$DASH" \
+grep -q 'dash-popup\.sh --size L --title popup_keys -- bash \$BIN/fleet-keys\.sh --context dash' "$DASH" \
   || fail "static guard: the dash '?' bind does not route through dash-popup.sh"
-grep -q 'dash-popup\.sh -w 90% -h 12 -- bash \$BIN/dash-issue-new\.sh confirm --spawn' "$DASH" \
+grep -q 'dash-popup\.sh --size S --title popup_new_task -- bash \$BIN/dash-issue-new\.sh confirm --spawn' "$DASH" \
   || fail "static guard: the dash ⌃n bind does not route through dash-popup.sh"
 # No fzf --bind may call display-popup directly any more — that is the whole bug.
 if grep -n -- '--bind' "$DASH" | grep -q 'display-popup'; then
@@ -197,7 +278,7 @@ fi
 # the sheet inline, since tmux cannot nest a popup inside a popup — #123/#122.)
 ISSUES="$BIN/tmux-issues.sh"
 [ -f "$ISSUES" ] || fail "static guard: $ISSUES not found"
-grep -q 'dash-popup\.sh -w 72% -h 80% -- bash \$BIN/fleet-keys\.sh --context backlog' "$ISSUES" \
+grep -q 'dash-popup\.sh --size L --title popup_keys -- bash \$BIN/fleet-keys\.sh --context backlog' "$ISSUES" \
   || fail "static guard: the backlog windowed '?' bind does not route through dash-popup.sh"
 grep -q 'K_BIND="?:execute(tmux display-popup' "$ISSUES" \
   && fail "static guard: the backlog '?' bind still calls 'tmux display-popup' directly"

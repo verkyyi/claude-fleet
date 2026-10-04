@@ -15,22 +15,11 @@ toast() { tmux display-message ${client:+-c "$client"} "$1" 2>/dev/null || :; }
 
 out=$(bash "$BIN/dash-reap.sh" "$wid" --yes 2>/dev/null </dev/null)
 token=$(printf '%s\n' "$out" | grep -E '^(reaped|skip|refused):' | tail -1)
-if [ "$(fleet_ui_lang)" = zh ]; then
-  case "$token" in
-    reaped:full) toast "fleet: 已回收" ;;
-    reaped:keep) toast "fleet: 已回收 — 脏 worktree 已保留在磁盘" ;;
-    skip:live)   toast "fleet: 未回收 — agent 仍在运行（或太新）" ;;
-    skip:*)      toast "fleet: 未回收（${token#skip:}）" ;;
-    refused:*)   toast "fleet: 未回收 — ${token#refused:}" ;;
-    *)           toast "fleet: 回收没有返回结果 — 请查看 hub" ;;
-  esac
-else
-  case "$token" in
-    reaped:full) toast "fleet: reaped" ;;
-    reaped:keep) toast "fleet: reaped — dirty worktree kept on disk" ;;
-    skip:live)   toast "fleet: not reaped — the agent is still live (or too young)" ;;
-    skip:*)      toast "fleet: not reaped (${token#skip:})" ;;
-    refused:*)   toast "fleet: not reaped — ${token#refused:}" ;;
-    *)           toast "fleet: reap gave no result — check the hub" ;;
-  esac
-fi
+case "$token" in
+  reaped:full) toast "$(fleet_ui_t reap_done)" ;;
+  reaped:keep) toast "$(fleet_ui_t reap_kept)" ;;
+  skip:live)   toast "$(fleet_ui_t reap_live)" ;;
+  skip:*)      toast "$(fleet_ui_t reap_skip_fmt "${token#skip:}")" ;;
+  refused:*)   toast "$(fleet_ui_t reap_refused_fmt "${token#refused:}")" ;;
+  *)           toast "$(fleet_ui_t reap_none)" ;;
+esac

@@ -1317,6 +1317,18 @@ try:
         result = command(['bash', str(bin_dir / 'fleet-sidebar.sh'), 'menu', 'fleet-test', wid, '--print'])
         return {line.split('\t')[0]: line.split('\t')[2]
                 for line in result.stdout.splitlines() if line.count('\t') == 2}
+    def menu_shape(wid):
+        # the row menu's frame (issue #1535): its title, and its letters in order
+        # with `|` for a rule and `E` for the closing 「Esc 关闭」 row
+        out = command(['bash', str(bin_dir / 'fleet-sidebar.sh'), 'menu', 'fleet-test', wid, '--print']).stdout
+        title = next((l.split('\t', 1)[1] for l in out.splitlines() if l.startswith('title\t')), None)
+        shape = ''
+        for l in out.splitlines():
+            if l.count('\t') != 2:
+                continue
+            k, name, _ = l.split('\t')
+            shape += 'E' if name == '-Esc 关闭' else (k if name else '|')
+        return title, shape
     def current():
         return tm('display-message', '-p', '-t', 'fleet-test:', '#{window_id}')
     tm('set-option', '-g', 'status-keys', 'emacs')
@@ -1668,6 +1680,12 @@ try:
     check('confirm-before' in remote_cmds['x'] and 'm4' in remote_cmds['x'], 'the remote reap does not confirm first, naming the machine: %r' % remote_cmds['x'])
     check(remote_items['1'] == '新建到 m4…' and 'dash-issue-new.sh' in remote_cmds['1'] and '--node=m4' in remote_cmds['1'],
           'the remote menu does not offer «new task on m4» with --node=m4: %r %r' % (remote_items.get('1'), remote_cmds.get('1')))
+    t1, _ = menu_shape(w1)
+    check(t1 == tm('display-message', '-p', '-t', w1, '#{window_name}') + ' · m5',
+          'with the hub on the local menu title does not name this machine: %r' % t1)
+    _, rshape = menu_shape(remote_wid)
+    check(rshape == 'e|ma|qcx|n1og|E',
+          'the remote row menu is not grouped 进入/消息/控制/其它 + Esc: %r' % rshape)
     local_items = menu_items(w1)
     local_cmds = menu_commands(w1)
     check(local_items.get('1') == '新建到 m4…' and '--node=m4' in local_cmds['1'],
@@ -1727,7 +1745,8 @@ try:
     check(len(writes.read_text().splitlines()) == n_writes, 'a hub write went out while the hub is silent: %r' % writes.read_text())
     printed = command(['bash', str(bin_dir / 'fleet-sidebar.sh'), 'menu', 'fleet-test', remote_wid, '--print']).stdout
     title = next((l.split('\t', 1)[1] for l in printed.splitlines() if l.startswith('title\t')), '')
-    check(title == '侧边栏 · 在 m4 · 入口失联 5m', 'the remote menu title does not say the hub is silent: %r' % title)
+    # 「名称 · 机器 · 状态」 (issue #1535): the row still waits on a permission
+    check(title == '侧边栏 · m4 · 等授权 · 入口失联 5m', 'the remote menu title does not say the hub is silent: %r' % title)
     lost_items, lost_cmds = menu_items(remote_wid), menu_commands(remote_wid)
     check(lost_items.get('1') == '-新建到 m4… · 入口失联 5m' and lost_cmds.get('1') == '',
           '«new task on m4» is not greyed with the reason while the hub is silent: %r %r' % (lost_items.get('1'), lost_cmds.get('1')))
@@ -1747,6 +1766,11 @@ try:
     plain = menu_items(w1)
     check('1' not in plain and not any('fleet-sidebar-remote.sh' in c for c in menu_commands(w1).values()),
           'the one-machine menu changed without the hub: %r' % plain)
+    # One frame (issue #1535): 进入 / 消息 / 控制 / 其它, a rule between, Esc last;
+    # with the hub off the title is the row's name alone — no machine to name.
+    t1, shape1 = menu_shape(w1)
+    check(shape1 == 'p|a|rtskx|vnog|E', 'the local row menu is not grouped 进入/消息/控制/其它 + Esc: %r' % shape1)
+    check(t1 == tm('display-message', '-p', '-t', w1, '#{window_name}'), 'the hub-off menu title is not the bare row name: %r' % t1)
     tm('select-window', '-t', w1)
     wait_for(lambda: bool(view_on(w1)), 'the view did not return after the hub-source leg')
     check(w2 in [r[0] for r in row_data()], 'the default source did not come back after the hub-source leg')

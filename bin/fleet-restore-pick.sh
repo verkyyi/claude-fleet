@@ -43,7 +43,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ "$MODE" = open ]; then
-  exec bash "$BIN/dash-popup.sh" -w 90% -h 70% -- \
+  exec bash "$BIN/dash-popup.sh" --size L --title popup_restore -- \
     bash "$BIN/fleet-restore-pick.sh" --pick ${SESS:+--session "$SESS"}
 fi
 

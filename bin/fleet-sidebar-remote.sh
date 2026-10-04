@@ -86,12 +86,8 @@ else:
 }
 
 label() {  # the action's human name for the toast / popup title
-  case "$(fleet_ui_lang):$1" in
-    zh:stop) printf '停 %s（在 %s）' "$name" "$node" ;;      en:stop) printf 'stop %s (on %s)' "$name" "$node" ;;
-    zh:resume) printf '继续 %s（在 %s）' "$name" "$node" ;;  en:resume) printf 'resume %s (on %s)' "$name" "$node" ;;
-    zh:reap) printf '回收 %s（在 %s）' "$name" "$node" ;;    en:reap) printf 'reap %s (on %s)' "$name" "$node" ;;
-    zh:message) printf '发给 %s（在 %s）' "$name" "$node" ;; en:message) printf 'message %s (on %s)' "$name" "$node" ;;
-    zh:answer) printf '答 %s（在 %s）' "$name" "$node" ;;    en:answer) printf 'answer %s (on %s)' "$name" "$node" ;;
+  case "$1" in
+    stop|resume|reap|message|answer) fleet_ui_t "remote_label_${1}_fmt" "$name" "$node" ;;
   esac
 }
 # write <tool> <json> [wait] → the record on stdout (fleet-hub-write's), rc its rc

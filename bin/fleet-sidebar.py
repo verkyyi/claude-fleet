@@ -59,54 +59,31 @@ LOCK_RETRY = 0.25
 TOAST_SECS = 4
 
 
-def ui_lang():
-    value = os.environ.get("FLEET_UI_LANG", "auto")
-    if value.startswith("zh") or value in ("cn", "CN", "Chinese", "chinese"):
-        return "zh"
-    if value.startswith("en") or value in ("English", "english"):
-        return "en"
-    locale = (os.environ.get("LC_ALL") or os.environ.get("LC_MESSAGES") or
-              os.environ.get("LC_CTYPE") or os.environ.get("LANG") or "")
-    if locale.startswith(("zh", "ZH")):
-        return "zh"
-    if locale.startswith(("en", "EN")):
-        return "en"
-    return "zh"
+def load_text():
+    """Every string this view draws, from THE table (issue #1535): one
+    `fleet-ui-lang.sh dump` at start — the shell resolves FLEET_UI_LANG / the
+    locale exactly as every other fleet surface does, and a printf argument
+    comes back as a \\001 slot for tr() to fill."""
+    try:
+        out = subprocess.run(["sh", str(BIN / "fleet-ui-lang.sh"), "dump", "sidebar_", "no_repo"],
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        out = b""
+    parts = out.decode("utf-8", "replace").split("\0")
+    return dict(zip(parts[0::2], parts[1::2]))
 
 
-TEXT = {
-    "zh": {
-        "placeholder": "新会话名…",
-        "help_row": " ? 快捷键",
-        "no_repo": "无仓库",
-        "new_to": "新会话 → {name}…",
-        "rename": "改名› ",
-        "spawn_failed": "创建失败",
-        "refreshing": "刷新中…",
-        "landed_heading": "已落地 ({n}) · ↵ 恢复",
-        "landed_empty": "（还没有已落地的会话）",
-        "landed_loading": "已落地 …",
-    },
-    "en": {
-        "placeholder": "New session name…",
-        "help_row": " ? keys",
-        "no_repo": "no repo",
-        "new_to": "New session → {name}…",
-        "rename": "rename› ",
-        "spawn_failed": "spawn failed",
-        "refreshing": "refreshing…",
-        "landed_heading": "Landed ({n}) · ↵ restore",
-        "landed_empty": "(no landed sessions yet)",
-        "landed_loading": "Landed …",
-    },
-}
+TEXT = load_text()
 
 
-def tr(key, **kwargs):
-    return TEXT[ui_lang()][key].format(**kwargs)
+def tr(key, *args):
+    text = TEXT.get(key, key)   # a missing key shows itself, never a blank
+    for arg in args:
+        text = text.replace("\x01", str(arg), 1)
+    return text.replace("\x01", "")
 
 
-PLACEHOLDER = tr("placeholder")
+PLACEHOLDER = tr("sidebar_placeholder")
 # The 置顶 group's heading key (issue #1170): selectable so ←/→ can fold it, but
 # it names no repo — a tap only highlights it, never opens the new-session popup.
 PIN_HEADING = "hdr:pin"
@@ -114,7 +91,7 @@ PIN_HEADING = "hdr:pin"
 # input line, opens this sidebar's key sheet — Claude Code's "? for shortcuts".
 # An explicit exception to EPIC #894 convention 5 (no resident rows), chosen by
 # the operator: on an iPad a whole row is a tap target a hint glyph is not.
-HELP_ROW = tr("help_row")
+HELP_ROW = tr("sidebar_help_row")
 # A Chinese IME turns the `.` and `?` keys into full-width 。/． and ？ (issue
 # #965). On an EMPTY input line they are the same keys — the row menu and the
 # key sheet — so the operator need not switch to English first; inside a name
@@ -423,7 +400,7 @@ def new_task(screen, env, repo=""):
     popup's shell takes the server's environment, not this one."""
     curses.endwin()
     pin = ["env", "CF_REPO=" + repo] if repo and repo != "none" else []
-    subprocess.call(["bash", str(BIN / "dash-popup.sh"), "-w", "90%", "-h", "12", "--"] + pin +
+    subprocess.call(["bash", str(BIN / "dash-popup.sh"), "--size", "S", "--title", "popup_new_task", "--"] + pin +
                     ["bash", str(BIN / "dash-issue-new.sh"), "confirm", "--spawn"], env=env)
     screen.clear()  # the next refresh resumes curses and repaints the whole grid
 
@@ -467,7 +444,7 @@ def open_help(screen, env):
     Sized to the sheet (issue #963): title + blank + eight rows (#1532) + the border,
     as wide as the editing row (#1097)."""
     curses.endwin()
-    subprocess.call(["bash", str(BIN / "dash-popup.sh"), "-w", "50", "-h", "12", "--",
+    subprocess.call(["bash", str(BIN / "dash-popup.sh"), "-w", "50", "-h", "12", "--title", "popup_keys", "--",
                      "bash", str(BIN / "fleet-keys.sh"), "--context", "sidebar"], env=env)
     screen.clear()
 
@@ -890,7 +867,7 @@ def placeholder(key):
     """The empty input line's hint: it names the destination whenever a heading
     is selected (issue #1032), so where a typed name goes is never a guess."""
     name = target_name(key)
-    return tr("new_to", name=name) if name else PLACEHOLDER
+    return tr("sidebar_new_to_fmt", name) if name else PLACEHOLDER
 
 
 def tap(hit, highlighted):
@@ -1066,8 +1043,8 @@ def landed_rows(text):
         glyph, _, name = " ".join(head(ANSI.sub("", parts[2]), LANDED_LEFT).split()).partition(" ")
         rows.append([parts[0], "landed", glyph, name, " ", "", "0"] + [""] * (ROW_FIELDS - 7))
     pad = [""] * (ROW_FIELDS - 4)
-    top = ["hdr", "", "", tr("landed_heading", n=len(rows))] + pad
-    return [top] + (rows or [["hdr", "", "", tr("landed_empty")] + pad])
+    top = ["hdr", "", "", tr("sidebar_landed_heading_fmt", len(rows))] + pad
+    return [top] + (rows or [["hdr", "", "", tr("sidebar_landed_empty")] + pad])
 
 
 def restore_landed(screen, session, target, env):
@@ -1079,7 +1056,7 @@ def restore_landed(screen, session, target, env):
     cmd = ["bash", str(BIN / "fleet-restore-pick.sh"), "--select", target, "--session", session]
     if target.startswith("landed:issue:"):
         curses.endwin()
-        subprocess.call(["bash", str(BIN / "dash-popup.sh"), "-w", "70", "-h", "8", "--"] + cmd,
+        subprocess.call(["bash", str(BIN / "dash-popup.sh"), "-w", "70", "-h", "8", "--title", "popup_restore", "--"] + cmd,
                         env=env)
         screen.clear()
     else:
@@ -1416,7 +1393,7 @@ def ui(screen, session, worker, lock):
                 leave_navigation(session)
             else:
                 # Keep the name: a cap refusal is retried once a slot frees.
-                reason = error[-1] if error else tr("spawn_failed")
+                reason = error[-1] if error else tr("sidebar_spawn_failed")
                 toast = "✗ " + reason.split(": ", 1)[-1]
                 toast_until = now + TOAST_SECS
             spawning = None
@@ -1571,7 +1548,7 @@ def ui(screen, session, worker, lock):
 
         screen.erase()
         if waiting:
-            put(0, tr("refreshing"), curses.A_DIM)
+            put(0, tr("sidebar_refreshing"), curses.A_DIM)
         colors = {"working": 1, "needs": 2, "done": 3, "looping": 4}
         for y, row in enumerate(rows[offset:offset + page], waiting):
             wid, state, glyph, label, tree, badge, _depth, _detail, node = row[:9]
@@ -1624,7 +1601,7 @@ def ui(screen, session, worker, lock):
         # Hide is keyboard-only (prefix e): no tap here hides anything (#821).
         room = max(0, width - 3)
         if renaming is not None:
-            prefix = tr("rename")
+            prefix = tr("sidebar_rename")
             put(height - 1, prefix + line.view(max(0, room - sum(map(cells, prefix)))),
                 curses.A_BOLD)
         elif spawning is not None:
@@ -1824,7 +1801,7 @@ def ui(screen, session, worker, lock):
             producer = None
             if view == "live":
                 view, live_rows, rows = "landed", rows, landed or [
-                    ["hdr", "", "", tr("landed_loading")] + [""] * (ROW_FIELDS - 4)]
+                    ["hdr", "", "", tr("sidebar_landed_loading")] + [""] * (ROW_FIELDS - 4)]
                 landed_at = NEVER
             else:
                 view, rows, selected = "live", live_rows, window

@@ -257,7 +257,10 @@ eq "9: the old wording is gone from bin/" "" "$hits"
 grep -q '^bind ! .*fleet-alerts.sh popup' "$BIN/../conf/tmux-attention.conf" || fail "9: prefix ! is not bound to the popup"; ok
 [ "$(grep -c 'mouse_status_range},alarm},' "$BIN/../conf/tmux-attention.conf")" = 2 ] \
   || fail "9: both MouseDown1Status tables must open the popup from a count"; ok
-[ "$(grep -c 'key "prefix !"' "$BIN/fleet-keys.sh")" = 2 ] || fail "9: prefix ! missing from the cheatsheet (zh + en)"; ok
+# one sheet since #1535 (both languages read the same row through fleet_ui_t)
+[ "$(grep -c 'key "prefix !"' "$BIN/fleet-keys.sh")" = 1 ] || fail "9: prefix ! missing from the cheatsheet"
+zsheet=$(FLEET_UI_LANG=zh NO_COLOR=1 bash "$BIN/fleet-keys.sh" --plain)
+grep -q '^  prefix !  *告警弹窗' <<< "$zsheet" || fail "9: prefix ! missing from the zh cheatsheet"; ok
 grep -q 'fleet_alerts_refresh --kick' "$BIN/tmux-status.sh" || fail "9: the bar no longer refreshes the producer"; ok
 
 printf 'selftest PASS: %d assertions (width · quota · since · mute · actions · accounts · needs · degenerate · act · wording)\n' "$CHECKS"

@@ -23,11 +23,11 @@
 # This asserts the whole contract:
 #   • PRODUCER (static) the dash reload gates `bash $ROWS` behind the wait helper;
 #                the helper bounds the pause by flag AGE; every modal popup in the
-#                conf stamps an epoch open and clears to 0; the client-detached
-#                hook is present.
+#                conf opens through dash-popup.sh, which stamps an epoch open
+#                and clears to 0; the client-detached hook is present.
 #   • PRODUCER (live)   the conf sources on a REAL, isolated tmux server (its own
 #                socket, torn down at exit — never the user's live server); the
-#                prefix + mouse popup binds carry the epoch stamp; the
+#                prefix + mouse popup binds go through dash-popup.sh; the
 #                client-detached hook is installed and, on a real detach, RESETS
 #                @popup_open to 0.
 #   • CONSUMER (live)   the REAL bin/dash-popup-wait.sh — unset flag repaints at
@@ -70,24 +70,29 @@ grep -Eq '\-ge "\$MAX_AGE"' "$WAIT" \
   || fail "dash-popup-wait.sh no longer breaks the wait once the flag ages past MAX_AGE (issue #431)"
 
 # --- PRODUCER (static): every modal popup is epoch-stamped + closed ------------
-# Count in CODE lines only (skip the comment block, which names the flag in prose).
-# One epoch stamp and one clear per display-popup surface; there are 7: the
-# prefix binds b/c/u/?/! plus the alerts popup a tap on a status-bar count opens
-# (bound twice, root + the task sidebar's table — issue #1238) — the acct one went with the ◉ account chip, #521; the
-# other-fleet ● jump with fleet switching, #980; the fleet-name repo picker with
-# the picker itself, #1034; and the status-bar usage tap (bound twice, root +
-# the task sidebar's table) with the 5h/7d stat, #1100, its modal now prefix u.
-# The clears number one MORE than the popups: the client-detached hook also sets
-# 0 (#431).
+# Since #1535 (EPIC #1529 E6) every popup opens through ONE door, bin/dash-popup.sh,
+# so the epoch lives THERE once — stamped before display-popup, cleared by its
+# EXIT trap on every way out — instead of a stamp + clear pasted into each bind.
+# The conf has 7 such binds: the prefix binds b/c/u/?/! plus the alerts popup a
+# tap on a status-bar count opens (bound twice, root + the task sidebar's table —
+# issue #1238) — the acct one went with the ◉ account chip, #521; the other-fleet
+# ● jump with fleet switching, #980; the fleet-name repo picker with the picker
+# itself, #1034; and the status-bar usage tap with the 5h/7d stat, #1100.
+# Count in CODE lines only (skip the comment block, which names it in prose).
 code_only() { grep -v '^[[:space:]]*#' "$CONF"; }
-npop=$(code_only | grep -c 'display-popup')
-[ "$npop" -eq 7 ] || fail "expected 7 display-popup binds in conf code (prefix b/c/u/?/! + 2 alert-count taps), found $npop"
-nstamp=$(code_only | grep -c '@popup_open \$(date +%s)')
-nclose=$(code_only | grep -c '@popup_open 0')
-[ "$nstamp" -eq "$npop" ] \
-  || fail "epoch-stamp mismatch: $nstamp opens stamp \`date +%s\` but there are $npop popups (issue #431 — every open must stamp an epoch, not a bare 1)"
-[ "$nclose" -eq "$((npop + 1))" ] \
-  || fail "clear mismatch: set-0 count=$nclose (want $((npop + 1)) — one per popup + the client-detached hook)"
+npop=$(code_only | grep -c 'dash-popup\.sh')
+[ "$npop" -eq 7 ] || fail "expected 7 dash-popup.sh binds in conf code (prefix b/c/u/?/! + 2 alert-count taps), found $npop"
+code_only | grep -q 'display-popup' \
+  && fail "conf calls display-popup directly — every popup goes through dash-popup.sh (issue #1535)"
+[ "$(code_only | grep -c 'dash-popup\.sh')" -eq "$(code_only | grep 'dash-popup\.sh' | grep -c 'run-shell -b ')" ] \
+  || fail "a dash-popup.sh bind is not run-shell -b — a blocking run-shell holds the client's command queue, and its keys never reach the popup"
+POP="$BIN/dash-popup.sh"
+grep -q 'epoch=$(date +%s)' "$POP" && grep -q '@popup_open "$epoch"' "$POP" \
+  || fail "dash-popup.sh no longer stamps an EPOCH @popup_open (issue #431 — not a bare 1)"
+grep -q "trap 'rm -f \"\$marker\" 2>/dev/null; tmux set -g @popup_open 0" "$POP" \
+  || fail "dash-popup.sh no longer clears @popup_open on every exit path"
+[ "$(code_only | grep -c '@popup_open 0')" -eq 1 ] \
+  || fail "the conf should clear @popup_open only in the client-detached hook now (dash-popup.sh clears the rest)"
 
 # --- PRODUCER (static): the client-detached self-heal hook is present ----------
 grep -Eq "^set-hook -g client-detached\[0\] 'set -g @popup_open 0'" "$CONF" \
@@ -122,9 +127,9 @@ tmux new-session -d -s t -x 200 -y 50 </dev/null >/dev/null 2>&1 \
 # --- PRODUCER (live): the conf parses AND registers the flagged binds ---------
 tmux source-file "$CONF" 2>"$WORK/src.err" \
   || { printf '%s\n' "$(cat "$WORK/src.err" 2>/dev/null)" >&2; fail "conf/tmux-attention.conf failed to source (syntax error in the popup-bind wrap)"; }
-for k in b c u '?'; do
-  tmux list-keys -T prefix 2>/dev/null | grep -F -- " $k " | grep -q 'date +%s' \
-    || fail "prefix '$k' bind lost its @popup_open epoch stamp after sourcing (issue #431)"
+for k in b c u '?' '!'; do
+  tmux list-keys -T prefix 2>/dev/null | grep -F -- " $k " | grep -q 'dash-popup.sh --client' \
+    || fail "prefix '$k' bind does not open through dash-popup.sh (which stamps @popup_open, issue #431/#1535) after sourcing"
 done
 # The footer no longer opens a popup: the usage-stat click range went with the
 # stat (issue #1100) and the modal is `prefix u`, stamped in the loop above.

@@ -35,4 +35,50 @@ eq 'sidebar Chinese strings' "$(probe_sidebar zh | paste -sd'|' -)" '新会话�
 eq 'ghost English' "$(FLEET_UI_LANG=en FLEET_SESSION='' "$BIN/dash-agent-prompt.sh" ghost 2>/dev/null)" '↵ new scratch (prefilled, unsent) · switch agent: ⌃v'
 eq 'ghost Chinese' "$(FLEET_UI_LANG=zh FLEET_SESSION='' "$BIN/dash-agent-prompt.sh" ghost 2>/dev/null)" '↵ 新开 scratch（预填不发送） · 切换 agent: ⌃v'
 
+# --- ONE TABLE (issue #1535, EPIC #1529 E6) ---------------------------------
+# fleet-ui-lang.sh is THE table. The four it replaced stay gone: fleet-sidebar.py's
+# TEXT dict, fleet-sidebar-menu.sh's MENU_KEYS literal + m_* labels, fleet-keys.sh's
+# whole zh sheet — and no script grows a zh/en branch of its own.
+ROOT="$(cd "$BIN/.." && pwd)"
+grep -qE '^TEXT = \{' "$BIN/fleet-sidebar.py" && fail 'fleet-sidebar.py has its own TEXT table again'
+ok 'fleet-sidebar.py has no table of its own'
+grep -qE "^MENU_KEYS='|^ *m_[a-z_]+='" "$BIN/fleet-sidebar-menu.sh" && fail 'fleet-sidebar-menu.sh has its own string table again'
+ok 'fleet-sidebar-menu.sh has no table of its own'
+grep -q 'print_sheet_zh' "$BIN/fleet-keys.sh" && fail 'fleet-keys.sh has a zh sheet of its own again'
+# a row's text is a lookup ("$(fleet_ui_t …)"), never a literal in either language
+grep -E '^ *s?key "[^"]*" "[^$]' "$BIN/fleet-keys.sh" | grep -qv '# ui-lang-ok:' && fail 'fleet-keys.sh writes a row literally instead of through fleet_ui_t'
+ok 'fleet-keys.sh reads every row from the table'
+branchy=$(grep -nE '(case "\$\(fleet_ui_lang\)"|"\$\(fleet_ui_lang\)" = (zh|en))' "$BIN"/*.sh | grep -v '/fleet-ui-lang\.sh:' | grep -v -- '-selftest\.sh:')
+[ -z "$branchy" ] || fail 'a script branches on the language instead of using fleet_ui_t' "$branchy"
+ok 'no script branches on the language itself'
+grep -n "display-message[^|]*'Tasks:" "$ROOT"/conf/*.conf "$BIN/hub-zoom.sh" | grep -Ev ':[0-9]+:[[:space:]]*#' | grep -q . \
+  && fail 'a hardcoded English toast is back (hub-zoom.sh / conf)'
+ok 'the sidebar toasts are translated'
+
+# every key exists in BOTH languages
+table="$BIN/fleet-ui-lang.sh"
+zk=$(sed -n 's/^ *zh:\([A-Za-z0-9_]*\)).*/\1/p' "$table" | sort)
+ek=$(sed -n 's/^ *en:\([A-Za-z0-9_]*\)).*/\1/p' "$table" | sort)
+[ "$zk" = "$ek" ] || fail 'zh and en keys differ' "$(diff <(printf '%s\n' "$zk") <(printf '%s\n' "$ek"))"
+[ -z "$(printf '%s\n' "$zk" | uniq -d)" ] || fail 'a key is defined twice' "$(printf '%s\n' "$zk" | uniq -d)"
+ok "zh and en carry the same $(printf '%s\n' "$zk" | wc -l | tr -d ' ') keys"
+
+# every key the code asks for is in the table (a typo would print the key itself)
+used=$( { grep -hE 'fleet_ui_t [a-z]' "$BIN"/*.sh | grep -Ev '^[[:space:]]*#' | grep -oE 'fleet_ui_t [a-z][a-z0-9_]+' | awk '{print $2}'
+          grep -ohE '\$\(t [a-z][a-z0-9_]+' "$BIN/fleet-sidebar-menu.sh" | awk '{print $2}'
+          grep -ohE 'tr\("[a-z0-9_]+"' "$BIN/fleet-sidebar.py" | sed 's/tr("//; s/"//'
+          grep -ohE -- '--title[", ]+popup_[a-z0-9_]+' "$BIN"/*.sh "$BIN"/*.py "$ROOT"/conf/*.conf | grep -oE 'popup_[a-z0-9_]+$'
+          grep -ohE "toast '#\{client_name\}' [a-z_]+" "$ROOT"/conf/*.conf | awk '{print $3}'
+          grep -ohE 'fleet-ui-lang\.sh" t [a-z_]+' "$BIN"/*.sh | awk '{print $3}'
+        } | grep -vxE 'remote_label_|needs_' | sort -u)
+missing=$(comm -23 <(printf '%s\n' "$used") <(printf '%s\n' "$zk"))
+[ -z "$missing" ] || fail 'the code asks for keys the table lacks' "$missing"
+ok "every key the code asks for exists ($(printf '%s\n' "$used" | wc -l | tr -d ' ') used)"
+
+# dump: what fleet-sidebar.py reads — KEY NUL TEXT NUL, a printf argument a \001 slot
+d=$(FLEET_UI_LANG=zh sh "$BIN/fleet-ui-lang.sh" dump sidebar_new_to no_repo | tr '\0\001' '|@')
+eq 'dump slots' "$d" 'no_repo|无仓库|sidebar_new_to_fmt|新会话 → @…|'
+eq 'menu letters come from the table' "$(FLEET_UI_LANG=en bash "$BIN/fleet-sidebar-menu.sh" --keys | cut -f1 | tr -d '\n')" 'rtpaswkvxn1-9ogemqc'
+eq 'pinned lookup' "$(FLEET_UI_LANG=en bash -c '. "$1"; fleet_ui_pin; FLEET_UI_LANG=zh; fleet_ui_t ui_close' _ "$table")" 'Esc close'
+
 printf 'selftest OK: %s assertions passed (FLEET_UI_LANG)\n' "$pass"
