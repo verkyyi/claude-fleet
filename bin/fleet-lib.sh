@@ -2232,6 +2232,31 @@ fleet_mod_alive() {
 # every fleet runs its own (issue #159) — `%7` exists once per fleet.
 fleet_mod_inbox_root() { printf '%s/global/mod-inbox' "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"; }
 
+# fleet_mod_inbox_reset <socket-label> — empty that socket's inbox when its tmux
+# SERVER is not the one that wrote it (issue #1538). A pane id is unique per server
+# LIFETIME only: after a restart the new server hands out `%7` again, and a `/clear`
+# left in the old `%7`'s dir (a poster SIGKILLed before it could cancel) would run
+# in whatever session the new `%7` is. The inbox remembers its server as
+# `.server` = `<pid>.<start_time>`; a different (or unreadable) server wipes every
+# pane dir under the label first. Called before every post and by fleet-up when it
+# starts the server. Never fails the caller.
+fleet_mod_inbox_reset() {
+  local sock="${1:-}" root id old=''
+  sock="${sock##*/}"
+  [ -n "$sock" ] || return 0
+  id=$(tmux -L "$sock" display-message -p '#{pid}.#{start_time}' 2>/dev/null)
+  case "$id" in [0-9]*.[0-9]*) : ;; *) return 0 ;; esac
+  root="$(fleet_mod_inbox_root)/$sock"
+  [ -f "$root/.server" ] && old=$(cat "$root/.server" 2>/dev/null)
+  [ "$old" = "$id" ] && return 0
+  if [ -d "$root" ]; then
+    find "$root" -mindepth 1 -maxdepth 1 -name '[0-9]*' -exec rm -rf {} + 2>/dev/null
+  fi
+  mkdir -p "$root" 2>/dev/null || return 0
+  printf '%s\n' "$id" > "$root/.server.$$" 2>/dev/null && mv -f "$root/.server.$$" "$root/.server" 2>/dev/null
+  return 0
+}
+
 # fleet_session_command [--socket <label>] [--from <who>] <target> '/cmd args'
 # Run a slash command in <target>'s Claude session through the mod. Exit codes —
 # the caller falls back to today's send-keys path on 3, 4 and 5, and must NOT on
@@ -2270,6 +2295,7 @@ fleet_session_command() {
   local cmd args dir seq f j t tw dw
   cmd="${line%% *}"; cmd="${cmd#/}"
   case "$line" in *' '*) args="${line#* }" ;; *) args='' ;; esac
+  fleet_mod_inbox_reset "$sock"
   dir="$(fleet_mod_inbox_root)/$sock/${pane#%}"
   mkdir -p "$dir" 2>/dev/null || return 3
   seq="$(date +%s)-$$-${RANDOM:-0}"
@@ -4709,22 +4735,37 @@ fleet_remote_children() {
 # `relayed_from` row (a report forwarded to an ancestor, below) is NOT a parent
 # link and is skipped; a child named in two books keeps its first. Prints nothing
 # and returns 1 when the fleet has no ledger.
+#
+# Generations (issue #1538): a row whose child is a key that has been re-allocated
+# since (`children/.gen`, below) is the PREVIOUS holder's link — it is skipped, so
+# a new scratch-3 never inherits the old one's parent. A row is current when its
+# `child_gen` equals the key's current generation (`child_key`, the repo-qualified
+# spelling, is looked up first); a row without one is generation 0. No `.gen` ⇒
+# every row is current, byte for byte the map it always was.
 fleet_origin_map() {
-  local d sig old='' f
+  local d sig old='' f g=''
   [ -n "${1:-}" ] || return 1
   d="$FLEET_CONF_DIR/fleets/$1/children"
   [ -d "$d" ] || return 1
   f="$d/.origin-map"
-  sig=$(cd "$d" 2>/dev/null && wc -c -- *.ndjson 2>/dev/null)
+  [ -f "$d/.gen" ] && g=.gen
+  sig=$(cd "$d" 2>/dev/null && wc -c -- *.ndjson $g 2>/dev/null)
   [ -f "$f.sig" ] && old=$(cat "$f.sig" 2>/dev/null)
   if [ ! -f "$f" ] || [ "$sig" != "$old" ]; then
     (cd "$d" 2>/dev/null && awk '
+      FILENAME == ".gen" { t = index($0, "\t"); if (t > 1) gen[substr($0, 1, t - 1)] = substr($0, t + 1); next }
       FNR == 1 { p = FILENAME; sub(/\.ndjson$/, "", p) }
       /"relayed_from": *"[^"]/ { next }
       match($0, /"child": *"[^"]*"/) {
         c = substr($0, RSTART, RLENGTH); sub(/^"child": *"/, "", c); sub(/"$/, "", c)
-        if (c != "" && c != p && !(c in seen)) { seen[c] = 1; print c "\t" p }
-      }' *.ndjson 2>/dev/null) > "$f.$$" && mv -f "$f.$$" "$f"
+        if (c == "" || c == p || (c in seen)) next
+        ck = c
+        if (match($0, /"child_key": *"[^"]*"/)) { ck = substr($0, RSTART, RLENGTH); sub(/^"child_key": *"/, "", ck); sub(/"$/, "", ck) }
+        cg = ""
+        if (match($0, /"child_gen": *"[^"]*"/)) { cg = substr($0, RSTART, RLENGTH); sub(/^"child_gen": *"/, "", cg); sub(/"$/, "", cg) }
+        if ((ck in gen) && gen[ck] != cg) next
+        seen[c] = 1; print c "\t" p
+      }' $g *.ndjson 2>/dev/null) > "$f.$$" && mv -f "$f.$$" "$f"
     printf '%s' "$sig" > "$f.sig.$$" && mv -f "$f.sig.$$" "$f.sig"
   fi
   printf '%s' "$f"
@@ -4770,6 +4811,122 @@ fleet_live_ancestor() {
     fi
   done
   return 1
+}
+
+# --- generations of a recycled key (issue #1538, EPIC #1529 E9) ----------------
+# A scratch NUMBER is recycled: fleet_scratch_free gives scratch-3 back, and the
+# next ⌃s (or the warm pool) allocates it again. Every book keyed by it — the
+# child ledger `children/scratch-3.ndjson`, the parent map, a child still out
+# there with `@origin scratch-3` — used to carry straight over, so the new
+# scratch-3 opened showing the old one's children, and the old one's grandchild
+# reported (or relayed) into a session that had never heard of it.
+#
+# So a key has a GENERATION, minted each time it is allocated:
+#   children/.gen          `<key>\t<gen>` per allocation, the last line wins;
+#                          <gen> = `<epoch>.<pid>`. No line ≡ generation 0 — every
+#                          key before this change, and every issue key (an issue
+#                          number is never reused, so it is never minted).
+#   children/<key>.ndjson.<gen>
+#                          a retired generation's book (`.0` for generation 0),
+#                          moved aside when the key is minted again. A late report
+#                          from that generation's child is appended here too.
+#   @origin_gen            stamped on a child beside @origin: the parent's
+#                          generation at spawn. A report whose @origin_gen is not
+#                          the key's current generation is archived, never
+#                          delivered and never relayed (the old parent's ancestry
+#                          is not the new one's). A child with NO @origin_gen
+#                          (spawned before this, or re-created by a restore) is
+#                          taken as it always was: a live one was already moved
+#                          aside at the mint (@origin_retired, below).
+#   @origin_retired        `<key>#<old-gen>` on a child that was still running when
+#                          its parent's key was minted again (fleet_scratch_gen_new
+#                          moves @origin here, so no reader nests it under the new
+#                          holder); its report goes to that retired book.
+# Ledger rows carry `gen` (the parent generation they were filed under) and
+# `child_gen` / `child_key` (the child's own) — fields added, none renamed.
+
+# fleet_key_gen <sess> <key> → the key's current generation; nothing for gen 0.
+fleet_key_gen() {
+  local f="$FLEET_CONF_DIR/fleets/${1:-_}/children/.gen"
+  [ -n "${2:-}" ] && [ -f "$f" ] || return 0
+  awk -F'\t' -v k="$2" '$1 == k { g = $2 } END { if (g != "") print g }' "$f" 2>/dev/null
+}
+
+# fleet_key_gen_new <sess> <key> → mint the next generation of <key> (printed):
+# its book and digest cursor are retired to `.<old-gen>` first, so the new holder
+# starts with an empty ledger and the old one stays readable.
+fleet_key_gen_new() {
+  local sess="${1:-}" key d old g
+  key=$(printf '%s' "${2:-}" | LC_ALL=C tr -cd 'A-Za-z0-9._:-')
+  case "$key" in ''|.*) return 1 ;; esac
+  [ -n "$sess" ] || return 1
+  d="$(fleet_state_dir "$sess")/children"
+  mkdir -p "$d" 2>/dev/null || return 1
+  old=$(fleet_key_gen "$sess" "$key"); [ -n "$old" ] || old=0
+  if [ -f "$d/$key.ndjson" ]; then
+    cat "$d/$key.ndjson" >> "$d/$key.ndjson.$old" 2>/dev/null && rm -f "$d/$key.ndjson"
+  fi
+  [ -f "$d/$key.cursor" ] && mv -f "$d/$key.cursor" "$d/$key.cursor.$old" 2>/dev/null
+  g="$(date +%s).$$"
+  printf '%s\t%s\n' "$key" "$g" >> "$d/.gen" || return 1
+  printf '%s' "$g"
+}
+
+# fleet_key_gen_stale <sess> <parent-key> <child's @origin_gen> → rc 0 when the
+# child was stamped under a generation of <parent-key> that is no longer current;
+# rc 1 when it is this generation's, or unstamped (nothing says otherwise).
+fleet_key_gen_stale() {
+  [ -n "${3:-}" ] || return 1
+  [ "$3" != "$(fleet_key_gen "${1:-}" "${2:-}")" ]
+}
+
+# fleet_stamp_origin_gen <sess> <window> <origin> [<sock>] — beside @origin, the
+# parent key's current generation as @origin_gen. Nothing for generation 0 (no
+# `.gen` line): the window is stamped exactly as it always was.
+fleet_stamp_origin_gen() {
+  local s="${1:-}" w="${2:-}" o="${3:-}" k="${4:-}" g
+  [ -n "$w" ] || return 0
+  case "$o" in issue-*|scratch-*|?*:issue-*|?*:scratch-*) ;; *) return 0 ;; esac
+  g=$(fleet_key_gen "$s" "$o")
+  [ -n "$g" ] || return 0
+  if [ -n "$k" ]; then tmux -L "$k" set-window-option -t "$w" @origin_gen "$g" 2>/dev/null
+  else _fleet_tmux "$s" set-window-option -t "$w" @origin_gen "$g" 2>/dev/null; fi
+  return 0
+}
+
+# fleet_scratch_gen_new <sess> <slug> <worktree> — mint the generation of a freshly
+# allocated scratch under the key a spawn from it will stamp as @origin
+# (fleet_origin_key): bare in a one-repo fleet, `<repo-slug>:scratch-N` in a 2+
+# repo one — and nothing there when the worktree's repo cannot be told.
+#
+# A child of the RETIRED generation may still be running (its parent closed, its
+# own work did not). Every reader of @origin — the dash and sidebar nesting,
+# fleet-children.sh, the peer channel, the report — would take the new holder for
+# its parent, so its link moves aside here: `@origin_retired <key>#<old-gen>`, and
+# @origin / @origin_wid / @origin_gen are unset. It renders as a root, and its
+# report goes to the retired book (fleet-report-parent.sh). The new holder was
+# allocated a moment ago, so no window can be ITS child yet.
+fleet_scratch_gen_new() {
+  local pre='' r key old sock w o
+  [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 0
+  if fleet_multirepo "$1"; then
+    r=$(fleet_worktree_repo "$1" "${3:-}"); r=${r%%$'\t'*}
+    [ -n "$r" ] || return 0
+    pre="$(fleet_slug "$r"):"
+  fi
+  key="$pre$2"
+  old=$(fleet_key_gen "$1" "$key"); [ -n "$old" ] || old=0
+  fleet_key_gen_new "$1" "$key" >/dev/null || return 0
+  sock=$(fleet_socket "$1")
+  [ -n "$sock" ] || return 0
+  fleet_lw '#{window_id}|#{@origin}' tmux -L "$sock" | while IFS='|' read -r w o; do
+    [ -n "$w" ] && [ "$o" = "$key" ] || continue
+    tmux -L "$sock" set-window-option -t "$w" @origin_retired "$key#$old" \; \
+      set-window-option -u -t "$w" @origin \; \
+      set-window-option -u -t "$w" @origin_wid \; \
+      set-window-option -u -t "$w" @origin_gen >/dev/null 2>&1
+  done
+  return 0
 }
 
 # The RECORD half of "record before remove" (issue #384): given a worktree a reaper
@@ -5267,8 +5424,10 @@ fleet_session_sleepers_for() { local t; t=$(_fleet_session_tally_for "$1"); prin
 # when there is no origin). `git worktree add -b` IS the serialization point — it
 # FAILS if the branch or dir already exists — so concurrent callers retry with the
 # next N rather than trusting a check-then-create gap. Prints "<slug>\t<worktree>".
+# With <sess>, the number's next GENERATION is minted (issue #1538): whatever the
+# last scratch-<N> left in the child ledger is retired, never inherited.
 fleet_scratch_alloc() {
-  local main="$1" base="$2" cand cwt n=1
+  local main="$1" base="$2" sess="${3:-}" cand cwt n=1
   git -C "$main" fetch origin "$base" --quiet 2>/dev/null
   while [ "$n" -le 999 ]; do
     cand="scratch-$n"; cwt="$(fleet_worktree_dir "$main" "$cand")"
@@ -5278,6 +5437,7 @@ fleet_scratch_alloc() {
     # No --reuse: `-b` failing on a branch a racing caller just took is the signal
     # to move on to the next N. Silent on both streams (#446).
     if fleet_worktree_create "$main" "$cand" "$base" >/dev/null; then
+      [ -n "$sess" ] && fleet_scratch_gen_new "$sess" "$cand" "$cwt"
       printf '%s\t%s\n' "$cand" "$cwt"; return 0
     fi
     n=$((n + 1))

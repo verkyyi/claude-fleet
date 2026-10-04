@@ -131,6 +131,12 @@ def cmd_append(a):
     # redelivery, never a second row.
     node = ''.join(ch for ch in str(raw.get('node') or '') if ch in NODE_OK)[:64]
     rid = ''.join(ch for ch in str(raw.get('rid') or '') if ch in RID_OK)[:256]
+    # gen / child_gen / child_key (issue #1538): the parent generation the report
+    # was filed under, and the child's own — a recycled scratch number is told
+    # from the one before it (fleet_origin_map). Kept only when set: a generation-0
+    # row is byte for byte what it was.
+    gens = {f: ''.join(ch for ch in str(raw.get(f) or '') if ch in (KEY_OK if f == 'child_key' else '0123456789.'))[:128]
+            for f in ('gen', 'child_gen', 'child_key')}
     if not ev['child'] or ev['state'] not in STATES:
         print('fleet-children: need child + state (%s)' % '|'.join(STATES), file=sys.stderr)
         return 2
@@ -172,6 +178,7 @@ def cmd_append(a):
             ev['node'] = node
         if rid:
             ev['rid'] = rid
+        ev.update((f, v) for f, v in gens.items() if v)
         fh.seek(0, os.SEEK_END)
         fh.write(json.dumps(ev, ensure_ascii=False) + '\n')
         fh.flush()

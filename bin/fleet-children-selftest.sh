@@ -213,4 +213,52 @@ TM set-option -wu -t "$K3" @loop; opt "$K3" @worker_lifecycle sleeping
 eq "a sleeping child is not counted done" "1/3 ✓ · 1!" "$(summ scratch-7)"
 eq "…nor on the dash" "0/2" "$(dash_badge)"
 
+# --- 3. GENERATIONS (issue #1538): a recycled scratch number starts empty --------
+# fleet_scratch_alloc with the fleet's session mints the number's next generation:
+# the last holder's book is retired to `<key>.ndjson.<gen>` (still readable), the
+# new holder's `fleet-children.sh` is empty, and a child of the last holder that
+# is still running has its @origin moved to @origin_retired, so nothing nests or
+# counts it under the new one. Without a session: nothing minted (as before).
+GR="$WORK/gen/repo"; mkdir -p "$GR"
+git -C "$GR" init -q -b master 2>/dev/null || { git -C "$GR" init -q && git -C "$GR" checkout -q -b master; }
+git -C "$GR" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init || fail "gen: could not seed a repo"
+CD="$FLEET_CONF_DIR/fleets/$LBL/children"
+printf '%s' '{"child":"issue-501","state":"MERGED","pr":"51"}' \
+  | python3 "$BIN/fleet-children.py" append --file "$CD/scratch-1.ndjson" >/dev/null \
+  || fail "gen: could not seed the last holder's book"
+new_win gen-oldkid; GK="$WID"; opt "$GK" @issue 502; opt "$GK" @origin scratch-1; opt "$GK" @origin_wid "u/scratch-1"
+eq "gen: before re-allocation scratch-1 has the old book's child + the live one" 2 \
+  "$(bash "$CLI" -L "$LBL" scratch-1 --json | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["children"]))')"
+alloc=$( . "$BIN/fleet-lib.sh"; fleet_scratch_alloc "$GR" master "$LBL" )
+eq "gen: the free number is allocated" scratch-1 "${alloc%%$'\t'*}"
+eq "gen: the last holder's book is moved aside" no "$([ -e "$CD/scratch-1.ndjson" ] && echo yes || echo no)"
+has "gen: …and kept, readable, in its retired book" '"child": "issue-501"' "$(cat "$CD/scratch-1.ndjson.0" 2>/dev/null)"
+G1=$(awk -F'\t' '$1 == "scratch-1" { g = $2 } END { print g }' "$CD/.gen" 2>/dev/null)
+case "$G1" in [0-9]*.[0-9]*) CHECKS=$((CHECKS + 1)) ;; *) fail "gen: no generation minted for scratch-1" "$(cat "$CD/.gen" 2>/dev/null)" ;; esac
+NEWOUT=$(bash "$CLI" -L "$LBL" scratch-1 --json 2>&1)
+eq "gen: the new scratch-1 has no children" 0 \
+  "$(printf '%s' "$NEWOUT" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["children"]))')"
+eq "gen: a running child of the last holder no longer names scratch-1" "|scratch-1#0|" \
+  "$(TM display-message -p -t "$GK" '#{@origin}|#{@origin_retired}|#{@origin_wid}')"
+# Evidence (issue #1538 上线证据): fleet-children.sh on the recycled number + the archive.
+if [ -n "${GEN_EVIDENCE:-}" ]; then
+  { printf '$ fleet-children.sh scratch-1   # after re-allocation\n'; bash "$CLI" -L "$LBL" scratch-1 2>&1
+    printf '\n$ ls children/\n'; ls -a "$CD"; printf '\n$ cat children/.gen\n'; cat "$CD/.gen"; } > "$GEN_EVIDENCE"
+fi
+# Recycled AGAIN: the generation-1 book retires under its own generation.
+printf '%s' '{"child":"issue-503","state":"BLOCKED"}' \
+  | python3 "$BIN/fleet-children.py" append --file "$CD/scratch-1.ndjson" >/dev/null
+( . "$BIN/fleet-lib.sh"; fleet_scratch_free "$GR" scratch-1 "${alloc#*$'\t'}" )
+alloc=$( . "$BIN/fleet-lib.sh"; fleet_scratch_alloc "$GR" master "$LBL" )
+eq "gen: recycled again" scratch-1 "${alloc%%$'\t'*}"
+has "gen: generation $G1's book retires under $G1" '"child": "issue-503"' "$(cat "$CD/scratch-1.ndjson.$G1" 2>/dev/null)"
+eq "gen: two generations minted" 2 "$(grep -c '^scratch-1	' "$CD/.gen")"
+# Degenerate: no session ⇒ nothing minted, nothing moved.
+printf '%s' '{"child":"issue-504","state":"MERGED"}' \
+  | python3 "$BIN/fleet-children.py" append --file "$CD/scratch-2.ndjson" >/dev/null
+alloc=$( . "$BIN/fleet-lib.sh"; fleet_scratch_alloc "$GR" master )
+eq "gen: (no session) scratch-2 allocated" scratch-2 "${alloc%%$'\t'*}"
+eq "gen: (no session) its book is untouched" 1 "$(wc -l < "$CD/scratch-2.ndjson" | tr -d ' ')"
+eq "gen: (no session) no generation minted" 0 "$(grep -c '^scratch-2	' "$CD/.gen")"
+
 printf 'fleet-children selftest: OK (%d checks)\n' "$CHECKS"
