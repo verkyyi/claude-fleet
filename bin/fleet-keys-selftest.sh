@@ -104,13 +104,10 @@ EOF
 
 # --- 3. the popup wiring is present -------------------------------------------
 grep -q 'bin/fleet-keys.sh' "$CONF"   || fail "conf has no fleet-keys.sh popup bind"
-# The `?` bind opens a display-popup; since issue #308 it is wrapped with a
-# `run-shell "tmux set -g @popup_open $(date +%s)" \; … \; set -g @popup_open 0`
-# flag (pause the dash repaint under the modal — the open stamps an epoch so a
-# stranded flag self-heals, issue #431), so allow anything between the key and
-# `display-popup`.
-grep -Eq '^bind[[:space:]]+\?[[:space:]].*display-popup' "$CONF" \
-  || fail "conf 'prefix ?' does not open a display-popup"
+# The `?` bind opens its popup through the one door, dash-popup.sh (issue #1535),
+# which stamps the @popup_open epoch (#308/#431) and draws the one title row.
+grep -Eq '^bind[[:space:]]+\?[[:space:]]+run-shell -b ".*dash-popup\.sh .*fleet-keys\.sh' "$CONF" \
+  || fail "conf 'prefix ?' does not open fleet-keys.sh through dash-popup.sh"
 # The in-panel opens are scoped to their own panel (issue #265): the dash `?`
 # passes `--context dash`, the backlog `⌃k` passes `--context backlog` — while the
 # global `prefix ?` (checked above) stays the full sheet.

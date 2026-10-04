@@ -27,7 +27,7 @@ command -v gh >/dev/null 2>&1 || { tmux display-message "gh not found — cannot
 
 # phase 1: pop the input dialog that re-invokes us in `confirm` mode.
 if [ "$mode" != confirm ]; then
-  bash "$BIN/dash-popup.sh" -w 90% -h 9 -- \
+  bash "$BIN/dash-popup.sh" --size S -h 9 --title popup_comment --object "#$num" -- \
     env CF_REPO="$REPO" bash "$BIN/dash-issue-comment.sh" "$num" confirm
   exit 0
 fi

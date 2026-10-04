@@ -89,14 +89,15 @@ act() {
 if [ "$POPUP" = 1 ]; then
   cur=$(tdm '#{window_id}')
   res=$(mktemp "${TMPDIR:-/tmp}/fleet-task-pick.XXXXXX") || exit 0
-  trap 'rm -f "$res" "$res.ran"; tmux set -g @popup_open 0 2>/dev/null' EXIT
+  trap 'rm -f "$res" "$res.ran"' EXIT
   trap 'exit 130' INT TERM HUP
   from=$(tdm '#{?#{@wid},#{@wid},#{window_id}}')
-  tmux set -g @popup_open "$(date +%s)" 2>/dev/null || :
-  tmux display-popup ${CLIENT:+-c "$CLIENT"} -E -w 90% -h 80% -T ' tasks ' \
-    "$(printf '%q ' bash "$BIN/fleet-task-pick.sh" --session "$SESS" --current "$cur" --out "$res")" \
-    2>/dev/null || :
-  tmux set -g @popup_open 0 2>/dev/null || :
+  # The one popup frame (issue #1535): dash-popup.sh draws it — size, the
+  # 「任务 · 机器 … Esc 关闭」 title row, the @popup_open epoch. --no-inline:
+  # this runs from a bind / hub-zoom.sh with no pane of its own to fall back to.
+  bash "$BIN/dash-popup.sh" ${CLIENT:+--client "$CLIENT"} --no-inline --size L --title popup_tasks -- \
+    bash "$BIN/fleet-task-pick.sh" --session "$SESS" --current "$cur" --out "$res" \
+    >/dev/null 2>&1 || :
   # display-popup exits 0 whether or not it drew anything (no client, another
   # overlay already up — see dash-popup.sh, issue #454), so the picker's first
   # act is to drop `$res.ran`. No marker ⇒ it never ran ⇒ exit 3, and the caller

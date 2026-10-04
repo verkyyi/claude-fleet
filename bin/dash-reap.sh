@@ -457,7 +457,7 @@ if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
         if [ "$yes" = 1 ]; then
           scratch_dispose
         elif have_client; then
-          bash "$BIN/dash-popup.sh" -w 90% -h 9 -- \
+          bash "$BIN/dash-popup.sh" --size S -h 9 --title popup_reap --object "$target" -- \
             bash "$BIN/dash-reap.sh" "$target" confirm || true
           emit skip:needs-confirm
           exit 3
@@ -555,7 +555,7 @@ if [ "$confirm" = 0 ]; then
           "$iss" "$reason" >&2
         exit 3
       fi
-      bash "$BIN/dash-popup.sh" -w 90% -h 9 -- \
+      bash "$BIN/dash-popup.sh" --size S -h 9 --title popup_reap --object "$target" -- \
         bash "$BIN/dash-reap.sh" "$target" confirm || true
       # The popup is a SEPARATE invocation; this pass reaped nothing (#596).
       emit skip:needs-confirm

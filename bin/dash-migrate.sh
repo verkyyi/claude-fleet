@@ -50,7 +50,7 @@ fi
 if [ "$mode" != confirm ] && [ "$mode" != choose-confirm ]; then
   next=confirm; height=20
   [ "$mode" = choose ] && { next=choose-confirm; height=80%; }
-  bash "$BIN/dash-popup.sh" -w 90% -h "$height" -- bash "$BIN/dash-migrate.sh" "$wid" "$next" || :
+  bash "$BIN/dash-popup.sh" --size S -h "$height" --title popup_switch_sub --object "$wid" -- bash "$BIN/dash-migrate.sh" "$wid" "$next" || :
   exit 0
 fi
 

@@ -25,7 +25,7 @@ fi
 # fallback: clickable popup + local clipboard via OSC52
 # Pass the URL as an argument, never as shell code or a temporary file. The helper
 # runs this same UI inline if no client exists or an overlay refuses the popup.
-bash "$BIN/dash-popup.sh" -w 80% -h 8 -- sh -c '
+bash "$BIN/dash-popup.sh" --size S -h 8 --title popup_open_url -- sh -c '
   url=$1
   b64=$(printf "%s" "$url" | base64 | tr -d "\n")
   printf "\033]52;c;%s\a" "$b64"

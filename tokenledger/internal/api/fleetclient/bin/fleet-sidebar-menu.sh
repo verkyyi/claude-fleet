@@ -40,70 +40,13 @@
 [ -n "${BIN:-}" ] || BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-ui-lang.sh"
 
-# The menu's letters: ONE table, read by the menu below (`mk <action>`) and by
-# the `?` sheet (--keys), so the sheet can never name a letter the menu lacks.
-case "$(fleet_ui_lang)" in
-  zh)
-MENU_KEYS='rename	r	改名 — 在输入行编辑（↵ 应用，esc / 空名称取消）
-pin	t	置顶 / 取消置顶
-pr	p	打开 PR（没有时置灰）
-answer	a	回答提问（红色 ? 行；否则置灰）
-sub	s	切换 sub — 选中运行中的 Claude worker，按 . 后按 s；显示额度并确认
-wake	w	唤醒睡眠中的 z 行（仅睡眠时显示）
-awake	k	保持唤醒 ⇄ 允许再次休眠
-agent	v	新会话 claude ⇄ codex
-reap	x	回收 — 先确认 y/n（别机行：经入口让那台机器回收）
-new	n	新任务 — 建 issue 并启动 worker
-newto	1-9	新建到 <机器>… — 入口在线的别的机器各一项：建 issue，worker 开在那台机器上
-restore	o	恢复已收工任务（hub landed 列表，弹窗）
-repo	g	添加仓库到这个 fleet — 询问 owner/name；~/projects/<name>，缺失时 clone（hub ⌃z）
-open	e	进入 — 打开 ⇄ 代理窗口（只有另一台机器上的行有；菜单标题写着「· 在 m4」）
-message	m	发消息… — 只有别机行有：经入口送到那台机器的 issue 桥，作为它的下一轮
-stop	q	停 — 只有别机行有：经入口让那台机器上的会话 /exit（可恢复）
-resume	c	继续 — 只有别机行有：经入口恢复刚停掉的会话（活着的会被拒绝并告诉你）'
-    m_open_remote='进入（⇄ 代理窗口）…'
-    m_r_message='发消息…'; m_r_stop='停（/exit）'; m_r_resume='继续（恢复）'
-    m_r_answer='答授权 / 回答…'; m_r_answer_none='答授权 / 回答（没有在等）'
-    m_r_reap_confirm_fmt='回收「%s」（在 %s）？(y/n)'; m_newto_fmt='新建到 %s…'
-    m_rename='改名…'; m_unpin='取消置顶'; m_pin='置顶'
-    m_open_pr='打开 PR'; m_open_pr_none='打开 PR（没有）'
-    m_answer='回答它的提问…'; m_answer_none='回答它的提问（没有）'
-    m_sub='切换 sub（选账号）…'; m_sub_none='切换 sub（先选运行中的 Claude worker）'
-    m_wake='唤醒'; m_allow_sleep='允许休眠'; m_keep_awake='保持唤醒'
-    m_agent_fmt='新会话改用 %s'; m_reap='回收…'; m_reap_confirm_fmt='回收「%s」？(y/n)'
-    m_new='新建任务（建 issue）…'; m_restore='恢复已收工…'; m_repo='＋ 仓库…'
-    ;;
-  *)
-MENU_KEYS='rename	r	rename — edits on the input line (↵ applies, esc / an empty name cancels)
-pin	t	pin / unpin the row to the top
-pr	p	open its PR (greyed when it has none)
-answer	a	answer its question (a red ? row; greyed otherwise)
-sub	s	switch subscription — select a running Claude worker, press . then s; review quota and confirm
-wake	w	wake a sleeping (z) row now — only listed on one
-awake	k	keep it awake ⇄ allow it to sleep again
-agent	v	flip new sessions claude ⇄ codex
-reap	x	reap it — asks y/n first (a row on another machine: through the hub, there)
-new	n	new task — file an issue AND spawn its worker
-newto	1-9	new task on <machine>… — one per other machine the hub says is online: file the issue, open the worker there
-restore	o	restore a finished task (the hub landed list, in a popup)
-repo	g	add a repo to this fleet — asks owner/name; ~/projects/<name>, cloned if missing (the hub ⌃z)
-open	e	enter — open the ⇄ proxy window (a row on another machine only; the menu title says · on m4)
-message	m	message… — a row on another machine only: through the hub to the issue bridge on that machine, as its next turn
-stop	q	stop — a row on another machine only: /exit there through the hub (resumable)
-resume	c	resume — a row on another machine only: reopen a just-stopped one through the hub (a live one is refused, and says so)'
-    m_open_remote='Enter (⇄ proxy window)…'
-    m_r_message='Message…'; m_r_stop='Stop (/exit)'; m_r_resume='Resume'
-    m_r_answer='Answer prompt…'; m_r_answer_none='Answer prompt (nothing waiting)'
-    m_r_reap_confirm_fmt='Reap "%s" (on %s)? (y/n)'; m_newto_fmt='New task on %s…'
-    m_rename='Rename…'; m_unpin='Unpin'; m_pin='Pin'
-    m_open_pr='Open PR'; m_open_pr_none='Open PR (none)'
-    m_answer='Answer question…'; m_answer_none='Answer question (none)'
-    m_sub='Switch subscription (choose account)…'; m_sub_none='Switch subscription (select a running Claude worker)'
-    m_wake='Wake'; m_allow_sleep='Allow sleep'; m_keep_awake='Keep awake'
-    m_agent_fmt='New sessions use %s'; m_reap='Reap…'; m_reap_confirm_fmt='Reap "%s"? (y/n)'
-    m_new='New task (file issue)…'; m_restore='Restore finished task…'; m_repo='Add repo…'
-    ;;
-esac
+# Every string — the letter table (`menu_keys`: action<TAB>letter<TAB>what, read
+# by the menu below via `mk <action>` and by the `?` sheet via --keys) and every
+# item's label — comes from THE table, fleet-ui-lang.sh (issue #1535). The
+# language is resolved once (fleet_ui_pin); `t` is the lookup.
+fleet_ui_pin
+t() { fleet_ui_t "$@"; }
+MENU_KEYS=$(t menu_keys)
 mk() { printf '%s\n' "$MENU_KEYS" | awk -F '\t' -v a="$1" '$1 == a { print $2; exit }'; }
 if [ "${1:-}" = --keys ]; then
   printf '%s\n' "$MENU_KEYS" | awk -F '\t' '{ print $2 "\t" $3 }'
@@ -145,11 +88,11 @@ fi
 # there is a hub placement); the row's actions stay listed — each refuses with a
 # toast of its own (fleet-sidebar-remote.sh), so a tap is never silent. No cache
 # (the hub off): no word, nothing here runs.
-HUB_LOST=''
+HUB_LOST=''; ME=''
 if [ -s "$FLEET_C/global/remote_$sess" ]; then
   # shellcheck disable=SC2034  # FLEET_STATUS_G is read by the lib sourced on the same line
   FLEET_STATUS_G="$FLEET_C/global"; . "$BIN/fleet-status-lib.sh"
-  fleet_status_remote_head "$sess"; fleet_status_hub_ok "$FSR_TS"
+  fleet_status_remote_head "$sess"; ME=$FSR_ME; fleet_status_hub_ok "$FSR_TS"
   if fleet_status_hub_lost "$(date +%s)"; then fleet_status_age "$FSH_AGE"; HUB_LOST=$(fleet_ui_t hub_lost_fmt "$FSA"); fi
 fi
 
@@ -166,12 +109,74 @@ add_newto() {
     # travels unquoted
     case "$n" in ''|*[!A-Za-z0-9._-]*) continue ;; esac
     i=$((i + 1)); [ "$i" -le 9 ] || break
-    printf -v m "$m_newto_fmt" "$n"
+    m=$(t menu_newto_fmt "$n")
     if [ -n "$HUB_LOST" ]; then add "-$m · $HUB_LOST" "$i" ''
-    else add "$m" "$i" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") -w 90% -h 12 -- bash $(sq "$BIN/dash-issue-new.sh") confirm --spawn --node=$n")"; fi
+    else add "$m" "$i" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") --size S --title popup_new_task_on_fmt --object $n -- bash $(sq "$BIN/dash-issue-new.sh") confirm --spawn --node=$n")"; fi
   done <<EOF
 $(LC_ALL=C awk -F $'\037' '$1 == "#node" && $3 == "online" && $2 != "" { print $2 }' "$FLEET_C/global/remote_$sess" 2>/dev/null)
 EOF
+}
+
+# One menu frame (issue #1535, EPIC #1529 E6) — the same for a local row and a
+# row on another machine:
+#
+#   title    「名称 · 机器 · 状态」: the machine only when the hub is on (a
+#            one-machine login has nothing to tell apart), the state only when
+#            the row wants you (its needs word, the act cell's), then the hub's
+#            silence if any
+#   groups   进入 / 消息 / 控制 / 其它, in that order, a rule between two that
+#            both have items; a group with nothing in it is not drawn
+#   last     「Esc 关闭」, greyed — the menu always says how it closes
+#
+# Each item's LETTER is fixed by menu_keys whatever group it lands in.
+items=()
+add() { items+=("$1" "$2" "$3"); }   # name key command
+group() {   # a rule before the next group, never two in a row, never first
+  local n=${#items[@]}
+  [ "$n" -gt 0 ] && [ -n "${items[$((n - 3))]}" ] && add "" "" ""
+  return 0
+}
+state_word() {   # <state> <needs kind> → the act cell's word, or nothing
+  case "$1" in
+    needs)  case "$2" in ask|perm|blocked|restore) t "needs_$2" ;; *) t needs_other ;; esac ;;
+    failed) t needs_failed ;;
+  esac
+}
+# show <title> — print (--print, the tests) or draw the menu
+show() {
+  local i=0 margs=()
+  add "" "" ""
+  add "-$(t ui_close)" "" ""
+  if [ "$PRINT" = 1 ]; then
+    printf 'title\t%s\n' "$1"
+    while [ "$i" -lt "${#items[@]}" ]; do
+      printf '%s\t%s\t%s\n' "${items[$((i + 1))]}" "${items[$i]}" "${items[$((i + 2))]}"
+      i=$((i + 3))
+    done
+    exit 0
+  fi
+  [ -n "$client" ] || exit 0
+  # a rule is ONE argument to display-menu (an empty name), an item three
+  while [ "$i" -lt "${#items[@]}" ]; do
+    if [ -z "${items[$i]}" ]; then margs+=("")
+    else margs+=("${items[$i]}" "${items[$((i + 1))]}" "${items[$((i + 2))]}"); fi
+    i=$((i + 3))
+  done
+  tmux display-menu -c "$client" ${side:+-t "$side"} -x P -y P \
+    -T "#[align=centre] $(fe "$1") " -- ${margs[@]+"${margs[@]}"} 2>/dev/null || :
+  exit 0
+}
+PRINT=''; [ "${4:-}" = --print ] && PRINT=1
+
+# The row-less items, the same at the bottom of both menus.
+add_other() {
+  add "$(t menu_new)" "$(mk new)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") --size S --title popup_new_task -- bash $(sq "$BIN/dash-issue-new.sh") confirm --spawn")"
+  add_newto
+  # Row-less too (issue #901): the hub's ⌃t landed list + ⌃o, as one popup.
+  add "$(t menu_restore)" "$(mk restore)" "$(sh_run "bash $(sq "$BIN/fleet-restore-pick.sh") --session $(sq "$sess")")"
+  # Row-less (issue #1103): the hub's ⌃z — the same popup, the same script.
+  # Listed in a one-repo fleet too: it is how the second repo gets in.
+  add "$(t menu_repo)" "$(mk repo)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") --size S --title popup_repo_add -- bash $(sq "$BIN/dash-repo-add.sh")")"
 }
 
 if [ -n "$remote" ]; then
@@ -183,52 +188,48 @@ if [ -n "$remote" ]; then
   name="${row%%$'\037'*}"; row="${row#*$'\037'}"
   rstate="${row%%$'\037'*}"; rneeds="${row#*$'\037'}"
   [ -n "$node" ] || exit 0
-  title=$(fleet_ui_t menu_title_on_node_fmt "${name:-${wid##*/}}" "$node")
+  # 「名称 · m4 · 在问你」 — the ONE place the list names the machine (#1475)
+  title="${name:-${wid##*/}} · $node"
+  # a prompt the hub saw is a needs row whatever its state field says (as the
+  # answer item below reads it)
+  case "$rneeds" in ask|perm) word=$(state_word needs "$rneeds") ;; *) word=$(state_word "$rstate" "$rneeds") ;; esac
+  [ -z "$word" ] || title="$title · $word"
   [ -z "$HUB_LOST" ] || title="$title · $HUB_LOST"          # the hub silent (#1483)
   side=$(tmux list-panes -t "$sess:" -F '#{pane_id} #{@sidebar}' 2>/dev/null | awk '$2==1{print $1; exit}')
   ctx="FLEET_SESSION=$(sq "$sess") TMUX_PANE=$(sq "${side:-}")"
   [ -n "${FLEET_CONF_DIR:-}" ] && ctx="$ctx FLEET_CONF_DIR=$(sq "$FLEET_CONF_DIR")"
   [ -n "${FLEET_UI_LANG:-}" ] && ctx="$ctx FLEET_UI_LANG=$(sq "$FLEET_UI_LANG")"
   sh_run() { printf 'run-shell -b %s' "$(sq "$ctx $1 >/dev/null 2>&1 || :")"; }
-  items=()
-  add() { items+=("$1" "$2" "$3"); }
-  add "$m_open_remote" "$(mk open)" "$(sh_run "bash $(sq "$BIN/fleet-remote-view.sh") open $(sq "$wid")")"
   # The actions (issue #1487): every one a hub write through fleet-sidebar-remote.sh.
   # Popups for the two that take input (message text, the answer); the others run
   # detached and toast. Reap confirms first, as a local row's does.
   rmt="bash $(sq "$BIN/fleet-sidebar-remote.sh")"
   rargs="$(sq "$sess") $(sq "$wid")"; [ -n "$client" ] && rargs="$rargs $(sq "$client")"
-  add "$m_r_message" "$(mk message)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") -w 84% -h 12 -- $rmt message $rargs")"
+  obj=$(sq "${name:-${wid##*/}}")
+  # 进入
+  add "$(t menu_open_remote)" "$(mk open)" "$(sh_run "bash $(sq "$BIN/fleet-remote-view.sh") open $(sq "$wid")")"
+  # 消息
+  group
+  add "$(t menu_r_message)" "$(mk message)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") --size S --title popup_message --object $obj -- $rmt message $rargs")"
   case "$rneeds:$rstate" in
-    ask:*|perm:*|*:needs) add "$m_r_answer" "$(mk answer)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") -w 84% -h 14 -- $rmt answer $rargs")" ;;
-    *) add "-$m_r_answer_none" "$(mk answer)" '' ;;
+    ask:*|perm:*|*:needs) add "$(t menu_r_answer)" "$(mk answer)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") --size S --title popup_answer --object $obj -- $rmt answer $rargs")" ;;
+    *) add "-$(t menu_r_answer_none)" "$(mk answer)" '' ;;
   esac
-  add "$m_r_stop" "$(mk stop)" "$(sh_run "$rmt stop $rargs")"
-  add "$m_r_resume" "$(mk resume)" "$(sh_run "$rmt resume $rargs")"
-  printf -v m_r_reap_confirm "$m_r_reap_confirm_fmt" "$(fe "${name:-${wid##*/}}")" "$(fe "$node")"
-  add "$m_reap" "$(mk reap)" "confirm-before -p $(sq "$m_r_reap_confirm") $(dq "$(sh_run "$rmt reap $rargs")")"
-  add "" "" ""
-  add "$m_new" "$(mk new)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") -w 90% -h 12 -- bash $(sq "$BIN/dash-issue-new.sh") confirm --spawn")"
-  add_newto
-  add "$m_restore" "$(mk restore)" "$(sh_run "bash $(sq "$BIN/fleet-restore-pick.sh") --session $(sq "$sess")")"
-  add "$m_repo" "$(mk repo)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") -w 80% -h 16 -- bash $(sq "$BIN/dash-repo-add.sh")")"
-  if [ "${4:-}" = --print ]; then
-    printf 'title\t%s\n' "$title"
-    i=0
-    while [ "$i" -lt "${#items[@]}" ]; do
-      printf '%s\t%s\t%s\n' "${items[$((i + 1))]}" "${items[$i]}" "${items[$((i + 2))]}"
-      i=$((i + 3))
-    done
-    exit 0
-  fi
-  [ -n "$client" ] || exit 0
-  tmux display-menu -c "$client" ${side:+-t "$side"} -x P -y P \
-    -T "#[align=centre] $(fe "$title") " ${items[@]+"${items[@]}"} 2>/dev/null || :
-  exit 0
+  # 控制
+  group
+  add "$(t menu_r_stop)" "$(mk stop)" "$(sh_run "$rmt stop $rargs")"
+  add "$(t menu_r_resume)" "$(mk resume)" "$(sh_run "$rmt resume $rargs")"
+  m_r_reap_confirm=$(t menu_r_reap_confirm_fmt "$(fe "${name:-${wid##*/}}")" "$(fe "$node")")
+  add "$(t menu_reap)" "$(mk reap)" "confirm-before -p $(sq "$m_r_reap_confirm") $(dq "$(sh_run "$rmt reap $rargs")")"
+  # 其它
+  group
+  add_other
+  show "$title"
 fi
 
 name=$(tmux display-message -p -t "$wid" '#{window_name}' 2>/dev/null)
 state=$(tmux display-message -p -t "$wid" '#{@claude_state}' 2>/dev/null)
+needs=$(tmux display-message -p -t "$wid" '#{@claude_needs}' 2>/dev/null)
 life=$(tmux display-message -p -t "$wid" '#{@worker_lifecycle}' 2>/dev/null)
 keep=$(tmux show-options -wqv -t "$wid" @sleep_keep_awake 2>/dev/null)
 pin=$(tmux show-options -wqv -t "$wid" @pin 2>/dev/null)
@@ -245,57 +246,45 @@ ctx="FLEET_SESSION=$(sq "$sess") TMUX_PANE=$(sq "${side:-}")"
 wake=''; [ -n "$side" ] && wake="; tmux send-keys -t $side F11 >/dev/null 2>&1"
 sh_run() { printf 'run-shell -b %s' "$(sq "$ctx $1 >/dev/null 2>&1$wake || :")"; }
 
-items=()
-add() { items+=("$1" "$2" "$3"); }   # name key command
+title=$name
+[ -z "$ME" ] || title="$title · $ME"
+word=$(state_word "$state" "$needs"); [ -z "$word" ] || title="$title · $word"
+# 进入
+if [ -n "$pr" ]; then add "$(t menu_open_pr) $(fe "$pr")" "$(mk pr)" "$(sh_run "bash $(sq "$BIN/dash-open-pr.sh") --wid $wid")"
+else add "-$(t menu_open_pr_none)" "$(mk pr)" ''; fi
+# 消息
+group
+if [ "$state" = needs ]; then
+  add "$(t menu_answer)" "$(mk answer)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") --size M -h 70% --title popup_answer --object $(sq "$name") -- bash $(sq "$BIN/dash-answer.sh") $(sq "$sess:$wid")")"
+else add "-$(t menu_answer_none)" "$(mk answer)" ''; fi
+# 控制
+group
 # Rename edits in the view's own input line (fleet-sidebar.py `renaming`): park
 # the row's id on the view, keep the keyboard there, and wake it with F12. The
 # view pins the client to itself on its next poll (#1105), so a paste of the new
 # name lands on the input line.
 if [ -n "$side" ]; then
-  add "$m_rename" "$(mk rename)" "set-option -p -t $side @sidebar_rename $wid ; switch-client -T fleet-sidebar ; send-keys -t $side F12"
-else add "-$m_rename" "$(mk rename)" ''; fi
-if [ "$pin" = 1 ]; then add "$m_unpin" "$(mk pin)" "$(sh_run "bash $(sq "$BIN/dash-pin-toggle.sh") $wid")"
-else add "$m_pin" "$(mk pin)" "$(sh_run "bash $(sq "$BIN/dash-pin-toggle.sh") $wid")"; fi
-if [ -n "$pr" ]; then add "$m_open_pr $(fe "$pr")" "$(mk pr)" "$(sh_run "bash $(sq "$BIN/dash-open-pr.sh") --wid $wid")"
-else add "-$m_open_pr_none" "$(mk pr)" ''; fi
-if [ "$state" = needs ]; then
-  add "$m_answer" "$(mk answer)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") -w 84% -h 70% -- bash $(sq "$BIN/dash-answer.sh") $(sq "$sess:$wid")")"
-else add "-$m_answer_none" "$(mk answer)" ''; fi
+  add "$(t menu_rename)" "$(mk rename)" "set-option -p -t $side @sidebar_rename $wid ; switch-client -T fleet-sidebar ; send-keys -t $side F12"
+else add "-$(t menu_rename)" "$(mk rename)" ''; fi
+if [ "$pin" = 1 ]; then add "$(t menu_unpin)" "$(mk pin)" "$(sh_run "bash $(sq "$BIN/dash-pin-toggle.sh") $wid")"
+else add "$(t menu_pin)" "$(mk pin)" "$(sh_run "bash $(sq "$BIN/dash-pin-toggle.sh") $wid")"; fi
 if fleet_pane_claude_pid "$wid" >/dev/null 2>&1; then
-  add "$m_sub" "$(mk sub)" "$(sh_run "bash $(sq "$BIN/dash-migrate.sh") $wid choose")"
-else add "-$m_sub_none" "$(mk sub)" ''; fi
+  add "$(t menu_sub)" "$(mk sub)" "$(sh_run "bash $(sq "$BIN/dash-migrate.sh") $wid choose")"
+else add "-$(t menu_sub_none)" "$(mk sub)" ''; fi
 # Wake (issue #1051): only a sleeping row gets it, and it wakes at once — opening
 # the menu and picking it is already the second deliberate step (EPIC #1048
 # decision 4). Detached, because the wake respawns the pane. Keep awake flips the
 # sleep controller's own @sleep_keep_awake hold; the label says what a pick does.
 # --over-cap (issue #1058): the operator's own wake goes even at the session limit.
 slp="bash $(sq "$BIN/fleet-sleep.sh")"
-[ "$life" = sleeping ] && add "$m_wake" "$(mk wake)" "$(sh_run "$slp wake $(sq "$sess") $wid --over-cap")"
-if [ "$keep" = 1 ]; then add "$m_allow_sleep" "$(mk awake)" "$(sh_run "$slp allow-sleep $(sq "$sess") $wid")"
-else add "$m_keep_awake" "$(mk awake)" "$(sh_run "$slp keep-awake $(sq "$sess") $wid")"; fi
-printf -v m_agent "$m_agent_fmt" "$next"
-add "$m_agent" "$(mk agent)" "$(sh_run "bash $(sq "$BIN/dash-agent-toggle.sh")")"
-printf -v m_reap_confirm "$m_reap_confirm_fmt" "$(fe "$name")"
+[ "$life" = sleeping ] && add "$(t menu_wake)" "$(mk wake)" "$(sh_run "$slp wake $(sq "$sess") $wid --over-cap")"
+if [ "$keep" = 1 ]; then add "$(t menu_allow_sleep)" "$(mk awake)" "$(sh_run "$slp allow-sleep $(sq "$sess") $wid")"
+else add "$(t menu_keep_awake)" "$(mk awake)" "$(sh_run "$slp keep-awake $(sq "$sess") $wid")"; fi
+m_reap_confirm=$(t menu_reap_confirm_fmt "$(fe "$name")")
 reap_args="$(sq "$sess") $wid"; [ -n "$client" ] && reap_args="$reap_args $(sq "$client")"
-add "$m_reap" "$(mk reap)" "confirm-before -p $(sq "$m_reap_confirm") $(dq "$(sh_run "bash $(sq "$BIN/fleet-sidebar-reap.sh") $reap_args")")"
-add "" "" ""
-add "$m_new" "$(mk new)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") -w 90% -h 12 -- bash $(sq "$BIN/dash-issue-new.sh") confirm --spawn")"
-add_newto
-# Row-less too (issue #901): the hub's ⌃t landed list + ⌃o, as one popup.
-add "$m_restore" "$(mk restore)" "$(sh_run "bash $(sq "$BIN/fleet-restore-pick.sh") --session $(sq "$sess")")"
-# Row-less (issue #1103): the hub's ⌃z — the same popup, the same script. Listed
-# in a one-repo fleet too: it is how the second repo gets in.
-add "$m_repo" "$(mk repo)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") -w 80% -h 16 -- bash $(sq "$BIN/dash-repo-add.sh")")"
-
-if [ "${4:-}" = --print ]; then
-  i=0
-  while [ "$i" -lt "${#items[@]}" ]; do
-    printf '%s\t%s\t%s\n' "${items[$((i + 1))]}" "${items[$i]}" "${items[$((i + 2))]}"
-    i=$((i + 3))
-  done
-  exit 0
-fi
-[ -n "$client" ] || exit 0
-tmux display-menu -c "$client" ${side:+-t "$side"} -x P -y P \
-  -T "#[align=centre] $(fe "$name") " ${items[@]+"${items[@]}"} 2>/dev/null || :
-exit 0
+add "$(t menu_reap)" "$(mk reap)" "confirm-before -p $(sq "$m_reap_confirm") $(dq "$(sh_run "bash $(sq "$BIN/fleet-sidebar-reap.sh") $reap_args")")"
+# 其它
+group
+add "$(t menu_agent_fmt "$next")" "$(mk agent)" "$(sh_run "bash $(sq "$BIN/dash-agent-toggle.sh")")"
+add_other
+show "$title"

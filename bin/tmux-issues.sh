@@ -98,7 +98,7 @@ else
   ENTER_TAIL=''
   N_BIND="$DASH_KEY_NEW:execute(bash $BIN/dash-issue-new.sh)+reload(sleep 2; bash $ROWS $MODE)"
   X_BIND="$DASH_KEY_CLOSE:execute(bash $BIN/dash-issue-close.sh {1}$RARG)+reload(sleep 2; bash $ROWS $MODE)"
-  K_BIND="?:execute(bash $BIN/dash-popup.sh -w 72% -h 80% -- bash $BIN/fleet-keys.sh --context backlog)"
+  K_BIND="?:execute(bash $BIN/dash-popup.sh --size L --title popup_keys -- bash $BIN/fleet-keys.sh --context backlog)"
   # Windowed carries no tap chips; keep the close-only click-header (inert here).
   CH_BIND='click-header:transform:case "$FZF_CLICK_HEADER_WORD" in *✕*|*close*) echo abort ;; esac'
 fi

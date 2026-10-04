@@ -232,8 +232,8 @@ whole row is a tap target). A tap on it (opened on the release, like the menu
 below), or `?` on an EMPTY line (inside a name it types), opens
 `fleet-keys.sh --context sidebar` through `dash-popup.sh`: prefix E and ⌂/F9, the
 "task sidebar" group, and the row menu's letters, read from
-`fleet-sidebar-menu.sh --keys` — the same `MENU_KEYS` table the menu is built
-from. The view blocks on the popup, so nothing repaints under it; q/Esc closes it
+`fleet-sidebar-menu.sh --keys` — the same `menu_keys` letter table (in
+`fleet-ui-lang.sh`) the menu is built from. The view blocks on the popup, so nothing repaints under it; q/Esc closes it
 and the keyboard is still on the sidebar.
 The row menu (issue #898) is the hub list's per-row actions without the hub:
 `.` on an EMPTY line (inside a name it types a dot), or a tap on the highlighted
@@ -254,6 +254,27 @@ whose result token — not its exit code — is toasted), and the row-less new t
 a release outside it, and opened on the press the tap's own release would close
 it. `display-menu` holds its caller until the menu closes, so the view spawns it
 and does not wait.
+**One frame, one table** (issue #1535, EPIC #1529 E6). The menu's items fall in
+four groups — 进入 (open PR / the ⇄ proxy window) · 消息 (answer / message) · 控制
+(rename, pin, sub, wake, stop, resume, reap) · 其它 (agent flip, new task, new task
+on <m>, restore, add repo) — a rule between two groups that have items, each
+letter fixed by `menu_keys` wherever it lands, and a greyed 「Esc 关闭」 last. Its
+title is 「名称 · 机器 · 状态」: the machine only with the hub on (the remote cache's
+`#me`; a one-machine login has nothing to tell apart), the state only when the row
+wants you (the act cell's word). Every POPUP opens through `bin/dash-popup.sh` —
+no script, bind or conf line calls `display-popup` (dash-popup-selftest's "one
+door" leg) — with `--size S|M|L` and `--title <key> [--object <o>]`, drawn as
+`┌─ 动作 · 对象 · 机器 ──── Esc 关闭 ─┐` (tmux titles only a popup's top border, so
+the close hint sits at its right end). The prefix binds b/u/!/c/? run it with
+`run-shell -b … --client '#{client_name}' --no-inline`: never a blocking
+run-shell, which would hold the client's command queue while the popup waits on
+its keys, and a refused popup toasts and exits 3 rather than running inline in a
+pane it does not have. Every string — the sidebar's, the menu's, the key sheet's
+(one sheet now, not an en and a zh copy), the popup titles, the bind toasts — is a
+`fleet_ui_t` key in `bin/fleet-ui-lang.sh`; the Python view reads its strings
+once through `fleet-ui-lang.sh dump sidebar_ no_repo`, and fleet-ui-lang-selftest
+fails on a second table, a zh/en branch outside it, a key missing in one
+language, or a key the code asks for that the table lacks.
 Its last item, 「恢复已收工…」 (issue #901), and ⌃o on the sidebar (the hub's
 own restore key; `restore` in `dash-keymap.sh --panel sidebar`) open
 `fleet-restore-pick.sh`: the hub's ⌃t landed list (`fleet-history.sh rows`) in a

@@ -99,7 +99,7 @@ if [ "$mode" != confirm ]; then
   popup_args=(confirm)
   [ "$spawn" = 1 ] && popup_args+=(--spawn)
   [ -n "$node" ] && popup_args+=("--node=$node")
-  bash "$BIN/dash-popup.sh" -w 90% -h 12 -- \
+  bash "$BIN/dash-popup.sh" --size S --title popup_new_task ${node:+--object "$node"} -- \
     env CF_REPO="$REPO" bash "$BIN/dash-issue-new.sh" ${popup_args[@]+"${popup_args[@]}"}
   exit 0
 fi
