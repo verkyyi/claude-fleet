@@ -5,10 +5,11 @@
 #
 # Two layers:
 #   1. PURE helpers, sourced: pane_model_of (read the model off Claude Code's
-#      status line), model_matches (the alias grammar `opus` ↔ "Opus 5" that the
-#      pane and fleet-account.sh's ledger must agree on) and switch_selected (the
-#      candidate matrix: mid-turn refused, already-flipped refused, target ==
-#      capped refused).
+#      NATIVE status line), window_model (the `@model` window option first, that
+#      line only as the fallback — issue #1454), model_matches (the alias grammar
+#      `opus` ↔ "Opus 5" that the pane and fleet-account.sh's ledger must agree
+#      on) and switch_selected (the candidate matrix: mid-turn refused,
+#      already-flipped refused, target == capped refused).
 #   2. END-TO-END on a DEDICATED tmux server on its own -L label (never the live
 #      server, issue #159) — it must be -L, not a -S shim, because the script
 #      targets servers as `tmux -L <session>` and a trailing -L would override a
@@ -27,7 +28,10 @@
 #      (switched — the #569 blocker), a GENUINELY live turn left untouched, a cap the
 #      ledger knows but the scrollback has lost (switched, silently), an
 #      already-flipped window left untouched, a fallback that is itself capped on the
-#      account, and --dry-run.
+#      account, --dry-run — and a login running the fleet's statusLine (#1454): the
+#      fake paints NO `◆` line and instead renders through the REAL
+#      conf/statusline.sh, which stamps the model onto the window as `@model`; the
+#      probe must select and verify that window off `@model` alone.
 #
 # Exit 0 = pass, non-zero = fail (prints what diverged).
 set -uo pipefail
@@ -76,6 +80,16 @@ eq "pane_model_of: no name after the diamond" "" "$(pane_model_of '  ◆   [█�
 eq "pane_model_of: diamond at the very end" ""  "$(pane_model_of 'some output ◆ ')"
 eq "pane_model_of: gap on a LATER line does not rescue an earlier diamond" "" "$(pane_model_of '  ◆ Opus 5
 next  line  here')"
+
+# window_model — @model (the statusline's stamp, #1452) wins; the native `◆` line
+# is read only when nothing stamped the window (issue #1454). The result lands in
+# $WMODEL, not on stdout, so the hot loop pays no subshell on the common path.
+command -v window_model >/dev/null 2>&1 || fail "window_model not defined after sourcing"
+window_model 'Opus 5.5' '  ◆ Fable 5.1  [█░] 9% x';  eq "window_model: @model wins over a ◆ line"    "Opus 5.5"  "$WMODEL"
+window_model 'Fable 5.1' 'just some output';          eq "window_model: @model alone"                 "Fable 5.1" "$WMODEL"
+window_model '' '  ◆ Fable 5.1  [█░] 9% x';          eq "window_model: no @model → the ◆ line"       "Fable 5.1" "$WMODEL"
+window_model '' 'just some output';                   eq "window_model: neither → empty"              ""          "$WMODEL"
+window_model 'Opus 5.5' '';                           eq "window_model: @model with an empty capture" "Opus 5.5"  "$WMODEL"
 
 # _lc — the fork-free lowercase that replaced `printf | tr` on the same hot path.
 command -v _lc >/dev/null 2>&1 || fail "_lc not defined after sourcing"
@@ -180,7 +194,21 @@ $| = 1;
 my $log = $ENV{FAKE_LOG};
 my $model = $ENV{FAKE_MODEL} || "Fable 5.1";
 my $wall  = $ENV{FAKE_WALL};
-sub paint { printf("  \x{25c6} %s  [\x{2588}\x{2588}\x{2591}\x{2591}] 30%% 300k/1.0M  wt  \x{21af}xhigh  \$1.00\n", $model); }
+my $sl    = $ENV{FAKE_STATUSLINE} || "";
+sub paint {
+  if ($sl ne "") {
+    # A login running the fleet's statusLine (#1452): Claude Code paints NO native
+    # line — it runs the configured command with its render JSON on stdin, and
+    # the REAL conf/statusline.sh stamps .model.display_name onto this window as
+    # @model. TMUX / TMUX_PANE are inherited from the pane, exactly as for the CLI.
+    if (open(my $p, '|-', 'bash', $sl)) {
+      print $p qq({"model":{"display_name":"$model"},"context_window":{"used_percentage":30,"context_window_size":1000000}});
+      close $p;
+    }
+    return;
+  }
+  printf("  \x{25c6} %s  [\x{2588}\x{2588}\x{2591}\x{2591}] 30%% 300k/1.0M  wt  \x{21af}xhigh  \$1.00\n", $model);
+}
 binmode(STDOUT, ":utf8");
 print "fake claude up\n";
 print "  \x{23bf}  You've reached your $wall limit. Run /usage-credits to continue or switch models with /model.\n" if $wall;
@@ -235,15 +263,17 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do [ -S "$INBOX_SOCK" ] && break; sleep 0.3; done
 [ -S "$INBOX_SOCK" ] || fail "the fake peer inbox socket never appeared"
 
 # --- a window running the fake claude, registered like the real CLI ------------
-# spawn_worker <window-name> <wall-model|''> <start-model> — sets $WID.
+# spawn_worker <window-name> <wall-model|''> <start-model> [<statusline.sh>] —
+# sets $WID. With a 4th argument the fake renders through that statusLine script
+# instead of painting a `◆` line (the #1454 fixture).
 # NOT a command substitution on purpose: `fail` must be able to exit the whole
 # selftest, and inside `$( )` its exit would only kill the subshell.
 WID=""
 spawn_worker() {
-  local name="$1" wall="$2" start="$3" pid=""
+  local name="$1" wall="$2" start="$3" sl="${4:-}" pid=""
   : > "$WORK/typed.$name"
   tmux -L "$LBL" new-window -d -n "$name" -c "$WORK" \
-    "FAKE_LOG='$WORK/typed.$name' FAKE_WALL='$wall' FAKE_MODEL='$start' PATH='$BINSH:$PATH' exec claude '$WORK/fake-claude.pl'" 2>/dev/null
+    "FAKE_LOG='$WORK/typed.$name' FAKE_WALL='$wall' FAKE_MODEL='$start' FAKE_STATUSLINE='$sl' PATH='$BINSH:$PATH' exec claude '$WORK/fake-claude.pl'" 2>/dev/null
   WID=$(tmux -L "$LBL" list-windows -F '#{window_id} #{window_name}' | awk -v n="$name" '$2==n{print $1; exit}')
   [ -n "$WID" ] || fail "could not create window $name"
   tmux -L "$LBL" set-window-option -t "$WID" @cc_account acctA 2>/dev/null
@@ -296,6 +326,10 @@ ok; has 'would:' "$out" || fail "--dry-run should print a plan" "$out"
 # The account is the visible end of that chain, so a collapsed split shows up here
 # as a missing `[acctA]` on the plan line.
 ok; has '[acctA]' "$out" || fail "the batched window read must survive three empty option columns ahead of @cc_account" "$out"
+# …and the @model column (#1454) sits between @cc_account and the NAME: empty on
+# a pane that paints its own ◆ line, so a shifted split would hand the name slot
+# the account.
+ok; has "($(tmux -L "$LBL" display-message -p -t "$W_OK" '#{window_name}'))" "$out" || fail "the window NAME must survive an empty @model column ahead of it" "$out"
 eq "--dry-run types nothing" "" "$(cat "$WORK/typed.walled")"
 eq "--dry-run writes no ledger row" "" "$(cat "$CAPLEDGER" 2>/dev/null)"
 
@@ -453,6 +487,39 @@ ok; has '/model opus' "$(cat "$WORK/typed.aftercap")" || fail "cached miss hid a
 ok; grep -q 'tok-aftercap' "$INBOX_LOG" && fail "the newly detected ledger-only window must not be nudged"
 out=$(RUN --capped --model opus --dry-run)
 ok; has "$W_BEFORE" "$out" || fail "the next sweep must pick up the earlier window" "$out"
+
+# --- a login running the fleet's statusLine: no `◆` line, @model instead (#1454)
+# conf/statusline.sh REPLACES Claude Code's native status line (#1452), so on
+# every fleet login the pane never shows `◆ <model>` — the model lands on the
+# window as @model, stamped by the real script off the engine's render JSON. This
+# fake renders exactly that way, so the whole read chain under test is the
+# production one: statusline.sh stamps, the probe's batched list-windows reads,
+# the verify re-reads after the flip. Before #1454 the probe read the pane text
+# only, found no model, and such a window was never even SELECTED — every
+# per-model cap on a statusLine login fell through to fleet-migrate.sh.
+if command -v jq >/dev/null 2>&1; then
+  SLSH="$BIN/../conf/statusline.sh"
+  [ -f "$SLSH" ] || fail "conf/statusline.sh not found beside bin/ ($SLSH)"
+  spawn_worker slworker Fable "Fable 5.1" "$SLSH"; W_SL="$WID"
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    [ "$(tmux -L "$LBL" display-message -p -t "$W_SL" '#{@model}')" = "Fable 5.1" ] && break
+    sleep 0.3
+  done
+  eq "statusline.sh stamped the start model onto the window as @model" "Fable 5.1" "$(tmux -L "$LBL" display-message -p -t "$W_SL" '#{@model}')"
+  ok; has '◆' "$(tmux -L "$LBL" capture-pane -p -t "$W_SL")" && fail "fixture: a statusLine login must show NO native ◆ line" "$(tmux -L "$LBL" capture-pane -p -t "$W_SL")"
+  tmux -L "$LBL" set-window-option -t "$W_BUSY" @claude_state_ts "$(date +%s)" 2>/dev/null
+  out=$(RUN --capped --model opus --dry-run)
+  ok; has "would: $W_SL (slworker) Fable 5.1 → opus" "$out" || fail "with no ◆ line on the pane the model must be read off @model" "$out"
+  out=$(RUN --model opus "$W_SL")
+  ok; has '1 switched' "$out" || fail "a statusLine-login window must switch in place, not fall through" "$out"
+  ok; has '/model opus' "$(cat "$WORK/typed.slworker")" || fail "the statusLine-login pane should have been handed /model opus" "$(cat "$WORK/typed.slworker")"
+  eq "the next render re-stamped @model, and that is what the verify read" "Opus 5" "$(tmux -L "$LBL" display-message -p -t "$W_SL" '#{@model}')"
+  ok; has 'fable → Opus 5 in place' "$out" || fail "the report should name the model the verify read off @model" "$out"
+  eq "@cc_model restamped off an @model verify" "opus" "$(tmux -L "$LBL" display-message -p -t "$W_SL" '#{@cc_model}')"
+  ok; has '◆' "$(tmux -L "$LBL" capture-pane -p -t "$W_SL")" && fail "still no native line after the flip — the verify cannot have read the pane text"
+else
+  printf 'fleet-model-switch selftest: jq absent — the statusLine (@model) leg skipped\n'
+fi
 
 # --- with the fleet mod alive, /model goes through its inbox (issue #1337) -----
 # A fresh @mod_alive and a stand-in mod that claims the posted file (the same
