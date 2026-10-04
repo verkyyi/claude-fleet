@@ -350,7 +350,8 @@ rows=$(tr '\037' '|' < "$G/hub_nodes" 2>/dev/null)
 has "G: … hub_nodes from its machines: m5" "m5|online|5.65|" "$rows"
 has "G: … and m4" "m4|lost|" "$rows"
 has "G: … hub_limits from its per_account: the person's account" "icloud|63|65|7a7e6173" "$(tr '\037' '|' < "$G/hub_limits" 2>/dev/null)"
-eq "G: … and its body is not left behind" "" "$(ls "$G" | grep hubsummary)"
+left=''; for f in "$G"/hubsummary.*; do [ -e "$f" ] && left=$f; done
+eq "G: … and its body is not left behind" "" "$left"
 rm -f "$G/hub_nodes" "$G/hub_limits"; : > "$WORK/curl.log"; echo 401 > "$WORK/sumcode"
 chubs
 eq "G: a refused certificate falls back to the viewer routes with the token" "/v1/fleet/summary cert
