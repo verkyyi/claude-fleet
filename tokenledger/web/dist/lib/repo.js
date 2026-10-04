@@ -1,0 +1,351 @@
+// web/dist/lib/repo.js — repo-progress arithmetic. No DOM, so node can test it.
+//
+// Every function here obeys one rule: a threshold is never a constant. The
+// scale an age is judged against comes from the repository's own close-time
+// distribution, shipped with the data, and when it is missing these functions
+// say so rather than substituting one. Measured on one real repo — 2,688
+// issues in 82 days — the median issue closed in 0.13 days and p95 was 10.9;
+// "stale after 30 days" would have found nothing there and would find
+// everything in a repo that works in quarters.
+
+const DAY = 86400;
+const HOUR = 3600;
+
+/** fmtAge renders a duration in seconds at the coarsest unit that still says
+ *  something. A backlog whose rows read "1123200s" is a backlog nobody reads. */
+export function fmtAge(seconds, t = (k, v) => `${v.n}${k.slice(-1)}`) {
+  const s = Math.max(0, Number(seconds) || 0);
+  if (s < HOUR) return t('repo.unit.m', { n: Math.round(s / 60) });
+  if (s < DAY) return t('repo.unit.h', { n: round1(s / HOUR) });
+  if (s < 90 * DAY) return t('repo.unit.d', { n: round1(s / DAY) });
+  return t('repo.unit.mo', { n: round1(s / (30 * DAY)) });
+}
+
+const round1 = (n) => Math.round(n * 10) / 10;
+
+/** isoWeekStart returns the Monday of the UTC week containing a YYYY-MM-DD
+ *  key, as another YYYY-MM-DD key. Weeks, not days, because issue flow at day
+ *  resolution over 90 days is noise with a trend hidden inside it. */
+export function isoWeekStart(day) {
+  const d = new Date(day + 'T00:00:00Z');
+  if (Number.isNaN(d.getTime())) return null;
+  // getUTCDay: 0=Sunday. Shift so Monday is the start of the week.
+  const back = (d.getUTCDay() + 6) % 7;
+  d.setUTCDate(d.getUTCDate() - back);
+  return d.toISOString().slice(0, 10);
+}
+
+/** weeklyFlow folds daily rows into weeks.
+ *
+ *  opened and closed SUM across the week; open_at_end does not — it is a
+ *  level, not a rate, and adding seven levels together would produce a number
+ *  seven times the backlog that nothing in the repo ever reached. The week's
+ *  level is the last day in it that reported one. */
+export function weeklyFlow(days) {
+  const weeks = new Map();
+  for (const d of days || []) {
+    const wk = isoWeekStart(d.day);
+    if (!wk) continue;
+    let w = weeks.get(wk);
+    if (!w) { w = { week: wk, opened: 0, closed: 0, openAtEnd: null, merged: null, lastDay: '' }; weeks.set(wk, w); }
+    w.opened += d.opened || 0;
+    w.closed += d.closed || 0;
+    if (typeof d.merged_prs === 'number') w.merged = (w.merged || 0) + d.merged_prs;
+    if (d.day >= w.lastDay) { w.lastDay = d.day; w.openAtEnd = d.open_at_end ?? null; }
+  }
+  return [...weeks.values()].sort((a, b) => (a.week < b.week ? -1 : 1));
+}
+
+/** net is opened minus closed: positive means the backlog grew that week.
+ *  It is the one number in the flow card that answers "are we keeping up". */
+export const net = (w) => (w.opened || 0) - (w.closed || 0);
+
+/** scaleBands turns a close-time distribution into the age bands a backlog is
+ *  read in. Returns [] when the shipper computed no percentiles — the caller
+ *  must then say the scale is unknown, never fall back to a constant.
+ *
+ *  Each band carries `from`/`to` in seconds (to === null means open-ended) and
+ *  the percentile name it came from, so the legend can say WHERE the edge came
+ *  from rather than printing a bare number a reader would take for a policy. */
+export function scaleBands(scale) {
+  if (!scale) return [];
+  const edges = [];
+  const add = (name, v) => { if (typeof v === 'number' && v > 0) edges.push({ name, at: v }); };
+  add('p50', scale.p50_seconds);
+  add('p90', scale.p90_seconds);
+  add('p95', scale.p95_seconds);
+  // A shipper that computed only some of them still gives a usable ladder, but
+  // only if the ones present are ordered; out-of-order input is a shipper bug
+  // and sorting it silently would hide that from whoever has to fix it.
+  for (let i = 1; i < edges.length; i++) {
+    if (edges[i].at < edges[i - 1].at) return [];
+  }
+  if (!edges.length) return [];
+  const bands = [];
+  let from = 0;
+  for (const e of edges) {
+    bands.push({ key: 'le-' + e.name, from, to: e.at, edge: e.name });
+    from = e.at;
+  }
+  bands.push({ key: 'gt-' + edges[edges.length - 1].name, from, to: null, edge: edges[edges.length - 1].name });
+  return bands;
+}
+
+/** ageHistogram counts issues into the bands scaleBands produced.
+ *
+ *  Returns null — not an empty histogram — when there is no scale. The two are
+ *  different answers ("no issues" vs "no way to judge them") and a card that
+ *  rendered them the same would be the exact failure this feature exists to
+ *  prevent. */
+export function ageHistogram(issues, scale) {
+  const bands = scaleBands(scale);
+  if (!bands.length) return null;
+  const counts = bands.map((b) => ({ ...b, count: 0 }));
+  for (const i of issues || []) {
+    const age = Number(i.age_seconds) || 0;
+    // Last band is open-ended, so a linear scan lands everything.
+    const hit = counts.find((b) => b.to === null || age < b.to);
+    if (hit) hit.count++;
+  }
+  return counts;
+}
+
+/** stalled keeps the issues past the repo's own p95, worst first.
+ *
+ *  Without a p95 it returns [] and `reason: 'no-scale'`, because there is no
+ *  honest stalled list on a repo nobody has measured. */
+export function stalled(issues, scale) {
+  const p95 = scale && typeof scale.p95_seconds === 'number' ? scale.p95_seconds : null;
+  if (p95 == null) return { rows: [], reason: 'no-scale' };
+  const rows = (issues || [])
+    .filter((i) => i.state === 'open' && (Number(i.age_seconds) || 0) >= p95)
+    .sort((a, b) => (Number(b.age_seconds) || 0) - (Number(a.age_seconds) || 0));
+  return { rows, reason: rows.length ? '' : 'none' };
+}
+
+/** shippedButOpen are the issues whose work already landed in a merged commit
+ *  while the issue stayed open. They are the actionable half of a stalled
+ *  list: a close, not an investigation. */
+export const shippedButOpen = (issues) =>
+  (issues || []).filter((i) => i.state === 'open' && i.shipped_at);
+
+/** STALLED_SORTS are the axes the stalled table can be ordered by.
+ *
+ *  Both read DESCENDING and there is no direction to flip: "oldest first" and
+ *  "most argued about first" are the questions somebody opens this table with,
+ *  and their opposites ("show me the newest thing that is already stalled")
+ *  are not. A toggle would add an arrow whose meaning a reader has to
+ *  remember in exchange for an ordering nobody asked for. */
+export const STALLED_SORTS = ['age', 'comments'];
+
+/** labelFacets counts the labels carried by a set of rows, commonest first.
+ *
+ *  The counts deliberately do NOT sum to the number of rows: an issue carries
+ *  as many labels as it carries, and eight of the twenty-four stalled issues
+ *  on the repo this was built against carry none at all. Printing a total
+ *  beside them would be a number no filter could ever reproduce.
+ *
+ *  `selected` is kept in the list at zero when nothing carries it any more.
+ *  Dropping it would leave the picker reading "all" while the table showed a
+ *  filtered set — a control that misreports its own state is worse than an
+ *  empty table, because the reader cannot see that anything is being hidden. */
+export function labelFacets(rows, selected = null) {
+  const counts = new Map();
+  for (const r of rows || []) for (const l of r.labels || []) counts.set(l, (counts.get(l) || 0) + 1);
+  const out = [...counts.entries()]
+    .map(([label, count]) => ({ label, count }))
+    .sort((a, b) => b.count - a.count || (a.label < b.label ? -1 : 1));
+  if (selected && !counts.has(selected)) out.push({ label: selected, count: 0 });
+  return out;
+}
+
+/** filterStalled narrows the table by label and by "the work already landed".
+ *
+ *  The second one is not a convenience: a stalled issue whose commit is
+ *  already on the trunk is a CLOSE, not an investigation, and it is the only
+ *  subset of this table anybody can clear without reading a line of code. */
+export function filterStalled(rows, { label = null, shippedOnly = false } = {}) {
+  return (rows || []).filter((r) =>
+    (!label || (r.labels || []).includes(label)) &&
+    (!shippedOnly || Boolean(r.shipped_at)));
+}
+
+/** sortStalled orders the table, ties broken on issue number.
+ *
+ *  The tie-break is not cosmetic. This card re-renders on the page's 60-second
+ *  timer, and two issues with equal comment counts would otherwise swap places
+ *  every minute on their own — a table that reorders itself while nobody
+ *  touched it teaches a reader not to trust that it is showing the same thing
+ *  twice. */
+export function sortStalled(rows, sort) {
+  const key = sort === 'comments'
+    ? (r) => Number(r.comments) || 0
+    : (r) => Number(r.age_seconds) || 0;
+  return (rows || []).slice().sort((a, b) => key(b) - key(a) || (a.number || 0) - (b.number || 0));
+}
+
+/** pickRepo resolves which repository to show: the URL's choice when it names
+ *  one this hub actually holds, otherwise the most recently observed.
+ *
+ *  An unknown name falls back rather than rendering an empty page. A link
+ *  outliving the repository it names should still open on something. */
+export function pickRepo(wanted, repos) {
+  const names = (repos || []).map((r) => r.repo);
+  return names.includes(wanted) ? wanted : names[0];
+}
+
+/* ------------------------------------------- verification health (shipped) */
+
+/** healthRows normalises the shipped readings into rows the card renders
+ *  verbatim.
+ *
+ *  It formats nothing and judges nothing. Every figure here was already
+ *  worded by the producer, under rules that withhold a percentile below a
+ *  sample floor, withhold a ratio below a denominator floor, and mark an
+ *  unfinished observation as a lower bound. Re-deriving any of that on this
+ *  side would put those rules in two places, and the whole reason these
+ *  readings exist is that two copies of a judgement drift in silence.
+ *
+ *  `ok` is read strictly: anything that is not exactly `true` means the
+ *  reading could not be taken. A producer that forgets the field, or a row
+ *  stored by an older shipper, must land on "not measured" rather than on a
+ *  silent claim of health. */
+export function healthRows(health) {
+  if (!health || !Array.isArray(health.readings)) return [];
+  return health.readings
+    .filter((r) => r && typeof r.key === 'string' && r.key !== '')
+    .map((r) => {
+      const value = typeof r.value === 'string' ? r.value.trim() : '';
+      return {
+        key: r.key,
+        label: typeof r.label === 'string' ? r.label : '',
+        value,
+        note: typeof r.note === 'string' ? r.note : '',
+        // A blank value cannot be an "ok" reading whatever the flag says: an
+        // empty cell reads as "nothing wrong", which is the one thing a
+        // missing figure never means.
+        ok: r.ok === true && value !== '',
+      };
+    });
+}
+
+/** healthAge answers how old these figures are, and whether that is too old.
+ *
+ *  The threshold comes from the shipper (`stale_after_seconds`), never from
+ *  this page — a daily shipper and a weekly one disagree about what "stale"
+ *  means, and a surface that picks its own number is quoting a scale nobody
+ *  measured. `stale: null` is the honest answer when the shipper did not say,
+ *  and the card prints that rather than guessing.
+ *
+ *  Returns null when there is nothing to age — no block, or an observation
+ *  time that will not parse. */
+export function healthAge(health, now = Date.now()) {
+  if (!health || !health.observed_at) return null;
+  const at = Date.parse(health.observed_at);
+  if (!Number.isFinite(at)) return null;
+  const seconds = Math.max(0, (now - at) / 1000);
+  const after = typeof health.stale_after_seconds === 'number' && health.stale_after_seconds > 0
+    ? health.stale_after_seconds
+    : null;
+  return { seconds, after, stale: after === null ? null : seconds > after };
+}
+
+/* ------------------------------------------------- the issue axis (#58) */
+
+/** issueSpendRows turns /v1/repo/cost into the rows the ranked list draws,
+ *  with the unattributed bucket PINNED LAST rather than sorted into place.
+ *
+ *  Pinned because it is not a competitor: it is the part of the window the
+ *  branch never named, and on the corpus the attribution rule was measured
+ *  against it is 63.5% of events — bigger than every real issue put together,
+ *  so sorting it by size would bury the actual distribution under one bar.
+ *  Last, always present, and never silently dropped: attributed +
+ *  unattributed = total is the only reason the other bars can be read as
+ *  shares of anything.
+ *
+ *  `limit` trims the ATTRIBUTED rows only. The caller is told what it cut
+ *  (`hidden`) so the card can say so. */
+export function issueSpendRows(cost, limit = 12) {
+  if (!cost) return null;
+  const issues = Array.isArray(cost.issues) ? cost.issues : [];
+  const shown = limit > 0 ? issues.slice(0, limit) : issues;
+  const un = cost.unattributed || null;
+  return {
+    // Lift the window's figures onto the row. An issue row nests them under
+    // `window` (it also carries `lifetime`, which is a different question)
+    // while the unattributed bucket IS a spend total, and every consumer
+    // below wants one shape. Normalising here rather than at each call site
+    // is what stopped the shares silently reading 0%: `r.tokens` was simply
+    // undefined on an issue row, which is a falsy number, not an error.
+    rows: shown.map((i) => ({
+      ...i,
+      kind: 'issue',
+      tokens: Number(i.window && i.window.tokens) || 0,
+      events: Number(i.window && i.window.events) || 0,
+    })),
+    unattributed: un ? { ...un, kind: 'unattributed' } : null,
+    // What the top-N hid: the rows this card cut, plus the ones the API had
+    // already cut before it got here.
+    hidden: Math.max(0, (Number(cost.distinct_issues) || issues.length) - shown.length),
+    total: cost.total || null,
+    attributed: cost.attributed || null,
+  };
+}
+
+/** undeclaredScope reads how /v1/repo/cost was bound to a repository, and what
+ *  the binding left out — the #84 half of the same disclosure rule the
+ *  unattributed bucket already obeys.
+ *
+ *  The card is now SCOPED: the endpoints declare which repository they run in,
+ *  so the bars are this repository's spend rather than the whole hub's. A scope
+ *  is a filter, and a filter drops rows without saying so. On a fleet that is
+ *  half upgraded most of the window still declares nothing, and a short set of
+ *  bars beside a large undeclared remainder means "not measured yet", never
+ *  "cheap" — the same factor-of-three error, in the same flattering direction.
+ *
+ *  Returns null when there is nothing to say: the legacy whole-hub reading has
+ *  no filter to disclose (`sole` is true for that instead), and a window where
+ *  everything declared has no remainder.
+ */
+export function undeclaredScope(cost) {
+  if (!cost) return null;
+  if (cost.binding === 'sole_repo') return { sole: true, share: null, tokens: 0 };
+  const d = cost.declaration;
+  if (!d || !d.total) return null;
+  const total = Number(d.total.tokens) || 0;
+  const tokens = Number(d.undeclared && d.undeclared.tokens) || 0;
+  if (!total || !tokens) return null;
+  return { sole: false, share: tokens / total, tokens };
+}
+
+/** issueShare is one bucket's share of the window, in TOKENS.
+ *
+ *  Tokens and not money, and the reason is not a preference: the three kinds
+ *  of money this hub holds are never added, so there is no single cost figure
+ *  a share could be taken of. Tokens are one physical quantity across every
+ *  source. Null when there is no denominator — a share of nothing is not 0%.
+ */
+export function issueShare(bucket, total) {
+  const denom = Number(total && total.tokens) || 0;
+  if (!denom) return null;
+  return (Number(bucket && bucket.tokens) || 0) / denom;
+}
+
+/** concentration answers "do a few issues eat the lot, or is it spread flat"
+ *  with the one number a reader actually asks for: what share of the window's
+ *  ATTRIBUTED tokens the top `n` issues carry.
+ *
+ *  Measured against the attributed total, never the grand total, and the card
+ *  has to say so. Against the grand total it would read as a claim about all
+ *  the spend, and the unattributed bucket would silently flatter it.
+ *
+ *  Null when nothing is attributed, or when there are not more than `n`
+ *  issues to concentrate — "the top 3 of 3 issues carry 100%" is arithmetic,
+ *  not a finding. */
+export function concentration(rows, attributed, n = 3) {
+  const denom = Number(attributed && attributed.tokens) || 0;
+  const list = Array.isArray(rows) ? rows : [];
+  if (!denom || list.length <= n) return null;
+  const top = list.slice(0, n).reduce((a, r) => a + (Number(r.tokens) || 0), 0);
+  return { n, share: top / denom, of: list.length };
+}

@@ -1,0 +1,536 @@
+package mcp
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/verkyyi/ccquota/internal/api"
+	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/ccquota/internal/pricing"
+	"github.com/verkyyi/ccquota/internal/store"
+)
+
+func newMCP(t *testing.T) (*httptest.Server, *store.Store) {
+	t.Helper()
+	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	srv := &api.Server{Store: st, Pricing: pricing.Default()}
+	ts := httptest.NewServer(Handler(srv))
+	t.Cleanup(ts.Close)
+	return ts, st
+}
+
+func seed(t *testing.T, st *store.Store, account, endpoint, cwd string, uuids ...string) {
+	t.Helper()
+	id := model.Identity{AccountUUID: account, Email: account + "@example.com", Hostname: endpoint}
+	if err := st.UpsertAccount(id, "max", "default_claude_max_20x"); err != nil {
+		t.Fatal(err)
+	}
+	// Enrolling is once per machine; seeding the same machine again (a
+	// subscription switch) must not try to re-enrol it.
+	if _, err := st.EndpointByTokenHash("hash-" + endpoint); err != nil {
+		if err := st.Enroll(endpoint, endpoint, "hash-"+endpoint); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := st.TouchEndpoint(endpoint, id, "test", true, nil); err != nil {
+		t.Fatal(err)
+	}
+	evs := make([]model.UsageEvent, len(uuids))
+	for i, u := range uuids {
+		c := 1.0
+		evs[i] = model.UsageEvent{
+			AccountUUID: account, EndpointID: endpoint, MessageUUID: u,
+			SessionID: "s-" + endpoint, TS: time.Now().UTC().Add(-time.Minute),
+			Model: "claude-sonnet-5", OutputTokens: 1000, CWD: cwd, CostUSD: &c,
+		}
+	}
+	if _, _, err := st.InsertEvents(evs); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func rpc(t *testing.T, ts *httptest.Server, method string, params any) map[string]any {
+	t.Helper()
+	body := map[string]any{"jsonrpc": "2.0", "id": 1, "method": method}
+	if params != nil {
+		body["params"] = params
+	}
+	b, _ := json.Marshal(body)
+
+	resp, err := ts.Client().Post(ts.URL, "application/json", bytes.NewReader(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode %s response: %v", method, err)
+	}
+	return out
+}
+
+func call(t *testing.T, ts *httptest.Server, tool string, args map[string]any) map[string]any {
+	t.Helper()
+	if args == nil {
+		args = map[string]any{}
+	}
+	return rpc(t, ts, "tools/call", map[string]any{"name": tool, "arguments": args})
+}
+
+func TestInitialize(t *testing.T) {
+	ts, _ := newMCP(t)
+	out := rpc(t, ts, "initialize", map[string]any{"protocolVersion": protocolVersion})
+
+	res, ok := out["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("no result: %v", out)
+	}
+	if res["protocolVersion"] != protocolVersion {
+		t.Errorf("protocolVersion = %v", res["protocolVersion"])
+	}
+	if _, ok := res["capabilities"].(map[string]any)["tools"]; !ok {
+		t.Error("server must advertise the tools capability")
+	}
+}
+
+func TestToolsList_AllToolsWithCaveats(t *testing.T) {
+	ts, _ := newMCP(t)
+	out := rpc(t, ts, "tools/list", nil)
+
+	tools, ok := out["result"].(map[string]any)["tools"].([]any)
+	if !ok {
+		t.Fatalf("no tools: %v", out)
+	}
+	if len(tools) != 33 {
+		t.Fatalf("tools = %d, want 33", len(tools))
+	}
+
+	want := map[string]bool{
+		"get_collectors": false, "get_account_usage": false, "get_live": false, "quota_history": false,
+		"list_accounts": false, "get_limits": false, "list_endpoints": false,
+		"list_account_switches": false, "list_endpoint_accounts": false,
+		"usage_by_account": false, "usage_by_endpoint": false,
+		"usage_by_source": false, "usage_by_provider": false,
+		"usage_by_user": false, "usage_by_project": false,
+		"usage_by_session": false, "usage_by_model": false,
+		"usage_by_team": false, "usage_by_branch": false,
+		"usage_by_effort": false, "usage_by_entrypoint": false,
+		"usage_history":      false,
+		"get_limits_history": false, "get_fx": false, "get_user": false,
+		"usage_summary": false, "list_sessions": false, "get_session": false, "get_findings": false,
+		"list_repos": false, "repo_progress": false, "list_repo_issues": false,
+		"repo_issue_cost": false,
+	}
+	for _, raw := range tools {
+		tool := raw.(map[string]any)
+		name := tool["name"].(string)
+		if _, known := want[name]; !known {
+			t.Errorf("unexpected tool %q", name)
+			continue
+		}
+		want[name] = true
+		if tool["description"].(string) == "" {
+			t.Errorf("%s has no description", name)
+		}
+		if _, ok := tool["inputSchema"].(map[string]any)["properties"]; !ok {
+			t.Errorf("%s has no input schema properties", name)
+		}
+	}
+	for name, seen := range want {
+		if !seen {
+			t.Errorf("missing tool %q", name)
+		}
+	}
+}
+
+// An agent that relays these figures must be told they are estimates, or it
+// will present them with the confidence of a measurement.
+func TestToolsList_UsageToolsCarryTheEstimateCaveat(t *testing.T) {
+	ts, _ := newMCP(t)
+	out := rpc(t, ts, "tools/list", nil)
+	tools := out["result"].(map[string]any)["tools"].([]any)
+
+	for _, raw := range tools {
+		tool := raw.(map[string]any)
+		name := tool["name"].(string)
+		if !strings.HasPrefix(name, "usage_") && name != "get_limits" {
+			continue
+		}
+		desc := tool["description"].(string)
+		if !strings.Contains(desc, "ESTIMATE") {
+			t.Errorf("%s does not warn that shares are estimates", name)
+		}
+		if !strings.Contains(desc, "notional") {
+			t.Errorf("%s does not warn that costs are notional", name)
+		}
+	}
+}
+
+func TestCall_ListAccounts(t *testing.T) {
+	ts, st := newMCP(t)
+	seed(t, st, "acct-a", "ep-1", "/srv/alpha", "u1")
+
+	out := call(t, ts, "list_accounts", nil)
+	res := out["result"].(map[string]any)
+	if res["isError"] == true {
+		t.Fatalf("unexpected error: %v", res)
+	}
+	sc := res["structuredContent"].(map[string]any)
+	accts := sc["accounts"].([]any)
+	if len(accts) != 1 {
+		t.Fatalf("accounts = %d, want 1", len(accts))
+	}
+}
+
+func TestCall_EmptyHubExplainsItself(t *testing.T) {
+	ts, _ := newMCP(t)
+	out := call(t, ts, "list_accounts", nil)
+	sc := out["result"].(map[string]any)["structuredContent"].(map[string]any)
+	if note, _ := sc["note"].(string); note == "" {
+		t.Error("an empty hub should say why it is empty, not just return []")
+	}
+}
+
+// With several subscriptions and none named, the answer spans all of them and
+// says so. Erroring used to be the safe option; it made the subscription a mode
+// rather than an axis, and left no way to ask about the fleet as a whole.
+func TestCall_NoAccountSpansEverything(t *testing.T) {
+	ts, st := newMCP(t)
+	seed(t, st, "acct-a", "ep-1", "/a", "a1")
+	seed(t, st, "acct-b", "ep-2", "/b", "b1")
+
+	out := call(t, ts, "usage_by_endpoint", nil)
+	res := out["result"].(map[string]any)
+	if res["isError"] == true {
+		t.Fatalf("unexpected tool error: %v", res)
+	}
+	sc := res["structuredContent"].(map[string]any)
+	if len(sc["buckets"].([]any)) != 2 {
+		t.Fatalf("buckets = %v, want both machines", sc["buckets"])
+	}
+	if sc["scope_note"] == nil || sc["scope_note"] == "" {
+		t.Error("a cross-subscription answer must state what it spans")
+	}
+}
+
+// Subscription as an ordinary axis.
+func TestCall_UsageByAccount(t *testing.T) {
+	ts, st := newMCP(t)
+	seed(t, st, "acct-a", "ep-1", "/a", "a1")
+	seed(t, st, "acct-b", "ep-2", "/b", "b1")
+
+	out := call(t, ts, "usage_by_account", nil)
+	res := out["result"].(map[string]any)
+	if res["isError"] == true {
+		t.Fatalf("unexpected error: %v", res)
+	}
+	sc := res["structuredContent"].(map[string]any)
+	if len(sc["buckets"].([]any)) != 2 {
+		t.Fatalf("buckets = %v, want one per subscription", sc["buckets"])
+	}
+}
+
+// Cross-subscription limits must arrive as a list, never a total.
+func TestCall_GetLimitsAcrossIsAList(t *testing.T) {
+	ts, st := newMCP(t)
+	seed(t, st, "acct-a", "ep-1", "/a", "a1")
+	seed(t, st, "acct-b", "ep-2", "/b", "b1")
+
+	out := call(t, ts, "get_limits", map[string]any{"account": "all"})
+	sc := out["result"].(map[string]any)["structuredContent"].(map[string]any)
+	if _, ok := sc["per_account"]; !ok {
+		t.Fatalf("no per_account list: %v", sc)
+	}
+	for k := range sc {
+		if k != "per_account" && k != "worst" && k != "note" {
+			t.Errorf("unexpected key %q; utilization must have nowhere to be totalled", k)
+		}
+	}
+}
+
+// The switch log is a regular view now, not a table nobody can see.
+func TestCall_ListAccountSwitches(t *testing.T) {
+	ts, st := newMCP(t)
+	seed(t, st, "acct-a", "shared", "/a", "s1")
+	seed(t, st, "acct-b", "shared", "/b", "s2")
+	if err := st.RecordAccountSwitch("shared", "acct-a", "acct-b"); err != nil {
+		t.Fatal(err)
+	}
+
+	out := call(t, ts, "list_account_switches", nil)
+	sc := out["result"].(map[string]any)["structuredContent"].(map[string]any)
+	sw := sc["switches"].([]any)
+	if len(sw) != 1 {
+		t.Fatalf("switches = %d, want 1", len(sw))
+	}
+	if sc["note"] == nil || sc["note"] == "" {
+		t.Error("the switch log must explain why historical figures near a seam are unreliable")
+	}
+}
+
+func TestCall_UsageByProjectIsAccountScoped(t *testing.T) {
+	ts, st := newMCP(t)
+	seed(t, st, "acct-a", "ep-1", "/srv/alpha", "a1")
+	seed(t, st, "acct-b", "ep-2", "/srv/confidential", "b1")
+
+	out := call(t, ts, "usage_by_project", map[string]any{"account": "acct-a"})
+	raw, _ := json.Marshal(out)
+	if strings.Contains(string(raw), "confidential") {
+		t.Fatalf("acct-a's answer leaked acct-b's directory: %s", raw)
+	}
+}
+
+func TestCall_GetLimitsUnavailableIsExplicit(t *testing.T) {
+	ts, st := newMCP(t)
+	seed(t, st, "acct-a", "ep-1", "/a", "a1")
+
+	out := call(t, ts, "get_limits", map[string]any{"account": "acct-a"})
+	sc := out["result"].(map[string]any)["structuredContent"].(map[string]any)
+	if sc["available"] == true {
+		t.Fatal("available = true with no snapshot")
+	}
+	if sc["reason"] == nil || sc["reason"] == "" {
+		t.Error("an unavailable reading must carry a reason")
+	}
+	if _, present := sc["five_hour"]; present {
+		t.Error("an unavailable reading must not include a five_hour gauge at all")
+	}
+}
+
+func TestCall_UnknownToolIsAToolError(t *testing.T) {
+	ts, _ := newMCP(t)
+	out := call(t, ts, "delete_everything", nil)
+	res := out["result"].(map[string]any)
+	if res["isError"] != true {
+		t.Fatalf("expected a tool error for an unknown tool, got %v", res)
+	}
+}
+
+func TestUnknownMethodIsAProtocolError(t *testing.T) {
+	ts, _ := newMCP(t)
+	out := rpc(t, ts, "resources/list", nil)
+	e, ok := out["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected a JSON-RPC error, got %v", out)
+	}
+	if int(e["code"].(float64)) != codeMethodNotFound {
+		t.Errorf("code = %v, want %d", e["code"], codeMethodNotFound)
+	}
+}
+
+// A notification carries no id and must get no response body.
+func TestNotificationGetsNoBody(t *testing.T) {
+	ts, _ := newMCP(t)
+	b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"})
+	resp, err := ts.Client().Post(ts.URL, "application/json", bytes.NewReader(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Errorf("HTTP %d, want 202 for a notification", resp.StatusCode)
+	}
+}
+
+func TestGetIsRejectedClearly(t *testing.T) {
+	ts, _ := newMCP(t)
+	resp, err := ts.Client().Get(ts.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("HTTP %d, want 405", resp.StatusCode)
+	}
+}
+
+func TestMalformedJSONIsAnInvalidRequest(t *testing.T) {
+	ts, _ := newMCP(t)
+	resp, err := ts.Client().Post(ts.URL, "application/json", strings.NewReader("{not json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var out map[string]any
+	json.NewDecoder(resp.Body).Decode(&out)
+	if _, ok := out["error"]; !ok {
+		t.Fatalf("expected a JSON-RPC error, got %v", out)
+	}
+}
+
+// Every tool is a read. Nothing here may mutate the store.
+func TestAllToolsAreReadOnly(t *testing.T) {
+	ts, st := newMCP(t)
+	seed(t, st, "acct-a", "ep-1", "/a", "a1", "a2", "a3")
+
+	seedRepo(t, st)
+
+	countRows := func() (int, int, int) {
+		var ev, ep, ri int
+		st.DB().QueryRow(`SELECT COUNT(*) FROM usage_events`).Scan(&ev)
+		st.DB().QueryRow(`SELECT COUNT(*) FROM endpoints`).Scan(&ep)
+		st.DB().QueryRow(`SELECT COUNT(*) FROM repo_issues`).Scan(&ri)
+		return ev, ep, ri
+	}
+	beforeEv, beforeEp, beforeRI := countRows()
+
+	for _, tool := range []string{
+		"list_accounts", "get_limits", "list_endpoints",
+		"usage_by_endpoint", "usage_by_project", "usage_by_session", "usage_history",
+	} {
+		call(t, ts, tool, map[string]any{"account": "acct-a"})
+	}
+	call(t, ts, "list_repos", nil)
+	call(t, ts, "repo_progress", map[string]any{"repo": "o/r"})
+	call(t, ts, "list_repo_issues", map[string]any{"repo": "o/r"})
+
+	afterEv, afterEp, afterRI := countRows()
+	if beforeEv != afterEv || beforeEp != afterEp || beforeRI != afterRI {
+		t.Fatalf("a tool mutated the store: events %d->%d, endpoints %d->%d, repo issues %d->%d",
+			beforeEv, afterEv, beforeEp, afterEp, beforeRI, afterRI)
+	}
+}
+
+// Task 8 adds findings, session listing/detail and a period summary shaped
+// for an agent to call directly rather than reassemble from usage_by_*.
+func TestToolsList_NewToolsPresent(t *testing.T) {
+	ts, _ := newMCP(t)
+	out := rpc(t, ts, "tools/list", nil)
+	tools := out["result"].(map[string]any)["tools"].([]any)
+
+	names := map[string]bool{}
+	for _, raw := range tools {
+		names[raw.(map[string]any)["name"].(string)] = true
+	}
+	for _, want := range []string{"usage_summary", "list_sessions", "get_session", "get_findings"} {
+		if !names[want] {
+			t.Errorf("tools/list is missing %q", want)
+		}
+	}
+}
+
+func TestCall_UsageSummary(t *testing.T) {
+	ts, st := newMCP(t)
+	seed(t, st, "acct-a", "ep-1", "/a", "a1", "a2")
+
+	out := call(t, ts, "usage_summary", map[string]any{"account": "acct-a"})
+	res := out["result"].(map[string]any)
+	if res["isError"] == true {
+		t.Fatalf("unexpected error: %v", res)
+	}
+	sc := res["structuredContent"].(map[string]any)
+	sum, ok := sc["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("no summary: %v", sc)
+	}
+	if tok, _ := sum["tokens"].(float64); tok <= 0 {
+		t.Fatalf("tokens = %v, want > 0", sum["tokens"])
+	}
+}
+
+// TestCall_UsageHistoryAndUsageBySurviveAPrune is the regression for MCP's
+// usage_history and usage_by_* reading usage_events directly while their HTTP
+// twins (/v1/history, /v1/usage) read the rollup: before any retention
+// pruning the two agree by coincidence, because the raw events are still
+// there. After the first prune they would silently start answering the same
+// question with permanently different numbers -- MCP's would drop to zero
+// while the rollup-backed HTTP endpoints keep the totals.
+func TestCall_UsageHistoryAndUsageBySurviveAPrune(t *testing.T) {
+	ts, st := newMCP(t)
+	seed(t, st, "acct-a", "ep-1", "/a", "a1", "a2")
+
+	// Prune every raw event; InsertEvents maintains the rollup in the same
+	// transaction, so it must be all that survives.
+	if _, err := st.PruneEvents(time.Now().UTC().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	var events int64
+	if err := st.DB().QueryRow(`SELECT COUNT(*) FROM usage_events`).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if events != 0 {
+		t.Fatalf("setup: want 0 surviving raw events after pruning, got %d", events)
+	}
+
+	out := call(t, ts, "usage_history", map[string]any{"account": "acct-a"})
+	res := out["result"].(map[string]any)
+	if res["isError"] == true {
+		t.Fatalf("usage_history errored post-prune: %v", res)
+	}
+	sc := res["structuredContent"].(map[string]any)
+	if series, _ := sc["series"].([]any); len(series) == 0 {
+		t.Fatal("usage_history.series went to zero after a prune: it must read the rollup, like /v1/history, not usage_events")
+	}
+	if byModel, _ := sc["by_model"].([]any); len(byModel) == 0 {
+		t.Fatal("usage_history.by_model went to zero after a prune")
+	}
+
+	out = call(t, ts, "usage_by_endpoint", map[string]any{"account": "acct-a"})
+	res = out["result"].(map[string]any)
+	if res["isError"] == true {
+		t.Fatalf("usage_by_endpoint errored post-prune: %v", res)
+	}
+	sc = res["structuredContent"].(map[string]any)
+	if buckets, _ := sc["buckets"].([]any); len(buckets) == 0 {
+		t.Fatal("usage_by_endpoint.buckets went to zero after a prune: it must read the rollup, like /v1/usage, not usage_events")
+	}
+}
+
+// get_findings uses the same envelope shape as usage_summary and GET
+// /v1/findings: account_uuid plus the ALIGNED since/until for the review
+// view, and since/until omitted entirely (not null) for the now view.
+func TestCall_GetFindingsEnvelope(t *testing.T) {
+	ts, st := newMCP(t)
+	seed(t, st, "acct-a", "ep-1", "/a", "a1", "a2")
+
+	out := call(t, ts, "get_findings", map[string]any{"account": "acct-a"})
+	res := out["result"].(map[string]any)
+	if res["isError"] == true {
+		t.Fatalf("unexpected error: %v", res)
+	}
+	sc := res["structuredContent"].(map[string]any)
+	if sc["view"] != "review" {
+		t.Errorf("view = %v, want %q", sc["view"], "review")
+	}
+	if sc["account_uuid"] != "acct-a" {
+		t.Errorf("account_uuid = %v, want %q", sc["account_uuid"], "acct-a")
+	}
+	if _, ok := sc["since"]; !ok {
+		t.Error("the review view must carry since")
+	}
+	if _, ok := sc["until"]; !ok {
+		t.Error("the review view must carry until")
+	}
+	if _, ok := sc["findings"].([]any); !ok {
+		t.Errorf("findings must be an array, got %T: %v", sc["findings"], sc["findings"])
+	}
+
+	nowOut := call(t, ts, "get_findings", map[string]any{"account": "acct-a", "view": "now"})
+	res = nowOut["result"].(map[string]any)
+	if res["isError"] == true {
+		t.Fatalf("unexpected error: %v", res)
+	}
+	sc = res["structuredContent"].(map[string]any)
+	if sc["view"] != "now" {
+		t.Errorf("view = %v, want %q", sc["view"], "now")
+	}
+	if _, ok := sc["since"]; ok {
+		t.Errorf("view=now must not carry since, got %v", sc["since"])
+	}
+	if _, ok := sc["until"]; ok {
+		t.Errorf("view=now must not carry until, got %v", sc["until"])
+	}
+}

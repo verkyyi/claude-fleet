@@ -1,0 +1,371 @@
+// Package api serves the hub: endpoint ingest, the dashboard's query API, the
+// dashboard itself, and the MCP endpoint.
+//
+// All four live in one process on one port so a self-hoster deploys one thing.
+package api
+
+import (
+	"context"
+	"fmt"
+	"io/fs"
+	"log"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/verkyyi/ccquota/internal/fx"
+	"github.com/verkyyi/ccquota/internal/store"
+)
+
+// Server is the hub's HTTP surface.
+type Server struct {
+	Store   *store.Store
+	Pricing *Pricing
+
+	// ViewerToken guards the dashboard, the query API and MCP. Endpoint
+	// ingest uses per-endpoint enrollment tokens instead.
+	ViewerToken string
+
+	// Tailnet grants the viewer role to allowlisted tailnet logins with no
+	// token, on the word of the local tailscaled. Nil means off.
+	Tailnet *TailnetViewers
+
+	// LogWriter receives access-log lines; nil means the standard logger.
+	// Tests capture it to assert that a tailnet-authenticated request is
+	// logged with who made it.
+	LogWriter func(line string)
+
+	// PublicBadges serves /badge/... without a viewer token, so an internal
+	// README can actually render one (a README image sends no credential, and
+	// camo strips cookies). Off by default: an operator who upgrades must not
+	// silently start serving without auth.
+	PublicBadges bool
+
+	// FX converts a figure from the currency it was BILLED in to the one a
+	// viewer reads. Presentation only: no stored figure and no total is ever
+	// computed through it, and every converted figure travels with the rate and
+	// its timestamp so it cannot be mistaken for the invoice. Nil means the
+	// dashboard shows each figure in its own currency, which is always correct.
+	FX *fx.Feed
+
+	// LimitsPollIntervalS is echoed to agents so a noisy fleet can be backed
+	// off centrally without touching every machine.
+	LimitsPollIntervalS int
+
+	// UI is the built dashboard, or nil when the binary was built without one.
+	UI fs.FS
+
+	// Listeners is where the hub command actually bound, so the door map at
+	// /access can print a URL rather than "some port". Presentation only:
+	// nothing routes on it, and the zero value just means the page names the
+	// doors without their addresses.
+	Listeners ListenerFacts
+
+	// SSO connects the human-facing surfaces to the company's WeCom single
+	// sign-on. Nil means not wired up — /enter 404s and nothing else changes.
+	SSO *SSO
+
+	// MCP handles /mcp when wired up.
+	MCP http.Handler
+
+	// counter caches the all-time token total behind the hero counter. Its
+	// query is a full scan and the SSE stream pushes several times a second,
+	// so it is recomputed on a timer rather than per push.
+	counter        Counter
+	sourceCounters scopedCounters
+	quotaLeases    quotaLeases
+
+	// LiveStore holds the seconds-scale view of running sessions. In memory
+	// only: it describes this minute, and a restart legitimately knows nothing
+	// until the agents report again.
+	LiveStore *Live
+
+	// osUsers caches the endpoint_id -> os_user map behind attachOSUsers.
+	osUsers osUserCache
+}
+
+// Handler builds the router.
+func (s *Server) Handler() http.Handler {
+	mux := http.NewServeMux()
+
+	// Every snapshot that leaves the hub carries the counter and each
+	// session's os_user, including the ones broadcast from inside Live.
+	// Enrich holds one hook, so the two are chained rather than one silently
+	// replacing the other.
+	if s.LiveStore != nil {
+		s.LiveStore.Enrich(func(snap *Snapshot) {
+			s.attachCounter(snap)
+			s.attachOSUsers(snap)
+		})
+	}
+
+	// Ingest authenticates per endpoint, so it is deliberately outside the
+	// viewer-token gate.
+	mux.HandleFunc("/v1/ingest", s.handleIngest)
+	// Live reports authenticate per endpoint, like ingest.
+	mux.HandleFunc("/v1/live/report", s.handleLiveReport)
+	mux.HandleFunc("/v1/collectors/quota-lease", s.handleQuotaLease)
+	// Repo progress ships on an enrollment token too, but carries no identity:
+	// see handleRepoIngest for why it is a sibling of /v1/ingest rather than
+	// another optional field on the usage batch.
+	mux.HandleFunc("/v1/ingest/repo", s.handleRepoIngest)
+	// The business ledger ships the same way and for the same reasons: its own
+	// enrollment token, no identity in the body, one whole day per push.
+	mux.HandleFunc("/v1/ingest/growth", s.handleGrowthIngest)
+	// Reading the ledger back, for the Monday brief. Outside the viewer gate
+	// for the same reason ingest is -- a headless job holds an enrollment
+	// token, not an SSO session -- but gated a second time on the enrollment's
+	// kind, because every shipper on this hub holds a token and only the growth
+	// ones may read revenue. See handleGrowthRead.
+	mux.HandleFunc("/v1/growth/latest", s.handleGrowthRead)
+
+	// The way in. Outside the viewer-token gate on purpose, and mounted
+	// unconditionally: when SSO is not configured the handler answers 404, so
+	// whether the route exists never leaks whether the feature is on.
+	mux.HandleFunc("/enter", s.handleEnter)
+
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	})
+
+	mux.Handle("/v1/accounts", s.viewerOnly(http.HandlerFunc(s.handleAccounts)))
+	mux.Handle("/v1/fx", s.viewerOnly(http.HandlerFunc(s.handleFX)))
+	mux.Handle("/v1/collectors", s.viewerOnly(http.HandlerFunc(s.handleCollectors)))
+	mux.Handle("/v1/account-usage", s.viewerOnly(http.HandlerFunc(s.handleAccountUsage)))
+	mux.Handle("/v1/limits", s.viewerOnly(http.HandlerFunc(s.handleLimits)))
+	mux.Handle("/v1/endpoints", s.viewerOnly(http.HandlerFunc(s.handleEndpoints)))
+	mux.Handle("/v1/usage", s.viewerOnly(http.HandlerFunc(s.handleUsage)))
+	mux.Handle("/v1/history", s.viewerOnly(http.HandlerFunc(s.handleHistory)))
+	mux.Handle("/v1/account-switches", s.viewerOnly(http.HandlerFunc(s.handleSwitches)))
+	mux.Handle("/v1/endpoint-accounts", s.viewerOnly(http.HandlerFunc(s.handleEndpointAccounts)))
+	mux.Handle("/v1/accounts/label", s.viewerOnly(http.HandlerFunc(s.handleAccountLabel)))
+	mux.Handle("/v1/live", s.viewerOnly(http.HandlerFunc(s.handleLiveSnapshot)))
+	mux.Handle("/v1/live/stream", s.viewerOnly(http.HandlerFunc(s.handleLiveStream)))
+	mux.Handle("/v1/summary", s.viewerOnly(http.HandlerFunc(s.handleSummary)))
+	mux.Handle("/v1/sessions", s.viewerOnly(http.HandlerFunc(s.handleSessions)))
+	mux.Handle("/v1/sessions/", s.viewerOnly(http.HandlerFunc(s.handleSession)))
+	mux.Handle("/v1/limits/history", s.viewerOnly(http.HandlerFunc(s.handleLimitsHistory)))
+	// The quota windows on their own. /v1/limits/history still folds a copy in
+	// for the dashboard, which draws both series on one axis; this is for a
+	// caller that wants only the windows -- see handleQuotaHistory.
+	mux.Handle("/v1/quota/history", s.viewerOnly(http.HandlerFunc(s.handleQuotaHistory)))
+	mux.Handle("/v1/findings", s.viewerOnly(http.HandlerFunc(s.handleFindings)))
+	// The hub's second viewer-facing WRITE, behind the same gate as the
+	// first (/v1/accounts/label) and deliberately not behind a new one --
+	// see internal/api/finding_mutes.go on the trust boundary.
+	mux.Handle("/v1/findings/mutes", s.viewerOnly(http.HandlerFunc(s.handleFindingMutes)))
+	mux.Handle("/v1/repos", s.viewerOnly(http.HandlerFunc(s.handleRepos)))
+	mux.Handle("/v1/repo/flow", s.viewerOnly(http.HandlerFunc(s.handleRepoFlow)))
+	mux.Handle("/v1/repo/issues", s.viewerOnly(http.HandlerFunc(s.handleRepoIssues)))
+	mux.Handle("/v1/repo/cost", s.viewerOnly(http.HandlerFunc(s.handleRepoCost)))
+	mux.Handle("/v1/repo/human-debt", s.viewerOnly(http.HandlerFunc(s.handleRepoHumanDebt)))
+
+	if s.MCP != nil {
+		mux.Handle("/mcp", s.viewerOnly(s.MCP))
+	}
+
+	// The public view. Mounted BEFORE "/" so the share token never reaches a
+	// viewerOnly route, and viewerOnly never has to know share tokens exist.
+	mux.Handle("/v1/share", s.shareOnly(s.handleShareData))
+	mux.Handle("/share", s.shareOnly(s.serveSharePage))
+	mux.Handle("/share/", s.shareOnly(s.serveSharePage))
+
+	mux.Handle("/v1/user", s.viewerOnly(http.HandlerFunc(s.handleUserData)))
+	mux.Handle("/u/", s.viewerOnly(http.HandlerFunc(s.serveUserPage)))
+
+	// The door map: every way into this hub, what each costs in credentials,
+	// and what is actually turned on here. Behind the viewer gate like every
+	// other human surface -- it describes the configuration, and /enter's
+	// unconditional 404 exists precisely so an uncredentialled prober cannot
+	// learn that. Both spellings, so /access/ is the page rather than the SPA
+	// fallback. See access.go.
+	mux.Handle("/v1/access", s.viewerOnly(http.HandlerFunc(s.handleAccess)))
+	mux.Handle("/access", s.viewerOnly(http.HandlerFunc(s.serveAccessPage)))
+	mux.Handle("/access/", s.viewerOnly(http.HandlerFunc(s.serveAccessPage)))
+
+	// The business board. Gated like every other human surface -- these are
+	// the most sensitive figures this binary holds -- and mounted at a fixed
+	// path rather than inside the dashboard's hash router because it is
+	// server-rendered; see serveGrowthPage. Both spellings, so /growth/ is the
+	// board rather than the SPA's index.html fallback.
+	mux.Handle("/growth", s.viewerOnly(http.HandlerFunc(s.serveGrowthPage)))
+	mux.Handle("/growth/", s.viewerOnly(http.HandlerFunc(s.serveGrowthPage)))
+
+	// Badges are the one surface that may be unauthenticated, and only on
+	// purpose. Everything else on this hub stays behind the viewer token.
+	badges := http.NewServeMux()
+	badges.HandleFunc("/badge/u/", s.handleUserBadge)
+	badges.HandleFunc("/badge/team/", s.handleTeamBadge)
+	// The live embed exposes exactly what a badge does, so it shares the gate.
+	badges.HandleFunc("/embed/u/", s.serveEmbed)
+	badges.HandleFunc("/embed/team/", s.serveEmbed)
+	if s.PublicBadges {
+		mux.Handle("/badge/", badges)
+		mux.Handle("/embed/", badges)
+	} else {
+		mux.Handle("/badge/", s.viewerOnly(badges))
+		mux.Handle("/embed/", s.viewerOnly(badges))
+	}
+
+	mux.Handle("/", s.viewerOnly(http.HandlerFunc(s.serveUI)))
+
+	return s.logRequests(mux)
+}
+
+// viewerOnly gates a handler behind the viewer token.
+//
+// The token may arrive as a bearer header (API and MCP clients) or as a
+// `ccquota_token` cookie, which is what lets a browser follow ?token=... once
+// and then navigate normally.
+func (s *Server) viewerOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.ViewerToken == "" {
+			// An unset viewer token means the operator explicitly opted out
+			// (see the hub's --no-auth flag, which refuses a public bind).
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		if tok := r.URL.Query().Get("token"); tok != "" && constantTimeEqual(tok, s.ViewerToken) {
+			// Move the secret out of the URL bar and into a cookie so it stops
+			// appearing in browser history, referrers and screenshots.
+			http.SetCookie(w, &http.Cookie{
+				Name: "ccquota_token", Value: tok, Path: "/",
+				HttpOnly: true, SameSite: http.SameSiteLaxMode,
+				Secure: r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https"),
+				MaxAge: 30 * 24 * 3600,
+			})
+			http.Redirect(w, r, stripToken(r), http.StatusFound)
+			return
+		}
+		if constantTimeEqual(bearer(r), s.ViewerToken) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if c, err := r.Cookie("ccquota_token"); err == nil && constantTimeEqual(c.Value, s.ViewerToken) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// A WeCom session this hub minted itself, from a ticket the company's
+		// authorization service signed. Checked after the token so the token
+		// stays the fallback that works when WeCom does not.
+		if sub, ok := s.ssoViewer(r); ok {
+			next.ServeHTTP(w, r.WithContext(withViewer(r.Context(), sub)))
+			return
+		}
+		// No token. A named tailnet peer may still be let in -- on the word
+		// of the local tailscaled, never of anything in the request.
+		if login, ok := s.Tailnet.Lookup(r.RemoteAddr); ok {
+			next.ServeHTTP(w, r.WithContext(withViewer(r.Context(), login)))
+			return
+		}
+		// A browser with no credential is someone who has not signed in yet;
+		// send them to do that. Everything else gets the honest 401.
+		if to, ok := s.ssoSignInURL(r); ok {
+			http.Redirect(w, r, to, http.StatusFound)
+			return
+		}
+
+		w.Header().Set("WWW-Authenticate", `Bearer realm="ccquota"`)
+		httpError(w, http.StatusUnauthorized, "a viewer token is required")
+	})
+}
+
+func stripToken(r *http.Request) string {
+	u := *r.URL
+	q := u.Query()
+	q.Del("token")
+	u.RawQuery = q.Encode()
+	if u.Path == "" {
+		u.Path = "/"
+	}
+	return u.RequestURI()
+}
+
+// serveUI serves the embedded dashboard, falling back to index.html so the SPA
+// owns its own routing.
+func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) {
+	if s.UI == nil {
+		writeJSON(w, http.StatusOK, map[string]string{
+			"service": "ccquota hub",
+			"note":    "this binary was built without the dashboard; the API is at /v1/",
+		})
+		return
+	}
+
+	path := strings.TrimPrefix(r.URL.Path, "/")
+	if path == "" {
+		path = "index.html"
+	}
+	f, err := s.UI.Open(path)
+	if err != nil {
+		f, err = s.UI.Open("index.html")
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		path = "index.html"
+	}
+	defer f.Close()
+
+	st, err := f.Stat()
+	if err != nil || st.IsDir() {
+		http.NotFound(w, r)
+		return
+	}
+	rs, ok := f.(interface {
+		Read([]byte) (int, error)
+		Seek(int64, int) (int64, error)
+	})
+	if !ok {
+		http.Error(w, "unreadable asset", http.StatusInternalServerError)
+		return
+	}
+	// The embedded dashboard is rebuilt into the SAME binary on every deploy,
+	// with no cache-busting filename. A browser that cached an old bundle
+	// under this path would keep serving it past a release until someone
+	// force-refreshed, silently running stale JS against a live API.
+	w.Header().Set("Cache-Control", "no-cache")
+	http.ServeContent(w, r, path, st.ModTime(), rs)
+}
+
+// logRequests logs method, path, status and duration, plus who it was when a
+// tailnet identity let the request in. Query strings are omitted: they can
+// carry the viewer token.
+func (s *Server) logRequests(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		// The gate fills this in if it grants by identity; the pointer is
+		// how a value set downstream reaches this outer layer.
+		var viewer string
+		r = r.WithContext(context.WithValue(r.Context(), viewerKey{}, &viewer))
+		next.ServeHTTP(sw, r)
+		line := fmt.Sprintf("%s %s %d %s", r.Method, r.URL.Path, sw.status, time.Since(start).Round(time.Millisecond))
+		if viewer != "" {
+			line += " viewer=" + viewer
+		}
+		if s.LogWriter != nil {
+			s.LogWriter(line)
+			return
+		}
+		log.Print(line)
+	})
+}
+
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusWriter) WriteHeader(code int) {
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+// Flush lets streaming handlers (MCP) work through the wrapper.
+func (w *statusWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}

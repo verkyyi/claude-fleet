@@ -1,0 +1,1360 @@
+// Package mcp exposes the hub's data to agents over the Model Context
+// Protocol, read-only.
+//
+// Read-only is a design decision, not a limitation. A monitor that can also
+// pause endpoints or change quotas needs a control channel back to every
+// machine, which is a far larger security surface than "tell me what my fleet
+// spent". If that is ever wanted it should be a separate, separately
+// authorised service.
+//
+// Transport is Streamable HTTP: a single POST endpoint carrying JSON-RPC 2.0.
+// It is implemented directly rather than through an SDK to keep the binary
+// dependency-free.
+package mcp
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/verkyyi/ccquota/internal/api"
+	"github.com/verkyyi/ccquota/internal/findings"
+	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/ccquota/internal/pricing"
+	"github.com/verkyyi/ccquota/internal/store"
+)
+
+// protocolVersion is the MCP revision this server implements.
+const protocolVersion = "2025-06-18"
+
+// caveat is repeated in every tool description. An agent relaying these
+// numbers to a person will otherwise present an estimate with the confidence
+// of a measurement.
+//
+// The cost half of it is not a disclaimer but a shape: cost comes back as a
+// LIST keyed by source, because the figures in it are different kinds of money
+// and an agent handed one number would add it to something.
+const caveat = " The account-wide utilization is exact and already covers every device on " +
+	"the subscription; per-endpoint and per-project shares are proportional ESTIMATES. " +
+	costCaveat
+
+// costCaveat is the cost half, split out so tools that return no cost can take
+// the utilization half alone.
+const costCaveat = "Cost is reported PER SOURCE and must never be summed across sources: " +
+	"claude and codex figures are NOTIONAL (what the tokens would have cost at API rates — " +
+	"nobody is billed them, the plan is), while gateway figures are BILLED (an actual " +
+	"per-call charge). Each entry carries its own kind. Real spend is subscription " +
+	"invoices plus gateway charges; the notional figure is not part of it and adding it in " +
+	"invents spending that never happened."
+
+// Handler returns the /mcp handler.
+func Handler(srv *api.Server) http.Handler {
+	s := &mcpServer{api: srv}
+	return http.HandlerFunc(s.serve)
+}
+
+type mcpServer struct{ api *api.Server }
+
+// --- JSON-RPC plumbing ---------------------------------------------------
+
+type request struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id,omitempty"`
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params,omitempty"`
+}
+
+type response struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id,omitempty"`
+	Result  any             `json:"result,omitempty"`
+	Error   *rpcError       `json:"error,omitempty"`
+}
+
+type rpcError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+const (
+	codeInvalidRequest = -32600
+	codeMethodNotFound = -32601
+	codeInvalidParams  = -32602
+	codeInternal       = -32603
+)
+
+const maxRPCBody = 1 << 20
+
+func (s *mcpServer) serve(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		// GET on a Streamable HTTP endpoint opens a server-initiated stream.
+		// This server never initiates anything, so declining is correct and
+		// clearer than holding a connection open forever.
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "this MCP server does not open server-initiated streams; use POST", http.StatusMethodNotAllowed)
+		return
+	}
+
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxRPCBody))
+	if err != nil {
+		writeRPC(w, &response{JSONRPC: "2.0", Error: &rpcError{codeInvalidRequest, "unreadable body"}})
+		return
+	}
+
+	var req request
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeRPC(w, &response{JSONRPC: "2.0", Error: &rpcError{codeInvalidRequest, "malformed JSON-RPC: " + err.Error()}})
+		return
+	}
+
+	resp := s.dispatch(&req)
+	if resp == nil {
+		// A notification (no id) gets no body, per JSON-RPC.
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+	writeRPC(w, resp)
+}
+
+func writeRPC(w http.ResponseWriter, resp *response) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func (s *mcpServer) dispatch(req *request) *response {
+	out := &response{JSONRPC: "2.0", ID: req.ID}
+
+	switch req.Method {
+	case "initialize":
+		out.Result = map[string]any{
+			"protocolVersion": protocolVersion,
+			"capabilities":    map[string]any{"tools": map[string]any{}},
+			"serverInfo":      map[string]any{"name": "ccquota", "version": "1"},
+			"instructions": "Reports Claude Code subscription usage collected from every enrolled " +
+				"endpoint." + caveat,
+		}
+	case "notifications/initialized", "notifications/cancelled":
+		return nil
+	case "ping":
+		out.Result = map[string]any{}
+	case "tools/list":
+		out.Result = map[string]any{"tools": toolSpecs()}
+	case "tools/call":
+		out.Result, out.Error = s.callTool(req.Params)
+	default:
+		out.Error = &rpcError{codeMethodNotFound, "unknown method " + req.Method}
+	}
+
+	if out.Error != nil {
+		out.Result = nil
+	}
+	return out
+}
+
+// --- tools ---------------------------------------------------------------
+
+type toolSpec struct {
+	Name        string         `json:"name"`
+	Title       string         `json:"title,omitempty"`
+	Description string         `json:"description"`
+	InputSchema map[string]any `json:"inputSchema"`
+}
+
+func obj(props map[string]any, required ...string) map[string]any {
+	m := map[string]any{"type": "object", "properties": props}
+	if len(required) > 0 {
+		m["required"] = required
+	} else {
+		m["required"] = []string{}
+	}
+	return m
+}
+
+var accountProp = map[string]any{
+	"type": "string",
+	"description": `Subscription to report on: an account uuid, or "all" to span every ` +
+		`subscription on this hub. Omitted means "all" when the hub holds several, ` +
+		`and the single subscription when it holds one. Token figures are additive ` +
+		`across subscriptions, and so is each SOURCE's cost; rate-limit utilization is ` +
+		`not, and neither is cost across sources.`,
+}
+
+var sinceProp = map[string]any{
+	"type":        "string",
+	"description": `Start of the range: RFC3339, or relative like "7d" or "24h" meaning "ago". Defaults to 7 days ago.`,
+}
+
+var untilProp = map[string]any{
+	"type":        "string",
+	"description": "End of the range: RFC3339, or relative like \"1h\". Defaults to now.",
+}
+
+var limitProp = map[string]any{
+	"type":        "integer",
+	"description": "Maximum rows to return (default 50).",
+}
+
+var repoProp = map[string]any{
+	"type":        "string",
+	"description": `Repository as "owner/name", exactly as GitHub spells it. Required: a backlog blended across repositories would be scaled by one repo's percentiles and read as if it applied to all of them. list_repos names the ones this hub holds.`,
+}
+
+// repoCaveat is the repo-progress counterpart of caveat. It says the two
+// things an agent reading these rows can get wrong: that the hub collected
+// them (it did not — a shipper pushed them, and they are only as fresh as that
+// shipper), and that an age can be judged without the repo's own distribution.
+const repoCaveat = " These rows are SHIPPED to the hub by an external collector, not gathered by it: " +
+	"observed_at is when that shipper read GitHub, and a stalled shipper shows a stale backlog " +
+	"rather than an empty one. Age is only ever meaningful against the same repo's close-time " +
+	"percentiles, never against a fixed number of days."
+
+// undeclaredChip is the one sentence every chip says about the third state.
+//
+// Omitting a chip means NO CONSTRAINT on that dimension, so an empty string
+// cannot also mean "only the rows that are empty here" — store.Undeclared is
+// the value that asks for that side. Said on each chip rather than once in the
+// caveat because a client reads one property's description while filling it
+// in, and this is the moment the distinction matters.
+var undeclaredChip = ` Pass "` + store.Undeclared +
+	`" to select only the rows that declared nothing on this dimension; omitting the argument places no constraint at all.`
+
+// chipProps are the drill-down dimensions store.Filter accepts, at most one
+// value per dimension, ANDed together.
+var chipProps = map[string]any{
+	"source": map[string]any{
+		"type": "string", "enum": model.Sources,
+		"description": "Limit to one collector source. claude and codex are billed by " +
+			"subscription and their cost is notional; gateway is billed per call and its cost " +
+			"is a real charge. Filtering to one source is what makes a single cost figure " +
+			"meaningful — unfiltered, cost comes back split.",
+	},
+	"endpoint": map[string]any{"type": "string", "description": "Limit to one machine, by endpoint id." + undeclaredChip},
+	"user":     map[string]any{"type": "string", "description": "Limit to one OS login." + undeclaredChip},
+	"project":  map[string]any{"type": "string", "description": "Limit to one working directory (cwd)." + undeclaredChip},
+	"model":    map[string]any{"type": "string", "description": "Limit to one model id." + undeclaredChip},
+	"provider": map[string]any{"type": "string", "description": "Limit to one upstream provider. With a gateway that fails over between vendors this is NOT derivable from the model id: one model id is reachable through several upstreams at several contracted prices. An empty value in a result means the reporting side declared none." + undeclaredChip},
+	"branch":   map[string]any{"type": "string", "description": "Limit to one git branch." + undeclaredChip},
+	"team":     map[string]any{"type": "string", "description": "Limit to one operator-assigned team." + undeclaredChip},
+	"session":  map[string]any{"type": "string", "description": "Limit to one Claude Code session id." + undeclaredChip},
+}
+
+// withChips merges the drill-down chips into a tool's own properties.
+func withChips(base map[string]any) map[string]any {
+	out := make(map[string]any, len(base)+len(chipProps))
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range chipProps {
+		out[k] = v
+	}
+	return out
+}
+
+func toolSpecs() []toolSpec {
+	return []toolSpec{
+		{Name: "get_collectors", Title: "Collection status by source", Description: "Source profile health, latest scan/event, client version, quota query failures and queue backlog." + caveat, InputSchema: obj(map[string]any{"account": accountProp, "source": chipProps["source"]})},
+		{Name: "get_account_usage", Title: "Service account activity", Description: "Independent service totals and locally attributed details. Overlap exists; they must never be added or treated as directly comparable." + caveat, InputSchema: obj(map[string]any{"account": accountProp, "source": chipProps["source"]})},
+		{Name: "get_live", Title: "Live and recent sessions", Description: "Claude heartbeats and Codex recent log activity, filtered by source/account, with scoped aggregates. Never add these overlapping counters to stored totals." + caveat, InputSchema: obj(map[string]any{"account": accountProp, "source": chipProps["source"]})},
+		{Name: "quota_history", Title: "Provider quota window history", Description: "Codex provider-defined quota windows and critical time within the selected interval. Windows and accounts are separate series; percentages are not added." + caveat, InputSchema: obj(withChips(map[string]any{"account": accountProp, "since": sinceProp, "until": untilProp}))},
+		{
+			Name:  "get_limits_history",
+			Title: "Rate-limit utilization over time",
+			Description: "How full each subscription's rate-limit window was over a period, as one series " +
+				"PER SUBSCRIPTION, plus how long each spent in the critical band (at or above 90%) and " +
+				"how many separate episodes that was — with the same critical figure for the previous " +
+				"period to compare against. get_limits answers \"where am I right now\"; this answers " +
+				"\"how often did I hit the wall, and is it getting worse\". The series are never merged: " +
+				"two subscriptions at 4% and 19% are separate quota pools with separate resets, and an " +
+				"average across them is a number that means nothing while looking authoritative. Points " +
+				"are downsampled by keeping each slot's HIGHEST reading, so a spike survives the " +
+				"downsample rather than being averaged away. Takes no drill-down chips beyond source: a " +
+				"rate limit is a property of the SUBSCRIPTION, so there is no such thing as one " +
+				"project's or one branch's utilization, and accepting a chip it could only ignore would " +
+				"hand back a fleet-wide series that looks scoped." + caveat,
+			InputSchema: obj(map[string]any{
+				"account": accountProp, "source": chipProps["source"],
+				"since": sinceProp, "until": untilProp,
+				"points": map[string]any{
+					"type":        "integer",
+					"description": "Maximum points per series (default 400).",
+				},
+			}),
+		},
+		{
+			Name:  "get_fx",
+			Title: "Exchange rate, with its provenance",
+			Description: "One currency conversion rate, with where it came from, when the feed last " +
+				"moved and whether it is stale. Needed because some figures on this hub are billed in a " +
+				"currency other than the one a question is asked in — a plan priced in CNY beside " +
+				"gateway charges in USD — and an agent that converts at a rate it invented, or compares " +
+				"two currencies without converting at all, produces a figure nobody can check. " +
+				"available: false means this hub cannot convert that pair; report each figure in its " +
+				"own currency rather than substituting a rate. fallback: true means the rate is pinned " +
+				"in the binary because the feed has not answered — say so when quoting it. CONVERSION " +
+				"IS FOR DISPLAY ONLY: the ledger keeps every figure in the currency it was billed in, " +
+				"no total is computed through this rate, and a converted amount is an approximation of " +
+				"an invoice, never the invoice.",
+			InputSchema: obj(map[string]any{
+				"base": map[string]any{
+					"type":        "string",
+					"description": `Currency to convert FROM, as an ISO code. Defaults to "USD".`,
+				},
+				"target": map[string]any{
+					"type":        "string",
+					"description": "Currency to convert TO, as an ISO code. Defaults to base, which is the identity rate.",
+				},
+			}),
+		},
+		{
+			Name:  "list_accounts",
+			Title: "List subscriptions",
+			Description: "List the subscriptions and local usage pools this hub tracks, with source, plan tier and how " +
+				"many endpoints report on each. Call this first when you do not know the account uuid.",
+			InputSchema: obj(map[string]any{"source": chipProps["source"]}),
+		},
+		{
+			Name:  "get_limits",
+			Title: "Current rate-limit state",
+			Description: "How much of each provider-defined quota window a subscription has used right now, " +
+				"when each resets, the current burn rate, and a projection of when the window would be " +
+				"exhausted. Also breaks the 5-hour window down by endpoint. If the reading is " +
+				"unavailable the response says so with a reason — treat that as unknown and do NOT " +
+				"report zero." + caveat,
+			InputSchema: obj(map[string]any{"account": accountProp, "source": chipProps["source"]}),
+		},
+		{
+			Name:  "list_endpoints",
+			Title: "List collecting machines",
+			Description: "The machines reporting into this hub: hostname, OS, agent version and when " +
+				"each was last heard from. Useful for spotting an agent that has stopped reporting.",
+			InputSchema: obj(map[string]any{"account": accountProp, "source": chipProps["source"]}),
+		},
+		{
+			Name:  "usage_by_account",
+			Title: "Spend by subscription",
+			Description: "Token and cost totals grouped by subscription — which of several " +
+				"Claude plans a period's spend landed on. Subscription is an ordinary axis here, " +
+				"the same shape of question as by-machine or by-project." + caveat,
+			InputSchema: obj(withChips(map[string]any{
+				"since": sinceProp, "until": untilProp, "limit": limitProp,
+			})),
+		},
+		{
+			Name:  "list_account_switches",
+			Title: "Machines that changed subscription",
+			Description: "Occasions when a machine logged OUT of one subscription and INTO " +
+				"another. Turns recorded before a switch keep their old attribution and cannot " +
+				"be corrected, so these are the seams where historical figures become " +
+				"unreliable. Use it to explain a total that looks wrong for a period. " +
+				"This is rare: running several subscriptions side by side is NOT a switch — " +
+				"for that, call list_endpoint_accounts.",
+			InputSchema: obj(map[string]any{"account": accountProp, "source": chipProps["source"], "limit": limitProp}),
+		},
+		{
+			Name:  "list_endpoint_accounts",
+			Title: "Which subscriptions each machine runs",
+			Description: "The subscriptions seen running on each machine, with the window each " +
+				"was active over and whether it is that machine's own login or merely a " +
+				"subscription observed in a session on it. A machine can run several AT THE " +
+				"SAME TIME — Claude Code takes its account from the process environment — so " +
+				"this is a list per machine, not one value.",
+			InputSchema: obj(map[string]any{"account": accountProp, "source": chipProps["source"], "limit": limitProp}),
+		},
+		{
+			Name:  "usage_by_source",
+			Title: "Token usage by source",
+			Description: "Token and cost totals grouped by collector source — Claude Code, Codex or a " +
+				"pay-per-call gateway. This is the one breakdown whose rows are each a single kind of " +
+				"money, so it is the right tool for \"what did each source cost\"; the rows are still " +
+				"not addable to each other." + caveat,
+			InputSchema: obj(withChips(map[string]any{
+				"account": accountProp, "since": sinceProp, "until": untilProp, "limit": limitProp,
+			})),
+		},
+		{
+			Name:  "usage_by_provider",
+			Title: "Spend by upstream provider",
+			Description: "Token and cost totals grouped by the upstream that actually served each " +
+				"call. Use it to answer \"which contract did this money go to\" — a question the model " +
+				"breakdown cannot answer, because failover sends one model id to several upstreams at " +
+				"several prices. Gateway rows are BILLED (a real per-call charge); rows from " +
+				"subscription sources are NOTIONAL and must never be added to them. An empty provider " +
+				"means the reporting side declared none — Claude transcripts carry no upstream — and " +
+				"is never a vendor called \"unknown\"." + caveat,
+			InputSchema: obj(withChips(map[string]any{
+				"account": accountProp, "since": sinceProp, "until": untilProp, "limit": limitProp,
+			})),
+		},
+		{
+			Name:  "usage_by_user",
+			Title: "Spend by operating-system login",
+			Description: "Token and cost totals grouped by the OS account the work ran under — " +
+				"who on a shared machine is consuming the subscription. Every OS login has its " +
+				"own Claude Code install, transcripts and credentials, so this is a different " +
+				"axis from by-machine, and on a multi-user box it is usually the one you " +
+				"want." + caveat,
+			InputSchema: obj(withChips(map[string]any{
+				"account": accountProp, "since": sinceProp, "until": untilProp, "limit": limitProp,
+			})),
+		},
+		{
+			Name:  "get_user",
+			Title: "One person's page",
+			Description: "Everything about ONE OS login over a period: their totals, the teams their " +
+				"machines belong to, how many projects and machines they touched, and the breakdown of " +
+				"their own spend by project and by machine. usage_by_user returns a row in a ranking; " +
+				"this is the person behind one of those rows, and it is what to call once a ranking has " +
+				"named somebody. The project and machine breakdowns are scoped to this login, not " +
+				"filtered out of a fleet-wide list, so they are that person's own top twelve and top " +
+				"twenty rather than whichever of their rows survived a global cut. Internal figures: " +
+				"they carry project paths and machine names." + caveat,
+			InputSchema: obj(map[string]any{
+				"user": map[string]any{
+					"type":        "string",
+					"description": "The OS login, exactly as usage_by_user or a finding's owner.user spells it.",
+				},
+				"since": sinceProp, "until": untilProp,
+			}, "user"),
+		},
+		{
+			Name:  "usage_by_endpoint",
+			Title: "Spend by machine",
+			Description: "Token and cost totals grouped by machine over a time range — which server or " +
+				"laptop is consuming the subscription." + caveat,
+			InputSchema: obj(withChips(map[string]any{
+				"account": accountProp, "since": sinceProp, "until": untilProp, "limit": limitProp,
+			})),
+		},
+		{
+			Name:  "usage_by_project",
+			Title: "Spend by project",
+			Description: "Token and cost totals grouped by working directory over a time range — which " +
+				"codebase the spend went to." + caveat,
+			InputSchema: obj(withChips(map[string]any{
+				"account": accountProp, "since": sinceProp, "until": untilProp, "limit": limitProp,
+			})),
+		},
+		{
+			Name:  "usage_by_session",
+			Title: "Spend by session",
+			Description: "Token and cost totals grouped by Claude Code session, including how much went " +
+				"to subagents. Use this to find a single runaway session." + caveat,
+			InputSchema: obj(withChips(map[string]any{
+				"account": accountProp, "since": sinceProp, "until": untilProp, "limit": limitProp,
+			})),
+		},
+		{
+			Name:  "usage_by_model",
+			Title: "Spend by model",
+			Description: "Token and cost totals grouped by model id — which model the period's spend " +
+				"went to. Answers \"is the expensive model earning its keep\"; it cannot answer which " +
+				"contract the money went to, because failover reaches one model id through several " +
+				"upstreams at several prices — that is usage_by_provider." + caveat,
+			InputSchema: obj(withChips(map[string]any{
+				"account": accountProp, "since": sinceProp, "until": untilProp, "limit": limitProp,
+			})),
+		},
+		{
+			Name:  "usage_by_team",
+			Title: "Spend by team",
+			Description: "Token and cost totals grouped by the operator-assigned team a machine belongs " +
+				"to — the axis a budget is actually held against. Team is a property of the ENDPOINT, " +
+				"resolved at query time, so re-assigning a machine moves its whole history with it. " +
+				"Machines nobody has assigned come back as one bucket labelled \"unassigned\" rather " +
+				"than being dropped: a team breakdown that does not add up to the fleet total is worse " +
+				"than one with an unassigned row in it." + caveat,
+			InputSchema: obj(withChips(map[string]any{
+				"account": accountProp, "since": sinceProp, "until": untilProp, "limit": limitProp,
+			})),
+		},
+		{
+			Name:  "usage_by_branch",
+			Title: "Spend by git branch",
+			Description: "Token and cost totals grouped by the git branch the work ran on — what a " +
+				"feature, a migration or one long-running refactor cost. Branch names repeat across " +
+				"repositories (every repo has a \"main\"), so narrow with the project chip before " +
+				"reading a single branch's total as one piece of work. An empty branch means the turn " +
+				"ran outside a git worktree." + caveat,
+			InputSchema: obj(withChips(map[string]any{
+				"account": accountProp, "since": sinceProp, "until": untilProp, "limit": limitProp,
+			})),
+		},
+		{
+			Name:  "usage_by_effort",
+			Title: "Spend by reasoning effort",
+			Description: "Token and cost totals grouped by the reasoning effort each turn was run at — " +
+				"what the high-effort setting is costing against what it is being used for. There is no " +
+				"effort filter to pair with this: effort is an axis only, on this surface and on the " +
+				"HTTP one alike. An empty bucket means the reporting side declared no effort, which is " +
+				"the normal case for sources that have no such setting." + caveat,
+			InputSchema: obj(withChips(map[string]any{
+				"account": accountProp, "since": sinceProp, "until": untilProp, "limit": limitProp,
+			})),
+		},
+		{
+			Name:  "usage_by_entrypoint",
+			Title: "Spend by how the turn was invoked",
+			Description: "Token and cost totals grouped by entrypoint — cli, ide and whatever else the " +
+				"reporting side names. Answers \"how much of this is interactive and how much is " +
+				"automation\". Like effort, it is an axis only and has no matching filter. An empty " +
+				"bucket means the reporting side declared none." + caveat,
+			InputSchema: obj(withChips(map[string]any{
+				"account": accountProp, "since": sinceProp, "until": untilProp, "limit": limitProp,
+			})),
+		},
+		{
+			Name:  "usage_history",
+			Title: "Usage over time",
+			Description: "A time series of a subscription's usage plus a per-model split, for trend and " +
+				"capacity questions. Every bucket's cost stays split by source across the fold, so a " +
+				"rising line is always one kind of money." + caveat,
+			InputSchema: obj(withChips(map[string]any{
+				"account":     accountProp,
+				"since":       sinceProp,
+				"until":       untilProp,
+				"granularity": map[string]any{"type": "string", "enum": []string{"hour", "day"}, "description": `Bucket size; defaults to "day".`},
+			})),
+		},
+		{
+			Name:  "usage_summary",
+			Title: "Totals for a period",
+			Description: "Totals for a period under optional drill-down filters: tokens, cost per source, " +
+				"turns, sessions, token composition (cache read / create, input, output, thinking), " +
+				"subagent share, the split by reasoning effort and by entrypoint, " +
+				"and the same figures for the previous period of equal length. " +
+				"Also the two figures that ARE real money — subscription_spend (what the plans cost over " +
+				"the period, billed whether or not a token was spent) and real_spend (subscriptions plus " +
+				"metered gateway charges). Quote real_spend when asked what something cost; quote " +
+				"cost_notional only as \"what this would have cost at API rates\"." + caveat,
+			InputSchema: obj(withChips(map[string]any{
+				"account": accountProp, "since": sinceProp, "until": untilProp,
+			})),
+		},
+		{
+			Name:  "list_sessions",
+			Title: "List sessions",
+			Description: "Sessions in a period, heaviest first by default, each with its token composition, " +
+				"cache hit rate and subagent share. Narrow with the drill-down filters (project, model, " +
+				"user, ...) to list what ran under one of them, or use usage_by_session to rank by a " +
+				"different total." + caveat,
+			InputSchema: obj(withChips(map[string]any{
+				"account": accountProp, "since": sinceProp, "until": untilProp,
+				"sort": map[string]any{
+					"type": "string", "enum": []string{"tokens", "cost", "started", "duration", "turns"},
+					"description": `Sort order; defaults to "tokens" (heaviest first).`,
+				},
+				"limit": limitProp,
+			})),
+		},
+		{
+			Name:  "get_session",
+			Title: "One session's detail",
+			Description: "One session's header (tokens, cost, models, cache hit) and every turn inside it. " +
+				"Turns are omitted (pruned: true) once the raw events behind them have aged out of " +
+				"retention; the header itself survives from the hourly rollup." + caveat,
+			InputSchema: obj(map[string]any{
+				"account": accountProp,
+				"session_id": map[string]any{
+					"type": "string", "description": "The session id, from list_sessions or usage_by_session.",
+				},
+			}, "session_id"),
+		},
+		{
+			Name:  "get_findings",
+			Title: "Machine-generated findings",
+			Description: "Machine-generated findings for a period: runaway sessions, unpriced models, time " +
+				"spent in the critical rate-limit band, cache-hit drops and spend spikes. Pass " +
+				`view: "now" for live, minute-scale alerts instead (high rate-limit windows, an ` +
+				"agent that has stopped reporting, a runaway session in flight) — that mode ignores " +
+				"since/until and the drill-down filters. Findings are ranked, capped at a handful, and " +
+				"each carries a scope map naming the chip an equivalent usage_by_* or list_sessions " +
+				"call can drill into. A finding whose subject has one may also carry owner.user " +
+				"(an OS login) and/or owner.team — who to go to about it. The key is ABSENT when " +
+				"the hub does not know, which is the normal case for a finding about a model, a " +
+				"project or a whole period: those are shared, so do not infer an owner for one. " +
+				"Every finding carries a stable `id`: the same problem gets the same id on every " +
+				"call, so two readings can be compared for whether they are about the same thing " +
+				"rather than merely similar. An id changes when the severity does, which is how an " +
+				"escalation is told apart from the same alert repeating. A finding an operator has " +
+				"silenced carries `muted` ({until, note, by}) and is listed AFTER the live ones, " +
+				"outside their cap — it is still present on purpose, so do not read its absence " +
+				"from the top of the list as the condition having cleared. This server is " +
+				"read-only: there is no tool to mute or unmute, and muting is a person's decision " +
+				"made through the dashboard." + caveat,
+			InputSchema: obj(withChips(map[string]any{
+				"account": accountProp, "since": sinceProp, "until": untilProp,
+				"view": map[string]any{
+					"type": "string", "enum": []string{"review", "now"},
+					"description": `"review" (default) evaluates the period rules; "now" evaluates live alerts.`,
+				},
+			})),
+		},
+
+		// Repo progress. Agents read backlogs, humans read dashboards — one
+		// source, two renderers. Without these tools the agent side grows a
+		// second, drifting copy of the same rows.
+		{
+			Name:  "list_repos",
+			Title: "Repositories with progress data",
+			Description: "Repositories a shipper has pushed progress for, most recently observed first, " +
+				"with the open-issue count and the span of daily history held. Repo rows carry no " +
+				"account: a repository is not owned by a subscription, and the join back to spend " +
+				"goes through the ISSUE NUMBER." + repoCaveat,
+			InputSchema: obj(map[string]any{}),
+		},
+		{
+			Name:  "repo_progress",
+			Title: "Issue flow and the repo's own close-time scale",
+			Description: "Daily flow for one repository — opened, closed, open-at-end, merged PRs — plus " +
+				"the close-time percentiles measured on that repo. ALWAYS read the scale before " +
+				"judging any age: p50/p90/p95 differ by orders of magnitude between repositories, " +
+				"and a fixed threshold like \"stale after 30 days\" is meaningless where the median " +
+				"issue closes in three hours. A null scale means nobody has computed percentiles; " +
+				"say so rather than substituting one." + repoCaveat,
+			InputSchema: obj(map[string]any{
+				"repo":  repoProp,
+				"since": sinceProp,
+				"until": untilProp,
+			}, "repo"),
+		},
+		{
+			Name:  "list_repo_issues",
+			Title: "One repository's backlog, oldest first",
+			Description: "Per-issue rows for one repository, oldest first, each with age_seconds and the " +
+				"scale it should be read against. stale: true keeps only issues older than that " +
+				"repo's OWN p95 — there is deliberately no way to pass a day count. shipped: true " +
+				"keeps only issues whose work already landed in a merged commit while the issue " +
+				"stayed open; those are closes, not investigations. Per-issue rows are BOUNDED by " +
+				"retention (open issues plus recently-closed ones); the daily aggregates behind " +
+				"repo_progress are the complete long-term record." + repoCaveat,
+			InputSchema: obj(map[string]any{
+				"repo": repoProp,
+				"state": map[string]any{
+					"type": "string", "enum": []string{"open", "closed"},
+					"description": "Limit to open or closed issues. Omitted means both.",
+				},
+				"stale": map[string]any{
+					"type":        "boolean",
+					"description": "Keep only issues older than this repo's own p95 close time. Errors when no percentiles have been shipped, rather than picking a threshold.",
+				},
+				"shipped": map[string]any{
+					"type":        "boolean",
+					"description": "Keep only issues whose work already shipped in a merged commit.",
+				},
+				"limit": limitProp,
+			}, "repo"),
+		},
+		{
+			Name:  "repo_issue_cost",
+			Title: "What the money landed on, per issue",
+			Description: "Spend for one repository on the ISSUE axis: the window's tokens and cost per " +
+				"issue, each issue's LIFETIME cost (every hour ever attributed to it, unbounded " +
+				"by the window), and the issue's own progress beside it. " +
+				"ALWAYS report the unattributed bucket: an issue number is read from the branch " +
+				"name by one anchored rule (`issue-<N>`), so work whose branch never said what it " +
+				"was for is NOT attributed -- measured at 63.5% of events on a real corpus. " +
+				"attributed + unattributed = total, and `unattributed.branches` says which branches " +
+				"it was. An answer that quotes only the attributed share is wrong by a factor of " +
+				"three, in the flattering direction. " +
+				"Cost is split by source and must never be added across them. `stale` is null when " +
+				"the repo has shipped no close-time percentiles -- say the scale is unknown, do not " +
+				"substitute one. " +
+				"`binding` says how the numbers were bound to the repo, and it changes what you may " +
+				"claim. \"declared\": the endpoints reported which repository they run in, the figures " +
+				"are this repo's, and `declaration` says what the scope left out -- ALWAYS report " +
+				"`declaration.undeclared` when it is non-zero, because that spend is invisible to this " +
+				"repo's answer and a small figure beside a large undeclared bucket means \"not yet " +
+				"measured\", never \"cheap\". \"sole_repo\": nothing declares yet, so these are the whole " +
+				"hub's numbers, answerable only because the hub holds this repository and no other. " +
+				"Errors while nothing declares AND the hub holds other repositories: a spend row would " +
+				"name an issue NUMBER without a repository, and every repo starts at #1." +
+				repoCaveat,
+			InputSchema: obj(map[string]any{
+				"repo":  repoProp,
+				"since": sinceProp,
+				"until": untilProp,
+				"limit": limitProp,
+			}, "repo"),
+		},
+	}
+}
+
+type callParams struct {
+	Name      string         `json:"name"`
+	Arguments map[string]any `json:"arguments"`
+}
+
+func (s *mcpServer) callTool(raw json.RawMessage) (any, *rpcError) {
+	var p callParams
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil, &rpcError{codeInvalidParams, "malformed tool call: " + err.Error()}
+	}
+
+	payload, err := s.run(p.Name, p.Arguments)
+	if err != nil {
+		// A tool-level failure is reported inside the result with isError, not
+		// as a protocol error: the model should see the message and adapt
+		// (usually by calling list_accounts first).
+		return map[string]any{
+			"isError": true,
+			"content": []any{map[string]any{"type": "text", "text": err.Error()}},
+		}, nil
+	}
+
+	pretty, _ := json.MarshalIndent(payload, "", "  ")
+	return map[string]any{
+		"content":           []any{map[string]any{"type": "text", "text": string(pretty)}},
+		"structuredContent": payload,
+	}, nil
+}
+
+func (s *mcpServer) run(name string, args map[string]any) (any, error) {
+	// Validated against the sources this build knows, not a hand-written
+	// pair. The pair left the gateway unaddressable over MCP -- an agent
+	// could not ask for the one scope in which a BILLED cost figure stands
+	// alone, which is the scope it most needs when asked what something
+	// actually cost (issue #4). api.querySource keeps the same rule.
+	if source := str(args, "source"); source != "" && !model.KnownSource(source) {
+		return nil, fmt.Errorf("source must be one of: %s", strings.Join(model.Sources, ", "))
+	}
+	switch name {
+	case "get_collectors":
+		rows, err := s.api.Store.Collectors(str(args, "account"), str(args, "source"))
+		return map[string]any{"collectors": rows}, err
+	case "get_account_usage":
+		return s.api.AccountUsageView(str(args, "account"), str(args, "source"))
+	case "get_live":
+		l := s.api.LiveStore
+		if l == nil {
+			l = api.NewLive()
+		}
+		return s.api.FilterLive(l.Snapshot(), str(args, "account"), str(args, "source")), nil
+	case "quota_history":
+		f, err := s.filter(args)
+		if err != nil {
+			return nil, err
+		}
+		rows, err := s.api.QuotaHistorySeries(f, 400)
+		return map[string]any{"account_uuid": f.Account, "since": f.Start, "until": f.End, "series": rows}, err
+	case "list_accounts":
+		accts, err := s.api.Store.ListAccounts()
+		if err != nil {
+			return nil, err
+		}
+		if source := str(args, "source"); source != "" {
+			filtered := accts[:0]
+			for _, account := range accts {
+				if account.Source == source {
+					filtered = append(filtered, account)
+				}
+			}
+			accts = filtered
+		}
+		if len(accts) == 0 {
+			return map[string]any{
+				"accounts": []any{},
+				"note":     "no endpoint has reported to this hub yet; check that an agent is running and enrolled",
+			}, nil
+		}
+		return map[string]any{"accounts": accts}, nil
+
+	case "get_limits":
+		// Spanning subscriptions returns a LIST, never a total: separate quota
+		// pools with separate resets cannot be added.
+		if a := str(args, "account"); a == "all" || a == store.AllAccounts {
+			return s.api.LimitsForAllSource(str(args, "source"))
+		}
+		account, err := s.account(args)
+		if err != nil {
+			return nil, err
+		}
+		if account == store.AllAccounts {
+			return s.api.LimitsForAllSource(str(args, "source"))
+		}
+		return s.api.LimitsForSource(account, str(args, "source"))
+
+	case "list_endpoints":
+		account := str(args, "account")
+		if account == "all" || account == store.AllAccounts {
+			account = ""
+		}
+		eps, err := s.api.Store.ListEndpoints(account, str(args, "source"))
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"endpoints": eps, "now": time.Now().UTC()}, nil
+
+	case "list_account_switches":
+		sw, err := s.api.Store.SourceSwitches(str(args, "account"), str(args, "source"), intArg(args, "limit"))
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"switches": sw,
+			"note": "Turns recorded before a switch keep the earlier subscription's " +
+				"attribution and cannot be corrected retroactively.",
+		}, nil
+
+	case "usage_by_account":
+		all := make(map[string]any, len(args)+1)
+		for k, v := range args {
+			all[k] = v
+		}
+		all["account"] = store.AllAccounts
+		return s.usage(all, store.ByAccount)
+
+	case "list_endpoint_accounts":
+		eas, err := s.api.Store.EndpointAccounts(str(args, "account"), intArg(args, "limit"), str(args, "source"))
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"endpoint_accounts": eas,
+			"note": "Several rows for one endpoint mean it ran those subscriptions " +
+				"concurrently, not that it switched between them.",
+		}, nil
+
+	case "usage_by_endpoint":
+		return s.usage(args, store.ByEndpoint)
+	case "usage_by_source":
+		return s.usage(args, store.BySource)
+	case "usage_by_provider":
+		return s.usage(args, store.ByProvider)
+	case "usage_by_user":
+		return s.usage(args, store.ByUser)
+	case "usage_by_project":
+		return s.usage(args, store.ByProject)
+	case "usage_by_session":
+		return s.usage(args, store.BySession)
+	case "usage_by_model":
+		return s.usage(args, store.ByModel)
+	case "usage_by_team":
+		return s.usage(args, store.ByTeam)
+	case "usage_by_branch":
+		return s.usage(args, store.ByBranch)
+	case "usage_by_effort":
+		return s.usage(args, store.ByEffort)
+	case "usage_by_entrypoint":
+		return s.usage(args, store.ByEntrypoint)
+
+	case "get_user":
+		login := str(args, "user")
+		if login == "" {
+			return nil, fmt.Errorf("user is required: the OS login, as usage_by_user spells it")
+		}
+		start, end := timeRange(args)
+		view, err := s.api.UserPage(login, start, end)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"since": start, "until": end, "user": view}, nil
+
+	case "get_fx":
+		return s.api.FXView(str(args, "base"), str(args, "target")), nil
+
+	case "get_limits_history":
+		f, err := s.filter(args)
+		if err != nil {
+			return nil, err
+		}
+		n := intArg(args, "points")
+		if n <= 0 {
+			n = 400
+		}
+		out, err := s.api.LimitsHistoryView(f, n)
+		if err != nil {
+			return nil, err
+		}
+		out["account_uuid"] = f.Account
+		out["disclaimer"] = strings.TrimSpace(caveat)
+		if note := scopeNote(f.Account); note != "" {
+			out["all_accounts"] = true
+			out["scope_note"] = note
+		}
+		return out, nil
+
+	case "usage_history":
+		f, err := s.filter(args)
+		if err != nil {
+			return nil, err
+		}
+		g := store.Granularity(str(args, "granularity"))
+		if g == "" {
+			g = store.Daily
+		}
+		if g != store.Hourly && g != store.Daily {
+			return nil, fmt.Errorf("unknown granularity %q (want hour or day)", g)
+		}
+		rows, err := s.api.Store.HourlyByModel(f)
+		if err != nil {
+			return nil, err
+		}
+		folded, err := api.FoldHours(rows, string(g), false, nil)
+		if err != nil {
+			return nil, err
+		}
+		series := seriesToBuckets(folded)
+		models, err := s.api.Store.UsageByFiltered(f, store.ByModel, 50)
+		if err != nil {
+			return nil, err
+		}
+		hist := map[string]any{
+			"account_uuid": f.Account, "granularity": string(g),
+			"since": f.Start, "until": f.End,
+			"series": series, "by_model": models,
+			"pricing":    pricing.Provenance(f.Source),
+			"cost_note":  pricing.Note(f.Source),
+			"disclaimer": strings.TrimSpace(caveat),
+		}
+		if note := scopeNote(f.Account); note != "" {
+			hist["all_accounts"] = true
+			hist["scope_note"] = note
+		}
+		return hist, nil
+
+	case "usage_summary":
+		f, err := s.filter(args)
+		if err != nil {
+			return nil, err
+		}
+		sum, err := s.api.Store.Summary(f)
+		if err != nil {
+			return nil, err
+		}
+		psum, err := s.api.Store.Summary(f.Prev())
+		if err != nil {
+			return nil, err
+		}
+		// The real money, read from the plan ledger rather than from the cost
+		// column -- a subscription is billed whether or not a token is spent,
+		// so it is not in that column at all.
+		plans, err := s.api.Store.SubscriptionSpendOver(f.Account, f.Start, f.End)
+		if err != nil {
+			return nil, err
+		}
+		// The two splits GET /v1/summary has always carried and this tool did
+		// not. Effort and entrypoint are the only axes with no chip to filter
+		// on, so until usage_by_effort and usage_by_entrypoint existed this
+		// omission left them unreachable over MCP entirely rather than merely
+		// inconvenient. Both doors now answer the same shape (issue #60).
+		effort, err := s.api.Store.UsageByFiltered(f, store.ByEffort, 10)
+		if err != nil {
+			return nil, err
+		}
+		entry, err := s.api.Store.UsageByFiltered(f, store.ByEntrypoint, 10)
+		if err != nil {
+			return nil, err
+		}
+		out := map[string]any{
+			"account_uuid": f.Account, "since": f.Start, "until": f.End,
+			"summary": sum, "prev": psum,
+			"effort": nonNil(effort), "entrypoint": nonNil(entry),
+			"cost_notional":      sum.Cost.Notional(),
+			"cost_billed":        sum.Cost.Billed(),
+			"subscription_spend": api.PlansForSource(plans, f.Source),
+			"real_spend":         api.RealSpendOver(sum.Cost, api.PlansForSource(plans, f.Source)),
+			"pricing":            pricing.Provenance(f.Source),
+			"cost_note":          pricing.Note(f.Source),
+			"disclaimer":         strings.TrimSpace(caveat),
+		}
+		if note := scopeNote(f.Account); note != "" {
+			out["all_accounts"] = true
+			out["scope_note"] = note
+		}
+		return out, nil
+
+	case "list_sessions":
+		f, err := s.filter(args)
+		if err != nil {
+			return nil, err
+		}
+		rows, err := s.api.Store.Sessions(f, str(args, "sort"), intArg(args, "limit"), 0)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"account_uuid": f.Account, "since": f.Start, "until": f.End, "sessions": rows,
+		}, nil
+
+	case "get_session":
+		account, err := s.account(args)
+		if err != nil {
+			return nil, err
+		}
+		id := str(args, "session_id")
+		if id == "" {
+			return nil, fmt.Errorf("session_id is required")
+		}
+		head, err := s.api.Store.Session(account, id, str(args, "source"))
+		if err != nil {
+			return nil, err
+		}
+		if head == nil {
+			return nil, fmt.Errorf("unknown session %q", id)
+		}
+		turns, err := s.api.Store.SessionTurns(account, id, str(args, "source"))
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"session": head, "turns": turns, "pruned": len(turns) == 0 && head.Turns > 0,
+		}, nil
+
+	case "get_findings":
+		// Same envelope shape as usage_summary -- account_uuid plus (for the
+		// review view) the ALIGNED window actually queried, since/until
+		// omitted entirely for "now" rather than echoing a fake window -- for
+		// consistency with the other three new tools and with GET
+		// /v1/findings, which reads the same two gatherers.
+		if str(args, "view") == "now" {
+			account, err := s.account(args)
+			if err != nil {
+				return nil, err
+			}
+			in, err := s.api.GatherNowSource(account, str(args, "source"))
+			if err != nil {
+				return nil, err
+			}
+			out := map[string]any{
+				"account_uuid": account, "view": "now",
+				"findings": findings.Now(in),
+			}
+			if note := scopeNote(account); note != "" {
+				out["all_accounts"] = true
+				out["scope_note"] = note
+			}
+			return out, nil
+		}
+		f, err := s.filter(args)
+		if err != nil {
+			return nil, err
+		}
+		in, err := s.api.GatherReview(f)
+		if err != nil {
+			return nil, err
+		}
+		out := map[string]any{
+			"account_uuid": f.Account, "since": f.Start, "until": f.End, "view": "review",
+			"findings": findings.Review(in),
+		}
+		if note := scopeNote(f.Account); note != "" {
+			out["all_accounts"] = true
+			out["scope_note"] = note
+		}
+		return out, nil
+
+	case "list_repos":
+		rows, err := s.api.Store.Repos()
+		if err != nil {
+			return nil, err
+		}
+		if rows == nil {
+			rows = []store.Repo{}
+		}
+		return map[string]any{"repos": rows, "disclaimer": strings.TrimSpace(repoCaveat)}, nil
+
+	case "repo_progress":
+		repo := str(args, "repo")
+		if err := model.ValidRepoName(repo); err != nil {
+			return nil, err
+		}
+		start, end := repoRange(args)
+		days, err := s.api.Store.RepoDays(repo, start, end)
+		if err != nil {
+			return nil, err
+		}
+		if days == nil {
+			days = []model.RepoDay{}
+		}
+		scale, err := s.api.Store.RepoCloseScale(repo)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"repo":  repo,
+			"since": start.UTC().Format(model.RepoDayLayout),
+			"until": end.UTC().Format(model.RepoDayLayout),
+			"days":  days,
+			// Null on purpose when nobody has computed percentiles. An agent
+			// must report the scale as unknown, not invent one.
+			"scale":      scale,
+			"disclaimer": strings.TrimSpace(repoCaveat),
+		}, nil
+
+	case "list_repo_issues":
+		repo := str(args, "repo")
+		if err := model.ValidRepoName(repo); err != nil {
+			return nil, err
+		}
+		state := str(args, "state")
+		if state != "" && state != model.RepoStateOpen && state != model.RepoStateClosed {
+			return nil, fmt.Errorf("state must be %q or %q", model.RepoStateOpen, model.RepoStateClosed)
+		}
+		limit := intArg(args, "limit")
+		if limit <= 0 {
+			limit = 50
+		}
+		scale, err := s.api.Store.RepoCloseScale(repo)
+		if err != nil {
+			return nil, err
+		}
+		f := store.RepoIssueFilter{
+			Repo: repo, State: state, Limit: limit,
+			ShippedOnly: boolArg(args, "shipped"), Now: time.Now(),
+		}
+		stale := boolArg(args, "stale")
+		if stale {
+			// Refusing beats answering. An agent handed a stalled list built
+			// from a threshold nobody measured cannot tell it from a measured
+			// one, and will report it as fact.
+			if scale == nil || scale.P95Seconds == nil {
+				return nil, fmt.Errorf("no close-time percentiles have been shipped for %s: "+
+					"staleness has no scale to be measured against", repo)
+			}
+			f.MinAgeSeconds = *scale.P95Seconds
+		}
+		rows, err := s.api.Store.RepoIssues(f)
+		if err != nil {
+			return nil, err
+		}
+		if rows == nil {
+			rows = []store.RepoIssueRow{}
+		}
+		return map[string]any{
+			"repo": repo, "stale": stale, "issues": rows, "scale": scale,
+			"disclaimer": strings.TrimSpace(repoCaveat),
+		}, nil
+
+	case "repo_issue_cost":
+		repo := str(args, "repo")
+		if err := model.ValidRepoName(repo); err != nil {
+			return nil, err
+		}
+		start, end := repoRange(args)
+		// The same body /v1/repo/cost serves, including the §5 refusal. An
+		// agent that could get a blended answer where the browser gets a 409
+		// would report the blend as measured.
+		out, err := s.api.IssueCost(repo, start, end, intArg(args, "limit"))
+		if err != nil {
+			return nil, err
+		}
+		out["disclaimer"] = strings.TrimSpace(repoCaveat)
+		return out, nil
+
+	default:
+		return nil, fmt.Errorf("unknown tool %q", name)
+	}
+}
+
+// repoRange mirrors timeRange but in whole days: repo flow is stored per UTC
+// day, and an hour-resolution window would silently clip the first and last.
+func repoRange(args map[string]any) (time.Time, time.Time) {
+	now := time.Now().UTC()
+	end := now.AddDate(0, 0, 1) // exclusive, so today's own row is included
+	if t, ok := parseWhen(str(args, "until"), now); ok {
+		end = t
+	}
+	start := end.AddDate(0, 0, -90)
+	if t, ok := parseWhen(str(args, "since"), now); ok {
+		start = t
+	}
+	if !start.Before(end) {
+		start = end.AddDate(0, 0, -90)
+	}
+	return start, end
+}
+
+// nonNil renders an empty breakdown as [] rather than null. A model reading
+// null has to decide whether it means "no rows" or "this build does not
+// report it"; an empty list only means the first.
+func nonNil(b []store.Bucket) []store.Bucket {
+	if b == nil {
+		return []store.Bucket{}
+	}
+	return b
+}
+
+// boolArg reads a JSON boolean, tolerating the string spellings a few clients
+// send for a checkbox.
+func boolArg(args map[string]any, key string) bool {
+	switch v := args[key].(type) {
+	case bool:
+		return v
+	case string:
+		return v == "true" || v == "1"
+	}
+	return false
+}
+
+// filter builds a store.Filter from tool arguments, mirroring api.scope:
+// account, then the time range, then at most one value per drill-down chip.
+func (s *mcpServer) filter(args map[string]any) (store.Filter, error) {
+	account, err := s.account(args)
+	if err != nil {
+		return store.Filter{}, err
+	}
+	start, end := timeRange(args)
+	f := store.Filter{
+		Account: account, Start: start, End: end,
+		Endpoint: str(args, "endpoint"), OSUser: str(args, "user"), CWD: str(args, "project"),
+		Model: str(args, "model"), Provider: str(args, "provider"),
+		Branch: str(args, "branch"), Team: str(args, "team"), Session: str(args, "session"),
+		Source: str(args, "source"),
+	}
+	return f.AlignHours(), nil
+}
+
+func (s *mcpServer) usage(args map[string]any, d store.Dimension) (any, error) {
+	f, err := s.filter(args)
+	if err != nil {
+		return nil, err
+	}
+	account := f.Account
+	buckets, err := s.api.Store.UsageByFiltered(f, d, intArg(args, "limit"))
+	if err != nil {
+		return nil, err
+	}
+	// Same method the dashboard's /v1/usage calls, deliberately: an operator who
+	// names an upstream in --pricing named it once, and an agent reading this
+	// breakdown must not be told a different name -- or, as it was until now, no
+	// name at all while the dashboard shows one.
+	if d == store.ByProvider {
+		s.api.LabelProviders(buckets)
+	}
+	out := map[string]any{
+		"account_uuid": account, "by": string(d),
+		"since": f.Start, "until": f.End, "buckets": buckets,
+		// Every bucket's cost is a list keyed by source; this says, once, what
+		// each of those sources' rates rest on and which kind of money it is.
+		"pricing":    pricing.Provenance(f.Source),
+		"cost_note":  pricing.Note(f.Source),
+		"disclaimer": strings.TrimSpace(caveat),
+	}
+	// An agent relaying a blended total without saying it is blended is the
+	// same failure as a dashboard doing it.
+	if note := scopeNote(account); note != "" {
+		out["all_accounts"] = true
+		out["scope_note"] = note
+	}
+	return out, nil
+}
+
+// seriesToBuckets adapts api.FoldHours's []api.Series to the []store.Bucket
+// shape usage_history has always returned over MCP. The two are identical
+// field for field except Series carries no Label -- store.Bucket's Label is
+// simply left at its zero value "", which is exactly what usage_history
+// returned before this used api.FoldHours too (by_model, a separate field,
+// already covers the per-model breakdown; usage_history has never populated
+// a per-bucket label). Series' Stack is dropped: usage_history calls
+// api.FoldHours with stack=false, so it is always empty anyway.
+//
+// This -- not a second hand-written fold of bucketKey's day/hour arithmetic
+// -- is what usage_history now does; see the 2026-09-02 pre-deploy review of
+// commit 1ff1bfc, which introduced (and this replaced) exactly that second
+// implementation.
+func seriesToBuckets(series []api.Series) []store.Bucket {
+	out := make([]store.Bucket, len(series))
+	for i, s := range series {
+		out[i] = store.Bucket{
+			Key: s.Key, Events: s.Events, Tokens: s.Tokens, Cost: s.Cost,
+			Unpriced: s.Unpriced, Sidechain: s.Sidechain,
+		}
+	}
+	return out
+}
+
+// scopeNote states what a figure spans, so a cross-subscription total is never
+// mistaken for one subscription's.
+func scopeNote(account string) string {
+	if account != store.AllAccounts {
+		return ""
+	}
+	return "Totals span every subscription on this hub. Tokens are additive, and so is each " +
+		"source's cost; rate-limit utilization is not and is reported per subscription, and " +
+		"cost is never added ACROSS sources — see the per-source breakdown and its kinds."
+}
+
+// account resolves the subscription, inferring it only when unambiguous.
+//
+// With several subscriptions on one hub, guessing would hand the model a
+// number for the wrong account with no way to tell.
+func (s *mcpServer) account(args map[string]any) (string, error) {
+	if a := str(args, "account"); a != "" {
+		if a == "all" {
+			return store.AllAccounts, nil
+		}
+		return a, nil
+	}
+	accts, err := s.api.Store.ListAccounts()
+	if err != nil {
+		return "", err
+	}
+	switch len(accts) {
+	case 0:
+		return "", fmt.Errorf("no subscriptions have reported to this hub yet")
+	case 1:
+		return accts[0].AccountUUID, nil
+	default:
+		// Everything, labelled — the same default the HTTP API takes. Refusing
+		// made the subscription a mode rather than an axis.
+		return store.AllAccounts, nil
+	}
+}
+
+func str(args map[string]any, key string) string {
+	if v, ok := args[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+func intArg(args map[string]any, key string) int {
+	switch v := args[key].(type) {
+	case float64: // JSON numbers decode as float64
+		return int(v)
+	case string:
+		n, _ := strconv.Atoi(v)
+		return n
+	}
+	return 0
+}
+
+const defaultRange = 7 * 24 * time.Hour
+
+func timeRange(args map[string]any) (time.Time, time.Time) {
+	now := time.Now().UTC()
+	end := now
+	if t, ok := parseWhen(str(args, "until"), now); ok {
+		end = t
+	}
+	start := end.Add(-defaultRange)
+	if t, ok := parseWhen(str(args, "since"), now); ok {
+		start = t
+	}
+	if !start.Before(end) {
+		start = end.Add(-defaultRange)
+	}
+	return start, end
+}
+
+func parseWhen(s string, now time.Time) (time.Time, bool) {
+	if s == "" {
+		return time.Time{}, false
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t.UTC(), true
+	}
+	if n := len(s); n > 1 && s[n-1] == 'd' {
+		if days, err := strconv.Atoi(s[:n-1]); err == nil {
+			return now.Add(-time.Duration(days) * 24 * time.Hour), true
+		}
+	}
+	if d, err := time.ParseDuration(s); err == nil {
+		return now.Add(-d), true
+	}
+	return time.Time{}, false
+}
