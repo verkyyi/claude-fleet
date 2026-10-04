@@ -92,6 +92,9 @@ if [ -z "${FLEET_LANG_RULE_SEED:-}" ]; then
   [ -n "$_flang_dir" ] && [ -r "$_flang_dir/fleet-lang.sh" ] && . "$_flang_dir/fleet-lang.sh"
   unset _flang_dir
 fi
+# Kept past the source for fleet_identity_triplet, which re-reads the global conf
+# from a clean slate (issue #1498).
+_FLEET_LIB_DIR="$_flib_here"
 unset _flib_here
 
 # ----------------------------------------------------------------- layout (#181)
@@ -4070,34 +4073,56 @@ EOF
 # fleet). A local hit runs the script's existing path; `remote`/`unknown` refuse
 # with a one-line reason, and never fall through to a same-numbered local window.
 
+# fleet_identity_triplet <sess> → `<sess>\0<repo>\0<checkout>\0` — the fleet's OWN
+# identity, the three things its UUID hashes: the fleet conf's FLEET_REPO and
+# FLEET_MAIN (its first repo), never a pane's. The ONE place it is read, shared by
+# fleet_uuid below and fleet-control-read.sh's inventory (what fleet_control.py
+# mints the UUID the hub registers from), so the two cannot drift (issue #1498).
+# The inventory runs under a scrubbed environment (fleet_control.py environment())
+# with no TMUX, so this rebuilds exactly that view from inside any pane:
+#   - TMUX unset: fleet_load_conf lays the WINDOW's repo overlay on top (issue
+#     #788) — a pane of the second repo minted that repo's UUID (issue #1491);
+#   - FLEET_REPO / FLEET_MAIN unset and the global conf re-read: a pane's
+#     environment can carry the window's repo exported (a launcher, a hook, a
+#     caller that loaded another conf) — the conf then fills only what it sets,
+#     and a value it leaves out would come from the pane, never the fleet.
+# NUL-separated (a checkout path is arbitrary text); pipe it, never `$(…)` it.
+fleet_identity_triplet() {
+  local sess="${1:-}"
+  [ -n "$sess" ] || return 1
+  ( unset TMUX TMUX_PANE FLEET_REPO FLEET_MAIN
+    if [ -z "${FLEET_SKIP_GLOBAL_CONF:-}" ]; then
+      [ -n "${_FLEET_LIB_DIR:-}" ] && [ -f "$_FLEET_LIB_DIR/../fleet.conf" ] && . "$_FLEET_LIB_DIR/../fleet.conf" >/dev/null 2>&1
+      [ -f "$FLEET_CONF_DIR/fleet.settings" ] && . "$FLEET_CONF_DIR/fleet.settings" >/dev/null 2>&1
+    fi
+    fleet_load_conf "$sess" >/dev/null 2>&1
+    printf '%s\0' "$sess" "${FLEET_REPO:-}" "${FLEET_MAIN:-}" )
+}
+
 # fleet_uuid <sess> → the fleet's durable UUID — byte-for-byte what
 # fleet_control.py's inventory mints: uuid5(<machine id>, canonical JSON of
-# [session, FLEET_REPO, FLEET_MAIN]) — the fleet conf's OWN repo and checkout.
+# fleet_identity_triplet) — the fleet conf's OWN repo and checkout, whichever
+# pane asks (issues #1491, #1498).
 # READ-ONLY: a machine whose control database has no machine id yet
 # (fleet-control.py never ran) has no fleet UUID — nothing, rc 1 — and so no
 # worker_id either; nothing here creates one.
-# TMUX is unset for the conf load: inside a pane whose window belongs to a hosted
-# repo, fleet_load_conf lays that repo's overlay on top (issue #788), which swapped
-# FLEET_REPO/FLEET_MAIN into the hash and minted a UUID the hub had never seen —
-# every lease / place / move from such a pane came back 403 「fleet … is not
-# registered to this node」 (issue #1491). The inventory never sees a window.
 fleet_uuid() {
   local sess="${1:-}" db="$FLEET_CONF_DIR/control/state.sqlite3"
   [ -n "$sess" ] && [ -f "$db" ] || return 1
-  ( unset TMUX TMUX_PANE; fleet_load_conf "$sess" >/dev/null 2>&1
-    python3 - "$db" "$sess" "${FLEET_REPO:-}" "${FLEET_MAIN:-}" 2>/dev/null <<'PY'
+  fleet_identity_triplet "$sess" | python3 -c '
 import json, sqlite3, sys, uuid
 from urllib.parse import quote
-db, sess, repo, main = sys.argv[1:5]
 try:
-    con = sqlite3.connect("file:%s?mode=ro" % quote(db), uri=True)
-    row = con.execute("SELECT value FROM metadata WHERE key='machine_id'").fetchone()
-    print(uuid.uuid5(uuid.UUID(row[0]), json.dumps([sess, repo, main], ensure_ascii=False,
+    parts = sys.stdin.buffer.read().decode("utf-8").split("\0")
+    if len(parts) != 4 or parts[3] != "":
+        sys.exit(1)
+    con = sqlite3.connect("file:%s?mode=ro" % quote(sys.argv[1]), uri=True)
+    row = con.execute("SELECT value FROM metadata WHERE key='"'"'machine_id'"'"'").fetchone()
+    print(uuid.uuid5(uuid.UUID(row[0]), json.dumps(parts[:3], ensure_ascii=False,
                                                    sort_keys=True, separators=(",", ":"))))
 except Exception:
     sys.exit(1)
-PY
-  )
+' "$db" 2>/dev/null
 }
 
 # fleet_worker_id <sess> <window> → that window's worker_id, or nothing (no fleet

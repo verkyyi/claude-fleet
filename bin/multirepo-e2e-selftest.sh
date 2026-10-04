@@ -30,6 +30,11 @@
 #                                picking B filters both to B.
 #   (i) restore                  snapshot → kill → restore brings B's windows back
 #                                with @repo, and the no-repo session with @norepo.
+#   (id) fleet identity          in B's worker pane (B's @repo overlay on, B's repo
+#                                exported in the env) fleet_uuid == the fleet_id
+#                                fleet_control.py's inventory mints — the fleet's
+#                                FIRST repo, never the pane's (issue #1498); the
+#                                one-repo fleet's UUID is unchanged.
 #   (z) degenerate               a one-repo fleet beside it keeps bare keys,
 #                                three-field backlog rows, no repo column, and its
 #                                hub in its checkout (a 2-repo fleet's hub: $HOME).
@@ -250,6 +255,36 @@ case "$kS" in o-beta:scratch-*) ok "(d) B's scratch key is repo-qualified" ;; *)
 chk d "o-beta:issue-12 resolves to B's window" "$(fleet_win_for_key o-beta:issue-12 "$S")" "$wB"
 chk d "o-alpha:issue-12 resolves to A's window" "$(fleet_win_for_key o-alpha:issue-12 "$S")" "$wA"
 chk d "B's scratch key resolves to B's scratch" "$(fleet_win_for_key "$kS" "$S")" "$sB"
+
+# ==== (id) fleet identity: the pane's repo never enters the fleet UUID (#1498) ===========
+# The UUID the hub registered is what fleet_control.py's inventory minted, under its
+# scrubbed environment. From B's worker pane — B's overlay on via @repo, and B's
+# repo exported in the env the way a launcher or hook can leave it — fleet_uuid
+# must name the FLEET's first repo, or fleet_wid_home reads this machine's own
+# workers as another machine's.
+inv() {   # → "<sess> <fleet_id> <repo>" per fleet, from the node agent's own inventory
+  ( cd "$WORK" && python3 -c '
+import sys; sys.path.insert(0, sys.argv[1]); import fleet_control as c
+for f in c.Control(sys.argv[2]).inventory(): print(f["name"], f["fleet_id"], f["repo"])' "$BIN" "$FLEET_CONF_DIR" )
+}
+INV=$(inv 2>"$WORK/inv.err") || fail "(id) the inventory failed: $(cat "$WORK/inv.err")"
+invS=$(printf '%s\n' "$INV" | awk -v s="$S" '$1==s {print $2" "$3}')
+invD=$(printf '%s\n' "$INV" | awk -v s="$D" '$1==s {print $2" "$3}')
+[ "$(inpane "$wB" bash -c '. "$1/fleet-lib.sh"; fleet_load_conf "$2"; printf %s "$FLEET_REPO"' _ "$BIN" "$S")" = o/beta ] \
+  && ok "(id) setup: B's pane loads B's overlay" || fail "(id) setup: B's pane does not load B's overlay"
+uB=$(inpane "$wB" env FLEET_REPO=o/beta FLEET_MAIN="$MB" bash -c '. "$1/fleet-lib.sh"; fleet_uuid "$2"' _ "$BIN" "$S")
+case "$invS" in *" o/alpha") ok "(id) the inventory names the fleet's first repo" ;; *) fail "(id) inventory row for $S: [$invS]" ;; esac
+[ -n "$uB" ] && [ "$uB o/alpha" = "$invS" ] && ok "(id) fleet_uuid in B's pane == the inventory's fleet_id" \
+  || fail "(id) fleet_uuid in B's pane [$uB] ≠ the inventory's [$invS]"
+uA=$(inpane "$wA" fleet_uuid "$S")
+[ "$uA" = "$uB" ] && ok "(id) A's and B's panes mint one fleet UUID" || fail "(id) A's pane [$uA] ≠ B's pane [$uB]"
+[ "$(inpane "$wB" env FLEET_REPO=o/beta FLEET_MAIN="$MB" bash -c '. "$1/fleet-lib.sh"; fleet_worker_id "$2" "$3"' _ "$BIN" "$S" "$wB")" = "$uB/o-beta:issue-12" ] \
+  && ok "(id) B#12's worker_id carries the fleet UUID" || fail "(id) B#12's worker_id"
+# degenerate: the one-repo fleet's UUID is the same formula over its conf as ever
+MID=$(python3 -c 'import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute("SELECT value FROM metadata WHERE key=\"machine_id\"").fetchone()[0])' "$FLEET_CONF_DIR/control/state.sqlite3")
+want=$(python3 -c 'import json,sys,uuid; print(uuid.uuid5(uuid.UUID(sys.argv[1]), json.dumps(sys.argv[2:5], ensure_ascii=False, sort_keys=True, separators=(",", ":"))))' "$MID" "$D" o/solo "$MD")
+chk z "the one-repo fleet's UUID is unchanged" "$(fleet_uuid "$D") o/solo" "$want o/solo"
+chk z "…and equals its inventory fleet_id" "$invD" "$want o/solo"
 
 # ==== (a) PR/CI by branch name ==========================================================
 # The prmaps pr-refresh writes, one per repo: A's #12 merged, B's #12 open.
