@@ -144,10 +144,13 @@ EOF
   fi
 fi
 
-# A window that can show the list: unzoom, switch it on, draw it now.
-[ "$(wdm '' '#{window_zoomed_flag}')" = 1 ] && tmux resize-pane -Z -t "$win" 2>/dev/null
-show_on
-py sync
+# A window that can show the list: unzoom, switch it on, draw it now — unless it
+# is already on screen, where focusing it is the whole press.
+if ! view_up; then
+  [ "$(wdm '' '#{window_zoomed_flag}')" = 1 ] && tmux resize-pane -Z -t "$win" 2>/dev/null
+  show_on
+  py sync
+fi
 if ! view_up; then
   if [ "$nav" = 0 ]; then
     bash "$BIN/fleet-task-pick.sh" --popup --session "$sess" --cause "$mode" ${client:+--client "$client"} >/dev/null 2>&1

@@ -1586,7 +1586,9 @@ try:
     check(not navigation(), 'fixture should start with the worker holding input')
     os.write(terminal, b'\x1b[20~')  # F9
     wait_for(navigation, 'first F9 did not put the keyboard on the task bar')
-    check(tm('display-message', '-p', '#{window_id}') == w2, 'first F9 left the task')
+    check(tm('display-message', '-p', '#{window_id}') == w2, 'first F9 left the task: %s | views %s | %s' % (
+        tm('list-windows', '-t', 'fleet-test', '-F', '#{window_id}:#{window_name}:#{window_active}'),
+        views(), tm('list-clients', '-F', '#{client_session} #{client_key_table}')))
     os.write(terminal, b'\x1b[20~')  # F9 again, now in the fleet-sidebar table
     wait_for(lambda: not views() and not navigation(), 'second F9 did not hide the list')
     check('FLEET_SIDEBAR=0' in conf.read_text(), 'second F9 hid the list without switching it off')
