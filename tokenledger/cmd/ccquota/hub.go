@@ -181,7 +181,7 @@ func runHub(args []string) error {
 		if err := st.EnsureNodes(); err != nil {
 			return err
 		}
-		log.Printf("fleet module on (CCQUOTA_FLEET=1): nodes connect at %s, roster at /nodes", control.Path)
+		log.Printf("fleet module on (CCQUOTA_FLEET=1): nodes connect at %s, roster at /nodes, fleet reads at /v1/fleet/", control.Path)
 	}
 	if *rebuild {
 		n, err := st.RebuildRollup(*rebuildForce)

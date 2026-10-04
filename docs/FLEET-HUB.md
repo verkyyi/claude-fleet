@@ -11,6 +11,15 @@ allowed configuration keys, and — on a durable worker identity — messaging,
 graceful stop and resume. It is opt-in: installing the files does not start a
 service, register machines or grant anyone access.
 
+> **Single machine / offline use.** For several machines, use the cloud hub
+> instead: `ccquota hub` with `CCQUOTA_FLEET=1` (`tokenledger/`, issue #1409)
+> keeps the same registry, fleet UUIDs and worker_ids (derived by the same rules,
+> checked value for value), fed by each machine's own outbound control channel
+> rather than by SSH from the hub — and serves `fleet_list` / `fleet_status` /
+> `config_get` / `operation_get` (plus `fleet_sessions`) over its MCP endpoint.
+> This Python hub is kept as is for one machine, or when the cloud hub is out of
+> reach. See `tokenledger/README.md`, "Sessions on every machine".
+
 Here, **Fleet Hub** means the cross-machine control service. The existing `plan`
 hub window remains the per-Fleet dashboard; it is not this service.
 

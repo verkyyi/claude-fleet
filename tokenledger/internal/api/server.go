@@ -103,6 +103,8 @@ type Server struct {
 	// (CCQUOTA_FLEET_AUTO_ASSIGN). Empty means accounts are only ever opened
 	// by an explicit assignment.
 	FleetAutoAssign []string
+	// fleetScopeHook replaces fleetScope in tests (claude-fleet#1409).
+	fleetScopeHook func(*http.Request) (func(hostname, osUser string) bool, error)
 
 	// nodes holds the open node control channels.
 	nodes nodeConns
@@ -159,6 +161,9 @@ func (s *Server) Handler() http.Handler {
 		mux.Handle("/nodes", s.viewerOnly(http.HandlerFunc(s.serveNodesPage)))
 		mux.Handle("/v1/fleet/me", s.viewerOnly(http.HandlerFunc(s.handleFleetMe)))
 		mux.Handle("/v1/fleet/accounts", s.viewerOnly(s.operatorOnly(http.HandlerFunc(s.handleFleetAccounts))))
+		// The Fleet Hub's read tools (claude-fleet#1409), the same ones
+		// /mcp lists when the module is on.
+		mux.Handle("/v1/fleet/", s.viewerOnly(http.HandlerFunc(s.handleFleet)))
 	}
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {

@@ -55,7 +55,28 @@ const (
 	// op's op_id. The hub acks it; until then the node keeps it and re-sends it
 	// on its next connection, so a result is never lost to a dropped link.
 	TypeAccountResult = "account_result"
+	// TypeRequest is a hub→node READ (claude-fleet#1409): one fleet-control.py
+	// method from ReadMethods, answered by a TypeResult (or TypeError) with the
+	// same op_id. Sent only to a node whose hello listed CapRead.
+	TypeRequest = "request"
+	// TypeResult answers a TypeRequest.
+	TypeResult = "result"
 )
+
+// CapRead is the hello capability a node lists when it answers TypeRequest.
+// A capability, not a proto bump: an older agent simply never says it, so the
+// hub never asks it and serves that node from its last heartbeat instead.
+const CapRead = "read"
+
+// ReadMethods is the whole list of fleet-control.py methods the hub may ask a
+// node for over the channel. All are reads; a write never travels as a
+// request (C3 adds writes through SendNodeWrite, with their own journal).
+var ReadMethods = map[string]bool{
+	"discover":      true,
+	"fleet_status":  true,
+	"config_get":    true,
+	"operation_get": true,
+}
 
 // Error codes.
 const (
@@ -67,6 +88,9 @@ const (
 	// CodeBadArgs refuses an account op whose arguments fail the node's own
 	// whitelist.
 	CodeBadArgs = "BAD_ARGS"
+	// CodeRefused is a node declining a request it does not serve (a method
+	// outside ReadMethods).
+	CodeRefused = "REFUSED"
 )
 
 // ErrIncompatible is returned when a write is addressed to a node whose
@@ -127,6 +151,34 @@ type Hello struct {
 	// account ops (claude-fleet#1411). A claim, not a grant: the hub also
 	// requires the login on its own allowlist before it sends one.
 	Admin bool `json:"admin,omitempty"`
+	// Capabilities lists optional message families this node serves
+	// (CapRead). Absent on an agent older than claude-fleet#1409.
+	Capabilities []string `json:"capabilities,omitempty"`
+}
+
+// HasCap reports whether a hello listed capability c.
+func (h Hello) HasCap(c string) bool {
+	for _, x := range h.Capabilities {
+		if x == c {
+			return true
+		}
+	}
+	return false
+}
+
+// Request is the payload of TypeRequest: one fleet-control.py rpc call. The
+// node fills in its own machine_id; Params goes through verbatim.
+type Request struct {
+	Method string          `json:"method"`
+	Params json.RawMessage `json:"params,omitempty"`
+}
+
+// Result is the payload of TypeResult: fleet-control.py's result, verbatim,
+// plus the machine_id it answered as. A fleet-control.py refusal comes back
+// as a TypeError carrying its code and message instead.
+type Result struct {
+	MachineID string          `json:"machine_id,omitempty"`
+	Result    json.RawMessage `json:"result"`
 }
 
 // Welcome is the payload of TypeWelcome.
@@ -178,12 +230,18 @@ type Heartbeat struct {
 // printed it: the hub stores it verbatim and C2 reads it, so this package does
 // not freeze a schema that belongs to claude-fleet.
 type Fleet struct {
-	FleetID string          `json:"fleet_id"`
-	Name    string          `json:"name"`
-	Repo    string          `json:"repo,omitempty"`
-	State   string          `json:"state,omitempty"`
-	Workers json.RawMessage `json:"workers,omitempty"`
-	Count   int             `json:"count"`
+	FleetID string `json:"fleet_id"`
+	Name    string `json:"name"`
+	Repo    string `json:"repo,omitempty"`
+	// Checkout and Agent are the rest of discover's inventory row
+	// (claude-fleet#1409): checkout is the third input of the fleet UUID, so
+	// the hub can re-derive it and refuse a heartbeat whose ids do not add
+	// up. Empty from an agent older than that.
+	Checkout string          `json:"checkout,omitempty"`
+	Agent    string          `json:"agent,omitempty"`
+	State    string          `json:"state,omitempty"`
+	Workers  json.RawMessage `json:"workers,omitempty"`
+	Count    int             `json:"count"`
 }
 
 // Account ops (claude-fleet#1411). There are exactly two, and both run one of

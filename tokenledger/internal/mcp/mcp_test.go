@@ -534,3 +534,45 @@ func TestCall_GetFindingsEnvelope(t *testing.T) {
 		t.Errorf("view=now must not carry until, got %v", sc["until"])
 	}
 }
+
+// The fleet tools (claude-fleet#1409) exist only when the hub runs the fleet
+// module; off, tools/list is what it always was.
+func TestFleetToolsOnlyWithFleetModule(t *testing.T) {
+	names := func(fleet bool) map[string]bool {
+		st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { st.Close() })
+		if fleet {
+			if err := st.EnsureNodes(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		ts := httptest.NewServer(Handler(&api.Server{Store: st, Pricing: pricing.Default(), Fleet: fleet}))
+		t.Cleanup(ts.Close)
+		out := map[string]bool{}
+		for _, tool := range rpc(t, ts, "tools/list", nil)["result"].(map[string]any)["tools"].([]any) {
+			out[tool.(map[string]any)["name"].(string)] = true
+		}
+		if fleet {
+			res, _ := call(t, ts, "fleet_list", map[string]any{})["result"].(map[string]any)
+			if res == nil || res["isError"] == true {
+				t.Fatalf("fleet_list on an empty fleet hub: %v", res)
+			}
+		}
+		return out
+	}
+	off, on := names(false), names(true)
+	for _, n := range api.FleetTools {
+		if off[n] {
+			t.Errorf("%s listed with the fleet module off", n)
+		}
+		if !on[n] {
+			t.Errorf("%s missing with the fleet module on", n)
+		}
+	}
+	if len(on) != len(off)+len(api.FleetTools) {
+		t.Errorf("fleet module on lists %d tools, off %d; want exactly the fleet tools added", len(on), len(off))
+	}
+}

@@ -146,6 +146,7 @@ func (a *Agent) nodeSession(ctx context.Context) (established bool, err error) {
 		HeartbeatMS:  int(a.cfg.LiveInterval / time.Millisecond),
 		AgentVersion: a.cfg.Version,
 		Admin:        a.cfg.FleetAdmin,
+		Capabilities: []string{control.CapRead},
 	})
 	if err != nil {
 		return false, err
@@ -179,8 +180,10 @@ func (a *Agent) nodeSession(ctx context.Context) (established bool, err error) {
 	dcancel()
 
 	// The reader: the hub's messages — account ops for an admin agent
-	// (claude-fleet#1411), acks of their results — and the pongs the
-	// heartbeat's ping waits for. When it ends, the connection is gone.
+	// (claude-fleet#1411), acks of their results, read requests
+	// (claude-fleet#1409, answered off the read loop so a slow
+	// fleet-control.py never stalls it) — and the pongs the heartbeat's ping
+	// waits for. When it ends, the connection is gone.
 	readErr := make(chan error, 1)
 	go func() {
 		for {
@@ -194,6 +197,8 @@ func (a *Agent) nodeSession(ctx context.Context) (established bool, err error) {
 				a.handleAccountOp(ctx, conn, m)
 			case control.TypeAck:
 				a.acct.acked(m.OpID)
+			case control.TypeRequest:
+				go a.answerRequest(ctx, conn, m)
 			case control.TypeError:
 				if m.Error != nil {
 					log.Printf("control channel: hub reported %s: %s", m.Error.Code, m.Error.Message)
@@ -325,9 +330,11 @@ func readFleets(ctx context.Context, home string) (fleetSnapshot, error) {
 	var disc struct {
 		MachineID string `json:"machine_id"`
 		Fleets    []struct {
-			FleetID string `json:"fleet_id"`
-			Name    string `json:"name"`
-			Repo    string `json:"repo"`
+			FleetID  string `json:"fleet_id"`
+			Name     string `json:"name"`
+			Repo     string `json:"repo"`
+			Checkout string `json:"checkout"`
+			Agent    string `json:"agent"`
 		} `json:"fleets"`
 	}
 	if err := fleetRPC(ctx, script, map[string]any{"protocol": 1, "method": "discover", "params": map[string]any{}}, &disc); err != nil {
@@ -339,7 +346,7 @@ func readFleets(ctx context.Context, home string) (fleetSnapshot, error) {
 			State   string            `json:"state"`
 			Workers []json.RawMessage `json:"workers"`
 		}
-		fl := control.Fleet{FleetID: f.FleetID, Name: f.Name, Repo: f.Repo}
+		fl := control.Fleet{FleetID: f.FleetID, Name: f.Name, Repo: f.Repo, Checkout: f.Checkout, Agent: f.Agent}
 		err := fleetRPC(ctx, script, map[string]any{"protocol": 1, "method": "fleet_status",
 			"machine_id": disc.MachineID, "params": map[string]any{"fleet_id": f.FleetID}}, &st)
 		if err != nil {
@@ -358,26 +365,111 @@ func readFleets(ctx context.Context, home string) (fleetSnapshot, error) {
 
 // fleetRPC runs one fleet-control.py request and decodes its result into out.
 func fleetRPC(ctx context.Context, script string, req map[string]any, out any) error {
-	in, err := json.Marshal(req)
+	res, _, err := fleetRPCRaw(ctx, script, req)
 	if err != nil {
 		return err
+	}
+	return json.Unmarshal(res, out)
+}
+
+// rpcFault is fleet-control.py's own refusal ({"error": {code, message}}),
+// kept apart from a transport failure so a request answer can carry its code.
+type rpcFault struct{ Code, Message string }
+
+func (e *rpcFault) Error() string { return e.Code + ": " + e.Message }
+
+// fleetRPCRaw runs one fleet-control.py request and returns its result and the
+// machine_id it answered as, undecoded.
+func fleetRPCRaw(ctx context.Context, script string, req map[string]any) (json.RawMessage, string, error) {
+	in, err := json.Marshal(req)
+	if err != nil {
+		return nil, "", err
 	}
 	raw, err := fleetControlCommand(ctx, script, in)
 	if err != nil {
-		return err
+		return nil, "", err
 	}
 	var resp struct {
-		Result json.RawMessage `json:"result"`
-		Error  *struct {
+		MachineID string          `json:"machine_id"`
+		Result    json.RawMessage `json:"result"`
+		Error     *struct {
 			Code    string `json:"code"`
 			Message string `json:"message"`
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(bytes.TrimSpace(raw), &resp); err != nil {
-		return errors.New("fleet-control.py printed something that is not JSON")
+		return nil, "", errors.New("fleet-control.py printed something that is not JSON")
 	}
 	if resp.Error != nil {
-		return fmt.Errorf("%s: %s", resp.Error.Code, resp.Error.Message)
+		return nil, "", &rpcFault{resp.Error.Code, resp.Error.Message}
 	}
-	return json.Unmarshal(resp.Result, out)
+	return resp.Result, resp.MachineID, nil
+}
+
+// requestTimeout bounds one hub read request on this node.
+const requestTimeout = 20 * time.Second
+
+// answerRequest serves one hub read (claude-fleet#1409). Only ReadMethods are
+// run, through the same fixed fleet-control.py entry point the heartbeat uses;
+// anything else is refused here, whatever the hub asked. The node fills in
+// its OWN machine_id — fleet-control.py checks it, so a request can never
+// address another login's controller.
+func (a *Agent) answerRequest(ctx context.Context, conn *websocket.Conn, m control.Message) {
+	reply := func(msg control.Message) {
+		msg.OpID = m.OpID
+		wctx, cancel := context.WithTimeout(ctx, nodeWriteTimeout)
+		defer cancel()
+		_ = wsjson.Write(wctx, conn, msg)
+	}
+	fail := func(code, msg string) {
+		reply(control.Message{Type: control.TypeError, Proto: control.Proto,
+			Error: &control.Error{Code: code, Message: msg}})
+	}
+	var req control.Request
+	if err := json.Unmarshal(m.Payload, &req); err != nil {
+		fail(control.CodeBadMessage, "malformed request")
+		return
+	}
+	if !control.ReadMethods[req.Method] {
+		fail(control.CodeRefused, "this node serves no method "+req.Method+" over the control channel")
+		return
+	}
+	script := filepath.Join(a.cfg.Home, fleetControlScript)
+	if _, err := os.Stat(script); err != nil {
+		fail("UNAVAILABLE", errNoFleet.Error())
+		return
+	}
+	params := json.RawMessage(`{}`)
+	if len(req.Params) > 0 {
+		params = req.Params
+	}
+	rctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+	call := map[string]any{"protocol": 1, "method": req.Method, "params": params}
+	if req.Method != "discover" {
+		var disc struct {
+			MachineID string `json:"machine_id"`
+		}
+		if err := fleetRPC(rctx, script, map[string]any{"protocol": 1, "method": "discover", "params": map[string]any{}}, &disc); err != nil {
+			fail("UNAVAILABLE", "fleet discover: "+err.Error())
+			return
+		}
+		call["machine_id"] = disc.MachineID
+	}
+	res, machineID, err := fleetRPCRaw(rctx, script, call)
+	if err != nil {
+		var f *rpcFault
+		if errors.As(err, &f) {
+			fail(f.Code, f.Message)
+		} else {
+			fail("UNAVAILABLE", err.Error())
+		}
+		return
+	}
+	out, err := control.New(control.TypeResult, control.Result{MachineID: machineID, Result: res})
+	if err != nil {
+		fail("INTERNAL", err.Error())
+		return
+	}
+	reply(out)
 }

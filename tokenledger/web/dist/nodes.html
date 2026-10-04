@@ -7,6 +7,9 @@
 <title>机器节点</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%232a78d6'/%3E%3Ccircle cx='8' cy='8' r='3' fill='%23fff'/%3E%3C/svg%3E">
 <!--
+  "My sessions" (claude-fleet#1409) is the second table: every window of every
+  fleet the viewer may see, from /v1/fleet/fleet_sessions.
+
   The node roster (claude-fleet#1408). A standalone page like access.html: it
   answers "which machines are up right now", so it must not depend on the
   dashboard's boot. Everything comes from /v1/nodes, polled every few seconds;
@@ -71,6 +74,12 @@ tr:last-child td { border-bottom:0; }
     <thead><tr><th>机器</th><th>登录</th><th>状态</th><th>会话</th><th>fleet</th><th>最近报到</th><th>协议</th><th>版本</th></tr></thead>
     <tbody id="nodes"></tbody>
   </table></div>
+  <h2 style="font-size:16px;margin:28px 0 4px">我的会话</h2>
+  <div class="sub" style="margin:0 0 10px">所有机器上的全部会话，一张表。编号（worker_id）由 fleet 自己派生，换到哪台机器看都不变。<span id="sessmeta" class="muted"></span></div>
+  <div class="scroll"><table>
+    <thead><tr><th>编号</th><th>机器</th><th>登录</th><th>fleet</th><th>状态</th><th>agent</th></tr></thead>
+    <tbody id="sessions"></tbody>
+  </table></div>
   <div id="error" class="err"></div>
 </div>
 <script>
@@ -113,7 +122,28 @@ function render(snap) {
     </tr>`).join("");
 }
 
+const WSTATE = { working: "工作中", idle: "空闲", waiting: "等输入", blocked: "被卡住", done: "完成" };
+function renderSessions(s) {
+  $("sessmeta").textContent = ` · ${s.count} 个会话 · 机器：${s.machines.join("、") || "—"}`;
+  $("sessions").innerHTML = s.sessions.length ? s.sessions.map((x) => {
+    const w = x.worker || {};
+    const id = x.worker_id ? x.worker_id.slice(x.worker_id.indexOf("/") + 1) : "";
+    return `<tr>
+      <td class="mono" title="${esc(x.worker_id || "无编号")}">${id ? esc(id) : `<span class="muted">—</span>`}</td>
+      <td>${esc(x.machine_name)}${x.availability === "online" ? "" : " " + pill(x.availability)}</td>
+      <td class="mono">${esc(x.os_user)}</td>
+      <td class="mono">${esc(x.fleet_name)}</td>
+      <td>${esc(WSTATE[w.state] || w.state || "—")}</td>
+      <td class="mono muted">${esc(w.agent || "")}</td>
+    </tr>`;
+  }).join("") : `<tr><td colspan="6" class="empty">没有会话（或你还没有被授权看任何登录的会话）。</td></tr>`;
+}
+
 async function tick() {
+  try {
+    const r = await fetch("/v1/fleet/fleet_sessions", { credentials: "same-origin", cache: "no-store" });
+    if (r.ok) renderSessions(await r.json());
+  } catch (e) { /* the roster below still reports the hub's reachability */ }
   try {
     const r = await fetch("/v1/nodes", { credentials: "same-origin", cache: "no-store" });
     if (!r.ok) throw new Error("HTTP " + r.status);

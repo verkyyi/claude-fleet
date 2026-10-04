@@ -624,6 +624,47 @@ who the hub thinks you are and where your login exists. Every later fleet view
 filters through the same `Server.FleetScope`. The token and tailnet doors
 still see everything.
 
+### Sessions on every machine — the Fleet Hub reads (claude-fleet#1409)
+
+The same switch moves the read half of claude-fleet's Fleet Hub into the hub,
+fed by those heartbeats instead of an SSH round trip per machine. Each beat
+registers its machine (by claude-fleet's own control `machine_id`) and its
+fleets in four new tables — `fleet_machines`, `fleet_fleets`,
+`fleet_operations` (the journal C3 writes into) and `fleet_audit` (one row per
+fleet tool call, refusals included). Identity is claude-fleet's scheme byte for
+byte (`internal/fleetid`, checked value for value against
+`bin/fleet_hub_common.py`): fleet UUID = `uuid5(machine_id, [session, repo,
+checkout])`, worker_id = `<fleet UUID>/[<repo slug>:]issue-N | scratch-N`. So a
+fleet UUID or worker_id issued by the SSH-era `fleet-hub.py` is the same one
+here, and a session keeps its id whichever machine you read it from. The hub
+re-derives every fleet UUID from the reporting machine and refuses one that
+does not add up, or one already registered to another machine; a window whose
+worker_id does not belong to its fleet is listed without an id, never routable.
+
+Five read tools, on MCP (listed only when the module is on) and at
+`/v1/fleet/<tool>`:
+
+| tool | answers | from |
+|---|---|---|
+| `fleet_list` | every fleet on every machine, with machine, login, window count, `availability` (online / lost) and age; `refresh=true` re-reads each connected machine first | heartbeat registry |
+| `fleet_sessions` | "my sessions": every window of every visible fleet, one list, with its worker_id and machine | heartbeat registry |
+| `fleet_status` | one fleet's windows | live over the control channel (`source: live`), else the last heartbeat (`source: heartbeat`, with its age) |
+| `config_get` | the fleet's managed settings and revision | live only (`UNAVAILABLE` when its machine is not connected) |
+| `operation_get` | one journalled operation; a non-final one is reconciled with its machine, else reads `unknown` — never retried | journal + live |
+
+A live read is a `request` message down the node's control channel, answered by
+the agent running the same `fleet-control.py rpc` method (only `discover`,
+`fleet_status`, `config_get`, `operation_get` — anything else is refused on the
+node, whatever the hub asks), with the node's OWN `machine_id`. An agent older
+than this never advertises the `read` capability in its hello, so the hub never
+asks it and answers from its heartbeat instead.
+
+Every answer is scoped to the caller: the operator's doors (viewer token,
+tailnet identity) see every machine; a person signed in through WeCom sees only
+the logins assigned to them (claude-fleet#1411) and gets `NOT_FOUND` — the same
+answer as for a fleet that does not exist — for anyone else's. The `/nodes` page
+shows the same "my sessions" table under the roster.
+
 ## The dashboard
 
 One page, no tabs — with a nav bar across the top of it. Those are not in
