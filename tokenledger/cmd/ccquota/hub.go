@@ -18,6 +18,7 @@ import (
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/agent"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/api"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/fx"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/mcp"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
@@ -34,6 +35,13 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// fleetEnabled reports CCQUOTA_FLEET=1, the one switch for the whole fleet
+// module (claude-fleet#1408). Anything else — unset, empty, 0 — is off, and off
+// is today's hub and agent exactly.
+func fleetEnabled() bool {
+	return os.Getenv("CCQUOTA_FLEET") == "1"
 }
 
 func runHub(args []string) error {
@@ -168,6 +176,13 @@ func runHub(args []string) error {
 	if st.BackfilledRollup > 0 {
 		log.Printf("rollup: built %d hourly rows from usage_events", st.BackfilledRollup)
 	}
+	fleetOn := fleetEnabled()
+	if fleetOn {
+		if err := st.EnsureNodes(); err != nil {
+			return err
+		}
+		log.Printf("fleet module on (CCQUOTA_FLEET=1): nodes connect at %s, roster at /nodes", control.Path)
+	}
 	if *rebuild {
 		n, err := st.RebuildRollup(*rebuildForce)
 		if err != nil {
@@ -290,6 +305,7 @@ func runHub(args []string) error {
 		LimitsPollIntervalS: *pollInterval,
 		UI:                  web.Assets(),
 		LiveStore:           api.NewLive(),
+		Fleet:               fleetOn,
 		// Where we are about to bind, so /access can print a URL instead of
 		// "some port". The HTTPS half is filled in below, once the certificate
 		// has told us the name it is actually for.
@@ -600,6 +616,7 @@ func runAgent(args []string) error {
 		Once:                *once,
 		AccountsDir:         *accountsDir,
 		ProbeModels:         splitList(*probeModels),
+		Fleet:               fleetEnabled(),
 	})
 	if err != nil {
 		return err

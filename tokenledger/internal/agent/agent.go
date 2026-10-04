@@ -98,6 +98,11 @@ type Config struct {
 	// A capped account answers with a 429, which costs nothing; an uncapped one
 	// costs a single output token of that model.
 	ProbeModels []string
+
+	// Fleet opens the fleet control channel (CCQUOTA_FLEET=1,
+	// claude-fleet#1408): a long-lived connection to the hub carrying this
+	// login's heartbeat. Off, the agent does exactly what it did before.
+	Fleet bool
 }
 
 // Defaults for the intervals.
@@ -266,6 +271,14 @@ func (a *Agent) Run(ctx context.Context) error {
 	// and must stay responsive even while a first scan is grinding through a
 	// machine's whole history.
 	go a.runLive(ctx)
+	if a.cfg.Fleet {
+		// Waited for on the way out, so a stopping agent closes its control
+		// channel cleanly (the hub sees a going-away, not a dead link).
+		var node sync.WaitGroup
+		node.Add(1)
+		go func() { defer node.Done(); a.runNode(ctx) }()
+		defer node.Wait()
+	}
 
 	// A transcript being written is the actual signal; the interval is the
 	// fallback for when the watch misses one. wake is buffered so a burst of

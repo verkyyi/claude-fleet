@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/fx"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
@@ -82,6 +83,15 @@ type Server struct {
 
 	// osUsers caches the endpoint_id -> os_user map behind attachOSUsers.
 	osUsers osUserCache
+
+	// Fleet turns on the fleet module (CCQUOTA_FLEET=1, claude-fleet#1408):
+	// the node control channel, the node roster and its page. Off, none of
+	// those routes exist and the hub is what it was before them. The caller
+	// must have run Store.EnsureNodes.
+	Fleet bool
+
+	// nodes holds the open node control channels.
+	nodes nodeConns
 }
 
 // Handler builds the router.
@@ -123,6 +133,13 @@ func (s *Server) Handler() http.Handler {
 	// unconditionally: when SSO is not configured the handler answers 404, so
 	// whether the route exists never leaks whether the feature is on.
 	mux.HandleFunc("/enter", s.handleEnter)
+
+	if s.Fleet {
+		// The control channel authenticates per endpoint, like ingest.
+		mux.HandleFunc(control.Path, s.handleNodeConnect)
+		mux.Handle("/v1/nodes", s.viewerOnly(http.HandlerFunc(s.handleNodes)))
+		mux.Handle("/nodes", s.viewerOnly(http.HandlerFunc(s.serveNodesPage)))
+	}
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -362,6 +379,10 @@ func (w *statusWriter) WriteHeader(code int) {
 	w.status = code
 	w.ResponseWriter.WriteHeader(code)
 }
+
+// Unwrap lets http.ResponseController (and the websocket upgrade on the node
+// control channel) reach the connection underneath.
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 // Flush lets streaming handlers (MCP) work through the wrapper.
 func (w *statusWriter) Flush() {
