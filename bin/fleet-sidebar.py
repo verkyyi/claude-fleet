@@ -83,6 +83,9 @@ TEXT = {
         "rename": "改名› ",
         "spawn_failed": "创建失败",
         "refreshing": "刷新中…",
+        "landed_heading": "已落地 ({n}) · ↵ 恢复",
+        "landed_empty": "（还没有已落地的会话）",
+        "landed_loading": "已落地 …",
     },
     "en": {
         "placeholder": "New session name…",
@@ -92,6 +95,9 @@ TEXT = {
         "rename": "rename› ",
         "spawn_failed": "spawn failed",
         "refreshing": "refreshing…",
+        "landed_heading": "Landed ({n}) · ↵ restore",
+        "landed_empty": "(no landed sessions yet)",
+        "landed_loading": "Landed …",
     },
 }
 
@@ -434,10 +440,16 @@ def restore_pick(screen, session, env):
 def no_discard():
     """macOS's line discipline eats ⌃o as VDISCARD (flush output) even in cbreak
     mode, so the `restore` byte never reached getch. Switch that one character
-    off before curses saves the tty modes, so an endwin/refresh keeps it off."""
+    off before curses saves the tty modes, so an endwin/refresh keeps it off.
+    The same for ⌃s (`scratch`, issue #1532): with IXON on it is XOFF and
+    freezes this pane's output until a ⌃q — and ⌃t (`view`), BSD's VSTATUS."""
     try:
         attrs = termios.tcgetattr(0)
-        attrs[6][termios.VDISCARD] = os.fpathconf(0, "PC_VDISABLE")
+        off = os.fpathconf(0, "PC_VDISABLE")
+        attrs[6][termios.VDISCARD] = off
+        if hasattr(termios, "VSTATUS"):
+            attrs[6][termios.VSTATUS] = off
+        attrs[0] &= ~termios.IXON
         termios.tcsetattr(0, termios.TCSANOW, attrs)
     except (AttributeError, OSError, ValueError, termios.error):
         pass
@@ -449,10 +461,10 @@ def open_help(screen, env):
     as the hub's `?` opens its own. Blocks until q/Esc closes it, which is the
     pause: nothing repaints under the popup. Leave curses meanwhile for the same
     reason new_task does — with no client the sheet runs INLINE in this pane.
-    Sized to the sheet (issue #963): title + blank + seven rows + the border,
+    Sized to the sheet (issue #963): title + blank + eight rows (#1532) + the border,
     as wide as the editing row (#1097)."""
     curses.endwin()
-    subprocess.call(["bash", str(BIN / "dash-popup.sh"), "-w", "50", "-h", "11", "--",
+    subprocess.call(["bash", str(BIN / "dash-popup.sh"), "-w", "50", "-h", "12", "--",
                      "bash", str(BIN / "fleet-keys.sh"), "--context", "sidebar"], env=env)
     screen.clear()
 
@@ -517,22 +529,38 @@ def row_left(marker, glyph, tree, name):
     return marker + " " + glyph + " " + (tree or " ") + " " + name
 
 
-def row_right(badge):
-    """What sits at a row's right edge: the subtree badge (`· k/N`). A row on
+def row_right(badge, info=""):
+    """What sits at a row's right edge: the subtree badge (`· k/N`), then — while
+    the info column is open (⌃i, issue #1532) — `info_text`. A row on
     another machine shows NO machine name (issue #1475, the operator's call): a
     local row and a remote row look the same; the machine is in the row menu's
     title (fleet-sidebar-menu.sh) and the status line on top."""
-    return "· " + badge if badge else ""
+    return " ".join(part for part in ("· " + badge if badge else "", info) if part)
 
 
-def row_text(marker, glyph, tree, name, badge, width):
+# The info column (issue #1532): the hub's issue · PR · ctx% cells, which the
+# producer hands every session row as fields 10-12. Fixed widths, so the three
+# line up down the list; folded away by default — the width goes to the names.
+INFO_WIDTHS = (5, 7, 4)
+
+
+def info_text(row):
+    """A session row's `#1532  #1552✓  45%`, or "" (a heading, a landed row, a
+    row from a producer that predates the fields)."""
+    if row[0] == "hdr" or len(row) < 12 or not any(row[9:12]):
+        return ""
+    return " ".join(" " * max(0, size - width_of(cell)) + cell
+                    for cell, size in zip(row[9:12], INFO_WIDTHS))
+
+
+def row_text(marker, glyph, tree, name, badge, width, info=""):
     """A session row laid out to `width` cells (issue #1328). The subtree badge
     (`· k/N`) is right-aligned and ALWAYS whole; the name gets what is left and,
     when it does not fit, ends in `…`. A narrow pane gives up name, never the
     count — the old joined label was clipped from the right, so the count went
     first. A row with no badge and a name that fits is exactly the old line."""
     left = row_left(marker, glyph, tree, "")
-    right = row_right(badge)
+    right = row_right(badge, info)
     room = width - width_of(left) - (width_of(right) + 1 if right else 0)
     if width_of(name) > room:
         name = clip(name, max(0, room - 1)) + "…" if room > 0 else ""
@@ -542,24 +570,26 @@ def row_text(marker, glyph, tree, name, badge, width):
     return text
 
 
-def row_need(row):
-    """The cells `row` needs to show whole, plus the one the paint keeps free."""
+def row_need(row, info=False):
+    """The cells `row` needs to show whole, plus the one the paint keeps free —
+    its info column too while that is open."""
     wid, _state, glyph, name, tree, badge = row[:6]
     if wid == "hdr":
         return 0 if name.startswith("──") else width_of(name) + 1
     need = width_of(row_left(" ", glyph, tree, name)) + 1
-    right = row_right(badge)
+    right = row_right(badge, info_text(row) if info else "")
     need += width_of(right) + 1 if right else 0
     return need + (2 if len(row) > 8 and row[8].endswith("~") else 0)   # the ⇄ cell (#1488)
 
 
-def auto_width(rows, cols, base, top):
+def auto_width(rows, cols, base, top, info=False):
     """The width the view wants for `rows` in a `cols`-wide window (issue #1328):
     its longest row, between `base` (FLEET_SIDEBAR_WIDTH, 30) and `top`
     (FLEET_SIDEBAR_WIDTH_MAX, 44), and never past a quarter of the window nor into
     the worker's 80 columns (move_view's rule) — but never under `base`, which is
-    what the view was opened at."""
-    want = max([base] + [row_need(row) for row in rows])
+    what the view was opened at. An open info column (issue #1532) widens it
+    within the same `top`: past that, the names give way."""
+    want = max([base] + [row_need(row, info) for row in rows])
     want = min(want, top, cols // 4, cols - 81)
     return max(base, want)
 
@@ -572,10 +602,10 @@ def detail_line(row):
     return " " + row[3]
 
 
-def hint_line(row, width):
+def hint_line(row, width, info=False):
     """What takes the `?` row for the selected `row` in a `width`-wide view: its
     whole name when the list clipped it, else None (`? 快捷键` stays)."""
-    if row is not None and row_need(row) > max(0, width - 1):
+    if row is not None and row_need(row, info) > max(0, width - 1):
         return detail_line(row)
     return None
 
@@ -784,7 +814,7 @@ def mark_input(pane, text):
         tmux("set-option", "-up", "-t", pane, "@sidebar_input")
 
 
-def spawn_scratch(name, env, repo=""):
+def spawn_scratch(name, env, repo="", selection=""):
     """The hub's ⌃s with a name (issue #896): the same script and the same
     provenance (`--origin hub` — the sidebar sits in a worker's window, and a
     session started here is not that worker's child). Focus follows the new
@@ -792,10 +822,15 @@ def spawn_scratch(name, env, repo=""):
     refusal reason) goes to a file, not a pipe: whatever the spawn leaves running
     would hold a pipe open, and reading it would freeze this view. `repo` (the
     highlighted row's, issues #1009/#997) goes as --repo, `none` as --no-repo;
-    empty keeps dash-raw-session.sh's own resolution."""
+    empty keeps dash-raw-session.sh's own resolution.
+    The sidebar's own ⌃s (issue #1532) is the hub's ⌃s exactly: no name, the
+    highlighted row as --selection, the slow half backgrounded (--bg) — so the
+    view gets its verdict (a refusal's reason) as fast as the hub's list does."""
     log = tempfile.TemporaryFile("w+")
+    args = ["--bg", "--selection", selection] if selection else []
     proc = subprocess.Popen(
-        ["bash", str(BIN / "dash-raw-session.sh"), "--name", name, "--origin", "hub"] +
+        ["bash", str(BIN / "dash-raw-session.sh")] + (["--name", name] if name else []) +
+        args + ["--origin", "hub"] +
         (["--no-repo"] if repo == "none" else ["--repo", repo] if repo else []),
         env=dict(env, FLEET_SPAWN_FOCUS="1"), stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL, stderr=log)
@@ -873,8 +908,10 @@ def tap(hit, highlighted):
 
 def acts(key):
     """The highlighted row as a target for any action but a new session or a fold:
-    a heading (`hdr:…`) is none — jump, menu, tap all stay no-ops on it (EPIC #994)."""
-    return "" if key.startswith("hdr") else key
+    a heading (`hdr:…`) is none — jump, menu, tap all stay no-ops on it (EPIC #994)
+    — and so is a landed row (`landed:…`, issue #1532): its one action is ↵,
+    restore, which the landed view handles itself."""
+    return "" if key.startswith(("hdr", "landed:")) else key
 
 
 def folds(key):
@@ -984,8 +1021,74 @@ def start_rows(env):
                             env=dict(env), stdin=subprocess.DEVNULL, stdout=out,
                             stderr=subprocess.DEVNULL, text=True)
     proc.out, proc.started, proc.stale, proc.failure = out, time.monotonic(), False, ""
-    proc.current = env["FLEET_SIDEBAR_CURRENT"]
+    proc.current, proc.view, proc.parse = env["FLEET_SIDEBAR_CURRENT"], "live", None
     return proc
+
+
+# The landed list (issue #1532): ⌃t swaps the running list for the hub's own
+# landed view, read from the ledger that view reads — `fleet-history.sh rows`,
+# what tmux-dashboard-rows.sh execs into on the hub's ⌃t. It changes when a
+# session lands, not every second: read on the switch, on ⌃r, and every
+# LANDED_SECS while it is shown.
+LANDED_SECS = 10
+NEVER = float("-inf")  # "read it now": a monotonic clock may start near 0
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+# A landed row's fixed left block — glyph · issue · tree · name, 38 cells
+# (fleet-history.sh cmd_rows LEFTW): the rest is the hub's wide right columns.
+LANDED_LEFT = 38
+
+
+def start_landed(env):
+    """The landed producer, launched like start_rows (a file, never a pipe)."""
+    out = tempfile.TemporaryFile("w+")
+    proc = subprocess.Popen(["bash", str(BIN / "fleet-history.sh"), "rows"],
+                            env=dict(env, FZF_COLUMNS="120"), stdin=subprocess.DEVNULL,
+                            stdout=out, stderr=subprocess.DEVNULL, text=True)
+    proc.out, proc.started, proc.stale, proc.failure = out, time.monotonic(), False, ""
+    proc.current, proc.view, proc.parse = env["FLEET_SIDEBAR_CURRENT"], "landed", landed_rows
+    return proc
+
+
+def landed_rows(text):
+    """`fleet-history.sh rows` as the view's rows: a heading that says which list
+    this is, then one row per `landed:…` target — its glyph, and the issue +
+    name the hub's left block shows, whitespace folded so it fits 30 columns.
+    The target is the row's key: ↵ hands it to the restore, as the hub's ⌃o."""
+    rows = []
+    for line in text.split("\n"):
+        parts = line.split(US, 2)
+        if len(parts) < 3 or not parts[0].startswith("landed:"):
+            continue  # the column header, the "(no landed sessions…)" filler
+        glyph, _, name = " ".join(head(ANSI.sub("", parts[2]), LANDED_LEFT).split()).partition(" ")
+        rows.append([parts[0], "landed", glyph, name, " ", "", "0"] + [""] * (ROW_FIELDS - 7))
+    pad = [""] * (ROW_FIELDS - 4)
+    top = ["hdr", "", "", tr("landed_heading", n=len(rows))] + pad
+    return [top] + (rows or [["hdr", "", "", tr("landed_empty")] + pad])
+
+
+def restore_landed(screen, session, target, env):
+    """↵ on a landed row: the hub's ⌃o for that target, with focus — the picker's
+    own step after a pick (fleet-restore-pick.sh --select). A row that may ask
+    first (`landed:issue:…`, a CLOSED-unmerged PR — #543) runs in a popup so the
+    question has a terminal; every other target restores in the background, no
+    popup (dash-restore-session.sh backgrounds its own slow half)."""
+    cmd = ["bash", str(BIN / "fleet-restore-pick.sh"), "--select", target, "--session", session]
+    if target.startswith("landed:issue:"):
+        curses.endwin()
+        subprocess.call(["bash", str(BIN / "dash-popup.sh"), "-w", "70", "-h", "8", "--"] + cmd,
+                        env=env)
+        screen.clear()
+    else:
+        subprocess.Popen(cmd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL)
+
+
+def drop_rows(proc):
+    """Abandon a producer in flight: its list is no longer the one shown."""
+    if proc is not None:
+        proc.kill()
+        proc.wait()
+        proc.out.close()
 
 
 def collect_rows(proc):
@@ -1003,10 +1106,14 @@ def collect_rows(proc):
         if not getattr(proc, "failure", ""):
             proc.failure = "producer exit %d" % proc.returncode
         return None
+    if proc.parse is not None:
+        return proc.parse(text)
     return [row_fields(line) for line in text.split("\n") if line.count(US) >= 4]
 
 
-ROW_FIELDS = 9  # wid state glyph name tree badge depth detail node (issues #1328, #1475)
+# wid state glyph name tree badge depth detail node issue pr ctx (issues #1328,
+# #1475, #1532)
+ROW_FIELDS = 12
 
 
 def row_fields(line):
@@ -1035,7 +1142,7 @@ def env_float(name, default):
         return default
 
 
-def fit_plan(pw, ww, window, zoomed, manual, rows, sized, moved=""):
+def fit_plan(pw, ww, window, zoomed, manual, rows, sized, moved="", info=False):
     """What holds the view's width (issues #1328, #1521), as (action, sized):
     action is ("manual", w) — record w as the operator's width — or ("resize", w)
     — one resize-pane — or None; `sized` is the (pane width, window width,
@@ -1061,25 +1168,26 @@ def fit_plan(pw, ww, window, zoomed, manual, rows, sized, moved=""):
         want = max(24, min(60, int(manual)))
     else:
         base = max(24, min(60, env_int("FLEET_SIDEBAR_WIDTH", 30)))
-        want = auto_width(rows, ww, base, max(base, env_int("FLEET_SIDEBAR_WIDTH_MAX", 44)))
+        want = auto_width(rows, ww, base, max(base, env_int("FLEET_SIDEBAR_WIDTH_MAX", 44)), info)
     if want != pw and ww >= want + 81:
         return ("resize", want), (want, ww, window, moved)
     return None, (pw, ww, window, moved)
 
 
-def fit_view(session, pane, rows, sized):
+def fit_view(session, pane, rows, sized, wide=False):
     """Apply fit_plan to the view: at most one tmux write a tick, and none at all
     while the pane is at the width it wants — the ONE writer of the view's width
     (a hook-driven sync has no memory of the last fit, so it could not tell the
     operator's drag from tmux's scaling and would undo the drag). `sized` is what
-    this function last left the view at; returns the next."""
+    this function last left the view at; returns the next. `wide`: the info
+    column is open (issue #1532)."""
     info = fields(pane, US.join(("#{pane_width}", "#{window_width}", "#{window_id}",
                                  "#{window_zoomed_flag}", "#{@sidebar_width_manual}",
                                  "#{@sidebar_moved}")))
     if len(info) != 6 or not info[0].isdigit() or not info[1].isdigit():
         return sized
     action, sized = fit_plan(int(info[0]), int(info[1]), info[2], info[3] == "1",
-                             info[4], rows, sized, info[5])
+                             info[4], rows, sized, info[5], wide)
     if action is None:
         return sized
     if action[0] == "manual":
@@ -1245,6 +1353,11 @@ def ui(screen, session, worker, lock):
     # watchdog's next check, and whether this stall is already logged.
     frame_at, shown_at, failure, empty_held, stalled = None, None, "", False, False
     watch_at = time.monotonic() + env_float("FLEET_SIDEBAR_WATCHDOG_SECS", WATCHDOG_SECS)
+    # The full-screen list's own actions (issue #1532): which list is shown
+    # (⌃t: `live` ⇄ `landed`), the live rows kept while the landed one is up so
+    # ⌃t back paints at once, when the landed rows were last read (⌃r: now), and
+    # whether the info column is open (⌃i).
+    view, live_rows, landed, landed_at, wide = "live", [], None, NEVER, False
     while True:
         now = time.monotonic()
         if folding is not None and folding.poll() is not None:
@@ -1253,8 +1366,15 @@ def ui(screen, session, worker, lock):
                                      now - producer.started >= PRODUCER_TIMEOUT):
             fresh, current, stale = collect_rows(producer), producer.current, producer.stale
             failure = producer.failure if fresh is None else failure
-            producer = None
-            if stale and loaded:
+            made, producer = producer.view, None
+            if made != view:
+                # Read for the list ⌃t just switched away from: read again now.
+                refresh_at = 0
+            elif made == "landed":
+                if fresh is not None:
+                    rows, landed = fresh, fresh
+                landed_at = now
+            elif stale and loaded:
                 # Started before something this view did (a fold, a jump, a menu
                 # action): its rows would undo what is painted. Read again now.
                 refresh_at = 0
@@ -1345,8 +1465,11 @@ def ui(screen, session, worker, lock):
                     # list within a second (issue #1536), not at the next tick.
                     refresh_at = now + 0.25
                 if shown and loaded:
-                    sized = fit_view(session, pane, rows, sized)
-                if shown and producer is None and folding is None:
+                    sized = fit_view(session, pane, rows, sized, wide)
+                if shown and producer is None and view == "landed":
+                    if now - landed_at >= LANDED_SECS:
+                        producer = start_landed(env)
+                elif shown and producer is None and folding is None:
                     producer = start_rows(env)
                     if not loaded:
                         # The first frame waits briefly for real rows rather than
@@ -1371,7 +1494,9 @@ def ui(screen, session, worker, lock):
             continue
         if shown_at is None:
             shown_at = now
-        age = now - max(frame_at or shown_at, shown_at)
+        # The landed list (issue #1532) is read every LANDED_SECS, not every
+        # second: its frame never counts as stale.
+        age = 0 if view == "landed" else now - max(frame_at or shown_at, shown_at)
         if now >= watch_at:
             # The watchdog (issue #1536): a frame older than STALL_SECS is a stall.
             # Log it — once per stall, however many checks it lasts — then heal:
@@ -1444,7 +1569,8 @@ def ui(screen, session, worker, lock):
         if waiting:
             put(0, tr("refreshing"), curses.A_DIM)
         colors = {"working": 1, "needs": 2, "done": 3, "looping": 4}
-        for y, (wid, state, glyph, label, tree, badge, _depth, _detail, node) in enumerate(rows[offset:offset + page], waiting):
+        for y, row in enumerate(rows[offset:offset + page], waiting):
+            wid, state, glyph, label, tree, badge, _depth, _detail, node = row[:9]
             if wid == "hdr":
                 if navigation and key_of((wid, state)) == selected:
                     put(y, "› " + label, curses.color_pair(6) | curses.A_BOLD, fill=True)
@@ -1468,7 +1594,8 @@ def ui(screen, session, worker, lock):
             # source mark the operator asked for; the badge keeps its place left of it.
             w = max(0, width - 1)
             via = node.endswith("~") and w > 2
-            text = row_text(marker, glyph, tree, label, badge, w - 2 if via else w)
+            text = row_text(marker, glyph, tree, label, badge, w - 2 if via else w,
+                            info_text(row) if wide else "")
             put(y, text, attr, fill=wid == current_row or (navigation and wid == selected))
             if via:
                 try:
@@ -1481,7 +1608,7 @@ def ui(screen, session, worker, lock):
         info = None
         if help_y is not None and navigation:
             row = next((r for r in rows if r[0] == selected and r[0] != "hdr"), None)
-            info = hint_line(row, width)
+            info = hint_line(row, width, wide)
         help_shown = help_y is not None and info is None
         if info is not None:
             put(help_y, info, curses.A_BOLD)
@@ -1564,7 +1691,7 @@ def ui(screen, session, worker, lock):
             continue
         # A typed key is a byte; a multi-byte one (。 ？, CJK) completes over
         # several getch calls, and only the last one yields its character.
-        byte = 0 <= key < 256 and key not in (8, 9, 10, 13, 14, 15, 27, 127)
+        byte = 0 <= key < 256 and key not in (8, 9, 10, 13, 14, 15, 18, 19, 20, 27, 127)
         chars = "".join(c for c in decoder.decode(bytes([key])) if typed(c)) if byte else ""
         press = KEY_ALIASES.get(chars, chars)
         if press == "." and not line.text and renaming is None and spawning is None and acts(selected):
@@ -1622,6 +1749,15 @@ def ui(screen, session, worker, lock):
                 toast = ""
                 spawning = spawn_scratch(line.text.strip(), env,
                                          selection_repo(session, selected or window, env))
+        elif key in (10, 13, curses.KEY_ENTER) and view == "landed":
+            # ↵ on a landed row restores it (issue #1532) — the hub's ⌃o, as the
+            # current window — and the list goes back to the running one, where
+            # the restored session shows up as ▶.
+            follow_at = None
+            if selected.startswith("landed:"):
+                restore_landed(screen, session, selected, env)
+                view, rows, selected = "live", live_rows, window
+            refresh_at = 0
         elif key in (10, 13, curses.KEY_ENTER):
             # The Enter bind already returned the client to root and sent the key
             # straight here (issue #1530). If the follow (or anyone) has moved the
@@ -1631,6 +1767,8 @@ def ui(screen, session, worker, lock):
             if acts(selected) and selected != window and not jump(session, selected, pane, lock):
                 follow_at = time.monotonic() + LOCK_RETRY  # lock busy: retried (#1536)
             refresh_at = 0
+        elif key in (curses.KEY_LEFT, curses.KEY_RIGHT) and view == "landed":
+            pass  # the landed list folds in the hub (⌃t there); here it is flat
         elif key in (curses.KEY_LEFT, curses.KEY_RIGHT) and folds(selected):
             # A session row folds its subtree; a repo heading its whole group
             # (issue #1037) — one helper, the hub's, for both.
@@ -1664,6 +1802,39 @@ def ui(screen, session, worker, lock):
             follow_at = None
             restore_pick(screen, session, env)
             refresh_at = 0
+        elif key == 19:
+            # ⌃s (`scratch`, issue #1532): the hub's ⌃s — a scratch session NOW,
+            # unnamed (a typed name, if any, names it), its repo the highlighted
+            # row's. It becomes current like a typed ↵'s; a refusal toasts.
+            follow_at = None
+            if spawning is None:
+                toast = ""
+                anchor = window if not selected or selected.startswith("landed:") else selected
+                spawning = spawn_scratch(line.text.strip(), env, selection=anchor)
+        elif key == 20:
+            # ⌃t (`view`, issue #1532): the running list ⇄ the landed one, in
+            # place — the hub's ⌃t. Either side paints what it last had at once,
+            # and the run in flight for the other one is dropped, not waited on.
+            follow_at = None
+            drop_rows(producer)
+            producer = None
+            if view == "live":
+                view, live_rows, rows = "landed", rows, landed or [
+                    ["hdr", "", "", tr("landed_loading")] + [""] * (ROW_FIELDS - 4)]
+                landed_at = NEVER
+            else:
+                view, rows, selected = "live", live_rows, window
+            refresh_at = 0
+        elif key == 18:
+            # ⌃r (`reload`, issue #1532): read the shown list now, landed included.
+            landed_at = NEVER
+            refresh_at = 0
+        elif key == 9:
+            # ⌃i / Tab (`info`, issue #1532): open or fold the info column —
+            # issue · PR · ctx%, right-aligned. The width follows at once, within
+            # FLEET_SIDEBAR_WIDTH_MAX; folded is the default, names come first.
+            wide = not wide
+            refresh_at = 0
         elif key == 27 and line.text and spawning is None:
             # Escape clears a typed name first; the keyboard stays here.
             line.clear()
@@ -1684,6 +1855,10 @@ def ui(screen, session, worker, lock):
             # `selected`, not the painted cue: a fast double tap lands its second
             # press before the next refresh repaints the first one's switch.
             action = tap(hit, selected)
+            if hit and hit.startswith("landed:"):
+                # A landed row (issue #1532): a tap highlights it, a tap on the
+                # highlighted one restores it — the session row's two-tap grammar.
+                action = "restore" if action == "menu" else "select"
             if buttons & (curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED):
                 refresh_at = 0
                 armed = None
@@ -1706,6 +1881,13 @@ def ui(screen, session, worker, lock):
                         open_tap(screen, session, action, hit, env)
                     else:
                         armed = hit
+                elif action == "restore":
+                    follow_at = None
+                    if buttons & curses.BUTTON1_CLICKED:
+                        restore_landed(screen, session, hit, env)
+                        view, rows, selected = "live", live_rows, window
+                    else:
+                        armed = hit
                 elif action == "select":
                     # A repo heading (issue #1032): highlight it, switch nothing.
                     # A typed name / ⌃n now starts there; Esc or a tap on a
@@ -1721,6 +1903,10 @@ def ui(screen, session, worker, lock):
             elif buttons & curses.BUTTON1_RELEASED:
                 if armed == HELP_ROW and y == help_y and help_shown:
                     open_help(screen, env)
+                elif armed is not None and hit == armed and armed.startswith("landed:"):
+                    restore_landed(screen, session, armed, env)
+                    view, rows, selected = "live", live_rows, window
+                    refresh_at = 0
                 elif armed is not None and hit == armed:
                     open_tap(screen, session, "new" if armed.startswith("hdr:") else "menu",
                              armed, env)

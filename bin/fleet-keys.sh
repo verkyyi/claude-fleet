@@ -130,6 +130,7 @@ print_sidebar_sheet() {
     skey "编辑" 2 "←→ Home End ⌥←→ $(dg bol) $(dg eol) $(dg kill_word) $(dg kill_eol) ⌃u"
     skey "$(dg menu) / 再点一次" 4 "任务菜单$(dn menu)"
     skey "esc" 0 "键盘还给任务"
+    skey "$(dg scratch) $(dg view) $(dg reload) $(dg info)" 0 "临时会话 · 已落地 · 刷新 · 详情"
     skey "⌂ / F9" 0 "进任务栏，再按去 hub"
     skey "prefix ?" 0 "全部按键（prefix = ${DASH_KEYMAP_PREFIX:-C-b}）"
   else
@@ -138,6 +139,7 @@ print_sidebar_sheet() {
     skey "edit" 0 "←→ Home End ⌥←→ $(dg bol) $(dg eol) $(dg kill_word) $(dg kill_eol) ⌃u"
     skey "$(dg menu) / tap again" 0 "task menu$(dn menu)"
     skey "esc" 0 "return keys to task"
+    skey "$(dg scratch) $(dg view) $(dg reload) $(dg info)" 0 "scratch · landed · reload · info"
     skey "⌂ / F9" 0 "enter sidebar, then hub"
     skey "prefix ?" 0 "all keys (prefix = ${DASH_KEYMAP_PREFIX:-C-b})"
   fi
@@ -307,6 +309,10 @@ print_sheet() {
   key "$(dg menu)" "on an EMPTY line: the highlighted task's menu — rename (edits on this line: ↵ applies, esc/empty cancels) · pin · open PR · answer its question · flip new sessions claude⇄codex · reap (asks y/n first) · new task. Inside a name it types a dot. Touch: tap the highlighted row again$(dn menu)"
   key "$(dg restore)" "restore a finished task — the hub's ⌃t landed list in a popup; ↵ brings it back as the current window (a closed-unmerged PR asks to reopen first). Touch: the row menu's last item$(dn restore)"
   key "$(dg help)" "on an EMPTY line, or a tap on the '? 快捷键' row above it: this sidebar's key sheet. Inside a name it types a ?$(dn help)"
+  key "$(dg scratch)" "a scratch session NOW — the hub's ⌃s: unnamed (a typed name, if any, names it), in the highlighted row's repo, and it becomes the current window. A refusal (cap, worktree) shows on the input line$(dn scratch)"
+  key "$(dg view)" "running ⇄ landed, in place — the hub's ⌃t: the landed list (fleet-history.sh rows) takes the sidebar's rows; ↵ (or a second tap) on one restores it as the current window and the list goes back to running. ⌃o's popup still works$(dn view)"
+  key "$(dg reload)" "re-read the shown list now (the landed one included) — the hub's ⌃r$(dn reload)"
+  key "$(dg info)" "the Tab key: open / fold the info column — each row's issue · PR · ctx%, right-aligned, the hub's three cells. Folded by default (the names get the width); open, the sidebar widens up to FLEET_SIDEBAR_WIDTH_MAX and the names give way past that$(dn info)"
   key "prefix e" "hide the sidebar (q types now; no tap hides it)"
   fi
 

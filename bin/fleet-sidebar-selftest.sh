@@ -95,6 +95,36 @@ assert ids(opened) == ids(frows) and opened[0][3] == 'a (4)', opened
 assert sidebar.fold_now(frows, '@5', 'collapse', '@9', fcache)[1] is None
 assert sidebar.fold_now(frows, '@1', 'expand', '@9', fcache)[1] is None
 assert sidebar.fold_now(frows, 'wid:m4/x', 'collapse', '@9', fcache)[1] is None
+# The full-screen list's own actions (issue #1532). The producer's fields 10-12
+# are the hub's issue · PR · ctx% cells; the info column (⌃i) draws them right-
+# aligned in fixed widths, and only on a session row.
+r12 = sidebar.row_fields('\x1f'.join(['@1', 'working', '·', 'issue-1532', ' ', '', '0', '', '', '#1532', '#1552✓', '45%']))
+assert len(r12) == sidebar.ROW_FIELDS == 12 and r12[9:] == ['#1532', '#1552✓', '45%'], r12
+assert sidebar.info_text(r12) == '#1532  #1552✓  45%', repr(sidebar.info_text(r12))
+assert sidebar.info_text(['hdr', 'o/a', '', 'a (1)', ' '] + [''] * 7) == ''
+assert sidebar.info_text(sidebar.row_fields('@2\x1fdone\x1f✓\x1fx\x1f \x1f\x1f0\x1f\x1f')) == '', 'an old 9-field row has no info'
+assert sidebar.info_text(['@3', 'idle', '·', 'notes', ' ', '', '0', '', '', '', '—', '·']) == '%5s %7s %4s' % ('', '—', '·')
+info_row = sidebar.row_text('▶', '·', ' ', 'issue-1532', '', 30, sidebar.info_text(r12))
+assert info_row.endswith('#1532  #1552✓  45%') and sidebar.width_of(info_row) == 30, repr(info_row)
+assert sidebar.row_text('▶', '·', ' ', 'issue-1532', '1/2', 34, sidebar.info_text(r12)).endswith('· 1/2 #1532  #1552✓  45%')
+# Open, the view widens for the column — never past FLEET_SIDEBAR_WIDTH_MAX; folded
+# (the default) it wants what it always wanted.
+long12 = r12[:3] + ['阿里云月成本评估-再看一遍'] + r12[4:]
+assert sidebar.auto_width([long12], 400, 30, 44) == sidebar.auto_width([long12], 400, 30, 44, False)
+assert sidebar.auto_width([long12], 400, 30, 44, True) == 44, sidebar.auto_width([long12], 400, 30, 44, True)
+assert sidebar.auto_width([r12], 400, 30, 60, True) > sidebar.auto_width([r12], 400, 30, 60), 'the info column did not widen the view'
+assert sidebar.fit_plan(30, 400, '@1', False, '', [long12], None, '', True)[0] == ('resize', 44)
+# ⌃t's landed list: `fleet-history.sh rows` as the view's rows — a heading that
+# names the list, then one restore target per row, whitespace folded to fit.
+landed_text = ('hdr\x1fhdr\x1f  issue  window\n'
+               'landed:1548@o/r\x1fk\x1f\x1b[32m✓\x1b[0m #1512    入口认得-fleet' + ' ' * 12 + ' cf  3 mins  #1548  ·\n'
+               'landed:scratch:scratch-5\x1fk\x1f✓ ~5       epic-run                    cf  5 hours\n')
+lrows = sidebar.landed_rows(landed_text)
+assert [r[0] for r in lrows] == ['hdr', 'landed:1548@o/r', 'landed:scratch:scratch-5'], lrows
+assert lrows[0][3] == '已落地 (2) · ↵ 恢复' and lrows[1][2:4] == ['✓', '#1512 入口认得-fleet'], lrows
+assert sidebar.selectable(lrows) == ['landed:1548@o/r', 'landed:scratch:scratch-5']
+assert sidebar.landed_rows('hdr\x1fhdr\x1fx\n')[1][3] == '（还没有已落地的会话）'
+assert sidebar.acts('landed:1548') == '' and sidebar.tap('landed:7', 'landed:7') == 'menu'
 # The input line's editor (issue #1097): a cursor, readline's moves and kills.
 Line = sidebar.Line
 line = Line('ab'); line.left(); line.insert('c')
@@ -1185,6 +1215,75 @@ try:
     wait_for(lambda: not navigation(), 'the CJK spawn left the keyboard on the sidebar')
     for window in spawned:
         tm('kill-window', '-t', window)
+
+    # The full-screen list's own actions (issue #1532), each pressed on the
+    # attached terminal. ⌃s: a scratch session NOW — the hub's ⌃s, unnamed
+    # (dash-raw-session.sh --bg --selection) — and it becomes current. A bare ⌃s
+    # is XOFF to a tty with IXON on: only a view that switched IXON off ever
+    # sees the byte, which is what this pins.
+    def side_rows():
+        return tm('capture-pane', '-p', '-t', side).splitlines()
+    def row_line(text):
+        return next((l.rstrip() for l in side_rows() if text in l), '')
+    click(side, row=height - 3)
+    wait_for(navigation, 'clicking the sidebar did not enter navigation before ⌃s')
+    before = set(windows())
+    os.write(terminal, b'\x13')
+    wait_for(lambda: set(windows()) - before, '⌃s did not spawn a scratch session')
+    new = (set(windows()) - before).pop()
+    check(tm('show-options', '-wqv', '-t', new, '@raw') == '1', '⌃s spawned something other than a scratch')
+    check(tm('show-options', '-wqv', '-t', new, '@origin') == '', '⌃s nested its scratch under the worker (must be the hub ⌃s)')
+    wait_for(lambda: tm('display-message', '-p', '-t', 'fleet-test:', '#{window_id}') == new,
+             'the ⌃s session did not become the current window')
+    wait_for(lambda: view_on(new) == [side], 'the view did not follow to the ⌃s session')
+    tm('select-window', '-t', w1)
+    wait_for(lambda: view_on(w1) == [side], 'the view did not come back after ⌃s')
+    tm('kill-window', '-t', new)
+
+    # ⌃i — the Tab key: the info column, the hub's issue · PR · ctx% cells right-
+    # aligned on each row (worker-one is issue 1, no PR, no ctx reading). Folded
+    # by default; open, the view widens for it but never past
+    # FLEET_SIDEBAR_WIDTH_MAX (44); Tab again folds it.
+    click(side, row=height - 3)
+    wait_for(navigation, 'clicking the sidebar did not enter navigation before ⌃i')
+    wait_for(lambda: row_line('worker-one'), 'worker-one has no row')
+    check(not re.search(r'#1 +— +·$', row_line('worker-one')), 'the info column is open by default: %r' % row_line('worker-one'))
+    os.write(terminal, b'\t')
+    wait_for(lambda: re.search(r'#1 +— +·$', row_line('worker-one')),
+             '⌃i did not open the info column: %r' % row_line('worker-one'))
+    check(int(tm('display-message', '-p', '-t', side, '#{pane_width}')) <= 44,
+          'the open info column widened the view past FLEET_SIDEBAR_WIDTH_MAX')
+    os.write(terminal, b'\t')
+    wait_for(lambda: row_line('worker-one') and not re.search(r'#1 +— +·$', row_line('worker-one')),
+             'a second ⌃i did not fold the info column: %r' % row_line('worker-one'))
+
+    # ⌃t: running ⇄ landed, in place — the rows `fleet-history.sh rows` gives the
+    # hub's ⌃t (stubbed: the ledger is not this test's subject). ⌃r re-reads it at
+    # once (the view itself re-reads a landed list only every 10 s), and ↵ on a
+    # landed row restores it through `fleet-history.sh resume` — the hub's ⌃o —
+    # and puts the running list back.
+    hist_log, hist_rows = work / 'history.log', work / 'history.rows'
+    hist_rows.write_text('hdr\x1fhdr\x1fhead\nlanded:77\x1fk\x1f✓ #77      已落地一号' + ' ' * 16 + ' cf\n')
+    (bin_dir / 'fleet-history.sh').unlink()
+    (bin_dir / 'fleet-history.sh').write_text(
+        '#!/bin/sh\nprintf \'%%s\\n\' "$*" >> %s\n[ "$1" = rows ] && cat %s\nexit 0\n'
+        % (shlex.quote(str(hist_log)), shlex.quote(str(hist_rows))))
+    (bin_dir / 'fleet-history.sh').chmod(0o755)
+    os.write(terminal, b'\x14')
+    wait_for(lambda: row_line('已落地 (1)') and row_line('已落地一号'), '⌃t did not show the landed list')
+    check(not row_line('worker-one'), 'the running rows stayed up under the landed list')
+    with hist_rows.open('a') as rows_file:
+        rows_file.write('landed:78\x1fk\x1f✓ #78      第二个落地' + ' ' * 16 + ' cf\n')
+    os.write(terminal, b'\x12')
+    wait_for(lambda: row_line('已落地 (2)') and row_line('第二个落地'), '⌃r did not re-read the landed list')
+    os.write(terminal, b'\r')
+    wait_for(lambda: hist_log.exists() and re.search(r'^resume .*#77$', hist_log.read_text(), re.M),
+             '↵ on a landed row did not reach fleet-history.sh resume: %r' %
+             (hist_log.read_text() if hist_log.exists() else ''))
+    wait_for(lambda: row_line('worker-one') and not row_line('已落地'),
+             'after the restore the running list did not come back')
+    (bin_dir / 'fleet-history.sh').unlink()
+    (bin_dir / 'fleet-history.sh').symlink_to(real_bin / 'fleet-history.sh')
 
     # The row menu (issue #898): `.` on an EMPTY input line, or a tap on the
     # highlighted row (the second tap on a row the first one switched to), opens
