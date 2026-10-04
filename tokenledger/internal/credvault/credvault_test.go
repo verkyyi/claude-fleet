@@ -236,3 +236,78 @@ func TestHTTPRefresher(t *testing.T) {
 		t.Fatalf("bad grant: %+v %v", s, err)
 	}
 }
+
+// A Claude setup token (claude-fleet#1463) is issued exactly as stored: no
+// refresh, no rotation, nothing cached — so any number of machines read one
+// row and never log each other out. Its expiry is the operator's word and the
+// vault refuses to store or issue one that has passed.
+func TestSetupTokenIssuedAsIsAndNeverRefreshed(t *testing.T) {
+	ref := &countingRefresher{ttl: 8 * time.Hour}
+	v := newVault(t, ref)
+	now := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	v.Now = func() time.Time { return now }
+	exp := now.Add(365 * 24 * time.Hour)
+	tok := "sk-ant-oat01-LONGLIVED"
+
+	if err := v.Put("pool", Claude, "icloud", Secret{SetupToken: tok, ExpiresAt: &exp, SubscriptionType: "max"}); err != nil {
+		t.Fatal(err)
+	}
+	row, err := v.Store.Credential("pool", Claude, "icloud")
+	if err != nil || row.Kind != KindSetupToken || row.SecretExpiresAt == nil || !row.SecretExpiresAt.Equal(exp) {
+		t.Fatalf("row = %+v, %v", row, err)
+	}
+	for i := 0; i < 3; i++ {
+		acc, err := v.Lease(context.Background(), "pool", Claude, "icloud")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if acc.AccessToken != tok || acc.ExpiresAt == nil || !acc.ExpiresAt.Equal(exp) || acc.SubscriptionType != "max" ||
+			len(acc.Scopes) != 1 || acc.Scopes[0] != "user:inference" {
+			t.Fatalf("lease %d = %+v", i, acc)
+		}
+	}
+	if n := ref.n.Load(); n != 0 {
+		t.Fatalf("a setup token was refreshed %d time(s)", n)
+	}
+	row, _ = v.Store.Credential("pool", Claude, "icloud")
+	if len(row.AccessSealed) != 0 || row.Version != 1 {
+		t.Fatalf("a setup token lease wrote the row: %+v", row)
+	}
+
+	// The shape the operator must send.
+	for name, s := range map[string]Secret{
+		"both":       {RefreshToken: "rt", SetupToken: tok, ExpiresAt: &exp},
+		"no expiry":  {SetupToken: tok},
+		"not an oat": {SetupToken: "sk-ant-api03-key", ExpiresAt: &exp},
+		"neither":    {},
+	} {
+		if err := s.Validate(Claude); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	if (Secret{RefreshToken: "rt"}).Kind(Claude) != KindRefreshToken || (Secret{Token: "t"}).Kind(GitHub) != KindToken {
+		t.Fatal("kinds of the existing shapes changed")
+	}
+
+	// Expired: refused at put, and refused at lease once the date passes.
+	past := now.Add(-time.Hour)
+	if err := v.Put("pool", Claude, "old", Secret{SetupToken: tok, ExpiresAt: &past}); !errors.Is(err, ErrSetupTokenExpired) {
+		t.Fatalf("expired put: %v", err)
+	}
+	now = exp.Add(time.Minute)
+	if _, err := v.Lease(context.Background(), "pool", Claude, "icloud"); !errors.Is(err, ErrSetupTokenExpired) {
+		t.Fatalf("expired lease: %v", err)
+	}
+	if n := ref.n.Load(); n != 0 {
+		t.Fatalf("an expired setup token was sent to the refresher %d time(s)", n)
+	}
+
+	// A refresh-token row beside it still refreshes as before.
+	now = exp.Add(-time.Hour)
+	if err := v.Put("pool", Claude, "rt", Secret{RefreshToken: "RT-0"}); err != nil {
+		t.Fatal(err)
+	}
+	if acc, err := v.Lease(context.Background(), "pool", Claude, "rt"); err != nil || acc.AccessToken != "AT-1" {
+		t.Fatalf("refresh-token lease = %+v, %v", acc, err)
+	}
+}

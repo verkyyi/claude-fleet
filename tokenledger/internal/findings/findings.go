@@ -27,6 +27,8 @@ const (
 	TmplFreeAllowanceGone = "free_allowance_exceeded"
 	TmplFreeAllowanceNear = "free_allowance_near"
 	TmplCredVaultLocked   = "cred_vault_locked"
+	TmplCredSetupExpiring = "cred_setup_token_expiring"
+	TmplCredSetupExpired  = "cred_setup_token_expired"
 )
 
 // Templates is every id above, so a translation table can be checked for
@@ -36,6 +38,7 @@ var Templates = []string{
 	TmplSpendSpikeTotal, TmplSpendSpikeProject, TmplWindowHigh,
 	TmplStaleAgentNever, TmplStaleAgentLast, TmplLiveRunaway,
 	TmplFreeAllowanceGone, TmplFreeAllowanceNear, TmplCredVaultLocked,
+	TmplCredSetupExpiring, TmplCredSetupExpired,
 }
 
 // Owner is "who should this finding go to". Both halves are optional and an
@@ -69,6 +72,7 @@ var Templates = []string{
 //	                        account, and the endpoints drawing on it are many
 //	window_high      no  -- same, a subscription's rate-limit window
 //	cred_vault_locked no -- the hub's own vault, everyone's credentials
+//	cred_setup_token  no -- a pool account's token, which every machine leases
 //
 // The "no" rows are not gaps waiting to be filled in. Each one's subject is an
 // aggregate over several people, so any single name on it would be the guess
@@ -662,12 +666,31 @@ type VaultLock struct {
 	Since  time.Time
 }
 
+// SetupToken is one stored Claude setup token (claude-fleet#1463) and when it
+// runs out. It cannot be refreshed: the only remedy is the operator minting a
+// new one (`claude setup-token`) and importing it, which takes a person and
+// some lead time — hence the reminder a month out.
+type SetupToken struct {
+	PrincipalID string // a person, or "pool"
+	Provider    string
+	Account     string
+	ExpiresAt   time.Time
+}
+
+// setupTokenWarnLead is how long before a setup token's expiry the reminder
+// starts (the issue's "30 days"); under setupTokenCriticalLead it is critical.
+const (
+	setupTokenWarnLead     = 30 * 24 * time.Hour
+	setupTokenCriticalLead = 7 * 24 * time.Hour
+)
+
 type NowInputs struct {
-	Windows   []WindowStat
-	Endpoints []EndpointSeen
-	Live      []LiveStat
-	VaultLock *VaultLock
-	Now       time.Time
+	Windows     []WindowStat
+	Endpoints   []EndpointSeen
+	Live        []LiveStat
+	VaultLock   *VaultLock
+	SetupTokens []SetupToken
+	Now         time.Time
 
 	// Mutes as on Inputs: the silences in force, keyed by Finding.ID.
 	Mutes Mutes
@@ -692,6 +715,7 @@ func Now(in NowInputs) []Finding {
 			// One vault per hub: the subject is constant.
 			subject: "vault"})
 	}
+	fs = append(fs, setupTokens(in.SetupTokens, in.Now)...)
 	for _, w := range in.Windows {
 		if w.FiveHourPct < windowWarnPct {
 			continue
@@ -803,4 +827,61 @@ func shortPath(p string) string {
 		return p
 	}
 	return "…/" + strings.Join(parts[len(parts)-2:], "/")
+}
+
+// setupTokens is the reminder for a Claude setup token (claude-fleet#1463):
+// a month before it ends, and critical in the last week and once it has
+// ended — from then on every lease of it is refused, so a machine whose
+// sessions start on it has nothing to start them with.
+func setupTokens(ts []SetupToken, now time.Time) []Finding {
+	var fs []Finding
+	for _, t := range ts {
+		left := t.ExpiresAt.Sub(now)
+		if left > setupTokenWarnLead {
+			continue
+		}
+		who := t.PrincipalID
+		if who == "" {
+			who = "pool"
+		}
+		f := Finding{Kind: "cred_setup_token", Link: "/credentials",
+			Args:    map[string]string{"account": t.Account, "provider": t.Provider, "principal": who},
+			subject: subjectKey(who, t.Provider, t.Account)}
+		switch {
+		case left <= 0:
+			ago := days(-left)
+			f.Severity, f.Template = "critical", TmplCredSetupExpired
+			f.Title = fmt.Sprintf("setup token %s (%s · %s) expired %s ago — run `claude setup-token` and import it again", t.Account, who, t.Provider, ago)
+			f.Args["ago"] = ago
+		default:
+			left := days(left)
+			f.Severity, f.Template = "warning", TmplCredSetupExpiring
+			if t.ExpiresAt.Sub(now) <= setupTokenCriticalLead {
+				f.Severity = "critical"
+			}
+			f.Title = fmt.Sprintf("setup token %s (%s · %s) expires in %s — run `claude setup-token` and import it again", t.Account, who, t.Provider, left)
+			f.Args["left"] = left
+		}
+		f.Args["date"] = t.ExpiresAt.UTC().Format("2006-01-02")
+		f.Detail = "expires " + f.Args["date"]
+		if left <= 0 {
+			f.Detail = "expired " + f.Args["date"]
+		}
+		fs = append(fs, f)
+	}
+	return fs
+}
+
+// days renders a lead measured in days ("23 days", "1 day"), falling back to
+// dur under a day — a setup token's horizon is weeks, where "720h 0m" says
+// nothing a person can plan on.
+func days(d time.Duration) string {
+	n := int(d / (24 * time.Hour))
+	switch {
+	case n == 1:
+		return "1 day"
+	case n > 1:
+		return fmt.Sprintf("%d days", n)
+	}
+	return dur(d)
 }

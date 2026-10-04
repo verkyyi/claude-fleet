@@ -864,7 +864,7 @@ What a machine can do with only the short-lived half was **measured first**
 |---|---|---|
 | hub | `CCQUOTA_FLEET_CRED_KEY_FILE=/secrets/cred-key` (or `CCQUOTA_FLEET_CRED_KEY`) | 32 bytes, base64 (`openssl rand -base64 32`). Unset = vault off: credential routes answer 503, the rest of the fleet module is unaffected |
 | hub | `CCQUOTA_FLEET_CRED_MIN_TTL=3h` (default) | a cached access token with less left is refreshed before it is issued |
-| agent | `CCQUOTA_FLEET_CREDS=1` | lease this login's credentials and keep them written (with `CCQUOTA_FLEET=1`) |
+| agent | `CCQUOTA_FLEET_CREDS=1` | lease this login's credentials (its own + the shared pool's) and keep them written (with `CCQUOTA_FLEET=1`) |
 | agent | `CCQUOTA_ACCOUNTS_DIR` (default `~/.config/claude-fleet/accounts`), `CCQUOTA_FLEET_CODEX_HOMES` (default `~/.codex-accounts`) | where the Claude / Codex files go |
 
 A lease (`POST /v1/node/credentials`, the node's enrollment token) is answered
@@ -888,6 +888,48 @@ refuse a WeCom session. A Claude refresh token comes from an interactive
 machine out — two holders of one refresh token rotate each other out.
 A Codex home the hub writes is registered once with
 `fleet-codex-account.sh register <label> <home>` like any other.
+
+#### Setup tokens and the shared pool (claude-fleet#1463)
+
+A Claude **setup token** — what `claude setup-token` prints, `sk-ant-oat01-…`,
+about a year, no refresh token — is the other kind the vault takes:
+
+    "secret":{"setup_token":"sk-ant-oat01-…","expires_at":"2027-10-03T00:00:00Z"}
+
+It cannot be refreshed and does not rotate, so the hub stores it as kind
+`setup_token`, **issues it as is** (no refresh, nothing cached, no row lock —
+any number of machines hold the same token without logging each other out),
+refuses to store or issue one past `expires_at`, and reminds the operator:
+a `cred_setup_token` finding on the hub page from **30 days** before the date
+(critical in the last week, and once it has passed), plus a banner on
+`/credentials`. The only remedy is a person minting a new one and importing it
+again — there is nothing the hub can renew. `expires_at` is the operator's
+word: the token endpoint does not say.
+
+**Pool accounts.** `"principal_id":"pool"` stores a credential that belongs to
+the machines' shared pool (docs/SHARED-MACHINE.md 2b), not to a person. Every
+node whose login IS some active principal gets the pool rows in its lease
+beside its own — after the same no-principal and revocation checks, so a
+revoked person or machine loses the pool too; the audit row names the person
+who leased it, with `pool` in its detail. There is no per-principal allow-list
+in this phase: the pool is for everyone the hub has let in, which is what the
+pool meant before the vault (every login got a copy of the same files). `pool`
+is a sentinel, never a row in `fleet_principals`.
+
+**Importing this machine's pool.** The operator's one command:
+
+    ~/.claude/fleet/bin/fleet-creds-import.sh [--dry-run] [--expires-at <RFC3339>] [--principal <id>] [label …]
+
+reads each plain `<accounts>/<label>` setup-token file, POSTs it as a pool
+`setup_token` over the viewer token, and prints what it did — the token goes to
+curl in a 0600 file and is never printed or put on a command line. Default
+expiry is the file's mtime + 365 days (shown per label; `--expires-at` to
+state it). Nothing on the importing machine changes: its files are left as they
+are until THAT login's agent runs with `CCQUOTA_FLEET_CREDS=1`, leases them
+back and writes `<label>.hub/.credentials.json` + the `hub:<label>` marker
+exactly as for any lease — a session already running on the token in its env
+is untouched (the env is read once), and the dash still attributes it to its
+label (`fleet-account-truth.py` indexes the hub file's token too).
 
 #### The vault key in Aliyun KMS (claude-fleet#1417)
 

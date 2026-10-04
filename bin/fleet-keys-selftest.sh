@@ -26,6 +26,11 @@
 #
 # Exit 0 = pass. Non-zero = fail (prints what diverged). No network / no tmux.
 set -uo pipefail
+# A block is searched with `grep -q … <<< "$block"`, never `printf … | grep -q`:
+# grep -q exits on its first match, and under pipefail a writer still flushing
+# the rest of the block dies of SIGPIPE (141) — a spurious, timing-dependent
+# FAIL that showed up on a loaded macOS runner (PR #1468). A here-string has
+# no writer to kill.
 export FLEET_UI_LANG=en
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -53,7 +58,7 @@ SHEET="$(NO_COLOR=1 bash "$KEYS" --plain)" || fail "fleet-keys.sh --plain exited
 
 # --- 4. all four group headers present ----------------------------------------
 for g in "tmux prefix" "task sidebar" "dashboard" "backlog" "config modal"; do
-  printf '%s\n' "$SHEET" | grep -qi "^$g " || fail "sheet missing group: $g"
+  grep -qi "^$g " <<< "$SHEET" || fail "sheet missing group: $g"
 done
 
 # Keys after "prefix " in each sheet row (a, j, G, b, A, c, r, ?). Set as text,
@@ -77,21 +82,21 @@ conf_prefix_keys="$(awk '$1=="bind"||$1=="bind-key"{ if ($2!="-n" && $2!="-T" &&
 # --- 1. every 'prefix X' row in the sheet is bound in the conf -----------------
 while IFS= read -r k; do
   [ -n "$k" ] || continue
-  printf '%s\n' "$conf_prefix_keys" | grep -Fxq "$k" \
+  grep -Fxq "$k" <<< "$conf_prefix_keys" \
     || fail "sheet lists 'prefix $k' but conf has no matching bind"
 done <<EOF
 $sheet_prefix_keys
 EOF
 
 # F9 (root-table) is documented in the sheet and must exist as `bind -n F9`.
-printf '%s\n' "$SHEET" | grep -q 'F9' || fail "sheet missing the F9 row"
+grep -q 'F9' <<< "$SHEET" || fail "sheet missing the F9 row"
 grep -Eq '^bind[[:space:]]+-n[[:space:]]+F9([[:space:]]|$)' "$CONF" \
   || fail "sheet lists F9 but conf has no 'bind -n F9'"
 
 # --- 2. every prefix bind in the conf is documented in the sheet --------------
 while IFS= read -r k; do
   [ -n "$k" ] || continue
-  printf '%s\n' "$sheet_prefix_keys" | grep -Fxq "$k" \
+  grep -Fxq "$k" <<< "$sheet_prefix_keys" \
     || fail "conf binds 'prefix $k' but the sheet does not document it"
 done <<EOF
 $conf_prefix_keys
@@ -125,17 +130,17 @@ grep -Eq -- 'keys\).*fleet-keys\.sh.*--context backlog' "$ISSUES" \
 # `--context dash` ⇒ tmux prefix + dashboard only; backlog/config gone.
 DSHEET="$(NO_COLOR=1 bash "$KEYS" --plain --context dash)" \
   || fail "fleet-keys.sh --context dash exited non-zero"
-printf '%s\n' "$DSHEET" | grep -qi '^tmux prefix '  || fail "--context dash dropped the global 'tmux prefix' group"
-printf '%s\n' "$DSHEET" | grep -qi '^dashboard '    || fail "--context dash missing its own 'dashboard' group"
-printf '%s\n' "$DSHEET" | grep -qi '^backlog '      && fail "--context dash should NOT list the 'backlog' group"
-printf '%s\n' "$DSHEET" | grep -qi '^config modal ' && fail "--context dash should NOT list the 'config modal' group"
+grep -qi '^tmux prefix ' <<< "$DSHEET"  || fail "--context dash dropped the global 'tmux prefix' group"
+grep -qi '^dashboard ' <<< "$DSHEET"    || fail "--context dash missing its own 'dashboard' group"
+grep -qi '^backlog ' <<< "$DSHEET"      && fail "--context dash should NOT list the 'backlog' group"
+grep -qi '^config modal ' <<< "$DSHEET" && fail "--context dash should NOT list the 'config modal' group"
 # `--context backlog` ⇒ tmux prefix + backlog only; dashboard/config gone.
 BSHEET="$(NO_COLOR=1 bash "$KEYS" --plain --context backlog)" \
   || fail "fleet-keys.sh --context backlog exited non-zero"
-printf '%s\n' "$BSHEET" | grep -qi '^tmux prefix '  || fail "--context backlog dropped the global 'tmux prefix' group"
-printf '%s\n' "$BSHEET" | grep -qi '^backlog '      || fail "--context backlog missing its own 'backlog' group"
-printf '%s\n' "$BSHEET" | grep -qi '^dashboard '    && fail "--context backlog should NOT list the 'dashboard' group"
-printf '%s\n' "$BSHEET" | grep -qi '^config modal ' && fail "--context backlog should NOT list the 'config modal' group"
+grep -qi '^tmux prefix ' <<< "$BSHEET"  || fail "--context backlog dropped the global 'tmux prefix' group"
+grep -qi '^backlog ' <<< "$BSHEET"      || fail "--context backlog missing its own 'backlog' group"
+grep -qi '^dashboard ' <<< "$BSHEET"    && fail "--context backlog should NOT list the 'dashboard' group"
+grep -qi '^config modal ' <<< "$BSHEET" && fail "--context backlog should NOT list the 'config modal' group"
 
 # --- 6. dashboard ⌃-keys ⇄ the dash's fzf --binds ⇄ the keymap table ----------
 # Section 1/2 guard the `prefix` binds; the DASHBOARD group had no such guard, so
@@ -169,14 +174,14 @@ grep -Eq -- '--bind "(ctrl|alt)-' "$DASH" \
 # 6a. dash ⇄ table
 while IFS= read -r k; do
   [ -n "$k" ] || continue
-  printf '%s\n' "$table_actions" | grep -Fxq "$k" \
+  grep -Fxq "$k" <<< "$table_actions" \
     || fail "tmux-dashboard.sh binds \$DASH_KEY_$(printf '%s' "$k" | tr '[:lower:]-' '[:upper:]_') but dash-keymap.sh's table has no '$k' action"
 done <<EOF
 $dash_actions
 EOF
 while IFS= read -r k; do
   [ -n "$k" ] || continue
-  printf '%s\n' "$dash_actions" | grep -Fxq "$k" \
+  grep -Fxq "$k" <<< "$dash_actions" \
     || fail "dash-keymap.sh lists '$k' but tmux-dashboard.sh has no --bind \"\$DASH_KEY_$(printf '%s' "$k" | tr '[:lower:]-' '[:upper:]_'):…\""
   grep -q "key \"\$(dg $k)" "$KEYS" \
     || fail "dash-keymap.sh lists '$k' but fleet-keys.sh has no \$(dg $k) row for it"
@@ -187,14 +192,14 @@ EOF
 # 6b. sheet ⇄ table (the rendered ⌃-letters)
 while IFS= read -r k; do
   [ -n "$k" ] || continue
-  printf '%s\n' "$table_keys" | grep -Fxq "$k" \
+  grep -Fxq "$k" <<< "$table_keys" \
     || fail "sheet lists dashboard '⌃$k' but dash-keymap.sh resolves no action to ctrl-$k"
 done <<EOF
 $sheet_dash_keys
 EOF
 while IFS= read -r k; do
   [ -n "$k" ] || continue
-  printf '%s\n' "$sheet_dash_keys" | grep -Fxq "$k" \
+  grep -Fxq "$k" <<< "$sheet_dash_keys" \
     || fail "dash-keymap.sh resolves an action to ctrl-$k but the dashboard sheet does not show ⌃$k"
 done <<EOF
 $table_keys
@@ -204,24 +209,24 @@ EOF
 # with the why, and ⌃s is gone — the help never names a key tmux will eat.
 RSHEET="$(FLEET_TMUX_PREFIX=C-s NO_COLOR=1 bash "$KEYS" --plain --context dash)" \
   || fail "fleet-keys.sh under a C-s prefix exited non-zero"
-printf '%s\n' "$RSHEET" | grep -q '^  ⌥s .*⌃s is your tmux prefix C-s' \
+grep -q '^  ⌥s .*⌃s is your tmux prefix C-s' <<< "$RSHEET" \
   || fail "under a C-s tmux prefix the sheet must list ⌥s for scratch and say why"
-printf '%s\n' "$RSHEET" | grep -q '^  ⌃s ' \
+grep -q '^  ⌃s ' <<< "$RSHEET" \
   && fail "under a C-s tmux prefix the sheet must NOT still list ⌃s"
 
 # ⌃e rename by name (issue #449): the bijection above passes if BOTH sides drop a
 # key, so pin the one this guard was extended for — sheet row, bind, and the
 # transform helper the bind calls (an inline action would break on a ')' in a
 # window name, which is why dash-rename.sh is a script).
-printf '%s\n' "$dash_block" | grep -q '⌃e' \
+grep -q '⌃e' <<< "$dash_block" \
   || fail "dashboard sheet is missing the ⌃e (rename window) row"
 grep -Eq -- '--bind "\$DASH_KEY_RENAME:transform\(bash [^)]*dash-rename\.sh' "$DASH" \
   || fail "dashboard ⌃e is not bound (via \$DASH_KEY_RENAME) to a transform(dash-rename.sh ...) action"
 [ -x "$BIN/dash-rename.sh" ] || fail "bin/dash-rename.sh missing or not executable"
 # and the #556 key by name: the agent flip is ⌃v, never ⌃a (the operator's prefix)
-printf '%s\n' "$dash_block" | grep -q '^  ⌃v .*flip this fleet' \
+grep -q '^  ⌃v .*flip this fleet' <<< "$dash_block" \
   || fail "dashboard sheet must list the agent flip on ⌃v"
-printf '%s\n' "$dash_block" | grep -q '^  ⌃a ' \
+grep -q '^  ⌃a ' <<< "$dash_block" \
   && fail "dashboard sheet lists ⌃a — that is a common tmux prefix (#556)"
 
 # --- 7. task sidebar: keymap table ⇄ tmux key table ⇄ view ⇄ sheet (#896) ------
@@ -240,9 +245,9 @@ side_table="$(bash "$KEYMAP" --panel sidebar list)" || fail "dash-keymap.sh --pa
 [ -n "$side_table" ] || fail "dash-keymap.sh --panel sidebar has no actions"
 while read -r action _ _ def _; do
   [ -n "$action" ] || continue
-  printf '%s\n' "$side_block" | grep -q "\$(dg $action)" \
+  grep -q "\$(dg $action)" <<< "$side_block" \
     || fail "sidebar action '$action' has no \$(dg $action) row in fleet-keys.sh"
-  printf '%s\n' "$side_block" | grep -q "\$(dn $action)" \
+  grep -q "\$(dn $action)" <<< "$side_block" \
     || fail "sidebar action '$action' has no \$(dn $action) remap note in fleet-keys.sh"
   # A printable punctuation default (`menu` = `.`, #898) acts only on an EMPTY
   # input line, so it reaches the view through the `Any` bind as its own byte
@@ -271,43 +276,43 @@ SSHEET="$(FLEET_UI_LANG=zh NO_COLOR=1 bash "$KEYS" --context sidebar --plain)" |
   || fail "the sidebar sheet is $(printf '%s\n' "$SSHEET" | wc -l | tr -d ' ') lines — it must fit its popup (≤ 10)"
 printf '%s\n' "$SSHEET" | head -1 | grep -q '任务栏快捷键' || fail "the sidebar sheet lacks its 任务栏快捷键 title"
 for k in "打字 ↵" "↑ ↓" "编辑" ". / 再点一次" "esc" "⌂ / F9" "prefix ?"; do
-  printf '%s\n' "$SSHEET" | grep -qF "  $k " || fail "the sidebar sheet does not list '$k'"
+  grep -qF "  $k " <<< "$SSHEET" || fail "the sidebar sheet does not list '$k'"
 done
 for k in "⌃o" "⌃n" "prefix E" "prefix Space"; do
-  printf '%s\n' "$SSHEET" | grep -qF "$k" && fail "the sidebar sheet lists '$k' — only the seven everyday keys belong there"
+  grep -qF "$k" <<< "$SSHEET" && fail "the sidebar sheet lists '$k' — only the seven everyday keys belong there"
 done
 # The editing row names every edit key, each keymap one as it resolves (#1097).
 edit_row="$(printf '%s\n' "$SSHEET" | grep -F '  编辑 ')"
 for k in "←→" "Home" "End" "⌥←→" "$(bash "$KEYMAP" --panel sidebar glyph bol)" \
          "$(bash "$KEYMAP" --panel sidebar glyph eol)" "$(bash "$KEYMAP" --panel sidebar glyph kill_word)" \
          "$(bash "$KEYMAP" --panel sidebar glyph kill_eol)" "⌃u"; do
-  printf '%s\n' "$edit_row" | grep -qF " $k" || fail "the sidebar sheet's 编辑 row lacks '$k': $edit_row"
+  grep -qF " $k" <<< "$edit_row" || fail "the sidebar sheet's 编辑 row lacks '$k': $edit_row"
 done
-printf '%s\n' "$SSHEET" | grep -Eq '^(task sidebar|row menu|tmux prefix|dashboard|backlog|config modal) ' \
+grep -Eq '^(task sidebar|row menu|tmux prefix|dashboard|backlog|config modal) ' <<< "$SSHEET" \
   && fail "the sidebar sheet shows a full-sheet group"
 menu_keys="$(bash "$BIN/fleet-sidebar-menu.sh" --keys)" || fail "fleet-sidebar-menu.sh --keys exited non-zero"
 [ "$(printf '%s\n' "$menu_keys" | cut -f1 | tr -d '\n')" = rtpaswkvxnog ] \
   || fail "the row menu's key table is not r t p a s w k v x n o g: $(printf '%s' "$menu_keys" | cut -f1 | tr '\n' ' ')"
 while IFS='	' read -r mk _; do
   [ -n "$mk" ] || continue
-  printf '%s\n' "$SSHEET" | grep -Eq "^  $mk +" && fail "the sidebar sheet lists the row menu letter '$mk'"
+  grep -Eq "^  $mk +" <<< "$SSHEET" && fail "the sidebar sheet lists the row menu letter '$mk'"
 done <<EOF
 $menu_keys
 EOF
 FULL_SHEET="$(NO_COLOR=1 bash "$KEYS" --plain)"
-printf '%s\n' "$FULL_SHEET" | grep -q '^task sidebar ' || fail "the full sheet lost the task sidebar group"
+grep -q '^task sidebar ' <<< "$FULL_SHEET" || fail "the full sheet lost the task sidebar group"
 menu_block="$(printf '%s\n' "$FULL_SHEET" | awk '/^row menu /{f=1;next} f && NF && /^[^ ]/{f=0} f')"
 [ -n "$menu_block" ] || fail "the full sheet lost the row menu group"
 while IFS='	' read -r mk _; do
   [ -n "$mk" ] || continue
-  printf '%s\n' "$menu_block" | grep -q "^  $mk  " || fail "the full sheet's row menu lacks '$mk'"
+  grep -q "^  $mk  " <<< "$menu_block" || fail "the full sheet's row menu lacks '$mk'"
 done <<EOF
 $menu_keys
 EOF
 grep -Eq '^ *add "[^"]*" [a-z] ' "$BIN/fleet-sidebar-menu.sh" \
   && fail "fleet-sidebar-menu.sh hardcodes a menu letter — read it from MENU_KEYS (mk)"
 DSHEET="$(NO_COLOR=1 bash "$KEYS" --context dash --plain)"
-printf '%s\n' "$DSHEET" | grep -Eq '^(row menu|task sidebar) ' \
+grep -Eq '^(row menu|task sidebar) ' <<< "$DSHEET" \
   && fail "the dash sheet shows a sidebar group"
 
 NSHEET="$(FLEET_TMUX_PREFIX=C-n NO_COLOR=1 bash "$KEYS" --plain)" || fail "fleet-keys.sh under a C-n prefix exited non-zero"
