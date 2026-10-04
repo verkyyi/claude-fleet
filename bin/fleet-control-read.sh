@@ -24,13 +24,17 @@ case "$mode" in
     # controller hashes into the fleet UUID the hub registers. fleet_identity_triplet
     # (bin/fleet-lib.sh) is the one reader, shared with fleet_uuid, so the two agree
     # byte for byte whoever runs them, from whichever pane (issues #1491, #1498).
+    # Field 6 (issue #1512): every repo the fleet hosts, one per line —
+    # fleet_repos, the conf's own first, then the repos/ overlays — so the hub
+    # can place another repo's issue here. It is a list, never part of the UUID.
     while IFS=$'\t' read -r sess _conf; do
       [ -n "$sess" ] || continue
       fleet_identity_triplet "$sess"
       (
         unset TMUX TMUX_PANE
         fleet_load_conf "$sess"
-        printf '%s\0' "${FLEET_AGENT:-claude}" "$(fleet_conf_file "$sess")"
+        printf '%s\0' "${FLEET_AGENT:-claude}" "$(fleet_conf_file "$sess")" \
+          "$(fleet_repos "$sess")"
       )
     done < <(fleet_each_conf)
     ;;

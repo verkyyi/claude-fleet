@@ -139,7 +139,7 @@ func (s *Server) recordFleets(ep store.Endpoint, hb control.Heartbeat, verify bo
 		workers := consistentWorkers(f.FleetID, f.Workers)
 		reports = append(reports, store.FleetReport{
 			FleetID: f.FleetID, Name: f.Name, Repo: f.Repo, Checkout: f.Checkout, Agent: f.Agent,
-			State: f.State, WorkerCount: f.Count, WorkersJSON: string(workers),
+			Repos: reportedRepos(f.Repos), State: f.State, WorkerCount: f.Count, WorkersJSON: string(workers),
 		})
 	}
 	host, user := hb.Hostname, hb.OSUser
@@ -162,6 +162,25 @@ func (s *Server) recordFleets(ep store.Endpoint, hb control.Heartbeat, verify bo
 	// Issue leases ride the same beat (claude-fleet#1422): a session it
 	// shows renews its lease, a session it no longer shows releases it.
 	s.renewLeases(ep, reports, rejected, s.leaseClock())
+}
+
+// maxFleetRepos bounds the repo list one fleet may report.
+const maxFleetRepos = 64
+
+// reportedRepos keeps the owner/name entries of a heartbeat's repo list
+// (claude-fleet#1512), each once, in the agent's order. nil when there are
+// none — the row then reads as an older agent's: its one repo.
+func reportedRepos(in []string) []string {
+	var out []string
+	for _, r := range in {
+		if len(out) == maxFleetRepos {
+			break
+		}
+		if leaseRepoRE.MatchString(r) && !hasString(out, r) {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // consistentWorkers returns a fleet's window list with every worker_id checked
@@ -294,6 +313,7 @@ type FleetView struct {
 	MachineID    string    `json:"machine_id"`
 	Name         string    `json:"name"`
 	Repo         string    `json:"repo"`
+	Repos        []string  `json:"repos,omitempty"` // claude-fleet#1512; absent from an older agent
 	Checkout     string    `json:"checkout"`
 	Agent        string    `json:"agent"`
 	MachineName  string    `json:"machine_name"`
@@ -367,7 +387,7 @@ func (s *Server) visibleFleets(p fleetPrincipal, now time.Time) ([]FleetView, []
 			a = "lost"
 		}
 		views = append(views, FleetView{
-			FleetID: r.FleetID, MachineID: r.MachineID, Name: r.Name, Repo: r.Repo, Checkout: r.Checkout,
+			FleetID: r.FleetID, MachineID: r.MachineID, Name: r.Name, Repo: r.Repo, Repos: r.Repos, Checkout: r.Checkout,
 			Agent: r.Agent, MachineName: r.Hostname, OSUser: r.OSUser, EndpointID: r.EndpointID,
 			Registered: r.Present, State: r.State, Count: r.WorkerCount, Availability: a,
 			ObservedAt: r.ObservedAt, AgeSec: now.Sub(r.ObservedAt).Seconds(),

@@ -369,11 +369,16 @@ type Fleet struct {
 	// (claude-fleet#1409): checkout is the third input of the fleet UUID, so
 	// the hub can re-derive it and refuse a heartbeat whose ids do not add
 	// up. Empty from an agent older than that.
-	Checkout string          `json:"checkout,omitempty"`
-	Agent    string          `json:"agent,omitempty"`
-	State    string          `json:"state,omitempty"`
-	Workers  json.RawMessage `json:"workers,omitempty"`
-	Count    int             `json:"count"`
+	Checkout string `json:"checkout,omitempty"`
+	Agent    string `json:"agent,omitempty"`
+	// Repos is every repo the fleet hosts (claude-fleet#1512): its own repo
+	// first, then the repos/ overlays (#788) — fleet_repos. Placement and
+	// moves match a repo against any of them. Absent from an older agent: the
+	// hub then reads [Repo], as it always has.
+	Repos   []string        `json:"repos,omitempty"`
+	State   string          `json:"state,omitempty"`
+	Workers json.RawMessage `json:"workers,omitempty"`
+	Count   int             `json:"count"`
 }
 
 // Account ops (claude-fleet#1411). There are exactly two, and both run one of

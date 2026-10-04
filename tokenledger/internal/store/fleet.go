@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -41,7 +42,8 @@ CREATE TABLE IF NOT EXISTS fleet_fleets (
   workers_json TEXT NOT NULL DEFAULT '[]',
   present      INTEGER NOT NULL DEFAULT 1,
   first_seen   TEXT NOT NULL,
-  observed_at  TEXT NOT NULL
+  observed_at  TEXT NOT NULL,
+  repos_json   TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS fleet_fleets_machine ON fleet_fleets(machine_id);
 CREATE TABLE IF NOT EXISTS fleet_operations (
@@ -80,11 +82,14 @@ var ErrFleetElsewhere = errors.New("fleet ID belongs to a different machine")
 
 // FleetReport is one fleet as a heartbeat describes it.
 type FleetReport struct {
-	FleetID     string
-	Name        string
-	Repo        string
-	Checkout    string
-	Agent       string
+	FleetID  string
+	Name     string
+	Repo     string
+	Checkout string
+	Agent    string
+	// Repos is every repo the fleet hosts (claude-fleet#1512), nil when the
+	// agent did not say (older than that): readers then use [Repo].
+	Repos       []string
 	State       string
 	WorkerCount int
 	WorkersJSON string
@@ -101,6 +106,7 @@ type FleetRow struct {
 	Repo        string
 	Checkout    string
 	Agent       string
+	Repos       []string // nil = not reported; see HostedRepos
 	State       string
 	WorkerCount int
 	WorkersJSON string
@@ -168,14 +174,14 @@ func (s *Store) RecordFleetSnapshot(endpointID, hostname, osUser, machineID stri
 		}
 		if _, err := tx.Exec(`
 			INSERT INTO fleet_fleets (fleet_id, machine_id, name, repo, checkout, agent, state,
-			                          worker_count, workers_json, present, first_seen, observed_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+			                          worker_count, workers_json, present, first_seen, observed_at, repos_json)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
 			ON CONFLICT(fleet_id) DO UPDATE SET name = excluded.name, repo = excluded.repo,
 			  checkout = excluded.checkout, agent = excluded.agent, state = excluded.state,
 			  worker_count = excluded.worker_count, workers_json = excluded.workers_json,
-			  present = 1, observed_at = excluded.observed_at`,
+			  present = 1, observed_at = excluded.observed_at, repos_json = excluded.repos_json`,
 			f.FleetID, machineID, f.Name, f.Repo, f.Checkout, f.Agent, f.State,
-			f.WorkerCount, workers, ts, ts); err != nil {
+			f.WorkerCount, workers, ts, ts, reposJSON(f.Repos)); err != nil {
 			return nil, err
 		}
 	}
@@ -191,14 +197,40 @@ func (s *Store) UpdateFleetWorkers(fleetID, state string, count int, workersJSON
 }
 
 const fleetCols = `f.fleet_id, f.machine_id, m.endpoint_id, m.hostname, m.os_user, f.name, f.repo,
-	f.checkout, f.agent, f.state, f.worker_count, f.workers_json, f.present, f.first_seen, f.observed_at`
+	f.checkout, f.agent, f.state, f.worker_count, f.workers_json, f.present, f.first_seen, f.observed_at,
+	f.repos_json`
+
+// reposJSON stores a fleet's repo list: "" when the agent sent none, so a
+// row from an older agent stays distinguishable from a reported list.
+func reposJSON(repos []string) string {
+	if len(repos) == 0 {
+		return ""
+	}
+	b, _ := json.Marshal(repos)
+	return string(b)
+}
+
+// HostedRepos is every repo the fleet hosts: the reported list, else its
+// one repo (an agent older than claude-fleet#1512), else none.
+func (r FleetRow) HostedRepos() []string {
+	if len(r.Repos) > 0 {
+		return r.Repos
+	}
+	if r.Repo == "" {
+		return nil
+	}
+	return []string{r.Repo}
+}
 
 func scanFleet(sc interface{ Scan(...any) error }) (FleetRow, error) {
 	var r FleetRow
 	var present int
-	var first, obs string
+	var first, obs, repos string
 	err := sc.Scan(&r.FleetID, &r.MachineID, &r.EndpointID, &r.Hostname, &r.OSUser, &r.Name, &r.Repo,
-		&r.Checkout, &r.Agent, &r.State, &r.WorkerCount, &r.WorkersJSON, &present, &first, &obs)
+		&r.Checkout, &r.Agent, &r.State, &r.WorkerCount, &r.WorkersJSON, &present, &first, &obs, &repos)
+	if repos != "" {
+		_ = json.Unmarshal([]byte(repos), &r.Repos)
+	}
 	r.Present = present != 0
 	r.FirstSeen, _ = time.Parse(rfc, first)
 	r.ObservedAt, _ = time.Parse(rfc, obs)
@@ -302,6 +334,15 @@ func (s *Store) ensureFleetColumns() error {
 	if n == 0 {
 		if _, err := s.write.Exec(`ALTER TABLE fleet_operations ADD COLUMN placement TEXT NOT NULL DEFAULT ''`); err != nil {
 			return fmt.Errorf("add fleet_operations.placement: %w", err)
+		}
+	}
+	// claude-fleet#1512: every repo a fleet hosts, "" = the agent did not say.
+	if err := s.write.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('fleet_fleets') WHERE name = 'repos_json'`).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		if _, err := s.write.Exec(`ALTER TABLE fleet_fleets ADD COLUMN repos_json TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("add fleet_fleets.repos_json: %w", err)
 		}
 	}
 	return nil
