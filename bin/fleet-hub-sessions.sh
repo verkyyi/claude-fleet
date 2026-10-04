@@ -48,6 +48,18 @@
 # and the dash never looks for the cache — a one-machine fleet is byte for byte
 # what it was (CLAUDE.md «Degenerate case is sacred»).
 #
+# CLIENT MODE (issue #1484, EPIC #1479 C5 — the shell on a person's own computer):
+# FLEET_HUB_SESSIONS_CLIENT=<name> makes this loop serve ONE pseudo-fleet named
+# <name> that has no conf, no control database and no windows of its own: the
+# fleet list is that one name, every session the hub shows is another machine's
+# (`local`=0 — this computer is a node at most by coincidence, and the shell
+# reaches even its own sessions through a nested attach, #1485), `#me` is empty,
+# the C1 locator cache is not written, and `watched` asks the shell's own tmux
+# server (`-L <name>`). The rows, the header lines, hub_ok, hub_nodes and
+# hub_limits are written exactly as for a fleet, under the $TMPDIR the shell
+# gives it — so tmux-dashboard-rows.sh, fleet-status-lib.sh and tmux-status.sh
+# read them unchanged. Unset (every node, every fleet) nothing here differs.
+#
 # Who asks (issue #1475), in this order — the first that exists is used:
 #   1. FLEET_HUB_SESSIONS_CMD: a seam; it prints the fleet_sessions JSON itself.
 #   2. YOUR connection certificate — ~/.ssh/fleet-cert + fleet-cert-cert.pub, the
@@ -112,6 +124,13 @@ PIDF="$G/hubsess.pid"
 SESSIONS_NS='fleet-sessions@claude-fleet'
 
 hub_on() { [ "${CCQUOTA_FLEET:-0}" = 1 ]; }
+# The fleets this loop serves: the shell's one pseudo-fleet in client mode
+# (issue #1484), else every fleet configured on this machine.
+CLIENT="${FLEET_HUB_SESSIONS_CLIENT:-}"
+case "$CLIENT" in *[!A-Za-z0-9._-]*) CLIENT='' ;; esac
+local_fleets() {
+  if [ -n "$CLIENT" ]; then printf '%s\t-\n' "$CLIENT"; else fleet_each_conf; fi
+}
 
 # hub_url → the hub's URL on stdout, rc 1 when none is configured anywhere.
 hub_url() {
@@ -283,7 +302,7 @@ restamp() {
     tmp=$(mktemp "$G/.hubsess.XXXXXX") || continue
     if { printf '#ts\037%s\n' "$now"; tail -n +2 "$f"; } > "$tmp" 2>/dev/null; then mv -f "$tmp" "$f"; else rm -f "$tmp"; fi
   done < "$lf"
-  [ -f "$FLEET_CONF_DIR/control/hub-workers.tsv" ] && touch "$FLEET_CONF_DIR/control/hub-workers.tsv" 2>/dev/null
+  [ -z "$CLIENT" ] && [ -f "$FLEET_CONF_DIR/control/hub-workers.tsv" ] && touch "$FLEET_CONF_DIR/control/hub-workers.tsv" 2>/dev/null
   hub_ok "$now"
   return 0
 }
@@ -305,6 +324,10 @@ refresh() {
   : > "$mf"
   while IFS=$'\t' read -r sess _c; do
     [ -n "$sess" ] || continue
+    if [ -n "$CLIENT" ]; then
+      # the shell's pseudo-fleet (#1484): no UUID, no repos, no windows to map
+      printf '%s\t\t0\t\n' "$sess"; continue
+    fi
     u=$(fleet_uuid "$sess" 2>/dev/null) || u=''
     repos=$(fleet_repos "$sess" 2>/dev/null | tr '\n' ' ')
     if fleet_multirepo "$sess" 2>/dev/null; then m=1; else m=0; fi
@@ -312,7 +335,7 @@ refresh() {
     bash "$BIN/fleet-control-read.sh" workers "$sess" 2>/dev/null \
       | while IFS= read -r line; do [ -n "$line" ] && printf '%s\t%s\n' "$sess" "$line"; done >> "$mf"
   done > "$lf" <<EOF
-$(fleet_each_conf)
+$(local_fleets)
 EOF
   fetch "$json" "$lf"; rc=$?
   if [ "$rc" = 3 ]; then
@@ -331,10 +354,10 @@ EOF
   now=$(date +%s)
   python3 - "$json" "$lf" "$G" "$FLEET_C" "$FLEET_CONF_DIR/control/hub-workers.tsv" \
     "${FLEET_HUB_SESSIONS_USER:-$(id -un 2>/dev/null)}" "$(hostname 2>/dev/null)" \
-    "${FLEET_NODE_ALIASES:-}" "$now" "$mf" "$BIN" <<'PY'
+    "${FLEET_NODE_ALIASES:-}" "$now" "$mf" "$BIN" "$CLIENT" <<'PY'
 import json, os, re, sys, tempfile
 from datetime import datetime, timezone
-jpath, lpath, gdir, cdir, wpath, user, host, aliases, now, mpath, bindir = sys.argv[1:12]
+jpath, lpath, gdir, cdir, wpath, user, host, aliases, now, mpath, bindir, client = sys.argv[1:13]
 try:
     data = json.load(open(jpath, encoding="utf-8"))
     sessions = data["sessions"]
@@ -345,7 +368,9 @@ except Exception:
 alias = dict(a.split("=", 1) for a in aliases.split() if "=" in a)
 short = lambda h: (h or "").split(".", 1)[0]
 label = lambda h: alias.get(h) or alias.get(short(h)) or short(h) or "?"
-me = short(host)
+# Client mode (#1484): this computer is nobody's `#me` — every row is a machine
+# the shell reaches over ssh, this host included when it happens to be a node.
+me = "" if client else short(host)
 local = []
 for line in open(lpath, encoding="utf-8"):
     p = line.rstrip("\n").split("\t")
@@ -398,11 +423,13 @@ def write(path, text):
         f.write(text)
     os.replace(tmp, path)
 
-# The C1 locator cache: worker_id → machine, for every routable session.
-write(wpath, "".join("%s\t%s\n" % (s["worker_id"], label(s.get("machine_name")))
-                     for s in sessions if s.get("worker_id")))
+# The C1 locator cache: worker_id → machine, for every routable session — a
+# node's; the shell (client mode) has no control adapter to serve.
+if not client:
+    write(wpath, "".join("%s\t%s\n" % (s["worker_id"], label(s.get("machine_name")))
+                         for s in sessions if s.get("worker_id")))
 
-is_local = lambda s: s.get("fleet_id") in local_uuids or short(s.get("machine_name")) == me
+is_local = lambda s: not client and (s.get("fleet_id") in local_uuids or short(s.get("machine_name")) == me)
 def local_fleet(s):
     """The fleet HERE a local session belongs to: by UUID; else, for a session the
     hub places on THIS host, by fleet name — a machine with no control database
@@ -465,7 +492,7 @@ for r in rows:
         if r["av"] in ("online", "maintenance") and cur["av"] == "lost":
             cur["av"] = r["av"]
         cur["seen"] = max(cur["seen"], r["seen"])
-head = ["#ts\x1f%s\n" % now, "#me\x1f%s\n" % clean(label(host))]
+head = ["#ts\x1f%s\n" % now, "#me\x1f%s\n" % ("" if client else clean(label(host)))]
 for lb in sorted(nodes):
     n = nodes[lb]
     head.append("\x1f".join(("#node", clean(lb), n["av"], str(n["n"]), str(n["seen"]))) + "\n")
@@ -526,7 +553,7 @@ watched() {
     [ -n "$sess" ] || continue
     [ -n "$(tmux -L "$sess" list-clients 2>/dev/null)" ] && return 0
   done <<EOF
-$(fleet_each_conf)
+$(local_fleets)
 EOF
   return 1
 }

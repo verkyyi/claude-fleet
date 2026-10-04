@@ -25,13 +25,25 @@
 #                           (one fleet per login), and two clients of one session
 #                           share its current window.
 #   run [--shell] <node> <worker_id>  the proxy pane's program: connect, reconnect,
-#                           report (`--shell` is passed through to `attach`).
+#                           report (`--shell` is passed through to `attach`). A
+#                           <worker_id> of `-` is the machine itself: its fleet
+#                           session as it stands, no window selected (the shell's
+#                           first window, issue #1484). The pane's window carries
+#                           `@remote_ctl` — the ssh ControlPath of its connection —
+#                           so `open` can retarget it without reconnecting.
 #   attach [--shell] <worker_id> [<view>]   (runs ON <node>, over ssh — or on the
 #                           node itself, nested in the shell's own tmux) — select
-#                           the worker's window and attach to its fleet session.
+#                           the worker's window and attach to its fleet session
+#                           (`-`: attach the login's fleet session, select nothing).
 #                           `--shell` registers this client as a SHELL client
 #                           (C5's `fleet` shell, issue #1485); a <view> id
 #                           registers it as a proxy VIEW with a fleet-open spool.
+#   select <worker_id>      (runs ON <node>, over the proxy's own ssh connection,
+#                           issue #1484) — select the worker's window in its fleet
+#                           session, which every client of that session — the
+#                           proxy — then shows: how `open` moves an open proxy
+#                           window to another row of the SAME machine, with no
+#                           reconnect. Exit 3 when the worker is not live here.
 #   watch <view>            (runs ON <node>, over the same ssh connection) — the
 #                           fleet-open back channel, below.
 #   reconcile <sess>        (ON <node>; its client-attached/-detached hooks) — apply
@@ -79,6 +91,12 @@
 #
 # Rails: off unless CCQUOTA_FLEET=1 (EPIC #1419 rule 1); proxy windows are skipped
 # by every reaper, the sleeper and the migrator (rule 5) — see `fleet_is_remote_window`.
+#
+# THE SHELL (issue #1484, EPIC #1479 C5): bin/fleet-shell.sh runs this very
+# machinery on a person's own computer — its tmux server holds one proxy window
+# per machine and nothing else. It sets FLEET_SHELL=1 in that server's environment,
+# and that is the only difference `open` sees: the pane it starts runs `run --shell`,
+# so the far end registers a SHELL client (#1485) and hides its own list and bar.
 #
 # Knobs (env, fleet.conf or the fleet's conf):
 #   FLEET_REMOTE_SSH         `m4=m4-lan m5=macmini` — ssh host per machine label
@@ -255,15 +273,28 @@ open)
   # (conf/tmux-attention.conf's pane-border-format), so the top of the pane says
   # at a glance that the keys go to another machine.
   title="⇄$node ${name:-${wid#*/}}"
-  cmd="exec bash $(sq "$BIN/fleet-remote-view.sh") run $(sq "$node") $(sq "$wid")"
+  shellopt=''; [ "${FLEET_SHELL:-0}" = 1 ] && shellopt=' --shell'   # the shell's panes (#1484)
+  cmd="exec bash $(sq "$BIN/fleet-remote-view.sh") run$shellopt $(sq "$node") $(sq "$wid")"
   w=$(tmux list-windows -t "=$sess" -F '#{window_id} #{@remote}' 2>/dev/null \
       | awk -v n="$node:" 'index($2, n) == 1 { print $1; exit }')
   if [ -n "$w" ]; then
     cur=$(tmux show-options -wqv -t "$w" @remote 2>/dev/null)
     if [ "$cur" != "$node:$wid" ]; then
-      tmux set-window-option -t "$w" @remote "$node:$wid" 2>/dev/null
-      tmux rename-window -t "$w" -- "$title" 2>/dev/null
-      tmux respawn-pane -k -t "$w" -c "$HOME" "$cmd" 2>/dev/null
+      # Another row of the SAME machine (issue #1484): over the proxy's own ssh
+      # connection (`@remote_ctl`, the ControlMaster `run` holds), select that
+      # worker's window there — the proxy, a client of that session, follows at
+      # once. No master up, or the worker not live there: reconnect, as before.
+      ctl=$(tmux show-options -wqv -t "$w" @remote_ctl 2>/dev/null)
+      SSH="${FLEET_REMOTE_SSH_CMD:-ssh}"; host=$(ssh_host "$node"); rbin="${FLEET_REMOTE_BIN:-.claude/fleet/bin}"
+      if [ -n "$ctl" ] && [ -S "$ctl" ] && $SSH -S "$ctl" -O check "$host" >/dev/null 2>&1 \
+         && $SSH -S "$ctl" "$host" "bash $rbin/fleet-remote-view.sh select $(sq "$wid")" >/dev/null 2>&1; then
+        tmux set-window-option -t "$w" @remote "$node:$wid" 2>/dev/null
+        tmux rename-window -t "$w" -- "$title" 2>/dev/null
+      else
+        tmux set-window-option -t "$w" @remote "$node:$wid" 2>/dev/null
+        tmux rename-window -t "$w" -- "$title" 2>/dev/null
+        tmux respawn-pane -k -t "$w" -c "$HOME" "$cmd" 2>/dev/null
+      fi
     fi
   else
     w=$(tmux new-window -d -P -F '#{window_id}' -t "=$sess:" -n "$title" -c "$HOME" "$cmd" 2>/dev/null) || exit 1
@@ -285,6 +316,8 @@ run)
   SSH="${FLEET_REMOTE_SSH_CMD:-ssh}"
   view="$(hostname -s 2>/dev/null | tr -c 'A-Za-z0-9-' '-')$$-$RANDOM"
   ctl="${TMPDIR:-/tmp}/frv.$$.$RANDOM"
+  # The window knows its connection (issue #1484): `open` retargets through it.
+  [ -n "${TMUX:-}" ] && tmux set-window-option -t "${TMUX_PANE:-}" @remote_ctl "$ctl" 2>/dev/null
   side=''
   cleanup() {
     [ -n "$side" ] && kill "$side" 2>/dev/null
@@ -339,7 +372,8 @@ for line in sys.stdin:
     kill "$side" 2>/dev/null; side=''
     case "$rc" in
       0) exit 0 ;;                                   # the remote client ended on purpose
-      3) printf '\n%s 已不在 %s 上（结束或搬走了）。按任意键关闭。\n' "${wid#*/}" "$node"
+      3) if [ "$wid" = - ]; then printf '\n%s 上没有活着的 fleet 会话。按任意键关闭。\n' "$node"
+         else printf '\n%s 已不在 %s 上（结束或搬走了）。按任意键关闭。\n' "${wid#*/}" "$node"; fi
          read -r -n 1 -s _; exit 0 ;;
     esac
     # A drop after a good session reconnects at once; a failing route backs off and,
@@ -361,10 +395,18 @@ attach)
     case "$1" in --shell) shell=1; shift ;; --) shift; break ;; -*) note "attach: unknown option $1"; exit 2 ;; *) break ;; esac
   done
   wid="${1:-}"; view="${2:-}"
-  loc=$(fleet_worker_locate "wid:${wid#wid:}" 2>/dev/null)
-  case "$loc" in local\ *) ;; *) note "${wid#*/} is not live on $(hostname -s)"; exit 3 ;; esac
-  set -- $loc; w=$2; s=$3; sock=$(fleet_socket "$s")
-  T select-window -t "$w" 2>/dev/null || { note "cannot select $w"; exit 3; }
+  if [ -z "$wid" ] || [ "$wid" = - ]; then
+    # The machine itself (issue #1484): this login's one fleet session (one fleet
+    # per login, #980), as it stands — the shell's first window lands here.
+    s=$(fleet_sockets | head -n 1)
+    [ -n "$s" ] || { note "no fleet session is live on $(hostname -s)"; exit 3; }
+    sock=$(fleet_socket "$s")
+  else
+    loc=$(fleet_worker_locate "wid:${wid#wid:}" 2>/dev/null)
+    case "$loc" in local\ *) ;; *) note "${wid#*/} is not live on $(hostname -s)"; exit 3 ;; esac
+    set -- $loc; w=$2; s=$3; sock=$(fleet_socket "$s")
+    T select-window -t "$w" 2>/dev/null || { note "cannot select $w"; exit 3; }
+  fi
   # A marker a SIGKILLed proxy left behind, or a state the hooks missed: the rule
   # first, on the clients that are here now.
   rv_prune
@@ -404,6 +446,19 @@ attach)
   rv_unlock "$s"
   rv_reconcile "$s"
   exit "$rc"
+  ;;
+
+# ---------------------------------------------------------------------------------
+select)
+  # On <node>, over the proxy's own connection (issue #1484): the worker's window
+  # becomes the session's current one, so the proxy client — and every other
+  # client of that session — shows it. Not live here → 3, and `open` reconnects.
+  wid="${1:-}"
+  loc=$(fleet_worker_locate "wid:${wid#wid:}" 2>/dev/null)
+  case "$loc" in local\ *) ;; *) note "${wid#*/} is not live on $(hostname -s)"; exit 3 ;; esac
+  set -- $loc; w=$2; s=$3; sock=$(fleet_socket "$s")
+  T select-window -t "$w" 2>/dev/null || { note "cannot select $w"; exit 3; }
+  exit 0
   ;;
 
 # ---------------------------------------------------------------------------------
@@ -460,6 +515,6 @@ watch)
   ;;
 
 *)
-  sed -n '2,41p' "$0" | sed 's/^# \{0,1\}//' >&2
+  sed -n '2,52p' "$0" | sed 's/^# \{0,1\}//' >&2
   exit 2 ;;
 esac

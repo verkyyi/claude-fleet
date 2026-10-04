@@ -374,6 +374,17 @@ status_hub_render() {
                mem_out="${_spc}$(mb_to_g1 "$HN_USED")G/$(mb_to_g1 "$HN_TOTAL")G" ;;
         esac
         node_seg=" ${BLUE}${FSN_NODE} ${GREEN}● ${DIM}│ ${BLUE}CPU ${cpu} ${DIM}│ ${BLUE}MEM ${mem_out} "
+    elif fleet_status_remote_node "$STATUS_SESS" "$FSN_NODE"; then
+        # no hub_nodes row (a certificate identity, the shell on a colleague's
+        # computer — #1484, #1502): the hub's word from the sessions cache, online
+        # or lost, without the load — never a `?` for a machine the hub does list
+        if [ "$RN_AV" = online ] || [ "$RN_AV" = maintenance ]; then
+            node_seg=" ${BLUE}${FSN_NODE} ${GREEN}● "
+        else
+            age=$(( _FLEET_NOW - ${RN_SEEN:-0} )); [ "$age" -lt 0 ] && age=0
+            fleet_status_age "$age"
+            node_seg=" ${BLUE}${FSN_NODE} ${RED}○ 失联 ${FSA} "
+        fi
     else
         node_seg=" ${BLUE}${FSN_NODE} ${DIM}? "
     fi
