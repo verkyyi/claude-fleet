@@ -56,11 +56,14 @@ if "list-windows" in sys.argv:
     # Rows carry @repo in column 9; a format that does not ask for it (a one-repo
     # fleet, issue #1018) gets that column empty, exactly as real tmux prints it.
     data=root/"workers.tsv"
-    keep=sys.argv[sys.argv.index("-F") + 1].endswith("#{@repo}")
+    # Columns 10-11 (issue #1423): the window name and @origin_wid, when asked.
+    fmt=sys.argv[sys.argv.index("-F") + 1]
+    keep="#{@repo}" in fmt
+    extra=["", ""] if "#{window_name}" in fmt else []
     if data.exists():
         for row in data.read_text().splitlines():
             cols=row.split("\t")
-            print("\t".join(cols[:8] + [cols[8] if keep else ""]))
+            print("\t".join(cols[:8] + [cols[8] if keep else ""] + extra))
     sys.exit(0)
 sys.exit(9)
 ''')
