@@ -89,14 +89,15 @@ act() {
 if [ "$POPUP" = 1 ]; then
   cur=$(tdm '#{window_id}')
   res=$(mktemp "${TMPDIR:-/tmp}/fleet-task-pick.XXXXXX") || exit 0
-  trap 'rm -f "$res" "$res.ran"; tmux set -g @popup_open 0 2>/dev/null' EXIT
+  trap 'rm -f "$res" "$res.ran"; tmux set -g @popup_open 0 \; set -gu @popup_pid 2>/dev/null' EXIT
   trap 'exit 130' INT TERM HUP
   from=$(tdm '#{?#{@wid},#{@wid},#{window_id}}')
-  tmux set -g @popup_open "$(date +%s)" 2>/dev/null || :
+  epoch=$(date +%s)   # + its holder, so the sidebar's pause ends with it (#1536)
+  tmux set -g @popup_open "$epoch" \; set -g @popup_pid "$epoch:$$" 2>/dev/null || :
   tmux display-popup ${CLIENT:+-c "$CLIENT"} -E -w 90% -h 80% -T ' tasks ' \
     "$(printf '%q ' bash "$BIN/fleet-task-pick.sh" --session "$SESS" --current "$cur" --out "$res")" \
     2>/dev/null || :
-  tmux set -g @popup_open 0 2>/dev/null || :
+  tmux set -g @popup_open 0 \; set -gu @popup_pid 2>/dev/null || :
   # display-popup exits 0 whether or not it drew anything (no client, another
   # overlay already up — see dash-popup.sh, issue #454), so the picker's first
   # act is to drop `$res.ran`. No marker ⇒ it never ran ⇒ exit 3, and the caller

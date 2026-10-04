@@ -100,8 +100,12 @@ marker="${TMPDIR:-/tmp}/.dash-popup-ran.$$"
 rm -f "$marker" 2>/dev/null || true
 
 if [ -n "$client" ]; then
-  trap 'rm -f "$marker" 2>/dev/null; tmux set -g @popup_open 0 2>/dev/null || true' EXIT INT TERM HUP
-  tmux set -g @popup_open "$(date +%s)" 2>/dev/null || true
+  trap 'rm -f "$marker" 2>/dev/null; tmux set -g @popup_open 0 \; set -gu @popup_pid 2>/dev/null || true' EXIT INT TERM HUP
+  # `@popup_pid <epoch>:<pid>` names the holder of THIS epoch (issue #1536): the
+  # sidebar pauses only while this process lives, so a holder SIGKILLed past
+  # its trap (or a flag that outlived its popup) frees the list at once, not 30s on.
+  epoch=$(date +%s)
+  tmux set -g @popup_open "$epoch" \; set -g @popup_pid "$epoch:$$" 2>/dev/null || true
   # Stamp the marker INSIDE the popup, ahead of the real command, so its presence
   # proves the popup opened and started running. display-popup -E blocks until the
   # popup closes, so the check below is not racing it.
@@ -112,7 +116,7 @@ if [ -n "$client" ]; then
   [ -e "$marker" ] && exit 0
   # Refused (an overlay already on this client, the client vanished mid-flight, …)
   # — fall through to inline rather than leaving the keystroke dead.
-  tmux set -g @popup_open 0 2>/dev/null || true
+  tmux set -g @popup_open 0 \; set -gu @popup_pid 2>/dev/null || true
   trap - EXIT INT TERM HUP
 fi
 
