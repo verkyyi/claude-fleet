@@ -729,10 +729,11 @@ EOF
 # Written on the same round as the sessions, read by bin/fleet-status-lib.sh (the
 # bar, C4's 入口 chip, C5's shell) — never fetched on a render path.
 #   $G/hub_nodes   #ts<US><epoch>, then one line per machine the hub shows:
-#     node<US>online|lost<US>load1<US>ncpu<US>mem_pct<US>sessions<US>fleet_version<US>age<US>mem_used_mb<US>mem_total_mb
+#     node<US>online|lost<US>load1<US>ncpu<US>mem_pct<US>sessions<US>fleet_version<US>age<US>mem_used_mb<US>mem_total_mb<US>ver_state
 #     (sessions `?` when the hub could not read a fleet there — #1465)
 #     (/v1/nodes `machines`: one load per machine; fleet_version is its newest
-#     login's; age is seconds since its last heartbeat when written)
+#     login's; age is seconds since its last heartbeat when written; ver_state
+#     is that version's word against the stable mark — issue #644, below)
 #   $G/hub_limits  #ts<US><epoch>, then one line per subscription with a reading:
 #     label<US>pct5h<US>pctweek<US>account_uuid<US>hub_label
 #     (/v1/limits?account=all; `label` is this login's accounts/<label>.conf name
@@ -814,10 +815,10 @@ refresh_summaries() {
   SUMJ=''; SUMRC=''
   nj=$(mktemp "$G/hubnodes.json.XXXXXX") || return 1
   if fetch_nodes >"$nj" && [ -s "$nj" ]; then
-    python3 - "$nj" "$G/hub_nodes" "${FLEET_NODE_ALIASES:-}" "$now" <<'PY' || printf 'fleet-hub-sessions: /v1/nodes did not answer a machine list — keeping the last hub_nodes\n' >&2
-import json, os, re, sys, tempfile
+    python3 - "$nj" "$G/hub_nodes" "${FLEET_NODE_ALIASES:-}" "$now" "${FLEET_LIVE_DIR:-$HOME/.claude/fleet}" <<'PY' || printf 'fleet-hub-sessions: /v1/nodes did not answer a machine list — keeping the last hub_nodes\n' >&2
+import json, os, re, subprocess, sys, tempfile
 from datetime import datetime, timezone
-jpath, out, aliases, now = sys.argv[1:5]
+jpath, out, aliases, now, live = sys.argv[1:6]
 now = int(now)
 data = json.load(open(jpath, encoding="utf-8"))
 machines = data.get("machines")
@@ -846,6 +847,49 @@ for n in data.get("nodes") or []:
     t = epoch(n.get("last_heartbeat"))
     if t >= version.get(n["hostname"], (0, ""))[0]:
         version[n["hostname"]] = (t, n["fleet_version"])
+# 旧 (issue #644, EPIC #1524 R4): a machine's fleet_version is the short sha of
+# its live install's HEAD (fleet-install-version.sh, carried on its node's
+# heartbeat). It is judged HERE, once per round, against the stable mark this
+# login's install-sync daemon keeps fetched as the live install's local
+# refs/tags/stable (fleet-install-sync.sh) — local git only, never the network —
+# so the bar and the doctor read one word, as builtins. The 11th field:
+#   ok         at stable          old:<n>   n commits behind stable → the bar's 旧
+#   ahead:<n>  n commits past it  off       not on stable's line (a branch)
+#   ?          a version this checkout cannot resolve (never fetched here)
+#   ''         no version reported, no live checkout, or no local stable tag:
+#              UNKNOWN — drawn as nothing, never as current (the #635 rule)
+def git(*args):
+    try:
+        r = subprocess.run(["git", "-C", live] + list(args), capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None, ""
+    return r.returncode, r.stdout.strip()
+stable = None
+if live and os.path.isdir(live):
+    rc, got = git("rev-parse", "-q", "--verify", "refs/tags/stable^{commit}")
+    if rc == 0 and got:
+        stable = got
+memo = {}
+def vstate(ver):
+    if not ver or stable is None:
+        return ""
+    if ver not in memo:
+        if not re.fullmatch(r"[0-9a-fA-F]{4,40}", ver):
+            s = "?"
+        else:
+            rc, full = git("rev-parse", "-q", "--verify", ver + "^{commit}")
+            if rc != 0 or not full:
+                s = "?"
+            elif full == stable:
+                s = "ok"
+            elif git("merge-base", "--is-ancestor", full, stable)[0] == 0:
+                s = "old:" + (git("rev-list", "--count", full + ".." + stable)[1] or "?")
+            elif git("merge-base", "--is-ancestor", stable, full)[0] == 0:
+                s = "ahead:" + (git("rev-list", "--count", stable + ".." + full)[1] or "?")
+            else:
+                s = "off"
+        memo[ver] = s
+    return memo[ver]
 lines = ["#ts\x1f%d\n" % now]
 for m in machines:
     if not isinstance(m, dict) or not m.get("hostname"):
@@ -860,10 +904,11 @@ for m in machines:
         continue
     used = max(total - free, 0)
     hb = epoch(m.get("last_heartbeat"))
+    ver = version.get(h, (0, ""))[1]
     lines.append("\x1f".join(clean(v) for v in (
         label(h), "online" if m.get("status") == "online" else "lost", "%.2f" % load1, ncpu,
-        used * 100 // total if total else "", sess, version.get(h, (0, ""))[1],
-        max(now - hb, 0) if hb else "", used // 1048576, total // 1048576)) + "\n")
+        used * 100 // total if total else "", sess, ver,
+        max(now - hb, 0) if hb else "", used // 1048576, total // 1048576, vstate(ver))) + "\n")
 fd, tmp = tempfile.mkstemp(dir=os.path.dirname(out), prefix=".hubnodes.")
 with os.fdopen(fd, "w", encoding="utf-8") as f:
     f.write("".join(lines))

@@ -25,7 +25,13 @@
 #      window (`@remote`, fleet-remote-view.sh): `● ` + its load and memory off
 #      the hub's cache, `○ 失联 3m` when the hub calls it lost — or when the hub
 #      itself is silent (#1483): nothing here can hear that machine, so its word
-#      is as old as the silence — `?` when the cache has no row for it;
+#      is as old as the silence — `?` when the cache has no row for it. `· 旧`
+#      at the chip's end (issue #644, EPIC #1524 R4) when that machine's live
+#      install is behind the stable mark: the refresh loop judges each node's
+#      reported version against this login's local refs/tags/stable and writes
+#      `old:<n>` into its hub_nodes row; this machine's own row says it too, so
+#      the one that was never looked at is the one that shows it. At stable,
+#      ahead, unknown or no version → nothing (unknown is never drawn current);
 #   2. the account the window runs on (`@cc_account`) with its 5h / week quota
 #      off the hub's limits cache, else the window's own reading — omitted when
 #      neither knows it;
@@ -378,12 +384,14 @@ status_hub_render() {
         for a in ${FLEET_NODE_ALIASES:-}; do case "$a" in "$h="*) me=${a#*=} ;; esac; done
     fi
     fleet_status_node "$STATUS_REMOTE" "$me"
-    have=0
+    # that machine's hub_nodes row, read once: a proxy window's load and memory
+    # (below), and — this machine's own row too — its fleet version's word (#644)
+    have=0; fleet_status_hub_node "$FSN_NODE" && have=1
     if [ "$FSN_KIND" = local ]; then
         # here: the live readings, same numbers and colours as the plain bar
         status_fields "$m_load" "$m_mem" ''
         node_seg="${BLUE}${FSN_NODE} ${GREEN}● ${_sf}"
-    elif fleet_status_hub_node "$FSN_NODE" && have=1 && [ "$HN_AV" != online ]; then
+    elif [ "$have" = 1 ] && [ "$HN_AV" != online ]; then
         # the hub's own word on it: lost — dated by its last observation plus the
         # cache's age (longer than any silence of the hub's, so it wins the next)
         age=$(( ${HN_AGE:-0} + _FLEET_NOW - HN_TS )); [ "$age" -lt 0 ] && age=0
@@ -419,6 +427,9 @@ status_hub_render() {
     else
         node_seg="${BLUE}${FSN_NODE} ${DIM}? "
     fi
+    # 旧 (issue #644): only the `old:<n>` word draws it — `ok`, `ahead`, `off`,
+    # `?` and a row without the field (a pre-#644 cache) leave the chip as it was.
+    case "${HN_VST:-}" in old:*) [ "$have" = 1 ] && node_seg+="${DIM}· ${YELLOW}旧 " ;; esac
     acct_seg=''
     if [ -n "$STATUS_ACCT" ] && fleet_status_hub_limit "$STATUS_ACCT"; then
         status_account "$STATUS_ACCT" "$HL_5H" "$HL_WK"; acct_seg=$_sa

@@ -127,7 +127,7 @@ FLEET_MANUAL_ACCOUNT_BIN           seam: fake fresh quota reader for manual targ
 FLEET_LADDER_LOG_MAX_BYTES         knob: size cap for context-ladder.log + handoff-cycle.log, cut to the newest rows filling half the cap (1 MiB; 0 = no cap)
 FLEET_LEDGER_WATCH                 knob: 0 turns the ledger-watch daemon into a no-op
 FLEET_LEDGER_WATCH_LEASE_TTL       knob: internal pacing/limit, safe in-code default (fleet-ledger-watch.sh)
-FLEET_LIVE_DIR                     path: state/log location override (fleet-doctor.sh)
+FLEET_LIVE_DIR                     path: the live install checkout (default ~/.claude/fleet) — fleet-install-version.sh, fleet-doctor.sh, and the hub refresh loop's stable mark (its local refs/tags/stable judges every machine's version, #644)
 FLEET_LIVE_ROOT                    path: state/log location override (fleet-daemon-lib.sh)
 FLEET_LOGIN_HOMES                  seam: an injectable command/path for tests (fleet-login-new.sh)
 FLEET_LOOP_AGENT                   handoff: which agent the /loop spec belongs to

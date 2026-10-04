@@ -349,6 +349,43 @@ if [ -f "$iv" ] && [ -d "$live_dir" ]; then
       info install "other logins on this machine: $flo (\`?\` = unreadable without passwordless sudo; $(dirname "$0")/fleet-install-follow.sh for the table)"
     fi
   fi
+  # The OTHER MACHINES (issue #644, EPIC #1524 R4). The install that is old is on
+  # the machine you are not logged into: on 2026-09-14 the Mac mini sat 28 commits
+  # behind while nobody ran doctor there. Every node's heartbeat carries its live
+  # install's HEAD (fleet-install-version.sh --json, read by the agent); the hub
+  # refresh loop (fleet-hub-sessions.sh) writes one row per machine into
+  # global/hub_nodes and judges that version against THIS login's local
+  # refs/tags/stable — the `old:<n>` word the status bar draws as 旧. This row
+  # reads that cache, never the hub: no cache (hub off, a certificate identity)
+  # prints nothing — the degenerate case. WARN when any machine is behind stable;
+  # a version this checkout cannot resolve, or none reported, is "unknown" — the
+  # #635 rule: never 0, never current.
+  hn="${FLEET_STATUS_G:-${TMPDIR:-/tmp}/.claude-dash/global}/hub_nodes"
+  if [ -s "$hn" ]; then
+    hn_sum=$(LC_ALL=C awk -F "$(printf '\037')" '
+      $1 == "#ts" { ts = $2; next }
+      $1 == "" { next }
+      { ver = $7; vs = $11; n++
+        if (vs ~ /^old:/)        { sub(/^old:/, "", vs); w = $1 " at " ver " — " vs " behind stable (OLD)"; nold++ }
+        else if (vs == "ok")     w = $1 " at " ver " — at stable"
+        else if (vs ~ /^ahead:/) { sub(/^ahead:/, "", vs); w = $1 " at " ver " — " vs " ahead of stable" }
+        else if (vs == "off")    w = $1 " at " ver " — not on stable'"'"'s line"
+        else if (vs == "?")      w = $1 " at " ver " — unknown (a commit this checkout has not fetched)"
+        else if (ver != "")      w = $1 " at " ver " — unknown (not judged against stable: no local refs/tags/stable yet, or an older refresh loop)"
+        else                     w = $1 " — unknown (no fleet version reported)"
+        s = (s == "" ? w : s " · " w) }
+      END { printf "%d\n%d\n%s\n%s\n", nold + 0, n + 0, ts, s }' "$hn")
+    _hnf() { printf '%s\n' "$hn_sum" | sed -n "${1}p"; }
+    hn_old=$(_hnf 1); hn_n=$(_hnf 2); hn_ts=$(_hnf 3); hn_s=$(_hnf 4)
+    hn_age=''; case "$hn_ts" in ''|*[!0-9]*) ;; *) hn_age=" (hub cache $(( $(date +%s) - hn_ts ))s old)" ;; esac
+    if [ "${hn_n:-0}" -gt 0 ]; then
+      if [ "${hn_old:-0}" -gt 0 ]; then
+        warn install "machines (hub): $hn_s$hn_age — an OLD machine runs bin/ + daemons behind the mark every login follows; on it, \`sh fleet-install-follow.sh\` says whether install-sync is stuck or off, and /fleet-sync-install moves it by hand"
+      else
+        info install "machines (hub): $hn_s$hn_age"
+      fi
+    fi
+  fi
 fi
 
 # --- config modal (prefix+c: view/edit per-fleet + global fleet config) ---

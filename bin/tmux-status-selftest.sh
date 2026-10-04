@@ -30,13 +30,20 @@
 #      seams: the alias, mem %, newest login's version, the uuid → local label
 #      map, rounding, skipped rows; a failed fetch keeps the last file; off
 #      (CCQUOTA_FLEET unset) writes nothing; their own cadence (FLEET_HUB_SUMMARY_EVERY);
-#      hub_ok written on a sessions round that stood, left alone on a failed one (#1483)
+#      hub_ok written on a sessions round that stood, left alone on a failed one (#1483);
 #      a connection certificate asks POST /v1/fleet/summary once for both and
-#      never the token; refused → the viewer routes with it; no answer → nothing (#1502)
+#      never the token; refused → the viewer routes with it; no answer → nothing (#1502);
+#      each version's word against the live install's local refs/tags/stable
+#      (issue #644): ok / old:<n> / ahead:<n> / off / ? — and '' (unknown, never
+#      current) with no live checkout or no stable tag
 #   H  fleet_status_node: the one rule for 「当前会话所在机器」
 #   I  the width (`cw=`): < 120 drops 内存, < 100 负载 too, 盘 stays; none = all
 #   J  the account chip off the window's own reading (`rl5=`/`rl7=`): local mode,
 #      and hub mode when the hub's limits do not know the account
+#   K  旧 (issue #644, EPIC #1524 R4): a hub_nodes row whose 11th field is
+#      `old:<n>` ends the machine chip in `· 旧` — this machine's own row too,
+#      a lost machine's, at any width; ok / ahead / off / ? / a 10-field row
+#      (a pre-#644 cache) draw nothing, and the plain bar never carries it
 #
 # Drives bin/tmux-status.sh, bin/fleet-status-lib.sh and bin/fleet-hub-sessions.sh.
 # ps / sysctl / vm_stat / free / df are shims (as tmux-status-cache-selftest.sh);
@@ -245,16 +252,35 @@ fi
 # ---- G: fleet-hub-sessions.sh writes the two summaries
 HUBS="$BIN/fleet-hub-sessions.sh"
 HB=$(python3 -c 'import sys, time; print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(sys.argv[1]))))' $(( NOW - 7 )))
+# The "live install" the loop judges every machine's version against (issue
+# #644): c1 → c2 → c3 on trunk, refs/tags/stable at c2, and c4 a commit off c1
+# on no branch — hermetic git (no user config, a fixed identity).
+export GIT_CONFIG_GLOBAL="$WORK/gitconfig" GIT_CONFIG_SYSTEM=/dev/null
+export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+: > "$WORK/gitconfig"
+LIVE="$WORK/live"; git init -q "$LIVE" || fail "G: git init"
+for c in c1 c2 c3; do git -C "$LIVE" commit -q --allow-empty -m "$c" || fail "G: commit $c"; done
+C1=$(git -C "$LIVE" rev-parse --short HEAD~2); C2=$(git -C "$LIVE" rev-parse --short HEAD~1); C3=$(git -C "$LIVE" rev-parse --short HEAD)
+git -C "$LIVE" tag stable "$C2"
+C4=$(git -C "$LIVE" commit-tree -p "$C1" -m c4 "$(git -C "$LIVE" rev-parse "$C1^{tree}")"); C4=$(git -C "$LIVE" rev-parse --short "$C4")
+git init -q "$WORK/nostable"; git -C "$WORK/nostable" commit -q --allow-empty -m x
 cat > "$WORK/nodes.json" <<EOF
 {"at":"x","machines":[
  {"hostname":"macmini","status":"online","sessions":14,"load1":5.65234375,"ncpu":15,"mem_free_bytes":29886201856,"mem_total_bytes":68719476736,"last_heartbeat":"$HB"},
  {"hostname":"mini2","status":"lost","sessions":0,"load1":0,"ncpu":10,"mem_free_bytes":0,"mem_total_bytes":0,"last_heartbeat":null},
  {"hostname":"box3","status":"online","sessions":null,"sessions_unknown":["u/f: UNAVAILABLE"],"load1":1,"ncpu":10,"mem_free_bytes":0,"mem_total_bytes":0,"last_heartbeat":"$HB"},
+ {"hostname":"box4","status":"online","sessions":1,"load1":1,"ncpu":4,"mem_free_bytes":1,"mem_total_bytes":2,"last_heartbeat":"$HB"},
+ {"hostname":"box5","status":"online","sessions":1,"load1":1,"ncpu":4,"mem_free_bytes":1,"mem_total_bytes":2,"last_heartbeat":"$HB"},
+ {"hostname":"box6","status":"online","sessions":1,"load1":1,"ncpu":4,"mem_free_bytes":1,"mem_total_bytes":2,"last_heartbeat":"$HB"},
  {"hostname":"","status":"online"}],
  "nodes":[
  {"hostname":"macmini","os_user":"a","fleet_version":"old","last_heartbeat":"2026-10-04T13:15:20Z"},
- {"hostname":"macmini","os_user":"b","fleet_version":"1607453c45","last_heartbeat":"2026-10-04T13:15:25Z"},
- {"hostname":"mini2","os_user":"c","fleet_version":"","last_heartbeat":"2026-10-04T13:15:23Z"}]}
+ {"hostname":"macmini","os_user":"b","fleet_version":"$C2","last_heartbeat":"2026-10-04T13:15:25Z"},
+ {"hostname":"mini2","os_user":"c","fleet_version":"","last_heartbeat":"2026-10-04T13:15:23Z"},
+ {"hostname":"box3","os_user":"d","fleet_version":"$C1","last_heartbeat":"2026-10-04T13:15:23Z"},
+ {"hostname":"box4","os_user":"e","fleet_version":"$C3","last_heartbeat":"2026-10-04T13:15:23Z"},
+ {"hostname":"box5","os_user":"f","fleet_version":"$C4","last_heartbeat":"2026-10-04T13:15:23Z"},
+ {"hostname":"box6","os_user":"g","fleet_version":"deadbeef","last_heartbeat":"2026-10-04T13:15:23Z"}]}
 EOF
 cat > "$WORK/limits.json" <<'EOF'
 {"per_account":[
@@ -270,7 +296,7 @@ printf '{"sessions":[]}\n' > "$WORK/sessions.json"
 hubs() { TMPDIR="$T/" FLEET_CONF_DIR="$CONF" FLEET_ACCOUNTS_DIR="$ACC" PATH="$WORK/bin:$PATH" CCQUOTA_FLEET="${CF-1}" \
          FLEET_HUB_SESSIONS_CMD="${SCMD-cat '$WORK/sessions.json'}" FLEET_HUB_NODES_CMD="${NCMD-cat '$WORK/nodes.json'}" \
          FLEET_HUB_LIMITS_CMD="${LCMD-cat '$WORK/limits.json'}" FLEET_NODE_ALIASES="macmini=m5 mini2=m4" \
-         FLEET_HUB_SUMMARY_EVERY="${SEVERY-0}" bash "$HUBS" --refresh 2>"$WORK/err"; }
+         FLEET_HUB_SUMMARY_EVERY="${SEVERY-0}" FLEET_LIVE_DIR="${LIVEDIR-$LIVE}" bash "$HUBS" --refresh 2>"$WORK/err"; }
 rm -f "$G/hub_nodes" "$G/hub_limits" "$G/hub_ok"
 CF='' hubs; [ -e "$G/hub_nodes" ] || [ -e "$G/hub_limits" ] || [ -e "$G/hub_ok" ] && fail "G: off (CCQUOTA_FLEET unset) wrote a summary or hub_ok"; CHECKS=$((CHECKS+1))
 hubs || fail "G: --refresh failed" "$(cat "$WORK/err")"
@@ -284,13 +310,27 @@ eq "G: a failed sessions round leaves hub_ok as it was (#1483)" "$OK" "$(cat "$G
 has "G: …and says how long the hub has been silent" "hub unreachable for" "$(cat "$WORK/err")"
 rows=$(tr '\037' '|' < "$G/hub_nodes")
 case "$rows" in "#ts|"[0-9]*) CHECKS=$((CHECKS+1)) ;; *) fail "G: hub_nodes starts with #ts" "$rows" ;; esac
-row=$(printf '%s\n' "$rows" | grep '^m5|'); row=${row%|*|*}   # drop mem_used/mem_total (exact bytes below)
-case "$row" in 'm5|online|5.65|15|56|14|1607453c45|'[0-9]|'m5|online|5.65|15|56|14|1607453c45|'[0-9][0-9]) CHECKS=$((CHECKS+1)) ;;
+row=$(printf '%s\n' "$rows" | grep '^m5|'); row=${row%|*|*|*}   # drop mem_used/mem_total/ver_state (exact below)
+case "$row" in "m5|online|5.65|15|56|14|$C2|"[0-9]|"m5|online|5.65|15|56|14|$C2|"[0-9][0-9]) CHECKS=$((CHECKS+1)) ;;
   *) fail "G: m5's row: alias, mem %, the newest login's version, a small age" "$row" ;; esac
-has "G: m5's memory in MB" "|37034|65536" "$(printf '%s\n' "$rows" | grep '^m5|')"
-eq "G: a lost machine with no reading: empty mem %, no version, no age" "m4|lost|0.00|10||0|||0|0" "$(printf '%s\n' "$rows" | grep '^m4|')"
+has "G: m5's memory in MB" "|37034|65536|" "$(printf '%s\n' "$rows" | grep '^m5|')"
+eq "G: a lost machine with no reading: empty mem %, no version, no age, no version word" "m4|lost|0.00|10||0|||0|0|" "$(printf '%s\n' "$rows" | grep '^m4|')"
 has "G: sessions null (#1465) → ? in the sessions field, never 0" "box3|online|1.00|10||?|" "$(printf '%s\n' "$rows" | grep '^box3|')"
-eq "G: a machine with no hostname is not a row" "4" "$(printf '%s\n' "$rows" | grep -c .)"
+eq "G: a machine with no hostname is not a row" "7" "$(printf '%s\n' "$rows" | grep -c .)"
+# the version's word (issue #644): judged against $LIVE's refs/tags/stable (c2)
+vw() { printf '%s\n' "$rows" | awk -F'|' -v n="$1" '$1 == n { print $7 "|" $11 }'; }
+eq "G: at stable → ok (a short sha against the tag's commit)" "$C2|ok" "$(vw m5)"
+eq "G: one commit behind stable → old:1" "$C1|old:1" "$(vw box3)"
+eq "G: one commit past stable → ahead:1" "$C3|ahead:1" "$(vw box4)"
+eq "G: a commit on no line through stable → off" "$C4|off" "$(vw box5)"
+eq "G: a sha this checkout does not have → ? (never 0, never ok)" "deadbeef|?" "$(vw box6)"
+LIVEDIR="$WORK/nolive" hubs; rows=$(tr '\037' '|' < "$G/hub_nodes")
+eq "G: no live checkout → every word empty (unknown), the rows otherwise the same" 0 "$(printf '%s\n' "$rows" | awk -F'|' 'NR > 1 && $11 != ""' | grep -c .)"
+eq "G: … box3 still carries its version" "$C1|" "$(vw box3)"
+LIVEDIR="$WORK/nostable" hubs; rows=$(tr '\037' '|' < "$G/hub_nodes")
+eq "G: a checkout with no refs/tags/stable → every word empty" 0 "$(printf '%s\n' "$rows" | awk -F'|' 'NR > 1 && $11 != ""' | grep -c .)"
+hubs; rows=$(tr '\037' '|' < "$G/hub_nodes")
+eq "G: … and back with the tag" "$C1|old:1" "$(vw box3)"
 lrows=$(tr '\037' '|' < "$G/hub_limits")
 has "G: a uuid this login has an accounts/<label>.conf for → that label; 65.4 → 65" "icloud|63|65|7a7e6173-f07c-490f-844e-00c27c3f0844|ylianghui@icloud.com" "$lrows"
 has "G: an unmapped uuid → the hub's label" "verky@24helpful.com|17|6|e69154ac|verky@24helpful.com" "$lrows"
@@ -402,5 +442,28 @@ eq "J: local, a reading but no account → no chip" "${GOLD_LOCAL}${tail}" "$(CF
 has "J: hub, the hub's limits win over the window's reading" "icloud #[fg=#565f89]5h #[fg=#9ece6a]63% " "$(bar $LOCAL rl5=1 rl7=74)"
 has "J: hub, an account the hub does not know → the window's reading" "│ #[fg=#7aa2f7]nope #[fg=#565f89]5h #[fg=#f7768e]99% " \
     "$(bar sess=f1 win=@1 remote= acct=nope wsf= wscf= wsaved= rl5=99 rl7=2)"
+
+# ---- K: 旧 — the machine's live install is behind the stable mark (issue #644)
+remote "$NOW"; printf '%s\n' "$NOW" > "$G/hub_ok"
+nodes "$NOW" "$(j m5 online 5.65 15 56 14 aaa1111 3 37035 65536 old:2)" \
+             "$(j m4 online 1.57 10 25 0 bbb2222 5 4142 16384 ok)" \
+             "$(j m8 online 9.00 10 90 2 ccc3333 1 14746 16384 ahead:1)" \
+             "$(j m9 lost 0.00 4 10 0 ddd4444 4000 400 4096 old:9)" \
+             "$(j m7 online 1.00 4 10 0 eee5555 1 400 4096 '?')" \
+             "$(j m6 online 1.00 4 10 0 fff6666 1 400 4096 off)" \
+             "$(j m3 online 1.00 4 10 0 ggg7777 1 400 4096)"
+OLD='#[fg=#565f89]· #[fg=#e0af68]旧 '
+eq "K: this machine behind stable → m5 ● · 负载 · 内存 · 旧 │ account │ ● 入口" \
+   " #[fg=#7aa2f7]m5 #[fg=#9ece6a]● ${LOAD}${MEM}${OLD}#[fg=#565f89]│ #[fg=#7aa2f7]icloud #[fg=#565f89]5h #[fg=#9ece6a]63% #[fg=#565f89]· 周 #[fg=#9ece6a]65% ${hub}${tail}" "$(bar $LOCAL)"
+eq "K: a proxy window onto a machine at stable → no 旧 (leg C's chip, byte for byte)" "${m4}${hub}${tail}" "$(bar sess=f1 win=@2 remote=m4:u/issue-9 acct= wsf= wscf= wsaved=)"
+hasnt "K: ahead of stable → no 旧" "旧" "$(bar sess=f1 win=@3 remote=m8:u/x acct= wsf= wscf= wsaved=)"
+hasnt "K: off stable's line → no 旧" "旧" "$(bar sess=f1 win=@3 remote=m6:u/x acct= wsf= wscf= wsaved=)"
+hasnt "K: a version the checkout cannot resolve (?) → no 旧, never a guess" "旧" "$(bar sess=f1 win=@3 remote=m7:u/x acct= wsf= wscf= wsaved=)"
+out=$(bar sess=f1 win=@3 remote=m3:u/x acct= wsf= wscf= wsaved=)
+hasnt "K: a 10-field row (a pre-#644 cache) → no 旧" "旧" "$out"
+has "K: … and its chip is whole" " #[fg=#7aa2f7]m3 #[fg=#9ece6a]● #[fg=#565f89]· 负载 " "$out"
+has "K: a lost machine that is also old → ○ 失联 66m · 旧" " #[fg=#7aa2f7]m9 #[fg=#f7768e]○ 失联 66m ${OLD}${hub}" "$(bar sess=f1 win=@3 remote=m9:u/x acct= wsf= wscf= wsaved=)"
+has "K: at cw=90 the fields go, 旧 stays" " #[fg=#7aa2f7]m5 #[fg=#9ece6a]● ${OLD}#[fg=#565f89]│ #[fg=#7aa2f7]icloud " "$(bar $LOCAL cw=90)"
+eq "K: the plain bar never carries it" "$plain" "$(CF='' bar)"
 
 printf 'tmux-status-selftest: OK (%d checks) — the bar shows the machine the current session is on (issue #1482), one layout in both modes (issue #1534)\n' "$CHECKS"
