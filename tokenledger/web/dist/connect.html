@@ -88,7 +88,7 @@ button.danger { border-color:var(--lost); color:var(--lost); background:transpar
     <h2>一行安装</h2>
     <div>在你的电脑终端里运行（macOS / Linux；Windows 在 WSL 里）：</div>
     <div class="cmdrow"><pre id="installcmd" style="flex:1"></pre><button class="ghost" id="copyinstall">复制</button></div>
-    <div style="margin-top:8px">之后每次只敲 <span class="mono"><b>fleet</b></span>：自动续证书（或第一次扫码）、入口选机器、测速选线路、进入你的 fleet。<span class="muted" id="installnote"></span></div>
+    <div style="margin-top:8px">之后每次只敲 <span class="mono"><b>fleet</b></span>：自动续证书（或第一次扫码）、入口选机器；电脑上装了 tmux（≥ 3.2）就是壳——左边入口给的列表、底下一栏、右边直连那台机器；没装 tmux 就按原来的方式测速选线路直连，并提示一行怎么装。再跑一次这条命令就是更新。<span class="muted" id="installnote"></span></div>
   </div>
   <div class="grid">
     <div class="card"><h2>入口</h2><div class="kv">

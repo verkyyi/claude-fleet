@@ -288,15 +288,27 @@ Do not install from memory: read the doc and work from it.
   every Claude window on the login runs mod ≥ 0.2.0: `bin/fleet-statusline.sh
   off` is the only thing that removes it, it refuses while a window would go
   blind, and `/fleet-sync-install` never touches the key.
-- **The hub ships the `fleet` client, and `bin/` stays canonical** (issue #1470).
-  `curl -fsSL <hub>/install | sh` serves `bin/fleet-install.sh` (hub URL filled
-  in) and `bin/fleet`, `fleet-login.py`, `fleet-connect.py` from
-  `tokenledger/internal/api/fleetclient/` — `//go:embed` copies, because the
-  Docker build context is `tokenledger/` alone and embed cannot reach `..`.
-  Edit the client in `bin/`, then `cp` the four files over; two tests pin the
-  mirror from both sides (`TestFleetClientMatchesBin` in the Go gate,
-  `bin/fleet-install-selftest.sh` leg A in the shell gate), so a drift reds
-  whichever CI the change reaches.
+- **The hub ships the `fleet` client, and `bin/` + `conf/` stay canonical**
+  (issues #1470, #1486). `curl -fsSL <hub>/install | sh` serves
+  `bin/fleet-install.sh` (hub URL filled in), which fetches `/install/manifest`
+  and then `/install/<path>` for every file on it — `bin/fleet`, what it
+  dispatches to, and the SHELL (#1484: `fleet-shell.sh`, the sidebar, the bar,
+  the hub loop, `fleet-lib.sh` whole, `conf/tmux-shell.conf`) — into
+  `~/.local/share/claude-fleet/<path>` (the repo's own layout, so `$BIN/../conf`
+  resolves), with a two-line `~/.local/bin/fleet` that runs the real one (a
+  script, not a symlink: `fleet` finds its siblings in its own `$0` directory,
+  which every dir-of-symlinks shadow relies on). The files come from
+  `tokenledger/internal/api/fleetclient/` — `//go:embed` copies in the same
+  `bin/` + `conf/` layout, because the Docker build context is `tokenledger/`
+  alone and embed cannot reach `..` — and **the list is `fleetclient/manifest`,
+  maintained there only**: `embed.go` parses it, the installer walks the served
+  copy, and a node-only script (spawning, reaping, gh) stays off it. Edit the
+  client in `bin/` or `conf/`, then run `bin/fleet-client-mirror.sh` (`--check`
+  is what the tests run); two tests pin the mirror from both sides
+  (`TestFleetClientMatchesBin` in the Go gate, `bin/fleet-install-selftest.sh`
+  leg A in the shell gate), so a drift reds whichever CI the change reaches. The
+  hub image is deployed by hand: a merge here reaches a colleague's `fleet` only
+  after the operator redeploys it and they run the one line again.
 - **The node token never enters a pane's environment** (issue #1491).
   `ccquota lease|place|move` act as this machine's agent and need its token;
   `fleet_hub_lease` / `fleet_hub_place` / `fleet_hub_move` (`bin/fleet-lib.sh`)

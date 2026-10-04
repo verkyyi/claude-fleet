@@ -1,0 +1,51 @@
+# fleetclient/manifest — the files a colleague's computer gets from the hub
+# (claude-fleet#1470, #1486): `curl -fsSL <hub>/install | sh`.
+#
+# One repo-relative path per line, in install order; `#` starts a comment. Each
+# is served at GET /install/<path> (its SHA-256 in X-Ccquota-Sha256) and lands
+# at <install home>/<path> (~/.local/share/claude-fleet by default) — the repo's
+# own bin/ + conf/ layout, so `$BIN/../conf/…` resolves there as in a checkout.
+# The one line tagged `installer` is the template GET /install serves with the
+# hub's URL filled in; it is never a download of its own.
+#
+# This list is read in three places and maintained here only:
+#   · fleetclient/embed.go       the hub — what to serve, which file is the installer
+#   · bin/fleet-client-mirror.sh the copy bin/ + conf/ → fleetclient/, and --check
+#   · bin/fleet-install.sh       fetches it as GET /install/manifest and walks it
+# and two tests hold the copies to the originals: TestFleetClientMatchesBin (Go)
+# and bin/fleet-install-selftest.sh leg A (shell).
+#
+# What is on it: `fleet` and the two it dispatches to (#1470), plus the SHELL
+# (#1484) — bin/fleet-shell.sh and everything it runs on the person's own
+# computer, the set verified by running bin/fleet-shell-selftest.sh from a root
+# holding only these files (101 checks). fleet-lib.sh ships whole: the row
+# producer and the hub loop source it unconditionally, and a second lib for the
+# shell would be a second code path in the render loop (EPIC #1479 「两套行生成
+# 器漂移」). What a fleet NODE needs — spawning, reaping, the daemons, gh — stays
+# out: the shell's rows are all remote, their actions all hub writes.
+bin/fleet-install.sh  installer
+bin/fleet
+bin/fleet-login.py
+bin/fleet-connect.py
+bin/fleet-shell.sh
+bin/fleet-remote-view.sh
+bin/fleet-hub-sessions.sh
+bin/fleet-hub-write.sh
+bin/fleet-sidebar.sh
+bin/fleet-sidebar.py
+bin/fleet-sidebar-menu.sh
+bin/fleet-sidebar-remote.sh
+bin/tmux-dashboard-rows.sh
+bin/tmux-status.sh
+bin/fleet-lib.sh
+bin/fleet-lang.sh
+bin/fleet-ui-lang.sh
+bin/fleet-status-lib.sh
+bin/usage-lib.sh
+bin/fleet-daemon-lib.sh
+bin/fleet-alerts.sh
+bin/dash-keymap.sh
+bin/dash-popup.sh
+bin/dash-fold-toggle.sh
+bin/fleet-keys.sh
+conf/tmux-shell.conf
