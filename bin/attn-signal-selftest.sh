@@ -214,6 +214,7 @@ BARCONF="$BIN/../conf/tmux-bar.conf"
 SL="$(grep -m1 '^set -g status-left ' "$BARCONF" | sed -e 's/^set -g status-left "//' -e 's/"$//')"
 [ -n "$SL" ] || fail "could not extract status-left from $BARCONF"
 . "$BIN/fleet-palette.sh"; fleet_palette_load || fail "no conf/fleet-palette.conf"
+# shellcheck disable=SC2154  # _fpe: fleet_palette_expand's result
 fleet_palette_expand "$SL"; SL=$_fpe
 sl_at() { tf "$1" display-message -p -t "$1:$2" "$SL"; }
 

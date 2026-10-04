@@ -113,12 +113,12 @@ eq    "A: ctrl-z on the dash is repo-add (#1103), not pick" "$(bash "$BIN/dash-k
 # --- B. the footer -------------------------------------------------------------
 # Render status-left's TEXT (style/range markup stripped: it draws nothing) on a
 # private server and compare it with the mockup's text byte for byte. Until issue
-# #1534 the reference was the pre-#1034 format (OLD_SL, kept for the record);
-# #1534 gave the footer its one layout, so the reference is now that layout.
-OLD_SL='#[range=user|hub]#{?#{==:#W,plan},#[fg=#1a1b26#,bg=#7aa2f7#,bold]  ⌂  ,#[fg=#7aa2f7#,bg=#414868]  ⌂  }#[default]#[norange]#[fg=#7aa2f7,bold]#[range=user|fleet]  #S#{?@fleet_repo_label, · #{@fleet_repo_label},}  #[default]#[norange]#[range=user|attn]#{?#{&&:#{==:#{@claude_state},needs},#{&&:#{!=:#W,dash},#{!=:#W,backlog}}},#{?@attn_needs,#{?#{e|-:#{@attn_needs},1},#[fg=#f7768e#,bold]  ● #{e|-:#{@attn_needs},1}  #[default],},},#{?@attn_needs,#[fg=#f7768e#,bold]  ● #{@attn_needs}  #[default],}}#[norange]#[fg=#565f89]│'
+# #1534 the reference was the pre-#1034 format; #1534 gave the footer its one
+# layout, so the reference is now that layout.
 BARCONF="$ROOT/conf/tmux-bar.conf"   # the bar's own file since issue #1534
 NEW_SL=$(sed -n 's/^set -g status-left "\(.*\)"$/\1/p' "$BARCONF")
 CHECKS=$((CHECKS+1)); [ -n "$NEW_SL" ] || fail "B: could not read status-left from $BARCONF"
+# shellcheck disable=SC2154  # _fpe: fleet_palette_expand's result
 . "$BIN/fleet-palette.sh"; fleet_palette_load; fleet_palette_expand "$NEW_SL"; NEW_SL=$_fpe
 render() { tmux display-message -p -t alpha:plan "$1" | sed 's/#\[[^]]*\]//g'; }
 tmux set -gu @fleet_repo_label

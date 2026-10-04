@@ -97,10 +97,12 @@ CHECKS=$((CHECKS+1)); unset _FLEET_NOW _FLEET_NOW_PID _FLEET_NOW_S0
 # integer math on hundredths — the table below is what awk's arithmetic would say.
 eval "$(sed -n '/^status_pct_color()/,/^}/p; /^status_load()/,/^}/p' "$BIN/tmux-status.sh")"
 command -v status_load >/dev/null || fail "tmux-status.sh no longer defines status_load"
+# shellcheck disable=SC2034  # read by the eval'd status_pct_color
 RED='' YELLOW='' GREEN='' DIM=''
 for c in '1.57 10 0.2' '9.00 10 0.9' '0.04 4 0.0' '12.5 4 3.1' '0.995 1 1.0' '3 2 1.5' '1.5 0 –' 'x 4 –' ' 4 –'; do
   set -- $c
   [ $# -eq 2 ] && set -- '' "$1" "$2"
+  # shellcheck disable=SC2154  # _sl: status_load's result
   status_load "$1" "$2"; eq "status_load $1 / $2 cores" "$3" "$_sl"
 done
 

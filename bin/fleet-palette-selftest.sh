@@ -19,6 +19,7 @@
 # Drives bin/tmux-status.sh, bin/tmux-dashboard-rows.sh, bin/fleet-sidebar.py,
 # bin/fleet-alerts.sh and bin/fleet-palette.sh against conf/fleet-palette.conf,
 # conf/tmux-bar.conf and conf/tmux-attention.conf.
+# shellcheck disable=SC2154  # _fpr / _fpe: fleet-palette.sh's results
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
