@@ -23,14 +23,8 @@ export type ProgressSnapshot = {
   issue: number | null
   /** This issue branch's PR from the dash's prmap: ci is `✓` `✗` `…` `·`. */
   pr: { number: number; state: string; ci: string; ready: string } | null
-  /** The parent issue (an EPIC when labelled `epic`) and its members done/seen. */
-  epic: { number: number; isEpic: boolean; done: number; total: number } | null
-  /** This window's children: done, all, and how many need you (`!`). */
-  children: { done: number; total: number; needs: number } | null
   /** Children standing at `!`, by bare ledger key (`issue-12`, `scratch-3`). */
   needsKids: string[]
-  /** @ctx_pct of this window. */
-  ctxPct: number | null
 }
 
 declare module 'claude-code' {
