@@ -32,6 +32,7 @@
 #                    FLEET_HUB_SESSIONS_EVERY on the observer's loop; unset = the
 #                    loop's own rule: 2 s while a client is attached there, 10 s
 #                    when nobody is looking)
+#   --round-timeout  seconds to wait for one round before calling it TIMEOUT (30)
 #   --observer-env   'VAR=value …' prefixed to the watcher's command on the
 #                    observer (e.g. a branch hub: 'CCQUOTA_FLEET=1
 #                    CCQUOTA_HUB_URL=http://127.0.0.1:18787 CCQUOTA_VIEWER_TOKEN=…')
@@ -79,7 +80,10 @@ if [ "${1:-}" = --watch ]; then
   # that merely got ensured once dies after 70 s and the rounds time out.) If a
   # daemon's loop already holds the pid file ours exits at once and is retried.
   export FLEET_HUB_SESSIONS_LOOP_SECS=86400
-  exec python3 -u - "$CACHE" "$NAME" "$LOOPBIN/fleet-hub-sessions.sh" <<'PY'
+  # The program goes through a file, NOT `python3 -` — stdin must stay the ssh
+  # channel, which is how the watcher learns the driver hung up.
+  WPY=$(mktemp "${TMPDIR:-/tmp}/hublat-watch.XXXXXX") || die '--watch: mktemp failed'
+  cat > "$WPY" <<'PY'
 import os, select, subprocess, sys, time
 cache, name, loop = sys.argv[1:4]
 US = "\x1f"
@@ -119,12 +123,14 @@ finally:
     if child is not None and child.poll() is None:
         child.terminate()
 PY
+  python3 -u "$WPY" "$CACHE" "$NAME" "$LOOPBIN/fleet-hub-sessions.sh"; rc=$?
+  rm -f "$WPY"; exit $rc
 fi
 
 # ---------------------------------------------------------------------------
 # the driver (setter) half
 # ---------------------------------------------------------------------------
-OBS=''; WIN=''; ROUNDS=10; STATES='done,working'; OBIN="$BIN"; OLOOPBIN=''; OEVERY=''; OENV=''
+OBS=''; WIN=''; ROUNDS=10; STATES='done,working'; OBIN="$BIN"; OLOOPBIN=''; OEVERY=''; OENV=''; RTO=30
 while [ $# -gt 0 ]; do
   case "$1" in
     --observer) OBS="${2:-}"; shift 2 ;;
@@ -135,6 +141,7 @@ while [ $# -gt 0 ]; do
     --observer-loop-bin) OLOOPBIN="${2:-}"; shift 2 ;;
     --observer-every) OEVERY="${2:-}"; shift 2 ;;
     --observer-env) OENV="${2:-}"; shift 2 ;;
+    --round-timeout) RTO="${2:-}"; shift 2 ;;
     -h|--help) sed -n '2,45p' "$0"; exit 0 ;;
     *) die "unknown option $1 (see --help)" ;;
   esac
@@ -175,8 +182,11 @@ if ! IFS= read -r -t 60 ready <&3; then die "the observer's watcher did not star
 case "$ready" in READY*) printf '%s\n' "observer: $ready" >&2 ;; *) die "observer: $ready" ;; esac
 OSTATE=${ready##* }    # what the observer's cache shows for this window right now
 
-export SOCK WID NUDGE DIRTY STATES ROUNDS CUR NAME OBS OSTATE
-python3 -u - <<'PY' 3<&3 4>&4
+export SOCK WID NUDGE DIRTY STATES ROUNDS CUR NAME OBS OSTATE RTO
+# exec: the driver IS the python from here on, so a signal to this pid ends the
+# run (and closing fd 4 hangs up the watcher) instead of orphaning a flipper.
+rm -f "$WFIFO"; trap - EXIT
+exec python3 -u - <<'PY' 3<&3 4>&4
 import os, select, subprocess, sys, time
 sock, wid, nudge, dirty = os.environ["SOCK"], os.environ["WID"], os.environ["NUDGE"], os.environ["DIRTY"]
 a, b = os.environ["STATES"].split(",", 1)
@@ -234,7 +244,7 @@ for i in range(1, rounds + 1):
     nxt = b if prev == a else a
     t0 = time.monotonic()
     write(nxt)
-    t1 = wait_seen(nxt, 90)
+    t1 = wait_seen(nxt, float(os.environ["RTO"]))
     if t1 is None:
         print("round %-2d %s → %s   TIMEOUT" % (i, prev, nxt))
         lat.append(None)
@@ -257,6 +267,3 @@ else:
     print("median -  (every round timed out)  observer=%s window=%s" % (obs, name))
     sys.exit(1)
 PY
-rc=$?
-exec 4>&- 3<&-
-exit $rc
