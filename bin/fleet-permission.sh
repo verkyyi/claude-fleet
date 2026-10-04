@@ -20,9 +20,9 @@
 # …so the worker sat there until a human walked over. In a system whose whole pitch
 # is "a room full of unattended workers", that is a hole.
 #
-# WHAT THIS DOES *NOT* DO. It never approves anything. A permission prompt is a
-# human decision BY DESIGN — auto-pressing Yes is precisely what the guard rails
-# exist to prevent, and no knob in this file turns that on. What it does instead:
+# WHAT THIS DOES *NOT* DO. Nothing here approves anything ON ITS OWN. A permission
+# prompt is a human decision BY DESIGN — AUTO-pressing Yes is precisely what the
+# guard rails exist to prevent, and no knob in this file turns that on. What it does:
 #
 #   1. --show  makes the blocked command READABLE without attaching to the pane.
 #              That is the expensive part of the outage: the operator could see a red
@@ -32,20 +32,34 @@
 #              rewrite the command safely (in the real case: `[ -n "$G" ] && rm -f
 #              "$G"/*.tick`, one line). "May I auto-answer No?" and "may I auto-answer
 #              Yes?" are different questions with different answers.
+#   3. --allow presses the plain **Yes** — and ONLY in the name of a human who
+#              decided it (`--by <who>`, issue #1487 / EPIC #1479 C8). This is the
+#              operator on another machine pressing Yes from THEIR sidebar: the
+#              decision is theirs, journalled on the hub under their principal, and
+#              this script is only the finger. There is no knob that arms it for a
+#              script and no `--by` default: without a name it prints what it would
+#              press and sends nothing (exit 5). It never picks a "don't ask again"
+#              row — one Yes answers one prompt, and the next one asks again.
 #
-# THE RAILS on --deny, each of which makes a mistake impossible rather than unlikely:
+# THE RAILS on --deny / --allow, each of which makes a mistake impossible rather
+# than unlikely:
 #
-#   KNOB GATE     FLEET_ALLOW_AUTO_DENY=1 (env, or this fleet's conf). DEFAULT OFF:
-#                 without it --deny prints what it WOULD press and sends nothing.
+#   KNOB GATE     --deny: FLEET_ALLOW_AUTO_DENY=1 (env, or this fleet's conf) for an
+#                 unattended refusal, OR `--by <who>` — a named human refusing.
+#                 --allow: `--by <who>` ONLY; the knob never arms a Yes. DEFAULT OFF:
+#                 unarmed, both print what they WOULD press and send nothing.
 #   PENDING GATE  the transcript must show a tool_use with no tool_result — and it
 #                 must NOT be an AskUserQuestion (that one is fleet-answer.sh's, and
 #                 a digit typed at the wrong dialog answers the wrong question).
 #   SCREEN GATE   the pane must actually be showing a "Do you want to …" dialog.
-#   NO-ONLY GATE  the digit is the one the SCREEN gives to the unique row whose text
-#                 begins with `No`. Never arithmetic, never a remembered index — and
-#                 a row that begins with `Yes` can never be selected, because the
-#                 chosen row is re-asserted against /^No\b/ after it is found. Zero
-#                 such rows, or several, ⇒ refuse with nothing sent.
+#   ROW GATE      the digit is the one the SCREEN gives to the unique row whose text
+#                 begins with `No` (--deny) or is the plain `Yes` (--allow: `Yes`
+#                 itself, or a `Yes…` row with no `,` clause — never "Yes, and don't
+#                 ask again"). Never arithmetic, never a remembered index — and the
+#                 chosen row is re-asserted against its own pattern after it is
+#                 found, so a Yes row has no path into a deny and a "don't ask again"
+#                 row has none into an allow. Zero such rows, or several, ⇒ refuse
+#                 with nothing sent.
 #
 # Sanctioned keystrokes only (#437): a single digit. No Enter, no Escape, nothing else.
 #
@@ -54,20 +68,26 @@
 # which is what lets it fix its own command instead of asking why it was rejected.
 #
 #   fleet-permission.sh [opts] --show <target>      what is blocked, and why
-#   fleet-permission.sh [opts] --deny <target>      press No (gated; never Yes)
+#   fleet-permission.sh [opts] --deny <target>      press No (gated)
+#   fleet-permission.sh [opts] --allow <target>     press the plain Yes (--by only)
 #
 #   <target>  @<window-id> / %<pane-id> / <sess>:<idx>  (the fleet-peer-send grammar)
+#             wid:<worker_id> / wid:<key>  that worker, when it lives on this machine
 #   opts: -L <label>          tmux socket label (outside a fleet pane)
 #         --session <fleet>   fleet whose socket to use (default: the caller's)
 #         --transcript <path> use this transcript instead of resolving it
 #         --json              --show: emit the blocked tool call as JSON
 #         --request-token T   Codex denial: fingerprint from --show --json
+#         --by <who>          the HUMAN whose decision this is (the hub journal's
+#                             actor) — arms --deny, and is the only thing that
+#                             arms --allow; named in the reason the worker gets
 #         --no-tell           --deny: do NOT peer-send the reason afterwards
 #         --dry-run           print the plan, send nothing
 #
 # Exit: 0 done · 1 nothing pending / target unusable · 2 usage · 3 refused at a gate
-#       (nothing sent) · 4 the digit was sent but the refusal never landed in the
-#       transcript · 5 --deny is not armed (FLEET_ALLOW_AUTO_DENY unset).
+#       (nothing sent) · 4 the digit was sent but the answer never landed in the
+#       transcript · 5 not armed (--deny: FLEET_ALLOW_AUTO_DENY unset and no --by;
+#       --allow: no --by).
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -87,14 +107,18 @@ TIMEOUT="${FLEET_ANSWER_TIMEOUT:-45}"
 case "$POLL"    in ''|*[!0-9.]*) POLL=1 ;; esac
 case "$TIMEOUT" in ''|*[!0-9]*)  TIMEOUT=45 ;; esac
 
-VERB="" TARGET="" SOCK="" SESS="" TPATH="" AS_JSON=0 DRY=0 TELL=1 REQUEST_TOKEN=''
-usage() { sed -n '/^#   fleet-permission.sh \[opts\] --show/,/^#       transcript/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+VERB="" TARGET="" SOCK="" SESS="" TPATH="" AS_JSON=0 DRY=0 TELL=1 REQUEST_TOKEN='' BY=''
+usage() { sed -n '/^#   fleet-permission.sh \[opts\] --show/,/^#       --allow: no --by/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --show|--deny)
+    --show|--deny|--allow)
       [ -z "$VERB" ] || usage
       VERB="${1#--}"; TARGET="${2:-}"; [ -n "$TARGET" ] || usage; shift 2 ;;
+    --by)
+      BY="${2:-}"; shift 2
+      # one printable token: it is quoted into a message the worker reads
+      case "$BY" in ''|*[!A-Za-z0-9@._:#/-]*) echo "fleet-permission: --by must name a person (letters, digits, @._:#/-)" >&2; exit 2 ;; esac ;;
     -L) SOCK="${2:-}"; shift 2 ;;
     -L*) SOCK="${1#-L}"; shift ;;
     --session) SESS="${2:-}"; shift 2 ;;
@@ -118,15 +142,33 @@ fi
 [ -n "$SESS" ] || SESS=$(fleet_current_session 2>/dev/null)
 [ -n "$SESS" ] && fleet_load_conf "$SESS" 2>/dev/null
 [ -n "$_ENV_AUTO_DENY" ] && FLEET_ALLOW_AUTO_DENY="$_ENV_AUTO_DENY"
-ARMED=0; [ "${FLEET_ALLOW_AUTO_DENY:-0}" = 1 ] && ARMED=1
+# What arms a keystroke: a refusal by the knob (unattended) or by a named human; an
+# approval by a named human ONLY — the knob is never read for --allow.
+ARMED=0
+case "$VERB" in
+  deny)  { [ "${FLEET_ALLOW_AUTO_DENY:-0}" = 1 ] || [ -n "$BY" ]; } && ARMED=1 ;;
+  allow) [ -n "$BY" ] && ARMED=1 ;;
+esac
 
 TM() { if [ -n "$SOCK" ]; then tmux -L "$SOCK" "$@"; else tmux "$@"; fi; }
 SK() { FLEET_ALLOW_SENDKEYS=1 TM send-keys -t "$PANE" "$@" 2>/dev/null; }
+
+# --- a worker_id target (issue #1420 / #1487): resolve it to its window HERE, or refuse
+case "$TARGET" in wid:*)
+  loc=$(fleet_worker_locate "$TARGET" "${SESS:-$SOCK}"); rc=$?
+  case "$loc" in
+    local\ *) loc=${loc#local }; TARGET=${loc%% *}; SOCK=$(fleet_socket "${loc#* }") ;;
+    remote\ *) echo "fleet-permission: '$TARGET' lives on ${loc#remote } — answer it through the hub (fleet-hub-write.sh worker_answer)" >&2; exit 1 ;;
+    *) [ "$rc" -eq 2 ] && { echo "fleet-permission: bad worker id '$TARGET'" >&2; exit 2; }
+       echo "fleet-permission: no live worker for '$TARGET' on this machine" >&2; exit 1 ;;
+  esac ;;
+esac
 
 # --- the pane must exist (a dead pane has nothing open) -----------------------
 PANE=$(TM display-message -p -t "$TARGET" '#{pane_id}' 2>/dev/null)
 [ -n "$PANE" ] || { echo "fleet-permission: no live pane for '$TARGET'" >&2; exit 1; }
 if [ "$(TM display-message -p -t "$PANE" '#{@cc_agent}')" = codex ]; then
+  [ "$VERB" != allow ] || { echo "fleet-permission: --allow is not supported on a Codex pane yet" >&2; exit 2; }
   NATIVE=("$VERB" --pane "$PANE" --socket "$SOCK" --category perm --request-token "$REQUEST_TOKEN")
   [ "$AS_JSON" = 0 ] || NATIVE+=(--json)
   [ "$DRY" = 0 ] || NATIVE+=(--dry-run)
@@ -299,48 +341,63 @@ if [ "$VERB" = show ]; then
     printf '\n(no "Do you want to …" dialog on screen — the call may be blocked on\n' >&2
     printf ' something else, or the pane has scrolled past it)\n' >&2
   fi
-  if [ "$ARMED" = 1 ]; then
+  if [ "${FLEET_ALLOW_AUTO_DENY:-0}" = 1 ]; then
     printf '\nrefuse it with: fleet-permission.sh --deny %s   (No only — never Yes)\n' "$TARGET"
   else
-    printf '\nOnly a human may approve this. Auto-refusal (No, never Yes) is available\nbut OFF: set FLEET_ALLOW_AUTO_DENY=1 to arm `--deny`.\n'
+    printf '\nOnly a human may approve this (from another machine: the row menu, or\nfleet-permission.sh --allow %s --by <you>). Auto-refusal (No, never Yes)\nis available but OFF: set FLEET_ALLOW_AUTO_DENY=1 to arm `--deny`.\n' "$TARGET"
   fi
   exit 0
 fi
 
-# ============================== --deny =======================================
+# ============================== --deny / --allow =============================
 DLG=$(dialog_text) || { echo "fleet-permission: no permission dialog on pane $PANE's screen — refusing to type at a pane we cannot read" >&2; exit 3; }
 
-# NO-ONLY GATE. Take the digit the SCREEN gives the row that begins with `No`, then
-# re-assert the chosen row against /^No\b/ — so the only way to reach send() is with
-# a row this script has twice agreed is a refusal. A `Yes` row has no path here.
-NOROW=$(FP_DLG="$DLG" python3 - <<'PY'
+# ROW GATE. Take the digit the SCREEN gives the one row this verb may press — the
+# row that begins with `No` for a deny, the PLAIN `Yes` for an allow (`Yes` itself,
+# or a `Yes…` row with no `,` clause: "Yes, and don't ask again" is a standing grant,
+# never pressed from here) — then re-assert the chosen row against the same rule, so
+# the only way to reach send() is with a row this script has twice agreed is the
+# answer asked for. The other verb's row has no path here.
+ROW=$(FP_DLG="$DLG" FP_VERB="$VERB" python3 - <<'PY'
 import os, re, sys
 opt = re.compile(r"^[\s❯>]*(\d+)\.\s+(?:\[[^\]]*\]\s+)?(.*)$")
+verb = os.environ["FP_VERB"]
+def wanted(text):
+    if verb == "deny":
+        return bool(re.match(r"^No\b", text)) and not re.match(r"^Yes\b", text)
+    return bool(re.match(r"^Yes\b", text)) and "," not in text and not re.match(r"^No\b", text) \
+        and not re.search(r"(?i)don'?t ask|always|不再|总是", text)
 hits = []
 for line in os.environ["FP_DLG"].splitlines():
     m = opt.match(line)
     if not m:
         continue
     text = m.group(2).strip()
-    if re.match(r"^No\b", text):
+    if wanted(text):
         hits.append((m.group(1), text))
 if len(hits) != 1:
     sys.exit(1)
 digit, text = hits[0]
-# belt-and-braces: never emit a digit whose row is not, re-read, a refusal.
-if not re.match(r"^No\b", text) or re.match(r"^Yes\b", text):
+# belt-and-braces: never emit a digit whose row is not, re-read, the answer asked for.
+if not wanted(text):
     sys.exit(1)
 print("%s\t%s" % (digit, text))
 PY
-) || { echo "fleet-permission: the dialog shows no single row starting with \"No\" — refusing (nothing sent)" >&2; exit 3; }
-DIGIT=${NOROW%%$'\t'*}
-NOTEXT=${NOROW#*$'\t'}
+) || { if [ "$VERB" = deny ]; then w='starting with "No"'; else w='that is the plain "Yes"'; fi
+       echo "fleet-permission: the dialog shows no single row $w — refusing (nothing sent)" >&2; exit 3; }
+DIGIT=${ROW%%$'\t'*}
+NOTEXT=${ROW#*$'\t'}
+if [ "$VERB" = deny ]; then WHAT=REFUSE; else WHAT=APPROVE; fi
 
 if [ "$DRY" = 1 ] || [ "$ARMED" = 0 ]; then
-  printf 'would press %s ("%s") on pane %s to REFUSE the blocked %s call.\n' \
-    "$DIGIT" "$NOTEXT" "$PANE" "$TOOL"
+  printf 'would press %s ("%s") on pane %s to %s the blocked %s call.\n' \
+    "$DIGIT" "$NOTEXT" "$PANE" "$WHAT" "$TOOL"
   if [ "$ARMED" = 0 ]; then
-    echo "not armed: set FLEET_ALLOW_AUTO_DENY=1 (env or this fleet's conf). Nothing sent." >&2
+    if [ "$VERB" = deny ]; then
+      echo "not armed: set FLEET_ALLOW_AUTO_DENY=1 (env or this fleet's conf), or name who refuses (--by <who>). Nothing sent." >&2
+    else
+      echo "not armed: a Yes is a human's decision — name who approves (--by <who>). Nothing sent." >&2
+    fi
     exit 5
   fi
   echo "nothing sent (--dry-run)"
@@ -375,7 +432,11 @@ for line in fh:
 raise SystemExit(1)
 PY
   then
-    printf 'refused (pane %s): pressed %s — "%s"\n' "$PANE" "$DIGIT" "$NOTEXT"
+    if [ "$VERB" = deny ]; then
+      printf 'refused (pane %s): pressed %s — "%s"%s\n' "$PANE" "$DIGIT" "$NOTEXT" "${BY:+ by $BY}"
+    else
+      printf 'approved (pane %s): pressed %s — "%s" by %s\n' "$PANE" "$DIGIT" "$NOTEXT" "$BY"
+    fi
     break
   fi
   [ "$(date +%s)" -ge "$deadline" ] && {
@@ -385,14 +446,18 @@ PY
   sleep "$POLL" 2>/dev/null || true
 done
 
+# An approval needs no message: the worker has its answer and its turn.
+[ "$VERB" = deny ] || exit 0
+
 # --- hand the reason back, now that the pane can receive one -----------------
 # Before the refusal this message would have queued under the dialog forever (the
 # #605 deadlock). After it, the worker has a turn — so this is the one moment the
 # ordinary peer channel works, and it is what lets the worker fix its own command.
 if [ "$TELL" = 1 ] && [ -x "$BIN/fleet-peer-send.sh" ]; then
-  msg="[fleet] Your $TOOL call was REFUSED from the dash — a permission prompt was
-blocking your pane and nothing in the fleet may press Yes on one. Nobody is
-objecting to the work: rewrite the call so it does not trip the guard, then carry
+  if [ -n "$BY" ]; then who="by $BY, from the fleet"; else who="from the dash"; fi
+  msg="[fleet] Your $TOOL call was REFUSED $who — a permission prompt was
+blocking your pane and nothing in the fleet may press Yes on one unattended. Nobody
+is objecting to the work: rewrite the call so it does not trip the guard, then carry
 on. This is what the prompt said:
 
 $DLG"

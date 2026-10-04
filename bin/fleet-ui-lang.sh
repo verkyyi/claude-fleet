@@ -87,6 +87,17 @@ fleet_ui_t() {
     en:lost_heading_short_fmt)  printf '─ %s lost ─' "${1:-}" ;;
     zh:menu_title_on_node_fmt)  printf '%s · 在 %s' "${1:-}" "${2:-}" ;;
     en:menu_title_on_node_fmt)  printf '%s · on %s' "${1:-}" "${2:-}" ;;
+    # the remote row's actions through the hub (issue #1487, EPIC #1479 C8)
+    zh:remote_press_any)        printf '按任意键关闭…' ;;
+    en:remote_press_any)        printf 'press any key to close…' ;;
+    zh:remote_message_hint)     printf '输入要发给它的话（经入口 → 那台机器的 issue 桥，作为它的下一轮）；空行取消：' ;;
+    en:remote_message_hint)     printf 'Type the message (hub → that machine'"'"'s issue bridge, its next turn); empty cancels:' ;;
+    zh:remote_perm_prompt)      printf '它在等一个权限确认。  [y] 批准（只按这一次的 Yes）   [n] 拒绝   其它键取消' ;;
+    en:remote_perm_prompt)      printf 'It is waiting on a permission prompt.  [y] approve (this one Yes)   [n] refuse   any other key cancels' ;;
+    zh:remote_pick_prompt)      printf '回答第几项？（先在 ⇄ 代理窗口里看题；1 / 1,3 / 多题用空格分开；权限弹窗答 y 或 n）空行取消：' ;;
+    en:remote_pick_prompt)      printf 'Which option? (read the question in the ⇄ proxy window first; 1 / 1,3 / several questions space-separated; a permission prompt takes y or n) empty cancels:' ;;
+    zh:remote_sending)          printf '已交给入口，等那台机器确认…' ;;
+    en:remote_sending)          printf 'handed to the hub, waiting for that machine to confirm…' ;;
     zh:pin_heading_fmt)         printf '置顶 (%s)' "${1:-}" ;;
     en:pin_heading_fmt)         printf 'Pinned (%s)' "${1:-}" ;;
     zh:unknown_repo_heading)    printf '? · 未知仓库' ;;

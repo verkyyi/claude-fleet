@@ -48,13 +48,17 @@
 # the non-interactive create/naming paths.)
 export LANG="${LANG:-en_US.UTF-8}" LC_ALL="${LC_ALL:-en_US.UTF-8}"
 
-mode=""; spawn=0; title_file=""; sel=""
+mode=""; spawn=0; title_file=""; sel=""; node=""
 for _a in "$@"; do
   case "$_a" in
     confirm)        mode=confirm ;;
     --spawn)        spawn=1 ;;
     --title-file=*) title_file="${_a#--title-file=}" ;;
     --selection=*)  sel="${_a#--selection=}" ;;
+    # --node=<machine> (issue #1487 ④, the row menu's «new task on m4…»): the
+    # worker opens THERE — handed to dash-issue-session.sh --node (#1475) with the
+    # spawn. A machine name is one token; anything else is dropped, never typed.
+    --node=*)       node="${_a#--node=}"; case "$node" in *[!A-Za-z0-9._-]*) node='' ;; esac ;;
   esac
 done
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -94,6 +98,7 @@ command -v fzf >/dev/null 2>&1 || { tmux display-message "fzf not found — cann
 if [ "$mode" != confirm ]; then
   popup_args=(confirm)
   [ "$spawn" = 1 ] && popup_args+=(--spawn)
+  [ -n "$node" ] && popup_args+=("--node=$node")
   bash "$BIN/dash-popup.sh" -w 90% -h 12 -- \
     env CF_REPO="$REPO" bash "$BIN/dash-issue-new.sh" ${popup_args[@]+"${popup_args[@]}"}
   exit 0
@@ -130,10 +135,10 @@ create_issue() {
       # and toasts its OWN outcome, so on a cap refusal the issue is STILL filed
       # (acceptance (c)). --title names the window after the WORK without depending on
       # the optimistic row surviving the collector refetch (issue #216).
-      tmux display-message "filed #$num in $REPO ✓ — spawning worker…"
+      tmux display-message "filed #$num in $REPO ✓ — spawning worker${node:+ on $node}…"
       # --repo only where it is needed (issue #794): a one-repo fleet's call is unchanged.
       _sr=''; [ "$MULTI" = 1 ] && _sr=$REPO
-      ( bash "$BIN/dash-issue-session.sh" "$num" --title "$title" ${_sr:+--repo "$_sr"} >/dev/null 2>&1 & )
+      ( bash "$BIN/dash-issue-session.sh" "$num" --title "$title" ${_sr:+--repo "$_sr"} ${node:+--node "$node"} >/dev/null 2>&1 & )
     else
       tmux display-message "filed new issue #$num in $REPO ✓"
     fi
@@ -183,5 +188,6 @@ title=${title%%$'\n'*}               # the query is the first (only) line
 tf=$(mktemp "${TMPDIR:-/tmp}/dash-new.XXXXXX") || { tmux display-message "backlog: cannot stage the new issue"; exit 1; }
 printf '%s' "$title" > "$tf"
 spawn_arg=""; [ "$spawn" = 1 ] && spawn_arg=" --spawn"
+[ -n "$node" ] && spawn_arg="$spawn_arg --node=$node"   # one [A-Za-z0-9._-] token, checked above
 fleet_bg "CF_REPO='$REPO' bash '$BIN/dash-issue-new.sh' confirm$spawn_arg --title-file='$tf'"
 exit 0

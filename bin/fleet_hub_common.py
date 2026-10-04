@@ -16,13 +16,24 @@ import uuid
 PROTOCOL = 1
 MAX_REQUEST = 65536
 MAX_RESPONSE = 2 * 1024 * 1024
-SCOPES = {"fleet:read", "worker:start", "worker:message", "worker:stop", "worker:resume", "config:write",
-          "gh:read", "gh:comment"}
+SCOPES = {"fleet:read", "worker:start", "worker:message", "worker:stop", "worker:resume", "worker:answer",
+          "worker:reap", "config:write", "gh:read", "gh:comment"}
 # One scope per write action; a lifecycle tool is never reachable through worker:start.
 SCOPE_OF = {"worker_start": "worker:start", "config_set": "config:write",
             "worker_message": "worker:message", "worker_stop": "worker:stop",
-            "worker_resume": "worker:resume", "gh_comment": "gh:comment"}
-WORKER_ACTIONS = ("worker_message", "worker_stop", "worker_resume")
+            "worker_resume": "worker:resume", "worker_answer": "worker:answer",
+            "worker_reap": "worker:reap", "gh_comment": "gh:comment"}
+# The tools that name a WORKER (a worker_id), not a fleet. worker_answer and
+# worker_reap (issue #1487, EPIC #1479 C8) are what a sidebar on another machine
+# runs on a row here: answer the pane's open prompt (fleet-answer.sh /
+# fleet-permission.sh) and reap the row (dash-reap.sh --yes).
+WORKER_ACTIONS = ("worker_message", "worker_stop", "worker_resume", "worker_answer", "worker_reap")
+# worker_answer's `answer` (issue #1487): `yes` / `no` for a permission prompt
+# (fleet-permission.sh --allow / --deny), else the picks of an AskUserQuestion —
+# one option number per question in order, `1,3` toggling several in a
+# multiSelect (fleet-answer.sh --answer's grammar). Nothing else: each word
+# becomes an argv word of a script that types into a pane.
+ANSWER_RE = re.compile(r"yes|no|[1-9][0-9]{0,2}(?:,[1-9][0-9]{0,2}){0,15}(?: [1-9][0-9]{0,2}(?:,[1-9][0-9]{0,2}){0,15}){0,7}")
 # GitHub reads through the fleet's local copy (issue #1274): tool → fleet-gh.sh
 # kind. Synchronous like fleet_status; gated by gh:read, never by fleet:read alone.
 GH_READS = {"gh_issue_view": "issue", "gh_pr_view": "pr", "gh_pr_checks": "checks"}
@@ -170,6 +181,11 @@ def check_text(text, what="text"):
         raise Fault("INVALID_ARGUMENT", what + " must not contain HTML comments or control characters")
 
 
+def check_answer(value):
+    if not isinstance(value, str) or not ANSWER_RE.fullmatch(value):
+        raise Fault("INVALID_ARGUMENT", "answer must be yes, no, or option numbers (`2`, `1,3`, one per question)")
+
+
 def validate_gh_read(params):
     fields(params, ("fleet_id", "number"), ("repo", "fields"))
     check_number(params["number"], "number")
@@ -198,10 +214,15 @@ def validate_write(action, params):
         check_repo(params)
         check_text(params["body"], "body")
     elif action in WORKER_ACTIONS:
-        fields(params, ("worker_id",), ("text",) if action == "worker_message" else ())
+        if action == "worker_answer":
+            fields(params, ("worker_id", "answer"))
+        else:
+            fields(params, ("worker_id",), ("text",) if action == "worker_message" else ())
         parse_worker_id(params["worker_id"])
         if action == "worker_message":
             check_text(params.get("text"))
+        if action == "worker_answer":
+            check_answer(params["answer"])
     elif action == "config_set":
         fields(params, ("key", "value", "expected_revision"))
         key, value = params["key"], params["value"]

@@ -52,6 +52,9 @@ class Sandbox:
 import os, pathlib, sys
 root=pathlib.Path(os.environ["FLEET_CONF_DIR"])
 if "has-session" in sys.argv: sys.exit(0)
+if "display-message" in sys.argv:
+    # the reap adapter's `#{socket_path}` (issue #1487): point bare tmux at this server
+    print("/tmp/fleet-hub-selftest.sock"); sys.exit(0)
 if "list-windows" in sys.argv:
     # Rows carry @repo in column 9; a format that does not ask for it (a one-repo
     # fleet, issue #1018) gets that column empty, exactly as real tmux prints it.
@@ -109,6 +112,35 @@ awk -F'\t' -v n="$n" -v p="$p" '{ s = $9; gsub("/", "-", s) } !($2 == n && (p ==
   "$FLEET_CONF_DIR/workers.tsv" > "$FLEET_CONF_DIR/workers.new"
 mv "$FLEET_CONF_DIR/workers.new" "$FLEET_CONF_DIR/workers.tsv"
 echo stopped:exit
+''')
+        # The row tools (issue #1487): fleet-permission.sh (--allow / --deny, armed
+        # by --by), fleet-answer.sh (option picks) and dash-reap.sh (--yes, its
+        # result token on stdout) — each with the real script's exit codes and
+        # stderr reasons, so the controller's mapping and the verbatim reason
+        # pass-through are what is exercised.
+        self.script(self.bin / "fleet-permission.sh", '''#!/bin/bash
+printf '%s\\n' "$*" >> "$FLEET_CONF_DIR/perm.calls"
+case " $* " in *" --by "*) ;; *) echo "not armed: a Yes is a human's decision — name who approves (--by <who>). Nothing sent." >&2; exit 5 ;; esac
+[ ! -f "$FLEET_CONF_DIR/perm-none" ] || { echo 'fleet-permission: nothing is pending on this pane (no tool_use is waiting for a result)' >&2; exit 1; }
+case " $* " in
+  *" --allow "*) echo 'approved (pane %5): pressed 1 — "Yes" by hub' ;;
+  *) echo 'refused (pane %5): pressed 3 — "No, and tell Claude what to do differently" by hub' ;;
+esac
+''')
+        self.script(self.bin / "fleet-answer.sh", '''#!/bin/bash
+printf '%s\\n' "$*" >> "$FLEET_CONF_DIR/answer.calls"
+[ ! -f "$FLEET_CONF_DIR/answer-gate" ] || { echo 'fleet-answer: option 2 ("Ship it") is not on the screen — refusing (nothing sent)' >&2; exit 3; }
+[ ! -f "$FLEET_CONF_DIR/answer-lost" ] || { echo 'fleet-answer: keys sent but no tool_result landed within 45s' >&2; exit 4; }
+echo 'answered (pane %5): 2 — "Ship it"'
+''')
+        self.script(self.bin / "dash-reap.sh", '''#!/bin/bash
+printf '%s\\n' "$* TMUX=${TMUX:-}" >> "$FLEET_CONF_DIR/reap.calls"
+[ ! -f "$FLEET_CONF_DIR/reap-live" ] || { echo skip:live; echo 'reap: issue-124 is live or could not be checked (working for 12s) — leaving window and worktree alone' >&2; exit 3; }
+[ ! -f "$FLEET_CONF_DIR/reap-fail" ] || { echo failed:kill-window; exit 5; }
+n="${1#issue-}"
+awk -F'\\t' -v n="$n" '!($2 == n)' "$FLEET_CONF_DIR/workers.tsv" > "$FLEET_CONF_DIR/workers.new"
+mv "$FLEET_CONF_DIR/workers.new" "$FLEET_CONF_DIR/workers.tsv"
+if [ -f "$FLEET_CONF_DIR/reap-dirty" ]; then echo reaped:keep; else echo reaped:full; fi
 ''')
         self.script(self.bin / "fleet-history.sh", '''#!/bin/bash
 printf '%s\\n' "$*" >> "$FLEET_CONF_DIR/history.calls"
@@ -187,7 +219,8 @@ class HubFixture(unittest.TestCase):
         self.registered = self.hub.register("MINI", ssh="mini-fixture")
         self.fleet = self.node.fleet_id
         self.grant = self.hub.grant("scheduler", [self.fleet], ["fleet:read", "worker:start", "config:write",
-                                                                 "worker:message", "worker:stop", "worker:resume"],
+                                                                 "worker:message", "worker:stop", "worker:resume",
+                                                                 "worker:answer", "worker:reap"],
                                     ["FLEET_MAX_SESSIONS"])
         self.token = self.grant["token"]
 
@@ -293,6 +326,100 @@ class HubTests(HubFixture):
                         params={"worker_id": other + "/issue-124"}, actor="direct")
         mismatch = self.node.wait(self.node.rpc("submit", envelope)["operation_id"])
         self.assertEqual((mismatch["status"], mismatch["result"]["error"]["code"]), ("failed", "INVALID_ARGUMENT"))
+
+    def test_answer_relays_a_human_decision_and_refusals_verbatim(self):
+        # worker_answer (issue #1487): yes / no are a permission prompt's, pressed
+        # by fleet-permission.sh --allow / --deny in the ACTOR's name; option
+        # numbers go to fleet-answer.sh. A refusal is a clean `failed` carrying the
+        # script's own last stderr line; keys sent but unconfirmed are `unknown`.
+        self.node.windows(("@12", 123, False, "/fixture/issue-123"), ("@15", 7, False, "/fixture/issue-7", "sleeping"))
+        done = self.lifecycle("worker_answer", answer="yes")
+        self.assertEqual(done["status"], "succeeded", done)
+        self.assertEqual((done["result"]["answered"], done["result"]["worker"]["window_id"]), ("yes", "@12"))
+        self.assertIn("approved", done["result"]["how"])
+        calls = self.node.calls("perm")
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(calls[0].startswith("--allow wid:issue-123 --session demo --by "), calls)
+        self.assertEqual(calls[0].split("--by ")[1], done["result"]["by"])
+        self.assertNotEqual(done["result"]["by"], "hub", "the journal's actor, never a placeholder")
+        no = self.lifecycle("worker_answer", idem="no", answer="no")
+        self.assertEqual(no["status"], "succeeded", no)
+        self.assertTrue(self.node.calls("perm")[1].startswith("--deny wid:issue-123 --session demo --by "))
+        picks = self.lifecycle("worker_answer", idem="picks", answer="2 1,3")
+        self.assertEqual(picks["status"], "succeeded", picks)
+        self.assertEqual(self.node.calls("answer"), ["--answer wid:issue-123 --session demo 2 1,3"])
+        self.assertEqual(self.lifecycle("worker_answer", idem="picks", answer="2 1,3")["operation_id"], picks["operation_id"])
+        # refusals come back as the script said them
+        (self.node.conf / "perm-none").touch()
+        none = self.lifecycle("worker_answer", idem="none", answer="yes")
+        self.assertEqual((none["status"], none["result"]["error"]["code"]), ("failed", "INVALID_STATE"))
+        self.assertIn("nothing is pending on this pane", none["result"]["error"]["message"])
+        (self.node.conf / "perm-none").unlink()
+        (self.node.conf / "answer-gate").touch()
+        gate = self.lifecycle("worker_answer", idem="gate", answer="2")
+        self.assertEqual((gate["status"], gate["result"]["error"]["code"]), ("failed", "INVALID_STATE"))
+        self.assertIn("is not on the screen", gate["result"]["error"]["message"])
+        (self.node.conf / "answer-gate").unlink()
+        (self.node.conf / "answer-lost").touch()
+        lost = self.lifecycle("worker_answer", idem="lost", answer="2")
+        self.assertEqual((lost["status"], lost["result"]["error"]["code"]), ("unknown", "UNKNOWN_OUTCOME"))
+        (self.node.conf / "answer-lost").unlink()
+        # a hibernating worker asks nothing; an unknown key is NOT_FOUND — neither reaches a script
+        before = (len(self.node.calls("perm")), len(self.node.calls("answer")))
+        asleep = self.lifecycle("worker_answer", "issue-7", idem="asleep", answer="yes")
+        self.assertEqual((asleep["status"], asleep["result"]["error"]["code"]), ("failed", "INVALID_STATE"))
+        gone = self.lifecycle("worker_answer", "issue-99", idem="gone", answer="yes")
+        self.assertEqual((gone["status"], gone["result"]["error"]["code"]), ("failed", "NOT_FOUND"))
+        self.assertEqual((len(self.node.calls("perm")), len(self.node.calls("answer"))), before)
+        # the grammar is the whitelist: nothing else becomes an argv word
+        for bad in ("yes; rm -rf /", "", "0", "y", "YES", "1,,2", 2, True, "1 2 3 4 5 6 7 8 9"):
+            with self.subTest(bad=bad), self.assertRaises(Fault):
+                self.call("worker_answer", {"worker_id": self.worker(), "answer": bad, "idempotency_key": "bad"})
+        with self.assertRaises(Fault):
+            self.call("worker_answer", {"worker_id": self.worker(), "idempotency_key": "no-answer"})
+        # its own scope
+        reader = self.hub.grant("stopper", [self.fleet], ["fleet:read", "worker:stop", "worker:message"])
+        with self.assertRaisesRegex(Fault, "outside this caller"):
+            self.lifecycle("worker_answer", idem="no-scope", token=reader["token"], answer="yes")
+        self.assertEqual((len(self.node.calls("perm")), len(self.node.calls("answer"))), before)
+
+    def test_reap_runs_the_confirmed_reap_and_passes_its_token_through(self):
+        # worker_reap (issue #1487): dash-reap.sh <key> --yes on the fleet's own
+        # server (bare tmux pointed at it through TMUX), the result token on stdout
+        # the verdict: reaped:* confirmed by re-reading the fleet, skip:* a clean
+        # failed with dash-reap's reason verbatim, failed:* unknown.
+        self.node.windows(("@12", 123, False, "/fixture/issue-123"), ("@13", 124, False, "/fixture/issue-124"))
+        done = self.lifecycle("worker_reap")
+        self.assertEqual(done["status"], "succeeded", done)
+        self.assertEqual((done["result"]["how"], done["result"]["reaped"]["window_id"]), ("reaped:full", "@12"))
+        self.assertEqual(self.node.calls("reap"), ["issue-123 --yes TMUX=/tmp/fleet-hub-selftest.sock,0,0"])
+        self.assertEqual([w["issue"] for w in self.call("fleet_status", {"fleet_id": self.fleet})["workers"]], [124])
+        self.assertEqual(self.lifecycle("worker_reap")["operation_id"], done["operation_id"])
+        (self.node.conf / "reap-live").touch()
+        live = self.lifecycle("worker_reap", "issue-124")
+        self.assertEqual((live["status"], live["result"]["error"]["code"]), ("failed", "INVALID_STATE"))
+        self.assertIn("skip:live", live["result"]["error"]["message"])
+        self.assertIn("leaving window and worktree alone", live["result"]["error"]["message"])
+        (self.node.conf / "reap-live").unlink()
+        (self.node.conf / "reap-dirty").touch()
+        keep = self.lifecycle("worker_reap", "issue-124", idem="keep")
+        self.assertEqual((keep["status"], keep["result"]["how"]), ("succeeded", "reaped:keep"))
+        self.assertIn("dirty", keep["result"]["kept"])
+        (self.node.conf / "reap-dirty").unlink()
+        n = len(self.node.calls("reap"))
+        gone = self.lifecycle("worker_reap", "issue-124", idem="gone")
+        self.assertEqual((gone["status"], gone["result"]["error"]["code"]), ("failed", "NOT_FOUND"))
+        self.assertEqual(len(self.node.calls("reap")), n)
+        self.node.windows(("@30", 125, False, "/fixture/issue-125"))
+        (self.node.conf / "reap-fail").touch()
+        bad = self.lifecycle("worker_reap", "issue-125")
+        self.assertEqual((bad["status"], bad["result"]["error"]["code"]), ("unknown", "UNKNOWN_OUTCOME"))
+        (self.node.conf / "reap-fail").unlink()
+        reader = self.hub.grant("stopper2", [self.fleet], ["fleet:read", "worker:stop", "worker:answer"])
+        with self.assertRaisesRegex(Fault, "outside this caller"):
+            self.lifecycle("worker_reap", "issue-125", idem="no-scope", token=reader["token"])
+        with self.assertRaises(Fault):
+            self.call("worker_reap", {"worker_id": self.worker("issue-125"), "answer": "yes", "idempotency_key": "extra"})
 
     def test_message_goes_through_the_issue_bridge(self):
         self.node.windows(("@12", 123, False, "/fixture/issue-123"), ("@13", None, True, "/fixture/project-scratch-4"))
@@ -913,7 +1040,8 @@ class MCPTests(HubFixture):
                     names = {tool.name for tool in (await session.list_tools()).tools}
                     tools = (await session.list_tools()).tools
                     self.assertEqual(names, {"fleet_list", "fleet_status", "config_get", "config_set", "worker_start",
-                                             "worker_message", "worker_stop", "worker_resume", "operation_get",
+                                             "worker_message", "worker_stop", "worker_resume", "worker_answer",
+                                             "worker_reap", "operation_get",
                                              "gh_issue_view", "gh_pr_view", "gh_pr_checks", "gh_comment"})
                     # Every session pays for tool descriptions in context (#1274).
                     gh_size = sum(len(canonical(t.model_dump(include={"name", "description", "inputSchema"})).encode())

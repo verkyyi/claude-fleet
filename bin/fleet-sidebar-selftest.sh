@@ -1319,8 +1319,72 @@ try:
     finally:
         link.unlink()
         link.symlink_to(real_bin / 'fleet-remote-view.sh')
+
+    # The remote row's menu (issue #1487, EPIC #1479 C8): message / answer / stop /
+    # resume / reap are hub WRITES — every item runs fleet-sidebar-remote.sh, whose
+    # one way out is fleet-hub-write.sh (stubbed here through FLEET_HUB_WRITE_CMD,
+    # which records the tool + its JSON); the local row's menu names neither
+    # script. The answer item is greyed unless the row needs its person (col 10 =
+    # ask / perm, or state needs). Both menus list «new task on m4…» for the one
+    # online machine in the cache; without the cache (the hub off) neither does.
+    remote_wid = 'wid:' + F + '/issue-1423'
+    remote_items = menu_items(remote_wid)
+    remote_cmds = menu_commands(remote_wid)
+    check({'e', 'm', 'a', 'q', 'c', 'x', 'n', '1', 'o', 'g'} <= set(remote_items),
+          'the remote row menu lacks an action: %r' % remote_items)
+    for k in 'mqcx':
+        check('fleet-sidebar-remote.sh' in remote_cmds[k], 'remote %s does not go through fleet-sidebar-remote.sh: %r' % (k, remote_cmds[k]))
+    check(remote_items['a'].startswith('-'), 'a remote row that needs nothing greyed nothing: %r' % remote_items['a'])
+    check('confirm-before' in remote_cmds['x'] and 'm4' in remote_cmds['x'], 'the remote reap does not confirm first, naming the machine: %r' % remote_cmds['x'])
+    check(remote_items['1'] == '新建到 m4…' and 'dash-issue-new.sh' in remote_cmds['1'] and '--node=m4' in remote_cmds['1'],
+          'the remote menu does not offer «new task on m4» with --node=m4: %r %r' % (remote_items.get('1'), remote_cmds.get('1')))
+    local_items = menu_items(w1)
+    local_cmds = menu_commands(w1)
+    check(local_items.get('1') == '新建到 m4…' and '--node=m4' in local_cmds['1'],
+          'the local menu does not offer «new task on m4» while the hub is on: %r' % local_items.get('1'))
+    check(not any('fleet-sidebar-remote.sh' in c or 'fleet-hub-write.sh' in c for c in local_cmds.values()),
+          'a local row item goes through the hub write client: %r' % local_cmds)
+    # a remote row that is asking offers the answer item
+    text = (cache / 'remote_fleet-test').read_text()
+    (cache / 'remote_fleet-test').write_text(text.replace(
+        US.join(('wid:' + F + '/issue-1423', 'm4', 'online', '1423', 'acme/app', 'working', 'claude', '侧边栏', '', '', '0', '')),
+        US.join(('wid:' + F + '/issue-1423', 'm4', 'online', '1423', 'acme/app', 'needs', 'claude', '侧边栏', '', 'perm', '0', ''))))
+    asking = menu_items(remote_wid)
+    check(not asking['a'].startswith('-') and 'fleet-sidebar-remote.sh' in menu_commands(remote_wid)['a'],
+          'a remote row waiting on a permission prompt did not offer the answer item: %r' % asking['a'])
+    # Run the printed stop / reap / answer commands' scripts with the write client
+    # stubbed: each records ONE write with the row's worker_id; the answer popup
+    # body takes its decision from the keyboard (here: y → yes).
+    writes = work / 'hub-writes'
+    stub = ('printf "%s\\t%s\\n" "$1" "$2" >> ' + shlex.quote(str(writes)) +
+            '; printf \'{"operation_id":"00000000-0000-4000-8000-000000000001","status":"succeeded","result":{"how":"stopped:exit"}}\\n\'')
+    env_w = dict(env, FLEET_HUB_WRITE_CMD=stub, FLEET_SESSION='fleet-test')
+    for action in ('stop', 'reap'):
+        r = subprocess.run(['bash', str(bin_dir / 'fleet-sidebar-remote.sh'), action, 'fleet-test', remote_wid],
+                           env=env_w, text=True, capture_output=True, timeout=30)
+        check(r.returncode == 0, 'fleet-sidebar-remote.sh %s failed: %s' % (action, r.stderr))
+    r = subprocess.run(['bash', str(bin_dir / 'fleet-sidebar-remote.sh'), 'answer', 'fleet-test', remote_wid],
+                       env=env_w, text=True, input='y', capture_output=True, timeout=30)
+    check(r.returncode == 0 and ('已完成' in r.stderr), 'the answer popup did not report the outcome: %s' % r.stderr)
+    rows = [l.split('\t') for l in writes.read_text().splitlines()] if writes.exists() else []
+    check([r[0] for r in rows] == ['worker_stop', 'worker_reap', 'worker_answer'], 'hub writes = %r' % rows)
+    for tool, js in rows:
+        import json as _json
+        payload = _json.loads(js)
+        check(payload.get('worker_id') == F + '/issue-1423' and payload.get('idempotency_key'),
+              '%s was sent without the worker_id / an idempotency key: %r' % (tool, payload))
+    check(_json.loads(rows[2][1]).get('answer') == 'yes', 'y did not become answer=yes: %r' % rows[2])
+    # a local row never writes to the hub, whatever the stub says
+    r = subprocess.run(['bash', str(bin_dir / 'fleet-sidebar-remote.sh'), 'stop', 'fleet-test', w1],
+                       env=env_w, text=True, capture_output=True, timeout=30)
+    check(r.returncode == 0 and len(writes.read_text().splitlines()) == 3, 'a local @ id reached the hub write client')
     conf.write_text(saved_conf)
     (cache / 'remote_fleet-test').unlink()
+    # Degenerate (CLAUDE.md): with no cache the menus are the one-machine menus —
+    # no «new task on …» item anywhere, no remote script named.
+    plain = menu_items(w1)
+    check('1' not in plain and not any('fleet-sidebar-remote.sh' in c for c in menu_commands(w1).values()),
+          'the one-machine menu changed without the hub: %r' % plain)
     tm('select-window', '-t', w1)
     wait_for(lambda: bool(view_on(w1)), 'the view did not return after the hub-source leg')
     check(w2 in [r[0] for r in row_data()], 'the default source did not come back after the hub-source leg')

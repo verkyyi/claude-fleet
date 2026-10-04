@@ -54,6 +54,10 @@ var fleetScopeOf = map[string]string{
 	"worker_message": "worker:message",
 	"worker_stop":    "worker:stop",
 	"worker_resume":  "worker:resume",
+	// What a sidebar on another machine does to a row here (claude-fleet#1487,
+	// EPIC #1479 C8): answer the pane's open prompt, reap the row.
+	"worker_answer": "worker:answer",
+	"worker_reap":   "worker:reap",
 	// A session moved in through the hub (claude-fleet#1426) opens a worker
 	// like a start does.
 	"worker_move_in": "worker:start",
@@ -66,14 +70,14 @@ var fleetScopeOf = map[string]string{
 
 // FleetScopes is every scope a grant may hold.
 var FleetScopes = []string{"fleet:read", "worker:start", "worker:message", "worker:stop",
-	"worker:resume", "config:write", "gh:read", "gh:comment"}
+	"worker:resume", "worker:answer", "worker:reap", "config:write", "gh:read", "gh:comment"}
 
 // DefaultPersonScopes is what a person signed in through WeCom may do on
 // their OWN logins when the hub sets nothing (CCQUOTA_FLEET_PERSON_SCOPES):
 // run their workers and read/comment on GitHub. config:write is the
 // operator's — a fleet's caps and autofill are not a colleague's to move.
 var DefaultPersonScopes = []string{"fleet:read", "worker:start", "worker:message", "worker:stop",
-	"worker:resume", "gh:read", "gh:comment"}
+	"worker:resume", "worker:answer", "worker:reap", "gh:read", "gh:comment"}
 
 // fleetConfigKeys is the remotely writable configuration, as fleet-control.py
 // allows it: key → inclusive integer range.
@@ -87,7 +91,7 @@ var fleetConfigKeys = map[string][2]int{
 // GitHub reads.
 var (
 	fleetWriteTools = map[string]bool{"worker_start": true, "worker_message": true, "worker_stop": true,
-		"worker_resume": true, "config_set": true, "gh_comment": true}
+		"worker_resume": true, "worker_answer": true, "worker_reap": true, "config_set": true, "gh_comment": true}
 	fleetGHReads = map[string]bool{"gh_issue_view": true, "gh_pr_view": true, "gh_pr_checks": true}
 )
 
@@ -97,6 +101,11 @@ var (
 	ghFieldRE  = regexp.MustCompile(`^[A-Za-z]{1,40}$`)
 	nodeNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 	revisionRE = regexp.MustCompile(`^[a-f0-9]{64}$`)
+	// answerRE is fleet_hub_common.ANSWER_RE: yes / no for a permission prompt,
+	// else an AskUserQuestion's option numbers — one pick per question, `1,3`
+	// toggling several in a multiSelect. Each word becomes an argv word of a
+	// script that types into a pane, so nothing else passes.
+	answerRE = regexp.MustCompile(`^(?:yes|no|[1-9][0-9]{0,2}(?:,[1-9][0-9]{0,2}){0,15}(?: [1-9][0-9]{0,2}(?:,[1-9][0-9]{0,2}){0,15}){0,7})$`)
 )
 
 // maxFleetText is the longest worker_message text / gh_comment body.
@@ -346,12 +355,16 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 			w.params["repo"] = w.repo
 		}
 		w.fleetID, _ = args["fleet_id"].(string)
-	case "worker_message", "worker_stop", "worker_resume":
+	case "worker_message", "worker_stop", "worker_resume", "worker_answer", "worker_reap":
 		opt := []string{}
+		req := []string{"worker_id", "idempotency_key"}
 		if tool == "worker_message" {
 			opt = append(opt, "text")
 		}
-		if err = checkFields(args, []string{"worker_id", "idempotency_key"}, opt...); err != nil {
+		if tool == "worker_answer" {
+			req = append(req, "answer")
+		}
+		if err = checkFields(args, req, opt...); err != nil {
 			break
 		}
 		wid, _ := args["worker_id"].(string)
@@ -368,6 +381,14 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 				break
 			}
 			w.params["text"] = text
+		}
+		if tool == "worker_answer" {
+			answer, _ := args["answer"].(string)
+			if !answerRE.MatchString(answer) {
+				err = fault("INVALID_ARGUMENT", "answer must be yes, no, or option numbers (`2`, `1,3`, one per question)")
+				break
+			}
+			w.params["answer"] = answer
 		}
 	case "config_set":
 		if err = checkFields(args, []string{"fleet_id", "key", "value", "expected_revision", "idempotency_key"}); err != nil {

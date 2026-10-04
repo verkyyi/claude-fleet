@@ -580,6 +580,26 @@ func HomeSigMessage(unix int64) string {
 	return fmt.Sprintf("fleet-home %d", unix)
 }
 
+// A write by connection certificate (claude-fleet#1487, EPIC #1479 C8): a
+// sidebar on another machine — or the `fleet` shell, which holds no viewer
+// token — acts on one of its person's workers through bin/fleet-hub-write.sh.
+const (
+	// WritePath takes POST {cert, sig, ts, tool, args_json}: tool is one of
+	// the hub's write tools (or operation_get, to read the result back),
+	// args_json the tool's arguments as the exact JSON text that was signed.
+	WritePath = "/v1/fleet/write"
+	// WriteSigNamespace is the ssh-keygen -Y namespace the request is signed
+	// under; the message is WriteSigMessage, so a signature is good for this
+	// one write and nothing else — not another tool, not other arguments.
+	WriteSigNamespace = "fleet-write@claude-fleet"
+)
+
+// WriteSigMessage is what a client signs to write by certificate: the
+// timestamp, the tool and the SHA-256 (hex) of the args_json bytes it sends.
+func WriteSigMessage(unix int64, tool, argsSHA256 string) string {
+	return fmt.Sprintf("fleet-write %d %s %s", unix, tool, argsSHA256)
+}
+
 // The OAuth refresh relay (claude-fleet#1490): the hub's own egress may sit
 // where a provider's token endpoint refuses it — the production hub runs in
 // Shenzhen, and auth.openai.com answers a mainland IP with 403

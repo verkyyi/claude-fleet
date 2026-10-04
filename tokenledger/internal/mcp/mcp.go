@@ -1508,6 +1508,26 @@ func fleetToolSpecs() []toolSpec {
 			InputSchema: obj(map[string]any{"worker_id": workerIDProp, "idempotency_key": idemProp}, "worker_id", "idempotency_key"),
 		},
 		{
+			Name:  "worker_answer",
+			Title: "Answer a worker's open prompt",
+			Description: "Answer what the worker's pane is asking: answer=yes|no presses the plain Yes / " +
+				"the No of an open PERMISSION prompt in the caller's name (never a don't-ask-again row); " +
+				"option numbers (`2`, `1,3`; one per question, space-separated) answer an AskUserQuestion. " +
+				"Refused with the node's reason when nothing is pending or the screen does not show the " +
+				"row. Needs worker:answer." + fleetWriteCaveat,
+			InputSchema: obj(map[string]any{"worker_id": workerIDProp,
+				"answer":          map[string]any{"type": "string", "description": "yes | no | option number(s)"},
+				"idempotency_key": idemProp}, "worker_id", "answer", "idempotency_key"),
+		},
+		{
+			Name:  "worker_reap",
+			Title: "Reap a finished worker",
+			Description: "The dash's confirmed reap (dash-reap.sh --yes): close the window, remove the " +
+				"worktree when clean (a dirty one is KEPT), close the issue. A live or too-young agent is " +
+				"refused with the reason. Needs worker:reap." + fleetWriteCaveat,
+			InputSchema: obj(map[string]any{"worker_id": workerIDProp, "idempotency_key": idemProp}, "worker_id", "idempotency_key"),
+		},
+		{
 			Name:  "config_set",
 			Title: "Set one fleet setting",
 			Description: "Compare-and-set one of FLEET_MAX_SESSIONS (0–256), FLEET_AUTOFILL (0|1), " +
