@@ -237,9 +237,18 @@ leg "2 real run moves idle + hibernating, leaves busy + unbound"
 TB kill-window -t "=$B:notes"
 ovl_before=$(cat "$OVL")
 : > "$CALLS"
-( sleep 2; tmux -L "$B" set -w -t "$W13" @claude_state "done" ) &
+# issue-13 finishes only once the fold has PRINTED its plan, i.e. classified it
+# busy — never on a wall-clock guess: a fixed `sleep 2` lost the race on a slow
+# macOS runner, whose preamble outran it and planned issue-13 as a plain move
+# (issue #1385). The 60s bound only stops a fold that never plans from hanging
+# the flipper; that fold then fails the "wait row" check below.
+WOUT="$WORK/wait.out"; : > "$WOUT"
+( i=0; until grep -q 'wait     issue-13' "$WOUT" 2>/dev/null || [ "$i" -ge 600 ]; do
+    sleep 0.1; i=$((i + 1)); done
+  tmux -L "$B" set -w -t "$W13" @claude_state "done" ) &
 flip=$!
-out=$(FLEET_FOLD_POLL=1 FLEET_FOLD_WAIT=30 bash "$FR" fold "$B" --into "$A" --wait 2>&1); rc=$?
+FLEET_FOLD_POLL=1 FLEET_FOLD_WAIT=30 bash "$FR" fold "$B" --into "$A" --wait > "$WOUT" 2>&1; rc=$?
+out=$(cat "$WOUT")
 wait "$flip" 2>/dev/null
 eq "wait rc" "$rc" 0
 has "wait hosted"  "$out" "$A already hosts o/b — its overlay is left as is"

@@ -38,6 +38,11 @@
 #             there too. Old Codex homes that do not exist are ignored.
 #   ui        dash launcher / tmux conf changed -> fleet-ui-refresh.sh --all
 #   repark    re-park stale sleeping-worker pages on every live fleet (#1064)
+#   loopmark  give every Claude window on every live fleet the `@loop` mark its
+#             transcript says it should carry (fleet_loop_mark.py sweep, #1370): a
+#             session that scheduled a ScheduleWakeup / CronCreate before the
+#             PostToolUse hook was synced otherwise reads `done` until its next
+#             call. Only adds, never clears; a window that already has one is left.
 #   logins    --sync-logins only (issue #1122): bring this machine's OTHER
 #             logins to this commit — fleet-sync-logins.sh, the second command
 #             /fleet-sync-install used to end with, folded into this one. A
@@ -685,6 +690,29 @@ if [ -f "$ROOT/bin/fleet-sleep.sh" ] && [ -f "$ROOT/bin/fleet-lib.sh" ]; then
   else say "repark: ok — $rp page(s) re-parked on $nf live fleet(s)"; fi
 else
   say 'repark: skip — no sleep pages in this version'
+fi
+
+# --- loopmark (issue #1370) --------------------------------------------------------
+if [ -f "$ROOT/bin/fleet_loop_mark.py" ] && [ -f "$ROOT/bin/fleet-lib.sh" ]; then
+  socks=$( # shellcheck source=/dev/null
+    . "$ROOT/bin/fleet-lib.sh" >/dev/null 2>&1 && fleet_sockets 2>/dev/null)
+  nf=0 lm=0 lw=0 lf=0
+  for s in $socks; do
+    nf=$((nf + 1))
+    [ "$DRY" = 1 ] && continue
+    out=$(python3 "$ROOT/bin/fleet_loop_mark.py" sweep --socket-name "$s" 2>/dev/null) || lf=$((lf + 1))
+    case "$out" in marked=*' 'windows=*)
+      _lmn=${out#marked=}; _lmn=${_lmn%% *}; _lmw=${out#* windows=}; _lmw=${_lmw%% *}
+      case "$_lmn$_lmw" in *[!0-9]*) ;; *) lm=$((lm + _lmn)); lw=$((lw + _lmw)) ;; esac ;;
+    esac
+  done
+  # A fleet it could not read is a WARN, not a FAIL: the Stop hook backfills the same
+  # window on its next turn, so nothing is lost — only the head start.
+  if [ "$DRY" = 1 ]; then say "loopmark: would mark pending Loops on $nf live fleet(s)"
+  elif [ "$lf" -gt 0 ]; then say "loopmark: WARN $lf of $nf fleet(s) unreadable; $lm of $lw window(s) marked"
+  else say "loopmark: ok — $lm of $lw Claude window(s) marked on $nf live fleet(s)"; fi
+else
+  say 'loopmark: skip — no @loop mark in this version'
 fi
 
 logins_step

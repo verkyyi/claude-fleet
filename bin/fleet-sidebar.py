@@ -488,10 +488,19 @@ def auto_width(rows, cols, base, top):
 
 
 def detail_line(row):
-    """The selected row's line above the input (issue #1328): its WHOLE name and,
-    for a `!` row, which kind of `!` — the glyph alone no longer says."""
-    name, detail = row[3], row[7]
-    return " " + name + (" · " + detail if detail else "")
+    """The selected row's line above the input (issue #1328): its WHOLE name, for
+    a row whose name the list clipped. Which `!` it is and why a ↻ waits (row[7])
+    moved to the worker pane's header, @title_info (issue #1377) — a parent row
+    almost always carries one, and it took the `?` line from the hints."""
+    return " " + row[3]
+
+
+def hint_line(row, width):
+    """What takes the `?` row for the selected `row` in a `width`-wide view: its
+    whole name when the list clipped it, else None (`? 快捷键` stays)."""
+    if row is not None and row_need(row) > max(0, width - 1):
+        return detail_line(row)
+    return None
 
 
 def wordy(char):
@@ -1072,15 +1081,13 @@ def ui(screen, session, worker, lock):
             # columns right of its parent's.
             put(y, row_text(marker, glyph, tree, label, badge, max(0, width - 1)), attr,
                 fill=wid == window or (navigation and wid == selected))
-        # The selected row's whole name (and which `!` it is) takes the `?`
-        # row while the keyboard is here and that says more than the list
-        # does (issue #1328): a clipped name, or a needs detail.
+        # The selected row's whole name takes the `?` row while the keyboard is
+        # here and the list clipped it (issue #1328); its status words live in
+        # the worker pane's header now (issue #1377), so `? 快捷键` stays put.
         info = None
         if help_y is not None and navigation:
             row = next((r for r in rows if r[0] == selected and r[0] != "hdr"), None)
-            if row is not None and (row[7] or
-                                    row_need(row) > max(0, width - 1)):
-                info = detail_line(row)
+            info = hint_line(row, width)
         help_shown = help_y is not None and info is None
         if info is not None:
             put(help_y, info, curses.A_BOLD)

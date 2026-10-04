@@ -22,11 +22,23 @@ spec.loader.exec_module(live)
 
 class LiveTests(unittest.TestCase):
     def probe(self, state="done", comm="claude", age="00:10", commands=None, roots="100\n", minimum=1800, lifecycle="", hold="",
-              merged_at=None, waived=None, now=None, loop="\t"):
+              merged_at=None, waived=None, now=None, loop="\t", wait=""):
         outputs = iter([hold, loop, lifecycle, state, roots, f"100 1 01:00:00 zsh\n101 100 {age} {comm}\n102 1 00:01 codex\n",
                         commands if commands is not None else f"100 zsh\n101 {comm}\n102 codex\n"])
-        with patch.object(live, "read", side_effect=lambda *args: next(outputs)):
+        with patch.object(live, "read", side_effect=lambda *args: next(outputs)), \
+             patch.object(live, "waiting", return_value=wait):
             return live.live_reason("@1", minimum, None, merged_at, waived, now)
+
+    def test_waiting_parent_or_bg_job_retains(self):
+        # Issue #1370: an unfinished sub-task / a Bash-tool job still running keeps a
+        # `done`-stamped window — after a hold and a Loop, ahead of age and state.
+        for wait in ("children", "bg"):
+            for lifecycle, state in (("", "done"), ("", "looping"), ("sleeping", "done")):
+                self.assertEqual(self.probe(minimum=0, lifecycle=lifecycle, state=state, wait=wait), "retained:" + wait)
+        self.assertEqual(self.probe(hold="1", wait="children"), "retained:hold")
+        now = int(time.time())
+        self.assertEqual(self.probe(wait="bg", loop=f"kind=wakeup next={now+600} ttl=600\t"), "retained:loop")
+        self.assertIsNone(self.probe(minimum=0, wait=""))
 
     def test_retained_workers_are_never_automatically_reaped(self):
         for phase in ('preparing','waking','failed'):
@@ -96,6 +108,7 @@ class LiveTests(unittest.TestCase):
             out = []
             with patch.object(sys, "argv", ["probe", "@1", *extra]), \
                  patch.object(live, "read", side_effect=lambda *a: next(replies)), \
+                 patch.object(live, "waiting", return_value=""), \
                  patch.object(live.time, "time", return_value=NOW), \
                  patch("builtins.print", side_effect=lambda *a: out.append(" ".join(map(str, a)))):
                 return live.main(), out
@@ -142,8 +155,10 @@ class LiveTests(unittest.TestCase):
 
     def test_explicit_socket_applies_to_every_tmux_probe(self):
         replies = iter(["", "\t", "", "done", "100", "100 1 01:00:00 zsh", "100 zsh"])
-        with patch.object(live, "read", side_effect=lambda *args: next(replies)) as read:
+        with patch.object(live, "read", side_effect=lambda *args: next(replies)) as read, \
+             patch.object(live, "waiting", return_value="") as wait:
             self.assertIsNone(live.live_reason("@1", 1800, "other-fleet"))
+        wait.assert_called_once_with("@1", "other-fleet")
         calls = [call.args for call in read.call_args_list if call.args[0] == "tmux"]
         self.assertEqual(len(calls), 5)
         self.assertTrue(all(call[:3] == ("tmux", "-L", "other-fleet") for call in calls))

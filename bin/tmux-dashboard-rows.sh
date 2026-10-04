@@ -54,7 +54,7 @@ R="${E}0m"; US=$'\x1f'
 # option of that name, so the per-repo fold set rides the one list-windows call
 # every frame already makes — same value on every line, no extra fork. Both
 # passes name it so nothing lands glued to @sleep_since.
-WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{@claude_needs}${US}#{@expand}${US}#{@pin}${US}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}"
+WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -66,9 +66,12 @@ fld() { local w="$1" s="$2" n=${#2}
 # tick doubles as the fork-free NOW (epoch seconds) for the activity column:
 # perl's time()*4 ÷ 4 == floor(now), so no extra `date` fork on the hot path; the
 # no-perl fallback reads whole seconds from `date` (one fork, as before).
+# The same perl also says the local UTC offset (TZOFF, seconds) so a Loop's next
+# round renders as local HH:MM in @title_info (issue #1377) with no extra fork.
 SPINF='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
-TICK=$(perl -MTime::HiRes=time -e 'printf "%d", time()*4' 2>/dev/null)
-if [ -n "$TICK" ]; then NOW=$(( TICK / 4 )); else TICK=$(date +%s); NOW=$TICK; fi
+TICK=$(perl -MTime::HiRes=time -e '$t=time; @l=localtime($t); @g=gmtime($t); $d=$l[7]-$g[7]; $d=$d>1?-1:$d<-1?1:$d; printf "%d %d", $t*4, $d*86400+($l[2]-$g[2])*3600+($l[1]-$g[1])*60' 2>/dev/null)
+TZOFF=${TICK#* }; TICK=${TICK%% *}
+if [ -n "$TICK" ]; then NOW=$(( TICK / 4 )); else TICK=$(date +%s); NOW=$TICK; TZOFF=''; fi
 FRAME=${SPINF:$(( TICK % 10 )):1}
 
 # state → color/glyph/rank (set vars; no subshells)
@@ -342,7 +345,7 @@ WLIST=${WLIST//\\037/$US}
 # line of this fleet, taken off the first (panels included: a fleet whose only
 # windows are panels still draws its `(0)` headings, folded or not).
 KEYTAB=''; PRWANT=''; RSLUGS=' '; RFOLD=''; UNFIN=$'\n'
-while IFS=$US read -r sess idx name path state _ _ iss origin wt _ _ nsub exp pin _ _ _ _ wrepo wnorepo _ rfold wloop; do
+while IFS=$US read -r sess idx name path state _ _ iss origin wt _ _ nsub exp pin _ _ _ _ wrepo wnorepo _ rfold wloop _; do
   [ -z "$name" ] && continue
   [ -n "${FLEET_SESSION:-}" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
   RFOLD=$rfold
@@ -499,7 +502,7 @@ if [ "$RGRP" = 1 ] && [ -n "$RFOLD" ]; then
 fi
 
 buf=""
-while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp wrepo wnorepo slept _; do
+while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp wrepo wnorepo slept _ wloop wtitle; do
   [ -z "$name" ] && continue
   # strict per-fleet: only windows from the viewing dash's own tmux session.
   # FLEET_SESSION exported by tmux-dashboard.sh; unset ⇒ show all (single-fleet).
@@ -720,6 +723,84 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
         [ "$pinned" = 1 ] && [ -z "$croot" ] && gpath="9:99999/$gpath" ;;
     esac
   fi
+  # --- subtree progress (issue #624) ------------------------------------------
+  # A row that SPAWNED work reports its subtree: `3/5` = 3 of its 5 descendants
+  # done — at EVERY level (issue #1328), counted off KIDTAB with the fork-free
+  # length-delta idiom (one substitution per figure, no subshell) so the 4Hz hot
+  # path keeps its exec budget. Just the two numbers: the old trailing `✓` was
+  # there on every parent whatever its state, and the loud `· 1!` is gone too — a
+  # child that needs you is the red `!` on its OWN row, which no fold hides.
+  # A row with no children draws NOTHING — the dash's quiet layer must not grow a
+  # badge on every line.
+  kidd=''; carg=''
+  if [ -n "$okey" ]; then
+    kn=$'\n'"$okey"$'\t'; kt=${KIDTAB//"$kn"/}
+    ktot=$(( (${#KIDTAB} - ${#kt}) / ${#kn} ))
+    if [ "$ktot" -gt 0 ]; then
+      kn=$'\n'"$okey"$'\t1'$'\n'; kt=${KIDTAB//"$kn"/}    # rk 1 = done
+      kdone=$(( (${#KIDTAB} - ${#kt}) / ${#kn} ))
+      kidd="$kdone/$ktot"
+      # fold caret — ONLY on a row that has a subtree, so the quiet layer still
+      # doesn't grow a mark on every line. It reads this row's OWN @expand,
+      # because this row is the one ←/→ toggles; every row the fold above can hide
+      # renders under such a row.
+      if [ "$exp" = 1 ]; then carg='▾'; else carg='▸'; fi
+    fi
+  fi
+  # --- @title_info: the worker pane's header line (issue #1377) --------------
+  # What the sidebar's selected-row line used to say, moved to where there is
+  # room: the worker pane's top border (conf/tmux-attention.conf reads
+  # #{@title_info} and nothing else). Plain text, ` · `-joined, most important
+  # first so a narrow pane truncates the tail: subtree k/N, why a ↻ waits, the
+  # Loop's next round, which `!`, the parent. Computed HERE — before the folds —
+  # so a folded row's header stays current; written only when it changed, and
+  # UNSET when every segment is empty, so a lone worker's header is byte for byte
+  # the old ` name #issue `. Parent = @origin as stamped (#1352's nearest-live
+  # ancestor replaces it when that lands).
+  tinfo=''
+  [ -n "$kidd" ] && { [ -n "${TL_kids-}" ] || TL_kids=$(fleet_ui_t title_kids); tinfo="$TL_kids $kidd"; }
+  if [ "$state" = looping ]; then
+    case ",$nsub," in *,children,*)
+      [ -n "${WD_children-}" ] || WD_children=$(fleet_ui_t wait_children)
+      tinfo="${tinfo:+$tinfo · }$WD_children" ;;
+    esac
+    case ",$nsub," in *,bg,*)
+      [ -n "${WD_bg-}" ] || WD_bg=$(fleet_ui_t wait_bg)
+      tinfo="${tinfo:+$tinfo · }$WD_bg" ;;
+    esac
+  fi
+  _lp=0; loop_live_v "$wloop" && _lp=1
+  [ "$state" = looping ] && case ",$nsub," in *,loop,*) _lp=1 ;; esac
+  if [ "$_lp" = 1 ]; then
+    _ln=''
+    case "$wloop" in *next=*) _ln=${wloop#*next=}; _ln=${_ln%% *} ;; esac
+    case "$_ln:$TZOFF" in
+      *[!0-9:-]*|:*|*:)
+         [ -n "${TL_loop-}" ] || TL_loop=$(fleet_ui_t title_loop)
+         tinfo="${tinfo:+$tinfo · }$TL_loop" ;;
+      *) _ln=$(( (_ln + TZOFF) % 86400 )); [ "$_ln" -lt 0 ] && _ln=$((_ln + 86400))
+         [ -n "${TL_loopf-}" ] || TL_loopf=$(fleet_ui_t title_loop_fmt '%02d:%02d')
+         printf -v _ln "$TL_loopf" $((_ln / 3600)) $((_ln % 3600 / 60))
+         tinfo="${tinfo:+$tinfo · }$_ln" ;;
+    esac
+  fi
+  if [ -n "$ndet" ]; then
+    if [ "$_nk" = other ]; then tinfo="${tinfo:+$tinfo · }$ndet"
+    else
+      [ -n "${TL_needs-}" ] || TL_needs=$(fleet_ui_t title_needs)
+      tinfo="${tinfo:+$tinfo · }$TL_needs$ndet"
+    fi
+  fi
+  case "$origin" in
+    issue-*|scratch-*|*:issue-*|*:scratch-*)
+      _po=${origin##*:}; case "$_po" in issue-*) _po="#${_po#issue-}" ;; esac
+      [ -n "${TL_parent-}" ] || TL_parent=$(fleet_ui_t title_parent)
+      tinfo="${tinfo:+$tinfo · }$TL_parent $_po" ;;
+  esac
+  if [ "$tinfo" != "$wtitle" ]; then
+    if [ -n "$tinfo" ]; then tmux set-option -wq -t "$wid" @title_info "$tinfo" 2>/dev/null
+    else tmux set-option -wqu -t "$wid" @title_info 2>/dev/null; fi
+  fi
   # --- the 置顶 group: every pinned row, above every repo group (issue #1170) ---
   # A row in the pin tier (`pinned`=0 — it carries @pin, or floats with a pinned
   # ancestor) leaves its repo group for ONE group at the very top, headed
@@ -816,30 +897,6 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     *) tagd="${tagd:+$tagd }quota:${qwait%%:*}" ;;
   esac
 
-  # --- subtree progress (issue #624) ------------------------------------------
-  # A row that SPAWNED work reports its subtree: `3/5` = 3 of its 5 descendants
-  # done — at EVERY level (issue #1328), counted off KIDTAB with the fork-free
-  # length-delta idiom (one substitution per figure, no subshell) so the 4Hz hot
-  # path keeps its exec budget. Just the two numbers: the old trailing `✓` was
-  # there on every parent whatever its state, and the loud `· 1!` is gone too — a
-  # child that needs you is the red `!` on its OWN row, which no fold hides.
-  # A row with no children draws NOTHING — the dash's quiet layer must not grow a
-  # badge on every line.
-  kidd=''; carg=''
-  if [ -n "$okey" ]; then
-    kn=$'\n'"$okey"$'\t'; kt=${KIDTAB//"$kn"/}
-    ktot=$(( (${#KIDTAB} - ${#kt}) / ${#kn} ))
-    if [ "$ktot" -gt 0 ]; then
-      kn=$'\n'"$okey"$'\t1'$'\n'; kt=${KIDTAB//"$kn"/}    # rk 1 = done
-      kdone=$(( (${#KIDTAB} - ${#kt}) / ${#kn} ))
-      kidd="$kdone/$ktot"
-      # fold caret — ONLY on a row that has a subtree, so the quiet layer still
-      # doesn't grow a mark on every line. It reads this row's OWN @expand,
-      # because this row is the one ←/→ toggles; every row the fold above can hide
-      # renders under such a row.
-      if [ "$exp" = 1 ]; then carg='▾'; else carg='▸'; fi
-    fi
-  fi
   # the tree cell (issues #836/#1328): 2 cells, the level said by WHERE the `└`
   # sits — left for a first-level child, right for a second, `┊└` deeper — and a
   # row that owns a subtree trades its free cell (or its `└`, from the second
@@ -869,6 +926,17 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     [ -n "$repod" ] && label="$label $repod"       # cross-repo child (#1031)
     [ -n "$zwait" ] && label="$label · ${zwait#z · }"
     [ "$depth" -gt "$DEPTH_MAX" ] && depth=$DEPTH_MAX
+    # WHY a ↻ row is idle-but-unfinished (issue #1370): the needs field carries
+    # @claude_wait on a `looping` window (WFMT), and the selected-row line says it —
+    # `等子任务 k/N` with this row's own subtree badge. Sidebar only: the hub's act
+    # cell is the red `!` column, and a ↻ is not one.
+    if [ -z "$ndet" ] && [ "$state" = looping ]; then
+      case ",$nsub," in
+        *,children,*) [ -n "${WD_children-}" ] || WD_children=$(fleet_ui_t wait_children)
+                      ndet="$WD_children${kidd:+ $kidd}" ;;
+        *,bg,*)       [ -n "${WD_bg-}" ] || WD_bg=$(fleet_ui_t wait_bg); ndet=$WD_bg ;;
+      esac
+    fi
     buf+="$rgrp	$pinned	$gpath	$wid$US$state$US$gl$US$label$US${treed:- }$US$kidd$US$depth$US$ndet"$'\n'
     continue
   fi

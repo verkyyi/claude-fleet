@@ -358,6 +358,15 @@ done
 eq "8 speaking: restarted once" "$(wc -l < "$launches" | tr -d ' ')" 4
 [ -f "$FLEET_CONF_DIR/global/guide.spoke" ] || fail "8: brief did not leave guide.spoke"
 eq "8 reused guide window" "$(wins '#{window_name}' | grep -cx guide)" 1
+# guide.spoke lands at the START of the brief; the stub is bash, so until it
+# reaches `exec sleep` the pane holds only shells (zsh → bash → brief's bash
+# subshells) and is rightly NOT running. A real claude is the agent itself. On
+# macOS the rest of the brief is slow enough that ticking right away lost the
+# race every time (#1384) — wait for the agent to be up first.
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25; do
+  lib 'fleet_guide_alive fleet' && break
+  sleep 0.2
+done
 FLEET_GUIDE_COOLDOWN=3600 FLEET_GUIDE_SPEAK_SECS=3600 lib 'fleet_guide_tick fleet'
 [ -f "$marker" ] || fail "8: spoken agent not marked onboarded"
 [ ! -e "$FLEET_CONF_DIR/global/onboard.pending" ] || fail "8: pending marker not cleared"
