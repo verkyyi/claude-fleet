@@ -168,6 +168,19 @@ button[aria-pressed="true"] { background: var(--ink); color: var(--surface); bor
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
 @media (max-width: 820px) { .grid2 { grid-template-columns: 1fr; } }
 
+/* ---- fleetnav: the way to 连接 / 我的会话 (claude-fleet#1458). One line,
+   links first, the login or the "placed nowhere yet" note after. Hidden
+   until /v1/fleet/me answers and on a hub without the fleet module. */
+.fleetnav {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px;
+  margin: 0 0 14px; font-size: 13px; color: var(--ink-2);
+}
+.fleetnav .fleet-label { color: var(--ink-3); font-size: 12px; letter-spacing: .02em; text-transform: uppercase; }
+.fleetnav a { color: var(--s1); font-weight: 600; text-decoration: none; }
+.fleetnav a:hover, .fleetnav a:focus-visible { text-decoration: underline; text-underline-offset: 2px; }
+.fleetnav .fleet-login { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--ink-3); }
+.fleetnav .fleet-note { color: var(--warning); }
+
 /* ---- banner: the degrade path. An unavailable reading is never a 0% gauge. */
 .banner {
   border: 1px solid var(--border); border-left: 3px solid var(--warning);

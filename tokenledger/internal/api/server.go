@@ -106,8 +106,19 @@ type Server struct {
 	// FleetAutoAssign is the machines (roster hostnames) a person gets a
 	// login on the first time they sign in through WeCom
 	// (CCQUOTA_FLEET_AUTO_ASSIGN). Empty means accounts are only ever opened
-	// by an explicit assignment.
+	// by an explicit assignment. A person in FleetPrincipalLogins is never
+	// auto-assigned: their login already exists, and is adopted instead.
 	FleetAutoAssign []string
+
+	// FleetPrincipalLogins maps a person (WeCom userid, the ticket's `uid`)
+	// to the OS login that is theirs on every machine
+	// (CCQUOTA_FLEET_PRINCIPAL_LOGINS=caojian=24haowan,yilianghui=verkyyi;
+	// claude-fleet#1458). At sign-in a mapped person is recorded under that
+	// login and the login is ADOPTED on every roster machine whose agent
+	// runs as it — nothing is ever created. A person not in the map gets no
+	// row and no op (unless FleetAutoAssign says otherwise). Empty means the
+	// map is not in use.
+	FleetPrincipalLogins map[string]string
 
 	// FleetPersonScopes is the grant a person signed in through WeCom holds
 	// on their own logins (CCQUOTA_FLEET_PERSON_SCOPES, claude-fleet#1410);
@@ -422,8 +433,9 @@ func (s *Server) viewerOnly(next http.Handler) http.Handler {
 		// authorization service signed. Checked after the token so the token
 		// stays the fallback that works when WeCom does not.
 		if sub, ok := s.ssoViewer(r); ok {
-			// The SSO subject is also the fleet principal: the one identity
-			// whose views are narrowed to that person's own machines.
+			// The signed-in person (the ticket's `uid`, else its role
+			// subject) is also the fleet principal: the one identity whose
+			// views are narrowed to that person's own machines.
 			ctx := context.WithValue(withViewer(r.Context(), sub), principalKey{}, sub)
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return

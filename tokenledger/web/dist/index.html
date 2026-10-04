@@ -120,6 +120,14 @@
   <div class="progress" id="progress" hidden></div>
 </header>
 <div class="wrap">
+  <!-- The way to the fleet pages — 连接 / 我的会话, and the roster for the
+       operator (claude-fleet#1458). lib/fleetnav.js decides what goes here
+       from /v1/fleet/me, app.js draws it. No `data-band`, deliberately: a
+       colleague who opened this page to find their machine must find the
+       link on every view. Hidden until the answer arrives, and stays hidden
+       on a hub without the fleet module, so a hub predating it renders
+       exactly as before. -->
+  <nav id="fleetnav" class="fleetnav" hidden></nav>
   <div id="banners"></div>
   <!-- Four tiers, and the boundary between them is WHICH QUESTION a card
        answers, not how important it is.

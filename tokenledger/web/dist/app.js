@@ -1,6 +1,7 @@
 // web/dist/app.js — boot, router, band mounting, loader wiring.
 import { parse, format, dataKey, resolveSub } from './lib/state.js';
 import { bandsFor } from './lib/nav.js';
+import { fleetNav } from './lib/fleetnav.js';
 import { createLoader } from './lib/seq.js';
 import { createScopeControls, renderNav, renderScopeControls, setBusy, syncNav } from './scope.js';
 import { renderNow, startLive, LIMITS_INDEX } from './now.js';
@@ -532,6 +533,22 @@ function wireOpsFold() {
   });
 }
 
+/** renderFleetNav draws lib/fleetnav.js's decision into the shell's
+ *  #fleetnav: the links, or the "placed nowhere yet" note, or nothing. */
+function renderFleetNav(me) {
+  const root = $('#fleetnav');
+  if (!root) return;
+  const nav = fleetNav(me);
+  if (!nav.links.length && !nav.note) { root.hidden = true; return; }
+  root.setAttribute('aria-label', t('fleet.nav'));
+  const kids = [el('span', { class: 'fleet-label' }, t('fleet.nav'))];
+  for (const { href, key } of nav.links) kids.push(el('a', { href }, t(key)));
+  if (nav.login) kids.push(el('span', { class: 'fleet-login' }, nav.login));
+  if (nav.note) kids.push(el('span', { class: 'fleet-note' }, t(nav.note)));
+  root.replaceChildren(...kids);
+  root.hidden = false;
+}
+
 async function boot() {
   // The shell's own strings first, before any fetch: a slow hub must not leave
   // the page's furniture in one language while the cards arrive in another.
@@ -571,6 +588,11 @@ async function boot() {
   // not: a hub with no repo data is a working hub, and it is also what every
   // hub predating this feature looks like.
   const reposReq = app.api('/v1/repos').catch(() => []);
+  // Fourth, same rule as the third: sent now, awaited by nobody. It decides
+  // one strip above the banners — the way to 连接 / 我的会话 for the person
+  // signed in (claude-fleet#1458) — and on a hub without the fleet module it
+  // 404s, which resolves to null and draws nothing.
+  app.api('/v1/fleet/me').catch(() => null).then(renderFleetNav);
   try { app.accounts = await accountsReq; }
   catch (err) { $('#banners').replaceChildren(el('div', { class: 'banner err' }, t('app.unreachable', { error: err.message }))); return; }
   useFxRate(await fxReq);

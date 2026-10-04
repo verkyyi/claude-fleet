@@ -1,6 +1,7 @@
 package api
 
 import (
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -78,9 +79,18 @@ func (s *Server) handleEnter(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusUnauthorized, "ticket rejected")
 		return
 	}
+	// The person is the ticket's `uid`, never its `sub`: the subject is the
+	// role the issuer admits (one per app — "staff"), identical on every
+	// colleague's ticket, and keying a principal on it made everyone one
+	// person (claude-fleet#1458). No `uid` means the issuer has not listed
+	// this app in AUTHZ_UID_APPS yet; say so on every sign-in rather than
+	// quietly file the role as if it were someone.
+	if p.UID == "" {
+		log.Printf("sso: ticket for %q names no person (no uid claim — is %q in the issuer's AUTHZ_UID_APPS?); treating the role as the principal", p.Sub, s.SSO.AppID)
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name:  authz.CookieName,
-		Value: authz.SignSession(p.Sub, s.SSO.SessionSecret, time.Now(), s.SSO.ttl()),
+		Value: authz.SignPerson(p.Sub, p.UID, p.Name, s.SSO.SessionSecret, time.Now(), s.SSO.ttl()),
 		Path:  "/",
 		// ★ No Domain: host-only. A cookie scoped to the parent domain is a
 		// cookie handed to every preview environment and every other app on
@@ -90,16 +100,19 @@ func (s *Server) handleEnter(w http.ResponseWriter, r *http.Request) {
 		Secure:   isHTTPS(r),
 		MaxAge:   int(s.SSO.ttl().Seconds()),
 	})
-	// The first sign-in is what gives a person their logins on the
-	// auto-assigned machines (claude-fleet#1411). It never delays or blocks
-	// the sign-in itself.
-	s.onPrincipalSignIn(p.Sub)
+	// The first sign-in is what records a person and, when the operator
+	// mapped them to a login (claude-fleet#1458) or auto-assigns machines
+	// (claude-fleet#1411), gives them their logins. It never delays or
+	// blocks the sign-in itself.
+	s.onPrincipalSignIn(p.Principal(), p.Name)
 	// A `fleet login` QR scanned while signed out comes back to its
 	// confirmation page (claude-fleet#1412); everything else goes to "/".
 	http.Redirect(w, r, loginReturn(w, r), http.StatusFound)
 }
 
-// ssoViewer reports the signed-in human behind this request, if any.
+// ssoViewer reports the signed-in human behind this request, if any: their
+// WeCom userid, or the role subject for a session minted from a ticket that
+// named no person (see authz.Session.Principal).
 func (s *Server) ssoViewer(r *http.Request) (string, bool) {
 	if !s.SSO.ready() {
 		return "", false
@@ -112,7 +125,7 @@ func (s *Server) ssoViewer(r *http.Request) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	return sess.Sub, true
+	return sess.Principal(), true
 }
 
 // ssoSignInURL is where a signed-out BROWSER should be sent.

@@ -412,13 +412,25 @@ const MaxLoginLen = 16
 // accept: a lowercase letter, then lowercase letters and digits. No dot, dash
 // or underscore, so it can never be mistaken for an option or a path.
 func ValidLogin(s string) bool {
+	return len(s) > 0 && s[0] >= 'a' && s[0] <= 'z' && ValidExistingLogin(s)
+}
+
+// ValidExistingLogin is the shape of a login the operator may NAME — one
+// that already exists on a machine and is adopted, mapped to a person
+// (CCQUOTA_FLEET_PRINCIPAL_LOGINS) or put on a certificate — as opposed to
+// one the hub would create. The same alphabet as ValidLogin, so it still
+// cannot be an option or a path, but a leading digit is allowed: macOS
+// permits it, and `24haowan` is a real login (claude-fleet#1458). A create
+// op keeps ValidLogin on both sides, so a login of this shape is never
+// minted or made, only recorded.
+func ValidExistingLogin(s string) bool {
 	if len(s) < 2 || len(s) > MaxLoginLen {
 		return false
 	}
-	for i, c := range s {
+	for _, c := range s {
 		switch {
 		case c >= 'a' && c <= 'z':
-		case c >= '0' && c <= '9' && i > 0:
+		case c >= '0' && c <= '9':
 		default:
 			return false
 		}

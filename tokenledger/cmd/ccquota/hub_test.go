@@ -46,3 +46,33 @@ func TestHubRejectsBadRepriceFlags(t *testing.T) {
 		})
 	}
 }
+
+// CCQUOTA_FLEET_PRINCIPAL_LOGINS decides whose machine a sign-in lands on
+// (claude-fleet#1458), so a half-readable value refuses to start the hub
+// rather than placing someone silently wrong.
+func TestFleetPrincipalLogins(t *testing.T) {
+	m, err := fleetPrincipalLogins(" caojian=24haowan , yilianghui = verkyyi ,")
+	if err != nil || len(m) != 2 || m["caojian"] != "24haowan" || m["yilianghui"] != "verkyyi" {
+		t.Fatalf("parsed %v, %v", m, err)
+	}
+	if m, err := fleetPrincipalLogins(""); err != nil || len(m) != 0 {
+		t.Fatalf("empty → %v, %v", m, err)
+	}
+	for _, bad := range []string{
+		"caojian",                              // no login
+		"=verkyyi",                             // no person
+		"caojian=Root",                         // not lowercase
+		"caojian=root",                         // reserved
+		"caojian=24-haowan",                    // not the alphabet
+		"a=verkyyi,b=verkyyi",                  // one login, two people
+		"yilianghui=verkyyi,yilianghui=other1", // one person, two logins
+	} {
+		if _, err := fleetPrincipalLogins(bad); err == nil {
+			t.Errorf("%q was accepted", bad)
+		}
+	}
+	// The same pair twice is not a conflict.
+	if _, err := fleetPrincipalLogins("a=verkyyi,a=verkyyi"); err != nil {
+		t.Errorf("a repeated pair refused: %v", err)
+	}
+}

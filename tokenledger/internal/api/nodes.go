@@ -224,6 +224,11 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 		conn.Close(websocket.StatusInternalError, "hub could not record the node")
 		return
 	}
+	// A machine joining as a mapped login AFTER its person signed in: adopt
+	// it now rather than at their next sign-in (claude-fleet#1458).
+	if s.mappedLogin(ep.OSUser) {
+		s.adoptMappedLogins(time.Now())
+	}
 
 	welcome := control.Welcome{Accepted: control.Compatible(hello.Proto), HubProto: control.Proto, MinProto: control.MinProto}
 	if !welcome.Accepted {

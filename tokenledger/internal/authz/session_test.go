@@ -71,3 +71,23 @@ func TestSession_RejectsTamperedOrForeignKey(t *testing.T) {
 		t.Error("没配密钥却放行了")
 	}
 }
+
+// 票上的人（uid / nam）要跟着进 cookie：票 90 秒后就没了，之后每个请求都得从 cookie
+// 知道这是谁。没带 uid 的旧 cookie 照样解析，Principal 退回 sub。
+func TestSession_CarriesThePersonFromTheTicket(t *testing.T) {
+	now := at(goldenIAT)
+	s, err := VerifySession(SignPerson("ccquota-staff", "yilianghui", "易良辉", sessSecret, now, time.Hour), sessSecret, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Sub != "ccquota-staff" || s.UID != "yilianghui" || s.Name != "易良辉" || s.Principal() != "yilianghui" {
+		t.Fatalf("session = %+v", s)
+	}
+	old, err := VerifySession(SignSession("ccquota-staff", sessSecret, now, time.Hour), sessSecret, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if old.UID != "" || old.Principal() != "ccquota-staff" {
+		t.Fatalf("old-style cookie = %+v", old)
+	}
+}

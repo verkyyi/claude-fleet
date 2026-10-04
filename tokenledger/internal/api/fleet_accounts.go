@@ -91,17 +91,43 @@ func (s *Server) isFleetAdmin(osUser string) bool {
 	return false
 }
 
-// onPrincipalSignIn records a person at their WeCom sign-in and queues their
-// login on every auto-assigned machine. Never in the way of the sign-in: a
-// failure here is logged, and the person is still let in.
-func (s *Server) onPrincipalSignIn(sub string) {
+// onPrincipalSignIn records a person at their WeCom sign-in and gives them
+// their logins. Never in the way of the sign-in: a failure here is logged,
+// and the person is still let in.
+//
+// Three cases, in this order (claude-fleet#1458):
+//
+//   - mapped (FleetPrincipalLogins): the person is recorded under THAT login
+//     — a login already on the machines, never minted — and it is adopted
+//     wherever the roster shows an agent running as it. No op is ever sent.
+//   - auto-assign (FleetAutoAssign, claude-fleet#1411): a login is minted and
+//     queued for creation on those machines, as before.
+//   - neither: nothing. Not even a principal row — a row mints a login name,
+//     and AdoptPrincipal refuses to change one later, so a row for a person
+//     the operator has not placed would be exactly the trap the map exists
+//     to close. The operator's `adopt` on /v1/fleet/accounts records them
+//     when there is somewhere to record them on.
+func (s *Server) onPrincipalSignIn(principal, displayName string) {
 	if !s.Fleet {
 		return
 	}
 	now := time.Now()
-	p, err := s.Store.EnsurePrincipal(sub, "", control.MaxLoginLen, control.ValidLogin, now)
+	if login, ok := s.FleetPrincipalLogins[principal]; ok {
+		if _, err := s.Store.AdoptPrincipal(principal, login, displayName, now); err != nil {
+			// The usual cause: a row minted for this person before the map
+			// named them. The operator `forget`s it; nothing is guessed.
+			log.Printf("fleet: sign-in of %s: mapped to login %s but %v", principal, login, err)
+			return
+		}
+		s.adoptMappedLogins(now)
+		return
+	}
+	if len(s.FleetAutoAssign) == 0 {
+		return
+	}
+	p, err := s.Store.EnsurePrincipal(principal, displayName, control.MaxLoginLen, control.ValidLogin, now)
 	if err != nil {
-		log.Printf("fleet: record principal %q: %v", sub, err)
+		log.Printf("fleet: record principal %q: %v", principal, err)
 		return
 	}
 	queued := false
@@ -112,12 +138,66 @@ func (s *Server) onPrincipalSignIn(sub string) {
 			continue
 		}
 		if created {
-			log.Printf("fleet: first sign-in of %s: queued login %s on %s", sub, p.Login, host)
+			log.Printf("fleet: first sign-in of %s: queued login %s on %s", principal, p.Login, host)
 			queued = true
 		}
 	}
 	if queued {
 		go s.dispatchAccounts()
+	}
+}
+
+// mappedLogin reports whether login is anyone's in FleetPrincipalLogins.
+func (s *Server) mappedLogin(login string) bool {
+	if login == "" {
+		return false
+	}
+	for _, l := range s.FleetPrincipalLogins {
+		if l == login {
+			return true
+		}
+	}
+	return false
+}
+
+// adoptMappedLogins records, for every mapped person the hub already knows,
+// their login as ACTIVE on each roster machine where an agent runs as that
+// login. The roster is the evidence: an agent connecting as `verkyyi` on
+// `macmini` proves the login exists there, and the operator's map says whose
+// it is. Nothing runs on a node. Called at a mapped sign-in and at every
+// node hello (a machine that joins after the person signed in), so the two
+// orders converge on the same rows. A row whose op is in flight, or that is
+// already active, is left alone.
+func (s *Server) adoptMappedLogins(now time.Time) {
+	if !s.Fleet || len(s.FleetPrincipalLogins) == 0 {
+		return
+	}
+	nodes, err := s.Store.Nodes()
+	if err != nil {
+		log.Printf("fleet: adopt mapped logins: roster: %v", err)
+		return
+	}
+	for pid, login := range s.FleetPrincipalLogins {
+		p, err := s.Store.Principal(pid)
+		if err != nil {
+			continue // not signed in yet, or a row the operator must sort out
+		}
+		if p.Login != login {
+			continue // a pre-map row; sign-in already logged it
+		}
+		seen := map[string]bool{}
+		for _, n := range nodes {
+			if n.OSUser != login || seen[n.Hostname] {
+				continue
+			}
+			seen[n.Hostname] = true
+			adopted, err := s.Store.AdoptAccountIfOpen(p, n.Hostname, now)
+			if err != nil {
+				log.Printf("fleet: adopt %s on %s for %s: %v", login, n.Hostname, pid, err)
+			} else if adopted {
+				log.Printf("fleet: adopted login %s on %s for %s (agent runs as it)", login, n.Hostname, pid)
+			}
+		}
 	}
 }
 
@@ -239,6 +319,13 @@ func truncate(s string, n int) string {
 
 // FleetMe is the body of /v1/fleet/me.
 type FleetMe struct {
+	// Signed says a WeCom person is behind this request (the operator's
+	// doors — token, tailnet — are not a person). Person is who: the
+	// ticket's WeCom userid, present even before the hub has a row for
+	// them, so "signed in but nowhere yet" is distinguishable from the
+	// operator's own view (claude-fleet#1458).
+	Signed    bool                 `json:"signed_in"`
+	Person    string               `json:"person,omitempty"`
 	Principal *store.Principal     `json:"principal"`
 	Accounts  []store.FleetAccount `json:"accounts"`
 }
@@ -248,6 +335,7 @@ type FleetMe struct {
 func (s *Server) handleFleetMe(w http.ResponseWriter, r *http.Request) {
 	out := FleetMe{Accounts: []store.FleetAccount{}}
 	if pid := principalOf(r.Context()); pid != "" {
+		out.Signed, out.Person = true, pid
 		p, err := s.Store.Principal(pid)
 		if err != nil && !errors.Is(err, store.ErrNoPrincipal) {
 			httpError(w, http.StatusInternalServerError, err.Error())
@@ -277,6 +365,11 @@ type FleetAccountsView struct {
 //	retry   re-queue a create that failed, went unknown or was removed
 //	remove  close the login on hostname (the home is archived, not deleted)
 //	adopt   record a login that already exists there as theirs; runs nothing
+//	forget  drop the hub's record: the account row on hostname, or — with no
+//	        hostname — the person and every row of theirs. Only rows that
+//	        never reached a machine (pending / failed / removed) can be
+//	        forgotten; an active login is `remove`d, an op in flight or
+//	        unknown is waited out or `retry`d. Runs nothing (claude-fleet#1458).
 type FleetAccountRequest struct {
 	Action      string `json:"action"`
 	PrincipalID string `json:"principal_id"`
@@ -308,7 +401,7 @@ func (s *Server) handleFleetAccounts(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		req.PrincipalID, req.Hostname = strings.TrimSpace(req.PrincipalID), strings.TrimSpace(req.Hostname)
-		if req.PrincipalID == "" || req.Hostname == "" {
+		if req.PrincipalID == "" || (req.Hostname == "" && req.Action != "forget") {
 			httpError(w, http.StatusBadRequest, "principal_id and hostname are required")
 			return
 		}
@@ -348,7 +441,7 @@ func (s *Server) changeAccount(req FleetAccountRequest) error {
 		_, err = s.Store.RequestAccount(p, req.Hostname, req.Action == "retry", now)
 		return err
 	case "adopt":
-		if !control.ValidLogin(req.Login) {
+		if !control.ValidExistingLogin(req.Login) {
 			return errors.New("adopt needs a login of 2-16 lowercase letters and digits")
 		}
 		p, err := s.Store.AdoptPrincipal(req.PrincipalID, req.Login, req.DisplayName, now)
@@ -358,7 +451,9 @@ func (s *Server) changeAccount(req FleetAccountRequest) error {
 		return s.Store.AdoptAccount(p, req.Hostname, now)
 	case "remove":
 		return s.Store.RequestAccountRemoval(req.PrincipalID, req.Hostname, now)
+	case "forget":
+		return s.Store.ForgetPrincipal(req.PrincipalID, req.Hostname)
 	default:
-		return errors.New("action must be assign, retry, remove or adopt")
+		return errors.New("action must be assign, retry, remove, adopt or forget")
 	}
 }
