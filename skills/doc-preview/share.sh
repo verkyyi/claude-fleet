@@ -102,21 +102,30 @@ sys.exit(0 if s.connect_ex((sys.argv[1],int(sys.argv[2])))==0 else 1)' "$1" "$2"
 }
 # Start ONE server.py on <addr> at the first free port from DOC_PREVIEW_PORT. pid/port are
 # recorded only once it ANSWERS, so a failed start never leaves a half-written state.
+# On failure START_FAIL says what the LAST launch did — exited, or alive but never
+# accepting (issue #1500: five launches sat bound-but-not-listening for ~34s each, and
+# "busy or bind refused" sent the reader to the wrong place for ten nightlies).
+START_FAIL=""
 start_server() { # <addr> [public]; sets PORT
   local addr="$1" pub="${2:-}" p="${DOC_PREVIEW_PORT:-8765}" end launches=0 pid
   end=$((p + 50))
+  START_FAIL="could not bind $addr on any port in $p..$((end - 1)) (all busy, or $addr is not an address of this machine)"
   rm -f "$PIDFILE" "$PORTFILE"
   while [ "$p" -lt "$end" ] && [ "$launches" -lt 5 ]; do
     if port_free "$addr" "$p"; then
       launches=$((launches + 1))
       nohup python3 "$HERE/server.py" "$p" "$SERVE_DIR" "$HERE" "$addr" $pub >"$ROOT/server.log" 2>&1 &
       pid=$!
+      START_FAIL="server.py (pid $pid) exited before it accepted a connection on $addr:$p"
       for _ in $(seq 1 50); do
         kill -0 "$pid" 2>/dev/null || break
         if port_up "$addr" "$p"; then echo "$pid" >"$PIDFILE"; echo "$p" >"$PORTFILE"; PORT="$p"; return 0; fi
         sleep 0.1
       done
-      kill "$pid" 2>/dev/null || true   # lost a race for the port, or never came up: next one
+      if kill -0 "$pid" 2>/dev/null; then   # alive but never came up (stuck before listen()): next one
+        START_FAIL="server.py (pid $pid) was still running but never accepted a connection on $addr:$p — stuck between bind() and listen()"
+        kill "$pid" 2>/dev/null || true
+      fi
     fi
     p=$((p + 1))
   done
@@ -373,7 +382,7 @@ rollback() {
 }
 server_fail() { # <addr>
   rm -f "$PIDFILE" "$PORTFILE"
-  echo "doc-preview: could not start server.py on $1 (ports ${DOC_PREVIEW_PORT:-8765}+ busy or bind refused) — see $ROOT/server.log:" >&2
+  echo "doc-preview: could not start server.py on $1 — ${START_FAIL:-ports ${DOC_PREVIEW_PORT:-8765}+ busy or bind refused}; see $ROOT/server.log:" >&2
   tail -3 "$ROOT/server.log" 2>/dev/null >&2 || true
   rollback; exit 1
 }

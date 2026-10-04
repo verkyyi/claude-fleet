@@ -4079,6 +4079,28 @@ EOF
   return 1
 }
 
+# fleet_hub_nudge — «a window's state just changed: report it now» (issue #1481).
+# The ccquota agent reports every window every 5 s; the other machines' sidebars
+# fetch the hub's list every 10 s; a window that just went 「在问你」 took up to
+# 15 s to show up on another machine. This is the ONE entry point that shortens
+# it: touch $FLEET_CONF_DIR/global/hub-nudge — one file per login, the agent's
+# own scope — whose mtime the agent polls (250 ms, no fsnotify) and answers with
+# an extra heartbeat at once, debounced (300 ms) and capped (2/s per node), so a
+# burst of writes is one beat and a runaway writer cannot flood the hub. Call it
+# right after every write of @claude_state / @claude_needs that CHANGES them
+# (bin/set-claude-state.sh and bin/tmux-spinner.sh are `sh` and cannot source this
+# lib: each carries a byte-equivalent inline copy — KEEP THEM IN SYNC). Off
+# unless CCQUOTA_FLEET=1: an empty function, so a one-machine fleet writes
+# nothing (CLAUDE.md «Degenerate case is sacred»). A builtin redirection, no
+# fork: `: >` truncates an already-empty file and still moves its mtime (APFS,
+# ext4 — the agent's test pins it).
+fleet_hub_nudge() {
+  [ "${CCQUOTA_FLEET:-0}" = 1 ] || return 0
+  [ -d "$FLEET_CONF_DIR/global" ] || mkdir -p "$FLEET_CONF_DIR/global" 2>/dev/null || return 0
+  : > "$FLEET_CONF_DIR/global/hub-nudge" 2>/dev/null
+  return 0
+}
+
 # _fleet_hub_node <uuid> <key> → the node the cross-machine hub last saw this
 # worker on, or rc 1. Off unless CCQUOTA_FLEET=1. Reads ONE local cache,
 # $FLEET_CONF_DIR/control/hub-workers.tsv — `<worker_id>\t<node>` per line, the
@@ -6113,6 +6135,7 @@ fleet_window_reeval() {
   [ "$(_fleet_tmux "$sess" display-message -p -t "$t" '#{@claude_state}' 2>/dev/null)" = "$ns" ] || return 1
   # Wake the spinner (issue #887), the same marker the Stop hook touches.
   [ -n "$sp" ] && : > "$sp.dirty" 2>/dev/null
+  fleet_hub_nudge   # …and the hub (issue #1481)
   return 0
 }
 

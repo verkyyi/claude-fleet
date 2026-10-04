@@ -159,6 +159,11 @@ type Config struct {
 	FleetReclaimCmd string
 	// FleetReclaimTimeout bounds Reclaim as a whole.
 	FleetReclaimTimeout time.Duration
+	// FleetNudgePath is the file claude-fleet touches when a window's state
+	// changes (claude-fleet#1481): $FLEET_CONF_DIR/global/hub-nudge. The
+	// agent beats at once when its mtime moves. Empty with Fleet on means
+	// the default conf dir under Home; off, nothing is watched.
+	FleetNudgePath string
 }
 
 // Defaults for the intervals.
@@ -303,6 +308,9 @@ func New(cfg Config) (*Agent, error) {
 	}
 	if cfg.LiveInterval <= 0 {
 		cfg.LiveInterval = DefaultLiveInterval
+	}
+	if cfg.Fleet && cfg.FleetNudgePath == "" {
+		cfg.FleetNudgePath = defaultNudgePath(cfg.Home)
 	}
 	if cfg.SessionsDir == "" {
 		h, err := os.UserHomeDir()

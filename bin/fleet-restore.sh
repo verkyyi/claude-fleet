@@ -552,6 +552,7 @@ restore() {
         if [ -n "$wstate" ] && [ "$wstate" != "-" ]; then
           tmux -L "$sock" set-window-option -t "$nw" @claude_state "$wstate" 2>/dev/null
           tmux -L "$sock" set-window-option -t "$nw" @claude_state_ts "$(date +%s)" 2>/dev/null
+          fleet_hub_nudge   # issue #1481
         fi
         # The outcome (issue #1265) — AFTER the state re-stamp above, so an awaiting
         # window's `needs` is the last word, not the snapshot's state.
@@ -603,7 +604,8 @@ mark_outcome() {
     failed|attention|awaiting)
       tmux -L "$sock" set-window-option -t "$w" @claude_state needs 2>/dev/null
       tmux -L "$sock" set-window-option -t "$w" @claude_needs restore 2>/dev/null
-      tmux -L "$sock" set-window-option -t "$w" @claude_state_ts "$(date +%s)" 2>/dev/null ;;
+      tmux -L "$sock" set-window-option -t "$w" @claude_state_ts "$(date +%s)" 2>/dev/null
+      fleet_hub_nudge ;;   # issue #1481
   esac
   OUTCOMES="$OUTCOMES$seq	$sess	$name	$oc	$note
 "
@@ -709,6 +711,7 @@ fresh_window() {
   tmux -L "$sock" set-window-option -t "$w" @claude_state '' 2>/dev/null
   tmux -L "$sock" set-window-option -t "$w" @claude_needs '' 2>/dev/null
   tmux -L "$sock" set-window-option -t "$w" @claude_state_ts "$(date +%s)" 2>/dev/null
+  fleet_hub_nudge   # issue #1481
   log "outcome $sess/$name fresh (operator --fresh)"
   echo "fleet-restore: $name → fresh session started"
 }

@@ -209,6 +209,7 @@ trust_sweep() { # $1 = session
       tmux -L "$sock" set-window-option -t "$wid" @claude_state needs 2>/dev/null
       tmux -L "$sock" set-window-option -t "$wid" @claude_state_ts "$(date +%s)" 2>/dev/null
       tmux -L "$sock" set-window-option -t "$wid" @trust_stuck 1 2>/dev/null
+      fleet_hub_nudge   # issue #1481
     done
   return 0
 }

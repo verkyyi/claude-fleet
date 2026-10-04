@@ -169,6 +169,7 @@ case "$cmd" in
     [ -n "$wid" ] && fleet_wid_stamp "$nw" "$SOCK" "$wid" >/dev/null 2>&1
     TM set-window-option -t "$nw" @claude_state "$state" 2>/dev/null
     TM set-window-option -t "$nw" @claude_state_ts "$(date +%s)" 2>/dev/null
+    fleet_hub_nudge   # issue #1481
     ncp=''; i=0
     while [ "$i" -lt "$boot" ]; do
       ncp=$(fleet_pane_claude_pid "$nw" "$SOCK" 2>/dev/null) && [ -n "$ncp" ] && break

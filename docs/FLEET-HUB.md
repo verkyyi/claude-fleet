@@ -135,8 +135,10 @@ running agent, every script behaves as it did before.
 
 **The sidebar sees every machine** (issue #1423). With `CCQUOTA_FLEET=1` and
 `CCQUOTA_HUB_URL` set, the collector keeps `bin/fleet-hub-sessions.sh` refreshing
-the hub's `fleet_sessions` every 10 s into `global/remote_<sess>` (and the
-`control/hub-workers.tsv` cache above). `tmux-dashboard-rows.sh` only reads that
+the hub's `fleet_sessions` into `global/remote_<sess>` (and the
+`control/hub-workers.tsv` cache above) — every 2 s while a client is attached to
+a fleet session on this machine (`FLEET_HUB_SESSIONS_WATCHED_EVERY`), every 10 s
+when nobody is looking (`FLEET_HUB_SESSIONS_EVERY`). `tmux-dashboard-rows.sh` only reads that
 file: your sessions on other machines — your login, a `worker_id`, a fleet that is
 not this machine's — render mixed in with the local windows, nested by
 `@origin_wid` (or the issue's sub-issue parent), and **look exactly like the
@@ -158,6 +160,21 @@ never vanishes. Machine labels come from `FLEET_NODE_ALIASES`
 carries each window's `name`, `origin_wid` and `needs` (columns 10–12 of
 `fleet-control-read.sh workers`, optional).
 
+**…and can be the whole list** (issue #1480, EPIC #1479 C1). The cache now holds
+this machine's own rows too — two fields appended to each line: `local` (1 for a
+row of this fleet on this machine) and `wid` (the tmux window id that holds it
+right now, mapped once per refresh from `fleet-control-read.sh workers` through
+the same `worker_key` rule the node agent reports with, never from the hub's
+observation) — and a local row goes only into its own fleet's cache. With
+`FLEET_SIDEBAR_SOURCE=hub` (per fleet, default `local`) `tmux-dashboard-rows.sh
+--sidebar` takes its row SET from the cache alone, so every machine shows one
+list in one order with one set of marks; a local row is still rendered off its
+own tmux line (state, needs, glyph, fold, pin, Enter: today's row, and its id is
+its `@<n>` window, never a `wid:`), a local window the hub does not list is not a
+row (the sidebar's own window excepted), and a cached local row whose window is
+gone is not one either. On the default source the cache's local rows are skipped
+and nothing changes; the hub list (prefix+F9) always keeps its local rows.
+
 **Who the hub shows you** (issue #1475). `fleet-hub-sessions.sh` asks as **you**:
 your connection certificate (`~/.ssh/fleet-cert` + `-cert.pub`, from
 `fleet login`, `FLEET_CERT` to name another) signs `fleet-sessions <ts>` under
@@ -173,6 +190,29 @@ no remote row, and `fleet-doctor`'s `hub` line WARNs.
 `fleet-hub-sessions.sh --identity` prints which it is. The hub URL is
 `CCQUOTA_HUB_URL`, else `FLEET_HUB_URL`, else `hub.json`'s `url`.
 
+**A state change is reported at once** (issue #1481, EPIC #1479 C2). The node
+agent's heartbeat stays at 5 s — that is the liveness signal — but a window that
+just went 「在问你 / 等授权 / 做完了」 no longer waits for it: every writer of
+`@claude_state` / `@claude_needs` calls `fleet_hub_nudge` (`bin/fleet-lib.sh`;
+`bin/set-claude-state.sh` and `bin/tmux-spinner.sh` carry an inline copy) right
+after a write that *changes* them, which touches `$FLEET_CONF_DIR/global/hub-nudge`
+— one file per login, the agent's scope. The agent polls that file's mtime every
+250 ms (no fsnotify) and sends an extra heartbeat: 300 ms debounce, so a burst
+of writes is one beat, and at most two nudge beats a second per node, so no
+writer can flood the hub. Off without `CCQUOTA_FLEET=1`: the function is empty.
+On the fetch side `fleet_sessions` carries a validator: `ETag` =
+`"<newest observed_at, ms>-<rows>-<rows on a lost machine>"` (also `etag` in
+the body), so any heartbeat moves it; a `GET` with a matching `If-None-Match` is
+answered `304` with no body. `fleet-hub-sessions.sh` sends the validator it
+stored (`global/hubsess.etag`) whenever every cache it vouches for is on disk,
+and treats a 304 as «the rows stand»: it re-stamps the cache's `#ts` line (and
+`hub-workers.tsv`'s mtime) so nothing reads 失联 while the hub is answering. A
+hub without ETags is fetched in full every time, as before. Budget: a change
+on machine A reaches machine B's list in ≤ 3 s (≈ 0.25 poll + 0.3 debounce +
+the beat + up to 2 s of fetch cadence); `bin/fleet-hub-latency.sh --observer m4`
+measures it from a fleet pane on A (ten rounds, median), with the watcher half
+over one ssh to B.
+
 **…and steps into them** (issue #1424, EPIC #1419 C5). Enter on a remote row (the
 dash's `dash-enter.sh`, the sidebar's `jump`) runs `bin/fleet-remote-view.sh open`:
 a **proxy window** `⇄m4 <name>` (its pane header carries the same `⇄m4`, so a
@@ -183,29 +223,45 @@ attaches to its fleet session. It is a plain **client** of that session, never a
 grouped or linked session of its own: a second session holding the window would
 list it twice in every `list-windows -a`, and `fleet-peer-send` would call the
 worker AMBIGUOUS while the proxy is open. So there is **one proxy window per
-machine** — Enter on another row of the same machine retargets it. While the proxy
-is the session's only client it turns that session's status line and prefix off
-(saved in `@remote_view_saved`, restored when it leaves, and by a
-`client-attached[77]` hook the moment anyone attaches at that machine). Closing
+machine** — Enter on another row of the same machine retargets it. Closing
 the window only drops the connection; a drop reconnects (backing off, and
 alternating with the hub relay `fleet connect --proxy` when one is configured).
 The ssh host is the machine label unless `FLEET_REMOTE_SSH` (`m4=m4-lan`) maps it.
-It is also marked `@remote_view_solo`, which that machine's sidebar
-(`fleet-sidebar.py sync`) reads as "draw no list": the proxy is drawn INSIDE the
-viewer's own sidebar (issue #1475) — the local sidebar treats a window with
-`@remote` as a task window, so Enter on a remote row lands in the proxy window
-with the list still on the left and the other machine's pane on the right, one
-list, never the whole window gone remote. ↑↓ in the list leave it like any task;
-`prefix h` returns to the last local window. Someone attached AT the remote end
-changes nothing there — they keep their status line, prefix and sidebar, and the
-proxy then shows their sidebar beside the local one (two lists: the price of a
-shared screen). Every local rail skips a proxy window: no dash row (the remote
-row stands for it), no session in either cap tally, no fleet-restore row, no
-sleep, failover or rate-limit scrape. **fleet-open from the remote session** cannot reach the
-operator's iTerm2 directly (it trusts this machine's secret only), so the remote
-side registers the proxy's client tty under `$FLEET_CONF_DIR/remote-views/`;
-`fleet-open.sh` there sees its newest client is a view, drops the request in the
-view's spool and prints `sent:proxy`, and a second ssh session on the proxy's own
+
+**The machine's own list gets out of the way — by one rule** (issue #1485, EPIC
+#1479 rule 7, generalising #1475). Every proxy (`attach <wid> <view>`) and every
+shell (`attach --shell`, the `fleet` shell of EPIC #1479 C5 — over ssh, or nested
+on the machine itself in the shell's own tmux) registers its client tty under
+`$FLEET_CONF_DIR/remote-views/<id>` as `<tty> <session> <kind=view|shell> <since>
+<pid>`. The remote session's status line, prefix and sidebar are **hidden exactly
+while it has at least one client and every client is registered**: status off,
+prefix `None` (the session's own values saved in `@remote_view_saved`), and
+`@remote_view_solo 1`, which that machine's sidebar (`fleet-sidebar.py sync`)
+reads as "draw no list" — the proxy is drawn INSIDE the viewer's own sidebar
+(issue #1475), so two shells on one machine each see one list. Anyone who
+attaches at that machine without registering — a plain `tmux attach` after an
+ssh login — brings status, prefix and sidebar back at once; when they leave and
+only shells remain, it hides again; when the last shell leaves, everything is
+back and the hooks are gone. `fleet-remote-view.sh reconcile <sess>` applies the
+rule; the server's **global** `client-attached[77]` / `client-detached[77]` hooks
+run it on every client change while a shell is registered — global, not on the
+session: a session-level hook array, even an emptied one, shadows the fleet's own
+`[71]`–`[73]` hooks for good (what #1475's session hook did). A registration
+whose attach shell is gone (SIGKILLed before its cleanup) never counts and is
+pruned at the next attach, so a tty the next login reuses is not mistaken for a
+shell; `restore <sess>` is the escape hatch that hands everything back now (the
+rule wins at the next client change). Never `resize-pane -Z`. The local sidebar
+treats a window with `@remote` as a task window, so Enter on a remote row lands
+in the proxy window with the list still on the left and the other machine's pane
+on the right, one list, never the whole window gone remote. ↑↓ in the list leave
+it like any task; `prefix h` returns to the last local window. Every local rail
+skips a proxy window: no dash row (the remote row stands for it), no session in
+either cap tally, no fleet-restore row, no sleep, failover or rate-limit scrape.
+**fleet-open from the remote session** cannot reach the operator's iTerm2
+directly (it trusts this machine's secret only), so `fleet-open.sh` there sees
+its newest client is a registered view with a spool (`<id>.d`, made only when
+`attach` was given a view id — a shell without one has no spool), drops the
+request in it and prints `sent:proxy`, and a second ssh session on the proxy's own
 connection (ControlMaster) streams it back here, where the local `fleet-open.sh`
 re-issues it — a url as is, a page on that machine's loopback through an
 `ssh -O forward` on the same connection.

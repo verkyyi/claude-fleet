@@ -362,6 +362,7 @@ TM set-option -w -t "$WIN" @source_agent "$SOURCE_AGENT" || die 'cannot stamp so
 TM set-option -w -t "$WIN" @source_session_id "$SID" || die 'cannot stamp source session'
 TM set-option -w -t "$WIN" @source_transcript "$TRANSCRIPT" || die 'cannot stamp source transcript'
 TM set-option -w -t "$WIN" @claude_state working || die 'cannot stamp target state'
+fleet_hub_nudge   # issue #1481
 TM set-option -w -t "$WIN" @migrated_at "$(date +%s)" 2>/dev/null || :
 if [ -n "$WALL" ]; then TM set-option -w -t "$WIN" @migrated_banner "$WALL" 2>/dev/null || :
 else TM set-option -wu -t "$WIN" @migrated_banner 2>/dev/null || :; fi

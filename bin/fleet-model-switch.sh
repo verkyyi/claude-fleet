@@ -513,6 +513,7 @@ main() {
         TM set-window-option -t "$wid" @claude_state "done" 2>/dev/null
         TM set-window-option -t "$wid" @claude_needs '' 2>/dev/null
         TM set-window-option -t "$wid" @claude_state_ts "$NOW_S" 2>/dev/null
+        fleet_hub_nudge   # issue #1481
       fi
       trace banner
     fi

@@ -13,8 +13,19 @@
 #               machine, plus the C1 locator cache control/hub-workers.tsv. A failed
 #               fetch leaves the last cache in place: its rows go on rendering, and
 #               once it is older than FLEET_HUB_SESSIONS_STALE they read 失联.
-#   --loop      --refresh every FLEET_HUB_SESSIONS_EVERY (10s) for
-#               FLEET_HUB_SESSIONS_LOOP_SECS (70s), then exit. One at a time (pid file).
+#   --loop      --refresh every FLEET_HUB_SESSIONS_WATCHED_EVERY (2s) while a client
+#               is attached to any fleet session on this machine — someone is
+#               looking — else every FLEET_HUB_SESSIONS_EVERY (10s), for
+#               FLEET_HUB_SESSIONS_LOOP_SECS (70s), then exit. One at a time (pid
+#               file). The 2 s is half of the 「3 秒内看到」 budget (issue #1481);
+#               the other half is the node reporting a change at once
+#               (fleet_hub_nudge). The fetch is cheap enough to ask that often
+#               because it is conditional: the hub answers fleet_sessions with an
+#               ETag (its newest heartbeat + row count), the loop sends it back as
+#               If-None-Match, and a 304 carries no body — the rows stand and only
+#               the cache's #ts line is re-stamped so they never read 失联 while
+#               the hub is answering. A hub without ETags (older) is fetched in
+#               full every time, as before.
 #   --ensure    start a detached --loop unless one is alive. The collector runs this
 #               every tick (60s), so the 10s cadence needs no daemon of its own and a
 #               loop can never outlive the collector by more than one round.
@@ -43,12 +54,19 @@
 # The hub's URL: CCQUOTA_HUB_URL, else FLEET_HUB_URL, else the `url` in
 # ~/.config/claude-fleet/hub.json (what `fleet login` remembered).
 #
-# Which rows: a session whose fleet is NOT one of this machine's (by fleet UUID,
-# and by hostname as a backstop), whose login is yours (os_user = `id -un`, or
-# FLEET_HUB_SESSIONS_USER; `*` = every login the hub shows you), and that has a
+# Which rows: every session whose login is yours (os_user = `id -un`, or
+# FLEET_HUB_SESSIONS_USER; `*` = every login the hub shows you) and that has a
 # worker_id — a row the hub could not identify is not addressable, so it is not
-# shown. The machine label is the hostname's first label, renamed through
-# FLEET_NODE_ALIASES (`macmini=m5 mini2=m4`).
+# shown. The other machines' rows go into EVERY fleet's cache here; this machine's
+# own (issue #1480, EPIC #1479 C1: by fleet UUID, else by hostname + fleet name)
+# go into THEIR fleet's cache only, marked `local`=1 and carrying the window id
+# they live in right now — mapped once per refresh from the control adapter's
+# inventory (`fleet-control-read.sh workers`, the hub's own key rule), never from
+# the hub's observation — so a dash that takes its whole list from the hub
+# (FLEET_SIDEBAR_SOURCE=hub) can still paint and enter them as local windows. A
+# dash on the default source ignores them: nothing it draws changes. The machine
+# label is the hostname's first label, renamed through FLEET_NODE_ALIASES
+# (`macmini=m5 mini2=m4`).
 #
 # Cache (US-separated — \x1f, as the dash's own WFMT: a TAB is IFS whitespace,
 # so `read` would collapse the empty fields). Header lines first:
@@ -59,12 +77,17 @@
 #       sessions there, last-seen the hub's newest observation of it. From the
 #       hub's `nodes` list; derived from the sessions on a hub older than #1475.
 # then one row per session:
-#   wid:<worker_id>  node  online|lost  issue  repo  state  agent  name  origin  needs
+#   wid:<worker_id>  node  online|lost  issue  repo  state  agent  name  origin  needs  local  wid
 # `origin` is already in the viewing fleet's terms: a parent in THIS fleet is its
 # bare key (`issue-1419`, exactly what a local @origin holds), a parent elsewhere is
 # its full worker_id; no @origin_wid ⇒ the issue's sub-issue parent (the collector's
 # parents cache), when that repo is hosted here. `needs` (#1475) is the window's
 # @claude_needs — ask / perm / blocked / … — so the row draws the same red `?`.
+# `local` (#1480) is 1 for a row of THIS fleet on THIS machine, 0 for another
+# machine's; `wid` is a local row's live tmux window id (`@12`; empty when no window
+# holds that worker right now), empty on another machine's row. Both are APPENDED,
+# so a reader of the ten older fields is unchanged — but a `read` that names `needs`
+# last must now name these two too, or they arrive glued to it.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
@@ -72,6 +95,8 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 
 G="$FLEET_C/global"
 EVERY="${FLEET_HUB_SESSIONS_EVERY:-10}"; case "$EVERY" in ''|*[!0-9]*|0) EVERY=10 ;; esac
+WATCHED_EVERY="${FLEET_HUB_SESSIONS_WATCHED_EVERY:-2}"; case "$WATCHED_EVERY" in ''|*[!0-9]*|0) WATCHED_EVERY=2 ;; esac
+ETAGF="$G/hubsess.etag"      # the validator of the cache on disk (issue #1481)
 LOOP_SECS="${FLEET_HUB_SESSIONS_LOOP_SECS:-70}"; case "$LOOP_SECS" in ''|*[!0-9]*) LOOP_SECS=70 ;; esac
 PIDF="$G/hubsess.pid"
 SESSIONS_NS='fleet-sessions@claude-fleet'
@@ -159,75 +184,130 @@ identity() {
   return 1
 }
 
-# fetch_cert <url> → the JSON on stdout; rc 0 ok, 3 the hub refused the
-# certificate (fall back), 1 anything else.
+# curl_sessions <out> <etag> <curl args…> — one fleet_sessions request into
+# <out>, with the validator (issue #1481) when we hold one. rc 0 = 200 (the
+# ETag the body came with is kept in $ETAGF; none ⇒ an older hub, dropped);
+# 3 = 304, nothing changed since <etag> (the <out> file is empty); 4 = 401/403,
+# the credential was refused; 1 = anything else.
+curl_sessions() {
+  local out="$1" etag="$2" hdr code; shift 2
+  hdr=$(mktemp "$G/hubsess.hdr.XXXXXX") || return 1
+  set -- -sS -m 8 -o "$out" -D "$hdr" -w '%{http_code}' "$@"
+  [ -n "$etag" ] && set -- "$@" -H "If-None-Match: $etag"
+  code=$(curl "$@" 2>/dev/null)
+  case "$code" in
+    200) etag=$(awk 'tolower($1) == "etag:" { sub(/\r$/, "", $2); print $2; exit }' "$hdr" 2>/dev/null)
+         rm -f "$hdr"
+         if [ -n "$etag" ]; then printf '%s\n' "$etag" > "$ETAGF.new" && mv -f "$ETAGF.new" "$ETAGF"
+         else rm -f "$ETAGF"; fi
+         return 0 ;;
+    304)     rm -f "$hdr"; return 3 ;;
+    401|403) rm -f "$hdr"; return 4 ;;
+    *)       rm -f "$hdr"; return 1 ;;
+  esac
+}
+
+# fetch_cert <url> <out> <etag> → the JSON into <out>; rc as curl_sessions
+# (4 = the hub refused the certificate: fall back).
 fetch_cert() {
-  local url="$1" ts sig cert body code out
+  local url="$1" out="$2" etag="$3" ts sig cert body
   ts=$(date +%s)
   sig=$(printf 'fleet-sessions %s' "$ts" | ssh-keygen -Y sign -f "$CERT_KEY" -n "$SESSIONS_NS" 2>/dev/null) || return 1
   cert=$(head -n1 "$CERT_PUB" 2>/dev/null) || return 1
   body=$(python3 -c 'import json, sys; print(json.dumps({"cert": sys.argv[1], "sig": sys.argv[2], "ts": int(sys.argv[3])}))' \
          "$cert" "$sig" "$ts") || return 1
-  out=$(mktemp "$G/hubsess.cert.XXXXXX") || return 1
-  code=$(curl -sS -m 8 -o "$out" -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
-         --data-binary "$body" "$url/v1/fleet/fleet_sessions" 2>/dev/null)
-  case "$code" in
-    200) cat "$out"; rm -f "$out"; return 0 ;;
-    401|403) rm -f "$out"; return 3 ;;
-    *) rm -f "$out"; return 1 ;;
-  esac
+  curl_sessions "$out" "$etag" -X POST -H 'Content-Type: application/json' --data-binary "$body" "$url/v1/fleet/fleet_sessions"
 }
 
-# fetch → the fleet_sessions JSON on stdout, rc 1 when there is no answer.
+# fetch <out> <local-fleets> → the fleet_sessions JSON into <out>. rc 0 = a fresh
+# body; 3 = 304, nothing changed since the ETag on disk (the <out> file is empty);
+# 1 = no answer. The validator goes out only while every cache it vouches for is
+# on disk — a fleet created since, or a wiped $FLEET_C, needs the body.
 fetch() {
-  local url st rc
+  local out="$1" lf="$2" url st rc etag='' sess _c
   if [ -n "${FLEET_HUB_SESSIONS_CMD:-}" ]; then
-    bash -c "$FLEET_HUB_SESSIONS_CMD" </dev/null 2>/dev/null; return
+    bash -c "$FLEET_HUB_SESSIONS_CMD" </dev/null >"$out" 2>/dev/null; return
   fi
   url=$(hub_url) || { printf 'fleet-hub-sessions: no hub URL (CCQUOTA_HUB_URL / FLEET_HUB_URL / hub.json) — no other machine to show\n' >&2; return 1; }
   command -v curl >/dev/null 2>&1 || return 1
+  if [ -s "$ETAGF" ] && read -r etag < "$ETAGF" && [ -n "$etag" ]; then
+    while IFS=$'\t' read -r sess _c; do
+      [ -z "$sess" ] || [ -s "$G/remote_$sess" ] || { etag=''; break; }
+    done < "$lf"
+  fi
   st=$(cert_state)
   case "$st" in
     ok\ *)
-      fetch_cert "$url"; rc=$?
-      [ "$rc" = 3 ] || return "$rc"
+      fetch_cert "$url" "$out" "$etag"; rc=$?
+      [ "$rc" = 4 ] || return "$rc"
       printf 'fleet-hub-sessions: the hub refused the connection certificate %s — trying the viewer token\n' "$CERT_PUB" >&2 ;;
   esac
   if token_source >/dev/null; then
-    curl -fsS -m 8 -H "Authorization: Bearer $TOK" "$url/v1/fleet/fleet_sessions" 2>/dev/null
-    return
+    curl_sessions "$out" "$etag" -H "Authorization: Bearer $TOK" "$url/v1/fleet/fleet_sessions"; rc=$?
+    [ "$rc" = 4 ] && rc=1
+    return "$rc"
   fi
   printf 'fleet-hub-sessions: %s — the sidebar shows no other machine\n' "$(identity | sed 's/^none //')" >&2
   return 1
 }
 
+# restamp <local-fleets> — a 304's only write: the #ts line of every fleet's cache
+# (the rows and the #me/#node header lines are unchanged, the hub is answering),
+# plus the C1 locator cache's mtime, which _fleet_hub_node trusts by age.
+restamp() {
+  local lf="$1" now sess _c f tmp
+  now=$(date +%s)
+  while IFS=$'\t' read -r sess _c; do
+    [ -n "$sess" ] || continue
+    f="$G/remote_$sess"; [ -s "$f" ] || continue
+    tmp=$(mktemp "$G/.hubsess.XXXXXX") || continue
+    if { printf '#ts\037%s\n' "$now"; tail -n +2 "$f"; } > "$tmp" 2>/dev/null; then mv -f "$tmp" "$f"; else rm -f "$tmp"; fi
+  done < "$lf"
+  [ -f "$FLEET_CONF_DIR/control/hub-workers.tsv" ] && touch "$FLEET_CONF_DIR/control/hub-workers.tsv" 2>/dev/null
+  return 0
+}
+
 refresh() {
   hub_on || return 0
-  local json sess _c u lf repos m
+  local json sess _c u lf mf repos m rc
   mkdir -p "$G" 2>/dev/null || return 1
   json=$(mktemp "$G/hubsess.json.XXXXXX") || return 1
   lf=$(mktemp "$G/hubsess.local.XXXXXX") || { rm -f "$json"; return 1; }
-  if ! fetch >"$json" || [ ! -s "$json" ]; then
-    rm -f "$json" "$lf"
-    printf 'fleet-hub-sessions: hub unreachable — keeping the last cache (its rows read 失联 once stale)\n' >&2
-    return 1
-  fi
-  # This machine's fleets: name, UUID (may be empty), multi-repo bit, hosted repos.
+  mf=$(mktemp "$G/hubsess.map.XXXXXX") || { rm -f "$json" "$lf"; return 1; }
+  # This machine's fleets: name, UUID (may be empty), multi-repo bit, hosted repos —
+  # and (issue #1480) each one's live window inventory, through the SAME adapter
+  # the node agent reports to the hub with, so a local row's worker_id is derived
+  # by one rule on both sides and maps back to the window that holds it NOW.
+  # Built BEFORE the fetch (issue #1481): `fetch` reads the fleet list to decide
+  # whether every cache the hub's answer would replace exists, which is what
+  # makes a 304 safe to take.
+  : > "$mf"
   while IFS=$'\t' read -r sess _c; do
     [ -n "$sess" ] || continue
     u=$(fleet_uuid "$sess" 2>/dev/null) || u=''
     repos=$(fleet_repos "$sess" 2>/dev/null | tr '\n' ' ')
     if fleet_multirepo "$sess" 2>/dev/null; then m=1; else m=0; fi
     printf '%s\t%s\t%s\t%s\n' "$sess" "$u" "$m" "$repos"
+    bash "$BIN/fleet-control-read.sh" workers "$sess" 2>/dev/null \
+      | while IFS= read -r line; do [ -n "$line" ] && printf '%s\t%s\n' "$sess" "$line"; done >> "$mf"
   done > "$lf" <<EOF
 $(fleet_each_conf)
 EOF
+  fetch "$json" "$lf"; rc=$?
+  if [ "$rc" = 3 ]; then
+    restamp "$lf"; rm -f "$json" "$lf" "$mf"; return 0
+  fi
+  if [ "$rc" != 0 ] || [ ! -s "$json" ]; then
+    rm -f "$json" "$lf" "$mf"
+    printf 'fleet-hub-sessions: hub unreachable — keeping the last cache (its rows read 失联 once stale)\n' >&2
+    return 1
+  fi
   python3 - "$json" "$lf" "$G" "$FLEET_C" "$FLEET_CONF_DIR/control/hub-workers.tsv" \
     "${FLEET_HUB_SESSIONS_USER:-$(id -un 2>/dev/null)}" "$(hostname 2>/dev/null)" \
-    "${FLEET_NODE_ALIASES:-}" "$(date +%s)" <<'PY'
+    "${FLEET_NODE_ALIASES:-}" "$(date +%s)" "$mf" "$BIN" <<'PY'
 import json, os, re, sys, tempfile
 from datetime import datetime, timezone
-jpath, lpath, gdir, cdir, wpath, user, host, aliases, now = sys.argv[1:10]
+jpath, lpath, gdir, cdir, wpath, user, host, aliases, now, mpath, bindir = sys.argv[1:12]
 try:
     data = json.load(open(jpath, encoding="utf-8"))
     sessions = data["sessions"]
@@ -246,6 +326,28 @@ for line in open(lpath, encoding="utf-8"):
         local.append(dict(sess=p[0], uuid=p[1], multi=p[2] == "1", repos=p[3].split()))
 local_uuids = {f["uuid"] for f in local if f["uuid"]}
 clean = lambda v: re.sub(r"[\t\n\r\x1f]", " ", str(v if v is not None else ""))
+
+# This machine's live windows (issue #1480): (fleet, key) → window id, keyed by
+# the hub's own rule (fleet_hub_common.worker_key, what the node agent reports),
+# so a local row's worker_id maps to the window that holds it right now.
+sys.path.insert(0, bindir)
+try:
+    from fleet_hub_common import worker_key
+except Exception:
+    worker_key = None
+windows = {}
+if worker_key is not None:
+    try:
+        for line in open(mpath, encoding="utf-8"):
+            p = line.rstrip("\n").split("\t")
+            if len(p) < 5 or not re.fullmatch(r"@[0-9]+", p[1]):
+                continue
+            issue = int(p[2]) if p[2].isdigit() and int(p[2]) > 0 else None
+            k = worker_key(issue, p[3] == "1", p[4], p[9] if len(p) > 9 else "")
+            if k:
+                windows[(p[0], k)] = p[1]
+    except OSError:
+        pass
 slug = lambda r: re.sub(r"[^A-Za-z0-9._-]", "", (r or "").replace("/", "-"))
 
 def epoch(iso):
@@ -274,22 +376,43 @@ write(wpath, "".join("%s\t%s\n" % (s["worker_id"], label(s.get("machine_name")))
                      for s in sessions if s.get("worker_id")))
 
 is_local = lambda s: s.get("fleet_id") in local_uuids or short(s.get("machine_name")) == me
+def local_fleet(s):
+    """The fleet HERE a local session belongs to: by UUID; else, for a session the
+    hub places on THIS host, by fleet name — a machine with no control database
+    has no UUID to match, and a UUID minted under another conf (the node agent's
+    environment is not a pane's) must not lose this machine its own rows. None:
+    not attributable — no row."""
+    for f in local:
+        if f["uuid"] and s.get("fleet_id") == f["uuid"]:
+            return f
+    if short(s.get("machine_name")) == me:
+        for f in local:
+            if s.get("fleet_name") == f["sess"]:
+                return f
+    return None
 rows = []
 for s in sessions:
     w = s.get("worker") or {}
     wid = s.get("worker_id")
     if not wid or "/" not in wid:
         continue
-    if is_local(s):
-        continue                                     # this machine: the dash has it live
     if user != "*" and s.get("os_user") != user:
         continue                                     # someone else's login
-    rows.append(dict(wid=wid, node=label(s.get("machine_name")),
-                     av="lost" if s.get("availability") == "lost" else "online",
+    here = None
+    if is_local(s):
+        # this machine (issue #1480): a row of ITS fleet's cache, marked local, with
+        # the window that holds it now; the dash on the default source skips it
+        here = local_fleet(s)
+        if here is None:
+            continue
+    rows.append(dict(wid=wid, node=label(host) if here else label(s.get("machine_name")),
+                     av="online" if here else ("lost" if s.get("availability") == "lost" else "online"),
                      issue=w.get("issue") or "", repo=w.get("repo") or "",
                      state=w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or ""),
                      agent=w.get("agent") or "", name=w.get("name") or w.get("key") or wid.split("/", 1)[1],
-                     owid=w.get("origin_wid") or "", needs=w.get("needs") or "", seen=epoch(s.get("observed_at"))))
+                     owid=w.get("origin_wid") or "", needs=w.get("needs") or "", seen=epoch(s.get("observed_at")),
+                     local=here["sess"] if here else None,
+                     lwid=windows.get((here["sess"], wid.split("/", 1)[1]), "") if here else ""))
 
 # The other machines (issue #1475): the hub's `nodes` list when it has one
 # (availability + its newest observation, every visible machine, sessions or
@@ -305,6 +428,8 @@ for n in (data.get("nodes") or []) if isinstance(data.get("nodes"), list) else [
         cur["av"] = "online"
     cur["seen"] = max(cur["seen"], epoch(n.get("observed_at")))
 for r in rows:
+    if r["local"]:
+        continue                                     # this machine is `#me`, never a #node
     cur = nodes.setdefault(r["node"], dict(av="lost", n=0, seen=0))
     cur["n"] += 1
     if not data.get("nodes"):
@@ -333,6 +458,8 @@ def parent_of(repo, issue):
 for f in local:
     out = list(head)
     for r in rows:
+        if r["local"] and r["local"] != f["sess"]:
+            continue                                 # a local row: its own fleet's cache only
         origin = ""
         ou, _, ok = r["owid"].partition("/")
         if ok:
@@ -340,28 +467,53 @@ for f in local:
         elif r["issue"] and r["repo"] in f["repos"]:
             p = parent_of(r["repo"], r["issue"])
             if p:
-                origin = by_issue.get((r["repo"], p)) or ((slug(r["repo"]) + ":" if f["multi"] else "") + "issue-" + p)
+                # the parent's row, when the hub lists one: a parent in THIS fleet
+                # (a local row since #1480) is its bare key, as a local @origin is
+                pu, _, pk = (by_issue.get((r["repo"], p)) or "").partition("/")
+                if pk:
+                    origin = pk if f["uuid"] and pu == f["uuid"] else pu + "/" + pk
+                else:
+                    origin = (slug(r["repo"]) + ":" if f["multi"] else "") + "issue-" + p
         out.append("\x1f".join(clean(v) for v in ("wid:" + r["wid"], r["node"], r["av"], r["issue"], r["repo"],
-                                               r["state"], r["agent"], r["name"], origin, r["needs"])) + "\n")
+                                               r["state"], r["agent"], r["name"], origin, r["needs"],
+                                               "1" if r["local"] else "0", r["lwid"])) + "\n")
     write(os.path.join(gdir, "remote_" + f["sess"]), "".join(out))
 PY
-  local rc=$?
-  rm -f "$json" "$lf"
+  rc=$?
+  rm -f "$json" "$lf" "$mf"
+  # A cache that failed to write is not vouched for: the next fetch takes the body.
+  [ "$rc" = 0 ] || rm -f "$ETAGF"
   return "$rc"
+}
+
+# watched — is anyone looking? A client attached to any fleet session on this
+# machine: the dash, a shell, another machine's proxy window. Then the loop runs
+# at WATCHED_EVERY; with nobody attached there is no one to show a change to
+# sooner, and the hub is asked every EVERY as before.
+watched() {
+  local sess _c
+  while IFS=$'\t' read -r sess _c; do
+    [ -n "$sess" ] || continue
+    [ -n "$(tmux -L "$sess" list-clients 2>/dev/null)" ] && return 0
+  done <<EOF
+$(fleet_each_conf)
+EOF
+  return 1
 }
 
 loop() {
   hub_on || return 0
   mkdir -p "$G" 2>/dev/null || return 1
-  local p end
+  local p end every
   read -r p < "$PIDF" 2>/dev/null || p=''
   if [ -n "$p" ] && [ "$p" != "$$" ] && kill -0 "$p" 2>/dev/null; then return 0; fi
   printf '%s\n' "$$" > "$PIDF"
   end=$(( $(date +%s) + LOOP_SECS ))
   while :; do
     refresh 2>/dev/null
-    [ $(( $(date +%s) + EVERY )) -le "$end" ] || break
-    sleep "$EVERY"
+    every=$EVERY; watched && every=$WATCHED_EVERY
+    [ $(( $(date +%s) + every )) -le "$end" ] || break
+    sleep "$every"
   done
   read -r p < "$PIDF" 2>/dev/null && [ "$p" = "$$" ] && rm -f "$PIDF"
   return 0

@@ -334,6 +334,7 @@ fcfg_label_i18n() {
     FLEET_SIDEBAR) printf 'Worker 任务栏' ;;
     FLEET_UI_LANG) printf 'Tmux UI 语言' ;;
     FLEET_SIDEBAR_WIDTH) printf '任务栏宽度' ;;
+    FLEET_SIDEBAR_SOURCE) printf '任务栏列表来源（local|hub）' ;;
     FLEET_CLOSE_LANDS_NEXT) printf '关闭任务后落到下一个任务' ;;
     FLEET_HOME_SIDEBAR_FIRST) printf '⌂/F9 先去任务栏' ;;
     FLEET_STATUS_CONTAINER) printf '状态栏容器' ;;

@@ -306,6 +306,10 @@ def jump(session, window, pane, lock):
     # retargets and prints — then land in it exactly as in a local task window
     # (issue #1475): the view moves along, so the list stays on the left and the
     # other machine's pane is on the right, never the whole window gone remote.
+    # With the list taken from the hub (FLEET_SIDEBAR_SOURCE=hub, issue #1480) a
+    # row of THIS machine still arrives as its own `@<n>` window id — the producer
+    # renders it off its tmux line — so it takes the local path below, unchanged;
+    # only a row on another machine is a `wid:`.
     if window.startswith("wid:") and "/" in window:
         env = dict(os.environ, FLEET_SESSION=session)
         out = run(["bash", str(BIN / "fleet-remote-view.sh"), "open", window], env=env,
