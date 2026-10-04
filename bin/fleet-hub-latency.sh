@@ -73,14 +73,23 @@ if [ "${1:-}" = --watch ]; then
   fi
   CACHE="$FLEET_C/global/remote_$WSESS"
   [ -x "$LOOPBIN/fleet-hub-sessions.sh" ] || die "--watch: no fleet-hub-sessions.sh in $LOOPBIN"
-  # Keep the fetch loop alive for as long as we watch (it runs 70 s at a time and
-  # is normally re-ensured by the collector tick, which may not run here).
-  ensure_loop() { bash "$LOOPBIN/fleet-hub-sessions.sh" --ensure >/dev/null 2>&1 || :; }
-  ensure_loop
-  exec python3 - "$CACHE" "$NAME" "$LOOPBIN/fleet-hub-sessions.sh" <<'PY'
+  # The fetch loop runs as OUR child for the whole watch — the real --loop code
+  # at its real cadence, one long cycle, gone when we are. (The collector tick
+  # that normally re-ensures it every 60 s may not run on this machine; a loop
+  # that merely got ensured once dies after 70 s and the rounds time out.) If a
+  # daemon's loop already holds the pid file ours exits at once and is retried.
+  export FLEET_HUB_SESSIONS_LOOP_SECS=86400
+  exec python3 -u - "$CACHE" "$NAME" "$LOOPBIN/fleet-hub-sessions.sh" <<'PY'
 import os, select, subprocess, sys, time
 cache, name, loop = sys.argv[1:4]
 US = "\x1f"
+child = None
+def keep_loop():
+    global child
+    if child is None or child.poll() is not None:
+        child = subprocess.Popen(["bash", loop, "--loop"], stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+keep_loop()
 def state():
     try:
         with open(cache, encoding="utf-8") as f:
@@ -93,18 +102,22 @@ def state():
     return None
 last = state()
 print("READY %s %s" % (cache, last if last is not None else "-"), flush=True)
-t_ensure = time.monotonic()
-while True:
-    if time.monotonic() - t_ensure > 30:
-        subprocess.run(["bash", loop, "--ensure"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        t_ensure = time.monotonic()
-    r, _, _ = select.select([sys.stdin], [], [], 0.1)
-    if r and not sys.stdin.readline():
-        break                                   # the driver hung up
-    s = state()
-    if s != last:
-        last = s
-        print("SEEN %s %d" % (s if s is not None else "-", int(time.time() * 1000)), flush=True)
+t_keep = time.monotonic()
+try:
+    while True:
+        if time.monotonic() - t_keep > 5:
+            keep_loop()
+            t_keep = time.monotonic()
+        r, _, _ = select.select([sys.stdin], [], [], 0.1)
+        if r and not sys.stdin.readline():
+            break                                   # the driver hung up
+        s = state()
+        if s != last:
+            last = s
+            print("SEEN %s %d" % (s if s is not None else "-", int(time.time() * 1000)), flush=True)
+finally:
+    if child is not None and child.poll() is None:
+        child.terminate()
 PY
 fi
 
@@ -163,7 +176,7 @@ case "$ready" in READY*) printf '%s\n' "observer: $ready" >&2 ;; *) die "observe
 OSTATE=${ready##* }    # what the observer's cache shows for this window right now
 
 export SOCK WID NUDGE DIRTY STATES ROUNDS CUR NAME OBS OSTATE
-python3 - <<'PY' 3<&3 4>&4
+python3 -u - <<'PY' 3<&3 4>&4
 import os, select, subprocess, sys, time
 sock, wid, nudge, dirty = os.environ["SOCK"], os.environ["WID"], os.environ["NUDGE"], os.environ["DIRTY"]
 a, b = os.environ["STATES"].split(",", 1)
