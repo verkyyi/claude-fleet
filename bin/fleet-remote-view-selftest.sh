@@ -36,6 +36,10 @@
 #                    the plain client leaving hides again; the last shell takes the
 #                    server's hooks with it, and no session-level hook array is
 #                    left to shadow the fleet's own
+#   K. one title   — (#1549) while hidden every remote window's pane-border-status
+#                    is off (its own value saved per window), so the proxy pane
+#                    shows no second header; a plain client gets each back as it
+#                    was (a window's own value, or inherited), the close too
 #   J. own window  — (#1489) two shells on one machine: each view session keeps
 #                    its own current window; `select <wid> <view>` moves that view
 #                    alone, `select <wid>` (an older open) the fleet session alone;
@@ -141,6 +145,11 @@ RW=$(tr_ new-window -d -P -F '#{window_id}' -t "$RS:" -n worker7 "cat > '$WORK/t
 tr_ set-window-option -t "$RW" @issue 7
 RW8=$(tr_ new-window -d -P -F '#{window_id}' -t "$RS:" -n worker8 'while :; do sleep 300; done')
 tr_ set-window-option -t "$RW8" @issue 8
+# Each window's own top header (tmux-attention.conf: global `top`, a marker format
+# to find it in a capture); worker 8 sets its OWN value — what a restore must give
+# back, where worker 7's inherited one must come back unset (#1549).
+tr_ set-option -g pane-border-status top \; set-option -g pane-border-format 'RBORDER #{window_name}'
+tr_ set-window-option -t "$RW8" pane-border-status bottom
 # The remote fleet's own sidebar view, in the worker's window (#1475: it goes
 # while the proxy is the only client, and comes back with the status line).
 RVP=$(tr_ split-window -d -h -b -f -l 30 -P -F '#{pane_id}' -t "$RW" 'while :; do sleep 300; done')
@@ -247,6 +256,14 @@ has "C: what it was is saved" "$(tr_ show-options -qv -t "=$RS:" @remote_view_sa
 eq "C: the remote session is marked solo — its sidebar draws no list (#1475)" "1" "$(tr_ show-options -qv -t "=$RS:" @remote_view_solo)"
 rviews() { tr_ list-panes -s -t "$RS" -F '#{pane_id} #{@sidebar}' | awk '$2 == 1 { print $1 }' | tr '\n' ' '; }
 eq "C: …the view it had is gone" "" "$(rviews)"
+# K (#1549): the far side's own header goes with the status line — one title line.
+pbs() { printf '%s|%s' "$(tr_ show-options -wqv -t "$RW" pane-border-status)" "$(tr_ show-options -wqv -t "$RW8" pane-border-status)"; }
+pbsaved() { printf '%s|%s' "$(tr_ show-options -wqv -t "$RW" @remote_view_saved)" "$(tr_ show-options -wqv -t "$RW8" @remote_view_saved)"; }
+eq "K: hidden — every remote window's pane-border-status is off" "off|off" "$(pbs)"
+eq "K: …what each window set is saved on the window (- = inherited)" "pane-border-status=-|pane-border-status=bottom" "$(pbsaved)"
+eq "K: …the session's own saved columns are untouched" "status=- prefix=- prefix2=- " "$(tr_ show-options -qv -t "=$RS:" @remote_view_saved)"
+noheader() { ! tl capture-pane -p -t "$PW" | grep -q RBORDER; }
+waitfor 5 noheader || fail "K: the proxy pane still shows the remote window's own header" "$(tl capture-pane -p -t "$PW" | head -3)"
 tl send-keys -t "$PW" 'hello-from-m5' Enter
 typed() { grep -q 'hello-from-m5' "$WORK/typed" 2>/dev/null; }
 waitfor 5 typed || fail "C: typing in the proxy window never reached the remote pane" "$(cat "$WORK/typed" 2>/dev/null)"
@@ -304,6 +321,10 @@ waitfor 10 two || fail "G: the second client never attached"
 back() { [ -z "$(tr_ show-options -qv -t "=$RS:" status)" ] && [ -z "$(tr_ show-options -qv -t "=$RS:" @remote_view_saved)" ]; }
 waitfor 5 back || fail "G: a client at the remote end did not get the status line back" "$(tr_ show-options -t "=$RS:" status)"
 eq "G: …and the solo marker is gone: its sidebar may draw again (#1475)" "" "$(tr_ show-options -qv -t "=$RS:" @remote_view_solo)"
+eq "K: a plain client gets each window's header back as it was" "|bottom" "$(pbs)"
+eq "K: …and no window keeps a saved marker" "|" "$(pbsaved)"
+header() { tl capture-pane -p -t "$PW" | grep -q RBORDER; }
+waitfor 5 header || fail "K: with a plain client there, the remote header is not back (the positive control)" "$(tl capture-pane -p -t "$PW" | head -3)"
 tl kill-window -t "$HW"
 one() { [ "$(gatt)" = 1 ]; }
 waitfor 5 one || fail "G: the helper client did not leave"
@@ -380,6 +401,7 @@ tl kill-window -t "$HW"
 waitfor 10 natt 2 || fail "I: the plain client did not leave"
 waitfor 5 hidden || fail "I: the plain client left, two shells remain — not hidden again" "$(tr_ show-options -t "=$RS:" status)"
 eq "I: …and the saved values are the originals" "status=- prefix=- prefix2=- " "$(tr_ show-options -qv -t "=$RS:" @remote_view_saved)"
+eq "K: hidden again — the headers off again, the originals saved again" "off|off pane-border-status=-|pane-border-status=bottom" "$(pbs) $(pbsaved)"
 # I6. the nested shell leaves: the proxy alone — still hidden; its row gone; the
 # server's hooks stay while a shell is registered, and never land on the session.
 tl kill-window -t "$SW"
@@ -403,6 +425,7 @@ restored() { [ -z "$(tr_ show-options -qv -t "=$RS:" status)" ]; }
 waitfor 5 restored || fail "E: the remote session's status line was not handed back" "$(tr_ show-options -t "=$RS:" status)"
 eq "E: the saved marker is gone" "" "$(tr_ show-options -qv -t "=$RS:" @remote_view_saved)"
 eq "E: the solo marker too" "" "$(tr_ show-options -qv -t "=$RS:" @remote_view_solo)"
+eq "K: closed — each window's header as it was, no marker left" "|bottom |" "$(pbs) $(pbsaved)"
 gone() { [ -z "$(ls "$FLEET_CONF_DIR/remote-views" 2>/dev/null)" ]; }
 waitfor 5 gone || fail "E: the view registration was left behind" "$(ls "$FLEET_CONF_DIR/remote-views")"
 hooksoff() { [ "$(tr_ show-hooks -g | grep -c '\[77\]')" = 0 ]; }
