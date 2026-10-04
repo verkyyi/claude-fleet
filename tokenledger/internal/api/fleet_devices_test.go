@@ -8,10 +8,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -409,9 +411,9 @@ func TestFleetHomePicks(t *testing.T) {
 	}
 }
 
-// Anyone may fetch the installer and the client; the script carries this
-// hub's URL, each file its SHA-256; a hub that cannot sign anyone in serves
-// none of it.
+// Anyone may fetch the installer, the manifest and every client file on it;
+// the script carries this hub's URL, each file its SHA-256; a hub that cannot
+// sign anyone in serves none of it.
 func TestInstallServed(t *testing.T) {
 	h, _ := certHarness(t)
 	get := func(path string) (*http.Response, []byte) {
@@ -432,15 +434,40 @@ func TestInstallServed(t *testing.T) {
 		!strings.Contains(script, `HUB="${FLEET_HUB_URL:-`+h.http.URL+`}"`) {
 		t.Fatalf("installer did not get this hub's URL:\n%s", script[:300])
 	}
+	// The manifest is a download of its own (claude-fleet#1486): the installer
+	// walks the list this build embeds, so the two can never disagree.
+	resp, body = get("/install/" + fleetclient.ManifestName)
+	sum := sha256.Sum256(body)
+	if resp.StatusCode != 200 || resp.Header.Get("X-Ccquota-Sha256") != hex.EncodeToString(sum[:]) ||
+		!strings.HasPrefix(resp.Header.Get("Content-Type"), "text/plain") {
+		t.Fatalf("/install/manifest: %d sha %q ct %q", resp.StatusCode, resp.Header.Get("X-Ccquota-Sha256"), resp.Header.Get("Content-Type"))
+	}
+	if inst, names := fleetclient.ParseManifest(body); inst != fleetclient.Installer || !reflect.DeepEqual(names, fleetclient.Names) {
+		t.Fatalf("served manifest parses to %q %v, the build has %q %v", inst, names, fleetclient.Installer, fleetclient.Names)
+	}
 	for _, name := range fleetclient.Names {
 		resp, body := get("/install/" + name)
 		sum := sha256.Sum256(body)
-		if resp.StatusCode != 200 || resp.Header.Get("X-Ccquota-Sha256") != hex.EncodeToString(sum[:]) || !bytes.HasPrefix(body, []byte("#!")) {
+		if resp.StatusCode != 200 || resp.Header.Get("X-Ccquota-Sha256") != hex.EncodeToString(sum[:]) {
 			t.Fatalf("/install/%s: %d sha %q", name, resp.StatusCode, resp.Header.Get("X-Ccquota-Sha256"))
 		}
+		ct := resp.Header.Get("Content-Type")
+		switch {
+		case strings.HasPrefix(name, "bin/") && !bytes.HasPrefix(body, []byte("#")):
+			t.Fatalf("/install/%s: a bin/ file is a script or a sourced lib (a comment first), got %q", name, body[:min(len(body), 20)])
+		case strings.HasSuffix(name, ".py") && !strings.HasPrefix(ct, "text/x-python"):
+			t.Fatalf("/install/%s: content-type %q", name, ct)
+		case strings.HasSuffix(name, ".conf") && !strings.HasPrefix(ct, "text/plain"):
+			t.Fatalf("/install/%s: content-type %q", name, ct)
+		case strings.HasSuffix(name, ".sh") && !strings.HasPrefix(ct, "text/x-shellscript"):
+			t.Fatalf("/install/%s: content-type %q", name, ct)
+		}
 	}
-	if resp, _ := get("/install/fleet-install.sh"); resp.StatusCode != 404 {
+	if resp, _ := get("/install/" + fleetclient.Installer); resp.StatusCode != 404 {
 		t.Fatalf("the template is not a download: %d", resp.StatusCode)
+	}
+	if resp, _ := get("/install/fleet"); resp.StatusCode != 404 {
+		t.Fatalf("the pre-#1486 flat name is gone — the manifest's paths are the URLs: %d", resp.StatusCode)
 	}
 	if resp, _ := get("/install/embed.go"); resp.StatusCode != 404 {
 		t.Fatalf("only the named client files are served: %d", resp.StatusCode)
@@ -454,33 +481,53 @@ func TestInstallServed(t *testing.T) {
 	}
 
 	h.srv.SSHCA = nil
-	if resp, _ := get("/install"); resp.StatusCode != 404 {
-		t.Fatalf("/install without a CA: %d, want 404", resp.StatusCode)
-	}
-	if resp, _ := get("/install/fleet"); resp.StatusCode != 404 {
-		t.Fatalf("/install/fleet without a CA: %d, want 404", resp.StatusCode)
+	for _, p := range []string{"/install", "/install/manifest", "/install/bin/fleet"} {
+		if resp, _ := get(p); resp.StatusCode != 404 {
+			t.Fatalf("%s without a CA: %d, want 404", p, resp.StatusCode)
+		}
 	}
 }
 
-// The embedded client is a byte-for-byte copy of bin/ — the originals the
-// shell selftests drive. Skipped where bin/ is not beside the module (the
-// Docker build context is tokenledger/ alone).
+// The embedded client is a byte-for-byte copy of the repo's bin/ + conf/ — the
+// originals the shell selftests drive — and the manifest is the one list: every
+// file it names is embedded and matches, and nothing unlisted is embedded.
+// Skipped where the repo is not beside the module (the Docker build context is
+// tokenledger/ alone). bin/fleet-client-mirror.sh --check is the shell twin.
 func TestFleetClientMatchesBin(t *testing.T) {
-	bin := filepath.Join("..", "..", "..", "bin")
-	if _, err := os.Stat(filepath.Join(bin, "fleet")); err != nil {
+	repo := filepath.Join("..", "..", "..")
+	if _, err := os.Stat(filepath.Join(repo, "bin", "fleet")); err != nil {
 		t.Skip("no bin/ beside the module")
 	}
+	listed := map[string]bool{fleetclient.ManifestName: true}
 	for _, name := range append([]string{fleetclient.Installer}, fleetclient.Names...) {
-		want, err := os.ReadFile(filepath.Join(bin, name))
+		listed[name] = true
+		want, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(name)))
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("%s is in the manifest but not in the repo: %v", name, err)
 		}
 		got, err := fleetclient.Files.ReadFile(name)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("%s is in the manifest but not embedded — run bin/fleet-client-mirror.sh: %v", name, err)
 		}
 		if !bytes.Equal(got, want) {
-			t.Errorf("internal/api/fleetclient/%s differs from bin/%s — copy it over (see fleetclient/embed.go)", name, name)
+			t.Errorf("internal/api/fleetclient/%s differs from %s — run bin/fleet-client-mirror.sh", name, name)
 		}
+	}
+	// The shell (claude-fleet#1484) ships: #1486 is what put it on the list.
+	for _, must := range []string{"bin/fleet", "bin/fleet-shell.sh", "bin/fleet-sidebar.py", "bin/tmux-status.sh", "conf/tmux-shell.conf"} {
+		if !listed[must] {
+			t.Errorf("manifest does not list %s", must)
+		}
+	}
+	if err := fs.WalkDir(fleetclient.Files, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && !listed[p] {
+			t.Errorf("internal/api/fleetclient/%s is embedded but not in the manifest — add it there or remove the copy", p)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }

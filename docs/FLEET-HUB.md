@@ -340,8 +340,35 @@ computer's, never sent on). `~/.config/claude-fleet/shell.conf` holds the knobs
 `bin/fleet-shell-selftest.sh` is the check: a fake hub, a fake `fleet connect`,
 an ssh shim, an isolated socket. The bar's machine chip reads the sessions
 cache's `#node` line when `hub_nodes` has no row (a certificate identity gets
-no `/v1/nodes` until #1502): `m4 ●` rather than `?`. Installing the shell with
-the one-line installer is C7 (#1486).
+no `/v1/nodes` until #1502): `m4 ●` rather than `?`.
+
+**The one-line install carries the shell** (issue #1486, EPIC #1479 C7).
+`curl -fsSL <hub>/install | sh` fetches `/install/manifest` — the list the hub's
+image embeds (`tokenledger/internal/api/fleetclient/manifest`, the ONE place the
+client's file set is maintained) — then `/install/<path>` for each, SHA-256
+checked, into `~/.local/share/claude-fleet/<path>`: `bin/fleet`,
+`fleet-login.py`, `fleet-connect.py`, and everything the shell runs on that
+computer (`fleet-shell.sh`, `fleet-remote-view.sh`, `fleet-hub-sessions.sh`,
+`fleet-hub-write.sh`, the sidebar scripts, `tmux-dashboard-rows.sh`,
+`tmux-status.sh` with the libs they source — `fleet-lib.sh` whole, since the
+row producer and the hub loop source it unconditionally and a shell-only lib
+would be a second code path in the render loop — and `conf/tmux-shell.conf`),
+in the repo's own `bin/` + `conf/` layout so a script's `$BIN/../conf/…`
+resolves as in a checkout. `~/.local/bin/fleet` is a two-line runner of the
+real one (a script, not a symlink: `fleet` finds its siblings in its own `$0`
+directory, which the conf-free mirror relies on). A file the manifest no longer
+lists is removed, so running the line again is the update. The set was fixed by
+running `fleet-shell-selftest.sh` from a root holding only those files; what a
+node needs (spawning, reaping, the daemons, gh) stays off it, and the shell's
+row menu still lists a few node-only items (新建 / 恢复 / 加仓库) that do
+nothing there — #1518. `bin/fleet-client-mirror.sh` copies `bin/` +
+`conf/` into the embed dir (`--check` asserts the mirror);
+`TestFleetClientMatchesBin` and `fleet-install-selftest.sh` leg A pin it from
+both sides, and leg E drives the installed `fleet`: a (fake) tmux ≥ 3.2 →
+`fleet-shell.sh` starts its server from the install root's `bin/` and `conf/`;
+no tmux → the one hint and `fleet-connect.py`. The hub image is deployed by
+hand: colleagues get the shell once the operator redeploys it; the connect
+page's command is the same line as before.
 
 **…and steps into them** (issue #1424, EPIC #1419 C5). Enter on a remote row (the
 dash's `dash-enter.sh`, the sidebar's `jump`) runs `bin/fleet-remote-view.sh open`:
