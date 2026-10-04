@@ -21,16 +21,16 @@ key_repo_split() { # <key> → sets krepo (hosted owner/name, or empty) + kbare
 case "$mode" in
   inventory)
     # The fleet's OWN identity — its conf's first repo and checkout — is what the
-    # controller hashes into the fleet UUID the hub registers. TMUX is unset so a
-    # caller inside a pane never gets the window's repo overlay (issue #788) folded
-    # in: fleet_uuid (bin/fleet-lib.sh) does the same, so the two agree byte for
-    # byte whoever runs them (issue #1491).
+    # controller hashes into the fleet UUID the hub registers. fleet_identity_triplet
+    # (bin/fleet-lib.sh) is the one reader, shared with fleet_uuid, so the two agree
+    # byte for byte whoever runs them, from whichever pane (issues #1491, #1498).
     while IFS=$'\t' read -r sess _conf; do
       [ -n "$sess" ] || continue
+      fleet_identity_triplet "$sess"
       (
         unset TMUX TMUX_PANE
         fleet_load_conf "$sess"
-        printf '%s\0' "$sess" "${FLEET_REPO:-}" "${FLEET_MAIN:-}" "${FLEET_AGENT:-claude}" "$(fleet_conf_file "$sess")"
+        printf '%s\0' "${FLEET_AGENT:-claude}" "$(fleet_conf_file "$sess")"
       )
     done < <(fleet_each_conf)
     ;;
