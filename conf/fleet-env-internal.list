@@ -285,6 +285,7 @@ FLEET_HUB_CACHE_SECS               knob: internal budget, seconds the hub worker
 FLEET_HUB_STATUS_CMD               seam: command printing `<worker_id>\t<node>` that refreshes the hub worker cache; the ccquota agent now writes the cache itself (#1421); kept for a hub reached some other way (fleet_worker_locate, #1420)
 FLEET_HUB_SESSIONS_CMD             seam: command printing the hub's fleet_sessions JSON instead of GET $CCQUOTA_HUB_URL/v1/fleet/fleet_sessions (fleet-hub-sessions.sh, #1423)
 FLEET_HUB_SESSIONS_EVERY           knob: internal pacing, seconds between the remote-sessions refreshes (fleet-hub-sessions.sh, 10, #1423)
+FLEET_HUB_SESSIONS_WATCHED_EVERY   knob: internal pacing, seconds between the refreshes while a client is attached to any session of this fleet — the loop sends If-None-Match so an unchanged hub answers 304 (fleet-hub-sessions.sh, 2, #1481)
 FLEET_HUB_SESSIONS_LOOP_SECS       knob: internal budget, how long one detached refresh loop lives before the next collector tick restarts it (70, #1423)
 FLEET_HUB_SESSIONS_STALE           knob: internal budget, seconds after which the dash reads every remote row as 失联 (tmux-dashboard-rows.sh, 60, #1423)
 FLEET_REMOTE_BIN                   knob: the fleet's bin/ on the other machine for a proxy window, default .claude/fleet/bin (fleet-remote-view.sh, #1424)
