@@ -390,7 +390,7 @@ if [ -n "${TMUX_PANE:-}" ]; then
   tmux set-option -w -t "$TMUX_PANE" @cc_launcher_pid "$$" 2>/dev/null || true
   # New ownership invalidates the old JSON even if the process died before its
   # SessionEnd. Clear visible context too; the first root hook supplies truth.
-  for _opt in @codex_identity @codex_session_id @codex_attention @ctx_pct @ctx_limit @cc_model @handoff_armed; do
+  for _opt in @codex_identity @codex_session_id @codex_attention @ctx_pct @ctx_limit @ctx_band @model @effort @cc_model @handoff_armed; do
     tmux set-option -wu -t "$TMUX_PANE" "$_opt" 2>/dev/null || true
   done
   [ -n "$launch_model" ] && tmux set-option -w -t "$TMUX_PANE" @cc_model "$launch_model" 2>/dev/null || true

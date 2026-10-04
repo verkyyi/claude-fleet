@@ -1,191 +1,161 @@
 #!/usr/bin/env bash
-# ~/.claude/statusline.sh
-# Claude Code status line — reads JSON from stdin, outputs a single coloured line.
+# conf/statusline.sh — Claude Code's status line, run as the fleet's MEASUREMENT BUS.
 #
-# Fields used (from documented Claude Code schema):
-#   .workspace.current_dir  — current working directory
-#   .cwd                    — fallback CWD
-#   .model.display_name     — human-readable model name
-#   .context_window.used_percentage  — % of context window consumed (null before first message)
-#   .context_window.context_window_size — the window's own size in tokens (the ONLY
-#                             place the fleet can learn it; see the stamp below)
+# Claude Code runs this command on every status-line redraw with a JSON on stdin
+# (schema: https://code.claude.com/docs/en/statusline). Since issue #1452 it PRINTS
+# NOTHING — the bottom status line is gone; the operator reads the context %, the
+# model and the effort level on the pane's TOP border instead (the right-aligned
+# segment of pane-border-format in conf/tmux-attention.conf). The command stays
+# wired in settings.json because this stdin JSON is the only place the fleet learns
+# these numbers. Each render stamps them onto this pane's WINDOW as tmux options —
+# the same state bus as @claude_state / @issue:
 #
-# Git commands use --no-optional-locks to avoid touching lock files.
-# Requires: jq  (silently exits if absent)
+#   .context_window.used_percentage      → @ctx_pct    rounded % (issue #330: the
+#                                           auto-handoff nudge, bin/fleet-context.sh)
+#   .context_window.context_window_size  → @ctx_limit  the window SIZE — the only
+#                                           place the fleet can learn it (#477)
+#   those two + the fleet's handoff lines → @ctx_band   ok | watch | handoff — the
+#                                           header's colour (#1452). Same bands as
+#                                           fleet-context.sh: with
+#                                           FLEET_AUTO_HANDOFF_PCT (or _TOKENS,
+#                                           converted against @ctx_limit the way
+#                                           set-claude-state.sh does, #1317) the
+#                                           handoff line is red and 15 points below
+#                                           it is yellow; with neither, 80 / 50.
+#   .model.display_name                  → @model      e.g. "Opus 5.5" (#1452)
+#   .effort.level                        → @effort     low … max — present only
+#                                           when the model has an effort level;
+#                                           UNSET otherwise, so a model switch
+#                                           cannot leave a stale one (#1452)
+#   .rate_limits.five_hour / .seven_day  → @rl5h @rl7d @rl_reset @rl_ts (#1267: the
+#                                           quota watch merges them per @cc_account;
+#                                           both windows or nothing)
+#
+# Cost per render: one jq pass, one tmux read, and at most ONE tmux write chain —
+# a stamp is written only when its value CHANGED since the last render, so an idle
+# pane costs tmux nothing. The @rl_* set is the one exception: its @rl_ts IS the
+# freshness the quota watch reads, so it is re-stamped on every render that has
+# both windows (and it unsets @rl_src: the fleet mod stamps the same set with
+# @rl_src=mod, issue #1338). The mod (mod/fleet/hooks/usage.ts) also writes
+# @ctx_pct / @ctx_limit off `session.measure` on the same scale — newest write
+# wins; @ctx_band / @model / @effort are this script's alone, so a mod write
+# between two renders leaves the band one render behind at most.
+#
+# Outside tmux there is no bus: nothing is stamped and nothing is printed. The
+# old visible line's cwd + git-branch segments went with it (#1452 — the window
+# name and the task bar show both), so this never runs git.
+# Requires: jq (silently exits if absent).
 
-if ! command -v jq &>/dev/null; then
-  exit 0
-fi
-
+command -v jq >/dev/null 2>&1 || exit 0
 INPUT=$(cat)
+[[ -n "${TMUX:-}" && -n "${TMUX_PANE:-}" ]] || exit 0
 
-# ── ANSI colour constants ────────────────────────────────────────────────────
-RESET=$'\033[0m'
-DIM=$'\033[2m'
-BOLD=$'\033[1m'
-CYAN=$'\033[36m'
-GREEN=$'\033[32m'
-YELLOW=$'\033[33m'
-RED=$'\033[31m'
-MAGENTA=$'\033[35m'
+US=$'\x1f'   # field separator — never whitespace, so `read` keeps EMPTY fields
 
-SEP="${DIM} │ ${RESET}"   # dim vertical bar as segment separator
+# ── one jq pass over the whole payload ──────────────────────────────────────
+# `(path)? // null` swallows a wrongly-typed parent ({"rate_limits":"weird"},
+# {"effort":"x"}) and still yields one element per field, so the join stays
+# aligned. Rate-limit fields: numbers floor to an integer, anything else is `-`
+# (both % must be numbers, or nothing is stamped — the watch reads a half stamp
+# as none).
+FIELDS=$(jq -r '
+  def str: if . == null then "" else tostring end;
+  def num: if type == "number" then (floor | tostring) else "-" end;
+  [ ((.context_window.used_percentage)?        // null | str),
+    ((.context_window.context_window_size)?    // null | str),
+    ((.model.display_name)?                    // null | str),
+    ((.effort.level)?                          // null | str),
+    ((.rate_limits.five_hour.used_percentage)? // null | num),
+    ((.rate_limits.seven_day.used_percentage)? // null | num),
+    ((.rate_limits.five_hour.resets_at)?       // null | num),
+    ((.rate_limits.seven_day.resets_at)?       // null | num) ]
+  | join("\u001f")' <<< "$INPUT" 2>/dev/null) || exit 0
+IFS=$US read -r CTX_PCT CTX_SIZE MODEL EFFORT RL5 RL7 RLR5 RLR7 <<< "$FIELDS"
 
-SEGMENTS=()
+# ── what this render wants on the bus ───────────────────────────────────────
+# '' = leave the option as it is (no reading this render); the band / effort
+# rules below are the only places '' means UNSET.
+want_pct='' want_limit='' want_band=''
+if [[ "$CTX_PCT" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+  want_pct=$(printf '%.0f' "$CTX_PCT")
+  [[ "$CTX_SIZE" =~ ^[0-9]+(\.[0-9]+)?$ ]] && want_limit=${CTX_SIZE%%.*}
 
-# ── 1. Context usage % ───────────────────────────────────────────────────────
-# .context_window.used_percentage is pre-calculated (0-100); null before first message.
-# .context_window.context_window_size is the window itself — read alongside it so
-# the stamp below can publish a denominator that follows the model (issue #477).
-CTX_PCT=$(jq -r '.context_window.used_percentage // ""' <<< "$INPUT")
-CTX_SIZE=$(jq -r '.context_window.context_window_size // ""' <<< "$INPUT")
-
-if [[ -n "$CTX_PCT" ]]; then
-  CTX_INT=$(printf '%.0f' "$CTX_PCT")
-  # Auto-handoff measurement bus (issue #330): stamp the rounded % onto this
-  # pane's window as @ctx_pct — the same tmux-option state bus as @claude_state /
-  # @issue — so the Stop hook (bin/set-claude-state.sh) can read it. The Stop-hook
-  # stdin doesn't carry the context window, but the statusline does. No-op outside
-  # tmux; cheap set-option on every render. Panels/the hub stamp too but are
-  # excluded by the nudge's scope gate, so the extra write is harmless.
-  # @ctx_limit rides along (issue #477): the window SIZE is handed to the
-  # statusline and nowhere else, so without this stamp bin/fleet-context.sh has to
-  # guess a denominator — its 200k default read 197% (and a false HANDOFF) on a 1M
-  # window. Stamping it makes the derived percentage follow the model instead of a
-  # constant an operator has to remember to set per fleet.
-  if [[ -n "${TMUX:-}" && -n "${TMUX_PANE:-}" ]]; then
-    tmux set-window-option -t "$TMUX_PANE" @ctx_pct "$CTX_INT" 2>/dev/null || true
-    if [[ -n "$CTX_SIZE" && "$CTX_SIZE" != null ]]; then
-      tmux set-window-option -t "$TMUX_PANE" @ctx_limit "${CTX_SIZE%%.*}" 2>/dev/null || true
+  # The handoff lines, read the CHEAP way — never by sourcing fleet-lib (≈200 ms
+  # through fleet-hook-conf.sh; this is the per-render hot path). Precedence is
+  # what a sourcing script sees (issue #561): the environment is the floor, the
+  # install's fleet.conf overrides it, then $FLEET_CONF_DIR/fleet.settings (the
+  # order fleet-lib sources them), then THIS fleet's overlay — fleets/<sess>/conf,
+  # legacy <sess>.conf — where the socket label is the fleet (issue #159). File
+  # tests and one awk; the last assignment wins, quotes and a trailing comment
+  # are stripped. statusline-selftest.sh pins the layering.
+  SL_PCT="${FLEET_AUTO_HANDOFF_PCT:-}" SL_TOK="${FLEET_AUTO_HANDOFF_TOKENS:-}"
+  SL_CONF_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
+  SL_HERE="${BASH_SOURCE[0]%/*}"
+  [[ "$SL_HERE" == "${BASH_SOURCE[0]}" ]] && SL_HERE=.
+  SL_SOCK="${TMUX%%,*}"; SL_SOCK="${SL_SOCK##*/}"
+  SL_FILES=()
+  [[ -f "$SL_HERE/../fleet.conf" ]] && SL_FILES+=("$SL_HERE/../fleet.conf")
+  [[ -f "$SL_CONF_DIR/fleet.settings" ]] && SL_FILES+=("$SL_CONF_DIR/fleet.settings")
+  if [[ -n "$SL_SOCK" ]]; then
+    if   [[ -f "$SL_CONF_DIR/fleets/$SL_SOCK/conf" ]]; then SL_FILES+=("$SL_CONF_DIR/fleets/$SL_SOCK/conf")
+    elif [[ -f "$SL_CONF_DIR/$SL_SOCK.conf" ]];        then SL_FILES+=("$SL_CONF_DIR/$SL_SOCK.conf")
     fi
   fi
-  if   (( CTX_INT >= 80 )); then CTX_COLOR="$RED"
-  elif (( CTX_INT >= 50 )); then CTX_COLOR="$YELLOW"
-  else                            CTX_COLOR="$GREEN"
+  if [[ ${#SL_FILES[@]} -gt 0 ]]; then
+    SL_KV=$(awk '/^[[:space:]]*(export[[:space:]]+)?FLEET_AUTO_HANDOFF_(PCT|TOKENS)=/ {
+                   k = $0; sub(/^[[:space:]]*(export[[:space:]]+)?/, "", k); sub(/=.*$/, "", k)
+                   v = $0; sub(/^[^=]*=/, "", v); sub(/[[:space:]]+#.*$/, "", v); gsub(/["\047[:space:]]/, "", v)
+                   val[k] = v }
+                 END { print val["FLEET_AUTO_HANDOFF_PCT"]; print val["FLEET_AUTO_HANDOFF_TOKENS"] }' \
+            ${SL_FILES[@]+"${SL_FILES[@]}"} 2>/dev/null)
+    SL_V=${SL_KV%%$'\n'*}; [[ -n "$SL_V" ]] && SL_PCT=$SL_V
+    SL_V=${SL_KV#*$'\n'};  [[ "$SL_V" != "$SL_KV" && -n "$SL_V" ]] && SL_TOK=$SL_V
   fi
-  # Build a mini bar (10 chars wide)
-  FILLED=$(( CTX_INT / 10 ))
-  BAR=""
-  for (( i=0; i<10; i++ )); do
-    if (( i < FILLED )); then BAR="${BAR}█"; else BAR="${BAR}░"; fi
-  done
-  SEGMENTS+=("${CTX_COLOR}${BAR} ${CTX_INT}%${RESET}")
+  [[ "$SL_PCT" =~ ^[0-9]+$ ]] || SL_PCT=0
+  [[ "$SL_TOK" =~ ^[0-9]+$ ]] || SL_TOK=0
+  # A line set in TOKENS wins over the % key, converted against this window's
+  # size — rounded up, clamped to 100, exactly as set-claude-state.sh does
+  # (#1317); no readable size ⇒ the % key.
+  hand=$SL_PCT
+  if (( SL_TOK > 0 )) && [[ -n "$want_limit" ]] && (( want_limit > 0 )); then
+    hand=$(( (SL_TOK * 100 + want_limit - 1) / want_limit )); (( hand > 100 )) && hand=100
+  fi
+  if (( hand > 0 )); then warn=$(( hand - 15 )); (( warn < 1 )) && warn=1
+  else hand=80; warn=50; fi                      # fleet-context.sh's own fallback bands
+  if   (( want_pct >= hand )); then want_band=handoff
+  elif (( want_pct >= warn )); then want_band=watch
+  else                              want_band=ok; fi
 fi
 
-# ── 1b. Subscription quota stamp (issue #1267) ───────────────────────────────
-# .rate_limits.five_hour/seven_day.{used_percentage,resets_at} are the account's
-# own 5h/7d numbers, re-read on every render — fresher than the quota watch's one
-# ccquota fetch per tick. Stamp them on this window (@rl5h @rl7d @rl_reset
-# "<5h-reset> <7d-reset>", @rl_ts = now) for the watch to merge per @cc_account
-# (bin/usage-lib.sh fleet_quota_merge). Both % must be present, or nothing is
-# stamped: the watch reads an aged-out stamp as "no reading", never a half one.
-# The fleet mod stamps the same set off `session.measure` with @rl_src=mod
-# (issue #1338); this render's stamp unsets it, so absent = the status line.
-if [[ -n "${TMUX:-}" && -n "${TMUX_PANE:-}" ]]; then
-  RL=$(jq -r '.rate_limits as $r | [$r.five_hour.used_percentage, $r.seven_day.used_percentage,
-              $r.five_hour.resets_at, $r.seven_day.resets_at]
-              | map(if type == "number" then (floor | tostring) else "-" end) | join(" ")' \
-         <<< "$INPUT" 2>/dev/null)
-  read -r RL5 RL7 RLR5 RLR7 <<< "$RL"
-  if [[ "$RL5" =~ ^[0-9]+$ && "$RL7" =~ ^[0-9]+$ ]]; then
-    tmux set-window-option -t "$TMUX_PANE" @rl5h "$RL5" \; \
+# ── one read of what is on the bus now; queue only what differs ─────────────
+CUR=$(tmux display-message -p -t "$TMUX_PANE" \
+        "#{@ctx_pct}${US}#{@ctx_limit}${US}#{@ctx_band}${US}#{@model}${US}#{@effort}" 2>/dev/null)
+IFS=$US read -r cur_pct cur_limit cur_band cur_model cur_effort <<< "$CUR"
+
+ARGS=()
+# stamp <option> <want> <have> — queue a set (want='' ⇒ an unset) when they differ.
+stamp() {
+  [[ "$2" == "$3" ]] && return 0
+  [[ ${#ARGS[@]} -gt 0 ]] && ARGS+=(\;)
+  if [[ -n "$2" ]]; then ARGS+=(set-window-option -t "$TMUX_PANE" "$1" "$2")
+  else                   ARGS+=(set-window-option -u -t "$TMUX_PANE" "$1"); fi
+}
+if [[ -n "$want_pct" ]]; then
+  stamp @ctx_pct  "$want_pct"  "$cur_pct"
+  [[ -n "$want_limit" ]] && stamp @ctx_limit "$want_limit" "$cur_limit"
+  stamp @ctx_band "$want_band" "$cur_band"
+fi
+if [[ -n "$MODEL" ]]; then
+  stamp @model  "$MODEL"  "$cur_model"
+  stamp @effort "$EFFORT" "$cur_effort"      # '' ⇒ unset: this model has no effort level
+fi
+if [[ "$RL5" =~ ^[0-9]+$ && "$RL7" =~ ^[0-9]+$ ]]; then
+  [[ ${#ARGS[@]} -gt 0 ]] && ARGS+=(\;)
+  ARGS+=(set-window-option -t "$TMUX_PANE" @rl5h "$RL5" \; \
          set-window-option -t "$TMUX_PANE" @rl7d "$RL7" \; \
          set-window-option -t "$TMUX_PANE" @rl_reset "$RLR5 $RLR7" \; \
          set-window-option -t "$TMUX_PANE" @rl_ts "$(date +%s)" \; \
-         set-window-option -u -t "$TMUX_PANE" @rl_src 2>/dev/null || true
-  fi
+         set-window-option -u -t "$TMUX_PANE" @rl_src)
 fi
-
-# ── 2/3 gate: cwd + git branch (issue #1361) ─────────────────────────────────
-# In a fleet pane the tmux window name and the task bar already show the task and
-# its branch, so segments 2 and 3 are a repeat that costs width and 2-3 `git` runs
-# per render. FLEET_STATUSLINE_CWD (global; default `auto` — fleet-lib.sh
-# fleet_statusline_cwd): `auto` hides them in a fleet pane only, 1 always shows,
-# 0 always hides. Read WITHOUT sourcing fleet-lib (this runs on every render): the
-# install's fleet.conf then $FLEET_CONF_DIR/fleet.settings — the order fleet-lib
-# sources them, so the last assignment wins — else the environment.
-# A fleet pane = $TMUX + $TMUX_PANE on a socket whose label has a fleet conf
-# (one fleet ≡ one socket labelled with its session name, issue #159) — so an
-# ad-hoc session on the `default` socket still shows both. File tests only, no
-# tmux call. Outside tmux nothing here forks and the output is unchanged.
-SHOW_CWD=1
-SL_CWD="${FLEET_STATUSLINE_CWD:-}"
-SL_CONF_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
-SL_FILES=()
-SL_HERE="${BASH_SOURCE[0]%/*}"
-[[ "$SL_HERE" == "${BASH_SOURCE[0]}" ]] && SL_HERE=.
-[[ -f "$SL_HERE/../fleet.conf" ]] && SL_FILES+=("$SL_HERE/../fleet.conf")
-[[ -f "$SL_CONF_DIR/fleet.settings" ]] && SL_FILES+=("$SL_CONF_DIR/fleet.settings")
-if [[ ${#SL_FILES[@]} -gt 0 ]]; then
-  SL_FILE_VAL=$(awk '/^[[:space:]]*(export[[:space:]]+)?FLEET_STATUSLINE_CWD=/ {
-                       sub(/^[^=]*=/, ""); sub(/[[:space:]]+#.*$/, ""); gsub(/["\047[:space:]]/, ""); v = $0 }
-                     END { print v }' ${SL_FILES[@]+"${SL_FILES[@]}"} 2>/dev/null)
-  [[ -n "$SL_FILE_VAL" ]] && SL_CWD="$SL_FILE_VAL"
-fi
-case "${SL_CWD:-auto}" in
-  0) SHOW_CWD=0 ;;
-  1) SHOW_CWD=1 ;;
-  *) if [[ -n "${TMUX:-}" && -n "${TMUX_PANE:-}" ]]; then
-       SL_SOCK="${TMUX%%,*}"; SL_SOCK="${SL_SOCK##*/}"
-       if [[ -n "$SL_SOCK" && ( -f "$SL_CONF_DIR/fleets/$SL_SOCK/conf" || -f "$SL_CONF_DIR/$SL_SOCK.conf" ) ]]; then
-         SHOW_CWD=0
-       fi
-     fi ;;
-esac
-
-# ── 2. Current working directory ─────────────────────────────────────────────
-CWD_RAW=""
-(( SHOW_CWD )) && CWD_RAW=$(jq -r '.workspace.current_dir // .cwd // ""' <<< "$INPUT")
-
-if [[ -n "$CWD_RAW" ]]; then
-  # Replace $HOME prefix with ~
-  CWD_DISPLAY="${CWD_RAW/#$HOME/~}"
-
-  # Shorten very deep paths: keep last two components, prefix with …
-  # Count slash depth below $HOME
-  STRIPPED="${CWD_RAW/#$HOME/}"
-  DEPTH=$(awk -F'/' '{print NF-1}' <<< "$STRIPPED")
-  if (( DEPTH > 3 )); then
-    PARENT=$(basename "$(dirname "$CWD_RAW")")
-    BASE=$(basename "$CWD_RAW")
-    CWD_DISPLAY="…/${PARENT}/${BASE}"
-  fi
-
-  SEGMENTS+=("${BOLD}${CYAN}${CWD_DISPLAY}${RESET}")
-fi
-
-# ── 3. Git branch + dirty indicator ──────────────────────────────────────────
-if [[ -n "$CWD_RAW" ]] && command -v git &>/dev/null; then
-  GIT_BRANCH=$(git -C "$CWD_RAW" --no-optional-locks \
-                 rev-parse --abbrev-ref HEAD 2>/dev/null || true)
-
-  if [[ -n "$GIT_BRANCH" && "$GIT_BRANCH" != "HEAD" ]]; then
-    GIT_DIRTY=""
-    git -C "$CWD_RAW" --no-optional-locks diff --quiet          2>/dev/null || GIT_DIRTY="*"
-    git -C "$CWD_RAW" --no-optional-locks diff --cached --quiet 2>/dev/null || GIT_DIRTY="*"
-
-    if [[ -n "$GIT_DIRTY" ]]; then
-      SEGMENTS+=("${YELLOW}${GIT_BRANCH}${GIT_DIRTY}${RESET}")
-    else
-      SEGMENTS+=("${GREEN}${GIT_BRANCH}${RESET}")
-    fi
-  fi
-fi
-
-# ── 4. Model display name ─────────────────────────────────────────────────────
-MODEL=$(jq -r '.model.display_name // ""' <<< "$INPUT")
-if [[ -n "$MODEL" ]]; then
-  SEGMENTS+=("${MAGENTA}${MODEL}${RESET}")
-fi
-
-# ── Join segments with separator and print ────────────────────────────────────
-RESULT=""
-for SEG in "${SEGMENTS[@]}"; do
-  if [[ -n "$RESULT" ]]; then
-    RESULT="${RESULT}${SEP}${SEG}"
-  else
-    RESULT="$SEG"
-  fi
-done
-
-printf '%s\n' "$RESULT"
+[[ ${#ARGS[@]} -gt 0 ]] && tmux ${ARGS[@]+"${ARGS[@]}"} 2>/dev/null
+exit 0

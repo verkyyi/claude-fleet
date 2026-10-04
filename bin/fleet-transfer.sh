@@ -353,7 +353,7 @@ fi
 
 # The helper quotes metadata as argv; conversation text is only ever data.
 python3 "$HELPER" launcher "$BUNDLE" "$LAUNCH" || die 'cannot write target launcher'
-for key in @cc_account @subscription_identity @codex_identity @cc_model @ctx_pct @ctx_limit @handoff_armed @handoff_cleared_at; do
+for key in @cc_account @subscription_identity @codex_identity @cc_model @ctx_pct @ctx_limit @ctx_band @model @effort @handoff_armed @handoff_cleared_at; do
   TM set-option -wu -t "$WIN" "$key" 2>/dev/null || :
 done
 TM set-option -w -t "$WIN" @cc_agent "$TO" || die 'cannot stamp target agent'

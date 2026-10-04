@@ -109,11 +109,14 @@ demo repo data.</sub>
   an hourly janitor removes worktrees that are merged + clean + not attached
   to any live pane (and never anything else).
 
-- **Optional Claude Code status line** (`conf/statusline.sh`): a context-window
-  mini-bar (green → yellow → red), shortened cwd, git branch + dirty star, and
-  model name. Opt-in at install time by pointing `settings.json`'s `statusLine`
-  at the live-install path, so it improves through `land → /fleet-sync-install`;
-  jq-gated (blank without it). Never auto-wired.
+- **Optional Claude Code status line** (`conf/statusline.sh`): wired as a
+  *measurement bus*, not a visible line (issue #1452) — it prints nothing and
+  stamps the context %, window size, model and effort level (plus the account's
+  rate limits) onto the pane's tmux window, where the pane header shows
+  `62% · Opus 5.5 · high` on its right and the auto-handoff nudge reads the %.
+  Opt-in at install time by pointing `settings.json`'s `statusLine` at the
+  live-install path, so it improves through `land → /fleet-sync-install`;
+  jq-gated (inert without it). Never auto-wired.
 
 ## Architecture
 
