@@ -91,7 +91,7 @@ printf '{\n  "model": "opus",\n  "hooks": {"Stop": [{"hooks": [{"type": "command
   row @2 hub '' opus "$NOW" 0.2.0 12 mod                         # fed + stamped
   row @3 issue-1 '' opus "$((NOW-5))" 0.2.0 40 ''                # fed, not yet stamped
   row @4 issue-2 codex gpt-6 '' '' 33 ''                        # codex: skipped
-  row @5 issue-3 '' done '' '' 20 ''                            # no mod
+  row @5 issue-3 '' 'done' '' '' 20 ''                            # no mod
   row @6 issue-4 '' working "$((NOW-300))" 0.2.0 20 mod          # stale beat
   row @7 scratch-1 '' opus "$NOW" 0.1.0 8 ''                     # old mod
   row @8 shell '' '' '' '' '' ''                                 # unstamped: skipped
@@ -180,7 +180,7 @@ out=$(run off); has "D: off again" "$out" 'already off'; has "D: rc 0" "$out" 'r
 [ "$(ls "$SETTINGS".bak.* | wc -l | tr -d ' ')" = "$nbak" ] || fail "D: a no-op must not write a backup"
 # --force takes a blind window knowingly
 printf '{"statusLine": {"type": "command", "command": "%s"}}\n' "$OURS" > "$SETTINGS"
-{ row @2 hub '' opus "$NOW" 0.2.0 12 mod; row @5 issue-3 '' done '' '' 20 ''; } > "$WORK/rows/fleet-a"
+{ row @2 hub '' opus "$NOW" 0.2.0 12 mod; row @5 issue-3 '' 'done' '' '' 20 ''; } > "$WORK/rows/fleet-a"
 out=$(run off); has "D: refused without --force" "$out" 'rc=1'
 out=$(run off --force)
 has "D: --force removes" "$out" "removed statusLine in $SETTINGS"

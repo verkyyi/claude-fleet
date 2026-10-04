@@ -116,12 +116,13 @@ US=$(printf '\037')   # the row separator: NOT whitespace, so `read` keeps EMPTY
 N_WIN=0 N_FED=0 N_BLIND=0 N_STAMPED=0
 BLIND=()      # "<sess>\t<name>\t<why>"
 census() {
-  local now max sess row wid name agent mark alive ver pct src why
+  local now max sess wid name agent mark alive ver _pct src why
   now=$(date +%s); max="${FLEET_MOD_ALIVE_SECS:-45}"
   case "$max" in ''|*[!0-9]*) max=45 ;; esac
   while IFS= read -r sess; do
     [ -n "$sess" ] || continue
-    while IFS="$US" read -r wid name agent mark alive ver pct src; do
+    # shellcheck disable=SC2034  # _pct: the column is read for alignment, not used (yet)
+    while IFS="$US" read -r wid name agent mark alive ver _pct src; do
       [ -n "$wid" ] || continue
       case "$name" in dash|plan|backlog) continue ;; esac
       [ "$agent" = codex ] && continue
