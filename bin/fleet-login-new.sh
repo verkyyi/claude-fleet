@@ -157,6 +157,9 @@ else
 fi
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+# the launchd label rule for a login's system daemons (issue #1495) — the lib's, not a copy
+# shellcheck source=/dev/null
+. "$BIN/fleet-daemon-lib.sh"
 GITURL="${FLEET_BOOTSTRAP_GIT_BASE:-https://github.com}/$FLEET_REPO_SELF.git"
 
 # Every path this script was handed, made absolute against the directory the
@@ -401,15 +404,20 @@ if [ "$DAEMONS" = 1 ]; then
         || { printf '%s: cannot read %s as %s\n' "$PROG" "$ROOT/$t" "$LOGIN" >&2; fail; }
     done
     APPLY_SH="$STAGE/bin/fleet-install-apply.sh"
+    # The apply script sources fleet-daemon-lib.sh beside itself (the one label /
+    # shape rule, #1495), so the clone's lib is staged with it; a clone whose
+    # script or lib cannot be read falls back to this install's pair.
     # shellcheck disable=SC2024  # same: read as the login, written here
     sudo -u "$LOGIN" -H cat "$ROOT/bin/fleet-install-apply.sh" > "$APPLY_SH" 2>/dev/null \
-      && grep -q -- '--render-system' "$APPLY_SH" || APPLY_SH="$BIN/fleet-install-apply.sh"
+      && grep -q -- '--render-system' "$APPLY_SH" \
+      && sudo -u "$LOGIN" -H cat "$ROOT/bin/fleet-daemon-lib.sh" > "$STAGE/bin/fleet-daemon-lib.sh" 2>/dev/null \
+      || APPLY_SH="$BIN/fleet-install-apply.sh"
   elif [ "$NU" = 0 ]; then
     say "  WARN: no launchd/*.plist.tmpl in $TMPL_DIR — nothing to preview here; --apply reads the clone's (as $LOGIN) and fails on 0"
   fi
   NI=0
   for u in $UNITS; do
-    label="com.claude-fleet.$LOGIN.$u"; dst="$DDIR/$label.plist"; src="$TMPD/plists/$label.plist"
+    label=$(fleet_daemon_label "$u" system "$LOGIN"); dst="$DDIR/$label.plist"; src="$TMPD/plists/$label.plist"
     if [ "$APPLY" = 1 ]; then
       FLEET_INSTALL_LOGIN="$LOGIN" FLEET_INSTALL_HOME="$H" bash "$APPLY_SH" --render-system "$u" --root "$STAGE" > "$src" \
         || { printf '%s: render %s failed (%s --render-system)\n' "$PROG" "$u" "$APPLY_SH" >&2; fail; }

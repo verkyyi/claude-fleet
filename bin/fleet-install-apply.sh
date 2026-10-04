@@ -169,8 +169,10 @@ RHOME="${FLEET_INSTALL_HOME:-$HOME}"
 # The daemons' launchd SHAPE (gui LaunchAgents / system LaunchDaemons) and each
 # unit's label + plist path in it are the lib's one rule (issue #1495), shared with
 # fleet-daemon-loaded.sh — so the doctor looks where this script installs.
+# A copy of this script without its lib must not render an empty Label quietly.
 # shellcheck source=/dev/null
-. "$(dirname "$SELF")/fleet-daemon-lib.sh"
+. "$(dirname "$SELF")/fleet-daemon-lib.sh" 2>/dev/null && command -v fleet_daemon_label >/dev/null 2>&1 \
+  || { printf 'fleet-install-apply: fleet-daemon-lib.sh (fleet_daemon_label, #1495) is missing beside %s\n' "$SELF" >&2; exit 2; }
 
 # --- --render-system <unit>: one system-shape plist on stdout, nothing else ------
 # fleet-login-new.sh --apply (issue #1192) renders a NEW login's daemons from the
