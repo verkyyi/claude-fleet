@@ -432,7 +432,7 @@ has  "E: a #ts line leads the cache" "$(printf '%s\n' "$R" | head -1)" "#ts$US"
 eq   "E: #me is this machine's label" "#me$US$MYHOST" "$(printf '%s\n' "$R" | sed -n 2p)"
 ep() { python3 -c 'from datetime import datetime, timezone; import sys; print(int(datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00")).timestamp()))' "$1"; }
 eq   "E: one #node per other machine from the hub's list: YOUR session count, its observation; 维护中 (#1427) passes through as its own word" \
-     "#node${US}m4${US}online${US}7$US$(ep 2026-10-04T10:07:00Z);#node${US}m8${US}maintenance${US}0$US$(ep 2026-10-04T10:06:00Z);#node${US}m9${US}lost${US}0$US$(ep 2026-10-04T09:00:00Z);" \
+     "#node${US}m4${US}online${US}7$US$(ep 2026-10-04T10:07:00Z)${US}hub;#node${US}m8${US}maintenance${US}0$US$(ep 2026-10-04T10:06:00Z)${US}hub;#node${US}m9${US}lost${US}0$US$(ep 2026-10-04T09:00:00Z)${US}hub;" \
      "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" '$1 == "#node" { printf "%s;", $0 }')"
 eq   "E: parent in THIS fleet → its bare key"  "m4|online|working|侧边栏|issue-1419|" "$(rrow issue-1423)"
 eq   "E: parent elsewhere → its worker_id"     "m4|online|working|孙|$F/issue-1423|" "$(rrow issue-1500)"
@@ -446,13 +446,14 @@ eq   "E: this fleet's own session is a LOCAL row (#1480): local=1, this machine'
      "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$U/issue-1420" '$1 == w { print $8 "|" $11 "|" $12 "|" $2 "|" $3 }')"
 eq   "E: a row on another machine says local=0, no wid" "0|" \
      "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$F/issue-1423" '$1 == w { print $11 "|" $12 }')"
-eq   "E: every row carries the two fields" "" "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" '/^wid:/ && NF != 12')"
+eq   "E: every row carries the three appended fields (local, wid, via — #1480, #1488)" "" "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" '/^wid:/ && NF != 13')"
+eq   "E: a hub answer's rows are via=hub" "" "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" '/^wid:/ && $13 != "hub"')"
 hasnt "E: another login's session is not shown" "$R" "theirs"
 hasnt "E: a session with no worker_id is not shown" "$R" "no-id"
 has  "E: the C1 locator cache is written" "$(cat "$FLEET_CONF_DIR/control/hub-workers.tsv" 2>/dev/null)" "$F/issue-1423	m4"
 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-old.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "E: --refresh (old hub) failed"
 eq   "E: a hub without a nodes list: #node derived from the sessions (newest observation)" \
-     "#node${US}m4${US}online${US}7$US$(ep 2026-10-04T10:05:00Z);" \
+     "#node${US}m4${US}online${US}7$US$(ep 2026-10-04T10:05:00Z)${US}hub;" \
      "$(LC_ALL=C awk -F"$US" '$1 == "#node" { printf "%s;", $0 }' "$G/remote_$S")"
 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null; R=$(cat "$G/remote_$S")
 OK=$(cat "$G/hub_ok" 2>/dev/null)

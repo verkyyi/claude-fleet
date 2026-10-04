@@ -46,6 +46,13 @@
 #                           reconnect. Exit 3 when the worker is not live here.
 #   watch <view>            (runs ON <node>, over the same ssh connection) — the
 #                           fleet-open back channel, below.
+#   sessions                (runs ON <node>, over the same ssh connection; issue
+#                           #1488) — this machine's sessions in the hub's own
+#                           fleet_sessions shape, one JSON object on stdout, so a
+#                           shell whose hub is silent can take this machine's rows
+#                           over the connection it already holds. The rows are the
+#                           control adapter's inventory keyed by the hub's own rule
+#                           (fleet_hub_common.worker_key) — never a second generator.
 #   reconcile <sess>        (ON <node>; its client-attached/-detached hooks) — apply
 #                           the one rule: hidden ⇔ every client is a shell/view.
 #   restore <sess>          (ON <node>) — hand the session its status line, prefix
@@ -512,6 +519,69 @@ watch)
     done
     sleep 0.5
   done
+  ;;
+
+# ---------------------------------------------------------------------------------
+sessions)
+  # ON <node> (issue #1488, EPIC #1479 R3): this machine's sessions, hub-shaped —
+  # {"sessions": […], "nodes": […]} as /v1/fleet/fleet_sessions would answer for
+  # it alone — so the shell's loop feeds it through the ONE mapping it has for the
+  # hub's answer (fleet-hub-sessions.sh), rows and header lines alike. Each live
+  # fleet session here: its UUID (fleet_uuid — the first half of every worker_id
+  # the hub knows), its conf's repo (what fills a one-repo window's repo, as
+  # fleet_control.py does) and the control adapter's inventory — the very
+  # `workers` the node agent reports — keyed by the hub's own rule, worker_key. A
+  # fleet with no UUID (no control database) has no addressable rows and is
+  # skipped, as the hub would skip it. Exit 1 only when python3 is missing.
+  inv=$(mktemp "${TMPDIR:-/tmp}/frv-sess.XXXXXX") || exit 1
+  while IFS= read -r s; do
+    [ -n "$s" ] || continue
+    u=$(fleet_uuid "$s" 2>/dev/null) || u=''
+    [ -n "$u" ] || continue
+    r=$( unset TMUX TMUX_PANE; fleet_load_conf "$s" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )
+    bash "$BIN/fleet-control-read.sh" workers "$s" 2>/dev/null \
+      | while IFS= read -r line; do [ -n "$line" ] && printf '%s\t%s\t%s\t%s\n' "$s" "$u" "$r" "$line"; done >> "$inv"
+  done <<EOF
+$(fleet_sockets)
+EOF
+  python3 - "$inv" "$(hostname -s 2>/dev/null)" "$(id -un 2>/dev/null)" "$BIN" <<'PY'
+import json, re, sys
+from datetime import datetime, timezone
+ipath, host, user, bindir = sys.argv[1:5]
+sys.path.insert(0, bindir)
+from fleet_hub_common import worker_key, worker_identity
+now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+host = (host or "").split(".", 1)[0]
+sessions = []
+for line in open(ipath, encoding="utf-8"):
+    p = line.rstrip("\n").split("\t")
+    # sess, uuid, the fleet's repo, then the adapter's 12 columns — the window
+    # name may hold tabs of its own, so (fleet_control.py's rule) the last two
+    # are always origin_wid and needs and the name is everything between
+    if len(p) < 15 or not re.fullmatch(r"@[0-9]+", p[3]):
+        continue
+    sess, uuid, frepo = p[0], p[1], p[2]
+    window, issue, scratch, worktree, state, agent, handle, lifecycle, repo = p[3:12]
+    name, owid, needs = " ".join(p[12:-2]), p[-2], p[-1]
+    if not issue and scratch != "1":
+        continue
+    number = int(issue) if issue.isdigit() and int(issue) > 0 else None
+    key = worker_key(number, scratch == "1", worktree, repo)
+    wid = worker_identity(uuid, key)
+    if not wid:
+        continue
+    sessions.append({"worker_id": wid, "fleet_id": uuid, "fleet_name": sess, "machine_name": host,
+                     "os_user": user, "availability": "online", "observed_at": now,
+                     "worker": {"key": key, "issue": number,
+                                "repo": repo if repo and repo != "?" else (None if repo else frepo or None),
+                                "state": state or "unknown", "lifecycle": lifecycle or "awake",
+                                "agent": agent or None, "name": name, "origin_wid": owid or None,
+                                "needs": needs or None}})
+print(json.dumps({"sessions": sessions,
+                  "nodes": [{"machine_name": host, "availability": "online",
+                             "sessions": len(sessions), "observed_at": now}]}, ensure_ascii=False))
+PY
+  rc=$?; rm -f "$inv"; exit "$rc"
   ;;
 
 *)

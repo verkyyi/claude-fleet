@@ -387,13 +387,16 @@ if [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ -n "${FLEET_SESSION:-}" ] && [ -s "$G/remo
   fleet_status_remote_head "$FLEET_SESSION"; fleet_status_hub_ok "$FSR_TS"
   fleet_status_hub_lost "$NOW" && _rstale=1
   # `local` and `wid` (fields 11/12, #1480) are named so a new cache's needs field
-  # stays its own; a cache older than #1480 leaves them empty.
-  while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid; do
+  # stays its own; a cache older than #1480 leaves them empty. `via` (field 13,
+  # #1488: hub | node) the same — empty reads as hub.
+  while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid r_via; do
     case "$r_wid" in
       '#ts')   _rts=$r_node; case "$_rts" in ''|*[!0-9]*) _rts=0 ;; esac; continue ;;
       '#me')   RME=$r_node; continue ;;
       '#node') [ -n "$r_node" ] || continue
-               [ "$_rstale" = 1 ] && r_av=lost
+               # a machine heard over the shell's own connection (via=node — its
+               # 6th field, #1488) is not lost for the hub's silence: it answered
+               [ "$_rstale" = 1 ] && [ "$r_state" != node ] && r_av=lost
                RN_K=$((RN_K + 1)); RN_IDX+="$r_node=$RN_K "
                RN_LABEL[RN_K]=$r_node; RN_AV[RN_K]=$r_av; RN_N[RN_K]=${r_iss:-0}; RN_SEEN[RN_K]=${r_repo:-0}
                case "${RN_N[RN_K]}" in ''|*[!0-9]*) RN_N[RN_K]=0 ;; esac
@@ -409,7 +412,7 @@ if [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ -n "${FLEET_SESSION:-}" ] && [ -s "$G/remo
       [ "$HUBSRC" = 1 ] && [ -n "$r_lwid" ] && _lwids+="$r_lwid "
       continue
     fi
-    [ "$_rstale" = 1 ] && r_av=lost
+    [ "$_rstale" = 1 ] && [ "$r_via" != node ] && r_av=lost
     case "$_rlostn" in *" $r_node "*) r_av=lost ;; esac
     if [ "$r_av" = lost ]; then
       r_node="$r_node!"; _rlostw+="$r_wid "
@@ -418,6 +421,11 @@ if [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ -n "${FLEET_SESSION:-}" ] && [ -s "$G/remo
         RN_K=$((RN_K + 1)); RN_IDX+="${r_node%!}=$RN_K "
         RN_LABEL[RN_K]=${r_node%!}; RN_AV[RN_K]=lost; RN_N[RN_K]=0; RN_SEEN[RN_K]=0 ;;
       esac
+    elif [ "$r_via" = node ]; then
+      # taken over the machine's direct connection while the hub is silent
+      # (#1488): `m5~` — the view draws a dim ⇄ at the row's end, nothing else
+      # about the row changes (its place, its nesting, its colour)
+      r_node="$r_node~"
     fi
     _rrows+=("$r_wid$US$r_node$US$r_iss$US$r_repo$US$r_state$US$r_agent$US$r_name$US$r_orig$US$r_needs")
   done < "$G/remote_$FLEET_SESSION"
@@ -670,11 +678,12 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # group 0, so a one-repo fleet sorts exactly as before.
   rgrp_v "$wrepo" "$wnorepo"; ownrgrp=$rgrp
   # A row on another machine (issues #1423/#1475): @wid carries its machine
-  # label — `m4`, `m4!` once that machine is lost. The label draws DIM at the
+  # label — `m4`, `m4!` once that machine is lost, `m5~` when the row came over
+  # the shell's direct connection to it (#1488). The label draws DIM at the
   # row's end; a lost row sorts into its machine's group at the foot (lgrp).
   rnode=''; rlost=''; lgrp=''
   case "$wid" in wid:*)
-    RCNT=$((RCNT + 1)); rnode=${hnd%!}
+    RCNT=$((RCNT + 1)); rnode=${hnd%[!~]}
     case "$hnd" in *!) rlost=1
       _t=${RN_IDX#* "$rnode"=}; _t=${_t%% *}
       case "$_t" in ''|*[!0-9]*) lgrp=$LGRP_BASE ;; *) lgrp=$((LGRP_BASE + _t)) ;; esac ;;
@@ -1112,9 +1121,10 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
       esac
     fi
     # field 9 (issue #1475): the machine of a row on another machine — `m4`,
-    # `m4!` when lost — empty for a local row. The view never draws it (a local
-    # row and a remote row LOOK the same; the machine is the row menu's title):
-    # `!` dims the row, that is all the paint reads.
+    # `m4!` when lost, `m5~` when heard over the shell's own connection (#1488)
+    # — empty for a local row. The view never draws it (a local row and a remote
+    # row LOOK the same; the machine is the row menu's title): `!` dims the row,
+    # `~` puts a dim ⇄ at its end, that is all the paint reads.
     buf+="$rgrp	$pinned	$gpath	$wid$US$state$US$gl$US$label$US${treed:- }$US$kidd$US$depth$US$ndet$US${rnode:+$hnd}"$'\n'
     continue
   fi
