@@ -39,7 +39,17 @@
 #                    dropped, -tt → RequestTTY=force); a `-S … -O check` call is
 #                    plain ssh; a host that is THIS computer runs the command here
 #   I. select      — fleet-remote-view.sh `select` on a node: the worker's window
-#                    becomes current in its fleet session; an unknown worker → 3
+#                    becomes current in its fleet session; an unknown worker → 3;
+#                    `sessions` on the node answers its worker rows hub-shaped
+#                    (worker_id = <fleet UUID>/<key>, the fleet's repo, this host)
+#   J. node source — (issue #1488) hub_ok aged and the hub failing: the loop asks
+#                    each machine the shell holds a live connection to for its
+#                    sessions over that connection; m5 answers → its rows are the
+#                    node's, via=node, never `!` (a dim ⇄ for the view: `m5~`); m4
+#                    does not → its last hub rows stand, via=hub, 失联; hub_ok is
+#                    untouched, the ETag dropped; the hub's next answer takes the
+#                    cache back (via=hub everywhere). A NODE (no client knob) never
+#                    asks anyone.
 # tmux / python3 absent → SKIP (exit 0). Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -130,6 +140,8 @@ case "\$*" in
 import time; time.sleep(600)' "\$ctl" & echo \$! > "$WORK/master.pid"; wait ;;
   *" select "*) exit 0 ;;
   *" watch "*) sleep 600 ;;
+  *" sessions") # leg J: the machine answers for itself when a node-<host>.json is staged
+    [ -f "$WORK/node-\$host.json" ] && { cat "$WORK/node-\$host.json"; exit 0; }; exit 255 ;;
 esac
 exit 0
 EOF
@@ -348,6 +360,83 @@ has 'G: the bar says 入口 失联' "$b" '入口 #[fg=#f7768e]○ 失联'
 printf '%s\n' "$(date +%s)" > "$G/hub_ok"
 
 # ================================================================================
+# J. node source (issue #1488) — the hub silent: the rows of a machine the shell is
+#    connected to come over that connection; the others keep their last rows
+# ================================================================================
+old=$(( $(date +%s) - 400 )); printf '%s\n' "$old" > "$G/hub_ok"
+printf 'etag-of-the-last-hub-body\n' > "$G/hubsess.etag"
+# what m5 says of itself (fleet-remote-view.sh sessions): a different login name
+# (the node's), one row the hub knew — now needs/ask — one it never had, and the
+# scratch row gone; m4 has no staged answer, so its connection "fails"
+cat > "$WORK/node-m5.json" <<'EOF'
+{"sessions": [
+  {"worker_id": "11111111-1111-4111-8111-111111111111/issue-7", "machine_name": "macmini", "os_user": "verkyyi-on-the-node",
+   "availability": "online", "observed_at": "2026-10-04T10:30:00Z",
+   "worker": {"issue": 7, "repo": "acme/app", "state": "needs", "agent": "claude", "name": "issue-7", "needs": "ask"}},
+  {"worker_id": "11111111-1111-4111-8111-111111111111/issue-12", "machine_name": "macmini", "os_user": "verkyyi-on-the-node",
+   "availability": "online", "observed_at": "2026-10-04T10:30:00Z",
+   "worker": {"issue": 12, "repo": "acme/app", "state": "working", "agent": "claude", "name": "issue-12", "needs": ""}}
+ ],
+ "nodes": [{"machine_name": "macmini", "availability": "online", "sessions": 2, "observed_at": "2026-10-04T10:30:00Z"}]}
+EOF
+: > "$WORK/ssh.log"
+# the loop as the keeper runs it: the server's environment (aliases from the pick)
+( export TMPDIR="$WORK/cache/tmp" FLEET_HUB_SESSIONS_CLIENT="$SESS" CCQUOTA_FLEET=1 FLEET_HUB_SESSIONS_CMD=false FLEET_NODE_ALIASES='macmini=m5 mini2=m4'
+  bash "$WORK/cache/bin/fleet-hub-sessions.sh" --refresh 2>"$WORK/node.err" ); rc=$?
+eq 'J: the refresh stood on the node rows (exit 0)' 0 "$rc"
+has 'J: m5 was asked for its sessions over its connection' "$(cat "$WORK/ssh.log")" "m5	bash $BIN/fleet-remote-view.sh sessions"
+has 'J: m4 was asked too (its connection is live)' "$(cat "$WORK/ssh.log")" "m4	bash $BIN/fleet-remote-view.sh sessions"
+hasnt 'J: nothing was asked to attach or select' "$(cat "$WORK/ssh.log")" 'attach'
+cache=$(tr '\037' '|' < "$G/remote_$SESS")
+has 'J: an m5 row the hub never had, via=node' "$cache" 'wid:11111111-1111-4111-8111-111111111111/issue-12|m5|online|12|acme/app|working|claude|issue-12|||0||node'
+has 'J: the m5 row the hub knew is REFRESHED from the node (needs/ask now), via=node' "$cache" 'wid:11111111-1111-4111-8111-111111111111/issue-7|m5|online|7|acme/app|needs|claude|issue-7||ask|0||node'
+hasnt 'J: the m5 scratch row the node no longer has is gone' "$cache" 'scratch-3'
+has 'J: the m4 row is KEPT from the last hub answer, via=hub' "$cache" 'wid:22222222-2222-4222-8222-222222222222/issue-9|m4|online|9|acme/app|needs|claude|issue-9||ask|0||hub'
+nodeline() { printf '%s\n' "$cache" | awk -F'|' -v n="$2" '$1 == "#node" && $2 == n { print $3, $4, $6; exit }'; }
+eq 'J: the m5 #node line is the node'"'"'s: online, its count, via=node' 'online 2 node' "$(nodeline "$cache" m5)"
+eq 'J: the m4 #node line is kept: online as the hub last said, via=hub' 'online 1 hub' "$(nodeline "$cache" m4)"
+eq 'J: every #node line precedes every row' '' "$(printf '%s\n' "$cache" | awk -F'|' 'seen && $1 == "#node" { print NR } $1 ~ /^wid:/ { seen = 1 }')"
+eq 'J: hub_ok is NOT touched (the hub IS silent)' "$old" "$(cat "$G/hub_ok")"
+CHECKS=$((CHECKS + 1)); [ -e "$G/hubsess.etag" ] && fail 'J: the ETag must be dropped so the hub'"'"'s next answer is a full body'
+has 'J: the loop said which machine answered' "$(cat "$WORK/node.err")" 'm5'
+has 'J: …and which did not' "$(cat "$WORK/node.err")" 'm4 did not answer'
+# the producer: m5's rows are live (never `!`) and marked `~`; m4's read 失联
+rows=$( cd "$WORK/cache/bin" && TMUX="$(ts display-message -p '#{socket_path}'),0,0" FLEET_SHELL=1 FLEET_SESSION="$SESS" FLEET_SIDEBAR_CURRENT="$w2" \
+        FLEET_SIDEBAR_SOURCE=hub CCQUOTA_FLEET=1 TMPDIR="$WORK/cache/tmp" FLEET_HUB_SESSIONS_CLIENT="$SESS" \
+        bash "$WORK/cache/bin/tmux-dashboard-rows.sh" --sidebar 2>/dev/null | tr '\037' '|' )
+has 'J: the producer lists the node row' "$rows" 'issue-12'
+has 'J: …marked as heard over the connection (m5~)' "$rows" '|m5~'
+hasnt 'J: …never lost' "$rows" 'm5!'
+has 'J: the m4 row still reads lost' "$rows" 'm4!'
+# the view: a `~` row ends in a dim ⇄ and asks two more cells for it
+CHECKS=$((CHECKS + 1)); ( cd "$WORK/cache/bin" && python3 - <<'PY'
+import importlib.util
+spec = importlib.util.spec_from_file_location("sb", "fleet-sidebar.py"); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+plain = m.row_fields("\x1f".join(("wid:x/issue-12", "working", "●", "issue-12", " ", "", "0", "", "m5")))
+via = m.row_fields("\x1f".join(("wid:x/issue-12", "working", "●", "issue-12", " ", "", "0", "", "m5~")))
+assert m.row_need(via) == m.row_need(plain) + 2, (m.row_need(via), m.row_need(plain))
+PY
+) || fail 'J: row_need gives a ~ row the ⇄ cell'
+# the hub answers again: its rows take the cache back, via=hub everywhere
+( export TMPDIR="$WORK/cache/tmp" FLEET_HUB_SESSIONS_CLIENT="$SESS" CCQUOTA_FLEET=1 FLEET_NODE_ALIASES='macmini=m5 mini2=m4'
+  bash "$WORK/cache/bin/fleet-hub-sessions.sh" --refresh >/dev/null 2>&1 )
+cache=$(tr '\037' '|' < "$G/remote_$SESS")
+has 'J: back on the hub: the m5 row is the hub'"'"'s again, via=hub' "$cache" 'wid:11111111-1111-4111-8111-111111111111/issue-7|m5|online|7|acme/app|working|claude|issue-7|||0||hub'
+hasnt 'J: back on the hub: no via=node line remains' "$cache" '|node'
+has 'J: back on the hub: the scratch row is back' "$cache" 'scratch-3'
+hasnt 'J: back on the hub: the node-only row is gone' "$cache" 'issue-12'
+CHECKS=$((CHECKS + 1)); [ "$(cat "$G/hub_ok")" -gt "$old" ] || fail 'J: the answer rewrote hub_ok'
+# degenerate: a NODE's loop (no client knob) asks no machine over ssh when the hub
+# is silent — its cache stands as before, nothing else happens
+: > "$WORK/ssh.log"
+( export TMPDIR="$WORK/degen" FLEET_CONF_DIR="$WORK/degen-conf"; printf '%s\n' "$old" > "$WORK/degen/.claude-dash/global/hub_ok"
+  CCQUOTA_FLEET=1 FLEET_HUB_SESSIONS_CMD=false bash "$SB/fleet-hub-sessions.sh" --refresh >/dev/null 2>&1 ); rc=$?
+eq 'J: a node with the hub silent → exit 1, as before' 1 "$rc"
+eq 'J: …asks no machine over ssh' '' "$(cat "$WORK/ssh.log")"
+CHECKS=$((CHECKS + 1)); [ -s "$WORK/degen/.claude-dash/global/remote_plainfleet" ] || fail 'J: …its cache stands'
+hasnt 'J: …and carries no via=node line' "$(tr '\037' '|' < "$WORK/degen/.claude-dash/global/remote_plainfleet")" '|node'
+
+# ================================================================================
 # H. ssh mode
 # ================================================================================
 : > "$WORK/connect.argv"
@@ -401,6 +490,16 @@ eq 'I: the current window is unchanged' 'issue-8' "$(tn display-message -p -t "=
 out=$( export TMPDIR="$WORK/node-tmp"; unset TMUX TMUX_PANE; CCQUOTA_FLEET=1 FLEET_REMOTE_TEST_NOATTACH=1 bash -c '
   . "$1/fleet-lib.sh"; fleet_sockets | head -1' _ "$SB" )
 eq 'I: fleet_sockets names the node session (what attach - picks)' "$NODE" "$out"
+# sessions (issue #1488): what the node says of itself over the shell's connection
+out=$( export TMPDIR="$WORK/node-tmp"; unset TMUX TMUX_PANE; CCQUOTA_FLEET=1 bash "$SB/fleet-remote-view.sh" sessions 2>"$WORK/sessions.err" ); rc=$?
+eq 'I: sessions exits 0' 0 "$rc"
+has 'I: sessions names a worker by worker_id (<fleet UUID>/<key>)' "$out" "\"worker_id\": \"$U/issue-7\""
+has 'I: …and the other' "$out" "\"worker_id\": \"$U/issue-8\""
+hasnt 'I: the hub window (no key) is not a session' "$out" '"hub"'
+has 'I: machine_name is this host' "$out" "\"machine_name\": \"$(hostname -s | cut -d. -f1)\""
+has 'I: the fleet'"'"'s repo fills a one-repo window'"'"'s repo' "$out" '"repo": "acme/app"'
+has 'I: the fleet is named' "$out" "\"fleet_name\": \"$NODE\""
+eq 'I: nodes lists this machine once, with its count' '1 2' "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(len(d["nodes"]), d["nodes"][0]["sessions"])')"
 
 printf 'fleet-shell selftest: %d checks, %d failures\n' "$CHECKS" "$FAIL"
 [ "$FAIL" = 0 ] && echo "PASS fleet-shell-selftest" || echo "FAIL fleet-shell-selftest"

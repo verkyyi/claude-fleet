@@ -94,12 +94,12 @@
 # so `read` would collapse the empty fields). Header lines first:
 #   #ts<US><epoch>                                when this cache was written
 #   #me<US><label>                                this machine's label (#1475)
-#   #node<US><label><US>online|lost<US><n><US><last-seen epoch>   one per OTHER
+#   #node<US><label><US>online|lost<US><n><US><last-seen epoch><US>via   one per OTHER
 #       machine the hub shows you (#1475): the sidebar's status line — n is your
 #       sessions there, last-seen the hub's newest observation of it. From the
 #       hub's `nodes` list; derived from the sessions on a hub older than #1475.
 # then one row per session:
-#   wid:<worker_id>  node  online|lost  issue  repo  state  agent  name  origin  needs  local  wid
+#   wid:<worker_id>  node  online|lost  issue  repo  state  agent  name  origin  needs  local  wid  via
 # `origin` is already in the viewing fleet's terms: a parent in THIS fleet is its
 # bare key (`issue-1419`, exactly what a local @origin holds), a parent elsewhere is
 # its full worker_id; no @origin_wid ⇒ the issue's sub-issue parent (the collector's
@@ -109,7 +109,28 @@
 # machine's; `wid` is a local row's live tmux window id (`@12`; empty when no window
 # holds that worker right now), empty on another machine's row. Both are APPENDED,
 # so a reader of the ten older fields is unchanged — but a `read` that names `needs`
-# last must now name these two too, or they arrive glued to it.
+# last must now name these two too, or they arrive glued to it. `via` (#1488) is
+# appended after them, on the rows and the #node lines alike: `hub` — the hub's
+# answer — or `node` — the machine itself, over the shell's direct connection
+# while the hub is silent (below). A reader that dims rows for the hub's silence
+# spares a `node` line: that machine answered.
+#
+# THE HUB SILENT, IN THE SHELL (issue #1488, EPIC #1479 R3) — client mode only.
+# The shell has no fleet of its own, so when the hub goes quiet its list has
+# nothing to fall back on but the cache (#1483). It does hold connections, though:
+# every proxy window's pane is a ControlMaster ssh into a machine (`@remote_ctl`,
+# fleet-remote-view.sh `run`). Once hub_ok is older than FLEET_HUB_SESSIONS_STALE
+# (the rows read 失联), each round that the hub fails asks every machine whose
+# connection answers `-O check` for its own sessions over it —
+# `fleet-remote-view.sh sessions`, the hub's fleet_sessions shape — merges the
+# answers into one document and feeds it through the SAME mapping as the hub's
+# (map_write), marked via=node; the machines that did not answer keep their last
+# lines, via=hub, so they read 失联 as before. hub_ok is NOT touched — the hub IS
+# silent and the bar keeps saying so — and the ETag is dropped, so the hub's next
+# answer is a full body that takes the cache back; nothing to switch. A node (no
+# FLEET_HUB_SESSIONS_CLIENT) never does this: its own rows come from its own tmux
+# (#1483) and it holds no connection to anyone. FLEET_HUB_NODE_TIMEOUT (8s) bounds
+# each ask.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
@@ -342,22 +363,42 @@ EOF
     restamp "$lf"; rm -f "$json" "$lf" "$mf"; return 0
   fi
   if [ "$rc" != 0 ] || [ ! -s "$json" ]; then
-    rm -f "$json" "$lf" "$mf"
     # one line, with how long the hub has been silent (hub_ok is left as it was)
     ok=''; { read -r ok _c < "$G/hub_ok"; } 2>/dev/null || ok=''
     case "$ok" in
       ''|*[!0-9]*) printf 'fleet-hub-sessions: hub unreachable — keeping the last cache (its rows read 失联 once hub_ok is older than %ss)\n' "${FLEET_HUB_SESSIONS_STALE:-60}" >&2 ;;
       *) printf 'fleet-hub-sessions: hub unreachable for %ss — keeping the last cache (its rows read 失联 past %ss; the next answer flips them back)\n' "$(( $(date +%s) - ok ))" "${FLEET_HUB_SESSIONS_STALE:-60}" >&2 ;;
     esac
-    return 1
+    # the shell (#1488): past the stale bound, every machine it is connected to
+    # answers for itself over that connection — client mode only
+    rc=1
+    if [ -n "$CLIENT" ] && hub_lost_now; then node_refresh "$json" "$lf" "$mf" && rc=0; fi
+    rm -f "$json" "$lf" "$mf"
+    return "$rc"
   fi
   now=$(date +%s)
+  map_write "$json" "$lf" "$mf" "$now" hub "${FLEET_HUB_SESSIONS_USER:-$(id -un 2>/dev/null)}"; rc=$?
+  rm -f "$json" "$lf" "$mf"
+  # A cache that failed to write is not vouched for: the next fetch takes the body.
+  # One that stood is the hub answering: hub_ok (#1483).
+  if [ "$rc" = 0 ]; then hub_ok "$now"; else rm -f "$ETAGF"; fi
+  return "$rc"
+}
+
+# map_write <json> <local-fleets> <window-map> <now> <via> <user> — the ONE mapping
+# from a fleet_sessions document to the caches: the hub's answer (via=hub), and in
+# client mode with the hub silent the machines' own answers over the shell's
+# connections (via=node, #1488 — then <user> is `*`: a login you are ssh'd into is
+# yours, and the lines of the machines that did not answer are carried over from
+# the cache on disk, via=hub, so they read 失联 as before).
+map_write() {
+  local json="$1" lf="$2" mf="$3" now="$4" via="$5" user="$6"
   python3 - "$json" "$lf" "$G" "$FLEET_C" "$FLEET_CONF_DIR/control/hub-workers.tsv" \
-    "${FLEET_HUB_SESSIONS_USER:-$(id -un 2>/dev/null)}" "$(hostname 2>/dev/null)" \
-    "${FLEET_NODE_ALIASES:-}" "$now" "$mf" "$BIN" "$CLIENT" <<'PY'
+    "$user" "$(hostname 2>/dev/null)" \
+    "${FLEET_NODE_ALIASES:-}" "$now" "$mf" "$BIN" "$CLIENT" "$via" <<'PY'
 import json, os, re, sys, tempfile
 from datetime import datetime, timezone
-jpath, lpath, gdir, cdir, wpath, user, host, aliases, now, mpath, bindir, client = sys.argv[1:13]
+jpath, lpath, gdir, cdir, wpath, user, host, aliases, now, mpath, bindir, client, via = sys.argv[1:14]
 try:
     data = json.load(open(jpath, encoding="utf-8"))
     sessions = data["sessions"]
@@ -495,7 +536,7 @@ for r in rows:
 head = ["#ts\x1f%s\n" % now, "#me\x1f%s\n" % ("" if client else clean(label(host)))]
 for lb in sorted(nodes):
     n = nodes[lb]
-    head.append("\x1f".join(("#node", clean(lb), n["av"], str(n["n"]), str(n["seen"]))) + "\n")
+    head.append("\x1f".join(("#node", clean(lb), n["av"], str(n["n"]), str(n["seen"]), via)) + "\n")
 
 by_issue = {(r["repo"], str(r["issue"])): r["wid"] for r in rows if r["issue"]}
 parents = {}
@@ -532,15 +573,114 @@ for f in local:
                     origin = (slug(r["repo"]) + ":" if f["multi"] else "") + "issue-" + p
         out.append("\x1f".join(clean(v) for v in ("wid:" + r["wid"], r["node"], r["av"], r["issue"], r["repo"],
                                                r["state"], r["agent"], r["name"], origin, r["needs"],
-                                               "1" if r["local"] else "0", r["lwid"])) + "\n")
-    write(os.path.join(gdir, "remote_" + f["sess"]), "".join(out))
+                                               "1" if r["local"] else "0", r["lwid"], via)) + "\n")
+    path = os.path.join(gdir, "remote_" + f["sess"])
+    if via == "node":
+        # The machines that did not answer over a connection keep their last
+        # lines (#1488) — header lines before any row, as every reader expects —
+        # marked via=hub: not heard this round, so the hub's silence dims them.
+        fresh = set(nodes)
+        keep_nodes, keep_rows = [], []
+        try:
+            for line in open(path, encoding="utf-8"):
+                p = line.rstrip("\n").split("\x1f")
+                if p[0] == "#node" and len(p) >= 5 and p[1] and p[1] not in fresh:
+                    keep_nodes.append("\x1f".join(p[:5] + ["hub"]) + "\n")
+                elif p[0].startswith("wid:") and len(p) >= 12 and p[1] not in fresh:
+                    keep_rows.append("\x1f".join(p[:12] + ["hub"]) + "\n")
+        except OSError:
+            pass
+        out = out[:len(head)] + keep_nodes + out[len(head):] + keep_rows
+    write(path, "".join(out))
 PY
-  rc=$?
-  rm -f "$json" "$lf" "$mf"
-  # A cache that failed to write is not vouched for: the next fetch takes the body.
-  # One that stood is the hub answering: hub_ok (#1483).
-  if [ "$rc" = 0 ]; then hub_ok "$now"; else rm -f "$ETAGF"; fi
-  return "$rc"
+}
+
+# --- the hub silent: the rows over the shell's own connections (issue #1488) -------
+# hub_lost_now — 失联 by the ONE word (fleet-status-lib.sh, as the rows and the bar
+# read it): hub_ok older than FLEET_HUB_SESSIONS_STALE, or never written.
+hub_lost_now() {
+  # shellcheck disable=SC2034  # FLEET_STATUS_G is read by the lib sourced on the next line
+  FLEET_STATUS_G="$G"; . "$BIN/fleet-status-lib.sh"
+  fleet_status_hub_ok 0; fleet_status_hub_lost "$(date +%s)"
+}
+# node_ssh_host <label> — its ssh host (FLEET_REMOTE_SSH, as fleet-remote-view.sh)
+node_ssh_host() {
+  local h
+  h=$(printf '%s\n' ${FLEET_REMOTE_SSH:-} | awk -F= -v n="$1" '$1 == n { print $2; exit }')
+  printf '%s' "${h:-$1}"
+}
+# node_sources → `<label>\t<host>\t<ctl>` per machine the shell holds a LIVE
+# connection to: a proxy window's `@remote_ctl` whose master answers `-O check`
+# (fleet-shell.sh's ssh mode makes that a yes for a host that is this computer).
+node_sources() {
+  local remote ctl node host
+  tmux -L "$CLIENT" list-windows -t "=$CLIENT" -F "#{@remote}"$'\t'"#{@remote_ctl}" 2>/dev/null \
+  | while IFS=$'\t' read -r remote ctl; do
+      node=${remote%%:*}
+      case "$node" in ''|-|*[!A-Za-z0-9._-]*) continue ;; esac
+      [ -n "$ctl" ] && [ -S "$ctl" ] || continue
+      host=$(node_ssh_host "$node")
+      ${FLEET_REMOTE_SSH_CMD:-ssh} -S "$ctl" -O check "$host" >/dev/null 2>&1 || continue
+      printf '%s\t%s\t%s\n' "$node" "$host" "$ctl"
+    done
+  return 0
+}
+# node_refresh <json> <local-fleets> <window-map> → rc 0 = a cache written off the
+# connections (<json> is reused for the merged document). Each machine is asked
+# once, bounded by FLEET_HUB_NODE_TIMEOUT; one that fails keeps its last lines.
+node_refresh() {
+  local json="$1" lf="$2" mf="$3" src srcf asked now rc
+  src=$(node_sources); [ -n "$src" ] || return 1
+  # the sources go by file: the script itself is python's stdin (the heredoc)
+  srcf=$(mktemp "$G/hubsess.src.XXXXXX") || return 1
+  printf '%s\n' "$src" > "$srcf"
+  asked=$(python3 - "$json" "$srcf" "${FLEET_REMOTE_SSH_CMD:-ssh}" \
+            "${FLEET_REMOTE_BIN:-.claude/fleet/bin}" "${FLEET_HUB_NODE_TIMEOUT:-8}" <<'PY'
+import json, shlex, subprocess, sys
+from datetime import datetime, timezone
+out, srcpath, ssh, rbin, tmo = sys.argv[1:6]
+try:
+    tmo = float(tmo)
+except ValueError:
+    tmo = 8.0
+now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+sessions, nodes, asked = [], [], []
+for line in open(srcpath, encoding="utf-8"):
+    node, host, ctl = (line.rstrip("\n").split("\t") + ["", "", ""])[:3]
+    if not node or not ctl:
+        continue
+    try:
+        r = subprocess.run(shlex.split(ssh) + ["-S", ctl, host, "bash %s/fleet-remote-view.sh sessions" % rbin],
+                           stdin=subprocess.DEVNULL, capture_output=True, timeout=tmo)
+        d = json.loads(r.stdout.decode("utf-8", "replace"))
+        rows = d["sessions"]
+        assert isinstance(rows, list)
+    except Exception:
+        sys.stderr.write("fleet-hub-sessions: %s did not answer over its connection — its last rows stand\n" % node)
+        continue
+    n = 0
+    for s in rows:
+        if isinstance(s, dict) and s.get("worker_id"):
+            s["machine_name"] = node          # the shell's label for it, whatever it calls itself
+            sessions.append(s)
+            n += 1
+    nodes.append({"machine_name": node, "availability": "online", "sessions": n, "observed_at": now})
+    asked.append(node)
+if not asked:
+    sys.exit(1)
+with open(out, "w", encoding="utf-8") as f:
+    json.dump({"sessions": sessions, "nodes": nodes}, f)
+print(" ".join(asked))
+PY
+); rc=$?
+  rm -f "$srcf"
+  [ "$rc" = 0 ] && [ -s "$json" ] || return 1
+  now=$(date +%s)
+  map_write "$json" "$lf" "$mf" "$now" node '*' || return 1
+  # the hub's next answer must be a full body: the cache is no longer its last one
+  rm -f "$ETAGF"
+  printf 'fleet-hub-sessions: hub silent — the rows of %s come over the direct connection (via=node) until it answers\n' "$asked" >&2
+  return 0
 }
 
 # watched — is anyone looking? A client attached to any fleet session on this

@@ -505,7 +505,8 @@ def row_need(row):
         return 0 if name.startswith("──") else width_of(name) + 1
     need = width_of(row_left(" ", glyph, tree, name)) + 1
     right = row_right(badge)
-    return need + (width_of(right) + 1 if right else 0)
+    need += width_of(right) + 1 if right else 0
+    return need + (2 if len(row) > 8 and row[8].endswith("~") else 0)   # the ⇄ cell (#1488)
 
 
 def auto_width(rows, cols, base, top):
@@ -875,8 +876,10 @@ def row_fields(line):
     """One producer line as its ROW_FIELDS fields: a heading's line stops at its
     tree field (5), a session row's carries the badge / depth / detail and, last,
     its machine — empty for a local row, `m4` for a row on another machine, `m4!`
-    when that machine is lost (issue #1475). The view never DRAWS the machine
-    (the rows look alike); `!` dims the row, and the menu titles it."""
+    when that machine is lost (issue #1475), `m5~` when the row came over the
+    shell's own connection to it while the hub is silent (issue #1488). The view
+    never DRAWS the machine (the rows look alike); `!` dims the row, `~` ends it
+    in a dim ⇄, and the menu titles it."""
     parts = line.split(US, ROW_FIELDS - 1)
     return parts + [""] * (ROW_FIELDS - len(parts))
 
@@ -1125,8 +1128,18 @@ def ui(screen, session, worker, lock):
             # fixed cell between the state glyph and the name, so at 30 columns every
             # name starts in the same place instead of a child's text sitting two
             # columns right of its parent's.
-            text = row_text(marker, glyph, tree, label, badge, max(0, width - 1))
+            # A row heard over the shell's own connection while the hub is silent
+            # (`m5~`, issue #1488) gives up its last two cells to a dim ⇄ — the
+            # source mark the operator asked for; the badge keeps its place left of it.
+            w = max(0, width - 1)
+            via = node.endswith("~") and w > 2
+            text = row_text(marker, glyph, tree, label, badge, w - 2 if via else w)
             put(y, text, attr, fill=wid == current_row or (navigation and wid == selected))
+            if via:
+                try:
+                    screen.addstr(y, w - 1, "⇄", curses.A_DIM)
+                except curses.error:
+                    pass
         # The selected row's whole name takes the `?` row while the keyboard is
         # here and the list clipped it (issue #1328); its status words live in
         # the worker pane's header now (issue #1377), so `? 快捷键` stays put.
