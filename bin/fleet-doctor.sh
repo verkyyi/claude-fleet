@@ -1927,6 +1927,25 @@ if [ -f "$_hm" ] && command -v python3 >/dev/null 2>&1; then
   fi
 fi
 
+# --- global config keys: what the sync pins on every login (issue #1528) ---
+# ← in a Claude pane opens the agents view, and the only off switch is
+# leftArrowOpensAgents=false in Claude Code's GLOBAL config (~/.claude.json) — no
+# keybinding, no mod, and not settings.json reach it. The sync merges
+# hooks/global-config-keys.json there; this row checks it landed.
+# FLEET_KEEP_AGENTS_KEY=1 (env or fleet.settings) leaves it to the login.
+_kj="$(dirname "$0")/../hooks/global-config-keys.json"
+if [ -f "$_hm" ] && [ -f "$_kj" ] && command -v python3 >/dev/null 2>&1; then
+  _kcfg="${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"
+  _kkeep="${FLEET_KEEP_AGENTS_KEY:-$(_gconf_val FLEET_KEEP_AGENTS_KEY)}"
+  if [ "$_kkeep" = 1 ]; then _kout="$(python3 "$_hm" keys-check --keys "$_kj" --config "$_kcfg" --skip leftArrowOpensAgents 2>&1)"; _krc=$?
+  else _kout="$(python3 "$_hm" keys-check --keys "$_kj" --config "$_kcfg" 2>&1)"; _krc=$?; fi
+  if [ "$_krc" = 0 ]; then
+    pass setkeys "${_kout#ok }"
+  else
+    warn setkeys "$_kcfg off — $(printf '%s' "$_kout" | awk '{print $1, $2, $3, $4}' | paste -sd ';' - | sed 's/;/; /g') (fix: python3 $_hm keys; keep ← for agents with FLEET_KEEP_AGENTS_KEY=1)"
+  fi
+fi
+
 # --- auto-handoff nudge: does the Stop hook SEE the threshold? (issue #561) ---
 # FLEET_AUTO_HANDOFF_PCT=60 sat in the global fleet.conf for weeks while the Stop
 # hook (bin/set-claude-state.sh) read the knob from its ENVIRONMENT — which nothing

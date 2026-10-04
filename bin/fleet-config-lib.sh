@@ -227,6 +227,7 @@ fcfg_label_i18n() {
     FLEET_INSTALL_SYNC) printf '自动跟随 stable' ;;
     FLEET_INSTALL_SYNC_TIMEOUT) printf '安装同步 fetch 超时' ;;
     FLEET_INSTALL_FOLLOW_STUCK_SECS) printf '安装跟随卡住阈值' ;;
+    FLEET_KEEP_AGENTS_KEY) printf '保留 ← 打开 agents 界面' ;;
     FLEET_REAP_KEPT_PROCS) printf '清理保留 worktree 的孤儿进程' ;;
     FLEET_REAP_KEPT_MINAGE) printf '保留 worktree 清理最小年龄' ;;
     FLEET_SCRATCH_MAX_IDLE) printf '回收空闲 scratch' ;;

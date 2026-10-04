@@ -19,6 +19,14 @@
 #      the merge, exit 0 after; the backup is written and the file mode kept.
 #   6. THE SOURCE TABLE ITSELF HAS UNIQUE IDENTITIES — else "replace by identity"
 #      would be ambiguous.
+#   7. GLOBAL CONFIG KEYS (issue #1528) — `keys` sets
+#      hooks/global-config-keys.json's keys (leftArrowOpensAgents=false) in
+#      Claude Code's GLOBAL config (.claude.json — the only place that key is
+#      read) and nothing else: every other key survives, a second run is a no-op
+#      (no write), a user `true` is corrected, --skip (the FLEET_KEEP_AGENTS_KEY=1
+#      opt-out) leaves the key alone, an absent file is not created, a held
+#      `.claude.json.lock` (Claude Code's own save in flight) is never stolen —
+#      exit 2, nothing written — and keys-check is the doctor's eye.
 #
 # Hermetic: temp fixtures only; no tmux, no network, no writes to the repo.
 # Exit 0 = pass.
@@ -148,5 +156,53 @@ ok "user hooks: untouched, including one sharing a group with a fleet guard"
 m check --settings "$S2" >"$WORK/c3" || fail "check still unhappy after the merge" "$(cat "$WORK/c3")"
 grep -q '^ok ' "$WORK/c3" || fail "check did not print ok" "$(cat "$WORK/c3")"
 ok "after merge: check passes, mode 0600 kept"
+
+# --- 7. global config keys (issue #1528) ---
+KEYS="$ROOT/hooks/global-config-keys.json"
+[ -r "$KEYS" ] || fail "hooks/global-config-keys.json missing"
+python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("leftArrowOpensAgents") is False else 1)' "$KEYS" \
+  || fail "global-config-keys.json does not pin leftArrowOpensAgents=false" "$(cat "$KEYS")"
+k() { python3 "$MERGE" "$@" --keys "$KEYS"; }
+K="$WORK/claude.json"
+k keys --config "$K" >"$WORK/k-1" || fail "keys on an absent config failed" "$(cat "$WORK/k-1")"
+[ -e "$K" ] && fail "keys created a .claude.json Claude Code never wrote"
+k keys-check --config "$K" >/dev/null && fail "keys-check passed with no config at all"
+printf '{\n  "numStartups": 7,\n  "oauthAccount": {"emailAddress": "a@b"},\n  "projects": {"/x": {"hasTrustDialogAccepted": true}}\n}\n' > "$K"
+chmod 600 "$K"
+k keys-check --config "$K" >"$WORK/k0" && fail "keys-check passed with the key missing" "$(cat "$WORK/k0")"
+grep -q '^missing    leftArrowOpensAgents' "$WORK/k0" || fail "keys-check did not name the missing key" "$(cat "$WORK/k0")"
+mkdir "$K.lock"
+FLEET_KEYS_LOCK_WAIT=0.3 python3 "$MERGE" keys --keys "$KEYS" --config "$K" >"$WORK/kl" 2>&1 && fail "keys wrote through a held .claude.json.lock" "$(cat "$WORK/kl")"
+grep -q leftArrowOpensAgents "$K" && fail "keys changed the file while the lock was held"
+[ -d "$K.lock" ] || fail "keys removed someone else's lock"
+rmdir "$K.lock"
+ok "keys: an absent config is not created; a held lock is never stolen"
+k keys --config "$K" >"$WORK/k1" || fail "keys merge failed" "$(cat "$WORK/k1")"
+[ -e "$K.lock" ] && fail "keys left its lock behind"
+K="$K" python3 - <<'PY' || fail "keys merge touched another key or missed its own" "$(cat "$K")"
+import json, os, sys
+s = json.load(open(os.environ["K"]))
+sys.exit(0 if s == {"numStartups": 7, "oauthAccount": {"emailAddress": "a@b"},
+                    "projects": {"/x": {"hasTrustDialogAccepted": True}},
+                    "leftArrowOpensAgents": False} else 1)
+PY
+[ "$(python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' "$K")" = 600 ] \
+  || fail "keys loosened .claude.json's mode"
+ok "keys: sets leftArrowOpensAgents=false, every other key untouched, mode 0600 kept"
+cp "$K" "$WORK/k.before"
+k keys --config "$K" >"$WORK/k2" || fail "second keys merge failed"
+grep -q '^unchanged' "$WORK/k2" || fail "second keys merge was not a no-op" "$(cat "$WORK/k2")"
+cmp -s "$K" "$WORK/k.before" || fail "no-op keys merge rewrote the file"
+k keys-check --config "$K" >"$WORK/k3" || fail "keys-check unhappy after merge" "$(cat "$WORK/k3")"
+ok "keys: idempotent (no write) and keys-check passes"
+printf '{"leftArrowOpensAgents": true, "theme": "dark"}\n' > "$K"
+k keys --config "$K" --skip leftArrowOpensAgents >"$WORK/k4" || fail "keys --skip failed"
+grep -q '^unchanged' "$WORK/k4" || fail "keys --skip changed something" "$(cat "$WORK/k4")"
+k keys-check --config "$K" --skip leftArrowOpensAgents >/dev/null || fail "keys-check --skip still unhappy"
+k keys --config "$K" >"$WORK/k5" || fail "keys over a user true failed"
+grep -q '^set            leftArrowOpensAgents: true -> false' "$WORK/k5" || fail "keys did not report the correction" "$(cat "$WORK/k5")"
+python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); sys.exit(0 if s=={"leftArrowOpensAgents": False, "theme": "dark"} else 1)' "$K" \
+  || fail "keys over a user true: wrong result" "$(cat "$K")"
+ok "keys: --skip leaves the key to the login; without it a user true is corrected"
 
 printf 'PASS  fleet-hooks-merge-selftest (%d checks)\n' "$pass"
