@@ -59,7 +59,7 @@ die() { printf 'fleet-hub-node: %s\n' "$2" >&2; exit "$1"; }
 # Seams: FLEET_HUB_NODE_SUDO (default `sudo -n`; empty = none),
 # FLEET_HUB_NODE_DAEMON_DIR (default /Library/LaunchDaemons).
 node_env() {
-  local write=0 force=0 plist='' f mode gr ot sudo ddir me cand src got keys rc
+  local write=0 force=0 plist='' f mode gr ot sudo ddir me cand src got rc
   while [ $# -gt 0 ]; do
     case "$1" in
       --write) write=1 ;;

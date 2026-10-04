@@ -303,7 +303,7 @@ cat > "$WORK/fakebin/ccquota" <<CCQFAKE
 printf '%s\n' "\$*" >> "$WORK/ccq.log"; printf 'LOCAL m5\tchose m5\n'; exit 0
 CCQFAKE
 chmod +x "$WORK/fakebin/ccquota"
-FLEET_HUB_PLACE_CMD= CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" run_spawn 258
+FLEET_HUB_PLACE_CMD='' CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" run_spawn 258
 [ "$(rc)" = 0 ] && tmux_has 'new-window'         || fail "TOKEN-less default place still opens it here (rc=$(rc))" "$(cat "$WORK/spawn.err")"
 [ -e "$WORK/ccq.log" ]                           && fail "TOKEN-less: ccquota place must not be run without a token" "$(cat "$WORK/ccq.log")"
 err_has "no node token (CCQUOTA_TOKEN unset and $NODE_ENV missing)" || fail "TOKEN-less stderr names what is missing" "$(cat "$WORK/spawn.err")"
