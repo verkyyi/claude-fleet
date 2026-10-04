@@ -665,6 +665,14 @@ the logins assigned to them (claude-fleet#1411) and gets `NOT_FOUND` — the sam
 answer as for a fleet that does not exist — for anyone else's. The `/nodes` page
 shows the same "my sessions" table under the roster.
 
+`/sessions` (claude-fleet#1429) is that list laid out for a phone, read-only:
+sessions grouped by machine, the ones waiting for an answer or blocked first,
+and a machine whose node is lost marked 失联 with how long ago it last reported
+(its rows keep their last known state, never shown as idle). The page filters
+again by the signed-in person's ACTIVE accounts from `/v1/fleet/me`, so a
+server-side scope regression still cannot put a colleague's session on it.
+Each `fleet_sessions` row carries `observed_at` / `age_sec` for that.
+
 ### Start, message, stop, resume — the Fleet Hub writes (claude-fleet#1410)
 
 The rest of the Fleet Hub moves in on the same switch: `worker_start`,

@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/coder/websocket"
@@ -183,6 +184,13 @@ func TestFleetListFromHeartbeats(t *testing.T) {
 	ids := map[string]bool{}
 	for _, row := range s["sessions"].([]any) {
 		ids[row.(map[string]any)["worker_id"].(string)] = true
+		// 我的会话 says how old a lost machine's rows are (claude-fleet#1429).
+		if age, ok := row.(map[string]any)["age_sec"].(float64); !ok || age < 0 {
+			t.Errorf("session %v: want a non-negative age_sec", row)
+		}
+		if _, ok := row.(map[string]any)["observed_at"].(string); !ok {
+			t.Errorf("session %v: want observed_at", row)
+		}
 	}
 	for _, w := range []string{fa.FleetID + "/issue-1", fa.FleetID + "/issue-2", fb.FleetID + "/issue-7"} {
 		if !ids[w] {
@@ -584,3 +592,23 @@ esac
 func pyQuote(s string) string { b, _ := json.Marshal(s); return string(b) }
 
 func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+// 我的会话 (claude-fleet#1429) is its own page, served from the embedded UI,
+// and only when the fleet module is on.
+func TestFleetSessionsPage(t *testing.T) {
+	h := newFleetHarness(t)
+	h.srv.UI = fstest.MapFS{
+		"sessions.html": &fstest.MapFile{Data: []byte("<!doctype html><title>我的会话</title>")},
+		"index.html":    &fstest.MapFile{Data: []byte("<!doctype html><title>dashboard</title>")},
+	}
+	resp, body := h.get(t, "/sessions")
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "我的会话") {
+		t.Fatalf("GET /sessions = %d %q; want sessions.html", resp.StatusCode, body)
+	}
+
+	off := newHarness(t)
+	off.srv.UI = h.srv.UI
+	if _, body := off.get(t, "/sessions"); strings.Contains(string(body), "我的会话") {
+		t.Errorf("GET /sessions served the page with the fleet module off")
+	}
+}

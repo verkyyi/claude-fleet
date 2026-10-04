@@ -230,6 +230,8 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("/v1/node/move/bundle/", s.handleNodeMoveBundle)
 		mux.Handle("/v1/nodes", s.viewerOnly(http.HandlerFunc(s.handleNodes)))
 		mux.Handle("/nodes", s.viewerOnly(http.HandlerFunc(s.serveNodesPage)))
+		// 我的会话 (claude-fleet#1429): the phone view of fleet_sessions.
+		mux.Handle("/sessions", s.viewerOnly(http.HandlerFunc(s.serveSessionsPage)))
 		mux.Handle("/v1/fleet/me", s.viewerOnly(http.HandlerFunc(s.handleFleetMe)))
 		mux.Handle("/v1/fleet/accounts", s.viewerOnly(s.operatorOnly(http.HandlerFunc(s.handleFleetAccounts))))
 		// Per-person node caps (claude-fleet#1410), the operator's.

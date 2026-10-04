@@ -314,6 +314,10 @@ type FleetSession struct {
 	FleetName    string         `json:"fleet_name"`
 	Availability string         `json:"availability"`
 	Worker       map[string]any `json:"worker"`
+	// ObservedAt is when the hub last heard this fleet's window list, so a
+	// lost machine's rows can say how old they are (claude-fleet#1429).
+	ObservedAt time.Time `json:"observed_at"`
+	AgeSec     float64   `json:"age_sec"`
 }
 
 // nodeAvailability maps endpoint → online|lost from the roster.
@@ -399,7 +403,8 @@ func (s *Server) FleetSessions(req *http.Request) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	views, rows, err := s.visibleFleets(p, time.Now())
+	now := time.Now()
+	views, rows, err := s.visibleFleets(p, now)
 	if err != nil {
 		return nil, err
 	}
@@ -423,7 +428,8 @@ func (s *Server) FleetSessions(req *http.Request) (map[string]any, error) {
 				id = &v
 			}
 			out = append(out, FleetSession{WorkerID: id, MachineName: r.Hostname, OSUser: r.OSUser,
-				FleetID: r.FleetID, FleetName: r.Name, Availability: views[i].Availability, Worker: w})
+				FleetID: r.FleetID, FleetName: r.Name, Availability: views[i].Availability, Worker: w,
+				ObservedAt: r.ObservedAt, AgeSec: now.Sub(r.ObservedAt).Seconds()})
 		}
 	}
 	hosts := make([]string, 0, len(machines))
