@@ -309,7 +309,7 @@ eq "H: the status line counts this machine's rows the hub lists" "hdr|● m5 2 �
 eq "H: the sidebar's own window stays on its list before the hub has it" \
    "solo;EPIC;C1;侧边栏;孙;草稿;" "$(sorder "$(FLEET_SIDEBAR_SOURCE=hub FLEET_SIDEBAR_CURRENT=@3 side)")"
 eq "H: the hub list ignores the switch" "$golden_h" "$(FLEET_SIDEBAR_SOURCE=hub hub)"
-eq "H: hub off — \`hub\` is the no-cache output" "$base_s" "$(CCQUOTA_FLEET= FLEET_SIDEBAR_SOURCE=hub side)"
+eq "H: hub off — \`hub\` is the no-cache output" "$base_s" "$(CCQUOTA_FLEET='' FLEET_SIDEBAR_SOURCE=hub side)"
 mv "$G/remote_$S" "$WORK/remote.keep"
 eq "H: no cache — \`hub\` is the no-cache output" "$base_s" "$(FLEET_SIDEBAR_SOURCE=hub side)"
 mv "$WORK/remote.keep" "$G/remote_$S"
