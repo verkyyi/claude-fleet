@@ -127,7 +127,9 @@ if [ "${target#hdr:}" != "$target" ]; then
   exit 0
 fi
 
-command -v fleet_wid_target >/dev/null 2>&1 && target="$(fleet_wid_target "$target")"
+if command -v fleet_wid_target >/dev/null 2>&1; then
+  target="$(fleet_wid_target "$target")" && [ -n "$target" ] || exit 0   # unknown handle: nothing to fold
+fi
 
 # --- the window table: key → window_id · origin · expand ----------------------
 # ONE tmux read, same field set and same key derivation the renderer uses, so the

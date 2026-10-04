@@ -150,9 +150,16 @@ def parent_window():
     if not re.match(r"^([A-Za-z0-9._-]+:)?(issue|scratch)-[0-9]+$", parent or ""):
         raise ToolFault("this session has no live-addressable parent")
     session = current_session()
+    # The ONE resolver (fleet_win_for_key, issue #1537): rc 2 = the key is
+    # ambiguous (two windows, or a bare issue key in a 2+ repo fleet) — said on
+    # stderr; never a pick. A warm-pool window never answers.
     script = ". " + shquote(str(BIN / "fleet-lib.sh")) + "; fleet_win_for_key " + shquote(parent) + " " + shquote(session)
-    wid = run(["bash", "-lc", script], check=False).stdout.strip()
-    if not wid:
+    res = run(["bash", "-lc", script], check=False)
+    wid = res.stdout.strip()
+    if res.returncode == 2:
+        why = (res.stderr or "").strip().replace("\n", " ")
+        raise ToolFault("parent %s is ambiguous in this fleet — %s" % (parent, why or "several windows answer to it"))
+    if res.returncode != 0 or not wid:
         raise ToolFault("parent is not online in this fleet")
     return wid
 

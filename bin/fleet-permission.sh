@@ -71,7 +71,8 @@
 #   fleet-permission.sh [opts] --deny <target>      press No (gated)
 #   fleet-permission.sh [opts] --allow <target>     press the plain Yes (--by only)
 #
-#   <target>  @<window-id> / %<pane-id> / <sess>:<idx>  (the fleet-peer-send grammar)
+#   <target>  @<window-id> / %<pane-id>   (the fleet-peer-send grammar; a `<sess>:<idx>`
+#             position or a window NAME is refused — exit 2, issue #1537)
 #             wid:<worker_id> / wid:<key>  that worker, when it lives on this machine
 #   opts: -L <label>          tmux socket label (outside a fleet pane)
 #         --session <fleet>   fleet whose socket to use (default: the caller's)
@@ -165,6 +166,10 @@ case "$TARGET" in wid:*)
 esac
 
 # --- the pane must exist (a dead pane has nothing open) -----------------------
+# Only an address reaches it (issue #1537 ③): a `<sess>:<idx>` position is
+# renumbered under you and tmux prefix-matches a name — a Yes/No on a stranger's
+# prompt is the one thing this script must never do. The dash pins the @id first.
+case "$TARGET" in @*|%*) ;; *) echo "fleet-permission: '$TARGET' is a window position or name, not an address — use @<window-id>, %<pane-id> or wid:<worker_id>" >&2; exit 2 ;; esac
 PANE=$(TM display-message -p -t "$TARGET" '#{pane_id}' 2>/dev/null)
 [ -n "$PANE" ] || { echo "fleet-permission: no live pane for '$TARGET'" >&2; exit 1; }
 if [ "$(TM display-message -p -t "$PANE" '#{@cc_agent}')" = codex ]; then

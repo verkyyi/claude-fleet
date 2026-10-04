@@ -97,7 +97,7 @@ ok "2 ROOT set: issue + scratch under ROOT (created on first use), basenames kep
 
 # --- 3. RECOGNISED: seat + scratch key read ROOT worktrees --------------------
 tmux() { printf '7|%s\n' "$ROOT/repo-issue-7"; }     # the pane's @issue|@worktree
-seat="$(cd "$ROOT/repo-issue-7" && fleet_seat)"
+seat="$(cd "$ROOT/repo-issue-7" && TMUX_PANE='%0' fleet_seat)"   # a pane has a TMUX_PANE (#1537)
 [ "$seat" = worker ] || fail "3 fleet_seat in a ROOT worktree = '$seat', want worker"
 unset -f tmux
 key="$(fleet_scratch_key "$ROOT/repo-scratch-2")"

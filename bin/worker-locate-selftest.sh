@@ -22,6 +22,18 @@
 #      origin, nothing for a non-key origin or a machine with no fleet UUID; the
 #      spawn sites (dash-issue-session.sh, dash-raw-session.sh,
 #      dash-restore-session.sh, fleet-await.sh) call it.
+#   F  ONE resolver (issue #1537, EPIC #1529 E8) — fleet_win_for_key is the only
+#      way a key becomes a window, and it refuses rather than guesses: a warm-pool
+#      window (`@pool`, or parked in `<sess>-pool`) never answers, so a closed
+#      scratch whose number the pool re-used is NOTFOUND for peer-send and
+#      report-parent alike; a stamped @worktree is never second-guessed by the pane
+#      cwd; two windows for one key → rc 2 AMBIGUOUS; a bare issue key in a 2+ repo
+#      fleet → rc 2, and fleet-await --repo B waits on B's #N, never A's; a
+#      `<sess>:<idx>` position and a window NAME are refused by fleet-peer-send.sh,
+#      fleet-answer.sh, fleet-permission.sh and fleet_worker_locate (exit 2); inside
+#      tmux with no TMUX_PANE fleet-comment.sh refuses before any gh call, and the
+#      five pane-identity reads go through fleet_pane_fmt; an unstamped @wid handle
+#      is refused by fleet_wid_target and every caller checks its rc.
 # tmux / python3 absent → SKIP. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -73,7 +85,7 @@ loc "wid:$U/issue-7" "$L";  ok; [ "$out" = "local $w7 $L" ] || fail "B: own wid 
 loc "$U/issue-7" "$L";      ok; [ "$out" = "local $w7 $L" ] || fail "B: own wid without wid: → local" "$out"
 loc "wid:issue-7" "$L";     ok; [ "$out" = "local $w7 $L" ] || fail "B: bare key → local" "$out"
 loc "wid:$U/scratch-3" "$L"; ok; [ "$out" = "local $w3 $L" ] || fail "B: scratch wid → local" "$out"
-loc "$L:issue-7" "$L";      ok; [ "$out" = "local $w7 $L" ] || fail "B: a window target → local" "$out"
+loc "$L:issue-7" "$L";      ok; [ "$out" = unknown ] && [ "$rc" = 2 ] || fail "B: a <sess>:<name> target is refused (issue #1537)" "$out rc=$rc"
 loc "wid:$U/issue-8" "$L";  ok; [ "$out" = unknown ] && [ "$rc" = 0 ] || fail "B: own fleet, not live → unknown" "$out rc=$rc"
 loc "wid:$F/issue-7" "$L";  ok; [ "$out" = unknown ] || fail "B: a foreign wid must NOT resolve to the local issue-7" "$out"
 loc "wid:junk" "$L";        ok; [ "$out" = unknown ] && [ "$rc" = 2 ] || fail "B: malformed → unknown rc 2" "$out rc=$rc"
@@ -160,6 +172,106 @@ lib fleet_stamp_origin_wid "$L" "$w3" autofill "$L"
 ok; [ -z "$(tf show-options -wqv -t "$w3" @origin_wid)" ] || fail "E: a non-key origin stamps nothing"
 for f in dash-issue-session.sh dash-raw-session.sh dash-restore-session.sh fleet-await.sh; do
   ok; grep -q 'fleet_stamp_origin_wid ' "$BIN/$f" || fail "E: $f must stamp @origin_wid beside @origin"
+done
+
+# --- F: ONE resolver (issue #1537) ---------------------------------------------------------
+unset CCQUOTA_FLEET FLEET_HUB_STATUS_CMD
+wfk() { out=$(lib fleet_win_for_key "$@" 2>"$WORK/err"); rc=$?; err=$(cat "$WORK/err"); }
+mkdir -p "$WORK/app-scratch-3" "$WORK/app-scratch-8"
+
+# F1 the warm pool: scratch-3 closes; the pool re-uses its number (fleet_scratch_free)
+tf kill-window -t "$w3"
+tf new-session -d -s "$L-pool" -n warm-3 -c "$WORK/app-scratch-3" 'while :; do sleep 300; done'
+wp=$(tf list-windows -t "$L-pool" -F '#{window_id}' | head -1)
+tf set-window-option -t "$wp" @pool 1; tf set-window-option -t "$wp" @raw 1
+tf set-window-option -t "$wp" @worktree "$WORK/app-scratch-3"
+wfk scratch-3 "$L"; ok; [ "$rc" = 1 ] && [ -z "$out" ] || fail "F1: a @pool window must not answer to scratch-3" "rc=$rc out=$out"
+tf set-window-option -u -t "$wp" @pool          # mid-claim: @pool already cleared, still parked in the pool session
+wfk scratch-3 "$L"; ok; [ "$rc" = 1 ] && [ -z "$out" ] || fail "F1: a window parked in <sess>-pool must not answer" "rc=$rc out=$out"
+run bash "$BIN/fleet-peer-send.sh" -L "$L" scratch-3 hi
+ok; [ "$rc" = 1 ] && case "$err" in *"no live window for 'scratch-3'"*) true ;; *) false ;; esac \
+  || fail "F1: peer-send scratch-3 → refused, never the pool window" "rc=$rc $err"
+run bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$wc" --origin scratch-3 --state blocked --summary x --dry-run
+ok; case "$out$err" in *"$wp"*) fail "F1: report-parent must not address the pool window" "$out $err" ;;
+                        *"has no window"*) true ;; *) fail "F1: report-parent scratch-3 → no window" "$out $err" ;; esac
+tf kill-session -t "$L-pool"
+w3=$(tf new-window -d -P -F '#{window_id}' -n sc 'while :; do sleep 300; done')
+tf set-window-option -t "$w3" @raw 1; tf set-window-option -t "$w3" @worktree "$WORK/app-scratch-3"
+wfk scratch-3 "$L"; ok; [ "$out" = "$w3" ] || fail "F1: the live scratch-3 answers again" "$out / $err"
+
+# F2 a stamped @worktree is the identity; the pane cwd is never a second chance
+w8=$(tf new-window -d -P -F '#{window_id}' -n sc8 -c "$WORK/app-scratch-3" 'while :; do sleep 300; done')
+tf set-window-option -t "$w8" @worktree "$WORK/app-scratch-8"
+wfk scratch-3 "$L"; ok; [ "$out" = "$w3" ] || fail "F2: a window stamped scratch-8 must not answer to scratch-3 by its cwd" "$out / $err"
+wfk scratch-8 "$L"; ok; [ "$out" = "$w8" ] || fail "F2: it answers to its stamp" "$out / $err"
+tf kill-window -t "$w8"
+
+# F3 two windows for one key: AMBIGUOUS, named, nothing picked
+w7x=$(tf new-window -d -P -F '#{window_id}' -n issue-7-dup 'while :; do sleep 300; done'); tf set-window-option -t "$w7x" @issue 7
+wfk issue-7 "$L"; ok; [ "$rc" = 2 ] && [ -z "$out" ] && case "$err" in *ambiguous*issue-7*issue-7-dup*) true ;; *) false ;; esac \
+  || fail "F3: two windows for issue-7 → rc 2, nothing on stdout, both named on stderr" "rc=$rc out=$out err=$err"
+run bash "$BIN/fleet-peer-send.sh" -L "$L" issue:7 hi
+ok; [ "$rc" = 1 ] && case "$err" in *ambiguous*) true ;; *) false ;; esac || fail "F3: peer-send refuses an ambiguous key" "rc=$rc $err"
+tf kill-window -t "$w7x"
+
+# F4 a 2+ repo fleet: a bare issue key is refused; the repo-qualified one resolves;
+#    fleet-await --repo B waits on B's #7, never A's
+mkdir -p "$FLEET_CONF_DIR/fleets/$L/repos"
+printf 'FLEET_REPO=acme/app\n' > "$FLEET_CONF_DIR/fleets/$L/repos/acme-app.conf"
+printf 'FLEET_REPO=acme/lib\n' > "$FLEET_CONF_DIR/fleets/$L/repos/acme-lib.conf"
+tf set-window-option -t "$w7" @repo acme/app
+w7b=$(tf new-window -d -P -F '#{window_id}' -n lib-7 'while :; do sleep 300; done')
+tf set-window-option -t "$w7b" @issue 7; tf set-window-option -t "$w7b" @repo acme/lib
+wfk issue-7 "$L"; ok; [ "$rc" = 2 ] && [ -z "$out" ] && case "$err" in *ambiguous*) true ;; *) false ;; esac \
+  || fail "F4: a bare issue key in a 2+ repo fleet → rc 2" "rc=$rc out=$out err=$err"
+wfk acme-lib:issue-7 "$L"; ok; [ "$out" = "$w7b" ] || fail "F4: the qualified key → that repo's window" "$out / $err"
+wfk scratch-3 "$L"; ok; [ "$out" = "$w3" ] || fail "F4: a scratch key needs no repo (its number is fleet-wide)" "$out / $err"
+run bash "$BIN/fleet-peer-send.sh" -L "$L" issue:7 hi
+ok; [ "$rc" = 1 ] && case "$err" in *ambiguous*--repo*) true ;; *) false ;; esac || fail "F4: peer-send issue:7 without --repo → refused, says --repo" "rc=$rc $err"
+run bash "$BIN/fleet-await.sh" 7 -L "$L" --parent scratch-3 --repo acme/lib --no-spawn --timeout 2 --interval 1
+ok; case "$err" in *"#7 is live ($w7b)"*) true ;; *) false ;; esac || fail "F4: fleet-await --repo acme/lib waits on B's #7, never A's" "rc=$rc out=$out err=$err"
+ok; [ "$(tf show-options -wqv -t "$w7b" @origin)" = scratch-3 ] && [ -z "$(tf show-options -wqv -t "$w7" @origin)" ] \
+  || fail "F4: fleet-await adopted B's #7 only" "A=[$(tf show-options -wqv -t "$w7" @origin)] B=[$(tf show-options -wqv -t "$w7b" @origin)]"
+run bash "$BIN/fleet-await.sh" 7 -L "$L" --parent scratch-3 --no-spawn --timeout 2 --interval 1
+ok; [ "$rc" = 2 ] && case "$err" in *"--repo"*) true ;; *) false ;; esac || fail "F4: fleet-await without --repo in a 2+ repo fleet → usage refusal" "rc=$rc $err"
+tf kill-window -t "$w7b"; rm -rf "$FLEET_CONF_DIR/fleets/$L/repos"; tf set-window-option -u -t "$w7" @repo
+
+# F5 a position (<sess>:<idx>, <sess>:<name>) and a window NAME are not addresses
+run bash "$BIN/fleet-peer-send.sh" -L "$L" "$L:1" hi
+ok; [ "$rc" = 2 ] && [ -z "$out" ] || fail "F5: peer-send <sess>:<idx> → exit 2, nothing sent" "rc=$rc out=$out err=$err"
+run bash "$BIN/fleet-peer-send.sh" -L "$L" "$L:issue-7" hi;  ok; [ "$rc" = 2 ] || fail "F5: peer-send <sess>:<name> → exit 2" "rc=$rc $err"
+run bash "$BIN/fleet-peer-send.sh" -L "$L" plan hi;          ok; [ "$rc" = 2 ] || fail "F5: peer-send a window NAME → exit 2" "rc=$rc $err"
+run bash "$BIN/fleet-answer.sh" -L "$L" --show "$L:1";        ok; [ "$rc" = 2 ] || fail "F5: fleet-answer <sess>:<idx> → exit 2" "rc=$rc $err"
+run bash "$BIN/fleet-answer.sh" -L "$L" --show plan;          ok; [ "$rc" = 2 ] || fail "F5: fleet-answer a window NAME → exit 2" "rc=$rc $err"
+run bash "$BIN/fleet-permission.sh" -L "$L" --show "$L:1";    ok; [ "$rc" = 2 ] || fail "F5: fleet-permission <sess>:<idx> → exit 2" "rc=$rc $err"
+loc "$L:1" "$L";    ok; [ "$out" = unknown ] && [ "$rc" = 2 ] || fail "F5: fleet_worker_locate <sess>:<idx> → unknown rc 2" "$out rc=$rc"
+ok; grep -q "display-message -p -t \"\$target\" '#{window_id}'" "$BIN/dash-answer.sh" \
+  || fail "F5: dash-answer.sh must pin its <sess>:<idx> row to the window id before calling fleet-answer"
+
+# F6 the caller's own pane or nothing: inside tmux with no TMUX_PANE, fleet-comment
+#    refuses before any gh call; a daemon (no \$TMUX) posts as before
+SB="$WORK/sbin"; mkdir -p "$SB"
+printf '#!/bin/sh\ntouch "%s/gh-called"; exit 0\n' "$WORK" > "$SB/gh"; chmod +x "$SB/gh"
+sp=$(tf display-message -p '#{socket_path}')
+out=$(PATH="$SB:$PATH" TMUX="$sp,1,0" env -u TMUX_PANE bash "$BIN/fleet-comment.sh" 7 --repo acme/app --body hi 2>"$WORK/err"); rc=$?; err=$(cat "$WORK/err")
+ok; [ "$rc" = 2 ] && case "$err" in *TMUX_PANE*) true ;; *) false ;; esac || fail "F6: fleet-comment inside tmux with no TMUX_PANE → exit 2" "rc=$rc $err"
+ok; [ ! -e "$WORK/gh-called" ] || fail "F6: nothing posted — gh must never be called"
+out=$(PATH="$SB:$PATH" env -u TMUX -u TMUX_PANE bash "$BIN/fleet-comment.sh" 7 --repo acme/app --body hi 2>"$WORK/err"); rc=$?
+ok; [ -e "$WORK/gh-called" ] || fail "F6: a daemon with no \$TMUX still posts" "rc=$rc $(cat "$WORK/err")"
+for f in fleet-comment.sh fleet-claim-brief.sh fleet-evidence.sh; do
+  ok; grep -q 'display-message -p -t "\${TMUX_PANE:-}"' "$BIN/$f" && fail "F6: $f still reads -t \"\${TMUX_PANE:-}\" — use fleet_pane_fmt"
+done
+ok; sed -n '/^fleet_seat()/,/^}/p' "$BIN/fleet-lib.sh" | grep -q fleet_pane_fmt || fail "F6: fleet_seat must read its pane through fleet_pane_fmt"
+ok; sed -n '/^fleet_from_marker()/,/^}/p' "$BIN/fleet-lib.sh" | grep -q fleet_pane_fmt || fail "F6: fleet_from_marker must read its pane through fleet_pane_fmt"
+ok; grep -q 'TMUX_PANE=' "$BIN/dash-popup.sh" || fail "F6: dash-popup.sh must hand its TMUX_PANE to the popup (a popup has none)"
+
+# F7 an unstamped @wid handle is refused — never handed to tmux as a window NAME
+tf new-window -d -n z9 'while :; do sleep 300; done'
+out=$(lib fleet_wid_target z9 "$L" 2>"$WORK/err"); rc=$?
+ok; [ "$rc" = 1 ] && [ -z "$out" ] || fail "F7: an unstamped handle → nothing, rc 1 (never the window NAMED z9)" "rc=$rc out=$out"
+ok; [ "$(lib fleet_wid_target "$w7" "$L")" = "$w7" ] || fail "F7: a window id still passes through"
+for f in dash-migrate.sh fleet-migrate.sh fleet-transfer.sh fleet-move.sh dash-fold-toggle.sh dash-pin-toggle.sh; do
+  ok; grep -Eq 'fleet_wid_target .*\)"? && \[ -n ' "$BIN/$f" || fail "F7: $f must check fleet_wid_target's rc (an empty target is -t \"\", the current window)"
 done
 
 if [ "$FAIL" -eq 0 ]; then printf 'worker-locate selftest: PASS (%d checks)\n' "$CHECKS"; exit 0; fi

@@ -103,7 +103,8 @@
 #   fleet-answer.sh [opts] --answer <target> <pick>…    one pick per question, in order
 #   fleet-answer.sh [opts] --cancel <target>            Esc the dialog
 #
-#   <target>  @<window-id> / %<pane-id> / <sess>:<idx>  (the fleet-peer-send grammar)
+#   <target>  @<window-id> / %<pane-id>   (the fleet-peer-send grammar; a `<sess>:<idx>`
+#             position or a window NAME is refused — exit 2, issue #1537)
 #             wid:<worker_id> / wid:<key>  that worker, when it lives on this machine
 #   <pick>    an option number from --show; `1,3` toggles several in a multiSelect
 #   opts: -L <label>          tmux socket label (outside a fleet pane)
@@ -175,6 +176,10 @@ case "$TARGET" in wid:*)
 esac
 
 # --- the pane must exist (a dead pane is nothing to answer) -------------------
+# Only an address reaches the pane (issue #1537 ③): a `<sess>:<idx>` position is
+# renumbered under you and tmux prefix-matches a name, so either can put the
+# digits on a STRANGER's dialog. The dash pins its row to the @id first.
+case "$TARGET" in @*|%*) ;; *) echo "fleet-answer: '$TARGET' is a window position or name, not an address — use @<window-id>, %<pane-id> or wid:<worker_id>" >&2; exit 2 ;; esac
 PANE=$(TM display-message -p -t "$TARGET" '#{pane_id}' 2>/dev/null)
 [ -n "$PANE" ] || { echo "fleet-answer: no live pane for '$TARGET'" >&2; exit 1; }
 if [ "$(TM display-message -p -t "$PANE" '#{@cc_agent}')" = codex ]; then

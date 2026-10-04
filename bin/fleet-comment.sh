@@ -119,6 +119,11 @@ done
 # multi-line message be fed without shell-quoting gymnastics.
 if [ "$have_body" -eq 0 ] && [ ! -t 0 ]; then body="$(cat)"; fi
 [ -z "$body" ] && { printf 'fleet-comment: empty body — nothing to post\n' >&2; exit 2; }
+# Inside tmux with no TMUX_PANE (a subshell or hook that lost it) the SENDER's
+# binding cannot be read — and `-t ""` would read the pane the operator is looking
+# at, signing the comment as someone else's window. Refuse before any gh call
+# (issue #1537 ④). A daemon with no $TMUX at all is not this: it posts as `fleet`.
+fleet_pane_lost && { printf 'fleet-comment: inside tmux but TMUX_PANE is unset — cannot tell which window is posting; nothing posted\n' >&2; exit 2; }
 
 repo="${repo:-${CF_REPO:-}}"
 if [ -z "$repo" ]; then
@@ -137,7 +142,7 @@ role=$(resolve_role)
 # Context = the SENDER's own binding: a worker window carries @issue → '#<n>'
 # + marker issue=<n>; otherwise (the operator hub, a dash daemon) fall to the fleet
 # slug/session name — repo-derived, so NO private identifier leaks (charter scrub).
-f_issue=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{@issue}' 2>/dev/null)
+f_issue=$(fleet_pane_fmt '#{@issue}')      # the caller's own pane, never `-t ""` (#1537)
 f_issue="${f_issue//[^0-9]/}"
 f_session=$(fleet_current_session 2>/dev/null)
 [ -z "$f_session" ] && f_session=$(fleet_slug "$repo" 2>/dev/null)

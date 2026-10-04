@@ -11,7 +11,9 @@
 #      dash's row producer.
 #   C. IT IS A WINDOW TARGET — fleet_wid_resolve finds a window by handle and
 #      rejects an unknown one; fleet_wid_target passes a non-handle (`@id`, an
-#      index, a name) straight through, so nothing that works today breaks.
+#      index, a name) straight through, so nothing that works today breaks — and
+#      REFUSES a well-formed handle no window carries (nothing, rc 1; issue #1537
+#      ⑤): passed through, tmux would prefix-match it as a window NAME.
 #   D. IT SURVIVES RE-CREATION — a simulated migrate (close the window, open a
 #      new one, run the re-stamp block) keeps the SAME handle; and when the
 #      handle was taken in the gap, the replacement gets a different one rather
@@ -167,7 +169,8 @@ eq "target: a tmux window-id passes through"    "$w3"      "$(fleet_wid_target "
 eq "target: an index passes through"            "2"        "$(fleet_wid_target 2 '')"
 eq "target: sess:idx passes through"            "$SESS:2"  "$(fleet_wid_target "$SESS:2" '')"
 eq "target: a window NAME passes through"       "three"    "$(fleet_wid_target three '')"
-eq "target: an UNSTAMPED handle passes through" "z9"       "$(fleet_wid_target z9 '')"
+out=$(fleet_wid_target z9 '' 2>/dev/null); rc=$?
+CHECKS=$((CHECKS+1)); [ "$rc" = 1 ] && [ -z "$out" ] || fail "target: an UNSTAMPED handle is refused (want '' rc 1, got '$out' rc $rc)"
 
 printf 'dash-wid-selftest: part C ok (%d checks)\n' "$CHECKS"
 

@@ -379,6 +379,22 @@ fleet_session_canon() { printf '%s' "${1%%@view-*}"; }
 # fleet_is_view_session <name> — a `<fleet>@view-<id>` session (never a fleet).
 fleet_is_view_session() { case "${1:-}" in *@view-*) return 0 ;; esac; return 1; }
 
+# fleet_pane_fmt <fmt> — <fmt> expanded for the CALLER'S OWN pane ($TMUX_PANE), or
+# nothing + rc 1 when $TMUX_PANE is unset (issue #1537 ④). Never `-t ""`: tmux
+# reads an empty target as "the current pane", which from a hook or a subshell
+# that lost TMUX_PANE is whichever pane the operator happens to be looking at — a
+# sender's @issue / @worktree read off someone else's window. Every read of the
+# caller's own binding (fleet_seat, fleet_from_marker, fleet-comment.sh,
+# fleet-claim-brief.sh, fleet-evidence.sh) goes through here.
+fleet_pane_fmt() {
+  [ -n "${TMUX_PANE:-}" ] || return 1
+  tmux display-message -p -t "$TMUX_PANE" "$1" 2>/dev/null
+}
+# fleet_pane_lost — 0 when the caller is INSIDE tmux ($TMUX set) yet has no
+# $TMUX_PANE: the one state where a pane-identity read would silently fall back to
+# the operator's current pane. A daemon (no $TMUX at all) is not this.
+fleet_pane_lost() { [ -n "${TMUX:-}" ] && [ -z "${TMUX_PANE:-}" ]; }
+
 # The tmux session the caller is running in (pane-targeted, client fallback).
 fleet_current_session() {
   local s
@@ -1962,7 +1978,9 @@ EOF
 # Pure tmux + shell builtins, no git/gh forks.
 fleet_seat() {
   local o issue wt cwd
-  o=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{@issue}|#{@worktree}' 2>/dev/null)
+  # The caller's OWN pane only (fleet_pane_fmt): no TMUX_PANE ⇒ no binding ⇒ no
+  # seat — never the current pane's (issue #1537 ④).
+  o=$(fleet_pane_fmt '#{@issue}|#{@worktree}')
   issue=${o%%|*}; wt=${o#*|}
   [ "$wt" = "$o" ] && wt=""            # no separator came back ⇒ no @worktree
   [ -n "$issue" ] || return 0          # the binding is required in BOTH shapes
@@ -4009,25 +4027,54 @@ _fleet_wfk_repo_ok() {
 # Matching mirrors the two readers that already exist, so the three never disagree:
 #   issue-<N>    the window's @issue (what the spawner binds, fleet_origin_key's
 #                first branch)
-#   scratch-<N>  @worktree FIRST, pane cwd as the fallback, through the SAME strict
-#                digits-only basename rule as fleet_scratch_key / the dash's okey_v
-#                (inlined here for the same reason okey_v inlines it: no subshell
-#                per window)
-# First match wins; the spawners already refuse a second window for a bound issue.
+#   scratch-<N>  @worktree when stamped, else the pane cwd — through the SAME
+#                strict digits-only basename rule as fleet_scratch_key / the dash's
+#                okey_v (inlined here for the same reason okey_v inlines it: no
+#                subshell per window)
+#
+# THE ONE RESOLVER (issue #1537, EPIC #1529 E8). Every cross-session address — a
+# child's report to its parent, fleet-await's child, fleet-peer-send's issue:<N> /
+# scratch-<N>, the hub's inbound relay, the children digest — resolves HERE, and a
+# key that does not resolve cleanly is a refusal, never a guess:
+#   rc 0  exactly one live window answers: its id on stdout
+#   rc 1  NOTFOUND: nothing on stdout, nothing on stderr
+#   rc 2  AMBIGUOUS: nothing on stdout, ONE stderr line saying why — two windows
+#         answer to the key, or the key is a bare `issue-<N>` in a fleet hosting
+#         2+ repos (every repo's #N spells that; the key must carry the repo slug,
+#         `<slug>:issue-<N>`, as @origin / worker_ids have since #789)
+#   ① a warm-pool window never answers (`@pool 1`, or parked in the fleet's
+#     `<sess>-pool` holding session): it sits in a pre-warmed scratch worktree whose
+#     NUMBER a closed scratch may have had (fleet_scratch_free recycles it), so
+#     before this a parent that had gone was "found" in the pool and its child's
+#     report woke a window nobody was using
+#   ② @worktree, once stamped, is the scratch's identity; the pane cwd is read ONLY
+#     when no @worktree exists (a crash-restored scratch) — never as a second chance
+#     for a window whose stamp said otherwise
+# A one-repo fleet with one window per key behaves byte for byte as before.
 fleet_win_for_key() {
-  local key="${1:-}" sock="${2:-}" wl line wid rest iss wt path cand bn sn pre='' wsess
+  local key="${1:-}" sock="${2:-}" wl line wid rest iss wt path cand bn sn pre='' wsess pool fleet hits='' n names
   # `<slug>:<key>` (issue #789): match the bare key, then require the window's repo.
   case "$key" in ?*:?*) pre=${key%%:*}; key=${key#*:} ;; esac
   case "$key" in
     issue-*|scratch-*) sn=${key#*-}; case "$sn" in ''|*[!0-9]*) return 1 ;; esac ;;
     *) return 1 ;;
   esac
+  fleet="$sock"; [ -n "$fleet" ] || fleet=$(fleet_current_session 2>/dev/null)
+  if [ -z "$pre" ] && [ -n "$fleet" ]; then
+    case "$key" in issue-*)
+      if fleet_multirepo "$fleet"; then
+        printf 'fleet: %s is ambiguous in %s — the fleet hosts several repos and each may bind #%s; qualify the key with the repo slug (<slug>:%s)\n' \
+          "$key" "$fleet" "${key#issue-}" "$key" >&2
+        return 2
+      fi ;;
+    esac
+  fi
   # window_name is NOT read here: the free-text field would have to ride the same
   # `|` separator (a tab/0x1f separator prints as a literal `\037` on tmux ≤3.4).
   if [ -n "$sock" ]; then
-    wl=$(fleet_lw '#{window_id}|#{session_name}|#{@issue}|#{@worktree}|#{pane_current_path}' tmux -L "$sock")
+    wl=$(fleet_lw '#{window_id}|#{session_name}|#{@issue}|#{@pool}|#{@worktree}|#{pane_current_path}' tmux -L "$sock")
   else
-    wl=$(fleet_lw '#{window_id}|#{session_name}|#{@issue}|#{@worktree}|#{pane_current_path}')
+    wl=$(fleet_lw '#{window_id}|#{session_name}|#{@issue}|#{@pool}|#{@worktree}|#{pane_current_path}')
   fi
   [ -n "$wl" ] || return 1
   while IFS= read -r line; do
@@ -4035,28 +4082,45 @@ fleet_win_for_key() {
     wid=${line%%|*};  rest=${line#*|}
     wsess=${rest%%|*}; rest=${rest#*|}
     iss=${rest%%|*};  rest=${rest#*|}
+    pool=${rest%%|*}; rest=${rest#*|}
     wt=${rest%%|*};   path=${rest#*|}
+    [ "$pool" = 1 ] && continue                                   # ① a warm-pool window
+    fleet_is_pool_session "$wsess" ${fleet:+"$fleet"} && continue  # ① parked in the pool session
     case "$key" in
       issue-*)
-        [ -n "$iss" ] && [ "issue-$iss" = "$key" ] && _fleet_wfk_repo_ok && { printf '%s' "$wid"; return 0; }
+        [ -n "$iss" ] && [ "issue-$iss" = "$key" ] && _fleet_wfk_repo_ok && hits="$hits$wid"$'\n'
         ;;
       scratch-*)
-        for cand in "$wt" "$path"; do
-          bn=${cand##*/}
-          case "$bn" in
-            scratch-*)   sn=${bn#scratch-} ;;
-            *-scratch-*) sn=${bn##*-scratch-} ;;
-            *)           continue ;;
-          esac
-          case "$sn" in ''|*[!0-9]*) continue ;; esac
-          [ "scratch-$sn" = "$key" ] && _fleet_wfk_repo_ok && { printf '%s' "$wid"; return 0; }
-        done
+        if [ -n "$wt" ]; then cand=$wt; else cand=$path; fi   # ② the stamp, else the cwd — not both
+        bn=${cand##*/}
+        case "$bn" in
+          scratch-*)   sn=${bn#scratch-} ;;
+          *-scratch-*) sn=${bn##*-scratch-} ;;
+          *)           sn='' ;;
+        esac
+        case "$sn" in
+          ''|*[!0-9]*) ;;
+          *) [ "scratch-$sn" = "$key" ] && _fleet_wfk_repo_ok && hits="$hits$wid"$'\n' ;;
+        esac
         ;;
     esac
   done <<EOF
 $wl
 EOF
-  return 1
+  n=$(printf '%s' "$hits" | grep -c .)
+  case "$n" in
+    0) return 1 ;;
+    1) printf '%s' "${hits%%$'\n'*}"; return 0 ;;
+  esac
+  # Two (or more) windows answer to one key: AMBIGUOUS. Named on stderr so the
+  # operator can see which; nothing on stdout, so no caller can act on a pick.
+  names=$(printf '%s' "$hits" | while IFS= read -r wid; do
+      [ -n "$wid" ] || continue
+      if [ -n "$sock" ]; then tmux -L "$sock" display-message -p -t "$wid" "$FLEET_SESSION_FMT:#{window_name}" 2>/dev/null
+      else tmux display-message -p -t "$wid" "$FLEET_SESSION_FMT:#{window_name}" 2>/dev/null; fi
+    done | paste -sd, - | sed 's/,/, /g')
+  printf 'fleet: %s%s is ambiguous — %s windows match: %s\n' "${pre:+$pre:}" "$key" "$n" "$names" >&2
+  return 2
 }
 
 # ---- worker identity → where it lives (issue #1420, EPIC #1419 C1) -------------
@@ -4444,7 +4508,7 @@ fleet_hub_move() {
 # (`<slug>:issue-<N>`, the same shape as `sess:name`) needs its `wid:` prefix. A worker_id of a fleet configured HERE never asks the hub:
 # its fleet is this machine, so not-live-here is `unknown`.
 fleet_worker_locate() {
-  local t="${1:-}" sess="${2:-}" sp u k home w node
+  local t="${1:-}" sess="${2:-}" sp u k home w node rc
   [ -n "$sess" ] || sess=$(fleet_current_session 2>/dev/null)
   case "$t" in
     wid:*|*/*|issue-*|scratch-*) sp=$(_fleet_wid_split "$t") || { echo unknown; return 2; } ;;
@@ -4453,27 +4517,29 @@ fleet_worker_locate() {
   if [ -n "$sp" ]; then
     u=${sp%%$'\t'*}; k=${sp#*$'\t'}
     if home=$(fleet_wid_home "$t" "$sess"); then
-      # A bare issue key in a 2+ repo fleet names every repo's #N (FLEET-HUB.md):
-      # two such windows are AMBIGUOUS, never a first-match pick.
-      case "$k" in issue-*)
-        if fleet_multirepo "$home" && [ "$(tmux -L "$(fleet_socket "$home")" list-windows -t "=$home" -F '#{@issue}' 2>/dev/null | grep -cx "${k#issue-}")" -gt 1 ]; then
-          printf 'fleet: %s is ambiguous in %s (several repos hold it) — name the repo: wid:<slug>:%s\n' "$k" "$home" "$k" >&2
-          echo unknown; return 0
-        fi ;;
-      esac
-      w=$(fleet_win_for_key "$k" "$(fleet_socket "$home")") && [ -n "$w" ] \
-        && { printf 'local %s %s\n' "$w" "$home"; return 0; }
+      # The ONE resolver (fleet_win_for_key, issue #1537): a bare issue key in a
+      # 2+ repo fleet, or a key two windows answer to, is AMBIGUOUS (rc 2, said on
+      # stderr) — `unknown` here, never a first-match pick, and never the hub.
+      w=$(fleet_win_for_key "$k" "$(fleet_socket "$home")"); rc=$?
+      [ "$rc" -eq 0 ] && [ -n "$w" ] && { printf 'local %s %s\n' "$w" "$home"; return 0; }
+      [ "$rc" -eq 2 ] && { echo unknown; return 0; }
       [ -n "$u" ] && { echo unknown; return 0; }
     fi
     if node=$(_fleet_hub_node "$u" "$k"); then printf 'remote %s\n' "$node"; else echo unknown; fi
     return 0
   fi
   case "$t" in
-    @*|%*|*:*)
+    @*|%*)
       w=$(_fleet_tmux "$sess" display-message -p -t "$t" '#{window_id}' 2>/dev/null)
       if [ -n "$w" ]; then printf 'local %s %s\n' "$w" "$(_fleet_tmux "$sess" display-message -p -t "$w" "$FLEET_SESSION_FMT" 2>/dev/null)"
       else echo unknown; fi
       return 0 ;;
+    *:*)
+      # `<sess>:<idx>` is a POSITION (renumbered under you) and `<sess>:<name>` a
+      # prefix-matched NAME (scratch-1 → scratch-12): neither is an address
+      # (issue #1537 ③). A repo-qualified key is spelled `wid:<slug>:issue-<N>`.
+      printf 'fleet: %s is a window position or name, not an address — use wid:<key>, @<window-id> or %%<pane-id>\n' "$t" >&2
+      echo unknown; return 2 ;;
   esac
   echo unknown; return 2
 }
@@ -4822,7 +4888,7 @@ fleet_from_role() {
 # green. Repo-derived only, so nothing private leaks (the charter scrub).
 fleet_from_marker() {
   local role="$1" repo="${2:-}" f_issue f_session mk
-  f_issue=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{@issue}' 2>/dev/null)
+  f_issue=$(fleet_pane_fmt '#{@issue}')     # the caller's own pane, never `-t ""` (#1537)
   f_issue="${f_issue//[^0-9]/}"
   f_session=$(fleet_current_session 2>/dev/null)
   [ -z "$f_session" ] && [ -n "$repo" ] && f_session=$(fleet_slug "$repo" 2>/dev/null)
@@ -6558,10 +6624,17 @@ EOF
 # `window_id`; ANYTHING else (an `@id`, an index, `sess:idx`, a window name) is
 # passed back untouched, so every form that works today keeps working. Handles
 # win the tie by design — a window merely NAMED `a1` is addressable by index.
+# A well-formed handle NO live window carries is refused (nothing printed, rc 1,
+# one stderr line; issue #1537 ⑤): passed through, tmux would read `a1` as a
+# window NAME — prefix-matched — and the reap / migrate / rename would land on a
+# stranger. Callers must check the rc: an empty target is `-t ""`, the current
+# window.
 fleet_wid_target() {
   local t="${1:-}" sock="${2:-}" w
   if fleet_wid_valid "$t"; then
     w=$(fleet_wid_resolve "$t" "$sock") && [ -n "$w" ] && { printf '%s' "$w"; return 0; }
+    printf 'fleet: no live window carries handle %s\n' "$t" >&2
+    return 1
   fi
   printf '%s' "$t"
 }
