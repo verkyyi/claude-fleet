@@ -280,6 +280,10 @@ type ConnectInfo struct {
 	// Problem says why a signed-in person cannot get a certificate yet.
 	Problem string            `json:"problem,omitempty"`
 	Recent  []store.FleetCert `json:"recent_certs"`
+	// InstallCommand is the one line a colleague runs (claude-fleet#1470);
+	// InstallReady says whether this hub serves it (a CA and WeCom sign-in).
+	InstallCommand string `json:"install_command"`
+	InstallReady   bool   `json:"install_ready"`
 }
 
 func (s *Server) handleFleetConnect(w http.ResponseWriter, r *http.Request) {
@@ -287,6 +291,7 @@ func (s *Server) handleFleetConnect(w http.ResponseWriter, r *http.Request) {
 		Hub: s.hubURL(r), CAEnabled: s.SSHCA != nil, CertTTLSec: int(sshca.TTL.Seconds()),
 		KeyPath: FleetKeyPath, CertPath: FleetCertPath, ConfigPath: FleetSSHConfigPath,
 		Machines: []FleetMachine{}, Recent: []store.FleetCert{},
+		InstallCommand: s.InstallCommand(r), InstallReady: s.installReady(),
 	}
 	if s.SSHCA != nil {
 		out.CAFingerprint = s.SSHCA.Fingerprint()
@@ -352,6 +357,7 @@ func (s *Server) handleFleetCert(w http.ResponseWriter, r *http.Request) {
 		httpError(w, certErrStatus(err), err.Error())
 		return
 	}
+	s.registerDevice(pid, req.PublicKey, "", "web", time.Now())
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -400,6 +406,7 @@ type deviceLogin struct {
 	userCode   string
 	keyLine    string
 	keyFP      string
+	name       string // the client's own hostname, for the device record (#1470)
 	expires    time.Time
 	state      deviceState
 	issued     *CertResponse
@@ -528,6 +535,8 @@ func (s *Server) handleDeviceStart(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		PublicKey string `json:"public_key"`
+		// DeviceName is the client's own hostname — display only (#1470).
+		DeviceName string `json:"device_name"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<14)).Decode(&req); err != nil {
 		httpError(w, http.StatusBadRequest, "malformed request")
@@ -552,6 +561,7 @@ func (s *Server) handleDeviceStart(w http.ResponseWriter, r *http.Request) {
 	l := &deviceLogin{
 		deviceCode: hex.EncodeToString(dc[:]), userCode: uc,
 		keyLine: strings.TrimSpace(req.PublicKey), keyFP: ssh.FingerprintSHA256(key),
+		name:    cleanDeviceName(req.DeviceName),
 		expires: now.Add(deviceTTL),
 	}
 	if err := s.devices.add(l, now); err != nil {
@@ -622,10 +632,10 @@ func (s *Server) handleFleetLoginPage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		approve := r.FormValue("action") == "approve"
-		var keyLine string
+		var keyLine, devName string
 		found := s.devices.withUser(code, now, func(l *deviceLogin) {
 			if l.state == devicePending {
-				keyLine = l.keyLine
+				keyLine, devName = l.keyLine, l.name
 			}
 		})
 		switch {
@@ -653,6 +663,9 @@ func (s *Server) handleFleetLoginPage(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				page.Error = "签发失败：" + err.Error()
 			} else {
+				// The scan is the proof: this computer is now a registered
+				// device that renews without one (#1470).
+				s.registerDevice(pid, keyLine, devName, "device", now)
 				page.Done, page.Login, page.Until = true, strings.Join(resp.Principals, ","), resp.ValidBefore.Local().Format("01-02 15:04")
 			}
 		}

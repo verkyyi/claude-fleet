@@ -162,9 +162,20 @@ case "$rc:$out" in
   *) bad "no hub URL: rc=$rc out=$out" ;;
 esac
 
-# 6 — the dispatcher refuses an unknown command.
-"$BIN/fleet" nosuch >/dev/null 2>&1; rc=$?
-[ "$rc" = 2 ] && ok "dispatcher: unknown command exits 2" || bad "dispatcher: rc=$rc"
+# 6 — the dispatcher: a first word that is no command is a MACHINE (#1470:
+# `fleet m4`), handed to `fleet-connect.py --enter`; with no hub configured
+# that is the usage error (exit 2), naming the installer.
+out=$("$BIN/fleet" nosuch 2>&1); rc=$?
+case "$rc:$out" in
+  2:*"no hub URL"*install*) ok "dispatcher: a non-command word is a machine; no hub → exit 2" ;;
+  *) bad "dispatcher: rc=$rc out=$out" ;;
+esac
+out=$("$BIN/fleet" 2>&1); rc=$?
+case "$rc:$out" in
+  2:*"no hub URL"*) ok "dispatcher: bare fleet → --enter; no hub → exit 2" ;;
+  *) bad "dispatcher bare: rc=$rc out=$out" ;;
+esac
+"$BIN/fleet" --help 2>&1 | grep -q 'fleet login renew' && ok "dispatcher: --help lists the commands" || bad "dispatcher --help"
 
 [ "$fail" = 0 ] && echo "PASS fleet-connect-selftest" || echo "FAIL fleet-connect-selftest"
 exit "$fail"

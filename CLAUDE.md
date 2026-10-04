@@ -263,5 +263,14 @@ Do not install from memory: read the doc and work from it.
   意外下线: leases released at once, nothing re-dispatched, the record kept in
   `fleet_spot_nodes`. Off (no image) adds nothing — `TestSpotOffAddsNothing`
   and `fleet-spot-evacuate-selftest.sh` case A pin the degenerate case.
+- **The hub ships the `fleet` client, and `bin/` stays canonical** (issue #1470).
+  `curl -fsSL <hub>/install | sh` serves `bin/fleet-install.sh` (hub URL filled
+  in) and `bin/fleet`, `fleet-login.py`, `fleet-connect.py` from
+  `tokenledger/internal/api/fleetclient/` — `//go:embed` copies, because the
+  Docker build context is `tokenledger/` alone and embed cannot reach `..`.
+  Edit the client in `bin/`, then `cp` the four files over; two tests pin the
+  mirror from both sides (`TestFleetClientMatchesBin` in the Go gate,
+  `bin/fleet-install-selftest.sh` leg A in the shell gate), so a drift reds
+  whichever CI the change reaches.
 - Claude Code re-reads `settings.json` hooks per turn, so running sessions pick
   up hook changes without a restart.

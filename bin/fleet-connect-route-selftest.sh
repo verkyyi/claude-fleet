@@ -15,6 +15,14 @@
 # the hub again; a certificate signs the route-list request (checked with
 # `ssh-keygen -Y check-novalidate`); the hub unreachable → the snippet's
 # routes; an unknown machine exits 1 naming the ones there are.
+#
+# Then `fleet` with no argument (#1470, `bin/fleet` → `--enter`): a certificate
+# with under 6h left is renewed by the device key first (the fake hub signs
+# again, no scan); the hub's /v1/fleet/home pick — signed under
+# fleet-home@claude-fleet, carrying the client's last-used hint — is entered,
+# its route list used without a second fetch; "你的机器都不在线" exits 1 and
+# lists the candidates; `fleet m4` names the machine and never asks for a pick;
+# the hub down falls back to the remembered machine.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-connect-route-selftest.XXXXXX") || exit 2
@@ -134,25 +142,59 @@ def serve(c):
     if st.get("down"):
         return reply(c, 503, {"error": "hub down"})
     u = urllib.parse.urlsplit(path)
-    if u.path == "/v1/fleet/routes":
-        bump("routes_hits")
-        if hdr.get("authorization") != "Bearer tok-1":
-            n = int(hdr.get("content-length", "0"))
-            while len(buf[0]) < n: buf[0] += c.recv(4096)
-            m = json.loads(buf[0][:n] or b"{}")
-            with tempfile.TemporaryDirectory() as td:
-                open(td + "/sig", "w").write(m.get("sig", ""))
-                r = subprocess.run(["ssh-keygen", "-Y", "check-novalidate", "-n", "fleet-routes@claude-fleet", "-s", td + "/sig"],
-                                   input=("fleet-routes %d" % m.get("ts", 0)).encode(), capture_output=True)
-            if method != "POST" or r.returncode != 0 or "-cert-v01@openssh.com" not in m.get("cert", ""):
-                return reply(c, 401, {"error": "bad cert"})
-            open(W + "/certok", "w").write("ok")
-        return reply(c, 200, {"hub": "x", "login": "alice", "machines": [
+    def body_json():
+        n = int(hdr.get("content-length", "0"))
+        while len(buf[0]) < n: buf[0] += c.recv(4096)
+        return json.loads(buf[0][:n] or b"{}")
+    def sig_ok(m, ns, prefix):
+        with tempfile.TemporaryDirectory() as td:
+            open(td + "/sig", "w").write(m.get("sig", ""))
+            r = subprocess.run(["ssh-keygen", "-Y", "check-novalidate", "-n", ns, "-s", td + "/sig"],
+                               input=("%s %d" % (prefix, m.get("ts", 0))).encode(), capture_output=True)
+        return r.returncode == 0
+    def machines():
+        return [
             {"hostname": "mini", "alias": "m4", "relay": True, "routes": [
                 {"name": "tailnet", "host": "127.0.0.1", "port": sshd.getsockname()[1]},
                 {"name": "public", "host": "127.0.0.1", "port": dead}]},
             {"hostname": "macmini", "alias": "m5", "relay": False, "routes": [
-                {"name": "public", "host": "127.0.0.1", "port": dead}]}]})
+                {"name": "public", "host": "127.0.0.1", "port": dead}]}]
+    if u.path == "/v1/fleet/routes":
+        bump("routes_hits")
+        if hdr.get("authorization") != "Bearer tok-1":
+            m = body_json()
+            if method != "POST" or not sig_ok(m, "fleet-routes@claude-fleet", "fleet-routes") or "-cert-v01@openssh.com" not in m.get("cert", ""):
+                return reply(c, 401, {"error": "bad cert"})
+            open(W + "/certok", "w").write("ok")
+        return reply(c, 200, {"hub": "x", "login": "alice", "machines": machines()})
+    if u.path == "/v1/fleet/login/renew":
+        # #1470: the device key's signature; the CA signs the same key again.
+        bump("renew_hits")
+        m = body_json()
+        if not sig_ok(m, "fleet-renew@claude-fleet", "fleet-renew"):
+            return reply(c, 401, {"error": "bad signature", "code": "bad_signature"})
+        with tempfile.TemporaryDirectory() as td:
+            open(td + "/k.pub", "w").write(m["public_key"] + "\n")
+            subprocess.run(["ssh-keygen", "-q", "-s", W + "/ca", "-I", "wecom:wx-alice", "-n", "alice",
+                            "-V", "-1m:+12h", "-z", "7", td + "/k.pub"], check=True)
+            cert = open(td + "/k-cert.pub").read()
+        conf = "# fleet-ssh-config v1 — test\nHost m4 fleet-m4 fleet-m4-tailnet\n  HostName 127.0.0.1\n  Port %d\n  User alice\n" % sshd.getsockname()[1]
+        return reply(c, 200, {"certificate": cert, "serial": "7", "key_id": "wecom:wx-alice", "principals": ["alice"],
+                              "valid_before": "later", "ssh_config": conf, "hub": "x"})
+    if u.path == "/v1/fleet/home":
+        # #1470: the pick, proven by the certificate under its own namespace.
+        bump("home_hits")
+        m = body_json()
+        if method != "POST" or not sig_ok(m, "fleet-home@claude-fleet", "fleet-home") or "-cert-v01@openssh.com" not in m.get("cert", ""):
+            return reply(c, 401, {"error": "bad cert"})
+        open(W + "/home_last", "w").write(m.get("last", ""))
+        cands = [{"machine": "mini", "alias": "m4", "online": st.get("home") != "none", "sessions": 2, "load_per_core": 0.12, "score": 0.9, "last": True},
+                 {"machine": "macmini", "alias": "m5", "online": False, "sessions": 0, "score": 0.5, "excluded": "offline"}]
+        if st.get("home") == "none":
+            return reply(c, 503, {"error": "你的机器都不在线", "code": "no_machine_online",
+                                  "home": {"machine": None, "rule": "", "reason": "你的机器都不在线", "online": 0, "candidates": cands}})
+        return reply(c, 200, {"hub": "x", "login": "alice", "machines": machines(), "machine": machines()[0],
+                              "rule": "last", "reason": "上次用的机器在线", "online": 1, "candidates": cands})
     if u.path == "/v1/ssh-relay/connect":
         bump("relay_hits")
         acc = base64.b64encode(hashlib.sha1((hdr["sec-websocket-key"] + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
@@ -255,6 +297,49 @@ case "$rc:$out" in
   1:*nosuch*m4*m5*) ok "unknown machine: exit 1, lists m4 m5" ;;
   *) bad "unknown machine: rc=$rc out=$out" ;;
 esac
+
+# ── `fleet` with no argument (#1470) ─────────────────────────────────────────
+if command -v ssh-keygen >/dev/null 2>&1; then
+  # 9 — a 1h certificate is renewed first (device key, no scan); the hub's pick
+  #     is entered off the home answer's own route list; the last-used hint
+  #     rides along.
+  echo '{"tailnet_up": true, "relay_ok": true, "home": "m4"}' > "$WORK/state"
+  r_before=$(hits routes_hits)
+  out=$("$BIN/fleet" --print -v 2>"$WORK/err9"); rc=$?
+  if [ "$rc" = 0 ] && [ "$(hits renew_hits)" = 1 ] && [ "$(hits home_hits)" = 1 ] && [ "$(hits routes_hits)" = "$r_before" ] \
+     && grep -q '证书已续期' "$WORK/err9" && grep -q '入口选了 m4（上次用的机器在线）' "$WORK/err9" \
+     && [[ "$out" == *"HostKeyAlias=fleet-m4"* ]] && [ "$(cat "$WORK/home_last")" = m4 ] \
+     && ssh-keygen -L -f "$HOME/.ssh/fleet-cert-cert.pub" | grep -q 'Serial: 7'; then
+    ok "fleet: renewed the 1h certificate (serial 7), entered the hub's pick m4, no second route fetch, hint last=m4"
+  else bad "fleet: rc=$rc renew=$(hits renew_hits) home=$(hits home_hits) routes $r_before→$(hits routes_hits) out=$out"$'\n'"$(cat "$WORK/err9")"; fi
+
+  # 10 — a 12h certificate is kept (no renew); none of the machines online →
+  #      exit 1, the hub's words, the candidates.
+  echo '{"tailnet_up": true, "relay_ok": true, "home": "none"}' > "$WORK/state"
+  out=$("$BIN/fleet" --print 2>"$WORK/err10"); rc=$?
+  if [ "$rc" = 1 ] && [ "$(hits renew_hits)" = 1 ] && grep -q '你的机器都不在线' "$WORK/err10" \
+     && grep -q 'm4.*离线' "$WORK/err10" && grep -q 'm5.*离线' "$WORK/err10"; then
+    ok "fleet: all machines offline → exit 1, 你的机器都不在线 + candidates; fresh certificate not renewed"
+  else bad "fleet offline: rc=$rc renew=$(hits renew_hits) $(cat "$WORK/err10")"; fi
+
+  # 11 — `fleet m4`: the machine is named, the hub is not asked for a pick.
+  h_before=$(hits home_hits)
+  out=$("$BIN/fleet" m4 --print 2>"$WORK/err11"); rc=$?
+  if [ "$rc" = 0 ] && [ "$(hits home_hits)" = "$h_before" ] && [[ "$out" == *"HostKeyAlias=fleet-m4"* ]]; then
+    ok "fleet m4: named machine, no pick asked"
+  else bad "fleet m4: rc=$rc home $h_before→$(hits home_hits) out=$out $(cat "$WORK/err11")"; fi
+
+  # 12 — the hub down: the certificate in hand is kept, the remembered machine
+  #      is entered the old way.
+  echo '{"down": true}' > "$WORK/state"
+  out=$("$BIN/fleet" --print 2>"$WORK/err12"); rc=$?
+  if [ "$rc" = 0 ] && grep -q '按上次的记录直连' "$WORK/err12" && [[ "$out" == *"HostKeyAlias=fleet-m4"* ]]; then
+    ok "fleet, hub down: falls back to the remembered machine"
+  else bad "fleet hub down: rc=$rc out=$out $(cat "$WORK/err12")"; fi
+  echo '{"tailnet_up": true}' > "$WORK/state"
+else
+  echo "skip fleet legs: no ssh-keygen"
+fi
 
 [ "$fail" = 0 ] && echo "PASS fleet-connect-route-selftest" || echo "FAIL fleet-connect-route-selftest"
 exit "$fail"
