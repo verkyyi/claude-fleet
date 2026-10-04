@@ -253,7 +253,12 @@ if [ "$TAIL_ONLY" != 1 ] && [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ -n "$REPO" ]; the
   lease_out=$(fleet_hub_lease acquire "$SESS" "$REPO" "$num" $_lf); lease_rc=$?
   case "$lease_rc" in
     0) LEASE_HELD=1
-       trap '_rc=$?; [ "$_rc" != 0 ] && [ "$LEASE_HELD" = 1 ] && fleet_hub_lease release "$SESS" "$REPO" "$num" >/dev/null 2>&1; exit "$_rc"' EXIT
+       _lease_back() {  # EXIT: a non-zero exit after the grant gives the lease back
+         local rc=$?
+         [ "$rc" != 0 ] && [ "$LEASE_HELD" = 1 ] && fleet_hub_lease release "$SESS" "$REPO" "$num" >/dev/null 2>&1
+         exit "$rc"
+       }
+       trap _lease_back EXIT
        case "$lease_out" in FORCED\ *)
          printf 'dash-issue-session: #%s 的入口租约已强制从 %s 收回 (--force，已在入口记录)\n' "$num" "$(printf '%s' "$lease_out" | awk '{print $3}')" >&2 ;;
        esac ;;
