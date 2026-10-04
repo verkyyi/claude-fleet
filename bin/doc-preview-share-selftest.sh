@@ -32,6 +32,12 @@
 #                  --open hands the doc URL to fleet-open (FLEET_OPEN_BIN stub) and
 #                  prints OPEN <its result>. Sections 1-7 run with no --local and are
 #                  the "behaviour unchanged" half.
+#   • NO-DNS       (issue #1500) server.py comes up and serves with EVERY reverse
+#                  lookup raising: http.server's server_bind() reverse-resolves the
+#                  bind address between bind() and listen(), and on a GitHub
+#                  macos-latest runner that blocked 30s+ — the port sat bound but
+#                  never accepting, share.sh gave up on five ports (~170s), and this
+#                  test was red on every macOS run from the day it landed.
 #   • DOCTOR       fleet-doctor's `docprev` row: operator = this login → PASS;
 #                  another login → INFO naming the http-direct fallback and the
 #                  one-time `sudo tailscale serve` command; unreadable → no row.
@@ -274,6 +280,32 @@ share "$WORK/a.md" >/dev/null
 out="$(share --local "$WORK/b.md")"; rc=$?
 [ "$rc" = 1 ] || fail "8e: --local beside http-direct must refuse (rc=$rc)" "$out"
 has "http-direct" "$out" "8e: the refusal must say why"
+
+# --- 9. server.py must come up with reverse DNS unavailable (issue #1500) -----
+# Run server.py itself with socket.getfqdn / gethostbyaddr / getnameinfo raising: a
+# server that reverse-resolves its bind address at startup dies here with the
+# traceback in its log, instead of silently sitting bound-but-not-listening on a
+# runner whose resolver is slow.
+P9="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')"
+mkdir -p "$WORK/serve9"; echo '<p>no-dns ok</p>' > "$WORK/serve9/index.html"
+python3 - "$BIN/../skills/doc-preview/server.py" "$P9" "$WORK/serve9" "$BIN/../skills/doc-preview" > "$WORK/srv9.log" 2>&1 <<'PY' &
+import runpy, socket, sys
+def boom(*a, **k): raise RuntimeError("reverse DNS lookup at startup: %r" % (a,))
+socket.getfqdn = socket.gethostbyaddr = socket.getnameinfo = boom
+sys.argv = sys.argv[1:]            # python3 - <server.py> <args…> → argv[0] = server.py
+runpy.run_path(sys.argv[0], run_name="__main__")
+PY
+pid9=$!; PIDS+=("$pid9"); up9=0
+for _ in $(seq 1 100); do
+  kill -0 "$pid9" 2>/dev/null || break
+  python3 -c 'import socket,sys;s=socket.socket();s.settimeout(0.5);sys.exit(s.connect_ex(("127.0.0.1",int(sys.argv[1]))))' "$P9" 2>/dev/null && { up9=1; break; }
+  sleep 0.1
+done
+CHECKS=$((CHECKS + 1)); [ "$up9" = 1 ] || fail "9: server.py must come up with reverse DNS unavailable (it reverse-resolves at startup, or never reached listen())" "$(cat "$WORK/srv9.log" 2>/dev/null)"
+has 200 "$(get "$P9" /)" "9: the no-DNS server must serve"
+has "listening on http://127.0.0.1:$P9/" "$(cat "$WORK/srv9.log")" "9: server.py must log the address it is accepting on"
+lacks "reverse DNS lookup" "$(cat "$WORK/srv9.log")" "9: server.py must never have called a reverse lookup"
+kill "$pid9" 2>/dev/null
 
 # --- 6. fleet-doctor's docprev row ------------------------------------------
 mkdir -p "$WORK/skills/doc-preview" "$WORK/conf"; : > "$WORK/skills/doc-preview/SKILL.md"

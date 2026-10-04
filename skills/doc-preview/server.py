@@ -31,6 +31,7 @@ and the index drops each row's source path — no internal metadata leaves the b
 import json
 import os
 import re
+import socketserver
 import subprocess
 import sys
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -160,5 +161,25 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_error(405)
 
 
+class Server(ThreadingHTTPServer):
+    """ThreadingHTTPServer minus the reverse-DNS lookup in HTTPServer.server_bind().
+
+    http.server resolves socket.getfqdn(bind_addr) between bind() and listen(). On a
+    GitHub macos-latest runner that lookup blocks for 30s+, so the port sat BOUND but
+    never accepting, share.sh's readiness probe gave up on five ports in a row, and
+    the doc-preview-share selftest was red on every macOS run (issue #1500). The
+    name only feeds CGIHTTPRequestHandler, which this server never uses, so a server
+    on a fixed address has nothing to look up: bind, record the address, listen.
+    """
+
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
 if __name__ == "__main__":
-    ThreadingHTTPServer((BIND_ADDR, PORT), Handler).serve_forever()
+    srv = Server((BIND_ADDR, PORT), Handler)
+    # One line to server.log once accepting — share.sh's failure path tails this file,
+    # and an EMPTY log then means "never reached listen()", not "nothing happened".
+    print("listening on http://%s:%d/%s" % (BIND_ADDR, PORT, " (public)" if PUBLIC else ""), flush=True)
+    srv.serve_forever()
