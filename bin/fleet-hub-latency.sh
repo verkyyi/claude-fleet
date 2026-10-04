@@ -160,8 +160,9 @@ exec 4> >(ssh -o BatchMode=yes -o ConnectTimeout=15 "$OBS" "bash -lc \"$wcmd\"" 
 exec 3< "$WFIFO"
 if ! IFS= read -r -t 60 ready <&3; then die "the observer's watcher did not start (ssh $OBS; is $OBIN there?)"; fi
 case "$ready" in READY*) printf '%s\n' "observer: $ready" >&2 ;; *) die "observer: $ready" ;; esac
+OSTATE=${ready##* }    # what the observer's cache shows for this window right now
 
-export SOCK WID NUDGE DIRTY STATES ROUNDS CUR NAME OBS
+export SOCK WID NUDGE DIRTY STATES ROUNDS CUR NAME OBS OSTATE
 python3 - <<'PY' 3<&3 4>&4
 import os, select, subprocess, sys, time
 sock, wid, nudge, dirty = os.environ["SOCK"], os.environ["WID"], os.environ["NUDGE"], os.environ["DIRTY"]
@@ -200,12 +201,20 @@ def wait_seen(state, timeout):
         if len(p) >= 2 and p[0] == "SEEN" and p[1] == state:
             return time.monotonic()
 
-# Settle: make sure the observer sees our starting state before round 1.
-start = b if cur == a else a
-write(start)
-if wait_seen(start, 60) is None:
-    print("fleet-hub-latency: the observer never saw the starting state %r — is the hub listing this window there?" % start, file=sys.stderr)
-    sys.exit(1)
+# Settle: round 1 must be a CHANGE for the observer, so start from the state
+# its cache shows now (the watcher reports changes only). If that is neither
+# of ours, write one and wait until it shows up there.
+ostate = os.environ["OSTATE"]
+if ostate in (a, b):
+    start = ostate
+    write(start)                 # make the setter agree with what the observer sees
+    time.sleep(1.0)
+else:
+    start = a
+    write(start)
+    if wait_seen(start, 60) is None:
+        print("fleet-hub-latency: the observer never saw the starting state %r (it shows %r) — is the hub listing this window there?" % (start, ostate), file=sys.stderr)
+        sys.exit(1)
 lat = []
 prev = start
 for i in range(1, rounds + 1):
