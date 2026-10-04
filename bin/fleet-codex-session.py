@@ -197,7 +197,7 @@ def context(args):
             if os.environ.get('TMUX') and not args.socket:
                 value = subprocess.run(['bash', str(Path(__file__).with_name('fleet-hook-conf.sh')),
                                         'FLEET_AUTO_HANDOFF_PCT'], capture_output=True, text=True, timeout=3)
-                threshold = int(value.stdout.strip() or '0') if value.returncode == 0 else 0
+                threshold = int(value.stdout.strip() or '80') if value.returncode == 0 else 0  # unset ⇒ 80 (#1571)
         except (OSError, ValueError, subprocess.SubprocessError):
             pass
     stats.update(verdict="UNKNOWN" if pct < 0 else "HANDOFF" if pct >= (threshold or 80) else "WATCH" if pct >= 50 else "OK",

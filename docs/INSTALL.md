@@ -249,7 +249,7 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    child (`CLAUDE_CODE_ENTRYPOINT≠cli`) — not the pane's session — and the nudge
    is **held** while a client is typing at that window (`FLEET_HANDOFF_DEFER_SECS`,
    default 30 s; 0 = off). That latch is set by the `Stop` hook's **auto-handoff nudge**: when
-   `FLEET_AUTO_HANDOFF_PCT>0` (OFF by default) and a worker/scratch session's
+   `FLEET_AUTO_HANDOFF_PCT>0` (default 80, issue #1571; 0 = off) and a worker/scratch session's
    context crosses that %, `set-claude-state.sh done` emits a Stop-hook `block`
    decision steering the model to run `/fleet-handoff` (store → `/clear` → resume)
    — reusing the whole existing handoff cycle, only the trigger is new. The `%` is
@@ -269,12 +269,12 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    calls; silent for the hub, headless children and any other source (a scratch
    gets only its recovery map back, after a fleet compaction — issue #1318).
    `FLEET_REFOCUS=0` turns it off. When the fleet itself ran that `/compact`
-   (issue #1269 — a worker or scratch (#1318) in `[FLEET_COMPACT_PREP_PCT` (default 70)`,
+   (issue #1269 — a worker or scratch (#1318) in `[FLEET_COMPACT_PREP_PCT` (default 55)`,
    FLEET_AUTO_HANDOFF_PCT)` is asked at a clean Stop for a recovery map, then
    compacted in place at the next idle Stop instead of handed off), the same hook
    adds a "check the map against git and the PR" line and stamps
    `@compact_stage=restored` and bumps `@compact_count`; after
-   `FLEET_COMPACT_MAX` (default 2) compactions the next one is a `/fleet-handoff`
+   `FLEET_COMPACT_MAX` (default 3) compactions the next one is a `/fleet-handoff`
    instead (issue #1316). `FLEET_COMPACT_PREP_PCT=0` turns that off.
 
    A `PreCompact` group, matcher `auto`, fires `precompact-hook.sh` (issue #1321):

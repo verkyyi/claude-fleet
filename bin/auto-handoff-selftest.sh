@@ -117,9 +117,9 @@ write_confs() {
   {
     printf '# global fleet.conf (selftest)\nFLEET_GLOBAL_MAX_SESSIONS=3\n'
     if [ -n "${GPCT:-}" ]; then printf 'FLEET_AUTO_HANDOFF_PCT=%s\n' "$GPCT"
-    else                        printf '#FLEET_AUTO_HANDOFF_PCT=0        # context %% that triggers an auto-handoff; 0 = OFF\n'; fi
+    else                        printf '#FLEET_AUTO_HANDOFF_PCT=80       # context %% that triggers an auto-handoff; 0 = OFF\n'; fi
     [ -n "${GDEFER:-}" ] && printf 'FLEET_HANDOFF_DEFER_SECS=%s\n' "$GDEFER"
-    # In-place compaction (issue #1269) shares this Stop and defaults ON at 70%;
+    # In-place compaction (issue #1269) shares this Stop and defaults ON at 55%;
     # these legs are about the handoff alone, so it is off here —
     # bin/compact-prep-selftest.sh owns that path.
     printf 'FLEET_COMPACT_PREP_PCT=0\n'
@@ -184,10 +184,13 @@ case "$out" in *'/fleet-handoff'*) fail 'Codex must never invoke the Claude slas
 out="$(GPCT=60 FAKE_CTX=65 FAKE_ISSUE=561 FAKE_AGENT=codex FAKE_ARMED=1 run_state 'done')"
 nudged "$out" && fail 'Codex native cycle must debounce'
 
-# ---- OFF ≠ BROKEN: no conf layer sets it → no nudge even at 95% ---------------
+# ---- UNSET ≠ OFF: no conf layer sets it → the repo default 80 (issue #1571) ----
 out="$(FAKE_CTX=95 FAKE_ISSUE=561 run_state 'done')"
-nudged "$out" && fail "no conf sets the threshold (OFF) must NOT nudge, got: '$out'"
-latched && fail "OFF must not set the latch"
+nudged "$out" || fail "no conf sets the threshold → the default 80 must nudge at 95%, got: '$out'"
+case "$out" in *'>= 80%'*) : ;; *) fail "the unset threshold must read as the 80 default, got: '$out'";; esac
+latched || fail "the default line must set the latch"
+out="$(FAKE_CTX=79 FAKE_ISSUE=561 run_state 'done')"
+nudged "$out" && fail "under the default 80 (79%) must NOT nudge, got: '$out'"
 
 # ---- explicit 0 in the global conf → off ---------------------------------------
 out="$(GPCT=0 FAKE_CTX=95 FAKE_ISSUE=561 run_state 'done')"
@@ -335,15 +338,17 @@ out="$(printf '%s' '{"stop_hook_active":true}' | \
 nudged "$out" && fail "stop_hook_active=true must stand down (no re-block loop)"
 latched && fail "stop_hook_active loop-guard must not set the latch"
 
-# ---- NO CONF AT ALL (no global file, no per-fleet dir) → fail-open: no nudge, rc 0
+# ---- NO CONF AT ALL (no global file, no per-fleet dir) → the repo defaults, rc 0
 : > "$SETOPT_LOG"; rm -f "$GCONF"
 out="$(env -i PATH="$HOOK_PATH" HOME="$WORK/nohome" TMPDIR="$WORK/tmp" \
       TMUX="$WORK/fake-sock,1,0" TMUX_PANE="$PANE" SETOPT_LOG="$SETOPT_LOG" FAKE_SESSION="$SESS" \
       FAKE_PREV='done' FAKE_ISSUE=561 FAKE_CTX=95 \
     sh "$WORK/inst/bin/set-claude-state.sh" 'done' < /dev/null 2>&1)"; rc=$?
 [ "$rc" = 0 ] || fail "with no conf anywhere the hook must still exit 0 (never block a turn), rc=$rc: '$out'"
-# (Only the HANDOFF nudge: with no conf, compaction runs at its built-in 70%.)
-case "$out" in *auto-handoff*) fail "with no conf anywhere the nudge must stay OFF, got: '$out'" ;; esac
+# A machine with no conf lines runs the same ladder as one that writes 55/80/3
+# (issue #1571): at 95% the handoff at its built-in 80% owns the Stop.
+case "$out" in *'>= 80% auto-handoff threshold'*) : ;;
+  *) fail "with no conf anywhere the default 80 must nudge at 95%, got: '$out'" ;; esac
 grep -q '@claude_state done' "$SETOPT_LOG" || fail "with no conf the hook must still stamp @claude_state done"
 
 # ---- BROKEN INSTALL (fleet-lib.sh missing beside the hook) → fail-open, rc 0 -----
@@ -469,8 +474,11 @@ out="$(GPCT=0 FPCT=45 run_doctor)"
 case "$out" in *PASS*'auto-handoff at 45%'*'hook sees 45'*) : ;;
   *) fail "doctor: per-fleet 45 over global 0 must read 'at 45% (hook sees 45 …)', got: '$out'";; esac
 out="$(run_doctor)"
+case "$out" in *PASS*'auto-handoff at 80%'*'hook sees 80'*) : ;;
+  *) fail "doctor: nothing set must read PASS 'auto-handoff at 80% (hook sees 80 …)' — the #1571 default, got: '$out'";; esac
+out="$(GPCT=0 run_doctor)"
 case "$out" in *PASS*'auto-handoff OFF'*) : ;;
-  *) fail "doctor: nothing set must read PASS 'auto-handoff OFF', got: '$out'";; esac
+  *) fail "doctor: an explicit 0 must read PASS 'auto-handoff OFF', got: '$out'";; esac
 # The typing-deferral window rides the same line (issue #571): default 30s, conf value.
 out="$(GPCT=60 run_doctor)"
 case "$out" in *'defer 30s'*) : ;;
@@ -489,7 +497,7 @@ mv "$WORK/inst/bin/fleet-lib.sh.off" "$WORK/inst/bin/fleet-lib.sh"
 case "$out" in *WARN*'hook sees 0'*'inert'*) : ;;
   *) fail "doctor: conf 60 but the hook resolves 0 must WARN 'hook sees 0 — nudge inert', got: '$out'";; esac
 
-printf 'selftest: DOCTOR leg PASS (hook-eye view of the threshold: 60/45/OFF/inert)\n' >&2
+printf 'selftest: DOCTOR leg PASS (hook-eye view of the threshold: 60/45/default 80/OFF/inert)\n' >&2
 
 # ---- MEASURE: the statusline stamps @ctx_pct (skip if jq absent) --------------
 if command -v jq >/dev/null 2>&1; then

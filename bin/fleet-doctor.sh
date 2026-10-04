@@ -2029,7 +2029,7 @@ elif [ -d "$conf_dir" ]; then
     lim=
     # what the HOOK SEES: the same resolver the hook runs.
     via="session name (fleet not running)"
-    hkeys="FLEET_AUTO_HANDOFF_PCT FLEET_HANDOFF_DEFER_SECS FLEET_COMPACT_PREP_PCT FLEET_AUTO_HANDOFF_TOKENS FLEET_COMPACT_PREP_TOKENS"
+    hkeys="FLEET_AUTO_HANDOFF_PCT FLEET_HANDOFF_DEFER_SECS FLEET_COMPACT_PREP_PCT FLEET_AUTO_HANDOFF_TOKENS FLEET_COMPACT_PREP_TOKENS FLEET_COMPACT_MAX"
     kv=$(bash "$hc" --session "$sess" $hkeys 2>/dev/null)
     sock=$(tmux -L "$sess" display-message -p '#{socket_path}' 2>/dev/null)
     if [ -n "$sock" ]; then
@@ -2050,9 +2050,15 @@ elif [ -d "$conf_dir" ]; then
     csees=$(printf '%s\n' "$kv" | sed -n 3p)
     tsees=$(printf '%s\n' "$kv" | sed -n 4p)
     ctsees=$(printf '%s\n' "$kv" | sed -n 5p)
-    case "$sees" in ''|*[!0-9]*) sees=0 ;; esac
+    msees=$(printf '%s\n' "$kv" | sed -n 6p)
+    # the hook's unset defaults (issue #1571): handoff 80, compact-prep 55, cap 3 —
+    # only while its conf path is intact (fleet-lib.sh beside it); else OFF, as the
+    # hook fails open. KEEP IN SYNC with bin/set-claude-state.sh.
+    if [ -f "$(dirname "$0")/fleet-lib.sh" ]; then d_h=80 d_c=55 d_m=3; else d_h=0 d_c=0 d_m=0; fi
+    case "$sees" in '') sees=$d_h ;; *[!0-9]*) sees=0 ;; esac
     case "$dsees" in ''|*[!0-9]*) dsees=30 ;; esac
-    case "$csees" in '') csees=70 ;; *[!0-9]*) csees=0 ;; esac   # the hook's unset ⇒ 70 default
+    case "$csees" in '') csees=$d_c ;; *[!0-9]*) csees=0 ;; esac
+    case "$msees" in '') msees=$d_m ;; *[!0-9]*) msees=0 ;; esac
     case "$tsees" in ''|*[!0-9]*) tsees=0 ;; esac
     case "$ctsees" in ''|*[!0-9]*) ctsees=0 ;; esac
     case "$lim" in ''|*[!0-9]*) lim=0 ;; esac
@@ -2070,6 +2076,9 @@ elif [ -d "$conf_dir" ]; then
       else cdesc="$ctsees tok (window size unknown → falls back to ${csees}%)"; fi
     fi
     [ "$cpct" -gt 0 ] && ladder="compact-prep $cdesc" || ladder="compact-prep off"
+    if [ "$cpct" -gt 0 ]; then
+      if [ "$msees" -gt 0 ]; then ladder="$ladder ×$msees then handoff"; else ladder="$ladder (no cap)"; fi
+    fi
     # ordering faults (issue #1317): compact-prep < handoff < Claude's auto-compaction
     lwarn=''
     if [ "$tsees" -gt 0 ] && [ "$lim" -gt 0 ] && [ "$hpct" -ge 100 ]; then
@@ -2092,7 +2101,7 @@ elif [ -d "$conf_dir" ]; then
     elif [ "$hpct" -gt 0 ]; then
       pass handoff "$sess: auto-handoff at $hdesc · $ladder (hook sees $hsees via $via) · $defer while the operator types at the pane"
     else
-      pass handoff "$sess: auto-handoff OFF (FLEET_AUTO_HANDOFF_PCT/_TOKENS unset/0; hook sees $sees) · $ladder"
+      pass handoff "$sess: auto-handoff OFF (FLEET_AUTO_HANDOFF_PCT=0, no _TOKENS; hook sees $sees) · $ladder"
     fi
   done <<EOF
 $(_fleet_confs "$conf_dir")

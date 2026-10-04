@@ -15,7 +15,8 @@
 #      @effort; a payload with no model touches neither @model nor @effort; no
 #      context_window touches no @ctx_*
 #   D  @ctx_band follows the fleet's handoff lines, read from the conf layers the
-#      cheap way: nothing set → 50/80; FLEET_AUTO_HANDOFF_PCT from the environment,
+#      cheap way: nothing set → the 80 default, 65/80 (#1571); 0 → 50/80;
+#      FLEET_AUTO_HANDOFF_PCT from the environment,
 #      then the install's fleet.conf, then $FLEET_CONF_DIR/fleet.settings, then
 #      THIS fleet's fleets/<sess>/conf (legacy <sess>.conf) — each winning over
 #      the previous, quotes + trailing comments stripped, another fleet's overlay
@@ -133,8 +134,10 @@ expect() { # <want> <pct> [size] [VAR=val …]
   local want="$1"; shift; local got; got=$(band_of "$@")
   [ "$got" = "$want" ] || fail "D: band for % $1 ($*) should be $want, got '$got'" "$(log)"
 }
-expect ok 49;  expect watch 50;  expect watch 79;  expect handoff 80
-ok "D nothing set: the 50 / 80 fallback bands"
+expect ok 64;  expect watch 65;  expect watch 79;  expect handoff 80
+ok "D nothing set: the default handoff line 80 (issue #1571) → 65 / 80"
+expect ok 49 200000 FLEET_AUTO_HANDOFF_PCT=0; expect watch 50 200000 FLEET_AUTO_HANDOFF_PCT=0; expect handoff 80 200000 FLEET_AUTO_HANDOFF_PCT=0
+ok "D auto-handoff 0: the 50 / 80 fallback bands"
 expect handoff 30 200000 FLEET_AUTO_HANDOFF_PCT=30; expect watch 15 200000 FLEET_AUTO_HANDOFF_PCT=30; expect ok 14 200000 FLEET_AUTO_HANDOFF_PCT=30
 ok "D the environment is the floor: PCT=30 → 15 / 30"
 printf 'FLEET_AUTO_HANDOFF_PCT=60\n' > "$WORK/inst/fleet.conf"

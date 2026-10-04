@@ -6,7 +6,7 @@
 # are the next leg's reads — the way a real pane carries @compact_stage).
 #
 # What is pinned:
-#   THREE STEPS  ctx 70 → 75 → (SessionStart compact) → 30: prep (one block
+#   THREE STEPS  ctx 55 → 75 → (SessionStart compact) → 30: prep (one block
 #                decision asking for the recovery map), compacting (exactly one
 #                `/compact …` typed, Esc / text / Enter as separate send-keys),
 #                restored (the refocus block carries the check line + map path) —
@@ -27,7 +27,7 @@
 #                the deadline ⇒ nothing typed and the stage stays `prep` (#571).
 #   STALE        a prep/compacting stage seen below the line is dropped.
 #   CAP (#1316)  each fleet compaction bumps @compact_count; at the prep line a
-#                count of 0/1 preps, a count of FLEET_COMPACT_MAX (default 2) gets
+#                count of 0/1 preps, a count of FLEET_COMPACT_MAX (default 3) gets
 #                the handoff block instead ("compacted in place N times"), through
 #                the same latch + typing hold; SessionStart clear/startup zeroes
 #                the count (compact/resume keep it); FLEET_COMPACT_MAX=0 is
@@ -173,17 +173,20 @@ wait_sent() { local i=0
 sent() { grep -c -- '/compact ' "$SENDLOG" 2>/dev/null || true; }
 blocked() { case "$OUT" in *'"decision":"block"'*) return 0 ;; esac; return 1; }
 
-# ===== THREE STEPS: 70 → 75 → compact → 30 ======================================
-conf '' ''                       # nothing set ⇒ the 70 default, handoff off
-reset @ctx_pct=70
+# ===== THREE STEPS: 55 → 75 → compact → 30 ======================================
+conf '' ''                       # nothing set ⇒ the defaults: prep 55, handoff 80 (#1571)
+reset @ctx_pct=54
 stop
-blocked || fail "70% (= default prep line) must block with the recovery-map request" "$OUT"
+blocked && fail "54% (under the default 55 prep line) must not block" "$OUT"
+reset @ctx_pct=55
+stop
+blocked || fail "55% (= default prep line) must block with the recovery-map request" "$OUT"
 case "$OUT" in *'compact-prep threshold'*"$MAP"*'issue #12'*) : ;;
   *) fail "prep directive must name the threshold, the map file and the issue" "$OUT" ;; esac
 printf '%s' "$OUT" | python3 -c 'import json,sys; json.load(sys.stdin)' || fail "prep output must be valid JSON" "$OUT"
 [ "$(getopt @compact_stage)" = prep ] || fail "step 1 must stamp @compact_stage=prep"
 [ "$(getopt @compact_rearm)" = 0 ] || fail "step 1 must disarm (@compact_rearm=0)"
-ok "STEP 1 ctx 70 → prep: one block decision naming $MAP"
+ok "STEP 1 ctx 55 (default line) → prep: one block decision naming $MAP"
 
 setopt @ctx_pct 75; printf 'map\n' > "$MAP"
 stop '{"stop_hook_active":true}'  # the map turn ends: this is the next idle Stop
@@ -246,13 +249,13 @@ case "$OUT" in *'compact-prep'*) fail "prep line above the handoff line ⇒ empt
 ok "HANDOFF ctx ≥ handoff % → handoff nudge, no compaction; band = [prep, handoff)"
 
 # ===== SCOPE / OFF ===============================================================
-conf '' ''
+conf '' 0                        # handoff off: 80% sits in the compaction band
 reset @ctx_pct=80 @issue=;                     stop; blocked && fail "the hub / a panel (no @issue, no @raw) must not compact" "$OUT"
 reset @ctx_pct=80 @issue= @raw=1 @cc_agent=codex; stop; blocked && fail "a codex scratch must not compact" "$OUT"
 reset @ctx_pct=80 @cc_agent=codex;             stop; blocked && fail "codex pane must not compact" "$OUT"
 reset @ctx_pct=80 @claude_state=needs;         stop; blocked && fail "a needs stop must not be hijacked" "$OUT"
 reset @ctx_pct=80; stop '{"stop_hook_active":true}'; blocked && fail "stop_hook_active must not start a prep" "$OUT"
-conf 0 ''
+conf 0 0
 reset @ctx_pct=95;                             stop; blocked && fail "FLEET_COMPACT_PREP_PCT=0 must be off" "$OUT"
 [ -z "$(getopt @compact_stage)" ] || fail "off must stamp nothing"
 ok "SCOPE/OFF hub · codex (worker + scratch) · needs · stop_hook_active · 0 ⇒ nothing"
@@ -335,7 +338,7 @@ stop
 ok "STALE compacting below the line → dropped + re-armed"
 
 # ===== CAP: compact twice, then hand off (issue #1316) ===========================
-conf '' ''                       # nothing set ⇒ prep 70, cap 2, auto-handoff OFF
+conf '' '' 2                     # prep 55 + handoff 80 by default; cap 2 set here
 for n in 0 1; do
   reset @ctx_pct=72 @compact_count=$n @compact_rearm=1 @compact_ts=1
   stop
@@ -359,9 +362,9 @@ stop; blocked && fail "the latched pane must not be re-nudged" "$OUT"
 sleep 0.5; [ "$(sent)" = 0 ] || fail "past the cap no /compact may ever be typed"
 ok "CAP count 2, same 72% reading → handoff block ('compacted in place 2 times'), latched, no prep"
 
-reset @ctx_pct=60 @compact_count=2; stop
+reset @ctx_pct=50 @compact_count=2; stop
 blocked && fail "count 2 below the prep line must not block" "$OUT"
-conf 70 80
+conf 70 80 2
 reset @ctx_pct=75 @compact_count=2; stop
 case "$OUT" in *'compacted in place 2 times'*) : ;; *) fail "cap fires inside [prep, handoff)" "$OUT" ;; esac
 reset @ctx_pct=85 @compact_count=2; stop
@@ -371,10 +374,15 @@ reset @ctx_pct=72 @compact_count=2; stop
 case "$OUT" in *'compact-prep threshold). The fleet will compact'*) : ;; *) fail "FLEET_COMPACT_MAX=3 lets a 3rd compaction prep" "$OUT" ;; esac
 reset @ctx_pct=72 @compact_count=3; stop
 case "$OUT" in *'compacted in place 3 times (FLEET_COMPACT_MAX=3)'*) : ;; *) fail "count 3 hits a cap of 3" "$OUT" ;; esac
-ok "CAP band [prep, handoff) only; the plain handoff keeps its line; FLEET_COMPACT_MAX moves the cap"
+conf '' ''                       # unset ⇒ the default cap 3 (#1571)
+reset @ctx_pct=72 @compact_count=2; stop
+case "$OUT" in *'compact-prep threshold). The fleet will compact'*) : ;; *) fail "the default cap 3 lets a 3rd compaction prep" "$OUT" ;; esac
+reset @ctx_pct=72 @compact_count=3; stop
+case "$OUT" in *'compacted in place 3 times (FLEET_COMPACT_MAX=3)'*) : ;; *) fail "unset cap ⇒ the default 3" "$OUT" ;; esac
+ok "CAP band [prep, handoff) only; the plain handoff keeps its line; FLEET_COMPACT_MAX moves the cap (default 3)"
 
-conf '' ''
-reset @ctx_pct=72 @compact_count=2; FAKE_CLIENTS="$(date +%s) @1" stop
+conf '' '' 2
+reset @ctx_pct=60 @compact_count=2; FAKE_CLIENTS="$(date +%s) @1" stop   # under the hold ceiling, prep+10
 blocked && fail "operator typing must hold the cap handoff" "$OUT"
 [ -n "$(getopt @handoff_deferred_ts)" ] && [ -z "$(getopt @handoff_armed)" ] || fail "a held cap handoff stamps the hold, no latch"
 [ -z "$(getopt @compact_stage)" ] || fail "a held cap handoff must not fall back to compacting"

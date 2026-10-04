@@ -298,7 +298,7 @@ fi
 # /fleet-handoff (cycle) — a structured handoff preserves task state far better
 # than Claude's near-limit auto-compaction. This ONLY adds the trigger; the whole
 # handoff/clear/resume machinery (commands/fleet-handoff.md + fleet-handoff-cycle.sh)
-# is reused unchanged. Knobs: FLEET_AUTO_HANDOFF_PCT (0 = OFF; mirrors
+# is reused unchanged. Knobs: FLEET_AUTO_HANDOFF_PCT (unset ⇒ 80; 0 = OFF; mirrors
 # FLEET_RUNAWAY_CPU_PCT), or FLEET_AUTO_HANDOFF_TOKENS to set it in tokens used
 # (issue #1317), and FLEET_HANDOFF_DEFER_SECS (the typing hold, issue #571).
 # Only 'done' (the Stop hook) reaches here, so the JSON is only ever emitted in the
@@ -314,8 +314,8 @@ fi
 # global-only keys stripped per #237) that fleet-doctor.sh evaluates too. This
 # script is `sh`-wired and cannot source the bash-only fleet-lib itself; the helper
 # is the bash hop (≈20 ms, once per Stop — never on the per-tool hot path). Any
-# failure (helper/lib missing, no server, no conf) yields '' ⇒ 0 ⇒ OFF: fail-open,
-# exactly as before.
+# failure of the PATH (helper/lib missing) yields OFF: fail-open, exactly as
+# before. A key nothing sets gets the repo default — 80 (issue #1571).
 if [ "$sem" = "done" ]; then
   _bin=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
   # The language rule this hook's directive ends with (issue #620). This script is
@@ -333,15 +333,24 @@ if [ "$sem" = "done" ]; then
   _ds=$(printf '%s\n' "$_kv" | sed -n 2p)             # typing-deferral window (issue #571)
   _cp=$(printf '%s\n' "$_kv" | sed -n 3p)             # compact-prep threshold (issue #1269)
   _cm=$(printf '%s\n' "$_kv" | sed -n 4p)             # compactions before a handoff (issue #1316)
-  case "$_hp" in ''|*[!0-9]*) _hp=0 ;; esac          # unset / non-numeric → off
-  # Unset ⇒ the 70 default, but only when the conf path is intact: a missing lib
-  # resolves nothing, and that must stay fail-open OFF like the handoff knob.
+  # The context ladder's defaults (issue #1571): handoff 80, compact-prep 55, at
+  # most 3 compactions — KEEP IN SYNC with fleet.conf.example, fleet-context.sh,
+  # conf/statusline.sh, fleet-doctor.sh and fleet-codex-session.py
+  # (context-ladder-defaults-selftest.sh pins all of them). Unset ⇒ the default,
+  # but only when the conf path is intact: a missing lib resolves nothing, and that
+  # stays fail-open OFF. Non-numeric ⇒ off; 0 = off.
+  _lad=0
+  [ -n "$_bin" ] && [ -f "$_bin/fleet-lib.sh" ] && [ -f "$_bin/fleet-hook-conf.sh" ] && _lad=1
+  case "$_hp" in
+    '') if [ "$_lad" = 1 ]; then _hp=80; else _hp=0; fi ;;
+    *[!0-9]*) _hp=0 ;;
+  esac
   case "$_cp" in
-    '') if [ -n "$_bin" ] && [ -f "$_bin/fleet-lib.sh" ] && [ -f "$_bin/fleet-hook-conf.sh" ]; then _cp=70; else _cp=0; fi ;;
+    '') if [ "$_lad" = 1 ]; then _cp=55; else _cp=0; fi ;;
     *[!0-9]*) _cp=0 ;;
   esac
   case "$_cm" in
-    '') if [ -n "$_bin" ] && [ -f "$_bin/fleet-lib.sh" ] && [ -f "$_bin/fleet-hook-conf.sh" ]; then _cm=2; else _cm=0; fi ;;
+    '') if [ "$_lad" = 1 ]; then _cm=3; else _cm=0; fi ;;
     *[!0-9]*) _cm=0 ;;
   esac
   # Lines set in TOKENS (issue #1317) win over the % keys: converted here against
@@ -390,7 +399,7 @@ if [ "$sem" = "done" ]; then
   # by the third or fourth a session no longer remembers what it agreed to at the
   # start. refocus-hook.sh counts each fleet compaction that completes on
   # @compact_count (handoff-latch-reset-hook.sh zeroes it in a fresh session), and
-  # once it reaches FLEET_COMPACT_MAX (unset ⇒ 2; 0 = no cap) a worker at the
+  # once it reaches FLEET_COMPACT_MAX (unset ⇒ 3; 0 = no cap) a worker at the
   # compact-prep line is handed off instead: the handoff below fires with the prep
   # % as its line, through the same latch and typing hold, and the compaction
   # section skips. At/over the handoff % the plain handoff keeps its own line. Same
@@ -505,7 +514,7 @@ PYCODEX
   # (@raw=1, issue #1318 — the long-lived window that drives a whole EPIC, where a
   # handoff's re-grounding costs most); a codex pane, hub, panels, a needs stop and
   # a pending transfer are untouched.
-  # Unset knob ⇒ 70; 0 = off. Past the compaction cap (#1316) the handoff owns it.
+  # Unset knob ⇒ 55; 0 = off. Past the compaction cap (#1316) the handoff owns it.
   if [ "$_cp" -gt 0 ] && [ -z "$_cmaxed" ] && [ "$_agent" != codex ] && [ "$handoff_prev" != needs ]; then
     _cissue=$(tmux display-message -p -t "$TMUX_PANE" '#{@issue}|#{@raw}' 2>/dev/null)
     _craw=${_cissue#*|}; _cissue=$(printf '%s' "${_cissue%%|*}" | tr -cd '0-9')
