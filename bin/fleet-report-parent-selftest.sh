@@ -272,6 +272,30 @@ TMUX="$csocket,1,0" TMUX_PANE="$cpane" FLEET_AUTO_HANDOFF_PCT=0 \
   sh "$BIN/set-claude-state.sh" "done" </dev/null >/dev/null
 eq "repeated Stop does not duplicate the report" $((b + 1)) "$(frames)"
 
+# --- the same Stop in a fleet hosting 2+ repos (issue #1511) ---------------------
+# There @origin is repo-qualified (`<slug>:issue-<N>`, #789). The hook matched the
+# bare shape only, so such a child stopped in silence: no frame, no `stopped` row
+# in the parent's ledger — its fleet-await had nothing but the stall ladder, while
+# fleet-report-parent.sh itself had read the qualified key fine all along. The
+# parent's repo must be KNOWN for the key to resolve (fleet_win_for_key's repo
+# gate), which is what a real spawn's @repo stamp guarantees.
+TM set-window-option -t "$PARENT" @repo acme/widgets
+new_win 'qualified child' "sleep 600"; QCHILD="$WID"
+TM set-window-option -t "$QCHILD" @issue 518 2>/dev/null
+TM set-window-option -t "$QCHILD" @origin acme-widgets:issue-483 2>/dev/null
+TM set-window-option -t "$QCHILD" @claude_state working
+qpane=$(TM display-message -p -t "$QCHILD" '#{pane_id}')
+QLEDGER="$FLEET_CONF_DIR/fleets/$LBL/children/acme-widgets:issue-483.ndjson"
+b=$(frames)
+TMUX="$csocket,1,0" TMUX_PANE="$qpane" FLEET_AUTO_HANDOFF_PCT=0 \
+  sh "$BIN/set-claude-state.sh" "done" </dev/null >/dev/null
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ "$(frames)" -gt "$b" ] && break; sleep 0.3; done
+eq "Stop with a repo-qualified @origin reports once to the live parent" $((b + 1)) "$(frames)"
+ok; grep -q '"state": *"STOPPED"' "$QLEDGER" 2>/dev/null \
+  || fail "the parent's qualified ledger must hold the child's STOPPED row" "$(cat "$QLEDGER" 2>/dev/null)"
+eq "the qualified child is stamped @reported" "1" "$(TM display-message -p -t "$QCHILD" '#{@reported}')"
+TM set-window-option -u -t "$PARENT" @repo
+
 # A deferred Fleet loop/handoff is not a stopped child task.
 b=$(frames)
 TM set-window-option -t "$CHILD" @reported 0

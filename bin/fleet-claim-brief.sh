@@ -92,7 +92,10 @@ at_issue="${at_issue//[^0-9]/}"
 # read here so the worker knows it has a parent to report back to at ship time. One
 # tmux read, zero gh cost; empty ≡ the operator spawned it from the hub.
 at_origin=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{@origin}' 2>/dev/null)
-at_origin=$(printf '%s' "$at_origin" | tr -cd 'A-Za-z0-9._-')
+# `:` stays: it is the repo-qualified key's separator (`<slug>:issue-<N>`, issue
+# #789). Stripped, that key read as `<slug>issue-<N>` — which no branch below knows,
+# so a monorepo child was told nobody was waiting on it (issue #1511).
+at_origin=$(printf '%s' "$at_origin" | tr -cd 'A-Za-z0-9._:-')
 cwd=$(pwd -P 2>/dev/null)
 wt_issue=''
 case "$cwd" in
@@ -135,6 +138,10 @@ printf 'issue=%s  (@issue=%s worktree=%s%s)\n' \
 case "$at_origin" in
   issue-*)   printf 'origin: %s (spawned by the worker on issue #%s — report to it when you ship: bin/fleet-report-parent.sh)\n' "$at_origin" "${at_origin#issue-}" ;;
   scratch-*) printf 'origin: %s (spawned by scratch session ~%s — report to it when you ship: bin/fleet-report-parent.sh)\n' "$at_origin" "${at_origin#scratch-}" ;;
+  # Repo-qualified (issue #789 — a fleet hosting 2+ repos): the same two keys with
+  # the parent's repo slug in front. A window key all the same (issue #1511).
+  ?*:issue-*)   printf 'origin: %s (spawned by the worker on issue #%s of %s — report to it when you ship: bin/fleet-report-parent.sh)\n' "$at_origin" "${at_origin##*:issue-}" "${at_origin%%:*}" ;;
+  ?*:scratch-*) printf 'origin: %s (spawned by scratch session ~%s of %s — report to it when you ship: bin/fleet-report-parent.sh)\n' "$at_origin" "${at_origin##*:scratch-}" "${at_origin%%:*}" ;;
   '')        printf 'origin: none (hub-spawned — the operator has the dash; nothing to report back to)\n' ;;
   *)         printf 'origin: %s (not a live-window key — a daemon or another fleet; nothing to report back to)\n' "$at_origin" ;;
 esac

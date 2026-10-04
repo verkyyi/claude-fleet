@@ -210,6 +210,24 @@ has 'origin: scratch-7' || fail "a scratch parent must be named too" "$OUT"
 has 'scratch session ~7' || fail "a scratch parent renders in the ~N grammar" "$OUT"
 ok "ORIGIN a scratch parent is named in the dash's own ~N grammar"
 
+# A repo-qualified key (`<slug>:issue-<N>`, issue #789 — a fleet hosting 2+ repos)
+# is a window key too (issue #1511). The brief used to strip its `:` and then call
+# the result "not a live-window key", so a monorepo child was told nobody was
+# waiting on it while its parent sat two windows away in the same fleet.
+GH_ASSIGNEES=verkyyi FAKE_AT_ISSUE=77 FAKE_AT_ORIGIN=acme-widgets:issue-483 run "$WORK/widgets-issue-12"
+has 'origin: acme-widgets:issue-483' || fail "a repo-qualified parent key must print intact, ':' included" "$OUT"
+has 'issue #483'             || fail "the qualified origin line should name the parent in issue form" "$OUT"
+has 'of acme-widgets'        || fail "the qualified origin line should name the parent's repo" "$OUT"
+has 'fleet-report-parent.sh' || fail "the qualified origin line must point at the report-back command" "$OUT"
+if has 'not a live-window key'; then fail "a repo-qualified key IS a window key — never 'not a live-window key'" "$OUT"; fi
+ok "ORIGIN a repo-qualified issue parent is named, with the report-back command"
+
+GH_ASSIGNEES=verkyyi FAKE_AT_ISSUE=77 FAKE_AT_ORIGIN=acme-widgets:scratch-7 run "$WORK/widgets-issue-12"
+has 'origin: acme-widgets:scratch-7' || fail "a repo-qualified scratch key must print intact" "$OUT"
+has 'scratch session ~7'    || fail "a qualified scratch parent renders in the ~N grammar" "$OUT"
+if has 'not a live-window key'; then fail "a repo-qualified scratch key IS a window key" "$OUT"; fi
+ok "ORIGIN a repo-qualified scratch parent is named in the ~N grammar"
+
 # No parent: SAY so. A silent omission would read as "the step was skipped" — the
 # exact #454 failure the atomic brief exists to make impossible.
 GH_ASSIGNEES=verkyyi FAKE_AT_ISSUE=77 FAKE_AT_ORIGIN='' run "$WORK/widgets-issue-12"

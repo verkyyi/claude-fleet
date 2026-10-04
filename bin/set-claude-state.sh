@@ -614,7 +614,12 @@ fi
 # stdout belongs to Stop's JSON response, so reports never print into it.
 if [ "$sem" = "done" ] && [ "$handoff_prev" != "looping" ] && [ -z "$wstate" ]; then
   _origin=$(tmux display-message -p -t "$TMUX_PANE" '#{@origin}' 2>/dev/null)
-  case "$_origin" in issue-*|scratch-*)
+  # Both key shapes (issue #1511): the bare `issue-<N>` / `scratch-<N>` and the
+  # repo-qualified `<slug>:issue-<N>` / `<slug>:scratch-<N>` a fleet hosting 2+ repos
+  # stamps (#789). Matching the bare shape alone let a monorepo child stop in
+  # silence — no `stopped` row in its parent's ledger, the parent's fleet-await left
+  # to its stall ladder — while fleet-report-parent.sh itself read the qualified key fine.
+  case "$_origin" in issue-*|scratch-*|?*:issue-*|?*:scratch-*)
     _bin=$(cd "$(dirname "$0")" && pwd)
     bash -c '. "$1/fleet-lib.sh"; fleet_timebox 10 bash "$1/fleet-report-parent.sh" --state stopped --only-once --win "$2"' \
       report-stop "$_bin" "$TMUX_PANE" >/dev/null 2>&1 || : ;;
