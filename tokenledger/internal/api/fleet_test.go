@@ -573,7 +573,7 @@ sys.exit(main())
 	checkout := filepath.Join(home, "checkout")
 	adapter := `#!/bin/bash
 case "$1" in
-  inventory) printf '%s\0' ` + shQuote(session) + ` ` + shQuote(repo) + ` ` + shQuote(checkout) + ` claude ` + shQuote(filepath.Join(conf, "fleet.conf")) + ` ;;
+  inventory) printf '%s\0' ` + shQuote(session) + ` ` + shQuote(repo) + ` ` + shQuote(checkout) + ` claude ` + shQuote(filepath.Join(conf, "fleet.conf")) + ` ` + shQuote(repo) + ` ;;
   workers) printf '@1\t42\t\t/w/x-issue-42\tworking\tclaude\tw1\t\t\n@2\t\t1\t/w/x-scratch-3\tidle\tclaude\tw2\t\t\n' ;;
   config) printf '%s\0' 8 0 1 ;;
   start) exit 0 ;;
