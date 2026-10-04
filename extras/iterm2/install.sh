@@ -84,7 +84,7 @@ ver_ge() {
 put_file() {
   if [ -f "$1" ] && cmp -s "$1" "$3"; then
     ok "$4 unchanged ($1)"
-    if [ "$(stat -f %Lp "$1" 2>/dev/null || stat -c %a "$1")" != "$2" ] && change "chmod $2 $1"; then
+    if [ -z "$(find "$1" -prune -perm "$2")" ] && change "chmod $2 $1"; then   # exact mode, BSD + GNU
       chmod "$2" "$1"
     fi
     return 0

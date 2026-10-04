@@ -120,7 +120,7 @@ inst --mini macmini
 [ "$RC" = 0 ] || fail "install exit $RC"
 cmp -s "$AL" "$EX/fleet_open.py" || fail "AutoLaunch script differs from the source"
 [ "$(cat "$C/secret")" = s3cr3t-token ] || fail "secret content"
-[ "$(stat -f %Lp "$C/secret" 2>/dev/null || stat -c %a "$C/secret")" = 600 ] || fail "secret not 0600"
+[ -n "$(find "$C/secret" -prune -perm 600)" ] || fail "secret not 0600"
 [ "$(cat "$C/host")" = macmini ] || fail "host file"
 grep -qx 'github.com' "$C/allow" && grep -qx 'claude.ai' "$C/allow" || fail "default allow-list"
 ls "$H/.ssh/config.bak-"* >/dev/null 2>&1 || fail "no ssh config backup"
