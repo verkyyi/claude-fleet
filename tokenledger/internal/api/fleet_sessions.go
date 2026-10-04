@@ -79,5 +79,5 @@ func (s *Server) handleFleetSessions(w http.ResponseWriter, r *http.Request) {
 		ctx = withViewer(ctx, login)
 	}
 	out, err := s.CallFleetTool(r.WithContext(ctx), "fleet_sessions", nil)
-	writeFleetResult(w, out, err)
+	writeFleetResult(w, r, out, err)
 }

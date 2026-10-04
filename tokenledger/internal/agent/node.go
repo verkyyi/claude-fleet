@@ -294,6 +294,11 @@ func (a *Agent) nodeSession(ctx context.Context) (established bool, err error) {
 	a.markNodeReady()
 	t := time.NewTicker(a.cfg.LiveInterval)
 	defer t.Stop()
+	// A state change on this machine beats at once (claude-fleet#1481):
+	// node_nudge.go watches the fleet's nudge file and debounces + rate-limits
+	// the extra beats it asks for. The ticker above is untouched by it.
+	nudge := watchNudge(ctx, a.cfg.FleetNudgePath)
+	var nb nudgeBeats
 	for {
 		select {
 		case <-ctx.Done():
@@ -302,6 +307,15 @@ func (a *Agent) nodeSession(ctx context.Context) (established bool, err error) {
 		case err := <-readErr:
 			return true, err
 		case <-t.C:
+			if err := beat(); err != nil {
+				return true, err
+			}
+		case <-nudge:
+			nb.arm()
+		case <-nb.pending:
+			if !nb.due() {
+				continue
+			}
 			if err := beat(); err != nil {
 				return true, err
 			}

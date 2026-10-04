@@ -69,6 +69,17 @@ printf '%s tmux-spinner: nofile=%s\n' "$(date '+%Y-%m-%dT%H:%M:%S' 2>/dev/null)"
 # probe, which is `_sock_live` here (issue #887, below).
 FLEET_CONF_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
 
+# _hub_nudge — tell the ccquota agent a window's state just changed (issue
+# #1481) so the other machines see it now, not on the next 5 s beat. Inline copy
+# of fleet_hub_nudge() in bin/fleet-lib.sh (POSIX sh here) — KEEP IN SYNC. Every
+# caller below writes only on a CHANGE, so no re-stamp ever nudges. Off unless
+# CCQUOTA_FLEET=1: nothing is written.
+_hub_nudge() {
+  [ "${CCQUOTA_FLEET:-0}" = 1 ] || return 0
+  : > "$FLEET_CONF_DIR/global/hub-nudge" 2>/dev/null
+  return 0
+}
+
 # Every tmux this daemon runs goes through here, so the heartbeat can publish how
 # many it forks (issue #887: `tmux_calls_per_s=`, read by fleet-doctor's machine
 # line). A call inside `$(…)` counts in the subshell and is lost — those sites add
@@ -288,6 +299,7 @@ stuck_check() {
         tmux -L "$sock" set-window-option -t "$wid" @claude_state 'done' 2>/dev/null
         tmux -L "$sock" set-window-option -t "$wid" @claude_needs '' 2>/dev/null   # #640: no stale reason on a fresh state
         tmux -L "$sock" set-window-option -t "$wid" @claude_state_ts "$nows" 2>/dev/null
+        _hub_nudge
         printf '%s  %-10s working -> done (idle %ss; stop-hook missed)\n' \
           "$(date +%H:%M:%S)" "$skey" "$age" >> "$STUCK_LOG"
         ( CLASSIFY_SOCK="$sock" "$BIN/classify-sessions.sh" --window "$wid" >/dev/null 2>&1 & )   # refine done|needs|looping
@@ -534,6 +546,7 @@ needs_check() {
           tmux -L "$sock" set-window-option -t "$wid" @claude_needs "$want" 2>/dev/null
           msg="needs/${nsub:--} -> needs/$want  pending tool_use is $name" ;;
       esac
+      _hub_nudge
       printf '%s  %-24s %s\n' "$(date +%H:%M:%S)" "$sock:$wid" "$msg" >> "$NEEDS_LOG"
       touched=$((touched + 1))
     done <<EOF

@@ -240,6 +240,11 @@ esac
 # nothing — it preserves the existing @claude_state and its timestamp so the
 # classifier (or the worker's own declaration) stays authoritative.
 if [ "$sem" != "leave" ]; then
+  # What the window said BEFORE this write — only with the cross-machine hub on
+  # (issue #1481, below): the nudge is for a CHANGE, and a per-tool `working`
+  # re-stamp is not one. Off, no extra fork.
+  _hubprev=''
+  [ "${CCQUOTA_FLEET:-0}" = 1 ] && _hubprev=$(tmux display-message -p -t "$TMUX_PANE" '#{@claude_state}/#{@claude_needs}' 2>/dev/null)
   # A tool, new prompt, or needs-attention event invalidates the previous Stop.
   # In particular, a typing hold must not let a later stale `done` stamp reuse it.
   if [ "$sem" != "done" ]; then
@@ -265,6 +270,13 @@ if [ "$sem" != "leave" ]; then
   # next tick instead. A builtin redirection: no fork on the per-tool hot path.
   _sockp=${TMUX%%,*}
   [ -n "$_sockp" ] && : > "$_sockp.dirty" 2>/dev/null
+  # …and the cross-machine hub (issue #1481): touch the login's nudge file so the
+  # ccquota agent reports this window NOW instead of on its next 5 s beat. Only
+  # when the state actually changed. Inline copy of fleet_hub_nudge() in
+  # bin/fleet-lib.sh (this script is `sh` and cannot source it) — KEEP IN SYNC.
+  if [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ "$_hubprev" != "${wstate:-$sem}/$sub" ]; then
+    : > "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/global/hub-nudge" 2>/dev/null
+  fi
 fi
 
 # A child that just went idle may be the last thing its parent was waiting on

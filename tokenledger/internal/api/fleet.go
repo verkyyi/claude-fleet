@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"sort"
@@ -427,6 +428,9 @@ func (s *Server) FleetSessions(req *http.Request) (map[string]any, error) {
 	// wins the timestamp, any online fleet makes the machine online, and the
 	// session count is this answer's rows on it.
 	nodes := map[string]*FleetNode{}
+	// The validator's inputs (claude-fleet#1481).
+	var latest time.Time
+	lost := 0
 	for i, r := range rows {
 		n := nodes[r.Hostname]
 		if n == nil {
@@ -444,6 +448,12 @@ func (s *Server) FleetSessions(req *http.Request) (map[string]any, error) {
 			continue
 		}
 		machines[r.Hostname] = true
+		if r.ObservedAt.After(latest) {
+			latest = r.ObservedAt
+		}
+		if views[i].Availability == "lost" {
+			lost++
+		}
 		var ws []map[string]any
 		_ = json.Unmarshal([]byte(r.WorkersJSON), &ws)
 		sort.SliceStable(ws, func(a, b int) bool {
@@ -472,7 +482,28 @@ func (s *Server) FleetSessions(req *http.Request) (map[string]any, error) {
 		nodeList = append(nodeList, *n)
 	}
 	sort.Slice(nodeList, func(a, b int) bool { return nodeList[a].MachineName < nodeList[b].MachineName })
-	return map[string]any{"machines": hosts, "count": len(out), "sessions": out, "nodes": nodeList}, nil
+	return map[string]any{"machines": hosts, "count": len(out), "sessions": out, "nodes": nodeList,
+		"etag": fleetSessionsETag(latest, len(out), lost)}, nil
+}
+
+// fleetSessionsETag is the validator of one fleet_sessions answer
+// (claude-fleet#1481): the newest heartbeat behind it, the row count and how
+// many rows are on a lost machine. Any heartbeat moves it, so a poller that
+// sends it back as If-None-Match gets 304 exactly while no node has reported
+// since — the sidebar can ask every 2 s without pulling the list each time.
+func fleetSessionsETag(latest time.Time, rows, lost int) string {
+	return fmt.Sprintf("\"%d-%d-%d\"", latest.UnixMilli(), rows, lost)
+}
+
+// etagMatches reports whether an If-None-Match header names tag (or `*`).
+func etagMatches(ifNoneMatch, tag string) bool {
+	for _, c := range strings.Split(ifNoneMatch, ",") {
+		c = strings.TrimSpace(c)
+		if c == "*" || c == tag || strings.TrimPrefix(c, "W/") == tag {
+			return true
+		}
+	}
+	return false
 }
 
 // visibleFleet resolves one fleet id the caller may see, or NOT_FOUND —
@@ -795,13 +826,27 @@ func (s *Server) handleFleet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := s.CallFleetTool(r, tool, args)
-	writeFleetResult(w, out, err)
+	writeFleetResult(w, r, out, err)
 }
 
 // writeFleetResult writes one fleet tool's answer the way /v1/fleet/<tool>
 // always has: the result as 200, a fault as its HTTP status.
-func writeFleetResult(w http.ResponseWriter, out any, err error) {
+func writeFleetResult(w http.ResponseWriter, r *http.Request, out any, err error) {
 	w.Header().Set("Cache-Control", "no-store")
+	// A read that carries its own validator (fleet_sessions, #1481) answers
+	// a matching If-None-Match with 304 and no body — whichever way it was
+	// asked: the viewer token's GET, or the certificate's POST (#1475), whose
+	// body is a credential, not a change.
+	if m, _ := out.(map[string]any); err == nil && m != nil {
+		tag, _ := m["etag"].(string)
+		if tag != "" {
+			w.Header().Set("ETag", tag)
+			if etagMatches(r.Header.Get("If-None-Match"), tag) {
+				w.WriteHeader(http.StatusNotModified)
+				return
+			}
+		}
+	}
 	if err != nil {
 		e := errorObject(err)
 		status := map[string]int{"INVALID_ARGUMENT": 400, "NOT_FOUND": 404, "FORBIDDEN": 403,

@@ -522,6 +522,7 @@ migrate_one_body() {
     [ -n "$hnd" ] && fleet_wid_stamp "$nw" "$SOCK" "$hnd" >/dev/null 2>&1
     TM set-window-option -t "$nw" @claude_state "${state:-done}" 2>/dev/null
     TM set-window-option -t "$nw" @claude_state_ts "$(now)" 2>/dev/null
+    fleet_hub_nudge   # issue #1481
   fi
   # The window exists and carries @issue/@worktree again — the gap is over, so the
   # reapers get their normal signals back (issue #550). Dropped BEFORE the boot
