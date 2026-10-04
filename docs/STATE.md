@@ -610,6 +610,40 @@ mistyped or unknown argument, or a repo the fleet does not host, is refused with
 the reason before anything runs; a valid call runs the script unchanged and
 returns its exit code, stdout and stderr — every cap and guard is the script's.
 
+### The command inbox — commands run, not typed (#1337)
+
+`/clear` + the handoff pickup (`bin/fleet-handoff-cycle.sh`), `/compact …`
+(`bin/fleet-compact-send.sh`) and `/model …` (`bin/fleet-model-switch.sh`) used to
+be TYPED into the pane. Each now goes through `fleet_session_command [--socket L]
+[--from who] <target> '/cmd args'` (`bin/fleet-lib.sh`; `bin/fleet-session-command.sh`
+is its CLI) first:
+
+```
+$FLEET_CONF_DIR/global/mod-inbox/<socket-label>/<pane-number>/
+  <seq>.json    {"cmd":"/clear","args":"","from":"handoff-cycle"}  (posted by rename)
+  <seq>.taken   the mod's claim — an atomic mv of the .json
+  <seq>.done    {"ok":true} | {"ok":false,"error":"…"}
+```
+
+The mod (`mod/fleet/hooks/inbox.ts`) polls it every second on a module timer — so
+it keeps polling after a `/clear`, which fires no new `session.start` — and runs
+each post with `$.command.run`, which the engine queues until the session is idle.
+Keyed by socket label as well as pane id: a pane id is unique per tmux server only.
+
+| exit | meaning | caller |
+|---|---|---|
+| 0 | ran (`.done` ok) | done — logs `via mod` |
+| 6 | taken, not done within `FLEET_MOD_DONE_SECS` (20) — running, e.g. a long `/compact` | done — never type it as well |
+| 3 | no mod (`fleet_mod_alive` false, `FLEET_MOD=0`, no pane / socket) | today's send-keys |
+| 4 | not taken within `FLEET_MOD_TAKE_SECS` (5) — cancelled by the same rename, so a late mod can never run it | today's send-keys |
+| 5 | the engine refused it (`.done` ok=false, reason on stderr) | today's send-keys |
+
+The callers' own gates (idle wait, the operator-typing hold, the handoff's
+fresh-session verify, the model switch's status-line verify) are unchanged and
+run on both paths. Logs: `handoff-cycle.log` (`/clear via mod`, `… pickup via
+mod`), `compact-send.log` (`/compact via mod|send-keys`), and the model switch's
+report line (`… in place (Ns) via mod|send-keys`).
+
 ## Related
 
 - **Auto-handoff nudge (#330).** `set-claude-state.sh`'s `done` branch also emits

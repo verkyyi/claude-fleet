@@ -563,11 +563,22 @@ main() {
     # act on the same window inside its 180 s guard window.
     TM set-window-option -t "$wid" @model_migrating "$(date +%s)" 2>/dev/null
 
-    # --- the four sanctioned keystrokes -------------------------------------
+    # --- through the mod, else the four sanctioned keystrokes ----------------
+    # Issue #1337: with the fleet mod alive in the window, `/model <target>` goes
+    # to its command inbox and the engine runs it once idle — no keystroke. 0 (ran)
+    # / 6 (running) = delivered; 3/4/5 (no mod, not taken — cancelled, refused) =
+    # today's keystrokes. Either way the status line below is the verdict.
     trace switch
-    SK -t "$wid" Escape 2>/dev/null; sleep 0.4
-    SK -t "$wid" -l -- "/model $TARGET" 2>/dev/null; sleep 1.2
-    SK -t "$wid" Enter 2>/dev/null; sleep 2
+    local sent=send-keys mrc=0
+    fleet_session_command --socket "$SOCK" --from model-switch "$wid" "/model $TARGET" </dev/null >/dev/null 2>&1 || mrc=$?
+    case "$mrc" in
+      0|6) sent=mod; sleep 1 ;;
+      *) SK -t "$wid" Escape 2>/dev/null; sleep 0.4
+         SK -t "$wid" -l -- "/model $TARGET" 2>/dev/null; sleep 1.2
+         SK -t "$wid" Enter 2>/dev/null; sleep 2 ;;
+    esac
+    # The engine's own "Switch model?" confirmation, if it shows, still takes an
+    # Enter on either path (a command run as if typed raises the same dialog).
     local tries="$DIALOG_TRIES"
     while [ "$tries" -gt 0 ]; do
       cap "$wid" | grep -q 'Switch model?' || break
@@ -586,7 +597,7 @@ main() {
 
     if [ "$ok" = 1 ]; then
       TM set-window-option -t "$wid" @cc_model "$TARGET" 2>/dev/null
-      printf '  ✓ %s (%s): %s → %s in place (%ss)\n' "$wid" "$name" "$capped" "$nowm" "$waited"
+      printf '  ✓ %s (%s): %s → %s in place (%ss) via %s\n' "$wid" "$name" "$capped" "$nowm" "$waited" "$sent"
       # ${name} braced on purpose: bash 3.2 (macOS) swallows the following
       # multibyte arrow into the variable NAME otherwise, and set -u then fires.
       switched=$((switched+1)); note "${name}→$TARGET"

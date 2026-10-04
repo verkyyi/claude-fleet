@@ -2093,6 +2093,92 @@ fleet_mod_alive() {
   [ $((now - at)) -le "$max" ]
 }
 
+# --- the mod's command inbox (issue #1337, EPIC #1334 C3) -----------------------
+# A slash command the fleet used to TYPE into a pane (`/clear`, `/compact …`,
+# `/model …`, the handoff pickup) is posted to the pane's inbox instead; the mod
+# (mod/fleet/hooks/inbox.ts) takes it on its 1s timer and runs it with
+# `$.command.run`, which the engine queues until the session is idle. No
+# keystroke, no bracketed-paste race, no draft with "/clear" glued on.
+#
+#   $FLEET_CONF_DIR/global/mod-inbox/<socket-label>/<pane-id>/
+#     <seq>.json   {"cmd":"/clear","args":"","from":"handoff-cycle"} — posted by
+#                  rename from a dot-temp, so the mod never reads half a file
+#     <seq>.taken  the mod's CLAIM: an atomic `mv` of the .json, so exactly one
+#                  of {mod runs it, the poster cancels it} ever happens
+#     <seq>.done   {"ok":true} | {"ok":false,"error":"…"} once the command ran
+#     <seq>.cancel the poster gave up before the mod took it
+#
+# Keyed by socket label AND pane id: a pane id is unique per tmux SERVER only, and
+# every fleet runs its own (issue #159) — `%7` exists once per fleet.
+fleet_mod_inbox_root() { printf '%s/global/mod-inbox' "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"; }
+
+# fleet_session_command [--socket <label>] [--from <who>] <target> '/cmd args'
+# Run a slash command in <target>'s Claude session through the mod. Exit codes —
+# the caller falls back to today's send-keys path on 3, 4 and 5, and must NOT on
+# 0 or 6 (the command ran, or is running: typing it again would run it twice):
+#   0  executed (the mod wrote .done ok)
+#   3  the mod is not here (fleet_mod_alive false, FLEET_MOD=0, no pane, no socket)
+#   4  timed out before the mod TOOK it — cancelled, it will never run
+#   5  the engine refused it (.done ok=false: unknown command, turn-bound hook…)
+#   6  taken but not done within the wait — running (a long /compact); outcome unknown
+#   2  usage
+# Knobs: FLEET_MOD_TAKE_SECS (5) to be taken, FLEET_MOD_DONE_SECS (20) to finish.
+# Outside a pane, --socket names the fleet's server (the label == the session).
+fleet_session_command() {
+  local sock='' from='' target line
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --socket) sock="${2:-}"; shift 2 ;;
+      --from)   from="${2:-}"; shift 2 ;;
+      *) break ;;
+    esac
+  done
+  target="${1:-}" line="${2:-}"
+  [ -n "$target" ] || return 2
+  case "$line" in /?*) : ;; *) return 2 ;; esac
+  fleet_mod_on || return 3
+  [ -n "$sock" ] || sock="${TMUX%%,*}"
+  sock="${sock##*/}"
+  [ -n "$sock" ] || return 3
+  # Always by label: from inside a pane `-L <its own label>` is the same server.
+  local pane
+  pane=$(tmux -L "$sock" display-message -p -t "$target" '#{pane_id}' 2>/dev/null)
+  case "$pane" in %[0-9]*) : ;; *) return 3 ;; esac
+  # fleet_mod_alive's [session] arg is the socket label (fleet_socket is identity).
+  ( unset TMUX; fleet_mod_alive "$pane" "$sock" ) || return 3
+
+  local cmd args dir seq f j t tw dw
+  cmd="${line%% *}"; cmd="${cmd#/}"
+  case "$line" in *' '*) args="${line#* }" ;; *) args='' ;; esac
+  dir="$(fleet_mod_inbox_root)/$sock/${pane#%}"
+  mkdir -p "$dir" 2>/dev/null || return 3
+  seq="$(date +%s)-$$-${RANDOM:-0}"
+  f="$dir/$seq"
+  j=$(FC_CMD="/$cmd" FC_ARGS="$args" FC_FROM="${from:-?}" python3 -c '
+import json, os
+print(json.dumps({"cmd": os.environ["FC_CMD"], "args": os.environ["FC_ARGS"], "from": os.environ["FC_FROM"]}, ensure_ascii=False))' 2>/dev/null) || return 3
+  printf '%s\n' "$j" > "$dir/.$seq.tmp" 2>/dev/null && mv -f "$dir/.$seq.tmp" "$f.json" 2>/dev/null || { rm -f "$dir/.$seq.tmp"; return 3; }
+
+  tw="${FLEET_MOD_TAKE_SECS:-5}"; dw="${FLEET_MOD_DONE_SECS:-20}"
+  case "$tw" in ''|*[!0-9]*) tw=5 ;; esac
+  case "$dw" in ''|*[!0-9]*) dw=20 ;; esac
+  t=0
+  while [ -f "$f.json" ] && [ "$t" -lt $((tw * 4)) ]; do sleep 0.25 2>/dev/null || sleep 1; t=$((t + 1)); done
+  if [ -f "$f.json" ]; then
+    # Cancel by the same atomic rename the mod claims with: whichever mv wins decides.
+    if mv "$f.json" "$f.cancel" 2>/dev/null; then rm -f "$f.cancel"; return 4; fi
+  fi
+  t=0
+  while [ ! -f "$f.done" ] && [ "$t" -lt $((dw * 4)) ]; do sleep 0.25 2>/dev/null || sleep 1; t=$((t + 1)); done
+  [ -f "$f.done" ] || return 6   # .taken stays: the mod writes .done when it finishes
+  local ok
+  ok=$(python3 -c 'import json,sys; print(1 if json.load(open(sys.argv[1])).get("ok") else 0)' "$f.done" 2>/dev/null)
+  if [ "$ok" = 1 ]; then rm -f "$f.taken" "$f.done"; return 0; fi
+  sed -n 's/.*"error" *: *"\([^"]*\)".*/fleet_session_command: refused: \1/p' "$f.done" >&2 2>/dev/null
+  rm -f "$f.taken" "$f.done"
+  return 5
+}
+
 # fleet_wt_window <session> <worktree-dir> — the live window sitting in a worktree,
 # addressed by PANE CWD (issue #589). An `issue-<N>` worker is addressed by its
 # @issue binding instead, which is cwd-INdependent and therefore the better key
