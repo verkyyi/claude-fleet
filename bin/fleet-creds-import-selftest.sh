@@ -55,7 +55,7 @@ MT=$(python3 -c 'import os,sys; print(int(os.stat(sys.argv[1]).st_mtime))' "$FLE
 
 # --- the fake hub: records every request as one JSON line --------------------
 LOG="$WORK/hub.log"; : > "$LOG"
-python3 - "$WORK/port" "$LOG" <<'PY' &
+python3 - "$WORK/port" "$LOG" <<'PY' 2>"$WORK/hub.err" &
 import json, signal, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 portfile, log = sys.argv[1:3]
@@ -82,8 +82,13 @@ with open(portfile, 'w') as f:
 srv.serve_forever()
 PY
 HUB_PID=$!
-for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do [ -s "$WORK/port" ] && break; sleep 0.1; done
-[ -s "$WORK/port" ] || fail "fake hub did not start"
+# A cold python3 on a CI macOS runner takes seconds to get here: wait up to 20s.
+i=0
+while [ ! -s "$WORK/port" ] && [ "$i" -lt 100 ]; do
+  kill -0 "$HUB_PID" 2>/dev/null || break
+  sleep 0.2; i=$((i+1))
+done
+[ -s "$WORK/port" ] || fail "fake hub did not start" "$(cat "$WORK/hub.err" 2>/dev/null)"
 CCQUOTA_HUB_URL="http://127.0.0.1:$(cat "$WORK/port")"
 export CCQUOTA_HUB_URL
 export CCQUOTA_VIEWER_TOKEN='viewer-SECRET-1'
