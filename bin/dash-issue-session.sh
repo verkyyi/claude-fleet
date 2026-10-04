@@ -455,6 +455,9 @@ fleet_wid_stamp "$win" "$SOCK" >/dev/null 2>&1 || :
 # tagged child under its live parent, and the reapers copy it into the history
 # ledger's origin column before the window dies.
 [ -n "$ORIGIN" ] && TM set-window-option -t "$win" @origin "$ORIGIN" 2>/dev/null
+# …and the parent's worker_id (issue #1420), the address that survives a machine
+# boundary. Nothing when this machine has no fleet UUID or the origin is no key.
+[ -n "$ORIGIN" ] && fleet_stamp_origin_wid "$SESS" "$win" "$ORIGIN" "$SOCK"
 
 # (The sub-second cross-machine tie-break that re-read the ▶ claiming comment ids
 # was retired with the claiming marker in issue #283 — the assignee is now the

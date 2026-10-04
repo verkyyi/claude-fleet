@@ -422,6 +422,7 @@ fi
 # Spawn provenance (issue #503) — stamped on the WARM path too: a pool window was
 # pre-warmed with no requester, so its origin is decided at CLAIM time, here.
 [ -n "$ORIGIN" ] && TM set-window-option -t "$win" @origin "$ORIGIN" 2>/dev/null
+[ -n "$ORIGIN" ] && fleet_stamp_origin_wid "$SESS" "$win" "$ORIGIN" "$SOCK"   # parent's worker_id (#1420)
 # Window handle (issue #566), likewise on BOTH paths: a warm-pool window is parked
 # in the holding session with no handle, and only becomes a fleet window here at
 # claim time. Best-effort — the dash backfills a window that ends up without one.

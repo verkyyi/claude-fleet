@@ -29,7 +29,8 @@
 #   --summary <t>   1–3 lines of what happened (the parent's whole payoff)
 #   --win <target>  the CHILD window; default: the window $TMUX_PANE sits in.
 #                   A REAPER passes this — it runs in its own pane, not the child's.
-#   --origin <key>  override the child's @origin read (a reaper that already read it)
+#   --origin <key>  override the child's @origin read (a reaper that already read it);
+#                   `wid:<worker_id>` names the parent by its durable identity
 #   --issue <N> / --title <t> / --branch <b>   override what is read off the window
 #   --key <k>       override the CHILD's own key (`issue-<N>` / `scratch-<N>`) —
 #                   for a reaper running outside the child's pane, whose window may
@@ -48,6 +49,13 @@
 # FLEET_CHILD_REPORT=0 — every one of those is a silent success. This runs on the
 # child's SHIP path and must never block it or turn a landed PR into an error.
 # Exit 2 is reserved for a usage mistake (bad/missing --state, unknown flag).
+#
+# THE PARENT ACROSS MACHINES (issue #1420). A spawn also stamps the parent's
+# worker_id as `@origin_wid`. When that id belongs to a fleet on THIS machine (or
+# there is none) everything below runs exactly as before. When it names another
+# machine's fleet, the report is ledgered but NOT sent: it says where the parent is
+# (fleet_worker_locate) on stderr and exits 0 — never to a local window that merely
+# carries the same key. EPIC #1419 C2 carries it across.
 #
 # On a delivered report the child's window is stamped `@reported 1`, which is what
 # stops the reaper fallback (session-end-hook.sh / dash-reap.sh) sending a second,
@@ -87,7 +95,7 @@ while [ "$#" -gt 0 ]; do
     -L*)        SOCK="${1#-L}" ;;
     --only-once) ONCE=1 ;;
     --dry-run)  DRY=1 ;;
-    -h|--help)  sed -n '2,61p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)  sed -n '2,69p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *)          printf 'fleet-report-parent: unknown argument %s\n' "$1" >&2; exit 2 ;;
   esac
   shift
@@ -113,16 +121,20 @@ TM() { if [ -n "$SOCK" ]; then tmux -L "$SOCK" "$@"; else tmux "$@"; fi; }
 target="${WIN:-${TMUX_PANE:-}}"
 [ -n "$target" ] || quiet 'no child window (no --win and no $TMUX_PANE)'
 row=$(TM display-message -p -t "$target" \
-        '#{window_id}|#{@origin}|#{@issue}|#{@reported}|#{@worktree}|#{@claude_state}|#{window_name}' 2>/dev/null)
+        '#{window_id}|#{@origin}|#{@issue}|#{@reported}|#{@worktree}|#{@claude_state}|#{@origin_wid}|#{window_name}' 2>/dev/null)
 [ -n "$row" ] || quiet "child window '$target' is gone"
 selfwin=${row%%|*};  row=${row#*|}
 worigin=${row%%|*};  row=${row#*|}
 wissue=${row%%|*};   row=${row#*|}
 wreported=${row%%|*}; row=${row#*|}
 wworktree=${row%%|*}; row=${row#*|}
-wstate=${row%%|*};   wname=${row#*|}
+wstate=${row%%|*};   row=${row#*|}
+owid=${row%%|*};     wname=${row#*|}
 
-[ -n "$ORIGIN" ] && worigin="$ORIGIN"
+case "$ORIGIN" in
+  wid:*) owid=${ORIGIN#wid:}; worigin=${owid#*/} ;;
+  ?*)    worigin="$ORIGIN"; [ "${owid#*/}" = "$ORIGIN" ] || owid='' ;;
+esac
 [ -n "$ISSUE" ]  && wissue="${ISSUE//[^0-9]/}"
 [ -n "$TITLE" ]  && wname="$TITLE"
 # The title is rendered inside "…" and the whole frame inside a
@@ -290,6 +302,18 @@ fi
 # the envelope saying who it is standing in for, and the receiver's book gets a
 # `relayed_from` row so `fleet-children.sh` there shows it too. Nobody alive above
 # (hub-spawned, cross-fleet, never reported) ⇒ the old silent success, below.
+# A parent on another machine (issue #1420): ledgered above, not sent — and never
+# resolved against this fleet's windows, where the same key may be someone else.
+if [ -n "$owid" ] && ! fleet_wid_home "$owid" "$sess" >/dev/null 2>&1; then
+  _loc=$(fleet_worker_locate "$owid" "$sess" 2>/dev/null)
+  case "$_loc" in
+    remote\ *) _why="lives on ${_loc#remote } — cross-machine reports are not supported yet (EPIC #1419 C2)" ;;
+    *)         _why="is not on this machine and the hub cannot place it" ;;
+  esac
+  _how='ledgered, not sent'; [ "$DRY" = 1 ] && _how='not sent (dry run)'
+  printf 'fleet-report-parent: parent %s %s; %s\n' "$owid" "$_why" "$_how" >&2
+  exit 0
+fi
 SENDKEY="$worigin" RELAY_FROM='' pwin=''
 pwin=$(fleet_win_for_key "$worigin" "$SOCK") || pwin=''
 if [ -z "$pwin" ] && _anc=$(fleet_live_ancestor "$worigin" "$sess" "$SOCK"); then

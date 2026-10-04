@@ -1,7 +1,7 @@
 #!/bin/bash
 # fleet-await.sh — hand an issue to a worker and WAIT for its outcome (issue #812).
 #
-#   fleet-await.sh <N> [--timeout <secs>] [--interval <secs>] [--no-spawn]
+#   fleet-await.sh <N | wid:<worker_id>> [--timeout <secs>] [--interval <secs>] [--no-spawn]
 #                      [--parent <key>] [--repo <owner/name>] [-L <socket>]
 #
 # The one thing a subagent gave that a worker did not: a result that comes BACK.
@@ -67,6 +67,11 @@
 #   --repo <r>      a fleet hosting 2+ repos: which one #N belongs to
 #   -L <socket>     the fleet's socket, for a caller with no $TMUX
 #
+# `wid:<fleet UUID>/[<slug>:]issue-<N>` (or `wid:issue-<N>`, this fleet) names the
+# worker by its durable identity (issue #1420): one of THIS fleet's runs exactly as
+# `<N>` (with --repo taken from the slug); a worker on another machine, or one no
+# machine can place, is NO-WORKER (5) with the reason — never a local #N spawn.
+#
 # A live worker spawned by SOMEONE ELSE keeps its parent: the wait reads that
 # parent's ledger instead of stealing its reports. A live worker with no parent at
 # all (hub-spawned) is adopted — its @origin is set to yours, so its report lands
@@ -81,7 +86,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
-usage() { sed -n '2,80p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,85p' "$0" | sed 's/^# \{0,1\}//'; }
 die()   { printf 'fleet-await: %s\n' "$1" >&2; exit "${2:-2}"; }
 
 NUM='' TIMEOUT=7200 INTERVAL=60 SPAWN=1 KEY='' REPO_ARG='' SOCK=''
@@ -104,7 +109,7 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
-case "$NUM" in ''|*[!0-9]*) die "usage: fleet-await.sh <issue-number> [--timeout s] [--no-spawn]" ;; esac
+case "$NUM" in wid:?*) ;; ''|*[!0-9]*) die "usage: fleet-await.sh <issue-number> [--timeout s] [--no-spawn]" ;; esac
 case "$TIMEOUT" in ''|*[!0-9]*|0) die "--timeout wants a positive number of seconds" ;; esac
 case "$INTERVAL" in ''|*[!0-9]*|0) die "--interval wants a positive number of seconds" ;; esac
 
@@ -138,6 +143,34 @@ sess="$SOCK"; [ -n "$sess" ] || sess=$(fleet_current_session)
 [ -n "$KEY" ] || KEY=$(fleet_origin_key)
 [ -n "$KEY" ] || die "no parent key — run it from a scratch or worker pane (the hub has none), or pass --parent issue-N|scratch-N"
 KEY=$(fleet_origin_canon "$KEY" '')
+
+# A worker_id target (issue #1420) → this fleet's issue number, or a refusal.
+case "$NUM" in wid:*)
+  WID=$NUM
+  home=$(fleet_wid_home "$WID" "$sess"); hrc=$?
+  [ "$hrc" -eq 2 ] && die "bad worker id '$WID' (want wid:<fleet UUID>/issue-<N> or wid:issue-<N>)"
+  if [ "$hrc" -eq 0 ]; then
+    [ "$home" = "$sess" ] || die "'$WID' belongs to fleet $home on this machine — run it there (-L $home)"
+    k=${WID#wid:}; k=${k#*/}
+    case "${k##*:}" in
+      issue-*) NUM=${k##*:}; NUM=${NUM#issue-} ;;
+      *) die "'$WID' is a scratch session — fleet-await waits on an issue worker" ;;
+    esac
+    case "$k" in ?*:*)
+      [ -n "$REPO_ARG" ] || REPO_ARG=$(fleet_repo_for_slug "$sess" "${k%%:*}") \
+        || die "'$WID' names repo ${k%%:*}, which this fleet does not host" ;;
+    esac
+  else
+    loc=$(fleet_worker_locate "$WID" "$sess")
+    case "$loc" in
+      remote\ *) note="'$WID' lives on ${loc#remote } — waiting on a worker on another machine is not supported yet (EPIC #1419 C2)" ;;
+      *) note="no worker '$WID' on this machine, and the hub cannot place it" ;;
+    esac
+    printf 'fleet-await: %s\n' "$note" >&2
+    printf 'NO-WORKER\nworker: %s\nnote: %s\n' "${WID#wid:}" "$note"
+    exit 5
+  fi ;;
+esac
 
 # The child's key, spelled the way its @origin-keyed ledger rows spell it.
 CKEY="issue-$NUM"
@@ -331,6 +364,7 @@ if [ -n "$wid" ]; then
     # Hub-spawned: nobody will ever read its report. Make it ours.
     TM set-window-option -t "$wid" @origin "$KEY" 2>/dev/null \
       && printf 'fleet-await: #%s had no parent — adopted (@origin %s)\n' "$NUM" "$KEY" >&2
+    fleet_stamp_origin_wid "$sess" "$wid" "$KEY" "$SOCK"
     worigin=$KEY
   fi
   LEDGER=$(fleet_origin_canon "$worigin" '')

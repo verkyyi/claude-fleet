@@ -74,6 +74,21 @@ reports hibernation (`awake`, `preparing`, `sleeping`, `waking`, `failed`); a
 sleeping worker is refused (`INVALID_STATE`) rather than typed at, because the
 sleep controller owns its pane. Transfer between machines is still deferred.
 
+**Inside a fleet** (issue #1420) the same identity is the cross-machine address.
+`fleet_worker_locate` (`bin/fleet-lib.sh`) answers `local <window> <sess>`,
+`remote <node>` or `unknown` for a `worker_id` (or a bare key, meaning this
+fleet); `fleet_uuid` mints the same fleet UUID as the controller, read-only.
+`fleet-peer-send.sh`, `fleet-await.sh` and `fleet-answer.sh` take a
+`wid:<worker_id>` target, and every spawn stamps the parent's worker_id as
+`@origin_wid` beside `@origin` for `fleet-report-parent.sh`. A local hit runs the
+existing path unchanged; `remote` and `unknown` refuse with the reason and never
+fall back to a local window that shares the number. Only with `CCQUOTA_FLEET=1`
+does a miss consult the hub, and then only through the local cache
+`$FLEET_CONF_DIR/control/hub-workers.tsv` (`<worker_id>\t<node>`, fresh for
+`FLEET_HUB_CACHE_SECS`, 30 s, refreshed by `FLEET_HUB_STATUS_CMD`); with no fresh
+cache the fleet behaves as a one-machine fleet and says so on stderr. The remote
+branches report "not supported yet" until EPIC #1419 C2 carries them across.
+
 ## Tools
 
 | MCP tool | Behavior | Required grant |
