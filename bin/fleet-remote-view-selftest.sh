@@ -19,13 +19,23 @@
 #                    `prefix h` (`back`) returns to the last local window
 #   C. attach      — the proxy is a client of the remote session, on the worker's
 #                    window, status line + prefix off (saved), its sidebar gone
-#                    (`@remote_view_solo`, #1475); typing reaches it
+#                    (`@remote_view_solo`, #1475); typing reaches it; registered
+#                    as a `view` row; the fleet's own global client-attached hook
+#                    still fires (the rule's hooks are global too, #1485)
 #   D. fleet-open  — from the remote session, the request reaches the proxy side
 #                    (sent:proxy), not an escape on the remote's terminal
 #   G. shared      — a client attaching AT the remote end gets status + prefix +
 #                    sidebar back
+#   I. shells      — (#1485) hidden ⇔ every client is a shell/view: a second
+#                    `--shell` client (nested on the node, no ssh, $TMUX set) keeps
+#                    it hidden; a plain hand-run attach brings everything back at
+#                    once; a shell arriving beside that plain client hides nothing;
+#                    the plain client leaving hides again; the last shell takes the
+#                    server's hooks with it, and no session-level hook array is
+#                    left to shadow the fleet's own
 #   E. close       — killing the proxy window leaves the remote worker running and
-#                    hands the remote session its status line + sidebar back
+#                    hands the remote session its status line + sidebar back,
+#                    the registry, the hooks and the markers all gone
 #   F. skipped     — a proxy window is no dash row, no session in either cap
 #                    tally, no fleet-restore row, no sleep candidate
 # tmux / python3 absent → SKIP (exit 0). Exit 0 = pass.
@@ -105,6 +115,9 @@ WID="$U/issue-7"; WID2="$U/issue-8"
 
 tr_ -f /dev/null new-session -d -s "$RS" -n plan -x 200 -y 50 'while :; do sleep 300; done' 2>/dev/null \
   || { printf 'fleet-remote-view selftest: cannot start an isolated tmux server — SKIP\n' >&2; exit 0; }
+# The fleet conf's own hook (tmux-attention.conf, client-attached[71]): a hook ON
+# THE SESSION — #1475's form — would shadow it; the rule's hooks are global (#1485).
+tr_ set-hook -g 'client-attached[71]' "run-shell -b 'echo att >> $WORK/hook71'"
 RW=$(tr_ new-window -d -P -F '#{window_id}' -t "$RS:" -n worker7 "cat > '$WORK/typed'")
 tr_ set-window-option -t "$RW" @issue 7
 RW8=$(tr_ new-window -d -P -F '#{window_id}' -t "$RS:" -n worker8 'while :; do sleep 300; done')
@@ -207,8 +220,14 @@ eq "C: …the view it had is gone" "" "$(rviews)"
 tl send-keys -t "$PW" 'hello-from-m5' Enter
 typed() { grep -q 'hello-from-m5' "$WORK/typed" 2>/dev/null; }
 waitfor 5 typed || fail "C: typing in the proxy window never reached the remote pane" "$(cat "$WORK/typed" 2>/dev/null)"
-nviews=0; for f in "$FLEET_CONF_DIR"/remote-views/*; do [ -f "$f" ] && nviews=$((nviews + 1)); done
-eq "C: one view registered (the fleet-open back channel)" "1" "$nviews"
+regrows() { local f; for f in "$FLEET_CONF_DIR"/remote-views/*; do [ -f "$f" ] && cat "$f"; done; }
+eq "C: one view registered (the fleet-open back channel)" "1" "$(regrows | wc -l | tr -d ' ')"
+eq "C: …a row <tty> <session> view <since> <pid> (#1485)" "$RS view" "$(regrows | awk -F '\t' '{ print $2, $3 }')"
+has "C: …its tty is the proxy client's" "$(tr_ list-clients -t "=$RS" -F '#{client_tty}' | tr '\n' ' ')" "$(regrows | cut -f1)"
+kill -0 "$(regrows | cut -f5)" 2>/dev/null; eq "C: …its pid is the attach shell, alive" "0" "$?"
+hook71() { [ -s "$WORK/hook71" ]; }
+waitfor 5 hook71 || fail "C: the fleet's own global client-attached hook did not fire for the proxy (shadowed by a session-level hook?)"
+eq "C: the rule's hooks are on the server, not the session" "2 " "$(tr_ show-hooks -g | grep -c '\[77\]') $(tr_ show-hooks -t "=$RS:" 2>/dev/null)"
 
 # B (cont.): another row of the same machine retargets the SAME window
 PW2=$(FLEET_SESSION=$LS bash "$BIN/fleet-remote-view.sh" open "$WID2" 2>/dev/null)
@@ -258,6 +277,62 @@ one() { [ "$(tr_ display-message -p -t "=$RS:" '#{session_attached}' 2>/dev/null
 waitfor 5 one || fail "G: the helper client did not leave"
 
 # ============================================================================
+# I. shells (#1485): hidden ⇔ at least one client, and every one a shell/view
+# ============================================================================
+hidden() { [ "$(tr_ show-options -qv -t "=$RS:" status)" = off ] && [ "$(tr_ show-options -qv -t "=$RS:" @remote_view_solo)" = 1 ]; }
+shown() { [ -z "$(tr_ show-options -qv -t "=$RS:" status)" ] && [ -z "$(tr_ show-options -qv -t "=$RS:" @remote_view_solo)" ] && [ -z "$(tr_ show-options -qv -t "=$RS:" @remote_view_saved)" ]; }
+natt() { [ "$(tr_ display-message -p -t "=$RS:" '#{session_attached}' 2>/dev/null)" = "$1" ]; }
+settle() { sleep 0.7; }   # the hooks run -b; give a NEGATIVE check time to be wrong
+# After G the proxy is alone again — the rule hides (the old code left the status
+# line on from the helper's visit until the proxy itself left).
+waitfor 5 hidden || fail "I: the proxy alone again after G — not hidden" "$(tr_ show-options -t "=$RS:" status)"
+# I1. a second SHELL client, on the node itself: a pane of ANOTHER tmux server (the
+# shell's own), no ssh, $TMUX left set — C5's `fleet` shell run on the machine.
+SW=$(tl new-window -d -P -F '#{window_id}' -t "=$LS:" -n shell2 "bash '$BIN/fleet-remote-view.sh' attach --shell '$WID2'; sleep 300")
+waitfor 10 natt 2 || fail "I: the nested --shell client never attached" "$(tl capture-pane -p -t "$SW" | head -3)"
+settle
+hidden || fail "I: two shells — must stay hidden" "$(tr_ show-options -t "=$RS:" status)"
+has "I: …what was saved is still the original (no re-save)" "$(tr_ show-options -qv -t "=$RS:" @remote_view_saved)" "status=- "
+eq "I: …no list" "" "$(rviews)"
+eq "I: the registry holds the view and the shell" "shell view " "$(regrows | cut -f3 | sort | tr '\n' ' ')"
+srow=$(regrows | awk -F '\t' '$3 == "shell"')
+eq "I: the shell row names the remote session" "$RS" "$(printf '%s' "$srow" | cut -f2)"
+has "I: …the shell client's tty" "$(tr_ list-clients -t "=$RS" -F '#{client_tty}' | tr '\n' ' ')" "$(printf '%s' "$srow" | cut -f1)"
+kill -0 "$(printf '%s' "$srow" | cut -f5)" 2>/dev/null; eq "I: …a live pid" "0" "$?"
+eq "I: …and no spool: nothing drains one for a shell without a view id" "" "$(ls -d "$FLEET_CONF_DIR"/remote-views/shell-*.d 2>/dev/null)"
+# I2. a PLAIN client: someone on the node runs `attach` by hand — no --shell, no view
+# — so it registers nothing and counts as a person. Everything back at once.
+HW=$(tl new-window -d -P -F '#{window_id}' -t "=$LS:" -n hand "env -u TMUX bash '$BIN/fleet-remote-view.sh' attach '$WID2'; sleep 300")
+waitfor 10 natt 3 || fail "I: the plain client never attached" "$(tl capture-pane -p -t "$HW" | head -3)"
+waitfor 5 shown || fail "I: a plain client did not bring status + prefix + sidebar back" "$(tr_ show-options -t "=$RS:")"
+eq "I: …it registered nothing" "2" "$(regrows | wc -l | tr -d ' ')"
+# I3. a shell arriving beside the plain client hides nothing (a view id too: a
+# shell may carry a fleet-open spool).
+SW3=$(tl new-window -d -P -F '#{window_id}' -t "=$LS:" -n shell3 "env -u TMUX bash '$BIN/fleet-remote-view.sh' attach --shell '$WID2' view3; sleep 300")
+waitfor 10 natt 4 || fail "I: the third shell never attached"
+settle
+shown || fail "I: a shell arriving while a plain client is attached must hide nothing" "$(tr_ show-options -t "=$RS:" status)"
+eq "I: …registered as a shell, with its spool" "2 yes" "$(regrows | awk -F '\t' '$3 == "shell"' | wc -l | tr -d ' ') $([ -d "$FLEET_CONF_DIR/remote-views/view3.d" ] && echo yes)"
+# I4. that shell leaves: the plain client keeps everything.
+tl kill-window -t "$SW3"
+waitfor 10 natt 3 || fail "I: the third shell did not leave"
+settle
+shown || fail "I: a shell leaving beside a plain client must change nothing" "$(tr_ show-options -t "=$RS:" status)"
+# I5. the plain client leaves: only shells remain — hidden again, at once.
+tl kill-window -t "$HW"
+waitfor 10 natt 2 || fail "I: the plain client did not leave"
+waitfor 5 hidden || fail "I: the plain client left, two shells remain — not hidden again" "$(tr_ show-options -t "=$RS:" status)"
+eq "I: …and the saved values are the originals" "status=- prefix=- prefix2=- " "$(tr_ show-options -qv -t "=$RS:" @remote_view_saved)"
+# I6. the nested shell leaves: the proxy alone — still hidden; its row gone; the
+# server's hooks stay while a shell is registered, and never land on the session.
+tl kill-window -t "$SW"
+waitfor 10 natt 1 || fail "I: the nested shell did not leave"
+settle
+hidden || fail "I: the shell left, the proxy remains — must stay hidden" "$(tr_ show-options -t "=$RS:" status)"
+eq "I: one row left, the proxy's view" "view" "$(regrows | cut -f3 | tr '\n' ' ' | sed 's/ $//')"
+eq "I: the server's hooks stay while a shell is registered — and none on the session" "2 " "$(tr_ show-hooks -g | grep -c '\[77\]') $(tr_ show-hooks -t "=$RS:" 2>/dev/null)"
+
+# ============================================================================
 # E. close the proxy window
 # ============================================================================
 tl kill-window -t "$PW"
@@ -270,6 +345,10 @@ eq "E: the saved marker is gone" "" "$(tr_ show-options -qv -t "=$RS:" @remote_v
 eq "E: the solo marker too" "" "$(tr_ show-options -qv -t "=$RS:" @remote_view_solo)"
 gone() { [ -z "$(ls "$FLEET_CONF_DIR/remote-views" 2>/dev/null)" ]; }
 waitfor 5 gone || fail "E: the view registration was left behind" "$(ls "$FLEET_CONF_DIR/remote-views")"
+hooksoff() { [ "$(tr_ show-hooks -g | grep -c '\[77\]')" = 0 ]; }
+waitfor 5 hooksoff || fail "E: the rule's hooks outlived the last shell" "$(tr_ show-hooks -g | grep '\[77\]')"
+eq "E: no session-level hook array left behind (it would shadow the fleet's [71]–[73] for good)" "" "$(tr_ show-hooks -t "=$RS:" 2>/dev/null)"
+eq "E: the fleet's own hook is still in place" "1" "$(tr_ show-hooks -g | grep -c '^client-attached\[71\]')"
 
 if [ "$FAIL" -eq 0 ]; then
   printf 'fleet-remote-view selftest: PASS (%d checks)\n' "$CHECKS"; exit 0
