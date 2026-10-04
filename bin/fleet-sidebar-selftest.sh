@@ -63,6 +63,30 @@ assert sidebar.hint_line(['@2', 'needs', '!', 'k2', '', '', '0', '在问你'], 3
 longp = parent[:3] + ['阿里云月成本评估-ack-节点合并-再看一遍'] + parent[4:]
 assert sidebar.hint_line(longp, 30) == ' ' + longp[3], sidebar.hint_line(longp, 30)
 assert '等子任务' not in sidebar.hint_line(longp, 30)
+# ←/→ fold AT ONCE (issue #1530): the view's guess, the producer's rules — ←
+# shuts the innermost OPEN block the cursor is in, a needs row and the current
+# window stay, → redraws the block from the rows last seen in it.
+fr = lambda w, st, tree, d: [w, st, '·', 'x', tree, '', str(d), '', '']
+frows = [['hdr', 'o/a', '', 'a (4)', ' '], fr('@1', 'working', '▾', 0), fr('@2', 'done', '└▾', 1),
+         fr('@3', 'done', ' └', 2), fr('@4', 'needs', '└', 1), ['hdr', 'o/b', '', 'b (1)', ' '],
+         fr('@5', 'done', '', 0)]
+fcache = {}
+sidebar.remember_folds(frows, fcache)
+assert sorted(fcache) == ['@1', '@2', 'hdr:o/a', 'hdr:o/b'], fcache
+ids = lambda rows: [r[0] for r in rows]
+shut, holder = sidebar.fold_now(frows, '@3', 'collapse', '@9', fcache)
+assert holder == '@2' and ids(shut) == ['hdr', '@1', '@2', '@4', 'hdr', '@5'] and shut[2][4] == '└▸', shut
+shut, holder = sidebar.fold_now(shut, '@1', 'collapse', '@9', fcache)
+assert holder == '@1' and ids(shut) == ['hdr', '@1', '@4', 'hdr', '@5'] and shut[1][4] == '▸', shut
+opened, holder = sidebar.fold_now(shut, '@1', 'expand', '@9', fcache)
+assert holder == '@1' and ids(opened) == ['hdr', '@1', '@2', '@4', 'hdr', '@5'], opened
+shut, holder = sidebar.fold_now(frows, 'hdr:o/a', 'collapse', '@2', fcache)
+assert ids(shut) == ['hdr', '@2', '@4', 'hdr', '@5'] and shut[0][3] == '▸ a (4)', shut
+opened, _ = sidebar.fold_now(shut, 'hdr:o/a', 'expand', '@2', fcache)
+assert ids(opened) == ids(frows) and opened[0][3] == 'a (4)', opened
+assert sidebar.fold_now(frows, '@5', 'collapse', '@9', fcache)[1] is None
+assert sidebar.fold_now(frows, '@1', 'expand', '@9', fcache)[1] is None
+assert sidebar.fold_now(frows, 'wid:m4/x', 'collapse', '@9', fcache)[1] is None
 # The input line's editor (issue #1097): a cursor, readline's moves and kills.
 Line = sidebar.Line
 line = Line('ab'); line.left(); line.insert('c')
@@ -327,6 +351,14 @@ try:
     fixture.write_text('\n'.join(selected).replace('~/.claude/fleet', str(bin_dir.parent))
                        .replace('run-shell "sh ', 'run-shell "bash --posix ') + '\n')
     tm('source-file', str(fixture))
+    # Enter / Escape fork nothing either (issue #1530): on an empty line they hand
+    # the keyboard back and send the key straight to `{top-left}`, as ↑↓ do — the
+    # binds AS LOADED, not only the file's spelling.
+    for key in ('Enter', 'Escape'):
+        bound = re.sub('["\']', '', tm('list-keys', '-T', 'fleet-sidebar', key))
+        check('run-shell' not in bound and 'fleet-sidebar.sh' not in bound and
+              bound.count('send-keys -t {top-left} ' + key) == 2,
+              'the sidebar %s bind forks a shell again: %r' % (key, bound))
     tm('set-hook', '-g', 'session-window-changed[72]',
        "set-option -wF -t fleet-test: @sidebar_ready_on_select '#{@sidebar_worker}'")
 
@@ -516,6 +548,16 @@ try:
           'the hook would re-sync a window the jump already moved the view into')
     check(tm('display-message', '-p', '-t', w2, swc_skip) == '1',
           'the hook would skip the sync for a window with no view')
+    # window-layout-changed (issue #1530): the jump's own join-pane fires it on the
+    # window the view lands in — no sync there (it queued on the jump's lock to do
+    # nothing); the window the view left, with none, still syncs.
+    wlc = next(line for line in shipped.splitlines()
+               if line.startswith('set-hook -g window-layout-changed[71] '))
+    wlc_skip = wlc.split("if -F '", 1)[1].split("'", 1)[0] if "if -F '" in wlc else ''
+    check('fleet-sidebar.sh sync' in wlc and
+          tm('display-message', '-p', '-t', w1, wlc_skip) == '' and
+          tm('display-message', '-p', '-t', w2, wlc_skip) == '1',
+          'window-layout-changed must sync only a window with no live view: %r' % wlc_skip)
 
     # The row producer runs BESIDE the UI loop (issue #1033): with it stalled,
     # an arrow still moves the highlight, the follow still switches, and the
@@ -547,6 +589,39 @@ try:
     os.write(terminal, b'\x1b[A')
     wait_for(lambda: bool(view_on(w1)), 'Up did not follow back after the stalled-producer leg')
     wait_for(navigation, 'the stalled-producer leg left the sidebar key table')
+
+    # ←/→ fold AT ONCE (issue #1530): with the producer stalled — no frame can
+    # land — ← on the parent hides its child and → brings it back from the rows
+    # last seen open. The bit is written all the same, and the first frame after
+    # the stall agrees with what was painted.
+    kid_shown = lambda: '└ 修复侧栏' in tm('capture-pane', '-p', '-t', side)
+    wait_for(kid_shown, 'the child row is not on the list before the fold leg')
+    (bin_dir / 'tmux-dashboard-rows-real.sh').symlink_to(real_bin / 'tmux-dashboard-rows.sh')
+    staged.write_text('#!/bin/bash\nn=0\nwhile [ -f %s ] && [ $n -lt 300 ]; do sleep .1; n=$((n+1)); done\n'
+                      'exec bash %s "$@"\n' % (shlex.quote(str(stall)),
+                                               shlex.quote(str(bin_dir / 'tmux-dashboard-rows-real.sh'))))
+    stall.write_text('')
+    os.replace(staged, rows_bin)
+    time.sleep(1.5)  # the view's next refresh is now stuck in the producer
+    started = time.monotonic()
+    os.write(terminal, b'\x1b[D')
+    wait_for(lambda: not kid_shown(), '← did not fold the child away before a producer frame')
+    folded = time.monotonic() - started
+    wait_for(lambda: tm('show-options', '-wqv', '-t', w1, '@expand') == '', '← did not write the fold bit')
+    started = time.monotonic()
+    os.write(terminal, b'\x1b[C')
+    wait_for(kid_shown, '→ did not draw the child row before a producer frame')
+    opened = time.monotonic() - started
+    wait_for(lambda: tm('show-options', '-wqv', '-t', w1, '@expand') == '1', '→ did not write the fold bit')
+    check(stall.exists(), 'the producer stall ended before the fold was checked')
+    print('sidebar timing: ← → painted in %.2fs / %.2fs with the producer stalled' % (folded, opened))
+    stall.unlink()
+    time.sleep(1.5)  # the stale run lands, is dropped, and a fresh one paints
+    check(kid_shown(), 'the first frame after the stall disagrees with the fold the view painted')
+    rows_bin.unlink()
+    rows_bin.symlink_to(real_bin / 'tmux-dashboard-rows.sh')
+    (bin_dir / 'tmux-dashboard-rows-real.sh').unlink()
+    wait_for(navigation, 'the fold leg left the sidebar key table')
 
     # Degenerate case (a one-repo fleet, no repos/ overlay): the async producer
     # paints exactly what the painter always has — `marker glyph tree label`,
@@ -1524,6 +1599,65 @@ fake_now=114; stuck_check
              'sidebar kept a closed worker window alive')
     check(w1 in tm('list-windows', '-t', 'fleet-test', '-F', '#{window_id}').splitlines(),
           'sidebar cleanup closed an unrelated worker')
+
+    # The sidebar's one refresh (issue #1530): 10 windows over a 700-line
+    # child-report ledger — the shape that took 4 s on a real machine — within
+    # 300 ms (600 on CI), read off the producer's own `--time`. Its own server and
+    # fleet, so no leg here sees these windows. Every @origin names a REAPED key,
+    # so each chain asks the ledger; one climbs two reaped hops to its live
+    # grandparent and must still nest under it.
+    bsock = str(work / 'fleet-bench')
+    bshim = work / 'bpath'
+    bshim.mkdir()
+    (bshim / 'tmux').write_text('#!/bin/sh\nexec ' + shlex.quote(real_tmux) + ' -S ' +
+                                shlex.quote(bsock) + ' "$@"\n')
+    (bshim / 'tmux').chmod(0o755)
+    benv = dict(env, PATH=str(bshim) + os.pathsep + env['PATH'], FLEET_SESSION='fleet-bench')
+    bconf = work / 'conf/fleets/fleet-bench/conf'
+    (bconf.parent / 'children').mkdir(parents=True)
+    bconf.write_text(fleet_conf)
+    for parent in range(1, 55):
+        (bconf.parent / 'children' / ('issue-%d.ndjson' % parent)).write_text(''.join(
+            '{"child": "issue-%d", "state": "merged"}\n' % (parent * 100 + c) for c in range(1, 14)))
+    (bconf.parent / 'children/issue-5501.ndjson').write_text('{"child": "issue-9001"}\n')
+    (bconf.parent / 'children/issue-9001.ndjson').write_text('{"child": "issue-9002"}\n')
+    def bt(*args):
+        return subprocess.run([real_tmux, '-S', bsock, *args], env=benv, text=True,
+                              capture_output=True, timeout=15).stdout.strip()
+    try:
+        bt('-f', '/dev/null', 'new-session', '-d', '-s', 'fleet-bench', '-n', 'dash', 'sleep 600')
+        bwins = {}
+        for n in range(5501, 5511):
+            bw = bt('new-window', '-d', '-P', '-F', '#{window_id}', '-t', 'fleet-bench:', '-n', 'issue-%d' % n, 'sleep 600')
+            bwins[n] = bw
+            bt('set-option', '-w', '-t', bw, '@issue', str(n), ';',
+               'set-option', '-w', '-t', bw, '@claude_state', 'working', ';',
+               'set-option', '-w', '-t', bw, '@origin', 'issue-%d' % (n % 100 * 100 + 7))
+        bt('set-option', '-w', '-t', bwins[5510], '@origin', 'issue-9002', ';',
+           'set-option', '-w', '-t', bwins[5501], '@expand', '1')
+        took, brows = [], []
+        for _ in range(3):
+            out = subprocess.run(['bash', str(bin_dir / 'tmux-dashboard-rows.sh'), '--sidebar', '--time'],
+                                 env=benv, text=True, capture_output=True, timeout=30)
+            check(out.returncode == 0 and out.stdout.rstrip().splitlines()[-1].startswith('#took '),
+                  '--time did not end the rows with `#took <ms>`: %r' % out.stdout[-200:])
+            took.append(int(out.stdout.rstrip().splitlines()[-1].split()[1]))
+            brows = [l.split('\x1f') for l in out.stdout.splitlines() if '\x1f' in l]
+        check(len((bconf.parent / 'children/.origin-map').read_text().splitlines()) >= 700,
+              'the bench ledger is not the 700-line shape')
+        order = [r[0] for r in brows]
+        check(bwins[5510] in order and order.index(bwins[5510]) == order.index(bwins[5501]) + 1 and
+              brows[order.index(bwins[5510])][6] == '1',
+              'a child two reaped hops below its live parent did not nest under it: %r' % brows)
+        budget = 600 if os.environ.get('CI') else 300
+        print('sidebar timing: --sidebar over 10 windows + 700-line ledger took %s ms' % took)
+        check(sorted(took)[1] <= budget, 'the sidebar refresh is slow again: %r ms (median over %d)' % (took, budget))
+        plain = subprocess.run(['bash', str(bin_dir / 'tmux-dashboard-rows.sh'), '--sidebar'],
+                               env=benv, text=True, capture_output=True, timeout=30).stdout
+        check('#took' not in plain, 'the rows carry `#took` without --time')
+    finally:
+        subprocess.run([real_tmux, '-S', bsock, 'kill-server'], env=benv,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     tm('set-option', '-g', '@popup_open', str(int(time.time())))
     client.terminate()

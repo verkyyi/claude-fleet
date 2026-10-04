@@ -25,7 +25,7 @@ import unicodedata
 
 BIN = Path(__file__).absolute().parent  # preserve the selftest shadow root
 US = "\x1f"
-VIEW_VERSION = "21"  # #1475: a proxy window (@remote) is a task window; no machine tag
+VIEW_VERSION = "22"  # #1530: ←/→ fold at once, a stale producer frame is dropped, F11 wakes
 # ↑↓ follow (issue #822): an arrow moves the highlight at once and switches to
 # it only after this much quiet. A held key on a slow link is one switch, not
 # one per row, and a row passed over is never selected — so the wake hook's
@@ -846,6 +846,96 @@ def folds(key):
     return key if key and key != "hdr" else ""
 
 
+# ←/→ fold AT ONCE (issue #1530): the view applies the fold to the rows it has
+# and paints them, then dash-fold-toggle.sh writes the bit and the producer's next
+# frame — the first one read after the write — corrects whatever the guess got
+# wrong. The guess mirrors the producer's rules (tmux-dashboard-rows.sh): a block
+# is the rows nested deeper than its row, or under a heading every row to the
+# next heading; `←` shuts the innermost OPEN block the cursor is in; a `needs` /
+# `failed` row and the current window never fold away. An opened block is drawn
+# from the rows last seen in it (`cache`), so children appear in the same frame
+# as the caret turns — none cached (never seen open), the caret turns and the
+# producer brings them.
+FOLD_KEEP = ("needs", "failed")  # rk 0 in the producer: the loud layer never folds
+
+
+def row_depth(row):
+    return int(row[6]) if len(row) > 6 and row[6].isdigit() else 0
+
+
+def owns_fold(row):
+    """A row with a block to fold: a heading, or a session row with a caret."""
+    return row[0] == "hdr" or row[4].endswith(("▾", "▸"))
+
+
+def fold_open(row):
+    return not row[3].startswith("▸ ") if row[0] == "hdr" else row[4].endswith("▾")
+
+
+def with_fold(row, opened):
+    row = list(row)
+    if row[0] == "hdr":
+        name = row[3][2:] if row[3].startswith("▸ ") else row[3]
+        row[3] = name if opened else "▸ " + name
+    else:
+        row[4] = row[4][:-1] + ("▾" if opened else "▸")
+    return row
+
+
+def block_end(rows, i):
+    """One past the last row of rows[i]'s block."""
+    heading, depth, j = rows[i][0] == "hdr", row_depth(rows[i]), i + 1
+    while j < len(rows) and rows[j][0] != "hdr" and (heading or row_depth(rows[j]) > depth):
+        j += 1
+    return j
+
+
+def remember_folds(rows, cache):
+    """Keep every OPEN block's rows, for drawing it again the moment it reopens."""
+    for i, row in enumerate(rows):
+        key = key_of(row)
+        if key != "hdr" and owns_fold(row) and fold_open(row):
+            end = block_end(rows, i)
+            if end > i + 1:
+                cache[key] = rows[i + 1:end]
+
+
+def fold_now(rows, key, verb, current, cache):
+    """The ←/→ guess: (rows, holder) — holder is the row whose block opened or
+    shut, None when this key folds nothing here (the producer still decides)."""
+    keys = [key_of(row) for row in rows]
+    if not key or key.startswith("wid:") or key not in keys:
+        return rows, None
+    i = keys.index(key)
+    if verb == "expand":
+        if not owns_fold(rows[i]) or fold_open(rows[i]):
+            return rows, None
+        end = block_end(rows, i)
+        shown = {row[0]: row for row in rows[i + 1:end]}
+        kids = [shown.get(row[0], row) for row in cache.get(key, [])]
+        have = {row[0] for row in kids}
+        kids += [row for row in rows[i + 1:end] if row[0] not in have]
+        return rows[:i] + [with_fold(rows[i], True)] + kids + rows[end:], key
+    j = i
+    if rows[i][0] != "hdr":
+        while not (owns_fold(rows[j]) and fold_open(rows[j])):
+            depth = row_depth(rows[j])
+            k = j - 1
+            while k >= 0 and rows[k][0] != "hdr" and row_depth(rows[k]) >= depth:
+                k -= 1
+            if depth == 0 or k < 0 or rows[k][0] == "hdr":
+                return rows, None
+            j = k
+    elif not fold_open(rows[i]):
+        return rows, None
+    end = block_end(rows, j)
+    hidden = rows[j + 1:end]
+    if hidden:
+        cache[key_of(rows[j])] = hidden
+    keep = [row for row in hidden if row[1] in FOLD_KEEP or row[0] == current]
+    return rows[:j] + [with_fold(rows[j], False)] + keep + rows[end:], key_of(rows[j])
+
+
 def start_rows(env):
     """Launch the row producer without waiting for it (issue #1033). Output goes
     to a file, not a pipe: a full pipe would stall a producer this loop only
@@ -854,7 +944,7 @@ def start_rows(env):
     proc = subprocess.Popen(["bash", str(BIN / "tmux-dashboard-rows.sh"), "--sidebar"],
                             env=dict(env), stdin=subprocess.DEVNULL, stdout=out,
                             stderr=subprocess.DEVNULL, text=True)
-    proc.out, proc.started = out, time.monotonic()
+    proc.out, proc.started, proc.stale = out, time.monotonic(), False
     proc.current = env["FLEET_SIDEBAR_CURRENT"]
     return proc
 
@@ -1016,18 +1106,29 @@ def ui(screen, session, worker, lock):
     # only the FIRST frame waits for one — every later frame paints the last
     # good rows, so a jump's `▶` moves as soon as the pane has.
     producer, loaded = None, False
+    # ←/→ (issue #1530): the toggle writing the fold bit, and the blocks last seen
+    # open — no producer starts until the toggle has written, so the next frame
+    # is the first one read after it.
+    folding, fold_cache = None, {}
     while True:
         now = time.monotonic()
+        if folding is not None and folding.poll() is not None:
+            folding, refresh_at = None, 0
         if producer is not None and (producer.poll() is not None or
                                      now - producer.started >= PRODUCER_TIMEOUT):
-            fresh, current = collect_rows(producer), producer.current
+            fresh, current, stale = collect_rows(producer), producer.current, producer.stale
             producer = None
-            if current != window:
+            if stale and loaded:
+                # Started before something this view did (a fold, a jump, a menu
+                # action): its rows would undo what is painted. Read again now.
+                refresh_at = 0
+            elif current != window:
                 # Read against a window this view has since left: its fold
                 # exemptions are for the wrong row. Drop it, read again now.
                 refresh_at = 0
             elif fresh is not None:
                 rows, loaded = fresh, True
+                remember_folds(rows, fold_cache)
                 # Publish the close-landing candidates for THIS window (issue
                 # #900) — only on change, so an idle view forks nothing extra.
                 # `@sidebar_next_of` pins them to the window they were read
@@ -1066,6 +1167,11 @@ def ui(screen, session, worker, lock):
                 refresh_at = 0
                 continue
         if now >= refresh_at:
+            if refresh_at == 0 and producer is not None:
+                # Asked for NOW while a run is in flight (issue #1530): that run
+                # read the state before the ask — drop it when it lands and start
+                # one at once, rather than paint it and wait a whole tick.
+                producer.stale = True
             refresh_at = now + 1
             info = fields(pane, US.join(("#{window_active}", "#{window_zoomed_flag}",
                                          "#{session_attached}", "#{@popup_open}",
@@ -1090,7 +1196,7 @@ def ui(screen, session, worker, lock):
             shown = visible(info[:4], time.time())
             if shown and loaded:
                 sized = fit_view(session, pane, rows, sized)
-            if shown and producer is None:
+            if shown and producer is None and folding is None:
                 producer = start_rows(env)
                 if not loaded:
                     # The first frame waits for real rows rather than flash an
@@ -1213,7 +1319,7 @@ def ui(screen, session, worker, lock):
             wait = min(wait, follow_at - time.monotonic())
         if spawning is not None:
             wait = min(wait, 0.2)
-        if producer is not None:
+        if producer is not None or folding is not None:
             wait = min(wait, PRODUCER_POLL)
         screen.timeout(max(1, min(1000, int(wait * 1000))))
         key = screen.getch()
@@ -1222,6 +1328,11 @@ def ui(screen, session, worker, lock):
             # size, the operator dragged the divider, or fit_view's own
             # resize-pane — so re-fit now, not at the next tick (issue #1521).
             # Never a loop: at the width it wants, fit_view writes nothing.
+            refresh_at = 0
+            continue
+        if key == curses.KEY_F11:
+            # A menu action finished (fleet-sidebar-menu.sh wakes the view with
+            # F11, issue #1530): read the rows now, not at the next tick.
             refresh_at = 0
             continue
         if key == curses.KEY_F12:
@@ -1317,8 +1428,8 @@ def ui(screen, session, worker, lock):
                 spawning = spawn_scratch(line.text.strip(), env,
                                          selection_repo(session, selected or window, env))
         elif key in (10, 13, curses.KEY_ENTER):
-            # The Enter bind already returned the client to root; the key reaches
-            # here a run-shell hop later. If the follow (or anyone) has moved the
+            # The Enter bind already returned the client to root and sent the key
+            # straight here (issue #1530). If the follow (or anyone) has moved the
             # session since, a switch back to the row it was read against would
             # yank the operator — with nothing to jump to, Enter only hands over.
             follow_at = None
@@ -1328,8 +1439,21 @@ def ui(screen, session, worker, lock):
         elif key in (curses.KEY_LEFT, curses.KEY_RIGHT) and folds(selected):
             # A session row folds its subtree; a repo heading its whole group
             # (issue #1037) — one helper, the hub's, for both.
+            # Painted at once (fold_now), written in the background; the
+            # producer waits for the write, so its frame is never the old one.
             verb = "collapse" if key == curses.KEY_LEFT else "expand"
-            run(["bash", str(BIN / "dash-fold-toggle.sh"), verb, folds(selected)], env=env)
+            target = folds(selected)
+            rows, holder = fold_now(rows, target, verb, window, fold_cache)
+            if holder and verb == "collapse":
+                selected = holder
+            if folding is not None:
+                try:
+                    folding.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    folding.kill()
+            folding = subprocess.Popen(["bash", str(BIN / "dash-fold-toggle.sh"), verb, target],
+                                       env=dict(env, DASH_FOLD_PLAIN="1"), stdin=subprocess.DEVNULL,
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             refresh_at = 0
         elif key == 14:
             # ⌃n (dash-keymap.sh --panel sidebar `new`; its ⌥n fallback is

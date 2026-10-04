@@ -14,7 +14,11 @@
 # Execs per render: tmux + sort + perl(sub-second clock) + one fleet_cache slug
 # lookup ≈ 4. ~30ms total. (The #566 @wid backfill adds a handful of forks for a
 # window that carries no handle yet — once in that window's life, not per tick.)
+# --time (issue #1530) appends one `#took <ms>` line: the wall time of this run,
+# from before the libraries load to the last row. Two perl forks, paid only by a
+# caller that asks — the sidebar's 1 s tick never does.
 set -uo pipefail
+TIMEIT=0; case " $* " in *" --time "*) TIMEIT=1; T0=$(perl -MTime::HiRes=time -e 'printf "%d", time*1000' 2>/dev/null) ;; esac
 export LANG="${LANG:-en_US.UTF-8}" LC_ALL="${LC_ALL:-en_US.UTF-8}"   # ${#s} must count chars, not bytes
 case "$0" in */*) BIN="${0%/*}" ;; *) BIN=. ;; esac   # forkless dirname (issue #888)
 BIN="$(cd "${BIN:-/}" && pwd)"
@@ -575,7 +579,14 @@ fi
 # was reaped nests under the nearest LIVE ancestor — at the depth of the live
 # levels only, no label. The skipped hop adds no A* entry. Only a key the ledger
 # does not know (hub-spawned, cross-fleet, never reported) still breaks the chain.
-# The map is read ONCE a frame, and only when some chain actually broke.
+# The map is read ONCE a frame, and only when some chain actually broke — and
+# only the part of it this frame can reach (issue #1530): every key that gets
+# here is a window's @origin (KEYTAB's last field, which both chain_v callers
+# pass) or a parent climbed to from one through the map, so one awk walks those
+# seeds up the map (≤ CHAIN_MAX hops, the bare-key fallback below included) and
+# keeps just the lines it touched. The lookup below is unchanged; it is the
+# string it scans that shrinks. A `${OMAP#*…}` scan of the whole 715-line ledger
+# took ~160 ms on bash 3.2, 35 lookups a frame — 5.7 s of a 5.8 s sidebar.
 CHAIN_MAX=16; DEPTH_MAX=4
 AK=(); AR=(); AI=(); AP=(); AE=(); AG=()
 OMAP=''; OMAP_LOADED=0
@@ -584,7 +595,17 @@ lparent_v() { lpar=''
     OMAP_LOADED=1
     local f
     [ -n "${FLEET_SESSION:-}" ] && f=$(fleet_origin_map "$FLEET_SESSION") \
-      && [ -s "$f" ] && OMAP=$'\n'$(<"$f")$'\n'
+      && [ -s "$f" ] && OMAP=$'\n'$(awk -F '\t' -v CM="$CHAIN_MAX" '
+        FILENAME == "-" { if (NF >= 7 && $7 != "") s[$7] = 1; next }
+        !($1 in m) { m[$1] = $2 }
+        END {
+          for (k in s) for (h = 0; h < CM; h++) {
+            if (k in m) j = k
+            else { b = k; sub(/^[^:]*:/, "", b); if (b == k || !(b in m)) break; j = b }
+            if (!(j in o)) { o[j] = 1; print j "\t" m[j] }
+            k = m[j]
+          }
+        }' - "$f" <<< "$KEYTAB")$'\n'
   fi
   [ -n "$OMAP" ] || return 1
   local m=${OMAP#*$'\n'"$1"$'\t'}
@@ -1351,3 +1372,6 @@ printf '%s' "$buf" | LC_ALL=C sort -t'	' -k1,1n -k2,2n -k3,3 \
   [ -z "$line" ] && continue
   printf '%s\n' "$line"
 done
+if [ "$TIMEIT" = 1 ] && [ -n "${T0:-}" ]; then
+  printf '#took %d\n' "$(( $(perl -MTime::HiRes=time -e 'printf "%d", time*1000' 2>/dev/null) - T0 ))"
+fi

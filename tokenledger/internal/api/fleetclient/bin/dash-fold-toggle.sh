@@ -239,7 +239,9 @@ done
 # window byte-identical to one that was never opened.
 tmux set-option -w -t "$hwid" -u @expand 2>/dev/null || exit 0
 
-if [ "$holder" = "$selfkey" ]; then
+# The sidebar (DASH_FOLD_PLAIN=1, issue #1530) has no fzf to point at a snapshot:
+# it painted the fold itself and only needs the bit written — skip the render.
+if [ "$holder" = "$selfkey" ] || [ "${DASH_FOLD_PLAIN:-0}" = 1 ]; then
   echo "reload(bash $ROWS)"
   exit 0
 fi
