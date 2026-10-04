@@ -103,6 +103,7 @@ print(json.dumps(d, ensure_ascii=False))' "$worker_id" "${1:-}" "${2:-}"; }
 pause() { printf '\n%s' "$(fleet_ui_t remote_press_any)" >&2; read -r -n 1 -s _ 2>/dev/null || read -r _ 2>/dev/null || true; }
 
 # 入口失联 (#1483): refuse before asking anything, send nothing, say why.
+# shellcheck disable=SC2034  # FLEET_STATUS_G is read by the lib sourced on the same line
 FLEET_STATUS_G="$FLEET_C/global"; . "$BIN/fleet-status-lib.sh"
 fleet_status_remote_head "$sess"; fleet_status_hub_ok "$FSR_TS"
 if fleet_status_hub_lost "$(date +%s)"; then

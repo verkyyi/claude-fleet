@@ -147,6 +147,7 @@ fi
 # (the hub off): no word, nothing here runs.
 HUB_LOST=''
 if [ -s "$FLEET_C/global/remote_$sess" ]; then
+  # shellcheck disable=SC2034  # FLEET_STATUS_G is read by the lib sourced on the same line
   FLEET_STATUS_G="$FLEET_C/global"; . "$BIN/fleet-status-lib.sh"
   fleet_status_remote_head "$sess"; fleet_status_hub_ok "$FSR_TS"
   if fleet_status_hub_lost "$(date +%s)"; then fleet_status_age "$FSH_AGE"; HUB_LOST=$(fleet_ui_t hub_lost_fmt "$FSA"); fi

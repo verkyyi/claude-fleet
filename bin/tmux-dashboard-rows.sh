@@ -382,6 +382,7 @@ if [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ -n "${FLEET_SESSION:-}" ] && [ -s "$G/remo
   RLIST=''; _rn=90000; _rts=0; _rstale=0; _rlostn=' '; _rlostw=' '; _rrows=(); _lwids=' '
   # 失联 is decided ONCE, off global/hub_ok (#1483) — the cache's own #ts only
   # for a cache from before that file existed (fleet_status_hub_ok's fallback)
+  # shellcheck disable=SC2034  # FLEET_STATUS_G is read by the lib sourced on the same line
   FLEET_STATUS_G="$G"; . "$BIN/fleet-status-lib.sh"
   fleet_status_remote_head "$FLEET_SESSION"; fleet_status_hub_ok "$FSR_TS"
   fleet_status_hub_lost "$NOW" && _rstale=1
