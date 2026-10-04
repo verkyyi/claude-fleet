@@ -1316,7 +1316,7 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # FLEET_HOME_SIDEBAR_FIRST does nothing then. 1 = the old `plan` hub window
 # running the dash, and the old ⌂ / F9 / prefix g — kept one batch as the way
 # back; the next batch deletes it.
-# @label=Full-screen list window (old hub) @group=status @tier=advanced @scope=fleet @edit=bool
+# @label=Full-screen list window (old hub) @group=status @tier=internal @scope=fleet @edit=bool
 #FLEET_DASH_WINDOW=0
 
 # Optional: a docker container name to show as ●/○ in the status bar right side.

@@ -70,7 +70,8 @@ export PATH="$WORK/bin:$PATH"
 # The server starts from THIS environment, so the hook's run-shell jobs inherit
 # the sandbox log + conf dirs (the knob is read through fleet-hook-conf.sh).
 export FLEET_HUB_VISITS_LOGDIR="$WORK/logs" FLEET_CONF_DIR="$WORK/conf"
-: > "$WORK/conf/fleets/t/conf"
+# The old hub (issue #1533): these legs land on the plan window.
+printf 'FLEET_DASH_WINDOW=1\n' > "$WORK/conf/fleets/t/conf"
 LOG="$WORK/logs/hub-visits-t.log"
 
 # shellcheck disable=SC2329  # invoked via the EXIT trap below
@@ -172,7 +173,7 @@ arrived "stale candidates"
 [ "$(here)" = plan ] || fail "stale: landed on '$(here)', want the hub"
 
 # 7. the knob off → today's behaviour exactly.
-printf 'FLEET_CLOSE_LANDS_NEXT=0\n' > "$WORK/conf/fleets/t/conf"
+printf 'FLEET_DASH_WINDOW=1\nFLEET_CLOSE_LANDS_NEXT=0\n' > "$WORK/conf/fleets/t/conf"
 task f
 land_on_hub_premise f
 publish f d f
