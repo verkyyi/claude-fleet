@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 // The repository a turn was spent in, declared at the source.

@@ -386,7 +386,7 @@ acct_limited_until() {
 acct_eligible() { [ "$(acct_limited_until "$1")" -le "$(now)" ]; }
 
 # --- ccquota: exact, account-wide utilization (issue #513) ----------------------
-# ccquota — the binary from TokenLedger (https://github.com/verkyyi/tokenledger)
+# ccquota — the binary from TokenLedger (https://github.com/verkyyi/claude-fleet/tree/master/tokenledger)
 # — knows every subscription's 5-hour
 # and 7-day utilization + reset instants, account-wide, across devices — the
 # number the limit banner is the LAST symptom of. Reading it lets the fleet

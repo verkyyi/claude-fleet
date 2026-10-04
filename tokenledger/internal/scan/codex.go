@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 // Codex writes metadata separately from usage. Persist both context and the

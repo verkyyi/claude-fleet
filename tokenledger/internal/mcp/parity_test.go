@@ -21,10 +21,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/api"
-	"github.com/verkyyi/ccquota/internal/model"
-	"github.com/verkyyi/ccquota/internal/pricing"
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/api"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 // httpBeside starts an HTTP server on the same store, so a tool's answer can be

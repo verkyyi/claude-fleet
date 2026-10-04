@@ -3,8 +3,8 @@ package agent
 import (
 	"encoding/base64"
 	"encoding/json"
-	"github.com/verkyyi/ccquota/internal/codex"
-	"github.com/verkyyi/ccquota/internal/scan"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/codex"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/scan"
 	"os"
 	"path/filepath"
 	"testing"

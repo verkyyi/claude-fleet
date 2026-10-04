@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 	"strings"
 	"time"
 )

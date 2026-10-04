@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/model"
-	"github.com/verkyyi/ccquota/internal/sessions"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/sessions"
 )
 
 // fakeHome builds a Claude Code home containing n billable turns.

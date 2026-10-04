@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 func migrateDetails(db *sql.DB) error {

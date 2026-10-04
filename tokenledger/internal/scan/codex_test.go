@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 const codexMeta = `{"type":"session_meta","payload":{"id":"s1","cwd":"/work/project","source":"cli","git":{"branch":"main"}}}`

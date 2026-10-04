@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 // seedQuotaWindows writes n provider quota observations two minutes apart.

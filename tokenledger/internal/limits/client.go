@@ -20,7 +20,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 // Endpoint is Claude Code's own usage endpoint.

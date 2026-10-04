@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 // Repo returns a repository the hub holds progress for.

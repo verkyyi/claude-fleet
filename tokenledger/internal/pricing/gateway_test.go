@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 // A deployment's own contract, stated the way the vendors publish it: CNY per

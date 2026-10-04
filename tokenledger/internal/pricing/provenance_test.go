@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 // ratelessSources derive no figure from a rate table, so they have no review

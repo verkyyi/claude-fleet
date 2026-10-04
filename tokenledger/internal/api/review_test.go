@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 // seedReviewHarness pushes two sessions through the real ingest path.

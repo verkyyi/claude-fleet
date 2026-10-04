@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 func lp(min int, pct float64) store.LimitPoint {

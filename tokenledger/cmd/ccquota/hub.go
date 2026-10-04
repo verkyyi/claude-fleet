@@ -16,14 +16,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/agent"
-	"github.com/verkyyi/ccquota/internal/api"
-	"github.com/verkyyi/ccquota/internal/fx"
-	"github.com/verkyyi/ccquota/internal/mcp"
-	"github.com/verkyyi/ccquota/internal/pricing"
-	"github.com/verkyyi/ccquota/internal/scan"
-	"github.com/verkyyi/ccquota/internal/store"
-	"github.com/verkyyi/ccquota/web"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/agent"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/api"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/fx"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/mcp"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/scan"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/web"
 )
 
 // envOr lets an environment variable override a compiled-in default while an

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/api"
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/api"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 func runShare(args []string) error {

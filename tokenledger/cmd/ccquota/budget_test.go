@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 func acct(label string, five, seven float64) BudgetAccount {

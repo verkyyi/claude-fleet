@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/badge"
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/badge"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 // Badge routes exist so an internal repo README can carry a figure served by

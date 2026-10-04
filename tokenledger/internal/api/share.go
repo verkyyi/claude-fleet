@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 // The public view is a SEPARATE DOCUMENT, not the dashboard with fields hidden.

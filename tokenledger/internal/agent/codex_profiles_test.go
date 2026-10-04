@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/verkyyi/ccquota/internal/codex"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/codex"
 )
 
 func TestAgentDiscoversNamedProfilesWithoutResettingExistingScanner(t *testing.T) {

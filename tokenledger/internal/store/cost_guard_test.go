@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 // THE GUARD (issue #2). Sibling to plans_test.go's guard, which keeps real

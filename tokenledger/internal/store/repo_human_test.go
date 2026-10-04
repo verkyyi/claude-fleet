@@ -3,7 +3,7 @@ package store
 import (
 	"testing"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 // step builds a manual step owned by a resolvable person.

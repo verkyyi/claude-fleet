@@ -4,7 +4,7 @@ package api
 import (
 	"testing"
 
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 func hr(hour, model string, tokens int64) store.HourRow {

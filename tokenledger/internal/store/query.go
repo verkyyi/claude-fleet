@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 // Account is a subscription tracked by this hub.

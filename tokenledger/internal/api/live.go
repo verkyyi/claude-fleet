@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 // LiveSession is one running Claude Code session as its own statusLine

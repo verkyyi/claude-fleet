@@ -1,8 +1,8 @@
 package api
 
 import (
-	"github.com/verkyyi/ccquota/internal/findings"
-	"github.com/verkyyi/ccquota/internal/i18n"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/findings"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
 )
 
 // The findings the dashboard prints, in every language this build ships.

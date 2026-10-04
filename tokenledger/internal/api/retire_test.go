@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 // TestRetiredEndpoint_TokenIsRefusedOnIngest is the issue's point 3: retired

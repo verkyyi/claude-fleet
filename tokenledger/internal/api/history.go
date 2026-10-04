@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 // Series is one bucket of a time series, optionally stacked by model.

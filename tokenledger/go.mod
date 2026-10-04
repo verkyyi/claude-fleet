@@ -1,4 +1,4 @@
-module github.com/verkyyi/ccquota
+module github.com/verkyyi/claude-fleet/tokenledger
 
 go 1.25.0
 

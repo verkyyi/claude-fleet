@@ -1,7 +1,7 @@
 package store
 
 import (
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 	"path/filepath"
 	"testing"
 	"time"

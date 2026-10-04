@@ -19,7 +19,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 // claudeConfig is the subset of ~/.claude.json ccquota reads.

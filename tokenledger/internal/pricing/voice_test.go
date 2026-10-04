@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 // The rule this source exists to keep: usage here, money on the invoice.

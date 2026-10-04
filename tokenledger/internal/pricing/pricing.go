@@ -25,7 +25,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 // RatesAsOf documents when the built-in table was last checked against

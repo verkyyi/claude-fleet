@@ -100,7 +100,7 @@ demo repo data.</sub>
 
 - **Subscription-aware scheduling.** Pool Claude subscription accounts, choose
   where new sessions start, and move existing sessions with their transcripts
-  when an account needs a break. With [TokenLedger](https://github.com/verkyyi/tokenledger)
+  when an account needs a break. With [TokenLedger](https://github.com/verkyyi/claude-fleet/tree/master/tokenledger)
   (`ccquota`), use account-wide 5h/7d readings to warn before a limit, rotate
   early, stagger window starts, and optionally pause autofill. See
   [subscription and quota management](#subscription-accounts-and-quota-management).
@@ -469,7 +469,7 @@ continues to work. These capabilities apply to **Claude Code**; the Codex adapte
 has no equivalent quota or account-migration integration yet.
 
 There are two layers: a token pool handles limit banners and session recovery;
-adding [TokenLedger](https://github.com/verkyyi/tokenledger) supplies account-wide
+adding [TokenLedger](https://github.com/verkyyi/claude-fleet/tree/master/tokenledger) supplies account-wide
 quota readings for decisions **before** a subscription is exhausted. TokenLedger
 is the product name; its executable and settings are still `ccquota` and
 `CCQUOTA_*`. Its CLI and hub are separate dependencies, covered in

@@ -1,6 +1,6 @@
 package pricing
 
-import "github.com/verkyyi/ccquota/internal/model"
+import "github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 
 // ClaudePriceNote is the caveat the built-in Anthropic table carries.
 //

@@ -36,8 +36,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/findings"
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/findings"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 // activeMutes reads the silences in force and keys them the way

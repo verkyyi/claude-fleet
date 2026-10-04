@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/verkyyi/ccquota/internal/i18n"
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 // Every translation's English entry must BE the exported constant, not a copy

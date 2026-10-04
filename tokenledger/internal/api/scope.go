@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 // scope resolves the subscription, the range and the drill-down chips of a

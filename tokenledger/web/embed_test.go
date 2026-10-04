@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/findings"
-	"github.com/verkyyi/ccquota/internal/model"
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/findings"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 // The dashboard is embedded, so a missing web/dist is not a cosmetic problem:

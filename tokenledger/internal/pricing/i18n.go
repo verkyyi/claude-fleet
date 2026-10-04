@@ -1,6 +1,6 @@
 package pricing
 
-import "github.com/verkyyi/ccquota/internal/i18n"
+import "github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
 
 // The price notes in every language this build ships.
 //

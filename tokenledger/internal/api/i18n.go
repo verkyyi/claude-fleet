@@ -6,8 +6,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/verkyyi/ccquota/internal/i18n"
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 // The dashboard's server-side prose, in every language this build ships.

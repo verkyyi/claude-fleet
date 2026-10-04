@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 type Auth struct {

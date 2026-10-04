@@ -4,7 +4,7 @@ package api
 import (
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 const criticalPct = 90.0

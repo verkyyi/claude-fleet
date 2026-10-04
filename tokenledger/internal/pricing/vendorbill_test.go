@@ -3,7 +3,7 @@ package pricing
 import (
 	"testing"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 func f(v float64) *float64 { return &v }

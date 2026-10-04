@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 // UserView is one person's page.

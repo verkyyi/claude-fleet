@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/findings"
-	"github.com/verkyyi/ccquota/internal/model"
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/findings"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 // The findings envelope must match the rest of the rollup-backed endpoints

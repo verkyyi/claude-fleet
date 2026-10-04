@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/model"
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 // flowBody is the shape these tests read out of /v1/repo/flow. Declared here

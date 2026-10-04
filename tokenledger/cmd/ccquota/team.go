@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 func runTeam(args []string) error {

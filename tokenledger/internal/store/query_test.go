@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 var base = time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)

@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/limits"
-	"github.com/verkyyi/ccquota/internal/sessions"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/limits"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/sessions"
 )
 
 // probeServer stands in for the messages endpoint, counting calls and returning

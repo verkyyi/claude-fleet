@@ -1,7 +1,7 @@
 package api
 
 import (
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 	"testing"
 	"time"
 )

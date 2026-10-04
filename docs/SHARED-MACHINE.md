@@ -174,7 +174,7 @@ Give the token to `alice` over a private channel. It is a credential.
 ## 4. Run the ccquota agent as that person (LaunchAgent)
 
 `ccquota` isn't a brew formula. See [INSTALL.md step 6](INSTALL.md#install-steps)
-for `go install github.com/verkyyi/ccquota/cmd/ccquota@latest`. As `alice`:
+for `go install github.com/verkyyi/claude-fleet/tokenledger/cmd/ccquota@latest`. As `alice`:
 
 ```sh
 mkdir -p ~/.ccquota/agent

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 // GrowthRow is one stored day of the business ledger.

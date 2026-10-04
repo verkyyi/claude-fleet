@@ -1,6 +1,6 @@
 package pricing
 
-import "github.com/verkyyi/ccquota/internal/model"
+import "github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 
 // VendorBillPriceNote says what every surface showing a vendor-bill figure has
 // to say. It is the counterpart of GatewayPriceNote: both are real money, but

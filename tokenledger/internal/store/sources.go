@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 func (s *Store) SourceForAccount(account string) (string, error) {

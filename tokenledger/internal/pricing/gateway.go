@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 // GatewayPriceNote says what every surface showing a gateway figure has to

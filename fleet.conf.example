@@ -1714,7 +1714,7 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # finds out when their OWN session is refused.
 #
 # Needs ccquota — the binary from TokenLedger
-# (https://github.com/verkyyi/tokenledger); see docs/INSTALL.md step 6 for how to
+# (https://github.com/verkyyi/claude-fleet/tree/master/tokenledger); see docs/INSTALL.md step 6 for how to
 # get it — with a hub configured —
 # CCQUOTA_HUB_URL / CCQUOTA_VIEWER_TOKEN in the daemon's environment. With
 # ccquota absent or no hub set, every mode is a no-op and the fleet behaves

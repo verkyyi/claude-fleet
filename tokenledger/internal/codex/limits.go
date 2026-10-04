@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 // normalizeKeys accepts the RPC camelCase and transcript snake_case contracts.

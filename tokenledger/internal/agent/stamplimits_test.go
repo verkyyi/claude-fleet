@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/sessions"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/sessions"
 )
 
 func pct(v float64) *float64 { return &v }

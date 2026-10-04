@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/model"
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 // maxRepoBody caps one repo snapshot. A first ship of a 2,688-issue backlog is

@@ -1,7 +1,7 @@
 // internal/api/growth_text.go
 package api
 
-import "github.com/verkyyi/ccquota/internal/i18n"
+import "github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
 
 // The board's prose, in the two languages this build ships.
 //

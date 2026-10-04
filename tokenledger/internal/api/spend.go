@@ -4,8 +4,8 @@ package api
 import (
 	"fmt"
 
-	"github.com/verkyyi/ccquota/internal/model"
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 // RealSpend is the only figure on the Review page that is money somebody was

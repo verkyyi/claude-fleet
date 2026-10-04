@@ -21,11 +21,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/api"
-	"github.com/verkyyi/ccquota/internal/findings"
-	"github.com/verkyyi/ccquota/internal/model"
-	"github.com/verkyyi/ccquota/internal/pricing"
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/api"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/findings"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 // protocolVersion is the MCP revision this server implements.

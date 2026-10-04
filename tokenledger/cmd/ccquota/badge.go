@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/badge"
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/badge"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 // dayPeriod matches the only relative window a badge may carry.

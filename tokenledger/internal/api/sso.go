@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/authz"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/authz"
 )
 
 // SSO connects this hub to the company's existing WeCom single sign-on.

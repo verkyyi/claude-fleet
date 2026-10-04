@@ -1,6 +1,6 @@
 package pricing
 
-import "github.com/verkyyi/ccquota/internal/model"
+import "github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 
 // VoicePriceNote says what every surface showing a voice figure has to say.
 //

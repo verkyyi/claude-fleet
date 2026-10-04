@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 // A second way to read a subscription's meter: the rate-limit headers Anthropic

@@ -1,0 +1,83 @@
+name: tokenledger
+
+# TokenLedger (the ccquota hub + agent + web dashboard, Go) — merged into this
+# repo under tokenledger/ with its full history (issue #1391). This is its old
+# repo's ci.yml, moved here and scoped to the subdirectory:
+#
+#   - it runs ONLY when a change touches tokenledger/** (or this file) — the
+#     same "run only what a change can break" rule as #1374. The shell
+#     selftests, in turn, never run for a change confined to tokenledger/:
+#     neither selftests*.yml path filter lists it, and run-selftests.sh
+#     --changed ignores files outside the shipped shell trees
+#     (bin/tokenledger-isolation-selftest.sh pins both directions).
+#   - every step runs with working-directory tokenledger/, which is its own Go
+#     module (github.com/verkyyi/claude-fleet/tokenledger) — there is no go.mod
+#     at the repo root.
+#   - `push` is master-only, like selftests.yml: a branch push would only
+#     duplicate its PR's run.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'tokenledger/**'
+      - '.github/workflows/tokenledger.yml'
+  pull_request:
+    paths:
+      - 'tokenledger/**'
+      - '.github/workflows/tokenledger.yml'
+
+concurrency:
+  group: tokenledger-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    working-directory: tokenledger
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+          cache-dependency-path: tokenledger/go.sum
+      - run: gofmt -l . | tee /tmp/fmt && test ! -s /tmp/fmt
+      - run: go vet ./...
+      - run: go test -race ./...
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      # `npm test` is `node --test test/*.test.mjs` (the glob form: a bare
+      # directory positional does not glob-search on Node 22 — it tries to
+      # require() the directory and fails with ERR_MODULE_NOT_FOUND). There are
+      # no dependencies; `npm ci` only checks the lockfile is in step.
+      - run: npm ci && npm test
+        working-directory: tokenledger/web
+
+  cross-compile:
+    # The whole adoption story is "download one binary", so a platform that
+    # stops building is a release-blocking bug, not a nice-to-have.
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { goos: linux,   goarch: amd64 }
+          - { goos: linux,   goarch: arm64 }
+          - { goos: darwin,  goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+          cache-dependency-path: tokenledger/go.sum
+      - run: CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build ./cmd/ccquota

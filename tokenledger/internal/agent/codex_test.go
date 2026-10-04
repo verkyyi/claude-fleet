@@ -12,7 +12,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 func codexHome(t *testing.T, n int) string {

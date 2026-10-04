@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 // A fake tailscaled. Records every lookup so tests can assert the CLI is

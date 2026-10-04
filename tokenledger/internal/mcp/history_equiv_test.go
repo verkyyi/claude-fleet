@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/api"
-	"github.com/verkyyi/ccquota/internal/pricing"
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/api"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 // TestUsageHistoryMatchesV1HistoryViaSharedFold is the provability check for

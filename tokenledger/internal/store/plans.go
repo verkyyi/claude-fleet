@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 // DefaultCurrency is assumed when a price is recorded without one. It is a

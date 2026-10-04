@@ -7,7 +7,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 // rollupVersion is stamped into rollup_meta. Bump it when the rollup's key or

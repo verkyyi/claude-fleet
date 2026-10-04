@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/identity"
-	"github.com/verkyyi/ccquota/internal/model"
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/identity"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 func TestCodexIngestIsolationAndSourceQueries(t *testing.T) {

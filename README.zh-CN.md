@@ -230,7 +230,7 @@ tmux -L fleet-infra attach -t fleet-infra
 
 多个任务并行时，除了代码进度，还需要知道：**哪个账号有余量、何时重置、正在运行的任务如何接着做。** Fleet 的账号池在本机所有 fleet 之间共用；没有注册账号时保持单账号用法。这些能力目前面向 **Claude Code**，Codex 的账号轮换和配额尚未接入。
 
-账号池本身可以处理限额提示和会话迁移；接入 [TokenLedger](https://github.com/verkyyi/tokenledger) 后，还能根据账号级额度提前采取行动。产品名是 TokenLedger，命令仍叫 `ccquota`，相关配置仍使用 `CCQUOTA_*`；CLI 和 hub 需要另外配置，见[安装手册](docs/INSTALL.md)。
+账号池本身可以处理限额提示和会话迁移；接入 [TokenLedger](https://github.com/verkyyi/claude-fleet/tree/master/tokenledger) 后，还能根据账号级额度提前采取行动。产品名是 TokenLedger，命令仍叫 `ccquota`，相关配置仍使用 `CCQUOTA_*`；CLI 和 hub 需要另外配置，见[安装手册](docs/INSTALL.md)。
 
 | 能力 | 实际行为 | 启用条件 |
 |---|---|---|

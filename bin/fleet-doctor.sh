@@ -597,7 +597,7 @@ if [ -d "$acct_dir" ] && [ -n "$(find "$acct_dir" -maxdepth 1 -type f ! -name '.
         fi
       fi
     else
-      warn quota "CCQUOTA_HUB_URL set but ccquota not on PATH — pre-emptive rotation off; install it with \`go install github.com/verkyyi/ccquota/cmd/ccquota@latest\` (needs Go 1.25+; the product is TokenLedger, https://github.com/verkyyi/tokenledger, the binary is still \`ccquota\`)"
+      warn quota "CCQUOTA_HUB_URL set but ccquota not on PATH — pre-emptive rotation off; install it with \`go install github.com/verkyyi/claude-fleet/tokenledger/cmd/ccquota@latest\` (needs Go 1.25+; the product is TokenLedger, tokenledger/ in the claude-fleet repo, the binary is still \`ccquota\`)"
     fi
   else
     printf '        note: set CCQUOTA_HUB_URL (fleet.conf) for pre-emptive rotation via ccquota — today it rotates only after a limit banner.\n'

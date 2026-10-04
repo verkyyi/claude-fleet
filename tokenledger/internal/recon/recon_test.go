@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/model"
-	"github.com/verkyyi/ccquota/internal/pricing"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
 )
 
 var reset = time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)

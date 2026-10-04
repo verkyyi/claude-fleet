@@ -5,8 +5,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/codex"
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/codex"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 const codexParserVersion = 3

@@ -309,11 +309,11 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
      so a quotawatch unit without it loads clean and then silently no-ops forever
      (`bin/fleet-quotaguard.sh` exits 0 when `ccquota` is off `PATH` — fail-open,
      so nothing ever complains). It comes from **TokenLedger**
-     (<https://github.com/verkyyi/tokenledger>), which has no tagged releases
+     (<https://github.com/verkyyi/claude-fleet/tree/master/tokenledger>), which has no tagged releases
      yet, so build it:
 
      ```sh
-     go install github.com/verkyyi/ccquota/cmd/ccquota@latest   # needs Go 1.25+
+     go install github.com/verkyyi/claude-fleet/tokenledger/cmd/ccquota@latest   # needs Go 1.25+
      ```
 
      Because there is no tagged release, the binary on each machine is whatever
@@ -322,11 +322,15 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
      (issue #668), which is the first thing to compare when one machine's quota
      line is red and another's is green.
 
+     TokenLedger lives in this repo under `tokenledger/` (its own Go module,
+     merged with full history in issue #1391; the old `github.com/verkyyi/ccquota`
+     / `verkyyi/tokenledger` install paths are retired). Installing the fleet
+     never builds it — `go install` above is the only way it gets onto `PATH`.
      The product was renamed to TokenLedger on 2026-09-14 but **the identifiers
-     were deliberately not**: the command, the Go module path above, the
-     `CCQUOTA_*` variables and `~/.ccquota/` are all still spelled `ccquota`, and
-     this fleet reads them under those names. See that repo's README for standing
-     up the hub and pointing `CCQUOTA_HUB_URL` at it.
+     were deliberately not**: the command, the `CCQUOTA_*` variables and
+     `~/.ccquota/` are all still spelled `ccquota`, and this fleet reads them
+     under those names. See [`tokenledger/README.md`](../tokenledger/README.md)
+     for standing up the hub and pointing `CCQUOTA_HUB_URL` at it.
 
      Next, the **diskguard** watcher (`com.claude-fleet.diskguard`, 60s) is strongly
      recommended — a full volume ENOSPCs any tmux server whose writes fail, and

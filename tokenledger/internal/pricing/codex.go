@@ -1,7 +1,7 @@
 package pricing
 
 import (
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 	"strings"
 )
 

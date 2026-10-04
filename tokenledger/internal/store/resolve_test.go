@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/model"
-	"github.com/verkyyi/ccquota/internal/sessions"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/sessions"
 )
 
 func seedSchedule(t *testing.T, s *Store, account string, sevenDay time.Time) {

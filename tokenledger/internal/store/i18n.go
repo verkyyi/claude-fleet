@@ -1,6 +1,6 @@
 package store
 
-import "github.com/verkyyi/ccquota/internal/i18n"
+import "github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
 
 // providerNote is ProviderNote in every language this build ships. The English
 // entry is the constant itself, so the two cannot drift.

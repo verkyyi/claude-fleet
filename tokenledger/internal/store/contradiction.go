@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 // utilizationDropTolerance is how far a window's utilization may fall inside one

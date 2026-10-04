@@ -3,8 +3,8 @@ package agent
 import (
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/model"
-	"github.com/verkyyi/ccquota/internal/sessions"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/sessions"
 )
 
 // stampLimitsMaxAge is how fresh a stamp must be to be believed as a limits

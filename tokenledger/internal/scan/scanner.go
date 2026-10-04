@@ -11,7 +11,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 // maxLineBytes caps a single transcript line. Real lines can reach a few MB

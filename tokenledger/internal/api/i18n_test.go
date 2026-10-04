@@ -6,10 +6,10 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/verkyyi/ccquota/internal/fx"
-	"github.com/verkyyi/ccquota/internal/i18n"
-	"github.com/verkyyi/ccquota/internal/pricing"
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/fx"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 // Each dashboard Text's English entry must BE the constant it translates, for

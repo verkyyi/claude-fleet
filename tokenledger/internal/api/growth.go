@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/badge"
-	"github.com/verkyyi/ccquota/internal/i18n"
-	"github.com/verkyyi/ccquota/internal/model"
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/badge"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 // maxGrowthBody caps one business-facts push. The whole contract is a handful

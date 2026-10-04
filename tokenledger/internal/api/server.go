@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/fx"
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/fx"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 // Server is the hub's HTTP surface.

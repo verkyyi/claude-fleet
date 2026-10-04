@@ -370,7 +370,7 @@ bin/fleet-account.sh model-quota      # label · model · capped|ok|unknown · r
 
 The banner path is reactive: an account has to be walled — and a session stuck
 for up to five hours — before the fleet reacts. If you run
-[TokenLedger](https://github.com/verkyyi/tokenledger) with a hub, the fleet can
+[TokenLedger](https://github.com/verkyyi/claude-fleet/tree/master/tokenledger) with a hub, the fleet can
 act first (issue #513). **The product is TokenLedger; the binary is `ccquota`**
 — the command, the `CCQUOTA_*` variables and the cache paths below all still
 read `ccquota`, so do not go looking for a `tokenledger` command. Install it per

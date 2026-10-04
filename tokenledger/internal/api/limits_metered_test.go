@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 // A gateway "account" is one calling application, billed per call. It has no

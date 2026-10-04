@@ -136,13 +136,20 @@ week", and Anthropic [closed the request for it as not planned](https://github.c
 Download a binary from Releases, or:
 
 ```bash
-go install github.com/verkyyi/ccquota/cmd/ccquota@latest   # needs Go 1.25+
+go install github.com/verkyyi/claude-fleet/tokenledger/cmd/ccquota@latest   # needs Go 1.25+
 ```
 
+> TokenLedger now lives in the [claude-fleet](https://github.com/verkyyi/claude-fleet)
+> monorepo, under `tokenledger/` (claude-fleet issue #1391), with its full
+> history. The old `go install github.com/verkyyi/ccquota/...` /
+> `github.com/verkyyi/tokenledger` paths are retired; the command is still
+> `ccquota` and every `CCQUOTA_*` variable is unchanged.
+
 **The product is TokenLedger; the binary is `ccquota`.** The rename is cosmetic
-so far — the command, the Go module path, the default database path and every
-`CCQUOTA_*` environment variable still read `ccquota`, and this release changes
-none of them. Renaming the identifiers is a separate cutover across two repos,
+so far — the command, the default database path and every `CCQUOTA_*`
+environment variable still read `ccquota`, and this release changes none of
+them. (Only the Go module path moved, with the code, to
+`github.com/verkyyi/claude-fleet/tokenledger`.) Renaming the identifiers is a separate cutover across two repos,
 and it has not been done. So wherever this README says TokenLedger, what you
 type is `ccquota`.
 
@@ -1670,18 +1677,32 @@ Design notes are in `docs/superpowers/specs/`.
 
 ### Trunk and CI
 
-`main` is the trunk. It is the default branch, it is what
-`go install github.com/verkyyi/ccquota/cmd/ccquota@latest` resolves to (there
-are no tags, so `@latest` follows the default branch), and it is what release
-images are cut from. `dashboard-redesign` is the *historical* trunk -- for two
-weeks production was built from it while `main` sat still -- and it is being
-retired; don't branch from it.
+TokenLedger lives in [claude-fleet](https://github.com/verkyyi/claude-fleet)
+under `tokenledger/`; claude-fleet's `master` is the trunk, and it is what
+`go install github.com/verkyyi/claude-fleet/tokenledger/cmd/ccquota@latest`
+resolves to (there are no `tokenledger/v*` tags, so `@latest` follows the
+default branch). Every Go / npm command in this README runs from inside
+`tokenledger/` — it is its own Go module (`go.mod` is here, not at the repo
+root).
 
-Both the trunk and every pull request run `test`, `web`, and the four
-`cross-compile` legs. Those six are required checks on the trunk, so a pull
-request that is red cannot be merged. There is deliberately no required
-*review*: a solo maintainer cannot approve their own pull request, so requiring
-one would leave every pull request unmergeable.
+`.github/workflows/tokenledger.yml` runs `test`, `web` and the four
+`cross-compile` legs on a pull request or a `master` push **only when it
+touches `tokenledger/**`** — the fleet's shell selftests, in turn, do not run
+for a change confined to this directory.
+
+### Docker image
+
+The image builds straight from this directory — the Dockerfile's context is
+`tokenledger/`, exactly as it was the old repo's root:
+
+```bash
+docker build -t ccquota tokenledger/                       # from the claude-fleet root
+docker build --build-arg VERSION=$(git rev-parse --short HEAD) \
+  --platform linux/amd64 -t <registry>/ccquota:<tag> tokenledger/
+```
+
+The production hub image is built and pushed by hand (the deployment manifest
+lives in the operator's infra repo); nothing here pushes an image.
 
 ## License
 

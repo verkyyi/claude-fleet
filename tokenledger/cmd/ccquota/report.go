@@ -13,11 +13,11 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/identity"
-	"github.com/verkyyi/ccquota/internal/limits"
-	"github.com/verkyyi/ccquota/internal/model"
-	"github.com/verkyyi/ccquota/internal/pricing"
-	"github.com/verkyyi/ccquota/internal/scan"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/identity"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/limits"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/scan"
 )
 
 // runReport produces a local report with no hub and, unless asked, no network.

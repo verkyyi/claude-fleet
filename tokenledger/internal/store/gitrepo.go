@@ -3,7 +3,7 @@ package store
 import (
 	"fmt"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 // The repository a spend row was earned in: stored, never derived.

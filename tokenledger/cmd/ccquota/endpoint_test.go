@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 // captureStdout runs fn with os.Stdout redirected and returns what it printed.
