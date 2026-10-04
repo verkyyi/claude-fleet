@@ -148,8 +148,8 @@ PY
   cat "$WORK/dash-popup.sh.argv" 2>/dev/null
 }
 SH="$WORK/shadow"
-PLAIN="--name n --origin hub|-w 90% -h 12 -- bash $SH/dash-issue-new.sh confirm --spawn"
-TO_B="--name n --origin hub --repo o/b|-w 90% -h 12 -- env CF_REPO=o/b bash $SH/dash-issue-new.sh confirm --spawn"
+PLAIN="--name n --origin hub|--size S --title popup_new_task -- bash $SH/dash-issue-new.sh confirm --spawn"
+TO_B="--name n --origin hub --repo o/b|--size S --title popup_new_task -- env CF_REPO=o/b bash $SH/dash-issue-new.sh confirm --spawn"
 
 # --- A. degenerate: one repo ------------------------------------------------------
 for w in wA wB wWT wNO wUNK plan; do

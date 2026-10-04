@@ -142,10 +142,11 @@ printf '%s\n' "$SHEET" | grep '^  ⌃z ' | grep -q 'fleet-repo.sh add' || fail "
 RSHEET=$(FLEET_TMUX_PREFIX=C-z FLEET_TMUX_PREFIX2='' NO_COLOR=1 bash "$KEYS" --plain --context dash)
 printf '%s\n' "$RSHEET" | grep -q '^  ⌥z .*⌃z is your tmux prefix C-z' || fail "C: under a C-z prefix the sheet must list ⌥z and say why"
 eq "C: the row menu's letter for repo is g" "$(printf '%s\n' "$(bash "$MENU" --keys)" | awk -F '\t' '$1=="g"{print $2}' | grep -c 'add a repo')" 1
-grep -Eq '^add "\$m_repo" "\$\(mk repo\)" .*dash-popup\.sh.*dash-repo-add\.sh' "$MENU" \
-  || fail "C: fleet-sidebar-menu.sh has no \$m_repo item on dash-popup.sh → dash-repo-add.sh via \$(mk repo)"
-grep -q "m_repo='＋ 仓库…'" "$MENU" && grep -q "m_repo='Add repo…'" "$MENU" \
-  || fail "C: fleet-sidebar-menu.sh must name the repo item in both UI languages (＋ 仓库… / Add repo…, #1188)"
+grep -Eq 'add "\$\(t menu_repo\)" "\$\(mk repo\)" .*dash-popup\.sh.*dash-repo-add\.sh' "$MENU" \
+  || fail "C: fleet-sidebar-menu.sh has no menu_repo item on dash-popup.sh → dash-repo-add.sh via \$(mk repo)"
+# the label lives in THE table since #1535 (fleet-ui-lang.sh), both UI languages
+[ "$(FLEET_UI_LANG=zh sh "$BIN/fleet-ui-lang.sh" t menu_repo)" = '＋ 仓库…' ] && [ "$(FLEET_UI_LANG=en sh "$BIN/fleet-ui-lang.sh" t menu_repo)" = 'Add repo…' ] \
+  || fail "C: the repo item must be named in both UI languages (＋ 仓库… / Add repo…, #1188)"
 grep -qE 'dash-repo-add\.sh' "$BIN/../README.md" || fail "C: README does not mention the popup"
 FULL=$(FLEET_TMUX_PREFIX=C-b FLEET_TMUX_PREFIX2='' NO_COLOR=1 bash "$KEYS" --plain)
 printf '%s\n' "$FULL" | awk '/^row menu /{f=1;next} f && NF && /^[^ ]/{f=0} f' | grep -q '^  g  .*add a repo' \
