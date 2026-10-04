@@ -376,5 +376,23 @@ Do not install from memory: read the doc and work from it.
   fleet UUID is the FLEET's**: `fleet_uuid` loads the conf with `TMUX` unset so
   the window's repo overlay (#788) never enters the hash — the hub only knows
   the UUID the inventory minted from the fleet conf's own repo + checkout.
+- **A managed login's default agent configuration has ONE source each, and the
+  sync only FILLS it** (issues #1558, #1559). `conf/claude-settings.default.json`
+  is the default Claude Code settings (`fleet-hooks-merge.py defaults`);
+  `conf/agent-defaults/` is the default package for BOTH agents — the user-scope
+  MCP servers `context7` / `playwright` / `github` / `fetch`, Codex's
+  `approval_policy` / `sandbox_mode` / `model_reasoning_effort`, one marker block
+  for `~/.claude/CLAUDE.md` / `$CODEX_HOME/AGENTS.md` (`fleet-agent-defaults.py
+  apply`), the repo's `skills/` for both homes. Fill only: a key / server the
+  login already has — whatever its value — is never rewritten, `model` is never
+  shipped, and the login's `config.toml` is edited as TEXT (its lines stay byte
+  for byte; macOS python 3.9 has no tomllib, so never re-serialize it).
+  `~/.claude/settings.fleet-override.json` / `~/.config/claude-fleet/agent-overrides.json`
+  name what is never written. **Credentials never enter a config**: the `github`
+  server's token is read by `bin/mcp-github.sh` from `gh auth token` at start;
+  `fleet-agent-defaults-selftest.sh` leg 11 greps every shipped and merged file
+  for one. Both run on every `fleet-install-apply.sh` move (`settings`, `agents`
+  passes) — never add a second place that writes these files; `fleet-doctor`'s
+  `settings` / `agents` rows count what a login still lacks.
 - Claude Code re-reads `settings.json` hooks per turn, so running sessions pick
   up hook changes without a restart.

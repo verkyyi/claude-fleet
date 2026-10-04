@@ -129,6 +129,14 @@ if sys.argv[1] == "defaults":
 else:
     print("appended PreToolUse Bash guard.sh")
 EOF
+cat > "$R/bin/fleet-agent-defaults.py" <<EOF
+import sys
+open("$LOG","a").write("fleet-agent-defaults.py " + " ".join(sys.argv[1:]) + "\n")
+print("set            claude mcp context7")
+print('set            codex approval_policy = "never"')
+print("set            codex mcp github")
+print("filled  claude 1 · codex 2")
+EOF
 cat > "$R/bin/fleet-lib.sh" <<'EOF'
 fleet_sockets() { printf '%s\n' ${STUB_SOCKS:-}; }
 EOF
@@ -492,6 +500,35 @@ Q3=$(commit 'no defaults file')
 run_ap --from "$Q2" --to "$Q3"
 contains 'Q no file -> skip' "$OUT" 'settings: skip — no conf/claude-settings.default.json in this version'
 ok 'Q no file -> no call' "! grep -q 'fleet-hooks-merge.py defaults' '$LOG'"
+
+# --- S. agents (issue #1559) ------------------------------------------------------------
+# Degenerate first: every leg so far ran without conf/agent-defaults/ — the pass
+# said skip and never called the script.
+S0=$(git -C "$R" rev-parse HEAD)
+ok 'S degenerate: no conf/agent-defaults -> never called' "! grep -q 'fleet-agent-defaults.py' '$LOG'"
+contains 'S degenerate: says skip' "$OUT" 'agents: skip — no conf/agent-defaults in this version'
+mkdir -p "$R/conf/agent-defaults/claude"
+printf '{"mcpServers": {}}\n' > "$R/conf/agent-defaults/claude/mcp.default.json"
+S1=$(commit 'agent defaults')
+run_ap --from "$S0" --to "$S1"
+eq 'S exit' 0 "$RC"
+ok 'S apply called on the global config, CLAUDE.md, the skills dir and the override file (Codex homes are the script'\''s to find)' \
+   "grep -qx 'fleet-agent-defaults.py apply --root $R --claude-config $H/.claude/.claude.json --claude-md $H/.claude/CLAUDE.md --claude-skills $H/.claude/skills --override $H/.config/claude-fleet/agent-overrides.json' '$LOG'"
+contains 'S summary relayed' "$OUT" 'agents: filled — claude 1 · codex 2 default item(s) this login lacked'
+contains 'S set line shown' "$OUT" 'set            codex mcp github'
+ok 'S hook table + settings untouched by the pass' "! grep -q 'fleet-hooks-merge.py merge' '$LOG'"
+run_ap --from "$S0" --to "$S1" --dry-run
+ok 'S dry-run hands --dry-run through' "grep -q '^fleet-agent-defaults.py apply .* --dry-run$' '$LOG'"
+contains 'S dry-run says would' "$OUT" 'agents: would fill — claude 1 · codex 2'
+echo s > "$R/bin/s.sh"
+S2=$(commit 'unrelated after agents')
+run_ap --from "$S1" --to "$S2"
+ok 'S unrelated move still re-applies' "grep -q '^fleet-agent-defaults.py apply ' '$LOG'"
+rm -rf "$R/conf/agent-defaults"     # the dir itself must go: the pass gates on it existing
+S3=$(commit 'no agent defaults')
+run_ap --from "$S2" --to "$S3"
+contains 'S no dir -> skip' "$OUT" 'agents: skip — no conf/agent-defaults in this version'
+ok 'S no dir -> no call' "! grep -q 'fleet-agent-defaults.py' '$LOG'"
 
 # --- K. usage -------------------------------------------------------------------------
 run_ap --from "$C0" --to "$C1"; eq 'K --to not HEAD' 2 "$RC"

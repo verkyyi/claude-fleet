@@ -1,0 +1,28 @@
+{
+  "mcpServers": {
+    "context7": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"],
+      "env": {}
+    },
+    "playwright": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["@playwright/mcp@latest"],
+      "env": {}
+    },
+    "github": {
+      "type": "stdio",
+      "command": "bash",
+      "args": ["-lc", "exec \"$HOME/.claude/fleet/bin/mcp-github.sh\""],
+      "env": {}
+    },
+    "fetch": {
+      "type": "stdio",
+      "command": "bash",
+      "args": ["-lc", "exec \"$HOME/.claude/fleet/bin/mcp-fetch.sh\""],
+      "env": {}
+    }
+  }
+}
