@@ -294,6 +294,10 @@ func (s *Server) Handler() http.Handler {
 		// plus a connection certificate proven by a signed timestamp — so
 		// it authenticates itself, outside the viewer gate, like the routes.
 		mux.HandleFunc(control.SessionsPath, s.handleFleetSessions)
+		// The status bar's machine + account summaries (claude-fleet#1502):
+		// the shapes of /v1/nodes and /v1/limits?account=all, by the same
+		// doors as the session list — a colleague's certificate included.
+		mux.HandleFunc(control.SummaryPath, s.handleFleetSummary)
 		// A write by connection certificate (claude-fleet#1487): the other
 		// machines' sidebars and the `fleet` shell act on their person's
 		// workers with the one credential they hold, signed per write.

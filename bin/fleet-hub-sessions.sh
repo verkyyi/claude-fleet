@@ -21,7 +21,8 @@
 #               restart). A cache from before hub_ok is judged by its own #ts.
 #               The same round writes the status bar's two summaries (issue
 #               #1482): global/hub_nodes (/v1/nodes) and global/hub_limits
-#               (/v1/limits) — on their own cadence, FLEET_HUB_SUMMARY_EVERY
+#               (/v1/limits) — or both from POST /v1/fleet/summary when the
+#               identity is a connection certificate (issue #1502) — on their own cadence, FLEET_HUB_SUMMARY_EVERY
 #               (10s), see refresh_summaries below.
 #   --loop      --refresh every FLEET_HUB_SESSIONS_WATCHED_EVERY (2s) while a client
 #               is attached to any fleet session on this machine — someone is
@@ -157,6 +158,7 @@ LP_SENT=0    # 1 = this round's ask carried a validator AND a wait
 LAST_FETCH=1 # this round's fetch rc (0 = 200, 3 = 304)
 PIDF="$G/hubsess.pid"
 SESSIONS_NS='fleet-sessions@claude-fleet'
+SUMMARY_NS='fleet-summary@claude-fleet'   # the status bar's two summaries (#1502)
 
 hub_on() { [ "${CCQUOTA_FLEET:-0}" = 1 ]; }
 # The fleets this loop serves: the shell's one pseudo-fleet in client mode
@@ -731,22 +733,54 @@ EOF
 #     (/v1/limits?account=all; `label` is this login's accounts/<label>.conf name
 #     whose CCQUOTA_ACCOUNT is that uuid — a window's @cc_account — else the
 #     hub's label; a subscription without a utilization, e.g. codex, is skipped)
-# Both routes are viewer routes, asked only when this login's identity (#1475's
-# ladder: seam, certificate, viewer token) IS the viewer token: a certificate
-# opens neither and a certificate round never spends the token, no identity
-# means no fetch — then nothing is written and the bar shows `?` / no account
-# chip (a cert door for them: #1502); a failed fetch keeps the last file. Seams: FLEET_HUB_NODES_CMD / FLEET_HUB_LIMITS_CMD
+# Identity follows #1475's ladder (seam, certificate, viewer token). A valid
+# certificate asks the hub's certificate door, POST /v1/fleet/summary (#1502):
+# ONE signed request whose body carries both `machines` and `per_account`,
+# narrowed by the hub to this person's machines and subscriptions — so a
+# colleague who only ran `fleet login` gets a machine cell and an account chip
+# too. Only when the hub REFUSES it (401/403, or 404 on a hub not yet redeployed)
+# does the round fall back to the two viewer routes with the token; a network
+# failure is no answer, never a token spend. No identity means no fetch — then
+# nothing is written and the bar shows `?` / no account chip; a failed fetch
+# keeps the last file. Seams: FLEET_HUB_NODES_CMD / FLEET_HUB_LIMITS_CMD
 # print the JSON; a run driven by FLEET_HUB_SESSIONS_CMD never goes to the network
 # for these either (a selftest must not reach a real hub through hub.json).
+SUMJ=''; SUMRC=''   # the certificate answer of THIS round (refresh_summaries resets both)
+# fetch_summary_cert <url> → rc 0 with the body in $SUMJ; 4 = refused; 1 = no answer.
+# Asked once per round: fetch_nodes and fetch_limits read the same body.
+fetch_summary_cert() {
+  local url="$1" ts sig cert body code
+  if [ -n "$SUMRC" ]; then return "$SUMRC"; fi
+  SUMRC=1
+  ts=$(date +%s)
+  sig=$(printf 'fleet-summary %s' "$ts" | ssh-keygen -Y sign -f "$CERT_KEY" -n "$SUMMARY_NS" 2>/dev/null) || return 1
+  cert=$(head -n1 "$CERT_PUB" 2>/dev/null) || return 1
+  body=$(python3 -c 'import json, sys; print(json.dumps({"cert": sys.argv[1], "sig": sys.argv[2], "ts": int(sys.argv[3])}))' \
+         "$cert" "$sig" "$ts") || return 1
+  SUMJ=$(mktemp "$G/hubsummary.json.XXXXXX") || return 1
+  code=$(curl -sS -m 8 -o "$SUMJ" -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+         --data-binary "$body" "$url/v1/fleet/summary" 2>/dev/null)
+  case "$code" in
+    200)         SUMRC=0 ;;
+    401|403|404) SUMRC=4
+                 printf 'fleet-hub-sessions: the hub refused the connection certificate %s for the summaries (HTTP %s) — trying the viewer token\n' "$CERT_PUB" "$code" >&2 ;;
+  esac
+  return "$SUMRC"
+}
 fetch_viewer() {   # fetch_viewer <path> → the JSON on stdout; rc 1 when no answer
   local url
   [ -z "${FLEET_HUB_SESSIONS_CMD:-}" ] || return 1
   url=$(hub_url) || return 1
   command -v curl >/dev/null 2>&1 || return 1
-  # #1475's ladder, not a fallback: the login's identity is the certificate when
-  # it has a valid one, and a certificate round never spends the viewer token —
-  # so only a token identity asks these two routes (a cert door: #1502).
-  case "$(cert_state)" in ok\ *) return 1 ;; esac
+  case "$(cert_state)" in
+    ok\ *)
+      fetch_summary_cert "$url"
+      case $? in
+        0) cat "$SUMJ"; return 0 ;;
+        4) ;;                       # refused: the token, if this login has one
+        *) return 1 ;;
+      esac ;;
+  esac
   token_source >/dev/null || return 1
   curl -fsS -m 8 -H "Authorization: Bearer $TOK" "$url$1" 2>/dev/null
 }
@@ -772,6 +806,7 @@ refresh_summaries() {
   { read -r last < "$SUMF"; } 2>/dev/null || last=''    # braced: a missing file is silent (#1483 fix in passing)
   case "$last" in ''|*[!0-9]*) ;; *) [ $(( now - last )) -lt "$SUMMARY_EVERY" ] && return 0 ;; esac
   printf '%s\n' "$now" > "$SUMF"
+  SUMJ=''; SUMRC=''
   nj=$(mktemp "$G/hubnodes.json.XXXXXX") || return 1
   if fetch_nodes >"$nj" && [ -s "$nj" ]; then
     python3 - "$nj" "$G/hub_nodes" "${FLEET_NODE_ALIASES:-}" "$now" <<'PY' || printf 'fleet-hub-sessions: /v1/nodes did not answer a machine list — keeping the last hub_nodes\n' >&2
@@ -872,6 +907,7 @@ os.replace(tmp, out)
 PY
   fi
   rm -f "$lj"
+  [ -z "$SUMJ" ] || rm -f "$SUMJ"
   return 0
 }
 # One round: the sessions (its rc), then the two summaries.

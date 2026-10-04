@@ -31,6 +31,8 @@
 #      map, rounding, skipped rows; a failed fetch keeps the last file; off
 #      (CCQUOTA_FLEET unset) writes nothing; their own cadence (FLEET_HUB_SUMMARY_EVERY);
 #      hub_ok written on a sessions round that stood, left alone on a failed one (#1483)
+#      a connection certificate asks POST /v1/fleet/summary once for both and
+#      never the token; refused → the viewer routes with it; no answer → nothing (#1502)
 #   H  fleet_status_node: the one rule for 「当前会话所在机器」
 #   I  the width (`cw=`): < 120 drops 内存, < 100 负载 too, 盘 stays; none = all
 #   J  the account chip off the window's own reading (`rl5=`/`rl7=`): local mode,
@@ -304,6 +306,63 @@ eq "G: two rounds inside FLEET_HUB_SUMMARY_EVERY fetch the summaries once" 1 "$(
 printf '%s\n' $(( $(date +%s) - 11 )) > "$G/hubsum.ts"
 NCMD="echo n >> '$WORK/ncalls'; cat '$WORK/nodes.json'" SEVERY=10 hubs
 eq "G: … and again once the stamp is older than it" 2 "$(grep -c . "$WORK/ncalls")"
+# a connection-certificate identity (#1502): no seams, a hub URL, a valid
+# certificate — the round asks POST /v1/fleet/summary ONCE for both summaries and
+# never spends the viewer token; refused (401) → the two viewer routes with the
+# token; no answer at all → nothing, the token untouched. curl / ssh-keygen are
+# shims on a PATH of this leg's own; nothing reaches a network.
+CB="$WORK/certbin"; mkdir -p "$CB"
+for f in hub_nodes hub_limits hubsum.ts; do cp -p "$G/$f" "$WORK/$f.pre" 2>/dev/null; done   # the legs below read these
+: > "$WORK/cert"; printf 'ssh-ed25519-cert-v01@openssh.com AAAA test\n' > "$WORK/cert-cert.pub"
+cat > "$CB/ssh-keygen" <<'EOF'
+#!/bin/sh
+case "$1" in -L) printf '        Valid: forever\n' ;; -Y) cat >/dev/null; printf -- '-----BEGIN SSH SIGNATURE-----\nx\n-----END SSH SIGNATURE-----\n' ;; esac
+EOF
+cat > "$CB/curl" <<EOF
+#!/bin/sh
+out=''; url=''; auth=''; prev=''
+for a in "\$@"; do
+  [ "\$prev" = -o ] && out=\$a
+  case "\$a" in http*) url=\$a ;; Authorization:*) auth=token ;; esac
+  prev=\$a
+done
+printf '%s %s\n' "\${url#http://hub.test}" "\${auth:-cert}" >> '$WORK/curl.log'
+case "\$url" in
+  */v1/fleet/summary) code=\$(cat '$WORK/sumcode'); [ "\$code" = 200 ] && cat '$WORK/summary.json' > "\$out"; printf '%s' "\$code" ;;
+  */v1/fleet/fleet_sessions*) cat '$WORK/sessions.json' > "\$out"; printf 200 ;;
+  */v1/nodes) cat '$WORK/nodes.json' ;;
+  */v1/limits*) cat '$WORK/limits.json' ;;
+esac
+EOF
+chmod +x "$CB/ssh-keygen" "$CB/curl"
+python3 - "$WORK/nodes.json" "$WORK/limits.json" > "$WORK/summary.json" <<'PY2'
+import json, sys
+n, l = (json.load(open(p)) for p in sys.argv[1:3])
+print(json.dumps({"at": "x", "machines": n["machines"], "per_account": l["per_account"][:1]}))
+PY2
+chubs() { TMPDIR="$T/" FLEET_CONF_DIR="$CONF" FLEET_ACCOUNTS_DIR="$ACC" PATH="$CB:$WORK/bin:$PATH" CCQUOTA_FLEET=1 \
+          CCQUOTA_HUB_URL=http://hub.test FLEET_CERT="$WORK/cert" CCQUOTA_VIEWER_TOKEN=tok FLEET_HUB_SUMMARY_EVERY=0 \
+          FLEET_NODE_ALIASES="macmini=m5 mini2=m4" bash "$HUBS" --refresh 2>"$WORK/err"; }
+rm -f "$G/hub_nodes" "$G/hub_limits" "$G/hubsum.ts"; : > "$WORK/curl.log"; echo 200 > "$WORK/sumcode"
+chubs || fail "G: a certificate round failed" "$(cat "$WORK/err")"
+eq "G: a certificate asks the summary door once, the token never (#1502)" "/v1/fleet/summary cert" "$(grep -v fleet_sessions "$WORK/curl.log")"
+rows=$(tr '\037' '|' < "$G/hub_nodes" 2>/dev/null)
+has "G: … hub_nodes from its machines: m5" "m5|online|5.65|" "$rows"
+has "G: … and m4" "m4|lost|" "$rows"
+has "G: … hub_limits from its per_account: the person's account" "icloud|63|65|7a7e6173" "$(tr '\037' '|' < "$G/hub_limits" 2>/dev/null)"
+eq "G: … and its body is not left behind" "" "$(ls "$G" | grep hubsummary)"
+rm -f "$G/hub_nodes" "$G/hub_limits"; : > "$WORK/curl.log"; echo 401 > "$WORK/sumcode"
+chubs
+eq "G: a refused certificate falls back to the viewer routes with the token" "/v1/fleet/summary cert
+/v1/nodes token
+/v1/limits?account=all token" "$(grep -v fleet_sessions "$WORK/curl.log")"
+has "G: … says so" "refused the connection certificate" "$(cat "$WORK/err")"
+has "G: … and writes the summaries" "m5|online" "$(tr '\037' '|' < "$G/hub_nodes" 2>/dev/null)"
+rm -f "$G/hub_nodes" "$G/hub_limits"; : > "$WORK/curl.log"; echo 000 > "$WORK/sumcode"
+chubs
+eq "G: a hub that does not answer is no answer — the token is not spent" "/v1/fleet/summary cert" "$(grep -v fleet_sessions "$WORK/curl.log")"
+[ -e "$G/hub_nodes" ] && fail "G: no answer wrote hub_nodes"; CHECKS=$((CHECKS+1))
+for f in hub_nodes hub_limits hubsum.ts; do rm -f "$G/$f"; cp -p "$WORK/$f.pre" "$G/$f" 2>/dev/null; done
 
 # ---- H: the one rule
 . "$BIN/fleet-status-lib.sh"
