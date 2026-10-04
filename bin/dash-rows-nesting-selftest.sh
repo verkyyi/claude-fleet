@@ -255,4 +255,26 @@ PY
 eq "E/F/G: the view lays rows out right" "ok" "$out" "$out"
 CHECKS=$((CHECKS+20))
 
+# ============================================================================
+# H. why a ↻ row waits (issue #1370): on a `looping` window WFMT carries
+#    @claude_wait in the needs field, and the sidebar's detail says it — its own
+#    subtree badge for `children`; nothing for a Loop-only or reason-less ↻
+# ============================================================================
+: > "$WLIST_FILE"
+w 1 par   /w/r-issue-1  looping @1 1 ''      /w/r-issue-1 1 children
+w 2 kid1  /w/r-issue-2  'done'  @2 2 issue-1 /w/r-issue-2
+w 3 kid2  /w/r-issue-3  working @3 3 issue-1 /w/r-issue-3
+w 4 bgw   /w/r-issue-4  looping @4 4 ''      /w/r-issue-4 '' bg
+w 5 lpw   /w/r-issue-5  looping @5 5 ''      /w/r-issue-5 '' loop
+w 6 both  /w/r-issue-6  looping @6 6 ''      /w/r-issue-6 '' loop,bg
+s=$(side)
+det() { printf '%s\n' "$1" | awk -F"$US" -v n="$2" '$4 == n { print $8; exit }'; }
+eq "H: waiting on children → 等子任务 + its own k/N" "等子任务 1/2" "$(det "$s" par)"
+eq "H: a background command → 后台命令在跑" "后台命令在跑" "$(det "$s" bgw)"
+eq "H: a Loop alone needs no words (the ↻ says it)" "" "$(det "$s" lpw)"
+eq "H: loop,bg → the bg words" "后台命令在跑" "$(det "$s" both)"
+eq "H: a child's own row carries nothing" "" "$(det "$s" kid2)"
+h=$(hub)
+hasnt "H: the hub's red act cell never shows a ↻ reason" "$h" "等子任务"
+
 printf 'dash-rows-nesting-selftest: OK (%d checks)\n' "$CHECKS"

@@ -5258,20 +5258,11 @@ fleet_pane_claude_pid() {
 # in two monorepo EPICs that report was 15/15 false, every one a worker waiting
 # on its PR gate. [branch] defaults to the @worktree's branch, else issue-<@issue>.
 fleet_child_busy() {
-  local sess="${1:-}" win="${2:-}" br="${3:-}" bin sock='' agent pid='' raw wt iss repo n
+  local sess="${1:-}" win="${2:-}" br="${3:-}" raw wt iss repo n
   [ -n "$win" ] || return 1
   [ -n "$sess" ] || sess=$(fleet_current_session)
   [ -n "$sess" ] || return 1
-  [ -n "${TMUX:-}" ] || sock=$(fleet_socket "$sess")
-  bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
-  if [ -f "$bin/fleet-sleep.py" ] && command -v python3 >/dev/null 2>&1; then
-    agent=$(_fleet_tmux "$sess" display-message -p -t "$win" '#{@cc_agent}' 2>/dev/null)
-    [ "$agent" = codex ] || pid=$(fleet_pane_claude_pid "$win" "$sock" 2>/dev/null) || pid=''
-    if [ "$agent" = codex ] || [ -n "$pid" ]; then
-      python3 "$bin/fleet-sleep.py" busy --session "$sess" ${pid:+--pid "$pid"} "$win" \
-        >/dev/null 2>&1 </dev/null && { printf 'bg\n'; return 0; }
-    fi
-  fi
+  fleet_window_bg_busy "$sess" "$win" && { printf 'bg\n'; return 0; }
   if [ -z "$br" ]; then
     raw=$(_fleet_tmux "$sess" display-message -p -t "$win" '#{@issue}|#{@worktree}' 2>/dev/null)
     iss=${raw%%|*}; wt=${raw#*|}
@@ -5291,6 +5282,180 @@ fleet_child_busy() {
     ''|*[!0-9]*) printf 'pr-unknown\n' ;;
     *) printf 'pr-open\n' ;;
   esac
+}
+
+# fleet_window_bg_busy <session> <win> [quick] — does <win>'s agent still own a
+# Bash-tool job (a run_in_background test, a PR-gate waiter) after its turn ended?
+# fleet_child_busy's `bg` half (issue #864), shared with the Stop hook's and the
+# reapers' "still waiting" answer (issue #1370). Exit 0 = busy. [quick]=1 first asks
+# the cheap necessary condition — a Claude agent counts ONLY a Bash-tool shell
+# (`…/shell-snapshots/snapshot-…` in its argv) among its direct children, exactly
+# fleet-sleep.py's non-strict walk — so a pane with none never pays the python walk.
+fleet_window_bg_busy() {
+  local sess="${1:-}" win="${2:-}" quick="${3:-}" bin sock='' agent pid=''
+  [ -n "$win" ] || return 1
+  [ -n "$sess" ] || sess=$(fleet_current_session)
+  [ -n "$sess" ] || return 1
+  [ -n "${TMUX:-}" ] || sock=$(fleet_socket "$sess")
+  bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+  [ -f "$bin/fleet-sleep.py" ] && command -v python3 >/dev/null 2>&1 || return 1
+  agent=$(_fleet_tmux "$sess" display-message -p -t "$win" '#{@cc_agent}' 2>/dev/null)
+  [ "$agent" = codex ] || pid=$(fleet_pane_claude_pid "$win" "$sock" 2>/dev/null) || pid=''
+  [ "$agent" = codex ] || [ -n "$pid" ] || return 1
+  if [ "$quick" = 1 ] && [ -n "$pid" ]; then
+    ps -axo ppid=,command= 2>/dev/null \
+      | awk -v p="$pid" '$1 == p && index($0, "/shell-snapshots/snapshot-") { f = 1 } END { exit !f }' \
+      || return 1
+  fi
+  python3 "$bin/fleet-sleep.py" busy --session "$sess" ${pid:+--pid "$pid"} "$win" \
+    >/dev/null 2>&1 </dev/null
+}
+
+# fleet_window_okey <session> <win> → <win>'s own ledger key — `issue-<N>` /
+# `scratch-<N>` (`<slug>:`-qualified in a 2+ repo fleet) — the key its children's
+# @origin carries; nothing when it has none. fleet_origin_key's rule, for any
+# window rather than only the caller's pane.
+fleet_window_okey() {
+  local sess="${1:-}" t="${2:-}" o iss owt path k pre
+  [ -n "$t" ] || return 0
+  o=$(_fleet_tmux "$sess" display-message -p -t "$t" \
+        '#{@issue}|#{@worktree}|#{pane_current_path}' 2>/dev/null)
+  [ -n "$o" ] || return 0
+  iss=${o%%|*}; o=${o#*|}; owt=${o%%|*}; path=${o#*|}
+  pre=$(_fleet_key_prefix "$sess" "$t") || return 0
+  case "$iss" in
+    ''|*[!0-9]*) : ;;
+    *) printf '%sissue-%s' "$pre" "$iss"; return 0 ;;
+  esac
+  k=$(fleet_scratch_key "$owt")
+  [ -z "$k" ] && k=$(fleet_scratch_key "$path")
+  [ -n "$k" ] && printf '%s%s' "$pre" "$k"
+  return 0
+}
+
+# fleet_window_waiting_children <session> <win> — is <win> waiting on a sub-task it
+# spawned (issue #1370)? Prints `k/N` (finished/total of its live subtree) and exits
+# 0 while k < N; prints nothing and exits 1 otherwise. The SAME count the dash's
+# k/N badge draws (tmux-dashboard-rows.sh pass A2): every live window whose @origin
+# chain climbs to <win>'s key, at any depth; finished = `done` with no live @loop.
+# A child whose PR merged or whose issue closed is reaped by cleanup and leaves the
+# count — it is "done" by leaving, as on the dash. One list-windows when <win> has
+# no live direct child — the common case on every Stop.
+fleet_window_waiting_children() {
+  local sess="${1:-}" t="${2:-}" key all line ws wid st loop iss wt repo norepo origin path name
+  local tab='' pre slug k tot=0 dn=0 bin direct=0
+  [ -n "$t" ] || return 1
+  [ -n "$sess" ] || sess=$(fleet_current_session)
+  key=$(fleet_window_okey "$sess" "$t"); [ -n "$key" ] || return 1
+  all=$(_fleet_tmux "$sess" list-windows -a -F '#{session_name}|#{window_id}|#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}|#{@loop}|#{@issue}|#{@worktree}|#{@repo}|#{@norepo}|#{@origin}|#{pane_current_path}|#{window_name}' 2>/dev/null)
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    ws=${line%%|*}; [ -n "$sess" ] && [ "$ws" != "$sess" ] && continue
+    line=${line#*|}; wid=${line%%|*}; line=${line#*|}; st=${line%%|*}; line=${line#*|}
+    loop=${line%%|*}; line=${line#*|}; iss=${line%%|*}; line=${line#*|}
+    wt=${line%%|*}; line=${line#*|}; repo=${line%%|*}; line=${line#*|}
+    norepo=${line%%|*}; line=${line#*|}; origin=${line%%|*}
+    [ "$origin" = "$key" ] && [ "$wid" != "$t" ] && { direct=1; break; }
+  done <<EOF
+$all
+EOF
+  [ "$direct" = 1 ] || return 1
+  bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+  # every window that could be in the subtree (a key-shaped @origin) → key/origin/finished
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    ws=${line%%|*}; [ -n "$sess" ] && [ "$ws" != "$sess" ] && continue
+    line=${line#*|}; wid=${line%%|*}; line=${line#*|}; st=${line%%|*}; line=${line#*|}
+    loop=${line%%|*}; line=${line#*|}; iss=${line%%|*}; line=${line#*|}
+    wt=${line%%|*}; line=${line#*|}; repo=${line%%|*}; line=${line#*|}
+    norepo=${line%%|*}; line=${line#*|}; origin=${line%%|*}; line=${line#*|}
+    path=${line%%|*}; name=${line#*|}
+    [ "$wid" = "$t" ] && continue
+    case "$name" in dash|plan|backlog) continue ;; esac
+    case "$origin" in issue-*|scratch-*|*:issue-*|*:scratch-*) ;; *) continue ;; esac
+    pre=''
+    if _fleet_hosts_many "$sess"; then
+      [ -n "$repo" ] || repo=$(fleet_window_repo "$sess" "$wid")
+      slug=''; [ "$norepo" != 1 ] && [ -n "$repo" ] && slug=$(fleet_slug "$repo")
+      pre="${slug:-?}:"
+    fi
+    case "$iss" in
+      ''|*[!0-9]*) k=$(fleet_scratch_key "$wt"); [ -n "$k" ] || k=$(fleet_scratch_key "$path")
+                   [ -n "$k" ] && k="$pre$k" ;;
+      *) k="${pre}issue-$iss" ;;
+    esac
+    [ -n "$k" ] || continue
+    if [ "$st" = done ] && ! { [ -n "$loop" ] \
+         && python3 "$bin/fleet_loop_mark.py" status --value "$loop" >/dev/null 2>&1; }; then
+      st=1
+    else st=0; fi
+    tab="$tab$k	$origin	$st
+"
+  done <<EOF
+$all
+EOF
+  # chain_v's walk (CHAIN_MAX 16): a row counts toward <win> when its @origin chain,
+  # climbed through live keyed windows (first match wins), reaches <win>'s key.
+  # One awk over the whole table, however deep or wide the subtree.
+  line=$(printf '%s' "$tab" | awk -F '\t' -v key="$key" '
+    NF >= 3 { n++; r[n] = $2; f[n] = $3; if (!($1 in o)) o[$1] = $2 }
+    END {
+      for (i = 1; i <= n; i++) {
+        c = r[i]
+        for (h = 0; h < 16; h++) {
+          if (c == key) { t++; if (f[i] == 1) d++; break }
+          if (!(c in o)) break
+          c = o[c]
+        }
+      }
+      print d + 0, t + 0
+    }')
+  dn=${line%% *}; tot=${line##* }
+  case "$dn$tot" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$tot" -gt "$dn" ] || return 1
+  printf '%s/%s\n' "$dn" "$tot"
+}
+
+# fleet_window_wait <session> <win> — WHY an idle <win> is not finished (issue
+# #1370). Prints the reasons it holds, comma-separated, in a fixed order, and
+# exits 0 when there is at least one; prints nothing and exits 1 otherwise:
+#   loop      a Loop is pending (fleet_window_loop: @loop / a fleet-loop ledger)
+#   children  a sub-task it spawned is not finished (fleet_window_waiting_children)
+#   bg        its agent still owns a Bash-tool job (fleet_window_bg_busy, quick)
+# The Stop hook writes `looping` + @claude_wait from this; fleet-reap-live.py
+# retains on it. A window with none of the three pays one list-windows, one tmux
+# read and one ps.
+fleet_window_wait() {
+  local sess="${1:-}" t="${2:-}" out=''
+  [ -n "$t" ] || return 1
+  [ -n "$sess" ] || sess=$(fleet_current_session)
+  fleet_window_loop "$sess" "$t" >/dev/null 2>&1 && out=loop
+  fleet_window_waiting_children "$sess" "$t" >/dev/null 2>&1 && out="${out:+$out,}children"
+  fleet_window_bg_busy "$sess" "$t" 1 && out="${out:+$out,}bg"
+  [ -n "$out" ] || return 1
+  printf '%s\n' "$out"
+}
+
+# fleet_stop_wait <win> [transcript] — the Stop hook's one question (issue #1370):
+# fleet_window_wait's reasons, after first backfilling a missing @loop from the
+# tail of this session's own transcript (fleet_loop_mark.py backfill) — a session
+# whose wakeup was scheduled before the PostToolUse hook was installed. Only when
+# the window has no @loop, no live mod heartbeat (the mod writes @loop itself) and
+# the transcript's last FLEET_LOOP_BACKFILL_BYTES even mention a Loop tool; bounded
+# by a 5s timebox, so a Stop is never held up by it.
+fleet_stop_wait() {
+  local t="${1:-}" tp="${2:-}" bin n="${FLEET_LOOP_BACKFILL_BYTES:-262144}"
+  [ -n "$t" ] || return 1
+  case "$n" in ''|*[!0-9]*) n=262144 ;; esac
+  bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+  if [ -n "$tp" ] && [ -f "$tp" ] \
+     && [ -z "$(tmux display-message -p -t "$t" '#{@loop}' 2>/dev/null)" ] \
+     && ! fleet_mod_alive "$t" \
+     && tail -c "$n" "$tp" 2>/dev/null | grep -qE '"(ScheduleWakeup|CronCreate)"'; then
+    fleet_timebox 5 python3 "$bin/fleet_loop_mark.py" backfill "$t" --transcript "$tp" \
+      --max-bytes "$n" >/dev/null 2>&1 </dev/null
+  fi
+  fleet_window_wait '' "$t"
 }
 
 # fleet_pr_merge_state <repo> <pr> — what GitHub says a PR's merge state IS, for a

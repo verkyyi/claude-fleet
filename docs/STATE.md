@@ -259,6 +259,33 @@ gate; the dash's `k/N` and `fleet-children.sh` count only `done` with no Loop
 (sleeping / preparing / waking are quiet, not finished). A Codex worker has no
 such tools — its `@loop` stays empty and nothing changes for it.
 
+**Why a ↻ is waiting: `@claude_wait`** (issue #1370). A Loop is not the only way a
+quiet window is unfinished. At every Stop (and at the mod's own `done` report)
+`fleet_stop_wait` → `fleet_window_wait` asks three things and the Stop writes
+`looping` + `@claude_wait=<reasons>` (comma-separated, fixed order) when any holds:
+
+- `loop` — the `@loop` answer above. A session that scheduled its wakeup BEFORE the
+  PostToolUse hook was synced has no mark, so when the window has no `@loop` and no
+  live mod heartbeat, the Stop first replays the tail of its own transcript
+  (`fleet_loop_mark.py backfill`, ≤ `FLEET_LOOP_BACKFILL_BYTES`, default 256 KiB,
+  5 s timebox) through the same `apply()` and writes the mark only if it is still
+  pending. `fleet-install-apply.sh`'s `loopmark` step does the same for every
+  Claude window at sync time (`fleet_loop_mark.py sweep`). Only adds, never clears.
+- `children` — a sub-task it spawned is not finished: `fleet_window_waiting_children`
+  walks the live windows whose `@origin` chain climbs to this window's key (every
+  level, as the dash's `k/N` does) and counts `done` with no live Loop as finished;
+  a child whose PR merged leaves the count when cleanup reaps it.
+- `bg` — its agent still owns a Bash-tool job (`fleet_window_bg_busy`: the
+  `fleet-sleep.py busy` walk behind `fleet_child_busy`'s `bg`, gated on a direct
+  `…/shell-snapshots/snapshot-…` child so an idle pane pays one `ps`).
+
+`@claude_wait` only explains `looping` — no new state value — and a Stop with no
+reason removes it, so a window that waits on nothing carries exactly the options
+it always did. The classifier's `STOPPED` read defers to all three, the reapers
+answer `retained:children` / `retained:bg`, and the sidebar's selected-row line
+says `等子任务 k/N` / `后台命令在跑`. When the last child lands (its child-report is
+a new turn) or the job ends (its task notification is too), the next Stop is `done`.
+
 For everything the hooks cannot see, the screen classifier below stays. A hook
 cannot tell a **clean finish** from a `/loop` paused **between iterations** when
 no schedule was recorded — both look like `Stop` → `done`. And a `done` window may actually hold a pending

@@ -22,6 +22,27 @@ _HERE = Path(__file__).absolute().parent
 LOOPMARK = runpy.run_path(str(next(
     (d / "fleet_loop_mark.py" for d in (_HERE, Path(__file__).resolve().parent)
      if (d / "fleet_loop_mark.py").is_file()), _HERE / "fleet_loop_mark.py")))
+LIB = next((d / "fleet-lib.sh" for d in (_HERE, Path(__file__).resolve().parent)
+            if (d / "fleet-lib.sh").is_file()), _HERE / "fleet-lib.sh")
+
+
+def waiting(target, socket_name=None):
+    """fleet_window_wait's other two reasons (issue #1370) — '' | 'children' | 'bg'.
+
+    A parent whose sub-task is not finished, or whose agent still owns a Bash-tool
+    job, is idle but not done: the same answer its Stop hook stamps `looping` +
+    @claude_wait from. Asked here too, because a window stamped `done` before the
+    sync (or by any writer that never asked) must not be reaped out from under it."""
+    script = ('. "$1"; t=$2; L=$3\n'
+              's=$(tmux ${L:+-L "$L"} display-message -p -t "$t" "#{session_name}" 2>/dev/null)\n'
+              '[ -n "$L" ] && TMUX=\n'
+              'fleet_window_waiting_children "$s" "$t" >/dev/null 2>&1 && { echo children; exit 0; }\n'
+              'fleet_window_bg_busy "$s" "$t" 1 && echo bg\n'
+              'exit 0\n')
+    out = subprocess.run(["bash", "-c", script, "reap-live", str(LIB), target, socket_name or ""],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                         text=True, timeout=30).stdout.strip()
+    return out if out in ("children", "bg") else ""
 
 
 def read(*args):
@@ -76,6 +97,9 @@ def live_reason(target, minimum, socket_name=None, merged_at=None, waived=None, 
     value, _, manifest = raw.partition("\t")
     if (value or manifest) and LOOPMARK["status"](value, manifest)[0] == "active":
         return "retained:loop"
+    why = waiting(target, socket_name)
+    if why:
+        return "retained:" + why
     lifecycle = read(*tmux, "display-message", "-p", "-t", target, "#{@worker_lifecycle}").strip()
     # A SLEEPING worker has no agent at all — its pane is the park page — so it is
     # the safest reap there is (issue #1244): no age gate, only the process walk

@@ -4,6 +4,9 @@
 Usage: fleet_loop_mark.py hook                         (PostToolUse, stdin JSON)
        fleet_loop_mark.py window <target> [--socket-name S]
        fleet_loop_mark.py status --value V [--manifest M] [--now N]
+       fleet_loop_mark.py backfill <target> [--transcript P] [--socket-name S]
+                                             [--max-bytes N] [--now N]
+       fleet_loop_mark.py sweep [--socket-name S]      (every window of one fleet)
 
 A worker that ran `/loop` ends every turn with a ScheduleWakeup (or holds a
 CronCreate job), so the Stop hook used to stamp it `done` — and the dash counted it
@@ -25,6 +28,15 @@ The value is ONE line of space-separated `k=v` fields:
 EXPIRY IS THE READER'S (no resident process): a wakeup whose `next + max(600, ttl/2)`
 has passed with no newer ScheduleWakeup was not renewed — the loop stopped; a cron
 id past its `until` has expired. So a stopped Loop reads `none` with no writer.
+
+BACKFILL (issue #1370): the hook only sees calls made after it was installed, so a
+session that scheduled its wakeup before the sync carries no `@loop` until it calls
+ScheduleWakeup again — and reads `done` meanwhile. `backfill` replays the tail of
+the window's Claude transcript through the same apply() (each successful
+ScheduleWakeup / CronCreate / CronDelete, at its result's timestamp) and writes the
+result ONLY when the window has no `@loop` and the replay is still active now. It
+never clears: expiry stays the reader's. Run by the Stop hook (a window with neither
+`@loop` nor a mod heartbeat) and by fleet-install-apply.sh's `loopmark` step.
 
 The fleet-loop.py ledger (`<manifest dir>/loop/state.json`, a transferred Codex /
 Claude loop) counts as a Loop too while its status is one that will still deliver.
@@ -150,6 +162,146 @@ def apply(value, payload, now=None):
     return fmt(d)
 
 
+def _epoch(ts):
+    try:
+        return int(datetime.datetime.fromisoformat(str(ts).replace('Z', '+00:00')).timestamp())
+    except (TypeError, ValueError):
+        return None
+
+
+def claude_tool_results(lines, names, strict=False):
+    """Each SUCCESSFUL main-thread call of a tool in <names>, in transcript order:
+    (name, input, response, use_ts, result_ts). A sidechain (subagent) call is not
+    the session's; an is_error result never happened. strict=False skips a torn
+    line — a tail read starts mid-line. fleet-loop.py from_claude shares this."""
+    calls = {}
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            if strict:
+                raise
+            continue
+        if not isinstance(row, dict) or row.get('isSidechain'):
+            continue
+        msg = row.get('message')
+        content = msg.get('content', []) if isinstance(msg, dict) else []
+        for b in content if isinstance(content, list) else []:
+            if not isinstance(b, dict):
+                continue
+            if b.get('type') == 'tool_use' and b.get('name') in names and 'id' in b:
+                inp = b.get('input')
+                calls[b['id']] = (b['name'], inp if isinstance(inp, dict) else {}, row.get('timestamp'))
+            elif (b.get('type') == 'tool_result' and b.get('tool_use_id') in calls
+                  and not b.get('is_error')):
+                name, inp, use_ts = calls.pop(b['tool_use_id'])
+                resp = row.get('toolUseResult')
+                if resp is None:
+                    resp = b.get('content')
+                    if isinstance(resp, list):
+                        resp = ' '.join(x.get('text', '') for x in resp if isinstance(x, dict))
+                yield name, inp, resp, use_ts, row.get('timestamp') or use_ts
+
+
+def replay(lines, now=None):
+    """The `@loop` the PostToolUse hook would hold now, had it seen every call."""
+    now = int(time.time()) if now is None else int(now)
+    value = ''
+    for name, inp, resp, use_ts, res_ts in claude_tool_results(
+            lines, ('ScheduleWakeup', 'CronCreate', 'CronDelete')):
+        at = _epoch(res_ts) or _epoch(use_ts)
+        if at is None:
+            continue
+        value = apply(value, {'tool_name': name, 'tool_input': inp, 'tool_response': resp}, at)
+    return fmt(prune(parse(value), now))
+
+
+TAIL_BYTES = 262144                # the Stop hook's read budget: a few hundred turns
+
+
+def tail_lines(path, max_bytes=TAIL_BYTES):
+    with open(path, 'rb') as fh:
+        fh.seek(0, os.SEEK_END)
+        size = fh.tell()
+        fh.seek(max(0, size - max_bytes))
+        data = fh.read()
+    lines = data.decode('utf-8', 'replace').splitlines()
+    return lines[1:] if size > max_bytes else lines
+
+
+def transcript_for(opt):
+    """A window's own Claude transcript: @cc_session_id (Stop/SessionStart stamp it,
+    issue #1296), else the pane's Claude pid's session registry. None = unknown."""
+    sid = opt('@cc_session_id')
+    if not sid:
+        try:
+            lib = str(Path(__file__).with_name('fleet-lib.sh'))
+            pid = subprocess.check_output(
+                ['bash', '-c', '. "$1"; fleet_pane_claude_pid "$2" "$3"', 'loopmark', lib,
+                 opt('window_id'), opt('_socket')], text=True, stderr=subprocess.DEVNULL, timeout=10).strip()
+            reg = Path(os.environ.get('FLEET_CC_SESSIONS_DIR', str(Path.home() / '.claude/sessions'))) / (pid + '.json')
+            sid = json.loads(reg.read_text()).get('sessionId') if pid.isdigit() else ''
+        except (OSError, ValueError, subprocess.SubprocessError, AttributeError):
+            sid = ''
+    if not isinstance(sid, str) or not re.fullmatch(r'[0-9a-fA-F-]{36}', sid):
+        return None
+    projects = Path(os.environ.get('FLEET_CC_PROJECTS_DIR',
+                                   os.environ.get('CLAUDE_PROJECTS_DIR', str(Path.home() / '.claude/projects'))))
+    hits = list(projects.glob('*/' + sid + '.jsonl'))
+    return hits[0] if len(hits) == 1 else None
+
+
+def backfill(target, transcript=None, socket_name=None, max_bytes=TAIL_BYTES, now=None):
+    """('marked', value) | ('skip', why). Writes @loop only where none is set."""
+    tm = ['tmux'] + (['-L', socket_name] if socket_name else [])
+
+    def opt(name):
+        if name == '_socket':
+            return socket_name or ''
+        return subprocess.check_output(tm + ['display-message', '-p', '-t', target, '#{%s}' % name],
+                                       text=True, stderr=subprocess.DEVNULL, timeout=5).strip()
+    if opt('@loop'):
+        return 'skip', 'has-loop'
+    if opt('@cc_agent') == 'codex':
+        return 'skip', 'codex'
+    path = Path(transcript) if transcript else transcript_for(opt)
+    if path is None or not path.is_file():
+        return 'skip', 'no-transcript'
+    value = replay(tail_lines(path, max_bytes), now)
+    if not value:
+        return 'skip', 'none'
+    subprocess.call(tm + ['set-window-option', '-t', target, '@loop', value],
+                    stderr=subprocess.DEVNULL, timeout=5)
+    return 'marked', value
+
+
+PANELS = ('dash', 'plan', 'backlog')
+
+
+def sweep(socket_name=None, max_bytes=TAIL_BYTES, now=None):
+    """backfill() over every agent window of one fleet's server → (marked, seen).
+    fleet-install-apply.sh's `loopmark` step runs it once per fleet socket, so a
+    session that scheduled its Loop before this version was synced is marked
+    without waiting for its next Stop."""
+    tm = ['tmux'] + (['-L', socket_name] if socket_name else [])
+    rows = subprocess.check_output(tm + ['list-windows', '-a', '-F', '#{window_id}\t#{window_name}'],
+                                   text=True, stderr=subprocess.DEVNULL, timeout=10).splitlines()
+    marked = seen = 0
+    for row in rows:
+        wid, _, name = row.partition('\t')
+        if not re.fullmatch(r'@\d+', wid) or name in PANELS:
+            continue
+        try:
+            st, why = backfill(wid, None, socket_name, max_bytes, now)
+        except (OSError, subprocess.SubprocessError):
+            st, why = 'skip', 'unreadable'
+        if why in ('codex', 'no-transcript'):
+            continue                   # not a Claude window this login can read
+        seen += 1
+        marked += st == 'marked'
+    return marked, seen
+
+
 def ledger_status(manifest):
     if not manifest:
         return ''
@@ -222,6 +374,14 @@ def main():
     w.add_argument('target')
     w.add_argument('--socket-name')
     w.add_argument('--now', type=int)
+    b = sub.add_parser('backfill')
+    b.add_argument('target')
+    b.add_argument('--transcript')
+    b.add_argument('--socket-name')
+    b.add_argument('--max-bytes', type=int, default=TAIL_BYTES)
+    b.add_argument('--now', type=int)
+    w2 = sub.add_parser('sweep')
+    w2.add_argument('--socket-name')
     s = sub.add_parser('status')
     s.add_argument('--value', default='')
     s.add_argument('--manifest', default='')
@@ -229,6 +389,21 @@ def main():
     a = p.parse_args()
     if a.cmd == 'hook':
         return hook()
+    if a.cmd == 'sweep':
+        try:
+            marked, seen = sweep(a.socket_name)
+        except (OSError, subprocess.SubprocessError):
+            print('marked=0 windows=0 unreadable')
+            return 1
+        print('marked=%d windows=%d' % (marked, seen))
+        return 0
+    if a.cmd == 'backfill':
+        try:
+            st, why = backfill(a.target, a.transcript, a.socket_name, a.max_bytes, a.now)
+        except (OSError, subprocess.SubprocessError):
+            st, why = 'skip', 'unreadable'
+        print(st, why)
+        return 0 if st == 'marked' else 1
     if a.cmd == 'window':
         try:
             st, why = window(a.target, a.socket_name, a.now)

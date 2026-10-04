@@ -301,6 +301,23 @@ ok 'G ui conf reload' "grep -q '^fleet-ui-refresh.sh --all --conf' '$LOG'"
 eq 'G before-conf is --from' "$(printf 'bind a run x\nbind b run y')" "$(cat "$WORK/seen-before.conf")"
 STUB_SOCKS='f1 f2' run_ap --from "$C7" --to "$C8"
 contains 'G repark per fleet' "$OUT" 'repark: ok — 2 page(s) re-parked on 2 live fleet(s)'
+# loopmark (issue #1370): one sweep per fleet socket, the counts summed into one line
+contains 'G loopmark absent → skip' "$OUT" 'loopmark: skip — no @loop mark in this version'
+cat > "$R/bin/fleet_loop_mark.py" <<EOF
+import sys
+open("$LOG","a").write("fleet_loop_mark.py " + " ".join(sys.argv[1:]) + "\n")
+print({"f1": "marked=2 windows=5", "f2": "marked=1 windows=3"}.get(sys.argv[-1], "marked=0 windows=0"))
+EOF
+STUB_SOCKS='f1 f2' run_ap --from "$C7" --to "$C8"
+contains 'G loopmark counts' "$OUT" 'loopmark: ok — 3 of 8 Claude window(s) marked on 2 live fleet(s)'
+ok 'G loopmark swept each fleet' "grep -q '^fleet_loop_mark.py sweep --socket-name f1' '$LOG' && grep -q '^fleet_loop_mark.py sweep --socket-name f2' '$LOG'"
+STUB_SOCKS='f1 f2' run_ap --from "$C7" --to "$C8" --dry-run
+contains 'G loopmark dry-run' "$OUT" 'loopmark: would mark pending Loops on 2 live fleet(s)'
+printf 'import sys\nsys.exit(1)\n' > "$R/bin/fleet_loop_mark.py"
+STUB_SOCKS='f1' run_ap --from "$C7" --to "$C8"
+contains 'G loopmark unreadable → WARN' "$OUT" 'loopmark: WARN 1 of 1 fleet(s) unreadable; 0 of 0 window(s) marked'
+eq 'G loopmark WARN never fails the apply' 0 "$RC"
+rm -f "$R/bin/fleet_loop_mark.py"
 
 # --- I. failure -----------------------------------------------------------------------
 sed -i.bak 's/<integer>90</<integer>45</' "$R/launchd/com.claude-fleet.collect.plist.tmpl" && rm -f "$R/launchd/"*.bak

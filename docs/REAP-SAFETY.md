@@ -32,6 +32,11 @@ The read-only `fleet-reap-live.py` gate blocks disposal when:
   CronCreate, not yet stopped or lapsed) or a live `fleet-loop.py` ledger:
   `retained:loop`, checked ahead of every age and state gate. It reaps by the
   ordinary rules once the Loop stops;
+- the window is still waiting on something else (issue #1370): a sub-task it spawned
+  is not finished (`retained:children` — its live subtree, the dash's `k/N` rule) or
+  its agent still owns a Bash-tool job (`retained:bg`). Both are checked right after
+  the Loop, so a parent stamped `done` before the sync is not reaped out from under
+  its children;
 - `@claude_state` is anything other than `done` or empty, including `working`,
   `looping`, `busy` and `waiting`;
 - any pane in that window contains a Claude or Codex process younger than
