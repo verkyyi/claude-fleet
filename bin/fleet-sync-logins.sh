@@ -207,16 +207,23 @@ conf_val() {
 # fleet.conf, as in fleet-lib.sh; unset anywhere = on. FLEET_CONF_DIR is taken
 # from the install conf when set there (a `$HOME`/`~` prefix means that login's
 # home), default ~u/.config/claude-fleet.
-autosync_off() {
-  _c=$(oread "$1" "$2/fleet.conf")
-  _v=$(conf_val "$_c" FLEET_INSTALL_SYNC)
-  _cd=$(conf_val "$_c" FLEET_CONF_DIR)
+# conf_dir_of <owner> <dir> <home> → that login's FLEET_CONF_DIR: the install
+# conf's value when set there (a `$HOME`/`~` prefix means that login's home),
+# default ~u/.config/claude-fleet.
+conf_dir_of() {
+  _cd=$(conf_val "$(oread "$1" "$2/fleet.conf")" FLEET_CONF_DIR)
   case "$_cd" in
     '')          _cd="$3/.config/claude-fleet" ;;
     '$HOME'/*)   _cd="$3/${_cd#\$HOME/}" ;;
     '${HOME}'/*) _cd="$3/${_cd#\$\{HOME\}/}" ;;
     '~'/*)       _cd="$3/${_cd#\~/}" ;;
   esac
+  printf '%s' "$_cd"
+}
+autosync_off() {
+  _c=$(oread "$1" "$2/fleet.conf")
+  _v=$(conf_val "$_c" FLEET_INSTALL_SYNC)
+  _cd=$(conf_dir_of "$1" "$2" "$3")
   _s=$(conf_val "$(oread "$1" "$_cd/fleet.settings")" FLEET_INSTALL_SYNC)
   [ -n "$_s" ] && _v=$_s
   [ "$_v" = 0 ]
@@ -800,6 +807,41 @@ EOF
 done 3<<EOF
 $plan
 EOF
+
+# --- node.env (issue #1491) --------------------------------------------------------
+# A login whose ccquota agent predates fleet-node-join.sh's node.env holds its token
+# only in the agent's launchd plist, so every hub call from its fleet panes
+# (`ccquota lease|place|move`) exits 1 「no hub configured」 and falls back silently.
+# One pass over the logins reached above, AS THE OWNER (a gui LaunchAgent plist sits
+# in a 0700 home; a system LaunchDaemon's is root's and 644): `fleet-hub-node.sh env
+# --write` from the STAGED tree — world-readable, where the source checkout in the
+# caller's home is not — with that login's HOME and FLEET_CONF_DIR. Silent when
+# node.env is already there, and when the login runs no agent (no plist = not a
+# node); one line when it writes, or finds a plist without a token. Never changes
+# the exit code: hygiene beside the sync, not a sync step.
+node_env_pass() {
+  _ne="$STAGE/tree/bin/fleet-hub-node.sh"
+  [ -f "$_ne" ] || return 0
+  while IFS='|' read -r login rd owner shape head n state note ents target; do
+    [ -n "$login" ] || continue
+    [ "$state" != off ] || continue
+    home=$(dirname "$(dirname "$rd")")
+    if [ "$owner" = "$me" ]; then as=''
+    elif as_owner "$owner"; then as="$SUDO -u $owner"
+    else continue; fi                       # needs sudo: counted and printed above
+    _cd=$(conf_dir_of "$owner" "$rd" "$home")
+    # shellcheck disable=SC2086
+    _out=$(cd / && $as env HOME="$home" FLEET_CONF_DIR="$_cd" FLEET_SKIP_GLOBAL_CONF=1 bash "$_ne" env --write 2>&1); _rc=$?
+    case "$_rc" in
+      0) case "$_out" in *written*) say "$login: $_out" ;; esac ;;   # already present → silent
+      1) ;;                                     # no node.env and no agent plist: not a node
+      *) say "$login: WARN ${_out##*$'\n'}" ;;
+    esac
+  done <<EOF
+$plan
+EOF
+}
+node_env_pass
 
 if [ "$togit" -eq 1 ]; then
   say "other logins on this machine: $nsync converted / $nskip skipped · $nskipgit already git checkouts$offtail$unrtail"

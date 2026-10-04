@@ -621,4 +621,57 @@ else
   eq "closed sudo: HEAD at the source commit" "$(g "$SRC" rev-parse HEAD)" "$(g "$K" rev-parse HEAD)"
 fi
 
+# ============================================================================
+# L. node.env — the token file for a login whose agent predates it (issue #1491)
+# ============================================================================
+# The pass runs the STAGED tree's fleet-hub-node.sh as the login, so the real
+# script (and the lib it sources) go into the fake source first — the source's
+# uncommitted a.sh edit stays uncommitted. bob runs a ccquota agent whose token
+# lives only in its gui LaunchAgent plist; alice runs none.
+if command -v python3 >/dev/null 2>&1; then
+  cp "$BIN/fleet-hub-node.sh" "$BIN/fleet-lib.sh" "$SRC/bin/"
+  g "$SRC" add bin/fleet-hub-node.sh bin/fleet-lib.sh; g "$SRC" commit -qm hubnode
+  BP="$H/bob/Library/LaunchAgents/com.ccquota.agent.plist"
+  mkdir -p "$(dirname "$BP")"
+  cat > "$BP" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.ccquota.agent</string>
+  <key>EnvironmentVariables</key><dict>
+    <key>CCQUOTA_HUB_URL</key><string>https://hub.test</string>
+    <key>CCQUOTA_TOKEN</key><string>fn_bob_SECRET</string>
+    <key>CCQUOTA_FLEET</key><string>1</string>
+  </dict>
+</dict></plist>
+EOF
+  chmod 600 "$BP"
+  BNE="$H/bob/.config/claude-fleet/node.env"
+  run --source "$SRC" --logins bob,alice
+  eq "node.env: the sync itself exits 0" 0 "$RC"
+  contains "node.env: bob's was written from its LaunchAgent" "$OUT" "bob: node.env: written from $BP — keys: CCQUOTA_HUB_URL CCQUOTA_TOKEN CCQUOTA_FLEET"
+  not_contains "node.env: the token's value is never printed" "$OUT" "fn_bob_SECRET"
+  not_contains "node.env: alice runs no agent → no line" "$OUT" "alice: node.env"
+  ok "node.env: bob's file exists" '[ -f "$BNE" ]'
+  eq "node.env: 0600" "-rw-------" "$(ls -ld "$BNE" | cut -c1-10)"
+  eq "node.env: the token is in" "CCQUOTA_TOKEN=fn_bob_SECRET" "$(grep '^CCQUOTA_TOKEN=' "$BNE")"
+  ok "node.env: alice got none" '[ ! -e "$H/alice/.config/claude-fleet/node.env" ]'
+  # a second run: already present → silent
+  run --source "$SRC" --logins bob,alice
+  eq "node.env rerun: exit 0" 0 "$RC"
+  not_contains "node.env rerun: nothing to say" "$OUT" "node.env"
+  # a plist that carries no token is said, as a WARN beside the row, never a failure
+  rm -f "$BNE"
+  sed -i.bak '/CCQUOTA_TOKEN/d' "$BP"; rm -f "$BP.bak"
+  run --source "$SRC" --logins bob
+  eq "node.env no-token plist: exit 0" 0 "$RC"
+  contains "node.env no-token plist: WARN names it" "$OUT" "bob: WARN node.env: $BP carries no CCQUOTA_TOKEN in EnvironmentVariables — nothing written"
+  ok "node.env no-token plist: nothing written" '[ ! -e "$BNE" ]'
+  # --dry-run never writes
+  sed -i.bak 's#<key>CCQUOTA_FLEET</key>#<key>CCQUOTA_TOKEN</key><string>fn_bob_SECRET</string><key>CCQUOTA_FLEET</key>#' "$BP"; rm -f "$BP.bak"
+  echo 'later' > "$SRC/bin/b.sh"; g "$SRC" commit -qam later
+  run --source "$SRC" --logins bob --dry-run
+  ok "node.env dry-run: nothing written" '[ ! -e "$BNE" ]'
+  not_contains "node.env dry-run: no node.env line" "$OUT" "node.env"
+fi
+
 echo "sync-logins-selftest OK ($CHECKS checks)"

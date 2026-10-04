@@ -220,6 +220,31 @@ the node's heartbeats while the window lives, released when it goes, and lapses
 30 minutes after its node goes silent — released, not re-dispatched. A hub that
 cannot be asked leaves one stderr note and the spawn runs exactly as without one.
 
+**The node token** (issue #1491). `ccquota lease|place|move` act as this
+machine's agent and need its enrollment — `CCQUOTA_HUB_URL` + `CCQUOTA_TOKEN` —
+or they exit 1 「no hub configured」. A fleet pane has the URL (fleet conf) but
+never the token: `fleet-node-join.sh` keeps it in `$FLEET_CONF_DIR/node.env`
+(0600), and `fleet_hub_lease` / `fleet_hub_place` / `fleet_hub_move` read it
+there **per call, inside the subshell that runs the command** — the token never
+enters the pane's environment, so a worker spawned from it carries no node
+credential (a `CCQUOTA_TOKEN` already exported wins; the file only fills the
+gap). With neither, the default command is not even run: the stderr note reads
+`no node token (CCQUOTA_TOKEN unset and …/node.env missing)` plus the fix, never
+「hub unreachable」. A login whose agent predates `node.env` (its token only in
+the launchd plist's `EnvironmentVariables`) writes the file once with
+`bin/fleet-hub-node.sh env --write` — from its gui LaunchAgent, else the system
+LaunchDaemon (`sudo -n` when unreadable), else `--plist <file>`; values are
+never printed. `fleet-sync-logins.sh` runs that for every other login it
+reaches, and `fleet-doctor`'s `node` line WARNs on a login that has
+`CCQUOTA_FLEET=1` and `ccquota` but no token — or a token exported into its
+shell. A `FLEET_HUB_*_CMD` seam is never held to the token. The same issue
+fixed the worker_id's fleet half: `fleet_uuid` hashes the fleet conf's OWN
+`[session, FLEET_REPO, FLEET_MAIN]` (what the inventory minted and the hub
+registered) — from a pane whose window belongs to a hosted repo it used to
+take that repo's overlay (issue #788) and mint a UUID the hub had never seen,
+so every lease / place / move from such a pane was 403 「fleet … is not
+registered to this node」.
+
 **A session moves with its lease** (issue #1426, EPIC #1419 C7).
 `fleet-move.sh --via hub --to <machine>` (and `--rebalance`) moves an idle
 session through the cloud hub: the transcript is uploaded there, the hub hands

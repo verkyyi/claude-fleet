@@ -666,6 +666,62 @@ _conf_has() {
   [ -f "$1" ] && grep -Eq "^[[:space:]]*(export[[:space:]]+)?$2[[:space:]]*=" "$1"
 }
 
+# --- node token: can the entry act for this login? (issue #1491) ------------------
+# With CCQUOTA_FLEET=1 every spawn / placement / move asks the hub through
+# `ccquota lease|place|move`, which acts as THIS machine's agent and needs its
+# token: CCQUOTA_TOKEN in the environment, else $conf_dir/node.env (0600, written
+# by fleet-node-join.sh; fleet_hub_* read it per call and never export it into a
+# pane). Without either, all three fall back SILENTLY — the lease to the GitHub
+# claim alone, placement to "here", a move to a refusal — which is how EPIC #1419's
+# C3/C6/C7 ran dark on two machines. A login whose agent predates node.env (its
+# token only in the launchd plist) is WARNed here, with the one command that fixes
+# it. Silent while the hub module is off: the degenerate case prints no line.
+# `export CCQUOTA_FLEET=1` is how the install's fleet.conf spells it, so the
+# read allows the prefix (_conf_val does not).
+_xconf_val() {  # <file> <KEY> → the last assignment's value, `export` allowed
+  [ -f "$1" ] || return 0
+  sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}'"$2"'[[:space:]]*=[[:space:]]*\([^#]*\).*/\2/p' "$1" | tail -1 | tr -d "\"' 	"
+}
+_hub_on=${CCQUOTA_FLEET:-}
+[ -n "$_hub_on" ] || _hub_on=$(_xconf_val "$conf_dir/fleet.settings" CCQUOTA_FLEET)
+[ -n "$_hub_on" ] || _hub_on=$(_xconf_val "$(dirname "$0")/../fleet.conf" CCQUOTA_FLEET)
+if [ -z "$_hub_on" ] && [ -d "$conf_dir" ]; then
+  while IFS= read -r _cf; do
+    [ -n "$_cf" ] || continue
+    _hub_on=$(_xconf_val "$_cf" CCQUOTA_FLEET); [ -n "$_hub_on" ] && break
+  done <<EOF
+$(_fleet_confs "$conf_dir")
+EOF
+fi
+if [ "$_hub_on" = 1 ]; then
+  _nenv="$conf_dir/node.env"
+  _nfix="\`bash $(dirname "$0")/fleet-hub-node.sh env --write\` (fills it from this login's agent service), or re-join with fleet-node-join.sh"
+  if ! command -v ccquota >/dev/null 2>&1; then
+    warn node "CCQUOTA_FLEET=1 but ccquota is not on PATH — the entry's lease / placement / move all fall back: spawns are guarded by the GitHub claim alone, every session opens here, no move lands. Install the agent (fleet-node-join.sh, or \`go install github.com/verkyyi/claude-fleet/tokenledger/cmd/ccquota@latest\`)"
+  elif [ -n "${CCQUOTA_TOKEN:-}" ]; then
+    # Reaches the hub, but the wrong way round: a token exported into the shell is
+    # inherited by every worker a pane spawns (a node credential in each session's
+    # environment) — the stop-gap the operator added to fleet.conf before #1491.
+    if [ -f "$_nenv" ] && grep -q '^CCQUOTA_TOKEN=.' "$_nenv" 2>/dev/null; then
+      warn node "CCQUOTA_TOKEN is exported into this environment — every worker spawned from a pane inherits a node credential; fleet_hub_* read $_nenv per call now, so drop the export (the fleet.conf stop-gap, issue #1491)"
+    else
+      warn node "CCQUOTA_TOKEN is exported into this environment and $_nenv is missing — the hub is reached only while the export stays, and every worker inherits a node credential; write the file, then drop the export: $_nfix"
+    fi
+  elif [ -f "$_nenv" ] && grep -q '^CCQUOTA_TOKEN=.' "$_nenv" 2>/dev/null; then
+    # ls -ld perms: char 5 = group-read, char 8 = other-read (as the account check)
+    _nm=$(ls -ld "$_nenv" 2>/dev/null | cut -c1-10)
+    if [ "$(printf '%s' "$_nm" | cut -c5)" = r ] || [ "$(printf '%s' "$_nm" | cut -c8)" = r ]; then
+      warn node "$_nenv holds this login's node token but is group/other-readable ($_nm) — \`chmod 600 $_nenv\`"
+    else
+      pass node "node token in $_nenv (0600) — ccquota lease / place / move read it per call; it never enters a pane's environment"
+    fi
+  elif [ -f "$_nenv" ]; then
+    warn node "CCQUOTA_FLEET=1 but $_nenv has no CCQUOTA_TOKEN= line — the entry's lease / placement / move all fall back silently (issue #1491); rewrite it: \`bash $(dirname "$0")/fleet-hub-node.sh env --write --force\`"
+  else
+    warn node "CCQUOTA_FLEET=1 but no node token: CCQUOTA_TOKEN unset and $_nenv missing — the entry's lease / placement / move all fall back silently: spawns are guarded by the GitHub claim alone, every session opens here, no move lands (issue #1491). Write it: $_nfix"
+  fi
+fi
+
 # --- autofill dispatcher (optional: auto-spawn `autofill`-labelled backlog, #70/#421) ---
 # OFF unless a fleet's conf sets FLEET_AUTOFILL=1. When ON, the dispatch daemon
 # auto-spawns eligible `autofill`-labelled backlog issues — which spends LLM tokens —
