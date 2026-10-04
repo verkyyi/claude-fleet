@@ -110,7 +110,7 @@ def cmd_append(a):
         return 2
     if not isinstance(ev, dict):
         return 2
-    ev = {k: ev.get(k, '') for k in FIELDS}
+    raw, ev = ev, {k: ev.get(k, '') for k in FIELDS}
     ev['child'] = ''.join(ch for ch in str(ev['child']) if ch in KEY_OK)[:128]
     ev['state'] = str(ev['state']).upper()
     ev['pr'] = ''.join(ch for ch in str(ev['pr']) if ch.isdigit())
@@ -118,6 +118,10 @@ def cmd_append(a):
     ev['summary'] = clean(ev['summary'])
     ev['title'] = clean(ev['title'], 1)
     ev['tier'] = str(ev['tier']).lower() if str(ev['tier']).lower() in TIERS else ''
+    # relayed_from (issue #1352): a report forwarded to the nearest live ancestor
+    # because its own parent was reaped — kept only when set, so every other row
+    # is byte for byte what it was. fleet_origin_map skips it: not a parent link.
+    rf = ''.join(ch for ch in str(raw.get('relayed_from') or '') if ch in KEY_OK)[:128]
     if not ev['child'] or ev['state'] not in STATES:
         print('fleet-children: need child + state (%s)' % '|'.join(STATES), file=sys.stderr)
         return 2
@@ -150,6 +154,8 @@ def cmd_append(a):
         ev = dict(seq=seq + 1,
                   ts=datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
                   **ev)
+        if rf:
+            ev['relayed_from'] = rf
         fh.seek(0, os.SEEK_END)
         fh.write(json.dumps(ev, ensure_ascii=False) + '\n')
         fh.flush()
