@@ -285,6 +285,7 @@ fcfg_label_i18n() {
     FLEET_WEBHOOK) printf '通过 gh webhook forward 刷新状态' ;;
     FLEET_WEBHOOK_PORT) printf 'Webhook handler 端口' ;;
     FLEET_WEBHOOK_SECRET) printf 'Webhook HMAC 密钥' ;;
+    FLEET_OPEN_LAPTOP) printf 'fleet-open 电脑 ssh 别名' ;;
     FLEET_EMIT_URL) printf '会话生命周期 endpoint' ;;
     FLEET_EMIT_TOKEN) printf '会话生命周期 token' ;;
     FLEET_ISSUE_TTL) printf 'Issue 缓存有效期' ;;

@@ -651,6 +651,30 @@ SSH. Everything here routes URLs through `bin/open-url.sh` instead:
    the URL (cmd-clickable in iTerm) already OSC52-copied to your local
    clipboard (`set-clipboard on` is in the shipped tmux conf).
 
+### `fleet-open`'s laptop half (iTerm2)
+
+`fleet-open` (#1379) asks the iTerm2 you are typing in to open a link — and, for
+a service on the fleet machine's loopback (a doc-preview, a dev server), to add a
+`-L` forward to the SSH connection you already have and open
+`http://localhost:<port>` here. The receiving end is an iTerm2 AutoLaunch
+script, `extras/iterm2/fleet_open.py`; install it on the laptop with
+
+```
+bash extras/iterm2/install.sh --mini <your ssh alias for the fleet machine>
+# or, from the fleet machine:
+ssh <laptop> 'bash -s -- --mini <alias>' < ~/.claude/fleet/extras/iterm2/install.sh
+```
+
+It needs iTerm2 ≥ 3.5 with the Python API turned on (you flip that switch; the
+installer only checks it), reads the shared secret back over SSH, and adds
+`ControlMaster`/`ControlPath`/`ControlPersist` to that `Host` block if missing
+(backing up `~/.ssh/config` first). `--dry-run` shows every step; re-running is a
+no-op; `--uninstall` removes it. Outside links open at once only for hosts in
+`~/.config/fleet-open/allow` (default github.com, claude.ai) — anything else asks
+first — and every action is logged to `~/.config/fleet-open/log`. On the fleet
+machine, `FLEET_OPEN_LAPTOP=<laptop ssh alias>` adds a `laptop` row to
+`fleet-doctor` (installed? same version?; `?` when the laptop is asleep).
+
 ## Showing a file on your own terminal
 
 An agent that wants you to look at an image, a PDF or a QR code must not `open`

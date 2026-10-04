@@ -2476,6 +2476,27 @@ if [ -f "$_af" ] && command -v bash >/dev/null 2>&1; then
   bash "$_fa" list --plain 2>/dev/null | cut -f2- | sed 's/^/        /'
 fi
 
+# --- fleet-open, the laptop half (issue #1380): is extras/iterm2/fleet_open.py
+# installed on the operator's computer, and the same version as this checkout's?
+# Only when FLEET_OPEN_LAPTOP names that computer's ssh alias (env, or the login
+# settings / install fleet.conf). Read over ssh with tight timeouts; a laptop that
+# is asleep or off-network is a `?`, never a warning — it is supposed to come and go.
+_ol="${FLEET_OPEN_LAPTOP:-$(_gconf_val FLEET_OPEN_LAPTOP)}"
+if [ -n "$_ol" ]; then
+  _ow=$(sed -n 's/^FLEET_OPEN_VERSION = "\([0-9]*\)".*/\1/p' "$(dirname "$0")/../extras/iterm2/fleet_open.py" 2>/dev/null)
+  # shellcheck disable=SC2016  # $HOME expands on the laptop
+  if _oh=$(ssh -o BatchMode=yes -o ConnectTimeout=3 -o ServerAliveInterval=2 -o ServerAliveCountMax=2 "$_ol" \
+      'f="$HOME/Library/Application Support/iTerm2/Scripts/AutoLaunch/fleet_open.py"; if [ -f "$f" ]; then printf "v%s\n" "$(sed -n "s/^FLEET_OPEN_VERSION = \"\([0-9]*\)\".*/\1/p" "$f")"; else echo none; fi' 2>/dev/null); then
+    case "$_oh" in
+      none) warn laptop "fleet_open.py not installed on $_ol — from here: ssh $_ol 'bash -s -- --mini <this-mini-alias>' < extras/iterm2/install.sh" ;;
+      "v$_ow") pass laptop "fleet_open.py v$_ow installed on $_ol (iTerm2 AutoLaunch)" ;;
+      *) warn laptop "fleet_open.py ${_oh:-v?} on $_ol, this checkout has v${_ow:-?} — rerun extras/iterm2/install.sh there" ;;
+    esac
+  else
+    info laptop "? $_ol unreachable over ssh (asleep / off-network) — fleet_open.py not checked"
+  fi
+fi
+
 # --- perl Time::HiRes (soft: dash spinner sub-second frames) ---
 if command -v perl >/dev/null 2>&1 && perl -MTime::HiRes -e1 >/dev/null 2>&1; then
   pass perl "Time::HiRes present (sub-second spinner)"
