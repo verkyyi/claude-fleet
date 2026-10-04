@@ -619,6 +619,21 @@ try:
     wait_for(lambda: view_on(w1) == [side] and
              tm('display-message', '-p', '-t', side, '#{pane_pid}') == side_pid,
              'unzoom after a divider double-click lost the sidebar view')
+    # Dragging the divider resizes even while the sidebar holds the keyboard:
+    # the drag is looked up in the fleet-sidebar table, where `Any` swallowed it.
+    os.write(terminal, b'\x02E')
+    wait_for(navigation, 'prefix E did not enter navigation before the divider drag')
+    time.sleep(.6)
+    before = int(tm('display-message', '-p', '-t', side, '#{pane_width}'))
+    dx, dy = before + 1, int(tm('display-message', '-p', '-t', side, '#{pane_top}')) + 6
+    os.write(terminal, ('\x1b[<0;%d;%dM' % (dx, dy)).encode())
+    for step in (1, 2, 3, 4):
+        os.write(terminal, ('\x1b[<32;%d;%dM' % (dx + step, dy)).encode())
+    os.write(terminal, ('\x1b[<0;%d;%dm' % (dx + 4, dy)).encode())
+    wait_for(lambda: int(tm('display-message', '-p', '-t', side, '#{pane_width}')) == before + 4,
+             'dragging the divider with the sidebar focused did not resize it')
+    check(navigation(), 'dragging the divider dropped sidebar navigation')
+    os.write(terminal, b'\x1b')
 
     # Blank space and rapid repeat clicks are focus targets too. The
     # release/double-click events must not silently reset the custom key table.
