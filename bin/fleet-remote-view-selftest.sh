@@ -10,7 +10,7 @@
 # (FLEET_REMOTE_SSH_CMD) that drops the options and runs the remote command here,
 # with $TMUX unset as a real ssh login has it.
 #   A. degenerate  — CCQUOTA_FLEET off: `open` creates nothing
-#   B. open        — a proxy window `@remote=m4:<wid>`, named `[m4] …`, selected;
+#   B. open        — a proxy window `@remote=m4:<wid>`, named `⇄m4 …` (#1475), selected;
 #                    a second row of the same machine RETARGETS it (still one)
 #   C. attach      — the proxy is a client of the remote session, on the worker's
 #                    window, status line + prefix off (saved); typing reaches it
@@ -127,7 +127,7 @@ eq "A: hub off — open makes no window" "" "$(proxies)"
 export CCQUOTA_FLEET=1
 PW=$(FLEET_SESSION=$LS bash "$BIN/fleet-remote-view.sh" open "wid:$WID" 2>/dev/null)
 eq "B: a proxy window, marked with machine:worker_id" "$PW m4:$WID" "$(proxies)"
-eq "B: named for the row and its machine" "[m4] 侧边栏" "$(tl display-message -p -t "$PW" '#{window_name}')"
+eq "B: named for the row and its machine — ⇄m4, the pane header's word too (#1475)" "⇄m4 侧边栏" "$(tl display-message -p -t "$PW" '#{window_name}')"
 eq "B: and selected" "$PW" "$(tl display-message -p -t "=$LS:" '#{window_id}')"
 
 # ============================================================================
@@ -175,7 +175,7 @@ eq "F: the per-fleet cap counts the local window only" "1" "$cnt"
 cntg=$(. "$BIN/fleet-lib.sh"; fleet_sockets() { printf '%s\n' "$LL"; }; _fleet_session_tally)
 eq "F: the machine-wide tally counts the local window only" "1 0" "$cntg"
 snap=$(tl list-windows -t "=$LS" -F '#{?@remote,,#{window_name}}|x')
-hasnt "F: fleet-restore's snapshot format names no proxy" "$snap" "[m4]"
+hasnt "F: fleet-restore's snapshot format names no proxy" "$snap" "⇄m4"
 sl=$(FLEET_SLEEP=observe python3 "$BIN/fleet-sleep.py" scan --session "$LL" --dry-run 2>/dev/null)
 hasnt "F: the sleeper reports nothing about the proxy" "$sl" "\"$PW\""
 

@@ -457,14 +457,26 @@ def row_left(marker, glyph, tree, name):
     return marker + " " + glyph + " " + (tree or " ") + " " + name
 
 
-def row_text(marker, glyph, tree, name, badge, width):
+def row_right(badge, node):
+    """What sits at a row's right edge: the subtree badge (`· k/N`), then the
+    machine label of a row on another machine (`m4`, issue #1475), dim."""
+    parts = []
+    if badge:
+        parts.append("· " + badge)
+    if node:
+        parts.append(node.rstrip("!"))
+    return " ".join(parts)
+
+
+def row_text(marker, glyph, tree, name, badge, width, node=""):
     """A session row laid out to `width` cells (issue #1328). The subtree badge
-    (`· k/N`) is right-aligned and ALWAYS whole; the name gets what is left and,
-    when it does not fit, ends in `…`. A narrow pane gives up name, never the
-    count — the old joined label was clipped from the right, so the count went
-    first. A row with no badge and a name that fits is exactly the old line."""
+    (`· k/N`) and the machine label (issue #1475) are right-aligned and ALWAYS
+    whole; the name gets what is left and, when it does not fit, ends in `…`. A
+    narrow pane gives up name, never the count — the old joined label was clipped
+    from the right, so the count went first. A row with no badge, no machine and a
+    name that fits is exactly the old line."""
     left = row_left(marker, glyph, tree, "")
-    right = ("· " + badge) if badge else ""
+    right = row_right(badge, node)
     room = width - width_of(left) - (width_of(right) + 1 if right else 0)
     if width_of(name) > room:
         name = clip(name, max(0, room - 1)) + "…" if room > 0 else ""
@@ -480,7 +492,8 @@ def row_need(row):
     if wid == "hdr":
         return 0 if name.startswith("──") else width_of(name) + 1
     need = width_of(row_left(" ", glyph, tree, name)) + 1
-    return need + (width_of("· " + badge) + 1 if badge else 0)
+    right = row_right(badge, row[8] if len(row) > 8 else "")
+    return need + (width_of(right) + 1 if right else 0)
 
 
 def auto_width(rows, cols, base, top):
@@ -843,12 +856,14 @@ def collect_rows(proc):
     return [row_fields(line) for line in text.split("\n") if line.count(US) >= 4]
 
 
-ROW_FIELDS = 8  # wid state glyph name tree badge depth detail (issue #1328)
+ROW_FIELDS = 9  # wid state glyph name tree badge depth detail node (issues #1328, #1475)
 
 
 def row_fields(line):
     """One producer line as its ROW_FIELDS fields: a heading's line stops at its
-    tree field (5), a session row's carries the badge / depth / detail too."""
+    tree field (5), a session row's carries the badge / depth / detail too, and
+    a row on another machine its machine label last (`m4`, `m4!` when that
+    machine is lost — issue #1475)."""
     parts = line.split(US, ROW_FIELDS - 1)
     return parts + [""] * (ROW_FIELDS - len(parts))
 
@@ -1069,7 +1084,7 @@ def ui(screen, session, worker, lock):
 
         screen.erase()
         colors = {"working": 1, "needs": 2, "done": 3, "looping": 4}
-        for y, (wid, state, glyph, label, tree, badge, _depth, _detail) in enumerate(rows[offset:offset + page]):
+        for y, (wid, state, glyph, label, tree, badge, _depth, _detail, node) in enumerate(rows[offset:offset + page]):
             if wid == "hdr":
                 if navigation and key_of((wid, state)) == selected:
                     put(y, "› " + label, curses.color_pair(6) | curses.A_BOLD, fill=True)
@@ -1077,6 +1092,8 @@ def ui(screen, session, worker, lock):
                     put(y, label, curses.A_DIM | curses.A_BOLD)
                 continue
             attr = curses.color_pair(colors.get(state, 0))
+            if node.endswith("!"):
+                attr |= curses.A_DIM  # a lost machine's row (issue #1475)
             if wid == window:
                 attr = curses.color_pair(5) | curses.A_BOLD
             if navigation and wid == selected:
@@ -1086,8 +1103,16 @@ def ui(screen, session, worker, lock):
             # fixed cell between the state glyph and the name, so at 30 columns every
             # name starts in the same place instead of a child's text sitting two
             # columns right of its parent's.
-            put(y, row_text(marker, glyph, tree, label, badge, max(0, width - 1)), attr,
-                fill=wid == window or (navigation and wid == selected))
+            text = row_text(marker, glyph, tree, label, badge, max(0, width - 1), node)
+            put(y, text, attr, fill=wid == window or (navigation and wid == selected))
+            if node and 0 <= y < height:
+                # The machine label at the row's end draws DIM (issue #1475): it is
+                # context, not the task, and the eye should not stop on it.
+                tag = node.rstrip("!")
+                try:
+                    screen.addstr(y, max(0, width_of(text) - width_of(tag)), tag, attr | curses.A_DIM)
+                except curses.error:
+                    pass
         # The selected row's whole name takes the `?` row while the keyboard is
         # here and the list clipped it (issue #1328); its status words live in
         # the worker pane's header now (issue #1377), so `? 快捷键` stays put.

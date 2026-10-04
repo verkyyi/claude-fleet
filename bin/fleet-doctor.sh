@@ -2064,6 +2064,23 @@ while IFS="$(printf '\t')" read -r hvs hvn hvtop; do
 done <<EOF
 $(FLEET_HUB_VISITS_LOGDIR="$(dirname "$0")/../logs" bash "$(dirname "$0")/fleet-hub-visits.sh" --brief --all --since 24h 2>/dev/null </dev/null)
 EOF
+# Who the sidebar asks the cross-machine hub as (issue #1475): your connection
+# certificate, else the viewer token, else nobody — and then no other machine's
+# session ever shows. Only with the hub module on; a one-machine fleet says nothing.
+_hub_on="${CCQUOTA_FLEET:-}"
+# the conf spells it `export CCQUOTA_FLEET=1`, which _conf_val's anchor does not take
+[ -n "$_hub_on" ] || [ ! -f "$(dirname "$0")/../fleet.conf" ] \
+  || _hub_on=$(sed -n 's/^[[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}CCQUOTA_FLEET[[:space:]]*=[[:space:]]*\([^#]*\).*/\2/p' "$(dirname "$0")/../fleet.conf" | tail -1 | tr -d "\"' 	")
+if [ "$_hub_on" = 1 ] && [ -x "$(dirname "$0")/fleet-hub-sessions.sh" ]; then
+  _hid=$(CCQUOTA_FLEET=1 bash "$(dirname "$0")/fleet-hub-sessions.sh" --identity 2>/dev/null </dev/null)
+  case "$_hid" in
+    cert\ *)  pass hub "sidebar asks the hub with your connection certificate (${_hid#cert }) — your own machines, no token" ;;
+    token\ *) pass hub "sidebar asks the hub with the viewer token (${_hid#token }) — the operator's view; a colleague runs \`fleet login\` for a certificate of their own" ;;
+    cmd\ *)   pass hub "sidebar reads the hub through FLEET_HUB_SESSIONS_CMD" ;;
+    *)        warn hub "sidebar cannot ask the hub: ${_hid#none } — no other machine's sessions will show (bin/fleet-hub-sessions.sh --identity)" ;;
+  esac
+  unset _hid
+fi
 # The invariant itself, per fleet — FLEET_HANDOFF_IDLE_TIMEOUT takes a per-fleet
 # overlay (FLEET_STUCK_WORKING_SECS is global-only: one spinner serves the machine).
 if [ -x "$inv" ]; then

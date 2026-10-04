@@ -156,3 +156,28 @@ func TestNodePlaceRefusesAnotherNodesFleet(t *testing.T) {
 		t.Fatalf("bad token = %d; want 401", st)
 	}
 }
+
+// A node that says it is not ready (claude-fleet#1475: no gh login, no
+// credential, a checkout missing) is never auto's pick, with the reason on the
+// refusal; a start that names it still goes there.
+func TestNodePlaceSkipsNotReadyNodeOnAuto(t *testing.T) {
+	h, _, m4, f5, f4 := twoNodes(t)
+	no := false
+	beat(t, m4.conn, control.Proto, control.Heartbeat{Hostname: "m4", OSUser: "verk", MachineID: machineB,
+		Load1: 1, NCPU: 10, MemFreeBytes: 8 << 30, MemTotalBytes: 16 << 30, Sessions: 1,
+		Fleets: []control.Fleet{f4}, Ready: &no, NotReady: "gh, checkout:fleet-m4", ObservedAt: time.Now()})
+	waitFor(t, 3*time.Second, "m4 reported not ready", func() bool {
+		hb, _, _ := h.srv.nodeStatusOf("ep_m4", time.Now())
+		return hb.Ready != nil && !*hb.Ready
+	})
+	wid5 := issueWID(f5.FleetID, 15)
+	st, out := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 15, "worker_id": wid5})
+	e, _ := out["error"].(map[string]any)
+	msg, _ := e["message"].(string)
+	if st != 503 || e["code"] != "NO_ELIGIBLE_NODE" || !strings.Contains(msg, "m4: not ready: gh, checkout:fleet-m4") || m4.count() != 0 {
+		t.Fatalf("auto with m4 not ready = %d %v; want NO_ELIGIBLE_NODE naming m4's reason, nothing sent", st, out)
+	}
+	if st, out := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 15, "worker_id": wid5, "node": "m4"}); st != 200 || out["local"] != false {
+		t.Fatalf("node=m4 while not ready = %d %v; want the start sent there anyway", st, out)
+	}
+}

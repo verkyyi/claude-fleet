@@ -282,6 +282,10 @@ func (s *Server) Handler() http.Handler {
 		// The Fleet Hub's read tools (claude-fleet#1409), the same ones
 		// /mcp lists when the module is on.
 		mux.Handle("/v1/fleet/", s.viewerOnly(http.HandlerFunc(s.handleFleet)))
+		// The sidebar's session list (claude-fleet#1475): the same doors,
+		// plus a connection certificate proven by a signed timestamp — so
+		// it authenticates itself, outside the viewer gate, like the routes.
+		mux.HandleFunc(control.SessionsPath, s.handleFleetSessions)
 		// Connection certificates (claude-fleet#1412). start/poll carry no
 		// credential — they are what a person runs before having one, and
 		// grant nothing until a signed-in person confirms the code.

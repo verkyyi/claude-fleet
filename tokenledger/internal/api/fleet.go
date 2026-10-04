@@ -320,6 +320,19 @@ type FleetSession struct {
 	AgeSec     float64   `json:"age_sec"`
 }
 
+// FleetNode is one machine in a fleet_sessions answer (claude-fleet#1475):
+// the sidebar's machine status line draws one per machine — online or lost,
+// how many of the caller's sessions it runs, and when the hub last heard it,
+// so a lost machine's line can say how long ago. A machine the caller may see
+// is listed even with no session on it.
+type FleetNode struct {
+	MachineName  string    `json:"machine_name"`
+	Availability string    `json:"availability"`
+	Sessions     int       `json:"sessions"`
+	ObservedAt   time.Time `json:"observed_at"`
+	AgeSec       float64   `json:"age_sec"`
+}
+
 // nodeAvailability maps endpoint → online|lost from the roster.
 func (s *Server) nodeAvailability(now time.Time) map[string]string {
 	out := map[string]string{}
@@ -410,7 +423,23 @@ func (s *Server) FleetSessions(req *http.Request) (map[string]any, error) {
 	}
 	out := []FleetSession{}
 	machines := map[string]bool{}
+	// One FleetNode per machine (claude-fleet#1475): the newest observation
+	// wins the timestamp, any online fleet makes the machine online, and the
+	// session count is this answer's rows on it.
+	nodes := map[string]*FleetNode{}
 	for i, r := range rows {
+		n := nodes[r.Hostname]
+		if n == nil {
+			n = &FleetNode{MachineName: r.Hostname, Availability: "lost"}
+			nodes[r.Hostname] = n
+		}
+		if views[i].Availability == "online" {
+			n.Availability = "online"
+		}
+		if r.ObservedAt.After(n.ObservedAt) {
+			n.ObservedAt = r.ObservedAt
+			n.AgeSec = now.Sub(r.ObservedAt).Seconds()
+		}
 		if !r.Present {
 			continue
 		}
@@ -430,6 +459,7 @@ func (s *Server) FleetSessions(req *http.Request) (map[string]any, error) {
 			out = append(out, FleetSession{WorkerID: id, MachineName: r.Hostname, OSUser: r.OSUser,
 				FleetID: r.FleetID, FleetName: r.Name, Availability: views[i].Availability, Worker: w,
 				ObservedAt: r.ObservedAt, AgeSec: now.Sub(r.ObservedAt).Seconds()})
+			n.Sessions++
 		}
 	}
 	hosts := make([]string, 0, len(machines))
@@ -437,7 +467,12 @@ func (s *Server) FleetSessions(req *http.Request) (map[string]any, error) {
 		hosts = append(hosts, h)
 	}
 	sort.Strings(hosts)
-	return map[string]any{"machines": hosts, "count": len(out), "sessions": out}, nil
+	nodeList := make([]FleetNode, 0, len(nodes))
+	for _, n := range nodes {
+		nodeList = append(nodeList, *n)
+	}
+	sort.Slice(nodeList, func(a, b int) bool { return nodeList[a].MachineName < nodeList[b].MachineName })
+	return map[string]any{"machines": hosts, "count": len(out), "sessions": out, "nodes": nodeList}, nil
 }
 
 // visibleFleet resolves one fleet id the caller may see, or NOT_FOUND —
@@ -760,6 +795,12 @@ func (s *Server) handleFleet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := s.CallFleetTool(r, tool, args)
+	writeFleetResult(w, out, err)
+}
+
+// writeFleetResult writes one fleet tool's answer the way /v1/fleet/<tool>
+// always has: the result as 200, a fault as its HTTP status.
+func writeFleetResult(w http.ResponseWriter, out any, err error) {
 	w.Header().Set("Cache-Control", "no-store")
 	if err != nil {
 		e := errorObject(err)

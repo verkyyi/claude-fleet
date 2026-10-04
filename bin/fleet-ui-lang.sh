@@ -78,6 +78,13 @@ fleet_ui_t() {
     en:repo_none_tag)           printf '⇢none' ;;
     zh:remote_lost)             printf '失联' ;;
     en:remote_lost)             printf 'lost' ;;
+    # the sidebar's machine status line + the lost group (issue #1475)
+    zh:node_silent_fmt)         printf '%s 分钟没联系' "${1:-}" ;;
+    en:node_silent_fmt)         printf 'silent %s min' "${1:-}" ;;
+    zh:lost_heading_fmt)        printf '─ %s 失联 %s 分钟 ─' "${1:-}" "${2:-}" ;;
+    en:lost_heading_fmt)        printf '─ %s lost %s min ─' "${1:-}" "${2:-}" ;;
+    zh:lost_heading_short_fmt)  printf '─ %s 失联 ─' "${1:-}" ;;
+    en:lost_heading_short_fmt)  printf '─ %s lost ─' "${1:-}" ;;
     zh:pin_heading_fmt)         printf '置顶 (%s)' "${1:-}" ;;
     en:pin_heading_fmt)         printf 'Pinned (%s)' "${1:-}" ;;
     zh:unknown_repo_heading)    printf '? · 未知仓库' ;;

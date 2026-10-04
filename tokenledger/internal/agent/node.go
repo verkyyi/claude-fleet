@@ -332,8 +332,47 @@ func (a *Agent) nodeHeartbeat(ctx context.Context, probe *fleetProbe) control.He
 	if fv := probe.reading(ctx, a.cfg.Home); fv != nil {
 		hb.FleetVersion = fv.Head
 	}
+	hb.Ready, hb.NotReady = probe.ready.reading(ctx, a.cfg.Home, time.Now())
 	hb.Routes = a.nodeRoutes(ctx)
 	return hb
+}
+
+// readyProbe caches fleet-control.py's `ready` verdict (claude-fleet#1475):
+// can this login take a NEW session — gh logged in, a usable Claude or Codex
+// credential, every hosted repo's checkout present. The verdict runs `gh auth
+// status` and reads credentials, not a 5-second thing, so it is re-asked at
+// most every readyInterval and the beats between carry the last answer. A
+// controller without `ready` (older than #1475), or no claude-fleet at all,
+// leaves the field unsaid — the hub reads nil as ready, as it always did.
+type readyProbe struct {
+	at    time.Time
+	ready *bool
+	why   string
+}
+
+const readyInterval = 60 * time.Second
+
+func (p *readyProbe) reading(ctx context.Context, home string, now time.Time) (*bool, string) {
+	if !p.at.IsZero() && now.Sub(p.at) < readyInterval {
+		return p.ready, p.why
+	}
+	p.at, p.ready, p.why = now, nil, ""
+	script := filepath.Join(home, fleetControlScript)
+	if _, err := os.Stat(script); err != nil {
+		return nil, ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, fleetControlTimeout)
+	defer cancel()
+	var out struct {
+		Ready   bool     `json:"ready"`
+		Missing []string `json:"missing"`
+	}
+	if err := fleetRPC(ctx, script, map[string]any{"protocol": 1, "method": "ready", "params": map[string]any{}}, &out); err != nil {
+		return nil, ""
+	}
+	r := out.Ready
+	p.ready, p.why = &r, strings.Join(out.Missing, ", ")
+	return p.ready, p.why
 }
 
 // sysInfo is the machine-wide reading in a heartbeat.

@@ -3,7 +3,9 @@
 # sidebar (issue #1424, EPIC #1419 C5).
 #
 # The sidebar already SHOWS your sessions on the other machines (#1423: rows keyed
-# `wid:<worker_id>`, tagged `[m4]`). Enter on one opens a PROXY WINDOW here: a
+# `wid:<worker_id>`, the machine name dimmed at the row's end since #1475). Enter
+# on one opens a PROXY WINDOW here — named `⇄m4 <name>` (#1475), so the window
+# list and the pane header both say the keys go elsewhere — a
 # window marked `@remote=<node>:<worker_id>` whose pane is an ssh client attached
 # to that session's tmux window on <node>. Typing and scrolling are the remote
 # window's own; closing the proxy window only drops the connection — the remote
@@ -103,7 +105,10 @@ open)
   node="${row%%$'\037'*}"; name="${row#*$'\037'}"
   [ -n "$node" ] || { tmux display-message "fleet: $wid 不在侧边栏的远程清单里" 2>/dev/null; exit 1; }
   case "$node" in *[!A-Za-z0-9._-]*) note "bad machine label: $node"; exit 2 ;; esac
-  title="[$node] ${name:-${wid#*/}}"
+  # `⇄m4 <name>` (issue #1475): the window name is also the pane header
+  # (conf/tmux-attention.conf's pane-border-format), so the top of the pane says
+  # at a glance that the keys go to another machine.
+  title="⇄$node ${name:-${wid#*/}}"
   cmd="exec bash $(sq "$BIN/fleet-remote-view.sh") run $(sq "$node") $(sq "$wid")"
   w=$(tmux list-windows -t "=$sess" -F '#{window_id} #{@remote}' 2>/dev/null \
       | awk -v n="$node:" 'index($2, n) == 1 { print $1; exit }')

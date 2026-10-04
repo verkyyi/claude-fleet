@@ -125,12 +125,13 @@ func TestRelayIntegrationTwoAgents(t *testing.T) {
 	installFakeFleetControl(t, py, bin, parentHome, "fleet-m5", "verkyyi/claude-fleet")
 	installFakeFleetControl(t, py, bin, childHome, "fleet-m4", "verkyyi/claude-fleet")
 	// The child's machine: its issue-42 window carries the parent's worker_id
-	// as @origin_wid (the inventory's last column, issue #1423) once we know it.
+	// as @origin_wid (inventory column 11, issue #1423; column 12 is
+	// @claude_needs, #1475) once we know it.
 	adapter := filepath.Join(childHome, ".claude", "fleet", "bin", "fleet-control-read.sh")
 	b, _ := os.ReadFile(adapter)
 	b = []byte(strings.Replace(string(b),
 		`workers) printf '@1\t42\t\t/w/x-issue-42\tworking\tclaude\tw1\t\t\n@2\t\t1\t/w/x-scratch-3\tidle\tclaude\tw2\t\t\n' ;;`,
-		`workers) printf '@1\t42\t\t/w/x-issue-42\tworking\tclaude\tw1\t\t\tissue-42\t%s\n' "$(cat `+shQuote(filepath.Join(childHome, "origin"))+` 2>/dev/null)" ;;`, 1))
+		`workers) printf '@1\t42\t\t/w/x-issue-42\tworking\tclaude\tw1\t\t\tissue-42\t%s\t\n' "$(cat `+shQuote(filepath.Join(childHome, "origin"))+` 2>/dev/null)" ;;`, 1))
 	if err := os.WriteFile(adapter, b, 0o755); err != nil {
 		t.Fatal(err)
 	}

@@ -47,20 +47,63 @@ case "$mode" in
     # whose repo is unknown or @norepo — the controller never guesses one.
     # Columns 10-11 (issue #1423): the window name and @origin_wid, for the other
     # machines' sidebars (a remote row's label, and which parent it nests under).
-    xfmt=$'\t#{window_name}\t#{@origin_wid}'
+    # Column 12 (issue #1475): what the window needs of its person (@claude_needs:
+    # ask / perm / blocked / …), so a remote row draws the same red `?` / `⊘`.
+    xfmt=$'\t#{window_name}\t#{@origin_wid}\t#{@claude_needs}'
     if ! fleet_multirepo "$sess"; then
       tmux -u -L "$sock" list-windows -t "=$sess" -F "$fmt$xfmt"
     else
       rows=$(tmux -u -L "$sock" list-windows -t "=$sess" -F "$fmt#{@repo}$xfmt") || exit 1
       while IFS= read -r row; do
         [ -n "$row" ] || continue
+        nd=${row##*$'\t'}; row=${row%$'\t'*}
         ow=${row##*$'\t'}; row=${row%$'\t'*}
         nm=${row##*$'\t'}; row=${row%$'\t'*}
         r=${row##*$'\t'}; row=${row%$'\t'*}
         [ -n "$r" ] || r=$(fleet_window_repo "$sess" "${row%%$'\t'*}")
-        printf '%s\t%s\t%s\t%s\n' "$row" "${r:-?}" "$nm" "$ow"
+        printf '%s\t%s\t%s\t%s\t%s\n' "$row" "${r:-?}" "$nm" "$ow" "$nd"
       done <<<"$rows"
     fi
+    ;;
+  ready)
+    # Can this login take a NEW session (issue #1475)? The node's heartbeat
+    # carries the verdict and the hub's `auto` placement never picks a machine
+    # that says no — only a `--node <name>` does. Three things, each named in
+    # `missing` when absent: a gh login, a usable Claude or Codex credential (a
+    # pool token file, a pool account's hub credential, Claude Code's own
+    # credential file or keychain item, Codex's auth.json), and every hosted
+    # repo's checkout. One JSON object on stdout; never an exit status.
+    missing=''
+    gh_ok=false
+    if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then gh_ok=true; else missing="$missing gh"; fi
+    creds=false
+    adir="${FLEET_ACCOUNTS_DIR:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/accounts}"
+    for f in "$adir"/*; do
+      [ -f "$f" ] || continue
+      case "${f##*/}" in .*|*~|*.conf) continue ;; esac
+      creds=true; break
+    done
+    if [ "$creds" = false ]; then
+      for d in "$adir"/*.hub; do [ -s "$d/.credentials.json" ] && { creds=true; break; }; done
+    fi
+    [ "$creds" = true ] || [ -s "$HOME/.claude/.credentials.json" ] && creds=true
+    if [ "$creds" = false ] && [ "$(uname -s 2>/dev/null)" = Darwin ] && command -v security >/dev/null 2>&1 \
+       && security find-generic-password -s 'Claude Code-credentials' >/dev/null 2>&1; then creds=true; fi
+    [ "$creds" = true ] || [ -s "${CODEX_HOME:-$HOME/.codex}/auth.json" ] && creds=true
+    [ "$creds" = true ] || missing="$missing creds"
+    checkouts=true
+    while IFS=$'\t' read -r s _c; do
+      [ -n "$s" ] || continue
+      while IFS= read -r r; do
+        [ -n "$r" ] || continue
+        m=$( fleet_load_conf "$s" >/dev/null 2>&1; fleet_load_repo_conf "$s" "$r" >/dev/null 2>&1; printf '%s' "${FLEET_MAIN:-}" )
+        [ -n "$m" ] && [ -d "$m" ] || { checkouts=false; missing="$missing checkout:$s/${r##*/}"; }
+      done < <(fleet_repos "$s" 2>/dev/null)
+    done < <(fleet_each_conf)
+    ready=false; [ "$gh_ok" = true ] && [ "$creds" = true ] && [ "$checkouts" = true ] && ready=true
+    printf '{"ready":%s,"gh":%s,"creds":%s,"checkouts":%s,"missing":[' "$ready" "$gh_ok" "$creds" "$checkouts"
+    sep=''; for w in $missing; do printf '%s"%s"' "$sep" "$w"; sep=','; done
+    printf ']}\n'
     ;;
   config)
     fleet_load_conf "$sess"

@@ -404,8 +404,9 @@ EOF
     # the tmux toast lands on no screen this daemon owns — and the exit code says
     # WHICH refusal: 2 at capacity, 3 claimed elsewhere, 1 infrastructure.
     # FLEET_AUTOFILL_NODE (issue #1425): pin autofill to one machine (`local`, or a
-    # name); unset, dash-issue-session's own default applies — `auto` when the hub
-    # module is on (CCQUOTA_FLEET=1), so a busy machine's autofill lands elsewhere.
+    # name); unset, dash-issue-session's own default applies — FLEET_SPAWN_NODE
+    # (issue #1475), else `auto` when the hub module is on (CCQUOTA_FLEET=1), so a
+    # busy machine's autofill lands elsewhere.
     na=(); [ -n "${FLEET_AUTOFILL_NODE:-}" ] && na=(--node "$FLEET_AUTOFILL_NODE")
     why=$("$BIN/dash-issue-session.sh" "$num" "$sess" ${ra[@]+"${ra[@]}"} ${na[@]+"${na[@]}"} --origin autofill 2>&1 >/dev/null); rc=$?
     why=${why#dash-issue-session: }; why=${why//$'\n'/ | }

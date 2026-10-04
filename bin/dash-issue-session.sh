@@ -75,7 +75,8 @@ for _a in "$@"; do
     --repo=*) REPO_ARG="${_a#--repo=}" ;;
     # --node (issue #1425, EPIC #1419 C6): which machine opens it — `auto` (the
     # hub picks by load, account headroom and the per-person cap), `local`, or a
-    # machine name. Default with the hub module on (CCQUOTA_FLEET=1): auto. A start
+    # machine name. Default with the hub module on (CCQUOTA_FLEET=1):
+    # FLEET_SPAWN_NODE, else auto (issue #1475). A start
     # the hub itself sent is already placed: fleet-control-read.sh says --node local.
     # With the module off nothing changes unless --node names another machine.
     --node) _want=node ;;
@@ -251,7 +252,14 @@ case "$ORIGIN_WID" in ''|*[!A-Za-z0-9/:._-]*) ORIGIN_WID='' ;; esac
 # window that merely shares the key (issue #1421).
 if [ -n "$ORIGIN_WID" ] && [ -z "$ORIGIN" ]; then ORIGIN=$(fleet_origin_canon "${ORIGIN_WID#*/}" '' '' ''); fi
 NODE="$NODE_ARG"
-if [ -z "$NODE" ] && [ "${CCQUOTA_FLEET:-0}" = 1 ]; then NODE=auto; fi
+# No --node: FLEET_SPAWN_NODE (issue #1475) — `auto` (the default), `local`, or
+# a machine name — is what every spawn on this login follows, autofill included
+# (FLEET_AUTOFILL_NODE, when set, is autofill's own override and arrives as
+# --node). Only read with the hub on: off, nothing is placed anyway.
+if [ -z "$NODE" ] && [ "${CCQUOTA_FLEET:-0}" = 1 ]; then
+  NODE="${FLEET_SPAWN_NODE:-auto}"
+  case "$NODE" in ''|*[!A-Za-z0-9._-]*) NODE=auto ;; esac
+fi
 PLACING=0
 [ "$TAIL_ONLY" != 1 ] && [ -n "$NODE" ] && ! fleet_node_is_self "$NODE" && PLACING=1
 CAP_HELD=''

@@ -501,11 +501,21 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Auto-fill batch size @group=autofill @tier=internal @scope=fleet @edit=int @unit=per tick
 #FLEET_AUTOFILL_MAX_PER_TICK=1
 # Which machine auto-fill opens sessions on (issue #1425). Unset: the spawn's own
-# default — `auto` when the hub module is on (CCQUOTA_FLEET=1: the hub picks the
-# least busy of your machines that host the repo), else this machine. `local`
-# pins auto-fill here; a machine name pins it there.
+# default — FLEET_SPAWN_NODE (below; `auto` when the hub module is on,
+# CCQUOTA_FLEET=1: the hub picks the least busy of your machines that host the
+# repo), else this machine. `local` pins auto-fill here; a machine name pins it
+# there.
 # @label=Auto-fill machine @group=autofill @tier=internal @scope=fleet @edit=str
 #FLEET_AUTOFILL_NODE=local
+# Where EVERY new issue session on this login opens when nothing names a machine
+# (issue #1475; a `--node` on the command, or FLEET_AUTOFILL_NODE for auto-fill,
+# still wins). Only read with the hub module on (CCQUOTA_FLEET=1). `auto`: the hub
+# picks among your machines that host the repo — and never one that is not READY
+# (no gh login, no usable Claude/Codex credential, a checkout missing: its
+# heartbeat says so); `local`: always this machine, the hub is not asked; a
+# machine name: always there, even when it is not ready (you asked by name).
+# @label=New-session machine @group=accounts @tier=internal @scope=global @edit=str
+#FLEET_SPAWN_NODE=auto
 
 # --- Child → parent outcome reports (bin/fleet-report-parent.sh, issue #574) -----
 # ON by default. When a worker that was SPAWNED BY ANOTHER SESSION (`@origin` names
@@ -1536,14 +1546,26 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # Your sessions on the OTHER machines, in this sidebar (issue #1423, EPIC #1419):
 # with `export CCQUOTA_FLEET=1` too, the collector keeps a 10s refresh of the hub's
 # fleet_sessions (bin/fleet-hub-sessions.sh — never on the dash's render path) and
-# the dash mixes those rows in with this machine's, nested under their parents and
-# tagged with the machine, `[m4]`; a machine the hub has lost — or a cache gone
-# stale — keeps its rows, reading `[m4 失联]`. Read-only: no key acts on them.
-# The tag is the hostname's first label unless named here, `host=label` pairs.
+# the dash mixes those rows in with this machine's, nested under their parents,
+# the machine's name dimmed at the row's end (issue #1475); the top line of the
+# sidebar is the machine status line, `● m5 22 · ● m4 3` (online ●, lost ○ with
+# how long it has been silent); a machine the hub has lost — or a cache gone
+# stale — keeps its rows, dimmed, in their own group at the bottom,
+# `─ m4 失联 3 分钟 ─`. Read-only: no key acts on them.
+# WHO the hub shows you (issue #1475): your own connection certificate
+# (~/.ssh/fleet-cert, from `fleet login`) first — the hub then lists exactly the
+# machines your active accounts are on, no token needed; without one (or past
+# its validity) the viewer token (CCQUOTA_VIEWER_TOKEN / ~/.ccquota/viewer-token,
+# the operator's); neither: nothing is fetched, no remote row, one WARN in
+# fleet-doctor. The hub's URL is CCQUOTA_HUB_URL, else FLEET_HUB_URL, else the
+# `url` in ~/.config/claude-fleet/hub.json (what `fleet login` wrote).
+# The machine label is the hostname's first label unless named here, `host=label`
+# pairs.
 # @label=Machine labels @group=accounts @tier=internal @scope=global @edit=str
 #FLEET_NODE_ALIASES="macmini=m5 mini2=m4"
 # Enter on one of those rows steps INTO it (issue #1424): a proxy window here,
-# `[m4] <name>`, attached over ssh to that session's window on m4 — typing and
+# `⇄m4 <name>` (its pane header says the same), attached over ssh to that
+# session's window on m4 — typing and
 # scrolling are the remote's; closing it only drops the connection; a drop
 # reconnects (through the hub relay, `fleet connect --proxy`, when one is set up).
 # One proxy window per machine. The ssh host is the machine label itself (as your

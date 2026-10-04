@@ -255,4 +255,32 @@ CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" INFLIGHT=1 FLEET_GLOBAL_MAX_SES
 [ "$(rc)" = 2 ] && [ ! -s "$PLACE_LOG" ]         || fail "CAP --node local refuses at the cap without asking (rc=$(rc))"
 ok "CAP a full machine still places elsewhere; opening here keeps the cap"
 
+# ===== FLEET_SPAWN_NODE (issue #1475): the login-wide default when nothing names a machine
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER="$REMOTE_LINE" FLEET_SPAWN_NODE=local run_spawn 258
+[ -s "$PLACE_LOG" ]                              && fail "SPAWN_NODE=local must not ask the hub"
+tmux_has 'new-window'                            || fail "SPAWN_NODE=local opens it here"
+ok "SPAWN_NODE local → no placement, opened here (auto never leaves the machine)"
+
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER="$REMOTE_LINE" FLEET_SPAWN_NODE=m4 run_spawn 258
+place_has '--node m4 '                           || fail "SPAWN_NODE=m4 asks for that machine by name"
+err_has '#258 → m4'                              || fail "SPAWN_NODE=m4 is placed there"
+ok "SPAWN_NODE m4 → asked for by name"
+
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER="$REMOTE_LINE" FLEET_SPAWN_NODE=auto run_spawn 258
+place_has '--node auto '                         || fail "SPAWN_NODE=auto asks with auto"
+ok "SPAWN_NODE auto → the hub picks, as with no knob"
+
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER="$REMOTE_LINE" FLEET_SPAWN_NODE=local run_spawn 258 --node m4
+place_has '--node m4 '                           || fail "SPAWN_NODE a --node on the command still wins"
+ok "SPAWN_NODE --node m4 overrides the knob"
+
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER="$REMOTE_LINE" FLEET_SPAWN_NODE='m4; rm -rf /' run_spawn 258
+place_has '--node auto '                         || fail "SPAWN_NODE a value that is no machine name reads as auto"
+ok "SPAWN_NODE garbage → auto"
+
+base=$(CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET= FLEET_HUB_PLACE_CMD= FLEET_HUB_LEASE_CMD= run_spawn 258; snap)
+CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET= FLEET_HUB_PLACE_CMD= FLEET_HUB_LEASE_CMD= FLEET_SPAWN_NODE=m4 run_spawn 258
+[ "$(snap)" = "$base" ]                          || fail "SPAWN_NODE with the hub off must change nothing" "$(diff <(printf '%s\n' "$base") <(snap))"
+ok "SPAWN_NODE off → byte-identical (the knob is never read without the hub)"
+
 printf 'hub-place-selftest: %s checks passed\n' "$pass"

@@ -139,17 +139,42 @@ the hub's `fleet_sessions` every 10 s into `global/remote_<sess>` (and the
 `control/hub-workers.tsv` cache above). `tmux-dashboard-rows.sh` only reads that
 file: your sessions on other machines — your login, a `worker_id`, a fleet that is
 not this machine's — render mixed in with the local windows, nested by
-`@origin_wid` (or the issue's sub-issue parent) and tagged `[m4]`. Their window id
+`@origin_wid` (or the issue's sub-issue parent), the machine's name dimmed at the
+row's end (issue #1475; it was a `[m4]` prefix). Their window id
 is `wid:<worker_id>`, so jump, menu, reap, rename, pin and fold find no window:
-remote rows are read-only. A machine the hub calls lost, or a cache older than
-`FLEET_HUB_SESSIONS_STALE` (60 s), keeps its rows, reading `[m4 失联]`. Machine
-labels come from `FLEET_NODE_ALIASES` (`macmini=m5 mini2=m4`). To feed the
-nesting, the controller's worker inventory now carries each window's `name` and
-`origin_wid` (columns 10–11 of `fleet-control-read.sh workers`, optional).
+remote rows are read-only. Their red `?` / `⊘` (asking you, waiting for a
+permission) is the local one: the inventory's column 12 carries `@claude_needs`.
+The **machine status line** heads the sidebar (and the hub list):
+`● m5 22 · ● m4 3` — one entry per machine, `●` online / `○` lost with
+`N 分钟没联系`, and your session count there; the local count is the frame's own
+rows, the others come from the cache's `#node` lines (the hub's `nodes` list,
+derived from the sessions on an older hub). A machine the hub calls lost, or a
+cache older than `FLEET_HUB_SESSIONS_STALE` (60 s), keeps its rows — dimmed,
+un-nested, in their own group at the foot under a `─ m4 失联 3 分钟 ─` heading —
+never vanishes. Machine labels come from `FLEET_NODE_ALIASES`
+(`macmini=m5 mini2=m4`). To feed the nesting, the controller's worker inventory
+carries each window's `name`, `origin_wid` and `needs` (columns 10–12 of
+`fleet-control-read.sh workers`, optional).
+
+**Who the hub shows you** (issue #1475). `fleet-hub-sessions.sh` asks as **you**:
+your connection certificate (`~/.ssh/fleet-cert` + `-cert.pub`, from
+`fleet login`, `FLEET_CERT` to name another) signs `fleet-sessions <ts>` under
+`fleet-sessions@claude-fleet` — the `/v1/fleet/routes` protocol of #1414 — and
+POSTs it to `/v1/fleet/fleet_sessions`, which now sits outside the viewer gate
+(`handleFleetSessions`) and admits a certificate the way the routes do; the
+holder is then a fleet principal, scoped by `FleetScope` to the machines of their
+ACTIVE accounts. So a colleague's sidebar fills in right after `fleet login`, no
+token anywhere. No certificate, or one past its validity (`ssh-keygen -L`'s
+window, checked locally), falls back to the viewer token (the operator's); a
+certificate the hub refuses (401) falls back too; neither ⇒ nothing is fetched,
+no remote row, and `fleet-doctor`'s `hub` line WARNs.
+`fleet-hub-sessions.sh --identity` prints which it is. The hub URL is
+`CCQUOTA_HUB_URL`, else `FLEET_HUB_URL`, else `hub.json`'s `url`.
 
 **…and steps into them** (issue #1424, EPIC #1419 C5). Enter on a remote row (the
 dash's `dash-enter.sh`, the sidebar's `jump`) runs `bin/fleet-remote-view.sh open`:
-a **proxy window** `[m4] <name>`, marked `@remote=<node>:<worker_id>`, whose pane
+a **proxy window** `⇄m4 <name>` (its pane header carries the same `⇄m4`, so a
+glance says the keys go elsewhere; issue #1475), marked `@remote=<node>:<worker_id>`, whose pane
 is `ssh -tt <host> fleet-remote-view.sh attach <worker_id>` — on the other machine
 that resolves the worker through `fleet_worker_locate`, selects its window and
 attaches to its fleet session. It is a plain **client** of that session, never a
@@ -191,6 +216,21 @@ the issue's lease to the target fleet's worker and journals a `worker_move_in`
 on it, the target's agent downloads the transcript and `fleet-move-remote.sh
 movein` lands the branch and resumes the session; only then is the source window
 closed. A failed move gives the lease back. A `working` session is never moved.
+
+**Where a new session opens, and which machines are READY** (issue #1475).
+`FLEET_SPAWN_NODE=auto|local|<machine>` (global, default `auto`) is what every
+spawn on the login follows when nothing names a machine — `dash-issue-session.sh`
+reads it in place of its old bare `auto`; `FLEET_AUTOFILL_NODE` stays auto-fill's
+own override and the operator's `FLEET_HUB_PLACE_CMD` pin is no longer needed.
+`local` never asks the hub. The node's heartbeat carries `ready` + `not_ready`
+(`control.Heartbeat`): `fleet-control.py`'s `ready` method →
+`fleet-control-read.sh ready` — a gh login, a usable Claude/Codex credential (a
+pool token, a pool account's hub credential, Claude Code's own credential file
+or keychain item, Codex's `auth.json`), every hosted repo's checkout — re-asked
+by the agent at most once a minute. `pickNode` marks a node that says `false`
+`not ready: <what is missing>` for an `auto` placement; `--node <name>` still
+sends work there (you asked by name), and an agent older than #1475 says nothing
+and is treated as ready.
 
 ## Tools
 
