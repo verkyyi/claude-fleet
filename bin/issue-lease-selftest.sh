@@ -20,6 +20,16 @@
 #   NOUUID no fleet UUID on this machine → one stderr note, today's path.
 #   FORCE  --force → acquire carries --force; the takeover is announced.
 #   MULTI  a 2-repo fleet keys the lease <slug>:issue-<N>, as its heartbeat will.
+#   TOKEN  (issue #1491) no CCQUOTA_TOKEN in the pane, one in $FLEET_CONF_DIR/node.env
+#          → the lease command sees it; the spawned window does NOT (the credential
+#          never enters the pane's environment); an env token wins over the file.
+#   NOTOKEN the default `ccquota lease` with no token anywhere → ccquota is not even
+#          run, stderr says 「no node token (… node.env missing)」 + the fix (not
+#          「hub unreachable」), and the spawn falls back to the GitHub claim; with
+#          node.env present the default command runs with the token. A seam
+#          (FLEET_HUB_LEASE_CMD) is never held to the token (DOWN above).
+#   MOVE   fleet_hub_move shares the plumbing: its command sees node.env's token;
+#          the default `ccquota move` without one says 「no node token」.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -86,7 +96,7 @@ case "\${1:-}" in
     esac ;;
   list-windows)      : ;;                                   # no existing windows → no local dedup hit
   show-options)      echo '' ;;
-  new-window)        printf 'new-window %s\n' "\$*" >> "$TMUX_LOG"; echo "\${TMUX_WIN:-@9}" ;;
+  new-window)        printf 'new-window %s\n' "\$*" >> "$TMUX_LOG"; printf '%s\n' "\${CCQUOTA_TOKEN:-<unset>}" > "$WORK/tmux.env"; echo "\${TMUX_WIN:-@9}" ;;
   kill-window)       printf 'kill-window %s\n' "\$*" >> "$TMUX_LOG" ;;
   set-window-option) : ;;
   *) : ;;
@@ -97,10 +107,12 @@ chmod +x "$WORK/fakebin/git" "$WORK/fakebin/gh" "$WORK/fakebin/tmux"
 
 LEASE_LOG="$WORK/lease.log"
 
-# --- fake lease command: LOG its argv, answer LEASE_ANSWER / exit LEASE_RC -------
+# --- fake lease command: LOG its argv (+ the token it was given, issue #1491),
+# answer LEASE_ANSWER / exit LEASE_RC --------------------------------------------
 cat > "$WORK/fakebin/fake-lease" <<LEASEFAKE
 #!/bin/bash
 printf '%s\n' "\$*" >> "$LEASE_LOG"
+printf '%s\n' "\${CCQUOTA_TOKEN:-<unset>}" > "$WORK/lease.env"
 case "\${1:-}" in
   release) echo RELEASED; exit 0 ;;
 esac
@@ -108,6 +120,22 @@ esac
 exit "\${LEASE_RC:-0}"
 LEASEFAKE
 chmod +x "$WORK/fakebin/fake-lease"
+
+# --- a fake `ccquota` for the DEFAULT path (no seam): on its own PATH dir, added
+# only by the legs that want it. Logs argv + the token; lease → GRANTED here.
+mkdir -p "$WORK/ccqbin"
+cat > "$WORK/ccqbin/ccquota" <<CCQFAKE
+#!/bin/bash
+printf '%s\n' "\$*" >> "$WORK/ccq.log"
+printf '%s\n' "\${CCQUOTA_TOKEN:-<unset>}" > "$WORK/ccq.env"
+case "\${1:-} \${2:-}" in
+  'lease release') echo RELEASED; exit 0 ;;
+  'lease acquire') echo 'GRANTED m5'; exit 0 ;;
+  'move '*)        printf 'LOCAL m5\tnothing to move\n'; exit 0 ;;
+esac
+exit 2
+CCQFAKE
+chmod +x "$WORK/ccqbin/ccquota"
 
 # A control database with a machine id: what fleet_uuid derives the fleet UUID from.
 MACHINE=11111111-1111-4111-8111-111111111111
@@ -122,6 +150,7 @@ PY
 
 run_spawn() { # $@ = args to dash-issue-session.sh
   : > "$GH_LOG"; : > "$TMUX_LOG"; : > "$GIT_LOG"; : > "$DISPLAY_LOG"; : > "$LEASE_LOG"
+  rm -f "$WORK/lease.env" "$WORK/tmux.env" "$WORK/ccq.log" "$WORK/ccq.env"
   rm -rf "$WORK/dash/.claude-dash"
   PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/dash" FLEET_CONF_DIR="${CONF_DIR:-$WORK/conf}" \
   FLEET_REPO="acme/widgets" FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH="master" \
@@ -138,6 +167,9 @@ lease_has()   { grep -qF -- "$1" "$LEASE_LOG"; }
 snap()        { cat "$WORK/spawn.rc" "$WORK/spawn.err" "$GH_LOG" "$TMUX_LOG" "$GIT_LOG"; }
 
 unset FLEET_PRESPAWN_DEDUP CCQUOTA_FLEET FLEET_HUB_LEASE_CMD FLEET_HUB_STATUS_CMD FLEET_NODE_ALIASES
+# The operator's stop-gap before #1491 exported the node token into every pane:
+# a run from such a pane must still test the no-token paths.
+unset CCQUOTA_TOKEN CCQUOTA_HUB_URL FLEET_HUB_MOVE_CMD FLEET_HUB_PLACE_CMD
 LEASE="$WORK/fakebin/fake-lease"
 UUID=$(cd "$WORK" && FLEET_CONF_DIR="$WORK/conf" FLEET_REPO=acme/widgets FLEET_MAIN="$WORK/main" \
   bash -c '. "$1/fleet-lib.sh"; fleet_uuid testsess' _ "$BIN")
@@ -221,6 +253,61 @@ out=$(cd "$WORK" && FLEET_CONF_DIR="$WORK/conf" FLEET_REPO=acme/widgets FLEET_MA
 lease_has "acquire acme/widgets 12 $UUID/wd:issue-12" || fail "MULTI a multi-repo lease must use the <slug>:issue-<N> key"
 [ "$out" = "GRANTED m4" ]                        || fail "MULTI fleet_hub_lease prints the command's line" "$out"
 ok "MULTI multi-repo fleet → <slug>:issue-<N> worker_id"
+
+# ===== TOKEN: node.env's token reaches the lease command and NOTHING else (#1491) ==
+NODE_ENV="$WORK/conf/node.env"
+printf 'CCQUOTA_HUB_URL=http://hub.test\nCCQUOTA_TOKEN=tok-node\n' > "$NODE_ENV"; chmod 600 "$NODE_ENV"
+CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET=1 FLEET_HUB_LEASE_CMD="$LEASE" LEASE_ANSWER="GRANTED m5" run_spawn 258
+[ "$(rc)" = 0 ]                                  || fail "TOKEN spawns" "$(cat "$WORK/spawn.err")"
+[ "$(cat "$WORK/lease.env" 2>/dev/null)" = tok-node ] || fail "TOKEN the lease command must see node.env's CCQUOTA_TOKEN" "lease saw: $(cat "$WORK/lease.env" 2>/dev/null)"
+[ "$(cat "$WORK/tmux.env" 2>/dev/null)" = '<unset>' ] || fail "TOKEN the spawned window must NOT inherit the node token" "tmux saw: $(cat "$WORK/tmux.env" 2>/dev/null)"
+[ -s "$WORK/spawn.err" ]                         && fail "TOKEN a token from node.env is the normal path: nothing on stderr" "$(cat "$WORK/spawn.err")"
+# an exported token wins; node.env only fills the gap
+CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET=1 FLEET_HUB_LEASE_CMD="$LEASE" LEASE_ANSWER="GRANTED m5" CCQUOTA_TOKEN=tok-env run_spawn 258
+[ "$(cat "$WORK/lease.env" 2>/dev/null)" = tok-env ] || fail "TOKEN CCQUOTA_TOKEN in the environment wins over node.env" "lease saw: $(cat "$WORK/lease.env" 2>/dev/null)"
+ok "TOKEN node.env's token reaches the lease command only; the pane and its window never hold it"
+
+# ===== NOTOKEN: default `ccquota lease`, no token anywhere → named, not 「unreachable」 =
+rm -f "$NODE_ENV"
+PATH="$WORK/ccqbin:$PATH" CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET=1 run_spawn 258
+[ "$(rc)" = 0 ]                                  || fail "NOTOKEN a missing token must not block the spawn" "$(cat "$WORK/spawn.err")"
+[ -e "$WORK/ccq.log" ]                           && fail "NOTOKEN ccquota must not be run without a token (it would only exit 1)" "$(cat "$WORK/ccq.log")"
+err_has "no node token (CCQUOTA_TOKEN unset and $NODE_ENV missing)" || fail "NOTOKEN stderr must name what is missing" "$(cat "$WORK/spawn.err")"
+err_has 'fleet-hub-node.sh env --write'          || fail "NOTOKEN stderr must carry the fix" "$(cat "$WORK/spawn.err")"
+err_has 'only the GitHub claim guards #258'      || fail "NOTOKEN stderr must say what guards the issue now" "$(cat "$WORK/spawn.err")"
+err_has 'hub unreachable'                        && fail "NOTOKEN a missing token is not 「hub unreachable」" "$(cat "$WORK/spawn.err")"
+gh_has '--add-assignee'                          || fail "NOTOKEN falls back to the GitHub claim"
+tmux_has 'new-window'                            || fail "NOTOKEN spawns"
+# a node.env with no CCQUOTA_TOKEN= line is named as such
+printf 'CCQUOTA_HUB_URL=http://hub.test\n' > "$NODE_ENV"
+PATH="$WORK/ccqbin:$PATH" CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET=1 run_spawn 258
+err_has "$NODE_ENV has no CCQUOTA_TOKEN= line"   || fail "NOTOKEN a token-less node.env is named" "$(cat "$WORK/spawn.err")"
+# with node.env in place the DEFAULT command runs, with the token, and says nothing
+printf 'CCQUOTA_HUB_URL=http://hub.test\nCCQUOTA_TOKEN=tok-node\n' > "$NODE_ENV"; chmod 600 "$NODE_ENV"
+PATH="$WORK/ccqbin:$PATH" CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET=1 run_spawn 258
+[ "$(rc)" = 0 ]                                  || fail "NOTOKEN+node.env spawns" "$(cat "$WORK/spawn.err")"
+grep -qF "lease acquire acme/widgets 258 $UUID/issue-258" "$WORK/ccq.log" 2>/dev/null || fail "NOTOKEN+node.env the default ccquota lease must run" "$(cat "$WORK/ccq.log" 2>/dev/null)"
+[ "$(cat "$WORK/ccq.env" 2>/dev/null)" = tok-node ] || fail "NOTOKEN+node.env ccquota must see node.env's token" "ccquota saw: $(cat "$WORK/ccq.env" 2>/dev/null)"
+[ "$(cat "$WORK/tmux.env" 2>/dev/null)" = '<unset>' ] || fail "NOTOKEN+node.env the window still never inherits it"
+[ -s "$WORK/spawn.err" ]                         && fail "NOTOKEN+node.env prints nothing on stderr" "$(cat "$WORK/spawn.err")"
+ok "NOTOKEN default ccquota without a token → 「no node token」 + fix, no ccquota run; with node.env it runs with the token"
+
+# ===== MOVE: fleet_hub_move shares the plumbing ==================================
+cat > "$WORK/fakebin/fake-move" <<MOVEFAKE
+#!/bin/bash
+printf 'LOCAL m5\t%s\n' "\${CCQUOTA_TOKEN:-<unset>}"
+MOVEFAKE
+chmod +x "$WORK/fakebin/fake-move"
+out=$(cd "$WORK" && FLEET_CONF_DIR="$WORK/conf" CCQUOTA_FLEET=1 FLEET_HUB_MOVE_CMD="$WORK/fakebin/fake-move" \
+  bash -c '. "$1/fleet-lib.sh"; fleet_hub_move plan --node auto acme/widgets x/issue-1' _ "$BIN")
+[ "$out" = $'LOCAL m5\ttok-node' ]               || fail "MOVE the move command must see node.env's token" "$out"
+rm -f "$NODE_ENV"
+err=$(cd "$WORK" && PATH="$WORK/ccqbin:$PATH" FLEET_CONF_DIR="$WORK/conf" CCQUOTA_FLEET=1 \
+  bash -c '. "$1/fleet-lib.sh"; fleet_hub_move plan --node auto acme/widgets x/issue-1; echo "rc=$?"' _ "$BIN" 2>&1)
+case "$err" in *'no node token (CCQUOTA_TOKEN unset and '*'node.env missing)'*'the move cannot be asked for'*'rc=1'*) ;;
+  *) fail "MOVE the default ccquota move without a token says 「no node token」, rc 1" "$err" ;; esac
+case "$err" in *'hub unreachable'*) fail "MOVE a missing token is not 「hub unreachable」" "$err" ;; esac
+ok "MOVE fleet_hub_move: node.env's token reaches the command; none → 「no node token」"
 
 printf '\nselftest OK: %s assertions passed (hub issue lease, issue #1422)\n' "$pass"
 exit 0

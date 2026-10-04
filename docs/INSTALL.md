@@ -87,7 +87,11 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    brings them to this commit, as each login, and restarts their daemons —
    `/fleet-sync-install` runs it as the apply's `--sync-logins` step (issues
    #1069, #1122), skipping a login that set `FLEET_INSTALL_SYNC=0` in its own
-   settings unless it is named (`--logins <login>` / `--include-off`). A login whose
+   settings unless it is named (`--logins <login>` / `--include-off`). Beside the
+   sync it writes each reached login's `~/.config/claude-fleet/node.env` when a
+   ccquota agent plist holds the token the file lacks (`bin/fleet-hub-node.sh env
+   --write`, issue #1491) — without it that login's `ccquota lease|place|move`
+   fall back silently; `fleet-doctor`'s `node` line says so. A login whose
    `~/.claude/fleet` is a file COPY (step 2's shape) cannot say which version it
    holds or update itself; `fleet-sync-logins.sh --to-git` turns it into a git
    clone at the commit it holds — origin = the public repo over https, no

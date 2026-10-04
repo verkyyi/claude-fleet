@@ -4107,23 +4107,77 @@ _fleet_hub_node() {
   printf '%s' "$hits"
 }
 
+# ---- the node token the hub commands act with (issue #1491) ---------------------
+# `ccquota lease|place|move` act AS THIS MACHINE'S AGENT: they need CCQUOTA_HUB_URL
+# + CCQUOTA_TOKEN — the agent's own enrollment — or they exit 1 「no hub configured」.
+# A fleet pane has the URL (fleet conf) but never the token: fleet-node-join.sh
+# keeps it in $FLEET_CONF_DIR/node.env (0600) and nothing exported it, so until
+# #1491 every hub call from a pane fell back silently, misreported as 「hub
+# unreachable」. The token stays OUT of the pane's environment — a worker spawned
+# from a pane that carried it would hold a node credential — so it is exported only
+# inside the command substitution that runs the hub command (`_fleet_hub_env`), and
+# dies with it. A login whose agent predates node.env (its token only in the launchd
+# plist) writes the file once with `fleet-hub-node.sh env --write`.
+
+# fleet_node_env_file → this login's node.env path.
+fleet_node_env_file() { printf '%s/node.env' "$FLEET_CONF_DIR"; }
+
+# _fleet_node_env_val <KEY> → the value node.env assigns KEY ('' when none; rc 1
+# when there is no readable file). READ, never sourced: it holds a credential.
+_fleet_node_env_val() {
+  local f; f=$(fleet_node_env_file)
+  [ -r "$f" ] || return 1
+  sed -n "s/^$1=//p" "$f" | head -n 1
+}
+
+# _fleet_hub_env — export the hub credentials the environment lacks, from node.env.
+# Call it ONLY inside the subshell that runs the hub command
+# (`out=$(_fleet_hub_env; bash -c … )`): the exports must die with that call and
+# never reach the caller, nor anything the caller spawns.
+_fleet_hub_env() {
+  local v
+  if [ -z "${CCQUOTA_TOKEN:-}" ]; then v=$(_fleet_node_env_val CCQUOTA_TOKEN); [ -n "$v" ] && export CCQUOTA_TOKEN="$v"; fi
+  if [ -z "${CCQUOTA_HUB_URL:-}" ]; then v=$(_fleet_node_env_val CCQUOTA_HUB_URL); [ -n "$v" ] && export CCQUOTA_HUB_URL="$v"; fi
+  return 0
+}
+
+# _fleet_hub_creds_missing → rc 0 and ONE phrase on stdout — what is missing, and
+# the fix — when the default `ccquota …` would exit 1 for want of credentials: no
+# token in the environment and none in node.env (or no hub URL anywhere). rc 1 =
+# all there. Only the DEFAULT command is held to this: a FLEET_HUB_*_CMD seam (a
+# test fake, the operator's place-local.sh) may need no token at all.
+_fleet_hub_creds_missing() {
+  local f why=''
+  f=$(fleet_node_env_file)
+  if [ -z "${CCQUOTA_TOKEN:-}" ] && [ -z "$(_fleet_node_env_val CCQUOTA_TOKEN)" ]; then
+    if [ -f "$f" ]; then why="CCQUOTA_TOKEN unset and $f has no CCQUOTA_TOKEN= line"
+    else why="CCQUOTA_TOKEN unset and $f missing"; fi
+  elif [ -z "${CCQUOTA_HUB_URL:-}" ] && [ -z "$(_fleet_node_env_val CCQUOTA_HUB_URL)" ]; then
+    why="CCQUOTA_HUB_URL unset and not in $f"
+  fi
+  [ -n "$why" ] || return 1
+  printf 'no node token (%s); fix: `fleet-hub-node.sh env --write` on this login writes node.env from its agent service, or re-join with fleet-node-join.sh' "$why"
+}
+
 # fleet_hub_lease acquire|release <sess> <repo> <issue> [--force] — the hub's
 # lease on (repo, issue) (issue #1422, EPIC #1419 C3): taken before a session is
 # opened so two machines can never both open one issue. Off unless CCQUOTA_FLEET=1.
 # Prints the lease command's one line — `GRANTED <node>` / `FORCED <node> <from>
 # <wid>` / `HELD <node> <wid> <expires>` / `RELEASED` / `NOT_HELD` — and returns:
 #   0  granted / released          3  held by another node (the line names it)
-#   1  the hub could not be asked: no lease command, no fleet UUID here, or the
-#      command failed — one stderr note, and the caller carries on as today
+#   1  the hub could not be asked: no lease command, no node token (#1491), no
+#      fleet UUID here, or the command failed — one stderr note, and the caller
+#      carries on as today
 #  10  the hub module is off (CCQUOTA_FLEET unset): nothing ran, nothing printed
 # The command is FLEET_HUB_LEASE_CMD, else `ccquota lease` when ccquota is on
-# PATH; it is run as `<cmd> <action> [--force] <repo> <issue> <worker_id>`. Node
+# PATH; it is run as `<cmd> <action> [--force] <repo> <issue> <worker_id>`, with
+# the node token from node.env in ITS environment only (`_fleet_hub_env`). Node
 # names in the line go through FLEET_NODE_ALIASES, as the sidebar's do.
 # The worker_id is `<fleet UUID>/<key>`, the key spelled as the session's own
 # heartbeat will spell it (`<slug>:issue-<N>` in a multi-repo fleet), so the
 # hub's heartbeat renewal recognises the session once its window exists.
 fleet_hub_lease() {
-  local act="${1:-}" sess="${2:-}" repo="${3:-}" num="${4:-}" force='' cmd u pre='' out rc
+  local act="${1:-}" sess="${2:-}" repo="${3:-}" num="${4:-}" force='' cmd u pre='' out rc why
   [ "${CCQUOTA_FLEET:-0}" = 1 ] || return 10
   [ "${5:-}" = --force ] && force=--force
   case "$act" in acquire|release) ;; *) return 1 ;; esac
@@ -4132,11 +4186,16 @@ fleet_hub_lease() {
   if [ -z "$cmd" ]; then
     if command -v ccquota >/dev/null 2>&1; then cmd='ccquota lease'
     else printf 'fleet: hub lease unavailable (no FLEET_HUB_LEASE_CMD, no ccquota on PATH) — only the GitHub claim guards #%s\n' "$num" >&2; return 1; fi
+    # ccquota acts as the agent: without its token it exits 1 「no hub configured」,
+    # which read as 「hub unreachable」 until issue #1491. Say what is actually missing.
+    if why=$(_fleet_hub_creds_missing); then
+      printf 'fleet: %s — only the GitHub claim guards #%s\n' "$why" "$num" >&2; return 1
+    fi
   fi
   u=$(fleet_uuid "$sess") && [ -n "$u" ] || {
     printf 'fleet: hub lease unavailable (no fleet UUID for %s on this machine) — only the GitHub claim guards #%s\n' "$sess" "$num" >&2; return 1; }
   _fleet_hosts_many "$sess" && pre="$(fleet_slug "$(fleet_norm_repo "$repo")"):"
-  out=$(bash -c "$cmd \"\$@\"" lease "$act" ${force:+"$force"} "$repo" "$num" "$u/${pre}issue-$num" </dev/null 2>/dev/null); rc=$?
+  out=$(_fleet_hub_env; bash -c "$cmd \"\$@\"" lease "$act" ${force:+"$force"} "$repo" "$num" "$u/${pre}issue-$num" </dev/null 2>/dev/null); rc=$?
   # Name machines the way the sidebar does (FLEET_NODE_ALIASES, `macmini=m5`): the
   # hub only knows a hostname's first label.
   out=$(printf '%s\n' "$out" | head -n1 | awk -v al="${FLEET_NODE_ALIASES:-}" '
@@ -4174,25 +4233,30 @@ fleet_node_is_self() {
 # <status>\t<reason>` / `HELD <m>\t<msg>` / `REFUSED <code>\t<msg>` — and returns:
 #   0  LOCAL or REMOTE             3  the issue is leased elsewhere
 #   4  refused: no machine can take it, or the chosen one would not
-#   1  the hub could not be asked — one stderr note; open it here as today
+#   1  the hub could not be asked (no command, no node token — #1491 —, no fleet
+#      UUID, or the command failed) — one stderr note; open it here as today
 #  10  the hub module is off: nothing ran, nothing printed
 # The command is FLEET_HUB_PLACE_CMD, else `ccquota place`; it is run as
-# `<cmd> --node <node> [--origin-wid <wid>] [--agent <a>] <repo> <issue> <worker_id>`.
+# `<cmd> --node <node> [--origin-wid <wid>] [--agent <a>] <repo> <issue> <worker_id>`,
+# with the node token from node.env in ITS environment only (`_fleet_hub_env`).
 fleet_hub_place() {
-  local sess="${1:-}" repo="${2:-}" num="${3:-}" node="${4:-auto}" owid="${5:-}" agent="${6:-}" cmd u pre='' out rc
+  local sess="${1:-}" repo="${2:-}" num="${3:-}" node="${4:-auto}" owid="${5:-}" agent="${6:-}" cmd u pre='' out rc why
   [ "${CCQUOTA_FLEET:-0}" = 1 ] || return 10
   case "$num" in ''|*[!0-9]*) return 1 ;; esac
   cmd="${FLEET_HUB_PLACE_CMD:-}"
   if [ -z "$cmd" ]; then
     if command -v ccquota >/dev/null 2>&1; then cmd='ccquota place'
     else printf 'fleet: hub placement unavailable (no FLEET_HUB_PLACE_CMD, no ccquota on PATH) — opening #%s here\n' "$num" >&2; return 1; fi
+    if why=$(_fleet_hub_creds_missing); then
+      printf 'fleet: %s — opening #%s here\n' "$why" "$num" >&2; return 1
+    fi
   fi
   u=$(fleet_uuid "$sess") && [ -n "$u" ] || {
     printf 'fleet: hub placement unavailable (no fleet UUID for %s on this machine) — opening #%s here\n' "$sess" "$num" >&2; return 1; }
   _fleet_hosts_many "$sess" && pre="$(fleet_slug "$(fleet_norm_repo "$repo")"):"
   # An alias the operator typed (`m5`) is the hub's hostname (`macmini`).
   [ "$node" != auto ] && node=$(printf '%s\n' ${FLEET_NODE_ALIASES:-} | awk -F= -v n="$node" '$2 == n { print $1; f = 1; exit } END { if (!f) print n }')
-  out=$(bash -c "$cmd \"\$@\"" place --node "$node" ${owid:+--origin-wid "$owid"} ${agent:+--agent "$agent"} \
+  out=$(_fleet_hub_env; bash -c "$cmd \"\$@\"" place --node "$node" ${owid:+--origin-wid "$owid"} ${agent:+--agent "$agent"} \
         "$repo" "$num" "$u/${pre}issue-$num" </dev/null 2>/dev/null); rc=$?
   out=$(printf '%s\n' "$out" | head -n1 | awk -F'\t' -v al="${FLEET_NODE_ALIASES:-}" '
     BEGIN { n = split(al, a, " "); for (i = 1; i <= n; i++) if ((p = index(a[i], "=")) > 1) m[substr(a[i], 1, p - 1)] = substr(a[i], p + 1) }
@@ -4215,15 +4279,20 @@ fleet_hub_place() {
 #   send → `MOVED <m> <window> <pid>\t<new wid>` / `HELD <m>\t<msg>` /
 #          `REFUSED <code>\t<msg>` / `FAILED <code>\t<msg>` / `UNKNOWN <op>\t<msg>`
 # and returns the command's code (0 / 3 held / 4 refused / 5 failed / 6 unknown),
-# 1 when the hub could not be asked (one stderr note), 10 when the module is off.
-# The command is FLEET_HUB_MOVE_CMD, else `ccquota move`.
+# 1 when the hub could not be asked (one stderr note: no command, no node token —
+# #1491 —, or the command failed), 10 when the module is off.
+# The command is FLEET_HUB_MOVE_CMD, else `ccquota move`, run with the node token
+# from node.env in ITS environment only (`_fleet_hub_env`).
 fleet_hub_move() {
-  local cmd out rc a prev='' n
+  local cmd out rc a prev='' n why
   [ "${CCQUOTA_FLEET:-0}" = 1 ] || return 10
   cmd="${FLEET_HUB_MOVE_CMD:-}"
   if [ -z "$cmd" ]; then
     if command -v ccquota >/dev/null 2>&1; then cmd='ccquota move'
     else printf 'fleet: hub move unavailable (no FLEET_HUB_MOVE_CMD, no ccquota on PATH)\n' >&2; return 1; fi
+    if why=$(_fleet_hub_creds_missing); then
+      printf 'fleet: %s — the move cannot be asked for\n' "$why" >&2; return 1
+    fi
   fi
   # Rotate the argv in place (no arrays: this lib must parse under POSIX sh).
   n=$#
@@ -4234,7 +4303,7 @@ fleet_hub_move() {
     fi
     set -- "$@" "$a"; prev=$a
   done
-  out=$(bash -c "$cmd \"\$@\"" move "$@" </dev/null 2>/dev/null); rc=$?
+  out=$(_fleet_hub_env; bash -c "$cmd \"\$@\"" move "$@" </dev/null 2>/dev/null); rc=$?
   out=$(printf '%s\n' "$out" | head -n1 | awk -F'\t' -v al="${FLEET_NODE_ALIASES:-}" '
     BEGIN { n = split(al, a, " "); for (i = 1; i <= n; i++) if ((p = index(a[i], "=")) > 1) m[substr(a[i], 1, p - 1)] = substr(a[i], p + 1) }
     { k = split($1, w, " ")

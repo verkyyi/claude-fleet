@@ -283,5 +283,17 @@ Do not install from memory: read the doc and work from it.
   mirror from both sides (`TestFleetClientMatchesBin` in the Go gate,
   `bin/fleet-install-selftest.sh` leg A in the shell gate), so a drift reds
   whichever CI the change reaches.
+- **The node token never enters a pane's environment** (issue #1491).
+  `ccquota lease|place|move` act as this machine's agent and need its token;
+  `fleet_hub_lease` / `fleet_hub_place` / `fleet_hub_move` (`bin/fleet-lib.sh`)
+  read it from `$FLEET_CONF_DIR/node.env` **inside the subshell that runs the
+  command** (`_fleet_hub_env`) — never `export` it in a conf, a hook or a
+  launcher, or every worker spawned from that pane inherits a node credential.
+  No token anywhere → the default command is not run and the note says
+  「no node token (… node.env missing)」, not 「hub unreachable」; a
+  `FLEET_HUB_*_CMD` seam is never held to the token. A login whose agent predates
+  `node.env` writes it once with `bin/fleet-hub-node.sh env --write` (from its
+  launchd plist); `fleet-sync-logins.sh` does that for the other logins, and
+  `fleet-doctor`'s `node` line WARNs on a login without one.
 - Claude Code re-reads `settings.json` hooks per turn, so running sessions pick
   up hook changes without a restart.

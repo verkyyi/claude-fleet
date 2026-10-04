@@ -8,6 +8,9 @@
 #                                  writes the worker map, and downloads a session
 #                                  moved here through the hub (issue #1426)
 #   fleet-hub-node.sh deliver    (a relay the hub pushed, JSON on stdin) → apply it
+#   fleet-hub-node.sh env [--write [--force]] [--plist <file>]
+#                                → this login's node token file (issue #1491; the
+#                                  one subcommand meant to be run by hand — see below)
 #
 # A worker's parent, or the worker a message is for, may live on another machine.
 # The sending side drops a relay in the outbox (fleet_hub_put, bin/fleet-lib.sh);
@@ -36,12 +39,122 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 
 die() { printf 'fleet-hub-node: %s\n' "$2" >&2; exit "$1"; }
 
+# --- env: this login's node token file (issue #1491) -----------------------------
+# `ccquota lease|place|move` act as this machine's agent and need its token.
+# fleet-node-join.sh writes it to $FLEET_CONF_DIR/node.env (0600) at join, and
+# fleet_hub_* (bin/fleet-lib.sh) read it per call. A login whose agent predates
+# that keeps the token ONLY in its launchd service's EnvironmentVariables
+# (docs/SHARED-MACHINE.md step 4), so every hub call from its fleet panes exited 1
+# 「no hub configured」 and fell back silently. `env` reports; `env --write` fills
+# node.env once from the service definition:
+#   ~/Library/LaunchAgents/com.ccquota.agent.plist              (gui LaunchAgent)
+#   <daemon dir>/com.ccquota.agent.<login>.plist                (system LaunchDaemon;
+#       read through `sudo -n` when this login cannot read it)
+#   --plist <file>                                              (anything else)
+# Every CCQUOTA_* string in the plist's EnvironmentVariables is copied (hub URL and
+# token first), mode 0600, written whole or not at all; a VALUE is never printed.
+# Exit: 0 present / written / already there (`--force` rewrites) · 1 missing and no
+# service definition found (the line says where it looked) · 3 the definition
+# carries no CCQUOTA_TOKEN · 2 usage · 75 python3 missing.
+# Seams: FLEET_HUB_NODE_SUDO (default `sudo -n`; empty = none),
+# FLEET_HUB_NODE_DAEMON_DIR (default /Library/LaunchDaemons).
+node_env() {
+  local write=0 force=0 plist='' f mode gr ot sudo ddir me cand src got keys rc
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --write) write=1 ;;
+      --force) force=1 ;;
+      --plist) plist="${2:-}"; [ -n "$plist" ] || die 2 "--plist needs a file"; shift ;;
+      *) die 2 "usage: fleet-hub-node.sh env [--write [--force]] [--plist <file>]" ;;
+    esac
+    shift
+  done
+  f=$(fleet_node_env_file)
+  if [ -f "$f" ] && [ -n "$(_fleet_node_env_val CCQUOTA_TOKEN)" ]; then
+    # ls -ld perms: char 5 = group-read, char 8 = other-read (fleet-doctor's check)
+    mode=$(ls -ld "$f" 2>/dev/null | cut -c1-10); gr=$(printf '%s' "$mode" | cut -c5); ot=$(printf '%s' "$mode" | cut -c8)
+    if [ "$gr" = r ] || [ "$ot" = r ]; then
+      printf 'node.env: present but group/other-readable (%s) — chmod 600 %s\n' "$mode" "$f"
+    elif [ "$write" = 1 ] && [ "$force" = 0 ]; then
+      printf 'node.env: already present (%s) — --force rewrites it from the service definition\n' "$f"
+    else
+      [ "$write" = 1 ] || { printf 'node.env: present (%s, 0600) — ccquota lease / place / move read it per call\n' "$f"; return 0; }
+    fi
+    [ "$write" = 1 ] && [ "$force" = 1 ] || return 0
+  elif [ "$write" = 0 ]; then
+    if [ -f "$f" ]; then printf 'node.env: present but has no CCQUOTA_TOKEN= line (%s) — `fleet-hub-node.sh env --write --force` rewrites it from this login'"'"'s agent service\n' "$f"
+    else printf 'node.env: missing (%s) — `fleet-hub-node.sh env --write` fills it from this login'"'"'s agent service; fleet_hub_lease / place / move fall back without it\n' "$f"; fi
+    return 1
+  fi
+  command -v python3 >/dev/null 2>&1 || die 75 "python3 is missing"
+  sudo="${FLEET_HUB_NODE_SUDO-sudo -n}"
+  ddir="${FLEET_HUB_NODE_DAEMON_DIR:-/Library/LaunchDaemons}"
+  me=$(id -un)
+  # Candidates, in order; the first that exists is the source.
+  if [ -n "$plist" ]; then set -- "$plist"
+  else set -- "$HOME/Library/LaunchAgents/com.ccquota.agent.plist" "$ddir/com.ccquota.agent.$me.plist"; fi
+  src=''
+  for cand in "$@"; do
+    if [ -r "$cand" ]; then src=$cand; break; fi
+    # A file this login cannot even stat (a root-owned daemon dir, a 0600 plist
+    # handed over): ask through sudo -n, never a password prompt.
+    # shellcheck disable=SC2086
+    if [ -n "$sudo" ] && $sudo test -r "$cand" 2>/dev/null; then src=$cand; break; fi
+  done
+  if [ -z "$src" ]; then
+    printf 'node.env: missing (%s) and no agent service definition to fill it from — looked for %s; pass --plist <file>, or re-join with fleet-node-join.sh\n' "$f" "$*"
+    return 1
+  fi
+  mkdir -p "$(dirname "$f")" || die 1 "cannot create $(dirname "$f")"
+  # The plist bytes go straight into python on stdin (plistlib reads XML and
+  # binary); python writes node.env itself under 0600 and prints only the KEY
+  # NAMES it copied.
+  prog=$(cat <<'PY'
+import os, plistlib, sys
+out, src = sys.argv[1], sys.argv[2]
+try:
+    p = plistlib.loads(sys.stdin.buffer.read())
+except Exception as e:  # noqa: BLE001 — one line, no traceback
+    sys.exit("not a plist: %s" % e)
+env = p.get("EnvironmentVariables") if isinstance(p, dict) else None
+if not isinstance(env, dict):
+    sys.exit("no EnvironmentVariables dict")
+keys = [k for k in env if k.startswith("CCQUOTA_") and isinstance(env[k], str) and env[k] != ""]
+if "CCQUOTA_TOKEN" not in keys:
+    print("no-token"); sys.exit(3)
+order = ["CCQUOTA_HUB_URL", "CCQUOTA_TOKEN"] + sorted(k for k in keys if k not in ("CCQUOTA_HUB_URL", "CCQUOTA_TOKEN"))
+order = [k for k in order if k in keys]
+tmp = out + ".tmp"
+fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w", encoding="utf-8") as fh:
+    fh.write("# claude-fleet fleet-hub-node env --write (issue #1491) from %s — this login's ccquota agent. Holds a credential: 0600.\n" % src)
+    for k in order:
+        v = env[k].replace("\n", "")
+        fh.write("%s=%s\n" % (k, v))
+os.chmod(tmp, 0o600)
+os.replace(tmp, out)
+print(" ".join(order))
+PY
+)
+  if [ -r "$src" ]; then got=$(python3 -c "$prog" "$f" "$src" < "$src"); rc=$?
+  else
+    # shellcheck disable=SC2086
+    got=$($sudo cat "$src" 2>/dev/null | python3 -c "$prog" "$f" "$src"); rc=$?
+  fi
+  case "$rc" in
+    0) printf 'node.env: written from %s — keys: %s (%s, 0600)\n' "$src" "$got" "$f"; return 0 ;;
+    3) printf 'node.env: %s carries no CCQUOTA_TOKEN in EnvironmentVariables — nothing written\n' "$src"; return 3 ;;
+    *) die 1 "cannot read $src: ${got:-python3 failed}" ;;
+  esac
+}
+
 case "${1:-}" in
   paths)
     printf 'outbox\t%s\nworkers\t%s\nmovein\t%s\n' "$(fleet_hub_outbox)" "$(fleet_hub_cache)" "$(fleet_hub_movein)"
     exit 0 ;;
+  env) shift; node_env "$@"; exit $? ;;
   deliver) ;;
-  *) die 2 "usage: fleet-hub-node.sh paths | deliver < relay.json" ;;
+  *) die 2 "usage: fleet-hub-node.sh paths | deliver < relay.json | env [--write [--force]] [--plist <file>]" ;;
 esac
 
 command -v python3 >/dev/null 2>&1 || die 75 "python3 is missing"

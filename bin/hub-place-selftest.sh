@@ -27,6 +27,9 @@
 #   SELF    --node local / this host's alias → never asks the hub.
 #   CAP     this machine is full → still placed on m4 (exit 0); a LOCAL answer
 #           then refuses with the cap reason (exit 2).
+#   TOKEN   (issue #1491) the place command sees node.env's CCQUOTA_TOKEN; the
+#           spawned window never inherits it; the default `ccquota place` with no
+#           token anywhere is not run and says 「no node token」, not 「unreachable」.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -94,7 +97,7 @@ case "\${1:-}" in
     esac ;;
   list-windows)      : ;;                                   # no existing windows → no local dedup hit
   show-options)      echo '' ;;
-  new-window)        printf 'new-window %s\n' "\$*" >> "$TMUX_LOG"; echo "\${TMUX_WIN:-@9}" ;;
+  new-window)        printf 'new-window %s\n' "\$*" >> "$TMUX_LOG"; printf '%s\n' "\${CCQUOTA_TOKEN:-<unset>}" > "$WORK/tmux.env"; echo "\${TMUX_WIN:-@9}" ;;
   kill-window)       printf 'kill-window %s\n' "\$*" >> "$TMUX_LOG" ;;
   set-window-option) case "\$*" in *@origin*) printf 'set-window-option %s\n' "\$*" >> "$TMUX_LOG" ;; esac ;;
   *) : ;;
@@ -109,6 +112,7 @@ LEASE_LOG="$WORK/lease.log"; PLACE_LOG="$WORK/place.log"
 cat > "$WORK/fakebin/fake-place" <<PLACEFAKE
 #!/bin/bash
 printf '%s\n' "\$*" >> "$PLACE_LOG"
+printf '%s\n' "\${CCQUOTA_TOKEN:-<unset>}" > "$WORK/place.env"
 [ -n "\${PLACE_ANSWER:-}" ] && printf '%s\n' "\$PLACE_ANSWER"
 exit "\${PLACE_RC:-0}"
 PLACEFAKE
@@ -139,6 +143,7 @@ PY
 
 run_spawn() { # $@ = args to dash-issue-session.sh
   : > "$GH_LOG"; : > "$TMUX_LOG"; : > "$GIT_LOG"; : > "$DISPLAY_LOG"; : > "$LEASE_LOG"; : > "$PLACE_LOG"
+  rm -f "$WORK/place.env" "$WORK/tmux.env" "$WORK/ccq.log"
   rm -rf "$WORK/dash/.claude-dash"
   # INFLIGHT=1: one fresh spawn-in-flight marker, so FLEET_GLOBAL_MAX_SESSIONS=1 is full.
   if [ "${INFLIGHT:-0}" = 1 ]; then mkdir -p "$WORK/dash/.claude-dash/global/spawn-inflight"; : > "$WORK/dash/.claude-dash/global/spawn-inflight/x.1"; fi
@@ -156,6 +161,7 @@ place_has()   { grep -qF -- "$1" "$PLACE_LOG"; }
 snap()        { cat "$WORK/spawn.rc" "$WORK/spawn.err" "$GH_LOG" "$TMUX_LOG" "$GIT_LOG"; }
 
 unset FLEET_PRESPAWN_DEDUP CCQUOTA_FLEET FLEET_HUB_LEASE_CMD FLEET_HUB_PLACE_CMD FLEET_HUB_STATUS_CMD FLEET_NODE_ALIASES
+unset CCQUOTA_TOKEN CCQUOTA_HUB_URL   # a pane under the pre-#1491 stop-gap exports the token
 LEASE="$WORK/fakebin/fake-lease"; PLACE="$WORK/fakebin/fake-place"
 UUID=$(cd "$WORK" && FLEET_CONF_DIR="$WORK/conf" FLEET_REPO=acme/widgets FLEET_MAIN="$WORK/main" \
   bash -c '. "$1/fleet-lib.sh"; fleet_uuid testsess' _ "$BIN")
@@ -282,5 +288,28 @@ base=$(CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET='' FLEET_HUB_PLACE_CMD='' FLEET_HUB_
 CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET='' FLEET_HUB_PLACE_CMD='' FLEET_HUB_LEASE_CMD='' FLEET_SPAWN_NODE=m4 run_spawn 258
 [ "$(snap)" = "$base" ]                          || fail "SPAWN_NODE with the hub off must change nothing" "$(diff <(printf '%s\n' "$base") <(snap))"
 ok "SPAWN_NODE off → byte-identical (the knob is never read without the hub)"
+
+# ===== TOKEN: node.env's token reaches the place command only (issue #1491) =======
+NODE_ENV="$WORK/conf/node.env"
+printf 'CCQUOTA_HUB_URL=http://hub.test\nCCQUOTA_TOKEN=tok-node\n' > "$NODE_ENV"; chmod 600 "$NODE_ENV"
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER=$'LOCAL m5\tchose m5' run_spawn 258
+[ "$(rc)" = 0 ] && tmux_has 'new-window'         || fail "TOKEN spawns (rc=$(rc))" "$(cat "$WORK/spawn.err")"
+[ "$(cat "$WORK/place.env" 2>/dev/null)" = tok-node ] || fail "TOKEN the place command must see node.env's CCQUOTA_TOKEN" "place saw: $(cat "$WORK/place.env" 2>/dev/null)"
+[ "$(cat "$WORK/tmux.env" 2>/dev/null)" = '<unset>' ] || fail "TOKEN the spawned window must NOT inherit the node token" "tmux saw: $(cat "$WORK/tmux.env" 2>/dev/null)"
+# the DEFAULT `ccquota place` (no seam) with no token anywhere: not run, named
+rm -f "$NODE_ENV"
+cat > "$WORK/fakebin/ccquota" <<CCQFAKE
+#!/bin/bash
+printf '%s\n' "\$*" >> "$WORK/ccq.log"; printf 'LOCAL m5\tchose m5\n'; exit 0
+CCQFAKE
+chmod +x "$WORK/fakebin/ccquota"
+FLEET_HUB_PLACE_CMD= CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" run_spawn 258
+[ "$(rc)" = 0 ] && tmux_has 'new-window'         || fail "TOKEN-less default place still opens it here (rc=$(rc))" "$(cat "$WORK/spawn.err")"
+[ -e "$WORK/ccq.log" ]                           && fail "TOKEN-less: ccquota place must not be run without a token" "$(cat "$WORK/ccq.log")"
+err_has "no node token (CCQUOTA_TOKEN unset and $NODE_ENV missing)" || fail "TOKEN-less stderr names what is missing" "$(cat "$WORK/spawn.err")"
+err_has 'opening #258 here'                      || fail "TOKEN-less stderr says where it opens" "$(cat "$WORK/spawn.err")"
+err_has 'hub unreachable'                        && fail "TOKEN-less is not 「hub unreachable」" "$(cat "$WORK/spawn.err")"
+rm -f "$WORK/fakebin/ccquota"
+ok "TOKEN node.env's token reaches the place command only; none → 「no node token」, opened here"
 
 printf 'hub-place-selftest: %s checks passed\n' "$pass"
