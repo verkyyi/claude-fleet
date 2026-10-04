@@ -91,13 +91,13 @@ tmux() { TMUX_N=$((TMUX_N + 1)); command tmux "$@"; }
 # dropped (issue #1489): a shell's `<fleet>@view-<id>` session shares the fleet's
 # windows and lists each again. Inline copy of fleet_lw_fmt / fleet_lw_filter in
 # bin/fleet-lib.sh (POSIX sh here) — KEEP IN SYNC.
-_lw_fmt() { printf '#{window_id} #{session_name} %s' "$1"; }
+_lw_fmt() { printf '#{window_id}:#{session_id}:#{session_name} %s' "$1"; }
 _lw_filter() {
-  awk '{ if ($0 !~ /^@[0-9]+ /) { print; next }    # not a fleet_lw_fmt row (a test shim: canned rows): untouched
-         i = index($0, " "); id = substr($0, 1, i - 1); r = substr($0, i + 1)
-         j = index(r, " "); s = substr(r, 1, j - 1)
+  awk '{ if ($0 !~ /^@[0-9]+:\$[0-9]+:[^ ]+ /) { print; next }    # not a fleet_lw_fmt row (a test shim: canned rows): untouched
+         i = index($0, " "); pre = substr($0, 1, i - 1); id = pre; sub(/:.*/, "", id)
+         s = pre; sub(/^[^:]*:[^:]*:/, "", s)
          if (index(s, "@view-") || (id in seen)) next
-         seen[id] = 1; print substr(r, j + 1) }'
+         seen[id] = 1; print substr($0, i + 1) }'
 }
 
 # Where `tmux -L <label>` puts its socket: tmux's own rule, resolved from THIS

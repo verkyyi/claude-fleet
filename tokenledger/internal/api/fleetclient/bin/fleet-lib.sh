@@ -1735,19 +1735,23 @@ EOF
 # (why #1424 first settled for a plain client). fleet_lw is the one scan every
 # fleet script uses; fleet-view-session-selftest.sh lints the bare form.
 #
-# fleet_lw_fmt <fmt> — the format fleet_lw asks tmux for: the window id and the
-# session name in front of the caller's, split off again by fleet_lw_filter. A
-# SPACE separates them: a fleet session name carries none (fleet-up sanitizes),
-# a view id is [A-Za-z0-9-], and a control byte prints as `\037` on tmux ≤3.4.
-fleet_lw_fmt() { printf '#{window_id} #{session_name} %s' "$1"; }
+# fleet_lw_fmt <fmt> — the format fleet_lw asks tmux for: `@wid:$sid:<session> `
+# in front of the caller's, split off again by fleet_lw_filter. The shape is
+# unmistakable — a session name never holds `:`, so the three colon-joined fields
+# then a SPACE (a fleet session name carries none, fleet-up sanitizes; a view id
+# is [A-Za-z0-9-]) cannot be a row of anyone else's, and a row without it (a
+# selftest's fake tmux printing canned lines) passes through untouched. No
+# control byte: tmux ≤3.4 prints one as the literal `\037`.
+fleet_lw_fmt() { printf '#{window_id}:#{session_id}:#{session_name} %s' "$1"; }
 # fleet_lw_filter — stdin: fleet_lw_fmt rows; stdout: the caller's rows, one per
-# WINDOW — a view session's rows dropped, a window seen twice printed once.
+# WINDOW — a view session's rows dropped, a window seen twice printed once, a row
+# that is not fleet_lw_fmt's left as it is.
 fleet_lw_filter() {
-  awk '{ if ($0 !~ /^@[0-9]+ /) { print; next }    # not a fleet_lw_fmt row (a test shim: canned rows): untouched
-         i = index($0, " "); id = substr($0, 1, i - 1); r = substr($0, i + 1)
-         j = index(r, " "); s = substr(r, 1, j - 1)
+  awk '{ if ($0 !~ /^@[0-9]+:\$[0-9]+:[^ ]+ /) { print; next }    # not a fleet_lw_fmt row (a test shim: canned rows): untouched
+         i = index($0, " "); pre = substr($0, 1, i - 1); id = pre; sub(/:.*/, "", id)
+         s = pre; sub(/^[^:]*:[^:]*:/, "", s)
          if (index(s, "@view-") || (id in seen)) next
-         seen[id] = 1; print substr(r, j + 1) }'
+         seen[id] = 1; print substr($0, i + 1) }'
 }
 # fleet_lw <fmt> [tmux-cmd…] — `<tmux-cmd> list-windows -a -F <fmt>`, every window
 # once. The command defaults to bare `tmux` (a pane's own server); pass

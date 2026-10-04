@@ -28,7 +28,10 @@ if [ "${1:-}" = -L ]; then [ "$2" = fixture ] || exit 1; shift 2; fi
 case "$1" in
   list-windows)
     if [[ "$*" = *pane_pid* ]]; then
-      printf '@1 %%1 101 acctB\n@2 %%2 102\n@3 %%3 103 acctB\n@4 %%4 104 acctB\n@5 %%5 105\n@6 %%6 106 acctB\n@7 %%7 107 acctA\n@8 %%8 108 acctB\n@9 %%9 109 acctB\n'
+      # fleet_lw (#1489) asks for `#{window_id} #{session_name} ` in front and strips it.
+      pre=''; [[ "$*" = *'#{window_id}:#{session_id}:#{session_name} '* ]] && pre=1
+      printf '@1 %%1 101 acctB\n@2 %%2 102\n@3 %%3 103 acctB\n@4 %%4 104 acctB\n@5 %%5 105\n@6 %%6 106 acctB\n@7 %%7 107 acctA\n@8 %%8 108 acctB\n@9 %%9 109 acctB\n' \
+        | if [ -n "$pre" ]; then awk '{ print $1 ":$0:fixture", $0 }'; else cat; fi
     else
       printf 'fixture:1\037@1\037acctB\nfixture:2\037@2\037\nfixture:3\037@3\037acctB\nfixture:4\037@4\037acctB\nfixture:5\037@5\037\n'
     fi ;;

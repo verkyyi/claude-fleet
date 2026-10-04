@@ -70,12 +70,12 @@ _fa_stall_id() { printf '%s' "${1:-}" | LC_ALL=C tr -cd 'A-Za-z0-9._:-'; }
 # each again. Inline copy of fleet_lw in bin/fleet-lib.sh (the bar refreshes this
 # script too often to source the lib) — KEEP IN SYNC.
 _fa_lw() {
-  tmux list-windows -a -F "#{window_id} #{session_name} $1" 2>/dev/null \
-    | awk '{ if ($0 !~ /^@[0-9]+ /) { print; next }    # not a fleet_lw_fmt row (a test shim: canned rows): untouched
-             i = index($0, " "); id = substr($0, 1, i - 1); r = substr($0, i + 1)
-             j = index(r, " "); s = substr(r, 1, j - 1)
+  tmux list-windows -a -F "#{window_id}:#{session_id}:#{session_name} $1" 2>/dev/null \
+    | awk '{ if ($0 !~ /^@[0-9]+:\$[0-9]+:[^ ]+ /) { print; next }    # not a fleet_lw_fmt row (a test shim: canned rows): untouched
+             i = index($0, " "); pre = substr($0, 1, i - 1); id = pre; sub(/:.*/, "", id)
+             s = pre; sub(/^[^:]*:[^:]*:/, "", s)
              if (index(s, "@view-") || (id in seen)) next
-             seen[id] = 1; print substr(r, j + 1) }'
+             seen[id] = 1; print substr($0, i + 1) }'
 }
 fleet_alerts_stall() {
   local id d

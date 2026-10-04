@@ -38,12 +38,12 @@ has() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) fail "$1 (want '$3')"
 # A. lint
 # ============================================================================
 # A1. every `list-windows -a` outside a comment or a selftest is fleet_lw's own
-# call, or carries fleet_lw_fmt / an inline copy's `#{window_id} #{session_name} `
+# call, or carries fleet_lw_fmt / an inline copy's `#{window_id}:#{session_id}:#{session_name} `
 # in front of its format. `# view-ok: <why>` marks a deliberate exception.
 bad=$(grep -n 'list-windows -a' "$BIN"/*.sh "$BIN"/*.py 2>/dev/null \
   | grep -v -- '-selftest\.sh:' \
   | grep -v -E '^[^:]+:[0-9]+:[[:space:]]*#' \
-  | grep -v -E 'list-windows -a -F "\$\(fleet_lw_fmt |list-windows -a -F "\$\(_lw_fmt |list-windows -a -F "#\{window_id\} #\{session_name\} ' \
+  | grep -v -E 'list-windows -a -F "\$\(fleet_lw_fmt |list-windows -a -F "\$\(_lw_fmt |list-windows -a -F "#\{window_id\}:#\{session_id\}:#\{session_name\} ' \
   | grep -v 'view-ok:')
 eq "A1: no bare list-windows -a in bin/ (use fleet_lw; see bin/fleet-lib.sh)" "" "$bad"
 # A2. a display-message that reads session_name reads it the canonical way.
@@ -56,7 +56,7 @@ bad=$(grep -n 'run-shell' "$ROOT"/conf/*.conf 2>/dev/null | grep '#{session_name
 eq "A3: no run-shell hook in conf/ passes a bare #{session_name}" "" "$bad"
 # A4. the lib's own definitions are where the rails say.
 has "A4: FLEET_SESSION_FMT is the group-or-name form" "$(grep -m1 '^FLEET_SESSION_FMT=' "$BIN/fleet-lib.sh")" "#{?#{session_group},#{session_group},#{session_name}}"
-eq "A4: fleet_lw_fmt puts the window id and the session name in front" "fleet_lw_fmt() { printf '#{window_id} #{session_name} %s' \"\$1\"; }" "$(grep -m1 '^fleet_lw_fmt()' "$BIN/fleet-lib.sh")"
+eq "A4: fleet_lw_fmt puts @wid:\$sid:session in front" "fleet_lw_fmt() { printf '#{window_id}:#{session_id}:#{session_name} %s' \"\$1\"; }" "$(grep -m1 '^fleet_lw_fmt()' "$BIN/fleet-lib.sh")"
 
 # ============================================================================
 # B. the inline copies are the lib's filter, byte for byte
@@ -69,8 +69,11 @@ lib=$(awk_of "$BIN/fleet-lib.sh" fleet_lw_filter)
 has "B: the lib filter drops view rows and dedups by window id" "$lib" 'index(s, "@view-") || (id in seen)'
 eq "B: tmux-spinner.sh's _lw_filter is the lib's" "$lib" "$(awk_of "$BIN/tmux-spinner.sh" _lw_filter)"
 eq "B: fleet-alerts.sh's _fa_lw filter is the lib's" "$lib" "$(awk_of "$BIN/fleet-alerts.sh" _fa_lw)"
-eq "B: tmux-spinner.sh's _lw_fmt is the lib's" "_lw_fmt() { printf '#{window_id} #{session_name} %s' \"\$1\"; }" "$(grep -m1 '^_lw_fmt()' "$BIN/tmux-spinner.sh")"
-has "B: fleet-alerts.sh asks tmux for the same prefix" "$(grep -m1 '^  tmux list-windows -a' "$BIN/fleet-alerts.sh")" '-F "#{window_id} #{session_name} $1"'
+eq "B: tmux-spinner.sh's _lw_fmt is the lib's" "_lw_fmt() { printf '#{window_id}:#{session_id}:#{session_name} %s' \"\$1\"; }" "$(grep -m1 '^_lw_fmt()' "$BIN/tmux-spinner.sh")"
+has "B: fleet-alerts.sh asks tmux for the same prefix" "$(grep -m1 '^  tmux list-windows -a' "$BIN/fleet-alerts.sh")" '-F "#{window_id}:#{session_id}:#{session_name} $1"'
+# a fake tmux's canned rows — even ones that begin with a window id — pass through untouched
+eq "B: rows that are not fleet_lw_fmt's pass through the filter untouched" "$(printf '@9 done\n@1 %%1 101 acctB\ns1\t@1\tdone\nworking\nworking\n')" "$(printf '@9 done\n@1 %%1 101 acctB\ns1\t@1\tdone\nworking\nworking\n@3:$0:f@view-x a\n@2:$1:f b\n@2:$0:f@view-x b\n' | bash -c '. "$0/fleet-lib.sh"; fleet_lw_filter' "$BIN" | sed '$d')"
+eq "B: …while fleet_lw_fmt rows are folded (a view row dropped, a window once)" "b" "$(printf '@3:$0:f@view-x a\n@2:$1:f b\n@2:$0:f@view-x b\n' | bash -c '. "$0/fleet-lib.sh"; fleet_lw_filter' "$BIN")"
 
 # ============================================================================
 # C/D/E need a tmux

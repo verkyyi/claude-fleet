@@ -79,11 +79,27 @@ def load():
 def save(d):
     with open(path, "w") as f:
         for k, v in d.items(): f.write("%s\t%s\n" % (k, v))
+# a format: innermost #{name} from the table; #{?cond,a,b} picks a or b — tmux's
+# conditional, which the fleet's session read is since #1489
+# (`#{?#{session_group},#{session_group},#{session_name}}`)
+def _fx(d, f):
+    r = re.compile(r"#\{([^#{}]*)\}")
+    while True:
+        m = r.search(f)
+        if not m:
+            return f
+        k = m.group(1)
+        if k.startswith("?"):
+            p = k[1:].split(",", 2) + ["", ""]
+            v = p[1] if p[0] else p[2]
+        else:
+            v = d.get(k, "")
+        f = f[:m.start()] + v + f[m.end():]
 verb = a[0] if a else ""
 if verb == "display-message":
-    d = load(); print(re.sub(r"#\{([^}]*)\}", lambda m: d.get(m.group(1), ""), a[-1]))
+    d = load(); print(_fx(d, a[-1]))
 elif verb == "list-panes":
-    d = load(); print(re.sub(r"#\{([^}]*)\}", lambda m: d.get(m.group(1), ""), a[-1]))
+    d = load(); print(_fx(d, a[-1]))
 elif verb == "set-window-option":
     d = load(); unset = "-u" in a
     rest = [x for x in a[1:] if x != "-u"]

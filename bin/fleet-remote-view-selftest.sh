@@ -266,7 +266,7 @@ eq "B: still exactly one proxy, now on the new worker" "$PW m4:$WID2" "$(proxies
 on8() { [ "$(vcur "$VS")" = "$RW8" ] && attached; }
 waitfor 10 on8 || fail "B: the retargeted proxy never showed worker 8" "$(vcur "$VS")"
 eq "B: …over the proxy's own connection — no reconnect: the same view session, the fleet session untouched (#1489)" "plan $VS" "$(rscur) $(vsess | tr '\n' ' ' | sed 's/ $//')"
-eq "B: the proxy window knows its view id, which `select` targets (#1489)" "${VS#"$RS@view-"}" "$(tl show-options -wqv -t "$PW" @remote_view)"
+eq "B: the proxy window knows its view id, the one select targets (#1489)" "${VS#"$RS@view-"}" "$(tl show-options -wqv -t "$PW" @remote_view)"
 
 # ============================================================================
 # D. fleet-open from the remote session goes back through the proxy
@@ -336,7 +336,7 @@ eq "I: …and no spool: nothing drains one for a shell without a view id" "" "$(
 # ============================================================================
 # J. two shells, each its own current window (#1489)
 # ============================================================================
-S2ID=$(ls "$FLEET_CONF_DIR/remote-views" | grep '^shell-' | head -n 1); S2V="$RS@view-$S2ID"
+S2ID=''; for f in "$FLEET_CONF_DIR"/remote-views/shell-*; do [ -f "$f" ] && { S2ID=${f##*/}; break; }; done; S2V="$RS@view-$S2ID"
 eq "J: the nested shell has a view session of its own, named by its registry id" "1" "$(tr_ has-session -t "=$S2V" 2>/dev/null && echo 1)"
 eq "J: …two view sessions now, both grouped onto the fleet session" "$RS $RS" "$(tr_ display-message -p -t "=$VS:" '#{session_group}') $(tr_ display-message -p -t "=$S2V:" '#{session_group}')"
 eq "J: …each on the window it asked for (both worker 8 so far)" "$RW8 $RW8" "$(vcur "$VS") $(vcur "$S2V")"

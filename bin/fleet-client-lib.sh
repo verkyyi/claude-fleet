@@ -35,10 +35,13 @@ fc_session() {
 }
 # fc_clients <fmt> — `list-clients -F <fmt>` for every client of FC_SESS, its view
 # sessions' included (`<fleet>@view-<id>`, issue #1489: a shell or proxy sits on
-# one of those, and it is the newest client fleet-open must find).
+# one of those, and it is the newest client fleet-open must find). The row is
+# asked for as `$sid:<fleet>\t<fmt>` and the prefix split off again; a row without
+# that shape (a selftest's fake tmux printing canned lines) passes through as it is.
 fc_clients() {
-  tmux list-clients -F "#{?#{session_group},#{session_group},#{session_name}}	$1" 2>/dev/null \
-    | awk -F '\t' -v s="$FC_SESS" '$1 == s { sub(/^[^\t]*\t/, ""); print }'
+  tmux list-clients -F "#{session_id}:#{?#{session_group},#{session_group},#{session_name}}	$1" 2>/dev/null \
+    | awk -F '\t' -v s="$FC_SESS" '$1 !~ /^\$[0-9]+:/ { print; next }
+                               { k = $1; sub(/^[^:]*:/, "", k); if (k != s) next; sub(/^[^\t]*\t/, ""); print }'
 }
 
 fc_pick() {  # <client tty, or empty> <termtype ERE>
