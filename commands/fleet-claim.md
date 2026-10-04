@@ -360,6 +360,15 @@ override them):
   would show yours; the Artifact tool's publish is hook-blocked in fleet sessions
   (issue #526). Reading or commenting on an artifact someone shared with you is
   fine.
+- **Show the operator a file on THEIR terminal, never `open` it here** (issue
+  #1367). The operator reads this machine over SSH from iTerm2; `open <file>`
+  pops it up on a screen nobody is looking at. An image, PDF, QR code or
+  screenshot they should see goes through
+  `~/.claude/fleet/bin/fleet-show.sh <file>` — it lands in their `~/Downloads`
+  with an iTerm2 notification (`--inline` draws it in the terminal and holds the
+  screen until they press a key). `SENT …` (exit 0) = delivered; `PATH …`
+  (exit 2) = no iTerm2 attached or over the cap — tell them the path instead.
+  A document to READ (Markdown/HTML) still goes through doc-preview (above).
 - **A temp server binds 127.0.0.1 and dies with your work** (issue #1154).
   `python3 -m http.server`, `vite`, `next dev`, a mock API — all bind `*` by
   default, which serves their cwd to the whole LAN, and a backgrounded one
