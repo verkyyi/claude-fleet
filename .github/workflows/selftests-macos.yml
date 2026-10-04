@@ -108,7 +108,9 @@ jobs:
         # nightly / dispatch full suite keeps 6. The runner reads N from
         # `strategy.job-total`, so each list stays the single source of its width.
         shard: ${{ github.event_name == 'pull_request' && fromJSON('[1, 2]') || fromJSON('[1, 2, 3, 4, 5, 6]') }}
-    timeout-minutes: 30
+    # A PR whose change falls back to the FULL suite (a harness edit) runs it on 2
+    # shards, not 6: measured ~28 min a shard on #1375, so the PR bounds are wider.
+    timeout-minutes: ${{ github.event_name == 'pull_request' && 60 || 30 }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -156,7 +158,7 @@ jobs:
         # budgets, a macOS runner is a noisier neighbour than an ubuntu one, and
         # this job is nightly — a timeout red costs a whole night's signal, where
         # a few extra idle minutes cost nothing on a free public runner.
-        timeout-minutes: 20
+        timeout-minutes: ${{ github.event_name == 'pull_request' && 50 || 20 }}
         env:
           # PR → only the related tests (issue #1374); nightly / dispatch → full.
           CHANGED_BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || '' }}
