@@ -97,6 +97,11 @@ py() {
 mode="${3:-home}" client="${4:-}" nav="${5:-0}"
 case "$mode" in home|f9|g) ;; *) mode=home ;; esac
 tdm() { tmux display-message ${client:+-c "$client"} -p "$@" 2>/dev/null; }
+# The window is resolved ONCE per step and every read after it names it: a bare
+# `{top-left}` under -c resolves against a different "current" window on some
+# tmux releases (3.4) than the pressing client's.
+win=$(tdm '#{window_id}')
+wdm() { tmux display-message -p -t "$win${1:+.$1}" "$2" 2>/dev/null; }
 US=$(printf '\037')
 # can_host <name> <issue> <raw> <worktree> <norepo> <remote> — the window test
 # fleet-sidebar.py's sync draws the list by (keep the two in step).
@@ -106,8 +111,8 @@ can_host() {
 }
 HFMT="#{window_name}$US#{@issue}$US#{@raw}$US#{@worktree}$US#{@norepo}$US#{@remote}"
 view_up() {   # the current window shows the list, unzoomed
-  [ "$(tdm '#{&&:#{@sidebar_worker},#{!=:#{window_zoomed_flag},1}}')" = 1 ] &&
-    [ "$(tdm -t '{top-left}' '#{@sidebar}')" = 1 ]
+  [ "$(wdm '' '#{&&:#{@sidebar_worker},#{!=:#{window_zoomed_flag},1}}')" = 1 ] &&
+    [ "$(wdm '{top-left}' '#{@sidebar}')" = 1 ]
 }
 
 # F9 again with the keyboard already on the list: hide it.
@@ -116,7 +121,7 @@ if [ "$mode" = f9 ] && [ "$nav" = 1 ] && view_up; then
 fi
 
 IFS="$US" read -r n_ i_ r_ w_ no_ re_ <<EOF
-$(tdm "$HFMT")
+$(wdm '' "$HFMT")
 EOF
 if ! can_host "${n_:-}" "${i_:-}" "${r_:-}" "${w_:-}" "${no_:-}" "${re_:-}"; then
   pick='' best=-1
@@ -132,13 +137,15 @@ $(tmux list-windows -t "$sess" -F "#{window_id}$US#{window_last_flag}$US#{window
 EOF
   if [ -n "$pick" ]; then
     tmux select-window -t "$pick" 2>/dev/null || :
+    win=$pick
   else
     HUB_SESSION="$sess" bash "$BIN/hub-session.sh" >/dev/null 2>&1 || :
+    win=$(tmux list-windows -t "$sess" -F '#{window_id} #{window_name}' 2>/dev/null | awk '$2=="home"{print $1; exit}')
   fi
 fi
 
 # A window that can show the list: unzoom, switch it on, draw it now.
-[ "$(tdm '#{window_zoomed_flag}')" = 1 ] && tmux resize-pane -Z -t "$(tdm '#{pane_id}')" 2>/dev/null
+[ "$(wdm '' '#{window_zoomed_flag}')" = 1 ] && tmux resize-pane -Z -t "$win" 2>/dev/null
 show_on
 py sync
 if ! view_up; then
@@ -153,8 +160,8 @@ tmux switch-client ${client:+-c "$client"} -T fleet-sidebar 2>/dev/null || :
 # The view pins the client's own pane to the list on its next poll (#1105). An
 # empty input line gets Escape (the highlight back on the task in view); a typed
 # name is left as it is.
-[ -z "$(tdm -t '{top-left}' '#{@sidebar_input}')" ] && py key Escape
+[ -z "$(wdm '{top-left}' '#{@sidebar_input}')" ] && py key Escape
 tmux display-message ${client:+-c "$client"} "$(fleet_ui_t toast_sidebar_focus)" 2>/dev/null || :
 bash "$BIN/fleet-hub-visits.sh" record '' "$sess" "$mode-sidebar" \
-  "$(tdm '#{?#{@wid},#{@wid},#{window_id}}')" '' >/dev/null 2>&1 || :
+  "$(wdm '' '#{?#{@wid},#{@wid},#{window_id}}')" '' >/dev/null 2>&1 || :
 exit 0

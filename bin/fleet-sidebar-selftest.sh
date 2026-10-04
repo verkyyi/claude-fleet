@@ -1579,17 +1579,24 @@ try:
     wait_for(lambda: side_width() != '40', 'clearing the manual width did not return the view to auto_width')
     check(30 <= int(side_width()) <= 40, 'auto_width left its 30..window/4 band: %s' % side_width())
 
-    # Hub/home resolution stays on the original @dash pane — and reaches it on the
-    # SECOND press (issue #899): the first F9 in a task with a bar hands the bar
-    # the keyboard and stays; the second, bound in the fleet-sidebar table, goes on.
+    # F9 is three-state on the list (issue #1533 — the full-screen hub retired):
+    # the first press hands the list the keyboard and stays in the task; the
+    # second, bound in the fleet-sidebar table, hides it (prefix e's off); the
+    # third shows it again. The plan window is never visited.
     check(not navigation(), 'fixture should start with the worker holding input')
     os.write(terminal, b'\x1b[20~')  # F9
     wait_for(navigation, 'first F9 did not put the keyboard on the task bar')
     check(tm('display-message', '-p', '#{window_id}') == w2, 'first F9 left the task')
     os.write(terminal, b'\x1b[20~')  # F9 again, now in the fleet-sidebar table
-    wait_for(lambda: not views(), 'hub should not have a worker sidebar')
-    check(tm('display-message', '-p', '-t', 'fleet-test:', '#{pane_id}') == hp,
-          'home went to a sidebar instead of hub')
+    wait_for(lambda: not views() and not navigation(), 'second F9 did not hide the list')
+    check('FLEET_SIDEBAR=0' in conf.read_text(), 'second F9 hid the list without switching it off')
+    check(tm('display-message', '-p', '#{window_id}') == w2, 'second F9 left the task')
+    os.write(terminal, b'\x1b[20~')  # F9 a third time: back on, focused
+    wait_for(lambda: view_on(w2) and navigation(), 'third F9 did not show and focus the list')
+    check('FLEET_SIDEBAR=1' in conf.read_text(), 'third F9 did not switch the list back on')
+    check(tm('display-message', '-p', '#{window_id}') == w2, 'third F9 left the task')
+    os.write(terminal, b'\x1b')      # Escape: the worker takes the keyboard back
+    wait_for(lambda: not navigation(), 'Escape did not hand the keyboard back')
     foreign = tm('new-session', '-d', '-s', 'adhoc', '-P', '-F', '#{window_id}', 'sleep 600')
     tm('set-option', '-w', '-t', foreign, '@issue', '99')
     check(foreign not in [r[0] for r in row_data()], 'another session leaked into sidebar')
