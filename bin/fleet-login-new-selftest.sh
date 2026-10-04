@@ -271,7 +271,7 @@ if [ -z "$DAEMONS" ]; then
   # 700 home), rendered here, and the count printed matches what was installed
   contains "B3 templates listed as the login" "$OUT" "sudo -u victor -H ls -1 $H/.claude/fleet/launchd"
   contains "B3 read as the login" "$OUT" "read as victor"
-  eq "B3 $NTMPL templates + the apply script read as the login" "$((NTMPL + 1))" "$(grep -c '^sudo cat$' "$LOG")"
+  eq "B3 $NTMPL templates + the apply script + its fleet-daemon-lib.sh read as the login (#1495)" "$((NTMPL + 2))" "$(grep -c '^sudo cat$' "$LOG")"
   contains "B3 installed N/N" "$OUT" "installed $NTMPL/$NTMPL"
   not_contains "B3 never 'nothing to install'" "$OUT" "nothing to install"
   # the login's own first-login apply must find them current: same render, from its clone
