@@ -36,7 +36,7 @@ import (
 //
 // Two ways to get one:
 //
-//   - `fleet-cert.py login` (the `fleet login` client, bin/): the device-code
+//   - `fleet login` (bin/fleet-login.py): the device-code
 //     flow. The client generates its key, POSTs the public half to
 //     /v1/fleet/login/start, draws the returned QR in the terminal, and polls
 //     /v1/fleet/login/poll. Scanning the QR in WeCom opens /fleet/login on

@@ -746,13 +746,15 @@ Make the CA once: `ssh-keygen -t ed25519 -N '' -C fleet-user-ca -f ca`, then
 **What a certificate says** (`internal/sshca`): principals = the person's
 login (C4's one name, active somewhere — no active login, no certificate),
 valid 12 hours (a minute back-dated for clock skew), key id
-`fleet:<wecom userid>:<login>:<serial>` — sshd logs it on every login, and the
+`wecom:<userid>` (the hub relay, C6, reads the userid after the last `:`) —
+sshd logs it on every login, and the
 hub's `fleet_certs` table turns it back into a person, a key and a moment. The
 issuance is recorded before the certificate is handed out.
 
 **Getting one.**
 
-- `bin/fleet-cert.py login --hub https://…` (`fleet login`): makes
+- `fleet login --hub https://…` (`bin/fleet-login.py`; the URL is kept in
+  `~/.config/claude-fleet/hub.json` `{"url":…}`, which C6's client reads too): makes
   `~/.ssh/fleet-cert` if needed, POSTs its public half to
   `/v1/fleet/login/start`, draws the QR, and polls `/v1/fleet/login/poll`.
   Scanning it in WeCom opens `/fleet/login`, which signs the person in (the

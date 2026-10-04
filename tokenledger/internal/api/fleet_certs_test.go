@@ -149,7 +149,7 @@ func TestFleetLoginDeviceFlow(t *testing.T) {
 	if d := time.Duration(c.ValidBefore-c.ValidAfter) * time.Second; d < 12*time.Hour || d > 12*time.Hour+2*time.Minute {
 		t.Fatalf("validity %v", d)
 	}
-	if !strings.HasPrefix(c.KeyId, "fleet:Alice:alice:") {
+	if c.KeyId != "wecom:Alice" {
 		t.Fatalf("key id %q", c.KeyId)
 	}
 	if string(c.SignatureKey.Marshal()) != string(mustParseKey(t, ca.PublicKey()).Marshal()) {

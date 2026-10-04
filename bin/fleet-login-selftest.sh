@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-cert-selftest.sh — bin/fleet-cert.py (`fleet login`, issue #1412)
+# fleet-login-selftest.sh — bin/fleet-login.py (`fleet login`, issue #1412)
 # against a fake hub on 127.0.0.1, fully hermetic: HOME is a sandbox, the hub
 # is a tiny python server that answers start/poll the way tokenledger does and
 # signs with a REAL throwaway CA (`ssh-keygen -s`), so the certificate the
@@ -9,7 +9,8 @@
 #   A. login     makes ~/.ssh/fleet-cert (ed25519) and sends ITS public half;
 #                waits through a pending poll; writes ~/.ssh/fleet-cert-cert.pub
 #                (a user cert, principal alice, ~12h, signed by the CA) and
-#                ~/.ssh/fleet-ssh-config verbatim; remembers the hub URL;
+#                ~/.ssh/fleet-ssh-config verbatim; remembers the hub URL in
+#                ~/.config/claude-fleet/hub.json (a token already there is kept);
 #                draws a QR (block characters) and prints the user code
 #   B. include   appends `Match all` + `Include ~/.ssh/fleet-ssh-config` to an
 #                EXISTING ~/.ssh/config AFTER the user's own lines (theirs keep
@@ -58,10 +59,10 @@ class H(BaseHTTPRequestHandler):
                 return self.reply(403, {"error": "access_denied"})
             d = tempfile.mkdtemp(dir=SB)
             open(os.path.join(d, "k.pub"), "w").write(state["pub"] + "\n")
-            subprocess.run(["ssh-keygen", "-q", "-s", os.path.join(SB, "ca"), "-I", "fleet:Alice:alice:1",
+            subprocess.run(["ssh-keygen", "-q", "-s", os.path.join(SB, "ca"), "-I", "wecom:Alice",
                             "-n", "alice", "-V", "-1m:+12h", "-z", "1", os.path.join(d, "k.pub")], check=True)
             cert = open(os.path.join(d, "k-cert.pub")).read()
-            return self.reply(200, {"certificate": cert, "serial": "1", "key_id": "fleet:Alice:alice:1",
+            return self.reply(200, {"certificate": cert, "serial": "1", "key_id": "wecom:Alice",
                 "principals": ["alice"], "valid_before": "2026-10-04T12:00:00Z", "ssh_config": CONF, "hub": ""})
         self.reply(404, {})
 srv = HTTPServer(("127.0.0.1", int(sys.argv[2]) if len(sys.argv) > 2 else 0), H)
@@ -89,7 +90,7 @@ ORIG_CONF="$(cat "$HOME/.ssh/config")"
 
 # ── A ──
 start_hub
-out="$(python3 "$BIN/fleet-cert.py" login --hub "http://127.0.0.1:$PORT" 2>&1)"; rc=$?
+out="$(python3 "$BIN/fleet-login.py" --hub "http://127.0.0.1:$PORT" 2>&1)"; rc=$?
 stop_hub
 [ "$rc" = 0 ] && ok "A login exit 0" || bad "A login exit $rc: $out"
 [ -f "$HOME/.ssh/fleet-cert" ] && grep -q '^ssh-ed25519 ' "$HOME/.ssh/fleet-cert.pub" && ok "A key made" || bad "A no ed25519 key"
@@ -99,7 +100,7 @@ echo "$L" | grep -q 'user certificate' && ok "A user certificate" || bad "A not 
 echo "$L" | grep -A1 'Principals:' | grep -qx '[[:space:]]*alice' && ok "A principal alice" || bad "A principals: $L"
 echo "$L" | grep -q "Signing CA: ED25519 $(ssh-keygen -lf "$SB/ca.pub" | awk '{print $2}')" && ok "A signed by the CA" || bad "A signing CA: $L"
 grep -q '^Host m4 fleet-m4 fleet-m4-public$' "$HOME/.ssh/fleet-ssh-config" && ok "A ssh config written" || bad "A ssh config"
-[ "$(cat "$HOME/.config/claude-fleet/hub-url")" = "http://127.0.0.1:$PORT" ] && ok "A hub remembered" || bad "A hub not remembered"
+[ "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["url"])' "$HOME/.config/claude-fleet/hub.json")" = "http://127.0.0.1:$PORT" ] && ok "A hub remembered in hub.json" || bad "A hub not remembered"
 echo "$out" | grep -q 'BCDF-GHJK' && echo "$out" | grep -q '█\|▀\|▄' && ok "A code + QR shown" || bad "A no code/QR: $out"
 
 # ── B ──
@@ -107,24 +108,29 @@ conf="$(cat "$HOME/.ssh/config")"
 [ "${conf:0:${#ORIG_CONF}}" = "$ORIG_CONF" ] && ok "B user's lines first, untouched" || bad "B config changed: $conf"
 printf '%s\n' "$conf" | tail -4 | tr '\n' '|' | grep -q 'Match all|Include ~/.ssh/fleet-ssh-config|' && ok "B Include appended" || bad "B include: $conf"
 key_before="$(cat "$HOME/.ssh/fleet-cert.pub")"
+python3 - "$HOME/.config/claude-fleet/hub.json" <<'PY2'
+import json, sys
+d = json.load(open(sys.argv[1])); d["token"] = "tok-123"; json.dump(d, open(sys.argv[1], "w"))
+PY2
 start_hub
-python3 "$BIN/fleet-cert.py" login >/dev/null 2>&1; rc=$?   # remembered hub
+python3 "$BIN/fleet-login.py" >/dev/null 2>&1; rc=$?   # remembered hub
 stop_hub
 [ "$rc" = 0 ] && ok "B second login (remembered hub)" || bad "B second login exit $rc"
+grep -q '"token": "tok-123"' "$HOME/.config/claude-fleet/hub.json" && ok "B hub.json token kept" || bad "B hub.json token lost"
 [ "$(grep -c 'Include ~/.ssh/fleet-ssh-config' "$HOME/.ssh/config")" = 1 ] && ok "B Include once" || bad "B Include duplicated"
 [ "$(cat "$HOME/.ssh/fleet-cert.pub")" = "$key_before" ] && ok "B key reused" || bad "B key replaced"
 
 # ── C ──
 rm -f "$HOME/.ssh/fleet-cert-cert.pub"; touch "$SB/deny"
 start_hub
-python3 "$BIN/fleet-cert.py" login >/dev/null 2>&1; rc=$?
+python3 "$BIN/fleet-login.py" >/dev/null 2>&1; rc=$?
 stop_hub
 [ "$rc" = 1 ] && [ ! -e "$HOME/.ssh/fleet-cert-cert.pub" ] && ok "C denied → exit 1, no cert" || bad "C denied rc=$rc"
 rm -f "$SB/deny"
 
 # ── D ──
-start_hub; python3 "$BIN/fleet-cert.py" login >/dev/null 2>&1; stop_hub
-python3 "$BIN/fleet-cert.py" status | grep -q 'Key ID: "fleet:Alice:alice:1"' && ok "D status" || bad "D status"
+start_hub; python3 "$BIN/fleet-login.py" >/dev/null 2>&1; stop_hub
+python3 "$BIN/fleet-login.py" status | grep -q 'Key ID: "wecom:Alice"' && ok "D status" || bad "D status"
 
-[ "$fail" = 0 ] && echo "PASS fleet-cert-selftest" || echo "FAIL fleet-cert-selftest"
+[ "$fail" = 0 ] && echo "PASS fleet-login-selftest" || echo "FAIL fleet-login-selftest"
 exit "$fail"

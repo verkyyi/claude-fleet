@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""fleet-cert.py — `fleet login`: scan once, get a 12-hour SSH certificate.
+"""fleet-login.py — `fleet login`: scan once, get a 12-hour SSH certificate.
 
-    fleet-cert.py login [--hub URL] [--invert] [--no-include]
-    fleet-cert.py status
+    fleet login [--hub URL] [--invert] [--no-include]
+    fleet login status
 
-`login` (claude-fleet#1412) is the device-code flow against the fleet hub
+`bin/fleet` dispatches `fleet login` here. Logging in (claude-fleet#1412) is the device-code flow against the fleet hub
 (tokenledger, CCQUOTA_FLEET=1):
 
   1. makes ~/.ssh/fleet-cert (ed25519, no passphrase) if it is not there —
@@ -21,8 +21,9 @@
         Include ~/.ssh/fleet-ssh-config
 
 After that `ssh m4` just works until the certificate runs out; run `login`
-again then. The hub URL is remembered in ~/.config/claude-fleet/hub-url
-(or set FLEET_HUB_URL). Those paths are fixed: `fleet connect` (C7) reads them.
+again then. The hub URL is remembered in ~/.config/claude-fleet/hub.json
+({"url": …}, any other key in it kept — `fleet connect` reads the same file),
+or set FLEET_HUB_URL. Those paths are fixed: `fleet connect` (C7) reads them.
 
 Exit: 0 certificate written · 1 refused/expired/denied · 2 usage/config.
 """
@@ -40,7 +41,7 @@ KEY = os.path.join(SSH_DIR, "fleet-cert")
 CERT = KEY + "-cert.pub"
 SSH_CONFIG_SNIPPET = os.path.join(SSH_DIR, "fleet-ssh-config")
 SSH_CONFIG = os.path.join(SSH_DIR, "config")
-HUB_FILE = os.path.join(HOME, ".config", "claude-fleet", "hub-url")
+HUB_FILE = os.path.join(HOME, ".config", "claude-fleet", "hub.json")
 INCLUDE_BEGIN = "# >>> fleet login (claude-fleet#1412) >>>"
 INCLUDE_END = "# <<< fleet login <<<"
 
@@ -53,11 +54,7 @@ def die(msg, code=2):
 def hub_url(arg):
     url = arg or os.environ.get("FLEET_HUB_URL", "")
     if not url:
-        try:
-            with open(HUB_FILE) as f:
-                url = f.read().strip()
-        except OSError:
-            pass
+        url = str(read_hub_file().get("url") or "")
     if not url:
         die("no hub URL: pass --hub https://<入口地址> once (it is remembered)")
     if not url.startswith(("https://", "http://")):
@@ -65,10 +62,20 @@ def hub_url(arg):
     return url.rstrip("/")
 
 
+def read_hub_file():
+    try:
+        with open(HUB_FILE) as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
 def remember_hub(url):
+    d = read_hub_file()  # keep a token (or anything else) already there
+    d["url"] = url
     os.makedirs(os.path.dirname(HUB_FILE), exist_ok=True)
-    with open(HUB_FILE, "w") as f:
-        f.write(url + "\n")
+    write_file(HUB_FILE, json.dumps(d, indent=2) + "\n", 0o600)
 
 
 def post(url, body, timeout=20):
@@ -196,7 +203,7 @@ def cmd_login(argv):
 
 def cmd_status(_argv):
     if not os.path.exists(CERT):
-        print("no certificate (%s) — run: fleet-cert.py login" % CERT)
+        print("no certificate (%s) — run: fleet login" % CERT)
         return 1
     out = subprocess.run(["ssh-keygen", "-L", "-f", CERT], capture_output=True, text=True)
     sys.stdout.write(out.stdout or out.stderr)
@@ -204,15 +211,14 @@ def cmd_status(_argv):
 
 
 def main(argv):
-    if not argv or argv[0] in ("-h", "--help", "help"):
+    if argv and argv[0] in ("-h", "--help", "help"):
         print(__doc__.strip())
-        return 0 if argv else 2
-    sub, rest = argv[0], argv[1:]
-    if sub == "login":
-        return cmd_login(rest)
-    if sub == "status":
-        return cmd_status(rest)
-    die("unknown command " + sub)
+        return 0
+    if argv and argv[0] == "status":
+        return cmd_status(argv[1:])
+    if argv and argv[0] == "login":  # `fleet-login.py login …` reads naturally too
+        argv = argv[1:]
+    return cmd_login(argv)
 
 
 if __name__ == "__main__":

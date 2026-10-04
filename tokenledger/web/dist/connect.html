@@ -129,7 +129,7 @@ function render(d) {
   $("hub").textContent = d.hub;
   $("login").textContent = d.login || (d.signed_in ? "未开通" : "运营者视图（不对应个人）");
   $("ca").textContent = d.ca_enabled ? d.ca_fingerprint : "未配置";
-  $("cmd").textContent = "fleet-cert.py login --hub " + d.hub;
+  $("cmd").textContent = "fleet login --hub " + d.hub;
   $("keypath").textContent = d.key_path;
   $("confpath").textContent = d.config_path;
   $("certpath").textContent = d.cert_path;

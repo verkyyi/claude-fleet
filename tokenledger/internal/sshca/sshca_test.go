@@ -64,7 +64,7 @@ func TestSignPrincipalsValidityKeyID(t *testing.T) {
 	if after := time.Unix(int64(c.ValidAfter), 0); !after.Before(now) || now.Sub(after) > 2*time.Minute {
 		t.Fatalf("valid_after %v: want a small back-date from %v", after, now)
 	}
-	if !strings.HasPrefix(c.KeyId, "fleet:WangXiaoMing:wangxiaoming:") || iss.KeyID != c.KeyId {
+	if c.KeyId != "wecom:WangXiaoMing" || iss.KeyID != c.KeyId {
 		t.Fatalf("key id %q", c.KeyId)
 	}
 	if len(c.CriticalOptions) != 0 {

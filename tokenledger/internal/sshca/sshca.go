@@ -12,8 +12,10 @@
 //   - principals: the person's login (the one name C4 gave them on every
 //     machine) — sshd lets the certificate in only as that login;
 //   - validity: 12 hours from now (a minute of back-dating for clock skew);
-//   - key id: "fleet:<wecom userid>:<login>:<serial>", which sshd writes to
-//     its log on every login, so an auth line names the person, not a key;
+//   - key id: "wecom:<wecom userid>", which sshd writes to its log on every
+//     login, so an auth line names the person, not a key. The hub relay (C6,
+//     claude-fleet#1413) reads the userid back as everything after the last
+//     ':'; the login is in the principals and the serial in its own field;
 //   - extensions: the ordinary interactive set (pty, port/agent forwarding,
 //     user rc). No critical options: no force-command, no source-address —
 //     the routes a person comes in on (LAN, tailnet, relay) are many.
@@ -143,7 +145,7 @@ func (c *CA) Sign(req Request, now time.Time) (*Issued, error) {
 	serial := binary.BigEndian.Uint64(sb[:]) &^ (1 << 63)
 	after := now.Add(-skew).Truncate(time.Second)
 	before := now.Add(TTL).Truncate(time.Second)
-	keyID := fmt.Sprintf("fleet:%s:%s:%d", req.PrincipalID, req.Logins[0], serial)
+	keyID := "wecom:" + req.PrincipalID
 	cert := &ssh.Certificate{
 		Key:             req.Key,
 		Serial:          serial,
