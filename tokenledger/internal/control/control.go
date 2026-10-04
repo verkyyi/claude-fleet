@@ -331,8 +331,23 @@ type Heartbeat struct {
 	// FleetVersion is the claude-fleet install's HEAD, when known.
 	FleetVersion string `json:"fleet_version,omitempty"`
 
+	// Routes is how people reach this machine's sshd from outside
+	// (claude-fleet#1414): its tailnet name, a public port the gateway
+	// forwards to it. The hub merges them into the route list it hands
+	// `fleet connect`, which measures each and picks the best. Absent on an
+	// agent older than #1414, or one that knows no route.
+	Routes []NodeRoute `json:"routes,omitempty"`
+
 	AgentVersion string    `json:"agent_version,omitempty"`
 	ObservedAt   time.Time `json:"observed_at"`
+}
+
+// NodeRoute is one way into a machine's sshd: a name people see ("tailnet",
+// "public"), a host and a port (0 = 22).
+type NodeRoute struct {
+	Name string `json:"name"`
+	Host string `json:"host"`
+	Port int    `json:"port,omitempty"`
 }
 
 // Fleet is one fleet's snapshot. Workers is relayed as fleet-control.py
@@ -486,7 +501,20 @@ const (
 	// hub's relay challenge under. A signature made for anything else (git
 	// commits use "git", files "file") is never accepted as a relay login.
 	SSHRelaySigNamespace = "fleet-relay@claude-fleet"
+
+	// RoutesPath is where `fleet connect` asks which machines it may reach
+	// and the ways in (claude-fleet#1414).
+	RoutesPath = "/v1/fleet/routes"
+	// RoutesSigNamespace is the ssh-keygen -Y namespace a client signs its
+	// route-list request under (the message is RoutesSigMessage).
+	RoutesSigNamespace = "fleet-routes@claude-fleet"
 )
+
+// RoutesSigMessage is what a client signs to ask for its route list with a
+// connection certificate: a timestamp the hub accepts only near its own clock.
+func RoutesSigMessage(unix int64) string {
+	return fmt.Sprintf("fleet-routes %d", unix)
+}
 
 // SSHRelayOpen is the payload of TypeSSHRelayOpen.
 type SSHRelayOpen struct {

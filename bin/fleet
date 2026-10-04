@@ -5,6 +5,7 @@
 # login`, a route-picking `fleet connect`) is adding a file, not editing here.
 #
 #   fleet login                       fetch a 12-hour connection certificate
+#   fleet connect [machine]           measure every route, ssh in over the best
 #   fleet connect --proxy <machine>   ssh's ProxyCommand through the hub
 here=$(cd "$(dirname "$0")" && pwd -P)
 cmd=${1-}

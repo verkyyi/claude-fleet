@@ -582,11 +582,13 @@ func (s *Server) sshRelayCertChallenge(ctx context.Context, conn *websocket.Conn
 	if ans.Type != "auth" || ans.Cert == "" || ans.Sig == "" {
 		return sshRelayIdentity{}, sshRelayRefusal("UNAUTHORIZED", "a session, a viewer token or a connection certificate is required")
 	}
-	return s.verifySSHRelayCert(ans.Cert, ans.Sig, nonce, time.Now())
+	return s.verifySSHRelayCert(ans.Cert, ans.Sig, nonce, control.SSHRelaySigNamespace, time.Now())
 }
 
-// verifySSHRelayCert checks a certificate and its signature over nonce, and
-// names the person it belongs to.
+// verifySSHRelayCert checks a certificate and its signature over nonce, made
+// under namespace, and names the person it belongs to. The relay and the route
+// list (claude-fleet#1414) sign under different namespaces, so a signature made
+// for one is never accepted by the other.
 //
 // The certificate must be a user certificate signed by one of SSHRelayCA, valid
 // now, whose key id is the person's WeCom userid (the principal; a
@@ -594,7 +596,7 @@ func (s *Server) sshRelayCertChallenge(ctx context.Context, conn *websocket.Conn
 // hub minted for them — so a certificate for one person can never be read as
 // another's, even if its key id were spoofed by a compromised signer of a
 // different scheme.
-func (s *Server) verifySSHRelayCert(certLine, sigArmor, nonce string, now time.Time) (sshRelayIdentity, error) {
+func (s *Server) verifySSHRelayCert(certLine, sigArmor, nonce, namespace string, now time.Time) (sshRelayIdentity, error) {
 	bad := func(why string) (sshRelayIdentity, error) {
 		return sshRelayIdentity{}, sshRelayRefusal("UNAUTHORIZED", "connection certificate refused: %s", why)
 	}
@@ -633,7 +635,7 @@ func (s *Server) verifySSHRelayCert(certLine, sigArmor, nonce string, now time.T
 	if err := checker.CheckCert(p.Login, cert); err != nil {
 		return bad(err.Error())
 	}
-	if err := verifySSHSig(cert.Key, []byte(sigArmor), []byte(nonce), control.SSHRelaySigNamespace); err != nil {
+	if err := verifySSHSig(cert.Key, []byte(sigArmor), []byte(nonce), namespace); err != nil {
 		return bad("challenge signature: " + err.Error())
 	}
 	return sshRelayIdentity{Principal: p.ID, Actor: p.ID}, nil

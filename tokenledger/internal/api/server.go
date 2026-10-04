@@ -261,6 +261,10 @@ func (s *Server) Handler() http.Handler {
 		// its enrollment token.
 		mux.HandleFunc(control.SSHRelayPath, s.handleSSHRelayConnect)
 		mux.HandleFunc(control.SSHRelayDataPath, s.handleSSHRelayData)
+		// The route list `fleet connect` measures (claude-fleet#1414): it
+		// admits a certificate by a signed timestamp, so it authenticates
+		// itself, outside the viewer gate.
+		mux.HandleFunc(control.RoutesPath, s.handleFleetRoutes)
 		mux.Handle("/v1/fleet/ssh-relays", s.viewerOnly(s.operatorOnly(http.HandlerFunc(s.handleSSHRelayAudit))))
 	}
 
