@@ -143,7 +143,7 @@ Do not install from memory: read the doc and work from it.
   `selftest-shadow-root.sh`, `.github/workflows/selftests*.yml`) or an
   unresolvable base falls back to the full suite. `selftests.yml` runs it on
   `pull_request` and on `push` to **master only** (the branch push duplicated
-  the PR run); `selftests-macos.yml` runs it on every PR too — the pre-merge BSD /
+  the PR run); `selftests-macos.yml` runs it on every PR too (2 shards max — 5 macOS jobs per free account) — the pre-merge BSD /
   bash 3.2 check — and stays FULL nightly as the backstop. So **don't run the
   suite locally**: push, open the PR, read the gate. Locally run only the one
   test that reproduces a CI failure (`run-selftests.sh <name>`), never the full
