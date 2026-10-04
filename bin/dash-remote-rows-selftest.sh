@@ -27,13 +27,25 @@
 #   N. needs      — a remote row that is asking its person draws the local `!` + detail
 #   D. no network — rendering with the hub on runs no curl/wget/nc/ccquota, and the
 #                   producer names none of them (nor the refresher)
-#   E. refresher  — fleet-hub-sessions.sh --refresh keeps only YOUR sessions on OTHER
-#                   machines with a worker_id, translates @origin_wid into this fleet's
-#                   terms (own fleet → bare key, elsewhere → worker_id, none → the
-#                   sub-issue parent), writes #me / #node / the needs field and the C1
+#   H. hub source — FLEET_SIDEBAR_SOURCE=hub (issue #1480, EPIC #1479 C1): the
+#                   sidebar's row SET is the cache's — a local row the cache names
+#                   renders off its own tmux line (its `@` id, its LIVE state, its
+#                   subtree), a local window the cache does not name is not a row (the
+#                   sidebar's own window excepted), nor is a cached local row whose
+#                   window is gone; the status line counts them as this machine's; the
+#                   hub list ignores the switch; on the DEFAULT source a cache carrying
+#                   local rows is byte for byte the one without (the golden), and with
+#                   the hub off `hub` is `local`
+#   E. refresher  — fleet-hub-sessions.sh --refresh keeps YOUR sessions with a
+#                   worker_id: the other machines' (local=0) and, since #1480, this
+#                   fleet's own, marked local=1 with the window that holds them (empty
+#                   when none does; leg G maps one on a real server); translates
+#                   @origin_wid into this fleet's terms (own fleet → bare key,
+#                   elsewhere → worker_id, none → the sub-issue parent — a local one
+#                   its bare key), writes #me / #node / the needs field and the C1
 #                   locator cache; derives #node from the sessions on a hub without a
-#                   `nodes` list; a failed fetch keeps the last cache; off ⇒ writes
-#                   nothing, --ensure starts nothing
+#                   `nodes` list, never counting a local row; a failed fetch keeps the
+#                   last cache; off ⇒ writes nothing, --ensure starts nothing
 #   I. identity   — who the refresher asks the hub as (#1475): FLEET_HUB_SESSIONS_CMD,
 #                   else a VALID connection certificate (a signed POST), else the viewer
 #                   token (a bearer GET), else nothing is fetched and --identity says why;
@@ -266,6 +278,46 @@ eq "D: the producer's code names no network tool and not the refresher" "0" \
    "$(grep -v '^[[:space:]]*#' "$ROWS" | grep -cE '(^|[^A-Za-z_])(curl|wget|nc|ccquota)([^A-Za-z_]|$)|fleet-hub-sessions')"
 
 # ============================================================================
+# H. the list from the hub (issue #1480)
+# ============================================================================
+L=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee            # this machine's fleet
+new_cache() {   # the #1480 shape: `local` + `wid` on every row, this machine's rows included
+  { printf '#ts\037%s\n#me\037m5\n#node\037m4\037online\0372\037%s\n' "$NOW" "$NOW"
+    printf 'wid:%s/issue-1423\037m4\037online\0371423\037acme/app\037working\037claude\037侧边栏\037issue-1419\037\0370\037\n' "$F"
+    printf 'wid:%s/issue-1500\037m4\037online\0371500\037acme/app\037done\037claude\037孙\037%s/issue-1423\037\0370\037\n' "$F" "$F"
+    printf 'wid:%s/scratch-2\037m4\037lost\037\037\037working\037claude\037草稿\037\037\0370\037\n' "$F"
+    printf 'wid:%s/issue-1419\037m5\037online\0371419\037acme/app\037done\037claude\037EPIC\037\037\0371\037@1\n' "$L"
+    printf 'wid:%s/issue-1420\037m5\037online\0371420\037acme/app\037done\037claude\037C1\037issue-1419\037\0371\037@2\n' "$L"
+    printf 'wid:%s/issue-1499\037m5\037online\0371499\037acme/app\037working\037claude\037gone\037\037\0371\037@9\n' "$L"
+    printf 'wid:%s/scratch-7\037m5\037online\037\037\037working\037claude\037nowin\037\037\0371\037\n' "$L"
+  } > "$G/remote_$S"
+}
+srow9() { printf '%s\n' "$1" | LC_ALL=C awk -F"$US" -v n="$2" '$1 != "hdr" && $4 == n { print $1 "|" $2 "|" $5 "|" $6 "|" $7 "|" $9; exit }'; }
+golden_s=$(side); golden_h=$(hub)                # the pre-#1480 cache, default source
+new_cache
+eq "H: default source — a cache carrying this machine's rows is byte for byte the golden (sidebar)" "$golden_s" "$(side)"
+eq "H: …and the hub list" "$golden_h" "$(hub)"
+eq "H: …FLEET_SIDEBAR_SOURCE=local says the same" "$golden_s" "$(FLEET_SIDEBAR_SOURCE=local side)"
+hs=$(FLEET_SIDEBAR_SOURCE=hub side)
+eq "H: hub source — the row set is the cache's: the local rows it names, the remote rows; solo (unnamed), gone (@9), nowin (no window) are not rows" \
+   "EPIC;C1;侧边栏;孙;草稿;" "$(sorder "$hs")"
+eq "H: a local row is its tmux line: its @ id, its LIVE state (tmux says looping, the cache said done), its caret + k/N, no machine" \
+   "@1|looping|▾|1/3|0|" "$(srow9 "$hs" EPIC)"
+eq "H: …its child nests under it as today" "@2|└||1|" "$(srow "$hs" C1)"
+eq "H: …and the remote child under the local parent, as today" "wid:$F/issue-1423|└▾|1/1|1|m4" "$(srow "$hs" '侧边栏')"
+eq "H: the status line counts this machine's rows the hub lists" "hdr|● m5 2 · ● m4 2" "$(sfirst "$hs")"
+eq "H: the sidebar's own window stays on its list before the hub has it" \
+   "solo;EPIC;C1;侧边栏;孙;草稿;" "$(sorder "$(FLEET_SIDEBAR_SOURCE=hub FLEET_SIDEBAR_CURRENT=@3 side)")"
+eq "H: the hub list ignores the switch" "$golden_h" "$(FLEET_SIDEBAR_SOURCE=hub hub)"
+eq "H: hub off — \`hub\` is the no-cache output" "$base_s" "$(CCQUOTA_FLEET= FLEET_SIDEBAR_SOURCE=hub side)"
+mv "$G/remote_$S" "$WORK/remote.keep"
+eq "H: no cache — \`hub\` is the no-cache output" "$base_s" "$(FLEET_SIDEBAR_SOURCE=hub side)"
+mv "$WORK/remote.keep" "$G/remote_$S"
+: > "$NET_LOG"; FLEET_SIDEBAR_SOURCE=hub side >/dev/null
+eq "H: …and still no network on the render path" "" "$(cat "$NET_LOG")"
+remote_cache "$NOW"
+
+# ============================================================================
 # E. refresher
 # ============================================================================
 unset CCQUOTA_FLEET
@@ -326,7 +378,12 @@ eq   "E: no @origin_wid → the sub-issue parent (remote)" "m4|online|working|re
 eq   "E: a sleeping lifecycle is the row's state" "m4|online|sleeping|sleeper||" "$(rrow issue-1700)"
 eq   "E: what the window needs rides along (field 10)" "m4|online|needs|asker||ask" "$(rrow issue-1800)"
 eq   "E: a lost machine's row is kept, marked lost" "m4|lost|working|草稿||" "$(rrow scratch-4)"
-hasnt "E: this fleet's own session is not a remote row" "$R" "local-one"
+eq   "E: this fleet's own session is a LOCAL row (#1480): local=1, this machine's label, no window here → empty wid" \
+     "local-one|1||$MYHOST|online" \
+     "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$U/issue-1420" '$1 == w { print $8 "|" $11 "|" $12 "|" $2 "|" $3 }')"
+eq   "E: a row on another machine says local=0, no wid" "0|" \
+     "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$F/issue-1423" '$1 == w { print $11 "|" $12 }')"
+eq   "E: every row carries the two fields" "" "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" '/^wid:/ && NF != 12')"
 hasnt "E: another login's session is not shown" "$R" "theirs"
 hasnt "E: a session with no worker_id is not shown" "$R" "no-id"
 has  "E: the C1 locator cache is written" "$(cat "$FLEET_CONF_DIR/control/hub-workers.tsv" 2>/dev/null)" "$F/issue-1423	m4"
@@ -443,6 +500,17 @@ ctl = c.Control(sys.argv[1]); f = [x for x in ctl.inventory() if x["name"] == sy
 w = [x for x in ctl.workers(f)["workers"] if x["issue"] == 1423][0]
 print(w["name"] + "|" + str(w["origin_wid"]) + "|" + w["key"] + "|" + str(w["needs"]))' "$FLEET_CONF_DIR" "$S" 2>&1)
   eq "G: the adapter hands over the window name, @origin_wid and @claude_needs" "侧边栏 x|$F/issue-1419|issue-1423|ask" "$got"
+  # The refresher maps a LOCAL row to the window that holds it now (#1480) —
+  # through this same adapter on the real server, by the hub's own key rule.
+  wl=$("$REAL_TMUX" -L "$S" new-window -d -P -F '#{window_id}' -n 'local-one' 'while :; do sleep 300; done')
+  "$REAL_TMUX" -L "$S" set-window-option -t "$wl" @issue 1420
+  CCQUOTA_FLEET=1 bash "$HUBS" --refresh 2>"$WORK/err" || fail "G: --refresh (real server) failed" "$(cat "$WORK/err")"
+  eq "G: a local row's wid is the live window of its worker_id" "1|$wl" \
+     "$(LC_ALL=C awk -F"$US" -v w="wid:$U/issue-1420" '$1 == w { print $11 "|" $12 }' "$G/remote_$S")"
+  "$REAL_TMUX" -L "$S" kill-window -t "$wl" 2>/dev/null
+  CCQUOTA_FLEET=1 bash "$HUBS" --refresh 2>/dev/null
+  eq "G: …and empty again once that window is gone" "1|" \
+     "$(LC_ALL=C awk -F"$US" -v w="wid:$U/issue-1420" '$1 == w { print $11 "|" $12 }' "$G/remote_$S")"
 else
   printf 'dash-remote-rows selftest: no isolated tmux server — leg G (live adapter) skipped\n' >&2
 fi

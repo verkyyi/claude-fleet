@@ -1573,6 +1573,20 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # ~/.ssh/config names it) unless mapped here, `label=host` pairs.
 # @label=Machine ssh hosts @group=accounts @tier=internal @scope=fleet @edit=str
 #FLEET_REMOTE_SSH="m4=m4 m5=m5"
+# Where the sidebar's LIST comes from (issue #1480, EPIC #1479 C1). `local`:
+# this machine's windows from tmux, plus your sessions on the other machines from
+# the hub's cache above — today's path. `hub`: the WHOLE list is the hub's
+# fleet_sessions (that same cache, which since #1480 also holds this machine's
+# rows, each with the window it lives in) — so m5 and m4 show one list, in one
+# order, with one set of marks; this machine's rows are simply the ones whose
+# machine is this one. A local row is still painted off its own tmux window —
+# state, needs, glyph, fold, pin, Enter are exactly today's — only WHICH rows is
+# the hub's: a window the hub has not seen yet (≤ 15 s after a spawn) is not on
+# the list yet, your own sidebar's window excepted. Sidebar only (the hub list,
+# prefix+F9, keeps its local rows); needs CCQUOTA_FLEET=1 and a cache on disk,
+# else `hub` behaves as `local`.
+# @label=Sidebar list source @group=status @tier=internal @scope=fleet @edit=str
+#FLEET_SIDEBAR_SOURCE=local
 # @label=Rotate early at @group=accounts @tier=advanced @scope=global @edit=int @unit=%
 #FLEET_ACCOUNT_CEILING=85
 # @label=Warn sessions at @group=accounts @tier=advanced @scope=global @edit=int @unit=%

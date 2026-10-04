@@ -1259,6 +1259,72 @@ try:
     command(['bash', str(bin_dir / 'fleet-sidebar.sh'), 'toggle', 'adhoc'])
     check(adhoc_conf.read_text() == 'FLEET_SIDEBAR=1\n', 'a matching conf on the wrong socket was treated as a fleet')
 
+    # The list from the hub (issue #1480, EPIC #1479 C1): FLEET_SIDEBAR_SOURCE=hub
+    # takes the row SET from the hub's cache. A row of THIS machine the cache
+    # names is still its own window — its `@` id, so Enter is the local
+    # select-window path, unchanged — a local window the cache does not name is
+    # not a row, and a row on another machine is a `wid:` whose Enter goes
+    # through fleet-remote-view.sh open.
+    tm('select-window', '-t', w1)
+    wait_for(lambda: bool(view_on(w1)), 'the hub-source leg needs a sidebar on the first worker')
+    side = view_on(w1)[0]
+    F = '11111111-2222-3333-4444-555555555555'
+    cache = work / '.claude-dash/global'
+    cache.mkdir(parents=True, exist_ok=True)
+    now = str(int(time.time()))
+    US = '\x1f'
+    (cache / 'remote_fleet-test').write_text(
+        '#ts' + US + now + '\n#me' + US + 'm5\n#node' + US + 'm4' + US + 'online' + US + '1' + US + now + '\n' +
+        US.join(('wid:' + F + '/issue-1423', 'm4', 'online', '1423', 'acme/app', 'working', 'claude',
+                 '侧边栏', '', '', '0', '')) + '\n' +
+        US.join(('wid:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/issue-1', 'm5', 'online', '1', '', 'working',
+                 'claude', 'worker-one', '', '', '1', w1)) + '\n')
+    saved_conf = conf.read_text()
+    conf.write_text(saved_conf + 'CCQUOTA_FLEET=1\nFLEET_SIDEBAR_SOURCE=hub\n')
+    ids = [r[0] for r in row_data(current=w1)]
+    check(w1 in ids and 'wid:' + F + '/issue-1423' in ids and w2 not in ids,
+          "hub source: the row set must be the cache's — a local row by its @ id, a remote one by wid:, "
+          'an unlisted window gone: ' + repr(ids))
+    check(not any(i.startswith('wid:') and i.endswith('/issue-1') for i in ids),
+          'hub source: a local row must never be a wid: row')
+    # Enter on the local row: the local path — select-window to that window.
+    tm('select-window', '-t', w2)
+    wait_for(lambda: bool(view_on(w2)), 'the view did not follow the second worker')
+    jump = work / 'jump.py'
+    jump.write_text('import importlib.util, sys\n'
+                    'spec = importlib.util.spec_from_file_location("sb", sys.argv[1])\n'
+                    'sb = importlib.util.module_from_spec(spec); spec.loader.exec_module(sb)\n'
+                    'sb.jump(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5])\n')
+    lock = str(conf) + '.sidebar.lock'
+    result = command(['python3', str(jump), str(bin_dir / 'fleet-sidebar.py'), 'fleet-test', w1,
+                      view_on(w2)[0], lock])
+    check(result.returncode == 0, 'jump on a hub-sourced local row failed: ' + result.stderr)
+    wait_for(lambda: tm('display-message', '-p', '-t', 'fleet-test:', '#{window_id}') == w1,
+             'Enter on a hub-sourced local row did not select its window')
+    wait_for(lambda: bool(view_on(w1)), 'the view did not move with the hub-sourced local jump')
+    # Enter on the other machine's row: fleet-remote-view.sh open, on that worker_id.
+    link = bin_dir / 'fleet-remote-view.sh'
+    opened = work / 'opened'
+    link.unlink()
+    link.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> ' + shlex.quote(str(opened)) +
+                    '\nprintf "%s\\n" ' + shlex.quote(w2) + '\n')
+    link.chmod(0o755)
+    try:
+        result = command(['python3', str(jump), str(bin_dir / 'fleet-sidebar.py'), 'fleet-test',
+                          'wid:' + F + '/issue-1423', view_on(w1)[0], lock])
+        check(result.returncode == 0, 'jump on a remote row failed: ' + result.stderr)
+        check(opened.exists() and opened.read_text().strip() == 'open wid:' + F + '/issue-1423',
+              'Enter on a remote row must go through fleet-remote-view.sh open: ' +
+              (opened.read_text() if opened.exists() else '<not called>'))
+    finally:
+        link.unlink()
+        link.symlink_to(real_bin / 'fleet-remote-view.sh')
+    conf.write_text(saved_conf)
+    (cache / 'remote_fleet-test').unlink()
+    tm('select-window', '-t', w1)
+    wait_for(lambda: bool(view_on(w1)), 'the view did not return after the hub-source leg')
+    check(w2 in [r[0] for r in row_data()], 'the default source did not come back after the hub-source leg')
+
     # Drive the real stuck_check function with a deterministic clock and real
     # pane captures. Sidebar repaints keep window_activity fresh; only changes
     # to the worker's own screen may reset the stale-worker timer.

@@ -43,12 +43,19 @@
 # The hub's URL: CCQUOTA_HUB_URL, else FLEET_HUB_URL, else the `url` in
 # ~/.config/claude-fleet/hub.json (what `fleet login` remembered).
 #
-# Which rows: a session whose fleet is NOT one of this machine's (by fleet UUID,
-# and by hostname as a backstop), whose login is yours (os_user = `id -un`, or
-# FLEET_HUB_SESSIONS_USER; `*` = every login the hub shows you), and that has a
+# Which rows: every session whose login is yours (os_user = `id -un`, or
+# FLEET_HUB_SESSIONS_USER; `*` = every login the hub shows you) and that has a
 # worker_id — a row the hub could not identify is not addressable, so it is not
-# shown. The machine label is the hostname's first label, renamed through
-# FLEET_NODE_ALIASES (`macmini=m5 mini2=m4`).
+# shown. The other machines' rows go into EVERY fleet's cache here; this machine's
+# own (issue #1480, EPIC #1479 C1: by fleet UUID, else by hostname + fleet name)
+# go into THEIR fleet's cache only, marked `local`=1 and carrying the window id
+# they live in right now — mapped once per refresh from the control adapter's
+# inventory (`fleet-control-read.sh workers`, the hub's own key rule), never from
+# the hub's observation — so a dash that takes its whole list from the hub
+# (FLEET_SIDEBAR_SOURCE=hub) can still paint and enter them as local windows. A
+# dash on the default source ignores them: nothing it draws changes. The machine
+# label is the hostname's first label, renamed through FLEET_NODE_ALIASES
+# (`macmini=m5 mini2=m4`).
 #
 # Cache (US-separated — \x1f, as the dash's own WFMT: a TAB is IFS whitespace,
 # so `read` would collapse the empty fields). Header lines first:
@@ -59,12 +66,17 @@
 #       sessions there, last-seen the hub's newest observation of it. From the
 #       hub's `nodes` list; derived from the sessions on a hub older than #1475.
 # then one row per session:
-#   wid:<worker_id>  node  online|lost  issue  repo  state  agent  name  origin  needs
+#   wid:<worker_id>  node  online|lost  issue  repo  state  agent  name  origin  needs  local  wid
 # `origin` is already in the viewing fleet's terms: a parent in THIS fleet is its
 # bare key (`issue-1419`, exactly what a local @origin holds), a parent elsewhere is
 # its full worker_id; no @origin_wid ⇒ the issue's sub-issue parent (the collector's
 # parents cache), when that repo is hosted here. `needs` (#1475) is the window's
 # @claude_needs — ask / perm / blocked / … — so the row draws the same red `?`.
+# `local` (#1480) is 1 for a row of THIS fleet on THIS machine, 0 for another
+# machine's; `wid` is a local row's live tmux window id (`@12`; empty when no window
+# holds that worker right now), empty on another machine's row. Both are APPENDED,
+# so a reader of the ten older fields is unchanged — but a `read` that names `needs`
+# last must now name these two too, or they arrive glued to it.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
@@ -207,27 +219,34 @@ refresh() {
   mkdir -p "$G" 2>/dev/null || return 1
   json=$(mktemp "$G/hubsess.json.XXXXXX") || return 1
   lf=$(mktemp "$G/hubsess.local.XXXXXX") || { rm -f "$json"; return 1; }
+  mf=$(mktemp "$G/hubsess.map.XXXXXX") || { rm -f "$json" "$lf"; return 1; }
   if ! fetch >"$json" || [ ! -s "$json" ]; then
-    rm -f "$json" "$lf"
+    rm -f "$json" "$lf" "$mf"
     printf 'fleet-hub-sessions: hub unreachable — keeping the last cache (its rows read 失联 once stale)\n' >&2
     return 1
   fi
-  # This machine's fleets: name, UUID (may be empty), multi-repo bit, hosted repos.
+  # This machine's fleets: name, UUID (may be empty), multi-repo bit, hosted repos —
+  # and (issue #1480) each one's live window inventory, through the SAME adapter
+  # the node agent reports to the hub with, so a local row's worker_id is derived
+  # by one rule on both sides and maps back to the window that holds it NOW.
+  : > "$mf"
   while IFS=$'\t' read -r sess _c; do
     [ -n "$sess" ] || continue
     u=$(fleet_uuid "$sess" 2>/dev/null) || u=''
     repos=$(fleet_repos "$sess" 2>/dev/null | tr '\n' ' ')
     if fleet_multirepo "$sess" 2>/dev/null; then m=1; else m=0; fi
     printf '%s\t%s\t%s\t%s\n' "$sess" "$u" "$m" "$repos"
+    bash "$BIN/fleet-control-read.sh" workers "$sess" 2>/dev/null \
+      | while IFS= read -r line; do [ -n "$line" ] && printf '%s\t%s\n' "$sess" "$line"; done >> "$mf"
   done > "$lf" <<EOF
 $(fleet_each_conf)
 EOF
   python3 - "$json" "$lf" "$G" "$FLEET_C" "$FLEET_CONF_DIR/control/hub-workers.tsv" \
     "${FLEET_HUB_SESSIONS_USER:-$(id -un 2>/dev/null)}" "$(hostname 2>/dev/null)" \
-    "${FLEET_NODE_ALIASES:-}" "$(date +%s)" <<'PY'
+    "${FLEET_NODE_ALIASES:-}" "$(date +%s)" "$mf" "$BIN" <<'PY'
 import json, os, re, sys, tempfile
 from datetime import datetime, timezone
-jpath, lpath, gdir, cdir, wpath, user, host, aliases, now = sys.argv[1:10]
+jpath, lpath, gdir, cdir, wpath, user, host, aliases, now, mpath, bindir = sys.argv[1:12]
 try:
     data = json.load(open(jpath, encoding="utf-8"))
     sessions = data["sessions"]
@@ -246,6 +265,28 @@ for line in open(lpath, encoding="utf-8"):
         local.append(dict(sess=p[0], uuid=p[1], multi=p[2] == "1", repos=p[3].split()))
 local_uuids = {f["uuid"] for f in local if f["uuid"]}
 clean = lambda v: re.sub(r"[\t\n\r\x1f]", " ", str(v if v is not None else ""))
+
+# This machine's live windows (issue #1480): (fleet, key) → window id, keyed by
+# the hub's own rule (fleet_hub_common.worker_key, what the node agent reports),
+# so a local row's worker_id maps to the window that holds it right now.
+sys.path.insert(0, bindir)
+try:
+    from fleet_hub_common import worker_key
+except Exception:
+    worker_key = None
+windows = {}
+if worker_key is not None:
+    try:
+        for line in open(mpath, encoding="utf-8"):
+            p = line.rstrip("\n").split("\t")
+            if len(p) < 5 or not re.fullmatch(r"@[0-9]+", p[1]):
+                continue
+            issue = int(p[2]) if p[2].isdigit() and int(p[2]) > 0 else None
+            k = worker_key(issue, p[3] == "1", p[4], p[9] if len(p) > 9 else "")
+            if k:
+                windows[(p[0], k)] = p[1]
+    except OSError:
+        pass
 slug = lambda r: re.sub(r"[^A-Za-z0-9._-]", "", (r or "").replace("/", "-"))
 
 def epoch(iso):
@@ -274,22 +315,40 @@ write(wpath, "".join("%s\t%s\n" % (s["worker_id"], label(s.get("machine_name")))
                      for s in sessions if s.get("worker_id")))
 
 is_local = lambda s: s.get("fleet_id") in local_uuids or short(s.get("machine_name")) == me
+def local_fleet(s):
+    """The fleet HERE a local session belongs to: by UUID, else (a machine with no
+    control database) by hostname + fleet name. None: not attributable — no row."""
+    for f in local:
+        if f["uuid"] and s.get("fleet_id") == f["uuid"]:
+            return f
+    if short(s.get("machine_name")) == me:
+        for f in local:
+            if not f["uuid"] and s.get("fleet_name") == f["sess"]:
+                return f
+    return None
 rows = []
 for s in sessions:
     w = s.get("worker") or {}
     wid = s.get("worker_id")
     if not wid or "/" not in wid:
         continue
-    if is_local(s):
-        continue                                     # this machine: the dash has it live
     if user != "*" and s.get("os_user") != user:
         continue                                     # someone else's login
-    rows.append(dict(wid=wid, node=label(s.get("machine_name")),
-                     av="lost" if s.get("availability") == "lost" else "online",
+    here = None
+    if is_local(s):
+        # this machine (issue #1480): a row of ITS fleet's cache, marked local, with
+        # the window that holds it now; the dash on the default source skips it
+        here = local_fleet(s)
+        if here is None:
+            continue
+    rows.append(dict(wid=wid, node=label(host) if here else label(s.get("machine_name")),
+                     av="online" if here else ("lost" if s.get("availability") == "lost" else "online"),
                      issue=w.get("issue") or "", repo=w.get("repo") or "",
                      state=w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or ""),
                      agent=w.get("agent") or "", name=w.get("name") or w.get("key") or wid.split("/", 1)[1],
-                     owid=w.get("origin_wid") or "", needs=w.get("needs") or "", seen=epoch(s.get("observed_at"))))
+                     owid=w.get("origin_wid") or "", needs=w.get("needs") or "", seen=epoch(s.get("observed_at")),
+                     local=here["sess"] if here else None,
+                     lwid=windows.get((here["sess"], wid.split("/", 1)[1]), "") if here else ""))
 
 # The other machines (issue #1475): the hub's `nodes` list when it has one
 # (availability + its newest observation, every visible machine, sessions or
@@ -305,6 +364,8 @@ for n in (data.get("nodes") or []) if isinstance(data.get("nodes"), list) else [
         cur["av"] = "online"
     cur["seen"] = max(cur["seen"], epoch(n.get("observed_at")))
 for r in rows:
+    if r["local"]:
+        continue                                     # this machine is `#me`, never a #node
     cur = nodes.setdefault(r["node"], dict(av="lost", n=0, seen=0))
     cur["n"] += 1
     if not data.get("nodes"):
@@ -333,6 +394,8 @@ def parent_of(repo, issue):
 for f in local:
     out = list(head)
     for r in rows:
+        if r["local"] and r["local"] != f["sess"]:
+            continue                                 # a local row: its own fleet's cache only
         origin = ""
         ou, _, ok = r["owid"].partition("/")
         if ok:
@@ -340,13 +403,20 @@ for f in local:
         elif r["issue"] and r["repo"] in f["repos"]:
             p = parent_of(r["repo"], r["issue"])
             if p:
-                origin = by_issue.get((r["repo"], p)) or ((slug(r["repo"]) + ":" if f["multi"] else "") + "issue-" + p)
+                # the parent's row, when the hub lists one: a parent in THIS fleet
+                # (a local row since #1480) is its bare key, as a local @origin is
+                pu, _, pk = (by_issue.get((r["repo"], p)) or "").partition("/")
+                if pk:
+                    origin = pk if f["uuid"] and pu == f["uuid"] else pu + "/" + pk
+                else:
+                    origin = (slug(r["repo"]) + ":" if f["multi"] else "") + "issue-" + p
         out.append("\x1f".join(clean(v) for v in ("wid:" + r["wid"], r["node"], r["av"], r["issue"], r["repo"],
-                                               r["state"], r["agent"], r["name"], origin, r["needs"])) + "\n")
+                                               r["state"], r["agent"], r["name"], origin, r["needs"],
+                                               "1" if r["local"] else "0", r["lwid"])) + "\n")
     write(os.path.join(gdir, "remote_" + f["sess"]), "".join(out))
 PY
   local rc=$?
-  rm -f "$json" "$lf"
+  rm -f "$json" "$lf" "$mf"
   return "$rc"
 }
 

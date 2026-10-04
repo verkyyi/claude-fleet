@@ -348,6 +348,16 @@ WLIST=${WLIST//\\037/$US}
 # Off, or no cache: not one extra line, and no file read at all when off.
 #   needs      the window's @claude_needs (cache field 10, #1475), so a remote
 #              row's `!` says which — ask / perm / blocked — like a local one
+# THE LIST FROM THE HUB (issue #1480, EPIC #1479 C1). The cache also carries THIS
+# machine's rows (field 11 `local`=1, field 12 their live window id, #1480). With
+# FLEET_SIDEBAR_SOURCE=hub the sidebar's row SET is the cache's, one source on
+# every machine: a local row renders off its own tmux line — state, needs, glyph,
+# fold, pin, Enter, byte for byte today's row — a local window the hub does not
+# list is not a row (its own sidebar's window excepted, as the fold rule has it),
+# a cached local row whose window is gone is not one either. Only WHICH rows is
+# the hub's. The default, `local`, is today's path: the cache's local rows are
+# skipped and this machine's rows come from tmux. Sidebar only — the hub list
+# keeps its local rows; and with the hub off, or no cache, `hub` is `local`.
 # The cache's header lines (#1475) feed the MACHINE STATUS LINE and the LOST
 # GROUPS: `#me` this machine's label; one `#node` per other machine — label,
 # online|lost, your session count there, the hub's last observation of it. A
@@ -356,10 +366,13 @@ WLIST=${WLIST//\\037/$US}
 # origin is dropped here, and so is the origin of any row whose parent is lost
 # (a child cannot indent under a parent that sorts somewhere else).
 RME=''; RN_IDX=' '; RN_K=0; RCNT=0; LGRP_BASE=1000000
+HUBSRC=0; [ "$SIDEBAR" = 1 ] && [ "${FLEET_SIDEBAR_SOURCE:-local}" = hub ] && HUBSRC=1
 if [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ -n "${FLEET_SESSION:-}" ] && [ -s "$G/remote_$FLEET_SESSION" ]; then
-  RLIST=''; _rn=90000; _rts=0; _rstale=0; _rlostn=' '; _rlostw=' '; _rrows=()
+  RLIST=''; _rn=90000; _rts=0; _rstale=0; _rlostn=' '; _rlostw=' '; _rrows=(); _lwids=' '
   RSTALE=${FLEET_HUB_SESSIONS_STALE:-60}; case "$RSTALE" in ''|*[!0-9]*) RSTALE=60 ;; esac
-  while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs; do
+  # `local` and `wid` (fields 11/12, #1480) are named so a new cache's needs field
+  # stays its own; a cache older than #1480 leaves them empty.
+  while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid; do
     case "$r_wid" in
       '#ts')   _rts=$r_node; case "$_rts" in ''|*[!0-9]*) _rts=0 ;; esac
                [ $(( NOW - _rts )) -gt "$RSTALE" ] && _rstale=1; continue ;;
@@ -375,6 +388,12 @@ if [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ -n "${FLEET_SESSION:-}" ] && [ -s "$G/remo
       wid:*/*) ;;
       *) continue ;;
     esac
+    if [ "$r_local" = 1 ]; then
+      # this machine's own row (#1480): never a wid: line — its tmux line renders
+      # it; on the hub source its window id is what keeps that line on the list
+      [ "$HUBSRC" = 1 ] && [ -n "$r_lwid" ] && _lwids+="$r_lwid "
+      continue
+    fi
     [ "$_rstale" = 1 ] && r_av=lost
     case "$_rlostn" in *" $r_node "*) r_av=lost ;; esac
     if [ "$r_av" = lost ]; then
@@ -396,6 +415,25 @@ if [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ -n "${FLEET_SESSION:-}" ] && [ -s "$G/remo
   done
   unset _rrows _rr
   WLIST="$RLIST$WLIST"
+  if [ "$HUBSRC" = 1 ]; then
+    # the hub source (#1480): of this fleet's own lines keep the windows the cache
+    # names, the panels (they carry @repo_fold) and the sidebar's own window; a
+    # remote line passes, another session's line is pass B's to skip
+    _hl=''
+    while IFS= read -r _ln; do
+      [ -n "$_ln" ] || continue
+      case "$_ln" in "$FLEET_SESSION$US"*) ;; *) _hl+="$_ln"$'\n'; continue ;; esac
+      _rest=${_ln#*$US}; _rest=${_rest#*$US}; _nm=${_rest%%$US*}            # window name
+      _rest=${_rest#*$US}; _rest=${_rest#*$US}; _rest=${_rest#*$US}; _rest=${_rest#*$US}
+      _w=${_rest%%$US*}                                                      # window id
+      case "$_nm" in dash|plan|backlog) _hl+="$_ln"$'\n'; continue ;; esac
+      case "$_w" in wid:*) _hl+="$_ln"$'\n'; continue ;; esac
+      case "$_lwids" in *" $_w "*) _hl+="$_ln"$'\n'; continue ;; esac
+      [ -n "${FLEET_SIDEBAR_CURRENT:-}" ] && [ "$_w" = "$FLEET_SIDEBAR_CURRENT" ] && _hl+="$_ln"$'\n'
+    done <<< "$WLIST"
+    WLIST=$_hl; unset _hl _ln _rest _nm _w
+  fi
+  unset _lwids
 fi
 
 # pass A — KEYTAB: one `<key>\t<rk>\t<idx>\t<pin>\t<exp>\t<rgrp>\t<origin>` line
