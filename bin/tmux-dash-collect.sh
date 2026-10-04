@@ -359,6 +359,9 @@ PHASE_MIN=5     # less headroom than this left in the tick ⇒ don't start a pha
 # the variable position it was moved out of. It runs in the head, budgeted like
 # everything else, and the tick budget still bounds it.
 PHASE_LIST=(guide sessmap issues git ctx usage scrape banner escalate snapshot)
+# hubsess (issue #1423) exists only with the cross-machine hub on (CCQUOTA_FLEET=1):
+# off, the list — and so the heartbeat's phases= line — is exactly what it was.
+[ "${CCQUOTA_FLEET:-0}" = 1 ] && PHASE_LIST+=(hubsess)
 
 # phase_budget NAME — seconds. Each has its own knob so one slow phase can be given
 # room without loosening the others; the tick budget is the backstop over all of them.
@@ -376,6 +379,7 @@ phase_budget() {
     banner)     printf '%s' "${FLEET_COLLECT_BANNER_BUDGET:-30}" ;;
     escalate)   printf '%s' "${FLEET_COLLECT_ESCALATE_BUDGET:-30}" ;;
     snapshot)   printf '%s' "${FLEET_COLLECT_SNAPSHOT_BUDGET:-30}" ;;
+    hubsess)    printf '%s' "${FLEET_COLLECT_HUBSESS_BUDGET:-10}" ;;
     *)          printf '30' ;;
   esac
 }
@@ -1175,6 +1179,14 @@ fi
 ph_snapshot() {
   bash "$BIN/fleet-restore.sh" --snapshot >/dev/null 2>&1 || true
 }
+
+# --- the other machines' sessions (issue #1423) -----------------------------------
+# The dash's remote rows come from global/remote_<sess>, written by
+# fleet-hub-sessions.sh off the hub's fleet_sessions. That wants a 10s cadence and
+# this tick is 60s, so the phase only makes sure a short-lived refresh loop is
+# running (one at a time, ~70s each): no daemon of its own, never on a render path,
+# and in the PHASE_LIST only when CCQUOTA_FLEET=1.
+ph_hubsess() { bash "$BIN/fleet-hub-sessions.sh" --ensure >/dev/null 2>&1 || true; }
 
 # --- run the phases: rotate, budget, truncate (issue #653) -----------------------
 # Start where the last tick was truncated and wrap round, so truncation costs a

@@ -45,15 +45,20 @@ case "$mode" in
     # carry it: two hosted repos can both have an issue-12. EMPTY in a one-repo
     # fleet (its keys stay bare `issue-N`, as always); `?` = a multi-repo window
     # whose repo is unknown or @norepo — the controller never guesses one.
+    # Columns 10-11 (issue #1423): the window name and @origin_wid, for the other
+    # machines' sidebars (a remote row's label, and which parent it nests under).
+    xfmt=$'\t#{window_name}\t#{@origin_wid}'
     if ! fleet_multirepo "$sess"; then
-      tmux -u -L "$sock" list-windows -t "=$sess" -F "$fmt"
+      tmux -u -L "$sock" list-windows -t "=$sess" -F "$fmt$xfmt"
     else
-      rows=$(tmux -u -L "$sock" list-windows -t "=$sess" -F "$fmt#{@repo}") || exit 1
+      rows=$(tmux -u -L "$sock" list-windows -t "=$sess" -F "$fmt#{@repo}$xfmt") || exit 1
       while IFS= read -r row; do
         [ -n "$row" ] || continue
+        ow=${row##*$'\t'}; row=${row%$'\t'*}
+        nm=${row##*$'\t'}; row=${row%$'\t'*}
         r=${row##*$'\t'}; row=${row%$'\t'*}
         [ -n "$r" ] || r=$(fleet_window_repo "$sess" "${row%%$'\t'*}")
-        printf '%s\t%s\n' "$row" "${r:-?}"
+        printf '%s\t%s\t%s\t%s\n' "$row" "${r:-?}" "$nm" "$ow"
       done <<<"$rows"
     fi
     ;;

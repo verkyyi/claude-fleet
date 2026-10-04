@@ -76,6 +76,8 @@ fleet_ui_t() {
     en:needs_other)             printf 'needs' ;;
     zh:repo_none_tag)           printf '⇢无' ;;
     en:repo_none_tag)           printf '⇢none' ;;
+    zh:remote_lost)             printf '失联' ;;
+    en:remote_lost)             printf 'lost' ;;
     zh:pin_heading_fmt)         printf '置顶 (%s)' "${1:-}" ;;
     en:pin_heading_fmt)         printf 'Pinned (%s)' "${1:-}" ;;
     zh:unknown_repo_heading)    printf '? · 未知仓库' ;;

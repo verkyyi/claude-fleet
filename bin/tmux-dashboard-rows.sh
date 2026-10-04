@@ -327,6 +327,38 @@ WLIST=$(tmux list-windows -a -F "$WFMT")
 # newer versions return the byte. Accept both at the serialization boundary.
 WLIST=${WLIST//\\037/$US}
 
+# --- the other machines' sessions (issue #1423, EPIC #1419 C4) -----------------
+# With the cross-machine hub on (CCQUOTA_FLEET=1), fleet-hub-sessions.sh keeps
+# global/remote_<sess> — your sessions on the other machines, refreshed off the
+# render path. Each becomes a WLIST line of the SAME shape as a local window's, so
+# the nesting, folds, counts and sort below take it with no second code path:
+#   window id  `wid:<worker_id>` — no tmux target, so every action that needs a
+#              window (jump, menu, reap, rename, pin, fold) finds none: a remote
+#              row is read-only, and its key (below) is the worker_id itself
+#   index      90001+, after this machine's windows of the same rank
+#   @wid       the machine label the row is tagged with (`m4`), `m4!` once that
+#              machine is lost — or the cache is older than
+#              FLEET_HUB_SESSIONS_STALE (60s): the row stays, reading 失联
+#   @expand    1, so a remote parent never hides its subtree behind a caret no key
+#              can open
+# Off, or no cache: not one extra line, and no file read at all when off.
+if [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ -n "${FLEET_SESSION:-}" ] && [ -s "$G/remote_$FLEET_SESSION" ]; then
+  RLIST=''; _rn=90000; _rts=0
+  RSTALE=${FLEET_HUB_SESSIONS_STALE:-60}; case "$RSTALE" in ''|*[!0-9]*) RSTALE=60 ;; esac
+  while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig; do
+    case "$r_wid" in
+      '#ts') _rts=$r_node; case "$_rts" in ''|*[!0-9]*) _rts=0 ;; esac; continue ;;
+      wid:*/*) ;;
+      *) continue ;;
+    esac
+    [ $(( NOW - _rts )) -gt "$RSTALE" ] && r_av=lost
+    [ "$r_av" = lost ] && r_node="$r_node!"
+    _rn=$((_rn + 1)); _rno=''; [ -n "$r_repo" ] || _rno=1   # no repo = @norepo
+    RLIST+="$FLEET_SESSION$US$_rn$US$r_name$US$US$r_state$US$US$r_wid$US$r_iss$US$r_orig$US$US$r_agent$US${r_node:-?}$US${US}1$US$US$US$US$US$US$r_repo$US$_rno$US$US$US$US"$'\n'
+  done < "$G/remote_$FLEET_SESSION"
+  WLIST="$RLIST$WLIST"
+fi
+
 # pass A — KEYTAB: one `<key>\t<rk>\t<idx>\t<pin>\t<exp>\t<rgrp>\t<origin>` line
 # per addressable window, the parent-resolution table for the spawn-provenance
 # grouping (#503), the pin bit a child inherits from its parent (#623), the
@@ -345,7 +377,7 @@ WLIST=${WLIST//\\037/$US}
 # line of this fleet, taken off the first (panels included: a fleet whose only
 # windows are panels still draws its `(0)` headings, folded or not).
 KEYTAB=''; PRWANT=''; RSLUGS=' '; RFOLD=''; UNFIN=$'\n'
-while IFS=$US read -r sess idx name path state _ _ iss origin wt _ _ nsub exp pin _ _ _ _ wrepo wnorepo _ rfold wloop _; do
+while IFS=$US read -r sess idx name path state _ rwid iss origin wt _ _ nsub exp pin _ _ _ _ wrepo wnorepo _ rfold wloop _; do
   [ -z "$name" ] && continue
   [ -n "${FLEET_SESSION:-}" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
   RFOLD=$rfold
@@ -371,6 +403,7 @@ while IFS=$US read -r sess idx name path state _ _ iss origin wt _ _ nsub exp pi
   esac
   okp_v "$wrepo" "$wnorepo"
   okey_v "$iss" "$wt" "$path"
+  case "$rwid" in wid:*) okey=${rwid#wid:} ;; esac   # a remote row: its worker_id (#1423)
   [ -z "$okey" ] && continue
   state_v "$state" "$nsub"; pin_v "$pin"; exp_v "$exp"
   KEYTAB+="$okey"$'\t'"$rk"$'\t'"$idx"$'\t'"$pin"$'\t'"$exp"$'\t'"$rgrp"$'\t'"$origin"$'\n'
@@ -479,7 +512,7 @@ chain_v() { croot=''; crootpin=0; cpnlvl=''; ANC=0
     [ "${AP[ANC]}" = 1 ] && [ -z "$cpnlvl" ] && cpnlvl=$ANC
     ANC=$((ANC+1))
     case "$porig" in
-      issue-*|scratch-*|*:issue-*|*:scratch-*) cur=$porig ;;   # a child too — keep climbing
+      issue-*|scratch-*|*:issue-*|*:scratch-*|*/issue-*|*/scratch-*) cur=$porig ;;   # a child too — keep climbing
       *) croot=$cur; crootpin=${AP[ANC-1]}
          return ;;                                            # hub/autofill/none: the root
     esac
@@ -498,7 +531,7 @@ chain_v() { croot=''; crootpin=0; cpnlvl=''; ANC=0
 # separator newline would count `\nA\t1\n` twice in a row as ONE.
 KIDTAB=''
 while IFS=$'\t' read -r kkey krk _ _ _ _ korig; do
-  case "$korig" in issue-*|scratch-*|*:issue-*|*:scratch-*) ;; *) continue ;; esac
+  case "$korig" in issue-*|scratch-*|*:issue-*|*:scratch-*|*/issue-*|*/scratch-*) ;; *) continue ;; esac
   # quiet-but-unfinished (#1331): `1L` still counts toward the total, never the k
   case "$UNFIN" in *$'\n'"$kkey"$'\n'*) krk=1L ;; esac
   chain_v "$korig"
@@ -694,8 +727,18 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # the worktree dir and still renders in the `↳~76` provenance tag.
   okp_v "$wrepo" "$wnorepo"
   okey_v "$iss" "$wt" "$path"
+  # A remote row (issue #1423) is keyed by its worker_id and tagged with its
+  # machine — `[m4]`, `[m4 失联]` when that machine is lost or the cache stale.
+  rtag=''
+  case "$wid" in wid:*)
+    okey=${wid#wid:}
+    case "$hnd" in
+      *!) [ -n "${RT_lost-}" ] || RT_lost=$(fleet_ui_t remote_lost); rtag="[${hnd%!} $RT_lost]" ;;
+      *)  rtag="[$hnd]" ;;
+    esac ;;
+  esac
   issd=''; icol=$GN
-  case "$okey" in issue-*|*:issue-*) issd="#${okey##*issue-}" ;; esac
+  case "$okey" in issue-*|*:issue-*|*/issue-*) issd="#${okey##*issue-}" ;; esac
   # --- spawn provenance (issue #503) -----------------------------------------
   # The hierarchy is said by POSITION alone (issue #1328): a child sorts right
   # under its real parent and indents one level per generation. The old `↳#483` /
@@ -738,7 +781,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   if [ "$pin" = 1 ]; then pinned=0
   else
     case "$origin" in
-      issue-*|scratch-*|*:issue-*|*:scratch-*)
+      issue-*|scratch-*|*:issue-*|*:scratch-*|*/issue-*|*/scratch-*)   # `/`: a remote worker_id (#1423)
         chain_v "$origin"
         top=$ANC                               # levels kept above this row
         if [ "$crootpin" = 1 ]; then pinned=0
@@ -825,7 +868,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
       [ -n "${TL_parent-}" ] || TL_parent=$(fleet_ui_t title_parent)
       tinfo="${tinfo:+$tinfo · }$TL_parent $_po" ;;
   esac
-  if [ "$tinfo" != "$wtitle" ]; then
+  if [ "$tinfo" != "$wtitle" ] && [ -z "$rtag" ]; then
     if [ -n "$tinfo" ]; then tmux set-option -wq -t "$wid" @title_info "$tinfo" 2>/dev/null
     else tmux set-option -wqu -t "$wid" @title_info 2>/dev/null; fi
   fi
@@ -901,6 +944,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     [ "$_hid" = 1 ] && continue
   fi
   tagd="$repod"
+  [ -n "$rtag" ] && tagd="${tagd:+$tagd }$rtag"
   [ -n "$agentd" ] && tagd="${tagd:+$tagd }$agentd"
   # repo badge (issue #793): DROPPED under `all` (issue #995) — the only frame
   # that ever drew it is the grouped one (#974), where the heading above already
@@ -952,6 +996,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     else treed=$carg; fi
     label="$dname"
     [ -n "$repod" ] && label="$label $repod"       # cross-repo child (#1031)
+    [ -n "$rtag" ] && label="$label $rtag"         # another machine's session (#1423)
     [ -n "$zwait" ] && label="$label · ${zwait#z · }"
     [ "$depth" -gt "$DEPTH_MAX" ] && depth=$DEPTH_MAX
     # WHY a ↻ row is idle-but-unfinished (issue #1370): the needs field carries
@@ -1004,6 +1049,8 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   #  takes the width-aware path above.)
   tagpfx=''; dwidth=0
   [ -n "$tagd" ] && { tagpfx="${IN}${tagd}${R}"; dwidth=${#tagd}; }
+  # 失联 is two wide cells a ${#} counts once each (issue #1423)
+  [ -n "$rtag" ] && { _a=${rtag//[![:ascii:]]/}; dwidth=$(( dwidth + ${#rtag} - ${#_a} )); }
   [ -n "$kidd" ] && { [ -n "$tagpfx" ] && { tagpfx+=' '; dwidth=$((dwidth+1)); }
                       tagpfx+="${GY}${kidd}${R}"; dwidth=$(( dwidth + ${#kidd} )); }
   # An automatic wake held at the session limit (issue #1058) says so here.
