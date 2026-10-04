@@ -199,10 +199,14 @@ elif _fleet_hosts_many "$sess"; then
   CKEY="$(fleet_slug "$(fleet_norm_repo "$REPO_ARG")"):issue-$NUM"
 fi
 
-# `wid|@origin` of #N's live window on this fleet, or nothing.
+# `wid|@origin` of #N's live window on this fleet, or nothing — through the ONE
+# resolver (fleet_win_for_key, issue #1537): CKEY carries the repo in a 2+ repo
+# fleet, so another repo's #N is never taken for ours; two windows answering to
+# the key, or a warm-pool window, resolve to nothing rather than to a pick.
 child_win() {
-  TM list-windows -t "$sess" -F '#{@issue}|#{window_id}|#{@origin}' 2>/dev/null \
-    | awk -F'|' -v n="$NUM" '$1==n { print $2 "|" $3; exit }'
+  local w
+  w=$(fleet_win_for_key "$CKEY" "$SOCK" 2>/dev/null) && [ -n "$w" ] || return 0
+  printf '%s|%s' "$w" "$(TM display-message -p -t "$w" '#{@origin}' 2>/dev/null)"
 }
 
 # One ledger read → `live|state|needs|seq|STATE|pr|verdict|tier|title|summary` for
@@ -397,7 +401,7 @@ if [ -n "${REMOTE:-}" ]; then
     "$NUM" "$RNODE" "$(fmt_age "$TIMEOUT")" >&2
   LFILE=$(children_file "$LEDGER" "$sess" 2>/dev/null)
   TICK="${FLEET_AWAIT_TICK:-1}"; case "$TICK" in ''|*[!0-9]*|0) TICK=1 ;; esac
-  lsize() { [ -n "$LFILE" ] && wc -c < "$LFILE" 2>/dev/null | tr -d ' '; }
+  lsize() { [ -n "$LFILE" ] && [ -f "$LFILE" ] && wc -c < "$LFILE" 2>/dev/null | tr -d ' '; }
   gone_polls=0
   while :; do
     left=$((TIMEOUT - SECONDS))
@@ -473,7 +477,7 @@ fi
 # list-windows + the ladder) still runs only once per --interval or per change.
 LFILE=$(children_file "$LEDGER" "$sess" 2>/dev/null)
 TICK="${FLEET_AWAIT_TICK:-1}"; case "$TICK" in ''|*[!0-9]*|0) TICK=1 ;; esac
-lsize() { [ -n "$LFILE" ] && wc -c < "$LFILE" 2>/dev/null | tr -d ' '; }
+lsize() { [ -n "$LFILE" ] && [ -f "$LFILE" ] && wc -c < "$LFILE" 2>/dev/null | tr -d ' '; }
 pause() {
   local n=$1 s0 t
   s0=$(lsize)

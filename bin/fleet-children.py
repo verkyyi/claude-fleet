@@ -214,7 +214,7 @@ def read_windows(stream):
             continue
         wid, state, needs, key, origin, name = parts
         if not key or key in wins:
-            continue                    # first match wins, as fleet_win_for_key
+            continue                    # a display grouping; ADDRESSING is fleet_win_for_key's (#1537)
         wins[key] = dict(wid=wid, state=state, needs=needs, origin=origin, name=name)
         # A child on another machine (issue #1421) rides as `<node>|remote|…`:
         # its window id is that machine's name, and it is never a local window.

@@ -133,7 +133,7 @@ fi
 resolve_issue() {
   local at wt cwd n
   [ -n "$issue_arg" ] && { printf '%s' "$issue_arg"; return 0; }
-  at=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{@issue}' 2>/dev/null); at="${at//[^0-9]/}"
+  at=$(fleet_pane_fmt '#{@issue}'); at="${at//[^0-9]/}"     # this pane only (issue #1537)
   [ -n "$at" ] && { printf '%s' "$at"; return 0; }
   cwd=$(pwd -P 2>/dev/null || pwd); wt=''
   case "$cwd" in

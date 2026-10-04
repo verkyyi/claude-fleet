@@ -5,8 +5,10 @@
 # operator-authorising instructions to the WRONG worker. Pins, on an isolated tmux
 # server with fake Claude processes and one real inbox socket per window:
 #   • issue:<N> / #<N> / issue-<N> reach the window bound to #N AFTER a renumber;
-#   • scratch-<N> reaches the @raw window by name / by its -scratch-<N> worktree;
-#   • a stale `<sess>:<idx>` with --expect-issue refuses (exit 1, nothing sent);
+#   • scratch-<N> reaches the @raw window by its -scratch-<N> worktree;
+#   • a `<sess>:<idx>` position and a bare window NAME refuse (exit 2, nothing
+#     sent; issue #1537 — the resolver is fleet_win_for_key, and --expect-issue
+#     pins an @id / %pane target, it does not make a position acceptable);
 #   • zero matches / several matches refuse; --repo disambiguates;
 #   • EVERY path prints exactly one outcome line — `sent → …` on stdout for a
 #     success (incl. the wake-delivery path, which used to print nothing),
@@ -128,22 +130,30 @@ one_line "#12"
 send -L "$L" issue-11 "m-dash"
 ok; [ "$rc" = 0 ] && landed "$wA" m-dash || fail "issue-11 → A" "$out $err"
 
-# --- 2. scratch by its -scratch-<N> worktree (window renamed) and by name -------
+# --- 2. scratch by its -scratch-<N> worktree (window renamed); a NAME refuses ----
 send -L "$L" scratch-5 "m-scratch"
 ok; [ "$rc" = 0 ] && landed "$wC" m-scratch || fail "scratch-5 → the @raw window in *-scratch-5" "$out $err"
 one_line "scratch-5"
 send -L "$L" sc-renamed "m-byname"
-ok; [ "$rc" = 0 ] && landed "$wC" m-byname || fail "exact window name → that window" "$out $err"
+ok; [ "$rc" = 2 ] && [ -z "$out" ] || fail "a window NAME is not an address → exit 2 (issue #1537)" "rc=$rc $out $err"
+ok; sleep 0.3; grep -q m-byname "$WORK/got" && fail "a refused name must deliver NOTHING" "$(cat "$WORK/got")"
+one_line "name refusal"
 
-# --- 3. positional + --expect-issue: stale index refuses, nothing sent ----------
-send -L "$L" --expect-issue 11 "$staleA" "m-stale"
-ok; [ "$rc" = 1 ] || fail "stale sess:idx with --expect-issue 11 → exit 1" "rc=$rc $out"
+# --- 3. a position refuses (issue #1537); --expect-issue pins an @id -------------
+send -L "$L" "$staleA" "m-stale"
+ok; [ "$rc" = 2 ] || fail "a <sess>:<idx> position → exit 2" "rc=$rc $out"
 ok; [ -z "$out" ] || fail "a refusal prints nothing on stdout" "$out"
 ok; sleep 0.3; grep -q m-stale "$WORK/got" && fail "a refused send must deliver NOTHING" "$(cat "$WORK/got")"
-ok; case "$err" in *refused*issue-12*) ;; *) fail "refusal names the window actually there" "$err" ;; esac
+ok; case "$err" in *position*) ;; *) fail "refusal says it is a position" "$err" ;; esac
+one_line "position refusal"
+send -L "$L" --expect-issue 12 "$staleA" "m-pinned-pos"
+ok; [ "$rc" = 2 ] || fail "--expect-issue does not make a position acceptable" "rc=$rc $out $err"
+send -L "$L" --expect-issue 11 "$wB" "m-wrong-pin"
+ok; [ "$rc" = 1 ] && case "$err" in *refused*issue-12*) true ;; *) false ;; esac \
+  || fail "@id with the wrong --expect-issue → refused, names the window there" "rc=$rc $err"
 one_line "--expect-issue refusal"
-send -L "$L" --expect-issue 12 "$staleA" "m-pinned"
-ok; [ "$rc" = 0 ] && landed "$wB" m-pinned || fail "matching --expect-issue → sends" "$out $err"
+send -L "$L" --expect-issue 12 "$wB" "m-pinned"
+ok; [ "$rc" = 0 ] && landed "$wB" m-pinned || fail "@id with a matching --expect-issue → sends" "$out $err"
 
 # --- 4. zero / ambiguous / --repo --------------------------------------------------
 send -L "$L" issue:99 "m-none"

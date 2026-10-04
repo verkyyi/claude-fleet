@@ -72,6 +72,12 @@ done
 # so a title/path with a space or metachar survives both the popup and the
 # inline fallback intact.
 cmd=$(printf '%q ' "$@")
+# tmux gives a popup $TMUX but NO $TMUX_PANE. Every pane-identity read in the
+# fleet (fleet_pane_fmt: fleet-comment.sh's sender, fleet_seat, …) refuses
+# rather than fall back to "the current pane" (issue #1537 ④), so the popup
+# inherits THIS pane's id — the dash pane the popup was opened from, which is the
+# identity its command is acting as.
+[ -n "${TMUX_PANE:-}" ] && cmd="TMUX_PANE=$(printf '%q' "$TMUX_PANE") $cmd"
 
 # NB the ${geom[@]+…} guard: macOS ships bash 3.2, where `set -u` treats an EMPTY
 # array's "${geom[@]}" as an unbound variable and aborts. Both call sites pass -w/-h,

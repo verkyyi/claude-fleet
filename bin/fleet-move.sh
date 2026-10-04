@@ -226,7 +226,10 @@ move_main() {
   TM() { tmux -L "$SOCK" "$@"; }
   SK() { FLEET_ALLOW_SENDKEYS=1 tmux -L "$SOCK" send-keys "$@"; }
 
-  _norm=(); for _w in ${WIDS[@]+"${WIDS[@]}"}; do _norm+=("$(fleet_wid_target "$_w" "$SOCK")"); done
+  _norm=(); for _w in ${WIDS[@]+"${WIDS[@]}"}; do
+    _w=$(fleet_wid_target "$_w" "$SOCK") && [ -n "$_w" ] || die 'no live window carries that handle'
+    _norm+=("$_w")
+  done
   WIDS=(${_norm[@]+"${_norm[@]}"})
 
   # One cheap probe up front: the target's $HOME (so REMOTE_BIN is a concrete

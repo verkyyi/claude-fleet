@@ -85,12 +85,14 @@ fail() { printf 'selftest FAIL: %s\n' "$1" >&2
 # the caller: RUNDIR (cwd), FAKE_ISSUE/FAKE_SESSION, FLEET_HUB. The
 # vars are explicitly forwarded (a prefix assignment to a function is NOT exported
 # to its grandchild bash). BODYFILE goes into the env so the fake gh can find it.
+# TMUX_PANE is a fake pane id: the sender's binding is read from ITS pane only
+# (fleet_pane_fmt, issue #1537), never from "the current pane".
 fc() {
   : > "$BODYFILE"; : > "$CLOSEFILE"
   ( cd "${RUNDIR:-$WORK}" 2>/dev/null || exit 3
     PATH="$FAKEPATH:$PATH" \
     FLEET_REPO="test/repo" \
-    TMUX_PANE="" \
+    TMUX_PANE="${FAKE_PANE-%0}" \
     BODYFILE="$BODYFILE" \
     CLOSEFILE="$CLOSEFILE" \
     FAKE_ISSUE="${FAKE_ISSUE:-}" \

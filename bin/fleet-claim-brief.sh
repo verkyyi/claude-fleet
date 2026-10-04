@@ -86,12 +86,12 @@ main="${FLEET_MAIN:-}"
 
 # @issue is the source of truth; the issue-<N> worktree in cwd is the fallback for
 # a window that lost its binding (hand-attached / renamed), mirroring fleet_seat.
-at_issue=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{@issue}' 2>/dev/null)
+at_issue=$(fleet_pane_fmt '#{@issue}')     # this pane only, never `-t ""` (issue #1537)
 at_issue="${at_issue//[^0-9]/}"
 # Spawn provenance (issue #574): the SAME @origin the dash already renders as `↳#483`,
 # read here so the worker knows it has a parent to report back to at ship time. One
 # tmux read, zero gh cost; empty ≡ the operator spawned it from the hub.
-at_origin=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{@origin}' 2>/dev/null)
+at_origin=$(fleet_pane_fmt '#{@origin}')
 # `:` stays: it is the repo-qualified key's separator (`<slug>:issue-<N>`, issue
 # #789). Stripped, that key read as `<slug>issue-<N>` — which no branch below knows,
 # so a monorepo child was told nobody was waiting on it (issue #1511).
