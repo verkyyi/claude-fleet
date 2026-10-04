@@ -1,11 +1,19 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"html"
+	"io"
 	"net/http"
+	"net/url"
+	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/authz"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
@@ -297,5 +305,189 @@ func TestFleetNoMapIsTheOldBehaviour(t *testing.T) {
 	_, op := expectAccountOp(t, admin.tnode)
 	if op.Op != control.AccountCreate || op.Login != "zhangsan" || op.FullName != "张三" {
 		t.Fatalf("op = %+v", op)
+	}
+}
+
+// uidCookie is a session cookie the way /enter mints one (claude-fleet#1458):
+// the role subject plus the WeCom userid and display name — a browser that
+// signed in earlier and will not pass /enter again.
+func uidCookie(uid, name string) *http.Cookie {
+	return &http.Cookie{Name: authz.CookieName, Value: authz.SignPerson(staffSub, uid, name, ssoSessionKey, time.Now(), time.Hour)}
+}
+
+// asUID makes a request on such a cookie.
+func asUID(t *testing.T, h *harness, method, path, uid, name string, body []byte) (int, []byte) {
+	t.Helper()
+	r, _ := http.NewRequest(method, h.http.URL+path, bytes.NewReader(body))
+	r.AddCookie(uidCookie(uid, name))
+	resp, err := http.DefaultClient.Do(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, b
+}
+
+// The first half of claude-fleet#1472: the directory spells the userid
+// `YiLiangHui`, the ticket carries it so, and the operator typed the map as
+// `yilianghui`. WeCom userids are case-insensitive, so that is one person:
+// the sign-in is placed by the lowercase map, the row keeps the directory's
+// spelling, every lookup by any spelling finds it, a node joining later is
+// adopted at its hello, and the operator's `adopt` by another spelling is the
+// same person — never a second row.
+func TestFleetMapMatchesTheUseridCaseInsensitively(t *testing.T) {
+	h := newFleetHarness(t)
+	enableSSO(h)
+	h.srv.FleetAdmins = []string{"verkyyi"}
+	h.srv.FleetPrincipalLogins = map[string]string{"yilianghui": "verkyyi", "caojian": "24haowan"}
+	connectNode(t, h, "m5-op", "macmini", "verkyyi", true)
+	connectNode(t, h, "m5-24h", "macmini", "24haowan", false)
+	waitFor(t, 3*time.Second, "two nodes", func() bool { return len(roster(t, h).Nodes) == 2 })
+
+	resp := h.raw(t, "/enter?ticket="+mintTicketFor(t, "ccquota", staffSub, "YiLiangHui", "易良辉", time.Now().Add(time.Minute).Unix()), nil)
+	me := meFor(t, h, resp)
+	if !me.Signed || me.Person != "YiLiangHui" || me.Principal == nil || me.Principal.ID != "YiLiangHui" ||
+		me.Principal.Login != "verkyyi" || me.Principal.DisplayName != "易良辉" {
+		t.Fatalf("/v1/fleet/me = %+v", me)
+	}
+	if len(me.Accounts) != 1 || me.Accounts[0].Hostname != "macmini" || me.Accounts[0].State != store.AccountActive || me.Accounts[0].Op != "adopt" {
+		t.Fatalf("accounts = %+v, want verkyyi adopted on macmini", me.Accounts)
+	}
+	// Any spelling reads the row; the row keeps its own.
+	for _, id := range []string{"yilianghui", "YILIANGHUI", "YiLiangHui"} {
+		p, err := h.srv.Store.Principal(id)
+		if err != nil || p.ID != "YiLiangHui" || p.Login != "verkyyi" {
+			t.Fatalf("Principal(%q) = %+v, %v", id, p, err)
+		}
+		if as, _ := h.srv.Store.FleetAccounts(id); len(as) != 1 || as[0].PrincipalID != "YiLiangHui" {
+			t.Fatalf("FleetAccounts(%q) = %+v", id, as)
+		}
+	}
+	// A machine joining after the sign-in: adopted at its hello, the map
+	// key lowercase and the row not.
+	connectNode(t, h, "m4-op", "mini2", "verkyyi", true)
+	waitState(t, h, "YiLiangHui", "mini2", store.AccountActive)
+
+	// The operator's adopt by the spelling they are used to is this person.
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: "yilianghui", Hostname: "mini3", Login: "verkyyi"}); code != 200 {
+		t.Fatalf("adopt by another spelling: HTTP %d", code)
+	}
+	if a := accountState(t, h, "YiLiangHui", "mini3"); a.State != store.AccountActive || a.PrincipalID != "YiLiangHui" {
+		t.Fatalf("adopted row = %+v", a)
+	}
+	if ps, _ := h.srv.Store.Principals(); len(ps) != 1 {
+		t.Fatalf("one person became %+v", ps)
+	}
+	// ...and so are remove and forget by it: the row on mini3 was adopted,
+	// so forget refuses it (409) rather than failing to find it (400).
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "forget", PrincipalID: "YILIANGHUI", Hostname: "mini3"}); code != http.StatusConflict {
+		t.Fatalf("forget of an adopted row by another spelling: HTTP %d, want 409", code)
+	}
+	// A second mapped person, spelled the directory's way, is their own row
+	// with their own login — the fold never merges two people.
+	enterAs(t, h, "CaoJian", "曹健")
+	if p, err := h.srv.Store.Principal("caojian"); err != nil || p.ID != "CaoJian" || p.Login != "24haowan" {
+		t.Fatalf("CaoJian → %+v %v", p, err)
+	}
+	if ps, _ := h.srv.Store.Principals(); len(ps) != 2 {
+		t.Fatalf("principals = %+v", ps)
+	}
+}
+
+// The second half of claude-fleet#1472: only /enter ran the placement, so a
+// browser that signed in BEFORE the operator mapped them — its cookie good
+// for eight hours — reached the `fleet login` confirmation, 连接 and the
+// certificate with no row and was told "no active login on any machine yet".
+// Each of those doors now places the person first; an unmapped person is
+// still recorded nowhere by any of them.
+func TestFleetCookieHolderIsPlacedAtTheDoorsThatNeedIt(t *testing.T) {
+	h, _ := certHarness(t)
+	h.srv.FleetAdmins = []string{"verkyyi"}
+	h.srv.FleetPrincipalLogins = map[string]string{"yilianghui": "verkyyi", "caojian": "24haowan", "huangyongsheng": "vincent"}
+	connectNode(t, h, "m5-op", "macmini", "verkyyi", true)
+	connectNode(t, h, "m5-24h", "macmini", "24haowan", false)
+	connectNode(t, h, "m5-v", "macmini", "vincent", false)
+	waitFor(t, 3*time.Second, "three nodes", func() bool { return len(roster(t, h).Nodes) == 3 })
+	for _, uid := range []string{"YiLiangHui", "CaoJian", "HuangYongSheng"} {
+		if _, err := h.srv.Store.Principal(uid); !errors.Is(err, store.ErrNoPrincipal) {
+			t.Fatalf("%s has a row before any door: %v", uid, err)
+		}
+	}
+
+	// /fleet/login — the QR's page, opened by a browser already signed in.
+	_, body := postJSON(t, h, "/v1/fleet/login/start", map[string]string{"public_key": newUserKey(t)})
+	var st DeviceStart
+	json.Unmarshal(body, &st)
+	pc, raw := asUID(t, h, http.MethodGet, "/fleet/login?code="+st.UserCode, "YiLiangHui", "易良辉", nil)
+	page := html.UnescapeString(string(raw))
+	if pc != 200 || strings.Contains(page, "还不能签发") || !strings.Contains(page, "确认签发") || !strings.Contains(page, "verkyyi") {
+		t.Fatalf("confirm page %d:\n%s", pc, page)
+	}
+	p, err := h.srv.Store.Principal("YiLiangHui")
+	if err != nil || p.Login != "verkyyi" || p.DisplayName != "易良辉" {
+		t.Fatalf("the page did not place them: %+v %v", p, err)
+	}
+	if a := accountState(t, h, "YiLiangHui", "macmini"); a.State != store.AccountActive || a.Op != "adopt" {
+		t.Fatalf("verkyyi on macmini = %+v", a)
+	}
+	pc, done := cookieForm(t, h, uidCookie("YiLiangHui", "易良辉"), h.http.URL, url.Values{"code": {st.UserCode}, "action": {"approve"}})
+	if pc != 200 || !strings.Contains(done, "已签发") {
+		t.Fatalf("approve %d:\n%s", pc, done)
+	}
+	code, body := postJSON(t, h, "/v1/fleet/login/poll", map[string]string{"device_code": st.DeviceCode})
+	var cr CertResponse
+	json.Unmarshal(body, &cr)
+	if code != 200 || strings.Join(cr.Principals, ",") != "verkyyi" || parseCert(t, cr.Certificate).KeyId != "wecom:YiLiangHui" {
+		t.Fatalf("poll: %d %s", code, body)
+	}
+
+	// /connect and its data.
+	h.srv.UI = fstest.MapFS{"connect.html": &fstest.MapFile{Data: []byte("<!doctype html><title>连接</title>")}}
+	if code, b := asUID(t, h, http.MethodGet, "/connect", "CaoJian", "曹健", nil); code != 200 || !strings.Contains(string(b), "连接") {
+		t.Fatalf("/connect: %d %s", code, b)
+	}
+	if p, err := h.srv.Store.Principal("CaoJian"); err != nil || p.Login != "24haowan" || p.DisplayName != "曹健" {
+		t.Fatalf("/connect did not place them: %+v %v", p, err)
+	}
+	code, body = asUID(t, h, http.MethodGet, "/v1/fleet/connect", "CaoJian", "", nil)
+	var ci ConnectInfo
+	json.Unmarshal(body, &ci)
+	if code != 200 || !ci.Signed || ci.Login != "24haowan" || ci.Problem != "" || len(ci.Machines) != 1 || ci.Machines[0].Hostname != "macmini" {
+		t.Fatalf("connect info %d %+v", code, ci)
+	}
+
+	// The paste-a-key door.
+	req, _ := json.Marshal(map[string]string{"public_key": newUserKey(t)})
+	code, body = asUID(t, h, http.MethodPost, "/v1/fleet/cert", "HuangYongSheng", "黄永胜", req)
+	cr = CertResponse{}
+	json.Unmarshal(body, &cr)
+	if code != 200 || strings.Join(cr.Principals, ",") != "vincent" {
+		t.Fatalf("/v1/fleet/cert: %d %s", code, body)
+	}
+
+	// An unmapped person knocks on every door and is placed by none.
+	_, body = postJSON(t, h, "/v1/fleet/login/start", map[string]string{"public_key": newUserKey(t)})
+	json.Unmarshal(body, &st)
+	if _, raw := asUID(t, h, http.MethodGet, "/fleet/login?code="+st.UserCode, "zhangsan", "张三", nil); !strings.Contains(string(raw), "还不能签发") {
+		t.Fatalf("zhangsan's confirm page:\n%s", raw)
+	}
+	if code, _ := asUID(t, h, http.MethodGet, "/connect", "zhangsan", "张三", nil); code != 200 {
+		t.Fatalf("zhangsan /connect: %d", code)
+	}
+	code, body = asUID(t, h, http.MethodGet, "/v1/fleet/connect", "zhangsan", "张三", nil)
+	ci = ConnectInfo{}
+	json.Unmarshal(body, &ci)
+	if code != 200 || ci.Login != "" || ci.Problem == "" || len(ci.Machines) != 0 {
+		t.Fatalf("zhangsan's connect info %d %+v", code, ci)
+	}
+	if code, _ := asUID(t, h, http.MethodPost, "/v1/fleet/cert", "zhangsan", "张三", req); code != http.StatusConflict {
+		t.Fatalf("zhangsan /v1/fleet/cert: %d, want 409", code)
+	}
+	if _, err := h.srv.Store.Principal("zhangsan"); !errors.Is(err, store.ErrNoPrincipal) {
+		t.Fatalf("an unmapped person was placed: %v", err)
+	}
+	if ps, _ := h.srv.Store.Principals(); len(ps) != 4 { // Alice from the harness + three mapped people
+		t.Fatalf("principals = %+v", ps)
 	}
 }

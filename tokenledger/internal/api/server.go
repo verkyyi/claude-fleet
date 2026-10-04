@@ -117,7 +117,9 @@ type Server struct {
 	// login and the login is ADOPTED on every roster machine whose agent
 	// runs as it — nothing is ever created. A person not in the map gets no
 	// row and no op (unless FleetAutoAssign says otherwise). Empty means the
-	// map is not in use.
+	// map is not in use. Keys are matched to the userid case-insensitively
+	// (mappedLoginFor, claude-fleet#1472): WeCom's are, and `YiLiangHui` in
+	// the directory is `yilianghui` as the operator typed it.
 	FleetPrincipalLogins map[string]string
 
 	// FleetPersonScopes is the grant a person signed in through WeCom holds

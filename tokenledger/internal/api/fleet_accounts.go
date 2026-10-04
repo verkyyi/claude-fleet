@@ -112,7 +112,7 @@ func (s *Server) onPrincipalSignIn(principal, displayName string) {
 		return
 	}
 	now := time.Now()
-	if login, ok := s.FleetPrincipalLogins[principal]; ok {
+	if login, ok := s.mappedLoginFor(principal); ok {
 		if _, err := s.Store.AdoptPrincipal(principal, login, displayName, now); err != nil {
 			// The usual cause: a row minted for this person before the map
 			// named them. The operator `forget`s it; nothing is guessed.
@@ -147,6 +147,45 @@ func (s *Server) onPrincipalSignIn(principal, displayName string) {
 	}
 }
 
+// ensurePerson is onPrincipalSignIn for a request that arrived on a session
+// cookie minted earlier (claude-fleet#1472). /enter runs the placement once,
+// at the ticket exchange — but the cookie lives eight hours, and a person
+// whose row was not there at that moment (the operator mapped them after
+// they had signed in; their first visit predates the map) reached
+// /fleet/login, /connect and the certificate with no principal and was told
+// to ask the operator. So the doors that need the row run the same placement
+// first. It is idempotent (an adopted row is left alone, an existing login is
+// never renamed), a failure is logged and never in the way, and for the
+// operator's doors — no person — it does nothing. Returns the principal.
+func (s *Server) ensurePerson(r *http.Request) string {
+	pid := principalOf(r.Context())
+	if pid == "" {
+		return ""
+	}
+	var name string
+	if sess := sessionOf(r.Context()); sess != nil {
+		name = sess.Name // the ticket's `nam`, kept on the request by the gate
+	}
+	s.onPrincipalSignIn(pid, name)
+	return pid
+}
+
+// mappedLoginFor is the login FleetPrincipalLogins names for principal.
+//
+// The comparison folds case (claude-fleet#1472): a WeCom userid is
+// case-insensitive — the directory lists `YiLiangHui`, the ticket carries it
+// so, and the operator types the map by hand, as `yilianghui` the first time
+// — so the two spellings are one person here, whichever way the map and the
+// ticket happen to disagree. The map is a handful of entries; a scan is fine.
+func (s *Server) mappedLoginFor(principal string) (string, bool) {
+	for pid, login := range s.FleetPrincipalLogins {
+		if strings.EqualFold(pid, principal) {
+			return login, true
+		}
+	}
+	return "", false
+}
+
 // mappedLogin reports whether login is anyone's in FleetPrincipalLogins.
 func (s *Server) mappedLogin(login string) bool {
 	if login == "" {
@@ -168,6 +207,11 @@ func (s *Server) mappedLogin(login string) bool {
 // node hello (a machine that joins after the person signed in), so the two
 // orders converge on the same rows. A row whose op is in flight, or that is
 // already active, is left alone.
+//
+// It walks the people the hub knows and asks the map about each — not the
+// other way round — so the row keeps the directory's spelling of the userid
+// and the map may spell it any way (claude-fleet#1472). A mapped person with
+// no row yet has not signed in; nothing to adopt for them until they do.
 func (s *Server) adoptMappedLogins(now time.Time) {
 	if !s.Fleet || len(s.FleetPrincipalLogins) == 0 {
 		return
@@ -177,13 +221,16 @@ func (s *Server) adoptMappedLogins(now time.Time) {
 		log.Printf("fleet: adopt mapped logins: roster: %v", err)
 		return
 	}
-	for pid, login := range s.FleetPrincipalLogins {
-		p, err := s.Store.Principal(pid)
-		if err != nil {
-			continue // not signed in yet, or a row the operator must sort out
-		}
-		if p.Login != login {
-			continue // a pre-map row; sign-in already logged it
+	people, err := s.Store.Principals()
+	if err != nil {
+		log.Printf("fleet: adopt mapped logins: principals: %v", err)
+		return
+	}
+	for i := range people {
+		p := &people[i]
+		login, ok := s.mappedLoginFor(p.ID)
+		if !ok || p.Login != login {
+			continue // not mapped, or a pre-map row; sign-in already logged it
 		}
 		seen := map[string]bool{}
 		for _, n := range nodes {
@@ -193,9 +240,9 @@ func (s *Server) adoptMappedLogins(now time.Time) {
 			seen[n.Hostname] = true
 			adopted, err := s.Store.AdoptAccountIfOpen(p, n.Hostname, now)
 			if err != nil {
-				log.Printf("fleet: adopt %s on %s for %s: %v", login, n.Hostname, pid, err)
+				log.Printf("fleet: adopt %s on %s for %s: %v", login, n.Hostname, p.ID, err)
 			} else if adopted {
-				log.Printf("fleet: adopted login %s on %s for %s (agent runs as it)", login, n.Hostname, pid)
+				log.Printf("fleet: adopted login %s on %s for %s (agent runs as it)", login, n.Hostname, p.ID)
 			}
 		}
 	}

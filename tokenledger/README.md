@@ -672,7 +672,7 @@ before the hub has a row for them), `principal` (the row, or null) and
 `accounts`.
 
 **Whose login is whose — the explicit map.**
-`CCQUOTA_FLEET_PRINCIPAL_LOGINS=caojian=24haowan,yilianghui=verkyyi` names the
+`CCQUOTA_FLEET_PRINCIPAL_LOGINS=CaoJian=24haowan,YiLiangHui=verkyyi` names the
 OS login that belongs to each WeCom userid. At a mapped person's sign-in the
 hub records them under that login and **adopts** it (state `active`, op
 `adopt`) on every roster machine whose agent runs as that login — the roster
@@ -685,6 +685,24 @@ records them when there is somewhere to record them on. A malformed entry, a
 login outside `[a-z0-9]{2,16}` or one login claimed by two people refuses to
 start the hub. A mapped login may start with a digit (`24haowan` is real); a
 login the hub *creates* still starts with a letter.
+
+**The userid's case never matters** (claude-fleet#1472). WeCom userids are
+case-insensitive — the directory lists `YiLiangHui`, the ticket carries it
+so, and the operator typed `yilianghui` — so the map is compared to the
+ticket case-insensitively, and every lookup of a principal (the row,
+their accounts, an operator's `adopt`/`remove`/`forget` by id) folds case
+too; the row keeps the spelling it was first written with, the directory's
+when the ticket wrote it. Spelling one person two ways in the map is one
+entry when the logins agree and a startup refusal when they do not.
+
+**The placement runs at every door that needs the row, not only at `/enter`**
+(claude-fleet#1472). The session cookie lives eight hours, and a person
+mapped *after* they signed in — or whose first visit predated the map — would
+otherwise reach the `fleet login` confirmation, `/connect` and the
+certificate with no principal and be told `no active login on any machine
+yet`. `/fleet/login` (the page and the confirm), `/connect`,
+`/v1/fleet/connect` and `/v1/fleet/cert` run the same idempotent placement
+first; an unmapped person is still recorded nowhere by it.
 
 Opening a login is an op sent down the machine's control channel to its
 **admin agent** — the operator's own login there, which already has
