@@ -140,6 +140,9 @@ if (open(my $w, '<', "$ENV{FLEET_CC_SESSIONS_DIR}/../wall")) { print while <$w>;
 # a background command this session started (issue #873): its pid is recorded
 # for the test, and it outlives Claude's /exit unless the migrate stops it
 if ($ENV{FAKE_BG} && !grep { $_ eq '--resume' } @ARGV) { my $c = fork; if (!$c) { exec 'sleep', '97' } open(my $b, '>', "$ENV{FLEET_CC_SESSIONS_DIR}/../bg.pid"); print $b "$c\n"; close $b }
+# a command this session runs as its CHILD (= the Bash tool, issue #1474): the
+# migrate-myself case runs fleet-migrate.sh from inside the target's own process tree
+if ($ENV{FAKE_RUN_CMD} && !grep { $_ eq '--resume' } @ARGV) { my $c = fork; if (!$c) { exec '/bin/sh', '-c', $ENV{FAKE_RUN_CMD} } }
 if ($ENV{FAKE_STUCK}) { sleep 1 while 1 }
 while (my $l = <STDIN>) { exit 0 if $l =~ m{/exit} }
 exit 0;
@@ -452,6 +455,134 @@ ok; printf '%s' "$out" | grep -q 'w4 .*acctB → acctA' || fail "manual choice m
 ok; [ "$(sed -n '1p' "$WORK/manual-env")" = acctA ] || fail 'launcher must be pinned to the selected account'
 ok; sed -n '2p' "$WORK/manual-env" | grep -q '"agent":"claude","label":"acctA"' || fail 'launcher must receive the Claude target binding'
 ok; [ "$(bash "$BIN/fleet-account.sh" active)" = acctB ] || fail 'manual move must leave global active account unchanged'
+
+# ============================================================================
+# 3. the caller's OWN window (issue #1474)
+# ============================================================================
+# 2026-10-04: a scratch ran `fleet-migrate.sh a1` on itself from its own pane; the
+# SessionEnd hook that closes the window killed the migrate with it — no new
+# window, a closed-unlanded history row for a live session, six orphaned
+# children. Now: refused (exit 3, window untouched) by either tell — the window
+# $TMUX_PANE sits in, or the target's Claude among the caller's ancestors — and
+# `--force-self` runs the move from a detached process that waits for the turn to
+# end, so SessionEnd killing the caller's whole tree still leaves a new window.
+# State here: acctA benched, acctB active — a window on A is a real move.
+
+# pure: pid_is_ancestor
+ok; pid_is_ancestor 1 $$ || fail "pid_is_ancestor: pid 1 is everyone's ancestor"
+ok; pid_is_ancestor $$ 1 && fail "pid_is_ancestor: a child is not an ancestor of pid 1"
+ok; pid_is_ancestor $$ $$ && fail "pid_is_ancestor: a pid is not its own (strict) ancestor"
+# (a background child, not $BASHPID — bash 3.2 has no BASHPID, issue #703's class)
+sleep 30 & _kid=$!
+ok; pid_is_ancestor $$ "$_kid" || fail "pid_is_ancestor: the shell is the ancestor of its own child"
+kill "$_kid" 2>/dev/null; wait "$_kid" 2>/dev/null
+ok; pid_is_ancestor x $$ && fail "pid_is_ancestor: a non-numeric pid is never an ancestor"
+ok; pid_is_ancestor $$ '' && fail "pid_is_ancestor: an empty pid is never a descendant"
+
+# rig: runner-hook with a command the fake claude runs as its child (Bash tool)
+spawn_self() {  # <name> <sid> <cwd> <child-cmd|''> → window id
+  local w
+  w=$(TM new-window -d -t "$SESS": -n "$1" -c "$3" -P -F '#{window_id}' "FAKE_RUN_CMD='$4' $FB/runner-hook $2") || fail "spawn $1"
+  TM set-window-option -t "$w" @raw 1; TM set-window-option -t "$w" @worktree "$3"
+  TM set-window-option -t "$w" @claude_state working; TM set-window-option -t "$w" @cc_account acctA
+  printf '%s' "$w"
+}
+cat > "$FB/self-refuse" <<EOS
+#!/bin/sh
+sleep 1
+W=\$(tmux display-message -p -t "\$TMUX_PANE" '#{window_id}')
+env -u TMUX_PANE bash '$SCRIPT' --session '$SESS' "\$W" >'$WORK/anc.out' 2>&1; echo \$? >'$WORK/anc.rc'
+EOS
+cat > "$FB/self-force" <<EOS
+#!/bin/sh
+sleep 1
+W=\$(tmux display-message -p -t "\$TMUX_PANE" '#{window_id}')
+FLEET_MIGRATE_SELF_IDLE_WAIT=40 bash '$SCRIPT' --force-self --session '$SESS' "\$W" >'$WORK/fs.out' 2>&1; echo \$? >'$WORK/fs.rc'
+EOS
+chmod +x "$FB/self-refuse" "$FB/self-force"
+mkdir -p "$WORK/wt7" "$WORK/wt8" "$WORK/x-scratch-7" "$WORK/wt-kid"
+
+# --- tell 1: the window $TMUX_PANE sits in. Refused, exit 3, nothing touched.
+w7=$(spawn_self self7 sid-7777 "$WORK/wt7" ''); sleep 1.5
+P7=$(TM display-message -p -t "$w7" '#{pane_id}')
+cp7=$(fleet_pane_claude_pid "$w7" "$LBL" 2>/dev/null)
+ok; [ -n "$cp7" ] || fail "rig: self7 must have a Claude ($(diag))"
+: > "$WORK/launched"
+out=$(env TMUX="$SP,0,0" TMUX_PANE="$P7" bash "$SCRIPT" "$w7" 2>&1); rc=$?
+ok; [ "$rc" = 3 ] || fail "migrating the caller's own window must exit 3, got $rc: $out"
+ok; printf '%s' "$out" | grep -q "CALLER'S OWN window" || fail "the refusal must say why: $out"
+ok; printf '%s' "$out" | grep -q 'fleet-handoff' || fail "the refusal must point at the way out (hub / another session / fleet-handoff): $out"
+ok; TM display-message -p -t "$w7" '#{pane_pid}' >/dev/null 2>&1 || fail "a refused self-move must leave the window alone"
+ok; kill -0 "$cp7" 2>/dev/null || fail "a refused self-move must leave Claude running"
+ok; [ ! -s "$WORK/launched" ] || fail "a refused self-move must launch nothing (launched: $(cat "$WORK/launched"))"
+# the same window named by its PANE id is still the caller's own (normalised first)
+out=$(env TMUX="$SP,0,0" TMUX_PANE="$P7" bash "$SCRIPT" "$P7" 2>&1); rc=$?
+ok; [ "$rc" = 3 ] || fail "a pane-id target of the caller's own window must be refused too, got $rc: $out"
+# --dry-run only says so, still prints the plan, exit 0
+out=$(env TMUX="$SP,0,0" TMUX_PANE="$P7" bash "$SCRIPT" --dry-run "$w7" 2>&1); rc=$?
+ok; [ "$rc" = 0 ] && printf '%s' "$out" | grep -q "CALLER'S OWN window" && printf '%s' "$out" | grep -q 'would /exit' \
+  || fail "--dry-run on the caller's own window must note it and still plan (rc $rc): $out"
+# from ANOTHER pane of the same fleet it is an ordinary target (not refused): the
+# plan prints with no self note
+P1=$(TM display-message -p -t "$w2" '#{pane_id}')
+out=$(env TMUX="$SP,0,0" TMUX_PANE="$P1" bash "$SCRIPT" --dry-run "$w7" 2>&1)
+ok; printf '%s' "$out" | grep -q 'would /exit' && ! printf '%s' "$out" | grep -q "CALLER'S OWN" \
+  || fail "another pane's migrate of self7 must not read as self: $out"
+
+# --- tell 2: no $TMUX_PANE, but the target's Claude is this process's ANCESTOR
+# (the migrate runs as the fake claude's child). Refused the same way.
+w8=$(spawn_self self8 sid-8888 "$WORK/wt8" "$FB/self-refuse")
+for _ in $(seq 1 40); do [ -s "$WORK/anc.rc" ] && break; sleep 0.5; done
+ok; [ "$(cat "$WORK/anc.rc" 2>/dev/null)" = 3 ] \
+  || fail "a migrate run from INSIDE the target's process tree (no \$TMUX_PANE) must exit 3 — rc='$(cat "$WORK/anc.rc" 2>/dev/null)' out: $(cat "$WORK/anc.out" 2>/dev/null) $(diag)"
+ok; grep -q "CALLER'S OWN window" "$WORK/anc.out" || fail "the ancestry refusal must say why: $(cat "$WORK/anc.out")"
+ok; TM display-message -p -t "$w8" '#{pane_pid}' >/dev/null 2>&1 || fail "the ancestry refusal must leave the window alone"
+ok; ! grep -q 'sid-8888' "$WORK/launched" 2>/dev/null || fail "the ancestry refusal must launch nothing"
+
+# --- --force-self: detached, waits for the turn, survives SessionEnd. self9 lives
+# in a SCRATCH-keyed worktree and has a child (kid, @origin scratch-7) so the
+# children's parent pointer can be checked after the move (part 3 of #1474).
+kid=$(spawn kid runner-stuck sid-kid "$WORK/wt-kid"); TM set-window-option -t "$kid" @origin scratch-7
+w9=$(spawn_self self9 sid-9999 "$WORK/x-scratch-7" "$FB/self-force")
+: > "$WORK/launched"
+for _ in $(seq 1 40); do [ -s "$WORK/fs.rc" ] && break; sleep 0.5; done
+ok; [ "$(cat "$WORK/fs.rc" 2>/dev/null)" = 0 ] \
+  || fail "--force-self must return 0 at once (the move is detached) — rc='$(cat "$WORK/fs.rc" 2>/dev/null)' out: $(cat "$WORK/fs.out" 2>/dev/null)"
+ok; grep -q 'runs DETACHED' "$WORK/fs.out" || fail "--force-self must say the move is detached: $(cat "$WORK/fs.out")"
+ok; grep -q 'detached 1' "$WORK/fs.out" || fail "the summary must count the detached move: $(cat "$WORK/fs.out")"
+cp9=$(fleet_pane_claude_pid "$w9" "$LBL" 2>/dev/null)
+ok; [ -n "$cp9" ] || fail "rig: self9 must have a Claude ($(diag))"
+# while the caller's turn is running (@claude_state working) the detached move
+# WAITS: no Escape, no /exit, nothing launched
+sleep 4
+ok; TM display-message -p -t "$w9" '#{pane_pid}' >/dev/null 2>&1 && kill -0 "$cp9" 2>/dev/null \
+  || fail "a detached self-move must wait while the session is working — it closed the window / exited Claude early ($(diag))"
+ok; ! grep -q 'sid-9999' "$WORK/launched" 2>/dev/null || fail "…and must not relaunch yet (launched: $(cat "$WORK/launched"))"
+# the turn ends (the Stop hook marks `done`): /exit, the runner kills the window —
+# the SessionEnd that killed the caller's whole tree in the incident — and a NEW
+# window still opens, resumed on acctB
+TM set-window-option -t "$w9" @claude_state done
+LOG="$FLEET_CONF_DIR/fleets/$SESS/migrate-self.log"
+nw9=''
+for _ in $(seq 1 80); do
+  nw9=$(TM list-windows -t "$SESS" -F '#{window_id} #{window_name}' | awk -v o="$w9" '$2=="self9" && $1!=o {print $1}' | head -1)
+  [ -n "$nw9" ] && grep -q '✓ self9' "$LOG" 2>/dev/null && break
+  sleep 0.5
+done
+ok; [ -n "$nw9" ] || fail "--force-self: a NEW self9 window must open after SessionEnd closed the old one — $(diag) log: $(cat "$LOG" 2>/dev/null)"
+ok; ! kill -0 "$cp9" 2>/dev/null || fail "the old Claude (pid $cp9) must be gone after the move"
+ok; grep -q -- '--resume sid-9999' "$WORK/launched" 2>/dev/null || fail "the detached move must resume the same session (launched: $(cat "$WORK/launched" 2>/dev/null))"
+ok; [ "$(TM display-message -p -t "$nw9" '#{@worktree}')" = "$WORK/x-scratch-7" ] || fail "the new window must carry the worktree binding"
+ok; grep -q '✓ self9 .*acctA → acctB' "$LOG" 2>/dev/null || fail "the detached move must log its verified result: $(cat "$LOG" 2>/dev/null)"
+ok; grep -q 'turn ended after' "$LOG" 2>/dev/null || fail "the detached move must log that it waited for the turn to end: $(cat "$LOG" 2>/dev/null)"
+# part 3: the children's parent pointer. @origin is the KEY (scratch-7), never a
+# window id, so the resumed window — same worktree, new id — IS the parent again:
+# the dash's grouping, fleet_win_for_key and a child's report all resolve to it.
+ok; [ "$(fleet_win_for_key scratch-7 "$LBL")" = "$nw9" ] \
+  || fail "fleet_win_for_key scratch-7 must resolve to the resumed window $nw9 (got '$(fleet_win_for_key scratch-7 "$LBL")')"
+rp=$(bash "$BIN/fleet-report-parent.sh" -L "$LBL" --win "$kid" --state blocked --summary 'kid is stuck' --dry-run 2>&1)
+ok; printf '%s' "$rp" | grep -q "would send to scratch-7 ($nw9," \
+  || fail "a child's report must address the RESUMED parent window $nw9: $rp"
 
 cleanup; trap - EXIT
 printf 'fleet-migrate selftest: OK (%d checks)\n' "$CHECKS"

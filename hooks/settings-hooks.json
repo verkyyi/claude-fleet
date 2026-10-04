@@ -80,6 +80,12 @@
         "hooks": [
           { "type": "command", "command": "bash ~/.claude/fleet/bin/refocus-hook.sh" }
         ]
+      },
+      {
+        "matcher": "resume",
+        "hooks": [
+          { "type": "command", "command": "bash ~/.claude/fleet/bin/fleet-history.sh resumed --stdin-json" }
+        ]
       }
     ],
     "PreCompact": [

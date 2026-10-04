@@ -101,7 +101,9 @@
 #                          --stuck; --force-bg moves past background work, #873);
 #                          a window already on the active account, or any window
 #                          while the active account is benched itself, is skipped
-#                          (#567) — only a --model relaunch is exempt
+#                          (#567) — only a --model relaunch is exempt; the CALLER'S
+#                          OWN window is refused (exit 3, #1474) unless --force-self,
+#                          which moves it from a detached process after the turn ends
 #   whoami [<window-id>] — the account a window really runs (token truth; heals a
 #                          stale @cc_account stamp) — fleet-migrate.sh whoami. With
 #                          NO window-id: the caller's own pane — "which account is
