@@ -657,18 +657,28 @@ An agent that wants you to look at an image, a PDF or a QR code must not `open`
 it — that opens it on the fleet machine's screen, where nobody is sitting. It
 runs `bin/fleet-show.sh <file>` instead, and the file arrives on **your** side of
 the SSH connection: iTerm2 asks you to accept the download, then saves it to
-your `~/Downloads`. `--inline` draws it in the terminal instead and holds
-the screen until you press a key.
+your `~/Downloads`. `--inline` draws it in the terminal instead, on a screen of
+its own: a title row (name · size · pixels), the image scaled to fit and
+centered, and a footer — `任意键返回 tmux · d 同时下载到 ~/Downloads · 30s 后自动返回`,
+counting down `FLEET_SHOW_HOLD_SECS` (default 30). `d` also sends it as a
+download. Centering needs the client's cell size (`#{client_cell_width}`, tmux
+3.4+); without it the image goes top-left at its own size. A PDF or any other
+non-image cannot be drawn inline, so `--inline` sends it as a download and says
+so. The screen text is Chinese, fixed — the fleet has no UI-language setting.
 
 - **iTerm2 side:** nothing to install (3.5+, for multipart transfers), but iTerm2
   **asks you to confirm each download** — the file lands only after you accept,
   so `SENT` means "offered", not "on disk yet". iTerm2 has no documented setting
   that silences it (`NoSyncSuppressDownloadConfirmation` did not, on 3.6.10).
-- **Which terminal:** the tmux client of this session whose terminal type
-  (`#{client_termtype}`, e.g. `iTerm2 3.6.10`) matches `FLEET_SHOW_TERM_RE`, most
-  recently active first; `--client <tty>` picks one. No iTerm2 attached → it prints
-  the file's path instead (exit 2), and so does `FLEET_SHOW=0` or a file over
-  `FLEET_SHOW_MAX_BYTES` (20 MB).
+- **Which terminal:** the one you are using — the most recently active tmux
+  client of this session — and only if its terminal type (`#{client_termtype}`,
+  e.g. `iTerm2 3.6.10`) matches `FLEET_SHOW_TERM_RE`. Reading from your phone over
+  SSH while an old iTerm2 is still attached at home? It prints the file's path
+  instead (exit 2) and names the client it saw, rather than sending the file to a
+  screen nobody is looking at. An unknown terminal type (tmux < 3.4, or a terminal
+  that does not answer XTVERSION) degrades the same way, and so do `FLEET_SHOW=0`
+  and a file over `FLEET_SHOW_MAX_BYTES` (20 MB). `--client <tty>` picks one
+  outright.
 - **The screen flashes once.** The file is written by the tmux client itself, run
   as a one-shot `lock-command`: tmux stops drawing to that terminal while it sends
   and redraws when it is done (a fraction of a second for a few MB). Writing the
