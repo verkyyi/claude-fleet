@@ -316,7 +316,7 @@ def jump(session, window, pane, lock):
                   stdin=subprocess.DEVNULL)
         window = out.stdout.strip().split("\n")[-1] if out.returncode == 0 else ""
     # Never resolve a stale row through a recycled index, or another fleet.
-    if not window.startswith("@") or fields(window, "#{session_name}") != [session]:
+    if not window.startswith("@") or fields(window, "#{?#{session_group},#{session_group},#{session_name}}") != [session]:
         return
     with open(lock, "w") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)

@@ -272,7 +272,7 @@ busy_fleets() {
   local sess n
   while IFS= read -r sess; do
     [ -n "$sess" ] || continue
-    n=$(tmux -L "$sess" list-windows -a -F '#{@claude_state}' 2>/dev/null \
+    n=$(fleet_lw '#{@claude_state}' tmux -L "$sess" \
         | grep -cE "^($BUSY_STATES)$")
     [ "${n:-0}" -gt 0 ] && printf '%s:%s\n' "$sess" "$n"
   done <<EOF

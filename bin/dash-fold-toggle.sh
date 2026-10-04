@@ -87,7 +87,7 @@ case "$target" in landed:*) exec bash "$BIN/fleet-history.sh" fold "$verb" "$tar
 # back to the current session, and outside tmux to none (⇒ every window, the
 # single-fleet back-compat case).
 SESS="${FLEET_SESSION:-}"
-[ -n "$SESS" ] || SESS=$(tmux display-message -p '#{session_name}' 2>/dev/null) || SESS=''
+[ -n "$SESS" ] || SESS=$(tmux display-message -p '#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null) || SESS=''
 
 # --- a repo heading: fold / unfold its group (issue #1037) ---------------------
 if [ "${target#hdr:}" != "$target" ]; then
@@ -133,7 +133,7 @@ command -v fleet_wid_target >/dev/null 2>&1 && target="$(fleet_wid_target "$targ
 # ONE tmux read, same field set and same key derivation the renderer uses, so the
 # two can never disagree about who a row's parent is.
 WFMT="#{session_name}${US}#{window_id}${US}#{window_name}${US}#{pane_current_path}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{@expand}${US}#{@repo}${US}#{@norepo}"
-WLIST=$(tmux list-windows -a -F "$WFMT" 2>/dev/null) || exit 0
+WLIST=$(fleet_lw "$WFMT") || exit 0
 # tmux ≤3.4 escapes the control separator as the literal four bytes `\037` (the
 # renderer normalizes the same way); without this every field lands in $wsess.
 WLIST=${WLIST//\\037/$US}
@@ -263,7 +263,7 @@ fi
 # name per fleet, so it is overwritten rather than accumulated — nothing to clean
 # up. Any failure falls back to the plain reload: a keystroke that costs an extra
 # render is fine, a blank list is not.
-htgt=$(tmux display-message -p -t "$hwid" '#{session_name}:#{window_index}' 2>/dev/null) || htgt=''
+htgt=$(tmux display-message -p -t "$hwid" '#{?#{session_group},#{session_group},#{session_name}}:#{window_index}' 2>/dev/null) || htgt=''
 SNAP="${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}/global/dash_fold_rows_${FLEET_SESSION:-default}"
 pos=''
 if [ -n "$htgt" ]; then

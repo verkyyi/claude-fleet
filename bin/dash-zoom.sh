@@ -14,7 +14,7 @@
 # via fleet_dash_pane. The rebuild fallback can no longer spawn a Claude session.
 set -uo pipefail
 . "$(cd "$(dirname "$0")" && pwd)/fleet-lib.sh"
-SESS=$(tmux display-message -p '#{session_name}' 2>/dev/null)
+SESS=$(tmux display-message -p '#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null)
 target=$(fleet_dash_pane "$SESS")
 if [ -z "$target" ]; then
   exec env HUB_SESSION="$SESS" bash "$(dirname "$0")/hub-session.sh"

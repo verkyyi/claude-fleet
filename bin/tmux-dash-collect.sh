@@ -524,7 +524,7 @@ fi
 # -F FMT`: run it against every live fleet socket and concatenate. Reuses the
 # cached $SOCKETS (no re-probe). Read-only callers use this; writers loop $SOCKETS
 # themselves so they hold the -L label to target (see the escalation block).
-lw_all() { local s; for s in $SOCKETS; do tmux -L "$s" list-windows -a -F "$1" 2>/dev/null; done; }
+lw_all() { local s; for s in $SOCKETS; do fleet_lw "$1" tmux -L "$s"; done; }
 
 # First-login recovery is a library operation so isolated socket tests can run
 # the exact tick without invoking the collector's GitHub/cache phases.
@@ -576,6 +576,7 @@ SM="$G/sessmap.$$"; : > "$SM"          # PID-unique tmp: safe if two collectors 
 # single shared server sees them all now.
 for sock in $SOCKETS; do
   for sess in $(tmux -L "$sock" list-sessions -F '#{session_name}' 2>/dev/null); do
+    fleet_is_view_session "$sess" && continue      # a shell's view of this fleet (#1489)
     r=$(fleet_resolve_repo_for_session "$sess")
     [ -z "$r" ] && continue
     printf '%s\t%s\t%s\n' "$sess" "$(fleet_slug "$r")" "$r" >> "$SM"
@@ -736,7 +737,7 @@ ph_git() {
   # earlier fleet answered. A failed/empty view may still refresh known paths,
   # but it must never authorize deleting another fleet's caches (#647).
   for sock in $SOCKETS; do
-    if snapshot=$(tmux -L "$sock" list-windows -a -F '#{pane_current_path}' 2>/dev/null); then
+    if snapshot=$(fleet_lw '#{pane_current_path}' tmux -L "$sock"); then
       [ -n "$snapshot" ] || complete=0
       inventory="${inventory}${snapshot}"$'\n'
     else
@@ -994,7 +995,7 @@ ph_scrape() {
 local line sock w
 line=$(for sock in $SOCKETS; do
   # A proxy window (@remote, #1424) shows ANOTHER machine's session — its banner is not ours.
-  for w in $(tmux -L "$sock" list-windows -a -F '#{?@remote,,#{session_name}:#{window_index}}' 2>/dev/null); do
+  for w in $(fleet_lw '#{?@remote,,#{session_name}:#{window_index}}' tmux -L "$sock"); do
     tmux -L "$sock" capture-pane -p -S -600 -t "$w" 2>/dev/null
   done
 done | grep -aoE "[0-9]+% of your (weekly|[0-9]+-hour) limit[^│]*" | tail -1)
@@ -1156,7 +1157,7 @@ if [ -n "${FLEET_NOTIFY_CMD:-}" ]; then
   nowts=$(now)
   for sock in $SOCKETS; do
   [ -z "$(tmux -L "$sock" list-clients 2>/dev/null)" ] || continue   # someone's watching THIS fleet → skip it
-  tmux -L "$sock" list-windows -a -F "#{session_name}:#{window_index}${US}#{window_name}${US}#{@claude_state}${US}#{@claude_state_ts}${US}#{@escalated}${US}#{window_id}" 2>/dev/null | \
+  fleet_lw "#{session_name}:#{window_index}${US}#{window_name}${US}#{@claude_state}${US}#{@claude_state_ts}${US}#{@escalated}${US}#{window_id}" tmux -L "$sock" | \
   while IFS="$US" read -r win name st ts esc wid; do
     [ "$st" = "needs" ] || continue
     case "$ts" in ''|*[!0-9]*) continue;; esac

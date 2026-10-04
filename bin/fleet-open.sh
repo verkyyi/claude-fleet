@@ -158,7 +158,7 @@ fc_session || fallback "$FC_WHY"
 # the view's spool and the proxy re-issues it there. No views dir: nothing changes.
 RV_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/remote-views"
 if [ -z "$client" ] && [ -d "$RV_DIR" ]; then
-  _newest=$(tmux list-clients -t "$FC_SESS" -F '#{client_activity}	#{client_tty}' 2>/dev/null \
+  _newest=$(fc_clients '#{client_activity}	#{client_tty}' \
     | sort -t '	' -k1,1nr | head -n 1 | cut -f2)
   _view=$(awk -F '\t' -v t="$_newest" -v s="$FC_SESS" '$1 == t && $2 == s { n = FILENAME; sub(/.*\//, "", n); print n; exit }' \
     "$RV_DIR"/* 2>/dev/null)

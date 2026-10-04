@@ -11,7 +11,7 @@ acct_dir="${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}"
 case "${1:-}" in
   --socket)
     [ -n "${2:-}" ] || exit 2
-    rows=$(tmux -L "$2" list-windows -a -F '#{window_id} #{pane_id} #{pane_pid} #{@cc_account}' 2>/dev/null) ;;
+    rows=$(fleet_lw '#{window_id} #{pane_id} #{pane_pid} #{@cc_account}' tmux -L "$2") ;;
   --pane)
     [ -n "${TMUX:-}" ] && [ -n "${2:-}" ] || exit 2
     rows=$(tmux display-message -p -t "$2" '#{window_id} #{pane_id} #{pane_pid} #{@cc_account}' 2>/dev/null) ;;

@@ -69,6 +69,24 @@ Do not install from memory: read the doc and work from it.
   is the end-to-end check (`leaks: 0/9`).
 - **Panel windows, not sessions.** Windows named `dash`, `plan`, `backlog` are
   treated as panels and excluded from the dash session list.
+- **A view session shares the fleet's windows; never scan or name them bare**
+  (issue #1489). A shell or proxy client of this machine (`fleet-remote-view.sh
+  attach --shell` / a view id) attaches to a GROUPED session of its own,
+  `<fleet>@view-<id>` — same windows, its own current window — so two people
+  looking at one machine each see the row they picked. tmux then holds every
+  window under two session names: `list-windows -a` lists it twice, and a bare
+  `#{session_name}` resolved from a window / pane / `$TMUX_PANE` names whichever
+  session was active last — a shell typing on m4 would make every hook in every
+  worker pane resolve to its view. So every scan goes through `fleet_lw`
+  (`bin/fleet-lib.sh`; `fleet_lw_fmt`/`fleet_lw_filter` for a command sequence,
+  inline copies in `tmux-spinner.sh` and `fleet-alerts.sh` KEPT IN SYNC), and
+  every window→session read uses `$FLEET_SESSION_FMT`
+  (`#{?#{session_group},#{session_group},#{session_name}}` — a group is named
+  after the fleet session it was grouped onto), in conf hooks too.
+  `fleet-view-session-selftest.sh` lints both and pins the degenerate case: with
+  no view session every output is byte for byte what it was. A view session is
+  never a fleet (`fleet_is_view_session`): restore and the collector skip it, and
+  `fleet-window-reap.sh --hook` ignores the unlinks its going fires.
 - **Navigate by name, not index.** The hub/dashboard is placed at the lowest
   index once, at spawn; numbers still shift when a window closes
   (`renumber-windows on`).

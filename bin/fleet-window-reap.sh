@@ -2,10 +2,14 @@
 # fleet-window-reap.sh — a closed window takes the process trees it started with
 # it (issue #1298). See fleet_orphan_trees in fleet-lib.sh for what is a target.
 #
-#   fleet-window-reap.sh --hook     tmux window-unlinked / pane-exited entry point:
-#                                   backgrounds itself, sweeps on a short schedule
-#                                   (the closing agent may take seconds to exit and
-#                                   orphan its children), logs what it reaped
+#   fleet-window-reap.sh --hook [<session>]  tmux window-unlinked / pane-exited entry
+#                                   point: backgrounds itself, sweeps on a short
+#                                   schedule (the closing agent may take seconds to
+#                                   exit and orphan its children), logs what it
+#                                   reaped. <session> is window-unlinked's
+#                                   `#{hook_session_name}`: a shell's view session
+#                                   (`<fleet>@view-<id>`, issue #1489) unlinks every
+#                                   window when it goes — nothing closed, no sweep
 #   fleet-window-reap.sh --once     one sweep now, print what was reaped
 #   fleet-window-reap.sh --dry      print what a sweep would reap, kill nothing
 #
@@ -66,6 +70,8 @@ hook() {
 
 case "${1:-}" in
   --hook)
+    # A view session's windows are still the fleet's: its going is no close.
+    fleet_is_view_session "${2:-}" && exit 0
     # tmux's run-shell -b already detaches us; nohup + & keeps a direct caller's
     # shell from waiting on the schedule either.
     if [ "${FLEET_WINDOW_REAP_FG:-0}" = 1 ]; then hook

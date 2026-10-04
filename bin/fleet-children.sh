@@ -84,7 +84,7 @@ fi
 # prints a 0x1f separator as a literal `\037`).
 rows() {
   local line wid rest ws st needs loop iss wt path repo norepo name key pre slug
-  TM list-windows -a -F '#{window_id}|#{session_name}|#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}|#{@claude_needs}|#{@loop}|#{@issue}|#{@worktree}|#{@repo}|#{@norepo}|#{@origin}|#{pane_current_path}|#{window_name}' 2>/dev/null |
+  fleet_lw '#{window_id}|#{session_name}|#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}|#{@claude_needs}|#{@loop}|#{@issue}|#{@worktree}|#{@repo}|#{@norepo}|#{@origin}|#{pane_current_path}|#{window_name}' TM |
   while IFS= read -r line; do
     wid=${line%%|*};  rest=${line#*|}
     ws=${rest%%|*};   rest=${rest#*|}

@@ -10,7 +10,7 @@
 # (MouseDown1Status) so clicking it steps through them; prefix+a keeps the
 # priority-jump behavior above.
 set -u  # POSIX sh: pipefail is bash-only (dash has none)
-sess=$(tmux display-message -p '#{session_name}')
+sess=$(tmux display-message -p '#{?#{session_group},#{session_group},#{session_name}}')
 
 if [ "${1:-}" = "--needs-cycle" ]; then
   cur=$(tmux display-message -p '#{window_index}')

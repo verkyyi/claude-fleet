@@ -139,7 +139,7 @@ census() {
       if [ -z "$why" ]; then N_FED=$((N_FED+1))
       else N_BLIND=$((N_BLIND+1)); BLIND+=("$sess$TAB$name$TAB$why"); fi
     done <<EOF
-$(tmux -L "$sess" list-windows -a -F "#{window_id}${US}#{window_name}${US}#{@cc_agent}${US}#{@cc_model}#{@claude_state}${US}#{@mod_alive}${US}#{@mod_ver}${US}#{@ctx_pct}${US}#{@ctx_src}" 2>/dev/null)
+$(fleet_lw "#{window_id}${US}#{window_name}${US}#{@cc_agent}${US}#{@cc_model}#{@claude_state}${US}#{@mod_alive}${US}#{@mod_ver}${US}#{@ctx_pct}${US}#{@ctx_src}" tmux -L "$sess")
 EOF
   done <<EOF
 $(fleet_sockets)

@@ -289,7 +289,7 @@ MR_SEEN=' ' MR_MULTI=' '
 # -a` lists a session's windows together.
 last_sess=$US; sess_prmf=''
 for sock in $SOCKETS; do
-wl=$(tmux -L "$sock" list-windows -a -F "#{session_name}${US}#{session_name}:#{window_index}${US}#{pane_current_path}${US}#{@prci}${US}#{@repo}${US}#{@norepo}" 2>/dev/null)
+wl=$(fleet_lw "#{session_name}${US}#{session_name}:#{window_index}${US}#{pane_current_path}${US}#{@prci}${US}#{@repo}${US}#{@norepo}" tmux -L "$sock")
 # tmux 3.4 escapes a control separator as the literal four bytes `\037`;
 # newer versions return the byte. Accept both (same as tmux-dashboard-rows.sh).
 wl=${wl//\\037/$US}

@@ -136,7 +136,7 @@ if [ -n "$want_issue$want_name" ]; then
       fi
       hits="$hits$s|$wid|$sess:$wname${wrepo:+ ($wrepo)}"$'\n'
     done <<EOF
-$("${tm[@]}" list-windows -a -F '#{window_id}|#{window_name}|#{@issue}|#{@raw}|#{@repo}|#{session_name}|#{@worktree}' 2>/dev/null)
+$(fleet_lw '#{window_id}|#{window_name}|#{@issue}|#{@raw}|#{@repo}|#{session_name}|#{@worktree}' "${tm[@]}")
 EOF
   done <<EOF
 $socks
@@ -167,7 +167,7 @@ case "$tgt" in
     lifecycle=$("${tm[@]}" display-message -p -t "$tgt" '#{@worker_lifecycle}' 2>/dev/null)
     evidence=$("${tm[@]}" display-message -p -t "$tgt" '#{@sleep_evidence}' 2>/dev/null)
     if [ -n "$lifecycle$evidence" ] && [ -f "$BIN/fleet-sleep.py" ]; then
-      session=$("${tm[@]}" display-message -p -t "$tgt" '#{session_name}' 2>/dev/null)
+      session=$("${tm[@]}" display-message -p -t "$tgt" '#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null)
       err=$(printf '%s' "$text" | python3 "$BIN/fleet-sleep.py" deliver --session "$session" "$tgt" 2>&1 >/dev/null); rc=$?
       [ "$rc" -eq 0 ] || die 1 "${err:-sleep delivery to $tgt failed (exit $rc)}"
       # A sleeper at a full fleet keeps the message and wakes when a slot frees (#1058).

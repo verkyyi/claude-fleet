@@ -11,7 +11,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-ui-lang.sh"
 verb="${1:-sync}"; target="${2:-}"
 if [ -n "$target" ]; then
-  sess=$(tmux display-message -p -t "$target" '#{session_name}' 2>/dev/null) || exit 0
+  sess=$(tmux display-message -p -t "$target" '#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null) || exit 0
 else
   sess=$(fleet_current_session) || exit 0
 fi

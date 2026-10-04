@@ -87,6 +87,19 @@ _hub_nudge() {
 TMUX_N=0
 tmux() { TMUX_N=$((TMUX_N + 1)); command tmux "$@"; }
 
+# _lw_fmt / _lw_filter — `list-windows -a` with a view session's duplicate rows
+# dropped (issue #1489): a shell's `<fleet>@view-<id>` session shares the fleet's
+# windows and lists each again. Inline copy of fleet_lw_fmt / fleet_lw_filter in
+# bin/fleet-lib.sh (POSIX sh here) — KEEP IN SYNC.
+_lw_fmt() { printf '#{window_id} #{session_name} %s' "$1"; }
+_lw_filter() {
+  awk '{ if ($0 !~ /^@[0-9]+ /) { print; next }    # not a fleet_lw_fmt row (a test shim: canned rows): untouched
+         i = index($0, " "); id = substr($0, 1, i - 1); r = substr($0, i + 1)
+         j = index(r, " "); s = substr(r, 1, j - 1)
+         if (index(s, "@view-") || (id in seen)) next
+         seen[id] = 1; print substr(r, j + 1) }'
+}
+
 # Where `tmux -L <label>` puts its socket: tmux's own rule, resolved from THIS
 # process's environment exactly as the tmux client below will resolve it. Used
 # only to find the hook's dirty marker (DIRTY MARKER, below the sweeps).
@@ -271,7 +284,8 @@ stuck_check() {
   # ANIM_SOCKS yet: fall back to every socket, which is what it used to scan.
   for sock in ${ANIM_SOCKS-$SOCKETS}; do
   TMUX_N=$((TMUX_N + 1))
-  wl=$(tmux -L "$sock" list-windows -a -F '#{window_id} #{@claude_state} #{window_activity} #{@sidebar_worker}' 2>/dev/null) || continue
+  wl=$(tmux -L "$sock" list-windows -a -F "$(_lw_fmt '#{window_id} #{@claude_state} #{window_activity} #{@sidebar_worker}')" 2>/dev/null) || continue
+  wl=$(printf '%s\n' "$wl" | _lw_filter)
   while read -r wid st act worker; do
     [ -n "$wid" ] || continue
     [ "$st" = working ] || continue
@@ -494,7 +508,8 @@ needs_check() {
     # re-slotting) plus the three stamps the verdict needs. '-'/'0' placeholders keep
     # the fields parsing when an option is empty (issue #105).
     TMUX_N=$((TMUX_N + 1))
-    wl=$(tmux -L "$sock" list-windows -a -F "$needs_fmt" 2>/dev/null) || continue
+    wl=$(tmux -L "$sock" list-windows -a -F "$(_lw_fmt "$needs_fmt")" 2>/dev/null) || continue
+    wl=$(printf '%s\n' "$wl" | _lw_filter)
     while read -r wid st nsub ts agent; do
       [ -n "$wid" ] || continue
       [ "$st" = needs ] || continue                       # ONLY red windows are candidates
@@ -740,12 +755,13 @@ while :; do
     # spinning this frame, not the next. An animated one already holds a table at
     # most one frame old (read by last frame's write) and reads AFTER building.
     if [ "$c_anim" != 1 ]; then
-      if ! tmux -L "$sock" list-windows -a -F "$WFMT" > "$winsf" 2>/dev/null; then
+      if ! tmux -L "$sock" list-windows -a -F "$(_lw_fmt "$WFMT")" > "$winsf.raw" 2>/dev/null; then
         # The server is gone (or going): forget the slot, and re-probe the socket
         # list on the next frame instead of the next refresh.
         eval "C_SOCK_$n=''"; SOCK_KNOWN=' '; socc=$SOCK_EVERY
         continue
       fi
+      _lw_filter < "$winsf.raw" > "$winsf"
     fi
 
     changed=0
@@ -845,10 +861,11 @@ EOF
     # @spin/@sfg/@nfg/window-status-style, none of which WFMT reads.
     if [ "$c_anim" = 1 ]; then
       if [ "$changed" = 1 ]; then
-        tmux -L "$sock" list-windows -a -F "$WFMT" ';' source-file "$cmdf" > "$winsf" 2>/dev/null
+        tmux -L "$sock" list-windows -a -F "$(_lw_fmt "$WFMT")" ';' source-file "$cmdf" > "$winsf.raw" 2>/dev/null
       else
-        tmux -L "$sock" list-windows -a -F "$WFMT" > "$winsf" 2>/dev/null
+        tmux -L "$sock" list-windows -a -F "$(_lw_fmt "$WFMT")" > "$winsf.raw" 2>/dev/null
       fi
+      _lw_filter < "$winsf.raw" > "$winsf"
     else
       [ "$changed" = 1 ] && tmux -L "$sock" source-file "$cmdf" 2>/dev/null
     fi

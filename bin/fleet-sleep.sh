@@ -5,6 +5,7 @@ BIN=$(cd "$(dirname "$0")" && pwd)
 . "$BIN/fleet-lib.sh"
 action=${1:-status}; shift || :
 session=${1:-$(fleet_current_session)}; [ $# -eq 0 ] || shift
+session=$(fleet_session_canon "$session")   # a hook may name a view session (#1489)
 [ -n "$session" ] || { echo 'usage: fleet-sleep.sh action session [window] [--dry-run]' >&2; exit 2; }
 fleet_load_conf "$session"
 export FLEET_CONF_DIR FLEET_MAIN

@@ -579,7 +579,7 @@ PYCODEX
   # converted) — auto-handoff off ⇒ no line ⇒ nothing here. One tmux read.
   _ha=$(printf '%s\n' "$_kv" | sed -n 7p)
   if [ "$_hp_conf" -gt 0 ] && [ "$_ha" != off ]; then
-    _hv=$(tmux display-message -p -t "$TMUX_PANE" '#{@issue}|#{@raw}|#{@ctx_pct}|#{@ctx_warn}|#{session_name}|#{window_name}' 2>/dev/null)
+    _hv=$(tmux display-message -p -t "$TMUX_PANE" '#{@issue}|#{@raw}|#{@ctx_pct}|#{@ctx_warn}|#{?#{session_group},#{session_group},#{session_name}}|#{window_name}' 2>/dev/null)
     _hiss=${_hv%%|*}; _hv=${_hv#*|}
     _hraw=${_hv%%|*}; _hv=${_hv#*|}
     _hctx=${_hv%%|*}; _hv=${_hv#*|}

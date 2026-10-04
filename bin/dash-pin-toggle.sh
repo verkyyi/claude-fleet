@@ -41,7 +41,7 @@ fi
 # fleet's socket (the CLAUDE.md rail) — never another fleet's windows.
 name=$(tmux display-message -p -t "$target" '#{window_name}' 2>/dev/null) || exit 0
 [ -n "$name" ] || exit 0
-sess=$(tmux display-message -p -t "$target" '#{session_name}' 2>/dev/null || true)
+sess=$(tmux display-message -p -t "$target" '#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null || true)
 [ -n "$sess" ] && command -v fleet_load_conf >/dev/null 2>&1 && fleet_load_conf "$sess" 2>/dev/null || true
 
 cur=$(tmux show-options -wqv -t "$target" @pin 2>/dev/null) || cur=''

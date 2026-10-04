@@ -15,8 +15,8 @@ REPO="${FLEET_REPO:-}"
 # multi-fleet: this panel shows the CURRENT fleet's (tmux session's) backlog.
 # Resolve the session → repo from the collector's sessmap; export FLEET_SESSION
 # so the rows producer (and its reload-binds) read the right issues cache.
-FLEET_SESSION=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{session_name}' 2>/dev/null)
-[ -z "$FLEET_SESSION" ] && FLEET_SESSION=$(tmux display-message -p '#{session_name}' 2>/dev/null)
+FLEET_SESSION=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null)
+[ -z "$FLEET_SESSION" ] && FLEET_SESSION=$(tmux display-message -p '#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null)
 export FLEET_SESSION
 _r=$(fleet_repo_cached "$FLEET_SESSION"); [ -n "$_r" ] && REPO="$_r"
 # A fleet hosting 2+ repos (issue #794): the rows carry their repo as field 4, and

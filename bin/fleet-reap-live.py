@@ -34,7 +34,7 @@ def waiting(target, socket_name=None):
     @claude_wait from. Asked here too, because a window stamped `done` before the
     sync (or by any writer that never asked) must not be reaped out from under it."""
     script = ('. "$1"; t=$2; L=$3\n'
-              's=$(tmux ${L:+-L "$L"} display-message -p -t "$t" "#{session_name}" 2>/dev/null)\n'
+              's=$(tmux ${L:+-L "$L"} display-message -p -t "$t" "#{?#{session_group},#{session_group},#{session_name}}" 2>/dev/null)\n'
               '[ -n "$L" ] && TMUX=\n'
               'fleet_window_waiting_children "$s" "$t" >/dev/null 2>&1 && { echo children; exit 0; }\n'
               'fleet_window_bg_busy "$s" "$t" 1 && echo bg\n'
