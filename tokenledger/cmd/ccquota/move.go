@@ -101,7 +101,7 @@ func move(args []string, stdout, stderr io.Writer) (int, error) {
 	fs := flag.NewFlagSet("move "+sub, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	hub := fs.String("hub", os.Getenv("CCQUOTA_HUB_URL"), "hub base URL")
-	token := fs.String("token", os.Getenv("CCQUOTA_TOKEN"), "this endpoint's enrollment token")
+	token := secretEnvFlag(fs, "token", "CCQUOTA_TOKEN", "this endpoint's enrollment `token`")
 	node := fs.String("node", "auto", "auto, or the machine to move to")
 	bundle := fs.String("bundle", "", "send: the transcript tar")
 	branch := fs.String("branch", "", "send: the session's branch")

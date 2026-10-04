@@ -212,7 +212,7 @@ func runHub(args []string) error {
 			"means localhost does not work from the machine itself, which is\n"+
 			"where you usually are: `127.0.0.1:8787,100.x.y.z:8787` gives both")
 	dbPath := fs.String("db", "", "path to the SQLite database (default: $CCQUOTA_DB, else ~/.ccquota/ccquota.db)")
-	token := fs.String("token", os.Getenv("CCQUOTA_VIEWER_TOKEN"), "viewer token for the dashboard, API and MCP")
+	token := secretEnvFlag(fs, "token", "CCQUOTA_VIEWER_TOKEN", "viewer `token` for the dashboard, API and MCP")
 	noAuth := fs.Bool("no-auth", false, "serve without a viewer token (loopback binds only)")
 	// 企微 SSO（把「人看面板」这一档接到公司已有的授权服务上）。
 	// ★ 两把密钥只从环境来、不给命令行开关：命令行参数在 `ps` 里人人可见，而这两把
@@ -806,7 +806,7 @@ agent; point the Monday brief at it instead:
 func runAgent(args []string) error {
 	fs := flag.NewFlagSet("agent", flag.ExitOnError)
 	hub := fs.String("hub", os.Getenv("CCQUOTA_HUB_URL"), "hub base URL")
-	token := fs.String("token", os.Getenv("CCQUOTA_TOKEN"), "enrollment token")
+	token := secretEnvFlag(fs, "token", "CCQUOTA_TOKEN", "enrollment `token`")
 	home := fs.String("home", "", "user home directory (default: your home)")
 	sources := fs.String("sources", os.Getenv("CCQUOTA_SOURCES"), "usage sources: all (default), claude, codex, or claude,codex")
 	codexHome := fs.String("codex-home", "", "Codex data directory (default: CODEX_HOME or <home>/.codex)")

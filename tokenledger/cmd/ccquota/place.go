@@ -52,7 +52,7 @@ func place(args []string, stdout, stderr io.Writer) (int, error) {
 	fs := flag.NewFlagSet("place", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	hub := fs.String("hub", os.Getenv("CCQUOTA_HUB_URL"), "hub base URL")
-	token := fs.String("token", os.Getenv("CCQUOTA_TOKEN"), "this endpoint's enrollment token")
+	token := secretEnvFlag(fs, "token", "CCQUOTA_TOKEN", "this endpoint's enrollment `token`")
 	node := fs.String("node", "auto", "auto, or the machine to open it on")
 	origin := fs.String("origin-wid", "", "the worker_id of the session that asked for this one")
 	agent := fs.String("agent", "", "claude or codex (default: the chosen fleet's)")
