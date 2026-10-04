@@ -429,12 +429,18 @@ func (v *Vault) Lease(ctx context.Context, principal, provider, account string) 
 		if err := sl.Open(c.SecretSealed, &s, principal, provider, account, "secret"); err != nil {
 			return Access{}, err
 		}
-		acc, next, rerr := v.Refresher.Refresh(ctx, provider, s)
+		acc, next, via, rerr := v.refresh(ctx, provider, s)
 		at := v.now()
+		// The audit says where the refresh ran when a node carried it
+		// (claude-fleet#1490): refresh_via=<login>@<host>.
+		viaNote := ""
+		if via != "" {
+			viaNote = " · refresh_via=" + via
+		}
 		if rerr != nil {
 			_ = v.Store.NoteRefreshError(principal, provider, account, truncate(rerr.Error(), 300), at)
 			_ = v.Store.AddCredAudit(store.CredAudit{At: at, Action: store.CredRefresh, PrincipalID: principal,
-				Provider: provider, Account: account, Detail: "failed: " + truncate(rerr.Error(), 300)})
+				Provider: provider, Account: account, Detail: "failed: " + truncate(rerr.Error(), 300) + viaNote})
 			// A still-valid cached token beats nothing: the node gets a
 			// shorter lease and asks again sooner.
 			if haveCached && cached.ExpiresAt != nil && cached.ExpiresAt.After(at) {
@@ -462,10 +468,19 @@ func (v *Vault) Lease(ctx context.Context, principal, provider, account string) 
 			return Access{}, fmt.Errorf("save refreshed credential (the rotated refresh token is lost; re-store this credential): %w", err)
 		}
 		_ = v.Store.AddCredAudit(store.CredAudit{At: at, Action: store.CredRefresh, PrincipalID: principal,
-			Provider: provider, Account: account, ExpiresAt: acc.ExpiresAt, Detail: "ok"})
+			Provider: provider, Account: account, ExpiresAt: acc.ExpiresAt, Detail: "ok" + viaNote})
 		return acc, nil
 	}
 	return Access{}, store.ErrCredConflict
+}
+
+// refresh runs the Refresher, asking a RefresherVia where it ran.
+func (v *Vault) refresh(ctx context.Context, provider string, s Secret) (Access, Secret, string, error) {
+	if rv, ok := v.Refresher.(RefresherVia); ok {
+		return rv.RefreshVia(ctx, provider, s)
+	}
+	acc, next, err := v.Refresher.Refresh(ctx, provider, s)
+	return acc, next, "", err
 }
 
 func truncate(s string, n int) string {

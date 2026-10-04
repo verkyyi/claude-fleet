@@ -884,6 +884,8 @@ What a machine can do with only the short-lived half was **measured first**
 | hub | `CCQUOTA_FLEET_CRED_MIN_TTL=3h` (default) | a cached access token with less left is refreshed before it is issued |
 | agent | `CCQUOTA_FLEET_CREDS=1` | lease this login's credentials (its own + the shared pool's) and keep them written (with `CCQUOTA_FLEET=1`) |
 | agent | `CCQUOTA_ACCOUNTS_DIR` (default `~/.config/claude-fleet/accounts`), `CCQUOTA_FLEET_CODEX_HOMES` (default `~/.codex-accounts`) | where the Claude / Codex files go |
+| hub | `CCQUOTA_FLEET_OAUTH_REFRESH_VIA=node` | refresh through an online admin node instead of the hub's own network (claude-fleet#1490, below). Unset / `direct` = the hub posts itself |
+| agent | `CCQUOTA_FLEET_OAUTH_REFRESH=0` | an admin agent stops offering to carry the hub's refreshes (on by default with `CCQUOTA_FLEET_ADMIN=1`) |
 
 A lease (`POST /v1/node/credentials`, the node's enrollment token) is answered
 only for the person whose ACTIVE fleet account is that (machine, login) — there
@@ -906,6 +908,48 @@ refuse a WeCom session. A Claude refresh token comes from an interactive
 machine out — two holders of one refresh token rotate each other out.
 A Codex home the hub writes is registered once with
 `fleet-codex-account.sh register <label> <home>` like any other.
+
+#### The refresh runs on a node when the hub's country is refused (claude-fleet#1490)
+
+The production hub sits in Shenzhen, and `auth.openai.com/oauth/token` answers a
+mainland IP with `403 unsupported_country_region_territory` — so a Codex
+refresh token in the vault (and, in time, a person's Claude refresh token) is
+one the hub itself can never refresh. With `CCQUOTA_FLEET_OAUTH_REFRESH_VIA=node`
+the hub keeps everything that matters — it alone holds the refresh token, one
+writer per account, the rotated token saved before anyone receives the result —
+and hands only the **one outbound POST** to an admin node whose network the
+provider serves:
+
+    hub  ──oauth_refresh {provider, form}──▶ admin node ──POST──▶ auth.openai.com
+    hub  ◀──oauth_refresh_result {status, body}── admin node ◀───────┘
+
+- **Which node.** A connected **admin** agent (on `CCQUOTA_FLEET_ADMIN_USERS`,
+  started with `CCQUOTA_FLEET_ADMIN=1`) whose hello offered `oauth_refresh`,
+  online by its heartbeat, not a SPOT pod (its egress is the cluster's own),
+  lowest load per core first — m5 or m4, whichever is idler. The node picks the
+  token endpoint itself, by provider: the hub cannot name a host or send a body
+  anywhere else, so a node is never a general forwarder.
+- **Nothing stays on the node.** The form and the provider's answer live in one
+  goroutine's memory; `agent.log` gets one line — provider, HTTP status, how
+  long — never a byte of either body.
+- **The audit says where.** The vault's `refresh` row carries
+  `refresh_via=<login>@<host>` (`ok · refresh_via=verkyyi@m5`, or
+  `failed: token endpoint answered 403 … · refresh_via=…` when the provider
+  refused through that node).
+- **No node online → `refresh_unavailable`.** The lease row's error (and the
+  leasing agent's log) says `credential refresh failed: refresh_unavailable: no
+  admin node is online to relay the refresh` — never a 403 page — and a cached
+  access token that is still valid is issued meanwhile. A node is asked
+  **once** per refresh, never a second: a refresh token is single-use, so a
+  form re-sent after a lost answer would get `invalid_grant` and strand the
+  account — the same reason the direct path never retries.
+
+Three outcomes are pinned in `internal/api/fleet_oauth_refresh_test.go` with a
+real agent against a fake provider: the node relays and the vault saves the
+rotated token; no node is online; the provider refuses. Importing a Codex
+account is `fleet-creds-import.sh --codex` (below). The hub half needs the
+image redeployed with the variable set; the agent half, `ccquota` upgraded on
+the admin logins.
 
 #### Setup tokens and the shared pool (claude-fleet#1463)
 
@@ -948,6 +992,21 @@ back and writes `<label>.hub/.credentials.json` + the `hub:<label>` marker
 exactly as for any lease — a session already running on the token in its env
 is untouched (the env is read once), and the dash still attributes it to its
 label (`fleet-account-truth.py` indexes the hub file's token too).
+
+**Importing a Codex account** (claude-fleet#1490) is the same command in its
+other mode:
+
+    ~/.claude/fleet/bin/fleet-creds-import.sh --codex [--dry-run] [--principal <id>] [profile …]
+
+reads each profile's `auth.json` (`default` = `~/.codex/auth.json`; any other
+profile is `<codex-homes>/<profile>/auth.json`) for `tokens.refresh_token`,
+`account_id` and `id_token`, and POSTs them as a pool `codex` account whose
+label is the profile. A home already holding the `hub-managed` placeholder is
+skipped. Nothing on the importing machine changes — but a Codex refresh token
+is single-use, so once it is in the hub that machine's own Codex must stop
+refreshing it: let the lease replace the home (`CCQUOTA_FLEET_CREDS=1`), or log
+it out. From then on the hub refreshes it — through an admin node when its
+own country is refused (above).
 
 #### The vault key in Aliyun KMS (claude-fleet#1417)
 

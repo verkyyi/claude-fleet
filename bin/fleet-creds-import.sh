@@ -11,6 +11,7 @@
 # command line, and is never printed: not on success, not on failure.
 #
 #   fleet-creds-import.sh [--principal <id>] [--expires-at <RFC3339>] [--dry-run] [label …]
+#   fleet-creds-import.sh --codex [--principal <id>] [--dry-run] [profile …]
 #
 #   label …        which pool files; default = every plain setup-token file in
 #                  the accounts dir. A file already holding `hub:<label>` is
@@ -22,11 +23,21 @@
 #                  mtime + 365 days (`claude setup-token` mints for a year and
 #                  the file is written right after) — printed per label so you
 #                  can see what was assumed. The hub refuses one already past.
+#   --codex        import CODEX refresh tokens instead (issue #1490): each
+#                  profile's auth.json — `default` = ~/.codex/auth.json, any
+#                  other = <codex-homes>/<profile>/auth.json (CCQUOTA_FLEET_CODEX_HOMES,
+#                  default ~/.codex-accounts) — gives tokens.refresh_token +
+#                  account_id + id_token; the hub account label IS the profile.
+#                  Default profile: `default`. A home whose refresh_token is
+#                  the `hub-managed` placeholder is skipped (the hub owns it).
+#                  The hub refreshes it from then on — through an admin node
+#                  in a country the provider serves, if the hub's own is not.
+#                  --expires-at does not apply (a refresh token rotates).
 #   --dry-run      print the plan, send nothing.
 #
 # Env: CCQUOTA_HUB_URL (required), CCQUOTA_VIEWER_TOKEN or ~/.ccquota/viewer-token
 # (the OPERATOR's — the route is operator-only), FLEET_ACCOUNTS_DIR (default
-# ~/.config/claude-fleet/accounts).
+# ~/.config/claude-fleet/accounts), CCQUOTA_FLEET_CODEX_HOMES (default ~/.codex-accounts).
 #
 # Exit 0 = every selected token imported (skips are not failures, and are
 # listed); 1 = at least one import failed (the hub's answer is shown); 2 = usage.
@@ -34,26 +45,37 @@
 # Afterwards nothing on THIS machine changes: the files stay as they are until
 # this login's ccquota agent runs with CCQUOTA_FLEET_CREDS=1, leases them back
 # and replaces each pool file with the hub marker (m4 first; m5 in its own
-# window, issue #1463 step 5).
+# window, issue #1463 step 5). A Codex home is likewise left alone until the
+# lease rewrites its auth.json with the short-lived half — and because a Codex
+# refresh token is single-use, log THIS machine's Codex out of that account
+# (or let the lease replace the home) once it is in the hub: two holders
+# rotate each other out.
 set -uo pipefail
 
-usage() { sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,46p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
-PRINCIPAL=pool EXPIRES='' DRY=0
+PRINCIPAL=pool EXPIRES='' DRY=0 CODEX=0
 LABELS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --principal)  [ -n "${2:-}" ] || usage; PRINCIPAL="$2"; shift 2 ;;
     --expires-at) [ -n "${2:-}" ] || usage; EXPIRES="$2"; shift 2 ;;
+    --codex)      CODEX=1; shift ;;
     --dry-run)    DRY=1; shift ;;
     -h|--help)    usage ;;
     --*)          printf 'fleet-creds-import: unknown option %s\n' "$1" >&2; usage ;;
     *)            LABELS+=("$1"); shift ;;
   esac
 done
+if [ "$CODEX" = 1 ] && [ -n "$EXPIRES" ]; then
+  printf 'fleet-creds-import: --expires-at does not apply to --codex (a refresh token rotates; nothing to date)\n' >&2; usage
+fi
 
 ACCT_DIR="${FLEET_ACCOUNTS_DIR:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/accounts}"
-[ -d "$ACCT_DIR" ] || { printf 'fleet-creds-import: no accounts dir %s\n' "$ACCT_DIR" >&2; exit 2; }
+CODEX_HOMES="${CCQUOTA_FLEET_CODEX_HOMES:-$HOME/.codex-accounts}"
+if [ "$CODEX" = 0 ]; then
+  [ -d "$ACCT_DIR" ] || { printf 'fleet-creds-import: no accounts dir %s\n' "$ACCT_DIR" >&2; exit 2; }
+fi
 command -v python3 >/dev/null 2>&1 || { printf 'fleet-creds-import: python3 is required\n' >&2; exit 2; }
 command -v curl    >/dev/null 2>&1 || { printf 'fleet-creds-import: curl is required\n' >&2; exit 2; }
 
@@ -68,14 +90,19 @@ if [ -z "$VIEWER" ] && [ "$DRY" = 0 ]; then
   exit 2
 fi
 
-# Default labels: every regular file that is not a .conf / dotfile / backup.
+# Default labels: every regular file that is not a .conf / dotfile / backup —
+# or, with --codex, the one `default` profile.
 if [ "${#LABELS[@]}" -eq 0 ]; then
-  for f in "$ACCT_DIR"/*; do
-    [ -f "$f" ] || continue
-    l=${f##*/}
-    case "$l" in .*|*~|*.conf) continue ;; esac
-    LABELS+=("$l")
-  done
+  if [ "$CODEX" = 1 ]; then
+    LABELS+=(default)
+  else
+    for f in "$ACCT_DIR"/*; do
+      [ -f "$f" ] || continue
+      l=${f##*/}
+      case "$l" in .*|*~|*.conf) continue ;; esac
+      LABELS+=("$l")
+    done
+  fi
 fi
 [ "${#LABELS[@]}" -gt 0 ] || { printf 'fleet-creds-import: no pool files in %s\n' "$ACCT_DIR" >&2; exit 2; }
 
@@ -121,26 +148,74 @@ print(exp + '\t')
 PY
 }
 
+# plan_codex <auth.json> <profile> <principal> → stdout: one line "\t<reason>"
+# (reason "" = ok, else why this profile is skipped) and the request body in
+# $WORK/body when ok. The tokens are read inside python and go nowhere else.
+plan_codex() {
+  python3 - "$1" "$2" "$3" "$WORK/body" <<'PY'
+import json, os, sys
+path, label, principal, out = sys.argv[1:5]
+try:
+    with open(path, 'rb') as f:
+        auth = json.load(f)
+except OSError as e:
+    print('\tunreadable: ' + e.strerror); sys.exit(0)
+except ValueError:
+    print('\tnot JSON'); sys.exit(0)
+tokens = auth.get('tokens') if isinstance(auth, dict) else None
+if not isinstance(tokens, dict):
+    print('\tno tokens{} in auth.json (not a ChatGPT login — an API-key home has nothing to import)'); sys.exit(0)
+rt, acct, idt = tokens.get('refresh_token') or '', tokens.get('account_id') or '', tokens.get('id_token') or ''
+if rt == 'hub-managed':
+    print('\talready hub-managed (refresh_token is the hub placeholder)'); sys.exit(0)
+if not rt or any(c.isspace() for c in rt):
+    print('\tno refresh_token in auth.json'); sys.exit(0)
+if not acct:
+    print('\tno account_id in auth.json (the hub needs it beside the refresh token)'); sys.exit(0)
+secret = {"refresh_token": rt, "account_id": acct}
+if idt:
+    secret["id_token"] = idt
+body = {"action": "put", "principal_id": principal, "provider": "codex", "account": label, "secret": secret}
+fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, 'w') as f:
+    json.dump(body, f)
+print('\t')
+PY
+}
+
+# codex_auth <profile> → that profile's auth.json path.
+codex_auth() {
+  if [ "$1" = default ]; then printf '%s/.codex/auth.json' "$HOME"; else printf '%s/%s/auth.json' "$CODEX_HOMES" "$1"; fi
+}
+
 ok=0 failed=0 skipped=0
 for l in ${LABELS[@]+"${LABELS[@]}"}; do
-  f="$ACCT_DIR/$l"
   case "$l" in
     ''|.*|*/*|*~|*.conf) printf 'skip   %-14s not a pool label\n' "$l"; skipped=$((skipped+1)); continue ;;
   esac
-  [ -f "$f" ] || { printf 'skip   %-14s no such pool file\n' "$l"; skipped=$((skipped+1)); continue; }
   rm -f "$WORK/body"
-  line=$(plan "$f" "$l" "$PRINCIPAL" "$EXPIRES") || { printf 'FAIL   %-14s could not read it\n' "$l"; failed=$((failed+1)); continue; }
-  exp=${line%%	*}; why=${line#*	}
+  if [ "$CODEX" = 1 ]; then
+    f=$(codex_auth "$l"); kind=refresh_token
+    [ -f "$f" ] || { printf 'skip   %-14s no %s\n' "$l" "$f"; skipped=$((skipped+1)); continue; }
+    line=$(plan_codex "$f" "$l" "$PRINCIPAL") || { printf 'FAIL   %-14s could not read it\n' "$l"; failed=$((failed+1)); continue; }
+    exp=''
+  else
+    f="$ACCT_DIR/$l"; kind=setup_token
+    [ -f "$f" ] || { printf 'skip   %-14s no such pool file\n' "$l"; skipped=$((skipped+1)); continue; }
+    line=$(plan "$f" "$l" "$PRINCIPAL" "$EXPIRES") || { printf 'FAIL   %-14s could not read it\n' "$l"; failed=$((failed+1)); continue; }
+    exp=${line%%	*}
+  fi
+  why=${line#*	}
   if [ -n "$why" ]; then printf 'skip   %-14s %s\n' "$l" "$why"; skipped=$((skipped+1)); continue; fi
   if [ "$DRY" = 1 ]; then
-    printf 'would  %-14s → %s · %s · setup_token · expires %s%s\n' "$l" "$HUB" "$PRINCIPAL" "$exp" "${EXPIRES:+ (given)}"
+    printf 'would  %-14s → %s · %s · %s%s%s\n' "$l" "$HUB" "$PRINCIPAL" "$kind" "${exp:+ · expires $exp}" "${EXPIRES:+ (given)}"
     ok=$((ok+1)); continue
   fi
   code=$(curl -sS -m 30 -o "$WORK/resp" -w '%{http_code}' -H @"$WORK/hdr" -H 'Content-Type: application/json' \
            --data-binary @"$WORK/body" "$HUB/v1/fleet/credentials" 2>"$WORK/err") || code=000
   rm -f "$WORK/body"
   if [ "$code" = 200 ]; then
-    printf 'put    %-14s → %s · setup_token · expires %s%s\n' "$l" "$PRINCIPAL" "$exp" "${EXPIRES:+ (given)}"
+    printf 'put    %-14s → %s · %s%s%s\n' "$l" "$PRINCIPAL" "$kind" "${exp:+ · expires $exp}" "${EXPIRES:+ (given)}"
     ok=$((ok+1))
   else
     # The hub's answer names the reason and never echoes a secret.

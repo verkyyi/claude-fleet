@@ -109,6 +109,30 @@ func fleetVault(fleetOn bool, st *store.Store) (*credvault.Vault, error) {
 	return vault, nil
 }
 
+// fleetRefreshVia wires how the vault refreshes a token (claude-fleet#1490).
+// CCQUOTA_FLEET_OAUTH_REFRESH_VIA=node hands the one POST to an admin node
+// whose network the provider accepts — the hub in Shenzhen cannot refresh a
+// Codex token itself (auth.openai.com answers 403
+// unsupported_country_region_territory) and must not keep trying from there.
+// Unset or "direct" keeps the hub posting from its own network, exactly as
+// before; anything else refuses to start rather than guess.
+func fleetRefreshVia(srv *api.Server, vault *credvault.Vault) error {
+	switch v := strings.ToLower(strings.TrimSpace(os.Getenv("CCQUOTA_FLEET_OAUTH_REFRESH_VIA"))); v {
+	case "", "direct":
+		return nil
+	case "node":
+		if vault == nil {
+			log.Printf("fleet: CCQUOTA_FLEET_OAUTH_REFRESH_VIA=node set, but the credential vault is off — nothing to relay")
+			return nil
+		}
+		vault.Refresher = &credvault.ProxyRefresher{Via: srv.NodeOAuthRefresh}
+		log.Printf("fleet: credential refreshes are relayed through an online admin node (CCQUOTA_FLEET_OAUTH_REFRESH_VIA=node); none online = refresh_unavailable")
+		return nil
+	default:
+		return fmt.Errorf("CCQUOTA_FLEET_OAUTH_REFRESH_VIA: %q is not node or direct", v)
+	}
+}
+
 // kmsEnvelope builds the KMS client from CCQUOTA_FLEET_CRED_KMS_ENDPOINT (or
 // _REGION) and the hub's Aliyun identity (credvault.CredsFromEnv). An identity
 // that is missing does not stop the hub: every unlock fails with that reason,
@@ -459,6 +483,9 @@ func runHub(args []string) error {
 			return err
 		}
 		if err := sshRelayConfig(srv); err != nil {
+			return err
+		}
+		if err := fleetRefreshVia(srv, vault); err != nil {
 			return err
 		}
 		// SPOT nodes (claude-fleet#1428): on only with an image to run.
@@ -864,6 +891,13 @@ func runAgent(args []string) error {
 		// The relay rides the control channel, so it is on wherever that is
 		// unless explicitly refused (claude-fleet#1413).
 		FleetSSHRelay: fleetEnabled() && os.Getenv("CCQUOTA_FLEET_SSH_RELAY") != "0",
+		// An admin agent carries the hub's token refreshes unless refused
+		// (claude-fleet#1490); the endpoint overrides are for a fake provider.
+		FleetOAuthRefresh: fleetEnabled() && os.Getenv("CCQUOTA_FLEET_OAUTH_REFRESH") != "0",
+		OAuthTokenURLs: map[string]string{
+			"claude": os.Getenv("CCQUOTA_FLEET_CLAUDE_TOKEN_URL"),
+			"codex":  os.Getenv("CCQUOTA_FLEET_CODEX_TOKEN_URL"),
+		},
 		// Routes for `fleet connect` ride the heartbeat (#1414).
 		FleetRoutes:       nodeRoutes,
 		FleetTailnetRoute: fleetEnabled() && os.Getenv("CCQUOTA_FLEET_NODE_TAILNET") != "0",
