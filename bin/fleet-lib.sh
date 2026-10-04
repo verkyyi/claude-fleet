@@ -5458,6 +5458,47 @@ fleet_stop_wait() {
   fleet_window_wait '' "$t"
 }
 
+# fleet_window_reeval <session> <win> [dry] — ask an IDLE window the Stop hook's
+# question again, now (issue #1376). The Stop hook decides `looping` + @claude_wait
+# once, at the edge; a child that finishes, a background job that ends, or a window
+# that stopped before #1370 was synced stays as that edge left it until its next
+# Stop. This re-asks fleet_window_wait and rewrites ONLY the two things the Stop
+# decision owns: `done` ↔ `looping` and @claude_wait. It never touches
+# working/needs, a sleep transition (@worker_lifecycle), or a `looping` with no
+# @claude_wait (the classifier's screen read of a loop — not a reason it can
+# re-ask); it never backfills @loop (fleet_loop_mark.py sweep does) and leaves
+# @claude_state_ts alone — nothing ran in the pane. The write re-checks the state
+# server-side, so a prompt that lands between the read and the write wins.
+# Prints `<old>[ (<wait>)] -> <new>[ (<wait>)]` and exits 0 when it changed (or,
+# with dry=1, would change); exits 1 otherwise.
+fleet_window_reeval() {
+  local sess="${1:-}" t="${2:-}" dry="${3:-}" raw st cw lc sp nw ns cmd
+  [ -n "$t" ] || return 1
+  [ -n "$sess" ] || sess=$(fleet_current_session)
+  raw=$(_fleet_tmux "$sess" display-message -p -t "$t" \
+          '#{@claude_state}|#{@worker_lifecycle}|#{@claude_wait}|#{socket_path}' 2>/dev/null) || return 1
+  st=${raw%%|*}; raw=${raw#*|}; lc=${raw%%|*}; raw=${raw#*|}; cw=${raw%%|*}; sp=${raw#*|}
+  [ -z "$lc" ] || return 1
+  case "$st" in
+    'done') ;;
+    looping) [ -n "$cw" ] || return 1 ;;
+    *) return 1 ;;
+  esac
+  nw=$(fleet_window_wait "$sess" "$t" 2>/dev/null) || nw=''
+  if [ -n "$nw" ]; then ns=looping; else ns='done'; fi
+  [ "$ns" = "$st" ] && [ "$nw" = "$cw" ] && return 1
+  printf '%s%s -> %s%s\n' "$st" "${cw:+ ($cw)}" "$ns" "${nw:+ ($nw)}"
+  [ "$dry" = 1 ] && return 0
+  if [ -n "$nw" ]; then cmd="set-option -w -t $t @claude_wait $nw"
+  else cmd="set-option -wu -t $t @claude_wait"; fi
+  _fleet_tmux "$sess" if-shell -F -t "$t" "#{==:#{@claude_state},$st}" \
+    "set-option -w -t $t @claude_state $ns ; $cmd" 2>/dev/null || return 1
+  [ "$(_fleet_tmux "$sess" display-message -p -t "$t" '#{@claude_state}' 2>/dev/null)" = "$ns" ] || return 1
+  # Wake the spinner (issue #887), the same marker the Stop hook touches.
+  [ -n "$sp" ] && : > "$sp.dirty" 2>/dev/null
+  return 0
+}
+
 # fleet_pr_merge_state <repo> <pr> — what GitHub says a PR's merge state IS, for a
 # child about to report MERGED (issue #1247). Prints one token:
 #   merged   .merged is true — the only token that makes a MERGED report true

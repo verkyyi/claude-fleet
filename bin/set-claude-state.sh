@@ -267,6 +267,16 @@ if [ "$sem" != "leave" ]; then
   [ -n "$_sockp" ] && : > "$_sockp.dirty" 2>/dev/null
 fi
 
+# A child that just went idle may be the last thing its parent was waiting on
+# (issue #1376): re-ask the PARENT's Stop question now, detached, rather than leave
+# it `looping` until its own next turn or the sleep tick. One tmux read on every
+# Stop; the fork only for a window that has an @origin at all.
+if [ "$sem" = 'done' ] && [ -n "$(tmux display-message -p -t "$TMUX_PANE" '#{@origin}' 2>/dev/null)" ]; then
+  _rbin=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
+  [ -x "$_rbin/fleet-wait-reeval.sh" ] && \
+    "$_rbin/fleet-wait-reeval.sh" --quiet --parent-of "$TMUX_PANE" >/dev/null 2>&1 </dev/null &
+fi
+
 # The mod's write ends here (issue #1336): the rest belongs to the Stop hook.
 [ "$via" = mod ] && exit 0
 

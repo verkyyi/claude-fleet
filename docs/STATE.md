@@ -286,6 +286,22 @@ answer `retained:children` / `retained:bg`, and the sidebar's selected-row line
 says `等子任务 k/N` / `后台命令在跑`. When the last child lands (its child-report is
 a new turn) or the job ends (its task notification is too), the next Stop is `done`.
 
+**Re-asked while idle** (issue #1376). A Stop decides this once, at the edge — so a
+window that stopped before #1370 was synced, a parent whose last child just went
+idle, or a job that ended without waking its agent would otherwise keep the edge's
+answer until its next turn. `fleet_window_reeval` re-asks `fleet_window_wait` for a
+window that is `done`, or `looping` WITH a `@claude_wait` (a reasonless `looping` is
+the classifier's screen read and is left), and rewrites only `done` ↔ `looping` +
+`@claude_wait` — never `working`/`needs`, never a sleep transition, never
+`@claude_state_ts` (nothing ran in the pane); the write re-checks the state
+server-side. `bin/fleet-wait-reeval.sh` drives it from three places: every
+`fleet-sleep-daemon.sh` tick right after the #806 reconcile, the
+`fleet-install-apply.sh` `reeval:` step after `loopmark` (`N of M idle window(s)
+changed`), and a child's own Stop (`--parent-of`, detached) so the parent flips the
+moment its last child goes idle. A pass that changed something runs again (≤ 3) so
+a grandchild finishing cascades up. Changes log to `logs/reconcile.log` with
+`via=reeval`; `FLEET_WAIT_REEVAL=0` turns it off.
+
 For everything the hooks cannot see, the screen classifier below stays. A hook
 cannot tell a **clean finish** from a `/loop` paused **between iterations** when
 no schedule was recorded — both look like `Stop` → `done`. And a `done` window may actually hold a pending

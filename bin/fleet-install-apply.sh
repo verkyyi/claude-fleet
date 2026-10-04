@@ -43,6 +43,10 @@
 #             session that scheduled a ScheduleWakeup / CronCreate before the
 #             PostToolUse hook was synced otherwise reads `done` until its next
 #             call. Only adds, never clears; a window that already has one is left.
+#   reeval    re-ask every idle window on every live fleet the Stop hook's
+#             "still waiting?" question (fleet-wait-reeval.sh, #1376): `done` ↔
+#             `looping` + @claude_wait for children / a background job / a Loop.
+#             Never touches working/needs.
 #   logins    --sync-logins only (issue #1122): bring this machine's OTHER
 #             logins to this commit — fleet-sync-logins.sh, the second command
 #             /fleet-sync-install used to end with, folded into this one. A
@@ -713,6 +717,29 @@ if [ -f "$ROOT/bin/fleet_loop_mark.py" ] && [ -f "$ROOT/bin/fleet-lib.sh" ]; the
   else say "loopmark: ok — $lm of $lw Claude window(s) marked on $nf live fleet(s)"; fi
 else
   say 'loopmark: skip — no @loop mark in this version'
+fi
+
+# --- reeval (issue #1376) ----------------------------------------------------------
+# After loopmark, so a freshly backfilled @loop is already a reason: every idle
+# window's `done` ↔ `looping` + @claude_wait re-asked once (fleet-wait-reeval.sh) —
+# a parent that stopped before this version still reads ✓ while its children run.
+if [ -f "$ROOT/bin/fleet-wait-reeval.sh" ]; then
+  socks=$( # shellcheck source=/dev/null
+    . "$ROOT/bin/fleet-lib.sh" >/dev/null 2>&1 && fleet_sockets 2>/dev/null)
+  nf=0 rc_=0 rw=0
+  for s in $socks; do
+    nf=$((nf + 1))
+    [ "$DRY" = 1 ] && continue
+    out=$(bash "$ROOT/bin/fleet-wait-reeval.sh" --quiet -- "$s" 2>/dev/null | tail -1)
+    case "$out" in changed=*' 'windows=*)
+      _rc=${out#changed=}; _rc=${_rc%% *}; _rw=${out#* windows=}; _rw=${_rw%% *}
+      case "$_rc$_rw" in *[!0-9]*) ;; *) rc_=$((rc_ + _rc)); rw=$((rw + _rw)) ;; esac ;;
+    esac
+  done
+  if [ "$DRY" = 1 ]; then say "reeval: would re-ask idle windows on $nf live fleet(s)"
+  else say "reeval: ok — $rc_ of $rw idle window(s) changed on $nf live fleet(s)"; fi
+else
+  say 'reeval: skip — no fleet-wait-reeval.sh in this version'
 fi
 
 logins_step

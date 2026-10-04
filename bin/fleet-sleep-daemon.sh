@@ -16,6 +16,11 @@ sockets=$(fleet_sockets)
 # scan keeps most of the tick; its heartbeat feeds fleet-doctor's `state` line.
 # shellcheck disable=SC2086  # the socket list is newline-separated words by design
 fleet_timebox 15 python3 "$BIN/fleet-state-reconcile.py" --cache-dir "$(fleet_cache_global)" -- $sockets || :
+# …and the other half of that truth (issue #1376): an IDLE window's `done` ↔
+# `looping` + @claude_wait, decided once at its Stop, is re-asked here — a child
+# that finished, a background job that ended, a window that stopped before #1370.
+# shellcheck disable=SC2086
+fleet_timebox 15 bash "$BIN/fleet-wait-reeval.sh" --quiet -- $sockets >/dev/null 2>&1 || :
 last=$(cat "$cursor" 2>/dev/null || :)
 # Rotate after the previous fleet so a slow fleet cannot starve later sockets.
 ordered=$(printf '%s\n' "$sockets" | awk -v last="$last" '

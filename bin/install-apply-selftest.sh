@@ -318,6 +318,19 @@ STUB_SOCKS='f1' run_ap --from "$C7" --to "$C8"
 contains 'G loopmark unreadable → WARN' "$OUT" 'loopmark: WARN 1 of 1 fleet(s) unreadable; 0 of 0 window(s) marked'
 eq 'G loopmark WARN never fails the apply' 0 "$RC"
 rm -f "$R/bin/fleet_loop_mark.py"
+# reeval (issue #1376): one fleet-wait-reeval.sh pass per fleet socket, summed
+contains 'G reeval absent → skip' "$OUT" 'reeval: skip — no fleet-wait-reeval.sh in this version'
+cat > "$R/bin/fleet-wait-reeval.sh" <<EOF
+echo "fleet-wait-reeval.sh \$*" >> "$LOG"
+case "\${3:-}" in f1) echo 'reeval: f1:@1 done -> looping (children)'; echo 'changed=1 windows=4 fleets=1' ;;
+  f2) echo 'changed=0 windows=2 fleets=1' ;; *) exit 0 ;; esac
+EOF
+STUB_SOCKS='f1 f2' run_ap --from "$C7" --to "$C8"
+contains 'G reeval counts' "$OUT" 'reeval: ok — 1 of 6 idle window(s) changed on 2 live fleet(s)'
+ok 'G reeval ran each fleet' "grep -q '^fleet-wait-reeval.sh --quiet -- f1' '$LOG' && grep -q '^fleet-wait-reeval.sh --quiet -- f2' '$LOG'"
+STUB_SOCKS='f1 f2' run_ap --from "$C7" --to "$C8" --dry-run
+contains 'G reeval dry-run' "$OUT" 'reeval: would re-ask idle windows on 2 live fleet(s)'
+rm -f "$R/bin/fleet-wait-reeval.sh"
 
 # --- I. failure -----------------------------------------------------------------------
 sed -i.bak 's/<integer>90</<integer>45</' "$R/launchd/com.claude-fleet.collect.plist.tmpl" && rm -f "$R/launchd/"*.bak
