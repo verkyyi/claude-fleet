@@ -4008,13 +4008,19 @@ EOF
 
 # fleet_uuid <sess> → the fleet's durable UUID — byte-for-byte what
 # fleet_control.py's inventory mints: uuid5(<machine id>, canonical JSON of
-# [session, FLEET_REPO, FLEET_MAIN]). READ-ONLY: a machine whose control database
-# has no machine id yet (fleet-control.py never ran) has no fleet UUID — nothing,
-# rc 1 — and so no worker_id either; nothing here creates one.
+# [session, FLEET_REPO, FLEET_MAIN]) — the fleet conf's OWN repo and checkout.
+# READ-ONLY: a machine whose control database has no machine id yet
+# (fleet-control.py never ran) has no fleet UUID — nothing, rc 1 — and so no
+# worker_id either; nothing here creates one.
+# TMUX is unset for the conf load: inside a pane whose window belongs to a hosted
+# repo, fleet_load_conf lays that repo's overlay on top (issue #788), which swapped
+# FLEET_REPO/FLEET_MAIN into the hash and minted a UUID the hub had never seen —
+# every lease / place / move from such a pane came back 403 「fleet … is not
+# registered to this node」 (issue #1491). The inventory never sees a window.
 fleet_uuid() {
   local sess="${1:-}" db="$FLEET_CONF_DIR/control/state.sqlite3"
   [ -n "$sess" ] && [ -f "$db" ] || return 1
-  ( fleet_load_conf "$sess" >/dev/null 2>&1
+  ( unset TMUX TMUX_PANE; fleet_load_conf "$sess" >/dev/null 2>&1
     python3 - "$db" "$sess" "${FLEET_REPO:-}" "${FLEET_MAIN:-}" 2>/dev/null <<'PY'
 import json, sqlite3, sys, uuid
 from urllib.parse import quote

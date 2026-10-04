@@ -309,5 +309,37 @@ case "$err" in *'no node token (CCQUOTA_TOKEN unset and '*'node.env missing)'*'t
 case "$err" in *'hub unreachable'*) fail "MOVE a missing token is not 「hub unreachable」" "$err" ;; esac
 ok "MOVE fleet_hub_move: node.env's token reaches the command; none → 「no node token」"
 
+# ===== UUID: the worker_id's fleet UUID is the FLEET's, not the window's repo (#1491) =
+# A 2-repo fleet; the pane's window belongs to the second repo, so fleet_load_conf
+# lays its overlay on (issue #788). fleet_uuid must still hash the fleet conf's own
+# [session, FLEET_REPO, FLEET_MAIN] — what fleet_control.py's inventory minted and
+# the hub registered — or every lease from such a pane is 403 「not registered」.
+mkdir -p "$WORK/conf/fleets/testsess/repos" "$WORK/other" "$WORK/ovbin"
+printf 'FLEET_REPO="acme/widgets"\nFLEET_MAIN="%s"\n' "$WORK/main" > "$WORK/conf/fleets/testsess/conf"
+printf 'FLEET_REPO="acme/other"\nFLEET_MAIN="%s"\n' "$WORK/other" > "$WORK/conf/fleets/testsess/repos/acme-other.conf"
+cat > "$WORK/ovbin/tmux" <<OVTMUX
+#!/bin/bash
+# the pane's window: session testsess, @repo acme/other
+if [ "\${1:-}" = "-L" ] || [ "\${1:-}" = "-S" ]; then shift 2; fi
+case "\$*" in
+  *session_name*) echo testsess ;;
+  *'@repo'*)      printf 'acme/other||\n' ;;
+  *)              echo '' ;;
+esac
+exit 0
+OVTMUX
+chmod +x "$WORK/ovbin/tmux"
+in_pane() { (cd "$WORK" && PATH="$WORK/ovbin:$PATH" TMUX=/tmp/fake,1,0 TMUX_PANE=%1 FLEET_CONF_DIR="$WORK/conf" bash -c '. "$1/fleet-lib.sh"; '"$1" _ "$BIN"); }
+no_pane() { (cd "$WORK" && env -u TMUX -u TMUX_PANE FLEET_CONF_DIR="$WORK/conf" bash -c '. "$1/fleet-lib.sh"; '"$1" _ "$BIN"); }
+[ "$(in_pane 'fleet_load_conf testsess; printf %s "$FLEET_REPO"')" = acme/other ] || fail "UUID setup: the fake pane must put the second repo's overlay on" "$(in_pane 'fleet_load_conf testsess; printf %s "$FLEET_REPO"')"
+[ "$(no_pane 'fleet_load_conf testsess; printf %s "$FLEET_REPO"')" = acme/widgets ] || fail "UUID setup: outside a pane the fleet conf's own repo"
+u_pane=$(in_pane 'fleet_uuid testsess'); u_fleet=$(no_pane 'fleet_uuid testsess')
+[ -n "$u_fleet" ]                                || fail "UUID setup: fleet_uuid derived nothing"
+[ "$u_pane" = "$u_fleet" ]                       || fail "UUID a pane bound to the second repo must mint the FLEET's UUID, not its window's" "pane: $u_pane · fleet: $u_fleet"
+# the conf the other legs ran under (no FLEET_MAIN line, FLEET_REPO from the env)
+# is restored so this leg leaves no footprint
+rm -rf "$WORK/conf/fleets/testsess/repos" "$WORK/conf/fleets/testsess/conf"
+ok "UUID the worker_id's fleet UUID ignores the window's repo overlay"
+
 printf '\nselftest OK: %s assertions passed (hub issue lease, issue #1422)\n' "$pass"
 exit 0

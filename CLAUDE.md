@@ -294,6 +294,9 @@ Do not install from memory: read the doc and work from it.
   `FLEET_HUB_*_CMD` seam is never held to the token. A login whose agent predates
   `node.env` writes it once with `bin/fleet-hub-node.sh env --write` (from its
   launchd plist); `fleet-sync-logins.sh` does that for the other logins, and
-  `fleet-doctor`'s `node` line WARNs on a login without one.
+  `fleet-doctor`'s `node` line WARNs on a login without one. **A worker_id's
+  fleet UUID is the FLEET's**: `fleet_uuid` loads the conf with `TMUX` unset so
+  the window's repo overlay (#788) never enters the hash — the hub only knows
+  the UUID the inventory minted from the fleet conf's own repo + checkout.
 - Claude Code re-reads `settings.json` hooks per turn, so running sessions pick
   up hook changes without a restart.

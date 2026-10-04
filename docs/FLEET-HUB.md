@@ -237,7 +237,13 @@ LaunchDaemon (`sudo -n` when unreadable), else `--plist <file>`; values are
 never printed. `fleet-sync-logins.sh` runs that for every other login it
 reaches, and `fleet-doctor`'s `node` line WARNs on a login that has
 `CCQUOTA_FLEET=1` and `ccquota` but no token — or a token exported into its
-shell. A `FLEET_HUB_*_CMD` seam is never held to the token.
+shell. A `FLEET_HUB_*_CMD` seam is never held to the token. The same issue
+fixed the worker_id's fleet half: `fleet_uuid` hashes the fleet conf's OWN
+`[session, FLEET_REPO, FLEET_MAIN]` (what the inventory minted and the hub
+registered) — from a pane whose window belongs to a hosted repo it used to
+take that repo's overlay (issue #788) and mint a UUID the hub had never seen,
+so every lease / place / move from such a pane was 403 「fleet … is not
+registered to this node」.
 
 **A session moves with its lease** (issue #1426, EPIC #1419 C7).
 `fleet-move.sh --via hub --to <machine>` (and `--rebalance`) moves an idle
