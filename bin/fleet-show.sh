@@ -138,7 +138,6 @@ PY="$(command -v python3)"
 # shellcheck source=/dev/null
 . "$BIN/fleet-client-lib.sh"
 fc_session || degrade "$FC_WHY"
-sess="$FC_SESS"
 fc_pick "$client" "$TERM_RE" || degrade "$FC_WHY"
 client="$FC_CLIENT"; termtype="$FC_TERMTYPE"; geom="$FC_GEOM"
 

@@ -27,6 +27,7 @@
 #   fc_lock                    → FC_LOCKDIR held (needs FC_SESS); fc_unlock frees it
 #   fc_run <cmd>               → lock-client FC_CLIENT running <cmd> (needs FC_SESS)
 #   fc_wait <status> <secs>    → 0 once <status> holds a `done` line
+# shellcheck disable=SC2034  # the FC_* globals are read by the sourcing script
 
 fc_session() {
   FC_SESS=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{session_name}' 2>/dev/null)
