@@ -23,6 +23,9 @@
 #   fleet_status_hub_lost <now>        → rc 0 = 失联: FSH_TS is older than
 #       FLEET_HUB_SESSIONS_STALE (60 s), FSH_AGE the seconds since; rc 1 = fresh.
 #   fleet_status_hub_node <label>      → HN_* from global/hub_nodes; rc 1: no row.
+#       HN_VST is the machine's fleet version against the stable mark (issue
+#       #644): `old:<n>` is what the bar draws as 旧; `ok` / `ahead:<n>` / `off`
+#       / `?` / '' (unknown — a pre-#644 cache has no such field) draw nothing.
 #   fleet_status_remote_node <sess> <label> → RN_AV (online|lost|maintenance) RN_N
 #       RN_SEEN from the `#node` header line of global/remote_<sess> (#1475): the
 #       hub's word on a machine when hub_nodes has no row for it — a login whose
@@ -42,8 +45,9 @@
 #
 # hub_nodes  (one per machine the hub shows; written by fleet-hub-sessions.sh):
 #   #ts<US><epoch>
-#   node<US>online|lost<US>load1<US>ncpu<US>mem_pct<US>sessions<US>fleet_version<US>age<US>mem_used_mb<US>mem_total_mb
-#   sessions is `?` when the hub could not read a fleet there (#1465), never 0.
+#   node<US>online|lost<US>load1<US>ncpu<US>mem_pct<US>sessions<US>fleet_version<US>age<US>mem_used_mb<US>mem_total_mb<US>ver_state
+#   sessions is `?` when the hub could not read a fleet there (#1465), never 0;
+#   ver_state is the version's word against the stable mark (#644, HN_VST above).
 # hub_limits (one per subscription with a reading):
 #   #ts<US><epoch>
 #   label<US>pct5h<US>pctweek<US>account_uuid<US>hub_label
@@ -97,13 +101,13 @@ fleet_status_hub_lost() {
 }
 
 fleet_status_hub_node() {
-  local f="$FLEET_STATUS_G/hub_nodes" want="${1:-}" k a b c d e g h i j
-  HN_TS=0 HN_AV='' HN_LOAD1='' HN_NCPU='' HN_MEM='' HN_SESS='' HN_VER='' HN_AGE='' HN_USED='' HN_TOTAL=''
+  local f="$FLEET_STATUS_G/hub_nodes" want="${1:-}" k a b c d e g h i j l
+  HN_TS=0 HN_AV='' HN_LOAD1='' HN_NCPU='' HN_MEM='' HN_SESS='' HN_VER='' HN_AGE='' HN_USED='' HN_TOTAL='' HN_VST=''
   [ -n "$want" ] && [ -s "$f" ] || return 1
-  while IFS=$_FS_US read -r k a b c d e g h i j; do
+  while IFS=$_FS_US read -r k a b c d e g h i j l; do
     case "$k" in
       '#ts')   HN_TS=$a; case "$HN_TS" in ''|*[!0-9]*) HN_TS=0 ;; esac ;;
-      "$want") HN_AV=$a; HN_LOAD1=$b; HN_NCPU=$c; HN_MEM=$d; HN_SESS=$e; HN_VER=$g; HN_AGE=$h; HN_USED=$i; HN_TOTAL=$j
+      "$want") HN_AV=$a; HN_LOAD1=$b; HN_NCPU=$c; HN_MEM=$d; HN_SESS=$e; HN_VER=$g; HN_AGE=$h; HN_USED=$i; HN_TOTAL=$j; HN_VST=$l
                return 0 ;;
     esac
   done < "$f"

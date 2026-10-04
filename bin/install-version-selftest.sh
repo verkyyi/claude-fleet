@@ -21,6 +21,11 @@
 #   G. other logins       the `logins:` line (issue #1069): absent with one login,
 #                         the drift of other logins' installs when they exist,
 #                         in --json too — and never a change to verdict or exit
+#   H. other machines     the doctor's `machines (hub)` install line (issue #644):
+#                         off global/hub_nodes alone — WARN naming the machine
+#                         and its behind-count when one is `old:<n>`, INFO when
+#                         none is, unknown for `?` / no version / an older cache,
+#                         and no line at all without the cache
 #
 # Exit 0 = pass.
 set -uo pipefail
@@ -267,5 +272,53 @@ contains "logins: json null-free when present" "$OUT" '"logins":"1 other'
 rm -rf "$WORK/homes/other"
 run --dir "$G" --no-fetch --json
 contains "logins: json null with one login" "$OUT" '"logins":null'
+
+# ============================================================================
+# H. the doctor's `machines (hub)` line (issue #644, EPIC #1524 R4)
+# ============================================================================
+# The refresh loop (fleet-hub-sessions.sh, pinned by tmux-status-selftest.sh G)
+# writes each machine's version word as hub_nodes' 11th field; the doctor only
+# READS the cache — so the cache is written by hand here, and the live dir is a
+# plain clone (its own install line is the earlier legs' business).
+HN="$WORK/dash/global"; mkdir -p "$HN"
+US=$(printf '\037')
+hn_row() { local IFS="$US"; printf '%s\n' "$*"; }
+doc_machines() {  # → the doctor's `machines (hub)` install line(s), label first
+  FLEET_LIVE_DIR="$C1" FLEET_STATUS_G="$HN" sh "$DOC" 2>&1 | grep -E '^[[:space:]]+(PASS|WARN|FAIL|INFO)[[:space:]]+install[[:space:]]' | grep 'machines (hub)' || true
+}
+out=$(doc_machines)
+eq "machines: no hub_nodes cache → no line (the degenerate case)" "" "$out"
+: > "$HN/hub_nodes"
+eq "machines: an empty cache → no line" "" "$(doc_machines)"
+{ printf '#ts%s%s\n' "$US" "$(( $(date +%s) - 12 ))"
+  hn_row m5 online 5.02 15 67 19 bc4e8e1753 2 44125 65536 ok
+  hn_row m4 online 3.18 10 53 6 a1b2c3d 5 8798 16384 old:3
+  hn_row m8 online 1.00 4 10 0 deadbee 1 400 4096 '?'
+  hn_row m9 lost 0.00 4 10 0 '' 4000 400 4096 ''
+  hn_row m7 online 1.00 4 10 0 c0ffee1 1 400 4096 ahead:2
+  hn_row m6 online 1.00 4 10 0 0ff1ine 1 400 4096 off; } > "$HN/hub_nodes"
+out=$(doc_machines)
+contains "machines: one old machine → WARN" "$out" "WARN"
+contains "machines: … naming it, its version and the behind-count" "$out" "m4 at a1b2c3d — 3 behind stable (OLD)"
+contains "machines: at stable" "$out" "m5 at bc4e8e1753 — at stable"
+contains "machines: ? is unknown, never a number" "$out" "m8 at deadbee — unknown (a commit this checkout has not fetched)"
+contains "machines: no version reported → unknown" "$out" "m9 — unknown (no fleet version reported)"
+contains "machines: ahead of stable" "$out" "m7 at c0ffee1 — 2 ahead of stable"
+contains "machines: off stable's line" "$out" "m6 at 0ff1ine — not on stable's line"
+contains "machines: the cache's age" "$out" "hub cache 1"
+contains "machines: the WARN names where to look on that machine" "$out" "fleet-install-follow.sh"
+eq "machines: one line" 1 "$(printf '%s\n' "$out" | grep -c .)"
+{ printf '#ts%s%s\n' "$US" "$(date +%s)"
+  hn_row m5 online 5.02 15 67 19 bc4e8e1753 2 44125 65536 ok
+  hn_row m4 online 3.18 10 53 6 bc4e8e1 5 8798 16384 ok; } > "$HN/hub_nodes"
+out=$(doc_machines)
+contains "machines: every machine at stable → INFO" "$out" "INFO"
+not_contains "machines: … not a WARN" "$out" "WARN"
+not_contains "machines: … and no OLD" "$out" "OLD"
+{ printf '#ts%s%s\n' "$US" "$(date +%s)"
+  hn_row m4 online 3.18 10 53 6 bc4e8e1 5 8798 16384; } > "$HN/hub_nodes"
+out=$(doc_machines)
+contains "machines: a pre-#644 10-field row → unknown, not judged" "$out" "m4 at bc4e8e1 — unknown (not judged against stable"
+not_contains "machines: … never a WARN" "$out" "WARN"
 
 printf 'install-version-selftest OK (%d checks)\n' "$CHECKS"

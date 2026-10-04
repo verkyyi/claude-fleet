@@ -198,7 +198,7 @@ The conf's `status-right` passes the client's current window as `k=v` args
 (`sess= win= remote= acct= wsf= wscf= wsaved= cw= rl5= rl7=`), so tmux re-runs the bar the
 moment you switch windows. Data: the same refresh loop writes, every
 `FLEET_HUB_SUMMARY_EVERY` (10 s, whatever the sessions' pace), `global/hub_nodes` (`/v1/nodes`: `node online|lost load1 ncpu mem_pct sessions
-fleet_version age mem_used_mb mem_total_mb`) and `global/hub_limits`
+fleet_version age mem_used_mb mem_total_mb ver_state`) and `global/hub_limits`
 (`/v1/limits?account=all`: `label pct5h pctweek account_uuid hub_label`, the
 label being this login's `accounts/<label>.conf` whose `CCQUOTA_ACCOUNT` is that
 uuid, else the hub's). Both are viewer routes; a login whose identity (the
@@ -362,6 +362,24 @@ computer's, never sent on). `~/.config/claude-fleet/shell.conf` holds the knobs
 an ssh shim, an isolated socket. The bar's machine chip reads the sessions
 cache's `#node` line when `hub_nodes` has no row (a certificate identity on a
 hub that predates #1502's `/v1/fleet/summary`): `m4 ●` rather than `?`.
+
+**Which machine's install is old** (issue #644, EPIC #1524 R4). Every node's
+heartbeat carries its live install's HEAD (`fleet-install-version.sh --json`,
+read by the agent every 5 minutes; `/v1/nodes` lists it as `fleet_version`).
+The refresh loop judges that version, once a round and with local git only,
+against the stable mark this login's install-sync daemon keeps fetched as the
+live install's `refs/tags/stable` (`FLEET_LIVE_DIR`, default `~/.claude/fleet`),
+and writes the word as `hub_nodes`' `ver_state`: `ok`, `old:<n>` (n commits
+behind stable), `ahead:<n>`, `off` (not on stable's line), `?` (a commit this
+checkout has not fetched) or empty — no version reported, no live checkout, no
+local tag: unknown, never drawn as current (the #635 rule). Only `old:<n>`
+shows: the bar's machine chip ends in `· 旧` for the machine the current
+window is on — this one included, a lost one too, at every width — and
+`fleet-doctor`'s `install` row lists every machine (`machines (hub): m4 at
+a1b2c3d — 3 behind stable (OLD) · m5 at bc4e8e1 — at stable`), a WARN when
+any is old. No cache (hub off, a certificate identity) draws and prints
+nothing; a cache from before #644 has no word and draws nothing.
+`tmux-status-selftest.sh` G/K and `install-version-selftest.sh` H pin it.
 
 **The one-line install carries the shell** (issue #1486, EPIC #1479 C7).
 `curl -fsSL <hub>/install | sh` fetches `/install/manifest` — the list the hub's
