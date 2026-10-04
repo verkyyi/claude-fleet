@@ -738,8 +738,9 @@ their own logins only, and `config_set` only for the keys in
 ### Credentials live at the entrance — machines lease the short-lived half (claude-fleet#1415)
 
 Every person's long-lived Claude / Codex credential (the refresh token) is
-stored ONLY in the hub, sealed with AES-256-GCM under a key kept in its own k8s
-Secret — never in the database the blobs are in. The hub alone refreshes them,
+stored ONLY in the hub, sealed with AES-256-GCM under a key that is never in the
+database the blobs are in — its own k8s Secret, or (better) a data key only
+Aliyun KMS can unwrap (below). The hub alone refreshes them,
 one writer per account, saving the rotated refresh token before anyone gets the
 result; so however many machines use an account, it is refreshed about once per
 token lifetime and no machine ever logs another out. A machine leases only the
@@ -783,6 +784,44 @@ refuse a WeCom session. A Claude refresh token comes from an interactive
 machine out — two holders of one refresh token rotate each other out.
 A Codex home the hub writes is registered once with
 `fleet-codex-account.sh register <label> <home>` like any other.
+
+#### The vault key in Aliyun KMS (claude-fleet#1417)
+
+A key in a k8s Secret means the database and that Secret, stolen together, open
+every credential. With `CCQUOTA_FLEET_CRED_KMS_KEY_ID` set, the vault uses
+**envelope encryption**: its data key is stored in the database only as KMS
+ciphertext (`fleet_cred_key`), and opening it is a KMS `Decrypt` call made with
+the hub's own cloud identity. The database and every Secret together open
+nothing, and every unwrap is a line in KMS's log — ActionTrail / the KMS
+console's call records; the hub's `/credentials` audit carries an `unlock` row
+with the same KMS request id.
+
+| where | setting | effect |
+|---|---|---|
+| hub | `CCQUOTA_FLEET_CRED_KMS_KEY_ID=alias/ccquota-fleet` | the master key (id or alias). Set = KMS mode |
+| hub | `CCQUOTA_FLEET_CRED_KMS_REGION=cn-shenzhen` (or `CCQUOTA_FLEET_CRED_KMS_ENDPOINT=kms-vpc.cn-shenzhen.aliyuncs.com`) | where KMS answers |
+| hub | RRSA: `ALIBABA_CLOUD_ROLE_ARN` + `ALIBABA_CLOUD_OIDC_PROVIDER_ARN` + `ALIBABA_CLOUD_OIDC_TOKEN_FILE` (ACK injects them); else `ALIBABA_CLOUD_ECS_METADATA=<role>`; else `ALIBABA_CLOUD_ACCESS_KEY_ID` / `_SECRET` | the hub's identity. **Use RRSA or an instance role**: a static AccessKey in a Secret puts KMS one Secret away again (the hub logs a warning) |
+
+The RAM role needs `kms:GenerateDataKey`, `kms:Decrypt` and `kms:Encrypt` on
+that key only. Every call carries the EncryptionContext
+`{"purpose":"ccquota-fleet-credential-vault"}`, so a wrapped blob cannot be
+decrypted for anything else.
+
+- **First KMS start** generates the data key. If `CCQUOTA_FLEET_CRED_KEY(_FILE)`
+  is still set, every stored credential is re-sealed from it under the new data
+  key in the same transaction — then **delete that Secret**: it opens nothing
+  any more, and the hub ignores (and warns about) it from then on. Rows sealed
+  under a key the hub was not given refuse the install rather than be stranded.
+- **Rotating the master key** needs nothing from the data: KMS's automatic
+  rotation keeps old versions decryptable, and pointing the hub at a different
+  key re-wraps the one data key on the next start (`rewrapped_at`) — no row is
+  touched.
+- **KMS unreachable = vault LOCKED, never a fallback.** The hub starts locked and
+  stays so until a `Decrypt` succeeds (retrying 15s → 5min): leases and stores
+  answer `503 vault_locked` (each lease refusal an audit row), and the live
+  findings carry a **critical** `cred_vault_locked` at the top. Revocation and
+  the audit keep working. Machines keep the access tokens they already have, so
+  a short KMS outage costs nothing until those run out.
 
 ### Connection certificates — scan once, 12 hours in (claude-fleet#1412)
 

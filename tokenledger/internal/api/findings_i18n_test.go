@@ -45,7 +45,8 @@ func everyFinding(t *testing.T) []findings.Finding {
 			{Label: "mac-studio"},
 			{Label: "linux-box", LastSeen: &seen},
 		},
-		Live: []findings.LiveStat{{SessionID: "feedfacecafe", CWD: "/srv/work/api", Tokens: 300_000_000}},
+		Live:      []findings.LiveStat{{SessionID: "feedfacecafe", CWD: "/srv/work/api", Tokens: 300_000_000}},
+		VaultLock: &findings.VaultLock{Reason: "kms Decrypt: kms 503 ServiceUnavailable", Since: seen},
 	})
 	all := append(append([]findings.Finding{}, review...), now...)
 	if len(all) == 0 {

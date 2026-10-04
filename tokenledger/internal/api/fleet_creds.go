@@ -44,12 +44,26 @@ const (
 	LeaseRevoked     = "revoked"
 	LeaseNoPrincipal = "no_principal"
 	LeaseVaultOff    = "vault_off"
+	// LeaseVaultLocked: the vault's key lives in KMS and KMS has not
+	// unwrapped it (claude-fleet#1417). Nothing is issued meanwhile — there
+	// is no plain key to fall back to — and the hub raises a critical finding.
+	LeaseVaultLocked = "vault_locked"
 )
+
+// vaultLocked answers 503 vault_locked when the vault holds no key.
+func (s *Server) vaultLocked(w http.ResponseWriter) bool {
+	if l := s.Vault.Locked(); l != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": LeaseVaultLocked,
+			"message": "the credential vault is locked (KMS): " + l.Reason})
+		return true
+	}
+	return false
+}
 
 func (s *Server) vaultOff(w http.ResponseWriter) bool {
 	if s.Vault == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": LeaseVaultOff,
-			"message": "the credential vault is off on this hub (no CCQUOTA_FLEET_CRED_KEY / _FILE)"})
+			"message": "the credential vault is off on this hub (no CCQUOTA_FLEET_CRED_KMS_KEY_ID or CCQUOTA_FLEET_CRED_KEY / _FILE)"})
 		return true
 	}
 	return false
@@ -101,6 +115,10 @@ func (s *Server) handleNodeCredentials(w http.ResponseWriter, r *http.Request) {
 			log.Printf("credentials: audit deny for %s@%s: %v", osUser, host, err)
 		}
 		writeJSON(w, code, map[string]string{"error": reason, "message": detail})
+	}
+	if l := s.Vault.Locked(); l != nil {
+		deny(http.StatusServiceUnavailable, LeaseVaultLocked, "", "the credential vault is locked (KMS): "+l.Reason)
+		return
 	}
 
 	principal, err := s.Store.PrincipalForLogin(host, osUser)
@@ -215,8 +233,15 @@ func (s *Server) handleFleetCredentials(w http.ResponseWriter, r *http.Request) 
 		audit := store.CredAudit{PrincipalID: req.PrincipalID, Provider: req.Provider, Account: req.Account}
 		switch req.Action {
 		case "put":
+			if s.vaultLocked(w) {
+				return
+			}
 			if err := s.Vault.Put(req.PrincipalID, req.Provider, req.Account, req.Secret); err != nil {
-				httpError(w, http.StatusBadRequest, err.Error())
+				code := http.StatusBadRequest
+				if errors.Is(err, credvault.ErrLocked) {
+					code = http.StatusServiceUnavailable
+				}
+				httpError(w, code, err.Error())
 				return
 			}
 			audit.Action = store.CredPut

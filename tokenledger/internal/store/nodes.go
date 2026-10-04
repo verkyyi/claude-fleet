@@ -72,6 +72,10 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetCreds(); err != nil {
 		return err
 	}
+	// The vault's KMS-wrapped data key (claude-fleet#1417).
+	if err := s.ensureFleetCredKey(); err != nil {
+		return err
+	}
 	// Session moves through the hub (claude-fleet#1426).
 	if err := s.ensureFleetMoves(); err != nil {
 		return err

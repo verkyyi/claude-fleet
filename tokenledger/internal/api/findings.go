@@ -294,6 +294,13 @@ func (s *Server) GatherNowSource(account, source string) (findings.NowInputs, er
 		return in, err
 	}
 	in.Mutes = mutes
+	// The credential vault locked (claude-fleet#1417) is the whole hub's
+	// alarm, not one account's: it rides the unscoped view only.
+	if s.Vault != nil && account == store.AllAccounts {
+		if l := s.Vault.Locked(); l != nil {
+			in.VaultLock = &findings.VaultLock{Reason: l.Reason, Since: l.Since}
+		}
+	}
 	accts, err := s.Store.ListAccounts()
 	if err != nil {
 		return in, err
