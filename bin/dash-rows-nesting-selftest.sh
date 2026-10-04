@@ -247,8 +247,8 @@ check(m.auto_width(wide, 200, 30, 44) == min(44, max(30, need)), "G: widens to t
 check(m.auto_width(wide + [["@9", "", "·", "x" * 80, "", "", "0", ""]], 200, 30, 44) == 44, "G: capped at 44")
 check(m.auto_width(wide, 140, 30, 44) <= 35, "G: never past a quarter of the window")
 check(m.auto_width(wide, 115, 30, 44) == 30, "G: never under the floor, never into the worker's 80")
-check(m.detail_line([r for r in wide if r[3] == "k2"][0]).endswith("k2 · " + [r for r in wide if r[3] == "k2"][0][7]),
-      "G: the selected-row line names the kind of !")
+check(m.detail_line([r for r in wide if r[3] == "k2"][0]) == " k2",
+      "G: the selected-row line is the whole name only — the kind of ! is @title_info's (#1377)")
 print("\n".join(fails) if fails else "ok")
 PY
 )
