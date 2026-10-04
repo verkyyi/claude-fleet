@@ -112,7 +112,7 @@ start_hub() {
 stop_hub() { kill "$HUB_PID" 2>/dev/null; wait "$HUB_PID" 2>/dev/null; HUB_PID=""; }
 
 PORT=""
-export HOME="$SB/home"
+export HOME="$SB/home" XDG_CONFIG_HOME="$SB/home/.config"
 mkdir -p "$HOME/.ssh"
 printf 'Host mine\n  HostName 10.0.0.1\n  User me\n' >"$HOME/.ssh/config"
 ORIG_CONF="$(cat "$HOME/.ssh/config")"
