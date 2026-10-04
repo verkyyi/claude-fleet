@@ -732,6 +732,12 @@ type Candidate struct {
 	// Kind is ephemeral for a SPOT node (claude-fleet#1428): its score is
 	// multiplied by the SPOT weight, so a fixed machine with room wins.
 	Kind string `json:"kind,omitempty"`
+	// Ready is the node's own word on whether it can take a NEW session
+	// (claude-fleet#1475: gh logged in, a usable credential, the checkouts
+	// present); nil from an agent that does not say. An `auto` placement
+	// never picks a node that says false — only a name asks for it.
+	Ready    *bool  `json:"ready,omitempty"`
+	NotReady string `json:"not_ready,omitempty"`
 }
 
 // Placement is pickNode's answer, journalled with the operation.
@@ -891,6 +897,12 @@ func (s *Server) pickNode(p fleetPrincipal, repo, node string, now time.Time) (P
 		}
 		seen[r.EndpointID] = true // one fleet per login: the first by name
 		c := s.judge(r, settings, accounts, now)
+		if node == "auto" && c.Eligible && c.Ready != nil && !*c.Ready {
+			// The node says it cannot take a new session (claude-fleet#1475:
+			// no gh login, no credential, a missing checkout). auto never
+			// sends work there; naming it with --node still does.
+			c.Eligible, c.Excluded = false, "not ready: "+c.NotReady
+		}
 		if k := kinds[r.EndpointID]; k != "" {
 			c.Kind = k
 			if st := spotState[r.EndpointID]; st != "" && st != store.SpotOnline && c.Eligible {
@@ -942,6 +954,10 @@ func (s *Server) judge(r store.FleetRow, settings map[string]string, accounts ma
 	c := Candidate{Machine: r.Hostname, OSUser: r.OSUser, EndpointID: r.EndpointID, FleetID: r.FleetID, FleetName: r.Name}
 	hb, status, _ := s.nodeStatusOf(r.EndpointID, now)
 	c.Sessions, c.MemFreeBytes = hb.Sessions, hb.MemFreeBytes
+	c.Ready, c.NotReady = hb.Ready, hb.NotReady
+	if hb.Ready == nil || *hb.Ready {
+		c.NotReady = ""
+	}
 	if hb.NCPU > 0 {
 		l := hb.Load1 / float64(hb.NCPU)
 		c.LoadPerCore = &l

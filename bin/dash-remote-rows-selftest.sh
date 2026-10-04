@@ -1,10 +1,11 @@
 #!/bin/bash
 # dash-remote-rows-selftest.sh — the sidebar shows your sessions on the OTHER
-# machines (issue #1423, EPIC #1419 C4), mixed in with this machine's, tagged with
-# the machine, nested under their real parents; a lost machine's rows stay and read
-# 失联. Drives tmux-dashboard-rows.sh, fleet-hub-sessions.sh, fleet-control-read.sh
-# + fleet_control.py, and the read-only guards in dash-fold-toggle.sh,
-# dash-pin-toggle.sh and dash-migrate.sh.
+# machines (issue #1423, EPIC #1419 C4; the #1475 look + identity), mixed in with
+# this machine's, nested under their real parents, drawn like them (no machine
+# name on a row — #1475); a machine status line on top; a lost machine's rows dimmed in their
+# own group at the foot. Drives tmux-dashboard-rows.sh, fleet-hub-sessions.sh,
+# fleet-control-read.sh + fleet_control.py, and the read-only guards in
+# dash-fold-toggle.sh, dash-pin-toggle.sh and dash-migrate.sh.
 #
 # Legs:
 #   A. degenerate — CCQUOTA_FLEET unset: a remote cache on disk changes NOTHING
@@ -12,28 +13,48 @@
 #                   cache, the same bytes again
 #   B. rows       — a remote row nests under its LOCAL parent (bare-key origin) and a
 #                   remote grandchild under ITS remote parent (worker_id origin); each
-#                   wears `[m4]`; the local parent's k/N counts them; the hub row keeps
-#                   the common width; its id is `wid:<worker_id>`
-#   C. lost       — a machine the hub calls lost, and EVERY row once the cache is older
-#                   than FLEET_HUB_SESSIONS_STALE, reads `[m4 失联]` — never vanishes
+#                   carries its machine as the sidebar's 9th field (`m4`) and the hub
+#                   row's last field, NEVER drawn — no `[m4]` in the name, no tag: a
+#                   remote row looks exactly like a local one (#1475); a local row has an
+#                   empty 9th field; the local parent's k/N counts them; the hub row keeps the
+#                   common width; its id is `wid:<worker_id>`
+#   S. status     — the first row is the machine status line, `● m5 3 · ● m4 2`: this
+#                   machine's live rows, then each #node line; an inert hdr row
+#   C. lost       — a lost machine's rows (the hub says lost, or the cache is older than
+#                   FLEET_HUB_SESSIONS_STALE) are `m4!` for the view, un-nested, in their
+#                   own group at the foot under `─ m4 失联 N 分钟 ─`, and the status line
+#                   reads `○ m4 2 · N 分钟没联系` — never vanish
+#   N. needs      — a remote row that is asking its person draws the local `!` + detail
 #   D. no network — rendering with the hub on runs no curl/wget/nc/ccquota, and the
 #                   producer names none of them (nor the refresher)
 #   E. refresher  — fleet-hub-sessions.sh --refresh keeps only YOUR sessions on OTHER
 #                   machines with a worker_id, translates @origin_wid into this fleet's
 #                   terms (own fleet → bare key, elsewhere → worker_id, none → the
-#                   sub-issue parent), writes the C1 locator cache; a failed fetch keeps
-#                   the last cache; off ⇒ writes nothing, --ensure starts nothing
+#                   sub-issue parent), writes #me / #node / the needs field and the C1
+#                   locator cache; derives #node from the sessions on a hub without a
+#                   `nodes` list; a failed fetch keeps the last cache; off ⇒ writes
+#                   nothing, --ensure starts nothing
+#   I. identity   — who the refresher asks the hub as (#1475): FLEET_HUB_SESSIONS_CMD,
+#                   else a VALID connection certificate (a signed POST), else the viewer
+#                   token (a bearer GET), else nothing is fetched and --identity says why;
+#                   an expired certificate is skipped
 #   F. read-only  — fold / pin / migrate on a `wid:` row touch no tmux option
 #   G. inventory  — the real adapter on an isolated socket hands fleet_control.py the
-#                   window name and @origin_wid; a 9-column adapter still parses
+#                   window name, @origin_wid and @claude_needs; a 9-column adapter still
+#                   parses
+#   R. ready      — fleet-control-read.sh ready: gh login, a credential, every checkout,
+#                   each named in `missing` when absent; fleet_control.py's `ready`
+#                   method hands it on as the node's heartbeat field
 #
 # Hermetic: the row legs PATH-shim `tmux` to replay a fixture window list; leg G runs
-# a private `tmux -L` server. No gh, no network. Exit 0 = pass.
+# a private `tmux -L` server; leg I mints its own throwaway CA + certificate. No gh,
+# no network. Exit 0 = pass.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 HUBS="$BIN/fleet-hub-sessions.sh"
+CREAD="$BIN/fleet-control-read.sh"
 command -v python3 >/dev/null 2>&1 || { echo 'dash-remote-rows selftest: python3 absent — SKIP'; exit 0; }
 REAL_TMUX=$(command -v tmux || true)
 
@@ -42,10 +63,11 @@ S="hubs$$"
 cleanup() { [ -n "$REAL_TMUX" ] && "$REAL_TMUX" -L "$S" kill-server 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT INT TERM
 unset CCQUOTA_FLEET CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN FLEET_HUB_SESSIONS_CMD FLEET_NODE_ALIASES \
-      FLEET_HUB_SESSIONS_USER FLEET_HUB_SESSIONS_STALE TMUX TMUX_PANE
+      FLEET_HUB_SESSIONS_USER FLEET_HUB_SESSIONS_STALE TMUX TMUX_PANE FLEET_HUB_URL FLEET_CERT XDG_CONFIG_HOME \
+      FLEET_ACCOUNTS_DIR CODEX_HOME
 export TMPDIR="$WORK" FLEET_SKIP_GLOBAL_CONF=1 FLEET_CONF_DIR="$WORK/conf" FLEET_UI_LANG=zh
 G="$WORK/.claude-dash/global"
-mkdir -p "$G" "$WORK/conf/fleets/$S" "$WORK/bin"
+mkdir -p "$G" "$WORK/conf/fleets/$S" "$WORK/bin" "$WORK/main"
 printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s/main\n' "$WORK" > "$WORK/conf/fleets/$S/conf"
 
 CHECKS=0
@@ -64,8 +86,14 @@ for a in "$@"; do [ "$a" = list-windows ] && lw=1; case "$a" in *"$US"*) fmt=1 ;
 [ "$lw" = 1 ] && [ "$fmt" = 1 ] && cat "$WLIST_FILE"
 exit 0
 SHIM
+# network tools: every call logged (argv verbatim — printf, since /bin/sh's echo
+# would turn a JSON body's `\n` into newlines), every call refused
 for n in curl wget nc ccquota; do
-  printf '#!/bin/sh\necho "%s $*" >> "$NET_LOG"\nexit 1\n' "$n" > "$WORK/bin/$n"
+  cat > "$WORK/bin/$n" <<SHIM
+#!/bin/sh
+printf '%s %s\n' '$n' "\$*" >> "\$NET_LOG"
+exit 1
+SHIM
 done
 chmod +x "$WORK/bin/"*
 export WLIST_FILE="$WORK/wlist" TMUX_LOG="$WORK/tmux.log" NET_LOG="$WORK/net.log"
@@ -87,16 +115,23 @@ side() { PATH="$SHIMPATH" FLEET_SESSION=$S bash "$ROWS" --sidebar 2>/dev/null | 
 hub()  { PATH="$SHIMPATH" FLEET_SESSION=$S FZF_COLUMNS=140 bash "$ROWS" 2>/dev/null | strip; }
 # LC_ALL=C: BSD awk compares strings with strcoll, and under a UTF-8 locale two
 # different CJK names collate EQUAL — `孙` would match `侧边栏`.
-srow()  { printf '%s\n' "$1" | LC_ALL=C awk -F"$US" -v n="$2" '$4 == n { print $1 "|" $5 "|" $6 "|" $7; exit }'; }
+# srow: id|tree|badge|depth|node (field 9, empty for a local row)
+srow()  { printf '%s\n' "$1" | LC_ALL=C awk -F"$US" -v n="$2" '$1 != "hdr" && $4 == n { print $1 "|" $5 "|" $6 "|" $7 "|" $9; exit }'; }
 sorder(){ printf '%s\n' "$1" | LC_ALL=C awk -F"$US" '$1 != "hdr" { printf "%s;", $4 }'; }
+shdrs() { printf '%s\n' "$1" | LC_ALL=C awk -F"$US" '$1 == "hdr" { printf "%s;", $4 }'; }
+sfirst(){ printf '%s\n' "$1" | head -1 | LC_ALL=C awk -F"$US" '{ print $1 "|" $4 }'; }
+sneed() { printf '%s\n' "$1" | LC_ALL=C awk -F"$US" -v n="$2" '$1 != "hdr" && $4 == n { print $3 "|" $8; exit }'; }
+nfields(){ printf '%s\n' "$1" | LC_ALL=C awk -F"$US" -v n="$2" '$1 != "hdr" && $4 == n { print NF; exit }'; }
 
 F=11111111-2222-3333-4444-555555555555            # a fleet on another machine
 NOW=$(date +%s)
-remote_cache() {   # $1 = the #ts epoch
+remote_cache() {   # $1 = the #ts epoch; $2 = m4's #node line availability; $3 = its last-seen epoch
   { printf '#ts\037%s\n' "$1"
-    printf 'wid:%s/issue-1423\037m4\037online\0371423\037acme/app\037working\037claude\037侧边栏\037issue-1419\n' "$F"
-    printf 'wid:%s/issue-1500\037m4\037online\0371500\037acme/app\037done\037claude\037孙\037%s/issue-1423\n' "$F" "$F"
-    printf 'wid:%s/scratch-2\037m4\037lost\037\037\037working\037claude\037草稿\037\n' "$F"
+    printf '#me\037m5\n'
+    printf '#node\037m4\037%s\0372\037%s\n' "${2:-online}" "${3:-$1}"
+    printf 'wid:%s/issue-1423\037m4\037online\0371423\037acme/app\037working\037claude\037侧边栏\037issue-1419\037\n' "$F"
+    printf 'wid:%s/issue-1500\037m4\037online\0371500\037acme/app\037done\037claude\037孙\037%s/issue-1423\037\n' "$F" "$F"
+    printf 'wid:%s/scratch-2\037m4\037lost\037\037\037working\037claude\037草稿\037\037\n' "$F"
   } > "$G/remote_$S"
 }
 
@@ -108,7 +143,8 @@ base_s=$(side); base_h=$(hub)
 remote_cache "$NOW"
 eq "A: hub off — a remote cache changes nothing (sidebar)" "$base_s" "$(side)"
 eq "A: hub off — a remote cache changes nothing (hub)"     "$base_h" "$(hub)"
-hasnt "A: hub off — no machine tag anywhere" "$(side)$(hub)" "[m4"
+hasnt "A: hub off — no machine anywhere" "$(side)$(hub)" "m4"
+hasnt "A: hub off — no status line" "$(side)$(hub)" "●"
 mv "$G/remote_$S" "$WORK/remote.keep"
 eq "A: hub on, no cache — the same bytes (sidebar)" "$base_s" "$(CCQUOTA_FLEET=1 side)"
 eq "A: hub on, no cache — the same bytes (hub)"     "$base_h" "$(CCQUOTA_FLEET=1 hub)"
@@ -119,34 +155,106 @@ mv "$WORK/remote.keep" "$G/remote_$S"
 # ============================================================================
 export CCQUOTA_FLEET=1
 s=$(side)
-eq "B: mixed with the local rows, each under its real parent" \
-   "solo;草稿 [m4 失联];EPIC;C1;侧边栏 [m4];孙 [m4];" "$(sorder "$s")"
-eq "B: the local parent counts its remote descendants" "@1|▾|1/3|0" "$(srow "$s" EPIC)"
-eq "B: a remote child under a LOCAL parent: depth 1, its own subtree" \
-   "wid:$F/issue-1423|└▾|1/1|1" "$(srow "$s" '侧边栏 [m4]')"
+eq "B: mixed with the local rows, each under its real parent; the lost one at the foot" \
+   "solo;EPIC;C1;侧边栏;孙;草稿;" "$(sorder "$s")"
+eq "B: the local parent counts its remote descendants" "@1|▾|1/3|0|" "$(srow "$s" EPIC)"
+eq "B: a remote child under a LOCAL parent: depth 1, its own subtree, its machine in field 9" \
+   "wid:$F/issue-1423|└▾|1/1|1|m4" "$(srow "$s" '侧边栏')"
 eq "B: a remote grandchild under its REMOTE parent: depth 2" \
-   "wid:$F/issue-1500|  └||2" "$(srow "$s" '孙 [m4]')"
-eq "B: a local sibling is untouched" "@2|└||1" "$(srow "$s" C1)"
+   "wid:$F/issue-1500|  └||2|m4" "$(srow "$s" '孙')"
+eq "B: a local sibling is untouched" "@2|└||1|" "$(srow "$s" C1)"
+eq "B: a local row carries the 9th field too, empty" "9" "$(nfields "$s" C1)"
+eq "B: a remote row has it" "9" "$(nfields "$s" '侧边栏')"
+hasnt "B: no [m4] in any name" "$s" "[m4"
+# The operator's call (#1475): a worker row never SHOWS its machine — a local row
+# and a remote row look the same. The view's own renderer, on the remote row and
+# on the same row with its machine blanked: one text, and no `m4` in it.
+printf '%s\n' "$s" > "$WORK/srows"
+drawn=$(python3 - "$BIN/fleet-sidebar.py" '侧边栏' "$WORK/srows" <<'PYR'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sb", sys.argv[1]); sb = importlib.util.module_from_spec(spec); spec.loader.exec_module(sb)
+rows = [sb.row_fields(l) for l in open(sys.argv[3], encoding="utf-8").read().split("\n") if l.count(sb.US) >= 4]
+r = next(x for x in rows if x[3] == sys.argv[2])
+local = r[:8] + [""]
+text = sb.row_text(" ", r[2], r[4], r[3], r[5], 34)
+print(text, "same" if text == sb.row_text(" ", local[2], local[4], local[3], local[5], 34) else "differs",
+      sb.row_need(r) == sb.row_need(local), sep="|")
+PYR
+)
+hasnt "B: the view draws no machine name on a remote row" "$drawn" "m4"
+has "B: …and lays it out exactly as the same row local" "$drawn" "|same|True"
 h=$(hub)
-has "B: the hub row carries the tag" "$h" "[m4]"
 has "B: the hub row shows the issue" "$h" "#1423"
+hrow=$(printf '%s\n' "$h" | LC_ALL=C awk -F"$US" -v w="wid:$F/issue-1423" '$2 == w { print $3; exit }')
+hasnt "B: the hub row shows no machine name either" "$hrow" "m4"
+hasnt "B: the hub row carries no [m4]" "$hrow" "[m4"
 widths=$(printf '%s\n' "$h" | python3 -c 'import sys, unicodedata
 w = lambda t: sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in t)
-print("\n".join(sorted({str(w(l.split("\x1f")[2])) for l in sys.stdin.read().split("\n")[1:] if "\x1f" in l})))')
-eq "B: every hub row is the same width, 失联 included" "136" "$widths"
+print("\n".join(sorted({str(w(l.split("\x1f")[2])) for l in sys.stdin.read().split("\n")[1:] if l.count("\x1f") >= 2 and not l.startswith("hdr")})))')
+eq "B: every hub session row is the same width, the remote ones included" "136" "$widths"
 hasnt "B: no @title_info is written for a remote row" "$(cat "$TMUX_LOG")" "wid:"
+
+# ============================================================================
+# M. the row MENU names the machine — the one place the list does (#1475)
+# ============================================================================
+menu=$(PATH="$SHIMPATH" FLEET_UI_LANG=zh bash -c '
+  BIN=$1; sess=$2; verb=menu; set -- menu "$2" "$3" --print
+  . "$BIN/fleet-lib.sh"; . "$BIN/fleet-ui-lang.sh"; . "$BIN/fleet-sidebar-menu.sh"' _ "$BIN" "$S" "wid:$F/issue-1423" 2>/dev/null)
+eq "M: a remote row's menu is titled with its name and machine" "title	侧边栏 · 在 m4" "$(printf '%s\n' "$menu" | head -1)"
+has "M: …and its first item opens the ⇄ proxy window" "$(printf '%s\n' "$menu" | sed -n 2p | cut -f1,2)" "e	进入（⇄ 代理窗口）…"
+has "M: …through fleet-remote-view.sh" "$(printf '%s\n' "$menu" | sed -n 2p)" "fleet-remote-view.sh"
+has "M: …open, on that worker_id" "$(printf '%s\n' "$menu" | sed -n 2p)" " open '\\''wid:$F/issue-1423'\\'' "
+eq "M: a row the cache does not hold gets no menu" "" "$(PATH="$SHIMPATH" bash -c '
+  BIN=$1; sess=$2; verb=menu; set -- menu "$2" "$3" --print
+  . "$BIN/fleet-lib.sh"; . "$BIN/fleet-ui-lang.sh"; . "$BIN/fleet-sidebar-menu.sh"' _ "$BIN" "$S" "wid:$F/issue-9999" 2>/dev/null)"
+
+# ============================================================================
+# S. the machine status line
+# ============================================================================
+eq "S: the sidebar's first row is the status line: this machine's live rows, then each node" \
+   "hdr|● m5 3 · ● m4 2" "$(sfirst "$s")"
+eq "S: the hub list's first row too" "hdr|  ● m5 3 · ● m4 2" \
+   "$(printf '%s\n' "$h" | sed -n 2p | LC_ALL=C awk -F"$US" '{ print $1 "|" $3 }')"
+eq "S: the status line is bare hdr — never a cursor stop, never a fold target" \
+   "hdr||" "$(printf '%s\n' "$s" | head -1 | LC_ALL=C awk -F"$US" '{ print $1 "|" $2 "|" $3 }')"
+sed -i.bak '/^#me/d' "$G/remote_$S"; rm -f "$G/remote_$S.bak"
+hasnt "S: a cache without #me (pre-#1475) draws no status line" "$(side)" "●"
+remote_cache "$NOW"
 
 # ============================================================================
 # C. lost
 # ============================================================================
-eq "C: a machine the hub calls lost: the row stays, 失联" \
-   "wid:$F/scratch-2| ||0" "$(srow "$s" '草稿 [m4 失联]')"
-remote_cache $((NOW - 600))
+eq "C: a row the hub calls lost: at the foot, un-nested, m4! for the view" \
+   "wid:$F/scratch-2| ||0|m4!" "$(srow "$s" '草稿')"
+eq "C: …under its machine's heading (no duration: the node itself is heard)" \
+   "● m5 3 · ● m4 2;─ m4 失联 ─;" "$(shdrs "$s")"
+remote_cache $((NOW - 600)) online $((NOW - 600))
 s=$(side)
-eq "C: a stale cache: every remote row stays, reading 失联" \
-   "solo;草稿 [m4 失联];EPIC;C1;侧边栏 [m4 失联];孙 [m4 失联];" "$(sorder "$s")"
+eq "C: a stale cache: every remote row is lost — the foot, by rank, none nested" \
+   "solo;EPIC;C1;孙;侧边栏;草稿;" "$(sorder "$s")"
+eq "C: …each m4!" "m4!|m4!|m4!" \
+   "$(printf '%s|%s|%s' "$(srow "$s" '侧边栏' | cut -d'|' -f5)" "$(srow "$s" '孙' | cut -d'|' -f5)" "$(srow "$s" '草稿' | cut -d'|' -f5)")"
+eq "C: …not nested: the remote child lost its └" "wid:$F/issue-1423| ||0|m4!" "$(srow "$s" '侧边栏')"
+eq "C: …the local parent no longer counts them (only its local child C1 remains)" "@1|▾|0/1|0|" "$(srow "$s" EPIC)"
+eq "C: …the status line says how long, and so does the heading" \
+   "● m5 3 · ○ m4 2 · 10 分钟没联系;─ m4 失联 10 分钟 ─;" "$(shdrs "$s")"
+h=$(hub)
+has "C: the hub list draws the heading too" "$h" "─ m4 失联 10 分钟 ─"
 eq "C: FLEET_HUB_SESSIONS_STALE widens the window" \
-   "solo;草稿 [m4 失联];EPIC;C1;侧边栏 [m4];孙 [m4];" "$(sorder "$(FLEET_HUB_SESSIONS_STALE=900 side)")"
+   "solo;EPIC;C1;侧边栏;孙;草稿;" "$(sorder "$(FLEET_HUB_SESSIONS_STALE=900 side)")"
+remote_cache "$NOW" lost $((NOW - 180))
+s=$(side)
+eq "C: the hub says the machine is lost: its last observation dates the silence" \
+   "● m5 3 · ○ m4 2 · 3 分钟没联系;─ m4 失联 3 分钟 ─;" "$(shdrs "$s")"
+eq "C: …and every row of it is lost, whatever its own word" "m4!" "$(srow "$s" '侧边栏' | cut -d'|' -f5)"
+remote_cache "$NOW"
+
+# ============================================================================
+# N. needs — a remote row asking its person
+# ============================================================================
+printf 'wid:%s/issue-1600\037m4\037online\0371600\037acme/app\037needs\037claude\037问\037\037ask\n' "$F" >> "$G/remote_$S"
+s=$(side)
+eq "N: a remote row that is asking draws the local ! and says which" "!|在问你" "$(sneed "$s" '问')"
 remote_cache "$NOW"
 
 # ============================================================================
@@ -166,29 +274,35 @@ f=[x for x in c.Control(sys.argv[1]).inventory() if x["name"]==sys.argv[2]]
 print(f[0]["fleet_id"] if f else "")' "$FLEET_CONF_DIR" "$S")
 [ -n "$U" ] || fail "E: could not mint this fleet's UUID"
 ME=$(id -un)
+MYHOST=$(hostname | cut -d. -f1)
 mkdir -p "$WORK/.claude-dash/fleets/acme-app"
 printf '1600\t1419\n1501\t1500\n' > "$WORK/.claude-dash/fleets/acme-app/parents"
-python3 - "$WORK/sessions.json" "$U" "$F" "$ME" <<'PY'
+python3 - "$WORK/sessions.json" "$WORK/sessions-old.json" "$U" "$F" "$ME" <<'PY'
 import json, sys
-path, u, f, me = sys.argv[1:5]
-def s(fleet, host, user, key, avail="online", wid=True, **w):
+path, old, u, f, me = sys.argv[1:6]
+def s(fleet, host, user, key, avail="online", wid=True, seen="2026-10-04T10:00:00Z", **w):
     w.setdefault("key", key); w.setdefault("state", "working"); w.setdefault("lifecycle", "awake")
     w.setdefault("agent", "claude"); w.setdefault("repo", "acme/app")
     return dict(worker_id=(fleet + "/" + key) if wid else None, machine_name=host, os_user=user,
-                fleet_id=fleet, fleet_name="x", availability=avail, worker=w)
-json.dump({"machines": [], "sessions": [
+                fleet_id=fleet, fleet_name="x", availability=avail, worker=w, observed_at=seen)
+sessions = [
     s(u, "elsewhere", me, "issue-1420", issue=1420, name="local-one"),           # this fleet: dropped
     s(f, "mini2.local", me, "issue-1423", issue=1423, name="侧边栏", origin_wid=u + "/issue-1419"),
-    s(f, "mini2.local", me, "issue-1500", issue=1500, name="孙", origin_wid=f + "/issue-1423"),
+    s(f, "mini2.local", me, "issue-1500", issue=1500, name="孙", origin_wid=f + "/issue-1423", seen="2026-10-04T10:05:00Z"),
     s(f, "mini2.local", me, "issue-1600", issue=1600, name="epic-kid"),          # sub-issue of local 1419
     s(f, "mini2.local", me, "issue-1501", issue=1501, name="remote-sub"),        # sub-issue of REMOTE 1500
     s(f, "mini2.local", me, "issue-1700", issue=1700, name="sleeper", lifecycle="sleeping"),
+    s(f, "mini2.local", me, "issue-1800", issue=1800, name="asker", state="needs", needs="ask"),
     s(f, "mini2.local", me, "scratch-4", avail="lost", issue=None, repo=None, name="草稿"),
-    s(f, "mini2.local", "someone-else", "issue-1800", issue=1800, name="theirs"),
-    s(f, "mini2.local", me, "issue-1900", wid=False, issue=1900, name="no-id"),
-]}, open(path, "w"), ensure_ascii=False)
+    s(f, "mini2.local", "someone-else", "issue-1900", issue=1900, name="theirs"),
+    s(f, "mini2.local", me, "issue-2000", wid=False, issue=2000, name="no-id"),
+]
+nodes = [dict(machine_name="mini2.local", availability="online", sessions=12, observed_at="2026-10-04T10:07:00Z", age_sec=3),
+         dict(machine_name="box3", availability="lost", sessions=0, observed_at="2026-10-04T09:00:00Z", age_sec=4000)]
+json.dump({"machines": [], "sessions": sessions, "nodes": nodes}, open(path, "w"), ensure_ascii=False)
+json.dump({"machines": [], "sessions": sessions}, open(old, "w"), ensure_ascii=False)   # a hub older than #1475
 PY
-export FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'" FLEET_NODE_ALIASES="mini2=m4"
+export FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'" FLEET_NODE_ALIASES="mini2=m4 box3=m9"
 rm -f "$G/remote_$S"
 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
 CHECKS=$((CHECKS+1)); [ ! -e "$G/remote_$S" ] || fail "E: off — --refresh must write nothing"
@@ -198,18 +312,29 @@ CHECKS=$((CHECKS+1)); [ ! -e "$G/hubsess.pid" ] || fail "E: off — --ensure mus
 export CCQUOTA_FLEET=1
 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>"$WORK/err" || fail "E: --refresh failed" "$(cat "$WORK/err")"
 R=$(cat "$G/remote_$S" 2>/dev/null)
-rrow() { printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$F/$1" '$1 == w { print $2 "|" $3 "|" $6 "|" $8 "|" $9 }'; }
+rrow() { printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$F/$1" '$1 == w { print $2 "|" $3 "|" $6 "|" $8 "|" $9 "|" $10 }'; }
 has  "E: a #ts line leads the cache" "$(printf '%s\n' "$R" | head -1)" "#ts$US"
-eq   "E: parent in THIS fleet → its bare key"  "m4|online|working|侧边栏|issue-1419" "$(rrow issue-1423)"
-eq   "E: parent elsewhere → its worker_id"     "m4|online|working|孙|$F/issue-1423" "$(rrow issue-1500)"
-eq   "E: no @origin_wid → the sub-issue parent (local)"  "m4|online|working|epic-kid|issue-1419" "$(rrow issue-1600)"
-eq   "E: no @origin_wid → the sub-issue parent (remote)" "m4|online|working|remote-sub|$F/issue-1500" "$(rrow issue-1501)"
-eq   "E: a sleeping lifecycle is the row's state" "m4|online|sleeping|sleeper|" "$(rrow issue-1700)"
-eq   "E: a lost machine's row is kept, marked lost" "m4|lost|working|草稿|" "$(rrow scratch-4)"
+eq   "E: #me is this machine's label" "#me$US$MYHOST" "$(printf '%s\n' "$R" | sed -n 2p)"
+ep() { python3 -c 'from datetime import datetime, timezone; import sys; print(int(datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00")).timestamp()))' "$1"; }
+eq   "E: one #node per other machine from the hub's list: YOUR session count, its observation" \
+     "#node${US}m4${US}online${US}7$US$(ep 2026-10-04T10:07:00Z);#node${US}m9${US}lost${US}0$US$(ep 2026-10-04T09:00:00Z);" \
+     "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" '$1 == "#node" { printf "%s;", $0 }')"
+eq   "E: parent in THIS fleet → its bare key"  "m4|online|working|侧边栏|issue-1419|" "$(rrow issue-1423)"
+eq   "E: parent elsewhere → its worker_id"     "m4|online|working|孙|$F/issue-1423|" "$(rrow issue-1500)"
+eq   "E: no @origin_wid → the sub-issue parent (local)"  "m4|online|working|epic-kid|issue-1419|" "$(rrow issue-1600)"
+eq   "E: no @origin_wid → the sub-issue parent (remote)" "m4|online|working|remote-sub|$F/issue-1500|" "$(rrow issue-1501)"
+eq   "E: a sleeping lifecycle is the row's state" "m4|online|sleeping|sleeper||" "$(rrow issue-1700)"
+eq   "E: what the window needs rides along (field 10)" "m4|online|needs|asker||ask" "$(rrow issue-1800)"
+eq   "E: a lost machine's row is kept, marked lost" "m4|lost|working|草稿||" "$(rrow scratch-4)"
 hasnt "E: this fleet's own session is not a remote row" "$R" "local-one"
 hasnt "E: another login's session is not shown" "$R" "theirs"
 hasnt "E: a session with no worker_id is not shown" "$R" "no-id"
 has  "E: the C1 locator cache is written" "$(cat "$FLEET_CONF_DIR/control/hub-workers.tsv" 2>/dev/null)" "$F/issue-1423	m4"
+FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-old.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "E: --refresh (old hub) failed"
+eq   "E: a hub without a nodes list: #node derived from the sessions (newest observation)" \
+     "#node${US}m4${US}online${US}7$US$(ep 2026-10-04T10:05:00Z);" \
+     "$(LC_ALL=C awk -F"$US" '$1 == "#node" { printf "%s;", $0 }' "$G/remote_$S")"
+PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null; R=$(cat "$G/remote_$S")
 FLEET_HUB_SESSIONS_CMD='exit 1' PATH="$SHIMPATH" bash "$HUBS" --refresh 2>"$WORK/err"
 eq   "E: a failed fetch returns 1"          "1" "$?"
 eq   "E: …and keeps the last cache"         "$R" "$(cat "$G/remote_$S")"
@@ -217,7 +342,84 @@ has  "E: …and says so on stderr"            "$(cat "$WORK/err")" "hub unreacha
 # The refreshed cache renders: the epic's sub-issue nests under the local EPIC.
 s=$(side)
 eq "E: the refreshed cache renders under the local parent" "$F/issue-1600" \
-   "$(printf '%s\n' "$s" | LC_ALL=C awk -F"$US" '$4 == "epic-kid [m4]" && $7 == 1 { sub(/^wid:/, "", $1); print $1 }')"
+   "$(printf '%s\n' "$s" | LC_ALL=C awk -F"$US" '$4 == "epic-kid" && $7 == 1 { sub(/^wid:/, "", $1); print $1 }')"
+eq "E: …with the status line off the #node lines" "hdr|● $MYHOST 3 · ● m4 7 · ○ m9 0" \
+   "$(FLEET_HUB_SESSIONS_STALE=99999999 side | head -1 | LC_ALL=C awk -F"$US" '{ print $1 "|" $4 }' | sed 's/ · [0-9]* 分钟没联系//')"
+
+# ============================================================================
+# I. identity — who asks the hub (#1475)
+# ============================================================================
+eq "I: a seam command is the identity" "cmd FLEET_HUB_SESSIONS_CMD" "$(bash "$HUBS" --identity)"
+unset FLEET_HUB_SESSIONS_CMD
+export HOME="$WORK/home"; mkdir -p "$HOME/.ssh" "$HOME/.ccquota"
+id_out=$(bash "$HUBS" --identity 2>/dev/null); id_rc=$?
+eq  "I: nothing: --identity exits 1" "1" "$id_rc"
+has "I: …and says why" "$id_out" "none no connection certificate"
+: > "$NET_LOG"; : > "$WORK/err"
+CCQUOTA_HUB_URL=http://hub.test PATH="$SHIMPATH" bash "$HUBS" --refresh 2>"$WORK/err"
+eq  "I: nothing: no fetch at all" "" "$(cat "$NET_LOG")"
+has "I: …one note" "$(cat "$WORK/err")" "no connection certificate"
+# the viewer token: a bearer GET
+printf 'tok-123\n' > "$HOME/.ccquota/viewer-token"
+eq  "I: a viewer token file" "token ~/.ccquota/viewer-token" "$(bash "$HUBS" --identity)"
+eq  "I: …the env wins" "token CCQUOTA_VIEWER_TOKEN" "$(CCQUOTA_VIEWER_TOKEN=x bash "$HUBS" --identity)"
+: > "$NET_LOG"
+CCQUOTA_HUB_URL=http://hub.test PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
+has   "I: token → a bearer GET of fleet_sessions" "$(cat "$NET_LOG")" "Bearer tok-123"
+has   "I: …at the hub URL" "$(cat "$NET_LOG")" "http://hub.test/v1/fleet/fleet_sessions"
+hasnt "I: …not a POST" "$(cat "$NET_LOG")" "POST"
+# the hub URL from hub.json (what `fleet login` wrote), when no env names one
+mkdir -p "$HOME/.config/claude-fleet"; printf '{"url": "http://json.hub/"}\n' > "$HOME/.config/claude-fleet/hub.json"
+: > "$NET_LOG"; PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
+has   "I: the hub URL falls back to hub.json" "$(cat "$NET_LOG")" "http://json.hub/v1/fleet/fleet_sessions"
+: > "$NET_LOG"; FLEET_HUB_URL=http://env.hub PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
+has   "I: …FLEET_HUB_URL before it" "$(cat "$NET_LOG")" "http://env.hub/v1/fleet/fleet_sessions"
+# a connection certificate: a signed POST, no token used
+if command -v ssh-keygen >/dev/null 2>&1; then
+  ssh-keygen -q -t ed25519 -N '' -f "$WORK/ca" >/dev/null 2>&1
+  ssh-keygen -q -t ed25519 -N '' -f "$HOME/.ssh/fleet-cert" >/dev/null 2>&1
+  ssh-keygen -q -s "$WORK/ca" -I 'wecom:wx-a' -n alice -V '-5m:+1h' "$HOME/.ssh/fleet-cert.pub" >/dev/null 2>&1 \
+    || fail "I: could not sign a test certificate"
+  has "I: a valid certificate is the identity, before the token" "$(bash "$HUBS" --identity)" "cert $HOME/.ssh/fleet-cert-cert.pub "
+  : > "$NET_LOG"
+  CCQUOTA_HUB_URL=http://hub.test PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
+  has   "I: cert → a POST of fleet_sessions" "$(cat "$NET_LOG")" "POST"
+  has   "I: …carrying the certificate line" "$(cat "$NET_LOG")" "ssh-ed25519-cert-v01@openssh.com"
+  has   "I: …and an ssh-keygen signature" "$(cat "$NET_LOG")" "BEGIN SSH SIGNATURE"
+  hasnt "I: …and never the token" "$(cat "$NET_LOG")" "tok-123"
+  sigok=$(printf '%s\n' "$(cat "$NET_LOG")" | python3 -c '
+import json, re, subprocess, sys, tempfile, os
+line = sys.stdin.read()
+m = re.search(r"--data-binary (\{.*?\}) http", line, re.S)   # the armored signature spans lines
+body = json.loads(m.group(1))
+d = tempfile.mkdtemp()
+# ssh-keygen signs with the plain key (the hub checks it against the certificate it
+# was sent): verify against that key
+k = open(sys.argv[1]).read().split()
+open(os.path.join(d, "allowed"), "w").write("alice " + k[0] + " " + k[1] + "\n")
+open(os.path.join(d, "sig"), "w").write(body["sig"])
+r = subprocess.run(["ssh-keygen", "-Y", "verify", "-f", os.path.join(d, "allowed"), "-I", "alice",
+                    "-n", "fleet-sessions@claude-fleet", "-s", os.path.join(d, "sig")],
+                   input=("fleet-sessions %d" % body["ts"]).encode(), capture_output=True)
+print("ok" if r.returncode == 0 else "bad:" + r.stderr.decode(errors="replace").strip())
+' "$HOME/.ssh/fleet-cert.pub" 2>&1)
+  eq "I: …the signature verifies under fleet-sessions@claude-fleet over the timestamp" "ok" "$sigok"
+  # an expired certificate is skipped: the token again, and --identity says expired without one
+  ssh-keygen -q -s "$WORK/ca" -I 'wecom:wx-a' -n alice -V '-2h:-1h' "$HOME/.ssh/fleet-cert.pub" >/dev/null 2>&1
+  eq  "I: an expired certificate falls back to the token" "token ~/.ccquota/viewer-token" "$(bash "$HUBS" --identity)"
+  rm -f "$HOME/.ccquota/viewer-token"
+  has "I: …and with no token says it expired" "$(bash "$HUBS" --identity 2>/dev/null)" "none certificate expired"
+  # FLEET_CERT names another pair
+  ssh-keygen -q -s "$WORK/ca" -I 'wecom:wx-a' -n alice -V '-5m:+1h' "$HOME/.ssh/fleet-cert.pub" >/dev/null 2>&1
+  cp "$HOME/.ssh/fleet-cert" "$WORK/other"; cp "$HOME/.ssh/fleet-cert-cert.pub" "$WORK/other-cert.pub"
+  rm -f "$HOME/.ssh/fleet-cert" "$HOME/.ssh/fleet-cert-cert.pub"
+  has "I: FLEET_CERT names the pair" "$(FLEET_CERT="$WORK/other" bash "$HUBS" --identity)" "cert $WORK/other-cert.pub "
+else
+  printf 'dash-remote-rows selftest: no ssh-keygen — the certificate legs of I skipped\n' >&2
+fi
+HOME="$(cd ~ && pwd)"; export HOME
+export FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'"
+PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
 
 # ============================================================================
 # F. read-only
@@ -229,17 +431,18 @@ PATH="$SHIMPATH" FLEET_SESSION=$S bash "$BIN/dash-migrate.sh" "wid:$F/issue-1423
 hasnt "F: fold/pin/migrate on a remote row set no tmux option" "$(cat "$TMUX_LOG")" "set-"
 
 # ============================================================================
-# G. inventory columns 10-11
+# G. inventory columns 10-12
 # ============================================================================
 if [ -n "$REAL_TMUX" ] && "$REAL_TMUX" -L "$S" -f /dev/null new-session -d -s "$S" -n plan 'while :; do sleep 300; done' 2>/dev/null; then
   wi=$("$REAL_TMUX" -L "$S" new-window -d -P -F '#{window_id}' -n '侧边栏 x' 'while :; do sleep 300; done')
   "$REAL_TMUX" -L "$S" set-window-option -t "$wi" @issue 1423
   "$REAL_TMUX" -L "$S" set-window-option -t "$wi" @origin_wid "$F/issue-1419"
+  "$REAL_TMUX" -L "$S" set-window-option -t "$wi" @claude_needs ask
   got=$(cd "$BIN" && python3 -c 'import sys, fleet_control as c
 ctl = c.Control(sys.argv[1]); f = [x for x in ctl.inventory() if x["name"] == sys.argv[2]][0]
 w = [x for x in ctl.workers(f)["workers"] if x["issue"] == 1423][0]
-print(w["name"] + "|" + str(w["origin_wid"]) + "|" + w["key"])' "$FLEET_CONF_DIR" "$S" 2>&1)
-  eq "G: the adapter hands over the window name and @origin_wid" "侧边栏 x|$F/issue-1419|issue-1423" "$got"
+print(w["name"] + "|" + str(w["origin_wid"]) + "|" + w["key"] + "|" + str(w["needs"]))' "$FLEET_CONF_DIR" "$S" 2>&1)
+  eq "G: the adapter hands over the window name, @origin_wid and @claude_needs" "侧边栏 x|$F/issue-1419|issue-1423|ask" "$got"
 else
   printf 'dash-remote-rows selftest: no isolated tmux server — leg G (live adapter) skipped\n' >&2
 fi
@@ -247,13 +450,45 @@ got=$(cd "$BIN" && python3 -c 'import sys, fleet_control as c
 ctl = c.Control(sys.argv[1]); f = {"name": "x", "agent": "claude", "fleet_id": sys.argv[2], "repo": "acme/app"}
 ctl.adapter = lambda *a, **k: (0, b"@5\t7\t0\t/w/app-issue-7\tworking\tclaude\ta1\t\t\n", b"")
 w = ctl.workers(f)["workers"][0]
-print("name" in w, "origin_wid" in w, w["key"])' "$FLEET_CONF_DIR" "$U" 2>&1)
-eq "G: a 9-column adapter still parses, with no new keys" "False False issue-7" "$got"
+print("name" in w, "origin_wid" in w, "needs" in w, w["key"])' "$FLEET_CONF_DIR" "$U" 2>&1)
+eq "G: a 9-column adapter still parses, with no new keys" "False False False issue-7" "$got"
 got=$(cd "$BIN" && python3 -c 'import sys, fleet_control as c
 ctl = c.Control(sys.argv[1]); f = {"name": "x", "agent": "claude", "fleet_id": sys.argv[2], "repo": "acme/app"}
-ctl.adapter = lambda *a, **k: (0, b"@5\t7\t0\t/w/app-issue-7\tworking\tclaude\ta1\t\t\ta\tb\t\n", b"")
+ctl.adapter = lambda *a, **k: (0, b"@5\t7\t0\t/w/app-issue-7\tworking\tclaude\ta1\t\t\ta\tb\t\t\n", b"")
 w = ctl.workers(f)["workers"][0]
-print(w["name"] + "|" + str(w["origin_wid"]))' "$FLEET_CONF_DIR" "$U" 2>&1)
-eq "G: a tab inside the window name is absorbed, never a protocol error" "a b|None" "$got"
+print(w["name"] + "|" + str(w["origin_wid"]) + "|" + str(w["needs"]))' "$FLEET_CONF_DIR" "$U" 2>&1)
+eq "G: a tab inside the window name is absorbed, never a protocol error" "a b|None|None" "$got"
+
+# ============================================================================
+# R. ready — can this login take a new session? (#1475)
+# ============================================================================
+export HOME="$WORK/home2"; mkdir -p "$HOME"
+# gh "logged in" iff a marker file exists — the controller hands the adapter an
+# allowlisted environment, so an env var would not reach the shim through it
+printf '#!/bin/sh\n[ "$1 $2" = "auth status" ] && [ -e "%s/gh-ok" ] && exit 0\nexit 1\n' "$WORK" > "$WORK/bin/gh"
+printf '#!/bin/sh\nexit 1\n' > "$WORK/bin/security"
+chmod +x "$WORK/bin/gh" "$WORK/bin/security"
+rdy() { PATH="$SHIMPATH" bash "$CREAD" ready 2>/dev/null | python3 -c 'import json, sys
+d = json.load(sys.stdin); print("%s|%s|%s|%s|%s" % (d["ready"], d["gh"], d["creds"], d["checkouts"], ",".join(d["missing"])))'; }
+eq "R: nothing in place: not ready, gh + creds named" "False|False|False|True|gh,creds" "$(rdy)"
+touch "$WORK/gh-ok"
+eq "R: a gh login" "False|True|False|True|creds" "$(rdy)"
+mkdir -p "$HOME/.claude"; printf '{}' > "$HOME/.claude/.credentials.json"
+eq "R: Claude Code's own credential file counts" "True|True|True|True|" "$(rdy)"
+rm -f "$HOME/.claude/.credentials.json"; mkdir -p "$HOME/.codex"; printf '{}' > "$HOME/.codex/auth.json"
+eq "R: Codex's auth.json counts" "True|True|True|True|" "$(rdy)"
+rm -f "$HOME/.codex/auth.json"; mkdir -p "$FLEET_CONF_DIR/accounts"; printf 'sk-x\n' > "$FLEET_CONF_DIR/accounts/alpha"
+eq "R: a pool token file counts" "True|True|True|True|" "$(rdy)"
+rm -f "$FLEET_CONF_DIR/accounts/alpha"; mkdir -p "$FLEET_CONF_DIR/accounts/beta.hub"; printf '{}' > "$FLEET_CONF_DIR/accounts/beta.hub/.credentials.json"
+eq "R: a pool account's hub credential counts" "True|True|True|True|" "$(rdy)"
+rmdir "$WORK/main"
+eq "R: a missing checkout is named" "False|True|True|False|checkout:$S/app" "$(rdy)"
+mkdir -p "$WORK/main"
+got=$(cd "$BIN" && PATH="$SHIMPATH" python3 -c 'import sys, fleet_control as c
+ctl = c.Control(sys.argv[1])
+r = ctl.dispatch(dict(protocol=1, method="ready", params={}))
+print("%s|%s|%s" % (r["ready"], r["gh"], ",".join(r["missing"])))' "$FLEET_CONF_DIR" 2>&1)
+eq "R: fleet_control.py's ready method hands the verdict on, no fleet identity needed" "True|True|" "$got"
+HOME="$(cd ~ && pwd)"; export HOME
 
 printf 'dash-remote-rows selftest: PASS (%d checks)\n' "$CHECKS"

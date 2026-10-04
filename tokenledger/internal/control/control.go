@@ -338,6 +338,14 @@ type Heartbeat struct {
 	// agent older than #1414, or one that knows no route.
 	Routes []NodeRoute `json:"routes,omitempty"`
 
+	// Ready says whether this login can take a NEW session
+	// (claude-fleet#1475): gh is logged in, a Claude or Codex credential is
+	// usable and every hosted repo's checkout exists. nil on an agent older
+	// than #1475 — placement reads that as ready, so an old node is never
+	// silently dropped. NotReady names what is missing when it is false.
+	Ready    *bool  `json:"ready,omitempty"`
+	NotReady string `json:"not_ready,omitempty"`
+
 	AgentVersion string    `json:"agent_version,omitempty"`
 	ObservedAt   time.Time `json:"observed_at"`
 }
@@ -520,12 +528,27 @@ const (
 	// RoutesSigNamespace is the ssh-keygen -Y namespace a client signs its
 	// route-list request under (the message is RoutesSigMessage).
 	RoutesSigNamespace = "fleet-routes@claude-fleet"
+
+	// SessionsPath is where a sidebar asks for its person's sessions on every
+	// machine (claude-fleet#1423); since claude-fleet#1475 it admits a
+	// connection certificate the way RoutesPath does, so a colleague's
+	// sidebar needs no token at all.
+	SessionsPath = "/v1/fleet/fleet_sessions"
+	// SessionsSigNamespace is the ssh-keygen -Y namespace a sidebar signs
+	// its session-list request under (the message is SessionsSigMessage).
+	SessionsSigNamespace = "fleet-sessions@claude-fleet"
 )
 
 // RoutesSigMessage is what a client signs to ask for its route list with a
 // connection certificate: a timestamp the hub accepts only near its own clock.
 func RoutesSigMessage(unix int64) string {
 	return fmt.Sprintf("fleet-routes %d", unix)
+}
+
+// SessionsSigMessage is what a sidebar signs to read its sessions with a
+// connection certificate (claude-fleet#1475), same shape as RoutesSigMessage.
+func SessionsSigMessage(unix int64) string {
+	return fmt.Sprintf("fleet-sessions %d", unix)
 }
 
 // `fleet` with no argument (claude-fleet#1470): the device renews its

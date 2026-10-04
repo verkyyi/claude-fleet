@@ -509,3 +509,55 @@ func TestAnswerWriteServesSubmitOnly(t *testing.T) {
 		t.Fatalf("a refused write still ran fleet-control.py: %v", ran[before:])
 	}
 }
+
+// The heartbeat carries fleet-control.py's readiness verdict
+// (claude-fleet#1475), asked at most once a minute; a controller without
+// `ready` leaves it unsaid.
+func TestNodeHeartbeatCarriesReadiness(t *testing.T) {
+	a := nodeTestAgent(t, "http://unused", true)
+	script := filepath.Join(a.cfg.Home, fleetControlScript)
+	os.MkdirAll(filepath.Dir(script), 0o755)
+	os.WriteFile(script, []byte("#!/bin/sh\n"), 0o755)
+
+	var mu sync.Mutex
+	asked, mode := 0, "not-ready"
+	old := fleetControlCommand
+	fleetControlCommand = func(ctx context.Context, s string, stdin []byte) ([]byte, error) {
+		var req map[string]any
+		json.Unmarshal(stdin, &req)
+		switch req["method"] {
+		case "discover":
+			return []byte(`{"protocol":1,"machine_id":"m-1","result":{"machine_id":"m-1","fleets":[]}}`), nil
+		case "ready":
+			mu.Lock()
+			asked++
+			m := mode
+			mu.Unlock()
+			if m == "old-controller" {
+				return []byte(`{"error":{"code":"INVALID_ARGUMENT","message":"Unsupported method"}}`), nil
+			}
+			return []byte(`{"protocol":1,"machine_id":"m-1","result":{"ready":false,"missing":["gh","checkout:x"]}}`), nil
+		}
+		return nil, errors.New("unexpected method")
+	}
+	t.Cleanup(func() { fleetControlCommand = old })
+
+	probe := &fleetProbe{}
+	hb := a.nodeHeartbeat(context.Background(), probe)
+	if hb.Ready == nil || *hb.Ready || hb.NotReady != "gh, checkout:x" {
+		t.Fatalf("ready = %v %q; want false with both reasons", hb.Ready, hb.NotReady)
+	}
+	hb = a.nodeHeartbeat(context.Background(), probe)
+	mu.Lock()
+	n := asked
+	mu.Unlock()
+	if n != 1 || hb.Ready == nil || *hb.Ready {
+		t.Fatalf("second beat: ready asked %d times (want 1), carries %v", n, hb.Ready)
+	}
+	mu.Lock()
+	mode = "old-controller"
+	mu.Unlock()
+	if hb := a.nodeHeartbeat(context.Background(), &fleetProbe{}); hb.Ready != nil || hb.NotReady != "" {
+		t.Fatalf("an old controller: ready = %v %q; want unsaid", hb.Ready, hb.NotReady)
+	}
+}

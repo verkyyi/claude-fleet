@@ -76,6 +76,26 @@ class Control:
                                repo=repo, checkout=checkout, agent=agent, config_path=config))
         return fleets
 
+    def ready(self):
+        """Can this login take a NEW session (issue #1475)? The adapter's `ready`
+        verdict — gh login, a usable credential, every checkout — as one object:
+        {"ready": bool, "gh": bool, "creds": bool, "checkouts": bool, "missing": [...]}.
+        The node agent puts it in its heartbeat; the hub's auto placement skips a
+        login that says no."""
+        code, output, _ = self.adapter("ready")
+        if code:
+            raise Fault("UNAVAILABLE", "Cannot judge readiness")
+        try:
+            verdict = json.loads(output.decode("utf-8"))
+        except ValueError:
+            raise Fault("PROTOCOL_ERROR", "Invalid readiness verdict")
+        if not isinstance(verdict, dict) or not isinstance(verdict.get("ready"), bool) \
+                or not isinstance(verdict.get("missing"), list):
+            raise Fault("PROTOCOL_ERROR", "Invalid readiness verdict")
+        return dict(ready=verdict["ready"], gh=bool(verdict.get("gh")), creds=bool(verdict.get("creds")),
+                    checkouts=bool(verdict.get("checkouts")),
+                    missing=[str(m) for m in verdict["missing"]], observed_at=now())
+
     def fleet(self, fleet_id):
         identifier(fleet_id)
         for fleet in self.inventory():
@@ -96,13 +116,21 @@ class Control:
         workers = []
         for line in output.decode("utf-8").splitlines():
             parts = line.split("\t")
-            # Columns 10-11 (issue #1423): the window name and its @origin_wid, so a
-            # remote sidebar can label the row and nest it under its parent. Optional
-            # — a 9-column adapter is still whole — and the name absorbs any tab of
-            # its own, so an odd window name can never make the inventory unreadable.
+            # Columns 10-12 (issues #1423, #1475): the window name, its @origin_wid
+            # and what it needs of its person (@claude_needs), so a remote sidebar
+            # can label the row, nest it under its parent and draw its red `?`.
+            # Optional — a 9-column adapter is still whole — and the name absorbs
+            # any tab of its own, so an odd window name can never make the
+            # inventory unreadable (the adapter ships beside this file, so the
+            # last two columns are always needs and origin_wid).
             extra = {}
-            if len(parts) >= 11:
-                extra = dict(name=" ".join(parts[9:-1]), origin_wid=parts[-1] or None)
+            if len(parts) >= 12:
+                extra = dict(name=" ".join(parts[9:-2]), origin_wid=parts[-2] or None, needs=parts[-1] or None)
+                parts = parts[:9]
+            elif len(parts) >= 10:
+                # the #1423 shape (name, origin_wid), from an adapter older than #1475
+                extra = dict(name=" ".join(parts[9:-1]) if len(parts) > 10 else parts[9],
+                             origin_wid=(parts[-1] or None) if len(parts) > 10 else None)
                 parts = parts[:9]
             if len(parts) != 9 or not re.fullmatch(r"@[0-9]+", parts[0]):
                 raise Fault("PROTOCOL_ERROR", "Invalid worker inventory")
@@ -379,13 +407,18 @@ class Control:
         if type(request["protocol"]) is not int or request["protocol"] != PROTOCOL:
             raise Fault("PROTOCOL_ERROR", "Unsupported control protocol")
         method, params = request["method"], request["params"]
-        if method != "discover" and request.get("machine_id") != self.machine_id:
+        # discover and ready (issue #1475) are machine-wide reads that name no
+        # fleet: the identity check guards a fleet's operations, not these.
+        if method not in ("discover", "ready") and request.get("machine_id") != self.machine_id:
             raise Fault("IDENTITY_MISMATCH", "Registered machine identity does not match")
         if method == "discover":
             fields(params, ())
             fleets = [{k: v for k, v in f.items() if k != "config_path"} for f in self.inventory()]
             return {"machine_id": self.machine_id, "hostname": socket.gethostname(),
                     "protocol": PROTOCOL, "fleets": fleets, "observed_at": now()}
+        if method == "ready":
+            fields(params, ())
+            return self.ready()
         if method in ("fleet_status", "config_get"):
             fields(params, ("fleet_id",))
             fleet = self.fleet(params["fleet_id"])

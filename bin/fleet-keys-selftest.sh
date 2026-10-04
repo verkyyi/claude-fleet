@@ -291,8 +291,8 @@ done
 grep -Eq '^(task sidebar|row menu|tmux prefix|dashboard|backlog|config modal) ' <<< "$SSHEET" \
   && fail "the sidebar sheet shows a full-sheet group"
 menu_keys="$(bash "$BIN/fleet-sidebar-menu.sh" --keys)" || fail "fleet-sidebar-menu.sh --keys exited non-zero"
-[ "$(printf '%s\n' "$menu_keys" | cut -f1 | tr -d '\n')" = rtpaswkvxnog ] \
-  || fail "the row menu's key table is not r t p a s w k v x n o g: $(printf '%s' "$menu_keys" | cut -f1 | tr '\n' ' ')"
+[ "$(printf '%s\n' "$menu_keys" | cut -f1 | tr -d '\n')" = rtpaswkvxnoge ] \
+  || fail "the row menu's key table is not r t p a s w k v x n o g e: $(printf '%s' "$menu_keys" | cut -f1 | tr '\n' ' ')"
 while IFS='	' read -r mk _; do
   [ -n "$mk" ] || continue
   grep -Eq "^  $mk +" <<< "$SSHEET" && fail "the sidebar sheet lists the row menu letter '$mk'"

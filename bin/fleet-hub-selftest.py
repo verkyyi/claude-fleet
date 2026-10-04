@@ -56,10 +56,11 @@ if "list-windows" in sys.argv:
     # Rows carry @repo in column 9; a format that does not ask for it (a one-repo
     # fleet, issue #1018) gets that column empty, exactly as real tmux prints it.
     data=root/"workers.tsv"
-    # Columns 10-11 (issue #1423): the window name and @origin_wid, when asked.
+    # Columns 10-12 (issues #1423, #1475): the window name, @origin_wid and
+    # @claude_needs, when asked.
     fmt=sys.argv[sys.argv.index("-F") + 1]
     keep="#{@repo}" in fmt
-    extra=["", ""] if "#{window_name}" in fmt else []
+    extra=["", "", ""] if "#{window_name}" in fmt else []
     if data.exists():
         for row in data.read_text().splitlines():
             cols=row.split("\t")
@@ -461,6 +462,23 @@ class HubTests(HubFixture):
             self.node.controller.dispatch(self.node.request("discover", {}, shell="touch /bad"))
         with self.assertRaises(Fault):
             self.node.rpc("exec", {"command": "anything"})
+
+    def test_ready_verdict_is_machine_wide_and_names_what_is_missing(self):
+        # The node agent's heartbeat carries this (issue #1475); the hub's auto
+        # placement skips a login that says no. The fixture's gh shim knows no
+        # `auth status` and its checkout /fixture/project does not exist, so both
+        # are named; a machine-wide read, it needs no fleet identity.
+        verdict = self.node.rpc("ready", {})
+        self.assertIs(verdict["ready"], False)
+        self.assertIs(verdict["gh"], False)
+        self.assertIs(verdict["checkouts"], False)
+        self.assertIn("gh", verdict["missing"])
+        self.assertTrue(any(m.startswith("checkout:") for m in verdict["missing"]), verdict)
+        again = self.node.controller.dispatch(dict(protocol=PROTOCOL, method="ready",
+                                                   machine_id=str(uuid.uuid4()), params={}))
+        self.assertEqual(again["missing"], verdict["missing"])
+        with self.assertRaises(Fault):
+            self.node.rpc("ready", {"fleet_id": self.fleet})
 
     def test_permissions_revocation_expiry_and_no_cross_fleet_routing(self):
         reader = self.hub.grant("reader", [self.fleet], ["fleet:read"])
