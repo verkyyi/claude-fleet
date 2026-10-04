@@ -270,6 +270,10 @@ func (s *Server) Handler() http.Handler {
 		// authenticates with its token; starting and releasing are the
 		// operator's.
 		mux.HandleFunc("/v1/node/reclaim", s.handleNodeReclaim)
+		// 维护中 (claude-fleet#1427): a machine flags itself before a planned
+		// outage, with its own token; the operator flags any machine through
+		// /v1/fleet/settings.
+		mux.HandleFunc("/v1/node/maintenance", s.handleNodeMaintenance)
 		mux.Handle("/v1/fleet/spot", s.viewerOnly(s.operatorOnly(http.HandlerFunc(s.handleFleetSpot))))
 		mux.Handle("/v1/nodes", s.viewerOnly(http.HandlerFunc(s.handleNodes)))
 		mux.Handle("/nodes", s.viewerOnly(http.HandlerFunc(s.serveNodesPage)))

@@ -972,9 +972,18 @@ func (s *Server) judge(r store.FleetRow, settings map[string]string, accounts ma
 		}
 	}
 	_, connErr := s.writableConn(r.EndpointID)
+	maint, flagged := maintenanceOf(r.Hostname, settings)
 	switch {
 	case status != "online":
 		c.Excluded = "offline"
+	case flagged:
+		// 维护中 (claude-fleet#1427): the operator is taking the machine down.
+		// Out for auto AND for a start that names it — unlike not-ready, this
+		// is a decision about the machine, not a report from it.
+		c.Excluded = "maintenance"
+		if maint.Reason != "" {
+			c.Excluded += ": " + maint.Reason
+		}
 	case connErr != nil:
 		c.Excluded = errorObject(connErr)["message"]
 	case c.LoadPerCore != nil && *c.LoadPerCore > maxLoadPerCore:
@@ -1046,8 +1055,10 @@ func placementReason(c Candidate, all []Candidate) string {
 // --- settings ----------------------------------------------------------
 
 // handleFleetSettings serves GET/PUT /v1/fleet/settings — the operator's
-// (mounted behind operatorOnly). Only fleet.node_cap.<machine> exists: an
-// integer 0–256, or "" to fall back to the default.
+// (mounted behind operatorOnly). fleet.node_cap.<machine> is an integer 0–256,
+// or "" to fall back to the default; fleet.spot_weight a number 0–2;
+// fleet.node_maintenance.<machine> (claude-fleet#1427) a reason — any text,
+// "" to end the maintenance — stored as the dated record the roster shows.
 func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	switch r.Method {
@@ -1062,6 +1073,30 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		switch {
+		case strings.HasPrefix(body.Key, NodeMaintenancePrefix) && nodeNameRE.MatchString(body.Key[len(NodeMaintenancePrefix):]):
+			machine, now := body.Key[len(NodeMaintenancePrefix):], time.Now()
+			reason := strings.TrimSpace(body.Value)
+			if len(reason) > 200 {
+				httpError(w, http.StatusBadRequest, "the maintenance reason is at most 200 characters")
+				return
+			}
+			if reason == "" {
+				was, err := s.leaveMaintenance(machine, now)
+				if err != nil {
+					httpError(w, http.StatusInternalServerError, err.Error())
+					return
+				}
+				s.maintenanceAudit("operator", machine, map[bool]string{true: "LEAVE", false: "NOT_FLAGGED"}[was], now)
+			} else {
+				m, already, err := s.enterMaintenance(machine, reason, "operator", now)
+				if err != nil {
+					httpError(w, http.StatusInternalServerError, err.Error())
+					return
+				}
+				s.maintenanceAudit("operator", machine, map[bool]string{true: "ALREADY", false: "ENTER"}[already]+": "+m.Reason, now)
+			}
+			s.writeFleetSettings(w)
+			return
 		case body.Key == SpotWeightKey:
 			// The SPOT placement weight (claude-fleet#1428): 0–2, or ""
 			// for CCQUOTA_FLEET_SPOT_WEIGHT's value.
@@ -1079,7 +1114,7 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		default:
-			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine> and "+SpotWeightKey+" are settable")
+			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine>, "+NodeMaintenancePrefix+"<machine> and "+SpotWeightKey+" are settable")
 			return
 		}
 		if err := s.Store.SetFleetSetting(body.Key, body.Value, time.Now()); err != nil {
@@ -1091,6 +1126,11 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusMethodNotAllowed, "GET or PUT")
 		return
 	}
+	s.writeFleetSettings(w)
+}
+
+// writeFleetSettings answers a settings call: what is set, and what applies.
+func (s *Server) writeFleetSettings(w http.ResponseWriter) {
 	settings, err := s.Store.FleetSettings()
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
@@ -1101,6 +1141,10 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 		eff[NodeCapPrefix+k] = n
 	}
 	for k, v := range settings {
+		if strings.HasPrefix(k, NodeMaintenancePrefix) {
+			eff[k] = parseMaintenance(k[len(NodeMaintenancePrefix):], v)
+			continue
+		}
 		if n, err := strconv.Atoi(v); err == nil {
 			eff[k] = n
 		}

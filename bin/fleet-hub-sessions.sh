@@ -424,8 +424,10 @@ for n in (data.get("nodes") or []) if isinstance(data.get("nodes"), list) else [
         continue
     lb = label(n.get("machine_name"))
     cur = nodes.setdefault(lb, dict(av="lost", n=0, seen=0))
-    if n.get("availability") == "online":
-        cur["av"] = "online"
+    # heard beats lost; `maintenance` (#1427) is heard too — the operator's
+    # flag over an online machine, never a third kind of silence
+    if n.get("availability") in ("online", "maintenance") and cur["av"] == "lost":
+        cur["av"] = n.get("availability")
     cur["seen"] = max(cur["seen"], epoch(n.get("observed_at")))
 for r in rows:
     if r["local"]:
@@ -433,8 +435,8 @@ for r in rows:
     cur = nodes.setdefault(r["node"], dict(av="lost", n=0, seen=0))
     cur["n"] += 1
     if not data.get("nodes"):
-        if r["av"] == "online":
-            cur["av"] = "online"
+        if r["av"] in ("online", "maintenance") and cur["av"] == "lost":
+            cur["av"] = r["av"]
         cur["seen"] = max(cur["seen"], r["seen"])
 head = ["#ts\x1f%s\n" % now, "#me\x1f%s\n" % clean(label(host))]
 for lb in sorted(nodes):

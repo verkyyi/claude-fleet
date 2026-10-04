@@ -108,7 +108,7 @@ function render(snap) {
     + (s.needs ? `<span class="chip needs"><b>${s.needs}</b> 个等你</span>` : "")
     + (s.lost ? `<span class="chip lost"><b>${s.lost}</b> 个失联</span>` : "");
   $("list").innerHTML = groups.length ? groups.map((g) => `
-    <h2>${esc(g.machine)}${g.lost ? ` <span class="pill">失联</span> <span class="muted" style="font-weight:400;font-size:13px">${esc(g.lostText.replace(/^失联 · /, ""))}</span>` : ""}</h2>
+    <h2>${esc(g.machine)}${g.lost ? ` <span class="pill">失联</span> <span class="muted" style="font-weight:400;font-size:13px">${esc(g.lostText.replace(/^失联 · /, ""))}</span>` : (g.lostText ? ` <span class="pill maint">${esc(g.lostText)}</span>` : "")}</h2>
     ${g.sessions.map(card).join("")}`).join("")
     : `<div class="card empty">没有会话（或你还没有分到任何机器上的登录）。</div>`;
 }

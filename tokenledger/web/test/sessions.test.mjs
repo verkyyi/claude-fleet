@@ -55,11 +55,28 @@ test('a lost node is 失联 with how long ago, keeps its last state, and is not 
 });
 
 test('any non-online availability is 失联, never shown as live', () => {
-  for (const a of ['lost', '', undefined]) {
+  for (const a of ['lost', '', undefined, 'unknown-word']) {
     assert.equal(sessionView(row('m4', 'alice', {}, { availability: a })).lost, true, `availability=${a}`);
   }
   assert.equal(sessionView(row('m4', 'alice')).lost, false);
   assert.equal(sessionView(row('m4', 'alice')).lostText, '');
+});
+
+test('维护中 is heard: not 失联, still ranked live, labelled on the card and the heading (#1427)', () => {
+  const v = sessionView(row('m5', 'alice', { state: 'waiting' }, { availability: 'maintenance', age_sec: 5 }));
+  assert.equal(v.lost, false);
+  assert.equal(v.maint, true);
+  assert.equal(v.lostText, '维护中');
+  assert.equal(v.needsYou, true, 'a waiting session on a 维护中 machine is a live ask');
+  const groups = byMachine([
+    row('m5', 'alice', {}, { availability: 'maintenance' }),
+    row('m4', 'alice', {}, { availability: 'online' }),
+  ], { accounts: [{ hostname: 'm5', login: 'alice', state: 'active' }, { hostname: 'm4', login: 'alice', state: 'active' }] });
+  const m5 = groups.find((g) => g.machine === 'm5');
+  const m4 = groups.find((g) => g.machine === 'm4');
+  assert.equal(m5.lost, false);
+  assert.equal(m5.lostText, '维护中');
+  assert.equal(m4.lostText, '');
 });
 
 test('a machine heading is 失联 only when every login on it is', () => {

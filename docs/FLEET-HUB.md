@@ -149,8 +149,9 @@ find no window: remote rows are read-only; Enter (or the menu's `e`) opens the
 proxy window below. Their red `?` / `⊘` (asking you, waiting for a
 permission) is the local one: the inventory's column 12 carries `@claude_needs`.
 The **machine status line** heads the sidebar (and the hub list):
-`● m5 22 · ● m4 3` — one entry per machine, `●` online / `○` lost with
-`N 分钟没联系`, and your session count there; the local count is the frame's own
+`● m5 22 · ● m4 3` — one entry per machine, `●` online / `◐` 维护中 (the
+operator's flag before a planned outage, issue #1427: heard, no new work sent
+there, rows unchanged) / `○` lost with `N 分钟没联系`, and your session count there; the local count is the frame's own
 rows, the others come from the cache's `#node` lines (the hub's `nodes` list,
 derived from the sessions on an older hub). A machine the hub calls lost, or a
 cache older than `FLEET_HUB_SESSIONS_STALE` (60 s), keeps its rows — dimmed,
@@ -632,6 +633,19 @@ Inventory refresh retains the last successful snapshot and its timestamp when
 a node is unreachable. An offline Fleet is not removed or treated as idle.
 There is no automatic write queue for disconnected nodes. Nodes continue
 running their existing workers if the Hub goes down.
+
+A machine has three words, not two (issue #1427): `online`, `maintenance`
+(维护中) and `lost`. The first and last are the heartbeat's; 维护中 is the
+operator's — set from the machine (`bin/fleet-node-maintenance.sh enter`, its
+node token, `POST /v1/node/maintenance`) or for any machine (`PUT
+/v1/fleet/settings` key `fleet.node_maintenance.<machine>`, the `/nodes` card's
+button) — and stored as a fleet setting, so it survives the outage and a hub
+restart. While a machine is 维护中 the hub places nothing new on it (auto or
+named), `fleet-move.sh --rebalance` on it finds every idle session a better
+home, and `fleet connect` sends people elsewhere; its sessions run on, and lost
+still wins (a flagged machine that stops reporting is lost, leases lapse on the
+30-minute TTL). `docs/MULTI-MACHINE-OPS.md` is the runbook — planned outage,
+unexpected outage, recovery, the drill.
 
 ### Worker lifecycle tools
 

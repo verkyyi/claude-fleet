@@ -422,7 +422,7 @@ type NodeView struct {
 	MachineID     string     `json:"machine_id,omitempty"`
 	Proto         int        `json:"proto"`
 	Compatible    bool       `json:"compatible"`
-	Status        string     `json:"status"` // online | lost
+	Status        string     `json:"status"` // online | maintenance | lost
 	Connected     bool       `json:"connected"`
 	HeartbeatMS   int        `json:"heartbeat_ms"`
 	LastHeartbeat *time.Time `json:"last_heartbeat"`
@@ -447,6 +447,9 @@ type NodeView struct {
 	// (claude-fleet#1428); Spot is that node's ledger state while it lives.
 	Kind string `json:"kind"`
 	Spot string `json:"spot,omitempty"`
+	// Maintenance is the 维护中 record when the machine is flagged
+	// (claude-fleet#1427); Status then reads maintenance while it is heard.
+	Maintenance *Maintenance `json:"maintenance,omitempty"`
 }
 
 // NodeFleetSummary is one fleet on a node, without its window list (C2 owns
@@ -463,7 +466,7 @@ type NodeFleetSummary struct {
 // up", not "is each of m4's six agents up".
 type MachineView struct {
 	Hostname string  `json:"hostname"`
-	Status   string  `json:"status"` // online if any login is
+	Status   string  `json:"status"` // online if any login is; maintenance when flagged
 	Online   int     `json:"logins_online"`
 	Logins   int     `json:"logins"`
 	Sessions int     `json:"sessions"`
@@ -475,6 +478,10 @@ type MachineView struct {
 	LastHeartbeat *time.Time `json:"last_heartbeat"`
 	// Kind is ephemeral when the machine is a SPOT node (claude-fleet#1428).
 	Kind string `json:"kind"`
+	// Maintenance is the 维护中 record when the operator flagged the machine
+	// (claude-fleet#1427): Status reads maintenance while any login is heard,
+	// lost when none is.
+	Maintenance *Maintenance `json:"maintenance,omitempty"`
 }
 
 // NodesSnapshot is the body of /v1/nodes.
@@ -524,6 +531,9 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 			}
 		}
 	}
+	// 维护中 (claude-fleet#1427): the flag is a setting, read once per roster;
+	// an empty settings table leaves every status as the heartbeat said.
+	settings, _ := s.Store.FleetSettings()
 	machines := map[string]*MachineView{}
 	order := []string{}
 	for _, n := range rows {
@@ -536,6 +546,12 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 			v.Kind = k
 		}
 		v.Spot = spotState[n.EndpointID]
+		if m, flagged := maintenanceOf(n.Hostname, settings); flagged {
+			v.Maintenance = &m
+			if v.Status == "online" {
+				v.Status = "maintenance"
+			}
+		}
 		if c := s.nodes.get(n.EndpointID); c != nil {
 			v.Connected, v.Admin = true, c.admin
 			if c.admin {
@@ -551,10 +567,15 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 			order = append(order, v.Hostname)
 		}
 		m.Logins++
-		if v.Status != "online" {
+		if m.Maintenance == nil {
+			m.Maintenance = v.Maintenance // a lost machine still shows why it was flagged
+		}
+		if v.Status == "lost" {
 			continue
 		}
-		m.Status = "online"
+		// Heard: online, or maintenance when flagged — the machine's word is
+		// its logins' word, since the flag is per machine.
+		m.Status, m.Maintenance = v.Status, v.Maintenance
 		m.Online++
 		m.Sessions += v.Sessions
 		// One machine, one load: every login reads the same kernel, so the

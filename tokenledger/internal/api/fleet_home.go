@@ -50,6 +50,9 @@ type HomeCandidate struct {
 	Score       float64  `json:"score"`
 	Last        bool     `json:"last,omitempty"`
 	Excluded    string   `json:"excluded,omitempty"`
+	// Maintenance is the 维护中 reason (claude-fleet#1427): still enterable —
+	// the operator shutting it down needs in — but the pick's last choice.
+	Maintenance string `json:"maintenance,omitempty"`
 }
 
 // HomeResponse is the body of control.HomePath.
@@ -136,6 +139,12 @@ func (s *Server) homePick(pid, last string, now time.Time) (HomeResponse, error)
 			} else {
 				c.Online = true
 				out.Online++
+				if m, flagged := maintenanceOf(m.Hostname, settings); flagged {
+					c.Maintenance = m.Reason
+					if c.Maintenance == "" {
+						c.Maintenance = "维护中"
+					}
+				}
 			}
 		}
 		if last != "" && (sameMachine(m.Hostname, last) || strings.EqualFold(m.alias(), last)) {
@@ -145,44 +154,57 @@ func (s *Server) homePick(pid, last string, now time.Time) (HomeResponse, error)
 	}
 
 	pick := -1
-	// 1 — last used, online.
-	for i, c := range out.Candidates {
-		if c.Online && c.Last {
-			pick, out.Rule, out.Reason = i, "last", "上次用的机器在线"
-		}
-	}
-	// 2 — the most of the person's sessions.
-	if pick < 0 {
-		best := 0
+	// Two passes (claude-fleet#1427): first over the machines that are not
+	// 维护中, then — only when none of those is online — over all online ones,
+	// so a person lands on the machine that is staying up, and the operator
+	// taking the last one down can still get in.
+	for _, allowMaint := range []bool{false, true} {
+		up := func(c HomeCandidate) bool { return c.Online && (allowMaint || c.Maintenance == "") }
+		// 1 — last used, online.
 		for i, c := range out.Candidates {
-			if c.Online && c.Sessions > best {
-				best, pick = c.Sessions, i
+			if up(c) && c.Last {
+				pick, out.Rule, out.Reason = i, "last", "上次用的机器在线"
+			}
+		}
+		// 2 — the most of the person's sessions.
+		if pick < 0 {
+			best := 0
+			for i, c := range out.Candidates {
+				if up(c) && c.Sessions > best {
+					best, pick = c.Sessions, i
+				}
+			}
+			if pick >= 0 {
+				out.Rule, out.Reason = "sessions", "有你的会话"
+			}
+		}
+		// 3 — the best placement score among the online ones.
+		if pick < 0 {
+			online := []int{}
+			for i, c := range out.Candidates {
+				if up(c) {
+					online = append(online, i)
+				}
+			}
+			sort.SliceStable(online, func(a, b int) bool {
+				ca, cb := out.Candidates[online[a]], out.Candidates[online[b]]
+				if ca.Score != cb.Score {
+					return ca.Score > cb.Score
+				}
+				if ca.Sessions != cb.Sessions {
+					return ca.Sessions < cb.Sessions
+				}
+				return ca.Machine < cb.Machine
+			})
+			if len(online) > 0 {
+				pick, out.Rule, out.Reason = online[0], "load", "负载最低"
 			}
 		}
 		if pick >= 0 {
-			out.Rule, out.Reason = "sessions", "有你的会话"
-		}
-	}
-	// 3 — the best placement score among the online ones.
-	if pick < 0 {
-		online := []int{}
-		for i, c := range out.Candidates {
-			if c.Online {
-				online = append(online, i)
+			if allowMaint {
+				out.Reason += "（只剩维护中的机器在线）"
 			}
-		}
-		sort.SliceStable(online, func(a, b int) bool {
-			ca, cb := out.Candidates[online[a]], out.Candidates[online[b]]
-			if ca.Score != cb.Score {
-				return ca.Score > cb.Score
-			}
-			if ca.Sessions != cb.Sessions {
-				return ca.Sessions < cb.Sessions
-			}
-			return ca.Machine < cb.Machine
-		})
-		if len(online) > 0 {
-			pick, out.Rule, out.Reason = online[0], "load", "负载最低"
+			break
 		}
 	}
 	if pick < 0 {
