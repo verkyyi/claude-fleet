@@ -949,6 +949,55 @@ lands the branch, unpacks the transcript and resumes the session. A `working`
 session is refused (`INVALID_STATE`); a failed move gives the lease back to the
 source; a settled move's bundle is dropped, and every bundle expires after a day.
 
+### The SSH relay — SSH through the hub when nothing else reaches (claude-fleet#1413)
+
+(Not the node-to-node message relays of claude-fleet#1421 above: everything
+here is named `ssh_relay` / `fleet_ssh_relays` to keep the two apart.)
+
+When the direct routes to a machine fail (the home LAN is out of reach, the
+tailnet is down, the gateway port is closed), the hub is still reachable and
+every machine already holds a link open to it. The relay carries an SSH
+connection over that path:
+
+```sh
+ssh -o ProxyCommand='fleet connect --proxy m4' m4
+```
+
+`fleet connect` (`bin/fleet` → `bin/fleet-connect.py`, standard-library
+Python, nothing else to install) opens a WebSocket to `/v1/ssh-relay/connect?node=m4`;
+the hub sends a `ssh_relay_open` down one of m4's control channels; that agent dials
+a second WebSocket back to `/v1/node/ssh-relay` and splices it onto m4's own sshd at
+`127.0.0.1:22`. The hub copies bytes between the two and never decrypts them —
+SSH runs end to end, and m4's sshd still decides who logs in. The agent opens no
+listener: both its connections are outbound, and the local one is loopback only.
+An agent offers this with the `ssh_relay` hello capability, on by default with the
+fleet module; `CCQUOTA_FLEET_SSH_RELAY=0` on the agent turns it off.
+
+Who may ask (checked by the hub; sshd checks again):
+
+| credential | how the client sends it | reaches |
+|---|---|---|
+| viewer token, tailnet identity | `FLEET_HUB_TOKEN` (bearer) / tailnet | any machine (the operator) |
+| WeCom session | the session token as `FLEET_HUB_TOKEN`, or the cookie | only machines where the hub opened them an **active** login |
+| connection certificate (C5, #1412) | `~/.ssh/fleet-cert` + `-cert.pub`, proven by signing the hub's nonce with `ssh-keygen -Y sign -n fleet-relay@claude-fleet` | same as a session |
+
+A certificate must be a user certificate signed by the hub's own CA
+(`CCQUOTA_FLEET_SSH_CA_KEY`, claude-fleet#1412) or a key listed in
+`CCQUOTA_FLEET_SSH_CA_PUB` (a file of CA public keys — e.g. one being rotated
+out), valid now, with key id = the person's WeCom userid (`wecom:<userid>` as
+`fleet login` gets it; the part after the last `:` is read) and the hub-minted
+login among its principals. The hub URL comes from `--hub`, `FLEET_HUB_URL`, or
+`{"url": …, "token": …}` in `~/.config/claude-fleet/hub.json`.
+
+Limits are per person, across all their relays: `CCQUOTA_FLEET_SSH_RELAY_MAX`
+concurrent (default 8) and `CCQUOTA_FLEET_SSH_RELAY_RATE_BPS` bytes/second both ways
+(default 4 MiB/s; `-1` unlimited). Every relay is a row in `fleet_ssh_relays` —
+who, which machine, through which login's agent, start, end, bytes each way,
+and why it ended — written when it is admitted and again when it closes;
+`GET /v1/fleet/ssh-relays` (operator only) lists the newest 200. When an agent's
+control channel drops, every relay it carried is closed at once: the client
+sees its SSH session end instead of a stream that silently stops.
+
 ## The dashboard
 
 One page, no tabs — with a nav bar across the top of it. Those are not in

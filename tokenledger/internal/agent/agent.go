@@ -122,6 +122,12 @@ type Config struct {
 	// FleetCodexHomesDir is where hub-leased Codex homes live
 	// (CCQUOTA_FLEET_CODEX_HOMES).
 	FleetCodexHomesDir string
+
+	// FleetSSHRelay lets the hub relay SSH connections to this machine
+	// (claude-fleet#1413): the agent splices a data stream it dials to the
+	// hub onto the local sshd at 127.0.0.1:22. On by default with Fleet;
+	// CCQUOTA_FLEET_SSH_RELAY=0 turns it off, and the hello then never offers it.
+	FleetSSHRelay bool
 }
 
 // Defaults for the intervals.

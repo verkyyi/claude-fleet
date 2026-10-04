@@ -67,10 +67,20 @@ type nodeConn struct {
 	canMove bool
 	// workersAt is when the worker map was last pushed (UnixNano).
 	workersAt atomic.Int64
+	// canSSHRelay is the hello's CapSSHRelay: this node splices relays onto its
+	// sshd (claude-fleet#1413). Set once, before the conn is published.
+	canSSHRelay bool
+	// osUser is the login this agent runs as, refreshed by heartbeats.
+	osUser atomic.Value // string
 	// pending routes read and write replies to their waiter.
 	pending pendingReads
 	// host is the machine as the roster names it, refreshed by heartbeats.
 	host atomic.Value // string
+}
+
+func (c *nodeConn) user() string {
+	u, _ := c.osUser.Load().(string)
+	return u
 }
 
 func (c *nodeConn) hostname() string {
@@ -222,7 +232,8 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 
 	nc := &nodeConn{conn: conn, admin: hp.Admin && s.isFleetAdmin(ep.OSUser), canRead: hp.HasCap(control.CapRead),
 		canWrite: hp.HasCap(control.CapWrite), canRelay: hp.HasCap(control.CapRelay),
-		canMove: hp.HasCap(control.CapMove)}
+		canMove: hp.HasCap(control.CapMove), canSSHRelay: hp.HasCap(control.CapSSHRelay)}
+	nc.osUser.Store(ep.OSUser)
 	nc.proto.Store(int64(hello.Proto))
 	nc.host.Store(ep.Hostname)
 	if hp.Admin && !nc.admin {
@@ -236,6 +247,10 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 		// (claude-fleet#1421).
 		go s.dispatchRelays(ep.ID)
 	}
+	// Relays this link carried end with it (claude-fleet#1413): the agent
+	// has dropped its halves, and the client deserves a clean close, not a
+	// stream that silently stops moving.
+	defer s.sshRelays.closeNode(nc)
 	if nc.admin {
 		// Every admin connect re-sends the SSH user CA: the node checks
 		// what it already has, so a matching machine changes nothing
@@ -284,6 +299,7 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 				hb.OSUser = ep.OSUser
 			}
 			nc.host.Store(hb.Hostname)
+			nc.osUser.Store(hb.OSUser)
 			// The heartbeat carries the version too: a node that upgrades
 			// without reconnecting is re-judged on its next beat.
 			nc.proto.Store(int64(m.Proto))

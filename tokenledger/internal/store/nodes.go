@@ -47,8 +47,8 @@ type Node struct {
 
 // EnsureNodes creates the node roster, the fleet registry (claude-fleet#1409),
 // the principal/account tables (claude-fleet#1411), the certificate audit
-// (claude-fleet#1412), the credential vault (claude-fleet#1415) and the issue
-// leases (claude-fleet#1422). Idempotent.
+// (claude-fleet#1412), the credential vault (claude-fleet#1415), the issue
+// leases (claude-fleet#1422) and the relay audit (claude-fleet#1413). Idempotent.
 func (s *Store) EnsureNodes() error {
 	if _, err := s.write.Exec(nodesSchema); err != nil {
 		return fmt.Errorf("create nodes table: %w", err)
@@ -77,7 +77,11 @@ func (s *Store) EnsureNodes() error {
 		return err
 	}
 	// Issue leases (claude-fleet#1422).
-	return s.ensureFleetLeases()
+	if err := s.ensureFleetLeases(); err != nil {
+		return err
+	}
+	// The relay audit (claude-fleet#1413).
+	return s.ensureFleetSSHRelays()
 }
 
 // NodeConnected records that endpointID opened a control channel speaking

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -387,6 +388,9 @@ func runHub(args []string) error {
 		if err := loadFleetCerts(srv); err != nil {
 			return err
 		}
+		if err := sshRelayConfig(srv); err != nil {
+			return err
+		}
 	}
 	srv.MCP = mcp.Handler(srv)
 
@@ -723,6 +727,9 @@ func runAgent(args []string) error {
 		// Lease this login's credentials from the hub's vault (#1415).
 		FleetCreds:         fleetEnabled() && os.Getenv("CCQUOTA_FLEET_CREDS") == "1",
 		FleetCodexHomesDir: os.Getenv("CCQUOTA_FLEET_CODEX_HOMES"),
+		// The relay rides the control channel, so it is on wherever that is
+		// unless explicitly refused (claude-fleet#1413).
+		FleetSSHRelay: fleetEnabled() && os.Getenv("CCQUOTA_FLEET_SSH_RELAY") != "0",
 	})
 	if err != nil {
 		return err
@@ -750,4 +757,44 @@ func bindHosts(addr string) []string {
 		hosts = append(hosts, host)
 	}
 	return hosts
+}
+
+// sshRelayConfig reads the relay's knobs (claude-fleet#1413):
+//
+//	CCQUOTA_FLEET_SSH_CA_PUB      the SSH CA public key(s) whose user
+//	                              certificates admit a person (a file of
+//	                              authorized_keys lines); unset: sessions and
+//	                              the viewer token only
+//	CCQUOTA_FLEET_SSH_RELAY_MAX       concurrent relays per person (default 8)
+//	CCQUOTA_FLEET_SSH_RELAY_RATE_BPS  bytes/second per person, both ways (default
+//	                              4 MiB/s; -1 unlimited)
+func sshRelayConfig(srv *api.Server) error {
+	if path := os.Getenv("CCQUOTA_FLEET_SSH_CA_PUB"); path != "" {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("CCQUOTA_FLEET_SSH_CA_PUB: %w", err)
+		}
+		if srv.SSHRelayCA, err = api.ParseSSHRelayCA(b); err != nil {
+			return fmt.Errorf("CCQUOTA_FLEET_SSH_CA_PUB: %w", err)
+		}
+	}
+	for _, kv := range []struct {
+		name string
+		set  func(int64)
+	}{
+		{"CCQUOTA_FLEET_SSH_RELAY_MAX", func(n int64) { srv.SSHRelayMaxPerUser = int(n) }},
+		{"CCQUOTA_FLEET_SSH_RELAY_RATE_BPS", func(n int64) { srv.SSHRelayRateBPS = n }},
+	} {
+		v := os.Getenv(kv.name)
+		if v == "" {
+			continue
+		}
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return fmt.Errorf("%s: %w", kv.name, err)
+		}
+		kv.set(n)
+	}
+	log.Printf("fleet relay at %s (%d CA key(s) for certificates)", control.SSHRelayPath, len(srv.SSHRelayCA))
+	return nil
 }
