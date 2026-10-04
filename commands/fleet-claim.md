@@ -365,8 +365,9 @@ override them):
   pops it up on a screen nobody is looking at. An image, PDF, QR code or
   screenshot they should see goes through
   `~/.claude/fleet/bin/fleet-show.sh <file>` — it lands in their `~/Downloads`
-  with an iTerm2 notification (`--inline` draws it in the terminal and holds the
-  screen until they press a key). `SENT …` (exit 0) = delivered; `PATH …`
+  once they accept iTerm2's download prompt (`--inline` draws it in the terminal
+  and holds the screen until they press a key). `SENT …` (exit 0) = offered to
+  their terminal; `PATH …`
   (exit 2) = no iTerm2 attached or over the cap — tell them the path instead.
   A document to READ (Markdown/HTML) still goes through doc-preview (above).
 - **A temp server binds 127.0.0.1 and dies with your work** (issue #1154).

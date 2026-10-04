@@ -11,8 +11,8 @@
 #   OSC 1337 ; FilePart=<b64 chunk> BEL            (repeated)
 #   OSC 1337 ; FileEnd BEL
 #
-#   inline=0  → iTerm2 DOWNLOADS it to the client's ~/Downloads and posts a
-#               notification (click = open). The DEFAULT: Claude Code / Codex
+#   inline=0  → iTerm2 DOWNLOADS it to the client's ~/Downloads — after the
+#               operator accepts its download prompt (3.6.10 asks every time). The DEFAULT: Claude Code / Codex
 #               repaint their TUI constantly, and an inline image is gone on the
 #               next frame.
 #   inline=1  → drawn in the terminal (what `imgcat` does). `--inline`.
@@ -188,7 +188,7 @@ done
 grep -qx done "$status" 2>/dev/null || degrade "the client did not finish sending within ${limit}s (status: $(tr '\n' ' ' < "$status"))"
 
 if [ "$inline" = 1 ]; then where='drawn on the operator'"'"'s screen (held until they press a key)'
-else where="downloaded to the operator's ~/Downloads (iTerm2 notification)"; fi
+else where="offered as a download — lands in the operator's ~/Downloads once they accept iTerm2's prompt"; fi
 while IFS='	' read -r verdict detail name; do
   case "$verdict" in
     ok)  printf 'SENT %s (%s bytes) → %s%s: %s\n' "$name" "$detail" "$client" "${termtype:+ [$termtype]}" "$where" ;;

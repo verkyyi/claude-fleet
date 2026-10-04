@@ -656,12 +656,14 @@ SSH. Everything here routes URLs through `bin/open-url.sh` instead:
 An agent that wants you to look at an image, a PDF or a QR code must not `open`
 it — that opens it on the fleet machine's screen, where nobody is sitting. It
 runs `bin/fleet-show.sh <file>` instead, and the file arrives on **your** side of
-the SSH connection: iTerm2 saves it to your `~/Downloads` and posts a
-notification (click = open). `--inline` draws it in the terminal instead and holds
+the SSH connection: iTerm2 asks you to accept the download, then saves it to
+your `~/Downloads`. `--inline` draws it in the terminal instead and holds
 the screen until you press a key.
 
-- **iTerm2 side:** nothing to set up (3.5+, for multipart transfers). The first
-  download may ask for confirmation; tick "don't ask again" and later ones are silent.
+- **iTerm2 side:** nothing to install (3.5+, for multipart transfers), but iTerm2
+  **asks you to confirm each download** — the file lands only after you accept,
+  so `SENT` means "offered", not "on disk yet". iTerm2 has no documented setting
+  that silences it (`NoSyncSuppressDownloadConfirmation` did not, on 3.6.10).
 - **Which terminal:** the tmux client of this session whose terminal type
   (`#{client_termtype}`, e.g. `iTerm2 3.6.10`) matches `FLEET_SHOW_TERM_RE`, most
   recently active first; `--client <tty>` picks one. No iTerm2 attached → it prints

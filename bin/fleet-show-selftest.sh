@@ -7,6 +7,8 @@
 # instead of /dev/tty, so the escape stream it would put on the operator's
 # terminal is decoded back here and compared byte for byte.
 #   • ROUNDTRIP    multipart stream decodes to the exact file bytes, name, inline=0
+#   • NAME         name= is the bare basename — no trailing newline (a `basename |
+#                  base64` encodes one, and iTerm2 shows it as a `?` on the file)
 #   • PICK         newest-activity client whose termtype matches iTerm2 wins; a
 #                  newer non-iTerm2 client is skipped
 #   • RESTORE      lock-command unset before → unset after; a session value → kept
@@ -76,6 +78,8 @@ res=$("$SHOW" "$F" 2>&1); rc=$?
 meta=$(decode "$OUT")
 [ "$meta" = "pic one.png 0 200001 MultipartFile" ] && ok "header: $meta" || bad "header: $meta"
 cmp -s "$OUT.bin" "$F" && ok "ROUNDTRIP bytes identical" || bad "ROUNDTRIP bytes differ"
+raw=$(python3 -c 'import base64,re,sys; print(repr(base64.b64decode(re.search(rb"name=([^;]*);", open(sys.argv[1],"rb").read()).group(1))))' "$OUT")
+[ "$raw" = "b'pic one.png'" ] && ok "NAME has no trailing newline" || bad "NAME decoded to $raw"
 [ ! -f "$STATE/lockcmd" ] && ok "RESTORE unset lock-command stays unset" || bad "RESTORE left $(cat "$STATE/lockcmd")"
 ls -d "$WORK"/fleet-show.* >/dev/null 2>&1 && bad "job/lock dir leaked" || ok "no job/lock dir left"
 
