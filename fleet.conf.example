@@ -169,7 +169,7 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 # issue #1528) and the doctor's `setkeys` row checks it.
 # Set to 1 to leave that key to this login — the sync stops touching it and the
 # doctor stops asking. GLOBAL.
-# @label=Keep ← opening the agents view @group=janitor @tier=common @scope=global @edit=bool
+# @label=Keep ← opening the agents view @group=janitor @tier=internal @scope=global @edit=bool
 #FLEET_KEEP_AGENTS_KEY=0
 
 # --- Orphan-process reap for KEPT worktrees (issue #469) ------------------------
