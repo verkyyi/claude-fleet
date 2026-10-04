@@ -337,15 +337,36 @@ fi
 
 # ============================ 3. CLEAR =========================================
 transfer_pending && refuse 'an agent transfer became pending — not clearing its source'
-# Escape first (dismiss any open TUI menu/palette), then type `/clear`, then a
-# SEPARATE Enter — text and Enter as distinct send-keys calls so the string is
-# typed into the input line and Enter is what executes the slash command (a
+# Through the fleet mod first (issue #1337): with it alive in the pane, `/clear`
+# is posted to its command inbox and the engine runs it once idle — no keystroke.
+# Exit 0 (ran) / 6 (taken, still running) = delivered; never type it as well.
+# 3/4/5 (no mod, not taken in time — cancelled, refused) = today's keystrokes.
+# The waits are short on purpose: IDLE_TIMEOUT + VERIFY_TIMEOUT + two of these
+# must stay under HARD_TIMEOUT (issue #677's ceiling).
+# mod_send <'/cmd args'> — sets VIA (mod | send-keys) and returns 0 when the mod took it.
+VIA=''
+mod_send() {
+  local rc=3
+  if type fleet_session_command >/dev/null 2>&1; then
+    FLEET_MOD_TAKE_SECS="${FLEET_MOD_TAKE_SECS:-3}" FLEET_MOD_DONE_SECS="${FLEET_MOD_DONE_SECS:-8}" \
+      fleet_session_command ${SOCKET:+--socket "$SOCKET"} --from handoff-cycle "$PANE" "$1" </dev/null >/dev/null 2>&1
+    rc=$?
+  fi
+  case "$rc" in
+    0|6) VIA=mod; log "  $1 via mod (rc=$rc)"; return 0 ;;
+    *)   VIA=send-keys; [ "$rc" = 3 ] || log "  mod did not take $1 (rc=$rc) — falling back to send-keys"; return 1 ;;
+  esac
+}
+# Fallback: Escape first (dismiss any open TUI menu/palette), then type `/clear`,
+# then a SEPARATE Enter — text and Enter as distinct send-keys calls so the string
+# is typed into the input line and Enter is what executes the slash command (a
 # combined send-keys would submit early / mis-fire the palette). Factored into a
 # helper because §4 may retry it once on a dropped keystroke.
 # FLEET_ALLOW_SENDKEYS=1 prefixes each send-keys: this is sanctioned fleet
 # plumbing, exempt from the issue-bridge send-keys rail (issue #437). Prefixed,
 # not exported, so nothing this cycle drives inherits the hatch.
 send_clear() {
+  mod_send /clear && return 0
   FLEET_ALLOW_SENDKEYS=1 TM send-keys -t "$PANE" Escape 2>/dev/null || true
   sleep 0.3 2>/dev/null || true
   FLEET_ALLOW_SENDKEYS=1 TM send-keys -t "$PANE" -l -- "/clear" 2>/dev/null || true
@@ -357,6 +378,7 @@ send_clear() {
 clear_t0=$(date +%s 2>/dev/null || echo 0)
 log "clearing pane $PANE"
 send_clear
+CLEAR_VIA="$VIA"
 
 # ============================ 4. VERIFY ========================================
 # Confirm the /clear landed and a fresh session started — DETERMINISTICALLY (#345).
@@ -391,7 +413,9 @@ while [ "$(date +%s 2>/dev/null || echo 0)" -lt "$vf_deadline" ]; do
   fi
   # Retry the /clear ONCE if nothing has confirmed within RETRY_AFTER — a dropped
   # Escape/keystroke leaves the session uncleared and no marker is ever stamped.
-  if [ "$retried" = 0 ] && [ "$(date +%s 2>/dev/null || echo 0)" -ge "$retry_at" ]; then
+  # A /clear the mod ran is never re-sent: it already cleared, and a second one
+  # would only land on the fresh session the pickup is about to use.
+  if [ "$retried" = 0 ] && [ "$CLEAR_VIA" != mod ] && [ "$(date +%s 2>/dev/null || echo 0)" -ge "$retry_at" ]; then
     retried=1
     log "no fresh signal within ${RETRY_AFTER}s — retrying /clear once"
     send_clear
@@ -416,9 +440,11 @@ fi
 # first render by a hair — a short pause keeps the pickup keystrokes from landing
 # in a not-yet-ready TUI (the scrape path already implies a rendered prompt).
 sleep 0.5 2>/dev/null || true
-log "sending pickup: $PICKUP"
-FLEET_ALLOW_SENDKEYS=1 TM send-keys -t "$PANE" -l -- "$PICKUP" 2>/dev/null || true
-FLEET_ALLOW_SENDKEYS=1 TM send-keys -t "$PANE" Enter 2>/dev/null || true
+if ! mod_send "$PICKUP"; then
+  log "sending pickup: $PICKUP"
+  FLEET_ALLOW_SENDKEYS=1 TM send-keys -t "$PANE" -l -- "$PICKUP" 2>/dev/null || true
+  FLEET_ALLOW_SENDKEYS=1 TM send-keys -t "$PANE" Enter 2>/dev/null || true
+fi
 
 log "cycle complete — pane $PANE cleared and resumed from $STORE"
 [ -f "$BIN/fleet-ladder-log.sh" ] && FLEET_HANDOFF_LOG_DIR="$LOG_DIR" sh "$BIN/fleet-ladder-log.sh" handoff-complete \

@@ -146,6 +146,8 @@ FLEET_MIGRATE_LAUNCH               seam: an injectable command/path for tests (f
 FLEET_OFFBOARD_ARCHIVE_DIR         path: offboarding home-archive dir override; --archive-dir is the CLI form (fleet-login-remove.sh)
 FLEET_MIGRATION_LOCKED             handoff: a transition lock the caller already holds
 FLEET_MOD_ALIVE_SECS               knob: a mod heartbeat younger than this is alive (fleet_mod_alive, fleet-doctor.sh; 45 = three missed beats)
+FLEET_MOD_DONE_SECS                knob: how long fleet_session_command waits for the mod to finish a taken command before answering 6 (running)
+FLEET_MOD_TAKE_SECS                knob: how long fleet_session_command waits for the mod to take a post before cancelling it (exit 4)
 FLEET_MODEL_SWITCH_DIALOG          knob: internal pacing/limit, safe in-code default (fleet-model-switch.sh)
 FLEET_MODEL_SWITCH_SCROLL          knob: internal pacing/limit, safe in-code default (fleet-model-switch.sh)
 FLEET_MODEL_SWITCH_TRACE           knob: debug trace for the model switch

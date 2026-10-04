@@ -17,6 +17,11 @@
 // not the session: a /clear ends the session (`session.end`, reason `clear`)
 // and fires no new `session.start`, but the module and its timers go on — so
 // the beat survives a handoff's /clear. A real exit unsets it at once.
+//
+// Inbox (issue #1337): the same module also polls the pane's command inbox every
+// INBOX_MS and runs what bash posted there with `$.command.run` (inbox.ts) — on a
+// module timer for the same reason: the pickup a handoff posts right after its
+// /clear must still be taken.
 
 import { atom, update } from 'claude-code'
 import type { EngineInterface, On, Timer } from 'claude-code'
@@ -24,6 +29,8 @@ import type { EngineInterface, On, Timer } from 'claude-code'
 import type { FleetModStatus } from '../types'
 import { isOpen, openGate } from './gate'
 import { TOOL_SPECS } from './tools'
+import { INBOX_MS, inboxDir, pollInbox } from './inbox'
+import type { InboxIo } from './inbox'
 import { TMUX_TIMEOUT_MS, windowOptionsArgv } from './tmux'
 import { MOD_VERSION, isSupported } from './version'
 
@@ -36,7 +43,10 @@ const status = atom({ plugin: 'fleet', key: 'status' } as const, null as FleetMo
 
 // Module state: a reload is a fresh module, and session.start fires again.
 let timer: Timer | undefined
+let inboxTimer: Timer | undefined
+let inboxBusy = false
 let pane: string | undefined
+let inbox: string | undefined
 
 async function setOptions($: EngineInterface, options: Record<string, string | null>): Promise<void> {
   if (pane === undefined) return
@@ -49,6 +59,35 @@ async function beat($: EngineInterface): Promise<void> {
     await setOptions($, { '@mod_alive': String(Math.floor((await $.clock.now()) / 1000)) })
   } catch {
     // A missed beat ages the option out; the bash side falls back on its own.
+  }
+}
+
+function inboxIo($: EngineInterface): InboxIo {
+  return {
+    list: async dir => (await $.fs.list(dir)).filter(f => f.kind === 'file').map(f => f.name),
+    read: path => $.fs.read(path),
+    write: (path, text) => $.fs.write(path, text),
+    claim: async (from, to) => {
+      const r = await $.process.run(['mv', from, to], { timeoutMs: TMUX_TIMEOUT_MS })
+      return r.exitCode === 0
+    },
+    run: async (command, args) => {
+      await $.command.run({ command, args })
+    },
+  }
+}
+
+async function pollOnce($: EngineInterface): Promise<void> {
+  // One command at a time: a /compact can hold its run for a minute, and the
+  // next one waits its turn behind it rather than racing it.
+  if (inboxBusy || inbox === undefined) return
+  inboxBusy = true
+  try {
+    await pollInbox(inboxIo($), inbox)
+  } catch {
+    // A failed poll is retried on the next tick; the poster times out on its own.
+  } finally {
+    inboxBusy = false
   }
 }
 
@@ -66,6 +105,13 @@ async function onReady($: EngineInterface): Promise<void> {
   timer?.cancel()
   timer = $.clock.every(HEARTBEAT_MS, () => {
     void beat($)
+  })
+  const home = (await $.env.get('HOME')) ?? ''
+  const conf = (await $.env.get('FLEET_CONF_DIR')) || `${home}/.config/claude-fleet`
+  inbox = inboxDir(conf, await $.env.get('TMUX'), pane)
+  inboxTimer?.cancel()
+  inboxTimer = inbox === undefined ? undefined : $.clock.every(INBOX_MS, () => {
+    void pollOnce($)
   })
 }
 
@@ -95,6 +141,8 @@ export function registerLifecycle(on: On): void {
     if (isOpen() && EXITS.has(e.reason)) {
       timer?.cancel()
       timer = undefined
+      inboxTimer?.cancel()
+      inboxTimer = undefined
       await setOptions($, { '@mod_alive': null })
     }
     return next(e)

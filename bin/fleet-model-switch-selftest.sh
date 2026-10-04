@@ -454,6 +454,40 @@ ok; grep -q 'tok-aftercap' "$INBOX_LOG" && fail "the newly detected ledger-only 
 out=$(RUN --capped --model opus --dry-run)
 ok; has "$W_BEFORE" "$out" || fail "the next sweep must pick up the earlier window" "$out"
 
+# --- with the fleet mod alive, /model goes through its inbox (issue #1337) -----
+# A fresh @mod_alive and a stand-in mod that claims the posted file (the same
+# atomic mv the real one runs) and answers done: the pane is never typed into.
+spawn_worker modded Fable "Fable 5.1"; W_MOD="$WID"
+tmux -L "$LBL" set-window-option -t "$W_MOD" @mod_alive "$(date +%s)" 2>/dev/null
+MPANE=$(tmux -L "$LBL" display-message -p -t "$W_MOD" '#{pane_id}')
+MDIR="$FLEET_CONF_DIR/global/mod-inbox/$LBL/${MPANE#%}"
+( end=$((SECONDS + 30))
+  while [ "$SECONDS" -lt "$end" ]; do
+    for f in "$MDIR"/*.json; do
+      [ -f "$f" ] || continue
+      s="${f%.json}"
+      mv "$f" "$s.taken" 2>/dev/null || continue
+      cat "$s.taken" >> "$WORK/mod-took"
+      printf '{"ok":true}\n' > "$s.done"
+    done
+    sleep 0.2
+  done ) &
+MODPID=$!
+sleep 1
+# (The stand-in cannot repaint the fake's status line, so the verify is cut short.)
+out=$(FLEET_MODEL_SWITCH_VERIFY=2 "$SCRIPT" --session "$LBL" --no-fallback --model opus "$W_MOD" 2>&1)
+kill "$MODPID" 2>/dev/null; wait "$MODPID" 2>/dev/null
+eq "with the mod alive, the pane is never typed into" "" "$(cat "$WORK/typed.modded")"
+ok; has '"cmd": "/model"' "$(cat "$WORK/mod-took" 2>/dev/null)" && has '"args": "opus"' "$(cat "$WORK/mod-took")" \
+  || fail "the mod should have taken /model opus from its inbox" "$(cat "$WORK/mod-took" 2>/dev/null) / $out"
+ok; has '"from": "model-switch"' "$(cat "$WORK/mod-took")" || fail "the post should name its sender" "$(cat "$WORK/mod-took")"
+# Stale beat → the mod is not here → today's keystrokes, unchanged.
+spawn_worker stalemod Fable "Fable 5.1"; W_STALE="$WID"
+tmux -L "$LBL" set-window-option -t "$W_STALE" @mod_alive "$(( $(date +%s) - 600 ))" 2>/dev/null
+sleep 1
+RUN --model opus "$W_STALE" >/dev/null
+ok; has '/model opus' "$(cat "$WORK/typed.stalemod")" || fail "a stale mod beat must fall back to typing /model" "$(cat "$WORK/typed.stalemod")"
+
 # --- panels and the hub are never touched ------------------------------------
 eq "the dash panel was never typed into" "" "$(cat "$WORK/typed.dash" 2>/dev/null)"
 

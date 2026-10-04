@@ -62,6 +62,7 @@ case "\$verb" in
       *@handoff_cleared_at*) printf '%s\n' "\${FAKE_CLEARED_AT:-}" ;;
       *@agent_transfer_pending_until*) printf '%s\n' "\${FAKE_TRANSFER_UNTIL:-}" ;;
       *window_id*)           printf '%s\n' '@7' ;;
+      *@mod_alive*)          printf '%s\n' "\${FAKE_MOD_ALIVE:-}" ;;
       *) : ;;   # a plain notify display-message (no -p) — no-op
     esac ;;
   capture-pane)
@@ -110,6 +111,8 @@ run() {  # usage: run [FAKE_STATE=..] [FAKE_CAP=..] [DEFER=..] -- <helper args..
   FAKE_TRANSFER_UNTIL="${FAKE_TRANSFER_UNTIL:-}" \
   FAKE_CLIENTS="${FAKE_CLIENTS:-}" \
   FAKE_CLIENTS_FILE="${FAKE_CLIENTS_FILE:-}" \
+  FAKE_MOD_ALIVE="${FAKE_MOD_ALIVE:-}" \
+  FLEET_CONF_DIR="$WORK/conf" \
   TMUX="${TMUX_OVERRIDE-fake,1,0}" \
     bash "$SRC" "$@"
 }
@@ -299,6 +302,49 @@ grep -qi 'operator' "$WORK/logs/handoff-cycle.log" 2>/dev/null \
   || fail "the wait must be logged (operator active → holding), log: $(cat "$WORK/logs/handoff-cycle.log")"
 
 printf 'selftest: operator-hold legs PASS (present→abort w/o clear or unlatch · elsewhere/stale/off→clear · leaves→clear+pickup)\n' >&2
+
+# ---- VIA-MOD (issue #1337): with the fleet mod alive in the pane, `/clear` and the
+# ---- pickup are POSTED to its command inbox, not typed — zero send-keys. A beat
+# ---- with no mod answering (a hung or dying mod) times out, is cancelled, and the
+# ---- cycle types exactly as before.
+MDIR="$WORK/conf/global/mod-inbox/fake/${PANE#%}"
+TOOK="$WORK/mod-took"; : > "$TOOK"
+( end=$((SECONDS + 30))
+  while [ "$SECONDS" -lt "$end" ]; do
+    for f in "$MDIR"/*.json; do
+      [ -f "$f" ] || continue
+      b="${f%.json}"
+      mv "$f" "$b.taken" 2>/dev/null || continue
+      cat "$b.taken" >> "$TOOK"
+      printf '{"ok":true}\n' > "$b.done"
+    done
+    sleep 0.2
+  done ) &
+MODPID=$!
+: > "$WORK/logs/handoff-cycle.log"
+FAKE_STATE='done' FAKE_CLEARED_AT=9999999999 FAKE_MOD_ALIVE="$(date +%s)" \
+  run --pane "$PANE" --doc "$DOC" || fail "via-mod cycle must exit 0"
+kill "$MODPID" 2>/dev/null; wait "$MODPID" 2>/dev/null
+[ -s "$INJECT" ] && fail "via-mod: the mod was alive — NOTHING may be typed"
+grep -q '"cmd": "/clear"' "$TOOK" || fail "via-mod: the mod must have taken /clear: $(cat "$TOOK")"
+grep -q '"cmd": "/fleet-handoff", "args": "pickup '"$DOC"'"' "$TOOK" || fail "via-mod: the mod must have taken the pickup with its doc: $(cat "$TOOK")"
+[ "$(grep -c . "$TOOK")" = 2 ] || fail "via-mod: exactly two posts (clear + pickup), no retry: $(cat "$TOOK")"
+grep -q '/clear via mod' "$WORK/logs/handoff-cycle.log" || fail "via-mod: the log must say /clear went via mod"
+grep -q 'pickup.* via mod' "$WORK/logs/handoff-cycle.log" || fail "via-mod: the log must say the pickup went via mod"
+grep -q 'sending pickup' "$WORK/logs/handoff-cycle.log" && fail "via-mod: no send-keys pickup line may be logged"
+ls "$MDIR"/*.json "$MDIR"/*.done "$MDIR"/*.taken >/dev/null 2>&1 && fail "via-mod: the inbox must be left empty: $(ls "$MDIR")"
+
+FLEET_MOD_TAKE_SECS=1 FAKE_STATE='done' FAKE_CLEARED_AT=9999999999 FAKE_MOD_ALIVE="$(date +%s)" \
+  run --pane "$PANE" --doc "$DOC" || fail "mod-silent cycle must exit 0"
+cleared || fail "mod-silent: an unanswered post must fall back to typing /clear"
+grep -q "pickup $DOC" "$INJECT" || fail "mod-silent: the pickup must be typed too"
+grep -q 'mod did not take' "$WORK/logs/handoff-cycle.log" || fail "mod-silent: the fallback must be logged"
+ls "$MDIR"/*.json >/dev/null 2>&1 && fail "mod-silent: the unanswered post must be cancelled, not left for a late mod: $(ls "$MDIR")"
+
+FLEET_MOD=0 FAKE_STATE='done' FAKE_CLEARED_AT=9999999999 FAKE_MOD_ALIVE="$(date +%s)" \
+  run --pane "$PANE" --doc "$DOC" || fail "FLEET_MOD=0 cycle must exit 0"
+cleared || fail "FLEET_MOD=0: a fresh beat is ignored — the cycle types as before"
+printf 'selftest: via-mod legs PASS (alive→posted, zero keys · silent mod→cancelled + typed · FLEET_MOD=0→typed)\n' >&2
 
 # ---- LOOP-CARRY (issue #594): the cycle's `/clear` retires the session id a running
 # ---- `/loop` is scheduled against, so the ONLY thing that carries the loop across the

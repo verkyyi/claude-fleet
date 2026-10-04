@@ -26,9 +26,14 @@
 # starts meanwhile (@claude_state=working) or a stage someone else moved also gives
 # up. Bounded: never runs past FLEET_COMPACT_SEND_TIMEOUT (default 90 s).
 #
-# Text and Enter go as SEPARATE send-keys calls (bracketed paste eats an inline
-# Enter); FLEET_ALLOW_SENDKEYS=1 marks this as sanctioned fleet plumbing (#437).
-# Always exits 0.
+# Delivery (issue #1337): with the fleet mod alive in the pane, `/compact …` goes
+# through its command inbox (bin/fleet-session-command.sh) and the engine runs it
+# once idle — no keystroke at all. With no mod (FLEET_MOD=0, a Codex pane, an
+# engine outside the mod's range, an install without the helper) or a post the
+# mod never took, today's keystrokes: text and Enter as SEPARATE send-keys calls
+# (bracketed paste eats an inline Enter); FLEET_ALLOW_SENDKEYS=1 marks this as
+# sanctioned fleet plumbing (#437). Each send logs one `via mod|send-keys` line
+# to compact-send.log beside context-ladder.log. Always exits 0.
 set -u
 PANE="${1:-}"
 MAP="${2:-}"
@@ -69,9 +74,19 @@ tmux set-window-option -t "$PANE" @compact_ts "$(date +%s)" 2>/dev/null
 # The context-ladder ledger (issue #1320): this script owns the `compacting` step.
 _lb="$(dirname "$0")/fleet-ladder-log.sh"
 [ -f "$_lb" ] && sh "$_lb" compacting --pane "$PANE" --reason "${MAP:+map}" </dev/null >/dev/null 2>&1
-FLEET_ALLOW_SENDKEYS=1 tmux send-keys -t "$PANE" Escape 2>/dev/null
-sleep 0.3 2>/dev/null || sleep 1
-FLEET_ALLOW_SENDKEYS=1 tmux send-keys -t "$PANE" -l -- "/compact $keep" 2>/dev/null
-sleep 0.3 2>/dev/null || sleep 1
-FLEET_ALLOW_SENDKEYS=1 tmux send-keys -t "$PANE" Enter 2>/dev/null
+_sc="$(dirname "$0")/fleet-session-command.sh" rc=3
+[ -f "$_sc" ] && { bash "$_sc" --from compact-send "$PANE" "/compact $keep" </dev/null >/dev/null 2>&1; rc=$?; }
+case "$rc" in
+  0|6) via=mod ;;   # ran, or running: typing it too would compact twice
+  *) via=send-keys
+     FLEET_ALLOW_SENDKEYS=1 tmux send-keys -t "$PANE" Escape 2>/dev/null
+     sleep 0.3 2>/dev/null || sleep 1
+     FLEET_ALLOW_SENDKEYS=1 tmux send-keys -t "$PANE" -l -- "/compact $keep" 2>/dev/null
+     sleep 0.3 2>/dev/null || sleep 1
+     FLEET_ALLOW_SENDKEYS=1 tmux send-keys -t "$PANE" Enter 2>/dev/null ;;
+esac
+_ld="${FLEET_HANDOFF_LOG_DIR:-$(dirname "$0")/../logs}"
+mkdir -p "$_ld" 2>/dev/null && printf '%s [%s] /compact via %s (rc=%s)\n' \
+  "$(date '+%Y-%m-%dT%H:%M:%S' 2>/dev/null)" "$PANE" "$via" "$rc" >> "$_ld/compact-send.log" 2>/dev/null
+[ -f "$_lb" ] && sh "$_lb" --trim "$_ld/compact-send.log" >/dev/null 2>&1
 exit 0
