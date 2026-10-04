@@ -208,6 +208,10 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("/v1/node/lease", s.handleNodeLease)
 		// Placement for a node's own spawn (claude-fleet#1425), the same way.
 		mux.HandleFunc("/v1/node/place", s.handleNodePlace)
+		// Moving a session between machines (claude-fleet#1426), the same way.
+		mux.HandleFunc("/v1/node/move", s.handleNodeMove)
+		mux.HandleFunc("/v1/node/move/bundle", s.handleNodeMoveBundle)
+		mux.HandleFunc("/v1/node/move/bundle/", s.handleNodeMoveBundle)
 		mux.Handle("/v1/nodes", s.viewerOnly(http.HandlerFunc(s.handleNodes)))
 		mux.Handle("/nodes", s.viewerOnly(http.HandlerFunc(s.serveNodesPage)))
 		mux.Handle("/v1/fleet/me", s.viewerOnly(http.HandlerFunc(s.handleFleetMe)))

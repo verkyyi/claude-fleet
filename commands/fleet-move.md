@@ -18,6 +18,12 @@ the target can land the exact same commits).
 session, else free text) rather than guessing. Missing a window → ask which one
 (the current window is never assumed; a move is deliberate, always named).
 
+**Through the hub** (issue #1426): `to <machine>` with no `@` — e.g.
+`/fleet-move b3 to m4` — or `/fleet-move rebalance`, when this login runs with
+the hub module on (`CCQUOTA_FLEET=1`). The two machines never talk to each
+other: the transcript, the issue's lease and the start all travel through the
+hub. See § 5.
+
 ## 0. Resolve fleet + guard seat (run FIRST, every time)
 
 ```sh
@@ -95,6 +101,36 @@ manually close whichever side you don't want) — never as a way to "duplicate"
 a working session, and never leave both sides open past that inspection. If
 you used it, say so plainly and remind whoever's listening which side is now
 the one true copy.
+
+## 5. Through the hub — `--via hub` / `--rebalance`
+
+When the operator names a machine (`m4`) rather than `<user>@<host>`, or asks to
+rebalance, and `CCQUOTA_FLEET=1`:
+
+```sh
+~/.claude/fleet/bin/fleet-move.sh <window>… --via hub --to <machine> --dry-run   # plan: asks the hub
+~/.claude/fleet/bin/fleet-move.sh <window>… --via hub --to <machine>             # after the go-ahead
+~/.claude/fleet/bin/fleet-move.sh --rebalance [--max N] [--dry-run]
+```
+
+Same eligibility, dirty and push rules as the ssh path; § 3's confirmation
+applies the same way. What differs:
+
+- **Only an idle session moves** — a window whose `@claude_state` is `working`
+  is `refused:busy` (exit 11); a move never cuts a turn in half.
+- The hub chooses the target fleet on that machine (it must host the repo and
+  pass the placement gates a new session pays) and is asked BEFORE anything
+  stops. Then the agent is stopped, the transcript is uploaded, the issue's
+  lease is handed to the target, and the target lands the branch, unpacks the
+  transcript and resumes the same session id. Only a verified resume closes the
+  window here. A target that fails gives the lease back; the session is then
+  resumable here with `/fleet-history`.
+- `--keep-source` and `--fleet` are ssh-only (the hub never leaves two copies,
+  and picks the fleet itself).
+- `--rebalance` asks the hub where sessions should run and moves the
+  longest-idle `done` sessions off this machine while the hub's answer is
+  another machine — at most `--max` (`FLEET_MOVE_REBALANCE_MAX`, 2) — and stops
+  at the first answer that says this machine is the best place.
 
 ## 4. Report
 

@@ -209,6 +209,10 @@ type Agent struct {
 	// (claude-fleet#1421); made on first use.
 	relay     *relayState
 	relayOnce sync.Once
+	// moveIn is where a moved-in session's transcript bundle is downloaded
+	// (claude-fleet#1426): claude-fleet's `fleet-hub-node.sh paths` movein
+	// line, set per connection before its reader starts; "" = no CapMove.
+	moveIn string
 
 	// consecutiveFailures backs the scan cadence off while the hub is
 	// unreachable. A failed cycle leaves the cursor unmoved, so the next scan

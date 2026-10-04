@@ -267,6 +267,36 @@ class Control:
             raise Fault("UNKNOWN_OUTCOME", "Restore returned but no matching worker is visible")
         return {"workers": matches, "observed_at": snapshot["observed_at"]}
 
+    def execute_move_in(self, fleet, params):
+        """A session moved here through the hub (issue #1426): land its branch
+        in a fresh worktree, unpack the transcript the agent downloaded, open a
+        window resuming it and see a live agent appear. Everything up to the
+        unpack is undone on failure, so those refusals are a clean `failed`;
+        a window that opened without an agent is `unknown` — the source keeps
+        its own window until someone looks."""
+        key = params["worker_key"]
+        bundle = self.conf_dir / "control" / "move-in" / (params["move_id"] + ".tar")
+        if "issue-" in key and self.find_workers(fleet, key)[0]:
+            bundle.unlink(missing_ok=True)
+            raise Unattempted("ALREADY_RUNNING", "A live window already holds this identity here")
+        argv = ["--repo", params["repo"], "--branch", params["branch"], "--sid", params["sid"],
+                "--name", params["name"], "--raw", str(params.get("raw", 0)), "--state", params.get("state") or "done"]
+        if params.get("pushed"):
+            argv.append("--pushed")
+        for opt, k in (("--issue", "issue"), ("--origin", "origin"), ("--origin-wid", "origin_wid"), ("--wid", "handle")):
+            if params.get(k) not in (None, ""):
+                argv += [opt, str(params[k])]
+        code, output, err = self.adapter("movein", fleet["name"], params["move_id"], *argv, timeout=180)
+        if code in (1, 4, 6, 7, 8):
+            reasons = {4: "RESOURCE_GATE", 6: "INVALID_ARGUMENT", 7: "EXECUTION_FAILED", 8: "EXECUTION_FAILED"}
+            raise Unattempted(reasons.get(code, "EXECUTION_FAILED"),
+                              "Fleet refused the moved session: " + last_line(err))
+        parts = (output.decode("utf-8", "replace").strip().splitlines() or [""])[-1].split("\t")
+        window, pid, worktree = (parts + ["", "", ""])[:3]
+        if code or not pid:
+            raise Fault("UNKNOWN_OUTCOME", "The window opened (%s) but no agent appeared under it" % (window or "?"))
+        return {"window": window, "pid": pid, "worktree": worktree, "worker_key": key, "observed_at": now()}
+
     def execute(self, op_id):
         with self.store.connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -312,6 +342,9 @@ class Control:
                 if not matches:
                     raise Fault("UNKNOWN_OUTCOME", "Spawn returned but no matching worker is visible")
                 result = {"workers": matches, "observed_at": snapshot["observed_at"]}
+            elif req["action"] == "worker_move_in":
+                result = self.execute_move_in(fleet, params)
+                attempted = True
             else:
                 try:
                     attempted = True

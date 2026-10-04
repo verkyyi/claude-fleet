@@ -535,6 +535,57 @@ class HubTests(HubFixture):
         self.assertEqual((self.node.conf / "spawn.calls").read_text(),
                          "126 demo --agent claude --origin hub --origin-wid %s\n" % parent)
 
+    def test_move_in_runs_the_target_half_and_maps_its_outcome(self):
+        # issue #1426: a session moved here through the hub. Every value is held
+        # to the hub's own rule before it can become an argv word…
+        base = {"move_id": "0" * 32, "worker_key": "issue-7", "repo": "example/project", "branch": "issue-7",
+                "sid": "11111111-1111-4111-8111-111111111111", "name": "issue-7"}
+        for bad in ({"move_id": "../../x"}, {"branch": "../main"}, {"branch": "-x"}, {"sid": "$(id)"},
+                    {"name": "a\x1bb"}, {"state": "working"}, {"origin_wid": "issue-7; rm"}, {"raw": 2},
+                    {"pushed": "yes"}, {"handle": "zz"}, {"extra": 1}):
+            with self.subTest(bad=bad), self.assertRaises(Fault):
+                validate_write("worker_move_in", dict(base, **bad))
+        validate_write("worker_move_in", dict(base, name="改 issue-7", state="done", raw=0, pushed=True, issue=7))
+        # …and the target half runs once per operation, its bundle removed after.
+        self.node.script(self.node.bin / "fleet-move-remote.sh", '''#!/bin/bash
+printf '%s\\n' "$*" >> "$FLEET_CONF_DIR/movein.calls"
+[ ! -f "$FLEET_CONF_DIR/movein-fail" ] || { echo 'branch issue-7 is already checked out' >&2; exit 7; }
+printf '@9\\t4242\\t/fixture/moved\\n'
+''')
+        inbox = self.node.conf / "control/move-in"
+        inbox.mkdir(parents=True, exist_ok=True)
+
+        def move(op_id, mid):
+            (inbox / (mid + ".tar")).write_bytes(b"tar")
+            params = dict(base, move_id=mid, state="done", raw=0, pushed=True, issue=7,
+                          origin_wid="22222222-2222-4222-8222-222222222222/issue-1")
+            self.node.rpc("submit", {"operation_id": op_id, "fleet_id": self.fleet, "action": "worker_move_in",
+                                     "params": params, "actor": "node:verk@m5"})
+            return self.node.wait(op_id)
+
+        done = move("33333333-3333-4333-8333-333333333333", "a" * 32)
+        self.assertEqual(done["status"], "succeeded")
+        self.assertEqual((done["result"]["window"], done["result"]["pid"]), ("@9", "4242"))
+        bundle = str(inbox / ("a" * 32 + ".tar"))
+        self.assertEqual(self.node.calls("movein"), [
+            "movein --fleet demo --bundle %s --repo example/project --branch issue-7 "
+            "--sid 11111111-1111-4111-8111-111111111111 --name issue-7 --raw 0 --state done --pushed --issue 7 "
+            "--origin-wid 22222222-2222-4222-8222-222222222222/issue-1" % bundle])
+        self.assertFalse(Path(bundle).exists())
+
+        (self.node.conf / "movein-fail").write_text("")
+        failed = move("44444444-4444-4444-8444-444444444444", "b" * 32)
+        self.assertEqual((failed["status"], failed["result"]["error"]["code"]), ("failed", "EXECUTION_FAILED"))
+        self.assertIn("already checked out", failed["result"]["error"]["message"])
+        self.assertFalse((inbox / ("b" * 32 + ".tar")).exists())
+
+        # A live window already holding the identity: refused before anything runs.
+        self.node.windows(("@5", 7, False, "/fixture/issue-7"))
+        held = move("55555555-5555-4555-8555-555555555555", "c" * 32)
+        self.assertEqual((held["status"], held["result"]["error"]["code"]), ("failed", "ALREADY_RUNNING"))
+        self.assertEqual(len(self.node.calls("movein")), 2)
+        self.assertFalse((inbox / ("c" * 32 + ".tar")).exists())
+
     def test_gh_tools_name_the_repo_in_a_multi_repo_fleet(self):
         # Keyed by (repo, N), never a bare number: repo B's #7 is not repo A's.
         (self.node.conf / "fleets/demo/repos").mkdir()

@@ -44,11 +44,17 @@ func connectWriteNode(t *testing.T, h *harness, label string) *writeNode {
 // coming back.
 func connectWriteNodeTok(t *testing.T, h *harness, token string) *writeNode {
 	t.Helper()
+	return connectWriteNodeCaps(t, h, token, control.CapRead, control.CapWrite)
+}
+
+// connectWriteNodeCaps is connectWriteNodeTok saying the given capabilities.
+func connectWriteNodeCaps(t *testing.T, h *harness, token string, caps ...string) *writeNode {
+	t.Helper()
 	c := dialNode(t, h, token)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	m, _ := control.New(control.TypeHello, control.Hello{HeartbeatMS: 60000, AgentVersion: "test",
-		Capabilities: []string{control.CapRead, control.CapWrite}})
+		Capabilities: caps})
 	if err := wsjson.Write(ctx, c, m); err != nil {
 		t.Fatal(err)
 	}

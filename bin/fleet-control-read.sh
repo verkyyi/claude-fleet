@@ -164,6 +164,22 @@ case "$mode" in
     fleet_load_conf "$sess"
     exec bash "$BIN/fleet-worker-stop.sh" "$sess" "${3:-}"
     ;;
+  movein)
+    # A session moved here through the hub (issue #1426): $3 is the move id, the
+    # rest are fleet-move-remote.sh movein's own flags, each already checked by
+    # fleet_hub_common.validate_write. The bundle is where this login's ccquota
+    # agent downloaded it — $FLEET_CONF_DIR/control/move-in/<id>.tar — and is
+    # removed whatever happens. Exit 6 = a repo this fleet does not host; 4 =
+    # the disk gate; the rest are fleet-move-remote.sh movein's.
+    fleet_load_conf "$sess"
+    mid="${3:-}"; shift 3
+    case "$mid" in ''|*[!0-9a-f]*) exit 1 ;; esac
+    bundle="$FLEET_CONF_DIR/control/move-in/$mid.tar"
+    trap 'rm -f "$bundle"' EXIT
+    bash "$BIN/fleet-diskguard.sh" --gate >&2 || exit 4
+    bash "$BIN/fleet-move-remote.sh" movein --fleet "$sess" --bundle "$bundle" "$@"
+    exit $?
+    ;;
   resume)
     # The /fleet-history resume path: verdict first (REVIEW-ONLY ⇒ 5, nothing
     # attempted), the same disk/quota gates a start pays (4), then the headless

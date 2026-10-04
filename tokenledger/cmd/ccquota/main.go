@@ -57,6 +57,8 @@ func main() {
 		err = runLease(os.Args[2:])
 	case "place":
 		err = runPlace(os.Args[2:])
+	case "move":
+		err = runMove(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println("ccquota", Version)
 	case "help", "--help", "-h":
@@ -100,6 +102,8 @@ Usage:
   ccquota place  <repo> <N> <wid>
                             Ask the hub which machine opens a session on an issue
                             (LOCAL | REMOTE — the hub sent it there; exit 3 held)
+  ccquota move   <cmd>      Move a session to another machine through the hub
+                            (plan | send; fleet-move.sh --via hub)
   ccquota version           Print the version
 
 Run any subcommand with -h for its flags.

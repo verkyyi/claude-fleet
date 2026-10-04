@@ -157,6 +157,14 @@ the node's heartbeats while the window lives, released when it goes, and lapses
 30 minutes after its node goes silent — released, not re-dispatched. A hub that
 cannot be asked leaves one stderr note and the spawn runs exactly as without one.
 
+**A session moves with its lease** (issue #1426, EPIC #1419 C7).
+`fleet-move.sh --via hub --to <machine>` (and `--rebalance`) moves an idle
+session through the cloud hub: the transcript is uploaded there, the hub hands
+the issue's lease to the target fleet's worker and journals a `worker_move_in`
+on it, the target's agent downloads the transcript and `fleet-move-remote.sh
+movein` lands the branch and resumes the session; only then is the source window
+closed. A failed move gives the lease back. A `working` session is never moved.
+
 ## Tools
 
 | MCP tool | Behavior | Required grant |

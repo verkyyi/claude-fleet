@@ -3,8 +3,10 @@
 # EPIC #1419 C2). Driven by the ccquota agent (tokenledger/internal/agent/
 # relay.go); not meant to be run by hand.
 #
-#   fleet-hub-node.sh paths      → `outbox\t<dir>` and `workers\t<file>`: where the
-#                                  agent picks up relays and writes the worker map
+#   fleet-hub-node.sh paths      → `outbox\t<dir>`, `workers\t<file>` and
+#                                  `movein\t<dir>`: where the agent picks up relays,
+#                                  writes the worker map, and downloads a session
+#                                  moved here through the hub (issue #1426)
 #   fleet-hub-node.sh deliver    (a relay the hub pushed, JSON on stdin) → apply it
 #
 # A worker's parent, or the worker a message is for, may live on another machine.
@@ -36,7 +38,7 @@ die() { printf 'fleet-hub-node: %s\n' "$2" >&2; exit "$1"; }
 
 case "${1:-}" in
   paths)
-    printf 'outbox\t%s\nworkers\t%s\n' "$(fleet_hub_outbox)" "$(fleet_hub_cache)"
+    printf 'outbox\t%s\nworkers\t%s\nmovein\t%s\n' "$(fleet_hub_outbox)" "$(fleet_hub_cache)" "$(fleet_hub_movein)"
     exit 0 ;;
   deliver) ;;
   *) die 2 "usage: fleet-hub-node.sh paths | deliver < relay.json" ;;
