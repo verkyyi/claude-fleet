@@ -299,7 +299,7 @@ FLEET_SHELL_SESSION                knob: the shell's tmux session + socket label
 FLEET_SHELL_CACHE                  path: the shell's own cache root — its bin/ mirror, tmux.conf and $TMPDIR (fleet-shell.sh, ~/.cache/claude-fleet/shell, #1484)
 FLEET_SHELL_PREFIX                 knob: the shell's tmux prefix (fleet-shell.sh, C-b, #1484)
 FLEET_SHELL_WIDTH                  knob: the shell's list width (fleet-shell.sh → FLEET_SIDEBAR_WIDTH, 30, #1484)
-FLEET_SHELL_NO_ATTACH              seam: 1 = start the shell's server and print its session instead of attaching (fleet-shell-selftest.sh)
+FLEET_SHELL_NO_ATTACH              seam: 1 = start the shell's server and print its session instead of attaching, so bin/fleet picks the shell with no terminal (fleet-shell-selftest.sh)
 FLEET_HUB_SESSIONS_USER            knob: whose sessions on the other machines the dash shows (os_user; default `id -un`, `*` = every login the hub shows; #1423)
 FLEET_CERT                         handoff: the connection-certificate key pair a sidebar / `fleet connect` signs with — the key; `<key>-cert.pub` beside it (default ~/.ssh/fleet-cert, what `fleet login` wrote; fleet-hub-sessions.sh, fleet-connect.py, #1475)
 FLEET_HUB_LEASE_CMD                seam: the hub issue-lease command (default `ccquota lease`), run as `<cmd> acquire|release [--force] <repo> <issue> <worker_id>` (fleet_hub_lease, #1422)

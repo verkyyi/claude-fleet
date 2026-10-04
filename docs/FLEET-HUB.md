@@ -301,7 +301,10 @@ cache, no item.
 
 **The shell on your own computer** (issue #1484, EPIC #1479 C5). `fleet` on a
 laptop with tmux ≥ 3.2 (`bin/fleet` → `bin/fleet-shell.sh`; `FLEET_SHELL=0`
-keeps today's direct ssh, no tmux prints one line on installing it) opens the
+keeps today's direct ssh, no tmux prints one line on installing it; a `fleet`
+with no terminal — a pipe, a script — and a `fleet m4 --print` with more words
+than the machine are `fleet connect`'s, the direct way, since the shell is a
+tmux client) opens the
 same three things a fleet pane shows, without a fleet on that computer: LEFT the
 hub's list, BOTTOM the hub's bar, RIGHT a direct ssh into the session you look
 at. Nothing is rendered anew — the shell is a composition: its own tmux server

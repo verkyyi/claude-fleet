@@ -9,7 +9,9 @@
 #                               the bottom, a direct ssh into that machine on
 #                               the right; no tmux (or FLEET_SHELL=0): measure
 #                               the routes and ssh in, as before      (#1470)
-#   fleet m4                    the same, into a machine you name
+#   fleet m4                    the same, into a machine you name; any more
+#                               words (fleet m4 --print, -v) are connect's —
+#                               the direct way, as is a fleet with no terminal
 #   fleet shell [m4]            the shell, explicitly (fleet-shell.sh)
 #   fleet login                 scan for a 12-hour connection certificate
 #   fleet login renew           renew it with this device's key, no scan
@@ -22,9 +24,15 @@
 here=$(cd "$(dirname "$0")" && pwd -P)
 # The shell (#1484) is the way in when tmux ≥ 3.2 is here and FLEET_SHELL is not
 # 0; with no tmux at all, one line says how to get it, then the direct way in.
+# It is a tmux client, so it needs a terminal: a pipe or a script gets the
+# direct way, silently (the selftest seam FLEET_SHELL_NO_ATTACH=1 starts the
+# server without attaching, so it needs none).
 shell_ok() {
   [ "${FLEET_SHELL:-1}" != 0 ] || return 1
   [ -x "$here/fleet-shell.sh" ] || return 1
+  if [ "${FLEET_SHELL_NO_ATTACH:-0}" != 1 ]; then
+    [ -t 0 ] && [ -t 1 ] || return 1
+  fi
   if ! command -v tmux >/dev/null 2>&1; then
     echo 'fleet · 装上 tmux 就是这套壳（左边列表、底下一栏、右边直连）：macOS `brew install tmux`，Debian/Ubuntu `sudo apt install tmux`；先按今天的方式直连。' >&2
     return 1
@@ -39,7 +47,7 @@ shell_ok() {
 cmd=${1-}
 case $cmd in
   -h|--help|help)
-    sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'
     exit 0 ;;
   '')
     shell_ok && exec "$here/fleet-shell.sh"
@@ -53,5 +61,6 @@ for ext in py sh; do
     exec "$here/fleet-$cmd.$ext" "$@"
   fi
 done
-shell_ok && exec "$here/fleet-shell.sh" "$@"
+# one word = a machine → the shell; more words are connect's own options
+[ $# -eq 1 ] && shell_ok && exec "$here/fleet-shell.sh" "$@"
 exec "$here/fleet-connect.py" --enter "$@"

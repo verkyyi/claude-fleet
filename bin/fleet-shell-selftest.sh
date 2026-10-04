@@ -177,6 +177,20 @@ eq 'A: no tmux → connect --enter, exit 0' 0 "$rc"
 has 'A: no tmux → the hint names tmux' "$out" 'brew install tmux'
 eq 'A: the hint is ONE line' 1 "$(printf '%s\n' "$out" | grep -c 'install tmux')"
 has 'A: no tmux → connect saw --enter' "$(cat "$WORK/connect.argv")" '--enter'
+# no terminal and no seam (a pipe, a script): the shell is a tmux client and
+# cannot attach → the direct way, without the tmux hint, no server started
+: > "$WORK/connect.argv"
+out=$(FLEET_SHELL_NO_ATTACH= "$SB/fleet" 2>&1 </dev/null); rc=$?
+eq 'A: no terminal → connect --enter, exit 0' 0 "$rc"
+has 'A: no terminal → connect saw --enter' "$(cat "$WORK/connect.argv")" '--enter'
+hasnt 'A: no terminal → no tmux hint' "$out" 'tmux'
+CHECKS=$((CHECKS + 1)); ts has-session -t "=$SESS" 2>/dev/null && fail 'A: no terminal must not start the shell server'
+# more words than a machine are connect's own options (fleet-connect-route-selftest's
+# `fleet m4 --print`): the direct way, no pick asked
+: > "$WORK/connect.argv"
+"$SB/fleet" m5 --print >/dev/null 2>&1
+has 'A: fleet m5 --print → connect --enter m5 --print' "$(cat "$WORK/connect.argv")" '--enter m5 --print'
+hasnt 'A: fleet m5 --print asked for no pick' "$(cat "$WORK/connect.argv")" '--pick'
 # fleet-hub-sessions.sh without the client knob: the conf dir's fleets, byte for byte
 mkdir -p "$WORK/degen-conf/fleets/plainfleet"; printf 'FLEET_REPO=acme/app\n' > "$WORK/degen-conf/fleets/plainfleet/conf"
 ( export TMPDIR="$WORK/degen" FLEET_CONF_DIR="$WORK/degen-conf"; mkdir -p "$TMPDIR"; CCQUOTA_FLEET=1 bash "$SB/fleet-hub-sessions.sh" --refresh >/dev/null 2>&1 )
