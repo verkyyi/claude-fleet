@@ -659,6 +659,31 @@ run on both paths. Logs: `handoff-cycle.log` (`/clear via mod`, `… pickup via
 mod`), `compact-send.log` (`/compact via mod|send-keys`), and the model switch's
 report line (`… in place (Ns) via mod|send-keys`).
 
+Two things a feature file must know about the engine. First, `$` is followed
+only within the file it is spelled in, so a feature cannot hand `$` to a
+function in another file (validate refuses it). It starts its own timer from a
+**matched** `session.start` hook in its own file (e.g. `{ isInteractive: true }`),
+which calls `await next(e)` first so the gate in `lifecycle.ts` has run. Second,
+a `ui.render` hook is pure: a state write made while it is drawing is denied. A
+render hook also has to `read()` its atom on **every** draw, before any early
+return, because that read is what subscribes it to redraws.
+
+**Task-progress band** (#1339, `hooks/progress.tsx` + `progress-model.ts`).
+Above the prompt it shows one row:
+`#<issue> · PR #<n> ✓|✗!|… · EPIC #<P> k/N · 子任务 k/N n! · 上下文 %`. The row is
+laid out to `bodyColumns`. When there isn't room it drops the EPIC first, then
+context, then PR, then children. The hub and scratch windows show only
+children and context. Every 10s the band refreshes with one
+`tmux display-message ; list-windows` call. It also reads files with `$.fs`:
+the dash's `prmap`, `parents` and `labels`, the children ledger, and the EPIC
+evidence folders. It makes no network calls and writes nothing outside the mod.
+Children are the windows whose `@origin` names this one, plus any ledger rows,
+bucketed as `fleet-children.py` buckets them. EPIC k/N counts the members
+open in `parents`, plus any members seen before (kept in `$.store`) or that
+hold evidence. A member that is no longer open counts as done. A toast fires
+once when a child goes to `!` or this PR's checks go red. It fires again only
+after that condition has cleared and come back.
+
 ## Related
 
 - **Auto-handoff nudge (#330).** `set-claude-state.sh`'s `done` branch also emits
