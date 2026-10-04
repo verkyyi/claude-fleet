@@ -180,7 +180,8 @@ printf 'A working\n' > "$WORK/hub.mode"
 python3 "$WORK/hub.py" "$WORK" & SRV_PID=$!
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do [ -s "$WORK/hub.port" ] && break; sleep 0.1; done
 [ -s "$WORK/hub.port" ] || fail "D: the loopback hub did not start"
-export CCQUOTA_HUB_URL="http://127.0.0.1:$(cat "$WORK/hub.port")" CCQUOTA_VIEWER_TOKEN=tok FLEET_HUB_SESSIONS_USER='*'
+hubport=$(cat "$WORK/hub.port")
+export CCQUOTA_HUB_URL="http://127.0.0.1:$hubport" CCQUOTA_VIEWER_TOKEN=tok FLEET_HUB_SESSIONS_USER='*'
 US=$'\x1f'
 row_state() { LC_ALL=C awk -F"$US" -v w="wid:$F/issue-7" '$1 == w { print $6 }' "$G/remote_$S" 2>/dev/null; }
 ts_of() { head -1 "$G/remote_$S" | cut -d"$US" -f2; }
@@ -240,7 +241,7 @@ FLEET_HUB_SESSIONS_WATCHED_EVERY=10 PATH="$SHIMPATH" bash "$HUBS" --loop 2>/dev/
 eq  "E: FLEET_HUB_SESSIONS_WATCHED_EVERY sets the watched cadence" "1" "$(wc -c < "$WORK/fetches" | tr -d ' ')"
 # OFF: the loop is a no-op — nothing fetched, no pid file.
 rm -f "$WORK/fetches" "$G/hubsess.pid"
-CCQUOTA_FLEET= PATH="$SHIMPATH" bash "$HUBS" --loop 2>/dev/null
+CCQUOTA_FLEET='' PATH="$SHIMPATH" bash "$HUBS" --loop 2>/dev/null
 absent "E: off — the loop fetches nothing" "$WORK/fetches"
 absent "E: off — and leaves no pid file"  "$G/hubsess.pid"
 
