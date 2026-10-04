@@ -41,6 +41,7 @@ bin/fleet-lib.sh
 bin/fleet-lang.sh
 bin/fleet-ui-lang.sh
 bin/fleet-status-lib.sh
+bin/fleet-palette.sh
 bin/usage-lib.sh
 bin/fleet-daemon-lib.sh
 bin/fleet-alerts.sh
@@ -49,3 +50,4 @@ bin/dash-popup.sh
 bin/dash-fold-toggle.sh
 bin/fleet-keys.sh
 conf/tmux-shell.conf
+conf/fleet-palette.conf

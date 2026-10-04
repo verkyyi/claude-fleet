@@ -182,18 +182,20 @@ and nothing changes; the hub list (prefix+F9) always keeps its local rows.
 EPIC #1479 C3). In hub mode — `CCQUOTA_FLEET=1`, the fleet's
 `FLEET_SIDEBAR_SOURCE=hub`, and a `remote_<sess>` cache on disk — the bottom
 bar's left part is three chips about THE WINDOW YOU ARE ON, not this machine:
-`m4 ● │ CPU 16% │ MEM 4.0G/16.0G │ ◉ icloud 5h 63% 周 65% │ 入口 ●`. The machine
-is this one for a local window (its live CPU / MEM / DSK, as always) and the
-OTHER machine for a proxy window (`@remote`, `fleet-remote-view.sh`): `●` with
-its load per core and memory off the hub, `○ 失联 3m` when the hub calls it
+`m4 ● · 负载 0.2 · 内存 25% │ icloud 5h 63% · 周 65% │ ● 入口` — since issue
+#1534 the same layout the bar has off hub mode (`本机 · 负载 · 内存 · 盘 │
+<account>`), colours from `conf/fleet-palette.conf`, and below 120 columns 内存
+drops first, then 负载. The machine is this one for a local window (its live 负载
+/ 内存) and the OTHER machine for a proxy window (`@remote`,
+`fleet-remote-view.sh`): `●` with its load per core and memory % off the hub, `○ 失联 3m` when the hub calls it
 lost, `?` when the cache has no row. The account is the window's `@cc_account`
 with its 5h / week quota (the account knobs' colour bands); omitted when neither
-side knows it. `入口 ●` while `global/hub_ok` (#1483, below) is fresh, `○ 失联 Nm`
-once it is older than `FLEET_HUB_SESSIONS_STALE`. The window list (`window-status-format`) goes
+side knows it (off the hub's limits, else the window's own `@rl5h`/`@rl7d`). `● 入口` while `global/hub_ok` (#1483, below) is fresh, `○ 失联 Nm`
+(`○ 入口 失联 Nm`) once it is older than `FLEET_HUB_SESSIONS_STALE`. The window list (`window-status-format`) goes
 blank in hub mode and is restored on leaving (saved in `@status_wsf_saved` /
 `@status_wscf_saved`, flag `@status_wlist_saved`).
 The conf's `status-right` passes the client's current window as `k=v` args
-(`sess= win= remote= acct= wsf= wscf= wsaved=`), so tmux re-runs the bar the
+(`sess= win= remote= acct= wsf= wscf= wsaved= cw= rl5= rl7=`), so tmux re-runs the bar the
 moment you switch windows. Data: the same refresh loop writes, every
 `FLEET_HUB_SUMMARY_EVERY` (10 s, whatever the sessions' pace), `global/hub_nodes` (`/v1/nodes`: `node online|lost load1 ncpu mem_pct sessions
 fleet_version age mem_used_mb mem_total_mb`) and `global/hub_limits`
@@ -206,7 +208,8 @@ neither and a certificate round never spends the token, so a login that did
 (#1502).
 `bin/fleet-status-lib.sh` holds the one rule (`fleet_status_node`: `@remote` →
 that machine, else here) and the readers; the shell (C5) reuses it. Off hub mode
-the bar is byte for byte what it was.
+the bar is `本机 · 负载 · 内存 · 盘`, plus the window's account chip when the
+window carries its own reading.
 
 **The hub gone is not a blank screen** (issue #1483, EPIC #1479 C4). 入口通不通
 is ONE word: `global/hub_ok`, the epoch of the last `fleet_sessions` round that

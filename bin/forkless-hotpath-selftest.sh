@@ -93,13 +93,19 @@ adv=$(fleet_now); [ "$adv" -le $(( $(date +%s) - 99 )) ] && [ "$adv" -ge $(( $(d
   || fail "a pinned clock must advance with \$SECONDS from its pin" "$adv"
 CHECKS=$((CHECKS+1)); unset _FLEET_NOW _FLEET_NOW_PID _FLEET_NOW_S0
 
-# tmux-status.sh's MEM figure: builtin tenths-rounding vs awk's printf "%.1f"
-eval "$(sed -n '/^mb_to_g1()/,/^}/p' "$BIN/tmux-status.sh")"
-command -v mb_to_g1 >/dev/null || fail "tmux-status.sh no longer defines mb_to_g1"
-mine=$(for mb in $(seq 0 6000) 32767 32768 65536 99999 131072; do printf '%s ' "$mb"; mb_to_g1 "$mb"; echo; done)
-ref=$(printf '%s\n' "$mine" | awk '{printf "%s %.1f\n", $1, $1/1024}')
-[ "$mine" = "$ref" ] || fail "mb_to_g1 disagrees with awk %.1f" "$(diff <(printf '%s\n' "$ref") <(printf '%s\n' "$mine") | head -5)"
-CHECKS=$((CHECKS+1))
+# tmux-status.sh's 负载 figure (issue #1534): the load per core, one decimal, by
+# integer math on hundredths — the table below is what awk's arithmetic would say.
+eval "$(sed -n '/^status_pct_color()/,/^}/p; /^status_load()/,/^}/p' "$BIN/tmux-status.sh")"
+command -v status_load >/dev/null || fail "tmux-status.sh no longer defines status_load"
+# shellcheck disable=SC2034  # read by the eval'd status_pct_color
+RED='' YELLOW='' GREEN='' DIM=''
+for c in '1.57 10 0.2' '9.00 10 0.9' '0.04 4 0.0' '12.5 4 3.1' '0.995 1 1.0' '3 2 1.5' '1.5 0 –' 'x 4 –' ' 4 –'; do
+  set -- $c
+  [ $# -eq 2 ] && set -- '' "$1" "$2"
+  status_load "$1" "$2"
+  # shellcheck disable=SC2154  # _sl: status_load's result
+  eq "status_load $1 / $2 cores" "$3" "$_sl"
+done
 
 # ================================================================ BUDGET shims
 # Counting shims for the tools the hot paths must no longer exec: each logs its
@@ -124,7 +130,7 @@ printf '0\t0\n' > "$G/account.quota.empty"
 : > "$WORK/exec.log"
 out=$(TMPDIR="$TMPD/" FLEET_LIVE_ROOT="$BIN/.." FLEET_ACCOUNTS_DIR="$WORK/acc" FLEET_STATE_DIR="$WORK/ghstate" FLEET_GH_FAKE_LIMIT="" CCQUOTA_HUB_URL=http://127.0.0.1:9 \
       PATH="$WORK/bin:$PATH" bash "$BIN/tmux-status.sh" 2>&1) || fail "tmux-status.sh exited non-zero" "$out"
-case "$out" in *"CPU "*"MEM "*) ;; *) fail "tmux-status.sh lost a segment" "$out" ;; esac; CHECKS=$((CHECKS+1))
+case "$out" in *"负载 "*"内存 "*"盘 "*) ;; *) fail "tmux-status.sh lost a segment" "$out" ;; esac; CHECKS=$((CHECKS+1))
 # The 5h/7d usage stat is gone from the bar (issue #1100) — a usage cache on
 # disk must NOT resurface it; the modal (prefix u) is its only reader now.
 case "$out" in *"5h "*|*"7d "*|*"range=user|usage"*) fail "tmux-status.sh still renders the 5h/7d usage stat (issue #1100)" "$out" ;; esac; CHECKS=$((CHECKS+1))

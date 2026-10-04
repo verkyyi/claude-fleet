@@ -374,13 +374,17 @@ fleet_alerts_counts() {
 # Needs keep their own clickable `● N` at the left end of the bar (status-left).
 # Sets $FA_BAR (no subshell: the bar renders every 5s per client).
 fleet_alerts_bar() {
-  local a w
+  local a w r='' y='' d=''
+  # colours: conf/fleet-palette.conf (issue #1534) — the bar's caller has loaded
+  # it already; loaded here only for a caller that has not
+  [ -n "${PAL_RED:-}" ] || { . "$_FA_BIN/fleet-palette.sh" && fleet_palette_load; }
+  [ -n "${PAL_RED:-}" ] && { r="#[fg=$PAL_RED,bold]"; y="#[fg=$PAL_YELLOW]"; d="#[fg=$PAL_DIM]"; }
   fleet_alerts_counts
   a=$FA_ALARM; w=$FA_WARNING
   [ "$a" -gt 99 ] && a=99; [ "$w" -gt 99 ] && w=99
-  if [ "$a" -gt 0 ]; then printf -v a '#[fg=#f7768e,bold]✖ %-2s#[nobold]' "$a"; else a='    '; fi
-  if [ "$w" -gt 0 ]; then printf -v w '#[fg=#e0af68]▲ %-2s' "$w"; else w='    '; fi
-  printf -v FA_BAR '#[fg=#565f89]│ #[range=user|alarm]%s#[norange] #[range=user|warning]%s#[norange] ' "$a" "$w"
+  if [ "$a" -gt 0 ]; then printf -v a '%s✖ %-2s#[nobold]' "$r" "$a"; else a='    '; fi
+  if [ "$w" -gt 0 ]; then printf -v w '%s▲ %-2s' "$y" "$w"; else w='    '; fi
+  printf -v FA_BAR '%s│ #[range=user|alarm]%s#[norange] #[range=user|warning]%s#[norange] ' "$d" "$a" "$w"
 }
 
 # fleet_alerts_list [--level L] [--plain] — the popup's rows, alarm → warning →

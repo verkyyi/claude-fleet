@@ -167,6 +167,10 @@ mirror() {
   SHADOW="$CACHE/bin"
   mkdir -p "$SHADOW" "$CACHE/tmp" || { note "cannot write $CACHE"; return 1; }
   for f in "$REAL_BIN"/*; do [ -f "$f" ] && ln -sf "$f" "$SHADOW/${f##*/}"; done
+  # the colour table (issue #1534): the bar, the rows and the list read it as
+  # $BIN/../conf/fleet-palette.conf — a table, not a config, so the mirror has it
+  f="$REAL_BIN/../conf/fleet-palette.conf"
+  [ -f "$f" ] && mkdir -p "$CACHE/conf" && ln -sf "$f" "$CACHE/conf/fleet-palette.conf"
   return 0
 }
 # write_conf — conf/tmux-shell.conf with the paths filled + the environment

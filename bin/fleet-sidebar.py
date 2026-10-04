@@ -1053,6 +1053,50 @@ def visible(info, now):
     return active == "1" and zoomed != "1" and attached != "0" and not modal
 
 
+def palette(path=None):
+    """conf/fleet-palette.conf, the fleet's ONE colour table (issue #1534) →
+    {"PAL_BLUE": "#rrggbb", …}. The same line rule as bin/fleet-palette.sh:
+    `%hidden PAL_<NAME>='#rrggbb'`; a missing file is an empty table."""
+    table = {}
+    try:
+        text = Path(path or BIN.parent / "conf" / "fleet-palette.conf").read_text(encoding="utf-8")
+    except OSError:
+        return table
+    for line in text.splitlines():
+        m = re.match(r"(?:%hidden\s+)?(PAL_[A-Z_]+)='(#[0-9a-fA-F]{6})'", line.strip())
+        if m:
+            table[m.group(1)] = m.group(2)
+    return table
+
+
+def xterm256(hexcolor):
+    """The xterm-256 index nearest a `#rrggbb` — the 6×6×6 cube or the grey ramp,
+    whichever is closer. curses cannot draw truecolour (tmux's terminfo cannot
+    redefine a colour), so this is how the sidebar draws the palette's colours."""
+    rgb = [int(hexcolor[i:i + 2], 16) for i in (1, 3, 5)]
+    steps = (0, 95, 135, 175, 215, 255)
+    cube = [min(range(6), key=lambda i, v=v: abs(steps[i] - v)) for v in rgb]
+    cube_dist = sum((steps[c] - v) ** 2 for c, v in zip(cube, rgb))
+    grey = max(0, min(23, round((sum(rgb) / 3 - 8) / 10)))
+    grey_dist = sum((8 + 10 * grey - v) ** 2 for v in rgb)
+    if grey_dist < cube_dist:
+        return 232 + grey
+    return 16 + 36 * cube[0] + 6 * cube[1] + cube[2]
+
+
+# A terminal of fewer than 256 colours cannot show the palette at all; it gets the
+# basic colour each palette name stands for — the sidebar's colours before #1534.
+PALETTE_BASIC = {"PAL_BG": curses.COLOR_BLACK, "PAL_CYAN": curses.COLOR_CYAN,
+                 "PAL_RED": curses.COLOR_RED, "PAL_GREEN": curses.COLOR_GREEN,
+                 "PAL_MAGENTA": curses.COLOR_MAGENTA, "PAL_YELLOW": curses.COLOR_YELLOW}
+
+
+def palette_colors(table, colors):
+    """{name: curses colour number} for every name the sidebar draws with."""
+    return {name: xterm256(table[name]) if colors >= 256 and name in table else basic
+            for name, basic in PALETTE_BASIC.items()}
+
+
 def shown_row(window, remote):
     """The row the current window stands for: itself — or, in a proxy window onto
     another machine's session (`@remote=<node>:<worker_id>`, issue #1475), that
@@ -1067,14 +1111,14 @@ def ui(screen, session, worker, lock):
     env = dict(os.environ, FLEET_SESSION=session, FLEET_SIDEBAR_CURRENT=window)
     curses.curs_set(0)
     curses.use_default_colors()
-    for number, color in enumerate((curses.COLOR_CYAN, curses.COLOR_RED,
-                                     curses.COLOR_GREEN, curses.COLOR_MAGENTA), 1):
-        curses.init_pair(number, color, -1)
-    curses.init_pair(5, curses.COLOR_BLACK, curses.COLOR_CYAN)
-    curses.init_pair(6, curses.COLOR_BLACK, curses.COLOR_YELLOW)
+    pal = palette_colors(palette(), curses.COLORS)
+    for number, name in enumerate(("PAL_CYAN", "PAL_RED", "PAL_GREEN", "PAL_MAGENTA"), 1):
+        curses.init_pair(number, pal[name], -1)
+    curses.init_pair(5, pal["PAL_BG"], pal["PAL_CYAN"])
+    curses.init_pair(6, pal["PAL_BG"], pal["PAL_YELLOW"])
     curses.mousemask(curses.ALL_MOUSE_EVENTS)
     curses.mouseinterval(0)
-    curses.init_pair(7, curses.COLOR_RED, -1)
+    curses.init_pair(7, pal["PAL_RED"], -1)
     screen.keypad(True)
     curses.meta(True)
     # Bracketed paste (issue #1105): with it on, tmux writes a paste as

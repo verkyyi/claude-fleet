@@ -696,7 +696,9 @@ fi
 uiargs=()
 touched bin/tmux-dashboard.sh || touched bin/tmux-dashboard-rows.sh && uiargs+=(--dash)
 beforeconf=''
-if touched conf/tmux-attention.conf; then
+# The bar's two files are sourced BY tmux-attention.conf (issue #1534), so a
+# change to either reloads it the same way.
+if touched conf/tmux-attention.conf || touched conf/tmux-bar.conf || touched conf/fleet-palette.conf; then
   # The pre-sync conf, straight from --from — never from a shell var a caller
   # might have lost (#295) or a zsh-mangled ref (#325).
   beforeconf=$(mktemp "${TMPDIR:-/tmp}/fleet-apply-conf.XXXXXX")

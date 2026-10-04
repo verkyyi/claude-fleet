@@ -205,6 +205,8 @@ eq  "C: the bind targets under test are the dash's" "$binds" \
 # --- D. degenerate frames are byte-identical to grouping switched off -----------
 mkdir -p "$WORK/nogrp"
 for f in "$BIN"/*; do ln -s "$f" "$WORK/nogrp/${f##*/}"; done
+# the colour table beside the copy's bin/, as beside the real one (issue #1534)
+mkdir -p "$WORK/conf"; ln -sf "$BIN/../conf/fleet-palette.conf" "$WORK/conf/fleet-palette.conf"
 rm "$WORK/nogrp/tmux-dashboard-rows.sh"
 sed 's/^RGRP=\$RMANY$/RGRP=0/' "$ROWS" > "$WORK/nogrp/tmux-dashboard-rows.sh"
 CHECKS=$((CHECKS+1))
