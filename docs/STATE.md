@@ -610,6 +610,21 @@ mistyped or unknown argument, or a repo the fleet does not host, is refused with
 the reason before anything runs; a valid call runs the script unchanged and
 returns its exit code, stdout and stderr — every cap and guard is the script's.
 
+**The state, said by the session (#1336).** `mod/fleet/hooks/state.ts` writes
+the same `@claude_state` the settings hooks do, as the engine knows it:
+`turn.start` → `working`; `turn.complete` → `done` (or `looping` while `@loop`
+says a Loop is pending); an `AskUserQuestion` call → `needs` + `@claude_needs=ask`
+while it is open, `working` once answered; `ScheduleWakeup` / `CronCreate` /
+`CronDelete` → `@loop`, through `fleet_loop_mark.py hook` with the PostToolUse
+payload (same writer, same value, whichever arrives first). Every state write is
+`set-claude-state.sh --via mod <working|done|ask>`: the state write alone —
+stdin pinned to `/dev/null`, no Stop decision, no bell, no parent report; the
+Stop hook still owns those. Subagent turns are skipped. With the mod alive,
+`classify-sessions.sh --window` (the Stop-hook fire and the spinner's demote
+alike) makes no capture and no model call and logs `skip:mod` in
+`logs/classify.log`; a Codex window or a dead/off mod is classified as before.
+`bin/mod-state-selftest.sh` holds both paths.
+
 ### The command inbox — commands run, not typed (#1337)
 
 `/clear` + the handoff pickup (`bin/fleet-handoff-cycle.sh`), `/compact …`

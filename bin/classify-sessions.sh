@@ -253,6 +253,15 @@ classify_one() {
   # fleet-restore.sh for a window it could not bring back on its own.
   case "$(TM display-message -p -t "$target" '#{@claude_state}/#{@claude_needs}' 2>/dev/null)" in needs/blocked|needs/restore) return 0 ;; esac
   [ -z "$(TM display-message -p -t "$target" '#{@codex_attention}' 2>/dev/null)" ] || return 0
+  # The session reports its own state (issue #1336): with the fleet mod alive in the
+  # window, turn.start/turn.complete/AskUserQuestion/@loop are written as they happen
+  # (mod/fleet/hooks/state.ts), so there is nothing left on the screen to guess — no
+  # capture, no model call, one `skip:mod` line. A Codex window, a mod that is off,
+  # out of range or stale (fleet_mod_alive false) is classified exactly as before.
+  if command -v fleet_mod_alive >/dev/null 2>&1 && fleet_mod_alive "$target" "${CLASSIFY_SOCK:-}"; then
+    printf '%s  %-10s skip:mod\n' "$(date +%H:%M:%S)" "$target" >> "$LOG"
+    return 0
+  fi
   observed=$(TM display-message -p -t "$target" '#{@cc_agent}|#{@cc_launcher_pid}|#{@codex_session_id}|#{@claude_state}|#{@claude_state_ts}' 2>/dev/null)
 
   # stable key for lock + hash: prefer the window id (survives re-slotting).
