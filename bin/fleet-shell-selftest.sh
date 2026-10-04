@@ -31,9 +31,9 @@
 #                    `jump` moves the SAME list pane into it; m5's window stays
 #   F. bar         — tmux-status.sh with the shell's env and the m4 window's args
 #                    renders hub mode: the m4 chip (online, off the #node line —
-#                    no hub_nodes), 入口 ●; the window list is blanked
+#                    no hub_nodes), ● 入口; the window list is blanked
 #   G. lost        — hub_ok aged past FLEET_HUB_SESSIONS_STALE: the rows are still
-#                    listed (dimmed, `!`), the bar says 入口 ○ 失联
+#                    listed (dimmed, `!`), the bar says ○ 入口 失联
 #   H. ssh mode    — `fleet-shell.sh ssh` turns a ControlMaster call into
 #                    `fleet-connect.py --enter <host> -o … -- <cmd>` (ProxyCommand
 #                    dropped, -tt → RequestTTY=force); a `-S … -O check` call is
@@ -337,8 +337,8 @@ b=$(bar "$w2")
 has 'F: the bar names m4 (the right pane machine)' "$b" 'm4 '
 has 'F: m4 is online off the #node line (no hub_nodes)' "$b" "m4 #[fg=#9ece6a]● "
 hasnt 'F: no `?` for a machine the hub lists' "$b" 'm4 #[fg=#565f89]? '
-has 'F: 入口 ●' "$b" '入口 #[fg=#9ece6a]● '
-hasnt 'F: no local CPU chip for a remote window' "$b" 'CPU'
+has 'F: ● 入口' "$b" '#[fg=#9ece6a]● #[fg=#7aa2f7]入口 '
+hasnt 'F: no local 负载 for a remote window' "$b" '负载'
 b5=$(bar "$w1")
 has 'F: the m5 window says m5' "$b5" 'm5 '
 eq 'F: the window list was blanked (hub mode)' '1' "$(ts show-options -gqv @status_wlist_saved)"
@@ -356,7 +356,7 @@ has 'G: the m4 row is still listed' "$rows" 'issue-9'
 has 'G: the m5 row is still listed' "$rows" 'issue-7'
 has 'G: rows are marked lost' "$rows" 'm4!'
 b=$(bar "$w2")
-has 'G: the bar says 入口 失联' "$b" '入口 #[fg=#f7768e]○ 失联'
+has 'G: the bar says ○ 入口 失联' "$b" '○ #[fg=#7aa2f7]入口 #[fg=#f7768e]失联'
 printf '%s\n' "$(date +%s)" > "$G/hub_ok"
 
 # ================================================================================

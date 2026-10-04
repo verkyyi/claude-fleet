@@ -1,25 +1,35 @@
 #!/bin/bash
 # tmux-status.sh — right side of the tmux status bar.
-# Shows: [● container] │ CPU 23% │ MEM 1.2G/4G │ DSK 34G │ ✖ 1  ▲ 2
-#        — the alert COUNTS, fixed width (issue #1238); the alerts themselves
-#        are in the `prefix !` popup (bin/fleet-alerts.sh).
-# Color coding: CPU green <50%, yellow 50-80%, red >80%;
-#               MEM green <60%, yellow 60-85%, red >85%;
-#               DSK green >1.5×floor, yellow ≤1.5×floor, red ≤FLEET_DISK_FLOOR_GB.
+# ONE layout in both modes (issue #1534, EPIC #1529 E5 — its 改后 mockup is the
+# contract; conf/tmux-bar.conf draws the left side):
+#   local  本机 · 负载 0.3 · 内存 49% · 盘 61% │ icloud 5h 1% · 周 74% │ ✖ 1  ▲ 2
+#   hub    m5 ● · 负载 0.3 · 内存 49% │ icloud 5h 1% · 周 74% │ ● 入口 │ ✖ 1  ▲ 2
+# `·` joins the fields of a chip, `│` separates chips; the counts at the end are
+# the alerts (fixed width, issue #1238) — the alerts themselves are in the
+# `prefix !` popup (bin/fleet-alerts.sh). Narrower than 120 columns 内存 goes
+# first, narrower than 100 负载 too (`cw=`, the client's width).
+# 负载 = the 1-minute load per core (green < 0.5, yellow < 0.8, red);
+# 内存 = used % (green < 60, yellow < 85, red); 盘 = the guarded volume's use %,
+#        coloured by its FREE GB against FLEET_DISK_FLOOR_GB (red ≤ floor,
+#        yellow ≤ 1.5×floor) — the spawn gate's own knob.
+# The account chip is the CURRENT window's @cc_account with its 5h / 周 quota
+# (hub_limits in hub mode, else the window's own @rl5h/@rl7d); none → no chip.
+# Every colour comes from conf/fleet-palette.conf (bin/fleet-palette.sh).
 # Optional: set FLEET_STATUS_CONTAINER in fleet.conf to show a docker
-# container's ●/○ running indicator.
+# container's ●/○ running indicator ahead of 本机.
 #
 # HUB MODE (issue #1482, EPIC #1479 C3) — three chips about THE SESSION YOU ARE
-# LOOKING AT, not this machine:  m4 ● │ CPU 16% │ MEM 4.0G/16.0G │ ◉ icloud 5h 63% 周 65% │ 入口 ● │ ✖ 1  ▲ 2
+# LOOKING AT, not this machine:  m4 ● · 负载 0.2 · 内存 25% │ icloud 5h 63% · 周 65% │ ● 入口
 #   1. the machine the current window's session is on — this one for a local
-#      window (its live CPU/MEM/DSK, as above), the OTHER machine for a proxy
+#      window (its live 负载/内存, as above), the OTHER machine for a proxy
 #      window (`@remote`, fleet-remote-view.sh): `● ` + its load and memory off
 #      the hub's cache, `○ 失联 3m` when the hub calls it lost — or when the hub
 #      itself is silent (#1483): nothing here can hear that machine, so its word
 #      is as old as the silence — `?` when the cache has no row for it;
 #   2. the account the window runs on (`@cc_account`) with its 5h / week quota
-#      off the hub's limits cache — omitted when neither knows it;
-#   3. the hub itself: `●` while global/hub_ok — fleet-hub-sessions.sh's stamp of
+#      off the hub's limits cache, else the window's own reading — omitted when
+#      neither knows it;
+#   3. the hub itself: `● 入口` while global/hub_ok — fleet-hub-sessions.sh's stamp of
 #      the last round that stood (issue #1483, EPIC #1479 C4) — is fresh, `○ 失联
 #      Nm` once it is older than FLEET_HUB_SESSIONS_STALE (60s): the ONE rule,
 #      fleet_status_hub_lost, that the sidebar's lost groups and the remote-row
@@ -28,12 +38,12 @@
 #   The window list goes blank in hub mode and comes back when it leaves
 #   (fleet_status_window_list). The cue is the `k=v` args the conf's status-right
 #   passes from the CLIENT'S CURRENT WINDOW (`sess= win= remote= acct= wsf= wscf=
-#   wsaved=`): tmux re-runs the job the moment the expanded command changes, so
+#   wsaved=`, and since #1534 `cw= rl5= rl7=`): tmux re-runs the job the moment the expanded command changes, so
 #   switching from a local window to an m4 proxy swaps the chip at once, not a
 #   status-interval later. Hub mode = CCQUOTA_FLEET=1 + the fleet's
 #   FLEET_SIDEBAR_SOURCE=hub + a remote_<sess> cache on disk (the sidebar's own
 #   gate, #1480); otherwise — and with no args at all, the pre-#1482 conf — the
-#   bar is byte for byte what it was. Data: bin/fleet-status-lib.sh reads the two
+#   bar is the local layout above. Data: bin/fleet-status-lib.sh reads the two
 #   summaries fleet-hub-sessions.sh --loop writes (hub_nodes / hub_limits); the
 #   render path never touches the network (EPIC #1479 rule 2).
 set -uo pipefail
@@ -48,6 +58,7 @@ _fs="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleet.settings"; [ -f "$_fs" 
 # The current window, as the conf's status-right passes it (issue #1482). Absent
 # (an older conf) → every value empty → never hub mode.
 STATUS_SESS='' STATUS_REMOTE='' STATUS_ACCT='' STATUS_WSF='' STATUS_WSCF='' STATUS_WSAVED=''
+STATUS_CW='' STATUS_RL5='' STATUS_RL7=''
 for _a in "$@"; do
     case "$_a" in
         sess=*)   STATUS_SESS=${_a#sess=} ;;
@@ -57,6 +68,9 @@ for _a in "$@"; do
         wsf=*)    STATUS_WSF=${_a#wsf=} ;;
         wscf=*)   STATUS_WSCF=${_a#wscf=} ;;
         wsaved=*) STATUS_WSAVED=${_a#wsaved=} ;;
+        cw=*)     STATUS_CW=${_a#cw=} ;;
+        rl5=*)    STATUS_RL5=${_a#rl5=} ;;
+        rl7=*)    STATUS_RL7=${_a#rl7=} ;;
     esac
 done
 
@@ -111,74 +125,76 @@ fleet_now_pin
 # The OS from $OSTYPE, not two `uname` forks per render (issue #888).
 case "${OSTYPE:-}" in darwin*) IS_DARWIN=1 ;; *) IS_DARWIN=0 ;; esac
 
-# Palette (Tokyo Night)
-RED="#[fg=#f7768e]"
-YELLOW="#[fg=#e0af68]"
-GREEN="#[fg=#9ece6a]"
-BLUE="#[fg=#7aa2f7]"
-DIM="#[fg=#565f89]"
+# Palette: conf/fleet-palette.conf, the fleet's ONE colour table (issue #1534) —
+# never a hex here. No palette file → no colour at all, never a colour of our own.
+. "$BIN/fleet-palette.sh"
+if fleet_palette_load "$BIN/../conf/fleet-palette.conf"; then
+    RED="#[fg=$PAL_RED]" YELLOW="#[fg=$PAL_YELLOW]" GREEN="#[fg=$PAL_GREEN]"
+    BLUE="#[fg=$PAL_BLUE]" DIM="#[fg=$PAL_DIM]"
+else
+    RED='' YELLOW='' GREEN='' BLUE='' DIM=''
+fi
+US=$'\x1f'
 
-# mb_to_g1 <MB> — MB as GB with one decimal, byte-identical to awk's
-# printf "%.1f" of MB/1024 (issue #888: was one awk fork per render). MB/1024 is
-# exact in binary, so the only rounding is %.1f's own: nearest, ties to even.
-mb_to_g1() {
-    local t=$(( $1 * 10 )) q r
-    q=$(( t / 1024 )); r=$(( t % 1024 ))
-    if [ "$r" -gt 512 ] || { [ "$r" -eq 512 ] && [ $(( q % 2 )) -eq 1 ]; }; then q=$(( q + 1 )); fi
-    printf '%d.%d' $(( q / 10 )) $(( q % 10 ))
+# status_pct_color <pct> <yellow-at> <red-at> → $_spc: the palette colour for a
+# percentage; DIM for anything that is not one.
+status_pct_color() {
+    case "${1:-}" in ''|*[!0-9]*) _spc=$DIM; return 0 ;; esac
+    if   [ "$1" -ge "$3" ]; then _spc=$RED
+    elif [ "$1" -ge "$2" ]; then _spc=$YELLOW
+    else _spc=$GREEN; fi
 }
 
-# --- Machine stats: container ● / CPU / MEM / DSK (issue #890). These are the
-# only segments that exec anything per render (ps, vm_stat, df, sysctl, docker),
-# and tmux runs this script every status-interval PER ATTACHED CLIENT — so two
-# terminals meant two of everything, every 5s, for the same machine-wide numbers.
-# status_machine_compute measures them once; status_machine_cached shares the
-# result through ${TMPDIR}/fleet-status.cache (see below), so N clients cost one
-# measurement per FLEET_STATUS_CACHE_SECS. Sets $machine; no subshell.
+# status_load <load1> <ncpu> → $_sl: 负载 — the 1-minute load PER CORE with one
+# decimal (`1.57` on 10 cores → `0.2`), through the bands the CPU % had (≥ 0.5
+# yellow, ≥ 0.8 red); DIM `–` when either reading is unusable. The same number for
+# this machine (sysctl / /proc/loadavg) and another one (the hub's load1 + ncpu),
+# so 「负载 0.3」 means one thing on every bar. Integer math on hundredths, no awk.
+status_load() {
+    local lp lf pc t
+    lp=${1%%.*}; lf=${1#*.}; [ "$lf" = "$1" ] && lf=0
+    lf="${lf}00"; lf=${lf:0:2}
+    case "$lp" in ''|*[!0-9]*) _sl="${DIM}–"; return 0 ;; esac
+    case "$lf" in *[!0-9]*) lf=00 ;; esac
+    case "${2:-}" in ''|*[!0-9]*|0) _sl="${DIM}–"; return 0 ;; esac
+    pc=$(( (10#$lp * 100 + 10#$lf) / $2 )); t=$(( (pc + 5) / 10 ))
+    status_pct_color "$pc" 50 80
+    _sl="${_spc}$(( t / 10 )).$(( t % 10 ))"
+}
+
+# --- Machine stats: container ● / 负载 / 内存 / 盘 (issue #890, #1534). These
+# are the only readings that exec anything per render (sysctl, vm_stat, df, docker
+# — /proc on Linux), and tmux runs this script every status-interval PER ATTACHED
+# CLIENT — so two terminals meant two of everything for the same machine-wide
+# numbers. status_machine_compute measures them once; status_machine_cached shares
+# the result through ${TMPDIR}/fleet-status.cache (see below), so N clients cost
+# one measurement per FLEET_STATUS_CACHE_SECS. Sets the four coloured values
+# m_ctr m_load m_mem m_dsk ('' = not shown); no subshell. They stay four values,
+# not one string, because which of them a client draws depends on ITS width.
 status_machine_compute() {
+    local sysv rest ncpu='' memsize=0 page_size=16384 load1='' used='' total='' used_pages
+    local mem_pct disk_target disk_floor dsk_free='' dsk_pct=''
+    m_ctr='' m_load='' m_mem='' m_dsk=''
     # --- Optional container status ---
-    container=""
     if [ -n "${FLEET_STATUS_CONTAINER:-}" ]; then
         if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${FLEET_STATUS_CONTAINER}$"; then
-            container="${GREEN}● ${DIM}│ "
+            m_ctr="${GREEN}●"
         else
-            container="${RED}○ ${DIM}│ "
+            m_ctr="${RED}○"
         fi
     fi
 
-    # --- CPU usage ---
+    # --- 负载 + 内存 ---
     if [ "$IS_DARWIN" = 1 ]; then
-        # hw.ncpu / hw.memsize / hw.pagesize in ONE sysctl (was three forks).
-        sysv=$(sysctl -n hw.ncpu hw.memsize hw.pagesize 2>/dev/null)
-        read -r ncpu memsize page_size <<< "${sysv//$'\n'/ }"
-        case "${ncpu:-}" in ''|*[!0-9]*|0) ncpu=1 ;; esac
+        # hw.ncpu / hw.memsize / hw.pagesize / vm.loadavg in ONE sysctl; the last
+        # prints `{ 1.57 1.60 1.70 }`.
+        sysv=$(sysctl -n hw.ncpu hw.memsize hw.pagesize vm.loadavg 2>/dev/null)
+        read -r ncpu memsize page_size rest <<< "${sysv//$'\n'/ }"
+        rest=${rest#\{ }; load1=${rest%% *}
         case "${memsize:-}" in ''|*[!0-9]*) memsize=0 ;; esac
         case "${page_size:-}" in ''|*[!0-9]*|0) page_size=16384 ;; esac
-        # macOS: aggregate CPU from ps + core count
-        cpu_sum=$(ps -A -o %cpu | awk '{s+=$1} END {printf "%.0f", s}')
-        cpu=$((cpu_sum / ncpu))
-    else
-        # Linux: from /proc/stat, cumulative since boot
-        cpu=$(awk '/^cpu / {idle=$5; total=0; for(i=2;i<=NF;i++) total+=$i; printf "%.0f", 100-idle*100/total}' /proc/stat 2>/dev/null)
-    fi
-
-    if [ -n "$cpu" ]; then
-        if [ "$cpu" -ge 80 ]; then
-            cpu_out="${RED}${cpu}%"
-        elif [ "$cpu" -ge 50 ]; then
-            cpu_out="${YELLOW}${cpu}%"
-        else
-            cpu_out="${GREEN}${cpu}%"
-        fi
-    else
-        cpu_out="${DIM}–"
-    fi
-
-    # --- Memory ---
-    used="" total=""
-    if [ "$IS_DARWIN" = 1 ]; then
         total=$(( memsize / 1024 / 1024 ))
-        # Pages: active + wired + compressed ≈ used — one vm_stat, one awk (was 3 + 3)
+        # Pages: active + wired + compressed ≈ used — one vm_stat, one awk
         used_pages=$(vm_stat 2>/dev/null | awk '
           /Pages active/                 {gsub(/\./,"",$3); u+=$3}
           /Pages wired/                  {gsub(/\./,"",$4); u+=$4}
@@ -186,57 +202,45 @@ status_machine_compute() {
           END {printf "%d", u}')
         case "${used_pages:-}" in ''|*[!0-9]*) used_pages=0 ;; esac
         used=$(( used_pages * page_size / 1024 / 1024 ))
-    elif command -v free &>/dev/null; then
-        read -r used total <<< "$(free -m | awk '/Mem:/ {print $3, $2}')"
-    fi
-
-    if [ -n "${used:-}" ] && [ -n "${total:-}" ] && [ "${total:-0}" -gt 0 ]; then
-        mem_pct=$((used * 100 / total))
-        mem_display="$(mb_to_g1 "$used")G/$(mb_to_g1 "$total")G"
-        if [ "$mem_pct" -ge 85 ]; then
-            mem_out="${RED}${mem_display}"
-        elif [ "$mem_pct" -ge 60 ]; then
-            mem_out="${YELLOW}${mem_display}"
-        else
-            mem_out="${GREEN}${mem_display}"
-        fi
     else
-        mem_out="${DIM}–"
+        read -r load1 rest < /proc/loadavg 2>/dev/null
+        ncpu=$(getconf _NPROCESSORS_ONLN 2>/dev/null)
+        command -v free &>/dev/null && read -r used total <<< "$(free -m | awk '/Mem:/ {print $3, $2}')"
+    fi
+    status_load "$load1" "$ncpu"; m_load=$_sl
+    if [ -n "${used:-}" ] && [ -n "${total:-}" ] && [ "${total:-0}" -gt 0 ] 2>/dev/null; then
+        mem_pct=$(( used * 100 / total ))
+        status_pct_color "$mem_pct" 60 85; m_mem="${_spc}${mem_pct}%"
+    else
+        m_mem="${DIM}–"
     fi
 
-    # --- Disk free (passive at-a-glance gauge; the diskguard daemon still owns the
+    # --- 盘 (passive at-a-glance gauge; the diskguard daemon still owns the
     # reactive gate/notify/forensics). Measure the SAME volume diskguard guards
-    # ($FLEET_DISK_TARGET, via the same portable `df -Pk` → int GB approach) so the
-    # footer number and the spawn gate agree, and tie the colors to the SAME floor
-    # knob (don't invent a new threshold). Display-only, no side effects — df is
-    # cheap + local, never a diskguard mutation path. Suppress with
-    # FLEET_STATUS_DISK=0 (default on). ---
-    dsk_seg=""
+    # ($FLEET_DISK_TARGET, via the same portable `df -Pk`) and colour it by the SAME
+    # floor knob, in free GB (don't invent a new threshold); the number drawn is the
+    # volume's use %, the unit 内存 has. Display-only — df is cheap + local, never a
+    # diskguard mutation path. Suppress with FLEET_STATUS_DISK=0 (default on). ---
     if [ "${FLEET_STATUS_DISK:-1}" != "0" ]; then
         disk_target="${FLEET_DISK_TARGET:-${TMPDIR:-/tmp}}"
         disk_floor="${FLEET_DISK_FLOOR_GB:-12}"
-        dsk_free=$(df -Pk "$disk_target" 2>/dev/null | awk 'NR==2 { printf "%d", int($4/1048576) }')
-        if [ -n "$dsk_free" ]; then
-            if [ "$dsk_free" -le "$disk_floor" ]; then
-                dsk_out="${RED}${dsk_free}G"
-            elif [ "$dsk_free" -le "$(( disk_floor * 3 / 2 ))" ]; then
-                dsk_out="${YELLOW}${dsk_free}G"
-            else
-                dsk_out="${GREEN}${dsk_free}G"
-            fi
-        else
-            dsk_out="${DIM}–"
-        fi
-        dsk_seg="${DIM}│ ${BLUE}DSK ${dsk_out} "
+        read -r dsk_free dsk_pct <<< "$(df -Pk "$disk_target" 2>/dev/null | awk 'NR==2 { printf "%d %s", int($4/1048576), $5 }')"
+        case "$dsk_free" in
+            ''|*[!0-9]*) m_dsk="${DIM}–" ;;
+            *) if [ "$dsk_free" -le "$disk_floor" ]; then m_dsk=$RED
+               elif [ "$dsk_free" -le "$(( disk_floor * 3 / 2 ))" ]; then m_dsk=$YELLOW
+               else m_dsk=$GREEN; fi
+               m_dsk="${m_dsk}${dsk_pct:-–}" ;;
+        esac
     fi
-    printf -v machine " %s${BLUE}CPU %s ${DIM}│ ${BLUE}MEM %s %s" "$container" "$cpu_out" "$mem_out" "$dsk_seg"
 }
 
-# status_machine_cached — sets $machine, measured at most once per
-# FLEET_STATUS_CACHE_SECS (default 5 = status-interval) across every client on the
-# machine (issue #890). The cache is two lines, `<epoch>\t<key>` then the rendered
-# segment; the key is every knob the segment depends on, so a sandbox or a second
-# install with another disk target / container never shows the other's numbers.
+# status_machine_cached — sets m_ctr m_load m_mem m_dsk, measured at most once per
+# FLEET_STATUS_CACHE_SECS (default 5) across every client on the machine (issue
+# #890). The cache is two lines, `<epoch>\t<key>` then the four values joined by
+# US; the key is every knob the values depend on (plus the layout version), so a
+# sandbox, a second install with another disk target / container, or a cache an
+# older bar wrote never shows here.
 #   fresh            → printed as is: zero forks.
 #   expired          → the first caller to `mkdir` the lock re-measures and
 #                      publishes atomically (tmp + mv); the rest print the previous
@@ -251,7 +255,7 @@ status_machine_cached() {
     case "$ttl" in ''|*[!0-9]*) ttl=5 ;; esac
     if [ "$ttl" -eq 0 ]; then status_machine_compute; return; fi
     cache="${FLEET_STATUS_CACHE:-${d%/}/fleet-status.cache}"; lock="$cache.lock"
-    key="${FLEET_STATUS_CONTAINER:-}|${FLEET_STATUS_DISK:-1}|${FLEET_DISK_TARGET:-${TMPDIR:-/tmp}}|${FLEET_DISK_FLOOR_GB:-12}"
+    key="v2|${FLEET_STATUS_CONTAINER:-}|${FLEET_STATUS_DISK:-1}|${FLEET_DISK_TARGET:-${TMPDIR:-/tmp}}|${FLEET_DISK_FLOOR_GB:-12}"
     _smc_read() {   # → ts/val + age; age=-1 when there is no usable entry
         ts="" k="" val="" age=-1
         { IFS=$'\t' read -r ts k; IFS= read -r val; } 2>/dev/null < "$cache"
@@ -262,25 +266,62 @@ status_machine_cached() {
         fi
         return 0
     }
+    _smc_use() { IFS=$US read -r m_ctr m_load m_mem m_dsk <<< "$val"; }
     _smc_read
-    if [ "$age" -ge 0 ] && [ "$age" -lt "$ttl" ]; then machine=$val; return; fi
+    if [ "$age" -ge 0 ] && [ "$age" -lt "$ttl" ]; then _smc_use; return; fi
     if mkdir "$lock" 2>/dev/null; then
         status_machine_compute
-        printf '%s\t%s\n%s\n' "$now" "$key" "$machine" > "$cache.$$" 2>/dev/null \
+        printf '%s\t%s\n%s\n' "$now" "$key" "${m_ctr}${US}${m_load}${US}${m_mem}${US}${m_dsk}" > "$cache.$$" 2>/dev/null \
             && mv -f "$cache.$$" "$cache" 2>/dev/null || rm -f "$cache.$$"
         rmdir "$lock" 2>/dev/null
         return
     fi
-    if [ "$age" -ge 0 ] && [ "$age" -lt $(( ttl * 6 )) ]; then machine=$val; return; fi
+    if [ "$age" -ge 0 ] && [ "$age" -lt $(( ttl * 6 )) ]; then _smc_use; return; fi
     while [ -d "$lock" ] && [ "$tries" -lt 30 ]; do
         sleep 0.1; tries=$((tries + 1))
     done
     _smc_read
-    if [ "$age" -ge 0 ] && [ "$age" -lt "$ttl" ]; then machine=$val; return; fi
+    if [ "$age" -ge 0 ] && [ "$age" -lt "$ttl" ]; then _smc_use; return; fi
     [ -d "$lock" ] && rmdir "$lock" 2>/dev/null
     status_machine_compute
 }
-machine=""
+
+# status_fields <负载> <内存> <盘> → $_sf: the machine chip's fields, each
+# `· <label> <value> ` ('' = not shown). Narrower than 120 columns (the client's
+# width, `cw=`) 内存 goes first, narrower than 100 负载 too (issue #1534); no
+# width (an older conf) = room for all of them. 盘 stays: it is the floor the
+# spawn gate keys on.
+status_fields() {
+    local w="${STATUS_CW:-}"
+    case "$w" in ''|*[!0-9]*) w=999 ;; esac
+    _sf=''
+    [ -n "$1" ] && [ "$w" -ge 100 ] && _sf="${_sf}${DIM}· 负载 $1 "
+    [ -n "$2" ] && [ "$w" -ge 120 ] && _sf="${_sf}${DIM}· 内存 $2 "
+    [ -n "$3" ] && _sf="${_sf}${DIM}· 盘 $3 "
+    return 0
+}
+
+# status_account <label> <5h> <周> → $_sa: `│ <label> 5h N% · 周 N% `, the
+# numbers through the account knobs' bands; `–` for a missing one.
+status_account() {
+    local c5 cw
+    status_pct_color "$2" "${FLEET_ACCOUNT_WARN_PCT:-70}" "${FLEET_ACCOUNT_CEILING:-85}"; c5=$_spc
+    status_pct_color "$3" "${FLEET_ACCOUNT_WARN_PCT:-70}" "${FLEET_ACCOUNT_CEILING:-85}"; cw=$_spc
+    _sa="${DIM}│ ${BLUE}$1 ${DIM}5h ${c5}${2:-–}% ${DIM}· 周 ${cw}${3:-–}% "
+}
+
+# status_window_account → rc 0 + $_sa when the current window names its account
+# and carries a reading of its own (`rl5=`/`rl7=`, the window's @rl5h/@rl7d that
+# conf/statusline.sh stamps) — the account chip off the hub (issue #1534).
+status_window_account() {
+    local a="${STATUS_RL5:-}" b="${STATUS_RL7:-}"
+    case "$a" in *[!0-9]*) a='' ;; esac
+    case "$b" in *[!0-9]*) b='' ;; esac
+    [ -n "$STATUS_ACCT" ] && [ -n "$a$b" ] || return 1
+    status_account "$STATUS_ACCT" "$a" "$b"
+}
+
+m_ctr='' m_load='' m_mem='' m_dsk=''
 status_machine_cached
 
 # --- Alerts: COUNTS only (issue #1238). The bar used to spell every alarm out as
@@ -315,25 +356,17 @@ if [ -f "$BIN/fleet-gh-lib.sh" ] && . "$BIN/fleet-gh-lib.sh" && gh_until=$(fleet
     esac
 fi
 
-# --- No account chip. The green `◉ <account>` segment (issue #289) mirrored the
-# fleet-wide global/account.active pointer, i.e. "the account new sessions use".
-# Since #513 that pointer is RE-PICKED on every spawn from ccquota headroom, so
-# there is no fixed or default account to show — the chip was a stale snapshot
-# of a moving target. The truth is per window (@cc_account, shown by the dash and
-# `fleet-account.sh whoami`); the usage + account modal it opened stays one key
-# away on `prefix u`. ---
+# --- The account chip is PER WINDOW (issue #1534). The old green `◉ <account>`
+# segment (issue #289) mirrored the fleet-wide global/account.active pointer —
+# since #513 re-picked on every spawn, so it was a stale snapshot of a moving
+# target and went away. What the bar shows now is the CURRENT WINDOW's account
+# (@cc_account) and its quota: off the hub's limits cache in hub mode, else the
+# window's own last reading (@rl5h/@rl7d); no account or no reading → no chip.
+# The usage + account modal stays one key away on `prefix u`. ---
 
 # --- Hub mode (issue #1482): the three chips, off the caches alone. ---
-# status_pct_color <pct> <yellow-at> <red-at> → $_spc: the palette colour for a
-# percentage, the same bands the machine segment uses.
-status_pct_color() {
-    case "${1:-}" in ''|*[!0-9]*) _spc=$DIM; return 0 ;; esac
-    if   [ "$1" -ge "$3" ]; then _spc=$RED
-    elif [ "$1" -ge "$2" ]; then _spc=$YELLOW
-    else _spc=$GREEN; fi
-}
 status_hub_render() {
-    local me h a node_seg acct_seg hub_seg cpu lp lf centi mem_out c5 cw age hub_lost hub_fsa have
+    local me h a node_seg acct_seg hub_seg mem age hub_lost hub_fsa have
     # 入口通不通, decided once (#1483): global/hub_ok, else this cache's own #ts
     fleet_status_hub_ok "$FSR_TS"
     hub_lost=0; hub_fsa=''
@@ -348,58 +381,63 @@ status_hub_render() {
     have=0
     if [ "$FSN_KIND" = local ]; then
         # here: the live readings, same numbers and colours as the plain bar
-        node_seg=" ${BLUE}${FSN_NODE} ${GREEN}● ${DIM}│${machine}"
+        status_fields "$m_load" "$m_mem" ''
+        node_seg="${BLUE}${FSN_NODE} ${GREEN}● ${_sf}"
     elif fleet_status_hub_node "$FSN_NODE" && have=1 && [ "$HN_AV" != online ]; then
         # the hub's own word on it: lost — dated by its last observation plus the
         # cache's age (longer than any silence of the hub's, so it wins the next)
         age=$(( ${HN_AGE:-0} + _FLEET_NOW - HN_TS )); [ "$age" -lt 0 ] && age=0
         fleet_status_age "$age"
-        node_seg=" ${BLUE}${FSN_NODE} ${RED}○ 失联 ${FSA} "
+        node_seg="${BLUE}${FSN_NODE} ${RED}○ 失联 ${FSA} "
     elif [ "$hub_lost" = 1 ]; then
         # the hub silent (#1483): whatever it last said of that machine — online,
         # or nothing — is as old as the silence, and this bar hears nothing itself
-        node_seg=" ${BLUE}${FSN_NODE} ${RED}○ 失联 ${hub_fsa} "
+        node_seg="${BLUE}${FSN_NODE} ${RED}○ 失联 ${hub_fsa} "
     elif [ "$have" = 1 ]; then
-        # load per core as a percentage, through the CPU bands: `1.57` on 10
-        # cores → 15%. Integer math on hundredths, no awk.
-        lp=${HN_LOAD1%%.*}; lf=${HN_LOAD1#*.}; [ "$lf" = "$HN_LOAD1" ] && lf=0
-        lf="${lf}00"; lf=${lf:0:2}
-        case "$lp" in ''|*[!0-9]*) lp=0 ;; esac; case "$lf" in ''|*[!0-9]*) lf=0 ;; esac
-        centi=$(( lp * 100 + 10#$lf ))
-        case "${HN_NCPU:-}" in ''|*[!0-9]*|0) cpu='' ;; *) cpu=$(( centi / HN_NCPU )) ;; esac
-        if [ -n "$cpu" ]; then status_pct_color "$cpu" 50 80; cpu="${_spc}${cpu}%"; else cpu="${DIM}–"; fi
-        case "${HN_USED:-}|${HN_TOTAL:-}" in
-            *[!0-9|]*|'|'*|*'|'|*'|0') mem_out="${DIM}–" ;;
-            *) status_pct_color "${HN_MEM:-}" 60 85
-               mem_out="${_spc}$(mb_to_g1 "$HN_USED")G/$(mb_to_g1 "$HN_TOTAL")G" ;;
+        # that machine's 负载 and 内存 off the hub's row, the same units and bands
+        status_load "$HN_LOAD1" "$HN_NCPU"
+        case "${HN_MEM:-}" in
+            ''|*[!0-9]*) mem="${DIM}–" ;;
+            *) status_pct_color "$HN_MEM" 60 85; mem="${_spc}${HN_MEM}%" ;;
         esac
-        node_seg=" ${BLUE}${FSN_NODE} ${GREEN}● ${DIM}│ ${BLUE}CPU ${cpu} ${DIM}│ ${BLUE}MEM ${mem_out} "
+        status_fields "$_sl" "$mem" ''
+        node_seg="${BLUE}${FSN_NODE} ${GREEN}● ${_sf}"
     elif fleet_status_remote_node "$STATUS_SESS" "$FSN_NODE"; then
         # no hub_nodes row (a certificate identity, the shell on a colleague's
         # computer — #1484, #1502): the hub's word from the sessions cache, online
         # or lost, without the load — never a `?` for a machine the hub does list
         if [ "$RN_AV" = online ] || [ "$RN_AV" = maintenance ]; then
-            node_seg=" ${BLUE}${FSN_NODE} ${GREEN}● "
+            node_seg="${BLUE}${FSN_NODE} ${GREEN}● "
         else
             age=$(( _FLEET_NOW - ${RN_SEEN:-0} )); [ "$age" -lt 0 ] && age=0
             fleet_status_age "$age"
-            node_seg=" ${BLUE}${FSN_NODE} ${RED}○ 失联 ${FSA} "
+            node_seg="${BLUE}${FSN_NODE} ${RED}○ 失联 ${FSA} "
         fi
     else
-        node_seg=" ${BLUE}${FSN_NODE} ${DIM}? "
+        node_seg="${BLUE}${FSN_NODE} ${DIM}? "
     fi
     acct_seg=''
     if [ -n "$STATUS_ACCT" ] && fleet_status_hub_limit "$STATUS_ACCT"; then
-        status_pct_color "$HL_5H" "${FLEET_ACCOUNT_WARN_PCT:-70}" "${FLEET_ACCOUNT_CEILING:-85}"; c5=$_spc
-        status_pct_color "$HL_WK" "${FLEET_ACCOUNT_WARN_PCT:-70}" "${FLEET_ACCOUNT_CEILING:-85}"; cw=$_spc
-        acct_seg="${DIM}│ ${BLUE}◉ ${STATUS_ACCT} ${DIM}5h ${c5}${HL_5H:-–}% ${DIM}周 ${cw}${HL_WK:-–}% "
+        status_account "$STATUS_ACCT" "$HL_5H" "$HL_WK"; acct_seg=$_sa
+    elif status_window_account; then
+        acct_seg=$_sa
     fi
     if [ "$hub_lost" = 1 ]; then
-        hub_seg="${DIM}│ ${BLUE}入口 ${RED}○ 失联 ${hub_fsa} "
+        hub_seg="${DIM}│ ${RED}○ ${BLUE}入口 ${RED}失联 ${hub_fsa} "
     else
-        hub_seg="${DIM}│ ${BLUE}入口 ${GREEN}● "
+        hub_seg="${DIM}│ ${GREEN}● ${BLUE}入口 "
     fi
-    printf -v HUB_BAR '%s%s%s' "$node_seg" "$acct_seg" "$hub_seg"
+    printf -v HUB_BAR ' %s%s%s' "$node_seg" "$acct_seg" "$hub_seg"
+}
+
+# status_local_render → $LOCAL_BAR: the bar off hub mode — this machine, its
+# fields per the client's width, and the window's account chip when it has one.
+status_local_render() {
+    local ctr='' acct=''
+    [ -n "$m_ctr" ] && ctr="${BLUE}${FLEET_STATUS_CONTAINER:-} ${m_ctr} ${DIM}│ "
+    status_fields "$m_load" "$m_mem" "$m_dsk"
+    status_window_account && acct=$_sa
+    printf -v LOCAL_BAR ' %s%s本机 %s%s' "$ctr" "$BLUE" "$_sf" "$acct"
 }
 
 # --- Output --- (claude count + hostname dropped — the window list and dash cover those;
@@ -408,5 +446,6 @@ if [ "$HUB_MODE" = 1 ]; then
     HUB_BAR=''; status_hub_render
     printf '%s%s%s' "$HUB_BAR" "$gh_seg" "$FA_BAR"
 else
-    printf '%s%s%s' "$machine" "$gh_seg" "$FA_BAR"
+    LOCAL_BAR=''; status_local_render
+    printf '%s%s%s' "$LOCAL_BAR" "$gh_seg" "$FA_BAR"
 fi

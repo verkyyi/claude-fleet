@@ -1,15 +1,19 @@
 #!/bin/bash
 # tmux-status-selftest.sh — pins issue #1482 (EPIC #1479 C3): in hub mode the
 # status bar shows THE MACHINE THE CURRENT SESSION IS ON, its account's quota and
-# the hub — off the caches alone — and nothing else changes.
+# the hub — off the caches alone — and nothing else changes; and issue #1534
+# (EPIC #1529 E5): ONE layout in both modes, its two goldens below are the
+# output-format contract (the EPIC's 改后 mockup):
+#   local  ` 本机 · 负载 0.3 · 内存 38% · 盘 1% │ <alerts>`
+#   hub    ` m5 ● · 负载 0.3 · 内存 38% │ icloud 5h 63% · 周 65% │ ● 入口 │ <alerts>`
 #
 #   A  degenerate: no args · args with the hub off · args with the fleet on
 #      FLEET_SIDEBAR_SOURCE=local · hub on but no remote_<sess> cache
-#                                   → byte for byte the plain bar
-#   B  a local window in hub mode   → `m5 ● │` + the live machine segment,
-#                                     the account chip, `入口 ●`
+#                                   → byte for byte the plain (local) bar
+#   B  a local window in hub mode   → `m5 ●` + the live 负载 · 内存,
+#                                     the account chip, `● 入口`
 #   C  a proxy window (@remote=m4:…) → m4's chip off hub_nodes: load per core
-#                                     through the CPU bands, MEM as G/G; the
+#                                     through the CPU bands, 内存 as %; the
 #                                     account chip follows @cc_account (a local
 #                                     label, the hub's label, none)
 #   D  a lost machine → `○ 失联 Nm` (the hub's age + the cache's); an unknown
@@ -28,6 +32,9 @@
 #      (CCQUOTA_FLEET unset) writes nothing; their own cadence (FLEET_HUB_SUMMARY_EVERY);
 #      hub_ok written on a sessions round that stood, left alone on a failed one (#1483)
 #   H  fleet_status_node: the one rule for 「当前会话所在机器」
+#   I  the width (`cw=`): < 120 drops 内存, < 100 负载 too, 盘 stays; none = all
+#   J  the account chip off the window's own reading (`rl5=`/`rl7=`): local mode,
+#      and hub mode when the hub's limits do not know the account
 #
 # Drives bin/tmux-status.sh, bin/fleet-status-lib.sh and bin/fleet-hub-sessions.sh.
 # ps / sysctl / vm_stat / free / df are shims (as tmux-status-cache-selftest.sh);
@@ -58,7 +65,7 @@ NOW=$(date +%s)
 
 sh_shim() { printf '#!/bin/sh\n%s\n' "$2" > "$WORK/bin/$1"; chmod +x "$WORK/bin/$1"; }
 sh_shim ps      'printf "%%CPU\n12.0\n28.0\n"'
-sh_shim sysctl  'printf "4\n8589934592\n16384\n"'
+sh_shim sysctl  'printf "4\n8589934592\n16384\n{ 1.20 1.00 0.90 }\n"'
 sh_shim vm_stat 'printf "Pages active:  100000.\nPages wired down:  50000.\nPages occupied by compressor:  50000.\n"'
 sh_shim free    'printf "       total used\nMem:    8192 3125\n"'
 sh_shim df      "printf 'Filesystem 1024-blocks Used Available Capacity Mounted\n/dev/x 1 1 104857600 1%% /\n'"
@@ -71,14 +78,25 @@ EOF
 chmod +x "$WORK/bin/tmux"; : > "$WORK/tmux.log"
 
 # bar [k=v …] — the status bar in the sandbox. CF overrides CCQUOTA_FLEET (default 1).
-bar() { FLEET_ALERTS_DISK=0 TMPDIR="$T/" FLEET_CONF_DIR="$CONF" FLEET_ACCOUNTS_DIR="$ACC" \
+# Linux reads the load from /proc/loadavg (not shimmable): its figure is masked
+# to the shim's 1.20 on 4 cores, so the goldens hold on both OSes.
+bar() { local o
+        o=$(FLEET_ALERTS_DISK=0 TMPDIR="$T/" FLEET_CONF_DIR="$CONF" FLEET_ACCOUNTS_DIR="$ACC" \
         CCQUOTA_HUB_URL=http://127.0.0.1:9 CCQUOTA_FLEET="${CF-1}" FLEET_NODE_ALIASES="box=m5" HOSTNAME=box.local \
-        PATH="$WORK/bin:$PATH" bash "$BIN/tmux-status.sh" "$@" 2>/dev/null; }
+        PATH="$WORK/bin:$PATH" bash "$BIN/tmux-status.sh" "$@" 2>/dev/null)
+        case "${OSTYPE:-}" in darwin*) ;; *) o=$(printf '%s' "$o" | sed -E 's/负载 #\[fg=#[0-9a-f]+\]([0-9]+\.[0-9]|–)/负载 #[fg=#9ece6a]0.3/') ;; esac
+        printf '%s' "$o"; }
 # the plain bar = machine segment + (no gh segment) + the alerts bar; split them
 FA='#[fg=#565f89]│ #[range=user|alarm]'
 plain=$(CF='' bar); machine=${plain%%"$FA"*}; tail=${plain#"$machine"}
 case "$plain" in *"$FA"*) ;; *) fail "the plain bar has no alerts segment" "$plain" ;; esac
-case "$machine" in ' '*'CPU '*'MEM '*'DSK '*) CHECKS=$((CHECKS+1)) ;; *) fail "the plain bar's machine segment" "$plain" ;; esac
+# the fields, as both goldens spell them: 1.20 / 4 cores → 0.3; 3125 of 8192 MB
+# → 38%; df's Capacity column → 1%
+LOAD='#[fg=#565f89]· 负载 #[fg=#9ece6a]0.3 '
+MEM='#[fg=#565f89]· 内存 #[fg=#9ece6a]38% '
+DSK='#[fg=#565f89]· 盘 #[fg=#9ece6a]1% '
+GOLD_LOCAL=" #[fg=#7aa2f7]本机 ${LOAD}${MEM}${DSK}"
+eq "golden (local): 本机 · 负载 · 内存 · 盘 — issue #1534's contract" "$GOLD_LOCAL" "$machine"
 
 # caches: the sidebar's (header only matters here), hub_nodes, hub_limits
 remote() { printf '#ts%s%s\n#me%sm5\n#node%sm4%sonline%s1%s%s\n' "$US" "$1" "$US" "$US" "$US" "$US" "$US" "$1" > "$G/remote_f1"; }
@@ -112,8 +130,9 @@ setcalls() { grep -c set-option "$WORK/tmux.log"; }   # the alerts refresh may r
 eq "A: no tmux set-option on any of those" 0 "$(setcalls)"
 
 # ---- B: a local window in hub mode
-want=" #[fg=#7aa2f7]m5 #[fg=#9ece6a]● #[fg=#565f89]│${machine}#[fg=#565f89]│ #[fg=#7aa2f7]◉ icloud #[fg=#565f89]5h #[fg=#9ece6a]63% #[fg=#565f89]周 #[fg=#9ece6a]65% #[fg=#565f89]│ #[fg=#7aa2f7]入口 #[fg=#9ece6a]● ${tail}"
-eq "B: local window → m5 ● + the live machine segment + account + 入口" "$want" "$(bar $LOCAL)"
+GOLD_HUB=" #[fg=#7aa2f7]m5 #[fg=#9ece6a]● ${LOAD}${MEM}#[fg=#565f89]│ #[fg=#7aa2f7]icloud #[fg=#565f89]5h #[fg=#9ece6a]63% #[fg=#565f89]· 周 #[fg=#9ece6a]65% #[fg=#565f89]│ #[fg=#9ece6a]● #[fg=#7aa2f7]入口 "
+want="${GOLD_HUB}${tail}"
+eq "golden (hub): a local window → m5 ● · 负载 · 内存 │ account │ ● 入口 — issue #1534's contract" "$want" "$(bar $LOCAL)"
 eq "B: an exported, quoted conf key reads the same" "$want" "$(bar $LOCAL)"
 eq "B: a legacy flat <sess>.conf is read when there is no fleets/<sess>/conf" "$want" \
    "$(mv "$CONF/fleets/f1/conf" "$CONF/f1.conf"; bar $LOCAL; mv "$CONF/f1.conf" "$CONF/fleets/f1/conf")"
@@ -121,23 +140,23 @@ out=$(rm -f "$G/remote_f1"; printf '#ts%s%s\n' "$US" "$NOW" > "$G/remote_f1"; ba
 has "B: no #me line → the alias of this host's first label" " #[fg=#7aa2f7]m5 #[fg=#9ece6a]● " "$out"
 
 # ---- C: a proxy window → that machine's chip
-m4=" #[fg=#7aa2f7]m4 #[fg=#9ece6a]● #[fg=#565f89]│ #[fg=#7aa2f7]CPU #[fg=#9ece6a]15% #[fg=#565f89]│ #[fg=#7aa2f7]MEM #[fg=#9ece6a]4.0G/16.0G "
-hub='#[fg=#565f89]│ #[fg=#7aa2f7]入口 #[fg=#9ece6a]● '
+m4=" #[fg=#7aa2f7]m4 #[fg=#9ece6a]● #[fg=#565f89]· 负载 #[fg=#9ece6a]0.2 #[fg=#565f89]· 内存 #[fg=#9ece6a]25% "
+hub='#[fg=#565f89]│ #[fg=#9ece6a]● #[fg=#7aa2f7]入口 '
 eq "C: @remote=m4:… → m4's load per core, memory, no account chip" "${m4}${hub}${tail}" "$(bar sess=f1 win=@2 remote=m4:u/issue-9 acct= wsf= wscf= wsaved=)"
 out=$(bar sess=f1 win=@2 remote=m4:u/issue-9 acct=gmail wsf= wscf= wsaved=)
-eq "C: the account chip follows @cc_account (gmail)" "${m4}#[fg=#565f89]│ #[fg=#7aa2f7]◉ gmail #[fg=#565f89]5h #[fg=#9ece6a]41% #[fg=#565f89]周 #[fg=#9ece6a]13% ${hub}${tail}" "$out"
+eq "C: the account chip follows @cc_account (gmail)" "${m4}#[fg=#565f89]│ #[fg=#7aa2f7]gmail #[fg=#565f89]5h #[fg=#9ece6a]41% #[fg=#565f89]· 周 #[fg=#9ece6a]13% ${hub}${tail}" "$out"
 out=$(bar sess=f1 win=@2 remote=m4:u/issue-9 acct=ylianghui@icloud.com wsf= wscf= wsaved=)
-has "C: the hub's own label finds the row too" "◉ ylianghui@icloud.com #[fg=#565f89]5h #[fg=#9ece6a]63%" "$out"
+has "C: the hub's own label finds the row too" "#[fg=#7aa2f7]ylianghui@icloud.com #[fg=#565f89]5h #[fg=#9ece6a]63%" "$out"
 out=$(bar sess=f1 win=@2 remote=m4:u/issue-9 acct=nope wsf= wscf= wsaved=)
 eq "C: an account the cache does not know → no chip" "${m4}${hub}${tail}" "$out"
 out=$(bar sess=f1 win=@2 remote=m4:u/issue-9 acct=ly297 wsf= wscf= wsaved=)
-has "C: quota colours: 90% red (FLEET_ACCOUNT_CEILING), 72% yellow (FLEET_ACCOUNT_WARN_PCT)" "5h #[fg=#f7768e]90% #[fg=#565f89]周 #[fg=#e0af68]72%" "$out"
+has "C: quota colours: 90% red (FLEET_ACCOUNT_CEILING), 72% yellow (FLEET_ACCOUNT_WARN_PCT)" "5h #[fg=#f7768e]90% #[fg=#565f89]· 周 #[fg=#e0af68]72%" "$out"
 out=$(FLEET_ACCOUNT_WARN_PCT=95 FLEET_ACCOUNT_CEILING=99 bar sess=f1 win=@2 remote=m4:u/issue-9 acct=ly297 wsf= wscf= wsaved=)
-has "C: the quota bands are the account knobs" "5h #[fg=#9ece6a]90% #[fg=#565f89]周 #[fg=#9ece6a]72%" "$out"
+has "C: the quota bands are the account knobs" "5h #[fg=#9ece6a]90% #[fg=#565f89]· 周 #[fg=#9ece6a]72%" "$out"
 out=$(bar sess=f1 win=@3 remote=m8:u/x acct= wsf= wscf= wsaved=)
-has "C: a busy machine → CPU red, MEM red (the machine bands)" "CPU #[fg=#f7768e]90% #[fg=#565f89]│ #[fg=#7aa2f7]MEM #[fg=#f7768e]14.4G/16.0G" "$out"
+has "C: a busy machine → 负载 red, 内存 red (the machine bands)" "负载 #[fg=#f7768e]0.9 #[fg=#565f89]· 内存 #[fg=#f7768e]90% " "$out"
 out=$(bar sess=f1 win=@3 remote=m6:u/x acct= wsf= wscf= wsaved=)
-has "C: a row with no cores / no memory → –, never a crash" "CPU #[fg=#565f89]– #[fg=#565f89]│ #[fg=#7aa2f7]MEM #[fg=#565f89]– " "$out"
+has "C: a row with no cores / no memory → –, never a crash" "负载 #[fg=#565f89]– #[fg=#565f89]· 内存 #[fg=#565f89]– " "$out"
 
 # ---- D: lost / unknown
 out=$(bar sess=f1 win=@3 remote=m9:u/x acct= wsf= wscf= wsaved=)
@@ -160,8 +179,9 @@ nodes "$NOW" "$(j m4 online 1.57 10 25 0 1607453c45 5 4142 16384)"
 # ---- E: the hub chip
 remote $(( NOW - 200 ))
 out=$(bar sess=f1 win=@2 remote=m4:u/issue-9 acct= wsf= wscf= wsaved=)
-eq "E: a remote_ cache older than FLEET_HUB_SESSIONS_STALE (no hub_ok: a loop from before #1483) → 入口 ○ 失联 3m, and the proxy window's machine 失联 with it (#1483: nothing here hears it)" \
-   " #[fg=#7aa2f7]m4 #[fg=#f7768e]○ 失联 3m #[fg=#565f89]│ #[fg=#7aa2f7]入口 #[fg=#f7768e]○ 失联 3m ${tail}" "$out"
+HUBLOST='#[fg=#565f89]│ #[fg=#f7768e]○ #[fg=#7aa2f7]入口 #[fg=#f7768e]失联 3m '
+eq "E: a remote_ cache older than FLEET_HUB_SESSIONS_STALE (no hub_ok: a loop from before #1483) → ○ 入口 失联 3m, and the proxy window's machine 失联 with it (#1483: nothing here hears it)" \
+   " #[fg=#7aa2f7]m4 #[fg=#f7768e]○ 失联 3m ${HUBLOST}${tail}" "$out"
 out=$(FLEET_HUB_SESSIONS_STALE=1000 bar sess=f1 win=@2 remote=m4:u/issue-9 acct= wsf= wscf= wsaved=)
 eq "E: the stale knob is the sidebar's" "${m4}${hub}${tail}" "$out"
 remote "$NOW"
@@ -169,8 +189,8 @@ remote "$NOW"
 # the word once it exists — the cache's #ts only for a loop from before it
 printf '%s\n' $(( NOW - 200 )) > "$G/hub_ok"
 out=$(bar sess=f1 win=@2 remote=m4:u/issue-9 acct= wsf= wscf= wsaved=)
-eq "E: hub_ok older than the knob, the remote_ cache FRESH → 入口 ○ 失联 3m, and the proxy window's machine is 失联 3m too (hub_nodes says online — a word as old as the silence)" \
-   " #[fg=#7aa2f7]m4 #[fg=#f7768e]○ 失联 3m #[fg=#565f89]│ #[fg=#7aa2f7]入口 #[fg=#f7768e]○ 失联 3m ${tail}" "$out"
+eq "E: hub_ok older than the knob, the remote_ cache FRESH → ○ 入口 失联 3m, and the proxy window's machine is 失联 3m too (hub_nodes says online — a word as old as the silence)" \
+   " #[fg=#7aa2f7]m4 #[fg=#f7768e]○ 失联 3m ${HUBLOST}${tail}" "$out"
 out=$(bar sess=f1 win=@3 remote=m7:u/x acct= wsf= wscf= wsaved=)
 has "E: …a machine the cache has no row for is 失联 3m too, not ?" " #[fg=#7aa2f7]m7 #[fg=#f7768e]○ 失联 3m " "$out"
 nodes "$NOW" "$(j m4 online 1.57 10 25 0 1607453c45 5 4142 16384)" "$(j m9 lost 0.00 4 10 0 '' 4000 400 4096)"
@@ -178,15 +198,15 @@ out=$(bar sess=f1 win=@3 remote=m9:u/x acct= wsf= wscf= wsaved=)
 has "E: …a machine the hub already called lost keeps its own, longer silence (66m)" " #[fg=#7aa2f7]m9 #[fg=#f7768e]○ 失联 66m " "$out"
 nodes "$NOW" "$(j m4 online 1.57 10 25 0 1607453c45 5 4142 16384)"
 out=$(bar $LOCAL)
-has "E: …a local window keeps its live readings and its account: 本机照常" " #[fg=#7aa2f7]m5 #[fg=#9ece6a]● #[fg=#565f89]│${machine}#[fg=#565f89]│ #[fg=#7aa2f7]◉ icloud " "$out"
-has "E: …under the 失联 hub chip" "#[fg=#7aa2f7]入口 #[fg=#f7768e]○ 失联 3m " "$out"
+has "E: …a local window keeps its live readings and its account: 本机照常" " #[fg=#7aa2f7]m5 #[fg=#9ece6a]● ${LOAD}${MEM}#[fg=#565f89]│ #[fg=#7aa2f7]icloud " "$out"
+has "E: …under the 失联 hub chip" "$HUBLOST" "$out"
 printf '%s\n' "$NOW" > "$G/hub_ok"; remote $(( NOW - 200 ))
-eq "E: a fresh hub_ok over an old #ts → 入口 ● (the file is the word, a 304 restamps both)" "${m4}${hub}${tail}" "$(bar sess=f1 win=@2 remote=m4:u/issue-9 acct= wsf= wscf= wsaved=)"
+eq "E: a fresh hub_ok over an old #ts → ● 入口 (the file is the word, a 304 restamps both)" "${m4}${hub}${tail}" "$(bar sess=f1 win=@2 remote=m4:u/issue-9 acct= wsf= wscf= wsaved=)"
 out=$(FLEET_HUB_SESSIONS_STALE=1000 bar sess=f1 win=@2 remote=m4:u/issue-9 acct= wsf= wscf= wsaved=)
 printf '%s\n' $(( NOW - 200 )) > "$G/hub_ok"
 eq "E: the knob applies to hub_ok" "${m4}${hub}${tail}" "$(FLEET_HUB_SESSIONS_STALE=1000 bar sess=f1 win=@2 remote=m4:u/issue-9 acct= wsf= wscf= wsaved=)"
 printf 'junk\n' > "$G/hub_ok"
-has "E: an unreadable hub_ok falls back to the cache's #ts (200s → 失联 3m)" "#[fg=#7aa2f7]入口 #[fg=#f7768e]○ 失联 3m " "$(bar sess=f1 win=@2 remote=m4:u/issue-9 acct= wsf= wscf= wsaved=)"
+has "E: an unreadable hub_ok falls back to the cache's #ts (200s → 失联 3m)" "$HUBLOST" "$(bar sess=f1 win=@2 remote=m4:u/issue-9 acct= wsf= wscf= wsaved=)"
 rm -f "$G/hub_ok"; remote "$NOW"
 eq "E: still no tmux set-option on a render" 0 "$(setcalls)"
 
@@ -294,4 +314,25 @@ fleet_status_node '' '';             eq "H: no label at all → ?" "local ?" "$F
 fleet_status_age 59; eq "H: 59s → 0m" 0m "$FSA"; fleet_status_age 7199; eq "H: 7199s → 119m" 119m "$FSA"
 fleet_status_age 7200; eq "H: 2h" 2h "$FSA"; fleet_status_age 172800; eq "H: 2d" 2d "$FSA"; fleet_status_age x; eq "H: junk → 0m" 0m "$FSA"
 
-printf 'tmux-status-selftest: OK (%d checks) — the bar shows the machine the current session is on (issue #1482)\n' "$CHECKS"
+# ---- I: the width — 内存 goes first, then 负载; 盘 stays (issue #1534)
+remote "$NOW"; nodes "$NOW" "$(j m4 online 1.57 10 25 0 1607453c45 5 4142 16384)"   # leg G rewrote both
+eq "I: local, cw=200 → every field" "${GOLD_LOCAL}${tail}" "$(CF='' bar cw=200)"
+eq "I: local, cw=120 → every field (the edge is < 120)" "${GOLD_LOCAL}${tail}" "$(CF='' bar cw=120)"
+eq "I: local, cw=119 → 内存 dropped" " #[fg=#7aa2f7]本机 ${LOAD}${DSK}${tail}" "$(CF='' bar cw=119)"
+eq "I: local, cw=99 → 负载 dropped too, 盘 stays" " #[fg=#7aa2f7]本机 ${DSK}${tail}" "$(CF='' bar cw=99)"
+eq "I: a width that is no number → every field" "${GOLD_LOCAL}${tail}" "$(CF='' bar cw=x)"
+has "I: hub, a local window at cw=110 → m5 ● · 负载, no 内存" " #[fg=#7aa2f7]m5 #[fg=#9ece6a]● ${LOAD}#[fg=#565f89]│ #[fg=#7aa2f7]icloud " "$(bar $LOCAL cw=110)"
+has "I: hub, a proxy window at cw=90 → m4 ● alone" " #[fg=#7aa2f7]m4 #[fg=#9ece6a]● #[fg=#565f89]│ #[fg=#9ece6a]● #[fg=#7aa2f7]入口 " "$(bar sess=f1 win=@2 remote=m4:u/issue-9 acct= wsf= wscf= wsaved= cw=90)"
+
+# ---- J: the account chip off the window's own reading (issue #1534)
+ACHIP='#[fg=#565f89]│ #[fg=#7aa2f7]icloud #[fg=#565f89]5h #[fg=#9ece6a]1% #[fg=#565f89]· 周 #[fg=#e0af68]74% '
+eq "J: local, acct + rl5/rl7 → 本机 … │ icloud 5h 1% · 周 74% (the mockup)" "${GOLD_LOCAL}${ACHIP}${tail}" "$(CF='' bar acct=icloud rl5=1 rl7=74)"
+eq "J: local, one reading → the other is –" "${GOLD_LOCAL}#[fg=#565f89]│ #[fg=#7aa2f7]icloud #[fg=#565f89]5h #[fg=#9ece6a]1% #[fg=#565f89]· 周 #[fg=#565f89]–% ${tail}" "$(CF='' bar acct=icloud rl5=1 rl7=)"
+eq "J: local, no reading → no chip" "${GOLD_LOCAL}${tail}" "$(CF='' bar acct=icloud rl5= rl7=)"
+eq "J: local, junk readings → no chip" "${GOLD_LOCAL}${tail}" "$(CF='' bar acct=icloud rl5=x rl7=1.5)"
+eq "J: local, a reading but no account → no chip" "${GOLD_LOCAL}${tail}" "$(CF='' bar acct= rl5=1 rl7=74)"
+has "J: hub, the hub's limits win over the window's reading" "icloud #[fg=#565f89]5h #[fg=#9ece6a]63% " "$(bar $LOCAL rl5=1 rl7=74)"
+has "J: hub, an account the hub does not know → the window's reading" "│ #[fg=#7aa2f7]nope #[fg=#565f89]5h #[fg=#f7768e]99% " \
+    "$(bar sess=f1 win=@1 remote= acct=nope wsf= wscf= wsaved= rl5=99 rl7=2)"
+
+printf 'tmux-status-selftest: OK (%d checks) — the bar shows the machine the current session is on (issue #1482), one layout in both modes (issue #1534)\n' "$CHECKS"

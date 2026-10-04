@@ -37,9 +37,14 @@ if [ "$SIDEBAR" = 0 ] && [ "$_view" = landed ]; then
 fi
 
 E=$'\033['
-CY="${E}38;2;125;207;255m"; RD="${E}38;2;247;118;142m"; GN="${E}38;2;158;206;106m"
-IN="${E}38;2;187;154;247m"; GY="${E}38;2;86;95;137m";  TX="${E}38;2;169;177;214m"
-AM="${E}38;2;224;175;104m"   # amber — green PR that isn't land-ready (behind/blocked)
+# Colours: conf/fleet-palette.conf, the fleet's ONE colour table (issue #1534), as
+# truecolour escapes — never a literal here. No palette → no colour.
+. "$BIN/fleet-palette.sh"; fleet_palette_load
+_rows_fg() { fleet_palette_rgb "$2"; if [ -n "$_fpr" ]; then printf -v "$1" '%s38;2;%sm' "$E" "$_fpr"; else printf -v "$1" '%s' ''; fi; }
+_rows_fg CY "${PAL_CYAN:-}"; _rows_fg RD "${PAL_RED:-}"; _rows_fg GN "${PAL_GREEN:-}"
+_rows_fg IN "${PAL_MAGENTA:-}"; _rows_fg GY "${PAL_DIM:-}"; _rows_fg TX "${PAL_FG:-}"
+_rows_fg AM "${PAL_YELLOW:-}"   # amber — green PR that isn't land-ready (behind/blocked)
+GYU=${GY/38;/4;38;}             # the header row: underlined, dim
 R="${E}0m"; US=$'\x1f'
 # @pin (issue #623) is LAST on purpose: both passes below read it with `read`'s
 # last-name-takes-the-rest rule, so a field appended AFTER it would arrive glued to
@@ -1195,7 +1200,7 @@ fld 7  "PR";     h_p=$fld_out
 fld 4  "ctx";    h_c=$fld_out
 h_pad=$(( USABLE - LEFTW - RIGHTW )); [ "$h_pad" -lt 1 ] && h_pad=1
 printf -v h_gap '%*s' "$h_pad" ''
-printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_i}    ${h_n} ${h_gap}${h_a} ${h_p} ${h_c}${R}"
+printf '%s\n' "hdr${US}hdr${US}${GYU}  ${h_i}    ${h_n} ${h_gap}${h_a} ${h_p} ${h_c}${R}"
 fi
 
 # the 置顶 group's frame (issue #1170): a `置顶 (n)` heading above the pinned rows

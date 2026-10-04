@@ -7,10 +7,10 @@
 #   A. GONE — fleet-pick.sh, the pick key, the `fleet` footer range, the
 #      @fleet_repo_label wiring and fleet_current_repo_set / fleet_repo_label[_sync];
 #      nothing in bin/ or conf/ still names them.
-#   B. FOOTER — status-left renders byte for byte what it rendered before in a
-#      one-repo fleet (the degenerate case) except that the middle chip names the
-#      LOGIN (@login, issue #1099) instead of the fleet (#S); no "· all" tail in
-#      a 2+ repo one; tmux-conf-reload.sh stamps @login.
+#   B. FOOTER — status-left renders `  ⌂   <login> · ● N 待处理  ` (issue #1534's
+#      one layout; the middle chip names the LOGIN, @login, issue #1099, never the
+#      fleet #S); no "· all" tail in a 2+ repo one; tmux-conf-reload.sh stamps
+#      @login.
 #   C. ALWAYS ALL — fleet_current_repo is gone (#1038): nothing in bin/ reads the
 #      retired picker's current-repo file, and fleet-up.sh deletes it.
 #   D. PER-SPAWN ASK — fleet-repo-ask.sh (the ⌃n "which repo?" prompt) lists the
@@ -112,35 +112,39 @@ eq    "A: ctrl-z on the dash is repo-add (#1103), not pick" "$(bash "$BIN/dash-k
 
 # --- B. the footer -------------------------------------------------------------
 # Render status-left's TEXT (style/range markup stripped: it draws nothing) on a
-# private server, the pre-#1034 format beside today's, and compare byte for byte.
-# #1099 swapped the fleet name (#S) for the login (@login), so the old format's
-# #S is read as the login: every OTHER byte must still match.
+# private server and compare it with the mockup's text byte for byte. Until issue
+# #1534 the reference was the pre-#1034 format (OLD_SL, kept for the record);
+# #1534 gave the footer its one layout, so the reference is now that layout.
 OLD_SL='#[range=user|hub]#{?#{==:#W,plan},#[fg=#1a1b26#,bg=#7aa2f7#,bold]  ⌂  ,#[fg=#7aa2f7#,bg=#414868]  ⌂  }#[default]#[norange]#[fg=#7aa2f7,bold]#[range=user|fleet]  #S#{?@fleet_repo_label, · #{@fleet_repo_label},}  #[default]#[norange]#[range=user|attn]#{?#{&&:#{==:#{@claude_state},needs},#{&&:#{!=:#W,dash},#{!=:#W,backlog}}},#{?@attn_needs,#{?#{e|-:#{@attn_needs},1},#[fg=#f7768e#,bold]  ● #{e|-:#{@attn_needs},1}  #[default],},},#{?@attn_needs,#[fg=#f7768e#,bold]  ● #{@attn_needs}  #[default],}}#[norange]#[fg=#565f89]│'
-NEW_SL=$(sed -n 's/^set -g status-left "\(.*\)"$/\1/p' "$CONF")
-CHECKS=$((CHECKS+1)); [ -n "$NEW_SL" ] || fail "B: could not read status-left from $CONF"
-EXP_SL=$(printf '%s' "$OLD_SL" | sed 's/#S#{?@fleet_repo_label/#{@login}#{?@fleet_repo_label/')
+BARCONF="$ROOT/conf/tmux-bar.conf"   # the bar's own file since issue #1534
+NEW_SL=$(sed -n 's/^set -g status-left "\(.*\)"$/\1/p' "$BARCONF")
+CHECKS=$((CHECKS+1)); [ -n "$NEW_SL" ] || fail "B: could not read status-left from $BARCONF"
+. "$BIN/fleet-palette.sh"; fleet_palette_load; fleet_palette_expand "$NEW_SL"; NEW_SL=$_fpe
 render() { tmux display-message -p -t alpha:plan "$1" | sed 's/#\[[^]]*\]//g'; }
 tmux set -gu @fleet_repo_label
 tmux set -g @login op-login
-eq    "B: one-repo fleet footer renders byte for byte as before" "$(render "$NEW_SL")" "$(render "$EXP_SL")"
+eq    "B: one-repo fleet footer renders the one layout (#1534)" "$(render "$NEW_SL")" "  ⌂   op-login "
 tmux set -w -t alpha:plan @attn_needs 3 2>/dev/null; tmux set -t alpha @attn_needs 3
-eq    "B: …with the needs badge up too" "$(render "$NEW_SL")" "$(render "$EXP_SL")"
+case "$(render "$NEW_SL")" in
+  '  ⌂   op-login · ● '[0-9]' 待处理  ') CHECKS=$((CHECKS+1)) ;;
+  *) fail "B: …with the needs badge up: \`  ⌂   op-login · ● N 待处理  \`" "$(render "$NEW_SL")" ;;
+esac
 tmux set -t alpha -u @attn_needs
-has   "B: the login name is drawn" "$(render "$NEW_SL")" "  op-login  "
+has   "B: the login name is drawn" "$(render "$NEW_SL")" " op-login "
 hasnt "B: the fleet name is not" "$(render "$NEW_SL")" "alpha"
 hasnt "B: the hub border title names the login, not #S" \
       "$(sed -n 's/^set -g pane-border-format "\(.*\)"$/\1/p' "$CONF" | grep -o 'FLEET HUB · [^ ]*')" "#S"
 tmux set -gu @login
 me=$(id -un)
 if [ -n "$(tmux display-message -p '#{user}')" ]; then    # tmux ≥ 3.3
-  has "B: unstamped server falls back to #{user}" "$(render "$NEW_SL")" "  $me  "
+  has "B: unstamped server falls back to #{user}" "$(render "$NEW_SL")" " $me "
 fi
 bash "$BIN/tmux-conf-reload.sh" /dev/null "$CONF" "$CONF" >/dev/null 2>&1
 eq    "B: tmux-conf-reload.sh stamps @login" "$(tmux show -gv @login 2>/dev/null)" "$me"
 grep -q 'set -g @login "$(id -un)"' "$BIN/fleet-up.sh"
 eq    "B: fleet-up.sh stamps @login on the fleet's socket" "$?" 0
 tmux set -g @fleet_repo_label all      # a stale value left on a live server
-hasnt 'B: 2+ repo fleet: no "· all" tail, even from a stale option' "$(render "$NEW_SL")" " · "
+hasnt 'B: 2+ repo fleet: no "· all" tail, even from a stale option' "$(render "$NEW_SL")" "· all"
 tmux set -gu @fleet_repo_label
 tmux source-file "$CONF" >/dev/null 2>&1
 for tbl in root fleet-sidebar; do

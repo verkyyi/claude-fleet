@@ -208,8 +208,13 @@ printf 'PART A ok: cross-fleet WINDOW count — A1 B3 C4 D4 (total 4 minus own),
 # window's context (display-message leaves #[...] literal when not writing to a tty,
 # so we can grep the chosen styles/counts). status-left renders in the ACTIVE
 # window's context, and `-t <sess>:<window>` pins that context to <window>.
-SL="$(grep -m1 '^set -g status-left ' "$CONF" | sed -e 's/^set -g status-left "//' -e 's/"$//')"
-[ -n "$SL" ] || fail "could not extract status-left from $CONF"
+# The bar lives in conf/tmux-bar.conf since issue #1534, its colours spelled as
+# conf/fleet-palette.conf names — expanded here the way tmux expands them.
+BARCONF="$BIN/../conf/tmux-bar.conf"
+SL="$(grep -m1 '^set -g status-left ' "$BARCONF" | sed -e 's/^set -g status-left "//' -e 's/"$//')"
+[ -n "$SL" ] || fail "could not extract status-left from $BARCONF"
+. "$BIN/fleet-palette.sh"; fleet_palette_load || fail "no conf/fleet-palette.conf"
+fleet_palette_expand "$SL"; SL=$_fpe
 sl_at() { tf "$1" display-message -p -t "$1:$2" "$SL"; }
 
 # --- PART B: the ⌂ hub icon is NAV-ONLY (issue #368) --------------------------
@@ -256,7 +261,7 @@ tf fleetB set-option -t fleetB @attn_other_windows 3
 out="$(sl_at fleetB plan)"
 case "$out" in *"fg=#ff9e64"*) fail "other-fleet ●: the orange dot must be gone (#980)" ;; *) : ;; esac
 case "$out" in *"●"*)          fail "other-fleet ●: no ● may render from @attn_other_windows (#980)" ;; *) : ;; esac
-grep -q 'range=user|xfleet\|attn_other_windows' "$CONF" && fail "other-fleet ●: conf still carries the xfleet range / @attn_other_windows"
+grep -q 'range=user|xfleet\|attn_other_windows' "$CONF" "$BARCONF" && fail "other-fleet ●: conf still carries the xfleet range / @attn_other_windows"
 [ -e "$BIN/fleet-xfleet-jump.sh" ] && fail "other-fleet ●: fleet-xfleet-jump.sh must be removed (#980)"
 printf 'PART D ok: no other-fleet dot — @attn_other_windows renders nothing, range + jump gone (#980)\n'
 

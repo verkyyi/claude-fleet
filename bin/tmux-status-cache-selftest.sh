@@ -1,6 +1,6 @@
 #!/bin/bash
 # tmux-status-cache-selftest.sh — pins issue #890: the status bar's machine stats
-# (container / CPU / MEM / DSK) are measured ONCE per interval for every attached
+# (container / 负载 / 内存 / 盘, issue #1534) are measured ONCE per interval for every attached
 # client, through ${TMPDIR}/fleet-status.cache, instead of once per client.
 #
 #   cold, 5 concurrent callers   → measured once, all five print the same bar
@@ -10,7 +10,7 @@
 #   another install's key        → never shown; measured for this key
 #   a dead holder's lock         → broken after the wait, bar still renders
 #   FLEET_STATUS_CACHE_SECS=0    → measured every call, no cache written
-#   output                       → byte-for-byte the pre-#890 bar
+#   output                       → the bar's local golden (tmux-status-selftest.sh)
 #
 # ps / sysctl / vm_stat / free / df are shims with fixed readings; df logs every
 # call (one per measurement on both OSes) and sleeps, so concurrent callers really
@@ -29,7 +29,7 @@ T="$WORK/tmp"; CACHE="$T/fleet-status.cache"; mkdir -p "$T" "$WORK/bin" "$WORK/o
 
 sh_shim() { printf '#!/bin/sh\n%s\n' "$2" > "$WORK/bin/$1"; chmod +x "$WORK/bin/$1"; }
 sh_shim ps      'printf "%%CPU\n12.0\n28.0\n"'
-sh_shim sysctl  'printf "4\n8589934592\n16384\n"'
+sh_shim sysctl  'printf "4\n8589934592\n16384\n{ 1.20 1.00 0.90 }\n"'
 sh_shim vm_stat 'printf "Pages active:  100000.\nPages wired down:  50000.\nPages occupied by compressor:  50000.\n"'
 sh_shim free    'printf "       total used\nMem:    8192 3125\n"'
 sh_shim df      "echo df >> '$WORK/df.log'; sleep 0.5
@@ -41,14 +41,16 @@ measured() { local n; n=$(grep -c . "$WORK/df.log" 2>/dev/null); printf '%s' "${
 # own df, which the df.log below would count as a machine measurement.
 bar() { FLEET_ALERTS_DISK=0 TMPDIR="$T/" FLEET_ACCOUNTS_DIR="$WORK/acc" CCQUOTA_HUB_URL=http://127.0.0.1:9 \
         PATH="$WORK/bin:$PATH" bash "$BIN/tmux-status.sh" 2>/dev/null; }
-# The machine segment is everything before the usage/alarm segments; Linux reads
-# CPU from /proc/stat (not shimmable), so its figure is masked there.
-seg() { local pre="${1%%DSK *}" rest s; rest="${1#"$pre"}"; s="$pre${rest%%G *}G "
-        case "${OSTYPE:-}" in darwin*) ;; *) s=$(printf '%s' "$s" | sed -E 's/CPU #\[fg=#[0-9a-f]+\][0-9]+%/CPU #[fg=#9ece6a]10%/') ;; esac
+# The machine segment is everything before the alarm segment; Linux reads the
+# load from /proc/loadavg (not shimmable), so its figure is masked there.
+seg() { local s="${1%%'#[fg=#565f89]│ #[range='*}"
+        case "${OSTYPE:-}" in darwin*) ;; *) s=$(printf '%s' "$s" | sed -E 's/#\[fg=#[0-9a-f]+\]([0-9]+\.[0-9]|–)/#[fg=#9ece6a]0.3/') ;; esac
         printf '%s' "$s"; }
-WANT=' #[fg=#7aa2f7]CPU #[fg=#9ece6a]10% #[fg=#565f89]│ #[fg=#7aa2f7]MEM #[fg=#9ece6a]3.1G/8.0G #[fg=#565f89]│ #[fg=#7aa2f7]DSK #[fg=#9ece6a]100G '
-MARK=' MARK-old-value '
-KEY="|1|$T/|12"   # container | FLEET_STATUS_DISK | disk target (= TMPDIR) | floor
+WANT=' #[fg=#7aa2f7]本机 #[fg=#565f89]· 负载 #[fg=#9ece6a]0.3 #[fg=#565f89]· 内存 #[fg=#9ece6a]38% #[fg=#565f89]· 盘 #[fg=#9ece6a]1% '
+US=$'\x1f'
+FIELDS="${US}#[fg=#9ece6a]0.3${US}#[fg=#9ece6a]38%${US}#[fg=#9ece6a]1%"   # container | 负载 | 内存 | 盘
+MARK='MARK-old-value'
+KEY="v2||1|$T/|12"   # layout | container | FLEET_STATUS_DISK | disk target (= TMPDIR) | floor
 now() { date +%s; }
 plant() { printf '%s\t%s\n%s\n' "$1" "${2:-$KEY}" "$MARK" > "$CACHE"; }
 five() {   # five concurrent callers → $WORK/out/1..5
@@ -61,13 +63,13 @@ five
 eq "cold: 5 concurrent callers measure once" 1 "$(measured)"
 for i in 1 2 3 4 5; do eq "cold: caller $i prints the pre-#890 bar" "$WANT" "$(seg "$(cat "$WORK/out/$i")")"; done
 [ -d "$CACHE.lock" ] && fail "cold: the lock outlived the measurement"
-first=$(sed -n 2p "$CACHE"); eq "cold: the cache holds the rendered segment" "$WANT" "$(seg "$first")"
+first=$(sed -n 2p "$CACHE"); eq "cold: the cache holds the four values" "$FIELDS" "$(seg "$first")"
 
 # ---- fresh: read through, nothing measured
 out=$(bar); eq "fresh: nothing measured" 1 "$(measured)"
 eq "fresh: same bar" "$WANT" "$(seg "$out")"
 plant "$(now)"; out=$(bar)
-case "$out" in "$MARK"*) CHECKS=$((CHECKS+1)) ;; *) fail "fresh: the cached segment must be printed verbatim" "$out" ;; esac
+case "$out" in *"$MARK"*) CHECKS=$((CHECKS+1)) ;; *) fail "fresh: the cached values must be printed verbatim" "$out" ;; esac
 eq "fresh: a planted entry is not re-measured" 1 "$(measured)"
 
 # ---- expired: one re-measurement, everyone else keeps the old value
@@ -76,15 +78,15 @@ eq "expired: 5 concurrent callers measure once" 2 "$(measured)"
 old=0
 for i in 1 2 3 4 5; do
   o=$(cat "$WORK/out/$i")
-  case "$o" in "$MARK"*) old=$((old+1)) ;; *) eq "expired: caller $i prints old or new, nothing else" "$WANT" "$(seg "$o")" ;; esac
+  case "$o" in *"$MARK"*) old=$((old+1)) ;; *) eq "expired: caller $i prints old or new, nothing else" "$WANT" "$(seg "$o")" ;; esac
 done
 [ "$old" -ge 1 ] || fail "expired: no caller served the old value while the holder measured"; CHECKS=$((CHECKS+1))
-eq "expired: the cache is re-published" "$WANT" "$(seg "$(sed -n 2p "$CACHE")")"
+eq "expired: the cache is re-published" "$FIELDS" "$(seg "$(sed -n 2p "$CACHE")")"
 
 # ---- expired while a live holder has the lock: old value, immediately
 plant $(( $(now) - 7 )); mkdir "$CACHE.lock"
 out=$(bar)
-case "$out" in "$MARK"*) CHECKS=$((CHECKS+1)) ;; *) fail "held lock: the old value must be served" "$out" ;; esac
+case "$out" in *"$MARK"*) CHECKS=$((CHECKS+1)) ;; *) fail "held lock: the old value must be served" "$out" ;; esac
 eq "held lock: nothing measured" 2 "$(measured)"
 rmdir "$CACHE.lock"
 
