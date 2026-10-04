@@ -36,6 +36,15 @@
 #               the cache's #ts line is re-stamped so they never read 失联 while
 #               the hub is answering. A hub without ETags (older) is fetched in
 #               full every time, as before.
+#               LONG POLL (issue #1526): while someone is looking and a validator
+#               is held, the ask also says `wait` (FLEET_HUB_SESSIONS_WAIT, 25s —
+#               under an ingress's 60 s idle timeout; curl gives up 5 s after it):
+#               the hub holds the 304 and answers the moment a heartbeat moves the
+#               validator, so a change lands in ~the node's beat, not up to 2 s
+#               later. An answer that was held, or a 200, is asked again at once;
+#               an immediate 304 or a failure (an older hub ignores `wait`) falls
+#               back to the 2 s cadence. FLEET_HUB_SESSIONS_LONGPOLL=0 turns it
+#               off; nobody looking, it is never sent (the 10 s cadence as before).
 #   --ensure    start a detached --loop unless one is alive. The collector runs this
 #               every tick (60s), so the 10s cadence needs no daemon of its own and a
 #               loop can never outlive the collector by more than one round.
@@ -141,6 +150,11 @@ EVERY="${FLEET_HUB_SESSIONS_EVERY:-10}"; case "$EVERY" in ''|*[!0-9]*|0) EVERY=1
 WATCHED_EVERY="${FLEET_HUB_SESSIONS_WATCHED_EVERY:-2}"; case "$WATCHED_EVERY" in ''|*[!0-9]*|0) WATCHED_EVERY=2 ;; esac
 ETAGF="$G/hubsess.etag"      # the validator of the cache on disk (issue #1481)
 LOOP_SECS="${FLEET_HUB_SESSIONS_LOOP_SECS:-70}"; case "$LOOP_SECS" in ''|*[!0-9]*) LOOP_SECS=70 ;; esac
+LP_WAIT="${FLEET_HUB_SESSIONS_WAIT:-25}"; case "$LP_WAIT" in ''|*[!0-9]*|0) LP_WAIT=25 ;; esac
+[ "$LP_WAIT" -le 25 ] || LP_WAIT=25
+WAIT=''      # the long poll's wait for THIS round (issue #1526); set by loop only
+LP_SENT=0    # 1 = this round's ask carried a validator AND a wait
+LAST_FETCH=1 # this round's fetch rc (0 = 200, 3 = 304)
 PIDF="$G/hubsess.pid"
 SESSIONS_NS='fleet-sessions@claude-fleet'
 
@@ -240,9 +254,10 @@ identity() {
 # 3 = 304, nothing changed since <etag> (the <out> file is empty); 4 = 401/403,
 # the credential was refused; 1 = anything else.
 curl_sessions() {
-  local out="$1" etag="$2" hdr code; shift 2
+  local out="$1" etag="$2" hdr code max=8; shift 2
   hdr=$(mktemp "$G/hubsess.hdr.XXXXXX") || return 1
-  set -- -sS -m 8 -o "$out" -D "$hdr" -w '%{http_code}' "$@"
+  [ "$LP_SENT" = 1 ] && max=$(( WAIT + 5 ))
+  set -- -sS -m "$max" -o "$out" -D "$hdr" -w '%{http_code}' "$@"
   [ -n "$etag" ] && set -- "$@" -H "If-None-Match: $etag"
   code=$(curl "$@" 2>/dev/null)
   case "$code" in
@@ -264,8 +279,11 @@ fetch_cert() {
   ts=$(date +%s)
   sig=$(printf 'fleet-sessions %s' "$ts" | ssh-keygen -Y sign -f "$CERT_KEY" -n "$SESSIONS_NS" 2>/dev/null) || return 1
   cert=$(head -n1 "$CERT_PUB" 2>/dev/null) || return 1
-  body=$(python3 -c 'import json, sys; print(json.dumps({"cert": sys.argv[1], "sig": sys.argv[2], "ts": int(sys.argv[3])}))' \
-         "$cert" "$sig" "$ts") || return 1
+  body=$(python3 -c 'import json, sys
+b = {"cert": sys.argv[1], "sig": sys.argv[2], "ts": int(sys.argv[3])}
+if sys.argv[4]: b["wait"] = int(sys.argv[4])
+print(json.dumps(b))' \
+         "$cert" "$sig" "$ts" "$([ "$LP_SENT" = 1 ] && printf '%s' "$WAIT")") || return 1
   curl_sessions "$out" "$etag" -X POST -H 'Content-Type: application/json' --data-binary "$body" "$url/v1/fleet/fleet_sessions"
 }
 
@@ -274,7 +292,7 @@ fetch_cert() {
 # 1 = no answer. The validator goes out only while every cache it vouches for is
 # on disk — a fleet created since, or a wiped $FLEET_C, needs the body.
 fetch() {
-  local out="$1" lf="$2" url st rc etag='' sess _c
+  local out="$1" lf="$2" url st rc etag='' sess _c q
   if [ -n "${FLEET_HUB_SESSIONS_CMD:-}" ]; then
     bash -c "$FLEET_HUB_SESSIONS_CMD" </dev/null >"$out" 2>/dev/null; return
   fi
@@ -285,6 +303,9 @@ fetch() {
       [ -z "$sess" ] || [ -s "$G/remote_$sess" ] || { etag=''; break; }
     done < "$lf"
   fi
+  # the long poll (issue #1526): only with a validator to hold against
+  q=''; LP_SENT=0
+  if [ -n "$WAIT" ] && [ -n "$etag" ]; then LP_SENT=1; q="?wait=$WAIT"; fi
   st=$(cert_state)
   case "$st" in
     ok\ *)
@@ -293,7 +314,7 @@ fetch() {
       printf 'fleet-hub-sessions: the hub refused the connection certificate %s — trying the viewer token\n' "$CERT_PUB" >&2 ;;
   esac
   if token_source >/dev/null; then
-    curl_sessions "$out" "$etag" -H "Authorization: Bearer $TOK" "$url/v1/fleet/fleet_sessions"; rc=$?
+    curl_sessions "$out" "$etag" -H "Authorization: Bearer $TOK" "$url/v1/fleet/fleet_sessions$q"; rc=$?
     [ "$rc" = 4 ] && rc=1
     return "$rc"
   fi
@@ -358,7 +379,7 @@ refresh() {
   done > "$lf" <<EOF
 $(local_fleets)
 EOF
-  fetch "$json" "$lf"; rc=$?
+  fetch "$json" "$lf"; rc=$?; LAST_FETCH=$rc
   if [ "$rc" = 3 ]; then
     restamp "$lf"; rm -f "$json" "$lf" "$mf"; return 0
   fi
@@ -859,16 +880,27 @@ refresh_all() { local rc; refresh; rc=$?; refresh_summaries; return "$rc"; }
 loop() {
   hub_on || return 0
   mkdir -p "$G" 2>/dev/null || return 1
-  local p end every
+  local p end every t0
   read -r p < "$PIDF" 2>/dev/null || p=''
   if [ -n "$p" ] && [ "$p" != "$$" ] && kill -0 "$p" 2>/dev/null; then return 0; fi
   printf '%s\n' "$$" > "$PIDF"
   end=$(( $(date +%s) + LOOP_SECS ))
   while :; do
+    every=$EVERY; WAIT=''
+    if watched; then
+      every=$WATCHED_EVERY
+      [ "${FLEET_HUB_SESSIONS_LONGPOLL:-1}" = 0 ] || WAIT=$LP_WAIT
+    fi
+    t0=$(date +%s); LP_SENT=0; LAST_FETCH=1
     refresh_all 2>/dev/null
-    every=$EVERY; watched && every=$WATCHED_EVERY
+    # A long-polled answer paces itself (issue #1526): a 200 (a change) or a
+    # 304 the hub held is asked again at once; an immediate 304 or a failure —
+    # an older hub that ignores `wait`, or none — keeps the 2 s cadence.
+    if [ "$LP_SENT" = 1 ] && { [ "$LAST_FETCH" = 0 ] || [ $(( $(date +%s) - t0 )) -ge "$WATCHED_EVERY" ]; }; then
+      every=0
+    fi
     [ $(( $(date +%s) + every )) -le "$end" ] || break
-    sleep "$every"
+    [ "$every" = 0 ] || sleep "$every"
   done
   read -r p < "$PIDF" 2>/dev/null && [ "$p" = "$$" ] && rm -f "$PIDF"
   return 0

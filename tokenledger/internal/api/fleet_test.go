@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -674,5 +675,107 @@ func TestFleetSessionsETag(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != 304 {
 		t.Fatalf("POST with a matching If-None-Match: %d, want 304", resp.StatusCode)
+	}
+}
+
+// fleet_sessions long-polls (claude-fleet#1526): with `wait` and a matching
+// If-None-Match the hub holds the request and answers 200 the moment a
+// heartbeat moves the validator; with nothing new it answers 304 at the
+// deadline. Without `wait` nothing changes — TestFleetSessionsETag's immediate
+// 304 is the degenerate case, asserted again here.
+func TestFleetSessionsLongPoll(t *testing.T) {
+	h := newFleetHarness(t)
+	a := connectFakeNode(t, h, "m5", false)
+	fa := fakeFleet(t, machineA, "fleet-a", "o/a", "/srv/a", 1, 2)
+	a.beat("m5", "alice", machineA, fa)
+	waitFor(t, 3*time.Second, "fleet registered", func() bool {
+		return getFleet(t, h, "/v1/fleet/fleet_sessions", 200)["count"].(float64) == 2
+	})
+	type answer struct {
+		status int
+		tag    string
+		at     time.Time
+	}
+	ask := func(method, query, body, inm string) answer {
+		req, _ := http.NewRequest(method, h.http.URL+"/v1/fleet/fleet_sessions"+query, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+viewerToken)
+		if body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		if inm != "" {
+			req.Header.Set("If-None-Match", inm)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		return answer{resp.StatusCode, resp.Header.Get("ETag"), time.Now()}
+	}
+	tag := ask(http.MethodGet, "", "", "").tag
+
+	// Degenerate: no wait → the immediate 304 of #1481.
+	t0 := time.Now()
+	if got := ask(http.MethodGet, "", "", tag); got.status != 304 || got.at.Sub(t0) > 500*time.Millisecond {
+		t.Fatalf("no wait: %d after %v, want an immediate 304", got.status, got.at.Sub(t0))
+	}
+	// A stale validator is answered at once, wait or not.
+	t0 = time.Now()
+	if got := ask(http.MethodGet, "?wait=5", "", `"stale-0-0"`); got.status != 200 || got.at.Sub(t0) > 500*time.Millisecond {
+		t.Fatalf("stale validator with wait: %d after %v, want an immediate 200", got.status, got.at.Sub(t0))
+	}
+
+	// Nothing new: held to the deadline, then 304 — by GET ?wait= and by the
+	// POST body's wait (the certificate door's form).
+	t0 = time.Now()
+	if got := ask(http.MethodGet, "?wait=1", "", tag); got.status != 304 || got.at.Sub(t0) < 900*time.Millisecond {
+		t.Fatalf("GET wait=1, nothing new: %d after %v, want 304 after ~1 s", got.status, got.at.Sub(t0))
+	}
+	t0 = time.Now()
+	if got := ask(http.MethodPost, "", `{"wait":1}`, tag); got.status != 304 || got.at.Sub(t0) < 900*time.Millisecond {
+		t.Fatalf("POST wait=1, nothing new: %d after %v, want 304 after ~1 s", got.status, got.at.Sub(t0))
+	}
+
+	// A heartbeat while held: 200 with the new validator, ≤ 50 ms after the
+	// hub recorded it — not at the recheck, not at the deadline.
+	done := make(chan answer, 1)
+	t0 = time.Now()
+	go func() { done <- ask(http.MethodGet, "?wait=20", "", tag) }()
+	time.Sleep(300 * time.Millisecond)
+	select {
+	case got := <-done:
+		t.Fatalf("held request answered %d before any heartbeat", got.status)
+	default:
+	}
+	fa.Workers = []byte(`[{"worker_id":"` + fa.FleetID + `/issue-1","key":"issue-1","issue":1,"state":"needs"}]`)
+	fa.Count = 1
+	a.beat("m5", "alice", machineA, fa)
+	select {
+	case got := <-done:
+		fired := h.srv.sessionsChanged.lastFired()
+		if got.status != 200 || got.tag == tag {
+			t.Fatalf("after a heartbeat: %d ETag=%q, want 200 with a new validator", got.status, got.tag)
+		}
+		if d := got.at.Sub(fired); fired.Before(t0) || d > 50*time.Millisecond {
+			t.Fatalf("answered %v after the heartbeat was recorded, want ≤ 50 ms", d)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("held request not answered within 3 s of a heartbeat")
+	}
+}
+
+func TestFleetSessionsWaitArg(t *testing.T) {
+	for _, c := range []struct {
+		in   any
+		want time.Duration
+	}{
+		{nil, 0}, {"", 0}, {"x", 0}, {"-3", 0}, {"0", 0},
+		{"2", 2 * time.Second}, {json.Number("1.5"), 1500 * time.Millisecond},
+		{float64(9), 9 * time.Second}, {"600", fleetSessionsMaxWait}, {"1e300", fleetSessionsMaxWait},
+	} {
+		if got := fleetSessionsWaitArg(c.in); got != c.want {
+			t.Errorf("fleetSessionsWaitArg(%#v) = %v, want %v", c.in, got, c.want)
+		}
 	}
 }

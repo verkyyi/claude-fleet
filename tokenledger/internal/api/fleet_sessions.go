@@ -28,10 +28,16 @@ import (
 // SessionsRequest proves a connection certificate for the session list: Sig
 // is `ssh-keygen -Y sign -n fleet-sessions@claude-fleet` over
 // control.SessionsSigMessage(TS) by the certificate's key.
+//
+// Wait (seconds, optional; claude-fleet#1526) asks for the long poll: with a
+// matching If-None-Match the hub holds the answer until a heartbeat moves it,
+// at most fleetSessionsMaxWait. Any door may send it — in the POST body, or as
+// ?wait= on a GET.
 type SessionsRequest struct {
-	Cert string `json:"cert"`
-	Sig  string `json:"sig"`
-	TS   int64  `json:"ts"`
+	Cert string      `json:"cert"`
+	Sig  string      `json:"sig"`
+	TS   int64       `json:"ts"`
+	Wait json.Number `json:"wait,omitempty"`
 }
 
 // handleFleetSessions serves control.SessionsPath outside the viewer gate.
@@ -41,12 +47,18 @@ func (s *Server) handleFleetSessions(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusMethodNotAllowed, "GET or POST")
 		return
 	}
+	var req SessionsRequest
+	if r.Method == http.MethodPost {
+		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req)
+	}
+	args := map[string]any{}
+	if req.Wait != "" {
+		args["wait"] = req.Wait
+	} else if v := r.URL.Query().Get("wait"); v != "" {
+		args["wait"] = v
+	}
 	id, ok := s.sshRelayHTTPIdentity(r)
 	if !ok {
-		var req SessionsRequest
-		if r.Method == http.MethodPost {
-			_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req)
-		}
 		if req.Cert == "" || req.Sig == "" {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="ccquota"`)
 			httpError(w, http.StatusUnauthorized, "a session, a viewer token or a connection certificate is required")
@@ -78,6 +90,6 @@ func (s *Server) handleFleetSessions(w http.ResponseWriter, r *http.Request) {
 		// viewerOnly does.
 		ctx = withViewer(ctx, login)
 	}
-	out, err := s.CallFleetTool(r.WithContext(ctx), "fleet_sessions", nil)
+	out, err := s.CallFleetTool(r.WithContext(ctx), "fleet_sessions", args)
 	writeFleetResult(w, r, out, err)
 }

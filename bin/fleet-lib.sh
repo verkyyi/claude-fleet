@@ -4174,7 +4174,7 @@ EOF
 # 15 s to show up on another machine. This is the ONE entry point that shortens
 # it: touch $FLEET_CONF_DIR/global/hub-nudge — one file per login, the agent's
 # own scope — whose mtime the agent polls (250 ms, no fsnotify) and answers with
-# an extra heartbeat at once, debounced (300 ms) and capped (2/s per node), so a
+# an extra heartbeat at once, debounced (100 ms, #1526) and capped (2/s per node), so a
 # burst of writes is one beat and a runaway writer cannot flood the hub. Call it
 # right after every write of @claude_state / @claude_needs that CHANGES them
 # (bin/set-claude-state.sh and bin/tmux-spinner.sh are `sh` and cannot source this
