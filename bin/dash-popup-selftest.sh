@@ -249,9 +249,10 @@ direct=$(grep -n 'display-popup' "$BIN"/*.sh "$BIN"/*.py "$ROOT"/conf/*.conf 2>/
   | grep -v -- '-selftest\.' | grep -v '^[^:]*/dash-popup\.sh:' | grep -Ev '^[^:]+:[0-9]+:[[:space:]]*#')
 [ -z "$direct" ] || fail "one door: display-popup called outside dash-popup.sh:
 $direct"
+# an INVOCATION (the script path then its args), not a mention in prose
 untitled=$(grep -n 'dash-popup\.sh' "$BIN"/*.sh "$BIN"/*.py "$ROOT"/conf/*.conf 2>/dev/null \
   | grep -v -- '-selftest\.' | grep -v '^[^:]*/dash-popup\.sh:' | grep -Ev '^[^:]+:[0-9]+:[[:space:]]*#' \
-  | grep -v -- '--title' | grep -Ev '^[^:]+:[0-9]+:.*(resolves the client|via dash-popup|dash-popup\.sh runs)')
+  | grep -E 'dash-popup\.sh(["'"'"')]| --| -w| -h)' | grep -v -- '--title')
 [ -z "$untitled" ] || fail "one frame: a popup without --title:
 $untitled"
 for f in tmux-dashboard.sh tmux-issues.sh fleet-sidebar-menu.sh fleet-sidebar.py fleet-task-pick.sh \
