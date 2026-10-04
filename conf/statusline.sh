@@ -96,8 +96,46 @@ if [[ -n "${TMUX:-}" && -n "${TMUX_PANE:-}" ]]; then
   fi
 fi
 
+# ── 2/3 gate: cwd + git branch (issue #1361) ─────────────────────────────────
+# In a fleet pane the tmux window name and the task bar already show the task and
+# its branch, so segments 2 and 3 are a repeat that costs width and 2-3 `git` runs
+# per render. FLEET_STATUSLINE_CWD (global; default `auto` — fleet-lib.sh
+# fleet_statusline_cwd): `auto` hides them in a fleet pane only, 1 always shows,
+# 0 always hides. Read WITHOUT sourcing fleet-lib (this runs on every render): the
+# install's fleet.conf then $FLEET_CONF_DIR/fleet.settings — the order fleet-lib
+# sources them, so the last assignment wins — else the environment.
+# A fleet pane = $TMUX + $TMUX_PANE on a socket whose label has a fleet conf
+# (one fleet ≡ one socket labelled with its session name, issue #159) — so an
+# ad-hoc session on the `default` socket still shows both. File tests only, no
+# tmux call. Outside tmux nothing here forks and the output is unchanged.
+SHOW_CWD=1
+SL_CWD="${FLEET_STATUSLINE_CWD:-}"
+SL_CONF_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
+SL_FILES=()
+SL_HERE="${BASH_SOURCE[0]%/*}"
+[[ "$SL_HERE" == "${BASH_SOURCE[0]}" ]] && SL_HERE=.
+[[ -f "$SL_HERE/../fleet.conf" ]] && SL_FILES+=("$SL_HERE/../fleet.conf")
+[[ -f "$SL_CONF_DIR/fleet.settings" ]] && SL_FILES+=("$SL_CONF_DIR/fleet.settings")
+if [[ ${#SL_FILES[@]} -gt 0 ]]; then
+  SL_FILE_VAL=$(awk '/^[[:space:]]*(export[[:space:]]+)?FLEET_STATUSLINE_CWD=/ {
+                       sub(/^[^=]*=/, ""); sub(/[[:space:]]+#.*$/, ""); gsub(/["\047[:space:]]/, ""); v = $0 }
+                     END { print v }' ${SL_FILES[@]+"${SL_FILES[@]}"} 2>/dev/null)
+  [[ -n "$SL_FILE_VAL" ]] && SL_CWD="$SL_FILE_VAL"
+fi
+case "${SL_CWD:-auto}" in
+  0) SHOW_CWD=0 ;;
+  1) SHOW_CWD=1 ;;
+  *) if [[ -n "${TMUX:-}" && -n "${TMUX_PANE:-}" ]]; then
+       SL_SOCK="${TMUX%%,*}"; SL_SOCK="${SL_SOCK##*/}"
+       if [[ -n "$SL_SOCK" && ( -f "$SL_CONF_DIR/fleets/$SL_SOCK/conf" || -f "$SL_CONF_DIR/$SL_SOCK.conf" ) ]]; then
+         SHOW_CWD=0
+       fi
+     fi ;;
+esac
+
 # ── 2. Current working directory ─────────────────────────────────────────────
-CWD_RAW=$(jq -r '.workspace.current_dir // .cwd // ""' <<< "$INPUT")
+CWD_RAW=""
+(( SHOW_CWD )) && CWD_RAW=$(jq -r '.workspace.current_dir // .cwd // ""' <<< "$INPUT")
 
 if [[ -n "$CWD_RAW" ]]; then
   # Replace $HOME prefix with ~
