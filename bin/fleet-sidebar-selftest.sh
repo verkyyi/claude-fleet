@@ -1229,7 +1229,14 @@ try:
     wait_for(navigation, 'clicking the sidebar did not enter navigation before ⌃s')
     before = set(windows())
     os.write(terminal, b'\x13')
-    wait_for(lambda: set(windows()) - before, '⌃s did not spawn a scratch session')
+    seen = set()
+    def spawned_or_seen():
+        seen.add(input_line(side))
+        return set(windows()) - before
+    try:
+        wait_for(spawned_or_seen, '⌃s did not spawn a scratch session')
+    except AssertionError as error:
+        raise AssertionError('%s — input lines seen: %r' % (error, sorted(seen)))
     new = (set(windows()) - before).pop()
     check(tm('show-options', '-wqv', '-t', new, '@raw') == '1', '⌃s spawned something other than a scratch')
     check(tm('show-options', '-wqv', '-t', new, '@origin') == '', '⌃s nested its scratch under the worker (must be the hub ⌃s)')
