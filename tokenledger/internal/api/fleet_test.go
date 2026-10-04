@@ -612,3 +612,67 @@ func TestFleetSessionsPage(t *testing.T) {
 		t.Errorf("GET /sessions served the page with the fleet module off")
 	}
 }
+
+// fleet_sessions carries a validator (claude-fleet#1481): the same answer
+// twice is a 304 for a poller that sends the ETag back, and any heartbeat
+// moves it.
+func TestFleetSessionsETag(t *testing.T) {
+	h := newFleetHarness(t)
+	a := connectFakeNode(t, h, "m5", false)
+	fa := fakeFleet(t, machineA, "fleet-a", "o/a", "/srv/a", 1, 2)
+	a.beat("m5", "alice", machineA, fa)
+	waitFor(t, 3*time.Second, "fleet registered", func() bool {
+		return getFleet(t, h, "/v1/fleet/fleet_sessions", 200)["count"].(float64) == 2
+	})
+	get := func(ifNoneMatch string) (int, string, map[string]any) {
+		req, _ := http.NewRequest(http.MethodGet, h.http.URL+"/v1/fleet/fleet_sessions", nil)
+		req.Header.Set("Authorization", "Bearer "+viewerToken)
+		if ifNoneMatch != "" {
+			req.Header.Set("If-None-Match", ifNoneMatch)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		return resp.StatusCode, resp.Header.Get("ETag"), out
+	}
+	st, tag, out := get("")
+	if st != 200 || tag == "" || !strings.HasPrefix(tag, `"`) {
+		t.Fatalf("GET: %d ETag=%q, want 200 with a quoted ETag", st, tag)
+	}
+	if out["etag"] != tag {
+		t.Fatalf("body etag %v != header %q", out["etag"], tag)
+	}
+	if st2, tag2, out2 := get(tag); st2 != 304 || tag2 != tag || len(out2) != 0 {
+		t.Fatalf("If-None-Match %q: %d ETag=%q body=%v, want 304, same tag, no body", tag, st2, tag2, out2)
+	}
+	if st3, _, _ := get(`"stale-0-0"`); st3 != 200 {
+		t.Fatalf("a stale validator: %d, want 200", st3)
+	}
+	// A new heartbeat — a window changed state — moves the validator.
+	fa.Workers = []byte(`[{"worker_id":"` + fa.FleetID + `/issue-1","key":"issue-1","issue":1,"state":"needs"}]`)
+	fa.Count = 1
+	a.beat("m5", "alice", machineA, fa)
+	waitFor(t, 3*time.Second, "the validator moved", func() bool {
+		st4, tag4, _ := get(tag)
+		return st4 == 200 && tag4 != tag
+	})
+	// The POST form (the certificate path of #1475 asks this way) honours the
+	// validator too: a tool read is a read whichever verb carried it.
+	req, _ := http.NewRequest(http.MethodPost, h.http.URL+"/v1/fleet/fleet_sessions", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer "+viewerToken)
+	req.Header.Set("Content-Type", "application/json")
+	_, tag5, _ := get("")
+	req.Header.Set("If-None-Match", tag5)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 304 {
+		t.Fatalf("POST with a matching If-None-Match: %d, want 304", resp.StatusCode)
+	}
+}

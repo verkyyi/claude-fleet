@@ -383,6 +383,7 @@ classify_one() {
       TM set-window-option -u -t "$target" @claude_wait 2>/dev/null
     fi
     TM set-window-option -t "$target" @claude_state_ts "$(date +%s)" 2>/dev/null
+    fleet_hub_nudge 2>/dev/null   # the hub hears the reconcile now (issue #1481)
     printf '%s  %-10s %-8s -> %s%s\n' "$(date +%H:%M:%S)" "$target" "$st" "$new" "$tag" >> "$LOG"
   fi
   return 0

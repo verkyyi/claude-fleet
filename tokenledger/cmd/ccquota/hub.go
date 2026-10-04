@@ -161,6 +161,16 @@ func kmsEnvelope(keyID string, st *store.Store) (*credvault.Envelope, error) {
 	return &credvault.Envelope{KMS: &credvault.AliyunKMS{Endpoint: endpoint, Creds: creds}, KeyID: keyID, Store: st}, nil
 }
 
+// fleetNudgePath is $FLEET_CONF_DIR/global/hub-nudge when the fleet's conf
+// dir is named in the environment (claude-fleet#1481); empty lets the agent
+// derive the default conf dir from its home.
+func fleetNudgePath() string {
+	if d := os.Getenv("FLEET_CONF_DIR"); d != "" {
+		return filepath.Join(d, "global", "hub-nudge")
+	}
+	return ""
+}
+
 // fleetEnabled reports CCQUOTA_FLEET=1, the one switch for the whole fleet
 // module (claude-fleet#1408). Anything else — unset, empty, 0 — is off, and off
 // is today's hub and agent exactly.
@@ -907,6 +917,9 @@ func runAgent(args []string) error {
 		FleetEphemeral:      fleetEnabled() && os.Getenv("CCQUOTA_FLEET_NODE_KIND") == "ephemeral",
 		FleetReclaimCmd:     os.Getenv("CCQUOTA_FLEET_RECLAIM_CMD"),
 		FleetReclaimTimeout: reclaimTimeout,
+		// The state nudge (claude-fleet#1481): the fleet's conf dir when
+		// the environment names one, else the agent's default under home.
+		FleetNudgePath: fleetNudgePath(),
 	})
 	if err != nil {
 		return err

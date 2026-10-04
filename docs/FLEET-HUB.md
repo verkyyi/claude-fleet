@@ -135,8 +135,10 @@ running agent, every script behaves as it did before.
 
 **The sidebar sees every machine** (issue #1423). With `CCQUOTA_FLEET=1` and
 `CCQUOTA_HUB_URL` set, the collector keeps `bin/fleet-hub-sessions.sh` refreshing
-the hub's `fleet_sessions` every 10 s into `global/remote_<sess>` (and the
-`control/hub-workers.tsv` cache above). `tmux-dashboard-rows.sh` only reads that
+the hub's `fleet_sessions` into `global/remote_<sess>` (and the
+`control/hub-workers.tsv` cache above) — every 2 s while a client is attached to
+a fleet session on this machine (`FLEET_HUB_SESSIONS_WATCHED_EVERY`), every 10 s
+when nobody is looking (`FLEET_HUB_SESSIONS_EVERY`). `tmux-dashboard-rows.sh` only reads that
 file: your sessions on other machines — your login, a `worker_id`, a fleet that is
 not this machine's — render mixed in with the local windows, nested by
 `@origin_wid` (or the issue's sub-issue parent), and **look exactly like the
@@ -187,6 +189,29 @@ certificate the hub refuses (401) falls back too; neither ⇒ nothing is fetched
 no remote row, and `fleet-doctor`'s `hub` line WARNs.
 `fleet-hub-sessions.sh --identity` prints which it is. The hub URL is
 `CCQUOTA_HUB_URL`, else `FLEET_HUB_URL`, else `hub.json`'s `url`.
+
+**A state change is reported at once** (issue #1481, EPIC #1479 C2). The node
+agent's heartbeat stays at 5 s — that is the liveness signal — but a window that
+just went 「在问你 / 等授权 / 做完了」 no longer waits for it: every writer of
+`@claude_state` / `@claude_needs` calls `fleet_hub_nudge` (`bin/fleet-lib.sh`;
+`bin/set-claude-state.sh` and `bin/tmux-spinner.sh` carry an inline copy) right
+after a write that *changes* them, which touches `$FLEET_CONF_DIR/global/hub-nudge`
+— one file per login, the agent's scope. The agent polls that file's mtime every
+250 ms (no fsnotify) and sends an extra heartbeat: 300 ms debounce, so a burst
+of writes is one beat, and at most two nudge beats a second per node, so no
+writer can flood the hub. Off without `CCQUOTA_FLEET=1`: the function is empty.
+On the fetch side `fleet_sessions` carries a validator: `ETag` =
+`"<newest observed_at, ms>-<rows>-<rows on a lost machine>"` (also `etag` in
+the body), so any heartbeat moves it; a `GET` with a matching `If-None-Match` is
+answered `304` with no body. `fleet-hub-sessions.sh` sends the validator it
+stored (`global/hubsess.etag`) whenever every cache it vouches for is on disk,
+and treats a 304 as «the rows stand»: it re-stamps the cache's `#ts` line (and
+`hub-workers.tsv`'s mtime) so nothing reads 失联 while the hub is answering. A
+hub without ETags is fetched in full every time, as before. Budget: a change
+on machine A reaches machine B's list in ≤ 3 s (≈ 0.25 poll + 0.3 debounce +
+the beat + up to 2 s of fetch cadence); `bin/fleet-hub-latency.sh --observer m4`
+measures it from a fleet pane on A (ten rounds, median), with the watcher half
+over one ssh to B.
 
 **…and steps into them** (issue #1424, EPIC #1419 C5). Enter on a remote row (the
 dash's `dash-enter.sh`, the sidebar's `jump`) runs `bin/fleet-remote-view.sh open`:

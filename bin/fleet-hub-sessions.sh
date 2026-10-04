@@ -13,8 +13,19 @@
 #               machine, plus the C1 locator cache control/hub-workers.tsv. A failed
 #               fetch leaves the last cache in place: its rows go on rendering, and
 #               once it is older than FLEET_HUB_SESSIONS_STALE they read 失联.
-#   --loop      --refresh every FLEET_HUB_SESSIONS_EVERY (10s) for
-#               FLEET_HUB_SESSIONS_LOOP_SECS (70s), then exit. One at a time (pid file).
+#   --loop      --refresh every FLEET_HUB_SESSIONS_WATCHED_EVERY (2s) while a client
+#               is attached to any fleet session on this machine — someone is
+#               looking — else every FLEET_HUB_SESSIONS_EVERY (10s), for
+#               FLEET_HUB_SESSIONS_LOOP_SECS (70s), then exit. One at a time (pid
+#               file). The 2 s is half of the 「3 秒内看到」 budget (issue #1481);
+#               the other half is the node reporting a change at once
+#               (fleet_hub_nudge). The fetch is cheap enough to ask that often
+#               because it is conditional: the hub answers fleet_sessions with an
+#               ETag (its newest heartbeat + row count), the loop sends it back as
+#               If-None-Match, and a 304 carries no body — the rows stand and only
+#               the cache's #ts line is re-stamped so they never read 失联 while
+#               the hub is answering. A hub without ETags (older) is fetched in
+#               full every time, as before.
 #   --ensure    start a detached --loop unless one is alive. The collector runs this
 #               every tick (60s), so the 10s cadence needs no daemon of its own and a
 #               loop can never outlive the collector by more than one round.
@@ -84,6 +95,8 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 
 G="$FLEET_C/global"
 EVERY="${FLEET_HUB_SESSIONS_EVERY:-10}"; case "$EVERY" in ''|*[!0-9]*|0) EVERY=10 ;; esac
+WATCHED_EVERY="${FLEET_HUB_SESSIONS_WATCHED_EVERY:-2}"; case "$WATCHED_EVERY" in ''|*[!0-9]*|0) WATCHED_EVERY=2 ;; esac
+ETAGF="$G/hubsess.etag"      # the validator of the cache on disk (issue #1481)
 LOOP_SECS="${FLEET_HUB_SESSIONS_LOOP_SECS:-70}"; case "$LOOP_SECS" in ''|*[!0-9]*) LOOP_SECS=70 ;; esac
 PIDF="$G/hubsess.pid"
 SESSIONS_NS='fleet-sessions@claude-fleet'
@@ -171,64 +184,103 @@ identity() {
   return 1
 }
 
-# fetch_cert <url> → the JSON on stdout; rc 0 ok, 3 the hub refused the
-# certificate (fall back), 1 anything else.
+# curl_sessions <out> <etag> <curl args…> — one fleet_sessions request into
+# <out>, with the validator (issue #1481) when we hold one. rc 0 = 200 (the
+# ETag the body came with is kept in $ETAGF; none ⇒ an older hub, dropped);
+# 3 = 304, nothing changed since <etag> (the <out> file is empty); 4 = 401/403,
+# the credential was refused; 1 = anything else.
+curl_sessions() {
+  local out="$1" etag="$2" hdr code; shift 2
+  hdr=$(mktemp "$G/hubsess.hdr.XXXXXX") || return 1
+  set -- -sS -m 8 -o "$out" -D "$hdr" -w '%{http_code}' "$@"
+  [ -n "$etag" ] && set -- "$@" -H "If-None-Match: $etag"
+  code=$(curl "$@" 2>/dev/null)
+  case "$code" in
+    200) etag=$(awk 'tolower($1) == "etag:" { sub(/\r$/, "", $2); print $2; exit }' "$hdr" 2>/dev/null)
+         rm -f "$hdr"
+         if [ -n "$etag" ]; then printf '%s\n' "$etag" > "$ETAGF.new" && mv -f "$ETAGF.new" "$ETAGF"
+         else rm -f "$ETAGF"; fi
+         return 0 ;;
+    304)     rm -f "$hdr"; return 3 ;;
+    401|403) rm -f "$hdr"; return 4 ;;
+    *)       rm -f "$hdr"; return 1 ;;
+  esac
+}
+
+# fetch_cert <url> <out> <etag> → the JSON into <out>; rc as curl_sessions
+# (4 = the hub refused the certificate: fall back).
 fetch_cert() {
-  local url="$1" ts sig cert body code out
+  local url="$1" out="$2" etag="$3" ts sig cert body
   ts=$(date +%s)
   sig=$(printf 'fleet-sessions %s' "$ts" | ssh-keygen -Y sign -f "$CERT_KEY" -n "$SESSIONS_NS" 2>/dev/null) || return 1
   cert=$(head -n1 "$CERT_PUB" 2>/dev/null) || return 1
   body=$(python3 -c 'import json, sys; print(json.dumps({"cert": sys.argv[1], "sig": sys.argv[2], "ts": int(sys.argv[3])}))' \
          "$cert" "$sig" "$ts") || return 1
-  out=$(mktemp "$G/hubsess.cert.XXXXXX") || return 1
-  code=$(curl -sS -m 8 -o "$out" -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
-         --data-binary "$body" "$url/v1/fleet/fleet_sessions" 2>/dev/null)
-  case "$code" in
-    200) cat "$out"; rm -f "$out"; return 0 ;;
-    401|403) rm -f "$out"; return 3 ;;
-    *) rm -f "$out"; return 1 ;;
-  esac
+  curl_sessions "$out" "$etag" -X POST -H 'Content-Type: application/json' --data-binary "$body" "$url/v1/fleet/fleet_sessions"
 }
 
-# fetch → the fleet_sessions JSON on stdout, rc 1 when there is no answer.
+# fetch <out> <local-fleets> → the fleet_sessions JSON into <out>. rc 0 = a fresh
+# body; 3 = 304, nothing changed since the ETag on disk (the <out> file is empty);
+# 1 = no answer. The validator goes out only while every cache it vouches for is
+# on disk — a fleet created since, or a wiped $FLEET_C, needs the body.
 fetch() {
-  local url st rc
+  local out="$1" lf="$2" url st rc etag='' sess _c
   if [ -n "${FLEET_HUB_SESSIONS_CMD:-}" ]; then
-    bash -c "$FLEET_HUB_SESSIONS_CMD" </dev/null 2>/dev/null; return
+    bash -c "$FLEET_HUB_SESSIONS_CMD" </dev/null >"$out" 2>/dev/null; return
   fi
   url=$(hub_url) || { printf 'fleet-hub-sessions: no hub URL (CCQUOTA_HUB_URL / FLEET_HUB_URL / hub.json) — no other machine to show\n' >&2; return 1; }
   command -v curl >/dev/null 2>&1 || return 1
+  if [ -s "$ETAGF" ] && read -r etag < "$ETAGF" && [ -n "$etag" ]; then
+    while IFS=$'\t' read -r sess _c; do
+      [ -z "$sess" ] || [ -s "$G/remote_$sess" ] || { etag=''; break; }
+    done < "$lf"
+  fi
   st=$(cert_state)
   case "$st" in
     ok\ *)
-      fetch_cert "$url"; rc=$?
-      [ "$rc" = 3 ] || return "$rc"
+      fetch_cert "$url" "$out" "$etag"; rc=$?
+      [ "$rc" = 4 ] || return "$rc"
       printf 'fleet-hub-sessions: the hub refused the connection certificate %s — trying the viewer token\n' "$CERT_PUB" >&2 ;;
   esac
   if token_source >/dev/null; then
-    curl -fsS -m 8 -H "Authorization: Bearer $TOK" "$url/v1/fleet/fleet_sessions" 2>/dev/null
-    return
+    curl_sessions "$out" "$etag" -H "Authorization: Bearer $TOK" "$url/v1/fleet/fleet_sessions"; rc=$?
+    [ "$rc" = 4 ] && rc=1
+    return "$rc"
   fi
   printf 'fleet-hub-sessions: %s — the sidebar shows no other machine\n' "$(identity | sed 's/^none //')" >&2
   return 1
 }
 
+# restamp <local-fleets> — a 304's only write: the #ts line of every fleet's cache
+# (the rows and the #me/#node header lines are unchanged, the hub is answering),
+# plus the C1 locator cache's mtime, which _fleet_hub_node trusts by age.
+restamp() {
+  local lf="$1" now sess _c f tmp
+  now=$(date +%s)
+  while IFS=$'\t' read -r sess _c; do
+    [ -n "$sess" ] || continue
+    f="$G/remote_$sess"; [ -s "$f" ] || continue
+    tmp=$(mktemp "$G/.hubsess.XXXXXX") || continue
+    if { printf '#ts\037%s\n' "$now"; tail -n +2 "$f"; } > "$tmp" 2>/dev/null; then mv -f "$tmp" "$f"; else rm -f "$tmp"; fi
+  done < "$lf"
+  [ -f "$FLEET_CONF_DIR/control/hub-workers.tsv" ] && touch "$FLEET_CONF_DIR/control/hub-workers.tsv" 2>/dev/null
+  return 0
+}
+
 refresh() {
   hub_on || return 0
-  local json sess _c u lf repos m
+  local json sess _c u lf mf repos m rc
   mkdir -p "$G" 2>/dev/null || return 1
   json=$(mktemp "$G/hubsess.json.XXXXXX") || return 1
   lf=$(mktemp "$G/hubsess.local.XXXXXX") || { rm -f "$json"; return 1; }
   mf=$(mktemp "$G/hubsess.map.XXXXXX") || { rm -f "$json" "$lf"; return 1; }
-  if ! fetch >"$json" || [ ! -s "$json" ]; then
-    rm -f "$json" "$lf" "$mf"
-    printf 'fleet-hub-sessions: hub unreachable — keeping the last cache (its rows read 失联 once stale)\n' >&2
-    return 1
-  fi
   # This machine's fleets: name, UUID (may be empty), multi-repo bit, hosted repos —
   # and (issue #1480) each one's live window inventory, through the SAME adapter
   # the node agent reports to the hub with, so a local row's worker_id is derived
   # by one rule on both sides and maps back to the window that holds it NOW.
+  # Built BEFORE the fetch (issue #1481): `fetch` reads the fleet list to decide
+  # whether every cache the hub's answer would replace exists, which is what
+  # makes a 304 safe to take.
   : > "$mf"
   while IFS=$'\t' read -r sess _c; do
     [ -n "$sess" ] || continue
@@ -241,6 +293,15 @@ refresh() {
   done > "$lf" <<EOF
 $(fleet_each_conf)
 EOF
+  fetch "$json" "$lf"; rc=$?
+  if [ "$rc" = 3 ]; then
+    restamp "$lf"; rm -f "$json" "$lf" "$mf"; return 0
+  fi
+  if [ "$rc" != 0 ] || [ ! -s "$json" ]; then
+    rm -f "$json" "$lf" "$mf"
+    printf 'fleet-hub-sessions: hub unreachable — keeping the last cache (its rows read 失联 once stale)\n' >&2
+    return 1
+  fi
   python3 - "$json" "$lf" "$G" "$FLEET_C" "$FLEET_CONF_DIR/control/hub-workers.tsv" \
     "${FLEET_HUB_SESSIONS_USER:-$(id -un 2>/dev/null)}" "$(hostname 2>/dev/null)" \
     "${FLEET_NODE_ALIASES:-}" "$(date +%s)" "$mf" "$BIN" <<'PY'
@@ -418,23 +479,41 @@ for f in local:
                                                "1" if r["local"] else "0", r["lwid"])) + "\n")
     write(os.path.join(gdir, "remote_" + f["sess"]), "".join(out))
 PY
-  local rc=$?
+  rc=$?
   rm -f "$json" "$lf" "$mf"
+  # A cache that failed to write is not vouched for: the next fetch takes the body.
+  [ "$rc" = 0 ] || rm -f "$ETAGF"
   return "$rc"
+}
+
+# watched — is anyone looking? A client attached to any fleet session on this
+# machine: the dash, a shell, another machine's proxy window. Then the loop runs
+# at WATCHED_EVERY; with nobody attached there is no one to show a change to
+# sooner, and the hub is asked every EVERY as before.
+watched() {
+  local sess _c
+  while IFS=$'\t' read -r sess _c; do
+    [ -n "$sess" ] || continue
+    [ -n "$(tmux -L "$sess" list-clients 2>/dev/null)" ] && return 0
+  done <<EOF
+$(fleet_each_conf)
+EOF
+  return 1
 }
 
 loop() {
   hub_on || return 0
   mkdir -p "$G" 2>/dev/null || return 1
-  local p end
+  local p end every
   read -r p < "$PIDF" 2>/dev/null || p=''
   if [ -n "$p" ] && [ "$p" != "$$" ] && kill -0 "$p" 2>/dev/null; then return 0; fi
   printf '%s\n' "$$" > "$PIDF"
   end=$(( $(date +%s) + LOOP_SECS ))
   while :; do
     refresh 2>/dev/null
-    [ $(( $(date +%s) + EVERY )) -le "$end" ] || break
-    sleep "$EVERY"
+    every=$EVERY; watched && every=$WATCHED_EVERY
+    [ $(( $(date +%s) + every )) -le "$end" ] || break
+    sleep "$every"
   done
   read -r p < "$PIDF" 2>/dev/null && [ "$p" = "$$" ] && rm -f "$PIDF"
   return 0
