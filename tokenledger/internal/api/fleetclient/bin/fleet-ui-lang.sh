@@ -364,7 +364,7 @@ resume	c	resume — a row on another machine only: reopen a just-stopped one thr
     en:keys_prefix_04)         printf %s 'focus the task sidebar (or click/tap it) — then type: see the '"'"'task sidebar'"'"' group. No sidebar on screen: opens the task picker (prefix Space)' ;;
     zh:keys_prefix_05)         printf %s '在 ⇄ 代理窗口（另一台机器的会话）里：回到上一个本机窗口；其他窗口无动作' ;;
     en:keys_prefix_05)         printf %s 'in a ⇄ proxy window (another machine'"'"'s session, beside this machine'"'"'s sidebar): back to the last LOCAL window; a no-op anywhere else' ;;
-    zh:keys_prefix_06)         printf '任务选择器：切换任务，或输入名称新建 scratch；F9 / ⌂ 回 hub' "${1:-}" ;;
+    zh:keys_prefix_06)         printf '任务选择器：切换任务，或输入名称新建 scratch；F9 / ⌂ 回 hub' ;;
     en:keys_prefix_06)         printf 'task picker — the task sidebar'"'"'s list as a popup, for when the sidebar is hidden (narrow screen) or off: ↵ switch · type a name + %s (or ↵ on no match) = new scratch session · F9 / [⌂ hub] = the hub · esc / [✕ close]' "${1:-}" ;;
     zh:keys_prefix_07)         printf %s '议题列表：GitHub issues，回车启动该 issue 的 worker' ;;
     en:keys_prefix_07)         printf %s 'backlog modal — GitHub issues; enter spawns the issue'"'"'s session' ;;
@@ -480,7 +480,7 @@ resume	c	resume — a row on another machine only: reopen a just-stopped one thr
     en:keys_dashboard_14)      printf %s 'toggle live ⇄ closed (finished sessions + scratch)' ;;
     zh:keys_dashboard_15)      printf %s '恢复高亮的已收工会话' ;;
     en:keys_dashboard_15)      printf %s 'restore the highlighted landed session into a new window (claude --resume)' ;;
-    zh:keys_dashboard_16)      printf '恢复高亮 landed 会话' "${1:-}" ;;
+    zh:keys_dashboard_16)      printf '恢复高亮 landed 会话' ;;
     en:keys_dashboard_16)      printf 'resume the highlighted landed session — same as %s' "${1:-}" ;;
     zh:keys_dashboard_17)      printf %s '在浏览器打开 landed 行的 PR' ;;
     en:keys_dashboard_17)      printf %s 'open the highlighted landed row'"'"'s PR in the browser' ;;
