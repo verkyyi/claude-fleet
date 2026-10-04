@@ -1,9 +1,11 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -226,6 +228,10 @@ func TestReadFleetsThroughFleetControl(t *testing.T) {
 		return nil, nil
 	}
 	t.Cleanup(func() { fleetControlCommand = old })
+	fleetReadErrs = &sync.Map{}
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 
 	snap, err := readFleets(context.Background(), home)
 	if err != nil {
@@ -243,6 +249,13 @@ func TestReadFleetsThroughFleetControl(t *testing.T) {
 	}
 	if b.State != "unknown" || b.Count != 0 {
 		t.Fatalf("an unreadable fleet must say unknown, not zero sessions running: %+v", b)
+	}
+	// The reason is logged once per distinct failure, not once per beat
+	// (claude-fleet#1460): three beats, one line, naming the fleet and the fault.
+	readFleets(context.Background(), home)
+	readFleets(context.Background(), home)
+	if n := strings.Count(logged.String(), "tmux down"); n != 1 || !strings.Contains(logged.String(), "fleet-b") {
+		t.Fatalf("unreadable-fleet log lines = %d, want 1 naming fleet-b:\n%s", n, logged.String())
 	}
 }
 

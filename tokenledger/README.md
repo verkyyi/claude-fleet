@@ -569,7 +569,9 @@ Set it on an **agent** and the agent dials OUT to the hub — a WebSocket over
 the hub URL you already gave it (`wss://` for `https://`), so a machine behind
 NAT needs no inbound port — and sends a heartbeat every `--live-interval`
 (5s): this login's fleets and their window counts (read through claude-fleet's
-`~/.claude/fleet/bin/fleet-control.py rpc`, never by parsing tmux), the
+`~/.claude/fleet/bin/fleet-control.py rpc`, never by parsing tmux; a fleet the
+read fails on is sent as `state: unknown`, not as 0 windows, and the agent logs
+the reason once per distinct failure — claude-fleet#1460), the
 machine's 1-minute load and core count, available memory, and the fleet
 install's version. A dropped link is redialled with exponential, jittered
 backoff capped at 60s.

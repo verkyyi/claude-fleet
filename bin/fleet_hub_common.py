@@ -27,6 +27,31 @@ WORKER_ACTIONS = ("worker_message", "worker_stop", "worker_resume")
 # kind. Synchronous like fleet_status; gated by gh:read, never by fleet:read alone.
 GH_READS = {"gh_issue_view": "issue", "gh_pr_view": "pr", "gh_pr_checks": "checks"}
 MAX_MESSAGE = 4000
+# The tool dirs every control adapter must see, whatever started it (issue
+# #1460). The SSH forced command (fleet_hub.REMOTE_COMMAND) exports exactly
+# this PATH; the local `rpc` path — ccquota's agent reading fleet_status for its
+# heartbeat under launchd, whose default PATH is /usr/bin:/bin:/usr/sbin:/sbin —
+# completes the PATH it inherited with the same dirs (tool_path). Without that a
+# Homebrew tmux was not found, fleet-control-read.sh died `tmux: command not
+# found`, every fleet_status read UNAVAILABLE, and the hub showed 0 sessions on
+# a machine running 22. Same dirs the daemon plists carry (launchd/*.plist.tmpl).
+TOOL_DIRS = ("$HOME/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin")
+
+
+def tool_path(inherited, home=None):
+    """`inherited` PATH with every TOOL_DIRS entry present. The missing ones are
+    prepended in TOOL_DIRS order; the ones already there keep their place, so a
+    whole PATH comes back unchanged and launchd's default becomes the forced
+    command's. $HOME/.local/bin is skipped when no home is known."""
+    have = [d for d in (inherited or "").split(os.pathsep) if d]
+    want = []
+    for d in TOOL_DIRS:
+        if d.startswith("$HOME"):
+            if not home:
+                continue
+            d = home.rstrip("/") + d[len("$HOME"):]
+        want.append(d)
+    return os.pathsep.join([d for d in want if d not in have] + have)
 REPO_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}(/[A-Za-z0-9_.-]{1,100})?")
 GH_FIELDS_RE = re.compile(r"[A-Za-z]{1,40}(,[A-Za-z]{1,40}){0,29}")
 # Durable worker identity (issue #834): the fleet UUID plus the binding the fleet

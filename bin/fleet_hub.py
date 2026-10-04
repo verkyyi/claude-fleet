@@ -12,13 +12,15 @@ import secrets
 import sys
 import uuid
 
-from fleet_hub_common import (CONFIG_KEYS, GH_READS, PROTOCOL, SCOPE_OF, SCOPES, WORKER_ACTIONS,
+from fleet_hub_common import (CONFIG_KEYS, GH_READS, PROTOCOL, SCOPE_OF, SCOPES, TOOL_DIRS, WORKER_ACTIONS,
                               Database, Fault, canonical, digest, fields, identifier,
                               name, now, operation, parse_worker_id, run, validate_gh_read,
                               validate_write)
 
 BIN = Path(__file__).absolute().parent
-REMOTE_COMMAND = ('export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"; '
+# The forced command's PATH is TOOL_DIRS verbatim (issue #1460): the same dirs
+# the local rpc path completes its own PATH with, so both doors see one tmux.
+REMOTE_COMMAND = ('export PATH="' + ":".join(TOOL_DIRS) + '"; '
                   'exec python3 "$HOME/.claude/fleet/bin/fleet-control.py" rpc')
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS nodes (
