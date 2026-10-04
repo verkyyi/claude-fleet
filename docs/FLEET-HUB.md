@@ -158,6 +158,21 @@ never vanishes. Machine labels come from `FLEET_NODE_ALIASES`
 carries each window's `name`, `origin_wid` and `needs` (columns 10–12 of
 `fleet-control-read.sh workers`, optional).
 
+**…and can be the whole list** (issue #1480, EPIC #1479 C1). The cache now holds
+this machine's own rows too — two fields appended to each line: `local` (1 for a
+row of this fleet on this machine) and `wid` (the tmux window id that holds it
+right now, mapped once per refresh from `fleet-control-read.sh workers` through
+the same `worker_key` rule the node agent reports with, never from the hub's
+observation) — and a local row goes only into its own fleet's cache. With
+`FLEET_SIDEBAR_SOURCE=hub` (per fleet, default `local`) `tmux-dashboard-rows.sh
+--sidebar` takes its row SET from the cache alone, so every machine shows one
+list in one order with one set of marks; a local row is still rendered off its
+own tmux line (state, needs, glyph, fold, pin, Enter: today's row, and its id is
+its `@<n>` window, never a `wid:`), a local window the hub does not list is not a
+row (the sidebar's own window excepted), and a cached local row whose window is
+gone is not one either. On the default source the cache's local rows are skipped
+and nothing changes; the hub list (prefix+F9) always keeps its local rows.
+
 **Who the hub shows you** (issue #1475). `fleet-hub-sessions.sh` asks as **you**:
 your connection certificate (`~/.ssh/fleet-cert` + `-cert.pub`, from
 `fleet login`, `FLEET_CERT` to name another) signs `fleet-sessions <ts>` under
