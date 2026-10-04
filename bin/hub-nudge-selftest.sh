@@ -173,12 +173,15 @@ class H(http.server.BaseHTTPRequestHandler):
         if tag != "noetag": self.send_header("ETag", '"%s"' % tag)
         self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
 srv = http.server.HTTPServer(("127.0.0.1", 0), H)
-with open(os.path.join(work, "hub.port"), "w") as f: f.write(str(srv.server_address[1]))
+with open(os.path.join(work, "hub.port.tmp"), "w") as f: f.write(str(srv.server_address[1]))
+os.rename(os.path.join(work, "hub.port.tmp"), os.path.join(work, "hub.port"))
 srv.serve_forever()
 PY
 printf 'A working\n' > "$WORK/hub.mode"
 python3 "$WORK/hub.py" "$WORK" & SRV_PID=$!
-for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do [ -s "$WORK/hub.port" ] && break; sleep 0.1; done
+# Up to 30 s: a cold python3 on a loaded CI runner (macOS shards) takes well over
+# the 2 s the first cut allowed — the same budget the other loopback-hub tests use.
+for _ in $(seq 1 300); do [ -s "$WORK/hub.port" ] && break; kill -0 "$SRV_PID" 2>/dev/null || break; sleep 0.1; done
 [ -s "$WORK/hub.port" ] || fail "D: the loopback hub did not start"
 hubport=$(cat "$WORK/hub.port")
 export CCQUOTA_HUB_URL="http://127.0.0.1:$hubport" CCQUOTA_VIEWER_TOKEN=tok FLEET_HUB_SESSIONS_USER='*'
