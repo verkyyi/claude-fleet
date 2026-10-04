@@ -43,6 +43,7 @@
 # hub_nodes  (one per machine the hub shows; written by fleet-hub-sessions.sh):
 #   #ts<US><epoch>
 #   node<US>online|lost<US>load1<US>ncpu<US>mem_pct<US>sessions<US>fleet_version<US>age<US>mem_used_mb<US>mem_total_mb
+#   sessions is `?` when the hub could not read a fleet there (#1465), never 0.
 # hub_limits (one per subscription with a reading):
 #   #ts<US><epoch>
 #   label<US>pct5h<US>pctweek<US>account_uuid<US>hub_label

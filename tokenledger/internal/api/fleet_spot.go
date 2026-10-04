@@ -376,7 +376,7 @@ func (c *SpotController) Reclaim(endpointID string, now time.Time) (store.SpotNo
 // Beat applies one heartbeat from an endpoint that may be a SPOT node: the
 // first one makes a provisioning node online; any that lists sessions
 // restarts the idle clock.
-func (c *SpotController) Beat(endpointID string, sessions int, now time.Time) {
+func (c *SpotController) Beat(endpointID string, sessions *int, now time.Time) {
 	n, err := c.s.Store.SpotNodeByEndpoint(endpointID)
 	if err != nil {
 		return
@@ -387,8 +387,14 @@ func (c *SpotController) Beat(endpointID string, sessions int, now time.Time) {
 			c.logf("fleet: SPOT node %s is online (%s)", n.ID, endpointID)
 		}
 	}
-	if sessions > 0 {
-		_ = c.s.Store.SpotNodeBusy(endpointID, sessions, now)
+	switch {
+	case sessions == nil:
+		// A fleet it could not read may be running anything
+		// (claude-fleet#1465): unknown restarts the idle clock, never lets
+		// it run out.
+		_ = c.s.Store.SpotNodeBusy(endpointID, 0, now)
+	case *sessions > 0:
+		_ = c.s.Store.SpotNodeBusy(endpointID, *sessions, now)
 	}
 }
 
@@ -493,10 +499,14 @@ func roundAge(d time.Duration) string {
 	return d.Round(time.Minute).String()
 }
 
-// busy reads a roster row's newest heartbeat for sessions.
+// busy reads a roster row's newest heartbeat for sessions. A count it could
+// not take is busy (claude-fleet#1465): an unread fleet is never idle.
 func (c *SpotController) busy(n store.Node) bool {
 	var hb control.Heartbeat
-	return json.Unmarshal([]byte(n.StatusJSON), &hb) == nil && hb.Sessions > 0
+	if json.Unmarshal([]byte(n.StatusJSON), &hb) != nil {
+		return false
+	}
+	return hb.SessionsCount() == nil || hb.Sessions > 0
 }
 
 // stateSince is when the node entered its current state, as far as the

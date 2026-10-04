@@ -771,10 +771,12 @@ type Candidate struct {
 	// LoadPerCore is load1 / ncpu; nil when the node did not say.
 	LoadPerCore  *float64 `json:"load_per_core"`
 	MemFreeBytes uint64   `json:"mem_free_bytes"`
-	// Sessions is this login's sessions on the machine; Cap the per-person
-	// cap there (nil: none).
-	Sessions int  `json:"sessions"`
-	Cap      *int `json:"cap"`
+	// Sessions is this login's sessions on the machine — nil when a fleet of
+	// the login could not be read (claude-fleet#1465), SessionsUnknown then
+	// says which and why; Cap the per-person cap there (nil: none).
+	Sessions        *int   `json:"sessions"`
+	SessionsUnknown string `json:"sessions_unknown,omitempty"`
+	Cap             *int   `json:"cap"`
 	// QuotaUsedPct is the busier of the 5-hour and 7-day windows of the
 	// account this login's Claude Code runs on; nil when unknown.
 	QuotaUsedPct *float64 `json:"quota_used_pct"`
@@ -885,6 +887,11 @@ func (s *Server) checkNodeCap(r store.FleetRow, now time.Time) error {
 		return nil
 	}
 	hb, _, _ := s.nodeStatusOf(r.EndpointID, now)
+	if u := hb.UnreadableFleets(); len(u) > 0 {
+		// An unread fleet may hold the whole cap (claude-fleet#1465).
+		return fault("AT_CAPACITY", fmt.Sprintf("%s@%s's session count is unknown (%s); the per-person cap there is %d",
+			r.OSUser, r.Hostname, strings.Join(u, "; "), limit))
+	}
 	if hb.Sessions >= limit {
 		return fault("AT_CAPACITY", fmt.Sprintf("%s@%s already runs %d sessions; the per-person cap there is %d",
 			r.OSUser, r.Hostname, hb.Sessions, limit))
@@ -1005,7 +1012,10 @@ func (s *Server) pickNode(p fleetPrincipal, repo, node string, now time.Time) (P
 func (s *Server) judge(r store.FleetRow, settings map[string]string, accounts map[string]string, now time.Time) Candidate {
 	c := Candidate{Machine: r.Hostname, OSUser: r.OSUser, EndpointID: r.EndpointID, FleetID: r.FleetID, FleetName: r.Name}
 	hb, status, _ := s.nodeStatusOf(r.EndpointID, now)
-	c.Sessions, c.MemFreeBytes = hb.Sessions, hb.MemFreeBytes
+	c.Sessions, c.MemFreeBytes = hb.SessionsCount(), hb.MemFreeBytes
+	if c.Sessions == nil {
+		c.SessionsUnknown = strings.Join(hb.UnreadableFleets(), "; ")
+	}
 	c.Ready, c.NotReady = hb.Ready, hb.NotReady
 	if hb.Ready == nil || *hb.Ready {
 		c.NotReady = ""
@@ -1042,8 +1052,10 @@ func (s *Server) judge(r store.FleetRow, settings map[string]string, accounts ma
 		c.Excluded = fmt.Sprintf("load %.2f/core > %.1f", *c.LoadPerCore, maxLoadPerCore)
 	case hb.MemTotalBytes > 0 && float64(hb.MemFreeBytes) < minFreeMem:
 		c.Excluded = fmt.Sprintf("free memory %.1f GiB < %.1f GiB", float64(hb.MemFreeBytes)/(1<<30), minFreeMem/(1<<30))
-	case c.Cap != nil && c.Sessions >= *c.Cap:
-		c.Excluded = fmt.Sprintf("at the per-person cap (%d/%d sessions)", c.Sessions, *c.Cap)
+	case c.Cap != nil && c.Sessions == nil:
+		c.Excluded = fmt.Sprintf("session count unknown (%s); the per-person cap %d cannot be checked", c.SessionsUnknown, *c.Cap)
+	case c.Cap != nil && *c.Sessions >= *c.Cap:
+		c.Excluded = fmt.Sprintf("at the per-person cap (%d/%d sessions)", *c.Sessions, *c.Cap)
 	default:
 		c.Eligible = true
 	}
@@ -1054,17 +1066,32 @@ func (s *Server) judge(r store.FleetRow, settings map[string]string, accounts ma
 	if c.LoadPerCore != nil {
 		idle = math.Max(0, 1-*c.LoadPerCore/maxLoadPerCore)
 	}
-	c.Score = math.Round((0.6*headroom+0.4*idle)*1000) / 1000
+	score := 0.6*headroom + 0.4*idle
+	if c.Sessions == nil {
+		// A login whose fleet could not be read may run any number of
+		// sessions (claude-fleet#1465): never scored as the idle 0 the
+		// heartbeat's sum says. better() also ranks it after every known one.
+		score *= unknownSessionsWeight
+	}
+	c.Score = math.Round(score*1000) / 1000
 	return c
 }
 
-// better orders two eligible candidates: score, then fewer sessions, then name.
+// unknownSessionsWeight discounts the score of a candidate whose session count
+// is unknown (claude-fleet#1465).
+const unknownSessionsWeight = 0.5
+
+// better orders two eligible candidates: a known session count before an
+// unknown one (claude-fleet#1465), then score, then fewer sessions, then name.
 func better(a, b Candidate) bool {
+	if (a.Sessions == nil) != (b.Sessions == nil) {
+		return a.Sessions != nil
+	}
 	if a.Score != b.Score {
 		return a.Score > b.Score
 	}
-	if a.Sessions != b.Sessions {
-		return a.Sessions < b.Sessions
+	if a.Sessions != nil && *a.Sessions != *b.Sessions {
+		return *a.Sessions < *b.Sessions
 	}
 	return a.Machine+"/"+a.OSUser < b.Machine+"/"+b.OSUser
 }
@@ -1080,10 +1107,13 @@ func placementReason(c Candidate, all []Candidate) string {
 	if c.QuotaUsedPct != nil {
 		parts = append(parts, fmt.Sprintf("account %.0f%% used", *c.QuotaUsedPct))
 	}
-	if c.Cap != nil {
-		parts = append(parts, fmt.Sprintf("%d/%d sessions", c.Sessions, *c.Cap))
-	} else {
-		parts = append(parts, fmt.Sprintf("%d sessions", c.Sessions))
+	switch {
+	case c.Sessions == nil:
+		parts = append(parts, "sessions unknown: "+c.SessionsUnknown)
+	case c.Cap != nil:
+		parts = append(parts, fmt.Sprintf("%d/%d sessions", *c.Sessions, *c.Cap))
+	default:
+		parts = append(parts, fmt.Sprintf("%d sessions", *c.Sessions))
 	}
 	out := strings.Join(parts, ", ") + ")"
 	others := []string{}

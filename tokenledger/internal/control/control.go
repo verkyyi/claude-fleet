@@ -318,7 +318,10 @@ type Heartbeat struct {
 	MemTotalBytes uint64 `json:"mem_total_bytes"`
 
 	// Sessions is how many fleet sessions (worker + scratch windows) this
-	// login runs across all its fleets.
+	// login runs across all its fleets. It sums only the fleets that were
+	// read: a fleet whose status read failed is State "unknown" with Count 0,
+	// so when UnreadableFleets is non-empty this number is a floor, never the
+	// count (claude-fleet#1465) — read it through SessionsCount.
 	Sessions int `json:"sessions"`
 	// MachineID is the claude-fleet control identity (fleet-control.py's
 	// machine_id), when the login has claude-fleet installed.
@@ -350,6 +353,42 @@ type Heartbeat struct {
 	ObservedAt   time.Time `json:"observed_at"`
 }
 
+// FleetStateUnknown is a fleet whose fleet_status read failed: the agent
+// sends it with Count 0, which is "could not count", never "none".
+const FleetStateUnknown = "unknown"
+
+// UnreadableFleets names this beat's fleets whose status could not be read
+// (claude-fleet#1465), each as "<name>: <reason>" when the agent sent one.
+// Empty when every fleet was read.
+func (hb Heartbeat) UnreadableFleets() []string {
+	var out []string
+	for _, f := range hb.Fleets {
+		if f.State != FleetStateUnknown {
+			continue
+		}
+		name := f.Name
+		if name == "" {
+			name = f.FleetID
+		}
+		if f.Error != "" {
+			name += ": " + f.Error
+		}
+		out = append(out, name)
+	}
+	return out
+}
+
+// SessionsCount is this login's session count, or nil when any of its fleets
+// could not be read — a machine that may run 22 sessions must never read as
+// idle (claude-fleet#1465).
+func (hb Heartbeat) SessionsCount() *int {
+	if len(hb.UnreadableFleets()) > 0 {
+		return nil
+	}
+	n := hb.Sessions
+	return &n
+}
+
 // NodeRoute is one way into a machine's sshd: a name people see ("tailnet",
 // "public"), a host and a port (0 = 22).
 type NodeRoute struct {
@@ -379,6 +418,10 @@ type Fleet struct {
 	State   string          `json:"state,omitempty"`
 	Workers json.RawMessage `json:"workers,omitempty"`
 	Count   int             `json:"count"`
+	// Error is why the status read failed, when State is "unknown"
+	// (claude-fleet#1465): fleet-control.py's fault, adapter stderr included.
+	// Absent from an older agent — the state alone still says "unknown".
+	Error string `json:"error,omitempty"`
 }
 
 // Account ops (claude-fleet#1411). There are exactly two, and both run one of

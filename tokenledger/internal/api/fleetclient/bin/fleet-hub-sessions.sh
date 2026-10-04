@@ -540,6 +540,10 @@ for n in (data.get("nodes") or []) if isinstance(data.get("nodes"), list) else [
         continue
     lb = label(n.get("machine_name"))
     cur = nodes.setdefault(lb, dict(av="lost", n=0, seen=0))
+    # null sessions: a fleet of yours there could not be read (#1465) — its rows
+    # are missing, so the count is `?`, never the rows this cache happens to hold
+    if "sessions" in n and n["sessions"] is None:
+        cur["unk"] = True
     # heard beats lost; `maintenance` (#1427) is heard too — the operator's
     # flag over an online machine, never a third kind of silence
     if n.get("availability") in ("online", "maintenance") and cur["av"] == "lost":
@@ -557,7 +561,7 @@ for r in rows:
 head = ["#ts\x1f%s\n" % now, "#me\x1f%s\n" % ("" if client else clean(label(host)))]
 for lb in sorted(nodes):
     n = nodes[lb]
-    head.append("\x1f".join(("#node", clean(lb), n["av"], str(n["n"]), str(n["seen"]), via)) + "\n")
+    head.append("\x1f".join(("#node", clean(lb), n["av"], "?" if n.get("unk") else str(n["n"]), str(n["seen"]), via)) + "\n")
 
 by_issue = {(r["repo"], str(r["issue"])): r["wid"] for r in rows if r["issue"]}
 parents = {}
@@ -724,6 +728,7 @@ EOF
 # bar, C4's 入口 chip, C5's shell) — never fetched on a render path.
 #   $G/hub_nodes   #ts<US><epoch>, then one line per machine the hub shows:
 #     node<US>online|lost<US>load1<US>ncpu<US>mem_pct<US>sessions<US>fleet_version<US>age<US>mem_used_mb<US>mem_total_mb
+#     (sessions `?` when the hub could not read a fleet there — #1465)
 #     (/v1/nodes `machines`: one load per machine; fleet_version is its newest
 #     login's; age is seconds since its last heartbeat when written)
 #   $G/hub_limits  #ts<US><epoch>, then one line per subscription with a reading:
@@ -813,7 +818,9 @@ for m in machines:
     h = m["hostname"]
     try:
         total = int(m.get("mem_total_bytes") or 0); free = int(m.get("mem_free_bytes") or 0)
-        load1 = float(m.get("load1") or 0); ncpu = int(m.get("ncpu") or 0); sess = int(m.get("sessions") or 0)
+        load1 = float(m.get("load1") or 0); ncpu = int(m.get("ncpu") or 0)
+        # null = a fleet there could not be read (#1465): unknown, never 0
+        sess = "?" if "sessions" in m and m["sessions"] is None else int(m.get("sessions") or 0)
     except (TypeError, ValueError):
         continue
     used = max(total - free, 0)

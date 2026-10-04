@@ -144,6 +144,14 @@ function maintButton(m) {
 }
 const SPOT = { provisioning: "启动中", online: "在线", releasing: "释放中", reclaiming: "回收中", released: "已释放" };
 function spotPill(st) { return `<span class="pill spot ${esc(st)}">${SPOT[st] || esc(st)}</span>`; }
+// A session count the hub could not take (claude-fleet#1465): a fleet's status
+// read failed, so the number is null — drawn as「?」with which fleet and why,
+// never as 0.
+function sessCell(x) {
+  if (x.sessions != null) return String(x.sessions);
+  const why = (x.sessions_unknown || []).join("\n");
+  return `<span class="err" title="${esc("读不到会话数：" + why)}">?</span>`;
+}
 function kindTag(n) { return n.kind === "ephemeral" ? ` <span class="tag" title="SPOT 节点（临时）">SPOT</span>` : ""; }
 function when(t) { return t ? new Date(t).toLocaleString() : "—"; }
 function dur(s) {
@@ -161,7 +169,7 @@ function render(snap) {
       ${maintLine(m)}
       <div class="kv">
         <span>登录在线</span><b>${m.logins_online} / ${m.logins}</b>
-        <span>会话数</span><b>${m.status !== "lost" ? m.sessions : "—"}</b>
+        <span>会话数</span><b>${m.status !== "lost" ? sessCell(m) : "—"}</b>
         <span>负载</span><b>${m.status !== "lost" ? load(m.load1, m.ncpu) : "—"}</b>
         <span>空闲内存</span><b>${m.status !== "lost" ? gib(m.mem_free_bytes) + " / " + gib(m.mem_total_bytes) : "—"}</b>
       </div>
@@ -177,8 +185,8 @@ function render(snap) {
       <td>${esc(n.hostname)}${kindTag(n)}</td>
       <td class="mono">${esc(n.os_user)}</td>
       <td>${pill(n.status)}${n.spot && n.spot !== "online" ? " " + spotPill(n.spot) : ""}</td>
-      <td>${n.sessions}</td>
-      <td>${n.fleets.length ? n.fleets.map((f) => `<span class="mono">${esc(f.name)}</span> <span class="muted">${f.count}</span>${fleetRepos(f)}`).join("<br>") : (n.fleet_error ? `<span class="err">${esc(n.fleet_error)}</span>` : `<span class="muted">—</span>`)}</td>
+      <td>${sessCell(n)}</td>
+      <td>${n.fleets.length ? n.fleets.map((f) => `<span class="mono">${esc(f.name)}</span> ${f.state === "unknown" ? `<span class="err" title="${esc(f.error || "")}">读不到${f.error ? "：" + esc(f.error) : ""}</span>` : `<span class="muted">${f.count}</span>`}${fleetRepos(f)}`).join("<br>") : (n.fleet_error ? `<span class="err">${esc(n.fleet_error)}</span>` : `<span class="muted">—</span>`)}</td>
       <td>${age(n.age_sec)}</td>
       <td>${n.proto}${n.compatible ? "" : ` <span class="err">不兼容·不派写操作</span>`}</td>
       <td class="mono muted">${esc(n.agent_version)}${n.fleet_version ? " · " + esc(n.fleet_version.slice(0, 7)) : ""}</td>

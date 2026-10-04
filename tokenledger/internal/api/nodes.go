@@ -352,8 +352,9 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 			s.recordFleets(*ep, hb, nc.canRead, now)
 			if s.Spot != nil {
 				// A SPOT node's first beat makes it online; a beat with
-				// sessions restarts its idle clock (claude-fleet#1428).
-				s.Spot.Beat(ep.ID, hb.Sessions, now)
+				// sessions — or an unknown count, #1465 — restarts its
+				// idle clock (claude-fleet#1428).
+				s.Spot.Beat(ep.ID, hb.SessionsCount(), now)
 			}
 			if nc.canRelay {
 				// The worker map, and any relay whose push went
@@ -434,14 +435,18 @@ type NodeView struct {
 	// (claude-fleet#1412): sent | trusted… | failed….
 	SSHCA string `json:"ssh_ca,omitempty"`
 
-	Load1         float64            `json:"load1"`
-	NCPU          int                `json:"ncpu"`
-	MemFreeBytes  uint64             `json:"mem_free_bytes"`
-	MemTotalBytes uint64             `json:"mem_total_bytes"`
-	Sessions      int                `json:"sessions"`
-	Fleets        []NodeFleetSummary `json:"fleets"`
-	FleetError    string             `json:"fleet_error,omitempty"`
-	FleetVersion  string             `json:"fleet_version,omitempty"`
+	Load1         float64 `json:"load1"`
+	NCPU          int     `json:"ncpu"`
+	MemFreeBytes  uint64  `json:"mem_free_bytes"`
+	MemTotalBytes uint64  `json:"mem_total_bytes"`
+	// Sessions is nil when a fleet of this login could not be read
+	// (claude-fleet#1465): its count is unknown, never 0. SessionsUnknown
+	// then names each unreadable fleet and why.
+	Sessions        *int               `json:"sessions"`
+	SessionsUnknown []string           `json:"sessions_unknown,omitempty"`
+	Fleets          []NodeFleetSummary `json:"fleets"`
+	FleetError      string             `json:"fleet_error,omitempty"`
+	FleetVersion    string             `json:"fleet_version,omitempty"`
 
 	// Kind is fixed, or ephemeral for a SPOT node the hub started
 	// (claude-fleet#1428); Spot is that node's ledger state while it lives.
@@ -461,20 +466,25 @@ type NodeFleetSummary struct {
 	Repos   []string `json:"repos,omitempty"` // claude-fleet#1512; absent from an older agent
 	State   string   `json:"state,omitempty"`
 	Count   int      `json:"count"`
+	Error   string   `json:"error,omitempty"` // why a state "unknown" fleet could not be read
 }
 
 // MachineView folds a machine's logins into one row: the operator asks "is m4
 // up", not "is each of m4's six agents up".
 type MachineView struct {
-	Hostname string  `json:"hostname"`
-	Status   string  `json:"status"` // online if any login is; maintenance when flagged
-	Online   int     `json:"logins_online"`
-	Logins   int     `json:"logins"`
-	Sessions int     `json:"sessions"`
-	Load1    float64 `json:"load1"`
-	NCPU     int     `json:"ncpu"`
-	MemFree  uint64  `json:"mem_free_bytes"`
-	MemTotal uint64  `json:"mem_total_bytes"`
+	Hostname string `json:"hostname"`
+	Status   string `json:"status"` // online if any login is; maintenance when flagged
+	Online   int    `json:"logins_online"`
+	Logins   int    `json:"logins"`
+	// Sessions is nil when a heard login's count is unknown
+	// (claude-fleet#1465); SessionsUnknown names those fleets as
+	// "<login>/<fleet>: <why>".
+	Sessions        *int     `json:"sessions"`
+	SessionsUnknown []string `json:"sessions_unknown,omitempty"`
+	Load1           float64  `json:"load1"`
+	NCPU            int      `json:"ncpu"`
+	MemFree         uint64   `json:"mem_free_bytes"`
+	MemTotal        uint64   `json:"mem_total_bytes"`
 	// LastHeartbeat is the newest from any login.
 	LastHeartbeat *time.Time `json:"last_heartbeat"`
 	// Kind is ephemeral when the machine is a SPOT node (claude-fleet#1428).
@@ -563,7 +573,8 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 
 		m := machines[v.Hostname]
 		if m == nil {
-			m = &MachineView{Hostname: v.Hostname, Status: "lost", Kind: v.Kind}
+			zero := 0
+			m = &MachineView{Hostname: v.Hostname, Status: "lost", Kind: v.Kind, Sessions: &zero}
 			machines[v.Hostname] = m
 			order = append(order, v.Hostname)
 		}
@@ -578,7 +589,17 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 		// its logins' word, since the flag is per machine.
 		m.Status, m.Maintenance = v.Status, v.Maintenance
 		m.Online++
-		m.Sessions += v.Sessions
+		// One unreadable login makes the machine's count unknown: a sum
+		// that silently drops it would read a busy machine as idle.
+		for _, u := range v.SessionsUnknown {
+			m.SessionsUnknown = append(m.SessionsUnknown, v.OSUser+"/"+u)
+		}
+		switch {
+		case v.Sessions == nil:
+			m.Sessions = nil
+		case m.Sessions != nil:
+			*m.Sessions += *v.Sessions
+		}
 		// One machine, one load: every login reads the same kernel, so the
 		// newest reading stands for all of them.
 		if m.LastHeartbeat == nil || (v.LastHeartbeat != nil && v.LastHeartbeat.After(*m.LastHeartbeat)) {
@@ -609,9 +630,10 @@ func nodeView(n store.Node, now time.Time) NodeView {
 	if json.Unmarshal([]byte(n.StatusJSON), &hb) == nil {
 		v.Load1, v.NCPU = hb.Load1, hb.NCPU
 		v.MemFreeBytes, v.MemTotalBytes = hb.MemFreeBytes, hb.MemTotalBytes
-		v.Sessions, v.FleetError, v.FleetVersion = hb.Sessions, hb.FleetError, hb.FleetVersion
+		v.Sessions, v.SessionsUnknown = hb.SessionsCount(), hb.UnreadableFleets()
+		v.FleetError, v.FleetVersion = hb.FleetError, hb.FleetVersion
 		for _, f := range hb.Fleets {
-			v.Fleets = append(v.Fleets, NodeFleetSummary{FleetID: f.FleetID, Name: f.Name, Repo: f.Repo, Repos: reportedRepos(f.Repos), State: f.State, Count: f.Count})
+			v.Fleets = append(v.Fleets, NodeFleetSummary{FleetID: f.FleetID, Name: f.Name, Repo: f.Repo, Repos: reportedRepos(f.Repos), State: f.State, Count: f.Count, Error: f.Error})
 		}
 	}
 	return v

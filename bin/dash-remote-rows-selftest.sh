@@ -413,6 +413,8 @@ nodes = [dict(machine_name="mini2.local", availability="online", sessions=12, ob
          dict(machine_name="box8", availability="maintenance", sessions=2, observed_at="2026-10-04T10:06:00Z", age_sec=60)]
 json.dump({"machines": [], "sessions": sessions, "nodes": nodes}, open(path, "w"), ensure_ascii=False)
 json.dump({"machines": [], "sessions": sessions}, open(old, "w"), ensure_ascii=False)   # a hub older than #1475
+unk = [dict(n, sessions=None) if n["machine_name"] == "mini2.local" else n for n in nodes]   # #1465: a fleet there unread
+json.dump({"machines": [], "sessions": sessions, "nodes": unk}, open(path.replace("sessions.json", "sessions-unk.json"), "w"), ensure_ascii=False)
 PY
 export FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'" FLEET_NODE_ALIASES="mini2=m4 box3=m9 box8=m8"
 rm -f "$G/remote_$S"
@@ -453,6 +455,10 @@ FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-old.json'" PATH="$SHIMPATH" bash "$H
 eq   "E: a hub without a nodes list: #node derived from the sessions (newest observation)" \
      "#node${US}m4${US}online${US}7$US$(ep 2026-10-04T10:05:00Z)${US}hub;" \
      "$(LC_ALL=C awk -F"$US" '$1 == "#node" { printf "%s;", $0 }' "$G/remote_$S")"
+FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-unk.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "E: --refresh (unknown count) failed"
+eq   "E: the hub's sessions null (a fleet it could not read, #1465) → that #node's count is ?, never the rows held" \
+     "#node${US}m4${US}online${US}?$US$(ep 2026-10-04T10:07:00Z)${US}hub;" \
+     "$(LC_ALL=C awk -F"$US" '$1 == "#node" && $2 == "m4" { printf "%s;", $0 }' "$G/remote_$S")"
 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null; R=$(cat "$G/remote_$S")
 OK=$(cat "$G/hub_ok" 2>/dev/null)
 case "$OK" in

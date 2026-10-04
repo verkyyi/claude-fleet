@@ -109,7 +109,8 @@ nodes "$NOW" "$(j m5 online 5.65 15 56 14 1607453 3 37035 65536)" \
              "$(j m4 online 1.57 10 25 0 1607453c45 5 4142 16384)" \
              "$(j m8 online 9.00 10 90 2 abc 1 14746 16384)" \
              "$(j m9 lost 0.00 4 10 0 '' 4000 400 4096)" \
-             "$(j m6 online 1.00 0 '' 0 '' 1 '' '')"
+             "$(j m6 online 1.00 0 '' 0 '' 1 '' '')" \
+             "$(j m3 online 1.00 10 25 '?' abc 1 4096 16384)"
 { printf '#ts%s%s\n' "$US" "$NOW"; printf '%s\n' "$(j icloud 63 65 7a7e ylianghui@icloud.com)" "$(j gmail 41 13 e58c verky.yi@gmail.com)" "$(j ly297 90 72 5a77 ly297@georgetown.edu)"; } > "$G/hub_limits"
 printf 'FLEET_SIDEBAR_SOURCE=hub   # per fleet\n' > "$CONF/fleets/f1/conf"
 LOCAL='sess=f1 win=@1 remote= acct=icloud wsf= wscf= wsaved='
@@ -158,6 +159,10 @@ out=$(bar sess=f1 win=@3 remote=m8:u/x acct= wsf= wscf= wsaved=)
 has "C: a busy machine → 负载 red, 内存 red (the machine bands)" "负载 #[fg=#f7768e]0.9 #[fg=#565f89]· 内存 #[fg=#f7768e]90% " "$out"
 out=$(bar sess=f1 win=@3 remote=m6:u/x acct= wsf= wscf= wsaved=)
 has "C: a row with no cores / no memory → –, never a crash" "负载 #[fg=#565f89]– #[fg=#565f89]· 内存 #[fg=#565f89]– " "$out"
+
+out=$(bar sess=f1 win=@3 remote=m3:u/x acct= wsf= wscf= wsaved=)
+has "C: the hub could not count m3's sessions (#1465) → · 会话 ?, never an idle-looking machine" "#[fg=#e0af68]· 会话 ? " "$out"
+hasnt "C: a machine with a count (m4, 0 sessions) says nothing of sessions" "会话" "$(bar sess=f1 win=@2 remote=m4:u/issue-9 acct= wsf= wscf= wsaved=)"
 
 # ---- D: lost / unknown
 out=$(bar sess=f1 win=@3 remote=m9:u/x acct= wsf= wscf= wsaved=)
@@ -242,6 +247,7 @@ cat > "$WORK/nodes.json" <<EOF
 {"at":"x","machines":[
  {"hostname":"macmini","status":"online","sessions":14,"load1":5.65234375,"ncpu":15,"mem_free_bytes":29886201856,"mem_total_bytes":68719476736,"last_heartbeat":"$HB"},
  {"hostname":"mini2","status":"lost","sessions":0,"load1":0,"ncpu":10,"mem_free_bytes":0,"mem_total_bytes":0,"last_heartbeat":null},
+ {"hostname":"box3","status":"online","sessions":null,"sessions_unknown":["u/f: UNAVAILABLE"],"load1":1,"ncpu":10,"mem_free_bytes":0,"mem_total_bytes":0,"last_heartbeat":"$HB"},
  {"hostname":"","status":"online"}],
  "nodes":[
  {"hostname":"macmini","os_user":"a","fleet_version":"old","last_heartbeat":"2026-10-04T13:15:20Z"},
@@ -281,7 +287,8 @@ case "$row" in 'm5|online|5.65|15|56|14|1607453c45|'[0-9]|'m5|online|5.65|15|56|
   *) fail "G: m5's row: alias, mem %, the newest login's version, a small age" "$row" ;; esac
 has "G: m5's memory in MB" "|37034|65536" "$(printf '%s\n' "$rows" | grep '^m5|')"
 eq "G: a lost machine with no reading: empty mem %, no version, no age" "m4|lost|0.00|10||0|||0|0" "$(printf '%s\n' "$rows" | grep '^m4|')"
-eq "G: a machine with no hostname is not a row" "3" "$(printf '%s\n' "$rows" | grep -c .)"
+has "G: sessions null (#1465) → ? in the sessions field, never 0" "box3|online|1.00|10||?|" "$(printf '%s\n' "$rows" | grep '^box3|')"
+eq "G: a machine with no hostname is not a row" "4" "$(printf '%s\n' "$rows" | grep -c .)"
 lrows=$(tr '\037' '|' < "$G/hub_limits")
 has "G: a uuid this login has an accounts/<label>.conf for → that label; 65.4 → 65" "icloud|63|65|7a7e6173-f07c-490f-844e-00c27c3f0844|ylianghui@icloud.com" "$lrows"
 has "G: an unmapped uuid → the hub's label" "verky@24helpful.com|17|6|e69154ac|verky@24helpful.com" "$lrows"
