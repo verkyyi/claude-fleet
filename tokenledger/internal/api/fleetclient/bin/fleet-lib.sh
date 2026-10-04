@@ -387,6 +387,21 @@ fleet_current_session() {
   printf '%s' "$s"
 }
 
+# _fleet_conf_sans_global <conf> → the conf's text minus every line assigning a
+# $_FLEET_GLOBAL_ONLY key (`[export ]KEY=`), for the callers to eval. ONE awk that
+# takes the space-separated list as it is (issue #1530): the `grep -Ev` it replaces
+# needed the list joined with `|`, and `${_FLEET_GLOBAL_ONLY// /|}` — a pattern
+# substitution over ~3.7 KB — cost ~95 ms per call on macOS's bash 3.2 under a
+# UTF-8 locale (13 ms under C), on every conf load of every hot path.
+_fleet_conf_sans_global() {
+  awk -v g=" $_FLEET_GLOBAL_ONLY " '{
+    k = $0; sub(/^[ \t]*/, "", k)
+    if (k ~ /^export[ \t]/) sub(/^export[ \t]+/, "", k)
+    if (match(k, /^[A-Za-z0-9_]+=/) && index(g, " " substr(k, 1, RLENGTH - 1) " ")) next
+    print
+  }' "$1"
+}
+
 # Overlay a fleet's per-session conf ON TOP of the already-sourced global
 # fleet.conf, so FLEET_REPO/FLEET_MAIN/FLEET_BASE_BRANCH/... target THIS fleet.
 # Sources into the caller's shell (call it non-subshelled). No-op if absent.
@@ -407,8 +422,7 @@ fleet_load_conf() {
   # substitution, as the dispatch/watch subshell-capture paths do). Confs are
   # trusted assignments-only content, so eval-ing the filtered text is exactly what
   # sourcing would do, minus the stripped keys.
-  local _ore="${_FLEET_GLOBAL_ONLY// /|}"   # space → `|`, no `tr` fork (#888)
-  eval "$(grep -Ev "^[[:space:]]*(export[[:space:]]+)?(${_ore})=" "$conf")"
+  eval "$(_fleet_conf_sans_global "$conf")"
   # Window-aware (issue #788): inside a pane of THIS fleet whose window belongs to a
   # hosted repo, that repo's overlay goes on top — so every in-pane consumer (hooks,
   # commands/*.md, the launcher, the claim brief) sees its own repo's MAIN/base/model
@@ -559,7 +573,7 @@ fleet_window_repo() {
 # and the conf repo's scoped keys are dropped first so they cannot leak across.
 # Returns 1 (env untouched) when <repo> is not hosted.
 _fleet_repo_overlay() {
-  local want f _ore
+  local want f
   want=$(fleet_norm_repo "${2:-}"); [ -n "$want" ] || return 1
   f=$(fleet_repo_conf_file "$1" "$want")
   if [ "$(fleet_norm_repo "${FLEET_REPO:-}")" != "$want" ]; then
@@ -567,8 +581,7 @@ _fleet_repo_overlay() {
     eval "unset $_FLEET_REPO_SCOPED"
   fi
   [ -f "$f" ] || return 0
-  _ore="${_FLEET_GLOBAL_ONLY// /|}"   # no `tr` fork: pr-refresh loads per repo (#888/#805)
-  eval "$(grep -Ev "^[[:space:]]*(export[[:space:]]+)?(${_ore})=" "$f")"
+  eval "$(_fleet_conf_sans_global "$f")"
   return 0
 }
 
@@ -576,15 +589,14 @@ _fleet_repo_overlay() {
 # rather than the caller's window: the fleet conf, then <repo>'s overlay. Returns 1
 # when the fleet does not host <repo> (the fleet conf is still loaded).
 fleet_load_repo_conf() {
-  local conf _ore; conf=$(fleet_conf_file "${1:-}")
+  local conf; conf=$(fleet_conf_file "${1:-}")
   # A multi-repo fleet first puts the per-repo keys back to what they were before
   # ANY conf was loaded (issue #978): else, in a shell that already applied repo B's
   # overlay (a pane of B spawning for A), a key A's overlay leaves unset would keep
   # B's value instead of falling back to the fleet's. One-repo fleet: untouched.
   fleet_has_repo_overlays "${1:-}" && _fleet_repo_keys_reset
   if [ -f "$conf" ]; then
-    _ore="${_FLEET_GLOBAL_ONLY// /|}"   # no `tr` fork: pr-refresh loads per repo (#888/#805)
-    eval "$(grep -Ev "^[[:space:]]*(export[[:space:]]+)?(${_ore})=" "$conf")"
+    eval "$(_fleet_conf_sans_global "$conf")"
   fi
   _fleet_repo_overlay "${1:-}" "${2:-}"
 }

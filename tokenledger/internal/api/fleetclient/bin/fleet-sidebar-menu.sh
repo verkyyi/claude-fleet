@@ -240,7 +240,10 @@ side=$(tmux list-panes -t "$sess:" -F '#{pane_id} #{@sidebar}' 2>/dev/null | awk
 ctx="FLEET_SESSION=$(sq "$sess") TMUX_PANE=$(sq "${side:-}")"
 [ -n "${FLEET_CONF_DIR:-}" ] && ctx="$ctx FLEET_CONF_DIR=$(sq "$FLEET_CONF_DIR")"
 [ -n "${FLEET_UI_LANG:-}" ] && ctx="$ctx FLEET_UI_LANG=$(sq "$FLEET_UI_LANG")"
-sh_run() { printf 'run-shell -b %s' "$(sq "$ctx $1 >/dev/null 2>&1 || :")"; }
+# Once the action is done, F11 wakes the view to read the rows at once (issue
+# #1530) — a pin, a wake, a reap shows in the next frame, not after the 1 s tick.
+wake=''; [ -n "$side" ] && wake="; tmux send-keys -t $side F11 >/dev/null 2>&1"
+sh_run() { printf 'run-shell -b %s' "$(sq "$ctx $1 >/dev/null 2>&1$wake || :")"; }
 
 items=()
 add() { items+=("$1" "$2" "$3"); }   # name key command
