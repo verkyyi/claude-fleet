@@ -11,6 +11,7 @@ per-client pointer, so the window's active pane is still the worker.
 """
 import codecs
 import curses
+import errno
 import fcntl
 import os
 from pathlib import Path
@@ -25,7 +26,7 @@ import unicodedata
 
 BIN = Path(__file__).absolute().parent  # preserve the selftest shadow root
 US = "\x1f"
-VIEW_VERSION = "22"  # #1530: ←/→ fold at once, a stale producer frame is dropped, F11 wakes
+VIEW_VERSION = "23"  # #1536: never blank, never frozen — 刷新中…, popup pid, lock wait, watchdog
 # ↑↓ follow (issue #822): an arrow moves the highlight at once and switches to
 # it only after this much quiet. A held key on a slow link is one switch, not
 # one per row, and a row passed over is never selected — so the wake hook's
@@ -37,6 +38,22 @@ FOLLOW_SECS = 0.12
 # often while it runs, and kills one that hangs.
 PRODUCER_POLL = 0.05
 PRODUCER_TIMEOUT = 10
+# Never blank, never frozen (issue #1536). The FIRST frame waits this long for
+# real rows, then paints 「刷新中…」 over an empty list instead of a blank pane.
+FIRST_WAIT = 1.0
+# A painted frame older than this (counted from when the view last became
+# visible) gets the 「刷新中…」 top row: the last good rows stay, and the row says
+# what the view is waiting for.
+STALE_SECS = 3
+# The watchdog: every WATCHDOG_SECS it checks the frame's age, and past
+# STALL_SECS writes one line to logs/sidebar-stall.log and restarts the producer.
+WATCHDOG_SECS = 60
+STALL_SECS = 5
+# A jump waits at most this long for the view lock (a hook sync holds it), then
+# gives up for now: the list keeps painting what was pressed, and the jump is
+# retried after LOCK_RETRY.
+LOCK_WAIT = 0.5
+LOCK_RETRY = 0.25
 # The input line (issue #896): a refused spawn's reason stays this long, then
 # the typed name — which is kept — shows again.
 TOAST_SECS = 4
@@ -290,7 +307,25 @@ def send_key(session, key):
             return
 
 
+def lock_within(handle, wait):
+    """flock(LOCK_EX) for at most `wait` seconds (issue #1536): a hook sync holding
+    the lock must never freeze the list a keypress is waiting on."""
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError as error:
+            if error.errno not in (errno.EAGAIN, errno.EACCES, errno.EWOULDBLOCK):
+                raise
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.02)
+
+
 def jump(session, window, pane, lock):
+    """Switch to `window`. False only when the view lock stayed busy past
+    LOCK_WAIT — the caller paints what was pressed and retries."""
     # Another machine's row (`wid:<worker_id>`, #1423): step in through a proxy
     # window (fleet-remote-view.sh, issue #1424), which `open` creates or
     # retargets and prints — then land in it exactly as in a local task window
@@ -307,9 +342,10 @@ def jump(session, window, pane, lock):
         window = out.stdout.strip().split("\n")[-1] if out.returncode == 0 else ""
     # Never resolve a stale row through a recycled index, or another fleet.
     if not window.startswith("@") or fields(window, "#{?#{session_group},#{session_group},#{session_name}}") != [session]:
-        return
+        return True
     with open(lock, "w") as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX)
+        if not lock_within(handle, env_float("FLEET_SIDEBAR_LOCK_WAIT", LOCK_WAIT)):
+            return False
         workers = [p for p in panes(session) if p[1] == window and p[2] != "1" and p[4] != "1"]
         if workers:
             worker = next((p[0] for p in workers if p[3] == "1"), workers[0][0])
@@ -317,8 +353,9 @@ def jump(session, window, pane, lock):
             if width.isdigit() and move_view(pane, worker, int(width), select=True):
                 # join-pane forgot the client's pin on the moved view (#1105).
                 pin_view(session)
-                return
+                return True
             tmux("select-window", "-t", window, ";", "select-pane", "-t", worker)
+    return True
 
 
 def clip(text, width):
@@ -929,7 +966,7 @@ def start_rows(env):
     proc = subprocess.Popen(["bash", str(BIN / "tmux-dashboard-rows.sh"), "--sidebar"],
                             env=dict(env), stdin=subprocess.DEVNULL, stdout=out,
                             stderr=subprocess.DEVNULL, text=True)
-    proc.out, proc.started, proc.stale = out, time.monotonic(), False
+    proc.out, proc.started, proc.stale, proc.failure = out, time.monotonic(), False, ""
     proc.current = env["FLEET_SIDEBAR_CURRENT"]
     return proc
 
@@ -941,10 +978,13 @@ def collect_rows(proc):
             return None
         proc.kill()
         proc.wait()
+        proc.failure = "producer hung %ds, killed" % PRODUCER_TIMEOUT
     proc.out.seek(0)
     text = proc.out.read()
     proc.out.close()
     if proc.returncode != 0:
+        if not getattr(proc, "failure", ""):
+            proc.failure = "producer exit %d" % proc.returncode
         return None
     return [row_fields(line) for line in text.split("\n") if line.count(US) >= 4]
 
@@ -967,6 +1007,13 @@ def row_fields(line):
 def env_int(name, default):
     try:
         return int(os.environ.get(name) or default)
+    except ValueError:
+        return default
+
+
+def env_float(name, default):
+    try:
+        return float(os.environ.get(name) or default)
     except ValueError:
         return default
 
@@ -1026,15 +1073,39 @@ def fit_view(session, pane, rows, sized):
     return (int(got) if got.isdigit() else sized[0],) + sized[1:]
 
 
-def visible(info, now):
-    if len(info) != 4:
-        return False
-    active, zoomed, attached, popup = info
-    # Same bounded popup pause as the hub. A stale flag cannot freeze the list.
+def alive(pid):
     try:
-        modal = 0 <= now - int(popup) < 30
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True  # EPERM: it exists, under another uid
+    return True
+
+
+def popup_up(popup, holder, now):
+    """Is a popup over the client (the @popup_open epoch)? Event-driven where it
+    can be (issue #1536): dash-popup.sh stamps `@popup_pid <epoch>:<pid>`, and a
+    holder that is gone — closed, or SIGKILLed past its trap — ends the pause at
+    once. A flag with no holder of ITS epoch (a prefix bind's popup) keeps the
+    old 30-second bound, so a stale flag still cannot freeze the list."""
+    try:
+        age = now - int(popup)
     except ValueError:
-        modal = False
+        return False
+    if not 0 <= age < 30:
+        return False
+    epoch, _, pid = holder.partition(":")
+    if epoch == popup and pid.isdigit():
+        return alive(int(pid))
+    return True
+
+
+def visible(info, now):
+    if len(info) not in (4, 5):
+        return False
+    active, zoomed, attached, popup = info[:4]
+    modal = popup_up(popup, info[4] if len(info) == 5 else "", now)
     return active == "1" and zoomed != "1" and attached != "0" and not modal
 
 
@@ -1089,6 +1160,18 @@ def shown_row(window, remote):
     return "wid:" + remote.split(":", 1)[1] if ":" in remote else window
 
 
+def stall_log(session, pane, reason, result):
+    """One line per stall (issue #1536): time · view · why · what self-heal did."""
+    path = Path(os.environ.get("FLEET_SIDEBAR_STALL_LOG") or BIN.parent / "logs" / "sidebar-stall.log")
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a") as log:
+            log.write("%s · %s %s · %s · %s\n" % (stamp, session, pane, reason, result))
+    except OSError:
+        pass
+
+
 def ui(screen, session, worker, lock):
     pane = os.environ["TMUX_PANE"]
     window, remote = (fields(worker, US.join(("#{window_id}", "#{@remote}"))) + ["", ""])[:2]
@@ -1139,6 +1222,12 @@ def ui(screen, session, worker, lock):
     # open — no producer starts until the toggle has written, so the next frame
     # is the first one read after it.
     folding, fold_cache = None, {}
+    # Never blank, never frozen (issue #1536): when the painted rows landed, when
+    # the view last became visible (a hidden view's frame does not age), why the
+    # last refresh gave nothing, whether one empty frame was held back, the
+    # watchdog's next check, and whether this stall is already logged.
+    frame_at, shown_at, failure, empty_held, stalled = None, None, "", False, False
+    watch_at = time.monotonic() + env_float("FLEET_SIDEBAR_WATCHDOG_SECS", WATCHDOG_SECS)
     while True:
         now = time.monotonic()
         if folding is not None and folding.poll() is not None:
@@ -1146,6 +1235,7 @@ def ui(screen, session, worker, lock):
         if producer is not None and (producer.poll() is not None or
                                      now - producer.started >= PRODUCER_TIMEOUT):
             fresh, current, stale = collect_rows(producer), producer.current, producer.stale
+            failure = producer.failure if fresh is None else failure
             producer = None
             if stale and loaded:
                 # Started before something this view did (a fold, a jump, a menu
@@ -1155,8 +1245,13 @@ def ui(screen, session, worker, lock):
                 # Read against a window this view has since left: its fold
                 # exemptions are for the wrong row. Drop it, read again now.
                 refresh_at = 0
+            elif fresh is not None and not fresh and rows and not empty_held:
+                # An empty frame never blanks a painted list on its own (issue
+                # #1536): a producer that caught tmux mid-change can print
+                # nothing. Keep the rows; the next run, at once, decides.
+                empty_held, failure, refresh_at = True, "empty frame", 0
             elif fresh is not None:
-                rows, loaded = fresh, True
+                rows, loaded, frame_at, failure, empty_held, stalled = fresh, True, now, "", False, False
                 remember_folds(rows, fold_cache)
                 # Publish the close-landing candidates for THIS window (issue
                 # #900) — only on change, so an idle view forks nothing extra.
@@ -1192,54 +1287,102 @@ def ui(screen, session, worker, lock):
             # Enter/Escape (whose binds do not re-enter) still hand input back.
             follow_at = None
             if acts(selected) and selected != window:
-                jump(session, selected, pane, lock)
-                refresh_at = 0
-                continue
-        if now >= refresh_at:
-            if refresh_at == 0 and producer is not None:
-                # Asked for NOW while a run is in flight (issue #1530): that run
-                # read the state before the ask — drop it when it lands and start
-                # one at once, rather than paint it and wait a whole tick.
-                producer.stale = True
-            refresh_at = now + 1
-            info = fields(pane, US.join(("#{window_active}", "#{window_zoomed_flag}",
-                                         "#{session_attached}", "#{@popup_open}",
-                                         "#{window_id}", "#{@sidebar_worker}",
-                                         "#{client_key_table}", "#{@remote}")))
-            if len(info) != 8:
-                return
-            # The pane (and curses grid) survives navigation. Follow its new
-            # worker before testing liveness or building current-row exemptions.
-            if info[4] != window:
-                window = info[4]
-                current_row = shown_row(window, info[7])
-                selected = current_row
-                env["FLEET_SIDEBAR_CURRENT"] = window
-            worker = info[5] or worker
-            navigation = info[6] == "fleet-sidebar"
-            route_input(session)
-            # kill-pane does not emit pane-exited on every supported tmux.
-            # Never let this view keep an otherwise closed worker window alive.
-            if fields(worker, "#{pane_dead}") != ["0"]:
-                return
-            shown = visible(info[:4], time.time())
-            if shown and loaded:
-                sized = fit_view(session, pane, rows, sized)
-            if shown and producer is None and folding is None:
-                producer = start_rows(env)
-                if not loaded:
-                    # The first frame waits for real rows rather than flash an
-                    # empty list; input has nothing to act on before it anyway.
-                    try:
-                        producer.wait(timeout=PRODUCER_TIMEOUT)
-                    except subprocess.TimeoutExpired:
-                        pass
+                if jump(session, selected, pane, lock):
+                    refresh_at = 0
                     continue
+                # The lock is busy (issue #1536): keep painting the highlight,
+                # try the switch again shortly.
+                follow_at = time.monotonic() + LOCK_RETRY
+        if now >= refresh_at:
+            try:
+                if refresh_at == 0 and producer is not None:
+                    # Asked for NOW while a run is in flight (issue #1530): that run
+                    # read the state before the ask — drop it when it lands and start
+                    # one at once, rather than paint it and wait a whole tick.
+                    producer.stale = True
+                refresh_at = now + 1
+                info = fields(pane, US.join(("#{window_active}", "#{window_zoomed_flag}",
+                                             "#{session_attached}", "#{@popup_open}",
+                                             "#{window_id}", "#{@sidebar_worker}",
+                                             "#{client_key_table}", "#{@remote}",
+                                             "#{@popup_pid}")))
+                if len(info) != 9:
+                    return
+                # The pane (and curses grid) survives navigation. Follow its new
+                # worker before testing liveness or building current-row exemptions.
+                if info[4] != window:
+                    window = info[4]
+                    current_row = shown_row(window, info[7])
+                    selected = current_row
+                    env["FLEET_SIDEBAR_CURRENT"] = window
+                worker = info[5] or worker
+                navigation = info[6] == "fleet-sidebar"
+                route_input(session)
+                # kill-pane does not emit pane-exited on every supported tmux.
+                # Never let this view keep an otherwise closed worker window alive.
+                if fields(worker, "#{pane_dead}") != ["0"]:
+                    return
+                shown = visible(info[:4] + info[8:], time.time())
+                if not shown and info[3] not in ("", "0"):
+                    # Under a popup: look again soon, so its close repaints the
+                    # list within a second (issue #1536), not at the next tick.
+                    refresh_at = now + 0.25
+                if shown and loaded:
+                    sized = fit_view(session, pane, rows, sized)
+                if shown and producer is None and folding is None:
+                    producer = start_rows(env)
+                    if not loaded:
+                        # The first frame waits briefly for real rows rather than
+                        # flash an empty list — but never a blank pane for the
+                        # producer's whole timeout (issue #1536): past FIRST_WAIT
+                        # it paints 「刷新中…」 and keeps polling.
+                        try:
+                            producer.wait(timeout=FIRST_WAIT)
+                            continue
+                        except subprocess.TimeoutExpired:
+                            pass
+            except subprocess.TimeoutExpired:
+                # A tmux call past run()'s 10s bound (issue #1536) used to end this
+                # view — a blank strip until the next hook sync. Paint the rows we
+                # have and try again next tick; the watchdog logs it if it lasts.
+                failure, refresh_at = "tmux call timed out", time.monotonic() + 1
         if not shown:
             follow_at = None  # a hidden view never switches windows
-            screen.timeout(1000)
+            shown_at = None   # nor does its frame age
+            screen.timeout(max(1, min(1000, int((refresh_at - time.monotonic()) * 1000))))
             screen.getch()
             continue
+        if shown_at is None:
+            shown_at = now
+        age = now - max(frame_at or shown_at, shown_at)
+        if now >= watch_at:
+            # The watchdog (issue #1536): a frame older than STALL_SECS is a stall.
+            # Log it — once per stall, however many checks it lasts — then heal:
+            # kill whatever holds the next frame back, start a fresh producer now.
+            watch_at = now + env_float("FLEET_SIDEBAR_WATCHDOG_SECS", WATCHDOG_SECS)
+            if age > env_float("FLEET_SIDEBAR_STALL_SECS", STALL_SECS):
+                if producer is not None:
+                    reason = "producer running %.0fs" % (now - producer.started)
+                elif folding is not None:
+                    reason = "fold write running"
+                else:
+                    reason = failure or ("no frame yet" if not loaded else "no refresh")
+                healed = []
+                for proc in (producer, folding):
+                    if proc is not None and proc.poll() is None:
+                        proc.kill()
+                        proc.wait()
+                if producer is not None:
+                    producer.out.close()
+                    healed.append("producer killed")
+                if folding is not None:
+                    healed.append("fold write killed")
+                producer, folding, refresh_at = None, None, 0
+                if not stalled:
+                    stall_log(session, pane, "%s, frame %.0fs old" % (reason, age),
+                              ", ".join(healed + ["producer restarted"]))
+                stalled = True
+                continue
         height, width = screen.getmaxyx()
         # A repo group heading (issue #974) is inert to every action: `hdr` in the
         # id field. One with a spawn target is a cursor stop since #997 — ↑/↓ land
@@ -1258,7 +1401,11 @@ def ui(screen, session, worker, lock):
         # The `? 快捷键` row sits above the input line whenever a task row
         # still fits above it; the list loses that one row.
         help_y = height - 2 if height >= 3 else None
-        page = max(1, height - (1 if help_y is None else 2))
+        # The 「刷新中…」 row (issue #1536): the list waits on a frame that has not
+        # come — the first, or one past STALE_SECS. The rows it has stay painted
+        # one row lower; the top row says what the view is waiting for.
+        waiting = 1 if height >= 4 and (not loaded or age > STALE_SECS) else 0
+        page = max(1, height - waiting - (1 if help_y is None else 2))
         offset = max(0, min(offset, max(0, len(rows) - page)))
         if index == 0:
             where = 0  # the top row keeps the heading above it in view
@@ -1277,8 +1424,10 @@ def ui(screen, session, worker, lock):
                     pass  # a resize may race this paint
 
         screen.erase()
+        if waiting:
+            put(0, tr("sidebar_refreshing"), curses.A_DIM)
         colors = {"working": 1, "needs": 2, "done": 3, "looping": 4}
-        for y, (wid, state, glyph, label, tree, badge, _depth, _detail, node) in enumerate(rows[offset:offset + page]):
+        for y, (wid, state, glyph, label, tree, badge, _depth, _detail, node) in enumerate(rows[offset:offset + page], waiting):
             if wid == "hdr":
                 if navigation and key_of((wid, state)) == selected:
                     put(y, "› " + label, curses.color_pair(6) | curses.A_BOLD, fill=True)
@@ -1462,8 +1611,8 @@ def ui(screen, session, worker, lock):
             # session since, a switch back to the row it was read against would
             # yank the operator — with nothing to jump to, Enter only hands over.
             follow_at = None
-            if acts(selected) and selected != window:
-                jump(session, selected, pane, lock)
+            if acts(selected) and selected != window and not jump(session, selected, pane, lock):
+                follow_at = time.monotonic() + LOCK_RETRY  # lock busy: retried (#1536)
             refresh_at = 0
         elif key in (curses.KEY_LEFT, curses.KEY_RIGHT) and folds(selected):
             # A session row folds its subtree; a repo heading its whole group
@@ -1513,7 +1662,8 @@ def ui(screen, session, worker, lock):
                 _, _, y, _, buttons = curses.getmouse()
             except curses.error:
                 continue
-            hit = key_of(rows[offset + y]) if 0 <= y < page and offset + y < len(rows) else None
+            ry = y - waiting  # below the 「刷新中…」 row when it shows (issue #1536)
+            hit = key_of(rows[offset + ry]) if 0 <= ry < page and offset + ry < len(rows) else None
             # `selected`, not the painted cue: a fast double tap lands its second
             # press before the next refresh repaints the first one's switch.
             action = tap(hit, selected)
@@ -1547,7 +1697,8 @@ def ui(screen, session, worker, lock):
                     selected = hit
                 elif action == "jump":
                     selected = hit
-                    jump(session, selected, pane, lock)
+                    if not jump(session, selected, pane, lock):
+                        follow_at = time.monotonic() + LOCK_RETRY  # lock busy (#1536)
                 # Anywhere else (the input line included) the click only focuses:
                 # the bind already moved the keyboard here, so typing follows.
             elif buttons & curses.BUTTON1_RELEASED:
