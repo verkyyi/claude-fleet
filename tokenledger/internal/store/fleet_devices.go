@@ -177,6 +177,12 @@ func (s *Store) TouchDevice(fingerprint string, at time.Time, machine string, re
 	return err
 }
 
+// SetDeviceName keeps the device's newest self-reported name.
+func (s *Store) SetDeviceName(fingerprint, name string) error {
+	_, err := s.write.Exec(`UPDATE fleet_devices SET name = ? WHERE fingerprint = ?`, name, fingerprint)
+	return err
+}
+
 // RevokeDevice stops a device renewing. False when it is unknown or already
 // revoked — nothing changed.
 func (s *Store) RevokeDevice(fingerprint, by string, at time.Time) (bool, error) {

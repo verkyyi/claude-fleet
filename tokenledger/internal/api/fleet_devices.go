@@ -182,9 +182,7 @@ func (s *Server) handleDeviceRenew(w http.ResponseWriter, r *http.Request) {
 	}
 	if name := cleanDeviceName(req.DeviceName); name != "" && name != dev.Name {
 		// The device's name is its own word; keep the newest.
-		_, _ = s.Store.RegisterDevice(store.FleetDevice{Fingerprint: fp, PrincipalID: dev.PrincipalID,
-			PublicKey: strings.TrimSpace(req.PublicKey), Name: name}, dev.RegisteredAt)
-		_ = s.Store.TouchDevice(fp, now, "", false)
+		_ = s.Store.SetDeviceName(fp, name)
 	}
 	s.deviceAudit(store.DeviceRenew, fp, dev.PrincipalID, dev.PrincipalID,
 		"serial "+resp.Serial+", until "+resp.ValidBefore.UTC().Format(time.RFC3339), now)
