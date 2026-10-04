@@ -55,6 +55,9 @@ func (s *Store) EnsureNodes() error {
 	if _, err := s.write.Exec(fleetSchema); err != nil {
 		return fmt.Errorf("create fleet registry tables: %w", err)
 	}
+	if err := s.ensureFleetColumns(); err != nil {
+		return err
+	}
 	return s.ensureFleetAccounts()
 }
 

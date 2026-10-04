@@ -1,5 +1,8 @@
 // Package mcp exposes the hub's data to agents over the Model Context
-// Protocol, read-only.
+// Protocol, read-only — except the fleet module's tools (CCQUOTA_FLEET=1),
+// which are that "separate, separately authorised service": the Fleet Hub's
+// journalled writes, checked against the caller's grant on every call
+// (claude-fleet#1410). A hub without the module lists none of them.
 //
 // Read-only is a design decision, not a limitation. A monitor that can also
 // pause endpoints or change quotas needs a control channel back to every
@@ -1373,7 +1376,7 @@ func parseWhen(s string, now time.Time) (time.Time, bool) {
 
 // --- fleet (CCQUOTA_FLEET=1 only) ---------------------------------------
 
-// fleetCaveat rides every fleet tool: what the answer is made of, and whose.
+// fleetCaveat rides every fleet read tool: what the answer is made of, and whose.
 const fleetCaveat = " Read-only. Scoped to the caller: the shared viewer token and fleet " +
 	"admins see every machine, any other viewer only the logins granted to them. IDs are " +
 	"claude-fleet's own (fleet UUID derived from the machine; worker_id = <fleet UUID>/[<repo>:]issue-N " +
@@ -1381,7 +1384,28 @@ const fleetCaveat = " Read-only. Scoped to the caller: the shared viewer token a
 	"control channel went quiet is reported as availability=lost with its last-seen windows, " +
 	"never as idle."
 
+// fleetWriteCaveat rides every fleet write tool: the journal's promise, and
+// what it is not.
+const fleetWriteCaveat = " A WRITE: journalled on the hub and on the machine before it runs, and " +
+	"returns an operation_id — submission is not proof it happened; read operation_get until " +
+	"status is succeeded or failed. Repeating the same idempotency_key with the same arguments " +
+	"returns the first operation (never a second side effect); the same key with different " +
+	"arguments is IDEMPOTENCY_CONFLICT. status=unknown means the outcome could not be " +
+	"confirmed — it is NEVER retried for you; inspect before sending a new key. A machine that " +
+	"is not connected is refused at once (UNAVAILABLE): nothing is queued. Checked against the " +
+	"caller's grant (scope per tool) and only on the caller's own logins."
+
 var fleetIDProp = map[string]any{"type": "string", "description": "Fleet UUID, from fleet_list."}
+
+var idemProp = map[string]any{"type": "string", "description": "1–128 of [A-Za-z0-9_.:-], unique per intended operation. Reuse it to retry safely."}
+
+var workerIDProp = map[string]any{"type": "string", "description": "Durable worker_id from fleet_status / fleet_sessions: <fleet UUID>/[<repo>:]issue-N or scratch-N. Never a window id."}
+
+var fleetRepoProp = map[string]any{"type": "string", "description": "owner/name (or a hosted repo's name)."}
+
+var numberProp = map[string]any{"type": "integer", "minimum": 1}
+
+var ghFieldsProp = map[string]any{"type": "string", "description": "Comma-separated gh --json field names (optional)."}
 
 // fleetToolSpecs are listed only when the hub runs the fleet module, so a hub
 // without it advertises exactly the tools it always did.
@@ -1421,9 +1445,90 @@ func fleetToolSpecs() []toolSpec {
 			Name:  "operation_get",
 			Title: "One fleet operation",
 			Description: "An operation from the hub's journal, reconciled with its machine when it has not " +
-				"finished; status=unknown when that machine cannot be asked — never retried." + fleetCaveat,
+				"finished; status=unknown when that machine cannot be asked — never retried. A placed " +
+				"worker_start carries `placement`: the machine chosen and every candidate's verdict." + fleetCaveat,
 			InputSchema: obj(map[string]any{"operation_id": map[string]any{"type": "string",
 				"description": "Operation UUID returned by the write that started it."}}, "operation_id"),
+		},
+		{
+			Name:  "gh_issue_view",
+			Title: "One GitHub issue, via a fleet",
+			Description: "One issue through the fleet machine's fleet-gh.sh: its daemons' local copy when " +
+				"fresh, else gh, else REST — gh --json fields plus _source (cache|gh|rest) and _age. Needs gh:read." + fleetCaveat,
+			InputSchema: obj(map[string]any{"fleet_id": fleetIDProp, "number": numberProp, "repo": fleetRepoProp, "fields": ghFieldsProp}, "fleet_id", "number"),
+		},
+		{
+			Name:        "gh_pr_view",
+			Title:       "One pull request, via a fleet",
+			Description: "One PR, same path and shape as gh_issue_view. Needs gh:read." + fleetCaveat,
+			InputSchema: obj(map[string]any{"fleet_id": fleetIDProp, "number": numberProp, "repo": fleetRepoProp, "fields": ghFieldsProp}, "fleet_id", "number"),
+		},
+		{
+			Name:        "gh_pr_checks",
+			Title:       "A pull request's CI, via a fleet",
+			Description: "A PR's CI rollup bucket; fields (e.g. name,state) adds per-check rows. Needs gh:read." + fleetCaveat,
+			InputSchema: obj(map[string]any{"fleet_id": fleetIDProp, "number": numberProp, "repo": fleetRepoProp, "fields": ghFieldsProp}, "fleet_id", "number"),
+		},
+		{
+			Name:  "worker_start",
+			Title: "Start a worker on an issue",
+			Description: "Start an existing issue through the fleet's headless launcher (its caps and claim " +
+				"checks apply). Give fleet_id to choose the fleet; or give repo and leave node=auto (the " +
+				"default) for the hub to place it: among your machines with a fleet hosting repo, those " +
+				"offline, above 0.8 load per core, short of memory or at your per-person cap are excluded, " +
+				"the rest scored on account headroom and load — the reasoning is in the operation's " +
+				"placement. node=<machine> restricts it to that machine. Needs worker:start." + fleetWriteCaveat,
+			InputSchema: obj(map[string]any{"issue": numberProp, "idempotency_key": idemProp,
+				"fleet_id": fleetIDProp, "repo": fleetRepoProp,
+				"node":  map[string]any{"type": "string", "description": "auto (default) or a machine name from the roster."},
+				"agent": map[string]any{"type": "string", "enum": []string{"claude", "codex"}}},
+				"issue", "idempotency_key"),
+		},
+		{
+			Name:  "worker_message",
+			Title: "Message a worker",
+			Description: "Post text as the worker's next turn through its fleet's issue bridge (a " +
+				"--to-worker comment; never keystrokes). Issue workers only, on a fleet with the bridge " +
+				"on; ≤4000 characters, no HTML comments or control characters. Needs worker:message." + fleetWriteCaveat,
+			InputSchema: obj(map[string]any{"worker_id": workerIDProp, "text": map[string]any{"type": "string"},
+				"idempotency_key": idemProp}, "worker_id", "text", "idempotency_key"),
+		},
+		{
+			Name:  "worker_stop",
+			Title: "Stop a worker",
+			Description: "Graceful /exit of the worker's live session; worktree, branch and issue are " +
+				"kept and it stays resumable. Needs worker:stop." + fleetWriteCaveat,
+			InputSchema: obj(map[string]any{"worker_id": workerIDProp, "idempotency_key": idemProp}, "worker_id", "idempotency_key"),
+		},
+		{
+			Name:  "worker_resume",
+			Title: "Resume a stopped worker",
+			Description: "Reopen a stopped worker from its /fleet-history row in a new window, same " +
+				"worker_id. Pays the same gates and caps as a start. Needs worker:resume." + fleetWriteCaveat,
+			InputSchema: obj(map[string]any{"worker_id": workerIDProp, "idempotency_key": idemProp}, "worker_id", "idempotency_key"),
+		},
+		{
+			Name:  "config_set",
+			Title: "Set one fleet setting",
+			Description: "Compare-and-set one of FLEET_MAX_SESSIONS (0–256), FLEET_AUTOFILL (0|1), " +
+				"FLEET_AUTOFILL_MAX_PER_TICK (1–16); expected_revision comes from config_get. Needs " +
+				"config:write and that key in the caller's grant." + fleetWriteCaveat,
+			InputSchema: obj(map[string]any{"fleet_id": fleetIDProp,
+				"key":               map[string]any{"type": "string", "enum": []string{"FLEET_MAX_SESSIONS", "FLEET_AUTOFILL", "FLEET_AUTOFILL_MAX_PER_TICK"}},
+				"value":             map[string]any{"type": "integer"},
+				"expected_revision": map[string]any{"type": "string"},
+				"idempotency_key":   idemProp},
+				"fleet_id", "key", "value", "expected_revision", "idempotency_key"),
+		},
+		{
+			Name:  "gh_comment",
+			Title: "Record a comment on an issue",
+			Description: "Post a RECORD-ONLY comment on an issue through the fleet's write queue; a live " +
+				"worker on that issue does NOT see it (worker_message is that channel). No merge, close " +
+				"or label tool exists. Needs gh:comment." + fleetWriteCaveat,
+			InputSchema: obj(map[string]any{"fleet_id": fleetIDProp, "issue": numberProp,
+				"body": map[string]any{"type": "string"}, "repo": fleetRepoProp, "idempotency_key": idemProp},
+				"fleet_id", "issue", "body", "idempotency_key"),
 		},
 	}
 }

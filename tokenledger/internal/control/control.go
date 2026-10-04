@@ -59,8 +59,16 @@ const (
 	// method from ReadMethods, answered by a TypeResult (or TypeError) with the
 	// same op_id. Sent only to a node whose hello listed CapRead.
 	TypeRequest = "request"
-	// TypeResult answers a TypeRequest.
+	// TypeResult answers a TypeRequest or a TypeWrite.
 	TypeResult = "result"
+	// TypeWrite is a hub→node WRITE (claude-fleet#1410): fleet-control.py's
+	// `submit`, carrying an operation the hub has already journalled. The
+	// node's controller journals it again under the same operation id before
+	// it starts a detached executor, so the answer (a TypeResult with the
+	// node's operation record, or a TypeError) says only that the node took
+	// it — what the executor did is read back later with operation_get. Sent
+	// only to a node whose hello listed CapWrite.
+	TypeWrite = "write"
 )
 
 // CapRead is the hello capability a node lists when it answers TypeRequest.
@@ -68,14 +76,32 @@ const (
 // hub never asks it and serves that node from its last heartbeat instead.
 const CapRead = "read"
 
+// CapWrite is the hello capability a node lists when it accepts TypeWrite
+// (claude-fleet#1410). An agent that never says it is never sent a write: the
+// hub refuses the operation as UNAVAILABLE before journalling anything.
+const CapWrite = "write"
+
 // ReadMethods is the whole list of fleet-control.py methods the hub may ask a
 // node for over the channel. All are reads; a write never travels as a
-// request (C3 adds writes through SendNodeWrite, with their own journal).
+// request — it is a TypeWrite naming one of WriteMethods, with its own journal
+// (claude-fleet#1410). The gh_* reads answer from the node's fleet-gh.sh (its
+// daemons' local copy first), exactly as the SSH hub's did.
 var ReadMethods = map[string]bool{
 	"discover":      true,
 	"fleet_status":  true,
 	"config_get":    true,
 	"operation_get": true,
+	"gh_issue_view": true,
+	"gh_pr_view":    true,
+	"gh_pr_checks":  true,
+}
+
+// WriteMethods is the whole list of fleet-control.py methods a TypeWrite may
+// name: `submit`, whose params are the operation envelope. Which actions a
+// submit may carry is fleet-control.py's own whitelist (validate_write), not
+// something the channel widens.
+var WriteMethods = map[string]bool{
+	"submit": true,
 }
 
 // Error codes.
@@ -91,6 +117,10 @@ const (
 	// CodeRefused is a node declining a request it does not serve (a method
 	// outside ReadMethods).
 	CodeRefused = "REFUSED"
+	// CodeUnknownOutcome is a write the node may or may not have taken: its
+	// controller ran but did not answer in a form that says. The hub
+	// journals it as unknown and never sends it again.
+	CodeUnknownOutcome = "UNKNOWN_OUTCOME"
 )
 
 // ErrIncompatible is returned when a write is addressed to a node whose

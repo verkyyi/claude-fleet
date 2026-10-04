@@ -56,7 +56,10 @@ type nodeConn struct {
 	// canRead is the hello's CapRead: this node answers TypeRequest
 	// (claude-fleet#1409). Set once, before the conn is published.
 	canRead bool
-	// pending routes read replies to their waiting NodeRead.
+	// canWrite is the hello's CapWrite: this node takes TypeWrite
+	// (claude-fleet#1410). Set once, before the conn is published.
+	canWrite bool
+	// pending routes read and write replies to their waiter.
 	pending pendingReads
 	// host is the machine as the roster names it, refreshed by heartbeats.
 	host atomic.Value // string
@@ -209,7 +212,8 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	nc := &nodeConn{conn: conn, admin: hp.Admin && s.isFleetAdmin(ep.OSUser), canRead: hp.HasCap(control.CapRead)}
+	nc := &nodeConn{conn: conn, admin: hp.Admin && s.isFleetAdmin(ep.OSUser), canRead: hp.HasCap(control.CapRead),
+		canWrite: hp.HasCap(control.CapWrite)}
 	nc.proto.Store(int64(hello.Proto))
 	nc.host.Store(ep.Hostname)
 	if hp.Admin && !nc.admin {
@@ -282,11 +286,12 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 		case control.TypeAccountResult:
 			s.applyAccountResult(ctx, conn, ep.ID, nc, m)
 		case control.TypeResult:
-			// A reply to a hub read (claude-fleet#1409).
+			// A reply to a hub read (claude-fleet#1409) or write
+			// (claude-fleet#1410).
 			nc.pending.deliver(m)
 		case control.TypeError:
-			// A refused hub read goes to its waiter; any other error is
-			// a refused account op.
+			// A refused hub read or write goes to its waiter; any other
+			// error is a refused account op.
 			if nc.pending.deliver(m) {
 				break
 			}

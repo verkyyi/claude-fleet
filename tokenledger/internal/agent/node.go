@@ -146,7 +146,7 @@ func (a *Agent) nodeSession(ctx context.Context) (established bool, err error) {
 		HeartbeatMS:  int(a.cfg.LiveInterval / time.Millisecond),
 		AgentVersion: a.cfg.Version,
 		Admin:        a.cfg.FleetAdmin,
-		Capabilities: []string{control.CapRead},
+		Capabilities: []string{control.CapRead, control.CapWrite},
 	})
 	if err != nil {
 		return false, err
@@ -182,7 +182,8 @@ func (a *Agent) nodeSession(ctx context.Context) (established bool, err error) {
 	// The reader: the hub's messages — account ops for an admin agent
 	// (claude-fleet#1411), acks of their results, read requests
 	// (claude-fleet#1409, answered off the read loop so a slow
-	// fleet-control.py never stalls it) — and the pongs the heartbeat's ping
+	// fleet-control.py never stalls it), writes (claude-fleet#1410, the same
+	// way) — and the pongs the heartbeat's ping
 	// waits for. When it ends, the connection is gone.
 	readErr := make(chan error, 1)
 	go func() {
@@ -199,6 +200,8 @@ func (a *Agent) nodeSession(ctx context.Context) (established bool, err error) {
 				a.acct.acked(m.OpID)
 			case control.TypeRequest:
 				go a.answerRequest(ctx, conn, m)
+			case control.TypeWrite:
+				go a.answerWrite(ctx, conn, m)
 			case control.TypeError:
 				if m.Error != nil {
 					log.Printf("control channel: hub reported %s: %s", m.Error.Code, m.Error.Message)
@@ -409,12 +412,40 @@ func fleetRPCRaw(ctx context.Context, script string, req map[string]any) (json.R
 // requestTimeout bounds one hub read request on this node.
 const requestTimeout = 20 * time.Second
 
+// ghRequestTimeout bounds a gh_* read: fleet-gh.sh may fall through its local
+// copy to gh, then to REST, and fleet-control.py gives it 20s of its own.
+const ghRequestTimeout = 30 * time.Second
+
+// writeTimeout bounds one hub write. fleet-control.py's submit only journals
+// the operation and starts a detached executor, so it answers in well under a
+// second; the executor runs on past this, and past this agent.
+const writeTimeout = 20 * time.Second
+
 // answerRequest serves one hub read (claude-fleet#1409). Only ReadMethods are
 // run, through the same fixed fleet-control.py entry point the heartbeat uses;
 // anything else is refused here, whatever the hub asked. The node fills in
 // its OWN machine_id — fleet-control.py checks it, so a request can never
 // address another login's controller.
 func (a *Agent) answerRequest(ctx context.Context, conn *websocket.Conn, m control.Message) {
+	a.answerControl(ctx, conn, m, false)
+}
+
+// answerWrite serves one hub write (claude-fleet#1410): fleet-control.py's
+// `submit`, and nothing else. It runs as THIS login, so the controller it
+// reaches knows only this login's fleets — a write the hub mis-addressed is
+// refused there as NOT_FOUND, the node half of "only your own" (EPIC #1407
+// 共同约定 5).
+//
+// The answer must never claim more than the node knows. A refusal before the
+// controller ran, or a structured refusal from it, is definite: nothing was
+// journalled here. Anything else after it started — a crash, a timeout, output
+// that is not JSON — may have come after the controller committed the
+// operation, so it goes back as UNKNOWN_OUTCOME and the hub never re-sends it.
+func (a *Agent) answerWrite(ctx context.Context, conn *websocket.Conn, m control.Message) {
+	a.answerControl(ctx, conn, m, true)
+}
+
+func (a *Agent) answerControl(ctx context.Context, conn *websocket.Conn, m control.Message, write bool) {
 	reply := func(msg control.Message) {
 		msg.OpID = m.OpID
 		wctx, cancel := context.WithTimeout(ctx, nodeWriteTimeout)
@@ -430,8 +461,12 @@ func (a *Agent) answerRequest(ctx context.Context, conn *websocket.Conn, m contr
 		fail(control.CodeBadMessage, "malformed request")
 		return
 	}
-	if !control.ReadMethods[req.Method] {
-		fail(control.CodeRefused, "this node serves no method "+req.Method+" over the control channel")
+	allowed, kind := control.ReadMethods, "read"
+	if write {
+		allowed, kind = control.WriteMethods, "write"
+	}
+	if !allowed[req.Method] {
+		fail(control.CodeRefused, "this node serves no "+kind+" method "+req.Method+" over the control channel")
 		return
 	}
 	script := filepath.Join(a.cfg.Home, fleetControlScript)
@@ -443,7 +478,23 @@ func (a *Agent) answerRequest(ctx context.Context, conn *websocket.Conn, m contr
 	if len(req.Params) > 0 {
 		params = req.Params
 	}
-	rctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	if write {
+		// The envelope is an object or nothing at all: never a string or
+		// array the controller would have to second-guess.
+		var obj map[string]json.RawMessage
+		if json.Unmarshal(params, &obj) != nil || obj == nil {
+			fail(control.CodeBadMessage, "a write's params must be one JSON object")
+			return
+		}
+	}
+	timeout := requestTimeout
+	switch {
+	case write:
+		timeout = writeTimeout
+	case strings.HasPrefix(req.Method, "gh_"):
+		timeout = ghRequestTimeout
+	}
+	rctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	call := map[string]any{"protocol": 1, "method": req.Method, "params": params}
 	if req.Method != "discover" {
@@ -459,16 +510,24 @@ func (a *Agent) answerRequest(ctx context.Context, conn *websocket.Conn, m contr
 	res, machineID, err := fleetRPCRaw(rctx, script, call)
 	if err != nil {
 		var f *rpcFault
-		if errors.As(err, &f) {
+		switch {
+		case write && (!errors.As(err, &f) || f.Code == "INTERNAL"):
+			// The controller may have committed before it failed.
+			fail(control.CodeUnknownOutcome, "the node's controller did not confirm the write: "+err.Error())
+		case errors.As(err, &f):
 			fail(f.Code, f.Message)
-		} else {
+		default:
 			fail("UNAVAILABLE", err.Error())
 		}
 		return
 	}
 	out, err := control.New(control.TypeResult, control.Result{MachineID: machineID, Result: res})
 	if err != nil {
-		fail("INTERNAL", err.Error())
+		code := "INTERNAL"
+		if write {
+			code = control.CodeUnknownOutcome
+		}
+		fail(code, err.Error())
 		return
 	}
 	reply(out)
