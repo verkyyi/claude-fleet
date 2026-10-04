@@ -727,6 +727,54 @@ hold every scope. A person signed in through WeCom holds
 `CCQUOTA_FLEET_PERSON_SCOPES` (default: everything except `config:write`) on
 their own logins only, and `config_set` only for the keys in
 `CCQUOTA_FLEET_PERSON_CONFIG_KEYS` (default none).
+### Credentials live at the entrance — machines lease the short-lived half (claude-fleet#1415)
+
+Every person's long-lived Claude / Codex credential (the refresh token) is
+stored ONLY in the hub, sealed with AES-256-GCM under a key kept in its own k8s
+Secret — never in the database the blobs are in. The hub alone refreshes them,
+one writer per account, saving the rotated refresh token before anyone gets the
+result; so however many machines use an account, it is refreshed about once per
+token lifetime and no machine ever logs another out. A machine leases only the
+access token and its expiry, renews it ~2h before it runs out, and never holds
+anything that can mint more: revoke it at the hub and what it has runs out.
+
+What a machine can do with only the short-lived half was **measured first**
+(issue #1415, first comment, Claude Code 2.1.289 / codex-cli 0.160.0):
+
+| CLI | where the agent writes it | a RUNNING session picks up a replacement |
+|---|---|---|
+| Claude | `<accounts>/<label>.hub/.credentials.json`, used via `CLAUDE_SECURESTORAGE_CONFIG_DIR`; the pool file `<accounts>/<label>` holds `hub:<label>` | on its next request (no refresh token needed). The `CLAUDE_CODE_OAUTH_TOKEN` env var is read once at launch and would die at expiry, so `bin/fleet-claude.sh` exports the directory instead |
+| Codex | `<codex-homes>/<label>/auth.json` (`default` = `~/.codex`), `refresh_token` = the placeholder `hub-managed`, and `cli_auth_credentials_store = "file"` in its `config.toml` | on its first 401 (it re-reads auth.json and retries). A *missing* `refresh_token` makes Codex drop ChatGPT auth entirely, hence the placeholder |
+| GitHub | `~/.config/gh/hosts.yml` (phase one: the person's existing token, no expiry — R1 replaces it) | — |
+
+| where | setting | effect |
+|---|---|---|
+| hub | `CCQUOTA_FLEET_CRED_KEY_FILE=/secrets/cred-key` (or `CCQUOTA_FLEET_CRED_KEY`) | 32 bytes, base64 (`openssl rand -base64 32`). Unset = vault off: credential routes answer 503, the rest of the fleet module is unaffected |
+| hub | `CCQUOTA_FLEET_CRED_MIN_TTL=3h` (default) | a cached access token with less left is refreshed before it is issued |
+| agent | `CCQUOTA_FLEET_CREDS=1` | lease this login's credentials and keep them written (with `CCQUOTA_FLEET=1`) |
+| agent | `CCQUOTA_ACCOUNTS_DIR` (default `~/.config/claude-fleet/accounts`), `CCQUOTA_FLEET_CODEX_HOMES` (default `~/.codex-accounts`) | where the Claude / Codex files go |
+
+A lease (`POST /v1/node/credentials`, the node's enrollment token) is answered
+only for the person whose ACTIVE fleet account is that (machine, login) — there
+is no principal parameter to forge. The operator stores, lists and revokes:
+
+    # store (or replace) — the secret never comes back out of the hub
+    curl -H "Authorization: Bearer $VIEWER" -d '{"action":"put","principal_id":"<wecom userid>",
+      "provider":"claude","account":"main","secret":{"refresh_token":"sk-ant-ort01-…","subscription_type":"max"}}' \
+      $HUB/v1/fleet/credentials
+    #   codex:  "secret":{"refresh_token":"…","account_id":"…"}   (from ~/.codex/auth.json)
+    #   github: "secret":{"token":"gho_…","user":"<login>"}
+    curl -H "Authorization: Bearer $VIEWER" $HUB/v1/fleet/credentials          # metadata only
+    curl -H "Authorization: Bearer $VIEWER" -d '{"hostname":"m4","reason":"lost"}' $HUB/v1/fleet/credentials/revoke
+    #   {"principal_id":…} revokes a person everywhere; both = that person on that machine; "lift":true undoes
+
+Every issue, refusal, refresh, store and revocation is an audit row:
+`/v1/fleet/credentials/audit`, and the page **`/credentials`**. All of these
+refuse a WeCom session. A Claude refresh token comes from an interactive
+`claude` login (`claudeAiOauth.refreshToken`); once it is in the hub, log that
+machine out — two holders of one refresh token rotate each other out.
+A Codex home the hub writes is registered once with
+`fleet-codex-account.sh register <label> <home>` like any other.
 
 ### Connection certificates — scan once, 12 hours in (claude-fleet#1412)
 

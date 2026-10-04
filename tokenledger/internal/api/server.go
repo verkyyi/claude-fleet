@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/fx"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/sshca"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
@@ -115,6 +116,11 @@ type Server struct {
 	FleetPersonConfigKeys []string
 	// fleetScopeHook replaces fleetScope in tests (claude-fleet#1409).
 	fleetScopeHook func(*http.Request) (func(hostname, osUser string) bool, error)
+	// Vault is the credential vault (claude-fleet#1415): long-lived Claude /
+	// Codex credentials sealed under CCQUOTA_FLEET_CRED_KEY, leased to nodes
+	// as short-lived tokens. nil (no key configured) leaves every credential
+	// route answering 503 and the rest of the fleet module unaffected.
+	Vault *credvault.Vault
 
 	// SSHCA signs people's connection certificates (claude-fleet#1412),
 	// loaded from CCQUOTA_FLEET_SSH_CA_KEY — a file from its own k8s Secret,
@@ -207,6 +213,14 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("/v1/fleet/login/poll", s.handleDevicePoll)
 		mux.Handle("/fleet/login", s.rememberLoginCode(s.viewerOnly(http.HandlerFunc(s.handleFleetLoginPage))))
 		mux.Handle("/connect", s.viewerOnly(http.HandlerFunc(s.serveConnectPage)))
+		// Credentials (claude-fleet#1415): the lease authenticates with the
+		// node's enrollment token, like the control channel; everything else
+		// is the operator's.
+		mux.HandleFunc("/v1/node/credentials", s.handleNodeCredentials)
+		mux.Handle("/v1/fleet/credentials", s.viewerOnly(s.operatorOnly(http.HandlerFunc(s.handleFleetCredentials))))
+		mux.Handle("/v1/fleet/credentials/revoke", s.viewerOnly(s.operatorOnly(http.HandlerFunc(s.handleFleetRevoke))))
+		mux.Handle("/v1/fleet/credentials/audit", s.viewerOnly(s.operatorOnly(http.HandlerFunc(s.handleFleetCredAudit))))
+		mux.Handle("/credentials", s.viewerOnly(s.operatorOnly(http.HandlerFunc(s.serveCredentialsPage))))
 	}
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {

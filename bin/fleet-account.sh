@@ -40,7 +40,8 @@
 #   token [label]        — print the OAuth token for <label> (default: active)
 #   env                  — print `CLAUDE_CODE_OAUTH_TOKEN=…` for the active acct (or nothing)
 #   list                 — aligned table: label · active(●) · rotation window · state
-#                          (state = ok | limited · back in ~Nm | NO TOKEN), then the
+#                          (state = ok | limited · back in ~Nm | NO TOKEN; a hub-managed
+#                          account, #1415, adds `· hub · expires in ~Nh`), then the
 #                          ccquota columns: 5h/7d %, the live 5h window, and the
 #                          weekly `pace ±N` (issue #1231; red = held, yellow = ahead)
 #   pace                 — the pool's weekly PACE table (issue #1231): label · 7d% ·
@@ -986,7 +987,12 @@ cmd_token() { local l="${1:-$(cmd_active)}"; [ -n "$l" ] && acct_token "$l"; }
 
 cmd_env() {
   local l t; l=$(cmd_active); [ -z "$l" ] && return 0
-  t=$(acct_token "$l"); [ -n "$t" ] && printf 'CLAUDE_CODE_OAUTH_TOKEN=%s' "$t"
+  t=$(acct_token "$l")
+  case "$t" in
+    '') ;;
+    hub:*) printf 'CLAUDE_SECURESTORAGE_CONFIG_DIR=%s' "$ACCT_DIR/${t#hub:}.hub" ;;   # #1415
+    *) printf 'CLAUDE_CODE_OAUTH_TOKEN=%s' "$t" ;;
+  esac
 }
 
 cmd_use() {
@@ -1404,6 +1410,20 @@ EOF
 #   ACCOUNT  ●(active)  FALLBACK(bench TTL used only when a banner carries no
 #   reset time — a live bench ends at the banner's instant, shown in STATE)
 #   STATE(ok | limited · back in ~Nm | NO TOKEN)
+# hub_state <label> <now> — the STATE cell of a hub-managed account (issue #1415):
+# its pool file holds `hub:<label>` and the ccquota agent keeps the short-lived
+# token in <label>.hub/.credentials.json. Shows where it comes from and when the
+# token in hand runs out — the agent renews it ~2h before, so `expired` means the
+# agent is not leasing (stopped, revoked at the hub, or the hub unreachable).
+hub_state() {
+  local f="$ACCT_DIR/$1.hub/.credentials.json" exp
+  exp=$(sed -n 's/.*"expiresAt":\([0-9][0-9]*\).*/\1/p' "$f" 2>/dev/null | head -n1)
+  if [ -z "$exp" ]; then printf '%sNO TOKEN%s %s· hub, nothing leased yet%s' "$A_RED" "$A_RST" "$A_DIM" "$A_RST"; return; fi
+  exp=$(( exp / 1000 ))
+  if [ "$exp" -le "$2" ]; then printf '%sexpired%s %s· hub%s' "$A_RED" "$A_RST" "$A_DIM" "$A_RST"; return; fi
+  printf '%sok%s %s· hub · expires in ~%s%s' "$A_GRN" "$A_RST" "$A_DIM" "$(human_dur $(( exp - $2 )))" "$A_RST"
+}
+
 cmd_list() {
   local labels active l until state tok w now_s hdr r5 hold p pc
   local fmt='%-*s  %s  %-7s %s\n'
@@ -1432,7 +1452,11 @@ EOF
       state="${A_YEL}limited${A_RST} ${A_DIM}· back in ~$(human_dur $(( until - now_s )))${A_RST}"
     else
       tok=$(acct_token "$l")
-      if [ -n "$tok" ]; then state="${A_GRN}ok${A_RST}"; else state="${A_RED}NO TOKEN${A_RST}"; fi
+      case "$tok" in
+        hub:*) state=$(hub_state "$l" "$now_s") ;;
+        '') state="${A_RED}NO TOKEN${A_RST}" ;;
+        *) state="${A_GRN}ok${A_RST}" ;;
+      esac
     fi
     # ccquota columns when known (issue #513): "5h 42% · 7d 21%", coloured by the
     # higher of the two against the warn/ceiling knobs. Then the WINDOW itself

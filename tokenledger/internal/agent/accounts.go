@@ -63,7 +63,9 @@ func (a *Agent) probeAccounts(ctx context.Context, observed map[string]bool) []*
 		if err != nil {
 			continue
 		}
-		token := strings.TrimSpace(string(raw))
+		// A hub-managed account (claude-fleet#1415) holds a marker, not a
+		// token; its live short-lived token is in <label>.hub/.
+		token := hubAccountToken(a.cfg.AccountsDir, label, strings.TrimSpace(string(raw)))
 		if token == "" {
 			continue
 		}

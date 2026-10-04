@@ -1,0 +1,326 @@
+package api
+
+import (
+	"encoding/json"
+	"errors"
+	"log"
+	"net/http"
+	"strconv"
+	"time"
+
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+)
+
+// The hub half of "credentials live at the entrance; machines lease the
+// short-lived half" (claude-fleet#1415).
+//
+// A node leases with its enrollment token, so the hub knows exactly which
+// (machine, login) is asking — and answers only for the person whose ACTIVE
+// fleet account that login is (C4's table). Nothing in the request can name
+// another person: there is no principal parameter to forge. Every answer,
+// issued or refused, is an audit row; a revocation (of the machine, of the
+// person, or of the person on that machine) refuses every lease after it.
+
+// NodeCredential is one leased credential in a node's answer.
+type NodeCredential struct {
+	Provider  string            `json:"provider"`
+	Account   string            `json:"account"`
+	ExpiresAt *time.Time        `json:"expires_at,omitempty"`
+	Access    *credvault.Access `json:"access,omitempty"`
+	Error     string            `json:"error,omitempty"`
+}
+
+// NodeCredentialsResponse is the answer to POST /v1/node/credentials.
+type NodeCredentialsResponse struct {
+	PrincipalID string           `json:"principal_id"`
+	IssuedAt    time.Time        `json:"issued_at"`
+	Credentials []NodeCredential `json:"credentials"`
+}
+
+// Lease refusal reasons, the "error" of a non-200 answer — the agent branches
+// on them.
+const (
+	LeaseRevoked     = "revoked"
+	LeaseNoPrincipal = "no_principal"
+	LeaseVaultOff    = "vault_off"
+)
+
+func (s *Server) vaultOff(w http.ResponseWriter) bool {
+	if s.Vault == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": LeaseVaultOff,
+			"message": "the credential vault is off on this hub (no CCQUOTA_FLEET_CRED_KEY / _FILE)"})
+		return true
+	}
+	return false
+}
+
+// nodeIdentity is the (machine, login) a node is, as the roster names it —
+// the names C4's accounts are keyed on — from its newest heartbeat, falling
+// back to the enrollment's own for a node that has never sent one.
+func (s *Server) nodeIdentity(ep *store.Endpoint) (hostname, osUser string) {
+	hostname, osUser = ep.Hostname, ep.OSUser
+	if nodes, err := s.Store.Nodes(); err == nil {
+		for _, n := range nodes {
+			if n.EndpointID == ep.ID {
+				if n.Hostname != "" {
+					hostname = n.Hostname
+				}
+				if n.OSUser != "" {
+					osUser = n.OSUser
+				}
+			}
+		}
+	}
+	return hostname, osUser
+}
+
+// handleNodeCredentials answers one node's lease.
+func (s *Server) handleNodeCredentials(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		httpError(w, http.StatusMethodNotAllowed, "POST only")
+		return
+	}
+	tok := bearer(r)
+	if tok == "" {
+		httpError(w, http.StatusUnauthorized, "missing bearer token")
+		return
+	}
+	ep, err := s.Store.EndpointByTokenHash(HashToken(tok))
+	if err != nil {
+		httpError(w, http.StatusUnauthorized, "unrecognised enrollment token")
+		return
+	}
+	if s.vaultOff(w) {
+		return
+	}
+	host, osUser := s.nodeIdentity(ep)
+	deny := func(code int, reason, principal, detail string) {
+		if err := s.Store.AddCredAudit(store.CredAudit{Action: store.CredDeny, PrincipalID: principal,
+			Hostname: host, OSUser: osUser, EndpointID: ep.ID, Detail: reason + ": " + detail}); err != nil {
+			log.Printf("credentials: audit deny for %s@%s: %v", osUser, host, err)
+		}
+		writeJSON(w, code, map[string]string{"error": reason, "message": detail})
+	}
+
+	principal, err := s.Store.PrincipalForLogin(host, osUser)
+	if errors.Is(err, store.ErrNoPrincipal) {
+		deny(http.StatusForbidden, LeaseNoPrincipal, "", "no active fleet account is "+osUser+" on "+host)
+		return
+	}
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	rev, err := s.Store.RevokedFor(host, principal)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if rev != nil {
+		what := "this machine"
+		switch {
+		case rev.Hostname != "" && rev.PrincipalID != "":
+			what = "this person on this machine"
+		case rev.Hostname == "":
+			what = "this person"
+		}
+		deny(http.StatusForbidden, LeaseRevoked, principal, what+" was revoked at "+rev.RevokedAt.Format(time.RFC3339)+
+			optional(" ("+rev.Reason+")", rev.Reason != ""))
+		return
+	}
+
+	creds, err := s.Store.Credentials(principal)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resp := NodeCredentialsResponse{PrincipalID: principal, IssuedAt: time.Now().UTC(), Credentials: []NodeCredential{}}
+	for _, c := range creds {
+		nc := NodeCredential{Provider: c.Provider, Account: c.Account}
+		acc, err := s.Vault.Lease(r.Context(), principal, c.Provider, c.Account)
+		audit := store.CredAudit{PrincipalID: principal, Provider: c.Provider, Account: c.Account,
+			Hostname: host, OSUser: osUser, EndpointID: ep.ID}
+		if err != nil {
+			nc.Error = err.Error()
+			audit.Action, audit.Detail = store.CredDeny, "lease failed: "+err.Error()
+		} else {
+			a := acc
+			nc.Access, nc.ExpiresAt = &a, acc.ExpiresAt
+			audit.Action, audit.ExpiresAt = store.CredIssue, acc.ExpiresAt
+		}
+		if err := s.Store.AddCredAudit(audit); err != nil {
+			log.Printf("credentials: audit %s for %s@%s: %v", audit.Action, osUser, host, err)
+		}
+		resp.Credentials = append(resp.Credentials, nc)
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func optional(s string, ok bool) string {
+	if ok {
+		return s
+	}
+	return ""
+}
+
+// FleetCredentialRequest is the body of POST /v1/fleet/credentials.
+type FleetCredentialRequest struct {
+	Action      string           `json:"action"` // put | delete
+	PrincipalID string           `json:"principal_id"`
+	Provider    string           `json:"provider"`
+	Account     string           `json:"account"`
+	Secret      credvault.Secret `json:"secret"`
+}
+
+// handleFleetCredentials lists credential metadata (GET — never a secret) or
+// stores / removes one (POST). Operator only.
+func (s *Server) handleFleetCredentials(w http.ResponseWriter, r *http.Request) {
+	if s.vaultOff(w) {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		creds, err := s.Store.Credentials(r.URL.Query().Get("principal_id"))
+		if err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		revs, err := s.Store.Revocations()
+		if err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, http.StatusOK, map[string]any{"credentials": creds, "revocations": revs})
+	case http.MethodPost:
+		var req FleetCredentialRequest
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
+			httpError(w, http.StatusBadRequest, "malformed request: "+err.Error())
+			return
+		}
+		if req.PrincipalID == "" || req.Account == "" || !credvault.ValidProvider(req.Provider) {
+			httpError(w, http.StatusBadRequest, "principal_id, account and a provider of claude|codex|github are required")
+			return
+		}
+		if !validAccountLabel(req.Account) {
+			httpError(w, http.StatusBadRequest, "account must be 1-64 of [A-Za-z0-9._-], not starting with '.'")
+			return
+		}
+		if _, err := s.Store.Principal(req.PrincipalID); err != nil {
+			httpError(w, http.StatusBadRequest, "unknown principal "+req.PrincipalID)
+			return
+		}
+		audit := store.CredAudit{PrincipalID: req.PrincipalID, Provider: req.Provider, Account: req.Account}
+		switch req.Action {
+		case "put":
+			if err := s.Vault.Put(req.PrincipalID, req.Provider, req.Account, req.Secret); err != nil {
+				httpError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			audit.Action = store.CredPut
+		case "delete":
+			if err := s.Store.DeleteCredential(req.PrincipalID, req.Provider, req.Account); err != nil {
+				code := http.StatusInternalServerError
+				if errors.Is(err, store.ErrNoCredential) {
+					code = http.StatusNotFound
+				}
+				httpError(w, code, err.Error())
+				return
+			}
+			audit.Action = store.CredDelete
+		default:
+			httpError(w, http.StatusBadRequest, "action must be put or delete")
+			return
+		}
+		_ = s.Store.AddCredAudit(audit)
+		writeJSON(w, http.StatusOK, map[string]string{"ok": req.Action})
+	default:
+		httpError(w, http.StatusMethodNotAllowed, "GET or POST")
+	}
+}
+
+// validAccountLabel is the shape a node can safely turn into a file name in
+// its accounts directory.
+func validAccountLabel(s string) bool {
+	if s == "" || len(s) > 64 || s[0] == '.' {
+		return false
+	}
+	for _, c := range s {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+// FleetRevokeRequest is the body of POST /v1/fleet/credentials/revoke.
+type FleetRevokeRequest struct {
+	Hostname    string `json:"hostname"`
+	PrincipalID string `json:"principal_id"`
+	Reason      string `json:"reason"`
+	Lift        bool   `json:"lift"`
+}
+
+// handleFleetRevoke revokes (or, with lift, un-revokes) a machine, a person,
+// or a person on a machine. Operator only.
+func (s *Server) handleFleetRevoke(w http.ResponseWriter, r *http.Request) {
+	if s.vaultOff(w) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		httpError(w, http.StatusMethodNotAllowed, "POST only")
+		return
+	}
+	var req FleetRevokeRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&req); err != nil {
+		httpError(w, http.StatusBadRequest, "malformed request: "+err.Error())
+		return
+	}
+	if req.Hostname == "" && req.PrincipalID == "" {
+		httpError(w, http.StatusBadRequest, "hostname, principal_id, or both")
+		return
+	}
+	audit := store.CredAudit{PrincipalID: req.PrincipalID, Hostname: req.Hostname, Detail: req.Reason}
+	if req.Lift {
+		ok, err := s.Store.Unrevoke(req.Hostname, req.PrincipalID)
+		if err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if !ok {
+			httpError(w, http.StatusNotFound, "no such revocation")
+			return
+		}
+		audit.Action = store.CredUnrevoke
+	} else {
+		if err := s.Store.Revoke(req.Hostname, req.PrincipalID, req.Reason, time.Now()); err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		audit.Action = store.CredRevoke
+	}
+	_ = s.Store.AddCredAudit(audit)
+	writeJSON(w, http.StatusOK, map[string]string{"ok": audit.Action})
+}
+
+// handleFleetCredAudit returns the audit log, newest first. Operator only.
+func (s *Server) handleFleetCredAudit(w http.ResponseWriter, r *http.Request) {
+	if s.vaultOff(w) {
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	rows, err := s.Store.CredAuditLog(r.URL.Query().Get("principal_id"), limit)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{"audit": rows})
+}
+
+// serveCredentialsPage serves the audit page.
+func (s *Server) serveCredentialsPage(w http.ResponseWriter, r *http.Request) {
+	s.serveStandalonePage(w, r, "credentials.html")
+}
