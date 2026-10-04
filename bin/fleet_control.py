@@ -14,7 +14,7 @@ import uuid
 from fleet_config_write import revision, write
 from fleet_hub_common import (CONFIG_KEYS, GH_READS, PROTOCOL, WORKER_ACTIONS, Database, Fault,
                               canonical, fields, identifier, name, now, operation,
-                              parse_worker_id, read_request, repo_named, run, validate_gh_read,
+                              parse_worker_id, read_request, repo_named, run, tool_path, validate_gh_read,
                               validate_write, worker_identity, worker_key)
 
 BIN = Path(__file__).absolute().parent
@@ -45,6 +45,13 @@ class Control:
         # arguments or a calling worker's inherited Fleet overrides.
         allowed = ("HOME", "PATH", "TMPDIR", "LANG", "LC_ALL", "USER", "LOGNAME", "SSH_AUTH_SOCK")
         env = {key: os.environ[key] for key in allowed if key in os.environ}
+        # PATH is inherited but never trusted to be whole (issue #1460): a launchd
+        # job — ccquota's agent reading fleet_status for its heartbeat — runs us
+        # under /usr/bin:/bin:/usr/sbin:/sbin, where a Homebrew tmux is not, and
+        # the adapter died `tmux: command not found` (UNAVAILABLE: 0 sessions on
+        # the hub for a fleet of 22). Complete it with the dirs the SSH forced
+        # command exports; a whole PATH passes through unchanged.
+        env["PATH"] = tool_path(env.get("PATH"), env.get("HOME"))
         env["FLEET_CONF_DIR"] = str(self.conf_dir)
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         return env
@@ -77,11 +84,15 @@ class Control:
         raise Fault("NOT_FOUND", "Fleet is no longer configured on this machine")
 
     def workers(self, fleet):
-        code, output, _ = self.adapter("workers", fleet["name"])
+        code, output, err = self.adapter("workers", fleet["name"])
         if code == 3:
             return {"state": "down", "workers": [], "observed_at": now()}
         if code:
-            raise Fault("UNAVAILABLE", "Cannot read fleet windows")
+            # The adapter's last stderr line rides along (issue #1460): `tmux:
+            # command not found` is the whole diagnosis, and without it the fault
+            # read the same as a wedged server for a day.
+            detail = [l for l in err.decode("utf-8", "replace").splitlines() if l.strip()]
+            raise Fault("UNAVAILABLE", "Cannot read fleet windows" + (": " + detail[-1].strip()[-200:] if detail else ""))
         workers = []
         for line in output.decode("utf-8").splitlines():
             parts = line.split("\t")

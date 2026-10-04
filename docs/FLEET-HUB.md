@@ -235,6 +235,13 @@ export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/us
 exec python3 "$HOME/.claude/fleet/bin/fleet-control.py" rpc
 ```
 
+`fleet-control.py rpc` completes its own PATH with the same dirs (issue #1460),
+so a caller that inherits launchd's default `/usr/bin:/bin:/usr/sbin:/sbin` — the
+ccquota agent reading `fleet_status` for its heartbeat — still finds a Homebrew
+tmux. A fleet it cannot read is reported `state: unknown`, never as 0 windows,
+with the adapter's own error in the fault; the agent logs that reason once per
+distinct failure.
+
 On the Hub machine, use the existing SSH aliases and trusted host keys:
 
 ```sh
