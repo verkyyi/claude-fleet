@@ -142,9 +142,11 @@ FLEET_METRICS                      knob: 0 = no machine-metrics rows from diskgu
 FLEET_METRICS_KEEP_DAYS            knob: machine/metrics-*.tsv retention in days (fleet-lib.sh, 7)
 FLEET_MIGRATE_BOOT_WAIT            knob: internal pacing/limit, safe in-code default (fleet-migrate.sh)
 FLEET_MIGRATE_CLOSE_WAIT           knob: internal pacing/limit, safe in-code default (fleet-migrate.sh)
+FLEET_MIGRATE_DETACHED             handoff: marks the --force-self re-exec so it skips the own-window refusal (fleet-migrate.sh, #1474)
 FLEET_MIGRATE_EXIT_WAIT            knob: internal pacing/limit, safe in-code default (fleet-migrate.sh)
 FLEET_MIGRATE_FAILOVER_PY          seam: an injectable command/path for tests (fleet-migrate.sh)
 FLEET_MIGRATE_LAUNCH               seam: an injectable command/path for tests (fleet-migrate.sh)
+FLEET_MIGRATE_SELF_IDLE_WAIT       knob: how long a --force-self move waits for the caller's turn to end (fleet-migrate.sh, 1800)
 FLEET_MOVE_CMD                     seam: the fleet-move.sh fleet-spot-evacuate.sh runs per fleet (default this bin's; #1428)
 FLEET_OFFBOARD_ARCHIVE_DIR         path: offboarding home-archive dir override; --archive-dir is the CLI form (fleet-login-remove.sh)
 FLEET_MIGRATION_LOCKED             handoff: a transition lock the caller already holds
