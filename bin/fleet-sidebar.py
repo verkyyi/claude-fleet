@@ -891,30 +891,57 @@ def env_int(name, default):
         return default
 
 
+def fit_plan(pw, ww, window, zoomed, manual, rows, sized):
+    """What holds the view's width (issues #1328, #1521), as (action, sized):
+    action is ("manual", w) — record w as the operator's width — or ("resize", w)
+    — one resize-pane — or None; `sized` is the (pane width, window width,
+    window) the view is at after it, or the old one when there is nothing to do.
+    Pure (no tmux), so the selftest pins every branch.
+
+    The width is `@sidebar_width_manual` once the operator has dragged to one,
+    else auto_width for the rows — and EITHER is re-applied when the pane left
+    it. tmux scales every pane in proportion when a window takes a client's
+    size (`window-size latest`: a 210-column window first shown on a 189-column
+    client), and before #1521 a manual width was never corrected, so the list
+    sat at 26 until the next move brought back 37 — a width that jumped on every
+    switch. A drag is the one width change that is the operator's: the pane
+    moved while the view stayed in the same window at the same window width.
+    Zoomed, or a window too narrow to keep the worker's 80 columns beside the
+    width: nothing (sync hides the view below that anyway)."""
+    if zoomed:
+        return None, sized
+    if sized is not None and sized[1:] == (ww, window) and sized[0] != pw:
+        return ("manual", pw), (pw, ww, window)
+    if manual.isdigit():
+        want = max(24, min(60, int(manual)))
+    else:
+        base = max(24, min(60, env_int("FLEET_SIDEBAR_WIDTH", 30)))
+        want = auto_width(rows, ww, base, max(base, env_int("FLEET_SIDEBAR_WIDTH_MAX", 44)))
+    if want != pw and ww >= want + 81:
+        return ("resize", want), (want, ww, window)
+    return None, (pw, ww, window)
+
+
 def fit_view(session, pane, rows, sized):
-    """Size the view to its rows (issue #1328) — auto_width, applied with one
-    resize-pane when it changed — until the operator drags it: a width that moved
-    while the view stayed in the same window at the same window width is THEIR
-    width, kept from then on as the session's `@sidebar_width_manual` (sync opens
-    every later view at it, and this stops resizing). `sized` is the (pane width,
-    window width, window) this function last left the view at; returns the next."""
+    """Apply fit_plan to the view: at most one tmux write a tick, and none at all
+    while the pane is at the width it wants — the ONE writer of the view's width
+    (a hook-driven sync has no memory of the last fit, so it could not tell the
+    operator's drag from tmux's scaling and would undo the drag). `sized` is what
+    this function last left the view at; returns the next."""
     info = fields(pane, US.join(("#{pane_width}", "#{window_width}", "#{window_id}",
                                  "#{window_zoomed_flag}", "#{@sidebar_width_manual}")))
     if len(info) != 5 or not info[0].isdigit() or not info[1].isdigit():
         return sized
-    pw, ww, window, zoomed, manual = int(info[0]), int(info[1]), info[2], info[3], info[4]
-    if manual.isdigit() or zoomed == "1":
+    action, sized = fit_plan(int(info[0]), int(info[1]), info[2], info[3] == "1",
+                             info[4], rows, sized)
+    if action is None:
         return sized
-    if sized is not None and sized[1:] == (ww, window) and sized[0] != pw:
-        tmux("set-option", "-t", "=" + session + ":", "@sidebar_width_manual", str(pw))
+    if action[0] == "manual":
+        tmux("set-option", "-t", "=" + session + ":", "@sidebar_width_manual", str(action[1]))
         return sized
-    base = max(24, min(60, env_int("FLEET_SIDEBAR_WIDTH", 30)))
-    want = auto_width(rows, ww, base, max(base, env_int("FLEET_SIDEBAR_WIDTH_MAX", 44)))
-    if want != pw:
-        tmux("resize-pane", "-t", pane, "-x", str(want))
-        got = fields(pane, "#{pane_width}")[0]
-        pw = int(got) if got.isdigit() else pw
-    return (pw, ww, window)
+    tmux("resize-pane", "-t", pane, "-x", str(action[1]))
+    got = fields(pane, "#{pane_width}")[0]
+    return (int(got) if got.isdigit() else sized[0],) + sized[1:]
 
 
 def visible(info, now):
@@ -1183,6 +1210,13 @@ def ui(screen, session, worker, lock):
             wait = min(wait, PRODUCER_POLL)
         screen.timeout(max(1, min(1000, int(wait * 1000))))
         key = screen.getch()
+        if key == curses.KEY_RESIZE:
+            # The pane was resized under the view — the window took a client's
+            # size, the operator dragged the divider, or fit_view's own
+            # resize-pane — so re-fit now, not at the next tick (issue #1521).
+            # Never a loop: at the width it wants, fit_view writes nothing.
+            refresh_at = 0
+            continue
         if key == curses.KEY_F12:
             # The menu's rename item: it parked the row's @id on this pane,
             # switched the client to the sidebar table and sent F12 to wake us.

@@ -35,6 +35,21 @@ assert not sidebar.visible(['1', '0', '0', ''], 100)
 assert not sidebar.visible(['1', '0', '1', '99'], 100)
 assert sidebar.visible(['1', '0', '1', '1'], 100)
 assert sidebar.tail('abc修复', 5) == 'c修复' and sidebar.tail('abc', 9) == 'abc'
+# The view's width is HELD (issue #1521): tmux scales every pane when a window
+# takes a client's size (210 → 189 columns), and the manual width used to stay
+# where the scale left it until the next move — 37 ↔ 26 on every switch.
+fit = sidebar.fit_plan
+assert fit(26, 189, '@1', False, '37', [], (37, 210, '@1')) == (('resize', 37), (37, 189, '@1')), 'scaled: back to the manual width'
+assert fit(26, 189, '@1', False, '37', [], None) == (('resize', 37), (37, 189, '@1')), 'a fresh view corrects too'
+assert fit(37, 189, '@1', False, '37', [], (37, 189, '@1')) == (None, (37, 189, '@1')), 'at its width: zero calls'
+assert fit(30, 189, '@2', False, '37', [], (37, 189, '@1')) == (('resize', 37), (37, 189, '@2')), 'moved to another window: not a drag'
+assert fit(40, 189, '@1', False, '37', [], (37, 189, '@1')) == (('manual', 40), (40, 189, '@1')), 'same window, same width, pane moved: the operator dragged'
+assert fit(40, 189, '@1', False, '40', [], (40, 189, '@1')) == (None, (40, 189, '@1')), 'the dragged width is then held'
+assert fit(26, 189, '@1', True, '37', [], (37, 210, '@1')) == (None, (37, 210, '@1')), 'zoomed: nothing'
+assert fit(26, 117, '@1', False, '37', [], (37, 210, '@1')) == (None, (26, 117, '@1')), 'too narrow for 37 + the worker 80: nothing'
+assert fit(26, 118, '@1', False, '37', [], (37, 210, '@1'))[0] == ('resize', 37), 'just wide enough: corrected'
+assert fit(26, 189, '@1', False, '', [], (30, 210, '@1')) == (('resize', 30), (30, 189, '@1')), 'no manual width: auto_width is re-applied as before'
+assert fit(26, 100, '@1', False, '', [], (30, 160, '@1')) == (None, (26, 100, '@1')), 'auto, too narrow: nothing'
 assert sidebar.typed('q') and sidebar.typed('修') and sidebar.typed(' ')
 assert not sidebar.typed('\x0e') and not sidebar.typed('\x7f')
 # The `?` row for the selected row (issue #1377): only a CLIPPED name takes it.
@@ -1236,6 +1251,39 @@ try:
     tm('resize-pane', '-Z', '-t', p2)
     wait_for(lambda: bool(view_on(w2)), 'unzoom did not restore the enabled sidebar')
     tm('kill-pane', '-t', extra)
+
+    # The width is held across a window scale (issue #1521). A 210-column window
+    # (what a since-gone client left behind) takes the 160-column client's size
+    # the moment it is shown — `window-size latest`; resize-window drives the same
+    # layout_resize — and every pane scales with it. The view snaps back to the
+    # manual width in the same window, without a move; a drag (the pane moved
+    # while the window did not) is still the operator's and is kept from then on.
+    tm('set-option', '-t', 'fleet-test:', '@sidebar_width_manual', '37')
+    side = view_on(w2)[0]
+    def side_width():
+        return tm('display-message', '-p', '-t', side, '#{pane_width}')
+    wait_for(lambda: side_width() == '37', 'a manual width set on the session was not applied to the open view')
+    tm('select-window', '-t', w1)
+    wait_for(lambda: bool(view_on(w1)), 'the view did not follow to the first worker')
+    tm('resize-window', '-t', w2, '-x', '210', '-y', window_height)
+    tm('select-window', '-t', w2)
+    wait_for(lambda: view_on(w2) == [side], 'the view did not follow back to the 210-column worker')
+    wait_for(lambda: side_width() == '37', 'the view did not join the 210-column window at the manual width')
+    tm('resize-window', '-t', w2, '-x', '160', '-y', window_height)
+    wait_for(lambda: side_width() == '37' and
+             tm('display-message', '-p', '-t', w2, '#{window_width}') == '160',
+             'the view stayed where the 210 → 160 scale left it (issue #1521)')
+    check(view_on(w2) == [side], 'the width came back by a move, not a fit')
+    check(tm('show-options', '-qv', '-t', 'fleet-test:', '@sidebar_width_manual') == '37',
+          'a window scale was recorded as a drag')
+    tm('resize-pane', '-t', side, '-x', '40')   # the operator drags the divider
+    wait_for(lambda: tm('show-options', '-qv', '-t', 'fleet-test:', '@sidebar_width_manual') == '40',
+             'a drag in the same window at the same width was not kept as the manual width')
+    time.sleep(1.5)
+    check(side_width() == '40', 'the held width fought the drag: %s' % side_width())
+    tm('set-option', '-u', '-t', 'fleet-test:', '@sidebar_width_manual')
+    wait_for(lambda: side_width() != '40', 'clearing the manual width did not return the view to auto_width')
+    check(30 <= int(side_width()) <= 40, 'auto_width left its 30..window/4 band: %s' % side_width())
 
     # Hub/home resolution stays on the original @dash pane — and reaches it on the
     # SECOND press (issue #899): the first F9 in a task with a bar hands the bar
