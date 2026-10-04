@@ -4,8 +4,10 @@
 # Line format:  <sess:idx>US<window-id>US<colored display>
 #   field1 = jump target · field2 = stable summary key (window-id) · field3 = display
 # Data: @claude_state (no LLM), everything slow from collector caches.
-# --sidebar emits wid US state US glyph US label, without a header. It shares
-# the live hub's ordering/folds, but never follows its landed-history toggle.
+# --sidebar emits wid US state US glyph US name US tree US badge US depth US detail
+# (issue #1328: the pieces, so the view lays them out to its own width), without
+# a header. It shares the live hub's ordering/folds, but never follows its
+# landed-history toggle.
 #
 # HOT PATH (2026-07-07): this runs on every dash repaint (4×/s) — the loop is
 # exec-fork-free (bash builtins only: read/expansion instead of cat/cut/sed/awk).
@@ -70,26 +72,25 @@ if [ -n "$TICK" ]; then NOW=$(( TICK / 4 )); else TICK=$(date +%s); NOW=$TICK; f
 FRAME=${SPINF:$(( TICK % 10 )):1}
 
 # state → color/glyph/rank (set vars; no subshells)
-# $2 is the `needs` SUBTYPE (@claude_needs, issue #640) and splits the red glyph
-# into the two reflexes it really stands for — #605 shipped the answerer without
-# this and the operator was left guessing which red row it applied to:
+# FIVE glyphs, one per thing the operator does about a row (issue #1328 — there
+# were ten, and nobody could keep them apart):
 #
-#   ?  an open AskUserQuestion  → ⌃k answers it from here, no attach
-#   ⊘  an open permission prompt → only a human may approve one; ⌃k shows you WHAT
-#                                  is blocked (bin/fleet-permission.sh) so you can
-#                                  decide before walking over
-#   !  undifferentiated (the classifier's verdict, an unrecognised Notification)
-#   ⊠  the worker declared a blocker → read the issue and send a new prompt
-#   ↺  crash-restore could not bring the session back on its own (issue #1265:
-#      @restore_outcome awaiting/attention/failed) — the row is also tagged 「需要你」
+#   ⠏  working — preparing / waking included: it is busy, not waiting on you
+#   ↻  turn over, waiting on background work (looping)
+#   !  needs YOU — every @claude_needs kind (ask / perm / blocked / restore /
+#      the classifier's undifferentiated one) AND failed. WHICH kind is said in
+#      words ($ndet below: the hub's act cell, the sidebar's selected-row line);
+#      $2, the @claude_needs subtype (#640), is unchanged and still drives ⌃k
+#   ✓  done
+#   z  asleep — the glyph alone; the hub's act cell still says for how long
 #
-# All four are ONE display cell, like every other state glyph: the row's leading
-# "${gc}${gl}${R} " slot is a fixed width the right-pinned act/PR/ctx block is
-# padded against, so a 2-cell emoji here (🔒) would shear every red row.
+# Every one is ONE display cell: the row's leading "${gc}${gl}${R} " slot is a
+# fixed width the right-pinned act/PR/ctx block is padded against, so a 2-cell
+# emoji here (🔒) would shear every red row.
 state_v() { case "$1" in
-  needs)   gc=$RD; rk=0; case "${2:-}" in ask) gl='?';; perm) gl='⊘';; blocked) gl='⊠';; restore) gl='↺';; *) gl='!';; esac;;
+  needs)   gc=$RD; gl='!'; rk=0;;
   sleeping) gc=$GY; gl='z'; rk=1;;
-  preparing|waking) gc=$TX; gl='↻'; rk=1;;
+  preparing|waking) gc=$CY; gl=$FRAME; rk=1;;
   failed) gc=$RD; gl='!'; rk=0;;
   done)    gc=$GN; gl='✓';      rk=1;;
   working) gc=$CY; gl=$FRAME;   rk=2;;
@@ -305,14 +306,14 @@ ckey_v() { ckey=${1//_/_u}; ckey=${ckey//\//_s}; ckey=${ckey// /_w}; }
 # the pane), so it's only a fallback for the very first pre-fzf render before
 # FZF_COLUMNS exists; 120 as a last resort. Keep a 2-col gutter + 2-col right
 # margin so fzf never clips the ctx% digits. Layout column widths:
-#   LEFTW  = glyph1+sp + issue5+sp + tree1+sp + window26+sp = 37   (tree: issue #836)
+#   LEFTW  = glyph1+sp + issue5+sp + tree2+sp + window26+sp = 38   (tree: #836/#1328)
 #   RIGHTW = act8+sp + PR7+sp + ctx4 = 21   (act = last-activity, issue #228)
 # NB: LEFTW/ACTW/RIGHTW MUST stay in step with fleet-history.sh cmd_rows so the
 # live list and the landed history list render the SAME aligned columns (#228).
 COLS=${FZF_COLUMNS:-}
 case "$COLS" in ''|*[!0-9]*) COLS=$( { tput cols </dev/tty; } 2>/dev/null );; esac
 case "$COLS" in ''|*[!0-9]*) COLS=120;; esac
-LEFTW=37; ACTW=8; RIGHTW=21; USABLE=$(( COLS - 4 ))
+LEFTW=38; ACTW=8; RIGHTW=21; USABLE=$(( COLS - 4 ))
 [ "$USABLE" -lt $(( LEFTW + RIGHTW + 1 )) ] && USABLE=$(( LEFTW + RIGHTW + 1 ))
 
 # One tmux read, iterated twice (issue #503): pass A below builds the parent
@@ -407,52 +408,60 @@ elif [ -s "$_pf" ] && [ -n "$PRWANT" ]; then
     ($1 in want)' "$_pf" 2>/dev/null)
 fi
 
-# chain walk (issues #503/#623/#624): resolve a parent KEY to the ultimate LIVE
-# root — ≤4 hops, so a grandchild both GROUPS under and COUNTS toward the same row.
+# chain walk (issues #503/#623/#624, real depth since #1328): walk a parent KEY up
+# to the ultimate LIVE root, collecting EVERY live ancestor on the way, so a
+# grandchild nests under its real parent (not beside it under the root), each
+# level folds on its own, and each level counts its own subtree.
 # Sets, all as globals (no subshells — this runs per row at 4Hz):
-#   $croot    the root's key; EMPTY ⇒ orphan (the chain left this dash, or ran
-#             past 4 hops), and then $crk/$cidx keep the 9/99999 sink sentinel
-#   $crk/$cidx  that root's rank/idx — the group sort key
-#   $chops    hops taken; 0 ⇒ the named parent itself was missing
-#   $crootpin the root's @pin bit (#623), 0 when there is no live root
-#   $crootexp the root's @expand fold bit, 0 when there is no live root
-#   $crgrp    the root's repo group (#1031) — the group a cross-repo child renders
-#             in — 0 when there is no live root (unused then: an orphan keeps its own)
-#   $cpnrk/$cpnidx  the NEAREST pinned ANCESTOR's rank/idx,
-#             empty if none. Self is
-#             not considered here — the caller checks its own @pin first, so a
-#             pinned row is always its own pin root (#623's rule, unchanged).
+#   ANC=n     ancestors found; A{K,R,I,P,E,G}[0..n-1] = key/rank/idx/@pin/@expand/
+#             repo group, [0] the parent, [n-1] the topmost one found
+#   $croot    the root's key (= AK[n-1]); EMPTY ⇒ the chain is broken (a window
+#             in it closed, or it ran past CHAIN_MAX hops) — an ORPHAN, which
+#             sorts under the 9:99999 sink sentinel, still nested under whatever
+#             of its chain IS live
+#   $crootpin the root's @pin (0 if none); its @expand / repo group are
+#             AE/AG[ANC-1]
+#   $cpnlvl   level (index into A*) of the NEAREST pinned ancestor; '' if none.
+#             Self is not considered here — the caller checks its own @pin first,
+#             so a pinned row is always its own pin root (#623's rule, unchanged).
 # Factored out of the render loop in #624 so the progress count and the grouping
-# can never disagree about who a row belongs to: one walker, now five readers
-# (sort, fold, caret, pin, badge — and the repo group since #1031).
-chain_v() { croot=''; crk=9; cidx=99999; chops=0; crootpin=0; crootexp=0; crgrp=0
-  cpnrk=''; cpnidx=''
-  local cur="$1" t m prow prest porig prk pidx ppin pexp pgrp
+# can never disagree about who a row belongs to: one walker for sort, fold,
+# caret, pin, badge and the repo group (#1031).
+# CHAIN_MAX bounds a cycle in @origin; depth DISPLAYS at most DEPTH_MAX levels
+# (the indent stops growing), but the sort key keeps the whole path, so a
+# deeper subtree still stays contiguous.
+CHAIN_MAX=16; DEPTH_MAX=4
+AK=(); AR=(); AI=(); AP=(); AE=(); AG=()
+chain_v() { croot=''; crootpin=0; cpnlvl=''; ANC=0
+  local cur="$1" t m prow prest porig
   t=$'\n'"$KEYTAB"
-  while [ "$chops" -lt 4 ]; do
+  while [ "$ANC" -lt "$CHAIN_MAX" ]; do
     m=${t#*$'\n'"$cur"$'\t'}
-    [ "$m" = "$t" ] && return                               # parent not on this dash
+    [ "$m" = "$t" ] && return                               # not on this dash: broken
     prow=${m%%$'\n'*}
-    prk=${prow%%$'\t'*}; prest=${prow#*$'\t'}
-    pidx=${prest%%$'\t'*}; prest=${prest#*$'\t'}
-    ppin=${prest%%$'\t'*}; prest=${prest#*$'\t'}
-    pexp=${prest%%$'\t'*}; prest=${prest#*$'\t'}
-    pgrp=${prest%%$'\t'*}; porig=${prest#*$'\t'}
-    [ "$ppin" = 1 ] && [ -z "$cpnrk" ] && { cpnrk=$prk; cpnidx=$pidx; }
+    AK[ANC]=$cur
+    AR[ANC]=${prow%%$'\t'*}; prest=${prow#*$'\t'}
+    AI[ANC]=${prest%%$'\t'*}; prest=${prest#*$'\t'}
+    AP[ANC]=${prest%%$'\t'*}; prest=${prest#*$'\t'}
+    AE[ANC]=${prest%%$'\t'*}; prest=${prest#*$'\t'}
+    AG[ANC]=${prest%%$'\t'*}; porig=${prest#*$'\t'}
+    [ "${AP[ANC]}" = 1 ] && [ -z "$cpnlvl" ] && cpnlvl=$ANC
+    ANC=$((ANC+1))
     case "$porig" in
-      issue-*|scratch-*|*:issue-*|*:scratch-*) cur=$porig; chops=$((chops+1)) ;;  # a child too — keep climbing
-      *) croot=$cur; crk=$prk; cidx=$pidx; crootpin=$ppin; crootexp=$pexp; crgrp=$pgrp; return ;;   # hub/autofill/none
+      issue-*|scratch-*|*:issue-*|*:scratch-*) cur=$porig ;;   # a child too — keep climbing
+      *) croot=$cur; crootpin=${AP[ANC-1]}
+         return ;;                                            # hub/autofill/none: the root
     esac
   done
 }
 
-# pass A2 — KIDTAB: one `\n<root-key>\t<rk>\n` record per window that resolves to
-# a LIVE root, so a row that spawned work can report its subtree's progress
-# (issue #624). Attribution is #503's grouping verbatim — a grandchild counts
-# toward the ULTIMATE live root, which is the row it renders under, so the badge
-# always describes exactly the indented block beneath it — and an orphan (parent
-# window closed, or a chain past 4 hops) counts toward nobody. (The #623 pin tier
-# only re-sorts that block; it never re-parents anyone, so the count is unaffected.)
+# pass A2 — KIDTAB: one `\n<ancestor-key>\t<rk>\n` record per (window, live
+# ancestor) pair, so EVERY row that spawned work reports its OWN subtree's
+# progress (issue #624; per level since #1328): a grandchild counts toward its
+# parent AND its grandparent, so the root's badge still sums the whole tree and
+# a middle row's badge describes exactly the block indented beneath it. The
+# attribution is chain_v's, the same walker the nesting sorts by. A window whose
+# parent closed counts toward nobody (it has no live ancestor to count toward).
 # Each record carries its OWN leading AND trailing newline: the counting
 # substitutions in pass B replace non-overlapping matches, so records sharing one
 # separator newline would count `\nA\t1\n` twice in a row as ONE.
@@ -462,7 +471,8 @@ while IFS=$'\t' read -r kkey krk _ _ _ _ korig; do
   # quiet-but-unfinished (#1331): `1L` still counts toward the total, never the k
   case "$UNFIN" in *$'\n'"$kkey"$'\n'*) krk=1L ;; esac
   chain_v "$korig"
-  [ -n "$croot" ] && KIDTAB+=$'\n'"$croot"$'\t'"$krk"$'\n'
+  _i=0
+  while [ "$_i" -lt "$ANC" ]; do KIDTAB+=$'\n'"${AK[_i]}"$'\t'"$krk"$'\n'; _i=$((_i+1)); done
 done <<< "$KEYTAB"
 
 # RGFOLD[g]=1 — the repo groups this frame draws FOLDED (issue #1037): @repo_fold
@@ -603,15 +613,19 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # a sleeper's act cell is how long it has slept (issue #1051), not its last turn
   zwait=''
   if [ "$state" = sleeping ]; then zage_v "$slept"; [ -n "$zage" ] && act=$zage; fi
-  # 「需要你」 (issue #1265): a window crash-restore parked for the operator. The
-  # tag's display width is measured once a frame, and only when a row needs it.
-  rtag=''
-  if [ "$state" = needs ] && [ "$nsub" = restore ]; then
-    if [ -z "${RESTORE_TAG:-}" ]; then
-      RESTORE_TAG=$(fleet_ui_t restore_needs_you); fleet_clip_display 40 "$RESTORE_TAG"
-      RESTORE_TAGW=${clip_w:-${#RESTORE_TAG}}
-    fi
-    rtag=$RESTORE_TAG
+  # WHICH `!` this is (issue #1328): the five needs glyphs are one red `!` now,
+  # so the kind moves into words — the hub's act cell, the sidebar's selected-row
+  # line. @claude_needs is unchanged; only its display moved. One lookup per
+  # kind a frame (fleet_ui_t forks), cached in ND_<kind>.
+  ndet=''
+  case "$state" in
+    needs)  case "$nsub" in ask|perm|blocked|restore) _nk=$nsub ;; *) _nk=other ;; esac ;;
+    failed) _nk=failed ;;
+    *)      _nk='' ;;
+  esac
+  if [ -n "$_nk" ]; then
+    eval "ndet=\${ND_$_nk-}"
+    [ -n "$ndet" ] || { ndet=$(fleet_ui_t "needs_$_nk"); eval "ND_$_nk=\$ndet"; }
   fi
   # A fresh daemon notice is tied to this exact done turn. Activity invalidates
   # it immediately; a stopped daemon cannot leave a misleading permanent marker.
@@ -652,73 +666,59 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   issd=''; icol=$GN
   case "$okey" in issue-*|*:issue-*) issd="#${okey##*issue-}" ;; esac
   # --- spawn provenance (issue #503) -----------------------------------------
-  # ↳ tag: rendered in the flex span for every non-hub origin (`↳#483` for a
-  # worker parent, `↳~12` for a scratch one — key_label's grammar — the literal
-  # word for autofill/bridge). └ TREE CELL: only when the parent is a WINDOW kind
-  # (issue-*/scratch-*), i.e. the row is a child in the grouped list.
-  # Built as TWO pieces and composed after the chain walk below, because whether the
-  # provenance half survives depends on where the row ends up nesting — and the
-  # agent half must survive either way.
+  # The hierarchy is said by POSITION alone (issue #1328): a child sorts right
+  # under its real parent and indents one level per generation. The old `↳#483` /
+  # `↳~12` parent tag — and the `↳autofill` / `↳bridge` source word — are gone:
+  # the indent already says the first, and the second was noise on every line.
+  # The parent's history is still in /fleet-history.
   #
-  # $treed is the fixed 2-cell TREE COLUMN between issue and window (issue #836).
-  # It used to be an indent spliced into the name (`dname="└ $name"`), which cost
-  # the child row 2 of the window column's 26 cells — so a 13-glyph CJK name lost
-  # its last character on a child row and kept it on a root — and started the two
-  # kinds of row at different columns. The glyph moved out; $dname is now the name,
-  # nothing else, and every row's name starts at the same column with all 26 cells.
-  provd=''; dname=$name; treed=''
-  case "$origin" in
-    '') : ;;
-    issue-*|*:issue-*)     provd="↳#${origin##*issue-}";   treed='└' ;;
-    scratch-*|*:scratch-*) provd="↳~${origin##*scratch-}"; treed='└' ;;
-    *)         provd="↳$origin" ;;
-  esac
+  # $treed is the fixed 2-cell TREE COLUMN between issue and window (issue #836,
+  # 2 cells since #1328): `└ ` a first-level child, ` └` a second, `┊└` third and
+  # deeper; a row that owns a subtree swaps its free cell for the fold caret
+  # (`▾ ` a root, `└▾`, ` ▾`, `┊▾`). The name keeps all 26 of its cells.
+  dname=$name; treed=''
   # agent tag (issue #547): a window running a non-Claude agent (@cc_agent, stamped
-  # by bin/fleet-codex.sh) shows its agent name in the same flex span, after the
-  # provenance tag — a Claude window carries no @cc_agent and draws nothing. ASCII
-  # only, so the ${#tagd} width math below stays exact.
+  # by bin/fleet-codex.sh) shows its agent name in the flex span — a Claude window
+  # carries no @cc_agent and draws nothing. ASCII only, so the ${#tagd} width math
+  # below stays exact.
   agentd=''
   case "$agent" in ''|claude) : ;; *) agentd="${agent//[^A-Za-z0-9_-]/}" ;; esac
-  # group sort key: a root keeps its own (rank, idx); a child resolves its parent
-  # CHAIN (≤4 hops, grandchildren group under the ultimate live root) and inherits
-  # that root's (rank, idx) with depth=1 so it sorts right below it; a chain that
-  # breaks (parent window closed) is an ORPHAN → the 9/99999 sentinel sinks the
-  # row below every live group, sub-sorted by its own rank/idx.
+  # sort key: the row's PATH (issue #1328) — one `<rk>:<idx>` segment per live
+  # ancestor, root first, then its own, `/`-joined and zero-padded so a plain
+  # byte sort puts every subtree contiguously under its parent, siblings in the
+  # (rank, idx) order roots have always had. A root's path is its own segment —
+  # exactly the old (grk, gidx, depth, rk, idx) order for a one-level tree. A
+  # broken chain (a window in it closed) is an ORPHAN: the `9:99999/` sentinel
+  # sinks it below every live group, still nested under what IS live of its chain.
   #
   # PIN (issue #623) is a tier ABOVE all of that: `pinned` (0 = pinned, 1 =
-  # ordinary) is the FIRST sort key, so a pinned window outranks every unpinned one
-  # whatever its status. The bit rides the SAME parent chain as (grk, gidx) — that
-  # is the load-bearing part: pinning a parent has to take its children up with it,
-  # or the pin strands them below and they read as orphans. Two rules make it exact:
-  #   • the ultimate live ROOT is pinned → the whole group is pinned and keeps the
-  #     grouping (and indentation) it already had — the everyday case;
-  #   • the root is NOT pinned but this row, or a MIDDLE ancestor, is → that pinned
-  #     node becomes the group's root for sorting, so a pinned child floats with its
-  #     own descendants still nested under it. A row that is its own pin root sheds
-  #     the └ indent, for the same reason an orphan does: its parent is no longer
-  #     the line above, and indenting under an unrelated row is a lie. The ↳ tag
-  #     stays either way, so the provenance is never lost.
-  grk=$rk; gidx=$idx; depth=0; rootpin=0
-  # nearest pinned ancestor-or-SELF, walking up — self first, so a pinned row is
-  # always its own pin root and can never be re-parented above itself.
-  pnrk=''; pnidx=''; pndepth=0
-  [ "$pin" = 1 ] && { pnrk=$rk; pnidx=$idx; }
-  case "$origin" in
-    issue-*|scratch-*|*:issue-*|*:scratch-*)
-      depth=1
-      chain_v "$origin"; grk=$crk; gidx=$cidx; rootpin=$crootpin
-      [ -z "$pnrk" ] && [ -n "$cpnrk" ] && { pnrk=$cpnrk; pnidx=$cpnidx; pndepth=1; }
-      # parent not on this dash at all (closed, or a key from ANOTHER fleet):
-      # keep the ↳ tag but blank the tree cell — an orphan sinks below every live
-      # group, and drawing it as a child there reads as a child of an unrelated row.
-      [ -z "$croot" ] && [ "$chops" -eq 0 ] && treed='' ;;
-  esac
-  pinned=1
-  if [ "$rootpin" = 1 ]; then
-    pinned=0                            # whole group floats, exactly as it grouped
-  elif [ -n "$pnrk" ]; then
-    pinned=0; grk=$pnrk; gidx=$pnidx; depth=$pndepth
-    [ "$pndepth" = 0 ] && treed=''      # promoted to a group root → empty tree cell
+  # ordinary) sorts before the path, so a pinned window outranks every unpinned one
+  # whatever its status. The bit rides the SAME ancestor chain — pinning a parent
+  # takes its children up with it, or the pin strands them as orphans:
+  #   • the ultimate live ROOT is pinned → the whole tree is pinned and keeps its
+  #     nesting — the everyday case;
+  #   • otherwise the nearest pinned ancestor-or-SELF becomes the tree's top for
+  #     sorting: its path starts there, so it floats with its own descendants still
+  #     nested under it. A row that is its own pin root sheds the └ indent: its
+  #     parent is no longer the line above, and indenting under an unrelated row is
+  #     a lie.
+  printf -v gpath '%s:%05d' "$rk" "$idx"
+  depth=0; pinned=1; ANC=0; croot=''; top=0
+  if [ "$pin" = 1 ]; then pinned=0
+  else
+    case "$origin" in
+      issue-*|scratch-*|*:issue-*|*:scratch-*)
+        chain_v "$origin"
+        top=$ANC                               # levels kept above this row
+        if [ "$crootpin" = 1 ]; then pinned=0
+        elif [ -n "$cpnlvl" ]; then pinned=0; top=$((cpnlvl + 1)); fi
+        depth=$top
+        _i=0
+        while [ "$_i" -lt "$top" ]; do
+          printf -v gpath '%s:%05d/%s' "${AR[_i]}" "${AI[_i]}" "$gpath"; _i=$((_i+1))
+        done
+        [ "$pinned" = 1 ] && [ -z "$croot" ] && gpath="9:99999/$gpath" ;;
+    esac
   fi
   # --- the 置顶 group: every pinned row, above every repo group (issue #1170) ---
   # A row in the pin tier (`pinned`=0 — it carries @pin, or floats with a pinned
@@ -731,20 +731,20 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # render under it. In a 2+ repo fleet the heading above no longer names a
   # repo, so a pinned row wears its repo tag — #1031's rule, applied as written.
   # --- repo group: a child FOLLOWS ITS PARENT (issue #1031) ---------------------
-  # A child nested under a live root renders in that root's repo group — the same
-  # attribution the sort, fold, caret and badge already take off chain_v — or it
-  # would land in its own repo's group with a `└` under an unrelated row, folded
-  # away by a caret that sits in another group. Orphans (no live root) are depth
-  # 0 and keep their own. Where the group is not the row's own, a short repo tag
-  # says so — the heading above no longer names its repo. Counted HERE, once the
-  # group is resolved and still BEFORE the fold filter, so a heading's `(n)` is
-  # the rows that render under it, a collapsed parent's hidden ones too.
+  # A nested row renders in the repo group of the top of the tree it renders in
+  # — the same attribution the sort, fold, caret and badge take off chain_v — or
+  # it would land in its own repo's group with a `└` under an unrelated row,
+  # folded away by a caret that sits in another group. Where the group is not the
+  # row's own, a short repo tag says so — the heading above no longer names its
+  # repo. Counted HERE, once the group is resolved and still BEFORE the fold
+  # filter, so a heading's `(n)` is the rows that render under it, a collapsed
+  # parent's hidden ones too.
   repod=''
   if [ "$pinned" = 0 ]; then
     rgrp=$PGRP; PINCNT=$((PINCNT + 1))
     [ "$RGRP" = 1 ] && repod=${RGTAG[ownrgrp]-}
   elif [ "$RGRP" = 1 ]; then
-    [ "$depth" -gt 0 ] && [ -n "$croot" ] && rgrp=$crgrp
+    [ "$depth" -gt 0 ] && rgrp=${AG[depth-1]}
     [ "$rgrp" != "$ownrgrp" ] && repod=${RGTAG[ownrgrp]-}
     RGCNT[rgrp]=$(( ${RGCNT[rgrp]:-0} + 1 ))
   fi
@@ -765,49 +765,33 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
      { [ "$SIDEBAR" = 0 ] || [ "$wid" != "${FLEET_SIDEBAR_CURRENT:-}" ]; }; then
     continue
   fi
-  # --- fold: a collapsed holder hides its subtree ------------------------------
-  # Default-collapsed (the @expand polarity in exp_v): a row only survives here if
-  # the row it renders UNDER is expanded. Three rails keep that from hiding
-  # anything the operator needs:
-  #   • only `depth>0` rows can hide — precisely the ones drawn with the `└` indent
-  #     under the line above. A root, an ORPHAN (parent window closed) and a row
-  #     promoted to its own pin root all carry depth 0 and are never touched, so
-  #     nothing can disappear with no visible parent to expand it back from;
-  #   • `rk != 0` — a child in `needs` (the red `!`) is EXEMPT and stays on the
-  #     list whatever the fold says. The dash's whole job is surfacing the row
-  #     that is waiting on you, and the fleet's rule is that the quiet layer folds
-  #     while the loud one never does;
-  #   • the governing bit is the ULTIMATE LIVE ROOT's ($crootexp) — the SAME
-  #     attribution pass A2 counts by and the caret below is drawn from, so every
-  #     fold that hides a row has a visible, caret-marked row to expand it back
-  #     from. (A row with a broken chain has no live root at all — `$croot` empty,
-  #     the 9/99999 orphan sentinel — and is never hidden: there would be nothing
-  #     on the list to unfold it.) The #623 pin tier re-SORTS a subtree and never
-  #     re-parents it, here exactly as in the count.
+  # --- fold: a collapsed holder hides its subtree, level by level --------------
+  # Default-collapsed (the @expand polarity in exp_v): a nested row survives here
+  # only if EVERY ancestor it renders under is expanded (issue #1328 — each level
+  # folds on its own; before, only the root's bit counted). Rails that keep it
+  # from hiding anything the operator needs:
+  #   • only `depth>0` rows can hide — the ones drawn indented under a row above.
+  #     A root, a closed parent's child and a row promoted to its own pin root all
+  #     carry depth 0 and are never touched, so nothing can vanish with no visible
+  #     parent to expand it back from; and every ancestor a row renders under owns
+  #     a subtree, so it carries a caret to unfold from;
+  #   • `rk != 0` — a row in `needs` (the red `!`) is EXEMPT and stays on the list
+  #     whatever the folds say, under its real parent. The dash's whole job is
+  #     surfacing the row that is waiting on you: the quiet layer folds, the loud
+  #     one never does;
+  #   • the sidebar's current window is never hidden from itself.
   # Hiding is a RENDER filter only: KIDTAB was counted in pass A2 over every window,
-  # so a collapsed parent's `3/5 ✓ · 1!` badge still describes the whole subtree —
-  # which is exactly what makes the fold safe to have on by default.
-  if [ "$depth" -gt 0 ] && [ -n "$croot" ] && [ "$rk" != 0 ] && [ "$crootexp" != 1 ] &&
+  # so a collapsed parent's `3/5` badge still describes its whole subtree — which
+  # is exactly what makes the fold safe to have on by default.
+  if [ "$depth" -gt 0 ] && [ "$rk" != 0 ] &&
      { [ "$SIDEBAR" = 0 ] || [ "$wid" != "${FLEET_SIDEBAR_CURRENT:-}" ]; }; then
-    continue
+    _i=0; _hid=0
+    while [ "$_i" -lt "$depth" ]; do
+      [ "${AE[_i]}" = 1 ] || { _hid=1; break; }; _i=$((_i+1))
+    done
+    [ "$_hid" = 1 ] && continue
   fi
-  # --- the ↳ tag, once the nesting is known ------------------------------------
-  # DROP it where the `└` indent already says the same thing: the row is drawn
-  # inside a block AND the session it came from is the very row that block hangs
-  # off. That is the everyday case — a worker spawned by the parent right above it
-  # — and there the tag was pure duplication.
-  # It STAYS wherever the indent does NOT say it, which is every case the fold and
-  # the two-level-flat grouping cannot express:
-  #   • a GRANDCHILD — it is drawn at the same indent as a child, under the ultimate
-  #     root, so `↳#<middle>` is the only thing naming its actual parent;
-  #   • an ORPHAN (parent window closed) — it has no indent at all, and the tag is
-  #     the only surviving trace of where it came from;
-  #   • a row #623 promoted to its own pin root — it sheds the indent on purpose;
-  #   • a non-window origin (`autofill`, `bridge`) — never indented, never nested.
-  # The agent tag (#547) is unaffected: it describes the row, not its parentage.
-  [ "$depth" -gt 0 ] && [ -n "$croot" ] && [ "$origin" = "$croot" ] && provd=''
-  tagd="$provd"
-  [ -n "$repod" ] && tagd="${tagd:+$tagd }$repod"
+  tagd="$repod"
   [ -n "$agentd" ] && tagd="${tagd:+$tagd }$agentd"
   # repo badge (issue #793): DROPPED under `all` (issue #995) — the only frame
   # that ever drew it is the grouped one (#974), where the heading above already
@@ -833,69 +817,68 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   esac
 
   # --- subtree progress (issue #624) ------------------------------------------
-  # A row that SPAWNED work reports the state of the group rendered beneath it:
-  # `3/5 ✓` = 3 of its 5 descendants done, and a LOUD `· 1!` when one of them is
-  # asking for the operator. Before this the parent knew nothing: each child
-  # pushed its own report on landing (#574) and no row held the total.
-  # Counted off KIDTAB with the fork-free length-delta idiom (one substitution
-  # per figure, no subshell) so the 4Hz hot path keeps its exec budget.
+  # A row that SPAWNED work reports its subtree: `3/5` = 3 of its 5 descendants
+  # done — at EVERY level (issue #1328), counted off KIDTAB with the fork-free
+  # length-delta idiom (one substitution per figure, no subshell) so the 4Hz hot
+  # path keeps its exec budget. Just the two numbers: the old trailing `✓` was
+  # there on every parent whatever its state, and the loud `· 1!` is gone too — a
+  # child that needs you is the red `!` on its OWN row, which no fold hides.
   # A row with no children draws NOTHING — the dash's quiet layer must not grow a
   # badge on every line.
-  kidd=''; kidpfx=''; carg=''
+  kidd=''; carg=''
   if [ -n "$okey" ]; then
     kn=$'\n'"$okey"$'\t'; kt=${KIDTAB//"$kn"/}
     ktot=$(( (${#KIDTAB} - ${#kt}) / ${#kn} ))
     if [ "$ktot" -gt 0 ]; then
       kn=$'\n'"$okey"$'\t1'$'\n'; kt=${KIDTAB//"$kn"/}    # rk 1 = done
       kdone=$(( (${#KIDTAB} - ${#kt}) / ${#kn} ))
-      kn=$'\n'"$okey"$'\t0'$'\n'; kt=${KIDTAB//"$kn"/}    # rk 0 = needs
-      kneed=$(( (${#KIDTAB} - ${#kt}) / ${#kn} ))
-      # quiet by default — progress is not a call for attention. Only the needs
-      # count is loud, the same hierarchy the state glyph already keeps.
-      kidd="$kdone/$ktot ✓"; kidpfx="${GY}${kidd}${R}"
-      [ "$kneed" -gt 0 ] && { kidd="$kidd · $kneed!"
-                              kidpfx="${kidpfx}${GY} · ${R}${RD}${kneed}!${R}"; }
+      kidd="$kdone/$ktot"
       # fold caret — ONLY on a row that has a subtree, so the quiet layer still
       # doesn't grow a mark on every line. It reads this row's OWN @expand,
-      # because this row is the one ←/→ toggles. `ktot>0` already implies depth 0:
-      # pass A2 attributes every descendant to its ULTIMATE root, and a root's
-      # @origin is hub/autofill/none, so only a top-level row can carry a count —
-      # which is why a caret is guaranteed present for every subtree the filter
-      # above can hide.
-      # It rides the TREE COLUMN (issue #836), directly left of the name it folds,
-      # rather than the flex span it used to share with the pin mark/↳/agent/badge. `ktot>0`
-      # implies depth 0, so the caret and the `└` can never both want the cell.
+      # because this row is the one ←/→ toggles; every row the fold above can hide
+      # renders under such a row.
       if [ "$exp" = 1 ]; then carg='▾'; else carg='▸'; fi
-      treed=$carg
     fi
   fi
+  # the tree cell (issues #836/#1328): 2 cells, the level said by WHERE the `└`
+  # sits — left for a first-level child, right for a second, `┊└` deeper — and a
+  # row that owns a subtree trades its free cell (or its `└`, from the second
+  # level down) for the caret. A root with no subtree: blank.
+  case "$depth" in
+    0) treed=${carg:+$carg }; treed=${treed:-'  '} ;;
+    1) treed="└${carg:- }" ;;
+    2) treed=" ${carg:-└}" ;;
+    *) treed="┊${carg:-└}" ;;
+  esac
   if [ "$SIDEBAR" = 1 ]; then
-    # The view clips by terminal cells (including CJK), after preserving the
-    # full name here. Stable window IDs survive renumbering between draw/click.
-    # The tree cell is its OWN field (issue #836), not spliced into the label: the
-    # view draws `marker glyph tree label`, so a 30-column sidebar starts every
-    # name at the same column instead of indenting the child's text by two.
+    # The view lays the row out to its own width (issue #1328), so the producer
+    # hands it the PIECES, never a pre-joined label: the name, the tree prefix,
+    # the subtree badge, the nesting depth, and the needs detail. The view
+    # right-aligns the badge and clips the NAME (with `…`) — a narrow pane gives
+    # up name, never the count. Stable window IDs survive renumbering between
+    # draw/click.
+    #   tree   = 2 cells of indent per level past the first, then `└`, then the
+    #            caret when the row owns a subtree (`└▾`); a root: its caret or blank
+    #   detail = what kind of `!` this is (ask / perm / blocked / restore /
+    #            failed) — the view shows it under the list for the selected row
+    if [ "$depth" -gt 0 ]; then
+      _d=$depth; [ "$_d" -gt "$DEPTH_MAX" ] && _d=$DEPTH_MAX
+      printf -v treed '%*s└%s' $(( (_d - 1) * 2 )) '' "$carg"
+    else treed=$carg; fi
     label="$dname"
-    # `z 42m` in the glyph field (issue #1051): the view draws it as-is, so a
-    # sleeping row reads its age before the name, where a narrow pane can't clip it.
-    if [ "$state" = sleeping ]; then zage_v "$slept"; [ -n "$zage" ] && gl=$zage; fi
     [ -n "$repod" ] && label="$label $repod"       # cross-repo child (#1031)
-    [ -n "$kidd" ] && label="$label · $kidd"
-    [ -n "$zwait" ] && label="$label · ${zwait#z · }"   # glyph already reads `z <age>`
-    [ -n "$rtag" ] && label="$label · ${rtag#↺ }"       # glyph already reads `↺`
-    buf+="$rgrp	$pinned	$grk	$gidx	$depth	$rk	$idx	$wid$US$state$US$gl$US$label$US${treed:- }"$'\n'
+    [ -n "$zwait" ] && label="$label · ${zwait#z · }"
+    [ "$depth" -gt "$DEPTH_MAX" ] && depth=$DEPTH_MAX
+    buf+="$rgrp	$pinned	$gpath	$wid$US$state$US$gl$US$label$US${treed:- }$US$kidd$US$depth$US$ndet"$'\n'
     continue
   fi
-  # full row: glyph1·issue5·tree1·window26·⟨flex: ↳tag or empty⟩·act8·PR7·ctx4
-  # the tree cell (issue #836) carries the hierarchy — `▾`/`▸` on a row that owns a
-  # subtree, `└` on a child, blank on a root/orphan/pin-root — so the window column
-  # holds the NAME and nothing else and every name starts at the same column.
-  # window sits right after it; act/PR/ctx right-align to the edge, the
-  # flex gap between them absorbing the width so the metadata block stays pinned
-  # right. The flex span used to carry the LLM one-liner (summary column, retired
-  # in issue #535 — it was the dash's only token-spending column); the ↳
-  # provenance tag and the #624 subtree-progress badge live there now. (The #623
-  # pin mark opened it until issue #1170 moved the pin into its own group.)
+  # full row: glyph1·issue5·tree2·window26·⟨flex: tags, badge⟩·act8·PR7·ctx4
+  # the tree cell carries the hierarchy, so the window column holds the NAME and
+  # nothing else and every name starts at the same column. act/PR/ctx right-align
+  # to the edge, the flex gap between them absorbing the width so the metadata
+  # block stays pinned right. The flex span used to carry the LLM one-liner
+  # (summary column, retired in issue #535); the agent/repo/mem tags and the
+  # #624 subtree-progress badge live there now.
   fld 5  "$issd"; f_iss=$fld_out
   # window column (issue #534): pad/clip by DISPLAY width, not code points. A CJK
   # name is the everyday case now that the prompt line NAMES a scratch, and a CJK
@@ -907,36 +890,38 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
                     printf -v f_name '%s%*s' "${clip_out:-}" $(( 26 - ${clip_w:-0} )) '' ;;
     *)              fld 26 "$dname"; f_name=$fld_out ;;
   esac
-  fld "$ACTW" "$act"; f_act=$fld_out
+  # the act cell of a `!` row names WHICH `!` it is (issue #1328: the five needs
+  # glyphs are one now). Its text is CJK in zh — padded by display width, which
+  # for these all-wide-or-all-ASCII words is ${#} plus one per non-ASCII char.
+  if [ -n "$ndet" ]; then
+    _a=${ndet//[![:ascii:]]/}; _w=$(( ${#ndet} * 2 - ${#_a} ))
+    [ "$_w" -le "$ACTW" ] && { printf -v f_act '%s%*s' "$ndet" $(( ACTW - _w )) ''; acol=$RD; } \
+      || { fld "$ACTW" "$act"; f_act=$fld_out; }
+  else fld "$ACTW" "$act"; f_act=$fld_out; fi
   fld 7  "$ptxt"; f_pr=$fld_out
   fld 4  "$pct";  f_pct=$fld_out
-  # the flex span draws the ↳ tag (+ an agent tag, #547), then the #624 progress
-  # badge; ↳/#/~/✓/· are single-cell and the agent name ASCII, so ${#} is the
-  # display width of both and the pad keeps act/PR/ctx pinned right.
+  # the flex span draws the tags (#547/#1031/#1292), then the #624 progress
+  # badge; the tags are ASCII and the badge digits, so ${#} is the display width
+  # of both and the pad keeps act/PR/ctx pinned right.
   # (fld() shares the same ${#}=chars assumption; its remaining inputs — issue/PR/
   #  ctx — are ASCII. The window column, where CJK names are ordinary since #534,
   #  takes the width-aware path above.)
   tagpfx=''; dwidth=0
   [ -n "$tagd" ] && { tagpfx="${IN}${tagd}${R}"; dwidth=${#tagd}; }
-  # (the caret used to open this span and cost it a constant 2; since issue #836 it
-  # lives in the fixed tree column, so the flex span carries no caret width at all.)
   [ -n "$kidd" ] && { [ -n "$tagpfx" ] && { tagpfx+=' '; dwidth=$((dwidth+1)); }
-                      tagpfx+="$kidpfx"; dwidth=$(( dwidth + ${#kidd} )); }
+                      tagpfx+="${GY}${kidd}${R}"; dwidth=$(( dwidth + ${#kidd} )); }
   # An automatic wake held at the session limit (issue #1058) says so here.
   [ -n "$zwait" ] && { [ -n "$tagpfx" ] && { tagpfx+=' '; dwidth=$((dwidth+1)); }
                        tagpfx+="${AM}${zwait}${R}"; dwidth=$(( dwidth + ${#zwait} )); }
-  [ -n "$rtag" ] && { [ -n "$tagpfx" ] && { tagpfx+=' '; dwidth=$((dwidth+1)); }
-                      tagpfx+="${RD}${rtag}${R}"; dwidth=$(( dwidth + RESTORE_TAGW )); }
   pad=$(( USABLE - LEFTW - dwidth - RIGHTW )); [ "$pad" -lt 1 ] && pad=1
   printf -v gap '%*s' "$pad" ''
-  # tree cell: exactly one cell of source text — the glyph, or a space when the row
-  # is a root/orphan/pin-root. Like the old caret it is a CONSTANT width, not
-  # a ${#} count: `└`/`▸`/`▾` are East-Asian AMBIGUOUS, so a CJK-wide terminal may
-  # draw them 2 cells; folding the cell into the fixed LEFTW keeps the right-pinned
-  # act/PR/ctx block put whatever the terminal measures.
-  disp="${gc}${gl}${R} ${icol}${f_iss}${R} ${GY}${treed:- }${R} ${nmcol}${f_name}${R} ${tagpfx}${gap}${acol}${f_act}${R} ${pcol}${f_pr}${R} ${pcolr}${f_pct}${R}"
+  # tree cell: exactly two cells of source text. Like the old caret it is a
+  # CONSTANT width, not a ${#} count: `└`/`▸`/`▾`/`┊` are East-Asian AMBIGUOUS,
+  # so a CJK-wide terminal may draw them 2 cells; folding the cell into the fixed
+  # LEFTW keeps the right-pinned act/PR/ctx block put whatever the terminal measures.
+  disp="${gc}${gl}${R} ${icol}${f_iss}${R} ${GY}${treed}${R} ${nmcol}${f_name}${R} ${tagpfx}${gap}${acol}${f_act}${R} ${pcol}${f_pr}${R} ${pcolr}${f_pct}${R}"
 
-  buf+="$rgrp	$pinned	$grk	$gidx	$depth	$rk	$idx	$sess:$idx$US$wid$US$disp"$'\n'
+  buf+="$rgrp	$pinned	$gpath	$sess:$idx$US$wid$US$disp"$'\n'
 done <<< "$WLIST"
 
 # column header — pinned at top of the list by fzf --header-lines=1. Same
@@ -951,7 +936,7 @@ fld 7  "PR";     h_p=$fld_out
 fld 4  "ctx";    h_c=$fld_out
 h_pad=$(( USABLE - LEFTW - RIGHTW )); [ "$h_pad" -lt 1 ] && h_pad=1
 printf -v h_gap '%*s' "$h_pad" ''
-printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_i}   ${h_n} ${h_gap}${h_a} ${h_p} ${h_c}${R}"
+printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_i}    ${h_n} ${h_gap}${h_a} ${h_p} ${h_c}${R}"
 fi
 
 # the 置顶 group's frame (issue #1170): a `置顶 (n)` heading above the pinned rows
@@ -972,11 +957,11 @@ if [ "$PINCNT" -gt 0 ]; then
   t=$(fleet_ui_t pin_heading_fmt "$PINCNT"); [ "$PINFOLD" = 1 ] && t="▸ $t"
   printf -v rule '%*s' $(( USABLE > 200 ? USABLE : 200 )) ''; rule=${rule// /─}
   if [ "$SIDEBAR" = 1 ]; then
-    buf+="$PGRP	-1	0	0	0	0	0	hdr${US}pin$US$US$t$US "$'\n'
-    buf+="$PGRP	2	0	0	0	0	0	hdr$US$US$US$rule$US "$'\n'
+    buf+="$PGRP	-1	0	hdr${US}pin$US$US$t$US "$'\n'
+    buf+="$PGRP	2	0	hdr$US$US$US$rule$US "$'\n'
   else
-    buf+="$PGRP	-1	0	0	0	0	0	hdr${US}hdr${US}${IN}${t}${R}${US}pin"$'\n'
-    buf+="$PGRP	2	0	0	0	0	0	hdr${US}hdr${US}${GY}${rule:0:USABLE}${R}"$'\n'
+    buf+="$PGRP	-1	0	hdr${US}hdr${US}${IN}${t}${R}${US}pin"$'\n'
+    buf+="$PGRP	2	0	hdr${US}hdr${US}${GY}${rule:0:USABLE}${R}"$'\n'
   fi
 fi
 
@@ -1011,9 +996,9 @@ if [ "$RGRP" = 1 ]; then
     t="$2 ($n)"
     [ "${RGFOLD[$1]:-0}" = 1 ] && t="▸ $t"
     if [ "$SIDEBAR" = 1 ]; then
-      buf+="$1	-1	0	0	0	0	0	hdr$US$tg$US$US$t$US "$'\n'
+      buf+="$1	-1	0	hdr$US$tg$US$US$t$US "$'\n'
     else
-      buf+="$1	-1	0	0	0	0	0	hdr${US}hdr${US}${IN}${t}${R}${tg:+$US$tg}"$'\n'
+      buf+="$1	-1	0	hdr${US}hdr${US}${IN}${t}${R}${tg:+$US$tg}"$'\n'
     fi
   }
   while IFS=$'\t' read -r g nm rp; do
@@ -1031,11 +1016,11 @@ fi
 if [ "$NSESS" = 0 ]; then
   if [ "$SIDEBAR" = 1 ]; then
     t=$(fleet_ui_t empty_sidebar)
-    buf+="-1	-1	0	0	0	0	0	hdr$US$US$US$t$US "$'\n'
+    buf+="-1	-1	0	hdr$US$US$US$t$US "$'\n'
   else
     DASH_GLYPH_NEW='⌃n'; eval "$(bash "$BIN/dash-keymap.sh" env 2>/dev/null)"
     t=$(fleet_ui_t empty_dash_fmt "$DASH_GLYPH_NEW")
-    buf+="-1	-1	0	0	0	0	0	hdr${US}hdr${US}${GY}  ${t}${R}"$'\n'
+    buf+="-1	-1	0	hdr${US}hdr${US}${GY}  ${t}${R}"$'\n'
   fi
 fi
 
@@ -1046,12 +1031,12 @@ fi
 # pinned windows (and the subtrees that float with them) take the whole top of the
 # list whatever their status; below them, roots (hub/autofill/bridge spawns) keep
 # the status-rank order they always had; each root's children sort directly below
-# it (depth breaks the tie, then the child's own rank/idx); orphans — children
-# whose parent window closed — sink below every live group. Pins sort AMONG
-# themselves by the same (grk, gidx) they always had, so the pinned block is the
-# ordinary list in miniature.
-printf '%s' "$buf" | sort -t'	' -k1,1n -k2,2n -k3,3n -k4,4n -k5,5n -k6,6n -k7,7n \
-| while IFS='	' read -r _ _ _ _ _ _ _ line; do
+# it, each child's own children directly below IT (the path key, issue #1328 —
+# a byte sort, hence LC_ALL=C); orphans — children whose parent window closed —
+# sink below every live group. Pins sort AMONG themselves by the same path, so
+# the pinned block is the ordinary list in miniature.
+printf '%s' "$buf" | LC_ALL=C sort -t'	' -k1,1n -k2,2n -k3,3 \
+| while IFS='	' read -r _ _ _ line; do
   [ -z "$line" ] && continue
   printf '%s\n' "$line"
 done

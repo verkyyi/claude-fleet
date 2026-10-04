@@ -363,7 +363,9 @@ try:
     check(tm('show-options', '-wqv', '-t', w1, '@wid') == 'a1', 'rendering changed the internal worker handle')
     check([r[1] for r in full if r[0] != 'hdr'] == [r[0] for r in compact],
           'sidebar order diverges from hub')
-    check(compact[0][0] == w2 and compact[0][2] == '?', 'needs/question cue was lost')
+    # ONE red `!` for every needs kind since #1328; the kind rides the detail field.
+    check(compact[0][0] == w2 and compact[0][2] == '!', 'needs cue was lost')
+    check(compact[0][7] != '', 'a needs row lost its detail (which kind of `!`)')
     tm('set-option', '-w', '-t', w1, '@pin', '1')
     # The 置顶 group (issue #1170): its heading, then the pinned row — bare, no
     # `* ` — then ONE inert rule the view clips to its width.
@@ -391,7 +393,8 @@ try:
     check(bool(kid) and kid[0][4] == '└', 'parent-child tree cell was lost')
     check(bool(kid) and kid[0][3].startswith('修复侧栏'),
           'the label still carries the tree glyph — it belongs in its own field')
-    check(all(len(r) == 5 for r in row_data()), 'sidebar rows must carry 5 fields')
+    check(all(len(r) == (5 if r[0] == 'hdr' else sidebar.ROW_FIELDS) for r in row_data()),
+          'sidebar rows must carry 8 fields (a heading 5)')
     root = [r for r in row_data() if r[0] == w1]
     check(bool(root) and root[0][4] in ('▾', '▸'), 'a holder row must carry its caret in the tree cell')
     cache = work / '.claude-dash/global'
@@ -524,9 +527,11 @@ try:
     # one row per producer row, `▶` on the window in view.
     def painted_rows():
         want = []
-        for wid, state, glyph, label, tree in row_data(current=w1):
-            text = label if wid == 'hdr' else (
-                ('▶' if wid == w1 else ' ') + ' ' + glyph + ' ' + (tree or ' ') + ' ' + label)
+        for row in row_data(current=w1):
+            wid, state, glyph, label, tree = row[:5]
+            badge = row[5] if len(row) > 5 else ''
+            text = label if wid == 'hdr' else sidebar.row_text(
+                '▶' if wid == w1 else ' ', glyph, tree, label, badge, 29)
             want.append(sidebar.clip(text, 29).rstrip())
         return want
     # A working row's glyph is the spinner, which animates between the two reads:

@@ -79,8 +79,8 @@ row_of() { printf '%s\n' "$2" | awk -v n="$1" '{for(i=1;i<=NF;i++) if($i==n){pri
 # tree1+sp, so the hierarchy glyph is character 8 of a rendered row and the window
 # name starts at 10 — on EVERY row. Reading the cell by position is what keeps the
 # two lists in lockstep; a `└ kid` substring would pass on a name-spliced indent too.
-tree_of() { printf '%s' "${1:8:1}"; }
-name_of() { printf '%s' "${1:10}"; }
+tree_of() { local t="${1:8:2}"; printf '%s' "${t% }"; }   # 2-cell column since #1328
+name_of() { printf '%s' "${1:11}"; }
 
 # ============================================================================
 # A. rows

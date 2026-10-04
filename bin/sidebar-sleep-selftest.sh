@@ -4,7 +4,7 @@
 #   A. fleet-sleep.py's phase() stamps @sleep_since on entering `sleeping`, keeps
 #      it across a re-entry (restore), and clears it on any other phase.
 #   B. tmux-dashboard-rows.sh renders a sleeping row with a stamped 42-minute-old
-#      @sleep_since as `z 42m` — in the sidebar's glyph field AND the dash's act
+#      @sleep_since as `z 42m` — in the dash's act (the sidebar: a bare `z`, #1328)
 #      cell — and h/d past an hour/day; an unstamped sleeper keeps the bare `z`.
 #   C. fleet-sidebar-menu.sh --print lists Wake (w) ONLY on a sleeping row, wired
 #      to `fleet-sleep.sh wake <sess> <@id>`; the k toggle reads `保持唤醒` →
@@ -101,9 +101,11 @@ W_a=$(mk_win busy 205); tmux set-window-option -t "$W_a" @claude_state working
 strip() { LC_ALL=C sed -e $'s/\x1b\\[[0-9;]*m//g'; }
 side=$(FLEET_SESSION=$S bash "$BIN/tmux-dashboard-rows.sh" --sidebar 2>/dev/null | strip)
 glyph_of() { printf '%s\n' "$side" | awk -F"$US" -v w="$1" '$1 == w { print $3; exit }'; }
-eq "sidebar: 42-minute sleeper reads z 42m" "z 42m" "$(glyph_of "$W_m")"
-eq "sidebar: 3-hour sleeper reads z 3h"     "z 3h"  "$(glyph_of "$W_h")"
-eq "sidebar: 2-day sleeper reads z 2d"      "z 2d"  "$(glyph_of "$W_d")"
+# issue #1328: the sidebar glyph is the bare `z` — the age stays in the dash's
+# act cell (below), where it has a column of its own.
+eq "sidebar: 42-minute sleeper reads a bare z" "z" "$(glyph_of "$W_m")"
+eq "sidebar: 3-hour sleeper reads a bare z"    "z" "$(glyph_of "$W_h")"
+eq "sidebar: 2-day sleeper reads a bare z"     "z" "$(glyph_of "$W_d")"
 eq "sidebar: an unstamped sleeper keeps the bare z" "z" "$(glyph_of "$W_u")"
 not_contains "sidebar: an awake row carries no sleep age" "$(glyph_of "$W_a")" "z "
 dash=$(FLEET_SESSION=$S FZF_COLUMNS=180 bash "$BIN/tmux-dashboard-rows.sh" 2>/dev/null | strip)

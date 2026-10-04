@@ -140,13 +140,17 @@ SHIM
   chmod +x "$WORK/shim/tmux"
   WLIST_FILE="$WORK/wlist" PATH="$WORK/shim:$PATH" FLEET_SESSION="$LBL" FZF_COLUMNS=140 bash "$ROWS" 2>/dev/null \
     | grep -F "$LBL:$(TM display-message -p -t "$PARENT" '#{window_index}')$US" \
-    | perl -pe 's/\e\[[0-9;]*m//g' | grep -oE '[0-9]+/[0-9]+ ✓( · [0-9]+!)?'
+    | perl -pe 's/\e\[[0-9;]*m//g' | grep -oE '[0-9]+/[0-9]+' | head -1
 }
+# The dash badge is the bare `k/N` since issue #1328 (no ✓, no `· n!` — a child
+# that needs you is red on its own row); this CLI's summary keeps both, so the
+# two AGREE on the count they share: the summary's leading `k/N`.
+kn() { printf '%s' "${1%% *}"; }
 summ() { bash "$CLI" -L "$LBL" "$@" 2>&1 | tail -1; }
 
 want=$(dash_badge)
-eq "the dash parent row shows the expected badge" "2/3 ✓ · 1!" "$want"
-eq "fleet-children's summary == the dash parent row's badge" "$want" "$(summ scratch-7)"
+eq "the dash parent row shows the expected badge" "2/3" "$want"
+eq "fleet-children's summary == the dash parent row's badge" "$want" "$(kn "$(summ scratch-7)")"
 out=$(bash "$CLI" -L "$LBL" scratch-7 2>&1)
 has "a row per child: the FAILED one is loud" '! issue-102' "$out"
 has "…the MERGED one is done, with its PR"   'MERGED #501' "$out"
@@ -180,7 +184,7 @@ new_win '分拆方案'; PARENT="$WID"; opt "$PARENT" @raw 1; opt "$PARENT" @work
 [ "$PARENT" != "$old" ] || fail "the migrated parent must carry a NEW window id"
 CHECKS=$((CHECKS + 1))
 eq "after migration the summary is unchanged" "2/3 ✓ · 1!" "$(summ scratch-7)"
-eq "…and still equals the dash badge"          "$(dash_badge)" "$(summ scratch-7)"
+eq "…and still equals the dash badge"          "$(dash_badge)" "$(kn "$(summ scratch-7)")"
 
 # DEFAULT key: run from inside the parent's pane (bare tmux → the test socket).
 mkdir -p "$WORK/pshim"
@@ -201,12 +205,12 @@ has "…shown as gone" 'issue-101        gone' "$out"
 opt "$K3" @loop "kind=wakeup next=$(( $(date +%s) + 1800 )) ttl=1800"
 eq "a done child with a live @loop is not counted done" "1/3 ✓ · 1!" "$(summ scratch-7)"
 has "…it is reported as looping" 'looping' "$(bash "$CLI" -L "$LBL" scratch-7 2>&1)"
-eq "…and the dash badge does not count it either" "0/2 ✓ · 1!" "$(dash_badge)"
+eq "…and the dash badge does not count it either" "0/2" "$(dash_badge)"
 opt "$K3" @loop "kind=wakeup next=$(( $(date +%s) - 7200 )) ttl=600"
 eq "a lapsed @loop (never renewed) is done again" "2/3 ✓ · 1!" "$(summ scratch-7)"
-eq "…on the dash too" "1/2 ✓ · 1!" "$(dash_badge)"
+eq "…on the dash too" "1/2" "$(dash_badge)"
 TM set-option -wu -t "$K3" @loop; opt "$K3" @worker_lifecycle sleeping
 eq "a sleeping child is not counted done" "1/3 ✓ · 1!" "$(summ scratch-7)"
-eq "…nor on the dash" "0/2 ✓ · 1!" "$(dash_badge)"
+eq "…nor on the dash" "0/2" "$(dash_badge)"
 
 printf 'fleet-children selftest: OK (%d checks)\n' "$CHECKS"

@@ -123,12 +123,13 @@ eval "$(bash "$BIN/dash-keymap.sh" env 2>/dev/null)"   # $DASH_KEY_SCRATCH / gly
 US=$'\037'
 rows=$(FLEET_SESSION="$SESS" FLEET_SIDEBAR_CURRENT="$CURRENT" \
          bash "$BIN/tmux-dashboard-rows.sh" --sidebar 2>/dev/null) || rows=''
-# wid US state US glyph US label US tree  →  `wid<TAB>▶ glyph tree label`
+# wid US state US glyph US name US tree US badge US depth US detail (#1328)
+#   →  `wid<TAB>▶ glyph tree name · badge`
 list=''
-while IFS="$US" read -r wid _state glyph label tree; do
+while IFS="$US" read -r wid _state glyph label tree badge _; do
   case "$wid" in @*) ;; *) continue ;; esac
   mark=' '; [ "$wid" = "$CURRENT" ] && mark='▶'
-  list+="$wid	$mark ${glyph:- } ${tree:- } $label"$'\n'
+  list+="$wid	$mark ${glyph:- } ${tree:- } $label${badge:+ · $badge}"$'\n'
 done <<EOF
 $rows
 EOF

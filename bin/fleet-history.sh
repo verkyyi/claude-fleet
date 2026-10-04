@@ -650,8 +650,9 @@ cmd_rows() {
   local COLS=${FZF_COLUMNS:-}
   case "$COLS" in ''|*[!0-9]*) COLS=$( { tput cols </dev/tty; } 2>/dev/null );; esac
   case "$COLS" in ''|*[!0-9]*) COLS=120;; esac
-  # LEFTW = glyph1+sp + issue5+sp + tree1+sp + window26+sp = 37 (tree col, #836)
-  local LEFTW=37 ACTW=8 RIGHTW=21 USABLE=$(( COLS - 4 ))
+  # LEFTW = glyph1+sp + issue5+sp + tree2+sp + window26+sp = 38 (tree col, #836;
+  # 2 cells since #1328, in step with the live list)
+  local LEFTW=38 ACTW=8 RIGHTW=21 USABLE=$(( COLS - 4 ))
   [ "$USABLE" -lt $(( LEFTW + RIGHTW + 1 )) ] && USABLE=$(( LEFTW + RIGHTW + 1 ))
   # pad/truncate to N DISPLAY chars → $fld_out (mirror of the live producer's fld).
   local fld_out
@@ -756,7 +757,7 @@ cmd_rows() {
   printf -v h_gap '%*s' "$h_pad" ''
   # the two blanks after the issue column are the empty tree cell (#836) — the live
   # header's own spelling, so the two lists still read as one table.
-  printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_i}   ${h_n} title${h_gap}${h_a} ${h_p} ${h_c}${R}"
+  printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_i}    ${h_n} title${h_gap}${h_a} ${h_p} ${h_c}${R}"
 
   [ -z "$out" ] && { printf '%s\n' "none${US}none${US}${GY}  (no landed sessions recorded yet — land a PR to populate; ⌃t=back to live)${R}"; return 0; }
   # Rows are BUFFERED, not printed straight out (they used to be): nesting has to
@@ -940,7 +941,7 @@ cmd_rows() {
     # the tree cell is exactly one cell of source text (glyph, or a space on a
     # root/orphan) and a CONSTANT width inside LEFTW, never a ${#} count — `└`/`▸`/`▾`
     # are East-Asian AMBIGUOUS, so a CJK-wide terminal may draw them 2 cells.
-    lbuf+="${target}${US}${fzfkey}${US}${glyph_c}${glyph}${R} ${icol}${f_iss}${R} ${GY}${treed:- }${R} ${TX}${f_name}${R} ${tagpfx}${TX}${dsmry}${R}${gap}${GY}${f_act}${R} ${IN}${f_pr}${R} ${depcol}${f_ctx}${R}"$'\n'
+    lbuf+="${target}${US}${fzfkey}${US}${glyph_c}${glyph}${R} ${icol}${f_iss}${R} ${GY}${treed:- } ${R} ${TX}${f_name}${R} ${tagpfx}${TX}${dsmry}${R}${gap}${GY}${f_act}${R} ${IN}${f_pr}${R} ${depcol}${f_ctx}${R}"$'\n'
   done <<< "$out"
 
   # Emit newest-first, nested: the group slot first (a root's own position, which a

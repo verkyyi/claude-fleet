@@ -376,7 +376,7 @@ override them):
   `⛔ blocked: <why>` comment on the issue (same `fleet-comment.sh --note`
   wrapper) and set the window red so it's visible on the dash:
   `sh ~/.claude/fleet/bin/set-claude-state.sh blocked`. This stamps `needs/blocked`
-  (red `⊠`): tool hooks, Stop, the classifier and an idle transcript preserve it.
+  (red `!` on the dash, `被卡住` beside it): tool hooks, Stop, the classifier and an idle transcript preserve it.
   A new `UserPromptSubmit` clears it so you can resume. If that input does not
   resolve the blocker (for example, a `[child-report]`), re-stamp `blocked` before
   stopping again. Then stop — don't spin.

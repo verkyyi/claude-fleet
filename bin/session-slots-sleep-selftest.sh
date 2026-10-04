@@ -142,7 +142,7 @@ tmux set-window-option -t "$W5" @sleep_wake_deferred cap
 strip() { LC_ALL=C sed -e $'s/\x1b\\[[0-9;]*m//g'; }
 side=$(FLEET_SESSION=$S bash "$BIN/tmux-dashboard-rows.sh" --sidebar 2>/dev/null | strip)
 row_of() { printf '%s\n' "$side" | awk -F"$US" -v w="$1" '$1 == w { print $3 "|" $4; exit }'; }
-eq "sidebar: a deferred sleeper keeps its age and says it waits" "z 10m|napw · waiting for a slot" "$(row_of "$W5")"
+eq "sidebar: a deferred sleeper says it waits (a bare z since #1328)" "z|napw · waiting for a slot" "$(row_of "$W5")"
 not_contains "sidebar: a plain sleeper does not wait" "$(row_of "$W1")" "waiting"
 dash=$(FLEET_SESSION=$S FZF_COLUMNS=180 bash "$BIN/tmux-dashboard-rows.sh" 2>/dev/null | strip)
 contains "dash: the deferred row reads z · waiting for a slot" "$(printf '%s\n' "$dash" | grep ' napw ')" "z · waiting for a slot"
