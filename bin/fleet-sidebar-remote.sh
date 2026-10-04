@@ -20,6 +20,12 @@
 #
 # The row's machine, name and what it needs come from the sidebar's own cache
 # ($FLEET_C/global/remote_<sess>, fleet-hub-sessions.sh) — never the network.
+# THE HUB SILENT (issue #1483, EPIC #1479 C4): with global/hub_ok older than
+# FLEET_HUB_SESSIONS_STALE (fleet_status_hub_lost — the one rule the sidebar's
+# rows and the bar read too) nothing is sent: a write now would only time out,
+# so the toast — or the popup, for the two that take input — says 「入口失联
+# Nm，稍后再试」 and that is all; the next round that stands lifts it. Enter on
+# the row (the ⇄ proxy window) is a direct ssh, not a hub write: untouched.
 # Nothing here runs on a local row (an `@` id exits 0 at once), and nothing runs
 # in a one-machine fleet: the menu offers these items on `wid:` rows only.
 set -uo pipefail
@@ -95,6 +101,18 @@ if len(sys.argv) > 3 and sys.argv[2]: d[sys.argv[2]] = sys.argv[3]
 print(json.dumps(d, ensure_ascii=False))' "$worker_id" "${1:-}" "${2:-}"; }
 
 pause() { printf '\n%s' "$(fleet_ui_t remote_press_any)" >&2; read -r -n 1 -s _ 2>/dev/null || read -r _ 2>/dev/null || true; }
+
+# 入口失联 (#1483): refuse before asking anything, send nothing, say why.
+FLEET_STATUS_G="$FLEET_C/global"; . "$BIN/fleet-status-lib.sh"
+fleet_status_remote_head "$sess"; fleet_status_hub_ok "$FSR_TS"
+if fleet_status_hub_lost "$(date +%s)"; then
+  fleet_status_age "$FSH_AGE"
+  case "$action" in
+    message|answer) printf '%s\n%s\n' "$(label "$action")" "$(fleet_ui_t remote_hub_lost_fmt "$FSA")" >&2; pause ;;
+    stop|resume|reap) toast "fleet: $(fleet_ui_t remote_hub_lost_fmt "$FSA")" ;;
+  esac
+  exit 0
+fi
 
 case "$action" in
   stop|resume|reap)

@@ -139,11 +139,25 @@ if [ "$verb" = reap ]; then
   exit 0
 fi
 
+# 入口通不通 (issue #1483, EPIC #1479 C4): global/hub_ok through the one rule in
+# fleet-status-lib.sh — the sidebar's rows and the bar read the same file. Lost ⇒
+# a remote row's title carries 「入口失联 3m」 and «新建到 m4…» is greyed (a spawn
+# there is a hub placement); the row's actions stay listed — each refuses with a
+# toast of its own (fleet-sidebar-remote.sh), so a tap is never silent. No cache
+# (the hub off): no word, nothing here runs.
+HUB_LOST=''
+if [ -s "$FLEET_C/global/remote_$sess" ]; then
+  FLEET_STATUS_G="$FLEET_C/global"; . "$BIN/fleet-status-lib.sh"
+  fleet_status_remote_head "$sess"; fleet_status_hub_ok "$FSR_TS"
+  if fleet_status_hub_lost "$(date +%s)"; then fleet_status_age "$FSH_AGE"; HUB_LOST=$(fleet_ui_t hub_lost_fmt "$FSA"); fi
+fi
+
 # «New task on <m>…» (issue #1487 ④): one item per OTHER machine the sidebar's
 # cache (fleet-hub-sessions.sh, `#node` lines) says is online — keys 1…9 in
 # cache order. No cache (the hub off) ⇒ no items: the menu is byte for byte the
 # one-machine menu. Each files the issue and spawns its worker THERE
-# (dash-issue-new.sh --node=<m> → dash-issue-session.sh --node, #1475).
+# (dash-issue-new.sh --node=<m> → dash-issue-session.sh --node, #1475); greyed,
+# with the reason, while the hub is silent (#1483).
 add_newto() {
   local n i=0 m
   while IFS= read -r n; do
@@ -152,7 +166,8 @@ add_newto() {
     case "$n" in ''|*[!A-Za-z0-9._-]*) continue ;; esac
     i=$((i + 1)); [ "$i" -le 9 ] || break
     printf -v m "$m_newto_fmt" "$n"
-    add "$m" "$i" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") -w 90% -h 12 -- bash $(sq "$BIN/dash-issue-new.sh") confirm --spawn --node=$n")"
+    if [ -n "$HUB_LOST" ]; then add "-$m · $HUB_LOST" "$i" ''
+    else add "$m" "$i" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") -w 90% -h 12 -- bash $(sq "$BIN/dash-issue-new.sh") confirm --spawn --node=$n")"; fi
   done <<EOF
 $(LC_ALL=C awk -F $'\037' '$1 == "#node" && $3 == "online" && $2 != "" { print $2 }' "$FLEET_C/global/remote_$sess" 2>/dev/null)
 EOF
@@ -168,6 +183,7 @@ if [ -n "$remote" ]; then
   rstate="${row%%$'\037'*}"; rneeds="${row#*$'\037'}"
   [ -n "$node" ] || exit 0
   title=$(fleet_ui_t menu_title_on_node_fmt "${name:-${wid##*/}}" "$node")
+  [ -z "$HUB_LOST" ] || title="$title · $HUB_LOST"          # the hub silent (#1483)
   side=$(tmux list-panes -t "$sess:" -F '#{pane_id} #{@sidebar}' 2>/dev/null | awk '$2==1{print $1; exit}')
   ctx="FLEET_SESSION=$(sq "$sess") TMUX_PANE=$(sq "${side:-}")"
   [ -n "${FLEET_CONF_DIR:-}" ] && ctx="$ctx FLEET_CONF_DIR=$(sq "$FLEET_CONF_DIR")"

@@ -36,6 +36,16 @@
 #                   hub list ignores the switch; on the DEFAULT source a cache carrying
 #                   local rows is byte for byte the one without (the golden), and with
 #                   the hub off `hub` is `local`
+#   L. hub silent — issue #1483 (EPIC #1479 C4): global/hub_ok older than
+#                   FLEET_HUB_SESSIONS_STALE is 失联 — the ONE word (the bar and the
+#                   remote-row actions read it too). The other machines' rows stay,
+#                   dimmed in their 失联 group, dated by the hub's silence; on the hub
+#                   source THIS machine's rows are tmux's set again (a window the cache
+#                   never named is back) with their live state — byte for byte the
+#                   local source under the same silence; a fresh hub_ok restores the
+#                   hub's row set on the next render; no network; a cache from before
+#                   hub_ok (no file, a stale #ts) renders the very same bytes; the hub
+#                   off ⇒ the no-cache output
 #   E. refresher  — fleet-hub-sessions.sh --refresh keeps YOUR sessions with a
 #                   worker_id: the other machines' (local=0) and, since #1480, this
 #                   fleet's own, marked local=1 with the window that holds them (empty
@@ -44,8 +54,9 @@
 #                   elsewhere → worker_id, none → the sub-issue parent — a local one
 #                   its bare key), writes #me / #node / the needs field and the C1
 #                   locator cache; derives #node from the sessions on a hub without a
-#                   `nodes` list, never counting a local row; a failed fetch keeps the
-#                   last cache; off ⇒ writes nothing, --ensure starts nothing
+#                   `nodes` list, never counting a local row; writes global/hub_ok on
+#                   a round that stood (#1483); a failed fetch keeps the last cache AND
+#                   hub_ok; off ⇒ writes nothing, --ensure starts nothing
 #   I. identity   — who the refresher asks the hub as (#1475): FLEET_HUB_SESSIONS_CMD,
 #                   else a VALID connection certificate (a signed POST), else the viewer
 #                   token (a bearer GET), else nothing is fetched and --identity says why;
@@ -329,6 +340,45 @@ eq "H: …and still no network on the render path" "" "$(cat "$NET_LOG")"
 remote_cache "$NOW"
 
 # ============================================================================
+# L. the hub silent (issue #1483, EPIC #1479 C4)
+# ============================================================================
+# global/hub_ok is the one word on 入口通不通 — the refresher writes it on every
+# round that stood (leg E pins the writer); older than FLEET_HUB_SESSIONS_STALE
+# ⇒ 失联, whatever the cache's own #ts says (a 304 restamps both).
+stamp_cache() { { printf '#ts\037%s\n' "$1"; tail -n +2 "$G/remote_$S"; } > "$WORK/stamp" && mv "$WORK/stamp" "$G/remote_$S"; }
+new_cache
+hs=$(FLEET_SIDEBAR_SOURCE=hub side)
+printf '%s\n' "$NOW" > "$G/hub_ok"
+eq "L: a fresh hub_ok changes nothing on the hub source" "$hs" "$(FLEET_SIDEBAR_SOURCE=hub side)"
+eq "L: …nor on the default source" "$golden_s" "$(side)"
+printf '%s\n' $(( NOW - 600 )) > "$G/hub_ok"            # silent 10 minutes; the cache itself fresh
+ls_=$(FLEET_SIDEBAR_SOURCE=hub side)
+eq "L: hub source, the hub silent — this machine's rows are tmux's set again (solo, never in the cache, is back), the other machine's at the foot, none nested" \
+   "solo;EPIC;C1;孙;侧边栏;草稿;" "$(sorder "$ls_")"
+eq "L: …byte for byte the local source under the same silence: one code path, not a second" "$(FLEET_SIDEBAR_SOURCE=local side)" "$ls_"
+eq "L: …the other machine's rows are 失联, dated by the hub's silence (its #node says seen just now — unheard at least since the hub was)" \
+   "● m5 3 · ○ m4 2 · 10 分钟没联系;─ m4 失联 10 分钟 ─;" "$(shdrs "$ls_")"
+eq "L: …each of them m4! for the view, un-nested" "wid:$F/issue-1423| ||0|m4!" "$(srow "$ls_" '侧边栏')"
+eq "L: …a local row is still its tmux line: its @ id, its live state" "@1|looping" "$(srow9 "$ls_" EPIC | cut -d'|' -f1,2)"
+cp "$WLIST_FILE" "$WORK/wlist.keep"
+LC_ALL=C awk -F"$US" -v OFS="$US" '$3 == "EPIC" { $5 = "working" } 1' "$WORK/wlist.keep" > "$WLIST_FILE"
+eq "L: …and follows tmux while the hub is silent (looping → working)" "@1|working" "$(srow9 "$(FLEET_SIDEBAR_SOURCE=hub side)" EPIC | cut -d'|' -f1,2)"
+cp "$WORK/wlist.keep" "$WLIST_FILE"
+: > "$NET_LOG"; FLEET_SIDEBAR_SOURCE=hub side >/dev/null
+eq "L: …no network call on the render path, silent or not" "" "$(cat "$NET_LOG")"
+eq "L: FLEET_HUB_SESSIONS_STALE is the knob here too" "$hs" "$(FLEET_HUB_SESSIONS_STALE=900 FLEET_SIDEBAR_SOURCE=hub side)"
+eq "L: hub off — the no-cache output, hub_ok or not" "$base_s" "$(CCQUOTA_FLEET='' FLEET_SIDEBAR_SOURCE=hub side)"
+printf '%s\n' "$NOW" > "$G/hub_ok"
+eq "L: hub_ok fresh again — the hub's row set is back on the next render, nothing restarted" "$hs" "$(FLEET_SIDEBAR_SOURCE=hub side)"
+# degenerate: a loop from before #1483 writes no hub_ok — the cache's own #ts is
+# the clock, as it always was, and renders the very same bytes
+rm -f "$G/hub_ok"; stamp_cache $(( NOW - 600 ))
+eq "L: no hub_ok, a stale #ts (the pre-#1483 cache) — the local source renders the bytes the silence did" "$ls_" "$(FLEET_SIDEBAR_SOURCE=local side)"
+eq "L: …and so does the hub source" "$ls_" "$(FLEET_SIDEBAR_SOURCE=hub side)"
+stamp_cache "$NOW"
+remote_cache "$NOW"
+
+# ============================================================================
 # E. refresher
 # ============================================================================
 unset CCQUOTA_FLEET
@@ -370,6 +420,7 @@ export FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'" FLEET_NODE_ALIASES="mi
 rm -f "$G/remote_$S"
 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
 CHECKS=$((CHECKS+1)); [ ! -e "$G/remote_$S" ] || fail "E: off — --refresh must write nothing"
+CHECKS=$((CHECKS+1)); [ ! -e "$G/hub_ok" ] || fail "E: off — --refresh must not write hub_ok"
 PATH="$SHIMPATH" bash "$HUBS" --ensure 2>/dev/null
 CHECKS=$((CHECKS+1)); [ ! -e "$G/hubsess.pid" ] || fail "E: off — --ensure must start nothing"
 
@@ -404,10 +455,16 @@ eq   "E: a hub without a nodes list: #node derived from the sessions (newest obs
      "#node${US}m4${US}online${US}7$US$(ep 2026-10-04T10:05:00Z);" \
      "$(LC_ALL=C awk -F"$US" '$1 == "#node" { printf "%s;", $0 }' "$G/remote_$S")"
 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null; R=$(cat "$G/remote_$S")
+OK=$(cat "$G/hub_ok" 2>/dev/null)
+case "$OK" in
+  [0-9]*) [ "$OK" -ge "$NOW" ] || fail "E: hub_ok is not a fresh epoch (#1483)" "$OK" ;;
+  *) fail "E: a round that stood must write global/hub_ok (#1483)" "$OK" ;;
+esac; CHECKS=$((CHECKS+1))
 FLEET_HUB_SESSIONS_CMD='exit 1' PATH="$SHIMPATH" bash "$HUBS" --refresh 2>"$WORK/err"
 eq   "E: a failed fetch returns 1"          "1" "$?"
 eq   "E: …and keeps the last cache"         "$R" "$(cat "$G/remote_$S")"
-has  "E: …and says so on stderr"            "$(cat "$WORK/err")" "hub unreachable"
+eq   "E: …and hub_ok as it was: the silence dates from the last answer (#1483)" "$OK" "$(cat "$G/hub_ok")"
+has  "E: …and says so on stderr"            "$(cat "$WORK/err")" "hub unreachable for"
 # The refreshed cache renders: the epic's sub-issue nests under the local EPIC.
 s=$(side)
 eq "E: the refreshed cache renders under the local parent" "$F/issue-1600" \

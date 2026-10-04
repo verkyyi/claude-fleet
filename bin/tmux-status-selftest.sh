@@ -14,13 +14,19 @@
 #                                     label, the hub's label, none)
 #   D  a lost machine → `○ 失联 Nm` (the hub's age + the cache's); an unknown
 #      one → `?`; a bad row → `–`
-#   E  the hub: a stale remote_ cache → `入口 ○ 失联 Nm`; the stale knob
+#   E  the hub: a stale remote_ cache → `入口 ○ 失联 Nm`; the stale knob; and
+#      global/hub_ok as THE word (issue #1483, EPIC #1479 C4): older than the knob
+#      with a fresh cache → `入口 ○ 失联`, a proxy window's machine `○ 失联` too
+#      (the hub's word on it is as old; a machine it already called lost keeps its
+#      own, longer silence), a local window's chip untouched; fresh hub_ok over an
+#      old #ts → `●`; an unreadable hub_ok → the #ts, as before the file
 #   F  the window list: blank on entering hub mode (formats saved), restored on
 #      leaving; no tmux call when there is nothing to do — on an ISOLATED server
 #   G  fleet-hub-sessions.sh --refresh writes hub_nodes / hub_limits from the
 #      seams: the alias, mem %, newest login's version, the uuid → local label
 #      map, rounding, skipped rows; a failed fetch keeps the last file; off
-#      (CCQUOTA_FLEET unset) writes nothing; their own cadence (FLEET_HUB_SUMMARY_EVERY)
+#      (CCQUOTA_FLEET unset) writes nothing; their own cadence (FLEET_HUB_SUMMARY_EVERY);
+#      hub_ok written on a sessions round that stood, left alone on a failed one (#1483)
 #   H  fleet_status_node: the one rule for 「当前会话所在机器」
 #
 # Drives bin/tmux-status.sh, bin/fleet-status-lib.sh and bin/fleet-hub-sessions.sh.
@@ -149,10 +155,34 @@ nodes "$NOW" "$(j m4 online 1.57 10 25 0 1607453c45 5 4142 16384)"
 # ---- E: the hub chip
 remote $(( NOW - 200 ))
 out=$(bar sess=f1 win=@2 remote=m4:u/issue-9 acct= wsf= wscf= wsaved=)
-eq "E: a remote_ cache older than FLEET_HUB_SESSIONS_STALE → 入口 ○ 失联 3m" "${m4}#[fg=#565f89]│ #[fg=#7aa2f7]入口 #[fg=#f7768e]○ 失联 3m ${tail}" "$out"
+eq "E: a remote_ cache older than FLEET_HUB_SESSIONS_STALE (no hub_ok: a loop from before #1483) → 入口 ○ 失联 3m, and the proxy window's machine 失联 with it (#1483: nothing here hears it)" \
+   " #[fg=#7aa2f7]m4 #[fg=#f7768e]○ 失联 3m #[fg=#565f89]│ #[fg=#7aa2f7]入口 #[fg=#f7768e]○ 失联 3m ${tail}" "$out"
 out=$(FLEET_HUB_SESSIONS_STALE=1000 bar sess=f1 win=@2 remote=m4:u/issue-9 acct= wsf= wscf= wsaved=)
 eq "E: the stale knob is the sidebar's" "${m4}${hub}${tail}" "$out"
 remote "$NOW"
+# global/hub_ok (issue #1483): the loop's stamp of the last round that stood is
+# the word once it exists — the cache's #ts only for a loop from before it
+printf '%s\n' $(( NOW - 200 )) > "$G/hub_ok"
+out=$(bar sess=f1 win=@2 remote=m4:u/issue-9 acct= wsf= wscf= wsaved=)
+eq "E: hub_ok older than the knob, the remote_ cache FRESH → 入口 ○ 失联 3m, and the proxy window's machine is 失联 3m too (hub_nodes says online — a word as old as the silence)" \
+   " #[fg=#7aa2f7]m4 #[fg=#f7768e]○ 失联 3m #[fg=#565f89]│ #[fg=#7aa2f7]入口 #[fg=#f7768e]○ 失联 3m ${tail}" "$out"
+out=$(bar sess=f1 win=@3 remote=m7:u/x acct= wsf= wscf= wsaved=)
+has "E: …a machine the cache has no row for is 失联 3m too, not ?" " #[fg=#7aa2f7]m7 #[fg=#f7768e]○ 失联 3m " "$out"
+nodes "$NOW" "$(j m4 online 1.57 10 25 0 1607453c45 5 4142 16384)" "$(j m9 lost 0.00 4 10 0 '' 4000 400 4096)"
+out=$(bar sess=f1 win=@3 remote=m9:u/x acct= wsf= wscf= wsaved=)
+has "E: …a machine the hub already called lost keeps its own, longer silence (66m)" " #[fg=#7aa2f7]m9 #[fg=#f7768e]○ 失联 66m " "$out"
+nodes "$NOW" "$(j m4 online 1.57 10 25 0 1607453c45 5 4142 16384)"
+out=$(bar $LOCAL)
+has "E: …a local window keeps its live readings and its account: 本机照常" " #[fg=#7aa2f7]m5 #[fg=#9ece6a]● #[fg=#565f89]│${machine}#[fg=#565f89]│ #[fg=#7aa2f7]◉ icloud " "$out"
+has "E: …under the 失联 hub chip" "#[fg=#7aa2f7]入口 #[fg=#f7768e]○ 失联 3m " "$out"
+printf '%s\n' "$NOW" > "$G/hub_ok"; remote $(( NOW - 200 ))
+eq "E: a fresh hub_ok over an old #ts → 入口 ● (the file is the word, a 304 restamps both)" "${m4}${hub}${tail}" "$(bar sess=f1 win=@2 remote=m4:u/issue-9 acct= wsf= wscf= wsaved=)"
+out=$(FLEET_HUB_SESSIONS_STALE=1000 bar sess=f1 win=@2 remote=m4:u/issue-9 acct= wsf= wscf= wsaved=)
+printf '%s\n' $(( NOW - 200 )) > "$G/hub_ok"
+eq "E: the knob applies to hub_ok" "${m4}${hub}${tail}" "$(FLEET_HUB_SESSIONS_STALE=1000 bar sess=f1 win=@2 remote=m4:u/issue-9 acct= wsf= wscf= wsaved=)"
+printf 'junk\n' > "$G/hub_ok"
+has "E: an unreadable hub_ok falls back to the cache's #ts (200s → 失联 3m)" "#[fg=#7aa2f7]入口 #[fg=#f7768e]○ 失联 3m " "$(bar sess=f1 win=@2 remote=m4:u/issue-9 acct= wsf= wscf= wsaved=)"
+rm -f "$G/hub_ok"; remote "$NOW"
 eq "E: still no tmux set-option on a render" 0 "$(setcalls)"
 
 # ---- F: the window list, on an isolated server
@@ -204,12 +234,20 @@ EOF
 printf 'CCQUOTA_ACCOUNT="7a7e6173-f07c-490f-844e-00c27c3f0844"\n' > "$ACC/icloud.conf"
 printf '{"sessions":[]}\n' > "$WORK/sessions.json"
 hubs() { TMPDIR="$T/" FLEET_CONF_DIR="$CONF" FLEET_ACCOUNTS_DIR="$ACC" PATH="$WORK/bin:$PATH" CCQUOTA_FLEET="${CF-1}" \
-         FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'" FLEET_HUB_NODES_CMD="${NCMD-cat '$WORK/nodes.json'}" \
+         FLEET_HUB_SESSIONS_CMD="${SCMD-cat '$WORK/sessions.json'}" FLEET_HUB_NODES_CMD="${NCMD-cat '$WORK/nodes.json'}" \
          FLEET_HUB_LIMITS_CMD="${LCMD-cat '$WORK/limits.json'}" FLEET_NODE_ALIASES="macmini=m5 mini2=m4" \
          FLEET_HUB_SUMMARY_EVERY="${SEVERY-0}" bash "$HUBS" --refresh 2>"$WORK/err"; }
-rm -f "$G/hub_nodes" "$G/hub_limits"
-CF='' hubs; [ -e "$G/hub_nodes" ] || [ -e "$G/hub_limits" ] && fail "G: off (CCQUOTA_FLEET unset) wrote a summary"; CHECKS=$((CHECKS+1))
+rm -f "$G/hub_nodes" "$G/hub_limits" "$G/hub_ok"
+CF='' hubs; [ -e "$G/hub_nodes" ] || [ -e "$G/hub_limits" ] || [ -e "$G/hub_ok" ] && fail "G: off (CCQUOTA_FLEET unset) wrote a summary or hub_ok"; CHECKS=$((CHECKS+1))
 hubs || fail "G: --refresh failed" "$(cat "$WORK/err")"
+OK=$(cat "$G/hub_ok" 2>/dev/null)
+case "$OK" in
+  [0-9]*) [ "$OK" -ge "$NOW" ] || fail "G: hub_ok is not a fresh epoch (#1483)" "$OK" ;;
+  *) fail "G: a sessions round that stood must write global/hub_ok (#1483)" "$OK" ;;
+esac; CHECKS=$((CHECKS+1))
+SCMD=false hubs
+eq "G: a failed sessions round leaves hub_ok as it was (#1483)" "$OK" "$(cat "$G/hub_ok")"
+has "G: …and says how long the hub has been silent" "hub unreachable for" "$(cat "$WORK/err")"
 rows=$(tr '\037' '|' < "$G/hub_nodes")
 case "$rows" in "#ts|"[0-9]*) CHECKS=$((CHECKS+1)) ;; *) fail "G: hub_nodes starts with #ts" "$rows" ;; esac
 row=$(printf '%s\n' "$rows" | grep '^m5|'); row=${row%|*|*}   # drop mem_used/mem_total (exact bytes below)
