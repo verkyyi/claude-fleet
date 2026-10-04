@@ -134,6 +134,21 @@ Do not install from memory: read the doc and work from it.
   is symlinks to the LIVE files, so **don't edit `bin/` while the gate is
   running** — a test (or the runner itself) re-reads a half-written script and
   dies on a syntax error that has nothing to do with your change.
+- **CI runs only the RELATED tests, once per commit — and the worker's box runs
+  none** (issue #1374). `run-selftests.sh --changed <base>` selects the tests
+  whose source names a changed file's basename, or — for a `bin/*lib.sh` — a
+  function (or top-level variable) the diff touched, plus a lint group that
+  always runs (`SELFTEST_ALWAYS` in the runner); each pick prints as
+  `select: <test> ← <reason>`. A change to the harness (`run-selftests.sh`,
+  `selftest-shadow-root.sh`, `.github/workflows/selftests*.yml`) or an
+  unresolvable base falls back to the full suite. `selftests.yml` runs it on
+  `pull_request` and on `push` to **master only** (the branch push duplicated
+  the PR run); `selftests-macos.yml` runs it on every PR too — the pre-merge BSD /
+  bash 3.2 check — and stays FULL nightly as the backstop. So **don't run the
+  suite locally**: push, open the PR, read the gate. Locally run only the one
+  test that reproduces a CI failure (`run-selftests.sh <name>`), never the full
+  gate or `--changed`. A new selftest is selected when its own file changes or
+  a file it NAMES does — name the scripts you drive.
 - **CI SHARDS the gate; the tests themselves still run one at a time**
   (issue #681). `run-selftests.sh --shard K/N` takes every N-th test of the
   sorted list, and `.github/workflows/selftests.yml` fans that over a 6-job
@@ -175,7 +190,8 @@ Do not install from memory: read the doc and work from it.
     exemption stays local; a fallback split across two lines marks itself
     `# portable-ok: <why>` (see `fleet_epoch_from_iso`).
   - `.github/workflows/selftests-macos.yml` — the full 6-shard suite on
-    `macos-latest`, nightly (18:17 UTC = 02:17 CST), plus `workflow_dispatch`.
+    `macos-latest`, nightly (18:17 UTC = 02:17 CST), plus `workflow_dispatch`;
+    on every PR it runs `--changed` (the related tests only, issue #1374).
     This is the half a lint structurally cannot do: **behaviour** differences.
     #703 (a bare `${a[@]}` on an empty array is fatal on bash 3.2, a no-op on
     bash 5) is not an enumerable idiom, only an observable outcome. The lint nets

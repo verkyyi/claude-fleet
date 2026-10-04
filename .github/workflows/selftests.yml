@@ -12,9 +12,25 @@ name: selftests
 # shipped launchd/systemd units, and the plugin manifests + the command/skill
 # trees they ship (see the paths below). A new selftest is picked up
 # automatically — the runner globs, so there's no list to keep in sync.
+#
+# ONLY THE RELATED TESTS, ONCE PER COMMIT (issue #1374). Every PR used to run the
+# full suite three times — the branch push, the pull_request on the same commit,
+# and the merge into master — 18 shard jobs for one change. Now:
+#   - `push` is master-only, so a branch push no longer duplicates its PR's run;
+#   - both triggers run `run-selftests.sh --changed <base>`, which selects the tests
+#     whose source names a changed file (or a changed library function) plus the
+#     always-run lint group, and prints each pick as `select: <test> ← <reason>`.
+#     A PR's base is its target branch; a master push's is the commit before it.
+#     A change to the harness itself (this file, the runner) falls back to the
+#     full suite; so does a base that cannot be resolved.
+#   - the selection is usually smaller than the matrix: a spare shard passes
+#     having run nothing.
+# The BSD half of the per-PR gate is selftests-macos.yml (same --changed); the
+# nightly macOS run there stays FULL, as the backstop for what a selector misses.
 
 on:
   push:
+    branches: [master]
     paths:
       - 'bin/**'
       # Guard hooks the selftests drive from OUTSIDE bin/ (bash-guard-selftest.sh
@@ -43,6 +59,7 @@ on:
       # shell/cw.zsh or extras/*.sh would never re-run the gate that catches it.
       - 'shell/**'
       - 'extras/**'
+      - 'mod/**'
       - 'fleet.conf.example'
       - '.github/workflows/selftests.yml'
   pull_request:
@@ -57,8 +74,14 @@ on:
       - 'skills/**'
       - 'shell/**'
       - 'extras/**'
+      - 'mod/**'
       - 'fleet.conf.example'
       - '.github/workflows/selftests.yml'
+
+# A re-push to a PR makes its in-flight run stale; master runs always finish.
+concurrency:
+  group: selftests-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   selftests:
@@ -99,6 +122,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          # --changed diffs against the PR's base branch / the pre-push commit, so
+          # both must be in the clone; a shallow one would fall back to full.
+          fetch-depth: 0
 
       - name: Run this shard's selftests
         # Measured: ~1-2 min per shard at this width. The bound stays several
@@ -122,9 +149,13 @@ jobs:
         # slowest test there is ~370s.
         env:
           FLEET_SELFTEST_TEST_TIMEOUT: 240
+          # The base --changed diffs against (issue #1374): the PR's target branch,
+          # or on a master push the commit before it. An all-zero `before` (a new
+          # branch) does not resolve, and the runner falls back to the full suite.
+          CHANGED_BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
         run: |
           set -o pipefail
-          bash bin/run-selftests.sh \
+          bash bin/run-selftests.sh --changed "$CHANGED_BASE" \
             --shard "${{ matrix.shard }}/${{ strategy.job-total }}" \
             2>&1 | tee selftests.log
 
@@ -145,8 +176,11 @@ jobs:
             echo "## selftests · shard ${{ matrix.shard }}/${{ strategy.job-total }}"
             echo
             echo '```'
+            [ "${{ matrix.shard }}" != 1 ] || grep '^select: ' selftests.log 2>/dev/null || true
             if grep -q '^-* slowest' selftests.log 2>/dev/null; then
               sed -n '/^-* slowest/,$p' selftests.log
+            elif grep -Eq 'has nothing to run|^select: \(none\)' selftests.log 2>/dev/null; then
+              echo 'nothing related landed in this shard'
             else
               echo 'the shard was cut short — this test started and never finished:'
               awk '/^=== /{h=$2} /^(PASS  |FAIL  |TIMEOUT )/{h=""}
