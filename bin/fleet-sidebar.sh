@@ -102,14 +102,15 @@ tdm() { tmux display-message ${client:+-c "$client"} -p "$@" 2>/dev/null; }
 # tmux releases (3.4) than the pressing client's.
 win=$(tdm '#{window_id}')
 wdm() { tmux display-message -p -t "$win${1:+.$1}" "$2" 2>/dev/null; }
-US=$(printf '\037')
 # can_host <name> <issue> <raw> <worktree> <norepo> <remote> — the window test
 # fleet-sidebar.py's sync draws the list by (keep the two in step).
 can_host() {
   case "$1" in plan|dash|backlog) return 1 ;; home) return 0 ;; esac
   [ -n "$2" ] || [ "$3" = 1 ] || [ -n "$4" ] || [ "$5" = 1 ] || [ -n "$6" ]
 }
-HFMT="#{window_name}$US#{@issue}$US#{@raw}$US#{@worktree}$US#{@norepo}$US#{@remote}"
+# PIPE-delimited, the name LAST (it may hold a '|'): tmux < 3.5 prints a control
+# character in -F output as an octal escape, so a \037 delimiter splits nothing.
+HFMT='#{@issue}|#{@raw}|#{@worktree}|#{@norepo}|#{@remote}|#{window_name}'
 view_up() {   # the current window shows the list, unzoomed
   [ "$(wdm '' '#{&&:#{@sidebar_worker},#{!=:#{window_zoomed_flag},1}}')" = 1 ] &&
     [ "$(wdm '{top-left}' '#{@sidebar}')" = 1 ]
@@ -120,12 +121,12 @@ if [ "$mode" = f9 ] && [ "$nav" = 1 ] && view_up; then
   exec bash "$BIN/fleet-sidebar.sh" hide "$sess"
 fi
 
-IFS="$US" read -r n_ i_ r_ w_ no_ re_ <<EOF
+IFS='|' read -r i_ r_ w_ no_ re_ n_ <<EOF
 $(wdm '' "$HFMT")
 EOF
 if ! can_host "${n_:-}" "${i_:-}" "${r_:-}" "${w_:-}" "${no_:-}" "${re_:-}"; then
   pick='' best=-1
-  while IFS="$US" read -r wid last act n_ i_ r_ w_ no_ re_; do
+  while IFS='|' read -r wid last act i_ r_ w_ no_ re_ n_; do
     [ -n "$wid" ] || continue
     can_host "$n_" "$i_" "$r_" "$w_" "$no_" "$re_" || continue
     if [ "$last" = 1 ]; then pick=$wid; break; fi
@@ -133,7 +134,7 @@ if ! can_host "${n_:-}" "${i_:-}" "${r_:-}" "${w_:-}" "${no_:-}" "${re_:-}"; the
     case "$score" in ''|*[!0-9]*) score=0 ;; esac
     [ "$score" -gt "$best" ] && { best=$score; pick=$wid; }
   done <<EOF
-$(tmux list-windows -t "$sess" -F "#{window_id}$US#{window_last_flag}$US#{window_activity}$US$HFMT" 2>/dev/null)
+$(tmux list-windows -t "$sess" -F "#{window_id}|#{window_last_flag}|#{window_activity}|$HFMT" 2>/dev/null)
 EOF
   if [ -n "$pick" ]; then
     tmux select-window -t "$pick" 2>/dev/null || :
