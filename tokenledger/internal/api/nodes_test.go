@@ -170,7 +170,7 @@ func TestNodeHeartbeatListedOnline(t *testing.T) {
 	var snap NodesSnapshot
 	waitFor(t, 3*time.Second, "the heartbeat to land", func() bool {
 		snap = roster(t, h)
-		return len(snap.Nodes) == 1 && snap.Nodes[0].Sessions == 3
+		return len(snap.Nodes) == 1 && sessionsIs(snap.Nodes[0].Sessions, 3)
 	})
 	n := snap.Nodes[0]
 	if n.Status != "online" || !n.Connected || !n.Compatible || n.Hostname != "m5" || n.Load1 != 2.5 || n.NCPU != 10 {
@@ -179,7 +179,7 @@ func TestNodeHeartbeatListedOnline(t *testing.T) {
 	if len(n.Fleets) != 1 || n.Fleets[0].Name != "fleet-a" || n.Fleets[0].Count != 3 {
 		t.Fatalf("fleets = %+v", n.Fleets)
 	}
-	if len(snap.Machines) != 1 || snap.Machines[0].Status != "online" || snap.Machines[0].Sessions != 3 {
+	if len(snap.Machines) != 1 || snap.Machines[0].Status != "online" || !sessionsIs(snap.Machines[0].Sessions, 3) {
 		t.Fatalf("machines = %+v", snap.Machines)
 	}
 }
@@ -278,14 +278,14 @@ func TestNodeGoesLostButStaysListed(t *testing.T) {
 	beat(t, c, control.Proto, control.Heartbeat{Hostname: "m4", Sessions: 2})
 	waitFor(t, 3*time.Second, "online", func() bool {
 		s := roster(t, h)
-		return len(s.Nodes) == 1 && s.Nodes[0].Status == "online" && s.Nodes[0].Sessions == 2
+		return len(s.Nodes) == 1 && s.Nodes[0].Status == "online" && sessionsIs(s.Nodes[0].Sessions, 2)
 	})
 	waitFor(t, 3*time.Second, "lost after three silent intervals", func() bool {
 		s := roster(t, h)
 		return len(s.Nodes) == 1 && s.Nodes[0].Status == "lost"
 	})
 	s := roster(t, h)
-	if s.Machines[0].Status != "lost" || s.Machines[0].Sessions != 0 {
+	if s.Machines[0].Status != "lost" || !sessionsIs(s.Machines[0].Sessions, 0) {
 		t.Fatalf("machine = %+v; a lost machine reports no live sessions rather than stale ones", s.Machines[0])
 	}
 }

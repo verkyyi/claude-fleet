@@ -402,6 +402,9 @@ status_hub_render() {
         esac
         status_fields "$_sl" "$mem" ''
         node_seg="${BLUE}${FSN_NODE} ${GREEN}● ${_sf}"
+        # the hub could not read a fleet there (#1465): its session count is
+        # unknown — say so, rather than let the machine look idle
+        [ "$HN_SESS" = '?' ] && node_seg="${node_seg}${YELLOW}· 会话 ? "
     elif fleet_status_remote_node "$STATUS_SESS" "$FSN_NODE"; then
         # no hub_nodes row (a certificate identity, the shell on a colleague's
         # computer — #1484, #1502): the hub's word from the sessions cache, online

@@ -468,7 +468,7 @@ func readFleets(ctx context.Context, home string) (fleetSnapshot, error) {
 		err := fleetRPC(ctx, script, map[string]any{"protocol": 1, "method": "fleet_status",
 			"machine_id": disc.MachineID, "params": map[string]any{"fleet_id": f.FleetID}}, &st)
 		if err != nil {
-			fl.State = "unknown"
+			fl.State, fl.Error = control.FleetStateUnknown, err.Error()
 			if prev, _ := fleetReadErrs.Load(f.Name); prev != err.Error() {
 				log.Printf("heartbeat: fleet %s is unreadable, reported as state unknown (not 0 sessions): %v", f.Name, err)
 				fleetReadErrs.Store(f.Name, err.Error())

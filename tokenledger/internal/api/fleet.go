@@ -349,11 +349,16 @@ type FleetSession struct {
 // so a lost machine's line can say how long ago. A machine the caller may see
 // is listed even with no session on it.
 type FleetNode struct {
-	MachineName  string    `json:"machine_name"`
-	Availability string    `json:"availability"`
-	Sessions     int       `json:"sessions"`
-	ObservedAt   time.Time `json:"observed_at"`
-	AgeSec       float64   `json:"age_sec"`
+	MachineName  string `json:"machine_name"`
+	Availability string `json:"availability"`
+	// Sessions is nil when a fleet of the caller's on this machine could not
+	// be read (state "unknown", claude-fleet#1465): its rows are missing, so
+	// the count is unknown — the status line draws "?", never 0.
+	// SessionsUnknown names those fleets as "<login>/<fleet>".
+	Sessions        *int      `json:"sessions"`
+	SessionsUnknown []string  `json:"sessions_unknown,omitempty"`
+	ObservedAt      time.Time `json:"observed_at"`
+	AgeSec          float64   `json:"age_sec"`
 }
 
 // nodeAvailability maps endpoint → online|maintenance|lost from the roster
@@ -458,7 +463,8 @@ func (s *Server) FleetSessions(req *http.Request) (map[string]any, error) {
 	for i, r := range rows {
 		n := nodes[r.Hostname]
 		if n == nil {
-			n = &FleetNode{MachineName: r.Hostname, Availability: "lost"}
+			zero := 0
+			n = &FleetNode{MachineName: r.Hostname, Availability: "lost", Sessions: &zero}
 			nodes[r.Hostname] = n
 		}
 		if a := views[i].Availability; a != "lost" && n.Availability == "lost" {
@@ -474,6 +480,10 @@ func (s *Server) FleetSessions(req *http.Request) (map[string]any, error) {
 			continue
 		}
 		machines[r.Hostname] = true
+		if r.State == control.FleetStateUnknown {
+			n.Sessions = nil
+			n.SessionsUnknown = append(n.SessionsUnknown, r.OSUser+"/"+r.Name)
+		}
 		if r.ObservedAt.After(latest) {
 			latest = r.ObservedAt
 		}
@@ -495,7 +505,9 @@ func (s *Server) FleetSessions(req *http.Request) (map[string]any, error) {
 			out = append(out, FleetSession{WorkerID: id, MachineName: r.Hostname, OSUser: r.OSUser,
 				FleetID: r.FleetID, FleetName: r.Name, Availability: views[i].Availability, Worker: w,
 				ObservedAt: r.ObservedAt, AgeSec: now.Sub(r.ObservedAt).Seconds()})
-			n.Sessions++
+			if n.Sessions != nil {
+				*n.Sessions++
+			}
 		}
 	}
 	hosts := make([]string, 0, len(machines))

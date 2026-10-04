@@ -249,7 +249,7 @@ func TestSpotPeakStartsNodeAndIdleReleasesIt(t *testing.T) {
 	waitFor(t, 3*time.Second, "the idle beat recorded", func() bool {
 		for _, n := range roster(t, h).Nodes {
 			if n.EndpointID == ep {
-				return n.Sessions == 0
+				return sessionsIs(n.Sessions, 0)
 			}
 		}
 		return false
