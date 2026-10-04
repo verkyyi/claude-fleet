@@ -54,8 +54,8 @@ set -uo pipefail
 
 PROG=fleet-node-join
 HUB="" CODE="" ADMIN=1 DEPS=1 FLEET=1 SERVICE=auto WAIT=180 FORCE=0
-FLEET_SRC="https://github.com/verkyyi/claude-fleet.git" FLEET_REF="" CCQ_SRC=""
-FLEET_SRC_SET=0
+SRC_REPO="https://github.com/verkyyi/claude-fleet.git" SRC_REF="" CCQ_SRC=""
+SRC_SET=0
 
 usage() {
   if [ -f "$0" ]; then sed -n '2,/^set -uo pipefail/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
@@ -72,8 +72,8 @@ while [ $# -gt 0 ]; do
     --no-admin) ADMIN=0 ;;
     --no-deps) DEPS=0 ;;
     --no-fleet) FLEET=0 ;;
-    --fleet-src) FLEET_SRC="${2:-}"; FLEET_SRC_SET=1; shift ;;
-    --ref) FLEET_REF="${2:-}"; shift ;;
+    --fleet-src) SRC_REPO="${2:-}"; SRC_SET=1; shift ;;
+    --ref) SRC_REF="${2:-}"; shift ;;
     --ccquota) CCQ_SRC="${2:-}"; shift ;;
     --service) SERVICE="${2:-}"; shift ;;
     --wait) WAIT="${2:-}"; shift ;;
@@ -328,8 +328,8 @@ start_detached() {
   fi
   # A simple command in the background, not a list: `cd && x &` would fork a
   # subshell that waits on x while holding our stdout, and $! would be it.
-  detach=nohup
-  command -v setsid >/dev/null 2>&1 && detach=setsid
+  detach="nohup"
+  command -v setsid >/dev/null 2>&1 && detach="setsid"
   (cd "$HOME" || exit 1; "$detach" "$RUNNER" >>"$STATE/agent.log" 2>&1 < /dev/null & echo $! > "$pidf")
   say "service: WARN — no service manager here; agent started detached (pid $(cat "$pidf"), log $STATE/agent.log) and will NOT come back after a reboot"
 }
@@ -476,11 +476,11 @@ if [ "$FLEET" = 1 ]; then
     say "fleet: $ROOT already there"
   else
     mkdir -p "$(dirname "$ROOT")"
-    if [ "$FLEET_SRC_SET" = 1 ] && [ -z "$FLEET_REF" ]; then
-      git clone -q "$FLEET_SRC" "$ROOT" >"$WORK/clone.log" 2>&1
+    if [ "$SRC_SET" = 1 ] && [ -z "$SRC_REF" ]; then
+      git clone -q "$SRC_REPO" "$ROOT" >"$WORK/clone.log" 2>&1
     else
-      git clone -q -b "${FLEET_REF:-stable}" "$FLEET_SRC" "$ROOT" >"$WORK/clone.log" 2>&1
-    fi || { say "fleet: FAIL — git clone $FLEET_SRC: $(tail -n 2 "$WORK/clone.log" | tr '\n' ' ')"; FLEET_RC=1; }
+      git clone -q -b "${SRC_REF:-stable}" "$SRC_REPO" "$ROOT" >"$WORK/clone.log" 2>&1
+    fi || { say "fleet: FAIL — git clone $SRC_REPO: $(tail -n 2 "$WORK/clone.log" | tr '\n' ' ')"; FLEET_RC=1; }
   fi
   if [ "$FLEET_RC" = 0 ]; then
     say "fleet: running $ROOT/bin/fleet-login-bootstrap.sh"

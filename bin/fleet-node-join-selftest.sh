@@ -121,7 +121,7 @@ run_join h1 --token "$CODE1"
 rc=$(cat "$SB/rc")
 ENVF="$SB/h1/.config/claude-fleet/node.env"
 if [ "$rc" = 0 ] && grep -q '^online: the hub sees this login · admin agent · ssh CA: trusted' "$SB/out"; then ok "A join exits 0 and reports online"; else bad "A join rc=$rc: $(cat "$SB/out")"; fi
-mode=$(stat -f %Lp "$ENVF" 2>/dev/null || stat -c %a "$ENVF" 2>/dev/null)
+mode=$(python3 -c 'import os,sys;print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' "$ENVF")
 [ "$mode" = 600 ] && ok "A node.env is 0600" || bad "A node.env mode $mode"
 if grep -qx "CCQUOTA_HUB_URL=$HUB" "$ENVF" && grep -qx 'CCQUOTA_TOKEN=ccq_testtoken0123456789abcdefXYZ' "$ENVF" \
    && grep -qx 'CCQUOTA_FLEET=1' "$ENVF" && grep -qx 'CCQUOTA_FLEET_ADMIN=1' "$ENVF"; then
