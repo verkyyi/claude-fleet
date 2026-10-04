@@ -24,15 +24,21 @@
 #                           it is a client of that machine's one fleet session
 #                           (one fleet per login), and two clients of one session
 #                           share its current window.
-#   run <node> <worker_id>  the proxy pane's program: connect, reconnect, report.
-#   attach <worker_id> [<view>]   (runs ON <node>, over ssh) — select the worker's
-#                           window and attach to its fleet session.
+#   run [--shell] <node> <worker_id>  the proxy pane's program: connect, reconnect,
+#                           report (`--shell` is passed through to `attach`).
+#   attach [--shell] <worker_id> [<view>]   (runs ON <node>, over ssh — or on the
+#                           node itself, nested in the shell's own tmux) — select
+#                           the worker's window and attach to its fleet session.
+#                           `--shell` registers this client as a SHELL client
+#                           (C5's `fleet` shell, issue #1485); a <view> id
+#                           registers it as a proxy VIEW with a fleet-open spool.
 #   watch <view>            (runs ON <node>, over the same ssh connection) — the
 #                           fleet-open back channel, below.
-#   restore <sess> [--unless-view <tty>]   (ON <node>; also its client-attached
-#                           hook) — hand the session its status line, prefix and
-#                           sidebar back once the proxy leaves, or someone AT that
-#                           machine attaches.
+#   reconcile <sess>        (ON <node>; its client-attached/-detached hooks) — apply
+#                           the one rule: hidden ⇔ every client is a shell/view.
+#   restore <sess>          (ON <node>) — hand the session its status line, prefix
+#                           and sidebar back now (an escape hatch; the rule wins at
+#                           the next client change).
 #   back [<session>]        (the local `prefix h`) — from a proxy window, select
 #                           the last LOCAL window; anywhere else, nothing.
 #
@@ -41,15 +47,25 @@
 # same window lists it twice — fleet-peer-send would call the worker AMBIGUOUS
 # for as long as the proxy is open. A plain client adds no winlink at all.
 #
-# Nesting: while the proxy is the remote session's ONLY client, it turns that
-# session's status line and prefix off (saved, and restored when it leaves or
-# when anyone else attaches) and marks the session `@remote_view_solo`, which
-# that machine's sidebar reads as "draw no list" (fleet-sidebar.py sync, #1475)
-# — so the remote looks like a local window, this machine's prefix reaches this
-# machine, and the one list on screen is this machine's. With someone attached
-# at the remote end, it changes nothing: that person keeps their status line,
-# prefix and sidebar, and the proxy shows their sidebar beside the local one —
-# two lists, the price of sharing a screen.
+# Nesting — ONE rule (issue #1485, EPIC #1479 rule 7): the remote session's own
+# status line, prefix and sidebar are HIDDEN exactly while it has at least one
+# client and every client is a registered shell/view; any other client — someone
+# who ssh'd onto that machine and attached — brings them back at once, and so
+# does the last shell leaving. Hidden = #1475's hide: status off, prefix None
+# (saved in `@remote_view_saved`), `@remote_view_solo 1`, which that machine's
+# sidebar reads as "draw no list" (fleet-sidebar.py sync) — so the remote looks
+# like a local window, this machine's prefix reaches this machine, and the one
+# list on screen is the viewer's. Two shells on one session: still one list each.
+# Never `resize-pane -Z`. `reconcile` applies the rule; the server's GLOBAL hooks
+# `client-attached[77]` / `client-detached[77]` run it on every client change
+# while any shell is registered (global, not on the session: a session-level hook
+# array — even an emptied one — shadows the fleet's own [71]–[73] hooks).
+#
+# The registry $FLEET_CONF_DIR/remote-views/<id>: one line per client,
+# `<tty> <session> <kind=shell|view> <since epoch> <pid>` (tab-separated — the
+# first two columns are what fleet-open.sh reads). A row whose attach shell is
+# gone (SIGKILLed before its cleanup) does not count and is pruned at the next
+# attach, so a tty the next login reuses is never mistaken for a shell.
 #
 # fleet-open in the remote session (the operator's iTerm2 only trusts THIS
 # machine's secret, and the escape would have to cross two tmux servers): the
@@ -103,6 +119,122 @@ hub_relay_ok() {
   [ -n "${FLEET_HUB_URL:-}" ] || [ -s "${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet/hub.json" ]
 }
 sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+T() { tmux -L "$sock" "$@"; }   # the REMOTE fleet's server; each mode sets $sock first
+
+# --- the registry + the one rule (issue #1485) -----------------------------------
+# Live rows of the registry: `<tty> <session> <kind> <since> <pid>`. A row whose
+# attach shell is gone does not count; a row without a pid (written by an older
+# attach) is trusted as before.
+rv_registry() {
+  local f tty sess kind since pid
+  for f in "$VIEWS"/*; do
+    [ -f "$f" ] || continue
+    IFS=$'\t' read -r tty sess kind since pid < "$f" || :
+    [ -n "$tty" ] || continue
+    case "${pid:-}" in '') ;; *[!0-9]*) continue ;; *) kill -0 "$pid" 2>/dev/null || continue ;; esac
+    printf '%s\t%s\t%s\t%s\t%s\n' "$tty" "$sess" "${kind:-view}" "${since:-}" "${pid:-}"
+  done
+}
+# Drop the rows (and spools) whose attach shell is gone: a SIGKILL skipped its
+# cleanup, and the next login may get that very tty.
+rv_prune() {
+  local f tty sess kind since pid
+  for f in "$VIEWS"/*; do
+    [ -f "$f" ] || continue
+    IFS=$'\t' read -r tty sess kind since pid < "$f" || :
+    case "${pid:-}" in ''|*[!0-9]*) continue ;; esac
+    kill -0 "$pid" 2>/dev/null || rm -rf "$f" "$f.d"
+  done
+}
+# Every client of the session is a registered shell/view (none at all → yes).
+rv_shells_only() {
+  local s="$1" reg tty
+  reg=$(rv_registry | awk -F '\t' -v s="$s" '$2 == s { print $1 }')
+  while IFS= read -r tty; do
+    [ -n "$tty" ] || continue
+    printf '%s\n' "$reg" | grep -qxF -- "$tty" || return 1
+  done <<< "$(T list-clients -t "=$s" -F '#{client_tty}' 2>/dev/null)"
+  return 0
+}
+rv_sync() {   # the sidebar follows the solo marker (issue #1475); the script wants $TMUX
+  TMUX="$(T display-message -p '#{socket_path}' 2>/dev/null),0,0" \
+    bash "$BIN/fleet-sidebar.sh" sync "=$1:" >/dev/null 2>&1 || :
+}
+# #1475's hide: status line + prefix off, what the SESSION itself set saved
+# (`-` = inherited), the solo marker on, its sidebar gone. Idempotent.
+rv_hide() {
+  local s="$1" saved='' o v
+  [ -z "$(T show-options -qv -t "=$s:" @remote_view_saved 2>/dev/null)" ] || return 0
+  # Space-separated: an argument ENDING in `;` is a command separator to tmux.
+  for o in status prefix prefix2; do
+    v=$(T show-options -q -t "=$s:" "$o" 2>/dev/null | sed "s/^$o //")
+    saved="$saved$o=${v:--} "
+  done
+  T set-option -t "=$s:" @remote_view_saved "$saved" \; \
+    set-option -t "=$s:" status off \; set-option -t "=$s:" prefix None \; set-option -t "=$s:" prefix2 None \; \
+    set-option -t "=$s:" @remote_view_solo 1 2>/dev/null
+  rv_sync "$s"
+}
+# #1475 set its hook ON THE SESSION, and a session-level hook array — even one
+# emptied by `set-hook -u <hook>[77]` — shadows the server's global hooks of that
+# name for good (the fleet's [71]–[73]: sidebar sync, sleep wake, hub visits).
+# Lift what an older attach left; the hooks live on the server now.
+rv_unshadow() {
+  local s="$1" h
+  for h in client-attached client-detached; do
+    T show-hooks -t "=$s:" 2>/dev/null | grep -q "^$h" || continue
+    T show-hooks -t "=$s:" 2>/dev/null | grep "^$h\[" | grep -qv "^$h\[77\]" && continue   # someone else's: leave it
+    T set-hook -u -t "=$s:" "$h" 2>/dev/null
+  done
+}
+rv_restore() {
+  local s="$1" saved o v p
+  saved=$(T show-options -qv -t "=$s:" @remote_view_saved 2>/dev/null)
+  rv_unshadow "$s"
+  [ -n "$saved" ] || return 0
+  IFS=' ' read -r -a kv <<< "$saved"
+  for p in ${kv[@]+"${kv[@]}"}; do
+    o=${p%%=*}; v=${p#*=}
+    case "$o" in status|prefix|prefix2) ;; *) continue ;; esac
+    if [ "$v" = - ]; then T set-option -u -t "=$s:" "$o" 2>/dev/null
+    else T set-option -t "=$s:" "$o" "$v" 2>/dev/null; fi
+  done
+  T set-option -u -t "=$s:" @remote_view_saved \; set-option -u -t "=$s:" @remote_view_solo 2>/dev/null
+  rv_sync "$s"
+}
+# One application of the rule at a time per session: a client leaving fires the
+# detached hook AND its own attach's cleanup, and two hides racing re-save the
+# hidden values (`prefix=None`) as the originals. A holder that died keeps nobody
+# waiting; a lock older than ~5 s is taken anyway.
+rv_lock() {
+  local d="$VIEWS/.lock-$1" i pid
+  mkdir -p "$VIEWS" 2>/dev/null
+  for i in $(seq 1 100); do
+    if mkdir "$d" 2>/dev/null; then printf '%s\n' "$$" > "$d/pid"; return 0; fi
+    pid=$(cat "$d/pid" 2>/dev/null)
+    case "$pid" in ''|*[!0-9]*) ;; *) kill -0 "$pid" 2>/dev/null || rm -rf "$d" ;; esac
+    sleep 0.05
+  done
+  rm -rf "$d"; mkdir "$d" 2>/dev/null && printf '%s\n' "$$" > "$d/pid"
+  return 0
+}
+rv_unlock() { rm -rf "${VIEWS:?}/.lock-$1"; }
+# The rule: hidden ⇔ at least one client, and every one of them a shell/view.
+rv_reconcile() {
+  local s="$1" n
+  rv_lock "$s"
+  n=$(T list-clients -t "=$s" -F x 2>/dev/null | grep -c x)
+  if [ "$n" -gt 0 ] && rv_shells_only "$s"; then rv_hide "$s"; else rv_restore "$s"; fi
+  rv_unlock "$s"
+}
+# The server's hooks run the rule on every client change while a shell is registered.
+rv_hooks_on() {
+  local s="$1" cmd
+  cmd="run-shell -b 'bash $(sq "$BIN/fleet-remote-view.sh") reconcile $(sq "$s") >/dev/null 2>&1'"
+  T set-hook -g 'client-attached[77]' "$cmd" \; set-hook -g 'client-detached[77]' "$cmd" 2>/dev/null
+  rv_unshadow "$s"
+}
+rv_hooks_off() { T set-hook -gu 'client-attached[77]' \; set-hook -gu 'client-detached[77]' 2>/dev/null; }
 
 case "$mode" in
 # ---------------------------------------------------------------------------------
@@ -144,8 +276,9 @@ open)
 
 # ---------------------------------------------------------------------------------
 run)
+  shellopt=''; [ "${1:-}" = --shell ] && { shellopt=' --shell'; shift; }
   node="${1:-}"; wid="${2:-}"
-  [ -n "$node" ] && [ -n "$wid" ] || { note 'usage: run <node> <worker_id>'; exit 2; }
+  [ -n "$node" ] && [ -n "$wid" ] || { note 'usage: run [--shell] <node> <worker_id>'; exit 2; }
   _s=$(fleet_current_session); [ -n "$_s" ] && fleet_load_conf "$_s" 2>/dev/null
   host=$(ssh_host "$node")
   rbin="${FLEET_REMOTE_BIN:-.claude/fleet/bin}"
@@ -201,7 +334,7 @@ for line in sys.stdin:
     rm -f "$ctl"
     sidecar & side=$!
     started=$(date +%s)
-    $SSH ${opts[@]+"${opts[@]}"} "$host" "bash $rbin/fleet-remote-view.sh attach $(sq "$wid") $(sq "$view")"
+    $SSH ${opts[@]+"${opts[@]}"} "$host" "bash $rbin/fleet-remote-view.sh attach$shellopt $(sq "$wid") $(sq "$view")"
     rc=$?
     kill "$side" 2>/dev/null; side=''
     case "$rc" in
@@ -223,74 +356,71 @@ for line in sys.stdin:
 
 # ---------------------------------------------------------------------------------
 attach)
+  shell=''
+  while [ $# -gt 0 ]; do
+    case "$1" in --shell) shell=1; shift ;; --) shift; break ;; -*) note "attach: unknown option $1"; exit 2 ;; *) break ;; esac
+  done
   wid="${1:-}"; view="${2:-}"
   loc=$(fleet_worker_locate "wid:${wid#wid:}" 2>/dev/null)
   case "$loc" in local\ *) ;; *) note "${wid#*/} is not live on $(hostname -s)"; exit 3 ;; esac
   set -- $loc; w=$2; s=$3; sock=$(fleet_socket "$s")
-  T() { tmux -L "$sock" "$@"; }
-  # A proxy that died without restoring (a SIGKILL) left the marker: restore first.
-  if [ -n "$(T show-options -qv -t "=$s:" @remote_view_saved 2>/dev/null)" ] \
-     && [ "$(T display-message -p -t "=$s:" '#{session_attached}' 2>/dev/null)" = 0 ]; then
-    bash "$BIN/fleet-remote-view.sh" restore "$s"
-  fi
   T select-window -t "$w" 2>/dev/null || { note "cannot select $w"; exit 3; }
-  if [ "$(T display-message -p -t "=$s:" '#{session_attached}' 2>/dev/null)" = 0 ] \
-     && [ -z "$(T show-options -qv -t "=$s:" @remote_view_saved 2>/dev/null)" ]; then
-    # Save what the SESSION itself sets (`-` = inherited) before turning them off.
-    # Space-separated: an argument ENDING in `;` is a command separator to tmux.
-    saved=''
-    for o in status prefix prefix2; do
-      v=$(T show-options -q -t "=$s:" "$o" 2>/dev/null | sed "s/^$o //")
-      saved="$saved$o=${v:--} "
-    done
-    T set-option -t "=$s:" @remote_view_saved "$saved" \; \
-      set-option -t "=$s:" status off \; set-option -t "=$s:" prefix None \; set-option -t "=$s:" prefix2 None \; \
-      set-option -t "=$s:" @remote_view_solo 1 \; \
-      set-hook -t "=$s:" 'client-attached[77]' "run-shell -b 'bash $(sq "$BIN/fleet-remote-view.sh") restore $(sq "$s") --unless-view #{client_tty} >/dev/null 2>&1'" 2>/dev/null
-    # This session's sidebar goes (issue #1475): the proxy draws inside the
-    # viewer's own sidebar, and a second list on the right would be noise. Not
-    # FLEET_SIDEBAR — nothing is written to the conf; the marker above is what
-    # fleet-sidebar.py reads, and `restore` drops it. The script wants $TMUX.
-    TMUX="$(T display-message -p '#{socket_path}' 2>/dev/null),0,0" \
-      bash "$BIN/fleet-sidebar.sh" sync "=$s:" >/dev/null 2>&1 || :
-  fi
-  if [ -n "$view" ] && tty=$(tty 2>/dev/null); then
-    case "$view" in *[!A-Za-z0-9-]*) ;; *)
-      mkdir -p "$VIEWS/$view.d" 2>/dev/null && printf '%s\t%s\n' "$tty" "$s" > "$VIEWS/$view" ;;
+  # A marker a SIGKILLed proxy left behind, or a state the hooks missed: the rule
+  # first, on the clients that are here now.
+  rv_prune
+  rv_reconcile "$s"
+  # Register this client (issue #1485): `--shell` = a shell client; a <view> id =
+  # a proxy view, with the spool its `watch` drains (no id → no spool: a request
+  # nobody drains would read as sent). Either way it counts toward the rule.
+  reg=''
+  if { [ -n "$shell" ] || [ -n "$view" ]; } && tty=$(tty 2>/dev/null); then
+    kind=view; [ -n "$shell" ] && kind=shell
+    spool="$view"
+    [ -n "$view" ] || view="$kind-$(hostname -s 2>/dev/null | tr -c 'A-Za-z0-9-' '-')$$-$RANDOM"
+    case "$view" in *[!A-Za-z0-9-]*) note "attach: bad view id $view — not registered" ;; *)
+      # Under the lock, like the unregister below: a shell leaving must not read the
+      # registry without this row and take the hooks down right after they went up.
+      rv_lock "$s"
+      if mkdir -p "$VIEWS" 2>/dev/null \
+         && printf '%s\t%s\t%s\t%s\t%s\n' "$tty" "$s" "$kind" "$(date +%s)" "$$" > "$VIEWS/$view"; then
+        reg="$view"
+        [ -n "$spool" ] && mkdir -p "$VIEWS/$spool.d" 2>/dev/null
+        rv_hooks_on "$s"
+        # Before the first frame: every client already here is a shell (none at
+        # all counts), so this one makes the session shells-only.
+        rv_shells_only "$s" && rv_hide "$s"
+      fi
+      rv_unlock "$s" ;;
     esac
   fi
   # A dropped connection HUPs this shell too: outlive the client, then clean up.
   trap 'rc=129' HUP
   T attach-session -t "=$s"; rc=$?
-  [ -n "$view" ] && rm -rf "${VIEWS:?}/$view" "${VIEWS:?}/$view.d" 2>/dev/null
-  [ "$(T display-message -p -t "=$s:" '#{session_attached}' 2>/dev/null)" = 0 ] && bash "$BIN/fleet-remote-view.sh" restore "$s"
+  # The last registered client of this session takes the hooks with it; the rule
+  # decides what the remaining clients get (none → everything back).
+  rv_lock "$s"
+  [ -n "$reg" ] && rm -rf "${VIEWS:?}/$reg" "${VIEWS:?}/$reg.d" 2>/dev/null
+  rv_registry | awk -F '\t' -v s="$s" '$2 == s { f = 1 } END { exit !f }' || rv_hooks_off "$s"
+  rv_unlock "$s"
+  rv_reconcile "$s"
   exit "$rc"
+  ;;
+
+# ---------------------------------------------------------------------------------
+reconcile)
+  s="${1:-}"; [ -n "$s" ] || exit 2
+  sock=$(fleet_socket "$s")
+  rv_reconcile "$s"
+  exit 0
   ;;
 
 # ---------------------------------------------------------------------------------
 restore)
   s="${1:-}"; [ -n "$s" ] || exit 2
   sock=$(fleet_socket "$s")
-  T() { tmux -L "$sock" "$@"; }
-  # The hook form: a proxy attaching is not a reason to restore; anyone else is.
-  if [ "${2:-}" = --unless-view ]; then
-    awk -F '\t' -v t="${3:-}" '$1 == t { f = 1 } END { exit !f }' "$VIEWS"/* 2>/dev/null && exit 0
-  fi
-  saved=$(T show-options -qv -t "=$s:" @remote_view_saved 2>/dev/null)
-  [ -n "$saved" ] || exit 0
-  IFS=' ' read -r -a kv <<< "$saved"
-  for p in ${kv[@]+"${kv[@]}"}; do
-    o=${p%%=*}; v=${p#*=}
-    case "$o" in status|prefix|prefix2) ;; *) continue ;; esac
-    if [ "$v" = - ]; then T set-option -u -t "=$s:" "$o" 2>/dev/null
-    else T set-option -t "=$s:" "$o" "$v" 2>/dev/null; fi
-  done
-  T set-option -u -t "=$s:" @remote_view_saved \; set-option -u -t "=$s:" @remote_view_solo \; \
-    set-hook -u -t "=$s:" 'client-attached[77]' 2>/dev/null
-  # The sidebar comes back with the rest (issue #1475): a sync now that the
-  # solo marker is gone — a no-op while nobody is attached.
-  TMUX="$(T display-message -p '#{socket_path}' 2>/dev/null),0,0" \
-    bash "$BIN/fleet-sidebar.sh" sync "=$s:" >/dev/null 2>&1 || :
+  # The hook an older attach set (`--unless-view <tty>`): the rule decides now.
+  [ "${2:-}" = --unless-view ] && { rv_reconcile "$s"; exit 0; }
+  rv_lock "$s"; rv_restore "$s"; rv_unlock "$s"
   exit 0
   ;;
 
@@ -330,6 +460,6 @@ watch)
   ;;
 
 *)
-  sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//' >&2
+  sed -n '2,41p' "$0" | sed 's/^# \{0,1\}//' >&2
   exit 2 ;;
 esac
