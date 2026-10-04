@@ -31,6 +31,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 
 target="${1:-}"; mode="${2:-}"
 case "$target" in ''|hdr|landed:*) exit 0 ;; esac
+case "$target" in wid:*) exit 0 ;; esac   # another machine's row: read-only (#1423)
 target="$(fleet_wid_target "$target")"
 wid=$(tmux display-message -p -t "$target" '#{window_id}' 2>/dev/null) || exit 0
 [ -n "$wid" ] || exit 0

@@ -27,6 +27,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 
 target="${1:-}"
 case "$target" in ''|hdr|landed:*) exit 0 ;; esac
+case "$target" in wid:*) exit 0 ;; esac   # another machine's row: read-only (#1423)
 
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh" 2>/dev/null || true

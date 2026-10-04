@@ -74,6 +74,7 @@ case "$verb" in expand|collapse) ;; *) exit 0 ;; esac
 # the hub's heading shape ({1}=hdr, {4}=target) folds onto the sidebar's `hdr:<target>`
 [ "$target" = hdr ] && target="hdr:${4:-}"
 case "$target" in ''|hdr:|none) exit 0 ;; esac
+case "$target" in wid:*) exit 0 ;; esac   # another machine's row: read-only (#1423)
 # landed rows have no tmux window to hang @expand on — fleet-history.sh owns that
 # view's fold, keyed by ledger key in a per-fleet file.
 case "$target" in landed:*) exec bash "$BIN/fleet-history.sh" fold "$verb" "$target" ;; esac

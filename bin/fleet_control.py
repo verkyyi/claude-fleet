@@ -85,6 +85,14 @@ class Control:
         workers = []
         for line in output.decode("utf-8").splitlines():
             parts = line.split("\t")
+            # Columns 10-11 (issue #1423): the window name and its @origin_wid, so a
+            # remote sidebar can label the row and nest it under its parent. Optional
+            # — a 9-column adapter is still whole — and the name absorbs any tab of
+            # its own, so an odd window name can never make the inventory unreadable.
+            extra = {}
+            if len(parts) >= 11:
+                extra = dict(name=" ".join(parts[9:-1]), origin_wid=parts[-1] or None)
+                parts = parts[:9]
             if len(parts) != 9 or not re.fullmatch(r"@[0-9]+", parts[0]):
                 raise Fault("PROTOCOL_ERROR", "Invalid worker inventory")
             window, issue, scratch, worktree, state, agent, handle, lifecycle, repo = parts
@@ -101,7 +109,7 @@ class Control:
                                 repo=repo if repo and repo != "?" else (None if repo else fleet.get("repo")),
                                 scratch=scratch == "1", worktree=worktree, state=state or "unknown",
                                 lifecycle=lifecycle or "awake",
-                                agent=agent or fleet["agent"], handle=handle))
+                                agent=agent or fleet["agent"], handle=handle, **extra))
         return {"state": "running", "workers": workers, "observed_at": now()}
 
     def find_workers(self, fleet, key):

@@ -102,6 +102,20 @@ does a miss consult the hub, and then only through the local cache
 cache the fleet behaves as a one-machine fleet and says so on stderr. The remote
 branches report "not supported yet" until EPIC #1419 C2 carries them across.
 
+**The sidebar sees every machine** (issue #1423). With `CCQUOTA_FLEET=1` and
+`CCQUOTA_HUB_URL` set, the collector keeps `bin/fleet-hub-sessions.sh` refreshing
+the hub's `fleet_sessions` every 10 s into `global/remote_<sess>` (and the
+`control/hub-workers.tsv` cache above). `tmux-dashboard-rows.sh` only reads that
+file: your sessions on other machines — your login, a `worker_id`, a fleet that is
+not this machine's — render mixed in with the local windows, nested by
+`@origin_wid` (or the issue's sub-issue parent) and tagged `[m4]`. Their window id
+is `wid:<worker_id>`, so jump, menu, reap, rename, pin and fold find no window:
+remote rows are read-only. A machine the hub calls lost, or a cache older than
+`FLEET_HUB_SESSIONS_STALE` (60 s), keeps its rows, reading `[m4 失联]`. Machine
+labels come from `FLEET_NODE_ALIASES` (`macmini=m5 mini2=m4`). To feed the
+nesting, the controller's worker inventory now carries each window's `name` and
+`origin_wid` (columns 10–11 of `fleet-control-read.sh workers`, optional).
+
 ## Tools
 
 | MCP tool | Behavior | Required grant |

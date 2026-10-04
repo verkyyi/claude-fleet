@@ -305,6 +305,7 @@ fcfg_label_i18n() {
     FLEET_COLLECT_BANNER_BUDGET) printf 'Collector banner 预算' ;;
     FLEET_COLLECT_ESCALATE_BUDGET) printf 'Collector escalate 预算' ;;
     FLEET_COLLECT_SNAPSHOT_BUDGET) printf 'Collector snapshot 预算' ;;
+    FLEET_COLLECT_HUBSESS_BUDGET) printf 'Collector hubsess 预算' ;;
     FLEET_COLLECT_STALE) printf 'Dash 陈旧告警' ;;
     FLEET_COLLECT_KICK) printf 'Dash 自愈' ;;
     FLEET_COLLECT_KICK_COOLDOWN) printf '自愈冷却时间' ;;
@@ -354,6 +355,7 @@ fcfg_label_i18n() {
     FLEET_FAILOVER_STUCK_ATTEMPTS) printf 'Failover 卡住尝试数' ;;
     FLEET_ACCOUNT_LIMIT_TTL) printf '账号限制重查间隔' ;;
     FLEET_ACCOUNT_CEILING) printf '提前轮换阈值' ;;
+    FLEET_NODE_ALIASES) printf '机器标签' ;;
     FLEET_ACCOUNT_WARN_PCT) printf '会话警告百分比' ;;
     FLEET_ACCOUNT_QUOTA_TTL) printf 'ccquota 缓存 TTL' ;;
     FLEET_ACCOUNT_QUOTA_STALE) printf '配额监控陈旧时间' ;;
