@@ -4288,6 +4288,31 @@ _fleet_hub_creds_missing() {
   printf 'no node token (%s); fix: `fleet-hub-node.sh env --write` on this login writes node.env from its agent service, or re-join with fleet-node-join.sh' "$why"
 }
 
+# _fleet_hub_fail <what> <cmd> <rc> <errfile> → ONE phrase naming why a hub
+# command failed, off the command's own stderr (issue #1507). Until then every
+# failure read 「hub unreachable」 — including a hub that ANSWERED 403 (a fleet UUID
+# the node's heartbeat never registered), which sent the debugging to the network.
+# Three forms, fixed:
+#   hub unreachable (<cause>)      no answer came back: Go's `Post "<url>": <cause>`
+#                                  (dial / DNS / TLS / timeout)
+#   <what> refused: HTTP N — <e>   the hub answered non-OK (`hub answered HTTP N: …`);
+#                                  <e> = its JSON "error", else the rest of the line
+#   <cmd> exit N: <first line>     anything else — `(no stderr)` when there was none
+_fleet_hub_fail() {
+  local what="$1" cmd="$2" rc="$3" f="$4" l code e
+  l=$(grep -v '^[[:space:]]*$' "$f" 2>/dev/null | head -n 1 | sed -E 's/^ccquota( [a-z]+)?: //' | cut -c 1-300)
+  case "$l" in
+    *'hub answered HTTP '*)
+      code=$(printf '%s\n' "$l" | sed -n 's/.*hub answered HTTP \([0-9][0-9]*\).*/\1/p')
+      e=$(printf '%s\n' "$l" | sed -n 's/.*"error"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+      [ -n "$e" ] || e=$(printf '%s\n' "$l" | sed 's/.*hub answered HTTP [0-9]*:* *//')
+      printf '%s refused: HTTP %s%s' "$what" "$code" "${e:+ — $e}" ;;
+    'Post "'*|*'dial tcp'*|*'no such host'*|*'connection refused'*|*'Client.Timeout'*|*'i/o timeout'*|*'context deadline exceeded'*|*'x509:'*|*'tls:'*)
+      printf 'hub unreachable (%s)' "$(printf '%s\n' "$l" | sed 's/^Post "[^"]*": //')" ;;
+    *) printf '%s exit %s: %s' "${cmd%% *}" "$rc" "${l:-(no stderr)}" ;;
+  esac
+}
+
 # fleet_hub_lease acquire|release <sess> <repo> <issue> [--force] — the hub's
 # lease on (repo, issue) (issue #1422, EPIC #1419 C3): taken before a session is
 # opened so two machines can never both open one issue. Off unless CCQUOTA_FLEET=1.
@@ -4306,7 +4331,7 @@ _fleet_hub_creds_missing() {
 # heartbeat will spell it (`<slug>:issue-<N>` in a multi-repo fleet), so the
 # hub's heartbeat renewal recognises the session once its window exists.
 fleet_hub_lease() {
-  local act="${1:-}" sess="${2:-}" repo="${3:-}" num="${4:-}" force='' cmd u pre='' out rc why
+  local act="${1:-}" sess="${2:-}" repo="${3:-}" num="${4:-}" force='' cmd u pre='' out rc why ef
   [ "${CCQUOTA_FLEET:-0}" = 1 ] || return 10
   [ "${5:-}" = --force ] && force=--force
   case "$act" in acquire|release) ;; *) return 1 ;; esac
@@ -4324,7 +4349,8 @@ fleet_hub_lease() {
   u=$(fleet_uuid "$sess") && [ -n "$u" ] || {
     printf 'fleet: hub lease unavailable (no fleet UUID for %s on this machine) — only the GitHub claim guards #%s\n' "$sess" "$num" >&2; return 1; }
   _fleet_hosts_many "$sess" && pre="$(fleet_slug "$(fleet_norm_repo "$repo")"):"
-  out=$(_fleet_hub_env; bash -c "$cmd \"\$@\"" lease "$act" ${force:+"$force"} "$repo" "$num" "$u/${pre}issue-$num" </dev/null 2>/dev/null); rc=$?
+  ef=$(mktemp "${TMPDIR:-/tmp}/fleet-hub-err.XXXXXX" 2>/dev/null) || ef=/dev/null
+  out=$(_fleet_hub_env; bash -c "$cmd \"\$@\"" lease "$act" ${force:+"$force"} "$repo" "$num" "$u/${pre}issue-$num" </dev/null 2>"$ef"); rc=$?
   # Name machines the way the sidebar does (FLEET_NODE_ALIASES, `macmini=m5`): the
   # hub only knows a hostname's first label.
   out=$(printf '%s\n' "$out" | head -n1 | awk -v al="${FLEET_NODE_ALIASES:-}" '
@@ -4333,9 +4359,10 @@ fleet_hub_lease() {
     $1 == "FORCED" { if ($3 in m) $3 = m[$3] }
     { print }')
   case "$rc" in
-    0|3) printf '%s\n' "$out"; return "$rc" ;;
+    0|3) [ "$ef" = /dev/null ] || rm -f "$ef"; printf '%s\n' "$out"; return "$rc" ;;
   esac
-  printf 'fleet: hub unreachable for the lease on #%s (%s exit %s) — falling back to the GitHub claim only\n' "$num" "${cmd%% *}" "$rc" >&2
+  printf 'fleet: %s — no lease on #%s, falling back to the GitHub claim only\n' "$(_fleet_hub_fail lease "$cmd" "$rc" "$ef")" "$num" >&2
+  [ "$ef" = /dev/null ] || rm -f "$ef"
   return 1
 }
 
@@ -4369,7 +4396,7 @@ fleet_node_is_self() {
 # `<cmd> --node <node> [--origin-wid <wid>] [--agent <a>] <repo> <issue> <worker_id>`,
 # with the node token from node.env in ITS environment only (`_fleet_hub_env`).
 fleet_hub_place() {
-  local sess="${1:-}" repo="${2:-}" num="${3:-}" node="${4:-auto}" owid="${5:-}" agent="${6:-}" cmd u pre='' out rc why
+  local sess="${1:-}" repo="${2:-}" num="${3:-}" node="${4:-auto}" owid="${5:-}" agent="${6:-}" cmd u pre='' out rc why ef
   [ "${CCQUOTA_FLEET:-0}" = 1 ] || return 10
   case "$num" in ''|*[!0-9]*) return 1 ;; esac
   cmd="${FLEET_HUB_PLACE_CMD:-}"
@@ -4385,17 +4412,19 @@ fleet_hub_place() {
   _fleet_hosts_many "$sess" && pre="$(fleet_slug "$(fleet_norm_repo "$repo")"):"
   # An alias the operator typed (`m5`) is the hub's hostname (`macmini`).
   [ "$node" != auto ] && node=$(printf '%s\n' ${FLEET_NODE_ALIASES:-} | awk -F= -v n="$node" '$2 == n { print $1; f = 1; exit } END { if (!f) print n }')
+  ef=$(mktemp "${TMPDIR:-/tmp}/fleet-hub-err.XXXXXX" 2>/dev/null) || ef=/dev/null
   out=$(_fleet_hub_env; bash -c "$cmd \"\$@\"" place --node "$node" ${owid:+--origin-wid "$owid"} ${agent:+--agent "$agent"} \
-        "$repo" "$num" "$u/${pre}issue-$num" </dev/null 2>/dev/null); rc=$?
+        "$repo" "$num" "$u/${pre}issue-$num" </dev/null 2>"$ef"); rc=$?
   out=$(printf '%s\n' "$out" | head -n1 | awk -F'\t' -v al="${FLEET_NODE_ALIASES:-}" '
     BEGIN { n = split(al, a, " "); for (i = 1; i <= n; i++) if ((p = index(a[i], "=")) > 1) m[substr(a[i], 1, p - 1)] = substr(a[i], p + 1) }
     { k = split($1, w, " "); if ((w[1] == "LOCAL" || w[1] == "REMOTE" || w[1] == "HELD") && (w[2] in m)) w[2] = m[w[2]]
       h = w[1]; for (i = 2; i <= k; i++) h = h " " w[i]
       $1 = h; print }' OFS='\t')
   case "$rc" in
-    0|3|4) printf '%s\n' "$out"; return "$rc" ;;
+    0|3|4) [ "$ef" = /dev/null ] || rm -f "$ef"; printf '%s\n' "$out"; return "$rc" ;;
   esac
-  printf 'fleet: hub unreachable for placing #%s (%s exit %s) — opening it here\n' "$num" "${cmd%% *}" "$rc" >&2
+  printf 'fleet: %s — placing #%s, opening it here\n' "$(_fleet_hub_fail placement "$cmd" "$rc" "$ef")" "$num" >&2
+  [ "$ef" = /dev/null ] || rm -f "$ef"
   return 1
 }
 
@@ -4413,7 +4442,7 @@ fleet_hub_place() {
 # The command is FLEET_HUB_MOVE_CMD, else `ccquota move`, run with the node token
 # from node.env in ITS environment only (`_fleet_hub_env`).
 fleet_hub_move() {
-  local cmd out rc a prev='' n why
+  local cmd out rc a prev='' n why ef
   [ "${CCQUOTA_FLEET:-0}" = 1 ] || return 10
   cmd="${FLEET_HUB_MOVE_CMD:-}"
   if [ -z "$cmd" ]; then
@@ -4432,7 +4461,8 @@ fleet_hub_move() {
     fi
     set -- "$@" "$a"; prev=$a
   done
-  out=$(_fleet_hub_env; bash -c "$cmd \"\$@\"" move "$@" </dev/null 2>/dev/null); rc=$?
+  ef=$(mktemp "${TMPDIR:-/tmp}/fleet-hub-err.XXXXXX" 2>/dev/null) || ef=/dev/null
+  out=$(_fleet_hub_env; bash -c "$cmd \"\$@\"" move "$@" </dev/null 2>"$ef"); rc=$?
   out=$(printf '%s\n' "$out" | head -n1 | awk -F'\t' -v al="${FLEET_NODE_ALIASES:-}" '
     BEGIN { n = split(al, a, " "); for (i = 1; i <= n; i++) if ((p = index(a[i], "=")) > 1) m[substr(a[i], 1, p - 1)] = substr(a[i], p + 1) }
     { k = split($1, w, " ")
@@ -4440,9 +4470,10 @@ fleet_hub_move() {
       h = w[1]; for (i = 2; i <= k; i++) h = h " " w[i]
       $1 = h; print }' OFS='\t')
   case "$rc" in
-    0|3|4|5|6) printf '%s\n' "$out"; return "$rc" ;;
+    0|3|4|5|6) [ "$ef" = /dev/null ] || rm -f "$ef"; printf '%s\n' "$out"; return "$rc" ;;
   esac
-  printf 'fleet: hub unreachable for the move (%s exit %s)\n' "${cmd%% *}" "$rc" >&2
+  printf 'fleet: %s — the move\n' "$(_fleet_hub_fail move "$cmd" "$rc" "$ef")" >&2
+  [ "$ef" = /dev/null ] || rm -f "$ef"
   return 1
 }
 

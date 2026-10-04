@@ -298,8 +298,11 @@ if [ "$TAIL_ONLY" != 1 ] && [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ -n "$REPO" ]; the
          exit "$rc"
        }
        trap _lease_back EXIT
-       case "$lease_out" in FORCED\ *)
-         printf 'dash-issue-session: #%s 的入口租约已强制从 %s 收回 (--force，已在入口记录)\n' "$num" "$(printf '%s' "$lease_out" | awk '{print $3}')" >&2 ;;
+       case "$lease_out" in
+         FORCED\ *)
+           printf 'dash-issue-session: #%s 的入口租约已强制从 %s 收回 (--force，已在入口记录)\n' "$num" "$(printf '%s' "$lease_out" | awk '{print $3}')" >&2 ;;
+         GRANTED\ *)  # issue #1507: a grant is said out loud, so a missing line means no lease
+           printf 'dash-issue-session: #%s 的入口租约已拿到 (%s)\n' "$num" "${lease_out#GRANTED }" >&2 ;;
        esac ;;
     3) _holder=$(printf '%s' "$lease_out" | awk '{print $2}')
        refuse "#$num 已被 ${_holder:-另一台机器} 认领 (hub lease $(printf '%s' "$lease_out" | awk '{print $3}')) — not spawning; --force overrides a stale lease"

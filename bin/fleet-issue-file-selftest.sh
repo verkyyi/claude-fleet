@@ -58,6 +58,7 @@ cat > "$WORK/bin/dash-issue-session.sh" <<'SPAWNSTUB'
 #!/bin/bash
 printf '%s\n' "$*" >> "$SPAWN_LOG"
 [ "${SPAWN_RC:-0}" != 0 ] && printf 'dash-issue-session: test capacity refusal\n' >&2
+[ -n "${SPAWN_NOTE:-}" ] && printf '%s\n' "$SPAWN_NOTE" >&2
 exit "${SPAWN_RC:-0}"
 SPAWNSTUB
 chmod +x "$WORK/bin/dash-issue-session.sh"
@@ -197,6 +198,17 @@ grep -q 'filed #777 but the spawn was refused' "$WORK/err" \
                                       || fail "G2 a spawn refusal must be reported on stderr — the caller reading only the URL must learn no worker took it (issue #683)" "$(cat "$WORK/err")"
 grep -q 'dash-issue-session: test capacity refusal' "$WORK/err" || fail "G2 the spawn reason must pass through unchanged" "$(cat "$WORK/err")"
 ok "G2 a spawn refusal files-without-spawning (issue not lost)"
+
+# issue #1507: the spawn's lease note (granted, or WHY not) reaches our caller verbatim.
+SPAWN_NOTE='fleet: lease refused: HTTP 403 — fleet c45a2451 is not registered to this node — no lease on #777, falling back to the GitHub claim only' \
+  run_fif --title "Ship it" --spawn
+[ "$RC" -eq 0 ]                       || fail "G3 a lease note must not fail the create" "$(cat "$WORK/err")"
+grep -qF 'fleet: lease refused: HTTP 403 — fleet c45a2451 is not registered to this node — no lease on #777' "$WORK/err" \
+                                      || fail "G3 the spawn's lease note must pass through unchanged" "$(cat "$WORK/err")"
+grep -q 'spawn was refused' "$WORK/err" && fail "G3 a spawn that went ahead is not 「refused」" "$(cat "$WORK/err")"
+SPAWN_NOTE='dash-issue-session: #777 的入口租约已拿到 (m5)' run_fif --title "Ship it" --spawn
+grep -qF '#777 的入口租约已拿到 (m5)' "$WORK/err" || fail "G3 the grant line must pass through" "$(cat "$WORK/err")"
+ok "G3 --spawn passes the lease line (refused: <why> / 已拿到) through verbatim"
 
 # ============================ H: --from role ===============================
 run_fif --title "By worker" --from worker

@@ -114,6 +114,7 @@ cat > "$WORK/fakebin/fake-place" <<PLACEFAKE
 printf '%s\n' "\$*" >> "$PLACE_LOG"
 printf '%s\n' "\${CCQUOTA_TOKEN:-<unset>}" > "$WORK/place.env"
 [ -n "\${PLACE_ANSWER:-}" ] && printf '%s\n' "\$PLACE_ANSWER"
+[ -n "\${PLACE_STDERR:-}" ] && printf '%s\n' "\$PLACE_STDERR" >&2
 exit "\${PLACE_RC:-0}"
 PLACEFAKE
 chmod +x "$WORK/fakebin/fake-place"
@@ -231,10 +232,21 @@ tmux_has 'new-window'                            && fail "NAMED must not open it
 lease_has release                                || fail "NAMED the lease is given back"
 ok "NAMED --node m4 refused → exit 2, no spawn, lease back"
 
-CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_RC=1 run_spawn 258
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_RC=1 \
+  PLACE_STDERR='ccquota: Post "https://hub.test/v1/node/place": context deadline exceeded (Client.Timeout exceeded while awaiting headers)' run_spawn 258
 [ "$(rc)" = 0 ] && tmux_has 'new-window'         || fail "DOWN hub unreachable opens it here"
-err_has 'hub unreachable for placing #258'       || fail "DOWN one note"
+err_has 'fleet: hub unreachable (context deadline exceeded (Client.Timeout exceeded while awaiting headers)) — placing #258, opening it here' \
+                                                 || fail "DOWN one note, with the cause"
 ok "DOWN hub unreachable → opened here"
+
+# issue #1507: a hub that ANSWERED is never 「unreachable」 — the note carries its error
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_RC=1 \
+  PLACE_STDERR='ccquota: hub answered HTTP 403: {"error":"fleet c45a2451 is not registered to this node"}' run_spawn 258
+[ "$(rc)" = 0 ] && tmux_has 'new-window'         || fail "WHY a refused placement opens it here"
+err_has 'fleet: placement refused: HTTP 403 — fleet c45a2451 is not registered to this node — placing #258' \
+                                                 || fail "WHY a 403 reads 「placement refused」 with the hub's error"
+err_has 'unreachable'                            && fail "WHY a hub that answered is not 「unreachable」"
+ok "WHY hub answered 403 → 「placement refused: HTTP 403 — <error>」, opened here"
 
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m4" PLACE_ANSWER="$REMOTE_LINE" run_spawn 258 --origin hub --origin-wid "$MACHINE/issue-77" --node local
 [ -s "$PLACE_LOG" ]                              && fail "HUBSENT a start the hub sent is never placed again"
