@@ -456,3 +456,64 @@ type SSHCAResult struct {
 	RolledBack bool   `json:"rolled_back,omitempty"`
 	Detail     string `json:"detail,omitempty"`
 }
+
+// The relay (claude-fleet#1413): when a person cannot reach a machine
+// directly, the hub carries their SSH connection over the one path that always
+// exists — the node's own outbound link. The hub never decrypts it; it only
+// pairs two WebSockets and copies bytes.
+//
+//	client ──wss SSHRelayPath?node=m4──▶ hub ──TypeSSHRelayOpen on the control channel──▶ agent
+//	agent  ──wss SSHRelayDataPath?id=…──▶ hub        agent ──tcp──▶ 127.0.0.1:22
+//
+// The data stream is a SECOND connection the agent dials, not frames on the
+// control channel: a 10MB scp must never queue a heartbeat behind it, and the
+// control channel's read limit is sized for JSON, not for a byte stream.
+const (
+	// SSHRelayPath is where a client asks for a relay to a machine.
+	SSHRelayPath = "/v1/ssh-relay/connect"
+	// SSHRelayDataPath is where the agent dials the data half of one relay.
+	SSHRelayDataPath = "/v1/node/ssh-relay"
+
+	// TypeSSHRelayOpen is a hub→node request: dial SSHRelayDataPath for this
+	// relay and splice it to the local sshd. Sent only to a node whose hello
+	// listed CapSSHRelay.
+	TypeSSHRelayOpen = "ssh_relay_open"
+
+	// CapSSHRelay is the hello capability of an agent that serves TypeSSHRelayOpen.
+	CapSSHRelay = "ssh_relay"
+
+	// SSHRelaySigNamespace is the ssh-keygen -Y namespace a client signs the
+	// hub's relay challenge under. A signature made for anything else (git
+	// commits use "git", files "file") is never accepted as a relay login.
+	SSHRelaySigNamespace = "fleet-relay@claude-fleet"
+)
+
+// SSHRelayOpen is the payload of TypeSSHRelayOpen.
+type SSHRelayOpen struct {
+	// RelayID names the relay; the agent dials SSHRelayDataPath?id=<RelayID>.
+	RelayID string `json:"relay_id"`
+	// Secret is a one-time value the agent echoes back as the X-Relay-Secret
+	// header, so a data stream cannot be attached to someone else's relay by
+	// another endpoint that guessed its id.
+	Secret string `json:"secret,omitempty"`
+}
+
+// SSHRelayHello is the client-side handshake on SSHRelayPath, one JSON text frame
+// each way before any byte of the SSH stream:
+//
+//	hub → client  {"type":"challenge","nonce":"…"}          (only when the HTTP
+//	              request carried no session or token)
+//	client → hub  {"type":"auth","cert":"…","sig":"…"}       an SSH user cert
+//	              signed by the hub's CA, and an ssh-keygen -Y sign signature
+//	              over the nonce under SSHRelaySigNamespace by the cert's key
+//	hub → client  {"type":"ready"} | {"type":"error","code":…,"message":…}
+//
+// After "ready" every frame is binary: the SSH stream, verbatim.
+type SSHRelayHello struct {
+	Type    string `json:"type"`
+	Nonce   string `json:"nonce,omitempty"`
+	Cert    string `json:"cert,omitempty"`
+	Sig     string `json:"sig,omitempty"`
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
+}

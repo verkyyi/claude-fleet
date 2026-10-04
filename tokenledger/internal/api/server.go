@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"golang.org/x/crypto/ssh"
+
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/fx"
@@ -115,6 +117,20 @@ type Server struct {
 	// (CCQUOTA_FLEET_PERSON_CONFIG_KEYS), with config:write in their scopes.
 	// Empty by default: a fleet's caps are the operator's.
 	FleetPersonConfigKeys []string
+
+	// SSHRelayCA is the SSH CA whose user certificates admit a person to the
+	// relay (CCQUOTA_FLEET_SSH_CA_PUB, claude-fleet#1413). Empty means a
+	// relay needs a session or the viewer token.
+	SSHRelayCA []ssh.PublicKey
+	// SSHRelayMaxPerUser bounds one person's concurrent relays (0: 8).
+	SSHRelayMaxPerUser int
+	// SSHRelayRateBPS bounds one person's relay bytes per second, both ways,
+	// across all their relays (0: 4 MiB/s; negative: unlimited).
+	SSHRelayRateBPS int64
+
+	// relays holds the relays in flight.
+	sshRelays sshRelayTable
+
 	// fleetScopeHook replaces fleetScope in tests (claude-fleet#1409).
 	fleetScopeHook func(*http.Request) (func(hostname, osUser string) bool, error)
 	// Vault is the credential vault (claude-fleet#1415): long-lived Claude /
@@ -239,6 +255,13 @@ func (s *Server) Handler() http.Handler {
 		mux.Handle("/v1/fleet/credentials/revoke", s.viewerOnly(s.operatorOnly(http.HandlerFunc(s.handleFleetRevoke))))
 		mux.Handle("/v1/fleet/credentials/audit", s.viewerOnly(s.operatorOnly(http.HandlerFunc(s.handleFleetCredAudit))))
 		mux.Handle("/credentials", s.viewerOnly(s.operatorOnly(http.HandlerFunc(s.serveCredentialsPage))))
+		// The relay (claude-fleet#1413). Both halves authenticate
+		// themselves: the client by session, token or certificate (the
+		// last proven in-band, so outside the viewer gate), the agent by
+		// its enrollment token.
+		mux.HandleFunc(control.SSHRelayPath, s.handleSSHRelayConnect)
+		mux.HandleFunc(control.SSHRelayDataPath, s.handleSSHRelayData)
+		mux.Handle("/v1/fleet/ssh-relays", s.viewerOnly(s.operatorOnly(http.HandlerFunc(s.handleSSHRelayAudit))))
 	}
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {

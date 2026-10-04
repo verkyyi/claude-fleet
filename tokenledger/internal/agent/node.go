@@ -155,6 +155,9 @@ func (a *Agent) nodeSession(ctx context.Context) (established bool, err error) {
 			a.moveIn = rp.movein
 		}
 	}
+	if a.cfg.FleetSSHRelay {
+		caps = append(caps, control.CapSSHRelay)
+	}
 	hello, err := control.New(control.TypeHello, control.Hello{
 		HeartbeatMS:  int(a.cfg.LiveInterval / time.Millisecond),
 		AgentVersion: a.cfg.Version,
@@ -228,6 +231,13 @@ func (a *Agent) nodeSession(ctx context.Context) (established bool, err error) {
 					if err := relayWorkers(rp, m); err != nil {
 						log.Printf("control channel: write the worker map: %v", err)
 					}
+				}
+			case control.TypeSSHRelayOpen:
+				// Bound to this session's ctx: when the control channel
+				// drops, every relay it opened is closed with it
+				// (claude-fleet#1413).
+				if a.cfg.FleetSSHRelay {
+					go a.openSSHRelay(ctx, m)
 				}
 			case control.TypeError:
 				if relayOK && a.relayRefused(rp, m.OpID, m.Error) {

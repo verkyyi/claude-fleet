@@ -1,0 +1,23 @@
+#!/bin/sh
+# fleet <command> [args] — the client-side entry point a person types on their
+# own computer (claude-fleet#1413). Each command is its own script beside this
+# one, `fleet-<command>.py` or `fleet-<command>.sh`, so adding one (`fleet
+# login`, a route-picking `fleet connect`) is adding a file, not editing here.
+#
+#   fleet login                       fetch a 12-hour connection certificate
+#   fleet connect --proxy <machine>   ssh's ProxyCommand through the hub
+here=$(cd "$(dirname "$0")" && pwd -P)
+cmd=${1-}
+case $cmd in
+  ''|-h|--help|help)
+    echo "usage: fleet <command> [args]   (commands: login, connect)" >&2
+    exit 2 ;;
+esac
+shift
+for ext in py sh; do
+  if [ -x "$here/fleet-$cmd.$ext" ]; then
+    exec "$here/fleet-$cmd.$ext" "$@"
+  fi
+done
+echo "fleet: no such command: $cmd" >&2
+exit 2
