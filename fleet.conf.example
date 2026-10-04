@@ -1793,6 +1793,22 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Listener exemptions @group=disk @tier=internal @scope=global @edit=str
 #FLEET_LISTEN_EXEMPT_RE=           # an ERE of argv never counted/reaped (doc-preview, cloudflared, webhook built in)
 
+# Showing a file on the operator's terminal (issue #1367). bin/fleet-show.sh sends
+# an image/PDF/QR code over the existing SSH connection to the iTerm2 the operator
+# is attached from (OSC 1337 file transfer → their ~/Downloads), instead of an
+# agent `open`-ing it on this machine's screen. It picks the session's client whose
+# #{client_termtype} matches FLEET_SHOW_TERM_RE; none → it prints the path.
+# @label=Show files on the operator's iTerm2 @group=notify @tier=internal @scope=fleet @edit=bool
+#FLEET_SHOW=1                      # 0 = never send; always print the path instead
+# @label=Show-file size cap @group=notify @tier=internal @scope=fleet @edit=int @unit=bytes
+#FLEET_SHOW_MAX_BYTES=20971520     # per file; bigger → the path is printed instead
+# @label=Show-file terminal match @group=notify @tier=internal @scope=fleet @edit=regex
+#FLEET_SHOW_TERM_RE=^iTerm2        # ERE on #{client_termtype}
+# @label=Show-file inline hold @group=notify @tier=internal @scope=fleet @edit=int @unit=sec
+#FLEET_SHOW_HOLD_SECS=120          # --inline: how long the drawn screen waits for a key
+# @label=Show-file part size @group=notify @tier=internal @scope=fleet @edit=int @unit=bytes
+#FLEET_SHOW_PART_BYTES=768         # base64 bytes per OSC 1337 FilePart
+
 # Transcript archive (issue #1299), once a day on the same diskguard --watch tick.
 # ~/.claude/projects only ever grows (one .jsonl per Claude session); a session
 # idle this many days — and a fleet helper `claude -p` transcript (the status

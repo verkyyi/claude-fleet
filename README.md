@@ -651,6 +651,30 @@ SSH. Everything here routes URLs through `bin/open-url.sh` instead:
    the URL (cmd-clickable in iTerm) already OSC52-copied to your local
    clipboard (`set-clipboard on` is in the shipped tmux conf).
 
+## Showing a file on your own terminal
+
+An agent that wants you to look at an image, a PDF or a QR code must not `open`
+it — that opens it on the fleet machine's screen, where nobody is sitting. It
+runs `bin/fleet-show.sh <file>` instead, and the file arrives on **your** side of
+the SSH connection: iTerm2 asks you to accept the download, then saves it to
+your `~/Downloads`. `--inline` draws it in the terminal instead and holds
+the screen until you press a key.
+
+- **iTerm2 side:** nothing to install (3.5+, for multipart transfers), but iTerm2
+  **asks you to confirm each download** — the file lands only after you accept,
+  so `SENT` means "offered", not "on disk yet". iTerm2 has no documented setting
+  that silences it (`NoSyncSuppressDownloadConfirmation` did not, on 3.6.10).
+- **Which terminal:** the tmux client of this session whose terminal type
+  (`#{client_termtype}`, e.g. `iTerm2 3.6.10`) matches `FLEET_SHOW_TERM_RE`, most
+  recently active first; `--client <tty>` picks one. No iTerm2 attached → it prints
+  the file's path instead (exit 2), and so does `FLEET_SHOW=0` or a file over
+  `FLEET_SHOW_MAX_BYTES` (20 MB).
+- **The screen flashes once.** The file is written by the tmux client itself, run
+  as a one-shot `lock-command`: tmux stops drawing to that terminal while it sends
+  and redraws when it is done (a fraction of a second for a few MB). Writing the
+  terminal directly while tmux paints it corrupts anything past a few hundred KB —
+  tmux's bytes land inside the file's escape sequence (issue #1367).
+
 ## Agents: Claude Code and Codex
 
 A fleet spawns **Claude Code** by default and can spawn **OpenAI Codex CLI**

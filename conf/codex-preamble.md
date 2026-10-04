@@ -24,7 +24,9 @@ Follow it as written, with these translations (they are the only differences):
   fleet-peer MCP tools are visible, use `list_agents` / `send_message` as Codex's
   peer equivalents; otherwise reach another worker with `fleet-peer-send.sh` or
   `fleet-comment.sh --to-worker`. A document the operator should open goes
-  through doc-preview's `share.sh`. Search the code with your own tools.
+  through doc-preview's `share.sh`; an image/PDF/QR code the operator should SEE
+  goes to their iTerm2 via `bash ~/.claude/fleet/bin/fleet-show.sh <file>` — never
+  `open` it on this machine. Search the code with your own tools.
 - **Everything the skill names under `~/.claude/fleet/bin` is a plain shell
   script** — run it exactly as written, with `bash`, from this worktree.
 - **The rails are unchanged and absolute:** edit only inside this worktree, never
