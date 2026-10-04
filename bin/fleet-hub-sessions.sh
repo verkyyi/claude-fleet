@@ -517,10 +517,11 @@ EOF
 #     (/v1/limits?account=all; `label` is this login's accounts/<label>.conf name
 #     whose CCQUOTA_ACCOUNT is that uuid — a window's @cc_account — else the
 #     hub's label; a subscription without a utilization, e.g. codex, is skipped)
-# Both routes are viewer routes: the viewer token when this login has one, else a
-# bare GET (the hub's tailnet door). A connection certificate alone (#1475) opens
-# neither — then nothing is written and the bar shows `?` / no account chip; a
-# failed fetch keeps the last file. Seams: FLEET_HUB_NODES_CMD / FLEET_HUB_LIMITS_CMD
+# Both routes are viewer routes, asked only when this login's identity (#1475's
+# ladder: seam, certificate, viewer token) IS the viewer token: a certificate
+# opens neither and a certificate round never spends the token, no identity
+# means no fetch — then nothing is written and the bar shows `?` / no account
+# chip (a cert door for them: #1502); a failed fetch keeps the last file. Seams: FLEET_HUB_NODES_CMD / FLEET_HUB_LIMITS_CMD
 # print the JSON; a run driven by FLEET_HUB_SESSIONS_CMD never goes to the network
 # for these either (a selftest must not reach a real hub through hub.json).
 fetch_viewer() {   # fetch_viewer <path> → the JSON on stdout; rc 1 when no answer
@@ -528,11 +529,12 @@ fetch_viewer() {   # fetch_viewer <path> → the JSON on stdout; rc 1 when no an
   [ -z "${FLEET_HUB_SESSIONS_CMD:-}" ] || return 1
   url=$(hub_url) || return 1
   command -v curl >/dev/null 2>&1 || return 1
-  if token_source >/dev/null; then
-    curl -fsS -m 8 -H "Authorization: Bearer $TOK" "$url$1" 2>/dev/null
-  else
-    curl -fsS -m 8 "$url$1" 2>/dev/null
-  fi
+  # #1475's ladder, not a fallback: the login's identity is the certificate when
+  # it has a valid one, and a certificate round never spends the viewer token —
+  # so only a token identity asks these two routes (a cert door: #1502).
+  case "$(cert_state)" in ok\ *) return 1 ;; esac
+  token_source >/dev/null || return 1
+  curl -fsS -m 8 -H "Authorization: Bearer $TOK" "$url$1" 2>/dev/null
 }
 fetch_nodes() {
   if [ -n "${FLEET_HUB_NODES_CMD:-}" ]; then bash -c "$FLEET_HUB_NODES_CMD" </dev/null 2>/dev/null; return; fi

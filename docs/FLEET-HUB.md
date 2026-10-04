@@ -196,9 +196,11 @@ moment you switch windows. Data: the same refresh loop writes, every
 fleet_version age mem_used_mb mem_total_mb`) and `global/hub_limits`
 (`/v1/limits?account=all`: `label pct5h pctweek account_uuid hub_label`, the
 label being this login's `accounts/<label>.conf` whose `CCQUOTA_ACCOUNT` is that
-uuid, else the hub's). Both are viewer routes — the viewer token or the tailnet
-door; a connection certificate alone opens neither, so a login with only
-`fleet login` sees `?` and no account chip until the hub grows a cert door.
+uuid, else the hub's). Both are viewer routes, asked only when the login's
+identity (the #1475 ladder) is the viewer token: a connection certificate opens
+neither and a certificate round never spends the token, so a login that did
+`fleet login` sees `?` and no account chip until the hub grows a cert door
+(#1502).
 `bin/fleet-status-lib.sh` holds the one rule (`fleet_status_node`: `@remote` →
 that machine, else here) and the readers; the shell (C5) reuses it. Off hub mode
 the bar is byte for byte what it was.
