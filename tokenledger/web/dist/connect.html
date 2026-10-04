@@ -67,10 +67,13 @@ button.ghost { background:transparent; color:var(--accent); }
 .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:10px; }
 .warn { background:var(--surface); border:1px solid var(--lost); border-radius:10px; padding:10px 14px; margin-bottom:16px; }
 </style>
+<!-- The shared page header's viewer slot (claude-fleet#1467): the same
+     stylesheet, slot and script as every other human page on this hub. -->
+<link rel="stylesheet" href="whoami.css">
 </head>
 <body>
 <div class="wrap">
-  <h1>连接</h1>
+  <div class="topbar"><h1>连接</h1><div id="whoami" class="whoami" hidden></div></div>
   <div class="sub">用入口签的 12 小时证书连到各台机器；证书过期后再扫一次即可。你原有的钥匙照常能用。</div>
   <div id="problem"></div>
   <div class="grid">
@@ -181,5 +184,6 @@ async function load() {
 }
 load();
 </script>
+<script type="module" src="whoami.js"></script>
 </body>
 </html>

@@ -110,19 +110,30 @@ func (s *Server) handleEnter(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, loginReturn(w, r), http.StatusFound)
 }
 
+// ssoSession is the verified session behind this request, if any. The gate
+// keeps it on the request (withSession) so /v1/me can show the name the
+// ticket carried without re-reading a cookie the gate already verified.
+func (s *Server) ssoSession(r *http.Request) (*authz.Session, bool) {
+	if !s.SSO.ready() {
+		return nil, false
+	}
+	c, err := r.Cookie(authz.CookieName)
+	if err != nil {
+		return nil, false
+	}
+	sess, err := authz.VerifySession(c.Value, s.SSO.SessionSecret, time.Now())
+	if err != nil {
+		return nil, false
+	}
+	return sess, true
+}
+
 // ssoViewer reports the signed-in human behind this request, if any: their
 // WeCom userid, or the role subject for a session minted from a ticket that
 // named no person (see authz.Session.Principal).
 func (s *Server) ssoViewer(r *http.Request) (string, bool) {
-	if !s.SSO.ready() {
-		return "", false
-	}
-	c, err := r.Cookie(authz.CookieName)
-	if err != nil {
-		return "", false
-	}
-	sess, err := authz.VerifySession(c.Value, s.SSO.SessionSecret, time.Now())
-	if err != nil {
+	sess, ok := s.ssoSession(r)
+	if !ok {
 		return "", false
 	}
 	return sess.Principal(), true
@@ -134,7 +145,18 @@ func (s *Server) ssoViewer(r *http.Request) (string, bool) {
 // handing it a 302 to a WeCom page replaces a clear "you sent no credential"
 // with a page it cannot read. Those callers keep getting 401.
 func (s *Server) ssoSignInURL(r *http.Request) (string, bool) {
-	if !s.SSO.ready() || !wantsHTML(r) {
+	if !wantsHTML(r) {
+		return "", false
+	}
+	return s.ssoGateURL()
+}
+
+// ssoGateURL is the authorization endpoint with this hub's app and tenant on
+// it -- what a signed-out browser is sent to, and what the signed-out page
+// links as 重新登录 (claude-fleet#1467). Composed from config only; nothing in
+// any request reaches it.
+func (s *Server) ssoGateURL() (string, bool) {
+	if !s.SSO.ready() {
 		return "", false
 	}
 	u, err := url.Parse(s.SSO.EnterURL)

@@ -241,6 +241,10 @@ func (s *Server) Handler() http.Handler {
 	// unconditionally: when SSO is not configured the handler answers 404, so
 	// whether the route exists never leaks whether the feature is on.
 	mux.HandleFunc("/enter", s.handleEnter)
+	// The way out (claude-fleet#1467): POST clears the cookies this hub
+	// minted, GET is the signed-out page. Outside the gate for the same
+	// reason /enter is -- a signed-out browser must be able to reach it.
+	mux.HandleFunc("/logout", s.handleLogout)
 
 	if s.Fleet {
 		// The control channel authenticates per endpoint, like ingest.
@@ -312,6 +316,9 @@ func (s *Server) Handler() http.Handler {
 	})
 
 	mux.Handle("/v1/accounts", s.viewerOnly(http.HandlerFunc(s.handleAccounts)))
+	// Who the gate admitted, for the shared page header (claude-fleet#1467).
+	// Unconditional: the header is on every hub's dashboard, fleet module or not.
+	mux.Handle("/v1/me", s.viewerOnly(http.HandlerFunc(s.handleMe)))
 	mux.Handle("/v1/fx", s.viewerOnly(http.HandlerFunc(s.handleFX)))
 	mux.Handle("/v1/collectors", s.viewerOnly(http.HandlerFunc(s.handleCollectors)))
 	mux.Handle("/v1/account-usage", s.viewerOnly(http.HandlerFunc(s.handleAccountUsage)))
@@ -402,10 +409,14 @@ func (s *Server) Handler() http.Handler {
 // and then navigate normally.
 func (s *Server) viewerOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Every admitting branch below records WHICH door let the request in
+		// (withDoor), so /v1/me can say so and the page header can show it
+		// (claude-fleet#1467). A branch that redirects records nothing: the
+		// request it redirects to is admitted again, by one of these.
 		if s.ViewerToken == "" {
 			// An unset viewer token means the operator explicitly opted out
 			// (see the hub's --no-auth flag, which refuses a public bind).
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(w, r.WithContext(withDoor(r.Context(), doorOpen)))
 			return
 		}
 
@@ -413,7 +424,7 @@ func (s *Server) viewerOnly(next http.Handler) http.Handler {
 			// Move the secret out of the URL bar and into a cookie so it stops
 			// appearing in browser history, referrers and screenshots.
 			http.SetCookie(w, &http.Cookie{
-				Name: "ccquota_token", Value: tok, Path: "/",
+				Name: viewerCookie, Value: tok, Path: "/",
 				HttpOnly: true, SameSite: http.SameSiteLaxMode,
 				Secure: r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https"),
 				MaxAge: 30 * 24 * 3600,
@@ -422,28 +433,31 @@ func (s *Server) viewerOnly(next http.Handler) http.Handler {
 			return
 		}
 		if constantTimeEqual(bearer(r), s.ViewerToken) {
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(w, r.WithContext(withDoor(r.Context(), doorToken)))
 			return
 		}
-		if c, err := r.Cookie("ccquota_token"); err == nil && constantTimeEqual(c.Value, s.ViewerToken) {
-			next.ServeHTTP(w, r)
+		if c, err := r.Cookie(viewerCookie); err == nil && constantTimeEqual(c.Value, s.ViewerToken) {
+			next.ServeHTTP(w, r.WithContext(withDoor(r.Context(), doorToken)))
 			return
 		}
 		// A WeCom session this hub minted itself, from a ticket the company's
 		// authorization service signed. Checked after the token so the token
 		// stays the fallback that works when WeCom does not.
-		if sub, ok := s.ssoViewer(r); ok {
+		if sess, ok := s.ssoSession(r); ok {
 			// The signed-in person (the ticket's `uid`, else its role
 			// subject) is also the fleet principal: the one identity whose
-			// views are narrowed to that person's own machines.
+			// views are narrowed to that person's own machines. The session
+			// itself rides along for /v1/me, which shows the name it carries.
+			sub := sess.Principal()
 			ctx := context.WithValue(withViewer(r.Context(), sub), principalKey{}, sub)
+			ctx = withDoor(withSession(ctx, sess), doorWeCom)
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
 		// No token. A named tailnet peer may still be let in -- on the word
 		// of the local tailscaled, never of anything in the request.
 		if login, ok := s.Tailnet.Lookup(r.RemoteAddr); ok {
-			next.ServeHTTP(w, r.WithContext(withViewer(r.Context(), login)))
+			next.ServeHTTP(w, r.WithContext(withDoor(withViewer(r.Context(), login), doorTailnet)))
 			return
 		}
 		// A browser with no credential is someone who has not signed in yet;
