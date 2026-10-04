@@ -266,3 +266,4 @@ FLEET_GH_WH_MAX_AGE                knob: longest an event-quiet prmap still serv
 FLEET_STATE_DIR                    path: state/log location override — the shared gh-limit marker dir (fleet-gh-lib.sh)
 FLEET_SHOW_OUT                     test seam: where fleet-show-send.py writes instead of /dev/tty (fleet-show-selftest.sh, #1367)
 FLEET_LOOP_BACKFILL_BYTES          knob: internal budget, transcript tail bytes the Stop hook replays to backfill a pre-hook @loop (fleet_stop_wait, 262144, #1370)
+FLEET_WAIT_REEVAL                  knob: 0 turns off the idle-window re-ask of done ↔ looping + @claude_wait (fleet-wait-reeval.sh, on, #1376)
