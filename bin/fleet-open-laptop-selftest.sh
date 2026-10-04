@@ -19,7 +19,8 @@
 #      e. API off → a WARN, exit 0, and `defaults write` never runs;
 #      f. iTerm2 3.4 → refused (exit 1);
 #      g. `bash -s -- --mini …` with no fleet_open.py beside it fetches the
-#         script from the mini;
+#         script from the mini AND runs to its closing `changes:` line, with an
+#         ssh shim that eats stdin unless -n, like the real one (#1405);
 #      h. --uninstall removes script/secret/host, keeps log + allow; again = 0;
 #   3. fleet-doctor's laptop row: unset → no row; installed same version → PASS;
 #      older → WARN; missing → WARN; unreachable → INFO `?`, never WARN/FAIL.
@@ -58,10 +59,14 @@ printf 's3cr3t-token\n' > "$WORK/mini/.config/claude-fleet/open.secret"
 
 # ssh shim: `-G <alias>` derives the three keys from $HOME/.ssh/config (what we
 # edit); otherwise run the remote command with ~ = the fake mini's home, or — for
-# the doctor's laptop probe — with HOME = $SHIM_LAPTOP_HOME.
+# the doctor's laptop probe — with HOME = $SHIM_LAPTOP_HOME. Like the real ssh,
+# it swallows stdin unless -n is given (issue #1405: under `bash -s` that stdin
+# is the rest of install.sh).
 cat > "$WORK/shim/ssh" <<'EOF'
 #!/bin/bash
-if [ "$1" = -G ]; then
+nostdin=0
+for a in "$@"; do case "$a" in -n|-[!-]*n*) nostdin=1 ;; esac; done
+if [ "$1" = -G ] || [ "$2" = -G ]; then
   c="$HOME/.ssh/config"
   grep -qi '^[[:space:]]*ControlMaster[[:space:]]' "$c" 2>/dev/null && echo 'controlmaster auto' || echo 'controlmaster false'
   grep -qi '^[[:space:]]*ControlPath[[:space:]]' "$c" 2>/dev/null && echo 'controlpath /x/cm-abc' || echo 'controlpath none'
@@ -69,6 +74,7 @@ if [ "$1" = -G ]; then
   exit 0
 fi
 [ "${SHIM_SSH_DOWN:-0}" = 1 ] && exit 255
+[ "$nostdin" = 1 ] || cat >/dev/null
 while [ $# -gt 1 ]; do case "$1" in -o) shift 2 ;; -*) shift ;; *) shift; break ;; esac; done
 if [ -n "${SHIM_LAPTOP_HOME:-}" ]; then HOME="$SHIM_LAPTOP_HOME" sh -c "$1"; exit; fi
 cmd="${1//\~/$SHIM_MINI_HOME}"
@@ -93,7 +99,7 @@ fresh_home() {
 inst() {   # inst [install.sh args…] → $WORK/out, exit code in $RC
   env HOME="$H" PATH="$WORK/shim:$PATH" FLEET_OPEN_ITERM_APP="$WORK/iTerm.app" \
     SHIM_MINI_HOME="$WORK/mini" SHIM_LOG="$WORK/defaults.log" \
-    "$SH" "$EX/install.sh" "$@" >"$WORK/out" 2>&1
+    "$SH" "$EX/install.sh" "$@" >"$WORK/out" 2>&1 </dev/null
   RC=$?
   grep -q 'unbound variable' "$WORK/out" && fail "install.sh died on an unbound variable"
   return 0
@@ -180,12 +186,20 @@ SHIM_ITERM_VER=3.10.0 inst --mini macmini
 ok
 
 # g. remote: script piped on stdin, fetched back from the mini
-fresh_home
+# --dry-run first: still reaches the closing `changes:` line, writes nothing
+fresh_home; before="$(snap)"
+(cd "$WORK" && env HOME="$H" PATH="$WORK/shim:$PATH" FLEET_OPEN_ITERM_APP="$WORK/iTerm.app" \
+  SHIM_MINI_HOME="$WORK/mini" "$SH" -s -- --mini macmini --dry-run < "$EX/install.sh" >"$WORK/out" 2>&1) \
+  || fail "bash -s --dry-run failed"
+grep -q '^changes: [1-9]' "$WORK/out" || fail "bash -s --dry-run never reached its changes: line (#1405)"
+[ "$(snap)" = "$before" ] || fail "bash -s --dry-run changed files"
 (cd "$WORK" && env HOME="$H" PATH="$WORK/shim:$PATH" FLEET_OPEN_ITERM_APP="$WORK/iTerm.app" \
   SHIM_MINI_HOME="$WORK/mini" "$SH" -s -- --mini macmini < "$EX/install.sh" >"$WORK/out" 2>&1) \
   || fail "bash -s install failed"
 grep -q 'script source: macmini:' "$WORK/out" || fail "bash -s did not fetch the script from the mini"
+grep -q '^changes: [1-9]' "$WORK/out" || fail "bash -s stopped before the end (an ssh ate stdin = the script, #1405)"
 cmp -s "$AL" "$EX/fleet_open.py" || fail "fetched script differs"
+[ -s "$C/secret" ] && [ -f "$C/host" ] || fail "bash -s left secret/host uninstalled"
 ok
 
 # h. uninstall
@@ -202,7 +216,7 @@ LH="$WORK/laptop"; mkdir -p "$LH/Library/Application Support/iTerm2/Scripts/Auto
 LAL="$LH/Library/Application Support/iTerm2/Scripts/AutoLaunch/fleet_open.py"
 doc() {
   env HOME="$WORK/dochome" TMPDIR="$WORK" FLEET_CONF_DIR="$WORK/conf" PATH="$WORK/shim:$PATH" \
-    SHIM_LAPTOP_HOME="$LH" "$@" sh "$BIN/fleet-doctor.sh" >"$WORK/out" 2>&1
+    SHIM_LAPTOP_HOME="$LH" "$@" sh "$BIN/fleet-doctor.sh" >"$WORK/out" 2>&1 </dev/null
   grep -q 'unbound variable' "$WORK/out" && fail "doctor died on an unbound variable"
   grep -E '^[[:space:]]+(PASS|WARN|FAIL|INFO)[[:space:]]+laptop[[:space:]]' "$WORK/out"
 }

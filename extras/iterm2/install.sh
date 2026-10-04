@@ -102,8 +102,11 @@ remove() {   # remove <path> <label>
   return 0
 }
 
+# -n on EVERY ssh here (issue #1405): under `ssh laptop 'bash -s' < install.sh`
+# stdin IS the rest of this script, and an ssh without -n forwards it to the
+# remote side — bash then reads EOF and exits 0 mid-install, silently.
 mini_cat() {   # mini_cat <remote path, ~ expanded there> → stdout
-  ssh -o BatchMode=yes -o ConnectTimeout=10 "$MINI" "cat $1"
+  ssh -n -o BatchMode=yes -o ConnectTimeout=10 "$MINI" "cat $1"
 }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-open-install.XXXXXX")"
@@ -193,7 +196,7 @@ else
 fi
 
 # --- 4. ssh multiplexing to the mini ----------------------------------------
-eff() { ssh -G "$MINI" 2>/dev/null | awk -v k="$1" '$1 == k { $1 = ""; sub(/^ /, ""); print; exit }'; }
+eff() { ssh -n -G "$MINI" 2>/dev/null | awk -v k="$1" '$1 == k { $1 = ""; sub(/^ /, ""); print; exit }'; }
 missing=''
 case "$(eff controlmaster)" in ''|false|no) missing="$missing ControlMaster" ;; esac
 case "$(eff controlpath)" in ''|none) missing="$missing ControlPath" ;; esac
