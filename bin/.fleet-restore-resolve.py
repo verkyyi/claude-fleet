@@ -30,7 +30,7 @@
 from pathlib import Path
 import sys, glob, os, re, json, uuid
 
-PANELS = {"plan", "dash", "backlog"}
+PANELS = {"plan", "dash", "backlog", "home"}
 HUB = "__HUB__"
 SEP = "|"  # input field delimiter — printable so it survives tmux (see header)
 MAIN = os.path.realpath(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1] else ""

@@ -1309,6 +1309,16 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=⌂/F9 go to the task bar first @group=status @tier=common @scope=fleet @edit=bool
 #FLEET_HOME_SIDEBAR_FIRST=1
 
+# The full-screen list window (issue #1533). 0 (default): there is none — the
+# task list on the left is the only list; ⌂ / F9 / prefix g all land on it, focused
+# (shown and switched on if needed; F9 a third time hides it), and a fleet's
+# resting window is `home`, a plain shell the list draws beside.
+# FLEET_HOME_SIDEBAR_FIRST does nothing then. 1 = the old `plan` hub window
+# running the dash, and the old ⌂ / F9 / prefix g — kept one batch as the way
+# back; the next batch deletes it.
+# @label=Full-screen list window (old hub) @group=status @tier=advanced @scope=fleet @edit=bool
+#FLEET_DASH_WINDOW=0
+
 # Optional: a docker container name to show as ●/○ in the status bar right side.
 # GLOBAL: the status bar (bin/tmux-status.sh) reads this from the global env only
 # — a per-fleet override would be a silent no-op — so it is machine-wide (like the

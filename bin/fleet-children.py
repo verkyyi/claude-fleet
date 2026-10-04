@@ -61,7 +61,7 @@ RID_OK = KEY_OK | set('/#')
 # summary and the dash parent row's `3/5 ✓ · 1!` badge can never disagree.
 RANK = {'needs': 0, 'failed': 0, 'sleeping': 1, 'preparing': 1, 'waking': 1,
         'done': 1, 'working': 2, 'looping': 3}
-PANELS = ('dash', 'plan', 'backlog')
+PANELS = ('dash', 'plan', 'backlog', 'home')
 HOPS = 4                       # chain_v's bound — a grandchild past it is an orphan
 
 

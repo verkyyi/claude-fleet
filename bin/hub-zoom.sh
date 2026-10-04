@@ -51,6 +51,21 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-lib.sh"
 SESS=$(tmux display-message -p '#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null)
 
+# The full-screen list retired (issue #1533): unless FLEET_DASH_WINDOW=1 brings
+# the hub window back, ⌂ / F9 land on the task list in the window you are in —
+# fleet-sidebar.sh home, whose contract is "always ends with the list focused"
+# (F9 a third time hides it). Everything below is the FLEET_DASH_WINDOW=1 hub,
+# kept one batch as the way back, unchanged.
+(
+  [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
+  _fs="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleet.settings"; [ -f "$_fs" ] && . "$_fs"
+  fleet_load_conf "$SESS"
+  [ "${FLEET_DASH_WINDOW:-0}" = 1 ]
+) || {
+  if [ "$mode" = --home ]; then m=home; else m=f9; fi
+  exec bash "$BIN/fleet-sidebar.sh" home '' "$m" "$client" "$nav"
+}
+
 # Task bar first — decided on this window's own options, before any hub lookup.
 if [ "$nav" = 0 ] &&
    [ "$(tmux display-message -p '#{&&:#{@sidebar_worker},#{!=:#{window_zoomed_flag},1}}' 2>/dev/null)" = 1 ] &&

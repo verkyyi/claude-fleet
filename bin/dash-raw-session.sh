@@ -314,7 +314,7 @@ if [ -n "$NAME" ]; then
   fleet_clip_display 24 "$san"; san="${clip_out:-}"
   san=$(printf '%s' "$san" | LC_ALL=C sed -e 's/[[:space:]]*$//')
   case "$san" in
-    plan|dash|backlog) note="'$san' is reserved — named it scratch instead" ;;
+    plan|dash|backlog|home) note="'$san' is reserved — named it scratch instead" ;;
     "")                note="name empty after sanitize — named it scratch instead" ;;
     *)                 custom="$san" ;;
   esac

@@ -103,7 +103,7 @@ if [ "${1:-}" = record ]; then
       while read -r wid life dash name; do
         [ "$wid" = "$id" ] || continue
         [ "$life" != sleeping ] && [ "$dash" = - ] || break
-        case "$name" in plan|dash|backlog) break ;; esac
+        case "$name" in plan|dash|backlog|home) break ;; esac
         T select-window -t "$id" 2>/dev/null && return 0
         break
       done <<EOF2

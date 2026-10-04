@@ -189,7 +189,7 @@ class Worker:
         workers = [p.split()[0] for p in panes if len(p.split()) == 1]
         if len(workers) != 1: raise NotAWorker('requires exactly one worker pane')
         self.pane = workers[0]
-        if self.opt('window_name') in ('dash','plan','backlog') or self.opt('@hub') == '1':
+        if self.opt('window_name') in ('dash','plan','backlog','home') or self.opt('@hub') == '1':
             raise NotAWorker('panel/hub is not a worker')
         if self.opt('@remote'):
             raise NotAWorker('a proxy onto another machine is not a worker here')

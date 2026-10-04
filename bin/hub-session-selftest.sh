@@ -1,6 +1,11 @@
 #!/bin/bash
 # hub-session-selftest.sh — the hub's launch contract: DASH-ONLY, never a Claude.
 #
+# Since issue #1533 that hub is the FLEET_DASH_WINDOW=1 way back only: by default
+# hub-session.sh builds NO 'plan' window at all — it builds `home`, a plain shell
+# the task list draws beside. Legs 1-5 below pin the FLEET_DASH_WINDOW=1 hub
+# exactly as it was; leg 6 pins the default (print seam + a real isolated tmux).
+#
 # The 'plan' hub used to split a persistent `claude` in below the dash (the "hub
 # pane", issue #439, successor to the steward seat). That pane restored itself
 # unasked — the ⌂ home tap, F9 and prefix+g all fall back to hub-session.sh when
@@ -53,7 +58,7 @@ EOF
 # e.g.  run HUB_RESUME_ID=abc123
 run() {
   env -u FLEET_MODEL -u FLEET_HUB_CMD -u HUB_RESUME_ID -u HUB_CWD -u HUB_CMD \
-      FLEET_CONF_DIR="$CONF" HUB_SESSION="$SESS" HUB_PRINT_CMD=1 \
+      FLEET_CONF_DIR="$CONF" HUB_SESSION="$SESS" HUB_PRINT_CMD=1 FLEET_DASH_WINDOW=1 \
       "$@" bash "$SCRIPT"
 }
 
@@ -115,5 +120,47 @@ case "$out" in *"tmux-dashboard.sh"*) : ;;
 out=$(run HUB_RESUME_ID=xyz789 FLEET_HUB_CMD='claude "my own orders"; exec $SHELL')
 no_claude resume+override "$out"
 
-printf 'PASS: hub-session launches the dash ALONE — HUB_RESUME_ID and FLEET_HUB_CMD are inert, no claude by any route\n'
+# --- 6. DEFAULT (issue #1533): no 'plan' window, a `home` shell instead --------
+d=$(env -u FLEET_DASH_WINDOW FLEET_CONF_DIR="$CONF" HUB_SESSION="$SESS" HUB_PRINT_CMD=1 bash "$SCRIPT")
+[ "$d" = home ] || fail "default: hub-session must build the 'home' window, not the dash: $d"
+d=$(env -u FLEET_DASH_WINDOW FLEET_CONF_DIR="$CONF" HUB_SESSION="$SESS" HUB_PRINT_CMD=cwd bash "$SCRIPT")
+[ "$d" = "$MAIN" ] || fail "default: home must open in the fleet's checkout, got: $d"
+# fleet.settings carries the knob too (the login's settings, #979).
+printf 'FLEET_DASH_WINDOW=1\n' > "$CONF/fleet.settings"
+d=$(env -u FLEET_DASH_WINDOW FLEET_CONF_DIR="$CONF" HUB_SESSION="$SESS" HUB_PRINT_CMD=1 bash "$SCRIPT")
+[ "$d" = "bash '$BIN/tmux-dashboard.sh'" ] || fail "fleet.settings FLEET_DASH_WINDOW=1 must bring the hub back: $d"
+rm -f "$CONF/fleet.settings"
+
+# A real build, on an isolated server (never the live one): fleet-up's throwaway
+# first window, then hub-session.sh — `home` at index 1, no `plan`, and a second
+# run (the ⌂ fallback) builds nothing more.
+REAL_TMUX=$(command -v tmux 2>/dev/null)
+if [ -z "$REAL_TMUX" ]; then
+  printf 'selftest: tmux missing — live leg 6 SKIPPED\n' >&2
+else
+  mkdir -p "$WORK/shim"
+  cat > "$WORK/shim/tmux" <<EOF
+#!/bin/sh
+case "\$1" in -L|-S) shift 2 ;; esac
+exec "$REAL_TMUX" -S "$WORK/sock" "\$@"
+EOF
+  chmod +x "$WORK/shim/tmux"
+  trap '"$REAL_TMUX" -S "$WORK/sock" kill-server 2>/dev/null; rm -rf "$WORK"' EXIT
+  T() { "$REAL_TMUX" -S "$WORK/sock" "$@"; }
+  T -f /dev/null new-session -d -s "$SESS" -n work 'sleep 600' || fail "could not start the isolated tmux server"
+  T set-option -g default-shell /bin/sh
+  T set-option -g base-index 1
+  live() { env -u FLEET_DASH_WINDOW -u TMUX PATH="$WORK/shim:$PATH" FLEET_CONF_DIR="$CONF" HUB_SESSION="$SESS" bash "$SCRIPT"; }
+  live || fail "default: hub-session.sh exited non-zero"
+  names=$(T list-windows -t "$SESS" -F '#{window_index}:#{window_name}' | tr '\n' ' ')
+  case " $names" in *":plan "*) fail "default: a 'plan' window was built: $names" ;; esac
+  case " $names" in *" 1:home "*) : ;; *) fail "default: 'home' must sit at index 1: $names" ;; esac
+  [ "$(T display-message -p -t "$SESS:" '#{window_name}')" = home ] || fail "default: home must be selected"
+  [ -z "$(T list-panes -s -t "$SESS" -F '#{@dash}' | tr -d '\n')" ] || fail "default: no dash pane may exist"
+  live || fail "default: a second hub-session.sh exited non-zero"
+  [ "$(T list-windows -t "$SESS" -F '#{window_name}' | grep -c '^home$')" = 1 ] \
+    || fail "default: a second run must not build a second home: $(T list-windows -t "$SESS" -F '#{window_name}' | tr '\n' ' ')"
+fi
+
+printf 'PASS: default builds `home` (no plan window); FLEET_DASH_WINDOW=1 launches the dash ALONE — HUB_RESUME_ID and FLEET_HUB_CMD are inert, no claude by any route\n'
 exit 0

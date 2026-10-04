@@ -215,9 +215,11 @@ keys are `dash-keymap.sh --panel sidebar` rows (`bol` `eol` `kill_word`
 the conf rewrites to the ⌃ byte.
 With NO sidebar on screen — a window under ~111 columns hides it, prefix e turns
 it off — the same list opens as a popup: `bin/fleet-task-pick.sh` (issue #902),
-from `prefix Space`, from `prefix E`, and from ⌂ / F9 in a task window (the
-no-bar branch of `hub-zoom.sh`'s task-bar-first, same `FLEET_HOME_SIDEBAR_FIRST`
-knob; a zoomed task and the hub's own window keep their old behaviour). Rows come
+from `prefix Space`, from `prefix E`, and from ⌂ / F9 / prefix g in a window
+too narrow to draw the list (`fleet-sidebar.sh home`, issue #1533 — which
+otherwise unzooms, switches the list back on, moves to a window that can show it
+or builds `home`, and focuses it; with `FLEET_DASH_WINDOW=1` it is the no-bar
+branch of `hub-zoom.sh`'s task-bar-first, `FLEET_HOME_SIDEBAR_FIRST`, as before). Rows come
 from `tmux-dashboard-rows.sh --sidebar`, so the order, pins, folds and the
 panel exclusion are the bar's. The popup only WRITES an action line —
 `select <@id>` · `scratch <name>` · `hub` — and the `--popup` parent acts on it

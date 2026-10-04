@@ -60,6 +60,36 @@ else
   [ -z "$BASE" ] && BASE="$HOME"
 fi
 
+# The full-screen list retired (issue #1533). Unless FLEET_DASH_WINDOW=1 brings
+# it back, the fleet's resting window is `home`: a plain shell in BASE that the
+# task list draws beside (fleet-sidebar.py), at the lowest index the hub had. It
+# is not a list of its own — nothing refreshes in it — but a session needs a
+# window that outlives its tasks, or the last one to close would take the fleet
+# and its server with it, and a fleet with no task yet starts one from the list's
+# input line, which needs a window to draw in. `home` is a panel like plan/dash/
+# backlog everywhere a window is counted, snapshotted or listed as a session.
+_fs="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleet.settings"
+[ -z "${FLEET_DASH_WINDOW:-}" ] && [ -f "$_fs" ] && FLEET_DASH_WINDOW=$( . "$_fs" >/dev/null 2>&1; printf '%s' "${FLEET_DASH_WINDOW:-}" )
+if [ "${FLEET_DASH_WINDOW:-0}" != 1 ]; then
+  if [ -n "${HUB_PRINT_CMD:-}" ]; then
+    if [ "$HUB_PRINT_CMD" = cwd ]; then printf '%s\n' "$BASE"; else printf 'home\n'; fi
+    exit 0
+  fi
+  win=$(tmux -L "$SOCK" list-windows -t "$SESS" -F '#{window_id} #{window_name}' 2>/dev/null | awk '$2=="home"{print $1; exit}')
+  if [ -z "$win" ]; then
+    win=$(tmux -L "$SOCK" new-window -P -F '#{window_id}' -t "$SESS:" -n home -c "$BASE") || exit 0
+    # A name tmux's automatic-rename must not change: the panel rules key on it.
+    tmux -L "$SOCK" set-window-option -t "$win" automatic-rename off 2>/dev/null
+    if tmux -L "$SOCK" list-windows -t "$SESS" -F '#{window_index}' | grep -qx 1; then
+      tmux -L "$SOCK" swap-window -d -s "$win" -t "$SESS:1" 2>/dev/null
+    else
+      tmux -L "$SOCK" move-window -d -s "$win" -t "$SESS:1" 2>/dev/null
+    fi
+  fi
+  tmux -L "$SOCK" select-window -t "$win"
+  exit 0
+fi
+
 # The ONLY command the hub runs: the dashboard. There is no second pane and no
 # `claude` launch here any more, so FLEET_HUB_CMD / HUB_RESUME_ID / HUB_CMD are
 # gone with it — a hub has no transcript to resume, and no env to inject.

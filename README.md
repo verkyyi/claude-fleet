@@ -240,7 +240,7 @@ line, which exits silently without it.)
 | Key | Action |
 |---|---|
 | `prefix a` | jump to the next window that needs you (red first, then green) |
-| `prefix g` | focus the hub's dash pane (jump / new task); press again to zoom it fullscreen. If your personal `~/.tmux.conf` binds `g` and is sourced after the fleet conf, your bind shadows this (tmux is last-write-wins) — rebind or drop it |
+| `prefix g` | focus the task list, like the `⌂` (with `FLEET_DASH_WINDOW=1`: the old hub dash pane, press again to zoom it). If your personal `~/.tmux.conf` binds `g` and is sourced after the fleet conf, your bind shadows this (tmux is last-write-wins) — rebind or drop it |
 | `prefix e` | show/hide the compact task sidebar in workers; remembers the preference for this fleet |
 | `prefix E` | focus the sidebar (or click it): ↑↓ switch tasks (follows once you pause); on an empty input line Home/End go to the ends and ←→ fold (a row's subtree, or a repo heading's whole group), on a typed name they move its cursor (with ⌥←→ ⌃a ⌃e ⌃w ⌃k to jump and delete, as on Claude's prompt), a terminal paste lands on it too (one name; newlines become spaces); Enter/Esc give input back to the worker, `n` (or a tap on the bottom row) new task — files an issue and spawns its worker, `q` hide (keyboard-only; nothing in the sidebar hides on a tap) |
 | `prefix Space` | task picker — the sidebar's task list as a popup, for when the sidebar is hidden (a window under ~111 columns) or off: ↵ switches, a typed name + `⌃s` (or ↵ on no match) starts a scratch session, F9 / `[⌂ hub]` goes on to the hub. `prefix E`, `F9` and the ⌂ tap open it too in a task with no sidebar on screen |
@@ -249,7 +249,7 @@ line, which exits silently without it.)
 | `prefix u` | usage + account modal — local 5h/7d usage and the official limit line on top, the account pool (when configured) as a selectable body below; enter picks the account new sessions start from |
 | `prefix !` | alerts popup — every alert the status bar counts, as one table: `✖` alarm · `▲` warning · `●` needs (then `↻` recently healed), each `subject · condition · value`, how long, and one action. `↵` acts (go to the window / restart the daemon / see accounts / see disk), `1`/`2`/`3` filter by level (`0` all), `m` mutes a warning or needs row for 1h — an alarm cannot be muted — `esc` closes. Overrides tmux's stock `break-pane` |
 | `prefix ?` | keymap cheatsheet — a popup listing **every** fleet shortcut (tmux prefix · dash · backlog · config modal), each with a one-line description; `q`/`esc` closes it (also reachable via `?` in the dash and the backlog) |
-| `F9` | (no prefix) jump back to this session's hub — in a task, the first press lands on the sidebar (or, with no sidebar on screen, the task picker) and the second goes to the hub (`FLEET_HOME_SIDEBAR_FIRST=0` turns that off) |
+| `F9` | (no prefix) focus the task list — shown, and switched back on, if it is not; a second press hides it, a third shows it again. A window too narrow for it opens the task picker. (`FLEET_DASH_WINDOW=1`: the old hub — first press the sidebar, second the hub; `FLEET_HOME_SIDEBAR_FIRST=0` turns that off) |
 
 The shortcut surface was pruned in #289 (one keyboard home per action): raw
 scratch sessions live on the dash's `⌃s`, and the usage / account controls (once
@@ -313,8 +313,9 @@ selectable body below). (Comment out `set -g mouse on` in
 
 To zoom a pane fullscreen, double-click it (or its border), or use stock tmux
 `prefix z` — except a worker with its task sidebar on screen, where a double-click
-selects a word as in stock tmux (zoom it with `prefix z` or its border); `F9` and `prefix g` both jump to the hub's dash and toggle its
-zoom (press again to restore). On iPad / Termius the double-tap
+selects a word as in stock tmux (zoom it with `prefix z` or its border); `F9`, `prefix g` and the `⌂` all land on
+the task list (the full-screen hub retired, issue #1533; `FLEET_DASH_WINDOW=1`
+brings back the old dash and its zoom toggle). On iPad / Termius the double-tap
 doesn't always reach tmux over touch and `prefix z` is a chord on a soft keyboard,
 so the reliable single-tap footer ranges are the `⌂` hub icon and the `● N` needs
 badge above — not a pane zoom.

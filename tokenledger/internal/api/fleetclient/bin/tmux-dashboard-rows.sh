@@ -461,7 +461,7 @@ if [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ -n "${FLEET_SESSION:-}" ] && [ -s "$G/remo
       _rest=${_ln#*$US}; _rest=${_rest#*$US}; _nm=${_rest%%$US*}            # window name
       _rest=${_rest#*$US}; _rest=${_rest#*$US}; _rest=${_rest#*$US}; _rest=${_rest#*$US}
       _w=${_rest%%$US*}                                                      # window id
-      case "$_nm" in dash|plan|backlog) _hl+="$_ln"$'\n'; continue ;; esac
+      case "$_nm" in dash|plan|backlog|home) _hl+="$_ln"$'\n'; continue ;; esac
       case "$_w" in wid:*) _hl+="$_ln"$'\n'; continue ;; esac
       case "$_lwids" in *" $_w "*) _hl+="$_ln"$'\n'; continue ;; esac
       [ -n "${FLEET_SIDEBAR_CURRENT:-}" ] && [ "$_w" = "$FLEET_SIDEBAR_CURRENT" ] && _hl+="$_ln"$'\n'
@@ -493,7 +493,7 @@ while IFS=$US read -r sess idx name path state _ rwid iss origin wt _ _ nsub exp
   [ -z "$name" ] && continue
   [ -n "${FLEET_SESSION:-}" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
   RFOLD=$rfold
-  case "$name" in dash|plan|backlog) continue;; esac
+  case "$name" in dash|plan|backlog|home) continue;; esac
   rgrp_v "$wrepo" "$wnorepo"
   # Collect the branch spellings this frame will look up in the prmap (issue
   # #662) — BEFORE the okey filter below, because a window with no addressable
@@ -697,7 +697,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # strict per-fleet: only windows from the viewing dash's own tmux session.
   # FLEET_SESSION exported by tmux-dashboard.sh; unset ⇒ show all (single-fleet).
   [ -n "${FLEET_SESSION:-}" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
-  case "$name" in dash|plan|backlog) continue;; esac   # panels, not Claude sessions
+  case "$name" in dash|plan|backlog|home) continue;; esac   # panels, not Claude sessions
   NSESS=$((NSESS + 1))                                 # a session row this frame (#998)
   # repo group (issues #793/#974) — the FIRST sort key: the row's OWN group here
   # (rgrp_v); a cross-repo child swaps in its root's once the chain walk below

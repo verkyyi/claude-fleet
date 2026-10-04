@@ -140,7 +140,7 @@ fold_key() {
 fold_classify() {
   local name key st
   name=$(fold_opt "$1" "$2" '#{window_name}')
-  case "$name" in dash|plan|backlog) printf 'panel\t-\t%s\tretires with the server\n' "$name"; return 0 ;; esac
+  case "$name" in dash|plan|backlog|home) printf 'panel\t-\t%s\tretires with the server\n' "$name"; return 0 ;; esac
   if [ "$(fold_opt "$1" "$2" '#{@pool}')" = 1 ]; then
     printf 'pool\t-\t%s\tretires with the server; the target refills its pool\n' "$name"; return 0
   fi

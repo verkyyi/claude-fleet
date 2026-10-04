@@ -55,7 +55,7 @@ class Cleaner:
     def eligible(self, window, snap):
         if (snap["@raw"] != "1" or snap["@issue"] or snap["@pin"] == "1"
                 or snap["@claude_state"] != "done"
-                or snap["window_name"] in ("dash", "plan", "backlog")):
+                or snap["window_name"] in ("dash", "plan", "backlog", "home")):
             return False
         # A no-repo session is never closed automatically (issue #791), and in a
         # multi-repo fleet (--window-repo) a pass only closes its OWN repo's windows.

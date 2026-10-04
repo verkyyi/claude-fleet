@@ -108,7 +108,7 @@ sweep_state_dirs() {
 
 # window names that are fleet UI panels (rebuilt by fleet-up/hub-session),
 # NOT Claude work sessions — never snapshotted or restored as sessions.
-PANEL_RE='^(plan|dash|backlog)$'
+PANEL_RE='^(plan|dash|backlog|home)$'
 
 log() { printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$*" >> "$LOG" 2>/dev/null; }
 say() { [ -n "${QUIET:-}" ] || echo "$*"; }

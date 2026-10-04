@@ -91,7 +91,7 @@ PANE=$(TM list-panes -t "$WIN" -F '#{pane_id}|#{@sidebar}' 2>/dev/null \
   | awk -F'|' '$2 != "1" { pane=$1; n++ } END { if (n == 1) print pane; else exit 1 }') \
   || die 'transfer requires exactly one worker pane (sidebars are allowed)'
 [ "$(opt '#{session_name}')" = "$SESS" ] || die 'window belongs to a different session'
-case "$(opt '#{window_name}')" in dash|plan|backlog) die 'panel windows cannot be transferred' ;; esac
+case "$(opt '#{window_name}')" in dash|plan|backlog|home) die 'panel windows cannot be transferred' ;; esac
 [ "$(opt '#{@hub}')" != 1 ] || die 'the hub cannot be transferred'
 SOURCE_AGENT=$(opt '#{@cc_agent}'); SOURCE_AGENT=${SOURCE_AGENT:-claude}
 case "$SOURCE_AGENT" in claude|codex) ;; *) die 'unsupported source agent' ;; esac
