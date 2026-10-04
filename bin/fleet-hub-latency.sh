@@ -231,13 +231,20 @@ ostate = os.environ["OSTATE"]
 if ostate in (a, b):
     start = ostate
     write(start)                 # make the setter agree with what the observer sees
-    time.sleep(1.0)
 else:
     start = a
     write(start)
     if wait_seen(start, 60) is None:
         print("fleet-hub-latency: the observer never saw the starting state %r (it shows %r) — is the hub listing this window there?" % (start, ostate), file=sys.stderr)
         sys.exit(1)
+# Drain: whatever the hub and the observer's loop still had in flight (a beat
+# and a fetch — 16 s covers the slowest cadence) lands before round 1, so the
+# first round measures a change, not a catch-up.
+deadline = time.monotonic() + 16
+while time.monotonic() < deadline:
+    r, _, _ = select.select([out], [], [], max(0.0, deadline - time.monotonic()))
+    if r and not out.readline():
+        break
 lat = []
 prev = start
 for i in range(1, rounds + 1):
