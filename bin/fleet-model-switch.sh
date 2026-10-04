@@ -21,7 +21,7 @@
 # Typing `/model opus` at the prompt takes ~5 s, keeps the process, keeps the
 # agents, keeps the context, and is literally what the banner tells a human to
 # do. So: in place first, `fleet-migrate.sh --model` only as the fallback when
-# the flip cannot be VERIFIED off the status line.
+# the flip cannot be VERIFIED off the session's own model report (@model / `◆`).
 #
 # Sanctioned keystrokes only (issue #437): Escape, `/model <alias>`, Enter, and
 # Enter again for Claude Code's "Switch model?" confirmation — nothing else, and
@@ -31,10 +31,24 @@
 # fleet_peer_send, the SendMessage channel (#513), like every other fleet→session
 # message.
 #
-# IDEMPOTENCE is the pane's own status line, not a marker file: a window is a
-# candidate only while `◆ <model>` still names the CAPPED model. Once the flip
-# lands the window stops matching, so a stale banner left in the scrollback can
-# never make a second pass type again.
+# IDEMPOTENCE is the session's own model report, not a marker file: a window is
+# a candidate only while the model it is ON still names the CAPPED model. Once
+# the flip lands the window stops matching, so a stale banner left in the
+# scrollback can never make a second pass type again.
+#
+# WHICH model a window is on has two sources, in this order (issue #1454):
+#   1. the `@model` window option — conf/statusline.sh stamps Claude Code's
+#      `.model.display_name` onto the window on every status-line render (#1452),
+#      so it updates on the first render after a `/model` and costs nothing to
+#      read: it rides the ONE `list-windows -F` this probe already pays for.
+#   2. the NATIVE status line, `◆ <model>  [████] 38% …`, parsed off the pane
+#      text — a login with no statusLine configured still shows it.
+# The order matters because they are mutually exclusive in practice: a login
+# running the fleet's statusLine (every fleet login) never shows the native line
+# at all, so the old pane-text-only read saw NO model there — the window was
+# never selected, and the flip could never be verified, so every per-model cap
+# on such a login fell through to `fleet-migrate.sh --model` (close + --resume),
+# the very dance this script exists to avoid.
 #
 # DETECTION has two sources, because the banner alone is not enough (2026-09-12,
 # the second episode). The pane's banner is ephemeral — it scrolls past $SCROLL, and
@@ -195,9 +209,11 @@ switch_selected() {
 }
 
 # pane_model_of <text> — stdin-free helper: the model named on Claude Code's
-# status line ("◆ Opus 5  [████░░░░░░] 38% …" → "Opus 5"). The name runs to the
-# column gap (2+ spaces) that separates it from the context meter; a pane with no
-# status line prints nothing.
+# NATIVE status line ("◆ Opus 5  [████░░░░░░] 38% …" → "Opus 5"). The name runs
+# to the column gap (2+ spaces) that separates it from the context meter; a pane
+# with no such line prints nothing. Since #1454 this is the FALLBACK read — a
+# login with no statusLine configured — behind the `@model` window option that
+# window_model below prefers.
 # Fork-free since #706: this runs once per window inside a probe whose whole
 # problem was its fork count, and `$(printf | sed | tail)` is three. The grammar
 # is unchanged and pinned by bin/fleet-model-switch-selftest.sh — `##*◆ ` is
@@ -213,6 +229,23 @@ pane_model_of() {
   c=${c%%  *}             # … and the name runs up to it
   [[ "$c" =~ ^[A-Za-z0-9][A-Za-z0-9.]*([ ][A-Za-z0-9.]+)*$ ]] || return 0
   printf '%s\n' "$c"
+}
+
+# window_model <@model> <pane-text> → $WMODEL — the model a window is ON (issue
+# #1454). The `@model` window option wins whenever it is set: conf/statusline.sh
+# stamps Claude Code's own `.model.display_name` there on every status-line
+# render (#1452), so it is the engine's word, it flips on the first render after
+# a `/model`, and a login running the fleet's statusLine shows NO native `◆` line
+# for pane_model_of to read. Only an EMPTY `@model` — a login with no statusLine,
+# whose window nothing ever stamped — falls back to parsing the pane text.
+# Result in a global, not on stdout, like _lc/_LC and ledger_until/LEDGER_UNTIL:
+# the common path is then a plain assignment, no subshell, on the probe's hot
+# loop (#706); only the fallback pays pane_model_of's one.
+WMODEL=""
+window_model() {
+  WMODEL="${1:-}"
+  [ -n "$WMODEL" ] && return 0
+  WMODEL=$(pane_model_of "${2:-}")
 }
 
 # _lc <word> → $_LC, lowercased WITHOUT a fork (issue #706). bash 3.2 (macOS) has
@@ -342,7 +375,9 @@ main() {
   # fields this is full of (an unset @hub next to an unset @claude_state) and every
   # column after the first empty one would shift. Same trap fleet-dispatch.sh
   # documents; it escapes via `awk -F'\t'`, this escapes without the fork.
-  local W_ID=() W_PPID=() W_HUB=() W_STATE=() W_STS=() W_ACCT=() W_NAME=()
+  # `@model` rides the same read (issue #1454): the statusline's stamp of the
+  # model the session is on, read for free with the rest.
+  local W_ID=() W_PPID=() W_HUB=() W_STATE=() W_STS=() W_ACCT=() W_MODEL=() W_NAME=()
   local _row _r TB=$'\t'
   while IFS= read -r _row; do
     [ -n "$_row" ] || continue
@@ -353,25 +388,28 @@ main() {
     W_STATE+=("${_r%%$'\t'*}"); _r="${_r#*$'\t'}"
     W_STS+=("${_r%%$'\t'*}");   _r="${_r#*$'\t'}"
     W_ACCT+=("${_r%%$'\t'*}");  _r="${_r#*$'\t'}"
+    W_MODEL+=("${_r%%$'\t'*}"); _r="${_r#*$'\t'}"
     W_NAME+=("$_r")
-  done < <(TM list-windows -t "$SESS" -F "#{window_id}$TB#{pane_pid}$TB#{@hub}$TB#{@claude_state}$TB#{@claude_state_ts}$TB#{@cc_account}$TB#{window_name}" 2>/dev/null)
+  done < <(TM list-windows -t "$SESS" -F "#{window_id}$TB#{pane_pid}$TB#{@hub}$TB#{@claude_state}$TB#{@claude_state_ts}$TB#{@cc_account}$TB#{@model}$TB#{window_name}" 2>/dev/null)
 
   # load_meta <wid> → M_* . From the batch; an EXPLICIT window the batch does not
   # cover (another session on this socket — the fleet's own callers never do this,
   # but the old per-window path accepted it) still resolves the slow way, so this
   # is a speedup on the hot path and not a narrowing of what the script accepts.
-  local M_PPID M_HUB M_STATE M_STS M_ACCT M_NAME
+  local M_PPID M_HUB M_STATE M_STS M_ACCT M_MODEL M_NAME
   load_meta() {
     local w="$1" i
     for ((i = 0; i < ${#W_ID[@]}; i++)); do
       [ "${W_ID[$i]}" = "$w" ] || continue
       M_PPID="${W_PPID[$i]}"; M_HUB="${W_HUB[$i]}";   M_STATE="${W_STATE[$i]}"
-      M_STS="${W_STS[$i]}";   M_ACCT="${W_ACCT[$i]}"; M_NAME="${W_NAME[$i]}"
+      M_STS="${W_STS[$i]}";   M_ACCT="${W_ACCT[$i]}"; M_MODEL="${W_MODEL[$i]}"
+      M_NAME="${W_NAME[$i]}"
       return 0
     done
     M_PPID=$(wopt "$w" '#{pane_pid}');        M_HUB=$(wopt "$w" '#{@hub}')
     M_STATE=$(wopt "$w" '#{@claude_state}');  M_STS=$(wopt "$w" '#{@claude_state_ts}')
-    M_ACCT=$(wopt "$w" '#{@cc_account}');     M_NAME=$(wopt "$w" '#{window_name}')
+    M_ACCT=$(wopt "$w" '#{@cc_account}');     M_MODEL=$(wopt "$w" '#{@model}')
+    M_NAME=$(wopt "$w" '#{window_name}')
   }
 
   local targets=() wid
@@ -436,7 +474,9 @@ main() {
     trace capture
     text=$(TM capture-pane -p -S "$SCROLL" -t "$wid" 2>/dev/null)
     trace banner
-    pmodel=$(pane_model_of "$text")
+    # The model this window is ON: the statusline's @model stamp, else the native
+    # `◆` line in the captured text (issue #1454 — see window_model).
+    window_model "$M_MODEL" "$text"; pmodel="$WMODEL"
     # The same fork-free reject usage-lib's fleet_limit_banner now opens with, and
     # here it skips the SUBSHELLS too: a pane with no `limit` anywhere in $SCROLL
     # lines — nearly every window, nearly every tick — costs zero processes to
@@ -586,11 +626,17 @@ main() {
       tries=$((tries - 1))
     done
 
-    # --- verify off the status line, never off our own keystrokes ------------
+    # --- verify off the session's own model report, never off our keystrokes --
+    # `@model` first — conf/statusline.sh re-stamps it on the first render after
+    # the switch — and the native `◆` line only for a window nothing stamps
+    # (issue #1454). A window read off `@model` above is still read off `@model`
+    # here: the statusline never unsets it while its session lives, so the two
+    # ends of the verify cannot be looking at different sources.
     trace verify
     local ok=0 waited=0 nowm
     while [ "$waited" -lt "$VERIFY_WAIT" ]; do
-      nowm=$(pane_model_of "$(cap "$wid")")
+      nowm=$(wopt "$wid" '#{@model}')
+      [ -n "$nowm" ] || nowm=$(pane_model_of "$(cap "$wid")")
       if model_matches "$TARGET" "$nowm" && ! model_matches "$capped" "$nowm"; then ok=1; break; fi
       sleep 1; waited=$((waited+1))
     done

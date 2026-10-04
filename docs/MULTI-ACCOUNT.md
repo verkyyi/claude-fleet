@@ -274,7 +274,10 @@ fleet-quotawatch.sh (≤60s tick) — or the collector, as the backstop — sees
    ├─ fleet-model-switch.sh --capped --model opus   (backgrounded, per fleet)
    │     types Escape + `/model opus` + Enter at the walled session's OWN
    │     prompt, confirms Claude Code's "Switch model?" dialog, then VERIFIES
-   │     the flip off the pane's `◆ <model>` status line. ~5s, and the process
+   │     the flip off the window's `@model` option (conf/statusline.sh stamps
+   │     the engine's model there on every render, #1452) — the native
+   │     `◆ <model>` line is the fallback for a login with no statusLine
+   │     (#1454). ~5s, and the process
    │     never dies: background agents, context and cost all survive. The nudge
    │     that follows rides fleet_peer_send (the SendMessage channel), never
    │     send-keys.
