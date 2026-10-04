@@ -35,6 +35,7 @@
 # `label` is this login's accounts/<label>.conf name when its CCQUOTA_ACCOUNT is
 # that uuid (what a window's @cc_account holds), else the hub's own label.
 
+# shellcheck disable=SC2034  # the FSN_* / FSR_* / HN_* / HL_* / FSA results are read by the sourcing script
 FLEET_STATUS_G="${FLEET_STATUS_G:-${TMPDIR:-/tmp}/.claude-dash/global}"
 _FS_US=$'\x1f'
 

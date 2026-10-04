@@ -43,11 +43,11 @@ _fs="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleet.settings"; [ -f "$_fs" 
 
 # The current window, as the conf's status-right passes it (issue #1482). Absent
 # (an older conf) → every value empty → never hub mode.
-STATUS_SESS='' STATUS_WIN='' STATUS_REMOTE='' STATUS_ACCT='' STATUS_WSF='' STATUS_WSCF='' STATUS_WSAVED=''
+STATUS_SESS='' STATUS_REMOTE='' STATUS_ACCT='' STATUS_WSF='' STATUS_WSCF='' STATUS_WSAVED=''
 for _a in "$@"; do
     case "$_a" in
         sess=*)   STATUS_SESS=${_a#sess=} ;;
-        win=*)    STATUS_WIN=${_a#win=} ;;
+        win=*)    ;;   # the window id is only the re-run cue (tmux re-runs #() when the expanded command changes)
         remote=*) STATUS_REMOTE=${_a#remote=} ;;
         acct=*)   STATUS_ACCT=${_a#acct=} ;;
         wsf=*)    STATUS_WSF=${_a#wsf=} ;;
