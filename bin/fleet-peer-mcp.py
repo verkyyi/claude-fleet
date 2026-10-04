@@ -32,7 +32,7 @@ def current_session():
     pane = os.environ.get("TMUX_PANE", "")
     if not os.environ.get("TMUX") or not pane:
         raise ToolFault("not running inside a fleet tmux pane")
-    sess = tmux("display-message", "-p", "-t", pane, "#{session_name}")
+    sess = tmux("display-message", "-p", "-t", pane, "#{?#{session_group},#{session_group},#{session_name}}")
     if not sess:
         raise ToolFault("could not resolve the current fleet session")
     return sess

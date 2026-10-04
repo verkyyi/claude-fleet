@@ -63,7 +63,7 @@ case "${1:-}" in
   list-sessions) [ -n "$label" ] && printf '%s\n' "$label"; exit 0 ;;
   list-windows)
     for a in "$@"; do
-      [ "$a" = '#{pane_current_path}' ] || continue
+      case "$a" in *'#{pane_current_path}'*) ;; *) continue ;; esac   # fleet_lw prefixes the format (#1489)
       case "${FAKE_TMUX_EMPTY_SESS:-}" in all|"$label") exit 0 ;; esac
       if [ "$label" = "${FAKE_TMUX_FAIL_SESS:-}" ]; then
         cat "$FAKE_PANEPATHS"; exit 1   # partial output is not a complete view

@@ -579,7 +579,7 @@ EOF
     elif [ -n "$WT" ]; then
       REPO=$(fleet_worktree_repo "$SESS" "$WT"); REPO=${REPO%%$'\t'*}
     elif [ -n "${TMUX_PANE:-}" ] \
-         && [ "$(tmux display-message -p -t "$TMUX_PANE" '#{session_name}' 2>/dev/null)" = "$SESS" ]; then
+         && [ "$(tmux display-message -p -t "$TMUX_PANE" '#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null)" = "$SESS" ]; then
       REPO=$(fleet_window_repo "$SESS" "$TMUX_PANE")
     fi
     if [ -n "$REPO" ]; then

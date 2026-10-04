@@ -30,15 +30,25 @@
 # shellcheck disable=SC2034  # the FC_* globals are read by the sourcing script
 
 fc_session() {
-  FC_SESS=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{session_name}' 2>/dev/null)
+  FC_SESS=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null)
   [ -n "$FC_SESS" ] || { FC_WHY='cannot resolve this pane'"'"'s tmux session'; return 1; }
+}
+# fc_clients <fmt> — `list-clients -F <fmt>` for every client of FC_SESS, its view
+# sessions' included (`<fleet>@view-<id>`, issue #1489: a shell or proxy sits on
+# one of those, and it is the newest client fleet-open must find). The row is
+# asked for as `$sid:<fleet>\t<fmt>` and the prefix split off again; a row without
+# that shape (a selftest's fake tmux printing canned lines) passes through as it is.
+fc_clients() {
+  tmux list-clients -F "#{session_id}:#{?#{session_group},#{session_group},#{session_name}}	$1" 2>/dev/null \
+    | awk -F '\t' -v s="$FC_SESS" '$1 !~ /^\$[0-9]+:/ { print; next }
+                               { k = $1; sub(/^[^:]*:/, "", k); if (k != s) next; sub(/^[^\t]*\t/, ""); print }'
 }
 
 fc_pick() {  # <client tty, or empty> <termtype ERE>
   local want="$1" re="$2" rows pick _tty _tt
   FC_CLIENT=""; FC_TERMTYPE=""; FC_GEOM="0,0,0,0"
   # activity <TAB> tty <TAB> termtype <TAB> cols,rows,cell-w,cell-h
-  rows=$(tmux list-clients -t "$FC_SESS" -F '#{client_activity}	#{client_tty}	#{client_termtype}	#{client_width},#{client_height},#{client_cell_width},#{client_cell_height}' 2>/dev/null)
+  rows=$(fc_clients '#{client_activity}	#{client_tty}	#{client_termtype}	#{client_width},#{client_height},#{client_cell_width},#{client_cell_height}')
   if [ -n "$want" ]; then
     pick=$(printf '%s\n' "$rows" | awk -F '\t' -v c="$want" '$2 == c { print $2 "\t" $3 "\t" $4; exit }')
     [ -n "$pick" ] || { FC_WHY="$want is not a client of session '$FC_SESS'"; return 1; }

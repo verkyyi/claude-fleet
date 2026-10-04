@@ -74,6 +74,7 @@ log_for() {   # $1=session → its log path (session names are sanitized; be saf
 # ---- record (the hook's writer) ---------------------------------------------
 if [ "${1:-}" = record ]; then
   sock="${2:-}" sess="${3:-}" marker="${4:-}" from="${5:-}" fromid="${6:-}"
+  sess=${sess%%@view-*}   # a hook may name a view session `<fleet>@view-<id>` (#1489; no lib here)
   [ -n "$sess" ] || exit 0
   T() { if [ -n "$sock" ]; then tmux -S "$sock" "$@"; else tmux "$@"; fi; }
   # CLOSE LANDS NEXT (issue #900): a close just dropped the client on the hub.
@@ -172,7 +173,7 @@ if [ -n "$logf" ]; then
   files=("$logf")
 else
   [ "$all" = 1 ] && sess=
-  [ -n "$sess" ] || [ "$all" = 1 ] || sess=$(tmux display-message -p '#{session_name}' 2>/dev/null)
+  [ -n "$sess" ] || [ "$all" = 1 ] || sess=$(tmux display-message -p '#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null)
   if [ -n "$sess" ]; then
     files=("$(log_for "$sess")")
   else

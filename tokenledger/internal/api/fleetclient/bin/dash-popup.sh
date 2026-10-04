@@ -83,7 +83,7 @@ geom=()
 # This pane's session. `display-message -p` PRINTS (it does not need a client of
 # its own), so this resolves even when nothing is attached — which is the case we
 # are here to handle.
-sess=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{session_name}' 2>/dev/null)
+sess=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null)
 
 # Most-recently-active client attached to THIS session. Sorting by
 # #{client_activity} is what demotes a ghost client (a dropped Termius session

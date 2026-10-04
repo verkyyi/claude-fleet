@@ -1482,9 +1482,14 @@ try:
     (spin_bin / 'classify-sessions.sh').write_text('#!/bin/sh\nexit 0\n')
     (spin_bin / 'classify-sessions.sh').chmod(0o755)
     source = (bin_dir / 'tmux-spinner.sh').read_text()
-    body = source[source.index("STUCK_STRIKES='|'"):source.index('# --- stale-`needs` reconcile')]
+    # stuck_check scans through the spinner's inline fleet_lw copy (issue #1489),
+    # defined above the slice: bring _lw_fmt / _lw_filter along. TMUX_N is the
+    # read counter it bumps — unset under `set -u`, bash-as-sh (macOS) dies on it
+    # with status 0 and this leg would pass without running.
+    lw = source[source.index('_lw_fmt() {'):source.index('# Where `tmux -L <label>` puts its socket')]
+    body = lw + source[source.index("STUCK_STRIKES='|'"):source.index('# --- stale-`needs` reconcile')]
     script = work / 'activity.sh'
-    script.write_text("set -u\nNL='\n'\nSOCKETS=fleet-test\nSTUCK_SECS=5\n" +
+    script.write_text("set -u\nTMUX_N=0\nNL='\n'\nSOCKETS=fleet-test\nSTUCK_SECS=5\n" +
         'BIN=' + shlex.quote(str(spin_bin)) + '\nSTUCK_LOG=' + shlex.quote(str(work / 'stuck.log')) + '\n' +
         'fake_now=100\ndate() { if [ "$1" = +%s ]; then echo "$fake_now"; else command date "$@"; fi; }\n' +
         body + '\n' + r'''

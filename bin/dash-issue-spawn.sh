@@ -12,8 +12,8 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # Scope the issue list to THIS fleet — resolve the tmux session the same way the
 # backlog (tmux-issues.sh) does, and export FLEET_SESSION so the rows producer
 # reads the right issues cache. dash-issue-session.sh resolves the same fleet.
-FLEET_SESSION=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{session_name}' 2>/dev/null)
-[ -z "$FLEET_SESSION" ] && FLEET_SESSION=$(tmux display-message -p '#{session_name}' 2>/dev/null)
+FLEET_SESSION=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null)
+[ -z "$FLEET_SESSION" ] && FLEET_SESSION=$(tmux display-message -p '#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null)
 export FLEET_SESSION
 
 # The `[✕ close]` header token + click-header bind give an iPad/Termius tap-to-dismiss

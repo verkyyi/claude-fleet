@@ -24,7 +24,7 @@ if [ "$target" = --wid ]; then
   [ -n "$path" ] || path=$(tmux display-message -p -t "$w" '#{pane_current_path}' 2>/dev/null)
   branch=$(git -C "$path" branch --show-current 2>/dev/null)
   [ -n "$branch" ] || exit 0
-  sess="${FLEET_SESSION:-$(tmux display-message -p -t "$w" '#{session_name}' 2>/dev/null)}"
+  sess="${FLEET_SESSION:-$(tmux display-message -p -t "$w" '#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null)}"
   prmap=$(fleet_cache prmap "$sess")
   pr=$(awk -F'\t' -v b="$branch" '$1==b{print $2; exit}' "$prmap" 2>/dev/null)
   pr="${pr#\#}"

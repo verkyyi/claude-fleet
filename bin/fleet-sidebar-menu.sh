@@ -118,7 +118,7 @@ wid="${3:-}"
 remote=''
 case "$wid" in @[0-9]*) ;; wid:*/*) remote=1 ;; *) exit 0 ;; esac
 # Never act on another fleet's window, or a stale id tmux recycled elsewhere.
-[ -n "$remote" ] || [ "$(tmux display-message -p -t "$wid" '#{session_name}' 2>/dev/null)" = "$sess" ] || exit 0
+[ -n "$remote" ] || [ "$(tmux display-message -p -t "$wid" '#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null)" = "$sess" ] || exit 0
 
 # sq <text> → one word for BOTH /bin/sh and tmux's command parser: single quotes
 # (no $ ~ expansion in either), an embedded quote closed, escaped and reopened.

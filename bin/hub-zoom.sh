@@ -49,7 +49,7 @@ while [ $# -gt 0 ]; do
 done
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-lib.sh"
-SESS=$(tmux display-message -p '#{session_name}' 2>/dev/null)
+SESS=$(tmux display-message -p '#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null)
 
 # Task bar first — decided on this window's own options, before any hub lookup.
 if [ "$nav" = 0 ] &&

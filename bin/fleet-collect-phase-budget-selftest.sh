@@ -91,7 +91,7 @@ case "${1:-}" in
   has-session)   exit 0 ;;
   list-sessions) [ -n "$label" ] && printf '%s\n' "$label"; exit 0 ;;
   list-windows)
-    for a in "$@"; do [ "$a" = '#{pane_current_path}' ] && { cat "$FAKE_PANEPATHS"; exit 0; }; done
+    for a in "$@"; do case "$a" in *'#{pane_current_path}'*) cat "$FAKE_PANEPATHS"; exit 0 ;; esac; done   # fleet_lw prefixes the format (#1489)
     exit 0 ;;
   *) exit 0 ;;
 esac

@@ -349,11 +349,38 @@ fleet_norm_repo() {
   printf '%s' "$r"
 }
 
+# ---- view sessions (issue #1489) ----------------------------------------------
+# A shell or proxy client of this machine's fleet (fleet-remote-view.sh attach)
+# gets a GROUPED session of its own, `<fleet>@view-<id>`: the fleet's windows,
+# its own current window — so two people looking at one machine each see the row
+# they picked. tmux then holds every window under two session names, and asked
+# which session a window, pane or client is in (a bare session_name from a
+# `-t @w` / `-t %p` / `$TMUX_PANE` context, or with no -t at all) it answers with
+# the MOST RECENTLY ACTIVE of them — a shell typing on m4 would make every hook
+# in every worker pane resolve to its view session. Two rails:
+#   • FLEET_SESSION_FMT — the fleet's own name from any context: a grouped
+#     session's group is named after the fleet session it was grouped onto, so the
+#     group name is the fleet's, and an ungrouped fleet has none. Every
+#     display-message that resolves a window / pane / client to its fleet goes
+#     through it (fleet-view-session-selftest.sh lints the bare session_name
+#     form). fleet_session_canon does the same to a name already in hand.
+#   • fleet_lw (below fleet_sockets) — `list-windows -a` prints every window once
+#     PER SESSION that holds it; fleet_lw drops the view sessions' rows, so a
+#     fleet script sees each window exactly once, under the fleet's name — the
+#     pre-#1489 output byte for byte while no view session exists.
+# A view session is never a fleet: fleet_sockets keys on the conf, and the
+# list-sessions walkers (fleet-restore, the collector) skip it by name.
+FLEET_SESSION_FMT='#{?#{session_group},#{session_group},#{session_name}}'
+# fleet_session_canon <name> — the fleet session a session name belongs to.
+fleet_session_canon() { printf '%s' "${1%%@view-*}"; }
+# fleet_is_view_session <name> — a `<fleet>@view-<id>` session (never a fleet).
+fleet_is_view_session() { case "${1:-}" in *@view-*) return 0 ;; esac; return 1; }
+
 # The tmux session the caller is running in (pane-targeted, client fallback).
 fleet_current_session() {
   local s
-  s=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{session_name}' 2>/dev/null)
-  [ -z "$s" ] && s=$(tmux display-message -p '#{session_name}' 2>/dev/null)
+  s=$(tmux display-message -p -t "${TMUX_PANE:-}" "$FLEET_SESSION_FMT" 2>/dev/null)
+  [ -z "$s" ] && s=$(tmux display-message -p "$FLEET_SESSION_FMT" 2>/dev/null)
   printf '%s' "$s"
 }
 
@@ -388,7 +415,7 @@ fleet_load_conf() {
   [ -d "$FLEET_CONF_DIR/fleets/${1:-_}/repos" ] || return 0
   [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] || return 0
   local _wr
-  [ "$(tmux display-message -p -t "$TMUX_PANE" '#{session_name}' 2>/dev/null)" = "$1" ] || return 0
+  [ "$(tmux display-message -p -t "$TMUX_PANE" "$FLEET_SESSION_FMT" 2>/dev/null)" = "$1" ] || return 0
   _wr=$(fleet_window_repo "$1" "$TMUX_PANE")
   [ -n "$_wr" ] && _fleet_repo_overlay "$1" "$_wr"
   return 0
@@ -516,7 +543,7 @@ fleet_window_repo() {
              printf '%s' "$r"; return 0 ;;
     esac
   fi
-  [ -n "$sess" ] || sess=$(_fleet_tmux '' display-message -p -t "$t" '#{session_name}' 2>/dev/null)
+  [ -n "$sess" ] || sess=$(_fleet_tmux '' display-message -p -t "$t" "$FLEET_SESSION_FMT" 2>/dev/null)
   r=$(fleet_repos "$sess")
   n=$(printf '%s' "$r" | grep -c .)
   [ "$n" = 1 ] && printf '%s' "$r"
@@ -962,7 +989,7 @@ fleet_target_repo() {
     printf '%s\n' "$want"; return 0
   fi
   if [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] \
-     && [ "$(tmux display-message -p -t "$TMUX_PANE" '#{session_name}' 2>/dev/null)" = "$sess" ]; then
+     && [ "$(tmux display-message -p -t "$TMUX_PANE" "$FLEET_SESSION_FMT" 2>/dev/null)" = "$sess" ]; then
     r=$(fleet_norm_repo "$(fleet_window_repo "$sess" "$TMUX_PANE")")
     if [ -n "$r" ] && fleet_repo_hosted "$sess" "$r"; then printf '%s\n' "$r"; return 0; fi
   fi
@@ -1701,6 +1728,43 @@ $(fleet_sockets)
 EOF
 }
 
+# ---- fleet_lw: `list-windows -a`, every window ONCE (issue #1489) -----------
+# A view session (`<fleet>@view-<id>`, see FLEET_SESSION_FMT) shares the fleet's
+# windows, and `list-windows -a` lists a window once per session holding it — so
+# a bare scan counted a worker twice and fleet-peer-send called it AMBIGUOUS
+# (why #1424 first settled for a plain client). fleet_lw is the one scan every
+# fleet script uses; fleet-view-session-selftest.sh lints the bare form.
+#
+# fleet_lw_fmt <fmt> — the format fleet_lw asks tmux for: `@wid:$sid:<session> `
+# in front of the caller's, split off again by fleet_lw_filter. The shape is
+# unmistakable — a session name never holds `:`, so the three colon-joined fields
+# then a SPACE (a fleet session name carries none, fleet-up sanitizes; a view id
+# is [A-Za-z0-9-]) cannot be a row of anyone else's, and a row without it (a
+# selftest's fake tmux printing canned lines) passes through untouched. No
+# control byte: tmux ≤3.4 prints one as the literal `\037`.
+fleet_lw_fmt() { printf '#{window_id}:#{session_id}:#{session_name} %s' "$1"; }
+# fleet_lw_filter — stdin: fleet_lw_fmt rows; stdout: the caller's rows, one per
+# WINDOW — a view session's rows dropped, a window seen twice printed once, a row
+# that is not fleet_lw_fmt's left as it is.
+fleet_lw_filter() {
+  awk '{ if ($0 !~ /^@[0-9]+:\$[0-9]+:[^ ]+ /) { print; next }    # not a fleet_lw_fmt row (a test shim: canned rows): untouched
+         i = index($0, " "); pre = substr($0, 1, i - 1); id = pre; sub(/:.*/, "", id)
+         s = pre; sub(/^[^:]*:[^:]*:/, "", s)
+         if (index(s, "@view-") || (id in seen)) next
+         seen[id] = 1; print substr($0, i + 1) }'
+}
+# fleet_lw <fmt> [tmux-cmd…] — `<tmux-cmd> list-windows -a -F <fmt>`, every window
+# once. The command defaults to bare `tmux` (a pane's own server); pass
+# `tmux -L <sock>`, a `tm` array or a wrapper function for another. tmux's exit
+# status is the result's, so a dead server still reads as the failure it is.
+fleet_lw() {
+  local fmt="$1" out; shift
+  [ $# -gt 0 ] || set -- tmux
+  out=$("$@" list-windows -a -F "$(fleet_lw_fmt "$fmt")" 2>/dev/null) || return $?
+  [ -n "$out" ] || return 0
+  printf '%s\n' "$out" | fleet_lw_filter
+}
+
 # Emulate the old server-wide `tmux list-windows -a -F <fmt>` across EVERY live
 # fleet socket, so a read-side daemon that relied on one estate-wide scan keeps
 # its whole-fleet view. Each emitted line is the tmux -F expansion (no socket
@@ -1711,7 +1775,7 @@ fleet_list_windows_all() {
   local fmt="$1" label
   while IFS= read -r label; do
     [ -n "$label" ] || continue
-    tmux -L "$label" list-windows -a -F "$fmt" 2>/dev/null
+    fleet_lw "$fmt" tmux -L "$label"
   done <<EOF
 $(fleet_sockets)
 EOF
@@ -3958,9 +4022,9 @@ fleet_win_for_key() {
   # window_name is NOT read here: the free-text field would have to ride the same
   # `|` separator (a tab/0x1f separator prints as a literal `\037` on tmux ≤3.4).
   if [ -n "$sock" ]; then
-    wl=$(tmux -L "$sock" list-windows -a -F '#{window_id}|#{session_name}|#{@issue}|#{@worktree}|#{pane_current_path}' 2>/dev/null)
+    wl=$(fleet_lw '#{window_id}|#{session_name}|#{@issue}|#{@worktree}|#{pane_current_path}' tmux -L "$sock")
   else
-    wl=$(tmux list-windows -a -F '#{window_id}|#{session_name}|#{@issue}|#{@worktree}|#{pane_current_path}' 2>/dev/null)
+    wl=$(fleet_lw '#{window_id}|#{session_name}|#{@issue}|#{@worktree}|#{pane_current_path}')
   fi
   [ -n "$wl" ] || return 1
   while IFS= read -r line; do
@@ -4382,7 +4446,7 @@ fleet_worker_locate() {
   case "$t" in
     @*|%*|*:*)
       w=$(_fleet_tmux "$sess" display-message -p -t "$t" '#{window_id}' 2>/dev/null)
-      if [ -n "$w" ]; then printf 'local %s %s\n' "$w" "$(_fleet_tmux "$sess" display-message -p -t "$w" '#{session_name}' 2>/dev/null)"
+      if [ -n "$w" ]; then printf 'local %s %s\n' "$w" "$(_fleet_tmux "$sess" display-message -p -t "$w" "$FLEET_SESSION_FMT" 2>/dev/null)"
       else echo unknown; fi
       return 0 ;;
   esac
@@ -5942,7 +6006,7 @@ fleet_window_waiting_children() {
   [ -n "$t" ] || return 1
   [ -n "$sess" ] || sess=$(fleet_current_session)
   key=$(fleet_window_okey "$sess" "$t"); [ -n "$key" ] || return 1
-  all=$(_fleet_tmux "$sess" list-windows -a -F '#{session_name}|#{window_id}|#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}|#{@loop}|#{@issue}|#{@worktree}|#{@repo}|#{@norepo}|#{@origin}|#{pane_current_path}|#{window_name}' 2>/dev/null)
+  all=$(fleet_lw '#{session_name}|#{window_id}|#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}|#{@loop}|#{@issue}|#{@worktree}|#{@repo}|#{@norepo}|#{@origin}|#{pane_current_path}|#{window_name}' _fleet_tmux "$sess")
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     ws=${line%%|*}; [ -n "$sess" ] && [ "$ws" != "$sess" ] && continue
@@ -6370,8 +6434,8 @@ fleet_wid_taken() {
 # `-a`: the scope is the SERVER, so the warm pool session's windows count too and
 # a claimed pool window never collides with a live one.
 fleet_wid_used() {
-  if [ -n "${1:-}" ]; then tmux -L "$1" list-windows -a -F '#{@wid}' 2>/dev/null
-  else                     tmux list-windows -a -F '#{@wid}' 2>/dev/null; fi
+  if [ -n "${1:-}" ]; then fleet_lw '#{@wid}' tmux -L "$1"
+  else                     fleet_lw '#{@wid}'; fi
 }
 
 # fleet_wid_get <window-target> [socket] — the handle stamped on that window ('').
@@ -6386,7 +6450,7 @@ fleet_wid_get() {
 # session shares its fleet's socket, hence its lock.
 fleet_wid_sess() {
   local s="${1:-}"
-  [ -n "$s" ] || s=$(tmux display-message -p '#{session_name}' 2>/dev/null)
+  [ -n "$s" ] || s=$(tmux display-message -p "$FLEET_SESSION_FMT" 2>/dev/null)
   printf '%s' "${s%-pool}"
 }
 
@@ -6458,8 +6522,8 @@ fleet_wid_resolve() {
     [ -n "$w" ] || continue
     if [ "$v" = "$h" ]; then printf '%s' "$w"; return 0; fi
   done <<EOF
-$(if [ -n "$sock" ]; then tmux -L "$sock" list-windows -a -F '#{window_id} #{@wid}' 2>/dev/null
-  else                    tmux list-windows -a -F '#{window_id} #{@wid}' 2>/dev/null; fi)
+$(if [ -n "$sock" ]; then fleet_lw '#{window_id} #{@wid}' tmux -L "$sock"
+  else                    fleet_lw '#{window_id} #{@wid}'; fi)
 EOF
   return 1
 }
@@ -6613,7 +6677,7 @@ fleet_recovery_map_path() {
   gd=$(git -C "$cwd" rev-parse --absolute-git-dir 2>/dev/null)
   if [ -n "$gd" ]; then printf '%s/fleet-recovery-map.md\n' "$gd"; return 0; fi
   [ -n "$pane" ] || return 1
-  sess=$(tmux display-message -p -t "$pane" '#{session_name}' 2>/dev/null)
+  sess=$(tmux display-message -p -t "$pane" "$FLEET_SESSION_FMT" 2>/dev/null)
   wid=$(tmux display-message -p -t "$pane" '#{window_id}' 2>/dev/null | tr -cd '0-9')
   [ -n "$sess" ] && [ -n "$wid" ] || return 1
   printf '%s/fleets/%s/recovery/w%s.md\n' "$FLEET_CONF_DIR" "$sess" "$wid"

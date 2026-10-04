@@ -144,6 +144,7 @@ snapshot() {
     # (issue #1020): snapshotting it minted fleets/<sess>-pool/ + a map that
     # --if-down saw as a fleet DOWN on every tick, and restore() would fleet-up it.
     fleet_is_pool_session "$sess" "$sock" && continue
+    fleet_is_view_session "$sess" && continue      # a shell's view of this fleet (#1489)
     local repo main base conf tmp
     conf=$(fleet_conf_file "$sess")
     repo=""; main=""; base=""

@@ -22,8 +22,7 @@
 #                           for the row's machine, or retarget + select the one
 #                           already open: ONE proxy window per machine, because
 #                           it is a client of that machine's one fleet session
-#                           (one fleet per login), and two clients of one session
-#                           share its current window.
+#                           (one fleet per login).
 #   run [--shell] <node> <worker_id>  the proxy pane's program: connect, reconnect,
 #                           report (`--shell` is passed through to `attach`). A
 #                           <worker_id> of `-` is the machine itself: its fleet
@@ -38,12 +37,15 @@
 #                           `--shell` registers this client as a SHELL client
 #                           (C5's `fleet` shell, issue #1485); a <view> id
 #                           registers it as a proxy VIEW with a fleet-open spool.
-#   select <worker_id>      (runs ON <node>, over the proxy's own ssh connection,
-#                           issue #1484) — select the worker's window in its fleet
-#                           session, which every client of that session — the
-#                           proxy — then shows: how `open` moves an open proxy
-#                           window to another row of the SAME machine, with no
-#                           reconnect. Exit 3 when the worker is not live here.
+#                           A registered client attaches to a VIEW SESSION of its
+#                           own (issue #1489, below), a plain one to the fleet's.
+#   select <worker_id> [<view>]  (runs ON <node>, over the proxy's own ssh
+#                           connection, issue #1484) — select the worker's window
+#                           in the proxy's view session (its <view> id; the fleet
+#                           session when none is named or live), which that proxy
+#                           then shows: how `open` moves an open proxy window to
+#                           another row of the SAME machine, with no reconnect.
+#                           Exit 3 when the worker is not live here.
 #   watch <view>            (runs ON <node>, over the same ssh connection) — the
 #                           fleet-open back channel, below.
 #   sessions                (runs ON <node>, over the same ssh connection; issue
@@ -61,10 +63,21 @@
 #   back [<session>]        (the local `prefix h`) — from a proxy window, select
 #                           the last LOCAL window; anywhere else, nothing.
 #
-# WHY a client of the fleet session, not a grouped/linked session of its own:
-# every fleet script scans `list-windows -a`, and a second session holding the
-# same window lists it twice — fleet-peer-send would call the worker AMBIGUOUS
-# for as long as the proxy is open. A plain client adds no winlink at all.
+# ONE VIEW SESSION PER REGISTERED CLIENT (issue #1489, EPIC #1479 R4): a tmux
+# session has one current window, so two shells on the fleet session kept
+# switching each other away. `attach` with `--shell` or a <view> id makes the
+# client a GROUPED session of its own — `new-session -t <fleet>`, named
+# `<fleet>@view-<id>` — the fleet's windows, its own current window, status line
+# and prefix off for good (the person's own tmux has both), destroyed with its
+# client (`destroy-unattached`, armed in the attach command itself, plus the
+# attach's own kill-session). A plain `attach` — a person on the node — stays a
+# client of the fleet session, as before. #1424 settled for a plain client
+# because a second session holding the same windows lists each twice in
+# `list-windows -a` and fleet-peer-send called the worker AMBIGUOUS; the fleet's
+# scans now go through fleet_lw (fleet-lib.sh), which drops the view sessions'
+# rows, and every window→session read uses FLEET_SESSION_FMT, which names the
+# fleet from a view session too. `select` targets the proxy's own view session,
+# so one proxy's retarget moves nobody else's screen.
 #
 # Nesting — ONE rule (issue #1485, EPIC #1479 rule 7): the remote session's own
 # status line, prefix and sidebar are HIDDEN exactly while it has at least one
@@ -163,13 +176,29 @@ rv_registry() {
 # Drop the rows (and spools) whose attach shell is gone: a SIGKILL skipped its
 # cleanup, and the next login may get that very tty.
 rv_prune() {
-  local f tty sess kind since pid
+  local f tty sess kind since pid g v
   for f in "$VIEWS"/*; do
     [ -f "$f" ] || continue
     IFS=$'\t' read -r tty sess kind since pid < "$f" || :
     case "${pid:-}" in ''|*[!0-9]*) continue ;; esac
     kill -0 "$pid" 2>/dev/null || rm -rf "$f" "$f.d"
   done
+  # A view session with no client (issue #1489): destroy-unattached takes it when
+  # its client goes; this is the belt for one left detached by an attach that
+  # died first. Never one a live attach has registered and is about to join.
+  for g in $(T list-sessions -F '#{?#{session_attached},,#{session_name}}' 2>/dev/null); do
+    fleet_is_view_session "$g" || continue
+    v=${g#*@view-}
+    [ -f "$VIEWS/$v" ] && kill -0 "$(cut -f5 "$VIEWS/$v" 2>/dev/null)" 2>/dev/null && continue
+    T kill-session -t "=$g" 2>/dev/null
+  done
+}
+# The clients of the fleet session AND of its view sessions (issue #1489): a
+# shell or proxy sits on `<s>@view-<id>`, a person on `<s>` itself; the rule
+# counts both — FLEET_SESSION_FMT names the fleet from either.
+rv_clients() {
+  T list-clients -F "#{client_tty}	$FLEET_SESSION_FMT" 2>/dev/null \
+    | awk -F '\t' -v s="$1" '$2 == s { print $1 }'
 }
 # Every client of the session is a registered shell/view (none at all → yes).
 rv_shells_only() {
@@ -178,7 +207,7 @@ rv_shells_only() {
   while IFS= read -r tty; do
     [ -n "$tty" ] || continue
     printf '%s\n' "$reg" | grep -qxF -- "$tty" || return 1
-  done <<< "$(T list-clients -t "=$s" -F '#{client_tty}' 2>/dev/null)"
+  done <<< "$(rv_clients "$s")"
   return 0
 }
 rv_sync() {   # the sidebar follows the solo marker (issue #1475); the script wants $TMUX
@@ -248,7 +277,7 @@ rv_unlock() { rm -rf "${VIEWS:?}/.lock-$1"; }
 rv_reconcile() {
   local s="$1" n
   rv_lock "$s"
-  n=$(T list-clients -t "=$s" -F x 2>/dev/null | grep -c x)
+  n=$(rv_clients "$s" | grep -c .)
   if [ "$n" -gt 0 ] && rv_shells_only "$s"; then rv_hide "$s"; else rv_restore "$s"; fi
   rv_unlock "$s"
 }
@@ -292,9 +321,10 @@ open)
       # worker's window there — the proxy, a client of that session, follows at
       # once. No master up, or the worker not live there: reconnect, as before.
       ctl=$(tmux show-options -wqv -t "$w" @remote_ctl 2>/dev/null)
+      rview=$(tmux show-options -wqv -t "$w" @remote_view 2>/dev/null)   # its view session (#1489)
       SSH="${FLEET_REMOTE_SSH_CMD:-ssh}"; host=$(ssh_host "$node"); rbin="${FLEET_REMOTE_BIN:-.claude/fleet/bin}"
       if [ -n "$ctl" ] && [ -S "$ctl" ] && $SSH -S "$ctl" -O check "$host" >/dev/null 2>&1 \
-         && $SSH -S "$ctl" "$host" "bash $rbin/fleet-remote-view.sh select $(sq "$wid")" >/dev/null 2>&1; then
+         && $SSH -S "$ctl" "$host" "bash $rbin/fleet-remote-view.sh select $(sq "$wid")${rview:+ $(sq "$rview")}" >/dev/null 2>&1; then
         tmux set-window-option -t "$w" @remote "$node:$wid" 2>/dev/null
         tmux rename-window -t "$w" -- "$title" 2>/dev/null
       else
@@ -323,8 +353,10 @@ run)
   SSH="${FLEET_REMOTE_SSH_CMD:-ssh}"
   view="$(hostname -s 2>/dev/null | tr -c 'A-Za-z0-9-' '-')$$-$RANDOM"
   ctl="${TMPDIR:-/tmp}/frv.$$.$RANDOM"
-  # The window knows its connection (issue #1484): `open` retargets through it.
-  [ -n "${TMUX:-}" ] && tmux set-window-option -t "${TMUX_PANE:-}" @remote_ctl "$ctl" 2>/dev/null
+  # The window knows its connection (issue #1484) and its view id (issue #1489):
+  # `open` retargets through the one, in the far end's view session named by the other.
+  [ -n "${TMUX:-}" ] && tmux set-window-option -t "${TMUX_PANE:-}" @remote_ctl "$ctl" \; \
+                             set-window-option -t "${TMUX_PANE:-}" @remote_view "$view" 2>/dev/null
   side=''
   cleanup() {
     [ -n "$side" ] && kill "$side" 2>/dev/null
@@ -401,7 +433,7 @@ attach)
   while [ $# -gt 0 ]; do
     case "$1" in --shell) shell=1; shift ;; --) shift; break ;; -*) note "attach: unknown option $1"; exit 2 ;; *) break ;; esac
   done
-  wid="${1:-}"; view="${2:-}"
+  wid="${1:-}"; view="${2:-}"; w=''
   if [ -z "$wid" ] || [ "$wid" = - ]; then
     # The machine itself (issue #1484): this login's one fleet session (one fleet
     # per login, #980), as it stands — the shell's first window lands here.
@@ -412,7 +444,7 @@ attach)
     loc=$(fleet_worker_locate "wid:${wid#wid:}" 2>/dev/null)
     case "$loc" in local\ *) ;; *) note "${wid#*/} is not live on $(hostname -s)"; exit 3 ;; esac
     set -- $loc; w=$2; s=$3; sock=$(fleet_socket "$s")
-    T select-window -t "$w" 2>/dev/null || { note "cannot select $w"; exit 3; }
+    T display-message -p -t "=$s:$w" '' >/dev/null 2>&1 || { note "cannot select $w"; exit 3; }
   fi
   # A marker a SIGKILLed proxy left behind, or a state the hooks missed: the rule
   # first, on the clients that are here now.
@@ -421,7 +453,7 @@ attach)
   # Register this client (issue #1485): `--shell` = a shell client; a <view> id =
   # a proxy view, with the spool its `watch` drains (no id → no spool: a request
   # nobody drains would read as sent). Either way it counts toward the rule.
-  reg=''
+  reg=''; g=''
   if { [ -n "$shell" ] || [ -n "$view" ]; } && tty=$(tty 2>/dev/null); then
     kind=view; [ -n "$shell" ] && kind=shell
     spool="$view"
@@ -435,6 +467,20 @@ attach)
         reg="$view"
         [ -n "$spool" ] && mkdir -p "$VIEWS/$spool.d" 2>/dev/null
         rv_hooks_on "$s"
+        # This client's own VIEW SESSION (issue #1489): grouped onto the fleet's —
+        # the same windows, a current window of its own — with the status line and
+        # prefix off for good (the person's own tmux has both). It starts on the
+        # worker's window, or for `-` on the fleet session's current one.
+        g="$s@view-$view"
+        if T new-session -d -t "=$s" -s "$g" 2>/dev/null; then
+          T set-option -t "=$g:" status off \; set-option -t "=$g:" prefix None \; \
+            set-option -t "=$g:" prefix2 None 2>/dev/null
+          [ -n "$w" ] || w=$(T display-message -p -t "=$s:" '#{window_id}' 2>/dev/null)
+          [ -z "$w" ] || T select-window -t "=$g:$w" 2>/dev/null
+        else
+          note "attach: no view session for $view — sharing the fleet session's current window"
+          g=''
+        fi
         # Before the first frame: every client already here is a shell (none at
         # all counts), so this one makes the session shells-only.
         rv_shells_only "$s" && rv_hide "$s"
@@ -442,9 +488,22 @@ attach)
       rv_unlock "$s" ;;
     esac
   fi
+  # A plain client sees the worker in the FLEET session — by name: a bare `-t @w`
+  # lands in whichever session holding the window was active last (#1489). A
+  # registered one already selected it in its own view session, so the fleet's
+  # current window — what a person on the node sees — is never moved by a shell.
+  [ -n "$w" ] && [ -z "$g" ] && T select-window -t "=$s:$w" 2>/dev/null
   # A dropped connection HUPs this shell too: outlive the client, then clean up.
   trap 'rc=129' HUP
-  T attach-session -t "=$s"; rc=$?
+  if [ -n "$g" ]; then
+    # destroy-unattached is armed IN the attach command: armed on the detached
+    # session a moment earlier, any other client's leaving in between would have
+    # destroyed it before this client arrived.
+    T attach-session -t "=$g" \; set-option -t "=$g:" destroy-unattached on; rc=$?
+    T kill-session -t "=$g" 2>/dev/null
+  else
+    T attach-session -t "=$s"; rc=$?
+  fi
   # The last registered client of this session takes the hooks with it; the rule
   # decides what the remaining clients get (none → everything back).
   rv_lock "$s"
@@ -458,13 +517,16 @@ attach)
 # ---------------------------------------------------------------------------------
 select)
   # On <node>, over the proxy's own connection (issue #1484): the worker's window
-  # becomes the session's current one, so the proxy client — and every other
-  # client of that session — shows it. Not live here → 3, and `open` reconnects.
-  wid="${1:-}"
+  # becomes the current one of the proxy's VIEW SESSION (issue #1489) — named by
+  # the <view> id `run` gave `attach`; the fleet session itself when none is
+  # named (an older `open`) or live. Not live here → 3, and `open` reconnects.
+  wid="${1:-}"; view="${2:-}"
   loc=$(fleet_worker_locate "wid:${wid#wid:}" 2>/dev/null)
   case "$loc" in local\ *) ;; *) note "${wid#*/} is not live on $(hostname -s)"; exit 3 ;; esac
   set -- $loc; w=$2; s=$3; sock=$(fleet_socket "$s")
-  T select-window -t "$w" 2>/dev/null || { note "cannot select $w"; exit 3; }
+  tgt="$s"
+  case "$view" in ''|*[!A-Za-z0-9-]*) ;; *) T has-session -t "=$s@view-$view" 2>/dev/null && tgt="$s@view-$view" ;; esac
+  T select-window -t "=$tgt:$w" 2>/dev/null || { note "cannot select $w"; exit 3; }
   exit 0
   ;;
 

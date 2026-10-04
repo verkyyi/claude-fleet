@@ -1055,7 +1055,7 @@ def hook():
     payload=json.load(sys.stdin)
     if payload.get('hook_event_name')!='Stop': return
     pane=os.environ['TMUX_PANE']
-    session=run(['tmux','display-message','-p','-t',pane,'#{session_name}'])
+    session=run(['tmux','display-message','-p','-t',pane,'#{?#{session_group},#{session_group},#{session_name}}'])
     w=Worker(session,pane)
     source=w.inspect()
     if payload.get('session_id')!=source['session_id']: return

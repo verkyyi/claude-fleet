@@ -325,7 +325,7 @@ LEFTW=38; ACTW=8; RIGHTW=21; USABLE=$(( COLS - 4 ))
 # One tmux read, iterated twice (issue #503): pass A below builds the parent
 # lookup table the grouping needs (a child can appear BEFORE its parent in window
 # order); pass B renders. Herestring iteration, no extra forks.
-WLIST=$(tmux list-windows -a -F "$WFMT")
+WLIST=$(fleet_lw "$WFMT")
 # tmux 3.4 escapes a control separator as the literal four bytes `\037`;
 # newer versions return the byte. Accept both at the serialization boundary.
 WLIST=${WLIST//\\037/$US}

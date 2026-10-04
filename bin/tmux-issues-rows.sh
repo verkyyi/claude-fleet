@@ -62,7 +62,7 @@ mrank(){ case "$1" in "$NOMS") echo 99; return;; esac
 TAB=$'\t'
 ACTIVE=''; BOUND=''
 if [ -z "$BLREPOS" ]; then
-  ACTIVE=$(tmux list-windows -a -F "#{session_name}${TAB}#{@issue}${TAB}#{window_name}" 2>/dev/null \
+  ACTIVE=$(fleet_lw "#{session_name}${TAB}#{@issue}${TAB}#{window_name}" \
     | awk -F'\t' -v s="${FLEET_SESSION:-}" '$2!="" && (s=="" || $1==s){print $2"\t"$3}')
 else
   # A fleet hosting 2+ repos (issues #790/#794): a row is issue N of ONE repo, so

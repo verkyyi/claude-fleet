@@ -9,7 +9,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 sess="${1:-}"; wid="${2:-}"; client="${3:-}"
 case "$wid" in @[0-9]*) ;; *) exit 0 ;; esac
 [ -n "$sess" ] || exit 0
-[ "$(tmux display-message -p -t "$wid" '#{session_name}' 2>/dev/null)" = "$sess" ] || exit 0
+[ "$(tmux display-message -p -t "$wid" '#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null)" = "$sess" ] || exit 0
 
 toast() { tmux display-message ${client:+-c "$client"} "$1" 2>/dev/null || :; }
 

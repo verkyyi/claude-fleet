@@ -17,8 +17,11 @@
 #                    machine's pane on the right; `sync` keeps it there (a proxy
 #                    window is a task window); `jump` on a local row takes it back;
 #                    `prefix h` (`back`) returns to the last local window
-#   C. attach      — the proxy is a client of the remote session, on the worker's
-#                    window, status line + prefix off (saved), its sidebar gone
+#   C. attach      — the proxy is a client of a VIEW SESSION of its own, grouped
+#                    onto the remote fleet session (`<fleet>@view-<id>`, #1489) and
+#                    on the worker's window; the fleet session's current window
+#                    never moves; status line + prefix off there for good, and on
+#                    the fleet session too (saved), its sidebar gone
 #                    (`@remote_view_solo`, #1475); typing reaches it; registered
 #                    as a `view` row; the fleet's own global client-attached hook
 #                    still fires (the rule's hooks are global too, #1485)
@@ -33,6 +36,12 @@
 #                    the plain client leaving hides again; the last shell takes the
 #                    server's hooks with it, and no session-level hook array is
 #                    left to shadow the fleet's own
+#   J. own window  — (#1489) two shells on one machine: each view session keeps
+#                    its own current window; `select <wid> <view>` moves that view
+#                    alone, `select <wid>` (an older open) the fleet session alone;
+#                    fleet_lw lists each window once and fleet-peer-send resolves
+#                    the worker (no AMBIGUOUS); FLEET_SESSION_FMT names the fleet
+#                    from a pane of the shared window
 #   E. close       — killing the proxy window leaves the remote worker running and
 #                    hands the remote session its status line + sidebar back,
 #                    the registry, the hooks and the markers all gone
@@ -81,19 +90,29 @@ exec "$REAL_TMUX" -L "$LL" "\$@"
 EOF
 cat > "$SHIM/ssh" <<'EOF'
 #!/bin/bash
-# options → dropped; `-O check|exit|forward` → the master's answers; then host, cmd
-op=''
+# options → dropped, but the ControlPath remembered; `-O check` answers like a
+# master would (is the control socket there?), `-O exit` takes it down, `-O
+# forward` says yes; then host, cmd. The master (the `attach`) binds the control
+# socket first, so `open`'s retarget goes over it to `select` (issue #1484) — the
+# way a real proxy does — instead of reconnecting.
+op=''; ctl=''
 while [ $# -gt 0 ]; do
   case "$1" in
     -O) op=$2; shift 2 ;;
-    -o|-S|-L) shift 2 ;;
+    -o) case "$2" in ControlPath=*) ctl=${2#ControlPath=} ;; esac; shift 2 ;;
+    -S) ctl=$2; shift 2 ;;
+    -L) shift 2 ;;
     -*) shift ;;
     *) break ;;
   esac
 done
-[ -n "$op" ] && exit 0
+if [ -n "$op" ]; then
+  case "$op" in check) [ -S "$ctl" ]; exit $? ;; exit) rm -f "$ctl"; exit 0 ;; *) exit 0 ;; esac
+fi
 shift                                    # the host
 unset TMUX TMUX_PANE
+case "$*" in *" attach"*) [ -n "$ctl" ] && python3 -c 'import socket, sys
+s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$ctl" 2>/dev/null ;; esac
 cd "$HOME" && exec bash -c "$*"
 EOF
 chmod +x "$SHIM/tmux" "$SHIM/ssh"
@@ -140,6 +159,12 @@ US=$'\037'
 } > "$G/remote_$LS"
 
 proxies() { tl list-windows -t "=$LS" -F '#{window_id} #{@remote}' | awk '$2 != ""'; }
+# The clients of the remote fleet: its own and its view sessions' (#1489) — a
+# registered client sits on `<fleet>@view-<id>`, a person on the fleet session.
+gatt() { tr_ display-message -p -t "=$RS:" '#{session_group_attached}' 2>/dev/null; }
+vsess() { tr_ list-sessions -F '#{session_name}' 2>/dev/null | grep "^$RS@view-"; }
+vcur() { tr_ display-message -p -t "=$1:" '#{window_id}' 2>/dev/null; }
+rscur() { tr_ display-message -p -t "=$RS:" '#{window_name}' 2>/dev/null; }
 
 # ============================================================================
 # A. degenerate
@@ -208,9 +233,14 @@ tr_ kill-window -t "$AW"
 # ============================================================================
 # C. attach
 # ============================================================================
-attached() { [ "$(tr_ display-message -p -t "=$RS:" '#{session_attached}' 2>/dev/null)" = 1 ]; }
+attached() { [ "$(gatt)" = 1 ]; }
 waitfor 10 attached || fail "C: the proxy never attached to the remote session"
-eq "C: the remote session shows the worker's window" "$RW" "$(tr_ display-message -p -t "=$RS:" '#{window_id}')"
+VS=$(vsess)
+eq "C: the proxy is a client of a VIEW SESSION of its own, grouped onto the fleet's (#1489)" "1 $RS" "$(printf '%s\n' "$VS" | grep -c .) $(tr_ display-message -p -t "=$VS:" '#{session_group}')"
+eq "C: …which shows the worker's window" "$RW" "$(vcur "$VS")"
+eq "C: …while the fleet session's own current window never moved" "plan" "$(rscur)"
+eq "C: …its status line and prefix off for good, and it goes with its client" "off None None on" "$(tr_ show-options -qv -t "=$VS:" status) $(tr_ show-options -qv -t "=$VS:" prefix) $(tr_ show-options -qv -t "=$VS:" prefix2) $(tr_ show-options -qv -t "=$VS:" destroy-unattached)"
+eq "C: …the fleet session has no client of its own" "0" "$(tr_ display-message -p -t "=$RS:" '#{session_attached}')"
 eq "C: remote status line off while the proxy is its only client" "off" "$(tr_ show-options -qv -t "=$RS:" status)"
 eq "C: remote prefix off" "None" "$(tr_ show-options -qv -t "=$RS:" prefix)"
 has "C: what it was is saved" "$(tr_ show-options -qv -t "=$RS:" @remote_view_saved)" "status=- "
@@ -223,7 +253,7 @@ waitfor 5 typed || fail "C: typing in the proxy window never reached the remote 
 regrows() { local f; for f in "$FLEET_CONF_DIR"/remote-views/*; do [ -f "$f" ] && cat "$f"; done; }
 eq "C: one view registered (the fleet-open back channel)" "1" "$(regrows | wc -l | tr -d ' ')"
 eq "C: …a row <tty> <session> view <since> <pid> (#1485)" "$RS view" "$(regrows | awk -F '\t' '{ print $2, $3 }')"
-has "C: …its tty is the proxy client's" "$(tr_ list-clients -t "=$RS" -F '#{client_tty}' | tr '\n' ' ')" "$(regrows | cut -f1)"
+has "C: …its tty is the proxy client's" "$(tr_ list-clients -F '#{client_tty}' | tr '\n' ' ')" "$(regrows | cut -f1)"
 kill -0 "$(regrows | cut -f5)" 2>/dev/null; eq "C: …its pid is the attach shell, alive" "0" "$?"
 hook71() { [ -s "$WORK/hook71" ]; }
 waitfor 5 hook71 || fail "C: the fleet's own global client-attached hook did not fire for the proxy (shadowed by a session-level hook?)"
@@ -233,8 +263,10 @@ eq "C: the rule's hooks are on the server, not the session" "2 " "$(tr_ show-hoo
 PW2=$(FLEET_SESSION=$LS bash "$BIN/fleet-remote-view.sh" open "$WID2" 2>/dev/null)
 eq "B: a second row of m4 reuses the proxy window" "$PW" "$PW2"
 eq "B: still exactly one proxy, now on the new worker" "$PW m4:$WID2" "$(proxies)"
-on8() { [ "$(tr_ display-message -p -t "=$RS:" '#{window_id}' 2>/dev/null)" = "$RW8" ] && attached; }
-waitfor 10 on8 || fail "B: the retargeted proxy never showed worker 8" "$(tr_ display-message -p -t "=$RS:" '#{window_id}')"
+on8() { [ "$(vcur "$VS")" = "$RW8" ] && attached; }
+waitfor 10 on8 || fail "B: the retargeted proxy never showed worker 8" "$(vcur "$VS")"
+eq "B: …over the proxy's own connection — no reconnect: the same view session, the fleet session untouched (#1489)" "plan $VS" "$(rscur) $(vsess | tr '\n' ' ' | sed 's/ $//')"
+eq "B: the proxy window knows its view id, the one select targets (#1489)" "${VS#"$RS@view-"}" "$(tl show-options -wqv -t "$PW" @remote_view)"
 
 # ============================================================================
 # D. fleet-open from the remote session goes back through the proxy
@@ -267,13 +299,13 @@ hasnt "F: the sleeper reports nothing about the proxy" "$sl" "\"$PW\""
 # G. someone attaches AT the remote end → its session gets status + prefix back
 # ============================================================================
 HW=$(tl new-window -d -P -F '#{window_id}' -t "=$LS:" -n helper "env -u TMUX $REAL_TMUX -L $RS attach -t '=$RS'")   # quoted: zsh expands a bare =word
-two() { [ "$(tr_ display-message -p -t "=$RS:" '#{session_attached}' 2>/dev/null)" = 2 ]; }
+two() { [ "$(gatt)" = 2 ]; }
 waitfor 10 two || fail "G: the second client never attached"
 back() { [ -z "$(tr_ show-options -qv -t "=$RS:" status)" ] && [ -z "$(tr_ show-options -qv -t "=$RS:" @remote_view_saved)" ]; }
 waitfor 5 back || fail "G: a client at the remote end did not get the status line back" "$(tr_ show-options -t "=$RS:" status)"
 eq "G: …and the solo marker is gone: its sidebar may draw again (#1475)" "" "$(tr_ show-options -qv -t "=$RS:" @remote_view_solo)"
 tl kill-window -t "$HW"
-one() { [ "$(tr_ display-message -p -t "=$RS:" '#{session_attached}' 2>/dev/null)" = 1 ]; }
+one() { [ "$(gatt)" = 1 ]; }
 waitfor 5 one || fail "G: the helper client did not leave"
 
 # ============================================================================
@@ -281,7 +313,7 @@ waitfor 5 one || fail "G: the helper client did not leave"
 # ============================================================================
 hidden() { [ "$(tr_ show-options -qv -t "=$RS:" status)" = off ] && [ "$(tr_ show-options -qv -t "=$RS:" @remote_view_solo)" = 1 ]; }
 shown() { [ -z "$(tr_ show-options -qv -t "=$RS:" status)" ] && [ -z "$(tr_ show-options -qv -t "=$RS:" @remote_view_solo)" ] && [ -z "$(tr_ show-options -qv -t "=$RS:" @remote_view_saved)" ]; }
-natt() { [ "$(tr_ display-message -p -t "=$RS:" '#{session_attached}' 2>/dev/null)" = "$1" ]; }
+natt() { [ "$(gatt)" = "$1" ]; }
 settle() { sleep 0.7; }   # the hooks run -b; give a NEGATIVE check time to be wrong
 # After G the proxy is alone again — the rule hides (the old code left the status
 # line on from the helper's visit until the proxy itself left).
@@ -297,9 +329,33 @@ eq "I: …no list" "" "$(rviews)"
 eq "I: the registry holds the view and the shell" "shell view " "$(regrows | cut -f3 | sort | tr '\n' ' ')"
 srow=$(regrows | awk -F '\t' '$3 == "shell"')
 eq "I: the shell row names the remote session" "$RS" "$(printf '%s' "$srow" | cut -f2)"
-has "I: …the shell client's tty" "$(tr_ list-clients -t "=$RS" -F '#{client_tty}' | tr '\n' ' ')" "$(printf '%s' "$srow" | cut -f1)"
+has "I: …the shell client's tty" "$(tr_ list-clients -F '#{client_tty}' | tr '\n' ' ')" "$(printf '%s' "$srow" | cut -f1)"
 kill -0 "$(printf '%s' "$srow" | cut -f5)" 2>/dev/null; eq "I: …a live pid" "0" "$?"
 eq "I: …and no spool: nothing drains one for a shell without a view id" "" "$(ls -d "$FLEET_CONF_DIR"/remote-views/shell-*.d 2>/dev/null)"
+
+# ============================================================================
+# J. two shells, each its own current window (#1489)
+# ============================================================================
+S2ID=''; for f in "$FLEET_CONF_DIR"/remote-views/shell-*; do [ -f "$f" ] && { S2ID=${f##*/}; break; }; done; S2V="$RS@view-$S2ID"
+eq "J: the nested shell has a view session of its own, named by its registry id" "1" "$(tr_ has-session -t "=$S2V" 2>/dev/null && echo 1)"
+eq "J: …two view sessions now, both grouped onto the fleet session" "$RS $RS" "$(tr_ display-message -p -t "=$VS:" '#{session_group}') $(tr_ display-message -p -t "=$S2V:" '#{session_group}')"
+eq "J: …each on the window it asked for (both worker 8 so far)" "$RW8 $RW8" "$(vcur "$VS") $(vcur "$S2V")"
+# `select <wid> <view>` — what `open` sends for a retarget — moves THAT view alone.
+bash "$BIN/fleet-remote-view.sh" select "$WID" "$S2ID" 2>/dev/null; eq "J: select with a view id answers 0" "0" "$?"
+eq "J: the nested shell shows worker 7, the proxy still worker 8, the fleet session is where the person left it" "$RW $RW8 plan" "$(vcur "$S2V") $(vcur "$VS") $(rscur)"
+# `select <wid>` with no view id (an older open): the fleet session alone.
+bash "$BIN/fleet-remote-view.sh" select "$WID2" >/dev/null 2>&1
+eq "J: select with no view id moves the fleet session and nobody's view" "$RW8 $RW $RW8" "$(tr_ display-message -p -t "=$RS:" '#{window_id}') $(vcur "$S2V") $(vcur "$VS")"
+tr_ select-window -t "=$RS:plan"
+# The fleet's scans: every window once, under the fleet's name — so the worker
+# is not AMBIGUOUS to fleet-peer-send (why #1424 had settled for a plain client).
+eq "J: fleet_lw lists each window once while two view sessions hold them" "$(tr_ list-windows -t "=$RS" -F '#{session_name} #{window_id}')" "$(. "$BIN/fleet-lib.sh"; fleet_lw '#{session_name} #{window_id}' tr_)"
+out=$(bash "$BIN/fleet-peer-send.sh" -L "$RS" issue:7 hi 2>&1)
+hasnt "J: fleet-peer-send does not call issue 7 ambiguous beside two view sessions" "$out" "ambiguous"
+has "J: …it resolved the one window and went looking for its Claude" "$out" "no live Claude session for '$RW'"
+# A hook in a pane of the shared window names the FLEET — tmux's bare
+# session_name there is whichever session holding the window was active last.
+eq "J: FLEET_SESSION_FMT names the fleet from a pane of the shared window" "$RS" "$(tr_ display-message -p -t "$RW" '#{?#{session_group},#{session_group},#{session_name}}')"
 # I2. a PLAIN client: someone on the node runs `attach` by hand — no --shell, no view
 # — so it registers nothing and counts as a person. Everything back at once.
 HW=$(tl new-window -d -P -F '#{window_id}' -t "=$LS:" -n hand "env -u TMUX bash '$BIN/fleet-remote-view.sh' attach '$WID2'; sleep 300")
@@ -313,6 +369,7 @@ waitfor 10 natt 4 || fail "I: the third shell never attached"
 settle
 shown || fail "I: a shell arriving while a plain client is attached must hide nothing" "$(tr_ show-options -t "=$RS:" status)"
 eq "I: …registered as a shell, with its spool" "2 yes" "$(regrows | awk -F '\t' '$3 == "shell"' | wc -l | tr -d ' ') $([ -d "$FLEET_CONF_DIR/remote-views/view3.d" ] && echo yes)"
+eq "I: …and a view session named by the id it brought (#1489)" "1" "$(tr_ has-session -t "=$RS@view-view3" 2>/dev/null && echo 1)"
 # I4. that shell leaves: the plain client keeps everything.
 tl kill-window -t "$SW3"
 waitfor 10 natt 3 || fail "I: the third shell did not leave"
@@ -330,14 +387,17 @@ waitfor 10 natt 1 || fail "I: the nested shell did not leave"
 settle
 hidden || fail "I: the shell left, the proxy remains — must stay hidden" "$(tr_ show-options -t "=$RS:" status)"
 eq "I: one row left, the proxy's view" "view" "$(regrows | cut -f3 | tr '\n' ' ' | sed 's/ $//')"
+eq "I: …and one view session, the proxy's (#1489)" "$VS" "$(vsess)"
 eq "I: the server's hooks stay while a shell is registered — and none on the session" "2 " "$(tr_ show-hooks -g | grep -c '\[77\]') $(tr_ show-hooks -t "=$RS:" 2>/dev/null)"
 
 # ============================================================================
 # E. close the proxy window
 # ============================================================================
 tl kill-window -t "$PW"
-detached() { [ "$(tr_ display-message -p -t "=$RS:" '#{session_attached}' 2>/dev/null)" = 0 ]; }
+detached() { [ "$(gatt)" = 0 ]; }
 waitfor 10 detached || fail "E: the remote client outlived the proxy window"
+noview() { [ -z "$(vsess)" ]; }
+waitfor 5 noview || fail "E: the proxy's view session outlived its client (#1489)" "$(vsess)"
 eq "E: the remote worker still runs" "$RW8" "$(tr_ list-windows -t "=$RS:" -F '#{window_id}' | grep -x "$RW8")"
 restored() { [ -z "$(tr_ show-options -qv -t "=$RS:" status)" ]; }
 waitfor 5 restored || fail "E: the remote session's status line was not handed back" "$(tr_ show-options -t "=$RS:" status)"

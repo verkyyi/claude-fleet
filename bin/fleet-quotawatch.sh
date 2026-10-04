@@ -554,7 +554,7 @@ if [ "$pre_ts" -gt 0 ] && [ $(( START - pre_ts )) -ge "$STALE" ]; then blind=$((
 # the number the policy used was (EPIC #1262's 「额度读数最长过期」 reads it).
 # Cheap on purpose — it runs every tick, and on a loaded box every fork counts
 # against the budget legs (#582): no merge at all while no window carries a stamp.
-qw_rl_socket() { tmux -L "$1" list-windows -a -F "$FLEET_QUOTA_RL_FMT" 2>/dev/null; }
+qw_rl_socket() { fleet_lw "$FLEET_QUOTA_RL_FMT" tmux -L "$1"; }
 qsl=""
 for qs in $SOCKETS; do
   tick_room || break
@@ -790,7 +790,7 @@ qw_warn_socket() {
     [ "$qa" = "$ql" ] || continue
     qp=$(fleet_pane_claude_pid "$qw" "$qs" 2>/dev/null) || continue
     [ -n "$qp" ] && fleet_peer_send "$qp" "$qmsg" fleet-quotawatch && n=$((n+1))
-  done < <(tmux -L "$qs" list-windows -a -F '#{window_id} #{@cc_account}' 2>/dev/null)
+  done < <(fleet_lw '#{window_id} #{@cc_account}' tmux -L "$qs")
   tmux -L "$qs" display-message "fleet: $ql at ${qutil}% of its $qwhich window ($qsrc) — sessions warned; moves at ${qceil}%" 2>/dev/null
   printf '%s' "$n"
 }

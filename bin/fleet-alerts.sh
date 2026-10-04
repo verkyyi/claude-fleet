@@ -65,6 +65,18 @@ fleet_alerts_stall_dir() { printf '%s/alerts.stall' "$(fleet_usage_cache_dir)"; 
 # — a stall is raised by a PROCESS (fleet-await.sh), not observed by compute, so
 # it is a file compute reads: one per id, `since<TAB>subject<TAB>target<TAB>detail`.
 _fa_stall_id() { printf '%s' "${1:-}" | LC_ALL=C tr -cd 'A-Za-z0-9._:-'; }
+# _fa_lw <fmt> — `tmux list-windows -a -F <fmt>`, every window once: a shell's view
+# session (`<fleet>@view-<id>`, issue #1489) shares the fleet's windows and lists
+# each again. Inline copy of fleet_lw in bin/fleet-lib.sh (the bar refreshes this
+# script too often to source the lib) — KEEP IN SYNC.
+_fa_lw() {
+  tmux list-windows -a -F "#{window_id}:#{session_id}:#{session_name} $1" 2>/dev/null \
+    | awk '{ if ($0 !~ /^@[0-9]+:\$[0-9]+:[^ ]+ /) { print; next }    # not a fleet_lw_fmt row (a test shim: canned rows): untouched
+             i = index($0, " "); pre = substr($0, 1, i - 1); id = pre; sub(/:.*/, "", id)
+             s = pre; sub(/^[^:]*:[^:]*:/, "", s)
+             if (index(s, "@view-") || (id in seen)) next
+             seen[id] = 1; print substr($0, i + 1) }'
+}
 fleet_alerts_stall() {
   local id d
   id=$(_fa_stall_id "${1:-}"); [ -n "$id" ] && [ -n "${2:-}" ] || {
@@ -242,7 +254,7 @@ fleet_alerts_compute() {
       subj="$n"; [ "$i" != - ] && subj="#$i"
       _fa_row "needs-$s-$w" needs "$subj" "$cond" '' "$ts" jump 0 "$s:$w" "$n"
     done <<EOF
-$(tmux list-windows -a -F '#{session_name}	#{window_id}	#{window_name}	#{?@issue,#{@issue},-}	#{?@claude_state,#{@claude_state},-}	#{?@claude_needs,#{@claude_needs},-}	#{?@claude_state_ts,#{@claude_state_ts},0}' 2>/dev/null)
+$(_fa_lw '#{session_name}	#{window_id}	#{window_name}	#{?@issue,#{@issue},-}	#{?@claude_state,#{@claude_state},-}	#{?@claude_needs,#{@claude_needs},-}	#{?@claude_state_ts,#{@claude_state_ts},0}')
 EOF
   else
     printf '#carry-needs\n'
