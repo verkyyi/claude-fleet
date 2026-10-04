@@ -684,7 +684,7 @@ try:
     # Never blank (issue #1536): a producer hung for 15s — past its own 10s kill,
     # through a restart that hangs again — leaves the last rows painted under a
     # 「刷新中…」 top row, and the watchdog writes ONE line for the stall.
-    stall_log = root / 'logs' / 'sidebar-stall.log'
+    stall_log = bin_dir.parent / 'logs' / 'sidebar-stall.log'
     logged = len(stall_log.read_text().splitlines()) if stall_log.exists() else 0
     (bin_dir / 'tmux-dashboard-rows-real.sh').symlink_to(real_bin / 'tmux-dashboard-rows.sh')
     staged.write_text('#!/bin/bash\nn=0\nwhile [ -f %s ] && [ $n -lt 300 ]; do sleep .1; n=$((n+1)); done\n'
