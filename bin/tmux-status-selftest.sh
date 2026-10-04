@@ -78,13 +78,14 @@ EOF
 chmod +x "$WORK/bin/tmux"; : > "$WORK/tmux.log"
 
 # bar [k=v …] — the status bar in the sandbox. CF overrides CCQUOTA_FLEET (default 1).
-# Linux reads the load from /proc/loadavg (not shimmable): its figure is masked
-# to the shim's 1.20 on 4 cores, so the goldens hold on both OSes.
+# Linux reads the load from /proc/loadavg (not shimmable): THIS machine's figure
+# (本机 / m5) is masked to the shim's 1.20 on 4 cores, so the goldens hold on both
+# OSes; another machine's comes off hub_nodes and is never masked.
 bar() { local o
         o=$(FLEET_ALERTS_DISK=0 TMPDIR="$T/" FLEET_CONF_DIR="$CONF" FLEET_ACCOUNTS_DIR="$ACC" \
         CCQUOTA_HUB_URL=http://127.0.0.1:9 CCQUOTA_FLEET="${CF-1}" FLEET_NODE_ALIASES="box=m5" HOSTNAME=box.local \
         PATH="$WORK/bin:$PATH" bash "$BIN/tmux-status.sh" "$@" 2>/dev/null)
-        case "${OSTYPE:-}" in darwin*) ;; *) o=$(printf '%s' "$o" | sed -E 's/负载 #\[fg=#[0-9a-f]+\]([0-9]+\.[0-9]|–)/负载 #[fg=#9ece6a]0.3/') ;; esac
+        case "${OSTYPE:-}" in darwin*) ;; *) o=$(printf '%s' "$o" | sed -E 's/(本机 |m5 #\[fg=#9ece6a\]● )(#\[fg=#565f89\]· 负载 )#\[fg=#[0-9a-f]+\]([0-9]+\.[0-9]|–)/\1\2#[fg=#9ece6a]0.3/') ;; esac
         printf '%s' "$o"; }
 # the plain bar = machine segment + (no gh segment) + the alerts bar; split them
 FA='#[fg=#565f89]│ #[range=user|alarm]'
