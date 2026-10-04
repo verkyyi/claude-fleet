@@ -22,6 +22,10 @@ concurrency:
   group: node-join-${{ github.ref }}
   cancel-in-progress: true
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   linux-container:
     runs-on: ubuntu-latest
@@ -34,6 +38,8 @@ jobs:
           DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl ca-certificates git >/dev/null
           for c in tmux gh python3 zsh; do command -v "$c" && { echo "$c is already here — not a clean box"; exit 1; }; done; true
       - uses: actions/checkout@v4
+      # The checkout is owned by the runner's uid, not the container's root.
+      - run: git config --global --add safe.directory '*'
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25'
@@ -55,7 +61,6 @@ jobs:
         env:
           FLEET_CLAUDE_INSTALL_CMD: 'true'   # no Claude download in CI; the rest of bootstrap runs
         run: |
-          git config --global --add safe.directory '*'
           J=$(curl -fsS -X POST -H 'Authorization: Bearer vt' -H 'Content-Type: application/json' -d '{}' \
             127.0.0.1:8787/v1/fleet/join-codes)
           CODE=$(printf '%s' "$J" | sed -n 's/.*"code":"\([^"]*\)".*/\1/p')
