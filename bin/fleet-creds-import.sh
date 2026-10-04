@@ -39,7 +39,7 @@ set -uo pipefail
 
 usage() { sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
-PRINCIPAL=pool EXPIRES= DRY=0
+PRINCIPAL=pool EXPIRES='' DRY=0
 LABELS=()
 while [ $# -gt 0 ]; do
   case "$1" in

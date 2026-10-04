@@ -84,7 +84,8 @@ PY
 HUB_PID=$!
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do [ -s "$WORK/port" ] && break; sleep 0.1; done
 [ -s "$WORK/port" ] || fail "fake hub did not start"
-export CCQUOTA_HUB_URL="http://127.0.0.1:$(cat "$WORK/port")"
+CCQUOTA_HUB_URL="http://127.0.0.1:$(cat "$WORK/port")"
+export CCQUOTA_HUB_URL
 export CCQUOTA_VIEWER_TOKEN='viewer-SECRET-1'
 
 # req <n> <jq-ish python expr> — field of the n-th logged request
