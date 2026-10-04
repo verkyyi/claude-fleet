@@ -39,17 +39,20 @@ assert sidebar.tail('abc修复', 5) == 'c修复' and sidebar.tail('abc', 9) == '
 # takes a client's size (210 → 189 columns), and the manual width used to stay
 # where the scale left it until the next move — 37 ↔ 26 on every switch.
 fit = sidebar.fit_plan
-assert fit(26, 189, '@1', False, '37', [], (37, 210, '@1')) == (('resize', 37), (37, 189, '@1')), 'scaled: back to the manual width'
-assert fit(26, 189, '@1', False, '37', [], None) == (('resize', 37), (37, 189, '@1')), 'a fresh view corrects too'
-assert fit(37, 189, '@1', False, '37', [], (37, 189, '@1')) == (None, (37, 189, '@1')), 'at its width: zero calls'
-assert fit(30, 189, '@2', False, '37', [], (37, 189, '@1')) == (('resize', 37), (37, 189, '@2')), 'moved to another window: not a drag'
-assert fit(40, 189, '@1', False, '37', [], (37, 189, '@1')) == (('manual', 40), (40, 189, '@1')), 'same window, same width, pane moved: the operator dragged'
-assert fit(40, 189, '@1', False, '40', [], (40, 189, '@1')) == (None, (40, 189, '@1')), 'the dragged width is then held'
-assert fit(26, 189, '@1', True, '37', [], (37, 210, '@1')) == (None, (37, 210, '@1')), 'zoomed: nothing'
-assert fit(26, 117, '@1', False, '37', [], (37, 210, '@1')) == (None, (26, 117, '@1')), 'too narrow for 37 + the worker 80: nothing'
-assert fit(26, 118, '@1', False, '37', [], (37, 210, '@1'))[0] == ('resize', 37), 'just wide enough: corrected'
-assert fit(26, 189, '@1', False, '', [], (30, 210, '@1')) == (('resize', 30), (30, 189, '@1')), 'no manual width: auto_width is re-applied as before'
-assert fit(26, 100, '@1', False, '', [], (30, 160, '@1')) == (None, (26, 100, '@1')), 'auto, too narrow: nothing'
+assert fit(26, 189, '@1', False, '37', [], (37, 210, '@1', '')) == (('resize', 37), (37, 189, '@1', '')), 'scaled: back to the manual width'
+assert fit(26, 189, '@1', False, '37', [], None) == (('resize', 37), (37, 189, '@1', '')), 'a fresh view corrects too'
+assert fit(37, 189, '@1', False, '37', [], (37, 189, '@1', '')) == (None, (37, 189, '@1', '')), 'at its width: zero calls'
+assert fit(30, 189, '@2', False, '37', [], (37, 189, '@1', '')) == (('resize', 37), (37, 189, '@2', '')), 'moved to another window: not a drag'
+assert fit(40, 189, '@1', False, '37', [], (37, 189, '@1', '')) == (('manual', 40), (40, 189, '@1', '')), 'same window, same width, pane moved: the operator dragged'
+assert fit(40, 189, '@1', False, '40', [], (40, 189, '@1', '')) == (None, (40, 189, '@1', '')), 'the dragged width is then held'
+# The view left @1 and came back between two ticks (move_view's stamp moved on)
+# while @1 was scaled 210 → 189 and back: not a drag — the hole tmux 3.4 found.
+assert fit(12, 189, '@1', False, '37', [], (37, 189, '@1', '1'), '2') == (('resize', 37), (37, 189, '@1', '2')), 'moved away and back since the last fit: not a drag'
+assert fit(26, 189, '@1', True, '37', [], (37, 210, '@1', '')) == (None, (37, 210, '@1', '')), 'zoomed: nothing'
+assert fit(26, 117, '@1', False, '37', [], (37, 210, '@1', '')) == (None, (26, 117, '@1', '')), 'too narrow for 37 + the worker 80: nothing'
+assert fit(26, 118, '@1', False, '37', [], (37, 210, '@1', ''))[0] == ('resize', 37), 'just wide enough: corrected'
+assert fit(26, 189, '@1', False, '', [], (30, 210, '@1', '')) == (('resize', 30), (30, 189, '@1', '')), 'no manual width: auto_width is re-applied as before'
+assert fit(26, 100, '@1', False, '', [], (30, 160, '@1', '')) == (None, (26, 100, '@1', '')), 'auto, too narrow: nothing'
 assert sidebar.typed('q') and sidebar.typed('修') and sidebar.typed(' ')
 assert not sidebar.typed('\x0e') and not sidebar.typed('\x7f')
 # The `?` row for the selected row (issue #1377): only a CLIPPED name takes it.
@@ -153,7 +156,7 @@ def wait_for(predicate, message):
             return
         time.sleep(.05)
     snapshots = [tm('display-message', '-p', '-t', p[0],
-                    '#{pane_id} top=#{pane_top} height=#{pane_height} window=#{window_height} client=#{client_height}') +
+                    '#{pane_id} top=#{pane_top} height=#{pane_height} width=#{pane_width} window=#{window_height}x#{window_width} client=#{client_height}x#{client_width} zoomed=#{window_zoomed_flag}') +
                  '\n' + tm('capture-pane', '-p', '-t', p[0]) for p in views()]
     raise AssertionError(message + '\n' + '\n'.join(snapshots))
 

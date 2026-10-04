@@ -148,7 +148,12 @@ def move_view(pane, worker, width, select=False):
         return False
     commands = []
     if source[0] != window:
-        commands = ["set-option", "-uw", "-t", source[0], "@sidebar_worker", ";",
+        # `@sidebar_moved`, in the same batch as the join: fit_view's drag test
+        # (issue #1521) reads it, so a width that changed after a move — the
+        # view left and came back between two of its ticks, and the window was
+        # scaled meanwhile — is never taken for the operator's drag.
+        commands = ["set-option", "-p", "-t", pane, "@sidebar_moved", str(time.time_ns()), ";",
+                    "set-option", "-uw", "-t", source[0], "@sidebar_worker", ";",
                     "set-option", "-w", "-t", window, "@sidebar_worker", worker, ";",
                     "join-pane", "-d", "-h", "-b", "-f", "-l", str(width),
                     "-s", pane, "-t", worker]
@@ -891,12 +896,12 @@ def env_int(name, default):
         return default
 
 
-def fit_plan(pw, ww, window, zoomed, manual, rows, sized):
+def fit_plan(pw, ww, window, zoomed, manual, rows, sized, moved=""):
     """What holds the view's width (issues #1328, #1521), as (action, sized):
     action is ("manual", w) — record w as the operator's width — or ("resize", w)
     — one resize-pane — or None; `sized` is the (pane width, window width,
-    window) the view is at after it, or the old one when there is nothing to do.
-    Pure (no tmux), so the selftest pins every branch.
+    window, move stamp) the view is at after it, or the old one when there is
+    nothing to do. Pure (no tmux), so the selftest pins every branch.
 
     The width is `@sidebar_width_manual` once the operator has dragged to one,
     else auto_width for the rows — and EITHER is re-applied when the pane left
@@ -905,21 +910,22 @@ def fit_plan(pw, ww, window, zoomed, manual, rows, sized):
     client), and before #1521 a manual width was never corrected, so the list
     sat at 26 until the next move brought back 37 — a width that jumped on every
     switch. A drag is the one width change that is the operator's: the pane
-    moved while the view stayed in the same window at the same window width.
-    Zoomed, or a window too narrow to keep the worker's 80 columns beside the
-    width: nothing (sync hides the view below that anyway)."""
+    moved while the view stayed in the same window (`moved`, move_view's stamp,
+    unchanged — the view may have left and come back since the last tick) at
+    the same window width. Zoomed, or a window too narrow to keep the worker's
+    80 columns beside the width: nothing (sync hides the view below that anyway)."""
     if zoomed:
         return None, sized
-    if sized is not None and sized[1:] == (ww, window) and sized[0] != pw:
-        return ("manual", pw), (pw, ww, window)
+    if sized is not None and sized[1:] == (ww, window, moved) and sized[0] != pw:
+        return ("manual", pw), (pw, ww, window, moved)
     if manual.isdigit():
         want = max(24, min(60, int(manual)))
     else:
         base = max(24, min(60, env_int("FLEET_SIDEBAR_WIDTH", 30)))
         want = auto_width(rows, ww, base, max(base, env_int("FLEET_SIDEBAR_WIDTH_MAX", 44)))
     if want != pw and ww >= want + 81:
-        return ("resize", want), (want, ww, window)
-    return None, (pw, ww, window)
+        return ("resize", want), (want, ww, window, moved)
+    return None, (pw, ww, window, moved)
 
 
 def fit_view(session, pane, rows, sized):
@@ -929,11 +935,12 @@ def fit_view(session, pane, rows, sized):
     operator's drag from tmux's scaling and would undo the drag). `sized` is what
     this function last left the view at; returns the next."""
     info = fields(pane, US.join(("#{pane_width}", "#{window_width}", "#{window_id}",
-                                 "#{window_zoomed_flag}", "#{@sidebar_width_manual}")))
-    if len(info) != 5 or not info[0].isdigit() or not info[1].isdigit():
+                                 "#{window_zoomed_flag}", "#{@sidebar_width_manual}",
+                                 "#{@sidebar_moved}")))
+    if len(info) != 6 or not info[0].isdigit() or not info[1].isdigit():
         return sized
     action, sized = fit_plan(int(info[0]), int(info[1]), info[2], info[3] == "1",
-                             info[4], rows, sized)
+                             info[4], rows, sized, info[5])
     if action is None:
         return sized
     if action[0] == "manual":
