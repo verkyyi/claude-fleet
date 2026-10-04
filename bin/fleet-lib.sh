@@ -3980,6 +3980,179 @@ EOF
   return 1
 }
 
+# ---- worker identity → where it lives (issue #1420, EPIC #1419 C1) -------------
+# A window id or `<sess>:<idx>` means something only on the server that minted it;
+# the durable address of a worker is its worker_id (docs/FLEET-HUB.md «Worker
+# identity»): `<fleet UUID>/<key>`, the key being the same `issue-<N>` /
+# `scratch-<N>` / `<slug>:issue-<N>` spelling @origin carries. These helpers answer
+# "is that worker HERE, and in which window?" — and, only when it is not and the
+# cross-machine hub is switched on (CCQUOTA_FLEET=1), "which node has it?". The
+# local answer is today's fleet_win_for_key, unchanged; the hub branch only ever
+# reads a local cache, never the network.
+#
+# Scripts take such a target as `wid:<worker_id>` (or `wid:<key>`, meaning THIS
+# fleet). A local hit runs the script's existing path; `remote`/`unknown` refuse
+# with a one-line reason, and never fall through to a same-numbered local window.
+
+# fleet_uuid <sess> → the fleet's durable UUID — byte-for-byte what
+# fleet_control.py's inventory mints: uuid5(<machine id>, canonical JSON of
+# [session, FLEET_REPO, FLEET_MAIN]). READ-ONLY: a machine whose control database
+# has no machine id yet (fleet-control.py never ran) has no fleet UUID — nothing,
+# rc 1 — and so no worker_id either; nothing here creates one.
+fleet_uuid() {
+  local sess="${1:-}" db="$FLEET_CONF_DIR/control/state.sqlite3"
+  [ -n "$sess" ] && [ -f "$db" ] || return 1
+  ( fleet_load_conf "$sess" >/dev/null 2>&1
+    python3 - "$db" "$sess" "${FLEET_REPO:-}" "${FLEET_MAIN:-}" 2>/dev/null <<'PY'
+import json, sqlite3, sys, uuid
+from urllib.parse import quote
+db, sess, repo, main = sys.argv[1:5]
+try:
+    con = sqlite3.connect("file:%s?mode=ro" % quote(db), uri=True)
+    row = con.execute("SELECT value FROM metadata WHERE key='machine_id'").fetchone()
+    print(uuid.uuid5(uuid.UUID(row[0]), json.dumps([sess, repo, main], ensure_ascii=False,
+                                                   sort_keys=True, separators=(",", ":"))))
+except Exception:
+    sys.exit(1)
+PY
+  )
+}
+
+# fleet_worker_id <sess> <window> → that window's worker_id, or nothing (no fleet
+# UUID on this machine, or a window with no durable key — fleet_window_okey).
+fleet_worker_id() {
+  local u k
+  k=$(fleet_window_okey "${1:-}" "${2:-}"); [ -n "$k" ] || return 1
+  u=$(fleet_uuid "${1:-}") && [ -n "$u" ] || return 1
+  printf '%s/%s' "$u" "$k"
+}
+
+# _fleet_wid_split <target> → `<uuid>\t<key>` (uuid empty for a bare key), rc 1
+# when the target (an optional `wid:` prefix stripped) is neither shape.
+_fleet_wid_split() {
+  local t="${1#wid:}" u='' k
+  case "$t" in */*) u=${t%%/*}; k=${t#*/} ;; *) k=$t ;; esac
+  if [ -n "$u" ]; then
+    printf '%s' "$u" | grep -Eqx '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' || return 1
+  fi
+  printf '%s' "$k" | grep -Eqx '([A-Za-z0-9][A-Za-z0-9._-]{0,127}:)?(issue|scratch)-[1-9][0-9]{0,9}' || return 1
+  printf '%s\t%s' "$u" "$k"
+}
+
+# fleet_wid_home <target> [<sess>] → the LOCAL fleet a worker_id belongs to: the
+# fleet whose UUID it names, or <sess> (default: the caller's) for a bare key.
+# rc 1 = another machine's fleet (or a fleet no longer configured here), rc 2 =
+# not a worker_id at all. Says nothing about whether the worker is live.
+fleet_wid_home() {
+  local sp u s _c
+  sp=$(_fleet_wid_split "${1:-}") || return 2
+  u=${sp%%$'\t'*}
+  if [ -z "$u" ]; then
+    s="${2:-}"; [ -n "$s" ] || s=$(fleet_current_session 2>/dev/null)
+    [ -n "$s" ] || return 1
+    printf '%s' "$s"; return 0
+  fi
+  while IFS=$'\t' read -r s _c; do
+    [ -n "$s" ] || continue
+    [ "$(fleet_uuid "$s")" = "$u" ] && { printf '%s' "$s"; return 0; }
+  done <<EOF
+$(fleet_each_conf)
+EOF
+  return 1
+}
+
+# _fleet_hub_node <uuid> <key> → the node the cross-machine hub last saw this
+# worker on, or rc 1. Off unless CCQUOTA_FLEET=1. Reads ONE local cache,
+# $FLEET_CONF_DIR/control/hub-workers.tsv — `<worker_id>\t<node>` per line, the
+# hub's fleet_status flattened — trusted while younger than FLEET_HUB_CACHE_SECS
+# (30). A stale or missing cache is refreshed by FLEET_HUB_STATUS_CMD when one is
+# configured (it prints that TSV on stdout; EPIC #1419 C2 supplies it); otherwise,
+# or when it fails, the hub counts as unreachable: one stderr note, rc 1, and the
+# caller carries on as a one-machine fleet. A bare key (no uuid) matches a row
+# only when exactly one row ends in it.
+_fleet_hub_node() {
+  local u="${1:-}" k="${2:-}" f="$FLEET_CONF_DIR/control/hub-workers.tsv" ttl m tmp hits
+  [ "${CCQUOTA_FLEET:-0}" = 1 ] || return 1
+  ttl="${FLEET_HUB_CACHE_SECS:-30}"; case "$ttl" in ''|*[!0-9]*) ttl=30 ;; esac
+  # GNU stat FIRST: `stat -f %m` on GNU means "filesystem status" and exits 0.
+  m=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null) || m=0
+  if [ $(( $(date +%s) - ${m:-0} )) -gt "$ttl" ]; then
+    if [ -n "${FLEET_HUB_STATUS_CMD:-}" ] && mkdir -p "${f%/*}" 2>/dev/null \
+       && tmp=$(mktemp "$f.XXXXXX" 2>/dev/null); then
+      if bash -c "$FLEET_HUB_STATUS_CMD" >"$tmp" 2>/dev/null </dev/null; then mv -f "$tmp" "$f"
+      else rm -f "$tmp"; printf 'fleet: hub unreachable (FLEET_HUB_STATUS_CMD failed) — only this machine is searched\n' >&2; return 1; fi
+    else
+      printf 'fleet: hub status cache %s is stale or missing — only this machine is searched\n' "$f" >&2
+      return 1
+    fi
+  fi
+  if [ -n "$u" ]; then
+    awk -F'\t' -v w="$u/$k" '$1 == w && $2 != "" { print $2; f = 1; exit } END { exit !f }' "$f" 2>/dev/null
+    return
+  fi
+  hits=$(awk -F'\t' -v s="/$k" 'length($1) > length(s) && substr($1, length($1) - length(s) + 1) == s && $2 != "" { print $2 }' "$f" 2>/dev/null)
+  [ -n "$hits" ] && [ "$(printf '%s\n' "$hits" | grep -c .)" -eq 1 ] || return 1
+  printf '%s' "$hits"
+}
+
+# fleet_worker_locate <worker_id | wid:… | key | window> [<sess>] → ONE line:
+#   local <window_id> <sess>   live on this machine, in that window of fleet <sess>
+#   remote <node>              not here; the hub last saw it on <node>
+#   unknown                    neither — never live here, and the hub can't place it
+# rc 0 for every verdict above; rc 2 (and `unknown`) for a target that is no
+# worker_id, key or window. A window target (@id / %pane / sess:idx / sess:name)
+# is local or unknown, nothing else — which is why a repo-qualified key
+# (`<slug>:issue-<N>`, the same shape as `sess:name`) needs its `wid:` prefix. A worker_id of a fleet configured HERE never asks the hub:
+# its fleet is this machine, so not-live-here is `unknown`.
+fleet_worker_locate() {
+  local t="${1:-}" sess="${2:-}" sp u k home w node
+  [ -n "$sess" ] || sess=$(fleet_current_session 2>/dev/null)
+  case "$t" in
+    wid:*|*/*|issue-*|scratch-*) sp=$(_fleet_wid_split "$t") || { echo unknown; return 2; } ;;
+    *) sp='' ;;
+  esac
+  if [ -n "$sp" ]; then
+    u=${sp%%$'\t'*}; k=${sp#*$'\t'}
+    if home=$(fleet_wid_home "$t" "$sess"); then
+      # A bare issue key in a 2+ repo fleet names every repo's #N (FLEET-HUB.md):
+      # two such windows are AMBIGUOUS, never a first-match pick.
+      case "$k" in issue-*)
+        if fleet_multirepo "$home" && [ "$(tmux -L "$(fleet_socket "$home")" list-windows -t "=$home" -F '#{@issue}' 2>/dev/null | grep -cx "${k#issue-}")" -gt 1 ]; then
+          printf 'fleet: %s is ambiguous in %s (several repos hold it) — name the repo: wid:<slug>:%s\n' "$k" "$home" "$k" >&2
+          echo unknown; return 0
+        fi ;;
+      esac
+      w=$(fleet_win_for_key "$k" "$(fleet_socket "$home")") && [ -n "$w" ] \
+        && { printf 'local %s %s\n' "$w" "$home"; return 0; }
+      [ -n "$u" ] && { echo unknown; return 0; }
+    fi
+    if node=$(_fleet_hub_node "$u" "$k"); then printf 'remote %s\n' "$node"; else echo unknown; fi
+    return 0
+  fi
+  case "$t" in
+    @*|%*|*:*)
+      w=$(_fleet_tmux "$sess" display-message -p -t "$t" '#{window_id}' 2>/dev/null)
+      if [ -n "$w" ]; then printf 'local %s %s\n' "$w" "$(_fleet_tmux "$sess" display-message -p -t "$w" '#{session_name}' 2>/dev/null)"
+      else echo unknown; fi
+      return 0 ;;
+  esac
+  echo unknown; return 2
+}
+
+# fleet_stamp_origin_wid <sess> <window> <origin> [<sock>] — beside the @origin key a spawn
+# stamps, record the PARENT's worker_id as @origin_wid, so a child that ends up on
+# another machine can still address its parent. Only for a key-shaped origin (not
+# empty/hub, autofill, bridge or a cross-fleet name) and only when this machine
+# has a fleet UUID; otherwise nothing is set — the one-machine case, as before.
+fleet_stamp_origin_wid() {
+  local s="${1:-}" w="${2:-}" o="${3:-}" k="${4:-}" u
+  [ -n "$w" ] && _fleet_wid_split "$o" >/dev/null || return 0
+  u=$(fleet_uuid "$s") && [ -n "$u" ] || return 0
+  if [ -n "$k" ]; then tmux -L "$k" set-window-option -t "$w" @origin_wid "$u/$o" 2>/dev/null
+  else _fleet_tmux "$s" set-window-option -t "$w" @origin_wid "$u/$o" 2>/dev/null; fi
+  return 0
+}
+
 # --- the child-report ledger as a PARENT MAP (issue #1352) ----------------------
 # A reaped middle window takes its @origin with it, so a grandchild's chain used to
 # break there and sink to the dash's orphan bottom. But the parent link is already

@@ -168,7 +168,8 @@ bind_marks() {  # $1 = window-id, $2 = worktree (may be empty) — mark the rest
   # Spawn provenance from the ledger's origin column (issue #503): re-stamped so
   # a resumed session keeps its dash grouping; '-'/empty (pre-#503 row) → skip.
   { [ -n "${led_origin:-}" ] && [ "$led_origin" != "-" ]; } \
-    && TM set-window-option -t "$1" @origin "$led_origin" 2>/dev/null
+    && TM set-window-option -t "$1" @origin "$led_origin" 2>/dev/null \
+    && fleet_stamp_origin_wid "$SESS" "$1" "$led_origin" "$SOCK"   # parent's worker_id (#1420)
   # The session's repo (issue #789); @worktree lets fleet_window_repo re-derive it.
   [ -n "$REPO" ] && TM set-window-option -t "$1" @repo "$(fleet_norm_repo "$REPO")" 2>/dev/null
   [ -n "${2:-}" ] && TM set-window-option -t "$1" @worktree "$2" 2>/dev/null

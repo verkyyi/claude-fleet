@@ -104,6 +104,7 @@
 #   fleet-answer.sh [opts] --cancel <target>            Esc the dialog
 #
 #   <target>  @<window-id> / %<pane-id> / <sess>:<idx>  (the fleet-peer-send grammar)
+#             wid:<worker_id> / wid:<key>  that worker, when it lives on this machine
 #   <pick>    an option number from --show; `1,3` toggles several in a multiSelect
 #   opts: -L <label>          tmux socket label (outside a fleet pane)
 #         --session <fleet>   fleet whose socket to use (default: the caller's)
@@ -161,6 +162,17 @@ if [ -z "$SOCK" ] && [ -z "${TMUX:-}" ]; then
 fi
 TM() { if [ -n "$SOCK" ]; then tmux -L "$SOCK" "$@"; else tmux "$@"; fi; }
 SK() { FLEET_ALLOW_SENDKEYS=1 TM send-keys -t "$PANE" "$@" 2>/dev/null; }
+
+# --- a worker_id target (issue #1420): resolve it to its window HERE, or refuse --
+case "$TARGET" in wid:*)
+  loc=$(fleet_worker_locate "$TARGET" "${SESS:-$SOCK}"); rc=$?
+  case "$loc" in
+    local\ *) loc=${loc#local }; TARGET=${loc%% *}; SOCK=$(fleet_socket "${loc#* }") ;;
+    remote\ *) echo "fleet-answer: '$TARGET' lives on ${loc#remote } — answering a worker on another machine is not supported yet (EPIC #1419 C2)" >&2; exit 1 ;;
+    *) [ "$rc" -eq 2 ] && { echo "fleet-answer: bad worker id '$TARGET'" >&2; exit 2; }
+       echo "fleet-answer: no live worker for '$TARGET' on this machine" >&2; exit 1 ;;
+  esac ;;
+esac
 
 # --- the pane must exist (a dead pane is nothing to answer) -------------------
 PANE=$(TM display-message -p -t "$TARGET" '#{pane_id}' 2>/dev/null)

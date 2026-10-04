@@ -13,6 +13,7 @@
 #             @<window-id> / %<pane-id> / <sess>:<idx>  → the Claude under that pane
 #             <pid>                                     → that Claude process
 #             <session-uuid>                            → the process running it
+#             wid:<worker_id> / wid:<key>               → that worker, wherever it lives
 #   <text>    the message; `-` or omitted → read stdin (multi-line ok)
 #   -L        tmux socket label for a tmux target when run outside the fleet
 #             ($TMUX unset); inside a pane bare tmux is already the right server.
@@ -27,6 +28,12 @@
 # time; zero or several matches refuse. A positional target can still be pinned
 # with --expect-issue.
 #
+# `wid:<fleet UUID>/<key>` (issue #1420) is the address that survives a machine
+# boundary (docs/FLEET-HUB.md «Worker identity»); fleet_worker_locate resolves it.
+# Live on this machine → the window it found, then the path below as for any
+# window. On another machine, or nowhere → exit 1 with the reason; it is never
+# delivered to a local window that merely shares the issue number.
+#
 # Exactly one line of outcome, always: success prints `sent → … (<window> · <worktree>)`
 # on stdout and exits 0; every failure exits non-zero with ONE line on stderr.
 # Exit 1 = target not found / ambiguous / refused / not a live session; 2 = usage.
@@ -38,7 +45,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-lib.sh"
 
 die() { printf 'fleet-peer-send: %s\n' "$(printf '%s' "$2" | tr '\n' ' ' | sed 's/ *$//')" >&2; exit "$1"; }
-usage() { sed -n '9,23p' "$0" >&2; exit 2; }
+usage() { sed -n '9,24p' "$0" >&2; exit 2; }
 
 SOCK=""; EXPECT=""; REPO=""
 while [ $# -gt 0 ]; do
@@ -49,7 +56,7 @@ while [ $# -gt 0 ]; do
     --expect-issue=*) EXPECT="${1#*=}"; shift ;;
     --repo) REPO="${2:-}"; shift 2 ;;
     --repo=*) REPO="${1#*=}"; shift ;;
-    -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,39p' "$0"; exit 0 ;;
     *) break ;;
   esac
 done
@@ -59,6 +66,18 @@ tgt="${1:-}"; [ -n "$tgt" ] || usage
 shift
 if [ $# -eq 0 ] || [ "$1" = "-" ]; then text=$(cat); else text="$*"; fi
 [ -n "$text" ] || die 2 "empty message"
+
+# --- worker_id → where it lives (issue #1420) -------------------------------------
+case "$tgt" in
+  wid:*)
+    loc=$(fleet_worker_locate "$tgt" "$SOCK"); rc=$?
+    case "$loc" in
+      local\ *) loc=${loc#local }; tgt=${loc%% *}; SOCK=$(fleet_socket "${loc#* }") ;;
+      remote\ *) die 1 "'$tgt' lives on ${loc#remote } — cross-machine delivery is not supported yet (EPIC #1419 C2); nothing sent" ;;
+      *) [ "$rc" -eq 2 ] && die 2 "bad worker id '$tgt' (want wid:<fleet UUID>/issue-<N>, wid:issue-<N> or wid:scratch-<N>)"
+         die 1 "no live worker for '$tgt' on this machine; nothing sent" ;;
+    esac ;;
+esac
 
 # --- identity → one live window (issue #1046) ------------------------------------
 # Resolved NOW, off the live server, never from a remembered index. Every
