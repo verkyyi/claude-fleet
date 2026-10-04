@@ -187,7 +187,15 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    existing hook that isn't the fleet's, wires each fleet hook exactly once by
    identity `(event, matcher, script basename)` (issue #818 — never a jq `+=`,
    which stacks a second copy the first time a command string changes), and
-   backs settings.json up first. `fleet-doctor`'s `hooks` line checks the result. These hooks are no-ops outside
+   backs settings.json up first. `fleet-doctor`'s `hooks` line checks the result. The same script's `keys` action
+   (issue #1528) merges `hooks/global-config-keys.json` into Claude Code's
+   GLOBAL config, `~/.claude.json` — today `leftArrowOpensAgents: false`, so a
+   stray ← in a pane never strands it in the agents view. That key is read only
+   from there (in settings.json it does nothing); the merge sets only those keys,
+   under Claude Code's own `.claude.json.lock`. The plugin cannot set it, so run
+   `python3 bin/fleet-hooks-merge.py keys` either way; every sync re-applies it.
+   `FLEET_KEEP_AGENTS_KEY=1` leaves that key to the login; `fleet-doctor`'s
+   `setkeys` line checks it. These hooks are no-ops outside
    tmux and always exit 0, so they are safe to add globally. The `Stop` entry also
    fires `classify-hook.sh`, the real-time path for state classification: it
    hands just the stopped window to `classify-sessions.sh --window`, so the

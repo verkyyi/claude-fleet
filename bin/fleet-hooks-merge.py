@@ -26,6 +26,23 @@ the arguments and the path spelling (~ vs $HOME vs absolute) are NOT identity.
          --plugin: the fleet plugin already wires the table, so the right number
          of fleet entries in settings.json is ZERO — any one of them fires twice.
 
+  keys   [--config F] [--keys F] [--skip KEY]… [--dry-run]
+         Issue #1528. Keys the fleet pins in Claude Code's GLOBAL config
+         (hooks/global-config-keys.json — today `leftArrowOpensAgents: false`, so
+         a stray ← never drops a pane into the agents view). That key is read
+         from ~/.claude.json ($CLAUDE_CONFIG_DIR/.claude.json when set), NOT
+         settings.json: in settings.json, or via --settings, it does nothing
+         (measured on 2.1.289). Sets each key whose value differs or is absent;
+         every other key is left exactly as it was. The write takes the lock
+         Claude Code itself takes (proper-lockfile: mkdir <file>.lock), re-reads
+         the file under it and replaces it atomically, so a running session's
+         own save cannot interleave. No such file yet (Claude Code never ran on
+         this login) → nothing written. --skip KEY leaves that key to the login
+         (the FLEET_KEEP_AGENTS_KEY=1 opt-out).
+  keys-check [--config F] [--keys F] [--skip KEY]…
+         Read-only: `ok …` (exit 0) or one line per key that is missing or
+         differs (exit 1). fleet-doctor's `setkeys` line.
+
 Exit: 0 ok · 1 check found problems · 2 unreadable/malformed input.
 """
 import argparse
@@ -38,6 +55,9 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_SOURCE = os.path.join(os.path.dirname(HERE), "hooks", "settings-hooks.json")
+DEFAULT_KEYS = os.path.join(os.path.dirname(HERE), "hooks", "global-config-keys.json")
+DEFAULT_CONFIG = os.path.join(
+    os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~"), ".claude.json")
 DEFAULT_SETTINGS = os.path.join(
     os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"), "settings.json")
 
@@ -167,14 +187,141 @@ def merge(settings, src_hooks, table):
     return new, changes
 
 
+def keys_table(path, skip):
+    src = load(path)
+    if not isinstance(src, dict):
+        print("fleet-hooks-merge: %s is not a JSON object" % path, file=sys.stderr)
+        sys.exit(2)
+    return {k: v for k, v in src.items() if k not in skip}
+
+
+def keys_problems(settings, want):
+    out = []
+    for k in sorted(want):
+        if k not in settings:
+            out.append("missing    %s (want %s)" % (k, json.dumps(want[k])))
+        elif settings[k] != want[k]:
+            out.append("differs    %s: %s (want %s)" % (k, json.dumps(settings[k]), json.dumps(want[k])))
+    return out
+
+
+def keys_merge(settings, want):
+    """Return (new_settings, change_lines). Pure: never touches the disk."""
+    new = json.loads(json.dumps(settings))
+    changes = []
+    for k in sorted(want):
+        if k in new and new[k] == want[k]:
+            continue
+        old = json.dumps(new[k]) if k in new else "(absent)"
+        new[k] = json.loads(json.dumps(want[k]))
+        changes.append("set            %s: %s -> %s" % (k, old, json.dumps(want[k])))
+    return new, changes
+
+
+def write_settings(path, new, backup=True):
+    if backup and os.path.exists(path):
+        bak = "%s.bak.%d" % (path, int(time.time()))
+        shutil.copy2(path, bak)
+        print("backup  %s" % bak)
+    # Write through a symlinked settings.json, and keep its mode (it is 0600).
+    target = os.path.realpath(path)
+    tmp = target + ".fleet-hooks-merge.tmp"
+    with open(tmp, "w") as f:
+        json.dump(new, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+    if os.path.exists(target):
+        shutil.copymode(target, tmp)
+    os.replace(tmp, target)
+    print("wrote   %s" % path)
+
+
+def keys_main(a):
+    want = keys_table(a.keys, set(a.skip))
+    skipped = "" if not a.skip else " (left to this login: %s)" % ", ".join(sorted(a.skip))
+
+    def current():
+        cfg = load(a.config)
+        if cfg is not None and not isinstance(cfg, dict):
+            print("fleet-hooks-merge: %s is not a JSON object" % a.config, file=sys.stderr)
+            sys.exit(2)
+        return cfg
+
+    if a.action == "keys-check":
+        cfg = current()
+        if cfg is None:
+            print("missing    %s — Claude Code has not run on this login yet" % a.config)
+            return 1
+        bad = keys_problems(cfg, want)
+        if not bad:
+            print("ok %d global config key(s) set in %s%s" % (len(want), a.config, skipped))
+            return 0
+        for line in bad:
+            print(line)
+        return 1
+
+    def apply():
+        cfg = current()
+        if cfg is None:
+            print("absent  %s — Claude Code has not run on this login yet; nothing written" % a.config)
+            return 0
+        new, changes = keys_merge(cfg, want)
+        if not changes:
+            print("unchanged — every fleet global config key already set%s" % skipped)
+            return 0
+        for line in changes:
+            print(line)
+        if a.dry_run:
+            print("(dry run — %s not written)" % a.config)
+            return 0
+        write_settings(a.config, new, backup=False)
+        return 0
+
+    if a.dry_run or not os.path.exists(a.config):
+        return apply()
+    return with_config_lock(a.config, apply)
+
+
+def with_config_lock(path, fn, wait=None):
+    """Run fn() holding Claude Code's own lock on `path` (proper-lockfile: an
+    mkdir'd `<realpath>.lock` dir). Never steals a lock — a holder past `wait`
+    is an error, not a race this script wins."""
+    if wait is None:
+        wait = float(os.environ.get("FLEET_KEYS_LOCK_WAIT") or 5)
+    lock = os.path.realpath(path) + ".lock"
+    deadline = time.time() + wait
+    while True:
+        try:
+            os.mkdir(lock)
+            break
+        except FileExistsError:
+            if time.time() >= deadline:
+                print("fleet-hooks-merge: %s is held (a Claude Code save in flight?) — try again"
+                      % lock, file=sys.stderr)
+                sys.exit(2)
+            time.sleep(0.1)
+    try:
+        return fn()
+    finally:
+        try:
+            os.rmdir(lock)
+        except OSError:
+            pass
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("action", choices=("merge", "check"))
+    ap.add_argument("action", choices=("merge", "check", "keys", "keys-check"))
     ap.add_argument("--settings", default=DEFAULT_SETTINGS)
     ap.add_argument("--source", default=DEFAULT_SOURCE)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--plugin", action="store_true")
+    ap.add_argument("--keys", default=DEFAULT_KEYS)
+    ap.add_argument("--config", default=DEFAULT_CONFIG)
+    ap.add_argument("--skip", action="append", default=[])
     a = ap.parse_args()
+
+    if a.action in ("keys", "keys-check"):
+        return keys_main(a)
 
     src_hooks, table = source_table(a.source)
     settings = load(a.settings)
@@ -210,20 +357,7 @@ def main():
     if a.dry_run:
         print("(dry run — %s not written)" % a.settings)
         return 0
-    if os.path.exists(a.settings):
-        bak = "%s.bak.%d" % (a.settings, int(time.time()))
-        shutil.copy2(a.settings, bak)
-        print("backup  %s" % bak)
-    # Write through a symlinked settings.json, and keep its mode (it is 0600).
-    target = os.path.realpath(a.settings)
-    tmp = target + ".fleet-hooks-merge.tmp"
-    with open(tmp, "w") as f:
-        json.dump(new, f, indent=2, ensure_ascii=False)
-        f.write("\n")
-    if os.path.exists(target):
-        shutil.copymode(target, tmp)
-    os.replace(tmp, target)
-    print("wrote   %s" % a.settings)
+    write_settings(a.settings, new)
     return 0
 
 

@@ -127,6 +127,7 @@ actually moved. One line per step (`<step>: …`), in this order:
   reaches the NEXT session, not this one.
 - **hooks** — `settings-hooks.json` changed → `fleet-hooks-merge.py merge`
   (identity merge, #818); its `replaced` / `removed …` / `appended` lines follow.
+- **keys** — every apply → `fleet-hooks-merge.py keys` (issue #1528): `leftArrowOpensAgents: false` in `~/.claude.json` (the global config — settings.json does not reach it), plugin installs too; `FLEET_KEEP_AGENTS_KEY=1` skips it
 - **commands** — added/changed fleet commands installed into
   `~/.claude/commands/`, retired ones removed, personal ones never touched. The
   gate (#858) is a line that **is** `<!-- fleet skill · owner: <owner> -->`,

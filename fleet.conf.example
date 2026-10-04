@@ -162,6 +162,15 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 # that long is not ticking. GLOBAL; read as a plain seconds count.
 # @label=Install-follow stuck threshold @group=janitor @tier=internal @scope=global @edit=int @unit=seconds
 #FLEET_INSTALL_FOLLOW_STUCK_SECS=86400
+# ← in a Claude pane opens the agents view (and its prompt hint says
+# "← for agents"); a stray press strands you there. The sync pins
+# leftArrowOpensAgents=false into this login's ~/.claude.json — Claude Code's
+# global config, the only place that key is read (hooks/global-config-keys.json,
+# issue #1528) and the doctor's `setkeys` row checks it.
+# Set to 1 to leave that key to this login — the sync stops touching it and the
+# doctor stops asking. GLOBAL.
+# @label=Keep ← opening the agents view @group=janitor @tier=common @scope=global @edit=bool
+#FLEET_KEEP_AGENTS_KEY=0
 
 # --- Orphan-process reap for KEPT worktrees (issue #469) ------------------------
 # ON by default, GLOBALLY. #151 already reaps a worktree's detached processes when
