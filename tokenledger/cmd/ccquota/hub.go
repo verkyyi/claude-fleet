@@ -308,6 +308,9 @@ func runHub(args []string) error {
 		Fleet:               fleetOn,
 		FleetAdmins:         splitList(os.Getenv("CCQUOTA_FLEET_ADMIN_USERS")),
 		FleetAutoAssign:     splitList(os.Getenv("CCQUOTA_FLEET_AUTO_ASSIGN")),
+		// A person's grant on their own logins (claude-fleet#1410).
+		FleetPersonScopes:     fleetPersonScopes(),
+		FleetPersonConfigKeys: splitList(os.Getenv("CCQUOTA_FLEET_PERSON_CONFIG_KEYS")),
 		// Where we are about to bind, so /access can print a URL instead of
 		// "some port". The HTTPS half is filled in below, once the certificate
 		// has told us the name it is actually for.
@@ -395,6 +398,29 @@ func runHub(args []string) error {
 }
 
 // splitList parses a comma-separated flag value, ignoring blanks.
+// fleetPersonScopes reads CCQUOTA_FLEET_PERSON_SCOPES: unset keeps the
+// default grant (nil), set — even to nothing — is the whole list. A scope
+// this build does not know is dropped and said so, never silently widened.
+func fleetPersonScopes() []string {
+	v, ok := os.LookupEnv("CCQUOTA_FLEET_PERSON_SCOPES")
+	if !ok {
+		return nil
+	}
+	out := []string{}
+	for _, sc := range splitList(v) {
+		known := false
+		for _, k := range api.FleetScopes {
+			known = known || k == sc
+		}
+		if !known {
+			log.Printf("CCQUOTA_FLEET_PERSON_SCOPES: unknown scope %q ignored", sc)
+			continue
+		}
+		out = append(out, sc)
+	}
+	return out
+}
+
 func splitList(s string) []string {
 	var out []string
 	for _, p := range strings.Split(s, ",") {

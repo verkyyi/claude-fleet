@@ -665,6 +665,69 @@ the logins assigned to them (claude-fleet#1411) and gets `NOT_FOUND` — the sam
 answer as for a fleet that does not exist — for anyone else's. The `/nodes` page
 shows the same "my sessions" table under the roster.
 
+### Start, message, stop, resume — the Fleet Hub writes (claude-fleet#1410)
+
+The rest of the Fleet Hub moves in on the same switch: `worker_start`,
+`worker_message`, `worker_stop`, `worker_resume`, `config_set` and `gh_comment`
+(journalled writes), plus `gh_issue_view` / `gh_pr_view` / `gh_pr_checks`
+(live reads through the node's `fleet-gh.sh`). Same MCP endpoint, same
+arguments and codes as `bin/fleet_hub.py` (`docs/FLEET-HUB.md`); over HTTP a
+write is `POST /v1/fleet/<tool>` with a JSON body (`Content-Type:
+application/json` — a GET, or any other type, is refused).
+
+The semantics are the Python hub's, unchanged:
+
+- **Journal first.** The hub writes the operation (`pending`) before it sends
+  it; the node's own `fleet-control.py submit` journals it again under the same
+  operation id before its detached executor runs. Read the outcome with
+  `operation_get`.
+- **Idempotency.** `(caller, idempotency_key)` is unique: the same request again
+  returns the first operation (concurrent repeats too — exactly one reaches a
+  node); the same key with different arguments is `IDEMPOTENCY_CONFLICT`.
+- **Unknown is never replayed.** A write the node did not acknowledge, or whose
+  controller ran and did not say, is `unknown` — and stays that way until
+  `operation_get` can reconcile it.
+- **No queue.** A machine that is not connected (or whose agent predates the
+  `write` capability, or speaks an incompatible protocol) is refused at once —
+  `UNAVAILABLE`, nothing journalled, the key still free — and nothing fires when
+  it comes back.
+
+A write travels as a `write` message (`method: submit`, nothing else) down the
+control channel; the agent runs it as its own login, so a mis-addressed fleet is
+refused on the node as `NOT_FOUND` — the node half of "only your own".
+
+**Where a start lands.** `worker_start` may omit `fleet_id` and give `repo`
+instead; `node` defaults to `auto` (or names one roster machine). The hub then
+calls `PickNode(person, repo)` — the placement EPIC B's dispatcher uses — over
+the caller's own logins with a fleet hosting that repo (for the operator's
+doors: the `CCQUOTA_FLEET_ADMIN_USERS` logins, when set). It excludes a machine
+that is offline, above **0.8 load per core**, under **1 GiB free memory**, or
+where the person is already at their **per-person cap**; scores the rest 60% on
+the headroom of the account that login's Claude Code runs on (the busier of its
+5-hour and 7-day windows) and 40% on load; and journals the choice with every
+candidate's verdict as the operation's `placement`:
+
+```json
+"placement": {"machine": "m4", "reason": "chose m4 (score 0.875, load 0.10/core, account 20% used, 1/6 sessions); m5 excluded: load 1.00/core > 0.8", "candidates": [...]}
+```
+
+The per-person cap is the hub setting `fleet.node_cap.<machine>` (default:
+`m4` = 6; a machine with none is uncapped; `0` closes it). It holds for a named
+fleet too — a start or resume past it is `AT_CAPACITY`. The operator sets it:
+
+```sh
+curl -X PUT -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"key":"fleet.node_cap.m4","value":"8"}' https://hub/v1/fleet/settings   # "" = back to the default
+```
+
+**Grants.** Each tool has the Python hub's scope (`worker:start`,
+`worker:message`, `worker:stop`, `worker:resume`, `config:write` plus the key,
+`gh:read`, `gh:comment`; every call needs `fleet:read`). The operator's doors
+hold every scope. A person signed in through WeCom holds
+`CCQUOTA_FLEET_PERSON_SCOPES` (default: everything except `config:write`) on
+their own logins only, and `config_set` only for the keys in
+`CCQUOTA_FLEET_PERSON_CONFIG_KEYS` (default none).
+
 ## The dashboard
 
 One page, no tabs — with a nav bar across the top of it. Those are not in

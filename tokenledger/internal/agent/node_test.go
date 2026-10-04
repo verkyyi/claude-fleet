@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -277,8 +278,8 @@ func TestNodeHelloAdvertisesReads(t *testing.T) {
 	}
 	var h control.Hello
 	json.Unmarshal(f.hellos[0].Payload, &h)
-	if !h.HasCap(control.CapRead) {
-		t.Fatalf("hello capabilities = %v, want %q", h.Capabilities, control.CapRead)
+	if !h.HasCap(control.CapRead) || !h.HasCap(control.CapWrite) {
+		t.Fatalf("hello capabilities = %v, want %q and %q", h.Capabilities, control.CapRead, control.CapWrite)
 	}
 }
 
@@ -372,5 +373,126 @@ func TestAnswerRequestServesReadsOnly(t *testing.T) {
 	defer mu.Unlock()
 	if len(ran) != before {
 		t.Fatalf("a refused method still ran fleet-control.py: %v", ran[before:])
+	}
+}
+
+// answerWrite runs fleet-control.py's submit and nothing else, and never
+// reports more certainty than it has: a structured refusal passes through as
+// a definite refusal, while a controller that ran and did not answer in a
+// form that says — or failed INTERNALly — is UNKNOWN_OUTCOME, so the hub
+// journals it unknown and never re-sends it (claude-fleet#1410).
+func TestAnswerWriteServesSubmitOnly(t *testing.T) {
+	a := nodeTestAgent(t, "http://unused", true)
+	script := filepath.Join(a.cfg.Home, fleetControlScript)
+	os.MkdirAll(filepath.Dir(script), 0o755)
+	os.WriteFile(script, []byte("#!/bin/sh\n"), 0o755)
+
+	var mu sync.Mutex
+	var ran []map[string]any
+	mode := "ok"
+	old := fleetControlCommand
+	fleetControlCommand = func(ctx context.Context, s string, stdin []byte) ([]byte, error) {
+		var req map[string]any
+		json.Unmarshal(stdin, &req)
+		mu.Lock()
+		ran = append(ran, req)
+		m := mode
+		mu.Unlock()
+		if req["method"] == "discover" {
+			return []byte(`{"protocol":1,"machine_id":"m-1","result":{"machine_id":"m-1","fleets":[]}}`), nil
+		}
+		switch m {
+		case "refuse":
+			return []byte(`{"error":{"code":"INVALID_ARGUMENT","message":"bad"}}`), nil
+		case "internal":
+			return []byte(`{"error":{"code":"INTERNAL","message":"Local controller failed"}}`), nil
+		case "garbage":
+			return []byte(`Traceback (most recent call last)`), nil
+		case "dead":
+			return nil, errors.New("signal: killed")
+		}
+		return []byte(`{"protocol":1,"machine_id":"m-1","result":{"operation_id":"o","status":"accepted"}}`), nil
+	}
+	t.Cleanup(func() { fleetControlCommand = old })
+
+	replies := make(chan control.Message, 8)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		for {
+			var m control.Message
+			if wsjson.Read(context.Background(), c, &m) != nil {
+				return
+			}
+			replies <- m
+		}
+	}))
+	t.Cleanup(srv.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.CloseNow()
+
+	write := func(method, params, m string) control.Message {
+		mu.Lock()
+		mode = m
+		mu.Unlock()
+		msg, _ := control.New(control.TypeWrite, control.Request{Method: method, Params: json.RawMessage(params)})
+		a.answerWrite(ctx, conn, msg)
+		select {
+		case r := <-replies:
+			if r.OpID != msg.OpID {
+				t.Fatalf("reply op_id %s, want %s", r.OpID, msg.OpID)
+			}
+			return r
+		case <-ctx.Done():
+			t.Fatal("no reply")
+		}
+		return control.Message{}
+	}
+	env := `{"operation_id":"o","fleet_id":"f","action":"worker_start","params":{"issue":1},"actor":"x"}`
+
+	r := write("submit", env, "ok")
+	var res control.Result
+	json.Unmarshal(r.Payload, &res)
+	if r.Type != control.TypeResult || res.MachineID != "m-1" || !strings.Contains(string(res.Result), `"accepted"`) {
+		t.Fatalf("submit = %+v / %s", r, res.Result)
+	}
+	mu.Lock()
+	last := ran[len(ran)-1]
+	mu.Unlock()
+	if last["method"] != "submit" || last["machine_id"] != "m-1" {
+		t.Fatalf("controller called with %v; want submit under the node's own machine_id", last)
+	}
+	for m, want := range map[string]string{
+		"refuse":   "INVALID_ARGUMENT",
+		"internal": control.CodeUnknownOutcome,
+		"garbage":  control.CodeUnknownOutcome,
+		"dead":     control.CodeUnknownOutcome,
+	} {
+		if r := write("submit", env, m); r.Type != control.TypeError || r.Error.Code != want {
+			t.Errorf("controller %s: %+v; want %s", m, r, want)
+		}
+	}
+
+	mu.Lock()
+	before := len(ran)
+	mu.Unlock()
+	if r := write("fleet_status", `{"fleet_id":"f"}`, "ok"); r.Type != control.TypeError || r.Error.Code != control.CodeRefused {
+		t.Fatalf("a read sent as a write = %+v; want REFUSED", r)
+	}
+	if r := write("submit", `["not","an","object"]`, "ok"); r.Type != control.TypeError || r.Error.Code != control.CodeBadMessage {
+		t.Fatalf("non-object params = %+v; want BAD_MESSAGE", r)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(ran) != before {
+		t.Fatalf("a refused write still ran fleet-control.py: %v", ran[before:])
 	}
 }

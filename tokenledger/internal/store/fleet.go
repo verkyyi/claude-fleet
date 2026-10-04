@@ -65,6 +65,11 @@ CREATE TABLE IF NOT EXISTS fleet_audit (
   outcome      TEXT NOT NULL,
   operation_id TEXT NOT NULL DEFAULT '',
   created      TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS fleet_settings (
+  key     TEXT PRIMARY KEY,
+  value   TEXT NOT NULL,
+  updated TEXT NOT NULL
 );`
 
 // ErrFleetElsewhere is an identity conflict: a heartbeat claims a fleet UUID
@@ -116,6 +121,10 @@ type FleetOperation struct {
 	Created time.Time
 	Updated time.Time
 	Result  string // JSON, empty when none yet
+	// Placement is why the hub put a worker_start where it did
+	// (claude-fleet#1410): the chosen machine and every candidate's verdict,
+	// JSON. Empty for an operation that named its fleet.
+	Placement string
 }
 
 // RecordFleetSnapshot registers machineID (reporting through endpointID) and
@@ -225,34 +234,108 @@ func (s *Store) Fleet(fleetID string) (FleetRow, error) {
 
 // FleetOperation reads one journal row; sql.ErrNoRows when unknown.
 func (s *Store) FleetOperation(id string) (FleetOperation, error) {
+	return scanFleetOperation(s.read.QueryRow(`SELECT `+fleetOpCols+` FROM fleet_operations WHERE id = ?`, id))
+}
+
+// FleetOperationByIdem reads the operation actor journalled under idem;
+// sql.ErrNoRows when that key is unused.
+func (s *Store) FleetOperationByIdem(actor, idem string) (FleetOperation, error) {
+	return scanFleetOperation(s.write.QueryRow(`SELECT `+fleetOpCols+` FROM fleet_operations
+		WHERE actor = ? AND idem = ?`, actor, idem))
+}
+
+const fleetOpCols = `id, fleet_id, action, request, actor, idem, status, created, updated, result, placement`
+
+func scanFleetOperation(row *sql.Row) (FleetOperation, error) {
 	var o FleetOperation
 	var created, updated string
 	var result sql.NullString
-	err := s.read.QueryRow(`SELECT id, fleet_id, action, request, actor, idem, status, created, updated, result
-		FROM fleet_operations WHERE id = ?`, id).Scan(&o.ID, &o.FleetID, &o.Action, &o.Request, &o.Actor,
-		&o.Idem, &o.Status, &created, &updated, &result)
+	err := row.Scan(&o.ID, &o.FleetID, &o.Action, &o.Request, &o.Actor,
+		&o.Idem, &o.Status, &created, &updated, &result, &o.Placement)
 	o.Created, _ = time.Parse(rfc, created)
 	o.Updated, _ = time.Parse(rfc, updated)
 	o.Result = result.String
 	return o, err
 }
 
+// ErrIdemTaken is InsertFleetOperation losing a race: another call by the
+// same actor journalled the same idempotency key first.
+var ErrIdemTaken = errors.New("idempotency key already journalled")
+
 // InsertFleetOperation journals a new operation. The (actor, idem) pair is
 // unique: a retry with the same key finds the first row instead of a second
 // side effect. C3 writes through this; C2 only reads the journal.
+//
+// The insert is ON CONFLICT DO NOTHING on (actor, idem): a concurrent retry
+// that loses gets ErrIdemTaken and reads the winner's row, so two calls with
+// one key never both reach a node.
 func (s *Store) InsertFleetOperation(o FleetOperation) error {
-	_, err := s.write.Exec(`INSERT INTO fleet_operations
-		(id, fleet_id, action, request, actor, idem, status, created, updated, result)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''))`,
+	res, err := s.write.Exec(`INSERT INTO fleet_operations
+		(id, fleet_id, action, request, actor, idem, status, created, updated, result, placement)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?)
+		ON CONFLICT(actor, idem) DO NOTHING`,
 		o.ID, o.FleetID, o.Action, o.Request, o.Actor, o.Idem, o.Status,
-		o.Created.UTC().Format(rfc), o.Updated.UTC().Format(rfc), o.Result)
-	return err
+		o.Created.UTC().Format(rfc), o.Updated.UTC().Format(rfc), o.Result, o.Placement)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrIdemTaken
+	}
+	return nil
 }
 
 // UpdateFleetOperation records a newer status and result for an operation.
 func (s *Store) UpdateFleetOperation(id, status, resultJSON string, at time.Time) error {
 	_, err := s.write.Exec(`UPDATE fleet_operations SET status = ?, result = NULLIF(?, ''), updated = ? WHERE id = ?`,
 		status, resultJSON, at.UTC().Format(rfc), id)
+	return err
+}
+
+// ensureFleetColumns adds the columns later issues gave the fleet tables to a
+// database created before them. Additive only.
+func (s *Store) ensureFleetColumns() error {
+	var n int
+	if err := s.write.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('fleet_operations') WHERE name = 'placement'`).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		if _, err := s.write.Exec(`ALTER TABLE fleet_operations ADD COLUMN placement TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("add fleet_operations.placement: %w", err)
+		}
+	}
+	return nil
+}
+
+// FleetSettings returns the hub's fleet settings (claude-fleet#1410), key →
+// value. Only keys someone set are here; defaults live with their readers.
+func (s *Store) FleetSettings() (map[string]string, error) {
+	rows, err := s.read.Query(`SELECT key, value FROM fleet_settings`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			return nil, err
+		}
+		out[k] = v
+	}
+	return out, rows.Err()
+}
+
+// SetFleetSetting stores one setting; an empty value deletes it, so the
+// default applies again.
+func (s *Store) SetFleetSetting(key, value string, at time.Time) error {
+	if value == "" {
+		_, err := s.write.Exec(`DELETE FROM fleet_settings WHERE key = ?`, key)
+		return err
+	}
+	_, err := s.write.Exec(`INSERT INTO fleet_settings (key, value, updated) VALUES (?, ?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated = excluded.updated`,
+		key, value, at.UTC().Format(rfc))
 	return err
 }
 

@@ -103,6 +103,15 @@ type Server struct {
 	// (CCQUOTA_FLEET_AUTO_ASSIGN). Empty means accounts are only ever opened
 	// by an explicit assignment.
 	FleetAutoAssign []string
+
+	// FleetPersonScopes is the grant a person signed in through WeCom holds
+	// on their own logins (CCQUOTA_FLEET_PERSON_SCOPES, claude-fleet#1410);
+	// nil means DefaultPersonScopes. The operator's doors hold every scope.
+	FleetPersonScopes []string
+	// FleetPersonConfigKeys is the config_set keys a person may write
+	// (CCQUOTA_FLEET_PERSON_CONFIG_KEYS), with config:write in their scopes.
+	// Empty by default: a fleet's caps are the operator's.
+	FleetPersonConfigKeys []string
 	// fleetScopeHook replaces fleetScope in tests (claude-fleet#1409).
 	fleetScopeHook func(*http.Request) (func(hostname, osUser string) bool, error)
 
@@ -161,6 +170,8 @@ func (s *Server) Handler() http.Handler {
 		mux.Handle("/nodes", s.viewerOnly(http.HandlerFunc(s.serveNodesPage)))
 		mux.Handle("/v1/fleet/me", s.viewerOnly(http.HandlerFunc(s.handleFleetMe)))
 		mux.Handle("/v1/fleet/accounts", s.viewerOnly(s.operatorOnly(http.HandlerFunc(s.handleFleetAccounts))))
+		// Per-person node caps (claude-fleet#1410), the operator's.
+		mux.Handle("/v1/fleet/settings", s.viewerOnly(s.operatorOnly(http.HandlerFunc(s.handleFleetSettings))))
 		// The Fleet Hub's read tools (claude-fleet#1409), the same ones
 		// /mcp lists when the module is on.
 		mux.Handle("/v1/fleet/", s.viewerOnly(http.HandlerFunc(s.handleFleet)))

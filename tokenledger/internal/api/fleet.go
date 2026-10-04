@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -58,6 +59,10 @@ type fleetPrincipal struct {
 	// Actor names the caller in the journal and the audit log: the viewer,
 	// or "operator" for the shared token (which names nobody).
 	Actor string
+	// Person is the WeCom principal behind the call, "" for the operator's
+	// doors. It picks the grant (claude-fleet#1410): the operator holds every
+	// scope, a person holds Server.FleetPersonScopes.
+	Person string
 	// scope is nil for the operator (sees everything), else the (machine,
 	// login) pairs this caller may see.
 	scope func(hostname, osUser string) bool
@@ -87,11 +92,18 @@ func (s *Server) FleetPrincipal(r *http.Request) (fleetPrincipal, error) {
 	if err != nil {
 		return fleetPrincipal{}, err
 	}
-	actor := viewerOf(r.Context())
+	// A person is journalled as their WeCom subject, whatever the access
+	// log calls them: it is the key their idempotency and operations are
+	// scoped by.
+	person := principalOf(r.Context())
+	actor := person
+	if actor == "" {
+		actor = viewerOf(r.Context())
+	}
 	if actor == "" {
 		actor = "operator"
 	}
-	return fleetPrincipal{Actor: actor, scope: scope}, nil
+	return fleetPrincipal{Actor: actor, Person: person, scope: scope}, nil
 }
 
 // --- registry feed (heartbeats) -----------------------------------------
@@ -220,6 +232,10 @@ func (s *Server) NodeRead(ctx context.Context, endpointID, method string, params
 	if !control.ReadMethods[method] {
 		return nil, "", fault("INVALID_ARGUMENT", "not a read method: "+method)
 	}
+	timeout := fleetReadTimeout
+	if fleetGHReads[method] {
+		timeout = ghReadTimeout
+	}
 	c := s.nodes.get(endpointID)
 	if c == nil {
 		return nil, "", ErrNodeOffline
@@ -240,7 +256,7 @@ func (s *Server) NodeRead(ctx context.Context, endpointID, method string, params
 	}
 	ch := c.pending.add(msg.OpID)
 	defer c.pending.remove(msg.OpID)
-	ctx, cancel := context.WithTimeout(ctx, fleetReadTimeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	if err := wsjson.Write(ctx, c.conn, msg); err != nil {
 		return nil, "", fault("UNAVAILABLE", "control channel write failed: "+err.Error())
@@ -595,8 +611,13 @@ func operationView(o store.FleetOperation) map[string]any {
 	if o.Result != "" {
 		result = json.RawMessage(o.Result)
 	}
-	return map[string]any{"operation_id": o.ID, "fleet_id": o.FleetID, "action": o.Action,
+	out := map[string]any{"operation_id": o.ID, "fleet_id": o.FleetID, "action": o.Action,
 		"status": o.Status, "created_at": o.Created, "updated_at": o.Updated, "result": result}
+	if o.Placement != "" {
+		// Where a placed worker_start went, and why (claude-fleet#1410).
+		out["placement"] = json.RawMessage(o.Placement)
+	}
+	return out
 }
 
 func errorObject(err error) map[string]string {
@@ -613,13 +634,26 @@ func errorObject(err error) map[string]string {
 	return map[string]string{"code": "INTERNAL", "message": err.Error()}
 }
 
-// CallFleetTool runs one read tool by name — the one door both MCP and HTTP go
-// through, so the audit row is written exactly once per call whichever way it
-// came in.
+// CallFleetTool runs one fleet tool by name — the one door both MCP and HTTP
+// go through, so the audit row is written exactly once per call whichever way
+// it came in.
 func (s *Server) CallFleetTool(req *http.Request, tool string, args map[string]any) (out any, err error) {
+	if args == nil {
+		args = map[string]any{}
+	}
 	fleetID, _ := args["fleet_id"].(string)
+	if wid, ok := args["worker_id"].(string); ok && fleetID == "" {
+		// A lifecycle tool names a worker; its fleet half is what is audited.
+		fleetID, _, _ = fleetid.ParseWorkerID(wid)
+	}
 	opID := ""
 	defer func() {
+		if m, ok := out.(map[string]any); ok && opID == "" {
+			opID, _ = m["operation_id"].(string)
+			if fleetID == "" {
+				fleetID, _ = m["fleet_id"].(string)
+			}
+		}
 		outcome := "OK"
 		if err != nil {
 			outcome = errorObject(err)["code"]
@@ -632,6 +666,13 @@ func (s *Server) CallFleetTool(req *http.Request, tool string, args map[string]a
 			log.Printf("fleet audit: %v", aerr)
 		}
 	}()
+	// Every caller needs fleet:read, whatever else it does (the Python
+	// grant model's first check).
+	if p, perr := s.FleetPrincipal(req); perr != nil {
+		return nil, perr
+	} else if err := s.authorize(p, "fleet:read", ""); err != nil {
+		return nil, err
+	}
 	switch tool {
 	case "fleet_list":
 		refresh, _ := args["refresh"].(bool)
@@ -646,32 +687,76 @@ func (s *Server) CallFleetTool(req *http.Request, tool string, args map[string]a
 		opID, _ = args["operation_id"].(string)
 		return s.OperationGet(req, opID)
 	}
+	if fleetWriteTools[tool] || fleetGHReads[tool] {
+		p, err := s.FleetPrincipal(req)
+		if err != nil {
+			return nil, err
+		}
+		if fleetGHReads[tool] {
+			return s.GHRead(req.Context(), p, tool, args)
+		}
+		return s.SubmitWrite(req.Context(), p, tool, args)
+	}
 	return nil, fault("INVALID_ARGUMENT", "Unknown Fleet tool")
 }
 
-// FleetTools lists the read tools CallFleetTool serves.
-var FleetTools = []string{"fleet_list", "fleet_sessions", "fleet_status", "config_get", "operation_get"}
+// FleetTools lists every tool CallFleetTool serves: the reads of
+// claude-fleet#1409, then the GitHub reads and the journalled writes of
+// claude-fleet#1410.
+var FleetTools = []string{"fleet_list", "fleet_sessions", "fleet_status", "config_get", "operation_get",
+	"gh_issue_view", "gh_pr_view", "gh_pr_checks",
+	"worker_start", "worker_message", "worker_stop", "worker_resume", "config_set", "gh_comment"}
 
-// handleFleet serves /v1/fleet/<tool>?fleet_id=…&operation_id=…&refresh=1.
+// handleFleet serves /v1/fleet/<tool>: a read as GET with query arguments
+// (?fleet_id=…&operation_id=…&refresh=1&number=…&repo=…&fields=…), or any tool
+// as POST with a JSON object body. A write is POST only, and the body must be
+// sent as application/json — a type no cross-site form can send without a
+// preflight, so a signed-in person's cookie cannot be ridden into a write.
 func (s *Server) handleFleet(w http.ResponseWriter, r *http.Request) {
 	tool := r.URL.Path[len("/v1/fleet/"):]
-	q := r.URL.Query()
 	args := map[string]any{}
-	if v := q.Get("fleet_id"); v != "" {
-		args["fleet_id"] = v
-	}
-	if v := q.Get("operation_id"); v != "" {
-		args["operation_id"] = v
-	}
-	if b, err := strconv.ParseBool(q.Get("refresh")); err == nil {
-		args["refresh"] = b
+	switch r.Method {
+	case http.MethodPost:
+		if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+			httpError(w, http.StatusUnsupportedMediaType, "send the tool's arguments as application/json")
+			return
+		}
+		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+		dec.UseNumber()
+		if err := dec.Decode(&args); err != nil || args == nil {
+			httpError(w, http.StatusBadRequest, "the body must be one JSON object of tool arguments")
+			return
+		}
+	case http.MethodGet:
+		if fleetWriteTools[tool] {
+			w.Header().Set("Allow", "POST")
+			httpError(w, http.StatusMethodNotAllowed, tool+" is a write: POST it")
+			return
+		}
+		q := r.URL.Query()
+		for _, k := range []string{"fleet_id", "operation_id", "repo", "fields"} {
+			if v := q.Get(k); v != "" {
+				args[k] = v
+			}
+		}
+		if v := q.Get("number"); v != "" {
+			args["number"] = json.Number(v)
+		}
+		if b, err := strconv.ParseBool(q.Get("refresh")); err == nil {
+			args["refresh"] = b
+		}
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		httpError(w, http.StatusMethodNotAllowed, "GET or POST")
+		return
 	}
 	out, err := s.CallFleetTool(r, tool, args)
 	w.Header().Set("Cache-Control", "no-store")
 	if err != nil {
 		e := errorObject(err)
 		status := map[string]int{"INVALID_ARGUMENT": 400, "NOT_FOUND": 404, "FORBIDDEN": 403,
-			"UNAVAILABLE": 503, "TIMEOUT": 504, control.CodeProtoMismatch: 409}[e["code"]]
+			"UNAVAILABLE": 503, "TIMEOUT": 504, control.CodeProtoMismatch: 409,
+			"IDEMPOTENCY_CONFLICT": 409, "AT_CAPACITY": 429, "NO_ELIGIBLE_NODE": 503}[e["code"]]
 		if status == 0 {
 			status = http.StatusBadGateway
 			if e["code"] == "INTERNAL" {
