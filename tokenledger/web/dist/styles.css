@@ -1,0 +1,1154 @@
+/* web/dist/styles.css — moved verbatim from the old single-file
+   web/dist/index.html <style> block (palette tokens, hero odometer, live
+   strip, cards, bars, gauges, tables, tooltip, legend), plus the new sticky
+   scope bar / kpi / timeline / heatmap / findings / detail-overlay / fleet
+   rules from the Task 11 brief.
+   NOTE: the old bare `header { display:flex; ... }` rule is intentionally
+   dropped here — the new index.html's <header class="scope" id="scope">
+   is itself a <header> element, so that unqualified selector would still
+   match it and force .row1/.progress into a flex ROW instead of the
+   intended vertical stack (as of Task 15 the header holds only .row1 and
+   .progress — chips/select/span moved out to .scope-controls, mounted
+   per-view; see that section below). The three *qualified* old header
+   rules (header h1 / header .sub / header .spacer) are harmless or still
+   load-bearing (header .spacer keeps the new .row1's <span class="spacer">
+   pushing the theme toggle right) and are kept verbatim below. */
+
+/* Palette: the dataviz reference instance, validated with
+   scripts/validate_palette.js for both surfaces. Light mode reports aqua and
+   yellow below 3:1, so every chart ships a legend, direct labels and a table
+   view — colour never carries meaning on its own here. */
+:root {
+  color-scheme: light;
+  --plane:        #f9f9f7;
+  --surface:      #fcfcfb;
+  --border:       #e3e2dd;
+  --grid:         #eeede9;
+  --ink:          #0b0b0b;
+  --ink-2:        #52514e;
+  --ink-3:        #85847e;
+
+  --s1: #2a78d6;  --s2: #eb6834;  --s3: #1baf7a;  --s4: #eda100;
+  --s5: #e87ba4;  --s6: #008300;  --s7: #4a3aa7;  --s8: #e34948;
+
+  --good: #0ca30c;  --warning: #fab219;  --serious: #ec835a;  --critical: #d03b3b;
+  --shadow: 0 1px 2px rgba(0,0,0,.05), 0 4px 12px rgba(0,0,0,.04);
+  /* tokenman -- the same palette the badge renders with */
+  --tm-pac: #f0b90b; --tm-eye: #1a1a1f; --tm-dot: #8a7a55;
+  --tm-cell: #e6e2d8; --tm-cell-top: #ffffff; --tm-digit: #1a1a1f; --tm-comma: #8a8577;
+
+  /* How much of the viewport the sticky bar covers, and therefore how far
+     above a scroll target the page must stop so the target is not parked
+     underneath it. scope.js MEASURES the bar and overwrites this on every spy
+     frame (the bar wraps at narrow widths, and loses its wordmark under
+     720px), so one number serves both the anchors here and the spy's own
+     line — the two cannot drift apart. This value is the pre-JS fallback and
+     the width the bar actually is at desktop size. */
+  --navh: 96px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --plane: #0d0d0d; --surface: #1a1a19; --border: #2f2f2c; --grid: #262624;
+    --ink: #ffffff; --ink-2: #c3c2b7; --ink-3: #8b8a81;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+    --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+    --shadow: 0 1px 2px rgba(0,0,0,.4);
+    --tm-pac: #ffd43b; --tm-eye: #0d0f14; --tm-dot: #f2d9a6;
+    --tm-cell: #1a1d26; --tm-cell-top: #2b2f3b; --tm-digit: #f3efe6; --tm-comma: #6b7080;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --plane: #0d0d0d; --surface: #1a1a19; --border: #2f2f2c; --grid: #262624;
+  --ink: #ffffff; --ink-2: #c3c2b7; --ink-3: #8b8a81;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+  --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+  --shadow: 0 1px 2px rgba(0,0,0,.4);
+  --tm-pac: #ffd43b; --tm-eye: #0d0f14; --tm-dot: #f2d9a6;
+  --tm-cell: #1a1d26; --tm-cell-top: #2b2f3b; --tm-digit: #f3efe6; --tm-comma: #6b7080;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--plane); color: var(--ink);
+  font: 14px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: -.01em; }
+a { color: var(--s1); }
+
+.wrap { max-width: 1180px; margin: 0 auto; padding: 20px 20px 64px; }
+
+/* Hero counter. The one number on this page that only ever grows.
+   Rendered as the tokenman odometer: the character eats the dot stream while
+   the fleet is working, and the wheels roll to follow the projection. */
+/* The lifetime token counter is a badge. Every metric inside it is in em, so
+   the one font-size below sets the whole thing -- it used to reach 40px, then
+   15px as a badge opening <main>, and 12.5px is what it costs to live in the
+   top bar (#96). The bar is where the size argument stops being cosmetic: see
+   `.scope #pulse` below for why this number is load-bearing.
+   No padding: the badge no longer sits in page flow with cards under it. */
+.hero { font-size: 12.5px; }
+.hero .tm {
+  display: inline-flex; align-items: center; gap: .4em; flex-wrap: nowrap;
+  padding: .26em .7em .26em .4em; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--surface); max-width: 100%;
+}
+.hero svg.pac { width: 1.25em; height: 1.25em; flex: none; }
+.hero .ju, .hero .jl { transform-box: view-box; transform-origin: 24px 24px; }
+.hero .ju { transform: rotate(-22deg); animation: tm-ju .5s ease-in-out infinite; }
+.hero .jl { transform: rotate(22deg);  animation: tm-jl .5s ease-in-out infinite; }
+@keyframes tm-ju { 0%,100% { transform: rotate(-6deg); } 50% { transform: rotate(-36deg); } }
+@keyframes tm-jl { 0%,100% { transform: rotate(6deg); }  50% { transform: rotate(36deg); } }
+.hero .dots { display: flex; gap: .34em; overflow: hidden; width: 1.5em; flex: none; }
+.hero .dots .run { display: flex; gap: .34em; animation: tm-eat .5s linear infinite; }
+.hero .dots i { width: .22em; height: .22em; border-radius: 50%; background: var(--tm-dot); flex: none; }
+@keyframes tm-eat { to { transform: translateX(-.56em); } }
+.hero .odo {
+  display: flex; align-items: center; gap: .1em;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
+  font-weight: 700; font-variant-numeric: tabular-nums; color: var(--tm-digit);
+}
+.hero .tilde { color: var(--ink-3); font-weight: 400; margin-right: .1em; }
+.hero .wheel {
+  position: relative; width: .74em; height: 1.28em; overflow: hidden; border-radius: .12em;
+  background: var(--tm-cell); box-shadow: inset 0 1px 0 var(--tm-cell-top);
+}
+.hero .strip { position: absolute; left: 0; top: 0; width: 100%;
+  transition: transform .45s cubic-bezier(.22,.8,.2,1); }
+.hero .strip.snap { transition: none; }
+.hero .strip span { display: block; height: 1.28em; line-height: 1.28em; text-align: center; }
+.hero .sep { color: var(--tm-comma); width: .32em; text-align: center; }
+/* Inline inside the badge now, not a caption row under it. */
+.hero .k { color: var(--ink-3); font-size: .68em; margin: 0 0 0 .15em;
+  text-transform: uppercase; letter-spacing: .07em; white-space: nowrap; }
+/* Stale: the fleet has stopped reporting. The character stops eating and the
+   whole thing fades -- a frozen counter that looks identical to a running one
+   reads as "nothing is happening", not "we have lost contact". */
+.hero.stale .tm { opacity: .4; transition: opacity .6s ease; }
+.hero.stale .ju, .hero.stale .jl, .hero.stale .dots .run { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) {
+  .hero .ju, .hero .jl, .hero .dots .run { animation: none; }
+  .hero .strip { transition: none; }
+}
+
+header h1 { font-size: 17px; }
+header .sub { color: var(--ink-3); font-size: 12.5px; }
+header .spacer { flex: 1 1 auto; }
+
+select, button {
+  font: inherit; font-size: 13px; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 7px; padding: 5px 9px; cursor: pointer;
+}
+button:hover, select:hover { border-color: var(--ink-3); }
+button[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+
+.controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 18px; }
+.controls .label { color: var(--ink-3); font-size: 12px; }
+
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; padding: 16px 18px; box-shadow: var(--shadow); margin-bottom: 16px;
+  /* FIX (execution review, Finding 1 follow-up): a grid item's automatic
+     minimum width is its CONTENT's min-content, not 0 — so a .card sitting
+     inside .grid2 (currently the only place, but this is a property a card
+     should hold anywhere) refused to shrink narrower than its widest
+     unbreakable content, forcing the whole card past its 1fr track and out
+     the viewport on narrow screens. Chosen HERE (not `.grid2 > *`) because
+     every current and plausible future .grid2 child is a .card, and this
+     way the invariant travels with the component rather than being scoped
+     to one container that happens to use it today. */
+  min-width: 0;
+}
+.card > h2 { font-size: 13px; letter-spacing: .02em; text-transform: uppercase; color: var(--ink-2); margin-bottom: 4px; }
+.card > .hint { color: var(--ink-3); font-size: 12px; margin: 0 0 14px; }
+
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+@media (max-width: 820px) { .grid2 { grid-template-columns: 1fr; } }
+
+/* ---- banner: the degrade path. An unavailable reading is never a 0% gauge. */
+.banner {
+  border: 1px solid var(--border); border-left: 3px solid var(--warning);
+  background: var(--surface); border-radius: 10px; padding: 12px 14px;
+  margin-bottom: 16px; display: flex; gap: 10px; align-items: flex-start;
+}
+.banner.err { border-left-color: var(--critical); }
+.banner .ico { font-size: 15px; line-height: 1.3; }
+.banner .msg { font-size: 13px; color: var(--ink-2); }
+.banner .msg b { color: var(--ink); font-weight: 600; }
+/* A `.dismiss` close button lived here until #125. Exactly one banner ever had
+   one -- the all-subscriptions caveat, the only STANDING condition among them
+   -- and deleting that banner left no banner that should be closable: the rest
+   report a fault, and a fault is fixed, not dismissed. */
+
+/* ---- the quota card (#95, #129, #153) ----
+
+   One SUBSCRIPTION is one line (#153). It used to be one line per WINDOW (#95)
+   with the percent as the biggest number on the card (#129), flowed into two
+   lanes of ten columns on wide screens. The operator reversed that: the two
+   windows share a line, the shorter one in a third of it and the week in the
+   other two thirds, and the percent moved into the state capsule in the same
+   small type as everything else. Five subscriptions are five lines.
+
+   A window cell is four columns: label · capsule · bar · time to reset. Every
+   cell uses the same four whether the window is live, BLOCKED (the capsule
+   spans the capsule and bar columns) or moot (label only), so a blocked row is
+   exactly as tall as a live one and its reset time sits in the same column as
+   everyone else's. The capsule column is sized to the widest percent ("100%"),
+   so the bars start on one line down the card.
+
+   The account name still spans the line above its windows rather than taking
+   a column: a name in column one would push every number right by however long
+   the longest email is. */
+.qgroup { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px 28px; margin-top: 18px; }
+.qgroup-head { grid-column: 1 / -1; padding-bottom: 2px; border-bottom: 1px solid var(--grid); }
+.qgroup-name { font-size: 13px; font-weight: 640; letter-spacing: .02em; }
+.qentry { min-width: 0; }
+.qacct { margin-top: 9px; font-size: 12px; font-weight: 600; color: var(--ink-2); overflow-wrap: anywhere; }
+.qempty { font-size: 11.5px; color: var(--ink-3); margin: 2px 0 0; }
+.quota-card .qsub { margin-top: 22px; }
+
+.qrow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 18px; margin-top: 3px; }
+.qrow-named { grid-template-columns: minmax(0, 1fr); }
+.qcell { display: grid; grid-template-columns: 24px 46px minmax(24px, 1fr) auto; gap: 7px; align-items: center; min-width: 0; height: 22px; }
+.qrow-named .qcell { grid-template-columns: auto 46px minmax(24px, 1fr) auto; }
+.qw { font: 600 11.5px/1 ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace; color: var(--ink-2); white-space: nowrap; }
+.qcell .state { font: 600 11px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace; text-align: center; padding: 0 6px; border-radius: 999px; border: 1px solid; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.qcell .meta { font-size: 11.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+/* BLOCKED spans the capsule and bar columns; whatever rides with it (a credit
+   balance) follows the capsule and is clipped before it can push the reset
+   time out of its column. */
+.qblocked { grid-column: 2 / 4; display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; white-space: nowrap; }
+.qextra { font-size: 11px; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; }
+.track { height: 8px; border-radius: 4px; background: var(--grid); overflow: hidden; }
+.fill { height: 100%; border-radius: 4px; transition: width .35s ease; }
+
+/* Two lanes once there is room for two (#129's breakpoint, kept): 1180px is
+   `.wrap`'s own max-width, so the lanes only ever run at the one width the card
+   has from there on. A subscription is one block now, so plain auto-flow does
+   what #129 needed subgrid for — there are no cross-block columns to keep in
+   step, every block carries its own. */
+@media (min-width: 1180px) {
+  .qgroup { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* On a phone the two cells cannot share a line: the week drops under the five
+   hours. Each cell keeps its own 22px, so a blocked account is still exactly as
+   tall as a live one. */
+@media (max-width: 640px) {
+  .qrow { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  /* A window the account does not have (Codex reports no 5H) holds its column
+     open on one line; stacked, there is no column to hold, only a blank line. */
+  .qcell:empty { display: none; }
+}
+
+/* Status colour is never carried alone: the quota capsule prints the percent
+   it is a band of, and its title/aria-label carries the band's word (#153). */
+.st-good     { color: var(--good);     border-color: var(--good); }
+.st-warning  { color: var(--warning);  border-color: var(--warning); }
+.st-serious  { color: var(--serious);  border-color: var(--serious); }
+.st-critical { color: var(--critical); border-color: var(--critical); }
+.bg-good     { background: var(--good); }
+.bg-warning  { background: var(--warning); }
+.bg-serious  { background: var(--serious); }
+.bg-critical { background: var(--critical); }
+
+/* ---- bars ---- */
+.bars { display: flex; flex-direction: column; gap: 9px; }
+/* The bar gets the row, and the two text columns are capped (issue #51).
+   Measured before this: in a `.grid2` breakdown card 562px wide, `.k` took
+   its full 250px and the `auto` value column took its content's 239px, which
+   left the BAR — the only part of a bar chart that encodes anything — 11
+   pixels. Two 11px bars cannot be compared no matter how honestly they are
+   scaled, so the shared scale above is worth nothing without this.
+   Percentage caps keep the track at ≥44% of the row at every width; both
+   text columns already clip with an ellipsis, and both are recoverable —
+   `.k` by its title, `.v` by the title rankedBars now sets on it. */
+.bar-row { display: grid; grid-template-columns: minmax(64px, 24%) minmax(0, 1fr) minmax(0, 32%); gap: 12px; align-items: center; }
+.bar-row .k { font-size: 12.5px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* FIX (execution review, Finding 1 follow-up): unlike `.k` just above,
+   this had no overflow/text-overflow, so its `auto` grid column's
+   automatic minimum stayed its content's full min-content width — a
+   pathological "tokens · $ · delta" string (measured: 218px on real
+   data, driven by an uncapped percentage — see lib/format.js's delta())
+   forced the whole row, and therefore the whole card, wider than its
+   track. `overflow: hidden` on a grid/flex item also resets its
+   automatic minimum size to 0 per spec (the same mechanism `.k` already
+   relies on for a long project path) — no explicit max-width needed,
+   the `auto` track still grows to fill available space when there IS
+   room, and only clips when the grid is actually too narrow to fit it. */
+.bar-row .v { font-size: 12.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Issue #99: the same column, as CELLS. One string packed with three facts
+   ("717,858 · 23.0% · claude — subscription") is about 260px of content in a
+   column that is 32% of half a page — roughly 180px — so on real data every
+   row lost its tail to the ellipsis, and the figures that survived did not
+   line up down the list because each row's text starts wherever its own
+   content does. Laid out as flex items from the right with `.pct` given a
+   fixed width, tokens sit under tokens and shares under shares, and the
+   reader can scan the column instead of reading each row. The gap does the
+   separating that "·" used to: right-aligned figures in their own columns
+   are already read as a table, and a cell can then be absent without
+   leaving a dangling separator behind it. */
+.bar-row .v { display: flex; justify-content: flex-end; align-items: baseline; gap: 14px; }
+.bar-row .v .vc { min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: right; }
+/* What gives way first, when the row is too narrow for all of it. Order
+   matters and it is not the DOM order: the token count is the figure the row
+   is FOR, and a `flex: none` share next to a shrinkable count meant that at
+   phone width the share survived at its full 46px while the count collapsed
+   to nothing — measured at a 390px viewport, where the row read "23.0% ↗".
+   The floor on `.tok` is the fix: it holds the count, the share absorbs the
+   shortfall, and the share is the one that can afford to go, since the bar
+   already draws it and the tip and the table both still carry it.
+
+   `width` on `.pct` is a BASIS, not a promise — it is what lines the % signs
+   up down the card whenever there is room, which is every width that has any
+   space to spare. */
+.bar-row .v .tok { flex: 0 1 auto; min-width: 4.5em; }
+.bar-row .v .pct { flex: 0 1 46px; width: 46px; color: var(--ink-3); }
+.bar-row .v .money { flex: none; }
+/* The drill-in link (issue #99). `flex: none` is what keeps it out of the
+   ellipsis: `.v` packs from the right, so when the row is too narrow the
+   overflow falls off the left and the figure cells — which DO shrink — are
+   what clips. `grid-template-columns` above is deliberately untouched, so a
+   card with links draws its track at exactly the width a card without them
+   does; see rankedBars for why that is not cosmetic. A 22px box, not a bare
+   glyph: the tap target is the point. */
+.bar-row .drill-in {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 5px; text-decoration: none;
+  font-size: 12.5px; color: var(--ink-3); flex: none;
+}
+.bar-row .drill-in:hover, .bar-row .drill-in:focus-visible { color: var(--s1); background: var(--grid); }
+.bar-track { height: 16px; background: var(--grid); border-radius: 4px; overflow: hidden; position: relative; }
+.bar-fill { height: 100%; background: var(--s1); border-radius: 0 4px 4px 0; }
+/* Previous period, on the track at the same scale as the fill (issue #51).
+   A 2px rule, not a second bar: the reader is comparing ONE length against
+   ONE mark, and a filled shadow bar behind a filled bar reads as a stack.
+   `left` is the marker's own position, so `translateX(-50%)` centres the
+   rule ON the value rather than starting it there — at 100% the whole rule
+   still lands inside the track rather than being clipped in half. The tick
+   above it is what survives when the fill is darker than the rule. */
+.bar-prev {
+  position: absolute; top: 0; bottom: 0; left: 0; width: 2px;
+  transform: translateX(-50%); background: var(--ink-3); opacity: .85;
+  box-shadow: 0 0 0 1px var(--surface); border-radius: 1px; pointer-events: auto;
+}
+
+/* ---- legend ---- */
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 12px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); }
+.legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+
+svg { display: block; max-width: 100%; overflow: visible; }
+
+/* ---- charts (issue #55) ----
+
+   `.chart` is every viewBox'd SVG charts.js and repo.js draw. Two rules, and
+   both exist because a viewBox scales EVERYTHING inside it, type included.
+
+   `height: auto` is the first. A viewBox plus `width:100%` plus a pixel
+   `height` gives preserveAspectRatio two constraints, so it fits the tighter
+   one and centres the rest: a 900x190 chart drew at 900px inside a 1104px
+   card (~100px of white each side), and on a 340px phone it drew 72px of
+   content inside a 190px box — 118px of dead white under every chart. With
+   no height attribute the viewBox's own ratio sizes the box and the drawing
+   fills its slot at every width.
+
+   The font-size is the second, and the `--cw` / `--slot` pair is what makes
+   it honest. Text in a viewBox is measured in USER UNITS, so what a reader
+   sees is `declared * rendered_width / design_width`. The old `font-size:
+   10.5` attribute therefore rendered ~10.5px in a half-width card, ~7.7px in
+   a full-width one and ~4px on a phone — the same declaration, three sizes,
+   and two charts side by side in one row visibly disagreeing.
+
+     --cw    the chart's own viewBox width, set by the JS that draws it.
+     --slot  roughly how many CSS pixels the surrounding card actually gets.
+
+   Dividing one by the other cancels the scaling out: rendered size works out
+   as `11px * real_width / --slot`, i.e. one number everywhere `--slot` is
+   honest, whatever `W` an individual chart was drawn at. `--slot` is the one
+   thing CSS cannot measure, so it is declared per layout below and stepped by
+   media query — which is also why no ResizeObserver appears anywhere near
+   this: a media query and a ratio are both recomputed by the layout engine on
+   every reflow, for free. (The brush is percentage-positioned for the same
+   reason; see charts.js's `timeline`.) */
+:root { --slot: 340; }                        /* phone: one card, most of the viewport */
+@media (min-width: 481px) { :root { --slot: 470; } }
+@media (min-width: 641px) { :root { --slot: 620; } }
+@media (min-width: 821px) {
+  /* .grid2 splits into two columns here, so a card's width stops tracking the
+     viewport: 1180 max-width - 40 wrap padding - 36 card padding = 1104 for a
+     full-bleed card, (1140 - 16 gap) / 2 - 36 = 526 for one of a pair, and
+     min(760, 100vw) - 40 = 720 inside the session panel. */
+  :root { --slot: 1100; }
+  .grid2 { --slot: 525; }
+  .detail { --slot: 720; }
+}
+svg.chart { width: 100%; height: auto; font-size: calc(var(--cw) / var(--slot) * 11px); }
+
+table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+th { color: var(--ink-3); font-weight: 600; font-size: 11.5px; text-transform: uppercase; letter-spacing: .03em; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.scroll { overflow-x: auto; }
+
+/* ---- live strip ---- */
+.live {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 14px 18px; box-shadow: var(--shadow); margin-bottom: 16px;
+}
+.live-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+.live-head h2 { font-size: 13px; letter-spacing: .02em; text-transform: uppercase; color: var(--ink-2); }
+.live-head .note { color: var(--ink-3); font-size: 11.5px; }
+/* The live strip is NOT a `.card`, so neither `.card > .hint` nor the nested
+   `.card * .hint` rule reaches it. Without this, the sentence stating the
+   active window renders at body size with a browser default paragraph margin —
+   bigger than the 13px title directly above it, which is the same heading
+   inversion issue #51 fixed inside cards. */
+.live > .hint { color: var(--ink-3); font-size: 11.5px; margin: -6px 0 13px; }
+.pulse {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--good);
+  box-shadow: 0 0 0 0 var(--good); animation: pulse 2s infinite;
+}
+.pulse.off { background: var(--ink-3); animation: none; box-shadow: none; }
+@keyframes pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(12,163,12,.5); }
+  70%  { box-shadow: 0 0 0 7px rgba(12,163,12,0); }
+  100% { box-shadow: 0 0 0 0 rgba(12,163,12,0); }
+}
+@media (prefers-reduced-motion: reduce) { .pulse { animation: none; } }
+
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 14px; }
+.tile .n {
+  font-size: 26px; font-weight: 620; letter-spacing: -.02em;
+  font-variant-numeric: tabular-nums; line-height: 1.15;
+}
+.tile .l { font-size: 11.5px; color: var(--ink-3); margin-top: 2px; }
+
+.live-rows { margin-top: 16px; display: flex; flex-direction: column; gap: 7px; }
+.live-row {
+  display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: center;
+  padding: 7px 10px; border-radius: 8px; background: var(--grid);
+}
+.live-row .who { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-row .who b { font-weight: 600; }
+.live-row .who span { color: var(--ink-3); }
+.live-row .rate { font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ctxbar { width: 54px; height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; }
+.ctxbar i { display: block; height: 100%; background: var(--s1); }
+
+.muted { color: var(--ink-3); font-size: 12.5px; }
+.empty { color: var(--ink-3); font-size: 13px; padding: 22px 0; text-align: center; }
+footer { margin-top: 26px; color: var(--ink-3); font-size: 12px; line-height: 1.7; }
+.tip {
+  position: fixed; pointer-events: none; z-index: 20; opacity: 0;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 7px 10px; font-size: 12px; box-shadow: var(--shadow); transition: opacity .1s;
+  font-variant-numeric: tabular-nums; max-width: 260px;
+}
+
+/* ------------------------------------------------------------------------ */
+/* Everything below is new for the module-shell redesign (Task 11 brief).   */
+
+/* `hidden` has to actually hide.
+   Every `display` rule in this file outranks the user-agent's
+   `[hidden] { display: none }` — same specificity, and an author sheet beats
+   the UA sheet on origin. So `.band { display: flex }` quietly defeated the
+   `hidden` attribute app.js sets on #repo-band, and the Progress band rendered
+   on hubs no shipper has ever pushed to: an empty labelled band asserting a
+   feature nobody turned on. Same for `.scope-controls .chips-row`, which held
+   8px of dead padding whenever there were no chips, against its own comment
+   below. Found while wiring #54's nav (a nav entry must appear exactly when
+   its band does), and `!important` is the point rather than a shortcut — this
+   rule exists to outrank every `display` in this file, including ones not
+   written yet. */
+[hidden] { display: none !important; }
+
+/* scope bar (Task 15: nav only — no subscription/span/chips here any more;
+   see .scope-controls below for where those moved. #54 gave it the section
+   nav: wordmark, anchor nav, language switch, theme toggle.) */
+.scope { position: sticky; top: 0; z-index: 20; background: var(--surface); border-bottom: 1px solid var(--border); }
+.scope .row1 { display: flex; align-items: center; gap: 14px; padding: 11px 20px; flex-wrap: wrap; }
+.scope h1 { font-size: 17px; }
+
+/* The section nav (#54).
+   Deliberately NOT the segmented-control look the retired view tabs had (the
+   `.scope .views` rules this replaces are gone with them). That styling says
+   "pick one of these modes, the others are put away"; these are four places on
+   one page that is all there at once, and a filled pill claiming otherwise
+   would re-assert the tab split in CSS after the markup stopped making it.
+   Plain text, with the current section marked by weight and a rule under it —
+   a position indicator, not a selected state.
+   It scrolls rather than wraps: wrapping grows the sticky bar, and the bar's
+   height is the offset every anchor lands against (--navh).
+
+   `flex: 1 1 0` is what makes that sentence true, and #123 is where it had to
+   be. The nav had `min-width: 0` at mobile "to let the flex item shrink below
+   its content and actually scroll" — but `.row1` is `flex-wrap: wrap`, and a
+   wrapping flex container breaks its lines on each item's HYPOTHETICAL size,
+   before any shrinking happens. So the nav's ~219px of content pushed the rest
+   of the bar onto a second line rather than scrolling, and the nav then had a
+   full line to itself and never needed to shrink at all. Nothing exposed it
+   while the bar's right-hand side was two 30px buttons and a badge that hides
+   on phones; adding the alert bell did, at 375px (--navh 58 → 95) and again in
+   the 721–810px band where the wordmark and the token badge are both still up.
+   A zero BASIS is the fix: the nav asks for no width of its own, takes what is
+   left after the fixed items, and scrolls inside it — which is what the
+   paragraph above always said it did. */
+.secnav { display: flex; align-items: center; gap: 2px; overflow-x: auto; scrollbar-width: none; flex: 1 1 0; min-width: 0; }
+/* ...and with the nav growing, the spacer beside it must not. They would
+   otherwise split the free space and leave the language/theme pair stranded in
+   the middle of the bar. The spacer is NOT redundant, which is why this is a
+   conditional rather than a deletion: #secnav is `hidden` in the shell until
+   app.js decides which entries exist, and on that first frame the spacer is the
+   only thing holding the right-hand cluster against the right edge. */
+.scope .row1 .secnav:not([hidden]) ~ .spacer { flex: 0 0 auto; }
+.secnav::-webkit-scrollbar { display: none; }
+.secnav button {
+  border: 0; background: transparent; cursor: pointer; font: inherit; font-size: 13px;
+  color: var(--ink-3); padding: 6px 10px; border-radius: 8px; white-space: nowrap;
+  border-bottom: 2px solid transparent; border-radius: 8px 8px 0 0;
+}
+.secnav button:hover { color: var(--ink-2); background: var(--grid); }
+.secnav button[aria-current="true"] { color: var(--ink); font-weight: 600; border-bottom-color: var(--s1); }
+.secnav button:focus-visible { outline: 2px solid var(--s1); outline-offset: -2px; }
+/* The two "how this page is rendered for me" controls, as one pair at the right
+   of the bar. They sit tighter than the bar's own 14px gap because they belong
+   together, and #lang is width-locked: its label alternates between "EN" and
+   "中", and a button that changes width on click drags the theme toggle with it. */
+.scope #lang, .scope #theme { padding: 5px 0; width: 30px; text-align: center; }
+.scope #lang { margin-right: -8px; }
+
+/* The lifetime token badge's slot in the bar (#96).
+
+   THE HEIGHT IS THE POINT. --navh is this bar measured (scope.js's navHeight),
+   and it is the scroll-margin everything the page scrolls to lands against --
+   the session overlay closing back onto its row, a browser restoring a scroll
+   position. The badge's first frame arrives about one round trip after the page
+   does: the stream that feeds it is opened only once the first screen's fetches
+   have settled (now.js's startLive says why). So a badge that made this bar
+   taller would be changing that offset a round trip late, under a reader who
+   has already been handed a page laid out against the old one.
+
+   The badge is therefore sized to fit inside the height the bar ALREADY has,
+   rather than being given a slot of its own. Measured at 61af559, this row's
+   content box is 33.5px, set by a .secnav button (13px/1.5 + 6px padding + the
+   2px current-view rule); with the nav hidden it is 31.5px, set by #lang. The
+   pill below is ~27px at 12.5px type. Inserting it changes the bar's height by
+   exactly nothing -- so there is no shift to correct, and no reserved height to
+   keep in sync with the badge's real one, which is the failure mode a fixed
+   slot would have had: a magic number that silently stops matching.
+
+   #98 had already made the bar's height self-correcting for its own reasons (a
+   ResizeObserver on the bar; see scope.js), and that is the backstop for what
+   sizing cannot promise -- `.row1` wraps, and a width, locale or default font
+   nobody tried could still put the badge on a second row. Note the order:
+   fitting is the mechanism, the observer is the net. A badge that relied on the
+   net would re-publish --navh correctly and still have grown the bar under the
+   reader's eyes, which is the part no observer can undo. */
+.scope #pulse { display: flex; align-items: center; min-width: 0; }
+/* Empty means empty -- no pill, and no 14px flex gap left where one would have
+   been. Two selectors, because there are two different empties: before the
+   first frame #pulse itself has no children, and on a scope change now.js
+   clears the persistent .hero-wrap without unmounting it (renderNow), which
+   leaves #pulse holding an empty div and therefore not :empty at all. */
+.scope #pulse:empty, .scope #pulse:has(> .hero-wrap:empty) { display: none; }
+
+/* The alert bell's slot in the bar (#123).
+
+   IT OBEYS #pulse's HEIGHT RULE, IN BOTH OF ITS STATES. That rule is the one
+   above: whatever goes in this bar fits the height the bar already has, because
+   the bar's height is --navh and --navh is the scroll-margin every anchor on
+   the page lands against. A bell has a second state #pulse does not, and it is
+   the dangerous one -- an open panel of eight findings in page flow would push
+   this row down by most of a screen, re-publish --navh through scope.js's
+   ResizeObserver, and move every landing point on the page at the moment the
+   reader clicked something urgent.
+
+   So: the SUMMARY fits (same recipe as .hero -- one font-size, everything
+   inside it in em, measured ~27px against this row's 33.5px, set by a .secnav
+   button), and the PANEL is taken out of flow. Neither state touches the bar's
+   height; the observer stays a backstop rather than a mechanism, which is the
+   order the #pulse block above argues for.
+
+   Measured at 915d924, 1280px wide: --navh is 65px with the bell absent, 65px
+   with it closed, and 65px with it open. */
+.scope #alertbell { display: flex; align-items: center; min-width: 0; font-size: 12.5px; }
+/* Empty means empty -- no pill, and no 14px flex gap left where one would have
+   been. One selector, not #pulse's two: now.js mounts the <details> itself
+   here rather than a persistent wrapper it later empties, so there is no
+   "holding an empty child" case to catch. */
+.scope #alertbell:empty { display: none; }
+
+/* The closed pill. A near-twin of `.hero .tm`, and that is deliberate: these
+   are the bar's two fleet-state readouts and a reader should see them as one
+   pair. `list-style: none` (plus the WebKit pseudo-element) removes the
+   disclosure triangle -- the count IS the affordance, and a marker at this size
+   reads as a stray glyph. */
+.scope #alertbell summary {
+  display: inline-flex; align-items: center; gap: .45em; cursor: pointer;
+  padding: .26em .7em; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--surface); list-style: none; white-space: nowrap;
+}
+.scope #alertbell summary::-webkit-details-marker { display: none; }
+.scope #alertbell summary:hover { background: var(--grid); }
+.scope #alertbell summary:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; }
+.scope #alertbell summary .dot { width: .6em; height: .6em; border-radius: 50%; margin-top: 0; flex: none; }
+.scope #alertbell .n { font-variant-numeric: tabular-nums; }
+/* The severity word. Quieter than the count -- the number is what a reader
+   takes in at a glance, the word is what makes the colour legible to someone
+   who cannot separate amber from red (styles.css's "never alone" rule). It is
+   NOT hidden at any width: dropping it on a phone would drop exactly the half
+   of the message that does not depend on colour vision. */
+.scope #alertbell .w { color: var(--ink-3); }
+/* Nothing live, something muted: the bell still appears -- hiding it would make
+   a silenced alert look resolved -- but it must not look like an alarm. No
+   severity colour, and the whole pill recedes. */
+.scope #alertbell summary .dot.muted { background: var(--ink-3); }
+.scope #alertbell [data-sev="muted"] summary { color: var(--ink-3); }
+
+/* The open panel. Absolutely positioned against .scope -- the BAR, not the
+   pill -- so it hangs from the bar's bottom edge even at the widths where
+   .row1 wraps and the pill is no longer on the last line.
+   It inherits .scope's z-index: 20 by being inside it, which settles the
+   layering this had to be reconciled with: above the page and #tip's z-20
+   (which is pointer-events: none and could not hold the mute buttons anyway),
+   below the #detail drawer's z-30 -- a reader who has opened a session detail
+   is reading that, and an alert panel is not entitled to cover it. */
+.scope #alertbell .bell-panel {
+  position: absolute; top: 100%; right: 20px;
+  /* 100% is .scope, this panel's containing block -- not 100vw, which includes
+     the scrollbar and so hangs the panel 3px off the left edge of a phone. */
+  width: min(400px, calc(100% - 24px));
+  max-height: min(60vh, 30em); overflow-y: auto;
+  padding: 4px 14px 10px; font-size: 13px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-top: 0; border-radius: 0 0 12px 12px; box-shadow: var(--shadow);
+}
+/* The rows inside are the Findings card's, to the letter: now.js gives the
+   panel the `findings` class as well, so every `.findings ...` rule below --
+   the dashed row separators, the severity dots, the owner line, the mute
+   footer, the muted tail -- applies here with nothing restated. One renderer
+   (alertRow) drew them in a card and draws them in the bar, and a second copy
+   of their styling is exactly the drift this file keeps warning about.
+   The only thing that had to be re-scoped is the dot, and upward rather than
+   down: `summary .dot` above is the pill's own, in em so it tracks the pill's
+   one font-size knob; the rows' 9px dots are untouched. */
+
+/* The ledger chip's slot in the bar (#128).
+
+   SAME HEIGHT RULE, SAME TWO STATES, same recipe as the bell above: one
+   font-size knob with everything inside it in em, so the closed pill fits
+   inside the height the row already has, and a panel taken out of flow so
+   opening it cannot move --navh either. The measurements are at the bottom of
+   this block.
+
+   Sized and shaped as the bell's twin on purpose. These are the bar's three
+   readouts -- alerts, money, tokens -- and a reader should see them as one set
+   rather than as three widgets that happen to share a row. */
+.scope #ledgerchip { display: flex; align-items: center; min-width: 0; font-size: 12.5px; }
+/* Empty means empty -- no pill, and no 14px flex gap left where one would have
+   been. One selector, not #pulse's two: app.js mounts the <details> itself
+   here rather than a persistent wrapper it later empties. */
+.scope #ledgerchip:empty { display: none; }
+
+/* `> details >` and not a bare descendant: there is a SECOND <summary> inside
+   this chip -- the working fold's, one level down in the panel -- and a pill
+   border, a pill background and `white-space: nowrap` reaching it would draw
+   the fold's door as a second, broken-looking pill. The bell has no nested
+   fold, which is why its block above can be written loosely and this one
+   cannot. */
+.scope #ledgerchip > details > summary {
+  display: inline-flex; align-items: baseline; gap: .45em; cursor: pointer;
+  padding: .26em .7em; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--surface); list-style: none; white-space: nowrap;
+}
+.scope #ledgerchip > details > summary::-webkit-details-marker { display: none; }
+.scope #ledgerchip > details > summary:hover { background: var(--grid); }
+.scope #ledgerchip > details > summary:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; }
+/* The period, and the verb in front of it. Both quieter than the figure -- the
+   number is what a reader takes in at a glance -- and they are two nodes
+   because only one of them is droppable.
+   `.per` is never dropped, at any width: a bare money figure in a bar that is
+   also printing a LIFETIME token counter is a figure that will be read as the
+   lifetime bill, which is the one misreading this chip exists to prevent.
+   `.lbl` is the verb, and a money figure in the bar of a page called
+   TokenLedger is not ambiguous about whether it was spent -- so that is the
+   half a phone gives up, below. */
+.scope #ledgerchip .lbl, .scope #ledgerchip .per { color: var(--ink-3); }
+.scope #ledgerchip .n { font-variant-numeric: tabular-nums; }
+/* "This total is LOW", in the warn colour AND in the word beside it. Same rule
+   as the bell's severity word and for the same reason (styles.css:256): at
+   12.5px a tinted glyph is the whole message, and to a reader who cannot
+   separate the warn hue from the ink it is no message at all. The `≥` on the
+   figure says it a third way, in a mark that needs no colour sense whatsoever. */
+.scope #ledgerchip .w { color: var(--serious); font-size: .92em; }
+
+/* The open panel. Absolutely positioned against .scope -- the BAR, not the
+   pill -- so it hangs from the bar's bottom edge even at the widths where
+   .row1 wraps and the pill is no longer on the last line. Same corner, same
+   width and the same z-20-by-containment as the bell's panel above: the two
+   are an exclusive <details name="barfold"> group, so only one of them is ever
+   open and they cannot stack. */
+.scope #ledgerchip .ledger-panel {
+  position: absolute; top: 100%; right: 20px;
+  /* 100% is .scope, this panel's containing block -- not 100vw, which includes
+     the scrollbar and so hangs the panel 3px off the left edge of a phone. */
+  width: min(400px, calc(100% - 24px));
+  max-height: min(60vh, 30em); overflow-y: auto;
+  padding: 10px 14px; font-size: 13px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-top: 0; border-radius: 0 0 12px 12px; box-shadow: var(--shadow);
+}
+.scope #ledgerchip .ledger-panel > .hint:first-child { margin-top: 0; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px 2px 10px; border-radius: 999px; background: var(--s1); color: #fff; font-size: 12.5px; }
+.chip button { border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 14px; line-height: 1; padding: 0; }
+.chip.clear { background: var(--ink-3); }
+.progress { height: 2px; background: linear-gradient(90deg, var(--s1), var(--s3)); animation: prog 1s linear infinite; background-size: 200% 100%; }
+@keyframes prog { from { background-position: 0 0 } to { background-position: 200% 0 } }
+
+/* scope controls (Task 15): the subscription select + span segmented
+   control + chips row, now mounted on a view's own first substantive card
+   (web/dist/scope.js's createScopeControls) instead of the sticky bar. A
+   near-twin of the old `.scope .row1`/`.row2` it replaces, just not scoped
+   under `.scope` any more — `.filters` holds the select/span side by side,
+   `.chips-row` is the second line and only takes space when chips exist
+   (scope.js toggles its `hidden` attribute). */
+.scope-controls { margin-bottom: 14px; }
+.scope-controls .filters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.scope-controls .filters .seg { margin-bottom: 0; } /* cancel the breakdown-card .seg's margin-bottom so this row stays centered */
+.scope-controls .chips-row { display: flex; gap: 6px; align-items: center; padding-top: 8px; overflow-x: auto; white-space: nowrap; }
+main[aria-busy="true"] .card { opacity: .6; transition: opacity .2s; }
+/* kpi */
+.kpis { display: grid; grid-template-columns: repeat(7, 1fr); gap: 10px; }
+.kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+.kpi .v { font-size: 22px; font-weight: 600; letter-spacing: -.01em; }
+.kpi .d { font-size: 12px; margin-left: 6px; color: var(--ink-3); } .kpi .d.up { color: var(--critical); } .kpi .d.down { color: var(--good); }
+.kpi .l { font-size: 12px; color: var(--ink-3); }
+/* timeline + brush */
+.timeline { position: relative; user-select: none; touch-action: none; }
+/* The brush is anchored to the PLOT, not to `.timeline` — the legend and the
+   caption live in `.timeline` too, so a `bottom` measured from its edge moved
+   whenever one of them appeared. `--axis-band` (set by charts.js, the x-axis
+   padding as a share of the chart's height) replaces the old `bottom: 26px`,
+   which was only ever right at exactly one rendering scale — and since issue
+   #55 dropped the pixel height there is no such scale any more. */
+.timeline .plot { position: relative; }
+.timeline .brush { position: absolute; top: 0; bottom: var(--axis-band, 0); background: color-mix(in srgb, var(--s1) 12%, transparent); border-left: 2px solid var(--s1); border-right: 2px solid var(--s1); cursor: grab; }
+.timeline .brush .h { position: absolute; top: 0; bottom: 0; width: 10px; cursor: ew-resize; } .timeline .brush .h.l { left: -6px } .timeline .brush .h.r { right: -6px }
+/* The brush has been a tabindex="0" arrow-key control all along; issue #56
+   gave it a name, and this gives it the ring that says where the keyboard
+   currently is — without which "arrow keys move the selection" is advice a
+   reader cannot act on. */
+.timeline .brush:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; }
+.timeline .caption { font-size: 12.5px; color: var(--ink-3); margin-top: 6px; }
+/* heatmap */
+.heat { display: grid; grid-template-columns: 34px repeat(24, 1fr); gap: 2px; align-items: center; font-size: 11px; color: var(--ink-3); }
+.heat i { display: block; aspect-ratio: 1; border-radius: 2px; background: var(--grid); }
+/* findings */
+.findings .f { display: flex; gap: 10px; padding: 8px 0; border-top: 1px dashed var(--border); align-items: flex-start; }
+.findings .f:first-child { border-top: 0; }
+.findings .dot { width: 9px; height: 9px; border-radius: 50%; margin-top: 6px; flex: none; }
+.dot.critical { background: var(--critical) } .dot.warning { background: var(--warning) } .dot.info { background: var(--s1) }
+/* "who to ask" — the attribution line, only present when the hub knows it.
+   Quieter than the title but not as recessed as .muted's detail text: it is
+   the one part of a finding a reader ACTS on, so it stays legible. */
+.findings .owner { font-size: 12.5px; color: var(--ink-2); margin-top: 3px; }
+/* The mute footer: the state ("muted · 20h left") and the one action.
+   Deliberately the quietest line in the row — it is a control, not a fact
+   about the fleet, and it must not compete with the title for attention. */
+.findings .mute { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; font-size: 12.5px; margin-top: 4px; }
+.findings .mute-state { color: var(--ink-3); }
+.findings .mute-err { color: var(--critical); }
+/* .linkish is a BUTTON that reads as a link. A button because the thing it
+   does is a write, not a navigation: that is what a keyboard, a screen reader
+   and a middle-click all expect, and an <a href="#"> here would offer to open
+   a mute in a new tab. */
+.findings .linkish { background: none; border: 0; padding: 0; font: inherit; color: var(--s1); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.findings .linkish:disabled { color: var(--ink-3); cursor: progress; text-decoration: none; }
+/* The silenced tail. Muted findings are FOLDED, never dropped — an alert that
+   vanished when silenced would be indistinguishable from one that cleared.
+   Everything inside is dimmed so a glance at an open fold still reads as
+   "handled" rather than as more alarm. */
+.findings .muted-tail { border-top: 1px dashed var(--border); margin-top: 6px; padding-top: 6px; }
+.findings .muted-tail > summary { font-size: 12.5px; color: var(--ink-3); cursor: pointer; list-style: revert; }
+.findings .muted-tail .f { opacity: .62; }
+.findings .muted-tail .f:first-of-type { border-top: 0; }
+/* Opacity is a look, not a state. The dot keeps its severity colour so a
+   muted critical is still visibly a critical when the fold is open — the
+   operator silenced it, they did not downgrade it. */
+.findings .muted-tail .dot { opacity: 1; }
+/* card table toggle */
+.card { position: relative; } .card .tbl { position: absolute; right: 12px; top: 12px; border: 1px solid var(--border); background: var(--surface); border-radius: 6px; font-size: 12px; padding: 2px 6px; cursor: pointer; color: var(--ink-2); }
+/* The toggle is absolutely positioned in the card's top-right corner, which
+   is the h2's own line box (issue #56): a card title long enough to reach the
+   right edge — or any title at all once the card is a narrow .grid2 half on a
+   phone — ran underneath the button. Reserve the corner on the heading, the
+   same way .detail h2 already reserves room for its fixed × below.
+   Scoped with :has() so only a card that ACTUALLY carries a toggle pays for
+   it; where :has() is unsupported the whole rule drops and the corner is
+   exactly as crowded as it is today, which is a safe way to fail. */
+.card:has(.tbl) > h2 { padding-right: 40px; }
+/* Two toggles on one card (#100). The roster now owns both reveals — "show
+   retired" and the per-machine subscription list that used to be its own card —
+   and `.card .tbl` pins itself to the corner, so a second one would land
+   exactly on top of the first. They share one anchored flex row instead, and
+   the heading reserves the wider corner. Same :has() fallback reasoning as
+   above: where it is unsupported the corner is merely crowded. */
+.card .tbls { position: absolute; right: 12px; top: 12px; display: flex; gap: 6px; }
+.card .tbls .tbl { position: static; }
+.card:has(.tbls) > h2 { padding-right: 76px; }
+/* The toggle is the designated way out of every chart on this page, so it has
+   to be findable by keyboard, not merely reachable — same ring as .secnav and
+   .ops summary already use. */
+.card .tbl:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; }
+/* A retired endpoint's row in the Fleet roster (issue #42). Greyed rather
+   than hidden once revealed: the operator asked to see it, and the question
+   they are answering — "did I retire the right one" — needs it legible, not
+   whispered. Not `display:none` anywhere; hiding is done by not fetching. */
+.card tr.retired > td { color: var(--ink-3); }
+/* sessions */
+.sessions tr { cursor: pointer; } .sessions td a { color: inherit; text-decoration: underline dotted; }
+/* detail overlay */
+.detail { position: fixed; inset: 0 0 0 auto; width: min(760px, 100vw); background: var(--surface); border-left: 1px solid var(--border); box-shadow: var(--shadow); z-index: 30; overflow: auto; padding: 20px; }
+.detail .close { position: absolute; right: 16px; top: 12px; border: 0; background: transparent; font-size: 22px; cursor: pointer; color: var(--ink-2); }
+/* Task 13 (session.js): a narrower KPI grid than Review's 7-up strip (the
+   panel tops out at 760px) and room reserved so a long project path never
+   runs under the fixed × button. */
+.detail h2 { font-size: 18px; padding-right: 34px; }
+.detail .kpis { grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 14px; }
+/* #100 removed `details.fleet` and its summary rule with it. The fold grouped
+   three roster tables; two of them are columns of the third now, and one card
+   is not a group — #ops is already the fold it sits in. */
+/* mobile */
+/* The token badge yields the bar to the money, from 900px down (#128).
+   #96 hid #pulse on phones only, with the wordmark, and #123 then measured the
+   721-810px band as the tight one: the wordmark and the badge are both back up
+   there, and the bar had 26px of slack at 810px and none at all at 721px.
+   Adding a 207px ledger chip spends slack that was not there -- MEASURED, the
+   bar wrapped and --navh went 65px -> 110px at 721px.
+
+   Something in that band has to give, and #96's own argument says which. The
+   badge is AMBIENT: it is a status light, and every number it summarises is in
+   the cards below. The ledger figure is the opposite, and #128 is what made it
+   so -- the card that used to hold it does not render any more, so the bar is
+   the only place the total appears at all. A bar that cannot hold both keeps
+   the figure that has nowhere else to be.
+
+   900 rather than the 784px where it strictly starts fitting: at 784 the nav
+   would be shrunk to nothing to buy it, and the nav is what this bar is for.
+   MEASURED with the badge hidden: the nav gets 144px at 721px and 248px at
+   900px; with it back at 901px, 117px. */
+@media (max-width: 900px) {
+  .scope #pulse { display: none; }
+}
+
+@media (max-width: 720px) {
+  /* The wordmark goes, and the nav takes the room it freed: on a phone the
+     4,459px page is nearer 9,000, so the nav is the one thing in this bar
+     worth the width.
+     The `min-width: 0; flex: 1 1 auto` that used to be restated here is gone,
+     and not because it stopped mattering — it is in the base `.secnav` rule
+     now, as `flex: 1 1 0`, because #123 found it was needed at every width and
+     that `auto` basis was the half that did not work (see that rule's note). A
+     copy down here would have re-broken it by winning the cascade. */
+  .scope .row1 { padding: 8px 12px; gap: 6px; } .scope h1 { display: none; }
+  /* The token badge's hide rule used to be here, with the wordmark. #128 moved
+     it UP to its own 900px query below, because the band it was needed in got
+     wider -- see that block. Nothing about the phone case changed. */
+  /* The bell STAYS, and the contrast with the line above is the point. The
+     badge is ambient — every number it summarises is in the cards below, so a
+     phone loses nothing by dropping it. An alert is the opposite: it is the one
+     thing in this bar a reader is meant to act on, and it is now the only place
+     the page says a collector died. Dropping it on a phone would not be saving
+     width, it would be deciding that phone readers do not need to know.
+     It costs little: the closed pill is ~60px of the width the wordmark just
+     freed, and it is shorter than the row's remaining tallest child, so the
+     phone bar's height stays as invariant as the note above claims.
+     Only the panel's inset moves, to follow .row1's 12px padding. */
+  .scope #alertbell .bell-panel { right: 12px; }
+  /* The ledger chip stays too, and by the SAME argument rather than the badge's
+     (#128). The badge is ambient; the money is not, and since the card is gone
+     the bar is the only place on a phone the total appears at all. Dropping it
+     here would not be saving width, it would be deciding phone readers do not
+     get to see what this deployment spent.
+     It is shorter than the row's tallest remaining child, so the phone bar's
+     height stays as invariant as the note above claims -- measured below.
+
+     What it gives up instead is two words. MEASURED at 375px: the full chip is
+     207px against a row with 351px to spend, and the bar wrapped (--navh 58 ->
+     95) -- the nav, the bell, the two toggles and this do not fit. The verb and
+     the incomplete WORD come off, leaving the period and the figure at ~103px,
+     and the row fits again with the nav still scrollable (76px at 375, 21px at
+     320, which is the width this bar has always been worst at).
+     Neither cut is a silent one: `≥` stays on the figure and is a MARK, not a
+     colour, so the "this total is low" claim survives the word being dropped
+     and survives it for a reader who cannot see the warn hue either. The full
+     sentence is in the panel, and both are in the summary's title/aria-label,
+     so nothing here is unreachable -- only unprinted. */
+  .scope #ledgerchip .lbl, .scope #ledgerchip .w { display: none; }
+  .scope #ledgerchip .ledger-panel { right: 12px; }
+  .secnav button { padding: 6px 8px; font-size: 12.5px; }
+  .kpis { grid-template-columns: repeat(2, 1fr); }
+  .detail .kpis { grid-template-columns: repeat(2, 1fr); }
+  .detail { padding: 16px; }
+  .grid2 { grid-template-columns: 1fr; }
+  .sessions table { display: none; } .sessions .cards { display: grid; gap: 8px; }
+}
+@media (min-width: 721px) { .sessions .cards { display: none; } }
+
+/* rankedBars selection state (charts.js: rankedBars(rows, {selectedKey})). Not
+   in the brief's CSS list, but the "sel" class it adds needs a visible effect
+   for a click-to-filter row (the Review breakdown cards, task 12) to read as
+   selected. */
+.bar-row.sel .k { color: var(--ink); font-weight: 600; }
+.bar-row.sel .bar-track { outline: 2px solid var(--s1); outline-offset: 1px; border-radius: 6px; }
+/* Issue #56 made a row a tab stop whenever it is clickable OR carries a tip
+   (the tip holds figures the row itself does not print). A new tab stop with
+   no visible focus indicator is its own failure, so the ring comes with it —
+   on the ROW, offset outward, which is what keeps it distinguishable from the
+   `.sel` ring above: that one marks the active facet and sits on the track. */
+.bar-row:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; border-radius: 6px; }
+
+/* ------------------------------------------------------------------------ */
+/* Task 12 (review.js): the segmented group-by control every breakdown card
+   has, room for its three inline efficiency lists, a mobile card layout for
+   the sessions table's stacked-card fallback, and scroll-margin so a
+   finding's "apply →" scrollIntoView doesn't tuck the target card under the
+   sticky scope bar. */
+
+/* The one `.seg` rule (Task 15 removed the old `.scope .seg` twin along with
+   the span control it was styling inside the sticky header — see the scope
+   bar section above). Used by the breakdown cards' own group-by control
+   here, and by Review's relocated Timeline span control via
+   `.scope-controls .filters .seg` (which cancels this rule's
+   margin-bottom — see that selector above — so it sits flush next to the
+   subscription select). */
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 12px; }
+.seg button { border: 0; border-right: 1px solid var(--border); background: var(--surface); padding: 5px 10px; font: inherit; font-size: 12.5px; color: var(--ink-2); cursor: pointer; }
+.seg button:last-child { border-right: 0; }
+.seg button[aria-pressed="true"] { background: var(--s1); color: #fff; }
+
+/* Anything the page scrolls to stops --navh short of the sticky bar, instead
+   of under it. .card was already doing this with a hardcoded 96px for the
+   findings' "apply →"; #54 gave the bar a second job (it is now also what the
+   nav's four anchors land against) and a measured height, so both share the
+   one variable rather than one of them being a constant that was true when it
+   was written. */
+.card, #ledger-band, #usage-band, #repo-band, #ops { scroll-margin-top: var(--navh); }
+
+.sessions .cards .srow {
+  background: var(--grid); border-radius: 8px; padding: 10px 12px; cursor: pointer;
+  display: flex; flex-direction: column; gap: 3px; font-size: 12.5px;
+}
+.sessions .cards .srow > div:nth-child(3) { color: var(--ink-3); font-size: 11.5px; }
+
+/* .kind labels the kind of money a cost figure is, wherever one is shown
+   next to another kind. Deliberately quiet and inline: it is a unit, like a
+   currency symbol, not an annotation the reader can dismiss. */
+.kind {
+  color: var(--ink-3);
+  font-size: 0.85em;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------- the spend headline
+   There is no display-size figure here any more (#128). The headline is a chip
+   in the sticky bar -- see `.scope #ledgerchip` above, which carries the whole
+   argument and the --navh measurements -- and #real-spend is what is left when
+   /v1/summary FAILS, which is a card with a heading and one sentence and needs
+   no rules of its own.
+
+   What did survive the move is the inside of the chip's panel, because it is
+   the same content the card used to hold: the terms line, the incomplete
+   sentence in its warn colour, and the working fold (#94). Those rules are now
+   scoped to the panel, one copy, moved rather than duplicated -- a second copy
+   of them under #real-spend would be styling a card that no longer renders
+   them. */
+.scope #ledgerchip .ledger-panel .terms {
+  color: var(--ink-2); margin: 0 0 10px;
+  font-variant-numeric: tabular-nums;
+}
+.scope #ledgerchip .ledger-panel .hint.warn { color: var(--serious); }
+
+/* The working, folded (issue #94). The headline exists to show one figure, and
+   the sentences that explain it outnumbered it five to one; they are all still
+   here, one click further away than they were. The summary is deliberately the
+   quietest thing in the panel -- it is a door, not a heading. */
+.scope #ledgerchip details.working { margin: 0; }
+.scope #ledgerchip details.working > summary {
+  color: var(--ink-3); font-size: 12px; padding: 2px 0;
+  cursor: pointer; list-style: revert; user-select: none;
+}
+.scope #ledgerchip details.working > summary:hover { color: var(--ink-2); }
+.scope #ledgerchip details.working > .hint:first-of-type { margin-top: 8px; }
+.scope #ledgerchip details.working > .hint:last-child { margin-bottom: 0; }
+
+/* The three provenance tables inside the KPI card (rate basis, subscription
+   spend, unpriced reasons) are bare <table>s wide enough to push the page
+   sideways on a phone. They used to hide behind the Review tab; with one
+   continuous surface they are on the default page, so they get the same
+   overflow container every other wide table here has. */
+details.unpriced-reasons table { display: block; overflow-x: auto; max-width: 100%; }
+/* Those three tables now share ONE fold (issue #93), so each needs a heading
+   of its own inside it -- they used to be their own <summary>. Sized down
+   from the card's <h2> so the fold reads as one card section with parts,
+   not as three cards that lost their frames. */
+details.unpriced-reasons h3 { font-size: 13px; margin: 14px 0 6px; }
+details.unpriced-reasons > summary + * { margin-top: 8px; }
+
+/* Six group options do not fit a phone in one row. Wrapping beats a scroller
+   for a segmented control: every option should be reachable without the user
+   discovering that this particular strip scrolls. max-width keeps it inside
+   its card once it is allowed to be a multi-line box. */
+@media (max-width: 560px) {
+  .seg { flex-wrap: wrap; max-width: 100%; }
+  .seg button { border-right: 0; border-bottom: 1px solid var(--border); }
+}
+
+/* Consumption table. `.link` is a button that reads as a link: the provider
+   cell expands its models, and a bare <button> in a table cell reads as an
+   action on the row rather than a way into it. */
+#consumption-table button.link {
+  border: 0; background: none; padding: 0; color: var(--s1);
+  font: inherit; text-align: left; cursor: pointer;
+}
+#consumption-table button.link:hover { text-decoration: underline; }
+#consumption-table tr.models > td { padding: 4px 0 10px 18px; background: transparent; }
+#consumption-table table.sub { width: auto; font-size: 12.5px; }
+#consumption-table table.sub td { border: 0; padding: 2px 14px 2px 0; color: var(--ink-2); }
+
+/* The folded tail: present and countable, but visibly not one of the rows that
+   carry a number worth reading. */
+.folded td { color: var(--ink-3); font-style: italic; }
+/* ── the operations tier ───────────────────────────────────────────────────
+   Folded by default. Not hidden: everything it holds still answers a real
+   question, and the page is still one continuous surface -- the fold only says
+   that "what did we pay" is asked more often than "which machine is near its
+   5-hour limit". */
+#alerts:empty { display: none; }
+
+.ops { margin-top: 26px; border-top: 1px solid var(--line); padding-top: 4px; }
+.ops > summary {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  padding: 12px 2px; cursor: pointer; list-style: none; user-select: none;
+  color: var(--ink-2);
+}
+.ops > summary::-webkit-details-marker { display: none; }
+/* The marker is drawn, not inherited, so it can rotate and so its colour comes
+   from the same tokens as the text beside it. */
+.ops > summary::before {
+  content: "▸"; display: inline-block; color: var(--ink-3);
+  transition: transform .15s ease; font-size: 13px; line-height: 1;
+}
+.ops[open] > summary::before { transform: rotate(90deg); }
+.ops > summary:hover { color: var(--ink); }
+.ops > summary:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; border-radius: 4px; }
+.ops-title { font-weight: 600; font-size: 14px; letter-spacing: .02em; }
+.ops-note { color: var(--ink-3); font-size: 12.5px; }
+/* The link to /access. Quiet -- it is a pointer to another page, not a card --
+   but underlined, because a link that looks like prose is a link nobody finds
+   on the one visit where they need it most. */
+.ops-link { margin: 6px 0 14px; font-size: 12.5px; }
+.ops-link a { color: var(--ink-2); text-decoration: underline; text-underline-offset: 2px; }
+.ops-link a:hover, .ops-link a:focus-visible { color: var(--s1); }
+@media (prefers-reduced-motion: reduce) { .ops > summary::before { transition: none; } }
+
+/* ── three tiers, three weights ────────────────────────────────────────────
+   Border, fill, radius and shadow each say "separate object". Spending all of
+   them equally on all twenty cards is what made the page flat: twenty things
+   shouting at one volume is the same as none of them shouting. So they are
+   spent by ROLE instead.
+
+   The band labels below and the operations <summary> are deliberately the same
+   type: the page is three labelled bands, and the label is what tells a reader
+   which question the cards under it answer. */
+.band {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  margin-top: 26px; padding: 12px 2px; border-top: 1px solid var(--line);
+}
+.band-title { font-weight: 600; font-size: 14px; letter-spacing: .02em; color: var(--ink-2); }
+.band-note { color: var(--ink-3); font-size: 12.5px; }
+
+/* Tier 1 — the answer, and the tier with the most room. The display-size figure
+   this note used to point at is gone (#128 moved it into the bar), so #spend's
+   share of this rule now dresses one thing: the card that says /v1/summary
+   failed. It keeps the padding because a failure should look like the card the
+   reader expected here, not like a narrower afterthought. */
+#spend > .card,
+#consumption > .card { padding: 20px 22px; }
+
+/* Tier 3 — reference, behind a fold. These are read when something is wrong,
+   not scanned every visit, so they drop the shadow and tighten up: a card that
+   costs a shadow and 16px of padding is claiming to be a headline object, and
+   nine of them claiming it is how the page got flat in the first place. */
+#ops .card {
+  box-shadow: none; border-radius: 8px; padding: 12px 14px; margin-bottom: 10px;
+}
+#ops .card > h2 { font-size: 12px; }
+#ops .card > .hint { font-size: 11.5px; margin-bottom: 10px; }
+#ops .grid2 { gap: 10px; }
+
+/* A heading nested inside a card is a SUB-heading, and must not outrank the
+   card's own title.
+   `.card > h2` only ever styled the direct child, so every h2 one level deeper
+   (the Efficiency card's "Effort", "Entrypoint", "Turns: main vs. subagent",
+   "$ per 1M output tokens, by model") fell through to the browser default —
+   1.5em and bold, rendering LARGER than the "EFFICIENCY" title above it. The
+   hierarchy read backwards inside the card. */
+.card * h2 {
+  font-size: 12.5px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase;
+  color: var(--ink-3); margin: 0 0 6px;
+}
+
+/* Same reasoning as the h2 rule above, for `.hint` (issue #51): `.card >
+   .hint` styled only the direct child, and the notes that now sit beside a
+   nested chart — "both cards share one scale", "unit: turns" — are one level
+   deeper, so they rendered at the browser's default paragraph size with
+   default margins, louder than the card title they qualify. */
+.card * .hint { color: var(--ink-3); font-size: 12px; margin: 0 0 8px; }
+/* The scale note follows its bars rather than introducing them. */
+.card * .hint.scale-note { margin: 10px 0 0; }
+/* The slot number, demoted: the dimension is the title now, and "#2" is only
+   there so the group-by control's aria-label ("group by (breakdown 2)") and
+   the per-card table toggle still name something a reader can find. */
+.card > h2 .slot { color: var(--ink-3); font-weight: 400; margin-left: 6px; }
+
+/* A sortable column header is a control and has to look like one. Both the
+   sessions table and the stalled table mark theirs role="button", which is
+   what a screen reader hears — a sighted reader got nothing at all, so the
+   only way to discover that a header could be clicked was to click it. */
+th[role="button"] { cursor: pointer; user-select: none; }
+th[role="button"]:hover { color: var(--ink-2); }
+th[aria-sort] { color: var(--ink); }
+
+/* An age reads "71.2 d" with a space in Chinese, and the age column is the
+   narrowest one here — left to wrap, every row becomes two lines tall. */
+#repo-stalled td.num { white-space: nowrap; }
+
+/* Verification health. Three rows of pre-worded figures, and the one visual
+   job here is that a reading which could NOT be taken never looks like a
+   reading that came back clean: `.unread` mutes the row and tags the cell in
+   words, rather than leaving a blank that reads as "nothing wrong". */
+#repo-health table { table-layout: auto; }
+#repo-health th[scope="row"] { text-align: left; font-weight: 500; color: var(--ink-2); white-space: nowrap; }
+#repo-health td.figure { font-variant-numeric: tabular-nums; white-space: nowrap; }
+#repo-health td.note { color: var(--ink-3); font-size: 12px; }
+#repo-health tr.unread td.figure { white-space: normal; }
+#repo-health .unread-tag { color: var(--serious); font-weight: 600; }
+#repo-health .hint.warn { color: var(--serious); }
+
+/* The manual-step card. Its marks are deliberately loud: every one of them
+   says "this row is not going to move on its own" — a step nobody was told
+   about, or an owner nothing could resolve. Rendering them as ordinary text
+   is how they become invisible in a list of ordinary rows. */
+#repo-human .warn { color: var(--serious); }
+#repo-human h3 { margin-top: 20px; font-size: 1.02em; }
+#repo-human .controls { margin-top: 14px; }
+/* "nobody told" is three words in English and five characters in Chinese; in a
+   column sized to its header it wraps into a vertical stack of single
+   characters, which reads as decoration rather than as the warning it is. */
+#repo-human td:last-child, #repo-human td.num { white-space: nowrap; }

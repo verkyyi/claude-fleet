@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Ways in</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%232a78d6'/%3E%3Crect x='3' y='7' width='10' height='3' rx='1.5' fill='%23fff'/%3E%3C/svg%3E">
+<!--
+  The door map. A standalone page, like share.html and user.html: it is the
+  page you read when you cannot get in somewhere, so it must not itself depend
+  on the dashboard's twenty-module boot.
+
+  Everything factual comes from /v1/access. Nothing about a door is written
+  here — a door described in HTML drifts from the router the first time someone
+  adds a route, and this page exists precisely because the repository had no
+  single true statement about its entrances.
+-->
+<style>
+:root {
+  color-scheme: light;
+  --plane:#f9f9f7; --surface:#fcfcfb; --border:#e3e2dd; --grid:#eeede9;
+  --ink:#0b0b0b; --ink-2:#52514e; --ink-3:#85847e;
+  --open:#2a78d6; --public:#eda100; --off:#85847e; --warn:#e34948;
+  --shadow: 0 1px 2px rgba(0,0,0,.05), 0 4px 12px rgba(0,0,0,.04);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --plane:#0d0d0d; --surface:#1a1a19; --border:#2f2f2c; --grid:#262624;
+    --ink:#fff; --ink-2:#c3c2b7; --ink-3:#8b8a81;
+    --open:#3987e5; --public:#c98500; --off:#8b8a81; --warn:#e66767;
+    --shadow: 0 1px 2px rgba(0,0,0,.4);
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin:0; background:var(--plane); color:var(--ink);
+  font:14px/1.6 ui-sans-serif,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+h1,h2,h3 { margin:0; font-weight:600; letter-spacing:-.01em; }
+code, .mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92em; }
+a { color:var(--open); }
+.wrap { max-width:940px; margin:0 auto; padding:32px 20px 72px; }
+
+header { margin-bottom:24px; }
+header h1 { font-size:26px; }
+header .sub { color:var(--ink-3); margin-top:6px; }
+/* The correction this page was written to make. Loud on purpose: "one process
+   on one port" is the sentence that got read as "one entrance". */
+.caveat {
+  margin-top:16px; padding:12px 16px; border-radius:10px;
+  border:1px solid var(--border); border-left:3px solid var(--public);
+  background:var(--surface); color:var(--ink-2);
+}
+
+.card {
+  background:var(--surface); border:1px solid var(--border); border-radius:12px;
+  padding:18px 20px; box-shadow:var(--shadow); margin-bottom:18px;
+}
+.card > h2 { font-size:15px; }
+.hint { color:var(--ink-3); font-size:13px; margin:2px 0 14px; }
+
+/* What is actually turned on here. Two columns of term/definition, because
+   every one of these is a yes/no an operator otherwise has to reconstruct
+   from the command line the hub was started with. */
+.facts { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:2px 24px; margin:0; }
+.facts div { display:flex; gap:10px; padding:7px 0; border-bottom:1px solid var(--grid); align-items:baseline; }
+/* A URL has no break points a 42% column can use, so it hyphenates mid-host
+   ("ai.24haowa / n.com") and stops looking like an address. Give it the row. */
+.facts div.wide { grid-column:1 / -1; }
+/* On a full-width row the 42% label column becomes a 400px gap, so the label
+   shrinks to its own text and the value follows it. */
+.facts div.wide dt { flex:0 0 auto; }
+.facts dt { color:var(--ink-3); flex:0 0 42%; }
+.facts dd { margin:0; flex:1 1 auto; word-break:break-word; }
+.facts .on  { color:var(--open); font-weight:600; }
+.facts .off { color:var(--ink-3); }
+.facts .hot { color:var(--warn); font-weight:600; }
+
+/* One door per row. The state word is text first: a pill that only used
+   colour would say nothing to a screen reader or a monochrome print. */
+.door { border-top:1px solid var(--grid); padding:18px 0; }
+.door:first-of-type { border-top:0; padding-top:4px; }
+.door .top { display:flex; flex-wrap:wrap; align-items:baseline; gap:10px; }
+.door h3 { font-size:16px; }
+.pill {
+  font-size:11px; letter-spacing:.06em; text-transform:uppercase; font-weight:650;
+  padding:2px 8px; border-radius:99px; border:1px solid currentColor;
+}
+.pill.open   { color:var(--open); }
+.pill.public { color:var(--public); }
+.pill.off    { color:var(--off); }
+.via { color:var(--ink-3); font-size:12px; margin-left:auto; }
+
+.where { display:flex; flex-wrap:wrap; gap:6px; margin:10px 0 0; padding:0; list-style:none; }
+.where li {
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px;
+  background:var(--grid); border-radius:6px; padding:2px 8px; color:var(--ink-2);
+}
+
+.rows { margin:12px 0 0; display:grid; gap:8px; }
+.rows > div { display:grid; grid-template-columns:96px 1fr; gap:14px; align-items:baseline; }
+.rows .k { color:var(--ink-3); font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+.rows .v { color:var(--ink-2); }
+.rows .v.here { color:var(--ink); }
+
+/* The boundary. This page describes doors; it is not one, and the reason it
+   is not is worth as much room as the table above it. */
+.limits { color:var(--ink-2); }
+.limits li { margin-bottom:8px; }
+.limits li:last-child { margin-bottom:0; }
+
+footer { color:var(--ink-3); font-size:12px; margin-top:26px; text-align:center; }
+.err { border-left:3px solid var(--warn); }
+
+@media (max-width:560px) {
+  .rows > div { grid-template-columns:1fr; gap:2px; }
+  .facts dt { flex-basis:50%; }
+  .via { margin-left:0; width:100%; }
+}
+</style>
+</head>
+<body>
+<div class="wrap" id="root">
+  <header><h1>Ways in</h1><div class="sub">Reading this hub…</div></header>
+</div>
+<script type="module">
+const $ = (q) => document.querySelector(q);
+
+function el(tag, attrs = {}, ...kids) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v === null || v === undefined || v === false) continue;
+    n.setAttribute(k, v);
+  }
+  for (const kid of kids.flat()) {
+    if (kid === null || kid === undefined || kid === false) continue;
+    n.append(kid);
+  }
+  return n;
+}
+
+// A fact is rendered as a word, never as a bare boolean: "on" and "off" are
+// what an operator is actually asking, and `true` beside "Public badges" reads
+// as a setting rather than as an answer.
+function fact(term, value, tone, wide) {
+  return el("div", { class: wide ? "wide" : null },
+    el("dt", {}, term),
+    el("dd", { class: tone || null }, value));
+}
+
+function hubFacts(h) {
+  const l = h.listeners || {};
+  const addrs = [...(l.http || [])];
+  if (l.https) addrs.push(l.https + " (https, tailnet peers only)");
+
+  const tailnet = (h.tailnet_viewers || []);
+  // "2 agent" is a column heading with a number stuck to it; "2 agents" is an
+  // answer. The kinds are storage identifiers (growth_reader), so they get
+  // spelled out here rather than shown as the column name they are.
+  const kinds = Object.entries(h.enrollments || {})
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([k, n]) => `${n} ${k.replace(/_/g, " ")}${n === 1 ? "" : "s"}`);
+
+  const rows = [
+    fact("Viewer credential", h.viewer_auth,
+      h.viewer_auth === "token" ? "on" : "hot"),
+    fact("WeCom SSO", h.sso && h.sso.enabled ? "on" : "not configured",
+      h.sso && h.sso.enabled ? "on" : "off"),
+    // The logins are deliberately NOT tinted: they are names, and the accent
+    // colour on this page means "a setting is on". A blue email address reads
+    // as a link to somewhere, which is the one thing it is not.
+    fact("Tokenless tailnet logins",
+      tailnet.length ? tailnet.join(", ") : "none — everyone needs a token",
+      tailnet.length ? null : "off"),
+    fact("Public badges", h.public_badges ? "ON — no credential needed" : "off (behind the viewer token)",
+      h.public_badges ? "hot" : "off"),
+    fact("MCP endpoint", h.mcp ? "mounted at /mcp" : "not wired up", h.mcp ? "on" : "off"),
+    fact("Dashboard", h.dashboard ? "built into this binary" : "not built in", h.dashboard ? "on" : "off"),
+    fact("Listening on", addrs.length ? addrs.join(" · ") : "not reported"),
+    fact("Share links",
+      h.share_links.total
+        ? `${h.share_links.active} active of ${h.share_links.total} minted`
+        : "none minted"),
+    fact("Enrolled shippers", kinds.length ? kinds.join(" · ") : "none enrolled"),
+  ];
+  if (h.sso && h.sso.enabled) {
+    rows.push(fact("Sign-in sends you to", el("span", { class: "mono" }, h.sso.enter_url), null, true));
+  }
+  return el("dl", { class: "facts" }, rows);
+}
+
+function door(d) {
+  const state = ["open", "public", "off"].includes(d.state) ? d.state : "off";
+  const stateWord = { open: "needs a credential", public: "no credential", off: "not on this hub" }[state];
+  return el("article", { class: "door" },
+    el("div", { class: "top" },
+      el("h3", {}, d.name),
+      el("span", { class: "pill " + state }, stateWord),
+      el("span", { class: "via" }, d.via === "hub-shell" ? "not on HTTP" : "over HTTP")),
+    el("ul", { class: "where" }, (d.where || []).map((w) => el("li", {}, w))),
+    el("div", { class: "rows" },
+      el("div", {}, el("span", { class: "k" }, "You need"), el("span", { class: "v" }, d.credential)),
+      el("div", {}, el("span", { class: "k" }, "It gives you"), el("span", { class: "v" }, d.can)),
+      el("div", {}, el("span", { class: "k" }, "On this hub"), el("span", { class: "v here" }, d.note))));
+}
+
+function render(d) {
+  const generated = new Date(d.generated_at);
+  $("#root").replaceChildren(
+    el("header", {},
+      el("h1", {}, "Ways in"),
+      el("div", { class: "sub" },
+        `Every door into this hub, what each one costs you in credentials, and what is actually turned on here · read ${generated.toLocaleString()}`),
+      el("div", { class: "caveat" }, d.one_process)),
+
+    el("div", { class: "card" },
+      el("h2", {}, "What is turned on here"),
+      el("p", { class: "hint" },
+        "The half a README cannot write: this is the configuration of the hub you are talking to, not of the software."),
+      hubFacts(d.hub)),
+
+    el("div", { class: "card" },
+      el("h2", {}, "The doors"),
+      el("p", { class: "hint" },
+        "In the order you are likely to meet them. A door marked “not on this hub” is not a door you are missing a credential for — it is not wired up here at all."),
+      (d.doors || []).map(door)),
+
+    el("div", { class: "card" },
+      el("h2", {}, "What this page is not"),
+      el("p", { class: "hint" }, "Three restraints, all deliberate."),
+      el("ul", { class: "limits" },
+        el("li", {}, el("b", {}, "It is not a control plane. "),
+          "Nothing here mints, revokes or widens a credential, and no command has been moved from the hub's shell onto HTTP. ",
+          el("code", {}, "enroll"), ", ", el("code", {}, "team"), " and ", el("code", {}, "plan"),
+          " stay local because a machine that could name its own team could move its spend onto another team's budget."),
+        el("li", {}, el("b", {}, "It adds no way in. "),
+          "Every door listed above already existed; this page only writes them down in one place for the first time."),
+        el("li", {}, el("b", {}, "It is behind the viewer gate, on purpose. "),
+          "It reports what is configured — SSO on or off, who the tailnet allowlist names. ",
+          el("code", {}, "/enter"), " is mounted unconditionally and 404s when SSO is off precisely so the route cannot tell that to someone with no credential. This page does not change that: you are reading it because you already came through a door."))),
+
+    el("footer", {}, "Served by this hub from /access · the same data as JSON at /v1/access"));
+}
+
+fetch("/v1/access", { headers: { Accept: "application/json" } })
+  .then((r) => r.ok ? r.json() : r.text().then((t) => { throw new Error(t || r.status); }))
+  .then(render)
+  .catch((e) => $("#root").replaceChildren(
+    el("header", {}, el("h1", {}, "Ways in")),
+    el("div", { class: "card err" },
+      el("h2", {}, "The door map could not be read"),
+      el("p", { class: "hint" }, String(e.message || e)))));
+</script>
+</body>
+</html>

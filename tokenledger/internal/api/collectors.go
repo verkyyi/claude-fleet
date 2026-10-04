@@ -1,0 +1,214 @@
+package api
+
+import (
+	"fmt"
+	"math"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/recon"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+)
+
+// querySource validates the ?source= chip against the sources this build
+// knows, rather than against a hand-written pair.
+//
+// It listed claude and codex literally, which made the third source
+// unaddressable from the dashboard and from MCP the moment it existed: a
+// gateway-scoped request was a 400, so the one scope in which a billed cost
+// figure can be read on its own could not be asked for. Deriving the set from
+// model.Sources means a source added there is addressable without a second
+// edit here.
+func querySource(w http.ResponseWriter, r *http.Request) (string, bool) {
+	source := r.URL.Query().Get("source")
+	if source != "" && !model.KnownSource(source) {
+		httpError(w, 400, "source must be one of: "+strings.Join(model.Sources, ", "))
+		return "", false
+	}
+	return source, true
+}
+
+func (s *Server) LimitsForSource(account, source string) (*LimitsView, error) {
+	if source != "" {
+		actual, err := s.Store.SourceForAccount(account)
+		if err != nil {
+			return nil, err
+		}
+		if actual != source {
+			return &LimitsView{AccountUUID: account, Source: source,
+				ReasonCode: ReasonWrongSource, Reason: LimitsReasonIn(ReasonWrongSource, i18n.EN)}, nil
+		}
+	}
+	return s.LimitsFor(account)
+}
+
+func (s *Server) codexLimitsFor(account string) (*LimitsView, error) {
+	v := &LimitsView{Source: model.SourceCodex, AccountUUID: account, Disclaimer: shareDisclaimer}
+	if account == "codex:local" {
+		v.ReasonCode = ReasonCodexUnassigned
+		v.Reason = LimitsReasonIn(v.ReasonCode, i18n.EN)
+		return v, nil
+	}
+	q, err := s.Store.LatestQuota(account)
+	if err != nil {
+		return nil, err
+	}
+	if q == nil {
+		v.ReasonCode = ReasonCodexUnverified
+		v.Reason = LimitsReasonIn(v.ReasonCode, i18n.EN)
+		cs, err := s.Store.Collectors(account, model.SourceCodex)
+		if err != nil {
+			return nil, err
+		}
+		for _, c := range cs {
+			if c.LimitsReason != "" {
+				v.Reason = c.LimitsReason
+			}
+		}
+		return v, nil
+	}
+	v.ObservedAt = &q.ObservedAt
+	v.StaleSeconds = int64(time.Since(q.ObservedAt).Seconds())
+	v.Plan = q.Plan
+	if v.StaleSeconds > 600 {
+		v.ReasonCode = ReasonCodexStale
+		v.Reason = LimitsReasonIn(v.ReasonCode, i18n.EN)
+		return v, nil
+	}
+	v.Credits = q.Credits
+	v.Blocked = q.Blocked
+	v.Reason = q.Reason
+	for _, w := range q.Windows {
+		// Passing a reset cannot prove remaining capacity. Wait for a new read.
+		if w.ResetsAt != nil && !w.ResetsAt.After(time.Now()) {
+			continue
+		}
+		observed := q.ObservedAt
+		if w.ObservedAt != nil {
+			observed = *w.ObservedAt
+		}
+		p := ProviderWindow{ID: w.ID, LimitID: w.LimitID, Label: w.Label, Minutes: w.Minutes, ObservedAt: &observed, WindowView: WindowView{Utilization: w.UsedPercent, ResetsAt: w.ResetsAt}}
+		if w.Minutes > 0 {
+			win := recon.WindowFor(w.ResetsAt, observed, time.Duration(w.Minutes)*time.Minute)
+			p.Burn = recon.Burn(win, w.UsedPercent, time.Now().UTC())
+		}
+		v.Windows = append(v.Windows, p)
+	}
+	v.Available = len(v.Windows) > 0 || len(v.Credits) > 0 || q.Blocked
+	if !v.Available {
+		v.ReasonCode = ReasonCodexWindowReset
+		v.Reason = LimitsReasonIn(v.ReasonCode, i18n.EN)
+	}
+	return v, nil
+}
+
+func (s *Server) ingestObservations(endpoint string, b *model.Batch) error {
+	for _, q := range b.Quotas {
+		if q.ObservedAt.IsZero() || q.ObservedAt.After(time.Now().Add(5*time.Minute)) {
+			return fmt.Errorf("invalid quota observation time")
+		}
+		for _, w := range q.Windows {
+			if math.IsNaN(w.UsedPercent) || math.IsInf(w.UsedPercent, 0) || w.UsedPercent < 0 || w.UsedPercent > 100 || w.Minutes < 0 {
+				return fmt.Errorf("invalid quota window")
+			}
+		}
+		q.Source = model.UsageSource(b.Identity.Source)
+		q.AccountUUID = b.Identity.AccountUUID
+		q.EndpointID = endpoint
+		if err := s.Store.InsertQuota(q); err != nil {
+			return err
+		}
+	}
+	if b.Collector != nil {
+		c := *b.Collector
+		c.Source = model.UsageSource(b.Identity.Source)
+		c.EndpointID = endpoint
+		c.AccountUUID = b.Identity.AccountUUID
+		if c.ObservedAt.IsZero() || c.ObservedAt.After(time.Now().Add(5*time.Minute)) {
+			return fmt.Errorf("invalid collector observation time")
+		}
+		if err := s.Store.UpsertCollector(c); err != nil {
+			return err
+		}
+	}
+	if b.AccountUsage != nil {
+		u := *b.AccountUsage
+		u.Source = model.UsageSource(b.Identity.Source)
+		u.AccountUUID = b.Identity.AccountUUID
+		u.EndpointID = endpoint
+		if u.ObservedAt.IsZero() || u.ObservedAt.After(time.Now().Add(5*time.Minute)) {
+			return fmt.Errorf("invalid account usage observation time")
+		}
+		if err := s.Store.InsertAccountUsage(u); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Server) handleCollectors(w http.ResponseWriter, r *http.Request) {
+	source, ok := querySource(w, r)
+	if !ok {
+		return
+	}
+	rows, err := s.Store.Collectors(r.URL.Query().Get("account"), source)
+	if err != nil {
+		httpError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, rows)
+}
+
+func (s *Server) handleAccountUsage(w http.ResponseWriter, r *http.Request) {
+	source, ok := querySource(w, r)
+	if !ok {
+		return
+	}
+	result, err := s.AccountUsageView(r.URL.Query().Get("account"), source)
+	if err != nil {
+		httpError(w, 500, err.Error())
+		return
+	}
+	result["note"] = accountUsageNote.In(localeOf(r))
+	writeJSON(w, 200, result)
+}
+
+func (s *Server) AccountUsageView(account, source string) (map[string]any, error) {
+	rows, err := s.Store.AccountUsage(account, source)
+	if err != nil {
+		return nil, err
+	}
+	type observation struct {
+		model.AccountUsage
+		LocalTokens   int64 `json:"local_attributed_tokens"`
+		LocalRequests int64 `json:"local_attributed_requests"`
+	}
+	// One GROUP BY for every row below, rather than one whole-ledger Summary
+	// per row (issue #49). A row here is an (account, source) pair — that is
+	// what Store.AccountUsage dedups to — so the N scans were N slices of a
+	// single grouped scan, paid for one at a time against the same SQLite
+	// read connection ingest is using.
+	//
+	// The range stays all-time deliberately. The number beside it is the
+	// vendor's own lifetime figure, so narrowing the local side would put two
+	// different periods on one line — and this endpoint's whole point is that
+	// the two are shown side by side and never added.
+	acct := account
+	if acct == "" || isAllAccounts(acct) {
+		acct = store.AllAccounts
+	}
+	local, err := s.Store.AttributedTotals(store.Filter{Account: acct, Source: source,
+		Start: time.Unix(0, 0).UTC(), End: time.Date(2200, 1, 1, 0, 0, 0, 0, time.UTC)})
+	if err != nil {
+		return nil, err
+	}
+	out := []observation{}
+	for _, u := range rows {
+		a := local[store.AccountSource{Account: u.AccountUUID, Source: u.Source}]
+		out = append(out, observation{AccountUsage: u, LocalTokens: a.Tokens, LocalRequests: a.Events})
+	}
+	return map[string]any{"observations": out, "comparable": false, "note": accountUsageNoteEN}, nil
+}

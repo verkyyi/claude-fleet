@@ -1,0 +1,630 @@
+package main
+
+import (
+	"context"
+	"crypto/tls"
+	"errors"
+	"flag"
+	"fmt"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/agent"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/api"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/fx"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/mcp"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/scan"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/web"
+)
+
+// envOr lets an environment variable override a compiled-in default while an
+// unset variable still leaves the default in place -- unlike os.Getenv alone,
+// which turns "not configured" into "configured as empty".
+func envOr(key, def string) string {
+	if v, ok := os.LookupEnv(key); ok {
+		return v
+	}
+	return def
+}
+
+func runHub(args []string) error {
+	fs := flag.NewFlagSet("hub", flag.ExitOnError)
+	addr := fs.String("addr", "127.0.0.1:8787",
+		"listen address(es), comma-separated. Binding a tailnet address alone\n"+
+			"means localhost does not work from the machine itself, which is\n"+
+			"where you usually are: `127.0.0.1:8787,100.x.y.z:8787` gives both")
+	dbPath := fs.String("db", "", "path to the SQLite database (default: $CCQUOTA_DB, else ~/.ccquota/ccquota.db)")
+	token := fs.String("token", os.Getenv("CCQUOTA_VIEWER_TOKEN"), "viewer token for the dashboard, API and MCP")
+	noAuth := fs.Bool("no-auth", false, "serve without a viewer token (loopback binds only)")
+	// 企微 SSO（把「人看面板」这一档接到公司已有的授权服务上）。
+	// ★ 两把密钥只从环境来、不给命令行开关：命令行参数在 `ps` 里人人可见，而这两把
+	//   一把能验票、一把能签会话 —— 泄露任何一把都等于可以凭空造一个已登录的人。
+	//   一把也没配 = 整条 SSO 关闭，/enter 回 404，行为与从前逐字节相同。
+	ssoApp := fs.String("sso-app", os.Getenv("CCQUOTA_SSO_APP"),
+		"this hub's app id at the authorization service (its `aud`); empty disables WeCom SSO")
+	ssoSlug := fs.String("sso-slug", os.Getenv("CCQUOTA_SSO_SLUG"), "tenant slug to enter as")
+	ssoEnterURL := fs.String("sso-enter-url", os.Getenv("CCQUOTA_SSO_ENTER_URL"),
+		"authorization endpoint a signed-out browser is sent to")
+	ssoHours := fs.Int("sso-session-hours", 8, "how long a WeCom session lasts")
+
+	tailnetViewers := fs.String("tailnet-viewers", os.Getenv("CCQUOTA_TAILNET_VIEWERS"),
+		"comma-separated tailnet logins who may open the dashboard with no\n"+
+			"token, on the word of the local tailscaled (tailscale whois).\n"+
+			"Tagged nodes, other logins, the LAN, loopback and the hub's own\n"+
+			"address still need the token. Empty = off")
+	tailscaleBin := fs.String("tailscale-bin", "", "path to the tailscale CLI (default: search PATH and the usual places)")
+	httpsAddr := fs.String("https-addr", "",
+		"also serve HTTPS here (e.g. :443) with a certificate from tailscale cert\n"+
+			"for this node's MagicDNS name, renewed by the hub. Only tailnet peers\n"+
+			"and loopback are accepted, whatever the socket can hear -- macOS lets\n"+
+			"an unprivileged process take :443 only on the wildcard address.\n"+
+			"The URL becomes https://<node>.<tailnet>.ts.net")
+	tlsHost := fs.String("tls-host", "", "the name to get a certificate for (default: detected from tailscale status)")
+	publicBadges := fs.Bool("public-badges", false,
+		"serve /badge/... without a viewer token.\n"+
+			"Needed for a README image, which sends no credential and is\n"+
+			"proxied through a cache that strips cookies. Off by default")
+	insecurePublic := fs.Bool("insecure-public", false, "acknowledge binding to a public address without TLS in front")
+	pricingFile := fs.String("pricing", "", "path to a pricing override file")
+	// Display-side currency conversion. It converts NOTHING in the ledger --
+	// stored figures keep the currency they were billed in, and RealSpendOver
+	// still refuses to add two currencies rather than converting one. This only
+	// decides what a reader sees, and every converted figure on the page carries
+	// the rate and the date the feed last moved.
+	fxURL := fs.String("fx-url", envOr("CCQUOTA_FX_URL", fx.DefaultURL),
+		"exchange-rate feed for DISPLAY-ONLY currency conversion, keyed on USD.\n"+
+			"The dashboard shows a viewer the figures in their own currency and\n"+
+			"states the rate and its date beside them; nothing stored is converted\n"+
+			"and no total is computed through it. Set empty to disable, and every\n"+
+			"figure is shown in the currency it was billed in")
+	fxRefresh := fs.Duration("fx-refresh", fx.DefaultRefresh,
+		"how often to re-read --fx-url. Daily feeds do not move faster than this")
+	pollInterval := fs.Int("limits-poll-interval", 120, "seconds between agents' limit polls")
+	retentionDays := fs.Int("retention-days", 90, "days of raw events to keep (0 disables pruning)")
+	rebuild := fs.Bool("rebuild-rollup", false,
+		"rebuild the hourly rollup from raw events at startup, then continue.\n"+
+			"Open already does this automatically after a schema change; pass this\n"+
+			"to force it after fixing corrupted rows by hand, for instance.\n"+
+			"Refuses (see the error) rather than rebuild over hours usage_events\n"+
+			"can no longer reconstruct -- retention pruning has already deleted\n"+
+			"their only other record. Pass --rebuild-rollup-force too to proceed\n"+
+			"anyway and accept losing them")
+	reprice := fs.Bool("reprice", false,
+		"recompute every stored event's cost from the pricing table as it\n"+
+			"stands now, then refold the rollup -- then continue serving.\n"+
+			"Pricing happens at ingest, so a rate added today otherwise reaches\n"+
+			"only the events that arrive after it: the month you could not price\n"+
+			"last month stays unpriced forever, and --rebuild-rollup does not\n"+
+			"help (it refolds the same stale figures). Use this after correcting\n"+
+			"--pricing. Costs that ARRIVE with the event (vendor bills, voice\n"+
+			"charges) are never recomputed -- repricing refuses rather than\n"+
+			"overwrite an invoice")
+	repriceSince := fs.String("reprice-since", "",
+		"with --reprice, only touch events at or after this RFC3339 instant\n"+
+			"(for example 2026-09-01T00:00:00Z). Default: every event")
+	rebuildForce := fs.Bool("rebuild-rollup-force", false,
+		"with --rebuild-rollup, proceed even when the rollup holds hours\n"+
+			"usage_events can no longer reconstruct, accepting that those older\n"+
+			"rows are left exactly as they are (not deleted, not rebuilt).\n"+
+			"Read the refusal error before reaching for this: it says how many\n"+
+			"hours are at stake")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	// Parse before anything opens a database or binds a port: an operator who
+	// mistyped the instant should get the complaint immediately, not after a
+	// restart has already taken the hub down.
+	var repriceFrom time.Time
+	if *repriceSince != "" {
+		if !*reprice {
+			return errors.New("--reprice-since without --reprice: nothing would be repriced")
+		}
+		t, err := time.Parse(time.RFC3339, *repriceSince)
+		if err != nil {
+			return fmt.Errorf("--reprice-since: %w (want an RFC3339 instant such as 2026-09-01T00:00:00Z)", err)
+		}
+		repriceFrom = t
+	}
+
+	dbFile, err := resolveDB(*dbPath)
+	if err != nil {
+		return err
+	}
+	// The hub is the one command allowed to bring a database into being, so
+	// say when it does. A hub silently starting on an empty database looks
+	// exactly like a hub that has lost everything.
+	if _, statErr := os.Stat(dbFile); errors.Is(statErr, os.ErrNotExist) {
+		if err := os.MkdirAll(filepath.Dir(dbFile), 0o700); err != nil {
+			return fmt.Errorf("create %s: %w", filepath.Dir(dbFile), err)
+		}
+		log.Printf("no database at %s yet; creating an empty one", dbFile)
+	}
+
+	addrs := splitList(*addr)
+	if len(addrs) == 0 {
+		return errors.New("--addr is empty")
+	}
+	for _, a := range addrs {
+		if err := checkExposure(a, *token, *noAuth, *insecurePublic); err != nil {
+			return err
+		}
+	}
+
+	st, err := store.Open(dbFile)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	if st.BackfilledRollup > 0 {
+		log.Printf("rollup: built %d hourly rows from usage_events", st.BackfilledRollup)
+	}
+	if *rebuild {
+		n, err := st.RebuildRollup(*rebuildForce)
+		if err != nil {
+			return fmt.Errorf("--rebuild-rollup: %w", err)
+		}
+		log.Printf("rollup: rebuilt %d hourly rows from usage_events", n)
+	}
+
+	table := pricing.Default()
+	if *pricingFile != "" {
+		if err := table.LoadOverrides(*pricingFile); err != nil {
+			return err
+		}
+		// Subscription prices ride in the same file but land in the database,
+		// not in the rate table: they are real money and the rate table is
+		// notional, and the two must never meet. Recording them on every start
+		// keeps the file the source of truth for a hub that manages prices
+		// that way, while `ccquota plan --set` stays available for a hub that
+		// does not.
+		plans, err := pricing.LoadPlanPrices(*pricingFile)
+		if err != nil {
+			return err
+		}
+		for _, pl := range plans {
+			if err := st.SetPlanPrice(pl); err != nil {
+				return fmt.Errorf("--pricing: record %s/%s: %w", pl.Source, pl.Plan, err)
+			}
+		}
+		if len(plans) > 0 {
+			log.Printf("pricing: recorded %d subscription plan price(s) from %s", len(plans), *pricingFile)
+		}
+	}
+
+	// After the table is loaded, and after any --pricing overrides are merged
+	// into it: repricing against the built-in table alone would restate every
+	// gateway figure as unpriced, which is the opposite of the point.
+	if *reprice {
+		scope := "every event"
+		if !repriceFrom.IsZero() {
+			scope = "events at or after " + repriceFrom.Format(time.RFC3339)
+		}
+		log.Printf("reprice: applying the current rate table to %s", scope)
+		res, err := st.Reprice(table, repriceFrom)
+		if err != nil {
+			return fmt.Errorf("--reprice: %w", err)
+		}
+		log.Printf("reprice: scanned %d event(s), changed %d (%d newly priced, %d back to unpriced), "+
+			"net %+.6f USD, largest single change %.6f USD, refolded %d hourly row(s)",
+			res.Scanned, res.Changed, res.NewlyPriced, res.Unpriced, res.NetUSD, res.MaxAbsUSD, res.RollupRows)
+	}
+
+	var tailnet *api.TailnetViewers
+	if *tailnetViewers != "" {
+		bin, err := api.FindTailscaleBin(*tailscaleBin)
+		if err != nil {
+			// Fail closed and loud: an operator who asked for tailnet
+			// identity must not get a hub that silently never grants it.
+			return fmt.Errorf("--tailnet-viewers: %w", err)
+		}
+		tailnet = api.NewTailnetViewers(strings.Split(*tailnetViewers, ","), bindHosts(*addr), api.TailscaleWhoIs(bin))
+		log.Printf("tailnet identity: %s may view without a token (via %s)", *tailnetViewers, bin)
+	}
+
+	var sso *api.SSO
+	if *ssoApp != "" {
+		sso = &api.SSO{
+			AppID:         *ssoApp,
+			Slug:          *ssoSlug,
+			TicketSecret:  os.Getenv("CCQUOTA_SSO_TICKET_SECRET"),
+			SessionSecret: os.Getenv("CCQUOTA_SSO_SESSION_SECRET"),
+			EnterURL:      *ssoEnterURL,
+			TTL:           time.Duration(*ssoHours) * time.Hour,
+		}
+		// 配了一半比没配更危险：运维以为登录口在跑，实际上每个人都被挡在门外
+		// （或者更糟，以为挡住了其实没挡）。当场说清缺哪一件。
+		if sso.TicketSecret == "" || sso.SessionSecret == "" || sso.EnterURL == "" {
+			return errors.New("--sso-app is set but the rest is not: " +
+				"CCQUOTA_SSO_TICKET_SECRET, CCQUOTA_SSO_SESSION_SECRET and --sso-enter-url are all required")
+		}
+	}
+
+	// The pinned rate is the fallback, never the default: if the feed cannot be
+	// reached the page still converts, but says the rate is a pinned one rather
+	// than passing it off as today's. pricing.GatewayCNYPerUSD is already
+	// human-reviewed and dated, which is exactly what a fallback needs to be.
+	feed := fx.New(*fxURL, *fxRefresh,
+		map[string]float64{"CNY": pricing.GatewayCNYPerUSD},
+		"pinned in this build, reviewed "+pricing.GatewayFXAsOf)
+
+	// Resolve the HTTPS name HERE rather than in the TLS block below, so the
+	// Server is complete before Handler() is called and nothing writes to it
+	// again once requests are being served. /access reports these addresses,
+	// and a field filled in after the first listener is up is a data race, not
+	// a late initialisation.
+	//
+	// It also fails earlier: a missing tailscale binary now stops the hub
+	// before it binds anything, with the same message it always gave.
+	var tlsBin, tlsName, httpsURL string
+	if *httpsAddr != "" {
+		var err error
+		if tlsBin, err = api.FindTailscaleBin(*tailscaleBin); err != nil {
+			return fmt.Errorf("--https-addr: %w", err)
+		}
+		if tlsName = *tlsHost; tlsName == "" {
+			if tlsName, err = detectMagicDNSName(tlsBin); err != nil {
+				return fmt.Errorf("--https-addr: %w", err)
+			}
+		}
+		httpsURL = "https://" + tlsName + "/"
+	}
+
+	srv := &api.Server{
+		Store:               st,
+		FX:                  feed,
+		SSO:                 sso,
+		Pricing:             table,
+		ViewerToken:         *token,
+		Tailnet:             tailnet,
+		PublicBadges:        *publicBadges,
+		LimitsPollIntervalS: *pollInterval,
+		UI:                  web.Assets(),
+		LiveStore:           api.NewLive(),
+		// Where we are about to bind, so /access can print a URL instead of
+		// "some port". The HTTPS half is filled in below, once the certificate
+		// has told us the name it is actually for.
+		Listeners: api.ListenerFacts{HTTP: addrs, HTTPS: *httpsAddr, HTTPSURL: httpsURL},
+	}
+	srv.MCP = mcp.Handler(srv)
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// Reads the feed once now, then on the interval. Failure is not fatal: a hub
+	// with no route to an FX feed is a working hub that shows every figure in
+	// the currency it was billed in.
+	go feed.Refreshing(ctx)
+
+	if *retentionDays > 0 {
+		go pruneLoop(ctx, st, *retentionDays)
+	}
+
+	handler := srv.Handler()
+	servers := make([]*http.Server, 0, len(addrs)+1)
+	errCh := make(chan error, len(addrs)+1) // +1: the optional TLS listener
+
+	for _, a := range addrs {
+		// Listen before serving, so a bad address fails here with a clear
+		// message rather than in a goroutine nobody is reading.
+		ln, err := net.Listen("tcp", a)
+		if err != nil {
+			return fmt.Errorf("listen on %s: %w", a, err)
+		}
+		hs := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+		servers = append(servers, hs)
+
+		log.Printf("ccquota hub listening on %s (db %s)", a, dbFile)
+		if *token != "" {
+			// The token itself is deliberately NOT logged: hub.log is readable
+			// by anyone on the machine and gets pasted into bug reports.
+			log.Printf("  dashboard: http://%s/?token=<viewer token>", a)
+		}
+		go func() { errCh <- hs.Serve(ln) }()
+	}
+
+	if *httpsAddr != "" {
+		// tlsBin and tlsName were resolved above, before the Server was built.
+		tc := newTailscaleCert(tlsBin, tlsName, filepath.Join(filepath.Dir(dbFile), "tls"))
+		if err := tc.refresh(); err != nil {
+			return fmt.Errorf("--https-addr: obtain certificate: %w", err)
+		}
+		go tc.renewLoop(ctx, 12*time.Hour)
+
+		rawLn, err := net.Listen("tcp", *httpsAddr)
+		if err != nil {
+			return fmt.Errorf("listen on %s: %w", *httpsAddr, err)
+		}
+		// Tailnet peers and loopback only, whatever the socket can hear.
+		ln := net.Listener(tailnetOnly{rawLn})
+		hs := &http.Server{
+			Handler:           handler,
+			ReadHeaderTimeout: 10 * time.Second,
+			TLSConfig:         &tls.Config{GetCertificate: tc.get, MinVersion: tls.VersionTLS12},
+		}
+		servers = append(servers, hs)
+		log.Printf("ccquota hub listening on %s (https, tailnet peers only) -> %s", *httpsAddr, httpsURL)
+		go func() { errCh <- hs.ServeTLS(ln, "", "") }()
+	}
+
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		for _, hs := range servers {
+			_ = hs.Shutdown(shutdownCtx)
+		}
+	}()
+
+	// Any listener dying unexpectedly takes the hub down: a half-bound hub
+	// that answers on one address and not another is worse than a dead one,
+	// because the missing half looks like a network problem.
+	for range servers {
+		if err := <-errCh; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+	}
+	return nil
+}
+
+// splitList parses a comma-separated flag value, ignoring blanks.
+func splitList(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// checkExposure refuses the combination that quietly puts an unauthenticated
+// dashboard on the internet.
+//
+// The hub holds several people's usage patterns and working-directory names.
+// Making the operator say --insecure-public out loud is cheap; discovering the
+// mistake from a search engine is not.
+func checkExposure(addr, token string, noAuth, insecurePublic bool) error {
+	if token == "" && !noAuth {
+		return errors.New("no viewer token: pass --token, set CCQUOTA_VIEWER_TOKEN, " +
+			"or pass --no-auth if this really should be open")
+	}
+	if token != "" {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("parse --addr: %w", err)
+	}
+	if isLoopback(host) || insecurePublic {
+		return nil
+	}
+	return fmt.Errorf("refusing to serve %s without a viewer token; "+
+		"bind to loopback, pass --token, or acknowledge with --insecure-public", addr)
+}
+
+func isLoopback(host string) bool {
+	if host == "localhost" || host == "" {
+		return true
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsLoopback()
+}
+
+// pruneLoop trims raw events past the retention window once a day. Rollups and
+// limit snapshots are kept: they are small and are the long-term record.
+//
+// Repo progress is bounded on the same schedule and by the same window, for
+// the same reason and with the same trade: repo_days is the long-term record
+// and is never touched, while the per-issue rows behind it are detail that
+// ages out. One knob rather than two, because a hub with two retention windows
+// has two ways to be surprised by its own disk.
+func pruneLoop(ctx context.Context, st *store.Store, days int) {
+	t := time.NewTicker(24 * time.Hour)
+	defer t.Stop()
+	for {
+		cut := time.Now().AddDate(0, 0, -days)
+		n, err := st.PruneEvents(cut)
+		if err != nil {
+			log.Printf("prune: %v", err)
+		} else if n > 0 {
+			log.Printf("pruned %d events older than %d days", n, days)
+		}
+		// A repo-progress failure must not stop event pruning, and vice
+		// versa: they are independent tables and the loop that keeps the disk
+		// bounded should not be taken out by whichever one broke.
+		if n, err := st.PruneRepoIssues(cut); err != nil {
+			log.Printf("prune repo issues: %v", err)
+		} else if n > 0 {
+			log.Printf("pruned %d repo issue rows older than %d days (day rows kept)", n, days)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
+func runEnroll(args []string) error {
+	fs := flag.NewFlagSet("enroll", flag.ExitOnError)
+	dbPath := fs.String("db", "", "the hub's database (default: $CCQUOTA_DB, else ~/.ccquota/ccquota.db)")
+	label := fs.String("name", "", "a human name for this endpoint, e.g. web-01")
+	kind := fs.String("kind", "agent", "what this enrollment is: agent | growth_reader")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *label == "" {
+		return errors.New("--name is required")
+	}
+	// Only the kinds a human has a reason to mint. The *_shipper kinds are
+	// deliberately absent: a shipper marks itself on its first successful push,
+	// so offering them here would create a second way to say the same thing --
+	// and the typo'd one would be a token that looks enrolled and is in the
+	// wrong roster forever. A reader has no such moment, which is why it is the
+	// one kind that must be chosen up front.
+	if *kind != "agent" && *kind != "growth_reader" {
+		return fmt.Errorf("--kind %q: want agent or growth_reader", *kind)
+	}
+
+	// Refuses to create one: a token minted into a fresh database is printed
+	// exactly like a real one and fails only later, on another machine.
+	dbFile, err := resolveExistingDB(*dbPath)
+	if err != nil {
+		return err
+	}
+	st, err := store.Open(dbFile)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
+	tok, err := api.MintToken()
+	if err != nil {
+		return err
+	}
+	id := fmt.Sprintf("ep_%d", time.Now().UnixNano())
+	if err := st.EnrollKind(id, *label, api.HashToken(tok), *kind); err != nil {
+		return err
+	}
+
+	fmt.Printf(`Enrolled %q as %s (in %s).
+
+Run this on that endpoint (the token is shown once and is not recoverable):
+
+  export CCQUOTA_HUB_URL=https://your-hub.example.com
+  export CCQUOTA_TOKEN=%s
+  ccquota agent
+
+`, *label, id, dbFile, tok)
+	if *kind == "growth_reader" {
+		// A reader never runs `ccquota agent`, so the block above is the wrong
+		// instruction for it. Say what it is actually for, here, where the
+		// token is on screen -- the one moment anybody is looking.
+		fmt.Printf(`This one is a READ-ONLY ledger credential (kind=%s). It does not run an
+agent; point the Monday brief at it instead:
+
+  export CCQUOTA_URL=https://your-hub.example.com
+  export CCQUOTA_TOKEN=%s
+  curl -sH "Authorization: Bearer $CCQUOTA_TOKEN" "$CCQUOTA_URL/v1/growth/latest"
+
+`, *kind, tok)
+	}
+	return nil
+}
+
+func runAgent(args []string) error {
+	fs := flag.NewFlagSet("agent", flag.ExitOnError)
+	hub := fs.String("hub", os.Getenv("CCQUOTA_HUB_URL"), "hub base URL")
+	token := fs.String("token", os.Getenv("CCQUOTA_TOKEN"), "enrollment token")
+	home := fs.String("home", "", "user home directory (default: your home)")
+	sources := fs.String("sources", os.Getenv("CCQUOTA_SOURCES"), "usage sources: all (default), claude, codex, or claude,codex")
+	codexHome := fs.String("codex-home", "", "Codex data directory (default: CODEX_HOME or <home>/.codex)")
+	codexHomes := fs.String("codex-homes", os.Getenv("CCQUOTA_CODEX_HOMES"), "additional Codex data directories, comma-separated")
+	codexBinary := fs.String("codex-bin", os.Getenv("CCQUOTA_CODEX_BINARY"), "Codex CLI executable for account queries and renewal")
+	codexAutoRefresh := fs.Bool("codex-auto-refresh", true, "renew Codex ChatGPT file logins through the official CLI before expiry")
+	state := fs.String("state", "", "state directory (default: <home>/.ccquota)")
+	sessionsDir := fs.String("sessions-dir", "",
+		"where `ccquota stamp` writes session stamps (default: <home>/.ccquota).\n"+
+			"Must match the hook's --state; it is separate from this agent's own\n"+
+			"state directory because the hook does not know which agent reads it")
+	scanEvery := fs.Duration("scan-interval", agent.DefaultScanInterval, "how often to scan transcripts")
+	limitsEvery := fs.Duration("limits-interval", agent.DefaultLimitsInterval, "how often to read account-wide limits")
+	liveEvery := fs.Duration("live-interval", agent.DefaultLiveInterval, "how often to report running sessions")
+	accountsDir := fs.String("accounts-dir", os.Getenv("CCQUOTA_ACCOUNTS_DIR"),
+		"directory of `label -> OAuth token` files, one per subscription.\n"+
+			"Lets this agent read the meter for subscriptions nothing else can see:\n"+
+			"an idle account, or one whose local credentials have expired. Each\n"+
+			"reading costs one minimal inference call against that subscription,\n"+
+			"so it is opt-in and only runs when no cheaper source has reported")
+	probeModels := fs.String("probe-model", os.Getenv("CCQUOTA_PROBE_MODELS"),
+		"models to probe each --accounts-dir subscription with, comma-separated\n"+
+			"(e.g. claude-fable-5-1). A per-model cap such as the weekly Fable limit\n"+
+			"only shows up on a request for that model, so this is the only way to\n"+
+			"read it. A capped account answers with a 429 and costs nothing; an\n"+
+			"uncapped one costs one output token of that model")
+	spoolMB := fs.Int64("spool-mb", 64, "cap on the on-disk queue, in MB")
+	maxBackfill := fs.Duration("max-backfill", 0,
+		"ignore turns older than this (e.g. 720h). Turns older than the account\n"+
+			"itself are always ignored; this narrows the window further, because\n"+
+			"attribution gets less trustworthy the further back a scan reaches")
+	once := fs.Bool("once", false, "run a single cycle and exit (for cron)")
+	install := fs.Bool("install", false, "print a service unit for this platform and exit")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	h, err := homeDir(*home)
+	if err != nil {
+		return err
+	}
+	stateDir := *state
+	if stateDir == "" {
+		stateDir = filepath.Join(h, ".ccquota")
+	}
+
+	if *install {
+		selected, err := scan.ParseSources(*sources)
+		if err != nil {
+			return err
+		}
+		return printServiceUnit(*hub, stateDir, strings.Join(selected, ","), scan.CodexHome(h, *codexHome), *codexHomes, *codexBinary, h, *codexAutoRefresh)
+	}
+
+	a, err := agent.New(agent.Config{
+		HubURL:              strings.TrimRight(*hub, "/"),
+		Token:               *token,
+		Home:                h,
+		Sources:             *sources,
+		CodexHome:           *codexHome,
+		CodexHomes:          *codexHomes,
+		CodexBinary:         *codexBinary,
+		CodexDisableRefresh: !*codexAutoRefresh,
+		StateDir:            stateDir,
+		SessionsDir:         *sessionsDir,
+		ScanInterval:        *scanEvery,
+		LimitsInterval:      *limitsEvery,
+		LiveInterval:        *liveEvery,
+		SpoolMaxBytes:       *spoolMB << 20,
+		MaxBackfill:         *maxBackfill,
+		Version:             Version,
+		Once:                *once,
+		AccountsDir:         *accountsDir,
+		ProbeModels:         splitList(*probeModels),
+	})
+	if err != nil {
+		return err
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if !*once {
+		log.Printf("ccquota agent %s -> %s (scan every %s)", Version, *hub, scanEvery)
+	}
+	return a.Run(ctx)
+}
+
+// bindHosts is the list of hosts in a comma-separated --addr. The tailnet
+// identity gate treats these as "self" and never trusts them: the hub's own
+// tailnet address resolves to the machine's owner.
+func bindHosts(addr string) []string {
+	var hosts []string
+	for _, a := range strings.Split(addr, ",") {
+		host, _, err := net.SplitHostPort(strings.TrimSpace(a))
+		if err != nil {
+			continue
+		}
+		hosts = append(hosts, host)
+	}
+	return hosts
+}

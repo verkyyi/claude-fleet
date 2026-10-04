@@ -1,0 +1,398 @@
+// Package model holds the types that cross package boundaries in ccquota.
+//
+// Everything here is plain data with JSON tags: the agent serialises these to
+// push to the hub, the hub stores them, and the query API hands them back. No
+// behaviour lives here beyond trivial derivations.
+package model
+
+import "time"
+
+const (
+	SourceClaude = "claude"
+	SourceCodex  = "codex"
+	// SourceGateway is an OpenAI-compatible gateway fronting non-Anthropic
+	// vendors. Unlike the other two it is billed per call, so its CostUSD is
+	// an actual charge rather than an API-equivalent estimate.
+	SourceGateway = "gateway"
+	// SourceVendorBill is spend read straight off a vendor's invoice rather
+	// than metered from a request. It exists because some spend never passes
+	// through anything this hub can observe: asynchronous task APIs (video
+	// generation, file transcription) hand back a vendor-signed result URL and
+	// require publicly fetchable input, so no proxy sits in that data path —
+	// yet the money is real and, measured on the deployment that prompted this,
+	// larger than everything the gateway does see.
+	//
+	// Its CostUSD is THE INVOICE: taken as supplied and never recomputed from a
+	// rate table (see pricing.Table.Cost). Consequences, all deliberate:
+	//   - no per-app attribution. A daily invoice line has no consumer, and
+	//     splitting it by call share would be an estimate wearing real money's
+	//     clothes.
+	//   - no token counters. The billing unit is seconds, images or calls.
+	//   - the collector must only ingest a billing day once the vendor has
+	//     settled it: dedup is by MessageUUID, so a later revision of the same
+	//     day is ignored rather than corrected.
+	SourceVendorBill = "vendor_bill"
+	// SourceVoice is model usage an application reports about itself, for calls
+	// that no proxy in this deployment can observe. It exists for the WebSocket
+	// tier — realtime speech recognition and streaming speech synthesis — where
+	// the credential rides the handshake and the audio then flows as frames: a
+	// gateway could proxy it, but only by becoming a single point in a live
+	// phone call, which is a far larger cost than the visibility is worth at the
+	// volumes that prompted this.
+	//
+	// It is the counterpart of SourceVendorBill, and the two divide the work by
+	// what each can actually know:
+	//
+	//   - This source carries USAGE and attribution. The app knows which tenant
+	//     the call served, how many seconds it listened and how many characters
+	//     it spoke. Measured on the deployment that prompted this, the invoice
+	//     knows none of that: the vendor's own bill reported 0 seconds of speech
+	//     recognition while the agent was demonstrably running.
+	//   - The invoice carries the MONEY. Rows here stay unpriced unless a
+	//     collector supplies a charge, and a billing item may be priced by
+	//     exactly one side — whatever this source prices must be excluded from
+	//     the bill collector's include list, or the same spend lands twice.
+	//     Unpriced is the safe default precisely because double counting is the
+	//     one error this ledger must never make.
+	//
+	// Its billing units are seconds and characters, so like SourceVendorBill it
+	// carries no token counters — and an event here must never be given an
+	// estimated token count to make it look like the rest.
+	SourceVoice = "voice"
+)
+
+// UsageSource preserves compatibility with agents and rows predating sources.
+func UsageSource(source string) string {
+	if source == "" {
+		return SourceClaude
+	}
+	return source
+}
+
+// UsageEvent is one model request, normalized from a source's transcript.
+//
+// Input and cache counters are disjoint after normalization. Thinking is a
+// subset of output and must never be added to TotalTokens. Source adapters
+// discard repeated notifications and overlapping breakdowns.
+type UsageEvent struct {
+	Source      string    `json:"source"`
+	AccountUUID string    `json:"account_uuid"`
+	EndpointID  string    `json:"endpoint_id"`
+	SessionID   string    `json:"session_id"`
+	MessageUUID string    `json:"message_uuid"` // transcript entry `uuid` — the dedup key
+	RequestID   string    `json:"request_id"`   // diagnostic only
+	TS          time.Time `json:"ts"`
+	Model       string    `json:"model"`
+
+	// Provider is the upstream that actually served this request.
+	//
+	// It is a separate fact from Model and from Source. A gateway with failover
+	// reaches the same model id through more than one upstream at more than one
+	// contracted price, so the model id alone cannot identify the contract --
+	// see internal/pricing/gateway.go. Senders may set it directly; the hub also
+	// reads it from Details.Provider, which is what the gateway shipper sends.
+	//
+	// Empty means NOT DECLARED, which is the honest state for a Claude
+	// transcript. It is never filled in by inference.
+	Provider string `json:"provider,omitempty"`
+
+	InputTokens   int64 `json:"input_tokens"`
+	OutputTokens  int64 `json:"output_tokens"`
+	CacheCreate5m int64 `json:"cache_create_5m_tokens"`
+	CacheCreate1h int64 `json:"cache_create_1h_tokens"`
+	CacheRead     int64 `json:"cache_read_tokens"`
+	Thinking      int64 `json:"thinking_tokens"`
+
+	WebSearchRequests int64 `json:"web_search_requests"`
+	WebFetchRequests  int64 `json:"web_fetch_requests"`
+
+	// CostUSD is notional on SourceClaude and SourceCodex: what this turn
+	// would have cost at API rates. On SourceGateway it is real spend — that
+	// source is billed per call — so costs from different sources are
+	// different kinds of money and must never be summed. It is nil for models
+	// absent from the pricing table — never 0, because 0 is a claim and nil
+	// is an admission.
+	CostUSD *float64      `json:"cost_usd"`
+	Details *UsageDetails `json:"details,omitempty"`
+	// Replayed prefix after a parser upgrade: enrich only, never resurrect a
+	// request the hub may already have pruned from the raw ledger.
+	EnrichOnly bool `json:"enrich_only,omitempty"`
+
+	CWD       string `json:"cwd"`
+	GitBranch string `json:"git_branch"`
+
+	// GitRepo is `owner/name`, resolved by the ENDPOINT from the checkout it
+	// was running in (`git remote get-url origin`, once per cwd) and sent as a
+	// declaration. Empty means NOT DECLARED — an older agent, a cwd that is not
+	// a checkout, or a remote that names no host — and it is never inferred,
+	// here or on the hub.
+	//
+	// It is what makes issue_number joinable: a number alone is repo-less and
+	// every repository starts at #1, so without this the cost-per-issue read
+	// could only answer while the hub happened to hold exactly one repository
+	// (§5 of the cost-per-issue seam design; this field is its §6).
+	GitRepo string `json:"git_repo,omitempty"`
+
+	Entrypoint  string `json:"entrypoint"`
+	Effort      string `json:"effort"`
+	IsSidechain bool   `json:"is_sidechain"` // true = subagent turn
+
+	// OSUser is the operating-system login the turn was spent under, stamped
+	// by the hub from the reporting endpoint. Denormalised onto the event for
+	// the same reason CWD is: the dimension has to survive an endpoint being
+	// re-enrolled or relabelled, and history must not move when it is.
+	OSUser string `json:"os_user"`
+
+	// TranscriptPath is where this turn was read from. It is the join key for
+	// per-session attribution — a statusLine stamp reports the same path — and
+	// is local bookkeeping, never sent to the hub.
+	TranscriptPath string `json:"-"`
+}
+
+// TotalTokens is the raw, unweighted sum. Useful for display; not the right
+// basis for apportioning a rate limit (see internal/recon).
+func (e UsageEvent) TotalTokens() int64 {
+	return e.InputTokens + e.OutputTokens + e.CacheCreate5m + e.CacheCreate1h + e.CacheRead
+}
+
+// Identity is who and where a batch of events came from.
+type Identity struct {
+	Source           string `json:"source"`
+	AccountUUID      string `json:"account_uuid"`
+	Email            string `json:"email"`
+	OrgUUID          string `json:"org_uuid"`
+	OrgName          string `json:"org_name"`
+	SubscriptionType string `json:"subscription_type"` // "max", "pro", ...
+	RateLimitTier    string `json:"rate_limit_tier"`   // "default_claude_max_20x", ...
+	DisplayName      string `json:"display_name"`
+
+	// AccountCreatedAt is the hard boundary for attribution.
+	//
+	// Transcripts record no account, so the agent stamps whichever one is
+	// logged in when it scans. On a first scan that means the ENTIRE history
+	// of a machine gets attributed to today's login — including turns spent
+	// under a different subscription. Nothing in the data can detect that in
+	// general, but one case is provable: a turn older than the account itself
+	// cannot possibly belong to it.
+	AccountCreatedAt time.Time `json:"account_created_at"`
+
+	MachineID string `json:"machine_id"`
+	Hostname  string `json:"hostname"`
+	OS        string `json:"os"`
+	Arch      string `json:"arch"`
+	CCVersion string `json:"cc_version"`
+
+	// OSUser is the operating-system account the agent runs as.
+	//
+	// One machine is not one Claude Code user: every OS login has its own
+	// ~/.claude, its own transcripts and its own credentials, and a home
+	// directory the others cannot read. An endpoint is therefore a (machine,
+	// user) pair, and this is the half that makes it one.
+	OSUser string `json:"os_user"`
+}
+
+// Window is one rate-limit bucket as Anthropic reports it.
+type Window struct {
+	// Utilization is a percentage, 0-100. Exact — it comes from Anthropic and
+	// already covers every device on the account.
+	Utilization float64    `json:"utilization"`
+	ResetsAt    *time.Time `json:"resets_at"`
+}
+
+// ScopedWindow is a per-model or per-surface weekly limit.
+type ScopedWindow struct {
+	Kind        string     `json:"kind"`  // "weekly_scoped", ...
+	Model       string     `json:"model"` // display name, may be empty
+	Surface     string     `json:"surface"`
+	Utilization float64    `json:"utilization"`
+	ResetsAt    *time.Time `json:"resets_at"`
+	IsActive    bool       `json:"is_active"`
+}
+
+// ModelClaim is one unified rate-limit claim seen on a response to a request
+// for one specific model — the per-model weekly cap being the reason it exists.
+//
+// It is keyed by the model the request was FOR, never by a mapping from the
+// claim name: the header ("7d_oi") does not say which model it covers, and it
+// only appears at all on a request for the capped model. A request for another
+// model carries no such header, so the same account reads uncapped there.
+type ModelClaim struct {
+	Model       string     `json:"model"`
+	Claim       string     `json:"claim"`       // the header's own name, e.g. "7d_oi"
+	Utilization float64    `json:"utilization"` // percent, 0-100
+	Status      string     `json:"status,omitempty"`
+	ResetsAt    *time.Time `json:"resets_at,omitempty"`
+	// SurpassedThreshold is the fraction the server says was crossed, once one
+	// has been. Nil until then.
+	SurpassedThreshold *float64  `json:"surpassed_threshold,omitempty"`
+	ObservedAt         time.Time `json:"observed_at"`
+}
+
+// LimitsSnapshot is one observation of an account's true, account-wide quota
+// state. This is the only exact number in the system; everything the scanner
+// produces is an estimate by comparison.
+type LimitsSnapshot struct {
+	AccountUUID string    `json:"account_uuid"`
+	EndpointID  string    `json:"endpoint_id"` // which endpoint observed it
+	ObservedAt  time.Time `json:"observed_at"`
+
+	FiveHour Window `json:"five_hour"`
+	SevenDay Window `json:"seven_day"`
+
+	Scoped []ScopedWindow `json:"scoped"`
+
+	// ModelClaims are the per-model windows a probe for a specific model saw,
+	// e.g. the weekly Fable cap. Empty unless a probe model is configured.
+	ModelClaims []ModelClaim `json:"model_claims,omitempty"`
+
+	ExtraUsageJSON string `json:"extra_usage_json"`
+	SpendJSON      string `json:"spend_json"`
+	RawJSON        string `json:"raw_json"`
+}
+
+// Attribution reports what the agent refused to attribute, and why.
+//
+// Silence here would be the worst outcome: a hub showing a confident total
+// that quietly excludes — or quietly includes — turns from another
+// subscription. Both the count and the reason travel with the batch.
+type Attribution struct {
+	// DroppedPreAccount counts turns older than AccountCreatedAt. These
+	// provably belong to some other subscription and are never ingested.
+	DroppedPreAccount int64 `json:"dropped_pre_account"`
+
+	// EarliestDropped is the oldest turn dropped for that reason, so the UI can
+	// say how far back the excluded history reaches.
+	EarliestDropped *time.Time `json:"earliest_dropped,omitempty"`
+
+	// DroppedBeyondBackfill counts turns excluded by an explicit
+	// --max-backfill window rather than by the account boundary.
+	DroppedBeyondBackfill int64 `json:"dropped_beyond_backfill"`
+
+	// BackfillLimit is the operator's chosen window, zero when unset.
+	BackfillLimit string `json:"backfill_limit,omitempty"`
+}
+
+// isZero reports whether anything was dropped. Exported behaviour lives on the
+// agent; this is just a nil-ish check.
+func (a Attribution) isZero() bool {
+	return a.DroppedPreAccount == 0 && a.DroppedBeyondBackfill == 0
+}
+
+// IsZero reports whether anything was dropped.
+func (a Attribution) IsZero() bool { return a.isZero() }
+
+// Batch is the agent's push payload.
+type Batch struct {
+	Quotas       []QuotaSnapshot  `json:"quotas,omitempty"`
+	Collector    *CollectorStatus `json:"collector,omitempty"`
+	AccountUsage *AccountUsage    `json:"account_usage,omitempty"`
+	AgentVersion string           `json:"agent_version"`
+	// FleetVersion is how far this login's claude-fleet install is behind its
+	// trunk, read from fleet-install-version.sh. On Batch, next to
+	// AgentVersion, rather than on Identity: Identity is reused by the guest
+	// batches for every subscription seen on the machine, and this is a
+	// property of the endpoint (the OS login), not of any subscription. Only
+	// the login-origin scan batch carries it; absent means "this batch does
+	// not say", never "no fleet" -- see FleetVersion.
+	FleetVersion *FleetVersion   `json:"fleet_version,omitempty"`
+	Identity     Identity        `json:"identity"`
+	Events       []UsageEvent    `json:"events"`
+	Limits       *LimitsSnapshot `json:"limits,omitempty"`
+
+	// Attribution travels on the first chunk of a scan, like Limits.
+	Attribution *Attribution `json:"attribution,omitempty"`
+
+	// LimitsUnavailable explains why Limits is nil, so the hub can render an
+	// honest banner instead of a stale gauge. Empty when Limits is present.
+	LimitsUnavailable string `json:"limits_unavailable,omitempty"`
+
+	// AccountOrigin says where Identity.AccountUUID came from, which decides
+	// whether this batch may move the endpoint's own login.
+	//
+	// A scan emits one batch per subscription observed on the machine, because
+	// several run side by side. Without this field the hub cannot tell "this
+	// machine logged into a different account" from "this machine is running
+	// two accounts at once", and treats the second as an endless stream of the
+	// first — 83 fabricated switches in four hours, here, before it was added.
+	AccountOrigin AccountOrigin `json:"account_origin,omitempty"`
+}
+
+// FleetVersion is one reading of `fleet-install-version.sh --json` on the
+// login the agent runs as: the claude-fleet install's head and how far it
+// trails the trunk, plus whether the install-sync daemon is still following.
+//
+// The key set and value shapes are the ones claude-fleet's
+// install-version-selftest.sh pins; this side does not re-derive any of them
+// (no second git comparison lives in this repository). Two contract points
+// matter here:
+//
+//   - Behind / Ahead are pointers because the script emits JSON null when the
+//     count could not be read (no upstream, fetch refused, not a checkout),
+//     with Verdict "UNKNOWN". A nil MUST stay nil through the hub: rendering
+//     it as 0 re-creates the "fetch failed, therefore current" bug
+//     (claude-fleet#635).
+//   - Fetched false means Behind was read against the remote-tracking ref the
+//     install already had, which can be up to a sync period old. Carried so
+//     the hub can say "12 (not fetched)" instead of presenting a stale count
+//     as fresh.
+//
+// Follow and Error are the script's own sentences for a reader and are never
+// parsed; they exist so the hub can put them in a tooltip.
+type FleetVersion struct {
+	Head          string `json:"head"`
+	Branch        string `json:"branch"`
+	Behind        *int   `json:"behind"`
+	Ahead         *int   `json:"ahead"`
+	Dirty         bool   `json:"dirty"`
+	Fetched       bool   `json:"fetched"`
+	Verdict       string `json:"verdict"`        // CURRENT BEHIND AHEAD DIVERGED UNKNOWN
+	FollowVerdict string `json:"follow_verdict"` // OK STUCK OFF UNSEEN UNKNOWN, or "" from an install too old to say
+	Follow        string `json:"follow,omitempty"`
+	Error         string `json:"error,omitempty"`
+	// ObservedAt is when the agent ran the script, which is not when the
+	// batch reached the hub: a spooled batch can be hours late.
+	ObservedAt time.Time `json:"observed_at"`
+}
+
+// AccountOrigin distinguishes the endpoint's own Claude Code login from a
+// subscription merely observed running on it.
+type AccountOrigin string
+
+const (
+	// OriginLogin — the account this machine+user is logged into, read from
+	// ~/.claude.json and the local credentials. At most one at a time, so a
+	// change here is a real logout/login.
+	OriginLogin AccountOrigin = "login"
+	// OriginSession — a subscription identified from a session's own
+	// statusLine. Several are normal and concurrent; a change means nothing.
+	OriginSession AccountOrigin = "session"
+)
+
+// IngestResponse lets the hub steer the fleet centrally.
+type IngestResponse struct {
+	Accepted            int    `json:"accepted"`
+	Deduped             int    `json:"deduped"`
+	EndpointID          string `json:"endpoint_id"`
+	LimitsPollIntervalS int    `json:"limits_poll_interval_s,omitempty"`
+}
+
+// SubscriptionPlan is what one plan cost over one period.
+//
+// This is REAL money and it is a different kind of money from
+// UsageEvent.CostUSD. A subscription is billed whether or not a single token
+// is spent; CostUSD is notional — what the tokens would have cost at API
+// rates — and is not an invoice. The two must never be summed. They are
+// separate types here for that reason: the mistake that matters is adding
+// them, and separate types are the cheapest thing that makes it visible.
+//
+// EffectiveTo is nil while the price is current. Prices change, so a plan
+// accumulates rows rather than having one overwritten: last month's spend
+// must stay priced at last month's price.
+type SubscriptionPlan struct {
+	Plan          string     `json:"plan"`   // matches Identity/account subscription_type
+	Source        string     `json:"source"` // same plan name, different vendors
+	MonthlyCost   float64    `json:"monthly_cost"`
+	Currency      string     `json:"currency"`
+	EffectiveFrom time.Time  `json:"effective_from"`
+	EffectiveTo   *time.Time `json:"effective_to,omitempty"`
+}

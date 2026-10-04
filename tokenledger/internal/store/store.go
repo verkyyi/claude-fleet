@@ -1,0 +1,896 @@
+// Package store persists accounts, endpoints, usage events and limit
+// snapshots to SQLite.
+//
+// The driver is modernc.org/sqlite: a pure-Go translation, so CGO_ENABLED=0
+// still cross-compiles to every platform an endpoint might run on. That
+// constraint is what keeps "download one binary" true.
+package store
+
+import (
+	"database/sql"
+	_ "embed"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+
+	_ "modernc.org/sqlite"
+
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
+)
+
+//go:embed schema.sql
+var schemaSQL string
+
+// readPoolSize is how many dashboard reads may run at once.
+//
+// SQLite runs inside this process, so past a handful of connections extra
+// readers only compete for the same core instead of finishing sooner. Four is
+// enough to keep the page's fan-out (~17 requests, nearly all of them
+// sub-millisecond) from forming a queue of its own.
+const readPoolSize = 4
+
+// Store is a handle on the hub's database.
+type Store struct {
+	// SQLite in WAL mode serves any number of concurrent readers alongside the
+	// one writer, so the hub keeps two pools on the same file rather than one
+	// connection for everything. A dashboard read then never waits behind an
+	// agent's ingest — which is what used to make the page slow: every read
+	// endpoint is single-digit milliseconds on its own, but with one shared
+	// connection a 13s ingest burst held the whole page hostage.
+	//
+	// read is opened query_only, so a write that strays onto it fails loudly
+	// instead of quietly re-serialising the two paths again.
+	read  *sql.DB
+	write *sql.DB
+
+	// BackfilledRollup is how many usage_hourly rows Open rebuilt from
+	// usage_events on this open, 0 when the rollup was already current. The
+	// hub logs it so an operator can see a first-run backfill happen.
+	BackfilledRollup int64
+}
+
+// Open opens (creating if needed) the database at path and applies the schema.
+func Open(path string) (*Store, error) {
+	// WAL lets the dashboard read while agents are pushing. busy_timeout turns
+	// the single-writer contention into a short wait instead of an immediate
+	// "database is locked" error under a fleet of agents.
+	dsn := path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
+	write, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open sqlite %s: %w", path, err)
+	}
+	// modernc's driver is not safe to hammer with many concurrent writers;
+	// one connection plus WAL is both correct and fast enough here.
+	write.SetMaxOpenConns(1)
+
+	if _, err := write.Exec(schemaSQL); err != nil {
+		write.Close()
+		return nil, fmt.Errorf("apply schema: %w", err)
+	}
+	if err := migrate(write); err != nil {
+		write.Close()
+		return nil, err
+	}
+	// Fills issue_number wherever the stored rule version is not the current
+	// one: a database that just acquired the column, or a changed rule. Reads
+	// only git_branch, so it never needs raw events retention has pruned.
+	if err := ensureIssueNumbers(write); err != nil {
+		write.Close()
+		return nil, err
+	}
+
+	// The schema exists by now, so the read pool opens against a database that
+	// is already complete — query_only cannot create or alter anything.
+	read, err := sql.Open("sqlite", dsn+"&_pragma=query_only(1)")
+	if err != nil {
+		write.Close()
+		return nil, fmt.Errorf("open sqlite %s for reading: %w", path, err)
+	}
+	read.SetMaxOpenConns(readPoolSize)
+
+	st := &Store{read: read, write: write}
+	if st.BackfilledRollup, err = ensureRollup(st); err != nil {
+		st.Close()
+		return nil, err
+	}
+	return st, nil
+}
+
+// migrate adds columns to databases created by an earlier version.
+//
+// The schema uses CREATE TABLE IF NOT EXISTS, which silently does nothing on an
+// existing database — so a new column has to be added explicitly or an upgraded
+// hub fails every query that mentions it.
+func migrate(db *sql.DB) error {
+	adds := []struct{ table, column, spec string }{
+		{"endpoints", "limits_unavailable", "TEXT NOT NULL DEFAULT ''"},
+		{"endpoints", "limits_checked_at", "TEXT"},
+		{"accounts", "account_created_at", "TEXT"},
+		{"endpoints", "dropped_pre_account", "INTEGER NOT NULL DEFAULT 0"},
+		{"endpoints", "earliest_dropped", "TEXT"},
+		{"endpoints", "dropped_beyond_backfill", "INTEGER NOT NULL DEFAULT 0"},
+		{"endpoints", "backfill_limit", "TEXT NOT NULL DEFAULT ''"},
+		{"accounts", "label_locked", "INTEGER NOT NULL DEFAULT 0"},
+		{"endpoints", "os_user", "TEXT NOT NULL DEFAULT ''"},
+		{"usage_events", "os_user", "TEXT NOT NULL DEFAULT ''"},
+		{"endpoints", "team", "TEXT NOT NULL DEFAULT ''"},
+		{"accounts", "source", "TEXT NOT NULL DEFAULT 'claude'"},
+		{"usage_events", "source", "TEXT NOT NULL DEFAULT 'claude'"},
+		{"usage_events", "provider", "TEXT NOT NULL DEFAULT ''"},
+		{"endpoints", "kind", "TEXT NOT NULL DEFAULT 'agent'"},
+		{"growth_facts", "okr_kill_switch_date", "TEXT NOT NULL DEFAULT ''"},
+		// Nullable with no default: NULL is "the branch did not say", which is
+		// the correct state for every row written before the column existed,
+		// and ensureIssueNumbers fills in the ones whose branch does say.
+		{"usage_events", "issue_number", "INTEGER"},
+		{"usage_hourly", "issue_number", "INTEGER"},
+		// '' is "not declared", which is the correct state for every row written
+		// before an endpoint could declare it -- and, unlike issue_number, there
+		// is nothing to fill them in with afterwards. The hub does not read git;
+		// only a reporter can say, and it can only say about turns it is still
+		// scanning. That blind spot is disclosed on the read, never guessed at.
+		{"usage_events", "git_repo", "TEXT NOT NULL DEFAULT ''"},
+		{"usage_hourly", "git_repo", "TEXT NOT NULL DEFAULT ''"},
+		// Nullable with no default: NULL is "active", which is the correct
+		// state for every endpoint enrolled before retiring existed.
+		{"endpoints", "retired_at", "TEXT"},
+		// The login's claude-fleet install (issue #157). '' / NULL / 0 on every
+		// row written before the agent could report it, and the roster renders
+		// that as "never reported" rather than as a reading.
+		{"endpoints", "fleet_head", "TEXT NOT NULL DEFAULT ''"},
+		{"endpoints", "fleet_behind", "INTEGER"},
+		{"endpoints", "fleet_verdict", "TEXT NOT NULL DEFAULT ''"},
+		{"endpoints", "fleet_follow", "TEXT NOT NULL DEFAULT ''"},
+		{"endpoints", "fleet_follow_text", "TEXT NOT NULL DEFAULT ''"},
+		{"endpoints", "fleet_error", "TEXT NOT NULL DEFAULT ''"},
+		{"endpoints", "fleet_fetched", "INTEGER NOT NULL DEFAULT 0"},
+		{"endpoints", "fleet_seen_at", "TEXT"},
+	}
+	for _, a := range adds {
+		has, err := hasColumn(db, a.table, a.column)
+		if err != nil {
+			return err
+		}
+		if has {
+			continue
+		}
+		if _, err := db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", a.table, a.column, a.spec)); err != nil {
+			return fmt.Errorf("add %s.%s: %w", a.table, a.column, err)
+		}
+	}
+	if err := migrateSources(db); err != nil {
+		return err
+	}
+	if err := migrateHourlyProvider(db); err != nil {
+		return err
+	}
+	return migrateDetails(db)
+}
+
+func hasColumn(db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return false, fmt.Errorf("inspect %s: %w", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+// RecordAttribution stores what an endpoint excluded and why.
+//
+// Zero is a meaningful value here: an endpoint that used to drop history and
+// no longer does must stop being reported as lossy.
+func (s *Store) RecordAttribution(endpointID string, a model.Attribution) error {
+	var earliest any
+	if a.EarliestDropped != nil {
+		earliest = fmtTime(*a.EarliestDropped)
+	}
+	_, err := s.write.Exec(`
+		UPDATE endpoints SET dropped_pre_account = ?, earliest_dropped = ?,
+		       dropped_beyond_backfill = ?, backfill_limit = ?
+		WHERE endpoint_id = ?`,
+		a.DroppedPreAccount, earliest, a.DroppedBeyondBackfill, a.BackfillLimit, endpointID)
+	if err != nil {
+		return fmt.Errorf("record attribution: %w", err)
+	}
+	return nil
+}
+
+// RecordLimitsUnavailable stores an endpoint's own explanation of why it could
+// not read its account's limits.
+func (s *Store) RecordLimitsUnavailable(endpointID, reason string) error {
+	_, err := s.write.Exec(
+		`UPDATE endpoints SET limits_unavailable = ?, limits_checked_at = ? WHERE endpoint_id = ?`,
+		reason, fmtTime(time.Now()), endpointID)
+	if err != nil {
+		return fmt.Errorf("record limits reason: %w", err)
+	}
+	return nil
+}
+
+// LimitsReason returns the most recent explanation from any endpoint on an
+// account, so the UI can say which machine to go fix.
+func (s *Store) LimitsReason(account string) (endpoint, reason string, err error) {
+	row := s.read.QueryRow(`
+		SELECT COALESCE(NULLIF(label,''), hostname, endpoint_id), limits_unavailable
+		FROM endpoints
+		WHERE account_uuid = ? AND limits_unavailable <> ''
+		ORDER BY limits_checked_at DESC LIMIT 1`, account)
+	switch err := row.Scan(&endpoint, &reason); {
+	case err == sql.ErrNoRows:
+		return "", "", nil
+	case err != nil:
+		return "", "", fmt.Errorf("limits reason: %w", err)
+	}
+	return endpoint, reason, nil
+}
+
+// DB exposes the handle for packages that need custom queries.
+//
+// It hands back the writer on purpose: that is the handle which can do both, so
+// a caller reaching past the store's own methods cannot land a write on the
+// read-only pool and get an "attempt to write a readonly database" instead.
+func (s *Store) DB() *sql.DB { return s.write }
+
+// Close releases the database.
+func (s *Store) Close() error {
+	// Close the readers first: they hold no locks, and closing the writer last
+	// means an in-flight write still has its connection to finish on.
+	err := s.read.Close()
+	if werr := s.write.Close(); err == nil {
+		err = werr
+	}
+	return err
+}
+
+const rfc = time.RFC3339Nano
+
+func fmtTime(t time.Time) string { return t.UTC().Format(rfc) }
+
+func fmtTimePtr(t *time.Time) any {
+	if t == nil {
+		return nil
+	}
+	return fmtTime(*t)
+}
+
+// UpsertAccount records or refreshes a subscription.
+//
+// Fields are only overwritten when the incoming value is non-empty: an agent
+// that cannot read the local credential file still reports the account, and
+// must not blank out the tier another endpoint already established.
+func (s *Store) UpsertAccount(id model.Identity, subType, tier string) error {
+	now := fmtTime(time.Now())
+	var created any
+	if !id.AccountCreatedAt.IsZero() {
+		created = fmtTime(id.AccountCreatedAt)
+	}
+	_, err := s.write.Exec(`
+		INSERT INTO accounts (account_uuid, email, org_uuid, org_name,
+		                      subscription_type, rate_limit_tier, display_name,
+		                      account_created_at, first_seen, last_seen, source)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(account_uuid) DO UPDATE SET
+		  -- A name set by hand is never overwritten by an automatic one. The
+		  -- automatic sources (a tmux window option, an env var) are hints that
+		  -- come and go; a deliberate name is the operator's answer and must
+		  -- outlive them.
+		  email             = CASE WHEN accounts.label_locked = 1 THEN accounts.email
+		                          WHEN excluded.email <> '' THEN excluded.email
+		                          ELSE accounts.email END,
+		  org_uuid          = CASE WHEN excluded.org_uuid          <> '' THEN excluded.org_uuid          ELSE accounts.org_uuid          END,
+		  org_name          = CASE WHEN excluded.org_name          <> '' THEN excluded.org_name          ELSE accounts.org_name          END,
+		  subscription_type = CASE WHEN excluded.subscription_type <> '' THEN excluded.subscription_type ELSE accounts.subscription_type END,
+		  rate_limit_tier   = CASE WHEN excluded.rate_limit_tier   <> '' THEN excluded.rate_limit_tier   ELSE accounts.rate_limit_tier   END,
+		  display_name      = CASE WHEN accounts.label_locked = 1 THEN accounts.display_name
+		                          WHEN excluded.display_name <> '' THEN excluded.display_name
+		                          ELSE accounts.display_name END,
+		  account_created_at = COALESCE(excluded.account_created_at, accounts.account_created_at),
+		  last_seen         = excluded.last_seen`,
+		id.AccountUUID, id.Email, id.OrgUUID, id.OrgName,
+		subType, tier, id.DisplayName, created, now, now, model.UsageSource(id.Source))
+	if err != nil {
+		return fmt.Errorf("upsert account: %w", err)
+	}
+	return nil
+}
+
+// SetAccountLabel names a subscription for good.
+//
+// Fingerprinted subscriptions have no email to discover — the reset schedule
+// identifies them correctly but cannot say who they belong to. This records the
+// operator's answer and locks it, so the next automatic report cannot quietly
+// replace it with a hint or blank it out.
+//
+// Passing an empty label unlocks the account and lets automatic naming resume.
+func (s *Store) SetAccountLabel(account, label string) error {
+	if account == "" {
+		return fmt.Errorf("account is required")
+	}
+	locked := 1
+	if label == "" {
+		locked = 0
+	}
+	res, err := s.write.Exec(
+		`UPDATE accounts SET email = ?, label_locked = ? WHERE account_uuid = ?`,
+		label, locked, account)
+	if err != nil {
+		return fmt.Errorf("set account label: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("no such subscription %q on this hub", account)
+	}
+	return nil
+}
+
+// Endpoint is a registered collector.
+type Endpoint struct {
+	ID           string `json:"endpoint_id"`
+	AccountUUID  string `json:"account_uuid"`
+	Label        string `json:"label"`
+	Hostname     string `json:"hostname"`
+	OS           string `json:"os"`
+	Arch         string `json:"arch"`
+	MachineID    string `json:"machine_id"`
+	CCVersion    string `json:"cc_version"`
+	AgentVersion string `json:"agent_version"`
+	// OSUser is the OS login the agent runs as. An endpoint is a (machine,
+	// user) pair, not a machine.
+	OSUser string `json:"os_user"`
+	// Team is the operator's allocation of this endpoint's spend. Empty means
+	// unassigned, which the UI renders as "unassigned" rather than hiding.
+	Team       string     `json:"team"`
+	EnrolledAt time.Time  `json:"enrolled_at"`
+	LastSeen   *time.Time `json:"last_seen"`
+	// RetiredAt is when the operator retired this endpoint; nil means active.
+	// Omitted from the JSON of an active endpoint so a client can treat its
+	// presence as the whole answer.
+	RetiredAt *time.Time `json:"retired_at,omitempty"`
+
+	// What this endpoint could not attribute. Surfaced so a total that
+	// excludes history says so, instead of just looking smaller.
+	DroppedPreAccount     int64      `json:"dropped_pre_account"`
+	EarliestDropped       *time.Time `json:"earliest_dropped,omitempty"`
+	DroppedBeyondBackfill int64      `json:"dropped_beyond_backfill"`
+	BackfillLimit         string     `json:"backfill_limit,omitempty"`
+
+	LimitsUnavailable string `json:"limits_unavailable,omitempty"`
+
+	// The login's claude-fleet install, last reported by the agent (issue
+	// #157). FleetHead == "" is "never reported", which the roster draws as a
+	// dash; it is not the same thing as FleetBehind == nil, which is a reading
+	// whose count could not be taken and MUST render as "unknown", never as 0.
+	FleetHead       string     `json:"fleet_head"`
+	FleetBehind     *int       `json:"fleet_behind"`
+	FleetVerdict    string     `json:"fleet_verdict"`
+	FleetFollow     string     `json:"fleet_follow"`
+	FleetFollowText string     `json:"fleet_follow_text,omitempty"`
+	FleetError      string     `json:"fleet_error,omitempty"`
+	FleetFetched    bool       `json:"fleet_fetched"`
+	FleetSeenAt     *time.Time `json:"fleet_seen_at"`
+}
+
+// Enroll registers a new endpoint and stores only the hash of its token.
+//
+// The enrollment is born an agent. Every nightly job that is not one says so
+// later, on its first push (MarkRepoShipper, MarkGrowthShipper) -- which works
+// because a shipper pushes. A credential that only ever READS has no such
+// moment, so it has to be born with its kind: see EnrollKind.
+func (s *Store) Enroll(endpointID, label, tokenHash string) error {
+	return s.EnrollKind(endpointID, label, tokenHash, "agent")
+}
+
+// EnrollKind registers a new endpoint with its kind set from the start.
+//
+// Read-only credentials are the reason this exists. The self-marking path
+// cannot serve them: it runs after a successful push, and a reader never
+// pushes, so a reader enrolled as an agent would sit in the agent roster
+// forever being reported as a machine that stopped sending usage -- and any
+// gate that asks "is this token allowed to read the books?" would have to
+// answer before the token had ever said what it was.
+func (s *Store) EnrollKind(endpointID, label, tokenHash, kind string) error {
+	_, err := s.write.Exec(`
+		INSERT INTO endpoints (endpoint_id, account_uuid, label, token_hash, enrolled_at, kind)
+		VALUES (?, NULL, ?, ?, ?, ?)`,
+		endpointID, label, tokenHash, fmtTime(time.Now()), kind)
+	if err != nil {
+		return fmt.Errorf("enroll endpoint: %w", err)
+	}
+	return nil
+}
+
+// EndpointKind reports what an enrollment is: "agent", "repo_shipper",
+// "growth_shipper", "growth_reader".
+//
+// Deliberately its own query rather than a field on Endpoint: the kind gates
+// access to the revenue ledger, and a value that rides along inside a struct
+// used by a dozen read paths is one refactor away from being scanned into the
+// wrong column and silently widening that gate. A caller that wants to make an
+// authorisation decision has to ask for it by name.
+func (s *Store) EndpointKind(endpointID string) (string, error) {
+	var kind string
+	err := s.read.QueryRow(`SELECT kind FROM endpoints WHERE endpoint_id = ?`, endpointID).Scan(&kind)
+	if err != nil {
+		return "", fmt.Errorf("endpoint kind: %w", err)
+	}
+	return kind, nil
+}
+
+// EnrollmentCounts reports how many enrollments this hub holds of each kind,
+// for the door map at /access: the ingest doors are only as open as the number
+// of tokens that can push through them.
+//
+// An aggregate on purpose. EndpointKind's note above is that a kind must never
+// ride along inside a struct a dozen read paths share, because that is how an
+// authorisation gate silently widens. A count is not a kind attached to an
+// endpoint — no caller can decide anything about one endpoint from it — so the
+// page can say "three agents, one growth shipper" without handing anyone a
+// kind to mistake for a credential.
+// Retired enrollments are NOT counted. The sentence above is the reason: this
+// page says how open each ingest door is, and a retired token cannot push
+// through one -- EndpointByTokenHash refuses it. Counting it would make the
+// door map overstate the hub's exposure, which is the one thing a page whose
+// whole job is "what is actually open here" must not do.
+func (s *Store) EnrollmentCounts() (map[string]int, error) {
+	rows, err := s.read.Query(
+		`SELECT kind, COUNT(*) FROM endpoints WHERE retired_at IS NULL GROUP BY kind`)
+	if err != nil {
+		return nil, fmt.Errorf("enrollment counts: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var kind string
+		var n int
+		if err := rows.Scan(&kind, &n); err != nil {
+			return nil, fmt.Errorf("enrollment counts: %w", err)
+		}
+		out[kind] = n
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("enrollment counts: %w", err)
+	}
+	return out, nil
+}
+
+// EndpointByTokenHash resolves an enrollment token to its endpoint.
+//
+// A RETIRED endpoint does not resolve. This one filter is what makes retiring
+// a revocation rather than a label: every path that authenticates an
+// enrollment token -- /v1/ingest, /v1/ingest/repo, /v1/growth in both
+// directions, the live report, the quota lease -- reaches the endpoint through
+// this query and nowhere else, so they all stop accepting the token at the
+// same instant, and a path added later inherits it without having to know.
+//
+// A retired token is rejected exactly like an unknown one, with no way to tell
+// them apart. That is deliberate, the same reasoning as ShareLinkByToken: a
+// machine that was decommissioned and is still running its agent learns only
+// that it is not welcome, not that it once was.
+func (s *Store) EndpointByTokenHash(hash string) (*Endpoint, error) {
+	row := s.read.QueryRow(endpointColumns+
+		` FROM endpoints WHERE token_hash = ? AND retired_at IS NULL`, hash)
+	return scanEndpoint(row)
+}
+
+// MarkRepoShipper records that this enrollment pushes repo progress rather
+// than usage, so the fleet surfaces stop reading its silence as a failure.
+//
+// Called on every repo push rather than once: it is a cheap idempotent write,
+// and making it conditional would mean reading the row first on a path whose
+// whole job is to be a sink.
+func (s *Store) MarkRepoShipper(endpointID string) error {
+	return s.markShipper(endpointID, "repo_shipper")
+}
+
+// MarkGrowthShipper is the same for a business-facts shipper. It gets its own
+// kind rather than borrowing the repo one: the roster only cares that this is
+// not an agent, but an operator staring at a silent enrollment wants to know
+// WHICH nightly job stopped running.
+func (s *Store) MarkGrowthShipper(endpointID string) error {
+	return s.markShipper(endpointID, "growth_shipper")
+}
+
+// markShipper moves an enrollment out of the agent roster. Every surface that
+// hunts for stale agents filters on kind = 'agent', so this is what keeps a
+// cron job that never reports usage from being reported as a broken machine.
+func (s *Store) markShipper(endpointID, kind string) error {
+	_, err := s.write.Exec(`UPDATE endpoints SET kind = ? WHERE endpoint_id = ?`, kind, endpointID)
+	if err != nil {
+		return fmt.Errorf("mark %s: %w", kind, err)
+	}
+	return nil
+}
+
+// endpointColumns keeps the SELECT list and scanEndpoint in lockstep; they
+// drifted apart once already when a column was added.
+const endpointColumns = `
+	SELECT endpoint_id, account_uuid, label, hostname, os, arch, machine_id,
+	       cc_version, agent_version, os_user, team, enrolled_at, last_seen,
+	       dropped_pre_account, earliest_dropped, dropped_beyond_backfill,
+	       backfill_limit, limits_unavailable, retired_at,
+	       fleet_head, fleet_behind, fleet_verdict, fleet_follow, fleet_follow_text,
+	       fleet_error, fleet_fetched, fleet_seen_at`
+
+type rowScanner interface{ Scan(...any) error }
+
+func scanEndpoint(row rowScanner) (*Endpoint, error) {
+	var e Endpoint
+	var enrolled string
+	var lastSeen, account, earliest, retired, fleetSeen sql.NullString
+	var fleetBehind sql.NullInt64
+	err := row.Scan(&e.ID, &account, &e.Label, &e.Hostname, &e.OS, &e.Arch,
+		&e.MachineID, &e.CCVersion, &e.AgentVersion, &e.OSUser, &e.Team, &enrolled, &lastSeen,
+		&e.DroppedPreAccount, &earliest, &e.DroppedBeyondBackfill,
+		&e.BackfillLimit, &e.LimitsUnavailable, &retired,
+		&e.FleetHead, &fleetBehind, &e.FleetVerdict, &e.FleetFollow, &e.FleetFollowText,
+		&e.FleetError, &e.FleetFetched, &fleetSeen)
+	if err != nil {
+		return nil, err
+	}
+	e.RetiredAt = parseNullTime(retired)
+	if fleetBehind.Valid {
+		n := int(fleetBehind.Int64)
+		e.FleetBehind = &n
+	}
+	e.FleetSeenAt = parseNullTime(fleetSeen)
+	e.AccountUUID = account.String
+	e.EnrolledAt, _ = time.Parse(rfc, enrolled)
+	if lastSeen.Valid {
+		if t, err := time.Parse(rfc, lastSeen.String); err == nil {
+			e.LastSeen = &t
+		}
+	}
+	e.EarliestDropped = parseNullTime(earliest)
+	return &e, nil
+}
+
+// TouchEndpoint records what an endpoint reported about itself on this push.
+//
+// login says whether this batch carries the endpoint's OWN Claude Code login.
+// Only such a batch may CHANGE endpoints.account_uuid: a batch for a
+// subscription merely observed running on the machine says nothing about what
+// the machine is logged into, and letting it write there is what manufactured a
+// switch history out of ordinary concurrency.
+//
+// An endpoint that has never reported is the exception — it takes whatever
+// arrives first, including from an agent too old to say. Refusing to fill an
+// empty slot would leave the endpoint with no account at all, and every
+// account-scoped query (limits above all) silently blind to it.
+//
+// prevWasLogin says whether the outgoing account had itself been established by
+// a login batch. Only then is a change a real logout/login; otherwise it is a
+// provisional guess being corrected, which is not a seam in the history.
+//
+// fleet is the login's claude-fleet reading when this batch carries one, and
+// nil when it does not. nil leaves the fleet_* columns exactly as they were:
+// the guest, limits and Codex batches of the same endpoint never carry it, and
+// letting them blank it would make the column flicker to "never reported"
+// several times a minute -- the same reason cc_version is COALESCEd above.
+func (s *Store) TouchEndpoint(endpointID string, id model.Identity, agentVersion string, login bool, fleet *model.FleetVersion) (prevAccount string, prevWasLogin bool, err error) {
+	var prev sql.NullString
+	if err := s.read.QueryRow(`SELECT account_uuid FROM endpoints WHERE endpoint_id = ?`,
+		endpointID).Scan(&prev); err != nil {
+		return "", false, fmt.Errorf("look up endpoint: %w", err)
+	}
+	prevAccount = prev.String
+
+	if prevAccount != "" {
+		var origin string
+		switch err := s.read.QueryRow(`
+			SELECT origin FROM endpoint_accounts
+			WHERE endpoint_id = ? AND account_uuid = ?`, endpointID, prevAccount).Scan(&origin); {
+		case err == nil:
+			prevWasLogin = origin == string(model.OriginLogin)
+		case errors.Is(err, sql.ErrNoRows):
+			// Recorded before this table existed. Treat it as a login: that is
+			// what the old code meant by endpoints.account_uuid.
+			prevWasLogin = true
+		default:
+			return "", false, fmt.Errorf("look up endpoint account origin: %w", err)
+		}
+	}
+
+	if login || prevAccount == "" {
+		_, err = s.write.Exec(`
+			UPDATE endpoints SET account_uuid = ?, hostname = ?, os = ?, arch = ?,
+			       machine_id = COALESCE(NULLIF(?,''), machine_id),
+			       cc_version = COALESCE(NULLIF(?,''), cc_version), agent_version = ?, os_user = ?,
+			       last_seen = ?
+			WHERE endpoint_id = ?`,
+			id.AccountUUID, id.Hostname, id.OS, id.Arch, id.MachineID,
+			id.CCVersion, agentVersion, id.OSUser, fmtTime(time.Now()), endpointID)
+	} else {
+		// Everything except the account: the machine is still reporting, and
+		// its hardware facts are just as true on a secondary batch.
+		_, err = s.write.Exec(`
+			UPDATE endpoints SET hostname = ?, os = ?, arch = ?,
+			       machine_id = COALESCE(NULLIF(?,''), machine_id),
+			       cc_version = COALESCE(NULLIF(?,''), cc_version), agent_version = ?, os_user = ?,
+			       last_seen = ?
+			WHERE endpoint_id = ?`,
+			id.Hostname, id.OS, id.Arch, id.MachineID,
+			id.CCVersion, agentVersion, id.OSUser, fmtTime(time.Now()), endpointID)
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("touch endpoint: %w", err)
+	}
+	if fleet != nil {
+		if err := s.touchFleetVersion(endpointID, fleet); err != nil {
+			return "", false, err
+		}
+	}
+	return prevAccount, prevWasLogin, nil
+}
+
+// touchFleetVersion writes one fleet-install-version reading onto the
+// endpoint, whole. A separate statement from the touch above on purpose: the
+// "absent batch keeps the old value" rule is then structural (the statement
+// does not run) rather than a COALESCE per column -- and fleet_behind could
+// not use that trick anyway, because for it NULL is a value the reading can
+// legitimately carry, not the marker for "did not say".
+func (s *Store) touchFleetVersion(endpointID string, fv *model.FleetVersion) error {
+	var behind any
+	if fv.Behind != nil {
+		behind = *fv.Behind
+	}
+	seen := fv.ObservedAt
+	if seen.IsZero() {
+		seen = time.Now()
+	}
+	_, err := s.write.Exec(`
+		UPDATE endpoints SET fleet_head = ?, fleet_behind = ?, fleet_verdict = ?,
+		       fleet_follow = ?, fleet_follow_text = ?, fleet_error = ?,
+		       fleet_fetched = ?, fleet_seen_at = ?
+		WHERE endpoint_id = ?`,
+		fv.Head, behind, fv.Verdict, fv.FollowVerdict, fv.Follow, fv.Error,
+		fv.Fetched, fmtTime(seen), endpointID)
+	if err != nil {
+		return fmt.Errorf("touch endpoint fleet version: %w", err)
+	}
+	return nil
+}
+
+// RecordEndpointAccount notes that this endpoint was seen running account,
+// extending the window rather than replacing anything. Several accounts on one
+// endpoint are normal and concurrent, so these rows accumulate; they never
+// compete.
+func (s *Store) RecordEndpointAccount(endpointID, account string, origin model.AccountOrigin) error {
+	if account == "" {
+		return nil
+	}
+	now := fmtTime(time.Now())
+	if origin == "" {
+		origin = model.OriginSession
+	}
+	_, err := s.write.Exec(`
+		INSERT INTO endpoint_accounts (endpoint_id, account_uuid, origin, first_seen, last_seen)
+		VALUES (?,?,?,?,?)
+		ON CONFLICT(endpoint_id, account_uuid) DO UPDATE SET
+		  last_seen = excluded.last_seen,
+		  -- 'login' is the stronger claim: once an account has been seen as
+		  -- this endpoint's own login, a later session sighting must not
+		  -- demote it back to a guest.
+		  origin = CASE WHEN endpoint_accounts.origin = 'login' THEN 'login'
+		                ELSE excluded.origin END`,
+		endpointID, account, string(origin), now, now)
+	if err != nil {
+		return fmt.Errorf("record endpoint account: %w", err)
+	}
+	return nil
+}
+
+// DemoteEndpointLogin marks any OTHER account on this endpoint as a guest.
+//
+// An endpoint has exactly one login at a time and any number of concurrent
+// guests — the whole point of endpoint_accounts. But 'login' is sticky, so that
+// a session sighting cannot demote a real login, and nothing ever un-stuck it:
+// after a genuine logout/login the previous account kept claiming to be this
+// machine's own login, and the dashboard showed one machine with two.
+//
+// The row is not deleted. Sessions started under the old account keep running
+// and keep reporting, which is exactly what 'session' means.
+func (s *Store) DemoteEndpointLogin(endpointID, keepLogin string) error {
+	_, err := s.write.Exec(`
+		UPDATE endpoint_accounts SET origin = 'session'
+		WHERE endpoint_id = ? AND account_uuid <> ? AND origin = 'login'`,
+		endpointID, keepLogin)
+	if err != nil {
+		return fmt.Errorf("demote endpoint login: %w", err)
+	}
+	return nil
+}
+
+// RecordAccountSwitch notes that an endpoint changed the account it is logged
+// into. Call it only for a login-origin batch — see TouchEndpoint.
+func (s *Store) RecordAccountSwitch(endpointID, from, to string) error {
+	_, err := s.write.Exec(`
+		INSERT INTO account_switches (endpoint_id, from_account, to_account, observed_at)
+		VALUES (?,?,?,?)`, endpointID, from, to, fmtTime(time.Now()))
+	if err != nil {
+		return fmt.Errorf("record account switch: %w", err)
+	}
+	return nil
+}
+
+// InsertEvents stores events, ignoring ones already present.
+//
+// Returns how many were new and how many were duplicates, which the agent uses
+// to confirm its cursor is behaving.
+func (s *Store) InsertEvents(evs []model.UsageEvent) (inserted, deduped int, err error) {
+	if len(evs) == 0 {
+		return 0, 0, nil
+	}
+	tx, err := s.write.Begin()
+	if err != nil {
+		return 0, 0, fmt.Errorf("begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`
+		INSERT OR IGNORE INTO usage_events (
+		  account_uuid, endpoint_id, session_id, message_uuid, request_id, ts, model,
+		  input_tokens, output_tokens, cache_create_5m_tokens, cache_create_1h_tokens,
+		  cache_read_tokens, thinking_tokens, web_search_requests, web_fetch_requests,
+		  cost_usd, cwd, os_user, git_branch, entrypoint, effort, is_sidechain, source,details_json,cache_write_tokens,cache_write_known_events,provider,issue_number,git_repo
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+	if err != nil {
+		return 0, 0, fmt.Errorf("prepare insert: %w", err)
+	}
+	defer stmt.Close()
+
+	rstmt, err := tx.Prepare(rollupInsertSQL)
+	if err != nil {
+		return 0, 0, fmt.Errorf("prepare rollup upsert: %w", err)
+	}
+	defer rstmt.Close()
+
+	for i := range evs {
+		e := &evs[i]
+		e.Source = model.UsageSource(e.Source)
+		// The shipper sends the upstream inside details; a sender that sets the
+		// field directly wins. Neither is inferred when both are absent.
+		if e.Provider == "" && e.Details != nil {
+			e.Provider = e.Details.Provider
+		}
+		if e.Source == model.SourceCodex {
+			res, err := tx.Exec(`INSERT OR IGNORE INTO codex_request_keys(message_uuid) VALUES(?)`, e.MessageUUID)
+			if err != nil {
+				return 0, 0, err
+			}
+			n, err := res.RowsAffected()
+			if err != nil {
+				return 0, 0, err
+			}
+			if n == 0 || e.EnrichOnly {
+				deduped++
+				if err := enrichCodex(tx, e); err != nil {
+					return 0, 0, err
+				}
+				continue
+			}
+		}
+		details, _ := json.Marshal(e.Details)
+		write, known := cacheWrite(e)
+		var cost any
+		if e.CostUSD != nil {
+			cost = *e.CostUSD
+		}
+		res, err := stmt.Exec(
+			e.AccountUUID, e.EndpointID, e.SessionID, e.MessageUUID, e.RequestID,
+			fmtTime(e.TS), e.Model,
+			e.InputTokens, e.OutputTokens, e.CacheCreate5m, e.CacheCreate1h,
+			e.CacheRead, e.Thinking, e.WebSearchRequests, e.WebFetchRequests,
+			cost, e.CWD, e.OSUser, e.GitBranch, e.Entrypoint, e.Effort, e.IsSidechain, e.Source, string(details), write, known, e.Provider,
+			issueNumber(e.GitBranch), declaredRepo(e.GitRepo))
+		if err != nil {
+			return 0, 0, fmt.Errorf("insert event %s: %w", e.MessageUUID, err)
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			inserted++
+			if err := rollupUpsert(rstmt, e); err != nil {
+				return 0, 0, fmt.Errorf("rollup event %s: %w", e.MessageUUID, err)
+			}
+		} else {
+			deduped++
+			if err := enrichCodex(tx, e); err != nil {
+				return 0, 0, err
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, 0, fmt.Errorf("commit: %w", err)
+	}
+	return inserted, deduped, nil
+}
+
+// InsertLimits stores one limits observation.
+func (s *Store) InsertLimits(snap *model.LimitsSnapshot) error {
+	scoped, err := json.Marshal(snap.Scoped)
+	if err != nil {
+		return fmt.Errorf("encode scoped windows: %w", err)
+	}
+	_, err = s.write.Exec(`
+		INSERT INTO limit_snapshots (
+		  account_uuid, endpoint_id, observed_at,
+		  five_hour_pct, five_hour_resets_at, seven_day_pct, seven_day_resets_at,
+		  scoped_json, extra_usage_json, spend_json, raw_json
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		snap.AccountUUID, snap.EndpointID, fmtTime(snap.ObservedAt),
+		snap.FiveHour.Utilization, fmtTimePtr(snap.FiveHour.ResetsAt),
+		snap.SevenDay.Utilization, fmtTimePtr(snap.SevenDay.ResetsAt),
+		string(scoped), snap.ExtraUsageJSON, snap.SpendJSON, snap.RawJSON)
+	if err != nil {
+		return fmt.Errorf("insert limits snapshot: %w", err)
+	}
+	for _, c := range snap.ModelClaims {
+		if c.Model == "" || c.Claim == "" {
+			continue
+		}
+		at := c.ObservedAt
+		if at.IsZero() {
+			at = snap.ObservedAt
+		}
+		// Latest wins, and only a NEWER reading replaces one: a spooled batch
+		// delivered late must not roll a cap back to what it used to be.
+		_, err = s.write.Exec(`
+			INSERT INTO model_claims (
+			  account_uuid, model, claim, utilization, status, resets_at,
+			  surpassed_threshold, observed_at
+			) VALUES (?,?,?,?,?,?,?,?)
+			ON CONFLICT(account_uuid, model, claim) DO UPDATE SET
+			  utilization = excluded.utilization, status = excluded.status,
+			  resets_at = excluded.resets_at,
+			  surpassed_threshold = excluded.surpassed_threshold,
+			  observed_at = excluded.observed_at
+			WHERE excluded.observed_at >= model_claims.observed_at`,
+			snap.AccountUUID, c.Model, c.Claim, c.Utilization, c.Status,
+			fmtTimePtr(c.ResetsAt), c.SurpassedThreshold, fmtTime(at))
+		if err != nil {
+			return fmt.Errorf("record model claim %s/%s: %w", c.Model, c.Claim, err)
+		}
+	}
+	return nil
+}
+
+// PruneEvents deletes raw events older than the retention window. Rollups and
+// limit snapshots are unaffected.
+func (s *Store) PruneEvents(olderThan time.Time) (int64, error) {
+	res, err := s.write.Exec(`DELETE FROM usage_events WHERE ts < ?`, fmtTime(olderThan))
+	if err != nil {
+		return 0, fmt.Errorf("prune events: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
+// SetEndpointTeam allocates an endpoint's spend to a team.
+//
+// Operator-side on purpose: this is the only writer of endpoints.team, and the
+// ingest path (TouchEndpoint) deliberately does not name the column. Passing an
+// empty team un-assigns it.
+func (s *Store) SetEndpointTeam(endpointID, team string) error {
+	if endpointID == "" {
+		return fmt.Errorf("endpoint id is required")
+	}
+	res, err := s.write.Exec(`UPDATE endpoints SET team = ? WHERE endpoint_id = ?`, team, endpointID)
+	if err != nil {
+		return fmt.Errorf("set endpoint team: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("no endpoint %q on this hub (run `ccquota team --list` to see them)", endpointID)
+	}
+	return nil
+}

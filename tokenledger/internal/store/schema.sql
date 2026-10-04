@@ -1,0 +1,709 @@
+-- ccquota schema.
+-- Provider-specific observations are additive: old raw and rollup history is
+-- retained, and account-wide observations never enter usage_events.
+
+CREATE TABLE IF NOT EXISTS quota_snapshots (
+  account_uuid TEXT NOT NULL,
+  source TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  endpoint_id TEXT NOT NULL,
+  observed_at TEXT NOT NULL,
+  observation TEXT NOT NULL,
+  data_json TEXT NOT NULL,
+  PRIMARY KEY(account_uuid, source, profile_id, endpoint_id, observed_at, observation)
+);
+CREATE INDEX IF NOT EXISTS idx_quotas_time ON quota_snapshots(account_uuid, observed_at);
+
+CREATE TABLE IF NOT EXISTS source_collectors (
+  endpoint_id TEXT NOT NULL,
+  source TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  account_uuid TEXT NOT NULL,
+  observed_at TEXT NOT NULL,
+  data_json TEXT NOT NULL,
+  PRIMARY KEY(endpoint_id, source, profile_id)
+);
+
+CREATE TABLE IF NOT EXISTS source_account_switches (
+  endpoint_id TEXT NOT NULL,
+  source TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  from_account TEXT NOT NULL,
+  to_account TEXT NOT NULL,
+  observed_at TEXT NOT NULL,
+  PRIMARY KEY(endpoint_id, source, profile_id, observed_at)
+);
+
+-- Which subscription a source's UNASSIGNED pool belongs to.
+--
+-- Codex transcripts do not attest to an OpenAI account, so usage whose session
+-- no logged-in profile can claim is parked under "<source>:local" rather than
+-- guessed at. On a hub that holds exactly one subscription for that source,
+-- the guess is not a guess and the pool is just that account under another
+-- name -- but only the operator can say so, which is what this records.
+-- Keyed by source: one pool per source, and re-binding replaces it.
+CREATE TABLE IF NOT EXISTS source_pool_bindings (
+  source       TEXT PRIMARY KEY,
+  account_uuid TEXT NOT NULL,
+  bound_at     TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS account_usage_observations (
+  account_uuid TEXT NOT NULL,
+  source TEXT NOT NULL,
+  endpoint_id TEXT NOT NULL,
+  observed_at TEXT NOT NULL,
+  data_json TEXT NOT NULL,
+  PRIMARY KEY(account_uuid, source, endpoint_id, observed_at)
+);
+--
+-- One hub may hold several subscriptions. account_uuid is therefore on every
+-- fact table and on every index, and every query path filters by it: an
+-- isolation bug here would show one team's spend to another.
+
+CREATE TABLE IF NOT EXISTS accounts (
+  account_uuid      TEXT PRIMARY KEY,
+  source            TEXT NOT NULL DEFAULT 'claude',
+  email             TEXT NOT NULL DEFAULT '',
+  org_uuid          TEXT NOT NULL DEFAULT '',
+  org_name          TEXT NOT NULL DEFAULT '',
+  subscription_type TEXT NOT NULL DEFAULT '',
+  rate_limit_tier   TEXT NOT NULL DEFAULT '',
+  display_name      TEXT NOT NULL DEFAULT '',
+  -- Turns older than this cannot belong to this subscription. The agent uses
+  -- it as a hard attribution floor; the UI uses it to explain a gap.
+  account_created_at TEXT,
+  first_seen        TEXT NOT NULL,
+  last_seen         TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS endpoints (
+  endpoint_id   TEXT PRIMARY KEY,
+  -- Nullable on purpose: an enrollment token is minted before the agent ever
+  -- runs, so an endpoint exists for a while before it can say which
+  -- subscription it belongs to. NULL means "enrolled, never reported".
+  account_uuid  TEXT REFERENCES accounts(account_uuid),
+  hostname      TEXT NOT NULL DEFAULT '',
+  os            TEXT NOT NULL DEFAULT '',
+  arch          TEXT NOT NULL DEFAULT '',
+  machine_id    TEXT NOT NULL DEFAULT '',
+  cc_version    TEXT NOT NULL DEFAULT '',
+  agent_version TEXT NOT NULL DEFAULT '',
+  token_hash    TEXT NOT NULL,          -- enrollment token, hashed; never the plaintext
+  label         TEXT NOT NULL DEFAULT '',
+
+  -- The OS login the agent runs as. An endpoint is a (machine, user) pair:
+  -- every OS account has its own ~/.claude, its own transcripts and its own
+  -- credentials, and on a shared box the other homes are unreadable.
+  os_user       TEXT NOT NULL DEFAULT '',
+
+  -- This login's claude-fleet install, as reported by the agent from
+  -- fleet-install-version.sh (issue #157). An endpoint is the right row for it
+  -- for the same reason os_user is: the install lives in that login's
+  -- ~/.claude/fleet, and the machine you never log into is precisely the one
+  -- whose install falls behind unnoticed.
+  --
+  -- fleet_behind is NULLABLE ON PURPOSE. The script emits null when the count
+  -- could not be read (no upstream, fetch refused, not a checkout) and NULL is
+  -- the only honest storage for it: a 0 here would say "current" about an
+  -- install nobody could measure, which is claude-fleet#635 all over again.
+  -- fleet_fetched says whether that count was read against a freshly fetched
+  -- remote or the remote-tracking ref the install already had. fleet_seen_at
+  -- is when the AGENT ran the script, so a login that stopped reporting the
+  -- install (Claude logged out; agent downgraded) shows as stale rather than
+  -- presenting the last reading as current. Every column keeps its last value
+  -- across batches that do not carry the reading; see Store.TouchEndpoint.
+  fleet_head        TEXT NOT NULL DEFAULT '',
+  fleet_behind      INTEGER,
+  fleet_verdict     TEXT NOT NULL DEFAULT '',
+  fleet_follow      TEXT NOT NULL DEFAULT '',
+  fleet_follow_text TEXT NOT NULL DEFAULT '',
+  fleet_error       TEXT NOT NULL DEFAULT '',
+  fleet_fetched     INTEGER NOT NULL DEFAULT 0,
+  fleet_seen_at     TEXT,
+
+  -- What this enrollment is FOR. 'agent' is a machine collecting usage;
+  -- 'repo_shipper' is a cron job pushing repo progress and nothing else.
+  --
+  -- The distinction is not cosmetic. Every fleet surface reads "enrolled but
+  -- silent" as a collection failure -- the roster, and the stale-agent
+  -- finding, which fires "<label> has never reported ... its share of every
+  -- total is under-counted until it returns". A repo shipper never reports
+  -- usage BY DESIGN, so without this column enrolling one buys a permanent
+  -- false alarm that no amount of fixing the shipper will clear. Stamped on
+  -- the first repo push, not at enrollment: what a token is for is only
+  -- knowable once it is used.
+  kind          TEXT NOT NULL DEFAULT 'agent',
+
+  -- The team this endpoint's spend is allocated to.
+  --
+  -- Assigned by the operator, never reported by the endpoint. An endpoint that
+  -- could name its own team could move its spend onto another team's budget,
+  -- for the same reason a public submission may not name its own handle.
+  team          TEXT NOT NULL DEFAULT '',
+  enrolled_at   TEXT NOT NULL,
+  last_seen     TEXT,
+
+  -- Why this endpoint could not read its account's limits, in its own words
+  -- ("the local OAuth token has expired", "no readable credentials", ...).
+  -- Without this the UI can only say "nobody managed to read them", which
+  -- tells an operator nothing about which machine to go fix.
+  limits_unavailable TEXT NOT NULL DEFAULT '',
+  limits_checked_at  TEXT,
+
+  -- What this endpoint refused to attribute, and why. Excluded history is
+  -- reported rather than silently missing from the totals.
+  dropped_pre_account     INTEGER NOT NULL DEFAULT 0,
+  earliest_dropped        TEXT,
+  dropped_beyond_backfill INTEGER NOT NULL DEFAULT 0,
+  backfill_limit          TEXT NOT NULL DEFAULT '',
+
+  -- When this endpoint was retired. NULL = active; a timestamp means the
+  -- operator is done with it.
+  --
+  -- Retiring KEEPS the row and every usage row pointing at it. That is the
+  -- whole point: an endpoint's spend is already in the ledger, and deleting it
+  -- would silently change historical totals -- last month's report would come
+  -- back smaller with no record of why. So retire is the default and the only
+  -- thing offered for an endpoint that has ever reported; DeleteEndpoint
+  -- exists for the mint-then-abandon case and refuses everything else.
+  --
+  -- It is also a real revocation, not a label: EndpointByTokenHash filters on
+  -- it, and that is the one query every enrollment-token path goes through, so
+  -- the token stops being accepted everywhere at once. There is deliberately
+  -- no un-retire -- the token hash is still on this row, so restoring the row
+  -- would restore the credential the operator just killed. Re-enroll instead:
+  -- a new id, a new token, and the old spend stays where it was.
+  retired_at              TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_endpoints_account ON endpoints(account_uuid);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_endpoints_token ON endpoints(token_hash);
+
+CREATE TABLE IF NOT EXISTS usage_events (
+  id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+  source                 TEXT NOT NULL DEFAULT 'claude',
+  account_uuid           TEXT NOT NULL,
+  endpoint_id            TEXT NOT NULL,
+  session_id             TEXT NOT NULL DEFAULT '',
+  message_uuid           TEXT NOT NULL,
+  request_id             TEXT NOT NULL DEFAULT '',
+  ts                     TEXT NOT NULL,          -- RFC3339 UTC
+  model                  TEXT NOT NULL DEFAULT '',
+  -- The upstream that actually served the request. Empty means the reporting
+  -- side declared none, which is the honest state for a Claude transcript --
+  -- never a vendor called "unknown".
+  provider               TEXT NOT NULL DEFAULT '',
+
+  input_tokens           INTEGER NOT NULL DEFAULT 0,
+  output_tokens          INTEGER NOT NULL DEFAULT 0,
+  cache_create_5m_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_create_1h_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_read_tokens      INTEGER NOT NULL DEFAULT 0,
+  thinking_tokens        INTEGER NOT NULL DEFAULT 0,
+  web_search_requests    INTEGER NOT NULL DEFAULT 0,
+  web_fetch_requests     INTEGER NOT NULL DEFAULT 0,
+
+  -- NULL means the model is not in the pricing table. Never 0 — that would
+  -- claim the work was free.
+  cost_usd               REAL,
+
+  cwd                    TEXT NOT NULL DEFAULT '',
+  os_user                TEXT NOT NULL DEFAULT '',
+  git_branch             TEXT NOT NULL DEFAULT '',
+  -- The issue this turn was worked under, read from git_branch by one anchored
+  -- rule (store.IssueFromBranch). NULL means the branch did not say -- never 0,
+  -- which would be a real issue number, and never a guess: on 420k measured
+  -- events a looser rule would file 15.6% of them under a scratch-session
+  -- ordinal that collides with real issues. It carries NO repository, on
+  -- purpose: `owner/name` appears nowhere on the spend side, so binding these
+  -- to repo_issues is the READER's job and has to be scoped to one repo.
+  -- docs/superpowers/specs/2026-09-19-cost-per-issue-seam-design.md
+  issue_number           INTEGER,
+  -- The repository the turn was spent in, as `owner/name`. DECLARED by the
+  -- endpoint, which runs inside the checkout and resolved it once per cwd from
+  -- `git remote get-url origin` — never derived here: the hub still shells out
+  -- to nothing and stores only what the reporter recorded.
+  --
+  -- '' means NOT DECLARED (an older agent, a cwd that is not a checkout, a
+  -- remote that names no host). It is the third state beside "this repo" and
+  -- "another repo", and a read has to disclose it rather than fold it into
+  -- either — see §6 of the design above, and internal/agent/gitrepo.go.
+  git_repo               TEXT NOT NULL DEFAULT '',
+  entrypoint             TEXT NOT NULL DEFAULT '',
+  effort                 TEXT NOT NULL DEFAULT '',
+  is_sidechain           INTEGER NOT NULL DEFAULT 0
+);
+
+-- The dedup key. A resumed session re-reads lines it already shipped and a
+-- forked conversation copies entries into a new file; both replay the same
+-- uuid for the same API call, so collapsing them is correct.
+-- The source-aware dedup index is created by migrateSources, after older
+-- databases have acquired their source column.
+
+CREATE INDEX IF NOT EXISTS idx_events_account_ts ON usage_events(account_uuid, ts);
+CREATE INDEX IF NOT EXISTS idx_events_endpoint_ts ON usage_events(account_uuid, endpoint_id, ts);
+CREATE INDEX IF NOT EXISTS idx_events_session ON usage_events(account_uuid, session_id);
+
+CREATE TABLE IF NOT EXISTS limit_snapshots (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_uuid        TEXT NOT NULL,
+  endpoint_id         TEXT NOT NULL DEFAULT '',
+  observed_at         TEXT NOT NULL,
+  five_hour_pct       REAL NOT NULL DEFAULT 0,
+  five_hour_resets_at TEXT,
+  seven_day_pct       REAL NOT NULL DEFAULT 0,
+  seven_day_resets_at TEXT,
+  scoped_json         TEXT NOT NULL DEFAULT '[]',
+  extra_usage_json    TEXT NOT NULL DEFAULT '',
+  spend_json          TEXT NOT NULL DEFAULT '',
+  raw_json            TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_snapshots_account_time
+  ON limit_snapshots(account_uuid, observed_at DESC);
+
+-- The latest reading of each per-model cap (the weekly Fable cap: claim
+-- "7d_oi"), per account. A table of its own, not a column on the snapshot, and
+-- latest-only: most snapshots come from a session's statusLine, which never sees
+-- these, so "the freshest snapshot" would hide a cap read five minutes earlier
+-- behind one that could not have seen it.
+CREATE TABLE IF NOT EXISTS model_claims (
+  account_uuid        TEXT NOT NULL,
+  model               TEXT NOT NULL,
+  claim               TEXT NOT NULL,
+  utilization         REAL NOT NULL DEFAULT 0,
+  status              TEXT NOT NULL DEFAULT '',
+  resets_at           TEXT,
+  surpassed_threshold REAL,
+  observed_at         TEXT NOT NULL,
+  PRIMARY KEY (account_uuid, model, claim)
+);
+
+-- Which subscriptions an endpoint has been seen running, and when.
+--
+-- This is many-to-many on purpose. Claude Code takes its account from the
+-- environment per process, so one machine+user runs several subscriptions AT
+-- THE SAME TIME -- measured here: three. endpoints.account_uuid holds only the
+-- machine's own login; every subscription observed in a session lands here
+-- instead, and neither displaces the other.
+CREATE TABLE IF NOT EXISTS endpoint_accounts (
+  endpoint_id  TEXT NOT NULL,
+  account_uuid TEXT NOT NULL,
+  origin       TEXT NOT NULL DEFAULT 'session',  -- 'login' | 'session'
+  first_seen   TEXT NOT NULL,
+  last_seen    TEXT NOT NULL,
+  PRIMARY KEY (endpoint_id, account_uuid)
+);
+
+CREATE INDEX IF NOT EXISTS idx_endpoint_accounts_account
+  ON endpoint_accounts(account_uuid, last_seen DESC);
+
+-- A machine that logs out and into a different account creates a seam: rows
+-- already ingested keep the old attribution and cannot be corrected. Recording
+-- the transition makes the seam visible in the UI instead of silent.
+--
+-- Only a change of the endpoint's OWN login is a switch. Writing a row every
+-- time the reported account differed from the last one turned concurrency into
+-- history: 83 "switches" in four hours on one laptop, in exactly balanced
+-- A->B/B->A pairs 0.003s apart, none of which happened.
+CREATE TABLE IF NOT EXISTS account_switches (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  endpoint_id  TEXT NOT NULL,
+  from_account TEXT NOT NULL,
+  to_account   TEXT NOT NULL,
+  observed_at  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_switches_endpoint ON account_switches(endpoint_id, observed_at DESC);
+
+-- Revocable links for showing usage to someone who must NOT see the fleet.
+--
+-- A separate credential from the viewer token on purpose. The viewer token
+-- opens the dashboard AND the MCP server — every project path, machine name,
+-- OS login and account email. There is no way to hand that to a third party
+-- "just for the charts", and no way to take it back afterwards without
+-- rotating it for everyone.
+CREATE TABLE IF NOT EXISTS share_links (
+  id           TEXT PRIMARY KEY,       -- short, printable; what you revoke by
+  token_hash   TEXT NOT NULL UNIQUE,   -- never the token itself
+  label        TEXT NOT NULL DEFAULT '',
+  -- Notional costs are OFF unless deliberately enabled: an API-equivalent
+  -- dollar figure shown to someone who does not know it is notional reads as
+  -- a bill.
+  show_costs   INTEGER NOT NULL DEFAULT 0,
+  created_at   TEXT NOT NULL,
+  expires_at   TEXT,                   -- NULL = no expiry
+  revoked_at   TEXT,
+  last_used_at TEXT,
+  uses         INTEGER NOT NULL DEFAULT 0
+);
+
+-- Hourly rollup of usage_events, keyed by every dimension the dashboard can
+-- drill down on plus the session. One row here stands for every turn in that
+-- hour with the same (account, endpoint, session, login, project, model,
+-- branch, effort, entrypoint, sidechain). The mini's 290k events collapse to a
+-- few thousand rows, which is what makes brushing a 90-day timeline cheap.
+--
+-- Maintained in the same transaction as the event insert, so it can never
+-- drift from usage_events. Pruning raw events leaves it alone on purpose:
+-- totals and sessions keep working past the retention window, only per-turn
+-- detail is lost -- which is exactly why a version bump does NOT rebuild it
+-- from scratch: RebuildRollup only ever touches hours at or after the
+-- earliest surviving raw event, since those are the only ones usage_events
+-- can still attest to. Once anything has been pruned, the rows below that
+-- line are the sole surviving record of that history, and RebuildRollup
+-- refuses to run over them unless told --rebuild-rollup-force, rather than
+-- silently truncating the rollup to the retention window with no way back.
+CREATE TABLE IF NOT EXISTS usage_hourly (
+  hour          TEXT NOT NULL,   -- 'YYYY-MM-DDTHH:00:00Z', the bucket start
+  account_uuid  TEXT NOT NULL,
+  endpoint_id   TEXT NOT NULL,
+  session_id    TEXT NOT NULL DEFAULT '',
+  os_user       TEXT NOT NULL DEFAULT '',
+  cwd           TEXT NOT NULL DEFAULT '',
+  model         TEXT NOT NULL DEFAULT '',
+  provider      TEXT NOT NULL DEFAULT '',
+  git_branch    TEXT NOT NULL DEFAULT '',
+  -- Derived from git_branch, exactly as on usage_events above, and NOT part of
+  -- the key below: it is a pure function of a column that already is, so it
+  -- adds no grain -- and it can be re-derived in place when the rule changes,
+  -- without the rebuild from usage_events that pruned history would refuse.
+  issue_number  INTEGER,
+  -- Declared by the endpoint, exactly as on usage_events above, and NOT part of
+  -- the key below: it is a function of cwd, which already is, so it adds no
+  -- grain. Unlike issue_number it CANNOT be re-derived here -- the hub does not
+  -- read git -- so the write paths never let '' overwrite a declared value: an
+  -- endpoint upgrading mid-hour would otherwise erase its own declaration.
+  git_repo      TEXT NOT NULL DEFAULT '',
+  effort        TEXT NOT NULL DEFAULT '',
+  entrypoint    TEXT NOT NULL DEFAULT '',
+  is_sidechain  INTEGER NOT NULL DEFAULT 0,
+
+  events                 INTEGER NOT NULL DEFAULT 0,
+  input_tokens           INTEGER NOT NULL DEFAULT 0,
+  output_tokens          INTEGER NOT NULL DEFAULT 0,
+  cache_create_5m_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_create_1h_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_read_tokens      INTEGER NOT NULL DEFAULT 0,
+  thinking_tokens        INTEGER NOT NULL DEFAULT 0,
+  cost_usd               REAL    NOT NULL DEFAULT 0,   -- priced turns only
+  unpriced_events        INTEGER NOT NULL DEFAULT 0,   -- turns with NULL cost
+  min_ts                 TEXT NOT NULL,
+  max_ts                 TEXT NOT NULL,
+  source                 TEXT NOT NULL DEFAULT 'claude',
+  cache_write_tokens       INTEGER NOT NULL DEFAULT 0,
+  cache_write_known_events INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (hour, account_uuid, endpoint_id, session_id, os_user, cwd,
+               model, provider, git_branch, effort, entrypoint, is_sidechain, source)
+);
+CREATE INDEX IF NOT EXISTS idx_hourly_account_hour ON usage_hourly(account_uuid, hour);
+CREATE INDEX IF NOT EXISTS idx_hourly_session ON usage_hourly(account_uuid, session_id);
+
+CREATE TABLE IF NOT EXISTS rollup_meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+-- What the subscriptions ACTUALLY cost.
+--
+-- A table rather than a column on accounts, because prices change. One column
+-- would rewrite history on every price change: last month's figures would
+-- silently be recomputed at this month's price. Effective-dated rows keep each
+-- period priced at what it actually cost then.
+--
+-- Seats are deliberately NOT stored. How many accounts were on a plan in a
+-- period is derivable from accounts; a stored count drifts out of date the
+-- moment somebody is added or removed, and a drifted count is worse than no
+-- count because it still looks authoritative.
+--
+-- THIS IS REAL MONEY, and it is a different kind of money from
+-- usage_events.cost_usd. A subscription is billed whether or not a single
+-- token is spent; cost_usd is notional -- "what this would have cost at API
+-- rates" -- and is not an invoice. Subscription spend may be added to a
+-- metered gateway bill. It must NEVER be added to the notional figure.
+--
+-- An unpriced plan is ABSENT here rather than present at 0, for the same
+-- reason usage_events.cost_usd is NULL rather than 0: zero is a claim that the
+-- plan was free, absent is an admission that nobody has said what it costs.
+CREATE TABLE IF NOT EXISTS subscription_plans (
+  plan           TEXT NOT NULL,           -- matches accounts.subscription_type
+  source         TEXT NOT NULL,           -- 'claude' | 'codex' | ... — same plan name, different vendors
+  monthly_cost   REAL NOT NULL,
+  currency       TEXT NOT NULL DEFAULT 'USD',
+  effective_from TEXT NOT NULL,           -- RFC3339 UTC, inclusive
+  effective_to   TEXT,                    -- RFC3339 UTC, exclusive; NULL = still current
+  PRIMARY KEY (plan, source, effective_from)
+);
+
+CREATE INDEX IF NOT EXISTS idx_plans_period
+  ON subscription_plans(source, plan, effective_from DESC);
+
+-- Repo progress: what the tokens BOUGHT.
+--
+-- Everything above this line is spend. None of it answers "this week's tokens,
+-- what actually landed?" -- the other half of that question is repo history.
+-- The issue NUMBER is the axis that joins the two: a fleet-style orchestrator
+-- binds a session to an issue, a commit convention binds a commit to an issue,
+-- and this hub already keys spend by session.
+--
+-- Both halves of that axis now exist. usage_events.issue_number and
+-- usage_hourly.issue_number carry the number read off the branch (#57), and
+-- git_repo carries the repository the ENDPOINT declared it was running in
+-- (#84, §6 of the design) -- so a spend row names a repo AND a number, and
+-- joins to a row here on both. The §5 refusal survives only for a hub whose
+-- endpoints cannot declare yet: while nothing on the spend side names a
+-- repository, a number alone is still ambiguous the moment a second shipper
+-- enrolls.
+-- docs/superpowers/specs/2026-09-19-cost-per-issue-seam-design.md
+--
+-- Two tables sharing a binary gain
+-- nothing; the same key is what makes cost-per-issue answerable.
+--
+-- Deliberately NOT keyed by account_uuid, unlike every fact table above it.
+-- Those tables carry it because they are spend, and spend belongs to a
+-- subscription -- an isolation bug there shows one team's money to another. A
+-- repository is not owned by a subscription: one repo is worked by endpoints
+-- on several plans at once, and stamping one of them onto the row would be a
+-- guess presented as a fact. Repo rows are hub-wide, and the join back to
+-- spend goes through the issue number, never through the account.
+--
+-- Two tables because they have two lifetimes. repo_days is kept forever;
+-- repo_issues is bounded (see store.PruneRepoIssues). The hub is one Go binary
+-- and one SQLite file on a single replica, and that is a property to defend,
+-- not an accident to grow out of.
+CREATE TABLE IF NOT EXISTS repo_issues (
+  repo         TEXT    NOT NULL,          -- 'owner/name'
+  number       INTEGER NOT NULL,
+  title        TEXT    NOT NULL DEFAULT '',
+  state        TEXT    NOT NULL,          -- 'open' | 'closed'
+  created_at   TEXT    NOT NULL,          -- RFC3339 UTC
+  updated_at   TEXT,
+  closed_at    TEXT,                      -- NULL while open
+  labels_json  TEXT    NOT NULL DEFAULT '[]',
+  comments     INTEGER NOT NULL DEFAULT 0,
+  url          TEXT    NOT NULL DEFAULT '',
+  -- The work landed but the issue is still open: a merged commit whose
+  -- subject references this number. NULL means nobody looked, not that
+  -- nothing shipped.
+  shipped_at   TEXT,
+  shipped_ref  TEXT    NOT NULL DEFAULT '',
+  -- When a shipper last saw this row. An open issue that stops appearing in
+  -- snapshots (deleted, transferred, or made private) would otherwise sit in
+  -- the stalled list forever; ageing it out by last sighting is what makes
+  -- the backlog self-healing without a separate "this list is complete" flag
+  -- that every shipper would have to get right.
+  observed_at  TEXT    NOT NULL,
+  PRIMARY KEY (repo, number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_repo_issues_state ON repo_issues(repo, state, created_at);
+CREATE INDEX IF NOT EXISTS idx_repo_issues_closed ON repo_issues(repo, closed_at);
+
+-- One UTC day of flow per repository, pre-aggregated by the shipper because it
+-- is the only party holding the full history.
+--
+-- This is the table that answers "what did the backlog look like two weeks
+-- ago" -- a question GitHub itself cannot answer retroactively, because its
+-- API exposes only each issue's CURRENT state. Storing rendered output instead
+-- would make that history impossible, which is why nothing here is HTML.
+--
+-- The percentile columns are NULL rather than 0 when the shipper did not
+-- compute them, for the same reason usage_events.cost_usd is NULL rather than
+-- 0: zero is a claim that issues close instantly, NULL is an admission that
+-- nobody measured. Every age judgement scales to these and never to a
+-- constant -- in a repo whose median issue closes in three hours, "stale after
+-- 30 days" carries no information.
+CREATE TABLE IF NOT EXISTS repo_days (
+  repo              TEXT    NOT NULL,
+  day               TEXT    NOT NULL,     -- YYYY-MM-DD, UTC, sorts as a string
+  opened            INTEGER NOT NULL DEFAULT 0,
+  closed            INTEGER NOT NULL DEFAULT 0,
+  open_at_end       INTEGER NOT NULL DEFAULT 0,
+  merged_prs        INTEGER,              -- NULL: the shipper does not track PRs
+  close_p50_seconds REAL,
+  close_p90_seconds REAL,
+  close_p95_seconds REAL,
+  closed_sample     INTEGER,              -- how many closes the percentiles cover
+  observed_at       TEXT    NOT NULL,
+  PRIMARY KEY (repo, day)
+);
+
+CREATE INDEX IF NOT EXISTS idx_repo_days_day ON repo_days(repo, day DESC);
+
+-- One row per repository: the shipper's own reading of whether that repo's
+-- post-release verification can be trusted.
+--
+-- A single row, not a history, and that is deliberate. These readings are
+-- already windowed by the producer ("the last 30 days", "right now", "the last
+-- 7 days"), so keeping a series of them would be keeping overlapping answers
+-- to a question that already has one -- and the first thing anyone would do
+-- with such a series is chart it, which is re-deriving a trend from figures
+-- whose windows move underneath it.
+--
+-- readings_json is stored whole rather than shredded into columns because the
+-- hub must not interpret it: the honesty rules that decide whether a figure is
+-- printed at all live in the producer, and a column per figure would invite a
+-- query that reconstitutes them here (see model.RepoVerifyHealth).
+CREATE TABLE IF NOT EXISTS repo_health (
+  repo                TEXT    NOT NULL PRIMARY KEY,   -- 'owner/name'
+  observed_at         TEXT    NOT NULL,               -- when the shipper read, not when we stored
+  source              TEXT    NOT NULL DEFAULT '',    -- producer, shown so a doubter knows what to read
+  stale_after_seconds REAL,                           -- NULL = the shipper did not say how long these stay current
+  readings_json       TEXT    NOT NULL                -- []model.RepoReading, verbatim
+);
+
+-- The other half of progress: release work that is waiting on a PERSON.
+--
+-- Two tables again, and again because they have two lifetimes. repo_human_days
+-- is kept forever (it is the ratio the whole thing is judged by, and nothing
+-- can reconstruct last week's denominator afterwards); repo_human_steps is a
+-- live list that ages out with its shipper, exactly like repo_issues.
+--
+-- Nothing here is a threshold. There is no "overdue" column: how long a step
+-- has been waiting is computed on read from todo_at, because a stored age is
+-- wrong the moment it is stored -- and because the ESCALATION ladder (who gets
+-- told at three days, at seven, at fourteen) belongs to the system that does
+-- the telling, not to the one that draws the list. Two copies of a ladder is
+-- two ladders that drift.
+CREATE TABLE IF NOT EXISTS repo_human_steps (
+  repo           TEXT    NOT NULL,
+  -- The release fragment's issue number, and the numbered step inside it.
+  -- The key is WHERE THE STEP IS WRITTEN, deliberately not any id the
+  -- notification channel minted: a card can be deleted and rebuilt, and the
+  -- step it describes is the same step throughout.
+  fragment       INTEGER NOT NULL,
+  ord            INTEGER NOT NULL,
+  owner          TEXT    NOT NULL,     -- verbatim, as written in the fragment
+  owner_kind     TEXT    NOT NULL,     -- person | not-a-person | unresolved
+  owner_id       TEXT,                 -- NULL unless owner_kind = 'person'
+  title          TEXT    NOT NULL,
+  how            TEXT,                 -- NULL: the author did not write one
+  pass           TEXT,                 -- NULL: no acceptance criterion written
+  exit           TEXT,                 -- NULL: no "what if I can't" written
+  fragment_title TEXT,
+  fragment_url   TEXT,
+  fragment_at    TEXT    NOT NULL,
+  -- NULL means nobody has been told yet. That is a different failure from
+  -- "told and not done", and the two want different fixes.
+  todo_at        TEXT,
+  -- 0 means still owed. Done steps keep arriving until their fragment is
+  -- archived: if "done" meant the shipper stopped sending the row, a broken
+  -- shipper would look exactly like a productive afternoon.
+  done           INTEGER NOT NULL DEFAULT 0,
+  -- NULL with done=1 is legal and common: somebody struck the step out by
+  -- hand in the issue body, so it is finished and no clock recorded when.
+  done_at        TEXT,
+  done_by        TEXT,
+  observed_at    TEXT    NOT NULL,
+  PRIMARY KEY (repo, fragment, ord)
+);
+
+CREATE INDEX IF NOT EXISTS idx_repo_human_open ON repo_human_steps(repo, done, fragment_at);
+
+-- One UTC day of "how much of this repo's release work needed a human".
+--
+-- Stored as its two halves, never as the quotient: a percentage cannot be
+-- re-summed into a week, and a week is the grain anyone actually asks about.
+-- fragments is the denominator -- "3 manual fragments" means nothing until you
+-- know whether the day had four or four hundred.
+CREATE TABLE IF NOT EXISTS repo_human_days (
+  repo        TEXT    NOT NULL,
+  day         TEXT    NOT NULL,       -- YYYY-MM-DD, UTC, sorts as a string
+  fragments   INTEGER NOT NULL DEFAULT 0,
+  with_human  INTEGER NOT NULL DEFAULT 0,
+  steps       INTEGER NOT NULL DEFAULT 0,
+  steps_done  INTEGER NOT NULL DEFAULT 0,
+  observed_at TEXT    NOT NULL,
+  PRIMARY KEY (repo, day)
+);
+
+CREATE INDEX IF NOT EXISTS idx_repo_human_days_day ON repo_human_days(repo, day DESC);
+
+-- The business ledger: what the company earns while the two books above are
+-- running. One row per (shipper, UTC day), whole-document upsert.
+--
+-- Everything here is a LEVEL -- money on the books, accounts alive that day --
+-- so nothing is additive and a replayed push is a no-op rather than a double
+-- count. There is deliberately no watermark and no back-fill: a day nobody
+-- shipped stays missing, which is the honest record of a cron job that did not
+-- run. Inventing the gap from its neighbours would put revenue on a board that
+-- no query can reproduce.
+--
+-- ai_updated_at is the load-bearing column. The h5_* figures come off a
+-- production database every night; the ai_* figures are typed in by a person,
+-- and this records when a person last confirmed them. A surface that shows
+-- those three numbers without reading this one is printing last week's guess
+-- as today's fact -- see model.AIStaleAfter.
+CREATE TABLE IF NOT EXISTS growth_facts (
+  source                    TEXT    NOT NULL,  -- the shipper, e.g. 'growth-facts'
+  day                       TEXT    NOT NULL,  -- YYYY-MM-DD, UTC, sorts as a string
+
+  -- Money is whole CNY, as the frozen shipper contract sends it.
+  h5_arr_cny                INTEGER NOT NULL DEFAULT 0,
+  h5_expiring_in_window_cny INTEGER NOT NULL DEFAULT 0,
+  h5_expiring_accounts      INTEGER NOT NULL DEFAULT 0,
+  h5_churned_accounts       INTEGER NOT NULL DEFAULT 0,
+  h5_active_accounts        INTEGER NOT NULL DEFAULT 0,
+
+  ai_signed_deals           INTEGER NOT NULL DEFAULT 0,
+  ai_qualified_leads        INTEGER NOT NULL DEFAULT 0,
+  ai_arr_cny                INTEGER NOT NULL DEFAULT 0,
+  ai_updated_at             TEXT    NOT NULL,  -- when a PERSON last confirmed the three above
+
+  okr_focus                 TEXT    NOT NULL DEFAULT '',
+  okr_quarter               TEXT    NOT NULL DEFAULT '',
+  okr_target_annualized     INTEGER NOT NULL DEFAULT 0,
+  -- Signed: the kill-switch date passes whether or not anyone re-decided.
+  okr_days_to_kill_switch   INTEGER NOT NULL DEFAULT 0,
+  -- The same fact as a DATE. A count rots by the day; a date does not, so the
+  -- board derives the countdown at render time and is right whenever it is read.
+  okr_kill_switch_date      TEXT    NOT NULL DEFAULT '',
+
+  -- The hub's own clock, for an operator asking "did tonight's job run?".
+  -- Never used to order two pushes: the contract carries no observation time,
+  -- so the hub cannot tell a retry from a correction and does not pretend to.
+  received_at               TEXT    NOT NULL,
+  PRIMARY KEY (source, day)
+);
+
+CREATE INDEX IF NOT EXISTS idx_growth_facts_day ON growth_facts(day DESC);
+
+-- The one piece of state a PERSON creates about a finding: "I know, be quiet
+-- until X".
+--
+-- Findings themselves are not stored. They are recomputed by internal/findings
+-- on every read, from the rollups, and that is deliberate -- a findings table
+-- would be a second copy of numbers that already exist and would go stale the
+-- moment a rule or a threshold changed. What cannot be recomputed is the
+-- operator's judgement, so that is the only thing here: a row per silenced
+-- finding, keyed by the stable id internal/findings/identity.go derives.
+--
+-- expires_at is NOT NULL, and there is no sentinel for "never". A permanently
+-- muted alert is a deleted alert that nobody remembers deleting: the condition
+-- stays true, the card stays quiet, and months later no one can say why that
+-- rule never fires. Forcing every silence to end makes it self-correcting --
+-- the worst case is being told again about something already handled.
+--
+-- Rows outlive their expiry until something writes: reads filter on the clock
+-- (store.ActiveFindingMutes) so an unpruned row can never silence anything,
+-- and the pruning rides along on the next mute/unmute rather than needing a
+-- daemon of its own.
+CREATE TABLE IF NOT EXISTS finding_mutes (
+  finding_id TEXT PRIMARY KEY,
+  -- The finding's kind at mute time, for the roster view only: an id is a
+  -- hash and says nothing a human can read. Never matched on -- the id is the
+  -- identity -- so a rule renaming its kind cannot orphan a live mute.
+  kind       TEXT NOT NULL DEFAULT '',
+  -- Why, in the operator's own words. Optional; a mute with no note is still
+  -- a decision, just an undocumented one.
+  note       TEXT NOT NULL DEFAULT '',
+  -- Who silenced it, when the hub knows (a tailnet or SSO identity). Empty
+  -- for a request carrying the shared viewer token, which names nobody --
+  -- and empty is the honest answer there rather than a guess at who holds it.
+  muted_by   TEXT NOT NULL DEFAULT '',
+  muted_at   TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_finding_mutes_expiry ON finding_mutes(expires_at);

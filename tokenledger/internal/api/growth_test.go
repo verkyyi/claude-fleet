@@ -1,0 +1,700 @@
+package api
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"regexp"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
+)
+
+// c2Template is the frozen shipper contract, verbatim.
+//
+// Two fields are parameters rather than literals, and only two: `day` and
+// `ai.updated_at` are the fields this hub reads against a clock, so hardcoding
+// them would make the whole suite quietly change meaning as the calendar moved
+// past them. Every figure below is the contract's own, which is what makes the
+// board assertions mean something.
+const c2Template = `{
+  "source": "growth-facts",
+  "day": %q,
+  "h5": { "arr_cny": 303600, "expiring_in_window_cny": 282000,
+          "expiring_accounts": 52, "churned_accounts": 6, "active_accounts": 76 },
+  "ai": { "signed_deals": 0, "qualified_leads": 0, "arr_cny": 0,
+          "updated_at": %q },
+  "okr": { "focus": "wechat_agent", "quarter": "2026Q4-首单",
+           "target_annualized": 420000, "days_to_kill_switch": 76 }
+}`
+
+func c2(day string, aiUpdated time.Time) []byte {
+	return []byte(fmt.Sprintf(c2Template, day, aiUpdated.UTC().Format(time.RFC3339)))
+}
+
+func today() string { return time.Now().UTC().Format(model.GrowthDayLayout) }
+
+func (h *harness) pushGrowth(t *testing.T, token string, body []byte) *http.Response {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost, h.http.URL+"/v1/ingest/growth", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := h.http.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
+// seedGrowth ships one day through the real ingest path — the house rule:
+// tests exercise the endpoint, not the store behind it.
+func seedGrowth(t *testing.T, h *harness, body []byte) {
+	t.Helper()
+	tok := h.tokens["growth"]
+	if tok == "" {
+		tok = h.enroll(t, "growth")
+	}
+	resp := h.pushGrowth(t, tok, body)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		buf := new(bytes.Buffer)
+		buf.ReadFrom(resp.Body)
+		t.Fatalf("seed growth: %d %s", resp.StatusCode, buf.String())
+	}
+}
+
+// ① no token and ② the wrong token are both 401, and the viewer token — which
+// opens the dashboard — must not open a write path.
+func TestGrowthIngest_RequiresAnEnrollmentToken(t *testing.T) {
+	h := newHarness(t)
+	body := c2(today(), time.Now().Add(-time.Hour))
+	for name, tok := range map[string]string{"none": "", "garbage": "ccq_not-a-token"} {
+		resp := h.pushGrowth(t, tok, body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("%s token: %d, want 401", name, resp.StatusCode)
+		}
+	}
+	resp := h.pushGrowth(t, viewerToken, body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("viewer token was accepted for growth ingest: %d", resp.StatusCode)
+	}
+}
+
+// ③ a legal body lands, and the board prints it: ¥303,600 on the books and the
+// 52 accounts that renew in the window.
+func TestGrowthIngest_StoresAndTheBoardShowsIt(t *testing.T) {
+	h := newHarness(t)
+	seedGrowth(t, h, c2(today(), time.Now().Add(-time.Hour)))
+
+	resp, body := h.get(t, "/growth")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /growth: %d", resp.StatusCode)
+	}
+	page := string(body)
+	for _, want := range []string{"303,600", "52"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the board does not carry %q", want)
+		}
+	}
+	// The rest of the contract, so a page that happened to contain those two
+	// substrings somewhere else could not pass.
+	for _, want := range []string{"282,000", "76", "wechat_agent", "2026Q4-首单", "420,000"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the board does not carry %q", want)
+		}
+	}
+	// Money is money: a bare 303600 on a board of yuan is a different claim.
+	if strings.Contains(page, ">303600<") {
+		t.Error("a figure was printed ungrouped")
+	}
+}
+
+// ④ the same (source, day) pushed twice is ONE row. Everything in this ledger
+// is a level, so a second push must replace the day rather than add to it.
+func TestGrowthIngest_SameDayTwiceIsOneRow(t *testing.T) {
+	h := newHarness(t)
+	day := today()
+	seedGrowth(t, h, c2(day, time.Now().Add(-time.Hour)))
+	seedGrowth(t, h, c2(day, time.Now().Add(-time.Hour)))
+
+	var rows int
+	if err := h.srv.Store.DB().QueryRow(
+		`SELECT COUNT(*) FROM growth_facts WHERE source = 'growth-facts' AND day = ?`, day,
+	).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 1 {
+		t.Fatalf("growth_facts holds %d rows for one (source, day); want exactly 1", rows)
+	}
+}
+
+// A correction for a day already shipped replaces the whole document. The
+// alternative — merging field by field — would let a figure that dropped out
+// of the shipper's query keep its old value under a fresh date.
+func TestGrowthIngest_ASecondPushReplacesTheDay(t *testing.T) {
+	h := newHarness(t)
+	day := today()
+	seedGrowth(t, h, c2(day, time.Now().Add(-time.Hour)))
+	seedGrowth(t, h, []byte(fmt.Sprintf(`{
+	  "source": "growth-facts", "day": %q,
+	  "h5": { "arr_cny": 311000, "expiring_in_window_cny": 0,
+	          "expiring_accounts": 0, "churned_accounts": 7, "active_accounts": 80 },
+	  "ai": { "signed_deals": 1, "qualified_leads": 3, "arr_cny": 96000, "updated_at": %q },
+	  "okr": { "focus": "wechat_agent", "quarter": "2026Q4-首单",
+	           "target_annualized": 420000, "days_to_kill_switch": 75 }
+	}`, day, time.Now().Add(-time.Hour).UTC().Format(time.RFC3339))))
+
+	_, body := h.get(t, "/growth")
+	page := string(body)
+	if !strings.Contains(page, "311,000") {
+		t.Error("the board is not showing the corrected figure")
+	}
+	if strings.Contains(page, "303,600") {
+		t.Error("the superseded figure is still on the board: the upsert merged instead of replacing")
+	}
+}
+
+// ⑤ the hand-filled half goes stale, and the board says so INSTEAD of printing
+// the old figures as today's. This is the criterion the whole feature turns
+// on: the AI deals are typed in by a person, and a board that shows last
+// week's number in today's slot lies more convincingly than an empty one.
+func TestGrowthBoard_StaleAIHalfIsNotPrintedAsToday(t *testing.T) {
+	h := newHarness(t)
+	seedGrowth(t, h, []byte(fmt.Sprintf(`{
+	  "source": "growth-facts", "day": %q,
+	  "h5": { "arr_cny": 303600, "expiring_in_window_cny": 282000,
+	          "expiring_accounts": 52, "churned_accounts": 6, "active_accounts": 76 },
+	  "ai": { "signed_deals": 4, "qualified_leads": 9, "arr_cny": 512000, "updated_at": %q },
+	  "okr": { "focus": "wechat_agent", "quarter": "2026Q4-首单",
+	           "target_annualized": 420000, "days_to_kill_switch": 76 }
+	}`, today(), time.Now().AddDate(0, 0, -5).UTC().Format(time.RFC3339))))
+
+	_, body := h.get(t, "/growth")
+	page := string(body)
+	if !strings.Contains(page, "距上次更新 5 天") {
+		t.Errorf("the board does not say how stale the hand-filled half is:\n%s", page)
+	}
+	// The figures may still appear as a dated FILING -- that is not a lie --
+	// but never in a value slot, which is what `<div class="v">` is.
+	for _, n := range []string{"4", "9", "512,000"} {
+		if strings.Contains(page, `<div class="v">`+n+`</div>`) {
+			t.Errorf("stale figure %q is printed as a current value", n)
+		}
+	}
+	// The measured half is unaffected: it came off a database tonight.
+	if !strings.Contains(page, "303,600") {
+		t.Error("the stale AI half took the measured H5 half down with it")
+	}
+
+	// A person who updated an hour ago gets the figures back, in the slots.
+	h2 := newHarness(t)
+	seedGrowth(t, h2, []byte(fmt.Sprintf(`{
+	  "source": "growth-facts", "day": %q,
+	  "h5": { "arr_cny": 303600, "expiring_in_window_cny": 282000,
+	          "expiring_accounts": 52, "churned_accounts": 6, "active_accounts": 76 },
+	  "ai": { "signed_deals": 4, "qualified_leads": 9, "arr_cny": 512000, "updated_at": %q },
+	  "okr": { "focus": "wechat_agent", "quarter": "2026Q4-首单",
+	           "target_annualized": 420000, "days_to_kill_switch": 76 }
+	}`, today(), time.Now().Add(-time.Hour).UTC().Format(time.RFC3339))))
+	_, fresh := h2.get(t, "/growth")
+	if !strings.Contains(string(fresh), `<div class="v">512,000`) &&
+		!strings.Contains(string(fresh), `<div class="v">¥512,000`) {
+		t.Errorf("a freshly confirmed figure is not on the board:\n%s", fresh)
+	}
+	if strings.Contains(string(fresh), "距上次更新") {
+		t.Error("an hour-old filing was reported as stale")
+	}
+}
+
+// The board is the most sensitive surface this binary serves. No credential is
+// a 401 -- not a redirect, which would hide the real reason.
+func TestGrowthBoard_RequiresViewerCredentials(t *testing.T) {
+	h := newHarness(t)
+	seedGrowth(t, h, c2(today(), time.Now().Add(-time.Hour)))
+	for _, path := range []string{"/growth", "/growth/"} {
+		resp, err := h.http.Client().Get(h.http.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := new(bytes.Buffer)
+		body.ReadFrom(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("GET %s with no credential: %d, want 401", path, resp.StatusCode)
+		}
+		if strings.Contains(body.String(), "303,600") {
+			t.Errorf("GET %s leaked a revenue figure to an anonymous caller", path)
+		}
+	}
+}
+
+// A hub nobody pointed a growth shipper at is a working hub. It must say so
+// rather than draw an empty ledger that reads like a business with no revenue.
+func TestGrowthBoard_SaysWhenNothingHasShipped(t *testing.T) {
+	h := newHarness(t)
+	resp, body := h.get(t, "/growth")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /growth on an empty hub: %d", resp.StatusCode)
+	}
+	if !strings.Contains(string(body), "还没有任何一天的数据") {
+		t.Errorf("an empty board does not say it is empty:\n%s", body)
+	}
+}
+
+// A shipper bug is a 400 the shipper can act on, not a 500 that sends whoever
+// wrote it reading hub logs -- and not a stored half-document either, because
+// these figures get read out in a meeting.
+func TestGrowthIngest_RejectsWhatItCannotStoreHonestly(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "growth")
+	recent := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+	okr := `"okr": { "focus": "wechat_agent", "quarter": "2026Q4-首单",
+	          "target_annualized": 420000, "days_to_kill_switch": 76 }`
+	h5 := `"h5": { "arr_cny": 303600, "expiring_in_window_cny": 282000,
+	         "expiring_accounts": 52, "churned_accounts": 6, "active_accounts": 76 }`
+
+	for name, body := range map[string]string{
+		"no source": fmt.Sprintf(`{"source": "", "day": %q, %s,
+			"ai": {"signed_deals":0,"qualified_leads":0,"arr_cny":0,"updated_at":%q}, %s}`,
+			today(), h5, recent, okr),
+		// A second spelling of one shipper is a second ledger nothing ever
+		// reconciles, so it is refused rather than normalised.
+		"shouting source": fmt.Sprintf(`{"source": "Growth-Facts", "day": %q, %s,
+			"ai": {"signed_deals":0,"qualified_leads":0,"arr_cny":0,"updated_at":%q}, %s}`,
+			today(), h5, recent, okr),
+		"day is not a day": fmt.Sprintf(`{"source": "growth-facts", "day": "yesterday", %s,
+			"ai": {"signed_deals":0,"qualified_leads":0,"arr_cny":0,"updated_at":%q}, %s}`,
+			h5, recent, okr),
+		"day is in the future": fmt.Sprintf(`{"source": "growth-facts", "day": %q, %s,
+			"ai": {"signed_deals":0,"qualified_leads":0,"arr_cny":0,"updated_at":%q}, %s}`,
+			time.Now().UTC().AddDate(0, 0, 9).Format(model.GrowthDayLayout), h5, recent, okr),
+		// Without it, every surface has to assume the hand-filled figures are
+		// current -- the one failure this whole feature exists to prevent.
+		"no ai.updated_at": fmt.Sprintf(`{"source": "growth-facts", "day": %q, %s,
+			"ai": {"signed_deals":0,"qualified_leads":0,"arr_cny":0}, %s}`, today(), h5, okr),
+		"negative revenue": fmt.Sprintf(`{"source": "growth-facts", "day": %q,
+			"h5": {"arr_cny": -1, "expiring_in_window_cny":0, "expiring_accounts":0,
+			       "churned_accounts":0, "active_accounts":0},
+			"ai": {"signed_deals":0,"qualified_leads":0,"arr_cny":0,"updated_at":%q}, %s}`,
+			today(), recent, okr),
+		"no focus": fmt.Sprintf(`{"source": "growth-facts", "day": %q, %s,
+			"ai": {"signed_deals":0,"qualified_leads":0,"arr_cny":0,"updated_at":%q},
+			"okr": {"focus": "", "quarter": "2026Q4", "target_annualized": 1, "days_to_kill_switch": 1}}`,
+			today(), h5, recent),
+		"not json": `{`,
+	} {
+		resp := h.pushGrowth(t, tok, []byte(body))
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s: %d, want 400", name, resp.StatusCode)
+		}
+	}
+
+	var rows int
+	if err := h.srv.Store.DB().QueryRow(`SELECT COUNT(*) FROM growth_facts`).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 0 {
+		t.Errorf("a refused push stored %d row(s)", rows)
+	}
+}
+
+// The shipper is a nightly cron job, not a machine. Marking it keeps the fleet
+// roster and the stale-agent finding from reporting it forever as a broken
+// endpoint that stopped sending usage.
+func TestGrowthIngest_ShipperLeavesTheAgentRoster(t *testing.T) {
+	h := newHarness(t)
+	seedGrowth(t, h, c2(today(), time.Now().Add(-time.Hour)))
+
+	var kind string
+	if err := h.srv.Store.DB().QueryRow(
+		`SELECT kind FROM endpoints WHERE endpoint_id = 'ep_growth'`).Scan(&kind); err != nil {
+		t.Fatal(err)
+	}
+	if kind != "growth_shipper" {
+		t.Errorf("endpoint kind = %q; want growth_shipper", kind)
+	}
+}
+
+// Chinese is this board's base language, English is available on request.
+func TestGrowthBoard_SpeaksEnglishWhenAsked(t *testing.T) {
+	h := newHarness(t)
+	seedGrowth(t, h, c2(today(), time.Now().AddDate(0, 0, -5)))
+
+	_, zh := h.get(t, "/growth")
+	if !strings.Contains(string(zh), "距上次更新 5 天") {
+		t.Error("the default board is not in Chinese")
+	}
+	_, en := h.get(t, "/growth?locale=en")
+	if !strings.Contains(string(en), "5 days since the last update") {
+		t.Errorf("?locale=en did not reach the English board:\n%s", en)
+	}
+}
+
+// ── GET /v1/growth/latest — the machine read (#7217) ─────────────────────────
+
+func (h *harness) readGrowth(t *testing.T, token string) *http.Response {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, h.http.URL+"/v1/growth/latest", nil)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := h.http.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
+// enrollKind is enroll() for a credential that must be born with its kind —
+// a reader never pushes, so it never reaches the self-marking path.
+func (h *harness) enrollKind(t *testing.T, label, kind string) string {
+	t.Helper()
+	tok, err := MintToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.srv.Store.EnrollKind("ep_"+label, label, HashToken(tok), kind); err != nil {
+		t.Fatal(err)
+	}
+	h.tokens[label] = tok
+	return tok
+}
+
+func decodeGrowthRead(t *testing.T, resp *http.Response) map[string]any {
+	t.Helper()
+	defer resp.Body.Close()
+	var got map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	return got
+}
+
+// The posture this hub states for every revenue surface: no credential, no
+// figures. The board says it with viewerOnly; this route has to say it itself.
+func TestGrowthReadRefusesWithoutToken(t *testing.T) {
+	h := newHarness(t)
+	seedGrowth(t, h, c2(today(), time.Now()))
+
+	resp := h.readGrowth(t, "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("no token: status = %d, want 401", resp.StatusCode)
+	}
+}
+
+// The gate this route exists to hold. Every shipper on this hub holds a valid
+// enrollment token; only the growth ones may read revenue. Without the kind
+// check this test passes with a 200 — which is exactly the silent widening.
+func TestGrowthReadRefusesAnAgentToken(t *testing.T) {
+	h := newHarness(t)
+	seedGrowth(t, h, c2(today(), time.Now()))
+
+	tok := h.enroll(t, "some-laptop") // a plain agent: valid token, wrong role
+	resp := h.readGrowth(t, tok)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("agent token: status = %d, want 401", resp.StatusCode)
+	}
+	// And it must not leak that the token itself was fine.
+	body := new(bytes.Buffer)
+	body.ReadFrom(resp.Body)
+	if strings.Contains(body.String(), "kind") {
+		t.Errorf("401 body names the kind, telling a prober its token is live: %s", body)
+	}
+}
+
+func TestGrowthReadAllowsAReaderToken(t *testing.T) {
+	h := newHarness(t)
+	day := today()
+	seedGrowth(t, h, c2(day, time.Now()))
+
+	tok := h.enrollKind(t, "monday-brief", "growth_reader")
+	resp := h.readGrowth(t, tok)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("reader token: status = %d, want 200", resp.StatusCode)
+	}
+	got := decodeGrowthRead(t, resp)
+	if got["present"] != true {
+		t.Fatalf("present = %v, want true", got["present"])
+	}
+	g, ok := got["growth"].(map[string]any)
+	if !ok {
+		t.Fatalf("growth block missing: %#v", got)
+	}
+	if g["day"] != day {
+		t.Errorf("day = %v, want %q", g["day"], day)
+	}
+	// received_at is the whole point of reading this back rather than trusting
+	// `day`: a shipper that died weeks ago still files a plausible day.
+	if g["received_at"] == nil || g["received_at"] == "" {
+		t.Error("received_at missing — the caller cannot tell a stale ledger from a fresh one")
+	}
+	h5, ok := g["h5"].(map[string]any)
+	if !ok {
+		t.Fatalf("h5 block missing: %#v", g)
+	}
+	if h5["active_accounts"] != float64(76) {
+		t.Errorf("h5.active_accounts = %v, want 76 (the C2 contract's own figure)", h5["active_accounts"])
+	}
+}
+
+// The shipper reads what it writes — no second credential for one machine.
+func TestGrowthReadAllowsTheShipperToken(t *testing.T) {
+	h := newHarness(t)
+	seedGrowth(t, h, c2(today(), time.Now()))
+
+	resp := h.readGrowth(t, h.tokens["growth"]) // marked growth_shipper by its push
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("shipper token: status = %d, want 200", resp.StatusCode)
+	}
+}
+
+// An empty ledger is a 200 with present:false, NOT a 404.
+//
+// The consumer's fallback for "no facts" is a brief with no figures in it. If
+// this answered 404, an older hub that simply lacks the route would be
+// indistinguishable from a quiet month, and that brief would go out empty every
+// week with nothing reporting a fault (#7217).
+func TestGrowthReadEmptyLedgerIsPresentFalseNot404(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enrollKind(t, "monday-brief", "growth_reader")
+
+	resp := h.readGrowth(t, tok)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("empty ledger: status = %d, want 200 (404 would collide with 'no such route')", resp.StatusCode)
+	}
+	got := decodeGrowthRead(t, resp)
+	if got["present"] != false {
+		t.Fatalf("present = %v, want false", got["present"])
+	}
+	if _, ok := got["growth"]; ok {
+		t.Error("empty ledger returned a growth block; a zeroed ledger reads like a business with no revenue")
+	}
+}
+
+func TestGrowthReadRejectsPost(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enrollKind(t, "monday-brief", "growth_reader")
+
+	req, _ := http.NewRequest(http.MethodPost, h.http.URL+"/v1/growth/latest", strings.NewReader("{}"))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := h.http.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("POST: status = %d, want 405", resp.StatusCode)
+	}
+}
+
+// ── 逐块合并：缺的块 = 「这一块我没话说，别动它」（C2 的澄清）──────────────────
+
+// h5Only is the body the real shipper sends, verbatim in shape: no `ai`, no
+// `okr`. Before the push type had pointer blocks the hub answered this with
+// 400 "ai.updated_at is required", and the collector never landed a day.
+const h5Only = `{"source":"growth-facts","day":%q,
+  "h5":{"arr_cny":303600,"expiring_in_window_cny":282000,
+        "expiring_accounts":52,"churned_accounts":6,"active_accounts":76}}`
+
+func TestGrowthIngestAcceptsTheShippersRealBody(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "growth")
+	day := today()
+
+	resp := h.pushGrowth(t, tok, []byte(fmt.Sprintf(h5Only, day)))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		buf := new(bytes.Buffer)
+		buf.ReadFrom(resp.Body)
+		t.Fatalf("只带 h5 的推送被拒：status=%d %s", resp.StatusCode, buf)
+	}
+}
+
+// 两个作者、两只钟：查询出来的那半和人手填的那半各推各的，谁也不许把对方抹成 0。
+func TestGrowthIngestMergesBlocksAcrossPushes(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "growth")
+	day := today()
+	rd := h.enrollKind(t, "reader", "growth_reader")
+
+	// ① 人手填的那半先到（完整 body，带 ai）。记下它写进去的那一刻，后面要**逐字**比。
+	aiAt := time.Now().UTC().Truncate(time.Second)
+	seedGrowth(t, h, c2(day, aiAt))
+	// ② 采集器随后只推 h5。
+	resp := h.pushGrowth(t, tok, []byte(fmt.Sprintf(h5Only, day)))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("h5-only 推送 status=%d", resp.StatusCode)
+	}
+
+	g := decodeGrowthRead(t, h.readGrowth(t, rd))["growth"].(map[string]any)
+	ai := g["ai"].(map[string]any)
+	// ★ 这里必须**逐字**比，不能只判「非空」：块缺失时写进去的是 time.Time 的零值，
+	//   它格式化出来是 "0001-01-01T00:00:00Z" —— 既不是 nil 也不是空串。
+	//   第一版就是这么写的，拿「ai 块永远覆盖」去变异时它照样绿。
+	gotAt, err := time.Parse(time.RFC3339, fmt.Sprint(ai["updated_at"]))
+	if err != nil {
+		t.Fatalf("ai.updated_at 解析不了：%v", ai["updated_at"])
+	}
+	if !gotAt.UTC().Truncate(time.Second).Equal(aiAt) {
+		t.Fatalf("ai.updated_at = %s，want %s —— h5-only 的推送动了 ai 块："+
+			"「没人更新」被改写成了「有人确认是 0」", gotAt.UTC(), aiAt)
+	}
+	okr := g["okr"].(map[string]any)
+	if okr["focus"] != "wechat_agent" {
+		t.Errorf("okr 块也被抹了：focus = %v", okr["focus"])
+	}
+	if g["h5"].(map[string]any)["active_accounts"] != float64(76) {
+		t.Error("h5 那一块反而没写进去")
+	}
+}
+
+// 块**之内**仍然是整块替换：一个从查询里掉出去的字段必须落成 0，
+// 而不是留着上周的值让整行的时间戳往前走 —— 那是「陈旧的数字穿着新鲜的日期」。
+func TestGrowthIngestReplacesWithinABlock(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "growth")
+	day := today()
+	rd := h.enrollKind(t, "reader", "growth_reader")
+
+	seedGrowth(t, h, c2(day, time.Now()))
+	zeroed := `{"source":"growth-facts","day":%q,
+	  "h5":{"arr_cny":303600,"expiring_in_window_cny":282000,
+	        "expiring_accounts":52,"churned_accounts":0,"active_accounts":76}}`
+	resp := h.pushGrowth(t, tok, []byte(fmt.Sprintf(zeroed, day)))
+	resp.Body.Close()
+
+	g := decodeGrowthRead(t, h.readGrowth(t, rd))["growth"].(map[string]any)
+	if got := g["h5"].(map[string]any)["churned_accounts"]; got != float64(0) {
+		t.Errorf("churned_accounts = %v，want 0 —— 块内必须整块替换", got)
+	}
+}
+
+// 一份一个块都没有的推送只会把 received_at 往前推，让一个没人维护的台账看起来还活着。
+func TestGrowthIngestRejectsAnEmptyPush(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "growth")
+
+	resp := h.pushGrowth(t, tok, []byte(fmt.Sprintf(`{"source":"growth-facts","day":%q}`, today())))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("空推送 status=%d，want 400", resp.StatusCode)
+	}
+	buf := new(bytes.Buffer)
+	buf.ReadFrom(resp.Body)
+	if !strings.Contains(buf.String(), "received_at") {
+		t.Errorf("400 没说清楚为什么，收到：%s", buf)
+	}
+}
+
+// ── 从来没有人推过的块，不许画成事实（#7217 的看板侧）────────────────────────
+//
+// 缺席的块与全零的块落在同一批列里：一天的第一次推送，会给它省略掉的东西写零。
+// 把那些零画出来，就是「目标 ¥0、kill switch 还有 0 天」——而「0 天」读起来是
+// 「今天就是大限」。线上实测过：搬运工只推 h5，看板上 okr 那一整行就是这样。
+
+func TestBoardDoesNotDrawAnUnfiledOKRAsFacts(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "growth")
+	// 搬运工真实的 body：只有 h5。
+	resp := h.pushGrowth(t, tok, []byte(fmt.Sprintf(h5Only, today())))
+	resp.Body.Close()
+
+	_, raw := h.get(t, "/growth")
+	body := string(raw)
+	assert := func(cond bool, msg string) {
+		t.Helper()
+		if !cond {
+			t.Error(msg)
+		}
+	}
+	assert(strings.Contains(body, "还没有人推过目标"), "没有说明这一块为什么是空的")
+	// ⚠️ 否定断言**不能拿整页判**：上面那句解释文案自己就含「¥0」和「kill switch」——
+	//    第一版写成 !Contains(body, "¥0") 当场被自己的文案骗成假红。
+	//    钉的是**标签**：它们只在真画那组数字时才出现。
+	assert(!strings.Contains(body, "目标年化"), "把没人推过的目标画成了一组数字")
+	assert(!strings.Contains(body, "距 kill switch"), "把没人推过的 kill switch 画成了倒计时")
+	// 地板断言：h5 那一块**确实**画出来了（契约夹具是 76），上面两条 !Contains 才不是恒真。
+	assert(strings.Contains(body, "活跃账号"), "h5 那一块没画出来")
+	assert(strings.Contains(body, "76"), "h5 的 active_accounts 没画出来")
+}
+
+func TestBoardDoesNotDrawAnUnfiledAIAsAFiveFigureAge(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "growth")
+	resp := h.pushGrowth(t, tok, []byte(fmt.Sprintf(h5Only, today())))
+	resp.Body.Close()
+
+	_, raw := h.get(t, "/growth")
+	body := string(raw)
+	// Go 的零值时刻是个合法日期：DaysSinceUpdate 对它回一个五位数。
+	if m := regexp.MustCompile(`距上次更新 (\d{4,}) 天`).FindStringSubmatch(body); m != nil {
+		t.Fatalf("看板印出了「距上次更新 %s 天」—— 那是零值时刻做减法的结果", m[1])
+	}
+	if !strings.Contains(body, "从来没有人填过") {
+		t.Error("没有说明人手填的那半是「还没有」而不是 0")
+	}
+}
+
+// kill switch 是个**日期**，不是一个推上来的天数。
+func TestBoardComputesKillSwitchFromTheDateNotThePushedCount(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "growth")
+	day := today()
+	// 故意让推上来的天数是错的（999），而日期是 60 天后 —— 看板必须信日期。
+	in60 := time.Now().UTC().AddDate(0, 0, 60).Format(model.GrowthDayLayout)
+	body := fmt.Sprintf(`{"source":"growth-facts","day":%q,
+	  "okr":{"focus":"wechat_agent","quarter":"2026Q4","target_annualized":420000,
+	         "days_to_kill_switch":999,"kill_switch_date":%q}}`, day, in60)
+	resp := h.pushGrowth(t, tok, []byte(body))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		buf := new(bytes.Buffer)
+		buf.ReadFrom(resp.Body)
+		t.Fatalf("推送被拒：%d %s", resp.StatusCode, buf)
+	}
+	_, rawp := h.get(t, "/growth")
+	page := string(rawp)
+	if !strings.Contains(page, "60 天") {
+		t.Errorf("看板没有按日期现算（期望「60 天」）")
+	}
+	if strings.Contains(page, "999") {
+		t.Error("看板信了推上来的那个天数 —— 它是推的那一刻的答案，会天天烂")
+	}
+}
+
+func TestBoardFallsBackToThePushedCountWhenThereIsNoDate(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "growth")
+	body := fmt.Sprintf(`{"source":"growth-facts","day":%q,
+	  "okr":{"focus":"wechat_agent","quarter":"2026Q4","target_annualized":420000,
+	         "days_to_kill_switch":42}}`, today())
+	resp := h.pushGrowth(t, tok, []byte(body))
+	resp.Body.Close()
+	_, rawp := h.get(t, "/growth")
+	page := string(rawp)
+	if !strings.Contains(page, "42 天") {
+		t.Error("没有日期时应当退回推上来的天数（旧搬运工还在用它）")
+	}
+}
+
+func TestOKRKillSwitchDateMustBeADate(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "growth")
+	body := fmt.Sprintf(`{"source":"growth-facts","day":%q,
+	  "okr":{"focus":"f","quarter":"q","target_annualized":1,
+	         "days_to_kill_switch":1,"kill_switch_date":"2026/11/30"}}`, today())
+	resp := h.pushGrowth(t, tok, []byte(body))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("坏日期 status=%d，want 400", resp.StatusCode)
+	}
+}

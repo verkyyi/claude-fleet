@@ -18,7 +18,7 @@ two is one field, and without this emitter it is nowhere: you can see that a wee
 burned N tokens, and separately that M issues closed, and you cannot connect them.
 
 This is the emitter half only. The consumer side — the hub that receives these
-facts and joins them to token spend — is [verkyyi/tokenledger#32](https://github.com/verkyyi/tokenledger/issues/32).
+facts and joins them to token spend — is TokenLedger ([`tokenledger/`](../tokenledger/) in this repo), tracked in [verkyyi/tokenledger#32](https://github.com/verkyyi/tokenledger/issues/32).
 
 ## Explicitly NOT a web UI for the fleet
 
