@@ -555,6 +555,31 @@ widens a credential, and no command has been moved from the hub's shell onto
 HTTP. `enroll`, `team` and `plan` stay local because a machine that could name
 its own team could move its spend onto another team's budget.
 
+## Fleet nodes — every machine reports in (`CCQUOTA_FLEET=1`)
+
+Off by default; with the switch off the hub and the agent are exactly what
+they were before it existed (no route, no table, no extra connection).
+
+Set `CCQUOTA_FLEET=1` on the **hub** and it creates a `nodes` table, accepts
+node control channels at `/v1/node/connect` (enrollment-token auth, like
+ingest) and serves the roster at `/nodes` (page) and `/v1/nodes` (JSON), both
+behind the viewer gate.
+
+Set it on an **agent** and the agent dials OUT to the hub — a WebSocket over
+the hub URL you already gave it (`wss://` for `https://`), so a machine behind
+NAT needs no inbound port — and sends a heartbeat every `--live-interval`
+(5s): this login's fleets and their window counts (read through claude-fleet's
+`~/.claude/fleet/bin/fleet-control.py rpc`, never by parsing tmux), the
+machine's 1-minute load and core count, available memory, and the fleet
+install's version. A dropped link is redialled with exponential, jittered
+backoff capped at 60s.
+
+The hub marks a node **lost** after three heartbeat intervals with nothing
+received. Lost is only a label: the row stays, its sessions are not read as
+idle, and nothing on the machine is touched. Every control message carries a
+`proto` version; a node whose version the hub does not accept stays listed
+(with its version) but is never sent a write.
+
 ## The dashboard
 
 One page, no tabs — with a nav bar across the top of it. Those are not in

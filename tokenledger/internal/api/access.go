@@ -361,13 +361,18 @@ func (s *Server) doors(f HubFacts) []Door {
 // this one sets no-cache, and unifying them would mean changing the share
 // page's caching as a side effect of a documentation change.)
 func (s *Server) serveAccessPage(w http.ResponseWriter, r *http.Request) {
+	s.serveStandalonePage(w, r, "access.html")
+}
+
+// serveStandalonePage serves one self-contained page from the built UI.
+func (s *Server) serveStandalonePage(w http.ResponseWriter, r *http.Request, name string) {
 	if s.UI == nil {
 		httpError(w, http.StatusNotFound, "this binary was built without the UI")
 		return
 	}
-	f, err := s.UI.Open("access.html")
+	f, err := s.UI.Open(name)
 	if err != nil {
-		httpError(w, http.StatusNotFound, "no access page in this build")
+		httpError(w, http.StatusNotFound, "no "+name+" in this build")
 		return
 	}
 	defer f.Close()
@@ -385,7 +390,7 @@ func (s *Server) serveAccessPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-cache")
-	http.ServeContent(w, r, "access.html", st.ModTime(), rs)
+	http.ServeContent(w, r, name, st.ModTime(), rs)
 }
 
 // pick is the ternary this file would otherwise spell out eight times. Every

@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>机器节点</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%232a78d6'/%3E%3Ccircle cx='8' cy='8' r='3' fill='%23fff'/%3E%3C/svg%3E">
+<!--
+  The node roster (claude-fleet#1408). A standalone page like access.html: it
+  answers "which machines are up right now", so it must not depend on the
+  dashboard's boot. Everything comes from /v1/nodes, polled every few seconds;
+  the hub decides online / lost (three missed heartbeats), this page only draws.
+  Served only when the hub runs with CCQUOTA_FLEET=1.
+-->
+<style>
+:root {
+  color-scheme: light;
+  --plane:#f9f9f7; --surface:#fcfcfb; --border:#e3e2dd;
+  --ink:#0b0b0b; --ink-2:#52514e; --ink-3:#85847e;
+  --ok:#1f8f4e; --lost:#e34948; --accent:#2a78d6;
+  --shadow: 0 1px 2px rgba(0,0,0,.05), 0 4px 12px rgba(0,0,0,.04);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --plane:#0d0d0d; --surface:#1a1a19; --border:#2f2f2c;
+    --ink:#fff; --ink-2:#c3c2b7; --ink-3:#8b8a81;
+    --ok:#3fb871; --lost:#e66767; --accent:#3987e5;
+    --shadow: 0 1px 2px rgba(0,0,0,.4);
+  }
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; background:var(--plane); color:var(--ink);
+  font:14px/1.6 ui-sans-serif,-apple-system,"Segoe UI",Roboto,"PingFang SC","Helvetica Neue",Arial,sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap { max-width:980px; margin:0 auto; padding:32px 16px 72px; }
+h1 { margin:0; font-size:26px; font-weight:600; }
+.sub { color:var(--ink-3); margin:6px 0 24px; }
+.mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92em; }
+.grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:14px; margin-bottom:28px; }
+.card {
+  background:var(--surface); border:1px solid var(--border); border-radius:12px;
+  padding:16px 18px; box-shadow:var(--shadow);
+}
+.card h2 { margin:0 0 8px; font-size:18px; display:flex; align-items:center; gap:10px; }
+.pill { font-size:12px; font-weight:600; padding:1px 9px; border-radius:999px; color:#fff; }
+.pill.online { background:var(--ok); }
+.pill.lost { background:var(--lost); }
+.kv { display:grid; grid-template-columns:auto 1fr; gap:2px 14px; color:var(--ink-2); }
+.kv b { color:var(--ink); font-weight:600; }
+table { width:100%; border-collapse:collapse; background:var(--surface); border:1px solid var(--border); border-radius:12px; overflow:hidden; }
+th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--border); vertical-align:top; }
+th { color:var(--ink-3); font-weight:500; font-size:12px; }
+tr:last-child td { border-bottom:0; }
+.scroll { overflow-x:auto; }
+.muted { color:var(--ink-3); }
+.err { color:var(--lost); }
+.empty { color:var(--ink-3); padding:24px; text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>机器节点</h1>
+  <div class="sub">每台机器的每个登录主动连到入口、每几秒报到一次；连续 3 次没报到即标「失联」（只标记，不动机器上的会话）。<span id="at" class="mono"></span></div>
+  <div id="machines" class="grid"></div>
+  <h2 style="font-size:16px;margin:0 0 10px">各登录</h2>
+  <div class="scroll"><table>
+    <thead><tr><th>机器</th><th>登录</th><th>状态</th><th>会话</th><th>fleet</th><th>最近报到</th><th>协议</th><th>版本</th></tr></thead>
+    <tbody id="nodes"></tbody>
+  </table></div>
+  <div id="error" class="err"></div>
+</div>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const STATUS = { online: "在线", lost: "失联" };
+function gib(b) { return b ? (b / 1073741824).toFixed(1) + " GiB" : "—"; }
+function load(l, n) { return n ? `${l.toFixed(2)} / ${n} 核` : "—"; }
+function age(s) {
+  if (s == null) return "从未";
+  if (s < 60) return Math.round(s) + " 秒前";
+  if (s < 3600) return Math.round(s / 60) + " 分钟前";
+  return Math.round(s / 3600) + " 小时前";
+}
+function pill(st) { return `<span class="pill ${st === "online" ? "online" : "lost"}">${STATUS[st] || esc(st)}</span>`; }
+
+function render(snap) {
+  $("at").textContent = " · 更新于 " + new Date(snap.at).toLocaleTimeString();
+  $("machines").innerHTML = snap.machines.length ? snap.machines.map((m) => `
+    <div class="card">
+      <h2>${esc(m.hostname)} ${pill(m.status)}</h2>
+      <div class="kv">
+        <span>登录在线</span><b>${m.logins_online} / ${m.logins}</b>
+        <span>会话数</span><b>${m.status === "online" ? m.sessions : "—"}</b>
+        <span>负载</span><b>${m.status === "online" ? load(m.load1, m.ncpu) : "—"}</b>
+        <span>空闲内存</span><b>${m.status === "online" ? gib(m.mem_free_bytes) + " / " + gib(m.mem_total_bytes) : "—"}</b>
+      </div>
+    </div>`).join("") : `<div class="card empty">还没有机器报到。agent 需以 CCQUOTA_FLEET=1 启动。</div>`;
+  $("nodes").innerHTML = snap.nodes.map((n) => `
+    <tr>
+      <td>${esc(n.hostname)}</td>
+      <td class="mono">${esc(n.os_user)}</td>
+      <td>${pill(n.status)}</td>
+      <td>${n.sessions}</td>
+      <td>${n.fleets.length ? n.fleets.map((f) => `<span class="mono">${esc(f.name)}</span> <span class="muted">${f.count}</span>`).join("<br>") : (n.fleet_error ? `<span class="err">${esc(n.fleet_error)}</span>` : `<span class="muted">—</span>`)}</td>
+      <td>${age(n.age_sec)}</td>
+      <td>${n.proto}${n.compatible ? "" : ` <span class="err">不兼容·不派写操作</span>`}</td>
+      <td class="mono muted">${esc(n.agent_version)}${n.fleet_version ? " · " + esc(n.fleet_version.slice(0, 7)) : ""}</td>
+    </tr>`).join("");
+}
+
+async function tick() {
+  try {
+    const r = await fetch("/v1/nodes", { credentials: "same-origin", cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    render(await r.json());
+    $("error").textContent = "";
+  } catch (e) {
+    $("error").textContent = "读取 /v1/nodes 失败：" + e.message;
+  }
+}
+tick();
+setInterval(tick, 3000);
+</script>
+</body>
+</html>
