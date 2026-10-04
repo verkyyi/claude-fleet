@@ -823,11 +823,12 @@ def spawn_scratch(name, env, repo="", selection=""):
     would hold a pipe open, and reading it would freeze this view. `repo` (the
     highlighted row's, issues #1009/#997) goes as --repo, `none` as --no-repo;
     empty keeps dash-raw-session.sh's own resolution.
-    The sidebar's own ⌃s (issue #1532) is the hub's ⌃s exactly: no name, the
-    highlighted row as --selection, the slow half backgrounded (--bg) — so the
-    view gets its verdict (a refusal's reason) as fast as the hub's list does."""
+    The sidebar's own ⌃s (issue #1532) is the hub's ⌃s: no name, the
+    highlighted row as --selection. Not --bg: this view already polls the spawn
+    without blocking, and the foreground run keeps the `…` up until the window
+    exists and hands back the whole refusal."""
     log = tempfile.TemporaryFile("w+")
-    args = ["--bg", "--selection", selection] if selection else []
+    args = ["--selection", selection] if selection else []
     proc = subprocess.Popen(
         ["bash", str(BIN / "dash-raw-session.sh")] + (["--name", name] if name else []) +
         args + ["--origin", "hub"] +

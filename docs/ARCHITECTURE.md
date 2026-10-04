@@ -265,8 +265,8 @@ silent past its grace (#543/#544). A bare ⌃o is VDISCARD to a macOS tty, which
 eats the byte even in cbreak mode, so the view switches that character off
 before curses starts.
 The full-screen list's own actions live on the sidebar too (issue #1532), on the
-hub's chords: ⌃s is the hub's ⌃s (`dash-raw-session.sh --bg --selection <row>`,
-focused); ⌃t swaps the running rows for the landed ones IN PLACE — the same
+hub's chords: ⌃s is the hub's ⌃s (`dash-raw-session.sh --selection <row>`,
+focused, polled like a typed name); ⌃t swaps the running rows for the landed ones IN PLACE — the same
 `fleet-history.sh rows`, re-read on the switch, on ⌃r and every 10 s while shown
 — and ↵ on one runs `fleet-restore-pick.sh --select` (a popup only for a
 `landed:issue:` row, which may ask the #543 question), then puts the running

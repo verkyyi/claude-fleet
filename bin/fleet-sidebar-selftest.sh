@@ -1218,7 +1218,7 @@ try:
 
     # The full-screen list's own actions (issue #1532), each pressed on the
     # attached terminal. ⌃s: a scratch session NOW — the hub's ⌃s, unnamed
-    # (dash-raw-session.sh --bg --selection) — and it becomes current. A bare ⌃s
+    # (dash-raw-session.sh --selection) — and it becomes current. A bare ⌃s
     # is XOFF to a tty with IXON on: only a view that switched IXON off ever
     # sees the byte, which is what this pins.
     def side_rows():
@@ -1246,16 +1246,18 @@ try:
     # FLEET_SIDEBAR_WIDTH_MAX (44); Tab again folds it.
     click(side, row=height - 3)
     wait_for(navigation, 'clicking the sidebar did not enter navigation before ⌃i')
-    wait_for(lambda: row_line('worker-one'), 'worker-one has no row')
-    check(not re.search(r'#1 +— +·$', row_line('worker-one')), 'the info column is open by default: %r' % row_line('worker-one'))
+    # (The current row is worker-one's — `▶` — and open, the column clips its
+    # name, so the row is found by its marker.)
+    wait_for(lambda: 'worker-one' in row_line('▶'), 'worker-one is not the ▶ row')
+    check(not re.search(r'#1 +— +·$', row_line('▶')), 'the info column is open by default: %r' % row_line('▶'))
     os.write(terminal, b'\t')
-    wait_for(lambda: re.search(r'#1 +— +·$', row_line('worker-one')),
-             '⌃i did not open the info column: %r' % row_line('worker-one'))
+    wait_for(lambda: re.search(r'#1 +— +·$', row_line('▶')),
+             '⌃i did not open the info column: %r' % row_line('▶'))
     check(int(tm('display-message', '-p', '-t', side, '#{pane_width}')) <= 44,
           'the open info column widened the view past FLEET_SIDEBAR_WIDTH_MAX')
     os.write(terminal, b'\t')
-    wait_for(lambda: row_line('worker-one') and not re.search(r'#1 +— +·$', row_line('worker-one')),
-             'a second ⌃i did not fold the info column: %r' % row_line('worker-one'))
+    wait_for(lambda: row_line('▶') and not re.search(r'#1 +— +·$', row_line('▶')),
+             'a second ⌃i did not fold the info column: %r' % row_line('▶'))
 
     # ⌃t: running ⇄ landed, in place — the rows `fleet-history.sh rows` gives the
     # hub's ⌃t (stubbed: the ledger is not this test's subject). ⌃r re-reads it at
