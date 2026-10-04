@@ -73,7 +73,10 @@ start_hub() {
   rm -f "$SB/port"
   # The same port every time after the first: the client remembers the URL.
   python3 "$SB/hub.py" "$SB" ${PORT:-} & HUB_PID=$!
-  for _ in $(seq 50); do [ -s "$SB/port" ] && break; sleep 0.1; done
+  # A cold python3 on a CI runner can take seconds to bind: wait up to 30s,
+  # and stop loudly rather than point the client at an empty port.
+  for _ in $(seq 300); do [ -s "$SB/port" ] && break; sleep 0.1; done
+  [ -s "$SB/port" ] || { echo "FAIL fake hub never started"; exit 1; }
   PORT="$(cat "$SB/port")"
 }
 stop_hub() { kill "$HUB_PID" 2>/dev/null; wait "$HUB_PID" 2>/dev/null; HUB_PID=""; }
