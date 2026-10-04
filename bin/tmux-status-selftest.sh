@@ -148,8 +148,13 @@ has "D: the age grows with the cache's own age (300 + 300 → 10m)" " #[fg=#7aa2
 out=$(bar sess=f1 win=@3 remote=m7:u/x acct= wsf= wscf= wsaved=)
 eq "D: a machine the cache has no row for → ?" " #[fg=#7aa2f7]m7 #[fg=#565f89]? ${hub}${tail}" "$out"
 rm -f "$G/hub_nodes"
+# No hub_nodes row (a certificate identity gets no /v1/nodes until #1502 — the
+# shell on a colleague's computer, #1484): the hub's word from the sessions
+# cache's #node line, online without the load, never a `?` for a machine it lists.
 out=$(bar sess=f1 win=@3 remote=m4:u/x acct= wsf= wscf= wsaved=)
-eq "D: no hub_nodes at all → ?" " #[fg=#7aa2f7]m4 #[fg=#565f89]? ${hub}${tail}" "$out"
+eq "D: no hub_nodes at all, a #node line says online → ● without the load" " #[fg=#7aa2f7]m4 #[fg=#9ece6a]● ${hub}${tail}" "$out"
+out=$(bar sess=f1 win=@3 remote=m7:u/x acct= wsf= wscf= wsaved=)
+eq "D: no hub_nodes and no #node line either → ?" " #[fg=#7aa2f7]m7 #[fg=#565f89]? ${hub}${tail}" "$out"
 nodes "$NOW" "$(j m4 online 1.57 10 25 0 1607453c45 5 4142 16384)"
 
 # ---- E: the hub chip
