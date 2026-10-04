@@ -316,14 +316,17 @@ write(wpath, "".join("%s\t%s\n" % (s["worker_id"], label(s.get("machine_name")))
 
 is_local = lambda s: s.get("fleet_id") in local_uuids or short(s.get("machine_name")) == me
 def local_fleet(s):
-    """The fleet HERE a local session belongs to: by UUID, else (a machine with no
-    control database) by hostname + fleet name. None: not attributable — no row."""
+    """The fleet HERE a local session belongs to: by UUID; else, for a session the
+    hub places on THIS host, by fleet name — a machine with no control database
+    has no UUID to match, and a UUID minted under another conf (the node agent's
+    environment is not a pane's) must not lose this machine its own rows. None:
+    not attributable — no row."""
     for f in local:
         if f["uuid"] and s.get("fleet_id") == f["uuid"]:
             return f
     if short(s.get("machine_name")) == me:
         for f in local:
-            if not f["uuid"] and s.get("fleet_name") == f["sess"]:
+            if s.get("fleet_name") == f["sess"]:
                 return f
     return None
 rows = []
