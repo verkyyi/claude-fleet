@@ -37,6 +37,14 @@ assert sidebar.visible(['1', '0', '1', '1'], 100)
 assert sidebar.tail('abc修复', 5) == 'c修复' and sidebar.tail('abc', 9) == 'abc'
 assert sidebar.typed('q') and sidebar.typed('修') and sidebar.typed(' ')
 assert not sidebar.typed('\x0e') and not sidebar.typed('\x7f')
+# The `?` row for the selected row (issue #1377): only a CLIPPED name takes it.
+# Which `!` / why a ↻ waits (field 7) moved to the worker header, @title_info.
+parent = ['@1', 'looping', '↻', '阿里云成本', '▸', '1/2', '0', '等子任务 1/2']
+assert sidebar.hint_line(parent, 30) is None, sidebar.hint_line(parent, 30)
+assert sidebar.hint_line(['@2', 'needs', '!', 'k2', '', '', '0', '在问你'], 30) is None
+longp = parent[:3] + ['阿里云月成本评估-ack-节点合并-再看一遍'] + parent[4:]
+assert sidebar.hint_line(longp, 30) == ' ' + longp[3], sidebar.hint_line(longp, 30)
+assert '等子任务' not in sidebar.hint_line(longp, 30)
 # The input line's editor (issue #1097): a cursor, readline's moves and kills.
 Line = sidebar.Line
 line = Line('ab'); line.left(); line.insert('c')

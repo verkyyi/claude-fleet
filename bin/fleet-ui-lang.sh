@@ -50,6 +50,17 @@ fleet_ui_t() {
     en:wait_children)           printf 'waiting on sub-tasks' ;;
     zh:wait_bg)                 printf '后台命令在跑' ;;
     en:wait_bg)                 printf 'background command running' ;;
+    # the worker pane header's @title_info segments (issue #1377)
+    zh:title_kids)              printf '子任务' ;;
+    en:title_kids)              printf 'sub-tasks' ;;
+    zh:title_loop)              printf 'Loop' ;;
+    en:title_loop)              printf 'Loop' ;;
+    zh:title_loop_fmt)          printf 'Loop 下次 %s' "${1:-}" ;;
+    en:title_loop_fmt)          printf 'Loop next %s' "${1:-}" ;;
+    zh:title_needs)             printf '要你处理：' ;;
+    en:title_needs)             printf 'needs you: ' ;;
+    zh:title_parent)            printf '父' ;;
+    en:title_parent)            printf 'parent' ;;
     # which `!` a row is (issue #1328) — ≤ 8 display cells: the hub's act column
     zh:needs_ask)               printf '在问你' ;;
     en:needs_ask)               printf 'asking' ;;
