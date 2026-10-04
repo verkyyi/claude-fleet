@@ -87,7 +87,9 @@
 # (saved in `@remote_view_saved`), `@remote_view_solo 1`, which that machine's
 # sidebar reads as "draw no list" (fleet-sidebar.py sync) — so the remote looks
 # like a local window, this machine's prefix reaches this machine, and the one
-# list on screen is the viewer's. Two shells on one session: still one list each.
+# list on screen is the viewer's. Each window's pane-border-status goes off with
+# them (issue #1549, saved per window), so the viewer's `⇄m4 …` header is the one
+# title line. Two shells on one session: still one list each.
 # Never `resize-pane -Z`. `reconcile` applies the rule; the server's GLOBAL hooks
 # `client-attached[77]` / `client-detached[77]` run it on every client change
 # while any shell is registered (global, not on the session: a session-level hook
@@ -216,8 +218,33 @@ rv_sync() {   # the sidebar follows the solo marker (issue #1475); the script wa
 }
 # #1475's hide: status line + prefix off, what the SESSION itself set saved
 # (`-` = inherited), the solo marker on, its sidebar gone. Idempotent.
+# Plus each window's own top header (issue #1549): `pane-border-status` is a
+# WINDOW option, so every window of the session saves what IT set in a window-
+# scoped `@remote_view_saved` and goes off — the viewer's `⇄m4 …` header is then
+# the only title line, not a second one nested under it. Re-run on every
+# reconcile, so a window born while hidden is covered at the next client change.
+rv_hide_borders() {
+  local s="$1" w v
+  for w in $(T list-windows -t "=$s" -F '#{window_id}' 2>/dev/null); do
+    [ -z "$(T show-options -wqv -t "$w" @remote_view_saved 2>/dev/null)" ] || continue
+    v=$(T show-options -wqv -t "$w" pane-border-status 2>/dev/null)
+    T set-option -w -t "$w" @remote_view_saved "pane-border-status=${v:--}" \; \
+      set-option -w -t "$w" pane-border-status off 2>/dev/null
+  done
+}
+rv_restore_borders() {
+  local s="$1" w v
+  for w in $(T list-windows -t "=$s" -F '#{window_id}' 2>/dev/null); do
+    v=$(T show-options -wqv -t "$w" @remote_view_saved 2>/dev/null)
+    case "$v" in pane-border-status=*) v=${v#pane-border-status=} ;; *) continue ;; esac
+    if [ "$v" = - ]; then T set-option -wu -t "$w" pane-border-status 2>/dev/null
+    else T set-option -w -t "$w" pane-border-status "$v" 2>/dev/null; fi
+    T set-option -wu -t "$w" @remote_view_saved 2>/dev/null
+  done
+}
 rv_hide() {
   local s="$1" saved='' o v
+  rv_hide_borders "$s"
   [ -z "$(T show-options -qv -t "=$s:" @remote_view_saved 2>/dev/null)" ] || return 0
   # Space-separated: an argument ENDING in `;` is a command separator to tmux.
   for o in status prefix prefix2; do
@@ -245,6 +272,7 @@ rv_restore() {
   local s="$1" saved o v p
   saved=$(T show-options -qv -t "=$s:" @remote_view_saved 2>/dev/null)
   rv_unshadow "$s"
+  rv_restore_borders "$s"
   [ -n "$saved" ] || return 0
   IFS=' ' read -r -a kv <<< "$saved"
   for p in ${kv[@]+"${kv[@]}"}; do
@@ -527,6 +555,7 @@ select)
   tgt="$s"
   case "$view" in ''|*[!A-Za-z0-9-]*) ;; *) T has-session -t "=$s@view-$view" 2>/dev/null && tgt="$s@view-$view" ;; esac
   T select-window -t "=$tgt:$w" 2>/dev/null || { note "cannot select $w"; exit 3; }
+  rv_reconcile "$s"   # a window spawned since the hide loses its header too (#1549)
   exit 0
   ;;
 
