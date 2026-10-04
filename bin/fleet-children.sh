@@ -132,6 +132,7 @@ remote_rows() {
     st=remote; case "$node" in *:lost) st=lost; node=${node%:lost} ;; esac
     printf '%s|%s||%s|%s|\n' "$node" "$st" "$k" "$KEY"
   done
+  return 0  # no hub map is the one-machine case, not a failure (pipefail)
 }
 
 args=(show --dir "$dir" --parent "$KEY" --session "$sess" --since "$SINCE" --prmap "$prmap" --prmap-dir "$prdir")
