@@ -70,6 +70,11 @@
 规则（都是 `fleet-move.sh` 的，不是这里新定的）：只搬 `done`/空闲的会话，**正在工作的一个都不碰**；工作树不干净的不搬（它会说 dirty）；搬过去的会话在 m4 以同一个 session id 续上，窗口名、`@issue`、父子关系都在。
 `left N` 就是还留在 m5 上的：看侧边栏/`/nodes` 它们是谁，等它们完成或让它们的主人 `/fleet-handoff`，再跑一次 evacuate。
 
+2026-10-04 演练学到的三件事（修掉之前照这里绕）：
+- **`--rebalance` 遇到第一个无处可去的会话就整体停**（#1513）：输出是 `REFUSED NO_ELIGIBLE_NODE … — stopping`、`moved 0`，后面能搬的也不搬了。这时**指定会话搬**：`fleet-move.sh <窗口号> --via hub --to m4`（先 `--dry-run`），一个个来。
+- **入口只认 fleet 的主仓库**（#1512）：一台机器只能接它的 fleet 以 `FLEET_REPO` 登记的那个仓库的会话，叠层仓库（`repos/*.conf`）对入口不可见。m5 主仓库是 monorepo、m4 主仓库是 claude-fleet 的今天，monorepo 的会话搬不到 m4，claude-fleet 的会话在 m5 本来就不是候选。**下线前先看 `/nodes` 各登录表里两台机器的 fleet 仓库**，心里有数哪些会话搬得走。
+- **live install 落后的机器看不懂「维护中」**：没有 #1505 的侧边栏把 maintenance 当失联画（`○ m5 … 没联系`、行变灰进失联组），没有 #1491 的 `dash-issue-session.sh` 连入口的租约/派单都打不通（`hub unreachable (ccquota exit 1)`，#1507）。演练或下线前把两台机器都同步到 ≥ df4daf9。
+
 ### T+5~10min：确认，然后下线
 
 - `/nodes`：m5 会话数为 0（或只剩你们决定「让它随机器一起断」的那几个）。
@@ -89,6 +94,19 @@
 ```
 
 入口随即恢复往 m5 派会话；`fleet connect` 的默认机器照旧按「上次用的 / 有你的会话 / 负载最低」选。
+
+### 温和版：只让入口当它下线（演练 / 验证入口用）
+
+机器一点不动——不关机、不重启 agent、不杀 fleet、不碰 working 会话——只走「标维护中 → 验证入口拒派 → 搬一个空闲会话 → 解除」。2026-10-04 第一次演练就是这个版本（记录在 #1427）：
+
+1. `fleet-node-maintenance.sh enter --reason '演练'`（T0）→ `status` 读回 maintenance。
+2. 验证入口拒派：对 m5 上任一 **主仓库** 的空闲会话 `fleet-move.sh --rebalance --max 1 --dry-run`，应答 `REFUSED NO_ELIGIBLE_NODE … macmini: maintenance: …`（这是「维护中排除了 m5」的直接证据；解除后同一条命令应变成 `this machine is the best place`——A/B 对照）。
+3. 新会话落别台：在能搬的仓库上开一张占位小单，`dash-issue-session.sh <N> --repo <repo>`（`FLEET_SPAWN_NODE=auto`），看另一台 20 秒内开出窗口。
+4. 搬一个空闲会话：`fleet-move.sh <窗口> --via hub --to m4 --dry-run`，再去掉 `--dry-run`；到 m4 上 `tmux -L fleet capture-pane -t fleet:<idx>` 看到 Claude 提示符即「能继续」。
+5. `fleet-node-maintenance.sh leave` → `status` 回 online → 第 2 步的对照。
+6. 收尾：占位会话 `fleet-worker-stop.sh fleet <repo>:issue-<N>` 优雅停、占位单关掉；临时改过的 conf 从备份恢复。
+
+读数口径同全量演练：T0 → 最后一项在 m4 上恢复操作的时刻。2026-10-04：**8 分 09 秒**（22:24:19 → 22:32:28），期间无人受影响。
 
 ## 3. 意外下线（断电、死机、网断）
 
@@ -142,6 +160,13 @@
 | | 搬回（可选） | | | |
 
 **演练后**：哪一步比预想慢、哪条命令的输出看不懂、谁被影响了——改到这份手册里，再提 PR；把 `fleet_audit` 的 ENTER/LEAVE 两行时间一起贴上。
+
+**已做过的演练**
+| 日期 | 版本 | 读数 | 记录 | 学到 |
+|---|---|---|---|---|
+| 2026-10-04 | 温和版（见 2 节末） | 8 分 09 秒 | #1427 | `--rebalance` 遇阻即停（#1513）；入口只认主仓库（#1512）；落后的安装把维护中画成失联、派不了单（#1507）；手册加了温和版一节 |
+
+全量版（真关机）还没做过：按运营者定的低峰时段，先把两台机器同步到含 #1505 的版本，再按第 2 节走。
 
 ## 6. 速查
 
