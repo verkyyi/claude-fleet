@@ -346,6 +346,97 @@ func (s *Store) AdoptAccount(p *Principal, hostname string, at time.Time) error 
 	return err
 }
 
+// AdoptAccountIfOpen is AdoptAccount for the roster-driven path
+// (claude-fleet#1458): it records p's login on hostname as active only when
+// the hub holds no row there yet, or a row that never reached the machine
+// (pending / failed / removed — a queued create that must now NOT run, a
+// create the node refused, a login the operator once closed that an agent
+// is nevertheless running as). An op in flight (creating / removing /
+// remove_pending), an unknown, and an active row are left exactly as they
+// are. adopted reports whether a row was written.
+func (s *Store) AdoptAccountIfOpen(p *Principal, hostname string, at time.Time) (adopted bool, err error) {
+	ts := at.UTC().Format(rfc)
+	res, err := s.write.Exec(`INSERT INTO fleet_accounts (principal_id, hostname, login, state, op, detail, requested_at, updated_at)
+		VALUES (?, ?, ?, ?, 'adopt', 'adopted: an agent runs as this login', ?, ?)
+		ON CONFLICT(principal_id, hostname) DO UPDATE SET state = excluded.state, op = excluded.op,
+		  detail = excluded.detail, op_id = '', endpoint_id = '', updated_at = excluded.updated_at
+		  WHERE fleet_accounts.state IN (?, ?, ?)`,
+		p.ID, hostname, p.Login, AccountActive, ts, ts, AccountPending, AccountFailed, AccountRemoved)
+	if isUniqueViolation(err) {
+		return false, fmt.Errorf("login %q is already assigned to someone else on %s", p.Login, hostname)
+	}
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// ForgetPrincipal drops the hub's record of an account that never reached a
+// machine — or, with hostname "", of the person and every such row of theirs
+// (claude-fleet#1458: a principal filed under the wrong identity, with a
+// create still queued for a node that never connected). It runs nothing and
+// sends nothing. Any row in another state refuses the whole call with
+// ErrAccountState: an active login is removed, not forgotten; an op in
+// flight or unknown is settled first.
+func (s *Store) ForgetPrincipal(principalID, hostname string) error {
+	if principalID == "" {
+		return errors.New("empty principal id")
+	}
+	tx, err := s.write.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	q, args := `SELECT hostname, state FROM fleet_accounts WHERE principal_id = ?`, []any{principalID}
+	if hostname != "" {
+		q, args = q+` AND hostname = ?`, append(args, hostname)
+	}
+	rows, err := tx.Query(q, args...)
+	if err != nil {
+		return err
+	}
+	found := 0
+	for rows.Next() {
+		var h, st string
+		if err := rows.Scan(&h, &st); err != nil {
+			rows.Close()
+			return err
+		}
+		found++
+		switch st {
+		case AccountPending, AccountFailed, AccountRemoved:
+		default:
+			rows.Close()
+			return fmt.Errorf("%w: login on %s is %s", ErrAccountState, h, st)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if hostname != "" {
+		if found == 0 {
+			return fmt.Errorf("%w: no account on %s", ErrAccountState, hostname)
+		}
+		if _, err := tx.Exec(`DELETE FROM fleet_accounts WHERE principal_id = ? AND hostname = ?`, principalID, hostname); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
+	if _, err := tx.Exec(`DELETE FROM fleet_accounts WHERE principal_id = ?`, principalID); err != nil {
+		return err
+	}
+	res, err := tx.Exec(`DELETE FROM fleet_principals WHERE principal_id = ?`, principalID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNoPrincipal
+	}
+	return tx.Commit()
+}
+
 // RequestAccountRemoval queues closing p's login on hostname.
 func (s *Store) RequestAccountRemoval(principalID, hostname string, at time.Time) error {
 	ts := at.UTC().Format(rfc)

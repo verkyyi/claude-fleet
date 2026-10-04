@@ -127,6 +127,16 @@ func TestAssets_DashboardIsEmbedded(t *testing.T) {
 			t.Errorf("index.html shell is missing %q -- the view nav has no band to mount", want)
 		}
 	}
+	// The way to the fleet pages (claude-fleet#1458): a node app.js fills from
+	// /v1/fleet/me, written in the shell so it is there on every view, and
+	// hidden until it has something to say so a hub without the fleet module
+	// renders as it always did.
+	if !strings.Contains(string(b), `<nav id="fleetnav" class="fleetnav" hidden>`) {
+		t.Error(`index.html shell is missing <nav id="fleetnav" ... hidden> -- the fleet pages have no way in from the home page`)
+	}
+	if strings.Contains(string(b), `id="fleetnav" class="fleetnav" data-band=`) || strings.Contains(string(b), `id="fleetnav" data-band=`) {
+		t.Error(`#fleetnav carries a data-band -- a colleague looking for their machine must find the link on every view`)
+	}
 	// Every band node says which view mounts it, and #pulse / #alerts say
 	// nothing, which is what puts them on every view.
 	//

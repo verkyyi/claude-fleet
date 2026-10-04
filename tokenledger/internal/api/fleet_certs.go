@@ -163,7 +163,7 @@ func (s *Server) fleetLoginsOf(pid string) (*store.Principal, []string, map[stri
 	seen, hosts := map[string]bool{}, map[string]bool{}
 	var logins []string
 	for _, a := range accts {
-		if a.State != store.AccountActive || !control.ValidLogin(a.Login) {
+		if a.State != store.AccountActive || !control.ValidExistingLogin(a.Login) {
 			continue
 		}
 		hosts[a.Hostname] = true

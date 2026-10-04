@@ -425,6 +425,10 @@ func runHub(args []string) error {
 		httpsURL = "https://" + tlsName + "/"
 	}
 
+	principalLogins, err := fleetPrincipalLogins(os.Getenv("CCQUOTA_FLEET_PRINCIPAL_LOGINS"))
+	if err != nil {
+		return err
+	}
 	srv := &api.Server{
 		Store:               st,
 		FX:                  feed,
@@ -439,6 +443,8 @@ func runHub(args []string) error {
 		Fleet:               fleetOn,
 		FleetAdmins:         splitList(os.Getenv("CCQUOTA_FLEET_ADMIN_USERS")),
 		FleetAutoAssign:     splitList(os.Getenv("CCQUOTA_FLEET_AUTO_ASSIGN")),
+		// Who owns which login, explicitly (claude-fleet#1458).
+		FleetPrincipalLogins: principalLogins,
 		// A person's grant on their own logins (claude-fleet#1410).
 		FleetPersonScopes:     fleetPersonScopes(),
 		FleetPersonConfigKeys: splitList(os.Getenv("CCQUOTA_FLEET_PERSON_CONFIG_KEYS")),
@@ -579,6 +585,34 @@ func fleetPersonScopes() []string {
 		out = append(out, sc)
 	}
 	return out
+}
+
+// fleetPrincipalLogins parses CCQUOTA_FLEET_PRINCIPAL_LOGINS
+// (`<wecom userid>=<os login>,…`, claude-fleet#1458). A malformed entry, a
+// login the nodes would refuse, or one login claimed by two people refuses
+// to start the hub: this map is what decides whose machine a sign-in lands
+// on, and a half-read one would place someone silently wrong.
+func fleetPrincipalLogins(v string) (map[string]string, error) {
+	out := map[string]string{}
+	owners := map[string]string{}
+	for _, e := range splitList(v) {
+		pid, login, ok := strings.Cut(e, "=")
+		pid, login = strings.TrimSpace(pid), strings.TrimSpace(login)
+		if !ok || pid == "" || login == "" {
+			return nil, fmt.Errorf("CCQUOTA_FLEET_PRINCIPAL_LOGINS: %q is not <userid>=<login>", e)
+		}
+		if !control.ValidExistingLogin(login) {
+			return nil, fmt.Errorf("CCQUOTA_FLEET_PRINCIPAL_LOGINS: %q is not a login (2-16 lowercase letters and digits, not reserved)", login)
+		}
+		if prev, dup := out[pid]; dup && prev != login {
+			return nil, fmt.Errorf("CCQUOTA_FLEET_PRINCIPAL_LOGINS: %s is mapped to both %s and %s", pid, prev, login)
+		}
+		if who, taken := owners[login]; taken && who != pid {
+			return nil, fmt.Errorf("CCQUOTA_FLEET_PRINCIPAL_LOGINS: login %s is claimed by both %s and %s", login, who, pid)
+		}
+		out[pid], owners[login] = login, pid
+	}
+	return out, nil
 }
 
 func splitList(s string) []string {

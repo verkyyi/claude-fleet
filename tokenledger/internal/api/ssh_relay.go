@@ -192,7 +192,7 @@ func (s *Server) sshRelayHTTPIdentity(r *http.Request) (sshRelayIdentity, bool) 
 	if s.SSO.ready() {
 		if tok := bearer(r); tok != "" {
 			if sess, err := authz.VerifySession(tok, s.SSO.SessionSecret, time.Now()); err == nil {
-				return sshRelayIdentity{Principal: sess.Sub, Actor: sess.Sub}, true
+				return sshRelayIdentity{Principal: sess.Principal(), Actor: sess.Principal()}, true
 			}
 		}
 	}

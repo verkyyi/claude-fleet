@@ -28,12 +28,28 @@ func enableSSO(h *harness) {
 	}
 }
 
-// mintTicket signs what the authorization service would sign. It lives in the
-// test only: a downstream that can sign is a second issuer.
+// mintTicket signs what the authorization service would sign for an app not
+// in its AUTHZ_UID_APPS: a subject and no person. It lives in the test only:
+// a downstream that can sign is a second issuer.
 func mintTicket(t *testing.T, aud, sub string, exp int64) string {
 	t.Helper()
-	payload := fmt.Sprintf(`{"iss":"kf-context","aud":%q,"sub":%q,"ten":"24haowan","iat":%d,"exp":%d}`,
+	return mintTicketFor(t, aud, sub, "", "", exp)
+}
+
+// mintTicketFor signs a ticket that also names the person (`uid`, `nam`)
+// when uid is non-empty — what the issuer signs once the app is listed in
+// AUTHZ_UID_APPS (claude-fleet#1458).
+func mintTicketFor(t *testing.T, aud, sub, uid, name string, exp int64) string {
+	t.Helper()
+	payload := fmt.Sprintf(`{"iss":"kf-context","aud":%q,"sub":%q,"ten":"24haowan","iat":%d,"exp":%d`,
 		aud, sub, exp-90, exp)
+	if uid != "" {
+		payload += fmt.Sprintf(`,"uid":%q`, uid)
+		if name != "" {
+			payload += fmt.Sprintf(`,"nam":%q`, name)
+		}
+	}
+	payload += "}"
 	body := base64.RawURLEncoding.EncodeToString([]byte(payload))
 	m := hmac.New(sha256.New, []byte(ssoTicketKey))
 	m.Write([]byte(body))

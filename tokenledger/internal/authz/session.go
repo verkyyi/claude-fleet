@@ -29,18 +29,42 @@ const sessionAud = "ccquota-session"
 // Session is a signed-in human on this hub.
 type Session struct {
 	// Sub is the ticket's subject, carried through unchanged so an audit line
-	// can name the same person the issuer named.
+	// can name the same subject the issuer named. It is the authorization
+	// (the role the issuer admitted), not the person — see Payload.UID.
 	Sub string `json:"sub"`
 	Aud string `json:"aud"`
 	Exp int64  `json:"exp"`
+	// UID and Name are the ticket's `uid` / `nam`, carried through so every
+	// later request knows the person without re-reading a ticket that no
+	// longer exists (claude-fleet#1458). Omitted when the ticket had none —
+	// a cookie minted before this field existed parses the same way.
+	UID  string `json:"uid,omitempty"`
+	Name string `json:"nam,omitempty"`
 }
 
-// SignSession mints the cookie value for a verified ticket subject.
+// Principal is the person this session is for: the WeCom userid when the
+// ticket carried one, else the role subject (see Payload.Principal).
+func (s *Session) Principal() string {
+	if s.UID != "" {
+		return s.UID
+	}
+	return s.Sub
+}
+
+// SignSession mints the cookie value for a verified ticket subject that
+// names no person. Kept for callers (and cookies) predating the `uid`
+// claim; SignPerson is what /enter uses.
+func SignSession(sub, secret string, now time.Time, ttl time.Duration) string {
+	return SignPerson(sub, "", "", secret, now, ttl)
+}
+
+// SignPerson mints the cookie value for a verified ticket: its subject plus,
+// when the issuer named one, the person (`uid`) and their display name.
 //
 // ttl is this hub's own session length, unrelated to the ticket's 90 seconds:
 // the ticket's job ends the moment it is exchanged.
-func SignSession(sub, secret string, now time.Time, ttl time.Duration) string {
-	body, _ := json.Marshal(Session{Sub: sub, Aud: sessionAud, Exp: now.Add(ttl).Unix()})
+func SignPerson(sub, uid, name, secret string, now time.Time, ttl time.Duration) string {
+	body, _ := json.Marshal(Session{Sub: sub, Aud: sessionAud, Exp: now.Add(ttl).Unix(), UID: uid, Name: name})
 	enc := base64.RawURLEncoding.EncodeToString(body)
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(enc))
