@@ -103,11 +103,14 @@ for sess in ${SESSIONS[@]+"${SESSIONS[@]}"}; do
   [ "$DRY" = 1 ] && dry=(--dry-run)
   out=$("$MOVE" --rebalance --max all --session "$sess" ${dry[@]+"${dry[@]}"} 2>&1); rc=$?
   printf '%s\n' "$out" | sed 's/^/  │ /'
-  # fleet-move.sh's own summary: "fleet-move: rebalance moved N[, M failed]"
+  # fleet-move.sh's own summary: "fleet-move: rebalance moved N · skipped M ·
+  # left K[, F failed]" (issue #1513) — K already counts the skipped and failed
+  # ones; an older fleet-move.sh says only "moved N[, F failed]".
   n=$(printf '%s\n' "$out" | sed -n 's/^fleet-move: rebalance moved \([0-9]*\).*/\1/p' | tail -n 1)
-  f=$(printf '%s\n' "$out" | sed -n 's/^fleet-move: rebalance moved [0-9]*, \([0-9]*\) failed.*/\1/p' | tail -n 1)
+  k=$(printf '%s\n' "$out" | sed -n 's/^fleet-move: rebalance moved .* left \([0-9]*\).*/\1/p' | tail -n 1)
+  [ -n "$k" ] || k=$(printf '%s\n' "$out" | sed -n 's/^fleet-move: rebalance moved [0-9]*, \([0-9]*\) failed.*/\1/p' | tail -n 1)
   moved=$(( moved + ${n:-0} ))
-  left=$(( left + ${f:-0} ))
+  left=$(( left + ${k:-0} ))
   [ "$rc" -eq 0 ] || [ -n "$n" ] || { say "$sess: fleet-move exited $rc"; left=$(( left + 1 )); }
 done
 

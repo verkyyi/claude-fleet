@@ -18,6 +18,8 @@
 #                exit 1 and the summary says so
 #   E. none      no live fleet: `moved 0, left 0`, exit 0, stub never called
 #   F. dry-run   --dry-run passes --dry-run through and says so
+#   H. skipped   the new `moved N · skipped M · left K` summary (issue #1513):
+#                moved 2, left 1 (the REFUSED one), exit 1
 #   G. max-all   fleet-move.sh --rebalance --max all parses (no "--max needs a
 #                number" refusal); --max x is still refused; --max all is
 #                refused outside the hub module like every --via hub form
@@ -45,6 +47,7 @@ while [ $# -gt 0 ]; do case "$1" in --session) sess="$2"; shift 2 ;; --session=*
 v="$(eval "printf '%s' \"\${FAKE_$(printf '%s' "$sess" | tr -c 'A-Za-z0-9_' '_')-}\"")"
 case "$v" in
   sleep) sleep 2; echo "fleet-move: rebalance moved 1"; exit 0 ;;
+  new:*) IFS=: read -r _ n m k <<<"$v"; echo "  ↷ w ($sess): NO_ELIGIBLE_NODE"; echo "fleet-move: rebalance moved $n · skipped $m · left $k"; exit 0 ;;
   *,*) echo "fleet-move: rebalance moved ${v%%,*}, ${v##*,} failed"; exit 1 ;;
   '') echo "fleet-move: rebalance moved 0"; exit 0 ;;
   *) echo "  ✓ w ($sess): moved"; echo "fleet-move: rebalance moved $v"; exit 0 ;;
@@ -110,6 +113,16 @@ out=$(FLEET_SPOT_EVACUATE_SESSIONS="fleet-a" FAKE_fleet_a=1 "$SUT" --dry-run 2>&
 [ "$rc" -eq 0 ] || fail "F: exit $rc: $out"
 [ "$(sed -n 1p "$STUB_LOG")" = "--rebalance --max all --session fleet-a --dry-run" ] || fail "F: call: $(sed -n 1p "$STUB_LOG")"
 printf '%s\n' "$out" | grep -q 'left 0 (dry-run)' || fail "F: summary: $out"
+ok
+
+# H. skipped (#1513) — fleet-move.sh's `moved N · skipped M · left K` summary:
+# the first session was REFUSED and skipped, the next two moved; `left` comes
+# from K (the skipped one is still here), and the run is not "everything moved".
+reset
+out=$(FLEET_SPOT_EVACUATE_SESSIONS="fleet-a" FAKE_fleet_a="new:2:1:1" "$SUT" 2>&1); rc=$?
+[ "$rc" -eq 1 ] || fail "H: exit $rc, want 1 (one session left): $out"
+printf '%s\n' "$out" | grep -q '^  │   ↷ w (fleet-a): NO_ELIGIBLE_NODE' || fail "H: ↷ line not relayed: $out"
+[ "$(printf '%s\n' "$out" | tail -n 1)" = "evacuate: moved 2, left 1" ] || fail "H: summary: $(printf '%s\n' "$out" | tail -n 1)"
 ok
 
 # G. fleet-move.sh --max all parses; --max x does not; both refused with the
