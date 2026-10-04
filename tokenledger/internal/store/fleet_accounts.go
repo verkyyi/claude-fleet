@@ -196,6 +196,11 @@ func (s *Store) AdoptPrincipal(id, login, displayName string, at time.Time) (*Pr
 }
 
 func (s *Store) insertPrincipal(id, login, displayName string, at time.Time) error {
+	if id == PoolPrincipal {
+		// The shared-pool credential sentinel (claude-fleet#1463) is not a
+		// person and must never become one.
+		return fmt.Errorf("principal id %q is reserved for shared-pool credentials", id)
+	}
 	ts := at.UTC().Format(rfc)
 	_, err := s.write.Exec(`INSERT INTO fleet_principals (principal_id, login, display_name, created_at, last_login_at)
 		VALUES (?, ?, ?, ?, ?)`, id, login, displayName, ts, ts)

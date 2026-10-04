@@ -47,6 +47,10 @@ func everyFinding(t *testing.T) []findings.Finding {
 		},
 		Live:      []findings.LiveStat{{SessionID: "feedfacecafe", CWD: "/srv/work/api", Tokens: 300_000_000}},
 		VaultLock: &findings.VaultLock{Reason: "kms Decrypt: kms 503 ServiceUnavailable", Since: seen},
+		SetupTokens: []findings.SetupToken{
+			{PrincipalID: "pool", Provider: "claude", Account: "icloud", ExpiresAt: time.Now().UTC().Add(20 * 24 * time.Hour)},
+			{PrincipalID: "wecom-bob", Provider: "claude", Account: "own", ExpiresAt: time.Now().UTC().Add(-2 * 24 * time.Hour)},
+		},
 	})
 	all := append(append([]findings.Finding{}, review...), now...)
 	if len(all) == 0 {

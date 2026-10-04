@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/findings"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
@@ -299,6 +300,16 @@ func (s *Server) GatherNowSource(account, source string) (findings.NowInputs, er
 	if s.Vault != nil && account == store.AllAccounts {
 		if l := s.Vault.Locked(); l != nil {
 			in.VaultLock = &findings.VaultLock{Reason: l.Reason, Since: l.Since}
+		}
+		// Setup tokens (claude-fleet#1463) end on a date the operator has to
+		// act on; metadata only — the list never opens a blob.
+		if creds, err := s.Store.Credentials(""); err == nil {
+			for _, c := range creds {
+				if c.Kind == credvault.KindSetupToken && c.SecretExpiresAt != nil {
+					in.SetupTokens = append(in.SetupTokens, findings.SetupToken{PrincipalID: c.PrincipalID,
+						Provider: c.Provider, Account: c.Account, ExpiresAt: *c.SecretExpiresAt})
+				}
+			}
 		}
 	}
 	accts, err := s.Store.ListAccounts()

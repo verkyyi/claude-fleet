@@ -26,6 +26,8 @@ CREATE TABLE IF NOT EXISTS fleet_credentials (
   refresh_error    TEXT NOT NULL DEFAULT '',
   created_at       TEXT NOT NULL,
   updated_at       TEXT NOT NULL,
+  kind             TEXT NOT NULL DEFAULT '',
+  secret_expires_at TEXT,
   PRIMARY KEY (principal_id, provider, account)
 );
 CREATE TABLE IF NOT EXISTS fleet_cred_audit (
@@ -61,12 +63,25 @@ const (
 	CredUnrevoke = "unrevoke" // a revocation was lifted
 )
 
+// PoolPrincipal is the principal_id of a SHARED-POOL credential
+// (claude-fleet#1463): an account that belongs to the machine's pool rather
+// than to one person (docs/SHARED-MACHINE.md 2b). A node's lease is answered
+// with its own person's rows AND every pool row — still only for a login that
+// IS some active principal, and still subject to that person's / machine's
+// revocation. It is a sentinel, never a row in fleet_principals
+// (insertPrincipal refuses it).
+const PoolPrincipal = "pool"
+
 // Credential is one stored (principal, provider, account) row. The sealed
-// blobs are opaque here.
+// blobs are opaque here. Kind and SecretExpiresAt are metadata about the
+// long-lived half (credvault.Kind*): "" on a row from before the column means
+// the provider's original kind (refresh_token; token for github).
 type Credential struct {
 	PrincipalID     string     `json:"principal_id"`
 	Provider        string     `json:"provider"`
 	Account         string     `json:"account"`
+	Kind            string     `json:"kind,omitempty"`
+	SecretExpiresAt *time.Time `json:"secret_expires_at,omitempty"`
 	SecretSealed    []byte     `json:"-"`
 	AccessSealed    []byte     `json:"-"`
 	AccessExpiresAt *time.Time `json:"access_expires_at,omitempty"`
@@ -112,22 +127,40 @@ func (s *Store) ensureFleetCreds() error {
 	if _, err := s.write.Exec(fleetCredsSchema); err != nil {
 		return fmt.Errorf("create fleet credential tables: %w", err)
 	}
+	// Columns added after the table shipped (claude-fleet#1463): a hub whose
+	// table predates them gets them here, with every existing row reading as
+	// the provider's original kind.
+	for _, c := range []struct{ column, spec string }{
+		{"kind", "TEXT NOT NULL DEFAULT ''"},
+		{"secret_expires_at", "TEXT"},
+	} {
+		var n int
+		if err := s.write.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('fleet_credentials') WHERE name = ?`, c.column).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			if _, err := s.write.Exec(`ALTER TABLE fleet_credentials ADD COLUMN ` + c.column + ` ` + c.spec); err != nil {
+				return fmt.Errorf("add fleet_credentials.%s: %w", c.column, err)
+			}
+		}
+	}
 	return nil
 }
 
 const credColumns = `SELECT principal_id, provider, account, secret_sealed, access_sealed, access_expires_at,
-	version, refreshed_at, refresh_error, created_at, updated_at FROM fleet_credentials`
+	version, refreshed_at, refresh_error, created_at, updated_at, kind, secret_expires_at FROM fleet_credentials`
 
 func scanCred(sc interface{ Scan(...any) error }) (Credential, error) {
 	var c Credential
-	var exp, ref sql.NullString
+	var exp, ref, sexp sql.NullString
 	var created, updated string
 	if err := sc.Scan(&c.PrincipalID, &c.Provider, &c.Account, &c.SecretSealed, &c.AccessSealed, &exp,
-		&c.Version, &ref, &c.RefreshError, &created, &updated); err != nil {
+		&c.Version, &ref, &c.RefreshError, &created, &updated, &c.Kind, &sexp); err != nil {
 		return c, err
 	}
 	c.AccessExpiresAt = parseTimePtr(exp)
 	c.RefreshedAt = parseTimePtr(ref)
+	c.SecretExpiresAt = parseTimePtr(sexp)
 	c.CreatedAt, _ = time.Parse(rfc, created)
 	c.UpdatedAt, _ = time.Parse(rfc, updated)
 	return c, nil
@@ -181,17 +214,19 @@ func (s *Store) Credentials(principalID string) ([]Credential, error) {
 	return out, rows.Err()
 }
 
-// PutCredential stores (or replaces) a credential's long-lived half. Any
+// PutCredential stores (or replaces) a credential's long-lived half, with its
+// kind and — for a kind that runs out on its own (a setup token) — when. Any
 // cached short-lived half is dropped: it was minted from the old secret.
-func (s *Store) PutCredential(principalID, provider, account string, secret []byte, at time.Time) error {
+func (s *Store) PutCredential(principalID, provider, account string, secret []byte, kind string, secretExpires *time.Time, at time.Time) error {
 	now := fmtTime(at)
 	_, err := s.write.Exec(`INSERT INTO fleet_credentials
-		(principal_id, provider, account, secret_sealed, access_sealed, access_expires_at, version, refresh_error, created_at, updated_at)
-		VALUES (?, ?, ?, ?, NULL, NULL, 1, '', ?, ?)
+		(principal_id, provider, account, secret_sealed, access_sealed, access_expires_at, version, refresh_error, created_at, updated_at, kind, secret_expires_at)
+		VALUES (?, ?, ?, ?, NULL, NULL, 1, '', ?, ?, ?, ?)
 		ON CONFLICT(principal_id, provider, account) DO UPDATE SET
 		  secret_sealed = excluded.secret_sealed, access_sealed = NULL, access_expires_at = NULL,
-		  version = fleet_credentials.version + 1, refresh_error = '', updated_at = excluded.updated_at`,
-		principalID, provider, account, secret, now, now)
+		  version = fleet_credentials.version + 1, refresh_error = '', updated_at = excluded.updated_at,
+		  kind = excluded.kind, secret_expires_at = excluded.secret_expires_at`,
+		principalID, provider, account, secret, now, now, kind, fmtTimePtr(secretExpires))
 	return err
 }
 

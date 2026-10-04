@@ -382,3 +382,124 @@ func TestLockedVaultRefusesAndAlerts(t *testing.T) {
 		}
 	}
 }
+
+// A shared-pool account (claude-fleet#1463) is stored under principal "pool"
+// and rides along in every active principal's lease — a setup token exactly as
+// stored, no refresh — while a login that is nobody, or a revoked one, still
+// gets nothing. The list shows its kind and expiry, never the token.
+func TestPoolSetupTokenLeasedByEveryActivePrincipal(t *testing.T) {
+	h, tok, ref := newVaultHarness(t)
+	exp := time.Now().Add(365 * 24 * time.Hour).UTC().Truncate(time.Second)
+	code, out := h.post(t, "/v1/fleet/credentials", FleetCredentialRequest{Action: "put", PrincipalID: store.PoolPrincipal,
+		Provider: credvault.Claude, Account: "icloud", Secret: credvault.Secret{SetupToken: "sk-ant-oat01-POOLSECRET", ExpiresAt: &exp}})
+	if code != http.StatusOK {
+		t.Fatalf("put pool: %d %v", code, out)
+	}
+	putCred(t, h, credvault.Claude, "main", credvault.Secret{RefreshToken: "sk-ant-ort01-SECRET"})
+
+	code, got, refusal := lease(t, h, tok)
+	if code != http.StatusOK {
+		t.Fatalf("alice: %d %v", code, refusal)
+	}
+	by := map[string]NodeCredential{}
+	for _, c := range got.Credentials {
+		by[c.Account] = c
+	}
+	pool, own := by["icloud"], by["main"]
+	if !pool.Pool || pool.Kind != credvault.KindSetupToken || pool.Access == nil || pool.Access.AccessToken != "sk-ant-oat01-POOLSECRET" ||
+		pool.ExpiresAt == nil || !pool.ExpiresAt.Equal(exp) {
+		t.Fatalf("pool credential = %+v", pool)
+	}
+	if own.Pool || own.Kind != credvault.KindRefreshToken || own.Access == nil || own.Access.AccessToken != "claude-access-1" {
+		t.Fatalf("own credential = %+v", own)
+	}
+	if n := ref.n.Load(); n != 1 {
+		t.Fatalf("%d refreshes, want 1 (alice's own; the setup token is never refreshed)", n)
+	}
+
+	// Nobody / revoked: the pool is not a back door.
+	bob := enrollAs(t, h, "bob-m4", "m4", "bob")
+	if code, _, refusal := lease(t, h, bob); code != http.StatusForbidden || refusal["error"] != LeaseNoPrincipal {
+		t.Fatalf("bob: %d %v", code, refusal)
+	}
+	if code, _ := h.post(t, "/v1/fleet/credentials/revoke", FleetRevokeRequest{PrincipalID: "wecom-alice", Reason: "left"}); code != http.StatusOK {
+		t.Fatal("revoke")
+	}
+	if code, _, refusal := lease(t, h, tok); code != http.StatusForbidden || refusal["error"] != LeaseRevoked {
+		t.Fatalf("revoked alice: %d %v", code, refusal)
+	}
+	if code, _ := h.post(t, "/v1/fleet/credentials/revoke", FleetRevokeRequest{PrincipalID: "wecom-alice", Lift: true}); code != http.StatusOK {
+		t.Fatal("lift")
+	}
+
+	// The list: metadata with kind + expiry, and the audit names the person.
+	res, body := h.get(t, "/v1/fleet/credentials")
+	if res.StatusCode != http.StatusOK || strings.Contains(string(body), "POOLSECRET") {
+		t.Fatalf("list: %d %s", res.StatusCode, body)
+	}
+	var listed struct{ Credentials []store.Credential }
+	_ = json.Unmarshal(body, &listed)
+	var poolRow *store.Credential
+	for i := range listed.Credentials {
+		if listed.Credentials[i].PrincipalID == store.PoolPrincipal {
+			poolRow = &listed.Credentials[i]
+		}
+	}
+	if poolRow == nil || poolRow.Kind != credvault.KindSetupToken || poolRow.SecretExpiresAt == nil || !poolRow.SecretExpiresAt.Equal(exp) {
+		t.Fatalf("listed pool row = %+v", poolRow)
+	}
+	audit, _ := h.srv.Store.CredAuditLog("", 50)
+	issued := 0
+	for _, a := range audit {
+		if a.Action == store.CredIssue && a.Account == "icloud" {
+			issued++
+			if a.PrincipalID != "wecom-alice" || a.Detail != "pool" || a.Hostname != "m4" {
+				t.Fatalf("pool issue audit = %+v", a)
+			}
+		}
+	}
+	if issued != 1 {
+		t.Fatalf("%d pool issue rows, want 1", issued)
+	}
+
+	// The shapes the operator can get wrong.
+	for name, req := range map[string]FleetCredentialRequest{
+		"expired": {Action: "put", PrincipalID: store.PoolPrincipal, Provider: credvault.Claude, Account: "old",
+			Secret: credvault.Secret{SetupToken: "sk-ant-oat01-x", ExpiresAt: ptrTime(time.Now().Add(-time.Hour))}},
+		"no expiry": {Action: "put", PrincipalID: store.PoolPrincipal, Provider: credvault.Claude, Account: "x",
+			Secret: credvault.Secret{SetupToken: "sk-ant-oat01-x"}},
+		"both": {Action: "put", PrincipalID: "wecom-alice", Provider: credvault.Claude, Account: "x",
+			Secret: credvault.Secret{SetupToken: "sk-ant-oat01-x", RefreshToken: "rt", ExpiresAt: &exp}},
+		"unknown person": {Action: "put", PrincipalID: "wecom-nobody", Provider: credvault.Claude, Account: "x",
+			Secret: credvault.Secret{SetupToken: "sk-ant-oat01-x", ExpiresAt: &exp}},
+	} {
+		if code, _ := h.post(t, "/v1/fleet/credentials", req); code != http.StatusBadRequest {
+			t.Errorf("%s: %d", name, code)
+		}
+	}
+
+	// Expiring within a month: the hub's own page carries the reminder.
+	soon := time.Now().Add(20 * 24 * time.Hour).UTC()
+	if code, out := h.post(t, "/v1/fleet/credentials", FleetCredentialRequest{Action: "put", PrincipalID: store.PoolPrincipal,
+		Provider: credvault.Claude, Account: "gmail", Secret: credvault.Secret{SetupToken: "sk-ant-oat01-SOON", ExpiresAt: &soon}}); code != http.StatusOK {
+		t.Fatalf("put soon: %d %v", code, out)
+	}
+	var now struct {
+		Findings []struct{ Kind, Severity, Title string }
+	}
+	h.getJSON(t, "/v1/findings?account=all&view=now", &now)
+	found := false
+	for _, f := range now.Findings {
+		if f.Kind == "cred_setup_token" && strings.Contains(f.Title, "gmail") && f.Severity == "warning" {
+			found = true
+		}
+		if f.Kind == "cred_setup_token" && strings.Contains(f.Title, "icloud") {
+			t.Fatalf("a token a year out raised a finding: %+v", f)
+		}
+	}
+	if !found {
+		t.Fatalf("no setup-token reminder: %+v", now.Findings)
+	}
+}
+
+func ptrTime(t time.Time) *time.Time { return &t }
