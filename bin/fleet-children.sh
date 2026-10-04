@@ -127,8 +127,8 @@ rows() {
 # rows after the local ones (a local window of the same key wins). Nothing unless
 # CCQUOTA_FLEET=1 and the map is fresh — a one-machine fleet prints what it did.
 remote_rows() {
-  local k node w st
-  fleet_remote_children "$sess" "$KEY" 2>/dev/null | while IFS=$'\t' read -r k node w; do
+  local k node st
+  fleet_remote_children "$sess" "$KEY" 2>/dev/null | while IFS=$'\t' read -r k node _; do
     st=remote; case "$node" in *:lost) st=lost; node=${node%:lost} ;; esac
     printf '%s|%s||%s|%s|\n' "$node" "$st" "$k" "$KEY"
   done
