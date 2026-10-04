@@ -561,7 +561,7 @@ ok; ! grep -q 'sid-9999' "$WORK/launched" 2>/dev/null || fail "…and must not r
 # the turn ends (the Stop hook marks `done`): /exit, the runner kills the window —
 # the SessionEnd that killed the caller's whole tree in the incident — and a NEW
 # window still opens, resumed on acctB
-TM set-window-option -t "$w9" @claude_state done
+TM set-window-option -t "$w9" @claude_state "done"
 LOG="$FLEET_CONF_DIR/fleets/$SESS/migrate-self.log"
 nw9=''
 for _ in $(seq 1 80); do

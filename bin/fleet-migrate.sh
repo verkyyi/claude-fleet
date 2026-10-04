@@ -219,13 +219,13 @@ migrate_is_self() {   # <wid> <claude-pid> → 0 iff moving <wid> would take THI
 migrate_detach_self() {
   local log="$1"; shift
   if command -v python3 >/dev/null 2>&1; then
-    ( cd / && FLEET_MIGRATE_DETACHED=1 TMUX_PANE= nohup python3 -c 'import os, sys
+    ( cd / && FLEET_MIGRATE_DETACHED=1 TMUX_PANE='' nohup python3 -c 'import os, sys
 if os.fork():
     os._exit(0)
 os.setsid()
 os.execvp(sys.argv[1], sys.argv[1:])' bash "$BIN/fleet-migrate.sh" "$@" </dev/null >>"$log" 2>&1 & )
   else
-    ( cd / && FLEET_MIGRATE_DETACHED=1 TMUX_PANE= nohup bash "$BIN/fleet-migrate.sh" "$@" </dev/null >>"$log" 2>&1 & )
+    ( cd / && FLEET_MIGRATE_DETACHED=1 TMUX_PANE='' nohup bash "$BIN/fleet-migrate.sh" "$@" </dev/null >>"$log" 2>&1 & )
   fi
 }
 
