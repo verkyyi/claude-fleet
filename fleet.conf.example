@@ -1395,6 +1395,18 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Compactions before handoff @group=handoff @tier=internal @scope=fleet @edit=int
 #FLEET_COMPACT_MAX=2             # in-place compactions per session before a handoff; 0 = no cap
 
+# Carry on by itself after an in-place compaction (issue #1441). The prep step ends
+# the turn and /compact leaves the session idle, so without this nothing starts the
+# next turn until someone types. On a FLEET compaction only (Claude Code's own
+# carries on by itself) bin/fleet-compact-resume.sh submits /fleet-compact-resume
+# once the pane is idle — through the mod's inbox, else keystrokes behind the
+# operator-typing hold — and skips when a turn is already running, the pane waits
+# on a human, a transfer is pending, or it is a Codex pane. Each outcome is a
+# `resumed` row in context-ladder.log; fleet-doctor WARNs on a restore with none.
+# 0 = off (the session waits for input, as before).
+# @label=Resume after compact @group=handoff @tier=internal @scope=fleet @edit=bool
+#FLEET_COMPACT_RESUME=1          # 1 = submit the next turn after an in-place compaction; 0 = off
+
 # Set the two lines above in TOKENS USED instead of a % (issue #1317), so a model
 # with a different window size needs no re-tuning: every window is 1M tokens
 # today, so a 70% line meant 700k — long after quality had started to slide. Each

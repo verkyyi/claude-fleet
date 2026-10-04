@@ -65,6 +65,8 @@ if [ "${cstate%%|*}" = compacting ]; then
   ccount=${cstate#*|}
   case "$ccount" in ''|*[!0-9]*) ccount=0 ;; esac
   tmux set-window-option -t "$TMUX_PANE" @compact_count $(( ccount + 1 )) 2>/dev/null
+  # The resume sender (issue #1441) dedups on this: one restore, one resume turn.
+  tmux set-window-option -t "$TMUX_PANE" @compact_restored_ts "$(date +%s)" 2>/dev/null
   compact_check=1
 fi
 # A native compaction the fleet saw coming (issue #1321): bin/precompact-hook.sh
@@ -80,9 +82,19 @@ case "$nts" in ''|*[!0-9]*) : ;; *)
 esac
 # The context-ladder ledger (issue #1320): every compaction this pane comes back
 # from — ours (`fleet`, the count just bumped) or Claude Code's own (`auto`, which
-# used to leave no trace outside the transcript).
+# used to leave no trace outside the transcript). ctx_pct is `-`: @ctx_pct still
+# holds the PRE-compaction reading here — the statusline has not redrawn yet (#1441).
 [ -f "$(dirname "$0")/fleet-ladder-log.sh" ] && sh "$(dirname "$0")/fleet-ladder-log.sh" restored \
-  --reason "$([ -n "$compact_check" ] && echo fleet || echo auto)" </dev/null >/dev/null 2>&1
+  --ctx - --reason "$([ -n "$compact_check" ] && echo fleet || echo auto)" </dev/null >/dev/null 2>&1
+# Nothing in prep → compacting → restored submits the NEXT turn (issue #1441): the
+# prep turn ended on purpose, /compact leaves the REPL idle, and additionalContext
+# only rides a turn something else starts. So after OUR compaction (never Claude
+# Code's own — that one runs mid-turn and carries on) a detached sender submits
+# /fleet-compact-resume once the pane is idle. Detached: SessionStart must return
+# before the engine can take the command. FLEET_COMPACT_RESUME=0 turns it off.
+if [ -n "$compact_check" ] && [ -f "$(dirname "$0")/fleet-compact-resume.sh" ]; then
+  bash "$(dirname "$0")/fleet-compact-resume.sh" "$TMUX_PANE" </dev/null >/dev/null 2>&1 &
+fi
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
