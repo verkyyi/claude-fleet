@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#f9f9f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0d0d0d" media="(prefers-color-scheme: dark)">
+<title>我的会话</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%232a78d6'/%3E%3Ccircle cx='8' cy='8' r='3' fill='%23fff'/%3E%3C/svg%3E">
+<!--
+  我的会话 (claude-fleet#1429). A standalone, phone-first page like nodes.html:
+  away from the desk, "where is each of my sessions, and is one waiting for
+  me". Read-only. Data: /v1/fleet/fleet_sessions (hub-scoped to the viewer)
+  and /v1/fleet/me; lib/sessions.js filters to the viewer's own accounts,
+  orders and labels — this page only draws. Served only with CCQUOTA_FLEET=1.
+-->
+<style>
+:root {
+  color-scheme: light;
+  --plane:#f9f9f7; --surface:#fcfcfb; --border:#e3e2dd;
+  --ink:#0b0b0b; --ink-2:#52514e; --ink-3:#85847e;
+  --ok:#1f8f4e; --lost:#e34948; --warn:#c77700; --accent:#2a78d6;
+  --shadow: 0 1px 2px rgba(0,0,0,.05), 0 4px 12px rgba(0,0,0,.04);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --plane:#0d0d0d; --surface:#1a1a19; --border:#2f2f2c;
+    --ink:#fff; --ink-2:#c3c2b7; --ink-3:#8b8a81;
+    --ok:#3fb871; --lost:#e66767; --warn:#e9a23b; --accent:#3987e5;
+    --shadow: 0 1px 2px rgba(0,0,0,.4);
+  }
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; background:var(--plane); color:var(--ink);
+  font:15px/1.55 ui-sans-serif,-apple-system,"Segoe UI",Roboto,"PingFang SC","Helvetica Neue",Arial,sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap { max-width:640px; margin:0 auto; padding:20px 16px calc(48px + env(safe-area-inset-bottom)); }
+h1 { margin:0; font-size:22px; font-weight:600; }
+.sub { color:var(--ink-3); margin:4px 0 16px; font-size:13px; }
+.mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.9em; }
+.chips { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 18px; }
+.chip { background:var(--surface); border:1px solid var(--border); border-radius:999px; padding:3px 12px; font-size:13px; color:var(--ink-2); }
+.chip b { color:var(--ink); }
+.chip.needs { border-color:var(--warn); color:var(--warn); }
+.chip.needs b { color:var(--warn); }
+.chip.lost { border-color:var(--lost); color:var(--lost); }
+.chip.lost b { color:var(--lost); }
+h2 { font-size:15px; margin:20px 0 8px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.card {
+  background:var(--surface); border:1px solid var(--border); border-radius:12px;
+  padding:12px 14px; box-shadow:var(--shadow); margin-bottom:10px;
+}
+.card.needs { border-left:4px solid var(--warn); }
+.card.lost { opacity:.62; }
+.row { display:flex; justify-content:space-between; align-items:flex-start; gap:10px; }
+.title { font-weight:600; overflow-wrap:anywhere; }
+.meta { color:var(--ink-3); font-size:13px; margin-top:2px; overflow-wrap:anywhere; }
+.badge { flex:none; font-size:12px; font-weight:600; padding:1px 9px; border-radius:999px; border:1px solid var(--border); color:var(--ink-2); white-space:nowrap; }
+.badge.working { color:var(--ok); border-color:var(--ok); }
+.badge.waiting, .badge.blocked { color:#fff; background:var(--warn); border-color:var(--warn); }
+.pill { font-size:12px; font-weight:600; padding:1px 9px; border-radius:999px; color:#fff; background:var(--lost); }
+.lostline { color:var(--lost); font-size:13px; margin-top:4px; }
+.muted { color:var(--ink-3); }
+.err { color:var(--lost); font-size:13px; margin-top:12px; }
+.empty { color:var(--ink-3); padding:28px 16px; text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>我的会话</h1>
+  <div class="sub">你在所有机器上的会话，只读。每 5 秒刷新。<span id="at" class="mono"></span></div>
+  <div id="chips" class="chips"></div>
+  <div id="list"><div class="card empty">读取中…</div></div>
+  <div id="error" class="err"></div>
+</div>
+<script type="module">
+import { byMachine, summary } from './lib/sessions.js';
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+// me is read once: who the viewer is does not change under a running page.
+let me = null;
+
+function card(v) {
+  return `<div class="card${v.needsYou ? " needs" : ""}${v.lost ? " lost" : ""}">
+    <div class="row">
+      <div class="title">${esc(v.title)}</div>
+      <span class="badge ${esc(v.state)}">${esc(v.stateText)}</span>
+    </div>
+    <div class="meta">${v.meta ? esc(v.meta) + " · " : ""}<span class="mono">${esc(v.login)}</span> · <span class="mono">${esc(v.fleet)}</span>${v.asleep ? " · " + esc(v.asleep) : ""}</div>
+    ${v.lost ? `<div class="lostline">${esc(v.lostText)}（状态为最后一次报到时的）</div>` : ""}
+  </div>`;
+}
+
+function render(snap) {
+  const groups = byMachine(snap.sessions, me);
+  const s = summary(groups);
+  $("at").textContent = " · 更新于 " + new Date().toLocaleTimeString();
+  $("chips").innerHTML = `<span class="chip"><b>${s.total}</b> 个会话 · <b>${s.machines}</b> 台机器</span>`
+    + (s.needs ? `<span class="chip needs"><b>${s.needs}</b> 个等你</span>` : "")
+    + (s.lost ? `<span class="chip lost"><b>${s.lost}</b> 个失联</span>` : "");
+  $("list").innerHTML = groups.length ? groups.map((g) => `
+    <h2>${esc(g.machine)}${g.lost ? ` <span class="pill">失联</span> <span class="muted" style="font-weight:400;font-size:13px">${esc(g.lostText.replace(/^失联 · /, ""))}</span>` : ""}</h2>
+    ${g.sessions.map(card).join("")}`).join("")
+    : `<div class="card empty">没有会话（或你还没有分到任何机器上的登录）。</div>`;
+}
+
+async function getJSON(path) {
+  const r = await fetch(path, { credentials: "same-origin", cache: "no-store" });
+  if (!r.ok) throw new Error(path + " HTTP " + r.status);
+  return r.json();
+}
+
+async function tick() {
+  try {
+    if (!me) me = await getJSON("/v1/fleet/me");
+    render(await getJSON("/v1/fleet/fleet_sessions"));
+    $("error").textContent = "";
+  } catch (e) {
+    // Keep the last list on screen: a phone dropping signal is not every
+    // session vanishing. Say the page is stale instead.
+    $("error").textContent = "连不上入口，下面是上一次的结果：" + e.message;
+  }
+}
+tick();
+setInterval(tick, 5000);
+</script>
+</body>
+</html>

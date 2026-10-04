@@ -545,3 +545,9 @@ func (s *Server) serveConnectPage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) serveNodesPage(w http.ResponseWriter, r *http.Request) {
 	s.serveStandalonePage(w, r, "nodes.html")
 }
+
+// serveSessionsPage serves 我的会话 (claude-fleet#1429): every session the
+// viewer may see, on every machine, laid out for a phone.
+func (s *Server) serveSessionsPage(w http.ResponseWriter, r *http.Request) {
+	s.serveStandalonePage(w, r, "sessions.html")
+}
