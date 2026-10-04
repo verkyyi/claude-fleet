@@ -111,6 +111,18 @@ func (n *nodeConns) drop(id string, c *nodeConn) {
 	}
 }
 
+// dropAll closes and forgets an endpoint's connection, whichever it is: a
+// released SPOT node's token is retired, so its link must not outlive it
+// (claude-fleet#1428).
+func (n *nodeConns) dropAll(id string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if c := n.conns[id]; c != nil {
+		c.conn.Close(websocket.StatusGoingAway, "node released")
+		delete(n.conns, id)
+	}
+}
+
 func (n *nodeConns) get(id string) *nodeConn {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -311,6 +323,11 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 			// The Fleet Hub registry (claude-fleet#1409): this login's
 			// fleets, re-derived and checked before they are registered.
 			s.recordFleets(*ep, hb, nc.canRead, now)
+			if s.Spot != nil {
+				// A SPOT node's first beat makes it online; a beat with
+				// sessions restarts its idle clock (claude-fleet#1428).
+				s.Spot.Beat(ep.ID, hb.Sessions, now)
+			}
 			if nc.canRelay {
 				// The worker map, and any relay whose push went
 				// unanswered (claude-fleet#1421).
@@ -394,6 +411,11 @@ type NodeView struct {
 	Fleets        []NodeFleetSummary `json:"fleets"`
 	FleetError    string             `json:"fleet_error,omitempty"`
 	FleetVersion  string             `json:"fleet_version,omitempty"`
+
+	// Kind is fixed, or ephemeral for a SPOT node the hub started
+	// (claude-fleet#1428); Spot is that node's ledger state while it lives.
+	Kind string `json:"kind"`
+	Spot string `json:"spot,omitempty"`
 }
 
 // NodeFleetSummary is one fleet on a node, without its window list (C2 owns
@@ -420,6 +442,8 @@ type MachineView struct {
 	MemTotal uint64  `json:"mem_total_bytes"`
 	// LastHeartbeat is the newest from any login.
 	LastHeartbeat *time.Time `json:"last_heartbeat"`
+	// Kind is ephemeral when the machine is a SPOT node (claude-fleet#1428).
+	Kind string `json:"kind"`
 }
 
 // NodesSnapshot is the body of /v1/nodes.
@@ -427,6 +451,9 @@ type NodesSnapshot struct {
 	At       time.Time     `json:"at"`
 	Machines []MachineView `json:"machines"`
 	Nodes    []NodeView    `json:"nodes"`
+	// Spot is the SPOT nodes block (claude-fleet#1428): absent on a hub
+	// that never started one.
+	Spot *SpotSummary `json:"spot,omitempty"`
 }
 
 // NodeStatus judges a node: lost after lostAfterBeats missed heartbeats. Lost
@@ -454,6 +481,18 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 		return NodesSnapshot{}, err
 	}
 	out := NodesSnapshot{At: now.UTC(), Machines: []MachineView{}, Nodes: []NodeView{}}
+	// Node kinds and SPOT states (claude-fleet#1428): both tables are empty
+	// on a hub that never started a SPOT node, and the reads are one query
+	// each.
+	kinds, _ := s.Store.EphemeralEndpoints()
+	spotState := map[string]string{}
+	if spots, err := s.Store.SpotNodes(false, 0); err == nil {
+		for _, sp := range spots {
+			if sp.EndpointID != "" {
+				spotState[sp.EndpointID] = sp.State
+			}
+		}
+	}
 	machines := map[string]*MachineView{}
 	order := []string{}
 	for _, n := range rows {
@@ -461,6 +500,11 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 			continue
 		}
 		v := nodeView(n, now)
+		v.Kind = store.NodeKindFixed
+		if k := kinds[n.EndpointID]; k != "" {
+			v.Kind = k
+		}
+		v.Spot = spotState[n.EndpointID]
 		if c := s.nodes.get(n.EndpointID); c != nil {
 			v.Connected, v.Admin = true, c.admin
 			if c.admin {
@@ -471,7 +515,7 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 
 		m := machines[v.Hostname]
 		if m == nil {
-			m = &MachineView{Hostname: v.Hostname, Status: "lost"}
+			m = &MachineView{Hostname: v.Hostname, Status: "lost", Kind: v.Kind}
 			machines[v.Hostname] = m
 			order = append(order, v.Hostname)
 		}
@@ -493,6 +537,7 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 	for _, h := range order {
 		out.Machines = append(out.Machines, *machines[h])
 	}
+	out.Spot = s.spotSummary(now, out.Nodes)
 	return out, nil
 }
 

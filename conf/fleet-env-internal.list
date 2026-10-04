@@ -145,6 +145,7 @@ FLEET_MIGRATE_CLOSE_WAIT           knob: internal pacing/limit, safe in-code def
 FLEET_MIGRATE_EXIT_WAIT            knob: internal pacing/limit, safe in-code default (fleet-migrate.sh)
 FLEET_MIGRATE_FAILOVER_PY          seam: an injectable command/path for tests (fleet-migrate.sh)
 FLEET_MIGRATE_LAUNCH               seam: an injectable command/path for tests (fleet-migrate.sh)
+FLEET_MOVE_CMD                     seam: the fleet-move.sh fleet-spot-evacuate.sh runs per fleet (default this bin's; #1428)
 FLEET_OFFBOARD_ARCHIVE_DIR         path: offboarding home-archive dir override; --archive-dir is the CLI form (fleet-login-remove.sh)
 FLEET_MIGRATION_LOCKED             handoff: a transition lock the caller already holds
 FLEET_MOD_ALIVE_SECS               knob: a mod heartbeat younger than this is alive (fleet_mod_alive, fleet-doctor.sh; 45 = three missed beats)
@@ -213,6 +214,9 @@ FLEET_SMOKE_SSH_PORT               seam: the sshd port the smoke run connects to
 FLEET_SMOKE_TIMEOUT                knob: internal pacing/limit, safe in-code default; --timeout is the operator's face (fleet-login-smoke.sh)
 FLEET_SPAWN_GUARD_SLEEP            knob: internal pacing/limit, safe in-code default (dash-enter.sh)
 FLEET_SPAWN_TAIL                   handoff: spawn only the seed tail (used by the handoff/resume path)
+FLEET_SPOT_EVACUATE_MARGIN         knob: seconds fleet-spot-evacuate.sh keeps before its deadline so a started move can finish, default 30 (#1428)
+FLEET_SPOT_EVACUATE_SECS           handoff: the SPOT reclaim deadline the ccquota agent passes to fleet-spot-evacuate.sh (its CCQUOTA_FLEET_RECLAIM_SECS, 240; #1428)
+FLEET_SPOT_EVACUATE_SESSIONS       seam: the fleets fleet-spot-evacuate.sh evacuates, space-separated, instead of fleet_sockets (no tmux in the selftest; #1428)
 FLEET_STATUS_CACHE                 path: status-bar render cache file
 FLEET_STATUS_DISK                  knob: 0 drops the disk segment from the status bar
 FLEET_STOP_CLOSE_WAIT              knob: internal pacing/limit, safe in-code default (fleet-worker-stop.sh)

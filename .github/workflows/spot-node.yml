@@ -1,0 +1,51 @@
+name: spot-node
+
+# The SPOT execution node's image (issue #1428, EPIC #1419 R1) builds and
+# starts: a smoke build with the two CLI installs off (no outside network
+# needed beyond apt and the Go proxy), then the pieces a node runs on are
+# there — tini, tmux, gh, git, python3, the ccquota agent, the fleet checkout
+# — and the entrypoint refuses to start without a hub address. The image the
+# hub actually runs is built and pushed by hand from the repo root (see
+# extras/spot-node/README.md); nothing here pushes one.
+
+on:
+  pull_request:
+    paths:
+      - 'extras/spot-node/**'
+      - '.github/workflows/spot-node.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: spot-node-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the node image (CLI installs off)
+        run: |
+          docker build -f extras/spot-node/Dockerfile \
+            --build-arg VERSION=ci-${GITHUB_SHA::7} \
+            --build-arg CLAUDE_INSTALL=0 --build-arg CODEX_INSTALL=0 \
+            --build-arg GOPROXY=https://proxy.golang.org,direct \
+            -t ccquota-node:ci .
+      - name: The pieces a node runs on are there
+        run: |
+          docker run --rm --entrypoint /bin/bash ccquota-node:ci -c '
+            set -e
+            for c in tini tmux gh git python3 zsh curl ccquota node; do command -v "$c" >/dev/null || { echo "missing: $c"; exit 1; }; done
+            ccquota version
+            test -x /opt/claude-fleet/bin/fleet-node-join.sh
+            test -x /opt/claude-fleet/bin/fleet-spot-evacuate.sh
+            git -C /opt/claude-fleet rev-parse --short HEAD
+            [ "$(id -un)" = fleet ]
+          '
+      - name: The entrypoint refuses to start without a hub
+        run: |
+          set +e
+          out=$(docker run --rm ccquota-node:ci 2>&1); rc=$?
+          echo "$out"
+          [ "$rc" -ne 0 ] && echo "$out" | grep -q 'CCQUOTA_HUB_URL is required'

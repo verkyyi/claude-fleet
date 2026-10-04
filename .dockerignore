@@ -1,0 +1,6 @@
+# Build context of extras/spot-node/Dockerfile (the repo root). The fleet
+# checkout the image carries is a git clone source, so .git stays.
+**/node_modules
+tokenledger/bin
+tokenledger/dist
+.fleet-worktrees.noindex

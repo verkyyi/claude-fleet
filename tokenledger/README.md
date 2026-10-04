@@ -1045,6 +1045,81 @@ lands the branch, unpacks the transcript and resumes the session. A `working`
 session is refused (`INVALID_STATE`); a failed move gives the lease back to the
 source; a settled move's bundle is dropped, and every bundle expires after a day.
 
+### SPOT nodes — the hub starts a machine when every fixed one is busy (claude-fleet#1428)
+
+Off by default. Set `CCQUOTA_FLEET_SPOT_IMAGE` (with `CCQUOTA_FLEET=1`, in a
+hub that runs in a Kubernetes cluster) and the hub starts **ephemeral
+execution nodes** of its own — a pod of that image on the cluster's SPOT
+machines — when placement finds no fixed machine with room, lets placement use
+them at a reduced weight, and deletes them again after they have sat idle for
+`CCQUOTA_FLEET_SPOT_IDLE_MINUTES` (30). The image is `extras/spot-node/` in
+the claude-fleet repo (fleet + agent + tmux + Claude Code + Codex CLI, one
+unprivileged login), built from the repo root; the hub needs create / get /
+list / delete on pods in its namespace (`extras/spot-node/k8s.yaml`).
+
+| setting | what |
+|---|---|
+| `CCQUOTA_FLEET_SPOT_IMAGE` | the node image; set = SPOT on |
+| `CCQUOTA_FLEET_SPOT_HUB_URL` | how a pod reaches the hub (default `CCQUOTA_FLEET_PUBLIC_URL`; one of the two is required) |
+| `CCQUOTA_FLEET_SPOT_NAMESPACE` | where pods go (default: the hub's own) |
+| `CCQUOTA_FLEET_SPOT_MAX` | nodes at once (1; 0 = never) |
+| `CCQUOTA_FLEET_SPOT_IDLE_MINUTES` | release after this long with no session (30) |
+| `CCQUOTA_FLEET_SPOT_BOOT_MINUTES` | give up on a pod that has not joined (10; also the join code's life) |
+| `CCQUOTA_FLEET_SPOT_WEIGHT` | an ephemeral node's placement score multiplier (0.5); the `fleet.spot_weight` setting (`PUT /v1/fleet/settings`, 0–2) overrides it at runtime |
+| `CCQUOTA_FLEET_SPOT_GRACE_SECONDS` | the pod's terminationGracePeriodSeconds: time to move sessions off on a reclaim (300) |
+| `CCQUOTA_FLEET_SPOT_NODE_SELECTOR` / `_TOLERATIONS` | the SPOT pool: `k=v,k=v` and `key[=value][:effect],…` (or a JSON array) |
+| `CCQUOTA_FLEET_SPOT_CPU` / `_MEMORY` / `_SERVICE_ACCOUNT` / `_PULL_SECRET` / `_POD_JSON` | the pod's requests, service account, pull secret, and a JSON file merged over the generated Pod for anything else |
+| `CCQUOTA_FLEET_SPOT_KUBE_URL` / `_KUBE_TOKEN` / `_KUBE_CA` / `_KUBE_INSECURE=1` | outside a cluster (a dev hub against kind); in-cluster discovery otherwise |
+
+**Kind.** A node is `fixed` (a machine someone owns) or `ephemeral` (one the
+hub started). The kind is stamped on the endpoint **from the join code** the
+hub minted — never from the joining side — so a SPOT pod cannot claim to be
+m5 and m5 cannot talk itself into the SPOT weight. `POST /v1/fleet/join-codes`
+takes `{kind: "ephemeral"}` for a SPOT box the operator runs by hand; the
+join answer carries `kind`, and the join script writes
+`CCQUOTA_FLEET_NODE_KIND=ephemeral` into `node.env`, which is what makes the
+agent treat SIGTERM as a reclaim. `/v1/nodes` carries `kind` on every node and
+machine, `spot` (the ledger state) on an ephemeral one, and a `spot` block —
+the configuration, the nodes under way (a pod is listed from the moment it is
+created, before it joins) and the newest released records.
+
+**Life.** `fleet_spot_nodes` is the ledger: one row per node the hub started,
+`provisioning` → `online` → `releasing` | `reclaiming` → `released`, with
+when it was created, joined and released, the most sessions it ever ran, and
+what it still held when it went. A placement that finds no eligible fixed
+machine (`NO_ELIGIBLE_NODE`) asks for one — the refusal says so — and the
+controller's next tick (`CCQUOTA_FLEET_SPOT_TICK_SECONDS`, 30) mints a join
+code good for the boot window and creates the pod with it in its environment.
+A pod that has not joined by the boot window, or a node whose heartbeats
+stop for that long, is deleted. Only an `online` node is a placement
+candidate; its score is multiplied by the weight, so a fixed machine with room
+always wins. When a node is gone — released, failed, or simply not there any
+more — the roster row is dropped, the endpoint retired (its token stops
+working) and the record closed; it never lingers as 失联.
+
+**Reclaim.** The cloud taking the machine reaches the pod as the kubelet's
+SIGTERM. An ephemeral agent then `POST /v1/node/reclaim` (its own token) —
+placement avoids the node from that moment — and runs claude-fleet's
+`bin/fleet-spot-evacuate.sh` (`CCQUOTA_FLEET_RECLAIM_CMD` overrides;
+`CCQUOTA_FLEET_RECLAIM_SECS`, 240, bounds it): `fleet-move.sh --rebalance
+--max all` per fleet, the ordinary hub move, so every idle session lands on
+another machine; a session mid-turn is never cut. When the pod is gone the
+hub lets every lease the node still held go **at once** — the 30-minute lost
+TTL is for a machine that may come back, and this one will not — records the
+sessions that were still on it (意外下线), and re-dispatches nothing, as for
+any lost node.
+
+| Route | Auth | What |
+|---|---|---|
+| `GET /v1/fleet/spot` | operator | the `spot` block on its own |
+| `POST /v1/fleet/spot {action: start\|release, id?, reason?}` | operator (same-origin) | start a node now (the `/nodes` page's button), or release one |
+| `POST /v1/node/reclaim` | the node's token | "the cloud is taking me": `{id, state, grace_seconds}` |
+
+Every step is a `fleet_audit` row (`hub:spot`, `spot_start` /
+`spot_online` / `spot_release` / `spot_reclaim` / `spot_lease_release` /
+`spot_released`), and the `/nodes` page's **SPOT 节点** block shows the live
+nodes and the last few records as a timeline — 起 → 报到 → 释放.
+
 ### The SSH relay — SSH through the hub when nothing else reaches (claude-fleet#1413)
 
 (Not the node-to-node message relays of claude-fleet#1421 above: everything

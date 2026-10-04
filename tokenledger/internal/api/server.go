@@ -165,6 +165,10 @@ type Server struct {
 	// joinClock replaces the join-code clock in tests.
 	joinClock func() time.Time
 
+	// Spot starts and releases SPOT execution nodes in the hub's cluster
+	// (claude-fleet#1428); nil when CCQUOTA_FLEET_SPOT_IMAGE is unset.
+	Spot *SpotController
+
 	// nodes holds the open node control channels.
 	nodes nodeConns
 
@@ -245,6 +249,11 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("/v1/node/dist/", s.handleNodeDist)
 		mux.HandleFunc("/v1/node/self", s.handleNodeSelf)
 		mux.Handle("/v1/fleet/join-codes", s.viewerOnly(s.operatorOnly(http.HandlerFunc(s.handleFleetJoinCodes))))
+		// SPOT nodes (claude-fleet#1428): the node's own reclaim notice
+		// authenticates with its token; starting and releasing are the
+		// operator's.
+		mux.HandleFunc("/v1/node/reclaim", s.handleNodeReclaim)
+		mux.Handle("/v1/fleet/spot", s.viewerOnly(s.operatorOnly(http.HandlerFunc(s.handleFleetSpot))))
 		mux.Handle("/v1/nodes", s.viewerOnly(http.HandlerFunc(s.handleNodes)))
 		mux.Handle("/nodes", s.viewerOnly(http.HandlerFunc(s.serveNodesPage)))
 		// 我的会话 (claude-fleet#1429): the phone view of fleet_sessions.

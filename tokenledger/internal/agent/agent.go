@@ -138,6 +138,14 @@ type Config struct {
 	// route when FleetRoutes names none (on by default with Fleet;
 	// CCQUOTA_FLEET_NODE_TAILNET=0 turns it off).
 	FleetTailnetRoute bool
+	// FleetEphemeral marks a SPOT node (claude-fleet#1428): SIGTERM means
+	// the machine is being taken back, and Reclaim runs before the exit.
+	FleetEphemeral bool
+	// FleetReclaimCmd is what Reclaim runs to move idle sessions off; empty
+	// means claude-fleet's own bin/fleet-spot-evacuate.sh under Home.
+	FleetReclaimCmd string
+	// FleetReclaimTimeout bounds Reclaim as a whole.
+	FleetReclaimTimeout time.Duration
 }
 
 // Defaults for the intervals.

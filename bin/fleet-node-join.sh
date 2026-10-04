@@ -133,11 +133,12 @@ priv() {
 }
 can_priv() { [ "$UID_N" = 0 ] || { [ -n "$SUDO" ] && priv true >/dev/null 2>&1; }; }
 
-load_env() { # → TOKEN, saved HUB match
-  TOKEN="" SAVED_HUB=""
+load_env() { # → TOKEN, saved HUB match, KIND
+  TOKEN="" SAVED_HUB="" KIND=""
   [ -f "$ENVF" ] || return 1
   TOKEN="$(sed -n 's/^CCQUOTA_TOKEN=//p' "$ENVF" | head -n 1)"
   SAVED_HUB="$(sed -n 's/^CCQUOTA_HUB_URL=//p' "$ENVF" | head -n 1)"
+  KIND="$(sed -n 's/^CCQUOTA_FLEET_NODE_KIND=//p' "$ENVF" | head -n 1)"
   [ -n "$TOKEN" ]
 }
 
@@ -150,6 +151,10 @@ write_env() {
       printf 'CCQUOTA_TOKEN=%s\n' "$1"
       printf 'CCQUOTA_FLEET=1\n'
       if [ "$ADMIN" = 1 ]; then printf 'CCQUOTA_FLEET_ADMIN=1\n'; fi
+      # The node's kind, from the hub's answer to the join (issue #1428):
+      # ephemeral = a SPOT node, whose agent treats SIGTERM as the cloud
+      # taking the machine (tell the hub, move idle sessions off, then stop).
+      if [ "${KIND:-}" = ephemeral ]; then printf 'CCQUOTA_FLEET_NODE_KIND=ephemeral\n'; fi
     } > "$ENVF.tmp" ) && mv "$ENVF.tmp" "$ENVF" && chmod 600 "$ENVF"
 }
 
@@ -158,7 +163,7 @@ self_status() { # → the /v1/node/self body on stdout; exit 0 iff 200
 }
 
 # ── join ────────────────────────────────────────────────────────────────────
-TOKEN="" SAVED_HUB=""
+TOKEN="" SAVED_HUB="" KIND=""
 if load_env && [ "$SAVED_HUB" = "$HUB" ] && self_status >/dev/null; then
   say "join: already registered with $HUB — the join code was not spent"
   # Keep the admin choice of THIS run.
@@ -177,10 +182,13 @@ else
   esac
   TOKEN="$(jfield token < "$WORK/join")"
   [ -n "$TOKEN" ] || die "join: the hub answered without a token"
+  KIND="$(jfield kind < "$WORK/join")"
   write_env "$TOKEN" || die "join: cannot write $ENVF"
   ADMIN_OK="$(jbool admin < "$WORK/join")"
   SSH_CA="$(jfield ssh_ca < "$WORK/join")"
-  say "join: registered as $(jfield label < "$WORK/join") ($(jfield endpoint_id < "$WORK/join")); token in $ENVF"
+  kind_note=""
+  [ "$KIND" = ephemeral ] && kind_note=" · SPOT node (ephemeral): SIGTERM moves idle sessions off, then stops"
+  say "join: registered as $(jfield label < "$WORK/join") ($(jfield endpoint_id < "$WORK/join")); token in $ENVF$kind_note"
 fi
 DIST_LIST=""
 [ -f "$WORK/join" ] && DIST_LIST="$(sed -n 's/.*"dist":\[\([^]]*\)\].*/\1/p' "$WORK/join" | tr -d '"')"

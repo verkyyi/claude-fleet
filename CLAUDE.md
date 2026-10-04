@@ -251,5 +251,17 @@ Do not install from memory: read the doc and work from it.
   `bin/fleet-show.sh`. Both share ONE client picker + `lock-client` writer,
   `bin/fleet-client-lib.sh` — never a second copy. No iTerm2 → `open-url.sh`
   (2226 tunnel, else popup + OSC 52).
+- **A SPOT node is the hub's machine, not anyone's** (issue #1428). With
+  `CCQUOTA_FLEET_SPOT_IMAGE` set, the hub (`tokenledger/internal/api/fleet_spot.go`)
+  starts a pod of `extras/spot-node/` on the cluster's SPOT machines when
+  placement finds no fixed machine with room, and deletes it after 30 idle
+  minutes. Its kind (`ephemeral`) comes from the join code the hub minted,
+  never from the node; placement multiplies its score by the SPOT weight so a
+  fixed machine with room always wins; a reclaim (the kubelet's SIGTERM) makes
+  the agent tell the hub and run `bin/fleet-spot-evacuate.sh` (`fleet-move.sh
+  --rebalance --max all`), and whatever is still on it when the pod is gone is
+  意外下线: leases released at once, nothing re-dispatched, the record kept in
+  `fleet_spot_nodes`. Off (no image) adds nothing — `TestSpotOffAddsNothing`
+  and `fleet-spot-evacuate-selftest.sh` case A pin the degenerate case.
 - Claude Code re-reads `settings.json` hooks per turn, so running sessions pick
   up hook changes without a restart.
