@@ -26,7 +26,7 @@
 #   fleet_status_remote_node <sess> <label> → RN_AV (online|lost|maintenance) RN_N
 #       RN_SEEN from the `#node` header line of global/remote_<sess> (#1475): the
 #       hub's word on a machine when hub_nodes has no row for it — a login whose
-#       identity is a certificate gets no /v1/nodes (until #1502), the shell on a
+#       identity is a certificate on a hub without #1502's cert door, the shell on a
 #       colleague's computer first of all (#1484). rc 1: no such line.
 #   fleet_status_hub_limit <label>     → HL_* from global/hub_limits; rc 1: no row.
 #   fleet_status_age <secs>            → FSA: `3m` / `2h` / `1d` for 失联 N.

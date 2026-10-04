@@ -542,6 +542,16 @@ const (
 	// SessionsSigNamespace is the ssh-keygen -Y namespace a sidebar signs
 	// its session-list request under (the message is SessionsSigMessage).
 	SessionsSigNamespace = "fleet-sessions@claude-fleet"
+
+	// SummaryPath is where a status bar asks for the two summaries it shows
+	// beside the sessions — the machines and the subscription readings, the
+	// shapes of /v1/nodes `machines` and /v1/limits?account=all `per_account`
+	// (claude-fleet#1502). Those two are viewer routes; this one admits a
+	// connection certificate the way SessionsPath does.
+	SummaryPath = "/v1/fleet/summary"
+	// SummarySigNamespace is the ssh-keygen -Y namespace a status bar signs
+	// its summary request under (the message is SummarySigMessage).
+	SummarySigNamespace = "fleet-summary@claude-fleet"
 )
 
 // RoutesSigMessage is what a client signs to ask for its route list with a
@@ -554,6 +564,12 @@ func RoutesSigMessage(unix int64) string {
 // connection certificate (claude-fleet#1475), same shape as RoutesSigMessage.
 func SessionsSigMessage(unix int64) string {
 	return fmt.Sprintf("fleet-sessions %d", unix)
+}
+
+// SummarySigMessage is what a status bar signs to read its summaries with a
+// connection certificate (claude-fleet#1502), same shape as SessionsSigMessage.
+func SummarySigMessage(unix int64) string {
+	return fmt.Sprintf("fleet-summary %d", unix)
 }
 
 // `fleet` with no argument (claude-fleet#1470): the device renews its

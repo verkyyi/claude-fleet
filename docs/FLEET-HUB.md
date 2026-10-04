@@ -201,11 +201,15 @@ moment you switch windows. Data: the same refresh loop writes, every
 fleet_version age mem_used_mb mem_total_mb`) and `global/hub_limits`
 (`/v1/limits?account=all`: `label pct5h pctweek account_uuid hub_label`, the
 label being this login's `accounts/<label>.conf` whose `CCQUOTA_ACCOUNT` is that
-uuid, else the hub's). Both are viewer routes, asked only when the login's
-identity (the #1475 ladder) is the viewer token: a connection certificate opens
-neither and a certificate round never spends the token, so a login that did
-`fleet login` sees `?` and no account chip until the hub grows a cert door
-(#1502).
+uuid, else the hub's). Both are viewer routes; a login whose identity (the
+#1475 ladder) is a connection certificate asks the hub's cert door instead —
+`POST /v1/fleet/summary` (#1502), signed under `fleet-summary@claude-fleet` like
+the session list, ONE body carrying both `machines` and `per_account`, narrowed
+by the hub to the machines of the person's ACTIVE logins and the subscriptions
+those logins report under (no `endpoint_shares`), audited as `fleet_summary`. So
+a colleague who only did `fleet login` sees `m5 ● │ CPU … │ MEM …` and their own
+account chip. Only a refusal (401/403, or 404 from a hub not yet redeployed)
+falls back to the viewer routes with the token; no answer spends nothing.
 `bin/fleet-status-lib.sh` holds the one rule (`fleet_status_node`: `@remote` →
 that machine, else here) and the readers; the shell (C5) reuses it. Off hub mode
 the bar is `本机 · 负载 · 内存 · 盘`, plus the window's account chip when the
@@ -356,8 +360,8 @@ computer's, never sent on). `~/.config/claude-fleet/shell.conf` holds the knobs
 (`FLEET_SHELL_PREFIX`, `FLEET_NODE_ALIASES`, `FLEET_SHELL_WIDTH`, …).
 `bin/fleet-shell-selftest.sh` is the check: a fake hub, a fake `fleet connect`,
 an ssh shim, an isolated socket. The bar's machine chip reads the sessions
-cache's `#node` line when `hub_nodes` has no row (a certificate identity gets
-no `/v1/nodes` until #1502): `m4 ●` rather than `?`.
+cache's `#node` line when `hub_nodes` has no row (a certificate identity on a
+hub that predates #1502's `/v1/fleet/summary`): `m4 ●` rather than `?`.
 
 **The one-line install carries the shell** (issue #1486, EPIC #1479 C7).
 `curl -fsSL <hub>/install | sh` fetches `/install/manifest` — the list the hub's
