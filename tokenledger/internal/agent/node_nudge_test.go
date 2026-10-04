@@ -140,7 +140,7 @@ func TestNudgeBeatsAtOnce(t *testing.T) {
 	time.Sleep(2 * nodeNudgePoll) // let the watcher take its baseline
 	t0 := time.Now()
 	touch(t, nudge)
-	// Budget: one poll (250 ms) + the debounce (300 ms), with slack for a
+	// Budget: one poll (250 ms) + the debounce (100 ms), with slack for a
 	// loaded CI box — far under the 5 s the ticker alone would take.
 	if !waitBeats(t, k, 2, 2*time.Second) {
 		t.Fatalf("no heartbeat within 2 s of a nudge (beats=%d)", k.beats())

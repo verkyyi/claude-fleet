@@ -90,6 +90,10 @@ type Server struct {
 	// osUsers caches the endpoint_id -> os_user map behind attachOSUsers.
 	osUsers osUserCache
 
+	// sessionsChanged fires on every recorded fleet heartbeat: a held
+	// fleet_sessions long poll (claude-fleet#1526) wakes and reads again.
+	sessionsChanged changeBroadcast
+
 	// Fleet turns on the fleet module (CCQUOTA_FLEET=1, claude-fleet#1408):
 	// the node control channel, the node roster and its page. Off, none of
 	// those routes exist and the hub is what it was before them. The caller

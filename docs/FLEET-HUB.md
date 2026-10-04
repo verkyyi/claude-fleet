@@ -255,7 +255,7 @@ just went 「在问你 / 等授权 / 做完了」 no longer waits for it: every 
 `bin/set-claude-state.sh` and `bin/tmux-spinner.sh` carry an inline copy) right
 after a write that *changes* them, which touches `$FLEET_CONF_DIR/global/hub-nudge`
 — one file per login, the agent's scope. The agent polls that file's mtime every
-250 ms (no fsnotify) and sends an extra heartbeat: 300 ms debounce, so a burst
+250 ms (no fsnotify) and sends an extra heartbeat: 100 ms debounce (300 ms before #1526), so a burst
 of writes is one beat, and at most two nudge beats a second per node, so no
 writer can flood the hub. Off without `CCQUOTA_FLEET=1`: the function is empty.
 On the fetch side `fleet_sessions` carries a validator: `ETag` =
@@ -265,9 +265,23 @@ answered `304` with no body. `fleet-hub-sessions.sh` sends the validator it
 stored (`global/hubsess.etag`) whenever every cache it vouches for is on disk,
 and treats a 304 as «the rows stand»: it re-stamps the cache's `#ts` line (and
 `hub-workers.tsv`'s mtime) so nothing reads 失联 while the hub is answering. A
-hub without ETags is fetched in full every time, as before. Budget: a change
-on machine A reaches machine B's list in ≤ 3 s (≈ 0.25 poll + 0.3 debounce +
-the beat + up to 2 s of fetch cadence); `bin/fleet-hub-latency.sh --observer m4`
+hub without ETags is fetched in full every time, as before.
+
+**…and the watcher is told at once** (issue #1526, EPIC #1524 C7). While someone
+is looking and a validator is held, the ask also carries `wait` (seconds, ≤ 25 —
+under an ingress's 60 s idle timeout): `?wait=` on the token's `GET`, a `"wait"`
+field in the certificate's `POST` body. With a matching `If-None-Match` the hub
+holds the request (`fleetSessionsWait`, `tokenledger/internal/api/fleet_longpoll.go`)
+and answers `200` the moment a recorded heartbeat moves the validator — every
+`recordFleets` fires a broadcast that wakes the held asks, which re-read and go
+back to waiting if *their* answer did not move; a 5 s recheck catches a machine
+going lost by silence — or `304` at the deadline. `fleet-hub-sessions.sh --loop`
+asks again at once after a 200 or a held 304; an immediate 304 or a failure (an
+older hub ignores `wait`) keeps the 2 s cadence. No `wait`, no validator, nobody
+looking, or `FLEET_HUB_SESSIONS_LONGPOLL=0`: the request and its answer are
+what they were. Budget: a change on machine A reaches machine B's list in ≈ 0.5 s
+(≈ 0.125 mean poll + 0.1 debounce + the beat + the held answer + the cache
+write; it was ≤ 3 s with the 2 s cadence); `bin/fleet-hub-latency.sh --observer m4`
 measures it from a fleet pane on A (ten rounds, median), with the watcher half
 over one ssh to B.
 

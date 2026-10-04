@@ -23,6 +23,11 @@
 #      sends the body when it is back); a cache that failed to WRITE drops it.
 #   E. Cadence: --loop refreshes every 2 s while a client is attached to a fleet
 #      session here, every 10 s when nobody is.
+#   F. Long poll (issue #1526): a watched loop holding a validator sends `wait`;
+#      against a hub that holds, a change lands in the cache within ~1 s of it; a
+#      hub that ignores `wait` (older) gets the 2 s cadence, not a spin; nothing
+#      sends `wait` with FLEET_HUB_SESSIONS_LONGPOLL=0, unwatched, or on a bare
+#      --refresh (the degenerate case).
 #
 # Hermetic: temp FLEET_CONF_DIR + FLEET_C, a PATH-shim tmux, the hub is a python3
 # http.server on 127.0.0.1 that dies with the test. Exit 0 = pass.
@@ -38,7 +43,7 @@ cleanup() { [ -n "$SRV_PID" ] && kill "$SRV_PID" 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT INT TERM
 unset CCQUOTA_FLEET CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN FLEET_HUB_SESSIONS_CMD FLEET_NODE_ALIASES \
       FLEET_HUB_SESSIONS_USER FLEET_HUB_SESSIONS_STALE FLEET_HUB_SESSIONS_EVERY FLEET_HUB_SESSIONS_WATCHED_EVERY \
-      FLEET_HUB_SESSIONS_LOOP_SECS TMUX TMUX_PANE
+      FLEET_HUB_SESSIONS_LOOP_SECS FLEET_HUB_SESSIONS_WAIT FLEET_HUB_SESSIONS_LONGPOLL TMUX TMUX_PANE
 export TMPDIR="$WORK" FLEET_SKIP_GLOBAL_CONF=1 FLEET_CONF_DIR="$WORK/conf" HOME="$WORK/home"
 S="nudge$$"
 G="$WORK/.claude-dash/global"
@@ -253,5 +258,96 @@ CCQUOTA_FLEET='' PATH="$SHIMPATH" bash "$HUBS" --loop 2>/dev/null
 absent "E: off — the loop fetches nothing" "$WORK/fetches"
 absent "E: off — and leaves no pid file"  "$G/hubsess.pid"
 
-printf 'PASS: hub-nudge — %d checks (nudge file + mtime, hook change-only, ETag/304 with #ts re-stamp, 2 s watched / 10 s idle)\n' "$CHECKS"
+# ============================================================================
+# F. long poll (issue #1526) against a loopback hub that holds — or ignores — wait
+# ============================================================================
+unset FLEET_HUB_SESSIONS_CMD FLEET_HUB_SESSIONS_LOOP_SECS
+cat > "$WORK/hub2.py" <<'PY'
+import json, os, sys, time, http.server, socketserver, urllib.parse
+work = sys.argv[1]
+def mode():
+    with open(os.path.join(work, "hub2.mode")) as f:
+        return f.read().strip().split(" ", 1)        # "<etag> <state>"
+def body(state):
+    return json.dumps({"machines": ["farbox"], "count": 1, "sessions": [{
+        "worker_id": "ffffffff-ffff-4fff-8fff-ffffffffffff/issue-7", "machine_name": "farbox.local",
+        "os_user": "someone", "fleet_id": "ffffffff-ffff-4fff-8fff-ffffffffffff", "fleet_name": "far",
+        "availability": "online", "observed_at": "2026-10-04T00:00:00Z", "age_sec": 1,
+        "worker": {"key": "issue-7", "issue": 7, "repo": "acme/app", "state": state, "name": "faraway"}}]}).encode()
+class H(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_GET(self):
+        u = urllib.parse.urlparse(self.path)
+        if u.path != "/v1/fleet/fleet_sessions":
+            self.send_response(404); self.end_headers(); return
+        wait = urllib.parse.parse_qs(u.query).get("wait", ["-"])[0]
+        inm = self.headers.get("If-None-Match", "-")
+        tag, state = mode()
+        held = False
+        if wait != "-" and not os.path.exists(os.path.join(work, "hub2.nowait")):
+            end = time.time() + float(wait)
+            while inm == '"%s"' % tag and time.time() < end:
+                held = True; time.sleep(0.02); tag, state = mode()
+        with open(os.path.join(work, "hub2.log"), "a") as f:
+            f.write("GET inm=%s wait=%s held=%s\n" % (inm, wait, "y" if held else "n"))
+        if inm == '"%s"' % tag:
+            self.send_response(304); self.send_header("ETag", inm); self.end_headers(); return
+        b = body(state)
+        self.send_response(200); self.send_header("ETag", '"%s"' % tag)
+        self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+class S(socketserver.ThreadingMixIn, http.server.HTTPServer):
+    daemon_threads = True
+srv = S(("127.0.0.1", 0), H)
+with open(os.path.join(work, "hub2.port.tmp"), "w") as f: f.write(str(srv.server_address[1]))
+os.rename(os.path.join(work, "hub2.port.tmp"), os.path.join(work, "hub2.port"))
+srv.serve_forever()
+PY
+printf 'A working\n' > "$WORK/hub2.mode"
+rm -f "$G/hubsess.etag" "$G/hubsess.pid"
+python3 "$WORK/hub2.py" "$WORK" & SRV_PID=$!
+for _ in $(seq 1 300); do [ -s "$WORK/hub2.port" ] && break; kill -0 "$SRV_PID" 2>/dev/null || break; sleep 0.1; done
+[ -s "$WORK/hub2.port" ] || fail "F: the loopback hub did not start"
+export CCQUOTA_HUB_URL="http://127.0.0.1:$(cat "$WORK/hub2.port")" FLEET_HUB_SESSIONS_WAIT=3
+nget() { grep -c '^GET' "$WORK/hub2.log" 2>/dev/null || echo 0; }
+
+# a bare --refresh never long-polls, validator or not
+: > "$ATTACHED"
+PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
+PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
+eq  "F: --refresh sends no wait (validator held)" 'GET inm="A" wait=- held=n' "$(sed -n 2p "$WORK/hub2.log")"
+eq  "F: …and the row is there"                 "working" "$(row_state)"
+
+# watched loop: the ask carries wait and is held; a change lands within 1 s
+: > "$WORK/hub2.log"; rm -f "$G/hubsess.pid"
+FLEET_HUB_SESSIONS_LOOP_SECS=4 PATH="$SHIMPATH" bash "$HUBS" --loop 2>/dev/null & LOOP_PID=$!
+sleep 1.5
+printf 'B needs\n' > "$WORK/hub2.mode"
+t0=$(python3 -c 'import time; print(time.time())')
+for _ in $(seq 1 100); do [ "$(row_state)" = needs ] && break; sleep 0.02; done
+dt=$(python3 -c "import time; print(int((time.time() - $t0) * 1000))")
+eq  "F: watched — the change reached the cache" "needs" "$(row_state)"
+CHECKS=$((CHECKS+1)); [ "$dt" -le 1500 ] || fail "F: watched — the change took ${dt} ms to land, want ≤ 1500 ms (long poll; the held=y line is the mechanism, this bound is CI slack)" "$(cat "$WORK/hub2.log")"
+has "F: …through a held ask"                   "$(cat "$WORK/hub2.log")" 'GET inm="A" wait=3 held=y'
+wait "$LOOP_PID"
+n=$(nget)
+CHECKS=$((CHECKS+1)); [ "$n" -le 8 ] || fail "F: a holding hub — $n asks in a ~4 s loop, want few (each one held)" "$(cat "$WORK/hub2.log")"
+
+# an older hub that ignores wait: immediate 304s keep the 2 s cadence, no spin
+: > "$WORK/hub2.log"; rm -f "$G/hubsess.pid"; : > "$WORK/hub2.nowait"
+FLEET_HUB_SESSIONS_LOOP_SECS=5 PATH="$SHIMPATH" bash "$HUBS" --loop 2>/dev/null
+n=$(nget)
+CHECKS=$((CHECKS+1)); [ "$n" -ge 2 ] && [ "$n" -le 4 ] || fail "F: a hub ignoring wait — $n asks in a 5 s loop, want 2–4 (every 2 s)" "$(cat "$WORK/hub2.log")"
+rm -f "$WORK/hub2.nowait"
+
+# FLEET_HUB_SESSIONS_LONGPOLL=0, and nobody looking: no wait at all
+: > "$WORK/hub2.log"; rm -f "$G/hubsess.pid"
+FLEET_HUB_SESSIONS_LONGPOLL=0 FLEET_HUB_SESSIONS_LOOP_SECS=3 PATH="$SHIMPATH" bash "$HUBS" --loop 2>/dev/null
+hasnt "F: LONGPOLL=0 sends no wait"            "$(cat "$WORK/hub2.log")" 'wait=3'
+has   "F: …but still asks"                     "$(cat "$WORK/hub2.log")" 'wait=-'
+: > "$WORK/hub2.log"; rm -f "$G/hubsess.pid" "$ATTACHED"
+FLEET_HUB_SESSIONS_LOOP_SECS=3 PATH="$SHIMPATH" bash "$HUBS" --loop 2>/dev/null
+eq  "F: unwatched — one ask, no wait"          'GET inm="B" wait=- held=n' "$(cat "$WORK/hub2.log")"
+kill "$SRV_PID" 2>/dev/null; wait "$SRV_PID" 2>/dev/null; SRV_PID=''
+
+printf 'PASS: hub-nudge — %d checks (nudge file + mtime, hook change-only, ETag/304 with #ts re-stamp, 2 s watched / 10 s idle, long poll)\n' "$CHECKS"
 exit 0

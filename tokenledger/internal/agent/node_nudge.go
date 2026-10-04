@@ -23,10 +23,13 @@ import (
 // has.
 
 // Nudge timing. Variables so tests can read them; the defaults are the
-// contract (issue #1481: 250 ms poll, 300 ms debounce, ≤ 2 nudge beats/s).
+// contract (issue #1481: 250 ms poll, ≤ 2 nudge beats/s; the debounce was
+// 300 ms there and is 100 ms since #1526 — the other machine's sidebar now
+// long-polls the hub, so the beat's own delay is most of what is left of the
+// 1 s budget, and a burst of writes still folds into one beat).
 var (
 	nodeNudgePoll     = 250 * time.Millisecond
-	nodeNudgeDebounce = 300 * time.Millisecond
+	nodeNudgeDebounce = 100 * time.Millisecond
 	nodeNudgeMinGap   = 500 * time.Millisecond
 )
 

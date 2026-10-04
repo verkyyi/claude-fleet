@@ -157,6 +157,8 @@ func (s *Server) recordFleets(ep store.Endpoint, hb control.Heartbeat, verify bo
 	for _, id := range rejected {
 		log.Printf("node %s: fleet %s is registered to another machine; refused", ep.ID, id)
 	}
+	// A held fleet_sessions long poll reads again (claude-fleet#1526).
+	s.sessionsChanged.fire()
 	// Issue leases ride the same beat (claude-fleet#1422): a session it
 	// shows renews its lease, a session it no longer shows releases it.
 	s.renewLeases(ep, reports, rejected, s.leaseClock())
@@ -757,7 +759,7 @@ func (s *Server) CallFleetTool(req *http.Request, tool string, args map[string]a
 		refresh, _ := args["refresh"].(bool)
 		return s.FleetList(req, refresh)
 	case "fleet_sessions":
-		return s.FleetSessions(req)
+		return s.fleetSessionsWait(req, fleetSessionsWaitArg(args["wait"]))
 	case "fleet_status":
 		return s.FleetStatus(req, fleetID)
 	case "config_get":
