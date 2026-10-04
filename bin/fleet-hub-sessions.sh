@@ -13,6 +13,10 @@
 #               machine, plus the C1 locator cache control/hub-workers.tsv. A failed
 #               fetch leaves the last cache in place: its rows go on rendering, and
 #               once it is older than FLEET_HUB_SESSIONS_STALE they read 失联.
+#               The same round writes the status bar's two summaries (issue
+#               #1482): global/hub_nodes (/v1/nodes) and global/hub_limits
+#               (/v1/limits) — on their own cadence, FLEET_HUB_SUMMARY_EVERY
+#               (10s), see refresh_summaries below.
 #   --loop      --refresh every FLEET_HUB_SESSIONS_WATCHED_EVERY (2s) while a client
 #               is attached to any fleet session on this machine — someone is
 #               looking — else every FLEET_HUB_SESSIONS_EVERY (10s), for
@@ -503,6 +507,164 @@ EOF
   return 1
 }
 
+# --- The status bar's two summaries (issue #1482, EPIC #1479 C3) ---------------
+# Written on the same round as the sessions, read by bin/fleet-status-lib.sh (the
+# bar, C4's 入口 chip, C5's shell) — never fetched on a render path.
+#   $G/hub_nodes   #ts<US><epoch>, then one line per machine the hub shows:
+#     node<US>online|lost<US>load1<US>ncpu<US>mem_pct<US>sessions<US>fleet_version<US>age<US>mem_used_mb<US>mem_total_mb
+#     (/v1/nodes `machines`: one load per machine; fleet_version is its newest
+#     login's; age is seconds since its last heartbeat when written)
+#   $G/hub_limits  #ts<US><epoch>, then one line per subscription with a reading:
+#     label<US>pct5h<US>pctweek<US>account_uuid<US>hub_label
+#     (/v1/limits?account=all; `label` is this login's accounts/<label>.conf name
+#     whose CCQUOTA_ACCOUNT is that uuid — a window's @cc_account — else the
+#     hub's label; a subscription without a utilization, e.g. codex, is skipped)
+# Both routes are viewer routes, asked only when this login's identity (#1475's
+# ladder: seam, certificate, viewer token) IS the viewer token: a certificate
+# opens neither and a certificate round never spends the token, no identity
+# means no fetch — then nothing is written and the bar shows `?` / no account
+# chip (a cert door for them: #1502); a failed fetch keeps the last file. Seams: FLEET_HUB_NODES_CMD / FLEET_HUB_LIMITS_CMD
+# print the JSON; a run driven by FLEET_HUB_SESSIONS_CMD never goes to the network
+# for these either (a selftest must not reach a real hub through hub.json).
+fetch_viewer() {   # fetch_viewer <path> → the JSON on stdout; rc 1 when no answer
+  local url
+  [ -z "${FLEET_HUB_SESSIONS_CMD:-}" ] || return 1
+  url=$(hub_url) || return 1
+  command -v curl >/dev/null 2>&1 || return 1
+  # #1475's ladder, not a fallback: the login's identity is the certificate when
+  # it has a valid one, and a certificate round never spends the viewer token —
+  # so only a token identity asks these two routes (a cert door: #1502).
+  case "$(cert_state)" in ok\ *) return 1 ;; esac
+  token_source >/dev/null || return 1
+  curl -fsS -m 8 -H "Authorization: Bearer $TOK" "$url$1" 2>/dev/null
+}
+fetch_nodes() {
+  if [ -n "${FLEET_HUB_NODES_CMD:-}" ]; then bash -c "$FLEET_HUB_NODES_CMD" </dev/null 2>/dev/null; return; fi
+  fetch_viewer /v1/nodes
+}
+fetch_limits() {
+  if [ -n "${FLEET_HUB_LIMITS_CMD:-}" ]; then bash -c "$FLEET_HUB_LIMITS_CMD" </dev/null 2>/dev/null; return; fi
+  fetch_viewer '/v1/limits?account=all'
+}
+# Their own cadence (FLEET_HUB_SUMMARY_EVERY, 10s; 0 = every round): the loop
+# asks fleet_sessions every 2s while someone is looking (#1481, a conditional GET),
+# but these two are full answers — a stamp of the last attempt, hit or miss, holds
+# them to the old pace.
+SUMMARY_EVERY="${FLEET_HUB_SUMMARY_EVERY:-10}"; case "$SUMMARY_EVERY" in ''|*[!0-9]*) SUMMARY_EVERY=10 ;; esac
+SUMF="$G/hubsum.ts"
+refresh_summaries() {
+  hub_on || return 0
+  local nj lj now last=''
+  mkdir -p "$G" 2>/dev/null || return 1
+  now=$(date +%s)
+  read -r last < "$SUMF" 2>/dev/null || last=''
+  case "$last" in ''|*[!0-9]*) ;; *) [ $(( now - last )) -lt "$SUMMARY_EVERY" ] && return 0 ;; esac
+  printf '%s\n' "$now" > "$SUMF"
+  nj=$(mktemp "$G/hubnodes.json.XXXXXX") || return 1
+  if fetch_nodes >"$nj" && [ -s "$nj" ]; then
+    python3 - "$nj" "$G/hub_nodes" "${FLEET_NODE_ALIASES:-}" "$now" <<'PY' || printf 'fleet-hub-sessions: /v1/nodes did not answer a machine list — keeping the last hub_nodes\n' >&2
+import json, os, re, sys, tempfile
+from datetime import datetime, timezone
+jpath, out, aliases, now = sys.argv[1:5]
+now = int(now)
+data = json.load(open(jpath, encoding="utf-8"))
+machines = data.get("machines")
+if not isinstance(machines, list):
+    sys.exit(1)
+alias = dict(a.split("=", 1) for a in aliases.split() if "=" in a)
+short = lambda h: (h or "").split(".", 1)[0]
+label = lambda h: alias.get(h) or alias.get(short(h)) or short(h) or "?"
+clean = lambda v: re.sub(r"[\t\n\r\x1f]", " ", str(v if v is not None else ""))
+def epoch(iso):
+    try:
+        s = str(iso or "")
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        s = re.sub(r"(\.\d{6})\d+", r"\1", s)
+        d = datetime.fromisoformat(s)
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=timezone.utc)
+        return int(d.timestamp())
+    except Exception:
+        return 0
+version = {}
+for n in data.get("nodes") or []:
+    if not isinstance(n, dict) or not n.get("hostname") or not n.get("fleet_version"):
+        continue
+    t = epoch(n.get("last_heartbeat"))
+    if t >= version.get(n["hostname"], (0, ""))[0]:
+        version[n["hostname"]] = (t, n["fleet_version"])
+lines = ["#ts\x1f%d\n" % now]
+for m in machines:
+    if not isinstance(m, dict) or not m.get("hostname"):
+        continue
+    h = m["hostname"]
+    try:
+        total = int(m.get("mem_total_bytes") or 0); free = int(m.get("mem_free_bytes") or 0)
+        load1 = float(m.get("load1") or 0); ncpu = int(m.get("ncpu") or 0); sess = int(m.get("sessions") or 0)
+    except (TypeError, ValueError):
+        continue
+    used = max(total - free, 0)
+    hb = epoch(m.get("last_heartbeat"))
+    lines.append("\x1f".join(clean(v) for v in (
+        label(h), "online" if m.get("status") == "online" else "lost", "%.2f" % load1, ncpu,
+        used * 100 // total if total else "", sess, version.get(h, (0, ""))[1],
+        max(now - hb, 0) if hb else "", used // 1048576, total // 1048576)) + "\n")
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(out), prefix=".hubnodes.")
+with os.fdopen(fd, "w", encoding="utf-8") as f:
+    f.write("".join(lines))
+os.replace(tmp, out)
+PY
+  fi
+  rm -f "$nj"
+  lj=$(mktemp "$G/hublimits.json.XXXXXX") || return 1
+  if fetch_limits >"$lj" && [ -s "$lj" ]; then
+    python3 - "$lj" "$G/hub_limits" "${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}" "$now" <<'PY' || printf 'fleet-hub-sessions: /v1/limits did not answer a per_account list — keeping the last hub_limits\n' >&2
+import glob, json, os, re, sys, tempfile
+jpath, out, accdir, now = sys.argv[1:5]
+data = json.load(open(jpath, encoding="utf-8"))
+per = data.get("per_account")
+if not isinstance(per, list):
+    sys.exit(1)
+clean = lambda v: re.sub(r"[\t\n\r\x1f]", " ", str(v if v is not None else ""))
+local = {}   # account uuid → this login's label (accounts/<label>.conf, CCQUOTA_ACCOUNT=…)
+for conf in sorted(glob.glob(os.path.join(accdir, "*.conf"))):
+    try:
+        for line in open(conf, encoding="utf-8"):
+            m = re.match(r'\s*(?:export\s+)?CCQUOTA_ACCOUNT=["\']?([^"\'\s#]+)', line)
+            if m:
+                local[m.group(1)] = os.path.basename(conf)[:-5]
+    except OSError:
+        pass
+def pct(w):
+    try:
+        return "" if w is None or w.get("utilization") is None else str(int(float(w["utilization"]) + 0.5))
+    except (TypeError, ValueError, AttributeError):
+        return ""
+lines = ["#ts\x1f%d\n" % int(now)]
+for a in per:
+    if not isinstance(a, dict):
+        continue
+    lim = a.get("limits") or {}
+    if not isinstance(lim, dict) or not lim.get("available"):
+        continue
+    p5, pw = pct(lim.get("five_hour")), pct(lim.get("seven_day"))
+    if p5 == "" and pw == "":
+        continue
+    uuid = a.get("account_uuid") or ""
+    lines.append("\x1f".join(clean(v) for v in (local.get(uuid) or a.get("label") or uuid, p5, pw, uuid, a.get("label") or "")) + "\n")
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(out), prefix=".hublimits.")
+with os.fdopen(fd, "w", encoding="utf-8") as f:
+    f.write("".join(lines))
+os.replace(tmp, out)
+PY
+  fi
+  rm -f "$lj"
+  return 0
+}
+# One round: the sessions (its rc), then the two summaries.
+refresh_all() { local rc; refresh; rc=$?; refresh_summaries; return "$rc"; }
+
 loop() {
   hub_on || return 0
   mkdir -p "$G" 2>/dev/null || return 1
@@ -512,7 +674,7 @@ loop() {
   printf '%s\n' "$$" > "$PIDF"
   end=$(( $(date +%s) + LOOP_SECS ))
   while :; do
-    refresh 2>/dev/null
+    refresh_all 2>/dev/null
     every=$EVERY; watched && every=$WATCHED_EVERY
     [ $(( $(date +%s) + every )) -le "$end" ] || break
     sleep "$every"
@@ -532,7 +694,7 @@ ensure() {
 
 cert_paths   # CERT_KEY / CERT_PUB for every mode (cert_state runs in a subshell)
 case "${1:-}" in
-  --refresh)  refresh ;;
+  --refresh)  refresh_all ;;
   --loop)     loop ;;
   --ensure)   ensure ;;
   --identity) identity ;;

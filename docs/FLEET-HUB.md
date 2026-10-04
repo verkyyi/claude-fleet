@@ -177,6 +177,36 @@ row (the sidebar's own window excepted), and a cached local row whose window is
 gone is not one either. On the default source the cache's local rows are skipped
 and nothing changes; the hub list (prefix+F9) always keeps its local rows.
 
+**The status bar shows the machine the current session is on** (issue #1482,
+EPIC #1479 C3). In hub mode — `CCQUOTA_FLEET=1`, the fleet's
+`FLEET_SIDEBAR_SOURCE=hub`, and a `remote_<sess>` cache on disk — the bottom
+bar's left part is three chips about THE WINDOW YOU ARE ON, not this machine:
+`m4 ● │ CPU 16% │ MEM 4.0G/16.0G │ ◉ icloud 5h 63% 周 65% │ 入口 ●`. The machine
+is this one for a local window (its live CPU / MEM / DSK, as always) and the
+OTHER machine for a proxy window (`@remote`, `fleet-remote-view.sh`): `●` with
+its load per core and memory off the hub, `○ 失联 3m` when the hub calls it
+lost, `?` when the cache has no row. The account is the window's `@cc_account`
+with its 5h / week quota (the account knobs' colour bands); omitted when neither
+side knows it. `入口 ●` while the cache is fresh, `○ 失联 Nm` once it is older
+than `FLEET_HUB_SESSIONS_STALE`. The window list (`window-status-format`) goes
+blank in hub mode and is restored on leaving (saved in `@status_wsf_saved` /
+`@status_wscf_saved`, flag `@status_wlist_saved`).
+The conf's `status-right` passes the client's current window as `k=v` args
+(`sess= win= remote= acct= wsf= wscf= wsaved=`), so tmux re-runs the bar the
+moment you switch windows. Data: the same refresh loop writes, every
+`FLEET_HUB_SUMMARY_EVERY` (10 s, whatever the sessions' pace), `global/hub_nodes` (`/v1/nodes`: `node online|lost load1 ncpu mem_pct sessions
+fleet_version age mem_used_mb mem_total_mb`) and `global/hub_limits`
+(`/v1/limits?account=all`: `label pct5h pctweek account_uuid hub_label`, the
+label being this login's `accounts/<label>.conf` whose `CCQUOTA_ACCOUNT` is that
+uuid, else the hub's). Both are viewer routes, asked only when the login's
+identity (the #1475 ladder) is the viewer token: a connection certificate opens
+neither and a certificate round never spends the token, so a login that did
+`fleet login` sees `?` and no account chip until the hub grows a cert door
+(#1502).
+`bin/fleet-status-lib.sh` holds the one rule (`fleet_status_node`: `@remote` →
+that machine, else here) and the readers; the shell (C5) reuses it. Off hub mode
+the bar is byte for byte what it was.
+
 **Who the hub shows you** (issue #1475). `fleet-hub-sessions.sh` asks as **you**:
 your connection certificate (`~/.ssh/fleet-cert` + `-cert.pub`, from
 `fleet login`, `FLEET_CERT` to name another) signs `fleet-sessions <ts>` under

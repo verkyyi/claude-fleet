@@ -1584,7 +1584,11 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # the hub's: a window the hub has not seen yet (≤ 15 s after a spawn) is not on
 # the list yet, your own sidebar's window excepted. Sidebar only (the hub list,
 # prefix+F9, keeps its local rows); needs CCQUOTA_FLEET=1 and a cache on disk,
-# else `hub` behaves as `local`.
+# else `hub` behaves as `local`. `hub` also switches the STATUS BAR (issue
+# #1482): its left part becomes the machine the current window's session is on
+# (this one, or the proxy window's), that window's account quota and the hub
+# (`m4 ● │ CPU 16% │ MEM 4.0G/16.0G │ ◉ icloud 5h 63% 周 65% │ 入口 ●`), and the
+# window list goes blank — back to today's bar, and the list restored, on `local`.
 # @label=Sidebar list source @group=status @tier=internal @scope=fleet @edit=str
 #FLEET_SIDEBAR_SOURCE=local
 # @label=Rotate early at @group=accounts @tier=advanced @scope=global @edit=int @unit=%
