@@ -5,7 +5,8 @@
 #   field1 = jump target · field2 = stable summary key (window-id) · field3 = display
 # Data: @claude_state (no LLM), everything slow from collector caches.
 # --sidebar emits wid US state US glyph US name US tree US badge US depth US detail
-# (issue #1328: the pieces, so the view lays them out to its own width), without
+# US node US issue US pr US ctx (issues #1328/#1475/#1532: the pieces, so the
+# view lays them out to its own width), without
 # a header. It shares the live hub's ordering/folds, but never follows its
 # landed-history toggle.
 #
@@ -1151,7 +1152,10 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     # — empty for a local row. The view never draws it (a local row and a remote
     # row LOOK the same; the machine is the row menu's title): `!` dims the row,
     # `~` puts a dim ⇄ at its end, that is all the paint reads.
-    buf+="$rgrp	$pinned	$gpath	$wid$US$state$US$gl$US$label$US${treed:- }$US$kidd$US$depth$US$ndet$US${rnode:+$hnd}"$'\n'
+    # fields 10-12 (issue #1532): the hub's issue · PR · ctx% cells, bare text
+    # (`#1532` · `#1552✓` · `45%`; `—` / `·` when there is none). The view draws
+    # them only while its info column is open (⌃i), right-aligned.
+    buf+="$rgrp	$pinned	$gpath	$wid$US$state$US$gl$US$label$US${treed:- }$US$kidd$US$depth$US$ndet$US${rnode:+$hnd}$US$issd$US$ptxt$US$pct"$'\n'
     continue
   fi
   # full row: glyph1·issue5·tree2·window26·⟨flex: tags, badge⟩·act8·PR7·ctx4

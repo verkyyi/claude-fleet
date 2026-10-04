@@ -122,9 +122,17 @@ preview ctrl-p alt-p' ;;
 # `kill_eol` everything after it. ⌃a is a common tmux prefix, so each takes its
 # ⌥ fallback the same way. ←→ Home End ⌥←→ ⌃u are not rows: they are named
 # keys (or, for ⌃u, predate this table), handled in fleet-sidebar.py edit_of.
+# The full-screen list's own actions (issue #1532), so the sidebar can stand in
+# for it: `scratch` / `view` / `reload` are the hub's ⌃s / ⌃t / ⌃r, same chords,
+# and `info` (⌃i — the Tab key, one press) opens the issue · PR · ctx% column.
+# Chords, not the letters t / i: a letter types (a name may start with either).
 sidebar) TABLE='new ctrl-n alt-n
 menu . .
 restore ctrl-o alt-o
+scratch ctrl-s alt-s
+view ctrl-t alt-t
+reload ctrl-r alt-r
+info ctrl-i alt-i
 help ? ?
 bol ctrl-a alt-a
 eol ctrl-e alt-e
