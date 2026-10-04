@@ -1686,6 +1686,24 @@ try:
     _, rshape = menu_shape(remote_wid)
     check(rshape == 'e|ma|qcx|n1og|E',
           'the remote row menu is not grouped 进入/消息/控制/其它 + Esc: %r' % rshape)
+    # In the SHELL (issue #1518) the row-less group is gone — new task, new on
+    # m4, restore, add repo run scripts its computer does not have — and the
+    # frame closes cleanly (no rule left dangling). Unset, the shape above is
+    # the golden: the machine's menu is byte for byte what it was.
+    sh_out = subprocess.run(['bash', str(bin_dir / 'fleet-sidebar.sh'), 'menu', 'fleet-test', remote_wid, '--print'],
+                            env=dict(env, FLEET_SHELL='1'), text=True, capture_output=True, timeout=15).stdout
+    sh_shape = ''.join('E' if l.split('\t')[1] == '-Esc 关闭' else (l.split('\t')[0] if l.split('\t')[1] else '|')
+                       for l in sh_out.splitlines() if l.count('\t') == 2 and not l.startswith('title\t'))
+    check(sh_shape == 'e|ma|qcx|E', 'the shell remote menu still lists the row-less group: %r' % sh_shape)
+    check(not any(s in sh_out for s in ('dash-issue-new.sh', 'fleet-restore-pick.sh', 'dash-repo-add.sh')),
+          'the shell remote menu names a machine-only script: %r' % sh_out)
+    check(sh_out.split('\n', 1)[0] == 'title\t' + menu_shape(remote_wid)[0],
+          'the shell remote menu title differs: %r' % sh_out.split('\n', 1)[0])
+    sh_keys = subprocess.run(['bash', str(bin_dir / 'fleet-sidebar-menu.sh'), '--keys'],
+                             env=dict(env, FLEET_SHELL='1'), text=True, capture_output=True, timeout=15).stdout
+    all_keys = command(['bash', str(bin_dir / 'fleet-sidebar-menu.sh'), '--keys']).stdout
+    check({l.split('\t')[0] for l in all_keys.splitlines()} - {l.split('\t')[0] for l in sh_keys.splitlines()} == {'n', '1-9', 'o', 'g'},
+          'the shell `?` sheet does not drop exactly the row-less items: %r' % sh_keys)
     local_items = menu_items(w1)
     local_cmds = menu_commands(w1)
     check(local_items.get('1') == '新建到 m4…' and '--node=m4' in local_cmds['1'],

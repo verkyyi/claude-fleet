@@ -97,6 +97,16 @@ HELP_ROW = tr("sidebar_help_row")
 # key sheet — so the operator need not switch to English first; inside a name
 # they type as themselves, like `.` and `?` do.
 KEY_ALIASES = {"。": ".", "．": ".", "？": "?"}
+# The SHELL (bin/fleet-shell.sh, issue #1484) runs this view on a computer with
+# no fleet: no conf, no gh, no worktree, and its install ships none of the
+# scripts a new task / restore / scratch spawn runs. There every row is on a
+# machine, so those keys say so (issue #1518) instead of doing nothing.
+SHELL = os.environ.get("FLEET_SHELL") == "1"
+
+
+def shell_refusal():
+    """The toast (text, until) a local-only key shows in the shell."""
+    return tr("sidebar_shell_local_only"), time.monotonic() + TOAST_SECS
 # The paste route's PIN (issue #1105). tmux forwards a bracketed paste to the
 # CLIENT's pane before any key table, so no bind can catch one; under the
 # `active-pane` client flag `select-pane` moves that client's own pane instead of
@@ -452,11 +462,15 @@ def open_help(screen, env):
 def open_tap(screen, session, action, key, env):
     """A second tap's popup (issue #1032): a session row's menu, or a selected
     heading's ⌃n popup with its repo pinned — selection_repo resolves `hdr:…`
-    exactly as it does for a typed name, so both paths agree on the target."""
+    exactly as it does for a typed name, so both paths agree on the target.
+    False when the shell refuses the heading's popup (issue #1518)."""
     if action == "new":
+        if SHELL:
+            return False
         new_task(screen, env, selection_repo(session, key, env))
     else:
         open_menu(session, key, env)
+    return True
 
 
 def open_menu(session, wid, env):
@@ -1726,7 +1740,9 @@ def ui(screen, session, worker, lock):
             # A typed name: start its scratch session (the bind kept the
             # keyboard here while @sidebar_input was set). One spawn at a time.
             follow_at = None
-            if spawning is None:
+            if SHELL:
+                toast, toast_until = shell_refusal()
+            elif spawning is None:
                 toast = ""
                 spawning = spawn_scratch(line.text.strip(), env,
                                          selection_repo(session, selected or window, env))
@@ -1775,20 +1791,28 @@ def ui(screen, session, worker, lock):
             # just before must not fire after it and switch away from the window
             # the spawn made current.
             follow_at = None
-            new_task(screen, env, selection_repo(session, selected or window, env))
+            if SHELL:
+                toast, toast_until = shell_refusal()
+            else:
+                new_task(screen, env, selection_repo(session, selected or window, env))
             refresh_at = 0
         elif key == 15:
             # ⌃o (`restore`; its ⌥o fallback is rewritten to ⌃o by the bind). The
             # restored window becomes current; the hook moves this view there.
             follow_at = None
-            restore_pick(screen, session, env)
+            if SHELL:
+                toast, toast_until = shell_refusal()
+            else:
+                restore_pick(screen, session, env)
             refresh_at = 0
         elif key == 19:
             # ⌃s (`scratch`, issue #1532): the hub's ⌃s — a scratch session NOW,
             # unnamed (a typed name, if any, names it), its repo the highlighted
             # row's. It becomes current like a typed ↵'s; a refusal toasts.
             follow_at = None
-            if spawning is None:
+            if SHELL:
+                toast, toast_until = shell_refusal()
+            elif spawning is None:
                 toast = ""
                 anchor = window if not selected or selected.startswith("landed:") else selected
                 spawning = spawn_scratch(line.text.strip(), env, selection=anchor)
@@ -1859,7 +1883,8 @@ def ui(screen, session, worker, lock):
                     # the release, for the same reason as the key sheet.
                     follow_at = None
                     if buttons & curses.BUTTON1_CLICKED:
-                        open_tap(screen, session, action, hit, env)
+                        if not open_tap(screen, session, action, hit, env):
+                            toast, toast_until = shell_refusal()
                     else:
                         armed = hit
                 elif action == "restore":
@@ -1889,8 +1914,9 @@ def ui(screen, session, worker, lock):
                     view, rows, selected = "live", live_rows, window
                     refresh_at = 0
                 elif armed is not None and hit == armed:
-                    open_tap(screen, session, "new" if armed.startswith("hdr:") else "menu",
-                             armed, env)
+                    if not open_tap(screen, session, "new" if armed.startswith("hdr:") else "menu",
+                                    armed, env):
+                        toast, toast_until = shell_refusal()
                     refresh_at = 0
                 armed = None
             elif buttons & curses.BUTTON4_PRESSED and ids:
