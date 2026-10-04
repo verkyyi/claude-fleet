@@ -380,7 +380,7 @@ WLIST=${WLIST//\\037/$US}
 # to its machine's group at the foot, `─ m4 失联 3 分钟 ─`, dimmed — so its
 # origin is dropped here, and so is the origin of any row whose parent is lost
 # (a child cannot indent under a parent that sorts somewhere else).
-RME=''; RN_IDX=' '; RN_K=0; RCNT=0; LGRP_BASE=1000000
+RME=''; RN_IDX=' '; RN_K=0; LGRP_BASE=1000000
 HUBSRC=0; [ "$SIDEBAR" = 1 ] && [ "${FLEET_SIDEBAR_SOURCE:-local}" = hub ] && HUBSRC=1
 if [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ -n "${FLEET_SESSION:-}" ] && [ -s "$G/remote_$FLEET_SESSION" ]; then
   RLIST=''; _rn=90000; _rts=0; _rstale=0; _rlostn=' '; _rlostw=' '; _rrows=(); _lwids=' '
@@ -704,7 +704,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # row's end; a lost row sorts into its machine's group at the foot (lgrp).
   rnode=''; rlost=''; lgrp=''
   case "$wid" in wid:*)
-    RCNT=$((RCNT + 1)); rnode=${hnd%[!~]}
+    rnode=${hnd%[!~]}
     case "$hnd" in *!) rlost=1
       _t=${RN_IDX#* "$rnode"=}; _t=${_t%% *}
       case "$_t" in ''|*[!0-9]*) lgrp=$LGRP_BASE ;; *) lgrp=$((LGRP_BASE + _t)) ;; esac ;;
@@ -1290,38 +1290,26 @@ fi
 
 # --- the other machines (issue #1475) ------------------------------------------
 # Only with a remote cache that names this machine (`#me`): a one-machine fleet,
-# or the hub off, adds not one line here. Two things:
-#   • the MACHINE STATUS LINE, the very first row (group below the pin tier):
-#     `● m5 22 · ● m4 3` — this machine first with its own live rows (NSESS less
-#     the remote rows), then each other machine: `●` online, `◐` 维护中 (the
-#     operator's flag, #1427: heard, no new work sent there), `○` lost with how
-#     long the hub has been without it (its last observation, else the cache's
-#     age). An inert `hdr` row: never a cursor stop, never a fold target.
-#   • one LOST-GROUP heading per lost machine that has rows this frame,
-#     `─ m4 失联 3 分钟 ─`, above its dimmed rows at the foot (LGRP_BASE+k).
+# or the hub off, adds not one line here. One LOST-GROUP heading per lost machine
+# that has rows this frame, `─ m4 失联 3 分钟 ─`, above its dimmed rows at the
+# foot (LGRP_BASE+k). There is no machine status line at the top any more
+# (issue #1531): it repeated the bar's machine cell, and its counts named no
+# row below it — which machine is online / 维护中 / lost lives in the bar's
+# machine cell and these headings only.
 if [ -n "$RME" ]; then
-  _sl="● $RME $(( NSESS - RCNT ))"
   _k=1
   while [ "$_k" -le "$RN_K" ]; do
-    _mins=0
-    if [ "${RN_AV[_k]}" = lost ]; then
-      _seen=${RN_SEEN[_k]}; [ "$_seen" -gt 0 ] || _seen=$_rts
-      # the hub itself silent (#1483): unheard at least since its last answer
-      [ "${_rstale:-0}" = 1 ] && [ "${FSH_TS:-0}" -gt 0 ] && [ "$_seen" -gt "$FSH_TS" ] && _seen=$FSH_TS
-      [ "$_seen" -gt 0 ] && [ "$NOW" -gt "$_seen" ] && _mins=$(( (NOW - _seen) / 60 ))
-      _sl+=" · ○ ${RN_LABEL[_k]} ${RN_N[_k]}"
-      [ "$_mins" -gt 0 ] && _sl+=" · $(fleet_ui_t node_silent_fmt "$_mins")"
-    elif [ "${RN_AV[_k]}" = maintenance ]; then
-      # 维护中 (#1427): heard, but the operator is taking it down — no new
-      # work goes there; its rows stay live (never dimmed, never a lost group)
-      _sl+=" · ◐ ${RN_LABEL[_k]} ${RN_N[_k]} $(fleet_ui_t node_maint)"
-    else
-      _sl+=" · ● ${RN_LABEL[_k]} ${RN_N[_k]}"
-    fi
     # the group heading: a machine with lost rows this frame (the hub may call
     # one fleet lost while the machine's node is still heard — the rows still
     # gather under the machine's name, without a duration)
     if [ "${LCNT[_k]:-0}" -gt 0 ]; then
+      _mins=0
+      if [ "${RN_AV[_k]}" = lost ]; then
+        _seen=${RN_SEEN[_k]}; [ "$_seen" -gt 0 ] || _seen=$_rts
+        # the hub itself silent (#1483): unheard at least since its last answer
+        [ "${_rstale:-0}" = 1 ] && [ "${FSH_TS:-0}" -gt 0 ] && [ "$_seen" -gt "$FSH_TS" ] && _seen=$FSH_TS
+        [ "$_seen" -gt 0 ] && [ "$NOW" -gt "$_seen" ] && _mins=$(( (NOW - _seen) / 60 ))
+      fi
       if [ "$_mins" -gt 0 ]; then t=$(fleet_ui_t lost_heading_fmt "${RN_LABEL[_k]}" "$_mins")
       else t=$(fleet_ui_t lost_heading_short_fmt "${RN_LABEL[_k]}"); fi
       if [ "$SIDEBAR" = 1 ]; then
@@ -1332,12 +1320,7 @@ if [ -n "$RME" ]; then
     fi
     _k=$((_k + 1))
   done
-  if [ "$SIDEBAR" = 1 ]; then
-    buf+="$((PGRP - 1))	-1	0	hdr$US$US$US$_sl$US "$'\n'
-  else
-    buf+="$((PGRP - 1))	-1	0	hdr${US}hdr${US}${GY}  ${_sl}${R}"$'\n'
-  fi
-  unset _sl _k _mins _seen
+  unset _k _mins _seen
 fi
 
 # the empty state (issue #998): a frame with no session row says so, and how to

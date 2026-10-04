@@ -1,10 +1,10 @@
 // The task-progress band above the prompt (issue #1339, EPIC #1334 C5).
 //
-// One row: task · PR + checks · EPIC k/N · children k/N n! · context %, laid
-// out to `e.props.bodyColumns` and shedding segments right-to-left by
-// importance when narrow (progress-model.ts DROP_ORDER). The hub and a scratch
-// window show only children and context. `!` means it needs you; no sleep
-// durations — the same reading as the sidebar (#1328).
+// One segment: this issue's PR + checks (`PR #N ✓/✗!/…`, issue #1527). Task,
+// EPIC, children and context % are the top-right corner's and the sidebar's,
+// so the band no longer repeats them; a window with no PR — the hub, a
+// scratch — draws nothing and the row takes no height. `!` means it needs you;
+// no sleep durations — the same reading as the sidebar (#1328).
 //
 // Data: every PROGRESS_MS, ONE tmux call (this window's options + one
 // list-windows of this fleet's own server) and `$.fs` reads of the dash's
@@ -24,8 +24,7 @@ import type { EngineInterface, On, Timer } from 'claude-code'
 import type { ProgressSnapshot } from '../types'
 import { isOpen } from './gate'
 import {
-  children, epicProgress, hasLabel, layout, newAlerts, parseLedger, parseParents,
-  parseTmux, PROGRESS_MS, prFor, segments, selfKey, slug, SEP, tmuxArgv,
+  children, newAlerts, parseLedger, parseTmux, PROGRESS_MS, prFor, segments, selfKey, slug, tmuxArgv,
 } from './progress-model'
 import { TMUX_TIMEOUT_MS } from './tmux'
 
@@ -73,40 +72,13 @@ async function refreshProgress($: EngineInterface): Promise<void> {
   }
   const kids = children(self, windows, parseLedger(ledgerText))
 
-  let pr: ProgressSnapshot['pr'] = null
-  let epic: ProgressSnapshot['epic'] = null
-  if (self.issue !== null && s !== '') {
-    pr = prFor(await readOr($, join(dash, s, 'prmap')), `issue-${self.issue}`)
-    const parents = parseParents(await readOr($, join(dash, s, 'parents')))
-    const parent = parents.get(self.issue)
-    if (parent !== undefined) {
-      const storeKey = `epicSeen:${self.repo}#${parent}`
-      const seen = await $.store.get(storeKey)
-      const known = Array.isArray(seen) ? seen.filter((n): n is number => typeof n === 'number') : []
-      // A member that closed before any session saw it open is still on record
-      // if it left EPIC evidence (fleet-evidence.sh: one folder per member).
-      const evidence = join(conf, 'fleets', self.session, 'by-repo', s, 'epic', String(parent), 'evidence')
-      const filed = (await $.fs.list(evidence).catch(() => []))
-        .map(x => (/^\d+$/.test(x.name) ? Number(x.name) : NaN))
-        .filter(n => !Number.isNaN(n))
-      const p = epicProgress(parents, parent, [...known, ...filed])
-      if (p.members.length !== known.length) await $.store.set(storeKey, p.members)
-      const isEpic = hasLabel(await readOr($, join(dash, s, 'labels')), parent, 'epic')
-      epic = { number: parent, isEpic, done: p.done, total: p.total }
-    }
-  }
-
+  const pr = self.issue !== null && s !== ''
+    ? prFor(await readOr($, join(dash, s, 'prmap')), `issue-${self.issue}`)
+    : null
   const snap: ProgressSnapshot = {
     issue: self.issue,
-    pr: self.issue === null ? null : pr,
-    epic: self.issue === null ? null : epic,
-    children: kids.length === 0 ? null : {
-      done: kids.filter(k => k.glyph === '✓').length,
-      total: kids.length,
-      needs: kids.filter(k => k.glyph === '!').length,
-    },
+    pr,
     needsKids: kids.filter(k => k.glyph === '!').map(k => k.key),
-    ctxPct: self.ctxPct,
   }
   await update($, progress, () => snap)
   const { toasts, keep } = newAlerts(await read($, alerts), snap)
@@ -137,14 +109,13 @@ export function registerProgress(on: On): void {
     // would otherwise never be redrawn when the first refresh lands.
     const snap = await read($, progress)
     if (!isOpen() || e.props.hasSurvey || snap === null) return next(e)
-    const kept = layout(segments(snap), e.props.bodyColumns)
+    const kept = segments(snap)
     if (kept.length === 0) return next(e)
     const { Box, Text } = $.ui.resolve(e)
     return (
       <Box key="fleet-progress" flexDirection="row">
-        {kept.map((seg, i) => (
+        {kept.map(seg => (
           <Text key={seg.id} color={seg.color} wrap="truncate-end">
-            {i > 0 ? <Text dimColor>{SEP}</Text> : ''}
             {seg.text}
           </Text>
         ))}
