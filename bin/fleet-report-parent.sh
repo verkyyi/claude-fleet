@@ -50,12 +50,12 @@
 # child's SHIP path and must never block it or turn a landed PR into an error.
 # Exit 2 is reserved for a usage mistake (bad/missing --state, unknown flag).
 #
-# THE PARENT ACROSS MACHINES (issue #1420). A spawn also stamps the parent's
-# worker_id as `@origin_wid`. When that id belongs to a fleet on THIS machine (or
-# there is none) everything below runs exactly as before. When it names another
-# machine's fleet, the report is ledgered but NOT sent: it says where the parent is
-# (fleet_worker_locate) on stderr and exits 0 — never to a local window that merely
-# carries the same key. EPIC #1419 C2 carries it across.
+# THE PARENT ACROSS MACHINES (issues #1420, #1421). A spawn also stamps the
+# parent's worker_id as `@origin_wid`. On THIS machine (or none) all runs as before.
+# On another machine's fleet the report goes to the hub's OUTBOX (CCQUOTA_FLEET=1),
+# and the parent's machine ledgers + delivers it (bin/fleet-hub-node.sh) — never a
+# local window that merely carries the same key. No hub: ledgered here, not sent.
+#
 #
 # On a delivered report the child's window is stamped `@reported 1`, which is what
 # stops the reaper fallback (session-end-hook.sh / dash-reap.sh) sending a second,
@@ -277,6 +277,90 @@ else
 fi
 UST=$(printf '%s' "$STATE" | tr '[:lower:]' '[:upper:]')
 
+# --- the envelope: FIXED shape, 4 lines typical, 6 at its widest ---------------
+# envelope → $msg + $st. A function (issue #1421): a parent on another machine gets
+# the same envelope, built here and carried there by the hub.
+envelope() {
+  # Fixed because it is read by two audiences with opposite needs: the parent model,
+  # which must be able to judge it at a glance and get straight back to its OWN
+  # issue, and whatever later wants to parse it. `no reply needed` is load-bearing —
+  # without it a fan-out of five children costs the parent five REPLIES on top of
+  # five interrupts, and a parent near its handoff can least afford them.
+  case "$STATE" in
+    merged)  st="MERGED${PR:+ (PR #${PR//[^0-9]/})}" ;;
+    blocked) st="BLOCKED${PR:+ (PR #${PR//[^0-9]/})}" ;;
+    failed)  st="FAILED${PR:+ (PR #${PR//[^0-9]/})}" ;;
+    stopped) st="STOPPED (no ship report)" ;;
+    reaped)  st="REAPED${VERDICT:+ ($VERDICT)}" ;;
+    # only reached when a `needs` child lifts a silent state to loud (report_tier)
+    waiting) st="WAITING${VERDICT:+ ($VERDICT)}" ;;
+    idle)    st="IDLE${VERDICT:+ ($VERDICT)}" ;;
+  esac
+  msg="[child-report] $label${wname:+ \"$wname\"}"$'\n'"state: $st · branch $BRANCH"
+  # the stand-in note rides the state line: the envelope's size is the point of it
+  [ -n "${RELAY_FROM:-}" ] && msg="$msg · 原 parent $RELAY_FROM 已回收，代收"
+  if [ -n "$SUMMARY" ]; then
+    # ≤3 lines, ≤200 chars each: the cap is the point of the envelope, not a
+    # formatting nicety — every line here is context the parent did not choose to
+    # spend. header + state + summary + `no reply needed` ⇒ 4 lines for the usual
+    # one-line summary, 6 at the absolute widest.
+    # `<`/`>` stripped for the same reason the title is: a summary is model-written
+    # text and must not be able to close the peer envelope it rides inside.
+    sum=$(printf '%s' "$SUMMARY" | tr -d '<>' | head -3 | cut -c1-200)
+    [ -n "$sum" ] && msg="$msg"$'\n'"summary: $sum"
+  fi
+  # The language rule (issue #620) rides ON the `no reply needed` line rather than
+  # taking a fifth: the envelope's size is the point of the envelope, and a parent
+  # near its handoff can least afford an extra line. `no reply needed` still LEADS
+  # the line, which is what both audiences read first.
+  msg="$msg"$'\n'"no reply needed${FLEET_LANG_RULE_NOTICE:+ — $FLEET_LANG_RULE_NOTICE}"
+}
+
+# --- a parent on ANOTHER machine (issues #1420, #1421) ----------------------------
+# The parent's book lives on ITS machine, so the report is not ledgered here — a
+# same-key window of this fleet may be someone else entirely. It goes to the hub
+# instead, through this machine's agent (the outbox, fleet_hub_put): every tier,
+# silent included, since the parent's ledger is the record; the parent's machine
+# applies the tier and the delivery mode exactly as a local report would. The id
+# is `<this child's worker_id>#<epoch>.<n>` — the hub's idempotency key, so the
+# agent's resends are one delivery. No hub (CCQUOTA_FLEET off, no fleet UUID, no
+# outbox) ⇒ C1's answer: ledgered here, not sent, said on stderr.
+if [ -n "$owid" ] && ! fleet_wid_home "$owid" "$sess" >/dev/null 2>&1; then
+  _loc=$(fleet_worker_locate "$owid" "$sess" 2>/dev/null)
+  _self=''
+  [ -n "${selfwin:-}" ] && _self=$(fleet_worker_id "$sess" "$selfwin" 2>/dev/null)
+  case "$_loc" in
+    remote\ *)
+      if [ -n "$_self" ] && [ "${CCQUOTA_FLEET:-0}" = 1 ]; then
+        envelope
+        _payload=$(python3 -c 'import json,sys; print(json.dumps(dict(zip(("child","state","pr","verdict","summary","title","tier","msg"), sys.argv[1:])), ensure_ascii=False))' \
+          "$selfkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER" "$msg" 2>/dev/null)
+        if [ "$DRY" = 1 ]; then
+          printf 'fleet-report-parent: would relay to %s on %s via the hub, tier=%s\n--- envelope ---\n%s\n' \
+            "$owid" "${_loc#remote }" "$TIER" "$msg"
+          exit 0
+        fi
+        _n=$(TM display-message -p -t "$selfwin" '#{@hub_report_seq}' 2>/dev/null); case "$_n" in ''|*[!0-9]*) _n=0 ;; esac
+        _n=$((_n + 1)); TM set-window-option -t "$selfwin" @hub_report_seq "$_n" 2>/dev/null
+        if _f=$(fleet_hub_put child_report "$_self" "$owid" "$(date +%s).$_n" "$_payload"); then
+          [ "$TIER" = silent ] || TM set-window-option -t "$selfwin" @reported 1 2>/dev/null
+          if fleet_hub_wait_sent "$_f" 3; then _how='handed to the hub'; else _how='queued for the hub'; fi
+          printf 'reported → %s on %s (%s): %s\n' "${owid#*/}" "${_loc#remote }" "$_how" "$st"
+          exit 0
+        fi
+      fi
+      _why="lives on ${_loc#remote } — the hub outbox is not available (CCQUOTA_FLEET=1 and a running ccquota agent carry it)" ;;
+    *) _why="is not on this machine and the hub cannot place it" ;;
+  esac
+  if [ "$DRY" != 1 ] && command -v children_append >/dev/null 2>&1; then
+    children_append "$worigin" "$(python3 -c 'import json,sys; print(json.dumps(dict(zip(("child","state","pr","verdict","summary","title","tier"), sys.argv[1:]))))' \
+      "$selfkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER" 2>/dev/null)" "$sess" || :
+  fi
+  _how='ledgered, not sent'; [ "$DRY" = 1 ] && _how='not sent (dry run)'
+  printf 'fleet-report-parent: parent %s %s; %s\n' "$owid" "$_why" "$_how" >&2
+  exit 0
+fi
+
 # --- the ledger (issue #937): every report is RECORDED, delivered or not --------
 # Written here — a parent key is known, nothing is sent yet — so a report the rails
 # below drop (parent reaped, no live Claude, no reachable inbox) still lands in the
@@ -302,18 +386,6 @@ fi
 # the envelope saying who it is standing in for, and the receiver's book gets a
 # `relayed_from` row so `fleet-children.sh` there shows it too. Nobody alive above
 # (hub-spawned, cross-fleet, never reported) ⇒ the old silent success, below.
-# A parent on another machine (issue #1420): ledgered above, not sent — and never
-# resolved against this fleet's windows, where the same key may be someone else.
-if [ -n "$owid" ] && ! fleet_wid_home "$owid" "$sess" >/dev/null 2>&1; then
-  _loc=$(fleet_worker_locate "$owid" "$sess" 2>/dev/null)
-  case "$_loc" in
-    remote\ *) _why="lives on ${_loc#remote } — cross-machine reports are not supported yet (EPIC #1419 C2)" ;;
-    *)         _why="is not on this machine and the hub cannot place it" ;;
-  esac
-  _how='ledgered, not sent'; [ "$DRY" = 1 ] && _how='not sent (dry run)'
-  printf 'fleet-report-parent: parent %s %s; %s\n' "$owid" "$_why" "$_how" >&2
-  exit 0
-fi
 SENDKEY="$worigin" RELAY_FROM='' pwin=''
 pwin=$(fleet_win_for_key "$worigin" "$SOCK") || pwin=''
 if [ -z "$pwin" ] && _anc=$(fleet_live_ancestor "$worigin" "$sess" "$SOCK"); then
@@ -361,41 +433,7 @@ if [ "$parent_agent" != codex ] && [ -z "$parent_sleep$parent_evidence" ]; then
   [ -n "$ppid" ] || quiet "parent $SENDKEY ($pwin) has no live Claude under it"
 fi
 
-# --- the envelope: FIXED shape, 4 lines typical, 6 at its widest ---------------
-# Fixed because it is read by two audiences with opposite needs: the parent model,
-# which must be able to judge it at a glance and get straight back to its OWN
-# issue, and whatever later wants to parse it. `no reply needed` is load-bearing —
-# without it a fan-out of five children costs the parent five REPLIES on top of
-# five interrupts, and a parent near its handoff can least afford them.
-case "$STATE" in
-  merged)  st="MERGED${PR:+ (PR #${PR//[^0-9]/})}" ;;
-  blocked) st="BLOCKED${PR:+ (PR #${PR//[^0-9]/})}" ;;
-  failed)  st="FAILED${PR:+ (PR #${PR//[^0-9]/})}" ;;
-  stopped) st="STOPPED (no ship report)" ;;
-  reaped)  st="REAPED${VERDICT:+ ($VERDICT)}" ;;
-  # only reached when a `needs` child lifts a silent state to loud (report_tier)
-  waiting) st="WAITING${VERDICT:+ ($VERDICT)}" ;;
-  idle)    st="IDLE${VERDICT:+ ($VERDICT)}" ;;
-esac
-msg="[child-report] $label${wname:+ \"$wname\"}"$'\n'"state: $st · branch $BRANCH"
-# the stand-in note rides the state line: the envelope's size is the point of it
-[ -n "$RELAY_FROM" ] && msg="$msg · 原 parent $RELAY_FROM 已回收，代收"
-if [ -n "$SUMMARY" ]; then
-  # ≤3 lines, ≤200 chars each: the cap is the point of the envelope, not a
-  # formatting nicety — every line here is context the parent did not choose to
-  # spend. header + state + summary + `no reply needed` ⇒ 4 lines for the usual
-  # one-line summary, 6 at the absolute widest.
-  # `<`/`>` stripped for the same reason the title is: a summary is model-written
-  # text and must not be able to close the peer envelope it rides inside.
-  sum=$(printf '%s' "$SUMMARY" | tr -d '<>' | head -3 | cut -c1-200)
-  [ -n "$sum" ] && msg="$msg"$'\n'"summary: $sum"
-fi
-# The language rule (issue #620) rides ON the `no reply needed` line rather than
-# taking a fifth: the envelope's size is the point of the envelope, and a parent
-# near its handoff can least afford an extra line. `no reply needed` still LEADS
-# the line, which is what both audiences read first.
-msg="$msg"$'\n'"no reply needed${FLEET_LANG_RULE_NOTICE:+ — $FLEET_LANG_RULE_NOTICE}"
-
+envelope
 if [ "$DRY" = 1 ]; then
   printf 'fleet-report-parent: would send to %s (%s, pid %s) tier=%s\n--- envelope ---\n%s\n' \
     "$SENDKEY" "$pwin" "$ppid" "$TIER" "$msg"

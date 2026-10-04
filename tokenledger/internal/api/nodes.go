@@ -59,6 +59,11 @@ type nodeConn struct {
 	// canWrite is the hello's CapWrite: this node takes TypeWrite
 	// (claude-fleet#1410). Set once, before the conn is published.
 	canWrite bool
+	// canRelay is the hello's CapRelay: this node sends and takes TypeRelay
+	// and keeps a worker map (claude-fleet#1421). Set once, before publish.
+	canRelay bool
+	// workersAt is when the worker map was last pushed (UnixNano).
+	workersAt atomic.Int64
 	// pending routes read and write replies to their waiter.
 	pending pendingReads
 	// host is the machine as the roster names it, refreshed by heartbeats.
@@ -213,7 +218,7 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	nc := &nodeConn{conn: conn, admin: hp.Admin && s.isFleetAdmin(ep.OSUser), canRead: hp.HasCap(control.CapRead),
-		canWrite: hp.HasCap(control.CapWrite)}
+		canWrite: hp.HasCap(control.CapWrite), canRelay: hp.HasCap(control.CapRelay)}
 	nc.proto.Store(int64(hello.Proto))
 	nc.host.Store(ep.Hostname)
 	if hp.Admin && !nc.admin {
@@ -222,6 +227,11 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	s.nodes.put(ep.ID, nc)
 	defer s.nodes.drop(ep.ID, nc)
+	if nc.canRelay {
+		// Relays that waited for this node while it was away go now
+		// (claude-fleet#1421).
+		go s.dispatchRelays(ep.ID)
+	}
 	if nc.admin {
 		// Every admin connect re-sends the SSH user CA: the node checks
 		// what it already has, so a matching machine changes nothing
@@ -281,6 +291,12 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 			// The Fleet Hub registry (claude-fleet#1409): this login's
 			// fleets, re-derived and checked before they are registered.
 			s.recordFleets(*ep, hb, nc.canRead, now)
+			if nc.canRelay {
+				// The worker map, and any relay whose push went
+				// unanswered (claude-fleet#1421).
+				go s.pushWorkers(*ep, nc)
+				go s.dispatchRelays(ep.ID)
+			}
 			if nc.admin {
 				// Each admin beat is a chance to send what is queued for
 				// this machine: a person assigned while it was offline
@@ -304,6 +320,16 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 			if nc.admin && m.Error != nil {
 				s.applyAccountRefusal(ep.ID, m)
 			}
+		case control.TypeRelay:
+			// A node handing over a relay for another machine
+			// (claude-fleet#1421).
+			if !nc.canRelay {
+				refuse(ctx, conn, m.OpID, control.CodeRefused, "relays need the relay capability in the hello")
+				break
+			}
+			s.acceptRelay(ctx, conn, *ep, m)
+		case control.TypeRelayResult:
+			s.relayResult(ep.ID, m)
 		case control.TypeAck:
 			// Replies to hub writes. Nothing sends one yet (C3 will).
 		default:

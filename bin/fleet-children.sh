@@ -123,6 +123,18 @@ rows() {
   done
 }
 
+# Children on ANOTHER machine (issue #1421), from the hub map: `<node>|remote|…`
+# rows after the local ones (a local window of the same key wins). Nothing unless
+# CCQUOTA_FLEET=1 and the map is fresh — a one-machine fleet prints what it did.
+remote_rows() {
+  local k node st
+  fleet_remote_children "$sess" "$KEY" 2>/dev/null | while IFS=$'\t' read -r k node _; do
+    st=remote; case "$node" in *:lost) st=lost; node=${node%:lost} ;; esac
+    printf '%s|%s||%s|%s|\n' "$node" "$st" "$k" "$KEY"
+  done
+  return 0  # no hub map is the one-machine case, not a failure (pipefail)
+}
+
 args=(show --dir "$dir" --parent "$KEY" --session "$sess" --since "$SINCE" --prmap "$prmap" --prmap-dir "$prdir")
 [ "$JSON" = 1 ] && args+=(--json)
-rows | python3 "$BIN/fleet-children.py" "${args[@]}"
+{ rows; remote_rows; } | python3 "$BIN/fleet-children.py" "${args[@]}"

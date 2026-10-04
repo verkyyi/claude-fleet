@@ -142,11 +142,18 @@ func (a *Agent) nodeSession(ctx context.Context) (established bool, err error) {
 	defer conn.CloseNow()
 	conn.SetReadLimit(1 << 20)
 
+	caps := []string{control.CapRead, control.CapWrite}
+	// Relays (claude-fleet#1421) only when this login's claude-fleet knows
+	// where its outbox and worker map live; otherwise the hub sends none.
+	rp, relayOK := relaySetup(ctx, a.cfg.Home)
+	if relayOK {
+		caps = append(caps, control.CapRelay)
+	}
 	hello, err := control.New(control.TypeHello, control.Hello{
 		HeartbeatMS:  int(a.cfg.LiveInterval / time.Millisecond),
 		AgentVersion: a.cfg.Version,
 		Admin:        a.cfg.FleetAdmin,
-		Capabilities: []string{control.CapRead, control.CapWrite},
+		Capabilities: caps,
 	})
 	if err != nil {
 		return false, err
@@ -199,12 +206,27 @@ func (a *Agent) nodeSession(ctx context.Context) (established bool, err error) {
 			case control.TypeSSHCA:
 				a.handleSSHCA(ctx, conn, m)
 			case control.TypeAck:
-				a.acct.acked(m.OpID)
+				if !a.relayAcked(m.OpID) {
+					a.acct.acked(m.OpID)
+				}
 			case control.TypeRequest:
 				go a.answerRequest(ctx, conn, m)
 			case control.TypeWrite:
 				go a.answerWrite(ctx, conn, m)
+			case control.TypeRelay:
+				if relayOK {
+					go a.relayDeliver(ctx, conn, rp, m)
+				}
+			case control.TypeWorkers:
+				if relayOK {
+					if err := relayWorkers(rp, m); err != nil {
+						log.Printf("control channel: write the worker map: %v", err)
+					}
+				}
 			case control.TypeError:
+				if relayOK && a.relayRefused(rp, m.OpID, m.Error) {
+					break
+				}
 				if m.Error != nil {
 					log.Printf("control channel: hub reported %s: %s", m.Error.Code, m.Error.Message)
 				}
@@ -220,6 +242,10 @@ func (a *Agent) nodeSession(ctx context.Context) (established bool, err error) {
 		return wsjson.Write(wctx, conn, m)
 	})
 	defer a.acct.detach()
+
+	if relayOK {
+		go a.relayOutbox(ctx, conn, rp)
+	}
 
 	probe := &fleetProbe{}
 	beat := func() error {

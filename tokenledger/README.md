@@ -862,6 +862,38 @@ after the last beat that saw them, and are released, never re-dispatched.
 naming whom it displaced. The `fleet_leases` table exists only under
 `CCQUOTA_FLEET=1`.
 
+### Across machines — reports, messages, the worker map (claude-fleet#1421)
+
+A worker's parent, or the worker a message is for, can live on another machine.
+Neither machine can reach the other; both reach the hub. So the channel carries
+node-to-node **relays**, on a `relay` capability an agent lists only when its
+claude-fleet has `bin/fleet-hub-node.sh`:
+
+- **Outbox.** claude-fleet drops a relay (`{id, kind, from, to, payload}`; kinds
+  `child_report` and `message`) as a JSON file in the directory
+  `fleet-hub-node.sh paths` names. The agent sends it (`relay`, op_id = the relay
+  id) and deletes it when the hub acks; a refusal moves it to `refused/` with the
+  reason beside it; anything unanswered is resent after 30 s or on reconnect.
+- **Hub.** Checks the sender's worker_id belongs to a fleet THAT node reports
+  (`FORBIDDEN` otherwise), that the id is `<from>#<1-64 safe chars>`, and that the
+  target fleet has the same owner — the operator's logins with each other
+  (`CCQUOTA_FLEET_ADMIN_USERS`; every login when none are named), a person's
+  logins with each other, never across — then stores it in `fleet_relays`
+  (primary key = the id, so a resend is one row) and acks. It pushes pending
+  relays down the target's channel at once, after every heartbeat (a push left
+  unanswered for 60 s goes again) and on its reconnect; they expire after 7 days.
+- **Target.** The agent runs `fleet-hub-node.sh deliver` with the relay on stdin
+  and answers `relay_result`: exit 0 = delivered, 75 = pending (pushed again
+  later), anything else = failed, with stderr's last line as the reason.
+- **Worker map.** After heartbeats (at most every 10 s) the hub pushes a
+  `workers` message — every worker of the node owner's fleets on every machine,
+  `{worker_id, node, origin_wid}`, `node` suffixed `:lost` for a lost machine —
+  and the agent writes it where `paths` says, as a TSV claude-fleet reads
+  without asking the network.
+
+Every stored, delivered or failed relay is a `fleet_audit` row
+(`relay:<kind>`, actor `node:<endpoint>`).
+
 ## The dashboard
 
 One page, no tabs — with a nav bar across the top of it. Those are not in

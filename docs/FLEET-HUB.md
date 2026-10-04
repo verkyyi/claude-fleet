@@ -99,8 +99,39 @@ fall back to a local window that shares the number. Only with `CCQUOTA_FLEET=1`
 does a miss consult the hub, and then only through the local cache
 `$FLEET_CONF_DIR/control/hub-workers.tsv` (`<worker_id>\t<node>`, fresh for
 `FLEET_HUB_CACHE_SECS`, 30 s, refreshed by `FLEET_HUB_STATUS_CMD`); with no fresh
-cache the fleet behaves as a one-machine fleet and says so on stderr. The remote
-branches report "not supported yet" until EPIC #1419 C2 carries them across.
+cache the fleet behaves as a one-machine fleet and says so on stderr.
+
+**Across machines** (issue #1421, EPIC #1419 C2) the cloud hub carries what the
+remote branches above used to refuse. Nothing in `bin/` dials the network: the
+ccquota agent's control channel is this machine's only door to the hub.
+
+- **The map.** After heartbeats the hub pushes each relay-capable node its owner's
+  worker map — every worker on every machine, with its machine (`m4`, or `m4:lost`)
+  and its parent's worker_id (the inventory's `@origin_wid` column, #1423) — and the
+  agent writes it as `hub-workers.tsv` (`<worker_id>\t<node>\t<parent wid>`).
+- **The outbox.** `fleet-report-parent.sh` (a parent elsewhere) and
+  `fleet-peer-send.sh` (`wid:` of a worker elsewhere) drop a relay —
+  `{id, kind, from, to, payload}`, id = `<sender worker_id>#<n>` — in
+  `$FLEET_CONF_DIR/control/hub-outbox/` (`fleet_hub_put`). The agent sends it as a
+  control-channel `relay`; the hub checks the sender's fleet is that node's and the
+  target's belongs to the same owner, STORES it (the id is the key: a resend is a
+  no-op) and acks, and the agent deletes the file. A refusal is kept in `refused/`.
+- **Delivery.** The hub pushes the relay down the target node's channel — at once,
+  or when that node reconnects (pending relays expire after 7 days) — and that
+  agent runs `bin/fleet-hub-node.sh deliver`: a `child_report` is appended to the
+  parent's ledger there with `node` + `rid` (one row however often it arrives) and
+  delivered like a local report (tier, batch mode, `children_send`); a `message`
+  goes to the worker through `fleet-peer-send.sh`, prefixed `[from <key> on <node>]`.
+- **Waiting and holding.** `fleet-await.sh wid:<child elsewhere>` (a child whose
+  parent is you) waits on your ledger, which the hub feeds, and calls it GONE when
+  the map drops it. `fleet-children.sh` lists a remote child as `m4 remote` (or
+  `gone · m4`), and `fleet_window_waiting_children` — the reaper's
+  `retained:children` — counts a remote child until its MERGED report arrives,
+  skipping a lost node and any map older than `FLEET_HUB_RETAIN_SECS` (600 s).
+
+Switch it on with `CCQUOTA_FLEET=1` in the fleet's conf (the agent needs the same
+variable, which it already has when it reports to a fleet hub). Off, or with no
+running agent, every script behaves as it did before.
 
 **The sidebar sees every machine** (issue #1423). With `CCQUOTA_FLEET=1` and
 `CCQUOTA_HUB_URL` set, the collector keeps `bin/fleet-hub-sessions.sh` refreshing

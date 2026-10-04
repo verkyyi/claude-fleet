@@ -75,6 +75,21 @@ const (
 	TypeSSHCA = "ssh_ca"
 	// TypeSSHCAResult is the node's answer to a TypeSSHCA, by op_id.
 	TypeSSHCAResult = "ssh_ca_result"
+	// TypeRelay carries one node-to-node relay (claude-fleet#1421): a child's
+	// report to its parent, or a message to a worker, on another machine.
+	// Node→hub, the op_id is the relay's own id; the hub stores it and
+	// answers TypeAck (stored, or already stored) or TypeError (refused, for
+	// good). Hub→node, the op_id is again the relay id, and the node answers
+	// TypeRelayResult. Sent only to a node whose hello listed CapRelay.
+	TypeRelay = "relay"
+	// TypeRelayResult is a node's answer to a hub TypeRelay.
+	TypeRelayResult = "relay_result"
+	// TypeWorkers is the hub's map of where the node owner's workers live on
+	// every machine (claude-fleet#1421), pushed after heartbeats to a node
+	// that listed CapRelay. The node keeps it as claude-fleet's local cache
+	// ($FLEET_CONF_DIR/control/hub-workers.tsv), so routing never asks the
+	// network.
+	TypeWorkers = "workers"
 )
 
 // CapRead is the hello capability a node lists when it answers TypeRequest.
@@ -86,6 +101,58 @@ const CapRead = "read"
 // (claude-fleet#1410). An agent that never says it is never sent a write: the
 // hub refuses the operation as UNAVAILABLE before journalling anything.
 const CapWrite = "write"
+
+// CapRelay is the hello capability a node lists when it sends and takes
+// TypeRelay and keeps a TypeWorkers map (claude-fleet#1421). The hub never
+// pushes a relay or a map to a node that did not say it; relays for it wait.
+const CapRelay = "relay"
+
+// Relay kinds.
+const (
+	RelayChildReport = "child_report"
+	RelayMessage     = "message"
+)
+
+// MaxRelayPayload bounds one relay's payload: a child report is a few hundred
+// bytes, a message at most a few thousand.
+const MaxRelayPayload = 16 << 10
+
+// Relay is the payload of TypeRelay, in both directions. From and To are
+// worker_ids; the hub routes on To's fleet and checks From's belongs to the
+// sending node.
+type Relay struct {
+	ID      string          `json:"id"`
+	Kind    string          `json:"kind"`
+	From    string          `json:"from"`
+	To      string          `json:"to"`
+	Payload json.RawMessage `json:"payload"`
+	// FromNode is the sender's machine as the hub's roster names it; set by
+	// the hub on the way down, never trusted from a sender.
+	FromNode string `json:"from_node,omitempty"`
+}
+
+// RelayResult is the payload of TypeRelayResult.
+type RelayResult struct {
+	ID string `json:"id"`
+	// OK is "applied (or already applied) on this node". Retry, with OK
+	// false, asks the hub to keep it pending and push it again later; with
+	// neither, the relay failed for good.
+	OK     bool   `json:"ok"`
+	Retry  bool   `json:"retry,omitempty"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// WorkerLoc is one worker in a TypeWorkers map.
+type WorkerLoc struct {
+	WorkerID  string `json:"worker_id"`
+	Node      string `json:"node"`
+	OriginWID string `json:"origin_wid,omitempty"`
+}
+
+// Workers is the payload of TypeWorkers.
+type Workers struct {
+	Rows []WorkerLoc `json:"rows"`
+}
 
 // ReadMethods is the whole list of fleet-control.py methods the hub may ask a
 // node for over the channel. All are reads; a write never travels as a

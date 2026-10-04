@@ -15,8 +15,9 @@
 #   D  the four scripts take `wid:`: a local worker_id behaves byte-for-byte like
 #      today's target for the same window (fleet-peer-send.sh), a remote/unknown
 #      one refuses with the reason and never touches the same-numbered local
-#      window (fleet-peer-send.sh, fleet-await.sh, fleet-answer.sh,
-#      fleet-report-parent.sh), and fleet-await.sh maps this fleet's wid to <N>.
+#      window (fleet-peer-send.sh, fleet-await.sh, fleet-answer.sh; a remote
+#      parent is relayed by fleet-report-parent.sh since #1421 — never to that
+#      window), and fleet-await.sh maps this fleet's wid to <N>.
 #   E  @origin_wid: fleet_stamp_origin_wid stamps the parent's worker_id for a key
 #      origin, nothing for a non-key origin or a machine with no fleet UUID; the
 #      spawn sites (dash-issue-session.sh, dash-raw-session.sh,
@@ -141,12 +142,15 @@ run bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$wc" --state blocked --sum
 ok; [ "$out" = "$base" ] && case "$out" in *"$w7"*) true ;; *) false ;; esac \
   || fail "D: report-parent with a local @origin_wid behaves as before" "[$out] vs [$base]"
 tf set-window-option -t "$wc" @origin_wid "$F/issue-7"
+# A remote parent is relayed through the hub since #1421 (hub-relay-selftest.sh
+# pins the relay); here: never the local issue-7.
 run bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$wc" --state blocked --summary x --dry-run
-ok; [ "$rc" = 0 ] && [ -z "$out" ] && case "$err" in *"lives on m4"*"not sent"*) true ;; *) false ;; esac \
-  || fail "D: report-parent with a remote parent → exit 0, not sent, never the local issue-7" "rc=$rc out=$out err=$err"
+ok; [ "$rc" = 0 ] && case "$out" in *"would relay to $F/issue-7 on m4"*) true ;; *) false ;; esac \
+  && case "$out" in *"$w7"*) false ;; *) true ;; esac \
+  || fail "D: report-parent with a remote parent → relayed to it, never the local issue-7" "rc=$rc out=$out err=$err"
 run bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$wc" --origin "wid:$F/issue-7" --state blocked --summary x --dry-run
-ok; [ "$rc" = 0 ] && [ -z "$out" ] && case "$err" in *"not sent"*) true ;; *) false ;; esac \
-  || fail "D: report-parent --origin wid:<remote> → not sent" "rc=$rc out=$out err=$err"
+ok; [ "$rc" = 0 ] && case "$out" in *"would relay to $F/issue-7"*) true ;; *) false ;; esac \
+  || fail "D: report-parent --origin wid:<remote> → relayed" "rc=$rc out=$out err=$err"
 
 # --- E: @origin_wid stamping ---------------------------------------------------------------
 lib fleet_stamp_origin_wid "$L" "$w3" issue-7 "$L"

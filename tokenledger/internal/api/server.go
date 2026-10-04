@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
@@ -151,6 +152,13 @@ type Server struct {
 	// accountsMu serialises account dispatch, so one queued op is never sent
 	// twice by two triggers racing.
 	accountsMu sync.Mutex
+
+	// relayLocks serialises relay dispatch per target endpoint
+	// (claude-fleet#1421), so two heartbeat triggers never push one relay
+	// twice in the same instant.
+	relayLocks sync.Map // endpoint ID → *sync.Mutex
+	// relayExpiredAt is when pending relays were last expired (UnixNano).
+	relayExpiredAt atomic.Int64
 }
 
 // Handler builds the router.

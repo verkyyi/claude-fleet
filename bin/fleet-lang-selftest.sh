@@ -140,7 +140,7 @@ carries bin/set-claude-state.sh   FLEET_LANG_RULE_RESUME '"decision":"block"' \
         'auto-handoff Stop-hook directive'
 carries bin/fleet-quotawatch.sh   FLEET_LANG_RULE_NOTICE 'qmsg="\[fleet quota watch\]' \
         'quota-watch warning pushed into a live session'
-carries bin/fleet-report-parent.sh FLEET_LANG_RULE_NOTICE '^msg=.*no reply needed' \
+carries bin/fleet-report-parent.sh FLEET_LANG_RULE_NOTICE '^  msg=.*no reply needed' \
         'child-report envelope'
 carries bin/fleet-children-flush.sh FLEET_LANG_RULE_NOTICE '^  msg=.*no reply needed' \
         'children-digest envelope'

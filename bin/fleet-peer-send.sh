@@ -31,8 +31,9 @@
 # `wid:<fleet UUID>/<key>` (issue #1420) is the address that survives a machine
 # boundary (docs/FLEET-HUB.md «Worker identity»); fleet_worker_locate resolves it.
 # Live on this machine → the window it found, then the path below as for any
-# window. On another machine, or nowhere → exit 1 with the reason; it is never
-# delivered to a local window that merely shares the issue number.
+# window. On another machine → the hub (issue #1421): `sent → … on <node>` once
+# this machine's agent has handed it over (or `queued` — it will be), exit 0.
+# Nowhere → exit 1; never a local window that merely shares the issue number.
 #
 # Exactly one line of outcome, always: success prints `sent → … (<window> · <worktree>)`
 # on stdout and exits 0; every failure exits non-zero with ONE line on stderr.
@@ -56,7 +57,7 @@ while [ $# -gt 0 ]; do
     --expect-issue=*) EXPECT="${1#*=}"; shift ;;
     --repo) REPO="${2:-}"; shift 2 ;;
     --repo=*) REPO="${1#*=}"; shift ;;
-    -h|--help) sed -n '2,39p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
     *) break ;;
   esac
 done
@@ -73,7 +74,23 @@ case "$tgt" in
     loc=$(fleet_worker_locate "$tgt" "$SOCK"); rc=$?
     case "$loc" in
       local\ *) loc=${loc#local }; tgt=${loc%% *}; SOCK=$(fleet_socket "${loc#* }") ;;
-      remote\ *) die 1 "'$tgt' lives on ${loc#remote } — cross-machine delivery is not supported yet (EPIC #1419 C2); nothing sent" ;;
+      remote\ *)
+        # Another machine (issue #1421): through the hub. The full worker_id comes
+        # from the hub map; the sender is THIS pane's worker, or nobody — a message
+        # needs a from the hub can check belongs to this machine.
+        node=${loc#remote }; node=${node%:lost}
+        sp=$(_fleet_wid_split "$tgt"); full=$(fleet_hub_wid "${sp%%$'\t'*}" "${sp#*$'\t'}") \
+          || die 1 "'$tgt' lives on $node, but the hub map has no full worker_id for it; nothing sent"
+        me=''
+        [ -n "${TMUX_PANE:-}" ] && me=$(fleet_worker_id "$(fleet_current_session)" "$TMUX_PANE" 2>/dev/null)
+        [ -n "$me" ] || die 1 "'$tgt' lives on $node — a cross-machine message must come from a worker or scratch pane (its worker_id is the sender); nothing sent"
+        payload=$(python3 -c 'import json,sys; print(json.dumps({"text": sys.argv[1]}, ensure_ascii=False))' "$text") \
+          || die 1 "could not encode the message"
+        f=$(fleet_hub_put message "$me" "$full" "$(date +%s).$$" "$payload") \
+          || die 1 "'$tgt' lives on $node — the hub outbox is not available (CCQUOTA_FLEET=1 and a running ccquota agent carry it); nothing sent"
+        if fleet_hub_wait_sent "$f" 3; then how='handed to the hub'; else how='queued for the hub'; fi
+        printf 'sent → %s on %s (%s)\n' "${full#*/}" "$node" "$how"
+        exit 0 ;;
       *) [ "$rc" -eq 2 ] && die 2 "bad worker id '$tgt' (want wid:<fleet UUID>/issue-<N>, wid:issue-<N> or wid:scratch-<N>)"
          die 1 "no live worker for '$tgt' on this machine; nothing sent" ;;
     esac ;;
