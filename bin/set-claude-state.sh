@@ -253,7 +253,7 @@ if [ "$sem" != "leave" ]; then
   tmux set-window-option -t "$TMUX_PANE" @claude_needs "$sub" 2>/dev/null
   # …and WHY a Stop wrote `looping` (issue #1370) beside it; only a Stop decides it,
   # and a window that waits on nothing carries no option at all.
-  if [ "$sem" = done ]; then
+  if [ "$sem" = 'done' ]; then
     if [ -n "$wwait" ]; then tmux set-window-option -t "$TMUX_PANE" @claude_wait "$wwait" 2>/dev/null
     elif [ -n "$wprev" ]; then tmux set-window-option -u -t "$TMUX_PANE" @claude_wait 2>/dev/null; fi
   fi

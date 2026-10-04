@@ -5385,7 +5385,7 @@ EOF
       *) k="${pre}issue-$iss" ;;
     esac
     [ -n "$k" ] || continue
-    if [ "$st" = done ] && ! { [ -n "$loop" ] \
+    if [ "$st" = 'done' ] && ! { [ -n "$loop" ] \
          && python3 "$bin/fleet_loop_mark.py" status --value "$loop" >/dev/null 2>&1; }; then
       st=1
     else st=0; fi
