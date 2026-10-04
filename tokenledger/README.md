@@ -894,6 +894,35 @@ claude-fleet has `bin/fleet-hub-node.sh`:
 Every stored, delivered or failed relay is a `fleet_audit` row
 (`relay:<kind>`, actor `node:<endpoint>`).
 
+### A spawn picks its machine — node placement (claude-fleet#1425)
+
+With `CCQUOTA_FLEET=1`, claude-fleet's `dash-issue-session.sh` (the dash, the
+backlog, autofill and `/fleet-epic-run` all spawn through it) defaults to
+`--node auto`: right after it took the issue's lease it asks the hub where the
+session should run.
+
+```sh
+ccquota place [--node auto|<machine>] [--origin-wid <wid>] [--agent a] <owner/repo> <issue> <worker_id>
+#  LOCAL m5<TAB><reason>                      exit 0 — open it here, as today
+#  REMOTE m4 <operation_id> <status><TAB><reason>  exit 0 — the hub sent it there
+#  HELD m4<TAB><msg>                          exit 3 — leased elsewhere
+#  REFUSED <code><TAB><msg>                   exit 4 — no machine can take it
+#  (exit 1: the hub could not be asked; the spawn opens it here)
+```
+
+`POST /v1/node/place` authenticates with the node's enrollment token, for a
+fleet that endpoint's heartbeats registered, like the lease. It runs the same
+`pickNode` as a placed `worker_start` (offline, >0.8 load/core, <1 GiB free and
+at-cap machines are out; account headroom 60% + load 40%), for the person whose
+active fleet account is that (machine, login) — a login nobody owns places among
+the logins of the same name. The asker's own fleet ⇒ `LOCAL`, nothing journalled
+but an audit row. Another machine ⇒ the hub hands that fleet the lease (the spawn
+arriving there takes it up: within one fleet, `(repo, issue)` is one worker) and
+journals a `worker_start` on it with the asker's parent as `origin_wid`, the
+placement kept on the operation; a refusal from that node gives the lease back,
+so the asker can still open it itself. `auto` falls back to opening locally; a
+machine named with `--node` is honoured or refused, never swapped.
+
 ## The dashboard
 
 One page, no tabs — with a nav bar across the top of it. Those are not in

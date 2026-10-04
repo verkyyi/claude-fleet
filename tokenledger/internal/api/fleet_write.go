@@ -266,7 +266,7 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 	var err error
 	switch tool {
 	case "worker_start":
-		if err = checkFields(args, []string{"issue", "idempotency_key"}, "fleet_id", "agent", "repo", "node"); err != nil {
+		if err = checkFields(args, []string{"issue", "idempotency_key"}, "fleet_id", "agent", "repo", "node", "origin_wid"); err != nil {
 			break
 		}
 		var issue int
@@ -293,6 +293,19 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 		}
 		if w.node, err = argString(args, "node"); err != nil {
 			break
+		}
+		// origin_wid (claude-fleet#1425): the worker that asked for this one,
+		// on another machine — the new window records it as its parent.
+		var owid string
+		if owid, err = argString(args, "origin_wid"); err != nil {
+			break
+		}
+		if owid != "" {
+			if _, _, perr := fleetid.ParseWorkerID(owid); perr != nil {
+				err = fault("INVALID_ARGUMENT", "origin_wid must be a worker_id (<fleet UUID>/<key>)")
+				break
+			}
+			w.params["origin_wid"] = owid
 		}
 		if w.node == "" {
 			w.node = "auto"
@@ -397,6 +410,13 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 // target, refuse a node that cannot take it, journal, send, and record what
 // the node said. The returned map is operation_get's shape.
 func (s *Server) SubmitWrite(ctx context.Context, p fleetPrincipal, tool string, args map[string]any) (map[string]any, error) {
+	return s.submitWrite(ctx, p, tool, args, nil)
+}
+
+// submitWrite is SubmitWrite with a placement already made (a node's own
+// /v1/node/place, claude-fleet#1425): the start goes to args' fleet_id and the
+// journal keeps placed as the operation's placement.
+func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string, args map[string]any, placed *Placement) (map[string]any, error) {
 	w, idem, err := parseWrite(tool, args)
 	if err != nil {
 		return nil, err
@@ -422,6 +442,9 @@ func (s *Server) SubmitWrite(ctx context.Context, p fleetPrincipal, tool string,
 		}
 		if tool == "worker_start" && w.node != "auto" && !sameMachine(target.Hostname, w.node) {
 			return nil, fault("INVALID_ARGUMENT", "fleet_id is on "+target.Hostname+", not "+w.node)
+		}
+		if placed != nil && placed.FleetID == target.FleetID {
+			placement = placed
 		}
 	default:
 		pl, err := s.pickNode(p, w.repo, w.node, time.Now())

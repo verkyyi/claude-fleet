@@ -127,7 +127,12 @@ func (s *Store) AcquireLease(c LeaseClaim, grace time.Duration, at time.Time) (g
 		return false, Lease{}, nil, err
 	default:
 		live := cur.ExpiresAt.After(at)
-		mine := cur.WorkerID == c.WorkerID
+		// The same fleet asking is the same worker: within one fleet (repo,
+		// issue) names exactly one window, whatever key prefix the asker's
+		// repo layout gives it. That is how a lease handed to the fleet a
+		// start was placed on (HandOverLease, claude-fleet#1425) is taken up
+		// by the spawn that arrives there.
+		mine := cur.WorkerID == c.WorkerID || (cur.FleetID != "" && cur.FleetID == c.FleetID)
 		if live && !mine {
 			if !c.Force {
 				return false, cur, nil, nil
@@ -143,12 +148,12 @@ func (s *Store) AcquireLease(c LeaseClaim, grace time.Duration, at time.Time) (g
 			if cur.ExpiresAt.After(exp) {
 				exp = cur.ExpiresAt
 			}
-			if _, err := tx.Exec(`UPDATE fleet_leases SET endpoint_id = ?, hostname = ?, os_user = ?,
+			if _, err := tx.Exec(`UPDATE fleet_leases SET worker_id = ?, endpoint_id = ?, hostname = ?, os_user = ?,
 				renewed_at = ?, expires_at = ? WHERE repo = ? AND issue = ?`,
-				c.EndpointID, c.Hostname, c.OSUser, at.UTC().Format(rfc), exp.UTC().Format(rfc), c.Repo, c.Issue); err != nil {
+				c.WorkerID, c.EndpointID, c.Hostname, c.OSUser, at.UTC().Format(rfc), exp.UTC().Format(rfc), c.Repo, c.Issue); err != nil {
 				return false, Lease{}, nil, err
 			}
-			cur.ExpiresAt = exp
+			cur.WorkerID, cur.ExpiresAt = c.WorkerID, exp
 			return true, cur, nil, tx.Commit()
 		}
 	}
@@ -274,4 +279,38 @@ func (s *Store) Leases(at time.Time) ([]Lease, error) {
 		}
 	}
 	return out, rows.Err()
+}
+
+// HandOverLease moves a live lease from the worker that holds it to another
+// fleet's worker — the start a node placed on another machine
+// (claude-fleet#1425). Only the holder can hand it over: false when from no
+// longer holds it (expired, released, or taken). The new holder gets a fresh
+// start grace and is unseen, exactly as a fresh acquire would be, so the
+// remote spawn has the same five minutes to show up in a heartbeat.
+func (s *Store) HandOverLease(repo string, issue int, from string, to LeaseClaim, grace time.Duration, at time.Time) (bool, error) {
+	repo = NormRepo(repo)
+	tx, err := s.write.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	cur, err := scanLease(tx.QueryRow(`SELECT `+leaseCols+` FROM fleet_leases WHERE repo = ? AND issue = ?`, repo, issue))
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if cur.WorkerID != from || !cur.ExpiresAt.After(at) {
+		return false, nil
+	}
+	ts := at.UTC().Format(rfc)
+	if _, err := tx.Exec(`UPDATE fleet_leases SET worker_id = ?, fleet_id = ?, endpoint_id = ?, hostname = ?,
+		os_user = ?, acquired_at = ?, renewed_at = ?, expires_at = ?, seen = 0, forced = 0
+		WHERE repo = ? AND issue = ?`,
+		to.WorkerID, to.FleetID, to.EndpointID, to.Hostname, to.OSUser, ts, ts, at.Add(grace).UTC().Format(rfc),
+		repo, issue); err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
 }

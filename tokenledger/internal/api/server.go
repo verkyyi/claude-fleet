@@ -206,6 +206,8 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc(control.Path, s.handleNodeConnect)
 		// Issue leases (claude-fleet#1422) authenticate the same way.
 		mux.HandleFunc("/v1/node/lease", s.handleNodeLease)
+		// Placement for a node's own spawn (claude-fleet#1425), the same way.
+		mux.HandleFunc("/v1/node/place", s.handleNodePlace)
 		mux.Handle("/v1/nodes", s.viewerOnly(http.HandlerFunc(s.handleNodes)))
 		mux.Handle("/nodes", s.viewerOnly(http.HandlerFunc(s.serveNodesPage)))
 		mux.Handle("/v1/fleet/me", s.viewerOnly(http.HandlerFunc(s.handleFleetMe)))

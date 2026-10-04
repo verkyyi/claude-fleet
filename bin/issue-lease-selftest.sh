@@ -125,9 +125,11 @@ run_spawn() { # $@ = args to dash-issue-session.sh
   rm -rf "$WORK/dash/.claude-dash"
   PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/dash" FLEET_CONF_DIR="${CONF_DIR:-$WORK/conf}" \
   FLEET_REPO="acme/widgets" FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH="master" \
-    "$SPAWN" "$@" >"$WORK/spawn.out" 2>"$WORK/spawn.err"
+    "$SPAWN" "$@" ${CCQUOTA_FLEET:+--node local} >"$WORK/spawn.out" 2>"$WORK/spawn.err"
   echo $? > "$WORK/spawn.rc"
 }
+# `--node local` with the hub on: placement (issue #1425, after the lease) is
+# hub-place-selftest.sh's to test — here every session opens on this machine.
 rc()          { cat "$WORK/spawn.rc"; }
 err_has()     { grep -qF -- "$1" "$WORK/spawn.err"; }
 gh_has()      { grep -qF -- "$1" "$GH_LOG"; }
