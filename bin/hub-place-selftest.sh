@@ -278,8 +278,8 @@ CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER="$REMOTE_LINE" FLE
 place_has '--node auto '                         || fail "SPAWN_NODE a value that is no machine name reads as auto"
 ok "SPAWN_NODE garbage → auto"
 
-base=$(CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET= FLEET_HUB_PLACE_CMD= FLEET_HUB_LEASE_CMD= run_spawn 258; snap)
-CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET= FLEET_HUB_PLACE_CMD= FLEET_HUB_LEASE_CMD= FLEET_SPAWN_NODE=m4 run_spawn 258
+base=$(CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET='' FLEET_HUB_PLACE_CMD='' FLEET_HUB_LEASE_CMD='' run_spawn 258; snap)
+CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET='' FLEET_HUB_PLACE_CMD='' FLEET_HUB_LEASE_CMD='' FLEET_SPAWN_NODE=m4 run_spawn 258
 [ "$(snap)" = "$base" ]                          || fail "SPAWN_NODE with the hub off must change nothing" "$(diff <(printf '%s\n' "$base") <(snap))"
 ok "SPAWN_NODE off → byte-identical (the knob is never read without the hub)"
 

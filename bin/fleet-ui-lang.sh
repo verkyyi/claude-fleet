@@ -85,6 +85,8 @@ fleet_ui_t() {
     en:lost_heading_fmt)        printf '─ %s lost %s min ─' "${1:-}" "${2:-}" ;;
     zh:lost_heading_short_fmt)  printf '─ %s 失联 ─' "${1:-}" ;;
     en:lost_heading_short_fmt)  printf '─ %s lost ─' "${1:-}" ;;
+    zh:menu_title_on_node_fmt)  printf '%s · 在 %s' "${1:-}" "${2:-}" ;;
+    en:menu_title_on_node_fmt)  printf '%s · on %s' "${1:-}" "${2:-}" ;;
     zh:pin_heading_fmt)         printf '置顶 (%s)' "${1:-}" ;;
     en:pin_heading_fmt)         printf 'Pinned (%s)' "${1:-}" ;;
     zh:unknown_repo_heading)    printf '? · 未知仓库' ;;

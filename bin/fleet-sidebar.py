@@ -25,7 +25,7 @@ import unicodedata
 
 BIN = Path(__file__).absolute().parent  # preserve the selftest shadow root
 US = "\x1f"
-VIEW_VERSION = "20"  # #1328: rows as name/badge/depth fields, laid out to the width
+VIEW_VERSION = "21"  # #1475: a proxy window (@remote) is a task window; no machine tag
 # ↑↓ follow (issue #822): an arrow moves the highlight at once and switches to
 # it only after this much quiet. A held key on a slow link is one switch, not
 # one per row, and a row passed over is never selected — so the wake hook's
@@ -225,20 +225,27 @@ def sync(session, enabled, width, lock):
     info = fields(session + ":", US.join(("#{window_id}", "#{window_name}",
                   "#{window_width}", "#{session_attached}", "#{@issue}",
                   "#{@raw}", "#{@worktree}", "#{@norepo}", "#{window_zoomed_flag}",
-                  "#{@sidebar_width_manual}")))
-    if len(info) != 10:
+                  "#{@sidebar_width_manual}", "#{@remote}", "#{@remote_view_solo}")))
+    if len(info) != 12:
         return
-    window, name, cols, attached, issue, raw, worktree, norepo, zoomed, manual = info
+    (window, name, cols, attached, issue, raw, worktree, norepo, zoomed, manual,
+     remote, solo) = info
     # A width the operator dragged to (issue #1328) is the width from then on.
     if manual.isdigit():
         width = max(24, min(60, int(manual)))
     all_panes = panes(session)
     workers = [p for p in all_panes if p[1] == window and p[2] != "1" and p[4] != "1"]
     wanted = (enabled == "1" and attached != "0" and
+              # This session is another machine's proxy view, and its ONLY client
+              # (fleet-remote-view.sh attach, issue #1475): it is drawn inside THAT
+              # machine's sidebar, so no list of its own — one list, not two.
+              solo != "1" and
               name not in ("plan", "dash", "backlog") and
-              # A task: issue worker, repo scratch, or a no-repo session in $HOME (#996).
-              bool(issue or raw == "1" or worktree or norepo == "1") and bool(workers) and
-              int(cols) >= width + 1 + 80)
+              # A task: issue worker, repo scratch, a no-repo session in $HOME (#996),
+              # or a proxy window onto another machine's session (`@remote`, #1475):
+              # the list stays on the left, the other machine's pane on the right.
+              bool(issue or raw == "1" or worktree or norepo == "1" or remote) and
+              bool(workers) and int(cols) >= width + 1 + 80)
     if not wanted or zoomed == "1":
         leave_navigation(session)
     current, reusable = [], []
@@ -295,12 +302,15 @@ def send_key(session, key):
 
 def jump(session, window, pane, lock):
     # Another machine's row (`wid:<worker_id>`, #1423): step in through a proxy
-    # window (fleet-remote-view.sh, issue #1424) — there is no window here to select.
+    # window (fleet-remote-view.sh, issue #1424), which `open` creates or
+    # retargets and prints — then land in it exactly as in a local task window
+    # (issue #1475): the view moves along, so the list stays on the left and the
+    # other machine's pane is on the right, never the whole window gone remote.
     if window.startswith("wid:") and "/" in window:
         env = dict(os.environ, FLEET_SESSION=session)
-        subprocess.call(["bash", str(BIN / "fleet-remote-view.sh"), "open", window], env=env,
-                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return
+        out = run(["bash", str(BIN / "fleet-remote-view.sh"), "open", window], env=env,
+                  stdin=subprocess.DEVNULL)
+        window = out.stdout.strip().split("\n")[-1] if out.returncode == 0 else ""
     # Never resolve a stale row through a recycled index, or another fleet.
     if not window.startswith("@") or fields(window, "#{session_name}") != [session]:
         return
@@ -414,7 +424,9 @@ def open_menu(session, wid, env):
     command string in it; this only names the row, by its stable window id.
     Not waited on: a tmux display-menu can hold its caller until it closes, and
     this view keeps painting meanwhile."""
-    if wid.startswith("@"):
+    # A row on another machine (`wid:…`) has one too (issue #1475): its title
+    # names the machine (`<name> · 在 m4`) — the one place the list says it.
+    if wid.startswith("@") or (wid.startswith("wid:") and "/" in wid):
         subprocess.Popen(["bash", str(BIN / "fleet-sidebar.sh"), "menu", session, wid],
                          env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL)
@@ -457,26 +469,22 @@ def row_left(marker, glyph, tree, name):
     return marker + " " + glyph + " " + (tree or " ") + " " + name
 
 
-def row_right(badge, node):
-    """What sits at a row's right edge: the subtree badge (`· k/N`), then the
-    machine label of a row on another machine (`m4`, issue #1475), dim."""
-    parts = []
-    if badge:
-        parts.append("· " + badge)
-    if node:
-        parts.append(node.rstrip("!"))
-    return " ".join(parts)
+def row_right(badge):
+    """What sits at a row's right edge: the subtree badge (`· k/N`). A row on
+    another machine shows NO machine name (issue #1475, the operator's call): a
+    local row and a remote row look the same; the machine is in the row menu's
+    title (fleet-sidebar-menu.sh) and the status line on top."""
+    return "· " + badge if badge else ""
 
 
-def row_text(marker, glyph, tree, name, badge, width, node=""):
+def row_text(marker, glyph, tree, name, badge, width):
     """A session row laid out to `width` cells (issue #1328). The subtree badge
-    (`· k/N`) and the machine label (issue #1475) are right-aligned and ALWAYS
-    whole; the name gets what is left and, when it does not fit, ends in `…`. A
-    narrow pane gives up name, never the count — the old joined label was clipped
-    from the right, so the count went first. A row with no badge, no machine and a
-    name that fits is exactly the old line."""
+    (`· k/N`) is right-aligned and ALWAYS whole; the name gets what is left and,
+    when it does not fit, ends in `…`. A narrow pane gives up name, never the
+    count — the old joined label was clipped from the right, so the count went
+    first. A row with no badge and a name that fits is exactly the old line."""
     left = row_left(marker, glyph, tree, "")
-    right = row_right(badge, node)
+    right = row_right(badge)
     room = width - width_of(left) - (width_of(right) + 1 if right else 0)
     if width_of(name) > room:
         name = clip(name, max(0, room - 1)) + "…" if room > 0 else ""
@@ -492,7 +500,7 @@ def row_need(row):
     if wid == "hdr":
         return 0 if name.startswith("──") else width_of(name) + 1
     need = width_of(row_left(" ", glyph, tree, name)) + 1
-    right = row_right(badge, row[8] if len(row) > 8 else "")
+    right = row_right(badge)
     return need + (width_of(right) + 1 if right else 0)
 
 
@@ -861,9 +869,10 @@ ROW_FIELDS = 9  # wid state glyph name tree badge depth detail node (issues #132
 
 def row_fields(line):
     """One producer line as its ROW_FIELDS fields: a heading's line stops at its
-    tree field (5), a session row's carries the badge / depth / detail too, and
-    a row on another machine its machine label last (`m4`, `m4!` when that
-    machine is lost — issue #1475)."""
+    tree field (5), a session row's carries the badge / depth / detail and, last,
+    its machine — empty for a local row, `m4` for a row on another machine, `m4!`
+    when that machine is lost (issue #1475). The view never DRAWS the machine
+    (the rows look alike); `!` dims the row, and the menu titles it."""
     parts = line.split(US, ROW_FIELDS - 1)
     return parts + [""] * (ROW_FIELDS - len(parts))
 
@@ -913,9 +922,17 @@ def visible(info, now):
     return active == "1" and zoomed != "1" and attached != "0" and not modal
 
 
+def shown_row(window, remote):
+    """The row the current window stands for: itself — or, in a proxy window onto
+    another machine's session (`@remote=<node>:<worker_id>`, issue #1475), that
+    machine's row `wid:<worker_id>`, so the ▶ and the cursor land on it."""
+    return "wid:" + remote.split(":", 1)[1] if ":" in remote else window
+
+
 def ui(screen, session, worker, lock):
     pane = os.environ["TMUX_PANE"]
-    window = fields(worker, "#{window_id}")[0]
+    window, remote = (fields(worker, US.join(("#{window_id}", "#{@remote}"))) + ["", ""])[:2]
+    current_row = shown_row(window, remote)
     env = dict(os.environ, FLEET_SESSION=session, FLEET_SIDEBAR_CURRENT=window)
     curses.curs_set(0)
     curses.use_default_colors()
@@ -934,7 +951,7 @@ def ui(screen, session, worker, lock):
     # so a pasted paragraph is one insert, not a line typed and submitted per
     # newline. Written past curses: it never touches this private mode.
     os.write(1, b"\x1b[?2004h")
-    rows, selected, offset, refresh_at = [], window, 0, 0.0
+    rows, selected, offset, refresh_at = [], current_row, 0, 0.0
     help_shown, sized = True, None
     shown, navigation, follow_at = False, False, None
     # The input line (issue #896). Keys arrive as BYTES through the fleet-sidebar
@@ -1012,14 +1029,15 @@ def ui(screen, session, worker, lock):
             info = fields(pane, US.join(("#{window_active}", "#{window_zoomed_flag}",
                                          "#{session_attached}", "#{@popup_open}",
                                          "#{window_id}", "#{@sidebar_worker}",
-                                         "#{client_key_table}")))
-            if len(info) != 7:
+                                         "#{client_key_table}", "#{@remote}")))
+            if len(info) != 8:
                 return
             # The pane (and curses grid) survives navigation. Follow its new
             # worker before testing liveness or building current-row exemptions.
             if info[4] != window:
                 window = info[4]
-                selected = window
+                current_row = shown_row(window, info[7])
+                selected = current_row
                 env["FLEET_SIDEBAR_CURRENT"] = window
             worker = info[5] or worker
             navigation = info[6] == "fleet-sidebar"
@@ -1094,25 +1112,17 @@ def ui(screen, session, worker, lock):
             attr = curses.color_pair(colors.get(state, 0))
             if node.endswith("!"):
                 attr |= curses.A_DIM  # a lost machine's row (issue #1475)
-            if wid == window:
+            if wid == current_row:
                 attr = curses.color_pair(5) | curses.A_BOLD
             if navigation and wid == selected:
                 attr = curses.color_pair(6) | curses.A_BOLD
-            marker = "▶" if wid == window else "›" if navigation and wid == selected else " "
+            marker = "▶" if wid == current_row else "›" if navigation and wid == selected else " "
             # `marker glyph tree label` (issue #836): the hierarchy glyph is its own
             # fixed cell between the state glyph and the name, so at 30 columns every
             # name starts in the same place instead of a child's text sitting two
             # columns right of its parent's.
-            text = row_text(marker, glyph, tree, label, badge, max(0, width - 1), node)
-            put(y, text, attr, fill=wid == window or (navigation and wid == selected))
-            if node and 0 <= y < height:
-                # The machine label at the row's end draws DIM (issue #1475): it is
-                # context, not the task, and the eye should not stop on it.
-                tag = node.rstrip("!")
-                try:
-                    screen.addstr(y, max(0, width_of(text) - width_of(tag)), tag, attr | curses.A_DIM)
-                except curses.error:
-                    pass
+            text = row_text(marker, glyph, tree, label, badge, max(0, width - 1))
+            put(y, text, attr, fill=wid == current_row or (navigation and wid == selected))
         # The selected row's whole name takes the `?` row while the keyboard is
         # here and the list clipped it (issue #1328); its status words live in
         # the worker pane's header now (issue #1377), so `? 快捷键` stays put.

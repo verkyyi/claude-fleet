@@ -1,8 +1,8 @@
 #!/bin/bash
 # dash-remote-rows-selftest.sh — the sidebar shows your sessions on the OTHER
 # machines (issue #1423, EPIC #1419 C4; the #1475 look + identity), mixed in with
-# this machine's, nested under their real parents, the machine's name dim at the
-# row's end; a machine status line on top; a lost machine's rows dimmed in their
+# this machine's, nested under their real parents, drawn like them (no machine
+# name on a row — #1475); a machine status line on top; a lost machine's rows dimmed in their
 # own group at the foot. Drives tmux-dashboard-rows.sh, fleet-hub-sessions.sh,
 # fleet-control-read.sh + fleet_control.py, and the read-only guards in
 # dash-fold-toggle.sh, dash-pin-toggle.sh and dash-migrate.sh.
@@ -14,8 +14,9 @@
 #   B. rows       — a remote row nests under its LOCAL parent (bare-key origin) and a
 #                   remote grandchild under ITS remote parent (worker_id origin); each
 #                   carries its machine as the sidebar's 9th field (`m4`) and the hub
-#                   row's last dim tag — never a `[m4]` in the name; a local row has no
-#                   9th field; the local parent's k/N counts them; the hub row keeps the
+#                   row's last field, NEVER drawn — no `[m4]` in the name, no tag: a
+#                   remote row looks exactly like a local one (#1475); a local row has an
+#                   empty 9th field; the local parent's k/N counts them; the hub row keeps the
 #                   common width; its id is `wid:<worker_id>`
 #   S. status     — the first row is the machine status line, `● m5 3 · ● m4 2`: this
 #                   machine's live rows, then each #node line; an inert hdr row
@@ -162,19 +163,50 @@ eq "B: a remote child under a LOCAL parent: depth 1, its own subtree, its machin
 eq "B: a remote grandchild under its REMOTE parent: depth 2" \
    "wid:$F/issue-1500|  └||2|m4" "$(srow "$s" '孙')"
 eq "B: a local sibling is untouched" "@2|└||1|" "$(srow "$s" C1)"
-eq "B: a local row has no 9th field" "8" "$(nfields "$s" C1)"
-eq "B: a remote row has one" "9" "$(nfields "$s" '侧边栏')"
+eq "B: a local row carries the 9th field too, empty" "9" "$(nfields "$s" C1)"
+eq "B: a remote row has it" "9" "$(nfields "$s" '侧边栏')"
 hasnt "B: no [m4] in any name" "$s" "[m4"
+# The operator's call (#1475): a worker row never SHOWS its machine — a local row
+# and a remote row look the same. The view's own renderer, on the remote row and
+# on the same row with its machine blanked: one text, and no `m4` in it.
+printf '%s\n' "$s" > "$WORK/srows"
+drawn=$(python3 - "$BIN/fleet-sidebar.py" '侧边栏' "$WORK/srows" <<'PYR'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sb", sys.argv[1]); sb = importlib.util.module_from_spec(spec); spec.loader.exec_module(sb)
+rows = [sb.row_fields(l) for l in open(sys.argv[3], encoding="utf-8").read().split("\n") if l.count(sb.US) >= 4]
+r = next(x for x in rows if x[3] == sys.argv[2])
+local = r[:8] + [""]
+text = sb.row_text(" ", r[2], r[4], r[3], r[5], 34)
+print(text, "same" if text == sb.row_text(" ", local[2], local[4], local[3], local[5], 34) else "differs",
+      sb.row_need(r) == sb.row_need(local), sep="|")
+PYR
+)
+hasnt "B: the view draws no machine name on a remote row" "$drawn" "m4"
+has "B: …and lays it out exactly as the same row local" "$drawn" "|same|True"
 h=$(hub)
 has "B: the hub row shows the issue" "$h" "#1423"
 hrow=$(printf '%s\n' "$h" | LC_ALL=C awk -F"$US" -v w="wid:$F/issue-1423" '$2 == w { print $3; exit }')
-has "B: the hub row ends its flex span with the dim machine name" "$hrow" " m4 "
+hasnt "B: the hub row shows no machine name either" "$hrow" "m4"
 hasnt "B: the hub row carries no [m4]" "$hrow" "[m4"
 widths=$(printf '%s\n' "$h" | python3 -c 'import sys, unicodedata
 w = lambda t: sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in t)
 print("\n".join(sorted({str(w(l.split("\x1f")[2])) for l in sys.stdin.read().split("\n")[1:] if l.count("\x1f") >= 2 and not l.startswith("hdr")})))')
 eq "B: every hub session row is the same width, the remote ones included" "136" "$widths"
 hasnt "B: no @title_info is written for a remote row" "$(cat "$TMUX_LOG")" "wid:"
+
+# ============================================================================
+# M. the row MENU names the machine — the one place the list does (#1475)
+# ============================================================================
+menu=$(PATH="$SHIMPATH" FLEET_UI_LANG=zh bash -c '
+  BIN=$1; sess=$2; verb=menu; set -- menu "$2" "$3" --print
+  . "$BIN/fleet-lib.sh"; . "$BIN/fleet-ui-lang.sh"; . "$BIN/fleet-sidebar-menu.sh"' _ "$BIN" "$S" "wid:$F/issue-1423" 2>/dev/null)
+eq "M: a remote row's menu is titled with its name and machine" "title	侧边栏 · 在 m4" "$(printf '%s\n' "$menu" | head -1)"
+has "M: …and its first item opens the ⇄ proxy window" "$(printf '%s\n' "$menu" | sed -n 2p | cut -f1,2)" "e	进入（⇄ 代理窗口）…"
+has "M: …through fleet-remote-view.sh" "$(printf '%s\n' "$menu" | sed -n 2p)" "fleet-remote-view.sh"
+has "M: …open, on that worker_id" "$(printf '%s\n' "$menu" | sed -n 2p)" " open '\\''wid:$F/issue-1423'\\'' "
+eq "M: a row the cache does not hold gets no menu" "" "$(PATH="$SHIMPATH" bash -c '
+  BIN=$1; sess=$2; verb=menu; set -- menu "$2" "$3" --print
+  . "$BIN/fleet-lib.sh"; . "$BIN/fleet-ui-lang.sh"; . "$BIN/fleet-sidebar-menu.sh"' _ "$BIN" "$S" "wid:$F/issue-9999" 2>/dev/null)"
 
 # ============================================================================
 # S. the machine status line

@@ -402,7 +402,7 @@ try:
     check(bool(kid) and kid[0][3].startswith('修复侧栏'),
           'the label still carries the tree glyph — it belongs in its own field')
     check(all(len(r) == (5 if r[0] == 'hdr' else sidebar.ROW_FIELDS) for r in row_data()),
-          'sidebar rows must carry 8 fields (a heading 5)')
+          'sidebar rows must carry 9 fields (a heading 5)')
     root = [r for r in row_data() if r[0] == w1]
     check(bool(root) and root[0][4] in ('▾', '▸'), 'a holder row must carry its caret in the tree cell')
     cache = work / '.claude-dash/global'

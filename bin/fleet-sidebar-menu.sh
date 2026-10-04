@@ -47,7 +47,9 @@ agent	v	新会话 claude ⇄ codex
 reap	x	回收 — 先确认 y/n
 new	n	新任务 — 建 issue 并启动 worker
 restore	o	恢复已收工任务（hub landed 列表，弹窗）
-repo	g	添加仓库到这个 fleet — 询问 owner/name；~/projects/<name>，缺失时 clone（hub ⌃z）'
+repo	g	添加仓库到这个 fleet — 询问 owner/name；~/projects/<name>，缺失时 clone（hub ⌃z）
+open	e	进入 — 打开 ⇄ 代理窗口（只有另一台机器上的行有；菜单标题写着「· 在 m4」）'
+    m_open_remote='进入（⇄ 代理窗口）…'
     m_rename='改名…'; m_unpin='取消置顶'; m_pin='置顶'
     m_open_pr='打开 PR'; m_open_pr_none='打开 PR（没有）'
     m_answer='回答它的提问…'; m_answer_none='回答它的提问（没有）'
@@ -68,7 +70,9 @@ agent	v	flip new sessions claude ⇄ codex
 reap	x	reap it — asks y/n first
 new	n	new task — file an issue AND spawn its worker
 restore	o	restore a finished task (the hub landed list, in a popup)
-repo	g	add a repo to this fleet — asks owner/name; ~/projects/<name>, cloned if missing (the hub ⌃z)'
+repo	g	add a repo to this fleet — asks owner/name; ~/projects/<name>, cloned if missing (the hub ⌃z)
+open	e	enter — open the ⇄ proxy window (a row on another machine only; the menu title says · on m4)'
+    m_open_remote='Enter (⇄ proxy window)…'
     m_rename='Rename…'; m_unpin='Unpin'; m_pin='Pin'
     m_open_pr='Open PR'; m_open_pr_none='Open PR (none)'
     m_answer='Answer question…'; m_answer_none='Answer question (none)'
@@ -85,9 +89,14 @@ if [ "${1:-}" = --keys ]; then
 fi
 
 wid="${3:-}"
-case "$wid" in @[0-9]*) ;; *) exit 0 ;; esac
+# A row on another machine (`wid:<fleet>/<name>`, #1423) gets a menu too (issue
+# #1475): titled `<name> · 在 m4` — the ONE place the list names the machine, now
+# that the rows look alike — with `enter` (the ⇄ proxy window) and the row-less
+# items. Everything a local row's menu does needs a window here; it has none.
+remote=''
+case "$wid" in @[0-9]*) ;; wid:*/*) remote=1 ;; *) exit 0 ;; esac
 # Never act on another fleet's window, or a stale id tmux recycled elsewhere.
-[ "$(tmux display-message -p -t "$wid" '#{session_name}' 2>/dev/null)" = "$sess" ] || exit 0
+[ -n "$remote" ] || [ "$(tmux display-message -p -t "$wid" '#{session_name}' 2>/dev/null)" = "$sess" ] || exit 0
 
 # sq <text> → one word for BOTH /bin/sh and tmux's command parser: single quotes
 # (no $ ~ expansion in either), an embedded quote closed, escaped and reopened.
@@ -103,7 +112,43 @@ client=$(tmux list-clients -t "$sess" -F '#{client_activity} #{client_name}' 2>/
   | sort -rn | head -1 | cut -d' ' -f2-)
 
 if [ "$verb" = reap ]; then
+  [ -n "$remote" ] && exit 0
   bash "$BIN/fleet-sidebar-reap.sh" "$sess" "$wid" "$client"
+  exit 0
+fi
+
+if [ -n "$remote" ]; then
+  # Its machine + name come from the sidebar's own cache (never the network),
+  # as fleet-remote-view.sh reads them.
+  row=$(LC_ALL=C awk -F $'\037' -v w="$wid" '$1 == w { print $2 "\037" $8; exit }' \
+        "$FLEET_C/global/remote_$sess" 2>/dev/null)
+  node="${row%%$'\037'*}"; name="${row#*$'\037'}"
+  [ -n "$node" ] || exit 0
+  title=$(fleet_ui_t menu_title_on_node_fmt "${name:-${wid##*/}}" "$node")
+  side=$(tmux list-panes -t "$sess:" -F '#{pane_id} #{@sidebar}' 2>/dev/null | awk '$2==1{print $1; exit}')
+  ctx="FLEET_SESSION=$(sq "$sess") TMUX_PANE=$(sq "${side:-}")"
+  [ -n "${FLEET_CONF_DIR:-}" ] && ctx="$ctx FLEET_CONF_DIR=$(sq "$FLEET_CONF_DIR")"
+  [ -n "${FLEET_UI_LANG:-}" ] && ctx="$ctx FLEET_UI_LANG=$(sq "$FLEET_UI_LANG")"
+  sh_run() { printf 'run-shell -b %s' "$(sq "$ctx $1 >/dev/null 2>&1 || :")"; }
+  items=()
+  add() { items+=("$1" "$2" "$3"); }
+  add "$m_open_remote" "$(mk open)" "$(sh_run "bash $(sq "$BIN/fleet-remote-view.sh") open $(sq "$wid")")"
+  add "" "" ""
+  add "$m_new" "$(mk new)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") -w 90% -h 12 -- bash $(sq "$BIN/dash-issue-new.sh") confirm --spawn")"
+  add "$m_restore" "$(mk restore)" "$(sh_run "bash $(sq "$BIN/fleet-restore-pick.sh") --session $(sq "$sess")")"
+  add "$m_repo" "$(mk repo)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") -w 80% -h 16 -- bash $(sq "$BIN/dash-repo-add.sh")")"
+  if [ "${4:-}" = --print ]; then
+    printf 'title\t%s\n' "$title"
+    i=0
+    while [ "$i" -lt "${#items[@]}" ]; do
+      printf '%s\t%s\t%s\n' "${items[$((i + 1))]}" "${items[$i]}" "${items[$((i + 2))]}"
+      i=$((i + 3))
+    done
+    exit 0
+  fi
+  [ -n "$client" ] || exit 0
+  tmux display-menu -c "$client" ${side:+-t "$side"} -x P -y P \
+    -T "#[align=centre] $(fe "$title") " ${items[@]+"${items[@]}"} 2>/dev/null || :
   exit 0
 fi
 

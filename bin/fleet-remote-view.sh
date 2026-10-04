@@ -3,13 +3,20 @@
 # sidebar (issue #1424, EPIC #1419 C5).
 #
 # The sidebar already SHOWS your sessions on the other machines (#1423: rows keyed
-# `wid:<worker_id>`, the machine name dimmed at the row's end since #1475). Enter
-# on one opens a PROXY WINDOW here — named `⇄m4 <name>` (#1475), so the window
-# list and the pane header both say the keys go elsewhere — a
-# window marked `@remote=<node>:<worker_id>` whose pane is an ssh client attached
-# to that session's tmux window on <node>. Typing and scrolling are the remote
-# window's own; closing the proxy window only drops the connection — the remote
-# session never notices. A dropped connection reconnects by itself.
+# `wid:<worker_id>`, drawn like the local ones — the machine is the row menu's
+# title and the status line on top, #1475). Enter on one opens a PROXY WINDOW
+# here — named `⇄m4 <name>` (#1475), so the window list and the pane header both
+# say the keys go elsewhere — a window marked `@remote=<node>:<worker_id>` whose
+# pane is an ssh client attached to that session's tmux window on <node>. Typing
+# and scrolling are the remote window's own; closing the proxy window only drops
+# the connection — the remote session never notices. A dropped connection
+# reconnects by itself.
+#
+# It is a TASK WINDOW of this machine (issue #1475): the local sidebar treats a
+# window with `@remote` like an issue worker's, so the list stays on the left and
+# the other machine's pane is on the right — never the whole window gone remote,
+# never two lists. `prefix h` (conf/tmux-attention.conf → `back`) returns to the
+# last local window; ↑↓ in the list do too.
 #
 #   open <worker_id>        (dash Enter, in a fleet pane) — open the proxy window
 #                           for the row's machine, or retarget + select the one
@@ -23,8 +30,11 @@
 #   watch <view>            (runs ON <node>, over the same ssh connection) — the
 #                           fleet-open back channel, below.
 #   restore <sess> [--unless-view <tty>]   (ON <node>; also its client-attached
-#                           hook) — hand the session its status line + prefix back
-#                           once the proxy leaves, or someone AT that machine attaches.
+#                           hook) — hand the session its status line, prefix and
+#                           sidebar back once the proxy leaves, or someone AT that
+#                           machine attaches.
+#   back [<session>]        (the local `prefix h`) — from a proxy window, select
+#                           the last LOCAL window; anywhere else, nothing.
 #
 # WHY a client of the fleet session, not a grouped/linked session of its own:
 # every fleet script scans `list-windows -a`, and a second session holding the
@@ -33,9 +43,13 @@
 #
 # Nesting: while the proxy is the remote session's ONLY client, it turns that
 # session's status line and prefix off (saved, and restored when it leaves or
-# when anyone else attaches), so the remote looks like a local window and this
-# machine's prefix reaches this machine. With someone attached at the remote
-# end, it changes nothing.
+# when anyone else attaches) and marks the session `@remote_view_solo`, which
+# that machine's sidebar reads as "draw no list" (fleet-sidebar.py sync, #1475)
+# — so the remote looks like a local window, this machine's prefix reaches this
+# machine, and the one list on screen is this machine's. With someone attached
+# at the remote end, it changes nothing: that person keeps their status line,
+# prefix and sidebar, and the proxy shows their sidebar beside the local one —
+# two lists, the price of sharing a screen.
 #
 # fleet-open in the remote session (the operator's iTerm2 only trusts THIS
 # machine's secret, and the escape would have to cross two tmux servers): the
@@ -113,7 +127,7 @@ open)
   w=$(tmux list-windows -t "=$sess" -F '#{window_id} #{@remote}' 2>/dev/null \
       | awk -v n="$node:" 'index($2, n) == 1 { print $1; exit }')
   if [ -n "$w" ]; then
-    cur=$(tmux show-window-option -qv -t "$w" @remote 2>/dev/null)
+    cur=$(tmux show-options -wqv -t "$w" @remote 2>/dev/null)
     if [ "$cur" != "$node:$wid" ]; then
       tmux set-window-option -t "$w" @remote "$node:$wid" 2>/dev/null
       tmux rename-window -t "$w" -- "$title" 2>/dev/null
@@ -231,7 +245,14 @@ attach)
     done
     T set-option -t "=$s:" @remote_view_saved "$saved" \; \
       set-option -t "=$s:" status off \; set-option -t "=$s:" prefix None \; set-option -t "=$s:" prefix2 None \; \
+      set-option -t "=$s:" @remote_view_solo 1 \; \
       set-hook -t "=$s:" 'client-attached[77]' "run-shell -b 'bash $(sq "$BIN/fleet-remote-view.sh") restore $(sq "$s") --unless-view #{client_tty} >/dev/null 2>&1'" 2>/dev/null
+    # This session's sidebar goes (issue #1475): the proxy draws inside the
+    # viewer's own sidebar, and a second list on the right would be noise. Not
+    # FLEET_SIDEBAR — nothing is written to the conf; the marker above is what
+    # fleet-sidebar.py reads, and `restore` drops it. The script wants $TMUX.
+    TMUX="$(T display-message -p '#{socket_path}' 2>/dev/null),0,0" \
+      bash "$BIN/fleet-sidebar.sh" sync "=$s:" >/dev/null 2>&1 || :
   fi
   if [ -n "$view" ] && tty=$(tty 2>/dev/null); then
     case "$view" in *[!A-Za-z0-9-]*) ;; *)
@@ -264,7 +285,29 @@ restore)
     if [ "$v" = - ]; then T set-option -u -t "=$s:" "$o" 2>/dev/null
     else T set-option -t "=$s:" "$o" "$v" 2>/dev/null; fi
   done
-  T set-option -u -t "=$s:" @remote_view_saved \; set-hook -u -t "=$s:" 'client-attached[77]' 2>/dev/null
+  T set-option -u -t "=$s:" @remote_view_saved \; set-option -u -t "=$s:" @remote_view_solo \; \
+    set-hook -u -t "=$s:" 'client-attached[77]' 2>/dev/null
+  # The sidebar comes back with the rest (issue #1475): a sync now that the
+  # solo marker is gone — a no-op while nobody is attached.
+  TMUX="$(T display-message -p '#{socket_path}' 2>/dev/null),0,0" \
+    bash "$BIN/fleet-sidebar.sh" sync "=$s:" >/dev/null 2>&1 || :
+  exit 0
+  ;;
+
+# ---------------------------------------------------------------------------------
+back)
+  # From a proxy window, back to the last LOCAL window (issue #1475): the one the
+  # row was clicked from, as a rule — never another proxy; failing that, the
+  # first local window. Anywhere else: nothing (the key is a no-op there).
+  t="${1:-}"; [ -n "$t" ] || t=$(tmux display-message -p '#{session_id}' 2>/dev/null)
+  [ -n "$t" ] || exit 0
+  cur=$(tmux display-message -p -t "$t:" '#{window_id}' 2>/dev/null)
+  [ -n "$cur" ] && [ -n "$(tmux show-options -wqv -t "$cur" @remote 2>/dev/null)" ] || exit 0
+  w=$(tmux list-windows -t "$t" -F '#{window_last_flag} #{window_id} #{@remote}' 2>/dev/null \
+      | awk '$1 == 1 && $3 == "" { print $2; exit }')
+  [ -n "$w" ] || w=$(tmux list-windows -t "$t" -F '#{window_id} #{@remote}' 2>/dev/null \
+                     | awk '$2 == "" { print $1; exit }')
+  [ -n "$w" ] && tmux select-window -t "$w" 2>/dev/null
   exit 0
   ;;
 

@@ -339,9 +339,10 @@ WLIST=${WLIST//\\037/$US}
 #              window (jump, menu, reap, rename, pin, fold) finds none: a remote
 #              row is read-only, and its key (below) is the worker_id itself
 #   index      90001+, after this machine's windows of the same rank
-#   @wid       the machine label the row is tagged with (`m4`), `m4!` once that
-#              machine is lost — or the cache is older than
-#              FLEET_HUB_SESSIONS_STALE (60s): the row stays, reading 失联
+#   @wid       the machine the row is on (`m4`; sidebar field 9, never drawn —
+#              the rows look alike), `m4!` once that machine is lost — or the
+#              cache is older than FLEET_HUB_SESSIONS_STALE (60s): the row
+#              stays, dimmed, under its machine's 失联 heading
 #   @expand    1, so a remote parent never hides its subtree behind a caret no key
 #              can open
 # Off, or no cache: not one extra line, and no file read at all when off.
@@ -1055,10 +1056,11 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
         *,bg,*)       [ -n "${WD_bg-}" ] || WD_bg=$(fleet_ui_t wait_bg); ndet=$WD_bg ;;
       esac
     fi
-    # field 9 (issue #1475): the machine label of a row on another machine —
-    # `m4`, `m4!` when lost — which the view draws dim at the row's end (and
-    # dims the whole row for `!`); empty for a local row, so its line is as before.
-    buf+="$rgrp	$pinned	$gpath	$wid$US$state$US$gl$US$label$US${treed:- }$US$kidd$US$depth$US$ndet${rnode:+$US$hnd}"$'\n'
+    # field 9 (issue #1475): the machine of a row on another machine — `m4`,
+    # `m4!` when lost — empty for a local row. The view never draws it (a local
+    # row and a remote row LOOK the same; the machine is the row menu's title):
+    # `!` dims the row, that is all the paint reads.
+    buf+="$rgrp	$pinned	$gpath	$wid$US$state$US$gl$US$label$US${treed:- }$US$kidd$US$depth$US$ndet$US${rnode:+$hnd}"$'\n'
     continue
   fi
   # full row: glyph1·issue5·tree2·window26·⟨flex: tags, badge⟩·act8·PR7·ctx4
@@ -1102,10 +1104,9 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # An automatic wake held at the session limit (issue #1058) says so here.
   [ -n "$zwait" ] && { [ -n "$tagpfx" ] && { tagpfx+=' '; dwidth=$((dwidth+1)); }
                        tagpfx+="${AM}${zwait}${R}"; dwidth=$(( dwidth + ${#zwait} )); }
-  # The machine of a row on another machine, dim, last (issue #1475). ASCII
-  # (a hostname label), so ${#} is its width.
-  [ -n "$rnode" ] && { [ -n "$tagpfx" ] && { tagpfx+=' '; dwidth=$((dwidth+1)); }
-                       tagpfx+="${GY}${rnode}${R}"; dwidth=$(( dwidth + ${#rnode} )); }
+  # No machine name on a row on another machine (issue #1475): it is laid out
+  # exactly like a local one — the status line on top says which machines, the
+  # lost heading says which rows, and $rnode only dims a lost row here.
   pad=$(( USABLE - LEFTW - dwidth - RIGHTW )); [ "$pad" -lt 1 ] && pad=1
   printf -v gap '%*s' "$pad" ''
   # tree cell: exactly two cells of source text. Like the old caret it is a

@@ -1547,7 +1547,8 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # with `export CCQUOTA_FLEET=1` too, the collector keeps a 10s refresh of the hub's
 # fleet_sessions (bin/fleet-hub-sessions.sh — never on the dash's render path) and
 # the dash mixes those rows in with this machine's, nested under their parents,
-# the machine's name dimmed at the row's end (issue #1475); the top line of the
+# drawn exactly like the local ones (issue #1475: no machine tag — the row menu's
+# title, `侧边栏 · 在 m4`, names the machine); the top line of the
 # sidebar is the machine status line, `● m5 22 · ● m4 3` (online ●, lost ○ with
 # how long it has been silent); a machine the hub has lost — or a cache gone
 # stale — keeps its rows, dimmed, in their own group at the bottom,

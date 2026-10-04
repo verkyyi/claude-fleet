@@ -12,13 +12,20 @@
 #   A. degenerate  — CCQUOTA_FLEET off: `open` creates nothing
 #   B. open        — a proxy window `@remote=m4:<wid>`, named `⇄m4 …` (#1475), selected;
 #                    a second row of the same machine RETARGETS it (still one)
+#   H. local view  — (#1475) the local sidebar's `jump` on a remote row lands in
+#                    the proxy window WITH the view: the list on the left, the other
+#                    machine's pane on the right; `sync` keeps it there (a proxy
+#                    window is a task window); `jump` on a local row takes it back;
+#                    `prefix h` (`back`) returns to the last local window
 #   C. attach      — the proxy is a client of the remote session, on the worker's
-#                    window, status line + prefix off (saved); typing reaches it
+#                    window, status line + prefix off (saved), its sidebar gone
+#                    (`@remote_view_solo`, #1475); typing reaches it
 #   D. fleet-open  — from the remote session, the request reaches the proxy side
 #                    (sent:proxy), not an escape on the remote's terminal
-#   G. shared      — a client attaching AT the remote end gets status + prefix back
+#   G. shared      — a client attaching AT the remote end gets status + prefix +
+#                    sidebar back
 #   E. close       — killing the proxy window leaves the remote worker running and
-#                    hands the remote session its status line back
+#                    hands the remote session its status line + sidebar back
 #   F. skipped     — a proxy window is no dash row, no session in either cap
 #                    tally, no fleet-restore row, no sleep candidate
 # tmux / python3 absent → SKIP (exit 0). Exit 0 = pass.
@@ -96,16 +103,22 @@ U=$(. "$BIN/fleet-lib.sh"; fleet_uuid "$RS")
 [ -n "$U" ] || { printf 'FAIL: rig: no fleet UUID for %s\n' "$RS" >&2; exit 1; }
 WID="$U/issue-7"; WID2="$U/issue-8"
 
-tr_ -f /dev/null new-session -d -s "$RS" -n plan -x 120 -y 30 'while :; do sleep 300; done' 2>/dev/null \
+tr_ -f /dev/null new-session -d -s "$RS" -n plan -x 200 -y 50 'while :; do sleep 300; done' 2>/dev/null \
   || { printf 'fleet-remote-view selftest: cannot start an isolated tmux server — SKIP\n' >&2; exit 0; }
 RW=$(tr_ new-window -d -P -F '#{window_id}' -t "$RS:" -n worker7 "cat > '$WORK/typed'")
 tr_ set-window-option -t "$RW" @issue 7
 RW8=$(tr_ new-window -d -P -F '#{window_id}' -t "$RS:" -n worker8 'while :; do sleep 300; done')
 tr_ set-window-option -t "$RW8" @issue 8
+# The remote fleet's own sidebar view, in the worker's window (#1475: it goes
+# while the proxy is the only client, and comes back with the status line).
+RVP=$(tr_ split-window -d -h -b -f -l 30 -P -F '#{pane_id}' -t "$RW" 'while :; do sleep 300; done')
+tr_ set-option -p -t "$RVP" @sidebar 1
 
 # --- the LOCAL fleet + the sidebar's remote cache (#1423's row shape) ---------------
 tl -f /dev/null new-session -d -s "$LS" -n plan -x 160 -y 40 'while :; do sleep 300; done'
-tl new-window -d -t "$LS:" -n local-work 'while :; do sleep 300; done'
+LW=$(tl new-window -d -P -F '#{window_id}' -t "$LS:" -n local-work 'while :; do sleep 300; done')
+tl set-window-option -t "$LW" @issue 9
+tl select-window -t "$LW"
 G="$TMPDIR/.claude-dash/global"; mkdir -p "$G"
 US=$'\037'
 { printf '#ts%s%s\n' "$US" "$(date +%s)"
@@ -131,6 +144,55 @@ eq "B: named for the row and its machine — ⇄m4, the pane header's word too (
 eq "B: and selected" "$PW" "$(tl display-message -p -t "=$LS:" '#{window_id}')"
 
 # ============================================================================
+# H. the local view rides along (#1475): a proxy window is a task window
+# ============================================================================
+# fleet-sidebar.py as the view's own entry points, on the LOCAL server (the shim).
+sb() { FLEET_SESSION=$LS python3 - "$BIN/fleet-sidebar.py" "$@" <<'PYR'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sb", sys.argv[1]); sb = importlib.util.module_from_spec(spec); spec.loader.exec_module(sb)
+fn = sys.argv[2]
+if fn == "jump":
+    sb.jump(sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6])
+elif fn == "sync":
+    sb.sync(sys.argv[3], "1", 30, sys.argv[4])
+elif fn == "version":
+    print(sb.VIEW_VERSION)
+PYR
+}
+VV=$(sb version)
+tl select-window -t "$LW"
+LWP=$(tl display-message -p -t "$LW" '#{pane_id}')
+# A view pane in the local task window, as sync would have made it.
+VP=$(tl split-window -d -h -b -f -l 30 -P -F '#{pane_id}' -t "$LWP" 'while :; do sleep 300; done')
+tl set-option -p -t "$VP" @sidebar 1 \; set-option -p -t "$VP" @sidebar_version "$VV" \; set-option -w -t "$LW" @sidebar_worker "$LWP"
+views_in() { tl list-panes -t "$1" -F '#{pane_id} #{@sidebar}' | awk '$2 == 1 { print $1 }' | tr '\n' ' '; }
+# `sync` draws a view only for an ATTACHED session (the operator's screen): a
+# client on the local session, from a pane of the other server.
+AW=$(tr_ new-window -d -P -F '#{window_id}' -t "$RS:" -n viewer "env -u TMUX $REAL_TMUX -L $LL attach -t '=$LS'")
+lattached() { [ "$(tl display-message -p -t "=$LS:" '#{session_attached}' 2>/dev/null)" = 1 ]; }
+waitfor 10 lattached || fail "H: no client attached to the local session"
+sb jump "$LS" "wid:$WID" "$VP" "$WORK/sb.lock"
+eq "H: jump on a remote row lands in the proxy window" "$PW" "$(tl display-message -p -t "=$LS:" '#{window_id}')"
+eq "H: …with the view: the list is in the proxy window" "$VP " "$(views_in "$PW")"
+eq "H: …and nowhere else" "" "$(views_in "$LW")"
+eq "H: …on the left" "0" "$(tl display-message -p -t "$VP" '#{pane_left}')"
+PP=$(tl list-panes -t "$PW" -F '#{pane_id} #{pane_active} #{@sidebar}' | awk '$2 == 1 && $3 != 1 { print $1 }')
+[ -n "$PP" ] || fail "H: the proxy pane is not the active pane of its window" "$(tl list-panes -t "$PW" -F '#{pane_id} #{pane_active} #{@sidebar}')"
+sb sync "$LS" "$WORK/sb.lock"
+eq "H: sync with the proxy window current keeps the view there (a task window)" "$VP " "$(views_in "$PW")"
+eq "H: …one view in the whole session" "1" "$(tl list-panes -s -t "$LS" -F '#{@sidebar}' | grep -c '^1$')"
+sb jump "$LS" "$LW" "$VP" "$WORK/sb.lock"
+eq "H: jump on a local row goes back, view and all" "$LW $VP " "$(tl display-message -p -t "=$LS:" '#{window_id}') $(views_in "$LW")"
+eq "H: …the proxy window keeps no view" "" "$(views_in "$PW")"
+tl select-window -t "$PW"
+FLEET_SESSION=$LS bash "$BIN/fleet-remote-view.sh" back "$LS" >/dev/null 2>&1
+eq "H: prefix h (back) from the proxy window selects the last local window" "$LW" "$(tl display-message -p -t "=$LS:" '#{window_id}')"
+FLEET_SESSION=$LS bash "$BIN/fleet-remote-view.sh" back "$LS" >/dev/null 2>&1
+eq "H: …and is a no-op anywhere else" "$LW" "$(tl display-message -p -t "=$LS:" '#{window_id}')"
+tl select-window -t "$PW"
+tr_ kill-window -t "$AW"
+
+# ============================================================================
 # C. attach
 # ============================================================================
 attached() { [ "$(tr_ display-message -p -t "=$RS:" '#{session_attached}' 2>/dev/null)" = 1 ]; }
@@ -139,6 +201,9 @@ eq "C: the remote session shows the worker's window" "$RW" "$(tr_ display-messag
 eq "C: remote status line off while the proxy is its only client" "off" "$(tr_ show-options -qv -t "=$RS:" status)"
 eq "C: remote prefix off" "None" "$(tr_ show-options -qv -t "=$RS:" prefix)"
 has "C: what it was is saved" "$(tr_ show-options -qv -t "=$RS:" @remote_view_saved)" "status=- "
+eq "C: the remote session is marked solo — its sidebar draws no list (#1475)" "1" "$(tr_ show-options -qv -t "=$RS:" @remote_view_solo)"
+rviews() { tr_ list-panes -s -t "$RS" -F '#{pane_id} #{@sidebar}' | awk '$2 == 1 { print $1 }' | tr '\n' ' '; }
+eq "C: …the view it had is gone" "" "$(rviews)"
 tl send-keys -t "$PW" 'hello-from-m5' Enter
 typed() { grep -q 'hello-from-m5' "$WORK/typed" 2>/dev/null; }
 waitfor 5 typed || fail "C: typing in the proxy window never reached the remote pane" "$(cat "$WORK/typed" 2>/dev/null)"
@@ -187,6 +252,7 @@ two() { [ "$(tr_ display-message -p -t "=$RS:" '#{session_attached}' 2>/dev/null
 waitfor 10 two || fail "G: the second client never attached"
 back() { [ -z "$(tr_ show-options -qv -t "=$RS:" status)" ] && [ -z "$(tr_ show-options -qv -t "=$RS:" @remote_view_saved)" ]; }
 waitfor 5 back || fail "G: a client at the remote end did not get the status line back" "$(tr_ show-options -t "=$RS:" status)"
+eq "G: …and the solo marker is gone: its sidebar may draw again (#1475)" "" "$(tr_ show-options -qv -t "=$RS:" @remote_view_solo)"
 tl kill-window -t "$HW"
 one() { [ "$(tr_ display-message -p -t "=$RS:" '#{session_attached}' 2>/dev/null)" = 1 ]; }
 waitfor 5 one || fail "G: the helper client did not leave"
@@ -201,6 +267,7 @@ eq "E: the remote worker still runs" "$RW8" "$(tr_ list-windows -t "=$RS:" -F '#
 restored() { [ -z "$(tr_ show-options -qv -t "=$RS:" status)" ]; }
 waitfor 5 restored || fail "E: the remote session's status line was not handed back" "$(tr_ show-options -t "=$RS:" status)"
 eq "E: the saved marker is gone" "" "$(tr_ show-options -qv -t "=$RS:" @remote_view_saved)"
+eq "E: the solo marker too" "" "$(tr_ show-options -qv -t "=$RS:" @remote_view_solo)"
 gone() { [ -z "$(ls "$FLEET_CONF_DIR/remote-views" 2>/dev/null)" ]; }
 waitfor 5 gone || fail "E: the view registration was left behind" "$(ls "$FLEET_CONF_DIR/remote-views")"
 

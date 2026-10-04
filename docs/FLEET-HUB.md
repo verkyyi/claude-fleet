@@ -139,10 +139,12 @@ the hub's `fleet_sessions` every 10 s into `global/remote_<sess>` (and the
 `control/hub-workers.tsv` cache above). `tmux-dashboard-rows.sh` only reads that
 file: your sessions on other machines — your login, a `worker_id`, a fleet that is
 not this machine's — render mixed in with the local windows, nested by
-`@origin_wid` (or the issue's sub-issue parent), the machine's name dimmed at the
-row's end (issue #1475; it was a `[m4]` prefix). Their window id
-is `wid:<worker_id>`, so jump, menu, reap, rename, pin and fold find no window:
-remote rows are read-only. Their red `?` / `⊘` (asking you, waiting for a
+`@origin_wid` (or the issue's sub-issue parent), and **look exactly like the
+local rows** (issue #1475, the operator's call: no `[m4]` prefix, no machine
+tag — the machine is the row menu's title, `侧边栏 · 在 m4`, and the status line
+on top). Their window id is `wid:<worker_id>`, so reap, rename, pin and fold
+find no window: remote rows are read-only; Enter (or the menu's `e`) opens the
+proxy window below. Their red `?` / `⊘` (asking you, waiting for a
 permission) is the local one: the inventory's column 12 carries `@claude_needs`.
 The **machine status line** heads the sidebar (and the hub list):
 `● m5 22 · ● m4 3` — one entry per machine, `●` online / `○` lost with
@@ -188,9 +190,18 @@ is the session's only client it turns that session's status line and prefix off
 the window only drops the connection; a drop reconnects (backing off, and
 alternating with the hub relay `fleet connect --proxy` when one is configured).
 The ssh host is the machine label unless `FLEET_REMOTE_SSH` (`m4=m4-lan`) maps it.
-Every local rail skips a proxy window: no dash row (the `[m4]` row stands for
-it), no session in either cap tally, no fleet-restore row, no sleep, failover or
-rate-limit scrape. **fleet-open from the remote session** cannot reach the
+It is also marked `@remote_view_solo`, which that machine's sidebar
+(`fleet-sidebar.py sync`) reads as "draw no list": the proxy is drawn INSIDE the
+viewer's own sidebar (issue #1475) — the local sidebar treats a window with
+`@remote` as a task window, so Enter on a remote row lands in the proxy window
+with the list still on the left and the other machine's pane on the right, one
+list, never the whole window gone remote. ↑↓ in the list leave it like any task;
+`prefix h` returns to the last local window. Someone attached AT the remote end
+changes nothing there — they keep their status line, prefix and sidebar, and the
+proxy then shows their sidebar beside the local one (two lists: the price of a
+shared screen). Every local rail skips a proxy window: no dash row (the remote
+row stands for it), no session in either cap tally, no fleet-restore row, no
+sleep, failover or rate-limit scrape. **fleet-open from the remote session** cannot reach the
 operator's iTerm2 directly (it trusts this machine's secret only), so the remote
 side registers the proxy's client tty under `$FLEET_CONF_DIR/remote-views/`;
 `fleet-open.sh` there sees its newest client is a view, drops the request in the
