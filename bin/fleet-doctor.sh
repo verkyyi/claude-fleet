@@ -1781,21 +1781,53 @@ if [ "$igchk" != 0 ] && [ -n "$ighost" ] && [ -n "$igprobe" ]; then
 fi
 
 # --- status line (optional: conf/statusline.sh is jq-gated) ---
-# The optional Claude Code status line (conf/statusline.sh, wired install-time
-# into settings.json's statusLine — see docs/INSTALL.md step 8b) renders a
-# context-% mini-bar + cwd + git branch + model. It exits silently without jq, so
-# a wired-but-jq-less status line shows a blank line. Soft-warn (never fail) so the
-# operator knows why. Only fires when a statusLine is actually wired to our script
-# (match the .sh path so an unrelated custom status line isn't flagged); the
-# component is off until then, so silence otherwise.
+# The Claude Code status line (conf/statusline.sh, wired install-time into
+# settings.json's statusLine — docs/INSTALL.md step 8b) prints nothing since #1452
+# and stamps the context % / model / effort / rate limits onto the pane's window;
+# while the key is there Claude Code keeps one blank row at the bottom of every
+# pane. Since #1459 the fleet mod feeds the same script from inside the session,
+# so a login whose every Claude window carries the mod can drop the key
+# (`bin/fleet-statusline.sh off`) — this row says where that stands: how many
+# Claude windows the mod feeds, and (statusLine off) whether any is left with no
+# reporter at all. The Claude path exits silently without jq, so a wired-but-
+# jq-less status line stamps nothing — soft-warn (never fail). A personal status
+# line (not ours) is never flagged.
 settings="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
-if [ -f "$settings" ] && grep -q 'statusline\.sh' "$settings" 2>/dev/null; then
-  if command -v jq >/dev/null 2>&1; then
-    pass statusln "wired + jq present (context-% mini-bar + cwd + branch + model)"
-  else
-    warn statusln "settings.json wires statusline.sh but jq is missing — it exits silently, so the status line stays blank (\`brew install jq\`)"
-  fi
-fi
+sl_sum=$(bash "$(dirname "$0")/fleet-statusline.sh" status --porcelain 2>/dev/null | head -1)
+case "$sl_sum" in
+  wired=*)
+    sl_tab=$(printf '\t')
+    sl_kind=${sl_sum#wired=}; sl_kind=${sl_kind%%"$sl_tab"*}
+    sl_n=$(printf '%s' "$sl_sum" | tr '\t' '\n' | sed -n 's/^windows=\([0-9]*\)$/\1/p')
+    sl_fed=$(printf '%s' "$sl_sum" | tr '\t' '\n' | sed -n 's/^fed=\([0-9]*\)$/\1/p')
+    sl_blind=$(printf '%s' "$sl_sum" | tr '\t' '\n' | sed -n 's/^blind=\([0-9]*\)$/\1/p')
+    sl_mod=${sl_sum##*mod=}
+    case "$sl_kind" in
+      fleet)
+        if ! command -v jq >/dev/null 2>&1; then
+          warn statusln "settings.json wires statusline.sh but jq is missing — the Claude path stamps nothing (\`brew install jq\`); the mod feeds ${sl_fed:-0}/${sl_n:-0} windows"
+        elif [ "$sl_mod" = on ] && [ "${sl_blind:-1}" = 0 ]; then
+          pass statusln "wired (one blank row per pane) · the mod feeds all ${sl_n:-0} Claude windows — \`fleet-statusline.sh off\` 省掉底部空行"
+        else
+          pass statusln "wired (one blank row per pane) · the mod feeds ${sl_fed:-0}/${sl_n:-0} Claude windows — ${sl_blind:-0} would go blind if turned off"
+        fi ;;
+      none)
+        if [ "${sl_blind:-0}" -gt 0 ] && [ "$sl_mod" = on ]; then
+          warn statusln "statusLine off, but ${sl_blind} Claude window(s) have no mod heartbeat — no context %, no @model, no auto-handoff there (cycle them, or \`fleet-statusline.sh on\`)"
+        elif [ "$sl_mod" = on ]; then
+          pass statusln "off — the mod feeds the bus (${sl_fed:-0}/${sl_n:-0} Claude windows); no blank row at the bottom"
+        fi ;;
+    esac ;;
+  *)
+    # fleet-statusline.sh missing (an older install): the pre-#1459 check.
+    if [ -f "$settings" ] && grep -q 'statusline\.sh' "$settings" 2>/dev/null; then
+      if command -v jq >/dev/null 2>&1; then
+        pass statusln "wired + jq present (the measurement bus behind the pane header)"
+      else
+        warn statusln "settings.json wires statusline.sh but jq is missing — it exits silently, so nothing is stamped (\`brew install jq\`)"
+      fi
+    fi ;;
+esac
 
 # --- hook table: every fleet hook wired exactly once (issue #818) ---
 # The sync used to append the table and de-dup on the command STRING, so a

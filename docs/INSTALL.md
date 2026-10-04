@@ -57,7 +57,7 @@ login is one fleet; a shared login gives everyone one quota record.
 | Several repos per fleet (`bin/fleet-repo.sh`, issue #788/#795) | `fleet-repo.sh add <owner/repo> [<checkout>] [--base <b>]` registers another repo with a fleet (clone-or-reuse, overlay at `fleets/<sess>/repos/<slug>.conf`); from inside the fleet the dash's ⌃z / the sidebar menu's `g` open `dash-repo-add.sh`, a popup over the same `add` that asks only `owner/name` (#1103); `list` / `remove [--force]`; `fold <old-fleet> --into <fleet> [--dry-run] [--wait]` moves a whole one-repo fleet in and archives its conf (#796). Nothing to install and no switch to set — a fleet with no overlay behaves exactly as before. Once 2+ repos are hosted, the fleet picker gains repo rows, sessions carry `@repo` (the dash badges it; window names stay bare), and the hub opens in `$HOME`. Proven by `bin/multirepo-e2e-selftest.sh` | git (+ gh to clone) |
 | Fleet commands (optional) | repo-shipped `/skill`s (`commands/`) — fleet-aware slash commands, appended to `~/.claude/commands/` | claude |
 | Fleet skills (optional) | repo-shipped base **skills** (`skills/<name>/` dirs — SKILL.md plus any supporting files) a fleet command or the agent delegates to — e.g. `/fleet-handoff` runs the base `handoff` skill verbatim; `doc-preview` ships `share.sh`/`server.py`/`render.mjs` beside its SKILL.md (issues #311, #354) and serves in one of two modes — `https` (loopback server behind `tailscale serve`) or, for a login that is not the machine's one tailscale operator, `http-direct` (server bound on the tailscale IPv4, plain http, tailnet-only; issue #1093) — `fleet-doctor`'s `docprev` row says which this login gets and the one-time `sudo tailscale serve …` for HTTPS, `epic-page` ships the `template.html` both EPIC pages render into (issue #809); installed into `~/.claude/skills/` and mirrored into each known `$CODEX_HOME/skills/` whole-dir, marker-gated (`<!-- fleet skill -->` in the SKILL.md) so a personal skill is never clobbered | claude / codex |
-| Status line (optional) | `conf/statusline.sh` — the Claude Code status line as the fleet's measurement bus (issue #1452): it prints nothing, and stamps the context % + window size (`@ctx_pct` / `@ctx_limit` / `@ctx_band` — the auto-handoff nudge, `fleet-context.sh`), the model + effort level (`@model` / `@effort`) and the account's rate limits (`@rl*`) onto the pane's tmux window on every render; the pane header shows `62% · Opus 5.5 · high` on its right from those stamps (`conf/tmux-attention.conf`). Wired **install-time only** by pointing `settings.json`'s `statusLine` at the **live-install** path `~/.claude/fleet/conf/statusline.sh`, so improvements flow through `land → /fleet-sync-install` with no copy step. jq-gated — inert without `jq`. NOT auto-wired on sync; opt-in per install (see step 8b) | jq (soft) |
+| Status line (optional) | `conf/statusline.sh` — the Claude Code status line as the fleet's measurement bus (issue #1452): it prints nothing, and stamps the context % + window size (`@ctx_pct` / `@ctx_limit` / `@ctx_band` — the auto-handoff nudge, `fleet-context.sh`), the model + effort level (`@model` / `@effort`) and the account's rate limits (`@rl*`) onto the pane's tmux window on every render; the pane header shows `62% · Opus 5.5 · high` on its right from those stamps (`conf/tmux-attention.conf`). Wired **install-time only** by pointing `settings.json`'s `statusLine` at the **live-install** path `~/.claude/fleet/conf/statusline.sh`, so improvements flow through `land → /fleet-sync-install` with no copy step. jq-gated — inert without `jq`. NOT auto-wired on sync; opt-in per install (see step 8b). The fleet mod feeds the same script from inside the session (`--from mod`, issue #1459), so once every window carries the mod the key can be dropped — `bin/fleet-statusline.sh off`, step 8c — and the blank bottom row goes with it | jq (soft) |
 
 ## Install steps
 
@@ -693,6 +693,32 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
      `~/.claude/fleet/conf/statusline.sh` is the operator's one-line step — the
      same script, now landed in the repo so it improves through `land → sync`.
 
+8c. **Give the pane its bottom row back (optional, later).** Claude Code keeps
+   one blank row at the bottom of every pane for as long as `settings.json` has
+   a `statusLine` at all — there is no hidden option (issue #1459). The fleet mod
+   (`mod/fleet`, v0.2.0+) feeds the SAME `conf/statusline.sh` from inside the
+   session (`--from mod`: context + rate limits off `session.measure`, model +
+   effort off `turn.step`, a `/model` off a 2 s poll), so a login whose every
+   Claude window carries that mod can drop the key and lose nothing. The switch
+   is `bin/fleet-statusline.sh`:
+
+   ```sh
+   ~/.claude/fleet/bin/fleet-statusline.sh status   # what is wired + a census: fed by the mod / not, and why
+   ~/.claude/fleet/bin/fleet-statusline.sh off      # removes the key — ONLY when every live Claude window is fed
+   ~/.claude/fleet/bin/fleet-statusline.sh on       # puts it back (this install's conf/statusline.sh)
+   ```
+
+   Rails: `off` refuses (exit 1, the windows named) while any Claude window has
+   no fresh `@mod_alive` or an older `@mod_ver` — a session launched before the
+   mod is blind the moment the key goes, since nothing restarts it; cycle those
+   first (`/fleet-handoff` in the pane, or close + `fleet-restore`) and re-run,
+   or `off --force` knowingly. It never touches a personal `statusLine` (one not
+   ending in `conf/statusline.sh`), refuses under `FLEET_MOD=0` (no second
+   reporter), backs `settings.json` up to `.bak.<epoch>` first, and
+   `/fleet-sync-install` never runs it — the row is the operator's to take.
+   Running sessions keep their row until restarted; new ones have it back.
+   `fleet-doctor`'s `statusln` row says where the login stands.
+
 9. **Seed the label taxonomy.** Run
    `bash ~/.claude/fleet/bin/fleet-labels-seed.sh` (resolves `FLEET_REPO` from
    step 3's `fleet.conf`; pass `--repo owner/name` to override). It
@@ -855,7 +881,8 @@ delete the plists), delete the `source-file …tmux-attention.conf` line from
 `~/.tmux.conf`, remove the five `set-claude-state.sh` hook entries (and the
 `handoff-latch-reset-hook.sh` + `refocus-hook.sh` entries on `SessionStart`, and `precompact-hook.sh` on `PreCompact`) from `~/.claude/settings.json`, remove the `statusLine` block from
 `~/.claude/settings.json` **only if** it points at `conf/statusline.sh` (leave a
-personal one), delete `~/.claude/fleet/`, remove any fleet commands
+personal one — `bin/fleet-statusline.sh off --force` does exactly this, backup
+included), delete `~/.claude/fleet/`, remove any fleet commands
 you copied into `~/.claude/commands/` (the ones with a `<!-- fleet skill … -->`
 marker — leave your personal commands) and any fleet skills you copied into
 `~/.claude/skills/` (each `<name>/` dir whose `SKILL.md` carries the
