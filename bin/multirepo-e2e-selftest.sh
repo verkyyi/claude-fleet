@@ -35,6 +35,8 @@
 #                                fleet_control.py's inventory mints — the fleet's
 #                                FIRST repo, never the pane's (issue #1498); the
 #                                one-repo fleet's UUID is unchanged.
+#   (p) hub inventory            the node agent's discover lists every hosted repo
+#                                (issue #1512), the one-repo fleet's its one repo.
 #   (z) degenerate               a one-repo fleet beside it keeps bare keys,
 #                                three-field backlog rows, no repo column, and its
 #                                hub in its checkout (a 2-repo fleet's hub: $HOME).
@@ -390,8 +392,24 @@ bash "$BIN/fleet-restore.sh" --snapshot >/dev/null 2>&1
 chk z "one-repo restore rows carry no repo column" "$(awk -F'\t' '$1=="WIN" && NF>15' "$FLEET_CONF_DIR/fleets/$D/restore.map" 2>/dev/null | wc -l | tr -d ' ')" 0
 [ -e "$FLEET_CONF_DIR/fleets/$D/repos" ] && fail "(z) the one-repo fleet grew a repos/ dir" || ok "(z) the one-repo fleet has no repos/ dir"
 
+# ==== (p) the hub sees every repo (issue #1512) ==========================================
+# The node agent's inventory (fleet-control-read.sh → fleet_control.py, the real
+# pair) carries `repos` — the fleet's own repo first, then the overlay — which the
+# hub's placement / move matches on; the one-repo fleet's is its repo alone, and
+# neither fleet's UUID moves (the list is never hashed).
+inv() { (cd "$BIN" && python3 -c '
+import sys, fleet_control as c
+for f in c.Control(sys.argv[1]).inventory():
+    if f["name"] == sys.argv[2]: print(" ".join(f["repos"]) + "|" + f["repo"])' "$FLEET_CONF_DIR" "$1") 2>"$WORK/inv.err"; }
+chk p "the 2-repo fleet's inventory lists both repos, own first" "$(inv "$S")" "o/alpha o/beta|o/alpha"
+chk p "the one-repo fleet's inventory lists its one repo" "$(inv "$D")" "o/solo|o/solo"
+fidS=$( (cd "$BIN" && python3 -c 'import sys, uuid, fleet_control as c
+ctl = c.Control(sys.argv[1]); f = [x for x in ctl.inventory() if x["name"] == sys.argv[2]][0]
+print(f["fleet_id"] == str(uuid.uuid5(uuid.UUID(ctl.machine_id), c.canonical([f["name"], f["repo"], f["checkout"]]))))' "$FLEET_CONF_DIR" "$S") 2>&1)
+chk p "the 2-repo fleet's UUID still hashes its own repo only" "$fidS" True
+
 # ==== the readout ===========================================================================
-n=0; for c in $LEAKS; do [ "$c" = z ] || n=$((n+1)); done
+n=0; for c in $LEAKS; do [ "$c" = z ] || [ "$c" = p ] || n=$((n+1)); done   # z, p: not one of the nine
 printf 'leaks: %s/9 known ways work leaks across repos%s\n' "$n" "${LEAKS:+ (classes:$LEAKS)}"
 [ "$FAILS" = 0 ] && { printf 'PASS multirepo-e2e-selftest\n'; exit 0; }
 printf '%s failure(s)\n' "$FAILS" >&2; exit 1

@@ -367,6 +367,14 @@ func (s *Server) handleNodeMove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The target's row comes first: the key it will know the session by
+	// depends on how many repos it hosts (claude-fleet#1512).
+	target, err := s.Store.Fleet(pl.FleetID)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	key = targetKey(key, target, req.Repo)
 	toWID := pl.FleetID + "/" + key
 	issue := 0
 	if km[1] == "issue" {
@@ -403,11 +411,6 @@ func (s *Server) handleNodeMove(w http.ResponseWriter, r *http.Request) {
 
 	// The lease goes first, so no third machine can open the issue between
 	// the source letting go and the target's first heartbeat.
-	target, err := s.Store.Fleet(pl.FleetID)
-	if err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
 	giveBack := func() {}
 	if issue > 0 {
 		tclaim := store.LeaseClaim{Repo: req.Repo, Issue: issue, WorkerID: toWID, FleetID: pl.FleetID,

@@ -447,11 +447,12 @@ func readFleets(ctx context.Context, home string) (fleetSnapshot, error) {
 	var disc struct {
 		MachineID string `json:"machine_id"`
 		Fleets    []struct {
-			FleetID  string `json:"fleet_id"`
-			Name     string `json:"name"`
-			Repo     string `json:"repo"`
-			Checkout string `json:"checkout"`
-			Agent    string `json:"agent"`
+			FleetID  string   `json:"fleet_id"`
+			Name     string   `json:"name"`
+			Repo     string   `json:"repo"`
+			Checkout string   `json:"checkout"`
+			Agent    string   `json:"agent"`
+			Repos    []string `json:"repos"`
 		} `json:"fleets"`
 	}
 	if err := fleetRPC(ctx, script, map[string]any{"protocol": 1, "method": "discover", "params": map[string]any{}}, &disc); err != nil {
@@ -463,7 +464,7 @@ func readFleets(ctx context.Context, home string) (fleetSnapshot, error) {
 			State   string            `json:"state"`
 			Workers []json.RawMessage `json:"workers"`
 		}
-		fl := control.Fleet{FleetID: f.FleetID, Name: f.Name, Repo: f.Repo, Checkout: f.Checkout, Agent: f.Agent}
+		fl := control.Fleet{FleetID: f.FleetID, Name: f.Name, Repo: f.Repo, Checkout: f.Checkout, Agent: f.Agent, Repos: f.Repos}
 		err := fleetRPC(ctx, script, map[string]any{"protocol": 1, "method": "fleet_status",
 			"machine_id": disc.MachineID, "params": map[string]any{"fleet_id": f.FleetID}}, &st)
 		if err != nil {

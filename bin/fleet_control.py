@@ -65,15 +65,18 @@ class Control:
         if code:
             raise Fault("UNAVAILABLE", "Cannot enumerate configured fleets")
         parts = output.decode("utf-8").split("\0")
-        if parts.pop() != "" or len(parts) % 5:
+        if parts.pop() != "" or len(parts) % 6:
             raise Fault("PROTOCOL_ERROR", "Invalid local fleet inventory")
         fleets = []
-        for i in range(0, len(parts), 5):
-            session, repo, checkout, agent, config = parts[i:i + 5]
+        for i in range(0, len(parts), 6):
+            session, repo, checkout, agent, config, hosted = parts[i:i + 6]
             name(session)
             fleet_id = str(uuid.uuid5(uuid.UUID(self.machine_id), canonical([session, repo, checkout])))
+            # repos (issue #1512): every repo the fleet hosts, for the hub's
+            # placement — its own repo alone in a one-repo fleet.
+            repos = [r for r in hosted.split("\n") if r] or ([repo] if repo else [])
             fleets.append(dict(fleet_id=fleet_id, machine_id=self.machine_id, name=session,
-                               repo=repo, checkout=checkout, agent=agent, config_path=config))
+                               repo=repo, repos=repos, checkout=checkout, agent=agent, config_path=config))
         return fleets
 
     def ready(self):

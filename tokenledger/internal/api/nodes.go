@@ -455,11 +455,12 @@ type NodeView struct {
 // NodeFleetSummary is one fleet on a node, without its window list (C2 owns
 // that view; the roster only counts).
 type NodeFleetSummary struct {
-	FleetID string `json:"fleet_id"`
-	Name    string `json:"name"`
-	Repo    string `json:"repo,omitempty"`
-	State   string `json:"state,omitempty"`
-	Count   int    `json:"count"`
+	FleetID string   `json:"fleet_id"`
+	Name    string   `json:"name"`
+	Repo    string   `json:"repo,omitempty"`
+	Repos   []string `json:"repos,omitempty"` // claude-fleet#1512; absent from an older agent
+	State   string   `json:"state,omitempty"`
+	Count   int      `json:"count"`
 }
 
 // MachineView folds a machine's logins into one row: the operator asks "is m4
@@ -610,7 +611,7 @@ func nodeView(n store.Node, now time.Time) NodeView {
 		v.MemFreeBytes, v.MemTotalBytes = hb.MemFreeBytes, hb.MemTotalBytes
 		v.Sessions, v.FleetError, v.FleetVersion = hb.Sessions, hb.FleetError, hb.FleetVersion
 		for _, f := range hb.Fleets {
-			v.Fleets = append(v.Fleets, NodeFleetSummary{FleetID: f.FleetID, Name: f.Name, Repo: f.Repo, State: f.State, Count: f.Count})
+			v.Fleets = append(v.Fleets, NodeFleetSummary{FleetID: f.FleetID, Name: f.Name, Repo: f.Repo, Repos: reportedRepos(f.Repos), State: f.State, Count: f.Count})
 		}
 	}
 	return v

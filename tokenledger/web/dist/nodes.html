@@ -167,13 +167,18 @@ function render(snap) {
       </div>
       ${maintButton(m)}
     </div>`).join("") : `<div class="card empty">还没有机器报到。agent 需以 CCQUOTA_FLEET=1 启动。</div>`;
+  // Every repo a fleet hosts (claude-fleet#1512) — placement and moves match
+  // any of them. An agent older than that sends none: nothing extra is drawn.
+  const fleetRepos = (f) => (f.repos && f.repos.length)
+    ? f.repos.map((r) => `<br><span class="mono muted">&nbsp;&nbsp;${esc(r)}</span>`).join("")
+    : "";
   $("nodes").innerHTML = snap.nodes.map((n) => `
     <tr>
       <td>${esc(n.hostname)}${kindTag(n)}</td>
       <td class="mono">${esc(n.os_user)}</td>
       <td>${pill(n.status)}${n.spot && n.spot !== "online" ? " " + spotPill(n.spot) : ""}</td>
       <td>${n.sessions}</td>
-      <td>${n.fleets.length ? n.fleets.map((f) => `<span class="mono">${esc(f.name)}</span> <span class="muted">${f.count}</span>`).join("<br>") : (n.fleet_error ? `<span class="err">${esc(n.fleet_error)}</span>` : `<span class="muted">—</span>`)}</td>
+      <td>${n.fleets.length ? n.fleets.map((f) => `<span class="mono">${esc(f.name)}</span> <span class="muted">${f.count}</span>${fleetRepos(f)}`).join("<br>") : (n.fleet_error ? `<span class="err">${esc(n.fleet_error)}</span>` : `<span class="muted">—</span>`)}</td>
       <td>${age(n.age_sec)}</td>
       <td>${n.proto}${n.compatible ? "" : ` <span class="err">不兼容·不派写操作</span>`}</td>
       <td class="mono muted">${esc(n.agent_version)}${n.fleet_version ? " · " + esc(n.fleet_version.slice(0, 7)) : ""}</td>

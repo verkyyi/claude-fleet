@@ -250,6 +250,37 @@ func repoNamed(repo, want string) bool {
 	return want == repo || want == fleetid.RepoSlug(repo) || want == name
 }
 
+// hostsRepo is repoNamed over every repo a fleet hosts (claude-fleet#1512):
+// its own and each repos/ overlay (#788), so a fleet whose first repo is
+// another one is still a candidate for this one's issues.
+func hostsRepo(r store.FleetRow, want string) bool {
+	for _, repo := range r.HostedRepos() {
+		if repoNamed(repo, want) {
+			return true
+		}
+	}
+	return false
+}
+
+// targetKey is the key a session gets in the fleet it is placed or moved
+// into. A key carries its repo's slug only in a fleet hosting several
+// (fleetid.WorkerKey), so the source's spelling is re-made for the target:
+// bare in a one-repo fleet, <slug>:… in a multi-repo one. A target from an
+// agent that did not report its repos keeps the source's key, as before.
+func targetKey(key string, target store.FleetRow, repo string) string {
+	if len(target.Repos) == 0 {
+		return key
+	}
+	bare := key
+	if i := strings.LastIndex(key, ":"); i >= 0 {
+		bare = key[i+1:]
+	}
+	if len(target.Repos) < 2 {
+		return bare
+	}
+	return fleetid.RepoSlug(repo) + ":" + bare
+}
+
 // writeRequest is one validated write: what the node is sent, and what the
 // journal compares a retry against.
 type writeRequest struct {
@@ -905,7 +936,7 @@ func (s *Server) pickNode(p fleetPrincipal, repo, node string, now time.Time) (P
 	weight := s.spotWeight(settings)
 	seen := map[string]bool{}
 	for _, r := range rows {
-		if !r.Present || seen[r.EndpointID] || !repoNamed(r.Repo, repo) {
+		if !r.Present || seen[r.EndpointID] || !hostsRepo(r, repo) {
 			continue
 		}
 		if node != "auto" && !sameMachine(r.Hostname, node) {
