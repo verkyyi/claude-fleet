@@ -26,7 +26,7 @@ func runName(args []string) error {
 	fs := flag.NewFlagSet("name", flag.ExitOnError)
 	dbPath := fs.String("db", "", "the hub's database (default: $CCQUOTA_DB, else ~/.ccquota/ccquota.db)")
 	hub := fs.String("hub", os.Getenv("CCQUOTA_HUB_URL"), "hub URL (used instead of --db when set)")
-	token := fs.String("token", os.Getenv("CCQUOTA_VIEWER_TOKEN"), "viewer token, with --hub")
+	token := secretEnvFlag(fs, "token", "CCQUOTA_VIEWER_TOKEN", "viewer `token`, with --hub")
 	clear := fs.Bool("clear", false, "remove the name and let automatic naming resume")
 	dedupe := fs.Bool("dedupe", false,
 		"merge subscriptions that share a seven-day reset schedule.\n"+

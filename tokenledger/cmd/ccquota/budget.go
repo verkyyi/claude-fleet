@@ -113,7 +113,7 @@ const budgetDisclaimer = "Utilization is exact and account-wide. A verdict is ad
 func runBudget(args []string) error {
 	fs := flag.NewFlagSet("budget", flag.ExitOnError)
 	hub := fs.String("hub", os.Getenv("CCQUOTA_HUB_URL"), "hub base URL")
-	token := fs.String("token", os.Getenv("CCQUOTA_VIEWER_TOKEN"), "viewer token")
+	token := secretEnvFlag(fs, "token", "CCQUOTA_VIEWER_TOKEN", "viewer `token`")
 	account := fs.String("account", "",
 		"subscription to judge: a uuid, or `all`.\n"+
 			"Default: the account THIS machine is logged into, because that is the\n"+

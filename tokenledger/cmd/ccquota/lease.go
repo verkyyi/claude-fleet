@@ -52,7 +52,7 @@ func lease(args []string, stdout, stderr io.Writer) (int, error) {
 	fs := flag.NewFlagSet("lease", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	hub := fs.String("hub", os.Getenv("CCQUOTA_HUB_URL"), "hub base URL")
-	token := fs.String("token", os.Getenv("CCQUOTA_TOKEN"), "this endpoint's enrollment token")
+	token := secretEnvFlag(fs, "token", "CCQUOTA_TOKEN", "this endpoint's enrollment `token`")
 	force := fs.Bool("force", false, "acquire: take the lease from a live holder (recorded on the hub)")
 	fs.Usage = func() {
 		fmt.Fprint(stderr, `Usage: ccquota lease acquire|release [--force] <owner/repo> <issue> <worker_id>

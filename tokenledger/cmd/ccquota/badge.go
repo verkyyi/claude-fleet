@@ -51,7 +51,7 @@ func runBadge(args []string) error {
 	//   读 CCQUOTA_HUB_URL 会**静默**把一条离线命令变成联网命令：环境里恰好有那个变量的
 	//   机器上，`ccquota badge` 会突然开始打网络，而调用方什么都没改。要远端就显式写出来。
 	hub := fs.String("hub", "", "read totals from a hub over HTTP instead of a local database (explicit only)")
-	hubToken := fs.String("token", os.Getenv("CCQUOTA_VIEWER_TOKEN"), "viewer token, with --hub")
+	hubToken := secretEnvFlag(fs, "token", "CCQUOTA_VIEWER_TOKEN", "viewer `token`, with --hub")
 	out := fs.String("out", "", "write to this file (default: stdout)")
 	theme := fs.String("theme", "dark", "\"dark\", \"light\", or \"auto\" (follows the reader's\n"+
 		"OS colour scheme; on GitHub use two files and <picture>, since its\n"+
