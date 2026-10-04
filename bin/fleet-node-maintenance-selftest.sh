@@ -17,8 +17,9 @@
 #   D. status    GET (no body, no -X POST); online → `m5 online`; flagged →
 #                `m5 maintenance · <reason> · since …`
 #   E. leave     POST {"action":"leave"}; prints `LEFT m5`; exit 0
-#   F. old hub   404 → exit 4 and the "predates issue #1427" note; 409 → exit 4
-#                naming the agent; 401 → exit 4 naming the token
+#   F. old hub   404 → exit 4 and the "predates issue #1427" note (so does a 401
+#                whose body is the viewer gate's — an older hub has no such path);
+#                409 → exit 4 naming the agent; 401 otherwise → naming the token
 #   G. down      curl fails (exit 7): exit 1, `hub unreachable`, nothing printed
 #                on stdout
 #   H. usage     no action / two actions / --reason with leave / a 201-char
@@ -121,6 +122,9 @@ out=$(FAKE_CODE=409 FAKE_BODY='{"error":"not reported"}' "$SUT" enter 2>"$WORK/e
 { [ "$rc" -eq 4 ] && grep -q 'never heard this node' "$WORK/err"; } || fail "F: 409 rc=$rc $(cat "$WORK/err")"
 out=$(FAKE_CODE=401 FAKE_BODY='{"error":"bad token"}' "$SUT" status 2>"$WORK/err"); rc=$?
 { [ "$rc" -eq 4 ] && grep -q 'node token' "$WORK/err"; } || fail "F: 401 rc=$rc $(cat "$WORK/err")"
+# an older hub has no such path: it falls through to the viewer gate and says so
+out=$(FAKE_CODE=401 FAKE_BODY='{"error":"a viewer token is required"}' "$SUT" status 2>"$WORK/err"); rc=$?
+{ [ "$rc" -eq 4 ] && grep -q 'predates issue #1427' "$WORK/err"; } || fail "F: 401 viewer-gate rc=$rc $(cat "$WORK/err")"
 out=$(FAKE_CODE=500 FAKE_BODY='boom' "$SUT" status 2>"$WORK/err"); rc=$?
 { [ "$rc" -eq 4 ] && grep -q 'HTTP 500: boom' "$WORK/err"; } || fail "F: 500 rc=$rc $(cat "$WORK/err")"
 ok

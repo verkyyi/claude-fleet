@@ -96,7 +96,10 @@ json=$(printf '%s\n' "$resp" | sed '$d')
 case "$code" in
   200) ;;
   404|405) die 4 "the hub has no /v1/node/maintenance — it predates issue #1427; redeploy the hub, then retry" ;;
-  401) die 4 "the hub does not know this node token (401): re-join with fleet-node-join.sh, or fleet-hub-node.sh env --write" ;;
+  401) case "$json" in
+         *'viewer token'*) die 4 "the hub has no /v1/node/maintenance (the path fell through to its viewer gate) — it predates issue #1427; redeploy the hub, then retry" ;;
+         *) die 4 "the hub does not know this node token (401): re-join with fleet-node-join.sh, or fleet-hub-node.sh env --write" ;;
+       esac ;;
   409) die 4 "the hub has never heard this node report (409): is the ccquota agent running here?" ;;
   *) die 4 "hub answered HTTP $code: $(printf '%s' "$json" | head -c 300)" ;;
 esac
