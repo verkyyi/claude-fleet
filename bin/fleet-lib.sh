@@ -4220,6 +4220,97 @@ fleet_stamp_origin_wid() {
   return 0
 }
 
+# ---- across machines: the hub outbox + the worker map (issue #1421, EPIC #1419 C2) --
+# A worker whose parent — or whose message's target — lives on another machine
+# reaches it through the hub, and the only door to the hub on this machine is the
+# ccquota agent's control channel. So nothing here dials the network: a relay is a
+# JSON file dropped in the OUTBOX (the agent sends it, and deletes it once the hub
+# has stored it), and where a worker lives is the WORKER MAP the agent keeps
+# (`<worker_id>\t<node>[:lost]\t<parent worker_id>` per line, pushed by the hub
+# about every 10 s). `bin/fleet-hub-node.sh` is the agent's half (paths, deliver).
+# All of it is off unless CCQUOTA_FLEET=1; with it off — or the map stale — a
+# fleet behaves as the one-machine fleet it always was.
+
+fleet_hub_outbox() { printf '%s/control/hub-outbox' "$FLEET_CONF_DIR"; }
+fleet_hub_cache()  { printf '%s/control/hub-workers.tsv' "$FLEET_CONF_DIR"; }
+
+# fleet_hub_wid <uuid> <key> → the FULL worker_id the hub map holds for that
+# (uuid may be empty: a bare key, matched only when exactly one row ends in it).
+# Reads the cache as fleet_worker_locate does (same freshness rule); rc 1 when
+# there is no such worker or no fresh map.
+fleet_hub_wid() {
+  local u="${1:-}" k="${2:-}" f hits
+  _fleet_hub_node "$u" "$k" >/dev/null 2>&1 || return 1
+  f=$(fleet_hub_cache)
+  if [ -n "$u" ]; then
+    awk -F'\t' -v w="$u/$k" '$1 == w { print $1; f = 1; exit } END { exit !f }' "$f" 2>/dev/null
+    return
+  fi
+  hits=$(awk -F'\t' -v s="/$k" 'length($1) > length(s) && substr($1, length($1) - length(s) + 1) == s { print $1 }' "$f" 2>/dev/null)
+  [ -n "$hits" ] && [ "$(printf '%s\n' "$hits" | grep -c .)" -eq 1 ] || return 1
+  printf '%s' "$hits"
+}
+
+# fleet_hub_put <kind> <from_wid> <to_wid> <id-suffix> <payload-json> → drop one
+# relay in the outbox (atomically: written aside, then renamed to *.json — the
+# agent reads only those). The relay id is `<from_wid>#<id-suffix>`, the hub's
+# idempotency key: the same suffix twice is ONE delivery. Prints the file; rc 1
+# when the hub is off or the file could not be written.
+fleet_hub_put() {
+  local kind="${1:-}" from="${2:-}" to="${3:-}" suf="${4:-}" payload="${5:-}" d tmp f
+  [ "${CCQUOTA_FLEET:-0}" = 1 ] || return 1
+  [ -n "$kind" ] && [ -n "$from" ] && [ -n "$to" ] && [ -n "$suf" ] || return 1
+  d=$(fleet_hub_outbox)
+  mkdir -p "$d" 2>/dev/null || return 1
+  tmp=$(mktemp "$d/.put.XXXXXX" 2>/dev/null) || return 1
+  if ! python3 - "$kind" "$from" "$to" "$suf" "$payload" >"$tmp" 2>/dev/null <<'PY'
+import json, sys
+kind, frm, to, suf, payload = sys.argv[1:6]
+p = json.loads(payload or "{}")
+if not isinstance(p, dict):
+    sys.exit(1)
+print(json.dumps(dict(id=frm + "#" + suf, kind=kind, **{"from": frm}, to=to, payload=p),
+                 ensure_ascii=False, separators=(",", ":")))
+PY
+  then rm -f "$tmp"; return 1; fi
+  # The name sorts oldest-first (the agent sends in name order); the suffix keeps
+  # two relays of one second apart.
+  f="$d/$(date -u +%Y%m%dT%H%M%SZ)-$$-${tmp##*.}.json"
+  mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp"; return 1; }
+  printf '%s' "$f"
+}
+
+# fleet_hub_wait_sent <file> [<secs>] — rc 0 once the agent has handed <file> to the
+# hub (it deletes it on the hub's ack), rc 1 if it is still queued after <secs> (3).
+fleet_hub_wait_sent() {
+  local f="${1:-}" n="${2:-3}" i=0
+  case "$n" in ''|*[!0-9]*) n=3 ;; esac
+  while [ -e "$f" ]; do
+    [ "$i" -ge $((n * 5)) ] && return 1
+    sleep 0.2; i=$((i + 1))
+  done
+  return 0
+}
+
+# fleet_remote_children <sess> <parent-key> → `<child-key>\t<node>\t<child wid>`,
+# one line per worker on ANOTHER machine whose @origin_wid is this parent's
+# worker_id, per the hub map. Nothing (rc 1) when the hub is off, this machine
+# has no fleet UUID, or the map is older than FLEET_HUB_RETAIN_SECS (600): a
+# hub gone that long is a one-machine fleet again (EPIC #1419 rule 6). A child
+# whose node is lost carries `<node>:lost`.
+fleet_remote_children() {
+  local sess="${1:-}" key="${2:-}" u f m ttl
+  [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ -n "$key" ] || return 1
+  f=$(fleet_hub_cache); [ -f "$f" ] || return 1
+  ttl="${FLEET_HUB_RETAIN_SECS:-600}"; case "$ttl" in ''|*[!0-9]*) ttl=600 ;; esac
+  m=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null) || m=0
+  [ $(( $(date +%s) - ${m:-0} )) -le "$ttl" ] || return 1
+  u=$(fleet_uuid "$sess") && [ -n "$u" ] || return 1
+  awk -F'\t' -v me="$u/$key" -v mine="$u/" '
+    $3 == me && $2 != "" && index($1, mine) != 1 { k = $1; sub(/^[^\/]*\//, "", k); print k "\t" $2 "\t" $1; n++ }
+    END { exit !n }' "$f" 2>/dev/null
+}
+
 # --- the child-report ledger as a PARENT MAP (issue #1352) ----------------------
 # A reaped middle window takes its @origin with it, so a grandchild's chain used to
 # break there and sink to the dash's orphan bottom. But the parent link is already
@@ -5676,7 +5767,14 @@ fleet_window_waiting_children() {
   done <<EOF
 $all
 EOF
-  [ "$direct" = 1 ] || return 1
+  # Children on another machine (issue #1421) count too: the hub map's, not lost,
+  # finished once their last report here says MERGED. Off without CCQUOTA_FLEET=1.
+  local rem='' rdn=0 rtot=0
+  rem=$(_fleet_remote_tally "$sess" "$key") && { rdn=${rem%% *}; rtot=${rem##* }; }
+  if [ "$direct" != 1 ]; then
+    [ "$rtot" -gt "$rdn" ] 2>/dev/null || return 1
+    printf '%s/%s\n' "$rdn" "$rtot"; return 0
+  fi
   bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
   # every window that could be in the subtree (a key-shaped @origin) → key/origin/finished
   while IFS= read -r line; do
@@ -5729,8 +5827,45 @@ EOF
     }')
   dn=${line%% *}; tot=${line##* }
   case "$dn$tot" in ''|*[!0-9]*) return 1 ;; esac
+  dn=$((dn + rdn)); tot=$((tot + rtot))
   [ "$tot" -gt "$dn" ] || return 1
   printf '%s/%s\n' "$dn" "$tot"
+}
+
+# _fleet_remote_tally <sess> <parent-key> → `<finished> <total>` of the parent's
+# children on OTHER machines (issue #1421): every row of the hub map naming this
+# parent's worker_id, minus those on a lost node (EPIC #1419 rule 5: a lost machine
+# is marked, never waited on), finished = its last report in this parent's ledger
+# is MERGED (or REAPED as merged). rc 1 (nothing) when there are none — or the hub
+# is off, or its map is stale: then the parent is the one-machine parent it was.
+_fleet_remote_tally() {
+  local rows f
+  rows=$(fleet_remote_children "${1:-}" "${2:-}") || return 1
+  f=$(printf '%s/children/%s.ndjson' "$(fleet_state_dir "${1:-}")" "$(printf '%s' "${2:-}" | LC_ALL=C tr -cd 'A-Za-z0-9._:-')")
+  printf '%s\n' "$rows" | python3 -c '
+import json, sys
+last = {}
+try:
+    for l in open(sys.argv[1], encoding="utf-8"):
+        try:
+            e = json.loads(l)
+        except ValueError:
+            continue
+        if isinstance(e, dict) and e.get("child") and e.get("type") != "wake":
+            last[e["child"]] = e
+except OSError:
+    pass
+dn = tot = 0
+for line in sys.stdin:
+    p = line.rstrip("\n").split("\t")
+    if len(p) < 2 or not p[0] or p[1].endswith(":lost"):
+        continue
+    tot += 1
+    e = last.get(p[0]) or {}
+    if e.get("state") == "MERGED" or (e.get("state") == "REAPED" and str(e.get("verdict") or "").startswith("merged")):
+        dn += 1
+print(dn, tot)
+sys.exit(0 if tot else 1)' "$f" 2>/dev/null
 }
 
 # fleet_window_wait <session> <win> — WHY an idle <win> is not finished (issue

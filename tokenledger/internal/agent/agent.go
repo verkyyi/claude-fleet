@@ -205,6 +205,10 @@ type Agent struct {
 
 	// acct is the admin agent's account-op state across connections.
 	acct accountOps
+	// relay is the outbox's in-flight table across connections
+	// (claude-fleet#1421); made on first use.
+	relay     *relayState
+	relayOnce sync.Once
 
 	// consecutiveFailures backs the scan cadence off while the hub is
 	// unreachable. A failed cycle leaves the cursor unmoved, so the next scan

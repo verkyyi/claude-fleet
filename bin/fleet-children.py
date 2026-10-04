@@ -53,6 +53,8 @@ FIELDS = ('child', 'state', 'pr', 'verdict', 'summary', 'title', 'tier')
 # report_tier's three bands (issue #938, fleet-children-lib.sh); '' = a pre-#938 event.
 TIERS = ('loud', 'quiet', 'silent')
 KEY_OK = set('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-')
+NODE_OK = set('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-')
+RID_OK = KEY_OK | set('/#')
 
 # The dash's state → rank table (tmux-dashboard-rows.sh state_v), verbatim: rank 0
 # is the loud `!`, rank 1 counts as done. Kept identical so `fleet-children.sh`'s
@@ -122,6 +124,13 @@ def cmd_append(a):
     # because its own parent was reaped — kept only when set, so every other row
     # is byte for byte what it was. fleet_origin_map skips it: not a parent link.
     rf = ''.join(ch for ch in str(raw.get('relayed_from') or '') if ch in KEY_OK)[:128]
+    # node / rid (issue #1421): a report from a child on ANOTHER machine, pushed
+    # here by the hub — node is that machine, rid the relay's id (`<child
+    # worker_id>#<seq>`). Kept only when set: a local report (no node — "this
+    # machine") is byte for byte what it was. A rid already in the file is a
+    # redelivery, never a second row.
+    node = ''.join(ch for ch in str(raw.get('node') or '') if ch in NODE_OK)[:64]
+    rid = ''.join(ch for ch in str(raw.get('rid') or '') if ch in RID_OK)[:256]
     if not ev['child'] or ev['state'] not in STATES:
         print('fleet-children: need child + state (%s)' % '|'.join(STATES), file=sys.stderr)
         return 2
@@ -145,6 +154,9 @@ def cmd_append(a):
                 pass
             if e.get('child') == ev['child'] and not is_wake(e):
                 last = e
+            if rid and e.get('rid') == rid:
+                print('dup seq=%s' % e.get('seq'))
+                return 0
         # Dedup against the child's LATEST event, not the whole file: a reaper
         # repeating the ship path's report is a no-op, while a real transition
         # back (WAITING → IDLE → WAITING) still lands and keeps "latest" true.
@@ -156,6 +168,10 @@ def cmd_append(a):
                   **ev)
         if rf:
             ev['relayed_from'] = rf
+        if node:
+            ev['node'] = node
+        if rid:
+            ev['rid'] = rid
         fh.seek(0, os.SEEK_END)
         fh.write(json.dumps(ev, ensure_ascii=False) + '\n')
         fh.flush()
@@ -200,6 +216,10 @@ def read_windows(stream):
         if not key or key in wins:
             continue                    # first match wins, as fleet_win_for_key
         wins[key] = dict(wid=wid, state=state, needs=needs, origin=origin, name=name)
+        # A child on another machine (issue #1421) rides as `<node>|remote|…`:
+        # its window id is that machine's name, and it is never a local window.
+        if state in ('remote', 'lost'):
+            wins[key]['node'] = wid
     return wins
 
 
@@ -512,6 +532,9 @@ def cmd_show(a):
         if live is not None and not descends(live['origin'], parent, wins):
             live = None
         prn, prs = prmap_lookup(child, a)
+        # The machine a child runs on (issue #1421): a live remote row's, else the
+        # one its last report came from. '' = this machine.
+        node = (live or {}).get('node') or (last or {}).get('node', '')
         kids.append(dict(
             child=child, bucket=bucket(live, last),
             live=live is not None, window=live['wid'] if live else '',
@@ -521,6 +544,8 @@ def cmd_show(a):
             pr=(last or {}).get('pr') or prn, pr_state=prs,
             last=last,
             since=[e for e in evs if int(e.get('seq') or 0) > a.since]))
+        if node:                        # only then: a one-machine answer is unchanged
+            kids[-1]['node'] = node
     kids.sort(key=lambda k: ('!⏳▸✓–'.index(k['bucket']), k['child']))
     n = {b: sum(1 for k in kids if k['bucket'] == b) for b in '✓⏳!▸–'}
     total = len(kids)
@@ -559,6 +584,8 @@ def cmd_show(a):
         if last.get('ts'):
             rep += ' ' + age(last['ts'])
         live = '%s %s' % (k['window'], k['state']) if k['live'] else 'gone'
+        if k.get('node') and not k['live']:
+            live += ' · ' + k['node']
         print('  %s %-16s %-18s %-22s %s' % (k['bucket'], k['child'], live, rep, k['title']))
     print(text)
     return 0

@@ -69,8 +69,8 @@
 #
 # `wid:<fleet UUID>/[<slug>:]issue-<N>` (or `wid:issue-<N>`, this fleet) names the
 # worker by its durable identity (issue #1420): one of THIS fleet's runs exactly as
-# `<N>` (with --repo taken from the slug); a worker on another machine, or one no
-# machine can place, is NO-WORKER (5) with the reason — never a local #N spawn.
+# `<N>`; one of YOUR children on another machine is waited on through your ledger,
+# which the hub feeds (#1421); anything else is NO-WORKER (5) — never a local spawn.
 #
 # A live worker spawned by SOMEONE ELSE keeps its parent: the wait reads that
 # parent's ledger instead of stealing its reports. A live worker with no parent at
@@ -161,20 +161,40 @@ case "$NUM" in wid:*)
         || die "'$WID' names repo ${k%%:*}, which this fleet does not host" ;;
     esac
   else
-    loc=$(fleet_worker_locate "$WID" "$sess")
+    loc=$(fleet_worker_locate "$WID" "$sess"); note=''
     case "$loc" in
-      remote\ *) note="'$WID' lives on ${loc#remote } — waiting on a worker on another machine is not supported yet (EPIC #1419 C2)" ;;
+      remote\ *)
+        # Another machine (issue #1421): its reports are pushed back here by the
+        # hub, into THIS parent's ledger — so the wait reads that ledger, and asks
+        # the hub map (never the network) whether the child is still alive. Only
+        # for one of OUR children: another parent's child reports to that parent.
+        RNODE=${loc#remote }; RNODE=${RNODE%:lost}
+        sp=$(_fleet_wid_split "$WID"); k=${sp#*$'\t'}
+        RWID=$(fleet_hub_wid "${sp%%$'\t'*}" "$k" 2>/dev/null) || RWID=''
+        rorigin=''
+        [ -n "$RWID" ] && rorigin=$(awk -F'\t' -v w="$RWID" '$1 == w { print $3; exit }' "$(fleet_hub_cache)" 2>/dev/null)
+        me=$(fleet_uuid "$sess" 2>/dev/null)/$KEY
+        case "${k##*:}" in issue-*) NUM=${k##*:issue-} ;; *) note="'$WID' is a scratch session — fleet-await waits on an issue worker" ;; esac
+        if [ -z "$note" ] && [ -z "$RWID" ]; then note="'$WID' lives on $RNODE, but the hub map has no full worker_id for it"
+        elif [ -z "$note" ] && [ "$rorigin" != "$me" ]; then
+          note="'$WID' lives on $RNODE and reports to ${rorigin:-nobody (hub-spawned)}, not to $KEY — its outcome is not pushed here"
+        fi
+        [ -n "$note" ] || REMOTE=$k ;;
       *) note="no worker '$WID' on this machine, and the hub cannot place it" ;;
     esac
-    printf 'fleet-await: %s\n' "$note" >&2
-    printf 'NO-WORKER\nworker: %s\nnote: %s\n' "${WID#wid:}" "$note"
-    exit 5
+    if [ -z "${REMOTE:-}" ]; then
+      printf 'fleet-await: %s\n' "$note" >&2
+      printf 'NO-WORKER\nworker: %s\nnote: %s\n' "${WID#wid:}" "$note"
+      exit 5
+    fi
   fi ;;
 esac
 
 # The child's key, spelled the way its @origin-keyed ledger rows spell it.
 CKEY="issue-$NUM"
-if _fleet_hosts_many "$sess"; then
+if [ -n "${REMOTE:-}" ]; then
+  CKEY=$REMOTE      # as the child's own machine spells it — what its reports carry
+elif _fleet_hosts_many "$sess"; then
   [ -n "$REPO_ARG" ] || die "this fleet hosts several repos — pass --repo <owner/name>"
   CKEY="$(fleet_slug "$(fleet_norm_repo "$REPO_ARG")"):issue-$NUM"
 fi
@@ -356,7 +376,51 @@ ladder_tick() {
   L_ANCHOR=$now
 }
 
+# A child on another machine (issue #1421): alive ⇔ the hub map still holds it.
+# rc 0 alive · 1 gone · 2 the map is stale (the hub is out of reach: say nothing).
+remote_alive() {
+  local f m
+  f=$(fleet_hub_cache)
+  m=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null) || return 2
+  [ $(( $(date +%s) - ${m:-0} )) -le "${FLEET_HUB_CACHE_SECS:-30}" ] || return 2
+  awk -F'\t' -v w="$RWID" '$1 == w { f = 1; exit } END { exit !f }' "$f" 2>/dev/null
+}
+
 # --- 1. find the worker (or spawn one) -------------------------------------------
+if [ -n "${REMOTE:-}" ]; then
+  row='' LEDGER=$KEY wid=''
+  split "$(probe)" || true
+  BASE=$P_SEQ
+  out=$(event_outcome)
+  [ "$out" = MERGED ] && finish "$out" 'already reported before this wait began'
+  printf 'fleet-await: #%s lives on %s — waiting on its reports via the hub, up to %s\n' \
+    "$NUM" "$RNODE" "$(fmt_age "$TIMEOUT")" >&2
+  LFILE=$(children_file "$LEDGER" "$sess" 2>/dev/null)
+  TICK="${FLEET_AWAIT_TICK:-1}"; case "$TICK" in ''|*[!0-9]*|0) TICK=1 ;; esac
+  lsize() { [ -n "$LFILE" ] && wc -c < "$LFILE" 2>/dev/null | tr -d ' '; }
+  gone_polls=0
+  while :; do
+    left=$((TIMEOUT - SECONDS))
+    [ "$left" -gt 0 ] || finish TIMEOUT "still running on $RNODE — re-run fleet-await.sh wid:$RWID to keep waiting"
+    n=$([ "$INTERVAL" -lt "$left" ] && echo "$INTERVAL" || echo "$left"); s0=$(lsize)
+    while [ "$n" -gt 0 ]; do
+      t=$TICK; [ "$t" -gt "$n" ] && t=$n
+      sleep "$t"; n=$((n - t))
+      [ "$(lsize)" = "$s0" ] || break
+    done
+    split "$(probe)" || true
+    if [ "$P_SEQ" -gt "$BASE" ] 2>/dev/null; then
+      out=$(event_outcome)
+      [ -n "$out" ] && finish "$out"
+    fi
+    remote_alive; ra=$?
+    case "$ra" in
+      0) gone_polls=0 ;;
+      1) gone_polls=$((gone_polls + 1))
+         [ "$gone_polls" -ge 2 ] && finish GONE "the session on $RNODE closed without a report" ;;
+    esac
+  done
+fi
 row=$(child_win)
 wid=${row%%|*}; worigin=${row#*|}; [ -n "$row" ] || { wid=''; worigin=''; }
 if [ -n "$wid" ]; then

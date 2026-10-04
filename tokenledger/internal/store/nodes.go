@@ -60,6 +60,9 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetColumns(); err != nil {
 		return err
 	}
+	if err := s.ensureFleetRelays(); err != nil {
+		return err
+	}
 	if err := s.ensureFleetAccounts(); err != nil {
 		return err
 	}
