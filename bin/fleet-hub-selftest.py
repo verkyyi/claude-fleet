@@ -523,6 +523,18 @@ class HubTests(HubFixture):
         self.assertEqual((self.node.conf / "spawn.calls").read_text(),
                          "123 demo --agent claude --origin hub --repo example/other\n")
 
+    def test_start_carries_a_remote_parent(self):
+        # issue #1425: a start another machine's node placed here names its parent
+        # by worker_id; the window stamps it as @origin_wid. Never free text.
+        with self.assertRaises(Fault):
+            validate_write("worker_start", {"issue": 1, "origin_wid": "issue-7; rm -rf ~"})
+        parent = "11111111-1111-4111-8111-111111111111/issue-7"
+        started = self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="placed",
+                                                 params={"issue": 126, "origin_wid": parent}))
+        self.assertEqual(self.node.wait(started["operation_id"])["status"], "succeeded")
+        self.assertEqual((self.node.conf / "spawn.calls").read_text(),
+                         "126 demo --agent claude --origin hub --origin-wid %s\n" % parent)
+
     def test_gh_tools_name_the_repo_in_a_multi_repo_fleet(self):
         # Keyed by (repo, N), never a bare number: repo B's #7 is not repo A's.
         (self.node.conf / "fleets/demo/repos").mkdir()

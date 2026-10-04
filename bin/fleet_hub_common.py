@@ -155,11 +155,15 @@ def validate_gh_read(params):
 
 def validate_write(action, params):
     if action == "worker_start":
-        fields(params, ("issue",), ("agent", "repo"))
+        fields(params, ("issue",), ("agent", "repo", "origin_wid"))
         check_number(params["issue"])
         if params.get("agent", "") not in ("", "claude", "codex"):
             raise Fault("INVALID_ARGUMENT", "agent must be claude or codex")
         check_repo(params)
+        if "origin_wid" in params:
+            # The parent on another machine (issue #1425): a worker_id, never
+            # free text — it becomes an argv word and a window option.
+            parse_worker_id(params["origin_wid"])
     elif action == "gh_comment":
         fields(params, ("issue", "body"), ("repo",))
         check_number(params["issue"])

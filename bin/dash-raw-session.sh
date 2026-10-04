@@ -110,7 +110,7 @@ set -uo pipefail
 # and input draft; --prompt <t> / --prompt=<t> is the optional submitted seed;
 # --bg backgrounds the slow half of the spawn (the dash ⌃s / typed-↵ path — see
 # below); the lone positional is the headless <fleet-session>.
-NAME=""; PROMPT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""
+NAME=""; PROMPT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --name)        NAME="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
@@ -145,6 +145,11 @@ while [ "$#" -gt 0 ]; do
     --no-repo)     NOREPO=1; shift ;;
     --selection)   SEL="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --selection=*) SEL="${1#--selection=}"; shift ;;
+    # --node (issue #1425): `auto` / `local` / this machine's name open it here.
+    # A scratch has no issue, and the hub's start is issue-bound, so it cannot be
+    # sent to another machine yet — naming one is refused rather than ignored.
+    --node)        NODE_ARG="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
+    --node=*)      NODE_ARG="${1#--node=}"; shift ;;
     *)             TARGET_SESS="$1"; shift ;;
   esac
 done
@@ -161,6 +166,12 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
+
+if [ -n "$NODE_ARG" ] && [ "$NODE_ARG" != auto ] && ! fleet_node_is_self "$NODE_ARG"; then
+  printf 'dash-raw-session: a scratch session opens on this machine only — --node %s is for issue sessions (dash-issue-session.sh)\n' "$NODE_ARG" >&2
+  tmux display-message "raw: --node $NODE_ARG — a scratch opens on this machine only" 2>/dev/null
+  exit 1
+fi
 
 SESS="${TARGET_SESS:-$(fleet_current_session)}"
 [ -z "$SESS" ] && { printf 'dash-raw-session: no target tmux session\n' >&2; tmux display-message "raw: no target tmux session" 2>/dev/null; exit 1; }

@@ -403,10 +403,16 @@ EOF
     # Keep the spawn's stderr (issue #683): a refusal prints its reason there —
     # the tmux toast lands on no screen this daemon owns — and the exit code says
     # WHICH refusal: 2 at capacity, 3 claimed elsewhere, 1 infrastructure.
-    why=$("$BIN/dash-issue-session.sh" "$num" "$sess" ${ra[@]+"${ra[@]}"} --origin autofill 2>&1 >/dev/null); rc=$?
+    # FLEET_AUTOFILL_NODE (issue #1425): pin autofill to one machine (`local`, or a
+    # name); unset, dash-issue-session's own default applies — `auto` when the hub
+    # module is on (CCQUOTA_FLEET=1), so a busy machine's autofill lands elsewhere.
+    na=(); [ -n "${FLEET_AUTOFILL_NODE:-}" ] && na=(--node "$FLEET_AUTOFILL_NODE")
+    why=$("$BIN/dash-issue-session.sh" "$num" "$sess" ${ra[@]+"${ra[@]}"} ${na[@]+"${na[@]}"} --origin autofill 2>&1 >/dev/null); rc=$?
     why=${why#dash-issue-session: }; why=${why//$'\n'/ | }
     if [ "$rc" = 0 ]; then
-      log "$sess: spawned $ref (p$tier)$rtag  [slot $((spawned + 1))/$slots]"
+      # A placed spawn says where it went ("#N → m4 (hub operation …)").
+      placed=''; case "$why" in *"#$num → "*' (hub operation '*) placed=${why#*"#$num → "}; placed=" → ${placed%% (hub operation*}" ;; esac
+      log "$sess: spawned $ref (p$tier)$rtag$placed  [slot $((spawned + 1))/$slots]"
       spawned=$((spawned + 1))
     elif [ "$rc" = 3 ]; then
       # Claimed between our eligibility read and the spawn (a peer machine's

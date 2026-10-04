@@ -4162,6 +4162,61 @@ fleet_hub_lease() {
   return 1
 }
 
+# fleet_node_is_self <name> — is <name> this machine? `local` / `here`, this
+# host's short name, or its FLEET_NODE_ALIASES alias (`macmini=m5` → m5), any case.
+fleet_node_is_self() {
+  local n h
+  n=$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')
+  case "$n" in '') return 1 ;; local|here) return 0 ;; esac
+  h=$(hostname -s 2>/dev/null | tr '[:upper:]' '[:lower:]'); h=${h%%.*}
+  [ -n "$h" ] || return 1
+  [ "$n" = "$h" ] && return 0
+  printf '%s\n' ${FLEET_NODE_ALIASES:-} | tr '[:upper:]' '[:lower:]' | grep -qx -- "$h=$n"
+}
+
+# fleet_hub_place <sess> <repo> <issue> <node> [<origin_wid>] [<agent>] — ask the
+# hub which machine opens a session on (repo, issue) (issue #1425, EPIC #1419 C6).
+# Run AFTER fleet_hub_lease granted the lease: a REMOTE answer means the hub
+# already handed that lease to the chosen machine's fleet and sent it the start
+# (a journalled worker_start carrying <origin_wid>, the parent). Off unless
+# CCQUOTA_FLEET=1. <node> is `auto` or a machine name (an alias is turned back
+# into the hostname the hub knows). Prints the place command's one line, machine
+# names through FLEET_NODE_ALIASES — `LOCAL <m>\t<reason>` / `REMOTE <m> <op>
+# <status>\t<reason>` / `HELD <m>\t<msg>` / `REFUSED <code>\t<msg>` — and returns:
+#   0  LOCAL or REMOTE             3  the issue is leased elsewhere
+#   4  refused: no machine can take it, or the chosen one would not
+#   1  the hub could not be asked — one stderr note; open it here as today
+#  10  the hub module is off: nothing ran, nothing printed
+# The command is FLEET_HUB_PLACE_CMD, else `ccquota place`; it is run as
+# `<cmd> --node <node> [--origin-wid <wid>] [--agent <a>] <repo> <issue> <worker_id>`.
+fleet_hub_place() {
+  local sess="${1:-}" repo="${2:-}" num="${3:-}" node="${4:-auto}" owid="${5:-}" agent="${6:-}" cmd u pre='' out rc
+  [ "${CCQUOTA_FLEET:-0}" = 1 ] || return 10
+  case "$num" in ''|*[!0-9]*) return 1 ;; esac
+  cmd="${FLEET_HUB_PLACE_CMD:-}"
+  if [ -z "$cmd" ]; then
+    if command -v ccquota >/dev/null 2>&1; then cmd='ccquota place'
+    else printf 'fleet: hub placement unavailable (no FLEET_HUB_PLACE_CMD, no ccquota on PATH) — opening #%s here\n' "$num" >&2; return 1; fi
+  fi
+  u=$(fleet_uuid "$sess") && [ -n "$u" ] || {
+    printf 'fleet: hub placement unavailable (no fleet UUID for %s on this machine) — opening #%s here\n' "$sess" "$num" >&2; return 1; }
+  _fleet_hosts_many "$sess" && pre="$(fleet_slug "$(fleet_norm_repo "$repo")"):"
+  # An alias the operator typed (`m5`) is the hub's hostname (`macmini`).
+  [ "$node" != auto ] && node=$(printf '%s\n' ${FLEET_NODE_ALIASES:-} | awk -F= -v n="$node" '$2 == n { print $1; f = 1; exit } END { if (!f) print n }')
+  out=$(bash -c "$cmd \"\$@\"" place --node "$node" ${owid:+--origin-wid "$owid"} ${agent:+--agent "$agent"} \
+        "$repo" "$num" "$u/${pre}issue-$num" </dev/null 2>/dev/null); rc=$?
+  out=$(printf '%s\n' "$out" | head -n1 | awk -F'\t' -v al="${FLEET_NODE_ALIASES:-}" '
+    BEGIN { n = split(al, a, " "); for (i = 1; i <= n; i++) if ((p = index(a[i], "=")) > 1) m[substr(a[i], 1, p - 1)] = substr(a[i], p + 1) }
+    { k = split($1, w, " "); if ((w[1] == "LOCAL" || w[1] == "REMOTE" || w[1] == "HELD") && (w[2] in m)) w[2] = m[w[2]]
+      h = w[1]; for (i = 2; i <= k; i++) h = h " " w[i]
+      $1 = h; print }' OFS='\t')
+  case "$rc" in
+    0|3|4) printf '%s\n' "$out"; return "$rc" ;;
+  esac
+  printf 'fleet: hub unreachable for placing #%s (%s exit %s) — opening it here\n' "$num" "${cmd%% *}" "$rc" >&2
+  return 1
+}
+
 # fleet_worker_locate <worker_id | wid:… | key | window> [<sess>] → ONE line:
 #   local <window_id> <sess>   live on this machine, in that window of fleet <sess>
 #   remote <node>              not here; the hub last saw it on <node>

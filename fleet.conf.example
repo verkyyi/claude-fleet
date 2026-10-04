@@ -500,6 +500,12 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # herd; the ~60s interval is the cooldown between ticks). Default 1.
 # @label=Auto-fill batch size @group=autofill @tier=internal @scope=fleet @edit=int @unit=per tick
 #FLEET_AUTOFILL_MAX_PER_TICK=1
+# Which machine auto-fill opens sessions on (issue #1425). Unset: the spawn's own
+# default — `auto` when the hub module is on (CCQUOTA_FLEET=1: the hub picks the
+# least busy of your machines that host the repo), else this machine. `local`
+# pins auto-fill here; a machine name pins it there.
+# @label=Auto-fill machine @group=autofill @tier=internal @scope=fleet @edit=str
+#FLEET_AUTOFILL_NODE=local
 
 # --- Child → parent outcome reports (bin/fleet-report-parent.sh, issue #574) -----
 # ON by default. When a worker that was SPAWNED BY ANOTHER SESSION (`@origin` names

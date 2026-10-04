@@ -55,6 +55,8 @@ func main() {
 		err = runCodex(os.Args[2:])
 	case "lease":
 		err = runLease(os.Args[2:])
+	case "place":
+		err = runPlace(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println("ccquota", Version)
 	case "help", "--help", "-h":
@@ -95,6 +97,9 @@ Usage:
   ccquota codex  [command]  Manage Codex accounts, launch profiles and renew login
   ccquota lease  <cmd>      Take/give back the hub's lease on an issue before a
                             fleet session opens it (acquire | release; exit 3 held)
+  ccquota place  <repo> <N> <wid>
+                            Ask the hub which machine opens a session on an issue
+                            (LOCAL | REMOTE — the hub sent it there; exit 3 held)
   ccquota version           Print the version
 
 Run any subcommand with -h for its flags.

@@ -215,6 +215,14 @@ bash ~/.claude/fleet/bin/dash-issue-session.sh <N> --repo "$FLEET_REPO" --title 
 (exit 1 — `this fleet hosts several repos`, issue #972), and in a one-repo fleet
 it names the only repo, so it is always correct to pass.
 
+**Which machine** (issue #1425): with the hub module on (`CCQUOTA_FLEET=1`) the
+spawn is `--node auto` by default — after the issue's lease, the hub picks the
+least busy of the operator's machines that host the repo, and a member placed on
+another machine exits `0` with `#<N> → <machine> (hub operation …) — <reason>` on
+stderr: it is spawned, its `[child-report]` comes back to this pane through the
+hub. Add `--node local` (or a machine name) only to pin one member. With the
+module off nothing changes.
+
 Always the **live install** path (`~/.claude/fleet/bin/…`), never the base
 checkout — the checkout's copy defaults the global cap to 8 instead of reading
 the installed cap. Pass `--title` so the window says what the work is.

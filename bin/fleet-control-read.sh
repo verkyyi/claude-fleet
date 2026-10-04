@@ -88,7 +88,15 @@ case "$mode" in
     else
       bash "$BIN/fleet-quotaguard.sh" --gate >&2 || exit 4
     fi
-    exec bash "$BIN/dash-issue-session.sh" "${3:-}" "$sess" --agent "$agent" --origin hub ${srepo:+--repo "$srepo"}
+    # $6 = the parent's worker_id when another machine's node placed this start
+    # here (issue #1425); the window records it as @origin_wid. A start the hub
+    # sends is already placed — --node local keeps dash-issue-session from asking
+    # the hub a second time (only said with the hub module on: off, the argv is
+    # exactly as before).
+    owid="${6:-}"
+    case "$owid" in ''|*[!A-Za-z0-9/:._-]*) owid='' ;; esac
+    here=''; [ "${CCQUOTA_FLEET:-0}" = 1 ] && here=local
+    exec bash "$BIN/dash-issue-session.sh" "${3:-}" "$sess" --agent "$agent" --origin hub ${srepo:+--repo "$srepo"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"}
     ;;
   # --- worker lifecycle by DURABLE key (issue #834) ---------------------------
   # $3 is issue-<N> / scratch-<N>; the window is re-resolved on the fleet at
