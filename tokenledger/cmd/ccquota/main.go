@@ -53,6 +53,8 @@ func main() {
 		err = runPlan(os.Args[2:])
 	case "codex":
 		err = runCodex(os.Args[2:])
+	case "lease":
+		err = runLease(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println("ccquota", Version)
 	case "help", "--help", "-h":
@@ -91,6 +93,8 @@ Usage:
   ccquota plan   [flags]    Record what a subscription actually costs, and
                             report real (billed, not notional) spend
   ccquota codex  [command]  Manage Codex accounts, launch profiles and renew login
+  ccquota lease  <cmd>      Take/give back the hub's lease on an issue before a
+                            fleet session opens it (acquire | release; exit 3 held)
   ccquota version           Print the version
 
 Run any subcommand with -h for its flags.

@@ -234,6 +234,41 @@ MAIN="${FLEET_MAIN:-}"
 REPO="${FLEET_REPO:-$(git -C "$MAIN" remote get-url origin 2>/dev/null | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')}"
 BASE="${FLEET_BASE_BRANCH:-main}"
 
+# --- Hub issue lease (issue #1422, EPIC #1419 C3; only when CCQUOTA_FLEET=1) ---
+# The GitHub claim below is not a mutex (no compare-and-swap on an issue), so two
+# machines that spawn the same issue within a second can both pass it. With the
+# cross-machine hub on, take the hub's lease on (repo, issue) FIRST: the hub
+# grants it to exactly one node, and the loser refuses here with the class code
+# for "claimed" (3) and the holder's name. The GitHub check stays as the second
+# guard. The lease renews itself off the node's heartbeats while the window lives
+# and is released when the window goes (or 30 min after the node goes silent);
+# a refusal AFTER the grant gives it back at once (the EXIT trap). --force takes
+# it from a live holder — the hub records that. A hub that cannot be asked
+# (unreachable, no ccquota, no fleet UUID) leaves one stderr note and today's
+# path runs unchanged; CCQUOTA_FLEET unset runs none of this. Sync-only: the
+# --async tail already holds the lease the foreground took.
+LEASE_HELD=0
+if [ "$TAIL_ONLY" != 1 ] && [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ -n "$REPO" ]; then
+  _lf=''; [ "$FORCE_FLAG" = 1 ] && _lf=--force
+  lease_out=$(fleet_hub_lease acquire "$SESS" "$REPO" "$num" $_lf); lease_rc=$?
+  case "$lease_rc" in
+    0) LEASE_HELD=1
+       _lease_back() {  # EXIT: a non-zero exit after the grant gives the lease back
+         local rc=$?
+         [ "$rc" != 0 ] && [ "$LEASE_HELD" = 1 ] && fleet_hub_lease release "$SESS" "$REPO" "$num" >/dev/null 2>&1
+         exit "$rc"
+       }
+       trap _lease_back EXIT
+       case "$lease_out" in FORCED\ *)
+         printf 'dash-issue-session: #%s 的入口租约已强制从 %s 收回 (--force，已在入口记录)\n' "$num" "$(printf '%s' "$lease_out" | awk '{print $3}')" >&2 ;;
+       esac ;;
+    3) _holder=$(printf '%s' "$lease_out" | awk '{print $2}')
+       refuse "#$num 已被 ${_holder:-另一台机器} 认领 (hub lease $(printf '%s' "$lease_out" | awk '{print $3}')) — not spawning; --force overrides a stale lease"
+       exit "$RC_CLAIMED" ;;
+  esac
+  unset _lf _holder
+fi
+
 # --- Cross-machine pre-spawn dedup (issue #258; ON by default, FLEET_PRESPAWN_DEDUP=0 opts out) ---
 # The local-tmux dedup above only sees THIS fleet's server. When two fleets run on
 # DIFFERENT machines against the same repo, a peer's worker is invisible — both can

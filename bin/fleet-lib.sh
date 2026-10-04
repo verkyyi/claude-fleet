@@ -4118,6 +4118,50 @@ _fleet_hub_node() {
   printf '%s' "$hits"
 }
 
+# fleet_hub_lease acquire|release <sess> <repo> <issue> [--force] — the hub's
+# lease on (repo, issue) (issue #1422, EPIC #1419 C3): taken before a session is
+# opened so two machines can never both open one issue. Off unless CCQUOTA_FLEET=1.
+# Prints the lease command's one line — `GRANTED <node>` / `FORCED <node> <from>
+# <wid>` / `HELD <node> <wid> <expires>` / `RELEASED` / `NOT_HELD` — and returns:
+#   0  granted / released          3  held by another node (the line names it)
+#   1  the hub could not be asked: no lease command, no fleet UUID here, or the
+#      command failed — one stderr note, and the caller carries on as today
+#  10  the hub module is off (CCQUOTA_FLEET unset): nothing ran, nothing printed
+# The command is FLEET_HUB_LEASE_CMD, else `ccquota lease` when ccquota is on
+# PATH; it is run as `<cmd> <action> [--force] <repo> <issue> <worker_id>`. Node
+# names in the line go through FLEET_NODE_ALIASES, as the sidebar's do.
+# The worker_id is `<fleet UUID>/<key>`, the key spelled as the session's own
+# heartbeat will spell it (`<slug>:issue-<N>` in a multi-repo fleet), so the
+# hub's heartbeat renewal recognises the session once its window exists.
+fleet_hub_lease() {
+  local act="${1:-}" sess="${2:-}" repo="${3:-}" num="${4:-}" force='' cmd u pre='' out rc
+  [ "${CCQUOTA_FLEET:-0}" = 1 ] || return 10
+  [ "${5:-}" = --force ] && force=--force
+  case "$act" in acquire|release) ;; *) return 1 ;; esac
+  case "$num" in ''|*[!0-9]*) return 1 ;; esac
+  cmd="${FLEET_HUB_LEASE_CMD:-}"
+  if [ -z "$cmd" ]; then
+    if command -v ccquota >/dev/null 2>&1; then cmd='ccquota lease'
+    else printf 'fleet: hub lease unavailable (no FLEET_HUB_LEASE_CMD, no ccquota on PATH) — only the GitHub claim guards #%s\n' "$num" >&2; return 1; fi
+  fi
+  u=$(fleet_uuid "$sess") && [ -n "$u" ] || {
+    printf 'fleet: hub lease unavailable (no fleet UUID for %s on this machine) — only the GitHub claim guards #%s\n' "$sess" "$num" >&2; return 1; }
+  _fleet_hosts_many "$sess" && pre="$(fleet_slug "$(fleet_norm_repo "$repo")"):"
+  out=$(bash -c "$cmd \"\$@\"" lease "$act" ${force:+"$force"} "$repo" "$num" "$u/${pre}issue-$num" </dev/null 2>/dev/null); rc=$?
+  # Name machines the way the sidebar does (FLEET_NODE_ALIASES, `macmini=m5`): the
+  # hub only knows a hostname's first label.
+  out=$(printf '%s\n' "$out" | head -n1 | awk -v al="${FLEET_NODE_ALIASES:-}" '
+    BEGIN { n = split(al, a, " "); for (i = 1; i <= n; i++) if ((p = index(a[i], "=")) > 1) m[substr(a[i], 1, p - 1)] = substr(a[i], p + 1) }
+    $1 == "HELD" || $1 == "GRANTED" || $1 == "FORCED" { if ($2 in m) $2 = m[$2] }
+    $1 == "FORCED" { if ($3 in m) $3 = m[$3] }
+    { print }')
+  case "$rc" in
+    0|3) printf '%s\n' "$out"; return "$rc" ;;
+  esac
+  printf 'fleet: hub unreachable for the lease on #%s (%s exit %s) — falling back to the GitHub claim only\n' "$num" "${cmd%% *}" "$rc" >&2
+  return 1
+}
+
 # fleet_worker_locate <worker_id | wid:… | key | window> [<sess>] → ONE line:
 #   local <window_id> <sess>   live on this machine, in that window of fleet <sess>
 #   remote <node>              not here; the hub last saw it on <node>

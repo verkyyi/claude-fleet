@@ -116,6 +116,16 @@ labels come from `FLEET_NODE_ALIASES` (`macmini=m5 mini2=m4`). To feed the
 nesting, the controller's worker inventory now carries each window's `name` and
 `origin_wid` (columns 10–11 of `fleet-control-read.sh workers`, optional).
 
+**One issue, one machine** (issue #1422, EPIC #1419 C3). With `CCQUOTA_FLEET=1`,
+`dash-issue-session.sh` takes the cloud hub's lease on `(repo, issue)` before its
+GitHub claim check (`fleet_hub_lease`, through `FLEET_HUB_LEASE_CMD`, default
+`ccquota lease`). Held elsewhere → exit 3 and `已被 <node> 认领` on stderr; a
+refusal after the grant gives the lease back; `--force` takes it and the hub
+records the takeover. The lease is keyed by the session's worker_id, renewed by
+the node's heartbeats while the window lives, released when it goes, and lapses
+30 minutes after its node goes silent — released, not re-dispatched. A hub that
+cannot be asked leaves one stderr note and the spawn runs exactly as without one.
+
 ## Tools
 
 | MCP tool | Behavior | Required grant |

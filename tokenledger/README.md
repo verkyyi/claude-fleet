@@ -834,6 +834,33 @@ the change applies to the next one; elsewhere the listener gets a reload
 (SIGHUP), which leaves established sessions alone. An unchanged key is a
 no-op. `/v1/nodes` shows each admin node's answer as `ssh_ca`;
 `/v1/fleet/ssh-ca.pub` serves the public key to anyone.
+### One issue, one machine — issue leases (claude-fleet#1422)
+
+Before claude-fleet's `dash-issue-session.sh` opens a session on an issue it
+takes the hub's lease on `(repo, issue)`; the hub grants it to exactly one node
+(one transaction on its single writer), and the other is refused with the
+holder's name — `已被 m5 认领`, exit 3. GitHub's assignee check still runs
+after it as the second guard.
+
+```sh
+ccquota lease acquire [--force] <owner/repo> <issue> <worker_id>   # GRANTED m4 · HELD m5 <wid> <expires> (exit 3)
+ccquota lease release <owner/repo> <issue> <worker_id>             # RELEASED · NOT_HELD
+```
+
+It posts to `POST /v1/node/lease` with the node's own enrollment token
+(`CCQUOTA_HUB_URL` / `CCQUOTA_TOKEN`, as the agent runs); the hub only grants a
+lease for a fleet that endpoint's heartbeats registered. Exit 1 means the hub
+could not be asked, and the fleet carries on as it does without a hub.
+
+No renewal call exists: the agent's heartbeat already lists every session, so a
+beat that shows the session pushes its lease out by 30 minutes, and a beat that
+read the fleet but no longer shows a session it once showed releases the lease
+(the session ended or was reaped). A fresh lease waits 5 minutes for its first
+sighting. A node that goes silent renews nothing — its leases lapse 30 minutes
+after the last beat that saw them, and are released, never re-dispatched.
+`--force` takes a live lease and is recorded in `fleet_audit` as `lease_force`,
+naming whom it displaced. The `fleet_leases` table exists only under
+`CCQUOTA_FLEET=1`.
 
 ## The dashboard
 
