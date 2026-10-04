@@ -445,11 +445,14 @@ def no_discard():
     freezes this pane's output until a ⌃q — and ⌃t (`view`), BSD's VSTATUS."""
     try:
         attrs = termios.tcgetattr(0)
-        off = os.fpathconf(0, "PC_VDISABLE")
-        attrs[6][termios.VDISCARD] = off
-        if hasattr(termios, "VSTATUS"):
-            attrs[6][termios.VSTATUS] = off
         attrs[0] &= ~termios.IXON
+        try:
+            off = os.fpathconf(0, "PC_VDISABLE")
+        except (OSError, ValueError):
+            off = 0  # POSIX _POSIX_VDISABLE on Linux; IXON stays off either way
+        for char in ("VDISCARD", "VSTATUS"):
+            if hasattr(termios, char):
+                attrs[6][getattr(termios, char)] = off
         termios.tcsetattr(0, termios.TCSANOW, attrs)
     except (AttributeError, OSError, ValueError, termios.error):
         pass
