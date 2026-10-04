@@ -3980,6 +3980,83 @@ EOF
   return 1
 }
 
+# --- the child-report ledger as a PARENT MAP (issue #1352) ----------------------
+# A reaped middle window takes its @origin with it, so a grandchild's chain used to
+# break there and sink to the dash's orphan bottom. But the parent link is already
+# written down: every child report lands in `children/<parent-key>.ndjson` (#937),
+# so `{"child":"issue-11101"}` in `issue-10550.ndjson` IS "11101's parent is 10550".
+# The close path is untouched; this only READS that book.
+#
+# fleet_origin_map <sess> → path of `children/.origin-map`, one `<child>\t<parent>`
+# line per child, rebuilt only when the ledger changed. The ledger is append-only,
+# so the signature is the files' byte sizes (`wc -c`, portable, one fork) kept in
+# `.origin-map.sig` — an mtime test can miss an append in the same second. A
+# `relayed_from` row (a report forwarded to an ancestor, below) is NOT a parent
+# link and is skipped; a child named in two books keeps its first. Prints nothing
+# and returns 1 when the fleet has no ledger.
+fleet_origin_map() {
+  local d sig old='' f
+  [ -n "${1:-}" ] || return 1
+  d="$FLEET_CONF_DIR/fleets/$1/children"
+  [ -d "$d" ] || return 1
+  f="$d/.origin-map"
+  sig=$(cd "$d" 2>/dev/null && wc -c -- *.ndjson 2>/dev/null)
+  [ -f "$f.sig" ] && old=$(cat "$f.sig" 2>/dev/null)
+  if [ ! -f "$f" ] || [ "$sig" != "$old" ]; then
+    (cd "$d" 2>/dev/null && awk '
+      FNR == 1 { p = FILENAME; sub(/\.ndjson$/, "", p) }
+      /"relayed_from": *"[^"]/ { next }
+      match($0, /"child": *"[^"]*"/) {
+        c = substr($0, RSTART, RLENGTH); sub(/^"child": *"/, "", c); sub(/"$/, "", c)
+        if (c != "" && c != p && !(c in seen)) { seen[c] = 1; print c "\t" p }
+      }' *.ndjson 2>/dev/null) > "$f.$$" && mv -f "$f.$$" "$f"
+    printf '%s' "$sig" > "$f.sig.$$" && mv -f "$f.sig.$$" "$f.sig"
+  fi
+  printf '%s' "$f"
+}
+
+# fleet_origin_of <key> [sess] [sock] → the key's parent key, or nothing (exit 1).
+# A live window answers with its own @origin; a reaped one with the ledger's
+# record. A bare ledger child (`issue-N`, what a report writes) also answers for a
+# repo-qualified `<slug>:issue-N` (issue #789), which is what @origin carries.
+fleet_origin_of() {
+  local key="${1:-}" sess="${2:-}" sock="${3:-}" w o map t m
+  [ -n "$key" ] || return 1
+  if w=$(fleet_win_for_key "$key" "$sock") && [ -n "$w" ]; then
+    if [ -n "$sock" ]; then o=$(tmux -L "$sock" display-message -p -t "$w" '#{@origin}' 2>/dev/null)
+    else o=$(tmux display-message -p -t "$w" '#{@origin}' 2>/dev/null); fi
+    [ -n "$o" ] && { printf '%s' "$o"; return 0; }
+    return 1
+  fi
+  [ -n "$sess" ] || sess="$sock"
+  [ -n "$sess" ] || sess=$(fleet_current_session 2>/dev/null)
+  map=$(fleet_origin_map "$sess") || return 1
+  t=$'\n'$(cat "$map" 2>/dev/null)$'\n'
+  m=${t#*$'\n'"$key"$'\t'}
+  if [ "$m" = "$t" ] && [ "${key#*:}" != "$key" ]; then m=${t#*$'\n'"${key#*:}"$'\t'}; fi
+  [ "$m" = "$t" ] && return 1
+  m=${m%%$'\n'*}
+  [ -n "$m" ] || return 1
+  printf '%s' "$m"
+}
+
+# fleet_live_ancestor <key> [sess] [sock] → `<key>\t<window-id>` of the nearest
+# ancestor of <key> (itself excluded) that still has a window, climbing through
+# reaped ones by the ledger; nothing (exit 1) when the chain leaves the ledger
+# (hub, daemon, cross-fleet) first. ≤16 hops — the dash's CHAIN_MAX.
+fleet_live_ancestor() {
+  local cur="${1:-}" sess="${2:-}" sock="${3:-}" n=0 w
+  while [ "$n" -lt 16 ]; do
+    n=$((n + 1))
+    cur=$(fleet_origin_of "$cur" "$sess" "$sock") || return 1
+    case "$cur" in issue-*|scratch-*|?*:issue-*|?*:scratch-*) ;; *) return 1 ;; esac
+    if w=$(fleet_win_for_key "$cur" "$sock") && [ -n "$w" ]; then
+      printf '%s\t%s' "$cur" "$w"; return 0
+    fi
+  done
+  return 1
+}
+
 # The RECORD half of "record before remove" (issue #384): given a worktree a reaper
 # is ABOUT to prune, write the matching /fleet-history ledger row so the finished
 # session stays listed + resumable no matter WHICH janitor reaps it. History rows

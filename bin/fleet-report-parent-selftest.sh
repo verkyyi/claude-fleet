@@ -481,6 +481,51 @@ assert c.count('"') == 6, "only the 2 envelope attribute pairs + the title quote
 ENVGUARD
 ok
 
+# --- RELAY (issue #1352): a reaped parent's report goes to the nearest live ------
+# ancestor. issue-650's window is gone, but the ledger says 650 was 483's child, so
+# grandkid 700's report reaches 483 — with the stand-in note — while 650's own
+# book still records it, and 483's book gets a `relayed_from` row.
+new_win grandkid "sleep 600"; GRANDKID="$WID"
+TM set-window-option -t "$GRANDKID" @issue 700 2>/dev/null
+TM set-window-option -t "$GRANDKID" @origin issue-650 2>/dev/null
+printf '{"seq": 900, "child": "issue-650", "state": "MERGED", "pr": "651"}\n' \
+  >> "$FLEET_CONF_DIR/fleets/$LBL/children/issue-483.ndjson"
+eq "fleet_live_ancestor climbs a reaped key through the ledger" \
+   "issue-483	$PARENT" "$(fleet_live_ancestor issue-650 "$LBL" "$LBL")"
+# 2+ repos (issue #789): @origin is `<slug>:issue-N`, the ledger's child the bare
+# `issue-N` a report writes — the bare record answers for the qualified key.
+printf '{"seq": 1, "child": "issue-11101", "state": "MERGED"}\n' \
+  > "$FLEET_CONF_DIR/fleets/$LBL/children/o-r:issue-10550.ndjson"
+eq "fleet_origin_of: a qualified reaped key resolves through its bare ledger row" \
+   "o-r:issue-10550" "$(fleet_origin_of o-r:issue-11101 "$LBL" "$LBL")"
+ok; fleet_origin_of issue-424242 "$LBL" "$LBL" >/dev/null && fail "a key the ledger never saw must not resolve"
+out=$(RUN --win "$GRANDKID" --state blocked --summary 'needs a token' --dry-run)
+ok; has 'would send to issue-483' "$out" && has '原 parent issue-650 已回收，代收' "$out" \
+  || fail "a reaped parent's report must be relayed to the live grandparent, saying so" "$out"
+b=$(frames)
+out=$(RUN --win "$GRANDKID" --state blocked --summary 'needs a token'); rc=$?
+eq "a relayed report exits 0" 0 "$rc"
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ "$(frames)" -gt "$b" ] && break; sleep 0.3; done
+eq "the relay wrote one frame to the grandparent" $((b + 1)) "$(frames)"
+ok; has 'relayed for reaped issue-650' "$out" || fail "the relay must say so on stdout" "$out"
+python3 - "$INBOX_LOG" "$FLEET_CONF_DIR/fleets/$LBL/children" <<'RELAY' || fail "the relay envelope / ledger rows are wrong (see above)"
+import json, os, sys
+frames = [json.loads(l) for l in open(sys.argv[1]).read().split("\n") if l.strip()]
+c = [f for f in frames if f.get("type") == "user"][-1]["message"]["content"]
+assert '[child-report] issue #700 "grandkid"' in c, c
+assert 'state: BLOCKED · branch issue-700 · 原 parent issue-650 已回收，代收' in c, c
+d = sys.argv[2]
+rows = lambda k: [json.loads(l) for l in open(os.path.join(d, k + '.ndjson')) if l.strip()]
+own = [e for e in rows('issue-650') if e.get('child') == 'issue-700']
+assert own and own[-1]['state'] == 'BLOCKED' and 'relayed_from' not in own[-1], own
+rel = [e for e in rows('issue-483') if e.get('child') == 'issue-700']
+assert rel and rel[-1].get('relayed_from') == 'issue-650', rel
+# the relayed row is NOT a parent link: 700's parent is still 650, not 483
+m = open(os.path.join(d, '.origin-map')).read()
+assert 'issue-700\tissue-650\n' in m and 'issue-700\tissue-483' not in m, m
+RELAY
+ok
+
 # --- nothing was ever TYPED at the parent (the #437 rail) ------------------------
 ok; has 'child-report' "$(TM capture-pane -p -t "$PARENT" 2>/dev/null)" \
   && fail "the report must never appear as keystrokes in the parent's pane"

@@ -15,6 +15,10 @@
 #                  indent at 4 while the sort keeps the whole path; a broken
 #                  chain sinks, still nested under what is live of it
 #   B. fold      — every level folds on its own; a `!` row never folds away
+#   I. reaped    — a middle window that was reaped (issue #1352): the grandchild
+#                  climbs on through the child-report ledger to the nearest LIVE
+#                  ancestor, at depth 1, counted in its k/N; no ledger record ⇒
+#                  today's orphan sink, byte for byte
 #   C. counts    — every level's badge is ITS subtree's `k/N`, nothing else: no
 #                  trailing ✓, no `· n!`
 #   D. glyphs    — every needs kind and failed draw `!` (the kind rides the
@@ -276,5 +280,41 @@ eq "H: loop,bg → the bg words" "后台命令在跑" "$(det "$s" both)"
 eq "H: a child's own row carries nothing" "" "$(det "$s" kid2)"
 h=$(hub)
 hasnt "H: the hub's red act cell never shows a ↻ reason" "$h" "等子任务"
+
+# ============================================================================
+# I. a reaped middle layer (issue #1352): gp ─ [issue-12, reaped] ─ gk, and a
+#    two-deep gap gp ─ [12] ─ [14, reaped] ─ gk2. The ledger (children/<parent>.ndjson,
+#    #937) still says who each reaped key's parent was.
+# ============================================================================
+: > "$WLIST_FILE"
+w 1 gp     /w/r-issue-10 working @1 10 ''       /w/r-issue-10 1
+w 2 sib    /w/r-issue-11 'done'  @2 11 issue-10 /w/r-issue-11
+w 3 gk     /w/r-issue-13 'done'  @3 13 issue-12 /w/r-issue-13
+w 4 gk2    /w/r-issue-15 working @4 15 issue-14 /w/r-issue-15
+w 5 lonely /w/r-issue-20 working @5 20 ''       /w/r-issue-20
+# the working spinner is clock-driven: fold its frame out before comparing frames
+nospin() { perl -CSD -pe 's/[\x{2800}-\x{28FF}]/*/g'; }
+s0=$(side); h0=$(hub | nospin)
+eq "I: no ledger — the grandchildren sink as orphans (today's rule)" \
+   "gp sib lonely gk gk2 " "$(sorder "$s0")"
+eq "I: no ledger — gp counts only its live child" "gp|▾|1/1|0" "$(srow "$s0" gp)"
+LD="$FLEET_CONF_DIR/fleets/S/children"; mkdir -p "$LD"
+printf '{"seq": 1, "child": "issue-12", "state": "MERGED", "pr": "99"}\n' > "$LD/issue-10.ndjson"
+printf '{"seq": 1, "child": "issue-14", "state": "MERGED"}\n'           > "$LD/issue-12.ndjson"
+# a relayed row is not a parent link: it must not re-parent gk2 onto lonely
+printf '{"seq": 1, "child": "issue-15", "state": "BLOCKED", "relayed_from": "issue-14"}\n' > "$LD/issue-20.ndjson"
+s=$(side)
+eq "I: the grandchildren nest under the nearest live ancestor" \
+   "gp sib gk gk2 lonely " "$(sorder "$s")"
+eq "I: …at depth 1, no label"                 "gk|└||1"     "$(srow "$s" gk)"
+eq "I: …through a two-deep gap too"           "gk2|└||1"    "$(srow "$s" gk2)"
+eq "I: …and they count in gp's k/N"           "gp|▾|2/3|0"  "$(srow "$s" gp)"
+eq "I: a relayed_from row parents nothing"    "lonely| ||0" "$(srow "$s" lonely)"
+hasnt "I: no ↳ tag names the reaped parent"   "$(hub)" "↳"
+# a ledger that does not know the reaped key ⇒ exactly today's frame
+printf '{"seq": 1, "child": "issue-77", "state": "MERGED"}\n' > "$LD/issue-10.ndjson"
+rm -f "$LD/issue-12.ndjson" "$LD/issue-20.ndjson"
+eq "I: an unknown key in the ledger — sidebar unchanged" "$(printf '%s' "$s0" | nospin)" "$(side | nospin)"
+eq "I: an unknown key in the ledger — hub unchanged"     "$h0" "$(hub | nospin)"
 
 printf 'dash-rows-nesting-selftest: OK (%d checks)\n' "$CHECKS"

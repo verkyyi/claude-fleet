@@ -42,7 +42,9 @@
 #   -h              this header
 #
 # EXIT 0 IS THE RULE, not the exception: no parent (hub-spawned / cross-fleet),
-# the parent window already reaped, no live Claude under it, or the fleet has
+# the parent window already reaped with no live ancestor above it in the ledger
+# (a reaped parent WITH one relays there, issue #1352 — see `relay` below), no
+# live Claude under it, or the fleet has
 # FLEET_CHILD_REPORT=0 — every one of those is a silent success. This runs on the
 # child's SHIP path and must never block it or turn a landed PR into an error.
 # Exit 2 is reserved for a usage mistake (bad/missing --state, unknown flag).
@@ -85,7 +87,7 @@ while [ "$#" -gt 0 ]; do
     -L*)        SOCK="${1#-L}" ;;
     --only-once) ONCE=1 ;;
     --dry-run)  DRY=1 ;;
-    -h|--help)  sed -n '2,59p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)  sed -n '2,61p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *)          printf 'fleet-report-parent: unknown argument %s\n' "$1" >&2; exit 2 ;;
   esac
   shift
@@ -279,13 +281,34 @@ fi
 # The `child busy (<reason>)` wording is #864's, kept for whoever greps for it.
 [ "$TIER" = silent ] && quiet "tier=silent · $UST${busy:+ · child busy ($busy)} — ledger only"
 
+# --- relay (issue #1352): a reaped parent's report goes to its nearest live ------
+# ancestor. A parent that merged is reaped minutes later whatever its children are
+# doing (an idle session costs 0.4-0.9 GB), so a grandchild's outcome used to land
+# in a dead parent's book and reach nobody. The ledger above still records it under
+# the original parent; here the climb (fleet_live_ancestor — the parent links the
+# same ledger already holds) finds who is still alive, the report goes THERE, with
+# the envelope saying who it is standing in for, and the receiver's book gets a
+# `relayed_from` row so `fleet-children.sh` there shows it too. Nobody alive above
+# (hub-spawned, cross-fleet, never reported) ⇒ the old silent success, below.
+SENDKEY="$worigin" RELAY_FROM='' pwin=''
+pwin=$(fleet_win_for_key "$worigin" "$SOCK") || pwin=''
+if [ -z "$pwin" ] && _anc=$(fleet_live_ancestor "$worigin" "$sess" "$SOCK"); then
+  SENDKEY=${_anc%%$'\t'*}; pwin=${_anc#*$'\t'}; RELAY_FROM="$worigin"
+  if [ "$DRY" != 1 ] && command -v children_append >/dev/null 2>&1; then
+    children_append "$SENDKEY" "$(python3 -c 'import json,sys; print(json.dumps(dict(zip(("child","state","pr","verdict","summary","title","tier","relayed_from"), sys.argv[1:]))))' \
+      "$selfkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER" "$RELAY_FROM" 2>/dev/null)" "$sess" || :
+  fi
+fi
+
 # --- batch (issue #939): the ledger IS the delivery queue -----------------------
+# A relay is delivered at once, never batched: the digest is per-parent and would
+# lose the stand-in note.
 # FLEET_CHILD_REPORT=batch hands delivery to the digest (bin/fleet-children-flush.sh,
 # run on the cleanup daemon's 60s tick): a quiet report stops here, recorded; a loud
 # one flushes NOW, and the digest it sends carries the quiet news queued ahead of it.
 # The child is stamped @reported once its report is in the book — the reaper's
 # backstop exists for sessions that never reported, and this one did.
-if [ "$MODE" = batch ]; then
+if [ "$MODE" = batch ] && [ -z "$RELAY_FROM" ]; then
   if [ "$DRY" = 1 ]; then
     printf 'fleet-report-parent: batch · tier=%s · %s — ledgered for the %s digest\n' \
       "$TIER" "$UST" "$worigin"
@@ -299,9 +322,7 @@ if [ "$MODE" = batch ]; then
 fi
 
 # --- rail 2: the parent window, and a live Claude under it ---------------------
-pwin=$(fleet_win_for_key "$worigin" "$SOCK") \
-  || quiet "parent $worigin has no window on this fleet (reaped, or another fleet)"
-[ -n "$pwin" ] || quiet "parent $worigin has no window on this fleet (reaped, or another fleet)"
+[ -n "$pwin" ] || quiet "parent $worigin has no window on this fleet (reaped, or another fleet), and no live ancestor in the ledger"
 # Defensive: a window whose @origin names ITSELF would otherwise message its own
 # pane and wake the child that is about to stop.
 [ "$pwin" = "$selfwin" ] && quiet "@origin $worigin resolves to this very window"
@@ -312,8 +333,8 @@ parent_sleep=$(TM display-message -p -t "$pwin" '#{@worker_lifecycle}' 2>/dev/nu
 parent_evidence=$(TM display-message -p -t "$pwin" '#{@sleep_evidence}' 2>/dev/null)
 if [ "$parent_agent" != codex ] && [ -z "$parent_sleep$parent_evidence" ]; then
   ppid=$(fleet_pane_claude_pid "$pwin" "$SOCK" 2>/dev/null) \
-    || quiet "parent $worigin ($pwin) has no live Claude under it"
-  [ -n "$ppid" ] || quiet "parent $worigin ($pwin) has no live Claude under it"
+    || quiet "parent $SENDKEY ($pwin) has no live Claude under it"
+  [ -n "$ppid" ] || quiet "parent $SENDKEY ($pwin) has no live Claude under it"
 fi
 
 # --- the envelope: FIXED shape, 4 lines typical, 6 at its widest ---------------
@@ -333,6 +354,8 @@ case "$STATE" in
   idle)    st="IDLE${VERDICT:+ ($VERDICT)}" ;;
 esac
 msg="[child-report] $label${wname:+ \"$wname\"}"$'\n'"state: $st · branch $BRANCH"
+# the stand-in note rides the state line: the envelope's size is the point of it
+[ -n "$RELAY_FROM" ] && msg="$msg · 原 parent $RELAY_FROM 已回收，代收"
 if [ -n "$SUMMARY" ]; then
   # ≤3 lines, ≤200 chars each: the cap is the point of the envelope, not a
   # formatting nicety — every line here is context the parent did not choose to
@@ -351,7 +374,7 @@ msg="$msg"$'\n'"no reply needed${FLEET_LANG_RULE_NOTICE:+ — $FLEET_LANG_RULE_N
 
 if [ "$DRY" = 1 ]; then
   printf 'fleet-report-parent: would send to %s (%s, pid %s) tier=%s\n--- envelope ---\n%s\n' \
-    "$worigin" "$pwin" "$ppid" "$TIER" "$msg"
+    "$SENDKEY" "$pwin" "$ppid" "$TIER" "$msg"
   exit 0
 fi
 
@@ -378,12 +401,12 @@ if send_report; then
   TM set-window-option -t "$selfwin" @reported 1 2>/dev/null
   # Keep the digest cursor current (issue #939): this report reached the parent, so
   # a later switch to batch must not replay it.
-  command -v children_cursor_set >/dev/null 2>&1 && children_cursor_set "$worigin" "$sess"
-  printf 'reported → %s (%s): %s\n' "$worigin" "$pwin" "$st"
+  command -v children_cursor_set >/dev/null 2>&1 && children_cursor_set "$SENDKEY" "$sess"
+  printf 'reported → %s (%s): %s%s\n' "$SENDKEY" "$pwin" "$st" "${RELAY_FROM:+ (relayed for reaped $RELAY_FROM)}"
   exit 0
 fi
 # A parent that is alive but unreachable (no registry record / no key / no socket)
 # is still not the child's problem to solve.
 printf 'fleet-report-parent: parent %s (%s, pid %s) has no reachable inbox — not reported\n' \
-  "$worigin" "$pwin" "$ppid" >&2
+  "$SENDKEY" "$pwin" "$ppid" >&2
 exit 0

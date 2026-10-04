@@ -419,7 +419,8 @@ fi
 #   ANC=n     ancestors found; A{K,R,I,P,E,G}[0..n-1] = key/rank/idx/@pin/@expand/
 #             repo group, [0] the parent, [n-1] the topmost one found
 #   $croot    the root's key (= AK[n-1]); EMPTY ⇒ the chain is broken (a window
-#             in it closed, or it ran past CHAIN_MAX hops) — an ORPHAN, which
+#             in it closed and the ledger does not know its parent, or it ran
+#             past CHAIN_MAX hops) — an ORPHAN, which
 #             sorts under the 9:99999 sink sentinel, still nested under whatever
 #             of its chain IS live
 #   $crootpin the root's @pin (0 if none); its @expand / repo group are
@@ -433,14 +434,41 @@ fi
 # CHAIN_MAX bounds a cycle in @origin; depth DISPLAYS at most DEPTH_MAX levels
 # (the indent stops growing), but the sort key keeps the whole path, so a
 # deeper subtree still stays contiguous.
+# A key NOT on this dash is a reaped window (issue #1352): before calling the chain
+# broken, the walk asks the child-report ledger who that key's parent was
+# (fleet_origin_map) and climbs on through it, so a grandchild whose middle window
+# was reaped nests under the nearest LIVE ancestor — at the depth of the live
+# levels only, no label. The skipped hop adds no A* entry. Only a key the ledger
+# does not know (hub-spawned, cross-fleet, never reported) still breaks the chain.
+# The map is read ONCE a frame, and only when some chain actually broke.
 CHAIN_MAX=16; DEPTH_MAX=4
 AK=(); AR=(); AI=(); AP=(); AE=(); AG=()
+OMAP=''; OMAP_LOADED=0
+lparent_v() { lpar=''
+  if [ "$OMAP_LOADED" = 0 ]; then
+    OMAP_LOADED=1
+    local f
+    [ -n "${FLEET_SESSION:-}" ] && f=$(fleet_origin_map "$FLEET_SESSION") \
+      && [ -s "$f" ] && OMAP=$'\n'$(<"$f")$'\n'
+  fi
+  [ -n "$OMAP" ] || return 1
+  local m=${OMAP#*$'\n'"$1"$'\t'}
+  if [ "$m" = "$OMAP" ] && [ "${1#*:}" != "$1" ]; then m=${OMAP#*$'\n'"${1#*:}"$'\t'}; fi
+  [ "$m" = "$OMAP" ] && return 1
+  lpar=${m%%$'\n'*}
+  [ -n "$lpar" ]
+}
 chain_v() { croot=''; crootpin=0; cpnlvl=''; ANC=0
-  local cur="$1" t m prow prest porig
+  local cur="$1" t m prow prest porig hop=0
   t=$'\n'"$KEYTAB"
-  while [ "$ANC" -lt "$CHAIN_MAX" ]; do
+  while [ "$ANC" -lt "$CHAIN_MAX" ] && [ "$hop" -lt "$CHAIN_MAX" ]; do
+    hop=$((hop+1))
     m=${t#*$'\n'"$cur"$'\t'}
-    [ "$m" = "$t" ] && return                               # not on this dash: broken
+    if [ "$m" = "$t" ]; then                                 # not on this dash:
+      lparent_v "$cur" || return                             # unknown ⇒ broken
+      case "$lpar" in issue-*|scratch-*|*:issue-*|*:scratch-*) cur=$lpar; continue ;; esac
+      return
+    fi
     prow=${m%%$'\n'*}
     AK[ANC]=$cur
     AR[ANC]=${prow%%$'\t'*}; prest=${prow#*$'\t'}
