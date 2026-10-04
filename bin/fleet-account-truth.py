@@ -60,10 +60,13 @@ def process_tokens(pids):
                 fields = Path('/proc', str(pid), 'environ').read_bytes().split(b'\0')
             except OSError:
                 continue
+            token = hub_token(fields)
             for field in fields:
                 if field.startswith(b'CLAUDE_CODE_OAUTH_TOKEN='):
-                    tokens[pid] = field.split(b'=', 1)[1]
+                    token = field.split(b'=', 1)[1]
                     break
+            if token:
+                tokens[pid] = token
         return tokens
     # ps prints a PID column ahead of argv+environment. Only return requested PIDs.
     raw = run_probe(['ps', '-E', '-ww', '-o', 'pid=,command=', '-p', ','.join(map(str, pids))])
@@ -74,9 +77,22 @@ def process_tokens(pids):
             continue
         pid = int(fields[0])
         match = re.search(rb'(?:^|\s)CLAUDE_CODE_OAUTH_TOKEN=([^\s]+)', fields[1])
-        if pid in pids and match:
-            tokens[pid] = match[1]
+        token = match[1] if match else hub_token(fields[1].split())
+        if pid in pids and token:
+            tokens[pid] = token
     return tokens
+
+
+def hub_token(words):
+    """A hub-managed account (issue #1415) carries no token in its environment,
+    only CLAUDE_SECURESTORAGE_CONFIG_DIR=<accounts>/<label>.hub; its pool file
+    holds `hub:<label>`, which is what the digests are compared on."""
+    for word in words:
+        if word.startswith(b'CLAUDE_SECURESTORAGE_CONFIG_DIR='):
+            name = word.split(b'=', 1)[1].rstrip(b'/').rsplit(b'/', 1)[-1]
+            if name.endswith(b'.hub') and len(name) > 4:
+                return b'hub:' + name[:-4]
+    return None
 
 
 def resolve(text, directory):

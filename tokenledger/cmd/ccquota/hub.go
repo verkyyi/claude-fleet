@@ -19,6 +19,7 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/agent"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/api"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/fx"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/mcp"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
@@ -36,6 +37,41 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// fleetVault builds the credential vault (claude-fleet#1415) when the fleet
+// module is on AND a key is configured. The key lives in its own k8s Secret,
+// never in the database the blobs are in. A key that is set but unreadable is
+// fatal: starting without it would silently stop every lease.
+func fleetVault(fleetOn bool, st *store.Store) (*credvault.Vault, error) {
+	if !fleetOn {
+		return nil, nil
+	}
+	key, ok, err := credvault.LoadKey(os.Getenv)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		log.Printf("fleet: credential vault off (set CCQUOTA_FLEET_CRED_KEY_FILE or CCQUOTA_FLEET_CRED_KEY to turn it on)")
+		return nil, nil
+	}
+	sealer, err := credvault.NewSealer(key)
+	if err != nil {
+		return nil, err
+	}
+	minTTL := credvault.DefaultMinTTL
+	if v := os.Getenv("CCQUOTA_FLEET_CRED_MIN_TTL"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d <= 0 {
+			return nil, fmt.Errorf("CCQUOTA_FLEET_CRED_MIN_TTL: %q is not a positive duration", v)
+		}
+		minTTL = d
+	}
+	log.Printf("fleet: credential vault on — nodes lease at /v1/node/credentials, audit at /credentials")
+	return &credvault.Vault{Store: st, Sealer: sealer, MinTTL: minTTL, Refresher: &credvault.HTTPRefresher{
+		ClaudeTokenURL: os.Getenv("CCQUOTA_FLEET_CLAUDE_TOKEN_URL"),
+		CodexTokenURL:  os.Getenv("CCQUOTA_FLEET_CODEX_TOKEN_URL"),
+	}}, nil
 }
 
 // fleetEnabled reports CCQUOTA_FLEET=1, the one switch for the whole fleet
@@ -209,6 +245,10 @@ func runHub(args []string) error {
 		}
 		log.Printf("fleet module on (CCQUOTA_FLEET=1): nodes connect at %s, roster at /nodes, fleet reads at /v1/fleet/", control.Path)
 	}
+	vault, err := fleetVault(fleetOn, st)
+	if err != nil {
+		return err
+	}
 	if *rebuild {
 		n, err := st.RebuildRollup(*rebuildForce)
 		if err != nil {
@@ -337,6 +377,7 @@ func runHub(args []string) error {
 		// A person's grant on their own logins (claude-fleet#1410).
 		FleetPersonScopes:     fleetPersonScopes(),
 		FleetPersonConfigKeys: splitList(os.Getenv("CCQUOTA_FLEET_PERSON_CONFIG_KEYS")),
+		Vault:                 vault,
 		// Where we are about to bind, so /access can print a URL instead of
 		// "some port". The HTTPS half is filled in below, once the certificate
 		// has told us the name it is actually for.
@@ -679,6 +720,9 @@ func runAgent(args []string) error {
 		// Only meaningful with the fleet module on: the admin agent is a
 		// role on the control channel.
 		FleetAdmin: fleetEnabled() && os.Getenv("CCQUOTA_FLEET_ADMIN") == "1",
+		// Lease this login's credentials from the hub's vault (#1415).
+		FleetCreds:         fleetEnabled() && os.Getenv("CCQUOTA_FLEET_CREDS") == "1",
+		FleetCodexHomesDir: os.Getenv("CCQUOTA_FLEET_CODEX_HOMES"),
 	})
 	if err != nil {
 		return err

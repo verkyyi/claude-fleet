@@ -241,6 +241,7 @@ func (a *Agent) nodeSession(ctx context.Context) (established bool, err error) {
 	if err := beat(); err != nil {
 		return true, err
 	}
+	a.markNodeReady()
 	t := time.NewTicker(a.cfg.LiveInterval)
 	defer t.Stop()
 	for {

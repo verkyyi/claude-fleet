@@ -217,7 +217,9 @@ if [ -n "$label" ]; then                                 # (resolved above, with
       unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL
       unset CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY
     fi
-    export CLAUDE_CODE_OAUTH_TOKEN="$tok"
+    # A plain token → CLAUDE_CODE_OAUTH_TOKEN; a hub-managed account (#1415) →
+    # CLAUDE_SECURESTORAGE_CONFIG_DIR at the file the agent keeps renewed.
+    fleet_claude_export_auth "$tok"
     # Stamp THIS pane's window (issue #511). An untargeted `set-option -w` resolves
     # to the session's CURRENT window, and every spawn is `new-window -d` (the hub
     # stays current on purpose) — so the label used to land on the hub while the

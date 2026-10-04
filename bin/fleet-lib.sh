@@ -290,6 +290,7 @@ fleet_model_limited_until() {
 # Sourced-library rules apply: no `set`, every expansion defaulted, always returns 0.
 fleet_helper_claude_auth() {
   [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && return 0    # inherited (hook path) — keep it
+  [ -n "${CLAUDE_SECURESTORAGE_CONFIG_DIR:-}" ] && return 0   # inherited hub-managed account (#1415)
   local _bin label tok
   _bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
   [ -n "$_bin" ] && [ -x "$_bin/fleet-account.sh" ] || return 0
@@ -297,7 +298,29 @@ fleet_helper_claude_auth() {
   [ -n "$label" ] || return 0                          # multi-account off → ambient login
   tok="$(bash "$_bin/fleet-account.sh" token "$label" 2>/dev/null)"
   [ -n "$tok" ] || return 0
-  export CLAUDE_CODE_OAUTH_TOKEN="$tok"
+  fleet_claude_export_auth "$tok"
+  return 0
+}
+
+# fleet_claude_export_auth <token-file-line> — export the credential a claude for
+# one pool account runs on. A plain token (`claude setup-token`) goes in
+# CLAUDE_CODE_OAUTH_TOKEN, as it always has. The marker `hub:<label>` (issue
+# #1415) means the account is hub-managed: the ccquota agent keeps a SHORT-LIVED
+# token in <accounts>/<label>.hub/.credentials.json and renews it before expiry.
+# Claude Code re-reads that file on every request only when pointed at it through
+# CLAUDE_SECURESTORAGE_CONFIG_DIR — the env var is read ONCE, at launch, so a
+# session started on it would die when the token expires (measured, #1415).
+# Sourced-library rules: no `set`, every expansion defaulted, always returns 0.
+fleet_claude_export_auth() {
+  case "${1:-}" in
+    '') ;;
+    hub:*)
+      unset CLAUDE_CODE_OAUTH_TOKEN
+      export CLAUDE_SECURESTORAGE_CONFIG_DIR="${FLEET_ACCOUNTS_DIR:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/accounts}/${1#hub:}.hub" ;;
+    *)
+      unset CLAUDE_SECURESTORAGE_CONFIG_DIR
+      export CLAUDE_CODE_OAUTH_TOKEN="$1" ;;
+  esac
   return 0
 }
 
@@ -5827,13 +5850,24 @@ fleet_sha12() { if command -v shasum >/dev/null 2>&1; then shasum -a 256 | cut -
 # (macOS strips the environment of Apple-signed binaries — a selftest's perl fake
 # — from `ps -E`, so a hermetic test cannot read it the production way).
 fleet_claude_token_sha() {
-  local pid="$1" tok=""
+  local pid="$1" tok="" env_words="" hubdir=""
   if [ -n "${FLEET_TOKEN_PROBE:-}" ]; then
     tok=$("$FLEET_TOKEN_PROBE" "$pid" 2>/dev/null | head -n1)
   elif [ -r "/proc/$pid/environ" ]; then
     tok=$(tr '\0' '\n' < "/proc/$pid/environ" | sed -n 's/^CLAUDE_CODE_OAUTH_TOKEN=//p' | head -n1)
   else
-    tok=$(ps -E -ww -o command= -p "$pid" 2>/dev/null | tr ' ' '\n' | sed -n 's/^CLAUDE_CODE_OAUTH_TOKEN=//p' | head -n1)
+    env_words=$(ps -E -ww -o command= -p "$pid" 2>/dev/null | tr ' ' '\n')
+    tok=$(printf '%s\n' "$env_words" | sed -n 's/^CLAUDE_CODE_OAUTH_TOKEN=//p' | head -n1)
+  fi
+  # A hub-managed account (#1415) carries no token in its environment, only the
+  # directory of its short-lived one: <accounts>/<label>.hub. Its pool file holds
+  # `hub:<label>`, so that string is the "token" the shas are compared on.
+  if [ -z "$tok" ] && [ -z "${FLEET_TOKEN_PROBE:-}" ]; then
+    if [ -r "/proc/$pid/environ" ]; then
+      env_words=$(tr '\0' '\n' < "/proc/$pid/environ")
+    fi
+    hubdir=$(printf '%s\n' "${env_words:-}" | sed -n 's/^CLAUDE_SECURESTORAGE_CONFIG_DIR=//p' | head -n1)
+    case "$hubdir" in */*.hub) hubdir=${hubdir##*/}; tok="hub:${hubdir%.hub}" ;; esac
   fi
   [ -n "$tok" ] || return 1
   printf '%s' "$tok" | fleet_sha12

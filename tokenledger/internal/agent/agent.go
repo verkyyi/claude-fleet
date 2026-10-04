@@ -110,6 +110,18 @@ type Config struct {
 	// on the operator's own login, the one with password-less sudo. Off, every
 	// account op is refused.
 	FleetAdmin bool
+
+	// FleetCreds makes this agent lease its login's credentials from the
+	// hub's vault (CCQUOTA_FLEET_CREDS=1, claude-fleet#1415) and keep them
+	// written where Claude Code, Codex and gh re-read them: Claude under
+	// AccountsDir (default ~/.config/claude-fleet/accounts), Codex under
+	// FleetCodexHomesDir (default ~/.codex-accounts; account "default" is
+	// ~/.codex), gh in its hosts.yml. Off, nothing is leased or written.
+	FleetCreds bool
+
+	// FleetCodexHomesDir is where hub-leased Codex homes live
+	// (CCQUOTA_FLEET_CODEX_HOMES).
+	FleetCodexHomesDir string
 }
 
 // Defaults for the intervals.
@@ -198,6 +210,12 @@ type Agent struct {
 	// unreachable. A failed cycle leaves the cursor unmoved, so the next scan
 	// re-reads everything — cheap once, wasteful every minute for an hour.
 	consecutiveFailures int
+
+	// nodeReady is closed after the first heartbeat reaches the hub, so the
+	// credential lease (claude-fleet#1415) is asked only once the hub knows
+	// which (machine, login) this is.
+	nodeReady                    chan struct{}
+	nodeReadyInit, nodeReadyDone sync.Once
 }
 
 // maxBackoffFactor caps how far a failing agent stretches its scan interval.
@@ -287,6 +305,10 @@ func (a *Agent) Run(ctx context.Context) error {
 		var node sync.WaitGroup
 		node.Add(1)
 		go func() { defer node.Done(); a.runNode(ctx) }()
+		if a.cfg.FleetCreds {
+			node.Add(1)
+			go func() { defer node.Done(); a.runCredLeases(ctx) }()
+		}
 		defer node.Wait()
 	}
 
