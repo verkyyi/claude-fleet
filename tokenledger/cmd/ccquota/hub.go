@@ -44,6 +44,11 @@ func envOr(key, def string) string {
 // module is on AND a key is configured. The key lives in its own k8s Secret,
 // never in the database the blobs are in. A key that is set but unreadable is
 // fatal: starting without it would silently stop every lease.
+//
+// CCQUOTA_FLEET_CRED_KMS_KEY_ID moves the key into Aliyun KMS
+// (claude-fleet#1417): the vault starts LOCKED and opens only when KMS unwraps
+// its data key; while KMS is unreachable it stays locked — no lease, no
+// store, a critical finding — and never falls back to a plain key.
 func fleetVault(fleetOn bool, st *store.Store) (*credvault.Vault, error) {
 	if !fleetOn {
 		return nil, nil
@@ -52,13 +57,10 @@ func fleetVault(fleetOn bool, st *store.Store) (*credvault.Vault, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !ok {
-		log.Printf("fleet: credential vault off (set CCQUOTA_FLEET_CRED_KEY_FILE or CCQUOTA_FLEET_CRED_KEY to turn it on)")
+	kmsKey := os.Getenv("CCQUOTA_FLEET_CRED_KMS_KEY_ID")
+	if !ok && kmsKey == "" {
+		log.Printf("fleet: credential vault off (set CCQUOTA_FLEET_CRED_KMS_KEY_ID, or CCQUOTA_FLEET_CRED_KEY_FILE / CCQUOTA_FLEET_CRED_KEY, to turn it on)")
 		return nil, nil
-	}
-	sealer, err := credvault.NewSealer(key)
-	if err != nil {
-		return nil, err
 	}
 	minTTL := credvault.DefaultMinTTL
 	if v := os.Getenv("CCQUOTA_FLEET_CRED_MIN_TTL"); v != "" {
@@ -68,11 +70,71 @@ func fleetVault(fleetOn bool, st *store.Store) (*credvault.Vault, error) {
 		}
 		minTTL = d
 	}
-	log.Printf("fleet: credential vault on — nodes lease at /v1/node/credentials, audit at /credentials")
-	return &credvault.Vault{Store: st, Sealer: sealer, MinTTL: minTTL, Refresher: &credvault.HTTPRefresher{
+	vault := &credvault.Vault{Store: st, MinTTL: minTTL, Refresher: &credvault.HTTPRefresher{
 		ClaudeTokenURL: os.Getenv("CCQUOTA_FLEET_CLAUDE_TOKEN_URL"),
 		CodexTokenURL:  os.Getenv("CCQUOTA_FLEET_CODEX_TOKEN_URL"),
-	}}, nil
+	}}
+	if kmsKey == "" {
+		sealer, err := credvault.NewSealer(key)
+		if err != nil {
+			return nil, err
+		}
+		vault.Sealer = sealer
+		log.Printf("fleet: credential vault on — nodes lease at /v1/node/credentials, audit at /credentials")
+		return vault, nil
+	}
+
+	env, err := kmsEnvelope(kmsKey, st)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		env.Legacy = key
+	}
+	vault.SetLocked("unwrapping the data key from KMS", time.Now())
+	log.Printf("fleet: credential vault on, key in KMS %s — locked until KMS unwraps it", kmsKey)
+	go credvault.KeepUnlocked(context.Background(), vault, env, 15*time.Second, 5*time.Minute,
+		func(locked bool, detail string) {
+			a := store.CredAudit{Action: store.CredUnlock, Detail: "ok: " + detail}
+			if locked {
+				a.Detail = "LOCKED: " + detail
+				log.Printf("credvault: ALERT vault LOCKED — no credential is issued until KMS answers: %s", detail)
+			} else {
+				log.Printf("credvault: vault unlocked — %s", detail)
+			}
+			if err := st.AddCredAudit(a); err != nil {
+				log.Printf("credvault: audit unlock: %v", err)
+			}
+		})
+	return vault, nil
+}
+
+// kmsEnvelope builds the KMS client from CCQUOTA_FLEET_CRED_KMS_ENDPOINT (or
+// _REGION) and the hub's Aliyun identity (credvault.CredsFromEnv). An identity
+// that is missing does not stop the hub: every unlock fails with that reason,
+// which is the locked vault + critical finding the operator needs to see.
+func kmsEnvelope(keyID string, st *store.Store) (*credvault.Envelope, error) {
+	endpoint := os.Getenv("CCQUOTA_FLEET_CRED_KMS_ENDPOINT")
+	if endpoint == "" {
+		region := os.Getenv("CCQUOTA_FLEET_CRED_KMS_REGION")
+		if region == "" {
+			return nil, errors.New("CCQUOTA_FLEET_CRED_KMS_KEY_ID needs CCQUOTA_FLEET_CRED_KMS_REGION (e.g. cn-shenzhen) or CCQUOTA_FLEET_CRED_KMS_ENDPOINT")
+		}
+		endpoint = "https://kms." + region + ".aliyuncs.com"
+	} else if !strings.Contains(endpoint, "://") {
+		endpoint = "https://" + endpoint
+	}
+	creds, source, err := credvault.CredsFromEnv(os.Getenv, nil)
+	if err != nil {
+		cerr := err
+		creds = func(context.Context) (credvault.AliyunCreds, error) { return credvault.AliyunCreds{}, cerr }
+		source = "none"
+	}
+	if source == "static-key" {
+		log.Printf("fleet: KMS identity is a static AccessKey — whoever holds that Secret can unwrap the vault too; use RRSA or an instance role")
+	}
+	log.Printf("fleet: KMS %s, identity %s", endpoint, source)
+	return &credvault.Envelope{KMS: &credvault.AliyunKMS{Endpoint: endpoint, Creds: creds}, KeyID: keyID, Store: st}, nil
 }
 
 // fleetEnabled reports CCQUOTA_FLEET=1, the one switch for the whole fleet

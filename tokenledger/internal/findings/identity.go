@@ -67,6 +67,7 @@ import (
 //	                  already names it uniquely
 //	time_in_critical  the account uuid when the caller supplies one, else its
 //	                  label
+//	cred_vault_locked the constant "vault": a hub has one
 //	window_high       the account uuid (or label) plus the window id
 //	stale_agent       the endpoint id when the caller supplies one, else its
 //	                  label

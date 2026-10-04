@@ -329,3 +329,56 @@ func TestCredentialLeaseIntegration(t *testing.T) {
 		t.Fatalf("%d issue audit rows for %s@%s, want 2", issued, u.Username, hostname)
 	}
 }
+
+// KMS unavailable (claude-fleet#1417): the vault is locked, so the hub
+// refuses every lease and store with 503 vault_locked, records each refusal,
+// and raises a critical finding — while revocation and the audit still work.
+// It never falls back to issuing from anything else.
+func TestLockedVaultRefusesAndAlerts(t *testing.T) {
+	h, tok, ref := newVaultHarness(t)
+	putCred(t, h, credvault.Claude, "main", credvault.Secret{RefreshToken: "rt-1"})
+	key := h.srv.Vault.Sealer
+	h.srv.Vault.SetLocked("kms Decrypt: kms 503 ServiceUnavailable", time.Now().Add(-2*time.Minute))
+
+	code, ok, refusal := lease(t, h, tok)
+	if code != http.StatusServiceUnavailable || refusal["error"] != LeaseVaultLocked || ok.Credentials != nil {
+		t.Fatalf("locked lease: %d %v %+v", code, refusal, ok)
+	}
+	if !strings.Contains(refusal["message"], "ServiceUnavailable") {
+		t.Errorf("refusal should say why: %v", refusal)
+	}
+	if n := ref.n.Load(); n != 0 {
+		t.Errorf("a locked vault refreshed %d time(s)", n)
+	}
+	audit, _ := h.srv.Store.CredAuditLog("", 10)
+	if len(audit) == 0 || audit[0].Action != store.CredDeny || !strings.Contains(audit[0].Detail, LeaseVaultLocked) {
+		t.Fatalf("no deny audit: %+v", audit)
+	}
+	code, out := h.post(t, "/v1/fleet/credentials", FleetCredentialRequest{Action: "put", PrincipalID: "wecom-alice",
+		Provider: "claude", Account: "other", Secret: credvault.Secret{RefreshToken: "x"}})
+	if code != http.StatusServiceUnavailable || out["error"] != LeaseVaultLocked {
+		t.Fatalf("locked put: %d %v", code, out)
+	}
+	if code, out := h.post(t, "/v1/fleet/credentials/revoke", FleetRevokeRequest{Hostname: "m4"}); code != http.StatusOK {
+		t.Fatalf("revoke while locked: %d %v", code, out)
+	}
+
+	var now findingsEnvelope
+	h.getJSON(t, "/v1/findings?account=all&view=now", &now)
+	if len(now.Findings) == 0 || now.Findings[0].Kind != "cred_vault_locked" || now.Findings[0].Severity != "critical" {
+		t.Fatalf("no critical vault finding first: %+v", now.Findings)
+	}
+
+	// Unlocked again: the finding clears and leases flow (the revocation
+	// above aside — lift it).
+	h.srv.Vault.Unlock(key)
+	if code, _ := h.post(t, "/v1/fleet/credentials/revoke", FleetRevokeRequest{Hostname: "m4", Lift: true}); code != http.StatusOK {
+		t.Fatal("lift")
+	}
+	h.getJSON(t, "/v1/findings?account=all&view=now", &now)
+	for _, f := range now.Findings {
+		if f.Kind == "cred_vault_locked" {
+			t.Fatalf("finding outlived the lock: %+v", f)
+		}
+	}
+}

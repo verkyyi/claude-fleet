@@ -26,6 +26,7 @@ const (
 	TmplLiveRunaway       = "live_runaway"
 	TmplFreeAllowanceGone = "free_allowance_exceeded"
 	TmplFreeAllowanceNear = "free_allowance_near"
+	TmplCredVaultLocked   = "cred_vault_locked"
 )
 
 // Templates is every id above, so a translation table can be checked for
@@ -34,7 +35,7 @@ var Templates = []string{
 	TmplRunawaySession, TmplUnpricedModel, TmplTimeInCritical, TmplCacheHitDrop,
 	TmplSpendSpikeTotal, TmplSpendSpikeProject, TmplWindowHigh,
 	TmplStaleAgentNever, TmplStaleAgentLast, TmplLiveRunaway,
-	TmplFreeAllowanceGone, TmplFreeAllowanceNear,
+	TmplFreeAllowanceGone, TmplFreeAllowanceNear, TmplCredVaultLocked,
 }
 
 // Owner is "who should this finding go to". Both halves are optional and an
@@ -67,6 +68,7 @@ var Templates = []string{
 //	time_in_critical no  -- a subscription, not a person: the label is an
 //	                        account, and the endpoints drawing on it are many
 //	window_high      no  -- same, a subscription's rate-limit window
+//	cred_vault_locked no -- the hub's own vault, everyone's credentials
 //
 // The "no" rows are not gaps waiting to be filled in. Each one's subject is an
 // aggregate over several people, so any single name on it would be the guess
@@ -651,10 +653,20 @@ type LiveStat struct {
 	// OSUser and Team are who is burning the tokens right now, when known.
 	OSUser, Team string
 }
+
+// VaultLock is the credential vault holding no key (claude-fleet#1417): its
+// key lives in KMS and KMS has not unwrapped it, so no machine is issued a
+// credential until it does.
+type VaultLock struct {
+	Reason string
+	Since  time.Time
+}
+
 type NowInputs struct {
 	Windows   []WindowStat
 	Endpoints []EndpointSeen
 	Live      []LiveStat
+	VaultLock *VaultLock
 	Now       time.Time
 
 	// Mutes as on Inputs: the silences in force, keyed by Finding.ID.
@@ -664,6 +676,22 @@ type NowInputs struct {
 // Now evaluates the minute-scale rules.
 func Now(in NowInputs) []Finding {
 	var fs []Finding
+	// First, so it lists first: while the vault is locked no machine gets a
+	// credential, which outranks any one window or agent.
+	if vl := in.VaultLock; vl != nil {
+		ago := "0s"
+		if !vl.Since.IsZero() {
+			ago = dur(in.Now.Sub(vl.Since))
+		}
+		fs = append(fs, Finding{Severity: "critical", Kind: "cred_vault_locked",
+			Title:    fmt.Sprintf("credential vault locked for %s — no machine is issued a credential", ago),
+			Detail:   vl.Reason,
+			Template: TmplCredVaultLocked,
+			Args:     map[string]string{"ago": ago, "reason": vl.Reason},
+			Link:     "/credentials",
+			// One vault per hub: the subject is constant.
+			subject: "vault"})
+	}
 	for _, w := range in.Windows {
 		if w.FiveHourPct < windowWarnPct {
 			continue

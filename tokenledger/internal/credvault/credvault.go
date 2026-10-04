@@ -198,6 +198,65 @@ type Vault struct {
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
+
+	// keyMu guards Sealer and locked once the hub unlocks the vault at run
+	// time, from KMS (claude-fleet#1417). Under KMS the vault starts LOCKED
+	// and stays locked until a Decrypt succeeds — there is no other key to
+	// fall back to, by design.
+	keyMu  sync.RWMutex
+	locked *LockState
+}
+
+// LockState says why the vault holds no key, and since when.
+type LockState struct {
+	Reason string
+	Since  time.Time
+}
+
+// ErrLocked is returned by every vault operation while the vault has no key.
+var ErrLocked = errors.New("credential vault is locked: its key could not be unwrapped from KMS")
+
+// SetLocked marks the vault keyless; reason is what the last unlock attempt
+// hit. A vault already locked keeps its Since.
+func (v *Vault) SetLocked(reason string, at time.Time) {
+	v.keyMu.Lock()
+	defer v.keyMu.Unlock()
+	v.Sealer = nil
+	if v.locked != nil {
+		v.locked.Reason = reason
+		return
+	}
+	v.locked = &LockState{Reason: reason, Since: at}
+}
+
+// Unlock hands the vault its key.
+func (v *Vault) Unlock(s *Sealer) {
+	v.keyMu.Lock()
+	defer v.keyMu.Unlock()
+	v.Sealer, v.locked = s, nil
+}
+
+// Locked reports the lock, or nil when the vault can seal and open.
+func (v *Vault) Locked() *LockState {
+	v.keyMu.RLock()
+	defer v.keyMu.RUnlock()
+	if v.locked == nil && v.Sealer != nil {
+		return nil
+	}
+	if v.locked == nil {
+		return &LockState{Reason: "no key"}
+	}
+	l := *v.locked
+	return &l
+}
+
+func (v *Vault) sealer() (*Sealer, error) {
+	v.keyMu.RLock()
+	defer v.keyMu.RUnlock()
+	if v.Sealer == nil {
+		return nil, ErrLocked
+	}
+	return v.Sealer, nil
 }
 
 // DefaultMinTTL is Vault.MinTTL when unset.
@@ -240,10 +299,14 @@ func (v *Vault) Put(principal, provider, account string, s Secret) error {
 	if err := s.Validate(provider); err != nil {
 		return err
 	}
+	sl, err := v.sealer()
+	if err != nil {
+		return err
+	}
 	l := v.lock(principal, provider, account)
 	l.Lock()
 	defer l.Unlock()
-	blob, err := v.Sealer.Seal(s, principal, provider, account, "secret")
+	blob, err := sl.Seal(s, principal, provider, account, "secret")
 	if err != nil {
 		return err
 	}
@@ -258,6 +321,10 @@ var ErrRefreshFailed = errors.New("credential refresh failed")
 // account wait on its lock, so the account is refreshed ONCE and the waiters
 // get the result; the refresh is saved before anyone receives it.
 func (v *Vault) Lease(ctx context.Context, principal, provider, account string) (Access, error) {
+	sl, err := v.sealer()
+	if err != nil {
+		return Access{}, err
+	}
 	if provider == GitHub {
 		// No refresh: the stored token IS the lease.
 		c, err := v.Store.Credential(principal, provider, account)
@@ -265,7 +332,7 @@ func (v *Vault) Lease(ctx context.Context, principal, provider, account string) 
 			return Access{}, err
 		}
 		var s Secret
-		if err := v.Sealer.Open(c.SecretSealed, &s, principal, provider, account, "secret"); err != nil {
+		if err := sl.Open(c.SecretSealed, &s, principal, provider, account, "secret"); err != nil {
 			return Access{}, err
 		}
 		return Access{Token: s.Token, User: s.User}, nil
@@ -282,13 +349,13 @@ func (v *Vault) Lease(ctx context.Context, principal, provider, account string) 
 		}
 		var cached Access
 		haveCached := len(c.AccessSealed) > 0 &&
-			v.Sealer.Open(c.AccessSealed, &cached, principal, provider, account, "access") == nil
+			sl.Open(c.AccessSealed, &cached, principal, provider, account, "access") == nil
 		if haveCached && cached.ExpiresAt != nil && cached.ExpiresAt.Sub(v.now()) >= v.minTTL() {
 			return cached, nil
 		}
 
 		var s Secret
-		if err := v.Sealer.Open(c.SecretSealed, &s, principal, provider, account, "secret"); err != nil {
+		if err := sl.Open(c.SecretSealed, &s, principal, provider, account, "secret"); err != nil {
 			return Access{}, err
 		}
 		acc, next, rerr := v.Refresher.Refresh(ctx, provider, s)
@@ -304,11 +371,11 @@ func (v *Vault) Lease(ctx context.Context, principal, provider, account string) 
 			}
 			return Access{}, fmt.Errorf("%w: %v", ErrRefreshFailed, rerr)
 		}
-		secretBlob, err := v.Sealer.Seal(next, principal, provider, account, "secret")
+		secretBlob, err := sl.Seal(next, principal, provider, account, "secret")
 		if err != nil {
 			return Access{}, err
 		}
-		accessBlob, err := v.Sealer.Seal(acc, principal, provider, account, "access")
+		accessBlob, err := sl.Seal(acc, principal, provider, account, "access")
 		if err != nil {
 			return Access{}, err
 		}
