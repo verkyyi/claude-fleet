@@ -121,6 +121,8 @@ type Server struct {
 	// as short-lived tokens. nil (no key configured) leaves every credential
 	// route answering 503 and the rest of the fleet module unaffected.
 	Vault *credvault.Vault
+	// leaseNow replaces the lease clock in tests (claude-fleet#1422).
+	leaseNow func() time.Time
 
 	// SSHCA signs people's connection certificates (claude-fleet#1412),
 	// loaded from CCQUOTA_FLEET_SSH_CA_KEY — a file from its own k8s Secret,
@@ -194,6 +196,8 @@ func (s *Server) Handler() http.Handler {
 	if s.Fleet {
 		// The control channel authenticates per endpoint, like ingest.
 		mux.HandleFunc(control.Path, s.handleNodeConnect)
+		// Issue leases (claude-fleet#1422) authenticate the same way.
+		mux.HandleFunc("/v1/node/lease", s.handleNodeLease)
 		mux.Handle("/v1/nodes", s.viewerOnly(http.HandlerFunc(s.handleNodes)))
 		mux.Handle("/nodes", s.viewerOnly(http.HandlerFunc(s.serveNodesPage)))
 		mux.Handle("/v1/fleet/me", s.viewerOnly(http.HandlerFunc(s.handleFleetMe)))

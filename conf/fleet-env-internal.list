@@ -276,3 +276,4 @@ FLEET_HUB_SESSIONS_EVERY           knob: internal pacing, seconds between the re
 FLEET_HUB_SESSIONS_LOOP_SECS       knob: internal budget, how long one detached refresh loop lives before the next collector tick restarts it (70, #1423)
 FLEET_HUB_SESSIONS_STALE           knob: internal budget, seconds after which the dash reads every remote row as 失联 (tmux-dashboard-rows.sh, 60, #1423)
 FLEET_HUB_SESSIONS_USER            knob: whose sessions on the other machines the dash shows (os_user; default `id -un`, `*` = every login the hub shows; #1423)
+FLEET_HUB_LEASE_CMD                seam: the hub issue-lease command (default `ccquota lease`), run as `<cmd> acquire|release [--force] <repo> <issue> <worker_id>` (fleet_hub_lease, #1422)
