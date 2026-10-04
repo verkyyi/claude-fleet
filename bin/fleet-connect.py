@@ -1,34 +1,54 @@
 #!/usr/bin/env python3
-"""fleet connect --proxy <machine> — reach a machine's sshd through the hub.
+"""fleet connect — get into your own fleet over the best route there is.
 
-When the direct routes fail (the home LAN is out of reach, the tailnet is down,
-the gateway port is closed), the hub is still reachable, and every machine
-already holds a link open to it. This is the client half of the relay
-(claude-fleet#1413): it opens a WebSocket to the hub's relay endpoint and
-copies bytes between it and stdin/stdout, so ssh can use it as a
-ProxyCommand:
+    fleet connect [MACHINE] [--verbose] [--retest] [--print] [-- SSH-ARGS…]
+    fleet connect --proxy MACHINE
+
+With no address at all (claude-fleet#1414), `fleet connect` asks the hub which
+machines you may reach and every way into each — its tailnet name, the public
+port the gateway forwards to it, and the relay through the hub itself (#1413)
+— measures each with FLEET_CONNECT_PROBES (3) TCP + SSH-banner handshakes,
+and ssh's in over the winner: most handshakes answered first, lowest median
+latency next. The interactive login on the far side attaches your fleet.
+
+The choice is remembered for FLEET_CONNECT_CACHE_SECS (600). Inside that
+window one handshake re-checks the remembered route before it is used; if that
+route has gone dark, every route is measured again — so closing any one line
+moves the next `fleet connect` onto another, with nothing to edit.
+
+MACHINE is an alias or hostname from the hub's list (default: the one you
+connected to last, else the hub's first). --verbose prints the measurement
+table and the choice; --retest ignores the remembered choice; --print prints
+the ssh command instead of running it. Anything after `--` goes to ssh (a
+remote command, -L forwards, …).
+
+If the hub cannot be asked, the routes come from ~/.ssh/fleet-ssh-config —
+the file `fleet login` wrote — without the relay.
+
+--proxy MACHINE: reach a machine's sshd through the hub, as ssh's
+ProxyCommand. When the direct routes fail (the home LAN is out of reach, the
+tailnet is down, the gateway port is closed), the hub is still reachable, and
+every machine already holds a link open to it. It opens a WebSocket to the
+hub's relay endpoint and copies bytes between it and stdin/stdout:
 
     ssh -o ProxyCommand='fleet connect --proxy m4' m4
-    # or in ~/.ssh/config:
-    #   Host m4-relay
-    #     HostName m4
-    #     ProxyCommand fleet connect --proxy m4
 
 SSH runs end to end inside the stream: the hub only moves ciphertext, and the
 machine's sshd still decides who logs in.
 
-The hub admits a relay on one of (first that is present):
+The hub admits you on one of (first that is present):
   FLEET_HUB_TOKEN / hub.json "token"   a viewer token (the operator) or a
                                        WeCom session token
   ~/.ssh/fleet-cert + -cert.pub        the connection certificate `fleet
-                                       login` fetches (proven by signing the
-                                       hub's challenge with ssh-keygen -Y sign)
+                                       login` fetches (proven by signing with
+                                       ssh-keygen -Y sign)
 
 The hub's URL: --hub, else FLEET_HUB_URL, else "url" in
 ~/.config/claude-fleet/hub.json.
 
-Exit: 0 the stream ended; 1 the hub refused (the reason is on stderr);
-2 usage / configuration.
+Exit: --proxy: 0 the stream ended; 1 the hub refused (the reason is on
+stderr). Otherwise ssh's own exit (it replaces this process), 1 when no route
+answers or no machine is known. 2 usage / configuration.
 
 Standard library only: this runs on a colleague's laptop, where nothing of the
 fleet is installed but this file.
@@ -39,19 +59,36 @@ import os
 import socket
 import ssl
 import struct
+import shlex
 import subprocess
 import sys
 import threading
+import time
+import urllib.error
 import urllib.parse
+import urllib.request
 
 RELAY_PATH = "/v1/ssh-relay/connect"
 SIG_NAMESPACE = "fleet-relay@claude-fleet"
+ROUTES_PATH = "/v1/fleet/routes"
+ROUTES_NAMESPACE = "fleet-routes@claude-fleet"
 CHUNK = 32 * 1024
+
+
+class Refused(Exception):
+    """The hub (or a route) said no; the message says why."""
 
 
 def die(msg, code=2):
     sys.stderr.write("fleet connect: " + msg + "\n")
     sys.exit(code)
+
+
+def env_num(name, default, cast=float):
+    try:
+        return cast(os.environ.get(name) or default)
+    except ValueError:
+        return default
 
 
 def config_dir():
@@ -81,7 +118,7 @@ class WS:
     def __init__(self, url, headers, timeout=20):
         u = urllib.parse.urlsplit(url)
         if u.scheme not in ("http", "https", "ws", "wss"):
-            die("the hub URL must be http(s)://…, not %r" % url)
+            raise Refused("the hub URL must be http(s)://…, not %r" % url)
         secure = u.scheme in ("https", "wss")
         port = u.port or (443 if secure else 80)
         raw = socket.create_connection((u.hostname, port), timeout=timeout)
@@ -107,14 +144,15 @@ class WS:
                 body = json.loads(body).get("error", body)
             except ValueError:
                 pass
-            die("hub refused the connection: %s%s" % (" ".join(parts[1:]), (" — " + body) if body else ""), 1)
+            self.sock.close()
+            raise Refused("hub refused the connection: %s%s" % (" ".join(parts[1:]), (" — " + body) if body else ""))
         self.sock.settimeout(None)
 
     def _read_until(self, marker):
         while marker not in self.buf:
             chunk = self.sock.recv(4096)
             if not chunk:
-                die("hub closed the connection during the handshake", 1)
+                raise Refused("hub closed the connection during the handshake")
             self.buf += chunk
         head, self.buf = self.buf.split(marker, 1)
         return head
@@ -184,48 +222,65 @@ class WS:
             pass
 
 
-def sign_nonce(nonce):
+def ssh_sign(message, namespace):
+    """(certificate line, `ssh-keygen -Y sign` armor over message)."""
     key, cert = cert_paths()
     if not (os.path.exists(key) and os.path.exists(cert)):
-        die("the hub asked for a connection certificate and there is none at %s — run `fleet login`, "
-            "or set FLEET_HUB_TOKEN" % cert, 1)
+        raise Refused("the hub asked for a connection certificate and there is none at %s — run `fleet login`, "
+                      "or set FLEET_HUB_TOKEN" % cert)
     try:
-        sig = subprocess.run(["ssh-keygen", "-Y", "sign", "-f", key, "-n", SIG_NAMESPACE],
-                             input=nonce.encode(), capture_output=True, check=True).stdout.decode()
+        sig = subprocess.run(["ssh-keygen", "-Y", "sign", "-f", key, "-n", namespace],
+                             input=message.encode(), capture_output=True, check=True).stdout.decode()
     except FileNotFoundError:
-        die("ssh-keygen is not installed", 1)
+        raise Refused("ssh-keygen is not installed")
     except subprocess.CalledProcessError as e:
-        die("ssh-keygen -Y sign failed: %s" % e.stderr.decode(errors="replace").strip(), 1)
+        raise Refused("ssh-keygen -Y sign failed: %s" % e.stderr.decode(errors="replace").strip())
     with open(cert) as f:
-        return {"type": "auth", "cert": f.read().strip(), "sig": sig}
+        return f.read().strip(), sig
+
+
+def sign_nonce(nonce):
+    cert, sig = ssh_sign(nonce, SIG_NAMESPACE)
+    return {"type": "auth", "cert": cert, "sig": sig}
+
+
+def open_relay(node, hub, token, timeout=20):
+    """A relay to node's sshd, handshake done: the WS, ready for stream bytes."""
+    q = urllib.parse.urlencode({"node": node})
+    headers = {"Authorization": "Bearer " + token} if token else {}
+    ws = WS(hub.rstrip("/") + RELAY_PATH + "?" + q, headers, timeout=timeout)
+    try:
+        # The handshake: JSON text frames until "ready".
+        while True:
+            try:
+                op, data = ws.recv()
+            except EOFError:
+                raise Refused("hub closed the relay before it was ready")
+            if op == 0x8:
+                reason = data[2:].decode(errors="replace") if len(data) > 2 else ""
+                raise Refused("hub closed the relay before it was ready" + (": " + reason if reason else ""))
+            if op != 0x1:
+                raise Refused("hub sent stream bytes before the relay was ready")
+            m = json.loads(data)
+            t = m.get("type")
+            if t == "challenge":
+                ws.send(0x1, json.dumps(sign_nonce(m.get("nonce", ""))).encode())
+            elif t == "ready":
+                return ws
+            elif t == "error":
+                raise Refused("%s: %s" % (m.get("code", "ERROR"), m.get("message", "")))
+            else:
+                raise Refused("unexpected handshake message %r" % t)
+    except BaseException:
+        ws.close()
+        raise
 
 
 def proxy(node, hub, token):
-    q = urllib.parse.urlencode({"node": node})
-    headers = {"Authorization": "Bearer " + token} if token else {}
-    ws = WS(hub.rstrip("/") + RELAY_PATH + "?" + q, headers)
-
-    # The handshake: JSON text frames until "ready".
-    while True:
-        try:
-            op, data = ws.recv()
-        except EOFError:
-            die("hub closed the relay before it was ready", 1)
-        if op == 0x8:
-            reason = data[2:].decode(errors="replace") if len(data) > 2 else ""
-            die("hub closed the relay before it was ready" + (": " + reason if reason else ""), 1)
-        if op != 0x1:
-            die("hub sent stream bytes before the relay was ready", 1)
-        m = json.loads(data)
-        t = m.get("type")
-        if t == "challenge":
-            ws.send(0x1, json.dumps(sign_nonce(m.get("nonce", ""))).encode())
-        elif t == "ready":
-            break
-        elif t == "error":
-            die("%s: %s" % (m.get("code", "ERROR"), m.get("message", "")), 1)
-        else:
-            die("unexpected handshake message %r" % t, 1)
+    try:
+        ws = open_relay(node, hub, token)
+    except (Refused, OSError) as e:
+        die(str(e), 1)
 
     out = sys.stdout.buffer
     done = threading.Event()
@@ -259,20 +314,348 @@ def proxy(node, hub, token):
     return 0
 
 
+
+
+# ── route picking (claude-fleet#1414) ───────────────────────────────────────
+
+def cache_path():
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+    return os.path.join(base, "claude-fleet", "connect.json")
+
+
+def load_cache():
+    try:
+        with open(cache_path()) as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_cache(d):
+    path = cache_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(d, f, indent=1)
+        os.replace(tmp, path)
+    except OSError:
+        pass  # a cache that cannot be written only costs the next run a re-measure
+
+
+def fetch_routes(hub, token, timeout=10):
+    """The hub's route list for whoever this is (RoutesResponse)."""
+    url = hub.rstrip("/") + ROUTES_PATH
+    if token:
+        req = urllib.request.Request(url, headers={"Authorization": "Bearer " + token})
+    else:
+        ts = int(time.time())
+        cert, sig = ssh_sign("fleet-routes %d" % ts, ROUTES_NAMESPACE)
+        body = json.dumps({"cert": cert, "sig": sig, "ts": ts}).encode()
+        req = urllib.request.Request(url, data=body, method="POST",
+                                     headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        try:
+            why = json.loads(e.read() or b"{}").get("error", "")
+        except ValueError:
+            why = ""
+        raise Refused("hub refused the route list (HTTP %d)%s" % (e.code, (": " + why) if why else ""))
+
+
+def ssh_config_snippet_path():
+    return os.path.join(os.path.expanduser("~"), ".ssh", "fleet-ssh-config")
+
+
+def parse_ssh_config_snippet(text):
+    """Machines from the snippet `fleet login` wrote (fleet-ssh-config v1):
+    a block "Host <alias> fleet-<alias> fleet-<alias>-<route>" opens a machine,
+    each "Host fleet-<alias>-<route>" after it adds a route. No relay: the
+    snippet does not name the machine as the hub's roster does."""
+    machines, cur, block, login = [], None, None, ""
+    for line in text.splitlines():
+        w = line.split()
+        if not w or w[0].startswith("#"):
+            continue
+        k = w[0].lower()
+        if k == "host":
+            names = w[1:]
+            if len(names) >= 3:
+                cur = {"hostname": "", "alias": names[0], "routes": [], "relay": False}
+                machines.append(cur)
+            if cur is None:
+                block = None
+                continue
+            pre = "fleet-%s-" % cur["alias"]
+            name = names[-1][len(pre):] if names[-1].startswith(pre) else names[-1]
+            block = {"name": name, "host": "", "port": 0}
+            cur["routes"].append(block)
+        elif block is not None and len(w) > 1:
+            if k == "hostname":
+                block["host"] = w[1]
+            elif k == "port" and w[1].isdigit():
+                block["port"] = int(w[1])
+            elif k == "user":
+                login = w[1]
+    for m in machines:
+        m["routes"] = [r for r in m["routes"] if r["host"]]
+    return {"login": login, "machines": [m for m in machines if m["routes"]]}
+
+
+def probe_direct(host, port, timeout):
+    """One TCP connect + SSH banner: milliseconds, or raises."""
+    t0 = time.monotonic()
+    with socket.create_connection((host, port or 22), timeout=timeout) as c:
+        c.settimeout(max(0.1, timeout - (time.monotonic() - t0)))
+        banner = b""
+        while b"\n" not in banner and len(banner) < 512:
+            d = c.recv(256)
+            if not d:
+                break
+            banner += d
+    if not banner.startswith(b"SSH-"):
+        raise Refused("no SSH banner")
+    return (time.monotonic() - t0) * 1000
+
+
+def probe_relay(hub, node, token, timeout):
+    """One relay through the hub, up to the far sshd's banner: milliseconds."""
+    t0 = time.monotonic()
+    ws = open_relay(node, hub, token, timeout=timeout)
+    try:
+        ws.sock.settimeout(max(0.1, timeout - (time.monotonic() - t0)))
+        while True:
+            op, data = ws.recv()
+            if op == 0x8:
+                raise Refused("the relay closed before the SSH banner")
+            if op == 0x2:
+                break
+    finally:
+        ws.close()
+    if not data.startswith(b"SSH-"):
+        raise Refused("no SSH banner")
+    return (time.monotonic() - t0) * 1000
+
+
+def median(xs):
+    xs = sorted(xs)
+    n = len(xs)
+    return None if not n else (xs[n // 2] if n % 2 else (xs[n // 2 - 1] + xs[n // 2]) / 2)
+
+
+def rank_routes(rows):
+    """Best first: most handshakes answered, then lowest median latency, then
+    the hub's own order. A route that answered none is never chosen."""
+    def key(r):
+        med = median(r["ms"])
+        return (-len(r["ms"]), med if med is not None else float("inf"), r["order"])
+    return sorted(rows, key=key)
+
+
+def route_rows(machine, hub):
+    rows = []
+    for i, r in enumerate(machine.get("routes") or []):
+        rows.append({"name": r["name"], "kind": "direct", "host": r["host"], "port": int(r.get("port") or 22),
+                     "order": i, "ms": [], "errors": []})
+    if hub:
+        rows.append({"name": "relay", "kind": "relay", "host": machine.get("hostname") or machine.get("alias"),
+                     "port": 0, "order": len(rows), "ms": [], "errors": [],
+                     "skip": None if machine.get("relay") else "入口暂时不能转发到这台机器"})
+    return rows
+
+
+def measure(rows, hub, token, probes, timeout):
+    """Fill each row's ms / errors: routes in parallel, a route's handshakes in
+    sequence (so the relay never holds more than one stream open)."""
+    def run(r):
+        for _ in range(probes):
+            try:
+                if r["kind"] == "relay":
+                    r["ms"].append(probe_relay(hub, r["host"], token, timeout))
+                else:
+                    r["ms"].append(probe_direct(r["host"], r["port"], timeout))
+            except (Refused, OSError, EOFError, ValueError) as e:
+                r["errors"].append(str(e) or e.__class__.__name__)
+    threads = [threading.Thread(target=run, args=(r,), daemon=True) for r in rows if not r.get("skip")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(probes * (timeout + 1) + 5)
+    return rank_routes([r for r in rows if not r.get("skip")]) + [r for r in rows if r.get("skip")]
+
+
+def addr(r, hub):
+    return ("经入口 " + hub) if r["kind"] == "relay" else "%s:%d" % (r["host"], r["port"])
+
+
+def pad(s, width):
+    """s left-justified to width terminal columns (a CJK character takes two)."""
+    import unicodedata
+    cols = sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in s)
+    return s + " " * max(1, width - cols)
+
+
+def print_table(label, rows, chosen, probes, hub):
+    w = sys.stderr.write
+    w("fleet connect · %s · 每条线 %d 次 TCP+SSH 握手\n" % (label, probes))
+    w("  " + pad("线路", 10) + pad("地址", 40) + pad("成功", 6) + "延迟(中位)\n")
+    for r in rows:
+        mark = "*" if chosen is not None and r is chosen else " "
+        if r.get("skip"):
+            ok, lat, note = "—", "—", r["skip"]
+        else:
+            med = median(r["ms"])
+            ok = "%d/%d" % (len(r["ms"]), probes)
+            lat = ("%.0fms" if med >= 10 else "%.1fms") % med if med is not None else "—"
+            note = r["errors"][-1] if r["errors"] else ""
+        w(mark + " " + pad(r["name"], 10) + pad(addr(r, hub), 40) + pad(ok, 6) + pad(lat, 10) + note + "\n")
+    w("→ %s\n" % (("选中 " + chosen["name"]) if chosen else "没有一条线能连通"))
+
+
+def pick_machine(machines, want, last):
+    if want:
+        for m in machines:
+            if want.lower() in (str(m.get("alias") or "").lower(), str(m.get("hostname") or "").lower()):
+                return m
+        return None
+    for m in machines:
+        if last and last in (m.get("alias"), m.get("hostname")):
+            return m
+    return machines[0] if machines else None
+
+
+def ssh_command(machine, route, login, hub):
+    alias = machine.get("alias") or machine.get("hostname")
+    cmd = ["ssh", "-o", "HostKeyAlias=fleet-" + alias, "-o", "ConnectTimeout=15"]
+    key, cert = cert_paths()
+    if os.path.exists(key) and os.path.exists(cert):
+        cmd += ["-i", key, "-o", "CertificateFile=" + cert]
+    if login:
+        cmd += ["-l", login]
+    if route["kind"] == "relay":
+        me = os.path.abspath(__file__)
+        pc = "%s %s --proxy %s --hub %s" % (shlex.quote(sys.executable or "python3"), shlex.quote(me),
+                                            shlex.quote(route["host"]), shlex.quote(hub))
+        cmd += ["-o", "ProxyCommand=" + pc, alias]
+    else:
+        if route["port"] and route["port"] != 22:
+            cmd += ["-p", str(route["port"])]
+        cmd.append(route["host"])
+    return cmd
+
+
+def connect(want, hub, token, verbose, retest, print_only, ssh_args):
+    probes = max(1, env_num("FLEET_CONNECT_PROBES", 3, int))
+    timeout = env_num("FLEET_CONNECT_TIMEOUT", 4.0)
+    ttl = env_num("FLEET_CONNECT_CACHE_SECS", 600.0)
+    cache = load_cache()
+    entries = cache.get("machines") if isinstance(cache.get("machines"), dict) else {}
+    now = time.time()
+
+    # 1 — a remembered choice, still fresh: one handshake to confirm it.
+    key = want or cache.get("last") or ""
+    ent = entries.get(key) if key else None
+    if ent and not retest and ent.get("hub") == hub and now - float(ent.get("at", 0)) < ttl:
+        r = ent["route"]
+        r = dict(r, ms=[], errors=[], order=0)
+        measure([r], hub, token, 1, timeout)
+        if r["ms"]:
+            if verbose:
+                sys.stderr.write("fleet connect · %s · 用 %d 秒前测出的 %s（复核 %.0fms 通过；--retest 重测）\n"
+                                 % (ent["label"], now - float(ent["at"]), r["name"], r["ms"][0]))
+            return run_ssh(ent["machine"], r, ent.get("login", ""), hub, print_only, ssh_args)
+        if verbose:
+            sys.stderr.write("fleet connect · 记住的线路 %s 不通了（%s），全部重测\n"
+                             % (r["name"], r["errors"][-1] if r["errors"] else "?"))
+
+    # 2 — ask the hub; fall back to the snippet `fleet login` wrote.
+    try:
+        info = fetch_routes(hub, token) if hub else None
+        source = "hub"
+    except (Refused, OSError, ValueError) as e:
+        info, source = None, "hub: %s" % e
+    if info is None:
+        try:
+            with open(ssh_config_snippet_path()) as f:
+                info = parse_ssh_config_snippet(f.read())
+            if verbose or hub:
+                sys.stderr.write("fleet connect: %s — 改用 %s 里的线路（没有中转）\n"
+                                 % (source if hub else "no hub URL", ssh_config_snippet_path()))
+            hub = ""
+        except OSError:
+            if not hub:
+                die("no hub URL: pass --hub, set FLEET_HUB_URL, or run `fleet login --hub <入口地址>` once")
+            die(source, 1)
+    machines = info.get("machines") or []
+    m = pick_machine(machines, want, cache.get("last"))
+    if m is None:
+        names = ", ".join(str(x.get("alias") or x.get("hostname")) for x in machines) or "（无）"
+        die(("没有叫 %s 的机器；你能连：%s" % (want, names)) if want else "入口没有列出你能连的机器", 1)
+    label = m.get("alias") or m.get("hostname")
+    if m.get("hostname") and m.get("alias") and m["hostname"] != m["alias"]:
+        label = "%s (%s)" % (m["alias"], m["hostname"])
+
+    # 3 — measure every route, pick, remember.
+    rows = measure(route_rows(m, hub), hub, token, probes, timeout)
+    best = rows[0] if rows and rows[0]["ms"] else None
+    if verbose or best is None:
+        print_table(label, rows, best, probes, hub)
+    if best is None:
+        die("%s: 没有一条线能连通" % label, 1)
+    login = info.get("login") or ""
+    name = m.get("alias") or m.get("hostname")
+    route = {k: best[k] for k in ("name", "kind", "host", "port")}
+    ent = {"at": now, "hub": hub, "label": label, "machine": m, "login": login, "route": route,
+           "table": [{"name": r["name"], "ok": len(r["ms"]), "median_ms": median(r["ms"]),
+                      "skip": r.get("skip")} for r in rows]}
+    entries[name] = ent
+    if want and want != name:
+        entries[want] = ent
+    cache["machines"], cache["last"] = entries, name
+    save_cache(cache)
+    return run_ssh(m, route, login, hub, print_only, ssh_args)
+
+
+def run_ssh(machine, route, login, hub, print_only, ssh_args):
+    cmd = ssh_command(machine, route, login, hub) + list(ssh_args)
+    if print_only:
+        print(" ".join(shlex.quote(c) for c in cmd))
+        return 0
+    sys.stderr.flush()
+    try:
+        os.execvp(cmd[0], cmd)
+    except OSError as e:
+        die("cannot run ssh: %s" % e, 1)
+
+
 def main(argv):
     import argparse
-    ap = argparse.ArgumentParser(prog="fleet connect", description=__doc__.split("\n\n")[0])
-    ap.add_argument("--proxy", metavar="MACHINE", required=True,
+    ssh_args = []
+    if "--" in argv:
+        i = argv.index("--")
+        argv, ssh_args = argv[:i], argv[i + 1:]
+    ap = argparse.ArgumentParser(prog="fleet connect", description=__doc__.split("\n\n")[0],
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("machine", nargs="?", help="alias or hostname (default: last used, else the hub's first)")
+    ap.add_argument("--proxy", metavar="MACHINE",
                     help="relay stdin/stdout to MACHINE's sshd through the hub (for ssh's ProxyCommand)")
     ap.add_argument("--hub", help="the hub's URL (default: FLEET_HUB_URL, then hub.json)")
+    ap.add_argument("-v", "--verbose", action="store_true", help="print the measurement table and the choice")
+    ap.add_argument("--retest", action="store_true", help="measure again even if a recent choice is remembered")
+    ap.add_argument("--print", dest="print_only", action="store_true", help="print the ssh command, don't run it")
     a = ap.parse_args(argv)
     conf = load_hub_conf()
-    hub = a.hub or os.environ.get("FLEET_HUB_URL") or conf.get("url")
-    if not hub:
-        die("no hub URL: pass --hub, set FLEET_HUB_URL, or put {\"url\": …} in %s"
-            % os.path.join(config_dir(), "hub.json"))
+    hub = a.hub or os.environ.get("FLEET_HUB_URL") or conf.get("url") or ""
     token = os.environ.get("FLEET_HUB_TOKEN") or conf.get("token") or ""
-    return proxy(a.proxy, hub, token)
+    if a.proxy:
+        if not hub:
+            die("no hub URL: pass --hub, set FLEET_HUB_URL, or put {\"url\": …} in %s"
+                % os.path.join(config_dir(), "hub.json"))
+        return proxy(a.proxy, hub, token)
+    return connect(a.machine, hub.rstrip("/"), token, a.verbose, a.retest, a.print_only, ssh_args)
 
 
 if __name__ == "__main__":

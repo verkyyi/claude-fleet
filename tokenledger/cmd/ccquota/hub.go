@@ -764,6 +764,16 @@ func runAgent(args []string) error {
 		return printServiceUnit(*hub, stateDir, strings.Join(selected, ","), scan.CodexHome(h, *codexHome), *codexHomes, *codexBinary, h, *codexAutoRefresh)
 	}
 
+	// This machine's advertised ways in (claude-fleet#1414).
+	var nodeRoutes []control.NodeRoute
+	if fleetEnabled() {
+		r, perr := agent.ParseNodeRoutes(os.Getenv("CCQUOTA_FLEET_NODE_ROUTES"))
+		if perr != nil {
+			return perr
+		}
+		nodeRoutes = r
+	}
+
 	a, err := agent.New(agent.Config{
 		HubURL:              strings.TrimRight(*hub, "/"),
 		Token:               *token,
@@ -794,6 +804,9 @@ func runAgent(args []string) error {
 		// The relay rides the control channel, so it is on wherever that is
 		// unless explicitly refused (claude-fleet#1413).
 		FleetSSHRelay: fleetEnabled() && os.Getenv("CCQUOTA_FLEET_SSH_RELAY") != "0",
+		// Routes for `fleet connect` ride the heartbeat (#1414).
+		FleetRoutes:       nodeRoutes,
+		FleetTailnetRoute: fleetEnabled() && os.Getenv("CCQUOTA_FLEET_NODE_TAILNET") != "0",
 	})
 	if err != nil {
 		return err

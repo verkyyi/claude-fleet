@@ -1094,6 +1094,42 @@ and why it ended — written when it is admitted and again when it closes;
 control channel drops, every relay it carried is closed at once: the client
 sees its SSH session end instead of a stream that silently stops.
 
+### `fleet connect` picks its own route (claude-fleet#1414)
+
+`fleet connect` with no `--proxy` needs no address at all:
+
+```sh
+fleet connect            # the machine you used last, else the hub's first
+fleet connect m4 -v      # print the measurement table and the choice
+```
+
+It asks the hub `GET|POST /v1/fleet/routes` for the machines the caller may
+reach and every way into each, measures each route with 3 TCP connects that
+must read an `SSH-` banner (the relay counts too, up to the far sshd's banner),
+and ssh's in over the winner — most handshakes answered first, lowest median
+latency next — with `HostKeyAlias=fleet-<alias>` so every route checks the same
+host key. The interactive login on the far side attaches the fleet. The choice
+is cached for 10 minutes in `~/.cache/claude-fleet/connect.json`; within that
+window one handshake re-checks it, and a route that has gone dark makes the
+next run measure everything again. Knobs (client env): `FLEET_CONNECT_PROBES`
+(3), `FLEET_CONNECT_TIMEOUT` (4s), `FLEET_CONNECT_CACHE_SECS` (600). If the hub
+cannot be asked, the routes come from `~/.ssh/fleet-ssh-config` (`fleet login`'s
+snippet), without the relay.
+
+The route list is the hub's `CCQUOTA_FLEET_ROUTES` merged with what each node's
+heartbeat advertises (`routes`); the static list comes first and wins by route
+name. Each machine also carries `relay: true` while an agent there can carry a
+relay. The list admits the same credentials as the relay — a certificate proves
+itself by signing `fleet-routes <unix-seconds>` with `ssh-keygen -Y sign -n
+fleet-routes@claude-fleet` (POST `{"cert","sig","ts"}`, accepted within 5
+minutes of the hub's clock) — and filters to the caller's machines. The same
+merged list feeds `fleet login`'s ssh config and the 连接 page.
+
+| env | where | what |
+|---|---|---|
+| `CCQUOTA_FLEET_NODE_ROUTES=public=gw.example.com:22023,lan=192.168.1.20` | agent | this machine's ways in, advertised in every heartbeat (a gateway's public port lives on the gateway, so the operator writes it here) |
+| `CCQUOTA_FLEET_NODE_TAILNET=0` | agent | stop advertising the local tailscaled's name for this machine as the `tailnet` route (on by default; skipped when `NODE_ROUTES` already names a `tailnet`) |
+
 ## The dashboard
 
 One page, no tabs — with a nav bar across the top of it. Those are not in

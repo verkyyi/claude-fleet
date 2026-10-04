@@ -27,6 +27,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/identity"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/limits"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
@@ -128,6 +129,15 @@ type Config struct {
 	// hub onto the local sshd at 127.0.0.1:22. On by default with Fleet;
 	// CCQUOTA_FLEET_SSH_RELAY=0 turns it off, and the hello then never offers it.
 	FleetSSHRelay bool
+
+	// FleetRoutes are this machine's ways in that the heartbeat advertises
+	// (CCQUOTA_FLEET_NODE_ROUTES, claude-fleet#1414) — typically the public
+	// port the gateway forwards here. `fleet connect` measures them.
+	FleetRoutes []control.NodeRoute
+	// FleetTailnetRoute adds this machine's tailnet name as a "tailnet"
+	// route when FleetRoutes names none (on by default with Fleet;
+	// CCQUOTA_FLEET_NODE_TAILNET=0 turns it off).
+	FleetTailnetRoute bool
 }
 
 // Defaults for the intervals.
@@ -230,6 +240,9 @@ type Agent struct {
 	// which (machine, login) this is.
 	nodeReady                    chan struct{}
 	nodeReadyInit, nodeReadyDone sync.Once
+
+	// tailnet caches this machine's tailnet name for the heartbeat's routes.
+	tailnet tailnetName
 }
 
 // maxBackoffFactor caps how far a failing agent stretches its scan interval.

@@ -331,6 +331,7 @@ func (a *Agent) nodeHeartbeat(ctx context.Context, probe *fleetProbe) control.He
 	if fv := probe.reading(ctx, a.cfg.Home); fv != nil {
 		hb.FleetVersion = fv.Head
 	}
+	hb.Routes = a.nodeRoutes(ctx)
 	return hb
 }
 
