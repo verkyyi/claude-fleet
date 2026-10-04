@@ -32,6 +32,7 @@ import { TOOL_SPECS } from './tools'
 import { INBOX_MS, inboxDir, pollInbox } from './inbox'
 import type { InboxIo } from './inbox'
 import { TMUX_TIMEOUT_MS, windowOptionsArgv } from './tmux'
+import { MODEL_POLL_MS, STATUSLINE_TIMEOUT_MS, claimModelFeed, feedArgv, modelMoved, resetModelFeed } from './usage'
 import { MOD_VERSION, isSupported } from './version'
 
 export const HEARTBEAT_MS = 15_000
@@ -44,6 +45,7 @@ const status = atom({ plugin: 'fleet', key: 'status' } as const, null as FleetMo
 // Module state: a reload is a fresh module, and session.start fires again.
 let timer: Timer | undefined
 let inboxTimer: Timer | undefined
+let modelTimer: Timer | undefined
 let inboxBusy = false
 let pane: string | undefined
 let inbox: string | undefined
@@ -77,6 +79,24 @@ function inboxIo($: EngineInterface): InboxIo {
   }
 }
 
+// The model poll (usage.ts explains it; the timer and `$` live here because the
+// engine follows `$` only within one file): when the live model is not the one
+// last fed, feed it alone through conf/statusline.sh, so a `/model` with no turn
+// yet still flips @model within MODEL_POLL_MS (fleet-model-switch's verify).
+async function pollModel($: EngineInterface): Promise<void> {
+  if (pane === undefined) return
+  let fields: string[] | null = null
+  try {
+    const id = await $.session.model()
+    if (!modelMoved(id)) return
+    fields = claimModelFeed(id, undefined)
+    if (fields === null) return
+    await $.process.run(feedArgv($.plugin.root, fields), { timeoutMs: STATUSLINE_TIMEOUT_MS })
+  } catch {
+    if (fields !== null) resetModelFeed()   // the next tick or turn feeds it again
+  }
+}
+
 async function pollOnce($: EngineInterface): Promise<void> {
   // One command at a time: a /compact can hold its run for a minute, and the
   // next one waits its turn behind it rather than racing it.
@@ -105,6 +125,13 @@ async function onReady($: EngineInterface): Promise<void> {
   timer?.cancel()
   timer = $.clock.every(HEARTBEAT_MS, () => {
     void beat($)
+  })
+  // The model on the bus from the first second, and a /model within ~2 s (#1459).
+  resetModelFeed()
+  await pollModel($)
+  modelTimer?.cancel()
+  modelTimer = $.clock.every(MODEL_POLL_MS, () => {
+    void pollModel($)
   })
   const home = (await $.env.get('HOME')) ?? ''
   const conf = (await $.env.get('FLEET_CONF_DIR')) || `${home}/.config/claude-fleet`
@@ -143,6 +170,8 @@ export function registerLifecycle(on: On): void {
       timer = undefined
       inboxTimer?.cancel()
       inboxTimer = undefined
+      modelTimer?.cancel()
+      modelTimer = undefined
       await setOptions($, { '@mod_alive': null })
     }
     return next(e)

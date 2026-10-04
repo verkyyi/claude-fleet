@@ -116,7 +116,11 @@ demo repo data.</sub>
   `62% · Opus 5.5 · high` on its right and the auto-handoff nudge reads the %.
   Opt-in at install time by pointing `settings.json`'s `statusLine` at the
   live-install path, so it improves through `land → /fleet-sync-install`;
-  jq-gated (inert without it). Never auto-wired.
+  jq-gated (inert without it). Never auto-wired. The fleet mod feeds the same
+  script from inside the session (`statusline.sh --from mod`, issue #1459), so
+  once every Claude window carries the mod the key can go —
+  `bin/fleet-statusline.sh off` removes it (and the blank bottom row Claude Code
+  keeps for any `statusLine`), refusing while a window would be left blind.
 
 ## Architecture
 
