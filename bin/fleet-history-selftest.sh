@@ -587,4 +587,87 @@ eq "list is ordered newest-first by timestamp" "22 11 33" \
 # find_row's "newest wins" rides on the same order.
 contains "find_row picks by the same time order" "$(run meta --repo o/r 22)" "newest"
 
-printf 'selftest OK: fleet-history (%s assertions — record/record-closed/list/find/resume/reuse/meta/rows/state/scratch/busy-dir/helper-transcripts/dedup/time-order)\n' "$CHECKS"
+# ============================================================================
+# I. resumed (issue #1474) — a closed-unlanded session that came back LIVE
+# ============================================================================
+# The SessionEnd hook records the row the instant Claude exits; a migrate, a
+# /fleet-history resume or a hand `claude --resume` brings the SAME session back
+# seconds later. 2026-10-04: the restored「系统奔溃了」scratch ran as
+# `claude --resume fc709f26…` while the ledger listed fc709f26 closed-unlanded.
+# `resumed` appends a marker that supersedes the closed row: list / find hide
+# both, and the session's NEXT close or land records afresh instead of being
+# deduped away as "already in ledger".
+: > "$FLEET_HISTORY_LEDGER"
+WTI="$WORK/wti/issue-88"; mkdir -p "$WTI"
+ENCI=$(printf '%s' "$WTI" | LC_ALL=C tr -c 'A-Za-z0-9' '-')
+mkdir -p "$CLAUDE_PROJECTS_DIR/$ENCI"; : > "$CLAUDE_PROJECTS_DIR/$ENCI/sess-i-88.jsonl"
+run record-closed --repo o/r --issue 88 --worktree "$WTI" --title "widget-88" --origin scratch-3 >/dev/null
+contains "resumed: before — the closed row is listed" "$(run list --repo o/r)" "#88"
+outr=$(run resumed --session-id sess-i-88 --repo o/r)
+contains "resumed: reports the superseded row" "$outr" "resumed #88"
+eq "resumed: appends ONE marker row (append-only, nothing rewritten)" "2" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
+eq "resumed: the closed row itself is untouched" "closed-unlanded" "$(sed -n '1p' "$FLEET_HISTORY_LEDGER" | cut -f10)"
+IFS=$'\t' read -r ri_when ri_iss ri_title _ _ ri_wt _ ri_sid _ ri_state ri_origin <<<"$(tail -n1 "$FLEET_HISTORY_LEDGER")"
+eq "resumed: marker keeps the key"       "88"        "$ri_iss"
+eq "resumed: marker keeps the title"     "widget-88" "$ri_title"
+eq "resumed: marker keeps the worktree"  "$WTI"      "$ri_wt"
+eq "resumed: marker keeps the session"   "sess-i-88" "$ri_sid"
+eq "resumed: marker keeps the origin"    "scratch-3" "$ri_origin"
+eq "resumed: state column"               "resumed"   "$ri_state"
+case "$ri_when" in ''|-) fail "resumed: marker must be stamped now, got [$ri_when]";; esac
+CHECKS=$((CHECKS + 1))
+# hidden wherever a reader looks: the list, and find_row (meta / resume / path)
+CHECKS=$((CHECKS + 1)); case "$(run list --repo o/r)" in *'#88'*) fail "resumed: a live-again session must not be listed as closed";; esac
+eq "resumed: meta finds no row for a live-again session" "" "$(run meta --repo o/r 88)"
+# idempotent: a second `resumed` for the same session writes nothing more…
+run resumed --session-id sess-i-88 --repo o/r >/dev/null
+eq "resumed: a repeat writes no second marker" "2" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
+# …and a session with NO closed-unlanded row writes nothing (every ordinary resume)
+outn=$(run resumed --session-id never-closed --repo o/r)
+contains "resumed: unknown session → nothing to supersede" "$outn" "nothing to supersede"
+eq "resumed: unknown session writes nothing" "2" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
+# the session ends AGAIN: record-closed records afresh — the dedup forgot the
+# superseded row — and the list shows exactly the fresh close
+outc2=$(run record-closed --repo o/r --issue 88 --worktree "$WTI" --title "widget-88 again")
+contains "resumed: the next close records afresh (not 'already in ledger')" "$outc2" "closed-unlanded #88"
+eq "resumed: 3 rows now (closed · resumed · closed)" "3" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
+contains "resumed: the fresh close is listed" "$(run list --repo o/r)" "widget-88 again"
+eq "resumed: exactly one #88 row listed" "1" "$(run list --repo o/r | grep -c '#88')"
+contains "resumed: meta sees the fresh close" "$(run meta --repo o/r 88)" "widget-88 again"
+# a closed → resumed session that then LANDS gets its landed row (before this the
+# closed row shadowed it: every hook-path migrate left its session ✗ for good)
+: > "$FLEET_HISTORY_LEDGER"
+run record-closed --repo o/r --issue 88 --worktree "$WTI" --title "widget-88" >/dev/null
+run resumed --session-id sess-i-88 --repo o/r >/dev/null
+outl=$(run record --repo o/r --issue 88 --worktree "$WTI" --summary "landed the widget")
+contains "resumed: a later land records (the closed row no longer shadows it)" "$outl" "landed #88"
+eq "resumed: the landed row is the session's final word" "landed" "$(tail -n1 "$FLEET_HISTORY_LEDGER" | cut -f10)"
+contains "resumed: the list shows the landed row ✓" "$(run list --repo o/r)" "✓"
+# a landed session is never superseded: `resumed` on it writes nothing
+run resumed --session-id sess-i-88 --repo o/r >/dev/null
+eq "resumed: never supersedes a landed row" "3" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
+# the SessionStart hook form: session_id + source off the payload; source=resume
+# only; NOTHING on stdout (a SessionStart hook's stdout becomes model context)
+: > "$FLEET_HISTORY_LEDGER"
+run record-closed --repo o/r --issue 88 --worktree "$WTI" --title "widget-88" >/dev/null
+printf '{"session_id":"sess-i-88","source":"startup","hook_event_name":"SessionStart"}' \
+  | run resumed --stdin-json --repo o/r >/dev/null 2>&1
+eq "resumed --stdin-json: source=startup writes nothing" "1" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
+outj=$(printf '{"session_id":"sess-i-88","source":"resume","hook_event_name":"SessionStart"}' \
+  | run resumed --stdin-json --repo o/r 2>"$WORK/res.err")
+eq "resumed --stdin-json: prints NOTHING on stdout" "" "$outj"
+eq "resumed --stdin-json: source=resume supersedes" "2" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
+contains "resumed --stdin-json: says so on stderr" "$(cat "$WORK/res.err")" "superseded"
+# WIRED: settings-hooks.json runs it on SessionStart(resume)
+HOOKS_JSON="$BIN/../hooks/settings-hooks.json"
+if [ -f "$HOOKS_JSON" ]; then
+  CHECKS=$((CHECKS + 1))
+  python3 - "$HOOKS_JSON" <<'PY' || fail "WIRED: SessionStart(resume) → fleet-history.sh resumed --stdin-json missing from settings-hooks.json"
+import json, sys
+t = json.load(open(sys.argv[1]))["hooks"].get("SessionStart", [])
+assert any(g.get("matcher") == "resume" and any("fleet-history.sh resumed --stdin-json" in h.get("command", "")
+           for h in g.get("hooks", [])) for g in t)
+PY
+fi
+
+printf 'selftest OK: fleet-history (%s assertions — record/record-closed/resumed/list/find/resume/reuse/meta/rows/state/scratch/busy-dir/helper-transcripts/dedup/time-order)\n' "$CHECKS"

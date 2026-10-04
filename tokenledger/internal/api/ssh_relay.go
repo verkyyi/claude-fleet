@@ -638,6 +638,14 @@ func (s *Server) verifySSHRelayCert(certLine, sigArmor, nonce, namespace string,
 	if err := verifySSHSig(cert.Key, []byte(sigArmor), []byte(nonce), namespace); err != nil {
 		return bad("challenge signature: " + err.Error())
 	}
+	// A revoked device's certificate is refused here from the moment of the
+	// revocation, inside its 12 hours or not (claude-fleet#1470). sshd itself
+	// cannot know, so the hub's own doors are where it bites.
+	if revoked, err := s.Store.DeviceRevoked(ssh.FingerprintSHA256(cert.Key)); err != nil {
+		return sshRelayIdentity{}, err
+	} else if revoked {
+		return bad("this device was revoked — run `fleet` and scan again")
+	}
 	return sshRelayIdentity{Principal: p.ID, Actor: p.ID}, nil
 }
 

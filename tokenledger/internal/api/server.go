@@ -296,6 +296,22 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("/v1/fleet/login/poll", s.handleDevicePoll)
 		mux.Handle("/fleet/login", s.rememberLoginCode(s.viewerOnly(http.HandlerFunc(s.handleFleetLoginPage))))
 		mux.Handle("/connect", s.viewerOnly(http.HandlerFunc(s.serveConnectPage)))
+		// Registered devices (claude-fleet#1470): a renewal is proven by the
+		// device's own key, so it authenticates itself, outside the viewer
+		// gate — like start/poll, it is what `fleet` runs before it holds a
+		// live certificate. The device list and revocation are a person's
+		// own (or the operator's), behind the gate.
+		mux.HandleFunc(control.RenewPath, s.handleDeviceRenew)
+		mux.Handle("/v1/fleet/devices", s.viewerOnly(http.HandlerFunc(s.handleFleetDevices)))
+		mux.Handle("/v1/fleet/devices/revoke", s.viewerOnly(http.HandlerFunc(s.handleFleetDeviceRevoke)))
+		// Which machine to enter (claude-fleet#1470): admits a certificate by a
+		// signed timestamp like the route list, so it authenticates itself.
+		mux.HandleFunc(control.HomePath, s.handleFleetHome)
+		// The one-line install (claude-fleet#1470): a script and three
+		// programs carrying no credential, public like the CA's public key;
+		// 404 until the hub can sign someone in with nothing in hand.
+		mux.HandleFunc("/install", s.handleInstall)
+		mux.HandleFunc("/install/", s.handleInstallFile)
 		// Credentials (claude-fleet#1415): the lease authenticates with the
 		// node's enrollment token, like the control channel; everything else
 		// is the operator's.
