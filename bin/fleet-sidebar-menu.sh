@@ -49,7 +49,9 @@ t() { fleet_ui_t "$@"; }
 MENU_KEYS=$(t menu_keys)
 mk() { printf '%s\n' "$MENU_KEYS" | awk -F '\t' -v a="$1" '$1 == a { print $2; exit }'; }
 if [ "${1:-}" = --keys ]; then
-  printf '%s\n' "$MENU_KEYS" | awk -F '\t' '{ print $2 "\t" $3 }'
+  # the shell's menu has no row-less items (issue #1518), so its sheet lists none
+  printf '%s\n' "$MENU_KEYS" | awk -F '\t' -v sh="${FLEET_SHELL:-0}" \
+    'sh == 1 && ($1 == "new" || $1 == "newto" || $1 == "restore" || $1 == "repo") { next } { print $2 "\t" $3 }'
   exit 0
 fi
 
@@ -221,9 +223,14 @@ if [ -n "$remote" ]; then
   add "$(t menu_r_resume)" "$(mk resume)" "$(sh_run "$rmt resume $rargs")"
   m_r_reap_confirm=$(t menu_r_reap_confirm_fmt "$(fe "${name:-${wid##*/}}")" "$(fe "$node")")
   add "$(t menu_reap)" "$(mk reap)" "confirm-before -p $(sq "$m_r_reap_confirm") $(dq "$(sh_run "$rmt reap $rargs")")"
-  # 其它
-  group
-  add_other
+  # 其它 — not in the SHELL (issue #1518): its computer has no fleet conf, gh or
+  # worktree, and its install (fleetclient/manifest) ships none of the scripts
+  # these four run, so each was a silent no-op there. The shell's every row is
+  # remote, so this is the only branch it reaches.
+  if [ "${FLEET_SHELL:-0}" != 1 ]; then
+    group
+    add_other
+  fi
   show "$title"
 fi
 

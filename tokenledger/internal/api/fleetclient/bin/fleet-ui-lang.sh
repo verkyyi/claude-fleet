@@ -215,6 +215,8 @@ fleet_ui_t() {
     zh:sidebar_new_to_fmt)      printf '新会话 → %s…' "${1:-}" ;;
     en:sidebar_new_to_fmt)      printf 'New session → %s…' "${1:-}" ;;
     zh:sidebar_rename)          printf '改名› ' ;;
+    zh:sidebar_shell_local_only) printf '这台电脑上没有 fleet：新建 / 恢复请在机器上做' ;;
+    en:sidebar_shell_local_only) printf 'no fleet on this computer — new / restore happen on a machine' ;;
     en:sidebar_rename)          printf 'rename› ' ;;
     zh:sidebar_refreshing)      printf '刷新中…' ;;
     en:sidebar_refreshing)      printf 'refreshing…' ;;
