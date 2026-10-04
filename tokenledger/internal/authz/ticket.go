@@ -94,6 +94,32 @@ type Payload struct {
 	// golden vector is byte-identical across the guest and WeCom paths.
 	// This hub reads it and grants nothing for it.
 	Switchable bool `json:"swi,omitempty"`
+	// UID is the WeCom userid of the person who exchanged the ticket
+	// (monorepo #6309), and Name their directory name (`nam`, display only).
+	//
+	// ★ `sub` is NOT a person. The authorization service signs one subject
+	// per (app, tenant) row — for this hub that is the role "staff", and every
+	// colleague's ticket carries the same `sub` byte for byte. Keying
+	// anything per-person on it made everyone one principal (claude-fleet#1458).
+	// `uid` is present only when the issuer lists this app in its
+	// `AUTHZ_UID_APPS`; until then there is no person in the ticket at all,
+	// and Principal says so by falling back to the role.
+	UID  string `json:"uid"`
+	Name string `json:"nam"`
+}
+
+// Principal is who this ticket is FOR: the WeCom userid when the issuer put
+// one in, else the authorization subject.
+//
+// The fallback is a role shared by everyone the issuer admits, so a hub
+// seeing it should treat it as "a colleague, not a known person" — never as
+// an identity to open accounts for. sso.go logs the fallback at every
+// sign-in so a missing `AUTHZ_UID_APPS` entry is visible, not silent.
+func (p *Payload) Principal() string {
+	if p.UID != "" {
+		return p.UID
+	}
+	return p.Sub
 }
 
 // Verify checks signature, issuer, audience, subject and expiry, and returns the

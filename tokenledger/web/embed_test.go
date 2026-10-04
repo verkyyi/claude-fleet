@@ -127,6 +127,16 @@ func TestAssets_DashboardIsEmbedded(t *testing.T) {
 			t.Errorf("index.html shell is missing %q -- the view nav has no band to mount", want)
 		}
 	}
+	// The way to the fleet pages (claude-fleet#1458): a node app.js fills from
+	// /v1/fleet/me, written in the shell so it is there on every view, and
+	// hidden until it has something to say so a hub without the fleet module
+	// renders as it always did.
+	if !strings.Contains(string(b), `<nav id="fleetnav" class="fleetnav" hidden>`) {
+		t.Error(`index.html shell is missing <nav id="fleetnav" ... hidden> -- the fleet pages have no way in from the home page`)
+	}
+	if strings.Contains(string(b), `id="fleetnav" class="fleetnav" data-band=`) || strings.Contains(string(b), `id="fleetnav" data-band=`) {
+		t.Error(`#fleetnav carries a data-band -- a colleague looking for their machine must find the link on every view`)
+	}
 	// Every band node says which view mounts it, and #pulse / #alerts say
 	// nothing, which is what puts them on every view.
 	//
@@ -977,5 +987,30 @@ func TestDashboard_TheDefaultViewIsNotTheWholePage(t *testing.T) {
 	if !strings.Contains(nav, "FOURTH position") {
 		t.Error("lib/nav.js no longer opens by saying how many positions this page has taken on the same question; " +
 			"that count is what makes the next person read the three that were overturned before adding a fifth")
+	}
+}
+
+// Every human page shares ONE header (claude-fleet#1467): who is signed in,
+// and the way out. The header is a slot each page carries, filled by one
+// script from one answer (/v1/me) with one stylesheet -- so the check is that
+// every page carries all three, by id and by file name. A page that grew its
+// own "current user" line would have a second header to drift.
+func TestAssets_EveryHumanPageSharesTheHeader(t *testing.T) {
+	assets := Assets()
+	for _, name := range []string{"whoami.js", "whoami.css", "lib/whoami.js"} {
+		if _, err := fs.Stat(assets, name); err != nil {
+			t.Fatalf("%s is not embedded: %v", name, err)
+		}
+	}
+	for _, page := range []string{"index.html", "connect.html", "sessions.html", "nodes.html", "credentials.html"} {
+		b, err := fs.ReadFile(assets, page)
+		if err != nil {
+			t.Fatalf("%s unreadable: %v", page, err)
+		}
+		for _, want := range []string{`id="whoami"`, `src="whoami.js"`, `href="whoami.css"`} {
+			if !strings.Contains(string(b), want) {
+				t.Errorf("%s is missing %s -- the five pages share one header", page, want)
+			}
+		}
 	}
 }

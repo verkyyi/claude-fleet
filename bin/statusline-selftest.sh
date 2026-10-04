@@ -25,6 +25,12 @@
 #   E  outside tmux: no stdout, no tmux call, exit 0; no jq on PATH: exit 0, silent
 #   F  odd payloads ({} / "weird" rate_limits / a string effort or model / not
 #      JSON) exit 0 with no stdout, no stderr and no @rl stamp
+#   G  the mod's feed (issue #1459): `--from mod key=value …` — no stdin, no jq —
+#      stamps the SAME options from the same fields (ctx_pct rounded the same
+#      way, the same band lines), plus @ctx_src mod beside @ctx_pct and @rl_src
+#      mod in place of the Claude path's unset; a key absent = left alone, a
+#      model without effort unsets @effort; only what changed is written; and
+#      the Claude path never writes @ctx_src (group A's exact chain pins it)
 #
 # Hermetic: the status line is copied into a sandbox install (so ../fleet.conf is
 # ours), a fake `tmux` on PATH answers display-message from $FAKE_CUR and logs each
@@ -179,5 +185,68 @@ done
 printf '%s' '{"model":{"display_name":"x"}}' | render
 [ "$(log)" = 'set-window-option -t %1 @model x' ] || fail "F: a lone model still stamps @model (nothing on the bus to unset)" "$(log)"
 ok "F odd payloads: exit 0, silent, no half rl stamp"
+
+# --- G: the mod's feed (--from mod key=value …) -----------------------------------
+# feed [VAR=val …] -- key=value … — the sandboxed script in the fleet-x pane, no stdin.
+feed() {
+  local envs=()
+  while [ "$#" -gt 0 ] && [ "$1" != -- ]; do envs+=("$1"); shift; done
+  [ "${1:-}" = -- ] && shift
+  : > "$TMUXLOG"; : > "$GITLOG"
+  env -u FLEET_AUTO_HANDOFF_PCT -u FLEET_AUTO_HANDOFF_TOKENS \
+      HOME="$WORK/home" FLEET_CONF_DIR="$WORK/cfg" PATH="$WORK/stub:$PATH" $PANE ${envs[@]+"${envs[@]}"} \
+      bash "$WORK/inst/conf/statusline.sh" --from mod "$@" 2>"$ERR" </dev/null
+}
+out=$(feed -- ctx_pct=42.4 ctx_limit=200000 model='Opus 5.5' effort=high rl5h=12 rl7d=2 rl_reset5=1791031200 rl_reset7=1791554400; echo "rc=$?")
+[ "$out" = "rc=0" ] || fail "G: the mod feed must print nothing, exit 0" "$out"
+[ ! -s "$ERR" ] || fail "G: stderr must be empty" "$(cat "$ERR")"
+[ "$(calls)" = 1 ] || fail "G: expected ONE tmux write chain, got $(calls)" "$(log)"
+grep -Eq '^set-window-option -t %1 @ctx_pct 42 ; set-window-option -t %1 @ctx_limit 200000 ; set-window-option -t %1 @ctx_band ok ; set-window-option -t %1 @ctx_src mod ; set-window-option -t %1 @model Opus 5\.5 ; set-window-option -t %1 @effort high ; set-window-option -t %1 @rl5h 12 ; set-window-option -t %1 @rl7d 2 ; set-window-option -t %1 @rl_reset 1791031200 1791554400 ; set-window-option -t %1 @rl_ts [0-9]{10} ; set-window-option -t %1 @rl_src mod$' "$TMUXLOG" \
+  || fail "G: the mod chain must stamp ctx (+ @ctx_src mod) → model/effort → rl (+ @rl_src mod), in order" "$(log)"
+ok "G mod feed: the same stamps as the Claude path, plus @ctx_src mod and @rl_src mod"
+
+# the same reading twice: @ctx_src is on the bus → not re-written; only the rl set goes
+feed -- ctx_pct=42.4 ctx_limit=200000 model='Opus 5.5' effort=high rl5h=12 rl7d=2 rl_reset5=1791031200 rl_reset7=1791554400 <<<"" ; :
+: > "$TMUXLOG"
+FAKE_CUR="${CUR_FULL}${US}mod" feed -- ctx_pct=42.4 ctx_limit=200000 model='Opus 5.5' effort=high rl5h=12 rl7d=2 rl_reset5=1791031200 rl_reset7=1791554400
+grep -Eq '^set-window-option -t %1 @rl5h 12 ; ' "$TMUXLOG" || fail "G: unchanged values → the chain starts with the rl set" "$(log)"
+grep -q '@ctx\|@model\|@effort' "$TMUXLOG" && fail "G: unchanged ctx/model/effort/@ctx_src must not be re-written" "$(log)"
+# a key absent = left alone: a measurement (no model keys) touches neither @model nor @effort
+FAKE_CUR="$CUR_FULL" feed -- ctx_pct=70 ctx_limit=200000
+[ "$(log)" = 'set-window-option -t %1 @ctx_pct 70 ; set-window-option -t %1 @ctx_band watch ; set-window-option -t %1 @ctx_src mod' ] \
+  || fail "G: a measurement writes the changed @ctx_pct + @ctx_band and marks @ctx_src — nothing else" "$(log)"
+# a model without an effort key UNSETS @effort (the poll's feed after a /model)
+FAKE_CUR="${CUR_FULL}${US}mod" feed -- model='Fable 5.1'
+[ "$(log)" = 'set-window-option -t %1 @model Fable 5.1 ; set-window-option -u -t %1 @effort' ] \
+  || fail "G: a model alone must write @model and UNSET @effort" "$(log)"
+# the same rounding as the Claude path: printf %.0f of the raw percent
+FAKE_CUR="${CUR_FULL}${US}mod" feed -- ctx_pct=42.50 ctx_limit=200000
+printf '%s' '{"context_window":{"used_percentage":42.50,"context_window_size":200000}}' | FAKE_CUR="${CUR_FULL}${US}mod" render
+[ "$(log)" = "$( : > "$TMUXLOG"; FAKE_CUR="${CUR_FULL}${US}mod" feed -- ctx_pct=42.50 ctx_limit=200000; log)" ] \
+  || fail "G: 42.50 must round the same on both paths" "$(log)"
+# a decimal rate-limit % floors like jq's; a half rl reading stamps nothing
+FAKE_CUR="${CUR_FULL}${US}mod" feed -- rl5h=37.5 rl7d=12.9 rl_reset5=1 rl_reset7=2
+grep -q '@rl5h 37 ; set-window-option -t %1 @rl7d 12 ; ' "$TMUXLOG" || fail "G: decimal rl % must floor" "$(log)"
+FAKE_CUR="${CUR_FULL}${US}mod" feed -- rl5h=37
+[ "$(calls)" = 0 ] || fail "G: one rate-limit window alone must stamp nothing" "$(log)"
+# band lines are the same file's: this fleet's overlay moves the mod's band too
+printf "FLEET_AUTO_HANDOFF_PCT='50'\n" > "$WORK/cfg/fleets/fleet-x/conf"
+FAKE_CUR="${CUR_FULL}${US}mod" feed -- ctx_pct=36 ctx_limit=200000
+grep -q '@ctx_band watch' "$TMUXLOG" || fail "G: the overlay's 50 line must put 36 in watch on the mod path" "$(log)"
+rm -f "$WORK/cfg/fleets/fleet-x/conf"
+ok "G mod feed: only what changed, absent keys left alone, model alone unsets effort, same rounding + band lines"
+
+# no jq on PATH: the mod path still stamps (the jq gate is the Claude path's); outside tmux: silent
+: > "$TMUXLOG"
+out=$(env -i HOME="$WORK/home" PATH="$WORK/stub" $PANE /bin/bash "$WORK/inst/conf/statusline.sh" --from mod ctx_pct=42.4 ctx_limit=200000 2>"$ERR" </dev/null; echo "rc=$?")
+[ "$out" = "rc=0" ] && [ ! -s "$ERR" ] || fail "G: no jq on PATH must still exit 0 silently on the mod path" "$out $(cat "$ERR")"
+grep -q '@ctx_pct 42 ; ' "$TMUXLOG" || fail "G: the mod path must stamp without jq" "$(log)"
+: > "$TMUXLOG"
+out=$(env -u TMUX -u TMUX_PANE HOME="$WORK/home" FLEET_CONF_DIR="$WORK/cfg" PATH="$WORK/stub:$PATH" bash "$WORK/inst/conf/statusline.sh" --from mod ctx_pct=42.4 2>"$ERR" </dev/null; echo "rc=$?")
+[ "$out" = "rc=0" ] && [ ! -s "$ERR" ] && [ "$(calls)" = 0 ] || fail "G: outside tmux the mod path must call no tmux, exit 0" "$out $(cat "$ERR") $(log)"
+# the Claude path never writes @ctx_src, even with the mark absent (A's chain has no @ctx_src)
+printf '%s' "$FULL" | render
+grep -q '@ctx_src' "$TMUXLOG" && fail "G: the Claude path must never write @ctx_src" "$(log)"
+ok "G mod feed: jq-free, silent outside tmux; the Claude path never marks @ctx_src"
 
 printf 'selftest: statusline PASS (%d groups)\n' "$pass"

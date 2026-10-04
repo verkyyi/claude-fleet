@@ -263,5 +263,16 @@ Do not install from memory: read the doc and work from it.
   意外下线: leases released at once, nothing re-dispatched, the record kept in
   `fleet_spot_nodes`. Off (no image) adds nothing — `TestSpotOffAddsNothing`
   and `fleet-spot-evacuate-selftest.sh` case A pin the degenerate case.
+- **The measurement bus has ONE writer, `conf/statusline.sh`, and two feeders**
+  (issues #1452, #1459). Every `@ctx_pct/@ctx_limit/@ctx_band/@model/@effort/@rl*`
+  stamp goes through that script — Claude Code's `statusLine` feeds it the JSON on
+  stdin; the fleet mod (`mod/fleet/hooks/usage.ts`) feeds it `--from mod key=value …`
+  from inside the session (context + rate limits off `session.measure`, model +
+  effort off `turn.step`, a `/model` off a 2 s poll) and marks `@ctx_src mod`.
+  Never add a second place that computes a band or rounds a percent. Claude Code
+  keeps one blank bottom row for ANY `statusLine`, so the key is removable once
+  every Claude window on the login runs mod ≥ 0.2.0: `bin/fleet-statusline.sh
+  off` is the only thing that removes it, it refuses while a window would go
+  blind, and `/fleet-sync-install` never touches the key.
 - Claude Code re-reads `settings.json` hooks per turn, so running sessions pick
   up hook changes without a restart.

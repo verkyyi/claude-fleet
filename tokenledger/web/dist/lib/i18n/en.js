@@ -40,6 +40,14 @@ export const en = {
   'ops.title': 'Operations',
   'ops.note': 'machines · collection health · sessions',
   'ops.access': 'Ways in — every door, its credential, and what is turned on here',
+  // The strip above the banners (claude-fleet#1458): the way to the fleet
+  // pages for the person signed in. `fleet.unassigned` is what a colleague
+  // with no login on any machine yet sees in place of the links.
+  'fleet.nav': 'Fleet',
+  'fleet.connect': 'Connect',
+  'fleet.sessions': 'My sessions',
+  'fleet.nodes': 'Machines',
+  'fleet.unassigned': 'No machine assigned to you yet — ask the operator.',
 
   /* ----------------------------------------------------------- common */
   'common.queryFailed': 'Query failed: {error}',

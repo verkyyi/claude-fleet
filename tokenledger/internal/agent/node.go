@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -346,6 +347,13 @@ type sysInfo struct {
 // heartbeat simply carries no fleets.
 var errNoFleet = errors.New("no claude-fleet install on this login")
 
+// fleetReadErrs is the last fleet_status refusal per fleet, so an unreadable
+// fleet is logged once per distinct reason and once more when it reads again,
+// not every beat. claude-fleet#1460: the heartbeat carried 0 sessions for a
+// fleet of 22 and the log said nothing; the reason (`tmux: command not found`
+// under launchd's PATH) was only ever in the discarded fault.
+var fleetReadErrs = &sync.Map{} // fleet name → error string
+
 type fleetSnapshot struct {
 	machineID string
 	fleets    []control.Fleet
@@ -400,7 +408,14 @@ func readFleets(ctx context.Context, home string) (fleetSnapshot, error) {
 			"machine_id": disc.MachineID, "params": map[string]any{"fleet_id": f.FleetID}}, &st)
 		if err != nil {
 			fl.State = "unknown"
+			if prev, _ := fleetReadErrs.Load(f.Name); prev != err.Error() {
+				log.Printf("heartbeat: fleet %s is unreadable, reported as state unknown (not 0 sessions): %v", f.Name, err)
+				fleetReadErrs.Store(f.Name, err.Error())
+			}
 		} else {
+			if _, had := fleetReadErrs.LoadAndDelete(f.Name); had {
+				log.Printf("heartbeat: fleet %s reads again", f.Name)
+			}
 			fl.State, fl.Count = st.State, len(st.Workers)
 			if st.Workers == nil {
 				st.Workers = []json.RawMessage{}

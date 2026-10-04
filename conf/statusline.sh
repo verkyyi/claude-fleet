@@ -30,47 +30,93 @@
 #   .rate_limits.five_hour / .seven_day  → @rl5h @rl7d @rl_reset @rl_ts (#1267: the
 #                                           quota watch merges them per @cc_account;
 #                                           both windows or nothing)
+#   (mod feed only, issue #1459)         → @ctx_src mod  beside @ctx_pct, and
+#                                           @rl_src mod beside the @rl* set — who
+#                                           fed the bus (bin/fleet-statusline.sh)
 #
 # Cost per render: one jq pass, one tmux read, and at most ONE tmux write chain —
 # a stamp is written only when its value CHANGED since the last render, so an idle
 # pane costs tmux nothing. The @rl_* set is the one exception: its @rl_ts IS the
 # freshness the quota watch reads, so it is re-stamped on every render that has
 # both windows (and it unsets @rl_src: the fleet mod stamps the same set with
-# @rl_src=mod, issue #1338). The mod (mod/fleet/hooks/usage.ts) also writes
-# @ctx_pct / @ctx_limit off `session.measure` on the same scale — newest write
-# wins; @ctx_band / @model / @effort are this script's alone, so a mod write
-# between two renders leaves the band one render behind at most.
+# @rl_src=mod, issue #1338).
+#
+# TWO FEEDERS, ONE WRITER (issue #1459). The same script is also what the fleet
+# mod (mod/fleet/hooks/usage.ts) runs to stamp the SAME options from inside the
+# session — off `session.measure` (context + rate limits, after every turn),
+# `turn.step` (model + effort, per model request) and a model poll — so a login
+# that removes `statusLine` from settings.json (`bin/fleet-statusline.sh off`,
+# which also gives the pane its bottom row back) loses nothing: the field names,
+# the rounding and the @ctx_band lines are this one file's, whoever feeds it.
+#
+#   statusline.sh                              Claude Code: the JSON on stdin
+#   statusline.sh --from mod key=value …       the mod: the same fields as argv —
+#       ctx_pct ctx_limit model effort rl5h rl7d rl_reset5 rl_reset7; a key
+#       absent = not in this reading (left alone), exactly as an absent JSON
+#       path is. No stdin, no jq. Two extra stamps say who fed the bus:
+#       @ctx_src mod (beside @ctx_pct) and @rl_src mod (where the Claude path
+#       UNSETS @rl_src). The Claude path never touches @ctx_src, so once the mod
+#       has stamped a window it stays marked — `fleet-statusline.sh status`
+#       counts those marks before the operator turns the statusLine off.
+#
+# While both feed the same window the newest write wins; they agree on every
+# value by construction, so the only visible seam is the model's spelling (the
+# mod derives the display name from the model id — mod/fleet/hooks/usage.ts).
 #
 # Outside tmux there is no bus: nothing is stamped and nothing is printed. The
 # old visible line's cwd + git-branch segments went with it (#1452 — the window
 # name and the task bar show both), so this never runs git.
-# Requires: jq (silently exits if absent).
+# Requires: jq on the Claude path (silently exits if absent); none on the mod's.
 
-command -v jq >/dev/null 2>&1 || exit 0
-INPUT=$(cat)
-[[ -n "${TMUX:-}" && -n "${TMUX_PANE:-}" ]] || exit 0
+FROM=''
+if [[ "${1:-}" == --from ]]; then FROM="${2:-}"; shift 2; fi
 
 US=$'\x1f'   # field separator — never whitespace, so `read` keeps EMPTY fields
 
-# ── one jq pass over the whole payload ──────────────────────────────────────
-# `(path)? // null` swallows a wrongly-typed parent ({"rate_limits":"weird"},
-# {"effort":"x"}) and still yields one element per field, so the join stays
-# aligned. Rate-limit fields: numbers floor to an integer, anything else is `-`
-# (both % must be numbers, or nothing is stamped — the watch reads a half stamp
-# as none).
-FIELDS=$(jq -r '
-  def str: if . == null then "" else tostring end;
-  def num: if type == "number" then (floor | tostring) else "-" end;
-  [ ((.context_window.used_percentage)?        // null | str),
-    ((.context_window.context_window_size)?    // null | str),
-    ((.model.display_name)?                    // null | str),
-    ((.effort.level)?                          // null | str),
-    ((.rate_limits.five_hour.used_percentage)? // null | num),
-    ((.rate_limits.seven_day.used_percentage)? // null | num),
-    ((.rate_limits.five_hour.resets_at)?       // null | num),
-    ((.rate_limits.seven_day.resets_at)?       // null | num) ]
-  | join("\u001f")' <<< "$INPUT" 2>/dev/null) || exit 0
-IFS=$US read -r CTX_PCT CTX_SIZE MODEL EFFORT RL5 RL7 RLR5 RLR7 <<< "$FIELDS"
+if [[ "$FROM" == mod ]]; then
+  # ── the mod's reading: key=value argv, no stdin ─────────────────────────────
+  [[ -n "${TMUX:-}" && -n "${TMUX_PANE:-}" ]] || exit 0
+  CTX_PCT='' CTX_SIZE='' MODEL='' EFFORT='' RL5='-' RL7='-' RLR5='-' RLR7='-'
+  for kv in "$@"; do
+    case "$kv" in
+      ctx_pct=*)   CTX_PCT=${kv#*=} ;;
+      ctx_limit=*) CTX_SIZE=${kv#*=} ;;
+      model=*)     MODEL=${kv#*=} ;;
+      effort=*)    EFFORT=${kv#*=} ;;
+      rl5h=*)      RL5=${kv#*=} ;;
+      rl7d=*)      RL7=${kv#*=} ;;
+      rl_reset5=*) RLR5=${kv#*=} ;;
+      rl_reset7=*) RLR7=${kv#*=} ;;
+    esac
+  done
+  # The jq path floors a decimal %; floor the mod's the same way.
+  [[ "$RL5" =~ ^[0-9]+\.[0-9]+$ ]] && RL5=${RL5%%.*}
+  [[ "$RL7" =~ ^[0-9]+\.[0-9]+$ ]] && RL7=${RL7%%.*}
+else
+  # ── Claude Code's render: the status-line JSON on stdin ─────────────────────
+  command -v jq >/dev/null 2>&1 || exit 0
+  INPUT=$(cat)
+  [[ -n "${TMUX:-}" && -n "${TMUX_PANE:-}" ]] || exit 0
+
+  # One jq pass over the whole payload. `(path)? // null` swallows a
+  # wrongly-typed parent ({"rate_limits":"weird"}, {"effort":"x"}) and still
+  # yields one element per field, so the join stays aligned. Rate-limit fields:
+  # numbers floor to an integer, anything else is `-` (both % must be numbers,
+  # or nothing is stamped — the watch reads a half stamp as none).
+  FIELDS=$(jq -r '
+    def str: if . == null then "" else tostring end;
+    def num: if type == "number" then (floor | tostring) else "-" end;
+    [ ((.context_window.used_percentage)?        // null | str),
+      ((.context_window.context_window_size)?    // null | str),
+      ((.model.display_name)?                    // null | str),
+      ((.effort.level)?                          // null | str),
+      ((.rate_limits.five_hour.used_percentage)? // null | num),
+      ((.rate_limits.seven_day.used_percentage)? // null | num),
+      ((.rate_limits.five_hour.resets_at)?       // null | num),
+      ((.rate_limits.seven_day.resets_at)?       // null | num) ]
+    | join("\u001f")' <<< "$INPUT" 2>/dev/null) || exit 0
+  IFS=$US read -r CTX_PCT CTX_SIZE MODEL EFFORT RL5 RL7 RLR5 RLR7 <<< "$FIELDS"
+fi
 
 # ── what this render wants on the bus ───────────────────────────────────────
 # '' = leave the option as it is (no reading this render); the band / effort
@@ -129,8 +175,8 @@ fi
 
 # ── one read of what is on the bus now; queue only what differs ─────────────
 CUR=$(tmux display-message -p -t "$TMUX_PANE" \
-        "#{@ctx_pct}${US}#{@ctx_limit}${US}#{@ctx_band}${US}#{@model}${US}#{@effort}" 2>/dev/null)
-IFS=$US read -r cur_pct cur_limit cur_band cur_model cur_effort <<< "$CUR"
+        "#{@ctx_pct}${US}#{@ctx_limit}${US}#{@ctx_band}${US}#{@model}${US}#{@effort}${US}#{@ctx_src}" 2>/dev/null)
+IFS=$US read -r cur_pct cur_limit cur_band cur_model cur_effort cur_src <<< "$CUR"
 
 ARGS=()
 # stamp <option> <want> <have> — queue a set (want='' ⇒ an unset) when they differ.
@@ -144,6 +190,7 @@ if [[ -n "$want_pct" ]]; then
   stamp @ctx_pct  "$want_pct"  "$cur_pct"
   [[ -n "$want_limit" ]] && stamp @ctx_limit "$want_limit" "$cur_limit"
   stamp @ctx_band "$want_band" "$cur_band"
+  [[ "$FROM" == mod ]] && stamp @ctx_src mod "$cur_src"   # the Claude path never touches it
 fi
 if [[ -n "$MODEL" ]]; then
   stamp @model  "$MODEL"  "$cur_model"
@@ -154,8 +201,9 @@ if [[ "$RL5" =~ ^[0-9]+$ && "$RL7" =~ ^[0-9]+$ ]]; then
   ARGS+=(set-window-option -t "$TMUX_PANE" @rl5h "$RL5" \; \
          set-window-option -t "$TMUX_PANE" @rl7d "$RL7" \; \
          set-window-option -t "$TMUX_PANE" @rl_reset "$RLR5 $RLR7" \; \
-         set-window-option -t "$TMUX_PANE" @rl_ts "$(date +%s)" \; \
-         set-window-option -u -t "$TMUX_PANE" @rl_src)
+         set-window-option -t "$TMUX_PANE" @rl_ts "$(date +%s)" \;)
+  if [[ "$FROM" == mod ]]; then ARGS+=(set-window-option -t "$TMUX_PANE" @rl_src mod)
+  else                          ARGS+=(set-window-option -u -t "$TMUX_PANE" @rl_src); fi
 fi
 [[ ${#ARGS[@]} -gt 0 ]] && tmux ${ARGS[@]+"${ARGS[@]}"} 2>/dev/null
 exit 0

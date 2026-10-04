@@ -138,3 +138,28 @@ func signForTest(t *testing.T, payload, secret string) string {
 	m.Write([]byte(body))
 	return body + "." + base64.RawURLEncoding.EncodeToString(m.Sum(nil))
 }
+
+// `sub` 是授权主体（同一个 app 下人人相同），不是人；人是签票方按 AUTHZ_UID_APPS 加进来的
+// `uid`（claude-fleet#1458）。有 uid 时 Principal 是 uid，没有时退回 sub —— 退回是显式的，
+// 不是把角色当成人。
+func TestVerify_UIDIsThePersonAndSubIsTheRole(t *testing.T) {
+	now := at(goldenIAT + 10)
+	with := signForTest(t, fmt.Sprintf(`{"iss":"kf-context","aud":"ccquota","sub":"ccquota-staff","ten":"staff","iat":%d,"exp":%d,"uid":"yilianghui","nam":"易良辉"}`,
+		goldenIAT, goldenIAT+90), goldenHMAC)
+	p, err := Verify(with, goldenHMAC, "ccquota", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Sub != "ccquota-staff" || p.UID != "yilianghui" || p.Name != "易良辉" || p.Principal() != "yilianghui" {
+		t.Fatalf("payload = %+v, principal %q", p, p.Principal())
+	}
+	without := signForTest(t, fmt.Sprintf(`{"iss":"kf-context","aud":"ccquota","sub":"ccquota-staff","ten":"staff","iat":%d,"exp":%d}`,
+		goldenIAT, goldenIAT+90), goldenHMAC)
+	p, err = Verify(without, goldenHMAC, "ccquota", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.UID != "" || p.Principal() != "ccquota-staff" {
+		t.Fatalf("without uid: payload = %+v, principal %q", p, p.Principal())
+	}
+}

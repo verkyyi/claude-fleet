@@ -9,6 +9,7 @@
 <title>TokenLedger</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%232a78d6'/%3E%3Crect x='3' y='7' width='10' height='3' rx='1.5' fill='%23fff'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="whoami.css">
 </head>
 <body>
 <!-- The bar holds the wordmark, the view nav, and the two "how this page is
@@ -114,12 +115,27 @@
          anchor's landing offset. styles.css has the full argument; scope.js's
          ResizeObserver is the backstop. -->
     <div id="pulse"></div>
+    <!-- Who is signed in, and the way out (claude-fleet#1467). whoami.js
+         fills it from /v1/me -- the same slot, script and stylesheet every
+         standalone page carries, so the five pages share one header. Hidden
+         until the answer arrives, and stays hidden on an open (--no-auth)
+         hub, where there is no one to name. Same height rule as its
+         neighbours: closed it fits the row, open its panel is out of flow. -->
+    <div id="whoami" class="whoami" hidden></div>
     <button id="lang" data-i18n-title="app.language" title="Language">中</button>
     <button id="theme" data-i18n-title="app.theme" title="Toggle light / dark">◐</button>
   </div>
   <div class="progress" id="progress" hidden></div>
 </header>
 <div class="wrap">
+  <!-- The way to the fleet pages — 连接 / 我的会话, and the roster for the
+       operator (claude-fleet#1458). lib/fleetnav.js decides what goes here
+       from /v1/fleet/me, app.js draws it. No `data-band`, deliberately: a
+       colleague who opened this page to find their machine must find the
+       link on every view. Hidden until the answer arrives, and stays hidden
+       on a hub without the fleet module, so a hub predating it renders
+       exactly as before. -->
+  <nav id="fleetnav" class="fleetnav" hidden></nav>
   <div id="banners"></div>
   <!-- Four tiers, and the boundary between them is WHICH QUESTION a card
        answers, not how important it is.
@@ -291,5 +307,6 @@
 <aside id="detail" class="detail" hidden aria-modal="true" role="dialog"></aside>
 <div class="tip" id="tip" role="status"></div>
 <script type="module" src="app.js"></script>
+<script type="module" src="whoami.js"></script>
 </body>
 </html>

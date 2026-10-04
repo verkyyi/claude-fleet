@@ -529,6 +529,7 @@ process, and they do not share a credential.
 |---|---|---|
 | Dashboard, `/u/<login>`, `/growth` | viewer token, a WeCom session, or a named tailnet peer | every figure this hub holds |
 | `/enter` | a 90-second ticket from the authorization service | exchanges that ticket for this hub's session cookie, nothing else |
+| `POST /logout` | a same-origin form (the page header's 退出) | clears the cookies this hub minted and shows the signed-out page; the authorization service's own session stays |
 | `/v1/...` | the viewer token, as a bearer header | the same figures as JSON |
 | `POST /mcp` | the same viewer token again | the read tools, for an agent |
 | `/v1/ingest`, `/v1/ingest/repo`, `/v1/ingest/growth`, … | each shipper's own enrollment token | write: push usage, progress or the ledger |
@@ -555,6 +556,24 @@ widens a credential, and no command has been moved from the hub's shell onto
 HTTP. `enroll`, `team` and `plan` stay local because a machine that could name
 its own team could move its spend onto another team's budget.
 
+### The page header — who is signed in, and the way out (claude-fleet#1467)
+
+Every human page — the dashboard, 连接, 我的会话, 机器节点, 凭据发放 — carries
+the same header, top right: the signed-in person's directory name (the
+ticket's `nam`, else what the hub has on record for them, else their WeCom
+userid) with 企业微信 under it, or 管理员 · 令牌 / 内网 for the operator's own
+doors. It is drawn by `web/dist/whoami.js` from **one** answer, `/v1/me`
+(`via`: `open | token | wecom | tailnet`, `person`, `name`, `login`,
+`can_logout`), recorded by the gate as it admits the request — never inferred
+per page. Clicking it opens 姓名 / 企微账号 / 登录方式 and, when a cookie of this
+hub's is behind the request, **退出**: a plain same-origin `POST /logout` that
+clears the session and the parked viewer token, then shows a signed-out page
+whose only link is 重新登录 → the gate (or `/` without SSO). No destination
+parameter, so no open redirect. As on OPS, the authorization service's own
+8-hour session on ai.24haowan.com is not this host's to end: it has no logout
+endpoint, and while it lives 重新登录 signs a fresh ticket without a WeCom
+prompt.
+
 ## Fleet nodes — every machine reports in (`CCQUOTA_FLEET=1`)
 
 Off by default; with the switch off the hub and the agent are exactly what
@@ -569,7 +588,9 @@ Set it on an **agent** and the agent dials OUT to the hub — a WebSocket over
 the hub URL you already gave it (`wss://` for `https://`), so a machine behind
 NAT needs no inbound port — and sends a heartbeat every `--live-interval`
 (5s): this login's fleets and their window counts (read through claude-fleet's
-`~/.claude/fleet/bin/fleet-control.py rpc`, never by parsing tmux), the
+`~/.claude/fleet/bin/fleet-control.py rpc`, never by parsing tmux; a fleet the
+read fails on is sent as `state: unknown`, not as 0 windows, and the agent logs
+the reason once per distinct failure — claude-fleet#1460), the
 machine's 1-minute load and core count, available memory, and the fleet
 install's version. A dropped link is redialled with exponential, jittered
 backoff capped at 60s.
@@ -632,11 +653,38 @@ command fetches.
 ### People and their logins — WeCom sign-in opens the account (claude-fleet#1411)
 
 With the fleet module on, a person signing in through WeCom (`/enter`) becomes
-a **principal**, keyed by their WeCom userid, and gets ONE login name, minted
-once (lowercase letters + digits, ≤16, de-duplicated) and used on every
-machine. The hub keeps, per (principal, machine), whether that login exists
-there: `fleet_principals` + `fleet_accounts`, created only when the switch is
-on.
+a **principal**, keyed by their WeCom userid, and has ONE login name used on
+every machine — either the one the operator mapped them to (below) or one the
+hub mints once (lowercase letters + digits, ≤16, de-duplicated). The hub
+keeps, per (principal, machine), whether that login exists there:
+`fleet_principals` + `fleet_accounts`, created only when the switch is on.
+
+**The person is the ticket's `uid`, never its `sub`** (claude-fleet#1458). The
+authorization service signs one `sub` per (app, tenant) — for this hub the
+role `staff`, identical on every colleague's ticket — and keying a principal on
+it filed everyone as one person. The WeCom userid rides the ticket as `uid`
+(and the directory name as `nam`) only once the issuer lists this app in its
+`AUTHZ_UID_APPS`; until then every sign-in logs `ticket for "…" names no
+person` and the role is the principal — a colleague the hub cannot place,
+never an identity it opens accounts for. `/v1/fleet/me` says which it saw:
+`signed_in` (a WeCom person, not an operator door), `person` (the userid, even
+before the hub has a row for them), `principal` (the row, or null) and
+`accounts`.
+
+**Whose login is whose — the explicit map.**
+`CCQUOTA_FLEET_PRINCIPAL_LOGINS=caojian=24haowan,yilianghui=verkyyi` names the
+OS login that belongs to each WeCom userid. At a mapped person's sign-in the
+hub records them under that login and **adopts** it (state `active`, op
+`adopt`) on every roster machine whose agent runs as that login — the roster
+is the evidence the login exists there — and again at any later node hello,
+so the order of "person signs in" and "machine joins" does not matter. Nothing
+is ever created for a mapped person, and no op is sent. A person **not** in
+the map leaves no row at all (no minted login name, no op) unless
+`CCQUOTA_FLEET_AUTO_ASSIGN` below applies to them; the operator's `adopt`
+records them when there is somewhere to record them on. A malformed entry, a
+login outside `[a-z0-9]{2,16}` or one login claimed by two people refuses to
+start the hub. A mapped login may start with a digit (`24haowan` is real); a
+login the hub *creates* still starts with a letter.
 
 Opening a login is an op sent down the machine's control channel to its
 **admin agent** — the operator's own login there, which already has
@@ -653,13 +701,17 @@ only picks the login and display name, both re-validated there:
     create  ~/.claude/fleet/bin/fleet-login-new.sh <login> --full-name <name> --share-pool --apply
     remove  ~/.claude/fleet/bin/fleet-login-remove.sh <login> --keep-home --apply
 
-`CCQUOTA_FLEET_AUTO_ASSIGN=m4[,m5]` (roster hostnames) queues a person's login
-on those machines at their first sign-in; anything else is the operator's
-`POST /v1/fleet/accounts` (`{"action":"assign|retry|remove|adopt",
+`CCQUOTA_FLEET_AUTO_ASSIGN=m4[,m5]` (roster hostnames) queues an *unmapped*
+person's login on those machines at their first sign-in; anything else is the
+operator's `POST /v1/fleet/accounts` (`{"action":"assign|retry|remove|adopt|forget",
 "principal_id":…, "hostname":…, "login":… for adopt}`) — `adopt` records a
 login that already existed (a colleague onboarded by hand) without running
-anything. That route, and its `GET`, refuse a WeCom session (403): only the
-viewer token or a tailnet identity can change accounts.
+anything; `forget` drops the hub's record of a row that never reached a
+machine (`pending` / `failed` / `removed`), or — with no `hostname` — of the
+person and every such row of theirs, and refuses (409) while any row is
+active, in flight or unknown: an active login is `remove`d, not forgotten.
+That route, and its `GET`, refuse a WeCom session (403): only the viewer
+token or a tailnet identity can change accounts.
 
 An op is recorded before it is sent; a link that drops with one in flight
 leaves the account `unknown` and it is **never re-sent on its own**. The node
@@ -671,7 +723,10 @@ already exists") is `failed`, never `active` — the name may be someone else's.
 (machine, login) pairs that are its own ACTIVE accounts; `/v1/fleet/me` says
 who the hub thinks you are and where your login exists. Every later fleet view
 filters through the same `Server.FleetScope`. The token and tailnet doors
-still see everything.
+still see everything. The home page reads `/v1/fleet/me` once and shows the
+way to `/connect` and `/sessions` for a person with an active login (and
+`/nodes` too for an operator door), or 「未分配机器，联系管理员」 for a person
+the hub has placed nowhere yet (`web/dist/lib/fleetnav.js`).
 
 ### Sessions on every machine — the Fleet Hub reads (claude-fleet#1409)
 

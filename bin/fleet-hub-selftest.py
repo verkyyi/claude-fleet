@@ -750,6 +750,33 @@ printf '@9\\t4242\\t/fixture/moved\\n'
             with self.assertRaises(Fault):
                 self.hub.rpc(node, "discover", {})
 
+    def test_control_adapter_path_is_completed_for_a_launchd_caller(self):
+        # issue #1460: ccquota's agent runs fleet-control.py under launchd's default
+        # PATH, where a Homebrew tmux is not — every fleet_status read UNAVAILABLE and
+        # the hub showed 0 sessions on a machine running 22. The adapter env completes
+        # PATH with the forced command's dirs; a whole PATH passes through unchanged.
+        launchd = "/usr/bin:/bin:/usr/sbin:/sbin"
+        controller = self.node.controller
+        with patch.dict(os.environ, PATH=launchd, HOME="/Users/node"):
+            path = controller.environment()["PATH"]
+        self.assertEqual(path, "/Users/node/.local/bin:/opt/homebrew/bin:/usr/local/bin:" + launchd)
+        # one list, two doors: the SSH forced command exports exactly this PATH
+        self.assertEqual(hub_module.REMOTE_COMMAND.split('"')[1], path.replace("/Users/node", "$HOME"))
+        whole = path + ":/fixture/tools"
+        with patch.dict(os.environ, PATH=whole, HOME="/Users/node"):
+            self.assertEqual(controller.environment()["PATH"], whole)
+        with patch.dict(os.environ, PATH="/fixture/tools"):
+            os.environ.pop("HOME", None)
+            self.assertEqual(controller.environment()["PATH"],
+                             "/opt/homebrew/bin:/usr/local/bin:" + launchd + ":/fixture/tools")
+        # the adapter's own stderr rides in the fault, so `tmux: command not found`
+        # is readable from the agent's log instead of a bare "Cannot read"
+        with patch.object(control, "run", return_value=(127, b"", b"x.sh: line 33: tmux: command not found\n")):
+            with self.assertRaises(Fault) as caught:
+                controller.workers({"name": "demo", "fleet_id": self.fleet, "agent": "claude"})
+        self.assertEqual(caught.exception.code, "UNAVAILABLE")
+        self.assertIn("tmux: command not found", str(caught.exception))
+
     def test_audit_records_denials_and_contains_no_secrets(self):
         with self.assertRaises(Fault):
             self.call("fleet_status", {"fleet_id": str(uuid.uuid4())})
