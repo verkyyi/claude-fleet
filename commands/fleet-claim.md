@@ -230,7 +230,14 @@ override them):
   queued up to merge it for you (issue #441). When the change is complete:
   1. **Verify** per *this* repo's own conventions (its tests/linters/CI —
      discover them from its `CLAUDE.md` / `README` / `.github/workflows`; don't
-     hardcode one project's commands). Don't ship red.
+     hardcode one project's commands). Don't ship red. **When the repo's CI
+     runs its test suite on the PR, CI is the verdict — don't run the suite on
+     this machine** (issue #1374): it is shared by dozens of sessions, and a
+     full local run here took 21 minutes for 159 of 270 tests. Push, open the
+     PR, and read the gate (step 5). Run a test locally only to REPRODUCE a CI
+     failure, and then only that one test (claude-fleet:
+     `bin/run-selftests.sh <name>` — never the full gate, never `--changed`;
+     CI already runs the related tests, on ubuntu and macOS).
   2. **Push** the clean worktree: `git status --porcelain` empty (commit
      anything left), then `git push -u origin issue-<N>`.
   3. **Open (or update) the PR** with a body containing `Closes #<issue>` plus a

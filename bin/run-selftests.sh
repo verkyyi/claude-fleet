@@ -5,8 +5,9 @@
 # new selftest is picked up the moment it lands), runs each in turn, prints a
 # per-test PASS/FAIL line WITH ITS DURATION, lists the slowest few, and exits
 # non-zero if ANY test failed. This is what CI runs
-# (.github/workflows/selftests.yml), so a worker can reproduce the exact CI
-# verdict locally with one command before pushing.
+# (.github/workflows/selftests.yml) — since issue #1374 as `--changed <base>`, the
+# related tests only (see below). Workers don't run it locally before pushing: CI
+# is the verdict, and `run-selftests.sh <name>` reproduces one CI failure.
 #
 # Convention every selftest already follows: exit 0 = pass, non-zero = fail
 # (a test that needs an absent tool — e.g. jq — SKIPs cleanly with exit 0). The
@@ -212,12 +213,19 @@ fi
 # selftest name never starts with `-`), so `run-selftests.sh --shard 1/4 'dash-*'`
 # works. Forwarded verbatim through the shadow re-exec above, so it is only ever
 # parsed here, in the inner run.
-shard_k=1 shard_n=1
+shard_k=1 shard_n=1 changed_base=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --shard) [ "$#" -ge 2 ] || { echo "run-selftests: --shard needs K/N" >&2; exit 2; }
              shard_spec=$2; shift 2 ;;
     --shard=*) shard_spec=${1#--shard=}; shift ;;
+    --changed) [ "$#" -ge 2 ] && [ -n "$2" ] \
+                 || { echo "run-selftests: --changed needs a base revision" >&2; exit 2; }
+               changed_base=$2; shift 2; continue ;;
+    --changed=*) changed_base=${1#--changed=}
+               [ -n "$changed_base" ] \
+                 || { echo "run-selftests: --changed needs a base revision" >&2; exit 2; }
+               shift; continue ;;
     --)      shift; break ;;
     -*)      echo "run-selftests: unknown option '$1'" >&2; exit 2 ;;
     *)       break ;;
@@ -236,10 +244,140 @@ while [ "$#" -gt 0 ]; do
     || { echo "run-selftests: --shard K must be 1..N, got '$shard_spec'" >&2; exit 2; }
 done
 
+# --changed <base> — run only the tests RELATED to what changed since <base>
+# (issue #1374). Every PR used to run the full 270-test suite three times (branch
+# push, pull_request, master push) plus once more on the worker's own box; this is
+# what lets CI run only the tests a change can actually break. A test is selected
+# when ANY of these hits, and the reason is printed as `select: <test> ← <reason>`:
+#   a) it is itself a changed *-selftest.sh;
+#   b) its source names a changed file's BASENAME (a file under one of the shipped
+#      trees below — `docs/` and the READMEs select nothing of their own);
+#   c) for a shared LIBRARY (bin/*lib.sh), where the basename is in nearly every
+#      test: its source names a FUNCTION whose body the diff touched (old or new
+#      side, so a removed function still selects its callers' tests);
+#   d) it is in SELFTEST_ALWAYS — the lint-type tests that scan the whole tree, so
+#      no filename rule could ever pick them.
+# A change to the harness itself (SELFTEST_HARNESS) — or a base that does not
+# resolve — falls back to the FULL suite: never trust a selector to vet its own
+# edit. The diff is base...HEAD (from the merge base), committed changes only.
+SELFTEST_ALWAYS='portability bash32-array fleet-keys conf-surface fleet-plugin selftest-isolation'
+SELFTEST_HARNESS='bin/run-selftests.sh bin/selftest-shadow-root.sh .github/workflows/selftests*.yml'
+
+# lib_funcs <rev> <path> <ranges> — the functions of <path>@<rev> whose bodies cover
+# any of <ranges> ("first-last ..."). A function's body runs from its definition
+# line to the next definition: top-level code between two functions is charged to
+# the one above it, which over-selects — the safe direction. A touched line above
+# the FIRST function (a library default like `FLEET_CONF_DIR=...`) yields the
+# variable it assigns instead, so a changed default still selects its readers.
+lib_funcs() {
+  git -C "$repo_dir" show "$1:$2" 2>/dev/null | awk -v ranges="$3" '
+    BEGIN { n = split(ranges, r, " ") ; for (i = 1; i <= n; i++) { split(r[i], ab, "-"); lo[i] = ab[1]; hi[i] = ab[2] } }
+    {
+      if (match($0, /^[[:space:]]*(function[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\(\)/)) {
+        f = substr($0, RSTART, RLENGTH)
+        sub(/^[[:space:]]*(function[[:space:]]+)?/, "", f); sub(/[[:space:]]*\(\)$/, "", f)
+        cur = f
+      }
+      hit = 0
+      for (i = 1; i <= n; i++) if (NR >= lo[i] && NR <= hi[i]) { hit = 1; break }
+      if (!hit) next
+      if (cur != "") { print cur; next }
+      # Above the first function: name the VARIABLE the line assigns, if any.
+      if (match($0, /^[[:space:]]*(export[[:space:]]+|readonly[[:space:]]+|:[[:space:]]+"?\$\{)?[A-Za-z_][A-Za-z0-9_]*[:]?=/)) {
+        v = substr($0, RSTART, RLENGTH)
+        sub(/^[[:space:]]*(export[[:space:]]+|readonly[[:space:]]+|:[[:space:]]+"?\$\{)?/, "", v); sub(/[:]?=$/, "", v)
+        print v
+      }
+    }' | sort -u
+}
+
+# hunk_ranges <old|new> — read `git diff -U0` and print the touched line ranges of
+# one side ("first-last", one per hunk; a pure insert/delete has none on its empty side).
+hunk_ranges() {
+  awk -v side="$1" '/^@@ / {
+      spec = (side == "old") ? $2 : $3; sub(/^[-+]/, "", spec)
+      c = split(spec, p, ","); start = p[1]; len = (c > 1) ? p[2] : 1
+      if (len > 0) printf "%d-%d ", start, start + len - 1
+    }'
+}
+
+if [ -n "$changed_base" ]; then
+  [ "$#" -eq 0 ] \
+    || { echo "run-selftests: --changed picks the tests itself — drop the test names" >&2; exit 2; }
+  repo_dir=$(cd .. && pwd)
+  full_reason=''
+  if ! mb=$(git -C "$repo_dir" merge-base "$changed_base" HEAD 2>/dev/null) || [ -z "$mb" ]; then
+    full_reason="base '$changed_base' does not resolve to a commit with a merge base"
+  else
+    changed_files=$(git -C "$repo_dir" diff --no-renames --name-only "$mb" HEAD 2>/dev/null) \
+      || full_reason="git diff $mb..HEAD failed"
+  fi
+  if [ -z "$full_reason" ]; then
+    for f in $changed_files; do
+      for h in $SELFTEST_HARNESS; do
+        # shellcheck disable=SC2254  # intentional: $h is a glob pattern
+        case "$f" in $h) full_reason="harness changed: $f"; break 2 ;; esac
+      done
+    done
+  fi
+  if [ -n "$full_reason" ]; then
+    printf 'select: * ← full suite (%s)\n' "$full_reason"
+    set -- *-selftest.sh
+  else
+    picks=''   # "test<TAB>reason" lines; the first reason per test wins
+    nl='
+'
+    tab=$(printf '\t')
+    for f in $changed_files; do
+      b=${f##*/}
+      case "$f" in
+        bin/*-selftest.sh)
+          [ -f "$b" ] && picks="$picks$b${tab}changed itself$nl" ;;
+      esac
+      case "$f" in
+        bin/*-selftest.sh) ;;
+        bin/*lib.sh)
+          diff_u0=$(git -C "$repo_dir" diff -U0 "$mb" HEAD -- "$f" 2>/dev/null)
+          funcs=$( { lib_funcs "$mb" "$f" "$(printf '%s\n' "$diff_u0" | hunk_ranges old)"
+                     lib_funcs HEAD "$f" "$(printf '%s\n' "$diff_u0" | hunk_ranges new)"; } | sort -u)
+          for fn in $funcs; do
+            for t in $(grep -lwF -- "$fn" *-selftest.sh 2>/dev/null); do
+              case "$fn" in
+                [A-Z]*) picks="$picks$t${tab}mentions \$$fn ($f)$nl" ;;
+                *)      picks="$picks$t${tab}mentions $fn() ($f)$nl" ;;
+              esac
+            done
+          done
+          continue ;;
+      esac
+      case "$f" in
+        bin/*|hooks/*|conf/*|commands/*|skills/*|launchd/*|systemd/*|mod/*|shell/*|extras/*|.claude-plugin/*|fleet.conf.example) ;;
+        *) continue ;;
+      esac
+      for t in $(grep -lF -- "$b" *-selftest.sh 2>/dev/null); do
+        picks="$picks$t${tab}mentions $b$nl"
+      done
+    done
+    for a in $SELFTEST_ALWAYS; do
+      [ -f "$a-selftest.sh" ] && picks="$picks$a-selftest.sh${tab}always (lint group)$nl"
+    done
+    picks=$(printf '%s' "$picks" | awk -F '\t' 'NF && !seen[$1]++' | sort)
+    if [ -z "$picks" ]; then
+      echo 'select: (none) ← no change maps to a selftest'
+      exit 0
+    fi
+    printf '%s\n' "$picks" | awk -F '\t' '{ printf "select: %s ← %s\n", $1, $2 }'
+    # shellcheck disable=SC2046  # intentional: test names carry no whitespace
+    set -- $(printf '%s\n' "$picks" | cut -f1)
+  fi
+fi
+
 # Which tests to run. No args = the full gate; args select, with the `-selftest.sh`
 # suffix optional so `run-selftests.sh fleet-context` does the obvious thing. The
 # candidates are deliberately left unquoted so a glob arg (`'dash-*'`) expands here.
-if [ "$#" -gt 0 ]; then
+if [ -n "$changed_base" ]; then
+  :   # already settled above
+elif [ "$#" -gt 0 ]; then
   selected=''
   for a in "$@"; do
     hit=0
@@ -278,6 +416,12 @@ if [ "$discovered" -eq 0 ]; then
 fi
 # A shard that runs nothing (N wider than what was selected) is a misconfiguration,
 # and the one outcome it must never produce is a green.
+# Under --changed it is the normal case — three related tests across a six-wide
+# matrix — so there the spare shard passes having run nothing, and says so.
+if [ "$ntests" -eq 0 ] && [ -n "$changed_base" ]; then
+  echo "run-selftests: shard $shard_k/$shard_n has nothing to run — only $discovered related test(s)"
+  exit 0
+fi
 if [ "$ntests" -eq 0 ]; then
   echo "run-selftests: shard $shard_k/$shard_n is empty — only $discovered test(s) to split" >&2
   exit 2

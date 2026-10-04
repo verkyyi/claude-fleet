@@ -42,12 +42,21 @@ name: selftests (macOS)
 # Six PRs landed here in a single day; a per-push trigger would multiply this job
 # by the day's merge rate for no extra signal — a BSD regression is found just as
 # well the same night. A nightly cron makes the cost and the noise a predictable
-# constant. `pull_request` is scoped to THIS FILE alone so a change to the
-# workflow itself is validated by running it, which is also how its first green
-# (and its deliberate first red) were demonstrated on the #696 PR.
+# constant. (`pull_request` was once scoped to this file alone; since #1374 it
+# covers every PR the ubuntu gate does, but runs only the related tests — below.)
 #
 # A scheduled workflow only runs from the DEFAULT branch, so the nightly starts
 # after this merges. `workflow_dispatch` is the manual handle from then on.
+#
+# PER-PR, RELATED TESTS ONLY (issue #1374)
+# ----------------------------------------
+# Workers no longer run the suite on their own Mac before pushing — that took 21
+# minutes for 159 of 270 tests on a box shared by dozens of sessions. CI is the
+# verdict, so the Mac-only failure classes (bash 3.2, BSD tools) need a check
+# BEFORE merge, and this is it: on a pull_request the same matrix runs
+# `run-selftests.sh --changed origin/<base>` — only the tests related to the change
+# (see selftests.yml) — on macos-latest. The nightly and workflow_dispatch runs stay
+# the FULL suite: the backstop for anything a selector cannot see.
 
 on:
   schedule:
@@ -56,14 +65,30 @@ on:
     - cron: '17 18 * * *'
   workflow_dispatch:
   pull_request:
+    # The same trees as selftests.yml, so every PR that runs the ubuntu gate also
+    # gets its BSD half.
     paths:
+      - 'bin/**'
+      - 'hooks/**'
+      - 'conf/**'
+      - 'launchd/**'
+      - 'systemd/**'
+      - '.claude-plugin/**'
+      - 'commands/**'
+      - 'skills/**'
+      - 'shell/**'
+      - 'extras/**'
+      - 'mod/**'
+      - 'fleet.conf.example'
+      - '.github/workflows/selftests.yml'
       - '.github/workflows/selftests-macos.yml'
 
-# One nightly at a time. A run that overlaps its successor (a wedged test, a long
+# One nightly at a time: a run that overlaps its successor (a wedged test, a long
 # queue for a macOS runner) would double the concurrency draw for a stale answer.
+# Each PR is its own group, and a re-push cancels that PR's stale run.
 concurrency:
-  group: selftests-macos
-  cancel-in-progress: false
+  group: selftests-macos-${{ github.event_name == 'pull_request' && github.ref || 'full' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   selftests-macos:
@@ -77,10 +102,20 @@ jobs:
       # picture is what makes people re-run instead of read.
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6]
-    timeout-minutes: 30
+        # Two widths, configured apart from the ubuntu matrix (issue #1374): a PR
+        # gets at most 2 macOS shards, because a free account runs at most 5 macOS
+        # jobs at once and several PRs pushed together must not fill that; the
+        # nightly / dispatch full suite keeps 6. The runner reads N from
+        # `strategy.job-total`, so each list stays the single source of its width.
+        shard: ${{ github.event_name == 'pull_request' && fromJSON('[1, 2]') || fromJSON('[1, 2, 3, 4, 5, 6]') }}
+    # A PR whose change falls back to the FULL suite (a harness edit) runs it on 2
+    # shards, not 6: measured ~28 min a shard on #1375, so the PR bounds are wider.
+    timeout-minutes: ${{ github.event_name == 'pull_request' && 60 || 30 }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # A PR run diffs against its base branch (--changed); it must be in the clone.
+          fetch-depth: 0
 
       - name: Assert a BSD toolchain
         # The premise of this entire workflow, checked rather than assumed. If a
@@ -123,12 +158,15 @@ jobs:
         # budgets, a macOS runner is a noisier neighbour than an ubuntu one, and
         # this job is nightly — a timeout red costs a whole night's signal, where
         # a few extra idle minutes cost nothing on a free public runner.
-        timeout-minutes: 20
+        timeout-minutes: ${{ github.event_name == 'pull_request' && 50 || 20 }}
+        env:
+          # PR → only the related tests (issue #1374); nightly / dispatch → full.
+          CHANGED_BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || '' }}
         run: |
           set -o pipefail
-          bash bin/run-selftests.sh \
-            --shard "${{ matrix.shard }}/${{ strategy.job-total }}" \
-            2>&1 | tee selftests.log
+          set -- --shard "${{ matrix.shard }}/${{ strategy.job-total }}"
+          [ -z "$CHANGED_BASE" ] || set -- --changed "$CHANGED_BASE" "$@"
+          bash bin/run-selftests.sh "$@" 2>&1 | tee selftests.log
 
       - name: Per-test timings
         if: always()
@@ -141,8 +179,11 @@ jobs:
             echo "## selftests · macOS · shard ${{ matrix.shard }}/${{ strategy.job-total }}"
             echo
             echo '```'
+            [ "${{ matrix.shard }}" != 1 ] || grep '^select: ' selftests.log 2>/dev/null || true
             if grep -q '^-* slowest' selftests.log 2>/dev/null; then
               sed -n '/^-* slowest/,$p' selftests.log
+            elif grep -Eq 'has nothing to run|^select: \(none\)' selftests.log 2>/dev/null; then
+              echo 'nothing related landed in this shard'
             else
               echo 'the shard was cut short — this test started and never finished:'
               awk '/^=== /{h=$2} /^(PASS  |FAIL  |TIMEOUT )/{h=""}
