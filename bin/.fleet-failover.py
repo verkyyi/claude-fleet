@@ -746,8 +746,9 @@ def reconcile(session, dry=False):
 
 def reconcile_windows(session, dry):
     data = ACCOUNT['inventory']()
-    windows = tm(session,'list-windows','-t',session,'-F','#{window_id}|#{window_name}').splitlines()
-    windows = [line.split('|',1)[0] for line in windows if line.split('|',1)[-1] not in ('dash','plan','backlog','hub')]
+    # `|R` marks a proxy window onto another machine's session (#1424): not ours to fail over.
+    windows = tm(session,'list-windows','-t',session,'-F','#{window_id}|#{?@remote,R,}|#{window_name}').splitlines()
+    windows = [line.split('|',2)[0] for line in windows if line.split('|',2)[1] != 'R' and line.split('|',2)[-1] not in ('dash','plan','backlog','hub')]
     cursor = read(root()/(session+'.cursor.json'),{}).get('next',0)
     if windows: windows=windows[cursor%len(windows):]+windows[:cursor%len(windows)]
     deadline=time.monotonic()+60

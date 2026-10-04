@@ -37,6 +37,8 @@
 #
 # Prints ONE result line:
 #   sent:iterm2      written to the operator's iTerm2               exit 0
+#   sent:proxy       handed to the proxy window the operator is viewing this
+#                    session through, from another machine (#1424)  exit 0
 #   sent:tunnel      open-url.sh's reverse-tunnel opener took it   exit 0
 #   fallback:popup   shown in a popup + copied to their clipboard  exit 0
 #   fallback:path    a file fleet-show could not send (PATH line above) exit 2
@@ -148,6 +150,30 @@ ensure_secret || fallback "cannot create $SECRET"
 # shellcheck source=/dev/null
 . "$BIN/fleet-client-lib.sh"
 fc_session || fallback "$FC_WHY"
+
+# The operator is looking through a PROXY WINDOW on another machine (issue #1424):
+# this session's newest client is that proxy's ssh, registered by
+# fleet-remote-view.sh attach. The operator's iTerm2 trusts only that machine's
+# secret, and an escape would have to cross its tmux too — so the request goes in
+# the view's spool and the proxy re-issues it there. No views dir: nothing changes.
+RV_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/remote-views"
+if [ -z "$client" ] && [ -d "$RV_DIR" ]; then
+  _newest=$(tmux list-clients -t "$FC_SESS" -F '#{client_activity}	#{client_tty}' 2>/dev/null \
+    | sort -t '	' -k1,1nr | head -n 1 | cut -f2)
+  _view=$(awk -F '\t' -v t="$_newest" -v s="$FC_SESS" '$1 == t && $2 == s { n = FILENAME; sub(/.*\//, "", n); print n; exit }' \
+    "$RV_DIR"/* 2>/dev/null)
+  if [ -n "$_newest" ] && [ -n "$_view" ] && [ -d "$RV_DIR/$_view.d" ]; then
+    _rq="$RV_DIR/$_view.d/$(date +%s)-$$"
+    if ( umask 077; printf '%s\n' "$json" > "$_rq.tmp" ) && mv -f "$_rq.tmp" "$_rq.json"; then
+      printf 'fleet-open: %s → proxy view %s (%s)\n' "$kind" "$_view" "$_newest" >&2
+      record sent:proxy "$kind"
+      echo 'sent:proxy'
+      exit 0
+    fi
+    rm -f "$_rq.tmp"
+  fi
+fi
+
 fc_pick "$client" "$TERM_RE" || fallback "$FC_WHY"
 fc_lock || fallback "$FC_WHY"
 job=$(mktemp -d "${TMPDIR:-/tmp}/fleet-show.XXXXXX") || { fc_unlock; fallback 'mktemp failed'; }

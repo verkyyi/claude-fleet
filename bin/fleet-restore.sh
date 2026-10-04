@@ -221,9 +221,11 @@ snapshot() {
         TMUX='' fleet_window_repo "$sess" "$_w" >/dev/null
       done
     fi
+    # A PROXY window (@remote, #1424) prints no name, so the resolver drops it:
+    # it is another machine's session, never one to `claude --resume` here.
     # Leading-most field (issue #1296): @cc_session_id, the pane's own session id as
     # its hooks recorded it — the resolver resumes THAT before guessing by mtime.
-    { tmux -L "$sock" list-windows -t "$sess" -F "#{@cc_session_id}|#{?@norepo,norepo:#{@norepo_sid},$rfmt}|"'#{window_name}|#{?@raw,#{?@worktree,#{@worktree},#{pane_current_path}},#{pane_current_path}}|#{@issue}|#{@claude_state}|#{@prci}|#{@pfg}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@handoff_manifest}|#{?@worker_lifecycle,#{@sleep_record},}|#{@codex_identity}' 2>/dev/null
+    { tmux -L "$sock" list-windows -t "$sess" -F "#{@cc_session_id}|#{?@norepo,norepo:#{@norepo_sid},$rfmt}|"'#{?@remote,,#{window_name}}|#{?@raw,#{?@worktree,#{@worktree},#{pane_current_path}},#{pane_current_path}}|#{@issue}|#{@claude_state}|#{@prci}|#{@pfg}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@handoff_manifest}|#{?@worker_lifecycle,#{@sleep_record},}|#{@codex_identity}' 2>/dev/null
       [ -n "$spath" ] && printf '||__HUB__|%s|-\n' "$spath"
     } | python3 "$BIN/.fleet-restore-resolve.py" "$main" --lead --sid >> "$tmp" 2>/dev/null
     # Destructive-shrink guard (issue #160): a fleet caught MID-RESTORE is

@@ -139,6 +139,12 @@ else                                              # jump (empty query)
   # put `?` and the prompt back just like the branches that own those modes (#454).
   # `hdr` (the column header, or a #974 repo group heading) names no window: never
   # hand it to select-window, where tmux would match it against window NAMES.
-  [ "$target" = hdr ] || tmux select-window -t "$target" 2>/dev/null
+  # A row of another machine (`wid:<worker_id>`, #1423) names no window here:
+  # step into it through a proxy window (fleet-remote-view.sh, issue #1424). The
+  # selection is `{2}:{4}`, so the worker_id is everything before the LAST colon.
+  case "$sel" in
+    wid:*/*) bash "$BIN/fleet-remote-view.sh" open "${sel%:*}" >/dev/null 2>&1 ;;
+    *) [ "$target" = hdr ] || tmux select-window -t "$target" 2>/dev/null ;;
+  esac
   echo "${RESTORE}clear-query"
 fi

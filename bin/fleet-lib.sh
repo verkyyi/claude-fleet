@@ -4920,15 +4920,16 @@ fleet_hub_sessions() {
 # `· z8`). preparing / waking still count: the agent is (about to be) live.
 # The lifecycle rides as a trailing ` @L=<value>` field, because a window NAME may
 # itself hold spaces; a reader that never sees the field (no sleepers, an old
-# server) counts exactly as before.
+# server) counts exactly as before. A PROXY window onto another machine's session
+# (@remote, issue #1424) rides the same field as `remote` and is no session here.
 _fleet_session_tally() {   # → "<awake> <sleepers>" across every fleet
-  fleet_list_windows_all '#{session_name} #{window_name} @L=#{@worker_lifecycle}' | awk '
+  fleet_list_windows_all '#{session_name} #{window_name} @L=#{?@remote,remote,#{@worker_lifecycle}}' | awk '
     { rows[NR]=$0; if ($2=="plan" || $2=="dash") fleet[$1]=1 }
     END {
       for (i=1; i<=NR; i++) {
         n=split(rows[i], a, " "); s=a[1]; w=a[2]; l=""
         if (n>=3 && a[n] ~ /^@L=/) l=substr(a[n], 4)
-        if (!fleet[s] || w=="dash" || w=="plan" || w=="backlog") continue
+        if (!fleet[s] || w=="dash" || w=="plan" || w=="backlog" || l=="remote") continue
         if (l=="sleeping" || l=="failed") z++; else c++
       }
       print c+0, z+0
@@ -4948,7 +4949,7 @@ fleet_session_sleepers() { local t; t=$(_fleet_session_tally); printf '%s\n' "${
 # duplicated in _fleet_session_tally above — keep BOTH in sync, or the global and
 # per-fleet caps count different sets.
 _fleet_session_tally_for() {   # <sess> → "<awake> <sleepers>" in that fleet
-  tmux -L "$(fleet_socket "$1")" list-windows -t "$1" -F '#{window_name} @L=#{@worker_lifecycle}' 2>/dev/null | awk '
+  tmux -L "$(fleet_socket "$1")" list-windows -t "$1" -F '#{window_name} @L=#{?@remote,remote,#{@worker_lifecycle}}' 2>/dev/null | awk '
     { l=""
       if (match($0, / @L=[^ ]*$/)) { l=substr($0, RSTART+4); name=substr($0, 1, RSTART-1) } else name=$0
       if (name=="plan" || name=="dash") hub=1; rows[NR]=name; life[NR]=l }
@@ -4956,7 +4957,7 @@ _fleet_session_tally_for() {   # <sess> → "<awake> <sleepers>" in that fleet
       if (!hub) { print 0, 0; exit }
       for (i=1; i<=NR; i++) {
         n=rows[i]
-        if (n=="dash" || n=="plan" || n=="backlog") continue
+        if (n=="dash" || n=="plan" || n=="backlog" || life[i]=="remote") continue
         if (life[i]=="sleeping" || life[i]=="failed") z++; else c++
       }
       print c+0, z+0

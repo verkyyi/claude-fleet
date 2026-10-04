@@ -993,7 +993,8 @@ fi
 ph_scrape() {
 local line sock w
 line=$(for sock in $SOCKETS; do
-  for w in $(tmux -L "$sock" list-windows -a -F '#{session_name}:#{window_index}' 2>/dev/null); do
+  # A proxy window (@remote, #1424) shows ANOTHER machine's session — its banner is not ours.
+  for w in $(tmux -L "$sock" list-windows -a -F '#{?@remote,,#{session_name}:#{window_index}}' 2>/dev/null); do
     tmux -L "$sock" capture-pane -p -S -600 -t "$w" 2>/dev/null
   done
 done | grep -aoE "[0-9]+% of your (weekly|[0-9]+-hour) limit[^│]*" | tail -1)

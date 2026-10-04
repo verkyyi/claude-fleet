@@ -356,6 +356,7 @@ fcfg_label_i18n() {
     FLEET_ACCOUNT_LIMIT_TTL) printf '账号限制重查间隔' ;;
     FLEET_ACCOUNT_CEILING) printf '提前轮换阈值' ;;
     FLEET_NODE_ALIASES) printf '机器标签' ;;
+    FLEET_REMOTE_SSH) printf '机器 ssh 地址' ;;
     FLEET_ACCOUNT_WARN_PCT) printf '会话警告百分比' ;;
     FLEET_ACCOUNT_QUOTA_TTL) printf 'ccquota 缓存 TTL' ;;
     FLEET_ACCOUNT_QUOTA_STALE) printf '配额监控陈旧时间' ;;

@@ -147,6 +147,33 @@ labels come from `FLEET_NODE_ALIASES` (`macmini=m5 mini2=m4`). To feed the
 nesting, the controller's worker inventory now carries each window's `name` and
 `origin_wid` (columns 10–11 of `fleet-control-read.sh workers`, optional).
 
+**…and steps into them** (issue #1424, EPIC #1419 C5). Enter on a remote row (the
+dash's `dash-enter.sh`, the sidebar's `jump`) runs `bin/fleet-remote-view.sh open`:
+a **proxy window** `[m4] <name>`, marked `@remote=<node>:<worker_id>`, whose pane
+is `ssh -tt <host> fleet-remote-view.sh attach <worker_id>` — on the other machine
+that resolves the worker through `fleet_worker_locate`, selects its window and
+attaches to its fleet session. It is a plain **client** of that session, never a
+grouped or linked session of its own: a second session holding the window would
+list it twice in every `list-windows -a`, and `fleet-peer-send` would call the
+worker AMBIGUOUS while the proxy is open. So there is **one proxy window per
+machine** — Enter on another row of the same machine retargets it. While the proxy
+is the session's only client it turns that session's status line and prefix off
+(saved in `@remote_view_saved`, restored when it leaves, and by a
+`client-attached[77]` hook the moment anyone attaches at that machine). Closing
+the window only drops the connection; a drop reconnects (backing off, and
+alternating with the hub relay `fleet connect --proxy` when one is configured).
+The ssh host is the machine label unless `FLEET_REMOTE_SSH` (`m4=m4-lan`) maps it.
+Every local rail skips a proxy window: no dash row (the `[m4]` row stands for
+it), no session in either cap tally, no fleet-restore row, no sleep, failover or
+rate-limit scrape. **fleet-open from the remote session** cannot reach the
+operator's iTerm2 directly (it trusts this machine's secret only), so the remote
+side registers the proxy's client tty under `$FLEET_CONF_DIR/remote-views/`;
+`fleet-open.sh` there sees its newest client is a view, drops the request in the
+view's spool and prints `sent:proxy`, and a second ssh session on the proxy's own
+connection (ControlMaster) streams it back here, where the local `fleet-open.sh`
+re-issues it — a url as is, a page on that machine's loopback through an
+`ssh -O forward` on the same connection.
+
 **One issue, one machine** (issue #1422, EPIC #1419 C3). With `CCQUOTA_FLEET=1`,
 `dash-issue-session.sh` takes the cloud hub's lease on `(repo, issue)` before its
 GitHub claim check (`fleet_hub_lease`, through `FLEET_HUB_LEASE_CMD`, default
