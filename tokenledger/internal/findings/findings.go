@@ -29,6 +29,7 @@ const (
 	TmplCredVaultLocked   = "cred_vault_locked"
 	TmplCredSetupExpiring = "cred_setup_token_expiring"
 	TmplCredSetupExpired  = "cred_setup_token_expired"
+	TmplAccountReauth     = "account_reauth"
 )
 
 // Templates is every id above, so a translation table can be checked for
@@ -38,7 +39,7 @@ var Templates = []string{
 	TmplSpendSpikeTotal, TmplSpendSpikeProject, TmplWindowHigh,
 	TmplStaleAgentNever, TmplStaleAgentLast, TmplLiveRunaway,
 	TmplFreeAllowanceGone, TmplFreeAllowanceNear, TmplCredVaultLocked,
-	TmplCredSetupExpiring, TmplCredSetupExpired,
+	TmplCredSetupExpiring, TmplCredSetupExpired, TmplAccountReauth,
 }
 
 // Owner is "who should this finding go to". Both halves are optional and an
@@ -73,6 +74,7 @@ var Templates = []string{
 //	window_high      no  -- same, a subscription's rate-limit window
 //	cred_vault_locked no -- the hub's own vault, everyone's credentials
 //	cred_setup_token  no -- a pool account's token, which every machine leases
+//	account_login     no -- an account, which several machines' profiles share
 //
 // The "no" rows are not gaps waiting to be filled in. Each one's subject is an
 // aggregate over several people, so any single name on it would be the guess
@@ -113,6 +115,16 @@ type Finding struct {
 	// omitempty): a consumer that has to key on it must not have to handle
 	// the key being absent.
 	ID string `json:"id"`
+
+	// Problem is the identity WITHOUT severity and template: the same (kind,
+	// subject) across an escalation, a downgrade or a change of sentence.
+	// ID answers "is this the same alert the operator muted"; Problem answers
+	// "is this the same trouble I already told someone about", which is what
+	// a notifier needs (claude-fleet#1469) — a setup token's warning turning
+	// critical is one problem escalating, not one problem resolved and a new
+	// one raised. Assigned by finish() beside ID; never serialised, like
+	// Template and Args: the wire contract keys on ID.
+	Problem string `json:"-"`
 
 	Severity string            `json:"severity"` // critical | warning | info
 	Kind     string            `json:"kind"`
@@ -313,11 +325,17 @@ var rank = map[string]int{"critical": 0, "warning": 1, "info": 2}
 // disappears while its silence holds.
 //
 // mutes is treated as already filtered to what is in force (see Mutes).
-func finish(fs []Finding, mutes Mutes) []Finding {
+//
+// uncapped keeps every finding, muted or not (claude-fleet#1469): the caps
+// are a page's budget, and a notifier reading a capped list would see the
+// ninth finding appear and vanish as the eight above it came and went — and
+// say "new" and "recovered" about a problem that never changed.
+func finish(fs []Finding, mutes Mutes, uncapped bool) []Finding {
 	kindOrder := map[string]int{}
 	for i := range fs {
 		f := &fs[i]
 		f.ID = findingID(f.Kind, f.Template, f.Severity, f.subject)
+		f.Problem = problemID(f.Kind, f.subject)
 		if m, ok := mutes[f.ID]; ok {
 			cp := m
 			f.Muted = &cp
@@ -343,10 +361,10 @@ func finish(fs []Finding, mutes Mutes) []Finding {
 		}
 		live = append(live, f)
 	}
-	if len(live) > maxFindings {
+	if !uncapped && len(live) > maxFindings {
 		live = live[:maxFindings]
 	}
-	if len(muted) > maxMutedFindings {
+	if !uncapped && len(muted) > maxMutedFindings {
 		muted = muted[:maxMutedFindings]
 	}
 	return append(live, muted...)
@@ -361,7 +379,7 @@ func Review(in Inputs) []Finding {
 	fs = append(fs, critical(in.Critical, in.SelectionSeconds)...)
 	fs = append(fs, cacheDrop(in.Projects, in.PrevProjects)...)
 	fs = append(fs, spike(in)...)
-	return finish(fs, in.Mutes)
+	return finish(fs, in.Mutes, false)
 }
 
 // runaway flags sessions whose tokens are far past a median: runawayMultiple
@@ -684,16 +702,39 @@ const (
 	setupTokenCriticalLead = 7 * 24 * time.Hour
 )
 
+// LoginState is one account's login health as the hub last saw it
+// (claude-fleet#1469, EPIC #1665 C2): a Codex profile's state as its machine's
+// collector reported it, or a vault credential whose refresh the hub itself
+// could not complete. Only a state that needs a PERSON — reauth_required —
+// becomes a finding; the rest are the agent's to sort out and would only be
+// noise at the operator's phone.
+type LoginState struct {
+	Provider string // claude | codex
+	Account  string // the account as the operator knows it (an email, a label)
+	Where    string // the machines / profiles that hold it, for the sentence
+	State    string // reauth_required | … (model.LoginHealth.State; "" = unknown)
+	Reason   string
+	Command  string // the one line that fixes it (`codex login --device-auth`)
+}
+
+// reauthRequired is the one LoginState.State that is a finding.
+const reauthRequired = "reauth_required"
+
 type NowInputs struct {
 	Windows     []WindowStat
 	Endpoints   []EndpointSeen
 	Live        []LiveStat
 	VaultLock   *VaultLock
 	SetupTokens []SetupToken
+	Logins      []LoginState
 	Now         time.Time
 
 	// Mutes as on Inputs: the silences in force, keyed by Finding.ID.
 	Mutes Mutes
+
+	// Uncapped keeps every finding instead of a page's eight-and-eight (see
+	// finish). The notifier sets it; a surface never does.
+	Uncapped bool
 }
 
 // Now evaluates the minute-scale rules.
@@ -716,6 +757,7 @@ func Now(in NowInputs) []Finding {
 			subject: "vault"})
 	}
 	fs = append(fs, setupTokens(in.SetupTokens, in.Now)...)
+	fs = append(fs, logins(in.Logins)...)
 	for _, w := range in.Windows {
 		if w.FiveHourPct < windowWarnPct {
 			continue
@@ -785,7 +827,7 @@ func Now(in NowInputs) []Finding {
 			Scope:    map[string]string{"session": l.SessionID}, Link: "#live", weight: float64(l.Tokens),
 			subject: l.SessionID})
 	}
-	return finish(fs, in.Mutes)
+	return finish(fs, in.Mutes, in.Uncapped)
 }
 
 // ---- formatting shared by the templates ----
@@ -868,6 +910,42 @@ func setupTokens(ts []SetupToken, now time.Time) []Finding {
 			f.Detail = "expired " + f.Args["date"]
 		}
 		fs = append(fs, f)
+	}
+	return fs
+}
+
+// logins is the re-login alarm (claude-fleet#1469, EPIC #1665 C2): an account
+// whose credential cannot be renewed by any machine or by the hub. Critical
+// outright — from the moment it is true every session starting on that
+// account fails to start, and the only remedy is a person signing in — and
+// the Title carries that one command, so the message on a phone is the fix.
+// One finding per (provider, account): the state is the problem, not the
+// profile that noticed it, so several machines' profiles on one account are
+// one alarm naming them all in `where`.
+func logins(ls []LoginState) []Finding {
+	var fs []Finding
+	for _, l := range ls {
+		if l.State != reauthRequired {
+			continue
+		}
+		where := l.Where
+		if where == "" {
+			where = "-"
+		}
+		cmd := l.Command
+		if cmd == "" {
+			cmd = "sign in again"
+		}
+		reason := l.Reason
+		if reason == "" {
+			reason = "the stored credential can no longer be renewed"
+		}
+		fs = append(fs, Finding{Severity: "critical", Kind: "account_login", Link: "/credentials",
+			Title:    fmt.Sprintf("account %s (%s · %s) needs re-login — run `%s`", l.Account, l.Provider, where, cmd),
+			Detail:   reason,
+			Template: TmplAccountReauth,
+			Args:     map[string]string{"account": l.Account, "provider": l.Provider, "where": where, "command": cmd, "reason": reason},
+			subject:  subjectKey(l.Provider, l.Account)})
 	}
 	return fs
 }

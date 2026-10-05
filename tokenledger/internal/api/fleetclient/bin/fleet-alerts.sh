@@ -18,7 +18,7 @@
 # ONE GRAMMAR: `<icon> <subject> · <condition> · <value>`. Subjects are nouns the
 # operator knows (quota, dash, daemon, disk, machine, accounts, model, #<issue>);
 # conditions come from a closed list (stale, unreadable, uneven, from banner,
-# low, load high, memory high, capped, all capped, question, permission,
+# low, load high, memory high, capped, all capped, reauth, question, permission,
 # blocked, failed, waiting, stalled).
 #
 # A row (fixed key order — the readers parse it with ONE regex, no jq):
@@ -35,7 +35,7 @@
 # turns an event younger than FLEET_ALERTS_EVENT_LIVE (1h) into a ▲ row (the
 # bar's count goes up by one, ↵ in the popup reads the full text) and the popup
 # lists the older ones below the live rows. Only the kinds in
-# FLEET_ALERT_FLASH_KINDS — the three that need you NOW — still flash too.
+# FLEET_ALERT_FLASH_KINDS — the four that need you NOW — still flash too.
 #
 # Usage:
 #   fleet-alerts.sh write [--kick]   compute + write $G/alerts.ndjson
@@ -111,7 +111,10 @@ fleet_alerts_unstall() {
 #   quota-nowhere  an account is at its ceiling and no other one can take its sessions
 #   hub-lost       the hub has not answered for FLEET_ALERTS_HUB_FLASH_SECS (5 min)
 #   disk-red       free disk is at the spawn-refusal floor
-FLEET_ALERT_FLASH_KINDS='quota-nowhere hub-lost disk-red'
+#   account-reauth a profile's credential died and only a person signing in
+#                  fixes it (issue #1469, EPIC #1665 C2) — its standing row is
+#                  `▲ accounts · reauth`, this is the toast when it first happens
+FLEET_ALERT_FLASH_KINDS='quota-nowhere hub-lost disk-red account-reauth'
 fleet_alerts_events_file() { printf '%s/alerts.events' "$(fleet_usage_cache_dir)"; }
 fleet_alert_flashes() { case " $FLEET_ALERT_FLASH_KINDS " in *" ${1:-} "*) return 0 ;; esac; return 1; }
 
@@ -179,6 +182,48 @@ _fa_hub_flash() {
   [ "$last" = "$FSH_TS" ] && return 0
   printf '%s\n' "$FSH_TS" > "$mk" 2>/dev/null || return 0
   fleet_alert hub-lost "fleet: hub unreachable for $(fleet_usage_human_secs "$FSH_AGE") — remote sessions are not refreshing; sessions here keep working"
+}
+
+# _fa_reauth <now> — one `▲ accounts · reauth · <profile>` row per profile whose
+# login is reauth_required, off $G/account.reauth. .fleet-account.py stamps that
+# file on every read of the profiles — it is the ONE judge of a login's
+# validity (EPIC #1665), so the bar never parses `ccquota codex list` itself —
+# and this refreshes it through `logins` when the header is older than
+# FLEET_ALERTS_REAUTH_SECS (60). The row stands while the state does (its
+# first-seen time comes from the stamp; write's ↻ trace follows when it
+# clears) and its detail carries the one command that fixes it. A profile NEWLY
+# in that state is also an account-reauth EVENT — the flash kind — which is
+# never a live row of its own (see the events loop): the standing row is the
+# alert, the event is the toast plus its line in the history.
+# Degenerate: no .fleet-account.py beside this script (a shell-only client,
+# #1484) ⇒ nothing is refreshed or drawn; no ccquota / no Codex ⇒ the header
+# says `unavailable` and nothing is drawn, retried a minute later.
+_fa_reauth() {
+  local now="$1" af py secs="${FLEET_ALERTS_REAUTH_SECS:-60}" at="" old="|" since agent prof acct st cmd key text
+  af="$(fleet_usage_cache_dir)/account.reauth"; py="$_FA_BIN/.fleet-account.py"
+  case "$secs" in ''|*[!0-9]*) secs=60 ;; esac
+  if [ -f "$af" ]; then
+    IFS=$'\t' read -r at _ < "$af" 2>/dev/null
+    while IFS=$'\t' read -r since agent prof _; do
+      [ -n "$agent" ] && [ -n "$prof" ] && old="$old$agent/$prof|"
+    done < <(tail -n +2 "$af" 2>/dev/null)
+  fi
+  case "$at" in ''|*[!0-9]*) at=0 ;; esac
+  if [ -f "$py" ] && [ $(( now - at )) -ge "$secs" ]; then
+    if ! python3 "$py" logins >/dev/null 2>&1; then
+      mkdir -p "${af%/*}" 2>/dev/null
+      printf '%s\tunavailable\n' "$now" > "$af.$$" 2>/dev/null && mv -f "$af.$$" "$af" 2>/dev/null
+    fi
+  fi
+  [ -s "$af" ] || return 0
+  while IFS=$'\t' read -r since agent prof acct st cmd; do
+    case "$since" in ''|*[!0-9]*) continue ;; esac
+    [ -n "$agent" ] && [ -n "$prof" ] && [ "$st" = reauth_required ] || continue
+    key="$agent/$prof"
+    text="$agent ${acct:-$prof} needs re-login — run: ${cmd:-sign in again}"
+    _fa_row "account-reauth-$(_fa_stall_id "$agent-$prof")" warning accounts reauth "$prof" "$since" accounts 0 '' "$text"
+    case "$old" in *"|$key|"*) ;; *) fleet_alert account-reauth "accounts: $text" ;; esac
+  done < <(tail -n +2 "$af")
 }
 
 # _fa_clean <s> — a value safe inside a JSON string and a TSV field.
@@ -365,6 +410,11 @@ fleet_alerts_compute() {
     fi
   fi
 
+  # --- accounts: a profile that needs a PERSON to sign in again (issue #1469,
+  # EPIC #1665 C2) — the node-side half of the WeCom push, for when the hub is
+  # unreachable or there is none.
+  _fa_reauth "$now"
+
   # --- model: a per-model cap (issue #524) on any account, one row per model.
   af="$(fleet_usage_cache_dir)/account.model-limited"
   if [ -f "$af" ]; then
@@ -403,6 +453,7 @@ fleet_alerts_compute() {
     while IFS=$'\t' read -r et eid ek ex; do
       case "$et" in ''|*[!0-9]*) continue ;; esac
       [ $(( now - et )) -lt "$live" ] && [ -n "$eid" ] || continue
+      [ "$ek" = account-reauth ] && continue   # its standing row is the alert (_fa_reauth)
       _fa_row "$eid" warning "$ek" event '' "$et" event 0 '' "$ex"
     done < "$ef"
   fi

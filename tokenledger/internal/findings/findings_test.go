@@ -1,6 +1,7 @@
 package findings
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -240,7 +241,7 @@ func TestFreeAllowance_ExceededOutranksApproaching(t *testing.T) {
 	fs := finish(freeAllowance([]FreeAllowanceStat{
 		{Model: "near", Tokens: 999_999, Allowance: 1_000_000},
 		{Model: "over", Tokens: 1_000_001, Allowance: 1_000_000},
-	}), nil)
+	}), nil, false)
 	if len(fs) < 2 {
 		t.Fatalf("got %d findings; want both", len(fs))
 	}
@@ -393,5 +394,62 @@ func TestSetupTokenReminder(t *testing.T) {
 	// Two rows, two identities: muting one does not silence the other.
 	if by["soon"].ID == by["week"].ID {
 		t.Fatal("two setup tokens share a finding id")
+	}
+}
+
+// An account whose credential cannot be renewed is one critical finding per
+// (provider, account) carrying the command that fixes it; any other login
+// state is not a finding; a severity change keeps the Problem and moves the ID.
+func TestAccountReauth(t *testing.T) {
+	fs := Now(NowInputs{Now: time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC), Logins: []LoginState{
+		{Provider: "codex", Account: "ops@example.com", Where: "m5:default, m4:work", State: "reauth_required",
+			Reason: "Access token expired and no refresh credential is available", Command: "codex login --device-auth"},
+		{Provider: "codex", Account: "fine@example.com", Where: "m5:fine", State: "valid"},
+		{Provider: "codex", Account: "due@example.com", Where: "m5:due", State: "refresh_due"},
+		{Provider: "claude", Account: "pool/icloud", State: "reauth_required"},
+	}})
+	if kinds(fs) != "account_login,account_login" {
+		t.Fatalf("%s", kinds(fs))
+	}
+	by := map[string]Finding{}
+	for _, f := range fs {
+		by[f.Args["account"]] = f
+	}
+	f := by["ops@example.com"]
+	if f.Severity != "critical" || f.Template != TmplAccountReauth || f.Link != "/credentials" ||
+		f.Title != "account ops@example.com (codex · m5:default, m4:work) needs re-login — run `codex login --device-auth`" ||
+		f.Detail != "Access token expired and no refresh credential is available" {
+		t.Fatalf("ops: %+v", f)
+	}
+	// No machine, no command, no reason: the sentence still stands.
+	if g := by["pool/icloud"]; g.Args["where"] != "-" || g.Args["command"] != "sign in again" || g.Detail == "" || g.ID == f.ID || g.Problem == f.Problem {
+		t.Fatalf("pool: %+v", g)
+	}
+	// Problem is the identity minus severity/template: the setup token that
+	// turns critical is the same problem with a new id.
+	now := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	tok := func(days int) Finding {
+		return Now(NowInputs{Now: now, SetupTokens: []SetupToken{{PrincipalID: "pool", Provider: "claude", Account: "a", ExpiresAt: now.Add(time.Duration(days) * 24 * time.Hour)}}})[0]
+	}
+	warn, crit := tok(20), tok(3)
+	if warn.ID == crit.ID || warn.Problem != crit.Problem || warn.Problem == "" {
+		t.Fatalf("warn %s/%s crit %s/%s", warn.ID, warn.Problem, crit.ID, crit.Problem)
+	}
+	if other := tok(20); other.Problem != warn.Problem {
+		t.Fatal("Problem is not stable across evaluations")
+	}
+}
+
+// Uncapped keeps every finding; the default keeps a page's eight.
+func TestUncapped(t *testing.T) {
+	var ws []WindowStat
+	for i := 0; i < 12; i++ {
+		ws = append(ws, WindowStat{AccountUUID: fmt.Sprintf("acct-%d", i), Label: fmt.Sprintf("a%d@x", i), FiveHourPct: 95})
+	}
+	if n := len(Now(NowInputs{Windows: ws})); n != maxFindings {
+		t.Fatalf("capped: %d findings, want %d", n, maxFindings)
+	}
+	if n := len(Now(NowInputs{Windows: ws, Uncapped: true})); n != 12 {
+		t.Fatalf("uncapped: %d findings, want 12", n)
 	}
 }

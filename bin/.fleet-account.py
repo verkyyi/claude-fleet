@@ -120,7 +120,65 @@ def profiles():
                         # (claude-fleet#1404): "reauth_required" alone sends the
                         # operator looking; the reason says what to do.
                         login_reason=str(login.get('reason') or '')))
+    # The ONE judge of a login's validity (EPIC #1665) also leaves the record
+    # the status bar reads; a failed stamp never fails the read it rode on.
+    try:
+        stamp_reauth(out)
+    except OSError:
+        pass
     return out
+
+
+# The one line that fixes a dead credential, per agent — the operator's words
+# (EPIC #1665): Codex re-authenticates with the device flow, Claude mints a
+# setup token to import again.
+REAUTH_COMMAND = {'codex': 'codex login --device-auth', 'claude': 'claude setup-token'}
+
+
+def stamp_reauth(local):
+    """Record which profiles need a PERSON to sign in again, for
+    bin/fleet-alerts.sh (issue #1469, EPIC #1665 C2): `account.reauth` in the
+    account state dir — a header `<epoch>\tchecked`, then one row
+    `<since>\t<agent>\t<profile>\t<account>\t<state>\t<command>` per profile
+    whose login is reauth_required. `since` carries over while the key stands,
+    so the ▲ row keeps its first-seen time across stamps. Written on every
+    profiles() read (a launch, a failover, the bar's `logins` refresh), so the
+    bar never judges a login itself."""
+    path = state_dir() / 'account.reauth'
+    old = {}
+    try:
+        for line in path.read_text().splitlines()[1:]:
+            parts = line.split('\t')
+            if len(parts) >= 6 and parts[0].isdigit():
+                old[(parts[1], parts[2])] = parts[0]
+    except OSError:
+        pass
+    now = int(time.time())
+    rows = ['%d\tchecked' % now]
+    for p in local:
+        if p.get('login') != 'reauth_required':
+            continue
+        clean = lambda v: str(v or '').replace('\t', ' ').replace('\n', ' ')
+        key = (p['agent'], p['profile'])
+        rows.append('\t'.join([old.get(key, str(now)), clean(p['agent']), clean(p['profile']),
+                               clean(p.get('email') or p.get('account')), 'reauth_required',
+                               REAUTH_COMMAND.get(p['agent'], 'sign in again')]))
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd, name = tempfile.mkstemp(prefix='.' + path.name, dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            stream.write('\n'.join(rows) + '\n')
+        os.replace(name, path)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+
+
+def logins():
+    """`logins`: every profile's login state, metadata only — and, through
+    profiles(), the account.reauth stamp fleet-alerts.sh draws from."""
+    return [dict(agent=p['agent'], profile=p['profile'], account=p.get('email') or p.get('account') or '',
+                 login=p['login']) for p in profiles()]
 
 
 def profile(name='', home='', account=''):
@@ -514,6 +572,7 @@ def main():
     q = sub.add_parser('profile')
     q.add_argument('--name', default=''); q.add_argument('--home', default=''); q.add_argument('--account', default='')
     q = sub.add_parser('check-target'); q.add_argument('path')
+    sub.add_parser('logins')
     q = sub.add_parser('bench-codex'); q.add_argument('key'); q.add_argument('until', type=int); q.add_argument('reason')
     q = sub.add_parser('launch'); q.add_argument('--agent', choices=('claude', 'codex'), required=True); q.add_argument('argv', nargs=argparse.REMAINDER)
     a = p.parse_args()
@@ -523,6 +582,7 @@ def main():
         data = inventory(a.refresh)
         result = choose_spawn(data,a.agent,a.allow.split(',')) if a.spawn else choose(data,a.agent,a.exclude,a.current,a.allow.split(','))
     elif a.command == 'check-target': result = check_target(read(a.path, {}))
+    elif a.command == 'logins': result = logins()
     elif a.command == 'bench-codex': bench(a.key, a.until, a.reason); return 0
     elif a.command == 'launch': return launch(a.agent, a.argv[1:] if a.argv[:1] == ['--'] else a.argv)
     print(json.dumps(result, ensure_ascii=False))

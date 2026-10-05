@@ -707,3 +707,21 @@ CREATE TABLE IF NOT EXISTS finding_mutes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_finding_mutes_expiry ON finding_mutes(expires_at);
+
+-- What the WeCom notifier has already said (claude-fleet#1469): one row per
+-- finding PROBLEM (internal/findings Finding.Problem — the identity minus
+-- severity and template), carrying the id and severity it last sent. The
+-- notifier compares each tick's findings against this: a problem with no row
+-- is new, one whose id moved up in severity has escalated, one still present
+-- past the repeat interval is reminded, one with a row and no finding has
+-- recovered — and the row goes. Never read by a page; the findings are still
+-- recomputed on every request and this changes nothing about them.
+CREATE TABLE IF NOT EXISTS finding_notices (
+  problem    TEXT PRIMARY KEY,
+  finding_id TEXT NOT NULL,
+  kind       TEXT NOT NULL DEFAULT '',
+  severity   TEXT NOT NULL DEFAULT '',
+  title      TEXT NOT NULL DEFAULT '',
+  first_at   TEXT NOT NULL,
+  last_at    TEXT NOT NULL
+);
