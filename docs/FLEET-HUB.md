@@ -132,7 +132,11 @@ ccquota agent's control channel is this machine's only door to the hub.
 
 Switch it on with `CCQUOTA_FLEET=1` in the fleet's conf (the agent needs the same
 variable, which it already has when it reports to a fleet hub). Off, or with no
-running agent, every script behaves as it did before.
+running agent, every script behaves as it did before. The switch is read **per
+fleet** (issue #1539, `fleet_hub_on`): a fleet conf's own line wins over the
+login-wide `export CCQUOTA_FLEET=1`, both ways, and a conf without the line
+follows the login — see [LOCAL-AND-HUB.md](LOCAL-AND-HUB.md) for which switch
+lives at which level.
 
 **The sidebar sees every machine** (issue #1423). With `CCQUOTA_FLEET=1` and
 `CCQUOTA_HUB_URL` set, the collector keeps `bin/fleet-hub-sessions.sh` refreshing
