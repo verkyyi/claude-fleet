@@ -64,6 +64,7 @@ done
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"
+. "$BIN/fleet-ui-lang.sh"   # fleet_ui_fail — the one failure line (issue #1618)
 
 FLEET_SESSION=$(fleet_current_session); export FLEET_SESSION
 # Overlay this fleet's per-session conf so any per-fleet knob is honored. Sourced in
@@ -86,12 +87,12 @@ if [ -z "$REPO" ] && [ "$MULTI" = 1 ] && [ -n "$sel" ]; then
   [ "$REPO" = none ] && REPO=''
 fi
 if [ -z "$REPO" ] && { [ "$MULTI" = 0 ] || [ -n "$title_file" ]; }; then
-  tmux display-message "backlog: no repo resolved — cannot create issue"; exit 1
+  fleet_ui_fail "backlog: no repo resolved — cannot create issue"; exit 1
 fi
-command -v gh >/dev/null 2>&1 || { tmux display-message "gh not found — cannot create issue"; exit 1; }
+command -v gh >/dev/null 2>&1 || { fleet_ui_fail "gh not found — cannot create issue"; exit 1; }
 # fzf is the interactive title widget now (issue #429), so this path requires it. Guard up
 # top like `gh` so BOTH phases fail with a toast instead of a broken popup if it's absent.
-command -v fzf >/dev/null 2>&1 || { tmux display-message "fzf not found — cannot create issue"; exit 1; }
+command -v fzf >/dev/null 2>&1 || { fleet_ui_fail "fzf not found — cannot create issue"; exit 1; }
 
 # phase 1: pop the input dialog that re-invokes us in `confirm` mode. Carry
 # --spawn through so quick-dispatch (prefix+n) reaches phase 2 as a spawn.
@@ -135,15 +136,17 @@ create_issue() {
       # and toasts its OWN outcome, so on a cap refusal the issue is STILL filed
       # (acceptance (c)). --title names the window after the WORK without depending on
       # the optimistic row surviving the collector refetch (issue #216).
-      tmux display-message "filed #$num in $REPO ✓ — spawning worker${node:+ on $node}…"
+      # No "filed ✓" line (issue #1618): the new row / window is the answer.
       # --repo only where it is needed (issue #794): a one-repo fleet's call is unchanged.
       _sr=''; [ "$MULTI" = 1 ] && _sr=$REPO
-      ( bash "$BIN/dash-issue-session.sh" "$num" --title "$title" ${_sr:+--repo "$_sr"} ${node:+--node "$node"} >/dev/null 2>&1 & )
-    else
-      tmux display-message "filed new issue #$num in $REPO ✓"
+      # The spawn's own refusal toast is muted (FLEET_UI_QUIET) and re-said here as
+      # ONE line that also says the issue IS filed — a cap refusal must not read as
+      # "nothing happened" (issue #1618: a failure is one line, reason + next step).
+      ( { _e=$(FLEET_UI_QUIET=1 bash "$BIN/dash-issue-session.sh" "$num" --title "$title" ${_sr:+--repo "$_sr"} ${node:+--node "$node"} 2>&1 >/dev/null) \
+          || { _e=${_e##*$'\n'}; fleet_ui_fail "$(fleet_ui_t ui_filed_no_worker_fmt "$num" "${_e#dash-issue-session: }")" "$(fleet_ui_t ui_filed_no_worker_next)"; }; } & )
     fi
   else
-    tmux display-message "failed to create issue in $REPO — try again"
+    fleet_ui_fail "failed to create issue in $REPO" "try again"
   fi
 }
 
@@ -194,7 +197,7 @@ if [ "$key" = ctrl-s ]; then
   # (#1541), toasting its own outcome. --repo only where it is needed (#794).
   nfarg=''
   if [ -n "$title" ]; then
-    nf=$(mktemp "${TMPDIR:-/tmp}/dash-raw.XXXXXX") || { tmux display-message "backlog: cannot stage the scratch name"; exit 1; }
+    nf=$(mktemp "${TMPDIR:-/tmp}/dash-raw.XXXXXX") || { fleet_ui_fail "backlog: cannot stage the scratch name"; exit 1; }
     printf '%s' "$title" > "$nf"
     nfarg=" --name-file='$nf'"           # the mktemp path has no metachars
   fi
@@ -207,7 +210,7 @@ fi
 # Stage the title in a temp file — it is arbitrary user text, so it is NEVER
 # interpolated into the run-shell command string (only the mktemp path, which has no
 # metachars, is). The bg re-exec toasts its own outcome (the popup is gone by then).
-tf=$(mktemp "${TMPDIR:-/tmp}/dash-new.XXXXXX") || { tmux display-message "backlog: cannot stage the new issue"; exit 1; }
+tf=$(mktemp "${TMPDIR:-/tmp}/dash-new.XXXXXX") || { fleet_ui_fail "backlog: cannot stage the new issue"; exit 1; }
 printf '%s' "$title" > "$tf"
 spawn_arg=""; [ "$spawn" = 1 ] && spawn_arg=" --spawn"
 [ -n "$node" ] && spawn_arg="$spawn_arg --node=$node"   # one [A-Za-z0-9._-] token, checked above

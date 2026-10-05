@@ -96,6 +96,7 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"
+. "$BIN/fleet-ui-lang.sh"   # fleet_ui_fail — the one failure line (issue #1618)
 . "$BIN/fleet-gh-lib.sh"   # merged-PR check with the REST fallback (issue #1042)
 
 # --- script-facing result (issue #596) ----------------------------------------
@@ -107,7 +108,9 @@ emit() { [ "${confirm:-0}" = 1 ] || printf '%s\n' "$1"; }
 # refuse <slug> <human message> — the slug is what scripts match (`refused:no-issue`),
 # the message is what the operator sees on the status line. Exit 4, never 0: a
 # refusal that reported success is exactly what let a caller believe it had reaped.
-refuse() { local slug="$1"; shift; emit "refused:$slug"; tmux display-message "reap: $*" 2>/dev/null; exit 4; }
+# A reap that WORKED draws nothing — the window going and its row leaving the list
+# are the answer (issue #1618); only a refusal / failure says why, via fleet_ui_fail.
+refuse() { local slug="$1"; shift; emit "refused:$slug"; fleet_ui_fail "reap: $*"; exit 4; }
 
 # Is anyone attached to THIS fleet's tmux server? `tmux list-clients` with no -t
 # lists every client on the server, and one fleet = one server (issue #159), so
@@ -136,7 +139,7 @@ guard_live() {
       "$target" "${why:-probe unavailable}" >&2
     # Also on the status line: in the backgrounded tail stderr goes nowhere, and a
     # refusal nobody can see is how #1244's "reaped" window was still standing.
-    tmux display-message "reap refused: $target — ${why:-probe unavailable}" 2>/dev/null || :
+    fleet_ui_fail "reap refused: $target — ${why:-probe unavailable}"
     exit 3
   fi
   case "$why" in waived:*) printf 'reap: %s %s (its PR merged during this agent'"'"'s life)\n' "$target" "$why" >&2 ;; esac
@@ -233,13 +236,13 @@ reap_record() {
 reap_kill() {
   if ! fleet_sleep_dispose "$target" "${FLEET_SESSION:-}"; then
     emit failed:sleep-record
-    tmux display-message "reap failed: $target — sleep record could not be retired" 2>/dev/null || :
+    fleet_ui_fail "reap failed: $target — sleep record could not be retired"
     exit 5
   fi
   tmux kill-window -t "$target" 2>/dev/null || true
   if tmux display-message -p -t "$target" '#{window_id}' 2>/dev/null | grep -qxF "$target"; then
     emit failed:kill-window
-    tmux display-message "reap failed: $target — window still open" 2>/dev/null || :
+    fleet_ui_fail "reap failed: $target — window still open"
     exit 5
   fi
 }
@@ -267,7 +270,6 @@ reap_full() {
     git -C "$MAIN" worktree prune 2>/dev/null || true
   fi
   settle_issue
-  tmux display-message "reaped #$iss ✓ (window + worktree)" 2>/dev/null || true
 }
 
 # dirty force reap: KEEP the worktree, settle issue + kill window only
@@ -278,7 +280,7 @@ reap_keep() {
   # kept tree, but its detached LISTENERS go now — a `*` bind serves it to the LAN (#1154)
   [ -n "${wtdir:-}" ] && fleet_reap_worktree_listeners "$wtdir" >/dev/null 2>&1
   settle_issue
-  tmux display-message "reaped #$iss ✓ (window) — worktree kept (dirty)" 2>/dev/null || true
+  printf 'reap: #%s window closed — worktree kept (dirty)\n' "$iss" >&2
 }
 
 # The disposal tail shared by the backgrounded --exec pass and the synchronous
@@ -455,7 +457,6 @@ if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
     guard_live
     describe_target ephemeral "$swt"
     tmux kill-window -t "$target" 2>/dev/null || true
-    tmux display-message "closed scratch ✓" 2>/dev/null || true
     emit reaped:full
     exit 0
   fi
@@ -516,10 +517,9 @@ if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
     [ "$sreason" = dirty ] || scratch_remove
     tmux kill-window -t "$target" 2>/dev/null || true
     if [ "$sreason" = dirty ]; then
-      tmux display-message "closed scratch ✓ — worktree kept (dirty)" 2>/dev/null || true
+      printf 'reap: scratch closed — worktree kept (dirty)\n' >&2
       emit reaped:keep
     else
-      tmux display-message "closed scratch ✓ (worktree reaped)" 2>/dev/null || true
       emit reaped:full
     fi
   }

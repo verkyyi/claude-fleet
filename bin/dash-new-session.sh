@@ -9,14 +9,15 @@ text="$*"; text="${text#"${text%%[![:space:]]*}"}"
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"
+. "$BIN/fleet-ui-lang.sh"   # fleet_ui_fail — the one failure line (issue #1618)
 SESS=$(fleet_current_session)
 fleet_load_conf "$SESS"                        # multi-fleet: target THIS fleet's repo
 REPO="${FLEET_REPO:-}"
 # A fleet hosting 2+ repos (issue #789): the view is always `all` (#1034), so
 # there is no repo to file into here — say so rather than guess.
-_fleet_hosts_many "$SESS" && { tmux display-message "new session: this fleet hosts several repos — use ⌃n, which asks which repo"; exit 1; }
-[ -z "$REPO" ] && { tmux display-message "fleet.conf: FLEET_REPO not set — cannot create issue"; exit 1; }
-command -v gh >/dev/null 2>&1 || { tmux display-message "gh not found — cannot create issue"; exit 1; }
+_fleet_hosts_many "$SESS" && { fleet_ui_fail "new session: this fleet hosts several repos — use ⌃n, which asks which repo"; exit 1; }
+[ -z "$REPO" ] && { fleet_ui_fail "fleet.conf: FLEET_REPO not set — cannot create issue"; exit 1; }
+command -v gh >/dev/null 2>&1 || { fleet_ui_fail "gh not found — cannot create issue"; exit 1; }
 
 # Session cap (issues #28, #70): check BEFORE creating the issue so a full fleet
 # doesn't leave a dangling backlog issue with no session behind it. Pass "$SESS"
@@ -24,7 +25,7 @@ command -v gh >/dev/null 2>&1 || { tmux display-message "gh not found — cannot
 # checked here — otherwise a fleet at its per-fleet cap (but under the global one)
 # would create the issue, then have the downstream spawn refused, stranding it.
 # dash-issue-session.sh re-checks the same way, so this is belt-and-braces.
-if ! cap_msg=$(fleet_session_cap_ok "$SESS"); then tmux display-message "$cap_msg"; exit 1; fi
+if ! cap_msg=$(fleet_session_cap_ok "$SESS"); then fleet_ui_fail "$cap_msg"; exit 1; fi
 
 # Backstop throttle (multi-line pastes are coalesced upstream by
 # dash-task-buffer.sh, so a burst reaches us as ONE call; this only guards
@@ -32,7 +33,7 @@ if ! cap_msg=$(fleet_session_cap_ok "$SESS"); then tmux display-message "$cap_ms
 C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
 now=$(date +%s); last=$(cat "$C/last_issue_create" 2>/dev/null || echo 0)
 if [ $(( now - last )) -lt 5 ]; then
-  tmux display-message "issue create throttled — wait 5s"; exit 0
+  fleet_ui_fail "issue create throttled — wait 5s"; exit 0
 fi
 echo "$now" > "$C/last_issue_create"
 
@@ -48,7 +49,7 @@ url=$("$BIN/fleet-issue-file.sh" --repo "$REPO" --title "$title" \
 
 $text" 2>/dev/null)
 num=$(printf '%s' "$url" | grep -oE '[0-9]+$')
-if [ -z "$num" ]; then tmux display-message "issue create failed — session not spawned"; exit 1; fi
+if [ -z "$num" ]; then fleet_ui_fail "issue create failed — session not spawned"; exit 1; fi
 
 # Instant cache refresh: optimistically append the new issue to THIS fleet's
 # backlog cache (visible on the panels' next repaint), then kick a real fetch in
