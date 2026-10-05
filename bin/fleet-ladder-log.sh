@@ -23,9 +23,13 @@
 #                                               (map written: 已提前存档), `kept` (the
 #                                               prep map is newer), `no-map` (hub) (#1321)
 #   resumed           bin/fleet-compact-resume.sh the turn after a FLEET compaction was
-#                                               submitted — reason `mod` / `send-keys`, or
+#                                               submitted — reason `mod` / `send-keys`
+#                                               (sent at once), `late:mod` / `late:send-keys`
+#                                               (sent when a stale `working` settled idle
+#                                               with no turn in between, #1572), or
 #                                               `skip:<why>` (dup, stage, codex, transfer,
-#                                               needs, operator, typing) (#1441)
+#                                               needs, self-continued, stale, typing)
+#                                               (#1441)
 #
 # Usage:
 #   fleet-ladder-log.sh <step> [--pane P] [--socket S] [--ctx N] [--count N] [--reason TEXT]
