@@ -237,6 +237,7 @@ FLEET_SMOKE_SSH_HOST               seam: where the smoke run's ssh -tt connects 
 FLEET_SMOKE_SSH_PORT               seam: the sshd port the smoke run connects to (22); --ssh-port is the operator's face (fleet-login-smoke.sh)
 FLEET_SMOKE_TIMEOUT                knob: internal pacing/limit, safe in-code default; --timeout is the operator's face (fleet-login-smoke.sh)
 FLEET_SPAWN_GUARD_SLEEP            knob: internal pacing/limit, safe in-code default (dash-enter.sh)
+FLEET_SPAWN_CLAIMED                handoff: the --async tail inherits the foreground's GitHub claim, taken back on failure (#1606)
 FLEET_SPAWN_TAIL                   handoff: spawn only the seed tail (used by the handoff/resume path)
 FLEET_SPOT_EVACUATE_MARGIN         knob: seconds fleet-spot-evacuate.sh keeps before its deadline so a started move can finish, default 30 (#1428)
 FLEET_SPOT_EVACUATE_SECS           handoff: the SPOT reclaim deadline the ccquota agent passes to fleet-spot-evacuate.sh (its CCQUOTA_FLEET_RECLAIM_SECS, 240; #1428)
