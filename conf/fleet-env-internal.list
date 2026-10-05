@@ -248,6 +248,7 @@ FLEET_TRANSFER_EXIT_WAIT           knob: internal pacing/limit, safe in-code def
 FLEET_TRANSFER_IDLE_WAIT           knob: internal pacing/limit, safe in-code default (fleet-transfer.sh)
 FLEET_TRASH_PURGE_URGENT           handoff: the cleanup daemon marks an urgent trash purge (skips the load cap)
 FLEET_TRASH_SWEEP_BUDGET           knob: internal pacing/limit, safe in-code default (fleet-cleanup-daemon.sh)
+FLEET_UI_QUIET                     handoff: 1 = fleet_ui_fail draws nothing — the caller re-says the failure in its own one line (dash-issue-new.sh, issue #1618)
 FLEET_WEBHOOK_DEBOUNCE             knob: internal pacing/limit, safe in-code default (fleet-webhook.sh)
 FLEET_WEBHOOK_EVENTS               knob: the GitHub events the webhook forwarder subscribes to (fleet-webhook.sh)
 FLEET_WEBHOOK_RESCAN               knob: internal pacing/limit, safe in-code default (fleet-webhook.sh)

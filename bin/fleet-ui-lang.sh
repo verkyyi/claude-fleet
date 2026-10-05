@@ -591,7 +591,7 @@ fleet_ui_hint_once() {
   [ -e "$_fuh_s" ] && return 1
   mkdir -p "$_fuh_d" 2>/dev/null
   for _fuh_o in "$_fuh_d/hint.$1".*; do [ -e "$_fuh_o" ] && rm -f "$_fuh_o"; done
-  { : > "$_fuh_s"; } 2>/dev/null || :
+  { true > "$_fuh_s"; } 2>/dev/null || true   # `true`, not `:` — a failed redirect on a SPECIAL builtin exits dash
   return 0
 }
 
