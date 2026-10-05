@@ -178,6 +178,14 @@ Do not install from memory: read the doc and work from it.
   exists it also `bash -n`s every script, which nets the SYNTAX half of the same
   family — a `case` inside `$(…)` must write its pattern `(pat)`, or 3.2's
   command-substitution scanner dies on the `;;`.
+- **A `local` never takes a zsh special parameter's name** (issue #1633). Claude
+  Code's Bash tool runs the login shell — zsh on the operator's Mac — so a skill's
+  `source fleet-lib.sh` runs every function IN ZSH, where `path` is tied to
+  `$PATH`: `local … path …` emptied PATH, `tmux` vanished, and `fleet_origin_key`
+  came back empty. Same for `argv`, `status`, `pipestatus`, `options`, `fpath`,
+  `commands`, `aliases`, …: write `pth` / `cmdline` / `stfile`.
+  `bin/zsh-local-selftest.sh` lints every `local`/`typeset`/`declare` in `bin/`
+  (`# zsh-ok: <why>` excepts a line); origin-selftest A runs the key under zsh.
 - **The selftest gate isolates at the ROOT, not per test** (issue #660).
   `bin/run-selftests.sh` re-runs the suite from a throwaway **shadow install
   root** (`bin/selftest-shadow-root.sh`): `bin/` mirrored file-by-file as
