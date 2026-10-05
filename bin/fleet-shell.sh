@@ -55,6 +55,8 @@
 #   open-url <url>         the fleet-open back channel: a url from the far end
 #                          opens on THIS computer (`open` / `xdg-open`)
 #   keeper <session>       keeps the refresh loop alive while the server lives
+#   warm <session> [--once] keeps ONE ssh master per machine you have sessions on
+#                          (issue #1631) — see `warm` below
 #   wait <session>         the first window when no machine is online: a note,
 #                          gone as soon as a row opens a real one
 #   env [MACHINE]          print the environment the server would get (debug, tests)
@@ -191,6 +193,7 @@ FLEET_NODE_ALIASES=$FLEET_NODE_ALIASES"
   for n in CCQUOTA_HUB_URL FLEET_HUB_URL FLEET_HUB_SESSIONS_CMD FLEET_HUB_NODES_CMD FLEET_HUB_LIMITS_CMD \
            FLEET_HUB_SESSIONS_USER FLEET_HUB_SESSIONS_STALE FLEET_HUB_SESSIONS_EVERY FLEET_HUB_SESSIONS_WATCHED_EVERY \
            FLEET_HUB_SESSIONS_LOOP_SECS FLEET_HUB_NODE_TIMEOUT FLEET_HUB_WRITE_CMD FLEET_REMOTE_BIN FLEET_REMOTE_SSH FLEET_REMOTE_VIA_HUB FLEET_CONF_DIR FLEET_CERT \
+           FLEET_SHELL_WARM FLEET_SHELL_WARM_MAX FLEET_SHELL_WARM_EVERY FLEET_SHELL_WARM_CONNECT \
            CCQUOTA_VIEWER_TOKEN FLEET_UI_LANG FLEET_SIDEBAR_WIDTH_MAX XDG_CONFIG_HOME XDG_CACHE_HOME \
            FLEET_SKIP_GLOBAL_CONF LANG LC_ALL; do
     eval "v=\${$n:-}"
@@ -304,6 +307,93 @@ keeper)
   exit 0
   ;;
 # ---------------------------------------------------------------------------------
+# The warm loop (issue #1631): the lines you use are open before you need them.
+# Every FLEET_SHELL_WARM_EVERY (5 s), off the sidebar's own cache (the #node lines
+# fleet-hub-sessions.sh writes — never a network ask of its own), each machine the
+# hub shows online with sessions of yours — at most FLEET_SHELL_WARM_MAX (4), the
+# busiest first, never this computer — gets ONE ssh master at
+# $TMPDIR/warm/<machine>.sock: `fleet connect <machine>` with ControlPersist=10m and
+# no session (SessionType=none, forked after auth), keepalive 2 s × 3 so a dead
+# line is gone in ≤ 6 s and simply comes back the next tick. A proxy window
+# (fleet-remote-view.sh run --shell) finds it and opens a SESSION on it — the
+# first switch to a machine is a new window, not a handshake. A machine that drops
+# out (offline, or no session of yours left) has its master closed on the next
+# tick — unless a window is riding it right now (`@remote_ctl`); the server gone,
+# every master is closed and the loop ends. A master that will not come up (an
+# OpenSSH older than 8.7, a host key never accepted: BatchMode) leaves the window to
+# connect the old way. FLEET_SHELL_WARM=0 turns it off. Its log: warm/warm.log.
+warm)
+  s="${2:-$SESS}"; once=''; [ "${3:-}" = --once ] && once=1
+  [ "${FLEET_SHELL_WARM:-1}" != 0 ] || exit 0
+  WD="${TMPDIR:-/tmp}/warm"
+  mkdir -p "$WD" 2>/dev/null || exit 0
+  if [ -z "$once" ]; then
+    p=''; { read -r p < "$WD/loop.pid"; } 2>/dev/null
+    case "$p" in ''|*[!0-9]*) ;; *) [ "$p" != $$ ] && kill -0 "$p" 2>/dev/null && exit 0 ;; esac
+    printf '%s\n' $$ > "$WD/loop.pid"
+  fi
+  SSHC="${FLEET_REMOTE_SSH_CMD:-ssh}"
+  CACHEF="${TMPDIR:-/tmp}/.claude-dash/global/remote_$s"
+  wlog() { printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$*" >> "$WD/warm.log" 2>/dev/null; }
+  whost() {   # its ssh host (FLEET_REMOTE_SSH, as fleet-remote-view.sh)
+    local h
+    h=$(printf '%s\n' ${FLEET_REMOTE_SSH:-} | awk -F= -v n="$1" '$1 == n { print $2; exit }')
+    printf '%s' "${h:-$1}"
+  }
+  walive() { [ -S "$WD/$1.sock" ] && $SSHC -S "$WD/$1.sock" -O check "$(whost "$1")" >/dev/null 2>&1; }
+  # wanted → one label per line: online (or 维护中), n > 0, busiest first, capped
+  wanted() {
+    [ -s "$CACHEF" ] || return 0
+    LC_ALL=C awk -F $'\037' '$1 == "#node" && $3 != "lost" && $4 + 0 > 0 && $2 ~ /^[A-Za-z0-9._-]+$/ { print $4 "\t" $2 }' "$CACHEF" \
+      | sort -t "$(printf '\t')" -k1,1nr -k2,2 | cut -f2 \
+      | while IFS= read -r m; do this_machine "$m" || printf '%s\n' "$m"; done \
+      | head -n "${FLEET_SHELL_WARM_MAX:-4}"
+  }
+  wstart() {   # <label> — in the background; the pid sits in <sock>.pending
+    local m="$1" sock="$WD/$1.sock" p=''
+    { read -r p < "$sock.pending"; } 2>/dev/null
+    case "$p" in ''|*[!0-9]*) ;; *) kill -0 "$p" 2>/dev/null && return 0 ;; esac
+    rm -f "$sock" "$sock.route"
+    wlog "start $m"
+    (
+      export FLEET_CONNECT_ROUTE_FILE="$sock.route"
+      set -- "$m" -o ControlMaster=yes -o "ControlPath=$sock" -o ControlPersist=10m \
+             -o SessionType=none -o ForkAfterAuthentication=yes -o StdinNull=yes -o BatchMode=yes \
+             -o ServerAliveInterval=2 -o ServerAliveCountMax=3 -o ConnectTimeout=8 \
+             -o "IPQoS=lowdelay throughput" -o Compression=no
+      if [ -n "${FLEET_SHELL_WARM_CONNECT:-}" ]; then exec $FLEET_SHELL_WARM_CONNECT "$@"
+      else exec python3 "$BIN/fleet-connect.py" "$@"; fi
+    ) </dev/null >>"$WD/warm.log" 2>&1 &
+    printf '%s\n' $! > "$sock.pending"
+  }
+  wstop() {    # <label>
+    local sock="$WD/$1.sock"
+    wlog "close $1"
+    $SSHC -S "$sock" -O exit "$(whost "$1")" >/dev/null 2>&1
+    rm -f "$sock" "$sock.route" "$sock.pending"
+  }
+  # riding <sock> — a window's proxy session is on it right now
+  riding() { tmux -L "$s" list-windows -a -F '#{@remote_ctl}' 2>/dev/null | grep -qxF "$1"; }
+  while :; do
+    if ! tmux -L "$s" has-session -t "=$s" 2>/dev/null && [ -z "$once" ]; then
+      for f in "$WD"/*.sock; do [ -e "$f" ] || continue; f=${f##*/}; wstop "${f%.sock}"; done
+      rm -f "$WD/loop.pid"
+      exit 0
+    fi
+    want=$(wanted)
+    for m in $want; do walive "$m" || wstart "$m"; done
+    for f in "$WD"/*.sock "$WD"/*.sock.pending; do
+      [ -e "$f" ] || continue
+      f=${f##*/}; m=${f%.pending}; m=${m%.sock}
+      case " $(printf '%s ' $want)" in *" $m "*) continue ;; esac
+      riding "$WD/$m.sock" && continue
+      wstop "$m"
+    done
+    [ -n "$once" ] && exit 0
+    sleep "${FLEET_SHELL_WARM_EVERY:-5}"
+  done
+  ;;
+# ---------------------------------------------------------------------------------
 wait)
   s="${2:-$SESS}"
   printf '\n  入口没有在线的机器，或者连不上入口。\n  左边是入口给的列表（缓存也算）：点一行就进那台机器；底下一栏说入口通不通。\n  prefix d 离开；再敲 fleet 回来。\n'
@@ -351,6 +441,7 @@ if T has-session -t "=$SESS" 2>/dev/null; then
     [ -n "$w" ] && T select-window -t "$w" 2>/dev/null
   fi
   ( nohup bash "$SHADOW/fleet-shell.sh" keeper "$SESS" </dev/null >/dev/null 2>&1 & )
+  ( nohup bash "$SHADOW/fleet-shell.sh" warm "$SESS" </dev/null >/dev/null 2>&1 & )
   client_where
   exec tmux -L "$SESS" attach-session -t "=$SESS"
 fi
@@ -369,8 +460,10 @@ fi
 w=$(tmux -L "$SESS" -f "$CACHE/tmux.conf" new-session -d -P -F '#{window_id}' -s "$SESS" -n "$title" -c "$HOME" -x 220 -y 60 "$cmd") \
   || fail_start 'tmux 开不了会话'
 T set-window-option -t "$w" @remote "$remote" \; set-window-option -t "$w" automatic-rename off 2>/dev/null
-# 4. the data: the refresh loop, kept alive while the server lives
+# 4. the data: the refresh loop, kept alive while the server lives; the warm
+#    connections (#1631) beside it
 ( nohup bash "$SHADOW/fleet-shell.sh" keeper "$SESS" </dev/null >/dev/null 2>&1 & )
+( nohup bash "$SHADOW/fleet-shell.sh" warm "$SESS" </dev/null >/dev/null 2>&1 & )
 client_where
 [ "${FLEET_SHELL_NO_ATTACH:-0}" = 1 ] && { printf '%s\n' "$SESS"; exit 0; }
 exec tmux -L "$SESS" attach-session -t "=$SESS"

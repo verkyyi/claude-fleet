@@ -16,6 +16,8 @@
 #
 # The key is ~/.ssh/fleet-peer (made once, ed25519, never in anyone's
 # authorized_keys); the certificate goes to $FLEET_CONF_DIR/peer/<machine>.<purpose>-cert.pub.
+# It is REUSED (issue #1631) until 30 s before it expires: one ask per (source,
+# target, purpose) per five minutes, however often the caller reconnects.
 #
 # stdout on success (exit 0): the ssh options, ONE PER LINE, for the caller to
 # read into an array (bash 3.2: `while IFS= read -r o; do a+=("$o"); done`):
@@ -33,7 +35,8 @@
 #
 # Seams: FLEET_HUB_CURL (default `curl`) is the transport; FLEET_PEER_KEY the
 # key path; FLEET_PEER_CERT_SECS the life asked for (default 300 — the hub caps
-# it at 300 whatever is asked).
+# it at 300 whatever is asked); FLEET_PEER_CERT_MARGIN how many seconds before
+# expiry a cached certificate stops being reused (default 30).
 set -uo pipefail
 
 BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -71,6 +74,24 @@ if [ ! -s "$KEY" ] || [ ! -s "$KEY.pub" ]; then
 fi
 DIR="$FLEET_CONF_DIR/peer"
 mkdir -p "$DIR" && chmod 700 "$DIR" 2>/dev/null
+CERT="$DIR/$MACHINE.$PURPOSE-cert.pub"
+
+# The cache (issue #1631): one certificate per (source, target, purpose) — this
+# login's peer key, $MACHINE, $PURPOSE — reused until FLEET_PEER_CERT_MARGIN (30)
+# seconds before it expires, so a reconnect loop or a move's several ssh steps
+# ask the hub once per five minutes, not once per connection. <cert>.meta holds
+# `<valid-before epoch> <login> <key's public half, as one word>`: a regenerated
+# key, a cert written by an older script (no .meta) or one past the margin is a
+# miss, asked afresh.
+keypub=$(awk '{ print $2; exit }' "$KEY.pub" 2>/dev/null)
+if [ -s "$CERT" ] && [ -n "$keypub" ] && read -r m_until m_login m_key 2>/dev/null < "$CERT.meta"; then
+  case "$m_until" in ''|*[!0-9]*) m_until=0 ;; esac
+  if [ "$m_key" = "$keypub" ] && [ -n "$m_login" ] \
+     && [ "$(date +%s)" -lt $(( m_until - ${FLEET_PEER_CERT_MARGIN:-30} )) ]; then
+    printf '%s\n' -i "$KEY" -o "CertificateFile=$CERT" -o IdentitiesOnly=yes -l "$m_login"
+    exit 0
+  fi
+fi
 
 body=$(python3 -c 'import json,sys; print(json.dumps({"target":sys.argv[1],"purpose":sys.argv[2],"public_key":open(sys.argv[3]).read().strip(),"ttl_sec":int(sys.argv[4])}))' \
   "$MACHINE" "$PURPOSE" "$KEY.pub" "${FLEET_PEER_CERT_SECS:-300}" 2>/dev/null) \
@@ -95,9 +116,8 @@ try: print(json.load(sys.stdin).get("error",""))
 except Exception: print("")' 2>/dev/null | head -c 300)" ;;
 esac
 
-CERT="$DIR/$MACHINE.$PURPOSE-cert.pub"
 login=$(printf '%s' "$json" | python3 -c '
-import json, os, sys
+import json, os, re, sys, time
 d = json.load(sys.stdin)
 cert, login = d.get("certificate", ""), d.get("login", "")
 if not cert.startswith("ssh-") or not login or any(c in login for c in " \t\n/"):
@@ -107,7 +127,32 @@ with open(tmp, "w") as f:
     f.write(cert)
 os.chmod(tmp, 0o600)
 os.rename(tmp, sys.argv[1])
+# when it stops working: valid_before, else now + ttl_sec, else now + what was asked
+until = 0
+try:
+    from datetime import datetime
+    vb = str(d.get("valid_before") or "")
+    if vb:
+        vb = re.sub(r"(\.\d{6})\d+", r"\1", vb[:-1] + "+00:00" if vb.endswith("Z") else vb)
+        until = int(datetime.fromisoformat(vb).timestamp())
+except Exception:
+    until = 0
+if until <= 0:
+    try:
+        until = int(time.time()) + int(d.get("ttl_sec") or sys.argv[3])
+    except (TypeError, ValueError):
+        until = 0
+meta = sys.argv[1] + ".meta"
+if until > 0 and sys.argv[2]:
+    with open(meta + ".tmp", "w") as f:
+        f.write("%d %s %s\n" % (until, login, sys.argv[2]))
+    os.rename(meta + ".tmp", meta)
+else:
+    try:
+        os.unlink(meta)
+    except OSError:
+        pass
 print(login)
-' "$CERT") || die 1 "the hub's answer carries no certificate"
+' "$CERT" "$keypub" "${FLEET_PEER_CERT_SECS:-300}") || die 1 "the hub's answer carries no certificate"
 
 printf '%s\n' -i "$KEY" -o "CertificateFile=$CERT" -o IdentitiesOnly=yes -l "$login"
