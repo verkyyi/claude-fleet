@@ -113,12 +113,12 @@ fc_run() {  # <cmd> — swap the session's lock-command for one lock, then put b
 }
 
 fc_wait() {  # <status file> <limit seconds>
-  local status="$1" limit="$2" waited=0
-  while ! grep -qx 'done' "$status" 2>/dev/null; do
+  local stfile="$1" limit="$2" waited=0
+  while ! grep -qx 'done' "$stfile" 2>/dev/null; do
     [ "$waited" -ge $(( limit * 5 )) ] && break
     sleep 0.2; waited=$(( waited + 1 ))
   done
-  grep -qx 'done' "$status" 2>/dev/null
+  grep -qx 'done' "$stfile" 2>/dev/null
 }
 
 # fc_tmux_ok — tmux ≥ 3.2 on PATH (the shell's key tables and `-e` need it); an
