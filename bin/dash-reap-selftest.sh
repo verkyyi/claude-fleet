@@ -753,12 +753,12 @@ MERGED_HEADS=issue-34 run_reap_tok 34 @9 --yes
 # dash's backgrounded tail (the merge epoch rides into --exec); a young agent
 # spawned onto an already-merged branch stays protected.
 : > "$TMLOG"; : > "$GHLOG"
-REAP_STATE=done PANE_PID=$AG MERGED_HEADS=issue-32 MERGED_ISO=$BEFORE_LIFE \
+REAP_STATE="done" PANE_PID=$AG MERGED_HEADS=issue-32 MERGED_ISO=$BEFORE_LIFE \
   run_reap_tok 32 @9 --yes 2>"$WORK/f3-err"
 [ "$TOK" = skip:live ] && grep -q 'young-agent' "$WORK/f3-err" \
   || fail "a young agent spawned after the merge must stay protected (got [$TOK])" "$(cat "$WORK/f3-err")"
 : > "$TMLOG"; : > "$GHLOG"
-REAP_STATE=done PANE_PID=$AG MERGED_HEADS=issue-31 MERGED_ISO=$IN_LIFE \
+REAP_STATE="done" PANE_PID=$AG MERGED_HEADS=issue-31 MERGED_ISO=$IN_LIFE \
   run_reap_tok 31 @9 --bg 2>"$WORK/f3-err"
 [ "$TOK" = dispatched:full ] || fail "young + merged in life must dispatch (#1248) (got [$TOK])" "$(cat "$WORK/f3-err")"
 grep -qE "RUNSHELL .*--exec full 'merged-pr' '[0-9]+'" "$TMLOG" || fail "the merge epoch must ride into the bg tail" "$(cat "$TMLOG")"
