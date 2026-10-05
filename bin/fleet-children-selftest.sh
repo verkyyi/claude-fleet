@@ -276,7 +276,7 @@ printf '%s' '{"child":"issue-1317","state":"MERGED","pr":"1333"}' \
   | python3 "$BIN/fleet-children.py" append --file "$JB" >/dev/null
 has "join: a bare child appended to a qualified book is written qualified" '"child": "r-a:issue-1317"' "$(sed -n 2p "$JB")"
 python3 "$BIN/fleet-children.py" dispatch --file "$JD/r-a:scratch-5.dispatch" --child r-a:issue-1317 \
-  --state done --node m4 --op op-1 --window @9 >/dev/null
+  --state 'done' --node m4 --op op-1 --window @9 >/dev/null
 FID1=11111111-2222-3333-4444-555555555555
 printf '%s\n' "{\"seq\": 3, \"ts\": \"2026-10-05T00:00:00Z\", \"child\": \"r-a:scratch-9\", \"state\": \"WAITING\", \"fid\": \"$FID1\"}" >> "$JB"
 JOUT=$(printf '%s\n' \
