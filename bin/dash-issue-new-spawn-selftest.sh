@@ -56,6 +56,7 @@ SPAWN_LOG="$WORK/spawns"; DISPLAY_LOG="$WORK/display"; GH_LOG="$WORK/ghcreate"; 
 # Symlink the REAL scripts under test; stub the siblings BIN resolves to.
 ln -s "$NEW" "$WORK/bin/dash-issue-new.sh"
 ln -s "$LIB" "$WORK/bin/fleet-lib.sh"
+ln -s "$BIN/fleet-ui-lang.sh" "$WORK/bin/fleet-ui-lang.sh"   # fleet_ui_fail (issue #1618)
 ln -s "$BIN/fleet-gh-lib.sh" "$WORK/bin/fleet-gh-lib.sh"   # fleet-issue-file.sh sources it (issue #1264)
 # The create now routes through the ONE issue channel (issue #332). Symlink the
 # REAL fleet-issue-file.sh so the create actually runs (title-only, so it makes
@@ -159,7 +160,7 @@ wait_spawn '^205( |$)'            || fail "A spawn not invoked for the new issue
 # not the bare issue-<N> slug (issue #216). The stub logs $* → the quoted title
 # flattens to space-separated words after --title.
 grep -q -- '--title Add a widget' "$SPAWN_LOG" || fail "A spawn should pass the descriptive --title (issue #216)" "$(cat "$SPAWN_LOG")"
-grep -qi 'filed' "$DISPLAY_LOG"   || fail "A success should toast that the issue was filed" "$(cat "$DISPLAY_LOG")"
+[ -s "$DISPLAY_LOG" ]             && fail "A a success draws NO line — the new row / window is the answer (issue #1618)" "$(cat "$DISPLAY_LOG")"
 # The fzf header verb (issue #429: the popup label is fzf's --header now) reads the spawn
 # variant — this is the interactive path telling the operator a worker will spawn too.
 grep -q 'New issue + worker' "$FZF_LOG" || fail "A --spawn fzf header should read 'New issue + worker'" "$(cat "$FZF_LOG")"
@@ -170,11 +171,13 @@ ok "A --spawn files the issue AND background-spawns the bound worker (descriptiv
 
 # ============================ B: cap refusal =================================
 # spawn exits non-zero (cap reached) in the background. The issue is STILL filed
-# (the 'filed' toast + optimistic row); dash-issue-session.sh owns the cap message.
+# (optimistic row), and the ONE failure line says so: '#N filed, but no session …'.
 FZF_QUERY='Add a widget' SPAWN_RC=1 run_new confirm --spawn
 grep -q create "$GH_LOG"           || fail "B the issue must still be FILED on a cap refusal" "$(cat "$WORK/err")"
 wait_spawn '^205( |$)'             || fail "B spawn should have been attempted" "$(cat "$SPAWN_LOG")"
-grep -qi 'filed' "$DISPLAY_LOG"    || fail "B a cap refusal must still confirm the issue was filed (not lost)" "$(cat "$DISPLAY_LOG")"
+_i=0; while [ "$_i" -lt 50 ] && ! grep -qi 'filed' "$DISPLAY_LOG"; do sleep 0.1; _i=$((_i + 1)); done
+grep -qi '205.*filed' "$DISPLAY_LOG" || fail "B a cap refusal must still confirm the issue was filed (not lost)" "$(cat "$DISPLAY_LOG")"
+[ "$(wc -l < "$DISPLAY_LOG" | tr -d ' ')" = 1 ] || fail "B the refusal is EXACTLY one line (issue #1618)" "$(cat "$DISPLAY_LOG")"
 ok "B cap refusal files-without-spawning (issue not lost)"
 
 # ============================ C: capture-only ================================
@@ -183,7 +186,7 @@ ok "B cap refusal files-without-spawning (issue not lost)"
 FZF_QUERY='Add a widget' run_new confirm
 grep -q create "$GH_LOG"              || fail "C gh issue create was not called" "$(cat "$WORK/err")"
 [ -s "$SPAWN_LOG" ] && fail "C capture-only must NOT spawn a worker" "$(cat "$SPAWN_LOG")"
-grep -qi 'filed new issue' "$DISPLAY_LOG" || fail "C capture-only should display 'filed new issue'" "$(cat "$DISPLAY_LOG")"
+[ -s "$DISPLAY_LOG" ]                 && fail "C capture-only success draws NO line — the backlog row is the answer (issue #1618)" "$(cat "$DISPLAY_LOG")"
 grep -q 'New issue + worker' "$FZF_LOG" && fail "C capture-only fzf header must NOT show the worker verb" "$(cat "$FZF_LOG")"
 grep -q 'New issue' "$FZF_LOG"        || fail "C capture-only fzf header should read 'New issue'" "$(cat "$FZF_LOG")"
 ok "C capture-only (no --spawn) files without spawning (⌃n behavior unchanged)"

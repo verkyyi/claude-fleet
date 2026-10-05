@@ -56,15 +56,28 @@ fleet_ui_t() {
     en:pin_unpinned_fmt)        printf 'unpinned: %s' "${1:-}" ;;
     zh:pin_pinned_fmt)          printf '已置顶：%s' "${1:-}" ;;
     en:pin_pinned_fmt)          printf 'pinned to the top: %s' "${1:-}" ;;
-    zh:sidebar_on)              printf 'fleet: 任务栏已开启 — worker 空间足够时显示' ;;
-    en:sidebar_on)              printf 'fleet: task sidebar on — shown when the worker has room' ;;
-    zh:sidebar_hidden)          printf 'fleet: 任务栏已隐藏' ;;
-    en:sidebar_hidden)          printf 'fleet: task sidebar hidden' ;;
     # ⌂ / F9 / prefix g landing on the list (issue #1533, fleet-sidebar.sh home)
-    zh:toast_sidebar_narrow)    printf 'fleet: 窗口太窄放不下任务栏 — 加宽终端，或 prefix Space 弹出列表' ;;
-    en:toast_sidebar_narrow)    printf 'fleet: window too narrow for the task list — widen it, or prefix Space for the popup' ;;
-    zh:sidebar_save_failed)     printf 'fleet: 无法保存任务栏偏好' ;;
-    en:sidebar_save_failed)     printf 'fleet: could not save sidebar preference' ;;
+    # the one failure line (issue #1618, fleet_ui_fail): reason, then the next step
+    zh:ui_fail_fmt)             printf '✗ %s' "${1:-}" ;;
+    en:ui_fail_fmt)             printf '✗ %s' "${1:-}" ;;
+    zh:ui_fail_next_fmt)        printf '✗ %s — %s' "${1:-}" "${2:-}" ;;
+    en:ui_fail_next_fmt)        printf '✗ %s — %s' "${1:-}" "${2:-}" ;;
+    zh:ui_already_open_fmt)     printf '#%s 已经开着' "${1:-}" ;;
+    en:ui_already_open_fmt)     printf '#%s already spawned' "${1:-}" ;;
+    zh:ui_already_open_next)    printf '在列表里选它那一行' ;;
+    en:ui_already_open_next)    printf 'pick its row in the list' ;;
+    zh:ui_filed_no_worker_fmt)  printf '#%s 已建，但没开会话：%s' "${1:-}" "${2:-}" ;;
+    en:ui_filed_no_worker_fmt)  printf '#%s filed, but no session started: %s' "${1:-}" "${2:-}" ;;
+    zh:ui_filed_no_worker_next) printf '稍后在 backlog 里开' ;;
+    en:ui_filed_no_worker_next) printf 'start it from the backlog' ;;
+    zh:sidebar_narrow_why)      printf '窗口太窄放不下任务栏' ;;
+    en:sidebar_narrow_why)      printf 'too narrow for the list' ;;
+    zh:sidebar_narrow_next)     printf '加宽终端或 prefix Space' ;;
+    en:sidebar_narrow_next)     printf 'widen it, or prefix Space' ;;
+    zh:sidebar_save_next)       printf '配置目录只读？' ;;
+    en:sidebar_save_next)       printf 'conf dir read-only?' ;;
+    zh:sidebar_save_failed)     printf '任务栏设置没保存' ;;
+    en:sidebar_save_failed)     printf 'sidebar setting not saved' ;;
     zh:wait_slot)               printf 'z · 等待空位' ;;
     en:wait_slot)               printf 'z · waiting for a slot' ;;
     # why a ↻ row is waiting (issue #1370, @claude_wait) — the sidebar's selected-row line
@@ -547,6 +560,47 @@ resume	c	resume — a row on another machine only: reopen a just-stopped one thr
   esac
 }
 
+# fleet_ui_fail REASON [NEXT] — THE one way an operation the operator asked for
+# says it did NOT happen (issue #1618, EPIC #1615 C3): one red line, the reason
+# and the next step, held FLEET_REFUSE_MS (default 4000) so it is read, not
+# glimpsed. A SUCCESS says nothing — the window appearing, going, the sidebar row
+# changing is the feedback; never add a "done ✓" toast beside this. The caller
+# keeps its own stderr line (the record a headless caller reads).
+#   FLEET_UI_SOCK   tmux -L label to draw on (a headless caller naming its fleet)
+#   FLEET_UI_CLIENT the one client to draw on (a bind's #{client_name})
+#   FLEET_UI_QUIET  1 = draw nothing (the caller says it in its own line)
+fleet_ui_fail() {
+  # FLEET_UI_QUIET=1: a caller that re-says the failure in its own one line
+  [ "${FLEET_UI_QUIET:-0}" = 1 ] && return 0
+  if [ -n "${2:-}" ]; then _fuf_m=$(fleet_ui_t ui_fail_next_fmt "$1" "$2")
+  else _fuf_m=$(fleet_ui_t ui_fail_fmt "${1:-}"); fi
+  _fuf_d=${FLEET_REFUSE_MS:-4000}; case $_fuf_d in ''|*[!0-9]*) _fuf_d=4000 ;; esac
+  # the colour is the palette's (conf/fleet-palette.conf), never one of our own
+  _fuf_c=${PAL_RED:-}
+  if [ -z "$_fuf_c" ] && [ -n "${BIN:-}" ] && [ -f "$BIN/../conf/fleet-palette.conf" ]; then
+    _fuf_c=$(sed -n "s/^%hidden PAL_RED='\(#[0-9A-Fa-f]*\)'.*/\1/p" "$BIN/../conf/fleet-palette.conf" 2>/dev/null)
+  fi
+  tmux ${FLEET_UI_SOCK:+-L "$FLEET_UI_SOCK"} display-message ${FLEET_UI_CLIENT:+-c "$FLEET_UI_CLIENT"} \
+    -d "$_fuf_d" "#[${_fuf_c:+fg=$_fuf_c,}bold] $_fuf_m " 2>/dev/null || :
+}
+
+# fleet_ui_hint_once KEY — rc 0 the first time KEY's how-to line is asked for
+# today on this login (and stamps it), rc 1 after: a sidebar's key help flashes
+# once a day, not on every visit (issue #1618). The stamp is
+# $FLEET_C/global/hint.<KEY>.<YYYYMMDD> — $FLEET_C is per login ($TMPDIR); an
+# older day's stamp for the KEY is swept as today's is written. A stamp that
+# cannot be written fails OPEN (the hint shows), never silent forever.
+fleet_ui_hint_once() {
+  case "${1:-}" in ''|*[!A-Za-z0-9_]*) return 0 ;; esac
+  _fuh_d="${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}/global"
+  _fuh_s="$_fuh_d/hint.$1.$(date +%Y%m%d)"
+  [ -e "$_fuh_s" ] && return 1
+  mkdir -p "$_fuh_d" 2>/dev/null
+  for _fuh_o in "$_fuh_d/hint.$1".*; do [ -e "$_fuh_o" ] && rm -f "$_fuh_o"; done
+  { true > "$_fuh_s"; } 2>/dev/null || true   # `true`, not `:` — a failed redirect on a SPECIAL builtin exits dash
+  return 0
+}
+
 case "$0" in */fleet-ui-lang.sh|fleet-ui-lang.sh)
   case "${1:-lang}" in
     lang) fleet_ui_lang ;;
@@ -554,6 +608,9 @@ case "$0" in */fleet-ui-lang.sh|fleet-ui-lang.sh)
     # toast CLIENT KEY [args…] — a tmux bind's message, in the login's language
     toast) _c=${2:-}; shift 2 2>/dev/null || shift $#
            tmux display-message ${_c:+-c "$_c"} "$(fleet_ui_t "$@")" 2>/dev/null || : ;;
+    # hint CLIENT KEY — KEY's toast, but only the first time today (issue #1618)
+    hint) _c=${2:-}; shift 2 2>/dev/null || shift $#
+          fleet_ui_hint_once "${1:-}" && tmux display-message ${_c:+-c "$_c"} "$(fleet_ui_t "$@")" 2>/dev/null || : ;;
     # dump PREFIX… — every key starting with a PREFIX, KEY NUL TEXT NUL; a printf
     # argument stays a \001 slot the caller fills
     dump) fleet_ui_pin; _s=$(printf '\001')
@@ -563,6 +620,6 @@ case "$0" in */fleet-ui-lang.sh|fleet-ui-lang.sh)
               case "$_k" in "$_p"*) printf '%s\0%s\0' "$_k" "$(fleet_ui_t "$_k" "$_s" "$_s" "$_s")"; break ;; esac
             done
           done ;;
-    *) printf 'usage: fleet-ui-lang.sh [lang|t KEY|toast CLIENT KEY|dump PREFIX…]\n' >&2; exit 2 ;;
+    *) printf 'usage: fleet-ui-lang.sh [lang|t KEY|toast CLIENT KEY|hint CLIENT KEY|dump PREFIX…]\n' >&2; exit 2 ;;
   esac ;;
 esac

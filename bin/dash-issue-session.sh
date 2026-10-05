@@ -125,6 +125,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 SELF="$BIN/$(basename "$0")"                   # absolute path for the --async re-invoke
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"
+. "$BIN/fleet-ui-lang.sh"   # fleet_ui_fail — the one failure line (issue #1618)
 # Internal re-entry (issue #303): the --async dispatch below backgrounds a
 # TAIL-ONLY re-invocation of THIS script through `tmux run-shell -b`, carrying the
 # resolved session name in FLEET_SPAWN_TAIL. A non-empty FLEET_SPAWN_TAIL therefore
@@ -133,7 +134,7 @@ SELF="$BIN/$(basename "$0")"                   # absolute path for the --async r
 # detached helper never leans on a "current client" that a run-shell context lacks.
 TAIL_ONLY=0; [ -n "${FLEET_SPAWN_TAIL:-}" ] && TAIL_ONLY=1
 SESS="${TARGET_SESS:-${FLEET_SPAWN_TAIL:-$(fleet_current_session)}}"
-[ -z "$SESS" ] && { printf 'dash-issue-session: no target tmux session\n' >&2; tmux display-message "issues: no target tmux session" 2>/dev/null; exit 1; }
+[ -z "$SESS" ] && { printf 'dash-issue-session: no target tmux session\n' >&2; fleet_ui_fail "issues: no target tmux session"; exit 1; }
 fleet_load_conf "$SESS"                       # multi-fleet: target THIS fleet's checkout
 # Each fleet is its OWN tmux server on a named socket (== session name, issue
 # #159). This spawn path runs BOTH interactively (in the target fleet, $TMUX set)
@@ -180,9 +181,11 @@ shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 RC_INFRA=1; RC_CAP=2; RC_CLAIMED=3
 REFUSE_MS="${FLEET_REFUSE_MS:-4000}"
 case "$REFUSE_MS" in ''|*[!0-9]*) REFUSE_MS=4000;; esac
+# The toast is fleet_ui_fail's (issue #1618): the one failure line, the palette's
+# red, held FLEET_REFUSE_MS. A success draws nothing — the window is the answer.
 refuse() {  # <reason> — stderr line + sticky red toast; the CALLER exits with the class code
   printf 'dash-issue-session: %s\n' "$1" >&2
-  TM display-message -d "$REFUSE_MS" "#[fg=red,bold] $1 " 2>/dev/null
+  FLEET_UI_SOCK=$SOCK FLEET_REFUSE_MS=$REFUSE_MS fleet_ui_fail "$1"
 }
 
 # Which repo (issue #789). Every session is born with its repo written on it and
@@ -228,27 +231,20 @@ if [ "$MULTI" = 1 ]; then
   unset _w _wr
 fi
 if [ -n "$existing" ]; then
-  msg="#$num already spawned"
   # Non-invasive by default: don't yank the caller to the existing window; just
-  # note it. Opt into the jump with FLEET_SPAWN_FOCUS=1 (interactive spawns only).
+  # say why nothing new opened. Opt into the jump with FLEET_SPAWN_FOCUS=1
+  # (interactive spawns only) — the jump IS the answer then, so no line (#1618).
   if [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && [ -z "$TARGET_SESS" ]; then
     TM select-window -t "$existing"
-    TM display-message "$msg" 2>/dev/null
   elif [ -z "$TARGET_SESS" ]; then
-    TM display-message "$msg" 2>/dev/null
+    FLEET_UI_SOCK=$SOCK fleet_ui_fail "$(fleet_ui_t ui_already_open_fmt "$num")" "$(fleet_ui_t ui_already_open_next)"
   fi
   exit 0
 fi
 
-# Immediate gate ack (issue #331): on a slow network the SYNCHRONOUS cap/dedup gh
-# reads below run BEFORE the async "spawning #N…" ack — a 1–2s dead pause that
-# makes Enter feel like it did nothing (worse on iPad/Termius). Emit a
-# "checking #N…" toast at the TOP of the gate — interactive spawns only (a
-# tail-only re-entry already passed the gate; a headless TARGET_SESS caller has no
-# watcher) — so Enter always registers instantly, before any gh call.
-if [ "$TAIL_ONLY" != 1 ] && [ -z "$TARGET_SESS" ]; then
-  TM display-message "checking #${num}…" 2>/dev/null
-fi
+# (The "checking #N…" / "spawning #N…" acks of issue #331 retired with #1618: a
+# spawn that works says nothing — its window appearing is the answer — and one
+# that does not says why, once, through refuse.)
 
 # Session cap (issues #28, #70): refuse to spawn once the GLOBAL cap
 # (FLEET_GLOBAL_MAX_SESSIONS, default 8, across ALL fleets) OR this fleet's
@@ -388,8 +384,7 @@ if [ "$PLACING" = 1 ]; then
           printf 'dash-issue-session: #%s → %s (hub operation %s, %s) — %s\n' "$num" "$_m" "$_op" "$_st" "$_why" >&2
           _place_note accepted "$_m" "$_op"
         fi
-        [ -z "$TARGET_SESS" ] && TM display-message "#$num → $_m (${_why%%;*})" 2>/dev/null
-        exit 0 ;;
+        exit 0 ;;   # placed: its row on the list is the answer (issue #1618)
       5:DECLINED\ *)
         # That machine's spawn refused it. The hub handed the lease back to us,
         # so the EXIT trap (LEASE_HELD=1) releases it: the next send needs no --force.
@@ -535,7 +530,6 @@ wname=$(fleet_win_name "$title"); [ -z "$wname" ] && wname="$slug"
 # content with no cache/gh round-trip. Interactive-only: a headless TARGET_SESS
 # caller needs the window id back, so it keeps today's synchronous behavior.
 if [ "$ASYNC_FLAG" = 1 ] && [ "$TAIL_ONLY" != 1 ] && [ -z "$TARGET_SESS" ]; then
-  TM display-message "spawning #${num}…" 2>/dev/null
   # run-shell -b runs in the tmux SERVER's environment, not this pane's, so any
   # pane-scoped knob the tail needs must be BAKED into the command. FLEET_SPAWN_TAIL
   # selects tail-only mode + names the fleet; FLEET_SPAWN_FOCUS is carried through
@@ -669,11 +663,10 @@ elif [ -n "$ORIGIN" ]; then fleet_stamp_origin_wid "$SESS" "$win" "$ORIGIN" "$SO
 # was retired with the claiming marker in issue #283 — the assignee is now the
 # claim, and workers share one gh account so a per-attempt tie token no longer
 # exists. Claim-at-spawn still shrinks the race window; it was never a mutex.)
-# Non-invasive by default: leave the active window put and just confirm the spawn
-# on the status line. Only jump to the new worker when the user opted in
-# (FLEET_SPAWN_FOCUS=1) on an interactive spawn; a headless spawn stays silent.
+# Non-invasive by default: leave the active window put — the new window and its
+# list row are the confirmation, so a success draws no line (issue #1618). Only
+# jump to the new worker when the user opted in (FLEET_SPAWN_FOCUS=1) on an
+# interactive spawn.
 if [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && [ -z "$TARGET_SESS" ]; then
   TM select-window -t "$win"
-elif [ -z "$TARGET_SESS" ]; then
-  TM display-message "spawned #$num → $wname" 2>/dev/null
 fi
