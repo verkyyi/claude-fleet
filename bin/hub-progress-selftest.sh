@@ -135,7 +135,7 @@ step() { # <seq> <rid> <kind> <state> <event-json> <want kid()> <what>
 }
 step 21 "op:$O1:running" dispatch running '{"op":"'"$O1"'","node":"m4","issue":"42","repo":"acme/app","state":"running"}' "1|▸|starting|1" "running ⇒ starting"
 ok; grep -q "ops=$O1" "$WORK/curl.log" || fail "E: an open placement rides along as ops=" "$(cat "$WORK/curl.log")"
-step 22 "op:$O1:done" dispatch done '{"op":"'"$O1"'","node":"m4","issue":"42","repo":"acme/app","state":"done","window":"@9","exit":0}' "1|▸|running|1" "done ⇒ running there"
+step 22 "op:$O1:done" dispatch 'done' '{"op":"'"$O1"'","node":"m4","issue":"42","repo":"acme/app","state":"done","window":"@9","exit":0}' "1|▸|running|1" "done ⇒ running there"
 ok; grep -q "ops=$O1" "$WORK/curl.log" || fail "E: still open when this pull asked" "$(cat "$WORK/curl.log")"
 step 23 "$F/issue-42#2.1" report WAITING '{"child":"issue-42","state":"WAITING","pr":"60","verdict":"pr-open","node":"m4"}' "1|⏳|pr|1" "a WAITING report with its PR ⇒ pr"
 ok; ! grep -q 'ops=' "$WORK/curl.log" || fail "E: a final placement is not asked about again" "$(cat "$WORK/curl.log")"
