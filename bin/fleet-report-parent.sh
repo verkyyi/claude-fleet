@@ -127,7 +127,7 @@ TM() { if [ -n "$SOCK" ]; then tmux -L "$SOCK" "$@"; else tmux "$@"; fi; }
 target="${WIN:-${TMUX_PANE:-}}"
 [ -n "$target" ] || quiet 'no child window (no --win and no $TMUX_PANE)'
 row=$(TM display-message -p -t "$target" \
-        '#{window_id}|#{@origin}|#{@issue}|#{@reported}|#{@worktree}|#{@claude_state}|#{@origin_wid}|#{@origin_gen}|#{@origin_retired}|#{@origin_fid}|#{window_name}' 2>/dev/null)
+        '#{window_id}|#{@origin}|#{@issue}|#{@reported}|#{@worktree}|#{@claude_state}|#{@origin_wid}|#{@origin_gen}|#{@origin_retired}|#{@origin_fid}|#{@fleet_id}|#{window_name}' 2>/dev/null)
 [ -n "$row" ] || quiet "child window '$target' is gone"
 selfwin=${row%%|*};  row=${row#*|}
 worigin=${row%%|*};  row=${row#*|}
@@ -138,7 +138,8 @@ wstate=${row%%|*};   row=${row#*|}
 owid=${row%%|*};     row=${row#*|}
 wogen=${row%%|*};    row=${row#*|}
 wretired=${row%%|*}; row=${row#*|}
-ofid=${row%%|*};     wname=${row#*|}
+ofid=${row%%|*};     row=${row#*|}
+selffid=${row%%|*};  wname=${row#*|}
 
 case "$ORIGIN" in
   wid:*) owid=${ORIGIN#wid:}; worigin=${owid#*/}; ofid=''
@@ -190,6 +191,23 @@ else   # a half-synced install without the lib: the historic switch
   case "${FLEET_CHILD_REPORT:-1}" in 0|no|off|false) MODE=0 ;; *) MODE=immediate ;; esac
 fi
 [ "$MODE" = 0 ] && quiet 'FLEET_CHILD_REPORT=0 for this fleet'
+
+# --- the hub copy of what this worker leaves (issue #1609) -----------------------
+# A ship report is the moment the evidence is complete: hand it (and nothing else
+# yet — the history row is the reap's) to the hub, so the machine that spawned this
+# worker sees it even when this machine is another one. Not a hub node → exit 3,
+# nothing sent; it never holds up or fails the report.
+case "$STATE" in
+  merged|blocked)
+    case "$wissue" in
+      ''|*[!0-9]*) ;;
+      *) if [ "$DRY" != 1 ] && [ -n "$sess" ] && [ -f "$BIN/fleet-worker-records.sh" ]; then
+           _wr_repo=$(fleet_window_repo "$sess" "$selfwin" 2>/dev/null)
+           [ -n "$_wr_repo" ] && bash "$BIN/fleet-worker-records.sh" push --session "$sess" \
+             --repo "$_wr_repo" --key "$wissue" --win "$selfwin" --evidence-only >/dev/null 2>&1 || :
+         fi ;;
+    esac ;;
+esac
 
 # --- rail 1: is there a parent at all? ----------------------------------------
 # Empty ≡ hub (the operator spawned it — they have the dash). The literals
@@ -260,6 +278,18 @@ case "$label" in
 esac
 branch_arg="$BRANCH"
 [ -n "$BRANCH" ] || BRANCH="${selfkey##*:}"
+# The ledger spells the child the way its window and its placement do (issue
+# #1351): `<slug>:issue-N` in a 2+ repo fleet, so fleet-children.sh joins the three
+# into ONE row. The child's own repo, off its window — unknown ⇒ the bare key, which
+# the reader then reads in the parent's repo. A one-repo fleet: the key as it was.
+ledkey="$selfkey"
+case "$ledkey" in
+  issue-*|scratch-*)
+    if [ -n "$sess" ] && [ -n "${selfwin:-}" ]; then
+      _lp=$(_fleet_key_prefix "$sess" "$selfwin" 2>/dev/null) || _lp=''
+      ledkey="$_lp$ledkey"
+    fi ;;
+esac
 
 # --- generations (issue #1538) ---------------------------------------------------
 # A scratch child's OWN generation rides its rows (`child_gen`, under the key a
@@ -279,12 +309,15 @@ esac
 # row_json <child> <state> <pr> <verdict> <summary> <title> <tier> [<relayed_from>]
 # → one ledger row. `gen` is the parent generation the child was spawned under
 # (@origin_gen); a relayed row is filed in someone else's book and carries none.
+# `fid` is the child's own @fleet_id (issue #1351) — its identity, never its name.
 row_json() {
-  RJ_GEN="$wogen" RJ_CGEN="$selfgen" RJ_CKEY="$selfgkey" RJ_LINES="$DROWS" RJ_SAMPLE="$DSAMPLE" python3 -c 'import json, os, sys
+  RJ_FID="$selffid" RJ_GEN="$wogen" RJ_CGEN="$selfgen" RJ_CKEY="$selfgkey" RJ_LINES="$DROWS" RJ_SAMPLE="$DSAMPLE" python3 -c 'import json, os, sys
 d = dict(zip(("child","state","pr","verdict","summary","title","tier","relayed_from"), sys.argv[1:]))
 for f in ("lines", "sample"):   # a DEGENERATE row (issue #1557); every other row is unchanged
     if os.environ.get("RJ_" + f.upper()):
         d[f] = os.environ["RJ_" + f.upper()]
+if os.environ.get("RJ_FID"):
+    d["fid"] = os.environ["RJ_FID"]
 if os.environ.get("RJ_GEN") and "relayed_from" not in d:
     d["gen"] = os.environ["RJ_GEN"]
 if os.environ.get("RJ_CGEN"):
@@ -430,7 +463,7 @@ if [ -z "$PFOUND" ] && [ -n "$owid" ] && ! fleet_wid_home "$owid" "$sess" >/dev/
   esac
   if [ "$DRY" != 1 ] && command -v children_append >/dev/null 2>&1; then
     children_append "$worigin" "$(row_json \
-      "$selfkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER" 2>/dev/null)" "$sess" || :
+      "$ledkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER" 2>/dev/null)" "$sess" || :
   fi
   _how='ledgered, not sent'; [ "$DRY" = 1 ] && _how='not sent (dry run)'
   printf 'fleet-report-parent: parent %s %s; %s\n' "$owid" "$_why" "$_how" >&2
@@ -448,7 +481,7 @@ if [ -n "$RETIRED_GEN" ] || { [ -z "$PFOUND" ] && [ -n "$sess" ] && fleet_key_ge
   RETIRED_GEN=${RETIRED_GEN:-${wogen:-0}}
   if [ "$DRY" != 1 ] && command -v children_append_retired >/dev/null 2>&1; then
     children_append_retired "$worigin" "$RETIRED_GEN" "$(row_json \
-      "$selfkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER")" "$sess" || :
+      "$ledkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER")" "$sess" || :
   fi
   printf 'fleet-report-parent: parent %s is a later generation than the one that spawned this session (%s ≠ %s) — filed in its retired book, not sent\n' \
     "$worigin" "$RETIRED_GEN" "$(fleet_key_gen "$sess" "$worigin")" >&2
@@ -464,7 +497,7 @@ fi
 # (child, state, pr) against that child's latest event; never fails, prints nothing.
 if [ "$DRY" != 1 ] && command -v children_append >/dev/null 2>&1; then
   children_append "$worigin" "$(row_json \
-    "$selfkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER" 2>/dev/null)" "$sess" || :
+    "$ledkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER" 2>/dev/null)" "$sess" || :
 fi
 
 # silent = ledger only, in every mode: a parent is never woken for a turn boundary.
@@ -487,7 +520,7 @@ if [ -z "$pwin" ] && _anc=$(fleet_live_ancestor "$worigin" "$sess" "$SOCK"); the
   SENDKEY=${_anc%%$'\t'*}; pwin=${_anc#*$'\t'}; RELAY_FROM="$worigin"
   if [ "$DRY" != 1 ] && command -v children_append >/dev/null 2>&1; then
     children_append "$SENDKEY" "$(row_json \
-      "$selfkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER" "$RELAY_FROM" 2>/dev/null)" "$sess" || :
+      "$ledkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER" "$RELAY_FROM" 2>/dev/null)" "$sess" || :
   fi
 fi
 

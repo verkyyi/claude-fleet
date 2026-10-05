@@ -83,9 +83,43 @@ def clean(s, lines=3, width=200):
     return '\n'.join(l[:width] for l in s.splitlines()[:lines])
 
 
+def book_prefix(path):
+    """`<slug>:` of the book's own key (`<slug>:scratch-5.ndjson`, `.dispatch`,
+    `.ndjson.<gen>`), '' for a bare key — a one-repo fleet's every book."""
+    bn = os.path.basename(path)
+    return bn.split(':', 1)[0] + ':' if ':' in bn else ''
+
+
+FID_OK = set('0123456789abcdef-')
+
+
+def is_fid(f):
+    """fleet_is_fid's shape (issue #1646): a lower-case 8-4-4-4-12 UUID."""
+    f = str(f or '')
+    return len(f) == 36 and set(f) <= FID_OK and [len(x) for x in f.split('-')] == [8, 4, 4, 4, 12]
+
+
+def canon_child(child, pre, ev=None):
+    """The ONE spelling of a child key (issue #1351): a ledger row written before
+    the report carried its repo says bare `issue-N` where the live window and the
+    placement say `<slug>:issue-N`, and the two were counted as two children. A
+    bare key in a repo-qualified book takes its own `child_key` when that names the
+    same key, else the book's prefix — the parent's repo, the repo the spawn ran
+    in. A qualified key, a non-key, and every key in a bare book (a one-repo
+    fleet) are returned as they are."""
+    if not pre or ':' in child or not is_key(child):
+        return child
+    ck = str((ev or {}).get('child_key') or '')
+    if ck.endswith(':' + child):
+        return ck
+    return pre + child
+
+
 def read_rows(path):
-    """Every JSON object in the ledger, reports and wake rows alike."""
+    """Every JSON object in the ledger, reports and wake rows alike — each `child`
+    in its canonical spelling (canon_child); the file itself is never rewritten."""
     out = []
+    pre = book_prefix(path)
     try:
         with open(path, encoding='utf-8') as fh:
             for line in fh:
@@ -97,6 +131,7 @@ def read_rows(path):
                 except ValueError:
                     continue            # a torn line never poisons the rest
                 if isinstance(ev, dict) and ev.get('child'):
+                    ev['child'] = canon_child(str(ev['child']), pre, ev)
                     out.append(ev)
     except OSError:
         pass
@@ -126,6 +161,7 @@ def cmd_append(a):
         return 2
     raw, ev = ev, {k: ev.get(k, '') for k in FIELDS}
     ev['child'] = ''.join(ch for ch in str(ev['child']) if ch in KEY_OK)[:128]
+    pre = book_prefix(a.file)
     ev['state'] = str(ev['state']).upper()
     ev['pr'] = ''.join(ch for ch in str(ev['pr']) if ch.isdigit())
     ev['verdict'] = clean(ev['verdict'], 1, 64)
@@ -152,11 +188,17 @@ def cmd_append(a):
     # lines / sample (issue #1557): a DEGENERATE row — how many screen rows were
     # one repeated unit, and the unit (`<br>` kept legible as `‹br›` — the scrub
     # drops `<>`). Kept only when set, like the fields above.
+    # fid (issue #1351): the child's @fleet_id (#1646) — its identity, so a row is
+    # joined to its window even after the key it reported under has moved. Kept
+    # only when set.
+    fid = str(raw.get('fid') or '').lower()
+    fid = fid if is_fid(fid) else ''
     deg = {'lines': ''.join(ch for ch in str(raw.get('lines') or '') if ch.isdigit())[:8],
            'sample': clean(str(raw.get('sample') or '').replace('<', '‹').replace('>', '›'), 1, 64)}
     if not ev['child'] or ev['state'] not in STATES:
         print('fleet-children: need child + state (%s)' % '|'.join(STATES), file=sys.stderr)
         return 2
+    ev['child'] = canon_child(ev['child'], pre, gens)
     os.makedirs(os.path.dirname(a.file) or '.', exist_ok=True)
     # a+ and an exclusive flock: two children reporting in the same second get
     # distinct seqs, and the read-then-append below is one critical section.
@@ -175,7 +217,8 @@ def cmd_append(a):
                 seq = max(seq, int(e.get('seq') or 0))
             except (TypeError, ValueError):
                 pass
-            if e.get('child') == ev['child'] and not is_wake(e):
+            if e.get('child') and canon_child(str(e['child']), pre, e) == ev['child'] \
+                    and not is_wake(e):
                 last = e
             if rid and e.get('rid') == rid:
                 print('dup seq=%s' % e.get('seq'))
@@ -195,6 +238,8 @@ def cmd_append(a):
             ev['node'] = node
         if rid:
             ev['rid'] = rid
+        if fid:
+            ev['fid'] = fid
         ev.update((f, v) for f, v in gens.items() if v)
         ev.update((f, v) for f, v in deg.items() if v)
         fh.seek(0, os.SEEK_END)
@@ -228,19 +273,26 @@ def is_key(k):
 
 
 def read_windows(stream):
-    """Rows: window_id|state|needs|key|origin|window_name (the shell resolved the key)."""
+    """Rows: window_id|state|needs|key|origin|fleet_id|window_name (the shell
+    resolved the key). The fleet_id column (issue #1351) is optional: a row of six
+    is the older shape, its last field the name."""
     wins = {}
     for line in stream:
         line = line.rstrip('\n')
         if not line:
             continue
-        parts = line.split('|', 5)
+        parts = line.split('|', 6)
         if len(parts) < 6:
             continue
+        fid = ''
+        if len(parts) == 7 and (parts[5] == '' or is_fid(parts[5])):
+            fid = parts.pop(5)
+        else:
+            parts = parts[:5] + ['|'.join(parts[5:])]
         wid, state, needs, key, origin, name = parts
         if not key or key in wins:
             continue                    # a display grouping; ADDRESSING is fleet_win_for_key's (#1537)
-        wins[key] = dict(wid=wid, state=state, needs=needs, origin=origin, name=name)
+        wins[key] = dict(wid=wid, state=state, needs=needs, origin=origin, name=name, fid=fid)
         # A child on another machine (issue #1421) rides as `<node>|remote|…`:
         # its window id is that machine's name, and it is never a local window.
         if state in ('remote', 'lost'):
@@ -491,6 +543,7 @@ def cmd_wake(a):
     if not isinstance(w, dict):
         return 2
     child = ''.join(ch for ch in str(w.get('child') or '') if ch in KEY_OK)[:128]
+    child = canon_child(child, book_prefix(a.file))
     try:
         level = int(w.get('level'))
     except (TypeError, ValueError):
@@ -509,7 +562,8 @@ def cmd_wake_state(a):
     climbed — so a restarted wait goes on from there. 0 when there is no wake
     row, the last one is a reset, or the child REPORTED after it (progress the
     previous waiter never saw)."""
-    rows = [e for e in read_rows(a.file) if e.get('child') == a.child]
+    child = canon_child(a.child, book_prefix(a.file))
+    rows = [e for e in read_rows(a.file) if e.get('child') == child]
     wakes = [e for e in rows if is_wake(e)]
     if not wakes:
         print('0 0')
@@ -527,7 +581,7 @@ def cmd_wake_state(a):
 
 def cmd_dispatch(a):
     """Append one cross-machine placement row (issue #1586)."""
-    child = ''.join(ch for ch in a.child if ch in KEY_OK)[:128]
+    child = canon_child(''.join(ch for ch in a.child if ch in KEY_OK)[:128], book_prefix(a.file))
     if not child or a.state not in ('done', 'accepted', 'unknown', 'refused'):
         print('fleet-children: dispatch needs child + state done|accepted|unknown|refused', file=sys.stderr)
         return 2
@@ -557,6 +611,10 @@ def cmd_show(a):
     # ledger side: the parent's own file, plus each descendant's (≤4 levels), so a
     # grandchild whose window is gone is still counted under the root — the same
     # "ultimate parent" attribution the live side gets from descends().
+    # Identity first (issue #1351): a row carrying a live window's @fleet_id is
+    # that window's, whatever key it was filed under — a scratch since bound to an
+    # issue answers to its new key, and its earlier reports join it there.
+    byfid = {w['fid']: k for k, w in wins.items() if w.get('fid')}
     events, seen, frontier = {}, set(), [parent]
     for _ in range(HOPS):
         nxt = []
@@ -565,6 +623,7 @@ def cmd_show(a):
                 continue
             seen.add(p)
             for ev in read_events(os.path.join(a.dir, p + '.ndjson')):
+                ev['child'] = byfid.get(ev.get('fid') or '', ev['child'])
                 events.setdefault(ev['child'], []).append(ev)
                 nxt.append(ev['child'])
         frontier = nxt
@@ -572,6 +631,12 @@ def cmd_show(a):
         if k != parent and descends(w['origin'], parent, wins):
             events.setdefault(k, [])
     events.pop(parent, None)
+
+    # A placement on another machine (issue #1586) is the same child's third
+    # source: it rides that child's row (`dispatch`), and only one naming a child
+    # with no row of its own keeps a `↗` line of its own (issue #1351).
+    dispatches = read_dispatches(a.dir, parent)
+    dmap = {d['child']: d for d in dispatches}
 
     kids = []
     for child, evs in events.items():
@@ -597,6 +662,8 @@ def cmd_show(a):
             since=[e for e in evs if int(e.get('seq') or 0) > a.since]))
         if node:                        # only then: a one-machine answer is unchanged
             kids[-1]['node'] = node
+        if child in dmap:
+            kids[-1]['dispatch'] = dmap[child]
     kids.sort(key=lambda k: ('!⏳▸✓–'.index(k['bucket']), k['child']))
     n = {b: sum(1 for k in kids if k['bucket'] == b) for b in '✓⏳!▸–'}
     total = len(kids)
@@ -619,7 +686,6 @@ def cmd_show(a):
                    wakes=sorted((w for w in read_wakes(os.path.join(a.dir, parent + '.ndjson'))
                                  if w.get('child') in events and seq_of(w) > a.since),
                                 key=seq_of))
-        dispatches = read_dispatches(a.dir, parent)
         if dispatches:                  # only then: an answer without one is unchanged
             out['dispatches'] = dispatches
         if a.since:
@@ -640,8 +706,13 @@ def cmd_show(a):
         live = '%s %s' % (k['window'], k['state']) if k['live'] else 'gone'
         if k.get('node') and not k['live']:
             live += ' · ' + k['node']
+        d = k.get('dispatch')
+        if d and not k['live']:
+            live += ' ↗' + d.get('node', '')
         print('  %s %-16s %-18s %-22s %s' % (k['bucket'], k['child'], live, rep, k['title']))
-    for d in read_dispatches(a.dir, parent):
+    for d in dispatches:
+        if d['child'] in events:
+            continue
         how = d.get('state', '')
         if d.get('window'):
             how += ' ' + d['window']

@@ -119,6 +119,7 @@ chmod +x "$WORK/fakebin/git" "$WORK/fakebin/gh" "$WORK/fakebin/tmux"
 run_spawn() { # $@ = args to dash-issue-session.sh
   : > "$GH_LOG"; : > "$TMUX_LOG"; : > "$GIT_LOG"; : > "$DISPLAY_LOG"; : > "$RUNSHELL_LOG"
   rm -rf "$WORK/dash/.claude-dash"
+  FLEET_ORIGIN_GATE=0 \
   PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/dash" FLEET_CONF_DIR="$WORK/conf" \
   FLEET_REPO="acme/widgets" FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH="master" \
     "$SPAWN" "$@" >"$WORK/spawn.out" 2>"$WORK/spawn.err"

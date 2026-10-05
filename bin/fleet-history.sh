@@ -63,7 +63,9 @@
 #           session records afresh instead of deduping away. The SessionStart hook
 #           (matcher `resume`) runs the --stdin-json form; nothing to supersede ⇒
 #           nothing written.
-#   list    [--repo R] [filter]      Human table, newest first (optional substring filter).
+#   list    [--repo R] [--local] [filter]  Human table, newest first (optional substring filter).
+#           Merges the rows of workers reaped on the owner's OTHER machines, from
+#           the hub (issue #1609, summary `@<machine> …`); --local skips them.
 #   rows                             Dash US-delimited rows (closed view of the dashboard).
 #           NESTED like the live list: ledger col 11 is the spawning session, so a
 #           child renders under its parent (`↳` tag + `└` indent) and the parent
@@ -81,6 +83,7 @@
 #           which is also how a closed-unlanded row (no SHA) resumes: its worktree
 #           is usually still on disk (worktree-autoclean keeps unmerged), #320.
 #   path    <key|#pr>                Print "<transcript-dir>\t<session-id>" for a ledger row.
+#   row     <key|#pr>                Print the raw ledger row (the hub upload, #1609).
 #   meta    <key|#pr>                Print "<key>\t<title>" for a ledger row — lets the
 #           restorer name the resumed window from the title + bind @issue (#319).
 # <key> is an issue number (a worker) or a `scratch-<N>` slug (a scratch, #466).
@@ -589,10 +592,42 @@ find_row() {
 # ============================================================================
 # list — human table, newest first
 # ============================================================================
+# remote_stream <repo…> → `<repo>\t<ledger row>` for every history row the hub
+# holds of a worker on ANOTHER machine of this owner (issue #1609) — the row its
+# machine recorded at the reap, col 9 prefixed `@<machine>` — minus a session
+# this ledger already has. Not a hub node → nothing (the list as it always was).
+remote_stream() {
+  local r rem sess="${FLEET_SESSION:-$(fleet_current_session 2>/dev/null)}"
+  [ -n "$sess" ] && [ -f "$BIN/fleet-worker-records.sh" ] || return 0
+  for r in "$@"; do
+    [ -n "$r" ] || continue
+    rem=$(bash "$BIN/fleet-worker-records.sh" fetch --session "$sess" --repo "$r" --history 2>/dev/null) || continue
+    [ -n "$rem" ] || continue
+    FH_REM="$rem" python3 -c '
+import os, sys
+repo, local = sys.argv[1], set()
+try:
+    for l in open(sys.argv[2], encoding="utf-8", errors="replace"):
+        f = l.rstrip("\n").split("\t")
+        if len(f) > 7 and f[7] not in ("", "-"): local.add(f[7])
+except OSError:
+    pass
+for l in os.environ["FH_REM"].split("\n"):
+    f = l.split("\t")
+    if len(f) < 13 or f[0] != "history": continue
+    node, row = f[2], f[3:]
+    if row[7] not in ("", "-") and row[7] in local: continue
+    row[8] = "@%s %s" % (node, "" if row[8] == "-" else row[8])
+    row[8] = row[8].rstrip()
+    print(repo + "\t" + "\t".join(row))
+' "$r" "$(ledger_path "$r")"
+  done
+}
+
 cmd_list() {
-  local repo="" filter="" all=""
+  local repo="" filter="" all="" lonly=""
   while [ $# -gt 0 ]; do
-    case "$1" in --repo) repo="${2:-}"; shift 2;; --all) all=1; shift;; *) filter="$1"; shift;; esac
+    case "$1" in --repo) repo="${2:-}"; shift 2;; --all) all=1; shift;; --local) lonly=1; shift;; *) filter="$1"; shift;; esac
   done
   # Every hosted repo (issue #804) with `--all`, or with no --repo at all in a
   # fleet hosting 2+ repos; `--repo R` stays that one ledger. One-repo fleet: the
@@ -602,6 +637,24 @@ cmd_list() {
     landed_scope
   fi
   local out; out=$(landed_stream "$repo" "$filter")
+  # Workers reaped on another machine (issue #1609): merged in by time, unless
+  # --local. Nothing from the hub ⇒ `out` untouched.
+  if [ -z "$lonly" ]; then
+    local rem
+    if [ "$LANDED_MERGED" = 1 ]; then
+      # shellcheck disable=SC2086
+      rem=$(remote_stream $LANDED_REPOS)
+    else
+      local rr="${repo:-${FLEET_REPO:-}}"
+      [ -n "$rr" ] || [ -z "${FLEET_SESSION:-}" ] \
+        || rr=$(fleet_load_conf "$FLEET_SESSION" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}")
+      rem=$(remote_stream "$rr")
+    fi
+    [ -n "$rem" ] && [ -n "$filter" ] && rem=$(printf '%s\n' "$rem" | grep -iF -- "$filter")
+    if [ -n "$rem" ]; then
+      out=$(printf '%s\n%s\n' "$out" "$rem" | grep -v '^$' | LC_ALL=C sort -s -t"$(printf '\t')" -k2,2r)
+    fi
+  fi
   if [ -z "$out" ]; then
     echo "no landed sessions recorded yet$( [ -n "$filter" ] && printf ' (filter: %s)' "$filter")."
     return 0
@@ -1114,6 +1167,16 @@ cmd_meta() {
   awk -F'\t' '{print $2 "\t" $3 "\t" $11}' <<<"$row"
 }
 
+# row — the raw ledger row for a key (newest wins), for the hub upload that hands
+# a reaped worker's history to its owner's other machines (issue #1609).
+cmd_row() {
+  local repo="" key=""
+  while [ $# -gt 0 ]; do
+    case "$1" in --repo) repo="${2:-}"; shift 2;; *) key="$1"; shift;; esac
+  done
+  find_row "$repo" "$key"
+}
+
 usage() {
   sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
 }
@@ -1346,7 +1409,8 @@ case "$cmd" in
   resume) cmd_resume "$@";;
   path)   cmd_path "$@";;
   meta)   cmd_meta "$@";;
+  row)    cmd_row "$@";;
   fold)   cmd_fold "$@";;
   ''|-h|--help|help) usage;;
-  *) echo "fleet-history: unknown subcommand '$cmd' (record|record-closed|resumed|list|rows|resume|path|meta|fold)" >&2; exit 2;;
+  *) echo "fleet-history: unknown subcommand '$cmd' (record|record-closed|resumed|list|rows|resume|path|meta|row|fold)" >&2; exit 2;;
 esac

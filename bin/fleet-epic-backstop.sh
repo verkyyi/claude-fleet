@@ -93,6 +93,9 @@ try:
 except Exception:
     kids = []
 k = next((k for k in kids if k.get("child") == child), None)
+if k is None and ":" not in child:   # a bare key; the ledger spells it <slug>:issue-N (#1351)
+    m = [k for k in kids if str(k.get("child") or "").endswith(":" + child)]
+    k = m[0] if len(m) == 1 else None
 if k is None and pr:
     k = next((k for k in kids if str(k.get("pr") or "").lstrip("#") == pr), None)
 if k is None:
