@@ -800,10 +800,43 @@ def reconcile_one(source, account, data, dry=False):
     if time.time() < r.get('retry_at',0):
         return
     if not decision['target']:
+        # Accounts skipped for their LOGIN ride on the request (issue #1670), and
+        # the episode that first waits with any says so once — a new reason
+        # (another login gone bad, one fixed) says so again.
+        r['excluded'] = decision.get('excluded', [])
+        if r['excluded'] and (r.get('state'), r.get('detail')) != ('waiting-quota', decision['reason']):
+            auth_alert(source, r['excluded'])
         outcome(path,r,'waiting-quota',decision['reason'])
         return
+    r.pop('excluded', None)
     r['attempts'] += 1
     move(path,r,decision['target'])
+
+
+def auth_alert(source, excluded):
+    """▲ account-auth: no account this source may move to has a valid login, so
+    it stays where it is (issue #1670) — the operator learns which to re-login."""
+    why = '; '.join('%s %s' % (e.get('key'), e.get('reason')) for e in excluded)
+    text = ('%s: 自动切换：没有登录有效的账号，原地等待，不切换 · not switching: %s'
+            % (source.get('window', '?'), why))
+    try:
+        subprocess.run(['bash', str(BIN/'fleet-alerts.sh'), 'event', '-L', source.get('session', ''),
+                        'account-auth', text], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+
+
+def status():
+    """failover-status: the durable requests, then one `excluded` row per account
+    an automatic pick skips for its login (`reason: auth:<state>`, issue #1670)."""
+    paths = list(root().glob('*/request.json')) + list(root().glob('unsupported-*.json'))
+    rows = [read(f,{}) for f in paths]
+    try:
+        allowed = os.environ.get('FLEET_FAILOVER_AGENTS','claude,codex').split(',')
+        rows += ACCOUNT['auth_excluded'](ACCOUNT['inventory'](), allowed)
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        pass
+    return rows
 
 
 def reconcile(session, dry=False):
@@ -878,8 +911,7 @@ def main():
     elif a.command=='background':
         print(json.dumps(claude_background(a.pid,a.worktree,a.session),ensure_ascii=False))
     else:
-        paths = list(root().glob('*/request.json')) + list(root().glob('unsupported-*.json'))
-        print(json.dumps([read(f,{}) for f in paths],ensure_ascii=False))
+        print(json.dumps(status(),ensure_ascii=False))
 
 
 if __name__=='__main__':

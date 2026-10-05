@@ -49,6 +49,21 @@ class Providers(unittest.TestCase):
         r = accounts.choose({'accounts':rows}, 'claude')
         self.assertEqual(r['state'], 'waiting-quota')
 
+    def test_a_bad_login_is_excluded_by_name_never_chosen(self):
+        # issue #1670: four candidates, one reauth_required with the most room —
+        # never the target, always listed as excluded with `auth:<state>`.
+        rows = [candidate('claude', n, u) for n, u in (('a', 50), ('b', 0), ('c', 40), ('d', 60))]
+        rows[1]['login'] = 'reauth_required'
+        r = accounts.choose({'accounts': rows}, 'claude')
+        self.assertEqual(r['target']['account'], 'c')
+        self.assertEqual([(e['key'], e['reason']) for e in r['excluded']], [('claude/b', 'auth:reauth_required')])
+        for row in rows:
+            row['login'] = 'expired'
+        r = accounts.choose({'accounts': rows}, 'claude')
+        self.assertEqual((r['state'], r['target']), ('waiting-quota', None))
+        self.assertEqual(len(r['excluded']), 4)
+        self.assertIn('login needed', r['reason'])
+
     def test_hub_managed_profile_is_valid_and_only_the_hub_lease_counts(self):
         # issue #1666: a hub-leased home is a valid login — ccquota reports
         # where it is refreshed, and the adapter carries that through.

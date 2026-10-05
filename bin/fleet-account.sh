@@ -80,9 +80,14 @@
 #   reauth-since <label> — epoch <label> was marked (0 = not marked)
 #   choose --agent claude|codex [--exclude KEY] [--spawn] — JSON decision
 #   reconcile --session S [--dry-run] — bounded per-session quota continuation
-#   failover-status      — durable waiting/cutover/recovery requests (JSON)
+#   failover-status      — durable waiting/cutover/recovery requests (JSON), then one
+#                          `{"state":"excluded","reason":"auth:<state>",…}` row per
+#                          account an automatic pick skips for its login (#1670)
 #   use <label>          — pin <label> active
-#   rotate               — advance active to the next eligible account
+#   rotate               — advance active to the next eligible account. Every
+#                          automatic pick (active, rotate, the failover planner)
+#                          skips a login that is not valid (#1670); none valid ⇒
+#                          it stays put and raises one ▲ account-auth event
 #   mark-limited <label> [banner]
 #                        — record <label> limited until its window actually refreshes:
 #                          the banner's "resets <time> (<zone>)" instant when it has one,
@@ -928,6 +933,105 @@ pick_score() {
   esac
 }
 
+# --- the LOGIN filter on every automatic pick (issue #1670, EPIC #1665 C6) ------
+# A switch at night chose by quota alone, so a login that had gone bad — a
+# `mark-reauth`, a hub token past its expiry, a token file emptied — was handed
+# the session and the session sat on a login prompt until morning. The judge is
+# .fleet-account.py claude_login() (#1667); this is its spawn-path mirror: the
+# mark and the token file are read here, and only a hub-managed `hub:` label (its
+# expiry lives in a JSON file) asks python — once per pick, every such label in
+# one call. A label is a candidate only while its login is valid; the rest are
+# EXCLUDED with `auth:<state>`, never ranked last. All of them out ⇒ the pick
+# stays where it is (no hard switch) and acct_auth_alert raises one ▲ event.
+acct_login() {  # <label> → valid | reauth_required | no_credentials | expired | unknown (python failed)
+  local l="$1" t row
+  row=$(printf '%s\n' "${_ACCT_AUTH:-}" | awk -F'\t' -v l="$l" '$1==l{print $2; exit}')
+  [ -n "$row" ] && { printf '%s' "$row"; return 0; }
+  [ "$(acct_reauth_since "$l")" -gt 0 ] && { printf reauth_required; return 0; }
+  t=$(acct_token "$l")
+  case "$t" in
+    '') printf no_credentials ;;
+    hub:*) FLEET_ACCOUNTS_DIR="$ACCT_DIR" FLEET_C="$FLEET_C" \
+             python3 "$BIN/.fleet-account.py" claude-login "$l" 2>/dev/null | awk -F'\t' '{print $2; exit}' | grep . \
+             || printf unknown ;;
+    *) printf valid ;;
+  esac
+}
+# acct_auth_scan — judge every label ONCE into _ACCT_AUTH (label<TAB>state) so a
+# pick's several passes never re-read a token file or re-run python per label.
+acct_auth_scan() {
+  local l hub="" rows="" st
+  _ACCT_AUTH=""
+  while IFS= read -r l; do
+    [ -n "$l" ] || continue
+    if [ "$(acct_reauth_since "$l")" -gt 0 ]; then st=reauth_required
+    else
+      case "$(acct_token "$l")" in
+        '') st=no_credentials ;;
+        hub:*) hub="$hub $l"; continue ;;
+        *) st=valid ;;
+      esac
+    fi
+    rows="$rows$l	$st
+"
+  done <<EOF
+$(acct_labels)
+EOF
+  if [ -n "$hub" ]; then
+    # shellcheck disable=SC2086  # deliberate word-split: labels never hold spaces
+    st=$(FLEET_ACCOUNTS_DIR="$ACCT_DIR" FLEET_C="$FLEET_C" python3 "$BIN/.fleet-account.py" claude-login $hub 2>/dev/null)
+    for l in $hub; do
+      printf '%s\n' "$st" | awk -F'\t' -v l="$l" '$1==l{f=1} END{exit !f}' \
+        || st="$st
+$l	unknown"
+    done
+    rows="$rows$st
+"
+  fi
+  _ACCT_AUTH=$(printf '%s' "$rows" | awk 'NF')
+}
+acct_auth_ok() { [ "$(acct_login "$1")" = valid ]; }
+# acct_auth_excluded — `label auth:<state>` per excluded label, `; `-joined (empty = none)
+acct_auth_excluded() {
+  local l out="" st
+  while IFS= read -r l; do
+    [ -n "$l" ] || continue
+    st=$(acct_login "$l"); [ "$st" = valid ] && continue
+    out="${out:+$out; }$l auth:$st"
+  done <<EOF
+$(acct_labels)
+EOF
+  printf '%s' "$out"
+}
+# acct_any_auth_ok — 0 iff at least one label has a valid login
+acct_any_auth_ok() {
+  local l
+  while IFS= read -r l; do
+    [ -n "$l" ] && acct_auth_ok "$l" && return 0
+  done <<EOF
+$(acct_labels)
+EOF
+  return 1
+}
+# acct_auth_alert — every label is out on its LOGIN: say so once (▲ account-auth),
+# again only when the set changes or the last one has aged out of the popup's
+# live hour (FLEET_ALERTS_EVENT_LIVE) — the spawn path asks this on every launch.
+STATE_AUTH_ALERT="$STATE_DIR/account.auth-alert"
+acct_auth_alert() {
+  local why text last="" lt=0 live="${FLEET_ALERTS_EVENT_LIVE:-3600}"
+  why=$(acct_auth_excluded); [ -n "$why" ] || return 0
+  text="自动切换：没有登录有效的账号，原地等待，不切换 · no account has a valid login — not switching: $why"
+  echo "fleet-account: $text" >&2
+  case "$live" in ''|*[!0-9]*) live=3600 ;; esac
+  [ -f "$STATE_AUTH_ALERT" ] && IFS='	' read -r lt last < "$STATE_AUTH_ALERT"
+  case "$lt" in ''|*[!0-9]*) lt=0 ;; esac
+  [ "$last" = "$why" ] && [ $(( $(now) - lt )) -lt "$live" ] && return 0
+  mkdir -p "$STATE_DIR" 2>/dev/null
+  printf '%s\t%s\n' "$(now)" "$why" | atomic_write "$STATE_AUTH_ALERT" 2>/dev/null
+  [ -f "$BIN/fleet-alerts.sh" ] && bash "$BIN/fleet-alerts.sh" event account-auth "$text" >/dev/null 2>&1
+  return 0
+}
+
 # pick_best <rows> <cur> <honour-holds> [<model>] [<honour-pace>] → the winning
 # label, or EMPTY when there is no candidate at all. A candidate is ELIGIBLE
 # (un-benched), known to ccquota, and under the CEILING on both windows; with
@@ -939,6 +1043,7 @@ pick_best() {
   while IFS= read -r l; do
     [ -n "$l" ] || continue
     acct_eligible "$l" || continue
+    acct_auth_ok "$l" || continue                     # auth:<state> → never a candidate (#1670)
     [ "$holds" = 1 ] && [ "$(acct_phase_hold "$l")" -gt "$(now)" ] && continue
     [ "$model" = 1 ] && [ "$(acct_model_limited_until "$l" "$(pick_model)")" -gt 0 ] && continue
     u5=$(quota_field "$rows" "$l" 2); u7=$(quota_field "$rows" "$l" 3)
@@ -971,7 +1076,16 @@ EOF
 # current (best effort) so sessions still launch. Reads the quota CACHE only —
 # this runs on the spawn path.
 pick_active() {
-  local cur="$1" rows best=""
+  local cur="$1" rows best="" _ACCT_AUTH=""
+  acct_auth_scan
+  # No label has a valid login (#1670): stay where we are — a hard switch onto
+  # another dead login is what parked a session until morning — and say so.
+  if ! acct_any_auth_ok; then
+    acct_auth_alert
+    if [ -n "$cur" ] && acct_labels | grep -qx "$cur"; then printf '%s' "$cur"
+    else acct_labels | sed -n 1p | tr -d '\n'; fi
+    return 0
+  fi
   rows=$(quota_rows cached)
   if [ -n "$rows" ]; then
     if model_pref_on; then
@@ -1014,11 +1128,19 @@ EOF
   n=${#L[@]}; [ "$n" -eq 0 ] && return 0
   start=-1
   for ((i=0; i<n; i++)); do [ "${L[$i]}" = "$cur" ] && { start=$i; break; }; done
-  if [ "$start" -ge 0 ] && acct_eligible "$cur"; then printf '%s' "$cur"; return 0; fi
+  if [ "$start" -ge 0 ] && acct_eligible "$cur" && acct_auth_ok "$cur"; then printf '%s' "$cur"; return 0; fi
   from=$(( start<0 ? 0 : start+1 ))
   for ((i=0; i<n; i++)); do
     idx=$(( (from+i) % n ))
-    acct_eligible "${L[$idx]}" && { printf '%s' "${L[$idx]}"; return 0; }
+    acct_eligible "${L[$idx]}" && acct_auth_ok "${L[$idx]}" && { printf '%s' "${L[$idx]}"; return 0; }
+  done
+  # Every login-valid account is benched: best effort keeps the current one when
+  # its login holds, else the first that does (#1670) — a bench clears at a reset,
+  # a dead login never does.
+  if [ "$start" -ge 0 ] && acct_auth_ok "$cur"; then printf '%s' "$cur"; return 0; fi
+  for ((i=0; i<n; i++)); do
+    idx=$(( (from+i) % n ))
+    acct_auth_ok "${L[$idx]}" && { printf '%s' "${L[$idx]}"; return 0; }
   done
   if [ "$start" -ge 0 ]; then printf '%s' "$cur"; else printf '%s' "${L[0]}"; fi
 }
@@ -1069,10 +1191,14 @@ $(acct_labels)
 EOF
   n=${#L[@]}; [ "$n" -eq 0 ] && return 0
   local start=-1; for ((i=0;i<n;i++)); do [ "${L[$i]}" = "$cur" ] && { start=$i; break; }; done
+  local _ACCT_AUTH=""; acct_auth_scan
   for ((i=1;i<=n;i++)); do
     idx=$(( (start+i) % n ))
-    acct_eligible "${L[$idx]}" && { nxt="${L[$idx]}"; break; }
+    acct_eligible "${L[$idx]}" && acct_auth_ok "${L[$idx]}" && { nxt="${L[$idx]}"; break; }
   done
+  # Nothing un-benched with a valid login (#1670): never rotate onto a dead login;
+  # when no login is valid at all, stay and say so.
+  acct_any_auth_ok || acct_auth_alert
   nxt="${nxt:-$cur}"
   mkdir -p "$STATE_DIR"; acct_lock; printf '%s\n' "$nxt" | atomic_write "$STATE_ACTIVE"; acct_unlock
   printf '%s' "$nxt"

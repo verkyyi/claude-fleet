@@ -77,6 +77,10 @@ STATE_LIMITED="$FLEET_C/account.limited"   # only the limited-state file is read
 # pick_best/cmd_list read the phase plan too (issue #598) — repoint it, or a plan
 # armed on the DEVELOPER's real pool would silently steer these assertions.
 STATE_PHASE="$FLEET_C/account.phase"
+# Every pick reads the reauth marks and may stamp an auth alert (issue #1670) —
+# both onto the scratch tree from the first pick on, never the operator's.
+STATE_REAUTH="$FLEET_C/account.reauth"
+STATE_AUTH_ALERT="$FLEET_C/account.auth-alert"
 
 CHECKS=0
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
@@ -157,7 +161,9 @@ acct_eligible acctZ; rc_is "eligible: unknown acct IS eligible" 0 $?
 # ============================================================================
 # Three real token files; pin their order with FLEET_ACCOUNTS so the round-robin
 # is deterministic regardless of readdir/sort locale.
-: > "$ACCT_DIR/a"; : > "$ACCT_DIR/b"; : > "$ACCT_DIR/c"
+# A token in each: an EMPTY file is a login with no credentials (issue #1670),
+# which no automatic pick lands on.
+printf 'tok-a\n' > "$ACCT_DIR/a"; printf 'tok-b\n' > "$ACCT_DIR/b"; printf 'tok-c\n' > "$ACCT_DIR/c"
 export FLEET_ACCOUNTS="a b c"
 
 limit() { printf '%s\t%s\ttest\n' "$1" "$((NOW + 10000))" >> "$STATE_LIMITED"; }
@@ -670,6 +676,9 @@ eq "model reader: missing ledger" 0 "$(acct_model_limited_until a fable)"
 rm -f "$STATE_QUOTA"; : > "$STATE_LIMITED"
 printf 'tok-a\n' > "$ACCT_DIR/a"; printf 'tok-b\n' > "$ACCT_DIR/b"
 printf 'hub:h1\n' > "$ACCT_DIR/h1"; printf 'hub:h2\n' > "$ACCT_DIR/h2"
+# …each with an unexpired hub credential, or its login is no_credentials (#1670)
+for _h in h1 h2; do mkdir -p "$ACCT_DIR/$_h.hub"
+  printf '{"claudeAiOauth":{"accessToken":"at","expiresAt":%s000}}\n' "$(( $(date +%s) + 86400 ))" > "$ACCT_DIR/$_h.hub/.credentials.json"; done
 export FLEET_ACCOUNTS="a h1 b h2"
 eq "class: a plain token is local" local "$(acct_class a)"
 eq "class: hub:<label> is pool" pool "$(acct_class h1)"
@@ -714,7 +723,7 @@ eq "active(pool) with no pool account → empty" "" "$(FLEET_ACCOUNTS='a b' FLEE
 # conf the script sources (a login conf saying `pool` cannot override a window
 # that chose `local`); with nothing in the environment the conf's line applies.
 mkdir -p "$WORK/sroot/bin" "$WORK/sconf"
-for f in "$BIN"/*; do ln -s "$f" "$WORK/sroot/bin/${f##*/}"; done
+for f in "$BIN"/* "$BIN"/.fleet-*.py; do ln -s "$f" "$WORK/sroot/bin/${f##*/}"; done   # the dot-named python judges too (#1670)
 printf 'FLEET_ACCOUNT_CLASS=pool\n' > "$WORK/sroot/fleet.conf"
 printf 'h1\n' > "$STATE_ACTIVE"
 _run() { env -i HOME="$WORK" PATH="$PATH" FLEET_CONF_DIR="$WORK/sconf" FLEET_ACCOUNTS_DIR="$ACCT_DIR" FLEET_ACCOUNTS="a h1 b h2" \
@@ -722,6 +731,60 @@ _run() { env -i HOME="$WORK" PATH="$PATH" FLEET_CONF_DIR="$WORK/sconf" FLEET_ACC
 eq "e2e: env local beats the conf's pool" a "$(_run FLEET_ACCOUNT_CLASS=local)"
 eq "e2e: no env → the conf's pool" h1 "$(_run FLEET_C="$FLEET_C")"
 eq "e2e: env any beats the conf's pool — the ordinary pick (first label, nothing pinned)" a "$(_run FLEET_ACCOUNT_CLASS=any FLEET_C="$FLEET_C")"
-rm -f "$ACCT_DIR/h1" "$ACCT_DIR/h2"; : > "$ACCT_DIR/a"; : > "$ACCT_DIR/b"; export FLEET_ACCOUNTS="a b c"
+rm -rf "$ACCT_DIR/h1" "$ACCT_DIR/h2" "$ACCT_DIR/h1.hub" "$ACCT_DIR/h2.hub"; export FLEET_ACCOUNTS="a b c"
 
-printf 'selftest OK: fleet-account rotation math (%s assertions — dur/human, acct_ttl, limited/eligible, pick_active, banner reset instant, ccquota quota/bench + #628 no-reading rail, #598 ranking + phase stagger, #1231 weekly pace, #1540 account class)\n' "$CHECKS"
+# ============================================================================
+# the LOGIN filter (issue #1670, EPIC #1665 C6) — an automatic pick never lands
+# on a login that is not valid; with none valid it stays put and alerts
+# ============================================================================
+rm -f "$STATE_QUOTA" "$STATE_QUOTA_TS" "$STATE_AUTH_ALERT"; : > "$STATE_LIMITED"; : > "$STATE_REAUTH"
+printf 'tok-a\n' > "$ACCT_DIR/a"; printf 'tok-b\n' > "$ACCT_DIR/b"; printf 'tok-c\n' > "$ACCT_DIR/c"
+printf 'hub:d\n' > "$ACCT_DIR/d"; mkdir -p "$ACCT_DIR/d.hub"
+printf '{"claudeAiOauth":{"accessToken":"at","expiresAt":%s000}}\n' "$(( $(date +%s) + 86400 ))" > "$ACCT_DIR/d.hub/.credentials.json"
+export FLEET_ACCOUNTS="a b c d"
+# fleet-alerts.sh writes its events under $TMPDIR — the scratch tree here.
+_tmpd="${TMPDIR:-}"; export TMPDIR="$WORK"
+_alerts() { cat "$WORK/.claude-dash/global/alerts.events" 2>/dev/null | grep -c $'\taccount-auth\t'; }
+eq "auth: a plain token is valid" valid "$(acct_login a)"
+eq "auth: an unexpired hub credential is valid" valid "$(acct_login d)"
+cmd_mark_reauth b 'auth error' >/dev/null
+eq "auth: a mark-reauth label is reauth_required" reauth_required "$(acct_login b)"
+# Four candidates, b reauth_required: whatever the cursor, the round-robin and
+# rotate never stop on it; the quota ranking never picks it even when it has
+# by far the most headroom.
+eq "auth: rr — current b is skipped → c" c "$(pick_active b)"
+eq "auth: rr — from a, rotate past b → keeps a" a "$(pick_active a)"
+limit a
+eq "auth: rr — a benched, next after a is b → c" c "$(pick_active a)"
+: > "$STATE_LIMITED"
+printf 'a\n' > "$STATE_ACTIVE"
+eq "auth: rotate from a skips b → c" c "$(cmd_rotate)"
+_q() { printf '%s\t%s\t%s\t50\t0\t0\t1\n' "$1" "$2" "$3"; }
+printf '%s\n%s\n%s\n%s\n' "$(_q a 80 80)" "$(_q b 1 1)" "$(_q c 50 50)" "$(_q d 70 70)" > "$STATE_QUOTA"; date +%s > "$STATE_QUOTA_TS"
+eq "auth: quota ranking — b has the most headroom, never picked" c "$(pick_active b)"
+eq "auth: quota ranking — from a, best login-valid is c" c "$(pick_active a)"
+rm -f "$STATE_QUOTA" "$STATE_QUOTA_TS"
+eq "auth: no alert while a login is valid" 0 "$(_alerts)"
+# The hub credential expires → d is out too; an empty token file is out.
+printf '{"claudeAiOauth":{"accessToken":"at","expiresAt":1000}}\n' > "$ACCT_DIR/d.hub/.credentials.json"
+eq "auth: an expired hub credential is expired" expired "$(acct_login d)"
+: > "$ACCT_DIR/c"
+eq "auth: an empty token file is no_credentials" no_credentials "$(acct_login c)"
+eq "auth: excluded rows carry auth:<state>" "b auth:reauth_required; c auth:no_credentials; d auth:expired" "$(acct_auth_excluded)"
+eq "auth: only a is left" a "$(pick_active d)"
+# Every login bad → never a switch: the current one stays, and one ▲ event says so.
+cmd_mark_reauth a 'revoked' >/dev/null
+eq "auth: all bad — current d stays (no hard switch)" d "$(pick_active d 2>/dev/null)"
+eq "auth: all bad — current b stays" b "$(pick_active b 2>/dev/null)"
+eq "auth: all bad — one account-auth alert, not one per pick" 1 "$(_alerts)"
+grep -q 'a auth:reauth_required; b auth:reauth_required' "$STATE_AUTH_ALERT" || fail "auth: the alert stamp must name every excluded login"
+printf 'b\n' > "$STATE_ACTIVE"
+eq "auth: all bad — rotate stays on b" b "$(cmd_rotate 2>/dev/null)"
+eq "auth: all bad — rotate adds no second alert for the same set" 1 "$(_alerts)"
+cmd_clear_reauth a
+eq "auth: a re-login brings a back" a "$(pick_active b)"
+rm -rf "$ACCT_DIR/d" "$ACCT_DIR/d.hub"; : > "$STATE_REAUTH"; : > "$STATE_LIMITED"
+printf 'tok-c\n' > "$ACCT_DIR/c"; export FLEET_ACCOUNTS="a b c"
+if [ -n "$_tmpd" ]; then export TMPDIR="$_tmpd"; else unset TMPDIR; fi
+
+printf 'selftest OK: fleet-account rotation math (%s assertions — dur/human, acct_ttl, limited/eligible, pick_active, banner reset instant, ccquota quota/bench + #628 no-reading rail, #598 ranking + phase stagger, #1231 weekly pace, #1540 account class, #1670 login filter)\n' "$CHECKS"

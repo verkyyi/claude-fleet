@@ -126,6 +126,37 @@ class Failover(unittest.TestCase):
         self.assertEqual(self.request()['state'],'waiting')
         self.assertTrue(self.request()['detail'].startswith('rolled-back: rolled back 5s ago'))
 
+    def test_a_bad_login_is_never_chosen_and_all_bad_waits_with_one_alert(self):
+        # issue #1670: four candidates, the emptiest one reauth_required — the
+        # planner never moves onto it; with every other login bad too the source
+        # stays where it is (waiting-quota), the request names each login as
+        # `auth:<state>`, and the operator gets ONE ▲ account-auth for the episode.
+        bad=account('codex','emptiest',0); bad['login']='reauth_required'
+        good=account('codex','second',60)
+        self.data['accounts'] += [bad,good,account('codex','third',70)]
+        with patch.object(flow,'move') as move, patch.object(flow,'auth_alert') as alert:
+            flow.reconcile_one(self.source,self.account,self.data)
+            self.assertEqual(move.call_args.args[2]['account'],'second')
+            alert.assert_not_called()
+        self.path.joinpath('request.json').unlink()
+        good['login']='expired'; self.data['accounts'][-1]['login']='no_credentials'
+        with patch.object(flow,'move') as move, patch.object(flow,'auth_alert') as alert:
+            flow.reconcile_one(self.source,self.account,self.data)
+            flow.reconcile_one(self.source,self.account,self.data)
+            move.assert_not_called()
+            self.assertEqual(alert.call_count,1)
+        r=self.request()
+        self.assertEqual(r['state'],'waiting-quota')
+        self.assertEqual(sorted((e['key'],e['reason']) for e in r['excluded']),
+                         [('codex/emptiest','auth:reauth_required'),('codex/second','auth:expired'),
+                          ('codex/third','auth:no_credentials')])
+        with patch.object(flow,'root',return_value=self.root), \
+             patch.dict(flow.ACCOUNT,inventory=lambda *_:self.data):
+            rows=flow.status()
+        self.assertIn(dict(state='excluded',agent='codex',key='codex/emptiest',label='emptiest',
+                           reason='auth:reauth_required',detail=''),rows)
+        self.assertEqual(len([x for x in rows if x.get('state')=='excluded']),3)
+
     def test_failed_target_cooldown_uses_another_available_subscription(self):
         flow.reconcile_one(self.source,self.account,self.data)
         r=self.request();r['failed_targets']={'codex/second':time.time()+120};flow.save(self.path/'request.json',r)
