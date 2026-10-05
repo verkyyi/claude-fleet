@@ -125,7 +125,7 @@ fleet_in() {
   mkdir -p "$h/.config/claude-fleet"
   [ -f "$h/.config/claude-fleet/fleet.conf" ] || HOME="$h" FLEET_CONF_DIR="$h/.config/claude-fleet" \
     "$BIN/fleet-conf.sh" set-hub "$HUB" --role client >/dev/null 2>&1
-  HOME="$h" FLEET_CONF_DIR="$h/.config/claude-fleet" XDG_CONFIG_HOME="$h/.config" FLEET_HUB_URL= \
+  HOME="$h" FLEET_CONF_DIR="$h/.config/claude-fleet" XDG_CONFIG_HOME="$h/.config" FLEET_HUB_URL="" \
     FLEET_JOIN_POLL=1 FLEET_JOIN_SUDO="" FLEET_NODE_JOIN_ARGS="--no-deps --no-fleet --service detached --wait 15" \
     "$BIN/fleet" "$@" >"$SB/out" 2>&1 </dev/null
   echo $? >"$SB/rc"
