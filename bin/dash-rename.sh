@@ -13,7 +13,7 @@
 #
 # The dash's query line already IS an fzf-owned input (UTF-8 / IME / paste
 # correct — the same reason ⌃n moved to `fzf --print-query` in #429), so rename
-# needs no display-popup and no @popup_open bookkeeping. While the flag is armed,
+# needs no the popup command and no @popup_open bookkeeping. While the flag is armed,
 # dash-enter.sh treats the query as the NAME, not as a task to seed a scratch with.
 #
 # `unbind(?)` is NOT optional. A PRINTABLE key that --bind claimed fires its action

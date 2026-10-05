@@ -135,7 +135,7 @@ if [ "$POPUP" = 1 ]; then
   bash "$BIN/dash-popup.sh" ${CLIENT:+--client "$CLIENT"} --session "$SESS" --no-inline --size L --title popup_tasks -- \
     bash "$BIN/fleet-task-pick.sh" --session "$SESS" --current "$cur" --out "$res" \
     >/dev/null 2>&1 || :
-  # display-popup exits 0 whether or not it drew anything (no client, another
+  # the popup command exits 0 whether or not it drew anything (no client, another
   # overlay already up — see dash-popup.sh, issue #454), so the picker's first
   # act is to drop `$res.ran`. No marker ⇒ it never ran ⇒ exit 3, and the caller
   # (hub-zoom.sh) takes the old jump instead of leaving a dead key.

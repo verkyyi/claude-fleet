@@ -14,7 +14,7 @@
 #
 #   REFUSE  --async + a CLAIMED issue → refuse IMMEDIATELY, no run-shell, no spawn.
 #   CAP     --async + the global session cap reached → refuse, no run-shell, no spawn.
-#   DISPATCH --async + FREE issue → returns fast, acks "spawning #N", claims AT SPAWN
+#   DISPATCH --async + FREE issue → returns fast, draws NO line (issue #1618), claims AT SPAWN
 #            (synchronous, authoritative), dispatches `run-shell -b` re-invoking the
 #            tail (FLEET_SPAWN_TAIL + --title) and does NOT worktree-add / new-window
 #            in the foreground.
@@ -142,8 +142,9 @@ runshell_has 'run-shell'                && fail "REFUSE must NOT dispatch the ba
 git_has 'worktree add'                  && fail "REFUSE must NOT create a worktree for a claimed issue"
 tmux_has 'new-window'                   && fail "REFUSE must NOT spawn a window for a claimed issue"
 display_has 'already claimed elsewhere' || fail "REFUSE should announce 'already claimed elsewhere'"
-display_has 'fg=red'                    || fail "REFUSE toast must be STICKY (red) so it isn't missed (issue #331)"
-display_has 'checking #303'             || fail "REFUSE must still ack 'checking #303…' at the top of the gate (issue #331)"
+display_has ',bold]'                    || fail "REFUSE toast must be STICKY (palette red + bold) so it isn't missed (issue #331)"
+display_has '✗ '                        || fail "REFUSE goes through fleet_ui_fail — its one '✗ <reason>' line (issue #1618)"
+[ "$(wc -l < "$DISPLAY_LOG" | tr -d ' ')" = 1 ] || fail "REFUSE draws EXACTLY one line — the reason, no 'checking…' ack before it (issue #1618)" "$(cat "$DISPLAY_LOG")"
 ok "REFUSE --async + claimed → immediate refuse, no run-shell / worktree / window, sticky red toast + gate ack"
 
 # ===== CAP: --async + the global session cap reached ⇒ refuse before dispatch =======
@@ -156,7 +157,7 @@ runshell_has 'run-shell'                && fail "CAP must NOT dispatch the backg
 git_has 'worktree add'                  && fail "CAP must NOT create a worktree when at capacity"
 tmux_has 'new-window'                   && fail "CAP must NOT spawn a window when at capacity"
 display_has 'at capacity'               || fail "CAP should announce the capacity refusal"
-display_has 'fg=red'                    || fail "CAP refusal toast must be STICKY (red) (issue #331)"
+display_has ',bold]'                    || fail "CAP refusal toast must be STICKY (palette red + bold) (issue #331)"
 grep -qi 'at capacity' "$WORK/spawn.err" || fail "CAP the refusal reason must reach STDERR — a headless caller never sees the toast (issue #683)" "$(cat "$WORK/spawn.err")"
 [ "$(rc)" = 2 ]                         || fail "CAP a cap refusal exits 2 — the 'retry later' class, distinct from claimed (3) / infra (1) (issue #683)" "rc=$(rc)"
 rm -f "$WORK/conf/testsess.conf"
@@ -166,8 +167,7 @@ ok "CAP --async + cap reached → immediate refuse, no run-shell / worktree / wi
 CLAIM_STATE=$'0\tOPEN' PR_COUNT=0 FLEET_PRESPAWN_DEDUP=1 run_spawn 303 --async
 [ "$(rc)" = 0 ]                         || fail "DISPATCH a free issue should return 0 fast under --async" "$(cat "$WORK/spawn.err")"
 gh_has '--add-assignee'                 || fail "DISPATCH must still claim AT SPAWN synchronously (the anti-collision rail stays sync)"
-display_has 'spawning #303'             || fail "DISPATCH should ack 'spawning #303…' synchronously"
-display_has 'checking #303'             || fail "DISPATCH must ack 'checking #303…' at the top of the gate, before the gh reads (issue #331)"
+[ -s "$DISPLAY_LOG" ]                   && fail "DISPATCH a spawn that works draws NO line — the window is the answer (issue #1618)" "$(cat "$DISPLAY_LOG")"
 runshell_has 'run-shell'                || fail "DISPATCH must hand the slow tail to run-shell -b"
 runshell_has '-b'                       || fail "DISPATCH must background the tail (run-shell -b)"
 runshell_has 'FLEET_SPAWN_TAIL='        || fail "DISPATCH's backgrounded command must carry FLEET_SPAWN_TAIL (tail-only re-entry)"
@@ -198,7 +198,7 @@ tmux_has 'async-spawn-rocks'            || fail "TAIL must name the window from 
 tmux_has '@issue 303'                   || fail "TAIL must bind the window to the issue (@issue 303)"
 gh_has '--add-assignee'                 && fail "TAIL must NOT re-claim — the gate already claimed in the foreground"
 runshell_has 'run-shell'                && fail "TAIL must NOT re-dispatch (no nested run-shell)"
-display_has 'checking'                  && fail "TAIL re-entry must NOT emit the gate ack — it already passed the gate (issue #331)"
+[ -s "$DISPLAY_LOG" ]                   && fail "TAIL a spawn that works draws NO line — its window is the answer (issue #1618)" "$(cat "$DISPLAY_LOG")"
 ok "TAIL re-entry → worktree add + new-window named from --title + @issue bound, no re-claim / re-dispatch / gate ack"
 
 # ===== TAILFAIL: a backgrounded worktree-add failure reports the failure ============
@@ -206,7 +206,7 @@ FLEET_SPAWN_TAIL=testsess GIT_WT_FAIL=1 run_spawn 303 --title 'Boom'
 [ "$(rc)" = 1 ]                         || fail "TAILFAIL a failed worktree add must exit 1" "rc=$(rc)"
 err_has 'dash-issue-session: spawn failed for #303: worktree add' || fail "TAILFAIL must reach stderr" "$(cat "$WORK/spawn.err")"
 display_has 'spawn failed for #303: worktree add' || fail "TAILFAIL must report 'spawn failed for #303: worktree add'"
-display_has 'fg=red'                    || fail "TAILFAIL failure toast must be STICKY (red) (issue #331)"
+display_has ',bold]'                    || fail "TAILFAIL failure toast must be STICKY (palette red + bold) (issue #331)"
 tmux_has 'new-window'                   && fail "TAILFAIL must NOT spawn a window after the worktree add failed"
 ok "TAILFAIL backgrounded worktree-add failure → 'spawn failed for #303: worktree add', no window"
 

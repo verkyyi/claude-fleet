@@ -326,7 +326,9 @@ python3 - "$BIN" <<'PYTEST' || exit 1
 import json, os, pathlib, re, subprocess, sys, tempfile, time
 root=pathlib.Path(sys.argv[1])
 keymap=root/'dash-keymap.sh'
-base_env=dict(os.environ,FLEET_TMUX_PREFIX='C-b',FLEET_TMUX_PREFIX2='',NO_COLOR='1')
+# FLEET_FZF_FOOTER pins fzf's --footer support (issue #1619): the stub below logs
+# every call, so fleet-popup-lib.sh's capability probe must not be one of them.
+base_env=dict(os.environ,FLEET_TMUX_PREFIX='C-b',FLEET_TMUX_PREFIX2='',NO_COLOR='1',FLEET_FZF_FOOTER='1')
 
 def table(panel,env):
     rows=subprocess.check_output(['bash',str(keymap),'--panel',panel,'list'],env=env,text=True)
@@ -386,7 +388,8 @@ with tempfile.TemporaryDirectory(prefix='panel-keymap-') as tmp:
                     for row in resolved.values():
                         assert row[1] in keys,(panel,prefix,popup,'missing bind',row,keys)
                         if row[5]=='remapped': assert row[3] not in keys,(panel,'old default still bound',row)
-                    header=next(arg for arg in args if arg.startswith('--header='))
+                    # the key hints may be the footer line now (fleet_fzf_hint, #1619)
+                    header=' '.join(arg for arg in args if arg.startswith(('--header=','--footer=')))
                     hints=['new'] if panel=='backlog' and not popup else (['scope','reload'] if panel=='config' else [])
                     for action in hints: assert resolved[action][2] in header,(panel,'stale header',header)
                 finally:

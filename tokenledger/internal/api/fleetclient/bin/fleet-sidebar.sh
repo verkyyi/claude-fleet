@@ -44,11 +44,10 @@ show_on() {
   [ "${FLEET_SIDEBAR:-1}" = 1 ] && return 0
   . "$BIN/fleet-config-lib.sh"
   if ! fcfg_write "$conf" FLEET_SIDEBAR 1 bool >/dev/null; then
-    tmux display-message "$(fleet_ui_t sidebar_save_failed)" 2>/dev/null || :
+    fleet_ui_fail "$(fleet_ui_t sidebar_save_failed)" "$(fleet_ui_t sidebar_save_next)"
     return 0
   fi
-  FLEET_SIDEBAR=1
-  tmux display-message "$(fleet_ui_t sidebar_on)" 2>/dev/null || :
+  FLEET_SIDEBAR=1   # no toast: the list appearing is the answer (issue #1618)
 }
 
 case "$verb" in
@@ -60,15 +59,10 @@ case "$verb" in
     { [ "$verb" = hide ] || [ "${FLEET_SIDEBAR:-1}" = 1 ]; } && enabled=0
     . "$BIN/fleet-config-lib.sh"
     if ! fcfg_write "$conf" FLEET_SIDEBAR "$enabled" bool >/dev/null; then
-      tmux display-message "$(fleet_ui_t sidebar_save_failed)" 2>/dev/null || :
+      fleet_ui_fail "$(fleet_ui_t sidebar_save_failed)" "$(fleet_ui_t sidebar_save_next)"
       exit 0
     fi
-    FLEET_SIDEBAR=$enabled
-    if [ "$enabled" = 1 ]; then
-      tmux display-message "$(fleet_ui_t sidebar_on)" 2>/dev/null || :
-    else
-      tmux display-message "$(fleet_ui_t sidebar_hidden)" 2>/dev/null || :
-    fi
+    FLEET_SIDEBAR=$enabled   # no toast: the list coming or going is the answer (issue #1618)
     verb=sync ;;
   sync|key) ;;
   menu|reap) . "$BIN/fleet-sidebar-menu.sh"; exit 0 ;;
@@ -202,7 +196,7 @@ if [ "$narrow" = 1 ] || ! view_up; then
     [ $? = 3 ] || exit 0
   fi
   fleet_home_trace_drop   # nothing records this press
-  tmux display-message ${client:+-c "$client"} "$(fleet_ui_t toast_sidebar_narrow)" 2>/dev/null || :
+  FLEET_UI_CLIENT=$client fleet_ui_fail "$(fleet_ui_t sidebar_narrow_why)" "$(fleet_ui_t sidebar_narrow_next)"
   exit 0
 fi
 if [ "$mode" = bar ]; then
@@ -217,7 +211,9 @@ tmux switch-client ${client:+-c "$client"} -T fleet-sidebar 2>/dev/null || :
 # empty input line gets Escape (the highlight back on the task in view); a typed
 # name is left as it is.
 [ -z "$(wdm '{top-left}' '#{@sidebar_input}')" ] && py key Escape
-tmux display-message ${client:+-c "$client"} "$(fleet_ui_t toast_sidebar_focus)" 2>/dev/null || :
+# The key help flashes once a day per login, not on every visit (issue #1618).
+fleet_ui_hint_once toast_sidebar_focus &&
+  tmux display-message ${client:+-c "$client"} "$(fleet_ui_t toast_sidebar_focus)" 2>/dev/null
 fleet_home_end focus
 bash "$BIN/fleet-hub-visits.sh" record '' "$sess" "$mode-sidebar" \
   "$(wdm '' '#{?#{@wid},#{@wid},#{window_id}}')" '' "$(fleet_home_extra)" >/dev/null 2>&1 || :

@@ -1,6 +1,6 @@
 #!/bin/bash
 # fleet-repo-ask.sh [<sess>] — the per-spawn "which repo?" prompt (issues #794, #1034).
-# Run inside `tmux display-popup -E`: lists <sess>'s (default: this fleet's) hosted
+# Run inside a fleet popup: lists <sess>'s (default: this fleet's) hosted
 # repos, prints the picked owner/name on stdout, nothing (exit 1) on Esc. Filing a
 # new issue with no row/heading repo to go on runs it (dash-issue-new.sh), since an
 # issue always belongs to one repo. It ASKS a destination and sets nothing — the
@@ -15,6 +15,7 @@ rsess="${1:-$(tmux display-message -p '#S' 2>/dev/null)}"
 # Escape is a reach (issue #346) — tapping ✕/close aborts fzf → empty pick → exit.
 # Bracketed as a button (issue #381): the clicked word is `[✕` or `close]`, so the
 # case globs *✕*|*close* to fire on either half.
+. "$BIN/fleet-popup-lib.sh"; fleet_fzf_frame   # a popup's border is the frame (issue #1619)
 CLOSE_BIND='click-header:transform:case "$FZF_CLICK_HEADER_WORD" in *✕*|*close*) echo abort ;; esac'
 
 # Every row carries a hidden key field ahead of what it shows — `<repo> US <display>`
@@ -28,7 +29,7 @@ $(fleet_repos "$rsess")
 EOF2
 [ -n "$listing" ] || exit 1
 pick=$(printf '%s' "$listing" \
-  | fzf --ansi --no-sort --layout=reverse-list --info=hidden --border=rounded --height=100% --no-input \
+  | fzf --ansi --no-sort --layout=reverse-list --info=hidden ${FZF_FRAME[@]+"${FZF_FRAME[@]}"} --height=100% --no-input \
         --delimiter="$US" --with-nth=2 \
         --header="which repo?  ·  enter=pick · esc=cancel · [✕ close]" \
         --bind "$CLOSE_BIND")

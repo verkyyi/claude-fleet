@@ -191,7 +191,7 @@ eq "← again is a no-op" "" "$(bash "$HIST" fold collapse landed:900)"
 # the snapshot already rendered — pointing fzf back at the producer would render
 # twice (issue #662).
 assert_cursor_lands_on_parent() { # <action> <expected field1> <label>
-  local act="$1" want="$2" label="$3" path idx got
+  local act="$1" want="$2" label="$3" pth idx got
   case "$act" in
     "reload-sync(cat "*")+pos("*")") ;;
     *) fail "$label — expected a snapshot reload + pos(), got" "$act" ;;
@@ -201,12 +201,12 @@ assert_cursor_lands_on_parent() { # <action> <expected field1> <label>
     *tmux-dashboard-rows.sh*) fail "$label — the action re-runs the producer, so the keystroke renders TWICE (issue #662)" "$act" ;;
   esac
   CHECKS=$((CHECKS+1))
-  path=${act#reload-sync(cat }; path=${path%%)*}
+  pth=${act#reload-sync(cat }; pth=${pth%%)*}
   idx=${act##*+pos(}; idx=${idx%)}
-  [ -s "$path" ] || fail "$label — the snapshot fzf is pointed at is missing or empty: $path"
+  [ -s "$pth" ] || fail "$label — the snapshot fzf is pointed at is missing or empty: $pth"
   CHECKS=$((CHECKS+1))
-  got=$(awk -F"$US" -v n=$(( idx + 1 )) 'NR==n {print $1; exit}' "$path")
-  [ "$got" = "$want" ] || fail "$label — pos($idx) lands on [$got], not the parent [$want]" "$(cat "$path")"
+  got=$(awk -F"$US" -v n=$(( idx + 1 )) 'NR==n {print $1; exit}' "$pth")
+  [ "$got" = "$want" ] || fail "$label — pos($idx) lands on [$got], not the parent [$want]" "$(cat "$pth")"
   CHECKS=$((CHECKS+1))
 }
 

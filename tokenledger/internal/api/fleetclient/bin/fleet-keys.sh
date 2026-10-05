@@ -3,7 +3,7 @@
 # of truth for EVERY fleet shortcut, grouped by context:
 #   tmux prefix binds · task sidebar · dashboard fzf · backlog fzf · config modal fzf.
 #
-# Opened by `prefix ?` (display-popup -E; see conf/tmux-attention.conf) and by a
+# Opened by `prefix ?` (a fleet popup; see conf/tmux-attention.conf) and by a
 # `?` bind inside the dash/backlog. The popup closes on q/esc.
 #
 # Context scoping (issue #265): the global `prefix ?` shows the WHOLE sheet, but

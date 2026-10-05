@@ -180,17 +180,18 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
+. "$BIN/fleet-ui-lang.sh"   # fleet_ui_fail — the one failure line (issue #1618)
 
 # A machine name is one token (it is embedded in the --bg re-exec and handed to
 # the hub); anything else is refused rather than guessed.
 case "$NODE_ARG" in *[!A-Za-z0-9._-]*)
   printf 'dash-raw-session: --node %s is not a machine name (auto / local / <name>)\n' "$NODE_ARG" >&2
-  tmux display-message "raw: --node $NODE_ARG is not a machine name" 2>/dev/null
+  fleet_ui_fail "raw: --node $NODE_ARG is not a machine name" "auto / local / <name>"
   exit 1 ;;
 esac
 
 SESS="${TARGET_SESS:-$(fleet_current_session)}"
-[ -z "$SESS" ] && { printf 'dash-raw-session: no target tmux session\n' >&2; tmux display-message "raw: no target tmux session" 2>/dev/null; exit 1; }
+[ -z "$SESS" ] && { printf 'dash-raw-session: no target tmux session\n' >&2; fleet_ui_fail "raw: no target tmux session"; exit 1; }
 fleet_load_conf "$SESS"                       # multi-fleet: target THIS fleet's checkout
 # Each fleet is its OWN tmux server on a named socket (== session name, issue
 # #159). Route EVERY tmux call through TM() so it names the target fleet's socket
@@ -202,7 +203,7 @@ TM() { tmux -L "$SOCK" "$@"; }
 # path — and a toast is on no screen that caller can read.
 # stderr is the record; the status line is the glance. Exit 2 = at capacity
 # (retry later), 1 = infrastructure, matching dash-issue-session.sh.
-refuse() { printf 'dash-raw-session: %s\n' "${1#raw: }" >&2; TM display-message "$1" 2>/dev/null; }
+refuse() { printf 'dash-raw-session: %s\n' "${1#raw: }" >&2; FLEET_UI_SOCK=$SOCK fleet_ui_fail "$1"; }
 # No spawning into ANOTHER fleet (issue #980): a caller sitting in a fleet pane may
 # name only its own fleet. A caller outside any fleet (no pane, or an ad-hoc
 # session with no fleet conf) is headless and names the fleet it means.
@@ -210,7 +211,7 @@ if [ -n "$TARGET_SESS" ] && [ -n "${TMUX:-}" ]; then
   _here=$(fleet_current_session)
   if [ -n "$_here" ] && [ "$_here" != "$TARGET_SESS" ] && [ -f "$(fleet_conf_file "$_here")" ]; then
     printf 'dash-raw-session: refusing to spawn into fleet %s from fleet %s — one fleet per login; pick the repo with --repo\n' "$TARGET_SESS" "$_here" >&2
-    tmux display-message "raw: no spawning into another fleet ($TARGET_SESS) — use --repo" 2>/dev/null
+    fleet_ui_fail "raw: no spawning into another fleet ($TARGET_SESS)" "use --repo"
     exit 1
   fi
   unset _here
@@ -369,8 +370,7 @@ if [ "$PLACING" = 1 ]; then
       else
         printf 'dash-raw-session: scratch → %s (hub operation %s, %s) — %s\n' "$_m" "$_op" "$_st" "$_why" >&2
       fi
-      [ -z "$TARGET_SESS" ] && TM display-message "scratch → $_m (${_why%%;*})" 2>/dev/null
-      exit 0 ;;
+      exit 0 ;;   # placed: its row on the list is the answer (issue #1618)
     5:DECLINED\ *)
       # That machine's spawn refused it: its reason, its class of exit.
       read -r _ _m _op _x <<<"$_pv"
@@ -569,10 +569,10 @@ if [ -n "${NAME//[[:space:]]/}" ] && [ -z "$PROMPT" ]; then
   pane=$(TM display-message -p -t "$win" '#{pane_id}' 2>/dev/null)
   if [ -n "$df" ] && [ -n "$pane" ] && printf '%s' "$NAME" > "$df"; then
     TM run-shell -b "python3 '$BIN/scratch-prefill.py' '$SOCK' '$pane' '$df' '$warm' >/dev/null 2>&1 || { rm -f '$df'; tmux -L '$SOCK' display-message 'raw: could not prefill the scratch name' 2>/dev/null; }" 2>/dev/null \
-      || { rm -f "$df"; TM display-message 'raw: could not prefill the scratch name' 2>/dev/null; }
+      || { rm -f "$df"; FLEET_UI_SOCK=$SOCK fleet_ui_fail 'raw: could not prefill the scratch name'; }
   else
     [ -n "$df" ] && rm -f "$df"
-    TM display-message 'raw: could not stage the scratch input' 2>/dev/null
+    FLEET_UI_SOCK=$SOCK fleet_ui_fail 'raw: could not stage the scratch input' 
   fi
 fi
 
@@ -592,18 +592,11 @@ TM run-shell -b "bash '$BIN/scratch-pool.sh' ensure '$SESS' --delay >/dev/null 2
 [ "$PRINT_WIN" = 1 ] && printf '%s\t%s\t%s\n' "$win" "$name" "$wt"
 
 if [ -z "$TARGET_SESS" ]; then
-  # Surface a reserved-name fallback note regardless of the focus path so the user
-  # learns why their name wasn't used (non-blocking — they still got a window).
-  if [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ]; then
-    TM select-window -t "$win" 2>/dev/null
-    # An `if`, not `[ … ] &&`: as the script's last command a false test would make
-    # a successful spawn exit 1 — and the sidebar's input line reads that code.
-    if [ -n "$note" ]; then TM display-message "$note" 2>/dev/null; fi
-  else
-    msg="spawned raw session → $name"; [ -n "$PROMPT" ] && msg="spawned scratch → $name (seeded)"
-    [ "$NOREPO" = 1 ] && msg="$msg (no repo · \$HOME)"
-    [ -n "$AGENT" ] && msg="$msg [$AGENT]"
-    [ -n "$note" ] && msg="$msg ($note)"
-    TM display-message "$msg" 2>/dev/null
-  fi
+  # A spawn that worked draws nothing — the new window and its list row are the
+  # answer (issue #1618). The one thing still said is a reserved-name fallback:
+  # the name typed was NOT used, and the user should learn why.
+  [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && TM select-window -t "$win" 2>/dev/null
+  # An `if`, not `[ … ] &&`: as the script's last command a false test would make
+  # a successful spawn exit 1 — and the sidebar's input line reads that code.
+  if [ -n "$note" ]; then FLEET_UI_SOCK=$SOCK fleet_ui_fail "$note"; fi
 fi
