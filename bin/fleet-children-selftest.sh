@@ -15,6 +15,8 @@
 #   SURVIVE   a parent migrated onto a new window id (same key) reads the same
 #             ledger; a reaped child stays in the book, counted by its report.
 #   DEFAULT   with no argument the key is the calling pane's own (fleet_origin_key).
+#   JOIN      one row per child (issue #1351): a bare-key report, the qualified live
+#             window and a placement are one child; two repos' same number are two.
 #
 # Runs on a DEDICATED tmux server on its own -L label (never the live server,
 # issue #159). The dash half replays that server's window list through a PATH shim,
@@ -260,5 +262,58 @@ alloc=$( . "$BIN/fleet-lib.sh"; fleet_scratch_alloc "$GR" master )
 eq "gen: (no session) scratch-2 allocated" scratch-2 "${alloc%%$'\t'*}"
 eq "gen: (no session) its book is untouched" 1 "$(wc -l < "$CD/scratch-2.ndjson" | tr -d ' ')"
 eq "gen: (no session) no generation minted" 0 "$(grep -c '^scratch-2	' "$CD/.gen")"
+
+# --- 4. ONE ROW PER CHILD (issue #1351): three sources, one key -----------------
+# A report filed before it carried its repo says bare `issue-N`; the live window
+# and the cross-machine placement say `<slug>:issue-N`. They are one child: one
+# row, counted once. Two repos' same number are NOT one child. A row carrying a
+# window's @fleet_id joins that window even under another key. A bare book (a
+# one-repo fleet) reads byte for byte as before.
+JD="$WORK/join"; mkdir -p "$JD"
+JB="$JD/r-a:scratch-5.ndjson"
+printf '%s\n' '{"seq": 1, "ts": "2026-10-05T00:00:00Z", "child": "issue-1317", "state": "FAILED", "pr": "1333"}' > "$JB"
+printf '%s' '{"child":"issue-1317","state":"MERGED","pr":"1333"}' \
+  | python3 "$BIN/fleet-children.py" append --file "$JB" >/dev/null
+has "join: a bare child appended to a qualified book is written qualified" '"child": "r-a:issue-1317"' "$(sed -n 2p "$JB")"
+python3 "$BIN/fleet-children.py" dispatch --file "$JD/r-a:scratch-5.dispatch" --child r-a:issue-1317 \
+  --state done --node m4 --op op-1 --window @9 >/dev/null
+FID1=11111111-2222-3333-4444-555555555555
+printf '%s\n' "{\"seq\": 3, \"ts\": \"2026-10-05T00:00:00Z\", \"child\": \"r-a:scratch-9\", \"state\": \"WAITING\", \"fid\": \"$FID1\"}" >> "$JB"
+JOUT=$(printf '%s\n' \
+  "@1|working||r-a:issue-1317|r-a:scratch-5||kid-a" \
+  "@2|working||r-b:issue-1317|r-a:scratch-5||kid-b" \
+  "@3|working||r-a:issue-1400|r-a:scratch-5|$FID1|kid-bound" \
+  | python3 "$BIN/fleet-children.py" show --dir "$JD" --parent r-a:scratch-5 --json)
+python3 - "$JOUT" <<'PY' || fail "join: the three sources must make one row per child (see above)" "$JOUT"
+import json, sys
+d = json.loads(sys.argv[1])
+kids = {k["child"]: k for k in d["children"]}
+assert sorted(kids) == ["r-a:issue-1317", "r-a:issue-1400", "r-b:issue-1317"], sorted(kids)
+a = kids["r-a:issue-1317"]
+assert a["live"] and a["window"] == "@1" and a["last"]["state"] == "MERGED" and a["pr"] == "1333", a
+assert a["dispatch"]["node"] == "m4", a
+assert kids["r-b:issue-1317"]["last"] is None, kids["r-b:issue-1317"]
+assert kids["r-a:issue-1400"]["last"]["state"] == "WAITING", kids["r-a:issue-1400"]
+assert d["summary"]["total"] == 3 and d["summary"]["needs"] == 0, d["summary"]
+PY
+CHECKS=$((CHECKS + 1))
+JTXT=$(printf '%s\n' "@1|working||r-a:issue-1317|r-a:scratch-5||kid-a" \
+  | python3 "$BIN/fleet-children.py" show --dir "$JD" --parent r-a:scratch-5)
+eq "join: the text view has one line per child (no extra ↗ line for a placed child)" 0 \
+  "$(printf '%s\n' "$JTXT" | grep -c '↗')"
+eq "join: wake-state answers for the bare spelling too" "0 0" \
+  "$(python3 "$BIN/fleet-children.py" wake-state --file "$JB" --child issue-1317)"
+# Degenerate: a bare book keeps its bare keys, and an old six-field window row reads.
+printf '%s\n' '{"seq": 1, "ts": "2026-10-05T00:00:00Z", "child": "issue-7", "state": "MERGED"}' > "$JD/scratch-5.ndjson"
+JOUT=$(printf '%s\n' "@1|done||issue-7|scratch-5|a|b" \
+  | python3 "$BIN/fleet-children.py" show --dir "$JD" --parent scratch-5 --json)
+python3 - "$JOUT" <<'PY' || fail "join: a one-repo book must read as before" "$JOUT"
+import json, sys
+d = json.loads(sys.argv[1])
+assert [k["child"] for k in d["children"]] == ["issue-7"], d
+assert d["children"][0]["title"] == "a|b" and d["children"][0]["live"], d
+assert "dispatch" not in d["children"][0], d
+PY
+CHECKS=$((CHECKS + 1))
 
 printf 'fleet-children selftest: OK (%d checks)\n' "$CHECKS"

@@ -6813,7 +6813,11 @@ for line in sys.stdin:
     if len(p) < 2 or not p[0] or p[1].endswith(":lost"):
         continue
     tot += 1
-    e = last.get(p[0]) or {}
+    e = last.get(p[0])
+    if e is None:   # one key, two spellings: bare `issue-N` / `<slug>:issue-N` (#1351)
+        alt = [k for k in last if k.endswith(":" + p[0])] if ":" not in p[0] else [p[0].split(":", 1)[1]]
+        e = last.get(alt[0]) if len(alt) == 1 else None
+    e = e or {}
     if e.get("state") == "MERGED" or (e.get("state") == "REAPED" and str(e.get("verdict") or "").startswith("merged")):
         dn += 1
 print(dn, tot)
