@@ -138,11 +138,13 @@ log() { printf '%s [%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S' 2>/dev/null)" "${PANE
 # bare tmux honours the inherited $TMUX (the arming pane's server); --socket wins.
 TM() { if [ -n "$SOCKET" ]; then tmux -L "$SOCKET" "$@"; else tmux "$@"; fi; }
 
-# A visible, non-fatal notice on the pane's status line, plus the log.
-notify() { log "$*"; TM display-message -t "$PANE" "fleet-handoff: $*" 2>/dev/null || true; }
+# A non-fatal notice: the log + the alerts (issue #1617 — this cycle runs in the
+# background, so a status-line toast flashed at whoever happened to be looking).
+alert() { bash "$BIN/fleet-alerts.sh" event ${SOCKET:+-L "$SOCKET"} handoff "fleet-handoff ${PANE:-?}: $*" >/dev/null 2>&1 || true; }
+notify() { log "$*"; alert "$*"; }
 
-# A validation refusal: log, notify, and exit non-zero (nothing destructive ran).
-refuse() { log "REFUSE: $*"; TM display-message -t "$PANE" "fleet-handoff: $*" 2>/dev/null || true; exit 1; }
+# A validation refusal: log, alert, and exit non-zero (nothing destructive ran).
+refuse() { log "REFUSE: $*"; alert "$*"; exit 1; }
 
 nap() { sleep "$POLL" 2>/dev/null || sleep 1; }
 
