@@ -354,9 +354,9 @@ if [ "$PLACING" = 1 ]; then
         # The lease is the remote fleet's now: the EXIT trap must not hand it back.
         LEASE_HELD=0
         read -r _ _m _op _st _w <<<"$_pv"
-        if [ "$_st" = done ]; then
+        if [ "$_st" = 'done' ]; then
           printf 'dash-issue-session: #%s → %s 已开窗 %s (hub operation %s) — %s\n' "$num" "$_m" "$_w" "$_op" "$_why" >&2
-          _place_note done "$_m" "$_op" "$_w" 0
+          _place_note 'done' "$_m" "$_op" "$_w" 0
         else
           printf 'dash-issue-session: #%s → %s (hub operation %s, %s) — %s\n' "$num" "$_m" "$_op" "$_st" "$_why" >&2
           _place_note accepted "$_m" "$_op"
