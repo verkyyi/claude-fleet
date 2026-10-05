@@ -528,18 +528,19 @@ func runHub(args []string) error {
 		srv.NodeLostAfter = api.NodeLostAfterFromEnv()
 		go srv.RunNodeAlerts(ctx)
 	}
-	// Findings to WeCom (claude-fleet#1469). The webhook carries the robot's
-	// key: environment only, never a flag (`ps`), never logged.
+	// Findings to kf-notify (claude-fleet#1705), else a WeCom robot
+	// (claude-fleet#1469). The key / webhook is a secret: environment only,
+	// never a flag (`ps`), never logged.
 	notifier, err := api.FindingNotifierFromEnv(os.Getenv, srv.FleetPublicURL)
 	if err != nil {
 		return err
 	}
 	if notifier != nil {
 		srv.Notifier = notifier
-		log.Printf("findings: WeCom push on (repeat every %s, %s)", notifier.Repeat, notifier.Locale)
+		log.Printf("findings: push on via %s (repeat every %s, %s)", notifier.Channel(), notifier.Repeat, notifier.Locale)
 		go srv.RunFindingNotify(ctx)
 	} else {
-		log.Printf("findings: WeCom push off (set CCQUOTA_WECOM_WEBHOOK to turn it on)")
+		log.Printf("findings: push off (set CCQUOTA_NOTIFY_URL + CCQUOTA_NOTIFY_KEY to turn it on)")
 	}
 
 	// Reads the feed once now, then on the interval. Failure is not fatal: a hub
