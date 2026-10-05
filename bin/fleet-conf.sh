@@ -85,7 +85,7 @@ _role_infer() {
   local r='' WHY_C='' WHY_N=''
   if [ -f "$CD/hub.json" ]; then WHY_C='hub.json'
   elif [ -f "$CD/shell.conf" ]; then WHY_C='shell.conf'
-  elif [ -f "$HOME/.ssh/fleet-cert-cert.pub" ]; then WHY_C='~/.ssh/fleet-cert'
+  elif [ -f "$HOME/.ssh/fleet-cert-cert.pub" ]; then WHY_C="the fleet-cert certificate"
   elif [ -x "$CLIENT_HOME/bin/fleet" ]; then WHY_C="${CLIENT_HOME/#$HOME/~}/bin/fleet"
   fi
   if [ -n "$(fleet_each_conf)" ]; then WHY_N='a fleet conf'
@@ -164,8 +164,7 @@ _body() {
 
 migrate() {
   local DRY="$1" QUIET="$2"
-  local SET="$CD/fleet.settings" SH="$CD/shell.conf" HJ="$CD/hub.json" NE
-  NE=$(fleet_node_env_file)
+  local SET="$CD/fleet.settings" SH="$CD/shell.conf" HJ="$CD/hub.json"
   if [ -f "$MC" ]; then
     [ "$QUIET" = 1 ] || echo "fleet-conf: already one file — $MC"
     return 0
@@ -209,7 +208,7 @@ except Exception: print("")' "$HJ" 2>/dev/null)
   # was never read — fleet_load_conf strips it, #237).
   local identity='^[[:space:]]*(export[[:space:]]+)?FLEET_(REPO|MAIN|BASE_BRANCH|SEED)='
   local globals="^[[:space:]]*(export[[:space:]]+)?(${_FLEET_GLOBAL_ONLY// /|})="
-  local tmp="$MC.tmp.$$" sec
+  local tmp="$MC.tmp.$$"
   local nodesec=node; _role_has "$role" node || nodesec=common
   {
     printf "# claude-fleet — this machine's ONE config file (issue #1623). Assignments only.\n"
