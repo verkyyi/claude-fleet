@@ -1,5 +1,5 @@
 #!/bin/bash
-# dash-raw-session.sh [--name <name>] [--prompt <text>] [--agent <a>] [--pin] [<fleet-session>] — open a
+# dash-raw-session.sh [--name <name>] [--prompt <text>] [--agent <a>] [--pin] [--node <m>] [<fleet-session>] — open a
 # RAW (non-issue-bound) scratch Claude window in a fleet: plain `claude` on the
 # fleet's socket, with NO GitHub issue and (unless --prompt) NO seed prompt, but in
 # its OWN git worktree off the base branch (issue #290). It is the counterpart to the issue-bound spawners
@@ -110,7 +110,7 @@ set -uo pipefail
 # and input draft; --prompt <t> / --prompt=<t> is the optional submitted seed;
 # --bg backgrounds the slow half of the spawn (the dash ⌃s / typed-↵ path — see
 # below); the lone positional is the headless <fleet-session>.
-NAME=""; PROMPT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""
+NAME=""; PROMPT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --name)        NAME="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
@@ -145,14 +145,28 @@ while [ "$#" -gt 0 ]; do
     --no-repo)     NOREPO=1; shift ;;
     --selection)   SEL="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --selection=*) SEL="${1#--selection=}"; shift ;;
-    # --node (issue #1425): `auto` / `local` / this machine's name open it here.
-    # A scratch has no issue, and the hub's start is issue-bound, so it cannot be
-    # sent to another machine yet — naming one is refused rather than ignored.
+    # --node (issues #1425, #1541): which machine opens it — the same word it is
+    # for an issue session. `auto` (the hub picks by load, account headroom and
+    # the per-person cap), `local`, or a machine name. Default with the hub
+    # module on (CCQUOTA_FLEET=1): FLEET_SPAWN_NODE, else auto (#1475). A start
+    # the hub itself sent is already placed: fleet-control-read.sh says --node
+    # local. With the module off nothing changes unless --node names another
+    # machine (refused). See «Which machine opens it» below.
     --node)        NODE_ARG="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --node=*)      NODE_ARG="${1#--node=}"; shift ;;
+    # --origin-wid (issue #1541): the parent's worker_id when the parent is on
+    # ANOTHER machine (a hub-placed start; fleet-control-read.sh passes it) —
+    # stamped as the window's @origin_wid verbatim, its key as @origin.
+    --origin-wid)  ORIGIN_WID="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
+    --origin-wid=*) ORIGIN_WID="${1#--origin-wid=}"; shift ;;
+    # --print (issue #1541): a headless caller's receipt — once the window
+    # exists, ONE stdout line `<window_id>\t<name>\t<worktree>`. Foreground pass
+    # only (the --bg pass's stdout is silenced, #446). The hub's node reads it.
+    --print)       PRINT_WIN=1; shift ;;
     *)             TARGET_SESS="$1"; shift ;;
   esac
 done
+case "$ORIGIN_WID" in ''|*[!A-Za-z0-9/:._-]*) ORIGIN_WID='' ;; esac
 # Trim the seed; a whitespace-only prompt is no prompt (plain scratch).
 PROMPT="${PROMPT#"${PROMPT%%[![:space:]]*}"}"; PROMPT="${PROMPT%"${PROMPT##*[![:space:]]}"}"
 case "$AGENT" in
@@ -167,11 +181,13 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
 
-if [ -n "$NODE_ARG" ] && [ "$NODE_ARG" != auto ] && ! fleet_node_is_self "$NODE_ARG"; then
-  printf 'dash-raw-session: a scratch session opens on this machine only — --node %s is for issue sessions (dash-issue-session.sh)\n' "$NODE_ARG" >&2
-  tmux display-message "raw: --node $NODE_ARG — a scratch opens on this machine only" 2>/dev/null
-  exit 1
-fi
+# A machine name is one token (it is embedded in the --bg re-exec and handed to
+# the hub); anything else is refused rather than guessed.
+case "$NODE_ARG" in *[!A-Za-z0-9._-]*)
+  printf 'dash-raw-session: --node %s is not a machine name (auto / local / <name>)\n' "$NODE_ARG" >&2
+  tmux display-message "raw: --node $NODE_ARG is not a machine name" 2>/dev/null
+  exit 1 ;;
+esac
 
 SESS="${TARGET_SESS:-$(fleet_current_session)}"
 [ -z "$SESS" ] && { printf 'dash-raw-session: no target tmux session\n' >&2; tmux display-message "raw: no target tmux session" 2>/dev/null; exit 1; }
@@ -211,11 +227,34 @@ fi
 _det=$(fleet_origin_key)
 ORIGIN=$(fleet_origin_canon "$ORIGIN" "$_det" "$TARGET_SESS" "")
 unset _det
+# A parent on another machine still needs its KEY as @origin (issue #1541, as
+# dash-issue-session.sh does): the child-report path treats an empty @origin as
+# hub-spawned and stays silent; with @origin_wid beside it, it routes by worker_id.
+if [ -n "$ORIGIN_WID" ] && [ -z "$ORIGIN" ]; then ORIGIN=$(fleet_origin_canon "${ORIGIN_WID#*/}" '' '' ''); fi
+
+# Which machine (issue #1541; the issue path's rule, #1425/#1475): --node, else —
+# with the hub module on — FLEET_SPAWN_NODE, else auto. PLACING = the hub may
+# send this scratch to another machine; decided for good below, after the repo
+# is known (a no-repo or seeded scratch never travels).
+NODE="$NODE_ARG"
+if [ -z "$NODE" ] && [ "${CCQUOTA_FLEET:-0}" = 1 ]; then
+  NODE="${FLEET_SPAWN_NODE:-auto}"
+  case "$NODE" in ''|*[!A-Za-z0-9._-]*) NODE=auto ;; esac
+fi
+PLACING=0
+[ -n "$NODE" ] && ! fleet_node_is_self "$NODE" && PLACING=1
 
 # Session cap (issues #28, #70): a raw session is a real Claude session, so it is
 # subject to the SAME global + per-fleet ceilings as an issue spawn. Refuse (with a
 # human-readable reason) once a cap is reached, rather than quietly overspend.
-if ! cap_msg=$(fleet_session_cap_ok "$SESS"); then refuse "$cap_msg"; exit 2; fi
+# Placing (issue #1541): a scratch the hub may send to ANOTHER machine must not be
+# stopped by THIS machine's caps — that is exactly when it should go elsewhere —
+# so the verdict is held until placement answers, and enforced only if it opens here.
+CAP_HELD=''
+if ! cap_msg=$(fleet_session_cap_ok "$SESS"); then
+  if [ "$PLACING" = 1 ] && [ "${CCQUOTA_FLEET:-0}" = 1 ]; then CAP_HELD=$cap_msg
+  else refuse "$cap_msg"; exit 2; fi
+fi
 
 # Which repo (issue #789) — see the header. The chosen repo's overlay replaces what
 # fleet_load_conf resolved (possibly the CALLER window's repo).
@@ -272,11 +311,88 @@ if [ "$BG" = 1 ]; then
   # the highlighted row the operator moved off in between.
   rarg=''; [ "$NOREPO" = 1 ] && rarg=' --no-repo'; [ -n "$REPO_ARG" ] && rarg=" --repo='$REPO_ARG'"
   pinarg=''; [ "$PIN" = 1 ] && pinarg=' --pin'
-  fleet_bg "FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg$pfarg$pinarg${ORIGIN:+ --origin='$ORIGIN'}${AGENT:+ --agent=$AGENT}$rarg${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1" \
+  # --node rides along (issue #1541): the placement itself runs in the bg pass, so
+  # the keypress returns at once while the hub is asked; the pass must see the
+  # same decision whatever its environment. One sanitized token (checked above),
+  # as is --origin-wid.
+  nodearg=''; [ -n "$NODE" ] && nodearg=" --node=$NODE"
+  owarg=''; [ -n "$ORIGIN_WID" ] && owarg=" --origin-wid=$ORIGIN_WID"
+  fleet_bg "FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg$pfarg$pinarg$nodearg$owarg${ORIGIN:+ --origin='$ORIGIN'}${AGENT:+ --agent=$AGENT}$rarg${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1" \
     || { [ -n "$nfarg" ] && rm -f "$nf"; [ -n "$pfarg" ] && rm -f "$pf"
          refuse "raw: background dispatch failed"; exit 1; }
   exit 0
 fi
+
+# --- Which machine opens it (issue #1541, EPIC #1529 R3) ------------------------
+# `--node` means for a scratch what it means for an issue session (#1425): `auto`
+# / `local` / this machine's name open it here; another machine's name — or
+# `auto`, when the hub picks another machine — opens it THERE. The hub's pick_node
+# chooses among this person's machines that host the repo (offline, >0.8
+# load/core, <1 GiB free or at the per-person cap are out, the rest scored on
+# account headroom + load); the chosen machine's node runs this script headless
+# (fleet-control-read.sh start … scratch), with this scratch's name and — when a
+# worker or scratch spawned us — our worker_id as its parent; nothing opens here
+# and we exit 0 with the machine on stderr and the toast. No lease is involved: a
+# scratch has no issue, and its scratch-<N> is minted on the machine that opens
+# it. REMOTE is waited on (the hub's 30 s) until that machine really opened the
+# window or really refused it (#1586): refused ⇒ its reason and the exit a refusal
+# here gives (2 full · 1 else); no final state ⇒ exit 1, never a success. A hub
+# that cannot be asked, or no machine that can take it, falls back to opening it
+# here for `auto` — and refuses for a machine named explicitly. Never placed: a
+# no-repo scratch (no repo to place by) and a seeded one (--prompt rides the
+# launch argument, here only) — named elsewhere they are refused, under `auto`
+# they open here. Hub module off: nothing runs unless --node names another machine.
+if [ "$PLACING" = 1 ]; then
+  if [ "$NOREPO" = 1 ] || [ -n "$PROMPT" ]; then
+    _why='a no-repo scratch'; [ -n "$PROMPT" ] && _why='a seeded scratch (--prompt)'
+    if [ "$NODE" != auto ]; then refuse "raw: $_why opens on this machine only — not opening it on $NODE"; exit 1; fi
+    PLACING=0
+  elif [ "${CCQUOTA_FLEET:-0}" != 1 ]; then
+    if [ "$NODE" != auto ]; then refuse "raw: --node $NODE needs the hub (CCQUOTA_FLEET=1) — not opening a scratch elsewhere"; exit 1; fi
+    PLACING=0
+  fi
+  unset _why
+fi
+if [ "$PLACING" = 1 ]; then
+  _pw="$ORIGIN_WID"
+  if [ -z "$_pw" ] && _fleet_wid_split "$ORIGIN" >/dev/null 2>&1; then
+    _u=$(fleet_uuid "$SESS") && [ -n "$_u" ] && _pw="$_u/$ORIGIN"
+  fi
+  _prepo="${REPO_ARG:-$(fleet_norm_repo "${FLEET_REPO:-}")}"
+  place_out=$(fleet_hub_place "$SESS" "$_prepo" scratch "$NODE" "$_pw" "$AGENT" '' '' "$NAME"); place_rc=$?
+  _pv=${place_out%%$'\t'*}; _why=''; case "$place_out" in *$'\t'*) _why=${place_out#*$'\t'} ;; esac
+  case "$place_rc:$_pv" in
+    0:REMOTE\ *)
+      read -r _ _m _op _st _w <<<"$_pv"
+      if [ "$_st" = 'done' ]; then
+        printf 'dash-raw-session: scratch → %s 已开窗 %s (hub operation %s) — %s\n' "$_m" "$_w" "$_op" "$_why" >&2
+      else
+        printf 'dash-raw-session: scratch → %s (hub operation %s, %s) — %s\n' "$_m" "$_op" "$_st" "$_why" >&2
+      fi
+      [ -z "$TARGET_SESS" ] && TM display-message "scratch → $_m (${_why%%;*})" 2>/dev/null
+      exit 0 ;;
+    5:DECLINED\ *)
+      # That machine's spawn refused it: its reason, its class of exit.
+      read -r _ _m _op _x <<<"$_pv"
+      refuse "raw: scratch 被 $_m 拒绝 (exit $_x): ${_why:-no reason given}"
+      [ "$_x" = 2 ] && exit 2; exit 1 ;;
+    6:UNKNOWN\ *)
+      read -r _ _m _op <<<"$_pv"
+      refuse "raw: scratch 已派到 $_m (hub operation $_op)，但没等到结果 — 未知，不当成功: ${_why:-no final state}"
+      exit 1 ;;
+    0:LOCAL\ *)
+      printf 'dash-raw-session: scratch 开在本机 %s — %s\n' "${_pv#LOCAL }" "$_why" >&2 ;;
+    *)
+      if [ "$NODE" != auto ]; then
+        refuse "raw: scratch 不能开在 $NODE: ${_why:-${_pv:-hub unreachable}}"
+        [ "$place_rc" = 4 ] && exit 2; exit 1
+      fi
+      [ "$place_rc" = 4 ] && printf 'dash-raw-session: 没有机器能接这个 scratch (%s) — 开在本机\n' "$_why" >&2 ;;
+  esac
+  unset _pw _u _pv _why _prepo
+fi
+# Opening here after all: this machine's cap verdict, held above, now applies.
+if [ -n "$CAP_HELD" ]; then refuse "$CAP_HELD"; exit 2; fi
 
 # In-flight marker (issue #531). Only the FOREGROUND pass reaches here — the --bg
 # dispatcher above re-execs + exits, so its instant return holds no slot. From now
@@ -433,8 +549,12 @@ fi
 # Spawn provenance (issue #503) — stamped on the WARM path too: a pool window was
 # pre-warmed with no requester, so its origin is decided at CLAIM time, here.
 [ -n "$ORIGIN" ] && TM set-window-option -t "$win" @origin "$ORIGIN" 2>/dev/null
-[ -n "$ORIGIN" ] && fleet_stamp_origin_wid "$SESS" "$win" "$ORIGIN" "$SOCK"   # parent's worker_id (#1420)
-[ -n "$ORIGIN" ] && fleet_stamp_origin_gen "$SESS" "$win" "$ORIGIN" "$SOCK"   # …and its generation (#1538)
+# The parent's worker_id (#1420): given verbatim when the parent is on another
+# machine (a hub-placed start, #1541), else derived from the key; a parent on
+# another machine has no generation here (#1538).
+if [ -n "$ORIGIN_WID" ]; then TM set-window-option -t "$win" @origin_wid "$ORIGIN_WID" 2>/dev/null
+elif [ -n "$ORIGIN" ]; then fleet_stamp_origin_wid "$SESS" "$win" "$ORIGIN" "$SOCK"; fi
+[ -n "$ORIGIN" ] && [ -z "$ORIGIN_WID" ] && fleet_stamp_origin_gen "$SESS" "$win" "$ORIGIN" "$SOCK"
 # Window handle (issue #566), likewise on BOTH paths: a warm-pool window is parked
 # in the holding session with no handle, and only becomes a fleet window here at
 # claim time. Best-effort — the dash backfills a window that ends up without one.
@@ -466,6 +586,10 @@ fi
 # pool-enabled gate so that with the pool off this whole line costs nothing.
 # run-shell -b because it is slow either way.
 TM run-shell -b "bash '$BIN/scratch-pool.sh' ensure '$SESS' --delay >/dev/null 2>&1" 2>/dev/null
+
+# The headless caller's receipt (issue #1541, --print): the window, its name and
+# its worktree — what the hub's node reads back as the start's window.
+[ "$PRINT_WIN" = 1 ] && printf '%s\t%s\t%s\n' "$win" "$name" "$wt"
 
 if [ -z "$TARGET_SESS" ]; then
   # Surface a reserved-name fallback note regardless of the focus path so the user

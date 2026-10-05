@@ -391,3 +391,84 @@ func TestNodePlaceCarriesAccountClass(t *testing.T) {
 		t.Fatalf("place(mine) = %d %v (m4 writes %d); want 400 and nothing sent", st, out, m4.count())
 	}
 }
+
+// A scratch session can be placed too (claude-fleet#1541): m5 busy, no issue,
+// no lease — the hub sends m4 a worker_start of kind scratch carrying the name
+// and the parent, reserves nothing, and reads the window back as for an issue.
+func TestNodePlaceScratchHandsStartWithoutLease(t *testing.T) {
+	h, m5, m4, f5, f4 := twoNodes(t)
+	tok5 := h.tokens["m5"]
+	parent := issueWID(f5.FleetID, 1)
+	m4.setOpGet(finished("succeeded", map[string]any{"exit": 0, "window": "@43",
+		"workers": []any{map[string]any{"window_id": "@43", "scratch": true}}}))
+
+	st, out := placeCall(t, h, tok5, map[string]any{"repo": writeRepo, "kind": "scratch", "fleet_id": f5.FleetID,
+		"name": "试一下 侧边栏", "origin_wid": parent, "idempotency_key": "place-scratch-1"})
+	if st != 200 || out["local"] != false {
+		t.Fatalf("place = %d %v; want a remote placement", st, out)
+	}
+	if pl := out["placement"].(map[string]any); pl["machine"] != "m4" || !strings.Contains(pl["reason"].(string), "m5 excluded") {
+		t.Fatalf("placement = %v; want m4 with m5's load as the reason", pl)
+	}
+	if m5.count() != 0 || m4.count() != 1 {
+		t.Fatalf("writes: m5=%d m4=%d; want 0 and 1", m5.count(), m4.count())
+	}
+	params := m4.writes[0]["params"].(map[string]any)
+	if params["kind"] != "scratch" || params["name"] != "试一下 侧边栏" || params["origin_wid"] != parent || params["repo"] != writeRepo {
+		t.Fatalf("m4 was sent %v; want a scratch start with its name and parent", params)
+	}
+	if _, has := params["issue"]; has {
+		t.Fatalf("a scratch start carried an issue: %v", params)
+	}
+	if m4.writes[0]["fleet_id"] != f4.FleetID {
+		t.Fatalf("sent to fleet %v; want m4's %s", m4.writes[0]["fleet_id"], f4.FleetID)
+	}
+	oc := placeOutcomeOf(t, out)
+	if oc["state"] != "done" || oc["window"] != "@43" || oc["node"] != "m4" {
+		t.Fatalf("outcome = %v; want done on m4 with window @43", oc)
+	}
+	// Nothing was reserved: a scratch has no issue to lease.
+	if ls, _ := h.srv.Store.Leases(time.Now()); len(ls) != 0 {
+		t.Fatalf("leases = %+v; want none for a scratch", ls)
+	}
+
+	// The request shape is strict: a scratch names its fleet and nothing else.
+	for _, bad := range []map[string]any{
+		{"repo": writeRepo, "kind": "scratch", "fleet_id": f5.FleetID, "issue": 7},
+		{"repo": writeRepo, "kind": "scratch", "fleet_id": f5.FleetID, "worker_id": issueWID(f5.FleetID, 7)},
+		{"repo": writeRepo, "kind": "scratch"},
+		{"repo": writeRepo, "kind": "scratch", "fleet_id": f5.FleetID, "name": "a#b"},
+		{"repo": writeRepo, "kind": "scratch", "fleet_id": f5.FleetID, "name": strings.Repeat("长", 65)},
+		{"repo": writeRepo, "kind": "draft", "fleet_id": f5.FleetID},
+		{"repo": writeRepo, "issue": 7, "worker_id": issueWID(f5.FleetID, 7), "name": "x"},
+	} {
+		if st, out := placeCall(t, h, tok5, bad); st != 400 {
+			t.Fatalf("%v = %d %v; want 400", bad, st, out)
+		}
+	}
+	if m4.count() != 1 {
+		t.Fatalf("a refused request sent a start: m4 writes %d", m4.count())
+	}
+	// Another node's fleet is still refused by name.
+	if st, _ := placeCall(t, h, tok5, map[string]any{"repo": writeRepo, "kind": "scratch", "fleet_id": f4.FleetID}); st != 403 {
+		t.Fatalf("m5 placing in m4's fleet's name = %d; want 403", st)
+	}
+}
+
+// An idle asker keeps its scratch: LOCAL, nothing sent.
+func TestNodePlaceScratchIdleNodeStaysLocal(t *testing.T) {
+	h, m5, m4, f5, f4 := twoNodes(t)
+	m5.beatLoad("m5", "verk", machineA, 0.5, 3, f5)
+	m4.beatLoad("m4", "verk", machineB, 6, 1, f4)
+	waitFor(t, 3*time.Second, "m5 cooled down", func() bool {
+		hb, _, _ := h.srv.nodeStatusOf("ep_m5", time.Now())
+		return hb.Load1 == 0.5
+	})
+	st, out := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "kind": "scratch", "fleet_id": f5.FleetID})
+	if st != 200 || out["local"] != true || out["placement"].(map[string]any)["machine"] != "m5" {
+		t.Fatalf("place = %d %v; want LOCAL m5", st, out)
+	}
+	if m5.count()+m4.count() != 0 {
+		t.Fatal("a local scratch placement sent a write")
+	}
+}

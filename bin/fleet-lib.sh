@@ -4540,9 +4540,13 @@ fleet_node_is_self() {
   printf '%s\n' ${FLEET_NODE_ALIASES:-} | tr '[:upper:]' '[:lower:]' | grep -qx -- "$h=$n"
 }
 
-# fleet_hub_place <sess> <repo> <issue> <node> [<origin_wid>] [<agent>] [<wait>]
-# [<account_class>] — ask the hub which machine opens a session on (repo, issue)
-# (issue #1425, EPIC #1419 C6).
+# fleet_hub_place <sess> <repo> <issue|scratch> <node> [<origin_wid>] [<agent>] [<wait>]
+# [<account_class>] [<name>] — ask the hub which machine opens a session on (repo,
+# issue) (issue #1425, EPIC #1419 C6), or a raw scratch session of <repo> (issue
+# #1541: `scratch` in place of the issue — no lease, the scratch-<N> is minted
+# where it opens, so the asker names its fleet UUID; <name> is the scratch's
+# optional name). <account_class> (issue #1540) is `local` / `pool` to bind the
+# kind of subscription; anything else adds nothing.
 # Run AFTER fleet_hub_lease granted the lease: a REMOTE answer means the hub
 # already handed that lease to the chosen machine's fleet and sent it the start
 # (a journalled worker_start carrying <origin_wid>, the parent) — and, since issue
@@ -4565,30 +4569,32 @@ fleet_node_is_self() {
 # session must run on, carried to the machine that opens it as `--account`;
 # anything else (`any`, empty) adds nothing to the command.
 # The command is FLEET_HUB_PLACE_CMD, else `ccquota place`; it is run as
-# `<cmd> --node <node> [--origin-wid <wid>] [--agent <a>] [--account <c>] <repo> <issue> <worker_id>`,
+# `<cmd> --node <node> [--origin-wid <wid>] [--agent <a>] [--account <c>] <repo> <issue> <worker_id>`
+# — for a scratch `[--name <n>] <repo> scratch <fleet UUID>` —
 # with the node token from node.env in ITS environment only (`_fleet_hub_env`).
 fleet_hub_place() {
-  local sess="${1:-}" repo="${2:-}" num="${3:-}" node="${4:-auto}" owid="${5:-}" agent="${6:-}" wait="${7:-}" acct="${8:-}" cmd u pre='' out rc why ef
+  local sess="${1:-}" repo="${2:-}" num="${3:-}" node="${4:-auto}" owid="${5:-}" agent="${6:-}" wait="${7:-}" acct="${8:-}" name="${9:-}" cmd u pre='' out rc why ef what wid
   fleet_hub_on "$sess" || return 10
-  case "$num" in ''|*[!0-9]*) return 1 ;; esac
+  case "$num" in scratch) what='a scratch session' ;; ''|*[!0-9]*) return 1 ;; *) what="#$num" ;; esac
   cmd="${FLEET_HUB_PLACE_CMD:-}"
   if [ -z "$cmd" ]; then
     if command -v ccquota >/dev/null 2>&1; then cmd='ccquota place'
-    else printf 'fleet: hub placement unavailable (no FLEET_HUB_PLACE_CMD, no ccquota on PATH) — opening #%s here\n' "$num" >&2; return 1; fi
+    else printf 'fleet: hub placement unavailable (no FLEET_HUB_PLACE_CMD, no ccquota on PATH) — opening %s here\n' "$what" >&2; return 1; fi
     if why=$(_fleet_hub_creds_missing); then
-      printf 'fleet: %s — opening #%s here\n' "$why" "$num" >&2; return 1
+      printf 'fleet: %s — opening %s here\n' "$why" "$what" >&2; return 1
     fi
   fi
   u=$(fleet_uuid "$sess") && [ -n "$u" ] || {
-    printf 'fleet: hub placement unavailable (no fleet UUID for %s on this machine) — opening #%s here\n' "$sess" "$num" >&2; return 1; }
-  _fleet_hosts_many "$sess" && pre="$(fleet_slug "$(fleet_norm_repo "$repo")"):"
+    printf 'fleet: hub placement unavailable (no fleet UUID for %s on this machine) — opening %s here\n' "$sess" "$what" >&2; return 1; }
+  if [ "$num" = scratch ]; then wid="$u"; name=$(printf '%s' "$name" | LC_ALL=C tr -d '[:cntrl:]#')
+  else _fleet_hosts_many "$sess" && pre="$(fleet_slug "$(fleet_norm_repo "$repo")"):"; wid="$u/${pre}issue-$num"; name=''; fi
   # An alias the operator typed (`m5`) is the hub's hostname (`macmini`).
   [ "$node" != auto ] && node=$(printf '%s\n' ${FLEET_NODE_ALIASES:-} | awk -F= -v n="$node" '$2 == n { print $1; f = 1; exit } END { if (!f) print n }')
   ef=$(mktemp "${TMPDIR:-/tmp}/fleet-hub-err.XXXXXX" 2>/dev/null) || ef=/dev/null
   case "$wait" in *[!0-9]*) wait='' ;; esac
   case "$acct" in local|pool) ;; *) acct='' ;; esac
   out=$(_fleet_hub_env; bash -c "$cmd \"\$@\"" place --node "$node" ${owid:+--origin-wid "$owid"} ${agent:+--agent "$agent"} \
-        ${wait:+--wait "$wait"} ${acct:+--account "$acct"} "$repo" "$num" "$u/${pre}issue-$num" </dev/null 2>"$ef"); rc=$?
+        ${wait:+--wait "$wait"} ${acct:+--account "$acct"} ${name:+--name "$name"} "$repo" "$num" "$wid" </dev/null 2>"$ef"); rc=$?
   out=$(printf '%s\n' "$out" | head -n1 | awk -F'\t' -v al="${FLEET_NODE_ALIASES:-}" '
     BEGIN { n = split(al, a, " "); for (i = 1; i <= n; i++) if ((p = index(a[i], "=")) > 1) m[substr(a[i], 1, p - 1)] = substr(a[i], p + 1) }
     { k = split($1, w, " ")
@@ -4598,7 +4604,7 @@ fleet_hub_place() {
   case "$rc" in
     0|3|4|5|6) [ "$ef" = /dev/null ] || rm -f "$ef"; printf '%s\n' "$out"; return "$rc" ;;
   esac
-  printf 'fleet: %s — placing #%s, opening it here\n' "$(_fleet_hub_fail placement "$cmd" "$rc" "$ef")" "$num" >&2
+  printf 'fleet: %s — placing %s, opening it here\n' "$(_fleet_hub_fail placement "$cmd" "$rc" "$ef")" "$what" >&2
   [ "$ef" = /dev/null ] || rm -f "$ef"
   return 1
 }

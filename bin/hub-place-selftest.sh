@@ -49,6 +49,16 @@
 #   TOKEN   (issue #1491) the place command sees node.env's CCQUOTA_TOKEN; the
 #           spawned window never inherits it; the default `ccquota place` with no
 #           token anywhere is not run and says 「no node token」, not 「unreachable」.
+#   SCRATCH (issue #1541, EPIC #1529 R3) bin/dash-raw-session.sh is placed the
+#           same way, as `<repo> scratch <fleet UUID>` with its --name and parent:
+#           hub off ⇒ byte-identical and --node m4 refused; REMOTE / done /
+#           LOCAL / no machine / named-refused / DECLINED / UNKNOWN / hub down
+#           branch as an issue spawn's do, with NO lease at any point; local /
+#           this host's alias never ask; a seeded (--prompt) or no-repo scratch
+#           never travels; a start the hub sent (--origin hub --node local
+#           --origin-wid) is never placed again, stamps the parent verbatim and
+#           prints its --print receipt; a full machine still places elsewhere;
+#           the dash's --bg hands --node to the background pass.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -78,6 +88,7 @@ if [ "\${1:-}" = "-C" ]; then shift 2; fi
 case "\${1:-}" in
   worktree|branch) printf 'git %s\n' "\$*" >> "$GIT_LOG" ;;   # add / remove / prune / branch -D
   rev-parse)       case "\$*" in *--show-toplevel*) pwd -P ;; *) printf 'deadbeef\n' ;; esac ;;
+  show-ref)        exit 1 ;;   # no scratch-<N> branch yet (fleet_scratch_alloc, #1541)
   *) : ;;   # fetch / remote → succeed silently
 esac
 exit 0
@@ -119,6 +130,7 @@ case "\${1:-}" in
   new-window)        printf 'new-window %s\n' "\$*" >> "$TMUX_LOG"; printf '%s\n' "\${CCQUOTA_TOKEN:-<unset>}" > "$WORK/tmux.env"; echo "\${TMUX_WIN:-@9}" ;;
   kill-window)       printf 'kill-window %s\n' "\$*" >> "$TMUX_LOG" ;;
   set-window-option) case "\$*" in *@origin*) printf 'set-window-option %s\n' "\$*" >> "$TMUX_LOG" ;; esac ;;
+  run-shell)         printf 'run-shell %s\n' "\$*" | tr '\n' ' ' >> "$TMUX_LOG"; echo >> "$TMUX_LOG" ;;
   *) : ;;
 esac
 exit 0
@@ -504,5 +516,149 @@ err_has 'opening #258 here'                      || fail "TOKEN-less stderr says
 err_has 'hub unreachable'                        && fail "TOKEN-less is not 「hub unreachable」" "$(cat "$WORK/spawn.err")"
 rm -f "$WORK/fakebin/ccquota"
 ok "TOKEN node.env's token reaches the place command only; none → 「no node token」, opened here"
+
+# ===== SCRATCH (issue #1541, EPIC #1529 R3): a raw scratch session is placed too ===
+# The same seams (FLEET_HUB_PLACE_CMD / FLEET_HUB_LEASE_CMD, the fake git / gh /
+# tmux), the real dash-raw-session.sh + fleet-lib.sh. A scratch has no issue: the
+# hub is asked as `<repo> scratch <fleet UUID>` (+ --name, + --origin-wid for a
+# parent) and the lease command is NEVER run.
+RAW="$BIN/dash-raw-session.sh"
+run_raw() { # $@ = args to dash-raw-session.sh
+  : > "$GH_LOG"; : > "$TMUX_LOG"; : > "$GIT_LOG"; : > "$DISPLAY_LOG"; : > "$LEASE_LOG"; : > "$PLACE_LOG"
+  rm -f "$WORK/place.env" "$WORK/tmux.env" "$WORK/ccq.log"
+  rm -rf "$WORK/dash/.claude-dash"
+  if [ "${INFLIGHT:-0}" = 1 ]; then mkdir -p "$WORK/dash/.claude-dash/global/spawn-inflight"; : > "$WORK/dash/.claude-dash/global/spawn-inflight/x.1"; fi
+  PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/dash" FLEET_CONF_DIR="$WORK/conf" \
+  FLEET_REPO="acme/widgets" FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH="master" \
+    "$RAW" "$@" >"$WORK/spawn.out" 2>"$WORK/spawn.err"
+  echo $? > "$WORK/spawn.rc"
+}
+unset CCQUOTA_FLEET FLEET_HUB_LEASE_CMD FLEET_HUB_PLACE_CMD FLEET_SPAWN_NODE FLEET_NODE_ALIASES
+rm -f "$WORK/conf/node.env"
+
+run_raw
+[ "$(rc)" = 0 ] && tmux_has 'new-window'         || fail "SCRATCH-OFF a plain scratch opens here (rc=$(rc))" "$(cat "$WORK/spawn.err")"
+rbase=$(snap)
+for extra in '' '--node auto' '--node local'; do
+  # shellcheck disable=SC2086  # deliberate: '' is no flag, the others two words
+  FLEET_HUB_PLACE_CMD="$PLACE" FLEET_HUB_LEASE_CMD="$LEASE" run_raw $extra
+  [ -s "$PLACE_LOG" ]                            && fail "SCRATCH-OFF ($extra) the place command must not run without CCQUOTA_FLEET=1"
+  [ "$(snap)" = "$rbase" ]                       || fail "SCRATCH-OFF ($extra) must change nothing while the hub is off" "$(diff <(printf '%s\n' "$rbase") <(snap))"
+done
+FLEET_HUB_PLACE_CMD="$PLACE" run_raw --node m4
+[ "$(rc)" = 1 ] && err_has 'needs the hub'       || fail "SCRATCH-NOHUB --node m4 without the hub refuses (rc=$(rc))" "$(cat "$WORK/spawn.err")"
+tmux_has 'new-window'                            && fail "SCRATCH-NOHUB must not open it here instead"
+[ -s "$PLACE_LOG" ]                              && fail "SCRATCH-NOHUB must not ask the hub"
+ok "SCRATCH OFF: hub off → no placement, byte-identical (no flag, auto, local); --node m4 refused, nothing opened"
+
+export CCQUOTA_FLEET=1 FLEET_HUB_LEASE_CMD="$LEASE" FLEET_HUB_PLACE_CMD="$PLACE"
+PLACE_ANSWER="$REMOTE_LINE" run_raw --node m4 --name '试一下 侧边栏' --origin issue-77
+[ "$(rc)" = 0 ]                                  || fail "SCRATCH-REMOTE exits 0 (rc=$(rc))" "$(cat "$WORK/spawn.err")"
+place_has "--node m4 --origin-wid $UUID/issue-77 --name 试一下 侧边栏 acme/widgets scratch $UUID" \
+                                                 || fail "SCRATCH-REMOTE asks for m4 as a scratch of THIS fleet, with its parent and name" "$(cat "$PLACE_LOG")"
+[ -s "$LEASE_LOG" ]                              && fail "SCRATCH-REMOTE a scratch takes no lease" "$(cat "$LEASE_LOG")"
+err_has 'scratch → m4 (hub operation op_42, accepted)' || fail "SCRATCH-REMOTE names the machine and the operation" "$(cat "$WORK/spawn.err")"
+err_has 'm5 excluded: load 1.00/core > 0.8'      || fail "SCRATCH-REMOTE carries the reason"
+tmux_has 'new-window'                            && fail "SCRATCH-REMOTE must not open a window here"
+grep -q 'git worktree add' "$GIT_LOG"            && fail "SCRATCH-REMOTE must not allocate a worktree here"
+ok "SCRATCH REMOTE --node m4 → asked as «acme/widgets scratch <fleet UUID>» with --name + parent; no lease, no window, no worktree"
+
+PLACE_ANSWER=$'REMOTE m4 op_43 done @42\tchose m4 (score 0.875)' run_raw --node auto
+[ "$(rc)" = 0 ] && err_has 'scratch → m4 已开窗 @42 (hub operation op_43)' || fail "SCRATCH-DONE the hub waited and m4 opened it (rc=$(rc))" "$(cat "$WORK/spawn.err")"
+tmux_has 'new-window'                            && fail "SCRATCH-DONE nothing opens here"
+ok "SCRATCH DONE → exit 0, the window id on stderr"
+
+PLACE_ANSWER=$'LOCAL m5\tchose m5 (score 0.9)' run_raw
+[ "$(rc)" = 0 ] && tmux_has 'new-window'         || fail "SCRATCH-LOCAL the hub chose this machine → opened here (rc=$(rc))" "$(cat "$WORK/spawn.err")"
+place_has "--node auto acme/widgets scratch $UUID" || fail "SCRATCH-LOCAL no --node asks with auto (the FLEET_SPAWN_NODE default)" "$(cat "$PLACE_LOG")"
+err_has 'scratch 开在本机 m5'                      || fail "SCRATCH-LOCAL says where and why"
+[ -s "$LEASE_LOG" ]                              && fail "SCRATCH-LOCAL still no lease"
+ok "SCRATCH LOCAL → opened here as today; asked with auto when nothing names a machine"
+
+PLACE_ANSWER=$'REFUSED NO_ELIGIBLE_NODE\tNo machine can take a new session now' PLACE_RC=4 run_raw
+[ "$(rc)" = 0 ] && tmux_has 'new-window'         || fail "SCRATCH-NOELIG auto with no eligible machine opens it here (rc=$(rc))"
+err_has '没有机器能接这个 scratch'                  || fail "SCRATCH-NOELIG says so"
+PLACE_ANSWER=$'REFUSED NO_ELIGIBLE_NODE\tm4: at the per-person cap (6/6 sessions)' PLACE_RC=4 run_raw --node m4
+[ "$(rc)" = 2 ]                                  || fail "SCRATCH-NAMED a refused named machine exits 2 (rc=$(rc))"
+tmux_has 'new-window'                            && fail "SCRATCH-NAMED must not open it here instead"
+err_has 'scratch 不能开在 m4: m4: at the per-person cap' || fail "SCRATCH-NAMED carries the hub's reason" "$(cat "$WORK/spawn.err")"
+ok "SCRATCH NOELIG auto → opened here with a note; NAMED refused → exit 2, nothing opened"
+
+PLACE_ANSWER=$'DECLINED m4 op_44 2\tdash-raw-session: at capacity: 6/6 sessions' PLACE_RC=5 run_raw --node m4
+[ "$(rc)" = 2 ] && err_has '被 m4 拒绝 (exit 2): dash-raw-session: at capacity' || fail "SCRATCH-DECLINED m4 full → exit 2 with its line (rc=$(rc))" "$(cat "$WORK/spawn.err")"
+tmux_has 'new-window'                            && fail "SCRATCH-DECLINED never the auto fallback"
+PLACE_ANSWER=$'DECLINED m4 op_44 1\tdash-raw-session: could not create a scratch worktree' PLACE_RC=5 run_raw --node m4
+[ "$(rc)" = 1 ]                                  || fail "SCRATCH-DECLINED anything else → exit 1 (rc=$(rc))"
+PLACE_ANSWER=$'UNKNOWN m4 op_45\tno final state from m4' PLACE_RC=6 run_raw --node m4
+[ "$(rc)" = 1 ] && err_has '未知，不当成功'         || fail "SCRATCH-UNKNOWN no final state → exit 1, never a success (rc=$(rc))" "$(cat "$WORK/spawn.err")"
+tmux_has 'new-window'                            && fail "SCRATCH-UNKNOWN nothing opens here"
+ok "SCRATCH DECLINED (2 full · 1 else) and UNKNOWN (exit 1) come back as an issue spawn's do"
+
+PLACE_RC=1 PLACE_STDERR='ccquota: Post "https://hub.test/v1/node/place": context deadline exceeded' run_raw
+[ "$(rc)" = 0 ] && tmux_has 'new-window'         || fail "SCRATCH-DOWN hub unreachable opens it here (rc=$(rc))"
+err_has 'fleet: hub unreachable (context deadline exceeded) — placing a scratch session, opening it here' || fail "SCRATCH-DOWN one note, with the cause" "$(cat "$WORK/spawn.err")"
+PLACE_RC=1 run_raw --node m4
+[ "$(rc)" = 1 ] && err_has 'scratch 不能开在 m4'    || fail "SCRATCH-DOWN a named machine with the hub down is refused (rc=$(rc))" "$(cat "$WORK/spawn.err")"
+ok "SCRATCH DOWN → auto opens here with one note; a named machine is refused"
+
+for n in local m5; do
+  PLACE_ANSWER="$REMOTE_LINE" FLEET_NODE_ALIASES="$(hostname -s | tr '[:upper:]' '[:lower:]')=m5" run_raw --node "$n"
+  [ -s "$PLACE_LOG" ]                            && fail "SCRATCH-SELF --node $n must not ask the hub"
+  tmux_has 'new-window'                          || fail "SCRATCH-SELF --node $n opens it here"
+done
+PLACE_ANSWER="$REMOTE_LINE" FLEET_SPAWN_NODE=local run_raw
+[ -s "$PLACE_LOG" ]                              && fail "SCRATCH-SPAWN_NODE=local must not ask the hub"
+tmux_has 'new-window'                            || fail "SCRATCH-SPAWN_NODE=local opens it here"
+PLACE_ANSWER="$REMOTE_LINE" FLEET_SPAWN_NODE=m4 run_raw
+place_has "--node m4 acme/widgets scratch $UUID" && err_has 'scratch → m4' || fail "SCRATCH-SPAWN_NODE=m4 asks for that machine by name" "$(cat "$PLACE_LOG")"
+ok "SCRATCH SELF (local / this host's alias) and FLEET_SPAWN_NODE=local never ask; FLEET_SPAWN_NODE=m4 asks by name"
+
+PLACE_ANSWER="$REMOTE_LINE" run_raw --node m4 --prompt 'seed me'
+[ "$(rc)" = 1 ] && err_has 'a seeded scratch (--prompt) opens on this machine only' || fail "SCRATCH-SEEDED --prompt + --node m4 is refused (rc=$(rc))" "$(cat "$WORK/spawn.err")"
+[ -s "$PLACE_LOG" ]                              && fail "SCRATCH-SEEDED must not ask the hub"
+tmux_has 'new-window'                            && fail "SCRATCH-SEEDED must not open it here instead"
+PLACE_ANSWER="$REMOTE_LINE" run_raw --prompt 'seed me'
+[ "$(rc)" = 0 ] && tmux_has 'new-window'         || fail "SCRATCH-SEEDED under auto a seeded scratch opens here (rc=$(rc))" "$(cat "$WORK/spawn.err")"
+[ -s "$PLACE_LOG" ]                              && fail "SCRATCH-SEEDED under auto never asks the hub"
+PLACE_ANSWER="$REMOTE_LINE" run_raw --node m4 --no-repo
+[ "$(rc)" = 1 ] && err_has 'a no-repo scratch opens on this machine only' || fail "SCRATCH-NOREPO --no-repo + --node m4 is refused (rc=$(rc))" "$(cat "$WORK/spawn.err")"
+[ -s "$PLACE_LOG" ]                              && fail "SCRATCH-NOREPO must not ask the hub"
+ok "SCRATCH a seeded or no-repo scratch never travels: named elsewhere → refused; auto → opened here, hub not asked"
+
+PLACE_ANSWER="$REMOTE_LINE" run_raw testsess --origin hub --origin-wid "$MACHINE/issue-77" --node local --print --name '试一下'
+[ "$(rc)" = 0 ]                                  || fail "SCRATCH-HUBSENT exits 0 (rc=$(rc))" "$(cat "$WORK/spawn.err")"
+[ -s "$PLACE_LOG" ]                              && fail "SCRATCH-HUBSENT a start the hub sent is never placed again"
+tmux_has 'new-window'                            || fail "SCRATCH-HUBSENT opens it here"
+tmux_has "@origin_wid $MACHINE/issue-77"         || fail "SCRATCH-HUBSENT stamps the given parent worker_id verbatim" "$(cat "$TMUX_LOG")"
+tmux_has "@origin issue-77"                      || fail "SCRATCH-HUBSENT stamps the parent's key as @origin too — the report path needs it" "$(cat "$TMUX_LOG")"
+[ "$(head -n1 "$WORK/spawn.out")" = "$(printf '@9\t试一下\t%s/main-scratch-1' "$WORK")" ] \
+                                                 || fail "SCRATCH-HUBSENT --print prints the receipt <window_id>\\t<name>\\t<worktree>" "$(cat "$WORK/spawn.out")"
+run_raw testsess --origin hub --node local
+[ -s "$WORK/spawn.out" ]                         && fail "SCRATCH-HUBSENT without --print nothing is printed" "$(cat "$WORK/spawn.out")"
+ok "SCRATCH HUBSENT --origin hub --node local → no re-placement; @origin_wid verbatim + @origin key; --print receipt"
+
+PLACE_ANSWER="$REMOTE_LINE" INFLIGHT=1 FLEET_GLOBAL_MAX_SESSIONS=1 run_raw --node m4
+[ "$(rc)" = 0 ] && err_has 'scratch → m4'        || fail "SCRATCH-CAP a full machine still places elsewhere (rc=$(rc))" "$(cat "$WORK/spawn.err")"
+PLACE_ANSWER=$'LOCAL m5\tchose m5' INFLIGHT=1 FLEET_GLOBAL_MAX_SESSIONS=1 run_raw
+[ "$(rc)" = 2 ] && err_has 'at capacity'         || fail "SCRATCH-CAP opening here after all applies the cap (rc=$(rc))" "$(cat "$WORK/spawn.err")"
+tmux_has 'new-window'                            && fail "SCRATCH-CAP must not spawn past the cap"
+INFLIGHT=1 FLEET_GLOBAL_MAX_SESSIONS=1 run_raw --node local
+[ "$(rc)" = 2 ] && [ ! -s "$PLACE_LOG" ]         || fail "SCRATCH-CAP --node local refuses at the cap without asking (rc=$(rc))"
+ok "SCRATCH CAP a full machine still places elsewhere; opening here keeps the cap"
+
+# The dash's ⌃s is `--bg`: the keypress returns at once and the BACKGROUND pass
+# does the asking — so --node (and --origin-wid) must ride the re-exec.
+PLACE_ANSWER="$REMOTE_LINE" run_raw --bg --node m4 --origin-wid "$MACHINE/issue-77"
+[ "$(rc)" = 0 ]                                  || fail "SCRATCH-BG --bg returns 0 (rc=$(rc))" "$(cat "$WORK/spawn.err")"
+[ -s "$PLACE_LOG" ]                              && fail "SCRATCH-BG the foreground --bg pass must not ask the hub itself"
+tmux_has "run-shell"                             || fail "SCRATCH-BG hands off through run-shell -b" "$(cat "$TMUX_LOG")"
+grep -q -- "--node=m4 --origin-wid=$MACHINE/issue-77" "$TMUX_LOG" || fail "SCRATCH-BG the re-exec carries --node and --origin-wid" "$(cat "$TMUX_LOG")"
+PLACE_ANSWER="$REMOTE_LINE" run_raw --bg
+grep -q -- '--node=auto' "$TMUX_LOG"             || fail "SCRATCH-BG with the hub on and no flag the re-exec says --node=auto" "$(cat "$TMUX_LOG")"
+unset CCQUOTA_FLEET
+run_raw --bg
+grep -q -- '--node=' "$TMUX_LOG"                 && fail "SCRATCH-BG hub off: the re-exec carries no --node (byte for byte)" "$(cat "$TMUX_LOG")"
+export CCQUOTA_FLEET=1
+ok "SCRATCH BG --bg carries --node / --origin-wid to the background pass; hub off carries nothing"
 
 printf 'hub-place-selftest: %s checks passed\n' "$pass"

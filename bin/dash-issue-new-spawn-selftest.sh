@@ -29,6 +29,10 @@
 #   H. empty query accepted (bare Enter, exit 1): the empty-title contract still cancels
 #      (issue #297) — no create, no spawn.
 #   E. dash ⌃n wiring: a fzf --bind on ctrl-n that runs this script with --spawn.
+#   I. ⌃s in the popup (issue #1541): fzf's --expect prints `ctrl-s` after the
+#      query → a SCRATCH session is dispatched instead (dash-raw-session.sh, the
+#      typed text staged as --name-file, --node carried, --origin hub); nothing is
+#      filed; an empty query + ⌃s is an unnamed scratch.
 #
 # Exit 0 = pass; non-zero = fail (prints the failing assertion + captured output).
 set -uo pipefail
@@ -47,7 +51,7 @@ ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output ---\n%s\n' "$2" >&2; exit 1; }
 
 mkdir -p "$WORK/bin" "$WORK/fakebin" "$WORK/conf" "$WORK/tmp/.claude-dash"
-SPAWN_LOG="$WORK/spawns"; DISPLAY_LOG="$WORK/display"; GH_LOG="$WORK/ghcreate"; RS_LOG="$WORK/runshell"; FZF_LOG="$WORK/fzfargs"
+SPAWN_LOG="$WORK/spawns"; DISPLAY_LOG="$WORK/display"; GH_LOG="$WORK/ghcreate"; RS_LOG="$WORK/runshell"; FZF_LOG="$WORK/fzfargs"; RAW_LOG="$WORK/raws"
 
 # Symlink the REAL scripts under test; stub the siblings BIN resolves to.
 ln -s "$NEW" "$WORK/bin/dash-issue-new.sh"
@@ -64,7 +68,13 @@ printf '%s\n' "\$*" >> "$SPAWN_LOG"
 exit "\${SPAWN_RC:-0}"
 SPAWNSTUB
 printf '#!/bin/bash\nexit 0\n' > "$WORK/bin/tmux-dash-collect.sh"
-chmod +x "$WORK/bin/dash-issue-session.sh" "$WORK/bin/tmux-dash-collect.sh"
+# The scratch spawner (issue #1541): logs its argv and the staged name it was handed.
+cat > "$WORK/bin/dash-raw-session.sh" <<RAWSTUB
+#!/bin/bash
+n=''; for a in "\$@"; do case "\$a" in --name-file=*) n=\$(cat "\${a#--name-file=}"; rm -f "\${a#--name-file=}") ;; esac; done
+printf '%s\tname=%s\n' "\$*" "\$n" >> "$RAW_LOG"
+RAWSTUB
+chmod +x "$WORK/bin/dash-issue-session.sh" "$WORK/bin/tmux-dash-collect.sh" "$WORK/bin/dash-raw-session.sh"
 
 # --- fake gh: log + control `issue create`; report a URL with the new number ----
 cat > "$WORK/fakebin/gh" <<GHFAKE
@@ -87,7 +97,10 @@ GHFAKE
 cat > "$WORK/fakebin/fzf" <<FZFFAKE
 #!/bin/bash
 printf '%s\n' "\$*" >> "$FZF_LOG"          # record argv (header/prompt) for assertions
-[ -n "\${FZF_QUERY:-}" ] && printf '%s\n' "\${FZF_QUERY}"   # --print-query echoes the typed line
+# --print-query echoes the typed line; with FZF_KEY the --expect key follows it
+# on the second line, as real fzf prints it (an empty query is then an empty line).
+if [ -n "\${FZF_KEY:-}" ]; then printf '%s\n%s\n' "\${FZF_QUERY:-}" "\$FZF_KEY"
+elif [ -n "\${FZF_QUERY:-}" ]; then printf '%s\n' "\${FZF_QUERY}"; fi
 exit "\${FZF_RC:-1}"                        # 130 = Esc/Ctrl-C; 0/1 = accepted (1 = no-match, our case)
 FZFFAKE
 
@@ -119,7 +132,7 @@ chmod +x "$WORK/fakebin/gh" "$WORK/fakebin/fzf" "$WORK/fakebin/tmux"
 # SPAWN_RC / NEW_NUM pass through the same way. stdin is /dev/null (fzf reads its own tty;
 # the script feeds it `< /dev/null` regardless).
 run_new() {
-  : > "$SPAWN_LOG"; : > "$DISPLAY_LOG"; : > "$GH_LOG"; : > "$RS_LOG"; : > "$FZF_LOG"
+  : > "$SPAWN_LOG"; : > "$DISPLAY_LOG"; : > "$GH_LOG"; : > "$RS_LOG"; : > "$FZF_LOG"; : > "$RAW_LOG"
   PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/tmp" FLEET_CONF_DIR="$WORK/conf" \
   FLEET_REPO="acme/widgets" \
     bash "$WORK/bin/dash-issue-new.sh" "$@" </dev/null >"$WORK/out" 2>"$WORK/err"
@@ -222,5 +235,26 @@ grep -Eq -- '\$DASH_KEY_NEW:.*dash-issue-new\.sh.*--spawn' "$DASH" \
   || fail "E dashboard has no ⌃n (\$DASH_KEY_NEW) bind invoking dash-issue-new.sh --spawn" "$(grep -n 'DASH_KEY_NEW' "$DASH" || true)"
 ok "E dash ⌃n bind wires into the quick-dispatch (dash-issue-new.sh --spawn)"
 
-printf '\nselftest OK: %s assertions passed (quick-dispatch: title-only, bg spawn, fzf exit-130 cancel + dash ⌃n)\n' "$pass"
+# ============================ I: ⌃s → a scratch instead (issue #1541) ========
+# «新建到 m4…» is this popup with --node=m4; ⌃s there opens a SCRATCH on m4: fzf's
+# --expect prints `ctrl-s` after the query, the typed text becomes the scratch's
+# name (staged in a file, never in the run-shell string), --node rides along,
+# and nothing is filed or spawned as a worker.
+wait_raw() { local n=0; while [ "$n" -lt 60 ]; do grep -Eq "$1" "$RAW_LOG" && return 0; n=$((n + 1)); sleep 0.05; done; return 1; }
+grep -q -- '--expect=ctrl-s' "$NEW"       || fail "I the popup's fzf has no --expect=ctrl-s"
+FZF_QUERY='试一下 侧边栏' FZF_KEY=ctrl-s run_new confirm --spawn --node=m4
+wait_raw '^--origin hub --name-file=.* --node=m4	name=试一下 侧边栏$'                                            || fail "I ⌃s dispatches dash-raw-session.sh with the staged name and --node=m4" "$(cat "$RAW_LOG" "$WORK/err")"
+[ -s "$GH_LOG" ]    && fail "I ⌃s must not file an issue" "$(cat "$GH_LOG")"
+[ -s "$SPAWN_LOG" ] && fail "I ⌃s must not spawn a worker" "$(cat "$SPAWN_LOG")"
+grep -q -- '--header=.*\^S = scratch session on m4' "$FZF_LOG" || fail "I the header says ⌃s = scratch session on m4" "$(cat "$FZF_LOG")"
+FZF_QUERY='' FZF_KEY=ctrl-s run_new confirm --spawn
+wait_raw '^--origin hub	name=$'            || fail "I an empty query + ⌃s is an unnamed scratch here (no --name-file, no --node)" "$(cat "$RAW_LOG" "$WORK/err")"
+[ -s "$GH_LOG" ]    && fail "I an empty query + ⌃s must not file an issue" "$(cat "$GH_LOG")"
+# a title that merely READS ctrl-s, entered with Enter, is a title
+FZF_QUERY='ctrl-s' run_new confirm --spawn
+grep -q create "$GH_LOG"                   || fail "I a title spelled ctrl-s + Enter still files" "$(cat "$WORK/err")"
+[ -s "$RAW_LOG" ]   && fail "I a title spelled ctrl-s + Enter is not a scratch" "$(cat "$RAW_LOG")"
+ok "I ⌃s in the popup → a scratch (name staged, --node carried, --origin hub), nothing filed; empty + ⌃s = unnamed scratch"
+
+printf '\nselftest OK: %s assertions passed (quick-dispatch: title-only, bg spawn, fzf exit-130 cancel + dash ⌃n + ⌃s scratch)\n' "$pass"
 exit 0

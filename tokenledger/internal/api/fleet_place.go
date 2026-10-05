@@ -36,9 +36,19 @@ import (
 // placeRequest is the node's question.
 type placeRequest struct {
 	Repo string `json:"repo"`
+	// Kind is what opens: "" / "issue" (a worker on an issue — the lease's
+	// holder asks) or "scratch" (claude-fleet#1541: a raw scratch session, which
+	// has no issue and takes no lease; its scratch-<N> is minted by the machine
+	// that opens it, so the asker names its FLEET, not a worker_id).
+	Kind string `json:"kind"`
 	// Issue and WorkerID are the asking fleet's worker (the lease's holder).
 	Issue    int    `json:"issue"`
 	WorkerID string `json:"worker_id"`
+	// FleetID is the asking fleet, for a scratch.
+	FleetID string `json:"fleet_id"`
+	// Name is a scratch's name (optional): the window's label and its unsent
+	// first draft, sanitized again by dash-raw-session.sh where it opens.
+	Name string `json:"name"`
 	// Node is "auto" (default) or one roster machine.
 	Node string `json:"node"`
 	// OriginWID is the worker that asked for this one, if any.
@@ -103,15 +113,47 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 	if req.Node == "" {
 		req.Node = "auto"
 	}
-	if !leaseRepoRE.MatchString(req.Repo) || req.Issue <= 0 {
-		httpError(w, http.StatusBadRequest, "repo must be owner/name and issue a positive number")
+	scratch := false
+	switch req.Kind {
+	case "", "issue":
+	case "scratch":
+		scratch = true
+	default:
+		httpError(w, http.StatusBadRequest, "kind must be issue or scratch")
 		return
 	}
-	fleetID, key, err := fleetid.ParseWorkerID(req.WorkerID)
-	m := leaseKeyRE.FindStringSubmatch(key)
-	if err != nil || m == nil || m[1] != strconv.Itoa(req.Issue) {
-		httpError(w, http.StatusBadRequest, "worker_id must be <fleet UUID>/issue-<issue> (or <slug>:issue-<issue>)")
+	if !leaseRepoRE.MatchString(req.Repo) {
+		httpError(w, http.StatusBadRequest, "repo must be owner/name")
 		return
+	}
+	var fleetID, key string
+	if scratch {
+		// A scratch has no issue and no worker_id yet (claude-fleet#1541).
+		if req.Issue != 0 || req.WorkerID != "" || !fleetid.IsUUID(req.FleetID) {
+			httpError(w, http.StatusBadRequest, "a scratch start names fleet_id (the asking fleet's UUID) and no issue or worker_id")
+			return
+		}
+		if _, err := checkScratchName(req.Name); err != nil {
+			httpError(w, http.StatusBadRequest, errorObject(err)["message"])
+			return
+		}
+		fleetID = req.FleetID
+	} else {
+		if req.Issue <= 0 {
+			httpError(w, http.StatusBadRequest, "repo must be owner/name and issue a positive number")
+			return
+		}
+		if req.FleetID != "" || req.Name != "" {
+			httpError(w, http.StatusBadRequest, "fleet_id and name belong to a scratch start (kind=scratch)")
+			return
+		}
+		var err error
+		fleetID, key, err = fleetid.ParseWorkerID(req.WorkerID)
+		m := leaseKeyRE.FindStringSubmatch(key)
+		if err != nil || m == nil || m[1] != strconv.Itoa(req.Issue) {
+			httpError(w, http.StatusBadRequest, "worker_id must be <fleet UUID>/issue-<issue> (or <slug>:issue-<issue>)")
+			return
+		}
 	}
 	if req.Node != "auto" && !nodeNameRE.MatchString(req.Node) {
 		httpError(w, http.StatusBadRequest, "node must be auto or a machine name from the roster")
@@ -152,45 +194,61 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 
 	// Another machine. Its fleet takes the lease first, so the spawn that
 	// arrives there finds it already its own (AcquireLease's same-fleet
-	// rule) and nobody else can take the issue in between.
+	// rule) and nobody else can take the issue in between. A scratch has no
+	// lease to hand over (claude-fleet#1541): nothing is reserved, nothing is
+	// given back — its start is sent as it is.
 	target, err := s.Store.Fleet(pl.FleetID)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	tclaim := store.LeaseClaim{Repo: req.Repo, Issue: req.Issue, WorkerID: pl.FleetID + "/" + targetKey(key, target, req.Repo),
-		FleetID: pl.FleetID, EndpointID: target.EndpointID, Hostname: target.Hostname, OSUser: target.OSUser}
-	moved, err := s.Store.HandOverLease(req.Repo, req.Issue, req.WorkerID, tclaim, leaseStartGrace, now)
-	if err == nil && !moved {
-		// The asker held no live lease (its own acquire could not reach
-		// the hub): take it for the target the ordinary way.
-		var held store.Lease
-		if moved, held, _, err = s.Store.AcquireLease(tclaim, leaseStartGrace, now); err == nil && !moved {
-			s.leaseAudit(p.Actor, "place", fleetID, "HELD by "+held.WorkerID+" on "+nodeLabel(held.Hostname), now)
-			writeJSON(w, http.StatusConflict, map[string]any{"error": map[string]string{"code": "ALREADY_CLAIMED",
-				"message": "#" + strconv.Itoa(req.Issue) + " is leased to " + nodeLabel(held.Hostname)},
-				"holder": leaseView(held), "placement": pl})
+	giveBack := func() {}
+	if !scratch {
+		tclaim := store.LeaseClaim{Repo: req.Repo, Issue: req.Issue, WorkerID: pl.FleetID + "/" + targetKey(key, target, req.Repo),
+			FleetID: pl.FleetID, EndpointID: target.EndpointID, Hostname: target.Hostname, OSUser: target.OSUser}
+		moved, err := s.Store.HandOverLease(req.Repo, req.Issue, req.WorkerID, tclaim, leaseStartGrace, now)
+		if err == nil && !moved {
+			// The asker held no live lease (its own acquire could not reach
+			// the hub): take it for the target the ordinary way.
+			var held store.Lease
+			if moved, held, _, err = s.Store.AcquireLease(tclaim, leaseStartGrace, now); err == nil && !moved {
+				s.leaseAudit(p.Actor, "place", fleetID, "HELD by "+held.WorkerID+" on "+nodeLabel(held.Hostname), now)
+				writeJSON(w, http.StatusConflict, map[string]any{"error": map[string]string{"code": "ALREADY_CLAIMED",
+					"message": "#" + strconv.Itoa(req.Issue) + " is leased to " + nodeLabel(held.Hostname)},
+					"holder": leaseView(held), "placement": pl})
+				return
+			}
+		}
+		if err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-	}
-	if err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	giveBack := func() {
-		mine := store.LeaseClaim{Repo: req.Repo, Issue: req.Issue, WorkerID: req.WorkerID, FleetID: fleetID,
-			EndpointID: ep.ID, Hostname: fl.Hostname, OSUser: fl.OSUser}
-		if _, err := s.Store.HandOverLease(req.Repo, req.Issue, tclaim.WorkerID, mine, leaseStartGrace, time.Now()); err != nil {
-			s.leaseAudit(p.Actor, "place", fleetID, "lease give-back failed: "+err.Error(), time.Now())
+		giveBack = func() {
+			mine := store.LeaseClaim{Repo: req.Repo, Issue: req.Issue, WorkerID: req.WorkerID, FleetID: fleetID,
+				EndpointID: ep.ID, Hostname: fl.Hostname, OSUser: fl.OSUser}
+			if _, err := s.Store.HandOverLease(req.Repo, req.Issue, tclaim.WorkerID, mine, leaseStartGrace, time.Now()); err != nil {
+				s.leaseAudit(p.Actor, "place", fleetID, "lease give-back failed: "+err.Error(), time.Now())
+			}
 		}
 	}
 
 	idem := req.Idem
-	if idem == "" {
-		idem = "place-" + fleetID[:8] + "-" + strconv.Itoa(req.Issue) + "-" + strconv.FormatInt(now.UnixNano(), 36)
+	what := strconv.Itoa(req.Issue)
+	if scratch {
+		what = "scratch"
 	}
-	args := map[string]any{"fleet_id": pl.FleetID, "issue": float64(req.Issue), "repo": req.Repo,
-		"node": req.Node, "idempotency_key": idem}
+	if idem == "" {
+		idem = "place-" + fleetID[:8] + "-" + what + "-" + strconv.FormatInt(now.UnixNano(), 36)
+	}
+	args := map[string]any{"fleet_id": pl.FleetID, "repo": req.Repo, "node": req.Node, "idempotency_key": idem}
+	if scratch {
+		args["kind"] = "scratch"
+		if req.Name != "" {
+			args["name"] = req.Name
+		}
+	} else {
+		args["issue"] = float64(req.Issue)
+	}
 	if req.Agent != "" {
 		args["agent"] = req.Agent
 	}

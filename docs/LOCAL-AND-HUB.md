@@ -23,7 +23,7 @@ INFO  mode     fleet hub (新会话 auto) · scratchpad local — 本机 / 联�
 | 开关 | 机器 | 登录（`fleet.settings` / 安装的 `fleet.conf`） | fleet（`fleets/<sess>/conf`） | 仓库（`repos/<slug>.conf`） | 会话（命令行） |
 |---|---|---|---|---|---|
 | **`CCQUOTA_FLEET`** 联机总开关 | — | 默认值（`export CCQUOTA_FLEET=1`；ccquota 节点程序也读这一个） | **这个 fleet 的值，赢过登录的**（#1539） | — | — |
-| **`FLEET_SPAWN_NODE`** 新会话开在哪台机器 | — | 默认值 | **这个 fleet 的值，赢过登录的**（#1539，以前只能全局设） | — | `--node <m>`（`dash-issue-session.sh`） |
+| **`FLEET_SPAWN_NODE`** 新会话开在哪台机器 | — | 默认值 | **这个 fleet 的值，赢过登录的**（#1539，以前只能全局设） | — | `--node <m>`（`dash-issue-session.sh` / `dash-raw-session.sh`，#1541：两种会话同义） |
 | `FLEET_AUTOFILL_NODE` 自动补位开在哪台 | — | — | 有 | — | — |
 | `FLEET_SIDEBAR_SOURCE` 列表从哪来 | — | — | `local` / `hub` | — | — |
 | `FLEET_NODE_ALIASES` 机器标签 | 每台一份 | 有（全局） | — | — | — |
@@ -44,7 +44,7 @@ fleet conf 也被剥掉。现在两者都由 fleet 自己那一行决定，**fle
 | 领域 | 本机（local） | 联机（hub） | 读哪里 |
 |---|---|---|---|
 | **派单**（开 issue 会话） | GitHub 认领就是锁；开在这台机器 | 先拿入口租约（一个 issue 只在一台机器上开），再按 `--node` ▸ `FLEET_SPAWN_NODE` ▸ `auto` 问入口开在哪；入口不通 → 开在这里 | `dash-issue-session.sh` → `fleet_hub_lease` / `fleet_hub_place`（`fleet_hub_on <sess>`） |
-| **临时会话** | 开在这台机器 | 今天仍只开在这台（下一刀 #1541：`dash-raw-session.sh --node`） | `dash-raw-session.sh` |
+| **临时会话** | 开在这台机器 | 同派单：按 `--node` ▸ `FLEET_SPAWN_NODE` ▸ `auto` 问入口开在哪（#1541）——**不拿租约**（临时会话没有 issue），入口按 `<repo> scratch <fleet UUID>` 挑机器，`scratch-N` 的号由开出来的那台机器分配；入口不通 → 开在这里。带 `--prompt` 的和无仓库的临时会话只开在本机（点名别的机器会被拒绝）。侧边栏「新建到 m4…」弹窗里按 ⌃s 就是在 m4 开一个临时会话 | `dash-raw-session.sh` → `fleet_hub_place … scratch`；对端 `fleet-control-read.sh start … scratch` |
 | **订阅** | 这个登录 `accounts/` 里的账号（`local` 类） | 同左，另加入口池里的 `hub:<label>` 账号（`pool` 类，入口发短期凭据）。按会话选「只用本地 / 只用池 / 都行」：`dash-issue-session.sh --account local\|pool\|any`（#1540）——盖在窗口 `@account_class` 上，`fleet-claude.sh` 据此只在那一类里挑；派到别的机器时 `ccquota place --account` 带过去，那台机器照样只在那一类里挑；`pool` 但本登录没有池账号 → 拒绝启动，不会悄悄落到本地订阅 | `fleet-account.sh`（`FLEET_ACCOUNT_CLASS` 过滤 `acct_labels`） |
 | **列表来源** | 这台机器的 tmux 窗口 | `FLEET_SIDEBAR_SOURCE=local`：本机窗口 + 入口缓存里你在别的机器上的会话；`=hub`：整张表来自入口的 `fleet_sessions`，状态条换成机器 / 额度 / 入口的版式 | `tmux-dashboard-rows.sh`、`tmux-status.sh`（读 `$FLEET_C` 缓存，渲染路径不联网） |
 | **取数** | 无 | 采集器在**至少一个** fleet 联机时跑 `hubsess` 阶段；`fleet-hub-sessions.sh` 只给联机的 fleet 写 `remote_<sess>` | `tmux-dash-collect.sh`（`fleet_hub_any`） |
@@ -74,5 +74,10 @@ fleet conf 也被剥掉。现在两者都由 fleet 自己那一行决定，**fle
   盖在了窗口上，fleet conf 的默认值与 `--account any` 的关法；
   `bin/fleet-hub-selftest.py` `test_start_carries_the_account_class`——入口派来
   的 `worker_start` 把 `account_class` 回放成 `--account`。
+- 临时会话腿：同一文件的 `SCRATCH` 腿（#1541）——没开入口时 `dash-raw-session.sh`
+  逐字节不变、`--node m4` 被拒绝；开了入口时 REMOTE / LOCAL / 被拒 / 未知 / 入口不通
+  与派单同一套分支，全程不调租约；入口派来的 start 不再二次问入口。入口侧
+  `TestNodePlaceScratch*`（`fleet_place_test.go`）、节点侧
+  `test_start_scratch_opens_a_raw_session`（`fleet-hub-selftest.py`）。
 - `bin/tmux-config-selftest.sh` 核对 global-only 名单与 `fleet.conf.example` 的
   `@scope=global` 标签同步。

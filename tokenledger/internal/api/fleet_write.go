@@ -219,6 +219,37 @@ func checkRepo(args map[string]any) (string, error) {
 	return repo, nil
 }
 
+// maxScratchName bounds a scratch's name (claude-fleet#1541): the opener clips
+// it to 24 display columns anyway; the hub only keeps it a label.
+const maxScratchName = 64
+
+// checkScratchName reads a scratch start's optional name: absent or blank is
+// no name; otherwise 1–64 characters with no control characters and no `#`
+// (tmux's format character — dash-raw-session.sh strips it, the hub refuses
+// it so the name that opens is the name that was asked for).
+func checkScratchName(v any) (string, error) {
+	if v == nil {
+		return "", nil
+	}
+	t, ok := v.(string)
+	if !ok {
+		return "", fault("INVALID_ARGUMENT", "name must be a string")
+	}
+	t = strings.TrimSpace(t)
+	if t == "" {
+		return "", nil
+	}
+	if len([]rune(t)) > maxScratchName {
+		return "", fault("INVALID_ARGUMENT", fmt.Sprintf("name must be at most %d characters", maxScratchName))
+	}
+	for _, c := range t {
+		if c < 32 || c == 127 || c == '#' {
+			return "", fault("INVALID_ARGUMENT", "name must not contain control characters or #")
+		}
+	}
+	return t, nil
+}
+
 // checkText is check_text: 1–4000 characters, not blank, and nothing that
 // could forge the bridge's <!-- fleet:… --> markers or drive a pane.
 func checkText(v any, what string) (string, error) {
@@ -309,14 +340,49 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 	var err error
 	switch tool {
 	case "worker_start":
-		if err = checkFields(args, []string{"issue", "idempotency_key"}, "fleet_id", "agent", "repo", "node", "origin_wid", "account_class"); err != nil {
+		if err = checkFields(args, []string{"idempotency_key"}, "issue", "kind", "name", "fleet_id", "agent", "repo", "node", "origin_wid", "account_class"); err != nil {
 			break
 		}
-		var issue int
-		if issue, err = argInt(args["issue"], "issue", 1, math.MaxInt32); err != nil {
+		// kind (claude-fleet#1541): "issue" (the default — a worker on an
+		// issue, `issue` required) or "scratch" (a raw scratch session: no
+		// issue, an optional name; it is dash-raw-session.sh that opens it).
+		var kind string
+		if kind, err = argString(args, "kind"); err != nil {
 			break
 		}
-		w.params["issue"] = issue
+		switch kind {
+		case "", "issue":
+			if _, ok := args["issue"]; !ok {
+				err = fault("INVALID_ARGUMENT", "Missing or unsupported request fields")
+			} else if _, ok := args["name"]; ok {
+				err = fault("INVALID_ARGUMENT", "name belongs to a scratch start (kind=scratch)")
+			}
+		case "scratch":
+			if _, ok := args["issue"]; ok {
+				err = fault("INVALID_ARGUMENT", "a scratch start has no issue")
+			}
+		default:
+			err = fault("INVALID_ARGUMENT", "kind must be issue or scratch")
+		}
+		if err != nil {
+			break
+		}
+		if kind == "scratch" {
+			w.params["kind"] = "scratch"
+			var name string
+			if name, err = checkScratchName(args["name"]); err != nil {
+				break
+			}
+			if name != "" {
+				w.params["name"] = name
+			}
+		} else {
+			var issue int
+			if issue, err = argInt(args["issue"], "issue", 1, math.MaxInt32); err != nil {
+				break
+			}
+			w.params["issue"] = issue
+		}
 		agent, aerr := argString(args, "agent")
 		if aerr != nil || (agent != "" && agent != "claude" && agent != "codex") {
 			err = fault("INVALID_ARGUMENT", "agent must be claude or codex")
