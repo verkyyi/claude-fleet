@@ -167,8 +167,8 @@ func TestNodeBackoffDoublesCapsAndJitters(t *testing.T) {
 	prev := time.Duration(0)
 	for i := 0; i < 12; i++ {
 		d := b.next()
-		if d < b.cur/2 || d > b.cur {
-			t.Fatalf("step %d: delay %s outside [%s, %s]", i, d, b.cur/2, b.cur)
+		if d < b.cur-b.cur/5 || d > b.cur {
+			t.Fatalf("step %d: delay %s outside [%s, %s]", i, d, b.cur-b.cur/5, b.cur)
 		}
 		if b.cur > nodeBackoffMax {
 			t.Fatalf("step %d: ceiling %s above the %s cap", i, b.cur, nodeBackoffMax)
@@ -184,6 +184,57 @@ func TestNodeBackoffDoublesCapsAndJitters(t *testing.T) {
 	b.reset()
 	if d := b.next(); d > nodeBackoffMin {
 		t.Fatalf("after reset the first delay is %s, want at most %s", d, nodeBackoffMin)
+	}
+}
+
+// The ladder the issue promises (claude-fleet#1630): 5, 10, 20, 30, 30 s —
+// and no jittered wait ever above the 30 s cap, so network back → node online
+// stays inside 30 s.
+func TestNodeBackoffLadder(t *testing.T) {
+	var b nodeBackoff
+	want := []time.Duration{5, 10, 20, 30, 30, 30}
+	for i, w := range want {
+		d := b.next()
+		if b.cur != w*time.Second {
+			t.Fatalf("rung %d = %s, want %s", i, b.cur, w*time.Second)
+		}
+		if d > 30*time.Second || d < b.cur*4/5 {
+			t.Fatalf("rung %d: jittered wait %s outside [%s, 30s]", i, d, b.cur*4/5)
+		}
+	}
+}
+
+// A change in this machine's network cuts the wait short: against a hub that
+// refuses every dial, a network wake makes the agent dial again at once
+// instead of sitting out a backoff far longer than the test.
+func TestNodeNetChangeSkipsBackoff(t *testing.T) {
+	oldMin, oldMax, oldSettle, oldFeed := nodeBackoffMin, nodeBackoffMax, netChangeSettle, netChangeFeed
+	nodeBackoffMin, nodeBackoffMax, netChangeSettle = time.Hour, time.Hour, 10*time.Millisecond
+	feed := make(chan struct{}, 1)
+	netChangeFeed = func(context.Context) <-chan struct{} { return feed }
+	t.Cleanup(func() {
+		nodeBackoffMin, nodeBackoffMax, netChangeSettle, netChangeFeed = oldMin, oldMax, oldSettle, oldFeed
+	})
+	var dials atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == control.Path {
+			dials.Add(1)
+			http.Error(w, "down", http.StatusServiceUnavailable)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	a := nodeTestAgent(t, srv.URL, true)
+	go func() {
+		for i := 0; i < 3; i++ {
+			time.Sleep(300 * time.Millisecond)
+			feed <- struct{}{}
+		}
+	}()
+	a.Run(ctx)
+	if n := dials.Load(); n < 3 {
+		t.Fatalf("dials = %d with a one-hour backoff and three network changes; want a dial per change", n)
 	}
 }
 

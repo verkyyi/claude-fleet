@@ -105,6 +105,10 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetSpot(); err != nil {
 		return err
 	}
+	// Node-lost / lease-conflict alerts (claude-fleet#1630).
+	if err := s.ensureFleetAlerts(); err != nil {
+		return err
+	}
 	// The relay audit (claude-fleet#1413).
 	return s.ensureFleetSSHRelays()
 }

@@ -138,6 +138,9 @@ fleet_ui_t() {
     en:hub_lost_fmt)            printf 'hub lost %s' "${1:-}" ;;
     zh:remote_hub_lost_fmt)     printf '入口失联 %s，稍后再试' "${1:-}" ;;
     en:remote_hub_lost_fmt)     printf 'hub lost %s — try again later' "${1:-}" ;;
+    # a cross-machine certificate while the hub is down (issue #1630): refused at once, with the way round
+    zh:peer_hub_lost_fmt)       printf '入口失联，机器间访问暂停；你可直接 `fleet %s` 进去' "${1:-}" ;;
+    en:peer_hub_lost_fmt)       printf 'hub lost — machine-to-machine access paused; you can still go in directly with `fleet %s`' "${1:-}" ;;
     zh:pin_heading_fmt)         printf '置顶 (%s)' "${1:-}" ;;
     en:pin_heading_fmt)         printf 'Pinned (%s)' "${1:-}" ;;
     zh:unknown_repo_heading)    printf '? · 未知仓库' ;;

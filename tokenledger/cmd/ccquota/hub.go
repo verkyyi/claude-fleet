@@ -523,6 +523,11 @@ func runHub(args []string) error {
 	if srv.Spot != nil {
 		go srv.Spot.Run(ctx)
 	}
+	if srv.Fleet {
+		// Node-lost / lease-conflict alerts (claude-fleet#1630).
+		srv.NodeLostAfter = api.NodeLostAfterFromEnv()
+		go srv.RunNodeAlerts(ctx)
+	}
 
 	// Reads the feed once now, then on the interval. Failure is not fatal: a hub
 	// with no route to an FX feed is a working hub that shows every figure in

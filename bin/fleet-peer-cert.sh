@@ -33,6 +33,12 @@
 #       (no node.env token), the hub predates #1626 or has no CA (404), or
 #       FLEET_PEER_CERT=0. Nothing printed on stdout.
 #
+# A hub that is DOWN is answered within a second (issue #1630): the connect is
+# bounded by FLEET_PEER_CERT_CONNECT_SECS (default 0.8) — no 10-second wait, no
+# retry — and the refusal names the way round, `fleet <machine>` straight in on
+# the operator's own client certificate. The whole request stays bounded by
+# FLEET_HUB_TIMEOUT (10) for a hub that answers slowly.
+#
 # Seams: FLEET_HUB_CURL (default `curl`) is the transport; FLEET_PEER_KEY the
 # key path; FLEET_PEER_CERT_SECS the life asked for (default 300 — the hub caps
 # it at 300 whatever is asked); FLEET_PEER_CERT_MARGIN how many seconds before
@@ -42,11 +48,14 @@ set -uo pipefail
 BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=fleet-lib.sh
 . "$BIN/fleet-lib.sh"
+# shellcheck source=fleet-ui-lang.sh
+. "$BIN/fleet-ui-lang.sh"
 
 die() { printf 'fleet-peer-cert: %s\n' "$2" >&2; exit "$1"; }
 
 [ $# -eq 2 ] || die 2 'usage: fleet-peer-cert.sh <machine> <view|upgrade|move>'
 MACHINE=$1 PURPOSE=$2
+SHOWN=${MACHINE##*@}; SHOWN=${SHOWN%%.*}   # the name the operator typed, for the way round
 case "$PURPOSE" in view|upgrade|move) ;; *) die 2 "purpose must be view, upgrade or move, not '$PURPOSE'" ;; esac
 # An ssh destination is fine: drop a user@, keep the host's first label unless
 # it is an address, and turn a local label back into the hub's name
@@ -98,10 +107,10 @@ body=$(python3 -c 'import json,sys; print(json.dumps({"target":sys.argv[1],"purp
   || die 2 "FLEET_PEER_CERT_SECS must be a number of seconds"
 CURL=${FLEET_HUB_CURL:-curl}
 resp=$(_fleet_hub_env
-  "$CURL" -sS --max-time "${FLEET_HUB_TIMEOUT:-10}" -o - -w '\n%{http_code}' \
+  "$CURL" -sS --connect-timeout "${FLEET_PEER_CERT_CONNECT_SECS:-0.8}" --max-time "${FLEET_HUB_TIMEOUT:-10}" -o - -w '\n%{http_code}' \
     -H "Authorization: Bearer $CCQUOTA_TOKEN" -H 'Content-Type: application/json' \
     -X POST --data-binary "$body" "${CCQUOTA_HUB_URL%/}/v1/node/peer-cert" 2>/dev/null); rc=$?
-[ "$rc" -eq 0 ] && [ -n "$resp" ] || die 1 "入口不可达，跨机访问暂停（hub unreachable: curl exit ${rc}）— 不退回长期互信；入口恢复后重试"
+[ "$rc" -eq 0 ] && [ -n "$resp" ] || die 1 "$(fleet_ui_t peer_hub_lost_fmt "$SHOWN")（curl exit ${rc}；不退回长期互信）"
 code=$(printf '%s\n' "$resp" | tail -n 1)
 json=$(printf '%s\n' "$resp" | sed '$d')
 case "$code" in

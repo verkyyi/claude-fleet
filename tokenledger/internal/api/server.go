@@ -158,6 +158,11 @@ type Server struct {
 	// leaseNow replaces the lease clock in tests (claude-fleet#1422).
 	leaseNow func() time.Time
 
+	// NodeLostAfter is how long a node may be silent before the hub records a
+	// node_lost alert (FLEET_NODE_LOST_ALERT_SECS, claude-fleet#1630); zero =
+	// the 120 s default.
+	NodeLostAfter time.Duration
+
 	// SSHCA signs people's connection certificates (claude-fleet#1412),
 	// loaded from CCQUOTA_FLEET_SSH_CA_KEY — a file from its own k8s Secret,
 	// never the database. Nil: no certificates, and no node is asked to trust

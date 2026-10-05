@@ -177,7 +177,9 @@
 `peer:<来源>><目标>:<用途>` 的证书，先记审计再交出。目标的 sshd 用本来就信任的入口 CA
 （`TrustedUserCAKeys`）放行；连接建立后不受证书过期影响。
 
-- 入口不可达 / 拒绝：**暂停并说明**，不退回长期互信（`fleet-peer-cert.sh` exit 1）。
+- 入口不可达 / 拒绝：**暂停并说明**，不退回长期互信（`fleet-peer-cert.sh` exit 1）。入口不可达在
+  **1 秒内**拒（连接只等 0.8 秒、只试一次），并给出绕法：「入口失联，机器间访问暂停；你可直接
+  `fleet <机器>` 进去」——见第 5¾ 节。
 - 没有入口（单机、无 node.env）或入口还没部署 #1626：照旧直接 ssh（exit 3）。
 - 审计：`GET /v1/fleet/peer-certs`（运营者），每次跨机一行；目标 sshd 日志里也有 key id。
 - 本机的 peer 钥匙：`~/.ssh/fleet-peer`（只用来被签，不放进任何 authorized_keys）。
@@ -193,6 +195,44 @@ bash ~/.claude/fleet/bin/fleet-doctor.sh | grep sshtrust   # WARN 列出其它 f
 
 删后再验一次跨机打开会话和升级。
 
+## 5¾. 入口断开：照常干活，接上自动恢复（#1630）
+
+入口（hub）重启、网络抖动、某台机器断网，都**不停任何会话**：入口只是看不见，不是指挥。
+
+**断开期间**
+
+| 谁 | 看到什么 | 能做什么 |
+|---|---|---|
+| m5 / m4 上的会话 | 什么都不变 | 照跑；认领在本机，入口回来再对账 |
+| 你的本地壳（MacBook） | 列表保留最后一次的样子，60 秒后变灰（失联）；断开 5 分钟闪**一次**「入口失联」 | 右边直连照常——靠你那张 12 小时的客户端证书，不经入口 |
+| 机器之间（打开别机会话、`fleet-node-upgrade.sh --host`、`fleet-move.sh`） | 1 秒内拒：「入口失联，机器间访问暂停；你可直接 `fleet <机器>` 进去」 | 自己 `fleet m4` 进去；**不**退回长期互信 |
+
+**重连**（节点程序 `ccquota agent`，参数只在 `tokenledger/internal/agent/node.go` 一处）：
+
+- 每次断开后按 **5 → 10 → 20 → 30 → 30 …** 秒重试（抖动只往短里抖，不超过 30 秒）——网络恢复到节点重新在线 ≤ 30 秒。
+- 本机网络一变（换 Wi-Fi、睡醒、插回网线；macOS 路由套接字 / Linux netlink）**立刻**重试，退避清零。
+- 接上后第一拍就是完整状态（所有会话、负载、版本），不等下一个周期。
+
+**入口记的两类告警**（`fleet_alerts` 表，读：`GET /v1/fleet/fleet_alerts`）：
+
+| kind | 什么时候出现 | 什么时候消除 | 入口做什么 |
+|---|---|---|---|
+| `node_lost` | 一台机器 **120 秒**没报到（`FLEET_NODE_LOST_ALERT_SECS`；从入口自己启动时起算，入口重启不会把所有机器都记失联；维护中的机器不记） | 它下一次报到 | 只记，`raised_at` / `cleared_at` 就是这次断开的起止 |
+| `lease_conflict` | 一台机器**重连后第一拍**带着一个会话，而这张单的认领此刻在别的 worker 手里（它不在时被重开 / 强取了） | 两边重新一致：认领没了、回到它手里，或它不再报这个会话 | 只记两边是谁（`holder` / `reporter`：机器、worker_id、fleet），**谁也不杀、认领不动**——留哪个由你决定（第 3 节第 3 条） |
+
+```sh
+curl -s -H "Authorization: Bearer $TOKEN" "$HUB/v1/fleet/fleet_alerts" | python3 -m json.tool
+# {"open": 1, "alerts": [{"kind": "lease_conflict", "subject": "verkyyi/claude-fleet#7",
+#   "detail": {"holder": {"node": "verkyyi@m5", …}, "reporter": {"node": "verkyyi@m4", …}}, …}]}
+```
+
+**演练：停入口 3 分钟**（运营者定时间；只停入口，不碰节点）
+
+1. 记 T0，停入口（k8s：`kubectl scale deploy/<hub> --replicas=0`）。
+2. 断开期间核对上表三行：m5 / m4 会话照跑；MacBook 列表变灰、右边可用；在 m5 上 `fleet-node-upgrade.sh --host m4 --status` 1 秒内被拒且有说明。
+3. T0+3 分钟恢复入口，记 T1；`/nodes` 上 m5、m4 回到在线的时刻取较大者 − T1 = 读数（目标 ≤ 30 秒）。
+4. `GET /v1/fleet/fleet_alerts`：断开超过 2 分钟的机器各一条 `node_lost`——注意入口停着的时候没人记，所以这次演练里**它们不会出现**（入口从自己启动时起算）；要看 `node_lost`，改为断某台机器的网 3 分钟，入口照常。贴出 `raised_at` / `cleared_at`。
+
 ## 6. 速查
 
 | 要做的事 | 命令 / 接口 |
@@ -204,6 +244,7 @@ bash ~/.claude/fleet/bin/fleet-doctor.sh | grep sshtrust   # WARN 列出其它 f
 | 进某台机器 | `fleet`（入口选）· `fleet m4`（指名）· `fleet connect --print` 看选了哪条线 |
 | 认领释放 / 强取 | 自动：失联 30 分钟 · 手动：`ccquota lease acquire --force <repo> <N> <wid>` |
 | 本机健康 | `fleet-doctor.sh` |
+| 入口记的告警（失联 / 重复认领） | `GET /v1/fleet/fleet_alerts`（第 5¾ 节） |
 | 审计 | 入口 `fleet_audit` 表：`node_maintenance`（ENTER/LEAVE/ALREADY/NOT_FLAGGED）、`lease_*`、`place`、`move` |
 
 相关：`docs/FLEET-HUB.md`（入口、失联、租约）· `docs/SHARED-MACHINE.md`（给一台机器加登录）· `docs/HOST.md`（无人值守 Mac）· `tokenledger/README.md`「Fleet nodes」。
