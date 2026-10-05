@@ -34,7 +34,10 @@
 #              Untracked litter (fleet.conf.bak*) is fine.
 #   deferred   any window on any of this login's live fleets is
 #              working / looping / waking (the same busy trio
-#              fleet-epic-backstop.sh uses) → wait; `deferred_since` keeps the
+#              fleet-epic-backstop.sh uses) → wait — except a `looping` window
+#              that waits on nothing but a Loop whose next round is more than
+#              FLEET_INSTALL_LOOP_MARGIN_SECS (600) away: a cron / wakeup parked
+#              between rounds is an idle session (issue #1690). `deferred_since` keeps the
 #              first deferral's time so the doctor (C7 #1123) can say
 #              "waiting 26h". Also deferred while an EPIC batch is running on
 #              this login — /fleet-epic-run stamps $FLEET_CONF_DIR/global/
@@ -113,6 +116,10 @@ ROOT="${FLEET_INSTALL_ROOT:-$(cd "$BIN/.." && pwd)}"
 REMOTE=origin TAG=stable TIMEOUT="${FLEET_INSTALL_SYNC_TIMEOUT:-30}"
 DRY=0 STATUS=0
 BUSY_STATES='working|looping|waking'
+# A Loop parked between rounds (issue #1690) is busy only when its next round is
+# this close: an apply + doctor finish well inside it.
+LOOP_MARGIN="${FLEET_INSTALL_LOOP_MARGIN_SECS:-600}"
+case "$LOOP_MARGIN" in ''|*[!0-9]*) LOOP_MARGIN=600 ;; esac
 LOCK_TTL=3600   # an apply + two doctor runs take well under a minute; older = a dead tick
 # A deferral this long is STUCK (the doctor's own threshold, C7) — and the alarm's.
 STUCK_SECS="${FLEET_INSTALL_FOLLOW_STUCK_SECS:-86400}"
@@ -121,7 +128,7 @@ NOTIFY_BUDGET=30   # a notifier that hangs must not hold the tick lock
 LOGIN=$(id -un 2>/dev/null || printf '%s' "${USER:-?}")
 HOST=$(hostname -s 2>/dev/null || hostname 2>/dev/null || printf '?')
 
-usage() { sed -n '2,101p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,104p' "$0" | sed 's/^# \{0,1\}//'; }
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run|-n) DRY=1 ;;
@@ -268,13 +275,29 @@ doctor_fail_tags() {
 # Busy windows across every live fleet of THIS login: "<sess>:<n>" per fleet that
 # has any, one line each; nothing when the machine is quiet. No fleet conf, no
 # tmux on PATH, no live server — all read as quiet: there is no session to defer to.
+# A `looping` window whose ONLY wait is its Loop (@claude_wait = loop) is idle
+# between rounds — `looping` is written at Stop, and a round that starts writes
+# `working` — so it is busy only while a round may start within LOOP_MARGIN
+# (fleet_loop_mark.py due, issue #1690): a cron that fires tomorrow morning no
+# longer pins the install for the night. Unknown (a pre-#1690 mark, a loop
+# ledger, a children / bg wait, a classifier `looping` with no wait) stays busy.
 busy_fleets() {
-  local sess n
+  local sess n st wt lp mf
   while IFS= read -r sess; do
     [ -n "$sess" ] || continue
-    n=$(fleet_lw '#{@claude_state}' tmux -L "$sess" \
-        | grep -cE "^($BUSY_STATES)$")
-    [ "${n:-0}" -gt 0 ] && printf '%s:%s\n' "$sess" "$n"
+    n=0
+    while IFS='|' read -r st wt lp mf; do
+      case "|$BUSY_STATES|" in *"|$st|"*) ;; *) continue ;; esac
+      if [ "$st" = looping ] && [ "$wt" = loop ] \
+         && ! python3 "$BIN/fleet_loop_mark.py" due --value "$lp" --manifest "$mf" \
+              --within "$LOOP_MARGIN" >/dev/null 2>&1 </dev/null; then
+        continue
+      fi
+      n=$((n + 1))
+    done <<WIN
+$(fleet_lw '#{@claude_state}|#{@claude_wait}|#{@loop}|#{@handoff_manifest}' tmux -L "$sess")
+WIN
+    [ "$n" -gt 0 ] && printf '%s:%s\n' "$sess" "$n"
   done <<EOF
 $(fleet_sockets 2>/dev/null)
 EOF
