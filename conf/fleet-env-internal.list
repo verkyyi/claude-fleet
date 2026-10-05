@@ -49,6 +49,7 @@ FLEET_COLLECT_QUOTAWATCH           knob: auto|never — whether the collector ru
 FLEET_COMPACT_SEND_GRACE           knob: seconds fleet-compact-send.sh waits for the Stop hook to return before its idle check (2)
 FLEET_COMPACT_RESUME_GRACE         knob: seconds fleet-compact-resume.sh waits after the restore before its idle check (3)
 FLEET_COMPACT_RESUME_TIMEOUT       knob: how long fleet-compact-resume.sh holds for an untyped-at pane before giving up (90)
+FLEET_COMPACT_RESUME_WATCH         knob: how long fleet-compact-resume.sh watches a stale `working` for the pane to settle before skip:stale (600, #1572)
 FLEET_COMPACT_SEND_TIMEOUT         knob: how long fleet-compact-send.sh holds for an idle, untyped-at pane before giving up (90)
 FLEET_CONFIG_SHOW_INTERNAL         knob: fcfg_table lists @tier=internal rows too (#1101) — a per-call switch, not a conf setting
 FLEET_CONTEXT_LIMIT                alias: retired twin of FLEET_CTX_WINDOW (#1101) — still read, wins when set

@@ -28,13 +28,28 @@
 #   codex      a Codex pane (@cc_agent codex)
 #   transfer   an agent transfer is pending (@agent_transfer_pending_until)
 #   needs      @claude_state=needs — the pane waits on a human, not on us
-#   operator   a turn is already running (@claude_state=working: the operator typed,
-#              a cron fired) — the engine would queue ours behind it and resume twice.
-#              Only `working` counts, not "the state changed since the restore": the
-#              classifier and the spinner's reconcile re-stamp an idle pane too
+#   self-continued
+#              a turn is running that STARTED AFTER the restore: @claude_state=working
+#              with a @claude_state_ts newer than @compact_restored_ts (every hook
+#              edge stamps it). The harness carried on by itself — whatever was
+#              queued while the pane compacted (a task notification, a peer
+#              message, the operator's typed line) is delivered the moment the
+#              compaction lands and starts a turn within a second (issue #1572:
+#              every one of the 2026-10-04 cases still on disk read so). Ours
+#              would be a second resume on top of it.
+#   stale      @claude_state=working whose stamp is OLDER than the restore, for the
+#              whole watch (FLEET_COMPACT_RESUME_WATCH, default 600 s): the turn it
+#              marks ended before /compact (the sender runs between turns), and
+#              nothing — not the spinner's reconcile, not a Stop — re-stamped the
+#              pane. Unreadable, so nothing is sent.
 #   typing     the operator was still typing at this window at the deadline
-# Every send logs `resumed mod|send-keys` to logs/context-ladder.log; bin/fleet-doctor.sh
-# WARNs on a fleet `restored` row with no `resumed` row after it.
+# A stale `working` that settles (a Stop lands, or bin/tmux-spinner.sh demotes it
+# after 2× FLEET_STUCK_WORKING_SECS) with no turn after the restore in between is
+# the pane that really sat idle: the turn is sent THEN, row `resumed late:mod` /
+# `late:send-keys` (the dup guard still holds: one restore, one resume). Before
+# #1572 both shapes were one `skip:operator` row and the idle one was given up on.
+# Every send logs `resumed mod|send-keys|late:<via>` to logs/context-ladder.log;
+# bin/fleet-doctor.sh WARNs on a fleet `restored` row with no `resumed` row after it.
 #
 # Kill switch: FLEET_COMPACT_RESUME=0 (fleet.conf / the fleet overlay, read through
 # fleet-hook-conf.sh) ⇒ no action and no row. Always exits 0.
@@ -87,8 +102,10 @@ on=$(printf '%s\n' "$conf" | sed -n 1p)
 DEFER=$(printf '%s\n' "$conf" | sed -n 2p)
 GRACE="${FLEET_COMPACT_RESUME_GRACE:-3}"
 TIMEOUT="${FLEET_COMPACT_RESUME_TIMEOUT:-90}"
+WATCH="${FLEET_COMPACT_RESUME_WATCH:-600}"
 case "$GRACE" in ''|*[!0-9]*) GRACE=3 ;; esac
 case "$TIMEOUT" in ''|*[!0-9]*) TIMEOUT=90 ;; esac
+case "$WATCH" in ''|*[!0-9]*) WATCH=600 ;; esac
 case "$DEFER" in ''|*[!0-9]*) DEFER=30 ;; esac
 
 ladder() { [ -f "$BIN/fleet-ladder-log.sh" ] && sh "$BIN/fleet-ladder-log.sh" resumed --pane "$PANE" --reason "$1" </dev/null >/dev/null 2>&1; }
@@ -96,22 +113,32 @@ skip() { ladder "skip:$1"; exit 0; }
 num() { case "$1" in ''|*[!0-9]*) echo 0 ;; *) echo "$1" ;; esac; }
 
 sleep "$GRACE"
-deadline=$(( $(date +%s) + TIMEOUT ))
+watch_end=$(( $(date +%s) + WATCH ))
+deadline=''    # the typing hold's bound: TIMEOUT from the first time the pane reads idle
+late=''        # the pane read a stale `working` first — it settled with no turn after the restore
 while :; do
   v=$(tmux display-message -p -t "$PANE" \
-    '#{@compact_stage}|#{@compact_restored_ts}|#{@compact_resume_ts}|#{@claude_state}|#{@cc_agent}|#{@agent_transfer_pending_until}|#{window_id}' 2>/dev/null)
+    '#{@compact_stage}|#{@compact_restored_ts}|#{@compact_resume_ts}|#{@claude_state}|#{@claude_state_ts}|#{@cc_agent}|#{@agent_transfer_pending_until}|#{window_id}' 2>/dev/null)
   [ -n "$v" ] || exit 0                                   # the pane is gone
-  IFS='|' read -r stage rts sts st agent tpu wid <<EOF
+  IFS='|' read -r stage rts sts st cts agent tpu wid <<EOF
 $v
 EOF
-  rts=$(num "$rts"); sts=$(num "$sts"); tpu=$(num "$tpu")
+  rts=$(num "$rts"); sts=$(num "$sts"); cts=$(num "$cts"); tpu=$(num "$tpu")
   now=$(date +%s)
   [ "$rts" -gt 0 ] && [ "$sts" -ge "$rts" ] && skip dup
   [ "$stage" = restored ] || skip stage
   [ "$agent" = codex ] && skip codex
   [ "$tpu" -gt "$now" ] && skip transfer
   [ "$st" = needs ] && skip needs
-  [ "$st" = working ] && skip operator
+  if [ "$st" = working ]; then
+    # Stamped after the restore ⇒ a turn started after /compact: the harness went on
+    # by itself (see the header). Stamped before it ⇒ stale: watch until the pane
+    # settles, then send — a resume that is late beats one that never comes.
+    [ "$cts" -gt "$rts" ] && skip self-continued
+    [ "$now" -lt "$watch_end" ] || skip stale
+    late=1; sleep 2; continue
+  fi
+  [ -n "$deadline" ] || deadline=$(( now + TIMEOUT ))
   held=''
   if [ "$DEFER" -gt 0 ] && [ -n "$wid" ]; then
     held=$(tmux list-clients -F '#{client_activity} #{window_id}' 2>/dev/null \
@@ -137,5 +164,5 @@ case "$rc" in
      sleep 0.3 2>/dev/null || sleep 1
      FLEET_ALLOW_SENDKEYS=1 tmux send-keys -t "$PANE" Enter 2>/dev/null ;;
 esac
-ladder "$via"
+ladder "${late:+late:}$via"
 exit 0

@@ -11,7 +11,15 @@
 #              row's ctx is `-` (the pre-compaction @ctx_pct is stale)
 #   RUNNING    inbox rc 6 (taken, still running) ⇒ never typed as well
 #   NO MOD     inbox rc 3/4/5 ⇒ Escape · text · Enter as separate send-keys; `send-keys`
-#   OPERATOR   a turn already running (@claude_state=working) ⇒ nothing; `skip:operator`
+#   SELF       a turn running that STARTED after the restore (@claude_state=working,
+#              @claude_state_ts newer than @compact_restored_ts) ⇒ nothing sent;
+#              `skip:self-continued` — at once, or mid-watch when the turn starts
+#              while a stale `working` is being watched (issue #1572)
+#   LATE       a STALE `working` (stamped before the restore) that settles to idle
+#              with no turn in between ⇒ the resume is sent THEN, once: row
+#              `resumed late:mod`, a second sender `skip:dup`
+#   STALE      a stale `working` that never settles within FLEET_COMPACT_RESUME_WATCH
+#              ⇒ nothing sent; `skip:stale`
 #   NATIVE     Claude Code's own compaction (no `compacting` stage, @compact_native) ⇒
 #              no sender at all, no `resumed` row
 #   OFF        FLEET_COMPACT_RESUME=0 in the fleet overlay ⇒ nothing, no row
@@ -127,7 +135,10 @@ penv() { env -i PATH="$WORK/fakepath:/usr/bin:/bin" HOME="$WORK" TMPDIR="$WORK/t
            TMUX="$WORK/sock,1,0" TMUX_PANE='%9' FLEET_CONF_DIR="$WORK/conf" \
            FAKE_OPTS="$OPTS" FAKE_SENDLOG="$SENDLOG" FAKE_INBOX="$INBOX" \
            FAKE_SC_RC="${SC_RC:-0}" FAKE_CLIENTS="${FAKE_CLIENTS:-}" \
-           FLEET_COMPACT_RESUME_GRACE=0 FLEET_COMPACT_RESUME_TIMEOUT="${RESUME_TIMEOUT:-90}" "$@"; }
+           FLEET_COMPACT_RESUME_GRACE=0 FLEET_COMPACT_RESUME_TIMEOUT="${RESUME_TIMEOUT:-90}" \
+           FLEET_COMPACT_RESUME_WATCH="${RESUME_WATCH:-600}" "$@"; }
+# setopt k v — a hook edge / the spinner's reconcile stamping the pane mid-watch.
+setopt() { awk -F'\t' -v k="$1" -v v="$2" 'BEGIN{OFS="\t"} $1 == k { $2 = v; d = 1 } { print } END { if (!d) print k, v }' "$OPTS" > "$OPTS.n" && mv "$OPTS.n" "$OPTS"; }
 # compact_start — SessionStart(source=compact) in the worktree: the refocus hook.
 compact_start() {
   OUT=$(cd "${CWD:-$WORK/widgets-issue-12}" && printf '{"hook_event_name":"SessionStart","source":"compact"}' \
@@ -176,12 +187,57 @@ for rc in 3 4 5; do
 done
 ok "NO MOD: inbox rc 3/4/5 → Escape · /fleet-compact-resume · Enter, row 'resumed send-keys'"
 
-# ===== OPERATOR: a turn already running ==========================================
-reset @claude_state=working
+# ===== SELF-CONTINUED: a turn that started after the restore (issue #1572) =========
+# `working` stamped AFTER the restore: the harness carried on by itself — nothing sent.
+reset @claude_state=working "@claude_state_ts=$(( $(date +%s) + 60 ))"
 compact_start; wait_resumed
-[ "$(reason)" = skip:operator ] || fail "OPERATOR: want skip:operator, got '$(reason)'"
-[ -s "$INBOX" ] || [ -s "$SENDLOG" ] && fail "OPERATOR: nothing may be sent"
-ok "OPERATOR: the operator typed first (state working) → nothing sent, skip:operator"
+[ "$(reason)" = skip:self-continued ] || fail "SELF: want skip:self-continued, got '$(reason)'"
+[ -s "$INBOX" ] || [ -s "$SENDLOG" ] && fail "SELF: nothing may be sent"
+ok "SELF: a turn stamped after the restore (state working, fresh ts) → nothing sent, skip:self-continued"
+# …and the same verdict when the turn starts MID-WATCH: a stale `working` is being
+# watched, then a hook edge stamps the pane after the restore.
+reset @claude_state=working "@claude_state_ts=$(( $(date +%s) - 60 ))"
+compact_start; sleep 1
+[ "$(resumed)" = 0 ] || fail "SELF mid-watch: a stale working must be WATCHED, not decided (got '$(reason)')"
+setopt @claude_state_ts "$(( $(getopt @compact_restored_ts) + 1 ))"
+wait_resumed
+[ "$(reason)" = skip:self-continued ] || fail "SELF mid-watch: want skip:self-continued, got '$(reason)'"
+[ -s "$INBOX" ] || [ -s "$SENDLOG" ] && fail "SELF mid-watch: nothing may be sent"
+ok "SELF mid-watch: a stale working, then a turn after the restore → skip:self-continued, nothing sent"
+
+# ===== LATE: a stale working that settles with no turn in between (issue #1572) ====
+# The pane really sat idle under a `working` nobody cleared: when it settles (a Stop,
+# or the spinner's reconcile) the resume goes out THEN — once.
+reset @claude_state=working "@claude_state_ts=$(( $(date +%s) - 60 ))"
+compact_start; sleep 1
+[ "$(resumed)" = 0 ] && [ ! -s "$INBOX" ] || fail "LATE: nothing may be sent while the stale working is watched"
+setopt @claude_state 'done'; setopt @claude_state_ts "$(( $(getopt @compact_restored_ts) + 1 ))"
+wait_resumed
+[ "$(reason)" = late:mod ] || fail "LATE: want 'resumed late:mod', got '$(reason)'"
+[ "$(grep -c '' "$INBOX")" = 1 ] && grep -q -- '--from compact-resume %9 /fleet-compact-resume$' "$INBOX" \
+  || fail "LATE: exactly one /fleet-compact-resume once the pane settled"
+[ -s "$SENDLOG" ] && fail "LATE: a command the mod took must never be typed too"
+[ "$(getopt @compact_resume_ts)" -ge "$(getopt @compact_restored_ts)" ] || fail "LATE: @compact_resume_ts must cover the restore"
+: > "$INBOX"; penv bash "$RESUME" '%9'
+[ -s "$INBOX" ] && fail "LATE: a second sender must not post again"
+[ "$(reason)" = skip:dup ] || fail "LATE: the second sender must read skip:dup, got '$(reason)'"
+[ "$(resumed)" = 2 ] || fail "LATE: one late row + one dup row, got $(resumed)"
+ok "LATE: a stale working that settles idle with no new turn → one late resume (late:mod), then skip:dup"
+# no mod: the late resume types the keystrokes, row late:send-keys
+reset @claude_state=working "@claude_state_ts=$(( $(date +%s) - 60 ))"
+SC_RC=3 compact_start; sleep 1
+setopt @claude_state 'done'; setopt @claude_state_ts "$(( $(getopt @compact_restored_ts) + 1 ))"
+SC_RC=3 wait_resumed; SC_RC=0
+[ "$(reason)" = late:send-keys ] && [ "$(grep -c '' "$SENDLOG")" = 3 ] \
+  || fail "LATE no mod: want late:send-keys with Escape · text · Enter, got '$(reason)'"
+ok "LATE no mod: the late resume is typed (late:send-keys)"
+
+# ===== STALE: a stale working that never settles ===================================
+reset @claude_state=working "@claude_state_ts=$(( $(date +%s) - 60 ))"
+RESUME_WATCH=0 compact_start; wait_resumed
+[ "$(reason)" = skip:stale ] || fail "STALE: want skip:stale at the watch bound, got '$(reason)'"
+[ -s "$INBOX" ] || [ -s "$SENDLOG" ] && fail "STALE: nothing may be sent into a pane that cannot be read"
+ok "STALE: a working stamped before the restore that never settles → skip:stale, nothing sent"
 
 # ===== NATIVE: Claude Code's own compaction ======================================
 reset @compact_stage= @compact_native="$(date +%s)"

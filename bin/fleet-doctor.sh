@@ -2368,7 +2368,14 @@ ltop=$(printf '%s\n' "$lwin" | awk -F '\t' '$1 ~ /^[0-9]+$/ && ($1 + 0) > best {
 # A fleet compaction nobody resumed (issue #1441): a `restored fleet` row older than
 # 5 minutes with no `resumed` row for that pane after it — the session sat idle
 # after /compact. Only rows newer than the ledger's first `resumed` row count, so a
-# log written before the resume sender existed does not WARN for a day.
+# log written before the resume sender existed does not WARN for a day. Any
+# `resumed` row settles it, by design: `mod` / `send-keys` (sent), `late:<via>` (a
+# stale `working` settled idle and the turn was sent then, #1572) and every
+# `skip:<why>` — `self-continued` is the harness going on by itself (queued input
+# lands the moment the compaction does; it is NOT a stall), `needs` / `typing` /
+# `codex` / `transfer` / `stage` are a pane that is someone else's to move, `stale`
+# is a pane that could not be read. A watch still running (a stale `working` not
+# yet settled) has no row yet and WARNs past 5 minutes, which is the point.
 lstuck=''
 if [ "${FLEET_COMPACT_RESUME:-1}" != 0 ]; then
   lstuck=$(awk -F '\t' -v cut=$(( $(date +%s) - 86400 )) -v old=$(( $(date +%s) - 300 )) '

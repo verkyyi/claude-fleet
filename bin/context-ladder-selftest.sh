@@ -256,9 +256,9 @@ case "$line" in *WARN*'1 次压缩后没有续跑'*'s1:w7'*) : ;;
   *) fail "DOCTOR: a fleet restore with no resumed row after 5 min must WARN (auto restores never)" "$line" ;; esac
 line=$(doctor FLEET_COMPACT_RESUME=0)
 case "$line" in *PASS*) : ;; *) fail "DOCTOR: FLEET_COMPACT_RESUME=0 must not WARN" "$line" ;; esac
-printf '%s\tt\tresumed\ts1\t%%7\tw7\t30\t1\tskip:operator\n' $(( now - 890 )) >> "$D/logs/context-ladder.log"
+printf '%s\tt\tresumed\ts1\t%%7\tw7\t30\t1\tlate:mod\n' $(( now - 890 )) >> "$D/logs/context-ladder.log"
 line=$(doctor)
-case "$line" in *PASS*) : ;; *) fail "DOCTOR: a resumed row (even a skip) settles the restore" "$line" ;; esac
+case "$line" in *PASS*) : ;; *) fail "DOCTOR: a resumed row (a late resend, #1572; a skip too) settles the restore" "$line" ;; esac
 grep -v resumed "$D/logs/context-ladder.log" > "$D/logs/x" && mv "$D/logs/x" "$D/logs/context-ladder.log"
 line=$(doctor)
 case "$line" in *PASS*) : ;; *) fail "DOCTOR: a ledger with no resumed row yet (pre-#1441) must not WARN" "$line" ;; esac
