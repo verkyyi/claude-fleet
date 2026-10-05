@@ -980,7 +980,8 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         original="bash ~/.claude/fleet/bin/fleet-sleep.sh wake"
         command=shlex.join(['env','FLEET_CONF_DIR='+self.env['FLEET_CONF_DIR'],'FLEET_SLEEP_WAKE='+mode,
                             'python3',str(self.bin/'fleet-sleep.py'),'wake','--session'])
-        for line in lines:self.assertIn(original+" '#{session_name}' '#{window_id}' --dwell 2 --nav",line)
+        # The fleet name is $FLEET_SESSION_FMT (issue #1489): a view session's group, else the session.
+        for line in lines:self.assertIn(original+" '#{?#{session_group},#{session_group},#{session_name}}' '#{window_id}' --dwell 2 --nav",line)
         hookfile=self.root/'focus.conf';hookfile.write_text(''.join(l.replace(original,command)+'\n' for l in lines))
         self.tm('source-file',str(hookfile))
         self.addCleanup(self.tm,'set-hook','-gu','client-attached[72]')
