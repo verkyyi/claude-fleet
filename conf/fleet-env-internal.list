@@ -18,6 +18,9 @@ FLEET_ACCOUNT_SELECTED             handoff: the account pick already ran for thi
 FLEET_ACCOUNT_TARGET               handoff: the account a migrate/move relaunches on
 FLEET_ALERTS_ALLCAPPED_SECS        knob: how long an `accounts · all capped` stamp stays an alert (fleet-alerts.sh, 900)
 FLEET_ALERTS_DISK                  seam: 0 skips the alerts producer's own df (a selftest that counts df calls)
+FLEET_ALERTS_LOAD_PCT              knob: load per core ×100 at which `machine · load high` is raised (fleet-alerts.sh, 80, #1616)
+FLEET_ALERTS_MACHINE               knob: 0 turns off the machine load / memory alerts (fleet-alerts.sh, #1616; selftests set it)
+FLEET_ALERTS_MEM_PCT               knob: used-memory % at which `machine · memory high` is raised (fleet-alerts.sh, 85, #1616)
 FLEET_ALERTS_MUTE_SECS             knob: how long `m` in the alerts popup mutes a row (fleet-alerts.sh, 3600)
 FLEET_ALERTS_STALL_TTL             knob: how long a forgotten `stalled` alert outlives its killed waiter (fleet-alerts.sh, 21600)
 FLEET_ALERTS_TRACE                 knob: how long a cleared alert keeps its ↻ row (fleet-alerts.sh, 1800)
@@ -183,6 +186,7 @@ FLEET_POOL_STABLE_HITS             knob: internal pacing/limit, safe in-code def
 FLEET_POOL_WARM_TIMEOUT            knob: internal pacing/limit, safe in-code default (scratch-pool.sh)
 FLEET_PRECOMPACT_GH_SECS           knob: internal pacing/limit, safe in-code default (precompact-hook.sh)
 FLEET_PRECOMPACT_TRIGGER           seam: the PreCompact trigger precompact-hook.sh acts on, instead of stdin
+FLEET_PROC_LOADAVG                 seam: the Linux /proc/loadavg the machine alert reads (fleet-alerts.sh, a selftest's own file)
 FLEET_PR_REFRESH_CMD               seam: an injectable command/path for tests (fleet-webhook.sh)
 FLEET_PR_WAIT_BACKSTOP             knob: event-driven --wait re-reads at least this often with no delivery (fleet-pr-verdict.sh, 300, #1272)
 FLEET_PR_WAIT_TICK                 knob: seconds between event-stamp checks in an event-driven --wait (fleet-pr-verdict.sh, 1, #1272)
@@ -229,7 +233,7 @@ FLEET_SPOT_EVACUATE_MARGIN         knob: seconds fleet-spot-evacuate.sh keeps be
 FLEET_SPOT_EVACUATE_SECS           handoff: the SPOT reclaim deadline the ccquota agent passes to fleet-spot-evacuate.sh (its CCQUOTA_FLEET_RECLAIM_SECS, 240; #1428)
 FLEET_SPOT_EVACUATE_SESSIONS       seam: the fleets fleet-spot-evacuate.sh evacuates, space-separated, instead of fleet_sockets (no tmux in the selftest; #1428)
 FLEET_STATUS_CACHE                 path: status-bar render cache file
-FLEET_STATUS_DISK                  knob: 0 drops the disk segment from the status bar
+FLEET_STATUS_DISK                  knob: 0 drops the disk alert (fleet-alerts.sh; the bar has no disk segment since #1616)
 FLEET_STOP_CLOSE_WAIT              knob: internal pacing/limit, safe in-code default (fleet-worker-stop.sh)
 FLEET_STOP_EXIT_WAIT               knob: internal pacing/limit, safe in-code default (fleet-worker-stop.sh)
 FLEET_SYNC_LOGINS_DAEMON_DIR       seam: an injectable command/path for tests (fleet-sync-logins.sh)

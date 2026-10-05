@@ -50,22 +50,28 @@ rm -f "$FLEET_STATE_DIR"/gh-limit.*
 ok "R the reader: live rows, expired dropped, until = last reset, injection = fake"
 
 # ============================ S: status bar ==================================
-TMPD="$WORK/tmp"; mkdir -p "$TMPD"
+# The alerts file is planted empty (fresh for FLEET_ALERTS_TTL=3600): the bar
+# draws only what wants a hand (issue #1616), so with no alert the clear render
+# is EMPTY and the limited one is the segment alone.
+TMPD="$WORK/tmp"; mkdir -p "$TMPD/.claude-dash/global"
+: > "$TMPD/.claude-dash/global/alerts.ndjson"; printf '%s\n' "$now" > "$TMPD/.claude-dash/global/alerts.ndjson.ts"
 render() {
   TMPDIR="$TMPD/" FLEET_LIVE_ROOT="$BIN/.." FLEET_ACCOUNTS_DIR="$WORK/acc" CCQUOTA_HUB_URL=http://127.0.0.1:9 \
-    FLEET_STATUS_CACHE_SECS=3600 bash "$BIN/tmux-status.sh" 2>&1
+    FLEET_STATUS_CACHE_SECS=3600 FLEET_ALERTS_TTL=3600 bash "$BIN/tmux-status.sh" "$@" 2>&1
 }
 clear_out=$(render) || fail "S tmux-status.sh exited non-zero" "$clear_out"
-case "$clear_out" in *GitHub*) fail "S1 nothing limited → no GitHub segment" "$clear_out" ;; esac
+[ -z "$clear_out" ] || fail "S1 nothing limited (and no alert) → an empty bar" "$clear_out"
 ok "S1 nothing limited → no GitHub segment"
 
 reset=$((now + 1200)); mark graphql "$reset"; hhmm=$(fleet_gh_hhmm "$reset")
 lim_out=$(render)
-seg="#[fg=#565f89]│ #[fg=#e0af68]⚠ GitHub 受限至 $hhmm "
+seg="#[fg=#e0af68]⚠ GitHub 受限至 $hhmm"
 case "$lim_out" in *"$seg"*) ;; *) fail "S2 a live marker shows ⚠ GitHub 受限至 $hhmm" "$lim_out" ;; esac
-# Everything else on the bar is untouched: drop the segment and it is the clear render.
-[ "${lim_out/"$seg"/}" = "$clear_out" ] || fail "S3 the segment is the ONLY difference from the clear render" "clear: $clear_out
+# Everything else on the bar is untouched: the segment is the whole bar.
+[ "$lim_out" = " $seg " ] || fail "S3 the segment is the ONLY difference from the clear render" "clear: $clear_out
 limited: $lim_out"
+narrow=$(render cw=54)
+[ "$narrow" = " #[fg=#e0af68]⚠ GitHub 受限 " ] || fail "S3 a narrow client (cw=54) gets the bare ⚠ GitHub 受限 (issue #1616)" "$narrow"
 ok "S2/S3 a live marker adds exactly \`⚠ GitHub 受限至 $hhmm\` and nothing else"
 
 rm -f "$FLEET_STATE_DIR"/gh-limit.*

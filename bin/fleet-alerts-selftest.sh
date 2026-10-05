@@ -1,10 +1,12 @@
 #!/bin/bash
 # fleet-alerts-selftest.sh — pins issue #1238: ONE producer (bin/fleet-alerts.sh)
-# writes $G/alerts.ndjson; the status bar only COUNTS it, at a fixed width; the
+# writes $G/alerts.ndjson; the status bar only COUNTS it, each count only when it
+# is not zero (issue #1616 — #1238's fixed-width blanks are gone); the
 # `prefix !` popup lists it, one action per row; an alarm cannot be muted; a
 # cleared alert leaves a ↻ trace; the old sentence wording is gone from bin/.
 #
-#   1. width    — `✖ N ▲ N` is the SAME width with 0 / 1 / 7 / 12 alerts
+#   1. counts   — `✖ N ▲ N`, each only when ≠ 0: nothing at all with 0 alerts,
+#                 no ✖ slot with warnings only, both clickable ranges
 #   2. quota    — hub gone: `✖ 1`, first popup row `quota · stale`; back: that
 #                 row carries ↻ (healed) until FLEET_ALERTS_TRACE, then drops
 #   3. since    — a standing alert keeps its first-seen time across writes
@@ -16,7 +18,10 @@
 #   7. needs    — @claude_state needs/failed windows → ● rows (question /
 #                 permission / blocked / waiting / failed; empty @issue safe);
 #                 a writer with no tmux keeps the previous needs rows
-#   8. degenerate — nothing configured: no rows, blank fixed-width bar
+#   8. degenerate — nothing configured: no rows, an empty bar
+#  11. machine  — 负载 per core ≥ 0.8 / 内存 ≥ 85 % → `▲ machine · load high` /
+#                 `memory high` (issue #1616: they left the bar); under the bands
+#                 nothing; the knobs move the line; FLEET_ALERTS_MACHINE=0 off
 #  10. act      — ↵ on a kick row returns at once (the kick runs detached and
 #                 toasts its outcome); kick-daemons passes ONLY the row's
 #                 detail units as --unit, never --force; a healed row kicks
@@ -39,7 +44,9 @@ WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-alerts-selftest.XXXXXX") || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
 [ -n "${KEEP:-}" ] || trap 'rm -rf "$WORK"' EXIT
 G="$WORK/.claude-dash/global"; mkdir -p "$G" "$WORK/acc" "$WORK/shim"
-export TMPDIR="$WORK" FLEET_CONF_DIR="$WORK/conf" FLEET_STATUS_DISK=0
+# FLEET_ALERTS_MACHINE=0: this box's own load must not add a ▲ to a count below
+# (leg 11 turns it on against shims).
+export TMPDIR="$WORK" FLEET_CONF_DIR="$WORK/conf" FLEET_STATUS_DISK=0 FLEET_ALERTS_MACHINE=0
 unset TMUX CCQUOTA_HUB_URL FLEET_ACCOUNTS_DIR 2>/dev/null
 FA="$BIN/fleet-alerts.sh"
 fa() { bash "$FA" "$@"; }
@@ -51,22 +58,25 @@ row() {  # id severity subject condition value since action → one ndjson row
   printf '{"id":"%s","severity":"%s","subject":"%s","condition":"%s","value":"%s","since":%s,"action":"%s","healed_at":0,"target":"","detail":""}\n' "$@"
 }
 
-# ------------------------------------------------------------------ 1. width ----
+# ----------------------------------------------------------------- 1. counts ----
 : > "$G/alerts.ndjson"
-w0=$(vis "$(fa bar)")
+eq "1: no alerts → the bar draws nothing at all (issue #1616)" "" "$(fa bar)"
 row a1 alarm quota stale 47m "$(now)" accounts > "$G/alerts.ndjson"
-w1=$(vis "$(fa bar)")
+b1=$(fa bar)
+case "$b1" in *"✖ 1"*) ok ;; *) fail "1: one alarm does not read ✖ 1" "$b1" ;; esac
+case "$b1" in *"▲"*) fail "1: no warning → no ▲ slot" "$b1" ;; *) ok ;; esac
 { for i in 1 2 3; do row "a$i" alarm dash stale 1m "$(now)" kick-collect; done
   for i in 1 2 3 4; do row "w$i" warning quota uneven '37 pts' "$(now)" accounts; done; } > "$G/alerts.ndjson"
-b7=$(fa bar); w7=$(vis "$b7")
-{ for i in $(seq 1 12); do row "a$i" alarm dash stale 1m "$(now)" kick-collect; row "w$i" warning disk low '11 GB' "$(now)" disk; done; } > "$G/alerts.ndjson"
-w12=$(vis "$(fa bar)")
-[ "$w0" -gt 0 ] || fail "1: the bar rendered nothing"
-eq "1: width with 1 alert = width with 0" "$w0" "$w1"
-eq "1: width with 7 alerts = width with 0" "$w0" "$w7"
-eq "1: width with 24 alerts = width with 0" "$w0" "$w12"
+b7=$(fa bar)
 case "$b7" in *"✖ 3"*"▲ 4"*) ok ;; *) fail "1: the 7-alert bar does not read ✖ 3 ▲ 4" "$b7" ;; esac
 case "$b7" in *"range=user|alarm"*"range=user|warning"*) ok ;; *) fail "1: the counts are not clickable ranges" "$b7" ;; esac
+eq "1: ✖ 3 ▲ 4 is 7 columns, no blanks around it" 7 "$(vis "$b7")"
+{ for i in 1 2 3 4; do row "w$i" warning quota uneven '37 pts' "$(now)" accounts; done; } > "$G/alerts.ndjson"
+b4=$(fa bar)
+case "$b4" in *"✖"*|*"range=user|alarm"*) fail "1: warnings only → no ✖ slot, no alarm range" "$b4" ;; *) ok ;; esac
+eq "1: ▲ 4 alone is 3 columns" 3 "$(vis "$b4")"
+{ for i in $(seq 1 120); do row "a$i" alarm dash stale 1m "$(now)" kick-collect; done; } > "$G/alerts.ndjson"
+case "$(fa bar)" in *"✖ 99#"*) ok ;; *) fail "1: a count past 99 reads 99" "$(fa bar)" ;; esac
 case "$(fa bar)" in *quota*|*stale*|*"·"*) fail "1: a sentence leaked onto the bar" "$(fa bar)" ;; *) ok ;; esac
 
 # ------------------------------------------------------------------ 2. quota ----
@@ -75,7 +85,7 @@ export FLEET_ACCOUNTS_DIR="$WORK/acc" CCQUOTA_HUB_URL=http://127.0.0.1:9
 printf '%s\n' $(( $(now) - 1800 )) > "$G/account.quota.ts"      # no tick for 30m
 fa write
 eq "2: hub gone → one alarm" "1 0 0" "$(fa counts)"
-case "$(fa bar)" in *"✖ 1 "*) ok ;; *) fail "2: the bar does not read ✖ 1" "$(fa bar)" ;; esac
+case "$(fa bar)" in *"✖ 1#"*) ok ;; *) fail "2: the bar does not read ✖ 1" "$(fa bar)" ;; esac
 first=$(fa list --plain | head -1 | cut -f2-)
 case "$first" in *"✖  quota · stale · 30m"*"see accounts"*) ok ;; *) fail "2: first popup row is not quota · stale" "$first" ;; esac
 printf '%s\n' "$(now)" > "$G/account.quota.ts"                    # the watch is back
@@ -191,7 +201,7 @@ eq "7: a writer that cannot see tmux keeps the needs rows" "0 0 5" "$(fa counts)
 rm -f "$G"/*
 fa write
 eq "8: nothing configured → no rows" "" "$(cat "$G/alerts.ndjson")"
-eq "8: …and the bar is blank slots of the same width" "$w0" "$(vis "$(fa bar)")"
+eq "8: …and the bar draws nothing at all" "" "$(fa bar)"
 case "$(fa bar | sed 's/#\[[^]]*\]//g')" in *✖*|*▲*|*[0-9]*) fail "8: a count on an empty fleet" "$(fa bar)" ;; *) ok ;; esac
 
 # ------------------------------------------------------------------- 10. act ----
@@ -251,6 +261,44 @@ await_toast 'kicked collect' || fail "10: kick-collect outcome toast" "$(cat "$W
 eq "10: kick-collect = --unit collect --force" "--unit collect --force" "$(cat "$WORK/watch.args")"
 rm -f "$G"/alerts.* "$WORK/toasts"
 
+# --------------------------------------------------------------- 11. machine ----
+# 负载 / 内存 left the bar (issue #1616): red is a warning row now. Shims for both
+# OSes — sysctl + vm_stat (macOS), FLEET_PROC_LOADAVG + getconf + free (Linux).
+MS="$WORK/mshim"; mkdir -p "$MS"
+mshim() {  # mshim <load1> <vm_stat active pages> <free's used MB> — 4 cores, 8 GB, 16 KB pages
+  printf '#!/bin/sh\nprintf "4\\n8589934592\\n16384\\n{ %s 1.00 0.90 }\\n"\n' "$1" > "$MS/sysctl"
+  printf '#!/bin/sh\nprintf "Pages active:  %s.\\nPages wired down:  50000.\\nPages occupied by compressor:  21872.\\n"\n' "$2" > "$MS/vm_stat"
+  printf '#!/bin/sh\nprintf "       total used\\nMem:    8192 %s\\n"\n' "$3" > "$MS/free"
+  printf '#!/bin/sh\necho 4\n' > "$MS/getconf"
+  printf '%s 1.00 0.90 1/100 1\n' "$1" > "$WORK/loadavg"
+  chmod +x "$MS"/*
+}
+mfa() { FLEET_ALERTS_MACHINE="${MON-1}" FLEET_PROC_LOADAVG="$WORK/loadavg" PATH="$MS:$PATH" bash "$FA" "$@"; }
+rm -f "$G"/*
+mshim 3.60 400000 7373                      # 3.6 / 4 = 0.9 per core; 7373 of 8192 MB = 90 %
+mfa write
+rows=$(cat "$G/alerts.ndjson")
+case "$rows" in *'"id":"machine-load","severity":"warning","subject":"machine","condition":"load high","value":"0.9/core"'*'"action":"machine"'*) ok ;;
+  *) fail "11: load 0.9 per core → ▲ machine · load high · 0.9/core" "$rows" ;; esac
+case "$rows" in *'"id":"machine-mem","severity":"warning","subject":"machine","condition":"memory high","value":"90%"'*) ok ;;
+  *) fail "11: memory 90 % → ▲ machine · memory high · 90%" "$rows" ;; esac
+eq "11: …two warnings, no alarm" "0 2 0" "$(fa counts)"
+case "$(fa list --plain)" in *"▲  machine · load high · 0.9/core"*"see top"*) ok ;; *) fail "11: the popup row names its action" "$(fa list --plain)" ;; esac
+case "$(fa bar)" in *"▲ 2"*) ok ;; *) fail "11: the bar counts them" "$(fa bar)" ;; esac
+mshim 1.20 100000 2685                      # 0.3 per core; 2685 of 8192 MB = 32 %
+mfa write
+eq "11: under the bands → no machine warning (a ↻ trace, as every cleared alert)" "" "$(grep '"severity":"warning","subject":"machine"' "$G/alerts.ndjson")"
+case "$(cat "$G/alerts.ndjson")" in *'"id":"machine-load","severity":"healed"'*) ok ;; *) fail "11: a cleared load warning leaves its ↻ trace" "$(cat "$G/alerts.ndjson")" ;; esac
+mshim 3.20 373824 6964                      # exactly 0.8 per core; 6964 of 8192 MB = 85 %
+mfa write
+eq "11: the bands' edges count (0.8 / 85 %)" "2" "$(grep -c '"severity":"warning","subject":"machine"' "$G/alerts.ndjson")"
+FLEET_ALERTS_LOAD_PCT=95 FLEET_ALERTS_MEM_PCT=99 mfa write
+eq "11: the knobs move the line" "" "$(grep '"severity":"warning","subject":"machine"' "$G/alerts.ndjson")"
+mshim 3.60 400000 7373
+MON=0 mfa write
+eq "11: FLEET_ALERTS_MACHINE=0 → none" "" "$(grep '"severity":"warning","subject":"machine"' "$G/alerts.ndjson")"
+rm -f "$G"/*
+
 # ---------------------------------------------------------------- 9. wording ----
 hits=$(grep -rn 'pace spread\|quota blind\|via banner\|no locally reachable' "$BIN" 2>/dev/null | grep -v 'fleet-alerts-selftest.sh')
 eq "9: the old wording is gone from bin/" "" "$hits"
@@ -263,4 +311,4 @@ zsheet=$(FLEET_UI_LANG=zh NO_COLOR=1 bash "$BIN/fleet-keys.sh" --plain)
 grep -q '^  prefix !  *告警弹窗' <<< "$zsheet" || fail "9: prefix ! missing from the zh cheatsheet"; ok
 grep -q 'fleet_alerts_refresh --kick' "$BIN/tmux-status.sh" || fail "9: the bar no longer refreshes the producer"; ok
 
-printf 'selftest PASS: %d assertions (width · quota · since · mute · actions · accounts · needs · degenerate · act · wording)\n' "$CHECKS"
+printf 'selftest PASS: %d assertions (counts · quota · since · mute · actions · accounts · needs · degenerate · act · machine · wording)\n' "$CHECKS"

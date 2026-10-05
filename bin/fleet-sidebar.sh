@@ -1,6 +1,6 @@
 #!/bin/bash
 # fleet-sidebar.sh sync|toggle|hide|show|key [session-target] [key]
-# fleet-sidebar.sh home [session-target] <home|f9|g> [client] [nav 0|1]   # ⌂ / F9 / prefix g
+# fleet-sidebar.sh home [session-target] <home|f9|g|bar> [client] [nav 0|1]   # ⌂ / F9 / prefix g / ☰
 # fleet-sidebar.sh menu <session> <@window-id> [--print]   # a row's action menu
 # fleet-sidebar.sh reap <session> <@window-id>             # the menu's confirmed reap
 # In-pane / tmux-hook entry point: bare tmux inherits this fleet's socket.
@@ -102,9 +102,13 @@ py() {
 # passes nav=1) hidden, exactly prefix e's off. ⌂ and g never hide.
 # A window too narrow for the list (an iPad in portrait) opens the same list as
 # a popup instead (fleet-task-pick.sh, issue #902) — a press is never a dead key.
+# ☰ (bar, issue #1616) is the list's SWITCH and nothing else: shown here →
+# hidden (prefix e's off); not shown → unzoom, switch on, draw — and the keyboard
+# stays where it was. It never goes to another window: one that cannot show the
+# list, or is too narrow for it, opens it as the popup.
 # FLEET_DASH_WINDOW=1 never gets here: hub-zoom.sh / dash-zoom.sh keep the hub.
 mode="${3:-home}" client="${4:-}" nav="${5:-0}"
-case "$mode" in home|f9|g) ;; *) mode=home ;; esac
+case "$mode" in home|f9|g|bar) ;; *) mode=home ;; esac
 tdm() { tmux display-message ${client:+-c "$client"} -p "$@" 2>/dev/null; }
 # The window is resolved ONCE per step and every read after it names it: a bare
 # `{top-left}` under -c resolves against a different "current" window on some
@@ -139,12 +143,17 @@ view_up_snap() {   # the same test on the snapshot (tmux's &&: non-empty and not
   [ -n "${sw_:-}" ] && [ "${sw_:-}" != 0 ] && [ "${zf_:-}" != 1 ] && [ "${sb_:-}" = 1 ]
 }
 
-# F9 again with the keyboard already on the list: hide it.
-if [ "$mode" = f9 ] && [ "$nav" = 1 ] && view_up_snap; then
+# F9 again with the keyboard already on the list: hide it. ☰ on a window
+# showing it: hide it, whoever has the keyboard.
+if { [ "$mode" = bar ] || { [ "$mode" = f9 ] && [ "$nav" = 1 ]; }; } && view_up_snap; then
+  fleet_home_trace_drop   # a hide is no trip anywhere: nothing records it
   exec bash "$BIN/fleet-sidebar.sh" hide "$sess"
 fi
 
-if ! can_host "${n_:-}" "${i_:-}" "${r_:-}" "${w_:-}" "${no_:-}" "${re_:-}"; then
+bar_cant=0
+if [ "$mode" = bar ] && ! can_host "${n_:-}" "${i_:-}" "${r_:-}" "${w_:-}" "${no_:-}" "${re_:-}"; then
+  bar_cant=1   # ☰ never goes to another window: this one gets the popup
+elif ! can_host "${n_:-}" "${i_:-}" "${r_:-}" "${w_:-}" "${no_:-}" "${re_:-}"; then
   pick='' best=-1
   while IFS='|' read -r wid last act i_ r_ w_ no_ re_ n_; do
     [ -n "$wid" ] || continue
@@ -175,8 +184,8 @@ fi
 # the dragged @sidebar_width_manual winning, both clamped 24..60) — KEEP THE TWO
 # IN STEP; task-pick-latency-selftest.sh pins that no view is drawn here. A
 # stale view on a window that shrank is the hooks' sync's to reap, as before.
-narrow=0
-if ! view_up_snap; then
+narrow=$bar_cant
+if [ "$bar_cant" = 0 ] && ! view_up_snap; then
   [ "${zf_:-}" = 1 ] && tmux resize-pane -Z -t "$win" 2>/dev/null
   show_on
   lw_=${FLEET_SIDEBAR_WIDTH:-30}
@@ -194,6 +203,13 @@ if [ "$narrow" = 1 ] || ! view_up; then
   fi
   fleet_home_trace_drop   # nothing records this press
   tmux display-message ${client:+-c "$client"} "$(fleet_ui_t toast_sidebar_narrow)" 2>/dev/null || :
+  exit 0
+fi
+if [ "$mode" = bar ]; then
+  # ☰: the list is on screen — that is the whole press; the keyboard stays put.
+  fleet_home_end shown
+  bash "$BIN/fleet-hub-visits.sh" record '' "$sess" bar-sidebar \
+    "$(wdm '' '#{?#{@wid},#{@wid},#{window_id}}')" '' "$(fleet_home_extra)" >/dev/null 2>&1 || :
   exit 0
 fi
 tmux switch-client ${client:+-c "$client"} -T fleet-sidebar 2>/dev/null || :

@@ -1,10 +1,10 @@
 #!/bin/bash
-# task-pick-latency-selftest.sh — ⌂ on a NARROW client: how long until the task
+# task-pick-latency-selftest.sh — ☰ (the ⌂ before issue #1616) on a NARROW client: how long until the task
 # list is on screen, and where the time went (issue #1611).
 #
 # The iPad operator (Termius, 54x50 portrait, no task bar) taps the ⌂ and waits.
 # This drives the REAL chain — the shipped conf's MouseDown1Status bind →
-# hub-zoom.sh --home → fleet-sidebar.sh home → fleet-task-pick.sh --popup →
+# hub-zoom.sh --bar → fleet-sidebar.sh home … bar → fleet-task-pick.sh --popup →
 # dash-popup.sh → the picker — on an ISOLATED tmux server, from a replay CLIENT
 # the test owns: a 54x50 pty (python's pty module), an SGR mouse press on the
 # ⌂'s cell of the status row, and the ms until fzf's prompt reaches that pty —
@@ -12,7 +12,7 @@
 # server side of the same press is the hub-visits line's 4th column, written by
 # bin/fleet-trace-lib.sh's marks; the gap between the two is the client's.
 #
-#   A. TRACE   every tap ends on ONE `home-pick` hub-visits line whose 4th column
+#   A. TRACE   every tap ends on ONE `bar-pick` hub-visits line whose 4th column
 #              is `ms=<N> conf:… side:… sync:… pick:… popup:… open:… keys:… rows:…
 #              fzf:… close:… done:…` — every stage, `ms=` = the fzf mark, done
 #              last; no trace file is left behind; FLEET_HOME_TRACE=0 ⇒ the
@@ -117,7 +117,7 @@ tmux set -g status-left "#[range=user|hub]  ⌂  #[norange] t "
 # issue #414): a Linux runner's sh is dash, which the fleet's sh scripts never
 # run under.
 awk '/^bind -n MouseDown1Status /,/^}$/' "$CONF" | sed "s#~/.claude/fleet#$ROOT#g; s#run-shell \"sh #run-shell \"bash --posix #" > "$WORK/bind.conf"
-grep -q 'hub-zoom.sh --home' "$WORK/bind.conf" || fail "the conf's MouseDown1Status bind no longer runs hub-zoom.sh --home"
+grep -q 'hub-zoom.sh --bar' "$WORK/bind.conf" || fail "the conf's MouseDown1Status bind no longer runs hub-zoom.sh --bar (the ☰, issue #1616)"
 tmux source-file "$WORK/bind.conf" || fail "the conf's MouseDown1Status bind did not load"
 
 # The replay client: a pty of its own, 54x50, that taps the ⌂ and times the
@@ -180,10 +180,10 @@ grep '^diag' "$WORK/taps" | cut -c1-1600
 printf 'taps: %s %s locale=%s\n' "$(awk '$1=="tap"{printf "%s ", $3}' "$WORK/taps")" "$FZF_NOTE" "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}"
 
 # --- A. the trace column ------------------------------------------------------
-n=$(grep -c "	home-pick" "$LOG" 2>/dev/null || echo 0)
-[ "$n" = "$TAPS" ] || fail "A: expected $TAPS home-pick lines, got $n: $(cat "$LOG" 2>/dev/null)"
+n=$(grep -c "	bar-pick" "$LOG" 2>/dev/null || echo 0)
+[ "$n" = "$TAPS" ] || fail "A: expected $TAPS bar-pick lines, got $n: $(cat "$LOG" 2>/dev/null)"
 while IFS='	' read -r ts from cause extra; do
-  [ "$cause" = home-pick ] || continue
+  [ "$cause" = bar-pick ] || continue
   case "$extra" in ms=[0-9]*) ;; *) fail "A: no ms= column on: $ts $from $cause [$extra]"; continue ;; esac
   for m in conf side sync pick popup open keys rows fzf close 'done'; do
     case " $extra " in *" $m:"[0-9]*) ;; *) fail "A: mark '$m' missing: $extra" ;; esac
@@ -256,4 +256,4 @@ dw '' '' 'FLEET_DASH_WINDOWS=1'          && fail "D: FLEET_DASH_WINDOWS (another
 dw '' '' '# FLEET_DASH_WINDOW=1'         && fail "D: a commented line read as the knob"
 
 [ "$fails" -eq 0 ] || { printf 'selftest FAILED: %d assertion(s)\n' "$fails" >&2; exit 1; }
-printf 'selftest PASS: ⌂ on a 54x50 client opens the task list (median %s ms over %s taps %s) with the trace column on every home-pick line, no list pane drawn, nothing left behind, FLEET_DASH_WINDOW read across its three layers (#1611)\n' "$median" "$TAPS" "$FZF_NOTE"
+printf 'selftest PASS: ⌂ on a 54x50 client opens the task list (median %s ms over %s taps %s) with the trace column on every bar-pick line, no list pane drawn, nothing left behind, FLEET_DASH_WINDOW read across its three layers (#1611)\n' "$median" "$TAPS" "$FZF_NOTE"

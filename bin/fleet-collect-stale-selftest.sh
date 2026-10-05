@@ -177,7 +177,7 @@ hb 900
 age=$(lib 'fleet_collect_stale_age')
 [ -n "$age" ] && [ "$age" -ge 900 ] || fail "4: stale age not reported (got '$age')"; ok
 [ "$(kick --status | cut -f1)" = stale ] || fail "4: --status not stale"; ok
-case "$(bar)" in *"✖ 1 "*"dash · stale · 15m"*) ok ;; *) fail "4: status bar missing '✖ 1' + 'dash · stale · 15m': $(bar)" ;; esac
+case "$(bar)" in *"✖ 1#"*"dash · stale · 15m"*) ok ;; *) fail "4: status bar missing '✖ 1' + 'dash · stale · 15m': $(bar)" ;; esac
 lib 'fleet_collect_kick_due' || fail "4: kick not due on a stale collector with no prior kick"; ok
 kick
 [ "$(kicks)" -eq 1 ] || fail "4: expected exactly 1 kickstart, got $(kicks)"; ok

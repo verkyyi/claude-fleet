@@ -36,12 +36,17 @@
 # (issue #897) — a trip to the hub that did NOT happen. Knob 0 ⇒ exactly the old
 # behaviour.
 #
-# Usage: hub-zoom.sh [--home] [--nav] [--client <name>]
+# --bar (the ☰ tap, issue #1616) — the list's switch: show the task list in this
+# window, or hide it, and nothing else (fleet-sidebar.sh home … bar). With
+# FLEET_DASH_WINDOW=1 it is the old ⌂ (--home) — that hub is kept as it was.
+#
+# Usage: hub-zoom.sh [--home|--bar] [--nav] [--client <name>]
 set -uo pipefail
 mode='' nav=0 client=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --home)   mode=--home ;;             # --home ⇒ always land unzoomed
+    --bar)    mode=--bar ;;              # the ☰: show / hide the list, nothing else
     --nav)    nav=1 ;;                   # the client was on the task bar already
     --client) client="${2:-}"; shift ;;  # the client that pressed the key
   esac
@@ -72,11 +77,12 @@ dash_window() {
   [ "${v:-${FLEET_DASH_WINDOW:-0}}" = 1 ]
 }
 if ! dash_window; then
-  if [ "$mode" = --home ]; then m=home; else m=f9; fi
+  case "$mode" in --home) m=home ;; --bar) m=bar ;; *) m=f9 ;; esac
   fleet_home_mark conf
   exec bash "$BIN/fleet-sidebar.sh" home '' "$m" "$client" "$nav"
 fi
 . "$BIN/fleet-lib.sh"
+[ "$mode" = --bar ] && mode=--home   # the dash hub: ☰ is the ⌂ it always was
 
 # Task bar first — decided on this window's own options, before any hub lookup.
 if [ "$nav" = 0 ] &&

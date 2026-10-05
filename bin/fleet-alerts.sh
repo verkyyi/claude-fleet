@@ -16,16 +16,16 @@
 #                       never silent
 #
 # ONE GRAMMAR: `<icon> <subject> · <condition> · <value>`. Subjects are nouns the
-# operator knows (quota, dash, daemon, disk, accounts, model, #<issue>);
+# operator knows (quota, dash, daemon, disk, machine, accounts, model, #<issue>);
 # conditions come from a closed list (stale, unreadable, uneven, from banner,
-# low, capped, all capped, question, permission, blocked, failed, waiting,
-# stalled).
+# low, load high, memory high, capped, all capped, question, permission,
+# blocked, failed, waiting, stalled).
 #
 # A row (fixed key order — the readers parse it with ONE regex, no jq):
 #   {"id":…,"severity":alarm|warning|needs|healed,"subject":…,"condition":…,
 #    "value":…,"since":<epoch>,"action":…,"healed_at":<epoch|0>,
 #    "target":…,"detail":…}
-# action ∈ accounts | kick-collect | kick-daemons | disk | jump  (every row has
+# action ∈ accounts | kick-collect | kick-daemons | disk | machine | jump  (every row has
 # one: an alert with nothing to do about it is demoted or deleted, not shown).
 #
 # Usage:
@@ -122,6 +122,57 @@ _fa_json() {
 # _fa_hhmm <epoch> — local HH:MM (BSD date -r, GNU date -d).
 _fa_hhmm() { date -r "$1" '+%H:%M' 2>/dev/null || date -d "@$1" '+%H:%M' 2>/dev/null || printf '?'; }
 
+# _fa_loadpc <load1> <ncpu> → FA_LOADPC, the 1-minute load PER CORE in
+# hundredths (`1.57` on 10 cores → 15), and FA_LOAD, the same with one decimal,
+# rounded (`0.2`) — '' both when either reading is unusable. Integer math, no awk
+# (the figure the bar drew as 负载 before issue #1616, the same on every machine).
+_fa_loadpc() {
+  local lp lf t
+  FA_LOADPC='' FA_LOAD=''
+  lp=${1%%.*}; lf=${1#*.}; [ "$lf" = "$1" ] && lf=0
+  lf="${lf}00"; lf=${lf:0:2}
+  case "$lp" in ''|*[!0-9]*) return 0 ;; esac
+  case "$lf" in *[!0-9]*) lf=00 ;; esac
+  case "${2:-}" in ''|*[!0-9]*|0) return 0 ;; esac
+  FA_LOADPC=$(( (10#$lp * 100 + 10#$lf) / $2 )); t=$(( (FA_LOADPC + 5) / 10 ))
+  FA_LOAD="$(( t / 10 )).$(( t % 10 ))"
+}
+
+# _fa_machine → FA_LOADPC (the 1-minute load per core, in hundredths) and
+# FA_MEMPC (used memory %), '' when unreadable. One sysctl + one vm_stat on
+# macOS (active + wired + compressed ≈ used, as the bar measured it), /proc +
+# free on Linux; run once per FLEET_ALERTS_TTL by the one writer, never per
+# client.
+_fa_machine() {
+  local sysv ncpu='' memsize=0 page=16384 load1='' rest used='' total='' pages
+  FA_MEMPC=''
+  case "${OSTYPE:-}" in
+    darwin*)
+      sysv=$(sysctl -n hw.ncpu hw.memsize hw.pagesize vm.loadavg 2>/dev/null)
+      read -r ncpu memsize page rest <<< "${sysv//$'\n'/ }"
+      rest=${rest#\{ }; load1=${rest%% *}
+      case "${memsize:-}" in ''|*[!0-9]*) memsize=0 ;; esac
+      case "${page:-}" in ''|*[!0-9]*|0) page=16384 ;; esac
+      total=$(( memsize / 1048576 ))
+      pages=$(vm_stat 2>/dev/null | awk '
+        /Pages active/                 {gsub(/\./,"",$3); u+=$3}
+        /Pages wired/                  {gsub(/\./,"",$4); u+=$4}
+        /Pages occupied by compressor/ {gsub(/\./,"",$5); u+=$5}
+        END {printf "%d", u}')
+      case "${pages:-}" in ''|*[!0-9]*) pages=0 ;; esac
+      used=$(( pages * page / 1048576 )) ;;
+    *)
+      read -r load1 rest < "${FLEET_PROC_LOADAVG:-/proc/loadavg}" 2>/dev/null   # the seam: a test's own file
+      ncpu=$(getconf _NPROCESSORS_ONLN 2>/dev/null)
+      command -v free >/dev/null 2>&1 && read -r used total <<< "$(free -m | awk '/Mem:/ {print $3, $2}')" ;;
+  esac
+  _fa_loadpc "$load1" "$ncpu"
+  case "${used:-}${total:-}" in ''|*[!0-9]*) ;; *)
+    [ "${total:-0}" -gt 0 ] && FA_MEMPC=$(( used * 100 / total )) ;;
+  esac
+  return 0
+}
+
 # fleet_alerts_compute [--kick] — every alert that holds RIGHT NOW, as TSV rows
 # (since=0 means "carry it over from the previous file, or now"). A line
 # `#carry-needs` asks the writer to keep the previous file's needs rows: the
@@ -195,6 +246,20 @@ fleet_alerts_compute() {
         _fa_row disk-low warning disk low "$free GB" 0 disk 0 "$target" "within 1.5x of the ${floor} GB floor"
       fi ;;
     esac
+  fi
+
+  # --- machine: 负载 / 内存 in the red (issue #1616). The bar stopped drawing
+  # them — they took room on every client while normal — so the moment they turn
+  # red is a warning here instead. The bands are the ones the bar coloured by:
+  # the 1-minute load PER CORE ≥ 0.8, used memory ≥ 85 %. FLEET_ALERTS_MACHINE=0 off.
+  if [ "${FLEET_ALERTS_MACHINE:-1}" != 0 ]; then
+    _fa_machine
+    [ -n "$FA_LOADPC" ] && [ "$FA_LOADPC" -ge "${FLEET_ALERTS_LOAD_PCT:-80}" ] &&
+      _fa_row machine-load warning machine 'load high' "$FA_LOAD/core" 0 machine 0 '' \
+        'the 1-minute load per core is in the red: spawns and selftests run slow'
+    [ -n "$FA_MEMPC" ] && [ "$FA_MEMPC" -ge "${FLEET_ALERTS_MEM_PCT:-85}" ] &&
+      _fa_row machine-mem warning machine 'memory high' "$FA_MEMPC%" 0 machine 0 '' \
+        'used memory is in the red: the box is about to swap'
   fi
 
   # --- accounts: every subscription at its ceiling (stamped by .fleet-account.py
@@ -368,23 +433,27 @@ fleet_alerts_counts() {
   return 0
 }
 
-# fleet_alerts_bar — `✖ N ▲ N`, FIXED width whatever the counts (a zero slot is
-# blanks, a count past 99 reads 99), wrapped in clickable ranges that open the
-# popup filtered to that level (conf/tmux-attention.conf, MouseDown1Status).
-# Needs keep their own clickable `● N` at the left end of the bar (status-left).
-# Sets $FA_BAR (no subshell: the bar renders every 5s per client).
+# fleet_alerts_bar — `✖ N ▲ N`, each count drawn ONLY when it is not zero
+# (issue #1616: the bar draws what wants a hand; #1238's fixed-width blanks held
+# 13 columns of a 54-column phone bar while nothing was wrong). A count past 99
+# reads 99; each sits in a clickable range that opens the popup filtered to that
+# level (conf/tmux-attention.conf, MouseDown1Status). Needs keep their own
+# clickable `● N` at the left end of the bar (status-left).
+# Sets $FA_BAR, '' when there is nothing (no subshell: the bar renders every 2s
+# per client).
 fleet_alerts_bar() {
-  local a w r='' y='' d=''
+  local a w r='' y=''
   # colours: conf/fleet-palette.conf (issue #1534) — the bar's caller has loaded
   # it already; loaded here only for a caller that has not
   [ -n "${PAL_RED:-}" ] || { . "$_FA_BIN/fleet-palette.sh" && fleet_palette_load; }
-  [ -n "${PAL_RED:-}" ] && { r="#[fg=$PAL_RED,bold]"; y="#[fg=$PAL_YELLOW]"; d="#[fg=$PAL_DIM]"; }
+  [ -n "${PAL_RED:-}" ] && { r="#[fg=$PAL_RED,bold]"; y="#[fg=$PAL_YELLOW]"; }
   fleet_alerts_counts
   a=$FA_ALARM; w=$FA_WARNING
   [ "$a" -gt 99 ] && a=99; [ "$w" -gt 99 ] && w=99
-  if [ "$a" -gt 0 ]; then printf -v a '%s✖ %-2s#[nobold]' "$r" "$a"; else a='    '; fi
-  if [ "$w" -gt 0 ]; then printf -v w '%s▲ %-2s' "$y" "$w"; else w='    '; fi
-  printf -v FA_BAR '%s│ #[range=user|alarm]%s#[norange] #[range=user|warning]%s#[norange] ' "$d" "$a" "$w"
+  FA_BAR=''
+  [ "$a" -gt 0 ] && FA_BAR="#[range=user|alarm]${r}✖ ${a}#[nobold]#[norange]"
+  [ "$w" -gt 0 ] && FA_BAR="${FA_BAR:+$FA_BAR }#[range=user|warning]${y}▲ ${w}#[norange]"
+  return 0
 }
 
 # fleet_alerts_list [--level L] [--plain] — the popup's rows, alarm → warning →
@@ -420,7 +489,7 @@ fleet_alerts_list() {
     r="$su · $co"; [ -n "$va" ] && r="$r · $va"
     case "$ac" in
       accounts) x='see accounts' ;; kick-collect|kick-daemons) x='restart daemon' ;;
-      disk) x='see disk' ;; jump) x='↵ go to window' ;; *) x='' ;;
+      disk) x='see disk' ;; machine) x='see top' ;; jump) x='↵ go to window' ;; *) x='' ;;
     esac
     tail=""
     if [ "$sev" = healed ]; then
@@ -551,6 +620,13 @@ fleet_alerts_act() {
     disk)
       df -h "${ta:-${TMPDIR:-/tmp}}" 2>/dev/null
       printf '\n'; bash "$_FA_BIN/fleet-diskguard.sh" --free 2>/dev/null
+      printf '\n  press any key to close\n'; IFS= read -rsn1 _ 2>/dev/null || true ;;
+    machine)
+      # what is eating the box: the top CPU / memory processes, then any orphaned
+      # runaway the worktree- and pane-keyed reapers cannot see (#697)
+      printf '  PID  %%CPU %%MEM COMMAND\n'
+      ps -Ao pid=,pcpu=,pmem=,comm= 2>/dev/null | sort -k2,2 -nr | head -n 10
+      printf '\n'; bash "$_FA_BIN/fleet-diskguard.sh" --orphans 2>/dev/null
       printf '\n  press any key to close\n'; IFS= read -rsn1 _ 2>/dev/null || true ;;
     jump)
       tmux switch-client -t "$ta" 2>/dev/null

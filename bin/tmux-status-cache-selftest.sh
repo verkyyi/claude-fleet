@@ -1,19 +1,22 @@
 #!/bin/bash
-# tmux-status-cache-selftest.sh — pins issue #890: the status bar's machine stats
-# (container / 负载 / 内存 / 盘, issue #1534) are measured ONCE per interval for every attached
-# client, through ${TMPDIR}/fleet-status.cache, instead of once per client.
+# tmux-status-cache-selftest.sh — pins issue #890: the status bar's one exec'd
+# reading, the container's ●/○ (FLEET_STATUS_CONTAINER, `docker ps`), is measured
+# ONCE per interval for every attached client, through ${TMPDIR}/fleet-status.cache,
+# instead of once per client. Since issue #1616 负载 / 内存 / 盘 are no longer the
+# bar's (fleet-alerts.sh raises them when red), so the bar measures nothing else
+# — and with no container configured, nothing at all.
 #
+#   no container                 → no docker, no cache written, nothing drawn
 #   cold, 5 concurrent callers   → measured once, all five print the same bar
 #   fresh cache                  → printed verbatim, nothing measured
 #   expired, 5 concurrent        → measured once; the rest print the old value
 #   expired, lock held (live)    → old value at once, nothing measured
-#   another install's key        → never shown; measured for this key
+#   another container's key      → never shown; measured for this key
 #   a dead holder's lock         → broken after the wait, bar still renders
 #   FLEET_STATUS_CACHE_SECS=0    → measured every call, no cache written
-#   output                       → the bar's local golden (tmux-status-selftest.sh)
+#   running                      → nothing drawn (a running container wants no hand)
 #
-# ps / sysctl / vm_stat / free / df are shims with fixed readings; df logs every
-# call (one per measurement on both OSes) and sleeps, so concurrent callers really
+# docker is a shim that logs every call and sleeps, so concurrent callers really
 # overlap. No live tmux; TMPDIR is a sandbox.
 set -uo pipefail
 
@@ -25,45 +28,42 @@ eq() { [ "$2" = "$3" ] || fail "$1" "want: [$2]
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/status-cache-selftest.XXXXXX") || exit 2
 [ -n "${KEEP:-}" ] || trap 'rm -rf "$WORK"' EXIT
-T="$WORK/tmp"; CACHE="$T/fleet-status.cache"; mkdir -p "$T" "$WORK/bin" "$WORK/out"
+T="$WORK/tmp"; CACHE="$T/fleet-status.cache"; G="$T/.claude-dash/global"; mkdir -p "$T" "$G" "$WORK/bin" "$WORK/out"
 
-sh_shim() { printf '#!/bin/sh\n%s\n' "$2" > "$WORK/bin/$1"; chmod +x "$WORK/bin/$1"; }
-sh_shim ps      'printf "%%CPU\n12.0\n28.0\n"'
-sh_shim sysctl  'printf "4\n8589934592\n16384\n{ 1.20 1.00 0.90 }\n"'
-sh_shim vm_stat 'printf "Pages active:  100000.\nPages wired down:  50000.\nPages occupied by compressor:  50000.\n"'
-sh_shim free    'printf "       total used\nMem:    8192 3125\n"'
-sh_shim df      "echo df >> '$WORK/df.log'; sleep 0.5
-printf 'Filesystem 1024-blocks Used Available Capacity Mounted\n/dev/x 1 1 104857600 1%% /\n'"
-: > "$WORK/df.log"
-measured() { local n; n=$(grep -c . "$WORK/df.log" 2>/dev/null); printf '%s' "${n:-0}"; }
+# docker ps lists `other` (web is down) — or `web` once $WORK/up exists
+printf '#!/bin/sh\necho docker >> "%s/docker.log"; sleep 0.5\n[ -e "%s/up" ] && echo web || echo other\n' "$WORK" "$WORK" > "$WORK/bin/docker"
+chmod +x "$WORK/bin/docker"
+: > "$WORK/docker.log"
+measured() { local n; n=$(grep -c . "$WORK/docker.log" 2>/dev/null); printf '%s' "${n:-0}"; }
 
-# FLEET_ALERTS_DISK=0: the alerts producer (issue #1238) probes the disk with its
-# own df, which the df.log below would count as a machine measurement.
-bar() { FLEET_ALERTS_DISK=0 TMPDIR="$T/" FLEET_ACCOUNTS_DIR="$WORK/acc" CCQUOTA_HUB_URL=http://127.0.0.1:9 \
-        PATH="$WORK/bin:$PATH" bash "$BIN/tmux-status.sh" 2>/dev/null; }
-# The machine segment is everything before the alarm segment; Linux reads the
-# load from /proc/loadavg (not shimmable), so its figure is masked there.
-seg() { local s="${1%%'#[fg=#565f89]│ #[range='*}"
-        case "${OSTYPE:-}" in darwin*) ;; *) s=$(printf '%s' "$s" | sed -E 's/#\[fg=#[0-9a-f]+\]([0-9]+\.[0-9]|–)/#[fg=#9ece6a]0.3/') ;; esac
-        printf '%s' "$s"; }
-WANT=' #[fg=#7aa2f7]本机 #[fg=#565f89]· 负载 #[fg=#9ece6a]0.3 #[fg=#565f89]· 内存 #[fg=#9ece6a]38% #[fg=#565f89]· 盘 #[fg=#9ece6a]1% '
-US=$'\x1f'
-FIELDS="${US}#[fg=#9ece6a]0.3${US}#[fg=#9ece6a]38%${US}#[fg=#9ece6a]1%"   # container | 负载 | 内存 | 盘
+# The alerts file is planted (empty, fresh for FLEET_ALERTS_TTL=3600) so the
+# producer adds nothing to the bar here.
+: > "$G/alerts.ndjson"; date +%s > "$G/alerts.ndjson.ts"
+bar() { FLEET_ALERTS_TTL=3600 TMPDIR="$T/" FLEET_ACCOUNTS_DIR="$WORK/acc" CCQUOTA_HUB_URL=http://127.0.0.1:9 \
+        FLEET_STATUS_CONTAINER="${CTR-web}" PATH="$WORK/bin:$PATH" bash "$BIN/tmux-status.sh" 2>/dev/null; }
+seg() { printf '%s' "$1"; }
+WANT=' #[fg=#7aa2f7]web #[fg=#f7768e]○ '
+FIELDS='=#[fg=#f7768e]○'
 MARK='MARK-old-value'
-KEY="v2||1|$T/|12"   # layout | container | FLEET_STATUS_DISK | disk target (= TMPDIR) | floor
+KEY="v3|web"
 now() { date +%s; }
-plant() { printf '%s\t%s\n%s\n' "$1" "${2:-$KEY}" "$MARK" > "$CACHE"; }
+plant() { printf '%s\t%s\n=%s\n' "$1" "${2:-$KEY}" "$MARK" > "$CACHE"; }
 five() {   # five concurrent callers → $WORK/out/1..5
   local i; rm -f "$WORK/out/"*
   for i in 1 2 3 4 5; do bar > "$WORK/out/$i" & done; wait
 }
 
+# ---- no container: nothing measured, nothing written, nothing drawn
+eq "no container: nothing drawn" "" "$(CTR='' bar)"
+eq "no container: docker never runs" 0 "$(measured)"
+[ -e "$CACHE" ] && fail "no container: a cache was written"; CHECKS=$((CHECKS+1))
+
 # ---- cold start: five at once, one measurement, one answer
 five
 eq "cold: 5 concurrent callers measure once" 1 "$(measured)"
-for i in 1 2 3 4 5; do eq "cold: caller $i prints the pre-#890 bar" "$WANT" "$(seg "$(cat "$WORK/out/$i")")"; done
+for i in 1 2 3 4 5; do eq "cold: caller $i prints web ○" "$WANT" "$(seg "$(cat "$WORK/out/$i")")"; done
 [ -d "$CACHE.lock" ] && fail "cold: the lock outlived the measurement"
-first=$(sed -n 2p "$CACHE"); eq "cold: the cache holds the four values" "$FIELDS" "$(seg "$first")"
+first=$(sed -n 2p "$CACHE"); eq "cold: the cache holds the value" "$FIELDS" "$first"
 
 # ---- fresh: read through, nothing measured
 out=$(bar); eq "fresh: nothing measured" 1 "$(measured)"
@@ -81,7 +81,7 @@ for i in 1 2 3 4 5; do
   case "$o" in *"$MARK"*) old=$((old+1)) ;; *) eq "expired: caller $i prints old or new, nothing else" "$WANT" "$(seg "$o")" ;; esac
 done
 [ "$old" -ge 1 ] || fail "expired: no caller served the old value while the holder measured"; CHECKS=$((CHECKS+1))
-eq "expired: the cache is re-published" "$FIELDS" "$(seg "$(sed -n 2p "$CACHE")")"
+eq "expired: the cache is re-published" "$FIELDS" "$(sed -n 2p "$CACHE")"
 
 # ---- expired while a live holder has the lock: old value, immediately
 plant $(( $(now) - 7 )); mkdir "$CACHE.lock"
@@ -91,7 +91,7 @@ eq "held lock: nothing measured" 2 "$(measured)"
 rmdir "$CACHE.lock"
 
 # ---- another install / knob: never shown, measured for our key
-plant "$(now)" "|1|/elsewhere/|12"; out=$(bar)
+plant "$(now)" "v3|db"; out=$(bar)
 eq "foreign key: measured for this key" 3 "$(measured)"
 eq "foreign key: its value is never shown" "$WANT" "$(seg "$out")"
 case "$(sed -n 1p "$CACHE")" in *"	$KEY") CHECKS=$((CHECKS+1)) ;; *) fail "foreign key: the cache was not re-keyed" "$(cat "$CACHE")" ;; esac
@@ -110,4 +110,11 @@ FLEET_STATUS_CACHE_SECS=0 bar >/dev/null; FLEET_STATUS_CACHE_SECS=0 bar >/dev/nu
 eq "FLEET_STATUS_CACHE_SECS=0: every call measures" $((n + 2)) "$(measured)"
 [ -e "$CACHE" ] && fail "FLEET_STATUS_CACHE_SECS=0 wrote a cache"; CHECKS=$((CHECKS+1))
 
-printf 'tmux-status-cache-selftest: OK (%d checks) — one measurement per interval for every client (issue #890)\n' "$CHECKS"
+# ---- running: nothing to say, and the empty value still caches
+rm -f "$CACHE"; touch "$WORK/up"; n=$(measured)
+eq "running: nothing drawn" "" "$(bar)"
+eq "running: the cache holds an empty value" "=" "$(sed -n 2p "$CACHE")"
+eq "running: …which is read through, not re-measured" "" "$(bar)"
+eq "running: measured once" $((n + 1)) "$(measured)"
+
+printf 'tmux-status-cache-selftest: OK (%d checks) — one container measurement per interval for every client (issue #890), none without one (#1616)\n' "$CHECKS"

@@ -348,11 +348,34 @@ else
   on_list "D9 ⌂ with no window that can show the list" home
   [ "$(tmux list-windows -t t -F '#{window_name}' | grep -c '^home$')" = 1 ] || fail "D9: want exactly one home window"
   [ "$(plans)" = 1 ] || fail "default: a plan window was built ($(plans) now)"
+  # D10 — ☰ (--bar, issue #1616) is the list's switch and nothing else: shown →
+  #       hidden, hidden → shown; never a focus, never another window.
+  tmux set-option -w -t t:worker @issue 7
+  TMUX="$SOCK,1,0" bash "$BIN/fleet-sidebar.sh" hide t
+  on_worker
+  run_new --bar --client "$client"
+  [ -n "$(view)" ] || fail "D10 ☰ on a hidden list: the list must be drawn"
+  [ "$(sconf)" = FLEET_SIDEBAR=1 ] || fail "D10 ☰ on a hidden list: switched back on ($(sconf))"
+  [ "$(ktable)" = root ] || fail "D10 ☰ must not focus the list (key table '$(ktable)')"
+  [ "$(curwin)" = worker ] || fail "D10 ☰ left the window for '$(curwin)'"
+  [ "$(lastcause)" = bar-sidebar ] || fail "D10: hub-visit cause '$(lastcause)', want bar-sidebar"
+  run_new --bar --client "$client"
+  [ -z "$(view)" ] || fail "D10 ☰ on a shown list: the list must be hidden"
+  [ "$(sconf)" = FLEET_SIDEBAR=0 ] || fail "D10 ☰ on a shown list: hidden like prefix e ($(sconf))"
+  [ "$(ktable)" = root ] || fail "D10 ☰ hide: key table '$(ktable)'"
+  [ "$(curwin)" = worker ] || fail "D10 ☰ hide left the window for '$(curwin)'"
+  run_new --bar --client "$client"
+  tmux switch-client -c "$client" -T fleet-sidebar
+  run_new --bar --client "$client"
+  [ -z "$(view)" ] || fail "D10 ☰ with the keyboard on the list: hidden all the same"
+  [ "$(plans)" = 1 ] || fail "D10: ☰ built a plan window ($(plans) now)"
 fi
 
 # =====================  STATIC GUARD : the shipped wiring  ==================
-grep -qF 'hub-zoom.sh --home' "$CONF" \
-  || fail "conf: the ⌂ hub click must run 'hub-zoom.sh --home' (issue #405)"
+awk '/^bind -n MouseDown1Status /,/^}$/' "$CONF" | grep -qF 'hub-zoom.sh --bar' \
+  || fail "conf: the ☰ click must run 'hub-zoom.sh --bar' (issue #1616)"
+grep -qF -- '--bar' "$SCRIPT" \
+  || fail "hub-zoom.sh no longer understands --bar (issue #1616)"
 # the ⌂ home wiring sits in the MouseDown1Status hub branch, not on F9.
 grep -Eq 'bind -n F9 .*hub-zoom\.sh( |")' "$CONF" \
   || fail "conf: expected an 'bind -n F9 … hub-zoom.sh' bind"
@@ -365,10 +388,10 @@ grep -qF -- '--home' "$SCRIPT" \
 # pins that the status click otherwise matches the root one).
 grep -Eq '^bind -T fleet-sidebar F9 .*hub-zoom\.sh --nav' "$CONF" \
   || fail "conf: the fleet-sidebar table needs an F9 bind running 'hub-zoom.sh --nav' (#899)"
-awk '/^bind -T fleet-sidebar MouseDown1Status /,/^}$/' "$CONF" | grep -qF 'hub-zoom.sh --home --nav' \
-  || fail "conf: the fleet-sidebar status click must run 'hub-zoom.sh --home --nav' on the ⌂ (#899)"
+awk '/^bind -T fleet-sidebar MouseDown1Status /,/^}$/' "$CONF" | grep -qF 'hub-zoom.sh --bar' \
+  || fail "conf: the fleet-sidebar status click must run 'hub-zoom.sh --bar' on the ☰ too (#1616)"
 grep -Eq '^bind -n F9 .*--client' "$CONF" \
   || fail "conf: the root F9 must pass --client so the right client's table switches (#899)"
 
-printf 'selftest PASS: by default ⌂ / F9 / prefix g always end on the task list, focused, and no plan window is built (#1533); with FLEET_DASH_WINDOW=1 ⌂ --home lands unzoomed on the DASH, F9 keeps the zoom toggle (#405), both land on the task bar first (#899)\n'
+printf 'selftest PASS: by default ⌂ / F9 / prefix g always end on the task list, focused, and no plan window is built (#1533); ☰ only shows / hides it (#1616); with FLEET_DASH_WINDOW=1 ⌂ --home lands unzoomed on the DASH, F9 keeps the zoom toggle (#405), both land on the task bar first (#899)\n'
 exit 0

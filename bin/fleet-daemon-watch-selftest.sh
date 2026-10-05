@@ -298,7 +298,7 @@ printf '%s\n' "$tbl" | grep -q '^ledger-watch	' \
 wipe
 tick cleanup 900; tick dispatch 900; tick base-sync 900
 out="$(FLEET_DAEMON_KICK=0 bar)"
-case "$out" in *"✖ 1 "*"daemon · stale · 3 units"*'"detail":"cleanup,dispatch,base-sync"'*) ok ;;
+case "$out" in *"✖ 1#"*"daemon · stale · 3 units"*'"detail":"cleanup,dispatch,base-sync"'*) ok ;;
   *) fail "9: bar did not count the stalled units, or the row lost their names: $out" ;; esac
 # collect belongs to the `dash · stale` row and must not be listed twice.
 wipe
