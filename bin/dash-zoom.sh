@@ -22,7 +22,7 @@ SESS=$(tmux display-message -p '#{?#{session_group},#{session_group},#{session_n
 (
   BIN="$(cd "$(dirname "$0")" && pwd)"
   [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
-  _fs="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleet.settings"; [ -f "$_fs" ] && . "$_fs"
+  _fs="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"; [ -f "$_fs/fleet.settings" ] && . "$_fs/fleet.settings"; [ -f "$_fs/fleet.conf" ] && . "$_fs/fleet.conf"
   fleet_load_conf "$SESS"
   [ "${FLEET_DASH_WINDOW:-0}" = 1 ]
 ) || exec bash "$(cd "$(dirname "$0")" && pwd)/fleet-sidebar.sh" home '' g

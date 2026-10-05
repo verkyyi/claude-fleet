@@ -38,7 +38,10 @@
 #     selftest-shadow-root.sh idea): every script resolves `$BIN/../fleet.conf`,
 #     and on a machine that is itself a node that file is the OPERATOR's — its
 #     FLEET_SIDEBAR_SOURCE would override the shell's. The mirror has no sibling
-#     conf, so the shell reads exactly the environment it sets.
+#     conf, so the shell reads exactly the environment it sets. Once the machine
+#     has its one fleet.conf (issue #1623) that sibling is gone (fleet.conf.bak)
+#     and the node's settings sit in a section the shell skips: the mirror is
+#     kept one version, for a node not yet migrated, then goes with the old paths.
 #   · the far end of the right pane runs `fleet connect <machine>` (the routes the
 #     hub measured, this device's certificate; `--enter` renews it first), through
 #     the `ssh` mode below — unless the machine is THIS computer, where the attach
@@ -56,6 +59,9 @@
 #                          gone as soon as a row opens a real one
 #   env [MACHINE]          print the environment the server would get (debug, tests)
 #
+# ~/.config/claude-fleet/fleet.conf — the machine's one config file (issue #1623):
+# FLEET_HUB_URL in [common], the keys below in [client]; its [node] section is
+# never read here. shell.conf is its predecessor, still read for one version:
 # ~/.config/claude-fleet/shell.conf (optional, sourced): CCQUOTA_HUB_URL (else
 # hub.json's url, what `fleet login` remembered), FLEET_NODE_ALIASES (else derived
 # from the hub's route list: `<hostname>=<alias>`), FLEET_SHELL_PREFIX (C-b),
@@ -73,8 +79,23 @@ SELF="$0"; [ -L "$SELF" ] && SELF=$(readlink "$SELF")   # the real file's dir ha
 REAL_BIN="$(cd "$(dirname "$SELF")" && pwd)"
 
 CONF_DIR="${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}"
+# The machine's ONE config file (issue #1623): a client that still keeps its
+# settings the old way (shell.conf, hub.json's url) folds them in once, here —
+# each old file kept as .bak. Two file tests when there is nothing to do.
+if [ ! -f "$CONF_DIR/fleet.conf" ] && { [ -f "$CONF_DIR/shell.conf" ] || [ -f "$CONF_DIR/hub.json" ]; } \
+   && [ -f "$REAL_BIN/fleet-conf.sh" ]; then
+  FLEET_CONF_DIR=$CONF_DIR bash "$REAL_BIN/fleet-conf.sh" migrate --quiet >&2 || :
+fi
 # shellcheck source=/dev/null
 [ -f "$CONF_DIR/shell.conf" ] && . "$CONF_DIR/shell.conf"
+# The machine's ONE config file (issue #1623): its [common] + [client] sections —
+# the [node] one sits in a FLEET_SHELL guard, and the shell is the shell.
+if [ -f "$CONF_DIR/fleet.conf" ]; then
+  _fsv=${FLEET_SHELL-}; FLEET_SHELL=1
+  # shellcheck source=/dev/null
+  . "$CONF_DIR/fleet.conf"
+  FLEET_SHELL=$_fsv; unset _fsv
+fi
 SESS="${FLEET_SHELL_SESSION:-fleet-shell}"
 case "$SESS" in ''|*[!A-Za-z0-9._-]*) SESS=fleet-shell ;; esac
 CACHE="${FLEET_SHELL_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet/shell}"

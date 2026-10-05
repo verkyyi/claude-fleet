@@ -682,6 +682,7 @@ _fleet_confs() {
   for _c in "$_cd"/*.conf; do
     [ -f "$_c" ] || continue
     _s=$(basename "$_c" .conf)
+    case "$_s" in fleet|shell) continue ;; esac   # the machine's config + the shell's (#1623), not fleets
     [ -f "$_cd/fleets/$_s/conf" ] && continue
     printf '%s\n' "$_c"
   done
@@ -694,10 +695,12 @@ _conf_val() {
   sed -n 's/^[[:space:]]*'"$2"'[[:space:]]*=[[:space:]]*\([^#]*\).*/\1/p' "$1" | tail -1 | tr -d "\"' 	"
 }
 
-# _gconf_val <KEY> → the login-wide value: the login's settings file (issue #979),
-# else the install's fleet.conf it replaces (dual-read).
+# _gconf_val <KEY> → the login-wide value: the machine's one config file (issue
+# #1623), else the login's settings file (issue #979), else the install's
+# fleet.conf they replace (dual-read).
 _gconf_val() {
-  _gv=$(_conf_val "$conf_dir/fleet.settings" "$1")
+  _gv=$(_conf_val "$conf_dir/fleet.conf" "$1")
+  [ -n "$_gv" ] || _gv=$(_conf_val "$conf_dir/fleet.settings" "$1")
   [ -n "$_gv" ] || _gv=$(_conf_val "$(dirname "$0")/../fleet.conf" "$1")
   printf '%s' "$_gv"
 }
@@ -724,6 +727,7 @@ _xconf_val() {  # <file> <KEY> → the last assignment's value, `export` allowed
   sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}'"$2"'[[:space:]]*=[[:space:]]*\([^#]*\).*/\2/p' "$1" | tail -1 | tr -d "\"' 	"
 }
 _hub_on=${CCQUOTA_FLEET:-}
+[ -n "$_hub_on" ] || _hub_on=$(_xconf_val "$conf_dir/fleet.conf" CCQUOTA_FLEET)
 [ -n "$_hub_on" ] || _hub_on=$(_xconf_val "$conf_dir/fleet.settings" CCQUOTA_FLEET)
 [ -n "$_hub_on" ] || _hub_on=$(_xconf_val "$(dirname "$0")/../fleet.conf" CCQUOTA_FLEET)
 if [ -z "$_hub_on" ] && [ -d "$conf_dir" ]; then
@@ -771,9 +775,11 @@ fi
 # fleet-lib.sh). A hub fleet also names where its new sessions open
 # (FLEET_SPAWN_NODE, per fleet too). Advice only: an INFO line, never counted.
 _mode_g=${CCQUOTA_FLEET:-}
+[ -n "$_mode_g" ] || _mode_g=$(_xconf_val "$conf_dir/fleet.conf" CCQUOTA_FLEET)
 [ -n "$_mode_g" ] || _mode_g=$(_xconf_val "$conf_dir/fleet.settings" CCQUOTA_FLEET)
 [ -n "$_mode_g" ] || _mode_g=$(_xconf_val "$(dirname "$0")/../fleet.conf" CCQUOTA_FLEET)
 _mode_sn_g=${FLEET_SPAWN_NODE:-}
+[ -n "$_mode_sn_g" ] || _mode_sn_g=$(_xconf_val "$conf_dir/fleet.conf" FLEET_SPAWN_NODE)
 [ -n "$_mode_sn_g" ] || _mode_sn_g=$(_xconf_val "$conf_dir/fleet.settings" FLEET_SPAWN_NODE)
 [ -n "$_mode_sn_g" ] || _mode_sn_g=$(_xconf_val "$(dirname "$0")/../fleet.conf" FLEET_SPAWN_NODE)
 _mode_out=''
@@ -795,6 +801,29 @@ EOF
 fi
 [ -n "$_mode_out" ] || { [ "$_mode_g" = 1 ] && _mode_out=hub || _mode_out=local; }
 info mode "$_mode_out — 本机 / 联机各管什么: docs/LOCAL-AND-HUB.md"
+
+# --- role (issue #1623): what this machine is, and its ONE config file ----------
+# client / node / client,node — FLEET_ROLE in $conf_dir/fleet.conf, else inferred
+# from what the machine holds (fleet-conf.sh role). One file = PASS; settings still
+# spread over the old files = INFO with the one command that folds them (the next
+# sync runs it on its own); a half-migrated machine (the file AND an old one still
+# read) = WARN. A machine that is neither prints nothing: the degenerate case.
+_rl=$(bash "$(dirname "$0")/fleet-conf.sh" role --why 2>/dev/null)
+_rl_role=${_rl%%	*}; _rl_how=${_rl#*	}
+_rl_old=''
+for _rf in "$(dirname "$0")/../fleet.conf" "$conf_dir/fleet.settings" "$conf_dir/shell.conf"; do
+  [ -f "$_rf" ] && _rl_old="${_rl_old:+$_rl_old, }$(printf '%s' "$_rf" | sed "s#^$HOME#~#")"
+done
+_rl_mc=$(printf '%s' "$conf_dir/fleet.conf" | sed "s#^$HOME#~#")
+if [ -n "$_rl_role" ] && [ "$_rl_role" != none ]; then
+  if [ -f "$conf_dir/fleet.conf" ] && [ -z "$_rl_old" ]; then
+    pass role "$_rl_role ($_rl_how) — 配置只有一份: $_rl_mc"
+  elif [ -f "$conf_dir/fleet.conf" ]; then
+    warn role "$_rl_role ($_rl_how) — $_rl_mc 之外还在读旧文件: $_rl_old — 并进去后改名 .bak"
+  else
+    info role "$_rl_role ($_rl_how) — 设置仍分散在: ${_rl_old:-fleets/<会话>/conf · hub.json} — \`bash $(dirname "$0")/fleet-conf.sh migrate\` 并成一份（同步时自动跑）"
+  fi
+fi
 
 # --- agent (issue #1525): every login's node agent on this machine vs stable ---
 # Same reading as `fleet-node-upgrade.sh --status`: the bytes on disk AND the
@@ -1566,7 +1595,7 @@ if [ "$mcpchk" != 0 ] && [ -d "$conf_dir" ] && [ -n "$(_fleet_confs "$conf_dir")
   _mcp_eff() {
     bash -c 'unset FLEET_MCP_CONFIG
       for f in "$@"; do [ -f "$f" ] && . "$f" >/dev/null 2>&1; done
-      printf "%s" "${FLEET_MCP_CONFIG-}"' _ "$mcp_inst" "$conf_dir/fleet.settings" "$@" 2>/dev/null
+      printf "%s" "${FLEET_MCP_CONFIG-}"' _ "$mcp_inst" "$conf_dir/fleet.settings" "$conf_dir/fleet.conf" "$@" 2>/dev/null
   }
   # _mcp_count <value> → how many servers it allows ("?" if unreadable).
   _mcp_count() {

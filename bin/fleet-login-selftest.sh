@@ -9,8 +9,10 @@
 #   A. login     makes ~/.ssh/fleet-cert (ed25519) and sends ITS public half;
 #                waits through a pending poll; writes ~/.ssh/fleet-cert-cert.pub
 #                (a user cert, principal alice, ~12h, signed by the CA) and
-#                ~/.ssh/fleet-ssh-config verbatim; remembers the hub URL in
-#                ~/.config/claude-fleet/hub.json (a token already there is kept);
+#                ~/.ssh/fleet-ssh-config verbatim; remembers the hub URL as
+#                FLEET_HUB_URL in ~/.config/claude-fleet/fleet.conf, the machine's
+#                one config file, with FLEET_ROLE client (issue #1623) — hub.json
+#                is left to its token (a token already there is kept);
 #                draws a QR (block characters) and prints the user code
 #   B. include   appends `Match all` + `Include ~/.ssh/fleet-ssh-config` to an
 #                EXISTING ~/.ssh/config AFTER the user's own lines (theirs keep
@@ -113,6 +115,7 @@ stop_hub() { kill "$HUB_PID" 2>/dev/null; wait "$HUB_PID" 2>/dev/null; HUB_PID="
 
 PORT=""
 export HOME="$SB/home" XDG_CONFIG_HOME="$SB/home/.config"
+unset FLEET_CONF_DIR   # a laptop has none: fleet.conf is ~/.config/claude-fleet/fleet.conf (issue #1623)
 mkdir -p "$HOME/.ssh"
 printf 'Host mine\n  HostName 10.0.0.1\n  User me\n' >"$HOME/.ssh/config"
 ORIG_CONF="$(cat "$HOME/.ssh/config")"
@@ -129,7 +132,9 @@ echo "$L" | grep -q 'user certificate' && ok "A user certificate" || bad "A not 
 echo "$L" | grep -A1 'Principals:' | grep -qx '[[:space:]]*alice' && ok "A principal alice" || bad "A principals: $L"
 echo "$L" | grep -q "Signing CA: ED25519 $(ssh-keygen -lf "$SB/ca.pub" | awk '{print $2}')" && ok "A signed by the CA" || bad "A signing CA: $L"
 grep -q '^Host m4 fleet-m4 fleet-m4-public$' "$HOME/.ssh/fleet-ssh-config" && ok "A ssh config written" || bad "A ssh config"
-[ "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["url"])' "$HOME/.config/claude-fleet/hub.json")" = "http://127.0.0.1:$PORT" ] && ok "A hub remembered in hub.json" || bad "A hub not remembered"
+grep -qx "export FLEET_HUB_URL=\"http://127.0.0.1:$PORT\"" "$HOME/.config/claude-fleet/fleet.conf" 2>/dev/null && ok "A hub remembered in fleet.conf" || bad "A hub not remembered: $(cat "$HOME/.config/claude-fleet/fleet.conf" 2>&1)"
+grep -qx 'FLEET_ROLE="client"' "$HOME/.config/claude-fleet/fleet.conf" 2>/dev/null && ok "A role client" || bad "A no FLEET_ROLE client"
+[ -f "$HOME/.config/claude-fleet/hub.json" ] && grep -q '"url"' "$HOME/.config/claude-fleet/hub.json" && bad "A the url went to hub.json too" || ok "A hub.json holds no url"
 echo "$out" | grep -q 'BCDF-GHJK' && echo "$out" | grep -q '█\|▀\|▄' && ok "A code + QR shown" || bad "A no code/QR: $out"
 
 # ── B ──
@@ -139,7 +144,9 @@ printf '%s\n' "$conf" | tail -4 | tr '\n' '|' | grep -q 'Match all|Include ~/.ss
 key_before="$(cat "$HOME/.ssh/fleet-cert.pub")"
 python3 - "$HOME/.config/claude-fleet/hub.json" <<'PY2'
 import json, sys
-d = json.load(open(sys.argv[1])); d["token"] = "tok-123"; json.dump(d, open(sys.argv[1], "w"))
+try: d = json.load(open(sys.argv[1]))
+except OSError: d = {}
+d["token"] = "tok-123"; json.dump(d, open(sys.argv[1], "w"))
 PY2
 start_hub
 python3 "$BIN/fleet-login.py" >/dev/null 2>&1; rc=$?   # remembered hub

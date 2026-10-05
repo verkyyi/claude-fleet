@@ -786,7 +786,8 @@ def _heavy_conf():
     conf = {}
     here = os.path.dirname(os.path.abspath(__file__))
     for path in (os.path.join(here, "..", "fleet.conf"),
-                 os.path.join(_conf_dir(), "fleet.settings")):
+                 os.path.join(_conf_dir(), "fleet.settings"),
+                 os.path.join(_conf_dir(), "fleet.conf")):   # the machine's one file (#1623)
         try:
             with open(path) as f:
                 for line in f:

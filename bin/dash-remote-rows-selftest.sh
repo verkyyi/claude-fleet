@@ -32,7 +32,9 @@
 #                   renders off its own tmux line (its `@` id, its LIVE state, its
 #                   subtree), a local window the cache does not name is not a row (the
 #                   sidebar's own window excepted), nor is a cached local row whose
-#                   window is gone; the
+#                   window is gone; a pinned or `@norepo` window the cache does not
+#                   name STAYS (issue #1643 — the hub never lists one: no worker_id,
+#                   and a pin is this machine's own mark); the
 #                   hub list ignores the switch; on the DEFAULT source a cache carrying
 #                   local rows is byte for byte the one without (the golden), and with
 #                   the hub off `hub` is `local`
@@ -335,6 +337,24 @@ eq "H: no cache — \`hub\` is the no-cache output" "$base_s" "$(FLEET_SIDEBAR_S
 mv "$WORK/remote.keep" "$G/remote_$S"
 : > "$NET_LOG"; FLEET_SIDEBAR_SOURCE=hub side >/dev/null
 eq "H: …and still no network on the render path" "" "$(cat "$NET_LOG")"
+# a pinned or @norepo window the cache does not name stays (issue #1643): the hub
+# never lists one — a `@norepo` session has no worker_id, a pin is this machine's
+# own mark — so the pinned guide and every no-repo session vanished with the switch.
+# Full WFMT lines: @pin is field 15, @norepo field 21 (w() stops at 14).
+cp "$WLIST_FILE" "$WORK/wlist.keep"
+wf() {   # idx name path state wid issue pin norepo
+  printf '%s\n' "$S$US$1$US$2$US$3$US$4$US$US$5$US$6$US$US$US$US$US$US$US$7$US$US$US$US$US$US$8$US$US$US$US" >> "$WLIST_FILE"
+}
+#  idx name    path                state    wid  issue  pin norepo
+wf 4   向导    /home/op            'done'   @4   ''     1   1          # the guide: pinned, no repo, no key
+wf 5   无仓库  /home/op            working  @5   ''     ''  1          # a no-repo session
+wf 6   钉住    /w/app-issue-1431   'done'   @6   1431   1   ''         # pinned, keyed, not in the cache
+hs=$(FLEET_SIDEBAR_SOURCE=hub side)
+eq "H: hub source — a pinned or @norepo window the cache does not name is still a row; the keyed, unpinned one (solo) still is not" \
+   "向导;钉住;无仓库;EPIC;C1;侧边栏;孙;草稿;" "$(sorder "$hs")"   # 无仓库 is working: it sorts ahead of looping as on the local source
+has "H: …in the 置顶 group" "$(shdrs "$hs")" "置顶 (2)"
+eq "H: …the local source's rows minus solo (keyed, unlisted: #1480's rule stands)" "$(sorder "$(side)" | sed 's/solo;//')" "$(sorder "$hs")"
+mv "$WORK/wlist.keep" "$WLIST_FILE"
 remote_cache "$NOW"
 
 # ============================================================================

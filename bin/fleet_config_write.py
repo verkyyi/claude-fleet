@@ -50,7 +50,15 @@ def write(path, key, value, kind, expected=None):
             else:
                 lines.append(line)
         if not found:
-            lines.append(assignment)
+            # The machine's one config file (issue #1623) ends in its [node]
+            # section's guard: a new key goes inside it, where the old
+            # fleet.settings keys went — never after it, into what the shell reads.
+            close = next((i for i in range(len(lines) - 1, -1, -1)
+                          if re.match(r"^fi\s+# ---- \[node\] end ----", lines[i])), None)
+            if close is None:
+                lines.append(assignment)
+            else:
+                lines.insert(close, assignment)
         fd, temporary = tempfile.mkstemp(prefix=path.name + ".tmp.", dir=path.parent)
         with os.fdopen(fd, "w") as output:
             output.write("\n".join(lines) + "\n")

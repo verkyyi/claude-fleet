@@ -328,6 +328,20 @@ else
   say 'layout: skip — no migrator in this version'
 fi
 
+# --- conf (issue #1623): the machine's ONE config file ------------------------------
+# Folds the install's fleet.conf, fleet.settings, the fleet conf, shell.conf and
+# hub.json's url into $FLEET_CONF_DIR/fleet.conf, each old file kept as .bak.
+# Idempotent: a machine already on one file says so and changes nothing.
+if [ -f "$ROOT/bin/fleet-conf.sh" ]; then
+  if out=$(bash "$ROOT/bin/fleet-conf.sh" migrate ${DRYFLAG:+"$DRYFLAG"} 2>&1); then
+    say "conf: ok — $(printf '%s\n' "$out" | grep -v '^  |' | tail -1 | sed 's/^fleet-conf: //')"
+  else
+    fail conf "$(printf '%s\n' "$out" | tail -1)"
+  fi
+else
+  say 'conf: skip — no fleet-conf.sh in this version'
+fi
+
 # --- daemons ------------------------------------------------------------------
 same_plist() { # semantic equality — the installed file may be binary or reformatted
   [ -f "$2" ] || return 1
