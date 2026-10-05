@@ -113,6 +113,14 @@ printf '%s\\n' "$*" >> "$FLEET_CONF_DIR/comment.calls"
 cat > "$FLEET_CONF_DIR/comment.body"
 echo "https://github.com/example/project/issues/$1#issuecomment-42"
 ''')
+        # The no-bridge path (issue #1554): fleet-peer-send.sh, the local inbox
+        # channel — its `sent →` line on stdout, one stderr reason on a refusal.
+        self.script(self.bin / "fleet-peer-send.sh", '''#!/bin/bash
+printf '%s\\n' "$*" >> "$FLEET_CONF_DIR/peer.calls"
+[ ! -f "$FLEET_CONF_DIR/peer-down" ] || { echo "fleet-peer-send: pid 4242 has no reachable inbox (not a registered session, or no key/socket)" >&2; exit 1; }
+cat > "$FLEET_CONF_DIR/peer.body"
+echo "sent → pid 4242 (issue-123 · /fixture/issue-123)"
+''')
         self.script(self.bin / "fleet-worker-stop.sh", '''#!/bin/bash
 printf '%s\\n' "$*" >> "$FLEET_CONF_DIR/stop.calls"
 [ ! -f "$FLEET_CONF_DIR/stop-hang" ] || { echo failed:no-exit; exit 7; }
@@ -448,9 +456,27 @@ class HubTests(HubFixture):
         self.assertEqual((gone["status"], gone["result"]["error"]["code"]), ("failed", "NOT_FOUND"))
         self.node.windows(("@12", 123, False, "/fixture/issue-123"))
         self.node.fleet_conf.write_text(self.node.fleet_conf.read_text().replace("FLEET_ISSUE_BRIDGE=1\n", ""))
-        off = self.lifecycle("worker_message", idem="msg-off", text="anyone?")
-        self.assertEqual((off["status"], off["result"]["error"]["code"]), ("failed", "UNAVAILABLE"))
+        # No issue bridge (issue #1554): the node delivers to the live session
+        # itself, through the peer channel — no comment, no UNAVAILABLE.
+        off = self.lifecycle("worker_message", idem="msg-off", text="anyone?\n第二行")
+        self.assertEqual(off["status"], "succeeded")
+        self.assertEqual(off["result"]["channel"], "direct")
+        self.assertIn("sent → pid 4242", off["result"]["how"])
         self.assertEqual(len(self.node.calls("comment")), 1)
+        self.assertEqual(len(self.node.calls("peer")), 1)
+        self.assertRegex(self.node.calls("peer")[0], r"^-L \S+ issue:123 -$")
+        self.assertEqual((self.node.conf / "peer.body").read_text(), "anyone?\n第二行")
+        (self.node.conf / "peer-down").touch()
+        down = self.lifecycle("worker_message", idem="msg-peer-down", text="anyone?")
+        self.assertEqual((down["status"], down["result"]["error"]["code"]), ("failed", "EXECUTION_FAILED"))
+        self.assertIn("no reachable inbox", down["result"]["error"]["message"])
+        (self.node.conf / "peer-down").unlink()
+        # A direct send never picks one of two windows on a guess.
+        self.node.windows(("@12", 123, False, "/fixture/issue-123"), ("@15", 123, False, "/fixture/issue-123"))
+        two = self.lifecycle("worker_message", idem="msg-two", text="anyone?")
+        self.assertEqual((two["status"], two["result"]["error"]["code"]), ("failed", "AMBIGUOUS"))
+        self.assertEqual(len(self.node.calls("peer")), 2)
+        self.node.windows(("@12", 123, False, "/fixture/issue-123"))
         self.node.fleet_conf.write_text(self.node.fleet_conf.read_text() + "FLEET_ISSUE_BRIDGE=1\n")
         (self.node.conf / "gh-down").touch()
         lost = self.lifecycle("worker_message", idem="msg-lost", text="anyone?")
@@ -810,6 +836,15 @@ printf '@9\\t4242\\t/fixture/moved\\n'
         self.assertEqual(back["status"], "succeeded")
         self.assertEqual(self.node.calls("restore"), ["landed:issue:123 demo --repo example/other"])
         self.assertEqual([w["worker_id"] for w in back["result"]["workers"]], [self.worker("example-other:issue-123")])
+        # The bridge is per repo (#978): with example/other's off, its resumed
+        # worker is reached directly, the peer resolver told which repo's #123 (#1554).
+        (repos / "example-other.conf").write_text('FLEET_REPO="example/other"\nFLEET_ISSUE_BRIDGE=0\n')
+        direct = self.lifecycle("worker_message", "example-other:issue-123", idem="msg-other", text="hi")
+        self.assertEqual(direct["status"], "succeeded", direct)
+        self.assertEqual(direct["result"]["channel"], "direct")
+        self.assertRegex(self.node.calls("peer")[-1], r"^-L \S+ --repo example/other issue:123 -$")
+        self.assertEqual(len(self.node.calls("comment")), 1)
+        (repos / "example-other.conf").write_text('FLEET_REPO="example/other"\nFLEET_ISSUE_BRIDGE=1\n')
         # worker_start's post-spawn read matches the spawned repo, not the number:
         # @14 (issue-124, repo unknown) is not the worker it started.
         started = self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="start-124",

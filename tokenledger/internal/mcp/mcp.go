@@ -1488,8 +1488,8 @@ func fleetToolSpecs() []toolSpec {
 			Name:  "worker_message",
 			Title: "Message a worker",
 			Description: "Post text as the worker's next turn through its fleet's issue bridge (a " +
-				"--to-worker comment; never keystrokes). Issue workers only, on a fleet with the bridge " +
-				"on; ≤4000 characters, no HTML comments or control characters. Needs worker:message." + fleetWriteCaveat,
+				"--to-worker comment; never keystrokes), or straight to the live session on a fleet " +
+				"without the bridge. Issue workers only; ≤4000 characters, no HTML comments or control characters. Needs worker:message." + fleetWriteCaveat,
 			InputSchema: obj(map[string]any{"worker_id": workerIDProp, "text": map[string]any{"type": "string"},
 				"idempotency_key": idemProp}, "worker_id", "text", "idempotency_key"),
 		},

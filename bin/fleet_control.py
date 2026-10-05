@@ -287,7 +287,7 @@ class Control:
             code, output, err = self.adapter("message", fleet["name"], key if ":" in key else key[len("issue-"):],
                                              payload=params["text"].encode("utf-8"), timeout=60)
             if code == 5:
-                raise Unattempted("UNAVAILABLE", "The issue bridge is not enabled on this fleet")
+                return self.execute_inject(fleet, matches, params["text"])
             if code == 2:
                 raise Unattempted("EXECUTION_FAILED", "Fleet refused the message; inspect local Fleet logs")
             if code:
@@ -326,6 +326,25 @@ class Control:
         if not matches:
             raise Fault("UNKNOWN_OUTCOME", "Restore returned but no matching worker is visible")
         return {"workers": matches, "observed_at": snapshot["observed_at"]}
+
+    def execute_inject(self, fleet, matches, text):
+        """worker_message on a fleet without the issue bridge (issue #1554): this
+        node IS the worker's machine, so the text goes to the live session
+        directly — fleet-peer-send.sh, the local inbox channel SendMessage uses,
+        never keystrokes. No comment means no GitHub record, so this needs
+        exactly ONE live window: the bridge path may post to an issue several
+        windows share, a direct send must pick none of them on a guess."""
+        if len(matches) > 1:
+            raise Unattempted("AMBIGUOUS", "Several live windows hold this identity and the fleet has no issue bridge; "
+                                           "resolve them on the fleet first")
+        code, output, err = self.adapter("inject", fleet["name"], matches[0]["key"],
+                                         payload=text.encode("utf-8"), timeout=60)
+        if code:
+            raise Unattempted("EXECUTION_FAILED", "No issue bridge on this fleet, and direct delivery was refused: "
+                              + last_line(err))
+        return {"channel": "direct", "how": last_line(output),
+                "delivery": "straight to the live session (no issue bridge on this fleet, so no issue comment)",
+                "workers": matches, "observed_at": now()}
 
     # The two answer scripts' exit codes, both the same shape (fleet-answer.sh /
     # fleet-permission.sh headers): 1 nothing pending or no usable pane, 2 a

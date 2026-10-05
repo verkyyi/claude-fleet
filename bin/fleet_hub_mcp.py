@@ -152,7 +152,7 @@ def make_server(hub, *, token=None, oauth=None, grant_tokens=False):
 
     @server.tool(annotations=change, structured_output=True)
     async def worker_message(worker_id: str, text: str, idempotency_key: str) -> dict[str, Any]:
-        """Send text to a live worker as its next turn through the fleet's issue bridge (a comment on its issue, no keystrokes). Needs worker:message; poll operation_get."""
+        """Send text to a live worker as its next turn through the fleet's issue bridge (a comment on its issue, no keystrokes), or straight to the live session where the fleet has no bridge. Needs worker:message; poll operation_get."""
         return await invoke("worker_message", {"worker_id": worker_id, "text": text, "idempotency_key": idempotency_key})
 
     @server.tool(annotations=lifecycle, structured_output=True)
