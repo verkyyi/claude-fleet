@@ -23,7 +23,7 @@
 #   D. refused      403 → exit 1 naming the hub's reason; curl failing → exit 1
 #                   「入口失联，机器间访问暂停；你可直接 `fleet <机器>` 进去」 —
 #                   paused, never a fallback; nothing on stdout. A down hub is
-#                   refused inside 1 s: connect bounded to 1 s, one try (#1630)
+#                   refused inside 1 s: connect bounded to 0.8 s, one try (#1630)
 #   E. old hub      404 / a 401 from the viewer gate → exit 3 (plain ssh) with a note
 #   F. usage        bad purpose / bad name: exit 2, curl never called
 #   G. trust        fleet-peer-trust.sh: no fleet machine known → exit 3 (no
@@ -130,8 +130,8 @@ out=$(FLEET_UI_LANG=zh "$SUT" m5 view 2>"$WORK/err"); rc=$?
 { [ "$rc" -eq 1 ] && [ -z "$out" ]; } || fail "D: down → exit $rc, out '$out'"
 grep -q '入口失联，机器间访问暂停；你可直接 `fleet m5` 进去' "$WORK/err" || fail "D: stderr: $(cat "$WORK/err")"
 # #1630: a down hub is refused within a second — the connect is bounded to 1 s
-# (not the 10 s request bound), and there is exactly one try.
-grep -q -- '--connect-timeout 1 ' "$STUB_LOG" || fail "D: connect not bounded to 1 s: $(cat "$STUB_LOG")"
+# (0.8 s, not the 10 s request bound) and there is exactly one try.
+grep -q -- '--connect-timeout 0.8 ' "$STUB_LOG" || fail "D: connect not bounded to 0.8 s: $(cat "$STUB_LOG")"
 reset
 export FAKE_RC=28 FLEET_UI_LANG=en
 out=$("$SUT" verkyyi@m5.tail.ts.net view 2>"$WORK/err"); rc=$?

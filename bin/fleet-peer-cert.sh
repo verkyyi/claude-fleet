@@ -32,7 +32,7 @@
 #       FLEET_PEER_CERT=0. Nothing printed on stdout.
 #
 # A hub that is DOWN is answered within a second (issue #1630): the connect is
-# bounded by FLEET_PEER_CERT_CONNECT_SECS (default 1) — no 10-second wait, no
+# bounded by FLEET_PEER_CERT_CONNECT_SECS (default 0.8) — no 10-second wait, no
 # retry — and the refusal names the way round, `fleet <machine>` straight in on
 # the operator's own client certificate. The whole request stays bounded by
 # FLEET_HUB_TIMEOUT (10) for a hub that answers slowly.
@@ -86,7 +86,7 @@ body=$(python3 -c 'import json,sys; print(json.dumps({"target":sys.argv[1],"purp
   || die 2 "FLEET_PEER_CERT_SECS must be a number of seconds"
 CURL=${FLEET_HUB_CURL:-curl}
 resp=$(_fleet_hub_env
-  "$CURL" -sS --connect-timeout "${FLEET_PEER_CERT_CONNECT_SECS:-1}" --max-time "${FLEET_HUB_TIMEOUT:-10}" -o - -w '\n%{http_code}' \
+  "$CURL" -sS --connect-timeout "${FLEET_PEER_CERT_CONNECT_SECS:-0.8}" --max-time "${FLEET_HUB_TIMEOUT:-10}" -o - -w '\n%{http_code}' \
     -H "Authorization: Bearer $CCQUOTA_TOKEN" -H 'Content-Type: application/json' \
     -X POST --data-binary "$body" "${CCQUOTA_HUB_URL%/}/v1/node/peer-cert" 2>/dev/null); rc=$?
 [ "$rc" -eq 0 ] && [ -n "$resp" ] || die 1 "$(fleet_ui_t peer_hub_lost_fmt "$SHOWN")（curl exit ${rc}；不退回长期互信）"
