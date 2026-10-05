@@ -355,3 +355,6 @@ FLEET_NODE_UPGRADE_NODES_CMD       seam: command printing the hub's /v1/nodes JS
 FLEET_NODE_UPGRADE_HOSTNAME        seam: overrides `hostname -s` — which /v1/nodes rows are this machine's (fleet-node-upgrade.sh, #1525)
 FLEET_NODE_UPGRADE_OS              seam: overrides `uname -s` (fleet-node-upgrade.sh is launchd-only, #1525)
 FLEET_NODE_UPGRADE_POLL            seam: seconds between post-restart hub polls (default 2) (fleet-node-upgrade.sh, #1525)
+FLEET_PEER_CERT                    escape hatch: 0 = never ask the hub for a machine-to-machine certificate, plain ssh (fleet-peer-cert.sh, #1626)
+FLEET_PEER_CERT_SECS               seam: life asked for a peer certificate (default 300; the hub caps it at 300) (fleet-peer-cert.sh, #1626)
+FLEET_PEER_KEY                     path: the peer key the hub signs (default ~/.ssh/fleet-peer) (fleet-peer-cert.sh, #1626)

@@ -97,7 +97,7 @@ PY
 [ -s "$HOME/.ssh/fleet-peer" ] || fail "B: no peer key made"
 cert="$FLEET_CONF_DIR/peer/m4.view-cert.pub"
 grep -q '^ssh-ed25519-cert-v01@openssh.com ' "$cert" || fail "B: certificate not written: $(cat "$cert" 2>&1)"
-[ "$(stat -f %Lp "$cert" 2>/dev/null || stat -c %a "$cert")" = 600 ] || fail "B: certificate not 0600"
+[ "$(python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))' "$cert")" = 0o600 ] || fail "B: certificate not 0600"
 want=$(printf '%s\n' -i "$HOME/.ssh/fleet-peer" -o "CertificateFile=$cert" -o IdentitiesOnly=yes -l verk)
 [ "$out" = "$want" ] || fail "B: options:
 $out
