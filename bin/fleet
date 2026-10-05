@@ -6,7 +6,8 @@
 #                               after that), let the hub pick your machine and
 #                               open the CLIENT (#1484): the hub's list on the
 #                               left, its bar at the bottom, that machine's
-#                               session on the right
+#                               session on the right (no hub address: this
+#                               computer's own fleet, #1712)
 #   fleet m4                    the same, onto a machine you name
 #   fleet shell [m4]            the client, by its script's name (fleet-shell.sh)
 #   fleet login                 scan for a 12-hour connection certificate
@@ -50,7 +51,7 @@ client() {
 cmd=${1-}
 case $cmd in
   -h|--help|help)
-    sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'
     exit 0 ;;
   '')
     client ;;

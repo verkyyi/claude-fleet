@@ -36,6 +36,11 @@
 #                 `apt-get install tmux` once; no root / sudo → the hint only;
 #                 --no-deps → skipped. fleet-node-join.sh's copy of fc_tmux_ok is
 #                 byte-identical to fleet-client-lib.sh's
+#   G. no hub     (issue #1712) the stable copy (placeholder unfilled) with
+#                 --no-hub and FLEET_INSTALL_SRC=file://<repo>: every manifest
+#                 file installed, NO hub address written anywhere, the node step
+#                 runs the checkout's bootstrap, the account hint is printed;
+#                 without --no-hub it still refuses (exit 2), naming --no-hub
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-install-selftest.XXXXXX") || exit 2
@@ -285,6 +290,35 @@ rm -rf "$F/brewbin"; : > "$F/brew.log"
 out=$(env PATH="$F/brew:$FARM" FC_OS=darwin FC_BREW_DIRS= sh -s -- --no-deps < "$WORK/install.sh" 2>&1); rc=$?
 [ "$rc" = 0 ] && [ ! -s "$F/brew.log" ] && echo "$out" | grep -q '^tmux: skipped (--no-deps)' \
   && ok "F sh -s -- --no-deps → skipped" || bad "F --no-deps: rc=$rc out=$out"
+
+# ── G — no hub (#1712): the same script from GitHub's stable, --no-hub ───────
+# The source is this repo over file:// (FLEET_INSTALL_SRC — the raw.githubusercontent
+# layout: the manifest at its repo path, each file at its own); the node is a
+# checkout already there with a stub bootstrap that says it ran.
+GH="$WORK/nohub"; mkdir -p "$GH/home/.claude/fleet/.git" "$GH/home/.claude/fleet/bin"
+printf '#!/bin/sh\necho bootstrap-ran >> "%s/boot.log"\n' "$GH" > "$GH/home/.claude/fleet/bin/fleet-login-bootstrap.sh"
+chmod +x "$GH/home/.claude/fleet/bin/fleet-login-bootstrap.sh"
+out=$(env -u FLEET_HUB_URL HOME="$GH/home" XDG_CONFIG_HOME="$GH/home/.config" PATH="/usr/bin:/bin:/usr/sbin:/sbin:$(dirname "$(command -v git)")" \
+      FLEET_INSTALL_SRC="file://$REPO" FLEET_INSTALL_NO_RUN=1 FLEET_INSTALL_NO_DEPS=1 sh -s -- --no-hub < "$BIN/fleet-install.sh" 2>&1); rc=$?
+[ "$rc" = 0 ] && ok "G --no-hub from the stable copy (placeholder unfilled) → exit 0" || bad "G rc=$rc: $out"
+GR="$GH/home/.local/share/claude-fleet"; gmiss=''
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  cmp -s "$GR/$f" "$REPO/$f" || gmiss="$gmiss $f"
+done <<EOT
+$FILES
+EOT
+[ -z "$gmiss" ] && ok "G every manifest file installed from the source, identical" || bad "G files:$gmiss"
+gconf="$GH/home/.config/claude-fleet"
+if grep -rqs 'FLEET_HUB_URL\|"url"' "$gconf" "$GH/home/.local/bin/fleet"; then bad "G a hub address was written: $(grep -rs 'FLEET_HUB_URL\|url' "$gconf")"
+else ok "G no hub address anywhere (no fleet.conf FLEET_HUB_URL, no hub.json url)"; fi
+grep -q "file://$REPO" "$GH/home/.local/bin/fleet" && ok "G the runner names where it came from" || bad "G runner: $(cat "$GH/home/.local/bin/fleet")"
+[ "$(cat "$GH/boot.log" 2>/dev/null)" = bootstrap-ran ] && echo "$out" | grep -q '已经在了' \
+  && ok "G the node step: checkout left alone, its bootstrap run" || bad "G node step: $(cat "$GH/boot.log" 2>&1) $out"
+echo "$out" | grep -q '没有入口' && echo "$out" | grep -q 'claude setup-token' \
+  && ok "G says: no hub, and how to add a local account" || bad "G output: $out"
+out=$(env -u FLEET_HUB_URL HOME="$GH/home" sh < "$BIN/fleet-install.sh" 2>&1); rc=$?
+[ "$rc" = 2 ] && echo "$out" | grep -q -- '--no-hub' && ok "G no hub and no --no-hub → exit 2, naming --no-hub" || bad "G bare: rc=$rc $out"
 
 [ "$fail" = 0 ] && echo "PASS fleet-install-selftest" || echo "FAIL fleet-install-selftest"
 exit "$fail"

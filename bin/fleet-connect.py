@@ -63,7 +63,10 @@ line: {"machine": <alias>, "hostname": …, "reason": …, "login": …,
 "machines": [{"alias", "hostname"}, …]} — what the shell starts from. With
 MACHINE the hub's pick is skipped and the name is checked against the route
 list. Exit 1 when no machine is online (the candidates on stderr, as `fleet`
-prints them); 2 with no hub URL.
+prints them). With no hub URL at all (claude-fleet#1712) the pick is THIS
+computer, reason `local` (FLEET_NODE_ALIASES names it) — the client reads this
+machine — and a MACHINE that is not this one exits 1; `fleet connect --print`
+then prints `local <machine>`: the route is no ssh at all.
 
 If the hub cannot be asked, the routes come from ~/.ssh/fleet-ssh-config —
 the file `fleet login` wrote — without the relay.
@@ -162,6 +165,40 @@ def machine_conf_hub():
     except OSError:
         pass
     return url
+
+
+def local_machine():
+    """THIS computer as a route-list entry (claude-fleet#1712): its hostname's
+    first label, named through FLEET_NODE_ALIASES (`macmini=m5`) — the label
+    fleet-shell.sh's this_machine() recognizes, so the client nests the attach
+    right here instead of ssh-ing anywhere."""
+    host = (socket.gethostname() or "").split(".", 1)[0]
+    alias = host
+    for a in (os.environ.get("FLEET_NODE_ALIASES") or "").split():
+        h, _, v = a.partition("=")
+        if h == host and v:
+            alias = v
+    return {"alias": alias, "hostname": host}
+
+
+def is_local_name(want):
+    m = local_machine()
+    return not want or want in (m["alias"], m["hostname"])
+
+
+def pick_local(want):
+    """--pick with no hub URL at all (claude-fleet#1712): the client still opens
+    — on THIS computer, the one machine there is, reason `local`. A name that is
+    not this computer has no route without a hub: exit 1, saying so."""
+    m = local_machine()
+    if not is_local_name(want):
+        die("没有入口时只能开本机 %s（%s 要入口才连得到）" % (m["alias"], want), 1)
+    import getpass
+    try:
+        login = getpass.getuser()
+    except Exception:
+        login = ""
+    return pick_json(m, {"machines": [m], "login": login}, "local")
 
 
 def load_hub_conf():
@@ -852,6 +889,8 @@ def pick_named(want, hub, token):
 
 
 def enter(want, hub, token, verbose, retest, print_only, ssh_args, ssh_opts=(), pick_only=False):
+    if not hub and pick_only:
+        return pick_local(want)
     if not hub:
         die("no hub URL: run the installer (curl -fsSL <入口>/install | sh) or `fleet login --hub <入口地址>` once")
     hub = hub.rstrip("/")
@@ -940,6 +979,16 @@ def main(argv):
         if not hub:
             die("no hub URL: pass --hub, set FLEET_HUB_URL, or run `fleet login --hub <入口地址>` once")
         return proxy(a.proxy, hub, token)
+    if not hub and not (a.enter or a.pick) and is_local_name(a.machine) \
+            and not os.path.exists(ssh_config_snippet_path()):
+        # No hub and no remembered routes (claude-fleet#1712): the one machine is
+        # this one, and its route is `local` — the client attaches here, no ssh.
+        m = local_machine()
+        if a.print_only:
+            sys.stdout.write("local %s\n" % m["alias"])
+            return 0
+        sys.stderr.write("fleet connect · %s 是本机（没有入口）：不用 ssh，敲 fleet 开客户端\n" % m["alias"])
+        return 0
     if a.enter or a.pick:
         return enter(a.machine, hub, token, a.verbose, a.retest, a.print_only, ssh_args, a.ssh_opts, a.pick)
     return connect(a.machine, hub.rstrip("/"), token, a.verbose, a.retest, a.print_only, ssh_args, ssh_opts=a.ssh_opts)

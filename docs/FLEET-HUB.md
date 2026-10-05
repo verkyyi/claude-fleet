@@ -480,7 +480,9 @@ any is old. No cache (hub off, a certificate identity) draws and prints
 nothing; a cache from before #644 has no word and draws nothing.
 `tmux-status-selftest.sh` G/K and `install-version-selftest.sh` H pin it.
 
-**The one-line install carries the shell** (issue #1486, EPIC #1479 C7).
+**The one-line install carries the shell** (issue #1486, EPIC #1479 C7; with
+no hub at all, the same script from GitHub's `stable` takes `--no-hub` — issue
+#1712, [LOCAL-AND-HUB.md](LOCAL-AND-HUB.md#只要工具不要入口)).
 `curl -fsSL <hub>/install | sh` fetches `/install/manifest` — the list the hub's
 image embeds (`tokenledger/internal/api/fleetclient/manifest`, the ONE place the
 client's file set is maintained) — then `/install/<path>` for each, SHA-256

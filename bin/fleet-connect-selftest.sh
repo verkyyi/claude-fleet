@@ -177,5 +177,21 @@ case "$rc:$out" in
 esac
 "$BIN/fleet" --help 2>&1 | grep -q 'fleet login renew' && ok "dispatcher: --help lists the commands" || bad "dispatcher --help"
 
+# 7 — no hub URL, the client's own question (#1712): --pick answers THIS
+# computer (reason local, named through FLEET_NODE_ALIASES), `--print` says the
+# route is `local`, and a machine that is not this one has no route (exit 1).
+me=$(python3 -c 'import socket; print(socket.gethostname().split(".", 1)[0])')
+out=$(FLEET_NODE_ALIASES="$me=here" "$BIN/fleet-connect.py" --pick 2>&1); rc=$?
+case "$rc:$out" in
+  0:*'"machine": "here"'*'"reason": "local"'*) ok "no hub: --pick → this computer, reason local" ;;
+  *) bad "no hub --pick: rc=$rc out=$out" ;;
+esac
+out=$(FLEET_NODE_ALIASES="$me=here" "$BIN/fleet-connect.py" --pick here 2>&1); rc=$?
+[ "$rc" = 0 ] && ok "no hub: --pick <this computer's alias> → 0" || bad "no hub --pick here: rc=$rc out=$out"
+out=$("$BIN/fleet-connect.py" --pick m4 2>&1); rc=$?
+case "$rc:$out" in 1:*m4*) ok "no hub: --pick <another machine> → 1" ;; *) bad "no hub --pick m4: rc=$rc out=$out" ;; esac
+out=$(FLEET_NODE_ALIASES="$me=here" "$BIN/fleet" connect --print 2>&1); rc=$?
+[ "$rc:$out" = "0:local here" ] && ok "no hub: fleet connect --print → local here" || bad "no hub --print: rc=$rc out=$out"
+
 [ "$fail" = 0 ] && echo "PASS fleet-connect-selftest" || echo "FAIL fleet-connect-selftest"
 exit "$fail"
