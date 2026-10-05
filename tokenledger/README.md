@@ -592,14 +592,26 @@ NAT needs no inbound port — and sends a heartbeat every `--live-interval`
 read fails on is sent as `state: unknown`, not as 0 windows, and the agent logs
 the reason once per distinct failure — claude-fleet#1460), the
 machine's 1-minute load and core count, available memory, and the fleet
-install's version. A dropped link is redialled with exponential, jittered
-backoff capped at 60s.
+install's version. A dropped link is redialled on a 5, 10, 20, 30, 30 … s
+ladder (jitter only shortens a rung, so the wait never exceeds 30 s), and a
+change in the machine's network — a new Wi-Fi, a wake from sleep, read off the
+PF_ROUTE socket on macOS and rtnetlink on Linux — redials at once from the
+bottom of the ladder (claude-fleet#1630). The first beat after a reconnect is
+the full picture.
 
 The hub marks a node **lost** after three heartbeat intervals with nothing
 received. Lost is only a label: the row stays, its sessions are not read as
 idle, and nothing on the machine is touched. Every control message carries a
 `proto` version; a node whose version the hub does not accept stays listed
 (with its version) but is never sent a write.
+
+The hub also **records** what it saw go wrong (claude-fleet#1630), in
+`fleet_alerts` — read it with `GET /v1/fleet/fleet_alerts`: `node_lost` when a
+node has been silent for `FLEET_NODE_LOST_ALERT_SECS` (120; counted from the
+hub's own start, and never for a machine in maintenance), cleared by its next
+beat; `lease_conflict` when a node's first beat after reconnecting shows a
+session on an issue whose live lease another worker holds, naming both sides,
+cleared once they agree again. Nothing changes hands because of either.
 
 ### A new machine in one command — join codes (claude-fleet#1418)
 
