@@ -8,6 +8,11 @@ for dep in tmux python3 perl git; do
 done
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-transfer-selftest.XXXXXX") || exit 2
 WORK=$(cd "$WORK" && pwd -P)
+# The account state + alerts both key on TMPDIR (.fleet-account.py state_dir,
+# usage-lib's cache dir): re-home it so the target-auth legs (issue #1667) never
+# read or write the operator's pool state or alerts.
+export TMPDIR="$WORK/tmp"; mkdir -p "$TMPDIR"
+unset FLEET_FAILOVER FLEET_CODEX_HOME FLEET_CODEX_ACCOUNTS FLEET_ACCOUNT_LABEL FLEET_ACCOUNTS_DIR
 LBL="transfer-selftest-$$-$RANDOM"
 TM() { tmux -L "$LBL" "$@"; }
 cleanup() { TM kill-server 2>/dev/null || :; rm -rf "$WORK"; }
@@ -19,8 +24,22 @@ ok() { checks=$((checks+1)); }
 
 IBIN="$WORK/install/bin"; FB="$WORK/fakebin"
 mkdir -p "$IBIN" "$FB" "$WORK/sessions" "$WORK/projects/actual" "$WORK/conf/fleets/$LBL"
-for f in fleet-codex-rpc.py fleet-codex-runtime.py fleet-input.py .fleet-account.py .fleet-failover.py fleet-codex-attention.py fleet-codex-session.py fleet-transfer.sh .fleet-transfer.py .fleet-transfer-wait.py fleet-loop.py fleet-sleep.py fleet_sleep_argv.py fleet_sleep_mcp.py fleet_sleep_park.py fleet-lib.sh usage-lib.sh fleet-lang.sh session-end-hook.sh set-claude-state.sh fleet-hook-conf.sh; do cp "$BIN/$f" "$IBIN/$f"; done
+for f in fleet-codex-rpc.py fleet-codex-runtime.py fleet-input.py .fleet-account.py .fleet-failover.py fleet-codex-attention.py fleet-codex-session.py fleet-transfer.sh .fleet-transfer.py .fleet-transfer-wait.py fleet-loop.py fleet-sleep.py fleet_sleep_argv.py fleet_sleep_mcp.py fleet_sleep_park.py fleet-lib.sh usage-lib.sh fleet-lang.sh session-end-hook.sh set-claude-state.sh fleet-hook-conf.sh fleet-account.sh fleet-alerts.sh fleet-daemon-lib.sh; do cp "$BIN/$f" "$IBIN/$f"; done
 export FLEET_CONF_DIR="$WORK/conf" FLEET_CC_SESSIONS_DIR="$WORK/sessions" FLEET_CC_PROJECTS_DIR="$WORK/projects"
+# The fake ccquota (issue #1667): the ONE registered Codex profile, its login
+# state read from a file; no file = no profiles, so every leg that does not set
+# one sees `target auth: unknown` and runs exactly as before.
+mkdir -p "$WORK/codex-home"
+cat > "$FB/ccquota" <<SH
+#!/bin/bash
+case "\$1 \$2" in
+  'codex list') [ -f "$WORK/login-state" ] || { echo '[]'; exit 0; }
+     printf '[{"name":"work","home":"%s","account":"codex:acct:1","email":"w@example.invalid","plan":"plus","default":true,"login":{"state":"%s"}}]\n' "$WORK/codex-home" "\$(cat "$WORK/login-state")" ;;
+  *) echo '{}' ;;
+esac
+SH
+chmod +x "$FB/ccquota"
+export FLEET_QUOTA_BIN="$FB/ccquota"
 export FLEET_TRANSFER_EXIT_WAIT=2 FLEET_TRANSFER_BOOT_WAIT=3
 export TRANSFER_TEST_ROOT="$WORK"
 TRANSFER_TEST_TMUX=$(command -v tmux)
@@ -305,6 +324,28 @@ ok; [ -n "$RECOVERED" ] && [ "$(fleet_cc_session_id "$RECOVERED")" = "$SID" ] &&
 spawn 45 issue tool
 transfer && fail 'live tool after source exit must refuse respawn'; ok
 ok; [ "$(TM display-message -p -t "$PANE" '#{pane_current_command}')" = sleep ] || fail 'leftover tool must not be killed'
+
+# issue #1667: the TARGET's login is read before the source is asked anything.
+# With the one Codex profile reauth_required, --dry-run and the cutover refuse
+# (exit 1, `target-auth: …`), the source keeps running untouched, no package is
+# written, no lease taken, and a ▲ transfer-refused event is recorded; once the
+# profile is valid the same cutover goes through.
+printf 'reauth_required\n' > "$WORK/login-state"
+spawn 52 issue normal
+PKGS=$(ls "$FLEET_CONF_DIR/handoffs" | wc -l | tr -d ' ')
+transfer --codex-home "$WORK/codex-home" --dry-run && fail 'dry-run onto a reauth_required profile must refuse'
+ok; printf '%s' "$OUT" | grep -q 'target auth: REFUSED · Codex profile needs a verified subscription login: work (reauth_required)' || fail "dry-run must name the login: $OUT"
+transfer --codex-home "$WORK/codex-home" && fail 'cutover onto a reauth_required profile must refuse'
+ok; printf '%s' "$OUT" | grep -q '^fleet-transfer: target-auth: Codex profile needs a verified subscription login: work (reauth_required)' || fail "the refusal must be target-auth: $OUT"
+ok; kill -0 "$PID" && [ -z "$(field cc_agent)" ] && TM capture-pane -p -t "$PANE" | grep -q "Claude ready $SID" || fail 'a refused target must leave the source running, untouched'
+ok; [ "$(ls "$FLEET_CONF_DIR/handoffs" | wc -l | tr -d ' ')" = "$PKGS" ] && ! fleet_rotate_lease_held "$WT" >/dev/null 2>&1 || fail 'a refusal must write no package and take no lease'
+ok; grep -q $'\ttransfer-refused\t.*reauth_required' "$TMPDIR/.claude-dash/global/alerts.events" 2>/dev/null \
+  || fail "a refusal must record a transfer-refused event: $(cat "$TMPDIR/.claude-dash/global/alerts.events" 2>/dev/null)"
+printf 'valid\n' > "$WORK/login-state"
+transfer --codex-home "$WORK/codex-home" || fail "a valid profile must still cut over: $OUT"
+ok; ! fleet_pid_alive "$PID" && [ "$(field cc_agent)" = codex ] || fail 'the valid-login cutover must switch'
+ok; printf '%s' "$OUT" | grep -q 'codex started' || fail "valid-login cutover output: $OUT"
+rm -f "$WORK/login-state"
 
 spawn 46 raw normal
 printf '{"type":' >> "$TRANSCRIPT"

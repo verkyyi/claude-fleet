@@ -16,6 +16,11 @@
 # Supports Claude → Codex and Codex context cycling. No bulk mode, transcript guessing, git mutation,
 # automatic source restart, or forced agent termination. A cutover requires @claude_state
 # done (or a Codex `looping` between rounds), one worker pane, a registered source session, and its own linked git worktree.
+# The TARGET account must be able to log in (issue #1667): --dry-run and the first
+# step of a cutover ask `fleet-account.sh target-auth` (check-target for a pinned
+# target), again right before /exit; a refusal — `target-auth: …`, exit 1 — leaves
+# the source running, records `<quota-request>/refused.json` for the planner and a
+# ▲ `transfer-refused` row in the alerts popup.
 # Run an immediate cutover from another pane/terminal. Inside the source agent,
 # use --after-turn as the final tool call, then end the turn.
 #
@@ -38,7 +43,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 HELPER="$BIN/.fleet-transfer.py"
 
 die() { FAILURE=$*; printf 'fleet-transfer: %s\n' "$*" >&2; exit 1; }
-usage() { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; }
 SESS='' TARGET='' TO='' NOTES='' LOOP='' DRY=0 PREPARE=0 AFTER=0 EXPECT='' REQUEST='' CODEX_TARGET_HOME='' REQUIRE_IDLE=0
 TARGET_FILE='' QUOTA_REQUEST='' DRAFT='' INSPECT=0 NATIVE=0
 while [ "$#" -gt 0 ]; do
@@ -167,6 +172,57 @@ source_ready() {
     esac
   fi
 }
+# target_auth — may the TARGET account start an agent? (issue #1667, EPIC #1665 C3)
+# Asked BEFORE anything is written and again right before /exit, so a target whose
+# login ccquota has marked reauth_required — or a Claude label marked by
+# mark-reauth, or whose hub token expired — is refused while the source still
+# runs. 2026-10-05 was the opposite order: source /exit'ed, Codex at a login
+# prompt, conversation gone. The ONE judge is fleet-account.sh target-auth
+# (check-target for the planner's pinned target); `unknown` — no ccquota registry,
+# multi-account off — is NOT a refusal, the launch then behaves as it always did,
+# but a judge that cannot answer at all is (never guess a login). On 0 TARGET_AUTH
+# carries the verdict line; on 1 TARGET_AUTH_WHY carries the reason.
+TARGET_AUTH='' TARGET_AUTH_WHY=''
+_json_field() { printf '%s\n' "$1" | sed -n "s/.*\"$2\": *\"\([^\"]*\)\".*/\1/p" | sed -n '1p'; }
+target_auth() {
+  local out rc=0 verdict reason
+  TARGET_AUTH='' TARGET_AUTH_WHY=''
+  if [ -n "$TARGET_FILE" ]; then
+    out=$(bash "$BIN/fleet-account.sh" check-target "$TARGET_FILE" 2>&1 >/dev/null) || rc=$?
+    if [ "$rc" = 0 ]; then TARGET_AUTH="ok · pinned $(_json_field "$(cat "$TARGET_FILE" 2>/dev/null)" key)"; return 0; fi
+    out=${out##*fleet-account: }; TARGET_AUTH_WHY="${out#target-auth: }"
+    [ -n "$TARGET_AUTH_WHY" ] || TARGET_AUTH_WHY='pinned target is unavailable'
+    return 1
+  fi
+  out=$(bash "$BIN/fleet-account.sh" target-auth --agent "$TO" ${CODEX_TARGET_HOME:+--home "$CODEX_TARGET_HOME"} 2>&1) || rc=$?
+  verdict=$(_json_field "$out" verdict); reason=$(_json_field "$out" reason)
+  case "$verdict" in
+    ok) TARGET_AUTH="ok · $(_json_field "$out" key)"; return 0 ;;
+    unknown) TARGET_AUTH="unknown · $reason"; return 0 ;;
+    refuse) TARGET_AUTH_WHY="$reason"; return 1 ;;
+  esac
+  TARGET_AUTH_WHY="the login check itself failed: $(printf '%s\n' "$out" | sed -n '/./{p;q;}')"
+  return 1
+}
+# refuse_target — the one exit for a target-auth refusal on a real cutover: the
+# planner's `refused.json` (its request dir, so failover-status can name the
+# reason), a ▲ row in the alerts popup (a toast nobody was looking at is gone in
+# 2s, #1617), then die. Nothing has been written to the pane or the worktree at
+# either call site; after the lease is held the EXIT trap tidies as for any die.
+refuse_target() {
+  if [ -n "$QUOTA_REQUEST" ] && [ -d "$QUOTA_REQUEST" ]; then
+    python3 - "$QUOTA_REQUEST/refused.json" "$TARGET_AUTH_WHY" "$TO" <<'PY' 2>/dev/null || :
+import json, os, sys, time
+path, detail, to = sys.argv[1:]
+fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, 'w') as stream:
+    json.dump(dict(reason='target-auth', detail=detail, to=to, at=time.time()), stream)
+PY
+  fi
+  [ -x "$BIN/fleet-alerts.sh" ] && bash "$BIN/fleet-alerts.sh" event -L "$SOCK" transfer-refused \
+    "${HANDLE:-$WIN}: 未切换：$TO 需要重新登录 · not switched: $TARGET_AUTH_WHY" >/dev/null 2>&1 || :
+  die "target-auth: $TARGET_AUTH_WHY — not switched; the source keeps running (log in to the target, then retry)"
+}
 [ -z "$NOTES" ] || [ -s "$NOTES" ] || die '--handoff file is missing or empty'
 [ -z "$LOOP" ] || [ -s "$LOOP" ] || die '--loop file is missing or empty'
 if [ -n "$LOOP" ]; then
@@ -178,6 +234,13 @@ fi
 printf 'fleet-transfer: %s/%s · %s → %s\nsource session: %s\nsource transcript: %s\nworktree: %s\n' \
   "$SESS" "${HANDLE:-$WIN}" "$SOURCE_AGENT" "$TO" "$SID" "$TRANSCRIPT" "$WT"
 if [ "$DRY" = 1 ]; then
+  # The target's login, first (issue #1667): a dry-run that says «would switch»
+  # onto an account that cannot log in is the plan that lost the 10-05 session.
+  if target_auth; then printf 'target auth: %s\n' "$TARGET_AUTH"
+  else
+    printf 'target auth: REFUSED · %s\n' "$TARGET_AUTH_WHY"
+    die "target-auth: $TARGET_AUTH_WHY — a cutover would not switch; log in to the target first"
+  fi
   printf 'dry-run: save a provenance package, /exit the source, then launch %s in %s (state=%s).\n' "$TO" "$PANE" "${STATE:-unknown}"
   [ "$STATE" = "done" ] || [ "$STATE" = looping ] || printf 'cutover would refuse until the source reaches done.\n'
   exit 0
@@ -186,6 +249,9 @@ fi
 umask 077
 LAUNCH="$BIN/fleet-claude.sh"
 if [ "$PREPARE" != 1 ]; then
+  # Step one of any cutover or arming (issue #1667): the target must be able to
+  # log in, or nothing below runs — the source is not even asked whether it is idle.
+  target_auth || refuse_target
   if [ "$AFTER" != 1 ]; then
     source_ready || die 'source is not safely idle; finish/pause its turn before transferring'
     CALLER_TMUX="${TMUX:-}"
@@ -207,7 +273,6 @@ if [ "$PREPARE" != 1 ]; then
   HOOKS=$(bash "$BIN/fleet-hooks-emit.sh" --target "$TO" --root "$BIN/..") || die 'cannot materialize target guard hooks'
   case "$HOOKS" in *base-readonly-guard.py*bash-guard.py*|*bash-guard.py*base-readonly-guard.py*) : ;; *) die 'Codex guard hooks are incomplete' ;; esac
   TM set-option -w -t "$WIN" @worktree "$WT" || die 'cannot record verified worktree'
-  [ -z "$TARGET_FILE" ] || bash "$BIN/fleet-account.sh" check-target "$TARGET_FILE" >/dev/null || die 'pinned target is unavailable'
 fi
 
 if [ "$AFTER" = 1 ]; then
@@ -279,7 +344,9 @@ else
     && [ "$(opt '#{@handoff_armed}')" != 1 ] || die 'source changed while preparing the transfer'
 fi
 source_ready || die 'source started another turn while preparing the transfer'
-[ -z "$TARGET_FILE" ] || bash "$BIN/fleet-account.sh" check-target "$TARGET_FILE" >/dev/null || die 'pinned target changed before source exit'
+# The last read before /exit (issue #1667): a login that went bad while the
+# package was written still finds the source running.
+target_auth || refuse_target
 if [ "$REQUIRE_IDLE" = 1 ]; then
   [ "$SOURCE_AGENT" = codex ] || die 'native idle check requires a Codex source'
   FLEET_CONF_DIR="$FLEET_CONF_DIR" "$BIN/fleet-codex-account.sh" idle --session "$SESS" --window "$PANE" \
