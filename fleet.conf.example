@@ -981,6 +981,10 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 #FLEET_COLLECT_SCRAPE_BUDGET=30
 # @label=Collector banner budget @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_COLLECT_BANNER_BUDGET=30
+# The banner phase scans every window each tick, so its budget is
+# max(FLEET_COLLECT_BANNER_BUDGET, windows × this) — the budget above is the floor (issue #1588).
+# @label=Collector banner per-window budget @group=cache @tier=internal @scope=global @edit=int @unit=ms
+#FLEET_COLLECT_BANNER_PER_WINDOW_MS=1500
 # @label=Collector escalate budget @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_COLLECT_ESCALATE_BUDGET=30
 # @label=Collector snapshot budget @group=cache @tier=internal @scope=global @edit=int @unit=sec
