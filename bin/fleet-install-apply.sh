@@ -162,21 +162,21 @@ render_tmpl() { # $1 template -> stdout, the gui-shape plist / user unit
 # GroupName, and argv wrapped so the job gets the user's own TMPDIR (a
 # LaunchDaemon does not inherit one) — the shape the installed ones carry.
 render_system() { # $1 template $2 unit $3 out
-  local tmp n i a argv=''
+  local tmp n i a cmdline=''
   tmp="$3"
   render_tmpl "$1" > "$tmp" || return 1
   n=$(plutil -extract ProgramArguments raw -o - "$tmp" 2>/dev/null) || return 1
   i=0
   while [ "$i" -lt "$n" ]; do
     a=$(plutil -extract "ProgramArguments.$i" raw -o - "$tmp") || return 1
-    argv="$argv '$(printf '%s' "$a" | sed "s/'/'\\\\''/g")'"
+    cmdline="$cmdline '$(printf '%s' "$a" | sed "s/'/'\\\\''/g")'"
     i=$((i + 1))
   done
   plutil -replace Label -string "$(fleet_daemon_label "$2" system "$LOGIN")" "$tmp" \
     && plutil -replace UserName -string "$LOGIN" "$tmp" \
     && plutil -replace GroupName -string staff "$tmp" \
     && plutil -replace ProgramArguments -json '["/bin/sh","-c"]' "$tmp" \
-    && plutil -insert ProgramArguments.2 -string "TMPDIR=\"\$(getconf DARWIN_USER_TEMP_DIR)\"; export TMPDIR; exec$argv" "$tmp"
+    && plutil -insert ProgramArguments.2 -string "TMPDIR=\"\$(getconf DARWIN_USER_TEMP_DIR)\"; export TMPDIR; exec$cmdline" "$tmp"
 }
 
 FROM='' TO='' DRY=0 ROOT="${FLEET_INSTALL_ROOT:-$HOME/.claude/fleet}" SYNCL=0 SYNCL_ONLY='' RENDER='' NODAEMONS=0

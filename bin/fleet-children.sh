@@ -83,7 +83,7 @@ fi
 # One list-windows; window_name rides LAST (free text), `|` separators (tmux ≤3.4
 # prints a 0x1f separator as a literal `\037`).
 rows() {
-  local line wid rest ws st needs loop iss wt path repo norepo name key pre slug
+  local line wid rest ws st needs loop iss wt pth repo norepo name key pre slug
   fleet_lw '#{window_id}|#{session_name}|#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}|#{@claude_needs}|#{@loop}|#{@issue}|#{@worktree}|#{@repo}|#{@norepo}|#{@origin}|#{pane_current_path}|#{window_name}' TM |
   while IFS= read -r line; do
     wid=${line%%|*};  rest=${line#*|}
@@ -96,7 +96,7 @@ rows() {
     repo=${rest%%|*}; rest=${rest#*|}
     norepo=${rest%%|*}; rest=${rest#*|}
     origin=${rest%%|*}; rest=${rest#*|}
-    path=${rest%%|*}; name=${rest#*|}
+    pth=${rest%%|*}; name=${rest#*|}
     [ -n "$sess" ] && [ "$ws" != "$sess" ] && continue
     case "$name" in dash|plan|backlog|home) continue ;; esac
     pre=''
@@ -108,7 +108,7 @@ rows() {
     fi
     key=''
     case "$iss" in
-      ''|*[!0-9]*) key=$(fleet_scratch_key "$wt"); [ -n "$key" ] || key=$(fleet_scratch_key "$path")
+      ''|*[!0-9]*) key=$(fleet_scratch_key "$wt"); [ -n "$key" ] || key=$(fleet_scratch_key "$pth")
                    [ -n "$key" ] && key="$pre$key" ;;
       *) key="${pre}issue-$iss" ;;
     esac

@@ -166,11 +166,11 @@ incident() {   # $1=title $2=body → path on stdout
 # act <rule> <pid> <rssMB> <grewMB> <age> <class> <argv> <action>
 #   action: kill | report | record (record = log only, no notify)
 act() {
-  local rule="$1" pid="$2" rss="$3" grew="$4" age="$5" cls="$6" argv="$7" action="$8"
+  local rule="$1" pid="$2" rss="$3" grew="$4" age="$5" cls="$6" cmdline="$7" action="$8"
   local key short verdict="" pane="" inc gb
   # once per PROCESS: the pid plus its argv, so a reused pid is a new process
-  key="$pid:$(printf '%s' "$argv" | cksum | tr -c '0-9\n' '_')"
-  short="$(printf '%s' "$argv" | awk '{ print substr($0, 1, 100) }')"
+  key="$pid:$(printf '%s' "$cmdline" | cksum | tr -c '0-9\n' '_')"
+  short="$(printf '%s' "$cmdline" | awk '{ print substr($0, 1, 100) }')"
   gb="$(awk -v m="$rss" 'BEGIN{ printf "%.1f", m/1024 }')"
   if [ "$ONCE" = 1 ]; then
     printf '%s\t%s\t%s\t%sMB\t+%sMB\t%s\t%s\n' "$rule" "$([ "$DRY" = 1 ] && echo "would-$action" || echo "$action")" \
@@ -199,7 +199,7 @@ act() {
 action:  $verdict
 pid:     $pid (class $cls, up ${age}s)
 rss:     ${rss} MB (grew ${grew} MB in ${WINDOW}s)
-argv:    $argv
+argv:    $cmdline
 window:  ${pane:-none}")"
   [ "$action" = record ] && return 0
   notify "# ⚠ fleet memguard: $([ "$action" = kill ] && echo "stopped" || echo "flagged") pid $pid at ${gb} GB
@@ -327,19 +327,19 @@ tick() {
     PRIMED=1
   fi
 
-  local rule pid rss grew age cls argv lvl=''
-  while IFS="$TAB" read -r rule pid rss grew age cls argv; do
+  local rule pid rss grew age cls cmdline lvl=''
+  while IFS="$TAB" read -r rule pid rss grew age cls cmdline; do
     [ -n "$pid" ] || continue
     [ "$pid" = "$$" ] && continue
     if [ "$cls" = orphan ]; then orphan_ours "$pid" || continue; cls="orphan@fleet"; fi
-    if [ "$cls" = agent ]; then act "$rule" "$pid" "$rss" "$grew" "$age" "$cls" "$argv" record; continue; fi
-    if exempt "$argv"; then act "$rule-exempt" "$pid" "$rss" "$grew" "$age" "$cls" "$argv" record; continue; fi
+    if [ "$cls" = agent ]; then act "$rule" "$pid" "$rss" "$grew" "$age" "$cls" "$cmdline" record; continue; fi
+    if exempt "$cmdline"; then act "$rule-exempt" "$pid" "$rss" "$grew" "$age" "$cls" "$cmdline" record; continue; fi
     if [ "$rule" = spike ]; then
       [ -n "$lvl" ] || lvl="$(pressure)"
-      if [ "$lvl" -lt 2 ]; then act spike-relaxed "$pid" "$rss" "$grew" "$age" "$cls" "$argv" record; continue; fi
+      if [ "$lvl" -lt 2 ]; then act spike-relaxed "$pid" "$rss" "$grew" "$age" "$cls" "$cmdline" record; continue; fi
     fi
-    case "$SPIKE_ACTION" in kill) act "$rule" "$pid" "$rss" "$grew" "$age" "$cls" "$argv" kill ;;
-      *) act "$rule" "$pid" "$rss" "$grew" "$age" "$cls" "$argv" report ;; esac
+    case "$SPIKE_ACTION" in kill) act "$rule" "$pid" "$rss" "$grew" "$age" "$cls" "$cmdline" kill ;;
+      *) act "$rule" "$pid" "$rss" "$grew" "$age" "$cls" "$cmdline" report ;; esac
   done <<EOF
 $cands
 EOF
@@ -355,12 +355,12 @@ EOF
     LAST_ORPHAN=$t
 
     printf '%s\n' "$ROWS" | awk -F'\t' -v m="$ORPHAN_MB" -v s="$ORPHAN_SECS" \
-      '$5 == "orphan" && $3 > m && $4 > s' | while IFS="$TAB" read -r pid _ rss age cls argv; do
+      '$5 == "orphan" && $3 > m && $4 > s' | while IFS="$TAB" read -r pid _ rss age cls cmdline; do
       [ -n "$pid" ] || continue
       orphan_ours "$pid" || continue
-      exempt "$argv" && continue
-      case "$ORPHAN_ACTION" in kill) act orphan "$pid" "$rss" 0 "$age" "$cls" "$argv" kill ;;
-        *) act orphan "$pid" "$rss" 0 "$age" "$cls" "$argv" report ;; esac
+      exempt "$cmdline" && continue
+      case "$ORPHAN_ACTION" in kill) act orphan "$pid" "$rss" 0 "$age" "$cls" "$cmdline" kill ;;
+        *) act orphan "$pid" "$rss" 0 "$age" "$cls" "$cmdline" report ;; esac
     done
   fi
   return 0

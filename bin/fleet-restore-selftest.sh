@@ -99,8 +99,8 @@ fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 slug() { printf '%s' "$1" | sed 's/[/._]/-/g'; }
 # seed a newest transcript <id>.jsonl in a path's project dir.
 seed_transcript() {
-  local path="$1" id="$2" d
-  d="$HOME/.claude/projects/$(slug "$path")"
+  local pth="$1" id="$2" d
+  d="$HOME/.claude/projects/$(slug "$pth")"
   mkdir -p "$d"
   : > "$d/$id.jsonl"
 }

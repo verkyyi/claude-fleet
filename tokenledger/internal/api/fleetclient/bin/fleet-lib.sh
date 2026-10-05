@@ -3067,12 +3067,12 @@ fleet_listen_rows() {
 # listeners, with the anchor appended: … \t argv \t kind \t key. The doctor's list.
 fleet_listen_fleet_rows() {
   local re="$FLEET_LISTEN_EXEMPT_RE_DEFAULT${FLEET_LISTEN_EXEMPT_RE:+|$FLEET_LISTEN_EXEMPT_RE}"
-  local pid ppid age exp addrs cwd argv anc
-  fleet_listen_rows | while IFS="$(printf '\t')" read -r pid ppid age exp addrs cwd argv; do
+  local pid ppid age exp addrs cwd cmdline anc
+  fleet_listen_rows | while IFS="$(printf '\t')" read -r pid ppid age exp addrs cwd cmdline; do
     [ -n "$pid" ] || continue
-    printf '%s' "$argv" | grep -Eq "$re" && continue
+    printf '%s' "$cmdline" | grep -Eq "$re" && continue
     anc="$(fleet_listen_anchor "$cwd")"; [ -n "$anc" ] || continue
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$pid" "$ppid" "$age" "$exp" "$addrs" "$cwd" "$argv" "$anc"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$pid" "$ppid" "$age" "$exp" "$addrs" "$cwd" "$cmdline" "$anc"
   done
 }
 
@@ -3125,8 +3125,8 @@ fleet_orphan_listeners() {
         if (!owned && top!="") print p "\t" top } }')"
   [ -n "$tops" ] || return 0
   panes="$(_fleet_pane_cwd_keys)"
-  local pid ppid age exp addrs cwd argv kind key top tcwd live
-  printf '%s\n' "$rows" | while IFS="$(printf '\t')" read -r pid ppid age exp addrs cwd argv kind key; do
+  local pid ppid age exp addrs cwd cmdline kind key top tcwd live
+  printf '%s\n' "$rows" | while IFS="$(printf '\t')" read -r pid ppid age exp addrs cwd cmdline kind key; do
     top="$(printf '%s\n' "$tops" | awk -F'\t' -v p="$pid" '$1==p{print $2; exit}')"
     [ -n "$top" ] || continue
     if [ "$top" != "$pid" ]; then
@@ -3141,7 +3141,7 @@ fleet_orphan_listeners() {
                   $1=="M" && ($2==k || index($2, k "-")==1) {f=1} END{exit !f}' && live=1 ;;
     esac
     [ "$live" = 1 ] && continue
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$pid" "$ppid" "$age" "$exp" "$addrs" "$cwd" "$argv" "$kind" "$key" "$top"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$pid" "$ppid" "$age" "$exp" "$addrs" "$cwd" "$cmdline" "$kind" "$key" "$top"
   done
 }
 
@@ -3150,8 +3150,8 @@ fleet_orphan_listeners() {
 # dev` wrapper and its node child go together). Prints one line per candidate:
 # "reaped|would reap <pid> <exposure> <addrs> cwd=<cwd> age=<s>s top=<top>".
 fleet_reap_orphan_listeners() {
-  local mode="${1:-kill}" minage="${2:-0}" pid ppid age exp addrs cwd argv kind key top
-  fleet_orphan_listeners "$minage" | while IFS="$(printf '\t')" read -r pid ppid age exp addrs cwd argv kind key top; do
+  local mode="${1:-kill}" minage="${2:-0}" pid ppid age exp addrs cwd cmdline kind key top
+  fleet_orphan_listeners "$minage" | while IFS="$(printf '\t')" read -r pid ppid age exp addrs cwd cmdline kind key top; do
     [ -n "$pid" ] || continue
     [ "$top" -gt 1 ] 2>/dev/null || continue
     [ "$top" = "$$" ] && continue
@@ -3227,17 +3227,17 @@ fleet_orphan_trees() {
   cwds="$(lsof -w -a -p "$(printf '%s\n' "$tops" | cut -f1 | paste -sd, -)" -d cwd -Fpn 2>/dev/null \
     | awk '/^p/{p=substr($0,2)} /^n/{print p "\t" substr($0,2)}')"
   [ -n "$cwds" ] || return 0
-  local pid age argv cwd anc kind key rows="" panes="" live roots
+  local pid age cmdline cwd anc kind key rows="" panes="" live roots
   # A login carries hundreds of PPID=1 processes (every launchd agent), so the
   # cheap shape test runs once in awk and only its few survivors pay for
   # fleet_listen_anchor's exact verdict.
   roots="$(fleet_claude_tmp_roots | paste -sd' ' -)"
-  while IFS="$(printf '\t')" read -r pid age cwd argv; do
+  while IFS="$(printf '\t')" read -r pid age cwd cmdline; do
     [ -n "$pid" ] || continue
     anc="$(fleet_listen_anchor "$cwd")"
     kind="${anc%%	*}"; key="${anc#*	}"
     case "$kind" in worktree|session) ;; *) continue ;; esac
-    rows="$rows$pid	$age	$kind	$key	$cwd	$argv
+    rows="$rows$pid	$age	$kind	$key	$cwd	$cmdline
 "
   done <<EOT
 $({ printf '%s\n' "$cwds" | sed 's/^/C\t/'; printf '%s\n' "$tops" | sed 's/^/T\t/'; } \
@@ -3252,7 +3252,7 @@ $({ printf '%s\n' "$cwds" | sed 's/^/C\t/'; printf '%s\n' "$tops" | sed 's/^/T\t
 EOT
   [ -n "$rows" ] || return 0
   panes="$(_fleet_pane_cwd_keys)"
-  printf '%s' "$rows" | while IFS="$(printf '\t')" read -r pid age kind key cwd argv; do
+  printf '%s' "$rows" | while IFS="$(printf '\t')" read -r pid age kind key cwd cmdline; do
     [ -n "$pid" ] || continue
     live=0
     case "$kind" in
@@ -3263,7 +3263,7 @@ EOT
                   $1=="M" && ($2==k || index($2, k "-")==1) {f=1} END{exit !f}' && live=1 ;;
     esac
     [ "$live" = 1 ] && continue
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$pid" "$age" "$kind" "$key" "$cwd" "$argv"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$pid" "$age" "$kind" "$key" "$cwd" "$cmdline"
   done
 }
 
@@ -3271,13 +3271,13 @@ EOT
 # from its top (fleet_kill_tree: TERM, grace, KILL, re-enumerated). One line each:
 # "reaped|would reap <top> <kind> cwd=<cwd> age=<s>s argv=<argv>".
 fleet_reap_orphan_trees() {
-  local mode="${1:-kill}" grace="${2:-2}" top age kind key cwd argv verb=reaped
+  local mode="${1:-kill}" grace="${2:-2}" top age kind key cwd cmdline verb=reaped
   [ "$mode" = dry ] && verb='would reap'
-  fleet_orphan_trees | while IFS="$(printf '\t')" read -r top age kind key cwd argv; do
+  fleet_orphan_trees | while IFS="$(printf '\t')" read -r top age kind key cwd cmdline; do
     [ "$top" -gt 1 ] 2>/dev/null || continue
     [ "$top" = "$$" ] && continue
     [ "$mode" = dry ] || fleet_kill_tree "$top" "$grace" >/dev/null 2>&1
-    printf '%s %s %s cwd=%s age=%ss argv=%.160s\n' "$verb" "$top" "$kind" "$cwd" "$age" "$argv"
+    printf '%s %s %s cwd=%s age=%ss argv=%.160s\n' "$verb" "$top" "$kind" "$cwd" "$age" "$cmdline"
   done
 }
 
@@ -3982,11 +3982,11 @@ fleet_win_stamp_cmd() {
 # window. A one-repo fleet's keys are unchanged.
 fleet_origin_key() {
   [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] || return 0
-  local o iss owt path k pre
+  local o iss owt pth k pre
   o=$(tmux display-message -p -t "$TMUX_PANE" \
         '#{@issue}|#{@worktree}|#{pane_current_path}' 2>/dev/null)
   [ -n "$o" ] || return 0
-  iss=${o%%|*}; o=${o#*|}; owt=${o%%|*}; path=${o#*|}
+  iss=${o%%|*}; o=${o#*|}; owt=${o%%|*}; pth=${o#*|}
   pre=$(_fleet_key_prefix "$(fleet_current_session)" "$TMUX_PANE") || return 0
   case "$iss" in
     ''|*[!0-9]*) : ;;
@@ -4001,7 +4001,7 @@ fleet_origin_key() {
   # fleet_scratch_key is STRICT (…-scratch-<digits> only), so a plain window whose
   # cwd is the base checkout never keys as a scratch.
   k=$(fleet_scratch_key "$owt")
-  [ -z "$k" ] && k=$(fleet_scratch_key "$path")
+  [ -z "$k" ] && k=$(fleet_scratch_key "$pth")
   [ -n "$k" ] && printf '%s%s' "$pre" "$k"
   return 0
 }
@@ -4136,7 +4136,7 @@ _fleet_wfk_repo_ok() {
 #     for a window whose stamp said otherwise
 # A one-repo fleet with one window per key behaves byte for byte as before.
 fleet_win_for_key() {
-  local key="${1:-}" sock="${2:-}" wl line wid rest iss wt path cand bn sn pre='' wsess pool fleet hits='' n names
+  local key="${1:-}" sock="${2:-}" wl line wid rest iss wt pth cand bn sn pre='' wsess pool fleet hits='' n names
   # `<slug>:<key>` (issue #789): match the bare key, then require the window's repo.
   case "$key" in ?*:?*) pre=${key%%:*}; key=${key#*:} ;; esac
   case "$key" in
@@ -4167,7 +4167,7 @@ fleet_win_for_key() {
     wsess=${rest%%|*}; rest=${rest#*|}
     iss=${rest%%|*};  rest=${rest#*|}
     pool=${rest%%|*}; rest=${rest#*|}
-    wt=${rest%%|*};   path=${rest#*|}
+    wt=${rest%%|*};   pth=${rest#*|}
     [ "$pool" = 1 ] && continue                                   # ① a warm-pool window
     fleet_is_pool_session "$wsess" ${fleet:+"$fleet"} && continue  # ① parked in the pool session
     case "$key" in
@@ -4175,7 +4175,7 @@ fleet_win_for_key() {
         [ -n "$iss" ] && [ "issue-$iss" = "$key" ] && _fleet_wfk_repo_ok && hits="$hits$wid"$'\n'
         ;;
       scratch-*)
-        if [ -n "$wt" ]; then cand=$wt; else cand=$path; fi   # ② the stamp, else the cwd — not both
+        if [ -n "$wt" ]; then cand=$wt; else cand=$pth; fi   # ② the stamp, else the cwd — not both
         bn=${cand##*/}
         case "$bn" in
           scratch-*)   sn=${bn#scratch-} ;;
@@ -5470,16 +5470,16 @@ fleet_epoch_from_iso() {
 # the first git checkout among its windows, else the global FLEET_REPO. Prints
 # owner/name or empty. Collector-only (runs once per cycle).
 fleet_resolve_repo_for_session() {
-  local sess="$1" conf repo path
+  local sess="$1" conf repo pth
   conf=$(fleet_conf_file "$sess")
   if [ -f "$conf" ]; then
     repo=$( . "$conf" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )
     [ -n "$repo" ] && { fleet_norm_repo "$repo"; return; }
   fi
-  while IFS= read -r path; do
-    [ -z "$path" ] && continue
-    git -C "$path" rev-parse --git-dir >/dev/null 2>&1 || continue
-    repo=$(git -C "$path" remote get-url origin 2>/dev/null) || continue
+  while IFS= read -r pth; do
+    [ -z "$pth" ] && continue
+    git -C "$pth" rev-parse --git-dir >/dev/null 2>&1 || continue
+    repo=$(git -C "$pth" remote get-url origin 2>/dev/null) || continue
     repo=$(fleet_norm_repo "$repo")
     [ -n "$repo" ] && { printf '%s' "$repo"; return; }
     # -L "$sess": each fleet runs on its own named socket (== session name), so a
@@ -6450,19 +6450,19 @@ fleet_window_bg_busy() {
 # @origin carries; nothing when it has none. fleet_origin_key's rule, for any
 # window rather than only the caller's pane.
 fleet_window_okey() {
-  local sess="${1:-}" t="${2:-}" o iss owt path k pre
+  local sess="${1:-}" t="${2:-}" o iss owt pth k pre
   [ -n "$t" ] || return 0
   o=$(_fleet_tmux "$sess" display-message -p -t "$t" \
         '#{@issue}|#{@worktree}|#{pane_current_path}' 2>/dev/null)
   [ -n "$o" ] || return 0
-  iss=${o%%|*}; o=${o#*|}; owt=${o%%|*}; path=${o#*|}
+  iss=${o%%|*}; o=${o#*|}; owt=${o%%|*}; pth=${o#*|}
   pre=$(_fleet_key_prefix "$sess" "$t") || return 0
   case "$iss" in
     ''|*[!0-9]*) : ;;
     *) printf '%sissue-%s' "$pre" "$iss"; return 0 ;;
   esac
   k=$(fleet_scratch_key "$owt")
-  [ -z "$k" ] && k=$(fleet_scratch_key "$path")
+  [ -z "$k" ] && k=$(fleet_scratch_key "$pth")
   [ -n "$k" ] && printf '%s%s' "$pre" "$k"
   return 0
 }
@@ -6476,7 +6476,7 @@ fleet_window_okey() {
 # count — it is "done" by leaving, as on the dash. One list-windows when <win> has
 # no live direct child — the common case on every Stop.
 fleet_window_waiting_children() {
-  local sess="${1:-}" t="${2:-}" key all line ws wid st loop iss wt repo norepo origin path name
+  local sess="${1:-}" t="${2:-}" key all line ws wid st loop iss wt repo norepo origin pth name
   local tab='' pre slug k tot=0 dn=0 bin direct=0
   [ -n "$t" ] || return 1
   [ -n "$sess" ] || sess=$(fleet_current_session)
@@ -6510,7 +6510,7 @@ EOF
     loop=${line%%|*}; line=${line#*|}; iss=${line%%|*}; line=${line#*|}
     wt=${line%%|*}; line=${line#*|}; repo=${line%%|*}; line=${line#*|}
     norepo=${line%%|*}; line=${line#*|}; origin=${line%%|*}; line=${line#*|}
-    path=${line%%|*}; name=${line#*|}
+    pth=${line%%|*}; name=${line#*|}
     [ "$wid" = "$t" ] && continue
     case "$name" in dash|plan|backlog|home) continue ;; esac
     case "$origin" in issue-*|scratch-*|*:issue-*|*:scratch-*) ;; *) continue ;; esac
@@ -6521,7 +6521,7 @@ EOF
       pre="${slug:-?}:"
     fi
     case "$iss" in
-      ''|*[!0-9]*) k=$(fleet_scratch_key "$wt"); [ -n "$k" ] || k=$(fleet_scratch_key "$path")
+      ''|*[!0-9]*) k=$(fleet_scratch_key "$wt"); [ -n "$k" ] || k=$(fleet_scratch_key "$pth")
                    [ -n "$k" ] && k="$pre$k" ;;
       *) k="${pre}issue-$iss" ;;
     esac

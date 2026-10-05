@@ -23,10 +23,13 @@
 # shell would be a second code path in the render loop (EPIC #1479 「两套行生成
 # 器漂移」). What a fleet NODE needs — spawning, reaping, the daemons, gh — stays
 # out: the shell's rows are all remote, their actions all hub writes.
+# bin/fleet-client-lib.sh rides along for the installer itself (#1629): its
+# tmux step sources the lib's fc_tmux_ok / fc_pkg_install once downloaded.
 bin/fleet-install.sh  installer
 bin/fleet
 bin/fleet-login.py
 bin/fleet-connect.py
+bin/fleet-client-lib.sh
 bin/fleet-shell.sh
 bin/fleet-remote-view.sh
 bin/fleet-hub-sessions.sh

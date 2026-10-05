@@ -28,6 +28,14 @@
 #                 install root's own bin/ and conf/; with no tmux, `fleet` prints
 #                 the one install hint and goes to fleet-connect.py (the direct
 #                 way), starting no server
+#   F. tmux       the install's tmux step (issue #1629), on a PATH holding only
+#                 what the installer needs plus fakes: macOS + brew + no tmux →
+#                 `brew install tmux` once, then ok; no brew → the brew.sh hint,
+#                 nothing called, still exit 0; tmux 3.4 → nothing called;
+#                 tmux 3.1 counts as none; Linux + apt-get + passwordless sudo →
+#                 `apt-get install tmux` once; no root / sudo → the hint only;
+#                 --no-deps → skipped. fleet-node-join.sh's copy of fc_tmux_ok is
+#                 byte-identical to fleet-client-lib.sh's
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-install-selftest.XXXXXX") || exit 2
@@ -103,7 +111,7 @@ sed "s|__FLEET_HUB_URL__|$HUB|g" "$BIN/fleet-install.sh" > "$WORK/install.sh"
 grep -q "$HUB" "$WORK/install.sh" || { bad "placeholder __FLEET_HUB_URL__ missing from fleet-install.sh"; }
 
 export HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/home/.config" SHELL=/bin/zsh
-export FLEET_INSTALL_NO_RUN=1
+export FLEET_INSTALL_NO_RUN=1 FLEET_INSTALL_NO_DEPS=1   # leg F drives the tmux step
 unset FLEET_CONF_DIR FLEET_HUB_URL FLEET_INSTALL_BIN FLEET_INSTALL_HOME FLEET_INSTALL_RC XDG_DATA_HOME XDG_CACHE_HOME
 ROOT="$HOME/.local/share/claude-fleet"
 mkdir -p "$HOME/.config/claude-fleet" "$ROOT/bin" "$HOME/.local/bin"
@@ -217,6 +225,65 @@ echo "$out" | grep -q 'brew install tmux' && ok "E no tmux: the one install hint
 [ "$(printf '%s\n' "$out" | grep -c 'install tmux')" = 1 ] && ok "E the hint is ONE line" || bad "E hint lines: $out"
 [ -s "$WORK/tmux.log" ] && bad "E no tmux: a server was asked for anyway: $(cat "$WORK/tmux.log")" || ok "E no tmux: no server started"
 [ "$rc" != 0 ] && ok "E no tmux: went to fleet-connect.py, which the fake hub refused (rc=$rc)" || bad "E no tmux: connect exited 0 against a hub that issues nothing"
+
+# ── F — the tmux step ───────────────────────────────────────────────────────
+fnbody() { awk '/^fc_tmux_ok\(\) \{/{p=1} p{print} p&&/^}/{exit}' "$1"; }
+lib_fn=$(fnbody "$BIN/fleet-client-lib.sh")
+[ -n "$lib_fn" ] && [ "$lib_fn" = "$(fnbody "$BIN/fleet-node-join.sh")" ] \
+  && ok "F fleet-node-join.sh's fc_tmux_ok is fleet-client-lib.sh's, byte for byte" || bad "F fc_tmux_ok copies differ"
+F="$WORK/f"; FARM="$F/farm"; mkdir -p "$FARM"
+for t in sh bash curl python3 ssh ssh-keygen uname tr awk sed mkdir mktemp rm mv chmod dirname basename head tail cat grep od id env pwd cmp true; do
+  p=$(type -P "$t") && ln -sf "$p" "$FARM/$t"   # a path, not a builtin
+done
+# fakes: brew (logs, `install tmux` puts a tmux 3.5a in its own bin, which its
+# shellenv puts on PATH), apt-get (logs; install drops tmux into $F/sys), sudo
+# (runs the command), and a pre-installed tmux of a given version
+mkfake() {  # <dir> <name> <body>
+  mkdir -p "$1"; printf '#!/bin/sh\n%s\n' "$3" > "$1/$2"; chmod +x "$1/$2"
+}
+mktmux() { mkfake "$1" tmux "case \"\$1\" in -V) echo 'tmux $2' ;; esac"; }
+mkfake "$F/brew" brew "case \"\$1\" in
+  shellenv) echo 'export PATH=\"$F/brewbin:\$PATH\"' ;;
+  install) echo \"\$*\" >> '$F/brew.log'; mkdir -p '$F/brewbin'; printf '#!/bin/sh\\necho \"tmux 3.5a\"\\n' > '$F/brewbin/tmux'; chmod +x '$F/brewbin/tmux' ;;
+esac"
+mkfake "$F/apt" apt-get "echo \"\$*\" >> '$F/apt.log'
+case \" \$* \" in *' install '*) mkdir -p '$F/sys'; printf '#!/bin/sh\\necho \"tmux 3.4\"\\n' > '$F/sys/tmux'; chmod +x '$F/sys/tmux' ;; esac"
+mkfake "$F/sudo" sudo 'case "$1" in -n) shift ;; esac; exec "$@"'
+frun() {  # <extra PATH dirs> <env…> — one install with the tmux step on; output in $out, rc in $rc
+  local dirs="$1"; shift
+  rm -rf "$F/brewbin" "$F/sys"; : > "$F/brew.log"; : > "$F/apt.log"
+  out=$(env PATH="$dirs:$F/sys:$FARM" FLEET_INSTALL_NO_DEPS= FC_BREW_DIRS= "$@" sh < "$WORK/install.sh" 2>&1); rc=$?
+}
+frun "$F/brew" FC_OS=darwin
+[ "$rc" = 0 ] && [ "$(grep -c '^install tmux$' "$F/brew.log")" = 1 ] && echo "$out" | grep -q '^tmux: ok 3.5a' \
+  && ok "F macOS + brew, no tmux → brew install tmux once, then ok" || bad "F brew: rc=$rc log=$(cat "$F/brew.log") out=$out"
+mkdir -p "$F/nobrew"
+frun "$F/nobrew" FC_OS=darwin
+[ "$rc" = 0 ] && [ ! -s "$F/brew.log" ] && echo "$out" | grep '^tmux: ' | grep -q 'brew.sh' && echo "$out" | grep '^tmux: ' | grep -q '直连' \
+  && ok "F macOS, no brew → one hint (brew.sh, direct way for now), nothing called, exit 0" || bad "F no brew: rc=$rc out=$out"
+mktmux "$F/t34" 3.4
+frun "$F/t34:$F/brew" FC_OS=darwin
+[ "$rc" = 0 ] && [ ! -s "$F/brew.log" ] && echo "$out" | grep -q '^tmux: 3.4 已就绪' \
+  && ok "F tmux 3.4 present → nothing installed" || bad "F tmux 3.4: rc=$rc log=$(cat "$F/brew.log") out=$out"
+mktmux "$F/t31" 3.1
+frun "$F/t31:$F/brew" FC_OS=darwin
+[ "$rc" = 0 ] && [ "$(grep -c '^install tmux$' "$F/brew.log")" = 1 ] && echo "$out" | grep -q '3.1 低于 3.2' \
+  && ok "F tmux 3.1 counts as none → brew install tmux" || bad "F tmux 3.1: rc=$rc log=$(cat "$F/brew.log") out=$out"
+frun "$F/apt" FC_OS=linux FLEET_INSTALL_SUDO="$F/sudo/sudo -n"
+[ "$rc" = 0 ] && [ "$(grep -c 'install -y -qq tmux' "$F/apt.log")" = 1 ] && echo "$out" | grep -q '^tmux: ok 3.4' \
+  && ok "F Linux + apt-get + passwordless sudo → apt-get install tmux once, then ok" || bad "F apt: rc=$rc log=$(cat "$F/apt.log") out=$out"
+if [ "$(id -u)" != 0 ]; then
+  frun "$F/apt" FC_OS=linux FLEET_INSTALL_SUDO=
+  [ "$rc" = 0 ] && [ ! -s "$F/apt.log" ] && echo "$out" | grep '^tmux: ' | grep -q 'apt-get install -y tmux' \
+    && ok "F Linux, no root / sudo → the command to run, apt-get never called" || bad "F no sudo: rc=$rc log=$(cat "$F/apt.log") out=$out"
+fi
+frun "$F/brew" FC_OS=darwin FLEET_INSTALL_NO_DEPS=1
+[ "$rc" = 0 ] && [ ! -s "$F/brew.log" ] && echo "$out" | grep -q '^tmux: skipped' \
+  && ok "F FLEET_INSTALL_NO_DEPS=1 → skipped" || bad "F no-deps env: rc=$rc out=$out"
+rm -rf "$F/brewbin"; : > "$F/brew.log"
+out=$(env PATH="$F/brew:$FARM" FC_OS=darwin FC_BREW_DIRS= sh -s -- --no-deps < "$WORK/install.sh" 2>&1); rc=$?
+[ "$rc" = 0 ] && [ ! -s "$F/brew.log" ] && echo "$out" | grep -q '^tmux: skipped (--no-deps)' \
+  && ok "F sh -s -- --no-deps → skipped" || bad "F --no-deps: rc=$rc out=$out"
 
 [ "$fail" = 0 ] && echo "PASS fleet-install-selftest" || echo "FAIL fleet-install-selftest"
 exit "$fail"
