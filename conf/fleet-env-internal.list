@@ -194,6 +194,8 @@ FLEET_QUOTAWATCH_PROBE_BUDGET      knob: internal pacing/limit, safe in-code def
 FLEET_QUOTAWATCH_SWEEP_BUDGET      knob: internal pacing/limit, safe in-code default (fleet-quotawatch.sh)
 FLEET_QUOTAWATCH_TICK_BUDGET       knob: internal pacing/limit, safe in-code default (fleet-quotawatch.sh)
 FLEET_QUOTAWATCH_TMUX_BUDGET       knob: internal pacing/limit, safe in-code default (fleet-quotawatch.sh)
+FLEET_REAP_HUB_WAIT                knob: seconds dash-reap.sh waits on a remote reap via the hub (90; #1589)
+FLEET_REAP_LOCAL                   handoff: the node adapter tells dash-reap.sh never to ask the hub (#1589)
 FLEET_REAP_MIN_AGE                 knob: internal pacing/limit, safe in-code default (dash-reap.sh)
 FLEET_REFOCUS_SOURCE               seam: the SessionStart source refocus-hook.sh acts on, instead of stdin
 FLEET_REFUSE_MS                    knob: internal pacing/limit, safe in-code default (dash-issue-session.sh)
