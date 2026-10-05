@@ -25,8 +25,17 @@ S=$(fleet_current_session); fleet_load_conf "$S"
 REPO=$(fleet_target_repo "$S" "<the --repo value, or empty>"); RC=$?   # issue #803
 [ "$RC" = 0 ] && fleet_multirepo "$S" && fleet_load_repo_conf "$S" "$REPO"   # → that repo's FLEET_REPO / FLEET_MAIN / FLEET_BASE_BRANCH / deploy
 SEAT=$(fleet_seat)
-echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master} seat=${SEAT:-unknown} rc=$RC"
+PKEY=$(fleet_epic_parent_key "$S" "${FLEET_REPO:-}" <EPIC>)   # issue #1110: this loop's ledger key
+echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master} seat=${SEAT:-unknown} rc=$RC pkey=${PKEY:-}"
 ```
+
+- **`pkey=` is the key this loop's children ledger is kept under** (issue #1110)
+  — this pane's own key in a scratch, else the EPIC's (`[<slug>:]issue-<EPIC>`):
+  a hub pane has none, and a loop driven from one (or picked up there after a
+  handoff) used to spawn every member with an empty `@origin`, so no report was
+  ledgered and `fleet-children.sh` answered `no parent key` for the whole batch.
+  Use the value it printed — literally — as `<PKEY>` below: every spawn passes it
+  as `--origin`, every ledger read and backstop names it.
 
 - **`RC=4` — several repos, none current** (the dash is on `all`): list them
   (`fleet_repos "$S"`) and ASK which one in an `AskUserQuestion` menu — never
@@ -71,12 +80,12 @@ that dies at the boundary. Therefore:
   sub-issue list and their states, and the repo's open PRs. Never carry a plan
   from the previous tick.
 - **Member state is ONE read: the children ledger** (issue #937/#940). Every
-  worker this loop spawns carries this pane's key as its `@origin`, and every
+  worker this loop spawns carries `<PKEY>` as its `@origin`, and every
   report it sends is written to this loop's ledger — so the per-member picture is
   one command, not a `gh pr list` plus a `capture-pane` per member:
 
   ```sh
-  bash ~/.claude/fleet/bin/fleet-children.sh --json   # {summary, children[{child, bucket, state, pr, pr_state, last, …}]}
+  bash ~/.claude/fleet/bin/fleet-children.sh "<PKEY>" --json   # {summary, children[{child, bucket, state, pr, pr_state, last, …}]}
   ```
 
   It merges the ledger with each child's live window state and the dash's PR
@@ -136,7 +145,7 @@ bash ~/.claude/fleet/bin/fleet-pr-verdict.sh <PR> --repo "$FLEET_REPO" -q
 - `READY` → first ask whether the worker still owns it (issue #921):
 
   ```sh
-  bash ~/.claude/fleet/bin/fleet-epic-backstop.sh <child-key> --pr <PR>
+  bash ~/.claude/fleet/bin/fleet-epic-backstop.sh <child-key> --pr <PR> --parent "<PKEY>"
   ```
 
   `READY` is CI green + mergeable — it says nothing about the member's own
@@ -145,9 +154,14 @@ bash ~/.claude/fleet/bin/fleet-pr-verdict.sh <PR> --repo "$FLEET_REPO" -q
   acceptance run. Exit `1` prints `backstop skipped: child busy (<child> <why>)`
   — the worker is mid-turn (`working` / `looping` / `waking`) or its turn ended
   with a background job still running (`fleet_child_busy` → `bg`): **don't
-  merge**, copy that line into this tick's comment, next tick. Exit `0`
-  (`clear: …` — idle / done, window gone, or its own MERGED ship report is in
-  the ledger) → merge it, **one command, never chained**:
+  merge**, copy that line into this tick's comment, next tick. A member the
+  ledger has no live window for is looked up before it is called gone (issue
+  #1110): this fleet's windows by key, then — hub on — the hub's session table
+  by (repo, issue), so one running on another machine reads `… hub: working on
+  m5` and holds; a hub that has not answered for 10 minutes holds too (`cannot
+  rule out a session elsewhere`) — a failed lookup is never "idle". Exit `0`
+  (`clear: …` — idle / done, no window here and none on the hub (`hub says
+  gone`), or its own MERGED ship report is in the ledger) → merge it, **one command, never chained**:
   `~/.claude/fleet/bin/fleet-pr-merge.sh <PR> --repo "$FLEET_REPO" --squash` (re-reads the gate,
   merges with the branch deleted, confirms `MERGED`; under a GraphQL rate limit it merges over
   REST instead of failing, issue #1042). A chained `push --delete` once
@@ -215,7 +229,7 @@ bash -c 'source ~/.claude/fleet/bin/fleet-lib.sh; fleet_machine_admit' || echo '
 ```
 
 ```sh
-bash ~/.claude/fleet/bin/dash-issue-session.sh <N> --repo "$FLEET_REPO" --title "<the issue's own title>"
+bash ~/.claude/fleet/bin/dash-issue-session.sh <N> --repo "$FLEET_REPO" --origin "<PKEY>" --title "<the issue's own title>"
 ```
 
 `--repo` is not optional: a fleet hosting 2+ repos refuses a spawn without it

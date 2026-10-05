@@ -3990,6 +3990,24 @@ fleet_origin_key() {
   return 0
 }
 
+# fleet_epic_parent_key <sess> <repo> <epic> → the key an EPIC loop's ledger is
+# kept under (issue #1110): this pane's own key (fleet_origin_key) when it has
+# one — a scratch, or a worker — else the EPIC's, `[<slug>:]issue-<epic>`. A hub
+# pane has no key, and a loop run there (or picked up there after a handoff) used
+# to spawn every member with an empty @origin: no child reported anywhere, and
+# `fleet-children.sh` answered `no parent key` for the whole batch. The loop
+# passes the key it gets here as `--origin` on every spawn and names it to
+# fleet-children.sh / fleet-epic-backstop.sh, so the book is the same on every
+# tick whichever pane drives it. No window answers to the EPIC's key, so a report
+# is ledgered (never relayed) — the loop reads the ledger each tick anyway.
+fleet_epic_parent_key() {
+  local k n="${3:-}"
+  k=$(fleet_origin_key)
+  [ -n "$k" ] && { printf '%s' "$k"; return 0; }
+  case "$n" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%sissue-%s' "$(fleet_okey_prefix "${1:-}" "${2:-}")" "$n"
+}
+
 # fleet_origin_canon <explicit> <detected> [<target-sess>] [<src-sess>] — the ONE
 # provenance decision both spawners make (dash-issue-session.sh, dash-raw-session.sh);
 # prints the value to stamp into @origin (empty ≡ hub).

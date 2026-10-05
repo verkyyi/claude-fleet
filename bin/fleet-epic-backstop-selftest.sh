@@ -5,7 +5,10 @@
 # still owns a Bash-tool job (fleet_child_busy → bg) is SKIPPED with the literal
 # tick-log line `backstop skipped: child busy`; an idle, gone, or ship-reported
 # worker is CLEAR. `pr-open` / `pr-unknown` never hold a merge (the PR is open by
-# construction). Pure: `--children-json` fixtures + the busy-cmd seam, no tmux, no gh.
+# construction). Issue #1110: a member the ledger has no live window for is looked
+# up — this fleet's windows (seam), then the hub's session table by (repo, issue) —
+# and a lookup that cannot answer holds the merge. Pure: `--children-json`
+# fixtures, the busy/find seams and a hand-written global/remote_<sess>; no tmux, no gh.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 GATE="$BIN/fleet-epic-backstop.sh"
@@ -37,6 +40,10 @@ case "$2" in @4) echo bg ;; @8) echo pr-open ;; *) exit 1 ;; esac
 SH
 chmod +x "$WORK/busy"
 export FLEET_EPIC_BACKSTOP_BUSY_CMD="$WORK/busy"
+# No window answers unless a case says so (#1110's local lookup), and nothing here
+# reads a live tmux server or conf.
+export FLEET_EPIC_BACKSTOP_FIND_CMD=false FLEET_CONF_DIR="$WORK/conf" TMPDIR="$WORK/tmp"
+mkdir -p "$WORK/conf" "$WORK/tmp"
 
 run() { out=$(bash "$GATE" --children-json "$J" "$@" 2>&1); rc=$?; }
 
@@ -54,5 +61,60 @@ out=$(bash "$GATE" 2>&1); eq "no child key → usage" 2 "$?"
 out=$(bash "$GATE" --bogus issue-1 2>&1); eq "unknown flag → usage" 2 "$?"
 printf 'not json' > "$WORK/bad.json"
 out=$(bash "$GATE" --children-json "$WORK/bad.json" issue-1 2>&1); eq "unreadable ledger read → clear (the pre-#921 behaviour)" 0 "$?"
+
+
+# --- issue #1110: find before calling it gone -----------------------------------
+# The local lookup (seam): a member missing from the ledger — a keyless hub loop
+# spawned it, or a handoff lost the book — but alive in this fleet is READ, not
+# assumed gone; two windows answering is a refusal, never a pick.
+cat > "$WORK/find" <<'SH'
+#!/bin/sh
+case "$1" in issue-90) echo '@90|working' ;; issue-91) echo '@91|idle' ;; issue-92) exit 2 ;; *) exit 1 ;; esac
+SH
+chmod +x "$WORK/find"
+export FLEET_EPIC_BACKSTOP_FIND_CMD="$WORK/find"
+run issue-90; eq "#1110 not in the ledger but a live working window here → skip" 'backstop skipped: child busy (issue-90 working)' "$out"
+run issue-91; eq "#1110 …an idle one → clear (and the bg seam was asked)" 'clear: issue-91 idle' "$out"
+run issue-92; eq "#1110 ambiguous key → skip, never a pick" 1 "$rc"
+run issue-99; eq "#1110 hub off, no window → the one-machine answer, byte for byte" 'clear: issue-99 no live window' "$out"
+
+# The hub's session table (global/remote_<sess>, fleet-hub-sessions.sh's rows):
+# a member on ANOTHER machine is found by (repo, issue).
+G="$WORK/tmp/.claude-dash/global"; mkdir -p "$G"
+now=$(date +%s); US=$(printf '\037')
+hubrow() {  # <issue> <state> <node> [local]
+  printf 'wid:u/issue-%s%s%s%sonline%s%s%sverkyyi/x%s%s%sclaude%sname%s%s%s%s%s%s%s%shub\n' \
+    "$1" "$US" "$3" "$US" "$US" "$1" "$US" "$US" "$2" "$US" "$US" "$US" "$US" "$US" "$US" "${4:-0}" "$US" "$US" "$US"
+}
+{ printf '#ts%s%s\n#me%sm5\n' "$US" "$now" "$US"
+  hubrow 99 working m4; hubrow 98 'done' m4; hubrow 96 looping m4; hubrow 95 idle m4; hubrow 95 working m6
+} > "$G/remote_s"
+printf '%s\n' "$now" > "$G/hub_ok"
+cat > "$WORK/remote.json" <<'JSON'
+{"parent":"scratch-9","session":"s","seq":1,"summary":{},"children":[
+ {"child":"issue-96","bucket":"▸","live":true,"window":"m4","state":"remote","pr":"96","last":null},
+ {"child":"issue-94","bucket":"▸","live":true,"window":"m4","state":"remote","pr":"94","last":null}
+]}
+JSON
+hrun() { out=$(CCQUOTA_FLEET=1 bash "$GATE" -L s --children-json "${J2:-$J}" "$@" 2>&1); rc=$?; }
+hrun issue-99; eq "#1110 working on another machine → skip (rc)" 1 "$rc"
+eq "#1110 …says where" 'backstop skipped: child busy (issue-99 hub: working on m4)' "$out"
+hrun issue-98; eq "#1110 done on another machine → clear" 'clear: issue-98 hub: done on m4' "$out"
+hrun issue-97; eq "#1110 no hub row → clear, and says so" 'clear: issue-97 no live window (hub says gone)' "$out"
+hrun issue-95; eq "#1110 a busy row beats an idle twin" 'backstop skipped: child busy (issue-95 hub: working on m6)' "$out"
+hrun issue-90; eq "#1110 a window here still answers first" 'backstop skipped: child busy (issue-90 working)' "$out"
+J2="$WORK/remote.json" hrun issue-96; eq "#1110 a ledger child live on another machine asks the hub" 'backstop skipped: child busy (issue-96 hub: looping on m4)' "$out"
+J2="$WORK/remote.json" hrun issue-94; eq "#1110 …and is clear only when the hub says gone" 'clear: issue-94 no live window (hub says gone)' "$out"
+printf '%s\n' "$((now - 1000))" > "$G/hub_ok"
+hrun issue-97; eq "#1110 a hub silent past FLEET_HUB_RETAIN_SECS → skip, never idle (rc)" 1 "$rc"
+case "$out" in *'cannot rule out a session elsewhere: hub silent'*) CHECKS=$((CHECKS + 1)) ;; *) fail "#1110 stale hub says why" "$out" ;; esac
+rm -f "$G/remote_s" "$G/hub_ok"
+hrun issue-97; eq "#1110 hub on but no session cache → skip" 'backstop skipped: child busy (issue-97 cannot rule out a session elsewhere: no hub session cache)' "$out"
+
+# fleet_epic_parent_key: a keyless (hub) pane keeps its ledger under the EPIC's key.
+pk=$(TMUX='' bash -c '. "$1/fleet-lib.sh" >/dev/null 2>&1; fleet_epic_parent_key s verkyyi/x 1585' _ "$BIN")
+eq "#1110 a pane with no key → the EPIC's key" 'issue-1585' "$pk"
+TMUX='' bash -c '. "$1/fleet-lib.sh" >/dev/null 2>&1; fleet_epic_parent_key s verkyyi/x nope' _ "$BIN" >/dev/null
+eq "#1110 …and no EPIC number → rc 1, nothing invented" 1 "$?"
 
 printf 'fleet-epic-backstop selftest: OK (%d checks)\n' "$CHECKS"
