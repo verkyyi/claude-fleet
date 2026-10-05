@@ -40,7 +40,7 @@
 #   sent:proxy       handed to the proxy window the operator is viewing this
 #                    session through, from another machine (#1424)  exit 0
 #   sent:tunnel      open-url.sh's reverse-tunnel opener took it   exit 0
-#   fallback:popup   shown in a popup + copied to their clipboard  exit 0
+#   fallback:copied  copied to their clipboard + one line saying so exit 0
 #   fallback:path    a file fleet-show could not send (PATH line above) exit 2
 # exit 1 = usage / an address it cannot parse.
 #
@@ -137,7 +137,7 @@ fallback() {  # <why> — open-url.sh: the 2226 tunnel, else a popup + OSC 52
       "$fallback_url" "$rport" "$rport" >&2 ;;
   esac
   res=$(OPEN_URL_REPORT=1 sh "${FLEET_OPEN_URL_BIN:-$BIN/open-url.sh}" "$fallback_url" 2>/dev/null | tail -n 1)
-  case "$res" in sent:tunnel|fallback:popup) ;; *) res=fallback:popup ;; esac
+  case "$res" in sent:tunnel|fallback:copied) ;; *) res=fallback:copied ;; esac
   record "$res" "$kind"
   echo "$res"
   exit 0

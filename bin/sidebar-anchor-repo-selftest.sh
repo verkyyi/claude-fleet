@@ -6,20 +6,21 @@
 #      window, and the sidebar's Enter / ⌃n spawn exactly as before (no --repo,
 #      no CF_REPO).
 #   B. 2-repo fleet viewing `all`: a row in repo B (@repo, or @worktree derived)
-#      → the scratch gets `--repo o/b` and ⌃n's popup `CF_REPO=o/b`; a @norepo
-#      row → `--no-repo` ($HOME, issue #997), ⌃n still asks; the hub, an unknown
-#      window → today's behavior (nothing passed).
+#      → the scratch gets `--repo o/b` and ⌃n's title `CF_REPO=o/b`; a @norepo
+#      row → `--no-repo` ($HOME, issue #997), and ⌃n's title line offers the
+#      repos on Tab (issue #1620: it was a popup asking), the first by default;
+#      an unknown window → nothing anchored, the same Tab choice.
 #   C. a stale current-repo file (the retired picker's, #1034) changes no anchor.
 #   T. Heading taps (issue #1032), over the REAL sidebar rows: in a one-repo
 #      fleet no row is a heading key, so every tap is today's jump/menu and the
 #      input line keeps its plain hint (byte for byte). Under `all`, a repo
-#      heading's 1st tap selects it (no switch), the 2nd opens ⌃n with CF_REPO
-#      pinned; the line names the target; `no repo` selects (⌃n asks); the `?`
-#      heading stays inert.
+#      heading's 1st tap selects it (no switch), the 2nd asks ⌃n's title with
+#      the repo pinned; the line names the target; `no repo` selects (⌃n offers
+#      the repos on Tab); the `?` heading stays inert.
 #
 # The sidebar half imports fleet-sidebar.py and runs its real selection_repo /
-# spawn_scratch / new_task against a shadow bin/ whose dash-raw-session.sh and
-# dash-popup.sh only record their argv. Every tmux call goes to a private socket
+# spawn_scratch / ask_new + submit against a shadow bin/ whose
+# dash-raw-session.sh and dash-issue-new.sh only record what they were handed. Every tmux call goes to a private socket
 # via a PATH shim (never the live server); `gh` is shimmed to fail.
 set -uo pipefail
 
@@ -60,10 +61,10 @@ eq()   { [ "$2" = "$3" ] || fail "$1: expected [$3], got [$2]"; }
 # The shadow bin/: every script the real one, but the two spawn entry points
 # only record what they were handed.
 for f in "$BIN"/*; do ln -s "$f" "$WORK/shadow/${f##*/}"; done
-for f in dash-raw-session.sh dash-popup.sh; do
-  rm -f "$WORK/shadow/$f"
-  printf '#!/bin/bash\nprintf "%%s\\n" "$*" > "%s/%s.argv"\n' "$WORK" "$f" > "$WORK/shadow/$f"
-done
+rm -f "$WORK/shadow/dash-raw-session.sh" "$WORK/shadow/dash-issue-new.sh"
+printf '#!/bin/bash\nprintf "%%s\\n" "$*" > "%s/dash-raw-session.sh.argv"\n' "$WORK" > "$WORK/shadow/dash-raw-session.sh"
+# the title's file is a fresh mktemp path: recorded as the repo it goes to + the mode
+printf '#!/bin/bash\nprintf "CF_REPO=%%s %%s %%s\\n" "${CF_REPO-unset}" "$1" "$2" > "%s/dash-issue-new.sh.argv"\n' "$WORK" > "$WORK/shadow/dash-issue-new.sh"
 
 mkrepo() { git init -q "$1" && git -C "$1" remote add origin "https://github.com/$2.git"; }
 mkrepo "$WORK/mainA" o/a
@@ -87,8 +88,9 @@ tmux set-option -w -t "$S:wNO" @norepo 1
 wid() { tmux display-message -p -t "$S:$1" '#{window_id}'; }
 pane() { tmux display-message -p -t "$S:$1" '#{pane_id}'; }
 
-# sidebar <window> → "<scratch argv>|<⌃n popup argv>" as the sidebar in that
-# window's pane would spawn them, the anchor row being that window.
+# sidebar <window> → "<scratch argv>|<⌃n's create, Tab choices>" as the sidebar
+# in that window's pane would spawn them (⌃n: a title typed and ↵), the anchor
+# row being that window.
 sidebar() {
   rm -f "$WORK"/*.argv
   TMUX="$SOCK,1,0" TMUX_PANE=$(pane "$1") FLEET_SESSION="$S" \
@@ -105,11 +107,14 @@ mod.curses = Stub()
 env = dict(os.environ)
 repo = mod.selection_repo(sys.argv[3], sys.argv[4], env)
 mod.spawn_scratch("n", env, repo).wait()
-mod.new_task(Stub(), env, repo)
+ask = mod.ask_new(sys.argv[3], env, repo)
+mod.submit(ask, "t", sys.argv[3], env).wait()
+open(os.environ["CHOICES"], "w").write(str(len(ask.choices)))
 PY
-  printf '%s|%s' "$(cat "$WORK/dash-raw-session.sh.argv" 2>/dev/null)" \
-                 "$(cat "$WORK/dash-popup.sh.argv" 2>/dev/null)"
+  printf '%s|%s %s' "$(cat "$WORK/dash-raw-session.sh.argv" 2>/dev/null)" \
+                    "$(cat "$WORK/dash-issue-new.sh.argv" 2>/dev/null)" "$(cat "$CHOICES" 2>/dev/null)"
 }
+CHOICES="$WORK/choices"; export CHOICES
 # taps <anchor window> → one line per sidebar row as that window's view reads
 # it: `<key> <1st tap> <2nd tap> <input hint>` (a bare heading prints `hdr`).
 taps() {
@@ -129,7 +134,8 @@ for line in out.split("\n"):
     print(key, mod.tap(key, sys.argv[2]), mod.tap(key, key), mod.placeholder(key))
 PY
 }
-# tapnew <window> <heading key> → the popup argv a 2nd tap on that heading opens.
+# tapnew <window> <heading key> → the repo + Tab choices of the title a 2nd tap
+# on that heading asks.
 tapnew() {
   rm -f "$WORK"/*.argv
   TMUX="$SOCK,1,0" TMUX_PANE=$(pane "$1") FLEET_SESSION="$S" \
@@ -143,13 +149,14 @@ class Stub:
     def endwin(self): pass
     def clear(self): pass
 mod.curses = Stub()
-mod.open_tap(Stub(), sys.argv[3], mod.tap(sys.argv[4], sys.argv[4]), sys.argv[4], dict(os.environ))
+ask = mod.open_tap(sys.argv[3], mod.tap(sys.argv[4], sys.argv[4]), sys.argv[4], dict(os.environ))
+open(os.environ["CHOICES"], "w").write("%s %d" % (ask.repo or "-", len(ask.choices)))
 PY
-  cat "$WORK/dash-popup.sh.argv" 2>/dev/null
+  cat "$CHOICES" 2>/dev/null
 }
-SH="$WORK/shadow"
-PLAIN="--name n --origin hub|--size S --title popup_new_task -- bash $SH/dash-issue-new.sh confirm --spawn"
-TO_B="--name n --origin hub --repo o/b|--size S --title popup_new_task -- env CF_REPO=o/b bash $SH/dash-issue-new.sh confirm --spawn"
+PLAIN="--name n --origin hub|CF_REPO=unset confirm --spawn 0"
+TO_B="--name n --origin hub --repo o/b|CF_REPO=o/b confirm --spawn 0"
+PICK="CF_REPO=o/a confirm --spawn 2"   # no anchor in a 2-repo fleet: Tab, first repo by default
 
 # --- A. degenerate: one repo ------------------------------------------------------
 for w in wA wB wWT wNO wUNK plan; do
@@ -182,8 +189,8 @@ tmux set-option -w -t "$S:wUNK" @repo o/gone
 eq "B: a repo the fleet does not host anchors nothing" "$(fleet_selection_repo "$S" "$(wid wUNK)")" ""
 tmux set-option -wu -t "$S:wUNK" @repo
 eq "B: sidebar on a B row → scratch + ⌃n go to B" "$(sidebar wB)" "$TO_B"
-eq "B: sidebar on a norepo row → --no-repo scratch, ⌃n asks" "$(sidebar wNO)" "--name n --origin hub --no-repo|${PLAIN#*|}"
-eq "B: sidebar on an unknown row → today's behavior" "$(sidebar wUNK)" "$PLAIN"
+eq "B: sidebar on a norepo row → --no-repo scratch, ⌃n offers the repos" "$(sidebar wNO)" "--name n --origin hub --no-repo|$PICK"
+eq "B: sidebar on an unknown row → nothing anchored, ⌃n offers the repos" "$(sidebar wUNK)" "--name n --origin hub|$PICK"
 
 T_B="$(taps wA)"
 eq "T: heading B — 1st tap selects, 2nd opens new, hint names it" \
@@ -194,8 +201,8 @@ eq "T: the ? heading stays inert" \
    "$(printf '%s\n' "$T_B" | grep -c '^hdr None None 新会话名…$')" 1
 eq "T: a session row still jumps, then opens its menu" \
    "$(printf '%s\n' "$T_B" | grep "^$(wid wB) " | awk '{print $2, $3, $4}')" "jump menu 新会话名…"
-eq "T: 2nd tap on heading B → ⌃n pinned to B" "$(tapnew wA hdr:o/b)" "${TO_B#*|}"
-eq "T: 2nd tap on no-repo heading → ⌃n asks" "$(tapnew wA hdr:none)" "${PLAIN#*|}"
+eq "T: 2nd tap on heading B → ⌃n pinned to B" "$(tapnew wA hdr:o/b)" "o/b 0"
+eq "T: 2nd tap on no-repo heading → ⌃n offers the repos" "$(tapnew wA hdr:none)" "o/a 2"
 
 # --- C. a stale current-repo file ---------------------------------------------------
 printf 'o/a\n' > "$FLEET_CONF_DIR/fleets/$S/current-repo"

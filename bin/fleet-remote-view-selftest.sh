@@ -423,6 +423,9 @@ waitfor 5 noview || fail "E: the proxy's view session outlived its client (#1489
 eq "E: the remote worker still runs" "$RW8" "$(tr_ list-windows -t "=$RS:" -F '#{window_id}' | grep -x "$RW8")"
 restored() { [ -z "$(tr_ show-options -qv -t "=$RS:" status)" ]; }
 waitfor 5 restored || fail "E: the remote session's status line was not handed back" "$(tr_ show-options -t "=$RS:" status)"
+# rv_restore puts `status` back BEFORE it unsets the markers: wait for them too
+unmarked() { [ -z "$(tr_ show-options -qv -t "=$RS:" @remote_view_saved)$(tr_ show-options -qv -t "=$RS:" @remote_view_solo)" ]; }
+waitfor 5 unmarked || :
 eq "E: the saved marker is gone" "" "$(tr_ show-options -qv -t "=$RS:" @remote_view_saved)"
 eq "E: the solo marker too" "" "$(tr_ show-options -qv -t "=$RS:" @remote_view_solo)"
 eq "K: closed — each window's header as it was, no marker left" "|bottom |" "$(pbs) $(pbsaved)"

@@ -1,22 +1,26 @@
 #!/bin/bash
-# dash-migrate.sh <window-target> [confirm|choose] — move the highlighted dash row onto
-# another subscription account on ONE key + ONE confirm (dash ⌃l, issue #873).
+# dash-migrate.sh <window-target> [to [account]|confirm|choose-confirm] — move the
+# highlighted dash row onto another subscription account on ONE key + ONE confirm
+# (dash ⌃l, issue #873).
 #
 # Unsticking a walled worker used to mean asking some Claude session to run
 # `fleet-account.sh migrate …` by hand — from an iPad, in prose. This is that
 # command behind a key:
 #
-#   ⌃l          opens a confirm popup (re-invokes us with `confirm`);
-#   the popup   shows fleet-migrate.sh's OWN dry-run for this window — the account
-#               it runs on → the account it would land on, and every background
-#               command the move would stop (the planner's inventory, #871) — so
-#               what you confirm is exactly what runs, never a second opinion;
-#   y           dispatches `fleet-migrate.sh --force-bg --toast <window>` detached
-#               (a move is a cold `claude` boot, ~25 s; the popup closes at once)
-#               and the toast reports the outcome.
-#   no move     when the dry-run plans nothing — every account benched, or the
-#               window already sits on the only one with room (#567) — the popup
-#               says why and offers no `y`: the refusal is fleet-migrate's own.
+#   ⌃l          asks y/n on the status line (confirm-before; a popup until
+#               issue #1620), then runs `to` below;
+#   to [acct]   no terminal: fleet-migrate.sh's OWN dry-run for this window (onto
+#               <acct> when named — the sidebar's 切换 sub, whose input line picked
+#               it with the quota beside each, after fleet-manual-sub.sh check
+#               passes it); a plan that moves dispatches `fleet-migrate.sh
+#               --force-bg --toast <window>` detached (a move is a cold `claude`
+#               boot, ~25 s) and the toast reports the outcome. A refusal — the
+#               same account, a benched one, a dry-run that plans nothing (#567)
+#               — prints ONE line and exits 1 (FLEET_DASH_TOAST=1: toasted too).
+#   confirm / choose-confirm
+#               the same in a terminal: shows the dry-run — the account it runs
+#               on → the account it would land on, and every background command
+#               the move would stop (the planner's inventory, #871) — and asks.
 #
 # Target: the dash row's {1} (`sess:idx`) or a fleet handle (`b3`); a header /
 # landed row / panel is a silent no-op. Bare `tmux`: this runs inside the dash
@@ -47,14 +51,36 @@ if ! fleet_pane_claude_pid "$wid" >/dev/null 2>&1; then
   exit 0
 fi
 
+if [ "$mode" = to ]; then
+  chosen="${3:-}"
+  refuse() {
+    printf '%s\n' "$1"
+    if [ "${FLEET_DASH_TOAST:-0}" = 1 ]; then . "$BIN/fleet-ui-lang.sh"; fleet_ui_fail "migrate: $1"; fi   # the one failure line (#1618)
+    exit 1
+  }
+  target_arg=()
+  if [ -n "$chosen" ]; then
+    source=$(bash "$MIGRATE" whoami --session "$SESS" "$wid" 2>/dev/null || :)
+    [ "$chosen" != "$source" ] || refuse "$name: already on $chosen"
+    why=$(bash "$MANUAL_SUB" check "$SESS" "$chosen" 2>&1) || refuse "$(printf '%s\n' "$why" | tail -n 1)"
+    target_arg=(--target-account "$chosen")
+  fi
+  plan=$(bash "$MIGRATE" --session "$SESS" ${target_arg[@]+"${target_arg[@]}"} --dry-run --force-bg "$wid" 2>&1)
+  printf '%s\n' "$plan" | grep -q 'would /exit' ||
+    refuse "$(printf '%s\n' "$plan" | grep -v '^[[:space:]]*$' | tail -n 1 | sed 's/^fleet-migrate: //')"
+  extra=''; [ -z "$chosen" ] || extra="--target-account '$chosen' "   # a checked label: [A-Za-z0-9._@-]
+  fleet_bg "bash '$MIGRATE' --session '$SESS' $extra--force-bg --toast '$wid'"
+  exit 0
+fi
 if [ "$mode" != confirm ] && [ "$mode" != choose-confirm ]; then
-  next=confirm; height=20
-  [ "$mode" = choose ] && { next=choose-confirm; height=80%; }
-  bash "$BIN/dash-popup.sh" --size S -h "$height" --title popup_switch_sub --object "$wid" -- bash "$BIN/dash-migrate.sh" "$wid" "$next" || :
+  # ⌃l in the (retired) hub: y/n on the status line — no popup (issue #1620).
+  q="migrate $name to another subscription account? (y/n)"
+  tmux confirm-before -p "$(printf '%s' "$q" | sed 's/#/##/g')" \
+    "run-shell -b \"FLEET_DASH_TOAST=1 bash '$BIN/dash-migrate.sh' '$wid' to >/dev/null 2>&1 || :\"" 2>/dev/null || :
   exit 0
 fi
 
-# --- inside the popup ------------------------------------------------------------
+# --- in a terminal ---------------------------------------------------------------
 target_arg=()
 if [ "$mode" = choose-confirm ]; then
   if [ "${FLEET_UI_LANG:-}" = zh ]; then

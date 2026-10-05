@@ -11,13 +11,17 @@
 #   reap     worker_reap    — the confirmed reap (the menu's confirm-before ran
 #                             first, as for a local row) through fleet_hub_reap;
 #                             toasts the node's dash-reap token as a local reap does
-#   message  worker_message — INSIDE a popup (dash-popup.sh): asks for the text,
-#                             sends it, shows the outcome. The text never passes
-#                             through a tmux command string, so it needs no quoting.
-#   answer   worker_answer  — INSIDE a popup: a permission prompt (`⊘`, needs=perm)
-#                             asks 批准 / 拒绝 → yes / no; a question (`?`,
-#                             needs=ask) asks for the option number(s); then sends
-#                             and waits for the node's verdict, refusal verbatim.
+#   message  worker_message — the text from $FLEET_SIDEBAR_TEXT (the sidebar's
+#                             input line asked for it, issue #1620), sent, the
+#                             outcome toasted. The text never passes through a
+#                             tmux command string, so it needs no quoting.
+#                             Without it (a terminal): asks for the text, sends
+#                             it, shows the outcome.
+#   answer   worker_answer  — the same: $FLEET_SIDEBAR_TEXT, or asked — a
+#                             permission prompt (`⊘`, needs=perm) takes y / n →
+#                             yes / no; a question (`?`, needs=ask) the option
+#                             number(s); then sends and waits for the node's
+#                             verdict, refusal verbatim.
 #
 # The row's machine, name and what it needs come from the sidebar's own cache
 # ($FLEET_C/global/remote_<sess>, fleet-hub-sessions.sh) — never the network.
@@ -98,6 +102,13 @@ if len(sys.argv) > 3 and sys.argv[2]: d[sys.argv[2]] = sys.argv[3]
 print(json.dumps(d, ensure_ascii=False))' "$worker_id" "${1:-}" "${2:-}"; }
 
 pause() { printf '\n%s' "$(fleet_ui_t remote_press_any)" >&2; read -r -n 1 -s _ 2>/dev/null || read -r _ 2>/dev/null || true; }
+# The sidebar's input line already asked (issue #1620): no terminal here, so the
+# outcome is a toast, never a «press any key».
+LINE=''; [ -n "${FLEET_SIDEBAR_TEXT+x}" ] && LINE=1
+tell() {   # <outcome> — shown where the asking happened
+  if [ -n "$LINE" ]; then toast "fleet: $1"
+  else printf '\n%s\n' "$1" >&2; pause; fi
+}
 
 # 入口失联 (#1483): refuse before asking anything, send nothing, say why.
 # shellcheck disable=SC2034  # FLEET_STATUS_G is read by the lib sourced on the same line
@@ -106,7 +117,9 @@ fleet_status_remote_head "$sess"; fleet_status_hub_ok "$FSR_TS"
 if fleet_status_hub_lost "$(date +%s)"; then
   fleet_status_age "$FSH_AGE"
   case "$action" in
-    message|answer) printf '%s\n%s\n' "$(label "$action")" "$(fleet_ui_t remote_hub_lost_fmt "$FSA")" >&2; pause ;;
+    message|answer)
+      if [ -n "$LINE" ]; then toast "fleet: $(fleet_ui_t remote_hub_lost_fmt "$FSA")"
+      else printf '%s\n%s\n' "$(label "$action")" "$(fleet_ui_t remote_hub_lost_fmt "$FSA")" >&2; pause; fi ;;
     stop|resume|reap) toast "fleet: $(fleet_ui_t remote_hub_lost_fmt "$FSA")" ;;
   esac
   exit 0
@@ -133,18 +146,25 @@ case "$action" in
     toast "fleet: $(outcome "$rec" "$(label "$action")")"
     ;;
   message)
-    # inside the popup: the text from the keyboard, straight into the JSON
-    printf '%s\n' "$(label message)" >&2
-    printf '%s\n' "$(fleet_ui_t remote_message_hint)" >&2
-    IFS= read -r -e text 2>/dev/null || text=''
+    # the text from the sidebar's line, else the keyboard — straight into the JSON
+    if [ -n "$LINE" ]; then text=$FLEET_SIDEBAR_TEXT
+    else
+      printf '%s\n' "$(label message)" >&2
+      printf '%s\n' "$(fleet_ui_t remote_message_hint)" >&2
+      IFS= read -r -e text 2>/dev/null || text=''
+    fi
     [ -n "${text// /}" ] || exit 0
     rec=$(write worker_message "$(json_wid text "$text")" 30)
-    printf '\n%s\n' "$(outcome "$rec" "$(label message)")" >&2
-    pause
+    tell "$(outcome "$rec" "$(label message)")"
     ;;
   answer)
-    printf '%s\n' "$(label answer)" >&2
     ans=''
+    if [ -n "$LINE" ]; then
+      ans=$FLEET_SIDEBAR_TEXT
+      case "$ans" in y|Y|yes) ans=yes ;; n|N|no) ans=no ;; esac
+      case "$needs:$ans" in perm:yes|perm:no|perm:) ;; perm:*) ans='' ;; esac
+    else
+    printf '%s\n' "$(label answer)" >&2
     case "$needs" in
       perm)
         printf '%s\n' "$(fleet_ui_t remote_perm_prompt)" >&2
@@ -157,11 +177,11 @@ case "$action" in
         IFS= read -r -e ans 2>/dev/null || ans=''
         case "$ans" in y|Y|yes) ans=yes ;; n|N|no) ans=no ;; esac ;;
     esac
+    fi
     [ -n "$ans" ] || exit 0
-    printf '%s\n' "$(fleet_ui_t remote_sending)" >&2
+    [ -n "$LINE" ] || printf '%s\n' "$(fleet_ui_t remote_sending)" >&2
     rec=$(write worker_answer "$(json_wid answer "$ans")" 90)
-    printf '\n%s\n' "$(outcome "$rec" "$(label answer)")" >&2
-    pause
+    tell "$(outcome "$rec" "$(label answer)")"
     ;;
   *) exit 0 ;;
 esac
