@@ -433,7 +433,7 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
       esac
     elif [ "$r_via" = node ]; then
       # taken over the machine's direct connection while the hub is silent
-      # (#1488): `m5~` — the view draws a dim ⇄ at the row's end, nothing else
+      # (#1488): `m5~` — the view ends the row in a dim `m5` (#1621), nothing else
       # about the row changes (its place, its nesting, its colour)
       r_node="$r_node~"
     fi
@@ -1168,7 +1168,8 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     # `m4!` when lost, `m5~` when heard over the shell's own connection (#1488)
     # — empty for a local row. The view never draws it (a local row and a remote
     # row LOOK the same; the machine is the row menu's title): `!` dims the row,
-    # `~` puts a dim ⇄ at its end, that is all the paint reads.
+    # `~` puts the machine's dim short name at its end (#1621), that is all
+    # the paint reads.
     # fields 10-12 (issue #1532): the hub's issue · PR · ctx% cells, bare text
     # (`#1532` · `#1552✓` · `45%`; `—` / `·` when there is none). The view draws
     # them only while its info column is open (⌃i), right-aligned.

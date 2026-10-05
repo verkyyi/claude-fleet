@@ -227,7 +227,7 @@ menu=$(PATH="$SHIMPATH" FLEET_UI_LANG=zh bash -c '
   BIN=$1; sess=$2; verb=menu; set -- menu "$2" "$3" --print
   . "$BIN/fleet-lib.sh"; . "$BIN/fleet-ui-lang.sh"; . "$BIN/fleet-sidebar-menu.sh"' _ "$BIN" "$S" "wid:$F/issue-1423" 2>/dev/null)
 eq "M: a remote row's menu is titled with its name and machine (「名称 · 机器」, #1535)" "title	侧边栏 · m4" "$(printf '%s\n' "$menu" | head -1)"
-has "M: …and its first item opens the ⇄ proxy window" "$(printf '%s\n' "$menu" | sed -n 2p | cut -f1,2)" "e	进入（⇄ 代理窗口）…"
+has "M: …and its first item opens the proxy window" "$(printf '%s\n' "$menu" | sed -n 2p | cut -f1,2)" "e	进入（代理窗口）…"
 has "M: …through fleet-remote-view.sh" "$(printf '%s\n' "$menu" | sed -n 2p)" "fleet-remote-view.sh"
 has "M: …open, on that worker_id" "$(printf '%s\n' "$menu" | sed -n 2p)" " open '\\''wid:$F/issue-1423'\\'' "
 eq "M: a row the cache does not hold gets no menu" "" "$(PATH="$SHIMPATH" bash -c '

@@ -5,8 +5,8 @@
 # The sidebar already SHOWS your sessions on the other machines (#1423: rows keyed
 # `wid:<worker_id>`, drawn like the local ones — the machine is the row menu's
 # title and the status line on top, #1475). Enter on one opens a PROXY WINDOW
-# here — named `⇄m4 <name>` (#1475), so the window list and the pane header both
-# say the keys go elsewhere — a window marked `@remote=<node>:<worker_id>` whose
+# here — named `m4 <name>` (#1475; no ⇄ since #1621), so the window list and the
+# pane header both say the keys go elsewhere — a window marked `@remote=<node>:<worker_id>` whose
 # pane is an ssh client attached to that session's tmux window on <node>. Typing
 # and scrolling are the remote window's own; closing the proxy window only drops
 # the connection — the remote session never notices. A dropped connection
@@ -88,7 +88,7 @@
 # sidebar reads as "draw no list" (fleet-sidebar.py sync) — so the remote looks
 # like a local window, this machine's prefix reaches this machine, and the one
 # list on screen is the viewer's. Each window's pane-border-status goes off with
-# them (issue #1549, saved per window), so the viewer's `⇄m4 …` header is the one
+# them (issue #1549, saved per window), so the viewer's `m4 …` header is the one
 # title line. Two shells on one session: still one list each.
 # Never `resize-pane -Z`. `reconcile` applies the rule; the server's GLOBAL hooks
 # `client-attached[77]` / `client-detached[77]` run it on every client change
@@ -225,7 +225,7 @@ rv_sync() {   # the sidebar follows the solo marker (issue #1475); the script wa
 # (`-` = inherited), the solo marker on, its sidebar gone. Idempotent.
 # Plus each window's own top header (issue #1549): `pane-border-status` is a
 # WINDOW option, so every window of the session saves what IT set in a window-
-# scoped `@remote_view_saved` and goes off — the viewer's `⇄m4 …` header is then
+# scoped `@remote_view_saved` and goes off — the viewer's `m4 …` header is then
 # the only title line, not a second one nested under it. Re-run on every
 # reconcile, so a window born while hidden is covered at the next client change.
 rv_hide_borders() {
@@ -338,10 +338,12 @@ open)
   node="${row%%$'\037'*}"; name="${row#*$'\037'}"
   [ -n "$node" ] || { tmux display-message "fleet: $wid 不在侧边栏的远程清单里" 2>/dev/null; exit 1; }
   case "$node" in *[!A-Za-z0-9._-]*) note "bad machine label: $node"; exit 2 ;; esac
-  # `⇄m4 <name>` (issue #1475): the window name is also the pane header
+  # `m4 <name>` (issue #1475): the window name is also the pane header
   # (conf/tmux-attention.conf's pane-border-format), so the top of the pane says
-  # at a glance that the keys go to another machine.
-  title="⇄$node ${name:-${wid#*/}}"
+  # at a glance that the keys go to another machine. The machine's name alone
+  # carries it — no ⇄ (issue #1621): a proxy window is known by `@remote`, never
+  # by its name.
+  title="$node ${name:-${wid#*/}}"
   shellopt=''; [ "${FLEET_SHELL:-0}" = 1 ] && shellopt=' --shell'   # the shell's panes (#1484)
   cmd="exec bash $(sq "$BIN/fleet-remote-view.sh") run$shellopt $(sq "$node") $(sq "$wid")"
   w=$(tmux list-windows -t "=$sess" -F '#{window_id} #{@remote}' 2>/dev/null \

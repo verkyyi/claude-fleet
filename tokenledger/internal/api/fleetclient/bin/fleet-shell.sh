@@ -21,7 +21,7 @@
 #     that name — a fleet's socket label IS its session name, so every in-pane
 #     script resolves this server the way it resolves a fleet's; never a fleet's
 #     server, never its conf;
-#   · ONE WINDOW PER MACHINE, each a proxy window (`⇄m4 <name>`, `@remote=<node>:
+#   · ONE WINDOW PER MACHINE, each a proxy window (`m4 <name>`, `@remote=<node>:
 #     <wid>`) exactly as a fleet opens one on a remote row (#1424/#1475), its pane
 #     `fleet-remote-view.sh run --shell`: the far end registers a SHELL client and
 #     hides its own list, bar and prefix while only shells are attached (#1485);
@@ -328,11 +328,11 @@ fi
 # 3. the server: conf (keys, hooks, bar, environment) + the first window
 write_conf || exit 1
 if [ -n "$node" ]; then
-  title="⇄$node"
+  title="$node"
   cmd="exec bash $(sq "$SHADOW/fleet-remote-view.sh") run --shell $(sq "$node") -"
   remote="$node:"
 else
-  title="⇄"
+  title="fleet"   # no machine picked yet; known by @remote=-:, not the name (#1621)
   cmd="exec bash $(sq "$SHADOW/fleet-shell.sh") wait $(sq "$SESS")"
   remote="-:"
 fi

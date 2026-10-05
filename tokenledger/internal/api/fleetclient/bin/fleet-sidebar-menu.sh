@@ -58,7 +58,7 @@ fi
 wid="${3:-}"
 # A row on another machine (`wid:<fleet>/<name>`, #1423) gets a menu too (issue
 # #1475): titled `<name> · 在 m4` — the ONE place the list names the machine, now
-# that the rows look alike — with `enter` (the ⇄ proxy window) and the row-less
+# that the rows look alike — with `enter` (the proxy window) and the row-less
 # items. Everything a local row's menu does needs a window here; it has none.
 remote=''
 case "$wid" in @[0-9]*) ;; wid:*/*) remote=1 ;; *) exit 0 ;; esac

@@ -703,7 +703,19 @@ def row_need(row, info=False):
     need = width_of(row_left(" ", glyph, tree, name)) + 1
     right = row_right(badge, info_text(row) if info else "")
     need += width_of(right) + 1 if right else 0
-    return need + (2 if len(row) > 8 and row[8].endswith("~") else 0)   # the ⇄ cell (#1488)
+    return need + via_need(row[8] if len(row) > 8 else "")   # the via mark (#1488)
+
+
+def via_tag(node):
+    """The dim mark a row heard over the shell's own connection (`m5~`, issue
+    #1488) ends in: that machine's short name — `m5`, never an arrow (issue #1621)."""
+    return node[:-1] if node.endswith("~") else ""
+
+
+def via_need(node):
+    """The cells the via mark takes at a row's end: the tag plus its gap."""
+    tag = via_tag(node)
+    return width_of(tag) + 1 if tag else 0
 
 
 def auto_width(rows, cols, base, top, info=False):
@@ -1246,7 +1258,7 @@ def row_fields(line):
     when that machine is lost (issue #1475), `m5~` when the row came over the
     shell's own connection to it while the hub is silent (issue #1488). The view
     never DRAWS the machine (the rows look alike); `!` dims the row, `~` ends it
-    in a dim ⇄, and the menu titles it."""
+    in that machine's dim short name (`m5`, #1621), and the menu titles it."""
     parts = line.split(US, ROW_FIELDS - 1)
     return parts + [""] * (ROW_FIELDS - len(parts))
 
@@ -1743,11 +1755,14 @@ def ui(screen, session, worker, lock):
             # name starts in the same place instead of a child's text sitting two
             # columns right of its parent's.
             # A row heard over the shell's own connection while the hub is silent
-            # (`m5~`, issue #1488) gives up its last two cells to a dim ⇄ — the
-            # source mark the operator asked for; the badge keeps its place left of it.
+            # (`m5~`, issue #1488) gives up its last cells to that machine's short
+            # name, dim — the source mark the operator asked for, a name rather
+            # than a ⇄ (issue #1621); the badge keeps its place left of it.
             w = max(0, width - 1)
-            via = node.endswith("~") and w > 2
-            text = row_text(marker, glyph, tree, label, badge, w - 2 if via else w,
+            tag = via_tag(node)
+            cut = via_need(node)
+            via = bool(tag) and w > cut + 1
+            text = row_text(marker, glyph, tree, label, badge, w - cut if via else w,
                             info_text(row) if wide else "")
             put(y, text, attr, fill=raised)
             # The state glyph, painted over its own cell in the state's colour —
@@ -1760,7 +1775,7 @@ def ui(screen, session, worker, lock):
                     pass
             if via:
                 try:
-                    screen.addstr(y, w - 1, "⇄", dim_attr)
+                    screen.addstr(y, w - width_of(tag), tag, dim_attr)
                 except curses.error:
                     pass
         # The selected row's whole name takes the `?` row while the keyboard is

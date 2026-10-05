@@ -129,8 +129,8 @@ fleet_ui_t() {
     en:remote_message_hint)     printf 'Type the message (hub → that machine'"'"'s issue bridge, its next turn); empty cancels:' ;;
     zh:remote_perm_prompt)      printf '它在等一个权限确认。  [y] 批准（只按这一次的 Yes）   [n] 拒绝   其它键取消' ;;
     en:remote_perm_prompt)      printf 'It is waiting on a permission prompt.  [y] approve (this one Yes)   [n] refuse   any other key cancels' ;;
-    zh:remote_pick_prompt)      printf '回答第几项？（先在 ⇄ 代理窗口里看题；1 / 1,3 / 多题用空格分开；权限弹窗答 y 或 n）空行取消：' ;;
-    en:remote_pick_prompt)      printf 'Which option? (read the question in the ⇄ proxy window first; 1 / 1,3 / several questions space-separated; a permission prompt takes y or n) empty cancels:' ;;
+    zh:remote_pick_prompt)      printf '回答第几项？（先在代理窗口里看题；1 / 1,3 / 多题用空格分开；权限弹窗答 y 或 n）空行取消：' ;;
+    en:remote_pick_prompt)      printf 'Which option? (read the question in the proxy window first; 1 / 1,3 / several questions space-separated; a permission prompt takes y or n) empty cancels:' ;;
     zh:remote_sending)          printf '已交给入口，等那台机器确认…' ;;
     en:remote_sending)          printf 'handed to the hub, waiting for that machine to confirm…' ;;
     # the hub itself silent (issue #1483, EPIC #1479 C4): the menu's word, the action's refusal
@@ -278,7 +278,7 @@ new	n	新任务 — 在输入行写标题（多仓库 Tab 换仓库），↵ 建
 newto	1-9	新建到 <机器>… — 入口在线的别的机器各一项：建 issue，worker 开在那台机器上
 restore	o	恢复已收工任务 — 任务栏就地换成已落地列表（同 ⌃t）
 repo	g	添加仓库到这个 fleet — 在输入行写 owner/name；~/projects/<name>，缺失时 clone（hub ⌃z）
-open	e	进入 — 打开 ⇄ 代理窗口（只有另一台机器上的行有；菜单标题写着「· m4」）
+open	e	进入 — 打开代理窗口（只有另一台机器上的行有；菜单标题写着「· m4」）
 message	m	发消息… — 只有别机行有：在输入行写，经入口送到那台机器的 issue 桥，作为它的下一轮
 stop	q	停 — 只有别机行有：经入口让那台机器上的会话 /exit（可恢复）
 resume	c	继续 — 只有别机行有：经入口恢复刚停掉的会话（活着的会被拒绝并告诉你）' ;;
@@ -295,12 +295,12 @@ new	n	new task — its title on the input line (Tab picks the repo in a 2+ repo 
 newto	1-9	new task on <machine>… — one per other machine the hub says is online: file the issue, open the worker there
 restore	o	restore a finished task — the sidebar shows the landed list in place (as ⌃t)
 repo	g	add a repo to this fleet — owner/name on the input line; ~/projects/<name>, cloned if missing (the hub ⌃z)
-open	e	enter — open the ⇄ proxy window (a row on another machine only; the menu title says · m4)
+open	e	enter — open the proxy window (a row on another machine only; the menu title says · m4)
 message	m	message… — a row on another machine only: typed on the input line, through the hub to the issue bridge on that machine, as its next turn
 stop	q	stop — a row on another machine only: /exit there through the hub (resumable)
 resume	c	resume — a row on another machine only: reopen a just-stopped one through the hub (a live one is refused, and says so)' ;;
-    zh:menu_open_remote)        printf '进入（⇄ 代理窗口）…' ;;
-    en:menu_open_remote)        printf 'Enter (⇄ proxy window)…' ;;
+    zh:menu_open_remote)        printf '进入（代理窗口）…' ;;
+    en:menu_open_remote)        printf 'Enter (proxy window)…' ;;
     zh:menu_r_message)          printf '发消息…' ;;
     en:menu_r_message)          printf 'Message…' ;;
     zh:menu_r_stop)             printf '停（/exit）' ;;
@@ -399,8 +399,8 @@ resume	c	resume — a row on another machine only: reopen a just-stopped one thr
     en:keys_prefix_03)         printf %s 'show/hide the worker task sidebar (saved for this fleet; narrow screens hide it automatically)' ;;
     zh:keys_prefix_04)         printf %s '聚焦任务栏（没显示就打开）；窗口太窄放不下时打开任务选择器' ;;
     en:keys_prefix_04)         printf %s 'focus the task sidebar (or click/tap it) — then type: see the '"'"'task sidebar'"'"' group. No sidebar on screen: shows it, as ⌂ does — a window too narrow for it opens the task picker' ;;
-    zh:keys_prefix_05)         printf %s '在 ⇄ 代理窗口（另一台机器的会话）里：回到上一个本机窗口；其他窗口无动作' ;;
-    en:keys_prefix_05)         printf %s 'in a ⇄ proxy window (another machine'"'"'s session, beside this machine'"'"'s sidebar): back to the last LOCAL window; a no-op anywhere else' ;;
+    zh:keys_prefix_05)         printf %s '在代理窗口（另一台机器的会话）里：回到上一个本机窗口；其他窗口无动作' ;;
+    en:keys_prefix_05)         printf %s 'in a proxy window (another machine'"'"'s session, beside this machine'"'"'s sidebar): back to the last LOCAL window; a no-op anywhere else' ;;
     zh:keys_prefix_06)         printf '聚焦任务栏（同 ⌂）；窗口太窄时才是任务选择器弹窗：切换任务，或输入名称新建 scratch' ;;
     en:keys_prefix_06)         printf 'the task list, focused (as ⌂); in a window too narrow for it, the task picker — the list as a popup: ↵ switch · type a name + %s (or ↵ on no match) = new scratch session · F9 / [⌂ hub] = the hub · esc / [✕ close]' "${1:-}" ;;
     zh:keys_prefix_07)         printf %s '议题列表：GitHub issues，回车启动该 issue 的 worker' ;;
