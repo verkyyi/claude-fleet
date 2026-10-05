@@ -51,6 +51,14 @@ for _a in "$@"; do
       node) NODE_ARG="$_a" ;; origin-wid) ORIGIN_WID="$_a" ;; esac
     _want=""; continue
   fi
+  # A FUSED "--flag value" (issue #1543) is --flag=value: zsh — Claude's Bash tool —
+  # does not word-split an unquoted $var, so `extra="--node local"; … $extra` hands
+  # us ONE arg, which fell to the unknown-flag branch and let the hub place a pinned
+  # spawn on another machine.
+  case "$_a" in
+    '--title '*|'--origin '*|'--agent '*|'--repo '*|'--node '*|'--origin-wid '*)
+      _v=${_a#* }; _v=${_v#"${_v%%[! ]*}"}; _a="${_a%% *}=$_v" ;;
+  esac
   case "$_a" in
     --force|--reclaim) FORCE_FLAG=1 ;;
     --async|--detach-spawn) ASYNC_FLAG=1 ;;

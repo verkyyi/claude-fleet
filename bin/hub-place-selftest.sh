@@ -263,6 +263,31 @@ for n in local m5; do
 done
 ok "SELF --node local / this host's alias → no hub call"
 
+# ===== PIN (issue #1543): --node local holds in any argv order, and FUSED ==========
+# EPIC #1524 ran `extra="--node local"; dash-issue-session.sh $n --title "$t" $extra`
+# in Claude's Bash tool — zsh, where an unquoted $extra does NOT word-split — so the
+# script got ONE arg "--node local", ignored it as an unknown flag and let the hub
+# place #1525 on m4. A fused "--flag value" is now read as --flag=value.
+for args in "--repo|acme/widgets|--title|x|--node|local" "--node|local|--title|x|--repo|acme/widgets" \
+            "--title|x|--node local" "--node local|--title x|--repo acme/widgets" "--node  local"; do
+  _o=$IFS; IFS='|'; set -- $args; IFS=$_o
+  CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER="$REMOTE_LINE" run_spawn 258 "$@"
+  [ -s "$PLACE_LOG" ]                            && fail "PIN [$args] must not ask the hub"
+  err_has 'chose'                                && fail "PIN [$args] prints no chose line"
+  err_has 'unknown flag'                         && fail "PIN [$args] is no unknown flag"
+  tmux_has "-n x"  || tmux_has "-n some-issue"   || fail "PIN [$args] opens it here"
+done
+if command -v zsh >/dev/null 2>&1; then          # the exact shape of the EPIC #1524 call
+  printf '#!/bin/sh\nexec zsh -fc %s _ "%s"\n' "'extra=\"--node local\"; \"\$1\" 258 --title x \$extra'" "$SPAWN" > "$WORK/zsh-spawn"
+  chmod +x "$WORK/zsh-spawn"
+  CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER="$REMOTE_LINE" SPAWN="$WORK/zsh-spawn" run_spawn
+  [ -s "$PLACE_LOG" ]                            && fail "PIN zsh's unsplit \$extra must not ask the hub"
+  tmux_has 'new-window'                          || fail "PIN zsh's unsplit \$extra opens it here"
+fi
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER="$REMOTE_LINE" run_spawn 258 "--node m4"
+place_has "--node m4 acme/widgets 258"           || fail "PIN a fused --node <other machine> is asked for by name"
+ok "PIN --node local in any order and fused (\"--node local\", zsh's unsplit \$var) → no hub call; fused m4 → by name"
+
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER="$REMOTE_LINE" INFLIGHT=1 FLEET_GLOBAL_MAX_SESSIONS=1 run_spawn 258
 [ "$(rc)" = 0 ] && err_has '#258 → m4'           || fail "CAP a full machine still places elsewhere (rc=$(rc))"
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER=$'LOCAL m5\tchose m5' INFLIGHT=1 FLEET_GLOBAL_MAX_SESSIONS=1 run_spawn 258
