@@ -231,7 +231,9 @@ logs
 FAKE_CUR=solo POPUP=1 bash "$SB/tmux-issues.sh" all >/dev/null 2>&1
 hasnt "F: no bind carries --repo"             "$(cat "$WORK/fzf.args")" "--repo="
 has   "F: open keeps the fleet repo"          "$(cat "$WORK/fzf.args")" "https://github.com/o/sss/issues/{1}"
-has   "F: border unchanged"                   "$(cat "$WORK/fzf.args")" "--border-label= backlog · GitHub issues  "
+# a popup's border is the popup frame's (#1619): no inner border, no label
+hasnt "F: no inner border label"             "$(cat "$WORK/fzf.args")" "--border-label="
+hasnt "F: one repo, no all-repos note"       "$(cat "$WORK/fzf.args")" "all repos"
 logs
 printf 'y' | FAKE_CUR=solo bash "$SB/dash-issue-close.sh" 5 confirm >/dev/null 2>&1
 has   "F: close → the sessmap repo"           "$(cat "$WORK/gh.log")" "issue close 5 --repo o/sss"

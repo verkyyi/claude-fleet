@@ -82,7 +82,8 @@ grep -qF -- '[＋ new]' "$BACKLOG" \
 ok
 # the ＋/new case mirrors the POPUP ⌃n N_BIND: drop the 'new' sentinel + abort, so
 # run_action files it in the gap (a nested popup can't open here, #123/#122).
-grep -- 'click-header:transform' "$BACKLOG" | grep -qF -- "*＋*|*new*) printf 'new'" \
+# (the click rides fleet_fzf_click since #1619: header and footer both)
+grep -- 'fleet_fzf_click "transform:' "$BACKLOG" | grep -qF -- "*＋*|*new*|*新建*) printf 'new'" \
   || fail "backlog: the ＋/new case must drop the 'new' sentinel (mirror the popup ⌃n)"
 ok
 # The resolved new key stays bound (ctrl-n normally, alt-n if prefix=C-n).

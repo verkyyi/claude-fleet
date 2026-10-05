@@ -88,8 +88,11 @@ if [ -n "${POPUP:-}" ]; then
   # The keys are the popup frame's bottom hint line (issue #1619); the slot
   # chip stays the header. The chips answer a tap on either line.
   . "$BIN/fleet-ui-lang.sh"; . "$BIN/fleet-popup-lib.sh"
-  fleet_fzf_hint "$(fleet_ui_t hint_backlog)" "$SLOTS"
-  FZF_FRAME=(--border=none)   # the popup's border is the frame; its title names it
+  # No inner border: the popup's is the frame and its title names the panel;
+  # what the label said beyond that (every repo, #1034) joins the header.
+  PHDR=$SLOTS; [ "$MULTI" = 1 ] && PHDR="$SLOTS · all repos"
+  fleet_fzf_hint "$(fleet_ui_t hint_backlog)" "$PHDR"
+  FZF_FRAME=(--border=none)
   mkdir -p "$(dirname "$ACT")" 2>/dev/null || true
   N_BIND="$DASH_KEY_NEW:execute-silent(printf 'new' > '$ACT')+abort"
   X_ARGS='{1}'; [ "$MULTI" = 1 ] && X_ARGS='{1} {4}'   # + the row's repo (issue #794)
