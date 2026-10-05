@@ -55,7 +55,7 @@ if [ "$mode" = to ]; then
   chosen="${3:-}"
   refuse() {
     printf '%s\n' "$1"
-    [ "${FLEET_DASH_TOAST:-0}" = 1 ] && tmux display-message "migrate: $1" 2>/dev/null
+    if [ "${FLEET_DASH_TOAST:-0}" = 1 ]; then . "$BIN/fleet-ui-lang.sh"; fleet_ui_fail "migrate: $1"; fi   # the one failure line (#1618)
     exit 1
   }
   target_arg=()
