@@ -1115,24 +1115,52 @@ decrypted for anything else.
   the audit keep working. Machines keep the access tokens they already have, so
   a short KMS outage costs nothing until those run out.
 
-#### Findings reach your phone — WeCom push (claude-fleet#1469, EPIC #1665 C2)
+#### Findings reach your phone — kf-notify push (claude-fleet#1469, #1705, EPIC #1665 C2)
 
 A finding used to live only on the entrance page and the `/credentials` banner:
 a 5-second poll by whoever happened to be looking. The setup-token reminder
 above, a Codex account whose refresh died at 23:46 — found the next morning,
-when a switch ran into them (EPIC #1665 measured about ten hours). With a
-**WeCom group robot** webhook set, the hub pushes every **warning / critical**
-finding of the live (`view=now`) view to it within a minute:
+when a switch ran into them (EPIC #1665 measured about ten hours). With the
+cluster's notification service **kf-notify** configured, the hub pushes every
+**warning / critical** finding of the live (`view=now`) view to it within a
+minute:
 
 ```
-CCQUOTA_WECOM_WEBHOOK=https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…
+CCQUOTA_NOTIFY_URL=http://kf-notify.<ns>:<port>     # from the cluster Secret's NOTIFY_URL
+CCQUOTA_NOTIFY_KEY=…                                 # from the cluster Secret's NOTIFY_KEY
+CCQUOTA_NOTIFY_DEST=alerts.prod                      # optional
 ```
+
+The hub reads the `CCQUOTA_`-prefixed names only (not the bare `NOTIFY_*` the
+cluster's producers use): the Deployment maps the Secret's `NOTIFY_URL` /
+`NOTIFY_KEY` onto them.
 
 | variable | role | what it does |
 |---|---|---|
-| `CCQUOTA_WECOM_WEBHOOK` | hub | the robot's webhook URL — **it carries the robot's key**: environment only, like the SSO secrets; never a flag (`ps`), never logged, never in a page. Unset: the push is off and nothing about findings changes |
-| `CCQUOTA_WECOM_REPEAT_HOURS` | hub | remind about a problem that is still standing this often (default `6`, the operator's interval; `0` = announce once, never remind) |
-| `CCQUOTA_WECOM_LOCALE` | hub | the messages' language (`zh-CN`; `en`) |
+| `CCQUOTA_NOTIFY_URL` | hub | kf-notify's base URL; the hub posts to `<url>/v1/notify`. Set together with the key — one without the other refuses to start |
+| `CCQUOTA_NOTIFY_KEY` | hub | kf-notify's caller key, sent as `Authorization: Bearer …` — **a secret**: environment only, like the SSO secrets; never a flag (`ps`), never logged, never in an error or a page |
+| `CCQUOTA_NOTIFY_DEST` | hub | the kf-notify `dest` (default `alerts.prod`, the cluster's default) |
+| `CCQUOTA_NOTIFY_REPEAT_HOURS` | hub | remind about a problem that is still standing this often (default `6`, the operator's interval; `0` = announce once, never remind). Old name `CCQUOTA_WECOM_REPEAT_HOURS` still read |
+| `CCQUOTA_NOTIFY_LOCALE` | hub | the messages' language (`zh-CN`; `en`). Old name `CCQUOTA_WECOM_LOCALE` still read |
+| `CCQUOTA_WECOM_WEBHOOK` | hub | **deprecated, kept one version**: a bare WeCom group robot webhook, used only when kf-notify is not configured. It carries the robot's key — same rules as the kf-notify key |
+
+Neither kf-notify nor the webhook set: the push is off and nothing about
+findings changes.
+
+What a kf-notify request carries (the cluster's convention, as in
+24haowan-monorepo `smoke/notify-post.js`):
+
+| field | value |
+|---|---|
+| `source` | `ccquota:finding:<kind>` (`account_login`, `cred_setup_token`, …) |
+| `dedupKey` | `ccquota:<problem>` — the finding's problem id (below), the same key for its announcement, reminders, escalation and recovery, so kf-notify folds them into one inbox event |
+| `severity` | critical → `error`, warning → `warn`, a recovery → `info` |
+| `recovery` | `true` on the `已恢复` message (kf-notify drops it if it never saw the problem) |
+| `title` / `body` | the finding's sentence / the markdown message below |
+| `dedupWindowSec` | `60` — the hub's own rules below are the dedup; kf-notify's default hour would swallow a `（有变化）` sent within it |
+
+A delivery failure (unreachable, a non-2xx answer) is one log line without the
+key, and never touches the finding itself.
 
 One message is one finding, as markdown: a bold head (`ccquota · 严重`), the
 finding's sentence in that language, its detail and its link
@@ -1149,7 +1177,7 @@ backed by the `finding_notices` table):
   critical in its last week) is announced again as `升级为严重`; the same
   severity with another sentence (expiring → expired) as `（有变化）`; a
   quieter one is recorded silently.
-- Still standing after `CCQUOTA_WECOM_REPEAT_HOURS`: one reminder per
+- Still standing after `CCQUOTA_NOTIFY_REPEAT_HOURS`: one reminder per
   interval (`仍在严重 · 已持续 6小时`).
 - **Gone**: one `已恢复` message carrying the sentence last sent — for the
   kinds whose clearing means a person acted or a machine came back
