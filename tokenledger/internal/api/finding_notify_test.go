@@ -198,7 +198,7 @@ func TestFindingNotifySkipsInfoMutedAndRoutineRecovery(t *testing.T) {
 	if _, err := h.srv.Store.MuteFinding(store.FindingMute{FindingID: hot(nil)[0].ID}, time.Hour, base); err != nil {
 		t.Fatal(err)
 	}
-	mutes, _ := h.srv.activeMutes()
+	mutes, _ := h.srv.activeMutes(base)
 	n.reconcile(h.srv.Store, hot(mutes), base)
 	wantMessages(t, robot, 0)
 	// Unmuted: announced once; gone: no 已恢复 for a window that cooled, row dropped.
