@@ -1477,14 +1477,18 @@ func fleetToolSpecs() []toolSpec {
 				"default) for the hub to place it: among your machines with a fleet hosting repo, those " +
 				"offline, above 0.8 load per core, short of memory or at your per-person cap are excluded, " +
 				"the rest scored on account headroom and load — the reasoning is in the operation's " +
-				"placement. node=<machine> restricts it to that machine. Needs worker:start." + fleetWriteCaveat,
+				"placement. node=<machine> restricts it to that machine. kind=scratch opens a raw " +
+				"scratch session instead (no issue, no lease; an optional name) — issue is required " +
+				"otherwise. Needs worker:start." + fleetWriteCaveat,
 			InputSchema: obj(map[string]any{"issue": numberProp, "idempotency_key": idemProp,
 				"fleet_id": fleetIDProp, "repo": fleetRepoProp,
+				"kind":  map[string]any{"type": "string", "enum": []string{"issue", "scratch"}, "description": "issue (default; issue required) or scratch (a raw session with no issue)."},
+				"name":  map[string]any{"type": "string", "maxLength": 64, "description": "kind=scratch only: the scratch's name (its window label and unsent first draft)."},
 				"node":  map[string]any{"type": "string", "description": "auto (default) or a machine name from the roster."},
 				"agent": map[string]any{"type": "string", "enum": []string{"claude", "codex"}},
 				"account_class": map[string]any{"type": "string", "enum": []string{"any", "local", "pool"},
 					"description": "The kind of subscription the session runs on: local (the opening login's own), pool (the hub's leased accounts) or any (default, that fleet's pick)."}},
-				"issue", "idempotency_key"),
+				"idempotency_key"),
 		},
 		{
 			Name:  "worker_message",

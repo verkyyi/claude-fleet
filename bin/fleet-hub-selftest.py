@@ -104,6 +104,19 @@ printf '%s\\n' "$*" >> "$FLEET_CONF_DIR/spawn.calls"
 repo=''; [ "${7:-}" = --repo ] && repo=$8
 printf '@12\\t%s\\t0\\t/fixture/issue-%s\\tdone\\tclaude\\ta1\\t\\t%s\\n' "$1" "$1" "$repo" >> "$FLEET_CONF_DIR/workers.tsv"
 ''')
+        # A scratch start (issue #1541) runs dash-raw-session.sh instead: its argv
+        # is recorded, a @raw row joins the window table, and the --print receipt
+        # names the window the controller reads back.
+        self.script(self.bin / "dash-raw-session.sh", '''#!/bin/bash
+if [ -f "$FLEET_CONF_DIR/spawn-full" ]; then
+  echo "dash-raw-session: at capacity: 6/6 sessions" >&2
+  exit 2
+fi
+printf '%s\\n' "$*" >> "$FLEET_CONF_DIR/scratch.calls"
+repo=''; prev=''; for a in "$@"; do [ "$prev" = --repo ] && repo=$a; prev=$a; done
+printf '@13\\t\\t1\\t/fixture/project-scratch-3\\tdone\\tclaude\\ta2\\t\\t%s\\n' "$repo" >> "$FLEET_CONF_DIR/workers.tsv"
+printf '@13\\tscratch-3\\t/fixture/project-scratch-3\\n'
+''')
         # Lifecycle fakes (issue #834): each records its argv, acts on the
         # window table the fake tmux serves, and answers with the real script's
         # result token / exit status so the controller's mapping is exercised.
@@ -768,6 +781,35 @@ class HubTests(HubFixture):
                                                params={"issue": 128, "account_class": "any"}))
         self.assertEqual(self.node.wait(plain["operation_id"])["status"], "succeeded")
         self.assertEqual((self.node.conf / "spawn.calls").read_text(), "128 demo --agent claude --origin hub\n")
+
+    def test_start_scratch_opens_a_raw_session(self):
+        # issue #1541: kind=scratch is a raw scratch session — no issue, no claim;
+        # the node runs dash-raw-session.sh and its --print receipt names the
+        # window. The name is held to the hub's own rule before it is an argv word.
+        parent = "11111111-1111-4111-8111-111111111111/issue-7"
+        for bad in ({"kind": "scratch", "issue": 1}, {"kind": "draft"}, {"kind": "scratch", "name": "a#b"},
+                    {"kind": "scratch", "name": "x" * 65}, {"kind": "scratch", "name": "a\x1bb"},
+                    {"issue": 1, "name": "x"}, {"kind": "scratch", "name": 3}, {"kind": "scratch", "repo": "../x"}):
+            with self.subTest(bad=bad), self.assertRaises(Fault):
+                validate_write("worker_start", bad)
+        validate_write("worker_start", {"kind": "scratch"})
+        validate_write("worker_start", {"kind": "scratch", "name": "试一下 侧边栏", "origin_wid": parent})
+        started = self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="scratch-1",
+                                                 params={"kind": "scratch", "name": " 试一下 ", "origin_wid": parent}))
+        op = self.node.wait(started["operation_id"])
+        self.assertEqual((op["status"], op["result"]["exit"], op["result"]["window"]), ("succeeded", 0, "@13"))
+        worker = op["result"]["workers"][0]
+        self.assertEqual((worker["key"], worker["scratch"], worker["issue"]), ("scratch-3", True, None))
+        self.assertEqual((self.node.conf / "scratch.calls").read_text(),
+                         "demo --origin hub --print --agent claude --origin-wid %s --name 试一下\n" % parent)
+        self.assertFalse((self.node.conf / "spawn.calls").exists())
+        # a refusal there comes back with the raw spawner's own code and line
+        (self.node.conf / "spawn-full").touch()
+        refused = self.node.wait(self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="scratch-2",
+                                                                params={"kind": "scratch"}))["operation_id"])
+        err = refused["result"]["error"]
+        self.assertEqual((refused["status"], err["code"], err["exit"]), ("failed", "AT_CAPACITY", 2))
+        self.assertEqual(err["stderr1"], "dash-raw-session: at capacity: 6/6 sessions")
 
     def test_move_in_runs_the_target_half_and_maps_its_outcome(self):
         # issue #1426: a session moved here through the hub. Every value is held

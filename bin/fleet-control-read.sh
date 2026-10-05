@@ -142,7 +142,7 @@ case "$mode" in
     if [ -n "${5:-}" ]; then
       srepo=$(fleet_repo_for_slug "$sess" "$5") || { printf 'start: %s is not a repo this fleet hosts\n' "$5" >&2; exit 6; }
     elif fleet_multirepo "$sess"; then
-      printf 'start: this fleet hosts several repos; name the repo of #%s\n' "${3:-}" >&2; exit 6
+      printf 'start: this fleet hosts several repos; name the repo of %s\n' "$([ "${3:-}" = scratch ] && echo 'the scratch' || echo "#${3:-}")" >&2; exit 6
     fi
     bash "$BIN/fleet-diskguard.sh" --gate >&2 || exit 4
     if [ "$agent" = codex ]; then
@@ -166,6 +166,16 @@ case "$mode" in
     # adds nothing.
     acls="${7:-}"
     case "$acls" in local|pool) ;; *) acls='' ;; esac
+    if [ "${3:-}" = scratch ]; then
+      # A raw scratch session the hub placed here (issue #1541): no issue, no
+      # claim — dash-raw-session.sh in its headless form, with $8 (the name the
+      # asker typed, validated by the controller) as --name and --print for the
+      # receipt the controller reads back (`<window_id>\t<name>\t<worktree>`).
+      # $7 is read like an issue's but not replayed: dash-raw-session.sh has no
+      # --account yet, so a scratch runs on the opening fleet's pick.
+      sname="${8:-}"
+      exec bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --agent "$agent" ${srepo:+--repo "$srepo"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"}
+    fi
     exec bash "$BIN/dash-issue-session.sh" "${3:-}" "$sess" --agent "$agent" --origin hub ${srepo:+--repo "$srepo"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${acls:+--account "$acls"}
     ;;
   # --- worker lifecycle by DURABLE key (issue #834) ---------------------------

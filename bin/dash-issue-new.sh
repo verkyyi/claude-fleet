@@ -168,18 +168,40 @@ if [ -z "$REPO" ]; then
 fi
 [ "$spawn" = 1 ] && verb="New issue + worker" || verb="New issue"
 title_prefix='  title ▸ '
-hdr="$verb in $REPO — type a title · Enter = file · Esc = cancel"
+hdr="$verb in $REPO — type a title · Enter = file · ^S = scratch session${node:+ on $node} · Esc = cancel"
 # fzf as a pure text input (issue #429): empty candidate list (< /dev/null), --print-query
 # echoes the typed line. Exit 130 = Esc/Ctrl-C → cancel; 0/1 = accepted (1 = Enter with no
 # match, our normal case — --print-query still prints the query). fzf reads keys from
 # /dev/tty, so it works inside `display-popup -E`; it owns UTF-8/IME/paste echo, so there is
 # no double-echo (issue #422), Esc is instant (no 1s wait — issue #419), and a multi-line
 # paste folds into the single-line query.
-title=$(fzf --print-query --no-multi --layout=reverse --no-info --no-separator \
+# --expect=ctrl-s (issue #1541): ⌃s in this popup opens a SCRATCH session instead
+# of filing — the sidebar's ⌃s (#1532) by another road, so «新建到 m4…» can open
+# a scratch on m4 too. fzf then prints the key as the SECOND line (after the
+# query); Enter prints an empty one.
+title=$(fzf --print-query --expect=ctrl-s --no-multi --layout=reverse --no-info --no-separator \
             --height=100% --border=none --prompt="$title_prefix" --header="$hdr" \
             < /dev/null 2>/dev/null); rc=$?
 [ "$rc" -eq 130 ] && exit 0          # Esc / Ctrl-C → cancel the create
-title=${title%%$'\n'*}               # the query is the first (only) line
+key=''; case "$title" in *$'\n'ctrl-s) key=ctrl-s ;; esac
+title=${title%%$'\n'*}               # the query is the first line
+if [ "$key" = ctrl-s ]; then
+  # A scratch: the typed text is its name (the window label + an unsent first
+  # draft, as the sidebar's input line), staged in a file — arbitrary user text
+  # is never interpolated into the run-shell string. --origin hub: this popup is
+  # the hub's ⌃s, not the row's child (#896). --node (one token, checked above):
+  # the machine this popup was opened for; dash-raw-session.sh places it there
+  # (#1541), toasting its own outcome. --repo only where it is needed (#794).
+  nfarg=''
+  if [ -n "$title" ]; then
+    nf=$(mktemp "${TMPDIR:-/tmp}/dash-raw.XXXXXX") || { tmux display-message "backlog: cannot stage the scratch name"; exit 1; }
+    printf '%s' "$title" > "$nf"
+    nfarg=" --name-file='$nf'"           # the mktemp path has no metachars
+  fi
+  rarg=''; [ "$MULTI" = 1 ] && rarg=" --repo='$REPO'"   # owner/name, as the create's CF_REPO above
+  fleet_bg "bash '$BIN/dash-raw-session.sh' --origin hub$nfarg${node:+ --node=$node}$rarg"
+  exit 0
+fi
 [ -z "$title" ] && exit 0            # empty title (incl. fzf error) → cancel
 
 # Stage the title in a temp file — it is arbitrary user text, so it is NEVER

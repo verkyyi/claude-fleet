@@ -90,3 +90,35 @@ func TestPlaceCLIContract(t *testing.T) {
 		t.Fatalf("missing worker_id: exit %d, want 2", code)
 	}
 }
+
+// `scratch` in place of the issue (claude-fleet#1541): the body names the
+// asking fleet and kind=scratch, carries --name, and no issue or worker_id.
+func TestPlaceCLIScratch(t *testing.T) {
+	var got map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"local":false,"placement":{"machine":"m4","reason":"chose m4"},"operation":{"operation_id":"op_9","status":"succeeded"},"outcome":{"state":"done","exit":0,"window":"@7","node":"m4"}}`))
+	}))
+	defer ts.Close()
+	fleet := "11111111-1111-4111-8111-111111111111"
+	var out, errb bytes.Buffer
+	code, _ := place([]string{"--hub", ts.URL, "--token", "tok", "--node", "m4", "--name", "试一下", "o/r", "scratch", fleet}, &out, &errb)
+	if code != 0 || strings.TrimRight(out.String(), "\n") != "REMOTE m4 op_9 done @7\tchose m4" {
+		t.Fatalf("code %d out %q", code, out.String())
+	}
+	if got["kind"] != "scratch" || got["fleet_id"] != fleet || got["name"] != "试一下" || got["node"] != "m4" {
+		t.Fatalf("request body %v", got)
+	}
+	for _, k := range []string{"issue", "worker_id"} {
+		if _, has := got[k]; has {
+			t.Fatalf("a scratch request carried %s: %v", k, got)
+		}
+	}
+	if code, _ := place([]string{"--hub", ts.URL, "--token", "tok", "o/r", "scratch", "not-a-uuid"}, &bytes.Buffer{}, &bytes.Buffer{}); code != 2 {
+		t.Fatalf("scratch with no fleet UUID: exit %d, want 2", code)
+	}
+	if code, _ := place([]string{"--hub", ts.URL, "--token", "tok", "--name", "x", "o/r", "7", fleet + "/issue-7"}, &bytes.Buffer{}, &bytes.Buffer{}); code != 2 {
+		t.Fatalf("--name on an issue: exit %d, want 2", code)
+	}
+}

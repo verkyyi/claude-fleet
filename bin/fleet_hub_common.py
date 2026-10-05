@@ -181,6 +181,26 @@ def check_text(text, what="text"):
         raise Fault("INVALID_ARGUMENT", what + " must not contain HTML comments or control characters")
 
 
+MAX_SCRATCH_NAME = 64
+
+
+def check_scratch_name(value):
+    """A scratch start's optional name (issue #1541): None / blank is no name;
+    otherwise ≤ 64 characters, no control characters, no `#` (tmux's format
+    character) — the opener clips it again. The hub's checkScratchName."""
+    if value is None:
+        return
+    if not isinstance(value, str):
+        raise Fault("INVALID_ARGUMENT", "name must be a string")
+    text = value.strip()
+    if not text:
+        return
+    if len(text) > MAX_SCRATCH_NAME:
+        raise Fault("INVALID_ARGUMENT", "name must be at most %d characters" % MAX_SCRATCH_NAME)
+    if any(ord(c) < 32 or ord(c) == 127 or c == "#" for c in text):
+        raise Fault("INVALID_ARGUMENT", "name must not contain control characters or #")
+
+
 def check_answer(value):
     if not isinstance(value, str) or not ANSWER_RE.fullmatch(value):
         raise Fault("INVALID_ARGUMENT", "answer must be yes, no, or option numbers (`2`, `1,3`, one per question)")
@@ -197,8 +217,22 @@ def validate_gh_read(params):
 
 def validate_write(action, params):
     if action == "worker_start":
-        fields(params, ("issue",), ("agent", "repo", "origin_wid", "account_class"))
-        check_number(params["issue"])
+        fields(params, (), ("issue", "kind", "name", "agent", "repo", "origin_wid", "account_class"))
+        # kind (issue #1541): "issue" (the default — a worker on an issue, `issue`
+        # required) or "scratch" (a raw scratch session: no issue, an optional
+        # name — dash-raw-session.sh opens it). Held to the hub's own rule
+        # (tokenledger/internal/api/fleet_write.go), letter for letter.
+        kind = params.get("kind", "issue")
+        if kind == "scratch":
+            if "issue" in params:
+                raise Fault("INVALID_ARGUMENT", "a scratch start has no issue")
+            check_scratch_name(params.get("name"))
+        elif kind == "issue":
+            if "issue" not in params or "name" in params:
+                raise Fault("INVALID_ARGUMENT", "Missing or unsupported request fields")
+            check_number(params["issue"])
+        else:
+            raise Fault("INVALID_ARGUMENT", "kind must be issue or scratch")
         if params.get("agent", "") not in ("", "claude", "codex"):
             raise Fault("INVALID_ARGUMENT", "agent must be claude or codex")
         check_repo(params)

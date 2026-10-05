@@ -484,9 +484,20 @@ class Control:
             elif req["action"] == "worker_start":
                 # No --force, arbitrary argv, paths, environment or shell input.
                 attempted = True
-                code, _, err = self.adapter("start", fleet["name"], str(params["issue"]), params.get("agent", ""),
-                                            params.get("repo", ""), params.get("origin_wid", ""),
-                                            params.get("account_class", ""), timeout=180)
+                scratch = params.get("kind") == "scratch"
+                if scratch:
+                    # issue #1541: a raw scratch session the hub placed here — the
+                    # adapter's start with `scratch` for the issue, the account class
+                    # in its usual slot and the name (validated above) as one more
+                    # argv word; dash-raw-session.sh opens it and prints its receipt
+                    # (`<window_id>\t<name>\t<worktree>`).
+                    code, output, err = self.adapter("start", fleet["name"], "scratch", params.get("agent", ""),
+                                                     params.get("repo", ""), params.get("origin_wid", ""),
+                                                     params.get("account_class", ""), params.get("name", "").strip(), timeout=180)
+                else:
+                    code, output, err = self.adapter("start", fleet["name"], str(params["issue"]), params.get("agent", ""),
+                                                     params.get("repo", ""), params.get("origin_wid", ""),
+                                                     params.get("account_class", ""), timeout=180)
                 if code:
                     # 6 = no repo named in a fleet hosting several, or one it does not host (#984).
                     reasons = {2: "AT_CAPACITY", 3: "ALREADY_CLAIMED", 4: "RESOURCE_GATE", 6: "INVALID_ARGUMENT"}
@@ -497,10 +508,15 @@ class Control:
                     raise Refused(reasons.get(code, "EXECUTION_FAILED"),
                                   "Fleet refused to start the worker: " + refusal_line(err), code, refusal_line(err))
                 snapshot = self.workers(fleet)
-                # Match the spawned repo too (issue #1018): another repo's issue-N
-                # is a different worker.
-                matches = [w for w in snapshot["workers"] if w["issue"] == params["issue"]
-                           and (not params.get("repo") or repo_named(w["repo"], params["repo"]))]
+                if scratch:
+                    # The receipt names the window: that row, and only that row.
+                    window = output.decode("utf-8", "replace").split("\n", 1)[0].split("\t", 1)[0].strip()
+                    matches = [w for w in snapshot["workers"] if window and w["window_id"] == window and w["scratch"]]
+                else:
+                    # Match the spawned repo too (issue #1018): another repo's issue-N
+                    # is a different worker.
+                    matches = [w for w in snapshot["workers"] if w["issue"] == params["issue"]
+                               and (not params.get("repo") or repo_named(w["repo"], params["repo"]))]
                 if not matches:
                     raise Fault("UNKNOWN_OUTCOME", "Spawn returned but no matching worker is visible")
                 result = {"workers": matches, "observed_at": snapshot["observed_at"],
@@ -568,10 +584,10 @@ def last_line(err):
 
 
 def refusal_line(err):
-    """The spawn's refusal: its last `dash-issue-session:` line (a lease note
-    can come first), else its last stderr line."""
+    """The spawn's refusal: its last `dash-issue-session:` / `dash-raw-session:`
+    line (a lease note can come first), else its last stderr line."""
     lines = [l.strip() for l in (err or b"").decode("utf-8", "replace").splitlines() if l.strip()]
-    said = [l for l in lines if l.startswith("dash-issue-session:")]
+    said = [l for l in lines if l.startswith(("dash-issue-session:", "dash-raw-session:"))]
     return (said or lines or ["no detail"])[-1][:200]
 
 

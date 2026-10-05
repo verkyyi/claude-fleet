@@ -541,6 +541,21 @@ does so wherever it lands. `any` / absent adds nothing to the request; the hub
 and the node both refuse any other word (`INVALID_ARGUMENT`). See
 [MULTI-ACCOUNT.md](MULTI-ACCOUNT.md) for what each class means.
 
+**A scratch session is placed the same way** (issue #1541, EPIC #1529 R3).
+`dash-raw-session.sh --node <m>` means what it means for an issue session: with
+the hub on, `--node` ▸ `FLEET_SPAWN_NODE` ▸ `auto`, and `fleet_hub_place … scratch`
+asks `POST /v1/node/place` with `kind=scratch`, the asking fleet's UUID and the
+scratch's optional `name` — no issue, so **no lease** is taken or handed over;
+the `scratch-<N>` is minted on the machine that opens it. REMOTE sends that fleet
+a `worker_start` of `kind=scratch` (`parseWrite` / `validate_write` hold it to the
+same rule: no `issue`, a `name` of ≤ 64 characters with no control characters or
+`#`); its node runs `fleet-control-read.sh start <sess> scratch <agent> <repo>
+<origin_wid> <name>` → `dash-raw-session.sh <sess> --origin hub --print …`, and
+the `--print` receipt (`<window_id>\t<name>\t<worktree>`) is the window the
+outcome reports. A seeded (`--prompt`) or no-repo scratch never travels; the
+hub's `worker_start(kind=scratch, repo, node?, name?)` opens one from the MCP side
+too. `ccquota place … <repo> scratch <fleet UUID>` is the CLI form.
+
 ## Tools
 
 | MCP tool | Behavior | Required grant |
@@ -548,7 +563,7 @@ and the node both refuse any other word (`INVALID_ARGUMENT`). See
 | `fleet_list(refresh=true)` | Discover changes on the caller's registered nodes; return only granted Fleets | `fleet:read` |
 | `fleet_status(fleet_id)` | Read current workers on the named socket, each with its durable `worker_id` | `fleet:read` on that Fleet |
 | `config_get(fleet_id)` | Read managed values and the Fleet-overlay revision | `fleet:read` on that Fleet |
-| `worker_start(fleet_id, issue, idempotency_key, agent?, repo?)` | Start an existing Issue through the headless Fleet launcher; `repo` (owner/name or a hosted repo's name) is REQUIRED when the Fleet hosts several repos, and an unhosted one fails `INVALID_ARGUMENT` before any gate runs (#984) | `worker:start` on that Fleet |
+| `worker_start(fleet_id, issue, idempotency_key, agent?, repo?, kind?, name?)` | Start an existing Issue through the headless Fleet launcher; `repo` (owner/name or a hosted repo's name) is REQUIRED when the Fleet hosts several repos, and an unhosted one fails `INVALID_ARGUMENT` before any gate runs (#984). `kind=scratch` (#1541) opens a raw scratch session instead — no `issue`, an optional `name` — through `dash-raw-session.sh` | `worker:start` on that Fleet |
 | `worker_message(worker_id, text, idempotency_key)` | Post `text` as the worker's next turn through the fleet's issue bridge (a `--to-worker` comment on its Issue; never keystrokes) — or, on a fleet without the bridge, straight to the live session through the node's peer channel (`fleet-peer-send.sh`, #1554) | `worker:message` on the worker's Fleet |
 | `worker_stop(worker_id, idempotency_key)` | Graceful `/exit` of the live session; the fleet's own exit policy closes the window and records the `/fleet-history` row | `worker:stop` on the worker's Fleet |
 | `worker_resume(worker_id, idempotency_key)` | Reopen a stopped worker from its `/fleet-history` row in a new window (`dash-restore-session.sh`) | `worker:resume` on the worker's Fleet |

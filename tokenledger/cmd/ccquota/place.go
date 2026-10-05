@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/fleetid"
 )
 
 // ccquota place — a node asks the hub where a new session should run
@@ -83,10 +85,14 @@ func place(args []string, stdout, stderr io.Writer) (int, error) {
 	account := fs.String("account", "", "local, pool or any: the kind of subscription the session runs on (default: the opening fleet's pick)")
 	key := fs.String("key", "", "idempotency key (default: one per call)")
 	wait := fs.Int("wait", -1, "seconds the hub waits on a remote start's outcome (default: the hub's, 30; 0 = answer on acceptance)")
+	name := fs.String("name", "", "a scratch session's name (with `scratch` in place of the issue)")
 	fs.Usage = func() {
 		fmt.Fprint(stderr, `Usage: ccquota place [--node auto|<machine>] [--origin-wid <wid>] [--agent a] [--account local|pool|any] <owner/repo> <issue> <worker_id>
+       ccquota place [--node auto|<machine>] [--origin-wid <wid>] [--agent a] [--account local|pool|any] [--name <n>] <owner/repo> scratch <fleet UUID>
 
-Ask the hub which machine should open a session on an issue (claude-fleet#1425).
+Ask the hub which machine should open a session on an issue (claude-fleet#1425),
+or a raw scratch session with no issue (claude-fleet#1541: no lease; the
+scratch-<N> is minted where it opens, so the asker names its fleet).
 Exit 0 LOCAL/REMOTE, 3 held elsewhere, 4 refused, 5 the chosen machine
 declined the start, 6 its outcome is unknown, 1 hub unreachable, 2 usage.
 `)
@@ -100,15 +106,28 @@ declined the start, 6 its outcome is unknown, 1 hub unreachable, 2 usage.
 		fs.Usage()
 		return 2, nil
 	}
-	issue, err := strconv.Atoi(rest[1])
-	if err != nil || issue <= 0 {
-		return 2, fmt.Errorf("issue must be a positive number, not %q", rest[1])
+	ask := map[string]any{"repo": rest[0], "node": *node, "origin_wid": *origin, "agent": *agent, "idempotency_key": *key}
+	if rest[1] == "scratch" {
+		if !fleetid.IsUUID(rest[2]) {
+			return 2, fmt.Errorf("a scratch start names the asking fleet's UUID, not %q", rest[2])
+		}
+		ask["kind"], ask["fleet_id"] = "scratch", rest[2]
+		if *name != "" {
+			ask["name"] = *name
+		}
+	} else {
+		issue, err := strconv.Atoi(rest[1])
+		if err != nil || issue <= 0 {
+			return 2, fmt.Errorf("issue must be a positive number (or scratch), not %q", rest[1])
+		}
+		if *name != "" {
+			return 2, errors.New("--name is for a scratch start")
+		}
+		ask["issue"], ask["worker_id"] = issue, rest[2]
 	}
 	if *hub == "" || *token == "" {
 		return 1, errors.New("no hub configured (CCQUOTA_HUB_URL and CCQUOTA_TOKEN)")
 	}
-	ask := map[string]any{"repo": rest[0], "issue": issue, "worker_id": rest[2],
-		"node": *node, "origin_wid": *origin, "agent": *agent, "idempotency_key": *key}
 	if *account != "" {
 		ask["account_class"] = *account
 	}

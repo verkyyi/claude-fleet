@@ -3,7 +3,7 @@
 import asyncio
 import contextvars
 import os
-from typing import Any
+from typing import Any, Optional
 from urllib.parse import urlsplit
 
 from fleet_hub_common import Fault, canonical, now
@@ -134,10 +134,16 @@ def make_server(hub, *, token=None, oauth=None, grant_tokens=False):
         return await invoke("config_get", {"fleet_id": fleet_id})
 
     @server.tool(annotations=change, structured_output=True)
-    async def worker_start(fleet_id: str, issue: StrictInt, idempotency_key: str, agent: str = "", repo: str = "",
-                           account_class: str = "") -> dict[str, Any]:
-        """Start work on an existing issue under local Fleet gates; name its repo (owner/name) when the fleet hosts several. account_class local|pool|any picks the kind of subscription it runs on (default: the fleet's). Reuse the key only for the same request; poll operation_get."""
-        params = {"issue": issue, "agent": agent}
+    async def worker_start(fleet_id: str, idempotency_key: str, issue: Optional[StrictInt] = None, agent: str = "",
+                           repo: str = "", account_class: str = "", kind: str = "", name: str = "") -> dict[str, Any]:
+        """Start work on an existing issue under local Fleet gates; name its repo (owner/name) when the fleet hosts several. account_class local|pool|any picks the kind of subscription it runs on (default: the fleet's). kind=scratch opens a raw scratch session instead (no issue; an optional name). Reuse the key only for the same request; poll operation_get."""
+        params = {"agent": agent}
+        if issue is not None:
+            params["issue"] = issue
+        if kind:
+            params["kind"] = kind
+        if name:
+            params["name"] = name
         if repo:
             params["repo"] = repo
         if account_class:
