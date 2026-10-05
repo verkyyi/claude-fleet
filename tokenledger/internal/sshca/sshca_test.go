@@ -173,3 +173,43 @@ func TestParsePEM(t *testing.T) {
 		t.Fatal("parsed garbage as a CA key")
 	}
 }
+
+// A peer certificate (claude-fleet#1626): one login, five minutes at most,
+// a key id naming source, target and purpose, no agent forwarding.
+func TestSignPeer(t *testing.T) {
+	ca := newCA(t)
+	k, _ := userKey(t)
+	now := time.Date(2026, 10, 5, 8, 0, 0, 0, time.UTC)
+	iss, err := ca.SignPeer(PeerRequest{Key: k, Source: "verk@m5", Target: "verk@m4", Purpose: "view", Login: "verk", TTL: time.Hour}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := iss.Cert
+	if got := time.Unix(int64(c.ValidBefore), 0).Sub(now); got != PeerTTL {
+		t.Fatalf("lives %v; want PeerTTL (asked an hour)", got)
+	}
+	if c.KeyId != "peer:verk@m5>verk@m4:view" || len(c.ValidPrincipals) != 1 || c.ValidPrincipals[0] != "verk" {
+		t.Fatalf("key id %q principals %v", c.KeyId, c.ValidPrincipals)
+	}
+	if _, ok := c.Permissions.Extensions["permit-agent-forwarding"]; ok {
+		t.Fatal("agent forwarding on a peer certificate")
+	}
+	if _, ok := c.Permissions.Extensions["permit-pty"]; !ok {
+		t.Fatal("no pty: a remote view could not attach")
+	}
+	short, _ := ca.SignPeer(PeerRequest{Key: k, Source: "a", Target: "b", Purpose: "move", Login: "verk", TTL: 30 * time.Second}, now)
+	if got := short.ValidBefore.Sub(now); got != 30*time.Second {
+		t.Fatalf("asked 30s, lives %v", got)
+	}
+	for _, bad := range []PeerRequest{
+		{Key: k, Source: "a", Target: "b", Purpose: "view"},
+		{Key: k, Target: "b", Purpose: "view", Login: "x"},
+		{Key: k, Source: "a", Purpose: "view", Login: "x"},
+		{Key: k, Source: "a", Target: "b", Login: "x"},
+		{Source: "a", Target: "b", Purpose: "view", Login: "x"},
+	} {
+		if _, err := ca.SignPeer(bad, now); err == nil {
+			t.Errorf("signed %+v", bad)
+		}
+	}
+}

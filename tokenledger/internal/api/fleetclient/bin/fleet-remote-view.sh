@@ -129,6 +129,11 @@
 #                            hub relay (`fleet connect --proxy`, #1413) when one is
 #                            configured; 0 = direct only
 #   FLEET_REMOTE_SSH_CMD     (selftests) the ssh program
+#
+# Machine to machine (issue #1626): with plain ssh on a hub node, every connect
+# first asks the hub for a five-minute certificate to that machine
+# (fleet-peer-cert.sh) — no standing key in the far end's authorized_keys is
+# needed or used; a hub that says no or is down pauses the view and says why.
 #   FLEET_REMOTE_OPENER      (selftests) what re-issues a request (fleet-open.sh)
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -427,9 +432,31 @@ for line in sys.stdin:
   }
   route=direct; delay=1
   while :; do
-    printf '\033[2J\033[H→ %s (%s%s) …\n' "$node" "$host" "$( [ "$route" = hub ] && printf ' · 经入口中转')"
+    # Machine to machine (issue #1626): a plain-ssh view from a hub node asks the
+    # hub for a five-minute certificate to THIS machine first. rc 3 = no hub here
+    # (or it predates #1626): plain ssh, as before; rc 1 = the hub said no or is
+    # down — pause and say so, never fall back to a standing key. A view driven by
+    # the shell (FLEET_REMOTE_SSH_CMD) rides the person's own certificate instead.
+    peer=(); peerwhy=''
+    if [ -z "${FLEET_REMOTE_SSH_CMD:-}" ] && [ -f "$BIN/fleet-peer-cert.sh" ]; then
+      peerout=$(bash "$BIN/fleet-peer-cert.sh" "$(hub_node "$node")" view 2>"${ctl}.err"); prc=$?
+      peerwhy=$(tail -n 1 "${ctl}.err" 2>/dev/null); rm -f "${ctl}.err"
+      case "$prc" in
+        0) while IFS= read -r o; do [ -n "$o" ] && peer+=("$o"); done <<EOF_PEER
+$peerout
+EOF_PEER
+           ;;
+        3) peerwhy='' ;;
+        *) printf '\033[2J\033[H→ %s 暂停：%s\n' "$node" "${peerwhy#fleet-peer-cert: }"
+           [ "$delay" -lt 30 ] && delay=$(( delay * 2 ))
+           printf '%ss 后再向入口申请 · Ctrl-C 关闭窗口\n' "$delay"
+           sleep "$delay"; continue ;;
+      esac
+    fi
+    printf '\033[2J\033[H→ %s (%s%s%s) …\n' "$node" "$host" "$( [ "$route" = hub ] && printf ' · 经入口中转')" \
+      "$( [ ${#peer[@]} -gt 0 ] && printf ' · 入口证书 5 分钟')"
     opts=(-tt -o ServerAliveInterval=5 -o ServerAliveCountMax=3 -o ConnectTimeout=8
-          -o ControlMaster=yes -o "ControlPath=$ctl" -o ControlPersist=no)
+          -o ControlMaster=yes -o "ControlPath=$ctl" -o ControlPersist=no ${peer[@]+"${peer[@]}"})
     [ "$route" = hub ] && opts+=(-o "ProxyCommand=$(sq "$BIN/fleet") connect --proxy $(sq "$(hub_node "$node")")")
     rm -f "$ctl"
     sidecar & side=$!

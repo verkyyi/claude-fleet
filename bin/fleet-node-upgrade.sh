@@ -32,6 +32,8 @@
 #   --host   run the same upgrade on another machine over ssh: the binary is
 #            built (or taken) HERE and shipped, and this very script is streamed
 #            to `bash -s` there — the remote needs neither Go nor this script.
+#            On a hub node each ssh rides a five-minute hub certificate
+#            (fleet-peer-cert.sh, issue #1626), never a standing key.
 #
 # --status prints one row per login (login · path · version on disk · version
 # the hub sees + heartbeat) and a `summary: <k>/<n> behind <target>` line; the
@@ -139,6 +141,23 @@ bin_version() { "$1" version 2>/dev/null | awk 'NR==1 {print $2}'; }
 # ── --host: ship binary + this script to another machine ────────────────────
 if [ -n "$HOST" ]; then
   resolve_target
+  # Machine to machine (issue #1626): each ssh asks the hub for a five-minute
+  # certificate to $HOST first (fleet-peer-cert.sh). rc 3 = no hub here, plain
+  # ssh as before; anything else = the hub said no or is down — stop and say so.
+  peer_ssh() {
+    local out rc o
+    PEER=()
+    [ -f "$(dirname "$0")/fleet-peer-cert.sh" ] || return 0
+    out=$(bash "$(dirname "$0")/fleet-peer-cert.sh" "$HOST" upgrade); rc=$?
+    case "$rc" in
+      0) while IFS= read -r o; do [ -n "$o" ] && PEER+=("$o"); done <<EOF_PEER
+$out
+EOF_PEER
+         ;;
+      3) ;;
+      *) fail "the hub gave no certificate to reach $HOST (fleet-peer-cert exit $rc) — cross-machine access paused" ;;
+    esac
+  }
   pass=()
   [ "$DRY" = 1 ] && pass+=(--dry-run)
   [ "$STATUS" = 1 ] && pass+=(--status)
@@ -153,7 +172,8 @@ if [ -n "$HOST" ]; then
   if [ "$DRY" = 1 ] || [ "$STATUS" = 1 ]; then
     [ "$DRY" = 1 ] && [ "$STATUS" != 1 ] && pass+=(--binary shipped-by-caller)
     say "host: $HOST — running there with target $VER"
-    exec ssh -o BatchMode=yes "$HOST" "${renv}bash -s -- $FULL ${pass[*]-}" < "$0"
+    peer_ssh
+    exec ssh -o BatchMode=yes ${PEER[@]+"${PEER[@]}"} "$HOST" "${renv}bash -s -- $FULL ${pass[*]-}" < "$0"
   fi
   if [ -z "$BINARY" ]; then
     # Re-enter ourselves locally for the build only: --dry-run would skip it.
@@ -169,8 +189,10 @@ if [ -n "$HOST" ]; then
   [ -z "$WANT_SUM" ] || [ "$WANT_SUM" = "$sum" ] || fail "$BINARY sha256 $sum ≠ --sha256 $WANT_SUM"
   rtmp="/tmp/fleet-node-upgrade-$S7-$$"
   say "host: $HOST — shipping $VER (sha256 $sum) to $rtmp"
-  ssh -o BatchMode=yes "$HOST" "cat > $rtmp && chmod 755 $rtmp" < "$BINARY" || fail "cannot copy the binary to $HOST"
-  ssh -o BatchMode=yes "$HOST" "${renv}bash -s -- $FULL --binary $rtmp --sha256 $sum ${pass[*]-}; rc=\$?; rm -f $rtmp; exit \$rc" < "$0"
+  peer_ssh
+  ssh -o BatchMode=yes ${PEER[@]+"${PEER[@]}"} "$HOST" "cat > $rtmp && chmod 755 $rtmp" < "$BINARY" || fail "cannot copy the binary to $HOST"
+  peer_ssh
+  ssh -o BatchMode=yes ${PEER[@]+"${PEER[@]}"} "$HOST" "${renv}bash -s -- $FULL --binary $rtmp --sha256 $sum ${pass[*]-}; rc=\$?; rm -f $rtmp; exit \$rc" < "$0"
   exit $?
 fi
 

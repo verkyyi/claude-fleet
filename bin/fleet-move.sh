@@ -169,7 +169,30 @@ remote_cmd() {
   for a in "$@"; do out="${out}${out:+ }$(printf '%q' "$a")"; done
   printf '%s' "$out"
 }
-ssh_run() { ssh -o BatchMode=yes "$TO" "$(remote_cmd "$@")"; }
+# Machine to machine (issue #1626): every ssh to $TO rides a five-minute hub
+# certificate (fleet-peer-cert.sh), fetched once and again when it is 4 minutes
+# old — a move outlasting one certificate takes the next. rc 3 = no hub here (or
+# one predating #1626): plain ssh, as before. Anything else: no certificate, no
+# ssh — the move stops on that step and says the hub did not let it through.
+PEER=() PEER_AT=0 PEER_NA=0
+peer_refresh() {
+  [ "$PEER_NA" = 1 ] && return 0
+  [ $(( $(date +%s) - PEER_AT )) -lt 240 ] && [ "${#PEER[@]}" -gt 0 ] && return 0
+  local out rc o
+  [ -f "$BIN/fleet-peer-cert.sh" ] || { PEER_NA=1; return 0; }
+  out=$(bash "$BIN/fleet-peer-cert.sh" "$TO" move); rc=$?
+  PEER=()
+  case "$rc" in
+    0) while IFS= read -r o; do [ -n "$o" ] && PEER+=("$o"); done <<EOF_PEER
+$out
+EOF_PEER
+       PEER_AT=$(date +%s) ;;
+    3) PEER_NA=1 ;;
+    *) printf 'fleet-move: the hub gave no certificate to reach %s — cross-machine access paused\n' "$TO" >&2; return 1 ;;
+  esac
+}
+move_ssh() { peer_refresh || return 255; ssh -o BatchMode=yes ${PEER[@]+"${PEER[@]}"} "$@"; }
+ssh_run() { move_ssh "$TO" "$(remote_cmd "$@")"; }
 
 # Sourced (fleet-move-selftest.sh pins the pure helpers above) → define only; a
 # direct run dispatches. Same guard idiom as fleet-migrate.sh/fleet-account.sh.
@@ -237,10 +260,11 @@ move_main() {
   # already-%q-escaped word, which would defeat the escaping) and that its
   # fleet-move-remote.sh half is actually installed.
   if [ "$VIA" = ssh ]; then
-  REMOTE_HOME=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$TO" 'printf %s "$HOME"' 2>/dev/null)
+  peer_refresh || die "the hub gave no certificate to reach $TO — cross-machine access paused"
+  REMOTE_HOME=$(move_ssh -o ConnectTimeout=10 "$TO" 'printf %s "$HOME"' 2>/dev/null)
   [ -n "$REMOTE_HOME" ] || die "cannot reach $TO over ssh"
   REMOTE_BIN="$REMOTE_HOME/$REMOTE_BIN_NAME"
-  ssh -o BatchMode=yes "$TO" test -x "$REMOTE_BIN" 2>/dev/null \
+  move_ssh "$TO" test -x "$REMOTE_BIN" 2>/dev/null \
     || die "$TO has no $REMOTE_BIN_NAME — update its fleet install first"
   fi
 
@@ -469,7 +493,7 @@ move_main() {
     local pdir; pdir="$(project_dir_for "$cwd")"
     local dest; dest="$(printf '%s' "$twt" | tr '/.' '--')"
     local sidecar=(); [ -d "$pdir/$sid" ] && sidecar=("$sid")
-    if ! tar -C "$pdir" -cf - "$sid.jsonl" ${sidecar[@]+"${sidecar[@]}"} 2>/dev/null | ssh -o BatchMode=yes "$TO" "$(remote_cmd "$REMOTE_BIN" receive --dest "$dest")"; then
+    if ! tar -C "$pdir" -cf - "$sid.jsonl" ${sidecar[@]+"${sidecar[@]}"} 2>/dev/null | move_ssh "$TO" "$(remote_cmd "$REMOTE_BIN" receive --dest "$dest")"; then
       fleet_rotate_lease_drop "$ldir"; abort_target
       say "  ✗ $name ($wid): transcript copy to $TO failed — failed:target"; return 8
     fi
