@@ -228,7 +228,10 @@ mkfifo "$WORK/client.fifo"
 "$REAL_TMUX" -L "$SESS" -C attach-session -t "=$SESS" < "$WORK/client.fifo" >/dev/null 2>&1 &
 CLIENT_PID=$!
 exec 7> "$WORK/client.fifo"
-CHECKS=$((CHECKS + 1)); waitfor 5 test "$(ts display-message -p -t "=$SESS:" '#{session_attached}')" != 0 || fail 'B: a control client attached'
+# re-read on every try: a "$(…)" argument to waitfor is evaluated ONCE, so the
+# client attaching a beat after this line was a flaky red (#1620)
+attached() { [ "$(ts display-message -p -t "=$SESS:" '#{session_attached}')" != 0 ]; }
+CHECKS=$((CHECKS + 1)); waitfor 5 attached || fail 'B: a control client attached'
 w1=$(ts list-windows -t "=$SESS" -F '#{window_id}' | head -1)
 eq 'B: the first window is m5 (the pick)' '⇄m5' "$(ts display-message -p -t "$w1" '#{window_name}')"
 eq 'B: @remote = m5: (the machine, no worker)' 'm5:' "$(ts show-options -wqv -t "$w1" @remote)"
