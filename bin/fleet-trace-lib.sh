@@ -13,7 +13,7 @@
 # bin/task-pick-latency-selftest.sh drives one and reads this column beside it.
 #
 # ONE env string rides the chain: FLEET_HOME_MS = the trace FILE
-# (`$TMPDIR/.claude-dash/home-trace.<pid>.<n>`), one `<name>:<ms>` line per mark.
+# (`$TMPDIR/.claude-dash/home-trace.<pid>`), one `<name>:<ms>` line per mark.
 # A mark never waits for a clock: under macOS's bash 3.2 the stamp is a perl in
 # the BACKGROUND (the mark costs one fork, ~1 ms, not perl's ~5 ms start; every
 # stamp lands ~4 ms after its mark point, the same for all, so the deltas hold),
@@ -39,8 +39,11 @@
 
 _fleet_home_stamp() {   # <name> — append `<name>:<ms since the epoch>` to the trace file
   if [ -n "${EPOCHREALTIME:-}" ]; then
+    # POSIX only (no ${f:0:3}, no 10#): the conf runs hub-zoom.sh under sh, which
+    # is dash on a Linux CI runner, and dash parses the whole body up front.
     local s=${EPOCHREALTIME%.*} f=${EPOCHREALTIME#*.}000
-    printf '%s:%s\n' "$1" "$(( s * 1000 + 10#${f:0:3} ))" >> "$FLEET_HOME_MS" 2>/dev/null
+    f=${f%"${f#???}"}; f=${f#0}; f=${f#0}; f=${f:-0}   # first three digits, no leading zero (octal!)
+    printf '%s:%s\n' "$1" "$(( s * 1000 + f ))" >> "$FLEET_HOME_MS" 2>/dev/null
   else
     ( perl -MTime::HiRes=time -e 'printf "%s:%d\n", $ARGV[0], time()*1000' "$1" >> "$FLEET_HOME_MS" 2>/dev/null ) &
   fi
@@ -53,7 +56,7 @@ fleet_home_trace_start() {
   if [ -n "${FLEET_HOME_MS:-}" ] && [ -f "$FLEET_HOME_MS" ]; then return 0; fi
   local d="${TMPDIR:-/tmp}/.claude-dash"
   [ -d "$d" ] || mkdir -p "$d" 2>/dev/null || { FLEET_HOME_MS=''; return 0; }
-  FLEET_HOME_MS="$d/home-trace.$$.$RANDOM"
+  FLEET_HOME_MS="$d/home-trace.$$"   # one trace per process; $RANDOM is not sh
   : > "$FLEET_HOME_MS" 2>/dev/null || { FLEET_HOME_MS=''; return 0; }
   export FLEET_HOME_MS
   _fleet_home_stamp t0

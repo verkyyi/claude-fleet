@@ -100,8 +100,11 @@ for w in 2 3 4 5; do tmux new-window -d -t t -n "issue-$w" 'sleep 600'; tmux set
 tmux select-window -t t:issue-1
 tmux set -g mouse on \; set -g status on \; set -g status-position bottom \; set -g status-interval 2
 tmux set -g status-left "#[range=user|hub]  ⌂  #[norange] t "
-# The SHIPPED bind, verbatim but for the install path: the one the ⌂ runs.
-awk '/^bind -n MouseDown1Status /,/^}$/' "$CONF" | sed "s#~/.claude/fleet#$ROOT#g" > "$WORK/bind.conf"
+# The SHIPPED bind, verbatim but for the install path — and `sh` spelled as the
+# production /bin/sh, bash in POSIX mode (hub-zoom-home-selftest.sh's reasoning,
+# issue #414): a Linux runner's sh is dash, which the fleet's sh scripts never
+# run under.
+awk '/^bind -n MouseDown1Status /,/^}$/' "$CONF" | sed "s#~/.claude/fleet#$ROOT#g; s#run-shell \"sh #run-shell \"bash --posix #" > "$WORK/bind.conf"
 grep -q 'hub-zoom.sh --home' "$WORK/bind.conf" || fail "the conf's MouseDown1Status bind no longer runs hub-zoom.sh --home"
 tmux source-file "$WORK/bind.conf" || fail "the conf's MouseDown1Status bind did not load"
 
