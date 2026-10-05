@@ -89,7 +89,7 @@ if [ "$INTERACTIVE" = 1 ]; then
   # --print-query echoes the typed line as the first output line. Exit 130 = Esc /
   # Ctrl-C / the ✕ tap → cancel; 0/1 = accepted (1 = Enter with no match, the
   # normal case here). fzf reads keys from /dev/tty, so it works inside
-  # `display-popup -E`.
+  # a fleet popup.
   note=""
   while :; do
     hdr="加仓库到 ${SESS}  ·  输入 owner/name（GitHub 网址也行）  ·  ↵ 加入 · esc 取消 · [✕ close]"

@@ -1138,13 +1138,13 @@ local banner kind lm fb muntil mig msw mk muntilt newact rc axis verdict hk
         if [ $(( $(now) - mig )) -gt 180 ]; then
           tmux -L "$sock" set-window-option -t "$wid" @model_migrating "$(now)" 2>/dev/null
           msw="$BIN/fleet-model-switch.sh"; [ -x "$msw" ] || msw="$BIN/fleet-migrate.sh"
-          fleet_bg -L "$sock" "bash '$msw' --model '$fb' --session '$sock' --toast '$wid'"
+          fleet_bg -L "$sock" "bash '$msw' --model '$fb' --session '$sock' --alert '$wid'"
         fi
         mk="$G/model.limited.$acct.$lm"
         if ! fleet_same_window "$mk" "$muntil"; then
           printf '%s' "$muntil" | atomic_write "$mk"
           muntilt=$(date -r "$muntil" '+%b %d %H:%M' 2>/dev/null || date -d "@$muntil" '+%b %d %H:%M' 2>/dev/null || echo "?")
-          tmux -L "$sock" display-message "fleet: $acct hit its $lm cap (until $muntilt) — switching walled sessions to $fb in place; new sessions on it launch on $fb" 2>/dev/null
+          bash "$BIN/fleet-alerts.sh" event -L "$sock" model-capped "fleet: $acct hit its $lm cap (until $muntilt) — switching walled sessions to $fb in place; new sessions on it launch on $fb"
           if [ -n "${FLEET_NOTIFY_CMD:-}" ]; then
             $FLEET_NOTIFY_CMD "# model cap reached — falling back to $fb
 account **$acct** hit its **$lm** cap (until $muntilt); the subscription itself is fine, so the account stays active — sessions showing the wall are switched to **$fb** IN PLACE (\`/model\` typed at their own prompt: same process, same transcript, background agents kept) and new sessions on this account launch on **$fb** until the cap resets
@@ -1196,11 +1196,11 @@ account **$acct** hit its **$lm** cap (until $muntilt); the subscription itself 
   # bare tmux calls stay on THIS fleet's server; --toast reports the count.
   # fleet_bg, not a hand-rolled `run-shell -b` (#575): migrate's say() report is
   # stdout, which run-shell would overlay on the operator's window (Esc to
-  # dismiss) — fleet_bg silences it; the status-line --toast is unchanged.
+  # dismiss) — fleet_bg silences it; the summary goes to the alerts (--alert, #1617).
   if ( fleet_load_conf "$sock"; [ "${FLEET_FAILOVER:-0}" = 1 ] ); then
     fleet_bg -L "$sock" "bash '$BIN/fleet-account.sh' reconcile --session '$sock'"
   elif [ "$rc" -eq 10 ]; then
-    fleet_bg -L "$sock" "bash '$BIN/fleet-account.sh' migrate --limited --session '$sock' --toast"
+    fleet_bg -L "$sock" "bash '$BIN/fleet-account.sh' migrate --limited --session '$sock' --alert"
     if [ -n "${FLEET_NOTIFY_CMD:-}" ]; then
       $FLEET_NOTIFY_CMD "# subscription limit reached
 account **$acct** hit its usage limit — new sessions now use **${newact:-?}**; every session still on it is being moved (close + \`--resume\` in a new window)

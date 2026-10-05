@@ -1,6 +1,6 @@
 #!/bin/bash
 # dash-config-edit.sh <KEY> — edit one FLEET_* key from the prefix+c config modal
-# (bin/tmux-config.sh). Runs INLINE in the modal's display-popup pty, in the gap
+# (bin/tmux-config.sh). Runs INLINE in the modal's popup pty, in the gap
 # between fzf runs (the modal `abort`s fzf, runs us, then relaunches) — NOT in a
 # nested popup-inside-a-popup, which never opened reliably (issue #122). Shows
 # context, reads one line, validates by @edit type, and writes to the routed conf.
@@ -189,11 +189,15 @@ if [ "$EDIT" = enum ] && command -v fzf >/dev/null 2>&1; then
     [ "$is_model" = yes ] && \
       printf '%s%s\033[36m%-9s\033[0m  \033[38;2;86;95;137m— %s\033[0m\n' ':custom:' "$US" 'custom…' "$(edit_t custom_model)"
   )
+  # In a popup the popup's border is the frame (issue #1619): the label joins the header.
+  . "$BIN/fleet-popup-lib.sh"
+  fleet_fzf_frame "$(edit_t pick_label_fmt "$(fcfg_label "$KEY")" "$scope_label")"
+  hdr=$(edit_t choose_header_fmt "${effval:-<$(edit_t empty)>}" "$effsrc_label")
+  [ -z "$FZF_FRAME_LABEL" ] || hdr="$FZF_FRAME_LABEL"$'\n'"$hdr"
   sel=$(printf '%s\n' "$rows" | fzf --ansi --delimiter="$US" --with-nth=2 \
-          --no-sort --layout=reverse-list --info=hidden --border=rounded \
-          --border-label="$(edit_t pick_label_fmt "$(fcfg_label "$KEY")" "$scope_label")" --border-label-pos=3 \
+          --no-sort --layout=reverse-list --info=hidden ${FZF_FRAME[@]+"${FZF_FRAME[@]}"} \
           --prompt="$(edit_t choose_prompt)" \
-          --header="$(edit_t choose_header_fmt "${effval:-<$(edit_t empty)>}" "$effsrc_label")") \
+          --header="$hdr") \
         || exit 0                                # esc / no selection = cancel
   tok=${sel%%"$US"*}
   case "$tok" in

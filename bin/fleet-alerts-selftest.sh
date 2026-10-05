@@ -21,6 +21,15 @@
 #                 toasts its outcome); kick-daemons passes ONLY the row's
 #                 detail units as --unit, never --force; a healed row kicks
 #                 nothing; kick-collect is `--unit collect --force` (#1242)
+#  11. events   — issue #1617: `fleet-alerts.sh event` records a background
+#                 event → one ▲ row (counts +1, ↵ reads the text) and NO toast;
+#                 a FLEET_ALERT_FLASH_KINDS kind (quota-nowhere) flashes once on
+#                 its socket AND is recorded; same text twice in 60s is one event;
+#                 past FLEET_ALERTS_EVENT_LIVE it leaves the count without a ↻
+#                 trace and stays in the popup's history; 30 days drops it
+#  12. lint     — a daemon (every launchd/*.tmpl script) or background helper
+#                 carrying a bare `display-message` (no -p) is red unless the
+#                 line says `# toast-ok: <why>`; the whitelist lives in ONE file
 #   9. wording  — `pace spread` / `quota blind` / `via banner` /
 #                 `no locally reachable` appear nowhere in bin/; `prefix !` is
 #                 bound and on the cheatsheet
@@ -251,6 +260,65 @@ await_toast 'kicked collect' || fail "10: kick-collect outcome toast" "$(cat "$W
 eq "10: kick-collect = --unit collect --force" "--unit collect --force" "$(cat "$WORK/watch.args")"
 rm -f "$G"/alerts.* "$WORK/toasts"
 
+# ----------------------------------------------------------------- 11. events ----
+rm -f "$G"/alerts.* "$WORK/calls11"
+cat > "$WORK/shim/tmux" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$WORK/calls11"
+exit 0
+EOF
+chmod +x "$WORK/shim/tmux"
+fev() { PATH="$WORK/shim:$PATH" fa event "$@"; }
+EV="$G/alerts.events"
+fev -L sA quota-benched 'fleet: a at 90% → benched; moving its sessions to b'
+eq "11: a background event is recorded once" 1 "$(grep -c 'quota-benched' "$EV" 2>/dev/null)"
+grep -q 'display-message' "$WORK/calls11" 2>/dev/null && fail "11: a non-whitelisted event must NOT flash" "$(cat "$WORK/calls11")"; ok
+fa write
+eq "11: …and the bar's ▲ goes up by one" "0 1 0" "$(fa counts)"
+out=$(fa list --plain)
+case "$out" in *"▲  fleet: a at 90% → benched; moving its sessions to b"*"↵ read"*) ok ;; *) fail "11: the popup row is the event's own text" "$out" ;; esac
+fev -L sB quota-benched 'fleet: a at 90% → benched; moving its sessions to b'   # the same news off another socket
+eq "11: the same kind + text within 60s is ONE event" 1 "$(grep -c 'quota-benched' "$EV")"
+fev -L sA quota-nowhere 'fleet: b at 95% — nowhere to move'
+eq "11: a whitelisted kind flashes once on its socket" 1 "$(grep -c '^-L sA display-message fleet: b at 95% — nowhere to move$' "$WORK/calls11")"
+grep -q 'quota-nowhere	fleet: b at 95%' "$EV" || fail "11: …and is recorded too" "$(cat "$EV")"; ok
+fa write
+eq "11: two events → ▲ 2" "0 2 0" "$(fa counts)"
+id=$(awk -F '\t' '$3 == "quota-benched" { print $2 }' "$EV")
+case "$(fa act "$id" </dev/null)" in *"quota-benched"*"moving its sessions to b"*) ok ;; *) fail "11: ↵ on an event prints its full text" "$(fa act "$id" </dev/null)" ;; esac
+fa event 2>/dev/null; eq "11: no kind / text → usage, exit 2" 2 "$?"
+# an hour later: out of the count, no ↻ trace, still in the popup's history
+awk -F '\t' -v OFS='\t' -v o=$(( $(now) - 7200 )) '{ $1 = o; print }' "$EV" > "$EV.t" && mv "$EV.t" "$EV"
+fa write
+eq "11: past FLEET_ALERTS_EVENT_LIVE the count drops back" "0 0 0" "$(fa counts)"
+grep -q healed "$G/alerts.ndjson" && fail "11: an aged-out event is history, not a ↻ recovery" "$(cat "$G/alerts.ndjson")"; ok
+case "$(fa list --plain)" in *benched*) fail "11: list (no --history) is the live rows only" "$(fa list --plain)" ;; *) ok ;; esac
+hist=$(fa list --plain --history --level warning)
+case "$hist" in *"·  fleet: a at 90% → benched"*"2h"*) ok ;; *) fail "11: --history lists the older event with its age" "$hist" ;; esac
+case "$(fa rows warning)" in *"nowhere to move"*) ok ;; *) fail "11: the popup's ▲ view carries the history" "$(fa rows warning)" ;; esac
+case "$(fa list --plain --history --level alarm)" in *benched*) fail "11: history is not an alarm" ;; *) ok ;; esac
+# 30 days: the next event prunes it
+awk -F '\t' -v OFS='\t' -v o=$(( $(now) - 31 * 86400 )) 'NR == 1 { $1 = o } { print }' "$EV" > "$EV.t" && mv "$EV.t" "$EV"
+fev handoff 'fleet-handoff %9: could not confirm a fresh session'
+eq "11: a 31-day-old event is pruned, the rest kept" "quota-nowhere handoff" "$(awk -F '\t' '{ printf "%s%s", (NR > 1 ? " " : ""), $3 }' "$EV")"
+rm -f "$G"/alerts.* "$WORK/calls11"
+
+# ------------------------------------------------------------------- 12. lint ----
+# The daemons are whatever launchd runs (a new one is covered the day it ships);
+# the helpers are what a daemon / hook / a worker's own Bash starts in the
+# background. Their only exit to the operator is `fleet-alerts.sh event`.
+bg=$(cd "$BIN/.." && for f in launchd/*.tmpl; do grep -o 'bin/[A-Za-z0-9_-]*\.sh' "$f"; done | sort -u)
+bg="$bg bin/fleet-cleanup.sh bin/fleet-migrate.sh bin/fleet-model-switch.sh bin/fleet-handoff-cycle.sh
+bin/fleet-collect-kick.sh bin/fleet-daemon-watch.sh bin/fleet-window-reap.sh bin/fleet-await.sh bin/fleet-report-parent.sh"
+lint=""
+for f in $bg; do
+  [ -f "$BIN/../$f" ] || continue
+  lint="$lint$(awk -v F="$f" '/display-message/ && !/^[[:space:]]*#/ && !/display-message -[A-Za-z]*p/ && !/toast-ok:/ { print F ":" NR ": " $0 "\n" }' "$BIN/../$f")"
+done
+eq "12: no bare display-message on a background path (mark a keypress-only one # toast-ok:)" "" "$lint"
+[ "$(grep -l "^FLEET_ALERT_FLASH_KINDS=" "$BIN"/*.sh | sed "s|.*/||" | grep -cv -- "-selftest\.sh$")" = 1 ] || fail "12: the flash whitelist must be written in ONE place" "$(grep -n FLEET_ALERT_FLASH_KINDS= "$BIN"/*.sh)"; ok
+eq "12: the whitelist is the three that need you now" "quota-nowhere hub-lost disk-red" "$(bash -c '. "$1"; printf %s "$FLEET_ALERT_FLASH_KINDS"' _ "$FA")"
+
 # ---------------------------------------------------------------- 9. wording ----
 hits=$(grep -rn 'pace spread\|quota blind\|via banner\|no locally reachable' "$BIN" 2>/dev/null | grep -v 'fleet-alerts-selftest.sh')
 eq "9: the old wording is gone from bin/" "" "$hits"
@@ -263,4 +331,4 @@ zsheet=$(FLEET_UI_LANG=zh NO_COLOR=1 bash "$BIN/fleet-keys.sh" --plain)
 grep -q '^  prefix !  *告警弹窗' <<< "$zsheet" || fail "9: prefix ! missing from the zh cheatsheet"; ok
 grep -q 'fleet_alerts_refresh --kick' "$BIN/tmux-status.sh" || fail "9: the bar no longer refreshes the producer"; ok
 
-printf 'selftest PASS: %d assertions (width · quota · since · mute · actions · accounts · needs · degenerate · act · wording)\n' "$CHECKS"
+printf 'selftest PASS: %d assertions (width · quota · since · mute · actions · accounts · needs · degenerate · act · events · lint · wording)\n' "$CHECKS"

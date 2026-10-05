@@ -172,7 +172,7 @@ hdr="$verb in $REPO — type a title · Enter = file · ^S = scratch session${no
 # fzf as a pure text input (issue #429): empty candidate list (< /dev/null), --print-query
 # echoes the typed line. Exit 130 = Esc/Ctrl-C → cancel; 0/1 = accepted (1 = Enter with no
 # match, our normal case — --print-query still prints the query). fzf reads keys from
-# /dev/tty, so it works inside `display-popup -E`; it owns UTF-8/IME/paste echo, so there is
+# /dev/tty, so it works inside a fleet popup; it owns UTF-8/IME/paste echo, so there is
 # no double-echo (issue #422), Esc is instant (no 1s wait — issue #419), and a multi-line
 # paste folds into the single-line query.
 # --expect=ctrl-s (issue #1541): ⌃s in this popup opens a SCRATCH session instead

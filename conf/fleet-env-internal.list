@@ -17,6 +17,11 @@ FLEET_ACCOUNT_PHASE_WINDOW         knob: internal pacing/limit, safe in-code def
 FLEET_ACCOUNT_SELECTED             handoff: the account pick already ran for this launch
 FLEET_ACCOUNT_TARGET               handoff: the account a migrate/move relaunches on
 FLEET_ALERTS_ALLCAPPED_SECS        knob: how long an `accounts · all capped` stamp stays an alert (fleet-alerts.sh, 900)
+FLEET_ALERTS_EVENT_DEDUP           knob: same kind + text within this many seconds is one alerts event (fleet-alerts.sh event, 60)
+FLEET_ALERTS_EVENT_KEEP            knob: how long alerts.events keeps a background event (fleet-alerts.sh, 2592000 = 30 days)
+FLEET_ALERTS_EVENT_LIVE            knob: how long a background event counts as a ▲ row before it is popup history (fleet-alerts.sh, 3600)
+FLEET_ALERTS_HISTORY_ROWS          knob: how many past events the alerts popup lists (fleet-alerts.sh, 100)
+FLEET_ALERTS_HUB_FLASH_SECS        knob: hub unreachable this long before the one hub-lost flash (fleet-alerts.sh, 300)
 FLEET_ALERTS_DISK                  seam: 0 skips the alerts producer's own df (a selftest that counts df calls)
 FLEET_ALERTS_MUTE_SECS             knob: how long `m` in the alerts popup mutes a row (fleet-alerts.sh, 3600)
 FLEET_ALERTS_STALL_TTL             knob: how long a forgotten `stalled` alert outlives its killed waiter (fleet-alerts.sh, 21600)
@@ -85,6 +90,7 @@ FLEET_FILES_PROBE_CMD              seam: a fake open-file-table reading for flee
 FLEET_FOLD_POLL                    knob: internal pacing/limit, safe in-code default (fleet-repo.sh)
 FLEET_FOLD_WAIT                    knob: internal pacing/limit, safe in-code default (fleet-repo.sh)
 FLEET_FSEVENTSD_WARN_CPU           knob: internal pacing/limit, safe in-code default (fleet-diskguard.sh)
+FLEET_FZF_FOOTER                   handoff: 1/0, whether fzf takes --footer — probed once, inherited by a popup (fleet-popup-lib.sh, #1619)
 FLEET_HANDOFF_COPY_LINES           knob: issue-body lines a handoff may copy before `check` hints (fleet-handoff-file.sh, 5; 0 = off)
 FLEET_HANDOFF_DIR                  path: state/log location override (fleet-handoff-file.sh)
 FLEET_HANDOFF_HARD_TIMEOUT         knob: internal pacing/limit, safe in-code default (fleet-handoff-cycle.sh)
@@ -181,6 +187,8 @@ FLEET_POOL_PROBE_TIMEOUT           knob: internal pacing/limit, safe in-code def
 FLEET_POOL_SETTLE_MIN              knob: internal pacing/limit, safe in-code default (scratch-pool.sh)
 FLEET_POOL_STABLE_HITS             knob: internal pacing/limit, safe in-code default (scratch-pool.sh)
 FLEET_POOL_WARM_TIMEOUT            knob: internal pacing/limit, safe in-code default (scratch-pool.sh)
+FLEET_POPUP                        handoff: 1 inside a fleet popup, so an fzf there draws no border of its own (fleet-popup-lib.sh, #1619)
+FLEET_POPUP_NARROW                 knob: a client this many columns or narrower gets the 96%×90% popup (fleet-popup-lib.sh, 80, #1619)
 FLEET_PRECOMPACT_GH_SECS           knob: internal pacing/limit, safe in-code default (precompact-hook.sh)
 FLEET_PRECOMPACT_TRIGGER           seam: the PreCompact trigger precompact-hook.sh acts on, instead of stdin
 FLEET_PR_REFRESH_CMD               seam: an injectable command/path for tests (fleet-webhook.sh)
