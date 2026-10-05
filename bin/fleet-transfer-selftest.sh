@@ -8,6 +8,11 @@ for dep in tmux python3 perl git; do
 done
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-transfer-selftest.XXXXXX") || exit 2
 WORK=$(cd "$WORK" && pwd -P)
+# The account state + alerts both key on TMPDIR (.fleet-account.py state_dir,
+# usage-lib's cache dir): re-home it so the target-auth legs (issue #1667) never
+# read or write the operator's pool state or alerts.
+export TMPDIR="$WORK/tmp"; mkdir -p "$TMPDIR"
+unset FLEET_FAILOVER FLEET_CODEX_HOME FLEET_CODEX_ACCOUNTS FLEET_ACCOUNT_LABEL FLEET_ACCOUNTS_DIR
 LBL="transfer-selftest-$$-$RANDOM"
 TM() { tmux -L "$LBL" "$@"; }
 cleanup() { TM kill-server 2>/dev/null || :; rm -rf "$WORK"; }
@@ -19,8 +24,22 @@ ok() { checks=$((checks+1)); }
 
 IBIN="$WORK/install/bin"; FB="$WORK/fakebin"
 mkdir -p "$IBIN" "$FB" "$WORK/sessions" "$WORK/projects/actual" "$WORK/conf/fleets/$LBL"
-for f in fleet-codex-rpc.py fleet-codex-runtime.py fleet-input.py .fleet-account.py .fleet-failover.py fleet-codex-attention.py fleet-codex-session.py fleet-transfer.sh .fleet-transfer.py .fleet-transfer-wait.py fleet-loop.py fleet-sleep.py fleet_sleep_argv.py fleet_sleep_mcp.py fleet_sleep_park.py fleet-lib.sh usage-lib.sh fleet-lang.sh session-end-hook.sh set-claude-state.sh fleet-hook-conf.sh; do cp "$BIN/$f" "$IBIN/$f"; done
+for f in fleet-codex-rpc.py fleet-codex-runtime.py fleet-input.py .fleet-account.py .fleet-failover.py fleet-codex-attention.py fleet-codex-session.py fleet-transfer.sh .fleet-transfer.py .fleet-transfer-wait.py fleet-loop.py fleet-sleep.py fleet_sleep_argv.py fleet_sleep_mcp.py fleet_sleep_park.py fleet-lib.sh usage-lib.sh fleet-lang.sh session-end-hook.sh set-claude-state.sh fleet-hook-conf.sh fleet-account.sh fleet-alerts.sh fleet-daemon-lib.sh; do cp "$BIN/$f" "$IBIN/$f"; done
 export FLEET_CONF_DIR="$WORK/conf" FLEET_CC_SESSIONS_DIR="$WORK/sessions" FLEET_CC_PROJECTS_DIR="$WORK/projects"
+# The fake ccquota (issue #1667): the ONE registered Codex profile, its login
+# state read from a file; no file = no profiles, so every leg that does not set
+# one sees `target auth: unknown` and runs exactly as before.
+mkdir -p "$WORK/codex-home"
+cat > "$FB/ccquota" <<SH
+#!/bin/bash
+case "\$1 \$2" in
+  'codex list') [ -f "$WORK/login-state" ] || { echo '[]'; exit 0; }
+     printf '[{"name":"work","home":"%s","account":"codex:acct:1","email":"w@example.invalid","plan":"plus","default":true,"login":{"state":"%s"}}]\n' "$WORK/codex-home" "\$(cat "$WORK/login-state")" ;;
+  *) echo '{}' ;;
+esac
+SH
+chmod +x "$FB/ccquota"
+export FLEET_QUOTA_BIN="$FB/ccquota"
 export FLEET_TRANSFER_EXIT_WAIT=2 FLEET_TRANSFER_BOOT_WAIT=3
 export TRANSFER_TEST_ROOT="$WORK"
 TRANSFER_TEST_TMUX=$(command -v tmux)
@@ -92,6 +111,7 @@ cat > "$IBIN/fleet-claude.sh" <<'SH'
 if [ "$1" = --agent ] && [ "$2" = claude ]; then
   sid=target-claude
   [ "${3:-}" != --resume ] || sid=$4
+  [ ! -f "$TRANSFER_TEST_ROOT/fail-source" ] || [ "${3:-}" != --resume ] || exit 38
   exec "$TRANSFER_TEST_ROOT/fakebin/claude" "$TRANSFER_TEST_ROOT/claude.pl" "$sid" normal
 fi
 [ "$1" = --agent ] && [ "$2" = codex ] || exit 90
@@ -275,11 +295,57 @@ assert not confirm(screen.replace('Enter to confirm · Esc to cancel', ''))
 PY
 ok
 
+# issue #1668: a target that exits at startup is ROLLED BACK in the same pane —
+# the source resumed under the SAME session id within the boot wait, stamps put
+# back, state.json rolled_back, @transfer_note + the pane itself say
+# 「切换失败，已退回」, a ▲ transfer-rolled-back event, lease + remain-on-exit
+# released, the package kept; an automatic retry is held off.
 spawn 44 issue normal
 touch "$WORK/fail-target"
-transfer && fail 'target startup failure must fail'; ok
+T0=$SECONDS
+transfer && fail 'target startup failure must not report success'; ok
 BUNDLE=$(packet)
-ok; [ -d "$WT" ] && [ "$(TM display-message -p -t "$PANE" '#{pane_dead}')" = 1 ] || fail 'failed target must leave retained pane and worktree'
+ok; [ $(( SECONDS - T0 )) -lt 60 ] || fail 'rollback must finish within 60 seconds'
+ok; printf '%s' "$OUT" | grep -q '^fleet-transfer: rolled-back: 切换失败，已退回：codex exited at startup (status 37)' || fail "rollback must say so: $OUT"
+BACK=$(fleet_pane_claude_pid "$PANE" "$LBL" 2>/dev/null) || BACK=''
+ok; [ -n "$BACK" ] && [ "$BACK" != "$PID" ] && [ "$(fleet_cc_session_id "$BACK")" = "$SID" ] \
+  || fail "the source must be resumed under the same session id: $(TM capture-pane -p -t "$PANE")"
+ok; [ -z "$(field cc_agent)" ] && [ -z "$(field handoff_manifest)" ] && [ -z "$(field source_session_id)" ] \
+  && [ -z "$(field migrated_at)" ] && [ "$(field claude_state)" = "done" ] || fail 'rollback must restore the source stamps'
+ok; [ "$(field transfer_note)" = '切换失败，已退回：codex exited at startup (status 37)' ] && [ -n "$(field transfer_rolled_back)" ] \
+  || fail "rollback must stamp @transfer_note: $(field transfer_note)"
+ok; TM capture-pane -p -S - -t "$PANE" | grep -q '▲ 切换失败，已退回' || fail 'the pane must say it rolled back'
+ok; grep -q $'\ttransfer-rolled-back\t.*切换失败，已退回' "$TMPDIR/.claude-dash/global/alerts.events" 2>/dev/null \
+  || fail 'rollback must raise a transfer-rolled-back event'
+ok; ! fleet_rotate_lease_held "$WT" >/dev/null 2>&1 && [ "$(TM display-message -p -t "$PANE" '#{remain-on-exit}')" != on ] \
+  || fail 'rollback must release the lease and remain-on-exit'
+python3 - "$BUNDLE" "$SID" <<'PY' || fail 'rolled-back package'
+import json, pathlib, sys
+b = pathlib.Path(sys.argv[1])
+st = json.loads((b/'state.json').read_text())
+assert st['state'] == 'rolled_back' and 'codex exited at startup (status 37)' in st['detail'], st
+assert json.loads((b/'manifest.json').read_text())['source']['session_id'] == sys.argv[2]
+assert (b/'pane-target-failed.txt').exists() and (b/'source.jsonl').stat().st_size > 0
+PY
+ok
+# The hold: an AUTOMATIC cutover (here an after-turn arm) of a just-rolled-back
+# window refuses before anything; a manual one is the operator's call and goes.
+printf '# 人工交接\n下一步：验证。\n' > "$WORK/notes44.md"
+transfer --after-turn --handoff "$WORK/notes44.md" && fail 'an automatic retry right after a rollback must be held'
+ok; printf '%s' "$OUT" | grep -q '^fleet-transfer: rolled-back: rolled back' && [ -z "$(field agent_transfer_request)" ] \
+  && kill -0 "$BACK" || fail "the hold must refuse without touching the source: $OUT"
+PID=$BACK
+# The source cannot come back either: one attempt, `failed`, pane retained,
+# ▲ transfer-failed — never a loop. A manual cutover is not held.
+touch "$WORK/fail-source"
+transfer && fail 'a double failure must fail'; ok
+BUNDLE=$(packet)
+ok; printf '%s' "$OUT" | grep -q 'did not resume either' || fail "double failure must say so: $OUT"
+ok; [ "$(TM display-message -p -t "$PANE" '#{pane_dead}')" = 1 ] && [ -d "$WT" ] || fail 'double failure must retain the dead pane'
+ok; [ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["state"])' "$BUNDLE/state.json")" = failed ] || fail 'double failure must stay failed'
+ok; case "$(field transfer_note)" in 切换失败，原会话也未能恢复*) ;; *) false ;; esac || fail "double-failure note: $(field transfer_note)"
+ok; grep -q $'\ttransfer-failed\t' "$TMPDIR/.claude-dash/global/alerts.events" || fail 'double failure must raise transfer-failed'
+ok; [ "$(grep -c $'\ttransfer-rolled-back\t' "$TMPDIR/.claude-dash/global/alerts.events")" = 1 ] || fail 'a double failure must not roll back twice'
 python3 - "$BUNDLE" <<'PY' || fail 'failed target recovery metadata'
 import json, pathlib, sys
 b = pathlib.Path(sys.argv[1])
@@ -288,6 +354,7 @@ assert (b/'source.jsonl').stat().st_size > 0
 assert '--resume source-44' in (b/'resume-source.sh').read_text()
 PY
 ok
+rm "$WORK/fail-source"
 rm "$WORK/fail-target"
 RLOCK=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["transfer_lock_path"])' "$BUNDLE/manifest.json")
 mkdir "$RLOCK" || fail 'recovery lock fixture'
@@ -305,6 +372,28 @@ ok; [ -n "$RECOVERED" ] && [ "$(fleet_cc_session_id "$RECOVERED")" = "$SID" ] &&
 spawn 45 issue tool
 transfer && fail 'live tool after source exit must refuse respawn'; ok
 ok; [ "$(TM display-message -p -t "$PANE" '#{pane_current_command}')" = sleep ] || fail 'leftover tool must not be killed'
+
+# issue #1667: the TARGET's login is read before the source is asked anything.
+# With the one Codex profile reauth_required, --dry-run and the cutover refuse
+# (exit 1, `target-auth: …`), the source keeps running untouched, no package is
+# written, no lease taken, and a ▲ transfer-refused event is recorded; once the
+# profile is valid the same cutover goes through.
+printf 'reauth_required\n' > "$WORK/login-state"
+spawn 52 issue normal
+PKGS=$(ls "$FLEET_CONF_DIR/handoffs" | wc -l | tr -d ' ')
+transfer --codex-home "$WORK/codex-home" --dry-run && fail 'dry-run onto a reauth_required profile must refuse'
+ok; printf '%s' "$OUT" | grep -q 'target auth: REFUSED · Codex profile needs a verified subscription login: work (reauth_required)' || fail "dry-run must name the login: $OUT"
+transfer --codex-home "$WORK/codex-home" && fail 'cutover onto a reauth_required profile must refuse'
+ok; printf '%s' "$OUT" | grep -q '^fleet-transfer: target-auth: Codex profile needs a verified subscription login: work (reauth_required)' || fail "the refusal must be target-auth: $OUT"
+ok; kill -0 "$PID" && [ -z "$(field cc_agent)" ] && TM capture-pane -p -t "$PANE" | grep -q "Claude ready $SID" || fail 'a refused target must leave the source running, untouched'
+ok; [ "$(ls "$FLEET_CONF_DIR/handoffs" | wc -l | tr -d ' ')" = "$PKGS" ] && ! fleet_rotate_lease_held "$WT" >/dev/null 2>&1 || fail 'a refusal must write no package and take no lease'
+ok; grep -q $'\ttransfer-refused\t.*reauth_required' "$TMPDIR/.claude-dash/global/alerts.events" 2>/dev/null \
+  || fail "a refusal must record a transfer-refused event: $(cat "$TMPDIR/.claude-dash/global/alerts.events" 2>/dev/null)"
+printf 'valid\n' > "$WORK/login-state"
+transfer --codex-home "$WORK/codex-home" || fail "a valid profile must still cut over: $OUT"
+ok; ! fleet_pid_alive "$PID" && [ "$(field cc_agent)" = codex ] || fail 'the valid-login cutover must switch'
+ok; printf '%s' "$OUT" | grep -q 'codex started' || fail "valid-login cutover output: $OUT"
+rm -f "$WORK/login-state"
 
 spawn 46 raw normal
 printf '{"type":' >> "$TRANSCRIPT"

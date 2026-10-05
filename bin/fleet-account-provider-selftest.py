@@ -181,6 +181,78 @@ class Providers(unittest.TestCase):
             self.assertEqual(accounts.codex_reading(True)['accounts'],[])
         self.assertEqual(accounts.read(path)['accounts'],[])
 
+    def test_claude_login_states_and_target_auth(self):
+        # issue #1667: the Claude-side judge — a plain token file, a hub-managed
+        # token (fresh / expired), the mark-reauth marker, nothing at all.
+        acct = self.root/'accounts'; acct.mkdir()
+        (acct/'plain').write_text('tok-secret\n'); (acct/'empty').write_text('\n')
+        for name, offset in (('hubbed', 3600), ('stale', -5)):
+            (acct/name).write_text('hub:%s\n' % name); (acct/(name+'.hub')).mkdir()
+            (acct/(name+'.hub')/'.credentials.json').write_text(json.dumps(
+                {'claudeAiOauth': {'accessToken': 'x', 'expiresAt': (time.time()+offset)*1000}}))
+        (acct/'marked').write_text('tok-secret\n')
+        state = accounts.state_dir(); state.mkdir(parents=True)
+        (state/'account.claude-reauth').write_text('marked\t%d\tauth error\n' % time.time())
+        # FLEET_ACCOUNT_LABEL is a worker pane's own pin — cleared, or «no label»
+        # below would read the developer's account instead of the sandbox
+        with patch.dict(os.environ, FLEET_ACCOUNTS_DIR=str(acct), FLEET_ACCOUNT_LABEL=''):
+            self.assertEqual([accounts.claude_login(l) for l in ('plain','empty','hubbed','stale','marked','missing','../x')],
+                             ['valid','no_credentials','valid','expired','reauth_required','no_credentials','no_credentials'])
+            self.assertEqual(accounts.target_auth('claude', label='plain')['verdict'], 'ok')
+            r = accounts.target_auth('claude', label='marked')
+            self.assertEqual((r['verdict'], r['login'], r['key']), ('refuse', 'reauth_required', 'claude/marked'))
+            self.assertIn('needs a new login (reauth_required)', r['reason'])
+            self.assertEqual(accounts.target_auth('claude', label='stale')['login'], 'expired')
+            with patch.object(accounts, 'run', return_value=''):   # multi-account off
+                self.assertEqual(accounts.target_auth('claude')['verdict'], 'unknown')
+            with self.assertRaisesRegex(ValueError, 'target-auth: Claude account stale'):
+                accounts.claude_profile('stale')
+            # the inventory carries the same answer, so choose() never picks it
+            line = lambda l: '%s\tuuid\t40\t3000\t0\t0\t0\t1\t1\t1\t1\t0\t0' % l
+            with patch.object(accounts, 'run', return_value='\n'.join(line(l) for l in ('plain','marked','stale'))), \
+                 patch.object(accounts, 'profiles', return_value=[]), \
+                 patch.object(accounts, 'codex_reading', return_value={'accounts': [], 'reason': ''}):
+                rows = {r['label']: r['login'] for r in accounts.inventory()['accounts']}
+            self.assertEqual(rows, {'plain': 'valid', 'marked': 'reauth_required', 'stale': 'expired'})
+            # …and C2's bar stamp (#1469) names the marked label beside ccquota's rows
+            accounts.stamp_reauth([dict(self.profile, login='reauth_required', profile='work', email='w@example.invalid')])
+            stamped = [l.split('\t') for l in (state/'account.reauth').read_text().splitlines()[1:]]
+            self.assertEqual([(r[1], r[2], r[4], r[5]) for r in stamped],
+                             [('codex', 'work', 'reauth_required', 'codex login --device-auth'),
+                              ('claude', 'marked', 'reauth_required', 'claude setup-token')])
+
+    def test_target_auth_codex_refuses_reauth_passes_valid_unknown_without_registry(self):
+        home = self.root/'codex-home'; home.mkdir(); home = home.resolve()
+        bad = dict(self.profile, home=str(home), login='reauth_required')
+        good = dict(bad, login='refresh_due')
+        with patch.object(accounts, 'profiles', return_value=[bad]):
+            r = accounts.target_auth('codex', home=str(home))
+            self.assertEqual((r['verdict'], r['login'], r['profile']), ('refuse', 'reauth_required', 'work'))
+            self.assertEqual(r['reason'], 'Codex profile needs a verified subscription login: work (reauth_required)')
+            # an unregistered home: the planner's launcher would refuse it, a plain
+            # install runs Codex on it as before
+            with patch.dict(os.environ, FLEET_FAILOVER='1'):
+                self.assertEqual(accounts.target_auth('codex', home=str(self.root/'nowhere'))['verdict'], 'refuse')
+            with patch.dict(os.environ, FLEET_FAILOVER='0'):
+                self.assertEqual(accounts.target_auth('codex', home=str(self.root/'nowhere'))['verdict'], 'unknown')
+        with patch.object(accounts, 'profiles', return_value=[good]):
+            self.assertEqual(accounts.target_auth('codex', profile_name='work')['verdict'], 'ok')
+            with patch.dict(os.environ, FLEET_CODEX_ACCOUNTS='work', FLEET_CODEX_HOME=''):
+                self.assertEqual(accounts.target_auth('codex')['verdict'], 'ok')
+        with patch.object(accounts, 'profiles', return_value=[bad]), \
+             patch.dict(os.environ, FLEET_CODEX_ACCOUNTS='work', FLEET_CODEX_HOME=''):
+            self.assertEqual(accounts.target_auth('codex')['verdict'], 'refuse')
+        with patch.object(accounts, 'profiles', side_effect=OSError('no ccquota')):
+            self.assertEqual(accounts.target_auth('codex', home=str(home))['verdict'], 'unknown')
+
+    def test_check_target_names_a_bad_login_as_target_auth(self):
+        target = candidate('claude', 'x', label='x')
+        with patch.object(accounts, 'inventory', return_value={'accounts': [dict(target, login='reauth_required')]}):
+            with self.assertRaisesRegex(ValueError, r'target-auth: pinned destination claude/x needs a new login \(reauth_required\)'):
+                accounts.check_target(target)
+        with patch.object(accounts, 'inventory', return_value={'accounts': [target]}):
+            self.assertEqual(accounts.check_target(target)['key'], 'claude/x')
+
     def test_pinned_target_rejects_relogin(self):
         target=candidate('codex','old',profile='p',home='/home')
         data={'accounts':[candidate('codex','new',profile='p',home='/home')]}

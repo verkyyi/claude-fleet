@@ -16,6 +16,20 @@
 # Supports Claude → Codex and Codex context cycling. No bulk mode, transcript guessing, git mutation,
 # automatic source restart, or forced agent termination. A cutover requires @claude_state
 # done (or a Codex `looping` between rounds), one worker pane, a registered source session, and its own linked git worktree.
+# The TARGET account must be able to log in (issue #1667): --dry-run and the first
+# step of a cutover ask `fleet-account.sh target-auth` (check-target for a pinned
+# target), again right before /exit; a refusal — `target-auth: …`, exit 1 — leaves
+# the source running, records `<quota-request>/refused.json` for the planner and a
+# ▲ `transfer-refused` row in the alerts popup.
+# A target that does not bind (issue #1668) is ROLLED BACK in the same pane: the
+# source is relaunched from the package's `resume-source.sh --run-source` (Claude
+# --resume <id> / codex resume <id>, cwd the worktree), the same session id is
+# confirmed, state.json says `rolled_back`, @transfer_note carries
+# 「切换失败，已退回：<why>」 and a ▲ `transfer-rolled-back` row is raised; exit 1.
+# A source that does not come back either stays `failed` (▲ `transfer-failed`),
+# pane retained — one rollback, never a loop. For FLEET_TRANSFER_ROLLBACK_HOLD
+# (1800s) after a rollback an AUTOMATIC cutover (quota failover, after-turn) on
+# that window refuses; a manual one, or `tmux set -wu @transfer_rolled_back`, goes.
 # Run an immediate cutover from another pane/terminal. Inside the source agent,
 # use --after-turn as the final tool call, then end the turn.
 #
@@ -38,7 +52,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 HELPER="$BIN/.fleet-transfer.py"
 
 die() { FAILURE=$*; printf 'fleet-transfer: %s\n' "$*" >&2; exit 1; }
-usage() { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; }
 SESS='' TARGET='' TO='' NOTES='' LOOP='' DRY=0 PREPARE=0 AFTER=0 EXPECT='' REQUEST='' CODEX_TARGET_HOME='' REQUIRE_IDLE=0
 TARGET_FILE='' QUOTA_REQUEST='' DRAFT='' INSPECT=0 NATIVE=0
 while [ "$#" -gt 0 ]; do
@@ -167,6 +181,80 @@ source_ready() {
     esac
   fi
 }
+# target_auth — may the TARGET account start an agent? (issue #1667, EPIC #1665 C3)
+# Asked BEFORE anything is written and again right before /exit, so a target whose
+# login ccquota has marked reauth_required — or a Claude label marked by
+# mark-reauth, or whose hub token expired — is refused while the source still
+# runs. 2026-10-05 was the opposite order: source /exit'ed, Codex at a login
+# prompt, conversation gone. The ONE judge is fleet-account.sh target-auth
+# (check-target for the planner's pinned target); `unknown` — no ccquota registry,
+# multi-account off — is NOT a refusal, the launch then behaves as it always did,
+# but a judge that cannot answer at all is (never guess a login). On 0 TARGET_AUTH
+# carries the verdict line; on 1 TARGET_AUTH_WHY carries the reason.
+TARGET_AUTH='' TARGET_AUTH_WHY=''
+_json_field() { printf '%s\n' "$1" | sed -n "s/.*\"$2\": *\"\([^\"]*\)\".*/\1/p" | sed -n '1p'; }
+target_auth() {
+  local out rc=0 verdict reason
+  TARGET_AUTH='' TARGET_AUTH_WHY=''
+  if [ -n "$TARGET_FILE" ]; then
+    out=$(bash "$BIN/fleet-account.sh" check-target "$TARGET_FILE" 2>&1 >/dev/null) || rc=$?
+    if [ "$rc" = 0 ]; then TARGET_AUTH="ok · pinned $(_json_field "$(cat "$TARGET_FILE" 2>/dev/null)" key)"; return 0; fi
+    out=${out##*fleet-account: }; TARGET_AUTH_WHY="${out#target-auth: }"
+    [ -n "$TARGET_AUTH_WHY" ] || TARGET_AUTH_WHY='pinned target is unavailable'
+    return 1
+  fi
+  out=$(bash "$BIN/fleet-account.sh" target-auth --agent "$TO" ${CODEX_TARGET_HOME:+--home "$CODEX_TARGET_HOME"} 2>&1) || rc=$?
+  verdict=$(_json_field "$out" verdict); reason=$(_json_field "$out" reason)
+  case "$verdict" in
+    ok) TARGET_AUTH="ok · $(_json_field "$out" key)"; return 0 ;;
+    unknown) TARGET_AUTH="unknown · $reason"; return 0 ;;
+    refuse) TARGET_AUTH_WHY="$reason"; return 1 ;;
+  esac
+  TARGET_AUTH_WHY="the login check itself failed: $(printf '%s\n' "$out" | sed -n '/./{p;q;}')"
+  return 1
+}
+# refuse_target — the one exit for a target-auth refusal on a real cutover: the
+# planner's `refused.json` (its request dir, so failover-status can name the
+# reason), a ▲ row in the alerts popup (a toast nobody was looking at is gone in
+# 2s, #1617), then die. Nothing has been written to the pane or the worktree at
+# either call site; after the lease is held the EXIT trap tidies as for any die.
+refuse_target() {
+  if [ -n "$QUOTA_REQUEST" ] && [ -d "$QUOTA_REQUEST" ]; then
+    python3 - "$QUOTA_REQUEST/refused.json" "$TARGET_AUTH_WHY" "$TO" <<'PY' 2>/dev/null || :
+import json, os, sys, time
+path, detail, to = sys.argv[1:]
+fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, 'w') as stream:
+    json.dump(dict(reason='target-auth', detail=detail, to=to, at=time.time()), stream)
+PY
+  fi
+  [ -x "$BIN/fleet-alerts.sh" ] && bash "$BIN/fleet-alerts.sh" event -L "$SOCK" transfer-refused \
+    "${HANDLE:-$WIN}: 未切换：$TO 需要重新登录 · not switched: $TARGET_AUTH_WHY" >/dev/null 2>&1 || :
+  die "target-auth: $TARGET_AUTH_WHY — not switched; the source keeps running (log in to the target, then retry)"
+}
+# rollback_hold — a window rolled back by issue #1668 within FLEET_TRANSFER_ROLLBACK_HOLD
+# seconds is not cut over AUTOMATICALLY again: the rolled-back source has a new pid,
+# so the failover planner sees a fresh request and would relaunch the same broken
+# target, kill the source, roll back — every tick. The refusal is as cheap as
+# target-auth's (nothing written yet) and lands in refused.json the same way.
+rollback_hold() {
+  local at hold="${FLEET_TRANSFER_ROLLBACK_HOLD:-1800}" now
+  case "$hold" in ''|*[!0-9]*) hold=1800 ;; esac
+  at=$(opt '#{@transfer_rolled_back}'); case "$at" in ''|*[!0-9]*) return 0 ;; esac
+  now=$(date +%s)
+  [ $(( now - at )) -lt "$hold" ] || return 0
+  TARGET_AUTH_WHY="rolled back $(( now - at ))s ago: $(opt '#{@transfer_note}')"
+  if [ -n "$QUOTA_REQUEST" ] && [ -d "$QUOTA_REQUEST" ]; then
+    python3 - "$QUOTA_REQUEST/refused.json" "$TARGET_AUTH_WHY" "$TO" <<'PY' 2>/dev/null || :
+import json, os, sys, time
+path, detail, to = sys.argv[1:]
+fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, 'w') as stream:
+    json.dump(dict(reason='rolled-back', detail=detail, to=to, at=time.time()), stream)
+PY
+  fi
+  die "rolled-back: $TARGET_AUTH_WHY — no automatic retry for ${hold}s; switch by hand, or clear @transfer_rolled_back"
+}
 [ -z "$NOTES" ] || [ -s "$NOTES" ] || die '--handoff file is missing or empty'
 [ -z "$LOOP" ] || [ -s "$LOOP" ] || die '--loop file is missing or empty'
 if [ -n "$LOOP" ]; then
@@ -178,6 +266,13 @@ fi
 printf 'fleet-transfer: %s/%s · %s → %s\nsource session: %s\nsource transcript: %s\nworktree: %s\n' \
   "$SESS" "${HANDLE:-$WIN}" "$SOURCE_AGENT" "$TO" "$SID" "$TRANSCRIPT" "$WT"
 if [ "$DRY" = 1 ]; then
+  # The target's login, first (issue #1667): a dry-run that says «would switch»
+  # onto an account that cannot log in is the plan that lost the 10-05 session.
+  if target_auth; then printf 'target auth: %s\n' "$TARGET_AUTH"
+  else
+    printf 'target auth: REFUSED · %s\n' "$TARGET_AUTH_WHY"
+    die "target-auth: $TARGET_AUTH_WHY — a cutover would not switch; log in to the target first"
+  fi
   printf 'dry-run: save a provenance package, /exit the source, then launch %s in %s (state=%s).\n' "$TO" "$PANE" "${STATE:-unknown}"
   [ "$STATE" = "done" ] || [ "$STATE" = looping ] || printf 'cutover would refuse until the source reaches done.\n'
   exit 0
@@ -186,6 +281,10 @@ fi
 umask 077
 LAUNCH="$BIN/fleet-claude.sh"
 if [ "$PREPARE" != 1 ]; then
+  # Step one of any cutover or arming (issue #1667): the target must be able to
+  # log in, or nothing below runs — the source is not even asked whether it is idle.
+  target_auth || refuse_target
+  { [ -z "$QUOTA_REQUEST" ] && [ -z "$REQUEST" ] && [ "$AFTER" != 1 ]; } || rollback_hold
   if [ "$AFTER" != 1 ]; then
     source_ready || die 'source is not safely idle; finish/pause its turn before transferring'
     CALLER_TMUX="${TMUX:-}"
@@ -207,7 +306,6 @@ if [ "$PREPARE" != 1 ]; then
   HOOKS=$(bash "$BIN/fleet-hooks-emit.sh" --target "$TO" --root "$BIN/..") || die 'cannot materialize target guard hooks'
   case "$HOOKS" in *base-readonly-guard.py*bash-guard.py*|*bash-guard.py*base-readonly-guard.py*) : ;; *) die 'Codex guard hooks are incomplete' ;; esac
   TM set-option -w -t "$WIN" @worktree "$WT" || die 'cannot record verified worktree'
-  [ -z "$TARGET_FILE" ] || bash "$BIN/fleet-account.sh" check-target "$TARGET_FILE" >/dev/null || die 'pinned target is unavailable'
 fi
 
 if [ "$AFTER" = 1 ]; then
@@ -242,11 +340,14 @@ else
   mkdir "$LOCK" 2>/dev/null || die "another transfer owns $LOCK; inspect it before retrying"
 fi
 printf '%s\n' "$$" > "$LOCK/pid"
-EXIT_SENT=0 LEASE=0 SUCCESS=0
+EXIT_SENT=0 LEASE=0 SUCCESS=0 ROLLED=0
 REMAIN=$(opt '#{remain-on-exit}')
 cleanup() {
   local rc=$?
-  if [ "$SUCCESS" != 1 ]; then
+  if [ "$ROLLED" = 1 ]; then
+    printf 'fleet-transfer: %s did not start; the source %s session %s was resumed in place. Handoff kept for a retry: %s\n' \
+      "$TO" "$SOURCE_AGENT" "$SID" "$BUNDLE" >&2
+  elif [ "$SUCCESS" != 1 ]; then
     python3 "$HELPER" state "$BUNDLE" failed "${FAILURE:-Transfer interrupted; inspect the retained pane before recovery.}" >/dev/null 2>&1 || :
     printf 'fleet-transfer: transfer incomplete; handoff preserved at %s\n' "$BUNDLE" >&2
     printf 'After confirming no Codex is writing, source recovery: bash %q\n' "$BUNDLE/resume-source.sh" >&2
@@ -254,8 +355,8 @@ cleanup() {
   TM set-option -wu -t "$WIN" @agent_transfer_until 2>/dev/null || :
   # After /exit, keep the bounded lease on failure: a shell/dead pane and the
   # recovery packet remain available while the operator inspects the failure.
-  if [ "$LEASE" = 1 ] && { [ "$SUCCESS" = 1 ] || [ "$EXIT_SENT" = 0 ] || fleet_pid_alive "$PID"; }; then fleet_rotate_lease_drop "$WT"; fi
-  if [ "$EXIT_SENT" = 0 ] || [ "$SUCCESS" = 1 ] || fleet_pid_alive "$PID"; then
+  if [ "$LEASE" = 1 ] && { [ "$SUCCESS" = 1 ] || [ "$ROLLED" = 1 ] || [ "$EXIT_SENT" = 0 ] || fleet_pid_alive "$PID"; }; then fleet_rotate_lease_drop "$WT"; fi
+  if [ "$EXIT_SENT" = 0 ] || [ "$SUCCESS" = 1 ] || [ "$ROLLED" = 1 ] || fleet_pid_alive "$PID"; then
     TM set-option -p -t "$PANE" remain-on-exit "${REMAIN:-off}" 2>/dev/null || :
   fi
   # An after-turn worker owns the shared lock until it has recorded the outcome.
@@ -279,7 +380,9 @@ else
     && [ "$(opt '#{@handoff_armed}')" != 1 ] || die 'source changed while preparing the transfer'
 fi
 source_ready || die 'source started another turn while preparing the transfer'
-[ -z "$TARGET_FILE" ] || bash "$BIN/fleet-account.sh" check-target "$TARGET_FILE" >/dev/null || die 'pinned target changed before source exit'
+# The last read before /exit (issue #1667): a login that went bad while the
+# package was written still finds the source running.
+target_auth || refuse_target
 if [ "$REQUIRE_IDLE" = 1 ]; then
   [ "$SOURCE_AGENT" = codex ] || die 'native idle check requires a Codex source'
   FLEET_CONF_DIR="$FLEET_CONF_DIR" "$BIN/fleet-codex-account.sh" idle --session "$SESS" --window "$PANE" \
@@ -351,8 +454,69 @@ if [ "$(opt '#{pane_dead}')" != 1 ]; then
   [ "$SHELL_OK" = 1 ] || die 'source pane is not a childless shell; refusing to replace it'
 fi
 
+# rollback <why> — the target did not bind (issue #1668, EPIC #1665 C4). Before
+# this the pane was left dead and the conversation waited for someone to notice
+# and run resume-source.sh by hand. The source is verified gone and its pane
+# was a childless shell, so the same pane takes it back: the window's own stamps
+# as the source left them, then `resume-source.sh --run-source` (the recipe the
+# package already carries — Claude --resume <id>, codex resume <id>, cwd the
+# worktree), then the SAME session id must answer. One attempt: a source that
+# does not come back either stays `failed` with the pane retained, never a loop.
+# The handoff package is kept, so a retry after the login is fixed starts there.
+ROLLBACK_KEYS=(@cc_agent @handoff_manifest @source_agent @source_session_id @source_transcript @migrated_at @migrated_banner)
+ROLLBACK_VALS=()
+for key in "${ROLLBACK_KEYS[@]}"; do ROLLBACK_VALS+=("$(opt "#{$key}")"); done
+rollback() {
+  local why=$1 st note cmd back='' got rest i
+  # The target's last screen + exit status, before the respawn wipes them; it is
+  # private to the package (0600) and never copied into a note or an alert.
+  TM capture-pane -p -S - -t "$PANE" > "$BUNDLE/pane-target-failed.txt" 2>/dev/null && chmod 600 "$BUNDLE/pane-target-failed.txt"
+  if [ "$(opt '#{pane_dead}')" = 1 ]; then
+    st=$(opt '#{pane_dead_status}'); why="$TO exited at startup (status ${st:-?})"
+  fi
+  python3 "$HELPER" state "$BUNDLE" target_failed "$why" >/dev/null 2>&1 || :
+  for i in "${!ROLLBACK_KEYS[@]}"; do
+    if [ -n "${ROLLBACK_VALS[$i]}" ]; then TM set-option -w -t "$WIN" "${ROLLBACK_KEYS[$i]}" "${ROLLBACK_VALS[$i]}" 2>/dev/null || :
+    else TM set-option -wu -t "$WIN" "${ROLLBACK_KEYS[$i]}" 2>/dev/null || :; fi
+  done
+  note="切换失败，已退回：$why"
+  # The note is printed into the pane above the resumed source, so the pane
+  # itself says what happened even with no bar in view.
+  printf -v cmd 'printf "%%s\\n" %q; exec bash %q --run-source' "▲ $note" "$BUNDLE/resume-source.sh"
+  if TM respawn-pane -k -t "$PANE" -c "$WT" "$cmd"; then
+    for ((i=0; i<BOOT_WAIT; i++)); do
+      if [ "$SOURCE_AGENT" = codex ]; then
+        got=$(python3 "$HELPER" source-codex --pane "$PANE" --socket "$SOCK" --worktree "$WT" 2>/dev/null) \
+          && IFS=$'\t' read -r back rest <<< "$got" && [ "$(printf '%s' "$rest" | cut -f1)" = "$SID" ] && break
+      else
+        back=$(fleet_pane_claude_pid "$PANE" "$SOCK" 2>/dev/null) && [ "$(fleet_cc_session_id "$back")" = "$SID" ] && break
+      fi
+      back=''
+      [ "$(opt '#{pane_dead}')" != 1 ] || break
+      sleep 1
+    done
+  fi
+  if [ -z "$back" ]; then
+    TM capture-pane -p -S - -t "$PANE" > "$BUNDLE/pane-rollback-failed.txt" 2>/dev/null && chmod 600 "$BUNDLE/pane-rollback-failed.txt"
+    TM set-option -w -t "$WIN" @transfer_note "切换失败，原会话也未能恢复：$why" 2>/dev/null || :
+    [ -x "$BIN/fleet-alerts.sh" ] && bash "$BIN/fleet-alerts.sh" event -L "$SOCK" transfer-failed \
+      "${HANDLE:-$WIN}: 切换失败，原会话也未能恢复 · $why; source $SOURCE_AGENT $SID did not resume" >/dev/null 2>&1 || :
+    die "$why; rollback: the source $SOURCE_AGENT session $SID did not resume either — pane retained, not retrying"
+  fi
+  python3 "$HELPER" state "$BUNDLE" rolled_back "$why; source $SOURCE_AGENT $SID resumed as pid $back" >/dev/null 2>&1 || :
+  ROLLED=1
+  TM set-option -w -t "$WIN" @claude_state "done" 2>/dev/null || :
+  TM set-option -w -t "$WIN" @transfer_note "$note" 2>/dev/null || :
+  TM set-option -w -t "$WIN" @transfer_rolled_back "$(date +%s)" 2>/dev/null || :
+  fleet_hub_nudge
+  [ -x "$BIN/fleet-alerts.sh" ] && bash "$BIN/fleet-alerts.sh" event -L "$SOCK" transfer-rolled-back \
+    "${HANDLE:-$WIN}: $note" >/dev/null 2>&1 || :
+  printf 'fleet-transfer: rolled-back: %s\n' "$note" >&2
+  exit 1
+}
+
 # The helper quotes metadata as argv; conversation text is only ever data.
-python3 "$HELPER" launcher "$BUNDLE" "$LAUNCH" || die 'cannot write target launcher'
+python3 "$HELPER" launcher "$BUNDLE" "$LAUNCH" || rollback 'cannot write the target launcher'
 for key in @cc_account @subscription_identity @codex_identity @cc_model @ctx_pct @ctx_limit @ctx_band @model @effort @handoff_armed @handoff_cleared_at; do
   TM set-option -wu -t "$WIN" "$key" 2>/dev/null || :
 done
@@ -372,7 +536,7 @@ TM clear-history -t "$PANE" 2>/dev/null || :
 printf -v CMD 'exec bash %q' "$BUNDLE/launch.sh"
 python3 "$HELPER" state "$BUNDLE" starting || die 'cannot record target launch'
 # -k only replaces the verified leftover shell; Claude is already confirmed gone.
-TM respawn-pane -k -t "$PANE" -c "$WT" "$CMD" || die 'could not launch Codex in the retained pane'
+TM respawn-pane -k -t "$PANE" -c "$WT" "$CMD" || rollback "could not launch $TO in the retained pane"
 CPID=''
 for ((i=0; i<BOOT_WAIT; i++)); do
   if [ -n "$TARGET_FILE" ] || [ "$TO" = claude ]; then
@@ -383,8 +547,10 @@ for ((i=0; i<BOOT_WAIT; i++)); do
   [ "$(opt '#{pane_dead}')" != 1 ] || break
   sleep 1
 done
-[ -n "$CPID" ] || die 'target session did not bind; inspect the retained pane and handoff package'
+[ -n "$CPID" ] || rollback "$TO did not bind within ${BOOT_WAIT}s"
 TM clear-history -t "$PANE" 2>/dev/null || :   # a resume's replay, out of history (#870)
 python3 "$HELPER" state "$BUNDLE" started "$TO identity $CPID; task completion is not implied." || die 'cannot record target startup'
 SUCCESS=1
+TM set-option -wu -t "$WIN" @transfer_note 2>/dev/null || :
+TM set-option -wu -t "$WIN" @transfer_rolled_back 2>/dev/null || :
 printf '%s started in %s/%s (identity %s). Source provenance: %s\n' "$TO" "$SESS" "${HANDLE:-$WIN}" "$CPID" "$BUNDLE/manifest.json"

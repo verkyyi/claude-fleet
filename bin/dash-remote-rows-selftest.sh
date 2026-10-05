@@ -48,6 +48,11 @@
 #                   hub's row set on the next render; no network; a cache from before
 #                   hub_ok (no file, a stale #ts) renders the very same bytes; the hub
 #                   off ⇒ the no-cache output
+#   P. shell      — the client (FLEET_SHELL=1, no conf, issue #1680): its hub rows
+#                   group under one heading per repo THEY name (2+), sorted, plus
+#                   `无仓库`; ←/→ folds a group through the shell's OWN @repo_fold;
+#                   one repo ⇒ no heading; a node on the hub source (no FLEET_SHELL)
+#                   renders the same cache flat, byte for byte as before
 #   E. refresher  — fleet-hub-sessions.sh --refresh keeps YOUR sessions with a
 #                   worker_id: the other machines' (local=0) and, since #1480, this
 #                   fleet's own, marked local=1 with the window that holds them (empty
@@ -109,6 +114,7 @@ printf '%s\n' "$*" >> "$TMUX_LOG"
 US=$(printf '\037'); lw=0; fmt=0
 for a in "$@"; do [ "$a" = list-windows ] && lw=1; case "$a" in *"$US"*) fmt=1 ;; esac; done
 [ "$lw" = 1 ] && [ "$fmt" = 1 ] && cat "$WLIST_FILE"
+case "$*" in *show-option*@repo_fold*) [ -n "${REPO_FOLD:-}" ] && printf '%s\n' "$REPO_FOLD" ;; esac
 exit 0
 SHIM
 # network tools: every call logged (argv verbatim — printf, since /bin/sh's echo
@@ -395,6 +401,47 @@ eq "L: no hub_ok, a stale #ts (the pre-#1483 cache) — the local source renders
 eq "L: …and so does the hub source" "$ls_" "$(FLEET_SIDEBAR_SOURCE=hub side)"
 stamp_cache "$NOW"
 remote_cache "$NOW"
+
+# ============================================================================
+# P. the shell's list groups by repo (issue #1680)
+# ============================================================================
+# The client has no conf: its repos are the ones the hub's rows name. Client-mode
+# cache (#1484): `#me` empty, every row another machine's (local=0).
+SH="shell$$"
+shell_cache() {
+  { printf '#ts\037%s\n#me\037\n#node\037m4\037online\0373\037%s\n' "$NOW" "$NOW"
+    printf 'wid:%s/issue-11\037m4\037online\03711\037acme/tool\037working\037claude\037工具活\037\037\0370\037\n' "$F"
+    printf 'wid:%s/issue-21\037m4\037online\03721\037acme/app\037working\037claude\037应用活\037\037\0370\037\n' "$F"
+    printf 'wid:%s/issue-22\037m4\037online\03722\037acme/app\037done\037claude\037应用二\037\037\0370\037\n' "$F"
+    printf 'wid:%s/scratch-3\037m4\037online\037\037\037working\037claude\037草稿三\037\037\0370\037\n' "$F"
+  } > "$G/remote_$SH"
+}
+shell_side() { PATH="$SHIMPATH" FLEET_SESSION=$SH FLEET_SIDEBAR_SOURCE=hub bash "$ROWS" --sidebar 2>/dev/null | strip; }
+printf '%s\n' "$NOW" > "$G/hub_ok"
+cp "$WLIST_FILE" "$WORK/wlist.keep"; : > "$WLIST_FILE"   # the shell's own windows: proxies, none named
+shell_cache
+flat=$(shell_side)
+eq "P: a node on the hub source (no FLEET_SHELL) — no conf repos, no heading: today's flat list" "" "$(shdrs "$flat")"
+ps=$(FLEET_SHELL=1 shell_side)
+eq "P: the shell — one heading per repo its rows name, sorted, then 无仓库" \
+   "app (2);tool (1);无仓库 (1);" "$(shdrs "$ps")"
+eq "P: …each row under its own repo's heading" "应用二;应用活;工具活;草稿三;" "$(sorder "$ps")"
+eq "P: …a heading's key is its repo (the view's hdr:<owner/name>)" "acme/tool" \
+   "$(printf '%s\n' "$ps" | LC_ALL=C awk -F"$US" '$1 == "hdr" && $4 ~ /^tool/ { print $2; exit }')"
+pf=$(REPO_FOLD=acme-tool FLEET_SHELL=1 shell_side)
+eq "P: the shell's @repo_fold folds that group: ▸ heading, its rows hidden" \
+   "app (2);▸ tool (1);无仓库 (1);" "$(shdrs "$pf")"
+eq "P: …the rest stay" "应用二;应用活;草稿三;" "$(sorder "$pf")"
+: > "$TMUX_LOG"
+PATH="$SHIMPATH" FLEET_SHELL=1 FLEET_SESSION=$SH DASH_FOLD_PLAIN=1 bash "$BIN/dash-fold-toggle.sh" collapse hdr:acme/tool >/dev/null 2>&1
+has "P: ← on a shell heading writes the fold to the shell's OWN session" "$(cat "$TMUX_LOG")" "set-option -t =$SH: @repo_fold acme-tool"
+: > "$TMUX_LOG"
+PATH="$SHIMPATH" FLEET_SESSION=$SH DASH_FOLD_PLAIN=1 bash "$BIN/dash-fold-toggle.sh" collapse hdr:acme/tool >/dev/null 2>&1
+hasnt "P: …a node with no conf repos writes nothing" "$(cat "$TMUX_LOG")" "@repo_fold"
+LC_ALL=C grep -v 'acme/tool' "$G/remote_$SH" > "$WORK/one" && mv "$WORK/one" "$G/remote_$SH"
+eq "P: one repo among the rows — no repo heading (a one-repo fleet's frame)" "" "$(shdrs "$(FLEET_SHELL=1 shell_side)")"
+rm -f "$G/remote_$SH" "$G/hub_ok"
+mv "$WORK/wlist.keep" "$WLIST_FILE"
 
 # ============================================================================
 # E. refresher

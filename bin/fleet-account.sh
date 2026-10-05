@@ -60,6 +60,24 @@
 #                          most-ahead account when it leads the current pick by
 #                          FLEET_ACCOUNT_PACE_REBALANCE points (see PICK_MODE below)
 #   inventory [--refresh] — provider-aware local subscriptions + ccquota readings
+#   target-auth --agent claude|codex [--label L] [--profile P] [--home H] [--account A]
+#                        — may THAT account start an agent? (issue #1667) JSON
+#                          `verdict` ok | refuse | unknown + key · login · reason.
+#                          Codex: ccquota's login state (valid / refresh_due pass)
+#                          + the home exists; Claude: the token file readable, a
+#                          hub token unexpired, no mark-reauth. `refuse` also says
+#                          why on stderr and exits 1 — the ONE judge every switch
+#                          (fleet-transfer, migrate, the failover planner) asks
+#                          BEFORE it stops a source. `unknown` = nothing to ask
+#                          (no ccquota, multi-account off): the launch is as before
+#   mark-reauth <label> [reason]
+#                        — record that <label>'s Claude login is REJECTED (an auth
+#                          error, a revoked setup-token, the hub's finding). Not a
+#                          bench: no reset clears it, only clear-reauth after the
+#                          operator logs in again. inventory/choose/target-auth read
+#                          it as login=reauth_required (#1667)
+#   clear-reauth [label] — drop the mark for <label> (or all)
+#   reauth-since <label> — epoch <label> was marked (0 = not marked)
 #   choose --agent claude|codex [--exclude KEY] [--spawn] — JSON decision
 #   reconcile --session S [--dry-run] — bounded per-session quota continuation
 #   failover-status      — durable waiting/cutover/recovery requests (JSON)
@@ -156,6 +174,7 @@ STATE_DIR="$FLEET_C/global"
 STATE_ACTIVE="$STATE_DIR/account.active"
 STATE_LIMITED="$STATE_DIR/account.limited"
 STATE_MODEL_LIMITED="$STATE_DIR/account.model-limited"   # label<TAB>model<TAB>until<TAB>banner (#524)
+STATE_REAUTH="$STATE_DIR/account.claude-reauth"          # label<TAB>since<TAB>reason (#1667; account.reauth is C2's stamp)
 LOCK="$STATE_DIR/account.lock"
 # ccquota-driven pre-emptive rotation (issue #513): quota cache + policy knobs.
 # CEILING: bench + move sessions at/above this utilization (5h OR 7d, whichever is
@@ -1116,6 +1135,41 @@ cmd_clear() {
   acct_unlock
 }
 
+# --- a Claude login the operator has to redo (issue #1667, EPIC #1665 C3) --------
+# `mark-reauth <label>` records that <label>'s CREDENTIAL is rejected — an auth
+# error on a session, a revoked setup-token, the hub's finding — which is a
+# different fact from a quota bench: no reset ends it, only `clear-reauth` once
+# the operator has logged in again (C5 does that from the re-login flow).
+# .fleet-account.py reads the same file (claude_login → reauth_required), so the
+# inventory, the planner's choose() and target-auth all see one answer; a switch
+# onto a marked account is refused before the source is stopped.
+acct_reauth_since() {  # <label> → epoch marked (0 = not marked)
+  local s; s=$(awk -F'\t' -v l="$1" '$1==l{print $2; exit}' "$STATE_REAUTH" 2>/dev/null)
+  case "$s" in ''|*[!0-9]*) s=0 ;; esac
+  printf '%s' "$s"
+}
+cmd_mark_reauth() {
+  local label="${1:-}" reason="${2:-login rejected}"
+  [ -n "$label" ] || { echo "mark-reauth: usage: mark-reauth <label> [reason]" >&2; return 1; }
+  acct_labels | grep -qx "$label" || { echo "mark-reauth: unknown account '$label'" >&2; return 1; }
+  reason=$(printf '%s' "$reason" | tr '\t\n' '  ')
+  mkdir -p "$STATE_DIR"; acct_lock
+  { [ -f "$STATE_REAUTH" ] && awk -F'\t' -v l="$label" '$1!=l' "$STATE_REAUTH"
+    printf '%s\t%s\t%s\n' "$label" "$(now)" "$reason"; } | atomic_write "$STATE_REAUTH"
+  acct_unlock
+}
+cmd_clear_reauth() {
+  local label="${1:-}"
+  [ -f "$STATE_REAUTH" ] || return 0
+  acct_lock
+  if [ -z "$label" ]; then
+    : | atomic_write "$STATE_REAUTH"
+  else
+    awk -F'\t' -v l="$label" '$1!=l' "$STATE_REAUTH" | atomic_write "$STATE_REAUTH"
+  fi
+  acct_unlock
+}
+
 # --- per-MODEL caps (issue #524) --------------------------------------------------
 # "You've hit your Fable 5 limit · resets Sep 6 …" is a different wall from the
 # subscription's: the account keeps its 5h/7d headroom for every other model. So it
@@ -1488,7 +1542,10 @@ EOF
   while IFS= read -r l; do
     [ -n "$l" ] || continue
     until=$(acct_limited_until "$l")
-    if [ "$until" -gt "$now_s" ]; then
+    if [ "$(acct_reauth_since "$l")" -gt 0 ]; then
+      # the login itself is rejected (#1667): red, and the fix is a login, not a wait
+      state="${A_RED}needs login${A_RST} ${A_DIM}· marked $(human_dur $(( now_s - $(acct_reauth_since "$l") ))) ago · clear-reauth after logging in${A_RST}"
+    elif [ "$until" -gt "$now_s" ]; then
       state="${A_YEL}limited${A_RST} ${A_DIM}· back in ~$(human_dur $(( until - now_s )))${A_RST}"
     else
       tok=$(acct_token "$l")
@@ -1558,7 +1615,7 @@ EOF
 # so the tests can exercise dur_secs/acct_ttl/pick_active/… in isolation.
 if [ "${BASH_SOURCE[0]:-}" = "${0}" ]; then
 case "${1:-active}" in
-  inventory|choose|profile|check-target|bench-codex|launch) account_adapter "$@" ;;
+  inventory|choose|profile|check-target|target-auth|bench-codex|launch) account_adapter "$@" ;;
   reconcile) account_reconcile "$@" ;;
   failover-status) account_reconcile status ;;
   _claude-inventory) shift; cmd_claude_inventory "$@" ;;
@@ -1571,6 +1628,9 @@ case "${1:-active}" in
   mark-limited)  cmd_mark_limited "${2:-}" "${3:-}" ;;
   clear)         cmd_clear "${2:-}" ;;
   limited-until) acct_limited_until "${2:-}" ;;
+  mark-reauth)   cmd_mark_reauth "${2:-}" "${3:-}" ;;
+  clear-reauth)  cmd_clear_reauth "${2:-}" ;;
+  reauth-since)  acct_reauth_since "${2:-}" ;;
   quota)         shift; cmd_quota "$@" ;;
   quota-verdict) shift; cmd_quota_verdict "$@" ;;
   pace)          cmd_pace ;;
@@ -1582,6 +1642,6 @@ case "${1:-active}" in
   migrate)       shift; exec bash "$BIN/fleet-migrate.sh" "$@" ;;
   whoami)        shift; exec bash "$BIN/fleet-migrate.sh" whoami "$@" ;;
   phase)         shift; cmd_phase "$@" ;;
-  *) echo "fleet-account.sh: unknown command '$1' (active|token|env|list|use|rotate|mark-limited|clear|limited-until|quota|quota-verdict|pace|bench|phase|model-limited|model-limited-until|model-clear|model-quota|migrate|whoami)" >&2; exit 2 ;;
+  *) echo "fleet-account.sh: unknown command '$1' (active|token|env|list|use|rotate|mark-limited|clear|limited-until|mark-reauth|clear-reauth|reauth-since|target-auth|quota|quota-verdict|pace|bench|phase|model-limited|model-limited-until|model-clear|model-quota|migrate|whoami)" >&2; exit 2 ;;
 esac
 fi

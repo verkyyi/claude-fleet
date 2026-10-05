@@ -104,6 +104,23 @@ first/last recorded user messages and git evidence, and directs Codex to recover
 the task before editing. It does not pretend an automatically extracted excerpt
 is an agent-written summary. No extra Claude/model call is needed to export.
 
+## Target login check
+
+Before a cutover asks the source anything, `--dry-run` and the first step of a
+real transfer ask `bin/fleet-account.sh target-auth` whether the TARGET account
+can log in (issue #1667): a Codex profile whose ccquota login state is not
+`valid` / `refresh_due`, or whose home is missing; a Claude pool label marked by
+`fleet-account.sh mark-reauth`, whose hub-managed token has expired, or whose
+token file is unreadable. The planner's pinned target goes through
+`check-target` the same way. A refusal prints `fleet-transfer: target-auth: …`,
+exits 1, leaves the source running, writes `refused.json` into the quota
+request (so `fleet-account.sh failover-status` shows `target-auth: …`) and
+records a `▲ transfer-refused` row for the `prefix !` alerts popup. The same
+read happens once more right before `/exit`. With no registry to ask (no
+ccquota, multi-account off) the verdict is `unknown` and the launch behaves as
+it always did. `fleet-account.sh migrate` makes the same check before each
+window's `/exit`; `clear-reauth <label>` lifts a mark after a new login.
+
 ## Export without switching
 
 ```sh

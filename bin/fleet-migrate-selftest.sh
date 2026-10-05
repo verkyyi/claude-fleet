@@ -301,6 +301,26 @@ ok; bash "$SCRIPT" --session "$SESS" --target-account acctB --all >/dev/null 2>&
   && fail 'manual target must reject bulk migration'
 unset FLEET_MANUAL_ACCOUNT_BIN
 
+# --- a target that cannot log in is refused BEFORE /exit (issue #1667): acctB
+# marked by mark-reauth → the explicit move leaves w1 running and launches
+# nothing, --dry-run says so, the alerts popup gets a transfer-refused row;
+# clear-reauth → the same preview no longer refuses.
+bash "$BIN/fleet-account.sh" mark-reauth acctB 'auth error on a session' >/dev/null || fail 'mark-reauth acctB'
+ok; out=$(bash "$SCRIPT" --session "$SESS" --dry-run "$w1" 2>&1)
+printf '%s' "$out" | grep -q 'target-auth: Claude account acctB needs a new login (reauth_required) — would be left running' \
+  || fail "dry-run must name the login refusal: $out"
+ok; out=$(bash "$SCRIPT" --session "$SESS" "$w1" 2>&1)
+printf '%s' "$out" | grep -q 'target-auth: Claude account acctB needs a new login (reauth_required) — left running' \
+  || fail "a marked target must be refused: $out"
+ok; TM display-message -p -t "$w1" '#{pane_pid}' >/dev/null 2>&1 && [ ! -f "$WORK/launched" ] \
+  || fail 'a refused target must leave w1 alive and launch nothing'
+ok; grep -q $'\ttransfer-refused\t.*acctB' "$WORK/.claude-dash/global/alerts.events" 2>/dev/null \
+  || fail "a migrate refusal must record a transfer-refused event: $(cat "$WORK/.claude-dash/global/alerts.events" 2>/dev/null)"
+bash "$BIN/fleet-account.sh" clear-reauth acctB
+ok; out=$(bash "$SCRIPT" --session "$SESS" --dry-run "$w1" 2>&1)
+printf '%s' "$out" | grep -q 'target-auth' && fail "a cleared mark must not refuse: $out"
+ok; printf '%s' "$out" | grep -q 'would /exit' || fail "a cleared mark must preview the move again: $out"
+
 # --- the real thing: --limited moves w1 (hook), leaves w2 (stuck), relaunches w3 in place
 out=$(bash "$SCRIPT" --session "$SESS" --limited 2>&1)
 # w1: hook path → a NEW window named w1 in wt1, options carried, argv has --resume + nudge
