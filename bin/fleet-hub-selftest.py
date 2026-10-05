@@ -16,7 +16,7 @@ import sys
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 import uuid
 
 BIN = Path(__file__).absolute().parent
@@ -735,6 +735,33 @@ class HubTests(HubFixture):
         self.assertEqual((err["code"], err["exit"]), ("AT_CAPACITY", 2))
         self.assertEqual(err["stderr1"], "dash-issue-session: at capacity: 6/6 sessions")
         self.assertIn("at capacity: 6/6", err["message"])
+
+    def test_start_leaves_a_trace_and_a_stale_one_never_opens(self):
+        # issue #1606: every start leaves lines in control/ops.log, taken or
+        # refused, and a start whose executor only gets to it after the hub
+        # stopped waiting (and handed its lease back) is refused, not opened.
+        done = self.node.wait(self.submit(key="t")["operation_id"])
+        self.assertEqual(done["status"], "succeeded")
+        log = (self.node.conf / "control" / "ops.log").read_text()
+        for step in ("worker_start %s accepted from" % done["operation_id"], "issue=123",
+                     "worker_start %s running" % done["operation_id"],
+                     "worker_start %s succeeded window=@12" % done["operation_id"]):
+            self.assertIn(step, log)
+        (self.node.conf / "spawn.calls").unlink()
+        real_popen = control.subprocess.Popen
+
+        def no_executor(argv, *args, **kwargs):  # the executor never gets going
+            return MagicMock() if "execute" in argv else real_popen(argv, *args, **kwargs)
+        with patch.object(control.subprocess, "Popen", side_effect=no_executor):
+            op_id = self.submit(key="late", issue=127)["operation_id"]
+        with self.node.controller.store.connect() as db:
+            db.execute("UPDATE operations SET created=created-?, updated=updated-? WHERE id=?",
+                       (control.START_STALE_SECS + 5, control.START_STALE_SECS + 5, op_id))
+        self.node.controller.execute(op_id)
+        late = self.node.rpc("operation_get", {"operation_id": op_id})
+        self.assertEqual((late["status"], late["result"]["error"]["code"]), ("failed", "EXPIRED"))
+        self.assertFalse((self.node.conf / "spawn.calls").exists())
+        self.assertIn("worker_start %s failed EXPIRED" % op_id, (self.node.conf / "control" / "ops.log").read_text())
 
     def test_start_names_the_repo_in_a_multi_repo_fleet(self):
         # issue #984: two repos can both have an issue-123, so the spawn needs --repo.

@@ -69,6 +69,7 @@ func TestMultiRepoPlaceSeesEveryHostedRepo(t *testing.T) {
 	if st, out := leaseCall(t, h, tok5, map[string]any{"action": "acquire", "repo": writeRepo, "issue": 7, "worker_id": wid5}); st != 200 {
 		t.Fatalf("m5's lease: %d %v", st, out)
 	}
+	m4.setOpGet(finished("succeeded", map[string]any{"exit": 0, "window": "@7"}))
 	st, out = placeCall(t, h, tok5, map[string]any{"repo": writeRepo, "issue": 7, "worker_id": wid5, "idempotency_key": "place-7"})
 	if got := candidateMachines(t, out); st != 200 || out["local"] != false || len(got) != 2 {
 		t.Fatalf("claude-fleet place from m5 = %d %v; want m4 out of two candidates (got %v)", st, out, got)

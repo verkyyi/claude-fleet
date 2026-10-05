@@ -588,7 +588,19 @@ func (a *Agent) answerControl(ctx context.Context, conn *websocket.Conn, m contr
 		defer cancel()
 		_ = wsjson.Write(wctx, conn, msg)
 	}
+	// Every write the hub sends leaves one line in this agent's log, taken
+	// or refused (claude-fleet#1606): a start the hub says it sent and this
+	// machine never opened is told apart — no line (the frame never came),
+	// "refused" (it never reached the controller), or "journalled" (the
+	// controller's own ops.log carries the rest).
+	what := "write"
+	logWrite := func(outcome string) {
+		if write {
+			log.Printf("control: %s %s", what, outcome)
+		}
+	}
 	fail := func(code, msg string) {
+		logWrite("refused " + code + ": " + msg)
 		reply(control.Message{Type: control.TypeError, Proto: control.Proto,
 			Error: &control.Error{Code: code, Message: msg}})
 	}
@@ -622,6 +634,12 @@ func (a *Agent) answerControl(ctx context.Context, conn *websocket.Conn, m contr
 			fail(control.CodeBadMessage, "a write's params must be one JSON object")
 			return
 		}
+		var env struct {
+			OperationID string `json:"operation_id"`
+			Action      string `json:"action"`
+		}
+		_ = json.Unmarshal(params, &env)
+		what = fmt.Sprintf("write %s operation %s", env.Action, env.OperationID)
 	}
 	if write {
 		// A moved-in session's transcript comes over HTTP, never the
@@ -675,5 +693,10 @@ func (a *Agent) answerControl(ctx context.Context, conn *websocket.Conn, m contr
 		fail(code, err.Error())
 		return
 	}
+	var st struct {
+		Status string `json:"status"`
+	}
+	_ = json.Unmarshal(res, &st)
+	logWrite("journalled: " + st.Status)
 	reply(out)
 }
