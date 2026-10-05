@@ -337,6 +337,10 @@ override them):
      hub-spawned worker needs no special case**: with no parent — or a parent that
      has already been reaped — it exits 0 silently, so this is one unconditional
      line on every ship path, never a decision. It cannot fail your merge.
+     `queued → …` (exit 3, issue #1647) means the parent cannot take it right
+     now — its machine is offline, it is asleep at a full fleet, its Claude is
+     down — and the report waits for it and is delivered when it can be: nothing
+     to do, don't resend. Only `reported → …` (exit 0) means it arrived.
   7. **Then stop.** `com.claude-fleet.cleanup` reaps the worktree/window/branch
      and records the resume ledger after the merged grace (default 10 minutes)
      and liveness checks; the dash marks pending cleanup with `rNm`.

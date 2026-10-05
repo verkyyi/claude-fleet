@@ -139,6 +139,21 @@ ccquota agent's control channel is this machine's only door to the hub.
   parent's ledger there with `node` + `rid` (one row however often it arrives) and
   delivered like a local report (tier, batch mode, `children_send`); a `message`
   goes to the worker through `fleet-peer-send.sh`, prefixed `[from <key> on <node>]`.
+- **Queued for the recipient** (issue #1647). A recipient not live on its machine
+  makes `deliver` answer «not now» (75): the hub keeps the relay and pushes it again
+  only on a beat whose inventory lists that worker — by `<fleet>/<key>` or its
+  lifelong `<fleet>/<fleet_id>` — never on a timer alone. A recipient whose window is
+  there but cannot take it (no live Claude, an inbox that will not answer) gets it
+  through that machine's peer queue (`bin/fleet-peer-queue.sh`, drained by the
+  cleanup tick and a sleeper's wake). The sender hands a full worker_id over even
+  when its map is stale — the hub routes on the fleet UUID — and says
+  `queued → …` (exit 3) unless the hub's **receipt** says delivered within
+  `FLEET_HUB_RECEIPT_WAIT` (4 s): once a relay settles (delivered / failed /
+  expired after 7 days) the hub pushes a `receipt` relay back down the SENDER's
+  channel, and its `deliver` writes the row into that fleet's delivery book,
+  `fleets/<sess>/delivery.ndjson` (`QUEUED` → `DELIVERED` / `FAILED` / `EXPIRED`).
+  `reported` / `sent` therefore always means it arrived; a receipt that says the
+  target's machine merely holds it stays `QUEUED`.
 - **Waiting and holding.** `fleet-await.sh wid:<child elsewhere>` (a child whose
   parent is you) waits on your ledger, which the hub feeds, and calls it GONE when
   the map drops it. `fleet-children.sh` lists a remote child as `m4 remote` (or

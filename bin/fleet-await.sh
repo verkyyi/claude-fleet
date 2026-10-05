@@ -340,7 +340,12 @@ ladder_fire() {
          [ "$rc" = 0 ] && out="alert stall-$STALL_ID" ;;
   esac
   out=$(printf '%s' "$out" | tr '\n' ' ' | sed 's/ *$//' | cut -c1-110)
-  if [ "$rc" = 0 ]; then printf 'sent%s' "${out:+: $out}"; else printf 'failed%s' "${out:+: $out}"; fi
+  # 3 = queued for the worker (issue #1647): it will get it, just not now.
+  case "$rc" in
+    0) printf 'sent%s' "${out:+: $out}" ;;
+    3) printf 'queued%s' "${out:+: $out}" ;;
+    *) printf 'failed%s' "${out:+: $out}" ;;
+  esac
 }
 
 # One ladder step per poll, for a LIVE child.

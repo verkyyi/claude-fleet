@@ -117,7 +117,25 @@ const CapMove = "move"
 const (
 	RelayChildReport = "child_report"
 	RelayMessage     = "message"
+	// RelayReceipt flows hub → SENDER only (claude-fleet#1647): what became
+	// of a relay that node sent — delivered, failed or expired. From is the
+	// relay's target, To its sender; the id is the relay's own. A node never
+	// sends one: the hub refuses it at the door like any unknown kind.
+	RelayReceipt = "receipt"
 )
+
+// ReceiptOpPrefix marks the OpID of a receipt push, so the sender node's
+// TypeRelayResult for it is told apart from a target's answer to a relay.
+const ReceiptOpPrefix = "rcpt:"
+
+// RelayReceiptBody is a receipt's payload.
+type RelayReceiptBody struct {
+	RID    string `json:"rid"`
+	Kind   string `json:"kind"`
+	To     string `json:"to"`
+	Status string `json:"status"`
+	Detail string `json:"detail,omitempty"`
+}
 
 // MaxRelayPayload bounds one relay's payload: a child report is a few hundred
 // bytes, a message at most a few thousand.

@@ -26,11 +26,24 @@
 #                   the child built — into the parent's pane (children_send).
 #   message       {text} → fleet-peer-send.sh to the target worker, with one
 #                 `[from <key> on <node>]` line in front so it knows who to answer.
+#   receipt       {rid, kind, to, status, detail} — the hub telling the SENDER what
+#                 became of a relay it sent (issue #1647): one row in the sending
+#                 fleet's delivery book (fleet-peer-queue.sh note), DELIVERED /
+#                 FAILED / EXPIRED — or QUEUED when the target's machine took it
+#                 but holds it for a recipient that cannot take it yet.
 #
-# Exit: 0 applied (or already applied) · 75 not now, push it again later · anything
-# else refused for good (the reason on stderr's last line). Never touches a window
-# that is not the relay's target: the target is a worker_id of a fleet on THIS
-# machine (fleet_wid_home), or the relay is refused.
+# A recipient that is not live here — no window answers to its identity or key —
+# is «not now» (75), never «done»: the hub keeps the relay and pushes it again the
+# beat this machine's inventory lists that worker (issue #1647). A child report is
+# still ledgered on the first push (the parent's book is the record); a recipient
+# whose window is here but cannot take it yet (no live Claude, an inbox that will
+# not answer) gets it through this machine's peer queue (fleet-peer-queue.sh), and
+# the last stderr line — the hub's detail — starts `queued`.
+#
+# Exit: 0 applied (or already applied, or queued here) · 75 not now, push it again
+# later · anything else refused for good (the reason on stderr's last line). Never
+# touches a window that is not the relay's target: the target is a worker_id of a
+# fleet on THIS machine (fleet_wid_home), or the relay is refused.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -173,18 +186,35 @@ except ValueError:
     sys.exit("relay is not JSON")
 if not isinstance(r, dict) or not isinstance(r.get("payload"), dict):
     sys.exit("relay has no payload object")
-wid = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/"
-                 r"([A-Za-z0-9][A-Za-z0-9._-]{0,127}:)?(issue|scratch)-[1-9][0-9]{0,9}$")
+uuid = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+# `<fleet UUID>/<key>`, or `<fleet UUID>/<fleet_id>` — the lifelong form (#1646).
+wid = re.compile(r"^" + uuid + r"/(([A-Za-z0-9][A-Za-z0-9._-]{0,127}:)?(issue|scratch)-[1-9][0-9]{0,9}|" + uuid + r")$")
 rid, kind, frm, to = (str(r.get(k) or "") for k in ("id", "kind", "from", "to"))
 node = re.sub(r"[^A-Za-z0-9._-]", "", str(r.get("from_node") or ""))[:64]
-if kind not in ("child_report", "message"):
+if kind not in ("child_report", "message", "receipt"):
     sys.exit("unknown relay kind %r" % kind)
 if not wid.match(frm) or not wid.match(to):
     sys.exit("from/to is not a worker_id")
-if not rid.startswith(frm + "#") or not re.match(r"^[A-Za-z0-9._-]{1,64}$", rid[len(frm) + 1:]):
+# A receipt carries the id of the relay it answers for: that relay's sender is
+# its `to` (the hub swaps the two), so the id is scoped to `to`, not `from`.
+scope = to if kind == "receipt" else frm
+if not rid.startswith(scope + "#") or not re.match(r"^[A-Za-z0-9._-]{1,64}$", rid[len(scope) + 1:]):
     sys.exit("bad relay id")
 p = r["payload"]
-if kind == "child_report":
+tier = ""
+if kind == "receipt":
+    st = str(p.get("status") or "")
+    if st not in ("delivered", "failed", "expired") or str(p.get("rid") or "") != rid:
+        sys.exit("bad receipt")
+    detail = " ".join(str(p.get("detail") or "").split())[:300]
+    # Taken by the target's machine but held there for its recipient: the
+    # sender's book says QUEUED, with where — never DELIVERED.
+    if st == "delivered" and detail.startswith("queued"):
+        st = "queued"
+    open(os.path.join(work, "row"), "w").write(json.dumps(
+        {"state": st.upper(), "kind": str(p.get("kind") or ""), "to": str(p.get("to") or frm), "detail": detail},
+        ensure_ascii=False))
+elif kind == "child_report":
     row = {k: p.get(k, "") for k in ("child", "state", "pr", "verdict", "summary", "title", "tier")}
     row.update(node=node or "?", rid=rid)
     open(os.path.join(work, "row"), "w").write(json.dumps(row, ensure_ascii=False))
@@ -195,14 +225,24 @@ else:
     if not text.strip():
         sys.exit("empty message")
     open(os.path.join(work, "msg"), "w").write(text)
-    tier = ""
-for v in (kind, frm, to, node, tier):
+for v in (kind, frm, to, node, tier, rid):
     print(v)
 PY
 ) || die 1 "${fields##*$'\n'}"
-{ read -r KIND; read -r FROM; read -r TO; read -r NODE; read -r TIER; } <<EOF
+{ read -r KIND; read -r FROM; read -r TO; read -r NODE; read -r TIER; read -r RID; } <<EOF
 $fields
 EOF
+
+# --- receipt (issue #1647): the sender's book learns what became of its relay -----
+if [ "$KIND" = receipt ]; then
+  home=$(fleet_wid_home "wid:$TO") || die 1 "receipt for $TO, which is not a fleet on this machine"
+  { read -r rst; read -r rkind; read -r rto; read -r rdet; } <<EOF
+$(python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); print("\n".join((d["state"], d["kind"], d["to"], d["detail"])))' "$WORK/row")
+EOF
+  bash "$BIN/fleet-peer-queue.sh" note -L "$home" --rid "$RID" --state "$rst" --to "$rto" \
+    --kind "$rkind" --via hub --detail "$rdet" || die 75 "could not write the delivery book"
+  exit 0
+fi
 
 home=$(fleet_wid_home "wid:$TO") || die 1 "target $TO is not a fleet on this machine"
 sock=$(fleet_socket "$home")
@@ -215,16 +255,23 @@ pfwin=''
 if fleet_is_fid "$pkey"; then
   pfwin=$(fleet_win_for_fid "$pkey" "$sock" 2>/dev/null) || pfwin=''
   _pk=''; [ -n "$pfwin" ] && _pk=$(fleet_window_okey "$home" "$pfwin" 2>/dev/null)
-  [ -n "$_pk" ] || die 1 "parent $pkey has no live window here"
+  # Not live here (yet): the hub holds it and pushes it again the beat this
+  # machine's inventory lists that identity (issue #1647).
+  [ -n "$_pk" ] || die 75 "not now: parent $pkey has no live window here"
   pkey=$_pk
 fi
 
 if [ "$KIND" = message ]; then
+  case "$(fleet_worker_locate "wid:$TO" "$home" 2>/dev/null)" in
+    local\ *) ;;
+    *) die 75 "not now: $TO has no live window here" ;;
+  esac
   text="[from $fkey on ${NODE:-another machine}]"$'\n'"$(cat "$WORK/msg")"
   out=$(env -u TMUX bash "$BIN/fleet-peer-send.sh" -L "$sock" "wid:$TO" "$text" 2>&1); rc=$?
   case "$rc" in
     0) printf '%s\n' "$out" >&2; exit 0 ;;
-    1) die 1 "${out##*$'\n'}" ;;           # no such live worker here: for good
+    3) printf 'queued at %s: %s\n' "$(hostname -s 2>/dev/null)" "${out##*$'\n'}" >&2; exit 0 ;;
+    1) die 1 "${out##*$'\n'}" ;;           # refused (ambiguous, bad target): for good
     *) die 75 "${out##*$'\n'}" ;;
   esac
 fi
@@ -235,7 +282,15 @@ fleet_load_conf "$home"
 . "$BIN/fleet-children-lib.sh"
 lf=$(children_file "$pkey" "$home") || die 1 "no ledger for parent $pkey"
 res=$(python3 "$BIN/fleet-children.py" append --file "$lf" < "$WORK/row" 2>&1) || die 1 "ledger refused it: ${res##*$'\n'}"
-case "$res" in dup*) printf 'fleet-hub-node: %s already in %s ledger\n' "$fkey" "$pkey" >&2; exit 0 ;; esac
+# A relay pushed again is ledgered once; it is DELIVERED once too — the rids this
+# machine handed to their parent (or its queue) are kept beside the ledger, so a
+# push that comes back after «not now» still gets delivered (issue #1647).
+sentf="${lf%/*}/.relay-sent"
+case "$res" in dup*)
+  if grep -qxF "$RID" "$sentf" 2>/dev/null; then
+    printf 'fleet-hub-node: %s already in %s ledger\n' "$fkey" "$pkey" >&2; exit 0
+  fi ;;
+esac
 
 [ "$TIER" = silent ] && exit 0
 MODE=$(children_report_mode)
@@ -247,12 +302,28 @@ if [ "$MODE" = batch ]; then
 fi
 pwin=$pfwin
 [ -n "$pwin" ] || pwin=$(fleet_win_for_key "$pkey" "$sock") || pwin=''
-[ -n "$pwin" ] || { printf 'fleet-hub-node: parent %s has no window here — ledgered only\n' "$pkey" >&2; exit 0; }
+[ -n "$pwin" ] || die 75 "not now: parent $pkey has no window here — ledgered, delivered when it is back"
 [ -s "$WORK/msg" ] || exit 0
-if children_send "$home" "$sock" "$pwin" "$(cat "$WORK/msg")"; then
+children_send "$home" "$sock" "$pwin" "$(cat "$WORK/msg")"; rc=$?
+if [ "$rc" -eq 0 ]; then
   children_cursor_set "$pkey" "$home"
+  printf '%s\n' "$RID" >> "$sentf"
   printf 'reported → %s (%s) from %s on %s\n' "$pkey" "$pwin" "$fkey" "${NODE:-?}" >&2
-else
-  printf 'fleet-hub-node: parent %s (%s) has no reachable inbox — ledgered only\n' "$pkey" "$pwin" >&2
+  exit 0
 fi
-exit 0
+if [ "$rc" -eq 3 ]; then
+  printf '%s\n' "$RID" >> "$sentf"
+  printf 'queued at %s: parent %s is asleep at a full fleet — delivered when a slot frees\n' "$(hostname -s 2>/dev/null)" "$pkey" >&2
+  exit 0
+fi
+# The window is here, its inbox will not answer now: this machine's peer queue
+# holds it for the parent's identity (drained every tick and on its wake).
+pfid=$(fleet_window_fid "$home" "$pwin" "$sock" 2>/dev/null) || pfid=''
+if printf '%s' "$(cat "$WORK/msg")" | bash "$BIN/fleet-peer-queue.sh" put -L "$home" --kind report \
+     --rid "$RID" --to "$pkey" ${pfid:+--to-fid "$pfid"} --to-key "$pkey" >/dev/null; then
+  printf '%s\n' "$RID" >> "$sentf"
+  printf 'queued at %s: parent %s (%s) cannot take it now — delivered when it can\n' "$(hostname -s 2>/dev/null)" "$pkey" "$pwin" >&2
+  exit 0
+fi
+die 75 "not now: parent $pkey ($pwin) has no reachable inbox"
+

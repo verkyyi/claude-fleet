@@ -213,7 +213,14 @@ silent() {   # silent <desc> <args…>
 silent "hub-spawned (@origin empty)"        --win "$HUBCHILD"    --state merged
 silent "a daemon origin (autofill)"         --win "$DAEMONCHILD" --state merged
 silent "the parent window is gone"          --win "$ORPHAN"      --state merged
-silent "the parent runs no Claude"          --win "$DEADP"       --state merged
+# A parent window with no live Claude under it is QUEUED for, never dropped (issue
+# #1647): exit 3, one `queued →` line, nothing sent yet — bin/peer-queue-selftest.sh
+# pins the drain that delivers it.
+b=$(frames); out=$(RUN --win "$DEADP" --state merged); rc=$?
+eq "the parent runs no Claude — exit 3 (queued)" 3 "$rc"
+eq "the parent runs no Claude — nothing sent yet" "$b" "$(frames)"
+ok; has 'queued → scratch-7' "$out" || fail "the parent runs no Claude — says queued" "$out"
+ok; [ -n "$(ls "$FLEET_CONF_DIR/fleets/$LBL/peer-queue/"*.json 2>/dev/null)" ] || fail "the parent runs no Claude — the report waits in the peer queue"
 silent "the child window itself is gone"    --win '@99999'       --state merged
 
 # --dry-run says WHY, and still sends nothing.

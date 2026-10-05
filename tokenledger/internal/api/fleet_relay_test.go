@@ -396,3 +396,164 @@ func TestRelayOwnerBoundary(t *testing.T) {
 		t.Fatal("with no admins named every login is the operator's")
 	}
 }
+
+// A relay waits for its RECIPIENT, by identity, and its sender hears what
+// became of it (claude-fleet#1647): pushed once, answered "not now", it is not
+// pushed again while the target fleet's inventory lacks that worker — however
+// often the target node beats — and goes the beat that lists it live under its
+// <fleet>/<fleet_id>. Delivered, the SENDER's node gets a receipt (OpID
+// rcpt:<id>), and its answer settles it; a relay nobody takes within the TTL
+// expires and the sender gets an "expired" receipt.
+func TestRelayQueuedForRecipientAndReceipts(t *testing.T) {
+	oldResend, oldTTL := relayResendAfter, relayTTL
+	relayResendAfter = 50 * time.Millisecond
+	t.Cleanup(func() { relayResendAfter, relayTTL = oldResend, oldTTL })
+	h := newFleetHarness(t)
+	const identity = "4b3c2d1e-0f9a-4b8c-9d7e-6f5a4b3c2d1e"
+	parent := fakeFleet(t, machineA, "fleet-a", "verkyyi/claude-fleet", "/a", 1)
+	child := fakeFleet(t, machineB, "fleet-b", "verkyyi/claude-fleet", "/b", 2)
+	withIdentity := parent
+	withIdentity.Workers = json.RawMessage(`[{"worker_id":"` + parent.FleetID + `/issue-1","key":"issue-1","window_id":"@1","issue":1,"state":"working"},` +
+		`{"worker_id":"` + parent.FleetID + `/scratch-4","key":"scratch-4","window_id":"@4","state":"idle","identity":"` + identity + `"}]`)
+	withIdentity.Count = 2
+
+	connect := func(label string) *fakeNode {
+		c := dialNode(t, h, h.enroll(t, label))
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		m, _ := control.New(control.TypeHello, control.Hello{HeartbeatMS: 60000, AgentVersion: "test",
+			Capabilities: []string{control.CapRead, control.CapWrite, control.CapRelay}})
+		if err := wsjson.Write(ctx, c, m); err != nil {
+			t.Fatal(err)
+		}
+		var reply control.Message
+		if err := wsjson.Read(ctx, c, &reply); err != nil || reply.Type != control.TypeWelcome {
+			t.Fatalf("hello: %v %+v", err, reply)
+		}
+		return &fakeNode{t: t, conn: c}
+	}
+	pn, cn := connect("a"), connect("b")
+	pn.beat("m5", "op", machineA, parent)
+	cn.beat("m4", "op", machineB, child)
+	waitFor(t, 5*time.Second, "fleets registered", func() bool {
+		_, e1 := h.srv.Store.Fleet(parent.FleetID)
+		_, e2 := h.srv.Store.Fleet(child.FleetID)
+		return e1 == nil && e2 == nil
+	})
+	to, from := parent.FleetID+"/"+identity, child.FleetID+"/issue-2"
+
+	pushes, receipts, acks := make(chan control.Message, 16), make(chan control.Message, 16), make(chan control.Message, 16)
+	go func() {
+		for {
+			var m control.Message
+			if wsjson.Read(context.Background(), pn.conn, &m) != nil {
+				return
+			}
+			if m.Type == control.TypeRelay {
+				pushes <- m
+			}
+		}
+	}()
+	go func() {
+		for {
+			var m control.Message
+			if wsjson.Read(context.Background(), cn.conn, &m) != nil {
+				return
+			}
+			switch m.Type {
+			case control.TypeRelay:
+				receipts <- m
+			case control.TypeAck, control.TypeError:
+				acks <- m
+			}
+		}
+	}()
+	next := func(ch chan control.Message, what string) control.Message {
+		select {
+		case m := <-ch:
+			return m
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		return control.Message{}
+	}
+	none := func(ch chan control.Message, what string) {
+		select {
+		case m := <-ch:
+			t.Fatalf("%s: got %+v", what, m)
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+	answer := func(n *fakeNode, m control.Message, res control.RelayResult) {
+		out, _ := control.New(control.TypeRelayResult, res)
+		out.OpID = m.OpID
+		if err := wsjson.Write(context.Background(), n.conn, out); err != nil {
+			t.Fatal(err)
+		}
+	}
+	send := func(id string) {
+		m, _ := control.New(control.TypeRelay, control.Relay{ID: id, Kind: control.RelayChildReport, From: from, To: to,
+			Payload: json.RawMessage(`{"child":"issue-2","state":"MERGED"}`)})
+		m.OpID = id
+		if err := wsjson.Write(context.Background(), cn.conn, m); err != nil {
+			t.Fatal(err)
+		}
+		if a := next(acks, "the hub's ack"); a.Type != control.TypeAck {
+			t.Fatalf("relay %s answered %+v; want stored", id, a)
+		}
+	}
+
+	id := from + "#1"
+	send(id)
+	answer(pn, next(pushes, "the first push"), control.RelayResult{ID: id, Retry: true, Detail: "parent not live here"})
+	time.Sleep(100 * time.Millisecond)
+	for i := 0; i < 3; i++ {
+		pn.beat("m5", "op", machineA, parent) // no worker with that identity yet
+	}
+	none(pushes, "re-pushed while the recipient is not in the inventory")
+	if r, _ := h.srv.Store.FleetRelay(id); r.Status != store.RelayPending || r.Attempts != 1 {
+		t.Fatalf("relay = %s/%d attempts; want pending after one push", r.Status, r.Attempts)
+	}
+	none(receipts, "a receipt for a relay still pending")
+
+	pn.beat("m5", "op", machineA, withIdentity) // the recipient is live, by identity
+	m := next(pushes, "the push once the recipient is live")
+	if m.OpID != id {
+		t.Fatalf("pushed %s; want %s", m.OpID, id)
+	}
+	answer(pn, m, control.RelayResult{ID: id, OK: true, Detail: "reported"})
+	waitFor(t, 5*time.Second, "delivered", func() bool {
+		r, err := h.srv.Store.FleetRelay(id)
+		return err == nil && r.Status == store.RelayDelivered && r.Receipt == store.ReceiptDue
+	})
+	cn.beat("m4", "op", machineB, child)
+	rc := next(receipts, "the sender's receipt")
+	var rel control.Relay
+	var body control.RelayReceiptBody
+	if json.Unmarshal(rc.Payload, &rel) != nil || json.Unmarshal(rel.Payload, &body) != nil ||
+		rel.Kind != control.RelayReceipt || rc.OpID != control.ReceiptOpPrefix+id || rel.ID != id || rel.To != from ||
+		body.RID != id || body.Status != store.RelayDelivered || body.To != to {
+		t.Fatalf("receipt %+v / %+v; want delivered for %s back to %s", rel, body, id, from)
+	}
+	answer(cn, rc, control.RelayResult{ID: id, OK: true})
+	waitFor(t, 5*time.Second, "the receipt settled", func() bool {
+		r, _ := h.srv.Store.FleetRelay(id)
+		return r.Receipt == store.ReceiptDone
+	})
+	cn.beat("m4", "op", machineB, child)
+	none(receipts, "a settled receipt pushed again")
+
+	// Nobody ever takes it: expired after the TTL, and the sender is told.
+	id2 := from + "#2"
+	send(id2)
+	answer(pn, next(pushes, "the push of the second"), control.RelayResult{ID: id2, Retry: true})
+	time.Sleep(50 * time.Millisecond)
+	relayTTL = 10 * time.Millisecond
+	h.srv.relayExpiredAt.Store(0)
+	cn.beat("m4", "op", machineB, child)
+	rc = next(receipts, "the expiry receipt")
+	if json.Unmarshal(rc.Payload, &rel) != nil || json.Unmarshal(rel.Payload, &body) != nil ||
+		body.RID != id2 || body.Status != store.RelayExpired {
+		t.Fatalf("receipt %+v; want expired for %s", body, id2)
+	}
+}

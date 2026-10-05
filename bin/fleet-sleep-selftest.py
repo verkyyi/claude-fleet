@@ -767,7 +767,8 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         self.fleet_full();self.addCleanup(self.fleet_full,False)
         p=subprocess.run(['python3',str(self.bin/'fleet-sleep.py'),'deliver','--session',self.socket,self.pane],
                          input='held for a slot',env=self.env,text=True,capture_output=True,timeout=50)
-        self.assertEqual(p.returncode,0,p.stderr)
+        # 3 = held, not delivered (issue #1647): the sender says «queued».
+        self.assertEqual(p.returncode,3,p.stderr)
         self.assertIn('queued — fleet at its session limit',p.stderr)
         self.assertEqual(self.opt('@worker_lifecycle'),'sleeping')
         self.assertEqual(self.opt('@sleep_wake_deferred'),'cap')
