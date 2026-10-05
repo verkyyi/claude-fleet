@@ -815,7 +815,7 @@ class Worker:
                 if not self.wake_locked(path,data,over_cap=False):
                     # Already saved above: the scan's drain delivers it once a slot frees.
                     print('fleet-sleep: queued — fleet at its session limit; delivers when a slot frees',file=sys.stderr)
-                    return
+                    return 'queued'
             source=self.inspect()
             if message['session_id']!=source['session_id']:raise ValueError('pending message belongs to an earlier conversation')
             self.stamp('@sleep_evidence','')
@@ -882,6 +882,19 @@ class Worker:
                 elif self.scheduled_wake(path,data): self.wake_locked(path,data,over_cap=False)
                 elif self.opt('@sleep_wake_deferred') and not any(self.inbox().glob('*.json')):
                     self.stamp('@sleep_wake_deferred','')   # nothing waits for a slot any more
+
+
+def drain_peer_queue(w):
+    # A woken worker first takes what waited for it (issue #1647): the fleet's
+    # peer queue — reports and messages queued while it could not take them —
+    # by its lifelong identity. Detached: delivery wakes nothing and takes the
+    # sleep lock itself, which this process may still be unwinding.
+    try:
+        fid=w.opt('@fleet_id')
+        if not fid or w.opt('@worker_lifecycle')=='sleeping': return
+        subprocess.Popen(['bash',str(BIN/'fleet-peer-queue.sh'),'drain','-L',w.session,'--fid',fid],
+                         stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
+    except (OSError,ValueError,subprocess.SubprocessError): pass
 
 
 def quiet_native_children(client,session_id):
@@ -1347,8 +1360,12 @@ def main():
     elif a.action=='holds-exit':
         _,data=w.record()
         return 0 if w.holds_exit(data) else 1
-    elif a.action=='wake': w.wake(dwell=a.dwell,nav=a.nav,over_cap=a.over_cap)
-    elif a.action=='deliver': w.deliver(sys.stdin.read())
+    elif a.action=='wake':
+        w.wake(dwell=a.dwell,nav=a.nav,over_cap=a.over_cap)
+        drain_peer_queue(w)
+    # 3 = held, not delivered (issue #1647): the sleeper waits for a slot with it,
+    # and the sender must say «queued», never «reported».
+    elif a.action=='deliver': return 3 if w.deliver(sys.stdin.read())=='queued' else 0
     elif a.action=='restore':
         path=Path(a.record)
         if path.parent!=w.directory: raise ValueError('restore record is outside this fleet')

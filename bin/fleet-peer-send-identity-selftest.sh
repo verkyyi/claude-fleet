@@ -180,6 +180,10 @@ out=$(bash "$SB/fleet-peer-send.sh" -L "$L" issue:12 "m-wake" 2>"$WORK/err"); rc
 ok; [ "$rc" = 0 ] || fail "wake-delivery success → exit 0" "$err"
 ok; case "$out" in "sent → $wB via wake-delivery (issue-12 · "*) ;; *) fail "wake-delivery must echo sent →" "[$out]" ;; esac
 ok; [ -z "$err" ] || fail "wake-delivery success: nothing on stderr" "$err"
+printf 'import sys\nsys.stdin.read()\nsys.exit(3)\n' > "$SB/fleet-sleep.py"
+out=$(bash "$SB/fleet-peer-send.sh" -L "$L" issue:12 "m-held" 2>"$WORK/err"); rc=$?; err=$(cat "$WORK/err")
+ok; [ "$rc" = 3 ] && case "$out" in "queued → $wB: fleet at its session limit"*) true ;; *) false ;; esac \
+  || fail "a sleeper holding it at a full fleet → queued →, exit 3 (issue #1647)" "rc=$rc out=[$out] err=[$err]"
 printf 'import sys\nsys.stdin.read()\nsys.exit(1)\n' > "$SB/fleet-sleep.py"
 out=$(bash "$SB/fleet-peer-send.sh" -L "$L" issue:12 "m-wake2" 2>"$WORK/err"); rc=$?; err=$(cat "$WORK/err")
 ok; [ "$rc" = 1 ] && [ -z "$out" ] && [ "$(printf '%s\n' "$err" | grep -c .)" = 1 ] \

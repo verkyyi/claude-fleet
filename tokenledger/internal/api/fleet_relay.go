@@ -209,8 +209,14 @@ func (s *Server) dispatchRelays(endpointID string) {
 		return
 	}
 	nodeOf := map[string]string{}
+	live := map[string]map[string]bool{}
 	for _, r := range rels {
-		if !r.SentAt.IsZero() && now.Sub(r.SentAt) < relayResendAfter {
+		// The first push always goes: a child report is ledgered on the
+		// parent's machine even when the parent itself is not there. A
+		// relay already pushed waits for its RECIPIENT (claude-fleet#1647):
+		// it goes again only once the target fleet's inventory — every
+		// heartbeat — lists that worker live, by key or by identity.
+		if !r.SentAt.IsZero() && (now.Sub(r.SentAt) < relayResendAfter || !s.relayTargetLive(r.ToWID, live)) {
 			continue
 		}
 		fid := fleetOf(r.FromWID)
@@ -235,12 +241,83 @@ func (s *Server) dispatchRelays(endpointID string) {
 			log.Printf("fleet relay %s: mark sent: %v", r.ID, err)
 		}
 	}
+	s.dispatchReceipts(endpointID, now)
+}
+
+// relayTargetLive reports whether the worker a relay is for is in its
+// fleet's last inventory, as `<fleet>/<key>` or `<fleet>/<identity>`. A fleet
+// whose inventory carries no worker list at all is not second-guessed (live);
+// one that lists its workers and not this one is not live. cache is per call.
+func (s *Server) relayTargetLive(toWID string, cache map[string]map[string]bool) bool {
+	fid := fleetOf(toWID)
+	ws, ok := cache[fid]
+	if !ok {
+		ws = nil
+		if f, err := s.Store.Fleet(fid); err == nil && f.Present && strings.TrimSpace(f.WorkersJSON) != "" {
+			var rows []struct {
+				WorkerID string  `json:"worker_id"`
+				Identity *string `json:"identity"`
+			}
+			if json.Unmarshal([]byte(f.WorkersJSON), &rows) == nil {
+				ws = map[string]bool{}
+				for _, w := range rows {
+					ws[w.WorkerID] = true
+					if w.Identity != nil && fleetid.IsUUID(*w.Identity) {
+						ws[fid+"/"+*w.Identity] = true
+					}
+				}
+			}
+		} else if err != nil || !f.Present {
+			ws = map[string]bool{} // the fleet is gone: nobody there is live
+		}
+		cache[fid] = ws
+	}
+	return ws == nil || ws[toWID]
+}
+
+// dispatchReceipts pushes, down endpointID's channel, the receipt owed for
+// every settled relay that node sent (claude-fleet#1647). The node writes it
+// into the sender's book and answers; an unanswered one goes again after
+// relayResendAfter.
+func (s *Server) dispatchReceipts(endpointID string, now time.Time) {
+	due, err := s.Store.DueFleetRelayReceipts(endpointID, relayResendAfter, now)
+	if err != nil {
+		log.Printf("fleet relay: read receipts for %s: %v", endpointID, err)
+		return
+	}
+	for _, r := range due {
+		body, _ := json.Marshal(control.RelayReceiptBody{RID: r.ID, Kind: r.Kind, To: r.ToWID, Status: r.Status, Detail: r.Detail})
+		msg, err := control.New(control.TypeRelay, control.Relay{ID: r.ID, Kind: control.RelayReceipt, From: r.ToWID,
+			To: r.FromWID, Payload: body})
+		if err != nil {
+			continue
+		}
+		msg.OpID = control.ReceiptOpPrefix + r.ID
+		wctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err = s.SendNodeWrite(wctx, endpointID, msg)
+		cancel()
+		if err != nil {
+			return
+		}
+		if err := s.Store.MarkFleetRelayReceipt(r.ID, store.ReceiptSent, now); err != nil {
+			log.Printf("fleet relay %s: mark receipt sent: %v", r.ID, err)
+		}
+	}
 }
 
 // relayResult records a target node's answer to a pushed relay.
 func (s *Server) relayResult(endpointID string, m control.Message) {
 	var res control.RelayResult
 	if json.Unmarshal(m.Payload, &res) != nil || res.ID == "" {
+		return
+	}
+	if strings.HasPrefix(m.OpID, control.ReceiptOpPrefix) {
+		// The sender's node answering a receipt: whatever it said, the
+		// receipt is done — a node too old to know the kind refuses it, and
+		// pushing it again would only be refused again.
+		if r, err := s.Store.FleetRelay(res.ID); err == nil && r.FromEndpoint == endpointID {
+			_ = s.Store.MarkFleetRelayReceipt(r.ID, store.ReceiptDone, time.Now())
+		}
 		return
 	}
 	r, err := s.Store.FleetRelay(res.ID)

@@ -179,7 +179,13 @@ def send_message(to, text):
         target = parent_window()
     elif not re.match(r"^(issue:[0-9]+|#[0-9]+|issue-[0-9]+|scratch-[0-9]+|[@%][A-Za-z0-9_.:-]+)$", target):
         raise ToolFault("to must be issue:<N>, scratch-<N> or parent")
-    result = run(["bash", str(BIN / "fleet-peer-send.sh"), target, "-"], input_text=text)
+    result = run(["bash", str(BIN / "fleet-peer-send.sh"), target, "-"], input_text=text, check=False)
+    # Exit 3 = queued (issue #1647): the peer cannot take it now; it is delivered
+    # when it can. Not delivered — and not an error either.
+    if result.returncode == 3:
+        return {"delivered": False, "queued": True, "receipt": result.stdout.strip(), "to": to}
+    if result.returncode != 0:
+        raise ToolFault((result.stderr or result.stdout or "command failed").strip().replace("\n", " "))
     return {"delivered": True, "receipt": result.stdout.strip(), "to": to}
 
 

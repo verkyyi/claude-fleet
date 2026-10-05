@@ -46,7 +46,17 @@
 #   --dry-run       print the resolved target + the exact envelope; send nothing
 #   -h              this header
 #
-# EXIT 0 IS THE RULE, not the exception: no parent (hub-spawned / cross-fleet),
+# THREE OUTCOMES (issue #1647, EPIC #1645 rule 3): `reported → …` exit 0 — it reached
+# the parent; `queued → …` exit 3 — the parent cannot take it now (offline machine,
+# a stale hub map, a sleeper at a full fleet, a window with no live Claude, an inbox
+# that will not answer), so it waits — on the hub for the parent's identity, or in
+# this machine's peer queue (bin/fleet-peer-queue.sh) — and is delivered when the
+# parent can take it, or EXPIRED after 7 days in this fleet's delivery book; and
+# exit 1 — refused: nothing reached anyone and nothing waits. Never `reported`
+# without a delivery. A queued report stamps @reported like a sent one: it WILL
+# arrive, and the reaper's backstop must not queue a second.
+#
+# EXIT 0 IS THE RULE for "nothing to send": no parent (hub-spawned / cross-fleet),
 # the parent window already reaped with no live ancestor above it in the ledger
 # (a reaped parent WITH one relays there, issue #1352 — see `relay` below), no
 # live Claude under it, or the fleet has
@@ -59,6 +69,8 @@
 # On another machine's fleet the report goes to the hub's OUTBOX (CCQUOTA_FLEET=1),
 # and the parent's machine ledgers + delivers it (bin/fleet-hub-node.sh) — never a
 # local window that merely carries the same key. No hub: ledgered here, not sent.
+# The hub routes on the parent's fleet UUID, so a stale map (no node for it) still
+# hands it over; the hub holds it until the parent's machine lists it live.
 #
 #
 # On a delivered report the child's window is stamped `@reported 1`, which is what
@@ -101,7 +113,7 @@ while [ "$#" -gt 0 ]; do
     -L*)        SOCK="${1#-L}" ;;
     --only-once) ONCE=1 ;;
     --dry-run)  DRY=1 ;;
-    -h|--help)  sed -n '2,69p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)  sed -n '2,88p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *)          printf 'fleet-report-parent: unknown argument %s\n' "$1" >&2; exit 2 ;;
   esac
   shift
@@ -438,6 +450,12 @@ if [ -z "$PFOUND" ] && [ -n "$owid" ] && ! fleet_wid_home "$owid" "$sess" >/dev/
   # `from` is the readable `<fleet UUID>/<key>` (issue #1646): a label + the
   # relay's idempotency prefix, never an address.
   [ -n "${selfwin:-}" ] && _self=$(fleet_worker_id_key "$sess" "$selfwin" 2>/dev/null)
+  # A stale map says `unknown`, but a full worker_id names the parent's fleet, and
+  # that is all the hub routes on (issue #1647): hand it over all the same.
+  _node=''; case "$_loc" in remote\ *) _node=${_loc#remote } ;; esac
+  if [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ "$_loc" = unknown ]; then
+    case "$owid" in ?*/?*) _loc="remote ?" ;; esac
+  fi
   case "$_loc" in
     remote\ *)
       if [ -n "$_self" ] && [ "${CCQUOTA_FLEET:-0}" = 1 ]; then
@@ -446,19 +464,39 @@ if [ -z "$PFOUND" ] && [ -n "$owid" ] && ! fleet_wid_home "$owid" "$sess" >/dev/
           "$selfkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER" "$msg" 2>/dev/null)
         if [ "$DRY" = 1 ]; then
           printf 'fleet-report-parent: would relay to %s on %s via the hub, tier=%s\n--- envelope ---\n%s\n' \
-            "$owid" "${_loc#remote }" "$TIER" "$msg"
+            "$owid" "${_node:-? (no fresh map)}" "$TIER" "$msg"
           exit 0
         fi
         _n=$(TM display-message -p -t "$selfwin" '#{@hub_report_seq}' 2>/dev/null); case "$_n" in ''|*[!0-9]*) _n=0 ;; esac
         _n=$((_n + 1)); TM set-window-option -t "$selfwin" @hub_report_seq "$_n" 2>/dev/null
-        if _f=$(fleet_hub_put child_report "$_self" "$owid" "$(date +%s).$_n" "$_payload"); then
+        _suf="$(date +%s).$_n"
+        if _f=$(fleet_hub_put child_report "$_self" "$owid" "$_suf" "$_payload"); then
           [ "$TIER" = silent ] || TM set-window-option -t "$selfwin" @reported 1 2>/dev/null
-          if fleet_hub_wait_sent "$_f" 3; then _how='handed to the hub'; else _how='queued for the hub'; fi
-          printf 'reported → %s on %s (%s): %s\n' "${owid#*/}" "${_loc#remote }" "$_how" "$st"
-          exit 0
+          # Reported only on the hub's receipt that the parent's machine delivered
+          # it — an online node, the outbox emptied, the receipt within
+          # FLEET_HUB_RECEIPT_WAIT. Anything less is queued, and says so.
+          _rid="$_self#$_suf"; _how=''
+          if fleet_hub_wait_sent "$_f" 3; then
+            case "$_node" in
+              '') _how='its machine is not in a fresh hub map' ;;
+              *:lost) _how='its machine is offline' ;;
+              *) if [ "$TIER" != silent ] && bash "$BIN/fleet-peer-queue.sh" wait -L "$sess" --rid "$_rid" \
+                      --secs "${FLEET_HUB_RECEIPT_WAIT:-4}" >/dev/null 2>&1; then
+                   printf 'reported → %s on %s (delivered): %s\n' "${owid#*/}" "$_node" "$st"
+                   exit 0
+                 fi
+                 _how='not delivered yet' ;;
+            esac
+          else
+            _how='the hub is not reachable from here; this machine sends it when it is'
+          fi
+          bash "$BIN/fleet-peer-queue.sh" note -L "$sess" --rid "$_rid" --state QUEUED --to "$owid" \
+            --kind report --via hub --detail "$_how" 2>/dev/null || :
+          printf 'queued → %s%s（对方不在线，上线后补送 · %s）: %s\n' "${owid#*/}" "${_node:+ on ${_node%:lost}}" "$_how" "$st"
+          exit 3
         fi
       fi
-      _why="lives on ${_loc#remote } — the hub outbox is not available (CCQUOTA_FLEET=1 and a running ccquota agent carry it)" ;;
+      _why="lives on ${_node:-another machine} — the hub outbox is not available (CCQUOTA_FLEET=1 and a running ccquota agent carry it)" ;;
     *) _why="is not on this machine and the hub cannot place it" ;;
   esac
   if [ "$DRY" != 1 ] && command -v children_append >/dev/null 2>&1; then
@@ -467,6 +505,9 @@ if [ -z "$PFOUND" ] && [ -n "$owid" ] && ! fleet_wid_home "$owid" "$sess" >/dev/
   fi
   _how='ledgered, not sent'; [ "$DRY" = 1 ] && _how='not sent (dry run)'
   printf 'fleet-report-parent: parent %s %s; %s\n' "$owid" "$_why" "$_how" >&2
+  # With the hub on, reaching here is a refusal (no worker_id of our own, the
+  # outbox unwritable): exit 1, never success. Hub off: exit 0, as it always was.
+  [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ "$DRY" != 1 ] && exit 1
   exit 0
 fi
 
@@ -555,18 +596,42 @@ parent_agent=$(TM display-message -p -t "$pwin" '#{@cc_agent}' 2>/dev/null)
 ppid=''
 parent_sleep=$(TM display-message -p -t "$pwin" '#{@worker_lifecycle}' 2>/dev/null)
 parent_evidence=$(TM display-message -p -t "$pwin" '#{@sleep_evidence}' 2>/dev/null)
+noclaude=''
 if [ "$parent_agent" != codex ] && [ -z "$parent_sleep$parent_evidence" ]; then
-  ppid=$(fleet_pane_claude_pid "$pwin" "$SOCK" 2>/dev/null) \
-    || quiet "parent $SENDKEY ($pwin) has no live Claude under it"
-  [ -n "$ppid" ] || quiet "parent $SENDKEY ($pwin) has no live Claude under it"
+  ppid=$(fleet_pane_claude_pid "$pwin" "$SOCK" 2>/dev/null) || ppid=''
+  [ -n "$ppid" ] || noclaude=1
 fi
 
 envelope
 if [ "$DRY" = 1 ]; then
-  printf 'fleet-report-parent: would send to %s (%s, pid %s) tier=%s\n--- envelope ---\n%s\n' \
-    "$SENDKEY" "$pwin" "$ppid" "$TIER" "$msg"
+  if [ -n "$noclaude" ]; then
+    printf 'fleet-report-parent: would queue for %s (%s): no live Claude under it, tier=%s\n--- envelope ---\n%s\n' \
+      "$SENDKEY" "$pwin" "$TIER" "$msg"
+  else
+    printf 'fleet-report-parent: would send to %s (%s, pid %s) tier=%s\n--- envelope ---\n%s\n' \
+      "$SENDKEY" "$pwin" "$ppid" "$TIER" "$msg"
+  fi
   exit 0
 fi
+
+# queue_local <why> — the parent is here but cannot take it now (issue #1647): this
+# fleet's peer queue holds it for the parent's IDENTITY, and the cleanup tick or the
+# parent's wake delivers it. Exit 3 `queued`; exit 1 only if even that failed.
+queue_local() {
+  local pfid rid
+  pfid=$(fleet_window_fid "$sess" "$pwin" "$SOCK" 2>/dev/null) || pfid=''
+  rid="local:${selfkey:-?}#$(date +%s).$$"
+  if printf '%s' "$msg" | bash "$BIN/fleet-peer-queue.sh" put -L "$sess" --kind report --rid "$rid" \
+       --to "$SENDKEY" ${pfid:+--to-fid "$pfid"} --to-key "$SENDKEY" >/dev/null; then
+    TM set-window-option -t "$selfwin" @reported 1 2>/dev/null
+    printf 'queued → %s (%s): %s — %s; delivered when it can take it\n' "$SENDKEY" "$pwin" "$st" "$1"
+    exit 3
+  fi
+  printf 'fleet-report-parent: parent %s (%s) %s, and the peer queue refused it — not reported\n' \
+    "$SENDKEY" "$pwin" "$1" >&2
+  exit 1
+}
+[ -n "$noclaude" ] && queue_local 'no live Claude under it'
 
 send_report() {
   # The lib's copy is the one the digest shares; this body is the half-synced
@@ -585,7 +650,8 @@ send_report() {
     fleet_peer_send "$ppid" "$msg" "${FLEET_REPORT_FROM:-fleet-report}"
   fi
 }
-if send_report; then
+send_report; src=$?
+if [ "$src" -eq 0 ]; then
   # The stamp is what keeps the reaper fallback from sending a second, blunter
   # report for the same session ~a minute later.
   TM set-window-option -t "$selfwin" @reported 1 2>/dev/null
@@ -595,8 +661,13 @@ if send_report; then
   printf 'reported → %s (%s): %s%s\n' "$SENDKEY" "$pwin" "$st" "${RELAY_FROM:+ (relayed for reaped $RELAY_FROM)}"
   exit 0
 fi
-# A parent that is alive but unreachable (no registry record / no key / no socket)
-# is still not the child's problem to solve.
-printf 'fleet-report-parent: parent %s (%s, pid %s) has no reachable inbox — not reported\n' \
-  "$SENDKEY" "$pwin" "$ppid" >&2
-exit 0
+# 3 = a sleeping parent at a full fleet (fleet-sleep.py): it holds the report and
+# wakes with it when a slot frees — queued, not reported (issue #1647).
+if [ "$src" -eq 3 ]; then
+  TM set-window-option -t "$selfwin" @reported 1 2>/dev/null
+  printf 'queued → %s (%s): %s — the parent is asleep at a full fleet; delivered when a slot frees\n' "$SENDKEY" "$pwin" "$st"
+  exit 3
+fi
+# A parent that is alive but unreachable (no registry record / no key / no socket):
+# queued for it, never dropped.
+queue_local "has no reachable inbox${ppid:+ (pid $ppid)}"

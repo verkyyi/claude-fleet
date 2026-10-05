@@ -499,6 +499,20 @@ if [ -f "$BIN/fleet-children-flush.sh" ]; then
   done
 fi
 
+# --- the peer queue (issue #1647) ---------------------------------------------------
+# A report or message whose recipient could not take it (no live Claude, an inbox
+# that would not answer, a failed wake) waits in fleets/<sess>/peer-queue for the
+# recipient's @fleet_id; this tick delivers what can go now and expires what waited
+# 7 days, each outcome a row in the fleet's delivery book. Nothing queued ⇒ one
+# directory test per fleet.
+if [ "$DRY" != 1 ] && [ -f "$BIN/fleet-peer-queue.sh" ]; then
+  for s in ${SESSIONS[@]+"${SESSIONS[@]}"}; do
+    [ -d "$FLEET_CONF_DIR/fleets/$s/peer-queue" ] || continue
+    qout=$(fleet_timebox 30 bash "$BIN/fleet-peer-queue.sh" drain -L "$s")
+    [ -z "$qout" ] || log "$s: $qout"
+  done
+fi
+
 # Diskguard gate is a MACHINE-WIDE (per-volume) condition, so answer it ONCE per
 # tick. A cleanup does a base-checkout pull + worktree teardown; don't add that
 # I/O below the floor. Mirrors the other single-writer, disk-gated fleet daemons.
