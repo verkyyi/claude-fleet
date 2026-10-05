@@ -450,23 +450,28 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
   WLIST="$RLIST$WLIST"
   if [ "$HUBSRC" = 1 ] && [ "$_rstale" != 1 ]; then
     # the hub source (#1480): of this fleet's own lines keep the windows the cache
-    # names, the panels (they carry @repo_fold) and the sidebar's own window; a
-    # remote line passes, another session's line is pass B's to skip. Not while
+    # names, the panels (they carry @repo_fold), the sidebar's own window and any
+    # pinned / `@norepo` window (#1643, below); a remote line passes, another
+    # session's line is pass B's to skip. Not while
     # the hub is silent (#1483): then every one of this fleet's own lines stays,
     # as on the local source — the cache cannot say which windows exist NOW.
     _hl=''
     while IFS= read -r _ln; do
       [ -n "$_ln" ] || continue
       case "$_ln" in "$FLEET_SESSION$US"*) ;; *) _hl+="$_ln"$'\n'; continue ;; esac
-      _rest=${_ln#*$US}; _rest=${_rest#*$US}; _nm=${_rest%%$US*}            # window name
-      _rest=${_rest#*$US}; _rest=${_rest#*$US}; _rest=${_rest#*$US}; _rest=${_rest#*$US}
-      _w=${_rest%%$US*}                                                      # window id
+      # WFMT fields 3 (name), 7 (window id), 15 (@pin), 21 (@norepo)
+      IFS=$US read -r _ _ _nm _ _ _ _w _ _ _ _ _ _ _ _pin _ _ _ _ _ _no _ <<< "$_ln"
       case "$_nm" in dash|plan|backlog|home) _hl+="$_ln"$'\n'; continue ;; esac
       case "$_w" in wid:*) _hl+="$_ln"$'\n'; continue ;; esac
       case "$_lwids" in *" $_w "*) _hl+="$_ln"$'\n'; continue ;; esac
+      # a pinned or a no-repo window stays (issue #1643): the hub never lists one
+      # — a `@norepo` session has no worker_id to report, and a pin is this
+      # machine's own mark — so on the hub source the pinned guide (#1169) and
+      # every `@norepo` session vanished from their own sidebar with the switch
+      if [ "$_pin" = 1 ] || [ "$_no" = 1 ]; then _hl+="$_ln"$'\n'; continue; fi
       [ -n "${FLEET_SIDEBAR_CURRENT:-}" ] && [ "$_w" = "$FLEET_SIDEBAR_CURRENT" ] && _hl+="$_ln"$'\n'
     done <<< "$WLIST"
-    WLIST=$_hl; unset _hl _ln _rest _nm _w
+    WLIST=$_hl; unset _hl _ln _nm _w _pin _no
   fi
   unset _lwids
 fi
