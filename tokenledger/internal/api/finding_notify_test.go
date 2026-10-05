@@ -194,11 +194,13 @@ func TestFindingNotifySkipsInfoMutedAndRoutineRecovery(t *testing.T) {
 		return findings.Now(findings.NowInputs{Now: base, Uncapped: true, Mutes: mutes,
 			Windows: []findings.WindowStat{{AccountUUID: "acct-1", Label: "team@example.com", FiveHourPct: 95}}})
 	}
-	// Muted before it was ever announced: silence, and no row.
-	if _, err := h.srv.Store.MuteFinding(store.FindingMute{FindingID: hot(nil)[0].ID}, time.Hour, base); err != nil {
+	// Muted before it was ever announced: silence, and no row. activeMutes
+	// reads the wall clock, so the mute is taken at it — at the fixture's
+	// fixed base it expired an hour later, and the test went red from then on.
+	if _, err := h.srv.Store.MuteFinding(store.FindingMute{FindingID: hot(nil)[0].ID}, time.Hour, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	mutes, _ := h.srv.activeMutes()
+	mutes, _ := h.srv.activeMutes(base)
 	n.reconcile(h.srv.Store, hot(mutes), base)
 	wantMessages(t, robot, 0)
 	// Unmuted: announced once; gone: no 已恢复 for a window that cooled, row dropped.
@@ -283,5 +285,168 @@ func TestFindingNotifierFromEnv(t *testing.T) {
 	}
 	if _, err = FindingNotifierFromEnv(env(map[string]string{"CCQUOTA_WECOM_WEBHOOK": "https://x/y", "CCQUOTA_WECOM_REPEAT_HOURS": "-1"}), ""); err == nil {
 		t.Fatal("negative hours accepted")
+	}
+}
+
+// fakeKfNotify is the cluster's kf-notify: it records every request it is
+// sent — path, headers, body — and answers like the real one (200 ok:true).
+type fakeKfNotify struct {
+	mu   sync.Mutex
+	got  []kfRequest
+	fail int // answer this status instead, 0 = 200
+	ts   *httptest.Server
+}
+
+type kfRequest struct {
+	Path, Auth, ContentType string
+	Body                    map[string]any
+}
+
+func newFakeKfNotify(t *testing.T) *fakeKfNotify {
+	k := &fakeKfNotify{}
+	k.ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		raw, _ := io.ReadAll(req.Body)
+		var m map[string]any
+		if req.Method != http.MethodPost || json.Unmarshal(raw, &m) != nil {
+			w.WriteHeader(400)
+			return
+		}
+		k.mu.Lock()
+		defer k.mu.Unlock()
+		if k.fail != 0 {
+			w.WriteHeader(k.fail)
+			w.Write([]byte(`{"error":"未知 dest：x"}`))
+			return
+		}
+		k.got = append(k.got, kfRequest{Path: req.URL.Path, Auth: req.Header.Get("Authorization"),
+			ContentType: req.Header.Get("Content-Type"), Body: m})
+		w.Write([]byte(`{"ok":true,"muted":true,"id":1,"deliveryReceiptVersion":1}`))
+	}))
+	t.Cleanup(k.ts.Close)
+	return k
+}
+
+func (k *fakeKfNotify) requests() []kfRequest {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return append([]kfRequest(nil), k.got...)
+}
+
+// The claude-fleet#1705 acceptance: with CCQUOTA_NOTIFY_URL + KEY set, an
+// account needing a login reaches kf-notify ONCE (path, Bearer key, the
+// mapped body), a standing problem is not re-sent inside the interval, and its
+// recovery goes out under the SAME dedupKey with recovery:true — and nothing
+// reaches the robot even with CCQUOTA_WECOM_WEBHOOK still set.
+func TestFindingNotifyKfNotify(t *testing.T) {
+	h := newFleetHarness(t)
+	kf := newFakeKfNotify(t)
+	robot := newFakeRobot(t)
+	n, err := FindingNotifierFromEnv(func(k string) string {
+		return map[string]string{"CCQUOTA_NOTIFY_URL": kf.ts.URL + "/", "CCQUOTA_NOTIFY_KEY": "SECRET-KEY",
+			"CCQUOTA_WECOM_WEBHOOK": robot.ts.URL + "/cgi-bin/webhook/send?key=k"}[k]
+	}, "https://hub.example")
+	if err != nil || n.Channel() != "kf-notify" {
+		t.Fatalf("env: %+v %v", n, err)
+	}
+	n.Client = kf.ts.Client()
+	h.srv.Notifier = n
+	t0 := time.Now().UTC().Truncate(time.Minute)
+	report := func(at time.Time, state string) {
+		if err := h.srv.Store.UpsertCollector(model.CollectorStatus{Source: model.SourceCodex, ProfileID: "p-work", ProfileName: "work",
+			EndpointID: "ep-m5", ObservedAt: at, State: "ok", Capabilities: []string{},
+			Login: &model.LoginHealth{State: state, Reason: "Access token expired"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	report(t0, "reauth_required")
+	h.srv.FindingNotifyTick(t0)
+	h.srv.FindingNotifyTick(t0.Add(time.Minute))
+	h.srv.FindingNotifyTick(t0.Add(5 * time.Hour))
+	got := kf.requests()
+	if len(got) != 1 {
+		t.Fatalf("kf-notify got %d requests, want 1: %+v", len(got), got)
+	}
+	r := got[0]
+	t.Logf("kf-notify got: %s %s %+v", r.Path, strings.Replace(r.Auth, "SECRET-KEY", "***", 1), r.Body)
+	if r.Path != "/v1/notify" || r.Auth != "Bearer SECRET-KEY" || r.ContentType != "application/json" {
+		t.Fatalf("request: %+v", r)
+	}
+	b := r.Body
+	key, _ := b["dedupKey"].(string)
+	if b["dest"] != "alerts.prod" || b["source"] != "ccquota:finding:account_login" || b["severity"] != "error" ||
+		!strings.HasPrefix(key, "ccquota:") || len(key) < len("ccquota:")+8 || b["recovery"] != nil || b["dedupWindowSec"] != float64(kfDedupWindow) {
+		t.Fatalf("body: %+v", b)
+	}
+	if title, _ := b["title"].(string); !strings.Contains(title, "需要重新登录") {
+		t.Fatalf("title: %q", title)
+	}
+	if body, _ := b["body"].(string); !strings.Contains(body, "**ccquota · 严重**") || !strings.Contains(body, "`codex login --device-auth`") ||
+		!strings.Contains(body, "https://hub.example/credentials") {
+		t.Fatalf("body: %q", body)
+	}
+
+	report(t0.Add(5*time.Hour+time.Minute), "valid")
+	h.srv.FindingNotifyTick(t0.Add(5*time.Hour + 2*time.Minute))
+	h.srv.FindingNotifyTick(t0.Add(5*time.Hour + 3*time.Minute))
+	got = kf.requests()
+	if len(got) != 2 {
+		t.Fatalf("kf-notify got %d requests, want 2: %+v", len(got), got)
+	}
+	rb := got[1].Body
+	t.Logf("kf-notify got: %s %+v", got[1].Path, rb)
+	if rb["recovery"] != true || rb["dedupKey"] != key || rb["severity"] != "info" || rb["source"] != "ccquota:finding:account_login" ||
+		!strings.Contains(rb["title"].(string), "已恢复") || !strings.Contains(rb["body"].(string), "**ccquota · 已恢复**") {
+		t.Fatalf("recovery body: %+v", rb)
+	}
+	if len(robot.messages()) != 0 {
+		t.Fatalf("the robot was sent to as well: %v", robot.messages())
+	}
+
+	// A refusal backs off, and its error carries neither the key nor the URL.
+	kf.fail = 400
+	report(t0.Add(6*time.Hour), "reauth_required")
+	h.srv.FindingNotifyTick(t0.Add(6*time.Hour + time.Minute))
+	if !n.retryAt.Equal(t0.Add(6*time.Hour + time.Minute + notifyBackoff)) {
+		t.Fatalf("retryAt = %s", n.retryAt)
+	}
+	fs := findings.Now(findings.NowInputs{Now: t0, Uncapped: true, Logins: []findings.LoginState{
+		{Provider: "codex", Account: "ops", Where: "m5:default", State: "reauth_required", Command: "codex login --device-auth"}}})
+	err = n.send(notice{kind: "new", finding: fs[0]}, t0)
+	if err == nil || strings.Contains(err.Error(), "SECRET-KEY") || !strings.Contains(err.Error(), "400") {
+		t.Fatalf("refusal error: %v", err)
+	}
+	dead := &FindingNotifier{KfURL: "http://127.0.0.1:1", KfKey: "SECRET-KEY", Client: &http.Client{Timeout: time.Second}}
+	if err := dead.send(notice{kind: "new", finding: fs[0]}, t0); err == nil || strings.Contains(err.Error(), "SECRET-KEY") {
+		t.Fatalf("dead error: %v", err)
+	}
+}
+
+// Degenerate: with neither kf-notify nor a webhook configured the notifier is
+// nil — the hub does exactly what it did before #1705 (and #1469): no push.
+// With only the webhook it is the robot, byte for byte as before.
+func TestFindingNotifierFromEnvKfNotify(t *testing.T) {
+	env := func(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
+	if n, err := FindingNotifierFromEnv(env(map[string]string{"CCQUOTA_NOTIFY_DEST": "dev.notify", "CCQUOTA_NOTIFY_REPEAT_HOURS": "1"}), "https://hub"); n != nil || err != nil {
+		t.Fatalf("unset: %+v %v", n, err)
+	}
+	n, err := FindingNotifierFromEnv(env(map[string]string{"CCQUOTA_WECOM_WEBHOOK": "https://x/y"}), "")
+	if err != nil || n.Channel() != "wecom" || n.KfURL != "" || n.Webhook != "https://x/y" || n.Repeat != 6*time.Hour {
+		t.Fatalf("webhook only: %+v %v", n, err)
+	}
+	for _, half := range []map[string]string{{"CCQUOTA_NOTIFY_URL": "https://kf"}, {"CCQUOTA_NOTIFY_KEY": "SECRET-KEY", "CCQUOTA_WECOM_WEBHOOK": "https://x/y"}} {
+		if _, err := FindingNotifierFromEnv(env(half), ""); err == nil || strings.Contains(err.Error(), "SECRET-KEY") || strings.Contains(err.Error(), "https://kf") {
+			t.Fatalf("half config %v: %v", half, err)
+		}
+	}
+	if _, err := FindingNotifierFromEnv(env(map[string]string{"CCQUOTA_NOTIFY_URL": "kf:80", "CCQUOTA_NOTIFY_KEY": "SECRET-KEY"}), ""); err == nil || strings.Contains(err.Error(), "SECRET-KEY") {
+		t.Fatalf("bad url: %v", err)
+	}
+	n, err = FindingNotifierFromEnv(env(map[string]string{"CCQUOTA_NOTIFY_URL": "http://kf-notify.ops:8080", "CCQUOTA_NOTIFY_KEY": "k",
+		"CCQUOTA_NOTIFY_DEST": "dev.notify", "CCQUOTA_NOTIFY_REPEAT_HOURS": "2", "CCQUOTA_WECOM_REPEAT_HOURS": "9", "CCQUOTA_WECOM_LOCALE": "en"}), "")
+	if err != nil || n.KfURL != "http://kf-notify.ops:8080" || n.KfDest != "dev.notify" || n.Repeat != 2*time.Hour || n.Locale != "en" {
+		t.Fatalf("knobs: %+v %v", n, err)
+	}
+	if _, err = FindingNotifierFromEnv(env(map[string]string{"CCQUOTA_NOTIFY_URL": "http://kf", "CCQUOTA_NOTIFY_KEY": "k", "CCQUOTA_NOTIFY_REPEAT_HOURS": "-1"}), ""); err == nil || !strings.Contains(err.Error(), "CCQUOTA_NOTIFY_REPEAT_HOURS") {
+		t.Fatalf("negative hours: %v", err)
 	}
 }
