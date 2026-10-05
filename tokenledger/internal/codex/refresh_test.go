@@ -15,10 +15,71 @@ import (
 
 func writeTestLogin(t *testing.T, home, member string, expires time.Time) {
 	t.Helper()
+	writeTestLoginRefresh(t, home, member, expires, "fixture-refresh-secret")
+}
+
+func writeTestLoginRefresh(t *testing.T, home, member string, expires time.Time, refresh string) {
+	t.Helper()
 	token := fakeJWT(map[string]any{"exp": expires.Unix(), "https://api.openai.com/auth": map[string]any{"chatgpt_account_id": "workspace", "chatgpt_user_id": member}})
-	b, _ := json.Marshal(map[string]any{"auth_mode": "chatgpt", "tokens": map[string]string{"access_token": token, "id_token": fakeJWT(map[string]string{"email": member + "@example.test"}), "refresh_token": "fixture-refresh-secret", "account_id": "workspace"}})
+	b, _ := json.Marshal(map[string]any{"auth_mode": "chatgpt", "tokens": map[string]string{"access_token": token, "id_token": fakeJWT(map[string]string{"email": member + "@example.test"}), "refresh_token": refresh, "account_id": "workspace"}})
 	if err := os.WriteFile(filepath.Join(home, "auth.json"), b, 0600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A hub-managed home (claude-fleet#1666): the hub is the one refresher, so the
+// local path never runs on it — not near expiry, not when forced, not after a
+// stale local renewal record — and the login reports where it is refreshed.
+func TestHubManagedHomeIsNeverRefreshedLocally(t *testing.T) {
+	home := t.TempDir()
+	// Inside the 24h local window: a self-managed home would be refresh_due.
+	writeTestLoginRefresh(t, home, "member", time.Now().Add(time.Hour), HubManagedRefreshToken)
+	a, err := ReadAuth(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !a.HubManaged || a.HasRefreshToken || a.Mode != "subscription" {
+		t.Fatalf("hub-managed auth = hub:%v refresh:%v mode:%s, want hub:true refresh:false subscription", a.HubManaged, a.HasRefreshToken, a.Mode)
+	}
+	h := LoginHealth(home, a, true)
+	if h.State != "valid" || h.Source != "hub" || h.AutoRefresh || h.HasRefreshToken || h.Reason != "" {
+		t.Fatalf("hub-managed health = %+v, want valid · source hub · auto_refresh false", h)
+	}
+	// A renewal record left by an older ccquota that did try (same
+	// credential version) is not read: reauth_required is the hub's call.
+	stale := refreshState{Fingerprint: a.fingerprint, State: "reauth_required", Reason: "stale local attempt"}
+	if err := atomicJSON(filepath.Join(home, ".ccquota-auth-state.json"), stale); err != nil {
+		t.Fatal(err)
+	}
+	if h := LoginHealth(home, a, true); h.State != "valid" || h.RefreshAttemptAt != nil {
+		t.Fatalf("stale local record leaked into a hub-managed login: %+v", h)
+	}
+	// Maintain refuses before the official CLI is started (a binary that
+	// cannot run would fail differently) and leaves the record untouched.
+	for _, force := range []bool{false, true} {
+		got, err := Maintain(context.Background(), filepath.Join(home, "no-such-codex"), home, force)
+		if !errors.Is(err, ErrHubManaged) {
+			t.Fatalf("Maintain(force=%v) err = %v, want ErrHubManaged", force, err)
+		}
+		if got == nil || !got.HubManaged {
+			t.Fatalf("Maintain(force=%v) returned %+v", force, got)
+		}
+	}
+	if s := readRefreshState(home); s.State != "reauth_required" || s.Reason != "stale local attempt" {
+		t.Fatalf("Maintain rewrote the renewal record of a hub-managed home: %+v", s)
+	}
+	// Only a lease the node agent failed to renew shows — as an expired
+	// lease that names the agent, never as a re-login.
+	writeTestLoginRefresh(t, home, "member", time.Now().Add(-time.Minute), HubManagedRefreshToken)
+	a, _ = ReadAuth(home)
+	if h := LoginHealth(home, a, true); h.State != "access_expired" || h.Source != "hub" || !strings.Contains(h.Reason, "node agent") {
+		t.Fatalf("expired hub lease health = %+v", h)
+	}
+	// Degenerate case: a self-managed home is what it always was, plus its source.
+	writeTestLogin(t, home, "member", time.Now().Add(time.Hour))
+	a, _ = ReadAuth(home)
+	if h := LoginHealth(home, a, true); h.State != "refresh_due" || h.Source != "local" || !h.AutoRefresh || !h.HasRefreshToken {
+		t.Fatalf("local health = %+v, want refresh_due · source local", h)
 	}
 }
 

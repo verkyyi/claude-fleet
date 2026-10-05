@@ -14,6 +14,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/codex"
 )
 
 // The node half of "credentials live at the entrance; machines lease the
@@ -41,7 +43,7 @@ import (
 
 // CodexRefreshPlaceholder fills auth.json's refresh_token on a hub-managed
 // home. It is not a credential.
-const CodexRefreshPlaceholder = "hub-managed"
+const CodexRefreshPlaceholder = codex.HubManagedRefreshToken
 
 // HubMarkerPrefix starts the contents of a hub-managed label file.
 const HubMarkerPrefix = "hub:"
@@ -376,24 +378,45 @@ func writeGHHosts(dir, user, token string) error {
 	return writeAtomic(filepath.Join(dir, "hosts.yml"), []byte(b.String()), 0o600)
 }
 
-// hubAccountToken resolves an accounts-dir label file that holds the hub
-// marker to the short-lived token the agent last wrote for it — so the
-// account probe reads the same meter it always did.
-func hubAccountToken(dir, label, contents string) string {
+// hubAccountToken resolves an accounts-dir label file to the token the probe
+// uses: a plain token file IS the token; a hub marker (`hub:<label>`) points at
+// the short-lived token the agent last leased into <label>.hub/, so the account
+// probe reads the same meter it always did.
+//
+// A marker whose lease is unreadable is an error that NAMES the hub-managed
+// source (claude-fleet#1404). It used to come back as "" and the probe skipped
+// the account in silence — so of the three places a Claude credential can live
+// (file, keychain, hub lease) this was the one whose failure nobody was told
+// about, and an operator reading the agent log saw no meter and no reason.
+func hubAccountToken(dir, label, contents string) (string, error) {
 	if !strings.HasPrefix(contents, HubMarkerPrefix) {
-		return contents
+		return contents, nil
 	}
-	raw, err := os.ReadFile(filepath.Join(dir, label+".hub", ".credentials.json"))
+	p := filepath.Join(dir, label+".hub", ".credentials.json")
+	src := "hub-managed account " + label + " (" + p + ")"
+	raw, err := os.ReadFile(p)
 	if err != nil {
-		return ""
+		if errors.Is(err, os.ErrNotExist) {
+			return "", errors.New(src + ": nothing leased yet — the agent writes it after a lease from the hub (is the hub reachable, and does it hold a Claude account for this login?)")
+		}
+		return "", fmt.Errorf("%s: %w", src, err)
 	}
 	var f struct {
 		ClaudeAiOauth struct {
 			AccessToken string `json:"accessToken"`
+			ExpiresAt   int64  `json:"expiresAt"`
 		} `json:"claudeAiOauth"`
 	}
 	if json.Unmarshal(raw, &f) != nil {
-		return ""
+		return "", errors.New(src + ": not the credentials JSON the agent writes")
 	}
-	return f.ClaudeAiOauth.AccessToken
+	if f.ClaudeAiOauth.AccessToken == "" {
+		return "", errors.New(src + ": has no claudeAiOauth.accessToken")
+	}
+	if ms := f.ClaudeAiOauth.ExpiresAt; ms > 0 && time.UnixMilli(ms).Before(time.Now()) {
+		// The agent renews ~2h ahead; an expired lease on disk means it is not
+		// renewing — stopped, the hub unreachable, or this login revoked there.
+		return "", fmt.Errorf("%s: lease expired %s ago and was not renewed (agent stopped, hub unreachable, or the login revoked at the hub)", src, time.Since(time.UnixMilli(ms)).Round(time.Minute))
+	}
+	return f.ClaudeAiOauth.AccessToken, nil
 }

@@ -324,7 +324,7 @@ ccquota codex add personal --codex-home "$HOME/.codex"  # name the existing logi
 ccquota codex add work                                 # new independent home
 ccquota codex login work                               # official browser login
 ccquota codex login work --device-auth                 # alternative for a headless host
-ccquota codex list                                     # email, plan, login state
+ccquota codex list                                     # email, plan, login state, who refreshes it (local | hub)
 ccquota codex use personal                             # default for new managed launches
 ccquota codex run                                      # use that default
 ccquota codex run work -- exec "review this change"     # choose one explicitly
@@ -357,6 +357,18 @@ owns credential persistence. Independent logins per home/machine avoid relying
 on copied refresh credentials. Transient failures back off; a recognized
 revoked/expired/reused refresh credential stops retries until a new login is
 observed. Expired access alone is reported as pending renewal.
+
+A **hub-managed** home — `auth.json`'s `refresh_token` is the `hub-managed`
+placeholder the node agent writes when it leases the account from the hub
+(claude-fleet#1415, #1666) — is never refreshed here. The hub is that account's
+one refresher and the node agent rewrites the access token before it expires,
+so `ccquota codex list` reports `login.source: hub` with `auto_refresh: false`,
+its login is `valid` until the lease itself lapses (`access_expired`, naming the
+node agent — never `reauth_required`), its local renewal record is not read,
+and `ccquota codex refresh` / the agent's auto-refresh refuse it before the
+official CLI is started. A self-managed home reports `login.source: local` and
+behaves exactly as above. Two refreshers of one Codex refresh token lock each
+other out — a refresh token is single-use — which is what the split exists for.
 
 **Now → Collection by source** shows the account email, plan, profile/default,
 login state, access expiry, last credential refresh, retry time, and per-machine
@@ -1049,12 +1061,21 @@ other mode:
 reads each profile's `auth.json` (`default` = `~/.codex/auth.json`; any other
 profile is `<codex-homes>/<profile>/auth.json`) for `tokens.refresh_token`,
 `account_id` and `id_token`, and POSTs them as a pool `codex` account whose
-label is the profile. A home already holding the `hub-managed` placeholder is
-skipped. Nothing on the importing machine changes — but a Codex refresh token
-is single-use, so once it is in the hub that machine's own Codex must stop
-refreshing it: let the lease replace the home (`CCQUOTA_FLEET_CREDS=1`), or log
-it out. From then on the hub refreshes it — through an admin node when its
-own country is refused (above).
+label is the profile. A name ccquota has registered (`ccquota codex add`) is
+resolved through `ccquota codex list --json` first (claude-fleet#1666): the
+hub label follows the HOME, because the node agent leases a label back into a
+fixed place — a profile living in `~/.codex` (a one-account machine's
+`personal`) imports as `default`, and the mapping is printed. A home already
+holding the `hub-managed` placeholder is skipped. Nothing on the importing
+machine changes — but a Codex refresh token is single-use, so once it is in
+the hub that machine's own Codex must stop refreshing it (the command says so
+after every Codex import): let the lease replace the home
+(`CCQUOTA_FLEET_CREDS=1` in `node.env`, restart the agent), or log it out. On
+2026-10-04 the hub rotated an imported token 23 s after the import and the
+importing machine's own ccquota auto-refresh, 10 h later, was refused with its
+stale copy — that login read `reauth_required` until a re-login. From then on
+the hub refreshes it — through an admin node when its own country is refused
+(above) — and the home reads `login.source: hub` in `ccquota codex list`.
 
 #### The vault key in Aliyun KMS (claude-fleet#1417)
 

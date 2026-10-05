@@ -28,6 +28,11 @@
 #                  other = <codex-homes>/<profile>/auth.json (CCQUOTA_FLEET_CODEX_HOMES,
 #                  default ~/.codex-accounts) — gives tokens.refresh_token +
 #                  account_id + id_token; the hub account label IS the profile.
+#                  A name ccquota has registered (`ccquota codex add`, issue
+#                  #1666) resolves through `ccquota codex list --json` first:
+#                  a profile living in ~/.codex (m5's `personal`) imports under
+#                  the hub label `default` — the label the node agent leases
+#                  back INTO ~/.codex — and the mapping is printed.
 #                  Default profile: `default`. A home whose refresh_token is
 #                  the `hub-managed` placeholder is skipped (the hub owns it).
 #                  The hub refreshes it from then on — through an admin node
@@ -188,6 +193,37 @@ codex_auth() {
   if [ "$1" = default ]; then printf '%s/.codex/auth.json' "$HOME"; else printf '%s/%s/auth.json' "$CODEX_HOMES" "$1"; fi
 }
 
+# codex_resolve <name> → "<auth.json>\t<hub label>\t<note>" (note "" = the
+# plain <codex-homes>/<name> rule). A name ccquota has registered may live
+# anywhere — on a one-account machine the only profile is `personal` at
+# ~/.codex (issue #1666) — so ask ccquota when it is here. The hub label follows
+# the HOME, because the node agent leases a label back into a fixed place:
+# `default` → ~/.codex, anything else → <codex-homes>/<label>.
+codex_resolve() {
+  local name="$1" quota="${FLEET_QUOTA_BIN:-ccquota}" home='' def="$HOME/.codex"
+  if [ "$name" != default ] && command -v "$quota" >/dev/null 2>&1; then
+    home=$(env -u CODEX_HOME "$quota" codex list --json 2>/dev/null | python3 -c '
+import json, sys
+name = sys.argv[1]
+try:
+    rows = json.load(sys.stdin)
+except ValueError:
+    sys.exit(0)
+for r in rows if isinstance(rows, list) else []:
+    if isinstance(r, dict) and r.get("name") == name and isinstance(r.get("home"), str):
+        print(r["home"]); break
+' "$name" 2>/dev/null) || home=''
+  fi
+  if [ -z "$home" ]; then printf '%s\t%s\t\n' "$(codex_auth "$name")" "$name"; return; fi
+  if [ "$home" = "$def" ] || [ "$home" = "$def/" ]; then
+    printf '%s\t%s\t%s\n' "$def/auth.json" default "profile $name is ~/.codex → hub label default (the node agent leases it back into ~/.codex)"
+  elif [ "$home" = "$CODEX_HOMES/$name" ]; then
+    printf '%s\t%s\t\n' "$home/auth.json" "$name"
+  else
+    printf '%s\t%s\t%s\n' "$home/auth.json" "$name" "profile $name lives at $home; its lease will land in $CODEX_HOMES/$name — register that directory (ccquota codex add $name --codex-home $CODEX_HOMES/$name) once it is hub-managed"
+  fi
+}
+
 ok=0 failed=0 skipped=0
 for l in ${LABELS[@]+"${LABELS[@]}"}; do
   case "$l" in
@@ -195,10 +231,13 @@ for l in ${LABELS[@]+"${LABELS[@]}"}; do
   esac
   rm -f "$WORK/body"
   if [ "$CODEX" = 1 ]; then
-    f=$(codex_auth "$l"); kind=refresh_token
+    res=$(codex_resolve "$l"); kind=refresh_token
+    f=${res%%	*}; rest=${res#*	}; label=${rest%%	*}; note=${rest#*	}
+    [ -z "$note" ] || printf 'note   %-14s %s\n' "$l" "$note"
     [ -f "$f" ] || { printf 'skip   %-14s no %s\n' "$l" "$f"; skipped=$((skipped+1)); continue; }
-    line=$(plan_codex "$f" "$l" "$PRINCIPAL") || { printf 'FAIL   %-14s could not read it\n' "$l"; failed=$((failed+1)); continue; }
+    line=$(plan_codex "$f" "$label" "$PRINCIPAL") || { printf 'FAIL   %-14s could not read it\n' "$l"; failed=$((failed+1)); continue; }
     exp=''
+    [ "$label" = "$l" ] || l="$l → $label"
   else
     f="$ACCT_DIR/$l"; kind=setup_token
     [ -f "$f" ] || { printf 'skip   %-14s no such pool file\n' "$l"; skipped=$((skipped+1)); continue; }
@@ -228,6 +267,14 @@ if [ "$DRY" = 1 ]; then
   printf 'dry-run: %d would be imported, %d skipped — nothing sent\n' "$ok" "$skipped"
 else
   printf '%d imported, %d skipped, %d failed → %s/credentials\n' "$ok" "$skipped" "$failed" "$HUB"
+  if [ "$CODEX" = 1 ] && [ "$ok" -gt 0 ]; then
+    # The moment it matters (issue #1666): on 2026-10-04 the hub rotated an
+    # imported token 23 s after the import and this machine's own ccquota
+    # auto-refresh, 10 h later, was refused with the stale copy — the login
+    # read reauth_required until a re-login.
+    printf 'NOW this machine must stop refreshing that account: a Codex refresh token is single-use and the hub rotates it on its next lease.\n'
+    printf '     Either let the lease replace the home — CCQUOTA_FLEET_CREDS=1 in %s/node.env, restart ccquota agent — or log this machine'"'"'s Codex out of it.\n' "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
+  fi
 fi
 [ "$failed" -eq 0 ] || exit 1
 exit 0

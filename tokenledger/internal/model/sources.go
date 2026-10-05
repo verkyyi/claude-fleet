@@ -98,8 +98,14 @@ type CollectorStatus struct {
 }
 
 type LoginHealth struct {
-	State            string     `json:"state"`
-	Reason           string     `json:"reason,omitempty"`
+	State  string `json:"state"`
+	Reason string `json:"reason,omitempty"`
+	// Source names the one refresher of a subscription login: "local" (this
+	// machine's official Codex CLI, driven by ccquota's auto-refresh) or "hub"
+	// (a hub-leased home — refresh_token is the hub placeholder, the node agent
+	// renews auth.json, and nothing local ever refreshes it; claude-fleet#1666).
+	// Empty when there is no subscription login to refresh.
+	Source           string     `json:"source,omitempty"`
 	AutoRefresh      bool       `json:"auto_refresh"`
 	HasRefreshToken  bool       `json:"has_refresh_token"`
 	AccessExpiresAt  *time.Time `json:"access_expires_at,omitempty"`

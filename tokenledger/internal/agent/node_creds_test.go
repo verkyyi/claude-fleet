@@ -2,9 +2,11 @@ package agent
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/codex"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -34,14 +36,22 @@ func credAgent(srv *httptest.Server, home string) *Agent {
 	return &Agent{cfg: Config{HubURL: srv.URL, Token: "tok", Home: home}, http: srv.Client()}
 }
 
+// hubTestJWT shapes a short-lived Codex access token the way the provider
+// does, so the codex package can read the written home as a login.
+func hubTestJWT(v any) string {
+	b, _ := json.Marshal(v)
+	return "e30." + base64.RawURLEncoding.EncodeToString(b) + ".signature"
+}
+
 func TestCredCycleWritesEachCLIsFile(t *testing.T) {
 	home := t.TempDir()
 	exp := time.Now().Add(8 * time.Hour).UTC().Truncate(time.Second)
+	cxShort := hubTestJWT(map[string]any{"exp": exp.Unix(), "https://api.openai.com/auth": map[string]any{"chatgpt_account_id": "acct-1", "chatgpt_user_id": "member"}})
 	body := fmt.Sprintf(`{"principal_id":"p","credentials":[
 	 {"provider":"claude","account":"main","expires_at":%q,"access":{"access_token":"sk-ant-oat01-short","scopes":["user:inference","user:profile"],"subscription_type":"max"}},
-	 {"provider":"codex","account":"work","expires_at":%q,"access":{"access_token":"cx-short","id_token":"idt","account_id":"acct-1"}},
+	 {"provider":"codex","account":"work","expires_at":%q,"access":{"access_token":%q,"id_token":"idt","account_id":"acct-1"}},
 	 {"provider":"github","account":"alice","access":{"token":"ghp_short","user":"alice"}}]}`,
-		exp.Format(time.RFC3339), exp.Format(time.RFC3339))
+		exp.Format(time.RFC3339), exp.Format(time.RFC3339), cxShort)
 	a := credAgent(fakeVaultHub(t, 200, body), home)
 
 	// A pre-existing long-lived token for the same label, and a codex config
@@ -89,9 +99,26 @@ func TestCredCycleWritesEachCLIsFile(t *testing.T) {
 		Tokens   map[string]string
 	}
 	readJSON(t, filepath.Join(cxHome, "auth.json"), &cx)
-	if cx.AuthMode != "chatgpt" || cx.Tokens["access_token"] != "cx-short" || cx.Tokens["refresh_token"] != CodexRefreshPlaceholder ||
+	if cx.AuthMode != "chatgpt" || cx.Tokens["access_token"] != cxShort || cx.Tokens["refresh_token"] != CodexRefreshPlaceholder ||
 		cx.Tokens["account_id"] != "acct-1" || cx.Tokens["id_token"] != "idt" {
 		t.Fatalf("codex auth.json = %+v", cx)
+	}
+	// The home the lease wrote is one `ccquota codex` reads as hub-managed
+	// (claude-fleet#1666): a valid login refreshed by the hub, and a local
+	// refresh — the agent's auto-refresh or `ccquota codex refresh` — refused
+	// before the official CLI is started.
+	leased, err := codex.ReadAuth(cxHome)
+	if err != nil {
+		t.Fatalf("the leased home does not read as a Codex login: %v", err)
+	}
+	if !leased.HubManaged || leased.HasRefreshToken || !leased.ExpiresAt.Equal(exp) {
+		t.Fatalf("leased home = hub:%v refresh:%v exp:%s", leased.HubManaged, leased.HasRefreshToken, leased.ExpiresAt)
+	}
+	if h := codex.LoginHealth(cxHome, leased, true); h.State != "valid" || h.Source != "hub" || h.AutoRefresh {
+		t.Fatalf("leased home health = %+v, want valid · source hub · auto_refresh false", h)
+	}
+	if _, err := codex.Maintain(context.Background(), filepath.Join(home, "no-such-codex"), cxHome, true); !errors.Is(err, codex.ErrHubManaged) {
+		t.Fatalf("local refresh of the leased home: err = %v, want ErrHubManaged", err)
 	}
 	cfg, _ := os.ReadFile(filepath.Join(cxHome, "config.toml"))
 	if !strings.HasPrefix(string(cfg), "cli_auth_credentials_store = \"file\"\nmodel = \"gpt-5.5\"\n[mcp_servers.x]") {
@@ -154,12 +181,56 @@ func TestHubAccountTokenResolvesMarker(t *testing.T) {
 	if err := writeClaudeCred(dir, "main", "sk-ant-oat01-live", &exp, nil, ""); err != nil {
 		t.Fatal(err)
 	}
-	if got := hubAccountToken(dir, "main", "hub:main"); got != "sk-ant-oat01-live" {
-		t.Fatalf("marker resolved to %q", got)
+	if got, err := hubAccountToken(dir, "main", "hub:main"); err != nil || got != "sk-ant-oat01-live" {
+		t.Fatalf("marker resolved to %q, %v", got, err)
 	}
-	if got := hubAccountToken(dir, "x", "sk-ant-oat01-plain"); got != "sk-ant-oat01-plain" {
-		t.Fatalf("a plain token was rewritten to %q", got)
+	if got, err := hubAccountToken(dir, "x", "sk-ant-oat01-plain"); err != nil || got != "sk-ant-oat01-plain" {
+		t.Fatalf("a plain token was rewritten to %q, %v", got, err)
 	}
+}
+
+// claude-fleet#1404: a hub-managed account whose lease cannot be read used to
+// vanish from the probe without a word. Every way it can fail now names the
+// hub-managed source and the file, so the operator is sent to the lease — not
+// to ~/.claude, and not to the keychain.
+func TestHubAccountTokenNamesTheHubSourceWhenUnreadable(t *testing.T) {
+	dir := t.TempDir()
+	lease := filepath.Join(dir, "main.hub", ".credentials.json")
+	check := func(stage string, err error, want ...string) {
+		t.Helper()
+		if err == nil {
+			t.Fatalf("%s: expected an error", stage)
+		}
+		for _, w := range append([]string{"hub-managed account main", lease}, want...) {
+			if !strings.Contains(err.Error(), w) {
+				t.Errorf("%s: error does not name %q:\n  %v", stage, w, err)
+			}
+		}
+	}
+	_, err := hubAccountToken(dir, "main", "hub:main")
+	check("nothing leased", err, "nothing leased yet")
+
+	if err := os.MkdirAll(filepath.Dir(lease), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lease, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = hubAccountToken(dir, "main", "hub:main")
+	check("malformed", err, "not the credentials JSON")
+
+	if err := os.WriteFile(lease, []byte(`{"claudeAiOauth":{"accessToken":""}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = hubAccountToken(dir, "main", "hub:main")
+	check("empty token", err, "has no claudeAiOauth.accessToken")
+
+	past := time.Now().Add(-3 * time.Hour)
+	if err := writeClaudeCred(dir, "main", "sk-ant-oat01-stale", &past, nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	_, err = hubAccountToken(dir, "main", "hub:main")
+	check("expired lease", err, "lease expired", "not renewed")
 }
 
 func readJSON(t *testing.T, path string, v any) {

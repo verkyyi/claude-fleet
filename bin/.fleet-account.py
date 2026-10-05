@@ -106,10 +106,20 @@ def profiles():
             continue
         homes.add(home)
         # Only metadata crosses this boundary. Do not persist the raw response.
+        # `source` is who refreshes the login (issue #1666): 'hub' = a
+        # hub-leased home the node agent renews (refresh_token is the hub
+        # placeholder; nothing local ever refreshes it), 'local' = this
+        # machine's Codex CLI. An older ccquota prints no source: local.
+        login = row.get('login') or {}
         out.append(dict(agent='codex', profile=name, home=home,
                         account=row.get('account', ''), email=row.get('email', ''),
                         plan=row.get('plan', ''), default=row.get('default', False),
-                        login=(row.get('login') or {}).get('state', 'unknown')))
+                        login=login.get('state', 'unknown'),
+                        source=login.get('source') or 'local',
+                        # ccquota's own words for a login that is not usable
+                        # (claude-fleet#1404): "reauth_required" alone sends the
+                        # operator looking; the reason says what to do.
+                        login_reason=str(login.get('reason') or '')))
     # The ONE judge of a login's validity (EPIC #1665) also leaves the record
     # the status bar reads; a failed stamp never fails the read it rode on.
     try:
@@ -179,8 +189,26 @@ def profile(name='', home='', account=''):
         raise ValueError('expected one registered Codex profile with the pinned account/home')
     p = found[0]
     if not p['account'] or p['login'] not in ('valid', 'refresh_due') or not Path(p['home']).is_dir():
-        raise ValueError('Codex profile needs a verified subscription login: ' + p['profile'])
+        if p.get('source') == 'hub':
+            # The hub refreshes this one; a re-login here would not fix it —
+            # and ccquota's reason, when it has one, says what did happen.
+            raise ValueError('hub-managed Codex profile %s has no valid lease (login=%s): the node agent renews it, '
+                             'check `ccquota agent` / CCQUOTA_FLEET_CREDS=1 on this machine'
+                             % (p['profile'], p['login'] + (' — ' + p['login_reason'] if p.get('login_reason') else '')))
+        raise ValueError('Codex profile needs a verified subscription login: %s (%s)' % (p['profile'], login_trouble(p)))
     return p
+
+
+def login_trouble(p):
+    """Why this Codex profile cannot be used, in ccquota's words when it has them."""
+    if not p.get('account'):
+        return 'no account on the login'
+    if p.get('login') not in ('valid', 'refresh_due'):
+        why = p.get('login') or 'unknown'
+        return why + (' — ' + p['login_reason'] if p.get('login_reason') else '')
+    if not Path(p['home']).is_dir():
+        return 'Codex home missing: ' + p['home']
+    return ''
 
 
 def codex_reading(refresh=False):
@@ -241,9 +269,10 @@ def pace_held(used_week, pace):
 def normalize_codex(p, reading, now=None, scope=None):
     now = time.time() if now is None else now
     row = dict(p, key='codex/' + p['account'], available=False, utilization=None,
-               score=None, reset_at=0, hold_until=0, limited_until=0, windows=[])
+               score=None, reset_at=0, hold_until=0, limited_until=0, windows=[],
+               login_reason=p.get('login_reason', ''))
     if not p.get('account') or p.get('login') not in ('valid', 'refresh_due'):
-        row['reason'] = 'auth-unavailable'
+        row['reason'] = 'hub-lease-lapsed' if p.get('source') == 'hub' else 'auth-unavailable'
         return row
     if not reading or reading.get('available') is not True:
         row['reason'] = 'unreadable'
@@ -342,7 +371,7 @@ def inventory(refresh=False):
             row['capable'] = os.environ.get('FLEET_CODEX_SERVER', '1') != '0'
             row['limited_until'] = benches.get(row['key'], {}).get('until', 0)
             if not Path(p['home']).is_dir():
-                row.update(login='no_home', reason='auth-unavailable')
+                row.update(login='no_home', reason='auth-unavailable', login_reason='Codex home missing: ' + p['home'])
             accounts.append(row)
         if data.get('reason') and not data['accounts']:
             errors.append(data['reason'])
@@ -396,7 +425,17 @@ def choose(data, agent, exclude=(), current='', allowed=('claude', 'codex')):
                 best = row
                 break
         return {'state': 'ready', 'target': best, 'reason': 'same-agent' if kind == agent else 'cross-agent'}
-    return {'state': 'waiting-quota', 'target': None, 'reason': 'accounts · all capped'}
+    reason = 'accounts · all capped'
+    # An account that is out because its LOGIN is bad is not capped, and saying
+    # so — in ccquota's words — is the difference between waiting for a window
+    # to reset and going to sign in (claude-fleet#1404).
+    needs = [a for a in data['accounts'] if a.get('agent') in allowed and a.get('key') not in excluded
+             and a.get('login') not in ('valid', 'refresh_due')]
+    if needs:
+        reason += ' · login needed: ' + '; '.join(
+            '%s %s%s' % (a.get('key'), a.get('login') or 'unknown',
+                         ' — ' + a['login_reason'] if a.get('login_reason') else '') for a in needs)
+    return {'state': 'waiting-quota', 'target': None, 'reason': reason}
 
 
 def choose_spawn(data, agent, allowed=('claude', 'codex')):

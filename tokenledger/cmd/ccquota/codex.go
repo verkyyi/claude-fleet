@@ -85,13 +85,16 @@ Use global --home and --codex-bin flags before the subcommand.
 			return json.NewEncoder(os.Stdout).Encode(rows)
 		}
 		w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(w, "PROFILE\tDEFAULT\tEMAIL\tPLAN\tLOGIN\tDIRECTORY")
+		// REFRESH names the one refresher of the login: local (this machine's
+		// Codex CLI, driven by ccquota) or hub (a hub-leased home the node
+		// agent renews — never refreshed here; claude-fleet#1666).
+		fmt.Fprintln(w, "PROFILE\tDEFAULT\tEMAIL\tPLAN\tLOGIN\tREFRESH\tDIRECTORY")
 		for _, r := range rows {
 			selected := ""
 			if r.Default {
 				selected = "*"
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", r.Name, selected, r.Email, r.Plan, r.Login.State, r.Home)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", r.Name, selected, r.Email, r.Plan, r.Login.State, r.Login.Source, r.Home)
 		}
 		return w.Flush()
 	}

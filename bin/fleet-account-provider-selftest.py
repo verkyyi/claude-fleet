@@ -49,6 +49,34 @@ class Providers(unittest.TestCase):
         r = accounts.choose({'accounts':rows}, 'claude')
         self.assertEqual(r['state'], 'waiting-quota')
 
+    def test_hub_managed_profile_is_valid_and_only_the_hub_lease_counts(self):
+        # issue #1666: a hub-leased home is a valid login — ccquota reports
+        # where it is refreshed, and the adapter carries that through.
+        row = dict(name='default', home=str(self.root), default=True, managed=True,
+                   account='codex:account:hub', email='x@example.test', plan='pro',
+                   login=dict(state='valid', source='hub', auto_refresh=False, has_refresh_token=False))
+        with patch.object(accounts, 'ccquota', return_value=[row]):
+            p = accounts.profile('default')
+            self.assertEqual((p['login'], p['source']), ('valid', 'hub'))
+            reading = dict(available=True, windows=[dict(id='codex:primary', minutes=300, utilization=5)])
+            self.assertTrue(accounts.eligible(accounts.normalize_codex(p, reading)))
+            # A lease the node agent did not renew: not usable, and the cause
+            # names the hub lease, never a re-login.
+            row['login'] = dict(state='access_expired', source='hub')
+            with self.assertRaisesRegex(ValueError, 'hub-managed.*node agent'):
+                accounts.profile('default')
+            r = accounts.normalize_codex(accounts.profiles()[0], reading)
+            self.assertEqual(r['reason'], 'hub-lease-lapsed')
+            self.assertFalse(accounts.eligible(r))
+            # Degenerate case: an older ccquota prints no source → local, and
+            # the gate is what it always was.
+            row['login'] = dict(state='valid')
+            self.assertEqual(accounts.profiles()[0]['source'], 'local')
+            row['login'] = dict(state='reauth_required')
+            with self.assertRaisesRegex(ValueError, 'verified subscription login'):
+                accounts.profile('default')
+            self.assertEqual(accounts.normalize_codex(accounts.profiles()[0], reading)['reason'], 'auth-unavailable')
+
     def test_window_ids_are_not_durations(self):
         reading = dict(available=True, windows=[dict(id='codex:primary', minutes=10080, utilization=95)])
         r = accounts.normalize_codex(self.profile, reading)
@@ -186,6 +214,43 @@ class Providers(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'startup feature'):
                 accounts.verify_codex_runtime('unix:///exact.sock')
 
+
+
+class CodexLoginReason(unittest.TestCase):
+    """claude-fleet#1404 (EPIC #1665 C7): ccquota's own reason for a failed Codex
+    login travels verbatim — the profile check, the row and the chooser's refusal
+    all say WHY, not just that auth is unavailable."""
+    REASON = 'Codex refresh credential rejected; sign in again for this profile'
+
+    def rows(self, home):
+        return [dict(name='work', home=home, default=True, account='acct-work', email='w@example.com',
+                     plan='plus', login=dict(state='reauth_required', reason=self.REASON))]
+
+    def test_ccquota_reason_reaches_profile_check_row_and_chooser(self):
+        with tempfile.TemporaryDirectory() as home, patch.object(accounts, 'ccquota', return_value=self.rows(home)):
+            p = accounts.profiles()[0]
+            self.assertEqual(p['login'], 'reauth_required')
+            self.assertEqual(p['login_reason'], self.REASON)
+            with self.assertRaises(ValueError) as cm:
+                accounts.profile('work')
+            self.assertIn('reauth_required', str(cm.exception))
+            self.assertIn(self.REASON, str(cm.exception))
+            row = accounts.normalize_codex(p, dict(available=True))
+            self.assertEqual(row['reason'], 'auth-unavailable')
+            self.assertEqual(row['login_reason'], self.REASON)
+            r = accounts.choose({'accounts': [row]}, 'codex')
+            self.assertEqual(r['state'], 'waiting-quota')
+            self.assertIn('codex/acct-work', r['reason'])
+            self.assertIn(self.REASON, r['reason'])
+
+    def test_valid_login_carries_no_reason_and_capped_text_is_unchanged(self):
+        with tempfile.TemporaryDirectory() as home:
+            rows = self.rows(home)
+            rows[0]['login'] = dict(state='valid')
+            with patch.object(accounts, 'ccquota', return_value=rows):
+                self.assertEqual(accounts.profiles()[0]['login_reason'], '')
+        r = accounts.choose({'accounts': [candidate('codex', 'full', 100)]}, 'codex')
+        self.assertEqual(r['reason'], 'accounts · all capped')
 
 if __name__ == '__main__':
     unittest.main()

@@ -19,6 +19,15 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
+// HubManagedRefreshToken is the placeholder a hub-leased Codex home carries in
+// auth.json's refresh_token (claude-fleet#1415, #1666). The long-lived half
+// never reaches this machine: the hub is the one refresher, and the node agent
+// rewrites the short-lived access token before it expires. Nothing on this
+// machine may try to refresh such a home — a Codex refresh token is single-use,
+// so a local attempt with a stale copy is refused and brands the login
+// reauth_required while the hub's copy is fine.
+const HubManagedRefreshToken = "hub-managed"
+
 type Auth struct {
 	Identity        model.Identity
 	Mode            string
@@ -26,6 +35,7 @@ type Auth struct {
 	ExpiresAt       time.Time
 	LastRefresh     *time.Time
 	HasRefreshToken bool
+	HubManaged      bool // refresh_token is HubManagedRefreshToken: the hub refreshes, the node agent renews
 	fingerprint     string
 	snapshot        []byte
 }
@@ -62,7 +72,8 @@ func ReadAuth(home string) (*Auth, error) {
 	if err := json.NewDecoder(io.LimitReader(f, 2<<20)).Decode(&doc); err != nil {
 		return nil, errors.New("invalid Codex credential file")
 	}
-	a := &Auth{Mode: "unknown", LastRefresh: doc.LastRefresh, HasRefreshToken: doc.Tokens.Refresh != ""}
+	hub := doc.Tokens.Refresh == HubManagedRefreshToken
+	a := &Auth{Mode: "unknown", LastRefresh: doc.LastRefresh, HasRefreshToken: doc.Tokens.Refresh != "" && !hub, HubManaged: hub}
 	a.fingerprint = fmt.Sprintf("%x", sha256.Sum256([]byte(doc.Tokens.Access+"\x00"+doc.Tokens.Refresh)))
 	if doc.Mode == "apikey" || (doc.APIKey != nil && *doc.APIKey != "") {
 		a.Mode = "api"
