@@ -99,7 +99,7 @@ func (s *Server) GatherReview(f store.Filter) (findings.Inputs, error) {
 	// /v1/findings and MCP get_findings -- see the same silences. A finding
 	// muted on the dashboard must also be muted for an agent reading the same
 	// hub, or "acknowledged" means two different things depending on who asks.
-	mutes, err := s.activeMutes()
+	mutes, err := s.activeMutes(time.Now())
 	if err != nil {
 		return in, err
 	}
@@ -290,7 +290,7 @@ func (s *Server) GatherNow(account string) (findings.NowInputs, error) {
 
 func (s *Server) GatherNowSource(account, source string) (findings.NowInputs, error) {
 	in := findings.NowInputs{Now: time.Now().UTC()}
-	mutes, err := s.activeMutes()
+	mutes, err := s.activeMutes(in.Now)
 	if err != nil {
 		return in, err
 	}

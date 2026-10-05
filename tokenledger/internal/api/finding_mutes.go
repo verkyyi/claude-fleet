@@ -44,9 +44,11 @@ import (
 // internal/findings wants them. One pull per findings request: the table holds
 // at most a handful of rows on any real hub (one per thing an operator
 // bothered to silence, each self-expiring), which is cheaper to read whole
-// than to look up per finding.
-func (s *Server) activeMutes() (findings.Mutes, error) {
-	rows, err := s.Store.ActiveFindingMutes(time.Now().UTC())
+// than to look up per finding. now is the caller's clock — the same instant
+// the findings themselves are judged at — so a test's fixed time decides which
+// mutes are in force, not the wall clock (claude-fleet#1708).
+func (s *Server) activeMutes(now time.Time) (findings.Mutes, error) {
+	rows, err := s.Store.ActiveFindingMutes(now.UTC())
 	if err != nil {
 		return nil, err
 	}
