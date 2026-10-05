@@ -111,6 +111,23 @@ class Control:
                     checkouts=bool(verdict.get("checkouts")),
                     missing=[str(m) for m in verdict["missing"]], observed_at=now())
 
+    def capacity(self):
+        """This login's own session cap and the count its spawn gate reads (issue
+        #1587): {"sessions": n, "max_sessions": m}, m = 0 for unlimited. Best
+        effort — None when the adapter cannot say, and discover then omits it, so
+        the hub filters nothing (exactly what an older install sends)."""
+        code, output, _ = self.adapter("capacity")
+        if code:
+            return None
+        try:
+            got = json.loads(output.decode("utf-8"))
+        except ValueError:
+            return None
+        if not isinstance(got, dict) or type(got.get("sessions")) is not int \
+                or type(got.get("max_sessions")) is not int:
+            return None
+        return dict(sessions=got["sessions"], max_sessions=got["max_sessions"])
+
     def fleet(self, fleet_id):
         identifier(fleet_id)
         for fleet in self.inventory():
@@ -492,8 +509,12 @@ class Control:
         if method == "discover":
             fields(params, ())
             fleets = [{k: v for k, v in f.items() if k != "config_path"} for f in self.inventory()]
-            return {"machine_id": self.machine_id, "hostname": socket.gethostname(),
-                    "protocol": PROTOCOL, "fleets": fleets, "observed_at": now()}
+            out = {"machine_id": self.machine_id, "hostname": socket.gethostname(),
+                   "protocol": PROTOCOL, "fleets": fleets, "observed_at": now()}
+            capacity = self.capacity()
+            if capacity is not None:
+                out["capacity"] = capacity
+            return out
         if method == "ready":
             fields(params, ())
             return self.ready()

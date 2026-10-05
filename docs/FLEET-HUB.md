@@ -520,6 +520,14 @@ by the agent at most once a minute. `pickNode` marks a node that says `false`
 sends work there (you asked by name), and an agent older than #1475 says nothing
 and is treated as ready.
 
+**A full machine is never chosen** (issue #1587). The heartbeat also carries
+`max_sessions` (the login's `FLEET_GLOBAL_MAX_SESSIONS`, its spawn gate's cap)
+and `cap_sessions` (the awake count that gate reads), from `discover`'s
+`capacity`; `pickNode` excludes a login at its cap as `full (N/M …)`, and with
+every candidate full refuses `AT_CAPACITY` `all-full: …` — the spawn says
+「都满了」. A beat without the fields filters nothing. See
+`tokenledger/README.md`, "Sessions on every machine".
+
 ## Tools
 
 | MCP tool | Behavior | Required grant |

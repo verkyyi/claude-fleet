@@ -442,11 +442,15 @@ type NodeView struct {
 	// Sessions is nil when a fleet of this login could not be read
 	// (claude-fleet#1465): its count is unknown, never 0. SessionsUnknown
 	// then names each unreadable fleet and why.
-	Sessions        *int               `json:"sessions"`
-	SessionsUnknown []string           `json:"sessions_unknown,omitempty"`
-	Fleets          []NodeFleetSummary `json:"fleets"`
-	FleetError      string             `json:"fleet_error,omitempty"`
-	FleetVersion    string             `json:"fleet_version,omitempty"`
+	Sessions        *int     `json:"sessions"`
+	SessionsUnknown []string `json:"sessions_unknown,omitempty"`
+	// MaxSessions is the login's own session cap and CapSessions the count
+	// its gate reads (claude-fleet#1587); absent when the node does not say.
+	MaxSessions  int                `json:"max_sessions,omitempty"`
+	CapSessions  *int               `json:"cap_sessions,omitempty"`
+	Fleets       []NodeFleetSummary `json:"fleets"`
+	FleetError   string             `json:"fleet_error,omitempty"`
+	FleetVersion string             `json:"fleet_version,omitempty"`
 
 	// Kind is fixed, or ephemeral for a SPOT node the hub started
 	// (claude-fleet#1428); Spot is that node's ledger state while it lives.
@@ -631,6 +635,7 @@ func nodeView(n store.Node, now time.Time) NodeView {
 		v.Load1, v.NCPU = hb.Load1, hb.NCPU
 		v.MemFreeBytes, v.MemTotalBytes = hb.MemFreeBytes, hb.MemTotalBytes
 		v.Sessions, v.SessionsUnknown = hb.SessionsCount(), hb.UnreadableFleets()
+		v.MaxSessions, v.CapSessions = hb.MaxSessions, hb.CapSessions
 		v.FleetError, v.FleetVersion = hb.FleetError, hb.FleetVersion
 		for _, f := range hb.Fleets {
 			v.Fleets = append(v.Fleets, NodeFleetSummary{FleetID: f.FleetID, Name: f.Name, Repo: f.Repo, Repos: reportedRepos(f.Repos), State: f.State, Count: f.Count, Error: f.Error})

@@ -307,6 +307,20 @@ CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" INFLIGHT=1 FLEET_GLOBAL_MAX_SES
 [ "$(rc)" = 2 ] && [ ! -s "$PLACE_LOG" ]         || fail "CAP --node local refuses at the cap without asking (rc=$(rc))"
 ok "CAP a full machine still places elsewhere; opening here keeps the cap"
 
+# ===== ALLFULL (issue #1587): every machine at its own cap ⇒ 都满了, naming each =====
+ALLFULL=$'REFUSED AT_CAPACITY\tall-full: every machine is at its session cap — m4: full (8/8 sessions, the login\'s own cap); m5: full (1/1 sessions, the login\'s own cap)'
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER="$ALLFULL" PLACE_RC=4 INFLIGHT=1 FLEET_GLOBAL_MAX_SESSIONS=1 run_spawn 258
+[ "$(rc)" = 2 ]                                  || fail "ALLFULL exits 2 (rc=$(rc))"
+err_has '#258 都满了'                             || fail "ALLFULL says 都满了"
+err_has 'm4: full (8/8 sessions'                 || fail "ALLFULL names each machine's count"
+err_has 'raise FLEET_GLOBAL_MAX_SESSIONS'        && fail "ALLFULL is the fleet-wide answer, not this machine's cap line"
+tmux_has 'new-window'                            && fail "ALLFULL must not spawn"
+lease_has release                                || fail "ALLFULL gives the lease back"
+# This machine freed a slot since its last beat: open here after all.
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER="$ALLFULL" PLACE_RC=4 run_spawn 258
+[ "$(rc)" = 0 ] && tmux_has 'new-window'         || fail "ALLFULL with a slot here now opens it here (rc=$(rc))"
+ok "ALLFULL every machine full → 都满了 naming each, exit 2; a slot here since → opened here"
+
 # ===== FLEET_SPAWN_NODE (issue #1475): the login-wide default when nothing names a machine
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER="$REMOTE_LINE" FLEET_SPAWN_NODE=local run_spawn 258
 [ -s "$PLACE_LOG" ]                              && fail "SPAWN_NODE=local must not ask the hub"

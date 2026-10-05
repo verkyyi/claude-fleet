@@ -777,6 +777,11 @@ type Candidate struct {
 	Sessions        *int   `json:"sessions"`
 	SessionsUnknown string `json:"sessions_unknown,omitempty"`
 	Cap             *int   `json:"cap"`
+	// MaxSessions is the login's OWN cap (claude-fleet#1587, its
+	// FLEET_GLOBAL_MAX_SESSIONS) and CapSessions the count its gate reads;
+	// absent from a node that does not say. Full there = never a candidate.
+	MaxSessions int  `json:"max_sessions,omitempty"`
+	CapSessions *int `json:"cap_sessions,omitempty"`
 	// QuotaUsedPct is the busier of the 5-hour and 7-day windows of the
 	// account this login's Claude Code runs on; nil when unknown.
 	QuotaUsedPct *float64 `json:"quota_used_pct"`
@@ -990,15 +995,24 @@ func (s *Server) pickNode(p fleetPrincipal, repo, node string, now time.Time) (P
 		}
 	}
 	if best < 0 {
-		reasons := []string{}
+		reasons, full := []string{}, true
 		for _, c := range pl.Candidates {
 			reasons = append(reasons, c.Machine+": "+c.Excluded)
+			full = full && excludedForFullness(c.Excluded)
 		}
 		msg := "No machine can take a new session now — " + strings.Join(reasons, "; ")
+		if full {
+			// Every candidate is at its own cap (claude-fleet#1587): say so
+			// as the refusal a full machine gives, not as "no machine".
+			msg = "all-full: every machine is at its session cap — " + strings.Join(reasons, "; ")
+		}
 		if s.Spot != nil && node == "auto" {
 			// Peak: every fixed machine is out. Ask for a SPOT node
 			// (claude-fleet#1428); the next placement finds it.
 			msg += "; " + s.Spot.Want("placement for "+repo+" found no eligible machine: "+strings.Join(reasons, "; "))
+		}
+		if full {
+			return pl, fault("AT_CAPACITY", msg)
 		}
 		return pl, fault("NO_ELIGIBLE_NODE", msg)
 	}
@@ -1027,6 +1041,8 @@ func (s *Server) judge(r store.FleetRow, settings map[string]string, accounts ma
 	if n, ok := s.nodeCap(r.Hostname, settings); ok {
 		c.Cap = &n
 	}
+	full, used, own := hb.Full()
+	c.MaxSessions, c.CapSessions = hb.MaxSessions, hb.CapSessions
 	if acct := accounts[r.EndpointID]; acct != "" {
 		if snap, err := s.Store.LatestLimits(acct); err == nil && snap != nil {
 			u := math.Max(snap.FiveHour.Utilization, snap.SevenDay.Utilization)
@@ -1055,7 +1071,11 @@ func (s *Server) judge(r store.FleetRow, settings map[string]string, accounts ma
 	case c.Cap != nil && c.Sessions == nil:
 		c.Excluded = fmt.Sprintf("session count unknown (%s); the per-person cap %d cannot be checked", c.SessionsUnknown, *c.Cap)
 	case c.Cap != nil && *c.Sessions >= *c.Cap:
-		c.Excluded = fmt.Sprintf("at the per-person cap (%d/%d sessions)", *c.Sessions, *c.Cap)
+		c.Excluded = fmt.Sprintf("%s (%d/%d sessions)", excludedPersonCap, *c.Sessions, *c.Cap)
+	case full:
+		// The login's own cap (claude-fleet#1587): its spawn gate would refuse
+		// the start, so it is no candidate — named or auto.
+		c.Excluded = fmt.Sprintf("%s (%d/%d sessions, the login's own cap)", excludedFull, used, own)
 	default:
 		c.Eligible = true
 	}
@@ -1075,6 +1095,20 @@ func (s *Server) judge(r store.FleetRow, settings map[string]string, accounts ma
 	}
 	c.Score = math.Round(score*1000) / 1000
 	return c
+}
+
+// excludedFull opens the verdict on a login at its own session cap
+// (claude-fleet#1587); excludedPersonCap the one at the hub's per-person cap.
+const (
+	excludedFull      = "full"
+	excludedPersonCap = "at the per-person cap"
+)
+
+// excludedForFullness reports whether a candidate is out only because it has
+// no free session slot: when every candidate is, placement refuses
+// AT_CAPACITY "all-full" (claude-fleet#1587) rather than NO_ELIGIBLE_NODE.
+func excludedForFullness(why string) bool {
+	return strings.HasPrefix(why, excludedFull) || strings.HasPrefix(why, excludedPersonCap)
 }
 
 // unknownSessionsWeight discounts the score of a candidate whose session count
