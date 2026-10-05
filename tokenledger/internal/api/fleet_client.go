@@ -81,6 +81,10 @@ type clientLeaseTable struct {
 	mu   sync.Mutex
 	cur  map[string]*ClientLease
 	gone map[string]clientGone
+	// keys: each lease's action key (C7, #1717); acts: the actions waiting
+	// for, or answered by, a lease's client — fleet_client_actions.go
+	keys map[string]string
+	acts clientActionQueue
 }
 
 // ClientLeaseRequest is the body of a POST to control.ClientPath. Cert, Sig
@@ -117,9 +121,12 @@ type ClientLeaseResponse struct {
 	By *ClientLease `json:"by,omitempty"`
 	// TookOver is the live client an acquire displaced — absent when the old
 	// lease had lapsed, which is not a takeover.
-	TookOver  *ClientLease `json:"took_over,omitempty"`
-	RenewSecs int          `json:"renew_secs"`
-	TTLSecs   int          `json:"ttl_secs"`
+	TookOver *ClientLease `json:"took_over,omitempty"`
+	// ActionKey signs every action sent to this lease (C7, #1717): handed
+	// to the lease's own client on acquire / renew, never on a read.
+	ActionKey string `json:"action_key,omitempty"`
+	RenewSecs int    `json:"renew_secs"`
+	TTLSecs   int    `json:"ttl_secs"`
 }
 
 func newClientLeaseID() string {
@@ -148,6 +155,7 @@ func (t *clientLeaseTable) init() {
 	if t.cur == nil {
 		t.cur = map[string]*ClientLease{}
 		t.gone = map[string]clientGone{}
+		t.keys = map[string]string{}
 	}
 }
 
@@ -155,6 +163,7 @@ func (t *clientLeaseTable) prune(now time.Time) {
 	for id, g := range t.gone {
 		if now.Sub(g.at) > clientGoneKeep {
 			delete(t.gone, id)
+			t.forgetLeaseLocked(id)
 		}
 	}
 }
@@ -231,6 +240,7 @@ func (t *clientLeaseTable) acquire(key string, req ClientLeaseRequest, now time.
 	if c != nil {
 		lapsed := !t.live(c, now)
 		t.gone[c.ID] = clientGone{key: key, by: *n, at: now, lapsed: lapsed}
+		t.forgetLeaseLocked(c.ID)
 		if !lapsed {
 			out.TookOver = leaseCopy(c)
 		}
@@ -273,6 +283,7 @@ func (t *clientLeaseTable) renew(key string, req ClientLeaseRequest, now time.Ti
 	t.fill(n, req)
 	if c != nil {
 		t.gone[c.ID] = clientGone{key: key, by: *n, at: now, lapsed: true}
+		t.forgetLeaseLocked(c.ID)
 	}
 	t.cur[key] = n
 	return ClientLeaseResponse{State: "active", Lease: leaseCopy(n)}
@@ -287,6 +298,7 @@ func (t *clientLeaseTable) release(key, lease string) ClientLeaseResponse {
 		delete(t.cur, key)
 	}
 	delete(t.gone, lease)
+	t.forgetLeaseLocked(lease)
 	return ClientLeaseResponse{State: "released"}
 }
 
@@ -337,27 +349,9 @@ func (s *Server) handleFleetClient(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	now := time.Now()
-	id, ok := s.sshRelayHTTPIdentity(r)
+	id, ok := s.clientIdentity(w, r, req.Cert, req.Sig, req.TS, now)
 	if !ok {
-		if req.Cert == "" || req.Sig == "" {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="ccquota"`)
-			httpError(w, http.StatusUnauthorized, "a session, a viewer token or a connection certificate is required")
-			return
-		}
-		if d := now.Sub(time.Unix(req.TS, 0)); d > routesClockSkew || d < -routesClockSkew {
-			httpError(w, http.StatusUnauthorized, "the signed timestamp is too far from the hub's clock — check this computer's time")
-			return
-		}
-		var err error
-		if id, err = s.verifySSHRelayCert(req.Cert, req.Sig, control.ClientSigMessage(req.TS), control.ClientSigNamespace, now); err != nil {
-			var re *sshRelayError
-			if errors.As(err, &re) {
-				httpError(w, http.StatusUnauthorized, re.msg)
-				return
-			}
-			httpError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
+		return
 	}
 	key := clientLeaseKey(id)
 	var out ClientLeaseResponse
@@ -391,9 +385,44 @@ func (s *Server) handleFleetClient(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "action must be acquire, renew, release or get")
 		return
 	}
+	if out.State == "active" && out.Lease != nil && (req.Action == "acquire" || req.Action == "renew") {
+		// The key the lease's actions are signed with (C7, #1717): the
+		// client that holds the lease, and only it, is told — on every
+		// acquire and renewal, so a hub restart's fresh key reaches it.
+		out.ActionKey = s.clientLeases.actionKey(out.Lease.ID)
+	}
 	out.RenewSecs, out.TTLSecs = int(ClientLeaseRenew/time.Second), int(ClientLeaseTTL/time.Second)
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, out)
+}
+
+// clientIdentity is who is asking at a client door: a session / viewer token,
+// else a connection certificate proven by a signed timestamp. It answers the
+// refusal itself.
+func (s *Server) clientIdentity(w http.ResponseWriter, r *http.Request, cert, sig string, ts int64, now time.Time) (sshRelayIdentity, bool) {
+	if id, ok := s.sshRelayHTTPIdentity(r); ok {
+		return id, true
+	}
+	if cert == "" || sig == "" {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="ccquota"`)
+		httpError(w, http.StatusUnauthorized, "a session, a viewer token or a connection certificate is required")
+		return sshRelayIdentity{}, false
+	}
+	if d := now.Sub(time.Unix(ts, 0)); d > routesClockSkew || d < -routesClockSkew {
+		httpError(w, http.StatusUnauthorized, "the signed timestamp is too far from the hub's clock — check this computer's time")
+		return sshRelayIdentity{}, false
+	}
+	id, err := s.verifySSHRelayCert(cert, sig, control.ClientSigMessage(ts), control.ClientSigNamespace, now)
+	if err != nil {
+		var re *sshRelayError
+		if errors.As(err, &re) {
+			httpError(w, http.StatusUnauthorized, re.msg)
+			return sshRelayIdentity{}, false
+		}
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return sshRelayIdentity{}, false
+	}
+	return id, true
 }
 
 // handleNodeClient serves GET /v1/node/client (C6, #1716): the client the

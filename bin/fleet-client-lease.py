@@ -10,6 +10,10 @@
   fleet-client-lease.py where             the person's current client, as the hub
                                           holds it (JSON) — fleet-client-where.sh
 
+An active acquire / renewal also carries the lease's ACTION KEY (issue #1717):
+it is written, 0600, to FLEET_CLIENT_KEY_FILE (never printed) for
+fleet-client-actions.py to check each action's signature with.
+
 Talks to the hub's client lease (POST /v1/fleet/client), signed by this
 device's connection certificate (`fleet-client@claude-fleet`) — or, with
 FLEET_HUB_TOKEN / hub.json's token, by that token. Prints ONE line,
@@ -334,12 +338,29 @@ def main(argv):
     except (OSError, ValueError) as e:
         sys.stderr.write("fleet-client-lease: %s\n" % e)
         return 1
+    save_key(d.get("action_key") or "")
     lease = d.get("lease") or {}
     by = d.get("by") or {}
     took = d.get("took_over") or {}
     out(d.get("state") or "none", lease.get("id") or "", by.get("device") or lease.get("device") or "",
         took.get("device") or "")
     return 0
+
+
+def save_key(key):
+    """The lease's action key (issue #1717), 0600 in FLEET_CLIENT_KEY_FILE —
+    never printed, never on an argv: fleet-client-actions.py checks every
+    action's signature with it."""
+    f = os.environ.get("FLEET_CLIENT_KEY_FILE") or ""
+    if not key or not f:
+        return
+    try:
+        fd = os.open(f + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(key + "\n")
+        os.replace(f + ".tmp", f)
+    except OSError as e:
+        sys.stderr.write("fleet-client-lease: %s\n" % e)
 
 
 def node_env(key):

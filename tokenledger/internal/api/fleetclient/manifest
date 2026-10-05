@@ -37,6 +37,15 @@ bin/fleet-connect.py
 bin/fleet-client-lib.sh
 bin/fleet-shell.sh
 bin/fleet-client-lease.py
+# open it on the device in your hands (#1717): the executor and what it drives
+bin/fleet-client-actions.py
+bin/fleet-client-escape.sh
+bin/fleet-client-where.sh
+bin/fleet-open.sh
+bin/fleet-open-addr.py
+bin/open-url.sh
+bin/fleet-show.sh
+bin/fleet-show-send.py
 bin/fleet-remote-view.sh
 bin/fleet-hub-sessions.sh
 bin/fleet-hub-write.sh

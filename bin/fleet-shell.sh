@@ -55,6 +55,8 @@
 #   open-url <url>         the fleet-open back channel: a url from the far end
 #                          opens on THIS computer (`open` / `xdg-open`)
 #   keeper <session>       keeps the refresh loop alive while the server lives
+#   actions <session>      does what a session anywhere asks to show you, on THIS
+#                          device (issue #1717) — see `actions` below
 #   warm <session> [--once] keeps ONE ssh master per machine you have sessions on
 #                          (issue #1631) — see `warm` below
 #   wait <session>         the first window when no machine is online: a note,
@@ -191,6 +193,9 @@ this_machine() {
 #   client.where.json        the one in use now — what fleet-client-where.sh
 #                   reads when there is no hub (its mtime = since)
 CL_DIR="$CACHE/tmp"
+# the lease's action key (issue #1717): fleet-client-lease.py writes it on every
+# active acquire / renewal, fleet-client-actions.py checks each action with it
+export FLEET_CLIENT_KEY_FILE="$CL_DIR/client.key"
 LEASE_CMD="${FLEET_CLIENT_LEASE_CMD:-python3 $BIN/fleet-client-lease.py}"
 cl_key() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'; }
 # lease <action> [args…] → L_STATE L_ID L_BY; rc 1 = the hub was not asked
@@ -265,7 +270,7 @@ go_standby() {
   local id=''
   { read -r id < "$CL_DIR/client.lease"; } 2>/dev/null
   [ -n "$id" ] && printf '%s\n' "$id" > "$CL_DIR/client.lease.old"
-  rm -f "$CL_DIR/client.lease" "$CL_DIR/client.where.json"
+  rm -f "$CL_DIR/client.lease" "$CL_DIR/client.where.json" "$CL_DIR/client.key"
   : > "$CL_DIR/client.standby"
   others_standby '' "${1:-未知设备}"
 }
@@ -461,8 +466,19 @@ keeper)
   # takes nothing over
   id=''; { read -r id < "$CL_DIR/client.lease"; } 2>/dev/null
   [ -n "$id" ] && lease release --lease "$id"
-  rm -f "$CL_DIR/client.lease" "$CL_DIR/client.lease.old" "$CL_DIR/client.standby" "$CL_DIR/client.nohub" "$CL_DIR/keeper.pid" "$CL_DIR/client.where.json"
+  rm -f "$CL_DIR/client.lease" "$CL_DIR/client.lease.old" "$CL_DIR/client.standby" "$CL_DIR/client.nohub" "$CL_DIR/keeper.pid" "$CL_DIR/client.where.json" "$CL_DIR/client.key"
   exit 0
+  ;;
+# ---------------------------------------------------------------------------------
+# Open it on the device in your hands (issue #1717, EPIC #1710 C7): one loop per
+# server long-polls the hub for this client's lease's actions — a page, a file or
+# a note a session anywhere asked to show you — and does each here, checked
+# against the lease's action key first (bin/fleet-client-actions.py run). Off in
+# standby (no lease, nothing comes); no hub → it idles. Log: $TMPDIR/actions.log.
+actions)
+  s="${2:-$SESS}"
+  [ "${FLEET_CLIENT_ACTIONS:-1}" != 0 ] || exit 0
+  FLEET_CLIENT_DIR="$CL_DIR" exec python3 "$BIN/fleet-client-actions.py" run --session "$s"
   ;;
 # ---------------------------------------------------------------------------------
 # The standby screen (issue #1715): what standby_popup runs on a client. Enter
@@ -649,6 +665,7 @@ if T has-session -t "=$SESS" 2>/dev/null; then
   client_open
   ( nohup bash "$SHADOW/fleet-shell.sh" keeper "$SESS" </dev/null >/dev/null 2>&1 & )
   ( nohup bash "$SHADOW/fleet-shell.sh" warm "$SESS" </dev/null >/dev/null 2>&1 & )
+  ( nohup bash "$SHADOW/fleet-shell.sh" actions "$SESS" </dev/null >/dev/null 2>&1 & )
   client_where
   exec tmux -L "$SESS" attach-session -t "=$SESS"
 fi
@@ -672,6 +689,7 @@ T set-window-option -t "$w" @remote "$remote" \; set-window-option -t "$w" autom
 client_open
 ( nohup bash "$SHADOW/fleet-shell.sh" keeper "$SESS" </dev/null >/dev/null 2>&1 & )
 ( nohup bash "$SHADOW/fleet-shell.sh" warm "$SESS" </dev/null >/dev/null 2>&1 & )
+( nohup bash "$SHADOW/fleet-shell.sh" actions "$SESS" </dev/null >/dev/null 2>&1 & )
 client_where
 [ "${FLEET_SHELL_NO_ATTACH:-0}" = 1 ] && { printf '%s\n' "$SESS"; exit 0; }
 exec tmux -L "$SESS" attach-session -t "=$SESS"

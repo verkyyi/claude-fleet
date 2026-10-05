@@ -7,6 +7,12 @@ description: Open a page, report, PR, local dev server or file on the OPERATOR's
 
 <!-- fleet skill -->
 
+**Wherever this session runs, it goes to the device the operator is using** (issue #1717):
+`fleet-open` asks `fleet-client-where.sh`, and when their `fleet` client holds the hub's
+lease the page goes to that client through the hub — a page on THIS machine's loopback is
+forwarded over the client's own ssh first. The terminal road below is what it falls back to
+when nobody is connected.
+
 The operator reads this machine over SSH from iTerm2. `open <url>` here pops the page up on
 the mini's own screen, which nobody is looking at. `fleet-open` sends it down the SSH
 connection the operator already has, to their iTerm2, whose fleet script (issue #1380)
@@ -31,6 +37,8 @@ One line on stdout:
 
 | result | meaning | what to tell the operator |
 |---|---|---|
+| `sent:client` | handed to the client they hold right now, through the hub (#1717): it opens it on the device in their hands — a computer opens it, an iTerm2 over ssh gets the escape, a phone gets a link to tap | "opened on your <device>" (stderr names it) — on a phone: "a link is at the bottom of your client" |
+| `sent:local` | no hub, and the client runs on this very screen: opened here | "opened" |
 | `sent:iterm2` | written to the iTerm2 they are using | "opened in your browser" — if nothing opened, their side (#1380) is not installed; give them the URL |
 | `sent:tunnel` | their reverse-tunnel opener (`open-url.sh`, port 2226) took it | "opened in your browser" |
 | `fallback:copied` | no iTerm2 / tunnel: the URL copied to their clipboard, one line saying so | "the link is on your clipboard" |
