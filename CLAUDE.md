@@ -185,7 +185,8 @@ Do not install from memory: read the doc and work from it.
   came back empty. Same for `argv`, `status`, `pipestatus`, `options`, `fpath`,
   `commands`, `aliases`, …: write `pth` / `cmdline` / `stfile`.
   `bin/zsh-local-selftest.sh` lints every `local`/`typeset`/`declare` in `bin/`
-  (`# zsh-ok: <why>` excepts a line); origin-selftest A runs the key under zsh.
+  (`# zsh-ok: <why>` excepts a line; bash32-array-selftest runs it on every PR);
+  origin-selftest A runs the key under zsh.
 - **The selftest gate isolates at the ROOT, not per test** (issue #660).
   `bin/run-selftests.sh` re-runs the suite from a throwaway **shadow install
   root** (`bin/selftest-shadow-root.sh`): `bin/` mirrored file-by-file as

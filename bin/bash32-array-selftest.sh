@@ -176,4 +176,12 @@ ok; [ -z "$(lint_file "$WORK/good.sh")" ]        || fail "lint flagged a SAFE fo
 ok; [ -z "$(lint_file "$WORK/never-empty.sh")" ] || fail "lint flagged an array that is never empty-initialised"
 ok; [ -z "$(lint_file "$WORK/opted-out.sh")" ]   || fail "lint ignored the '# bash32-ok:' escape hatch"
 
+# --- the zsh sibling (issue #1633) ------------------------------------------------
+# The other shell bin/ code runs under that CI never sees: a skill's `source
+# fleet-lib.sh` in Claude Code's Bash tool runs in zsh, where a `local path` empties
+# PATH. zsh-local-selftest.sh lints that repo-wide; it rides along HERE because this
+# test is in SELFTEST_ALWAYS (a whole-tree lint no filename rule can select).
+out=$(bash "$BIN/zsh-local-selftest.sh" 2>&1) || fail "zsh-local-selftest.sh: $out"
+ok
+
 printf 'bash32-array-selftest: OK (%d checks)\n' "$CHECKS"

@@ -27,6 +27,8 @@
 #            leg — `zsh -c 'source fleet-lib.sh; fleet_origin_key'` in a scratch
 #            pane on an isolated socket — lives in origin-selftest.sh part A.
 #
+# Runs on every PR through bash32-array-selftest.sh (in SELFTEST_ALWAYS).
+#
 # Hermetic: reads files, runs zsh on a one-liner. No network, no tmux, no gh.
 # Exit 0 = pass, non-zero = fail (prints every offending site).
 set -uo pipefail
