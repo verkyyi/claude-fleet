@@ -4,6 +4,7 @@
 Usage: fleet_loop_mark.py hook                         (PostToolUse, stdin JSON)
        fleet_loop_mark.py window <target> [--socket-name S]
        fleet_loop_mark.py status --value V [--manifest M] [--now N]
+       fleet_loop_mark.py due --value V [--manifest M] --within S [--now N]
        fleet_loop_mark.py backfill <target> [--transcript P] [--socket-name S]
                                              [--max-bytes N] [--now N]
        fleet_loop_mark.py sweep [--socket-name S]      (every window of one fleet)
@@ -19,11 +20,20 @@ depend on any of that: the PostToolUse hook (matcher
 The value is ONE line of space-separated `k=v` fields:
 
     kind=wakeup,cron next=<epoch> ttl=<s> id=<job>@<until>,<job>@<until>
+         at=<job>@<fire> cron=<job>@<m_h_dom_mon_dow>
 
   kind   which of the two halves are present (`wakeup`, `cron`, or both)
   next   the epoch the pending ScheduleWakeup fires; ttl its (clamped) delay
   id     CronCreate job ids, each with the epoch past which it is gone on its own
          (a recurring job auto-expires after 7 days; a pinned one-shot after it fires)
+  at     one token per pinned one-shot job: the epoch it fires (issue #1690)
+  cron   one token per recurring job: its 5-field spec, spaces written `_`
+
+`at` / `cron` say WHEN a job fires next, which `id` alone cannot (a recurring
+job's `until` is its expiry). `due` reads them: a Loop whose every known round is
+more than S seconds away is PARKED — an idle session between rounds, not a running
+one (fleet-install-sync.sh applies under it). A job with neither (a mark written
+before #1690), an unreadable spec or a live ledger is always `due`: unknown is busy.
 
 EXPIRY IS THE READER'S (no resident process): a wakeup whose `next + max(600, ttl/2)`
 has passed with no newer ScheduleWakeup was not renewed — the loop stopped; a cron
@@ -59,11 +69,13 @@ CRON_LIFE = 7 * 86400 + 900        # recurring CronCreate auto-expires after 7 d
 WAKE_MIN, WAKE_MAX = 60, 3600      # ScheduleWakeup's own clamp
 LEDGER_LIVE = ('active', 'waiting-quota', 'hibernating', 'delivering')
 ID_OK = re.compile(r'[A-Za-z0-9_.:-]{1,64}')
+SPEC_OK = re.compile(r'[0-9*,/-]+(?:_[0-9*,/-]+){4}')
+CRON_JITTER = 900                  # a recurring job may fire up to 15 min after its minute
 
 
 def parse(value):
     """`k=v k=v` → dict of the fields we know; anything malformed is dropped."""
-    out = {'next': 0, 'ttl': 0, 'ids': []}
+    out = {'next': 0, 'ttl': 0, 'ids': [], 'at': {}, 'cron': {}}
     for tok in (value or '').split():
         k, _, v = tok.partition('=')
         if k in ('next', 'ttl') and v.isdigit():
@@ -73,6 +85,10 @@ def parse(value):
                 job, _, until = ent.partition('@')
                 if ID_OK.fullmatch(job) and until.isdigit():
                     out['ids'].append((job, int(until)))
+        elif k in ('at', 'cron'):
+            job, _, w = v.partition('@')
+            if ID_OK.fullmatch(job) and (w.isdigit() if k == 'at' else SPEC_OK.fullmatch(w)):
+                out[k][job] = int(w) if k == 'at' else w
     return out
 
 
@@ -84,6 +100,11 @@ def fmt(d):
     if d.get('ids'):
         kinds.append('cron')
         parts.append('id=' + ','.join('%s@%d' % e for e in d['ids']))
+        for job, _ in d['ids']:
+            if job in d.get('at', {}):
+                parts.append('at=%s@%d' % (job, d['at'][job]))
+            elif job in d.get('cron', {}):
+                parts.append('cron=%s@%s' % (job, d['cron'][job]))
     return ' '.join(['kind=' + ','.join(kinds)] + parts) if kinds else ''
 
 
@@ -96,6 +117,9 @@ def prune(d, now):
     if d.get('next') and wake_until(d) < now:
         d['next'] = d['ttl'] = 0
     d['ids'] = [e for e in d.get('ids', []) if e[1] >= now]
+    live = {e[0] for e in d['ids']}
+    for k in ('at', 'cron'):
+        d[k] = {j: w for j, w in d.get(k, {}).items() if j in live}
     return d
 
 
@@ -151,14 +175,22 @@ def apply(value, payload, now=None):
         job = cron_id(payload.get('tool_response'))
         if job:
             until = now + CRON_LIFE
+            d['at'].pop(job, None)
+            d['cron'].pop(job, None)
+            spec = '_'.join(str(inp.get('cron') or '').split())
             if inp.get('recurring') is False:
                 fire = oneshot_fire(inp.get('cron'), now)
                 if fire is not None:
                     until = fire + GRACE_MIN
+                    d['at'][job] = fire
+            elif SPEC_OK.fullmatch(spec):
+                d['cron'][job] = spec
             d['ids'] = [e for e in d['ids'] if e[0] != job] + [(job, until)]
     elif name == 'CronDelete':
         job = str(inp.get('id') or '')
         d['ids'] = [e for e in d['ids'] if e[0] != job]
+        d['at'].pop(job, None)
+        d['cron'].pop(job, None)
     return fmt(d)
 
 
@@ -327,6 +359,87 @@ def status(value, manifest='', now=None):
     return 'none', ('expired' if (value or '').strip() else 'unset')
 
 
+def _cron_field(f, lo, hi):
+    """One cron field → the set of values it allows; None when unreadable."""
+    vals = set()
+    for part in f.split(','):
+        rng, _, step = part.partition('/')
+        if step and not step.isdigit():
+            return None
+        step = int(step) if step else 1
+        if rng == '*':
+            a, b = lo, hi
+        elif '-' in rng:
+            a, _, b = rng.partition('-')
+            if not (a.isdigit() and b.isdigit()):
+                return None
+            a, b = int(a), int(b)
+        elif rng.isdigit():
+            a = int(rng)
+            b = hi if step > 1 else a
+        else:
+            return None
+        if step < 1 or a < lo or b > hi or a > b:
+            return None
+        vals.update(range(a, b + 1, step))
+    return vals
+
+
+def cron_fires(spec, start, end):
+    """True when the `_`-joined 5-field spec has a minute in [start, end] (local
+    time, standard cron: DoM and DoW are OR'd when both are restricted); None when
+    the spec is unreadable."""
+    f = spec.split('_')
+    if len(f) != 5:
+        return None
+    sets = [_cron_field(f[0], 0, 59), _cron_field(f[1], 0, 23), _cron_field(f[2], 1, 31),
+            _cron_field(f[3], 1, 12), _cron_field(f[4], 0, 7)]
+    if any(x is None for x in sets):
+        return None
+    mi, hr, dom, mon, dow = sets
+    if 7 in dow:
+        dow.add(0)
+    dom_any, dow_any = f[2].startswith('*'), f[4].startswith('*')
+    t = start - start % 60
+    end = min(end, start + 8 * 86400)
+    while t <= end:
+        lt = time.localtime(t)
+        day = ((lt.tm_mday in dom) or (lt.tm_wday + 1) % 7 in dow) \
+            if not (dom_any or dow_any) else \
+            ((lt.tm_mday in dom) and ((lt.tm_wday + 1) % 7 in dow))
+        if lt.tm_min in mi and lt.tm_hour in hr and lt.tm_mon in mon and day:
+            return True
+        t += 60
+    return False
+
+
+def due(value, manifest='', within=600, now=None):
+    """('due'|'parked'|'none', reason) — may a round of this Loop start within
+    <within> seconds? Unknown is `due`; `parked` only when every pending round is
+    known to be further away (issue #1690)."""
+    now = int(time.time()) if now is None else int(now)
+    d = prune(parse(value), now)
+    if ledger_status(manifest):
+        return 'due', 'ledger'
+    if not d['next'] and not d['ids']:
+        return 'none', ('expired' if (value or '').strip() else 'unset')
+    if d['next'] and d['next'] - now <= within:
+        return 'due', 'wakeup:next=%d' % d['next']
+    for job, _ in d['ids']:
+        if job in d['at']:
+            if d['at'][job] - now <= within:
+                return 'due', 'cron:%s@%d' % (job, d['at'][job])
+        elif job in d['cron']:
+            hit = cron_fires(d['cron'][job], now - CRON_JITTER, now + within)
+            if hit is not False:
+                return 'due', 'cron:%s:%s' % (job, 'spec?' if hit is None else 'fires')
+        else:
+            return 'due', 'cron:%s:unknown' % job
+    parts = (['wakeup:next=%d' % d['next']] if d['next'] else []) + \
+        ['cron:%s@%d' % (j, d['at'][j]) if j in d['at'] else 'cron:%s' % j for j, _ in d['ids']]
+    return 'parked', ','.join(parts)
+
+
 def window(target, socket_name=None, now=None):
     tm = ['tmux'] + (['-L', socket_name] if socket_name else [])
     raw = subprocess.check_output(
@@ -386,6 +499,11 @@ def main():
     s.add_argument('--value', default='')
     s.add_argument('--manifest', default='')
     s.add_argument('--now', type=int)
+    u = sub.add_parser('due')
+    u.add_argument('--value', default='')
+    u.add_argument('--manifest', default='')
+    u.add_argument('--within', type=int, default=600)
+    u.add_argument('--now', type=int)
     a = p.parse_args()
     if a.cmd == 'hook':
         return hook()
@@ -404,6 +522,10 @@ def main():
             st, why = 'skip', 'unreadable'
         print(st, why)
         return 0 if st == 'marked' else 1
+    if a.cmd == 'due':
+        st, why = due(a.value, a.manifest, a.within, a.now)
+        print(st, why)
+        return 0 if st == 'due' else 1
     if a.cmd == 'window':
         try:
             st, why = window(a.target, a.socket_name, a.now)

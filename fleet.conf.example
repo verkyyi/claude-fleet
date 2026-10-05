@@ -155,6 +155,13 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 # tick over https). Not seen ≠ refused: nothing moves, nothing alarms. GLOBAL.
 # @label=Install-sync fetch timeout @group=janitor @tier=internal @scope=global @edit=int @unit=seconds
 #FLEET_INSTALL_SYNC_TIMEOUT=30
+# A /loop session parked between rounds (`looping`, waiting on nothing but its
+# Loop) defers the tick only while its next round — a ScheduleWakeup or a
+# CronCreate job — may start within this many seconds (issue #1690); a cron
+# that fires tomorrow morning no longer pins the install overnight. A round
+# whose time is unknown (a mark written before #1690) still defers. GLOBAL.
+# @label=Install-sync loop margin @group=janitor @tier=internal @scope=global @edit=int @unit=seconds
+#FLEET_INSTALL_LOOP_MARGIN_SECS=600
 # How long a login may sit `deferred` (a session busy) — or go without any
 # install-sync tick at all — before the doctor's install row and
 # fleet-install-follow.sh call it STUCK (WARN) instead of following normally.

@@ -52,7 +52,7 @@ assert apply(v2, sw(stop=True), T + 1900) == ''
 # CronCreate: the id from the structured response (dict) or the text form
 cc = lambda resp, **i: {'tool_name': 'CronCreate', 'tool_input': dict(dict(cron='7 * * * *', prompt='x'), **i), 'tool_response': resp}
 c1 = apply('', cc({'id': 'd250bcc6', 'recurring': True}), T)
-assert c1 == 'kind=cron id=d250bcc6@%d' % (T + 7 * 86400 + 900), c1
+assert c1 == 'kind=cron id=d250bcc6@%d cron=d250bcc6@7_*_*_*_*' % (T + 7 * 86400 + 900), c1
 c2 = apply(c1, cc('Scheduled recurring task ab12cd34 (7 * * * *).'), T)
 assert 'id=d250bcc6@' in c2 and ',ab12cd34@' in c2, c2
 assert status(c2, now=T)[1] == 'cron:d250bcc6,ab12cd34'
@@ -62,19 +62,45 @@ assert apply('', cc('ok'), T) == ''
 import time as _t
 fire = int(_t.mktime((2027, 3, 14, 15, 9, 0, 0, 0, -1)))
 o = apply('', cc({'id': 'one1'}, cron='9 15 14 3 *', recurring=False), fire - 3600)
-assert o == 'kind=cron id=one1@%d' % (fire + 600), o
+assert o == 'kind=cron id=one1@%d at=one1@%d' % (fire + 600, fire), o
 # CronDelete removes that id; the last one clears
 cd = lambda j: {'tool_name': 'CronDelete', 'tool_input': {'id': j}}
 c3 = apply(c2, cd('d250bcc6'), T)
-assert c3 == 'kind=cron id=ab12cd34@%d' % (T + 7 * 86400 + 900), c3
+assert c3 == 'kind=cron id=ab12cd34@%d cron=ab12cd34@7_*_*_*_*' % (T + 7 * 86400 + 900), c3
 assert apply(c3, cd('ab12cd34'), T) == ''
 assert apply(c3, cd('nope'), T) == c3
 # both halves at once; stopping the wakeup keeps the cron
 both = apply(v, cc({'id': 'cafe01'}), T)
 assert both.startswith('kind=wakeup,cron next=') and 'id=cafe01@' in both, both
-assert apply(both, sw(stop=True), T) == 'kind=cron id=cafe01@%d' % (T + 7 * 86400 + 900)
+assert apply(both, sw(stop=True), T) == 'kind=cron id=cafe01@%d cron=cafe01@7_*_*_*_*' % (T + 7 * 86400 + 900)
 # a lapsed half is pruned on the next write
 assert apply(v, cc({'id': 'cafe01'}), T + 99999).startswith('kind=cron id=cafe01@')
+# due() — may a round start within S? (issue #1690) Unknown is always due.
+due = M['due']
+assert due(o, now=fire - 3600, within=600) == ('parked', 'cron:one1@%d' % fire)
+assert due(o, now=fire - 500, within=600)[0] == 'due'
+assert due(o, now=fire + 300, within=600)[0] == 'due'          # a late one-shot is still due
+assert due('kind=cron id=old1@%d' % (T + 999), now=T) == ('due', 'cron:old1:unknown')  # pre-#1690 mark
+assert due(v, now=T, within=600) == ('parked', 'wakeup:next=%d' % (T + 1800))
+assert due(v, now=T + 1300, within=600)[0] == 'due'
+assert due('', now=T) == ('none', 'unset')
+# a recurring spec: weekdays 09:07 local
+day = int(_t.mktime((2027, 3, 15, 9, 7, 0, 0, 0, -1)))          # a Monday
+wk = apply('', cc({'id': 'wk1'}, cron='7  9 * * 1-5'), day - 86400)
+assert 'cron=wk1@7_9_*_*_1-5' in wk, wk
+assert due(wk, now=day - 3 * 3600)[0] == 'parked'
+assert due(wk, now=day - 300)[0] == 'due'
+assert due(wk, now=day + 600)[0] == 'due'                      # within the 15-min jitter
+assert due(wk, now=day + 1200)[0] == 'parked'
+assert due(wk, now=day + 5 * 86400 - 300)[0] == 'parked'       # Saturday: no round
+cf = M['cron_fires']
+assert cf('*/15_*_*_*_*', day, day + 480) is True       # 09:15
+assert cf('0_0_13_*_5', day, day + 86400) is False            # DoM/DoW OR rule: neither matches
+assert cf('7_9_*_JAN_*', day, day + 60) is None                # names → unreadable → due
+assert due('kind=cron id=n1@%d cron=n1@61_*_*_*_*' % (T + 9999), now=T)[0] == 'due'  # bad spec → unknown
+# one parked + one due job: due wins; CronDelete drops the spec with the id
+assert due(apply(wk, cc({'id': 'x9'}, cron='*/5 * * * *'), day - 3 * 3600), now=day - 3 * 3600)[0] == 'due'
+assert 'wk1' not in apply(wk, cd('wk1'), day)
 # malformed values read as none; unset reads unset
 assert status('garbage next=x id=@@', now=T) == ('none', 'expired')
 assert status('', now=T) == ('none', 'unset')

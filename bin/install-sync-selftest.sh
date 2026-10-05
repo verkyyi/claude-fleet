@@ -184,6 +184,24 @@ T1=$(st deferred_since); case "$T1" in ''|-|*[!0-9]*) fail "E: deferred_since no
 printf 'looping\n' > "$WORK/tmux-states/f1"; sleep 1; run
 eq "E: still deferred on looping" deferred "$(st result)"
 eq "E: deferred_since kept across ticks" "$T1" "$(st deferred_since)"
+# a Loop parked between rounds is idle (issue #1690): only the waking window counts
+NOW=$(date +%s); FAR=$((NOW + 5 * 3600))
+printf 'looping|loop|kind=cron id=j1@%s at=j1@%s\nwaking||\n' "$((FAR + 600))" "$FAR" > "$WORK/tmux-states/f1"; run
+contains "E: a parked cron loop is not busy" "$(st reason)" "busy window(s) on f1:1"
+printf 'looping|loop|kind=wakeup next=%s ttl=3600\n' "$((NOW + 3000))" > "$WORK/tmux-states/f1"; run
+eq "E: a parked wakeup loop alone does not defer" updated "$(st result)"
+eq "E: moved under a parked loop" "$C3" "$(hd)"
+git -C "$CO" reset -q --hard "$C2"
+# …but a round due within the margin, an old mark (no at=/cron=), a children/bg
+# wait or a classifier `looping` with no wait all stay busy
+printf 'looping|loop|kind=cron id=j1@%s at=j1@%s\nlooping|loop|kind=cron id=j2@%s\nlooping|loop,bg|kind=cron id=j1@%s at=j1@%s\nlooping||\n' \
+  "$((NOW + 660))" "$((NOW + 60))" "$((FAR + 600))" "$((FAR + 600))" "$FAR" > "$WORK/tmux-states/f1"; run
+eq "E: unknown / due loops still defer" deferred "$(st result)"
+contains "E: …all four counted" "$(st reason)" "busy window(s) on f1:4"
+printf 'looping|loop|kind=cron id=j1@%s at=j1@%s\n' "$((FAR + 600))" "$FAR" > "$WORK/tmux-states/f1"
+FLEET_INSTALL_LOOP_MARGIN_SECS=$((6 * 3600)) run
+eq "E: the margin is FLEET_INSTALL_LOOP_MARGIN_SECS" deferred "$(st result)"
+printf 'looping\n' > "$WORK/tmux-states/f1"
 printf 'waking\n' > "$WORK/tmux-states/f1"; run
 eq "E: still deferred on waking" deferred "$(st result)"
 # a busy window on a fleet whose server is DOWN is no fleet at all
