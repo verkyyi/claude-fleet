@@ -18,6 +18,45 @@ key_repo_split() { # <key> → sets krepo (hosted owner/name, or empty) + kbare
     kbare=${1#*:} ;;
   esac
 }
+# workers_busy <socket> <session> → `<window_id> <looping|bg>` per window whose
+# turn is over but whose work is not (issue #1607). One list-windows, and the
+# process table read only when a window could hold a Bash-tool job: a window
+# mid-turn is already `working`, and a Codex agent has no cheap answer (its
+# column stays empty — the hub then knows what it knew before).
+workers_busy() {
+  local sock="$1" s="$2" wid ppid st loop agent cands='' pairs
+  # US-separated: a TAB is IFS whitespace, so `read` would collapse an empty @loop
+  while IFS=$'\037' read -r wid ppid st loop agent; do
+    [ -n "$wid" ] || continue
+    case "$st" in working|looping|waking) continue ;; esac
+    if [ "$st" = done ] && [ -n "$loop" ] \
+       && python3 "$BIN/fleet_loop_mark.py" status --value "$loop" >/dev/null 2>&1; then
+      printf '%s looping\n' "$wid"; continue
+    fi
+    [ "$agent" = codex ] || [ -z "$ppid" ] || cands="$cands $wid:$ppid"
+  done < <(tmux -u -L "$sock" list-windows -t "=$s" \
+             -F $'#{window_id}\037#{pane_pid}\037#{@claude_state}\037#{@loop}\037#{@cc_agent}' 2>/dev/null)
+  [ -n "$cands" ] || return 0
+  # `<pane pid> <claude pid>` pairs, then: does that Claude have a Bash-tool
+  # shell (`…/shell-snapshots/snapshot-…` in its argv) among its direct children?
+  # shellcheck disable=SC2086  # the pane pids are one word each
+  pairs=$(fleet_pane_claude_pids $(printf '%s\n' $cands | sed 's/^.*://')) || pairs=''
+  [ -n "$pairs" ] || return 0
+  ps -axo ppid=,command= 2>/dev/null | awk -v cands="$cands" -v pairs="$pairs" '
+    BEGIN {
+      n = split(pairs, pl, "\n")
+      for (i = 1; i <= n; i++) { split(pl[i], f, " "); cl[f[1]] = f[2] }
+    }
+    index($0, "/shell-snapshots/snapshot-") { bg[$1] = 1 }
+    END {
+      n = split(cands, c, " ")
+      for (i = 1; i <= n; i++) {
+        w = c[i]; p = w; sub(/:.*/, "", w); sub(/^[^:]*:/, "", p)
+        if ((p in cl) && (cl[p] in bg)) print w " bg"
+      }
+    }'
+}
+
 case "$mode" in
   inventory)
     # The fleet's OWN identity — its conf's first repo and checkout — is what the
@@ -62,11 +101,19 @@ case "$mode" in
     # Column 13 (issue #1646): the session's lifelong identity (@fleet_id), so the
     # hub finds a worker by the `<fleet UUID>/<fleet_id>` its children hold.
     xfmt=$'\t#{window_name}\t#{@origin_wid}\t#{@claude_needs}\t#{@fleet_id}'
+    # Column 14 (issue #1607): `busy=<why>` — is a window whose turn is over still
+    # working, as only THIS machine can see? `looping` = a `done` window whose
+    # @loop still holds a round (#1331); `bg` = its Claude still owns a Bash-tool
+    # job (a run_in_background acceptance run, a `--wait` gate waiter — the cheap
+    # half of fleet_window_bg_busy, #864); empty = no. The epic backstop on
+    # another machine reads it off the hub (a worker mid-acceptance owns its
+    # merge, #921). Always present and always `busy=`-prefixed, so a window name
+    # holding a tab can never pass for it.
     if ! fleet_multirepo "$sess"; then
-      tmux -u -L "$sock" list-windows -t "=$sess" -F "$fmt$xfmt"
+      rows=$(tmux -u -L "$sock" list-windows -t "=$sess" -F "$fmt$xfmt") || exit 1
     else
       rows=$(tmux -u -L "$sock" list-windows -t "=$sess" -F "$fmt#{@repo}$xfmt") || exit 1
-      while IFS= read -r row; do
+      rows=$(while IFS= read -r row; do
         [ -n "$row" ] || continue
         fi=${row##*$'\t'}; row=${row%$'\t'*}
         nd=${row##*$'\t'}; row=${row%$'\t'*}
@@ -75,8 +122,14 @@ case "$mode" in
         r=${row##*$'\t'}; row=${row%$'\t'*}
         [ -n "$r" ] || r=$(fleet_window_repo "$sess" "${row%%$'\t'*}")
         printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$row" "${r:-?}" "$nm" "$ow" "$nd" "$fi"
-      done <<<"$rows"
+      done <<<"$rows")
     fi
+    busy=$(workers_busy "$sock" "$sess")
+    while IFS= read -r row; do
+      [ -n "$row" ] || continue
+      b=''; [ -z "$busy" ] || b=$(printf '%s\n' "$busy" | awk -v w="${row%%$'\t'*}" '$1 == w { print $2; exit }')
+      printf '%s\tbusy=%s\n' "$row" "$b"
+    done <<<"$rows"
     ;;
   ready)
     # Can this login take a NEW session (issue #1475)? The node's heartbeat

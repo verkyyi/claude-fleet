@@ -420,7 +420,7 @@ sessions = [
     s(u, "elsewhere", me, "issue-1420", issue=1420, name="local-one"),           # this fleet: dropped
     s(f, "mini2.local", me, "issue-1423", issue=1423, name="侧边栏", origin_wid=u + "/issue-1419"),
     s(f, "mini2.local", me, "issue-1500", issue=1500, name="孙", origin_wid=f + "/issue-1423", seen="2026-10-04T10:05:00Z"),
-    s(f, "mini2.local", me, "issue-1600", issue=1600, name="epic-kid"),          # sub-issue of local 1419
+    s(f, "mini2.local", me, "issue-1600", issue=1600, name="epic-kid", busy="bg"),  # sub-issue of local 1419; #1607 busy
     s(f, "mini2.local", me, "issue-1501", issue=1501, name="remote-sub"),        # sub-issue of REMOTE 1500
     s(f, "mini2.local", me, "issue-1700", issue=1700, name="sleeper", lifecycle="sleeping"),
     s(f, "mini2.local", me, "issue-1800", issue=1800, name="asker", state="needs", needs="ask"),
@@ -457,6 +457,8 @@ eq   "E: one #node per other machine from the hub's list: YOUR session count, it
 eq   "E: parent in THIS fleet → its bare key"  "m4|online|working|侧边栏|issue-1419|" "$(rrow issue-1423)"
 eq   "E: parent elsewhere → its worker_id"     "m4|online|working|孙|$F/issue-1423|" "$(rrow issue-1500)"
 eq   "E: no @origin_wid → the sub-issue parent (local)"  "m4|online|working|epic-kid|issue-1419|" "$(rrow issue-1600)"
+eq   "E: the node's busy word rides as field 14 (#1607), empty where it has none" "bg|" \
+     "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v a="wid:$F/issue-1600" -v b="wid:$F/issue-1423" '$1 == a { x = $14 } $1 == b { y = $14 } END { print x "|" y }')"
 eq   "E: no @origin_wid → the sub-issue parent (remote)" "m4|online|working|remote-sub|$F/issue-1500|" "$(rrow issue-1501)"
 eq   "E: a sleeping lifecycle is the row's state" "m4|online|sleeping|sleeper||" "$(rrow issue-1700)"
 eq   "E: what the window needs rides along (field 10)" "m4|online|needs|asker||ask" "$(rrow issue-1800)"
@@ -466,7 +468,7 @@ eq   "E: this fleet's own session is a LOCAL row (#1480): local=1, this machine'
      "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$U/issue-1420" '$1 == w { print $8 "|" $11 "|" $12 "|" $2 "|" $3 }')"
 eq   "E: a row on another machine says local=0, no wid" "0|" \
      "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$F/issue-1423" '$1 == w { print $11 "|" $12 }')"
-eq   "E: every row carries the three appended fields (local, wid, via — #1480, #1488)" "" "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" '/^wid:/ && NF != 13')"
+eq   "E: every row carries the four appended fields (local, wid, via, busy — #1480, #1488, #1607)" "" "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" '/^wid:/ && NF != 14')"
 eq   "E: a hub answer's rows are via=hub" "" "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" '/^wid:/ && $13 != "hub"')"
 hasnt "E: another login's session is not shown" "$R" "theirs"
 hasnt "E: a session with no worker_id is not shown" "$R" "no-id"
