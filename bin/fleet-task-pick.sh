@@ -141,7 +141,7 @@ if [ "$POPUP" = 1 ]; then
   # (hub-zoom.sh) takes the old jump instead of leaving a dead key.
   exec 8<&- 9<&-   # the FIFOs' job is done: a spawn below must not inherit them
   [ -e "$res.ran" ] || exit 3
-  fleet_home_end done   # the picker's own marks are in the trace file already
+  fleet_home_end 'done'   # the picker's own marks are in the trace file already
   # The meter (issue #897): a ⌂/F9 that opened this instead of the hub is a trip
   # that did NOT happen — recorded like C4's `*-sidebar` landings; the 4th
   # column is the trace (issue #1611).

@@ -157,6 +157,8 @@ for k in range(n):
         if buf.find(pat, max(0, start - len(pat))) >= 0:
             ms = int((time.monotonic() - t1) * 1000); break
     res.append(ms); print('tap %d %s' % (k + 1, 'TIMEOUT' if ms is None else ms), flush=True)
+    if ms is None and k == 0:   # what DID the client get? (a CI runner cannot be watched)
+        print('diag %d bytes since the tap: %r' % (len(buf) - start, bytes(buf[start:start + 1500])), flush=True)
     os.write(fd, b'\x1b')
     t2 = time.monotonic()
     while time.monotonic() - t2 < 10:
@@ -170,6 +172,8 @@ EOF
 env -u TMUX -u TMUX_PANE python3 "$WORK/client.py" "$REAL_TMUX" "$SOCK" "$TAPS" > "$WORK/taps" 2>"$WORK/client.err"
 grep -q '^noclient' "$WORK/taps" && { printf 'selftest: the pty client never attached — SKIP\n' >&2; cat "$WORK/client.err" >&2; exit 0; }
 median=$(awk '$1=="median"{print $2}' "$WORK/taps")
+printf 'tmux: %s\n' "$(tmux -V 2>/dev/null)"
+grep '^diag' "$WORK/taps" | cut -c1-1600
 printf 'taps: %s %s locale=%s\n' "$(awk '$1=="tap"{printf "%s ", $3}' "$WORK/taps")" "$FZF_NOTE" "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}"
 
 # --- A. the trace column ------------------------------------------------------
@@ -178,12 +182,12 @@ n=$(grep -c "	home-pick" "$LOG" 2>/dev/null || echo 0)
 while IFS='	' read -r ts from cause extra; do
   [ "$cause" = home-pick ] || continue
   case "$extra" in ms=[0-9]*) ;; *) fail "A: no ms= column on: $ts $from $cause [$extra]"; continue ;; esac
-  for m in conf side sync pick popup open keys rows fzf close done; do
+  for m in conf side sync pick popup open keys rows fzf close 'done'; do
     case " $extra " in *" $m:"[0-9]*) ;; *) fail "A: mark '$m' missing: $extra" ;; esac
   done
   fz=$(printf '%s\n' "$extra" | tr ' ' '\n' | awk -F: '$1=="fzf"{print $2}')
   [ "${extra#ms=}" != "$extra" ] && [ "${extra#ms=}" = "$fz ${extra#*ms=$fz }" ] || fail "A: ms= is not the fzf mark: $extra"
-  [ "$(printf '%s\n' "$extra" | awk '{print $NF}' | cut -d: -f1)" = done ] || fail "A: done is not last: $extra"
+  [ "$(printf '%s\n' "$extra" | awk '{print $NF}' | cut -d: -f1)" = 'done' ] || fail "A: done is not last: $extra"
   dn=$(printf '%s\n' "$extra" | tr ' ' '\n' | awk -F: '$1=="done"{print $2}')
   [ "${dn:-0}" -ge "${fz:-0}" ] || fail "A: done ($dn) before fzf ($fz): $extra"
 done < "$LOG"
@@ -206,7 +210,8 @@ drawn=$(tmux list-panes -t t:issue-1 -F '#{@sidebar}' 2>/dev/null | grep -c '^1$
 [ "$(tmux display-message -p -t t:issue-1 '#{window_panes}')" = 1 ] || fail "B: the task window gained a pane"
 pre=$(ls "$WORK"/fleet-task-pick.* 2>/dev/null)
 [ -z "$pre" ] || fail "B: pre-read files / FIFOs left behind: $pre"
-[ -s "$WORK/.claude-dash/task-pick-keys."* ] 2>/dev/null || fail "B: the keymap cache was not written"
+kc=0; for f in "$WORK/.claude-dash"/task-pick-keys.*; do [ -s "$f" ] && kc=1; done
+[ "$kc" = 1 ] || fail "B: the keymap cache was not written"
 
 # --- C. the budget --------------------------------------------------------------
 cores=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 1)
@@ -231,6 +236,7 @@ FN=$(sed -n '/^dash_window() {/,/^}/p' "$BIN/hub-zoom.sh")
 D="$WORK/d"; mkdir -p "$D/bin" "$D/conf/fleets/t"
 dw() {   # <fleet.conf> <fleet.settings> <fleet conf> [env] → 0 iff the hub window is on
   printf '%s' "$1" > "$D/fleet.conf"; printf '%s' "$2" > "$D/conf/fleet.settings"; printf '%s' "$3" > "$D/conf/fleets/t/conf"
+  # shellcheck disable=SC2034  # BIN / SESS are dash_window's globals, read by the eval'd body
   ( BIN="$D/bin"; SESS=t; FLEET_CONF_DIR="$D/conf"
     if [ -n "${4:-}" ]; then export FLEET_DASH_WINDOW="$4"; else unset FLEET_DASH_WINDOW; fi
     eval "$FN"; dash_window )
