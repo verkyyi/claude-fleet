@@ -571,7 +571,23 @@ def eligible(row, now=None):
             and row.get('limited_until', 0) <= now and row.get('score') is not None)
 
 
+def auth_excluded(data, allowed=('claude', 'codex')):
+    """Every account an automatic pick skips for its LOGIN (issue #1670): one row
+    each, reason `auth:<state>` — what `choose` returns beside its decision and
+    what `failover-status` lists, so a waiting session says WHICH login to fix."""
+    return [dict(state='excluded', agent=a.get('agent'), key=a.get('key'),
+                 label=a.get('label') or a.get('profile') or '',
+                 reason='auth:' + (a.get('login') or 'unknown'), detail=a.get('login_reason') or '')
+            for a in data.get('accounts', []) if a.get('agent') in allowed and a.get('login') not in LOGIN_OK]
+
+
 def choose(data, agent, exclude=(), current='', allowed=('claude', 'codex')):
+    result = _choose(data, agent, exclude, current, allowed)
+    result['excluded'] = auth_excluded(data, allowed)
+    return result
+
+
+def _choose(data, agent, exclude=(), current='', allowed=('claude', 'codex')):
     now = time.time()
     excluded = set(exclude)
     for kind in [agent] + [a for a in allowed if a != agent]:
@@ -761,6 +777,8 @@ def main():
     q.add_argument('--agent', choices=('claude', 'codex'), required=True)
     for name in ('label', 'profile', 'home', 'account'):
         q.add_argument('--' + name, default='')
+    q = sub.add_parser('claude-login')  # issue #1670: the spawn-path pick's judge for hub labels
+    q.add_argument('labels', nargs='+')
     q = sub.add_parser('bench-codex'); q.add_argument('key'); q.add_argument('until', type=int); q.add_argument('reason')
     q = sub.add_parser('launch'); q.add_argument('--agent', choices=('claude', 'codex'), required=True); q.add_argument('argv', nargs=argparse.REMAINDER)
     a = p.parse_args()
@@ -779,6 +797,10 @@ def main():
         if result['verdict'] == 'refuse':
             print('fleet-account: target-auth: ' + result['reason'], file=sys.stderr)
             return 1
+        return 0
+    elif a.command == 'claude-login':
+        for label in a.labels:
+            print('%s\t%s' % (label, claude_login(label)))
         return 0
     elif a.command == 'bench-codex': bench(a.key, a.until, a.reason); return 0
     elif a.command == 'launch': return launch(a.agent, a.argv[1:] if a.argv[:1] == ['--'] else a.argv)
