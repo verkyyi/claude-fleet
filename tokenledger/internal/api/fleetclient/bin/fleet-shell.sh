@@ -113,8 +113,8 @@ this_machine() {
 # shell_env <machine-json> — sets SHELL_ENV (one `NAME=value` per line) and the
 # derived globals; the names listed are the ones the pieces read.
 shell_env() {
-  local aliases="${FLEET_NODE_ALIASES:-}" n v
-  [ -n "$aliases" ] || aliases=$(printf '%s' "${1:-}" | python3 -c '
+  local node_aliases="${FLEET_NODE_ALIASES:-}" n v
+  [ -n "$node_aliases" ] || node_aliases=$(printf '%s' "${1:-}" | python3 -c '
 import json, sys
 try:
     d = json.load(sys.stdin)
@@ -127,7 +127,7 @@ for m in d.get("machines") or []:
         out.append("%s=%s" % (h, a))
 print(" ".join(out))
 ' 2>/dev/null)
-  FLEET_NODE_ALIASES="$aliases"
+  FLEET_NODE_ALIASES="$node_aliases"
   SHELL_ENV="FLEET_SHELL=1
 FLEET_SHELL_SESSION=$SESS
 FLEET_HUB_SESSIONS_CLIENT=$SESS

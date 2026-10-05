@@ -154,11 +154,11 @@ stop_turn() {
   TMUX="$sp,0,0" TMUX_PANE="$PANE" bash "$IBIN/set-claude-state.sh" "done" </dev/null
 }
 wait_request() {
-  local expected=$1 status attempt
+  local expected=$1 state attempt
   for ((attempt=0; attempt<100; attempt++)); do
-    status=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["state"])' "$REQUEST/state.json")
-    if [ "$status" = "$expected" ] && [ -z "$(field agent_transfer_request)" ]; then return 0; fi
-    [ "$status" != failed ] || [ "$expected" = failed ] || break
+    state=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["state"])' "$REQUEST/state.json")
+    if [ "$state" = "$expected" ] && [ -z "$(field agent_transfer_request)" ]; then return 0; fi
+    [ "$state" != failed ] || [ "$expected" = failed ] || break
     sleep 0.1
   done
   OUT=$(cat "$REQUEST/state.json" "$REQUEST/wait.log")

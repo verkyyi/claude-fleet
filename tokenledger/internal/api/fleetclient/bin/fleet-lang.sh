@@ -58,9 +58,13 @@ FLEET_LANG_RULE_NOTICE="This notice is in English; keep replying in your session
 # The $0 guard is load-bearing, not ceremony: a sourced file inherits the CALLER's
 # positional parameters, so a bare `case "$1"` here would fire on any script that
 # happens to be invoked as `… seed` (or `-h`) and sources fleet-lib.sh. $0 is the
-# outer script when sourced and this file only when executed.
-case "${0##*/}" in
-  fleet-lang.sh)
+# outer script when sourced and this file only when executed — under bash. zsh's
+# `source` sets $0 to the SOURCED file, so there ZSH_EVAL_CONTEXT (…:file) is what
+# says "sourced" (issue #1633: every skill's `source fleet-lib.sh` in the Bash
+# tool, which runs zsh here, printed the usage line below).
+case "${0##*/}:${ZSH_EVAL_CONTEXT:-}" in
+  fleet-lang.sh:*file*) : ;;
+  fleet-lang.sh:*)
     case "${1:-}" in
       resume) printf '%s\n' "$FLEET_LANG_RULE_RESUME" ;;
       seed)   printf '%s\n' "$FLEET_LANG_RULE_SEED" ;;
