@@ -4051,6 +4051,7 @@ fleet_epic_parent_key() {
 #     (a #516 source-fleet name) pass: none of them is a session to report to.
 fleet_origin_gate() {
   local sess="${1:-}" ex="${2:-}" o="${3:-}" ow="${4:-}" v
+  [ "${FLEET_ORIGIN_GATE:-1}" = 0 ] && return 0   # seam: a test whose subject is not the parent
   [ -n "$ow" ] && return 0
   if [ -z "$ex" ] && fleet_pane_lost; then
     printf 'cannot tell who is spawning — $TMUX is set but $TMUX_PANE is not; run it from a scratch/worker pane, or pass --origin hub (you, the operator) / --origin <key>'
