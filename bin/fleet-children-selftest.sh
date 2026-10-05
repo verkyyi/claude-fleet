@@ -316,4 +316,39 @@ assert "dispatch" not in d["children"][0], d
 PY
 CHECKS=$((CHECKS + 1))
 
+# --- 5. A CHILD ON ANOTHER MACHINE READS ITS OWN STATE (issue #1607) -------------
+# `gone · m4` / `m4 remote` said nothing about whether it is still at work. With the
+# hub's session table (--hub-cache, global/remote_<sess>) the row carries what the
+# machine says — its `busy` word first, `lost` for a machine the hub lost — and
+# the text shows `m4 bg`. A cache past FLEET_HUB_RETAIN_SECS is no answer; no
+# --hub-cache is the one-machine view, byte for byte.
+RD="$WORK/remote"; mkdir -p "$RD/g"
+US=$(printf '\037'); now=$(date +%s)
+rrow() { local IFS="$US"; printf '%s\n' "wid:u/issue-$1${US}m4${US}${4:-online}${US}$1${US}o/r${US}$2${US}claude${US}n${US}${US}${US}0${US}${US}hub${US}$3"; }
+{ printf '#ts%s%s\n' "$US" "$now"; rrow 501 'done' bg; rrow 502 'done' ''; rrow 504 idle '' lost; } > "$RD/g/remote_s"
+printf '%s\n' "$now" > "$RD/g/hub_ok"
+printf '%s\n' '{"seq": 1, "ts": "2026-10-05T00:00:00Z", "child": "issue-501", "state": "WAITING", "node": "m4", "pr": "9"}' \
+  '{"seq": 2, "ts": "2026-10-05T00:00:00Z", "child": "issue-502", "state": "WAITING", "node": "m4"}' \
+  '{"seq": 3, "ts": "2026-10-05T00:00:00Z", "child": "issue-503", "state": "WAITING", "node": "m4"}' \
+  '{"seq": 4, "ts": "2026-10-05T00:00:00Z", "child": "issue-504", "state": "WAITING", "node": "m4"}' > "$RD/scratch-5.ndjson"
+ROUT=$(printf '%s\n' "m4|remote||issue-502|scratch-5||" \
+  | python3 "$BIN/fleet-children.py" show --dir "$RD" --parent scratch-5 --hub-cache "$RD/g/remote_s" --json)
+python3 - "$ROUT" <<'PY2' || fail "remote: a child on another machine must carry that machine's word (see above)" "$ROUT"
+import json, sys
+k = {c["child"]: c for c in json.loads(sys.argv[1])["children"]}
+assert (k["issue-501"]["remote_state"], k["issue-501"]["remote_node"]) == ("bg", "m4"), k["issue-501"]
+assert k["issue-502"]["remote_state"] == "done" and k["issue-502"]["state"] == "remote", k["issue-502"]
+assert "remote_state" not in k["issue-503"], k["issue-503"]
+assert k["issue-504"]["remote_state"] == "lost", k["issue-504"]
+PY2
+CHECKS=$((CHECKS + 1))
+RTXT=$(printf '' | python3 "$BIN/fleet-children.py" show --dir "$RD" --parent scratch-5 --hub-cache "$RD/g/remote_s")
+has "remote: the text shows the machine's word, not \`gone · m4\`" 'm4 bg' "$RTXT"
+has "remote: a child the hub has no row for still reads gone · m4" 'gone · m4' "$(printf '%s\n' "$RTXT" | grep issue-503)"
+printf '%s\n' "$((now - 1000))" > "$RD/g/hub_ok"
+RTXT=$(printf '' | python3 "$BIN/fleet-children.py" show --dir "$RD" --parent scratch-5 --hub-cache "$RD/g/remote_s")
+eq "remote: a hub silent past FLEET_HUB_RETAIN_SECS is no answer" 4 "$(printf '%s\n' "$RTXT" | grep -c 'gone · m4')"
+eq "remote: degenerate — no --hub-cache, the view is unchanged" \
+  "$(printf '' | python3 "$BIN/fleet-children.py" show --dir "$RD" --parent scratch-5)" "$RTXT"
+
 printf 'fleet-children selftest: OK (%d checks)\n' "$CHECKS"

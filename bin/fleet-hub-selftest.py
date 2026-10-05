@@ -44,7 +44,7 @@ class Sandbox:
         self.fleet_conf.write_text('FLEET_REPO="example/project"\nFLEET_MAIN="/fixture/project"\nFLEET_MAX_SESSIONS=3\nFLEET_ISSUE_BRIDGE=1\n')
         for filename in ("fleet-control.py", "fleet_control.py", "fleet_hub_common.py", "fleet_config_write.py",
                          "fleet-lib.sh", "fleet-control-read.sh", "fleet-hub.py", "fleet_hub.py", "fleet_hub_mcp.py",
-                         "fleet-gh.sh", "fleet-gh-lib.sh", "fleet-issue-cache.py"):
+                         "fleet-gh.sh", "fleet-gh-lib.sh", "fleet-issue-cache.py", "fleet_loop_mark.py"):
             shutil.copy2(BIN / filename, self.bin / filename)
         self.tools = self.root / "tools"
         self.tools.mkdir()
@@ -67,6 +67,13 @@ if "list-windows" in sys.argv:
     # the tenth column of workers.tsv.
     fmt=sys.argv[sys.argv.index("-F") + 1]
     keep="#{@repo}" in fmt
+    if "#{pane_pid}" in fmt and data.exists():
+        # the busy read (issue #1607): window, pane pid (none — no process tree
+        # here), @claude_state, @loop (the ELEVENTH column of workers.tsv), @cc_agent
+        for row in data.read_text().splitlines():
+            cols=row.split("\t")
+            print("\x1f".join([cols[0], "", cols[4], cols[10] if len(cols) > 10 else "", cols[5]]))
+        sys.exit(0)
     if data.exists():
         for row in data.read_text().splitlines():
             cols=row.split("\t")
@@ -305,6 +312,20 @@ class HubTests(HubFixture):
         finally:
             subprocess.run([*argv, "kill-server"], env=env, stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL, timeout=10)
+
+    def test_busy_column_marks_a_held_loop_round(self):
+        """issue #1607: a `done` window whose @loop still holds a round is busy on
+        the workers table (`looping`), so the epic backstop on ANOTHER machine
+        never merges under a worker between /loop rounds; a plain `done` is not."""
+        future = int(time.time()) + 3600
+        rows = ["@12\t123\t0\t/fixture/issue-123\tdone\tclaude\ta1\t\t\t\tkind=wakeup next=%d ttl=60" % future,
+                "@13\t124\t0\t/fixture/issue-124\tdone\tclaude\ta2\t\t\t\t",
+                "@14\t125\t0\t/fixture/issue-125\tworking\tclaude\ta3\t\t\t\tkind=wakeup next=%d ttl=60" % future]
+        (self.node.conf / "workers.tsv").write_text("".join(r + "\n" for r in rows))
+        ws = {w["window_id"]: w for w in self.call("fleet_status", {"fleet_id": self.fleet})["workers"]}
+        self.assertEqual((ws["@12"].get("busy"), ws["@13"].get("busy"), ws["@14"].get("busy")),
+                         ("looping", None, None))
+        self.assertEqual(ws["@12"]["worker_id"], self.worker("issue-123"))
 
     def test_worker_identity_is_the_binding_not_the_window(self):
         self.node.windows(("@12", 123, False, "/fixture/issue-123"), ("@13", None, True, "/fixture/project-scratch-4"),

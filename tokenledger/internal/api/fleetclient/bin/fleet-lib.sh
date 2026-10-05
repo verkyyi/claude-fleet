@@ -888,6 +888,23 @@ EOF
     NF { s = $3; if (s in x) { s = $1; sub(/.*\//, "", s) } print $1 "\t" $2 "\t" s }'
 }
 
+# fleet_hub_repo_shorts <cache> → fleet_repo_shorts' lines for the repos the hub
+# cache's rows name (issue #1680): field 5 of every `wid:` line, owner/name only,
+# sorted — the shell's list has no conf, so its repos are the rows'. Short tags
+# are the derived ones (no conf to carry an override), deduplicated the same way.
+fleet_hub_repo_shorts() {
+  [ -s "${1:-}" ] || return 0
+  awk -F'\037' '$1 ~ /^wid:/ && $5 ~ /^[^\/ ]+\/[^\/ ]+$/ { print $5 }' "$1" | LC_ALL=C sort -u \
+  | awk '{
+      n = $0; sub(/.*\//, "", n); s = tolower(n); gsub(/[^a-z0-9]+/, " ", s); k = split(s, w, " "); o = ""
+      if (k >= 2) { for (i = 1; i <= k && length(o) < 3; i++) o = o substr(w[i], 1, 1) }
+      else o = substr(w[1], 1, 2)
+      sl = $0; gsub(/\//, "-", sl); gsub(/[^A-Za-z0-9._-]/, "", sl)
+      r[NR] = $0; g[NR] = sl; t[NR] = o; c[o]++ }
+    END { for (i = 1; i <= NR; i++) { o = t[i]; if (c[o] > 1) { o = r[i]; sub(/.*\//, "", o) }
+                                       print r[i] "\t" g[i] "\t" o } }'
+}
+
 # fleet_repo_short_of <sess> <repo> → that hosted repo's short tag ('' if not hosted).
 fleet_repo_short_of() {
   local want; want=$(fleet_norm_repo "${2:-}")
@@ -936,12 +953,21 @@ _fleet_repo_name_v() {
 #             by fleet_repo_name (bare, owner/name on a collision; issue #995);
 #   RNREPO    how many repos are hosted (the unknown/no-repo groups sort after).
 # A fleet with no repos/ dir costs nothing: the directory test returns first.
+# THE SHELL (FLEET_SHELL=1, issue #1680) has no conf to host a repo: its list is
+# the hub's rows (FLEET_SIDEBAR_SOURCE=hub, #1480), across machines, so its repos
+# are the ones those rows name — each `wid:` line's repo field in the hub cache
+# (global/remote_<sess>, fleet-hub-sessions.sh client mode), sorted, never a
+# machine's conf. 2+ of them group the list exactly as a 2+ repo fleet does.
 # shellcheck disable=SC2034  # RMANY/RSHORTMAP/RGRPMAP/RHEADS/RNREPO are caller-facing OUTPUT globals
 fleet_dash_repo_frame() {
   local sess="${1:-}" shorts r s sh all=''
   RMANY=0; RSHORTMAP=$'\n'; RGRPMAP=$'\n'; RHEADS=''; RNREPO=0
-  [ -d "$FLEET_CONF_DIR/fleets/${sess:-_}/repos" ] || return 0
-  shorts=$(fleet_repo_shorts "$sess")
+  if [ ! -d "$FLEET_CONF_DIR/fleets/${sess:-_}/repos" ]; then
+    [ "${FLEET_SHELL:-0}" = 1 ] && [ -n "$sess" ] || return 0
+    shorts=$(fleet_hub_repo_shorts "$FLEET_C/global/remote_$sess")
+  else
+    shorts=$(fleet_repo_shorts "$sess")
+  fi
   case "$shorts" in *$'\n'*) ;; *) return 0 ;; esac          # one repo: nothing to filter
   RMANY=1
   while IFS=$'\t' read -r r s sh; do [ -n "$r" ] && all+=$'\t'"${r##*/}"$'\t'; done <<EOF

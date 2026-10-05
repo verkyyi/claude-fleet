@@ -261,8 +261,13 @@ rslug_v() { rslug=''
 # RMANY=1 only in a fleet hosting 2+ repos; then RHEADS is its group headings
 # (fleet_dash_repo_frame, once a frame). A one-repo fleet has RMANY=0 and every
 # branch below keeps today's path.
+# The shell (FLEET_SHELL=1, issue #1680) has no conf and so no overlay: its repos
+# are the hub rows' own (fleet_dash_repo_frame reads the hub cache), so its list
+# groups and folds like a 2+ repo fleet's — RMULTI stays 0 (no per-repo prmap).
 RMANY=0; RGRPMAP=''; RHEADS=''; RNREPO=0
-[ "$RMULTI" = 1 ] && fleet_dash_repo_frame "$FLEET_SESSION"
+if [ "$RMULTI" = 1 ] || { [ "${FLEET_SHELL:-0}" = 1 ] && [ "$SIDEBAR" = 1 ]; }; then
+  fleet_dash_repo_frame "${FLEET_SESSION:-}"
+fi
 # RGRP=1 iff this frame groups its rows by repo (issue #974): a 2+ repo fleet. A
 # one-repo fleet never groups — its frame stays as it was, heading-free, byte
 # for byte.
@@ -399,7 +404,7 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
   # `local` and `wid` (fields 11/12, #1480) are named so a new cache's needs field
   # stays its own; a cache older than #1480 leaves them empty. `via` (field 13,
   # #1488: hub | node) the same — empty reads as hub.
-  while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid r_via; do
+  while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid r_via _r_busy; do
     case "$r_wid" in
       '#ts')   _rts=$r_node; case "$_rts" in ''|*[!0-9]*) _rts=0 ;; esac; continue ;;
       '#me')   RME=$r_node; continue ;;
@@ -685,6 +690,12 @@ RGFOLD=()
 # (a repo slug is always `owner-name`, so it can never collide) — in a one-repo
 # fleet too, where it is the only heading there is.
 PGRP=-2; PINCNT=0; PINFOLD=0
+# The shell's windows are proxies (no name in WFMT, so pass A never reads their
+# line) and its rows are the hub's: the fold bit is read off its OWN session —
+# one value per client, never per fleet (issue #1680). Only while it groups.
+if [ "${FLEET_SHELL:-0}" = 1 ] && [ "$RGRP" = 1 ] && [ -n "${FLEET_SESSION:-}" ]; then
+  RFOLD=$(tmux show-option -t "=$FLEET_SESSION:" -qv @repo_fold 2>/dev/null) || RFOLD=''
+fi
 case " $RFOLD " in *' pin '*) PINFOLD=1 ;; esac
 if [ "$RGRP" = 1 ] && [ -n "$RFOLD" ]; then
   for _s in $RFOLD; do

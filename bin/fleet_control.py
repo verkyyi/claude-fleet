@@ -165,9 +165,14 @@ class Control:
             # Column 13 (issue #1646): the session's lifelong identity (@fleet_id);
             # the last three columns are then origin_wid, needs and identity.
             extra = {}
+            # Column 14 (issue #1607): `busy=<looping|bg|>` — a turn over but the
+            # work not (a /loop round, a Bash-tool job), which only this machine
+            # can see. Prefixed, so it is never a stray piece of a window name.
+            if len(parts) >= 14 and parts[-1].startswith("busy="):
+                extra["busy"] = parts.pop()[5:] or None
             if len(parts) >= 13:
                 ident = parts[-1] if re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", parts[-1]) else None
-                extra = dict(name=" ".join(parts[9:-3]), origin_wid=parts[-3] or None, needs=parts[-2] or None,
+                extra.update(name=" ".join(parts[9:-3]), origin_wid=parts[-3] or None, needs=parts[-2] or None,
                              identity=ident)
                 parts = parts[:9]
             elif len(parts) >= 12:

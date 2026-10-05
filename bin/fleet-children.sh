@@ -146,5 +146,11 @@ if [ -n "$sess" ] && fleet_hub_on "$sess"; then
 fi
 
 args=(show --dir "$dir" --parent "$KEY" --session "$sess" --since "$SINCE" --prmap "$prmap" --prmap-dir "$prdir")
+# What a child on another machine is doing NOW (issue #1607): the hub's session
+# table, the cache fleet-hub-sessions.sh keeps — read, never fetched. Hub off ⇒
+# not passed, and a one-machine answer is unchanged.
+if [ -n "$sess" ] && fleet_hub_on "$sess" && [ -s "$FLEET_C/global/remote_$sess" ]; then
+  args+=(--hub-cache "$FLEET_C/global/remote_$sess")
+fi
 [ "$JSON" = 1 ] && args+=(--json)
 { rows; remote_rows; } | python3 "$BIN/fleet-children.py" "${args[@]}"

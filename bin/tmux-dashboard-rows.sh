@@ -404,7 +404,7 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
   # `local` and `wid` (fields 11/12, #1480) are named so a new cache's needs field
   # stays its own; a cache older than #1480 leaves them empty. `via` (field 13,
   # #1488: hub | node) the same — empty reads as hub.
-  while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid r_via; do
+  while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid r_via _r_busy; do
     case "$r_wid" in
       '#ts')   _rts=$r_node; case "$_rts" in ''|*[!0-9]*) _rts=0 ;; esac; continue ;;
       '#me')   RME=$r_node; continue ;;

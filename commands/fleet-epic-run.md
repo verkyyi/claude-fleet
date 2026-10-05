@@ -161,7 +161,13 @@ bash ~/.claude/fleet/bin/fleet-pr-verdict.sh <PR> --repo "$FLEET_REPO" -q
   #1110): this fleet's windows by key, then — hub on — the hub's session table
   by (repo, issue), so one running on another machine reads `… hub: working on
   m5` and holds; a hub that has not answered for 10 minutes holds too (`cannot
-  rule out a session elsewhere`) — a failed lookup is never "idle". Exit `0`
+  rule out a session elsewhere`) — a failed lookup is never "idle". A member on
+  another machine is judged by THAT machine's word (issue #1607): its node
+  reports a held `/loop` round or a running Bash-tool job on the hub, so
+  `… hub: bg on m4` / `… hub: looping on m4` holds exactly as it would here; a
+  machine the hub has lost reads `hub: lost on m4` and holds; and with the hub
+  off, a member the ledger places on another machine holds (`on m4, hub off:
+  cannot see it`) rather than reading as gone. Exit `0`
   (`clear: …` — idle / done, no window here and none on the hub (`hub says
   gone`), or its own MERGED ship report is in the ledger) → merge it, **one command, never chained**:
   `~/.claude/fleet/bin/fleet-pr-merge.sh <PR> --repo "$FLEET_REPO" --squash` (re-reads the gate,

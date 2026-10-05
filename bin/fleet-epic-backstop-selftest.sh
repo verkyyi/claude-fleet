@@ -9,6 +9,9 @@
 # up — this fleet's windows (seam), then the hub's session table by (repo, issue) —
 # and a lookup that cannot answer holds the merge. Pure: `--children-json`
 # fixtures, the busy/find seams and a hand-written global/remote_<sess>; no tmux, no gh.
+# Issue #1607: a member on another machine is judged by that machine's word — its
+# `busy` column (a held /loop round, a Bash-tool job), a lost machine is unseen,
+# and a hub that is off cannot clear a child the ledger places elsewhere.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 GATE="$BIN/fleet-epic-backstop.sh"
@@ -105,7 +108,45 @@ hrun issue-95; eq "#1110 a busy row beats an idle twin" 'backstop skipped: child
 hrun issue-90; eq "#1110 a window here still answers first" 'backstop skipped: child busy (issue-90 working)' "$out"
 J2="$WORK/remote.json" hrun issue-96; eq "#1110 a ledger child live on another machine asks the hub" 'backstop skipped: child busy (issue-96 hub: looping on m4)' "$out"
 J2="$WORK/remote.json" hrun issue-94; eq "#1110 …and is clear only when the hub says gone" 'clear: issue-94 no live window (hub says gone)' "$out"
+# --- issue #1607: what only the other machine can see ---------------------------
+# The node's `busy` column (fleet-control-read.sh workers → the hub → the cache's
+# 14th field): a `done` member still holding a /loop round or a Bash-tool job is
+# BUSY, never clear; a row on a machine the hub has lost is unseen, not idle; and
+# with the hub off, a ledger that puts the child on another machine holds too.
+hubrow14() {  # <issue> <state> <node> <busy> [online|lost]
+  local IFS="$US"
+  printf '%s\n' "wid:u/issue-$1${US}$3${US}${5:-online}${US}$1${US}verkyyi/x${US}$2${US}claude${US}name${US}${US}${US}0${US}${US}hub${US}$4"
+}
+{ printf '#ts%s%s\n#me%sm5\n' "$US" "$now" "$US"
+  hubrow14 80 'done' m4 bg; hubrow14 81 'done' m4 looping; hubrow14 82 idle m4 '' lost
+  hubrow14 83 'done' m4 ''; hubrow14 84 idle m4 '' lost; hubrow14 84 working m6 ''
+  hubrow14 85 idle m4 '' lost; hubrow14 85 'done' m6 ''
+} > "$G/remote_s"
+hrun issue-80; eq "#1607 remote done + a Bash-tool job → skip (rc)" 1 "$rc"
+eq "#1607 …the tick line names it and the machine" 'backstop skipped: child busy (issue-80 hub: bg on m4)' "$out"
+hrun issue-81; eq "#1607 remote done + a held /loop round → skip" 'backstop skipped: child busy (issue-81 hub: looping on m4)' "$out"
+hrun issue-82; eq "#1607 a lost machine's row → skip (rc), never its last idle" 1 "$rc"
+case "$out" in *'issue-82 hub: lost on m4'*) CHECKS=$((CHECKS + 1)) ;; *) fail "#1607 lost says where" "$out" ;; esac
+hrun issue-83; eq "#1607 remote ended (done, busy empty) → clear" 'clear: issue-83 hub: done on m4' "$out"; eq "…rc 0" 0 "$rc"
+hrun issue-84; eq "#1607 a working twin still wins over a lost one" 'backstop skipped: child busy (issue-84 hub: working on m6)' "$out"
+hrun issue-85; eq "#1607 a lost twin outranks an idle one" 1 "$rc"
+cat > "$WORK/node.json" <<'JSON'
+{"parent":"scratch-9","session":"s","seq":1,"summary":{},"children":[
+ {"child":"issue-70","bucket":"–","live":false,"window":"","state":"gone","node":"m4","pr":"70","last":{"state":"WAITING","node":"m4"}},
+ {"child":"issue-71","bucket":"▸","live":true,"window":"m4","state":"remote","node":"m4","pr":"71","last":null}
+]}
+JSON
+out=$(CCQUOTA_FLEET=0 bash "$GATE" -L s --children-json "$WORK/node.json" issue-70 2>&1); rc=$?
+eq "#1607 hub off, ledger says m4 → skip (rc)" 1 "$rc"
+eq "#1607 …and says it cannot see" 'backstop skipped: child busy (issue-70 on m4, hub off: cannot see it)' "$out"
+out=$(CCQUOTA_FLEET=0 bash "$GATE" -L s --children-json "$WORK/node.json" issue-71 2>&1)
+eq "#1607 hub off, a remote ledger row → skip" 'backstop skipped: child busy (issue-71 on m4, hub off: cannot see it)' "$out"
+out=$(CCQUOTA_FLEET=0 bash "$GATE" -L s --children-json "$J" issue-5 2>&1)
+eq "#1607 degenerate: hub off, no node → the one-machine answer, byte for byte" 'clear: issue-5 no live window' "$out"
+J2="$WORK/node.json" hrun issue-70; eq "#1607 hub on: a ledger m4 child no hub row names → clear (ended there)" 'clear: issue-70 no live window (hub says gone)' "$out"
+
 printf '%s\n' "$((now - 1000))" > "$G/hub_ok"
+hrun issue-80; eq "#1607 hub silent past FLEET_HUB_RETAIN_SECS → skip, whatever the row said" 1 "$rc"
 hrun issue-97; eq "#1110 a hub silent past FLEET_HUB_RETAIN_SECS → skip, never idle (rc)" 1 "$rc"
 case "$out" in *'cannot rule out a session elsewhere: hub silent'*) CHECKS=$((CHECKS + 1)) ;; *) fail "#1110 stale hub says why" "$out" ;; esac
 rm -f "$G/remote_s" "$G/hub_ok"

@@ -113,7 +113,7 @@
 #       sessions there, last-seen the hub's newest observation of it. From the
 #       hub's `nodes` list; derived from the sessions on a hub older than #1475.
 # then one row per session:
-#   wid:<worker_id>  node  online|lost  issue  repo  state  agent  name  origin  needs  local  wid  via
+#   wid:<worker_id>  node  online|lost  issue  repo  state  agent  name  origin  needs  local  wid  via  busy
 # `origin` is already in the viewing fleet's terms: a parent in THIS fleet is its
 # bare key (`issue-1419`, exactly what a local @origin holds), a parent elsewhere is
 # its full worker_id; no @origin_wid ⇒ the issue's sub-issue parent (the collector's
@@ -127,7 +127,12 @@
 # appended after them, on the rows and the #node lines alike: `hub` — the hub's
 # answer — or `node` — the machine itself, over the shell's direct connection
 # while the hub is silent (below). A reader that dims rows for the hub's silence
-# spares a `node` line: that machine answered.
+# spares a `node` line: that machine answered. `busy` (#1607, rows only) is the
+# node's word for a window whose turn is over but whose work is not — `looping`
+# (a /loop round still held) or `bg` (a Bash-tool job still running) — empty
+# otherwise; fleet-epic-backstop.sh reads it so a member mid-acceptance on
+# another machine is never merged under it. A `read` naming `via` last must name
+# one more.
 #
 # THE HUB SILENT, IN THE SHELL (issue #1488, EPIC #1479 R3) — client mode only.
 # The shell has no fleet of its own, so when the hub goes quiet its list has
@@ -569,7 +574,7 @@ for s in sessions:
                      issue=w.get("issue") or "", repo=w.get("repo") or "",
                      state=w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or ""),
                      agent=w.get("agent") or "", name=w.get("name") or w.get("key") or wid.split("/", 1)[1],
-                     owid=by_ident.get(w.get("origin_wid") or "", w.get("origin_wid") or ""), needs=w.get("needs") or "", seen=epoch(s.get("observed_at")), seenf=fepoch(s.get("observed_at")),
+                     owid=by_ident.get(w.get("origin_wid") or "", w.get("origin_wid") or ""), needs=w.get("needs") or "", busy=w.get("busy") or "", seen=epoch(s.get("observed_at")), seenf=fepoch(s.get("observed_at")),
                      local=here["sess"] if here else None,
                      lwid=windows.get((here["sess"], wid.split("/", 1)[1]), "") if here else ""))
 
@@ -673,7 +678,7 @@ for f in local:
                     origin = (slug(r["repo"]) + ":" if f["multi"] else "") + "issue-" + p
         out.append("\x1f".join(clean(v) for v in ("wid:" + r["wid"], r["node"], r["av"], r["issue"], r["repo"],
                                                r["state"], r["agent"], r["name"], origin, r["needs"],
-                                               "1" if r["local"] else "0", r["lwid"], via)) + "\n")
+                                               "1" if r["local"] else "0", r["lwid"], via, r["busy"])) + "\n")
     path = os.path.join(gdir, "remote_" + f["sess"])
     if via == "node":
         # The machines that did not answer over a connection keep their last
@@ -687,7 +692,7 @@ for f in local:
                 if p[0] == "#node" and len(p) >= 5 and p[1] and p[1] not in fresh:
                     keep_nodes.append("\x1f".join(p[:5] + ["hub"]) + "\n")
                 elif p[0].startswith("wid:") and len(p) >= 12 and p[1] not in fresh:
-                    keep_rows.append("\x1f".join(p[:12] + ["hub"]) + "\n")
+                    keep_rows.append("\x1f".join(p[:12] + ["hub"] + p[13:14]) + "\n")
         except OSError:
             pass
         out = out[:len(head)] + keep_nodes + out[len(head):] + keep_rows

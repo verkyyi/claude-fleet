@@ -384,6 +384,74 @@ def progress_of(live, st, disp):
     return lst.lower() or 'gone'
 
 
+HUB_BUSY = ('working', 'looping', 'waking', 'bg')
+
+
+def hub_states(path):
+    """The hub's session table (global/remote_<sess>, fleet-hub-sessions.sh) as
+    {(issue, repo): [(state, node), …]} — issue #1607. A row's word is the node's
+    `busy` column when it has one (a /loop round, a Bash-tool job: what only that
+    machine sees), else `lost` on a machine the hub lost, else its state. Empty
+    when there is no cache, or the hub has been silent past
+    FLEET_HUB_RETAIN_SECS (600): an old answer is no answer."""
+    out = {}
+    if not path:
+        return out
+    try:
+        with open(path, encoding='utf-8') as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return out
+    ts = 0
+    try:
+        with open(os.path.join(os.path.dirname(path), 'hub_ok'), encoding='utf-8') as f:
+            ts = int(f.read().split()[0])
+    except (OSError, ValueError, IndexError):
+        for ln in lines:
+            p = ln.split('\x1f')
+            if p[0] == '#ts' and len(p) > 1 and p[1].isdigit():
+                ts = int(p[1])
+    try:
+        ttl = int(os.environ.get('FLEET_HUB_RETAIN_SECS') or 600)
+    except ValueError:
+        ttl = 600
+    if time.time() - ts > ttl:
+        return out
+    for ln in lines:
+        p = ln.split('\x1f')
+        if not p[0].startswith('wid:') or len(p) < 6 or not p[3]:
+            continue
+        st = p[5] or 'idle'
+        if len(p) > 13 and p[13] in ('looping', 'bg'):
+            st = p[13]
+        elif st not in HUB_BUSY and p[2] == 'lost':
+            st = 'lost'
+        out.setdefault((p[3], p[4]), []).append((st, p[1]))
+    return out
+
+
+def slugify(repo):
+    """fleet_slug: owner/name → owner-name, anything else outside [alnum._-] dropped."""
+    return ''.join(ch for ch in repo.replace('/', '-') if ch.isalnum() or ch in '._-')
+
+
+def hub_state_of(child, hub):
+    """`(state, node)` the hub shows for <child> (`issue-N` / `<slug>:issue-N`),
+    matched by (repo, issue) like the epic backstop; a busy row beats a lost one
+    beats an idle twin. None when the hub has no row."""
+    slug, _, bare = child.rpartition(':')
+    if not bare.startswith('issue-') or not hub:
+        return None
+    n = bare[len('issue-'):]
+    rows = [r for (i, repo), rs in hub.items() if i == n and (not slug or slugify(repo) == slug or repo.split('/')[-1] == slug)
+            for r in rs]
+    for want in (HUB_BUSY, ('lost',)):
+        for r in rows:
+            if r[0] in want:
+                return r
+    return rows[0] if rows else None
+
+
 def bucket(live, last, disp=None):
     """✓ done · ⏳ waiting on checks · ! needs a human · ▸ working · – ended unlanded."""
     lst = (last or {}).get('state', '')
@@ -772,6 +840,7 @@ def cmd_show(a):
     # source: it rides that child's row (`dispatch`) — and one naming a child with
     # no report or window yet IS that child's row (issue #1648), counted like any
     # other, its state the placement's until the first report says more.
+    hub = hub_states(a.hub_cache)
     dispatches = read_dispatches(a.dir, parent)
     dmap = {d['child']: d for d in dispatches}
     for d in dispatches:
@@ -804,6 +873,10 @@ def cmd_show(a):
             since=[e for e in evs if int(e.get('seq') or 0) > a.since]))
         if node:                        # only then: a one-machine answer is unchanged
             kids[-1]['node'] = node
+            # …and what it is doing there now (issue #1607), off the hub's table
+            hs = hub_state_of(child, hub)
+            if hs:
+                kids[-1]['remote_state'], kids[-1]['remote_node'] = hs
         if disp:
             kids[-1]['dispatch'] = disp
         kids[-1]['progress'] = progress_of(live, st, disp)
@@ -858,7 +931,9 @@ def cmd_show(a):
             if d.get('ts'):
                 rep += ' ' + age(d['ts'])
         live = '%s %s' % (k['window'], k['state']) if k['live'] else 'gone'
-        if k.get('node') and not k['live']:
+        if k.get('remote_state'):       # the machine's own word, not `remote` / `gone · m4` (#1607)
+            live = '%s %s' % (k['remote_node'], k['remote_state'])
+        elif k.get('node') and not k['live']:
             live += (' ↗' if d else ' · ') + k['node']
         print('  %s %-16s %-18s %-22s %s' % (k['bucket'], k['child'], live, rep.strip(), k['title']))
     print(text)
@@ -878,6 +953,7 @@ def main():
     p.add_argument('--since', type=int, default=0)
     p.add_argument('--prmap', default='')
     p.add_argument('--prmap-dir', default='')
+    p.add_argument('--hub-cache', default='')
     p = sub.add_parser('scan')
     p.add_argument('--dir', required=True)
     p = sub.add_parser('digest')
