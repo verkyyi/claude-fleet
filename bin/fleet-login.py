@@ -58,6 +58,8 @@ CERT = KEY + "-cert.pub"
 SSH_CONFIG_SNIPPET = os.path.join(SSH_DIR, "fleet-ssh-config")
 SSH_CONFIG = os.path.join(SSH_DIR, "config")
 HUB_FILE = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.join(HOME, ".config"), "claude-fleet", "hub.json")
+# The machine's ONE config file (issue #1623): the hub address lives there.
+MACHINE_CONF = os.path.join(os.environ.get("FLEET_CONF_DIR") or os.path.dirname(HUB_FILE), "fleet.conf")
 INCLUDE_BEGIN = "# >>> fleet login (claude-fleet#1412) >>>"
 INCLUDE_END = "# <<< fleet login <<<"
 RENEW_PATH = "/v1/fleet/login/renew"
@@ -71,10 +73,26 @@ def die(msg, code=2):
     sys.exit(code)
 
 
+def machine_conf_hub():
+    """FLEET_HUB_URL from the machine's ONE config file (issue #1623) ('' if none)."""
+    url = ""
+    try:
+        with open(MACHINE_CONF) as f:
+            for line in f:
+                m = re.match(r"\s*(?:export\s+)?FLEET_HUB_URL=(.*)$", line)
+                if m:
+                    url = m.group(1).split(" #")[0].strip().strip("\"'")
+    except OSError:
+        pass
+    return url
+
+
 def hub_url(arg):
     url = arg or os.environ.get("FLEET_HUB_URL", "")
     if not url:
-        url = str(read_hub_file().get("url") or "")
+        url = machine_conf_hub()
+    if not url:
+        url = str(read_hub_file().get("url") or "")   # the old place, read one version
     if not url:
         die("no hub URL: pass --hub https://<入口地址> once (it is remembered)")
     if not url.startswith(("https://", "http://")):
@@ -92,6 +110,19 @@ def read_hub_file():
 
 
 def remember_hub(url):
+    """The address goes to fleet.conf's [common] (issue #1623) — written in ONE
+    place, with FLEET_ROLE gaining `client`; hub.json is left to its token."""
+    if machine_conf_hub() == url:
+        return
+    tool = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fleet-conf.sh")
+    if os.path.exists(tool):
+        env = dict(os.environ, FLEET_CONF_DIR=os.path.dirname(MACHINE_CONF))
+        r = subprocess.run(["bash", tool, "set-hub", url, "--role", "client"], env=env,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        if r.returncode == 0:
+            return
+        print("fleet login: " + (r.stderr.strip() or "fleet-conf.sh set-hub failed")
+              + " — remembering it in hub.json", file=sys.stderr)
     d = read_hub_file()  # keep a token (or anything else) already there
     d["url"] = url
     os.makedirs(os.path.dirname(HUB_FILE), exist_ok=True)

@@ -87,7 +87,7 @@ self_real=''; [ -d "$dir" ] && self_real=$(cd "$dir" && pwd -P)
 # the lib would. One threshold for every login on the machine: the judgement is
 # the reader's, not the login's.
 if [ -z "$STUCK_SECS" ]; then
-  for f in "$conf_dir/fleet.settings" "$dir/fleet.conf"; do
+  for f in "$conf_dir/fleet.conf" "$conf_dir/fleet.settings" "$dir/fleet.conf"; do
     [ -r "$f" ] || continue
     STUCK_SECS=$(sed -n 's/^[[:space:]]*FLEET_INSTALL_FOLLOW_STUCK_SECS[[:space:]]*=[[:space:]]*\([^#]*\).*/\1/p' "$f" | tail -1 | tr -d "\"' 	")
     [ -n "$STUCK_SECS" ] && break
@@ -158,10 +158,10 @@ judge() {
   j_login=$1 j_owner=$2 j_conf=$3 j_inst=$4
   j_state="$j_conf/global/install-sync.state"
 
-  # on / off: the login's settings file (issue #979), else the install's fleet.conf
-  # it replaces (dual-read) — the same two files fleet-lib.sh gives the daemon.
+  # on / off: the machine's one config file (issue #1623), else the login's
+  # settings file (issue #979), else the install's fleet.conf they replace (dual-read) — the same two files fleet-lib.sh gives the daemon.
   j_val=''; j_unread=0
-  for j_f in "$j_conf/fleet.settings" "$j_inst/fleet.conf"; do
+  for j_f in "$j_conf/fleet.conf" "$j_conf/fleet.settings" "$j_inst/fleet.conf"; do
     j_txt=$(oread "$j_owner" "$j_f"); j_rc=$?
     [ "$j_rc" -eq 2 ] && j_unread=1
     [ "$j_rc" -eq 0 ] && j_val=$(conf_val "$j_txt" FLEET_INSTALL_SYNC)

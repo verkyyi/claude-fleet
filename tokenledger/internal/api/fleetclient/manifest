@@ -41,6 +41,7 @@ bin/fleet-sidebar-remote.sh
 bin/tmux-dashboard-rows.sh
 bin/tmux-status.sh
 bin/fleet-lib.sh
+bin/fleet-conf.sh
 bin/fleet-lang.sh
 bin/fleet-ui-lang.sh
 bin/fleet-status-lib.sh

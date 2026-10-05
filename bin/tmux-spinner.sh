@@ -144,6 +144,7 @@ fleet_sockets() {
   for _cf in "$FLEET_CONF_DIR"/*.conf; do
     [ -f "$_cf" ] || continue
     _label=$(basename "$_cf" .conf)
+    case "$_label" in fleet|shell) continue ;; esac   # the machine's config + the shell's (#1623)
     [ -f "$FLEET_CONF_DIR/fleets/$_label/conf" ] && continue
     _sock_live "$_label" && printf '%s\n' "$_label"
   done

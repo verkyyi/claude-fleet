@@ -68,8 +68,8 @@ fi
 # and its server with it, and a fleet with no task yet starts one from the list's
 # input line, which needs a window to draw in. `home` is a panel like plan/dash/
 # backlog everywhere a window is counted, snapshotted or listed as a session.
-_fs="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleet.settings"
-[ -z "${FLEET_DASH_WINDOW:-}" ] && [ -f "$_fs" ] && FLEET_DASH_WINDOW=$( . "$_fs" >/dev/null 2>&1; printf '%s' "${FLEET_DASH_WINDOW:-}" )
+_fs="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
+[ -z "${FLEET_DASH_WINDOW:-}" ] && { [ -f "$_fs/fleet.settings" ] || [ -f "$_fs/fleet.conf" ]; } && FLEET_DASH_WINDOW=$( for _f in "$_fs/fleet.settings" "$_fs/fleet.conf"; do [ -f "$_f" ] && . "$_f" >/dev/null 2>&1; done; printf '%s' "${FLEET_DASH_WINDOW:-}" )
 if [ "${FLEET_DASH_WINDOW:-0}" != 1 ]; then
   if [ -n "${HUB_PRINT_CMD:-}" ]; then
     if [ "$HUB_PRINT_CMD" = cwd ]; then printf '%s\n' "$BASE"; else printf 'home\n'; fi
