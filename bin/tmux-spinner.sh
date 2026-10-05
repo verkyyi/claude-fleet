@@ -599,6 +599,94 @@ if [ "${1:-}" = "--needs-check" ]; then
   exit 0
 fi
 
+# --- degenerate-stream watchdog (issue #1557) ---------------------------------
+# A worker whose OUTPUT collapses — one token streamed thousands of times (#1498,
+# 2026-10-04: `<br>` ×16,822 for 7 minutes, until a human pressed Esc) — is
+# healthy to every other watchdog here: its Stop hook is not missing (the turn is
+# live), its CPU is idle, the API is streaming, and window_activity is as fresh as
+# it gets. Only the screen says so, row after row of the same short unit.
+#
+# So every DEGEN_SECS this sweep captures the screen of each `working` window of an
+# animating fleet — ONE tmux process per fleet, a `display-message` header +
+# `capture-pane` per window chained on it — and hands the lot to
+# bin/fleet-degenerate.awk, which names the screens whose >= DEGEN_LINES non-blank
+# rows are one short unit repeated (the awk header has the rule and what it must
+# not hit). A window named by TWO consecutive sweeps is interrupted:
+# bin/fleet-degenerate.sh sends ONE Escape, stamps @degenerate_ts (the sidebar's
+# `⟲`), logs it and records a DEGENERATE row in the parent's child ledger. A window
+# whose @degenerate_ts is younger than DEGEN_COOLDOWN is not even captured — one
+# Escape per window per cooldown, however the screen looks afterwards.
+#
+# The strike table is a FILE (like the needs reconcile's) so the one-shot
+# `--degenerate-check` below runs the same two-sweep rule a pass at a time; a table
+# older than 3 sweeps is not "the previous sweep". Worst case from a full screen to
+# the Escape: two sweeps, ~2×DEGEN_SECS. FLEET_DEGENERATE_SECS=0 turns it off.
+DEGEN_SECS="${FLEET_DEGENERATE_SECS:-15}"
+case "$DEGEN_SECS" in ''|*[!0-9]*) DEGEN_SECS=15 ;; esac
+DEGEN_LINES="${FLEET_DEGENERATE_LINES:-12}"
+case "$DEGEN_LINES" in ''|*[!0-9]*) DEGEN_LINES=12 ;; esac
+DEGEN_COOLDOWN="${FLEET_DEGENERATE_COOLDOWN_SECS:-300}"
+case "$DEGEN_COOLDOWN" in ''|*[!0-9]*) DEGEN_COOLDOWN=300 ;; esac
+DEGEN_STRIKE_F="$BIN/../logs/.degenerate-strikes"
+DEGEN_EVERY=$(awk -v c="$DEGEN_SECS" -v i="$INTERVAL" 'BEGIN{f=int(c/i+0.5); if(f<1)f=1; print f}')
+dgc=0
+
+# degen_check — one sweep (see above). Writes only on a second strike.
+degen_check() {
+  _dnow=$(date +%s)
+  _dprev='|' _dnew='|'
+  if [ -f "$DEGEN_STRIKE_F" ]; then
+    _dl=$(cat "$DEGEN_STRIKE_F" 2>/dev/null)
+    _dt=${_dl%% *}
+    case "$_dt" in
+      ''|*[!0-9]*) : ;;
+      *) [ $(( _dnow - _dt )) -le $(( DEGEN_SECS * 3 + 5 )) ] && _dprev="${_dl#* }" ;;
+    esac
+  fi
+  for _dsock in ${ANIM_SOCKS-$SOCKETS}; do
+    TMUX_N=$((TMUX_N + 1))
+    _dwl=$(tmux -L "$_dsock" list-windows -a -F "$(_lw_fmt '#{window_id} #{@claude_state} #{?@sidebar_worker,#{@sidebar_worker},-} #{?@degenerate_ts,#{@degenerate_ts},0}')" 2>/dev/null) || continue
+    _dwl=$(printf '%s\n' "$_dwl" | _lw_filter)
+    set --
+    while read -r _dwid _dst _dworker _dts; do
+      [ "$_dst" = working ] || continue
+      case "$_dts" in ''|*[!0-9]*) _dts=0 ;; esac
+      [ $(( _dnow - _dts )) -ge "$DEGEN_COOLDOWN" ] || continue
+      _dtgt=$_dwid; [ "$_dworker" = - ] || _dtgt=$_dworker   # the AGENT pane, never the sidebar
+      [ $# -gt 0 ] && set -- "$@" ';'
+      set -- "$@" display-message -p -t "$_dtgt" "@@fleet-degenerate@@ $_dwid #{pane_id}" ';' capture-pane -p -t "$_dtgt"
+    done <<EOF
+$_dwl
+EOF
+    [ $# -gt 0 ] || continue
+    TMUX_N=$((TMUX_N + 1))
+    _dhits=$(tmux -L "$_dsock" "$@" 2>/dev/null | LC_ALL=C awk -v min="$DEGEN_LINES" -f "$BIN/fleet-degenerate.awk" 2>/dev/null)
+    while read -r _dh _dwid _dpane _drows _dunit; do
+      [ "$_dh" = HIT ] || continue
+      case "$_dprev" in
+        *"|$_dsock:$_dwid|"*)                       # named by the last sweep too → act
+          bash "$BIN/fleet-degenerate.sh" -L "$_dsock" --win "$_dwid" --pane "$_dpane" \
+            --rows "$_drows" --sample "$_dunit" >/dev/null 2>&1 ;;
+        *) _dnew="$_dnew$_dsock:$_dwid|" ;;          # first strike → arm
+      esac
+    done <<EOF
+$_dhits
+EOF
+  done
+  printf '%s %s\n' "$_dnow" "$_dnew" > "$DEGEN_STRIKE_F" 2>/dev/null
+}
+
+# One-shot: `tmux-spinner.sh --degenerate-check` — exactly one sweep over every live
+# fleet, then exit (bin/fleet-degenerate-selftest.sh drives the two-sweep rule by
+# COUNT with it, like --needs-check below). Runs even with the errand off.
+if [ "${1:-}" = "--degenerate-check" ]; then
+  [ "$DEGEN_SECS" -gt 0 ] || DEGEN_SECS=15
+  SOCKETS=$(fleet_sockets)
+  [ -n "$SOCKETS" ] || { echo "tmux-spinner: no live fleet" >&2; exit 1; }
+  degen_check
+  exit 0
+fi
+
 # --- read cadence (issue #887) ------------------------------------------------
 # IDLE_READ_SECS: how stale a QUIET fleet's window table may get — the ceiling on
 # "state changed by a writer that does not touch the dirty marker" → "the bar shows
@@ -674,6 +762,13 @@ while :; do
   if [ "$STUCK_SECS" -gt 0 ]; then
     sc=$((sc + step))
     [ "$sc" -ge "$STUCK_EVERY" ] && { sc=0; stuck_check; }
+  fi
+
+  # Throttled degenerate-stream watchdog (issue #1557) — one integer compare per
+  # frame; the sweep only over animating fleets (a `working` window animates).
+  if [ "$DEGEN_SECS" -gt 0 ] && [ -n "$ANIM_SOCKS" ]; then
+    dgc=$((dgc + step))
+    [ "$dgc" -ge "$DEGEN_EVERY" ] && { dgc=0; degen_check; }
   fi
 
   # Throttled stale-`needs` reconcile (issue #658) — same shape as the sweep above:

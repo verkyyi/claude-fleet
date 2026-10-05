@@ -2,7 +2,7 @@
 # fleet-report-parent.sh — a finished child worker PUSHES its outcome to the
 # session that SPAWNED it (issue #574), instead of leaving that session to poll.
 #
-#   fleet-report-parent.sh --state merged|blocked|failed|reaped|stopped|waiting|idle [options]
+#   fleet-report-parent.sh --state merged|blocked|failed|reaped|stopped|waiting|idle|degenerate [options]
 #
 # The parent/child link has existed since #503: every spawn stamps `@origin` on
 # the new window (`issue-<N>` / `scratch-<N>`, empty ≡ the hub), canonicalised by
@@ -17,8 +17,8 @@
 # fleet_peer_send (#513) — the SendMessage tool's local inbox socket. Queued while
 # the parent is mid-turn, delivered as its next turn. NEVER tmux send-keys (#437).
 #
-#   --state <s>     merged | blocked | failed | reaped | stopped | waiting | idle
-#                   (required). A `stopped` whose child is still busy (issue #864)
+#   --state <s>     merged | blocked | failed | reaped | stopped | waiting | idle |
+#                   degenerate (required). A `stopped` whose child is still busy (issue #864)
 #                   is re-filed here as `waiting` (bg job / open PR) or `idle` (the
 #                   PR gate could not be read) — see TIERS below.
 #   --pr <N>        the PR number, for a merged or failed report. A `merged` report
@@ -27,6 +27,10 @@
 #                   FAILED, an unreadable one IDLE — never sent as MERGED.
 #   --verdict <v>   the reap verdict, for a `reaped` report (unmerged, dirty, …)
 #   --summary <t>   1–3 lines of what happened (the parent's whole payoff)
+#   --rows <n> / --sample <unit>   a `degenerate` report (issue #1557, filed by
+#                   bin/fleet-degenerate.sh after it interrupted the child): how many
+#                   screen rows were the one unit, and the unit. Ledger fields
+#                   `lines` / `sample`; tier silent — recorded, never sent.
 #   --win <target>  the CHILD window; default: the window $TMUX_PANE sits in.
 #                   A REAPER passes this — it runs in its own pane, not the child's.
 #   --origin <key>  override the child's @origin read (a reaper that already read it);
@@ -78,13 +82,15 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
 
-STATE='' PR='' VERDICT='' SUMMARY='' WIN='' ORIGIN='' ISSUE='' TITLE='' BRANCH='' KEY='' SOCK='' DRY=0 ONCE=0
+STATE='' PR='' VERDICT='' SUMMARY='' DROWS='' DSAMPLE='' WIN='' ORIGIN='' ISSUE='' TITLE='' BRANCH='' KEY='' SOCK='' DRY=0 ONCE=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --state)    shift; STATE="${1:-}" ;;
     --pr)       shift; PR="${1:-}" ;;
     --verdict)  shift; VERDICT="${1:-}" ;;
     --summary)  shift; SUMMARY="${1:-}" ;;
+    --rows)     shift; DROWS="${1:-}" ;;
+    --sample)   shift; DSAMPLE="${1:-}" ;;
     --win)      shift; WIN="${1:-}" ;;
     --origin)   shift; ORIGIN="${1:-}" ;;
     --issue)    shift; ISSUE="${1:-}" ;;
@@ -101,9 +107,9 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-STATES='merged|blocked|failed|reaped|stopped|waiting|idle'
+STATES='merged|blocked|failed|reaped|stopped|waiting|idle|degenerate'
 case "$STATE" in
-  merged|blocked|failed|reaped|stopped|waiting|idle) ;;
+  merged|blocked|failed|reaped|stopped|waiting|idle|degenerate) ;;
   '') printf 'fleet-report-parent: --state is required (%s)\n' "$STATES" >&2; exit 2 ;;
   *)  printf 'fleet-report-parent: unknown --state %s (%s)\n' "$STATE" "$STATES" >&2; exit 2 ;;
 esac
@@ -249,8 +255,11 @@ esac
 # → one ledger row. `gen` is the parent generation the child was spawned under
 # (@origin_gen); a relayed row is filed in someone else's book and carries none.
 row_json() {
-  RJ_GEN="$wogen" RJ_CGEN="$selfgen" RJ_CKEY="$selfgkey" python3 -c 'import json, os, sys
+  RJ_GEN="$wogen" RJ_CGEN="$selfgen" RJ_CKEY="$selfgkey" RJ_LINES="$DROWS" RJ_SAMPLE="$DSAMPLE" python3 -c 'import json, os, sys
 d = dict(zip(("child","state","pr","verdict","summary","title","tier","relayed_from"), sys.argv[1:]))
+for f in ("lines", "sample"):   # a DEGENERATE row (issue #1557); every other row is unchanged
+    if os.environ.get("RJ_" + f.upper()):
+        d[f] = os.environ["RJ_" + f.upper()]
 if os.environ.get("RJ_GEN") and "relayed_from" not in d:
     d["gen"] = os.environ["RJ_GEN"]
 if os.environ.get("RJ_CGEN"):
