@@ -359,4 +359,6 @@ FLEET_NODE_UPGRADE_OS              seam: overrides `uname -s` (fleet-node-upgrad
 FLEET_NODE_UPGRADE_POLL            seam: seconds between post-restart hub polls (default 2) (fleet-node-upgrade.sh, #1525)
 FLEET_PEER_CERT                    escape hatch: 0 = never ask the hub for a machine-to-machine certificate, plain ssh (fleet-peer-cert.sh, #1626)
 FLEET_PEER_CERT_SECS               seam: life asked for a peer certificate (default 300; the hub caps it at 300) (fleet-peer-cert.sh, #1626)
+FLEET_WORKER_RECORDS               escape hatch: 0 = never hand a reaped worker's evidence/history to the hub nor read others' back (fleet-worker-records.sh, #1609)
+FLEET_WORKER_RECORDS_IMG_MAX       seam: image size in bytes above which push shrinks it with sips (default 614400) (fleet-worker-records.sh, #1609)
 FLEET_PEER_KEY                     path: the peer key the hub signs (default ~/.ssh/fleet-peer) (fleet-peer-cert.sh, #1626)
