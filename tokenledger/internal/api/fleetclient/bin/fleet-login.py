@@ -305,8 +305,6 @@ def scan(hub, invert, purpose=""):
     code, st = post(hub + "/v1/fleet/login/start", body)
     if code == 404:
         die("this hub does not issue certificates (no CA or no WeCom sign-in configured)", 1)
-    if code == 400 and purpose:
-        die("this hub cannot add a node by scan yet (HTTP 400: %s) — it needs the hub from claude-fleet#1627" % st.get("error", ""), 1)
     if code != 200:
         die("start refused (HTTP %d): %s" % (code, st.get("error", "")), 1)
     if not purpose:
@@ -355,7 +353,9 @@ def cmd_node(argv):
     res = scan(hub_url(hub_arg), invert, purpose="node")
     node = res.get("node")
     if not isinstance(node, dict) or not node.get("token"):
-        die("the hub confirmed the scan but sent no node pass", 1)
+        # an older hub ignores purpose and answers a plain login (#1627)
+        die("the hub signed a certificate but sent no node pass — it predates `fleet node join`"
+            " (claude-fleet#1627); redeploy the hub, or use a join code from its /nodes page", 1)
     # compact, as the hub writes it: fleet-node-join.sh reads it with sed
     write_file(out, json.dumps(node, separators=(",", ":")) + "\n", 0o600)
     added = write_cert(res, include)
