@@ -293,6 +293,9 @@ case "$mode" in
     esac
     export TMUX="$sp,0,0"
     unset TMUX_PANE
+    # This IS the worker's machine: a key that vanished meanwhile is refused here,
+    # never handed back to the hub (dash-reap.sh's hub branch, issue #1589).
+    export FLEET_REAP_LOCAL=1
     exec bash "$BIN/dash-reap.sh" "$target" --yes
     ;;
   movein)

@@ -933,6 +933,24 @@ with a code, never `unknown`:
   carrying the token and dash-reap's own reason, `failed:*` (the gate passed,
   a disposal did not) is `unknown`. A repo-qualified key (`<slug>:issue-N`) is
   resolved to its window first — the reaper's grammar has no repo prefix.
+  Every outcome also carries #1586's terminal fields (issue #1589): `token`,
+  `exit` (dash-reap's own status) and `stderr1` (its reason), plus `window` —
+  in `result` on success, in `result.error` on a refusal or an unknown. The
+  asking side is `dash-reap.sh` itself: with the hub on, a key no window here
+  holds that the worker map places on another machine
+  (`fleet_worker_locate` → `remote <node>`) is reaped THERE through this tool
+  (`fleet_hub_reap`, `bin/fleet-lib.sh`), and the caller gets the token, the
+  reason and the exit status a local reap would have printed — `reaped:*` 0,
+  `skip:*` 3, `refused:*` 4 (`refused:hub` = the hub said no or could not be
+  asked), `failed:*` 5 for an unknown outcome, never counted as reaped. That
+  reap is the confirmed one, so without `--yes` it is `skip:needs-confirm`
+  and nothing is sent; the node's adapter sets `FLEET_REAP_LOCAL=1` so its
+  own run never bounces back. So `/fleet-epic-run`'s per-tick
+  `dash-reap.sh <key> --yes` and the sidebar's 回收 on a remote row
+  (`fleet-sidebar-remote.sh reap`, the same toast as a local row's) reap
+  another machine's merged window the way they reap one here. An older node
+  that writes no fields back is read off its error message. Hub off: the
+  branch never runs (`bin/dash-reap-hub-selftest.sh` leg A).
 
 Worker starts reuse `dash-issue-session.sh` with an explicit target session and
 provider. They preserve its capacity and Issue-claim checks; the bridge also

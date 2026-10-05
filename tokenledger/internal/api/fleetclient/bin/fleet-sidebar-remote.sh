@@ -9,7 +9,8 @@
 #   stop     worker_stop    — graceful /exit there; toasts the outcome
 #   resume   worker_resume  — reopen a stopped one (a live row refuses, and says so)
 #   reap     worker_reap    — the confirmed reap (the menu's confirm-before ran
-#                             first, as for a local row); toasts the result token
+#                             first, as for a local row) through fleet_hub_reap;
+#                             toasts the node's dash-reap token as a local reap does
 #   message  worker_message — INSIDE a popup (dash-popup.sh): asks for the text,
 #                             sends it, shows the outcome. The text never passes
 #                             through a tmux command string, so it needs no quoting.
@@ -112,9 +113,23 @@ if fleet_status_hub_lost "$(date +%s)"; then
 fi
 
 case "$action" in
-  stop|resume|reap)
-    tool=worker_$action; wait=30; [ "$action" = reap ] && wait=90
-    rec=$(write "$tool" "$(json_wid)" "$wait")
+  reap)
+    # fleet_hub_reap (issue #1589): the node's own dash-reap token, reason and
+    # exit — so the toast is the one a local row's reap shows, plus the machine.
+    out=$(fleet_hub_reap "$worker_id" 90 2>/dev/null); token=$(printf '%s\n' "$out" | tail -1)
+    case "$token" in
+      reaped:full) msg=$(fleet_ui_t reap_done) ;;
+      reaped:keep) msg=$(fleet_ui_t reap_kept) ;;
+      skip:live)   msg=$(fleet_ui_t reap_live) ;;
+      skip:*)      msg=$(fleet_ui_t reap_skip_fmt "${token#skip:}") ;;
+      refused:*|failed:*) msg=$(fleet_ui_t reap_refused_fmt "$token") ;;
+      *)           msg=$(fleet_ui_t reap_none) ;;
+    esac
+    toast "$msg · $(label reap)"
+    ;;
+  stop|resume)
+    tool=worker_$action
+    rec=$(write "$tool" "$(json_wid)" 30)
     toast "fleet: $(outcome "$rec" "$(label "$action")")"
     ;;
   message)

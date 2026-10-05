@@ -35,12 +35,12 @@ class Refused(Fault):
     """A spawn the fleet refused (issue #1586): its exit code and refusal line
     go into the operation's error, so the machine that placed it can say why."""
 
-    def __init__(self, code, message, exit_code, line):
+    def __init__(self, code, message, exit_code, line, **extra):
         super().__init__(code, message)
-        self.exit_code, self.line = exit_code, line
+        self.exit_code, self.line, self.extra = exit_code, line, extra
 
     def as_dict(self):
-        return dict(super().as_dict(), exit=self.exit_code, stderr1=self.line)
+        return dict(super().as_dict(), exit=self.exit_code, stderr1=self.line, **self.extra)
 
 
 class Control:
@@ -395,22 +395,31 @@ class Control:
         KEPT. The result token on stdout is the verdict (issue #869), never the
         exit code: `reaped:*` landed, `skip:*` / `refused:*` touched nothing and
         is a clean `failed` carrying the token and dash-reap's own reason,
-        `failed:*` means the gate passed but a disposal did not — unknown."""
+        `failed:*` means the gate passed but a disposal did not — unknown.
+        Either way the record carries #1586's terminal fields (issue #1589):
+        `exit` (dash-reap's own status) + `stderr1` (its reason) + `token`, so
+        the machine that asked (dash-reap.sh's hub branch, fleet_hub_reap)
+        answers with exactly what a reap there would have."""
         matches, _ = self.target(fleet, key, "worker_reap")
         code, output, err = self.adapter("reap", fleet["name"], key, timeout=300)
         tokens = [l for l in output.decode("utf-8", "replace").splitlines()
                   if re.match(r"(reaped|skip|refused|failed|dispatched):", l)]
         token = tokens[-1].strip() if tokens else ""
+        window = matches[0].get("window_id", "")
         if code == 5 and not token:
-            raise Unattempted("NOT_FOUND", "Reap refused on the fleet: " + last_line(err))
+            raise Refused("NOT_FOUND", "Reap refused on the fleet: " + last_line(err), 4, last_line(err),
+                          token="refused:no-target", window=window)
         if token.startswith("skip:") or token.startswith("refused:"):
-            raise Unattempted("INVALID_STATE", "Reap refused on the fleet: %s — %s" % (token, last_line(err)))
+            raise Refused("INVALID_STATE", "Reap refused on the fleet: %s — %s" % (token, last_line(err)),
+                          code, last_line(err), token=token, window=window)
         if not token.startswith("reaped:"):
-            raise Fault("UNKNOWN_OUTCOME", "Reap did not confirm: %s" % (token or last_line(err)))
+            raise Refused("UNKNOWN_OUTCOME", "Reap did not confirm: %s" % (token or last_line(err)),
+                          code or 5, last_line(err), token=token or "failed:unconfirmed", window=window)
         remaining, snapshot = self.find_workers(fleet, key)
         if remaining:
-            raise Fault("UNKNOWN_OUTCOME", "A window still holds this identity after the reap")
-        return {"reaped": matches[0], "how": token,
+            raise Refused("UNKNOWN_OUTCOME", "A window still holds this identity after the reap",
+                          5, "a window still holds %s after the reap" % key, token="failed:window", window=window)
+        return {"reaped": matches[0], "how": token, "token": token, "exit": 0, "window": window,
                 "kept": "the worktree stays on disk when it was dirty (reaped:keep)" if token == "reaped:keep"
                 else "worktree, branch and issue disposed; the window is closed",
                 "observed_at": snapshot["observed_at"]}

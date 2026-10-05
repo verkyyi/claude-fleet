@@ -331,6 +331,51 @@ else
     *) refuse bad-args "one target only; unexpected argument: $a" ;;
   esac; done
 fi
+# --- a worker on ANOTHER machine (issue #1589) --------------------------------
+# With the hub on, a KEY no window here holds may live on another machine of this
+# fleet (fleet_worker_locate: the hub's worker map). Its window is not on this
+# server, so nothing here can reap it — the hub's worker_reap asks that machine's
+# node to run THIS script there (`dash-reap.sh <key> --yes`, its own gate, its own
+# history row) and fleet_hub_reap answers with its token, reason and exit status,
+# exactly as a local reap would. The hub's reap is the CONFIRMED one (--yes: a
+# dirty worktree is kept), so without --yes it is skip:needs-confirm — the answer
+# a local row needing a y/n gives a caller who did not grant one. Hub off, or a
+# key that is live here: nothing below runs. FLEET_REAP_LOCAL=1 (set by the
+# node's own adapter) keeps a reap from bouncing back to the hub.
+if [ "${FLEET_REAP_LOCAL:-0}" != 1 ] && [ "$confirm" = 0 ]; then
+  case "$target" in
+    wid:*|*/*|issue-*|scratch-*|*:issue-*|*:scratch-*)
+      if fleet_hub_on "$(fleet_current_session 2>/dev/null)"; then
+        loc_t=$target
+        case "$target" in wid:*|*/*|issue-*|scratch-*) ;; *) loc_t="wid:$target" ;; esac
+        # fleet_hub_on read the fleet's own conf line (#1539); the map readers
+        # read the environment, so hand them the answer.
+        loc=$(CCQUOTA_FLEET=1 fleet_worker_locate "$loc_t" 2>/dev/null)
+        case "$loc" in
+          remote\ *)
+            node=${loc#remote }
+            hwid=''
+            sp=$(_fleet_wid_split "$loc_t") && hwid=$(CCQUOTA_FLEET=1 fleet_hub_wid "${sp%%$'\t'*}" "${sp#*$'\t'}")
+            if [ -z "$hwid" ]; then
+              emit refused:no-target
+              printf 'reap: %s is on %s, but the hub map names no single worker for it\n' "$target" "$node" >&2
+              exit 4
+            fi
+            if [ "$yes" != 1 ]; then
+              emit skip:needs-confirm
+              printf 'reap: %s lives on %s — a reap there is the confirmed one; re-run with --yes\n' "$target" "$node" >&2
+              exit 3
+            fi
+            printf 'reap: %s lives on %s — reaping it there through the hub\n' "$target" "$node" >&2
+            fleet_hub_reap "$hwid" "${FLEET_REAP_HUB_WAIT:-90}"
+            exit $?
+            ;;
+        esac
+      fi
+      ;;
+  esac
+fi
+
 # Unlike the general fleet_wid_target helper, this destructive entry never falls
 # back from an unresolved handle to a window name. Pin a unique identity now;
 # popup and delayed tail invocations carry only the resolved @id.
