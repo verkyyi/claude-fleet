@@ -213,6 +213,7 @@ else
   . "$ROOT/bin/fleet-client-lib.sh"
   # shellcheck disable=SC2034  # FC_LOG / FC_SUDO are read by the lib just sourced
   FC_LOG="$tmp/deps.log"
+  # shellcheck disable=SC2034
   if [ -n "${FLEET_INSTALL_SUDO+x}" ]; then FC_SUDO="$FLEET_INSTALL_SUDO"; fi
   if fc_tmux_ok; then
     say "tmux: $FC_TMUX_V 已就绪"
