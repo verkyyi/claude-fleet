@@ -154,7 +154,6 @@ open(os.environ["CHOICES"], "w").write("%s %d" % (ask.repo or "-", len(ask.choic
 PY
   cat "$CHOICES" 2>/dev/null
 }
-SH="$WORK/shadow"
 PLAIN="--name n --origin hub|CF_REPO=unset confirm --spawn 0"
 TO_B="--name n --origin hub --repo o/b|CF_REPO=o/b confirm --spawn 0"
 PICK="CF_REPO=o/a confirm --spawn 2"   # no anchor in a 2-repo fleet: Tab, first repo by default
