@@ -99,7 +99,12 @@ case "\$1" in
   has-session) [ -n "\$FAKE_TMUX_DOWN" ] && exit 1; exit 0 ;;
   list-windows)
     case "\$args" in
-      *@claude_state*) printf 's1\t@1\tdone\t10\ns1\t@2\tworking\t11\n' ;;
+      # find_window splits on \037 (issue #918). @3 is bound to #13 with an
+      # EMPTY @claude_state (fresh spawn / trust dialog). FAKE_US_LITERAL=1 hands
+      # the separator back as the four bytes \037, the way tmux 3.4 does.
+      *@claude_state*)
+        u=\$'\037'; [ -n "\$FAKE_US_LITERAL" ] && u='\037'
+        printf '%s\n' "s1\${u}@1\${u}done\${u}10" "s1\${u}@2\${u}working\${u}11" "s1\${u}@3\${u}\${u}13" ;;
       *window_name*)   printf 's1 plan\ns1 dash\n' ;;
     esac
     exit 0 ;;
@@ -161,6 +166,7 @@ runbridge() {
   FLEET_ISSUE_BRIDGE_REVIVE="${FLEET_ISSUE_BRIDGE_REVIVE:-0}" \
   SPAWN_LOG="$WORK/spawn.log" SPAWN_RC="${SPAWN_RC:-0}" SPAWN_REASON="${SPAWN_REASON:-}" \
   FAKE_TMUX_DOWN="${FAKE_TMUX_DOWN:-}" \
+  FAKE_US_LITERAL="${FAKE_US_LITERAL:-}" \
   FAKE_INPUT_TEXT="${FAKE_INPUT_TEXT:-}" \
   FAKE_INPUT_ROW="${FAKE_INPUT_ROW:-}" \
   FAKE_CURSOR="${FAKE_CURSOR:-}" \
@@ -470,7 +476,7 @@ case "\$1" in
   info|has-session) exit 0 ;;
   list-windows)
     case "\$args" in
-      *@claude_state*) [ -z "\$MR_NO_WINDOWS" ] && printf 'mr\t@1\tdone\t12\nmr\t@2\t%s\t12\n' "\${MR_B_STATE:-done}" ;;
+      *@claude_state*) [ -z "\$MR_NO_WINDOWS" ] && printf 'mr\037@1\037done\03712\nmr\037@2\037%s\03712\n' "\${MR_B_STATE:-done}" ;;
       *window_name*)   printf 'mr plan\n' ;;
     esac ;;
   display-message)
@@ -564,6 +570,22 @@ if command -v python3 >/dev/null 2>&1; then
   grep -q '^@1:' "$MR/inject.log" && mrfail "a delivery naming acme/b must not touch @1"
 fi
 printf 'selftest: two-repo leg PASS (A#12/B#12 routed to their own windows, independent watermarks, per-repo off, revive --repo, webhook repo — #798)\n' >&2
+
+# ============ empty @claude_state leg (issue #918) =============================
+# A window bound to #13 with NO @claude_state yet must still be found: under the
+# old TAB split the empty field collapsed (st=13, bissue="") and --find-window
+# printed nothing, so bash-guard read "no live worker". Both the raw \037 byte and
+# tmux 3.4's literal `\037` spelling must resolve.
+for lit in '' 1; do
+  : > "$WORK/log"
+  got=$(FAKE_US_LITERAL="$lit" runbridge --find-window 13 fake/repo)
+  [ "$got" = "s1"$'\t''@3'$'\t' ] \
+    || fail "--find-window 13 (empty @claude_state, literal=${lit:-0}) got '$got'"
+  got=$(FAKE_US_LITERAL="$lit" runbridge --find-window 10 fake/repo)
+  [ "$got" = "s1"$'\t''@1'$'\t''done' ] \
+    || fail "--find-window 10 (state set, literal=${lit:-0}) got '$got'"
+done
+printf 'selftest: empty-state leg PASS (a window with no @claude_state is still found — issue #918)\n' >&2
 
 # ============================== --deliver HMAC leg =============================
 if ! command -v python3 >/dev/null 2>&1; then

@@ -307,10 +307,19 @@ bridge_lease_acquire() { # $1 = lease path
 # "session<TAB>window_id<TAB>@claude_state" for the first match, empty if none.
 # A window matches when @issue == the number AND its session resolves to <repo>
 # (cached sessmap slug), so a same-numbered issue in another fleet never collides.
+#
+# The read splits on \037, never TAB (issue #918): TAB is IFS *whitespace*, so
+# consecutive tabs collapse and a window with an EMPTY @claude_state (fresh
+# spawn, a pane parked at the trust dialog) read as st=<issue> bissue="" — never
+# found. \037 is not whitespace, so an empty field stays a field. tmux 3.4 hands
+# a control separator back as the literal four bytes `\037`; normalize it the way
+# tmux-dashboard-rows.sh does.
 bridge_find_window() {
-  local issue="$1" repo="$2" want_slug sess win st bissue slug
+  local issue="$1" repo="$2" want_slug sess win st bissue slug line us=$'\037'
   want_slug=$(fleet_slug "$(fleet_norm_repo "$repo")")
-  while IFS=$'\t' read -r sess win st bissue; do
+  while IFS= read -r line; do
+    line=${line//\\037/$us}
+    IFS=$us read -r sess win st bissue <<<"$line"
     [ "$bissue" = "$issue" ] || continue
     # A fleet hosting 2+ repos (issue #790): the SESSION's repo says nothing about
     # which repo this window works — A#12 and B#12 share a session. Match the
@@ -329,7 +338,7 @@ bridge_find_window() {
     if [ "$slug" = "$want_slug" ]; then
       printf '%s\t%s\t%s' "$sess" "$win" "$st"; return 0
     fi
-  done < <(fleet_list_windows_all '#{session_name}'$'\t''#{window_id}'$'\t''#{@claude_state}'$'\t''#{@issue}')
+  done < <(fleet_list_windows_all '#{session_name}'"$us"'#{window_id}'"$us"'#{@claude_state}'"$us"'#{@issue}')
   return 0
 }
 
