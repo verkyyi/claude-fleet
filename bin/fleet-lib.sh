@@ -4472,17 +4472,23 @@ fleet_node_is_self() {
   printf '%s\n' ${FLEET_NODE_ALIASES:-} | tr '[:upper:]' '[:lower:]' | grep -qx -- "$h=$n"
 }
 
-# fleet_hub_place <sess> <repo> <issue> <node> [<origin_wid>] [<agent>] — ask the
-# hub which machine opens a session on (repo, issue) (issue #1425, EPIC #1419 C6).
+# fleet_hub_place <sess> <repo> <issue> <node> [<origin_wid>] [<agent>] [<wait>] — ask
+# the hub which machine opens a session on (repo, issue) (issue #1425, EPIC #1419 C6).
 # Run AFTER fleet_hub_lease granted the lease: a REMOTE answer means the hub
 # already handed that lease to the chosen machine's fleet and sent it the start
-# (a journalled worker_start carrying <origin_wid>, the parent). Off unless
-# CCQUOTA_FLEET=1. <node> is `auto` or a machine name (an alias is turned back
-# into the hostname the hub knows). Prints the place command's one line, machine
-# names through FLEET_NODE_ALIASES — `LOCAL <m>\t<reason>` / `REMOTE <m> <op>
-# <status>\t<reason>` / `HELD <m>\t<msg>` / `REFUSED <code>\t<msg>` — and returns:
+# (a journalled worker_start carrying <origin_wid>, the parent) — and, since issue
+# #1586, waited for what became of it: <wait> seconds (`--wait`), the hub's own 30
+# when empty, 0 = answer on acceptance. Off unless CCQUOTA_FLEET=1. <node> is
+# `auto` or a machine name (an alias is turned back into the hostname the hub
+# knows). Prints the place command's one line, machine names through
+# FLEET_NODE_ALIASES — `LOCAL <m>\t<reason>` / `REMOTE <m> <op> <status>\t<reason>` /
+# `REMOTE <m> <op> done <window>\t<reason>` / `DECLINED <m> <op> <exit>\t<line>` /
+# `UNKNOWN <m> <op>\t<msg>` / `HELD <m>\t<msg>` / `REFUSED <code>\t<msg>` — and returns:
 #   0  LOCAL or REMOTE             3  the issue is leased elsewhere
 #   4  refused: no machine can take it, or the chosen one would not
+#   5  the start was sent and that machine's spawn refused it (<exit> is its
+#      code: 2 at capacity, 3 claimed, 1 anything else); the lease is ours again
+#   6  sent, but no final state within the wait — unknown, never a success
 #   1  the hub could not be asked (no command, no node token — #1491 —, no fleet
 #      UUID, or the command failed) — one stderr note; open it here as today
 #  10  the hub module is off: nothing ran, nothing printed
@@ -4490,7 +4496,7 @@ fleet_node_is_self() {
 # `<cmd> --node <node> [--origin-wid <wid>] [--agent <a>] <repo> <issue> <worker_id>`,
 # with the node token from node.env in ITS environment only (`_fleet_hub_env`).
 fleet_hub_place() {
-  local sess="${1:-}" repo="${2:-}" num="${3:-}" node="${4:-auto}" owid="${5:-}" agent="${6:-}" cmd u pre='' out rc why ef
+  local sess="${1:-}" repo="${2:-}" num="${3:-}" node="${4:-auto}" owid="${5:-}" agent="${6:-}" wait="${7:-}" cmd u pre='' out rc why ef
   [ "${CCQUOTA_FLEET:-0}" = 1 ] || return 10
   case "$num" in ''|*[!0-9]*) return 1 ;; esac
   cmd="${FLEET_HUB_PLACE_CMD:-}"
@@ -4507,15 +4513,17 @@ fleet_hub_place() {
   # An alias the operator typed (`m5`) is the hub's hostname (`macmini`).
   [ "$node" != auto ] && node=$(printf '%s\n' ${FLEET_NODE_ALIASES:-} | awk -F= -v n="$node" '$2 == n { print $1; f = 1; exit } END { if (!f) print n }')
   ef=$(mktemp "${TMPDIR:-/tmp}/fleet-hub-err.XXXXXX" 2>/dev/null) || ef=/dev/null
+  case "$wait" in *[!0-9]*) wait='' ;; esac
   out=$(_fleet_hub_env; bash -c "$cmd \"\$@\"" place --node "$node" ${owid:+--origin-wid "$owid"} ${agent:+--agent "$agent"} \
-        "$repo" "$num" "$u/${pre}issue-$num" </dev/null 2>"$ef"); rc=$?
+        ${wait:+--wait "$wait"} "$repo" "$num" "$u/${pre}issue-$num" </dev/null 2>"$ef"); rc=$?
   out=$(printf '%s\n' "$out" | head -n1 | awk -F'\t' -v al="${FLEET_NODE_ALIASES:-}" '
     BEGIN { n = split(al, a, " "); for (i = 1; i <= n; i++) if ((p = index(a[i], "=")) > 1) m[substr(a[i], 1, p - 1)] = substr(a[i], p + 1) }
-    { k = split($1, w, " "); if ((w[1] == "LOCAL" || w[1] == "REMOTE" || w[1] == "HELD") && (w[2] in m)) w[2] = m[w[2]]
+    { k = split($1, w, " ")
+      if ((w[1] == "LOCAL" || w[1] == "REMOTE" || w[1] == "HELD" || w[1] == "DECLINED" || w[1] == "UNKNOWN") && (w[2] in m)) w[2] = m[w[2]]
       h = w[1]; for (i = 2; i <= k; i++) h = h " " w[i]
       $1 = h; print }' OFS='\t')
   case "$rc" in
-    0|3|4) [ "$ef" = /dev/null ] || rm -f "$ef"; printf '%s\n' "$out"; return "$rc" ;;
+    0|3|4|5|6) [ "$ef" = /dev/null ] || rm -f "$ef"; printf '%s\n' "$out"; return "$rc" ;;
   esac
   printf 'fleet: %s — placing #%s, opening it here\n' "$(_fleet_hub_fail placement "$cmd" "$rc" "$ef")" "$num" >&2
   [ "$ef" = /dev/null ] || rm -f "$ef"

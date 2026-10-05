@@ -33,6 +33,9 @@ type writeNode struct {
 	mu     sync.Mutex
 	writes []map[string]any
 	answer func(env map[string]any) (any, *control.Error)
+	// opGet answers operation_get (claude-fleet#1586); nil = the operation
+	// as submit journalled it, still accepted.
+	opGet func(env map[string]any) (any, *control.Error)
 }
 
 func connectWriteNode(t *testing.T, h *harness, label string) *writeNode {
@@ -79,18 +82,24 @@ func (n *writeNode) serve() {
 		if err := wsjson.Read(context.Background(), n.conn, &m); err != nil {
 			return
 		}
-		if m.Type != control.TypeWrite {
-			continue
-		}
 		var req control.Request
 		_ = json.Unmarshal(m.Payload, &req)
 		var env map[string]any
 		_ = json.Unmarshal(req.Params, &env)
-		n.mu.Lock()
-		n.writes = append(n.writes, env)
-		answer := n.answer
-		n.mu.Unlock()
-		res, e := answer(env)
+		var res any
+		var e *control.Error
+		switch {
+		case m.Type == control.TypeRequest && req.Method == "operation_get":
+			res, e = n.operation(asString(env["operation_id"]))
+		case m.Type != control.TypeWrite:
+			continue
+		default:
+			n.mu.Lock()
+			n.writes = append(n.writes, env)
+			answer := n.answer
+			n.mu.Unlock()
+			res, e = answer(env)
+		}
 		if res == nil && e == nil {
 			continue // say nothing: the hub must time out to unknown
 		}
@@ -106,10 +115,36 @@ func (n *writeNode) serve() {
 	}
 }
 
+// operation is the node's record of one operation it was sent.
+func (n *writeNode) operation(id string) (any, *control.Error) {
+	n.mu.Lock()
+	get := n.opGet
+	var env map[string]any
+	for _, w := range n.writes {
+		if w["operation_id"] == id {
+			env = w
+		}
+	}
+	n.mu.Unlock()
+	switch {
+	case env == nil:
+		return nil, &control.Error{Code: "NOT_FOUND", Message: "Operation has not been accepted by this machine"}
+	case get != nil:
+		return get(env)
+	}
+	return accepted(env)
+}
+
 func (n *writeNode) count() int {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return len(n.writes)
+}
+
+func (n *writeNode) setOpGet(f func(map[string]any) (any, *control.Error)) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.opGet = f
 }
 
 func (n *writeNode) setAnswer(f func(map[string]any) (any, *control.Error)) {

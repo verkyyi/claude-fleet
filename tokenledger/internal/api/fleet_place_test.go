@@ -14,6 +14,28 @@ import (
 
 // A node's own placement (claude-fleet#1425, EPIC #1419 C6).
 
+// The handler waits on a REMOTE start's outcome (claude-fleet#1586); under
+// test that wait is short, so a node that never finishes costs 300ms.
+func init() { placeWait, placePoll = 300*time.Millisecond, 10*time.Millisecond }
+
+// finished is the node's record of an operation that reached a final state.
+func finished(status string, result map[string]any) func(map[string]any) (any, *control.Error) {
+	return func(env map[string]any) (any, *control.Error) {
+		return map[string]any{"operation_id": env["operation_id"], "fleet_id": env["fleet_id"],
+			"action": env["action"], "status": status, "result": result}, nil
+	}
+}
+
+// placeOutcomeOf is the answer's outcome object, failing the test without one.
+func placeOutcomeOf(t *testing.T, out map[string]any) map[string]any {
+	t.Helper()
+	oc, ok := out["outcome"].(map[string]any)
+	if !ok {
+		t.Fatalf("no outcome in %v", out)
+	}
+	return oc
+}
+
 func placeCall(t *testing.T, h *harness, token string, body map[string]any) (int, map[string]any) {
 	t.Helper()
 	b, _ := json.Marshal(body)
@@ -179,5 +201,91 @@ func TestNodePlaceSkipsNotReadyNodeOnAuto(t *testing.T) {
 	}
 	if st, out := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 15, "worker_id": wid5, "node": "m4"}); st != 200 || out["local"] != false {
 		t.Fatalf("node=m4 while not ready = %d %v; want the start sent there anyway", st, out)
+	}
+}
+
+// claude-fleet#1586: the asker hears what became of a REMOTE start, not just
+// that it was accepted. A window opened there: done, exit 0, its window id.
+func TestNodePlaceWaitsForTheWindow(t *testing.T) {
+	h, _, m4, f5, _ := twoNodes(t)
+	tok5 := h.tokens["m5"]
+	wid5 := issueWID(f5.FleetID, 21)
+	if st, _ := leaseCall(t, h, tok5, map[string]any{"action": "acquire", "repo": writeRepo, "issue": 21, "worker_id": wid5}); st != 200 {
+		t.Fatal("m5's lease")
+	}
+	m4.setOpGet(finished("succeeded", map[string]any{"exit": 0, "window": "@42",
+		"workers": []any{map[string]any{"window_id": "@42", "issue": 21}}}))
+	st, out := placeCall(t, h, tok5, map[string]any{"repo": writeRepo, "issue": 21, "worker_id": wid5})
+	oc := placeOutcomeOf(t, out)
+	if st != 200 || oc["state"] != "done" || oc["exit"] != 0.0 || oc["window"] != "@42" || oc["node"] != "m4" {
+		t.Fatalf("place = %d %v; want done on m4 with window @42", st, out)
+	}
+	if out["operation"].(map[string]any)["status"] != "succeeded" {
+		t.Fatalf("operation = %v; want the reconciled succeeded", out["operation"])
+	}
+	ls, _ := h.srv.Store.Leases(time.Now())
+	if len(ls) != 1 || ls[0].FleetID == f5.FleetID {
+		t.Fatalf("leases = %+v; want #21 m4's", ls)
+	}
+}
+
+// The target was full: refused with the spawn's own exit code and line, and
+// the lease is the asker's again — its exit releases it, no --force next time.
+func TestNodePlaceRemoteRefusalComesBack(t *testing.T) {
+	h, _, m4, f5, _ := twoNodes(t)
+	tok5 := h.tokens["m5"]
+	wid5 := issueWID(f5.FleetID, 22)
+	if st, _ := leaseCall(t, h, tok5, map[string]any{"action": "acquire", "repo": writeRepo, "issue": 22, "worker_id": wid5}); st != 200 {
+		t.Fatal("m5's lease")
+	}
+	why := "dash-issue-session: at capacity: 6/6 sessions on m4"
+	m4.setOpGet(finished("failed", map[string]any{"error": map[string]any{"code": "AT_CAPACITY",
+		"message": "Fleet refused to start the worker: " + why, "exit": 2, "stderr1": why}}))
+	st, out := placeCall(t, h, tok5, map[string]any{"repo": writeRepo, "issue": 22, "worker_id": wid5})
+	oc := placeOutcomeOf(t, out)
+	if st != 200 || oc["state"] != "refused" || oc["exit"] != 2.0 || oc["stderr1"] != why {
+		t.Fatalf("place = %d %v; want refused, exit 2, the spawn's line", st, out)
+	}
+	ls, _ := h.srv.Store.Leases(time.Now())
+	if len(ls) != 1 || ls[0].WorkerID != wid5 {
+		t.Fatalf("leases = %+v; want #22 back with %s", ls, wid5)
+	}
+	if st, _ := leaseCall(t, h, tok5, map[string]any{"action": "release", "repo": writeRepo, "issue": 22, "worker_id": wid5}); st != 200 {
+		t.Fatalf("the asker could not release the lease it got back: %d", st)
+	}
+	if st, out := leaseCall(t, h, tok5, map[string]any{"action": "acquire", "repo": writeRepo, "issue": 22, "worker_id": wid5}); st != 200 {
+		t.Fatalf("re-dispatch without --force = %d %v; want granted", st, out)
+	}
+}
+
+// A node that never reports a final state (an agent predating #1586, or a
+// spawn still running): unknown after the wait — never done — and the lease
+// stays with the target, which may yet open it.
+func TestNodePlaceNoFinalStateIsUnknown(t *testing.T) {
+	h, _, _, f5, f4 := twoNodes(t)
+	wid5 := issueWID(f5.FleetID, 23)
+	start := time.Now()
+	st, out := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 23, "worker_id": wid5})
+	oc := placeOutcomeOf(t, out)
+	if st != 200 || oc["state"] != "unknown" || oc["exit"] != nil || !strings.Contains(oc["stderr1"].(string), "no final state") {
+		t.Fatalf("place = %d %v; want unknown with a reason and no exit", st, out)
+	}
+	if time.Since(start) < placeWait {
+		t.Fatalf("answered in %v; want it to wait %v first", time.Since(start), placeWait)
+	}
+	ls, _ := h.srv.Store.Leases(time.Now())
+	if len(ls) != 1 || ls[0].FleetID != f4.FleetID {
+		t.Fatalf("leases = %+v; want #23 still m4's", ls)
+	}
+}
+
+// wait 0 is the asynchronous ask: the answer on acceptance, as before.
+func TestNodePlaceWaitZeroAnswersOnAcceptance(t *testing.T) {
+	h, _, m4, f5, _ := twoNodes(t)
+	m4.setOpGet(finished("succeeded", map[string]any{"window": "@1"}))
+	st, out := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 24,
+		"worker_id": issueWID(f5.FleetID, 24), "wait": 0})
+	if _, has := out["outcome"]; st != 200 || has || out["operation"].(map[string]any)["status"] != "accepted" {
+		t.Fatalf("place wait=0 = %d %v; want accepted and no outcome", st, out)
 	}
 }
