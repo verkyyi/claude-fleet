@@ -16,7 +16,7 @@ from fleet_config_write import revision, write
 from fleet_hub_common import (CONFIG_KEYS, GH_READS, PROTOCOL, WORKER_ACTIONS, Database, Fault,
                               canonical, fields, identifier, name, now, operation,
                               parse_worker_id, is_identity, read_request, repo_named, run, tool_path, validate_gh_read,
-                              validate_write, worker_identity, worker_key)
+                              validate_write, worker_identity, worker_key, inventory_row)
 
 BIN = Path(__file__).absolute().parent
 # A start the hub stopped waiting for (claude-fleet#1606): the hub waits 60 s
@@ -154,37 +154,12 @@ class Control:
             raise Fault("UNAVAILABLE", "Cannot read fleet windows" + (": " + detail[-1].strip()[-200:] if detail else ""))
         workers = []
         for line in output.decode("utf-8").splitlines():
-            parts = line.split("\t")
-            # Columns 10-12 (issues #1423, #1475): the window name, its @origin_wid
-            # and what it needs of its person (@claude_needs), so a remote sidebar
-            # can label the row, nest it under its parent and draw its red `?`.
-            # Optional — a 9-column adapter is still whole — and the name absorbs
-            # any tab of its own, so an odd window name can never make the
-            # inventory unreadable (the adapter ships beside this file, so the
-            # last two columns are always needs and origin_wid).
-            # Column 13 (issue #1646): the session's lifelong identity (@fleet_id);
-            # the last three columns are then origin_wid, needs and identity.
-            extra = {}
-            # Column 14 (issue #1607): `busy=<looping|bg|>` — a turn over but the
-            # work not (a /loop round, a Bash-tool job), which only this machine
-            # can see. Prefixed, so it is never a stray piece of a window name.
-            if len(parts) >= 14 and parts[-1].startswith("busy="):
-                extra["busy"] = parts.pop()[5:] or None
-            if len(parts) >= 13:
-                ident = parts[-1] if re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", parts[-1]) else None
-                extra.update(name=" ".join(parts[9:-3]), origin_wid=parts[-3] or None, needs=parts[-2] or None,
-                             identity=ident)
-                parts = parts[:9]
-            elif len(parts) >= 12:
-                extra = dict(name=" ".join(parts[9:-2]), origin_wid=parts[-2] or None, needs=parts[-1] or None)
-                parts = parts[:9]
-            elif len(parts) >= 10:
-                # the #1423 shape (name, origin_wid), from an adapter older than #1475
-                extra = dict(name=" ".join(parts[9:-1]) if len(parts) > 10 else parts[9],
-                             origin_wid=(parts[-1] or None) if len(parts) > 10 else None)
-                parts = parts[:9]
-            if len(parts) != 9 or not re.fullmatch(r"@[0-9]+", parts[0]):
+            # The adapter's columns — name, @origin_wid, needs, identity, busy —
+            # through the one reader both inventories share (issue #1698).
+            row = inventory_row(line.split("\t"))
+            if row is None:
                 raise Fault("PROTOCOL_ERROR", "Invalid worker inventory")
+            parts, extra = row
             window, issue, scratch, worktree, state, agent, handle, lifecycle, repo = parts
             if not issue and scratch != "1":
                 continue

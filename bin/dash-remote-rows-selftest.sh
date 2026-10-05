@@ -440,6 +440,34 @@ PATH="$SHIMPATH" FLEET_SESSION=$SH DASH_FOLD_PLAIN=1 bash "$BIN/dash-fold-toggle
 hasnt "P: …a node with no conf repos writes nothing" "$(cat "$TMUX_LOG")" "@repo_fold"
 LC_ALL=C grep -v 'acme/tool' "$G/remote_$SH" > "$WORK/one" && mv "$WORK/one" "$G/remote_$SH"
 eq "P: one repo among the rows — no repo heading (a one-repo fleet's frame)" "" "$(shdrs "$(FLEET_SHELL=1 shell_side)")"
+
+# K. kinship on the shell (issue #1698): a row's key is `wid:<worker_id>`, its
+# parent `<worker_id>` bare — pass A strips the `wid:` off the key (KEYTAB), so
+# the two spellings meet there; adding `wid:` to the origin instead would break
+# every chain. A child nests under a parent on the SAME machine, on ANOTHER
+# machine (by design, #1423: a worker_id names one session wherever it runs —
+# the sidebar shows the real tree, not a per-machine one) and in another repo
+# (it follows its root's group, #1031, its own repo as a ⇢ tag); a parent whose
+# machine is lost un-nests its child (the `wid:$r_orig` lost test), and a parent
+# no row names (another login's fleet) leaves the child at the top.
+F5=33333333-4444-5555-6666-777777777777            # a fleet on a third machine, m5
+{ printf '#ts\037%s\n#me\037\n#node\037m4\037online\0373\037%s\n#node\037m5\037online\0371\037%s\n' "$NOW" "$NOW" "$NOW"
+  printf 'wid:%s/acme-app:scratch-5\037m4\037online\037\037acme/app\037looping\037claude\037父\037\037\0370\037\n' "$F"
+  printf 'wid:%s/acme-app:issue-31\037m4\037online\03731\037acme/app\037working\037claude\037同机子\037%s/acme-app:scratch-5\037\0370\037\n' "$F" "$F"
+  printf 'wid:%s/acme-tool:issue-32\037m4\037online\03732\037acme/tool\037working\037claude\037跨仓子\037%s/acme-app:scratch-5\037\0370\037\n' "$F" "$F"
+  printf 'wid:%s/acme-app:issue-33\037m5\037online\03733\037acme/app\037working\037claude\037跨机子\037%s/acme-app:scratch-5\037\0370\037\n' "$F5" "$F"
+  printf 'wid:%s/acme-app:issue-34\037m4\037online\03734\037acme/app\037working\037claude\037孤儿\037%s/acme-app:scratch-9\037\0370\037\n' "$F" "$F5"
+} > "$G/remote_$SH"
+ks=$(FLEET_SHELL=1 shell_side)
+eq "K: the parent is a top row with its fold caret" "wid:$F/acme-app:scratch-5|▾|0" "$(srow "$ks" '父' | cut -d'|' -f1,2,4)"
+eq "K: a child on the same machine nests under it" "wid:$F/acme-app:issue-31|└|1" "$(srow "$ks" '同机子' | cut -d'|' -f1,2,4)"
+eq "K: …a child on ANOTHER machine too (one tree across machines, by design)" "└|1" "$(srow "$ks" '跨机子' | cut -d'|' -f2,4)"
+eq "K: …a child in another repo too, in its root's group" "└|1" "$(srow "$ks" '跨仓子 ⇢too' | cut -d'|' -f2,4)"
+eq "K: a parent no row names leaves its child at the top" " |0" "$(srow "$ks" '孤儿' | cut -d'|' -f2,4)"
+eq "K: …and the children sort right under their parent" "父;" "$(sorder "$ks" | cut -d';' -f1);"
+sed -e "s/^#node\x1fm4\x1fonline/#node\x1fm4\x1flost/" "$G/remote_$SH" > "$WORK/k" && mv "$WORK/k" "$G/remote_$SH"
+kl=$(FLEET_SHELL=1 shell_side)
+eq "K: the parent's machine lost — the m5 child un-nests (the wid:\$r_orig lost test)" " |0" "$(srow "$kl" '跨机子' | cut -d'|' -f2,4)"
 rm -f "$G/remote_$SH" "$G/hub_ok"
 mv "$WORK/wlist.keep" "$WLIST_FILE"
 
@@ -643,6 +671,22 @@ ctl = c.Control(sys.argv[1]); f = [x for x in ctl.inventory() if x["name"] == sy
 w = [x for x in ctl.workers(f)["workers"] if x["issue"] == 1423][0]
 print(w["name"] + "|" + str(w["origin_wid"]) + "|" + w["key"] + "|" + str(w["needs"]))' "$FLEET_CONF_DIR" "$S" 2>&1)
   eq "G: the adapter hands over the window name, @origin_wid and @claude_needs" "侧边栏 x|$F/issue-1419|issue-1423|ask" "$got"
+  # The shell's road while the hub is silent (#1488): fleet-remote-view.sh
+  # sessions reads the SAME adapter on this machine. Its hand copy of the column
+  # rule missed #1607's `busy=` and glued @origin_wid onto the name (issue
+  # #1698), so every row of a silent hub came back un-nested and mislabelled.
+  got=$(bash "$BIN/fleet-remote-view.sh" sessions 2>&1 | python3 -c 'import json, sys
+d = json.load(sys.stdin); w = [s["worker"] for s in d["sessions"] if s["worker"]["issue"] == 1423][0]
+print(w["name"] + "|" + str(w["origin_wid"]) + "|" + str(w["needs"]) + "|" + str("busy" in w))' 2>&1)
+  eq "G: remote-view sessions — name, @origin_wid, needs each in its own field (#1698)" \
+     "侧边栏 x|$F/issue-1419|ask|True" "$got"
+  "$REAL_TMUX" -L "$S" set-window-option -t "$wi" -u @origin_wid
+  "$REAL_TMUX" -L "$S" set-window-option -t "$wi" -u @claude_needs
+  got=$(bash "$BIN/fleet-remote-view.sh" sessions 2>&1 | python3 -c 'import json, sys
+d = json.load(sys.stdin); w = [s["worker"] for s in d["sessions"] if s["worker"]["issue"] == 1423][0]
+print(repr(w["name"]) + "|" + str(w["origin_wid"]) + "|" + str(w["needs"]))' 2>&1)
+  eq "G: …a row with no parent: no trailing space on its name, origin_wid None" \
+     "'侧边栏 x'|None|None" "$got"
   # The refresher maps a LOCAL row to the window that holds it now (#1480) —
   # through this same adapter on the real server, by the hub's own key rule.
   wl=$("$REAL_TMUX" -L "$S" new-window -d -P -F '#{window_id}' -n 'local-one' 'while :; do sleep 300; done')
@@ -669,7 +713,8 @@ ctl = c.Control(sys.argv[1]); f = {"name": "x", "agent": "claude", "fleet_id": s
 ctl.adapter = lambda *a, **k: (0, b"@5\t7\t0\t/w/app-issue-7\tworking\tclaude\ta1\t\t\ta\tb\t\t\t9d1c6b7e-2f4a-4c3b-8e5d-6a7b8c9d0e1f\n", b"")
 w = ctl.workers(f)["workers"][0]
 print(w["name"] + "|" + str(w["origin_wid"]) + "|" + str(w["needs"]) + "|" + str(w["identity"]))' "$FLEET_CONF_DIR" "$U" 2>&1)
-eq "G: a tab inside the window name is absorbed, never a protocol error" "a b|None|None|9d1c6b7e-2f4a-4c3b-8e5d-6a7b8c9d0e1f" "$got"
+eq "G: a tab inside the window name is absorbed — kept as the tab it is (#1698), never a protocol error" \
+   $'a\tb|None|None|9d1c6b7e-2f4a-4c3b-8e5d-6a7b8c9d0e1f' "$got"
 
 # ============================================================================
 # R. ready — can this login take a new session? (#1475)

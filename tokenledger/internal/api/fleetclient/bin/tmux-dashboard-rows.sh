@@ -447,7 +447,8 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
   for _rr in ${_rrows[@]+"${_rrows[@]}"}; do
     IFS=$US read -r r_wid r_node r_iss r_repo r_state r_agent r_name r_orig r_needs <<< "$_rr"
     case "$r_node" in *!) r_orig='' ;; esac                      # lost: never nested
-    [ -n "$r_orig" ] && case "$_rlostw" in *" wid:$r_orig "*) r_orig='' ;; esac   # parent lost
+    # parent lost: _rlostw holds row ids (`wid:`-prefixed), the origin is bare
+    [ -n "$r_orig" ] && case "$_rlostw" in *" wid:$r_orig "*) r_orig='' ;; esac
     _rn=$((_rn + 1)); _rno=''; [ -n "$r_repo" ] || _rno=1   # no repo = @norepo
     RLIST+="$FLEET_SESSION$US$_rn$US$r_name$US$US$r_state$US$US$r_wid$US$r_iss$US$r_orig$US$US$r_agent$US${r_node:-?}$US$r_needs${US}1$US$US$US$US$US$US$r_repo$US$_rno$US$US$US$US"$'\n'
   done
@@ -525,7 +526,11 @@ while IFS=$US read -r sess idx name path state _ rwid iss origin wt _ _ nsub exp
   esac
   okp_v "$wrepo" "$wnorepo"
   okey_v "$iss" "$wt" "$path"
-  case "$rwid" in wid:*) okey=${rwid#wid:} ;; esac   # a remote row: its worker_id (#1423)
+  # A remote row: its worker_id (#1423). The row's id is `wid:<worker_id>`, its
+  # origin the parent's `<worker_id>` bare — stripping the prefix HERE is what
+  # makes the two spellings meet, so the origin slot stays bare (issue #1698:
+  # a `wid:` added to it would match no KEYTAB key and flatten every chain).
+  case "$rwid" in wid:*) okey=${rwid#wid:} ;; esac
   [ -z "$okey" ] && continue
   state_v "$state" "$nsub"; pin_v "$pin"; exp_v "$exp"
   KEYTAB+="$okey"$'\t'"$rk"$'\t'"$idx"$'\t'"$pin"$'\t'"$exp"$'\t'"$rgrp"$'\t'"$origin"$'\n'
