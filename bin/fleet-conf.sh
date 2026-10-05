@@ -5,6 +5,7 @@
 #   fleet-conf.sh role [--why]           client | node | client,node — FLEET_ROLE, else inferred
 #   fleet-conf.sh migrate [--dry-run] [--quiet]   fold the old files into it (each kept as .bak)
 #   fleet-conf.sh set-hub <url> [--role client|node]   write FLEET_HUB_URL (+ add a role)
+#   fleet-conf.sh hub                    print FLEET_HUB_URL from it (exit 1: none)
 #   fleet-conf.sh add-role client|node   add a role to FLEET_ROLE (creates the file)
 #
 # A machine used to spread its settings over up to five files — the install's
@@ -37,14 +38,18 @@
 # fleet, and keeps its identity (FLEET_REPO / FLEET_MAIN / FLEET_BASE_BRANCH /
 # FLEET_SEED — fleet-up.sh's registry entry, like repos/*.conf).
 #
-# Exit 0 ok (or nothing to do), 1 failed, 2 usage.
+# `hub` is set-hub's reader (issue #1692): the file's LAST FLEET_HUB_URL
+# assignment, `export` and quotes allowed — the same parse as fleet-connect.py /
+# fleet-login.py's machine_conf_hub(), which read it without a subprocess.
+#
+# Exit 0 ok (or nothing to do), 1 failed (hub: no address), 2 usage.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # The old files are what we read here — never let the lib source them first.
 FLEET_SKIP_GLOBAL_CONF=1 . "$BIN/fleet-lib.sh"
 
 die()   { echo "fleet-conf: $*" >&2; exit 1; }
-usage() { sed -n '4,8p' "$0" | sed 's/^# //' >&2; exit 2; }
+usage() { sed -n '4,9p' "$0" | sed 's/^# //' >&2; exit 2; }
 
 CD="$FLEET_CONF_DIR"
 MC="$CD/fleet.conf"
@@ -122,6 +127,7 @@ _set_common() {
     $0 ~ re { if (!done) print line; done = 1; next }
     { print }
     /^# ---- \[common\] ----$/ && !done { print line; done = 1 }
+    END { if (!done) print line }   # a hand-written file with no [common] header
   ' "$f" > "$tmp" && { chmod "$(stat -c '%a' "$f" 2>/dev/null || stat -f '%Lp' "$f")" "$tmp" 2>/dev/null; mv -f "$tmp" "$f"; } \
     || { rm -f "$tmp"; return 1; }
 }
@@ -363,6 +369,13 @@ case "$cmd" in
     [ -f "$MC" ] || migrate 0 1 >/dev/null
     add_role "$r"
     _set_common "$MC" FLEET_HUB_URL "export FLEET_HUB_URL=\"$url\"" || die "cannot write $MC" ;;
+  hub)
+    [ $# -eq 0 ] || usage
+    url=''
+    [ -f "$MC" ] && url=$(grep -E '^[[:space:]]*(export[[:space:]]+)?FLEET_HUB_URL=' "$MC" | tail -n1 \
+      | sed -E 's/^[^=]*=//; s/[[:space:]]+#.*$//; s/^[[:space:]]+//; s/[[:space:]]+$//' | tr -d "\"'")
+    [ -n "$url" ] || exit 1
+    printf '%s\n' "$url" ;;
   -h|--help) usage ;;
   *) usage ;;
 esac

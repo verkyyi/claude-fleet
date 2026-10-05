@@ -41,9 +41,11 @@ FILE (0600) for fleet-node-join.sh --joined; it is never printed.
 `check` prints the certificate's state (valid <seconds left> · expired · none)
 and exits 0 only while it is valid. `status` is `ssh-keygen -L` on it.
 
-The hub URL is remembered in ~/.config/claude-fleet/hub.json ({"url": …}, any
-other key in it kept — `fleet connect` reads the same file), or set
-FLEET_HUB_URL. Those paths are fixed: `fleet connect` (C7) reads them.
+The hub URL: --hub, else FLEET_HUB_URL, else FLEET_HUB_URL in the machine's
+fleet.conf ($FLEET_CONF_DIR, default ~/.config/claude-fleet — issue #1623), else
+hub.json's "url" (an older install, read one version). A --hub is remembered in
+fleet.conf (`fleet-conf.sh set-hub`); hub.json keeps only its token. `fleet
+connect` reads the same places in the same order (issue #1692).
 
 Exit: 0 certificate written · 1 refused/expired/denied (renew: the hub could
 not be reached, or any other error) · 2 usage/config · 3 (renew only) this
@@ -103,7 +105,11 @@ def hub_url(arg):
     if not url:
         url = str(read_hub_file().get("url") or "")   # the old place, read one version
     if not url:
-        die("no hub URL: pass --hub https://<入口地址> once (it is remembered)")
+        # Nothing was found, so nothing is remembered on this path (issue #1692):
+        # only an explicit --hub reaches remember_hub().
+        die("no hub URL (not in --hub, FLEET_HUB_URL, %s or hub.json): run "
+            "`fleet login --hub https://<入口地址>` — a --hub is written to fleet.conf"
+            % MACHINE_CONF.replace(HOME, "~", 1))
     if not url.startswith(("https://", "http://")):
         die("hub URL must start with https://")
     return url.rstrip("/")

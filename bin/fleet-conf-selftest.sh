@@ -203,6 +203,23 @@ run bash "$INS/bin/fleet-conf.sh" add-role node
 has "E: add-role node → client,node" "$(cat "$CD/fleet.conf")" 'FLEET_ROLE="client,node"'
 is "E: one FLEET_ROLE line" "$(grep -c '^FLEET_ROLE=' "$CD/fleet.conf")" 1
 
+# `hub` — set-hub's reader (issue #1692)
+is "E: hub prints the address" "$(run bash "$INS/bin/fleet-conf.sh" hub)" "https://hub.example"
+mkbox e2
+run bash "$INS/bin/fleet-conf.sh" hub >/dev/null 2>&1; is "E: hub with no file → exit 1" "$?" 1
+printf 'FLEET_ROLE="client"\n' > "$CD/fleet.conf"
+run bash "$INS/bin/fleet-conf.sh" hub >/dev/null 2>&1; is "E: hub with no line → exit 1" "$?" 1
+# fleet login with no address anywhere writes nothing and promises nothing
+out=$(run python3 "$INS/bin/fleet-login.py" hub 2>&1); rc=$?
+is "E: fleet login hub, no address → exit 2" "$rc" 2
+hasnt "E: …no false 'it is remembered'" "$out" "it is remembered"
+has "E: …names fleet.conf" "$out" "fleet.conf"
+# a client installed by set-hub alone (no hub.json): both entry points find it
+run bash "$INS/bin/fleet-conf.sh" set-hub https://hub.example >/dev/null 2>&1
+[ ! -e "$CD/hub.json" ] && ok || bad "E: set-hub writes no hub.json"
+is "E: set-hub on a header-less file still writes the address" "$(run bash "$INS/bin/fleet-conf.sh" hub)" "https://hub.example"
+is "E: fleet login hub ← fleet.conf only" "$(run python3 "$INS/bin/fleet-login.py" hub)" "https://hub.example"
+
 # ---------------------------------------------------------------------------- F
 mkbox f; node_fixture
 l=$(role_line)
