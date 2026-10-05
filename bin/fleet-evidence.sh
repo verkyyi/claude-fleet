@@ -261,11 +261,49 @@ if [ "$cmd" = list ] || [ "$cmd" = export ]; then
     printf '# member\tstage\tts\tpath\tnote   (issue %s%s)\n' "$m" "${e:+ · epic $e}"
     rows=$(member_rows "$m" "$e")
   fi
+  # A member with nothing HERE may have run on another machine of this owner
+  # (issue #1609): its worker's machine handed the files to the hub at its ship
+  # report / reap. Ask once, only when some member reads `none`; a remote row's
+  # note starts `[@<machine>]`, and a member the hub knows ran elsewhere but left
+  # no capture reads `none` with 「在 <machine> 上跑过，没拍」. Not a hub node →
+  # nothing asked, every row as before.
+  case "$rows" in
+    *$'\tnone\t'*)
+      if [ -f "$BIN/fleet-worker-records.sh" ] && [ -n "$repo" ]; then
+        if [ -n "$epic_arg" ] && [ "$epic_arg" != none ]; then set -- --epic "$e"; else set -- --issue "$m"; fi
+        rem=$(bash "$BIN/fleet-worker-records.sh" fetch --session "$sess" --repo "$repo" "$@" 2>/dev/null); rrc=$?
+        if [ "$rrc" -eq 0 ] || [ "$rrc" -eq 1 ]; then
+          rows=$(FE_ROWS="$rows" FE_REM="$rem" FE_RC="$rrc" python3 -c '
+import os
+rem, by = os.environ["FE_REM"], {}
+ran = {}
+for l in rem.split("\n"):
+    f = l.split("\t")
+    if f[0] == "evidence" and len(f) >= 7:
+        by.setdefault(f[1], []).append("%s\t%s\t%s\t%s\t%s" % (f[1], f[2], f[3], f[4], ("[@%s] %s" % (f[6], f[5])).rstrip()))
+    elif f[0] == "history" and len(f) >= 3:
+        ran.setdefault(f[1], f[2])
+for l in os.environ["FE_ROWS"].split("\n"):
+    f = l.split("\t")
+    if len(f) >= 2 and f[1] == "none":
+        if f[0] in by:
+            print("\n".join(by[f[0]])); continue
+        if f[0] in ran:
+            print("%s\tnone\t\t\t在 %s 上跑过，没拍" % (f[0], ran[f[0]])); continue
+        if os.environ["FE_RC"] == "1":
+            print("%s\tnone\t\t\t别机未查（入口不可达）" % f[0]); continue
+    print(l)
+')
+        fi
+      fi ;;
+  esac
   if [ "$cmd" = list ]; then printf '%s\n' "$rows"; exit 0; fi
   # export: copy every file to <dest>/evidence/<M>/<file>; print rows with the RELATIVE path
   n=0
   printf '%s\n' "$rows" | while IFS=$'\t' read -r m st ts p nt; do
-    if [ "$st" = none ] || [ -z "$p" ]; then printf '%s\t%s\t\t\t\n' "$m" "$st"; continue; fi
+    # a none row's ts/path are empty, and a tab IFS folds empty fields — so its
+    # note (issue #1609) lands in whichever of the three read it
+    if [ "$st" = none ] || [ -z "$p" ]; then printf '%s\t%s\t\t\t%s\n' "$m" "$st" "$ts$p$nt"; continue; fi
     rel="evidence/$m/${p##*/}"
     mkdir -p "$dest/evidence/$m" && cp -p "$p" "$dest/$rel" \
       || { printf 'fleet-evidence: copy failed: %s\n' "$p" >&2; continue; }

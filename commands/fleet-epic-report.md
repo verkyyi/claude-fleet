@@ -86,6 +86,14 @@ echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master
   named, before touching code and after the PR was open — and `live`, which is
   yours (step 2). **Collect, never create**: a missing before/after is not
   re-shot and not staged; the member is reported as **无证据**, in those words.
+  A member that ran on **another machine** (hub placement) is read back from the
+  hub — its machine uploaded the captures at its ship report / reap (issue #1609,
+  `bin/fleet-worker-records.sh`): such a row's note starts `[@<machine>]`. A `none`
+  row whose note says 「在 <machine> 上跑过，没拍」 means the worker ran there and
+  took nothing — write **无证据（在 <machine> 上跑过，没拍）**; 「别机未查（入口不可达）」
+  means the hub could not be asked — write that, not a bare 无证据. The same rows
+  reach `/fleet-history list` (summary `@<machine> …`), so 占用时长 for a remote
+  member comes from its row there, not the tick log.
 
 **A hard limit to state plainly in the page, not to paper over:** this fleet
 cannot attribute tokens to an issue. There is no session→spend join yet

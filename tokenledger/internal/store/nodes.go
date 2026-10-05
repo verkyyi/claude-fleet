@@ -73,6 +73,10 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetPeerCerts(); err != nil {
 		return err
 	}
+	// What a worker on another machine left behind (claude-fleet#1609).
+	if err := s.ensureFleetWorkerRecords(); err != nil {
+		return err
+	}
 	// Registered devices + their audit (claude-fleet#1470).
 	if err := s.ensureFleetDevices(); err != nil {
 		return err

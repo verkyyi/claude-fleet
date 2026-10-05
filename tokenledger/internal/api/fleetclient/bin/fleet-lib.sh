@@ -5449,6 +5449,13 @@ fleet_reap_record() {
         --title "$title" --origin "$origin" >/dev/null 2>&1 || return 0
       ;;
   esac
+  # Hand what the worker left — its evidence files and the row just written — to
+  # the hub (issue #1609), so the machine that spawned it sees them when this one
+  # is not that machine. Not a hub node (no node token) → exit 3, nothing sent.
+  if [ -f "$_bin/fleet-worker-records.sh" ] && [ -n "$repo" ]; then
+    bash "$_bin/fleet-worker-records.sh" push --session "$sess" --repo "$repo" \
+      --key "$key" ${win:+--win "$win"} >/dev/null 2>&1 || :
+  fi
   return 0
 }
 
