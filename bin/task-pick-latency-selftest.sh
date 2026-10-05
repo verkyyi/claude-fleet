@@ -78,7 +78,8 @@ if [ "${TPL_FZF:-}" = shim ] || ! command -v fzf >/dev/null 2>&1; then
   cat > "$WORK/bin/fzf" <<'EOF'
 #!/bin/sh
 cat >/dev/null &
-printf '\033[2J\033[H task \xe2\x96\xb8 \n[\xef\xbc\x8b new] [\xe2\x8c\x82 hub] [\xe2\x9c\x95 close]\n' > /dev/tty
+# literal UTF-8 and %s, no \xHH: dash's printf (a Linux runner's sh) has no hex escapes
+{ printf '\033[2J\033[H'; printf '%s\n' ' task ▸ ' '[＋ new] [⌂ hub] [✕ close]'; } > /dev/tty
 stty -icanon -echo min 1 time 0 < /dev/tty 2>/dev/null   # one key, not one line: Esc alone must end it
 dd if=/dev/tty bs=1 count=1 2>/dev/null >/dev/null
 exit 130
@@ -158,7 +159,9 @@ for k in range(n):
             ms = int((time.monotonic() - t1) * 1000); break
     res.append(ms); print('tap %d %s' % (k + 1, 'TIMEOUT' if ms is None else ms), flush=True)
     if ms is None and k == 0:   # what DID the client get? (a CI runner cannot be watched)
-        print('diag %d bytes since the tap: %r' % (len(buf) - start, bytes(buf[start:start + 1500])), flush=True)
+        b = bytes(buf[start:]); i = b.find(b'task'); j = b.find(b'\x1b[3;')
+        print('diag %d bytes since the tap; task at %d: %r; row 3 at %d: %r; tail %r' % (
+            len(b), i, b[max(0, i - 200):i + 200] if i >= 0 else b'', j, b[j:j + 700] if j >= 0 else b'', b[-300:]), flush=True)
     os.write(fd, b'\x1b')
     t2 = time.monotonic()
     while time.monotonic() - t2 < 10:
