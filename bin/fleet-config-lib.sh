@@ -344,6 +344,7 @@ fcfg_label_i18n() {
     FLEET_CLOSE_LANDS_NEXT) printf '关闭任务后落到下一个任务' ;;
     FLEET_HOME_SIDEBAR_FIRST) printf '⌂/F9 先去任务栏' ;;
     FLEET_DASH_WINDOW) printf '全屏列表窗口（旧 hub）' ;;
+    FLEET_STATUS_QUOTA_PCT) printf '状态栏额度出现线（%%）' ;;
     FLEET_STATUS_CONTAINER) printf '状态栏容器' ;;
     FLEET_STATUS_CACHE_SECS) printf '状态栏统计共享秒数' ;;
     FLEET_USAGE_WARN_PCT) printf '用量警告百分比' ;;

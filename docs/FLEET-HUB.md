@@ -182,22 +182,23 @@ row (the sidebar's own window excepted), and a cached local row whose window is
 gone is not one either. On the default source the cache's local rows are skipped
 and nothing changes; the hub list (prefix+F9) always keeps its local rows.
 
-**The status bar shows the machine the current session is on** (issue #1482,
-EPIC #1479 C3). In hub mode — `CCQUOTA_FLEET=1`, the fleet's
-`FLEET_SIDEBAR_SOURCE=hub`, and a `remote_<sess>` cache on disk — the bottom
-bar's left part is three chips about THE WINDOW YOU ARE ON, not this machine:
-`m4 ● · 负载 0.2 · 内存 25% │ icloud 5h 63% · 周 65% │ ● 入口` — since issue
-#1534 the same layout the bar has off hub mode (`本机 · 负载 · 内存 · 盘 │
-<account>`), colours from `conf/fleet-palette.conf`, and below 120 columns 内存
-drops first, then 负载. The machine is this one for a local window (its live 负载
-/ 内存) and the OTHER machine for a proxy window (`@remote`,
-`fleet-remote-view.sh`): `●` with its load per core and memory % off the hub, `○ 失联 3m` when the hub calls it
-lost, `?` when the cache has no row. The account is the window's `@cc_account`
-with its 5h / week quota (the account knobs' colour bands); omitted when neither
-side knows it (off the hub's limits, else the window's own `@rl5h`/`@rl7d`). `● 入口` while `global/hub_ok` (#1483, below) is fresh, `○ 失联 Nm`
-(`○ 入口 失联 Nm`) once it is older than `FLEET_HUB_SESSIONS_STALE`. The window list (`window-status-format`) goes
-blank in hub mode and is restored on leaving (saved in `@status_wsf_saved` /
-`@status_wscf_saved`, flag `@status_wlist_saved`).
+**The status bar reads the session you are on, and draws only what wants your
+hand** (issues #1482, #1616; EPIC #1479 C3, EPIC #1615 C1). In hub mode —
+`CCQUOTA_FLEET=1`, the fleet's `FLEET_SIDEBAR_SOURCE=hub`, and a `remote_<sess>`
+cache on disk — the bar's right side is about THE WINDOW YOU ARE ON, not this
+machine, and it is EMPTY while all is well. Each segment appears on its own
+condition, in this order: the machine of a proxy window (`@remote`,
+`fleet-remote-view.sh`) by name, `○ 失联 3m` after it when the hub calls it
+lost; `旧` when a machine's live install is behind stable (this machine's own
+row too); the window's `@cc_account` once max(5h, 周) reaches
+`FLEET_STATUS_QUOTA_PCT` (80 %; off the hub's limits, else the window's own
+`@rl5h`/`@rl7d`); the alert counts; `○ 入口 Nm` once `global/hub_ok` (#1483,
+below) is older than `FLEET_HUB_SESSIONS_STALE`. Below 60 columns the account's
+label goes and only the higher window stays. Load and memory are no longer drawn
+— `fleet-alerts.sh` raises `▲ machine · load high` / `memory high` when they turn
+red. Colours from `conf/fleet-palette.conf`. The window list
+(`window-status-format`) goes blank in hub mode and is restored on leaving
+(saved in `@status_wsf_saved` / `@status_wscf_saved`, flag `@status_wlist_saved`).
 The conf's `status-right` passes the client's current window as `k=v` args
 (`sess= win= remote= acct= wsf= wscf= wsaved= cw= rl5= rl7=`), so tmux re-runs the bar the
 moment you switch windows. Data: the same refresh loop writes, every
@@ -211,13 +212,13 @@ uuid, else the hub's). Both are viewer routes; a login whose identity (the
 the session list, ONE body carrying both `machines` and `per_account`, narrowed
 by the hub to the machines of the person's ACTIVE logins and the subscriptions
 those logins report under (no `endpoint_shares`), audited as `fleet_summary`. So
-a colleague who only did `fleet login` sees `m5 ● │ CPU … │ MEM …` and their own
-account chip. Only a refusal (401/403, or 404 from a hub not yet redeployed)
+a colleague who only did `fleet login` gets the machine's word and their own
+account's quota. Only a refusal (401/403, or 404 from a hub not yet redeployed)
 falls back to the viewer routes with the token; no answer spends nothing.
 `bin/fleet-status-lib.sh` holds the one rule (`fleet_status_node`: `@remote` →
 that machine, else here) and the readers; the shell (C5) reuses it. Off hub mode
-the bar is `本机 · 负载 · 内存 · 盘`, plus the window's account chip when the
-window carries its own reading.
+the bar draws the account past the line (off the window's own reading), the
+alert counts and nothing else.
 
 **The hub gone is not a blank screen** (issue #1483, EPIC #1479 C4). 入口通不通
 is ONE word: `global/hub_ok`, the epoch of the last `fleet_sessions` round that

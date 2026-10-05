@@ -272,7 +272,7 @@ SSHEET="$(FLEET_UI_LANG=zh NO_COLOR=1 bash "$KEYS" --context sidebar --plain)" |
 [ "$(printf '%s\n' "$SSHEET" | wc -l | tr -d ' ')" -le 10 ] \
   || fail "the sidebar sheet is $(printf '%s\n' "$SSHEET" | wc -l | tr -d ' ') lines — it must fit its popup (≤ 10)"
 printf '%s\n' "$SSHEET" | head -1 | grep -q '任务栏快捷键' || fail "the sidebar sheet lacks its 任务栏快捷键 title"
-for k in "打字 ↵" "↑ ↓" "编辑" ". / 再点一次" "esc" "⌂ / F9" "prefix ?"; do
+for k in "打字 ↵" "↑ ↓" "编辑" ". / 再点一次" "esc" "F9" "prefix ?"; do
   grep -qF "  $k " <<< "$SSHEET" || fail "the sidebar sheet does not list '$k'"
 done
 for k in "⌃o" "⌃n" "prefix E" "prefix Space"; do

@@ -199,8 +199,8 @@ fleet_ui_t() {
     zh:popup_switch_sub)        printf '切换 sub' ;;
     en:popup_switch_sub)        printf 'Switch subscription' ;;
     # --- toasts a tmux bind shows (issue #1535: no hardcoded English left)
-    zh:toast_sidebar_home)      printf '任务栏：输入名称 ↵ 新会话 · ↑↓ 切换 · ↵/Esc 回任务 · 再按 ⌂/F9 去 hub' ;;
-    en:toast_sidebar_home)      printf 'Tasks: type a name ↵ = new session · ↑↓ switch · ↵/Esc worker · ⌂/F9 again → hub' ;;
+    zh:toast_sidebar_home)      printf '任务栏：输入名称 ↵ 新会话 · ↑↓ 切换 · ↵/Esc 回任务 · 再按 ☰/F9 去 hub' ;;
+    en:toast_sidebar_home)      printf 'Tasks: type a name ↵ = new session · ↑↓ switch · ↵/Esc worker · ☰/F9 again → hub' ;;
     zh:toast_sidebar_focus)     printf '任务栏：输入名称 ↵ 新会话 · . 行菜单 · ↑↓ 切换 · 空行 ←→ 折叠 · 有字时移光标 · ↵/Esc 回任务' ;;
     en:toast_sidebar_focus)     printf 'Tasks: type a name ↵ = new session · . = row menu · ↑↓ switch · empty line ←→ fold · with text ←→ move · ↵/Esc worker' ;;
     zh:toast_shell_sidebar)     printf '任务：↑↓ 切换 · ↵ 进入 · . 行菜单 · ? 快捷键 · Esc 返回' ;;
@@ -380,8 +380,8 @@ resume	c	resume — a row on another machine only: reopen a just-stopped one thr
     en:keys_g_prefix_sub)      printf %s '— global, from any window' ;;
     zh:keys_prefix_01)         printf %s '跳到下一个需要你处理的窗口（红色优先，其次绿色）' ;;
     en:keys_prefix_01)         printf %s 'jump to the next window that needs you (red first, then green)' ;;
-    zh:keys_prefix_02)         printf %s '聚焦任务栏（同 ⌂）；FLEET_DASH_WINDOW=1 时为旧 hub 仪表盘' ;;
-    en:keys_prefix_02)         printf %s 'focus the task list, like ⌂ (FLEET_DASH_WINDOW=1: the old hub dash)' ;;
+    zh:keys_prefix_02)         printf %s '聚焦任务栏（同 F9）；FLEET_DASH_WINDOW=1 时为旧 hub 仪表盘' ;;
+    en:keys_prefix_02)         printf %s 'focus the task list, like F9 (FLEET_DASH_WINDOW=1: the old hub dash)' ;;
     zh:keys_prefix_03)         printf %s '显示/隐藏 worker 任务栏（保存到当前 fleet；窄屏自动隐藏）' ;;
     en:keys_prefix_03)         printf %s 'show/hide the worker task sidebar (saved for this fleet; narrow screens hide it automatically)' ;;
     zh:keys_prefix_04)         printf %s '聚焦任务栏；没有任务栏时打开任务选择器' ;;
@@ -404,8 +404,8 @@ resume	c	resume — a row on another machine only: reopen a just-stopped one thr
     en:keys_prefix_12)         printf %s 'alerts popup — every ✖ alarm / ▲ warning / ● needs the status bar counts, one row each with its action: ↵ act (go to window / restart daemon / see accounts / see disk) · 1/2/3 filter by level, 0 all · m mute 1h (never an alarm) · esc close' ;;
     zh:keys_prefix_13)         printf %s '打开这份快捷键' ;;
     en:keys_prefix_13)         printf %s 'this cheatsheet' ;;
-    zh:keys_prefix_14)         printf %s '无前缀：聚焦任务栏（没显示就打开）；再按隐藏，第三下再打开。⌂ 也聚焦任务栏但不隐藏；FLEET_DASH_WINDOW=1 回到旧 hub' ;;
-    en:keys_prefix_14)         printf %s '(no prefix) focus the task list — shown (and switched back on) if it is not; a second press hides it, a third shows it again. The ⌂ tap focuses it too but never hides; a window too narrow for the list opens the task picker (prefix Space). The full-screen hub is gone (FLEET_DASH_WINDOW=1 brings it back, with the old F9)' ;;
+    zh:keys_prefix_14)         printf %s '无前缀：聚焦任务栏（没显示就打开）；再按隐藏，第三下再打开。底栏 ☰ 只负责显示 / 隐藏任务栏；FLEET_DASH_WINDOW=1 回到旧 hub' ;;
+    en:keys_prefix_14)         printf %s '(no prefix) focus the task list — shown (and switched back on) if it is not; a second press hides it, a third shows it again. The status bar ☰ only shows or hides it; a window too narrow for the list opens the task picker (prefix Space). The full-screen hub is gone (FLEET_DASH_WINDOW=1 brings it back, with the old F9)' ;;
     zh:keys_prefix_15)         printf %s '在 shell 叫回上手向导，从上次进度继续' ;;
     en:keys_prefix_15)         printf %s 'from a shell, reopen the onboarding guide at its saved progress' ;;
     zh:keys_prefix_16)         printf %s '点击左下角 needs 数字：跳到下一个需要处理的窗口' ;;

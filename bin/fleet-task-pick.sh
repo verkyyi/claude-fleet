@@ -24,7 +24,7 @@
 #                       0 turns both off). A zoomed task keeps going home.
 #
 # Usage:
-#   fleet-task-pick.sh --popup [--session S] [--client C] [--cause home|f9|key]
+#   fleet-task-pick.sh --popup [--session S] [--client C] [--cause home|f9|bar|key]
 #       Open the picker as a popup on client C and act on the pick once it
 #       closes. Brackets the popup with the @popup_open epoch (#308/#431) and
 #       clears it on every exit path. Exit 3 = the popup never ran (no client,
@@ -146,7 +146,7 @@ if [ "$POPUP" = 1 ]; then
   # that did NOT happen — recorded like C4's `*-sidebar` landings; the 4th
   # column is the trace (issue #1611).
   case "$CAUSE" in
-    home|f9) bash "$BIN/fleet-hub-visits.sh" record '' "$SESS" "$CAUSE-pick" "$from" '' "$(fleet_home_extra)" >/dev/null 2>&1 || : ;;
+    home|f9|bar) bash "$BIN/fleet-hub-visits.sh" record '' "$SESS" "$CAUSE-pick" "$from" '' "$(fleet_home_extra)" >/dev/null 2>&1 || : ;;
   esac
   # The action line carries no trailing newline: read returns 1 on it, so the
   # line is taken whatever read's status.

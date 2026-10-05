@@ -112,15 +112,21 @@ mkroot() {   # mkroot <dir> [palette-text] — bin/ = links to every script, con
 mkroot "$WORK/alt" "$(sed -e "s/'#7aa2f7'/'#123456'/" -e "s/'#565f89'/'#010203'/" -e "s/'#7dcfff'/'#00ff00'/" "$PAL")"
 mkroot "$WORK/none"
 mkdir -p "$WORK/tmp"
-st() { FLEET_ALERTS_DISK=0 FLEET_STATUS_CACHE_SECS=0 TMPDIR="$WORK/tmp/" FLEET_CONF_DIR="$WORK/cd" FLEET_ACCOUNTS_DIR="$WORK/acc" \
-       CCQUOTA_HUB_URL=http://127.0.0.1:9 CCQUOTA_FLEET='' bash "$1/bin/tmux-status.sh" 2>/dev/null; }
+# The bar draws only what wants a hand (issue #1616): an account past the line
+# (the label blue, `5h` dim) and the alert counts (an alarm, red) are what is
+# on it here — the alerts file planted, fresh for FLEET_ALERTS_TTL=3600.
+mkdir -p "$WORK/tmp/.claude-dash/global"
+printf '{"id":"a1","severity":"alarm","subject":"s","condition":"c","value":"v","since":1,"action":"disk","healed_at":0,"target":"","detail":"d"}\n' > "$WORK/tmp/.claude-dash/global/alerts.ndjson"
+date +%s > "$WORK/tmp/.claude-dash/global/alerts.ndjson.ts"
+st() { FLEET_ALERTS_TTL=3600 FLEET_STATUS_CACHE_SECS=0 TMPDIR="$WORK/tmp/" FLEET_CONF_DIR="$WORK/cd" FLEET_ACCOUNTS_DIR="$WORK/acc" \
+       CCQUOTA_HUB_URL=http://127.0.0.1:9 CCQUOTA_FLEET='' bash "$1/bin/tmux-status.sh" acct=icloud rl5=90 rl7=1 2>/dev/null; }
 out=$(st "$WORK/alt")
-has "D: the bar's 本机 is the edited blue" '#[fg=#123456]本机' "$out"
-has "D: the separators are the edited dim" '#[fg=#010203]· 负载' "$out"
-has "D: the alert counts too" '#[fg=#010203]│ #[range=user|alarm]' "$out"
+has "D: the bar's account label is the edited blue" '#[fg=#123456]icloud' "$out"
+has "D: the window names are the edited dim" '#[fg=#010203]5h' "$out"
+has "D: the alert counts too" '#[range=user|alarm]#[fg=#f7768e,bold]✖ 1' "$out"
 hasnt "D: the old blue is gone" '#7aa2f7' "$out"
 out=$(st "$WORK/none")
-has "D: no palette → the bar still renders" '本机 ' "$out"
+has "D: no palette → the bar still renders" 'icloud 5h 90% ' "$out"
 hasnt "D: no palette → no colour of its own" '#[fg=' "$out"
 rows=$(sed -n "/^E=\$'/,/^GYU=/p" "$BIN/tmux-dashboard-rows.sh")
 [ -n "$rows" ] || fail "D: could not find the rows producer's colour block"

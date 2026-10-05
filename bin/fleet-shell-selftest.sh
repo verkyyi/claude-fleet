@@ -335,9 +335,9 @@ bar() {  # <window> — the bar as the conf's status-right runs it
 }
 b=$(bar "$w2")
 has 'F: the bar names m4 (the right pane machine)' "$b" 'm4 '
-has 'F: m4 is online off the #node line (no hub_nodes)' "$b" "m4 #[fg=#9ece6a]● "
-hasnt 'F: no `?` for a machine the hub lists' "$b" 'm4 #[fg=#565f89]? '
-has 'F: ● 入口' "$b" '#[fg=#9ece6a]● #[fg=#7aa2f7]入口 '
+hasnt 'F: m4 online off the #node line (no hub_nodes) → its name, no 失联' "$b" '失联'
+hasnt 'F: no `?` for a machine the hub lists' "$b" '?'
+hasnt 'F: a healthy hub draws no ● 入口 (issue #1616: only what wants a hand)' "$b" '入口'
 hasnt 'F: no local 负载 for a remote window' "$b" '负载'
 b5=$(bar "$w1")
 has 'F: the m5 window says m5' "$b5" 'm5 '
@@ -356,7 +356,7 @@ has 'G: the m4 row is still listed' "$rows" 'issue-9'
 has 'G: the m5 row is still listed' "$rows" 'issue-7'
 has 'G: rows are marked lost' "$rows" 'm4!'
 b=$(bar "$w2")
-has 'G: the bar says ○ 入口 失联' "$b" '○ #[fg=#7aa2f7]入口 #[fg=#f7768e]失联'
+has 'G: the bar says ○ 入口 <age>' "$b" '○ #[fg=#7aa2f7]入口 #[fg=#f7768e]6m'
 printf '%s\n' "$(date +%s)" > "$G/hub_ok"
 
 # ================================================================================

@@ -134,7 +134,7 @@ print_sidebar_sheet() {
   skey "$(fleet_ui_t keys_sb_menu_k_fmt "$(dg menu)")" "$(fleet_ui_t keys_sb_menu)$(dn menu)"
   skey "esc" "$(fleet_ui_t keys_sb_esc)"
   skey "$(dg scratch) $(dg view) $(dg reload) $(dg info)" "$(fleet_ui_t keys_sb_more)"
-  skey "⌂ / F9" "$(fleet_ui_t keys_sb_home)"
+  skey "F9" "$(fleet_ui_t keys_sb_home)"
   skey "prefix ?" "$(fleet_ui_t keys_sb_all_fmt "${DASH_KEYMAP_PREFIX:-C-b}")"
 }
 

@@ -240,10 +240,10 @@ line, which exits silently without it.)
 | Key | Action |
 |---|---|
 | `prefix a` | jump to the next window that needs you (red first, then green) |
-| `prefix g` | focus the task list, like the `⌂` (with `FLEET_DASH_WINDOW=1`: the old hub dash pane, press again to zoom it). If your personal `~/.tmux.conf` binds `g` and is sourced after the fleet conf, your bind shadows this (tmux is last-write-wins) — rebind or drop it |
+| `prefix g` | focus the task list, like `F9` (with `FLEET_DASH_WINDOW=1`: the old hub dash pane, press again to zoom it). If your personal `~/.tmux.conf` binds `g` and is sourced after the fleet conf, your bind shadows this (tmux is last-write-wins) — rebind or drop it |
 | `prefix e` | show/hide the compact task sidebar in workers; remembers the preference for this fleet |
 | `prefix E` | focus the sidebar (or click it): ↑↓ switch tasks (follows once you pause); on an empty input line Home/End go to the ends and ←→ fold (a row's subtree, or a repo heading's whole group), on a typed name they move its cursor (with ⌥←→ ⌃a ⌃e ⌃w ⌃k to jump and delete, as on Claude's prompt), a terminal paste lands on it too (one name; newlines become spaces); Enter/Esc give input back to the worker, `n` (or a tap on the bottom row) new task — files an issue and spawns its worker, `q` hide (keyboard-only; nothing in the sidebar hides on a tap) |
-| `prefix Space` | task picker — the sidebar's task list as a popup, for when the sidebar is hidden (a window under ~111 columns) or off: ↵ switches, a typed name + `⌃s` (or ↵ on no match) starts a scratch session, F9 / `[⌂ hub]` goes on to the hub. `prefix E`, `F9` and the ⌂ tap open it too in a task with no sidebar on screen |
+| `prefix Space` | task picker — the sidebar's task list as a popup, for when the sidebar is hidden (a window under ~111 columns) or off: ↵ switches, a typed name + `⌃s` (or ↵ on no match) starts a scratch session, F9 / `[⌂ hub]` goes on to the hub. `prefix E`, `F9` and the `☰` tap open it too in a task with no sidebar on screen |
 | `prefix b` | backlog modal — near-fullscreen popup; enter spawns the issue session |
 | `prefix c` | config modal — view/edit `FLEET_*` by friendly label, grouped + collapsible; pacing/budget/timeout knobs live under a collapsed INTERNAL "show all" header (#1101); identity keys locked; `⌃s` toggles where edits land — this fleet ⇄ one hosted repo (#1102), `?` reveals raw keys, enter edits |
 | `prefix u` | usage + account modal — local 5h/7d usage and the official limit line on top, the account pool (when configured) as a selectable body below; enter picks the account new sessions start from |
@@ -294,30 +294,37 @@ background windows and detached fleets do not run sidebar refresh loops.
 The full hub list also hides worker IDs and gives that space to task descriptions.
 
 Mouse mode is shipped **on** by the fleet baseline (see below), so the footer is
-clickable too: the **`⌂` hub icon** (leftmost) is a consistent **home** tap — it
-always lands on this fleet's hub, unzoomed
-(never a pane zoom, unlike `F9`) — next to it your **login name** says whose
-fleet this is (not a tap target) — the red **`● N` needs badge** cycles to the
-next window that needs you (blue: `●` needs is a level of its own). The right
-side carries machine vitals plus the **alert counts** — `✖ N` alarms (red: what
+clickable too: the **`☰`** (leftmost) is the task list's **switch** — one tap
+shows the list in this window, the next hides it, and it does nothing else (a
+window too narrow for the list opens it as a popup the width of the screen;
+issue #1616) — next to it your **login name** says whose fleet this is (not a tap
+target; cut to 8 characters under 60 columns) — the blue **`● N` needs badge**
+cycles to the next window that needs you. That left side is always there; the
+right side draws **only what wants your hand**, and is empty while all is well:
+the machine of a session on another machine, the current account once 5h or week
+reaches `FLEET_STATUS_QUOTA_PCT` (80 %), `⚠ GitHub 受限`, the **alert counts** and
+`○ 入口 Nm` when the hub has gone silent. The counts are `✖ N` alarms (red: what
 you see may be wrong, e.g. `quota · stale`, `quota · unreadable`, `dash · stale`,
 `daemon · stale`, `disk · low` under the floor) and `▲ N` warnings (yellow:
 drifting or a limit ahead, e.g. `quota · uneven`, `quota · from banner`,
-`accounts · all capped`, `model · capped`). The counts are fixed width and never
-a sentence; tap one, or press `prefix !`, for the table (issue #1238; the one
-producer is `bin/fleet-alerts.sh`, which writes `$G/alerts.ndjson` for the bar,
-the popup and `fleet-doctor` alike). No usage figures; `prefix u` opens the consolidated
+`accounts · all capped`, `model · capped`, `machine · load high` /
+`memory high` — load and memory left the bar and turn up here when red), each
+drawn only when it is not zero and never a sentence; tap one, or press
+`prefix !`, for the table (issue #1238; the one producer is
+`bin/fleet-alerts.sh`, which writes `$G/alerts.ndjson` for the bar, the popup and
+`fleet-doctor` alike). On a 54-column iPad / iPhone in portrait the whole bar
+stays within 30 columns in every state. No usage figures; `prefix u` opens the consolidated
 **usage + account modal** (usage/limit detail on top, the account pool as a
 selectable body below). (Comment out `set -g mouse on` in
 `conf/tmux-attention.conf` to keep native select-to-copy.)
 
 To zoom a pane fullscreen, double-click it (or its border), or use stock tmux
 `prefix z` — except a worker with its task sidebar on screen, where a double-click
-selects a word as in stock tmux (zoom it with `prefix z` or its border); `F9`, `prefix g` and the `⌂` all land on
-the task list (the full-screen hub retired, issue #1533; `FLEET_DASH_WINDOW=1`
+selects a word as in stock tmux (zoom it with `prefix z` or its border); `F9` and `prefix g` land on
+the task list, the `☰` shows or hides it (the full-screen hub retired, issue #1533; `FLEET_DASH_WINDOW=1`
 brings back the old dash and its zoom toggle). On iPad / Termius the double-tap
 doesn't always reach tmux over touch and `prefix z` is a chord on a soft keyboard,
-so the reliable single-tap footer ranges are the `⌂` hub icon and the `● N` needs
+so the reliable single-tap footer ranges are the `☰` and the `● N` needs
 badge above — not a pane zoom.
 
 There is no other-fleet cue and no fleet switching: **one fleet per login** holds

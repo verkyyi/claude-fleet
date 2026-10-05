@@ -93,18 +93,16 @@ adv=$(fleet_now); [ "$adv" -le $(( $(date +%s) - 99 )) ] && [ "$adv" -ge $(( $(d
   || fail "a pinned clock must advance with \$SECONDS from its pin" "$adv"
 CHECKS=$((CHECKS+1)); unset _FLEET_NOW _FLEET_NOW_PID _FLEET_NOW_S0
 
-# tmux-status.sh's 负载 figure (issue #1534): the load per core, one decimal, by
-# integer math on hundredths — the table below is what awk's arithmetic would say.
-eval "$(sed -n '/^status_pct_color()/,/^}/p; /^status_load()/,/^}/p' "$BIN/tmux-status.sh")"
-command -v status_load >/dev/null || fail "tmux-status.sh no longer defines status_load"
-# shellcheck disable=SC2034  # read by the eval'd status_pct_color
-RED='' YELLOW='' GREEN='' DIM=''
+# The 负载 figure (issue #1534; an alert of fleet-alerts.sh's since #1616): the
+# load per core, one decimal, by integer math on hundredths — the table below is
+# what awk's arithmetic would say.
+eval "$(sed -n '/^_fa_loadpc()/,/^}/p' "$BIN/fleet-alerts.sh")"
+command -v _fa_loadpc >/dev/null || fail "fleet-alerts.sh no longer defines _fa_loadpc"
 for c in '1.57 10 0.2' '9.00 10 0.9' '0.04 4 0.0' '12.5 4 3.1' '0.995 1 1.0' '3 2 1.5' '1.5 0 –' 'x 4 –' ' 4 –'; do
   set -- $c
   [ $# -eq 2 ] && set -- '' "$1" "$2"
-  status_load "$1" "$2"
-  # shellcheck disable=SC2154  # _sl: status_load's result
-  eq "status_load $1 / $2 cores" "$3" "$_sl"
+  _fa_loadpc "$1" "$2"
+  eq "_fa_loadpc $1 / $2 cores" "$3" "${FA_LOAD:-–}"
 done
 
 # ================================================================ BUDGET shims
@@ -130,13 +128,14 @@ printf '0\t0\n' > "$G/account.quota.empty"
 : > "$WORK/exec.log"
 out=$(TMPDIR="$TMPD/" FLEET_LIVE_ROOT="$BIN/.." FLEET_ACCOUNTS_DIR="$WORK/acc" FLEET_STATE_DIR="$WORK/ghstate" FLEET_GH_FAKE_LIMIT="" CCQUOTA_HUB_URL=http://127.0.0.1:9 \
       PATH="$WORK/bin:$PATH" bash "$BIN/tmux-status.sh" 2>&1) || fail "tmux-status.sh exited non-zero" "$out"
-case "$out" in *"负载 "*"内存 "*"盘 "*) ;; *) fail "tmux-status.sh lost a segment" "$out" ;; esac; CHECKS=$((CHECKS+1))
+# The bar draws only what wants a hand (issue #1616): no 负载 / 内存 / 盘 chips.
+case "$out" in *"负载"*|*"内存"*|*"盘 "*) fail "tmux-status.sh still draws a machine chip (issue #1616)" "$out" ;; esac; CHECKS=$((CHECKS+1))
 # The 5h/7d usage stat is gone from the bar (issue #1100) — a usage cache on
 # disk must NOT resurface it; the modal (prefix u) is its only reader now.
 case "$out" in *"5h "*|*"7d "*|*"range=user|usage"*) fail "tmux-status.sh still renders the 5h/7d usage stat (issue #1100)" "$out" ;; esac; CHECKS=$((CHECKS+1))
 # The bar only COUNTS alerts now (issue #1238): both alarms land in one `✖ 2`,
 # and the rows themselves are in the file the render just (re)wrote.
-case "$out" in *"✖ 2 "*) ;; *) fail "tmux-status.sh: the two alarms must be counted" "$out" ;; esac; CHECKS=$((CHECKS+1))
+case "$out" in *"✖ 2#"*) ;; *) fail "tmux-status.sh: the two alarms must be counted" "$out" ;; esac; CHECKS=$((CHECKS+1))
 case "$(cat "$G/alerts.ndjson")" in *'"subject":"quota","condition":"stale","value":"16m"'*) ;; *) fail "tmux-status.sh: the stale quota watch must still be raised" "$(cat "$G/alerts.ndjson")" ;; esac; CHECKS=$((CHECKS+1))
 case "$(cat "$G/alerts.ndjson")" in *'"subject":"daemon","condition":"stale"'*'"detail":"cleanup"'*) ;; *) fail "tmux-status.sh: the overdue unit must still be raised" "$(cat "$G/alerts.ndjson")" ;; esac; CHECKS=$((CHECKS+1))
 [ "$(count date)" -le 1 ] || fail "tmux-status.sh forked date $(count date)× — one pinned clock per render (#888)"; CHECKS=$((CHECKS+1))

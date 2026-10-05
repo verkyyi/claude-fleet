@@ -1349,18 +1349,28 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Full-screen list window (old hub) @group=status @tier=internal @scope=fleet @edit=bool
 #FLEET_DASH_WINDOW=0
 
-# Optional: a docker container name to show as ●/○ in the status bar right side.
+# The status bar draws the current window's account only once its quota reaches
+# this % on max(5h, week) (issue #1616: the bar draws only what wants your hand —
+# below the line the account takes no room). Only the window(s) past the line are
+# drawn, coloured by FLEET_ACCOUNT_WARN_PCT / FLEET_ACCOUNT_CEILING. GLOBAL, like
+# the container below: the status bar reads the global env only.
+# @label=Status-bar quota line (%) @group=status @tier=internal @scope=global @edit=int
+#FLEET_STATUS_QUOTA_PCT=80
+
+# Optional: a docker container name to show as ○ in the status bar right side
+# while it is down (nothing while it runs, issue #1616).
 # GLOBAL: the status bar (bin/tmux-status.sh) reads this from the global env only
 # — a per-fleet override would be a silent no-op — so it is machine-wide (like the
 # FLEET_DISK_* thresholds the same status bar renders).
 # @label=Status-bar container @group=status @tier=advanced @scope=global @edit=str
 #FLEET_STATUS_CONTAINER="claude-dev"
 
-# How long the status bar's machine stats (container / CPU / MEM / DSK) are shared
-# between attached clients, in seconds (issue #890). tmux renders the bar once per
-# status-interval PER CLIENT, so two terminals used to run ps / vm_stat / df twice
-# for the same machine-wide numbers; now the first renderer measures and publishes
-# ${TMPDIR}/fleet-status.cache, and the rest read it. Default 5 = status-interval.
+# How long the status bar's container reading (`docker ps`) is shared between
+# attached clients, in seconds (issue #890). tmux renders the bar once per
+# status-interval PER CLIENT, so two terminals used to measure twice for the same
+# machine-wide answer; now the first renderer measures and publishes
+# ${TMPDIR}/fleet-status.cache, and the rest read it (load / memory / disk left
+# the bar in issue #1616: fleet-alerts.sh measures them). Default 5 = status-interval.
 # 0 = no sharing (every client measures, the pre-#890 behaviour). GLOBAL, like the
 # container above.
 # @label=Status-bar stats sharing (s) @group=status @tier=internal @scope=global @edit=int

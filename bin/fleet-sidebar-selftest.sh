@@ -356,10 +356,10 @@ try:
     def status_block(head):
         start = shipped.index(head)
         return shipped[start + len(head):shipped.index('\n}\n', start)]
-    # The one allowed difference: the ⌂ from the task bar is the SECOND press of
-    # "task bar first" and says so with --nav (issue #899).
+    # No difference allowed: the ☰ is one switch whoever has the keyboard (issue
+    # #1616 — the ⌂ it replaced said --nav here, #899).
     check(status_block('bind -n MouseDown1Status ') ==
-          status_block('bind -T fleet-sidebar MouseDown1Status ').replace(' --nav', '', 1),
+          status_block('bind -T fleet-sidebar MouseDown1Status '),
           'the fleet-sidebar status-bar tap drifted from the root one')
     # Movement keys never fork (issue #1033): each goes straight to the view at
     # `{top-left}` behind the same @sidebar gate as `Any`, and all six bodies are

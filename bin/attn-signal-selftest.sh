@@ -28,8 +28,9 @@
 #     keywords never miscount, the retired beacon flag is gone, and the cross-fleet WINDOW
 #     aggregation ("total minus own").
 #
-#   PART B — the ⌂ hub icon is NAV-ONLY: expand the REAL status-left and assert the
-#     ⌂ background is blue (bg=#7aa2f7) on the hub / dim (bg=#414868) off it, and
+#   PART B — the ☰ (the ⌂ before #1616) is never a beacon: expand the REAL status-left
+#     and assert its background is blue (bg=#7aa2f7) while the list is on screen /
+#     raised (bg=#414868) otherwise, and
 #     NEVER a red block (bg=#f7768e) — even when the hub itself is needy.
 #
 #   PART C — the LOCAL ● badge's active-window discount: a non-needy active window
@@ -219,21 +220,25 @@ fleet_palette_expand "$SL"
 SL=$_fpe
 sl_at() { tf "$1" display-message -p -t "$1:$2" "$SL"; }
 
-# --- PART B: the ⌂ hub icon is NAV-ONLY (issue #368) --------------------------
-# Even with the hub itself needy, the ⌂ must be blue (on hub) / dim (off hub) and
-# NEVER a red block (bg=#f7768e) — the red ⌂ beacon is retired. (The red local
-# ● uses fg=#f7768e, so we grep the bg= form to isolate the icon block.)
+# --- PART B: the ☰ is the list's switch, never a beacon (#368, #1616) --------
+# Its block is blue while the list is on screen in the window (@sidebar_worker,
+# not zoomed), raised (bg=#414868) otherwise — and NEVER a red block (bg=#f7768e),
+# not even on a needy hub: the red beacon is retired. (The red local ● uses
+# fg=#f7768e, so we grep the bg= form to isolate the icon block.)
 tf fleetB set-option -t fleetB @attn_needs 1
 tf fleetB set-option -t fleetB @attn_other_windows 0
 tf fleetB set-window-option -t fleetB:plan @claude_state needs   # needy hub
 out="$(sl_at fleetB plan)"
-case "$out" in *"bg=#7aa2f7"*) : ;; *) fail "⌂ nav-only: on the hub expected blue block bg=#7aa2f7" ;; esac
-case "$out" in *"bg=#f7768e"*) fail "⌂ nav-only: needy hub must NOT show a red ⌂ block (beacon retired)" ;; esac
+case "$out" in *"☰"*) : ;; *) fail "☰: the status-left must lead with ☰ (#1616)" "$out" ;; esac
+case "$out" in *"bg=#414868"*) : ;; *) fail "☰: a window with no list on screen expected the raised block bg=#414868" ;; esac
+case "$out" in *"bg=#f7768e"*) fail "☰: a needy hub must NOT show a red block (beacon retired)" ;; esac
+tf fleetB set-window-option -t fleetB:issue-9 @sidebar_worker 1
 out="$(sl_at fleetB issue-9)"
-case "$out" in *"bg=#414868"*) : ;; *) fail "⌂ nav-only: off the hub expected dim block bg=#414868" ;; esac
-case "$out" in *"bg=#f7768e"*) fail "⌂ nav-only: off-hub must NOT show a red ⌂ block" ;; esac
+case "$out" in *"bg=#7aa2f7"*) : ;; *) fail "☰: the list on screen expected the blue block bg=#7aa2f7" ;; esac
+case "$out" in *"bg=#f7768e"*) fail "☰: must NOT show a red block" ;; esac
+tf fleetB set-window-option -u -t fleetB:issue-9 @sidebar_worker
 tf fleetB set-window-option -t fleetB:plan @claude_state 'done'  # restore
-printf 'PART B ok: ⌂ nav-only — blue(on-hub)/dim(off-hub), never a red block, even on a needy hub (#368)\n'
+printf 'PART B ok: ☰ — blue while the list is on screen, raised otherwise, never a red block, even on a needy hub (#368, #1616)\n'
 
 # --- PART C: the local ● badge's active-window discount (#368, supersedes #363) --
 # Zero the orange cross-fleet dot on the fleets we render so the ONLY ● is the local
