@@ -20,6 +20,8 @@
 #   its top border only, so that is where 「Esc 关闭」 can sit on every popup.
 #   --client C     draw on this client (a tmux bind passes '#{client_name}');
 #                  default: resolved as below
+#   --session S    the session the popup belongs to, when the caller already
+#                  knows it (saves the read that would ask tmux; issue #1611)
 #   --no-inline    a refused popup is NOT run in the caller's pane — for a bind's
 #                  `run-shell -b` (no terminal to fall back to) or a caller that
 #                  has its own fallback: toast why and exit 3
@@ -78,7 +80,7 @@
 # THIS fleet's socket (issue #159).
 set -u
 
-W=""; H=""; SIZE=""; TITLE=""; OBJECT=""; CLIENT=""; NO_INLINE=""
+W=""; H=""; SIZE=""; TITLE=""; OBJECT=""; CLIENT=""; NO_INLINE=""; SESSION=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -w) shift; W="${1:-}" ;;
@@ -87,6 +89,7 @@ while [ $# -gt 0 ]; do
     --title) shift; TITLE="${1:-}" ;;
     --object) shift; OBJECT="${1:-}" ;;
     --client) shift; CLIENT="${1:-}" ;;
+    --session) shift; SESSION="${1:-}" ;;
     --no-inline) NO_INLINE=1 ;;
     --) shift; break ;;
     *)  break ;;
@@ -123,12 +126,17 @@ cmd=$(printf '%q ' "$@")
 # inherits THIS pane's id — the dash pane the popup was opened from, which is the
 # identity its command is acting as.
 [ -n "${TMUX_PANE:-}" ] && cmd="TMUX_PANE=$(printf '%q' "$TMUX_PANE") $cmd"
+# The ⌂ latency trace (issue #1611) crosses the same way — the popup's command
+# starts from the SERVER's environment, not ours. No trace ⇒ nothing added.
+. "$BIN/fleet-trace-lib.sh"
 
 # This pane's session. `display-message -p` PRINTS (it does not need a client of
 # its own), so this resolves even when nothing is attached — which is the case we
 # are here to handle. A bind's run-shell names its client instead: that client's
 # session.
-if [ -n "$CLIENT" ]; then
+if [ -n "$SESSION" ]; then
+  sess=$SESSION
+elif [ -n "$CLIENT" ]; then
   sess=$(tmux display-message -p -c "$CLIENT" '#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null)
 else
   sess=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null)
@@ -176,7 +184,10 @@ if [ -n "$client" ]; then
   tmux set -g @popup_open "$epoch" \; set -g @popup_pid "$epoch:$$" 2>/dev/null || true
   # Stamp the marker INSIDE the popup, ahead of the real command, so its presence
   # proves the popup opened and started running. display-popup -E blocks until the
-  # popup closes, so the check below is not racing it.
+  # popup closes, so the check below is not racing it. (Kept as its own tmux call:
+  # dash-popup-selftest.sh's shims dispatch on the subcommand.)
+  fleet_home_mark popup
+  [ -z "${FLEET_HOME_MS:-}" ] || cmd="FLEET_HOME_MS=$(printf '%q' "$FLEET_HOME_MS") $cmd"
   tmux display-popup -c "$client" -E ${geom[@]+"${geom[@]}"} \
     "$(printf 'printf 1 > %q; ' "$marker")$cmd"
   # Ran ⇒ done. NB we test the MARKER, never tmux's exit status: a refused popup

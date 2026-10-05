@@ -46,7 +46,14 @@ export FLEET_HUB_VISITS_LOGDIR="$WORK/logs"
 # still builds (issue #1533) — this fleet keeps it.
 export FLEET_CONF_DIR="$WORK/conf"
 mkdir -p "$FLEET_CONF_DIR/fleets/t"
-printf 'FLEET_DASH_WINDOW=1\n' > "$FLEET_CONF_DIR/fleets/t/conf"
+# The meter is the thing under test, so every key goes STRAIGHT to the hub
+# (FLEET_HOME_SIDEBAR_FIRST=0): with the task-bar-first branch on, a ⌂ / F9 from
+# a bar-less window tries the picker popup first, and since issue #1611 that
+# parent pre-reads the row producer BEFORE the popup opens — whose @wid backfill
+# hands every window a handle, and leg 3's "from the window id, no @wid" would
+# read a handle instead. The branch itself is hub-zoom-home-selftest.sh's and
+# task-pick-selftest.sh's to cover.
+printf 'FLEET_DASH_WINDOW=1\nFLEET_HOME_SIDEBAR_FIRST=0\n' > "$FLEET_CONF_DIR/fleets/t/conf"
 LOG="$WORK/logs/hub-visits-t.log"
 
 CLIENT_PID=
@@ -218,6 +225,20 @@ printf '%s\n' "$px" | grep -q ': 1 (+2 via the task picker, not counted)$' || fa
 printf '%s\n' "$px" | grep -Eq '^  f9-pick +1  \(task picker instead of the hub, not counted\)$' || fail "f9-pick row missing: $px"
 bx="$(bash "$HV" --brief --since 24h --log "$WORK/pick.log")"
 printf '%s\n' "$bx" | cut -f2 | grep -qx 1 || fail "--brief counted a picker opening: $bx"
+
+# The ⌂ trace (issue #1611): `record`'s optional 6th argument is a 4th column —
+# one line, no tab (a tab-bearing extra is dropped, never a 5th column) — and
+# the readers key on the first three columns as before.
+: > "$WORK/logs/hub-visits-x.log"
+bash "$HV" record '' x home-pick a1 '' 'ms=238 conf:21 fzf:238 done:240'
+bash "$HV" record '' x home-pick a1 '' "$(printf 'ms=1\tevil')"
+bash "$HV" record '' x f9 a1 ''
+xl="$(cat "$WORK/logs/hub-visits-x.log")"
+[ "$(printf '%s\n' "$xl" | sed -n 1p | cut -f4)" = 'ms=238 conf:21 fzf:238 done:240' ] || fail "record extra → 4th column: $xl"
+[ "$(printf '%s\n' "$xl" | sed -n 2p | awk -F'\t' '{print NF}')" = 3 ] || fail "a tab in the extra must drop it, not add a column: $xl"
+[ "$(printf '%s\n' "$xl" | sed -n 3p | awk -F'\t' '{print NF}')" = 3 ] || fail "no extra → three columns as before: $xl"
+xt="$(bash "$HV" --since 24h --log "$WORK/logs/hub-visits-x.log")"
+printf '%s\n' "$xt" | grep -q ': 1 (+1 via the task picker, not counted)$' || fail "the 4th column changed the table: $xt"
 
 # No log at all, and a bad --since.
 empty="$(FLEET_HUB_VISITS_LOGDIR="$WORK/none" bash "$HV" --brief --all)"
