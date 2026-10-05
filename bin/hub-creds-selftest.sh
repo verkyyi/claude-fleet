@@ -121,6 +121,11 @@ PY
 ok "fleet-account-truth.py maps CLAUDE_SECURESTORAGE_CONFIG_DIR back to its pool label"
 
 # --- CLAUDE-SH --------------------------------------------------------------------
+# A leased token again, and hubbed re-pinned: while it had none, the pick moved
+# the active account off it for its login (#1670).
+printf '{"claudeAiOauth":{"accessToken":"sk-ant-oat01-short","refreshToken":null,"expiresAt":%s,"scopes":["user:inference"]}}' \
+  "$exp_ms" > "$FLEET_ACCOUNTS_DIR/hubbed.hub/.credentials.json"
+bash "$ACCT" use hubbed >/dev/null 2>&1
 mkdir -p "$WORK/bin"
 cat > "$WORK/bin/claude" <<EOF
 #!/bin/sh
