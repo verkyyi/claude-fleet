@@ -31,8 +31,8 @@ case "$MODE" in roadmap) LABEL=' roadmap · milestoned ';; unplanned) LABEL=' un
 [ "$MULTI" = 1 ] && LABEL="${LABEL}· all repos "
 
 # The ⌃n new · ⌃x close · ? keys sub-actions each open a small
-# `tmux display-popup` (input dialog / cheatsheet). That works from a windowed
-# panel, but NOT when the backlog itself already runs in a display-popup
+# a tmux popup (input dialog / cheatsheet). That works from a windowed
+# panel, but NOT when the backlog itself already runs in a the popup command
 # (prefix+b): tmux won't nest a popup inside a popup, so the dialog never opens
 # and the input is silently lost (issues #123/#122).
 #
@@ -40,7 +40,7 @@ case "$MODE" in roadmap) LABEL=' roadmap · milestoned ';; unplanned) LABEL=' un
 #   • windowed (no POPUP): keep the original in-place binds — nesting a popup is
 #     fine here, and fzf's +reload/+refresh-preview preserve the filter/cursor.
 #     The `?` bind opens its popup through bin/dash-popup.sh, NOT `tmux
-#     display-popup` directly (issue #448): a popup has to draw on a CLIENT, and an
+#     popup` directly (issue #448): a popup has to draw on a CLIENT, and an
 #     fzf `execute()` bind runs from a PANE PROCESS that reaches tmux with no client
 #     of its own — so tmux has to guess one, and when it can't it exits 1 with
 #     "no current client" and draws nothing, invisibly. That made the dash's twin of
@@ -85,7 +85,11 @@ if [ -n "${POPUP:-}" ]; then
   #   • ✕/close → bare abort (no sentinel) → run_action finds nothing → loop exits.
   # Chips are popup-only; windowed panes keep the ⌃n/? keyboard hints (CH_BIND is
   # close-only + inert there — no matching header word).
-  HDR="$SLOTS · ↵ work · [＋ new] · ? keys · esc · [✕ close]"
+  # The keys are the popup frame's bottom hint line (issue #1619); the slot
+  # chip stays the header. The chips answer a tap on either line.
+  . "$BIN/fleet-ui-lang.sh"; . "$BIN/fleet-popup-lib.sh"
+  fleet_fzf_hint "$(fleet_ui_t hint_backlog)" "$SLOTS"
+  FZF_FRAME=(--border=none)   # the popup's border is the frame; its title names it
   mkdir -p "$(dirname "$ACT")" 2>/dev/null || true
   N_BIND="$DASH_KEY_NEW:execute-silent(printf 'new' > '$ACT')+abort"
   X_ARGS='{1}'; [ "$MULTI" = 1 ] && X_ARGS='{1} {4}'   # + the row's repo (issue #794)
@@ -93,14 +97,15 @@ if [ -n "${POPUP:-}" ]; then
   K_BIND="?:execute-silent(printf 'keys' > '$ACT')+abort"
   # The clicked header word is a single whitespace token, so a bracketed multi-word
   # chip `[＋ new]` arrives as `[＋` OR `new]` — glob both (issue #381).
-  CH_BIND="click-header:transform:case \"\$FZF_CLICK_HEADER_WORD\" in *＋*|*new*) printf 'new' > '$ACT'; echo abort ;; *✕*|*close*) echo abort ;; esac"
+  fleet_fzf_click "transform:case \"\$FZF_CLICK_FOOTER_WORD\$FZF_CLICK_HEADER_WORD\" in *＋*|*new*|*新建*) printf 'new' > '$ACT'; echo abort ;; *✕*|*close*|*关闭*) echo abort ;; esac"
 else
   ENTER_TAIL=''
   N_BIND="$DASH_KEY_NEW:execute(bash $BIN/dash-issue-new.sh)+reload(sleep 2; bash $ROWS $MODE)"
   X_BIND="$DASH_KEY_CLOSE:execute(bash $BIN/dash-issue-close.sh {1}$RARG)+reload(sleep 2; bash $ROWS $MODE)"
   K_BIND="?:execute(bash $BIN/dash-popup.sh --size L --title popup_keys -- bash $BIN/fleet-keys.sh --context backlog)"
   # Windowed carries no tap chips; keep the close-only click-header (inert here).
-  CH_BIND='click-header:transform:case "$FZF_CLICK_HEADER_WORD" in *✕*|*close*) echo abort ;; esac'
+  FZF_CLICK=(--bind 'click-header:transform:case "$FZF_CLICK_HEADER_WORD" in *✕*|*close*) echo abort ;; esac')
+  FZF_HINT=(--header="$HDR"); FZF_FRAME=(--border=rounded --border-label="$LABEL" --border-label-pos=3)
 fi
 
 # The dim column-title line (issue #371) is NOT a --header line — that renders at
@@ -139,10 +144,9 @@ run_fzf() {
   bash "$ROWS" "$MODE" | fzf --ansi --delimiter=$'\x1f' --with-nth=2 \
     --no-sort --disabled --no-input \
     --header-lines=1 \
-    --layout=reverse-list --info=hidden --border=rounded \
-    --border-label="$LABEL" --border-label-pos=3 \
+    --layout=reverse-list --info=hidden ${FZF_FRAME[@]+"${FZF_FRAME[@]}"} \
     --prompt='backlog ▸ ' \
-    --header="$HDR" \
+    ${FZF_HINT[@]+"${FZF_HINT[@]}"} \
     --preview "bash $BIN/tmux-issue-preview.sh {1}$RARG" \
     --preview-window='right,46%,wrap,border-left,hidden' \
     --bind "load:reload-sync(sleep $REFRESH; bash $ROWS $MODE)" \
@@ -155,7 +159,7 @@ run_fzf() {
     --bind "$X_BIND" \
     --bind "$P_BIND" \
     --bind "enter:execute-silent(bash $BIN/dash-issue-session.sh {1} --async$RARG)${ENTER_TAIL}" \
-    --bind "$CH_BIND" \
+    ${FZF_CLICK[@]+"${FZF_CLICK[@]}"} \
     >/dev/null 2>&1
 }
 

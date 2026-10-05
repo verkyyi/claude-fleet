@@ -3,10 +3,15 @@
 #               [-w <width>] [-h <height>] -- <command> [args…]
 #
 # THE way a fleet popup opens (issue #448; the one frame since #1535, EPIC #1529
-# E6 — no script, bind or conf line calls `display-popup` but this one, and
-# dash-popup-selftest.sh greps for one). Every popup gets the same frame:
+# E6; one style since #1619). A script or bind opens a popup through here (a
+# script may say `fleet_popup`, which calls this); the draw itself is
+# bin/fleet-popup-lib.sh's, the only place tmux's popup command is spelled —
+# dash-popup-selftest.sh greps for a second one. Every popup gets the same frame:
 #
-#   ┌─ 动作 · 对象 · 机器 ─────────────────── Esc 关闭 ─┐
+#   ╭──────────── 动作 · 对象 · 机器 ────────────╮      rounded, PAL_DIM
+#   │ …                                          │
+#   │  ↵ … · [✕ 关闭]                            │      the fzf's key line
+#   ╰────────────────────────────────────────────╯
 #
 #   --size S|M|L   the three sizes (S a one-question prompt, M a table, L a
 #                  list / sheet); -w / -h still override either axis
@@ -16,8 +21,9 @@
 #                  the machine is appended only when the hub is on (the sidebar's
 #                  remote cache names this machine, `#me`); one machine needs no
 #                  name, so a hub-off login's titles stay 「动作 · 对象」
-#   The close hint is the title row's right end: tmux draws a popup's title on
-#   its top border only, so that is where 「Esc 关闭」 can sit on every popup.
+#   The key hints are the body's bottom line (fleet_fzf_hint, issue #1619): a
+#   title shares its border with nothing, so on a 54-column client it is whole.
+#   A client 80 columns or narrower gets 96% × 90% whatever the size.
 #   --client C     draw on this client (a tmux bind passes '#{client_name}');
 #                  default: resolved as below
 #   --session S    the session the popup belongs to, when the caller already
@@ -27,9 +33,9 @@
 #                  has its own fallback: toast why and exit 3
 #
 # It gives an in-pane popup the two things a `prefix`-bound popup gets for free
-# and a raw `tmux display-popup` in an fzf `execute()` bind never had:
+# and a raw a tmux popup in an fzf `execute()` bind never had:
 #
-#   1. AN EXPLICIT CLIENT (the reported bug). `display-popup` has to draw on a
+#   1. AN EXPLICIT CLIENT (the reported bug). tmux's popup command has to draw on a
 #      CLIENT. A prefix bind runs FROM the client that pressed the key, so tmux
 #      always knows which one. A command run from a PANE PROCESS arrives on the
 #      socket with no client of its own, so tmux must GUESS — and when it can't it
@@ -51,10 +57,10 @@
 #      cannot strand it (and dash-popup-wait.sh ages out whatever leaks anyway).
 #
 #   3. PROOF THAT THE POPUP ACTUALLY RAN (issue #454 — the second silent no-op).
-#      `display-popup` DOES NOT report a refusal: when it declines to open, tmux
+#      tmux's popup command DOES NOT report a refusal: when it declines to open, tmux
 #      exits **0** and prints NOTHING, and the command never runs. (tmux returns
 #      CMD_RETURN_NORMAL on a failed popup_display() — verified on 3.5a: with an
-#      overlay already up, `display-popup -E … 'echo ran >> log'` gives rc 0, empty
+#      overlay already up, a popup `-E … 'echo ran >> log'` gives rc 0, empty
 #      stderr, and no `ran`.) So the exit status cannot tell "shown" from "silently
 #      dropped", and the `&& exit 0` this script used to end on treated a dropped
 #      popup as a success — the keystroke was dead again, invisibly, which is the
@@ -62,9 +68,9 @@
 #      THE REFUSAL THAT BITES IS NESTING: a client may hold exactly ONE overlay, so
 #      any popup already up on it (a prefix+b backlog modal / prefix+c config modal
 #      / prefix+? sheet, a menu, the dash itself running as a POPUP peek) makes the
-#      next `display-popup` a no-op. tmux offers no "did it open?" query, so we make
+#      next tmux's popup command a no-op. tmux offers no "did it open?" query, so we make
 #      success OBSERVABLE instead of inferred: the popup's FIRST act is to drop a
-#      marker file. Marker present when display-popup returns ⇒ it really ran (it
+#      marker file. Marker present when the popup command returns ⇒ it really ran (it
 #      blocks until the popup closes, so there is no race); marker absent ⇒ it was
 #      dropped ⇒ fall back to inline. One check covers EVERY refusal reason —
 #      today's nesting and whatever tmux declines next — instead of enumerating them.
@@ -109,14 +115,7 @@ esac
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 
-# NB the ${geom[@]+…} guard: macOS ships bash 3.2, where `set -u` treats an EMPTY
-# array's "${geom[@]}" as an unbound variable and aborts. Both call sites pass -w/-h,
-# but the helper must not detonate for one that doesn't.
-geom=()
-[ -n "$W" ] && geom+=(-w "$W")
-[ -n "$H" ] && geom+=(-h "$H")
-
-# One shell-command string (display-popup takes exactly one). %q-quote each token
+# One shell-command string (the popup command takes exactly one). %q-quote each token
 # so a title/path with a space or metachar survives both the popup and the
 # inline fallback intact.
 cmd=$(printf '%q ' "$@")
@@ -133,11 +132,16 @@ cmd=$(printf '%q ' "$@")
 # This pane's session. `display-message -p` PRINTS (it does not need a client of
 # its own), so this resolves even when nothing is attached — which is the case we
 # are here to handle. A bind's run-shell names its client instead: that client's
-# session.
-if [ -n "$SESSION" ]; then
+# session, read in the same call as its width (the frame's narrow-screen size,
+# issue #1619).
+cw=''
+if [ -n "$CLIENT" ]; then
+  IFS='|' read -r cw s2 <<EOF_CW
+$(tmux display-message -p -c "$CLIENT" '#{client_width}|#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null)
+EOF_CW
+  sess=${SESSION:-$s2}
+elif [ -n "$SESSION" ]; then
   sess=$SESSION
-elif [ -n "$CLIENT" ]; then
-  sess=$(tmux display-message -p -c "$CLIENT" '#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null)
 else
   sess=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null)
 fi
@@ -146,13 +150,16 @@ fi
 # #{client_activity} is what demotes a ghost client (a dropped Termius session
 # tmux has not reaped yet) below the one the operator is really looking at.
 client=$CLIENT
-[ -z "$client" ] && [ -n "$sess" ] && client=$(tmux list-clients -t "$sess" \
-  -F '#{client_activity} #{client_name}' 2>/dev/null \
-  | sort -rn | head -1 | cut -d' ' -f2-)
+if [ -z "$client" ] && [ -n "$sess" ]; then
+  read -r _ cw client <<EOF_CL
+$(tmux list-clients -t "$sess" -F '#{client_activity} #{client_width} #{client_name}' 2>/dev/null | sort -rn | head -1)
+EOF_CL
+fi
 
-# The title row (issue #1535): 「动作 · 对象 · 机器」 left, 「Esc 关闭」 right.
+# The title (issue #1535): 「动作 · 对象 · 机器」, centred on the top border
+# (issue #1619 — the key hints are the body's bottom line now, fleet_fzf_hint).
 # Every string from the one table; the machine from the sidebar's own cache
-# (never the network). It is a tmux FORMAT, so a literal # doubles.
+# (never the network). fleet_popup_title makes it a tmux format (# doubles).
 . "$BIN/fleet-ui-lang.sh"
 fleet_ui_pin
 title=''
@@ -166,8 +173,8 @@ if [ -n "$TITLE" ]; then
     fleet_status_remote_head "$sess" && me=$FSR_ME
   fi
   [ -z "$me" ] || title="$title · $me"
-  geom+=(-T "#[align=left] $(printf '%s' "$title" | sed 's/#/##/g') #[align=right]#[dim] $(fleet_ui_t ui_close) ")
 fi
+. "$BIN/fleet-popup-lib.sh"
 
 # The did-it-run marker (see 3 above). A plain $$-suffixed path, not mktemp: it
 # must NOT exist up front (existence IS the signal) and one path per process is
@@ -183,13 +190,12 @@ if [ -n "$client" ]; then
   epoch=$(date +%s)
   tmux set -g @popup_open "$epoch" \; set -g @popup_pid "$epoch:$$" 2>/dev/null || true
   # Stamp the marker INSIDE the popup, ahead of the real command, so its presence
-  # proves the popup opened and started running. display-popup -E blocks until the
+  # proves the popup opened and started running. the popup blocks until the
   # popup closes, so the check below is not racing it. (Kept as its own tmux call:
   # dash-popup-selftest.sh's shims dispatch on the subcommand.)
   fleet_home_mark popup
   [ -z "${FLEET_HOME_MS:-}" ] || cmd="FLEET_HOME_MS=$(printf '%q' "$FLEET_HOME_MS") $cmd"
-  tmux display-popup -c "$client" -E ${geom[@]+"${geom[@]}"} \
-    "$(printf 'printf 1 > %q; ' "$marker")$cmd"
+  fleet_popup_draw "$client" "$cw" "$title" "$(printf 'printf 1 > %q; ' "$marker")$cmd" "$W" "$H"
   # Ran ⇒ done. NB we test the MARKER, never tmux's exit status: a refused popup
   # exits 0 too, and trusting that is exactly the bug (issue #454).
   [ -e "$marker" ] && exit 0

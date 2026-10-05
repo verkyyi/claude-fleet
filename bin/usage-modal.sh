@@ -19,7 +19,7 @@
 #     `[now: X]` was a stale snapshot) and the footer shows no ◉ chip.
 # On a SINGLE-account install (no token files) there is no pool to pick: it shows
 # the usage detail only + a pointer to register accounts, and holds for a key.
-# Run inside `tmux display-popup -E`.
+# Run inside a fleet popup.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
@@ -100,8 +100,13 @@ usg=$(fleet_usage_summary_plain)
 # (ccquota headroom, #513), so a `[now: X]` in the header would be a stale
 # snapshot of a moving target. The ● in the pool table marks it for the curious.
 active=$(bash "$BIN/fleet-account.sh" active 2>/dev/null)
-hdr="pick the account new sessions start from (re-picked per spawn on quota headroom)  ·  enter=select · esc=cancel · [✕ close]"
+hdr="pick the account new sessions start from (re-picked per spawn on quota headroom)"
 [ -n "$usg" ] && hdr="${usg}"$'\n'"${hdr}"
+# The keys are the popup frame's bottom hint line (issue #1619), one line that
+# fits 54 columns; a tap on its ✕ closes, as the header chip did.
+. "$BIN/fleet-ui-lang.sh"; . "$BIN/fleet-popup-lib.sh"
+fleet_fzf_hint "$(fleet_ui_t hint_usage)" "$hdr"
+fleet_fzf_click 'transform:case "$FZF_CLICK_FOOTER_WORD$FZF_CLICK_HEADER_WORD" in *✕*|*close*|*关闭*) echo abort ;; esac'
 
 # --header-lines=1 pins the table's column-title row (line 1 of `list`) so it
 # stays aligned with the data rows and out of the selectable set; the usage
@@ -115,8 +120,7 @@ hdr="pick the account new sessions start from (re-picked per spawn on quota head
 pick=$(printf '%s\n' "$listing" \
   | fzf --ansi --no-sort --layout=reverse --height=100% --header-lines=1 \
         --prompt='account ▸ ' \
-        --header="$hdr" \
-        --bind 'click-header:transform:case "$FZF_CLICK_HEADER_WORD" in *✕*|*close*) echo abort ;; esac' \
+        ${FZF_HINT[@]+"${FZF_HINT[@]}"} ${FZF_CLICK[@]+"${FZF_CLICK[@]}"} \
   | awk '{print $1}')
 
 [ -n "$pick" ] || exit 0

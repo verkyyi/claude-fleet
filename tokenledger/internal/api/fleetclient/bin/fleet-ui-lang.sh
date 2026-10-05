@@ -173,6 +173,12 @@ fleet_ui_t() {
     en:popup_comment)           printf 'Comment' ;;
     zh:popup_close_issue)       printf '关闭 issue' ;;
     en:popup_close_issue)       printf 'Close issue' ;;
+    zh:hint_alerts)             printf '↵ 处理 · 1✖ 2▲ 3● 0全部 · m 静音1h · [✕ 关闭]' ;;
+    en:hint_alerts)             printf '↵ act · 1✖ 2▲ 3● 0 all · m mute 1h · [✕ close]' ;;
+    zh:hint_usage)              printf '↵ 新会话用它 · Esc 取消 · [✕ 关闭]' ;;
+    en:hint_usage)              printf '↵ new sessions use it · esc · [✕ close]' ;;
+    zh:hint_backlog)            printf '↵ 开工 · [＋ 新建] · ? 键 · [✕ 关闭]' ;;
+    en:hint_backlog)            printf '↵ work · [＋ new] · ? keys · [✕ close]' ;;
     zh:popup_reap)              printf '回收' ;;
     en:popup_reap)              printf 'Reap' ;;
     zh:popup_open_url)          printf '打开链接' ;;

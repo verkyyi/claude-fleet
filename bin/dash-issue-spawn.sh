@@ -1,7 +1,7 @@
 #!/bin/bash
 # dash-issue-spawn.sh — popup issue picker that STARTS A NEW SESSION for the
 # chosen issue (git worktree + claude, bound to it) in the current fleet. Run
-# inside `tmux display-popup -E`. Type to search; Enter spawns and focuses the
+# inside a fleet popup. Type to search; Enter spawns and focuses the
 # new window; Esc cancels. Replaces the old dash ⌃g "bind window ↔ issue" picker
 # (dash-issue-pick.sh) — same list UI, but it spawns a worker instead of binding
 # an existing window.

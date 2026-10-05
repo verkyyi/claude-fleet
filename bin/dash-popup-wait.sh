@@ -2,7 +2,7 @@
 # dash-popup-wait.sh — the dash's "pause repaint while a modal popup is open"
 # guard (issue #308), made self-healing against a leaked flag (issue #431).
 #
-# A tmux display-popup is a CLIENT-SIDE overlay that does NOT freeze the panes
+# A tmux popup is a CLIENT-SIDE overlay that does NOT freeze the panes
 # under it, so the dash's 1Hz reload keeps re-rendering right beneath the popup
 # and that churn flashes THROUGH it (worst where the popup edge clips a
 # double-width CJK cell). The modal popup binds (conf/tmux-attention.conf) raise

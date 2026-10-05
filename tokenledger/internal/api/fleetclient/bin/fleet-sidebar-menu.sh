@@ -164,7 +164,9 @@ show() {
     else margs+=("${items[$i]}" "${items[$((i + 1))]}" "${items[$((i + 2))]}"); fi
     i=$((i + 3))
   done
-  tmux display-menu -c "$client" ${side:+-t "$side"} -x P -y P \
+  # the popup frame's border, title and colours (issue #1619)
+  . "$BIN/fleet-popup-lib.sh"; fleet_menu_style
+  tmux display-menu -c "$client" ${side:+-t "$side"} -x P -y P ${FMENU_STYLE[@]+"${FMENU_STYLE[@]}"} \
     -T "#[align=centre] $(fe "$1") " -- ${margs[@]+"${margs[@]}"} 2>/dev/null || :
   exit 0
 }

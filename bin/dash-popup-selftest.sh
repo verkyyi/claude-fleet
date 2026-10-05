@@ -160,7 +160,7 @@ cat > "$REFUSE/tmux" <<EOF
 #!/bin/sh
 case "\$1" in
   display-popup) exit 0 ;;                        # refuse, exactly as tmux does
-  list-clients)  echo "9 /dev/ttyFAKE"; exit 0 ;; # => the helper takes the popup path
+  list-clients)  echo "9 200 /dev/ttyFAKE"; exit 0 ;; # => the helper takes the popup path
 esac
 exec "$REAL_TMUX" -S "$SOCK" "\$@"
 EOF
@@ -181,8 +181,9 @@ if ls "$RTMP"/.dash-popup-ran.* >/dev/null 2>&1; then
   fail "refused popup: the did-it-run marker leaked into TMPDIR"
 fi
 
-# --- 6b. ONE FRAME (issue #1535, EPIC #1529 E6) -------------------------------
-# --size S|M|L, the 「动作 · 对象 · 机器 … Esc 关闭」 title row, --client, and
+# --- 6b. ONE FRAME (issue #1535, EPIC #1529 E6; one style since #1619) -------
+# --size S|M|L, the rounded PAL_DIM border, the 「动作 · 对象 · 机器」 title
+# centred on it, the narrow-client size, the palette fzf options, --client, and
 # --no-inline. A logging shim records the display-popup argv (tmux offers no query
 # for a popup's title) and RUNS the command, as a popup that opened would.
 FRAME="$WORK/frame"; mkdir -p "$FRAME"; FLOG="$WORK/frame.log"
@@ -190,8 +191,9 @@ cat > "$FRAME/tmux" <<EOF
 #!/bin/bash
 case "\$1" in
   display-popup) shift; printf '%s\n' "\$@" > "$FLOG"; for a; do last=\$a; done; sh -c "\$last"; exit 0 ;;
-  list-clients)  echo "9 /dev/ttyF"; exit 0 ;;
-  display-message) [ "\${2:-}" = -c ] && [ "\${4:-}" != -p ] && { printf 'toast %s\n' "\$4" >> "$FLOG.toast"; exit 0; } ;;
+  list-clients)  echo "9 200 /dev/ttyF"; exit 0 ;;
+  display-message) [ "\${2:-}" = -c ] && [ "\${4:-}" != -p ] && { printf 'toast %s\n' "\$4" >> "$FLOG.toast"; exit 0; }
+                   [ "\${2:-}" = -p ] && [ "\${3:-}" = -c ] && [ -n "\${FRAME_CW:-}" ] && { echo "\$FRAME_CW|fr"; exit 0; } ;;
 esac
 exec "$REAL_TMUX" -S "$SOCK" "\$@"
 EOF
@@ -200,24 +202,34 @@ FTMP="$WORK/frame-tmp"; mkdir -p "$FTMP"
 frame() { PATH="$FRAME:$PATH" TMPDIR="$FTMP" FLEET_UI_LANG=zh bash "$HELPER" "$@" >/dev/null 2>&1; }
 frame --client /dev/ttyF --size L --title popup_keys -- true \
   || fail "frame: --size/--title/--client did not run"
-want="$(printf '%s\n' -c /dev/ttyF -E -w 94% -h 86% -T '#[align=left] 快捷键 #[align=right]#[dim] Esc 关闭 ')"
-[ "$(head -9 "$FLOG")" = "$want" ] \
-  || fail "frame: the L popup is not 94%×86% titled 「快捷键 … Esc 关闭」: $(head -9 "$FLOG" | tr '\n' ' ')"
+want="$(printf '%s\n' -c /dev/ttyF -E -b rounded -S 'fg=#565f89' -w 94% -h 86% -T '#[align=centre] 快捷键 ')"
+[ "$(head -13 "$FLOG")" = "$want" ] \
+  || fail "frame: the L popup is not rounded/PAL_DIM 94%×86% titled 「快捷键」 centred: $(head -13 "$FLOG" | tr '\n' ' ')"
+# every fzf in the popup reads the palette: FZF_DEFAULT_OPTS is exported ahead of the command
+tail -1 "$FLOG" | grep -q '^export FZF_DEFAULT_OPTS=.*--color=.*bg+:#414868.*--border=none.*--info=hidden.*FLEET_POPUP=1;' \
+  || fail "frame: the popup command does not export the palette fzf options: $(tail -1 "$FLOG")"
+# a narrow client (the iPad's 54 columns) gets 96% × 90% — a fixed row count is kept
+FRAME_CW=54 frame --client /dev/ttyF --size M --title popup_alerts -- true
+[ "$(sed -n 8,11p "$FLOG")" = "$(printf '%s\n' -w 96% -h 90%)" ] || fail "frame: a 54-column client is not 96%×90%: $(tr '\n' ' ' < "$FLOG")"
+FRAME_CW=54 frame --client /dev/ttyF --size S --title popup_new_task -- true
+[ "$(sed -n 8,11p "$FLOG")" = "$(printf '%s\n' -w 96% -h 16)" ] || fail "frame: a narrow S popup lost its row count: $(tr '\n' ' ' < "$FLOG")"
+FRAME_CW=120 frame --client /dev/ttyF --size M --title popup_alerts -- true
+[ "$(sed -n 8,11p "$FLOG")" = "$(printf '%s\n' -w 86% -h 60%)" ] || fail "frame: a wide client was resized: $(tr '\n' ' ' < "$FLOG")"
 # -w / -h beside --size win on their axis; an object joins the title; a # in it is
 # literal in the tmux format
 frame --client /dev/ttyF --size S -h 9 --title popup_reap --object '#42' -- true
-[ "$(sed -n 4,7p "$FLOG")" = "$(printf '%s\n' -w 84% -h 9)" ] || fail "frame: -h beside --size S did not win: $(tr '\n' ' ' < "$FLOG")"
-grep -qxF -- '#[align=left] 回收 · ##42 #[align=right]#[dim] Esc 关闭 ' "$FLOG" || fail "frame: the object is not 「回收 · #42」: $(tr '\n' ' ' < "$FLOG")"
+[ "$(sed -n 8,11p "$FLOG")" = "$(printf '%s\n' -w 84% -h 9)" ] || fail "frame: -h beside --size S did not win: $(tr '\n' ' ' < "$FLOG")"
+grep -qxF -- '#[align=centre] 回收 · ##42 ' "$FLOG" || fail "frame: the object is not 「回收 · #42」: $(tr '\n' ' ' < "$FLOG")"
 # a title that is no key shows as given; English follows FLEET_UI_LANG
 PATH="$FRAME:$PATH" TMPDIR="$FTMP" FLEET_UI_LANG=en bash "$HELPER" --client /dev/ttyF --size M --title 'Free text' -- true
-grep -qxF -- '#[align=left] Free text #[align=right]#[dim] Esc close ' "$FLOG" || fail "frame: free-text English title wrong: $(tr '\n' ' ' < "$FLOG")"
+grep -qxF -- '#[align=centre] Free text ' "$FLOG" || fail "frame: free-text English title wrong: $(tr '\n' ' ' < "$FLOG")"
 # the machine joins the title only when the hub is on: the sidebar's remote cache
 # names this one (`#me`). Hub off (no cache, above) ⇒ 「动作 · 对象」 only.
 tmux new-session -d -s fr -x 80 -y 20 </dev/null >/dev/null 2>&1
 mkdir -p "$FTMP/.claude-dash/global"
 printf '#ts\0371\n#me\037m5\n' > "$FTMP/.claude-dash/global/remote_fr"
 TMUX_PANE=$(tmux list-panes -t fr -F '#{pane_id}' | head -1) frame --size L --title popup_keys -- true
-grep -qxF -- '#[align=left] 快捷键 · m5 #[align=right]#[dim] Esc 关闭 ' "$FLOG" \
+grep -qxF -- '#[align=centre] 快捷键 · m5 ' "$FLOG" \
   || fail "frame: the hub-on title does not name this machine: $(tr '\n' ' ' < "$FLOG")"
 # --no-inline: a refused popup is never run in the caller (a bind has no pane) —
 # it toasts why on that client and exits 3, and strands nothing
@@ -240,15 +252,20 @@ EOF
 frame --client /dev/ttyF --no-inline --size S -- true; rc=$?
 [ "$rc" = 3 ] && grep -q '^toast fleet: 弹窗没打开' "$FLOG.toast" 2>/dev/null \
   || fail "--no-inline: a refusal did not toast on its client (rc=$rc): $(cat "$FLOG.toast" 2>/dev/null)"
-echo "ok: one frame — sizes, 「动作 · 对象 · 机器 … Esc 关闭」, --no-inline exit 3 + toast"
+echo "ok: one frame — rounded PAL_DIM, sizes + narrow 96%×90%, 「动作 · 对象 · 机器」 centred, palette fzf, --no-inline exit 3 + toast"
 
-# --- 6c. ONE DOOR (issue #1535): nothing but dash-popup.sh calls display-popup,
-# and every caller gives its popup a title — the shipped scripts and the conf.
+# --- 6c. ONE DOOR (issue #1535): nothing but fleet-popup-lib.sh calls
+# display-popup (dash-popup.sh draws through it), and every caller gives its
+# popup a title — the shipped scripts and the conf.
 ROOT="$(cd "$BIN/.." && pwd)"
 direct=$(grep -n 'display-popup' "$BIN"/*.sh "$BIN"/*.py "$ROOT"/conf/*.conf 2>/dev/null \
-  | grep -v -- '-selftest\.' | grep -v '^[^:]*/dash-popup\.sh:' | grep -Ev '^[^:]+:[0-9]+:[[:space:]]*#')
-[ -z "$direct" ] || fail "one door: display-popup called outside dash-popup.sh:
+  | grep -v -- '-selftest\.' | grep -v '^[^:]*/fleet-popup-lib\.sh:' | grep -Ev '^[^:]+:[0-9]+:[[:space:]]*#')
+[ -z "$direct" ] || fail "one door: display-popup called outside fleet-popup-lib.sh:
 $direct"
+# the EPIC's 「弹窗样式种类」 reading (issue #1619): scripts naming display-popup at all
+kinds=$(grep -l display-popup "$BIN"/*.sh | grep -v -- '-selftest\.' | sed 's#.*/##')
+[ "$kinds" = fleet-popup-lib.sh ] || fail "one style: display-popup named outside fleet-popup-lib.sh: $kinds"
+grep -q 'fleet_popup_draw ' "$HELPER" || fail "one door: dash-popup.sh does not draw through fleet_popup_draw"
 # an INVOCATION (the script path then its args), not a mention in prose
 untitled=$(grep -n 'dash-popup\.sh' "$BIN"/*.sh "$BIN"/*.py "$ROOT"/conf/*.conf 2>/dev/null \
   | grep -v -- '-selftest\.' | grep -v '^[^:]*/dash-popup\.sh:' | grep -Ev '^[^:]+:[0-9]+:[[:space:]]*#' \
