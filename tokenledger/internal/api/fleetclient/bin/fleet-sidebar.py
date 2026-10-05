@@ -1856,7 +1856,8 @@ def ui(screen, session, worker, lock):
                 hint = tr("sidebar_ask_to_fmt", arg.rsplit("/", 1)[-1])
                 if kind == "answer":
                     hint = tr("sidebar_ask_perm_hint" if extra == "perm" else "sidebar_ask_answer_hint")
-                nxt = Ask(kind, tr("sidebar_ask_" + kind), arg=arg, hint=hint)
+                nxt = Ask(kind, tr("sidebar_ask_answer" if kind == "answer" else "sidebar_ask_message"),
+                          arg=arg, hint=hint)
             elif kind == "sub" and arg.startswith("@"):
                 nxt = Ask("sub", tr("sidebar_ask_sub"), arg=arg, hint=tr("sidebar_ask_sub_loading"))
                 jobs.append(start_job(["bash", str(BIN / "fleet-manual-sub.sh"), "list", session],
