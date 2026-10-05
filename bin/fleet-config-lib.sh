@@ -333,6 +333,10 @@ fcfg_label_i18n() {
     FLEET_DEPLOY_CHECK) printf 'Deploy 检查（Actions runs）' ;;
     FLEET_STUCK_WORKING_SECS) printf '卡在 working 后降级' ;;
     FLEET_STATE_IDLE_SECS) printf '原生 idle 后 reconcile working' ;;
+    FLEET_DEGENERATE_SECS) printf '输出退化检测间隔' ;;
+    FLEET_DEGENERATE_LINES) printf '输出退化行数下限' ;;
+    FLEET_DEGENERATE_COOLDOWN_SECS) printf '输出退化 Esc 冷却' ;;
+    FLEET_DEGENERATE_MARK_SECS) printf '输出退化 ⟲ 标记时长' ;;
     FLEET_SIDEBAR) printf 'Worker 任务栏' ;;
     FLEET_UI_LANG) printf 'Tmux UI 语言' ;;
     FLEET_SIDEBAR_WIDTH) printf '任务栏宽度' ;;

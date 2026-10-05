@@ -60,7 +60,7 @@ import os
 import sys
 import time
 
-STATES = ('MERGED', 'BLOCKED', 'FAILED', 'STOPPED', 'REAPED', 'WAITING', 'IDLE')
+STATES = ('MERGED', 'BLOCKED', 'FAILED', 'STOPPED', 'REAPED', 'WAITING', 'IDLE', 'DEGENERATE')
 FIELDS = ('child', 'state', 'pr', 'verdict', 'summary', 'title', 'tier')
 # report_tier's three bands (issue #938, fleet-children-lib.sh); '' = a pre-#938 event.
 TIERS = ('loud', 'quiet', 'silent')
@@ -149,6 +149,11 @@ def cmd_append(a):
     # row is byte for byte what it was.
     gens = {f: ''.join(ch for ch in str(raw.get(f) or '') if ch in (KEY_OK if f == 'child_key' else '0123456789.'))[:128]
             for f in ('gen', 'child_gen', 'child_key')}
+    # lines / sample (issue #1557): a DEGENERATE row — how many screen rows were
+    # one repeated unit, and the unit (`<br>` kept legible as `‹br›` — the scrub
+    # drops `<>`). Kept only when set, like the fields above.
+    deg = {'lines': ''.join(ch for ch in str(raw.get('lines') or '') if ch.isdigit())[:8],
+           'sample': clean(str(raw.get('sample') or '').replace('<', '‹').replace('>', '›'), 1, 64)}
     if not ev['child'] or ev['state'] not in STATES:
         print('fleet-children: need child + state (%s)' % '|'.join(STATES), file=sys.stderr)
         return 2
@@ -191,6 +196,7 @@ def cmd_append(a):
         if rid:
             ev['rid'] = rid
         ev.update((f, v) for f, v in gens.items() if v)
+        ev.update((f, v) for f, v in deg.items() if v)
         fh.seek(0, os.SEEK_END)
         fh.write(json.dumps(ev, ensure_ascii=False) + '\n')
         fh.flush()

@@ -1266,6 +1266,20 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # independent of the spinner. 0 disables the pass.
 # @label=Reconcile native-idle working after @group=status @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_STATE_IDLE_SECS=30
+# Degenerate-output watchdog (issue #1557): a `working` window whose screen is
+# >= FLEET_DEGENERATE_LINES non-blank rows of one short unit repeated (`<br>` ×16,822
+# on 2026-10-04) on two consecutive spinner sweeps gets ONE Escape, @degenerate_ts,
+# a DEGENERATE row in its parent's child ledger and a `⟲` at the end of its sidebar
+# row for FLEET_DEGENERATE_MARK_SECS. At most one Escape per window per
+# FLEET_DEGENERATE_COOLDOWN_SECS. Full screen → Escape: ~2 × the sweep. 0 disables.
+# @label=Degenerate-output sweep @group=status @tier=internal @scope=global @edit=int @unit=sec
+#FLEET_DEGENERATE_SECS=15
+# @label=Degenerate-output row floor @group=status @tier=internal @scope=global @edit=int
+#FLEET_DEGENERATE_LINES=12
+# @label=Degenerate-output Escape cooldown @group=status @tier=internal @scope=global @edit=int @unit=sec
+#FLEET_DEGENERATE_COOLDOWN_SECS=300
+# @label=Degenerate-output ⟲ mark @group=status @tier=internal @scope=global @edit=int @unit=sec
+#FLEET_DEGENERATE_MARK_SECS=1800
 
 # Show a compact live hub list on the left of worker/scratch windows. prefix+e
 # toggles and saves this preference for the fleet; prefix+E browses by keyboard.

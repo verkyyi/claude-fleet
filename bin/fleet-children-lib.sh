@@ -32,7 +32,7 @@
 #
 # <json> carries {child, state, pr, verdict, summary, title, tier}; seq and ts are
 # stamped here, under a lock, so two children reporting at once never share a seq.
-# state ∈ MERGED BLOCKED FAILED STOPPED REAPED WAITING IDLE. A write whose
+# state ∈ MERGED BLOCKED FAILED STOPPED REAPED WAITING IDLE DEGENERATE. A write whose
 # (child, state, pr) equals that child's LATEST event is a no-op — the reaper's
 # backstop repeating the ship path's report adds nothing.
 #
@@ -123,7 +123,7 @@ report_tier() {
   st=$(printf '%s' "${1:-}" | tr '[:lower:]' '[:upper:]')
   case "$cs" in needs*) printf 'loud\n'; return 0 ;; esac
   case "$st" in
-    WAITING|IDLE) printf 'silent\n' ;;
+    WAITING|IDLE|DEGENERATE) printf 'silent\n' ;;   # DEGENERATE: #1557, already handled
     MERGED)       printf 'quiet\n' ;;
     FAILED)
       case "$(printf '%s' "$sum" | tr '[:upper:]' '[:lower:]')" in

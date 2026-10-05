@@ -66,7 +66,7 @@ R="${E}0m"; US=$'\x1f'
 # passes name it so nothing lands glued to @sleep_since.
 # A PROXY window (@remote, issue #1424) prints an EMPTY name, so both passes drop
 # it like a nameless line: the machine's own `[m4]` row already stands for it.
-WFMT="#{session_name}${US}#{window_index}${US}#{?@remote,,#{window_name}}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}"
+WFMT="#{session_name}${US}#{window_index}${US}#{?@remote,,#{window_name}}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -1093,6 +1093,17 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # memguard (issue #1292) SIGKILLed a command in this window for a memory spike;
   # @mem_killed rides the same WFMT field as a `mem:` prefix, so the row says so
   # (`⚠ mem·137` — the exit code the session saw) without one more field or fork.
+  # The degenerate watchdog (issue #1557) pressed Esc on this window's runaway
+  # output: @degenerate_ts rides the same field as a `degen=<epoch>:` prefix, and
+  # the row ends in `⟲` for FLEET_DEGENERATE_MARK_SECS (30 min) after it.
+  degd=''
+  case $qwait in degen=*:*)
+    degv=${qwait%%:*}; degv=${degv#degen=}; qwait=${qwait#*:}
+    case $degv in ''|*[!0-9]*) ;; *)
+      [ $(( NOW - degv )) -lt "${FLEET_DEGENERATE_MARK_SECS:-1800}" ] 2>/dev/null && degd='⟲' ;;
+    esac ;;
+  esac
+  [ -n "$degd" ] && tagd="${tagd:+$tagd }$degd"
   case $qwait in mem:*) qwait=${qwait#mem:}; tagd="${tagd:+$tagd }⚠ mem·137" ;; esac
   # memguard rule C (issue #1297): this window's claude/codex session itself has
   # grown past FLEET_CLAUDE_RSS_WARN_MB. `fat=<size>:` on the same field; the badge
@@ -1135,6 +1146,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     label="$dname"
     [ -n "$repod" ] && label="$label $repod"       # cross-repo child (#1031)
     [ -n "$zwait" ] && label="$label · ${zwait#z · }"
+    [ -n "$degd" ] && label="$label $degd"           # #1557: output degenerated, Esc sent
     [ "$depth" -gt "$DEPTH_MAX" ] && depth=$DEPTH_MAX
     # WHY a ↻ row is idle-but-unfinished (issue #1370): the needs field carries
     # @claude_wait on a `looping` window (WFMT), and the selected-row line says it —
