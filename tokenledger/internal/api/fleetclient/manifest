@@ -36,6 +36,7 @@ bin/fleet-node-join.sh
 bin/fleet-connect.py
 bin/fleet-client-lib.sh
 bin/fleet-shell.sh
+bin/fleet-client-lease.py
 bin/fleet-remote-view.sh
 bin/fleet-hub-sessions.sh
 bin/fleet-hub-write.sh

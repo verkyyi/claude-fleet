@@ -161,6 +161,85 @@ this_machine() {
   return 1
 }
 
+# --- one person, one client (issue #1715, EPIC #1710 C5) ----------------------------
+# The hub holds ONE client lease per person (POST /v1/fleet/client): opening the
+# client takes it — over whoever held it — and the keeper renews it every
+# FLEET_CLIENT_LEASE_EVERY (15 s). When a renewal reads taken_over, this server
+# goes to STANDBY: every attached client gets a full-screen popup —
+# 「正在 <device> 上使用 · 按回车接回」 — the list stops asking the hub
+# (fleet-hub-sessions.sh skips its rounds), no write goes out (fleet-hub-write.sh
+# refuses), the warm loop opens nothing, and the keeper stops renewing. Enter in
+# the popup takes the lease back (`standby` → client_take), and the other side
+# goes to standby on its next renewal. On ONE machine the same rule holds between
+# its clients: a second `fleet` here attaches to the running server (never a
+# second one) and the clients already attached get the standby popup naming the
+# new one's device. No hub (no URL — or one without the lease) → no lease; the
+# local rule still holds. State, under $CACHE/tmp (the server's TMPDIR):
+#   client.lease    our lease id             client.standby  present = standby
+#   client.by       the device holding it    client.dev/<tty> each client's device
+#   client.nohub    the hub keeps no lease   keeper.pid       the one keeper
+CL_DIR="$CACHE/tmp"
+LEASE_CMD="${FLEET_CLIENT_LEASE_CMD:-python3 $BIN/fleet-client-lease.py}"
+cl_key() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'; }
+# lease <action> [args…] → L_STATE L_ID L_BY L_TOOK; rc 1 = the hub was not asked
+lease() {
+  local line
+  L_STATE=''; L_ID=''; L_BY=''; L_TOOK=''
+  line=$($LEASE_CMD "$@" 2>/dev/null) || return 1
+  # TAB is whitespace to `read`: two in a row (an empty field) would collapse
+  line=${line//$'\t'/$'\037'}
+  IFS=$'\037' read -r L_STATE L_ID L_BY L_TOOK <<< "$line"
+  [ -n "$L_STATE" ]
+}
+standby_on() { [ -f "$CL_DIR/client.standby" ]; }
+# standby_popup <client> — the standby screen on that client (a popup is the
+# client's own, so the session's other clients keep their screen); display-popup
+# holds its caller until the popup closes, so it runs in the background.
+standby_popup() {
+  ( T display-popup -c "$1" -E -w 100% -h 100% \
+      "exec bash $(sq "$SHADOW/fleet-shell.sh") standby $(sq "$SESS") $(sq "$1")" </dev/null >/dev/null 2>&1 & )
+}
+# others_standby <client|''> <device> — every client of the session but that one
+# to standby, naming the device now in use
+others_standby() {
+  local c
+  printf '%s\n' "$2" > "$CL_DIR/client.by" 2>/dev/null
+  for c in $(T list-clients -t "=$SESS" -F '#{client_name}' 2>/dev/null); do
+    [ "$c" = "$1" ] && continue
+    standby_popup "$c"
+  done
+  return 0
+}
+# client_take <client|''> <device> <terminal> — this client is THE one: the hub's
+# lease (taken over, or ours kept), standby off, the others here to standby.
+# rc 1 = the hub could not be asked (nothing changed).
+client_take() {
+  local old=''
+  mkdir -p "$CL_DIR/client.dev" 2>/dev/null
+  { read -r old < "$CL_DIR/client.lease"; } 2>/dev/null
+  [ -n "$old" ] || { read -r old < "$CL_DIR/client.lease.old"; } 2>/dev/null
+  lease acquire ${old:+--lease "$old"} --device "$2" ${3:+--terminal "$3"} || return 1
+  rm -f "$CL_DIR/client.lease.old"
+  case "$L_STATE" in
+    active) printf '%s\n' "$L_ID" > "$CL_DIR/client.lease"; rm -f "$CL_DIR/client.nohub" ;;
+    *) rm -f "$CL_DIR/client.lease"; : > "$CL_DIR/client.nohub" ;;   # nohub: no lease to keep
+  esac
+  [ -n "$1" ] && printf '%s\n' "$2" > "$CL_DIR/client.dev/$(cl_key "$1")"
+  rm -f "$CL_DIR/client.standby"
+  others_standby "$1" "$2"
+  return 0
+}
+# go_standby <device> — another client holds the lease now: every client here to
+# standby, the lease id kept aside for taking it back
+go_standby() {
+  local id=''
+  { read -r id < "$CL_DIR/client.lease"; } 2>/dev/null
+  [ -n "$id" ] && printf '%s\n' "$id" > "$CL_DIR/client.lease.old"
+  rm -f "$CL_DIR/client.lease"
+  : > "$CL_DIR/client.standby"
+  others_standby '' "${1:-未知设备}"
+}
+
 # --- the environment the server gets --------------------------------------------
 # shell_env <machine-json> — sets SHELL_ENV (one `NAME=value` per line) and the
 # derived globals; the names listed are the ones the pieces read.
@@ -300,11 +379,63 @@ open-url)
 # ---------------------------------------------------------------------------------
 keeper)
   s="${2:-$SESS}"
+  SESS=$s; SHADOW=$BIN
+  # one keeper per server: the lease must not be renewed twice
+  mkdir -p "$CL_DIR" 2>/dev/null
+  p=''; { read -r p < "$CL_DIR/keeper.pid"; } 2>/dev/null
+  case "$p" in ''|*[!0-9]*) ;; *) [ "$p" != $$ ] && kill -0 "$p" 2>/dev/null && exit 0 ;; esac
+  printf '%s\n' $$ > "$CL_DIR/keeper.pid"
   while tmux -L "$s" has-session -t "=$s" 2>/dev/null; do
-    bash "$BIN/fleet-hub-sessions.sh" --ensure >/dev/null 2>&1 || :
-    sleep 20
+    if ! standby_on; then
+      id=''; { read -r id < "$CL_DIR/client.lease"; } 2>/dev/null
+      if [ -n "$id" ]; then
+        if lease renew --lease "$id"; then
+          case "$L_STATE" in
+            taken_over) go_standby "$L_BY" ;;
+            active) [ -z "$L_ID" ] || [ "$L_ID" = "$id" ] || printf '%s\n' "$L_ID" > "$CL_DIR/client.lease" ;;
+          esac
+        fi
+      elif [ ! -f "$CL_DIR/client.nohub" ]; then
+        # not held (the hub was out of reach at the start): take it now, as the
+        # device of the client attached
+        c=$(T list-clients -t "=$s" -F '#{client_name}' 2>/dev/null | head -n 1)
+        d=''; [ -n "$c" ] && { read -r d < "$CL_DIR/client.dev/$(cl_key "$c")"; } 2>/dev/null
+        client_take "$c" "${d:-未知设备}" '' || :
+      fi
+      bash "$BIN/fleet-hub-sessions.sh" --ensure >/dev/null 2>&1 || :
+    fi
+    sleep "${FLEET_CLIENT_LEASE_EVERY:-15}"
   done
+  # the server is gone: give the lease up at once, so the next client anywhere
+  # takes nothing over
+  id=''; { read -r id < "$CL_DIR/client.lease"; } 2>/dev/null
+  [ -n "$id" ] && lease release --lease "$id"
+  rm -f "$CL_DIR/client.lease" "$CL_DIR/client.lease.old" "$CL_DIR/client.standby" "$CL_DIR/client.nohub" "$CL_DIR/keeper.pid"
   exit 0
+  ;;
+# ---------------------------------------------------------------------------------
+# The standby screen (issue #1715): what standby_popup runs on a client. Enter
+# takes the lease back for this client; any other key is ignored.
+standby)
+  s="${2:-$SESS}"; c="${3:-}"
+  SESS=$s; SHADOW=$BIN
+  trap '' INT QUIT TSTP
+  msg=''
+  while :; do
+    by=''; { read -r by < "$CL_DIR/client.by"; } 2>/dev/null
+    printf '\033[2J\033[H\n\n    正在 %s 上使用 · 按回车接回\n' "${by:-另一台设备}"
+    [ -n "$msg" ] && printf '\n    %s\n' "$msg"
+    # a timeout only redraws (another client here may have taken it since);
+    # bash 3.2 answers a timeout like an EOF, so the tty decides which it was
+    if ! IFS= read -r -s -n 1 -t 2 k; then [ -t 0 ] || exit 0; continue; fi
+    [ -z "$k" ] || continue
+    d=''; [ -n "$c" ] && { read -r d < "$CL_DIR/client.dev/$(cl_key "$c")"; } 2>/dev/null
+    if client_take "$c" "${d:-未知设备}" ''; then
+      bash "$BIN/fleet-hub-sessions.sh" --ensure >/dev/null 2>&1 || :
+      exit 0
+    fi
+    msg='连不上入口，再按回车重试'
+  done
   ;;
 # ---------------------------------------------------------------------------------
 # The warm loop (issue #1631): the lines you use are open before you need them.
@@ -380,6 +511,8 @@ warm)
       rm -f "$WD/loop.pid"
       exit 0
     fi
+    # standby (issue #1715): open nothing new; what is open lapses on its own
+    if [ -f "${TMPDIR:-/tmp}/client.standby" ] && [ -z "$once" ]; then sleep "${FLEET_SHELL_WARM_EVERY:-5}"; continue; fi
     want=$(wanted)
     for m in $want; do walive "$m" || wstart "$m"; done
     for f in "$WD"/*.sock "$WD"/*.sock.pending; do
@@ -434,12 +567,30 @@ shell_env "$pick"
 if [ "$mode" = env ]; then printf '%s\n' "$SHELL_ENV"; exit 0; fi
 export_env
 
+# client_open — this run is THE client (issue #1715): its device remembered for
+# its tty (the name tmux gives its client), the lease taken, the clients already
+# attached here to standby. A hub out of reach does not stop the start: the
+# clients here still yield, and the keeper takes the lease on its next tick.
+client_open() {
+  local dev tt
+  dev=$($LEASE_CMD device 2>/dev/null) || dev=''
+  tt=$(tty 2>/dev/null) || tt=''
+  case "$tt" in /dev/*) ;; *) tt='' ;; esac
+  rm -f "$CL_DIR/client.nohub"
+  client_take "$tt" "${dev%%$'\t'*}" "$(printf '%s' "$dev" | cut -f2 -s)" && return 0
+  rm -f "$CL_DIR/client.standby"
+  mkdir -p "$CL_DIR/client.dev" 2>/dev/null
+  [ -n "$tt" ] && printf '%s\n' "${dev%%$'\t'*}" > "$CL_DIR/client.dev/$(cl_key "$tt")"
+  others_standby "$tt" "${dev%%$'\t'*}"
+}
+
 # 2. already running? Re-attach — onto the named machine's window when there is one.
 if T has-session -t "=$SESS" 2>/dev/null; then
   if [ -n "$node" ]; then
     w=$(T list-windows -t "=$SESS" -F '#{window_id} #{@remote}' 2>/dev/null | awk -v n="$node:" 'index($2, n) == 1 { print $1; exit }')
     [ -n "$w" ] && T select-window -t "$w" 2>/dev/null
   fi
+  client_open
   ( nohup bash "$SHADOW/fleet-shell.sh" keeper "$SESS" </dev/null >/dev/null 2>&1 & )
   ( nohup bash "$SHADOW/fleet-shell.sh" warm "$SESS" </dev/null >/dev/null 2>&1 & )
   client_where
@@ -460,8 +611,9 @@ fi
 w=$(tmux -L "$SESS" -f "$CACHE/tmux.conf" new-session -d -P -F '#{window_id}' -s "$SESS" -n "$title" -c "$HOME" -x 220 -y 60 "$cmd") \
   || fail_start 'tmux 开不了会话'
 T set-window-option -t "$w" @remote "$remote" \; set-window-option -t "$w" automatic-rename off 2>/dev/null
-# 4. the data: the refresh loop, kept alive while the server lives; the warm
-#    connections (#1631) beside it
+# 4. the lease (#1715) before anything renews it; the data: the refresh loop,
+#    kept alive while the server lives; the warm connections (#1631) beside it
+client_open
 ( nohup bash "$SHADOW/fleet-shell.sh" keeper "$SESS" </dev/null >/dev/null 2>&1 & )
 ( nohup bash "$SHADOW/fleet-shell.sh" warm "$SESS" </dev/null >/dev/null 2>&1 & )
 client_where
