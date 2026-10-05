@@ -11,8 +11,6 @@
 #   fleet shell [m4]            the client, by its script's name (fleet-shell.sh)
 #   fleet login                 scan for a 12-hour connection certificate
 #   fleet login renew           renew it with this device's key, no scan
-#   fleet node join             make THIS machine a node: one scan, same page
-#   fleet node status           is it a node, and does the hub see it online
 #   fleet connect [machine]     route + ssh only — what the client runs inside;
 #                               for debugging (`fleet connect m4 --print`)
 #   fleet connect --proxy <m>   ssh's ProxyCommand through the hub
@@ -52,7 +50,7 @@ client() {
 cmd=${1-}
 case $cmd in
   -h|--help|help)
-    sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'
     exit 0 ;;
   '')
     client ;;
