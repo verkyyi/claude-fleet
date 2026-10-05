@@ -139,7 +139,7 @@ find_local() {
        else tmux display-message -p -t "$wid" '#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}|#{@loop}'; fi 2>/dev/null) || st='|'
   loop=${st#*|}; st=${st%%|*}
   # a `done` window whose @loop still holds a round is looping (issue #1331)
-  if [ "$st" = done ] && [ -n "$loop" ] && python3 "$BIN/fleet_loop_mark.py" status --value "$loop" >/dev/null 2>&1; then
+  if [ "$st" = 'done' ] && [ -n "$loop" ] && python3 "$BIN/fleet_loop_mark.py" status --value "$loop" >/dev/null 2>&1; then
     st=looping
   fi
   printf '%s|%s' "$wid" "${st:-idle}"

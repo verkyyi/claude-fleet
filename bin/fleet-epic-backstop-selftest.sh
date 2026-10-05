@@ -87,7 +87,7 @@ hubrow() {  # <issue> <state> <node> [local]
     "$1" "$US" "$3" "$US" "$US" "$1" "$US" "$US" "$2" "$US" "$US" "$US" "$US" "$US" "$US" "${4:-0}" "$US" "$US" "$US"
 }
 { printf '#ts%s%s\n#me%sm5\n' "$US" "$now" "$US"
-  hubrow 99 working m4; hubrow 98 done m4; hubrow 96 looping m4; hubrow 95 idle m4; hubrow 95 working m6
+  hubrow 99 working m4; hubrow 98 'done' m4; hubrow 96 looping m4; hubrow 95 idle m4; hubrow 95 working m6
 } > "$G/remote_s"
 printf '%s\n' "$now" > "$G/hub_ok"
 cat > "$WORK/remote.json" <<'JSON'
