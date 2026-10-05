@@ -613,7 +613,28 @@ beat; `lease_conflict` when a node's first beat after reconnecting shows a
 session on an issue whose live lease another worker holds, naming both sides,
 cleared once they agree again. Nothing changes hands because of either.
 
-### A new machine in one command — join codes (claude-fleet#1418)
+### A new machine in one command — `fleet node join` (claude-fleet#1627)
+
+On the new machine, as the login that will run the fleet (after the client
+install line, `curl -fsSL <hub>/install | sh`):
+
+```bash
+fleet node join
+```
+
+It is `fleet login`'s device flow with `purpose=node`: `POST
+/v1/fleet/login/start {public_key, device_name, purpose:"node", os_user}`, the
+same QR and `/fleet/login` page — titled 「把 <机器名> 加为节点」 — and the same
+poll. Confirming needs what a certificate needs (an active login); the hub then
+mints a fixed-kind join code for that confirmation and redeems it at once
+(`enrollNode` → `redeemJoin`, the code row kept as the audit trail), so the
+poll's `CertResponse` carries `node` — the same `NodeJoinResponse` as
+`/v1/node/join` below. A plain login never carries it. The client hands the
+pass to `fleet-node-join.sh --joined <file> --ui`, which runs the steps below
+on their defaults. The `/nodes` panel shows this command to anyone signed in;
+the join-code button below stays, for the operator, one more version.
+
+### A new machine — join codes (claude-fleet#1418, kept one version)
 
 The `/nodes` page has an **加一台机器** panel (the operator's; a WeCom session
 gets 403): one click mints a **join code** and prints the line to paste on the

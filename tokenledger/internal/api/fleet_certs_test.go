@@ -148,6 +148,9 @@ func TestFleetLoginDeviceFlow(t *testing.T) {
 	}
 	var cr CertResponse
 	json.Unmarshal(body, &cr)
+	if cr.Node != nil || bytes.Contains(body, []byte(`"node"`)) {
+		t.Fatalf("a plain login carried a node pass: %s", body) // #1627
+	}
 	c := parseCert(t, cr.Certificate)
 	if strings.Join(c.ValidPrincipals, ",") != "alice" || cr.Principals[0] != "alice" {
 		t.Fatalf("principals %v", c.ValidPrincipals)
@@ -414,5 +417,78 @@ func writeMsg(t *testing.T, n *tnode, m control.Message) {
 	defer cancel()
 	if err := wsjson.Write(ctx, n.c, m); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// `fleet node join` (claude-fleet#1627): the same start / page / poll as
+// `fleet login`, with purpose=node. The page is titled for the machine, and
+// the confirmation returns the certificate AND a node pass the hub accepts —
+// one endpoint, enrolled under the reported host and login.
+func TestFleetNodeJoinByScan(t *testing.T) {
+	h, _ := certHarness(t)
+	key := newUserKey(t)
+
+	if code, _ := postJSON(t, h, "/v1/fleet/login/start", map[string]string{"public_key": key, "purpose": "admin"}); code != http.StatusBadRequest {
+		t.Fatalf("unknown purpose: %d, want 400", code)
+	}
+	code, body := postJSON(t, h, "/v1/fleet/login/start", map[string]string{
+		"public_key": key, "device_name": "newbox", "purpose": "node", "os_user": "alice"})
+	if code != 200 {
+		t.Fatalf("start: %d %s", code, body)
+	}
+	var st DeviceStart
+	json.Unmarshal(body, &st)
+	if !strings.HasSuffix(st.VerificationURI, "/fleet/login?code="+st.UserCode) {
+		t.Fatalf("verification uri %q — the node scan opens the SAME page", st.VerificationURI)
+	}
+
+	pc, raw := asPerson(t, h, http.MethodGet, "/fleet/login?code="+st.UserCode, "Alice", nil)
+	page := html.UnescapeString(string(raw))
+	if pc != 200 || !strings.Contains(page, "<title>把 newbox 加为节点</title>") || !strings.Contains(page, "<h1>把 newbox 加为节点</h1>") ||
+		!strings.Contains(page, st.UserCode) || !strings.Contains(page, "确认签发") {
+		t.Fatalf("node confirm page %d:\n%s", pc, page)
+	}
+	pc, done := personForm(t, h, "Alice", h.http.URL, url.Values{"code": {st.UserCode}, "action": {"approve"}})
+	if pc != 200 || !strings.Contains(html.UnescapeString(done), "已把 <b>newbox</b> 加为节点") {
+		t.Fatalf("approve %d:\n%s", pc, done)
+	}
+
+	code, body = postJSON(t, h, "/v1/fleet/login/poll", map[string]string{"device_code": st.DeviceCode})
+	if code != 200 {
+		t.Fatalf("poll: %d %s", code, body)
+	}
+	var cr CertResponse
+	json.Unmarshal(body, &cr)
+	if cr.Certificate == "" || cr.Node == nil || cr.Node.Token == "" || cr.Node.EndpointID == "" {
+		t.Fatalf("node scan answer = %s", body)
+	}
+	if cr.Node.Label != "newbox-alice" || cr.Node.Kind != "fixed" || cr.Node.SSHCA == "" {
+		t.Fatalf("node pass = %+v", cr.Node)
+	}
+	if resp, sb := getWithToken(t, h, "/v1/node/self", cr.Node.Token); resp.StatusCode != 200 || !strings.Contains(string(sb), cr.Node.EndpointID) {
+		t.Fatalf("the hub does not accept the node pass: %d %s", resp.StatusCode, sb)
+	}
+	if code, _ := postJSON(t, h, "/v1/fleet/login/poll", map[string]string{"device_code": st.DeviceCode}); code != http.StatusGone {
+		t.Fatalf("second poll: %d, want 410 — the pass is handed out once", code)
+	}
+}
+
+// A person with no active login cannot add a node by scan: the same gate as
+// the certificate, so no pass is minted.
+func TestFleetNodeJoinNeedsAnActiveLogin(t *testing.T) {
+	h, _ := certHarness(t)
+	code, body := postJSON(t, h, "/v1/fleet/login/start", map[string]string{
+		"public_key": newUserKey(t), "device_name": "newbox", "purpose": "node", "os_user": "carol"})
+	if code != 200 {
+		t.Fatalf("start: %d %s", code, body)
+	}
+	var st DeviceStart
+	json.Unmarshal(body, &st)
+	personForm(t, h, "Carol", h.http.URL, url.Values{"code": {st.UserCode}, "action": {"approve"}})
+	if code, body := postJSON(t, h, "/v1/fleet/login/poll", map[string]string{"device_code": st.DeviceCode}); code == 200 {
+		t.Fatalf("a person with no login added a node: %s", body)
+	}
+	if codes, _ := h.srv.Store.JoinCodes(20); len(codes) != 0 {
+		t.Fatalf("a join code was minted for a refused scan: %+v", codes)
 	}
 }

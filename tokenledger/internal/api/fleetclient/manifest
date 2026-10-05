@@ -25,9 +25,14 @@
 # out: the shell's rows are all remote, their actions all hub writes.
 # bin/fleet-client-lib.sh rides along for the installer itself (#1629): its
 # tmux step sources the lib's fc_tmux_ok / fc_pkg_install once downloaded.
+# bin/fleet-node.sh + bin/fleet-node-join.sh are `fleet node join` (#1627): the
+# one command that turns THIS computer into a node — a scan, then the join
+# script's steps (which install the node's own tooling from git themselves).
 bin/fleet-install.sh  installer
 bin/fleet
 bin/fleet-login.py
+bin/fleet-node.sh
+bin/fleet-node-join.sh
 bin/fleet-connect.py
 bin/fleet-client-lib.sh
 bin/fleet-shell.sh

@@ -144,6 +144,9 @@ type CertResponse struct {
 	// SSHConfig is the snippet for FleetSSHConfigPath.
 	SSHConfig string `json:"ssh_config"`
 	Hub       string `json:"hub"`
+	// Node is the machine's node pass (claude-fleet#1627): present only when
+	// the scan was `fleet node join` (purpose=node), never on a plain login.
+	Node *NodeJoinResponse `json:"node,omitempty"`
 }
 
 // fleetLoginsOf is the principals a certificate for pid may carry: the
@@ -407,6 +410,8 @@ type deviceLogin struct {
 	keyLine    string
 	keyFP      string
 	name       string // the client's own hostname, for the device record (#1470)
+	purpose    string // "" fleet login · "node" fleet node join: the scan also adds a node (#1627)
+	osUser     string // the login the node's agent runs as (purpose=node)
 	expires    time.Time
 	state      deviceState
 	issued     *CertResponse
@@ -537,9 +542,18 @@ func (s *Server) handleDeviceStart(w http.ResponseWriter, r *http.Request) {
 		PublicKey string `json:"public_key"`
 		// DeviceName is the client's own hostname — display only (#1470).
 		DeviceName string `json:"device_name"`
+		// Purpose "node" makes the confirmation add this machine as a node
+		// and the poll carry its node pass (claude-fleet#1627).
+		Purpose string `json:"purpose"`
+		// OSUser is the login the node's agent will run as (purpose=node).
+		OSUser string `json:"os_user"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<14)).Decode(&req); err != nil {
 		httpError(w, http.StatusBadRequest, "malformed request")
+		return
+	}
+	if req.Purpose != "" && req.Purpose != purposeNode {
+		httpError(w, http.StatusBadRequest, "purpose: empty or node")
 		return
 	}
 	key, err := sshca.ParseUserKey(req.PublicKey)
@@ -562,6 +576,8 @@ func (s *Server) handleDeviceStart(w http.ResponseWriter, r *http.Request) {
 		deviceCode: hex.EncodeToString(dc[:]), userCode: uc,
 		keyLine: strings.TrimSpace(req.PublicKey), keyFP: ssh.FingerprintSHA256(key),
 		name:    cleanDeviceName(req.DeviceName),
+		purpose: req.Purpose,
+		osUser:  sanitizeJoinField(req.OSUser),
 		expires: now.Add(deviceTTL),
 	}
 	if err := s.devices.add(l, now); err != nil {
@@ -634,12 +650,13 @@ func (s *Server) handleFleetLoginPage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		approve := r.FormValue("action") == "approve"
-		var keyLine, devName string
+		var keyLine, devName, purpose, osUser string
 		found := s.devices.withUser(code, now, func(l *deviceLogin) {
 			if l.state == devicePending {
-				keyLine, devName = l.keyLine, l.name
+				keyLine, devName, purpose, osUser = l.keyLine, l.name, l.purpose, l.osUser
 			}
 		})
+		page.setPurpose(purpose, devName)
 		switch {
 		case !found || keyLine == "":
 			page.Error = "这个验证码已过期或已用过，请在终端重新运行 fleet login。"
@@ -652,6 +669,15 @@ func (s *Server) handleFleetLoginPage(w http.ResponseWriter, r *http.Request) {
 			page.Done, page.Denied = true, true
 		default:
 			resp, err := s.issueCert(r, pid, keyLine, "device")
+			if err == nil && purpose == purposeNode {
+				// Same eligibility as the certificate (an active login), then
+				// the node pass the old join code used to buy (#1627).
+				var node *NodeJoinResponse
+				if node, err = s.enrollNode(r, devName, osUser); err == nil {
+					resp.Node = node
+					log.Printf("fleet: %s added node %s (%s) by scan", pid, node.Label, node.EndpointID)
+				}
+			}
 			s.devices.withUser(code, now, func(l *deviceLogin) {
 				if l.state != devicePending {
 					return
@@ -684,6 +710,7 @@ func (s *Server) handleFleetLoginPage(w http.ResponseWriter, r *http.Request) {
 	if !validUserCode(code) || !s.devices.withUser(code, now, func(l *deviceLogin) {
 		if l.state == devicePending {
 			page.KeyFP = l.keyFP
+			page.setPurpose(l.purpose, l.name)
 		}
 	}) || page.KeyFP == "" {
 		page.Error = "这个验证码已过期或已用过，请在终端重新运行 fleet login。"
@@ -755,6 +782,8 @@ func sameOrigin(r *http.Request) bool {
 }
 
 type loginPage struct {
+	Title   string // 领取连接证书, or 把 <机器名> 加为节点 (#1627)
+	Node    string // the machine being added, purpose=node only
 	Code    string
 	KeyFP   string
 	Who     string
@@ -769,7 +798,7 @@ type loginPage struct {
 var loginTmpl = template.Must(template.New("login").Parse(`<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>领取连接证书</title>
+<title>{{.Title}}</title>
 <style>
 :root{--bg:#fff;--fg:#1f2328;--mut:#59636e;--card:#f6f8fa;--line:#d1d9e0;--ok:#1a7f37;--bad:#cf222e;--btn:#1f6feb}
 @media (prefers-color-scheme:dark){:root{--bg:#0d1117;--fg:#e6edf3;--mut:#9198a1;--card:#151b23;--line:#3d444d;--ok:#3fb950;--bad:#f85149;--btn:#388bfd}}
@@ -785,22 +814,42 @@ button{flex:1;font-size:16px;padding:12px;border-radius:8px;border:1px solid var
 button.go{background:var(--btn);border-color:var(--btn);color:#fff}
 .ok{color:var(--ok)}.bad{color:var(--bad)}
 </style></head><body><main>
-<h1>领取连接证书</h1>
+<h1>{{.Title}}</h1>
 {{if .Error}}<div class="card bad">{{.Error}}</div>
 {{else if .Done}}{{if .Denied}}<div class="card">已拒绝。终端里的 fleet login 会停下来。</div>
+{{else if .Node}}<div class="card ok">已把 <b>{{.Node}}</b> 加为节点（证书签给 <b>{{.Login}}</b>，{{.Until}} 前有效）。回到终端，fleet node join 会接着装好并上线。</div>
 {{else}}<div class="card ok">已签发给 <b>{{.Login}}</b>，{{.Until}} 前有效。回到终端，fleet login 会自动写好证书。</div>{{end}}
 {{else if .Confirm}}
 <p>确认终端上显示的验证码与下面一致，再点「确认签发」。</p>
 <div class="card"><div class="mut">验证码</div><div class="code">{{.Code}}</div></div>
 <div class="card"><div class="mut">签给</div><div>{{.Who}} · 系统账号 <b>{{.Login}}</b></div>
 <div class="mut" style="margin-top:8px">密钥指纹</div><code>{{.KeyFP}}</code>
-<div class="mut" style="margin-top:8px">有效期 12 小时，过期后再扫一次即可。</div></div>
+<div class="mut" style="margin-top:8px">有效期 12 小时，过期后再扫一次即可。</div>
+{{if .Node}}<div class="mut" style="margin-top:8px">确认后 <b>{{.Node}}</b> 成为节点：入口可以把会话派到它上面。</div>{{end}}</div>
 <form method="post" action="/fleet/login"><input type="hidden" name="code" value="{{.Code}}">
 <div class="row"><button name="action" value="deny">不是我</button><button class="go" name="action" value="approve">确认签发</button></div></form>
 {{end}}
 </main></body></html>`))
 
+// purposeNode is the device-flow purpose of `fleet node join` (#1627).
+const purposeNode = "node"
+
+// setPurpose titles the page for what the scan does: the only difference
+// between the login page and the add-a-node page (#1627).
+func (p *loginPage) setPurpose(purpose, machine string) {
+	if purpose != purposeNode {
+		return
+	}
+	if machine == "" {
+		machine = "这台机器"
+	}
+	p.Node, p.Title = machine, "把 "+machine+" 加为节点"
+}
+
 func renderLoginPage(w http.ResponseWriter, p loginPage) {
+	if p.Title == "" {
+		p.Title = "领取连接证书"
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Frame-Options", "DENY")
