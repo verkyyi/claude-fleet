@@ -40,7 +40,7 @@
 set -uo pipefail
 REFRESH="${REFRESH:-1}"   # 1Hz repaint: 4Hz burned ~10% CPU per dash in steady state; the spinner steps a frame per repaint
 # Pause the 1Hz repaint while a modal popup is open over the dash (issue #308).
-# A tmux display-popup is a client-side overlay that does NOT freeze the panes
+# A tmux popup is a client-side overlay that does NOT freeze the panes
 # under it — tmux keeps re-compositing them, so the dash's per-second re-render
 # flashes THROUGH the popup (worst where the popup edge clips a double-width CJK
 # cell — the underlying half-cell flickers before the popup redraws). The modal

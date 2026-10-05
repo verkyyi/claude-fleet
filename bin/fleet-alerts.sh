@@ -737,22 +737,26 @@ fleet_alerts_popup_mute() {
 
 # fleet_alerts_popup [--level L] — the `prefix !` table.
 fleet_alerts_popup() {
-  local level=all self="bash '$_FA_BIN/fleet-alerts.sh'" hdr l
+  local level=all self="bash '$_FA_BIN/fleet-alerts.sh'" l
   [ "${1:-}" = --level ] && level="${2:-all}"
   case "$level" in alarm|warning|needs) ;; *) level=all ;; esac
   fleet_alerts_refresh
-  hdr='↵ act · 1 ✖ · 2 ▲ · 3 ● · 0 all · m mute 1h (not ✖) · esc  [✕ close]'
+  # The key line is the popup frame's bottom hint (issue #1619): one line that
+  # fits 54 columns, from the one string table; a tap on its ✕ closes.
+  . "$_FA_BIN/fleet-ui-lang.sh"; . "$_FA_BIN/fleet-popup-lib.sh"
+  fleet_fzf_hint "$(fleet_ui_t hint_alerts)"
+  fleet_fzf_click 'transform:case "$FZF_CLICK_FOOTER_WORD$FZF_CLICK_HEADER_WORD" in *✕*|*close*) echo abort ;; esac'
   set --
   for l in 1:alarm 2:warning 3:needs 0:all; do
-    set -- "$@" --bind "${l%%:*}:reload($self rows ${l#*:})+change-prompt(alerts (${l#*:}) ▸ )+change-header($hdr)"
+    set -- "$@" --bind "${l%%:*}:reload($self rows ${l#*:})+change-prompt(alerts (${l#*:}) ▸ )"
   done
   fleet_alerts_rows "$level" \
     | fzf --ansi --no-sort --layout=reverse --height=100% --disabled --no-info \
-          --delimiter='\t' --with-nth=2.. --prompt="alerts ($level) ▸ " --header="$hdr" \
+          --delimiter='\t' --with-nth=2.. --prompt="alerts ($level) ▸ " ${FZF_HINT[@]+"${FZF_HINT[@]}"} \
           "$@" \
           --bind "m:transform($self popup-mute {1} \"\$FZF_PROMPT\")" \
           --bind "enter:become([ {1} = - ] || $self act {1})" \
-          --bind 'click-header:transform:case "$FZF_CLICK_HEADER_WORD" in *✕*|*close*) echo abort ;; esac'
+          ${FZF_CLICK[@]+"${FZF_CLICK[@]}"}
   return 0
 }
 

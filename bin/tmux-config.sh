@@ -38,7 +38,7 @@
 # and an identity/view-only key refuses on the status line (modal stays open).
 #
 # Dispatch (re-invoked by the fzf binds):
-#   tmux-config.sh                 → the fzf loop (run under `tmux display-popup -E`)
+#   tmux-config.sh                 → the fzf loop (run under a fleet popup)
 #   tmux-config.sh rows            → emit the fzf rows (FIELD1<US>colored display)
 #   tmux-config.sh preview KEY     → the detail/preview pane for one key
 #   tmux-config.sh enter-action K S Q QRY → emit the fzf action(s) for enter on K
@@ -52,6 +52,7 @@ SELF="$BIN/$(basename "$0")"
 . "$BIN/fleet-lib.sh"
 . "$BIN/fleet-config-lib.sh"
 [ -f "$BIN/fleet-ui-lang.sh" ] && . "$BIN/fleet-ui-lang.sh"
+. "$BIN/fleet-popup-lib.sh"
 
 SESSION=$(fleet_current_session)
 [ -n "$SESSION" ] && fleet_load_conf "$SESSION" 2>/dev/null || true
@@ -84,7 +85,7 @@ cfg_t() {
       write_scope) printf '写入范围' ;;
       refresh) printf '刷新' ;;
       close) printf '关闭' ;;
-      header) printf '↵编辑  输入搜索全部  Space详情  %s范围  ?key  %s刷新  Esc关闭' "$DASH_GLYPH_SCOPE" "$DASH_GLYPH_RELOAD" ;;
+      header) printf '↵编辑 · Space详情 · %s范围 · ?key · %s刷新 · Esc' "$DASH_GLYPH_SCOPE" "$DASH_GLYPH_RELOAD" ;;
       border_fmt) printf ' fleet 配置 · 写入到 %s ' "${2:-}" ;;
       no_fzf) printf 'prefix+c 配置面板需要 fzf' ;;
       no_example) printf '找不到 fleet.conf.example，无法生成配置面板' ;;
@@ -140,7 +141,7 @@ cfg_t() {
       write_scope) printf 'write-scope' ;;
       refresh) printf 'refresh' ;;
       close) printf 'close' ;;
-      header) printf 'enter edit  type searches all  Space detail  %s scope  ? key  %s reload  Esc close' "$DASH_GLYPH_SCOPE" "$DASH_GLYPH_RELOAD" ;;
+      header) printf '↵ edit · Space detail · %s scope · ? key · %s reload' "$DASH_GLYPH_SCOPE" "$DASH_GLYPH_RELOAD" ;;
       border_fmt) printf ' fleet config · edits write to %s ' "${2:-}" ;;
       no_fzf) printf 'fzf required for the prefix+c config modal' ;;
       no_example) printf 'fleet.conf.example not found — cannot build the config modal' ;;
@@ -678,12 +679,15 @@ run_fzf() {
   # below aborts (→ closes this popup) when ✕/close is tapped — an iPad/Termius
   # dismiss that doesn't need Escape (issue #346). Bracketed as a button (issue
   # #381), so a tap lands on `[✕` or `close]` — the case globs *✕*|*close*.
+  # In a popup (issue #1619) the frame is the popup's: no inner border, the
+  # scope line becomes the header and the keys the bottom hint line.
+  fleet_fzf_frame "$(cfg_t border_fmt "$scope")"
+  fleet_fzf_hint "$(cfg_t header)" "$FZF_FRAME_LABEL"
   bash "$SELF" rows "$savedq" | fzf --ansi --delimiter="$FCFG_US" --with-nth=2 \
-    --no-sort --layout=reverse-list --info=hidden --border=rounded --tabstop=24 \
+    --no-sort --layout=reverse-list --info=hidden ${FZF_FRAME[@]+"${FZF_FRAME[@]}"} --tabstop=24 \
     --query="$savedq" \
-    --border-label="$(cfg_t border_fmt "$scope")" --border-label-pos=3 \
     --prompt="$(cfg_t filter) ▸ " \
-    --header="$(cfg_t header)" \
+    ${FZF_HINT[@]+"${FZF_HINT[@]}"} \
     --preview "bash $SELF preview {1}" \
     --preview-window='right,54%,wrap,border-left,hidden' \
     --bind "change:reload(bash $SELF rows {q})" \
@@ -700,7 +704,7 @@ run_fzf() {
 while :; do
   run_fzf || true
   # A key stashed itself + aborted fzf: run the edit here, in the gap between fzf
-  # runs (a plain interactive prompt in this same display-popup pty — NOT a nested
+  # runs (a plain interactive prompt in this same popup pty — NOT a nested
   # popup), then relaunch the modal so it reflects the new value (query restored).
   if [ -f "$EDITKEY" ]; then
     ekey=$(cat "$EDITKEY" 2>/dev/null); rm -f "$EDITKEY"
