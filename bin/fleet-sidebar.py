@@ -26,7 +26,7 @@ import unicodedata
 
 BIN = Path(__file__).absolute().parent  # preserve the selftest shadow root
 US = "\x1f"
-VIEW_VERSION = "23"  # #1536: never blank, never frozen — 刷新中…, popup pid, lock wait, watchdog
+VIEW_VERSION = "24"  # #1702: a move into a proxy window swaps into its slot, never re-lays it out
 # ↑↓ follow (issue #822): an arrow moves the highlight at once and switches to
 # it only after this much quiet. A held key on a slow link is one switch, not
 # one per row, and a row passed over is never selected — so the wake hook's
@@ -135,10 +135,15 @@ def fields(target, fmt):
 def panes(session):
     fmt = US.join(("#{pane_id}", "#{window_id}", "#{@sidebar}",
                    "#{pane_active}", "#{pane_dead}", "#{@sidebar_worker}",
-                   "#{@sidebar_version}"))
+                   "#{@sidebar_version}", "#{@sidebar_slot}"))
     return [line.split(US) for line in tmux(
         "list-panes", "-s", "-t", session, "-F", fmt).splitlines()
-        if len(line.split(US)) == 7]
+        if len(line.split(US)) == 8]
+
+
+def is_worker(pane):
+    """A panes() row that is the window's own content: not the view, not a slot."""
+    return pane[2] != "1" and pane[7] != "1" and pane[4] != "1"
 
 
 def remove_view(pane):
@@ -148,12 +153,58 @@ def remove_view(pane):
         tmux("kill-pane", "-t", pane)
 
 
+# The SLOT (issue #1702). There is one view and it moves; moving it with
+# join-pane re-lays out BOTH windows — the one it leaves widens its app pane back
+# to full width, the one it enters narrows it — and every resize is a SIGWINCH
+# into the program inside. In a proxy window (`@remote`) that program is another
+# machine's Claude Code, so each switch between machines repainted two whole
+# screens, one of them across the network. So a proxy window the view leaves
+# keeps a SLOT in the view's cell: a blank pane of the same width, swapped with
+# the view (`swap-pane` between two same-size cells resizes nothing). Steady
+# state, switching between machines changes no app pane's size at all. A local
+# window keeps none — its content repaints locally, and every reader that wants
+# "the one worker pane" stays as it was. The slot exits on its own once it is
+# alone in its window, so it never keeps a closed proxy window open.
+SLOT_CMD = ("printf '\033[?25l'; while sleep 5; do "
+            "n=$(tmux display-message -p -t \"$TMUX_PANE\" '#{window_panes}' 2>/dev/null) || exit 0; "
+            "[ \"${n:-1}\" -gt 1 ] || exit 0; done")
+
+
+def remove_slot(pane):
+    # Ownership first, as remove_view: never close an agent pane.
+    if fields(pane, "#{@sidebar_slot}") == ["1"]:
+        tmux("kill-pane", "-t", pane)
+
+
+def make_slot(worker, width):
+    """A slot beside `worker`, in the cell a view would take. "" on failure."""
+    slot = tmux("split-window", "-d", "-h", "-b", "-f", "-l", str(width),
+                "-t", worker, "-c", str(BIN.parent), "-P", "-F", "#{pane_id}",
+                "sh", "-c", SLOT_CMD)
+    if not slot.startswith("%"):
+        return ""
+    tmux("set-option", "-p", "-t", slot, "@sidebar_slot", "1", ";",
+         "set-option", "-p", "-t", slot, "remain-on-exit", "off")
+    return slot
+
+
+def window_slot(window):
+    """(pane id, width) of the first live slot in `window`, or ("", "")."""
+    for line in tmux("list-panes", "-t", window, "-F",
+                     US.join(("#{pane_id}", "#{@sidebar_slot}", "#{pane_dead}",
+                              "#{pane_width}"))).splitlines():
+        part = line.split(US)
+        if len(part) == 4 and part[1] == "1" and part[2] != "1":
+            return part[0], part[3]
+    return "", ""
+
+
 def move_view(pane, worker, width, select=False):
     """Move the populated grid before selecting its new window, in one queue."""
-    source = fields(pane, US.join(("#{window_id}", "#{@sidebar}")))
+    source = fields(pane, US.join(("#{window_id}", "#{@sidebar}", "#{@remote}")))
     target = fields(worker, US.join(("#{window_id}", "#{window_width}",
                                     "#{window_zoomed_flag}")))
-    if len(source) != 2 or source[1] != "1" or len(target) != 3:
+    if len(source) != 3 or source[1] != "1" or len(target) != 3:
         return False
     window, cols, zoomed = target
     if not cols.isdigit() or int(cols) < width + 81 or zoomed == "1":
@@ -166,9 +217,24 @@ def move_view(pane, worker, width, select=False):
         # scaled meanwhile — is never taken for the operator's drag.
         commands = ["set-option", "-p", "-t", pane, "@sidebar_moved", str(time.time_ns()), ";",
                     "set-option", "-uw", "-t", source[0], "@sidebar_worker", ";",
-                    "set-option", "-w", "-t", window, "@sidebar_worker", worker, ";",
-                    "join-pane", "-d", "-h", "-b", "-f", "-l", str(width),
-                    "-s", pane, "-t", worker]
+                    "set-option", "-w", "-t", window, "@sidebar_worker", worker, ";"]
+        # A slot to swap with (issue #1702, SLOT_CMD): the target's own, or — when
+        # the view leaves a proxy window, which keeps one — a new one made in the
+        # target (that window's one resize, the join's). Leaving a local window,
+        # the slot it is handed is closed at once: that window widens as before.
+        slot, slot_width = window_slot(window)
+        keep = bool(source[2])
+        if not slot and keep:
+            slot, slot_width = make_slot(worker, width), str(width)
+        if slot:
+            if slot_width != str(width):
+                commands += ["resize-pane", "-t", slot, "-x", str(width), ";"]
+            commands += ["swap-pane", "-d", "-s", pane, "-t", slot]
+            if not keep:
+                commands += [";", "kill-pane", "-t", slot]
+        else:
+            commands += ["join-pane", "-d", "-h", "-b", "-f", "-l", str(width),
+                         "-s", pane, "-t", worker]
     if select:
         if commands:
             commands.append(";")
@@ -251,7 +317,7 @@ def sync(session, enabled, width, lock):
     if manual.isdigit():
         width = max(24, min(60, int(manual)))
     all_panes = panes(session)
-    workers = [p for p in all_panes if p[1] == window and p[2] != "1" and p[4] != "1"]
+    workers = [p for p in all_panes if p[1] == window and is_worker(p)]
     wanted = (enabled == "1" and attached != "0" and
               # This session is another machine's proxy view, and its ONLY client
               # (fleet-remote-view.sh attach, issue #1475): it is drawn inside THAT
@@ -269,6 +335,15 @@ def sync(session, enabled, width, lock):
               bool(workers) and int(cols) >= width + 1 + 80)
     if not wanted or zoomed == "1":
         leave_navigation(session)
+    # Slots (issue #1702): none at all while the list is off; none in a window
+    # with no content left (the slot must not hold it open); and none in the
+    # window on screen unless the view is about to take it — below.
+    hosts = {p[1] for p in all_panes if is_worker(p)}
+    slots = [p for p in all_panes if p[7] == "1" and p[4] != "1"]
+    for pane in slots:
+        if enabled != "1" or pane[1] not in hosts:
+            remove_slot(pane[0])
+    here = next((p[0] for p in slots if p[1] == window and enabled == "1" and p[1] in hosts), "")
     current, reusable = [], []
     for pane in all_panes:
         if pane[2] != "1":
@@ -283,6 +358,9 @@ def sync(session, enabled, width, lock):
         for pane in reusable:
             remove_view(pane[0])
     if not wanted or current or zoomed == "1":
+        # The window on screen shows no list: its slot would be a blank column.
+        if here and zoomed != "1":
+            remove_slot(here)
         return
     worker = next((p[0] for p in workers if p[3] == "1"), workers[0][0])
     if reusable:
@@ -299,8 +377,13 @@ def sync(session, enabled, width, lock):
         "FLEET_SIDEBAR_WIDTH=" + str(width),
         "FLEET_SIDEBAR_WIDTH_MAX=" + os.environ.get("FLEET_SIDEBAR_WIDTH_MAX", ""),
         "python3", str(BIN / "fleet-sidebar.py"), "ui", session, worker, lock))
-    pane = tmux("split-window", "-d", "-h", "-b", "-f", "-l", str(width),
-                "-t", worker, "-c", cwd, "-P", "-F", "#{pane_id}", cmd)
+    if here and run(["tmux", "respawn-pane", "-k", "-t", here, "-c", cwd, cmd]).returncode == 0:
+        # The window keeps a slot (issue #1702): the new view takes its cell.
+        pane = here
+        tmux("set-option", "-up", "-t", pane, "@sidebar_slot")
+    else:
+        pane = tmux("split-window", "-d", "-h", "-b", "-f", "-l", str(width),
+                    "-t", worker, "-c", cwd, "-P", "-F", "#{pane_id}", cmd)
     if not pane.startswith("%"):
         return
     tmux("set-option", "-p", "-t", pane, "@sidebar", "1", ";",
@@ -360,7 +443,7 @@ def jump(session, window, pane, lock):
     with open(lock, "w") as handle:
         if not lock_within(handle, env_float("FLEET_SIDEBAR_LOCK_WAIT", LOCK_WAIT)):
             return False
-        workers = [p for p in panes(session) if p[1] == window and p[2] != "1" and p[4] != "1"]
+        workers = [p for p in panes(session) if p[1] == window and is_worker(p)]
         if workers:
             worker = next((p[0] for p in workers if p[3] == "1"), workers[0][0])
             width = fields(pane, "#{pane_width}")[0]
