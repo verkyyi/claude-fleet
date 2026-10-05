@@ -3,7 +3,8 @@
 # EPIC #1419 C1). On an isolated tmux server and a sandbox conf dir, pins:
 #   A  fleet_uuid (fleet-lib.sh) mints the SAME fleet UUID as fleet_control.py's
 #      inventory, so a shell-built worker_id equals what fleet_status reports;
-#      fleet_worker_id builds `<uuid>/<key>` for an issue and a scratch window.
+#      fleet_worker_id builds `<uuid>/<fleet_id>` (issue #1646) and
+#      fleet_worker_id_key `<uuid>/<key>` for an issue and a scratch window.
 #   B  fleet_worker_locate: this fleet's worker_id / bare key / window → `local
 #      <window> <sess>`; this fleet's not-live worker → `unknown` (the hub is never
 #      asked); ANOTHER fleet's worker_id with a key a local window also holds →
@@ -19,7 +20,9 @@
 #      parent is relayed by fleet-report-parent.sh since #1421 — never to that
 #      window), and fleet-await.sh maps this fleet's wid to <N>.
 #   E  @origin_wid: fleet_stamp_origin_wid stamps the parent's worker_id for a key
-#      origin, nothing for a non-key origin or a machine with no fleet UUID; the
+#      origin — its identity form + @origin_fid when a live window answers to the
+#      key (issue #1646), else the key form — nothing for a non-key origin or a
+#      machine with no fleet UUID; the
 #      spawn sites (dash-issue-session.sh, dash-raw-session.sh,
 #      dash-restore-session.sh, fleet-await.sh) call it.
 #   F  ONE resolver (issue #1537, EPIC #1529 E8) — fleet_win_for_key is the only
@@ -75,8 +78,15 @@ f=[x for x in c.Control(sys.argv[1]).inventory() if x["name"]==sys.argv[2]]
 print(f[0]["fleet_id"] if f else "")' "$FLEET_CONF_DIR" "$L" 2>"$WORK/py.err")
 U=$(lib fleet_uuid "$L")
 ok; [ -n "$PYID" ] && [ "$U" = "$PYID" ] || fail "A: fleet_uuid must equal fleet_control's fleet_id" "sh=$U py=$PYID $(cat "$WORK/py.err")"
-ok; [ "$(lib fleet_worker_id "$L" "$w7")" = "$U/issue-7" ] || fail "A: worker_id of the issue window" "$(lib fleet_worker_id "$L" "$w7")"
-ok; [ "$(lib fleet_worker_id "$L" "$w3")" = "$U/scratch-3" ] || fail "A: worker_id of the scratch window" "$(lib fleet_worker_id "$L" "$w3")"
+# Since issue #1646 a worker_id names the session's lifelong identity (@fleet_id,
+# minted on first ask); the key form is fleet_worker_id_key, the readable alias.
+wid7=$(lib fleet_worker_id "$L" "$w7"); fid7=$(tf show-options -wqv -t "$w7" @fleet_id)
+ok; [ -n "$fid7" ] && [ "$wid7" = "$U/$fid7" ] || fail "A: worker_id of the issue window is <uuid>/<fleet_id>" "$wid7 (fid $fid7)"
+ok; [ "$(lib fleet_worker_id "$L" "$w7")" = "$wid7" ] || fail "A: a second ask returns the same identity (never re-minted)"
+wid3=$(lib fleet_worker_id "$L" "$w3"); fid3=$(tf show-options -wqv -t "$w3" @fleet_id)
+ok; [ -n "$fid3" ] && [ "$fid3" != "$fid7" ] && [ "$wid3" = "$U/$fid3" ] || fail "A: worker_id of the scratch window" "$wid3"
+ok; [ "$(lib fleet_worker_id_key "$L" "$w7")" = "$U/issue-7" ] || fail "A: the key-form alias of the issue window" "$(lib fleet_worker_id_key "$L" "$w7")"
+ok; [ "$(lib fleet_worker_id_key "$L" "$w3")" = "$U/scratch-3" ] || fail "A: the key-form alias of the scratch window" "$(lib fleet_worker_id_key "$L" "$w3")"
 
 # --- B: locate ------------------------------------------------------------------------
 F=11111111-2222-3333-4444-555555555555          # another machine's fleet
@@ -166,7 +176,12 @@ ok; [ "$rc" = 0 ] && case "$out" in *"would relay to $F/issue-7"*) true ;; *) fa
 
 # --- E: @origin_wid stamping ---------------------------------------------------------------
 lib fleet_stamp_origin_wid "$L" "$w3" issue-7 "$L"
-ok; [ "$(tf show-options -wqv -t "$w3" @origin_wid)" = "$U/issue-7" ] || fail "E: a key origin stamps the parent's worker_id"
+ok; [ "$(tf show-options -wqv -t "$w3" @origin_wid)" = "$U/$fid7" ] || fail "E: a key origin stamps the parent's identity-form worker_id (#1646)" "$(tf show-options -wqv -t "$w3" @origin_wid)"
+ok; [ "$(tf show-options -wqv -t "$w3" @origin_fid)" = "$fid7" ] || fail "E: …and the parent's identity as @origin_fid"
+tf set-window-option -u -t "$w3" @origin_wid; tf set-window-option -u -t "$w3" @origin_fid
+lib fleet_stamp_origin_wid "$L" "$w3" issue-77 "$L"
+ok; [ "$(tf show-options -wqv -t "$w3" @origin_wid)" = "$U/issue-77" ] && [ -z "$(tf show-options -wqv -t "$w3" @origin_fid)" ] \
+  || fail "E: a key no live window answers to keeps the key form and stamps no @origin_fid"
 tf set-window-option -u -t "$w3" @origin_wid
 lib fleet_stamp_origin_wid "$L" "$w3" autofill "$L"
 ok; [ -z "$(tf show-options -wqv -t "$w3" @origin_wid)" ] || fail "E: a non-key origin stamps nothing"

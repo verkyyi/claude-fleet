@@ -15,7 +15,7 @@ import uuid
 from fleet_config_write import revision, write
 from fleet_hub_common import (CONFIG_KEYS, GH_READS, PROTOCOL, WORKER_ACTIONS, Database, Fault,
                               canonical, fields, identifier, name, now, operation,
-                              parse_worker_id, read_request, repo_named, run, tool_path, validate_gh_read,
+                              parse_worker_id, is_identity, read_request, repo_named, run, tool_path, validate_gh_read,
                               validate_write, worker_identity, worker_key)
 
 BIN = Path(__file__).absolute().parent
@@ -162,8 +162,15 @@ class Control:
             # any tab of its own, so an odd window name can never make the
             # inventory unreadable (the adapter ships beside this file, so the
             # last two columns are always needs and origin_wid).
+            # Column 13 (issue #1646): the session's lifelong identity (@fleet_id);
+            # the last three columns are then origin_wid, needs and identity.
             extra = {}
-            if len(parts) >= 12:
+            if len(parts) >= 13:
+                ident = parts[-1] if re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", parts[-1]) else None
+                extra = dict(name=" ".join(parts[9:-3]), origin_wid=parts[-3] or None, needs=parts[-2] or None,
+                             identity=ident)
+                parts = parts[:9]
+            elif len(parts) >= 12:
                 extra = dict(name=" ".join(parts[9:-2]), origin_wid=parts[-2] or None, needs=parts[-1] or None)
                 parts = parts[:9]
             elif len(parts) >= 10:
@@ -192,8 +199,12 @@ class Control:
 
     def find_workers(self, fleet, key):
         """Windows holding `key`. A bare key in a multi-repo fleet matches every
-        repo's (issue #1018) — so two of them resolve as AMBIGUOUS, never a pick."""
+        repo's (issue #1018) — so two of them resolve as AMBIGUOUS, never a pick.
+        An identity (issue #1646, a worker_id's `<fleet_id>` half) matches the
+        window whose @fleet_id it is, whatever key that window answers to now."""
         snapshot = self.workers(fleet)
+        if is_identity(key):
+            return [w for w in snapshot["workers"] if w.get("identity") == key], snapshot
         return [w for w in snapshot["workers"] if w["key"] == key
                 or (":" not in key and (w["key"] or "").endswith(":" + key))], snapshot
 
@@ -323,6 +334,13 @@ class Control:
         fleet_id, key = parse_worker_id(params["worker_id"])
         if fleet_id != fleet["fleet_id"]:
             raise Unattempted("INVALID_ARGUMENT", "worker_id belongs to a different fleet")
+        if is_identity(key):
+            # An identity-form worker_id (issue #1646): the session it names, under
+            # the key it answers to NOW — every adapter below speaks keys.
+            if action == "worker_resume":
+                raise Unattempted("INVALID_ARGUMENT", "Resume a stopped worker by its key-form worker_id")
+            matches, _ = self.target(fleet, key, action)
+            key = matches[0]["key"]
         if action == "worker_answer":
             return self.execute_answer(fleet, key, params["answer"], actor)
         if action == "worker_reap":

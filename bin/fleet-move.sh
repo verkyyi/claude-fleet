@@ -194,6 +194,23 @@ EOF_PEER
 move_ssh() { peer_refresh || return 255; ssh -o BatchMode=yes ${PEER[@]+"${PEER[@]}"} "$@"; }
 ssh_run() { move_ssh "$TO" "$(remote_cmd "$@")"; }
 
+# fid_bundle <window> <sid> — the session's lifelong identity (issue #1646) rides
+# the transcript bundle as `<sid>.fleet-id`, so the target window is stamped with
+# the SAME @fleet_id (fleet-move-remote.sh launch). A file, not a flag: a target
+# install or ccquota agent that predates it just leaves the file where the tar put
+# it. Sets FIDTAR to the extra tar operands (`-C <dir> <sid>.fleet-id`), or empty.
+FIDTAR=()
+fid_bundle() {
+  local f d
+  FIDTAR=()
+  f=$(TM show-options -wqv -t "${1:-}" @fleet_id 2>/dev/null)
+  fleet_is_fid "$f" || return 0
+  d=$(mktemp -d "${TMPDIR:-/tmp}/fleet-move-fid.XXXXXX") || return 0
+  printf '%s\n' "$f" > "$d/${2:-}.fleet-id" 2>/dev/null || { rm -rf "$d"; return 0; }
+  FIDTAR=(-C "$d" "${2:-}.fleet-id")
+}
+fid_bundle_drop() { [ "${#FIDTAR[@]}" -eq 3 ] && rm -rf "${FIDTAR[1]}"; FIDTAR=(); return 0; }
+
 # Sourced (fleet-move-selftest.sh pins the pure helpers above) → define only; a
 # direct run dispatches. Same guard idiom as fleet-migrate.sh/fleet-account.sh.
 
@@ -361,11 +378,14 @@ move_main() {
     [ -f "$pdir/$sid.jsonl" ] || pdir="$(project_dir_for "$cwd")"
     [ -d "$pdir/$sid" ] && sidecar=("$sid")
     tmp=$(mktemp "${TMPDIR:-/tmp}/fleet-move.XXXXXX") || { fleet_rotate_lease_drop "$ldir"; say "  ✗ $name ($wid): no temp file — failed:target"; return 8; }
-    if ! tar -C "$pdir" -cf "$tmp" "$sid.jsonl" ${sidecar[@]+"${sidecar[@]}"} 2>/dev/null; then
+    fid_bundle "$wid" "$sid"
+    if ! tar -cf "$tmp" -C "$pdir" "$sid.jsonl" ${sidecar[@]+"${sidecar[@]}"} ${FIDTAR[@]+"${FIDTAR[@]}"} 2>/dev/null; then
+      fid_bundle_drop
       rm -f "$tmp"; fleet_rotate_lease_drop "$ldir"
       say "  ✗ $name ($wid): cannot read transcript $sid.jsonl — the agent here is stopped; resume it with /fleet-history — failed:target"; return 8
     fi
 
+    fid_bundle_drop
     # --- 7. hand it to the hub; wait for the target's verdict ---------------------
     line=$(fleet_hub_move send --node "$TO" --bundle "$tmp" --branch "$branch" ${pushed_flag:+"$pushed_flag"} \
       --sid "$sid" --name "$name" --raw "${raw:-0}" ${state:+--state "$state"} ${origin:+--origin "$origin"} \
@@ -493,11 +513,14 @@ move_main() {
     local pdir; pdir="$(project_dir_for "$cwd")"
     local dest; dest="$(printf '%s' "$twt" | tr '/.' '--')"
     local sidecar=(); [ -d "$pdir/$sid" ] && sidecar=("$sid")
-    if ! tar -C "$pdir" -cf - "$sid.jsonl" ${sidecar[@]+"${sidecar[@]}"} 2>/dev/null | move_ssh "$TO" "$(remote_cmd "$REMOTE_BIN" receive --dest "$dest")"; then
+    fid_bundle "$wid" "$sid"
+    if ! tar -cf - -C "$pdir" "$sid.jsonl" ${sidecar[@]+"${sidecar[@]}"} ${FIDTAR[@]+"${FIDTAR[@]}"} 2>/dev/null | move_ssh "$TO" "$(remote_cmd "$REMOTE_BIN" receive --dest "$dest")"; then
+      fid_bundle_drop
       fleet_rotate_lease_drop "$ldir"; abort_target
       say "  ✗ $name ($wid): transcript copy to $TO failed — failed:target"; return 8
     fi
 
+    fid_bundle_drop
     # --- 7. target: open the window, resume, verify ------------------------------
     local launch; launch=$(ssh_run "$REMOTE_BIN" launch --wt "$twt" --sid "$sid" --name "$name" \
       --raw "${raw:-0}" --state "${state:-done}" --fleet "$rfleet" \

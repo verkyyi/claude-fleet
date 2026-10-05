@@ -357,7 +357,7 @@ fi
 if [ "$PLACING" = 1 ]; then
   _pw="$ORIGIN_WID"
   if [ -z "$_pw" ] && _fleet_wid_split "$ORIGIN" >/dev/null 2>&1; then
-    _u=$(fleet_uuid "$SESS") && [ -n "$_u" ] && _pw="$_u/$ORIGIN"
+    _pw=$(fleet_key_wid "$SESS" "$ORIGIN") || _pw=''   # by identity (#1646)
   fi
   _prepo="${REPO_ARG:-$(fleet_norm_repo "${FLEET_REPO:-}")}"
   place_out=$(fleet_hub_place "$SESS" "$_prepo" scratch "$NODE" "$_pw" "$AGENT" '' '' "$NAME"); place_rc=$?
@@ -541,6 +541,9 @@ else
     TM set-window-option -t "$win" @worktree "$wt" 2>/dev/null # so ⌃x can resolve+reap the worktree
   fi
 fi
+# The session's lifelong identity (issue #1646), warm or cold: a pool window was no
+# session until this claim. Minted once; restore / migrate / move carry it.
+fleet_window_fid "$SESS" "$win" "$SOCK" >/dev/null 2>&1 || :
 # Every repo scratch carries its repo (issue #789), warm or cold.
 [ -n "$REPO_ARG" ] && TM set-window-option -t "$win" @repo "$REPO_ARG" 2>/dev/null
 [ "$NOREPO" != 1 ] && [ "$MULTI" = 0 ] && [ -n "${FLEET_REPO:-}" ] \

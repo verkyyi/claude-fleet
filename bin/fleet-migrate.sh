@@ -347,6 +347,10 @@ migrate_one_body() {
   cwd=$(wopt "$wid" '#{pane_current_path}'); state=$(wopt "$wid" '#{@claude_state}')
   raw=$(wopt "$wid" '#{@raw}'); iss=$(wopt "$wid" '#{@issue}'); wt=$(wopt "$wid" '#{@worktree}')
   origin=$(wopt "$wid" '#{@origin}')
+  # The session's lifelong identity + its parent's (issue #1646) ride the move
+  # verbatim: a new window is the SAME session, never a re-mint.
+  local fid ofid owid
+  fid=$(wopt "$wid" '#{@fleet_id}'); ofid=$(wopt "$wid" '#{@origin_fid}'); owid=$(wopt "$wid" '#{@origin_wid}')
   # The window's repo identity (issue #789) rides the move like @issue/@worktree: a
   # new window without it would load the fleet's default repo, or lose the no-repo
   # mark that keeps every reaper off a $HOME session.
@@ -517,6 +521,9 @@ migrate_one_body() {
     [ "$raw" = 1 ] && TM set-window-option -t "$nw" @raw 1 2>/dev/null
     [ -n "$wt" ] && TM set-window-option -t "$nw" @worktree "$wt" 2>/dev/null
     [ -n "$origin" ] && TM set-window-option -t "$nw" @origin "$origin" 2>/dev/null
+    [ -n "$fid" ] && TM set-window-option -t "$nw" @fleet_id "$fid" 2>/dev/null
+    [ -n "$ofid" ] && TM set-window-option -t "$nw" @origin_fid "$ofid" 2>/dev/null
+    [ -n "$owid" ] && TM set-window-option -t "$nw" @origin_wid "$owid" 2>/dev/null
     [ -n "$wrepo" ] && TM set-window-option -t "$nw" @repo "$wrepo" 2>/dev/null
     if [ "$norepo" = 1 ]; then
       TM set-window-option -t "$nw" @norepo 1 2>/dev/null

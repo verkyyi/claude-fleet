@@ -59,19 +59,22 @@ case "$mode" in
     # machines' sidebars (a remote row's label, and which parent it nests under).
     # Column 12 (issue #1475): what the window needs of its person (@claude_needs:
     # ask / perm / blocked / …), so a remote row draws the same red `?` / `⊘`.
-    xfmt=$'\t#{window_name}\t#{@origin_wid}\t#{@claude_needs}'
+    # Column 13 (issue #1646): the session's lifelong identity (@fleet_id), so the
+    # hub finds a worker by the `<fleet UUID>/<fleet_id>` its children hold.
+    xfmt=$'\t#{window_name}\t#{@origin_wid}\t#{@claude_needs}\t#{@fleet_id}'
     if ! fleet_multirepo "$sess"; then
       tmux -u -L "$sock" list-windows -t "=$sess" -F "$fmt$xfmt"
     else
       rows=$(tmux -u -L "$sock" list-windows -t "=$sess" -F "$fmt#{@repo}$xfmt") || exit 1
       while IFS= read -r row; do
         [ -n "$row" ] || continue
+        fi=${row##*$'\t'}; row=${row%$'\t'*}
         nd=${row##*$'\t'}; row=${row%$'\t'*}
         ow=${row##*$'\t'}; row=${row%$'\t'*}
         nm=${row##*$'\t'}; row=${row%$'\t'*}
         r=${row##*$'\t'}; row=${row%$'\t'*}
         [ -n "$r" ] || r=$(fleet_window_repo "$sess" "${row%%$'\t'*}")
-        printf '%s\t%s\t%s\t%s\t%s\n' "$row" "${r:-?}" "$nm" "$ow" "$nd"
+        printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$row" "${r:-?}" "$nm" "$ow" "$nd" "$fi"
       done <<<"$rows"
     fi
     ;;

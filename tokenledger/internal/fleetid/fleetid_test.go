@@ -73,7 +73,13 @@ func TestParseWorkerID(t *testing.T) {
 	if err != nil || fid != fleetGolden[0].want || key != "verkyyi-claude-fleet:issue-5" {
 		t.Fatalf("ParseWorkerID = %q %q %v", fid, key, err)
 	}
+	// The lifelong form (claude-fleet#1646): <fleet UUID>/<fleet_id>.
+	ident := "9d1c6b7e-2f4a-4c3b-8e5d-6a7b8c9d0e1f"
+	if fid, key, err := ParseWorkerID(fleetGolden[0].want + "/" + ident); err != nil || fid != fleetGolden[0].want || key != ident {
+		t.Fatalf("ParseWorkerID(identity form) = %q %q %v", fid, key, err)
+	}
 	for _, bad := range []string{"", "x/issue-1", fleetGolden[0].want + "/issue-0", fleetGolden[0].want + "/pr-3",
+		fleetGolden[0].want + "/" + strings.ToUpper(ident), fleetGolden[0].want + "/" + ident + "x",
 		strings.ToUpper(fleetGolden[0].want) + "/issue-1", fleetGolden[0].want + "/issue-1/x"} {
 		if _, _, err := ParseWorkerID(bad); err == nil {
 			t.Errorf("ParseWorkerID(%q) accepted", bad)

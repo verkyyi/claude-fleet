@@ -4274,24 +4274,131 @@ except Exception:
 ' "$db" 2>/dev/null
 }
 
-# fleet_worker_id <sess> <window> → that window's worker_id, or nothing (no fleet
-# UUID on this machine, or a window with no durable key — fleet_window_okey).
+# ---- a session's lifelong identity: @fleet_id (issue #1646, EPIC #1645 C1) ------
+# A key (`issue-<N>` / `scratch-<N>`) is a NAME a window wears, and it changes under
+# the session: a scratch bound to an issue (`fleet-issue-file.sh --bind`) stops
+# answering to `scratch-<N>`, so every child whose @origin said so lost its parent —
+# reports ledgered into a book nobody reads, sidebar rows sunk to the top level.
+# @fleet_id is a UUID minted ONCE per session — at spawn (dash-issue-session.sh /
+# dash-raw-session.sh stamp it with the window's first command), else on the first
+# fleet_window_fid that asks — and carried verbatim by every road a session takes
+# to another window: fleet-restore (the map's FID row), fleet-migrate, fleet-move
+# (local and through the hub). It is never re-minted; /clear and a handoff never
+# touch it. A spawn records the parent's as @origin_fid beside @origin, and every
+# resolver asks for it FIRST, falling back to the key only when it has none.
+# Its worker_id is `<fleet UUID>/<fleet_id>`; the old `<fleet UUID>/<key>` stays a
+# readable alias for one version (EPIC #1645 rule 2): _fleet_wid_split takes both.
+FLEET_FID_RE='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+
+# fleet_is_fid <s> — a canonical (lowercase, hyphenated) UUID?
+fleet_is_fid() {
+  [ -n "${1:-}" ] && printf '%s' "$1" | grep -Eqx "$FLEET_FID_RE"
+}
+
+# fleet_fid_mint → a fresh @fleet_id (uuid4), rc 1 when nothing on PATH can mint.
+fleet_fid_mint() {
+  local f
+  f=$(uuidgen 2>/dev/null | tr 'A-F' 'a-f')
+  fleet_is_fid "$f" || f=$(python3 -c 'import uuid; print(uuid.uuid4())' 2>/dev/null)
+  fleet_is_fid "$f" || return 1
+  printf '%s' "$f"
+}
+
+# fleet_window_fid <sess> <window> [<sock>] → that window's @fleet_id, minting and
+# stamping one first if it has none (a window spawned before #1646, or by a road
+# that does not stamp). rc 1: no such window, or nothing could mint. The stored
+# value is re-read after the stamp, so two racing first asks print the same one.
+fleet_window_fid() {
+  local sess="${1:-}" w="${2:-}" sock="${3:-}" f
+  [ -n "$w" ] || return 1
+  if [ -n "$sock" ]; then f=$(tmux -L "$sock" show-options -wqv -t "$w" @fleet_id 2>/dev/null)
+  else f=$(_fleet_tmux "$sess" show-options -wqv -t "$w" @fleet_id 2>/dev/null); fi
+  fleet_is_fid "$f" && { printf '%s' "$f"; return 0; }
+  f=$(fleet_fid_mint) || return 1
+  if [ -n "$sock" ]; then
+    tmux -L "$sock" set-window-option -t "$w" @fleet_id "$f" 2>/dev/null || return 1
+    f=$(tmux -L "$sock" show-options -wqv -t "$w" @fleet_id 2>/dev/null)
+  else
+    _fleet_tmux "$sess" set-window-option -t "$w" @fleet_id "$f" 2>/dev/null || return 1
+    f=$(_fleet_tmux "$sess" show-options -wqv -t "$w" @fleet_id 2>/dev/null)
+  fi
+  fleet_is_fid "$f" || return 1
+  printf '%s' "$f"
+}
+
+# fleet_win_for_fid <fleet_id> [<sock>] — fleet_win_for_key's twin for an identity:
+# the live window carrying @fleet_id <fleet_id> on this fleet's socket. Same rails:
+# rc 0 + the id, rc 1 NOTFOUND, rc 2 AMBIGUOUS (two windows carry it — a copy made
+# by hand — said on stderr, never a pick); a warm-pool window never answers.
+fleet_win_for_fid() {
+  local fid="${1:-}" sock="${2:-}" fleet wl line wid rest wsess pool f hits='' n
+  fleet_is_fid "$fid" || return 1
+  fleet="$sock"; [ -n "$fleet" ] || fleet=$(fleet_current_session 2>/dev/null)
+  if [ -n "$sock" ]; then wl=$(fleet_lw '#{window_id}|#{session_name}|#{@pool}|#{@fleet_id}' tmux -L "$sock")
+  else wl=$(fleet_lw '#{window_id}|#{session_name}|#{@pool}|#{@fleet_id}'); fi
+  [ -n "$wl" ] || return 1
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    wid=${line%%|*};   rest=${line#*|}
+    wsess=${rest%%|*}; rest=${rest#*|}
+    pool=${rest%%|*};  f=${rest#*|}
+    [ "$f" = "$fid" ] || continue
+    [ "$pool" = 1 ] && continue
+    fleet_is_pool_session "$wsess" ${fleet:+"$fleet"} && continue
+    hits="$hits$wid"$'\n'
+  done <<EOF
+$wl
+EOF
+  n=$(printf '%s' "$hits" | grep -c .)
+  case "$n" in
+    0) return 1 ;;
+    1) printf '%s' "${hits%%$'\n'*}"; return 0 ;;
+  esac
+  printf 'fleet: identity %s is ambiguous — %s windows carry it: %s\n' "$fid" "$n" \
+    "$(printf '%s' "$hits" | paste -sd, - | sed 's/,/, /g')" >&2
+  return 2
+}
+
+# fleet_win_for_addr <key | fleet_id> [<sock>] — the one entry for an address that
+# may be either: an identity goes to fleet_win_for_fid, a key to fleet_win_for_key.
+fleet_win_for_addr() {
+  if fleet_is_fid "${1:-}"; then fleet_win_for_fid "$@"; else fleet_win_for_key "$@"; fi
+}
+
+# fleet_worker_id <sess> <window> → that window's worker_id, `<fleet UUID>/<fleet_id>`
+# (issue #1646), or nothing (no fleet UUID on this machine, or a window with no
+# durable key — fleet_window_okey: a panel is no worker). A window that cannot get
+# an identity (nothing can mint) keeps the old `<fleet UUID>/<key>`.
 fleet_worker_id() {
+  local u k f
+  k=$(fleet_window_okey "${1:-}" "${2:-}"); [ -n "$k" ] || return 1
+  u=$(fleet_uuid "${1:-}") && [ -n "$u" ] || return 1
+  f=$(fleet_window_fid "${1:-}" "${2:-}") || f=''
+  printf '%s/%s' "$u" "${f:-$k}"
+}
+
+# fleet_worker_id_key <sess> <window> → the OLD form, `<fleet UUID>/<key>` — a
+# readable label (a relay's `from`, the hub's lease holder), never an address.
+fleet_worker_id_key() {
   local u k
   k=$(fleet_window_okey "${1:-}" "${2:-}"); [ -n "$k" ] || return 1
   u=$(fleet_uuid "${1:-}") && [ -n "$u" ] || return 1
   printf '%s/%s' "$u" "$k"
 }
 
-# _fleet_wid_split <target> → `<uuid>\t<key>` (uuid empty for a bare key), rc 1
-# when the target (an optional `wid:` prefix stripped) is neither shape.
+# _fleet_wid_split <target> → `<uuid>\t<key-or-fleet_id>` (uuid empty for a bare
+# one), rc 1 when the target (an optional `wid:` prefix stripped) is no worker_id:
+# `<fleet UUID>/<fleet_id>` (issue #1646), the old `<fleet UUID>/<key>`, or either
+# half alone (this fleet's).
 _fleet_wid_split() {
   local t="${1#wid:}" u='' k
   case "$t" in */*) u=${t%%/*}; k=${t#*/} ;; *) k=$t ;; esac
   if [ -n "$u" ]; then
-    printf '%s' "$u" | grep -Eqx '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' || return 1
+    fleet_is_fid "$u" || return 1
   fi
-  printf '%s' "$k" | grep -Eqx '([A-Za-z0-9][A-Za-z0-9._-]{0,127}:)?(issue|scratch)-[1-9][0-9]{0,9}' || return 1
+  if ! fleet_is_fid "$k"; then
+    printf '%s' "$k" | grep -Eqx '([A-Za-z0-9][A-Za-z0-9._-]{0,127}:)?(issue|scratch)-[1-9][0-9]{0,9}' || return 1
+  fi
   printf '%s\t%s' "$u" "$k"
 }
 
@@ -4697,7 +4804,8 @@ fleet_worker_locate() {
       # The ONE resolver (fleet_win_for_key, issue #1537): a bare issue key in a
       # 2+ repo fleet, or a key two windows answer to, is AMBIGUOUS (rc 2, said on
       # stderr) — `unknown` here, never a first-match pick, and never the hub.
-      w=$(fleet_win_for_key "$k" "$(fleet_socket "$home")"); rc=$?
+      # An identity (issue #1646) resolves through fleet_win_for_fid, same rails.
+      w=$(fleet_win_for_addr "$k" "$(fleet_socket "$home")"); rc=$?
       [ "$rc" -eq 0 ] && [ -n "$w" ] && { printf 'local %s %s\n' "$w" "$home"; return 0; }
       [ "$rc" -eq 2 ] && { echo unknown; return 0; }
       [ -n "$u" ] && { echo unknown; return 0; }
@@ -4799,12 +4907,123 @@ say("failed:unconfirmed", 5, "still %s on the node after %ss — not counted as 
 # another machine can still address its parent. Only for a key-shaped origin (not
 # empty/hub, autofill, bridge or a cross-fleet name) and only when this machine
 # has a fleet UUID; otherwise nothing is set — the one-machine case, as before.
+# Since issue #1646 the parent is named by its IDENTITY: the key is resolved to the
+# parent's window NOW, while it is fresh (fleet_win_for_key — the same rails), and
+# that window's @fleet_id is stamped as @origin_fid — with or without a fleet UUID,
+# since a rename on one machine needs no hub — and @origin_wid becomes
+# `<fleet UUID>/<fleet_id>`. A key no single live window answers to keeps the old
+# `<fleet UUID>/<key>` and no @origin_fid: resolution falls back to the key.
 fleet_stamp_origin_wid() {
-  local s="${1:-}" w="${2:-}" o="${3:-}" k="${4:-}" u
+  local s="${1:-}" w="${2:-}" o="${3:-}" k="${4:-}" pf ow
   [ -n "$w" ] && _fleet_wid_split "$o" >/dev/null || return 0
-  u=$(fleet_uuid "$s") && [ -n "$u" ] || return 0
-  if [ -n "$k" ]; then tmux -L "$k" set-window-option -t "$w" @origin_wid "$u/$o" 2>/dev/null
-  else _fleet_tmux "$s" set-window-option -t "$w" @origin_wid "$u/$o" 2>/dev/null; fi
+  fleet_is_fid "$o" && return 0          # @origin is a key, never an identity
+  pf=$(_fleet_key_fid "$s" "$o" "$k") || pf=''
+  if [ -n "$pf" ]; then
+    if [ -n "$k" ]; then tmux -L "$k" set-window-option -t "$w" @origin_fid "$pf" 2>/dev/null
+    else _fleet_tmux "$s" set-window-option -t "$w" @origin_fid "$pf" 2>/dev/null; fi
+  fi
+  ow=$(fleet_key_wid "$s" "$o" "$k" "$pf") || return 0
+  if [ -n "$k" ]; then tmux -L "$k" set-window-option -t "$w" @origin_wid "$ow" 2>/dev/null
+  else _fleet_tmux "$s" set-window-option -t "$w" @origin_wid "$ow" 2>/dev/null; fi
+  return 0
+}
+
+# _fleet_key_fid <sess> <key> [<sock>] → the @fleet_id of the ONE live window that
+# answers to <key> right now (minted if it has none), rc 1 when none or several do.
+_fleet_key_fid() {
+  local pw
+  pw=$(fleet_win_for_key "${2:-}" "${3:-}" 2>/dev/null) && [ -n "$pw" ] || return 1
+  fleet_window_fid "${1:-}" "$pw" "${3:-}"
+}
+
+# fleet_key_wid <sess> <key> [<sock>] [<fleet_id>] → the worker_id to NAME the
+# session that answers to <key> on this fleet by: `<fleet UUID>/<fleet_id>` when one
+# live window does (issue #1646), else the old `<fleet UUID>/<key>`. rc 1 when this
+# machine has no fleet UUID. A <fleet_id> already resolved skips the lookup.
+fleet_key_wid() {
+  local u f="${4:-}"
+  u=$(fleet_uuid "${1:-}") && [ -n "$u" ] || return 1
+  [ -n "$f" ] || f=$(_fleet_key_fid "${1:-}" "${2:-}" "${3:-}") || f=''
+  printf '%s/%s' "$u" "${f:-${2:-}}"
+}
+
+# fleet_origin_win <sess> <window> [<sock>] → the live window of <window>'s PARENT:
+# by @origin_fid first (issue #1646 — the parent may have changed its key since),
+# else by @origin through fleet_win_for_key. rc as the resolver that answered;
+# a parent with neither is rc 1.
+fleet_origin_win() {
+  local s="${1:-}" w="${2:-}" k="${3:-}" row pf po rc
+  [ -n "$w" ] || return 1
+  if [ -n "$k" ]; then row=$(tmux -L "$k" display-message -p -t "$w" '#{@origin_fid}|#{@origin}' 2>/dev/null)
+  else row=$(_fleet_tmux "$s" display-message -p -t "$w" '#{@origin_fid}|#{@origin}' 2>/dev/null); fi
+  pf=${row%%|*}; po=${row#*|}
+  if fleet_is_fid "$pf"; then
+    fleet_win_for_fid "$pf" "$k"; rc=$?
+    [ "$rc" -eq 1 ] || return "$rc"
+  fi
+  [ -n "$po" ] || return 1
+  fleet_win_for_key "$po" "$k"
+}
+
+# fleet_restore_wins <restore.map> → its WIN rows, the way restore() reads them: a
+# `FID<TAB><fleet_id>` row (issue #1646, written just before its window's WIN row)
+# tags that row, whose column 1 then reads `WIN:<fleet_id>`; every other column is
+# byte for byte the map's. A map without FID rows prints exactly `$1=="WIN"`.
+fleet_restore_wins() {
+  awk -F'\t' 'BEGIN { OFS = "\t" }
+    $1 == "FID" { f = $2; next }
+    $1 == "WIN" { if (f != "") $1 = "WIN:" f; f = ""; print; next }
+    { f = "" }' "${1:-/dev/null}" 2>/dev/null
+}
+
+# fleet_origin_heal <sess> [<sock>] — keep every child's @origin the key its
+# parent answers to NOW (issue #1646). The parent is found by the child's
+# @origin_fid; when that window's key is no longer what @origin says (a scratch
+# bound to an issue, fleet-bind.sh / the dash's rebind), @origin — and its
+# @origin_gen, which belonged to the old key — are rewritten. So every reader that
+# joins on keys (the sidebar's nesting, the k/N badge, fleet-children.sh, the
+# report digest) follows the parent without learning about identities. A child
+# with no @origin_fid, or whose parent is not live here, is left alone. Prints one
+# `healed <window> <old> → <new>` line per rewrite; never fails.
+fleet_origin_heal() {
+  local sess="${1:-}" sock="${2:-}" wl line wid rest wsess pool f of o ids='' pw pk
+  [ -n "$sess" ] || return 0
+  if [ -n "$sock" ]; then
+    wl=$(fleet_lw '#{window_id}|#{session_name}|#{@pool}|#{@fleet_id}|#{@origin_fid}|#{@origin}' tmux -L "$sock")
+  else
+    wl=$(fleet_lw '#{window_id}|#{session_name}|#{@pool}|#{@fleet_id}|#{@origin_fid}|#{@origin}' _fleet_tmux "$sess")
+  fi
+  [ -n "$wl" ] || return 0
+  case "$wl" in *'|'????????-????-????-????-????????????'|'*) ;; *) return 0 ;; esac   # nobody has an @origin_fid
+  while IFS= read -r line; do               # pass 1: identity → window, this fleet's own
+    [ -n "$line" ] || continue
+    wid=${line%%|*}; rest=${line#*|}; wsess=${rest%%|*}; rest=${rest#*|}
+    pool=${rest%%|*}; rest=${rest#*|}; f=${rest%%|*}
+    [ "$wsess" = "$sess" ] && [ "$pool" != 1 ] && [ -n "$f" ] && ids="$ids$f $wid"$'\n'
+  done <<EOF
+$wl
+EOF
+  while IFS= read -r line; do               # pass 2: each child whose parent's key moved
+    [ -n "$line" ] || continue
+    wid=${line%%|*}; rest=${line#*|}; wsess=${rest%%|*}; rest=${rest#*|}
+    rest=${rest#*|}; rest=${rest#*|}; of=${rest%%|*}; o=${rest#*|}
+    [ "$wsess" = "$sess" ] && fleet_is_fid "$of" || continue
+    pw=$(printf '%s' "$ids" | awk -v f="$of" '$1 == f { print $2; n++ } END { exit n != 1 }') || continue
+    [ "$pw" != "$wid" ] || continue
+    pk=$(fleet_window_okey "$sess" "$pw" 2>/dev/null)
+    [ -n "$pk" ] && [ "$pk" != "$o" ] || continue
+    if [ -n "$sock" ]; then
+      tmux -L "$sock" set-window-option -t "$wid" @origin "$pk" 2>/dev/null || continue
+      tmux -L "$sock" set-window-option -u -t "$wid" @origin_gen 2>/dev/null
+    else
+      _fleet_tmux "$sess" set-window-option -t "$wid" @origin "$pk" 2>/dev/null || continue
+      _fleet_tmux "$sess" set-window-option -u -t "$wid" @origin_gen 2>/dev/null
+    fi
+    fleet_stamp_origin_gen "$sess" "$wid" "$pk" "$sock"
+    printf 'healed %s %s → %s\n' "$wid" "${o:--}" "$pk"
+  done <<EOF
+$wl
+EOF
   return 0
 }
 
@@ -4890,15 +5109,22 @@ fleet_hub_wait_sent() {
 # hub gone that long is a one-machine fleet again (EPIC #1419 rule 6). A child
 # whose node is lost carries `<node>:lost`.
 fleet_remote_children() {
-  local sess="${1:-}" key="${2:-}" u f m ttl
+  local sess="${1:-}" key="${2:-}" u f m ttl pf
   fleet_hub_on "$sess" && [ -n "$key" ] || return 1
   f=$(fleet_hub_cache); [ -f "$f" ] || return 1
   ttl="${FLEET_HUB_RETAIN_SECS:-600}"; case "$ttl" in ''|*[!0-9]*) ttl=600 ;; esac
   m=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null) || m=0
   [ $(( $(date +%s) - ${m:-0} )) -le "$ttl" ] || return 1
   u=$(fleet_uuid "$sess") && [ -n "$u" ] || return 1
-  awk -F'\t' -v me="$u/$key" -v mine="$u/" '
-    $3 == me && $2 != "" && index($1, mine) != 1 { k = $1; sub(/^[^\/]*\//, "", k); print k "\t" $2 "\t" $1; n++ }
+  # …or by this parent's IDENTITY (issue #1646): a child spawned since names it
+  # `<fleet UUID>/<fleet_id>`, whatever key the parent answers to now. The map
+  # lists a child under both its worker_ids; only the key-form row is printed.
+  pf=$(_fleet_key_fid "$sess" "$key" "$(fleet_socket "$sess")" 2>/dev/null) || pf=''
+  awk -F'\t' -v me="$u/$key" -v mef="${pf:+$u/$pf}" -v mine="$u/" '
+    ($3 == me || (mef != "" && $3 == mef)) && $2 != "" && index($1, mine) != 1 {
+      k = $1; sub(/^[^\/]*\//, "", k)
+      if (length(k) == 36 && k !~ /[^0-9a-f-]/) next   # the identity-form row
+      print k "\t" $2 "\t" $1; n++ }
     END { exit !n }' "$f" 2>/dev/null
 }
 

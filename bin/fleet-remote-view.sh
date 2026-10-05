@@ -675,13 +675,18 @@ host = (host or "").split(".", 1)[0]
 sessions = []
 for line in open(ipath, encoding="utf-8"):
     p = line.rstrip("\n").split("\t")
-    # sess, uuid, the fleet's repo, then the adapter's 12 columns — the window
-    # name may hold tabs of its own, so (fleet_control.py's rule) the last two
-    # are always origin_wid and needs and the name is everything between
+    # sess, uuid, the fleet's repo, then the adapter's 13 columns — the window
+    # name may hold tabs of its own, so (fleet_control.py's rule) the last three
+    # are always origin_wid, needs and the identity (issue #1646), the name
+    # everything between; a 12-column adapter (no identity) still reads
     if len(p) < 15 or not re.fullmatch(r"@[0-9]+", p[3]):
         continue
     sess, uuid, frepo = p[0], p[1], p[2]
     window, issue, scratch, worktree, state, agent, handle, lifecycle, repo = p[3:12]
+    ident = None
+    if len(p) >= 16:
+        ident = p[-1] if re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", p[-1]) else None
+        p = p[:-1]
     name, owid, needs = " ".join(p[12:-2]), p[-2], p[-1]
     if not issue and scratch != "1":
         continue
@@ -696,7 +701,7 @@ for line in open(ipath, encoding="utf-8"):
                                 "repo": repo if repo and repo != "?" else (None if repo else frepo or None),
                                 "state": state or "unknown", "lifecycle": lifecycle or "awake",
                                 "agent": agent or None, "name": name, "origin_wid": owid or None,
-                                "needs": needs or None}})
+                                "needs": needs or None, "identity": ident}})
 print(json.dumps({"sessions": sessions,
                   "nodes": [{"machine_name": host, "availability": "online",
                              "sessions": len(sessions), "observed_at": now}]}, ensure_ascii=False))

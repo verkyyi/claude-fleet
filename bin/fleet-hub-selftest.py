@@ -25,7 +25,7 @@ sys.path.insert(0, str(BIN))
 import fleet_control as control
 import fleet_hub as hub_module
 from fleet_config_write import revision, write
-from fleet_hub_common import Fault, PROTOCOL, canonical, now, validate_write
+from fleet_hub_common import Fault, PROTOCOL, canonical, now, parse_worker_id, validate_write
 
 try:
     HAS_MCP_SDK = version("mcp") == "2.2.0"
@@ -63,13 +63,16 @@ if "list-windows" in sys.argv:
     # fleet, issue #1018) gets that column empty, exactly as real tmux prints it.
     data=root/"workers.tsv"
     # Columns 10-12 (issues #1423, #1475): the window name, @origin_wid and
-    # @claude_needs, when asked.
+    # @claude_needs, when asked; column 13 (issue #1646) the window's @fleet_id,
+    # the tenth column of workers.tsv.
     fmt=sys.argv[sys.argv.index("-F") + 1]
     keep="#{@repo}" in fmt
-    extra=["", "", ""] if "#{window_name}" in fmt else []
     if data.exists():
         for row in data.read_text().splitlines():
             cols=row.split("\t")
+            extra=["", "", ""] if "#{window_name}" in fmt else []
+            if extra and "#{@fleet_id}" in fmt:
+                extra.append(cols[9] if len(cols) > 9 else "")
             print("\t".join(cols[:8] + [cols[8] if keep else ""] + extra))
     sys.exit(0)
 sys.exit(9)
@@ -192,14 +195,15 @@ printf '@40\\t%s\\t0\\t/fixture/issue-%s\\tdone\\tclaude\\tb2\\t\\t%s\\n' "$n" "
         path.chmod(0o755)
 
     def windows(self, *rows):
-        """Serve these windows from the fake tmux: (window, issue, raw, worktree[, lifecycle[, @repo]])."""
+        """Serve these windows from the fake tmux: (window, issue, raw, worktree[, lifecycle[, @repo[, @fleet_id]]])."""
         lines = []
         for row in rows:
             window, issue, raw, worktree = row[:4]
             lifecycle = row[4] if len(row) > 4 else ""
             repo = row[5] if len(row) > 5 else ""
+            ident = row[6] if len(row) > 6 else ""
             lines.append("\t".join([window, str(issue or ""), "1" if raw else "0", worktree, "done", "claude", "a1",
-                                    lifecycle, repo]))
+                                    lifecycle, repo, ident]))
         (self.conf / "workers.tsv").write_text("".join(line + "\n" for line in lines))
 
     def calls(self, name):
@@ -319,6 +323,30 @@ class HubTests(HubFixture):
                     self.fleet + "/:issue-1", self.fleet + "/a/b:issue-1", self.fleet + "/-x:issue-1"):
             with self.subTest(bad=bad), self.assertRaises(Fault):
                 self.call("worker_stop", {"worker_id": bad, "idempotency_key": "bad"})
+
+    def test_identity_worker_id_finds_the_session_whatever_its_key(self):
+        """issue #1646: the workers table carries each session's lifelong identity
+        (@fleet_id), and a worker_id of the form <fleet UUID>/<fleet_id> finds it —
+        under whatever key it answers to now; the key form stays an alias."""
+        ident = str(uuid.uuid4())
+        self.node.windows(("@12", 123, False, "/fixture/issue-123", "", "", ident), ("@13", 124, False, "/fixture/issue-124"))
+        ws = {w["window_id"]: w for w in self.call("fleet_status", {"fleet_id": self.fleet})["workers"]}
+        self.assertEqual((ws["@12"]["identity"], ws["@13"].get("identity")), (ident, None))
+        self.assertEqual(ws["@12"]["worker_id"], self.worker("issue-123"))
+        self.assertEqual(parse_worker_id(self.fleet + "/" + ident), (self.fleet, ident))
+        for bad in (self.fleet + "/" + ident.upper(), self.fleet + "/" + ident + "0", ident):
+            with self.subTest(bad=bad), self.assertRaises(Fault):
+                parse_worker_id(bad)
+        done = self.lifecycle("worker_stop", ident)
+        self.assertEqual(done["status"], "succeeded")
+        self.assertEqual(done["result"]["stopped"]["window_id"], "@12")
+        self.assertEqual(self.node.calls("stop"), ["demo issue-123"])
+        # An identity no live window carries is NOT_FOUND — never a key guess.
+        gone = self.lifecycle("worker_stop", str(uuid.uuid4()), idem="stop-nobody")
+        self.assertEqual((gone["status"], gone["result"]["error"]["code"]), ("failed", "NOT_FOUND"))
+        # The old <fleet UUID>/<key> form still resolves (one version's alias).
+        alias = self.lifecycle("worker_stop", "issue-124", idem="stop-alias")
+        self.assertEqual(alias["result"]["stopped"]["window_id"], "@13")
 
     def test_stop_targets_identity_never_a_window_number(self):
         self.node.windows(("@12", 123, False, "/fixture/issue-123"), ("@13", 124, False, "/fixture/issue-124"))
