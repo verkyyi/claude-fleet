@@ -518,14 +518,26 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # there.
 # @label=Auto-fill machine @group=autofill @tier=internal @scope=fleet @edit=str
 #FLEET_AUTOFILL_NODE=local
-# Where EVERY new issue session on this login opens when nothing names a machine
+# The cross-machine hub, per fleet (issue #1539; docs/LOCAL-AND-HUB.md). `1`:
+# this fleet's spawns take a hub lease and placement, its sidebar shows your
+# sessions on the other machines, its status bar may switch to the hub layout,
+# and the collector keeps the hub's session list fresh for it. `0`: this machine
+# only — the one-machine fleet, byte for byte. Unset here: the login-wide value
+# (an `export CCQUOTA_FLEET=1` in the install's fleet.conf or fleet.settings —
+# the ccquota agent reads that same variable), so a login that never wrote this
+# line behaves exactly as before. A fleet's line wins over the login's, both ways.
+# @label=Cross-machine hub @group=accounts @tier=advanced @scope=fleet @edit=bool
+#CCQUOTA_FLEET=0
+# Where EVERY new issue session in this fleet opens when nothing names a machine
 # (issue #1475; a `--node` on the command, or FLEET_AUTOFILL_NODE for auto-fill,
 # still wins). Only read with the hub module on (CCQUOTA_FLEET=1). `auto`: the hub
 # picks among your machines that host the repo — and never one that is not READY
 # (no gh login, no usable Claude/Codex credential, a checkout missing: its
 # heartbeat says so); `local`: always this machine, the hub is not asked; a
 # machine name: always there, even when it is not ready (you asked by name).
-# @label=New-session machine @group=accounts @tier=internal @scope=global @edit=str
+# Per fleet since #1539 (it was login-wide): a fleet's conf wins over the
+# login's fleet.settings, which stays the default for every fleet.
+# @label=New-session machine @group=accounts @tier=internal @scope=fleet @edit=str
 #FLEET_SPAWN_NODE=auto
 
 # --- Child → parent outcome reports (bin/fleet-report-parent.sh, issue #574) -----

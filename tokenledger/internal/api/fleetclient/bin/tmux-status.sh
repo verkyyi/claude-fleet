@@ -84,31 +84,41 @@ done
 # (bare or `export`, quotes stripped), '' when absent. A builtin `read` loop, not
 # fleet_load_conf: the bar does not source fleet-lib.sh (#888), and it wants ONE
 # per-fleet key, not the fleet's whole overlay on top of fleet.conf's knobs.
+# status_conf_has <file> <KEY> is the same read, rc 0 only when the file spells
+# the key at all (an explicit `KEY=` counts) — what lets a fleet's own line beat
+# the environment.
 status_conf_key() {
-    local line; _sck=''
+    local line; _sck=''; _sch=0
     [ -f "$1" ] || return 0
     while IFS= read -r line || [ -n "$line" ]; do
         case "$line" in
             "$2="*|"export $2="*)
                 line=${line#*=}; line=${line%%#*}; line=${line%"${line##*[![:space:]]}"}
                 line=${line#\"}; line=${line%\"}; line=${line#\'}; line=${line%\'}
-                _sck=$line ;;
+                _sck=$line; _sch=1 ;;
         esac
     done < "$1"
 }
+status_conf_has() { status_conf_key "$1" "$2"; [ "$_sch" = 1 ]; }
 
 # Hub mode (issue #1482): CCQUOTA_FLEET=1, the current session's fleet set to
 # FLEET_SIDEBAR_SOURCE=hub (its own conf wins over fleet.conf / fleet.settings),
 # and the sidebar's remote_<sess> cache on disk — no cache, no hub mode: the bar
 # renders exactly as before until the loop's first answer (as the sidebar does).
+# The hub switch itself is per fleet too (issue #1539): the session's own conf
+# line wins over the environment, as fleet_hub_on reads it in fleet-lib.sh.
 HUB_MODE=0
-if [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ -n "$STATUS_SESS" ]; then
-    _src="${FLEET_SIDEBAR_SOURCE:-local}"
+if [ -n "$STATUS_SESS" ]; then
     _cd="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
-    if [ -f "$_cd/fleets/$STATUS_SESS/conf" ]; then status_conf_key "$_cd/fleets/$STATUS_SESS/conf" FLEET_SIDEBAR_SOURCE
-    else status_conf_key "$_cd/$STATUS_SESS.conf" FLEET_SIDEBAR_SOURCE; fi
-    [ -n "$_sck" ] && _src=$_sck
-    [ "$_src" = hub ] && fleet_status_remote_head "$STATUS_SESS" && HUB_MODE=1
+    _sconf="$_cd/fleets/$STATUS_SESS/conf"; [ -f "$_sconf" ] || _sconf="$_cd/$STATUS_SESS.conf"
+    _hub="${CCQUOTA_FLEET:-0}"
+    status_conf_has "$_sconf" CCQUOTA_FLEET && _hub=$_sck
+    if [ "$_hub" = 1 ]; then
+        _src="${FLEET_SIDEBAR_SOURCE:-local}"
+        status_conf_key "$_sconf" FLEET_SIDEBAR_SOURCE
+        [ -n "$_sck" ] && _src=$_sck
+        [ "$_src" = hub ] && fleet_status_remote_head "$STATUS_SESS" && HUB_MODE=1
+    fi
 fi
 # The window list: blank while in hub mode, restored on the way out (#1482). Both
 # are transitions — a tmux call only when the passed-in formats say so.

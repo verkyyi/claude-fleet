@@ -388,7 +388,7 @@ WLIST=${WLIST//\\037/$US}
 # (a child cannot indent under a parent that sorts somewhere else).
 RME=''; RN_IDX=' '; RN_K=0; LGRP_BASE=1000000
 HUBSRC=0; [ "$SIDEBAR" = 1 ] && [ "${FLEET_SIDEBAR_SOURCE:-local}" = hub ] && HUBSRC=1
-if [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ -n "${FLEET_SESSION:-}" ] && [ -s "$G/remote_$FLEET_SESSION" ]; then
+if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remote_$FLEET_SESSION" ]; then
   RLIST=''; _rn=90000; _rts=0; _rstale=0; _rlostn=' '; _rlostw=' '; _rrows=(); _lwids=' '
   # 失联 is decided ONCE, off global/hub_ok (#1483) — the cache's own #ts only
   # for a cache from before that file existed (fleet_status_hub_ok's fallback)

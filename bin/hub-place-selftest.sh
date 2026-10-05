@@ -36,6 +36,10 @@
 #           lease stays the remote's; nothing opened here.
 #   ASYNC   --async asks with --wait 0; the operation id is left in the dispatch
 #           file and `fleet-children.py show --json` lists it.
+#   PERFLEET (issue #1539) the hub switch and FLEET_SPAWN_NODE are read PER FLEET:
+#           two fleets on one login, one conf `CCQUOTA_FLEET=0` and one `=1`, do
+#           not affect each other whichever way the login-wide value points; a
+#           fleet's FLEET_SPAWN_NODE beats the login's; no line ⇒ the login's.
 #   TOKEN   (issue #1491) the place command sees node.env's CCQUOTA_TOKEN; the
 #           spawned window never inherits it; the default `ccquota place` with no
 #           token anywhere is not run and says 「no node token」, not 「unreachable」.
@@ -379,6 +383,35 @@ printf '%s' "$shown" | grep -q '"dispatches": \[{.*"op": "op_46"' || fail "ASYNC
 shown=$(python3 "$BIN/fleet-children.py" show --dir "$WORK/conf/none" --parent issue-77 --json </dev/null)
 printf '%s' "$shown" | grep -q dispatches         && fail "ASYNC no dispatch file → no dispatches key (unchanged answer)"
 ok "ASYNC --async → --wait 0, operation id in the dispatch file, listed by fleet-children"
+
+# ===== PERFLEET: the hub switch + FLEET_SPAWN_NODE per fleet (issue #1539) ========
+# testsess = the fleet the fake tmux answers; `other` = a second fleet on the same
+# login, named as the spawn's second argument (a headless target). Each conf carries only the lines under test.
+mkdir -p "$WORK/conf/fleets/testsess" "$WORK/conf/fleets/other"
+printf 'CCQUOTA_FLEET=0\n' > "$WORK/conf/fleets/testsess/conf"
+printf 'export CCQUOTA_FLEET=1\n' > "$WORK/conf/fleets/other/conf"
+for login in 1 ''; do
+  CCQUOTA_FLEET=$login CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER="$REMOTE_LINE" run_spawn 258
+  [ -s "$PLACE_LOG" ] || [ -s "$LEASE_LOG" ]     && fail "PERFLEET (login=${login:-unset}) a fleet whose conf says 0 must not ask the hub"
+  tmux_has 'new-window'                          || fail "PERFLEET (login=${login:-unset}) the local fleet opens it here"
+  CCQUOTA_FLEET=$login CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER="$REMOTE_LINE" run_spawn 258 other
+  place_has '--node auto '                       || fail "PERFLEET (login=${login:-unset}) a fleet whose conf says 1 is placed by the hub"
+  tmux_has 'new-window'                          && fail "PERFLEET (login=${login:-unset}) the hub fleet's remote placement opens nothing here"
+done
+ok "PERFLEET one fleet local, one hub — neither follows the other, nor the login-wide value"
+
+printf 'CCQUOTA_FLEET=1\nFLEET_SPAWN_NODE=local\n' > "$WORK/conf/fleets/testsess/conf"
+printf 'FLEET_SPAWN_NODE=m4\n' > "$WORK/conf/fleets/other/conf"
+FLEET_SPAWN_NODE=m4 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER="$REMOTE_LINE" run_spawn 258
+[ -s "$PLACE_LOG" ]                              && fail "PERFLEET a fleet's FLEET_SPAWN_NODE=local beats the login's m4"
+tmux_has 'new-window'                            || fail "PERFLEET SPAWN_NODE=local (fleet) opens it here"
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER="$REMOTE_LINE" run_spawn 258 other
+place_has '--node m4 '                           || fail "PERFLEET the other fleet's own FLEET_SPAWN_NODE=m4 (login: hub on, no knob)"
+rm -f "$WORK/conf/fleets/other/conf"
+FLEET_SPAWN_NODE=m4 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER="$REMOTE_LINE" run_spawn 258 other
+place_has '--node m4 '                           || fail "PERFLEET a fleet with no line follows the login's FLEET_SPAWN_NODE"
+rm -f "$WORK/conf/fleets/testsess/conf"
+ok "PERFLEET FLEET_SPAWN_NODE: the fleet's line beats the login's; no line ⇒ the login's"
 
 # ===== TOKEN: node.env's token reaches the place command only (issue #1491) =======
 NODE_ENV="$WORK/conf/node.env"

@@ -159,7 +159,7 @@ fi
 # never a FAIL: install-sync uses the doctor's FAIL count as its rollback gate.
 if [ -f "$conf_dir/global/bootstrapped" ]; then
   if onboard=$(FLEET_CONF_DIR="$conf_dir" bash "$(dirname "$0")/fleet-doctor-onboard.sh" 2>/dev/null); then
-    pass onboard "$onboard"
+    pass onboard "$onboard · 本机 / 联机模式: docs/LOCAL-AND-HUB.md"
   else warn onboard "${onboard:-readiness probe failed}"; fi
 fi
 
@@ -762,6 +762,39 @@ if [ "$_hub_on" = 1 ]; then
     warn node "CCQUOTA_FLEET=1 but no node token: CCQUOTA_TOKEN unset and $_nenv missing — the entry's lease / placement / move all fall back silently: spawns are guarded by the GitHub claim alone, every session opens here, no move lands (issue #1491). Write it: $_nfix"
   fi
 fi
+
+# --- mode (issue #1539): local or hub, per fleet ---------------------------------
+# Which of the two modes each fleet on this login runs in — docs/LOCAL-AND-HUB.md
+# is the matrix of what that decides. The login-wide value (environment ▸
+# fleet.settings ▸ the install's fleet.conf, as the node line reads it) is every
+# fleet's default; a fleet conf's own CCQUOTA_FLEET line wins (fleet_hub_on in
+# fleet-lib.sh). A hub fleet also names where its new sessions open
+# (FLEET_SPAWN_NODE, per fleet too). Advice only: an INFO line, never counted.
+_mode_g=${CCQUOTA_FLEET:-}
+[ -n "$_mode_g" ] || _mode_g=$(_xconf_val "$conf_dir/fleet.settings" CCQUOTA_FLEET)
+[ -n "$_mode_g" ] || _mode_g=$(_xconf_val "$(dirname "$0")/../fleet.conf" CCQUOTA_FLEET)
+_mode_sn_g=${FLEET_SPAWN_NODE:-}
+[ -n "$_mode_sn_g" ] || _mode_sn_g=$(_xconf_val "$conf_dir/fleet.settings" FLEET_SPAWN_NODE)
+[ -n "$_mode_sn_g" ] || _mode_sn_g=$(_xconf_val "$(dirname "$0")/../fleet.conf" FLEET_SPAWN_NODE)
+_mode_out=''
+if [ -d "$conf_dir" ]; then
+  while IFS= read -r _cf; do
+    [ -n "$_cf" ] || continue
+    case "$_cf" in */fleets/*/conf) _ms=${_cf%/conf}; _ms=${_ms##*/} ;; *) _ms=$(basename "$_cf" .conf) ;; esac
+    if grep -Eq '^[[:space:]]*(export[[:space:]]+)?CCQUOTA_FLEET[[:space:]]*=' "$_cf" 2>/dev/null; then
+      _mv=$(_xconf_val "$_cf" CCQUOTA_FLEET)
+    else _mv=$_mode_g; fi
+    if [ "$_mv" = 1 ]; then
+      _msn=$(_xconf_val "$_cf" FLEET_SPAWN_NODE); [ -n "$_msn" ] || _msn=${_mode_sn_g:-auto}
+      _mm="hub (新会话 $_msn)"
+    else _mm=local; fi
+    _mode_out="${_mode_out:+$_mode_out · }$_ms $_mm"
+  done <<EOF
+$(_fleet_confs "$conf_dir")
+EOF
+fi
+[ -n "$_mode_out" ] || { [ "$_mode_g" = 1 ] && _mode_out=hub || _mode_out=local; }
+info mode "$_mode_out — 本机 / 联机各管什么: docs/LOCAL-AND-HUB.md"
 
 # --- agent (issue #1525): every login's node agent on this machine vs stable ---
 # Same reading as `fleet-node-upgrade.sh --status`: the bytes on disk AND the

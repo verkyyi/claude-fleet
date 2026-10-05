@@ -160,13 +160,22 @@ PIDF="$G/hubsess.pid"
 SESSIONS_NS='fleet-sessions@claude-fleet'
 SUMMARY_NS='fleet-summary@claude-fleet'   # the status bar's two summaries (#1502)
 
-hub_on() { [ "${CCQUOTA_FLEET:-0}" = 1 ]; }
 # The fleets this loop serves: the shell's one pseudo-fleet in client mode
-# (issue #1484), else every fleet configured on this machine.
+# (issue #1484), else every fleet configured on this machine whose hub switch is
+# on (issue #1539: per fleet — a fleet conf's own CCQUOTA_FLEET line wins over the
+# environment, so one fleet can stay local beside a hub one; no such line
+# anywhere ⇒ the environment decides for all, as before).
 CLIENT="${FLEET_HUB_SESSIONS_CLIENT:-}"
 case "$CLIENT" in *[!A-Za-z0-9._-]*) CLIENT='' ;; esac
+hub_on() { if [ -n "$CLIENT" ]; then [ "${CCQUOTA_FLEET:-0}" = 1 ]; else fleet_hub_any; fi; }
 local_fleets() {
-  if [ -n "$CLIENT" ]; then printf '%s\t-\n' "$CLIENT"; else fleet_each_conf; fi
+  if [ -n "$CLIENT" ]; then printf '%s\t-\n' "$CLIENT"; return; fi
+  local s c
+  while IFS=$'\t' read -r s c; do
+    [ -n "$s" ] && fleet_hub_on "$s" && printf '%s\t%s\n' "$s" "$c"
+  done <<EOF
+$(fleet_each_conf)
+EOF
 }
 
 # hub_url → the hub's URL on stdout, rc 1 when none is configured anywhere.
