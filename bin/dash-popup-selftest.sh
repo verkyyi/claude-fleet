@@ -160,7 +160,7 @@ cat > "$REFUSE/tmux" <<EOF
 #!/bin/sh
 case "\$1" in
   display-popup) exit 0 ;;                        # refuse, exactly as tmux does
-  list-clients)  echo "9 200 /dev/ttyFAKE"; exit 0 ;; # => the helper takes the popup path
+  list-clients)  echo "9 /dev/ttyFAKE 200"; exit 0 ;; # => the helper takes the popup path
 esac
 exec "$REAL_TMUX" -S "$SOCK" "\$@"
 EOF
@@ -191,7 +191,7 @@ cat > "$FRAME/tmux" <<EOF
 #!/bin/bash
 case "\$1" in
   display-popup) shift; printf '%s\n' "\$@" > "$FLOG"; for a; do last=\$a; done; sh -c "\$last"; exit 0 ;;
-  list-clients)  echo "9 200 /dev/ttyF"; exit 0 ;;
+  list-clients)  echo "9 /dev/ttyF 200"; exit 0 ;;
   display-message) [ "\${2:-}" = -c ] && [ "\${4:-}" != -p ] && { printf 'toast %s\n' "\$4" >> "$FLOG.toast"; exit 0; }
                    [ "\${2:-}" = -p ] && [ "\${3:-}" = -c ] && [ -n "\${FRAME_CW:-}" ] && { echo "\$FRAME_CW|fr"; exit 0; } ;;
 esac

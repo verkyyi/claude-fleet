@@ -151,9 +151,10 @@ fi
 # tmux has not reaped yet) below the one the operator is really looking at.
 client=$CLIENT
 if [ -z "$client" ] && [ -n "$sess" ]; then
-  read -r _ cw client <<EOF_CL
-$(tmux list-clients -t "$sess" -F '#{client_activity} #{client_width} #{client_name}' 2>/dev/null | sort -rn | head -1)
-EOF_CL
+  # `<name> <width>` after the activity; a line with no width is a bare name
+  client=$(tmux list-clients -t "$sess" -F '#{client_activity} #{client_name} #{client_width}' 2>/dev/null \
+    | sort -rn | head -1 | cut -d' ' -f2-)
+  case "$client" in *' '*) cw=${client##* }; client=${client% *} ;; esac
 fi
 
 # The title (issue #1535): 「动作 · 对象 · 机器」, centred on the top border
