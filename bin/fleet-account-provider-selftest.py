@@ -215,5 +215,42 @@ class Providers(unittest.TestCase):
                 accounts.verify_codex_runtime('unix:///exact.sock')
 
 
+
+class CodexLoginReason(unittest.TestCase):
+    """claude-fleet#1404 (EPIC #1665 C7): ccquota's own reason for a failed Codex
+    login travels verbatim — the profile check, the row and the chooser's refusal
+    all say WHY, not just that auth is unavailable."""
+    REASON = 'Codex refresh credential rejected; sign in again for this profile'
+
+    def rows(self, home):
+        return [dict(name='work', home=home, default=True, account='acct-work', email='w@example.com',
+                     plan='plus', login=dict(state='reauth_required', reason=self.REASON))]
+
+    def test_ccquota_reason_reaches_profile_check_row_and_chooser(self):
+        with tempfile.TemporaryDirectory() as home, patch.object(accounts, 'ccquota', return_value=self.rows(home)):
+            p = accounts.profiles()[0]
+            self.assertEqual(p['login'], 'reauth_required')
+            self.assertEqual(p['login_reason'], self.REASON)
+            with self.assertRaises(ValueError) as cm:
+                accounts.profile('work')
+            self.assertIn('reauth_required', str(cm.exception))
+            self.assertIn(self.REASON, str(cm.exception))
+            row = accounts.normalize_codex(p, dict(available=True))
+            self.assertEqual(row['reason'], 'auth-unavailable')
+            self.assertEqual(row['login_reason'], self.REASON)
+            r = accounts.choose({'accounts': [row]}, 'codex')
+            self.assertEqual(r['state'], 'waiting-quota')
+            self.assertIn('codex/acct-work', r['reason'])
+            self.assertIn(self.REASON, r['reason'])
+
+    def test_valid_login_carries_no_reason_and_capped_text_is_unchanged(self):
+        with tempfile.TemporaryDirectory() as home:
+            rows = self.rows(home)
+            rows[0]['login'] = dict(state='valid')
+            with patch.object(accounts, 'ccquota', return_value=rows):
+                self.assertEqual(accounts.profiles()[0]['login_reason'], '')
+        r = accounts.choose({'accounts': [candidate('codex', 'full', 100)]}, 'codex')
+        self.assertEqual(r['reason'], 'accounts · all capped')
+
 if __name__ == '__main__':
     unittest.main()

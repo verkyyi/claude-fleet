@@ -64,8 +64,15 @@ func (a *Agent) probeAccounts(ctx context.Context, observed map[string]bool) []*
 			continue
 		}
 		// A hub-managed account (claude-fleet#1415) holds a marker, not a
-		// token; its live short-lived token is in <label>.hub/.
-		token := hubAccountToken(a.cfg.AccountsDir, label, strings.TrimSpace(string(raw)))
+		// token; its live short-lived token is in <label>.hub/. An unreadable
+		// lease is logged by name, once per probe interval like a failed probe
+		// (claude-fleet#1404) — the agent's own lease cycle is what repairs it.
+		token, err := hubAccountToken(a.cfg.AccountsDir, label, strings.TrimSpace(string(raw)))
+		if err != nil {
+			log.Printf("could not read the meter for %s: %v", label, err)
+			a.noteProbe(label, now)
+			continue
+		}
 		if token == "" {
 			continue
 		}

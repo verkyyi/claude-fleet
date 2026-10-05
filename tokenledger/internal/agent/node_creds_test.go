@@ -181,12 +181,56 @@ func TestHubAccountTokenResolvesMarker(t *testing.T) {
 	if err := writeClaudeCred(dir, "main", "sk-ant-oat01-live", &exp, nil, ""); err != nil {
 		t.Fatal(err)
 	}
-	if got := hubAccountToken(dir, "main", "hub:main"); got != "sk-ant-oat01-live" {
-		t.Fatalf("marker resolved to %q", got)
+	if got, err := hubAccountToken(dir, "main", "hub:main"); err != nil || got != "sk-ant-oat01-live" {
+		t.Fatalf("marker resolved to %q, %v", got, err)
 	}
-	if got := hubAccountToken(dir, "x", "sk-ant-oat01-plain"); got != "sk-ant-oat01-plain" {
-		t.Fatalf("a plain token was rewritten to %q", got)
+	if got, err := hubAccountToken(dir, "x", "sk-ant-oat01-plain"); err != nil || got != "sk-ant-oat01-plain" {
+		t.Fatalf("a plain token was rewritten to %q, %v", got, err)
 	}
+}
+
+// claude-fleet#1404: a hub-managed account whose lease cannot be read used to
+// vanish from the probe without a word. Every way it can fail now names the
+// hub-managed source and the file, so the operator is sent to the lease — not
+// to ~/.claude, and not to the keychain.
+func TestHubAccountTokenNamesTheHubSourceWhenUnreadable(t *testing.T) {
+	dir := t.TempDir()
+	lease := filepath.Join(dir, "main.hub", ".credentials.json")
+	check := func(stage string, err error, want ...string) {
+		t.Helper()
+		if err == nil {
+			t.Fatalf("%s: expected an error", stage)
+		}
+		for _, w := range append([]string{"hub-managed account main", lease}, want...) {
+			if !strings.Contains(err.Error(), w) {
+				t.Errorf("%s: error does not name %q:\n  %v", stage, w, err)
+			}
+		}
+	}
+	_, err := hubAccountToken(dir, "main", "hub:main")
+	check("nothing leased", err, "nothing leased yet")
+
+	if err := os.MkdirAll(filepath.Dir(lease), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lease, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = hubAccountToken(dir, "main", "hub:main")
+	check("malformed", err, "not the credentials JSON")
+
+	if err := os.WriteFile(lease, []byte(`{"claudeAiOauth":{"accessToken":""}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = hubAccountToken(dir, "main", "hub:main")
+	check("empty token", err, "has no claudeAiOauth.accessToken")
+
+	past := time.Now().Add(-3 * time.Hour)
+	if err := writeClaudeCred(dir, "main", "sk-ant-oat01-stale", &past, nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	_, err = hubAccountToken(dir, "main", "hub:main")
+	check("expired lease", err, "lease expired", "not renewed")
 }
 
 func readJSON(t *testing.T, path string, v any) {

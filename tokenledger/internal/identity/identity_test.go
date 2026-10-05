@@ -3,8 +3,10 @@ package identity
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -260,5 +262,134 @@ func TestLoadCredentials_StaleFileLosesToLiveKeychain(t *testing.T) {
 	}
 	if c.AccessToken != "live-keychain" {
 		t.Fatalf("picked %q; the stale file beat the live keychain", c.AccessToken)
+	}
+}
+
+// Regression (claude-fleet#1404): when BOTH sources fail on macOS, the error
+// named only the file — the first source tried — and the keychain's failure,
+// the likelier cause on a headless login, was dropped. Four of six machines on
+// one hub read "<file> has no claudeAiOauth.accessToken" while the keychain was
+// what could not be reached. A true fact, but not the reason.
+func TestLoadCredentials_DoubleFailureNamesBothSources(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("the two-source case only arises on macOS")
+	}
+	home := t.TempDir()
+	writeCreds(t, home, `{"claudeAiOauth":{"accessToken":"","expiresAt":0}}`)
+	prev := readKeychain
+	readKeychain = func() (*Credentials, error) {
+		return nil, errors.New("security exit 36: the login keychain is locked")
+	}
+	t.Cleanup(func() { readKeychain = prev })
+
+	_, err := LoadCredentials(home)
+	if !errors.Is(err, ErrNoCredentials) {
+		t.Fatalf("err = %v, want ErrNoCredentials", err)
+	}
+	for _, want := range []string{
+		filepath.Join(home, ".claude", ".credentials.json"), "has no claudeAiOauth.accessToken",
+		"keychain", "security exit 36",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not name %q:\n  %v", want, err)
+		}
+	}
+}
+
+// Same family: with NO file at all the old code reported the keychain alone, so
+// the operator could not tell "missing" from "unreadable" for the file.
+func TestLoadCredentials_MissingFileAndKeychainFailureNamesBoth(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("the two-source case only arises on macOS")
+	}
+	home := t.TempDir()
+	prev := readKeychain
+	readKeychain = func() (*Credentials, error) {
+		return nil, errors.New("security exit 44: no such item")
+	}
+	t.Cleanup(func() { readKeychain = prev })
+
+	_, err := LoadCredentials(home)
+	if !errors.Is(err, ErrNoCredentials) {
+		t.Fatalf("err = %v, want ErrNoCredentials", err)
+	}
+	for _, want := range []string{filepath.Join(home, ".claude", ".credentials.json"), "keychain", "security exit 44"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not name %q:\n  %v", want, err)
+		}
+	}
+}
+
+// A hub-managed account (claude-fleet#1415) keeps its leased token in the
+// directory CLAUDE_SECURESTORAGE_CONFIG_DIR names — where a session launched on
+// it reads — so ccquota run inside that session must read the same place.
+func TestLoadCredentials_HubManagedDirIsASource(t *testing.T) {
+	noKeychain(t)
+	home := t.TempDir()
+	past := time.Now().Add(-time.Hour).UnixMilli()
+	writeCreds(t, home, `{"claudeAiOauth":{"accessToken":"stale-file","expiresAt":`+itoa(past)+`}}`)
+	hub := t.TempDir()
+	future := time.Now().Add(time.Hour).UnixMilli()
+	if err := os.WriteFile(filepath.Join(hub, ".credentials.json"),
+		[]byte(`{"claudeAiOauth":{"accessToken":"hub-leased","expiresAt":`+itoa(future)+`}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", hub)
+
+	c, err := LoadCredentials(home)
+	if err != nil {
+		t.Fatalf("a live hub-leased token must win over a stale file: %v", err)
+	}
+	if c.AccessToken != "hub-leased" {
+		t.Fatalf("picked %q, want the hub-leased token", c.AccessToken)
+	}
+}
+
+// ...and when that directory holds nothing readable, the error names the hub
+// lease — the fix is there (agent, hub, revocation), not in ~/.claude.
+func TestLoadCredentials_HubManagedFailureNamesTheHub(t *testing.T) {
+	noKeychain(t)
+	home := t.TempDir()
+	hub := t.TempDir()
+	t.Setenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", hub)
+
+	_, err := LoadCredentials(home)
+	if !errors.Is(err, ErrNoCredentials) {
+		t.Fatalf("err = %v, want ErrNoCredentials", err)
+	}
+	for _, want := range []string{"hub-managed", filepath.Join(hub, ".credentials.json")} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not name %q:\n  %v", want, err)
+		}
+	}
+}
+
+// /usr/bin/security exits with the low byte of the OSStatus and, on a headless
+// login, says nothing on stderr for the failure that matters there. The two
+// codes behind nearly every failure are spelled out; stderr rides along.
+func TestKeychainFailure_SpellsOutTheCommonExits(t *testing.T) {
+	run := func(script string) error {
+		_, err := exec.Command("sh", "-c", script).Output()
+		return err
+	}
+	cases := []struct {
+		script string
+		want   []string
+	}{
+		{"exit 36", []string{"exit 36", "locked or unreachable"}},
+		{"echo 'security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.' >&2; exit 44",
+			[]string{"exit 44", `"Claude Code-credentials"`, "could not be found"}},
+		{"exit 7", []string{"security exit 7"}},
+	}
+	for _, c := range cases {
+		got := keychainFailure(run(c.script))
+		for _, w := range c.want {
+			if !strings.Contains(got, w) {
+				t.Errorf("%q → %q lacks %q", c.script, got, w)
+			}
+		}
+	}
+	if got := keychainFailure(errors.New("fork failed")); !strings.Contains(got, "security could not run") {
+		t.Errorf("non-exit error → %q", got)
 	}
 }
