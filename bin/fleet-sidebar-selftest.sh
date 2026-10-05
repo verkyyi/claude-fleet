@@ -265,6 +265,13 @@ def input_line(pane):
 def worker_cue(pane):
     return input_line(pane) == '›'
 
+def spawning(pane):
+    # A spawn in flight (issue #1608): the input line shows the name dimmed with
+    # a trailing ` …` until dash-raw-session.sh EXITS — which is after its window
+    # shows (option stamps, the prefill, the pool refill) — and the sidebar drops
+    # a ⌃s / ↵ pressed while it runs.
+    return input_line(pane).endswith(' …')
+
 def tasks_cue(pane):
     return input_line(pane).startswith('› 新会话名')
 
@@ -1210,6 +1217,13 @@ try:
     spawned += list(set(windows()) - before)
     wait_for(lambda: tm('display-message', '-p', '-t', 'fleet-test:', '#{window_name}') == '修复 demo',
              'the CJK session is not current or lost its name')
+    # Wait for the spawn's SCRIPT to exit, not just its window (issue #1608): the
+    # line empties and @sidebar_input clears only then. On a loaded macOS runner
+    # the ⌃s leg below pressed its key while this line still read `› 修复 demo …`
+    # and the sidebar dropped it as «a spawn in flight» (three red macOS shards,
+    # green on ubuntu where the script's tail fits in the gap).
+    wait_for(lambda: not spawning(side) and tm('show-options', '-pqv', '-t', side, '@sidebar_input') == '',
+             'the CJK spawn did not finish (its script exit) before the next key: %r' % input_line(side))
     tm('select-window', '-t', w1)
     wait_for(lambda: view_on(w1) == [side], 'the view did not come back to the first worker')
     wait_for(lambda: not navigation(), 'the CJK spawn left the keyboard on the sidebar')
@@ -1228,6 +1242,10 @@ try:
     click(side, row=height - 3)
     wait_for(navigation, 'clicking the sidebar did not enter navigation before ⌃s')
     before = set(windows())
+    # Sequencing pin (issue #1608): a ⌃s pressed while an earlier spawn's script
+    # is still running is dropped by design (one spawn at a time), so a red here
+    # names the leg above, not a slow runner.
+    check(not spawning(side), '⌃s pressed while a spawn was still in flight: %r' % input_line(side))
     os.write(terminal, b'\x13')
     seen = set()
     def spawned_or_seen():

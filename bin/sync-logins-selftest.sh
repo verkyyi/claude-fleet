@@ -78,7 +78,17 @@ $2";; esac; }
 
 export GIT_CONFIG_GLOBAL="$WORK/gitconfig" GIT_CONFIG_SYSTEM=/dev/null
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
-: > "$WORK/gitconfig"
+# No background git in this rig (issue #1608). Every `git commit` / `git fetch`
+# forks a DETACHED `git maintenance run --auto` in its repo, and the rig's
+# `git clone "$SRC" …` hardlinks $SRC/.git/objects while that child may still be
+# writing there: on the macOS runner (git 2.55) it was mid-way through
+# objects/pack/multi-pack-index.lock, and the clone died with «hardlink
+# different from source» — twice in EPIC #1529, green on ubuntu, green on rerun.
+# maintenance.auto=false means the child is never started, so nothing writes a
+# rig repo but the rig's own (sequential) commands; the trace2 log is how
+# section M proves it.
+printf '[maintenance]\n\tauto = false\n' > "$WORK/gitconfig"
+export GIT_TRACE2_EVENT="$WORK/git-trace2"
 g() { git -C "$1" "${@:2}"; }
 
 # --- shims ------------------------------------------------------------------
@@ -673,5 +683,15 @@ EOF
   ok "node.env dry-run: nothing written" '[ ! -e "$BNE" ]'
   not_contains "node.env dry-run: no node.env line" "$OUT" "node.env"
 fi
+
+# ============================================================================
+# M. no background git ran in the rig (issue #1608)
+# ============================================================================
+# The trace2 event log names every git process the rig and the script started.
+# A detached `maintenance run --auto` in any of them is the writer the hardlink
+# clones raced on macOS; with maintenance.auto=false in the rig's gitconfig
+# there must be none — and the clones that read $SRC must have all been there.
+ok "rig: git ran, and the trace saw it" '[ -s "$WORK/git-trace2" ] && grep -q "\"clone\"" "$WORK/git-trace2"'
+ok "rig: no git forked a background maintenance run (maintenance.auto=false, #1608)" '! grep -q "\"maintenance\",\"run\"" "$WORK/git-trace2"'
 
 echo "sync-logins-selftest OK ($CHECKS checks)"
