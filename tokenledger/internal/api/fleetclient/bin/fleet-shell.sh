@@ -181,14 +181,14 @@ this_machine() {
 CL_DIR="$CACHE/tmp"
 LEASE_CMD="${FLEET_CLIENT_LEASE_CMD:-python3 $BIN/fleet-client-lease.py}"
 cl_key() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'; }
-# lease <action> [args…] → L_STATE L_ID L_BY L_TOOK; rc 1 = the hub was not asked
+# lease <action> [args…] → L_STATE L_ID L_BY; rc 1 = the hub was not asked
 lease() {
   local line
-  L_STATE=''; L_ID=''; L_BY=''; L_TOOK=''
+  L_STATE=''; L_ID=''; L_BY=''
   line=$($LEASE_CMD "$@" 2>/dev/null) || return 1
   # TAB is whitespace to `read`: two in a row (an empty field) would collapse
   line=${line//$'\t'/$'\037'}
-  IFS=$'\037' read -r L_STATE L_ID L_BY L_TOOK <<< "$line"
+  IFS=$'\037' read -r L_STATE L_ID L_BY _ <<< "$line"
   [ -n "$L_STATE" ]
 }
 standby_on() { [ -f "$CL_DIR/client.standby" ]; }
