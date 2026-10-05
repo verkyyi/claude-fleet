@@ -170,7 +170,11 @@ particular deployment of `mcp-image` is stateless:
 FLEET_SLEEP_MCP_RESTARTABLE=mcp-image
 ```
 
-The default is empty. This is an explicit restartability contract, not a global
+The default is empty, except for a plugin's own stdio server
+(`plugin:<plugin>:<server>`, issue #1583): Claude Code starts it afresh with every
+process, so it is restartable unless the list says `!plugin:*` (all) or
+`!plugin:<plugin>:<server>` (one). A browser or job beneath it still vetoes.
+This is an explicit restartability contract, not a global
 process-name allowlist. Fleet matches the live server's effective configuration
 to exact stdio launcher argv and kernel executable paths. Supported npm/uv
 entrypoint wrappers are checked separately; additional jobs/browser descendants

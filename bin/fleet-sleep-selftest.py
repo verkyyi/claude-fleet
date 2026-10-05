@@ -980,7 +980,8 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         original="bash ~/.claude/fleet/bin/fleet-sleep.sh wake"
         command=shlex.join(['env','FLEET_CONF_DIR='+self.env['FLEET_CONF_DIR'],'FLEET_SLEEP_WAKE='+mode,
                             'python3',str(self.bin/'fleet-sleep.py'),'wake','--session'])
-        for line in lines:self.assertIn(original+" '#{session_name}' '#{window_id}' --dwell 2 --nav",line)
+        # The fleet name is $FLEET_SESSION_FMT (issue #1489): a view session's group, else the session.
+        for line in lines:self.assertIn(original+" '#{?#{session_group},#{session_group},#{session_name}}' '#{window_id}' --dwell 2 --nav",line)
         hookfile=self.root/'focus.conf';hookfile.write_text(''.join(l.replace(original,command)+'\n' for l in lines))
         self.tm('source-file',str(hookfile))
         self.addCleanup(self.tm,'set-hook','-gu','client-attached[72]')
@@ -1415,6 +1416,26 @@ class McpRestartTest(unittest.TestCase):
             del self.rows[4]
             self.argv[3].append('--wrong')
             self.assertEqual(self.classify(),set())  # rewritten wrapper cannot prove its child
+
+    def test_a_plugin_stdio_server_is_restartable_by_default(self):
+        # #1583: `plugin:playwright:playwright` refused a hard-walled source 3x on
+        # 2026-10-04 for want of a conf line. A plugin's stdio server restarts with
+        # every Claude process; `!plugin:*` / `!<name>` take the default back, and a
+        # bare third-party name still needs the explicit contract.
+        name='plugin:playwright:playwright'
+        config={name:self.config['safe']}
+        readers=(lambda pid:self.argv[pid],lambda pid:self.exes[pid])
+        classify=lambda:LIB['MCP']['classify'](self.source,(config,None),self.rows,1,*readers)
+        with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE=''):
+            self.assertEqual(classify(),{2})
+        for off in ('!plugin:*','other,!'+name):
+            with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE=off):
+                with self.assertRaisesRegex(ValueError,'restartability contract'):classify()
+        self.rows[4]=(2,'browser');self.rows[5]=(4,'renderer')   # a browser beneath it still vetoes
+        self.argv[4]=['/x/chrome'];self.exes[4]=Path('/x/chrome')
+        with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE=''):
+            with self.assertRaisesRegex(ValueError,'MCP service plugin:playwright:playwright owns'):classify()
+        self.assertFalse(LIB['MCP']['contracted']('safe',set()))
 
     def test_busy_classify_drops_the_contract_but_keeps_identification(self):
         # child_busy (#864) asks "MCP service or agent work?", not "may it sleep?":

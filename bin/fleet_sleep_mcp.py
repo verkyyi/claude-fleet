@@ -316,6 +316,17 @@ def restartable(source):
     return {name.strip() for name in value.split(',') if name.strip()}, conf
 
 
+def contracted(name, approved):
+    """Is <name> on the restartability contract? A plugin's stdio server
+    (`plugin:<plugin>:<server>`) is by default (issue #1583): Claude Code starts
+    it afresh with every process, exactly as a resumed session needs — and a
+    browser or job beneath it is still refused below. `!plugin:*` in the list
+    takes that default back; `!<name>` refuses one plugin server."""
+    if '!' + name in approved:
+        return False
+    return name in approved or (name.startswith('plugin:') and '!plugin:*' not in approved)
+
+
 def contract_hint(source, approved, name, conf=None):
     """The one conf line that would lift this refusal, and where it goes (#786).
 
@@ -356,7 +367,7 @@ def classify(source, inventory, rows, server_pid, argv_reader, exe_reader, stric
                 allowed.add(node)
                 pending.extend(child for child, (pp, _) in rows.items() if pp == node)
             continue
-        if name not in approved:
+        if not contracted(name, approved):
             raise ValueError('MCP service %s has no restartability contract (FLEET_SLEEP_MCP_RESTARTABLE); %s'
                              % (name, contract_hint(source, approved, name, contract_conf)))
         # Codex reports a runtime status per server. Claude has no such channel:

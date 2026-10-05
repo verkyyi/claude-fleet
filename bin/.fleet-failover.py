@@ -23,6 +23,7 @@ TRANSFER = runpy.run_path(str(BIN / '.fleet-transfer.py'))
 RPC = runpy.run_path(str(BIN / 'fleet-codex-rpc.py'))['Client']
 ATTENTION = runpy.run_path(str(BIN / 'fleet-codex-attention.py'))
 LOOP = runpy.run_path(str(BIN / 'fleet-loop.py'))
+LOOP_MARK = runpy.run_path(str(BIN / 'fleet_loop_mark.py'))
 save, read, locked = (ACCOUNT[n] for n in ('save', 'read', 'locked'))
 
 
@@ -312,6 +313,57 @@ def looping_settled(source, thread):
             and bool(turns) and turns[-1].get('status') == 'completed')
 
 
+def wake_margin():
+    """FLEET_FAILOVER_WAKE_MARGIN: a wakeup due sooner than this is left to fire (#1583)."""
+    try: return max(0, int(os.environ.get('FLEET_FAILOVER_WAKE_MARGIN', '90')))
+    except ValueError: return 90
+
+
+def claude_loop(source, now=None):
+    """What a `looping` Claude source is waiting on between rounds (#1583):
+    'wakeup' (a native ScheduleWakeup the move exports with --loop), 'ledger'
+    (a fleet-loop.py record the transfer package carries itself) or '' (no
+    movable Loop). Raises ValueError with the reason a looping source must wait.
+
+    The Codex counterpart is looping_settled(). Without this a Claude /loop sat
+    on a benched account until its next wakeup hit the wall and painted a banner
+    (3 sources x 10-16 refused retries on 2026-10-04). Only the Stop hook's own
+    decision counts: @claude_wait is written at a clean Stop and never by the
+    screen classifier, and a pending tool result is refused by validate().
+    """
+    if source.get('agent') != 'claude' or source.get('state') != 'looping':
+        return ''
+    wait = [w for w in opt(source, '@claude_wait').split(',') if w]
+    if not wait:
+        raise ValueError('source Claude loop state is not from a clean Stop; waiting for its round to end')
+    if 'bg' in wait:
+        raise ValueError('source Claude loop still owns a background job')
+    if 'loop' not in wait:
+        raise ValueError('source Claude is waiting on %s, not on its loop' % ','.join(wait))
+    now = int(time.time()) if now is None else int(now)
+    mark = LOOP_MARK['prune'](LOOP_MARK['parse'](opt(source, '@loop')), now)
+    ledger = LOOP_MARK['ledger_status'](source.get('previous') or '')
+    if mark['ids']:
+        raise ValueError('source Claude loop uses CronCreate, which a move cannot carry')
+    if mark['next'] and ledger:
+        raise ValueError('source Claude holds both a native wakeup and a Fleet loop')
+    if mark['next']:
+        if mark['next'] - now < wake_margin():
+            raise ValueError('source Claude loop wakeup is due in %ds; waiting for that round' % max(0, mark['next'] - now))
+        return 'wakeup'
+    if ledger in ('active', 'waiting-quota'):
+        return 'ledger'
+    raise ValueError('source Claude loop has no live wakeup or Fleet loop to carry')
+
+
+def export_claude_loop(path, source):
+    """The source's last ScheduleWakeup as a private --loop spec for the target."""
+    spec = path / 'loop-spec.json'
+    run(['python3', BIN / 'fleet-loop.py', 'from-claude', '--transcript', source['transcript'],
+         '--output', spec], timeout=30)
+    return spec
+
+
 def settled(session, pane):
     """fleet-transfer.sh's manual source_ready for a `looping` Codex source."""
     source = inspect(session, pane)
@@ -346,7 +398,13 @@ def validate(request, session, pane, sid, recovery=False):
     else:
         hard = claude_wall(source)
         if source['state'] != 'done' and not hard:
-            raise ValueError('source Claude turn is not complete or quota-blocked')
+            # Two different waits, written apart (#1583): a turn still running
+            # versus a loop between rounds that is not yet safe to carry.
+            if source['state'] == 'working':
+                raise ValueError('source Claude turn is still running')
+            if source['state'] != 'looping':
+                raise ValueError('source Claude turn is not complete or quota-blocked')
+            claude_loop(source)
         if unresolved_claude_tools(source['transcript']):
             raise ValueError('source Claude tool result is unresolved')
     # Hibernation and a PROACTIVE move keep the blanket background veto. A hard
@@ -530,6 +588,16 @@ def move(path, r, target):
         validate(path, source['session'], source['pane'], source['session_id'])
         flags = ['--session',source['session'],'--target-file',str(path/'target.json'),
                  '--quota-request',str(path)]
+        # A native ScheduleWakeup rides along as a Fleet loop (#1583): exported
+        # from the transcript, it lets the transfer confirm the source's exit
+        # dialog and hands the target the same cadence. A Fleet loop ledger
+        # needs nothing here — the package carries it.
+        (path/'loop-spec.json').unlink(missing_ok=True)
+        if source['agent'] == 'claude':
+            try: kind = claude_loop(dict(source, state=opt(source,'@claude_state')))
+            except ValueError: kind = ''
+            if kind == 'wakeup':
+                flags += ['--loop', str(export_claude_loop(path, source))]
         if source['agent'] == target['agent'] == 'claude':
             cmd = ['bash',BIN/'fleet-migrate.sh',*flags,source['window']]
         else:

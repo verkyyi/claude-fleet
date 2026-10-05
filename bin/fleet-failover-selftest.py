@@ -312,6 +312,94 @@ class Failover(unittest.TestCase):
         self.assertEqual(closed,[1])
 
 
+class ClaudeLooping(unittest.TestCase):
+    """A Claude /loop between rounds moves like `done` (#1583) — the looping_settled()
+    counterpart Codex already had. Before it, 3 looping sources sat `waiting` on
+    'source Claude turn is not complete or quota-blocked' for 10-16 retries each."""
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name)
+        self.path=self.root/'attempt';self.path.mkdir()
+        self.now=int(time.time())
+        self.source=dict(session='test',window='@2',pane='%2',pid=42,session_id='s',agent='claude',
+                         worktree='/w',transcript='/t',state='looping',previous='')
+        self.opts={'@claude_wait':'loop','@loop':'kind=wakeup next=%d ttl=1200' % (self.now+1200),
+                   '@claude_state':'looping'}
+        self.tools=False
+        for p in (patch.object(flow,'inspect',side_effect=lambda *a:self.source),
+                  patch.object(flow,'opt',side_effect=lambda s,k:self.opts.get(k,'')),
+                  patch.object(flow,'evidence',return_value=(False,'claude:e')),
+                  patch.object(flow,'claude_wall',return_value=False),
+                  patch.object(flow,'unresolved_claude_tools',side_effect=lambda t:self.tools),
+                  patch.object(flow,'quiet_processes'),
+                  patch.object(flow,'tm',return_value=''),
+                  patch.object(flow,'stamp'),patch.object(flow,'stamp_stuck'),
+                  patch.dict(flow.INPUT,snapshot=lambda *a,**k:{'state':'empty','digest':'d'}),
+                  patch.dict(os.environ,FLEET_CONF_DIR=str(self.root))):
+            p.start();self.addCleanup(p.stop)
+
+    def validate(self):
+        flow.save(self.path/'request.json',dict(source=self.source,episode='claude:e',hard=False))
+        flow.validate(self.path,'test','%2','s')
+
+    def refused(self,why):
+        with self.assertRaisesRegex(ValueError,why):self.validate()
+
+    def test_a_clean_stop_between_wakeups_is_movable(self):
+        self.validate()
+        self.assertEqual(flow.claude_loop(self.source),'wakeup')
+
+    def test_an_unresolved_tool_result_still_refuses(self):
+        self.tools=True
+        self.refused('tool result is unresolved')
+
+    def test_every_unsafe_loop_names_its_own_reason(self):
+        for opts,why in (({'@claude_wait':''},'not from a clean Stop'),
+                         ({'@claude_wait':'loop,bg'},'background job'),
+                         ({'@claude_wait':'children'},'waiting on children'),
+                         ({'@loop':'kind=cron id=job1@%d' % (self.now+9999)},'CronCreate'),
+                         ({'@loop':'kind=wakeup next=%d ttl=60' % (self.now+30)},'due in'),
+                         ({'@loop':''},'no live wakeup')):
+            saved=dict(self.opts);self.opts.update(opts)
+            try:self.refused(why)
+            finally:self.opts=saved
+
+    def test_a_running_turn_is_reported_apart_from_a_loop(self):
+        self.source['state']='working'
+        self.refused('turn is still running')
+        self.source['state']='needs'
+        self.refused('not complete or quota-blocked')
+
+    def test_a_fleet_loop_ledger_is_carried_by_the_package(self):
+        manifest=self.root/'old/manifest.json';(manifest.parent/'loop').mkdir(parents=True)
+        flow.save(manifest.parent/'loop/state.json',{'status':'waiting-quota'})
+        self.source['previous']=str(manifest);self.opts['@loop']=''
+        self.assertEqual(flow.claude_loop(self.source),'ledger')
+        self.opts['@loop']='kind=wakeup next=%d ttl=1200' % (self.now+1200)
+        self.refused('both a native wakeup and a Fleet loop')
+
+    def test_the_move_exports_the_wakeup_and_passes_it_as_loop(self):
+        manifest=self.root/'new/manifest.json';manifest.parent.mkdir()
+        self.opts['@handoff_manifest']=str(manifest)
+        seen=[]
+        def transfer(cmd,**_):
+            seen.append(cmd)
+            flow.save(manifest,{'quota_request':str(self.path),'target':{'session_id':'target'}})
+            flow.save(manifest.parent/'state.json',{'state':'started'})
+            return subprocess.CompletedProcess(cmd,0)
+        spec=self.path/'loop-spec.json'
+        def export(path,source):
+            flow.save(spec,{'prompt':'tick','interval_seconds':1200});return spec
+        r=dict(source=self.source,episode='claude:e',hard=False,attempts=1,failed_targets={})
+        flow.save(self.path/'request.json',r)
+        with patch.object(flow,'export_claude_loop',side_effect=export), \
+             patch.object(flow.subprocess,'run',side_effect=transfer):
+            flow.move(self.path,r,dict(key='claude/other',agent='claude'))
+        self.assertEqual(flow.read(self.path/'request.json')['state'],'bound')
+        cmd=seen[0]
+        self.assertIn('fleet-migrate.sh',cmd[1]);self.assertEqual(cmd[cmd.index('--loop')+1],str(spec))
+
+
 class Drafts(unittest.TestCase):
     def test_waiting_loop_and_unsent_draft_survive_another_handoff(self):
         with tempfile.TemporaryDirectory() as tmp:

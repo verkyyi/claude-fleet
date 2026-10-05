@@ -564,7 +564,7 @@ migrate_one_body() {
 # direct run dispatches. Same guard idiom as fleet-account.sh.
 migrate_main() {
   MODE=""; ACCOUNT=""; TARGET_ACCOUNT=""; NUDGE=""; NUDGE_SET=0; DRY=0; TOAST=0; SESS=""; MODEL=""; WIDS=(); FORCE_BG=0; MAX=0; FORCE_SELF=0
-  local pinned_target='' quota_request='' verified=0
+  local pinned_target='' quota_request='' pinned_loop='' verified=0
   FLEET_MIGRATION_LOCKED=''
   MIGRATE_TMP=''
   trap '[ -z "${FLEET_MIGRATION_LOCKED:-}" ] || fleet_transition_lock_drop "$FLEET_MIGRATION_LOCKED"; [ -z "${MIGRATE_TMP:-}" ] || rm -rf "$MIGRATE_TMP"' EXIT
@@ -585,6 +585,7 @@ migrate_main() {
       --session=*) SESS="${1#--session=}"; shift ;;
       --target-file) pinned_target="${2:-}"; shift 2 ;;
       --quota-request) quota_request="${2:-}"; shift 2 ;;
+      --loop) pinned_loop="${2:-}"; shift 2 ;;   # a quota request's exported wakeup (issue #1583)
       --nudge) NUDGE="${2:-}"; NUDGE_SET=1; shift 2 ;;
       --nudge=*) NUDGE="${1#--nudge=}"; NUDGE_SET=1; shift ;;
       --model) MODEL="${2:-}"; shift 2 ;;
@@ -613,10 +614,12 @@ migrate_main() {
   # The quota planner pins ONE account for ONE exact session. Use the existing
   # transfer transaction for its locks, packet, draft and loop, while retaining
   # Claude's native --resume UUID (the legacy bulk mover below stays compatible).
+  [ -z "$pinned_loop" ] || [ -n "$pinned_target" ] || { echo 'fleet-migrate: --loop rides only a pinned quota target' >&2; return 2; }
   if [ -n "$pinned_target" ]; then
     [ "${#WIDS[@]}" = 1 ] && [ -n "$quota_request" ] || { echo 'fleet-migrate: pinned target needs one window and a quota request' >&2; return 2; }
     exec bash "$BIN/fleet-transfer.sh" --session "$SESS" --window "${WIDS[0]}" --to claude \
-      --target-file "$pinned_target" --quota-request "$quota_request" --native-resume
+      --target-file "$pinned_target" --quota-request "$quota_request" --native-resume \
+      ${pinned_loop:+--loop "$pinned_loop"}
   fi
   # Now that the per-fleet overlay is loaded, let it override the resume nudges
   # (issue #620). An operator value replaces the built-in ENTIRELY, so a fleet that

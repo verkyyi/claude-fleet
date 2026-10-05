@@ -271,6 +271,15 @@ link to their transfer packet. `waiting-quota` means no eligible destination;
 `waiting` includes busy tools, recent typing and unreadable drafts;
 `ambiguous` requires inspection of the retained pane/packet and never starts a
 second writer. The dashboard shows the quota state; doctor shows its reason.
+A Claude `/loop` between rounds (`looping` with `@claude_wait` from a clean Stop,
+issue #1583) moves like `done` — the Codex `looping` rule's counterpart. Its last
+`ScheduleWakeup` is exported (`fleet-loop.py from-claude`) and passed as `--loop`,
+so the transfer confirms the source's exit dialog and the target continues the
+same cadence as a Fleet loop; a Fleet loop ledger is carried as-is. It keeps
+waiting, with its own reason, while a background job runs, the loop is a
+`CronCreate`, or the wakeup is due within `FLEET_FAILOVER_WAKE_MARGIN` seconds
+(default 90) — and `source Claude turn is still running` is a turn mid-flight,
+never a loop.
 A running background command (a dev server, a long test) keeps a request
 `waiting`, as it keeps a worker awake. After a **hard** wall that has waited
 `FLEET_FAILOVER_BG_GRACE` seconds (default 600; `0` disables), the move proceeds:
