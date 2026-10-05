@@ -1069,7 +1069,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   if [ "$pinned" = 0 ]; then gfold=$PINFOLD
   elif [ "$RGRP" = 1 ]; then gfold=${RGFOLD[rgrp]:-0}; fi
   if [ "$gfold" = 1 ] && [ "$rk" != 0 ] &&
-     { [ "$SIDEBAR" = 0 ] || [ "$wid" != "${FLEET_SIDEBAR_CURRENT:-}" ]; }; then
+     { [ "$SIDEBAR" = 0 ] || [ "$wid" != "${FLEET_SIDEBAR_CURRENT_ROW:-${FLEET_SIDEBAR_CURRENT:-}}" ]; }; then
     continue
   fi
   # --- fold: a collapsed holder hides its subtree, level by level --------------
@@ -1091,7 +1091,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # so a collapsed parent's `3/5` badge still describes its whole subtree — which
   # is exactly what makes the fold safe to have on by default.
   if [ "$depth" -gt 0 ] && [ "$rk" != 0 ] &&
-     { [ "$SIDEBAR" = 0 ] || [ "$wid" != "${FLEET_SIDEBAR_CURRENT:-}" ]; }; then
+     { [ "$SIDEBAR" = 0 ] || [ "$wid" != "${FLEET_SIDEBAR_CURRENT_ROW:-${FLEET_SIDEBAR_CURRENT:-}}" ]; }; then
     _i=0; _hid=0
     while [ "$_i" -lt "$depth" ]; do
       [ "${AE[_i]}" = 1 ] || { _hid=1; break; }; _i=$((_i+1))

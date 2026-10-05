@@ -1150,6 +1150,12 @@ def fold_now(rows, key, verb, current, cache):
     return rows[:j] + [with_fold(rows[j], False)] + keep + rows[end:], key_of(rows[j])
 
 
+def current_of(env):
+    """What a producer run was read against: the window AND the row it stands
+    for — a proxy window keeps its id while it retargets (issue #1697)."""
+    return env["FLEET_SIDEBAR_CURRENT"], env["FLEET_SIDEBAR_CURRENT_ROW"]
+
+
 def start_rows(env):
     """Launch the row producer without waiting for it (issue #1033). Output goes
     to a file, not a pipe: a full pipe would stall a producer this loop only
@@ -1159,7 +1165,7 @@ def start_rows(env):
                             env=dict(env), stdin=subprocess.DEVNULL, stdout=out,
                             stderr=subprocess.DEVNULL, text=True)
     proc.out, proc.started, proc.stale, proc.failure = out, time.monotonic(), False, ""
-    proc.current, proc.view, proc.parse = env["FLEET_SIDEBAR_CURRENT"], "live", None
+    proc.current, proc.view, proc.parse = current_of(env), "live", None
     return proc
 
 
@@ -1183,7 +1189,7 @@ def start_landed(env):
                             env=dict(env, FZF_COLUMNS="120"), stdin=subprocess.DEVNULL,
                             stdout=out, stderr=subprocess.DEVNULL, text=True)
     proc.out, proc.started, proc.stale, proc.failure = out, time.monotonic(), False, ""
-    proc.current, proc.view, proc.parse = env["FLEET_SIDEBAR_CURRENT"], "landed", landed_rows
+    proc.current, proc.view, proc.parse = current_of(env), "landed", landed_rows
     return proc
 
 
@@ -1453,7 +1459,11 @@ def ui(screen, session, worker, lock):
     pane = os.environ["TMUX_PANE"]
     window, remote = (fields(worker, US.join(("#{window_id}", "#{@remote}"))) + ["", ""])[:2]
     current_row = shown_row(window, remote)
-    env = dict(os.environ, FLEET_SESSION=session, FLEET_SIDEBAR_CURRENT=window)
+    # Two consumers, two values (issue #1697): the local window id for what joins
+    # on a tmux window, the ROW key for the producer's keep-current fold rails —
+    # in a proxy window onto another machine those differ (`@12` vs `wid:…`).
+    env = dict(os.environ, FLEET_SESSION=session, FLEET_SIDEBAR_CURRENT=window,
+               FLEET_SIDEBAR_CURRENT_ROW=current_row)
     curses.curs_set(0)
     curses.use_default_colors()
     pal = palette_colors(palette(), curses.COLORS)
@@ -1529,7 +1539,7 @@ def ui(screen, session, worker, lock):
                 # Started before something this view did (a fold, a jump, a menu
                 # action): its rows would undo what is painted. Read again now.
                 refresh_at = 0
-            elif current != window:
+            elif current != (window, current_row):
                 # Read against a window this view has since left: its fold
                 # exemptions are for the wrong row. Drop it, read again now.
                 refresh_at = 0
@@ -1586,7 +1596,7 @@ def ui(screen, session, worker, lock):
             # before their key arrives, so ↑↓ keep browsing after the switch;
             # Enter/Escape (whose binds do not re-enter) still hand input back.
             follow_at = None
-            if acts(selected) and selected != window:
+            if acts(selected) and selected != current_row:
                 if jump(session, selected, pane, lock):
                     refresh_at = 0
                     continue
@@ -1610,11 +1620,14 @@ def ui(screen, session, worker, lock):
                     return
                 # The pane (and curses grid) survives navigation. Follow its new
                 # worker before testing liveness or building current-row exemptions.
-                if info[4] != window:
-                    window = info[4]
-                    current_row = shown_row(window, info[7])
-                    selected = current_row
+                # A proxy window onto another machine is RETARGETED in place by
+                # fleet-remote-view.sh open — same window id, a new `@remote` —
+                # so the row it stands for is the test, not the id (issue #1697).
+                row = shown_row(info[4], info[7])
+                if info[4] != window or row != current_row:
+                    window, current_row, selected = info[4], row, row
                     env["FLEET_SIDEBAR_CURRENT"] = window
+                    env["FLEET_SIDEBAR_CURRENT_ROW"] = current_row
                 worker = info[5] or worker
                 navigation = info[6] == "fleet-sidebar"
                 route_input(session)
@@ -2018,7 +2031,7 @@ def ui(screen, session, worker, lock):
             # session since, a switch back to the row it was read against would
             # yank the operator — with nothing to jump to, Enter only hands over.
             follow_at = None
-            if acts(selected) and selected != window and not jump(session, selected, pane, lock):
+            if acts(selected) and selected != current_row and not jump(session, selected, pane, lock):
                 follow_at = time.monotonic() + LOCK_RETRY  # lock busy: retried (#1536)
             refresh_at = 0
         elif key in (curses.KEY_LEFT, curses.KEY_RIGHT) and view == "landed":
@@ -2177,6 +2190,7 @@ def ui(screen, session, worker, lock):
                     selected = hit
                     if not jump(session, selected, pane, lock):
                         follow_at = time.monotonic() + LOCK_RETRY  # lock busy (#1536)
+                    refresh_at = 0  # re-read where it landed: ▶ follows (#1697)
                 # Anywhere else (the input line included) the click only focuses:
                 # the bind already moved the keyboard here, so typing follows.
             elif buttons & curses.BUTTON1_RELEASED:
