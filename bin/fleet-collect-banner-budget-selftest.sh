@@ -103,6 +103,7 @@ open(sys.argv[2], 'w').write('\n'.join(out) + '\n')
 PY
 [ $? = 0 ] || fail 'could not extract the banner phase functions'
 # in_phase CMD… — run CMD with the collector's environment for the banner phase.
+# shellcheck disable=SC2034  # read by the sourced phase functions, not here
 in_phase() {
   ( BIN="$WORK/bin"; . "$BIN/fleet-lib.sh"; . "$BIN/usage-lib.sh"; . "$WORK/phase.sh"
     SOCKETS=fixture; US=$'\037'; C="$WORK/.claude-dash"; FLEET_CONF_DIR="$WORK/conf"
@@ -121,6 +122,7 @@ b=$(FLEET_COLLECT_BANNER_BUDGET=0 in_phase banner_budget)
 [ "$b" = 0 ] || fail "A: 0 must stay unbudgeted (got: $b)"
 b=$(FLEET_COLLECT_BANNER_PER_WINDOW_MS=0 in_phase banner_budget)
 [ "$b" = 30 ] || fail "A: per-window 0 is the old fixed budget (got: $b)"
+# shellcheck disable=SC2034  # read by the sourced banner_budget
 b=$( BIN="$WORK/bin"; . "$BIN/fleet-lib.sh"; . "$WORK/phase.sh"; SOCKETS=fixture; FLEET_ACCOUNTS_DIR="$WORK/none"; banner_budget )
 [ "$b" = 30 ] || fail "A: no accounts dir (phase is a no-op) must be just the floor (got: $b)"
 ok "budget = max(floor, windows × 1.5s): 24 → 36s, 4 → 30s; floor/0/no-accounts honoured"
@@ -167,7 +169,7 @@ hbget() { sed -n "s/^$1=//p" "$G/collect.heartbeat" | head -1; }
 # B ran the phase in THIS shell, so its progress file carries our $$ — not a tick's.
 rm -f "$G/banner.cursor" "$G/collect.phase.cursor" "$G"/collect.banner.prog.*
 run_tick FLEET_COLLECT_BANNER_PER_WINDOW_MS=500 || fail 'C: the tick must exit 0'
-[ "$(hbget phase)" = done ] || fail 'C: the tick must reach phase=done'
+[ "$(hbget phase)" = 'done' ] || fail 'C: the tick must reach phase=done'
 case " $(hbget over) " in *' banner '*) fail "C: the banner phase was killed with a window-scaled budget (over=$(hbget over))" ;; esac
 grep -q 'phase banner hit' "$WORK/stderr" && fail 'C: stderr says the banner phase hit its budget'
 [ "$(hbget banner_scanned)" = 24 ] && [ "$(hbget banner_total)" = 24 ] \
