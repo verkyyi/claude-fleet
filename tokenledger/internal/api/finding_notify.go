@@ -20,7 +20,9 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
-// Findings reach WeCom (claude-fleet#1469, EPIC #1665 C2).
+// Findings reach the operator's phone (claude-fleet#1469, EPIC #1665 C2) —
+// through the cluster's notification service kf-notify (claude-fleet#1705),
+// else a bare WeCom group robot.
 //
 // A finding used to live only on the entrance page and the /credentials
 // banner — a 5-second poll by whoever happened to be looking. A setup token
@@ -62,6 +64,27 @@ import (
 // (CCQUOTA_WECOM_WEBHOOK, like the SSO secrets), is never logged — net/http's
 // errors print the URL, so they are unwrapped before they reach the log — and
 // never enters a config file or a page.
+//
+// kf-notify (claude-fleet#1705) is the operator's choice since 2026-10-05: with
+// CCQUOTA_NOTIFY_URL + CCQUOTA_NOTIFY_KEY set it wins over the webhook (kept
+// for one version). The call is the cluster's own convention
+// (24haowan-monorepo smoke/notify-post.js): POST <url>/v1/notify, a Bearer key,
+// {dest, title, body, source, severity, dedupKey, dedupWindowSec, recovery}.
+// The mapping:
+//
+//   - source   = ccquota:finding:<kind>
+//   - dedupKey = ccquota:<Finding.Problem> — one key per problem, across its
+//     whole life, so kf-notify's inbox folds an announcement, its reminders and
+//     its recovery into one event (a recovery finds its event by that key).
+//   - severity = critical → error, warning → warn, a recovery → info (the
+//     service only knows info|warn|error).
+//   - recovery = true on the 已恢复 message.
+//   - dedupWindowSec = kfDedupWindow: the dedup rules above are the real
+//     ones; kf-notify's own fold (same key + severity inside its window, 1 h
+//     by default) would otherwise swallow a 「有变化」 sent within the hour.
+//
+// The key is a Bearer secret: environment only, never logged, never in an
+// error (the URL carries none, but the error path is the same as the webhook's).
 
 // notifyTick is how often the notifier evaluates. A minute is well inside the
 // EPIC's ≤ 5 minutes and far above anything a robot would mind.
@@ -76,6 +99,14 @@ const maxPerTick = 10
 // defaultNotifyRepeat is CCQUOTA_WECOM_REPEAT_HOURS's default.
 const defaultNotifyRepeat = 6 * time.Hour
 
+// kfDedupWindow is the window kf-notify folds a repeated (dedupKey, severity)
+// in. Short: it only has to catch a true duplicate.
+const kfDedupWindow = 60
+
+// defaultKfDest is kf-notify's dest when CCQUOTA_NOTIFY_DEST is unset — the
+// cluster's default (notify-post.js).
+const defaultKfDest = "alerts.prod"
+
 // recoverKinds are the finding kinds whose disappearance is worth a message:
 // each one clears only because a person acted (a token re-imported, a login
 // redone, the vault unlocked) or a machine came back.
@@ -83,9 +114,13 @@ var recoverKinds = map[string]bool{
 	"cred_vault_locked": true, "cred_setup_token": true, "account_login": true, "stale_agent": true,
 }
 
-// FindingNotifier is the WeCom side of the findings page: what to send where.
+// FindingNotifier is the push side of the findings page: what to send where.
 // Nil on the Server means off, and the hub is byte for byte what it was.
+// KfURL set ⇒ kf-notify; else Webhook.
 type FindingNotifier struct {
+	KfURL   string        // kf-notify's base URL (…/v1/notify is appended)
+	KfKey   string        // kf-notify's Bearer key (a secret)
+	KfDest  string        // kf-notify's dest ("" = alerts.prod)
 	Webhook string        // the group robot's webhook URL (a secret: it carries the key)
 	Repeat  time.Duration // remind about a standing problem this often; 0 = never
 	HubURL  string        // prefix for a finding's Link in the message, "" = no link
@@ -95,32 +130,69 @@ type FindingNotifier struct {
 	retryAt time.Time
 }
 
-// FindingNotifierFromEnv reads CCQUOTA_WECOM_WEBHOOK (unset ⇒ nil, off),
-// CCQUOTA_WECOM_REPEAT_HOURS (6; 0 = once only) and CCQUOTA_WECOM_LOCALE
-// (zh-CN). hubURL is the public address links are built on.
+// FindingNotifierFromEnv reads CCQUOTA_NOTIFY_URL + CCQUOTA_NOTIFY_KEY (+
+// CCQUOTA_NOTIFY_DEST) for kf-notify, else CCQUOTA_WECOM_WEBHOOK; neither ⇒
+// nil, off. CCQUOTA_NOTIFY_REPEAT_HOURS (6; 0 = once only) and
+// CCQUOTA_NOTIFY_LOCALE (zh-CN) each fall back to their CCQUOTA_WECOM_ name.
+// hubURL is the public address links are built on.
 func FindingNotifierFromEnv(getenv func(string) string, hubURL string) (*FindingNotifier, error) {
-	wh := strings.TrimSpace(getenv("CCQUOTA_WECOM_WEBHOOK"))
-	if wh == "" {
-		return nil, nil
-	}
-	u, err := url.Parse(wh)
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
-		// The value is a secret: the error says what is wrong, not what it was.
-		return nil, errors.New("CCQUOTA_WECOM_WEBHOOK is not an http(s) URL")
-	}
-	n := &FindingNotifier{Webhook: wh, Repeat: defaultNotifyRepeat, HubURL: strings.TrimRight(hubURL, "/"), Locale: i18n.ZhCN,
+	n := &FindingNotifier{Repeat: defaultNotifyRepeat, HubURL: strings.TrimRight(hubURL, "/"), Locale: i18n.ZhCN,
 		Client: &http.Client{Timeout: 10 * time.Second}}
-	if v := strings.TrimSpace(getenv("CCQUOTA_WECOM_REPEAT_HOURS")); v != "" {
+	kfURL, kfKey := strings.TrimSpace(getenv("CCQUOTA_NOTIFY_URL")), strings.TrimSpace(getenv("CCQUOTA_NOTIFY_KEY"))
+	switch {
+	case kfURL != "" && kfKey != "":
+		if !isHTTPURL(kfURL) {
+			return nil, errors.New("CCQUOTA_NOTIFY_URL is not an http(s) URL")
+		}
+		n.KfURL, n.KfKey = strings.TrimRight(kfURL, "/"), kfKey
+		n.KfDest = strings.TrimSpace(getenv("CCQUOTA_NOTIFY_DEST"))
+	case kfURL != "" || kfKey != "":
+		// Half a kf-notify config is a mistake, not a choice: say so rather
+		// than quietly fall back to the webhook. Names only, never values.
+		return nil, errors.New("CCQUOTA_NOTIFY_URL and CCQUOTA_NOTIFY_KEY go together: set both or neither")
+	default:
+		wh := strings.TrimSpace(getenv("CCQUOTA_WECOM_WEBHOOK"))
+		if wh == "" {
+			return nil, nil
+		}
+		if !isHTTPURL(wh) {
+			// The value is a secret: the error says what is wrong, not what it was.
+			return nil, errors.New("CCQUOTA_WECOM_WEBHOOK is not an http(s) URL")
+		}
+		n.Webhook = wh
+	}
+	if name, v := envEither(getenv, "CCQUOTA_NOTIFY_REPEAT_HOURS", "CCQUOTA_WECOM_REPEAT_HOURS"); v != "" {
 		h, err := strconv.ParseFloat(v, 64)
 		if err != nil || h < 0 {
-			return nil, fmt.Errorf("CCQUOTA_WECOM_REPEAT_HOURS=%q: want a number of hours ≥ 0", v)
+			return nil, fmt.Errorf("%s=%q: want a number of hours ≥ 0", name, v)
 		}
 		n.Repeat = time.Duration(h * float64(time.Hour))
 	}
-	if v := strings.TrimSpace(getenv("CCQUOTA_WECOM_LOCALE")); v != "" {
+	if _, v := envEither(getenv, "CCQUOTA_NOTIFY_LOCALE", "CCQUOTA_WECOM_LOCALE"); v != "" {
 		n.Locale = i18n.Normalize(v)
 	}
 	return n, nil
+}
+
+// Channel names where the notifier pushes, for the log: "kf-notify" or "wecom".
+func (n *FindingNotifier) Channel() string {
+	if n.KfURL != "" {
+		return "kf-notify"
+	}
+	return "wecom"
+}
+
+func isHTTPURL(s string) bool {
+	u, err := url.Parse(s)
+	return err == nil && (u.Scheme == "https" || u.Scheme == "http") && u.Host != ""
+}
+
+// envEither is the new name's value, else the old one's, with the name read.
+func envEither(getenv func(string) string, name, old string) (string, string) {
+	if v := strings.TrimSpace(getenv(name)); v != "" {
+		return name, v
+	}
+	return old, strings.TrimSpace(getenv(old))
 }
 
 // RunFindingNotify evaluates on notifyTick until ctx ends. A no-op without a
@@ -250,7 +322,7 @@ func (n *FindingNotifier) reconcile(st *store.Store, fs []findings.Finding, now 
 
 func (n *FindingNotifier) fail(now time.Time, err error) {
 	n.retryAt = now.Add(notifyBackoff)
-	log.Printf("findings notify: wecom: %v — retrying after %s", err, notifyBackoff)
+	log.Printf("findings notify: %s: %v — retrying after %s", n.Channel(), err, notifyBackoff)
 }
 
 func severityRank(s string) int {
@@ -335,19 +407,91 @@ func humanDuration(d time.Duration, loc string) string {
 // wecomMaxContent is the robot API's cap on a markdown message's content.
 const wecomMaxContent = 4000
 
-// send posts one markdown message to the robot. The robot answers
-// {"errcode":0,"errmsg":"ok"}; anything else is a failure.
+// send posts one message to kf-notify when it is configured, else to the robot.
 func (n *FindingNotifier) send(x notice, now time.Time) error {
+	if n.KfURL != "" {
+		return n.sendKf(x, now)
+	}
+	return n.sendWecom(x, now)
+}
+
+// kfSeverity maps a finding's severity onto kf-notify's info|warn|error.
+var kfSeverity = map[string]string{"critical": "error", "warning": "warn"}
+
+// sendKf posts one notice to kf-notify. Any 2xx is delivered — {ok:true} and
+// muted / suppressed / skipped all mean the service took it; anything else
+// (a 4xx for a wrong dest or key, a 429, a 5xx) is a failure.
+func (n *FindingNotifier) sendKf(x notice, now time.Time) error {
+	kind, problem, severity := x.finding.Kind, x.finding.Problem, kfSeverity[x.finding.Severity]
+	title := ""
+	if x.kind == "recovered" {
+		kind, problem, severity = x.prev.Kind, x.prev.Problem, "info"
+		title = noticeHeads[x.kind].In(n.locale()) + " · " + x.prev.Title
+	} else {
+		title = localizeFinding(x.finding, n.locale()).Title
+	}
+	if severity == "" {
+		severity = "warn"
+	}
+	dest := n.KfDest
+	if dest == "" {
+		dest = defaultKfDest
+	}
+	msg := map[string]any{"dest": dest, "title": truncRunes(title, 200), "body": n.message(x, now),
+		"source": "ccquota:finding:" + kind, "severity": severity, "dedupKey": "ccquota:" + problem,
+		"dedupWindowSec": kfDedupWindow}
+	if x.kind == "recovered" {
+		msg["recovery"] = true
+	}
+	body, _ := json.Marshal(msg)
+	req, err := http.NewRequest(http.MethodPost, n.KfURL+"/v1/notify", bytes.NewReader(body))
+	if err != nil {
+		return errors.New("kf-notify: cannot build the request")
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+n.KfKey)
+	resp, err := n.client().Do(req)
+	if err != nil {
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err
+		}
+		return fmt.Errorf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode/100 != 2 {
+		// The answer is the service's own words (`未知 dest`, `rate limited`):
+		// no secret is echoed back, but keep it short.
+		return fmt.Errorf("kf-notify answered %d %s", resp.StatusCode, truncRunes(strings.TrimSpace(string(raw)), 120))
+	}
+	return nil
+}
+
+func truncRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n])
+}
+
+func (n *FindingNotifier) client() *http.Client {
+	if n.Client != nil {
+		return n.Client
+	}
+	return &http.Client{Timeout: 10 * time.Second}
+}
+
+// sendWecom posts one markdown message to the robot. The robot answers
+// {"errcode":0,"errmsg":"ok"}; anything else is a failure.
+func (n *FindingNotifier) sendWecom(x notice, now time.Time) error {
 	content := n.message(x, now)
 	if len(content) > wecomMaxContent {
 		content = content[:wecomMaxContent]
 	}
 	body, _ := json.Marshal(map[string]any{"msgtype": "markdown", "markdown": map[string]string{"content": content}})
-	client := n.Client
-	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
-	}
-	resp, err := client.Post(n.Webhook, "application/json", bytes.NewReader(body))
+	resp, err := n.client().Post(n.Webhook, "application/json", bytes.NewReader(body))
 	if err != nil {
 		// A *url.Error prints the URL — the key with it. Keep the cause only.
 		var ue *url.Error
