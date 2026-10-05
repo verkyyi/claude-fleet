@@ -101,6 +101,26 @@ class LiveTests(unittest.TestCase):
         # Without --merged-at: unchanged.
         self.assertEqual(self.probe(age="10:00"), "young-agent:claude:600s<1800s")
 
+    def test_merged_looping_worker_is_reapable(self):
+        # Issue #1356 (R4 of EPIC #1529): a worker whose own PR merged during its
+        # life, still stamped `looping` waiting on that merge, is done.
+        NOW = 1_000_000
+        waived = []
+        self.assertIsNone(self.probe(state="looping", age="10:00", merged_at=NOW-300, now=NOW, waived=waived))
+        self.assertEqual(waived, ["claude:600s<1800s", "looping"])
+        self.assertIsNone(self.probe(state="looping", age="2:00:00", merged_at=NOW-300, now=NOW))
+        # No merge time, or a merge before this agent started: still live.
+        self.assertEqual(self.probe(state="looping", age="2:00:00"), "state:looping")
+        self.assertEqual(self.probe(state="looping", age="10:00", merged_at=NOW-900, now=NOW), "state:looping")
+        # No agent under the pane: nothing shipped, the stamp stands.
+        self.assertEqual(self.probe(state="looping", comm="zsh", merged_at=NOW-300, now=NOW), "state:looping")
+        # An ACTIVE Loop, a running child or bg job still retain it (#1331, #1370).
+        wake = f"kind=wakeup next={int(time.time())+1800} ttl=1800\t"
+        self.assertEqual(self.probe(state="looping", age="10:00", merged_at=NOW-300, now=NOW, loop=wake), "retained:loop")
+        self.assertEqual(self.probe(state="looping", age="10:00", merged_at=NOW-300, now=NOW, wait="children"), "retained:children")
+        # Only `looping` is waived — a working agent never is.
+        self.assertEqual(self.probe(state="working", age="2:00:00", merged_at=NOW-300, now=NOW), "state:working")
+
     def test_merged_at_cli_output(self):
         NOW = 1_000_000
         def run(*extra):

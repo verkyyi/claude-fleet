@@ -237,14 +237,22 @@ fleet_gh_rest_issue_close() {  # fleet_gh_rest_issue_close <repo> <issue>
 # answer dash-reap's merged-check reads, with the REST fallback. Same argv as the
 # pre-#1042 call on the healthy path. REST's `head=` filter wants owner:branch;
 # a fleet branch is pushed to the repo itself, so the owner is the repo's.
-fleet_gh_merged_heads() {  # fleet_gh_merged_heads <repo> <branch>
+# `--at` (issue #1542) appends a TAB + the PR's mergedAt (ISO-8601 UTC) to each
+# line, so the reaper can hand the liveness probe the merge time (#1329) without a
+# second round-trip; without it the argv is byte for byte the pre-#1542 one.
+fleet_gh_merged_heads() {  # fleet_gh_merged_heads <repo> <branch> [--at]
   local repo="$1" branch="$2" out rc
+  local gq='.[].headRefName' gj=headRefName rq='.[] | select(.merged_at != null) | .head.ref'
+  if [ "${3:-}" = --at ]; then
+    gq='.[] | "\(.headRefName)\t\(.mergedAt)"'; gj=headRefName,mergedAt
+    rq='.[] | select(.merged_at != null) | "\(.head.ref)\t\(.merged_at)"'
+  fi
   out=$(fleet_gh_run graphql reap -R "$repo" pr list --state merged --head "$branch" \
-          --json headRefName -q '.[].headRefName'); rc=$?
+          --json "$gj" -q "$gq"); rc=$?
   if [ "$rc" -eq 0 ]; then [ -n "$out" ] && printf '%s\n' "$out"; return 0; fi
   [ "$rc" -eq "$FLEET_GH_LIMITED_RC" ] || return "$rc"
   out=$(fleet_gh_run core reap api "repos/$repo/pulls?state=closed&head=${repo%%/*}:$branch&per_page=100" \
-          --jq '.[] | select(.merged_at != null) | .head.ref') || return $?
+          --jq "$rq") || return $?
   fleet_gh_log "fallback-ok op=merged-heads repo=$repo branch=$branch"
   [ -n "$out" ] && printf '%s\n' "$out"
   return 0

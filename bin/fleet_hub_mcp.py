@@ -172,7 +172,7 @@ def make_server(hub, *, token=None, oauth=None, grant_tokens=False):
 
     @server.tool(annotations=lifecycle, structured_output=True)
     async def worker_reap(worker_id: str, idempotency_key: str) -> dict[str, Any]:
-        """The dash's confirmed reap (dash-reap.sh --yes): close the window, remove the worktree when clean (a dirty one is kept), close the issue; a live agent is refused with the reason. Needs worker:reap; poll operation_get."""
+        """The dash's confirmed reap (dash-reap.sh --yes): close the window, remove the worktree when clean (a dirty one is kept), leave the issue to its PR (an unlanded one stays open, claim released); a live agent is refused with the reason. Needs worker:reap; poll operation_get."""
         return await invoke("worker_reap", {"worker_id": worker_id, "idempotency_key": idempotency_key})
 
     # GitHub through the fleet's own rails (issue #1274): reads come from the

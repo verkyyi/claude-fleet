@@ -174,7 +174,9 @@ off on its own while this loop's heartbeat is fresh (step 1).
 A finished worker holds a slot until something reaps it. Don't wait to be told:
 for each member whose PR is MERGED (and deploy-green, if applicable) while its
 window still exists, reap it —
-`bash ~/.claude/fleet/bin/dash-reap.sh <window-target>` — which records a
+`bash ~/.claude/fleet/bin/dash-reap.sh issue-<N>` (in a multi-repo fleet
+`<slug>:issue-<N>`; never a `session:index` or a window name — those are
+`refused:target`, exit 4, issue #869) — which records a
 `/fleet-history` row before disposing of anything.
 
 **A member still running its `/loop` is delivered, and KEPT** (issue #1331, the

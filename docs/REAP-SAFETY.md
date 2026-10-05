@@ -41,6 +41,15 @@ The read-only `fleet-reap-live.py` gate blocks disposal when:
   `looping`, `busy` and `waiting`;
 - any pane in that window contains a Claude or Codex process younger than
   `FLEET_REAP_MIN_AGE` seconds (default **1800**, or 30 minutes);
+
+A worker that **shipped its own PR** is the one exception to the last two
+(issue #1542): `dash-reap.sh` reads the branch's merged PR with its `mergedAt`
+and passes it as `--merged-at`, and an agent that was already running at that
+merge is waived past the age gate (#1248, as the cleanup daemon does for #1329)
+and past a `looping` stamp (#1356 — the round it scheduled to wait for the
+merge). A worker spawned onto an already-merged branch started after the merge
+and keeps both gates; an active Loop, a child or a bg job still retain it. The
+waiver is logged on stderr as `waived:…`.
 - window/process metadata cannot be read reliably. Probes have a five-second
   timeout and fail closed; missing Python/helper files also block disposal.
 
@@ -77,6 +86,16 @@ This equality check is conservative: a fast-forwarded branch at the base tip wit
 no GitHub merged-PR evidence is also kept. It does not reconstruct the branch's
 creation point; after base advances, a branch created at the previous base can
 become a strict ancestor. The separate liveness guards remain necessary.
+
+## The issue is not the reaper's to close
+
+A reap disposes of a window and a worktree (issue #1542, from #1309 and #867).
+A **landed** row (`merged-pr` / `ancestor`) leaves the issue exactly as it is:
+the PR's `Closes #N` closed it, and one still open is a worker that said "keep
+open until the read-back". An **unlanded** row (`unmerged` / `dirty`, only after
+a confirm or `--yes`) leaves the issue OPEN, removes the `@me` assignee (the
+claim) and posts one no-relay note — naming a zero-commit worker "never started"
+— so the EPIC report never counts a reaped attempt as `CLOSED/COMPLETED`.
 
 The cleanup daemon separately enforces a [merged grace](CLEANUP.md#the-pieces)
 of 600 seconds by default. The same daemon implements idle-scratch window cleanup and the dashboard `rNm`
