@@ -73,7 +73,7 @@ print(line[1:] if line.startswith("/") else ""); sys.exit(1)
 (fake / 'fzf').chmod(0o755)
 conf = work / 'conf/fleets/fleet-test/conf'
 conf.parent.mkdir(parents=True)
-conf.write_text('FLEET_SIDEBAR=1\n')
+conf.write_text('FLEET_SIDEBAR=1\nFLEET_DASH_WINDOW=1\n')
 checks = 0
 client = None
 terminal = None
@@ -249,10 +249,10 @@ try:
 
     # --- 8. knob off → F9 is the direct jump again --------------------------------
     tm('select-window', '-t', w1)
-    conf.write_text('FLEET_SIDEBAR=1\nFLEET_HOME_SIDEBAR_FIRST=0\n')
+    conf.write_text('FLEET_SIDEBAR=1\nFLEET_DASH_WINDOW=1\nFLEET_HOME_SIDEBAR_FIRST=0\n')
     os.write(terminal, b'\x1b[20~')
     wait_for(lambda: current() == hub, 'FLEET_HOME_SIDEBAR_FIRST=0: F9 must jump to the hub')
-    conf.write_text('FLEET_SIDEBAR=1\n')
+    conf.write_text('FLEET_SIDEBAR=1\nFLEET_DASH_WINDOW=1\n')
 
     # --- 9. a zoomed task keeps going home ----------------------------------------
     tm('select-window', '-t', w1)

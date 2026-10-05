@@ -101,8 +101,14 @@ Do not install from memory: read the doc and work from it.
   by a previous holder. Issue keys are never minted; no `.gen` ⇒ byte for byte as
   before. The mod inbox is per server lifetime too (`fleet_mod_inbox_reset`).
   `fleet-children-selftest.sh` §3 and `origin-selftest.sh` D pin it.
-- **Panel windows, not sessions.** Windows named `dash`, `plan`, `backlog` are
-  treated as panels and excluded from the dash session list.
+- **Panel windows, not sessions.** Windows named `dash`, `plan`, `backlog`,
+  `home` are treated as panels and excluded from the dash session list, the
+  session counts, snapshots and restore. **The full-screen list retired**
+  (issue #1533): by default no `plan` window is built — a fleet's resting window
+  is `home`, a plain shell the task list draws beside, and ⌂ / F9 / prefix g all
+  end on that list, focused (`fleet-sidebar.sh home`). `FLEET_DASH_WINDOW=1`
+  brings the old dash hub back for one batch; adding a panel name means adding
+  it everywhere `dash|plan|backlog` is spelled.
 - **A view session shares the fleet's windows; never scan or name them bare**
   (issue #1489). A shell or proxy client of this machine (`fleet-remote-view.sh
   attach --shell` / a view id) attaches to a GROUPED session of its own,

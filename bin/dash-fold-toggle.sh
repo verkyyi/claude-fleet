@@ -178,7 +178,7 @@ selfkey=''
 while IFS=$US read -r wsess wid wname wpath wiss worig wwt wexp wrepo _; do
   [ -n "$wname" ] || continue
   [ -n "$SESS" ] && [ "$wsess" != "$SESS" ] && continue
-  case "$wname" in dash|plan|backlog) continue ;; esac
+  case "$wname" in dash|plan|backlog|home) continue ;; esac
   okp_v "$wrepo"
   okey_v "$wiss" "$wwt" "$wpath"
   [ -n "$okey" ] || continue

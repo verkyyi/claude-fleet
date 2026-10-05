@@ -5231,7 +5231,7 @@ fleet_win_name() {
   fleet_clip_display "$cols" "$s"; s="${clip_out:-}"; s="${s%-}"
   # Reserved panel names — keep this set in lockstep with fleet_session_count /
   # fleet_session_count_for / the dash's panel filter.
-  case "$s" in dash|plan|backlog) s='' ;; esac
+  case "$s" in dash|plan|backlog|home) s='' ;; esac
   printf '%s' "$s"
 }
 
@@ -5344,7 +5344,7 @@ _fleet_sessmap_field() {
 # every live fleet socket (issue #159), since no single server sees them all now.
 fleet_hub_sessions() {
   fleet_list_windows_all '#{session_name} #{window_name}' | awk '
-    { if ($2=="plan" || $2=="dash") f[$1]=1 } END { for (s in f) print s }'
+    { if ($2=="plan" || $2=="dash" || $2=="home") f[$1]=1 } END { for (s in f) print s }'
 }
 
 # CHEAP: count the live Claude WORKING-session windows across every fleet (the
@@ -5365,12 +5365,12 @@ fleet_hub_sessions() {
 # (@remote, issue #1424) rides the same field as `remote` and is no session here.
 _fleet_session_tally() {   # → "<awake> <sleepers>" across every fleet
   fleet_list_windows_all '#{session_name} #{window_name} @L=#{?@remote,remote,#{@worker_lifecycle}}' | awk '
-    { rows[NR]=$0; if ($2=="plan" || $2=="dash") fleet[$1]=1 }
+    { rows[NR]=$0; if ($2=="plan" || $2=="dash" || $2=="home") fleet[$1]=1 }
     END {
       for (i=1; i<=NR; i++) {
         n=split(rows[i], a, " "); s=a[1]; w=a[2]; l=""
         if (n>=3 && a[n] ~ /^@L=/) l=substr(a[n], 4)
-        if (!fleet[s] || w=="dash" || w=="plan" || w=="backlog" || l=="remote") continue
+        if (!fleet[s] || w=="dash" || w=="plan" || w=="backlog" || w=="home" || l=="remote") continue
         if (l=="sleeping" || l=="failed") z++; else c++
       }
       print c+0, z+0
@@ -5393,12 +5393,12 @@ _fleet_session_tally_for() {   # <sess> → "<awake> <sleepers>" in that fleet
   tmux -L "$(fleet_socket "$1")" list-windows -t "$1" -F '#{window_name} @L=#{?@remote,remote,#{@worker_lifecycle}}' 2>/dev/null | awk '
     { l=""
       if (match($0, / @L=[^ ]*$/)) { l=substr($0, RSTART+4); name=substr($0, 1, RSTART-1) } else name=$0
-      if (name=="plan" || name=="dash") hub=1; rows[NR]=name; life[NR]=l }
+      if (name=="plan" || name=="dash" || name=="home") hub=1; rows[NR]=name; life[NR]=l }
     END {
       if (!hub) { print 0, 0; exit }
       for (i=1; i<=NR; i++) {
         n=rows[i]
-        if (n=="dash" || n=="plan" || n=="backlog" || life[i]=="remote") continue
+        if (n=="dash" || n=="plan" || n=="backlog" || n=="home" || life[i]=="remote") continue
         if (life[i]=="sleeping" || life[i]=="failed") z++; else c++
       }
       print c+0, z+0
@@ -6331,7 +6331,7 @@ EOF
     norepo=${line%%|*}; line=${line#*|}; origin=${line%%|*}; line=${line#*|}
     path=${line%%|*}; name=${line#*|}
     [ "$wid" = "$t" ] && continue
-    case "$name" in dash|plan|backlog) continue ;; esac
+    case "$name" in dash|plan|backlog|home) continue ;; esac
     case "$origin" in issue-*|scratch-*|*:issue-*|*:scratch-*) ;; *) continue ;; esac
     pre=''
     if _fleet_hosts_many "$sess"; then

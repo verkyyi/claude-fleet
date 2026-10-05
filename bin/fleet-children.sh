@@ -98,7 +98,7 @@ rows() {
     origin=${rest%%|*}; rest=${rest#*|}
     path=${rest%%|*}; name=${rest#*|}
     [ -n "$sess" ] && [ "$ws" != "$sess" ] && continue
-    case "$name" in dash|plan|backlog) continue ;; esac
+    case "$name" in dash|plan|backlog|home) continue ;; esac
     pre=''
     if [ "$multi" = 1 ]; then
       # okp_v: the window's repo slug; unknown → `?:`, a key no @origin names.

@@ -261,7 +261,11 @@ def sync(session, enabled, width, lock):
               # A task: issue worker, repo scratch, a no-repo session in $HOME (#996),
               # or a proxy window onto another machine's session (`@remote`, #1475):
               # the list stays on the left, the other machine's pane on the right.
-              bool(issue or raw == "1" or worktree or norepo == "1" or remote) and
+              # `home` — the fleet's resting window once the full-screen list
+              # retired (issue #1533): a shell, but the list's input line is how
+              # a fleet with no task yet starts one, so the list shows there too.
+              bool(issue or raw == "1" or worktree or norepo == "1" or remote or
+                   name == "home") and
               bool(workers) and int(cols) >= width + 1 + 80)
     if not wanted or zoomed == "1":
         leave_navigation(session)

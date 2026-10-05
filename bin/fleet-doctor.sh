@@ -2383,7 +2383,7 @@ fi
 # A Claude window: not a panel, not codex, and stamped by the launcher (@cc_model)
 # or the state hooks (@claude_state). Columns: total alive off:version stale none.
 mcount=$(printf '%s\n' "$mwin" | awk -F '\t' -v now="$(date +%s)" -v max="$mod_max" '
-  NF < 5 || $1 == "dash" || $1 == "plan" || $1 == "backlog" || $2 == "codex" || $3 == "" { next }
+  NF < 5 || $1 == "dash" || $1 == "plan" || $1 == "backlog" || $1 == "home" || $2 == "codex" || $3 == "" { next }
   { n++
     if ($5 ~ /^[0-9]+$/ && now - $5 <= max) a++
     else if ($4 == "off:version") v++

@@ -42,6 +42,11 @@ export PATH="$WORK/bin:$PATH"
 # The server is started from THIS environment, so the hook's run-shell jobs
 # inherit the sandbox log dir.
 export FLEET_HUB_VISITS_LOGDIR="$WORK/logs"
+# The meter counts trips to the full-screen hub, which only FLEET_DASH_WINDOW=1
+# still builds (issue #1533) — this fleet keeps it.
+export FLEET_CONF_DIR="$WORK/conf"
+mkdir -p "$FLEET_CONF_DIR/fleets/t"
+printf 'FLEET_DASH_WINDOW=1\n' > "$FLEET_CONF_DIR/fleets/t/conf"
 LOG="$WORK/logs/hub-visits-t.log"
 
 CLIENT_PID=

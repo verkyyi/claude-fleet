@@ -30,6 +30,15 @@
 #   STATIC GUARD — the shipped conf wires the ⌂ hub range to `--home` and leaves
 #     the F9 bind on the plain toggle, and hub-zoom.sh understands --home.
 #
+#   DEFAULT (issue #1533) — the full-screen list retired: with no FLEET_DASH_WINDOW
+#     ⌂, F9 and prefix g all end on the TASK LIST, focused (the client in the
+#     fleet-sidebar key table, the list at the window's {top-left}), from every
+#     start: a task with no list yet, with the list, with a name typed on it (kept),
+#     zoomed, with the list switched off, from a panel window, and with NO window
+#     that can show it (hub-session.sh builds `home`). F9 is three-state: focus, then
+#     hide (prefix e's off), then show again. No `plan` window is ever built.
+#     Every leg above runs with FLEET_DASH_WINDOW=1 — the way back, unchanged.
+#
 # tmux absent → SKIP cleanly (exit 0), per the run-selftests convention.
 # Exit 0 = pass. Non-zero = fail (prints which assertion diverged).
 set -uo pipefail
@@ -48,7 +57,9 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/szh-selftest.XXXXXX")" || exit 2
 # server. The shim routes the plain `tmux` hub-zoom.sh calls there AND strips a
 # leading -L/-S so fleet_hub_pane's `tmux -L <session> …` (fleet-lib.sh) lands
 # on the same isolated socket instead of escaping to a `-L <session>` server.
-SOCK="$WORK/tmux.sock"
+# Named after the session: fleet-sidebar.sh (the default legs) only acts on a
+# server whose socket is the fleet's own label (issue #159).
+SOCK="$WORK/t"
 mkdir -p "$WORK/bin"
 cat > "$WORK/bin/tmux" <<EOF
 #!/bin/sh
@@ -69,6 +80,13 @@ trap 'exit 130' INT TERM HUP
 
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 
+# The fleet's conf. FLEET_DASH_WINDOW=1 for every leg up to the default ones: they
+# pin the old hub exactly. Exported BEFORE the server starts, so the list's view
+# (spawned by the server) reads this conf dir too, never the operator's.
+export FLEET_CONF_DIR="$WORK/conf" FLEET_HUB_VISITS_LOGDIR="$WORK/logs"
+mkdir -p "$FLEET_CONF_DIR/fleets/t"
+printf 'FLEET_DASH_WINDOW=1\n' > "$FLEET_CONF_DIR/fleets/t/conf"
+
 # --- build the hub: session 't', a 'plan' window + a plain 'worker' window to
 #     jump from. Every pane runs `sleep`, not a login shell: once the task-bar
 #     legs attach a real client, an interactive shell's profile could end its pane
@@ -79,7 +97,15 @@ fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 # (tmux will not set window_zoomed_flag on a single-pane window), and so the
 # assertions below actually prove hub-zoom homes on the DASH rather than on
 # "whatever pane happens to be there". -------------------------------------
-tmux new-session -d -s t -n plan -x 200 -y 50 'sleep 600' 2>/dev/null || fail "could not start isolated tmux server"
+# -f /dev/null: never the operator's ~/.tmux.conf — its fleet hooks would run the
+# LIVE install's scripts against this server. The shipped fleet-sidebar table's
+# F9 and paste-pin (C-M-S-F12, issue #1105) binds are the one piece of the conf
+# the legs need: switch-client -T refuses a table that does not exist, and the
+# list's view pins a navigating client by sending it that key.
+tmux -f /dev/null new-session -d -s t -n plan -x 200 -y 50 'sleep 600' 2>/dev/null || fail "could not start isolated tmux server"
+grep -E '^bind -T fleet-sidebar (F9|C-M-S-F12) ' "$CONF" > "$WORK/sidebar-binds.conf"
+[ "$(wc -l < "$WORK/sidebar-binds.conf")" -eq 2 ] || fail "conf: the fleet-sidebar F9 / C-M-S-F12 binds moved"
+tmux source-file "$WORK/sidebar-binds.conf" || fail "could not load the fleet-sidebar binds"
 tmux new-window -d -t t: -n worker 'sleep 600'
 dashp="$(tmux list-panes -t t:plan -F '#{pane_id}' | head -n1)"
 sidep="$(tmux split-window -d -P -F '#{pane_id}' -t "$dashp" 'sleep 600')"
@@ -165,13 +191,14 @@ run_zoom
 # (client key table fleet-sidebar) and stays in the task; the second press — which
 # the conf's fleet-sidebar-table binds pass as --nav — goes to the hub. Needs a
 # real client for the key table: a pty via `script`, as hub-visits-selftest does.
-export FLEET_CONF_DIR="$WORK/conf" FLEET_HUB_VISITS_LOGDIR="$WORK/logs"
 VLOG="$WORK/logs/hub-visits-t.log"
 attach_bg() {
+  # 200 columns: the default legs need room for the list beside a worker (111+).
+  local a="stty cols 200 rows 50 2>/dev/null; exec '$REAL_TMUX' -S '$SOCK' attach -t t:worker"
   if script -q /dev/null true >/dev/null 2>&1; then           # BSD/macOS
-    script -q /dev/null tmux -S "$SOCK" attach -t t:worker >/dev/null 2>&1 &
+    env -u TMUX script -q /dev/null sh -c "$a" >/dev/null 2>&1 &
   elif script -q -c true /dev/null >/dev/null 2>&1; then      # GNU/util-linux
-    script -q -c "$REAL_TMUX -S '$SOCK' attach -t t:worker" /dev/null >/dev/null 2>&1 &
+    env -u TMUX script -q -c "$a" /dev/null >/dev/null 2>&1 &
   else
     return 1
   fi
@@ -228,8 +255,7 @@ else
   tmux set-option -up -t 't:worker.{top-left}' @sidebar_input
 
   # S7 — the knob off: word for word today's behaviour, first press goes home.
-  mkdir -p "$FLEET_CONF_DIR/fleets/t"
-  printf 'FLEET_HOME_SIDEBAR_FIRST=0\n' > "$FLEET_CONF_DIR/fleets/t/conf"
+  printf 'FLEET_DASH_WINDOW=1\nFLEET_HOME_SIDEBAR_FIRST=0\n' > "$FLEET_CONF_DIR/fleets/t/conf"
   on_worker
   run_zoom --home --client "$client"
   assert_home_split "S7 ⌂ with FLEET_HOME_SIDEBAR_FIRST=0"
@@ -237,8 +263,91 @@ else
   on_worker
   run_zoom --client "$client"
   assert_home_split "S7 F9 with FLEET_HOME_SIDEBAR_FIRST=0"
-  rm -f "$FLEET_CONF_DIR/fleets/t/conf"
+  printf 'FLEET_DASH_WINDOW=1\n' > "$FLEET_CONF_DIR/fleets/t/conf"
   tmux set-option -uw -t t:worker @sidebar_worker
+
+  # ===================  DEFAULT: the list is home (issue #1533)  ==============
+  # No FLEET_DASH_WINDOW: the real fleet-sidebar.sh home draws the real list.
+  # The worker becomes a task (@issue); `plan` stays as an OLD fleet's leftover.
+  printf 'FLEET_SIDEBAR=1\n' > "$FLEET_CONF_DIR/fleets/t/conf"
+  tmux set-option -g default-shell /bin/sh
+  tmux set-option -w -t t:worker @issue 7
+  run_new() { TMUX="$SOCK,1,0" bash --posix "$SCRIPT" "$@"; }
+  on_list() {   # $1 = why, $2 = the window it must end in
+    [ "$(ktable)" = fleet-sidebar ] || fail "$1: key table '$(ktable)', want fleet-sidebar (the list focused)"
+    [ "$(curwin)" = "$2" ] || fail "$1: ended on '$(curwin)', want '$2'"
+    [ "$(tmux display-message -p '#{window_zoomed_flag}')" = 0 ] || fail "$1: the window is still zoomed"
+    [ "$(tmux display-message -p -t '{top-left}' '#{@sidebar}')" = 1 ] || fail "$1: no list on the window's left"
+    [ -n "$(tmux display-message -p '#{@sidebar_worker}')" ] || fail "$1: the window carries no @sidebar_worker"
+  }
+  sconf() { grep '^FLEET_SIDEBAR=' "$FLEET_CONF_DIR/fleets/t/conf" | tail -n1; }
+  view() { tmux display-message -p -t 't:worker.{top-left}' '#{?#{==:#{@sidebar},1},#{pane_id},}'; }
+  plans() { tmux list-windows -t t -F '#{window_name}' | grep -c '^plan$'; }
+
+  # D1 — a task with no list drawn yet: ⌂ draws it and focuses it.
+  on_worker
+  run_new --home --client "$client"
+  on_list "D1 ⌂ in a task with no list yet" worker
+  [ "$(lastcause)" = home-sidebar ] || fail "D1: hub-visit cause '$(lastcause)', want home-sidebar"
+  # D2 — the list on screen: ⌂ focuses it, nothing else moves.
+  on_worker
+  run_new --home --client "$client"
+  on_list "D2 ⌂ with the list on screen" worker
+  # D3 — a name half-typed on its input line: focused, and the name is KEPT
+  #      (the old hub-zoom.sh left the task for the hub here).
+  v=$(view); [ -n "$v" ] || fail "D3: no view to type into"
+  tmux send-keys -t "$v" -l ab
+  for _ in $(seq 1 50); do [ -n "$(tmux display-message -p -t "$v" '#{@sidebar_input}')" ] && break; sleep 0.1; done
+  [ -n "$(tmux display-message -p -t "$v" '#{@sidebar_input}')" ] || fail "D3: the view never marked its input line"
+  on_worker
+  run_new --home --client "$client"
+  on_list "D3 ⌂ with a name typed on the list" worker
+  [ -n "$(tmux display-message -p -t "$v" '#{@sidebar_input}')" ] || fail "D3: ⌂ cleared the typed name"
+  tmux send-keys -t "$v" Escape
+  # D4 — a zoomed task (no list on screen): unzoomed, list drawn, focused.
+  wside="$(tmux split-window -d -P -F '#{pane_id}' -t t:worker 'sleep 600')"
+  on_worker; tmux resize-pane -Z -t "$wside"
+  run_new --home --client "$client"
+  on_list "D4 ⌂ from a zoomed task" worker
+  tmux kill-pane -t "$wside"
+  # D5 — the list switched off (prefix e): ⌂ switches it back on.
+  TMUX="$SOCK,1,0" bash "$BIN/fleet-sidebar.sh" hide t
+  [ "$(sconf)" = FLEET_SIDEBAR=0 ] || fail "D5 setup: hide did not switch the list off ($(sconf))"
+  [ -z "$(view)" ] || fail "D5 setup: the list is still drawn after hide"
+  on_worker
+  run_new --home --client "$client"
+  on_list "D5 ⌂ with the list switched off" worker
+  [ "$(sconf)" = FLEET_SIDEBAR=1 ] || fail "D5: ⌂ must switch the list back on ($(sconf))"
+  # D6 — from a window that cannot show it (an old fleet's plan): the last task.
+  on_worker; tmux select-window -t t:plan
+  run_new --home --client "$client"
+  on_list "D6 ⌂ from the old plan window" worker
+  # D7 — F9 is three-state: focus · hide · show again.
+  on_worker
+  run_new --client "$client"
+  on_list "D7 F9 first press" worker
+  [ "$(lastcause)" = f9-sidebar ] || fail "D7: hub-visit cause '$(lastcause)', want f9-sidebar"
+  run_new --nav --client "$client"
+  [ "$(ktable)" = root ] || fail "D7 F9 second press: key table '$(ktable)', want root"
+  [ -z "$(view)" ] || fail "D7 F9 second press: the list must be hidden"
+  [ "$(sconf)" = FLEET_SIDEBAR=0 ] || fail "D7 F9 second press: hidden like prefix e ($(sconf))"
+  run_new --client "$client"
+  on_list "D7 F9 third press" worker
+  [ "$(sconf)" = FLEET_SIDEBAR=1 ] || fail "D7 F9 third press: the list must be back on"
+  # ⌂ from the list itself (the fleet-sidebar table's own status click: --nav) stays.
+  run_new --home --nav --client "$client"
+  on_list "D7 ⌂ pressed on the list" worker
+  # D8 — prefix g lands in the same place.
+  on_worker
+  TMUX="$SOCK,1,0" bash --posix "$BIN/dash-zoom.sh"
+  on_list "D8 prefix g" worker
+  # D9 — no window can show the list (no task, no home): hub-session.sh builds
+  #      `home`, the list draws beside its shell, focused. Still no new plan.
+  on_worker; tmux set-option -uw -t t:worker @issue; tmux select-window -t t:plan
+  run_new --home --client "$client"
+  on_list "D9 ⌂ with no window that can show the list" home
+  [ "$(tmux list-windows -t t -F '#{window_name}' | grep -c '^home$')" = 1 ] || fail "D9: want exactly one home window"
+  [ "$(plans)" = 1 ] || fail "default: a plan window was built ($(plans) now)"
 fi
 
 # =====================  STATIC GUARD : the shipped wiring  ==================
@@ -261,5 +370,5 @@ awk '/^bind -T fleet-sidebar MouseDown1Status /,/^}$/' "$CONF" | grep -qF 'hub-z
 grep -Eq '^bind -n F9 .*--client' "$CONF" \
   || fail "conf: the root F9 must pass --client so the right client's table switches (#899)"
 
-printf 'selftest PASS: ⌂ --home always lands unzoomed on the DASH; F9 keeps the progressive zoom toggle (#405); both land on the task bar first (#899)\n'
+printf 'selftest PASS: by default ⌂ / F9 / prefix g always end on the task list, focused, and no plan window is built (#1533); with FLEET_DASH_WINDOW=1 ⌂ --home lands unzoomed on the DASH, F9 keeps the zoom toggle (#405), both land on the task bar first (#899)\n'
 exit 0

@@ -124,7 +124,7 @@ census() {
     # shellcheck disable=SC2034  # _pct: the column is read for alignment, not used (yet)
     while IFS="$US" read -r wid name agent mark alive ver _pct src; do
       [ -n "$wid" ] || continue
-      case "$name" in dash|plan|backlog) continue ;; esac
+      case "$name" in dash|plan|backlog|home) continue ;; esac
       [ "$agent" = codex ] && continue
       [ -n "$mark" ] || continue
       N_WIN=$((N_WIN+1))

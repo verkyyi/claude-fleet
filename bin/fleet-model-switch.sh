@@ -121,7 +121,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 . "$BIN/usage-lib.sh"          # fleet_limit_banner / fleet_limit_kind
 
-PANEL_RE='^(plan|dash|backlog)$'
+PANEL_RE='^(plan|dash|backlog|home)$'
 SCROLL="${FLEET_MODEL_SWITCH_SCROLL:--200}"      # capture depth for the banner scan
 VERIFY_WAIT="${FLEET_MODEL_SWITCH_VERIFY:-15}"   # s to wait for the status line to flip
 DIALOG_TRIES="${FLEET_MODEL_SWITCH_DIALOG:-5}"   # Enter presses offered to "Switch model?"

@@ -94,7 +94,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 . "$BIN/usage-lib.sh"          # fleet_limit_banner — the wall this move leaves behind (#870)
 
-PANEL_RE='^(plan|dash|backlog)$'
+PANEL_RE='^(plan|dash|backlog|home)$'
 ACCT_DIR="${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}"
 LAUNCH="${FLEET_MIGRATE_LAUNCH:-$BIN/fleet-claude.sh}"   # selftest seam: a fake launcher
 EXIT_WAIT="${FLEET_MIGRATE_EXIT_WAIT:-30}"                 # s to wait for Claude to exit

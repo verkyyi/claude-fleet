@@ -116,7 +116,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
 
-PANEL_RE='^(plan|dash|backlog)$'
+PANEL_RE='^(plan|dash|backlog|home)$'
 EXIT_WAIT="${FLEET_MOVE_EXIT_WAIT:-30}"     # s to wait for a graceful `/exit`
 TERM_WAIT="${FLEET_MOVE_TERM_WAIT:-10}"     # s to wait after a SIGTERM fallback
 CLOSE_WAIT="${FLEET_MOVE_CLOSE_WAIT:-15}"   # s to wait for the SessionEnd hook

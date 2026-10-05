@@ -123,7 +123,7 @@ def list_agents():
     agents = []
     for line in out.splitlines():
         parts = line.split("\t")
-        if len(parts) != 12 or parts[1] != session or parts[2] in ("dash", "plan", "backlog"):
+        if len(parts) != 12 or parts[1] != session or parts[2] in ("dash", "plan", "backlog", "home"):
             continue
         row = dict(zip(("window_id", "session", "window_name", "issue", "agent", "state", "needs",
                         "origin", "repo", "norepo", "worktree", "path"), parts))

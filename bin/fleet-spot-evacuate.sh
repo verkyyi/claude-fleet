@@ -121,7 +121,7 @@ here=0
 for sess in ${SESSIONS[@]+"${SESSIONS[@]}"}; do
   sock=$(fleet_socket "$sess")
   c=$(tmux -L "$sock" list-windows -t "=$sess" -F '#{@hub}|#{window_name}' 2>/dev/null \
-    | awk -F'|' '$1 != "1" && $2 !~ /^(plan|dash|backlog)$/ { n++ } END { print n+0 }')
+    | awk -F'|' '$1 != "1" && $2 !~ /^(plan|dash|backlog|home)$/ { n++ } END { print n+0 }')
   here=$(( here + ${c:-0} ))
 done
 [ "$here" -gt "$left" ] && left=$here

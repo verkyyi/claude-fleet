@@ -595,7 +595,7 @@ PYCODEX
     _hwarn=${_hv%%|*}; _hv=${_hv#*|}
     _hsess=${_hv%%|*}; _hname=${_hv#*|}
     case "$_hctx" in ''|*[!0-9]*) _hctx=-1 ;; esac
-    case "$_hname" in dash|plan|backlog) _hiss=panel ;; esac
+    case "$_hname" in dash|plan|backlog|home) _hiss=panel ;; esac
     if [ -z "$_hiss" ] && [ "$_hraw" != 1 ] && [ "$_hctx" -ge 0 ]; then
       if [ "$_hctx" -ge "$_hp_conf" ]; then
         if [ "$_hwarn" != 1 ]; then

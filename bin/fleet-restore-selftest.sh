@@ -171,6 +171,8 @@ for state in working idle 'done'; do
   tmux set-window-option -t "snap:renamed-$state" @claude_state "$state"
 done
 tmux new-window -t snap: -n legacy-raw -c "$STEW_PATH"
+# `home` (issue #1533): the fleet's resting shell — a panel, never a session.
+tmux new-window -t snap: -n home -c "$STEW_PATH"
 tmux set-window-option -t snap:legacy-raw @raw 1
 
 bash "$RESTORE" --snapshot 2>/dev/null || fail "fleet-restore.sh --snapshot exited non-zero"
@@ -191,6 +193,8 @@ grep -q '^WIN	issue-9	' "$MAP" \
   || fail "snapshot: the work window should still be a WIN row (map: $(cat "$MAP"))"
 grep -q '^WIN	plan	' "$MAP" \
   && fail "snapshot: the 'plan' panel must not be a WIN row (map: $(cat "$MAP"))"
+grep -q '^WIN	home	' "$MAP" \
+  && fail "snapshot: the 'home' window must not be a WIN row (map: $(cat "$MAP"))"
 # issue #153: the per-window runtime state trio rides on the WIN row (trailing
 # field = @origin, '-' when unset — issue #503).
 grep -qE '^WIN	issue-9	.*	working	✓	#9ece6a	-$' "$MAP" \
@@ -281,7 +285,7 @@ assert_dash_only() {
 : > "$WORK/claude-argv"
 tmux new-session -d -s res -x 200 -y 50 -c "$STEW_PATH" 2>/dev/null || fail "could not create session res"
 env -u HUB_CMD -u FLEET_HUB_CMD \
-  HUB_SESSION=res HUB_CWD="$STEW_PATH" HUB_RESUME_ID="stew-abc123" \
+  HUB_SESSION=res HUB_CWD="$STEW_PATH" HUB_RESUME_ID="stew-abc123" FLEET_DASH_WINDOW=1 \
   bash "$HUBSH" >/dev/null 2>&1 || fail "hub-session.sh (stale-id) exited non-zero"
 assert_dash_only res "HUB_RESUME_ID"
 
@@ -289,7 +293,7 @@ assert_dash_only res "HUB_RESUME_ID"
 : > "$WORK/claude-argv"
 tmux new-session -d -s fresh -x 200 -y 50 -c "$STEW_PATH" 2>/dev/null || fail "could not create session fresh"
 env -u HUB_CMD -u FLEET_HUB_CMD -u HUB_RESUME_ID \
-  HUB_SESSION=fresh HUB_CWD="$STEW_PATH" \
+  HUB_SESSION=fresh HUB_CWD="$STEW_PATH" FLEET_DASH_WINDOW=1 \
   bash "$HUBSH" >/dev/null 2>&1 || fail "hub-session.sh (fresh) exited non-zero"
 assert_dash_only fresh "fresh build"
 
@@ -298,9 +302,23 @@ assert_dash_only fresh "fresh build"
 tmux new-session -d -s ovr -x 200 -y 50 -c "$STEW_PATH" 2>/dev/null || fail "could not create session ovr"
 env -u HUB_CMD -u HUB_RESUME_ID \
   FLEET_HUB_CMD='claude "my own orders"; exec $SHELL' \
-  HUB_SESSION=ovr HUB_CWD="$STEW_PATH" \
+  HUB_SESSION=ovr HUB_CWD="$STEW_PATH" FLEET_DASH_WINDOW=1 \
   bash "$HUBSH" >/dev/null 2>&1 || fail "hub-session.sh (override) exited non-zero"
 assert_dash_only ovr "FLEET_HUB_CMD override"
+
+# --- DEFAULT (issue #1533): no plan window — `home`, a plain shell, no claude ---
+# (The three legs above pin the FLEET_DASH_WINDOW=1 hub, the way back.)
+: > "$WORK/claude-argv"
+tmux new-session -d -s homed -x 200 -y 50 -c "$STEW_PATH" 2>/dev/null || fail "could not create session homed"
+env -u HUB_CMD -u FLEET_HUB_CMD -u FLEET_DASH_WINDOW \
+  HUB_SESSION=homed HUB_CWD="$STEW_PATH" HUB_RESUME_ID="stew-abc123" \
+  bash "$HUBSH" >/dev/null 2>&1 || fail "hub-session.sh (default) exited non-zero"
+settle homed && fail "default: hub-session launched a claude (argv: $(cat "$WORK/claude-argv"))"
+lw=$(tmux list-windows -t homed -F '#{window_name}')
+printf '%s\n' "$lw" | grep -qxF home || fail "default: no home window was built (windows: $lw)"
+printf '%s\n' "$lw" | grep -qxF plan && fail "default: a plan window was built (windows: $lw)"
+[ -z "$(tmux list-panes -s -t homed -F '#{@dash}' | tr -d '\n')" ] || fail "default: a dash pane was built"
+tmux kill-session -t homed
 
 # ================================= 4. HUB-ONLY RECOVERY (issue #160) ============
 # A snapshot of a hub-only session must NOT shrink a richer map, and restore must
@@ -329,6 +347,10 @@ mkdir -p "$FLEET_CONF_DIR/restore"
   printf 'WIN\tissue-9\t%s\twrk-def456\t9\n'  "$WORK_PATH"
   printf 'WIN\tissue-11\t%s\twrk-xyz789\t11\n' "$W11"
   printf 'HUB\t%s\tstew-abc123\n' "$STEW_PATH"
+  # An OLD map's panel rows (issue #1533): the retired plan, and a home — skipped,
+  # never reopened as a session, never an error.
+  printf 'WIN\tplan\t%s\tplan-old\t-\n' "$STEW_PATH"
+  printf 'WIN\thome\t%s\thome-old\t-\n' "$STEW_PATH"
   printf '%s\n' "$RAW_ROWS"
 } > "$HMAP"
 
@@ -461,6 +483,13 @@ for _n in $(seq 1 200); do
 done
 grep -q -- '--resume wrk-def456' "$WORK/claude-argv" \
   || fail "reconcile: issue-9 should resume via 'claude --resume wrk-def456' (argv: $(cat "$WORK/claude-argv"))"
+
+[ "$(printf '%s\n' "$lw" | grep -cxF plan)" = 1 ] \
+  || fail "reconcile: an old map's plan row must not open a window (windows: $lw)"
+printf '%s\n' "$lw" | grep -qxF home \
+  && fail "reconcile: an old map's home row must not open a window (windows: $lw)"
+grep -q -- 'plan-old\|home-old' "$WORK/claude-argv" \
+  && fail "reconcile: a panel row was resumed (argv: $(cat "$WORK/claude-argv"))"
 
 # --- IDEMPOTENT: a second restore must not duplicate the now-live windows -------
 bash "$RESTORE" >/dev/null 2>&1

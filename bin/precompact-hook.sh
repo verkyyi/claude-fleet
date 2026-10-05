@@ -71,7 +71,7 @@ case "$prep_ts" in ''|*[!0-9]*) prep_ts=0 ;; esac
 # The fleet's own /compact (fleet-compact-send.sh stamped `compacting` first).
 [ "$trigger" = manual ] && [ "$stage" = compacting ] && exit 0
 [ "$agent" = codex ] && exit 0
-case "$wname" in dash|plan|backlog) exit 0 ;; esac
+case "$wname" in dash|plan|backlog|home) exit 0 ;; esac
 
 # shellcheck source=/dev/null
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
