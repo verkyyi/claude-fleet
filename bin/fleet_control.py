@@ -9,6 +9,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 import uuid
 
 from fleet_config_write import revision, write
@@ -18,6 +19,12 @@ from fleet_hub_common import (CONFIG_KEYS, GH_READS, PROTOCOL, WORKER_ACTIONS, D
                               validate_write, worker_identity, worker_key)
 
 BIN = Path(__file__).absolute().parent
+# A start the hub stopped waiting for (claude-fleet#1606): the hub waits 60 s
+# for a placed start to open, then calls one this machine journalled but never
+# began "never started" and hands its lease back to the asker. An executor
+# that only gets to it after that must not open it behind the asker's back.
+START_STALE_SECS = 60
+OPS_LOG_MAX = 1 << 20
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS operations (
@@ -234,6 +241,21 @@ class Control:
             raise Fault("PROTOCOL_ERROR", "GitHub read returned no JSON object")
         return result
 
+    def oplog(self, op_id, action, line):
+        """One line per step of an operation in control/ops.log (claude-fleet#1606):
+        accepted, running, and how it finished — so a start the hub says it
+        sent and this machine never opened leaves a trace either way. Never
+        fails the operation; kept to one rotated megabyte."""
+        try:
+            path = self.store.root / "ops.log"
+            if path.exists() and path.stat().st_size > OPS_LOG_MAX:
+                os.replace(path, path.with_suffix(".log.1"))
+            stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            with open(path, "a", encoding="utf-8") as out:
+                out.write("%s %s %s %s\n" % (stamp, action, op_id, " ".join(str(line).split())[:300]))
+        except OSError:
+            pass
+
     def get_operation(self, op_id):
         with self.store.connect() as db:
             row = db.execute("SELECT * FROM operations WHERE id=?", (identifier(op_id),)).fetchone()
@@ -262,6 +284,7 @@ class Control:
             timestamp = now()
             db.execute("INSERT INTO operations VALUES (?,?,?,?,?,?,?,?,NULL)",
                        (op_id, fleet_id, request["action"], encoded, request["actor"], "accepted", timestamp, timestamp))
+        self.oplog(op_id, request["action"], "accepted from %s %s" % (request["actor"], describe(request)))
         # Commit acceptance BEFORE launching. The detached executor survives an
         # SSH disconnect. A crash in this gap stays accepted/unknown, never
         # silently re-executes a potentially completed side effect.
@@ -282,6 +305,14 @@ class Control:
         with self.store.connect() as db:
             db.execute("UPDATE operations SET status=?,result=?,updated=? WHERE id=?",
                        (state, canonical(result), now(), op_id))
+            row = db.execute("SELECT action FROM operations WHERE id=?", (op_id,)).fetchone()
+        error = result.get("error") or {}
+        if error:
+            said = "%s exit=%s %s" % (error.get("code", ""), error.get("exit", "-"),
+                                      error.get("stderr1") or error.get("message", ""))
+        else:
+            said = "window=%s" % (result.get("window") or "-")
+        self.oplog(op_id, row["action"] if row else "?", "%s %s" % (state, said))
 
     def execute_worker(self, fleet, action, params, actor=""):
         """Lifecycle tools on a durable worker identity. Every refusal before the
@@ -460,8 +491,15 @@ class Control:
             row = db.execute("SELECT * FROM operations WHERE id=?", (identifier(op_id),)).fetchone()
             if row is None or row["status"] != "accepted":
                 return
+            stale = row["action"] == "worker_start" and now() - row["created"] > START_STALE_SECS
             db.execute("UPDATE operations SET status='running',updated=? WHERE id=?", (now(), op_id))
         req = json.loads(row["request"])
+        if stale:
+            self.finish(op_id, "failed", {"error": Unattempted(
+                "EXPIRED", "Start reached its executor %ds after it was accepted; the hub already "
+                "gave its lease back — not opening it" % int(now() - row["created"])).as_dict()})
+            return
+        self.oplog(op_id, row["action"], "running")
         attempted = False
         try:
             fleet = self.fleet(req["fleet_id"])
@@ -576,6 +614,13 @@ class Control:
         if method == "submit":
             return self.submit(params)
         raise Fault("INVALID_ARGUMENT", "Unsupported control method")
+
+
+def describe(request):
+    """The few params worth a log line: which issue, repo and parent."""
+    params = request.get("params") or {}
+    words = ["%s=%s" % (k, params[k]) for k in ("issue", "kind", "repo", "worker_id", "origin_wid") if params.get(k)]
+    return " ".join(words) or "-"
 
 
 def last_line(err):

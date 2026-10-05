@@ -32,8 +32,16 @@
 #   DECLINED m4's spawn refused it → the same exit a refusal here gives (2 full ·
 #           3 claimed · 1 else), its reason on stderr, the lease released, nothing
 #           opened here (never the auto fallback); a re-send is granted, no --force.
-#   UNKNOWN no final state in time → exit 1 saying 未知, never a success; the
-#           lease stays the remote's; nothing opened here.
+#           (issue #1606/#1610) A start that never reached m4 / never started
+#           there comes back the same way (exit 1, its line, the operation id);
+#           the GitHub claim m4 may have taken is withdrawn — only when the issue
+#           was unassigned before the ask, never on exit 3 (claimed).
+#   UNKNOWN still running there when the wait ran out → exit 1 saying 未知,
+#           never a success; (issue #1606) the lease the hub gave back is
+#           released, the GitHub claim kept; nothing opened here.
+#   UNCLAIM (issue #1610) a spawn here that claimed the issue and then failed
+#           (new-window) takes its GitHub assignee back; one that opened keeps it.
+#           Hub on only: with CCQUOTA_FLEET unset a failed spawn is as today (OFF).
 #   ASYNC   --async asks with --wait 0; the operation id is left in the dispatch
 #           file and `fleet-children.py show --json` lists it.
 #   PERFLEET (issue #1539) the hub switch and FLEET_SPAWN_NODE are read PER FLEET:
@@ -102,6 +110,7 @@ cat > "$WORK/fakebin/gh" <<GHFAKE
 printf 'gh %s\n' "\$*" >> "$GH_LOG"
 case "\$*" in
   *"issue view"*"--json assignees,state"*) printf '%s\n' "\${CLAIM_STATE:-0	OPEN}" ;;
+  *"issue view"*"--json assignees --jq"*)  printf '%s\n' "\${PRE_ASSIGNEES:-0}" ;;   # the pre-place read (#1610)
   *"issue view"*"--json title"*)           printf '%s\n' "\${GH_TITLE:-Some Issue}" ;;
   *"pr list"*)                             printf '%s\n' "\${PR_COUNT:-0}" ;;
   *"issue edit"*)                          : ;;
@@ -127,7 +136,8 @@ case "\${1:-}" in
     esac ;;
   list-windows)      : ;;                                   # no existing windows → no local dedup hit
   show-options)      echo '' ;;
-  new-window)        printf 'new-window %s\n' "\$*" >> "$TMUX_LOG"; printf '%s\n' "\${CCQUOTA_TOKEN:-<unset>}" > "$WORK/tmux.env"; echo "\${TMUX_WIN:-@9}" ;;
+  new-window)        printf 'new-window %s\n' "\$*" >> "$TMUX_LOG"; printf '%s\n' "\${CCQUOTA_TOKEN:-<unset>}" > "$WORK/tmux.env"
+                     [ "\${TMUX_NEWWIN_FAIL:-0}" = 1 ] && exit 1; echo "\${TMUX_WIN:-@9}" ;;
   kill-window)       printf 'kill-window %s\n' "\$*" >> "$TMUX_LOG" ;;
   set-window-option) case "\$*" in *@origin*) printf 'set-window-option %s\n' "\$*" >> "$TMUX_LOG" ;; esac ;;
   run-shell)         printf 'run-shell %s\n' "\$*" | tr '\n' ' ' >> "$TMUX_LOG"; echo >> "$TMUX_LOG" ;;
@@ -212,6 +222,8 @@ for extra in '' '--node auto' '--node local'; do
   [ -s "$PLACE_LOG" ]                            && fail "OFF ($extra) the place command must not run without CCQUOTA_FLEET=1"
   [ "$(snap)" = "$base" ]                        || fail "OFF ($extra) must change nothing while the hub is off" "$(diff <(printf '%s\n' "$base") <(snap))"
 done
+CLAIM_STATE=$'0\tOPEN' TMUX_NEWWIN_FAIL=1 run_spawn 258
+gh_has '--remove-assignee'                       && fail "OFF a failed spawn with the hub off keeps today's behaviour (no claim take-back)"
 ok "OFF CCQUOTA_FLEET unset → no placement, byte-identical (no flag, --node auto, --node local)"
 
 CLAIM_STATE=$'0\tOPEN' FLEET_HUB_PLACE_CMD="$PLACE" run_spawn 258 --node m4
@@ -402,8 +414,40 @@ CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_RC=6 \
 [ "$(rc)" = 1 ]                                  || fail "UNKNOWN exits 1, never 0 (rc=$(rc))"
 err_has '未知，不当成功: no final state from m4' || fail "UNKNOWN says so"
 tmux_has 'new-window'                            && fail "UNKNOWN must not open it here too"
-lease_has release                                && fail "UNKNOWN the lease stays with m4, which may yet open it"
-ok "UNKNOWN no final state → exit 1 saying 未知; lease kept remote; nothing here"
+lease_has release                                || fail "UNKNOWN releases the lease the hub gave back (#1606)"
+gh_has '--remove-assignee'                       && fail "UNKNOWN keeps the GitHub claim: m4 may yet open it"
+ok "UNKNOWN still running → exit 1 saying 未知; lease released, claim kept; nothing here"
+
+# ===== #1606/#1610: a start m4 swallowed — failed, lease AND claim given back =====
+SWALLOWED=$'DECLINED m4 op_47 1\tm4 accepted operation op_47 but never started it within 60 s — nothing opened; re-send it'
+CLAIM_STATE=$'0\tOPEN' PRE_ASSIGNEES=0 LEASE_ANSWER="GRANTED m5" PLACE_RC=5 PLACE_ANSWER="$SWALLOWED" run_spawn 258 --origin issue-77
+[ "$(rc)" = 1 ]                                  || fail "SWALLOWED exits 1, never 0 (rc=$(rc))"
+err_has '#258 被 m4 拒绝 (exit 1): m4 accepted operation op_47 but never started it' || fail "SWALLOWED one line naming m4 and the operation"
+lease_has release                                || fail "SWALLOWED releases the lease"
+gh_has "issue edit 258 --repo acme/widgets --remove-assignee @me" || fail "SWALLOWED withdraws the GitHub claim m4 may have taken"
+err_has 'GitHub 认领已撤回'                       || fail "SWALLOWED says the claim was withdrawn"
+grep -q '"op": "op_47".*"state": "refused"' "$DISPATCH" || fail "SWALLOWED is recorded with its operation" "$(cat "$DISPATCH")"
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER=$'LOCAL m5\tchose m5' run_spawn 258
+[ "$(rc)" = 0 ] && tmux_has 'new-window'         || fail "SWALLOWED the re-send opens without --force (rc=$(rc))"
+grep -q -- '--force' "$LEASE_LOG"                && fail "SWALLOWED a re-send must not need --force"
+CLAIM_STATE=$'1\tOPEN' PRE_ASSIGNEES=1 LEASE_ANSWER="GRANTED m5" PLACE_RC=5 PLACE_ANSWER="$SWALLOWED" run_spawn 258
+gh_has '--remove-assignee'                       && fail "SWALLOWED an assignee that predates the ask is not ours to take"
+CLAIM_STATE=$'0\tOPEN' PRE_ASSIGNEES=0 LEASE_ANSWER="GRANTED m5" PLACE_RC=5 \
+  PLACE_ANSWER=$'DECLINED m4 op_48 3\tdash-issue-session: #258 already claimed elsewhere (assigned)' run_spawn 258
+gh_has '--remove-assignee'                       && fail "SWALLOWED exit 3 (claimed there) never withdraws the claim"
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_RC=5 PLACE_ANSWER="$SWALLOWED" run_spawn 258 --async
+gh_has '--json assignees --jq'                   && fail "SWALLOWED --async never pays for the pre-place read"
+ok "SWALLOWED never started on m4 → exit 1 with its line; lease + claim back; re-send needs no --force"
+
+# ===== UNCLAIM: a spawn here that claimed and then failed takes the claim back ====
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER=$'LOCAL m5\tchose m5' TMUX_NEWWIN_FAIL=1 run_spawn 258
+[ "$(rc)" = 1 ]                                  || fail "UNCLAIM a failed new-window exits 1 (rc=$(rc))"
+gh_has '--add-assignee @me'                      || fail "UNCLAIM setup: the spawn claimed first"
+gh_has "issue edit 258 --repo acme/widgets --remove-assignee @me" || fail "UNCLAIM the failed spawn withdraws its claim"
+lease_has release                                || fail "UNCLAIM and releases its lease"
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER=$'LOCAL m5\tchose m5' run_spawn 258
+gh_has '--remove-assignee'                       && fail "UNCLAIM a spawn that opened keeps its claim"
+ok "UNCLAIM a claimed-then-failed spawn here withdraws its GitHub claim; an opened one keeps it"
 
 rm -f "$DISPATCH"
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER=$'REMOTE m4 op_46 accepted\tchose m4' run_spawn 258 --origin issue-77 --async

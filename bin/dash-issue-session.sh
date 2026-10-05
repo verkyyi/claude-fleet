@@ -310,17 +310,31 @@ BASE="${FLEET_BASE_BRANCH:-main}"
 # path runs unchanged; CCQUOTA_FLEET unset runs none of this. Sync-only: the
 # --async tail already holds the lease the foreground took.
 LEASE_HELD=0
+# CLAIMED_HERE (issue #1606, #1610): this spawn assigned @me on GitHub and no
+# window holds the issue yet — a non-zero exit takes the assignee back, so a
+# failed spawn leaves no dead claim that only --force gets past (hub on only).
+# The --async
+# tail inherits it from the foreground that claimed (FLEET_SPAWN_CLAIMED).
+CLAIMED_HERE=0
+[ "$TAIL_ONLY" = 1 ] && [ "${FLEET_SPAWN_CLAIMED:-0}" = 1 ] && CLAIMED_HERE=1
+_spawn_back() {  # EXIT: a non-zero exit gives back what this spawn took
+  local rc=$?
+  if [ "$rc" != 0 ]; then
+    [ "$LEASE_HELD" = 1 ] && fleet_hub_lease release "$SESS" "$REPO" "$num" >/dev/null 2>&1
+    if [ "$CLAIMED_HERE" = 1 ] && [ -n "$REPO" ] \
+       && gh issue edit "$num" --repo "$REPO" --remove-assignee @me >/dev/null 2>&1; then
+      printf 'dash-issue-session: #%s 的 GitHub 认领已撤回 — 再派不用 --force\n' "$num" >&2
+    fi
+  fi
+  exit "$rc"
+}
+[ "$CLAIMED_HERE" = 1 ] && trap _spawn_back EXIT
 if [ "$TAIL_ONLY" != 1 ] && [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ -n "$REPO" ]; then
   _lf=''; [ "$FORCE_FLAG" = 1 ] && _lf=--force
   lease_out=$(fleet_hub_lease acquire "$SESS" "$REPO" "$num" $_lf); lease_rc=$?
   case "$lease_rc" in
     0) LEASE_HELD=1
-       _lease_back() {  # EXIT: a non-zero exit after the grant gives the lease back
-         local rc=$?
-         [ "$rc" != 0 ] && [ "$LEASE_HELD" = 1 ] && fleet_hub_lease release "$SESS" "$REPO" "$num" >/dev/null 2>&1
-         exit "$rc"
-       }
-       trap _lease_back EXIT
+       trap _spawn_back EXIT
        case "$lease_out" in
          FORCED\ *)
            printf 'dash-issue-session: #%s 的入口租约已强制从 %s 收回 (--force，已在入口记录)\n' "$num" "$(printf '%s' "$lease_out" | awk '{print $3}')" >&2 ;;
@@ -344,11 +358,15 @@ fi
 # hub that cannot be asked, or no machine that can take it, falls back to opening
 # it here for `auto` — and refuses for a machine named explicitly, which the
 # caller asked for by name. Sync-only, like the lease.
-# Issue #1586: a REMOTE start is waited on (the hub's 30 s) until that machine
-# really opened the window or really refused it. Refused ⇒ its reason on stderr
-# and the same exit a refusal here gives (2 full · 3 claimed · 1 anything else),
-# and the lease — the hub gave it back — released by the EXIT trap, so a re-send
-# needs no --force. No final state in time ⇒ unknown: exit 1, never a success.
+# Issue #1586: a REMOTE start is waited on (the hub's 60 s, issue #1606) until
+# that machine really opened the window or really refused it. Refused ⇒ its
+# reason on stderr and the same exit a refusal here gives (2 full · 3 claimed ·
+# 1 anything else — a start that never reached that machine or never started
+# there is 1 too), and the lease — the hub gave it back — released by the EXIT
+# trap, so a re-send needs no --force. No final state in time ⇒ unknown: exit 1,
+# never a success, and (issue #1606) the hub gave the lease back here as well.
+# Refused for any reason but "claimed" with the issue unassigned before we
+# asked ⇒ the GitHub claim that machine may have taken is withdrawn too (#1610).
 # --async asks without waiting and leaves the operation id for fleet-children.sh.
 # Every REMOTE answer is written to the parent's `children/<key>.dispatch`.
 _place_note() {  # <state> <machine> <op> [<window>] [<exit>] [<line>]
@@ -370,6 +388,13 @@ if [ "$PLACING" = 1 ]; then
       _u=$(fleet_uuid "$SESS") && [ -n "$_u" ] && _pw="$_u/$ORIGIN"
     fi
     _wait=''; [ "$ASYNC_FLAG" = 1 ] && _wait=0
+    # Was the issue unassigned before we asked (issue #1610)? Only then may a
+    # refused start's claim be withdrawn: an assignee that predates us is not
+    # ours to take. Sync only — an --async ask hears no refusal to act on.
+    _pre_asg=''
+    if [ "$ASYNC_FLAG" != 1 ] && [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && command -v gh >/dev/null 2>&1; then
+      _pre_asg=$(gh issue view "$num" --repo "$REPO" --json assignees --jq '.assignees|length' 2>/dev/null)
+    fi
     place_out=$(fleet_hub_place "$SESS" "$REPO" "$num" "$NODE" "$_pw" "$AGENT" "$_wait" "$ACCOUNT"); place_rc=$?
     _pv=${place_out%%$'\t'*}; _why=''; case "$place_out" in *$'\t'*) _why=${place_out#*$'\t'} ;; esac
     case "$place_rc:$_pv" in
@@ -390,13 +415,15 @@ if [ "$PLACING" = 1 ]; then
         # so the EXIT trap (LEASE_HELD=1) releases it: the next send needs no --force.
         read -r _ _m _op _x <<<"$_pv"
         _place_note refused "$_m" "$_op" '' "$_x" "$_why"
+        [ "$_x" != 3 ] && [ "$_pre_asg" = 0 ] && CLAIMED_HERE=1
         refuse "#$num 被 $_m 拒绝 (exit $_x): ${_why:-no reason given}"
         case "$_x" in 2) exit "$RC_CAP" ;; 3) exit "$RC_CLAIMED" ;; esac
         exit "$RC_INFRA" ;;
       6:UNKNOWN\ *)
-        # Sent, but no final state in time: that machine may still open it, so the
-        # lease stays its own — and this is not a success.
-        LEASE_HELD=0
+        # Sent, but still running there when the wait ran out — not a success.
+        # The hub gave the lease back (issue #1606): the EXIT trap releases it,
+        # so nothing outlives a start nobody saw open. The GitHub claim stays —
+        # should that machine open it after all, the claim keeps a second one off.
         read -r _ _m _op <<<"$_pv"
         _place_note unknown "$_m" "$_op" '' '' "$_why"
         refuse "#$num 已派到 $_m (hub operation $_op)，但没等到结果 — 未知，不当成功: ${_why:-no final state}"
@@ -418,7 +445,7 @@ if [ "$PLACING" = 1 ]; then
         fi
         [ "$place_rc" = 4 ] && printf 'dash-issue-session: 没有机器能接 #%s (%s) — 开在本机\n' "$num" "$_why" >&2 ;;
     esac
-    unset _pw _u _pv _why _wait
+    unset _pw _u _pv _why _wait _pre_asg
   fi
 fi
 # Opening here after all: this machine's cap verdict, held above, now applies.
@@ -485,7 +512,12 @@ if [ "$TAIL_ONLY" != 1 ] && [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_F
   fi
   # Free → claim NOW by assigning @me so a peer's check sees it within ~1s.
   # /fleet-claim stays and no-ops idempotently when it finds this pre-claim.
-  gh issue edit "$num" --repo "$REPO" --add-assignee @me >/dev/null 2>&1 || issue_json=''
+  if gh issue edit "$num" --repo "$REPO" --add-assignee @me >/dev/null 2>&1; then
+    # Hub off ⇒ today's path, byte for byte (EPIC #1645 rule 6): no take-back.
+    [ "${CCQUOTA_FLEET:-0}" = 1 ] && { CLAIMED_HERE=1; trap _spawn_back EXIT; }
+  else
+    issue_json=''
+  fi
 fi
 
 # The ONE path exit (issue #886): FLEET_WORKTREE_ROOT, else a sibling of the base.
@@ -535,6 +567,7 @@ if [ "$ASYNC_FLAG" = 1 ] && [ "$TAIL_ONLY" != 1 ] && [ -z "$TARGET_SESS" ]; then
   # selects tail-only mode + names the fleet; FLEET_SPAWN_FOCUS is carried through
   # so "focus the new worker when ready" still works (default no-focus otherwise).
   _bg="FLEET_SPAWN_TAIL=$(shq "$SESS")"
+  [ "$CLAIMED_HERE" = 1 ] && _bg="$_bg FLEET_SPAWN_CLAIMED=1"
   [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && _bg="$_bg FLEET_SPAWN_FOCUS=1"
   # >/dev/null 2>&1 on the detached tail (belt-and-suspenders for issue #401):
   # `tmux run-shell` DISPLAYS its command's stdout in an Esc-to-dismiss view, so
@@ -630,6 +663,7 @@ stamp=''; [ "$MULTI" = 1 ] && stamp=$(fleet_win_stamp_cmd @repo "$REPO" @worktre
 [ -n "$ACCOUNT" ] && stamp="$stamp$(fleet_win_stamp_cmd @account_class "$ACCOUNT")"
 win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "$stamp'$BIN/fleet-claude.sh'${AGENT:+ --agent $AGENT} \"\$(cat '$tf')\"; exec \$SHELL") \
   || { refuse "spawn failed for #$num: new-window"; exit "$RC_INFRA"; }
+CLAIMED_HERE=0   # a window holds the issue now: its claim is the worker's
 # A session is on its way: wake the idle-gated daemons so the dash is fresh on
 # their very next tick, not up to FLEET_DAEMON_IDLE_AFTER later (issue #1077).
 [ -f "$BIN/fleet-daemon-lib.sh" ] && ( . "$BIN/fleet-daemon-lib.sh" && fleet_daemon_wake "$BIN/.." ) 2>/dev/null || true
