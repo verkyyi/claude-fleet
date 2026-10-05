@@ -373,7 +373,7 @@ warm)
     rm -f "$sock" "$sock.route" "$sock.pending"
   }
   # riding <sock> — a window's proxy session is on it right now
-  riding() { tmux -L "$s" list-windows -a -F '#{@remote_ctl}' 2>/dev/null | grep -qxF "$1"; }
+  riding() { tmux -L "$s" list-windows -t "=$s" -F '#{@remote_ctl}' 2>/dev/null | grep -qxF "$1"; }
   while :; do
     if ! tmux -L "$s" has-session -t "=$s" 2>/dev/null && [ -z "$once" ]; then
       for f in "$WD"/*.sock; do [ -e "$f" ] || continue; f=${f##*/}; wstop "${f%.sock}"; done
