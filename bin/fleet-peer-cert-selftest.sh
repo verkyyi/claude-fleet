@@ -32,6 +32,13 @@
 #                   machine's own and a laptop's are not; none → exit 1
 #   H. move         fleet-move.sh's move_ssh puts the certificate's options on
 #                   the ssh it runs; a refusal runs NO ssh (exit 255)
+#   J. cache        (issue #1631) one certificate per (source, target,
+#                   purpose) reused until 30 s before it expires: a second call
+#                   prints the same options and does NOT reach the hub (a
+#                   counting fake hub); another purpose / target asks; the
+#                   hub's valid_before is honoured; inside the margin, a
+#                   regenerated peer key, or no .meta (an older script's cert)
+#                   asks afresh; a refusal is not cached
 #   I. lint         every ssh fleet-move.sh / fleet-node-upgrade.sh /
 #                   fleet-remote-view.sh opens to another machine carries the
 #                   peer options; fleet-doctor.sh reads fleet-peer-trust.sh
@@ -54,6 +61,7 @@ STUB="$WORK/curl"
 cat > "$STUB" <<'EOF'
 #!/bin/bash
 printf '%s\n' "$*" > "$STUB_LOG"
+[ -n "${STUB_COUNT:-}" ] && printf 'x\n' >> "$STUB_COUNT"
 body=''
 while [ $# -gt 0 ]; do case "$1" in --data-binary) body="$2"; shift 2 ;; *) shift ;; esac; done
 printf '%s' "$body" > "$STUB_BODY"
@@ -219,7 +227,7 @@ want=$(printf '%s\n' -o BatchMode=yes -i "$HOME/.ssh/fleet-peer" -o "Certificate
 $(cat "$SSH_LOG")
 want:
 $want"
-reset; rm -f "$SSH_LOG"
+reset; rm -f "$SSH_LOG" "$FLEET_CONF_DIR"/peer/*.meta   # the grant above is cached (#1631): forget it
 export FAKE_CODE=403 FAKE_BODY='{"error":"no"}'
 ( PATH="$WORK/shim:$PATH"; . "$BIN/fleet-move.sh"; TO='m4'; move_ssh "$TO" true ) 2>/dev/null; rc=$?
 [ "$rc" -eq 255 ] || fail "H: refused → exit $rc, want 255"
@@ -236,6 +244,46 @@ bad=$(grep -n 'ssh -o BatchMode=yes' "$BIN/fleet-move.sh" "$BIN/fleet-node-upgra
 $bad"
 grep -q 'ControlPersist=no \${peer\[@\]+"\${peer\[@\]}"}' "$BIN/fleet-remote-view.sh" || fail "I: fleet-remote-view.sh's master ssh lost the peer options"
 grep -q 'fleet-peer-trust.sh' "$BIN/fleet-doctor.sh" || fail "I: fleet-doctor.sh does not read fleet-peer-trust.sh"
+ok
+
+# J. cache (issue #1631)
+cnt() { [ -f "$STUB_COUNT" ] && grep -c x "$STUB_COUNT" || printf 0; }
+export STUB_COUNT="$WORK/curl.count"
+rm -rf "$FLEET_CONF_DIR/peer"; rm -f "$STUB_COUNT"; reset
+export FAKE_BODY="$GRANT"
+o1=$("$SUT" m4 view 2>/dev/null) || fail "J: first call"
+o2=$("$SUT" m4 view 2>/dev/null) || fail "J: second call"
+[ "$o1" = "$o2" ] || fail "J: cached options differ:
+$o2
+want:
+$o1"
+[ "$(cnt)" = 1 ] || fail "J: the hub was asked $(cnt) times for one (m4, view), want 1"
+"$SUT" m4 upgrade >/dev/null 2>&1; "$SUT" m5 view >/dev/null 2>&1
+[ "$(cnt)" = 3 ] || fail "J: another purpose / target must ask (count $(cnt), want 3)"
+# the hub's valid_before: 20 s left is inside the 30 s margin → asks every time
+vb=$(python3 -c 'import datetime,time; print(datetime.datetime.utcfromtimestamp(time.time()+20).strftime("%Y-%m-%dT%H:%M:%S.123456789Z"))')
+rm -f "$STUB_COUNT"
+export FAKE_BODY="${GRANT%\}},\"valid_before\":\"$vb\"}"
+"$SUT" m4 move >/dev/null 2>&1; "$SUT" m4 move >/dev/null 2>&1
+[ "$(cnt)" = 2 ] || fail "J: a certificate inside the margin was reused (count $(cnt), want 2)"
+read -r u _ < "$FLEET_CONF_DIR/peer/m4.move-cert.pub.meta"
+[ $(( u - $(date +%s) )) -le 21 ] || fail "J: valid_before not honoured: until $u"
+# FLEET_PEER_CERT_MARGIN=5: 20 s left is reusable
+FLEET_PEER_CERT_MARGIN=5 "$SUT" m4 move >/dev/null 2>&1
+[ "$(cnt)" = 2 ] || fail "J: FLEET_PEER_CERT_MARGIN=5 still asked (count $(cnt))"
+# a regenerated key / no .meta → a miss
+export FAKE_BODY="$GRANT"; rm -f "$STUB_COUNT"
+rm -f "$HOME/.ssh/fleet-peer" "$HOME/.ssh/fleet-peer.pub"
+"$SUT" m4 view >/dev/null 2>&1
+[ "$(cnt)" = 1 ] || fail "J: a new peer key reused the old certificate"
+rm -f "$FLEET_CONF_DIR/peer/m4.view-cert.pub.meta"
+"$SUT" m4 view >/dev/null 2>&1
+[ "$(cnt)" = 2 ] || fail "J: a certificate with no .meta was reused"
+# a refusal is not cached
+rm -f "$STUB_COUNT"; export FAKE_CODE=403 FAKE_BODY='{"error":"no"}'
+"$SUT" m9 view >/dev/null 2>&1; "$SUT" m9 view >/dev/null 2>&1
+[ "$(cnt)" = 2 ] || fail "J: a refusal was cached (count $(cnt))"
+unset STUB_COUNT; reset
 ok
 
 printf 'fleet-peer-cert selftest: OK (%d checks)\n' "$CHECKS"

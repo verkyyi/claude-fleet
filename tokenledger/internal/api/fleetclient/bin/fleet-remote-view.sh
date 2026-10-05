@@ -408,9 +408,11 @@ run)
   }
   cleanup() {
     stop_bg
-    $SSH -S "$ctl" -O exit "$host" >/dev/null 2>&1
+    $SSH -S "$ctl" -O exit "$host" >/dev/null 2>&1   # our own master only — never the warm one (#1631)
     rm -f "$ctl" "$ctl.route" "$ctl.upgrade"
+    [ "$use" = "$ctl" ] || rm -f "$use.upgrade"
   }
+  use="$ctl"   # the master this round rides: ours, or the shell's warm one (#1631)
   trap 'cleanup; exit 0' INT TERM HUP
   trap cleanup EXIT
   # The back channel: once the master connection is up, a second session on it
@@ -418,12 +420,12 @@ run)
   sidecar() {
     local _ up=''
     for _ in $(seq 1 50); do
-      $SSH -S "$ctl" -O check "$host" >/dev/null 2>&1 && { up=1; break; }
+      $SSH -S "$use" -O check "$host" >/dev/null 2>&1 && { up=1; break; }
       sleep 0.2
     done
     # No master: never let `-S` fall through to a second, independent login.
     [ -n "$up" ] || return 0
-    $SSH -S "$ctl" "$host" "bash $rbin/fleet-remote-view.sh watch $(sq "$view")" 2>/dev/null \
+    $SSH -S "$use" "$host" "bash $rbin/fleet-remote-view.sh watch $(sq "$view")" 2>/dev/null \
       | python3 -c '
 import json, socket, subprocess, sys
 ssh, ctl, host, opener = sys.argv[1:5]
@@ -443,13 +445,13 @@ for line in sys.stdin:
             if not path.startswith("/"):
                 path = "/" + path
             subprocess.call(["bash", opener, ":%d%s" % (lport, path)], stdout=subprocess.DEVNULL)
-' "$SSH" "$ctl" "$host" "${FLEET_REMOTE_OPENER:-$BIN/fleet-open.sh}"
+' "$SSH" "$use" "$host" "${FLEET_REMOTE_OPENER:-$BIN/fleet-open.sh}"
   }
   # The line this connection took (issue #1628): `fleet connect`'s own word in the
   # shell (FLEET_CONNECT_ROUTE_FILE — it chose), else this loop's (`hub` = relay).
   route_kind() {
     local k=''
-    [ -s "$ctl.route" ] && k=$(sed -n 's/.*"kind": *"\([a-z]*\)".*/\1/p' "$ctl.route" | head -n 1)
+    [ -s "$use.route" ] && k=$(sed -n 's/.*"kind": *"\([a-z]*\)".*/\1/p' "$use.route" | head -n 1)
     [ -n "$k" ] || { [ "$route" = hub ] && k=relay || k=direct; }
     printf '%s' "$k"
   }
@@ -481,21 +483,21 @@ for line in sys.stdin:
   upgrader() {
     local every="${FLEET_CONNECT_UPGRADE_SECS:-15}" idle="${FLEET_REMOTE_IDLE_SECS:-2}" _ up='' kind
     for _ in $(seq 1 50); do
-      $SSH -S "$ctl" -O check "$host" >/dev/null 2>&1 && { up=1; break; }
+      $SSH -S "$use" -O check "$host" >/dev/null 2>&1 && { up=1; break; }
       sleep 0.2
     done
     [ -n "$up" ] || return 0
     kind=$(route_kind); mark_route "$kind"
     [ "$kind" = relay ] && [ -n "$shellopt" ] || return 0
     while sleep "$every"; do
-      $SSH -S "$ctl" -O check "$host" >/dev/null 2>&1 || return 0
+      $SSH -S "$use" -O check "$host" >/dev/null 2>&1 || return 0
       probe_direct >/dev/null 2>&1 || continue
       until keys_idle "$idle"; do
         sleep 0.5
-        $SSH -S "$ctl" -O check "$host" >/dev/null 2>&1 || return 0
+        $SSH -S "$use" -O check "$host" >/dev/null 2>&1 || return 0
       done
-      : > "$ctl.upgrade"
-      $SSH -S "$ctl" -O exit "$host" >/dev/null 2>&1
+      : > "$use.upgrade"
+      $SSH -S "$use" -O exit "$host" >/dev/null 2>&1
       return 0
     done
   }
@@ -525,12 +527,32 @@ EOF_PEER
            sleep "$delay"; continue ;;
       esac
     fi
-    printf '\033[2J\033[H→ %s (%s%s%s) …\n' "$node" "$host" "$( [ "$route" = hub ] && printf ' · 经入口中转')" \
-      "$( [ ${#peer[@]} -gt 0 ] && printf ' · 入口证书 5 分钟')"
-    opts=(-tt -o ServerAliveInterval=5 -o ServerAliveCountMax=3 -o ConnectTimeout=8
-          -o ControlMaster=yes -o "ControlPath=$ctl" -o ControlPersist=no ${peer[@]+"${peer[@]}"})
-    [ "$route" = hub ] && opts+=(-o "ProxyCommand=$(sq "$BIN/fleet") connect --proxy $(sq "$(hub_node "$node")")")
-    rm -f "$ctl" "$ctl.route" "$ctl.upgrade"
+    # The shell's warm master (issue #1631): `fleet-shell.sh warm` keeps one
+    # connection per machine you have sessions on; when it answers, this round is
+    # a SESSION on it — no handshake, no `fleet connect`, no certificate — and the
+    # window's `@remote_ctl` names it, so `open` retargets over it too. Its line,
+    # keepalive and life are the warm loop's; a drop here just comes back round.
+    use="$ctl"
+    if [ -n "$shellopt" ] && [ "${FLEET_SHELL_WARM:-1}" != 0 ]; then
+      wsock="${TMPDIR:-/tmp}/warm/$node.sock"
+      [ -S "$wsock" ] && $SSH -S "$wsock" -O check "$host" >/dev/null 2>&1 && use="$wsock"
+    fi
+    [ -n "${TMUX:-}" ] && tmux set-window-option -t "${TMUX_PANE:-}" @remote_ctl "$use" 2>/dev/null
+    if [ "$use" != "$ctl" ]; then
+      printf '\033[2J\033[H→ %s (%s · 已连) …\n' "$node" "$host"
+      opts=(-tt -o ControlMaster=no -S "$use")
+    else
+      printf '\033[2J\033[H→ %s (%s%s%s) …\n' "$node" "$host" "$( [ "$route" = hub ] && printf ' · 经入口中转')" \
+        "$( [ ${#peer[@]} -gt 0 ] && printf ' · 入口证书 5 分钟')"
+      # keepalive 2 s × 3: a dead line is seen in ≤ 6 s (issue #1631, was 5 × 3);
+      # no compression (a LAN / tailnet only pays its latency), low-delay QoS
+      opts=(-tt -o ServerAliveInterval=2 -o ServerAliveCountMax=3 -o ConnectTimeout=8
+            -o "IPQoS=lowdelay throughput" -o Compression=no
+            -o ControlMaster=yes -o "ControlPath=$ctl" -o ControlPersist=no ${peer[@]+"${peer[@]}"})
+      [ "$route" = hub ] && opts+=(-o "ProxyCommand=$(sq "$BIN/fleet") connect --proxy $(sq "$(hub_node "$node")")")
+      rm -f "$ctl" "$ctl.route" "$ctl.upgrade"
+    fi
+    rm -f "$use.upgrade"
     sidecar & side=$!
     upgrader & upg=$!
     started=$(date +%s)
@@ -540,7 +562,8 @@ EOF_PEER
     stop_bg
     mark_route ''
     retest=1
-    if [ -f "$ctl.upgrade" ]; then
+    if [ -f "$use.upgrade" ]; then
+      rm -f "$use.upgrade"
       # the upgrader closed the relay: a direct line answered — over to it now
       printf '\n%s 的直连通了，切回直连 …\n' "$node"
       delay=1; continue

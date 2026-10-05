@@ -432,7 +432,7 @@ map_write() {
   python3 - "$json" "$lf" "$G" "$FLEET_C" "$FLEET_CONF_DIR/control/hub-workers.tsv" \
     "$user" "$(hostname 2>/dev/null)" \
     "${FLEET_NODE_ALIASES:-}" "$now" "$mf" "$BIN" "$CLIENT" "$via" <<'PY'
-import json, os, re, sys, tempfile
+import json, os, re, sys, tempfile, time
 from datetime import datetime, timezone
 jpath, lpath, gdir, cdir, wpath, user, host, aliases, now, mpath, bindir, client, via = sys.argv[1:14]
 try:
@@ -492,6 +492,20 @@ def epoch(iso):
         return int(d.timestamp())
     except Exception:
         return 0
+
+def fepoch(iso):
+    """As epoch(), to the millisecond (the end-to-end log, issue #1631)."""
+    try:
+        s = str(iso or "")
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        s = re.sub(r"(\.\d{6})\d+", r"\1", s)
+        d = datetime.fromisoformat(s)
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=timezone.utc)
+        return d.timestamp()
+    except Exception:
+        return 0.0
 
 def write(path, text):
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -555,7 +569,7 @@ for s in sessions:
                      issue=w.get("issue") or "", repo=w.get("repo") or "",
                      state=w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or ""),
                      agent=w.get("agent") or "", name=w.get("name") or w.get("key") or wid.split("/", 1)[1],
-                     owid=by_ident.get(w.get("origin_wid") or "", w.get("origin_wid") or ""), needs=w.get("needs") or "", seen=epoch(s.get("observed_at")),
+                     owid=by_ident.get(w.get("origin_wid") or "", w.get("origin_wid") or ""), needs=w.get("needs") or "", seen=epoch(s.get("observed_at")), seenf=fepoch(s.get("observed_at")),
                      local=here["sess"] if here else None,
                      lwid=windows.get((here["sess"], wid.split("/", 1)[1]), "") if here else ""))
 
@@ -606,6 +620,38 @@ def parent_of(repo, issue):
             pass
     return parents[repo].get(str(issue))
 
+def e2e_log(path, rows):
+    """The end-to-end log (issue #1631): for each row whose state or needs moved
+    since the cache on disk, one line in global/hub_e2e.log —
+    `<received ms> <observed ms> <lag ms> <worker_id> <state>|<needs>` — the
+    node's observation of the change (the hub's observed_at) to this shell
+    holding it. `--e2e` reads the median off the last 50. Kept to 500 lines."""
+    old = {}
+    try:
+        for line in open(path, encoding="utf-8"):
+            p = line.rstrip("\n").split("\x1f")
+            if p[0].startswith("wid:") and len(p) >= 10:
+                old[p[0][4:]] = (p[5], p[9])
+    except OSError:
+        return                                       # a first cache: nothing moved
+    recv = time.time()
+    new = []
+    for r in rows:
+        prev = old.get(r["wid"])
+        if prev is None or prev == (clean(r["state"]), clean(r["needs"])) or not r["seenf"]:
+            continue
+        new.append("%d %d %d %s %s|%s\n" % (recv * 1000, r["seenf"] * 1000, (recv - r["seenf"]) * 1000,
+                                            r["wid"], clean(r["state"]) or "-", clean(r["needs"]) or "-"))
+    if not new:
+        return
+    lp = os.path.join(gdir, "hub_e2e.log")
+    try:
+        with open(lp, encoding="utf-8") as f:
+            keep = f.readlines()[-(500 - len(new)):] if len(new) < 500 else []
+    except OSError:
+        keep = []
+    write(lp, "".join(keep + new[-500:]))
+
 for f in local:
     out = list(head)
     for r in rows:
@@ -645,6 +691,8 @@ for f in local:
         except OSError:
             pass
         out = out[:len(head)] + keep_nodes + out[len(head):] + keep_rows
+    if client and via == "hub":
+        e2e_log(path, rows)
     write(path, "".join(out))
 PY
 }
@@ -665,18 +713,30 @@ node_ssh_host() {
 }
 # node_sources → `<label>\t<host>\t<ctl>` per machine the shell holds a LIVE
 # connection to: a proxy window's `@remote_ctl` whose master answers `-O check`
-# (fleet-shell.sh's ssh mode makes that a yes for a host that is this computer).
+# (fleet-shell.sh's ssh mode makes that a yes for a host that is this computer),
+# then the shell's warm masters (`$TMPDIR/warm/<label>.sock`, issue #1631) for a
+# machine no window is on.
 node_sources() {
-  local remote ctl node host
-  tmux -L "$CLIENT" list-windows -t "=$CLIENT" -F "#{@remote}"$'\t'"#{@remote_ctl}" 2>/dev/null \
+  local remote ctl node host out
+  out=$(tmux -L "$CLIENT" list-windows -t "=$CLIENT" -F "#{@remote}"$'\t'"#{@remote_ctl}" 2>/dev/null \
   | while IFS=$'\t' read -r remote ctl; do
       node=${remote%%:*}
-      case "$node" in ''|-|*[!A-Za-z0-9._-]*) continue ;; esac
+      case "$node" in (''|-|*[!A-Za-z0-9._-]*) continue ;; esac
       [ -n "$ctl" ] && [ -S "$ctl" ] || continue
       host=$(node_ssh_host "$node")
       ${FLEET_REMOTE_SSH_CMD:-ssh} -S "$ctl" -O check "$host" >/dev/null 2>&1 || continue
       printf '%s\t%s\t%s\n' "$node" "$host" "$ctl"
-    done
+    done)
+  [ -n "$out" ] && printf '%s\n' "$out"
+  for ctl in "${TMPDIR:-/tmp}"/warm/*.sock; do
+    [ -S "$ctl" ] || continue
+    node=${ctl##*/}; node=${node%.sock}
+    case "$node" in ''|*[!A-Za-z0-9._-]*) continue ;; esac
+    printf '%s\n' "$out" | cut -f1 | grep -qxF "$node" && continue
+    host=$(node_ssh_host "$node")
+    ${FLEET_REMOTE_SSH_CMD:-ssh} -S "$ctl" -O check "$host" >/dev/null 2>&1 || continue
+    printf '%s\t%s\t%s\n' "$node" "$host" "$ctl"
+  done
   return 0
 }
 # node_refresh <json> <local-fleets> <window-map> → rc 0 = a cache written off the
@@ -1066,6 +1126,19 @@ status() {
   return "$rc"
 }
 
+# e2e [N] — the end-to-end readout (issue #1631): over the last N (50) lines of
+# global/hub_e2e.log, `n <count> · median <ms> · max <ms>` — a state change on a
+# node to this shell holding it. rc 1 = no line yet.
+e2e() {
+  local n="$1"
+  case "$n" in ''|*[!0-9]*) n=50 ;; esac
+  [ -s "$G/hub_e2e.log" ] || { printf 'n 0 · no change logged yet (%s)\n' "$G/hub_e2e.log"; return 1; }
+  tail -n "$n" "$G/hub_e2e.log" | awk '{ print $3 }' | sort -n | awk '
+    { v[NR] = $1 } END { if (NR == 0) exit 1
+      m = (NR % 2) ? v[(NR + 1) / 2] : int((v[NR / 2] + v[NR / 2 + 1]) / 2)
+      printf "n %d · median %dms · max %dms\n", NR, m, v[NR] }'
+}
+
 cert_paths   # CERT_KEY / CERT_PUB for every mode (cert_state runs in a subshell)
 case "${1:-}" in
   --refresh)  refresh_all ;;
@@ -1073,5 +1146,6 @@ case "${1:-}" in
   --ensure)   ensure ;;
   --status)   status ;;
   --identity) identity ;;
-  *) printf 'usage: fleet-hub-sessions.sh --refresh | --loop | --ensure | --status | --identity\n' >&2; exit 2 ;;
+  --e2e)      e2e "${2:-50}" ;;
+  *) printf 'usage: fleet-hub-sessions.sh --refresh | --loop | --ensure | --status | --identity | --e2e [N]\n' >&2; exit 2 ;;
 esac
