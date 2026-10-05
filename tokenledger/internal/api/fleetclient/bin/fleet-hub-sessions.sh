@@ -48,7 +48,11 @@
 #               off; nobody looking, it is never sent (the 10 s cadence as before).
 #   --ensure    start a detached --loop unless one is alive. The collector runs this
 #               every tick (60s), so the 10s cadence needs no daemon of its own and a
-#               loop can never outlive the collector by more than one round.
+#               loop can never outlive the collector by more than one round. The loop
+#               gets its own session (setsid), or launchd kills it with the tick
+#               (issue #1596) and the cache stops whenever no sidebar is drawing.
+#   --status    `loop <pid>|none · cache <age>s|none` for fleet-doctor; rc 1 = no
+#               loop or a cache older than FLEET_HUB_SESSIONS_STATUS_STALE (60s).
 #   --identity  WHO this login asks the hub as (issue #1475), one line, no network:
 #               `cert <cert path> <valid until>` / `token <where it came from>` /
 #               `none <why>` — exit 0 for the first two, 1 for none. fleet-doctor
@@ -978,8 +982,8 @@ loop() {
   hub_on || return 0
   mkdir -p "$G" 2>/dev/null || return 1
   local p end every t0
-  read -r p < "$PIDF" 2>/dev/null || p=''
-  if [ -n "$p" ] && [ "$p" != "$$" ] && kill -0 "$p" 2>/dev/null; then return 0; fi
+  p=$(loop_pid)
+  if [ -n "$p" ] && [ "$p" != "$$" ]; then return 0; fi
   printf '%s\n' "$$" > "$PIDF"
   end=$(( $(date +%s) + LOOP_SECS ))
   while :; do
@@ -1003,13 +1007,49 @@ loop() {
   return 0
 }
 
+# loop_pid → the live loop's pid on stdout, nothing when none. A pid file alone is
+# not proof (issue #1596): a recycled pid answers `kill -0`, and then no tick
+# would ever start the loop again — so the pid must still BE a --loop of ours.
+loop_pid() {
+  local p cmd
+  { read -r p < "$PIDF"; } 2>/dev/null || return 0
+  case "$p" in ''|*[!0-9]*) return 0 ;; esac
+  kill -0 "$p" 2>/dev/null || return 0
+  cmd=$(ps -o command= -p "$p" 2>/dev/null) || return 0
+  case "$cmd" in *fleet-hub-sessions.sh*--loop*) printf '%s\n' "$p" ;; esac
+}
+
+# The loop runs in a SESSION OF ITS OWN (issue #1596). The collector calling
+# --ensure is a launchd job, and when a job's tick exits launchd kills every
+# process left in its process group (no AbandonProcessGroup) — the `nohup … &`
+# loop died ~1 s after each start, so with no client attached to start it from
+# the sidebar, remote_<sess> stopped for 10 hours. setsid(2) takes it out of
+# that group; systemd's collect unit says KillMode=process for the same reason.
 ensure() {
   hub_on || return 0
-  local p
-  read -r p < "$PIDF" 2>/dev/null || p=''
-  if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then return 0; fi
-  ( cd / && nohup bash "$BIN/fleet-hub-sessions.sh" --loop </dev/null >/dev/null 2>&1 & )
+  [ -z "$(loop_pid)" ] || return 0
+  ( cd / && nohup python3 -c 'import os, sys
+try: os.setsid()
+except OSError: pass
+os.execvp(sys.argv[1], sys.argv[1:])' bash "$BIN/fleet-hub-sessions.sh" --loop </dev/null >/dev/null 2>&1 & )
   return 0
+}
+
+# --status → one line for fleet-doctor: `loop <pid>|none · cache <age>s|none`,
+# where cache = the age of hub_ok (the last round that stood). rc 0 = a loop is
+# alive and the cache is younger than FLEET_HUB_SESSIONS_STATUS_STALE (60s);
+# rc 1 otherwise. No network.
+status() {
+  hub_on || { printf 'off\n'; return 0; }
+  local p ts age='' stale="${FLEET_HUB_SESSIONS_STATUS_STALE:-60}" rc=0
+  case "$stale" in ''|*[!0-9]*) stale=60 ;; esac
+  p=$(loop_pid)
+  { read -r ts < "$G/hub_ok"; } 2>/dev/null || ts=''
+  case "$ts" in ''|*[!0-9]*) ts='' ;; *) age="$(( $(date +%s) - ts ))s" ;; esac
+  [ -n "$p" ] || rc=1
+  { [ -n "$age" ] && [ "${age%s}" -le "$stale" ]; } || rc=1
+  printf 'loop %s · cache %s\n' "${p:-none}" "${age:-none}"
+  return "$rc"
 }
 
 cert_paths   # CERT_KEY / CERT_PUB for every mode (cert_state runs in a subshell)
@@ -1017,6 +1057,7 @@ case "${1:-}" in
   --refresh)  refresh_all ;;
   --loop)     loop ;;
   --ensure)   ensure ;;
+  --status)   status ;;
   --identity) identity ;;
-  *) printf 'usage: fleet-hub-sessions.sh --refresh | --loop | --ensure | --identity\n' >&2; exit 2 ;;
+  *) printf 'usage: fleet-hub-sessions.sh --refresh | --loop | --ensure | --status | --identity\n' >&2; exit 2 ;;
 esac
