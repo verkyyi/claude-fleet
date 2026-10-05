@@ -191,6 +191,23 @@ else   # a half-synced install without the lib: the historic switch
 fi
 [ "$MODE" = 0 ] && quiet 'FLEET_CHILD_REPORT=0 for this fleet'
 
+# --- the hub copy of what this worker leaves (issue #1609) -----------------------
+# A ship report is the moment the evidence is complete: hand it (and nothing else
+# yet — the history row is the reap's) to the hub, so the machine that spawned this
+# worker sees it even when this machine is another one. Not a hub node → exit 3,
+# nothing sent; it never holds up or fails the report.
+case "$STATE" in
+  merged|blocked)
+    case "$wissue" in
+      ''|*[!0-9]*) ;;
+      *) if [ "$DRY" != 1 ] && [ -n "$sess" ] && [ -f "$BIN/fleet-worker-records.sh" ]; then
+           _wr_repo=$(fleet_window_repo "$sess" "$selfwin" 2>/dev/null)
+           [ -n "$_wr_repo" ] && bash "$BIN/fleet-worker-records.sh" push --session "$sess" \
+             --repo "$_wr_repo" --key "$wissue" --win "$selfwin" --evidence-only >/dev/null 2>&1 || :
+         fi ;;
+    esac ;;
+esac
+
 # --- rail 1: is there a parent at all? ----------------------------------------
 # Empty ≡ hub (the operator spawned it — they have the dash). The literals
 # `autofill` / `bridge` are daemons with no session to talk to, and a bare fleet
