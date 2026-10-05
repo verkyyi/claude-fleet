@@ -665,9 +665,9 @@ eq "labels: pool → hub: labels only" $'h1\nh2' "$(FLEET_ACCOUNT_CLASS=pool acc
 # still no account.
 _ad="$ACCT_DIR"; ACCT_DIR="$WORK/accounts-cls"; mkdir -p "$ACCT_DIR"
 printf 'tok\n' > "$ACCT_DIR/own"; printf 'hub:lease\n' > "$ACCT_DIR/lease"; printf 'LIMIT_TTL=1h\n' > "$ACCT_DIR/own.conf"
-eq "labels(dir): local" own "$(FLEET_ACCOUNTS= FLEET_ACCOUNT_CLASS=local acct_labels)"
-eq "labels(dir): pool" lease "$(FLEET_ACCOUNTS= FLEET_ACCOUNT_CLASS=pool acct_labels)"
-eq "labels(dir): none → both" $'lease\nown' "$(FLEET_ACCOUNTS= acct_labels)"
+eq "labels(dir): local" own "$(FLEET_ACCOUNTS='' FLEET_ACCOUNT_CLASS=local acct_labels)"
+eq "labels(dir): pool" lease "$(FLEET_ACCOUNTS='' FLEET_ACCOUNT_CLASS=pool acct_labels)"
+eq "labels(dir): none → both" $'lease\nown' "$(FLEET_ACCOUNTS='' acct_labels)"
 ACCT_DIR="$_ad"
 # pick_active never leaves the class — here the pool-wide active is a hub account.
 eq "pick(local): active is pool → first local" a "$(FLEET_ACCOUNT_CLASS=local pick_active h1)"
