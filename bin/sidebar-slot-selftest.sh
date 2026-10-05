@@ -61,7 +61,6 @@ def eq(name, want, got):
 HOLD = "while :; do sleep 300; done"
 NS = subprocess.run(["tmux", "-f", "/dev/null", "new-session", "-d", "-s", "f", "-x", "152", "-y", "26",
                      "-n", "issue-1", HOLD], text=True, capture_output=True)
-t("set-option", "-g", "window-size", "manual")
 L = t("display-message", "-p", "-t", "f:issue-1", "#{window_id}")
 if not L.startswith("@"):
     print("FAIL: setup: the isolated tmux server did not start (%s: %s)"
@@ -72,6 +71,10 @@ for node in ("m4", "m5"):
     w = t("new-window", "-d", "-P", "-F", "#{window_id}", "-t", "f:", "-n", node, HOLD)
     t("set-option", "-w", "-t", w, "@remote", node + ":x/issue-" + node)
     P[node] = w
+# Each window sized on its own: tmux 3.4 crashes creating a detached window while
+# the GLOBAL window-size is manual (see fleet-sidebar-selftest.sh).
+for w in (L, *P.values()):
+    t("resize-window", "-t", w, "-x", "152", "-y", "26")
 P1, P2 = P["m4"], P["m5"]
 app = {w: t("display-message", "-p", "-t", w, "#{pane_id}") for w in (L, P1, P2)}
 def mkview(w):
