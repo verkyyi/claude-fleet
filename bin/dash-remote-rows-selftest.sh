@@ -432,6 +432,13 @@ pf=$(REPO_FOLD=acme-tool FLEET_SHELL=1 shell_side)
 eq "P: the shell's @repo_fold folds that group: ▸ heading, its rows hidden" \
    "app (2);▸ tool (1);无仓库 (1);" "$(shdrs "$pf")"
 eq "P: …the rest stay" "应用二;应用活;草稿三;" "$(sorder "$pf")"
+# The keep-current rail joins on the ROW key (issue #1697): the shell's current
+# window is a proxy (`@12`) whose row is `wid:…` — the sidebar passes that as
+# FLEET_SIDEBAR_CURRENT_ROW, and a folded group still shows the row being viewed.
+eq "P: the row the shell is viewing stays inside its folded group" "应用二;应用活;工具活;草稿三;" \
+   "$(sorder "$(REPO_FOLD=acme-tool FLEET_SHELL=1 FLEET_SIDEBAR_CURRENT=@12 FLEET_SIDEBAR_CURRENT_ROW="wid:$F/issue-11" shell_side)")"
+eq "P: …the proxy's local window id alone never matched a \`wid:\` row (the #1697 bug)" "应用二;应用活;草稿三;" \
+   "$(sorder "$(REPO_FOLD=acme-tool FLEET_SHELL=1 FLEET_SIDEBAR_CURRENT=@12 shell_side)")"
 : > "$TMUX_LOG"
 PATH="$SHIMPATH" FLEET_SHELL=1 FLEET_SESSION=$SH DASH_FOLD_PLAIN=1 bash "$BIN/dash-fold-toggle.sh" collapse hdr:acme/tool >/dev/null 2>&1
 has "P: ← on a shell heading writes the fold to the shell's OWN session" "$(cat "$TMUX_LOG")" "set-option -t =$SH: @repo_fold acme-tool"
