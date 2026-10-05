@@ -90,6 +90,14 @@ else
 fi
 export PATH="$WORK/bin:$PATH"
 export FLEET_CONF_DIR="$WORK/conf" FLEET_HUB_VISITS_LOGDIR="$WORK/logs" TMPDIR="$WORK"
+# A UTF-8 locale for the server, and -u on the client: in the C locale (a CI
+# runner with no LANG) tmux draws every non-ASCII cell — the prompt's ▸, the
+# ⌂ — as `_`, and the pattern below never arrives.
+case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+  *UTF-8*|*utf8*|*UTF8*) ;;
+  *) locale -a > "$WORK/locales" 2>/dev/null   # (not `locale -a | grep -q`: pipefail + grep's early exit = SIGPIPE = no match)
+     for loc in C.UTF-8 en_US.UTF-8; do grep -qix "$loc" "$WORK/locales" && { export LC_ALL="$loc"; break; }; done ;;
+esac
 export FLEET_UI_LANG=en
 mkdir -p "$FLEET_CONF_DIR/fleets/t" "$WORK/logs"
 printf 'FLEET_SIDEBAR=1\n' > "$FLEET_CONF_DIR/fleets/t/conf"
@@ -123,7 +131,7 @@ if pid == 0:
     os.environ['TERM'] = 'xterm-256color'
     os.environ.pop('TMUX', None); os.environ.pop('TMUX_PANE', None)
     fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
-    os.execvp(tmux, [tmux, '-S', sock, 'attach', '-t', 't'])
+    os.execvp(tmux, [tmux, '-u', '-S', sock, 'attach', '-t', 't'])
 buf = bytearray()
 def pump(timeout):
     r, _, _ = select.select([fd], [], [], timeout)
@@ -162,7 +170,7 @@ EOF
 env -u TMUX -u TMUX_PANE python3 "$WORK/client.py" "$REAL_TMUX" "$SOCK" "$TAPS" > "$WORK/taps" 2>"$WORK/client.err"
 grep -q '^noclient' "$WORK/taps" && { printf 'selftest: the pty client never attached — SKIP\n' >&2; cat "$WORK/client.err" >&2; exit 0; }
 median=$(awk '$1=="median"{print $2}' "$WORK/taps")
-printf 'taps: %s\n' "$(awk '$1=="tap"{printf "%s ", $3}' "$WORK/taps")"
+printf 'taps: %s %s locale=%s\n' "$(awk '$1=="tap"{printf "%s ", $3}' "$WORK/taps")" "$FZF_NOTE" "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}"
 
 # --- A. the trace column ------------------------------------------------------
 n=$(grep -c "	home-pick" "$LOG" 2>/dev/null || echo 0)
