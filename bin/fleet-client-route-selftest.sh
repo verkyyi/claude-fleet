@@ -255,7 +255,7 @@ waitfor 10 is_relay || fail 'E: the relay connection marks @remote_route relay' 
 sleep 2                                            # a few failed probes: nothing moves
 eq 'E: the probe failing → still one connection' 1 "$(cat "$WORK/connects" 2>/dev/null)"
 t0=$(date +%s); : > "$WORK/direct.up"
-two() { [ "$(cat "$WORK/connects" 2>/dev/null)" = 2 ]; }
+two() { [ "$(grep -c . "$WORK/connect-e.log" 2>/dev/null)" = 2 ]; }   # the log line lands after the count
 waitfor 10 two || fail 'E: the direct line answered → a second connection' "$(cat "$WORK/connect-e.log" 2>/dev/null)"
 t1=$(tail -n 1 "$WORK/connect-e.log" | awk '{ print $3 }')
 CHECKS=$((CHECKS + 1)); [ $(( ${t1:-99999} - t0 )) -le 4 ] || fail "E: switched within tick + idle + reconnect (scaled ≤ 4s)" "$(( ${t1:-0} - t0 ))s"
