@@ -60,6 +60,7 @@ PREFILL_LOG="$WORK/prefill"
 
 ln -s "$RAW" "$WORK/bin/dash-raw-session.sh"
 ln -s "$LIB" "$WORK/bin/fleet-lib.sh"
+ln -s "$BIN/fleet-ui-lang.sh" "$WORK/bin/fleet-ui-lang.sh"   # fleet_ui_fail (issue #1618)
 # Record the async prefill handoff; scratch-prefill-selftest.sh tests delivery.
 cat > "$WORK/bin/scratch-prefill.py" <<'PY'
 import json, os, sys
@@ -159,6 +160,7 @@ git -C "$MAIN" show-ref --verify -q refs/heads/scratch-1 || fail "A a scratch-1 
 # covers the dash until the user presses Esc.
 [ -s "$WORK/out" ] && fail "A the spawn must be silent on stdout (run-shell would overlay it on the dash)" "$(cat "$WORK/out")"
 [ -s "$PREFILL_LOG" ] && fail "A an unnamed scratch must keep an empty input"
+[ -s "$DISPLAY_LOG" ] && fail "A a spawn that works draws NO line — the window is the answer (issue #1618)" "$(cat "$DISPLAY_LOG")"
 ok "A raw spawn creates a @raw scratch-1 WORKTREE off base, @worktree set, no @issue"
 
 # ============================ B: cap refusal ================================
@@ -168,6 +170,8 @@ WINS=$'plan\nworker-1' FLEET_MAX_SESSIONS=1 run_raw; rc_b=$?
 [ -s "$NEWWIN_LOG" ] && fail "B a cap refusal must NOT create a window" "$(cat "$NEWWIN_LOG")"
 [ -e "$WORK/main-scratch-1" ] && fail "B a cap refusal must NOT create a worktree" "$(git -C "$MAIN" worktree list)"
 grep -qi 'capacity' "$DISPLAY_LOG"       || fail "B cap refusal should surface a capacity message" "$(cat "$DISPLAY_LOG")"
+[ "$(wc -l < "$DISPLAY_LOG" | tr -d ' ')" = 1 ] || fail "B a refusal is EXACTLY one line (issue #1618)" "$(cat "$DISPLAY_LOG")"
+grep -q '^✗ \|✗ ' "$DISPLAY_LOG"        || fail "B the refusal goes through fleet_ui_fail ('✗ <reason>', issue #1618)" "$(cat "$DISPLAY_LOG")"
 grep -qi 'capacity' "$WORK/err"          || fail "B the cap reason must reach STDERR — a headless (cross-fleet) caller never sees the toast (issue #683)" "$(cat "$WORK/err")"
 [ "$rc_b" = 2 ]                          || fail "B a cap refusal exits 2 (retry-later class), matching dash-issue-session.sh (issue #683)" "rc=$rc_b"
 ok "B raw spawn honours the session cap (refuses, no window, no worktree)"
@@ -357,7 +361,7 @@ tf="$(grep -o "cat '[^']*task_scratch-1.txt'" "$NEWWIN_LOG" | head -1 | sed "s/^
 [ -n "$tf" ] && [ -f "$tf" ]               || fail "N the task file task_scratch-1.txt must exist" "$(cat "$NEWWIN_LOG")"
 [ "$(cat "$tf")" = $'audit the dash binds for "$(injection)" risks' ] || fail "N the task file must hold the prompt verbatim" "$(cat "$tf")"
 grep -qs 'claim' "$POOL_LOG"               && fail "N a seeded scratch must never claim a warm-pool window (the seed is a launch arg)" "$(cat "$POOL_LOG")"
-grep -q 'seeded' "$DISPLAY_LOG"            || fail "N the status line should say the scratch was seeded" "$(cat "$DISPLAY_LOG")"
+[ -s "$DISPLAY_LOG" ]                      && fail "N a seeded spawn that works draws NO line (issue #1618)" "$(cat "$DISPLAY_LOG")"
 # …while an UNSEEDED spawn does consult the pool first
 reset_scratch; : > "$POOL_LOG"
 WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw
@@ -427,7 +431,7 @@ reset_scratch; : > "$POOL_LOG"; : > "$NEWWIN_LOG"
 WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --agent codex
 grep -qF -- "fleet-claude.sh' --agent codex" "$NEWWIN_LOG" || fail "O --agent codex must reach the launcher inside the new-window command" "$(cat "$NEWWIN_LOG")"
 grep -qs 'claim' "$POOL_LOG"               && fail "O an explicit --agent scratch must never claim a warm-pool window" "$(cat "$POOL_LOG")"
-grep -q '\[codex\]' "$DISPLAY_LOG"         || fail "O the status line should name the agent" "$(cat "$DISPLAY_LOG")"
+[ -s "$DISPLAY_LOG" ]                      && fail "O a codex spawn that works draws NO line (issue #1618)" "$(cat "$DISPLAY_LOG")"
 reset_scratch; : > "$NEWWIN_LOG"
 WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --bg --agent=codex --prompt 'seeded on codex'
 grep -qF -- "fleet-claude.sh' --agent codex \"\$(cat '" "$NEWWIN_LOG" || fail "O --bg --agent must survive the re-exec and precede the seed" "$(cat "$NEWWIN_LOG")"

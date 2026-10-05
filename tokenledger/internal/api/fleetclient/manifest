@@ -49,6 +49,7 @@ bin/fleet-daemon-lib.sh
 bin/fleet-alerts.sh
 bin/dash-keymap.sh
 bin/dash-popup.sh
+bin/fleet-popup-lib.sh
 bin/dash-fold-toggle.sh
 bin/fleet-keys.sh
 conf/tmux-shell.conf

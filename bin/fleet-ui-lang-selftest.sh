@@ -68,8 +68,9 @@ used=$( { grep -hE 'fleet_ui_t [a-z]' "$BIN"/*.sh | grep -Ev '^[[:space:]]*#' | 
           grep -ohE '\$\(t [a-z][a-z0-9_]+' "$BIN/fleet-sidebar-menu.sh" | awk '{print $2}'
           grep -ohE 'tr\("[a-z0-9_]+"' "$BIN/fleet-sidebar.py" | sed 's/tr("//; s/"//'
           grep -ohE -- '--title[", ]+popup_[a-z0-9_]+' "$BIN"/*.sh "$BIN"/*.py "$ROOT"/conf/*.conf | grep -oE 'popup_[a-z0-9_]+$'
-          grep -ohE "toast '#\{client_name\}' [a-z_]+" "$ROOT"/conf/*.conf | awk '{print $3}'
+          grep -ohE "(toast|hint) '#\{client_name\}' [a-z_]+" "$ROOT"/conf/*.conf | awk '{print $3}'
           grep -ohE 'fleet-ui-lang\.sh" t [a-z_]+' "$BIN"/*.sh | awk '{print $3}'
+          grep -ohE 'fleet-ui-lang\.sh" hint "[^"]*" [a-z_]+' "$BIN"/*.sh | awk '{print $NF}'   # issue #1618
         } | grep -vxE 'remote_label_|needs_' | sort -u)
 missing=$(comm -23 <(printf '%s\n' "$used") <(printf '%s\n' "$zk"))
 [ -z "$missing" ] || fail 'the code asks for keys the table lacks' "$missing"

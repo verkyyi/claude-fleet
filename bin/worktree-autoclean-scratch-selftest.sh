@@ -40,7 +40,12 @@ mkdir -p "$WORK/bin" "$WORK/fakebin" "$WORK/conf" "$WORK/logs"
 ln -s "$SRC" "$WORK/bin/worktree-autoclean.sh"
 ln -s "$LIB" "$WORK/bin/fleet-lib.sh"
 ln -s "$BIN/fleet-reap-live.py" "$WORK/bin/fleet-reap-live.py"
-NOTIFY_LOG="$WORK/notify"; LIVE_FILE="$WORK/live"; : > "$NOTIFY_LOG"; : > "$LIVE_FILE"
+# issue #1617: the janitor RECORDS a kept scratch in the alerts (fleet-alerts.sh
+# event → $TMPDIR/.claude-dash/global/alerts.events), it never flashes a toast:
+# NOTIFY_LOG is the fake tmux's display-message log and must stay empty.
+for f in fleet-alerts.sh usage-lib.sh fleet-daemon-lib.sh; do ln -s "$BIN/$f" "$WORK/bin/$f"; done
+mkdir -p "$WORK/tmp/.claude-dash/global"; EVENTS="$WORK/tmp/.claude-dash/global/alerts.events"
+NOTIFY_LOG="$WORK/notify"; LIVE_FILE="$WORK/live"; : > "$NOTIFY_LOG"; : > "$LIVE_FILE"; : > "$EVENTS"
 
 # --- build a real base checkout + scratch/issue worktrees ---------------------
 BASE="$WORK/base"
@@ -122,7 +127,7 @@ FLEET_PROTECTED_RE='^(master|main|develop|test)\$'
 EOF
 
 run_wac() {   # run worktree-autoclean.sh with the fakes; args forwarded (--dry-run)
-  PATH="$WORK/fakebin:$PATH" FLEET_CONF_DIR="$WORK/conf" CLAUDE_PROJECTS_DIR="$PROJ" \
+  PATH="$WORK/fakebin:$PATH" FLEET_CONF_DIR="$WORK/conf" CLAUDE_PROJECTS_DIR="$PROJ" TMPDIR="$WORK/tmp" \
     bash "$WORK/bin/worktree-autoclean.sh" "$@" 2>"$WORK/err"
 }
 
@@ -155,15 +160,16 @@ git -C "$BASE" show-ref --verify -q refs/heads/scratch-1 && fail "real run shoul
 SURF="$WORK/logs/.scratch-surfaced"
 [ "$(ls -1 "$SURF" 2>/dev/null | wc -l | tr -d ' ')" = 3 ] || fail "exactly three scratch surface markers expected" "$(ls -la "$SURF" 2>/dev/null)"
 # notify fired for scratch-2 + scratch-3 + scratch-6
-grep -q 'NOTIFY.*scratch-2 kept (unmerged work)' "$NOTIFY_LOG" || fail "scratch-2 should have surfaced a notify" "$(cat "$NOTIFY_LOG")"
-grep -q 'NOTIFY.*scratch-3 kept (dirty)' "$NOTIFY_LOG" || fail "scratch-3 should have surfaced a notify" "$(cat "$NOTIFY_LOG")"
-grep -q 'NOTIFY.*scratch-6 kept (clean, but a session ran here)' "$NOTIFY_LOG" || fail "scratch-6 should have surfaced a notify" "$(cat "$NOTIFY_LOG")"
-n1="$(wc -l < "$NOTIFY_LOG" | tr -d ' ')"
+grep -q 'scratch-2 kept (unmerged work)' "$EVENTS" || fail "scratch-2 should have surfaced a notify" "$(cat "$EVENTS")"
+grep -q 'scratch-3 kept (dirty)' "$EVENTS" || fail "scratch-3 should have surfaced a notify" "$(cat "$EVENTS")"
+grep -q 'scratch-6 kept (clean, but a session ran here)' "$EVENTS" || fail "scratch-6 should have surfaced a notify" "$(cat "$EVENTS")"
+[ -s "$NOTIFY_LOG" ] && fail "a kept scratch is recorded in the alerts, never flashed (issue #1617)" "$(cat "$NOTIFY_LOG")"
+n1="$(wc -l < "$EVENTS" | tr -d ' ')"
 ok "REAL: pristine/merged scratch reaped; conversation/dirty/unmerged kept + surfaced once (markers + notify)"
 
 # ============================ SURFACE-ONCE dedup ===========================
 run_wac >/dev/null
-n2="$(wc -l < "$NOTIFY_LOG" | tr -d ' ')"
+n2="$(wc -l < "$EVENTS" | tr -d ' ')"
 [ "$n1" = "$n2" ] || fail "a second sweep must NOT re-notify a still-kept scratch (surface once)" "before=$n1 after=$n2"
 ok "SURFACE-ONCE: a kept scratch is surfaced only on the first sweep, not every cycle"
 

@@ -39,7 +39,12 @@ mkdir -p "$WORK/bin" "$WORK/fakebin" "$WORK/conf" "$WORK/logs"
 ln -s "$SRC" "$WORK/bin/worktree-autoclean.sh"
 ln -s "$LIB" "$WORK/bin/fleet-lib.sh"
 ln -s "$BIN/fleet-reap-live.py" "$WORK/bin/fleet-reap-live.py"
-NOTIFY_LOG="$WORK/notify"; LIVE_FILE="$WORK/live"; : > "$NOTIFY_LOG"; : > "$LIVE_FILE"
+# issue #1617: the janitor RECORDS a kept scratch in the alerts (fleet-alerts.sh
+# event → $TMPDIR/.claude-dash/global/alerts.events), it never flashes a toast:
+# NOTIFY_LOG is the fake tmux's display-message log and must stay empty.
+for f in fleet-alerts.sh usage-lib.sh fleet-daemon-lib.sh; do ln -s "$BIN/$f" "$WORK/bin/$f"; done
+mkdir -p "$WORK/tmp/.claude-dash/global"; EVENTS="$WORK/tmp/.claude-dash/global/alerts.events"
+NOTIFY_LOG="$WORK/notify"; LIVE_FILE="$WORK/live"; : > "$NOTIFY_LOG"; : > "$LIVE_FILE"; : > "$EVENTS"
 
 BASE="$WORK/base"
 git init -q "$BASE"
@@ -98,7 +103,7 @@ $1
 EOF
 }
 run_wac() {
-  PATH="$WORK/fakebin:$PATH" FLEET_CONF_DIR="$WORK/conf" CLAUDE_PROJECTS_DIR="$PROJ" \
+  PATH="$WORK/fakebin:$PATH" FLEET_CONF_DIR="$WORK/conf" CLAUDE_PROJECTS_DIR="$PROJ" TMPDIR="$WORK/tmp" FLEET_ALERTS_EVENT_DEDUP=0 \
     bash "$WORK/bin/worktree-autoclean.sh" "$@" 2>"$WORK/err"
 }
 norm() { sed -E 's/lease [0-9]+s/lease Ns/'; }   # the lease age ticks between runs
@@ -136,7 +141,7 @@ printf '%s\n' "$out" | grep -Eq 'PRUNE +scratch-7 .*scratch idle [0-9]+d' || fai
 [ "$(printf '%s\n' "$out" | grep -c '^DIGEST')" = 1 ] || fail "exactly ONE digest line expected" "$out"
 printf '%s\n' "$out" | grep -E '^DIGEST' | grep -q 'scratch-5.*scratch-6' || fail "the digest lists every idle kept scratch" "$out"
 [ -d "$WORK/base-scratch-1" ] || fail "dry run must not remove anything"
-[ -s "$NOTIFY_LOG" ] && fail "dry run must not notify" "$(cat "$NOTIFY_LOG")"
+[ -s "$EVENTS" ] && fail "dry run must not notify" "$(cat "$EVENTS")"
 ok "DRY: idle clean → PRUNE; recent/live/leased → KEEP; idle dirty/unmerged → one digest"
 
 # ======================= ON: real run =======================================
@@ -150,18 +155,19 @@ LOG="$WORK/logs/worktree-autoclean.log"
 grep -Eq 'autoclean: scratch idle [0-9]+d → trash .*/\.fleet-trash/base-scratch-1\.' "$LOG" \
   || fail "missing the 'autoclean: scratch idle <Nd> → trash <path>' line for scratch-1" "$(cat "$LOG")"
 [ "$(grep -c 'autoclean: scratch idle' "$LOG")" = 2 ] || fail "exactly two idle-reclaim log lines expected" "$(cat "$LOG")"
-[ "$(grep -c 'idle scratch worktree' "$NOTIFY_LOG")" = 1 ] || fail "ONE digest notify expected" "$(cat "$NOTIFY_LOG")"
-grep -q 'scratch-2 kept (clean, but a session ran here)' "$NOTIFY_LOG" || fail "recent scratch-2 still surfaces once" "$(cat "$NOTIFY_LOG")"
-grep -Eq 'scratch-(5|6) kept' "$NOTIFY_LOG" && fail "idle kept scratches go to the digest, not one notify each" "$(cat "$NOTIFY_LOG")"
+[ "$(grep -c 'idle scratch worktree' "$EVENTS")" = 1 ] || fail "ONE digest notify expected" "$(cat "$EVENTS")"
+grep -q 'scratch-2 kept (clean, but a session ran here)' "$EVENTS" || fail "recent scratch-2 still surfaces once" "$(cat "$EVENTS")"
+grep -Eq 'scratch-(5|6) kept' "$EVENTS" && fail "idle kept scratches go to the digest, not one notify each" "$(cat "$EVENTS")"
+[ -s "$NOTIFY_LOG" ] && fail "a kept scratch is recorded in the alerts, never flashed (issue #1617)" "$(cat "$NOTIFY_LOG")"
 ok "REAL: idle clean scratches trashed + logged; kept work announced in one digest"
 
 # ======================= digest cadence: once per 24h ======================
-n1="$(grep -c 'idle scratch worktree' "$NOTIFY_LOG")"
+n1="$(grep -c 'idle scratch worktree' "$EVENTS")"
 run_wac >/dev/null
-[ "$(grep -c 'idle scratch worktree' "$NOTIFY_LOG")" = "$n1" ] || fail "a second sweep within 24h must not re-send the digest" "$(cat "$NOTIFY_LOG")"
+[ "$(grep -c 'idle scratch worktree' "$EVENTS")" = "$n1" ] || fail "a second sweep within 24h must not re-send the digest" "$(cat "$EVENTS")"
 touch -t "$OLD" "$WORK/logs/.scratch-idle-digest"   # the last digest is now > 24h old
 run_wac >/dev/null
-[ "$(grep -c 'idle scratch worktree' "$NOTIFY_LOG")" = $((n1 + 1)) ] || fail "after 24h the digest must repeat" "$(cat "$NOTIFY_LOG")"
+[ "$(grep -c 'idle scratch worktree' "$EVENTS")" = $((n1 + 1)) ] || fail "after 24h the digest must repeat" "$(cat "$EVENTS")"
 ok "DIGEST: at most once per 24h, and it repeats while the work is still there"
 
 printf '\nselftest OK: %s assertions passed (scratch idle age gate, #884)\n' "$pass"

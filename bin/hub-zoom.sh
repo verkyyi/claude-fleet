@@ -91,7 +91,7 @@ if [ "$nav" = 0 ] &&
     # a terminal paste of a session name then lands on the input line, not Claude.
     sid=$(tmux display-message -p '#{session_id}' 2>/dev/null)
     bash "$BIN/fleet-sidebar.sh" key "$sid" Escape >/dev/null 2>&1 || :
-    tmux display-message ${client:+-c "$client"} "$(sh "$BIN/fleet-ui-lang.sh" t toast_sidebar_home)" 2>/dev/null || :
+    sh "$BIN/fleet-ui-lang.sh" hint "$client" toast_sidebar_home   # once a day per login (issue #1618)
     if [ "$mode" = --home ]; then cause=home-sidebar; else cause=f9-sidebar; fi
     fleet_home_end focus
     bash "$BIN/fleet-hub-visits.sh" record '' "$SESS" "$cause" \

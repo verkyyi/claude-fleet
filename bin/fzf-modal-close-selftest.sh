@@ -35,6 +35,7 @@ fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 HEAD='click-header:transform:case "$FZF_CLICK_HEADER_WORD" in'
 CLOSE_CASE='*✕*|*close*) echo abort ;; esac'
 TOKEN='[✕ close]'
+FHEAD='fleet_fzf_click '"'"'transform:case "$FZF_CLICK_FOOTER_WORD$FZF_CLICK_HEADER_WORD" in'
 
 # The fzf modals that MUST carry the tap-to-close affordance (each already passes
 # a --header). tmux-issues.sh shows the chip only in its POPUP branch (a windowed
@@ -50,7 +51,8 @@ for m in $MODALS; do
   grep -qF -- "$TOKEN" "$f" || fail "$m: --header missing the '[✕ close]' button chip"
   ok
   # the click-header→abort bind is present, using the globbed close case
-  grep -qF -- "$HEAD" "$f"       || fail "$m: missing the click-header:transform bind head"
+  # (or fleet_fzf_click's, #1619: the same case on the header AND the footer line)
+  grep -qF -- "$HEAD" "$f" || grep -qF -- "$FHEAD" "$f" || fail "$m: missing the click-header:transform bind head"
   grep -qF -- "$CLOSE_CASE" "$f" || fail "$m: missing the *✕*|*close*→abort case"
   ok
 done
