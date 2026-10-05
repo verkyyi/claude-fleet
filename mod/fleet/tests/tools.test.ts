@@ -8,6 +8,7 @@ import type { On, ProcessRunResult } from 'claude-code'
 
 import { SUPPORTED } from '../hooks/version'
 import { AWAIT_DEFAULT_S, AWAIT_MAX_S, TOOL_SPECS, binDir, checkArgs, parseRepoList } from '../hooks/tools'
+import { isWhereRun } from '../hooks/where'
 
 const START = { cwd: '/tmp', surface: 'terminal', isInteractive: false } as const
 
@@ -27,7 +28,7 @@ function engine(on: On, scripts: Record<string, ProcessRunResult> = {}) {
   on('session.version', () => ({ value: { version: SUPPORTED.min, base: SUPPORTED.min } }))
   on('process.run', (_$, e) => {
     const argv = [...e.argv]
-    runs.push(argv)
+    if (!isWhereRun(argv)) runs.push(argv)
     const name = (argv[0] ?? '').replace(/^.*\//, '')
     if (name === 'fleet-repo.sh') return { value: ran(0, REPO_LIST) }
     return { value: scripts[name] ?? ran(0) }

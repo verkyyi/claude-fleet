@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -162,5 +163,71 @@ func TestClientLeaseTableExpiry(t *testing.T) {
 	}
 	if l := tb.acquire("p:c", ClientLeaseRequest{}, t1); l.Lease.Device != "未知设备" {
 		t.Fatalf("no device = %q, want 未知设备", l.Lease.Device)
+	}
+}
+
+// Where the owner is (claude-fleet#1716, C6): a node reads, with its own
+// token, the client its OWNER holds right now — every field a client reported,
+// the unknown words dropped — and a node of another person reads none; a
+// takeover is what the next read answers.
+func TestNodeClientReadsOwnersLease(t *testing.T) {
+	h, _, n := peerHarness(t)
+	read := func(tok string) (int, ClientLeaseResponse) {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodGet, h.http.URL+"/v1/node/client", nil)
+		if tok != "" {
+			req.Header.Set("Authorization", "Bearer "+tok)
+		}
+		res, err := h.http.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		var out ClientLeaseResponse
+		_ = json.NewDecoder(res.Body).Decode(&out)
+		return res.StatusCode, out
+	}
+	if code, out := read(n["alice4"].token); code != 200 || out.State != "none" {
+		t.Fatalf("nobody connected: HTTP %d %+v", code, out)
+	}
+	alice := clientLeaseKey(sshRelayIdentity{Principal: "Alice"})
+	now := time.Now()
+	h.srv.clientLeases.acquire(alice, ClientLeaseRequest{Device: "MacBook", OS: "macOS", Terminal: "iTerm2 3.6.1",
+		Via: "local", Host: "MacBook", Caps: []string{"open_url", "show_file", "notify", "iterm2", "rm -rf"}}, now)
+	code, out := read(n["alice4"].token)
+	if code != 200 || out.State != "active" || out.Lease == nil {
+		t.Fatalf("alice on m4: HTTP %d %+v", code, out)
+	}
+	l := out.Lease
+	if l.Device != "MacBook" || l.OS != "macOS" || l.Terminal != "iTerm2 3.6.1" || l.Via != "local" || l.Host != "MacBook" {
+		t.Fatalf("fields: %+v", l)
+	}
+	if got := strings.Join(l.Caps, ","); got != "open_url,show_file,notify,iterm2" {
+		t.Fatalf("caps: %q", got)
+	}
+	if _, o := read(n["alice5"].token); o.Lease == nil || o.Lease.ID != l.ID {
+		t.Fatalf("alice's other machine reads the same lease: %+v", o)
+	}
+	if _, o := read(n["bob4"].token); o.State != "none" {
+		t.Fatalf("bob's node must not read alice's client: %+v", o)
+	}
+	// The phone takes over: the next read follows.
+	h.srv.clientLeases.acquire(alice, ClientLeaseRequest{Device: "verkyyi-iphone", OS: "iOS", Terminal: "Termius",
+		Via: "tailnet", Host: "m5", Caps: []string{"link"}}, now.Add(time.Second))
+	if _, o := read(n["alice4"].token); o.Lease == nil || o.Lease.Device != "verkyyi-iphone" || o.Lease.Host != "m5" || o.Lease.Via != "tailnet" {
+		t.Fatalf("after takeover: %+v", o.Lease)
+	}
+	// A bad via is dropped, not stored.
+	h.srv.clientLeases.acquire(alice, ClientLeaseRequest{Device: "x", Via: "carrier-pigeon"}, now.Add(2*time.Second))
+	if _, o := read(n["alice4"].token); o.Lease == nil || o.Lease.Via != "" {
+		t.Fatalf("bad via kept: %+v", o.Lease)
+	}
+	// The operator's own login (owned by nobody) reads the operator's lease.
+	h.srv.clientLeases.acquire("operator", ClientLeaseRequest{Device: "op-mac"}, now)
+	if _, o := read(n["verk4"].token); o.Lease == nil || o.Lease.Device != "op-mac" {
+		t.Fatalf("operator's node: %+v", o.Lease)
+	}
+	if code, _ := read(""); code != 401 {
+		t.Fatalf("no token: HTTP %d", code)
 	}
 }

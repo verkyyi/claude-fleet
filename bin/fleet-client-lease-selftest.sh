@@ -28,6 +28,9 @@
 #                   standby naming the MacBook
 #   E. release    — a shell server that ends gives its lease up (release logged),
 #                   so the next client anywhere takes nothing over
+# and, at each step, the where (issue #1716): an acquire carries the client's
+# saved where (--where-file), client.where.json names the client in use, and a
+# machine on standby holds none
 # tmux / python3 absent → SKIP (exit 0). Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -75,9 +78,14 @@ cat > "$WORK/lease" <<EOF
 #!/bin/bash
 # fake client lease — the hub's rules, one person
 H="$H"
-act=\$1; shift; lease=''; dev=''
-while [ \$# -gt 0 ]; do case "\$1" in --lease) lease=\$2; shift 2 ;; --device) dev=\$2; shift 2 ;; *) shift ;; esac; done
-[ "\$act" = device ] && { printf '%s\tFakeTerm\n' "\${FLEET_CLIENT_DEVICE:-未知设备}"; exit 0; }
+act=\$1; shift; lease=''; dev=''; save=''; wf=''
+while [ \$# -gt 0 ]; do case "\$1" in --lease) lease=\$2; shift 2 ;; --device) dev=\$2; shift 2 ;; --save) save=\$2; shift 2 ;; --where-file) wf=\$2; shift 2 ;; *) shift ;; esac; done
+if [ "\$act" = device ]; then
+  # the whole where saved for the tty (#1716), as the real one does
+  [ -n "\$save" ] && printf '{"device": "%s", "terminal": "FakeTerm", "via": "local", "caps": ["open_url"]}\n' "\${FLEET_CLIENT_DEVICE:-未知设备}" > "\$save"
+  printf '%s\tFakeTerm\n' "\${FLEET_CLIENT_DEVICE:-未知设备}"; exit 0
+fi
+[ "\$act" = acquire ] && [ -n "\$wf" ] && cat "\$wf" >> "\$H/wherefiles"
 [ -f "\$H/nohub" ] && { printf 'nohub\t\t\t\n'; exit 0; }
 cur=''; cdev=''; [ -f "\$H/cur" ] && read -r cur cdev < "\$H/cur"
 printf '%s %s %s\n' "\$act" "\$lease" "\$dev" >> "\$H/log"
@@ -142,6 +150,10 @@ hasnt "B: the second client works" "$(screen "$p2")" "按回车接回"
 eq "B: the same lease kept (no takeover of itself)" "$id1" "$(cat "$WORK/cache-$SX/tmp/client.lease" 2>/dev/null)"
 ok test ! -f "$H/takeovers"
 ok test ! -f "$WORK/cache-$SX/tmp/client.standby"
+# where (#1716): each acquire carries the client's saved where; the one in use is
+# client.where.json, what fleet-client-where.sh reads with no hub
+has "B: the acquire carried the saved where" "$(cat "$H/wherefiles" 2>/dev/null)" '"via": "local"'
+has "B: client.where.json = the client in use" "$(cat "$WORK/cache-$SX/tmp/client.where.json" 2>/dev/null)" '"device": "MacBook"'
 
 # --- C. another device takes over ------------------------------------------------
 p3=$(client "$SY" iPhone)
@@ -150,6 +162,8 @@ has "C: the hub saw a takeover" "$(cat "$H/takeovers" 2>/dev/null)" takeover
 waitfor 6 test -f "$WORK/cache-$SX/tmp/client.standby" || fail "C: the MacBook's machine never went to standby"
 waitfor 5 shows "$p2" "正在 iPhone 上使用 · 按回车接回" || fail "C: the MacBook client shows no standby screen" "$(screen "$p2")"
 hasnt "C: the iPhone works" "$(screen "$p3")" "按回车接回"
+ok test ! -f "$WORK/cache-$SX/tmp/client.where.json"
+has "C: the iPhone's machine holds its where" "$(cat "$WORK/cache-$SY/tmp/client.where.json" 2>/dev/null)" '"device": "iPhone"'
 n1=$(grep -c "^renew $id1" "$H/log"); sleep 2.5; n2=$(grep -c "^renew $id1" "$H/log")
 eq "C: standby renews nothing" "$n1" "$n2"
 out=$(FLEET_SHELL=1 TMPDIR="$WORK/cache-$SX/tmp" FLEET_HUB_WRITE_CMD="touch $WORK/sent" bash "$BIN/fleet-hub-write.sh" worker_stop '{"worker_id":"x"}' 2>&1); rc=$?
@@ -162,6 +176,7 @@ FLEET_ALLOW_SENDKEYS=1 to send-keys -t "$p2" Enter
 waitfor 6 sh -c "! test -f '$WORK/cache-$SX/tmp/client.standby'" || fail "D: standby not cleared"
 waitfor 5 sh -c "! tmux -L $OUT capture-pane -p -t '$p2' | grep -q 按回车接回" || fail "D: the popup is still up" "$(screen "$p2")"
 has "D: the lease is the MacBook's" "$(cat "$H/cur" 2>/dev/null)" MacBook
+has "D: its where is back" "$(cat "$WORK/cache-$SX/tmp/client.where.json" 2>/dev/null)" '"device": "MacBook"'
 waitfor 6 test -f "$WORK/cache-$SY/tmp/client.standby" || fail "D: the iPhone's machine never went to standby"
 waitfor 5 shows "$p3" "正在 MacBook 上使用 · 按回车接回" || fail "D: the iPhone shows no standby screen" "$(screen "$p3")"
 

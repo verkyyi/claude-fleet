@@ -323,6 +323,29 @@ rule alone holds. `ClientLeaseOf` is where the hub reads which device a person
 is on (#1716). `TestFleetClientLeaseByCertificate` /
 `TestClientLeaseTableExpiry` and `bin/fleet-client-lease-selftest.sh` pin it.
 
+**Where the person is** (issue #1716, EPIC #1710 C6). The lease also carries
+`os`, `via` (`local` · `tailnet` · `lan` · `public`), `host` (the machine the
+client runs on) and `caps` (`open_url` `show_file` `notify` on the device itself;
+`link` for a device at the far end of an ssh; `iterm2` added in an iTerm2), all
+worked out ONCE when the client opens (`fleet-client-lease.py device`, saved per
+tty as `<cache>/tmp/client.where/<tty>.json`) off the connection itself — no key,
+no name anyone gave it: a tailnet source address → `tailscale whois` (device +
+system); a LAN one → matched against the LAN endpoints tailnet devices report
+(`tailscale status`); a public one (port 22022) → 未知设备. The terminal:
+`LC_TERMINAL[_VERSION]` (macOS's ssh sends `LC_*`; iTerm2 sets it), else
+`TERM_PROGRAM`, else an XTVERSION query (`CSI > q`, 200 ms, bounded by a DA1),
+else 通用终端 (`TERM`). A node reads its OWNER's lease with its own token at
+`GET /v1/node/client` (owner = `PrincipalForLogin`, unowned = the operator's).
+**`bin/fleet-client-where.sh` is the one reader** (EPIC rule 7): the hub's lease,
+or with no hub the fleet-shell client attached here (`client.where.json`, the
+client in use); one line, or `--json` `{state device os terminal caps since via
+host source}`; exit 0 named · 3 nobody connected · 1 could not tell. Nothing is
+cached, so a takeover shows on the next call. The fleet mod (`mod/fleet/hooks/where.ts`)
+reads it at session start and every 15 s and keeps it as the last `session`
+section of the system prompt (「操作者此刻在：…」); Codex reads the same script
+through the agent-defaults block. `TestNodeClientReadsOwnersLease`,
+`bin/fleet-client-where-selftest.sh` and `mod/fleet/tests/where.test.ts` pin it.
+
 **Who the hub shows you** (issue #1475). `fleet-hub-sessions.sh` asks as **you**:
 your connection certificate (`~/.ssh/fleet-cert` + `-cert.pub`, from
 `fleet login`, `FLEET_CERT` to name another) signs `fleet-sessions <ts>` under

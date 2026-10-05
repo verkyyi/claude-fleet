@@ -8,6 +8,7 @@ import type { On } from 'claude-code'
 
 import { HEARTBEAT_MS } from '../hooks/lifecycle'
 import { SUPPORTED, isSupported } from '../hooks/version'
+import { isWhereRun } from '../hooks/where'
 
 const START = { cwd: '/tmp', surface: 'terminal', isInteractive: true } as const
 
@@ -15,7 +16,7 @@ function engine(on: On, version: string, env: Record<string, string> = { TMUX_PA
   const runs: string[][] = []
   on('session.version', () => ({ value: { version, base: version } }))
   on('process.run', (_$, e) => {
-    runs.push([...e.argv])
+    if (!isWhereRun(e.argv)) runs.push([...e.argv])
     return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
@@ -51,7 +52,7 @@ test('in range: @mod_state on, @mod_ver, and a heartbeat every 15s', async ($, o
   expect(option(runs, '@mod_state')).toEqual(['on'])
   expect(option(runs, '@mod_ver').length).toBe(1)
   expect(option(runs, '@mod_alive')).toEqual(['1000000000'])
-  expect(runs.every(argv => argv.includes('%7'))).toBe(true)
+  expect(runs.filter(argv => argv[0] !== 'bash').every(argv => argv.includes('%7'))).toBe(true)
   await clock.advance(HEARTBEAT_MS)
   await clock.advance(HEARTBEAT_MS)
   expect(option(runs, '@mod_alive')).toEqual(['1000000000', '1000000015', '1000000030'])

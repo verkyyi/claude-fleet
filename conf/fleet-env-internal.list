@@ -52,6 +52,9 @@ FLEET_CLAUDE_INSTALL_CMD           seam: the Claude Code installer command (flee
 FLEET_CLAUDE_TMP_ROOT              seam: the Claude scratchpad root the listener sweep anchors on (selftest sandbox)
 FLEET_CLIENT_LEASE_CMD             seam: the client-lease command fleet-shell.sh asks (default python3 fleet-client-lease.py; fleet-client-lease-selftest.sh swaps in a fake hub, #1715)
 FLEET_CLIENT_LEASE_EVERY           knob: seconds between the shell keeper's client-lease renewals (fleet-shell.sh keeper, 15, #1715)
+FLEET_CLIENT_TTY                   seam: the terminal fleet-client-lease.py asks XTVERSION on (default /dev/tty; fleet-client-where-selftest.sh hands it a pty, #1716)
+FLEET_CLIENT_WHERE_CMD             seam: the hub read fleet-client-where.sh runs (default python3 fleet-client-lease.py where; the selftest swaps in a file, #1716)
+FLEET_CLIENT_XTVERSION             knob: 0 = never ask the terminal its name at client start (fleet-client-lease.py, 1, #1716)
 FLEET_CLEANUP_LEASE_TTL            knob: internal pacing/limit, safe in-code default (fleet-cleanup-daemon.sh)
 FLEET_CODEX_ACCOUNT                handoff: the codex account a launch was assigned
 FLEET_CODEX_MANAGED                handoff: marks a codex launch as fleet-managed

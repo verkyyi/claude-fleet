@@ -42,6 +42,10 @@ popup URL `http://127.0.0.1:<port>/…` means nothing on their computer without 
 
 ## Rules
 
+- **Read where the operator is first** — `~/.claude/fleet/bin/fleet-client-where.sh`
+  (issue #1716, the one reader): which device and terminal, and its `能：` — `打开网页`
+  (the client runs on their computer), `给链接` only (a phone / iPad at the far end of an
+  ssh: give them a link they can tap, tailnet address first), `iTerm2`. Never guess it.
 - **Never `open`** a URL or file from a fleet session. Use `fleet-open`.
 - **Docs to READ** (Markdown / HTML) still go through doc-preview — `share.sh --open <file>`
   hosts it and opens it in one step (add `--local` when there is no tailnet).
