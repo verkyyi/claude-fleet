@@ -151,6 +151,8 @@ type Server struct {
 
 	// relays holds the relays in flight.
 	sshRelays sshRelayTable
+	// clientLeases is each person's one connected client (claude-fleet#1715).
+	clientLeases clientLeaseTable
 
 	// fleetScopeHook replaces fleetScope in tests (claude-fleet#1409).
 	fleetScopeHook func(*http.Request) (func(hostname, osUser string) bool, error)
@@ -324,6 +326,10 @@ func (s *Server) Handler() http.Handler {
 		// machines' sidebars and the `fleet` shell act on their person's
 		// workers with the one credential they hold, signed per write.
 		mux.HandleFunc(control.WritePath, s.handleFleetWrite)
+		// The client lease (claude-fleet#1715): one person, one connected
+		// client — a certificate proven by a signed timestamp, like the
+		// session list, so it authenticates itself outside the viewer gate.
+		mux.HandleFunc(control.ClientPath, s.handleFleetClient)
 		// Connection certificates (claude-fleet#1412). start/poll carry no
 		// credential — they are what a person runs before having one, and
 		// grant nothing until a signed-in person confirms the code.

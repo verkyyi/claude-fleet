@@ -1072,6 +1072,12 @@ loop() {
       [ "${FLEET_HUB_SESSIONS_LONGPOLL:-1}" = 0 ] || WAIT=$LP_WAIT
     fi
     t0=$(date +%s); LP_SENT=0; LAST_FETCH=1
+    # A client in standby (issue #1715: another client holds the person's
+    # lease) asks the hub nothing; Enter on its standby screen resumes it.
+    if [ -n "${FLEET_HUB_SESSIONS_CLIENT:-}" ] && [ -f "${TMPDIR:-/tmp}/client.standby" ]; then
+      [ $(( $(date +%s) + EVERY )) -le "$end" ] || break
+      sleep "$EVERY"; continue
+    fi
     refresh_all 2>/dev/null
     # A long-polled answer paces itself (issue #1526): a 200 (a change) or a
     # 304 the hub held is asked again at once; an immediate 304 or a failure —

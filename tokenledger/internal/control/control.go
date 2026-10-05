@@ -680,6 +680,24 @@ func HomeSigMessage(unix int64) string {
 	return fmt.Sprintf("fleet-home %d", unix)
 }
 
+// The client lease (claude-fleet#1715, EPIC #1710 C5): one person, one
+// connected `fleet` client at a time. A client takes the lease when it opens
+// and renews it every 15 seconds (45 without one and it lapses); a second client of the same person
+// takes it over, and the first reads taken_over on its next renewal and goes
+// to its standby screen. POST {cert, sig, ts, action, lease, device, terminal,
+// version} signed under ClientSigNamespace over ClientSigMessage(ts) — or a
+// viewer door's GET (the current lease) / POST.
+const (
+	ClientPath         = "/v1/fleet/client"
+	ClientSigNamespace = "fleet-client@claude-fleet"
+)
+
+// ClientSigMessage is what a client signs to take, renew, release or read its
+// person's client lease.
+func ClientSigMessage(unix int64) string {
+	return fmt.Sprintf("fleet-client %d", unix)
+}
+
 // A write by connection certificate (claude-fleet#1487, EPIC #1479 C8): a
 // sidebar on another machine — or the `fleet` shell, which holds no viewer
 // token — acts on one of its person's workers through bin/fleet-hub-write.sh.

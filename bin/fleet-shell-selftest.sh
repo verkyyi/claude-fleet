@@ -269,7 +269,7 @@ has 'C: the m5 worker row is REMOTE (local=0)' "$cache" 'wid:11111111-1111-4111-
 has 'C: the m4 row with its need' "$cache" 'wid:22222222-2222-4222-8222-222222222222/issue-9|m4|online|9|acme/app|needs|claude|issue-9||ask|0|'
 hasnt 'C: another login is not a row' "$cache" 'someone'
 hasnt 'C: another login is not a row (wid)' "$cache" '33333333'
-CHECKS=$((CHECKS + 1)); [ -s "$G/hub_ok" ] || fail 'C: hub_ok written'
+CHECKS=$((CHECKS + 1)); waitfor 5 test -s "$G/hub_ok" || fail 'C: hub_ok written'   # same round as the cache, a beat later
 CHECKS=$((CHECKS + 1)); [ -e "$FLEET_CONF_DIR/control/hub-workers.tsv" ] && fail 'C: client mode must not write the control locator cache'
 rows=$( cd "$WORK/cache/bin" && TMUX="$(ts display-message -p '#{socket_path}'),0,0" FLEET_SHELL=1 FLEET_SESSION="$SESS" FLEET_SIDEBAR_CURRENT="$w1" \
         FLEET_SIDEBAR_SOURCE=hub CCQUOTA_FLEET=1 TMPDIR="$WORK/cache/tmp" FLEET_HUB_SESSIONS_CLIENT="$SESS" \

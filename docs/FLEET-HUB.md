@@ -296,6 +296,33 @@ nothing is restarted. Off hub mode nothing changes; with the hub off the file is
 never written. `dash-remote-rows-selftest.sh` leg L, `tmux-status-selftest.sh`
 legs E/G and `fleet-sidebar-selftest.sh` pin it.
 
+**One person, one client** (issue #1715, EPIC #1710 C5). The hub keeps ONE
+client lease per person, in memory: `POST /v1/fleet/client` `{action:
+acquire|renew|release|get, lease, device, terminal, version}`, signed under
+`fleet-client@claude-fleet` like the session list (a viewer door may GET the
+current lease). `fleet-shell.sh` takes it when it opens (`client_open`, through
+`bin/fleet-client-lease.py`) and its keeper renews it every 15 s; 45 s without a
+renewal and it lapses. A second client of the same person takes it over — the
+answer names the device it `took_over` — and the first reads `taken_over` (with
+the taker's device) on its next renewal: every client attached to that server
+gets a full-screen popup 「正在 <device> 上使用 · 按回车接回」, the list's
+refresh loop asks the hub nothing, `fleet-hub-write.sh` refuses, the warm loop
+opens nothing, and the keeper stops renewing. Enter on the popup is an acquire
+again, and the other side goes to standby on its next renewal. On one machine
+the same rule runs between its clients: a second `fleet` attaches to the running
+server (never a second one), and the clients already attached get the popup
+naming the new one's device — the hub's lease is kept (same id), not taken from
+itself. A lease that lapsed (a MacBook asleep) is not taken over: the next client
+gets a fresh one with no `took_over`, and the sleeper reads `taken_over` when it
+wakes. A server that ends releases its lease. The device is the tailnet's name
+for the ssh connection's source address (`tailscale whois`), else 未知设备; on
+the computer itself, its own name (`FLEET_CLIENT_DEVICE` overrides). A hub
+restart forgets every lease and each live client's next renewal re-adopts its
+own id; no hub URL (or a hub without the route, a 404) → no lease, and the local
+rule alone holds. `ClientLeaseOf` is where the hub reads which device a person
+is on (#1716). `TestFleetClientLeaseByCertificate` /
+`TestClientLeaseTableExpiry` and `bin/fleet-client-lease-selftest.sh` pin it.
+
 **Who the hub shows you** (issue #1475). `fleet-hub-sessions.sh` asks as **you**:
 your connection certificate (`~/.ssh/fleet-cert` + `-cert.pub`, from
 `fleet login`, `FLEET_CERT` to name another) signs `fleet-sessions <ts>` under
