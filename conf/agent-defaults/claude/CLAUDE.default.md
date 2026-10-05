@@ -12,6 +12,10 @@ This login is managed by claude-fleet (`~/.claude/fleet`). Whatever the project:
 - **The operator's screen is their own computer**, reached over SSH. `open <url|file>`
   here shows it to nobody — use `~/.claude/fleet/bin/fleet-open.sh` /
   `fleet-show.sh`, or the doc-preview skill for a document.
+- **Where the operator is right now** — which device, system and terminal, and
+  what it can do (open a page, take a file, a link only) — is
+  `~/.claude/fleet/bin/fleet-client-where.sh` (`--json`): the one reader. Never
+  guess a terminal or a device yourself.
 - **A temp server binds `127.0.0.1`, never `*`**, and dies with the work.
 - **Credentials never enter a config, a commit, an issue or a comment.** Tokens
   are read at start (`gh auth token`, the environment), never written down.

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 // The client lease (claude-fleet#1715, EPIC #1710 C5): one person, one
@@ -35,7 +36,11 @@ import (
 // next renewal of each live client re-adopts its own id (nothing else holds
 // one), so a deploy costs nobody a standby screen. The current lease is also
 // where the hub learns which device a person is using right now
-// (ClientLeaseOf — C6, #1716).
+// (ClientLeaseOf — C6, #1716): besides the device and terminal, a client
+// says the device's system (OS), how it reached the machine its client runs on
+// (Via: local, tailnet, lan or public), that machine (Host) and what it can do
+// for a session (Caps: open_url, show_file, notify, link, iterm2). A node reads
+// its owner's at GET /v1/node/client (bin/fleet-client-where.sh).
 
 const (
 	// ClientLeaseRenew is how often a client renews.
@@ -52,6 +57,10 @@ type ClientLease struct {
 	ID       string    `json:"id"`
 	Device   string    `json:"device"`
 	Terminal string    `json:"terminal,omitempty"`
+	OS       string    `json:"os,omitempty"`
+	Via      string    `json:"via,omitempty"`
+	Host     string    `json:"host,omitempty"`
+	Caps     []string  `json:"caps,omitempty"`
 	Version  string    `json:"version,omitempty"`
 	Since    time.Time `json:"since"`
 	Renewed  time.Time `json:"renewed"`
@@ -87,10 +96,14 @@ type ClientLeaseRequest struct {
 	// Lease is the client's own lease id: required to renew or release; on an
 	// acquire, the id the client held before (its server's), so the same
 	// client opening again keeps its lease instead of taking it from itself.
-	Lease    string `json:"lease,omitempty"`
-	Device   string `json:"device,omitempty"`
-	Terminal string `json:"terminal,omitempty"`
-	Version  string `json:"version,omitempty"`
+	Lease    string   `json:"lease,omitempty"`
+	Device   string   `json:"device,omitempty"`
+	Terminal string   `json:"terminal,omitempty"`
+	OS       string   `json:"os,omitempty"`
+	Via      string   `json:"via,omitempty"`
+	Host     string   `json:"host,omitempty"`
+	Caps     []string `json:"caps,omitempty"`
+	Version  string   `json:"version,omitempty"`
 }
 
 // ClientLeaseResponse is the answer.
@@ -156,10 +169,34 @@ func (t *clientLeaseTable) fill(l *ClientLease, req ClientLeaseRequest) {
 	if v := cleanClientField(req.Terminal, 64); v != "" {
 		l.Terminal = v
 	}
+	if v := cleanClientField(req.OS, 32); v != "" {
+		l.OS = v
+	}
+	if v := cleanClientField(req.Via, 16); clientVias[v] {
+		l.Via = v
+	}
+	if v := cleanClientField(req.Host, 64); v != "" {
+		l.Host = v
+	}
+	if req.Caps != nil {
+		var caps []string
+		for _, c := range req.Caps {
+			if c = cleanClientField(c, 16); clientCaps[c] && len(caps) < len(clientCaps) {
+				caps = append(caps, c)
+			}
+		}
+		l.Caps = caps
+	}
 	if v := cleanClientField(req.Version, 64); v != "" {
 		l.Version = v
 	}
 }
+
+// clientVias and clientCaps are the words a client may report (C6, #1716).
+var (
+	clientVias = map[string]bool{"local": true, "tailnet": true, "lan": true, "public": true}
+	clientCaps = map[string]bool{"open_url": true, "show_file": true, "notify": true, "link": true, "iterm2": true}
+)
 
 func (t *clientLeaseTable) live(l *ClientLease, now time.Time) bool {
 	return l != nil && now.Before(l.Expires)
@@ -170,6 +207,7 @@ func leaseCopy(l *ClientLease) *ClientLease {
 		return nil
 	}
 	c := *l
+	c.Caps = append([]string(nil), l.Caps...)
 	return &c
 }
 
@@ -352,6 +390,38 @@ func (s *Server) handleFleetClient(w http.ResponseWriter, r *http.Request) {
 	default:
 		httpError(w, http.StatusBadRequest, "action must be acquire, renew, release or get")
 		return
+	}
+	out.RenewSecs, out.TTLSecs = int(ClientLeaseRenew/time.Second), int(ClientLeaseTTL/time.Second)
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleNodeClient serves GET /v1/node/client (C6, #1716): the client the
+// node's OWNER is connected through right now — the person whose active fleet
+// account is this node's login (PrincipalForLogin; an unowned login is the
+// operator's) — so a session running on any machine can say which device and
+// terminal that person is using. Authenticated by the node's enrollment token;
+// state none when nobody holds a lease.
+func (s *Server) handleNodeClient(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		httpError(w, http.StatusMethodNotAllowed, "GET")
+		return
+	}
+	ep, ok := s.nodeEndpoint(w, r)
+	if !ok {
+		return
+	}
+	host, user := s.peerSelf(ep)
+	owner, err := s.Store.PrincipalForLogin(host, user)
+	if err != nil && !errors.Is(err, store.ErrNoPrincipal) {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	now := time.Now()
+	out := ClientLeaseResponse{State: "none"}
+	if l, ok := s.ClientLeaseOf(owner, now); ok {
+		out = ClientLeaseResponse{State: "active", Lease: &l}
 	}
 	out.RenewSecs, out.TTLSecs = int(ClientLeaseRenew/time.Second), int(ClientLeaseTTL/time.Second)
 	w.Header().Set("Cache-Control", "no-store")

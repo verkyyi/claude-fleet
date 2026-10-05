@@ -297,6 +297,9 @@ func (s *Server) Handler() http.Handler {
 		// own token, for a five-minute certificate to one other machine of
 		// the same owner; the operator reads every issuance.
 		mux.HandleFunc("/v1/node/peer-cert", s.handleNodePeerCert)
+		// Where the owner is (claude-fleet#1716): the client they are
+		// connected through right now, read by a node with its own token.
+		mux.HandleFunc("/v1/node/client", s.handleNodeClient)
 		// A worker's evidence and history, uploaded by the machine that
 		// reaped it and read back by its owner's others (claude-fleet#1609).
 		mux.HandleFunc("/v1/node/worker-records", s.handleNodeWorkerRecords)

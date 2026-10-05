@@ -178,6 +178,10 @@ this_machine() {
 #   client.lease    our lease id             client.standby  present = standby
 #   client.by       the device holding it    client.dev/<tty> each client's device
 #   client.nohub    the hub keeps no lease   keeper.pid       the one keeper
+#   client.where/<tty>.json  each client's whole where (issue #1716: device os
+#                   terminal via host caps, fleet-client-lease.py device --save)
+#   client.where.json        the one in use now — what fleet-client-where.sh
+#                   reads when there is no hub (its mtime = since)
 CL_DIR="$CACHE/tmp"
 LEASE_CMD="${FLEET_CLIENT_LEASE_CMD:-python3 $BIN/fleet-client-lease.py}"
 cl_key() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'; }
@@ -210,15 +214,32 @@ others_standby() {
   done
   return 0
 }
+# where_file <client> — that client's saved where (issue #1716)
+where_file() { printf '%s/client.where/%s.json' "$CL_DIR" "$(cl_key "$1")"; }
+jstr() { local v=${1//\\/\\\\}; v=${v//\"/\\\"}; printf '"%s"' "$v"; }
+# where_now <client|''> <device> <terminal> — that client is the one in use:
+# client.where.json is its saved where, or (none saved) what we know of it
+where_now() {
+  local f=''
+  [ -n "$1" ] && f=$(where_file "$1")
+  if [ -n "$f" ] && [ -s "$f" ]; then
+    cp "$f" "$CL_DIR/client.where.json.tmp" 2>/dev/null
+  else
+    printf '{"device": %s, "terminal": %s}\n' "$(jstr "${2:-未知设备}")" "$(jstr "${3:-}")" > "$CL_DIR/client.where.json.tmp" 2>/dev/null
+  fi
+  mv -f "$CL_DIR/client.where.json.tmp" "$CL_DIR/client.where.json" 2>/dev/null
+  return 0
+}
 # client_take <client|''> <device> <terminal> — this client is THE one: the hub's
 # lease (taken over, or ours kept), standby off, the others here to standby.
 # rc 1 = the hub could not be asked (nothing changed).
 client_take() {
-  local old=''
+  local old='' wf=''
   mkdir -p "$CL_DIR/client.dev" 2>/dev/null
   { read -r old < "$CL_DIR/client.lease"; } 2>/dev/null
   [ -n "$old" ] || { read -r old < "$CL_DIR/client.lease.old"; } 2>/dev/null
-  lease acquire ${old:+--lease "$old"} --device "$2" ${3:+--terminal "$3"} || return 1
+  [ -n "$1" ] && wf=$(where_file "$1") && [ -s "$wf" ] || wf=''
+  lease acquire ${old:+--lease "$old"} --device "$2" ${3:+--terminal "$3"} ${wf:+--where-file "$wf"} || return 1
   rm -f "$CL_DIR/client.lease.old"
   case "$L_STATE" in
     active) printf '%s\n' "$L_ID" > "$CL_DIR/client.lease"; rm -f "$CL_DIR/client.nohub" ;;
@@ -226,6 +247,7 @@ client_take() {
   esac
   [ -n "$1" ] && printf '%s\n' "$2" > "$CL_DIR/client.dev/$(cl_key "$1")"
   rm -f "$CL_DIR/client.standby"
+  where_now "$1" "$2" "$3"
   others_standby "$1" "$2"
   return 0
 }
@@ -235,7 +257,7 @@ go_standby() {
   local id=''
   { read -r id < "$CL_DIR/client.lease"; } 2>/dev/null
   [ -n "$id" ] && printf '%s\n' "$id" > "$CL_DIR/client.lease.old"
-  rm -f "$CL_DIR/client.lease"
+  rm -f "$CL_DIR/client.lease" "$CL_DIR/client.where.json"
   : > "$CL_DIR/client.standby"
   others_standby '' "${1:-未知设备}"
 }
@@ -410,7 +432,7 @@ keeper)
   # takes nothing over
   id=''; { read -r id < "$CL_DIR/client.lease"; } 2>/dev/null
   [ -n "$id" ] && lease release --lease "$id"
-  rm -f "$CL_DIR/client.lease" "$CL_DIR/client.lease.old" "$CL_DIR/client.standby" "$CL_DIR/client.nohub" "$CL_DIR/keeper.pid"
+  rm -f "$CL_DIR/client.lease" "$CL_DIR/client.lease.old" "$CL_DIR/client.standby" "$CL_DIR/client.nohub" "$CL_DIR/keeper.pid" "$CL_DIR/client.where.json"
   exit 0
   ;;
 # ---------------------------------------------------------------------------------
@@ -573,14 +595,18 @@ export_env
 # clients here still yield, and the keeper takes the lease on its next tick.
 client_open() {
   local dev tt
-  dev=$($LEASE_CMD device 2>/dev/null) || dev=''
   tt=$(tty 2>/dev/null) || tt=''
   case "$tt" in /dev/*) ;; *) tt='' ;; esac
+  mkdir -p "$CL_DIR/client.where" 2>/dev/null
+  # the whole where saved for this tty (#1716): the lease carries it, and a
+  # take-back from the standby screen hands the same again
+  dev=$($LEASE_CMD device ${tt:+--save "$(where_file "$tt")"} 2>/dev/null) || dev=''
   rm -f "$CL_DIR/client.nohub"
   client_take "$tt" "${dev%%$'\t'*}" "$(printf '%s' "$dev" | cut -f2 -s)" && return 0
   rm -f "$CL_DIR/client.standby"
   mkdir -p "$CL_DIR/client.dev" 2>/dev/null
   [ -n "$tt" ] && printf '%s\n' "${dev%%$'\t'*}" > "$CL_DIR/client.dev/$(cl_key "$tt")"
+  where_now "$tt" "${dev%%$'\t'*}" "$(printf '%s' "$dev" | cut -f2 -s)"
   others_standby "$tt" "${dev%%$'\t'*}"
 }
 

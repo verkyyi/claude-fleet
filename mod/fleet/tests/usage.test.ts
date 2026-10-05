@@ -9,6 +9,7 @@ import type { On, SessionMeasureInput, TurnStepInput } from 'claude-code'
 
 import { MODEL_POLL_MS, displayName, measureFields, modelFields, statuslinePath } from '../hooks/usage'
 import { SUPPORTED } from '../hooks/version'
+import { isWhereRun } from '../hooks/where'
 
 const START = { cwd: '/tmp', surface: 'terminal', isInteractive: false } as const
 const NOW = 1_000_000_000_000
@@ -19,7 +20,7 @@ function engine(on: On, version: string = SUPPORTED.min, env: Record<string, str
   on('session.version', () => ({ value: { version, base: version } }))
   on('session.model', () => ({ value: model.id }))
   on('process.run', (_$, e) => {
-    runs.push([...e.argv])
+    if (!isWhereRun(e.argv)) runs.push([...e.argv])
     return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))

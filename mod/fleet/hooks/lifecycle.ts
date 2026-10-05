@@ -22,6 +22,9 @@
 // INBOX_MS and runs what bash posted there with `$.command.run` (inbox.ts) — on a
 // module timer for the same reason: the pickup a handoff posts right after its
 // /clear must still be taken.
+//
+// Where (issue #1716): the same module reads bin/fleet-client-where.sh at the
+// start and every WHERE_POLL_MS; where.ts puts the line in the context.
 
 import { atom, update } from 'claude-code'
 import type { EngineInterface, On, Timer } from 'claude-code'
@@ -34,6 +37,7 @@ import type { InboxIo } from './inbox'
 import { TMUX_TIMEOUT_MS, windowOptionsArgv } from './tmux'
 import { MODEL_POLL_MS, STATUSLINE_TIMEOUT_MS, claimModelFeed, feedArgv, modelMoved, resetModelFeed } from './usage'
 import { MOD_VERSION, isSupported } from './version'
+import { WHERE_POLL_MS, WHERE_TIMEOUT_MS, takeWhere, whereArgv } from './where'
 
 export const HEARTBEAT_MS = 15_000
 
@@ -46,6 +50,8 @@ const status = atom({ plugin: 'fleet', key: 'status' } as const, null as FleetMo
 let timer: Timer | undefined
 let inboxTimer: Timer | undefined
 let modelTimer: Timer | undefined
+let whereTimer: Timer | undefined
+let whereBusy = false
 let inboxBusy = false
 let pane: string | undefined
 let inbox: string | undefined
@@ -97,6 +103,21 @@ async function pollModel($: EngineInterface): Promise<void> {
   }
 }
 
+// Where the person is (where.ts): one read at a time, a failed one keeps the line.
+async function pollWhere($: EngineInterface): Promise<void> {
+  // A session outside tmux is no fleet session: there is no one to place.
+  if (whereBusy || pane === undefined) return
+  whereBusy = true
+  try {
+    const r = await $.process.run(whereArgv($.plugin.root), { timeoutMs: WHERE_TIMEOUT_MS })
+    takeWhere(r.exitCode, r.stdout)
+  } catch {
+    // The next tick reads it again.
+  } finally {
+    whereBusy = false
+  }
+}
+
 async function pollOnce($: EngineInterface): Promise<void> {
   // One command at a time: a /compact can hold its run for a minute, and the
   // next one waits its turn behind it rather than racing it.
@@ -132,6 +153,12 @@ async function onReady($: EngineInterface): Promise<void> {
   modelTimer?.cancel()
   modelTimer = $.clock.every(MODEL_POLL_MS, () => {
     void pollModel($)
+  })
+  // Where the person is, in the context from the first request (#1716).
+  await pollWhere($)
+  whereTimer?.cancel()
+  whereTimer = $.clock.every(WHERE_POLL_MS, () => {
+    void pollWhere($)
   })
   const home = (await $.env.get('HOME')) ?? ''
   const conf = (await $.env.get('FLEET_CONF_DIR')) || `${home}/.config/claude-fleet`
@@ -172,6 +199,8 @@ export function registerLifecycle(on: On): void {
       inboxTimer = undefined
       modelTimer?.cancel()
       modelTimer = undefined
+      whereTimer?.cancel()
+      whereTimer = undefined
       await setOptions($, { '@mod_alive': null })
     }
     return next(e)

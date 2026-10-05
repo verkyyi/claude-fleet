@@ -11,6 +11,7 @@ import type { On, RenderPropsOf } from 'claude-code'
 import { PROGRESS_MS, bandText, segments } from '../hooks/progress-model'
 import { SUPPORTED } from '../hooks/version'
 import type { ProgressSnapshot } from '../types'
+import { isWhereRun } from '../hooks/where'
 
 const START = { cwd: '/tmp', surface: 'terminal', isInteractive: true } as const
 const TMP = '/var/folders/xx/T/'
@@ -195,7 +196,7 @@ test('outside tmux: nothing drawn, no tmux call', async ($, on) => {
   on('session.version', () => ({ value: { version: SUPPORTED.min, base: SUPPORTED.min } }))
   const runs: string[][] = []
   on('process.run', (_$, e) => {
-    runs.push([...e.argv])
+    if (!isWhereRun(e.argv)) runs.push([...e.argv])
     return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   engineBand(on)

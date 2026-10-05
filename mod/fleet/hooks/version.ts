@@ -5,7 +5,7 @@
 // `mod` row counts it. Widen BELOW after checking a new release.
 
 /** The mod's own version — keep equal to .claude-plugin/plugin.json. */
-export const MOD_VERSION = '0.2.0'
+export const MOD_VERSION = '0.3.0'
 
 /** Supported Claude Code releases: MIN inclusive, BELOW exclusive. */
 export const SUPPORTED = { min: '2.1.288', below: '2.2.0' } as const
