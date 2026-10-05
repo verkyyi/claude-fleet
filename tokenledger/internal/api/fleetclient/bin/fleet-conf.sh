@@ -122,7 +122,7 @@ _set_common() {
     $0 ~ re { if (!done) print line; done = 1; next }
     { print }
     /^# ---- \[common\] ----$/ && !done { print line; done = 1 }
-  ' "$f" > "$tmp" && { chmod "$(stat -f '%Lp' "$f" 2>/dev/null || stat -c '%a' "$f")" "$tmp" 2>/dev/null; mv -f "$tmp" "$f"; } \
+  ' "$f" > "$tmp" && { chmod "$(stat -c '%a' "$f" 2>/dev/null || stat -f '%Lp' "$f")" "$tmp" 2>/dev/null; mv -f "$tmp" "$f"; } \
     || { rm -f "$tmp"; return 1; }
 }
 

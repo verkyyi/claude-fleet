@@ -117,8 +117,8 @@ has "B: the hub address, once" "$mc" 'export FLEET_HUB_URL="https://hub.example"
 is "B: the URL is spelled once in the file" "$(grep -c 'hub.example' "$CD/fleet.conf")" 1
 hasnt "B: no credential in the config" "$mc" "vt-secret-123"
 is "B: secrets.env holds the token" "$(grep -c 'vt-secret-123' "$CD/secrets.env")" 1
-is "B: secrets.env is 0600" "$(stat -f '%Lp' "$CD/secrets.env" 2>/dev/null || stat -c '%a' "$CD/secrets.env")" 600
-is "B: fleet.conf is 0600" "$(stat -f '%Lp' "$CD/fleet.conf" 2>/dev/null || stat -c '%a' "$CD/fleet.conf")" 600
+is "B: secrets.env is 0600" "$(stat -c '%a' "$CD/secrets.env" 2>/dev/null || stat -f '%Lp' "$CD/secrets.env")" 600
+is "B: fleet.conf is 0600" "$(stat -c '%a' "$CD/fleet.conf" 2>/dev/null || stat -f '%Lp' "$CD/fleet.conf")" 600
 [ -f "$INS/fleet.conf.bak" ] && [ ! -e "$INS/fleet.conf" ] && ok || bad "B: install fleet.conf kept as .bak, gone from its path"
 [ -f "$CD/fleets/fleet/conf.bak" ] && ok || bad "B: fleet conf kept as .bak"
 fc=$(grep -v '^#' "$CD/fleets/fleet/conf")
