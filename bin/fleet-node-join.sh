@@ -194,8 +194,23 @@ DIST_LIST=""
 [ -f "$WORK/join" ] && DIST_LIST="$(sed -n 's/.*"dist":\[\([^]]*\)\].*/\1/p' "$WORK/join" | tr -d '"')"
 
 # ── deps ────────────────────────────────────────────────────────────────────
+# fc_tmux_ok — tmux ≥ 3.2 on PATH; an older one counts as missing (issue #1629).
+# A COPY of bin/fleet-client-lib.sh's (this script runs as `curl … | bash`, with
+# nothing beside it to source); fleet-install-selftest.sh leg F holds the two
+# byte-identical.
+fc_tmux_ok() {
+  FC_TMUX_V=""
+  command -v tmux >/dev/null 2>&1 || return 1
+  FC_TMUX_V=$(tmux -V 2>/dev/null); FC_TMUX_V=${FC_TMUX_V#tmux }
+  _fc_v=${FC_TMUX_V#next-}; _fc_maj=${_fc_v%%.*}
+  case "$_fc_v" in *.*) _fc_min=${_fc_v#*.}; _fc_min=${_fc_min%%[!0-9]*} ;; *) _fc_maj=${_fc_maj%%[!0-9]*}; _fc_min=0 ;; esac
+  case "$_fc_maj" in ''|*[!0-9]*) return 1 ;; esac
+  case "$_fc_min" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$_fc_maj" -gt 3 ] || { [ "$_fc_maj" -eq 3 ] && [ "$_fc_min" -ge 2 ]; }
+}
 have() {
   case "$1" in
+    tmux) fc_tmux_ok ;;
     # macOS ships git/python3 as stubs that pop a GUI installer: ask them to run.
     git|python3) "$1" --version >/dev/null 2>&1 ;;
     *) command -v "$1" >/dev/null 2>&1 ;;
