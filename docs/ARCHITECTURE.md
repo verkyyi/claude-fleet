@@ -267,7 +267,7 @@ a release outside it, and opened on the press the tap's own release would close
 it. `display-menu` holds its caller until the menu closes, so the view spawns it
 and does not wait.
 **One frame, one table** (issue #1535, EPIC #1529 E6). The menu's items fall in
-four groups — 进入 (open PR / the ⇄ proxy window) · 消息 (answer / message) · 控制
+four groups — 进入 (open PR / the proxy window) · 消息 (answer / message) · 控制
 (rename, pin, sub, wake, stop, resume, reap) · 其它 (agent flip, new task, new task
 on <m>, restore, add repo) — a rule between two groups that have items, each
 letter fixed by `menu_keys` wherever it lands, and a greyed 「Esc 关闭」 last. Its

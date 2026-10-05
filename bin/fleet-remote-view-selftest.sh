@@ -10,7 +10,7 @@
 # (FLEET_REMOTE_SSH_CMD) that drops the options and runs the remote command here,
 # with $TMUX unset as a real ssh login has it.
 #   A. degenerate  — CCQUOTA_FLEET off: `open` creates nothing
-#   B. open        — a proxy window `@remote=m4:<wid>`, named `⇄m4 …` (#1475), selected;
+#   B. open        — a proxy window `@remote=m4:<wid>`, named `m4 …` (#1475; no ⇄, #1621), selected;
 #                    a second row of the same machine RETARGETS it (still one)
 #   H. local view  — (#1475) the local sidebar's `jump` on a remote row lands in
 #                    the proxy window WITH the view: the list on the left, the other
@@ -51,6 +51,11 @@
 #                    the registry, the hooks and the markers all gone
 #   F. skipped     — a proxy window is no dash row, no session in either cap
 #                    tally, no fleet-restore row, no sleep candidate
+#   L. no ⇄ (lint) — (#1621) a proxy window is known by `@remote`, never by its
+#                    name: no code line in bin/ (fleet-remote-view.sh,
+#                    fleet-shell.sh, fleet-sidebar.py, tmux-status.sh,
+#                    tmux-dashboard-rows.sh, …) or conf/ draws or matches a ⇄ —
+#                    only fleet-ui-lang.sh's toggle words (`claude ⇄ codex`) keep one
 # tmux / python3 absent → SKIP (exit 0). Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -187,7 +192,7 @@ eq "A: hub off — open makes no window" "" "$(proxies)"
 export CCQUOTA_FLEET=1
 PW=$(FLEET_SESSION=$LS bash "$BIN/fleet-remote-view.sh" open "wid:$WID" 2>/dev/null)
 eq "B: a proxy window, marked with machine:worker_id" "$PW m4:$WID" "$(proxies)"
-eq "B: named for the row and its machine — ⇄m4, the pane header's word too (#1475)" "⇄m4 侧边栏" "$(tl display-message -p -t "$PW" '#{window_name}')"
+eq "B: named for the row and its machine — m4, the pane header's word too (#1475), no ⇄ (#1621)" "m4 侧边栏" "$(tl display-message -p -t "$PW" '#{window_name}')"
 eq "B: and selected" "$PW" "$(tl display-message -p -t "=$LS:" '#{window_id}')"
 
 # ============================================================================
@@ -308,7 +313,7 @@ eq "F: the per-fleet cap counts the local window only" "1" "$cnt"
 cntg=$(. "$BIN/fleet-lib.sh"; fleet_sockets() { printf '%s\n' "$LL"; }; _fleet_session_tally)
 eq "F: the machine-wide tally counts the local window only" "1 0" "$cntg"
 snap=$(tl list-windows -t "=$LS" -F '#{?@remote,,#{window_name}}|x')
-hasnt "F: fleet-restore's snapshot format names no proxy" "$snap" "⇄m4"
+hasnt "F: fleet-restore's snapshot format names no proxy" "$snap" "m4 侧边栏"
 sl=$(FLEET_SLEEP=observe python3 "$BIN/fleet-sleep.py" scan --session "$LL" --dry-run 2>/dev/null)
 hasnt "F: the sleeper reports nothing about the proxy" "$sl" "\"$PW\""
 
@@ -435,6 +440,15 @@ hooksoff() { [ "$(tr_ show-hooks -g | grep -c '\[77\]')" = 0 ]; }
 waitfor 5 hooksoff || fail "E: the rule's hooks outlived the last shell" "$(tr_ show-hooks -g | grep '\[77\]')"
 eq "E: no session-level hook array left behind (it would shadow the fleet's [71]–[73] for good)" "" "$(tr_ show-hooks -t "=$RS:" 2>/dev/null)"
 eq "E: the fleet's own hook is still in place" "1" "$(tr_ show-hooks -g | grep -c '^client-attached\[71\]')"
+
+# ================================================================================
+# L. no ⇄ (#1621): the machine's name alone marks a proxy window and a via row;
+#    nothing names, matches or draws the arrow. Comments and the selftests aside,
+#    only fleet-ui-lang.sh's toggle words (`live ⇄ landed`) may hold one.
+arrows=$(cd "$BIN/.." && grep -n '⇄' bin/*.sh bin/*.py conf/*.conf 2>/dev/null \
+         | grep -v -e '-selftest\.' -e '^bin/fleet-ui-lang\.sh:' \
+         | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#')
+eq "L: no code line draws or matches a ⇄ (a proxy window is known by @remote)" "" "$arrows"
 
 if [ "$FAIL" -eq 0 ]; then
   printf 'fleet-remote-view selftest: PASS (%d checks)\n' "$CHECKS"; exit 0

@@ -1646,7 +1646,7 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Machine labels @group=accounts @tier=internal @scope=global @edit=str
 #FLEET_NODE_ALIASES="macmini=m5 mini2=m4"
 # Enter on one of those rows steps INTO it (issue #1424): a proxy window here,
-# `⇄m4 <name>` (its pane header says the same), attached over ssh to that
+# `m4 <name>` (its pane header says the same), attached over ssh to that
 # session's window on m4 — typing and
 # scrolling are the remote's; closing it only drops the connection; a drop
 # reconnects (through the hub relay, `fleet connect --proxy`, when one is set up).

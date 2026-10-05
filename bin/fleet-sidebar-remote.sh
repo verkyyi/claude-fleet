@@ -30,7 +30,7 @@
 # rows and the bar read too) nothing is sent: a write now would only time out,
 # so the toast — or the popup, for the two that take input — says 「入口失联
 # Nm，稍后再试」 and that is all; the next round that stands lifts it. Enter on
-# the row (the ⇄ proxy window) is a direct ssh, not a hub write: untouched.
+# the row (the proxy window) is a direct ssh, not a hub write: untouched.
 # Nothing here runs on a local row (an `@` id exits 0 at once), and nothing runs
 # in a one-machine fleet: the menu offers these items on `wid:` rows only.
 set -uo pipefail

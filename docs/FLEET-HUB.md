@@ -241,7 +241,7 @@ already called lost keeps its own, longer silence) and a local window's chip its
 live readings; a remote row's menu is titled `… · 入口失联 Nm`, «新建到 m4…» is
 greyed with the reason, and every action on a remote row refuses with a toast
 (`fleet-sidebar-remote.sh`: 「入口失联 Nm，稍后再试」) instead of a 40-second
-timeout — Enter on the row (the ⇄ proxy, a direct ssh) still works. The next
+timeout — Enter on the row (the proxy, a direct ssh) still works. The next
 round that stands rewrites `hub_ok` and everything flips back on its own;
 nothing is restarted. Off hub mode nothing changes; with the hub off the file is
 never written. `dash-remote-rows-selftest.sh` leg L, `tmux-status-selftest.sh`
@@ -337,7 +337,7 @@ same three things a fleet pane shows, without a fleet on that computer: LEFT the
 hub's list, BOTTOM the hub's bar, RIGHT a direct ssh into the session you look
 at. Nothing is rendered anew — the shell is a composition: its own tmux server
 `-L fleet-shell` (the socket label is the session name, as a fleet's is) holding
-ONE proxy window per machine (`⇄m4 <name>`, `@remote=<node>:<wid>`,
+ONE proxy window per machine (`m4 <name>`, `@remote=<node>:<wid>`,
 `fleet-remote-view.sh run --shell`, so the far end registers a shell client and
 hides its own list and bar, #1485); the list pane (`fleet-sidebar.py`) joins
 whichever window is current and the conf's hooks (`conf/tmux-shell.conf`) put it
@@ -418,8 +418,9 @@ page's command is the same line as before.
 
 **…and steps into them** (issue #1424, EPIC #1419 C5). Enter on a remote row (the
 dash's `dash-enter.sh`, the sidebar's `jump`) runs `bin/fleet-remote-view.sh open`:
-a **proxy window** `⇄m4 <name>` (its pane header carries the same `⇄m4`, so a
-glance says the keys go elsewhere; issue #1475), marked `@remote=<node>:<worker_id>`, whose pane
+a **proxy window** `m4 <name>` (its pane header carries the same `m4`, so a
+glance says the keys go elsewhere; issue #1475 — the machine's name alone, no ⇄
+since #1621: a proxy window is known by `@remote`, never its name), marked `@remote=<node>:<worker_id>`, whose pane
 is `ssh -tt <host> fleet-remote-view.sh attach <worker_id>` — on the other machine
 that resolves the worker through `fleet_worker_locate`, selects its window and
 attaches to its fleet session. It is a plain **client** of that session, never a
