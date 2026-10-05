@@ -211,7 +211,7 @@ ok "SELF mid-watch: a stale working, then a turn after the restore → skip:self
 reset @claude_state=working "@claude_state_ts=$(( $(date +%s) - 60 ))"
 compact_start; sleep 1
 [ "$(resumed)" = 0 ] && [ ! -s "$INBOX" ] || fail "LATE: nothing may be sent while the stale working is watched"
-setopt @claude_state done; setopt @claude_state_ts "$(( $(getopt @compact_restored_ts) + 1 ))"
+setopt @claude_state 'done'; setopt @claude_state_ts "$(( $(getopt @compact_restored_ts) + 1 ))"
 wait_resumed
 [ "$(reason)" = late:mod ] || fail "LATE: want 'resumed late:mod', got '$(reason)'"
 [ "$(grep -c '' "$INBOX")" = 1 ] && grep -q -- '--from compact-resume %9 /fleet-compact-resume$' "$INBOX" \
@@ -226,7 +226,7 @@ ok "LATE: a stale working that settles idle with no new turn → one late resume
 # no mod: the late resume types the keystrokes, row late:send-keys
 reset @claude_state=working "@claude_state_ts=$(( $(date +%s) - 60 ))"
 SC_RC=3 compact_start; sleep 1
-setopt @claude_state done; setopt @claude_state_ts "$(( $(getopt @compact_restored_ts) + 1 ))"
+setopt @claude_state 'done'; setopt @claude_state_ts "$(( $(getopt @compact_restored_ts) + 1 ))"
 SC_RC=3 wait_resumed; SC_RC=0
 [ "$(reason)" = late:send-keys ] && [ "$(grep -c '' "$SENDLOG")" = 3 ] \
   || fail "LATE no mod: want late:send-keys with Escape · text · Enter, got '$(reason)'"
