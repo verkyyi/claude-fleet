@@ -36,15 +36,19 @@ import (
 //	                                                 machine's spawn refused it:
 //	                                                 its exit code (2 at capacity,
 //	                                                 3 claimed, 1 anything else)
-//	                                                 and its refusal line
-//	6  UNKNOWN <machine> <operation_id>\t<message>   no final state within the
-//	                                                 wait — not a success
+//	                                                 and its refusal line — or
+//	                                                 it never reached that
+//	                                                 machine / never started
+//	                                                 there (1, claude-fleet#1606)
+//	6  UNKNOWN <machine> <operation_id>\t<message>   still running there when the
+//	                                                 wait ran out — not a success
+//	Every answer but REMOTE … done hands the lease back to the asker (#1606).
 //	1  the hub could not be asked (stderr says why)
 //	2  usage
 //
 // The hub waits on a REMOTE start's outcome (claude-fleet#1586) — --wait
-// seconds, its own default (30) when not given; --wait 0 answers on acceptance,
-// the status-only REMOTE line. A hub predating #1586 always answers that way.
+// seconds, its own default (60, claude-fleet#1606) when not given; --wait 0
+// answers on acceptance, the status-only REMOTE line. A hub predating #1586 always answers that way.
 
 // placeRefused is the exit code of a placement the hub answered with no;
 // placeDeclined of a start the chosen machine's spawn refused; placeUnknown
@@ -60,7 +64,7 @@ const (
 // top (placeWaitDefault when --wait is not given, as the hub's default).
 const (
 	placeTimeout     = 40 * time.Second
-	placeWaitDefault = 30
+	placeWaitDefault = 60
 )
 
 func runPlace(args []string) error {
@@ -84,7 +88,7 @@ func place(args []string, stdout, stderr io.Writer) (int, error) {
 	agent := fs.String("agent", "", "claude or codex (default: the chosen fleet's)")
 	account := fs.String("account", "", "local, pool or any: the kind of subscription the session runs on (default: the opening fleet's pick)")
 	key := fs.String("key", "", "idempotency key (default: one per call)")
-	wait := fs.Int("wait", -1, "seconds the hub waits on a remote start's outcome (default: the hub's, 30; 0 = answer on acceptance)")
+	wait := fs.Int("wait", -1, "seconds the hub waits on a remote start's outcome (default: the hub's, 60; 0 = answer on acceptance)")
 	name := fs.String("name", "", "a scratch session's name (with `scratch` in place of the issue)")
 	fs.Usage = func() {
 		fmt.Fprint(stderr, `Usage: ccquota place [--node auto|<machine>] [--origin-wid <wid>] [--agent a] [--account local|pool|any] <owner/repo> <issue> <worker_id>

@@ -33,7 +33,7 @@ One line on stdout:
 |---|---|---|
 | `sent:iterm2` | written to the iTerm2 they are using | "opened in your browser" — if nothing opened, their side (#1380) is not installed; give them the URL |
 | `sent:tunnel` | their reverse-tunnel opener (`open-url.sh`, port 2226) took it | "opened in your browser" |
-| `fallback:popup` | no iTerm2 / tunnel: a popup with the URL, also copied to their clipboard | "the link is in a popup and on your clipboard" |
+| `fallback:copied` | no iTerm2 / tunnel: the URL copied to their clipboard, one line saying so | "the link is on your clipboard" |
 | `fallback:path` | a file fleet-show could not send (`PATH …` line above it) | give them the path |
 
 Why it fell back is on stderr (e.g. the active client is not iTerm2). A loopback page that

@@ -137,6 +137,55 @@ func (c *CA) Sign(req Request, now time.Time) (*Issued, error) {
 	if req.PrincipalID == "" {
 		return nil, errors.New("no principal")
 	}
+	return c.sign(req.Key, "wecom:"+req.PrincipalID, req.Logins, TTL, map[string]string{
+		"permit-pty":              "",
+		"permit-port-forwarding":  "",
+		"permit-agent-forwarding": "",
+		"permit-user-rc":          "",
+		"permit-X11-forwarding":   "",
+	}, now)
+}
+
+// PeerTTL is the longest a machine-to-machine certificate lives (claude-fleet
+// #1626, EPIC #1615 decision 10): five minutes — enough to open one
+// connection, which outlives it (sshd checks a certificate at login only).
+const PeerTTL = 5 * time.Minute
+
+// PeerRequest is a certificate for ONE machine to reach ONE other, for one
+// purpose (claude-fleet#1626). The hub decides every field: Source is the
+// requesting node as the hub knows it (host/user), Target the machine, Login
+// the one OS login it admits there.
+type PeerRequest struct {
+	Key     ssh.PublicKey
+	Source  string
+	Target  string
+	Purpose string
+	Login   string
+	// TTL is clamped to (0, PeerTTL]; zero means PeerTTL.
+	TTL time.Duration
+}
+
+// SignPeer issues a machine-to-machine certificate. Its key id —
+// "peer:<source>><target>:<purpose>" — is what the target's sshd logs on the
+// login, so every cross-machine login names where it came from and why. No
+// agent forwarding, no user rc, no X11: a peer runs a command or attaches a
+// pane (pty, and a port forward for fleet-open), nothing more.
+func (c *CA) SignPeer(req PeerRequest, now time.Time) (*Issued, error) {
+	if req.Key == nil {
+		return nil, errors.New("no key to sign")
+	}
+	if req.Login == "" || req.Source == "" || req.Target == "" || req.Purpose == "" {
+		return nil, errors.New("a peer certificate needs a source, a target, a purpose and a login")
+	}
+	ttl := req.TTL
+	if ttl <= 0 || ttl > PeerTTL {
+		ttl = PeerTTL
+	}
+	return c.sign(req.Key, "peer:"+req.Source+">"+req.Target+":"+req.Purpose, []string{req.Login}, ttl,
+		map[string]string{"permit-pty": "", "permit-port-forwarding": ""}, now)
+}
+
+func (c *CA) sign(key ssh.PublicKey, keyID string, logins []string, ttl time.Duration, ext map[string]string, now time.Time) (*Issued, error) {
 	var sb [8]byte
 	if _, err := rand.Read(sb[:]); err != nil {
 		return nil, err
@@ -144,25 +193,16 @@ func (c *CA) Sign(req Request, now time.Time) (*Issued, error) {
 	// Top bit clear: some tools print the serial as a signed int64.
 	serial := binary.BigEndian.Uint64(sb[:]) &^ (1 << 63)
 	after := now.Add(-skew).Truncate(time.Second)
-	before := now.Add(TTL).Truncate(time.Second)
-	keyID := "wecom:" + req.PrincipalID
+	before := now.Add(ttl).Truncate(time.Second)
 	cert := &ssh.Certificate{
-		Key:             req.Key,
+		Key:             key,
 		Serial:          serial,
 		CertType:        ssh.UserCert,
 		KeyId:           keyID,
-		ValidPrincipals: append([]string(nil), req.Logins...),
+		ValidPrincipals: append([]string(nil), logins...),
 		ValidAfter:      uint64(after.Unix()),
 		ValidBefore:     uint64(before.Unix()),
-		Permissions: ssh.Permissions{
-			Extensions: map[string]string{
-				"permit-pty":              "",
-				"permit-port-forwarding":  "",
-				"permit-agent-forwarding": "",
-				"permit-user-rc":          "",
-				"permit-X11-forwarding":   "",
-			},
-		},
+		Permissions:     ssh.Permissions{Extensions: ext},
 	}
 	if err := cert.SignCert(rand.Reader, c.signer); err != nil {
 		return nil, err
@@ -175,7 +215,7 @@ func (c *CA) Sign(req Request, now time.Time) (*Issued, error) {
 		Principals:     cert.ValidPrincipals,
 		ValidAfter:     after,
 		ValidBefore:    before,
-		KeyFingerprint: ssh.FingerprintSHA256(req.Key),
+		KeyFingerprint: ssh.FingerprintSHA256(key),
 	}, nil
 }
 

@@ -500,7 +500,18 @@ func TestAnswerWriteServesSubmitOnly(t *testing.T) {
 	}
 	env := `{"operation_id":"o","fleet_id":"f","action":"worker_start","params":{"issue":1},"actor":"x"}`
 
+	// Every write leaves one line in the agent's log, taken or refused
+	// (claude-fleet#1606). log is process-global: no t.Parallel here.
+	var logged bytes.Buffer
+	var logMu sync.Mutex
+	log.SetOutput(writerFunc(func(p []byte) (int, error) { logMu.Lock(); defer logMu.Unlock(); return logged.Write(p) }))
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	logOf := func() string { logMu.Lock(); defer logMu.Unlock(); return logged.String() }
+
 	r := write("submit", env, "ok")
+	if l := logOf(); !strings.Contains(l, "control: write worker_start operation o journalled: accepted") {
+		t.Fatalf("agent log after a taken start = %q; want its journalled line", l)
+	}
 	var res control.Result
 	json.Unmarshal(r.Payload, &res)
 	if r.Type != control.TypeResult || res.MachineID != "m-1" || !strings.Contains(string(res.Result), `"accepted"`) {
@@ -521,6 +532,9 @@ func TestAnswerWriteServesSubmitOnly(t *testing.T) {
 		if r := write("submit", env, m); r.Type != control.TypeError || r.Error.Code != want {
 			t.Errorf("controller %s: %+v; want %s", m, r, want)
 		}
+	}
+	if l := logOf(); !strings.Contains(l, "control: write worker_start operation o refused INVALID_ARGUMENT: bad") {
+		t.Fatalf("agent log after a refused start = %q; want its refused line", l)
 	}
 
 	mu.Lock()
@@ -590,3 +604,8 @@ func TestNodeHeartbeatCarriesReadiness(t *testing.T) {
 		t.Fatalf("an old controller: ready = %v %q; want unsaid", hb.Ready, hb.NotReady)
 	}
 }
+
+// writerFunc is an io.Writer from a function.
+type writerFunc func([]byte) (int, error)
+
+func (f writerFunc) Write(p []byte) (int, error) { return f(p) }

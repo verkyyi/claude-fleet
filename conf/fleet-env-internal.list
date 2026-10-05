@@ -69,6 +69,7 @@ FLEET_DAEMON_WEDGED_MULT           knob: internal pacing/limit, safe in-code def
 FLEET_DASH_LAUNCHER                seam: an injectable command/path for tests (fleet-ui-refresh.sh)
 FLEET_DASH_MANUAL_SUB_BIN           seam: fake manual quota gate for picker tests (dash-migrate.sh)
 FLEET_DASH_MIGRATE_BIN             seam: an injectable command/path for tests (dash-migrate.sh)
+FLEET_DASH_TOAST                   handoff: dash-migrate.sh `to` run from a confirm-before also shows its refusal (#1620)
 FLEET_DASH_POPUP_MAX_AGE           knob: internal pacing/limit, safe in-code default (dash-popup-wait.sh)
 FLEET_DASH_POPUP_POLL              knob: internal pacing/limit, safe in-code default (dash-popup-wait.sh)
 FLEET_DELIVERY_SIG                 handoff: the webhook delivery signature the bridge verifies
@@ -230,6 +231,7 @@ FLEET_SEED_REPO                    knob: the starter repo a new login's first-lo
 FLEET_SESSION                      handoff: the fleet session a pane/popup belongs to, exported by the spawner
 FLEET_SESSION_END_REASON           handoff: why the SessionEnd hook fired (set by the stopper)
 FLEET_SIDEBAR_CURRENT              handoff: the window id the sidebar is rendering for
+FLEET_SIDEBAR_TEXT                 handoff: the text the sidebar input line asked for, to fleet-sidebar-remote.sh (#1620)
 FLEET_SKIP_GLOBAL_CONF             seam: fleet-lib skips the install fleet.conf (tests / isolated tools)
 FLEET_SMOKE_ONBOARD_SECS           knob: internal pacing/limit, safe in-code default (fleet-login-smoke.sh)
 FLEET_SMOKE_POLL_SECS              knob: internal pacing/limit, safe in-code default (fleet-login-smoke.sh)
@@ -237,6 +239,7 @@ FLEET_SMOKE_SSH_HOST               seam: where the smoke run's ssh -tt connects 
 FLEET_SMOKE_SSH_PORT               seam: the sshd port the smoke run connects to (22); --ssh-port is the operator's face (fleet-login-smoke.sh)
 FLEET_SMOKE_TIMEOUT                knob: internal pacing/limit, safe in-code default; --timeout is the operator's face (fleet-login-smoke.sh)
 FLEET_SPAWN_GUARD_SLEEP            knob: internal pacing/limit, safe in-code default (dash-enter.sh)
+FLEET_SPAWN_CLAIMED                handoff: the --async tail inherits the foreground's GitHub claim, taken back on failure (#1606)
 FLEET_SPAWN_TAIL                   handoff: spawn only the seed tail (used by the handoff/resume path)
 FLEET_SPOT_EVACUATE_MARGIN         knob: seconds fleet-spot-evacuate.sh keeps before its deadline so a started move can finish, default 30 (#1428)
 FLEET_SPOT_EVACUATE_SECS           handoff: the SPOT reclaim deadline the ccquota agent passes to fleet-spot-evacuate.sh (its CCQUOTA_FLEET_RECLAIM_SECS, 240; #1428)
@@ -308,6 +311,7 @@ FLEET_HUB_SESSIONS_EVERY           knob: internal pacing, seconds between the re
 FLEET_HUB_SESSIONS_WATCHED_EVERY   knob: internal pacing, seconds between the refreshes while a client is attached to any session of this fleet — the loop sends If-None-Match so an unchanged hub answers 304 (fleet-hub-sessions.sh, 2, #1481)
 FLEET_HUB_SESSIONS_WAIT            knob: internal pacing, seconds the hub may hold a watched fleet_sessions ask (long poll) until a heartbeat moves its ETag — capped at 25, under an ingress's 60 s idle timeout (fleet-hub-sessions.sh, 25, #1526)
 FLEET_HUB_SESSIONS_LONGPOLL        knob: 0 = the watched loop never sends `wait` and keeps its fixed 2 s cadence (fleet-hub-sessions.sh, 1, #1526)
+FLEET_HUB_SESSIONS_STATUS_STALE    knob: seconds of hub_ok age past which `fleet-hub-sessions.sh --status` (fleet-doctor's hub-sessions row) reports the refresh stalled (fleet-hub-sessions.sh, 60, #1596)
 FLEET_HUB_SESSIONS_LOOP_SECS       knob: internal budget, how long one detached refresh loop lives before the next collector tick restarts it (70, #1423)
 FLEET_HUB_SESSIONS_STALE           knob: internal budget, seconds of hub silence (global/hub_ok, else the cache's #ts) after which the dash reads every remote row as 失联, the bar `入口 ○`, and a remote-row action refuses — fleet_status_hub_lost in fleet-status-lib.sh (60, #1423 #1483)
 FLEET_HUB_NODE_TIMEOUT             knob: internal budget, seconds the shell's loop gives ONE machine to answer `fleet-remote-view.sh sessions` over its ssh control connection while the hub is silent — client mode only, node_refresh in fleet-hub-sessions.sh (8, #1488)
@@ -358,3 +362,6 @@ FLEET_NODE_UPGRADE_NODES_CMD       seam: command printing the hub's /v1/nodes JS
 FLEET_NODE_UPGRADE_HOSTNAME        seam: overrides `hostname -s` — which /v1/nodes rows are this machine's (fleet-node-upgrade.sh, #1525)
 FLEET_NODE_UPGRADE_OS              seam: overrides `uname -s` (fleet-node-upgrade.sh is launchd-only, #1525)
 FLEET_NODE_UPGRADE_POLL            seam: seconds between post-restart hub polls (default 2) (fleet-node-upgrade.sh, #1525)
+FLEET_PEER_CERT                    escape hatch: 0 = never ask the hub for a machine-to-machine certificate, plain ssh (fleet-peer-cert.sh, #1626)
+FLEET_PEER_CERT_SECS               seam: life asked for a peer certificate (default 300; the hub caps it at 300) (fleet-peer-cert.sh, #1626)
+FLEET_PEER_KEY                     path: the peer key the hub signs (default ~/.ssh/fleet-peer) (fleet-peer-cert.sh, #1626)

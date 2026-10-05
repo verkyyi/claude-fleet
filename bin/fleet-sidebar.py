@@ -400,32 +400,158 @@ def selection_repo(session, key, env):
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
-def new_task(screen, env, repo=""):
-    """The hub's ⌃n popup, launched from this pane by ⌃n (issue #821; a letter
-    since #896 types into the input line instead): file an issue
-    and spawn its worker. dash-popup.sh resolves the client, raises @popup_open
-    for the popup's lifetime and clears it on the way out; the spawned window
-    becomes current and the session-window-changed hook moves this view there.
-    Leave curses meanwhile: a popup draws on the client, not on this pane, but
-    when none can open (no client, an overlay already up) dash-popup.sh runs the
-    command INLINE here, and its fzf title prompt then needs a sane tty. No
-    timeout — the popup lives as long as the operator types. `repo` (the
-    anchor row's, issue #1009) rides CF_REPO on the popup's command line: a
-    popup's shell takes the server's environment, not this one."""
-    curses.endwin()
-    pin = ["env", "CF_REPO=" + repo] if repo and repo != "none" else []
-    subprocess.call(["bash", str(BIN / "dash-popup.sh"), "--size", "S", "--title", "popup_new_task", "--"] + pin +
-                    ["bash", str(BIN / "dash-issue-new.sh"), "confirm", "--spawn"], env=env)
-    screen.clear()  # the next refresh resumes curses and repaints the whole grid
+class Ask:
+    """One question on the input line (issue #1620, EPIC #1615 C5): what used to
+    be a popup with one field — a rename, a new task's title, a repo to add, a
+    message or an answer for a row on another machine, the account to switch a
+    worker to, the #543 restore question — is asked HERE, on the line the list
+    already has, so nothing covers the session being looked at. `kind` picks
+    what ↵ runs (submit); `prompt` leads the line; `hint` takes the `?` row
+    above it; `choices` ((value, label) pairs) are what Tab steps through — a
+    new task's repo in a 2+ repo fleet, a subscription's account; `keys` makes
+    it a one-key question (restore: y / r, anything else cancels)."""
+
+    def __init__(self, kind, prompt, arg="", hint="", node="", repo="", keys=""):
+        self.kind, self.prompt, self.arg, self.hint = kind, prompt, arg, hint
+        self.node, self.repo, self.keys = node, repo, keys
+        self.choices, self.at, self.where = [], -1, ""
+
+    def step(self):
+        """Tab: the next choice. A repo choice re-targets the task; an account
+        choice fills the line (it can still be edited)."""
+        if not self.choices:
+            return ""
+        self.at = (self.at + 1) % len(self.choices)
+        value, label = self.choices[self.at]
+        if self.kind == "new":
+            self.repo = value
+            self.hint = new_hint(self)
+            return ""
+        self.hint = label
+        return value
 
 
-def restore_pick(screen, session, env):
-    """The restore picker (issue #901), on ⌃o (dash-keymap.sh --panel sidebar
-    `restore`): the hub's landed list in a popup, a pick restored as the current
-    window. Blocks like new_task, and leaves curses for the same inline fallback."""
-    curses.endwin()
-    subprocess.call(["bash", str(BIN / "fleet-restore-pick.sh"), "--session", session], env=env)
-    screen.clear()
+def new_hint(ask):
+    """The new task's `?` row: where it goes (repo, machine), and Tab when the
+    fleet has more than one repo to choose from."""
+    repo = ask.repo or ask.where
+    where = repo.rsplit("/", 1)[-1] if repo else tr("no_repo")
+    if ask.node:
+        where += " @" + ask.node
+    return tr("sidebar_ask_to_fmt", where) + (tr("sidebar_ask_tab") if len(ask.choices) > 1 else "")
+
+
+def ask_new(session, env, repo="", node=""):
+    """⌃n, a selected heading's second tap, the menu's 新任务 / 新建到 m4…: an
+    issue title on the input line (it was the hub's ⌃n popup). `repo` is the
+    anchor row's (selection_repo); with none — or the `no repo` heading, where an
+    issue cannot go — a 2+ repo fleet offers its repos on Tab, starting from the
+    first; a one-repo fleet leaves it to dash-issue-new.sh, as before."""
+    ask = Ask("new", tr("sidebar_ask_new"), node=node, repo="" if repo == "none" else repo)
+    if not ask.repo:
+        out = run(["bash", "-c", '. "$0/fleet-lib.sh" && fleet_repos "$1"', str(BIN), session], env=env)
+        repos = out.stdout.split() if out.returncode == 0 else []
+        if len(repos) > 1:
+            ask.choices, ask.at, ask.repo = [(r, r) for r in repos], 0, repos[0]
+        elif repos:
+            ask.where = repos[0]  # the one repo: shown; dash-issue-new.sh resolves it, as before
+    ask.hint = new_hint(ask)
+    return ask
+
+
+def start_job(args, env, done):
+    """A submitted question's work, off this view's loop: the poll in ui() calls
+    `done(rc, output)` when it exits, which answers (toast, next ask) — a
+    refusal is one line on the input line, a success says nothing (EPIC #1615).
+    Its own session, so the create or the clone in flight outlives a view that
+    is restarted under it."""
+    out = tempfile.TemporaryFile("w+")
+    proc = subprocess.Popen(args, env=env, stdin=subprocess.DEVNULL, stdout=out,
+                            stderr=subprocess.STDOUT, start_new_session=True)
+    proc.out, proc.done = out, done
+    return proc
+
+
+def last_line(text):
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    return lines[-1] if lines else ""
+
+
+def quiet(rc, text):
+    """The script toasts its own outcome (or has none to tell)."""
+    return "", None
+
+
+def failed(rc, text):
+    """A refusal's last line, only when it refused."""
+    return ("✗ " + last_line(text).lstrip("✗ ") if rc != 0 and last_line(text) else ""), None
+
+
+def repo_added(rc, text):
+    """dash-repo-add.sh: its verdict line (stderr) comes before the result token
+    (stdout); `added:` says nothing — the heading appears."""
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    if lines and lines[-1].startswith("added:"):
+        return "", None
+    verdict = next((l for l in reversed(lines[:-1]) if not re.match(r"^(added|refused|failed):", l)), "")
+    return verdict or (lines[-1] if lines else tr("sidebar_spawn_failed")), None
+
+
+def sub_choices(ask):
+    """fleet-manual-sub.sh list → the accounts Tab steps through, each with its
+    fresh quota on the `?` row; a refusal (no fresh quota) is the row itself."""
+    def done(rc, text):
+        rows = [l.split("\t") for l in text.splitlines()[1:] if l.count("\t") >= 3]
+        if rc != 0 or not rows:
+            ask.hint = "✗ " + (last_line(text) or tr("sidebar_spawn_failed"))
+            return "", None
+        ask.choices = [(r[0], " · ".join(x for x in (r[0], "5h " + r[1] if r[1] else "", "7d " + r[2] if r[2] else "", r[3]) if x))
+                       for r in rows]
+        ask.hint = tr("sidebar_ask_sub_hint")
+        return "", None
+    return done
+
+
+def restore_asked(session, target):
+    """fleet-restore-pick.sh --ask: exit 4 with the question on stdout when the
+    restore must ask first (#543, a CLOSED-unmerged PR) — asked as a one-key
+    question; any other exit restored it, or says why not."""
+    def done(rc, text):
+        if rc == 4:
+            return "", Ask("restore", tr("sidebar_ask_restore"), arg=target,
+                           hint=last_line(text), keys="yYrR")
+        return failed(rc, text)
+    return done
+
+
+def submit(ask, text, session, env):
+    """↵ (or a one-key answer) on a question: the job that does it, or None when
+    there is nothing to do (an empty line cancels, as an empty name always has)."""
+    if ask.kind == "restore":
+        return start_job(["bash", str(BIN / "fleet-restore-pick.sh"), "--select", ask.arg,
+                          "--session", session, "--answer", text.lower()], env, failed)
+    if not text:
+        return None
+    if ask.kind == "rename":
+        run(["bash", str(BIN / "dash-rename.sh"), "--wid", ask.arg, text], env=env)
+        return None
+    if ask.kind == "new":
+        # The title is arbitrary text: it travels in a file (the mktemp the
+        # popup used), never on a command line any shell parses.
+        handle, path = tempfile.mkstemp(prefix="dash-new.", dir=os.environ.get("TMPDIR") or "/tmp")
+        with os.fdopen(handle, "w") as out:
+            out.write(text)
+        return start_job(["env"] + (["CF_REPO=" + ask.repo] if ask.repo else []) +
+                         ["bash", str(BIN / "dash-issue-new.sh"), "confirm", "--spawn", "--title-file=" + path] +
+                         (["--node=" + ask.node] if ask.node else []), env, quiet)
+    if ask.kind == "repo":
+        return start_job(["bash", str(BIN / "dash-repo-add.sh"), "--session", session, text], env, repo_added)
+    if ask.kind in ("message", "answer"):
+        return start_job(["bash", str(BIN / "fleet-sidebar-remote.sh"), ask.kind, session, ask.arg],
+                         dict(env, FLEET_SIDEBAR_TEXT=text), quiet)
+    if ask.kind == "sub":
+        return start_job(["bash", str(BIN / "dash-migrate.sh"), ask.arg, "to", text], env, failed)
+    return None
 
 
 def no_discard():
@@ -453,8 +579,8 @@ def open_help(screen, env):
     """The sidebar's `?` sheet (issue #948): fleet-keys.sh --context sidebar in
     a popup via dash-popup.sh (explicit client, the @popup_open epoch), exactly
     as the hub's `?` opens its own. Blocks until q/Esc closes it, which is the
-    pause: nothing repaints under the popup. Leave curses meanwhile for the same
-    reason new_task does — with no client the sheet runs INLINE in this pane.
+    pause: nothing repaints under the popup. Leave curses meanwhile: with no
+    client dash-popup.sh runs the sheet INLINE, in this pane.
     Sized to the sheet (issue #963): title + blank + eight rows (#1532) + the border,
     as wide as the editing row (#1097)."""
     curses.endwin()
@@ -463,18 +589,18 @@ def open_help(screen, env):
     screen.clear()
 
 
-def open_tap(screen, session, action, key, env):
-    """A second tap's popup (issue #1032): a session row's menu, or a selected
-    heading's ⌃n popup with its repo pinned — selection_repo resolves `hdr:…`
-    exactly as it does for a typed name, so both paths agree on the target.
-    False when the shell refuses the heading's popup (issue #1518)."""
+def open_tap(session, action, key, env):
+    """A second tap (issue #1032): a session row's menu, or — on a selected
+    heading — a new task's title on the input line with that repo pinned
+    (selection_repo resolves `hdr:…` exactly as it does for a typed name, so both
+    paths agree on the target). Returns that Ask; "refused" when the shell
+    refuses it (issue #1518); None after opening a menu."""
     if action == "new":
         if SHELL:
-            return False
-        new_task(screen, env, selection_repo(session, key, env))
-    else:
-        open_menu(session, key, env)
-    return True
+            return "refused"
+        return ask_new(session, env, selection_repo(session, key, env))
+    open_menu(session, key, env)
+    return None
 
 
 def open_menu(session, wid, env):
@@ -812,7 +938,7 @@ def mark_input(pane, text):
         tmux("set-option", "-up", "-t", pane, "@sidebar_input")
 
 
-def spawn_scratch(name, env, repo="", selection=""):
+def spawn_scratch(name, env, repo="", selection="", node=""):
     """The hub's ⌃s with a name (issue #896): the same script and the same
     provenance (`--origin hub` — the sidebar sits in a worker's window, and a
     session started here is not that worker's child). Focus follows the new
@@ -824,9 +950,10 @@ def spawn_scratch(name, env, repo="", selection=""):
     The sidebar's own ⌃s (issue #1532) is the hub's ⌃s: no name, the
     highlighted row as --selection. Not --bg: this view already polls the spawn
     without blocking, and the foreground run keeps the `…` up until the window
-    exists and hands back the whole refusal."""
+    exists and hands back the whole refusal. `node` (a new task's «新建到 m4…»,
+    ⌃s on its title line) opens it on that machine (#1541)."""
     log = tempfile.TemporaryFile("w+")
-    args = ["--selection", selection] if selection else []
+    args = (["--selection", selection] if selection else []) + (["--node=" + node] if node else [])
     proc = subprocess.Popen(
         ["bash", str(BIN / "dash-raw-session.sh")] + (["--name", name] if name else []) +
         args + ["--origin", "hub"] +
@@ -1065,21 +1192,18 @@ def landed_rows(text):
     return [top] + (rows or [["hdr", "", "", tr("sidebar_landed_empty")] + pad])
 
 
-def restore_landed(screen, session, target, env):
+def restore_landed(session, target, env):
     """↵ on a landed row: the hub's ⌃o for that target, with focus — the picker's
-    own step after a pick (fleet-restore-pick.sh --select). A row that may ask
-    first (`landed:issue:…`, a CLOSED-unmerged PR — #543) runs in a popup so the
-    question has a terminal; every other target restores in the background, no
-    popup (dash-restore-session.sh backgrounds its own slow half)."""
+    own step after a pick (fleet-restore-pick.sh --select), in the background. A
+    row that may have to ask first (`landed:issue:…`, a CLOSED-unmerged PR —
+    #543) asks on the input line (--ask, issue #1620): the job is returned so the
+    loop can turn its exit 4 into the question; nothing else needs a terminal."""
     cmd = ["bash", str(BIN / "fleet-restore-pick.sh"), "--select", target, "--session", session]
     if target.startswith("landed:issue:"):
-        curses.endwin()
-        subprocess.call(["bash", str(BIN / "dash-popup.sh"), "-w", "70", "-h", "8", "--title", "popup_restore", "--"] + cmd,
-                        env=env)
-        screen.clear()
-    else:
-        subprocess.Popen(cmd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL)
+        return start_job(cmd + ["--ask"], env, restore_asked(session, target))
+    subprocess.Popen(cmd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL)
+    return None
 
 
 def drop_rows(proc):
@@ -1345,12 +1469,12 @@ def ui(screen, session, worker, lock):
     # (issue #898). Opening on the press would lose the menu at once: tmux closes
     # a menu on a button release outside it, and that release is this tap's own.
     armed = None
-    # Rename (issue #898): the menu's 改名 turns THIS input line into the name
-    # editor for one row — the hub's ⌃e does the same to its query line. The
-    # name goes to dash-rename.sh as an argv word; no tmux or shell parser ever
-    # sees it (a command-prompt template re-parses the reply, and tmux 3.4 and
-    # 3.7 unescape it differently).
-    renaming = None
+    # A question on the input line (issue #1620, the Ask class): the menu's 改名
+    # (issue #898 — the name goes to dash-rename.sh as an argv word; no tmux or
+    # shell parser ever sees it), ⌃n's title, 加仓库, a remote row's message or
+    # answer, 切换 sub, the #543 restore question. `jobs`: what a submitted one
+    # runs, polled below — its refusal comes back as a toast.
+    asking, jobs = None, []
     decoder = codecs.getincrementaldecoder("utf-8")("ignore")
     mark_input(pane, "")
     published = None  # the (window, candidates) last written to @sidebar_next
@@ -1431,6 +1555,18 @@ def ui(screen, session, worker, lock):
                 toast = "✗ " + reason.split(": ", 1)[-1]
                 toast_until = now + TOAST_SECS
             spawning = None
+            refresh_at = 0
+        for job in [j for j in jobs if j.poll() is not None]:
+            jobs.remove(job)
+            job.out.seek(0)
+            said, nxt = job.done(job.returncode, job.out.read())
+            job.out.close()
+            if said:
+                toast, toast_until = said, now + TOAST_SECS
+            if nxt is not None and asking is None and spawning is None:
+                asking = nxt
+                line.clear()
+                mark_input(pane, "1")
             refresh_at = 0
         if follow_at is not None and now >= follow_at:
             # The highlight settled: switch once. Nothing here touches the
@@ -1631,7 +1767,9 @@ def ui(screen, session, worker, lock):
         # here and the list clipped it (issue #1328); its status words live in
         # the worker pane's header now (issue #1377), so `? 快捷键` stays put.
         info = None
-        if help_y is not None and navigation:
+        if help_y is not None and asking is not None:
+            info = asking.hint or None  # a rename has none: `? 快捷键` stays
+        elif help_y is not None and navigation:
             row = next((r for r in rows if r[0] == selected and r[0] != "hdr"), None)
             info = hint_line(row, width, wide)
         help_shown = help_y is not None and info is None
@@ -1644,9 +1782,10 @@ def ui(screen, session, worker, lock):
         # scratch session named after it. Away from the sidebar only `›` shows.
         # Hide is keyboard-only (prefix e): no tap here hides anything (#821).
         room = max(0, width - 3)
-        if renaming is not None:
-            prefix = tr("sidebar_rename")
-            put(height - 1, prefix + line.view(max(0, room - sum(map(cells, prefix)))),
+        if asking is not None:
+            prefix = asking.prompt
+            put(height - 1, prefix + line.view(max(0, room - sum(map(cells, prefix))),
+                                               "" if asking.keys else "▏"),
                 curses.A_BOLD)
         elif spawning is not None:
             put(height - 1, "› " + line.view(max(0, room - 2), "") + " …", dim_attr)
@@ -1664,7 +1803,7 @@ def ui(screen, session, worker, lock):
         wait = refresh_at - time.monotonic()
         if follow_at is not None:
             wait = min(wait, follow_at - time.monotonic())
-        if spawning is not None:
+        if spawning is not None or jobs:
             wait = min(wait, 0.2)
         if producer is not None or folding is not None:
             wait = min(wait, PRODUCER_POLL)
@@ -1691,14 +1830,52 @@ def ui(screen, session, worker, lock):
             refresh_at = 0
             continue
         if key == curses.KEY_F12:
-            # The menu's rename item: it parked the row's @id on this pane,
-            # switched the client to the sidebar table and sent F12 to wake us.
+            # A menu item that asks here (issue #1620): it parked
+            # `<kind> <arg>…` in @sidebar_ask on this pane (a rename: the row's
+            # @id in @sidebar_rename, as since #898), switched the client to the
+            # sidebar table and sent F12 to wake us.
+            parked = tmux("show-options", "-pqv", "-t", pane, "@sidebar_ask")
             wid = tmux("show-options", "-pqv", "-t", pane, "@sidebar_rename")
-            tmux("set-option", "-up", "-t", pane, "@sidebar_rename")
-            if wid.startswith("@") and spawning is None:
-                follow_at, renaming, toast = None, wid, ""
-                line.set(fields(wid, "#{window_name}")[0])
+            tmux("set-option", "-up", "-t", pane, "@sidebar_ask", ";",
+                 "set-option", "-up", "-t", pane, "@sidebar_rename")
+            if wid and not parked:
+                parked = "rename " + wid
+            kind, _, rest = parked.strip().partition(" ")
+            arg, _, extra = rest.partition(" ")
+            if spawning is not None or not kind:
+                continue
+            follow_at, toast, nxt = None, "", None
+            if kind == "rename" and arg.startswith("@"):
+                nxt = Ask("rename", tr("sidebar_rename"), arg=arg)
+                line.set(fields(arg, "#{window_name}")[0])
+            elif kind == "new" and not SHELL:
+                nxt = ask_new(session, env, selection_repo(session, selected or window, env), node=arg)
+            elif kind == "repo" and not SHELL:
+                nxt = Ask("repo", tr("sidebar_ask_repo"), hint=tr("sidebar_ask_repo_hint"))
+            elif kind in ("message", "answer") and arg.startswith("wid:"):
+                hint = tr("sidebar_ask_to_fmt", arg.rsplit("/", 1)[-1])
+                if kind == "answer":
+                    hint = tr("sidebar_ask_perm_hint" if extra == "perm" else "sidebar_ask_answer_hint")
+                nxt = Ask(kind, tr("sidebar_ask_answer" if kind == "answer" else "sidebar_ask_message"),
+                          arg=arg, hint=hint)
+            elif kind == "sub" and arg.startswith("@"):
+                nxt = Ask("sub", tr("sidebar_ask_sub"), arg=arg, hint=tr("sidebar_ask_sub_loading"))
+                jobs.append(start_job(["bash", str(BIN / "fleet-manual-sub.sh"), "list", session],
+                                      env, sub_choices(nxt)))
+            elif kind == "landed" and view == "live" and not SHELL:
+                curses.ungetch(20)  # ⌃t: the landed list, in place (issue #1532)
+            elif kind == "jump" and acts(arg):
+                # 回答 on a row of this machine: its own question, in its own
+                # pane — the window the answer popup only copied.
+                selected = arg
+                if not jump(session, arg, pane, lock):
+                    follow_at = time.monotonic() + LOCK_RETRY
+            if nxt is not None:
+                if kind != "rename":
+                    line.clear()
+                asking = nxt
                 mark_input(pane, "1")
+            refresh_at = 0
             continue
         if key == 27:
             key = escape_word(screen)
@@ -1720,21 +1897,33 @@ def ui(screen, session, worker, lock):
                 was, toast = line.text, ""
                 getattr(line, op)()
                 if bool(was) != bool(line.text):
-                    mark_input(pane, renaming or line.text)
+                    mark_input(pane, "1" if asking is not None else line.text)
             continue
         # A typed key is a byte; a multi-byte one (。 ？, CJK) completes over
         # several getch calls, and only the last one yields its character.
         byte = 0 <= key < 256 and key not in (8, 9, 10, 13, 14, 15, 18, 19, 20, 27, 127)
         chars = "".join(c for c in decoder.decode(bytes([key])) if typed(c)) if byte else ""
         press = KEY_ALIASES.get(chars, chars)
-        if press == "." and not line.text and renaming is None and spawning is None and acts(selected):
+        if asking is not None and asking.keys and (byte or key in (10, 13, curses.KEY_ENTER)):
+            # A one-key question (restore: y / r): the key IS the answer; any
+            # other key — Enter included — cancels it.
+            if not chars and byte:
+                continue  # the first byte of a multi-byte key: wait for it
+            ask, asking = asking, None
+            mark_input(pane, line.text)
+            decoder.reset()
+            if press and press in ask.keys:
+                jobs.append(submit(ask, press, session, env))
+            refresh_at = 0
+            continue
+        if press == "." and not line.text and asking is None and spawning is None and acts(selected):
             # `.` on an EMPTY line is the row menu (dash-keymap.sh --panel sidebar
             # `menu`); inside a name it types. The follow is dropped: the menu
             # acts on the highlighted row and the window in view stays put.
             follow_at = None
             open_menu(session, selected, env)
             continue
-        if press == "?" and not line.text and renaming is None and spawning is None:
+        if press == "?" and not line.text and asking is None and spawning is None:
             # `?` on an EMPTY line is the sidebar's key sheet (dash-keymap.sh
             # --panel sidebar `help`, issue #948); inside a name it types.
             follow_at = None
@@ -1763,17 +1952,30 @@ def ui(screen, session, worker, lock):
         elif key == curses.KEY_END and ids:
             selected = ids[-1]
             follow_at = time.monotonic() + FOLLOW_SECS
-        elif key in (10, 13, curses.KEY_ENTER) and renaming is not None:
-            # An empty name cancels, as in the hub (dash-rename.sh decides).
-            run(["bash", str(BIN / "dash-rename.sh"), "--wid", renaming, line.text.strip()], env=env)
-            renaming = None
+        elif key in (10, 13, curses.KEY_ENTER) and asking is not None:
+            # ↵ answers the question (submit). An empty rename still goes to
+            # dash-rename.sh, which decides (an empty name cancels, as in the
+            # hub); any other empty answer cancels here.
+            ask, text, asking = asking, line.text.strip(), None
             line.clear()
             mark_input(pane, line.text)
+            if ask.kind == "rename":
+                run(["bash", str(BIN / "dash-rename.sh"), "--wid", ask.arg, text], env=env)
+            else:
+                job = submit(ask, text, session, env)
+                if job is not None:
+                    jobs.append(job)
             refresh_at = 0
-        elif key == 27 and renaming is not None:
-            renaming = None
+        elif key == 27 and asking is not None:
+            asking = None
             line.clear()
             mark_input(pane, line.text)
+        elif key == 9 and asking is not None:
+            # Tab steps a question's choices (a new task's repo, an account);
+            # ⌃i's info column waits until the question is answered.
+            value = asking.step()
+            if value:
+                line.set(value)
         elif key in (10, 13, curses.KEY_ENTER) and line.text.strip():
             # A typed name: start its scratch session (the bind kept the
             # keyboard here while @sidebar_input was set). One spawn at a time.
@@ -1790,7 +1992,9 @@ def ui(screen, session, worker, lock):
             # the restored session shows up as ▶.
             follow_at = None
             if selected.startswith("landed:"):
-                restore_landed(screen, session, selected, env)
+                job = restore_landed(session, selected, env)
+                if job is not None:
+                    jobs.append(job)
                 view, rows, selected = "live", live_rows, window
             refresh_at = 0
         elif key in (10, 13, curses.KEY_ENTER):
@@ -1831,8 +2035,11 @@ def ui(screen, session, worker, lock):
             follow_at = None
             if SHELL:
                 toast, toast_until = shell_refusal()
-            else:
-                new_task(screen, env, selection_repo(session, selected or window, env))
+            elif asking is None and spawning is None:
+                # The title on the input line (issue #1620; it was a popup) —
+                # whatever is typed already starts it.
+                asking = ask_new(session, env, selection_repo(session, selected or window, env))
+                mark_input(pane, "1")
             refresh_at = 0
         elif key == 15:
             # ⌃o (`restore`; its ⌥o fallback is rewritten to ⌃o by the bind). The
@@ -1840,8 +2047,10 @@ def ui(screen, session, worker, lock):
             follow_at = None
             if SHELL:
                 toast, toast_until = shell_refusal()
-            else:
-                restore_pick(screen, session, env)
+            elif view == "live":
+                # The landed list, in place — ⌃t's (issue #1620: the restore
+                # popup was the same list a second time).
+                curses.ungetch(20)
             refresh_at = 0
         elif key == 19:
             # ⌃s (`scratch`, issue #1532): the hub's ⌃s — a scratch session NOW,
@@ -1850,7 +2059,12 @@ def ui(screen, session, worker, lock):
             follow_at = None
             if SHELL:
                 toast, toast_until = shell_refusal()
-            elif spawning is None:
+            elif spawning is None and asking is not None and asking.kind == "new":
+                # ⌃s on a new task's title: a scratch session by that name
+                # instead, there (its repo, its machine) — the popup's ⌃s (#1541).
+                ask, asking, toast = asking, None, ""
+                spawning = spawn_scratch(line.text.strip(), env, ask.repo, node=ask.node)
+            elif spawning is None and asking is None:
                 toast = ""
                 anchor = window if not selected or selected.startswith("landed:") else selected
                 spawning = spawn_scratch(line.text.strip(), env, selection=anchor)
@@ -1921,14 +2135,20 @@ def ui(screen, session, worker, lock):
                     # the release, for the same reason as the key sheet.
                     follow_at = None
                     if buttons & curses.BUTTON1_CLICKED:
-                        if not open_tap(screen, session, action, hit, env):
+                        nxt = open_tap(session, action, hit, env)
+                        if nxt == "refused":
                             toast, toast_until = shell_refusal()
+                        elif nxt is not None and asking is None and spawning is None:
+                            asking = nxt
+                            mark_input(pane, "1")
                     else:
                         armed = hit
                 elif action == "restore":
                     follow_at = None
                     if buttons & curses.BUTTON1_CLICKED:
-                        restore_landed(screen, session, hit, env)
+                        job = restore_landed(session, hit, env)
+                        if job is not None:
+                            jobs.append(job)
                         view, rows, selected = "live", live_rows, window
                     else:
                         armed = hit
@@ -1948,13 +2168,18 @@ def ui(screen, session, worker, lock):
                 if armed == HELP_ROW and y == help_y and help_shown:
                     open_help(screen, env)
                 elif armed is not None and hit == armed and armed.startswith("landed:"):
-                    restore_landed(screen, session, armed, env)
+                    job = restore_landed(session, armed, env)
+                    if job is not None:
+                        jobs.append(job)
                     view, rows, selected = "live", live_rows, window
                     refresh_at = 0
                 elif armed is not None and hit == armed:
-                    if not open_tap(screen, session, "new" if armed.startswith("hdr:") else "menu",
-                                    armed, env):
+                    nxt = open_tap(session, "new" if armed.startswith("hdr:") else "menu", armed, env)
+                    if nxt == "refused":
                         toast, toast_until = shell_refusal()
+                    elif nxt is not None and asking is None and spawning is None:
+                        asking = nxt
+                        mark_input(pane, "1")
                     refresh_at = 0
                 armed = None
             elif buttons & curses.BUTTON4_PRESSED and ids:

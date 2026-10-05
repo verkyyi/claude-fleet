@@ -7,10 +7,10 @@
 #      ~/.ssh/config →  Host macmini
 #                         RemoteForward 2226 127.0.0.1:2226
 #      listener      →  run extras/laptop-url-opener.sh from this repo
-# 2) Fallback (no tunnel): tmux popup with the URL — cmd-clickable in iTerm —
-#    and OSC52-copied to your LOCAL clipboard (needs tmux set-clipboard on).
+# 2) Fallback (no tunnel): the URL copied to your LOCAL clipboard (OSC 52, needs
+#    tmux set-clipboard on) and shown on one line — never a popup (issue #1620).
 # OPEN_URL_REPORT=1 prints which one happened as the last stdout line —
-# `sent:tunnel` or `fallback:popup` (bin/fleet-open.sh's fallback, issue #1379).
+# `sent:tunnel` or `fallback:copied` (bin/fleet-open.sh's fallback, issue #1379).
 set -u  # POSIX sh: pipefail is bash-only (dash has none)
 url="${1:-}"; [ -z "$url" ] && exit 0
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -22,16 +22,16 @@ if printf '%s\n' "$url" | nc 127.0.0.1 "$PORT" 2>/dev/null; then
   exit 0
 fi
 
-# fallback: clickable popup + local clipboard via OSC52
-# Pass the URL as an argument, never as shell code or a temporary file. The helper
-# runs this same UI inline if no client exists or an overlay refuses the popup.
-bash "$BIN/dash-popup.sh" --size S -h 8 --title popup_open_url -- sh -c '
-  url=$1
-  b64=$(printf "%s" "$url" | base64 | tr -d "\n")
-  printf "\033]52;c;%s\a" "$b64"
-  printf "\n  \033[1;36m%s\033[0m\n\n  cmd-click to open — also copied to your local clipboard.\n  (set up the ssh RemoteForward opener to skip this popup; see open-url.sh)\n\n  Enter to close." "$url"
-  read -r _dummy
-' open-url "$url"
-rc=$?
-[ "${OPEN_URL_REPORT:-0}" = 1 ] && echo 'fallback:popup'
-exit "$rc"
+# fallback: the URL on their LOCAL clipboard (tmux set-buffer -w → OSC 52, needs
+# tmux set-clipboard on) and one line saying so — no popup (issue #1620: a box to
+# read a link off was one more thing over the session). Outside tmux, the
+# terminal it runs in gets the OSC 52 and the URL itself, cmd-clickable in iTerm.
+# The URL is only ever an argument, never shell code.
+if [ -n "${TMUX:-}" ] && tmux set-buffer -w -- "$url" 2>/dev/null; then
+  tmux display-message "$(sh "$BIN/fleet-ui-lang.sh" t toast_url_copied_fmt "$url" | sed 's/#/##/g')" 2>/dev/null || :
+else
+  b64=$(printf '%s' "$url" | base64 | tr -d '\n')
+  printf '\033]52;c;%s\a%s\n' "$b64" "$url"
+fi
+[ "${OPEN_URL_REPORT:-0}" = 1 ] && echo 'fallback:copied'
+exit 0

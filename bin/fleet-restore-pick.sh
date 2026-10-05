@@ -1,18 +1,19 @@
 #!/bin/bash
-# fleet-restore-pick.sh [--session S] — pick a finished session and bring it back
-# (issue #901). The hub's ⌃t landed view + ⌃o restore, as ONE popup any window
-# can open: the task sidebar's row menu (「恢复已收工…」) and its ⌃o
-# (dash-keymap.sh --panel sidebar `restore`) both land here.
+# fleet-restore-pick.sh --pick|--select … — bring a finished session back
+# (issue #901). The hub's ⌃t landed view + ⌃o restore, minus the hub: the task
+# sidebar's landed list (its ⌃t, ⌃o and the row menu's 「恢复已收工…」 all show
+# it, in place — the popup this used to open was the same list a second time,
+# issue #1620) runs --select on the row ↵ picks.
 #
-#   fleet-restore-pick.sh [--session S]          open the picker in a popup
-#                                                (dash-popup.sh: client resolved,
-#                                                @popup_open raised then cleared,
-#                                                inline when no popup can open)
-#   fleet-restore-pick.sh --pick [--session S]   the popup's body: fzf over the rows
-#   fleet-restore-pick.sh --select <target> [--session S]
-#                                                the step after a pick, no fzf —
-#                                                the selftest drives this; the
-#                                                #543 answer is read from stdin
+#   fleet-restore-pick.sh --pick [--session S]   fzf over the rows, in a terminal
+#   fleet-restore-pick.sh --select <target> [--session S] [--ask | --answer y|r]
+#                                                the step after a pick, no fzf.
+#                                                The #543 answer is read from
+#                                                stdin; --ask (the sidebar) asks
+#                                                nothing — it prints the question
+#                                                and exits 4, and the sidebar asks
+#                                                it on its input line and comes
+#                                                back with --answer
 #
 # Nothing here is new logic (EPIC #894 convention 1): the rows are the landed
 # view's own (`fleet-history.sh rows`, what tmux-dashboard-rows.sh execs into on
@@ -30,22 +31,21 @@
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 
-MODE=open; SESS=""; TARGET=""
+MODE=''; SESS=""; TARGET=""; ASK=''; ANSWER=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --session)   SESS="${2:-}"; [ "$#" -gt 1 ] && shift ;;
     --session=*) SESS="${1#--session=}" ;;
     --pick)      MODE=pick ;;
     --select)    MODE=select; TARGET="${2:-}"; [ "$#" -gt 1 ] && shift ;;
-    *) printf 'usage: fleet-restore-pick.sh [--session S] [--pick | --select <target>]\n' >&2; exit 2 ;;
+    --ask)       ASK=1 ;;
+    --answer)    ANSWER="${2:-}"; [ "$#" -gt 1 ] && shift ;;
+    *) MODE='' ; break ;;
   esac
   shift
 done
-
-if [ "$MODE" = open ]; then
-  exec bash "$BIN/dash-popup.sh" --size L --title popup_restore -- \
-    bash "$BIN/fleet-restore-pick.sh" --pick ${SESS:+--session "$SESS"}
-fi
+[ -n "$MODE" ] || {
+  printf 'usage: fleet-restore-pick.sh [--session S] --pick | --select <target> [--ask | --answer y|r]\n' >&2; exit 2; }
 
 # shellcheck source=/dev/null
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
@@ -57,9 +57,19 @@ fleet_load_conf "$SESS"
 export FLEET_SESSION="$SESS"   # fleet-history.sh rows scopes its ledger by it
 
 say() { printf '%s\n' "$*"; }
-# One key from the operator. stdin is the popup's terminal (fzf only ever read the
-# pipe it was handed), and the selftest's pipe under --select.
-ask() { local k=''; printf '%s ' "$1"; IFS= read -r -n1 k || :; printf '\n'; REPLY_KEY="$k"; }
+# One key from the operator. stdin is the terminal (fzf only ever read the pipe it
+# was handed), and the selftest's pipe under --select. --answer is that key given
+# up front (the sidebar asked it, issue #1620); a SECOND question then has no one
+# to answer it, so it is refused with what went wrong (exit 1, the last line).
+asked=''
+ask() {
+  local k=''
+  if [ -n "$ANSWER" ]; then
+    [ -z "$asked" ] || { REPLY_KEY=''; exit 1; }
+    asked=1; REPLY_KEY=$ANSWER; return 0
+  fi
+  printf '%s ' "$1"; IFS= read -r -n1 k || :; printf '\n'; REPLY_KEY="$k"
+}
 
 if [ "$MODE" = pick ]; then
   command -v fzf >/dev/null 2>&1 || { say 'restore: fzf is missing'; ask '按任意键关闭'; exit 1; }
@@ -95,14 +105,19 @@ case "$TARGET" in
     if [ -n "$closed" ]; then
       grace=${FLEET_CLEANUP_CLOSED_GRACE:-900}
       case "$grace" in ''|*[!0-9]*) grace=900 ;; esac
+      if [ -n "$ASK" ] && [ -z "$ANSWER" ]; then
+        # the sidebar asks it on its input line, then calls again with --answer
+        say "#$n 的 PR #$closed 已关闭（未合并），静默 $((grace / 60)) 分钟会被回收"
+        exit 4
+      fi
       say "#$n 的 PR #$closed 已关闭（未合并）。"
       say "恢复后它若静默超过 $((grace / 60)) 分钟，清理会把窗口回收（#543/#544）。"
       ask '[y] 先 reopen PR 再恢复 · [r] 直接恢复 · 其它键取消 ›'
       case "$REPLY_KEY" in
         y|Y)
           if ! err=$(gh pr reopen "$closed" --repo "$repo" 2>&1 >/dev/null); then
-            say "reopen 失败：${err:-gh gave no reason}"
             say '（分支若已删：先把 refs/pull/'"$closed"'/head 推回 issue-'"$n"'，再 reopen。）'
+            say "reopen 失败：${err:-gh gave no reason}"
             ask '[r] 仍然直接恢复 · 其它键取消 ›'
             case "$REPLY_KEY" in r|R) ;; *) exit 0 ;; esac
           fi ;;

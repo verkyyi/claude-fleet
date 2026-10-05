@@ -66,19 +66,23 @@ type placeRequest struct {
 	Wait *int `json:"wait"`
 }
 
-// placeWait is how long a REMOTE start is waited on by default, and
-// placeWaitMax the most a node may ask for; placePoll is how often the
-// target is asked in between. Variables so tests can move them.
+// placeWait is how long a REMOTE start is waited on by default (60 s, the
+// EPIC #1645 ruling — claude-fleet#1606), and placeWaitMax the most a node
+// may ask for; placePoll is how often the target is asked in between.
+// Variables so tests can move them.
 var (
-	placeWait    = 30 * time.Second
+	placeWait    = 60 * time.Second
 	placeWaitMax = 60 * time.Second
 	placePoll    = time.Second
 )
 
 // placeOutcome is what became of a REMOTE start (claude-fleet#1586):
 // done (a window opened), refused (the target's fleet said no, with the
-// spawn's own exit code and refusal line), failed (it never ran), or
-// unknown (no final state within the wait — never read as success). Exit
+// spawn's own exit code and refusal line), failed (it never ran — including
+// a start that never reached the target, or one it journalled and never
+// started within the wait, claude-fleet#1606), or unknown (still running
+// when the wait ran out — never read as success). Every outcome but done
+// hands the lease back to the asker, whose exit releases it. Exit
 // is dash-issue-session.sh's: 0 opened · 1 infrastructure · 2 at capacity ·
 // 3 claimed elsewhere.
 type placeOutcome struct {
@@ -271,12 +275,19 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := map[string]any{"local": false, "placement": pl}
 	if wait > 0 {
-		op = s.awaitOperation(r.Context(), op, time.Now().Add(wait))
+		var heard error
+		op, heard = s.awaitOperation(r.Context(), op, time.Now().Add(wait))
 		oc := outcomeOf(op, nodeLabel(pl.Machine))
+		if oc.State == "unknown" {
+			oc = neverStarted(op, heard, oc, wait)
+		}
 		resp["outcome"] = oc
-		if oc.State == "refused" || oc.State == "failed" {
-			// Nothing opened there: the issue is the asker's again, which
-			// gives it back to the pool when it exits on the refusal.
+		if oc.State != "done" {
+			// Nothing seen open there (claude-fleet#1606): the issue is the
+			// asker's again, which gives it back to the pool when it exits —
+			// no lease outlives a start nobody saw open, so the next send
+			// needs no --force. A start still running that opens after all
+			// is held off by the GitHub claim, the second guard.
 			giveBack()
 		}
 		s.leaseAudit(p.Actor, "place", fleetID, "REMOTE "+nodeLabel(pl.Machine)+" "+oc.State, now)
@@ -293,26 +304,56 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 }
 
 // awaitOperation asks the target for a REMOTE start's state until it is
-// final or the deadline passes, and returns the latest view. A target that
-// cannot be asked is asked again; the view stays what was last known.
-func (s *Server) awaitOperation(ctx context.Context, op map[string]any, deadline time.Time) map[string]any {
+// final or the deadline passes, and returns the latest view with the last
+// error asking the target gave (nil once it answered). A target that cannot
+// be asked is asked again; the view stays what was last known. An unknown
+// the hub wrote itself — the write was not acknowledged — is not the
+// target's word: it is asked too (claude-fleet#1606), so a start that never
+// arrived is told from one that did.
+func (s *Server) awaitOperation(ctx context.Context, op map[string]any, deadline time.Time) (map[string]any, error) {
 	id := asString(op["operation_id"])
-	for !operationFinal(asString(op["status"])) && time.Now().Before(deadline) {
+	heard := false
+	var last error
+	for !(operationFinal(asString(op["status"])) && (heard || asString(op["status"]) != "unknown")) && time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
-			return op
+			return op, last
 		case <-time.After(min(placePoll, time.Until(deadline))):
 		}
 		o, err := s.Store.FleetOperation(id)
 		if err != nil {
-			return op
+			return op, last
 		}
-		if !operationFinal(o.Status) && s.reconcileOperation(ctx, &o) != nil {
-			continue
+		if !heard || !operationFinal(o.Status) {
+			if last = s.reconcileOperation(ctx, &o); last != nil {
+				continue
+			}
+			heard = true
 		}
 		op = operationView(o)
 	}
-	return op
+	return op, last
+}
+
+// neverStarted turns an unknown REMOTE start into a failed one when the
+// target says it never ran it (claude-fleet#1606): it has no record of the
+// operation (the start never reached it), or it journalled it and never
+// started it within the wait — its executor refuses one that old, so it
+// never will. Anything else (still running) stays unknown.
+func neverStarted(op map[string]any, heard error, oc placeOutcome, wait time.Duration) placeOutcome {
+	id := asString(op["operation_id"])
+	var f *FleetFault
+	why := ""
+	switch {
+	case asString(op["status"]) == "accepted":
+		why = oc.Node + " accepted operation " + id + " but never started it within " + strconv.FormatFloat(wait.Seconds(), 'f', -1, 64) + " s"
+	case heard != nil && errors.As(heard, &f) && f.Code == "NOT_FOUND":
+		why = "operation " + id + " never reached " + oc.Node + " (it has no record of it)"
+	default:
+		return oc
+	}
+	one := 1
+	return placeOutcome{State: "failed", Exit: &one, Stderr: why + " — nothing opened; re-send it", Node: oc.Node}
 }
 
 func operationFinal(status string) bool {

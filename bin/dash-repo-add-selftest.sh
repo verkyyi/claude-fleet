@@ -142,8 +142,10 @@ printf '%s\n' "$SHEET" | grep '^  ⌃z ' | grep -q 'fleet-repo.sh add' || fail "
 RSHEET=$(FLEET_TMUX_PREFIX=C-z FLEET_TMUX_PREFIX2='' NO_COLOR=1 bash "$KEYS" --plain --context dash)
 printf '%s\n' "$RSHEET" | grep -q '^  ⌥z .*⌃z is your tmux prefix C-z' || fail "C: under a C-z prefix the sheet must list ⌥z and say why"
 eq "C: the row menu's letter for repo is g" "$(printf '%s\n' "$(bash "$MENU" --keys)" | awk -F '\t' '$1=="g"{print $2}' | grep -c 'add a repo')" 1
-grep -Eq 'add "\$\(t menu_repo\)" "\$\(mk repo\)" .*dash-popup\.sh.*dash-repo-add\.sh' "$MENU" \
-  || fail "C: fleet-sidebar-menu.sh has no menu_repo item on dash-popup.sh → dash-repo-add.sh via \$(mk repo)"
+grep -Eq 'adda "\$\(t menu_repo\)" "\$\(mk repo\)" "\$\(ask repo\)"' "$MENU" \
+  || fail "C: fleet-sidebar-menu.sh has no menu_repo item asking on the sidebar line (ask repo) via \$(mk repo) (#1620)"
+grep -q '"--session", session, text\], env, repo_added)' "$BIN/fleet-sidebar.py" \
+  || fail "C: the sidebar's repo question does not hand the typed owner/name to dash-repo-add.sh --session (#1620)"
 # the label lives in THE table since #1535 (fleet-ui-lang.sh), both UI languages
 [ "$(FLEET_UI_LANG=zh sh "$BIN/fleet-ui-lang.sh" t menu_repo)" = '＋ 仓库…' ] && [ "$(FLEET_UI_LANG=en sh "$BIN/fleet-ui-lang.sh" t menu_repo)" = 'Add repo…' ] \
   || fail "C: the repo item must be named in both UI languages (＋ 仓库… / Add repo…, #1188)"

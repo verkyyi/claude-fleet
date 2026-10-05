@@ -73,6 +73,17 @@ sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 dq() { printf '"%s"' "$(printf '%s' "$1" | sed 's/["\\]/\\&/g')"; }
 # fe <text> → literal inside a tmux FORMAT (menu names/title, -I input): ## = #.
 fe() { printf '%s' "$1" | sed 's/#/##/g'; }
+# ask <kind> [arg…] → the tmux command that asks on the sidebar's input line
+# instead of a popup (issue #1620): park `<kind> <arg>…` on the view
+# (@sidebar_ask), keep the keyboard there, wake it with F12 — the path rename
+# took since #898 (fleet-sidebar.py `Ask`). Every arg is a token (@id, wid:…,
+# a machine, a needs word), so a space separates them. Empty when no view is on
+# screen; the caller greys the item then.
+ask() {
+  [ -n "${side:-}" ] || return 0
+  printf 'set-option -p -t %s @sidebar_ask %s ; switch-client -T fleet-sidebar ; send-keys -t %s F12' \
+    "$side" "$(sq "$*")" "$side"
+}
 
 toast() { tmux display-message ${client:+-c "$client"} "$1" 2>/dev/null || :; }
 client=$(tmux list-clients -t "$sess" -F '#{client_activity} #{client_name}' 2>/dev/null \
@@ -113,7 +124,7 @@ add_newto() {
     i=$((i + 1)); [ "$i" -le 9 ] || break
     m=$(t menu_newto_fmt "$n")
     if [ -n "$HUB_LOST" ]; then add "-$m · $HUB_LOST" "$i" ''
-    else add "$m" "$i" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") --size S --title popup_new_task_on_fmt --object $n -- bash $(sq "$BIN/dash-issue-new.sh") confirm --spawn --node=$n")"; fi
+    else adda "$m" "$i" "$(ask new "$n")"; fi
   done <<EOF
 $(LC_ALL=C awk -F $'\037' '$1 == "#node" && $3 == "online" && $2 != "" { print $2 }' "$FLEET_C/global/remote_$sess" 2>/dev/null)
 EOF
@@ -133,6 +144,9 @@ EOF
 # Each item's LETTER is fixed by menu_keys whatever group it lands in.
 items=()
 add() { items+=("$1" "$2" "$3"); }   # name key command
+adda() {   # an item that asks on the view's line: greyed when no view is up
+  if [ -n "$3" ]; then add "$1" "$2" "$3"; else add "-$1" "$2" ''; fi
+}
 group() {   # a rule before the next group, never two in a row, never first
   local n=${#items[@]}
   [ "$n" -gt 0 ] && [ -n "${items[$((n - 3))]}" ] && add "" "" ""
@@ -174,13 +188,16 @@ PRINT=''; [ "${4:-}" = --print ] && PRINT=1
 
 # The row-less items, the same at the bottom of both menus.
 add_other() {
-  add "$(t menu_new)" "$(mk new)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") --size S --title popup_new_task -- bash $(sq "$BIN/dash-issue-new.sh") confirm --spawn")"
+  # Each asks on the view's input line (issue #1620), not in a popup: a new
+  # task's title (Tab picks the repo in a 2+ repo fleet) …
+  adda "$(t menu_new)" "$(mk new)" "$(ask new)"
   add_newto
-  # Row-less too (issue #901): the hub's ⌃t landed list + ⌃o, as one popup.
-  add "$(t menu_restore)" "$(mk restore)" "$(sh_run "bash $(sq "$BIN/fleet-restore-pick.sh") --session $(sq "$sess")")"
-  # Row-less (issue #1103): the hub's ⌃z — the same popup, the same script.
+  # Row-less too (issue #901): the landed list — the view's own ⌃t list, in
+  # place (the restore popup was that list a second time) …
+  adda "$(t menu_restore)" "$(mk restore)" "$(ask landed)"
+  # Row-less (issue #1103): the hub's ⌃z, as an owner/name on the line.
   # Listed in a one-repo fleet too: it is how the second repo gets in.
-  add "$(t menu_repo)" "$(mk repo)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") --size S --title popup_repo_add -- bash $(sq "$BIN/dash-repo-add.sh")")"
+  adda "$(t menu_repo)" "$(mk repo)" "$(ask repo)"
 }
 
 if [ -n "$remote" ]; then
@@ -205,18 +222,18 @@ if [ -n "$remote" ]; then
   [ -n "${FLEET_UI_LANG:-}" ] && ctx="$ctx FLEET_UI_LANG=$(sq "$FLEET_UI_LANG")"
   sh_run() { printf 'run-shell -b %s' "$(sq "$ctx $1 >/dev/null 2>&1 || :")"; }
   # The actions (issue #1487): every one a hub write through fleet-sidebar-remote.sh.
-  # Popups for the two that take input (message text, the answer); the others run
-  # detached and toast. Reap confirms first, as a local row's does.
+  # The two that take input (message text, the answer) ask on the view's input
+  # line (issue #1620); the others run detached and toast. Reap confirms first,
+  # as a local row's does.
   rmt="bash $(sq "$BIN/fleet-sidebar-remote.sh")"
   rargs="$(sq "$sess") $(sq "$wid")"; [ -n "$client" ] && rargs="$rargs $(sq "$client")"
-  obj=$(sq "${name:-${wid##*/}}")
   # 进入
   add "$(t menu_open_remote)" "$(mk open)" "$(sh_run "bash $(sq "$BIN/fleet-remote-view.sh") open $(sq "$wid")")"
   # 消息
   group
-  add "$(t menu_r_message)" "$(mk message)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") --size S --title popup_message --object $obj -- $rmt message $rargs")"
+  adda "$(t menu_r_message)" "$(mk message)" "$(ask message "$wid")"
   case "$rneeds:$rstate" in
-    ask:*|perm:*|*:needs) add "$(t menu_r_answer)" "$(mk answer)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") --size S --title popup_answer --object $obj -- $rmt answer $rargs")" ;;
+    ask:*|perm:*|*:needs) adda "$(t menu_r_answer)" "$(mk answer)" "$(ask answer "$wid" "$rneeds")" ;;
     *) add "-$(t menu_r_answer_none)" "$(mk answer)" '' ;;
   esac
   # 控制
@@ -245,7 +262,7 @@ pin=$(tmux show-options -wqv -t "$wid" @pin 2>/dev/null)
 pr=$(FLEET_SESSION="$sess" bash "$BIN/dash-open-pr.sh" --wid "$wid" --probe 2>/dev/null </dev/null)
 case "${FLEET_AGENT:-claude}" in codex) next=Claude ;; *) next=Codex ;; esac
 # The sidebar pane on screen anchors the menu; FLEET_SESSION / TMUX_PANE give the
-# popup-opening scripts the context they read inside a pane (dash-popup.sh).
+# scripts the items run the context they read inside a pane.
 side=$(tmux list-panes -t "$sess:" -F '#{pane_id} #{@sidebar}' 2>/dev/null | awk '$2==1{print $1; exit}')
 ctx="FLEET_SESSION=$(sq "$sess") TMUX_PANE=$(sq "${side:-}")"
 [ -n "${FLEET_CONF_DIR:-}" ] && ctx="$ctx FLEET_CONF_DIR=$(sq "$FLEET_CONF_DIR")"
@@ -263,22 +280,25 @@ if [ -n "$pr" ]; then add "$(t menu_open_pr) $(fe "$pr")" "$(mk pr)" "$(sh_run "
 else add "-$(t menu_open_pr_none)" "$(mk pr)" ''; fi
 # 消息
 group
+# 回答 goes to the row's own pane (issue #1620): the question is there, in the
+# agent's own picker — the answer popup only copied it.
 if [ "$state" = needs ]; then
-  add "$(t menu_answer)" "$(mk answer)" "$(sh_run "bash $(sq "$BIN/dash-popup.sh") --size M -h 70% --title popup_answer --object $(sq "$name") -- bash $(sq "$BIN/dash-answer.sh") $(sq "$sess:$wid")")"
+  adda "$(t menu_answer)" "$(mk answer)" "$(ask jump "$wid")"
 else add "-$(t menu_answer_none)" "$(mk answer)" ''; fi
 # 控制
 group
-# Rename edits in the view's own input line (fleet-sidebar.py `renaming`): park
+# Rename edits in the view's own input line (fleet-sidebar.py `Ask`): park
 # the row's id on the view, keep the keyboard there, and wake it with F12. The
 # view pins the client to itself on its next poll (#1105), so a paste of the new
 # name lands on the input line.
-if [ -n "$side" ]; then
-  add "$(t menu_rename)" "$(mk rename)" "set-option -p -t $side @sidebar_rename $wid ; switch-client -T fleet-sidebar ; send-keys -t $side F12"
+if [ -n "$side" ]; then add "$(t menu_rename)" "$(mk rename)" "$(ask rename "$wid")"
 else add "-$(t menu_rename)" "$(mk rename)" ''; fi
 if [ "$pin" = 1 ]; then add "$(t menu_unpin)" "$(mk pin)" "$(sh_run "bash $(sq "$BIN/dash-pin-toggle.sh") $wid")"
 else add "$(t menu_pin)" "$(mk pin)" "$(sh_run "bash $(sq "$BIN/dash-pin-toggle.sh") $wid")"; fi
-if fleet_pane_claude_pid "$wid" >/dev/null 2>&1; then
-  add "$(t menu_sub)" "$(mk sub)" "$(sh_run "bash $(sq "$BIN/dash-migrate.sh") $wid choose")"
+# 切换 sub: the account on the input line, Tab through them with their quota
+# (issue #1620) — dash-migrate.sh <@id> to <account> does the move.
+if fleet_pane_claude_pid "$wid" >/dev/null 2>&1 && [ -n "$side" ]; then
+  add "$(t menu_sub)" "$(mk sub)" "$(ask sub "$wid")"
 else add "-$(t menu_sub_none)" "$(mk sub)" ''; fi
 # Wake (issue #1051): only a sleeping row gets it, and it wakes at once — opening
 # the menu and picking it is already the second deliberate step (EPIC #1048

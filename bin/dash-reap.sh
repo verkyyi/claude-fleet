@@ -11,8 +11,8 @@
 #   ⌃x on a clean+merged row (a MERGED PR for the branch, or the tip is an
 #      ancestor of base) reaps STRAIGHT AWAY — the common case, and the cleanup
 #      daemon reaps those anyway, so no confirm.
-#   ⌃x on anything else (dirty, or clean-but-not-merged) opens a y/n confirm
-#      popup FIRST, then force-reaps — but STILL never removes a dirty worktree
+#   ⌃x on anything else (dirty, or clean-but-not-merged) asks y/n on the status
+#      line FIRST (confirm-before — a popup until #1620), then force-reaps — but STILL never removes a dirty worktree
 #      (a dirty worktree is KEPT; only the window closes).
 # The same one-key rule applies to BOTH a bound worker row (issue-<N>) and a raw
 # `scratch-<N>` row (issue #290 gave scratch its own writable worktree).
@@ -40,7 +40,7 @@
 # scratch-N. Indexes and arbitrary names are refused (#565). Never assume a human is
 # watching the fleet:
 #
-#   --yes | --force    skip the confirm popup and take the branch that popup would
+#   --yes | --force    skip the y/n confirm and take the branch that confirm would
 #                      have taken — dirty → KEEP the worktree (window close
 #                      only), anything else → full reap. Semantics are IDENTICAL to
 #                      a confirmed ⌃x; only the question is skipped, so it opens NO
@@ -48,7 +48,7 @@
 #                      and `git worktree remove` refuses one anyway). It runs
 #                      SYNCHRONOUSLY, so what it reports is the outcome, not a
 #                      dispatch receipt.
-#   no attached client never open a popup. Without --yes, a row that needs a confirm
+#   no attached client never ask. Without --yes, a row that needs a confirm
 #                      is refused with a reason instead of drawing a y/n box onto
 #                      whichever client the operator happens to be looking at — a
 #                      box nobody asked for, and (with no client at all) one that
@@ -118,6 +118,13 @@ refuse() { local slug="$1"; shift; emit "refused:$slug"; fleet_ui_fail "reap: $*
 # popup is drawn into the void — nobody can answer it, so the reap would hang on a
 # `y` that can never arrive while the caller walked away thinking it was done.
 have_client() { [ -n "$(tmux list-clients -F '#{client_name}' 2>/dev/null)" ]; }
+# ask_yes <question> — the y/n on the status line (confirm-before), never a popup
+# (issue #1620): y re-runs this reap with --yes, detached. The question is
+# shown as a format, so a `#` in it is doubled.
+ask_yes() {
+  tmux confirm-before -p "$(printf '%s (y/n)' "$1" | sed 's/#/##/g')" \
+    "run-shell -b \"bash '$BIN/dash-reap.sh' '$target' --yes >/dev/null 2>&1 || :\"" 2>/dev/null || :
+}
 
 # Git ancestry cannot distinguish a finished session from a new, clean worker
 # (#565). Recheck at each disposal entry, INCLUDING the delayed --exec tail,
@@ -527,8 +534,8 @@ if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
   describe_target "$sreason" "$swt"
 
   # ⌃x (issue #289): a clean+merged scratch disposes straight away; a
-  # dirty/unmerged one opens a y/n confirm popup FIRST (a dirty worktree stays
-  # KEPT). The initial keypress (no `confirm` arg) decides which.
+  # dirty/unmerged one asks y/n FIRST (ask_yes; a dirty worktree stays KEPT).
+  # The initial keypress (no `confirm` arg) decides which.
   if [ "$confirm" = 0 ]; then
     case "$sreason" in
       merged-pr|ancestor)
@@ -539,8 +546,8 @@ if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
         if [ "$yes" = 1 ]; then
           scratch_dispose
         elif have_client; then
-          bash "$BIN/dash-popup.sh" --size S -h 9 --title popup_reap --object "$target" -- \
-            bash "$BIN/dash-reap.sh" "$target" confirm || true
+          if [ "$sreason" = dirty ]; then ask_yes "Dispose $sbranch? Worktree is DIRTY — it will be KEPT; window closes."
+          else ask_yes "Dispose $sbranch? Removes the scratch worktree + branch, closes the window."; fi
           emit skip:needs-confirm
           exit 3
         else
@@ -626,7 +633,8 @@ describe_target "$reason" "$wtdir"
 # --- ⌃x (issue #289): clean+merged reaps straight away; anything else confirms -
 # first, then force-reaps. The initial keypress (no `confirm` arg) decides which:
 #   merged-pr | ancestor → reap_full now (the cleanup daemon reaps these anyway);
-#   dirty | unmerged     → open a y/n confirm popup that re-invokes us `confirm`.
+#   dirty | unmerged     → ask y/n on the status line (ask_yes), whose y re-invokes
+#                          us --yes. (`confirm` is the same question in a terminal.)
 if [ "$confirm" = 0 ]; then
   case "$reason" in
     dirty|unmerged)
@@ -647,9 +655,9 @@ if [ "$confirm" = 0 ]; then
           "$iss" "$reason" >&2
         exit 3
       fi
-      bash "$BIN/dash-popup.sh" --size S -h 9 --title popup_reap --object "$target" -- \
-        bash "$BIN/dash-reap.sh" "$target" confirm || true
-      # The popup is a SEPARATE invocation; this pass reaped nothing (#596).
+      if [ "$reason" = dirty ]; then ask_yes "Force-reap #$iss? Worktree is DIRTY — it will be KEPT; window closes."
+      else ask_yes "Force-reap #$iss? Removes worktree + branch, closes the window."; fi
+      # The confirm is a SEPARATE invocation; this pass reaped nothing (#596).
       emit skip:needs-confirm
       exit 3 ;;
     # merged-pr | ancestor — clean+merged, no confirm. Background the reap (issue

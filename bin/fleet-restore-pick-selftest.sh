@@ -152,6 +152,31 @@ printf 'yr' | REOPEN_FAIL=1 bash "$PICK_SH" --select landed:issue:5 --session fl
 wait_windows 2 || fail 'D: a failed reopen + r did not restore' "$(cat "$WORK/out")"
 ok 'D4 a failed reopen says why and asks again (r restores, n cancels)'
 reset_windows
+
+# --- E. the sidebar's input line asks it (issue #1620): --ask / --answer ------------
+bash "$PICK_SH" --select landed:issue:5 --session fleet-test --ask </dev/null >"$WORK/out" 2>&1; rc=$?
+[ "$rc" = 4 ] || fail "E: --ask on a closed PR must exit 4 (the question), got $rc" "$(cat "$WORK/out")"
+grep -q 'PR #12 已关闭' "$WORK/out" || fail 'E: --ask did not print the question' "$(cat "$WORK/out")"
+assert_no_restore 'E: --ask restored before the answer'
+bash "$PICK_SH" --select landed:issue:5 --session fleet-test --ask --answer y </dev/null >"$WORK/out" 2>&1
+wait_windows 2 || fail 'E: --answer y did not restore after the reopen' "$(cat "$WORK/out")"
+[ "$(cat "$WORK/gh.log" 2>/dev/null)" = 'reopen 12' ] || fail 'E: --answer y did not reopen PR #12'
+reset_windows
+REOPEN_FAIL=1 bash "$PICK_SH" --select landed:issue:5 --session fleet-test --ask --answer y </dev/null >"$WORK/out" 2>&1; rc=$?
+[ "$rc" = 1 ] || fail "E: a failed reopen under --answer must refuse (exit 1), got $rc" "$(cat "$WORK/out")"
+[ "$(tail -n 1 "$WORK/out")" = '' ] && fail 'E: the refusal has no last line'
+tail -n 1 "$WORK/out" | grep -q 'reopen 失败：could not reopen' || fail 'E: the last line is not why' "$(cat "$WORK/out")"
+assert_no_restore 'E: a failed reopen under --answer still restored'
+ok 'E  --ask exits 4 with the question; --answer y reopens then restores; a failed reopen refuses with why'
+reset_windows
 unset CLOSED
+bash "$PICK_SH" --select landed:issue:5 --session fleet-test --ask </dev/null >"$WORK/out" 2>&1; rc=$?
+[ "$rc" = 0 ] || fail "E: --ask with no closed PR must just restore, got $rc" "$(cat "$WORK/out")"
+wait_windows 2 || fail 'E: --ask with no closed PR did not restore'
+ok 'E2 --ask with nothing to ask restores straight away'
+reset_windows
+bash "$PICK_SH" --session fleet-test </dev/null >/dev/null 2>&1; rc=$?
+[ "$rc" = 2 ] || fail "E: no mode must be a usage error now (the popup is gone), got $rc"
+ok 'E3 no mode is a usage error — no popup to open'
 
 echo "fleet-restore-pick-selftest: all $pass passed"

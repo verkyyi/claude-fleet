@@ -1,13 +1,13 @@
 #!/bin/bash
 # dash-issue-close.sh <issue-number> [confirm] [--repo=<owner/name>] — close a GitHub issue straight
-# from the backlog panel (triage without leaving tmux). Called with just the
-# number it opens a small y/n confirm popup; the popup re-invokes it with
-# `confirm`, which runs `gh issue close`, optimistically drops the row from the
+# from the backlog panel (triage without leaving tmux). It asks y/n in the
+# terminal it runs in — the backlog's own fzf execute(), or its popup (a second
+# popup here was one too many, issue #1620; `confirm` is still accepted and means
+# the same) — then runs `gh issue close`, optimistically drops the row from the
 # fleet's issues cache (so the panel repaints without it at once), and kicks a
 # background refetch to make it authoritative. Closed by mistake? `gh issue
 # reopen <N>` or the web — closing is reversible.
 num="${1//[^0-9]/}"; [ -z "$num" ] && exit 0
-mode="${2:-}"
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"
@@ -18,21 +18,14 @@ ROWREPO=''
 for _a in "$@"; do case "$_a" in --repo=*) ROWREPO="${_a#--repo=}" ;; esac; done
 
 FLEET_SESSION=$(fleet_current_session); export FLEET_SESSION
-# repo: CF_REPO (passed through the confirm popup) wins; else the fleet's cached
+# repo: CF_REPO wins; else the fleet's cached
 # repo, else the global FLEET_REPO — matching the backlog panel's resolution.
 # In a 2+ repo fleet: the row's repo, else CF_REPO, else nothing (refused).
 REPO=$(fleet_backlog_repo "$FLEET_SESSION" "$ROWREPO")
 [ -z "$REPO" ] && { tmux display-message "backlog: no repo resolved — cannot close #$num"; exit 1; }
 command -v gh >/dev/null 2>&1 || { tmux display-message "gh not found — cannot close #$num"; exit 1; }
 
-# phase 1: pop a confirm dialog that re-invokes us in `confirm` mode.
-if [ "$mode" != confirm ]; then
-  bash "$BIN/dash-popup.sh" --size S -h 8 --title popup_close_issue --object "#$num" -- \
-    env CF_REPO="$REPO" bash "$BIN/dash-issue-close.sh" "$num" confirm
-  exit 0
-fi
-
-# phase 2: running inside the popup — ask, then close.
+# ask, then close.
 printf '\n  Close issue \033[1m#%s\033[0m in %s?\n\n  [y] close    [n] cancel ' "$num" "$REPO"
 read -rsn1 ans; echo
 case "$ans" in y|Y) ;; *) exit 0;; esac
@@ -50,8 +43,8 @@ rm -f "$FD/issue_${num}.json" "$FD/issue_${num}.json.ts"   # per-issue preview c
 rm -f "$FD/issues.ts" "$C/issues_$(fleet_slug "$REPO").ts" "$C/issues.ts"  # force the next fetch
 
 # Background the slow network close + authoritative refetch (issue #304) so the
-# popup closes INSTANTLY instead of blocking on `gh issue close`. The bg job toasts
-# its own outcome — the popup is already gone, so a failure can no longer wait on a
+# backlog gets its terminal back INSTANTLY instead of blocking on `gh issue close`.
+# The bg job toasts its own outcome — the question is already gone, so a failure can no longer wait on a
 # keypress; it surfaces via display-message and the same refetch RESTORES the
 # optimistically-dropped row (the issue is still open + reversible via `gh issue
 # reopen`). GH_TTL=0 forces the refetch regardless of cache age.

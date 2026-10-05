@@ -20,7 +20,7 @@
 #               unset) · no job/lock dir left
 #   • FALLBACK  active client not iTerm2 / FLEET_OPEN=0 / no tmux → open-url.sh gets
 #               the fallback URL, nothing written to the client, stdout is its
-#               token (`fallback:popup` / `sent:tunnel`) · a loopback page names the
+#               token (`fallback:copied` / `sent:tunnel`) · a loopback page names the
 #               `ssh -L` it needs
 #   • OPEN-URL  OPEN_URL_REPORT=1: a live tunnel port → `sent:tunnel`, the listener
 #               got the URL
@@ -64,7 +64,7 @@ EOF
 cat > "$WORK/bin/open-url" <<EOF
 #!/bin/sh
 printf '%s\n' "\$1" > "$STATE/openurl.argv"
-echo "\${FAKE_OPENURL_SAYS:-fallback:popup}"
+echo "\${FAKE_OPENURL_SAYS:-fallback:copied}"
 EOF
 chmod +x "$WORK/bin/tmux" "$WORK/bin/tailscale" "$WORK/bin/open-url"
 export PATH="$WORK/bin:$PATH" TMUX="/x/sock,1,0" TMUX_PANE="%1"
@@ -166,16 +166,16 @@ fb() {  # <label> <expect stdout> <expect open-url arg> <cmd…>
   else bad "FALLBACK $label → rc $rc res=$res arg=$(cat "$STATE/openurl.argv" 2>/dev/null) out=$(wc -c < "$OUT" 2>/dev/null)"; fi
 }
 clients '100|/dev/ttyOLD|iTerm2 3.6.10' '300|/dev/ttyPHONE|xterm-256color'
-fb 'active client not iTerm2' fallback:popup 'http://127.0.0.1:8765/d/x/' "$OPEN" ':8765/d/x/'
+fb 'active client not iTerm2' fallback:copied 'http://127.0.0.1:8765/d/x/' "$OPEN" ':8765/d/x/'
 grep -q 'ssh -L 8765:127.0.0.1:8765' "$WORK/err" && ok "FALLBACK names the ssh -L a loopback page needs" || bad "FALLBACK hint: $(cat "$WORK/err")"
 grep -q 'ttyPHONE 是 xterm-256color' "$WORK/err" && ok "FALLBACK says why (fleet-show's words)" || bad "FALLBACK why"
 fb 'tunnel took it' sent:tunnel 'https://github.com/x' env FAKE_OPENURL_SAYS=sent:tunnel "$OPEN" 'https://github.com/x'
 echo '{"Web":{"box.tail0.ts.net:8446":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8765"}}}}}' > "$STATE/serve.json"
-fb 'tailnet page keeps its tailnet URL' fallback:popup 'https://box.tail0.ts.net:8446/d/a/' "$OPEN" 'https://box.tail0.ts.net:8446/d/a/'
+fb 'tailnet page keeps its tailnet URL' fallback:copied 'https://box.tail0.ts.net:8446/d/a/' "$OPEN" 'https://box.tail0.ts.net:8446/d/a/'
 clients '300|/dev/ttyNEW|iTerm2 3.6.10'
-fb 'FLEET_OPEN=0' fallback:popup 'https://github.com/x' env FLEET_OPEN=0 "$OPEN" 'https://github.com/x'
-fb 'no tmux' fallback:popup 'https://github.com/x' env -u TMUX "$OPEN" 'https://github.com/x'
-[ "$(cut -f2 "$HOME/.config/claude-fleet/open.last")" = fallback:popup ] && ok "RECORD fallback:popup" || bad "RECORD fallback"
+fb 'FLEET_OPEN=0' fallback:copied 'https://github.com/x' env FLEET_OPEN=0 "$OPEN" 'https://github.com/x'
+fb 'no tmux' fallback:copied 'https://github.com/x' env -u TMUX "$OPEN" 'https://github.com/x'
+[ "$(cut -f2 "$HOME/.config/claude-fleet/open.last")" = fallback:copied ] && ok "RECORD fallback:copied" || bad "RECORD fallback"
 
 # ---- OPEN-URL's report (the real script, a tunnel listener we own) ------------------
 LPORT=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')

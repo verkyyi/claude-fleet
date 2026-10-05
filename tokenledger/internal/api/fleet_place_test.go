@@ -66,6 +66,9 @@ func TestNodePlaceBusyNodeHandsStartToIdleOne(t *testing.T) {
 	if st, out := leaseCall(t, h, tok5, map[string]any{"action": "acquire", "repo": writeRepo, "issue": 7, "worker_id": wid5}); st != 200 {
 		t.Fatalf("m5's lease: %d %v", st, out)
 	}
+	// m4 opens it (a start it never runs fails and hands the lease back,
+	// claude-fleet#1606 — TestNodePlaceSwallowedStartFails).
+	m4.setOpGet(finished("succeeded", map[string]any{"exit": 0, "window": "@7"}))
 
 	st, out := placeCall(t, h, tok5, map[string]any{"repo": writeRepo, "issue": 7, "worker_id": wid5,
 		"origin_wid": parent, "idempotency_key": "place-7"})
@@ -77,8 +80,8 @@ func TestNodePlaceBusyNodeHandsStartToIdleOne(t *testing.T) {
 		t.Fatalf("placement = %v; want m4, with m5's load as the reason", pl)
 	}
 	op := out["operation"].(map[string]any)
-	if op["status"] != "accepted" || op["fleet_id"] != f4.FleetID {
-		t.Fatalf("operation = %v; want accepted on m4's fleet", op)
+	if op["status"] != "succeeded" || op["fleet_id"] != f4.FleetID {
+		t.Fatalf("operation = %v; want succeeded on m4's fleet", op)
 	}
 	if m5.count() != 0 || m4.count() != 1 {
 		t.Fatalf("writes: m5=%d m4=%d; want 0 and 1", m5.count(), m4.count())
@@ -258,12 +261,15 @@ func TestNodePlaceRemoteRefusalComesBack(t *testing.T) {
 	}
 }
 
-// A node that never reports a final state (an agent predating #1586, or a
-// spawn still running): unknown after the wait — never done — and the lease
-// stays with the target, which may yet open it.
+// A start still running on the target when the wait runs out (a slow spawn,
+// or an agent predating #1586): unknown — never done, exit 1 there — and the
+// lease is the asker's again (claude-fleet#1606): its exit releases it, so no
+// lease outlives a start nobody saw open. The GitHub claim stays the second
+// guard should that machine open it after all.
 func TestNodePlaceNoFinalStateIsUnknown(t *testing.T) {
-	h, _, _, f5, f4 := twoNodes(t)
+	h, _, m4, f5, _ := twoNodes(t)
 	wid5 := issueWID(f5.FleetID, 23)
+	m4.setOpGet(finished("running", nil))
 	start := time.Now()
 	st, out := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 23, "worker_id": wid5})
 	oc := placeOutcomeOf(t, out)
@@ -274,8 +280,64 @@ func TestNodePlaceNoFinalStateIsUnknown(t *testing.T) {
 		t.Fatalf("answered in %v; want it to wait %v first", time.Since(start), placeWait)
 	}
 	ls, _ := h.srv.Store.Leases(time.Now())
-	if len(ls) != 1 || ls[0].FleetID != f4.FleetID {
-		t.Fatalf("leases = %+v; want #23 still m4's", ls)
+	if len(ls) != 1 || ls[0].WorkerID != wid5 {
+		t.Fatalf("leases = %+v; want #23 back with %s", ls, wid5)
+	}
+}
+
+// claude-fleet#1606: the target journalled the start (accepted) but never ran
+// it — the 3/17 m4 swallowed. That is a failure, not a hope: failed, exit 1,
+// a line naming the machine and the operation, the lease back with the asker,
+// and the next send needs no --force.
+func TestNodePlaceSwallowedStartFails(t *testing.T) {
+	h, _, _, f5, _ := twoNodes(t)
+	tok5 := h.tokens["m5"]
+	wid5 := issueWID(f5.FleetID, 25)
+	if st, _ := leaseCall(t, h, tok5, map[string]any{"action": "acquire", "repo": writeRepo, "issue": 25, "worker_id": wid5}); st != 200 {
+		t.Fatal("m5's lease")
+	}
+	st, out := placeCall(t, h, tok5, map[string]any{"repo": writeRepo, "issue": 25, "worker_id": wid5})
+	oc := placeOutcomeOf(t, out)
+	op := asString(out["operation"].(map[string]any)["operation_id"])
+	why, _ := oc["stderr1"].(string)
+	if st != 200 || oc["state"] != "failed" || oc["exit"] != 1.0 || !strings.Contains(why, "m4") ||
+		!strings.Contains(why, "never started") || !strings.Contains(why, op) {
+		t.Fatalf("place = %d %v; want failed, exit 1, a line naming m4 and %s", st, out, op)
+	}
+	ls, _ := h.srv.Store.Leases(time.Now())
+	if len(ls) != 1 || ls[0].WorkerID != wid5 {
+		t.Fatalf("leases = %+v; want #25 back with %s", ls, wid5)
+	}
+	if st, _ := leaseCall(t, h, tok5, map[string]any{"action": "release", "repo": writeRepo, "issue": 25, "worker_id": wid5}); st != 200 {
+		t.Fatalf("the asker could not release the lease it got back: %d", st)
+	}
+	if st, out := leaseCall(t, h, tok5, map[string]any{"action": "acquire", "repo": writeRepo, "issue": 25, "worker_id": wid5}); st != 200 {
+		t.Fatalf("re-dispatch without --force = %d %v; want granted", st, out)
+	}
+}
+
+// claude-fleet#1606: the start never reached the target (no acknowledgement,
+// and the node has no record of it): failed, not unknown, and the lease back.
+func TestNodePlaceStartThatNeverArrivedFails(t *testing.T) {
+	h, _, m4, f5, _ := twoNodes(t)
+	old := fleetWriteWait
+	fleetWriteWait = 100 * time.Millisecond
+	t.Cleanup(func() { fleetWriteWait = old })
+	tok5 := h.tokens["m5"]
+	wid5 := issueWID(f5.FleetID, 26)
+	m4.setAnswer(func(map[string]any) (any, *control.Error) { return nil, nil }) // the frame is lost
+	m4.setOpGet(func(map[string]any) (any, *control.Error) {
+		return nil, &control.Error{Code: "NOT_FOUND", Message: "Operation has not been accepted by this machine"}
+	})
+	st, out := placeCall(t, h, tok5, map[string]any{"repo": writeRepo, "issue": 26, "worker_id": wid5})
+	oc := placeOutcomeOf(t, out)
+	why, _ := oc["stderr1"].(string)
+	if st != 200 || oc["state"] != "failed" || oc["exit"] != 1.0 || !strings.Contains(why, "never reached m4") {
+		t.Fatalf("place = %d %v; want failed, exit 1, never reached m4", st, out)
+	}
+	ls, _ := h.srv.Store.Leases(time.Now())
+	if len(ls) != 1 || ls[0].WorkerID != wid5 {
+		t.Fatalf("leases = %+v; want #26 back with %s", ls, wid5)
 	}
 }
 

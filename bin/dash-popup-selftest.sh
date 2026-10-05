@@ -217,9 +217,9 @@ FRAME_CW=120 frame --client /dev/ttyF --size M --title popup_alerts -- true
 [ "$(sed -n 8,11p "$FLOG")" = "$(printf '%s\n' -w 86% -h 60%)" ] || fail "frame: a wide client was resized: $(tr '\n' ' ' < "$FLOG")"
 # -w / -h beside --size win on their axis; an object joins the title; a # in it is
 # literal in the tmux format
-frame --client /dev/ttyF --size S -h 9 --title popup_reap --object '#42' -- true
+frame --client /dev/ttyF --size S -h 9 --title popup_answer --object '#42' -- true
 [ "$(sed -n 8,11p "$FLOG")" = "$(printf '%s\n' -w 84% -h 9)" ] || fail "frame: -h beside --size S did not win: $(tr '\n' ' ' < "$FLOG")"
-grep -qxF -- '#[align=centre] 回收 · ##42 ' "$FLOG" || fail "frame: the object is not 「回收 · #42」: $(tr '\n' ' ' < "$FLOG")"
+grep -qxF -- '#[align=centre] 回答 · ##42 ' "$FLOG" || fail "frame: the object is not 「回答 · #42」: $(tr '\n' ' ' < "$FLOG")"
 # a title that is no key shows as given; English follows FLEET_UI_LANG
 PATH="$FRAME:$PATH" TMPDIR="$FTMP" FLEET_UI_LANG=en bash "$HELPER" --client /dev/ttyF --size M --title 'Free text' -- true
 grep -qxF -- '#[align=centre] Free text ' "$FLOG" || fail "frame: free-text English title wrong: $(tr '\n' ' ' < "$FLOG")"
@@ -272,12 +272,34 @@ untitled=$(grep -n 'dash-popup\.sh' "$BIN"/*.sh "$BIN"/*.py "$ROOT"/conf/*.conf 
   | grep -E 'dash-popup\.sh(["'"'"')]| --| -w| -h)' | grep -v -- '--title')
 [ -z "$untitled" ] || fail "one frame: a popup without --title:
 $untitled"
-for f in tmux-dashboard.sh tmux-issues.sh fleet-sidebar-menu.sh fleet-sidebar.py fleet-task-pick.sh \
-         fleet-restore-pick.sh dash-issue-new.sh dash-issue-comment.sh dash-issue-close.sh \
-         dash-reap.sh dash-migrate.sh open-url.sh; do
+for f in tmux-dashboard.sh tmux-issues.sh fleet-sidebar.py fleet-task-pick.sh; do
   grep -q 'dash-popup' "$BIN/$f" || fail "one door: $f opens no popup through dash-popup.sh"
 done
 echo "ok: one door — every popup in bin/ and conf/ goes through dash-popup.sh, titled"
+
+# --- 6d. ONLY THE POPUPS THAT NEED A SCREEN (issue #1620, EPIC #1615 C5) -------
+# The 「保留的弹窗个数」 reading: the distinct --title a popup is opened with,
+# anywhere in bin/ and conf/ — the retired full-screen hub (tmux-dashboard.sh,
+# FLEET_DASH_WINDOW=1 only) aside. What fits one line asks on the sidebar's input
+# line (fleet-sidebar.py `Ask`); what duplicated the sidebar is gone. Six stay:
+# alerts, usage, config, keys, backlog — and the task picker, for a window too
+# narrow for the list. The row menu is a display-menu, not a popup.
+kept=$(grep -ho -- '--title["'"'"', ]*popup_[a-z_]*' "$BIN"/*.sh "$BIN"/*.py "$ROOT"/conf/*.conf 2>/dev/null \
+  | grep -v '^$' | sed 's/.*\(popup_[a-z_]*\)$/\1/' | sort -u | paste -sd ' ' -)
+kept_hub=$(grep -lE -- '--title["'"'"', ]*popup_' "$BIN"/*.sh "$BIN"/*.py "$ROOT"/conf/*.conf 2>/dev/null \
+  | grep -v -- '-selftest\.' | grep -v '/tmux-dashboard\.sh$' \
+  | xargs grep -ho -- '--title["'"'"', ]*popup_[a-z_]*' | sed 's/.*\(popup_[a-z_]*\)$/\1/' | sort -u | paste -sd ' ' -)
+[ "$kept_hub" = 'popup_alerts popup_backlog popup_config popup_keys popup_tasks popup_usage' ] \
+  || fail "kept popups: want alerts backlog config keys tasks usage (6), got: $kept_hub (all, the hub too: $kept)"
+# the one-field popups that moved onto the sidebar's line open no popup at all
+for f in fleet-sidebar-menu.sh fleet-restore-pick.sh dash-issue-close.sh dash-issue-new.sh dash-reap.sh \
+         dash-migrate.sh open-url.sh dash-repo-add.sh fleet-sidebar-remote.sh; do
+  grep -Ev '^[[:space:]]*#' "$BIN/$f" | grep -q 'dash-popup\.sh\|fleet_popup ' \
+    && fail "kept popups: $f still opens a popup"
+done
+grep -E 'dash-popup\.sh.*popup_(new_task|restore)' "$BIN/fleet-sidebar.py" \
+  && fail "kept popups: the sidebar's ⌃n / ⌃o / landed restore still open a popup"
+echo "ok: six popups kept (alerts usage config keys backlog, the narrow task picker); one-field ones ask on the sidebar line"
 
 # --- 7. STATIC GUARD: the binds route through the helper ---------------------
 [ -f "$DASH" ] || fail "static guard: $DASH not found"
@@ -321,36 +343,31 @@ FAKE
 chmod +x "$ACTIONS/gh" "$ACTIONS/nc" "$ACTIONS/fzf"
 export ACTION_LOG="$WORK/action-log" INPUT_LOG="$WORK/input-log"
 for popup_path in "$WORK/bin" "$REFUSE"; do
-  for action in close comment; do
-    answer=n; [ "$action" = comment ] && answer=""
-    out=$(printf '%s\n' "$answer" | PATH="$ACTIONS:$popup_path:$PATH" TMPDIR="$RTMP" \
-      CF_REPO='fake/repo' bash "$BIN/dash-issue-$action.sh" 42)
-    case "$out" in *'#42'*'fake/repo'*) ;; *) fail "$action fallback did not show the issue/repo" ;; esac
-    [ ! -s "$ACTION_LOG" ] || fail "$action cancellation invoked gh"
-  done
+  # close asks in the terminal it runs in — no popup of its own (issue #1620)
+  out=$(printf 'n\n' | PATH="$ACTIONS:$popup_path:$PATH" TMPDIR="$RTMP" \
+    CF_REPO='fake/repo' bash "$BIN/dash-issue-close.sh" 42)
+  case "$out" in *'#42'*'fake/repo'*) ;; *) fail "close did not ask about the issue/repo" ;; esac
+  [ ! -s "$ACTION_LOG" ] || fail "close cancellation invoked gh"
   : > "$INPUT_LOG"
   PATH="$ACTIONS:$popup_path:$PATH" TMPDIR="$RTMP" CF_REPO='fake/repo' \
     bash "$BIN/dash-issue-new.sh" --spawn
   grep -q 'New issue + worker in fake/repo' "$INPUT_LOG" \
     || fail "new issue fallback lost its repo or --spawn argument"
+  # the URL fallback (issue #1620): no popup — outside tmux the terminal gets
+  # the URL (+ OSC 52); inside, it goes to the client's clipboard buffer
   url='https://example.invalid/a?q=two words&literal=$(false)'
-  out=$(printf '\n' | PATH="$ACTIONS:$popup_path:$PATH" TMPDIR="$RTMP" \
-    sh "$BIN/open-url.sh" "$url")
-  case "$out" in *"$url"*'Enter to close.'*) ;; *) fail "URL fallback lost its UI or literal argument" ;; esac
-  out=$(printf '\n' | PATH="$ACTIONS:$popup_path:$PATH" TMPDIR="$RTMP" \
-    FLEET_REPO='fake/repo' bash "$BIN/dash-open-pr.sh" landed:42)
-  case "$out" in *'https://github.com/fake/repo/pull/42'*'Enter to close.'*) ;; *)
-    fail "PR URL action lost its foreground fallback" ;; esac
+  out=$(env -u TMUX PATH="$ACTIONS:$popup_path:$PATH" TMPDIR="$RTMP" sh "$BIN/open-url.sh" "$url" </dev/null)
+  case "$out" in *"$url"*) ;; *) fail "URL fallback lost its literal argument" ;; esac
+  out=$(env -u TMUX PATH="$ACTIONS:$popup_path:$PATH" TMPDIR="$RTMP" \
+    FLEET_REPO='fake/repo' bash "$BIN/dash-open-pr.sh" landed:42 </dev/null)
+  case "$out" in *'https://github.com/fake/repo/pull/42'*) ;; *)
+    fail "PR URL action lost its fallback" ;; esac
+  out=$(TMUX="$SOCK,1,0" PATH="$ACTIONS:$popup_path:$PATH" TMPDIR="$RTMP" OPEN_URL_REPORT=1 sh "$BIN/open-url.sh" "$url" </dev/null)
+  [ "$out" = fallback:copied ] && [ "$(PATH="$WORK/bin:$PATH" tmux show-buffer 2>/dev/null)" = "$url" ] \
+    || fail "URL fallback in tmux did not copy the literal URL: $out / $(PATH="$WORK/bin:$PATH" tmux show-buffer 2>/dev/null)"
   [ ! -s "$ACTION_LOG" ] || fail "cancelled input invoked gh"
 done
 
-# Remaining pane helpers must share client resolution and the refused-popup fallback.
-for script in dash-reap dash-issue-new dash-issue-close dash-issue-comment open-url; do
-  if grep -Eq '^[[:space:]]*tmux display-popup' "$BIN/$script.sh"; then
-    fail "$script still opens a popup without resolving its client (#451)"
-  fi
-  grep -q 'dash-popup.sh' "$BIN/$script.sh" || fail "$script bypasses dash-popup.sh"
-done
 # Interactive fallback requires execute(), including the indirect PR URL opener.
 for spec in 'tmux-dashboard.sh REAP' 'tmux-dashboard.sh PR' 'tmux-dashboard.sh REPO_ADD' 'tmux-issues.sh OPEN'; do
   read -r script action <<< "$spec"

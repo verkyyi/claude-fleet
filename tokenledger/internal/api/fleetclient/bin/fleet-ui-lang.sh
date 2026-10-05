@@ -172,32 +172,18 @@ fleet_ui_t() {
     en:popup_tasks)             printf 'Tasks' ;;
     zh:popup_new_task)          printf '新建任务' ;;
     en:popup_new_task)          printf 'New task' ;;
-    zh:popup_new_task_on_fmt)   printf '新建任务 · 到 %s' "${1:-}" ;;
-    en:popup_new_task_on_fmt)   printf 'New task · on %s' "${1:-}" ;;
-    zh:popup_message)           printf '发消息' ;;
-    en:popup_message)           printf 'Message' ;;
     zh:popup_answer)            printf '回答' ;;
     en:popup_answer)            printf 'Answer' ;;
     zh:popup_repo_add)          printf '添加仓库' ;;
     en:popup_repo_add)          printf 'Add repo' ;;
-    zh:popup_restore)           printf '恢复已收工' ;;
-    en:popup_restore)           printf 'Restore finished' ;;
-    zh:popup_comment)           printf '评论' ;;
-    en:popup_comment)           printf 'Comment' ;;
-    zh:popup_close_issue)       printf '关闭 issue' ;;
-    en:popup_close_issue)       printf 'Close issue' ;;
     zh:hint_alerts)             printf '↵ 处理 · 1✖ 2▲ 3● 0全部 · m 静音1h · [✕ 关闭]' ;;
     en:hint_alerts)             printf '↵ act · 1✖ 2▲ 3● 0 all · m mute 1h · [✕ close]' ;;
     zh:hint_usage)              printf '↵ 新会话用它 · Esc 取消 · [✕ 关闭]' ;;
     en:hint_usage)              printf '↵ new sessions use it · esc · [✕ close]' ;;
     zh:hint_backlog)            printf '↵ 开工 · [＋ 新建] · ? 键 · [✕ 关闭]' ;;
     en:hint_backlog)            printf '↵ work · [＋ new] · ? keys · [✕ close]' ;;
-    zh:popup_reap)              printf '回收' ;;
-    en:popup_reap)              printf 'Reap' ;;
-    zh:popup_open_url)          printf '打开链接' ;;
-    en:popup_open_url)          printf 'Open link' ;;
-    zh:popup_switch_sub)        printf '切换 sub' ;;
-    en:popup_switch_sub)        printf 'Switch subscription' ;;
+    zh:toast_url_copied_fmt)    printf 'fleet: 链接已复制到剪贴板 — %s' "${1:-}" ;;
+    en:toast_url_copied_fmt)    printf 'fleet: link copied to your clipboard — %s' "${1:-}" ;;
     # --- toasts a tmux bind shows (issue #1535: no hardcoded English left)
     zh:toast_sidebar_home)      printf '任务栏：输入名称 ↵ 新会话 · ↑↓ 切换 · ↵/Esc 回任务 · 再按 ☰/F9 去 hub' ;;
     en:toast_sidebar_home)      printf 'Tasks: type a name ↵ = new session · ↑↓ switch · ↵/Esc worker · ☰/F9 again → hub' ;;
@@ -250,40 +236,67 @@ fleet_ui_t() {
     en:sidebar_landed_loading)  printf 'Landed …' ;;
     zh:sidebar_spawn_failed)    printf '创建失败' ;;
     en:sidebar_spawn_failed)    printf 'spawn failed' ;;
+    # the questions asked on the input line instead of a popup (issue #1620)
+    zh:sidebar_ask_new)         printf '新任务› ' ;;
+    en:sidebar_ask_new)         printf 'task› ' ;;
+    zh:sidebar_ask_to_fmt)      printf '→ %s' "${1:-}" ;;
+    en:sidebar_ask_to_fmt)      printf '→ %s' "${1:-}" ;;
+    zh:sidebar_ask_tab)         printf ' · Tab 换' ;;
+    en:sidebar_ask_tab)         printf ' · Tab next' ;;
+    zh:sidebar_ask_repo)        printf '仓库› ' ;;
+    en:sidebar_ask_repo)        printf 'repo› ' ;;
+    zh:sidebar_ask_repo_hint)   printf 'owner/name 或网址 · ↵ 加入' ;;
+    en:sidebar_ask_repo_hint)   printf 'owner/name or URL · ↵ adds' ;;
+    zh:sidebar_ask_message)     printf '消息› ' ;;
+    en:sidebar_ask_message)     printf 'message› ' ;;
+    zh:sidebar_ask_answer)      printf '回答› ' ;;
+    en:sidebar_ask_answer)      printf 'answer› ' ;;
+    zh:sidebar_ask_answer_hint) printf '选项号，或 y / n' ;;
+    en:sidebar_ask_answer_hint) printf 'option number(s), or y / n' ;;
+    zh:sidebar_ask_perm_hint)   printf '允许？y / n' ;;
+    en:sidebar_ask_perm_hint)   printf 'allow? y / n' ;;
+    zh:sidebar_ask_sub)         printf '切到› ' ;;
+    en:sidebar_ask_sub)         printf 'switch to› ' ;;
+    zh:sidebar_ask_sub_loading) printf '读额度…' ;;
+    en:sidebar_ask_sub_loading) printf 'reading quota…' ;;
+    zh:sidebar_ask_sub_hint)    printf 'Tab 选账号 · ↵ 迁移' ;;
+    en:sidebar_ask_sub_hint)    printf 'Tab picks an account · ↵ moves' ;;
+    zh:sidebar_ask_restore)     printf 'y 先 reopen · r 直接恢复› ' ;;
+    en:sidebar_ask_restore)     printf 'y reopen first · r restore› ' ;;
     # --- the row menu (fleet-sidebar-menu.sh). menu_keys is THE letter table:
     # `action<TAB>letter<TAB>what`, read by the menu (mk) and the ? sheet (--keys).
     zh:menu_keys)               printf '%s' 'rename	r	改名 — 在输入行编辑（↵ 应用，esc / 空名称取消）
 pin	t	置顶 / 取消置顶
 pr	p	打开 PR（没有时置灰）
-answer	a	回答提问（红色 ? 行；否则置灰）
-sub	s	切换 sub — 选中运行中的 Claude worker，按 . 后按 s；显示额度并确认
+answer	a	回答提问 — 跳到那个会话，在它自己的提问里答（红色 ? 行；否则置灰）
+sub	s	切换 sub — 在输入行写账号，Tab 逐个看额度，↵ 迁移
 wake	w	唤醒睡眠中的 z 行（仅睡眠时显示）
 awake	k	保持唤醒 ⇄ 允许再次休眠
 agent	v	新会话 claude ⇄ codex
 reap	x	回收 — 先确认 y/n（别机行：经入口让那台机器回收）
-new	n	新任务 — 建 issue 并启动 worker
+new	n	新任务 — 在输入行写标题（多仓库 Tab 换仓库），↵ 建 issue 并启动 worker
 newto	1-9	新建到 <机器>… — 入口在线的别的机器各一项：建 issue，worker 开在那台机器上
-restore	o	恢复已收工任务（hub landed 列表，弹窗）
-repo	g	添加仓库到这个 fleet — 询问 owner/name；~/projects/<name>，缺失时 clone（hub ⌃z）
+restore	o	恢复已收工任务 — 任务栏就地换成已落地列表（同 ⌃t）
+repo	g	添加仓库到这个 fleet — 在输入行写 owner/name；~/projects/<name>，缺失时 clone（hub ⌃z）
 open	e	进入 — 打开 ⇄ 代理窗口（只有另一台机器上的行有；菜单标题写着「· m4」）
-message	m	发消息… — 只有别机行有：经入口送到那台机器的 issue 桥，作为它的下一轮
+message	m	发消息… — 只有别机行有：在输入行写，经入口送到那台机器的 issue 桥，作为它的下一轮
 stop	q	停 — 只有别机行有：经入口让那台机器上的会话 /exit（可恢复）
 resume	c	继续 — 只有别机行有：经入口恢复刚停掉的会话（活着的会被拒绝并告诉你）' ;;
     en:menu_keys)               printf '%s' 'rename	r	rename — edits on the input line (↵ applies, esc / an empty name cancels)
 pin	t	pin / unpin the row to the top
 pr	p	open its PR (greyed when it has none)
-answer	a	answer its question (a red ? row; greyed otherwise)
-sub	s	switch subscription — select a running Claude worker, press . then s; review quota and confirm
+answer	a	answer its question — jumps to that session, to answer in its own picker (a red ? row; greyed otherwise)
+sub	s	switch subscription — the account on the input line, Tab through them with their quota, ↵ moves
 wake	w	wake a sleeping (z) row now — only listed on one
 awake	k	keep it awake ⇄ allow it to sleep again
 agent	v	flip new sessions claude ⇄ codex
 reap	x	reap it — asks y/n first (a row on another machine: through the hub, there)
-new	n	new task — file an issue AND spawn its worker
+new	n	new task — its title on the input line (Tab picks the repo in a 2+ repo fleet), ↵ files the issue AND spawns its worker
 newto	1-9	new task on <machine>… — one per other machine the hub says is online: file the issue, open the worker there
-restore	o	restore a finished task (the hub landed list, in a popup)
-repo	g	add a repo to this fleet — asks owner/name; ~/projects/<name>, cloned if missing (the hub ⌃z)
+restore	o	restore a finished task — the sidebar shows the landed list in place (as ⌃t)
+repo	g	add a repo to this fleet — owner/name on the input line; ~/projects/<name>, cloned if missing (the hub ⌃z)
 open	e	enter — open the ⇄ proxy window (a row on another machine only; the menu title says · m4)
-message	m	message… — a row on another machine only: through the hub to the issue bridge on that machine, as its next turn
+message	m	message… — a row on another machine only: typed on the input line, through the hub to the issue bridge on that machine, as its next turn
 stop	q	stop — a row on another machine only: /exit there through the hub (resumable)
 resume	c	resume — a row on another machine only: reopen a just-stopped one through the hub (a live one is refused, and says so)' ;;
     zh:menu_open_remote)        printf '进入（⇄ 代理窗口）…' ;;
@@ -384,12 +397,12 @@ resume	c	resume — a row on another machine only: reopen a just-stopped one thr
     en:keys_prefix_02)         printf %s 'focus the task list, like F9 (FLEET_DASH_WINDOW=1: the old hub dash)' ;;
     zh:keys_prefix_03)         printf %s '显示/隐藏 worker 任务栏（保存到当前 fleet；窄屏自动隐藏）' ;;
     en:keys_prefix_03)         printf %s 'show/hide the worker task sidebar (saved for this fleet; narrow screens hide it automatically)' ;;
-    zh:keys_prefix_04)         printf %s '聚焦任务栏；没有任务栏时打开任务选择器' ;;
-    en:keys_prefix_04)         printf %s 'focus the task sidebar (or click/tap it) — then type: see the '"'"'task sidebar'"'"' group. No sidebar on screen: opens the task picker (prefix Space)' ;;
+    zh:keys_prefix_04)         printf %s '聚焦任务栏（没显示就打开）；窗口太窄放不下时打开任务选择器' ;;
+    en:keys_prefix_04)         printf %s 'focus the task sidebar (or click/tap it) — then type: see the '"'"'task sidebar'"'"' group. No sidebar on screen: shows it, as ⌂ does — a window too narrow for it opens the task picker' ;;
     zh:keys_prefix_05)         printf %s '在 ⇄ 代理窗口（另一台机器的会话）里：回到上一个本机窗口；其他窗口无动作' ;;
     en:keys_prefix_05)         printf %s 'in a ⇄ proxy window (another machine'"'"'s session, beside this machine'"'"'s sidebar): back to the last LOCAL window; a no-op anywhere else' ;;
-    zh:keys_prefix_06)         printf '任务选择器：切换任务，或输入名称新建 scratch；F9 / ⌂ 回 hub' ;;
-    en:keys_prefix_06)         printf 'task picker — the task sidebar'"'"'s list as a popup, for when the sidebar is hidden (narrow screen) or off: ↵ switch · type a name + %s (or ↵ on no match) = new scratch session · F9 / [⌂ hub] = the hub · esc / [✕ close]' "${1:-}" ;;
+    zh:keys_prefix_06)         printf '聚焦任务栏（同 ⌂）；窗口太窄时才是任务选择器弹窗：切换任务，或输入名称新建 scratch' ;;
+    en:keys_prefix_06)         printf 'the task list, focused (as ⌂); in a window too narrow for it, the task picker — the list as a popup: ↵ switch · type a name + %s (or ↵ on no match) = new scratch session · F9 / [⌂ hub] = the hub · esc / [✕ close]' "${1:-}" ;;
     zh:keys_prefix_07)         printf %s '议题列表：GitHub issues，回车启动该 issue 的 worker' ;;
     en:keys_prefix_07)         printf %s 'backlog modal — GitHub issues; enter spawns the issue'"'"'s session' ;;
     zh:keys_prefix_08)         printf %s '配置弹窗：查看/编辑 FLEET_* 设置' ;;
@@ -444,20 +457,20 @@ resume	c	resume — a row on another machine only: reopen a just-stopped one thr
     en:keys_sidebar_11)        printf %s 'delete from the cursor to the end of the line' ;;
     zh:keys_sidebar_12k)       printf %s '点仓库标题' ;;
     en:keys_sidebar_12k)       printf %s 'tap a heading' ;;
-    zh:keys_sidebar_12)        printf %s '2+ 仓库、看全部时：点一下仓库标题只选中它（不切换），输入行写着它——这时输入名称或新任务都建在那个仓库；再点一次弹出钉在该仓库的新任务弹窗。「无仓库」= $HOME；esc 或点任务行清除' ;;
-    en:keys_sidebar_12)        printf %s '2+ repos, viewing all: a tap on a repo heading selects it (no switch) and the input line names it — a typed name or new task starts THERE; tap it again for the new-task popup pinned to that repo. '"'"'no repo'"'"' = $HOME; esc or a tap on a task clears it' ;;
-    zh:keys_sidebar_13)        printf %s '新任务：创建 issue 并启动 worker' ;;
-    en:keys_sidebar_13)        printf %s 'new task — file an issue AND spawn its worker (the hub'"'"'s ⌃n popup)' ;;
+    zh:keys_sidebar_12)        printf %s '2+ 仓库、看全部时：点一下仓库标题只选中它（不切换），输入行写着它——这时输入名称或新任务都建在那个仓库；再点一次在输入行写钉在该仓库的新任务标题。「无仓库」= $HOME；esc 或点任务行清除' ;;
+    en:keys_sidebar_12)        printf %s '2+ repos, viewing all: a tap on a repo heading selects it (no switch) and the input line names it — a typed name or new task starts THERE; tap it again for a new task'"'"'s title on the input line, pinned to that repo. '"'"'no repo'"'"' = $HOME; esc or a tap on a task clears it' ;;
+    zh:keys_sidebar_13)        printf %s '新任务：在输入行写标题，↵ 创建 issue 并启动 worker' ;;
+    en:keys_sidebar_13)        printf %s 'new task — its title on the input line (Tab picks the repo in a 2+ repo fleet, ⌃s makes it a scratch instead); ↵ files an issue AND spawns its worker' ;;
     zh:keys_sidebar_14)        printf %s '空行时打开选中任务菜单；输入名称时就是普通点号' ;;
     en:keys_sidebar_14)        printf %s 'on an EMPTY line: the highlighted task'"'"'s menu — rename (edits on this line: ↵ applies, esc/empty cancels) · pin · open PR · answer its question · flip new sessions claude⇄codex · reap (asks y/n first) · new task. Inside a name it types a dot. Touch: tap the highlighted row again' ;;
-    zh:keys_sidebar_15)        printf %s '恢复已收工任务' ;;
-    en:keys_sidebar_15)        printf %s 'restore a finished task — the hub'"'"'s ⌃t landed list in a popup; ↵ brings it back as the current window (a closed-unmerged PR asks to reopen first). Touch: the row menu'"'"'s last item' ;;
+    zh:keys_sidebar_15)        printf %s '恢复已收工任务 — 就地换成已落地列表（同 ⌃t）' ;;
+    en:keys_sidebar_15)        printf %s 'restore a finished task — the landed list, in place (as ⌃t); ↵ brings it back as the current window (a closed-unmerged PR asks y / r on the input line first). Touch: the row menu'"'"'s last item' ;;
     zh:keys_sidebar_16)        printf %s '空行时打开任务栏快捷键；输入名称时就是普通问号' ;;
     en:keys_sidebar_16)        printf %s 'on an EMPTY line, or a tap on the '"'"'? 快捷键'"'"' row above it: this sidebar'"'"'s key sheet. Inside a name it types a ?' ;;
     zh:keys_sidebar_18)         printf %s '立即开一个临时会话 — 同 hub 的 ⌃s：不命名（输入行有字就用它命名），开在选中行的仓库，并切过去。被拒（上限、worktree）写在输入行' ;;
     en:keys_sidebar_18)         printf %s 'a scratch session NOW — the hub'"'"'s ⌃s: unnamed (a typed name, if any, names it), in the highlighted row'"'"'s repo, and it becomes the current window. A refusal (cap, worktree) shows on the input line' ;;
-    zh:keys_sidebar_19)         printf %s '运行中 ⇄ 已落地，就地切换 — 同 hub 的 ⌃t：已落地列表（fleet-history.sh rows）占用任务栏的行；在一行上 ↵（或再点一次）把它恢复为当前窗口，列表回到运行中。⌃o 弹窗照常可用' ;;
-    en:keys_sidebar_19)         printf %s 'running ⇄ landed, in place — the hub'"'"'s ⌃t: the landed list (fleet-history.sh rows) takes the sidebar'"'"'s rows; ↵ (or a second tap) on one restores it as the current window and the list goes back to running. ⌃o'"'"'s popup still works' ;;
+    zh:keys_sidebar_19)         printf %s '运行中 ⇄ 已落地，就地切换 — 同 hub 的 ⌃t：已落地列表（fleet-history.sh rows）占用任务栏的行；在一行上 ↵（或再点一次）把它恢复为当前窗口，列表回到运行中。⌃o 同此' ;;
+    en:keys_sidebar_19)         printf %s 'running ⇄ landed, in place — the hub'"'"'s ⌃t: the landed list (fleet-history.sh rows) takes the sidebar'"'"'s rows; ↵ (or a second tap) on one restores it as the current window and the list goes back to running. ⌃o does the same' ;;
     zh:keys_sidebar_20)         printf %s '立即重读当前列表（已落地列表也算）— 同 hub 的 ⌃r' ;;
     en:keys_sidebar_20)         printf %s 're-read the shown list now (the landed one included) — the hub'"'"'s ⌃r' ;;
     zh:keys_sidebar_21)         printf %s 'Tab 键：展开 / 收起信息列 — 每行的单号 · PR · 上下文%，右对齐，同 hub 的三格。默认收起（名称优先占宽）；展开时任务栏最宽到 FLEET_SIDEBAR_WIDTH_MAX，再宽就让名称让位' ;;
@@ -495,7 +508,7 @@ resume	c	resume — a row on another machine only: reopen a just-stopped one thr
     zh:keys_dashboard_10)      printf %s '回收完成的 worker；必要时确认，脏 worktree 会保留' ;;
     en:keys_dashboard_10)      printf %s 'reap a finished worker (window + worktree + issue) — confirms when the row isn'"'"'t merged+clean. Targets: @window-id, %pane-id, registered handle, issue-N or scratch-N; indexes/names are refused. From a SCRIPT: `dash-reap.sh <handle> --yes` takes that confirm branch unasked (a dirty worktree is still KEPT) and prints a result token (`reaped:full`/`reaped:keep`/`skip:needs-confirm`/`refused:<slug>`); with no client attached it never pops a box at you' ;;
     zh:keys_dashboard_11)      printf %s '把高亮会话迁移到另一个有余量的账号' ;;
-    en:keys_dashboard_11)      printf %s 'move the highlighted session onto another subscription account NOW — the unstick for a `⚠ stuck` row (issue #873). A confirm popup shows the target account and every background command the move will stop; y closes it (/exit), stops those commands, and resumes the same transcript in a new window on the account with headroom, the stopped commands named in its first prompt. Refuses when no account has room (every one benched) — it never bounces a session onto another wall. Same as `fleet-account.sh migrate --force-bg <window>`; `migrate --stuck` moves every stuck row' ;;
+    en:keys_dashboard_11)      printf %s 'move the highlighted session onto another subscription account NOW — the unstick for a `⚠ stuck` row (issue #873). It asks y/n on the status line, then fleet-migrate'"'"'s own dry-run decides; y closes it (/exit), stops those commands, and resumes the same transcript in a new window on the account with headroom, the stopped commands named in its first prompt. Refuses when no account has room (every one benched) — it never bounces a session onto another wall. Same as `fleet-account.sh migrate --force-bg <window>`; `migrate --stuck` moves every stuck row' ;;
     zh:keys_dashboard_12)      printf %s '置顶/取消置顶高亮窗口；置顶行显示在最上方' ;;
     en:keys_dashboard_12)      printf %s 'pin/unpin the highlighted window to the TOP of the list — a pin beats the status sort (a pinned idle row sits above a red one), so the session you are deliberately watching stays where you left it. Pinned rows move to the 置顶 group at the very top (a thin line closes it; ←/→ on its heading folds it); pinning a PARENT floats its children with it, still nested. The pin lives on the tmux window, so it vanishes with the window — nothing to clean up' ;;
     zh:keys_dashboard_13)      printf %s '给当前 fleet 添加仓库' ;;

@@ -5,6 +5,10 @@ Description=claude-fleet dashboard collector (git/gh/usage caches)
 
 [Service]
 Type=oneshot
+# The tick starts the cross-machine sessions loop (fleet-hub-sessions.sh --ensure),
+# which must outlive it; the default control-group kill took it with every tick
+# (issue #1596). The collector bounds its own children with fleet_timebox.
+KillMode=process
 ExecStart=/bin/bash __HOME__/.claude/fleet/bin/tmux-dash-collect.sh
 Environment=HOME=__HOME__
 Environment=LANG=en_US.UTF-8

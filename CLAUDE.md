@@ -424,5 +424,15 @@ Do not install from memory: read the doc and work from it.
   next batch deletes them, and the shell's conf-free mirror with them. The legacy
   flat-conf scans skip `fleet.conf` / `shell.conf` (not fleets). `fleet-doctor`'s
   `role` row; `bin/fleet-conf-selftest.sh` pins all three roles + the degenerate.
+- **Machine-to-machine ssh rides a five-minute hub certificate, never a
+  standing key** (issue #1626). `fleet-remote-view.sh`, `fleet-node-upgrade.sh
+  --host` and `fleet-move.sh` get their ssh options from `bin/fleet-peer-cert.sh
+  <machine> view|upgrade|move` (the node token asks `POST /v1/node/peer-cert`; the
+  hub checks the target login is the same owner's, signs `~/.ssh/fleet-peer` for
+  `sshca.PeerTTL`, audits it in `fleet_peer_certs`). Exit 1 = the hub said no or is
+  down: pause and say so — never fall back to authorized_keys; exit 3 = no hub
+  here: plain ssh, byte for byte. Any new cross-machine ssh goes through it
+  (`fleet-peer-cert-selftest.sh` I lints it); `fleet-doctor`'s `sshtrust` row
+  WARNs on another fleet machine's key in `~/.ssh/authorized_keys`.
 - Claude Code re-reads `settings.json` hooks per turn, so running sessions pick
   up hook changes without a restart.

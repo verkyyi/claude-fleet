@@ -168,6 +168,31 @@
 
 全量版（真关机）还没做过：按运营者定的低峰时段，先把两台机器同步到含 #1505 的版本，再按第 2 节走。
 
+## 5½. 机器之间互访：一律经入口（#1626）
+
+一台机器去另一台（打开别机会话 `fleet-remote-view.sh`、`fleet-node-upgrade.sh --host`、
+`fleet-move.sh`），每次 ssh 前先用本登录的节点令牌向入口申请
+`POST /v1/node/peer-cert {target, purpose: view|upgrade|move}`：入口核对目标机器上有
+**同一主人**的登录，签一张 **5 分钟**、principal 只有那个登录、key id 写明
+`peer:<来源>><目标>:<用途>` 的证书，先记审计再交出。目标的 sshd 用本来就信任的入口 CA
+（`TrustedUserCAKeys`）放行；连接建立后不受证书过期影响。
+
+- 入口不可达 / 拒绝：**暂停并说明**，不退回长期互信（`fleet-peer-cert.sh` exit 1）。
+- 没有入口（单机、无 node.env）或入口还没部署 #1626：照旧直接 ssh（exit 3）。
+- 审计：`GET /v1/fleet/peer-certs`（运营者），每次跨机一行；目标 sshd 日志里也有 key id。
+- 本机的 peer 钥匙：`~/.ssh/fleet-peer`（只用来被签，不放进任何 authorized_keys）。
+
+**删除旧互信**（运营者 2026-10-04 已同意）：入口部署后，在 m5 上打开一个 m4 会话
+（选路行出现「入口证书 5 分钟」）、`fleet-node-upgrade.sh --host m4 --status` 照常，
+`/v1/fleet/peer-certs` 有两条；然后在每台机器上：
+
+```sh
+bash ~/.claude/fleet/bin/fleet-doctor.sh | grep sshtrust   # WARN 列出其它 fleet 机器的钥匙（行号）
+# 删掉列出的那几行，再跑一次：PASS = 没有永久互信
+```
+
+删后再验一次跨机打开会话和升级。
+
 ## 6. 速查
 
 | 要做的事 | 命令 / 接口 |

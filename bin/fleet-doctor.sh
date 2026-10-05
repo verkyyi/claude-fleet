@@ -825,6 +825,19 @@ if [ -n "$_rl_role" ] && [ "$_rl_role" != none ]; then
   fi
 fi
 
+# --- sshtrust (issue #1626): no standing key from another fleet machine ----------
+# Cross-machine ssh rides a five-minute certificate the hub signs per connection
+# (fleet-peer-cert.sh); a key another fleet machine left in ~/.ssh/authorized_keys
+# (`verkyyi@macmini`) admits it forever and the hub never hears of it. WARN with
+# each entry (line, type, comment — never the key); PASS when there is none. A
+# login that knows no other fleet machine prints nothing: the degenerate case.
+_tr=$(bash "$(dirname "$0")/fleet-peer-trust.sh" 2>/dev/null); _tr_rc=$?
+case "$_tr_rc" in
+  0) warn sshtrust "$(printf '%s\n' "$_tr" | awk 'NF' | wc -l | tr -d ' ') 把其它 fleet 机器的钥匙留在 ~/.ssh/authorized_keys（永久互信）: $(printf '%s\n' "$_tr" | awk -F '\t' 'NF { printf "%s%s (第 %s 行)", s, $3, $1; s = ", " }') — 跨机已改走入口签发的 5 分钟证书（#1626），确认跨机照常后删掉这些行"
+     ;;
+  1) pass sshtrust "authorized_keys 里没有其它 fleet 机器的钥匙 — 跨机只认入口签发的 5 分钟证书" ;;
+esac
+
 # --- agent (issue #1525): every login's node agent on this machine vs stable ---
 # Same reading as `fleet-node-upgrade.sh --status`: the bytes on disk AND the
 # version the hub sees running (an agent upgraded on disk but never restarted is
@@ -2322,7 +2335,15 @@ if [ "$_hub_on" = 1 ] && [ -x "$(dirname "$0")/fleet-hub-sessions.sh" ]; then
     cmd\ *)   pass hub "sidebar reads the hub through FLEET_HUB_SESSIONS_CMD" ;;
     *)        warn hub "sidebar cannot ask the hub: ${_hid#none } — no other machine's sessions will show (bin/fleet-hub-sessions.sh --identity)" ;;
   esac
-  unset _hid
+  # The refresh loop itself (issue #1596): the collector re-starts it every tick,
+  # sidebar or not — a dead loop or an old cache means the other machines' rows
+  # stopped while nobody was looking.
+  if _hst=$(CCQUOTA_FLEET=1 bash "$(dirname "$0")/fleet-hub-sessions.sh" --status 2>/dev/null </dev/null); then
+    pass hub-sessions "$_hst"
+  else
+    warn hub-sessions "${_hst:-no answer} — the other machines' sessions are not refreshing (collector runs bin/fleet-hub-sessions.sh --ensure every tick)"
+  fi
+  unset _hid _hst
 fi
 # The invariant itself, per fleet — FLEET_HANDOFF_IDLE_TIMEOUT takes a per-fleet
 # overlay (FLEET_STUCK_WORKING_SECS is global-only: one spinner serves the machine).
