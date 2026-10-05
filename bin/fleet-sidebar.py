@@ -1644,6 +1644,14 @@ def ui(screen, session, worker, lock):
             wait = min(wait, PRODUCER_POLL)
         screen.timeout(max(1, min(1000, int(wait * 1000))))
         key = screen.getch()
+        if key != -1 and spawning is not None and spawning.poll() is not None:
+            # The spawn finished during this wait. Settle it first (the top of
+            # the loop reaps it: the line empties, the keyboard leaves the
+            # sidebar) and only then handle the key — a ⌃s or ↵ typed in the
+            # same tick was otherwise dropped as «a spawn in flight» (issue
+            # #1541: the sidebar selftest's ⌃s right after a typed spawn).
+            curses.ungetch(key)
+            continue
         if key == curses.KEY_RESIZE:
             # The pane was resized under the view — the window took a client's
             # size, the operator dragged the divider, or fit_view's own
