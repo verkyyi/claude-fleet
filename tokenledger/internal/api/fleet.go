@@ -113,7 +113,9 @@ func (s *Server) FleetPrincipal(r *http.Request) (fleetPrincipal, error) {
 // agent that reports each fleet's checkout (one that said CapRead): then every
 // fleet UUID is re-derived from (machine, name, repo, checkout) and a fleet
 // whose UUID does not add up is dropped, never registered under a wrong id.
-func (s *Server) recordFleets(ep store.Endpoint, hb control.Heartbeat, verify bool, at time.Time) {
+// reconnect is the connection's first beat: its sessions are checked against
+// the leases other workers hold (claude-fleet#1630).
+func (s *Server) recordFleets(ep store.Endpoint, hb control.Heartbeat, verify, reconnect bool, at time.Time) {
 	if hb.MachineID == "" || hb.FleetError != "" {
 		// No claude-fleet, or this beat could not read it: keep what the
 		// registry knew rather than marking every fleet gone.
@@ -161,7 +163,7 @@ func (s *Server) recordFleets(ep store.Endpoint, hb control.Heartbeat, verify bo
 	s.sessionsChanged.fire()
 	// Issue leases ride the same beat (claude-fleet#1422): a session it
 	// shows renews its lease, a session it no longer shows releases it.
-	s.renewLeases(ep, reports, rejected, s.leaseClock())
+	s.renewLeases(ep, host, user, reports, rejected, reconnect, s.leaseClock())
 }
 
 // maxFleetRepos bounds the repo list one fleet may report.
@@ -799,6 +801,9 @@ func (s *Server) CallFleetTool(req *http.Request, tool string, args map[string]a
 	case "operation_get":
 		opID, _ = args["operation_id"].(string)
 		return s.OperationGet(req, opID)
+	case "fleet_alerts":
+		// Node-lost / lease-conflict alerts (claude-fleet#1630).
+		return s.FleetAlerts(req)
 	}
 	if fleetWriteTools[tool] || fleetGHReads[tool] {
 		p, err := s.FleetPrincipal(req)

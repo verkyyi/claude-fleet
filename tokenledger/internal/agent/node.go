@@ -32,14 +32,18 @@ import (
 // version. The hub marks the node lost after three silent intervals.
 //
 // The link is expected to break (it crosses a border). Every break is followed
-// by a reconnect after an exponentially growing, jittered delay capped at a
-// minute, and nothing on this machine changes while it is down: the sessions
-// keep running, only the hub's view of them goes stale.
+// by a reconnect on a 5, 10, 20, 30, 30 … second ladder (claude-fleet#1630:
+// network back → node online within 30 s), jittered, and a change in this
+// machine's network (netwatch_*.go) skips the wait and clears the ladder.
+// Nothing on this machine changes while the link is down: the sessions keep
+// running, only the hub's view of them goes stale — and the first beat of the
+// next session is the full picture again.
 
-// Reconnect backoff bounds. Variables so tests can shrink them.
+// Reconnect backoff bounds — the ONE place they are set (node_creds.go rides
+// the same ladder). Variables so tests can shrink them.
 var (
-	nodeBackoffMin = 1 * time.Second
-	nodeBackoffMax = 60 * time.Second
+	nodeBackoffMin = 5 * time.Second
+	nodeBackoffMax = 30 * time.Second
 )
 
 // nodeDialTimeout bounds the dial plus the hello/welcome exchange.
@@ -59,9 +63,10 @@ var fleetControlScript = filepath.Join(".claude", "fleet", "bin", "fleet-control
 // fleet_status per fleet).
 const fleetControlTimeout = 8 * time.Second
 
-// nodeBackoff is the reconnect delay: doubling from min to max, with equal
-// jitter (half fixed, half random) so a hub restart is not met by every node
-// at the same instant.
+// nodeBackoff is the reconnect delay: doubling from min to max. The jitter
+// only ever SHORTENS a rung (down to 80 % of it), so a hub restart is not met
+// by every node at the same instant and the cap stays a promise — the wait is
+// never longer than nodeBackoffMax.
 type nodeBackoff struct {
 	cur time.Duration
 }
@@ -75,8 +80,8 @@ func (b *nodeBackoff) next() time.Duration {
 	if b.cur > nodeBackoffMax {
 		b.cur = nodeBackoffMax
 	}
-	half := b.cur / 2
-	return half + time.Duration(rand.Int63n(int64(half)+1))
+	fifth := b.cur / 5
+	return b.cur - fifth + time.Duration(rand.Int63n(int64(fifth)+1))
 }
 
 func (b *nodeBackoff) reset() { b.cur = 0 }
@@ -85,8 +90,9 @@ func (b *nodeBackoff) reset() { b.cur = 0 }
 func (a *Agent) runNode(ctx context.Context) {
 	var bo nodeBackoff
 	var lastErr string
+	netc := watchNetChanges(ctx)
 	for {
-		established, err := a.nodeSession(ctx)
+		established, err := a.nodeSession(ctx, netc)
 		if ctx.Err() != nil {
 			return
 		}
@@ -111,6 +117,14 @@ func (a *Agent) runNode(ctx context.Context) {
 			t.Stop()
 			return
 		case <-t.C:
+		case <-netc:
+			// This machine's network changed: whatever failed the last
+			// dial may be gone. Dial now, from the bottom of the ladder.
+			t.Stop()
+			bo.reset()
+			if lastErr != "" {
+				log.Print("control channel: network changed; reconnecting now")
+			}
 		}
 	}
 }
@@ -128,7 +142,11 @@ func nodeURL(hub string) string {
 
 // nodeSession runs one connection to its end. established reports whether the
 // hub welcomed it.
-func (a *Agent) nodeSession(ctx context.Context) (established bool, err error) {
+//
+// netc wakes on a change in this machine's network: mid-session it beats at
+// once (through the nudge limiter), and the ping that beat carries finds a
+// link the change has broken without waiting for the next tick.
+func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (established bool, err error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -311,6 +329,8 @@ func (a *Agent) nodeSession(ctx context.Context) (established bool, err error) {
 				return true, err
 			}
 		case <-nudge:
+			nb.arm()
+		case <-netc:
 			nb.arm()
 		case <-nb.pending:
 			if !nb.due() {

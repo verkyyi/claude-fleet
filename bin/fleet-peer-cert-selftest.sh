@@ -21,7 +21,9 @@
 #   C. names        `verkyyi@m5.tail.ts.net` → m5 → its hub name through
 #                   FLEET_NODE_ALIASES (`macmini=m5` → macmini)
 #   D. refused      403 → exit 1 naming the hub's reason; curl failing → exit 1
-#                   「入口不可达」 — paused, never a fallback; nothing on stdout
+#                   「入口失联，机器间访问暂停；你可直接 `fleet <机器>` 进去」 —
+#                   paused, never a fallback; nothing on stdout. A down hub is
+#                   refused inside 1 s: connect bounded to 0.8 s, one try (#1630)
 #   E. old hub      404 / a 401 from the viewer gate → exit 3 (plain ssh) with a note
 #   F. usage        bad purpose / bad name: exit 2, curl never called
 #   G. trust        fleet-peer-trust.sh: no fleet machine known → exit 3 (no
@@ -45,7 +47,7 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-peer-cert-selftest.XXXXXX")" || exit 2
 trap 'rm -rf "$WORK"' EXIT
 export HOME="$WORK/home" FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1 TMPDIR="$WORK/tmp"
 mkdir -p "$HOME" "$FLEET_CONF_DIR" "$TMPDIR"
-unset CCQUOTA_TOKEN CCQUOTA_HUB_URL FLEET_HUB_CURL FLEET_HUB_TIMEOUT FLEET_NODE_ALIASES FLEET_REMOTE_SSH \
+unset CCQUOTA_TOKEN CCQUOTA_HUB_URL FLEET_HUB_CURL FLEET_HUB_TIMEOUT FLEET_NODE_ALIASES FLEET_REMOTE_SSH FLEET_PEER_CERT_CONNECT_SECS \
       FLEET_TRUST_MACHINES FLEET_PEER_CERT FLEET_PEER_KEY FLEET_PEER_CERT_SECS
 
 STUB="$WORK/curl"
@@ -124,9 +126,28 @@ out=$("$SUT" m5 view 2>"$WORK/err"); rc=$?
 grep -q 'has no login of its owner' "$WORK/err" || fail "D: reason not relayed: $(cat "$WORK/err")"
 reset
 export FAKE_RC=7
-out=$("$SUT" m5 view 2>"$WORK/err"); rc=$?
+out=$(FLEET_UI_LANG=zh "$SUT" m5 view 2>"$WORK/err"); rc=$?
 { [ "$rc" -eq 1 ] && [ -z "$out" ]; } || fail "D: down → exit $rc, out '$out'"
-grep -q '入口不可达' "$WORK/err" || fail "D: stderr: $(cat "$WORK/err")"
+grep -q '入口失联，机器间访问暂停；你可直接 `fleet m5` 进去' "$WORK/err" || fail "D: stderr: $(cat "$WORK/err")"
+# #1630: a down hub is refused within a second — the connect is bounded to 1 s
+# (0.8 s, not the 10 s request bound) and there is exactly one try.
+grep -q -- '--connect-timeout 0.8 ' "$STUB_LOG" || fail "D: connect not bounded to 0.8 s: $(cat "$STUB_LOG")"
+reset
+export FAKE_RC=28 FLEET_UI_LANG=en
+out=$("$SUT" verkyyi@m5.tail.ts.net view 2>"$WORK/err"); rc=$?
+unset FLEET_UI_LANG
+{ [ "$rc" -eq 1 ] && [ -z "$out" ]; } || fail "D: connect timeout → exit $rc, out '$out'"
+grep -q 'hub lost — machine-to-machine access paused; you can still go in directly with `fleet m5`' "$WORK/err" \
+  || fail "D: en stderr: $(cat "$WORK/err")"
+# And for real: a hub port nobody listens on is refused well inside a second.
+if command -v curl >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+  port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
+  t0=$(python3 -c 'import time; print(time.time())')
+  out=$(FLEET_HUB_CURL=curl CCQUOTA_HUB_URL="http://127.0.0.1:$port" "$SUT" m5 view 2>"$WORK/err"); rc=$?
+  dt=$(python3 -c "import time; print(int((time.time()-$t0)*1000))")
+  { [ "$rc" -eq 1 ] && [ -z "$out" ]; } || fail "D: closed port → exit $rc, out '$out', err $(cat "$WORK/err")"
+  [ "$dt" -lt 1000 ] || fail "D: a down hub took ${dt} ms to refuse; want < 1000"
+fi
 ok
 
 # E. old hub
