@@ -2293,7 +2293,15 @@ if [ "$_hub_on" = 1 ] && [ -x "$(dirname "$0")/fleet-hub-sessions.sh" ]; then
     cmd\ *)   pass hub "sidebar reads the hub through FLEET_HUB_SESSIONS_CMD" ;;
     *)        warn hub "sidebar cannot ask the hub: ${_hid#none } — no other machine's sessions will show (bin/fleet-hub-sessions.sh --identity)" ;;
   esac
-  unset _hid
+  # The refresh loop itself (issue #1596): the collector re-starts it every tick,
+  # sidebar or not — a dead loop or an old cache means the other machines' rows
+  # stopped while nobody was looking.
+  if _hst=$(CCQUOTA_FLEET=1 bash "$(dirname "$0")/fleet-hub-sessions.sh" --status 2>/dev/null </dev/null); then
+    pass hub-sessions "$_hst"
+  else
+    warn hub-sessions "${_hst:-no answer} — the other machines' sessions are not refreshing (collector runs bin/fleet-hub-sessions.sh --ensure every tick)"
+  fi
+  unset _hid _hst
 fi
 # The invariant itself, per fleet — FLEET_HANDOFF_IDLE_TIMEOUT takes a per-fleet
 # overlay (FLEET_STUCK_WORKING_SECS is global-only: one spinner serves the machine).
