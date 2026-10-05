@@ -81,6 +81,24 @@ class Failover(unittest.TestCase):
             flow.reconcile_one(self.source,self.account,self.data)
             self.assertEqual(move.call_args.args[2]['account'],'second')
 
+    def test_a_target_auth_refusal_is_filed_by_name_and_cools_the_target(self):
+        # issue #1667: fleet-transfer.sh refused BEFORE /exit and left refused.json;
+        # the request waits on `target-auth: …` — failover-status shows the login,
+        # never «inspect transfer.log» — and the target cools like any failed one.
+        def transfer(cmd,**_):
+            flow.save(self.path/'refused.json',dict(reason='target-auth',to='codex',
+                      detail='Codex profile work needs a new login (reauth_required)'))
+            return subprocess.CompletedProcess(cmd,1)
+        r=dict(source=self.source,episode='turn:1',hard=True,attempts=1,failed_targets={})
+        self.path.mkdir(); flow.save(self.path/'request.json',r)
+        with patch.object(flow,'validate'), patch.object(flow,'opt',return_value=''), \
+             patch.object(flow,'inspect',return_value=dict(self.source)), \
+             patch.object(flow.subprocess,'run',side_effect=transfer):
+            flow.move(self.path,r,dict(key='codex/second',agent='codex'))
+        r=self.request()
+        self.assertEqual((r['state'],r['detail']),('waiting','target-auth: Codex profile work needs a new login (reauth_required)'))
+        self.assertIn('codex/second',r['failed_targets'])
+
     def test_failed_target_cooldown_uses_another_available_subscription(self):
         flow.reconcile_one(self.source,self.account,self.data)
         r=self.request();r['failed_targets']={'codex/second':time.time()+120};flow.save(self.path/'request.json',r)

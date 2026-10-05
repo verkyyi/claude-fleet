@@ -272,6 +272,21 @@ eq "mark-limited: no instant → now + LIMIT_TTL (unchanged)" \
 # And a per-account LIMIT_TTL still wins on that fallback path.
 printf 'LIMIT_TTL=7d\n' > "$ACCT_DIR/a.conf"
 : > "$STATE_LIMITED"; printf 'a\n' > "$STATE_ACTIVE"
+# --- mark-reauth / clear-reauth / reauth-since (issue #1667) ---------------------
+# A rejected LOGIN is not a bench: one row per label, no reset ends it, only
+# clear-reauth does. Repointed like the limited file above; the lock follows so
+# a sandbox without the operator's global dir never waits on a missing parent.
+STATE_REAUTH="$FLEET_C/account.reauth"; STATE_DIR="$FLEET_C"; LOCK="$FLEET_C/account.lock"
+eq "reauth-since: unmarked → 0" 0 "$(acct_reauth_since a)"
+cmd_mark_reauth a 'auth error' >/dev/null; rc_is "mark-reauth: known label" 0 $?
+CHECKS=$((CHECKS + 1)); [ "$(acct_reauth_since a)" -gt 0 ] || fail "mark-reauth: must record the epoch it was marked"
+eq "mark-reauth: label + reason on one row" "a	auth error" "$(awk -F'\t' '{print $1"\t"$3}' "$STATE_REAUTH")"
+cmd_mark_reauth a 'again' >/dev/null
+eq "mark-reauth: re-marking replaces the row" 1 "$(wc -l < "$STATE_REAUTH" | tr -d ' ')"
+cmd_mark_reauth nosuch >/dev/null 2>&1; rc_is "mark-reauth: unknown label refused" 1 $?
+cmd_clear_reauth a
+eq "clear-reauth: drops the mark" 0 "$(acct_reauth_since a)"
+
 cmd_mark_limited a '' >/dev/null
 eq "mark-limited: fallback still honours per-account LIMIT_TTL" \
    "$((1787454480 + 604800))" "$(awk -F'\t' '$1=="a"{print $2}' "$STATE_LIMITED")"

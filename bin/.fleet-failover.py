@@ -579,7 +579,7 @@ def outcome(path, r, state, detail=''):
 
 
 def move(path, r, target):
-    for name in ('input.json','unsent-draft.txt'):
+    for name in ('input.json','unsent-draft.txt','refused.json'):
         (path/name).unlink(missing_ok=True)
     save(path/'target.json',target)
     outcome(path,r,'preparing','selected '+target['key'])
@@ -616,6 +616,12 @@ def move(path, r, target):
             r['manifest'] = manifest
             outcome(path,r,'bound','target '+m['target']['session_id'])
         else:
+            # The transfer refused BEFORE touching the source (issue #1667): the
+            # target cannot log in. It left `refused.json` for exactly this read,
+            # so failover-status says `target-auth: …` and not «inspect the log».
+            refused = read(path/'refused.json', {})
+            if isinstance(refused, dict) and refused.get('reason') == 'target-auth':
+                raise ValueError('target-auth: ' + str(refused.get('detail') or 'target account needs a new login'))
             raise ValueError('transfer did not confirm the bound target; inspect transfer.log')
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         # Retrying before source exit is safe; a dead/changed source is not.

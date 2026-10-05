@@ -163,6 +163,12 @@ def stamp_reauth(local):
         rows.append('\t'.join([old.get(key, str(now)), clean(p['agent']), clean(p['profile']),
                                clean(p.get('email') or p.get('account')), 'reauth_required',
                                REAUTH_COMMAND.get(p['agent'], 'sign in again')]))
+    # A Claude label marked by `fleet-account.sh mark-reauth` (#1667) is the same
+    # fact for the bar: one row, its own first-seen time, the Claude fix.
+    for label, mark in sorted(claude_marks().items()):
+        clean = lambda v: str(v or '').replace('\t', ' ').replace('\n', ' ')
+        rows.append('\t'.join([str(mark['since'] or now), 'claude', clean(label), clean(label),
+                               'reauth_required', REAUTH_COMMAND['claude']]))
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd, name = tempfile.mkstemp(prefix='.' + path.name, dir=path.parent)
     try:
@@ -188,7 +194,7 @@ def profile(name='', home='', account=''):
     if len(found) != 1:
         raise ValueError('expected one registered Codex profile with the pinned account/home')
     p = found[0]
-    if not p['account'] or p['login'] not in ('valid', 'refresh_due') or not Path(p['home']).is_dir():
+    if not p['account'] or p['login'] not in LOGIN_OK or not Path(p['home']).is_dir():
         if p.get('source') == 'hub':
             # The hub refreshes this one; a re-login here would not fix it —
             # and ccquota's reason, when it has one, says what did happen.
@@ -203,12 +209,170 @@ def login_trouble(p):
     """Why this Codex profile cannot be used, in ccquota's words when it has them."""
     if not p.get('account'):
         return 'no account on the login'
-    if p.get('login') not in ('valid', 'refresh_due'):
+    if p.get('login') not in LOGIN_OK:
         why = p.get('login') or 'unknown'
         return why + (' — ' + p['login_reason'] if p.get('login_reason') else '')
     if not Path(p['home']).is_dir():
         return 'Codex home missing: ' + p['home']
     return ''
+
+
+# --- the target's LOGIN, judged in ONE place (issue #1667, EPIC #1665 C3) ----------
+# «Can this account START an agent?» is a different question from «does it have
+# quota?», and until #1667 only the quota half was asked before a switch: a Codex
+# profile ccquota had marked reauth_required at 23:46Z was still handed a session
+# at 09:10Z the next morning — the source /exit'ed, Codex came up on a login
+# prompt, and the conversation was gone. profile() above is the Codex judge;
+# claude_login() / claude_profile() are its Claude-side twins; target_auth() is the
+# one entry every switch asks BEFORE it stops a source (fleet-transfer.sh,
+# fleet-migrate.sh; the failover planner through check_target). Nothing here reads
+# a token further than «is there one», and nothing prints one.
+LOGIN_OK = ('valid', 'refresh_due')
+
+
+def claude_accounts_dir():
+    conf = os.environ.get('FLEET_CONF_DIR', str(Path.home() / '.config/claude-fleet'))
+    return Path(os.environ.get('FLEET_ACCOUNTS_DIR') or Path(conf) / 'accounts')
+
+
+def claude_reauth(label):
+    """The `fleet-account.sh mark-reauth` marker for one label, or None. A bench
+    (account.limited) clears itself at a reset; this does not — only
+    `clear-reauth` after a new login (EPIC #1665 C5 runs that)."""
+    return claude_marks().get(label)
+
+
+def claude_marks():
+    """Every `mark-reauth` row: account.claude-reauth, `label<TAB>since<TAB>reason`
+    — its OWN file, because account.reauth (C2, #1469) is a STAMP rewritten on
+    every profiles() read; stamp_reauth() folds these rows into it so the bar's
+    `▲ accounts · reauth` names a marked Claude label the same way."""
+    marks = {}
+    try:
+        for line in (state_dir() / 'account.claude-reauth').read_text().splitlines():
+            fields = line.split('\t')
+            if fields and fields[0]:
+                since = fields[1] if len(fields) > 1 and fields[1].isdigit() else '0'
+                marks[fields[0]] = dict(since=int(since), reason=fields[2] if len(fields) > 2 else '')
+    except OSError:
+        pass
+    return marks
+
+
+def claude_login(label, now=None):
+    """'valid' | 'reauth_required' | 'expired' | 'no_credentials' for one pool label.
+    A plain token file (`claude setup-token`): readable, first line non-empty. A
+    hub-managed `hub:<label>` (#1415): the agent-renewed .credentials.json beside
+    it, unexpired — the launcher points Claude at that file, so an expired one
+    starts a session that cannot speak. Either kind: not marked by mark-reauth."""
+    now = time.time() if now is None else now
+    if not label or '/' in label or label.startswith('.'):
+        return 'no_credentials'
+    if claude_reauth(label):
+        return 'reauth_required'
+    try:
+        lines = (claude_accounts_dir() / label).read_text().splitlines()
+    except (OSError, UnicodeDecodeError):
+        return 'no_credentials'
+    token = lines[0].strip() if lines else ''
+    if not token:
+        return 'no_credentials'
+    if not token.startswith('hub:'):
+        return 'valid'
+    hub_label = token[4:] or label
+    creds = None
+    for name in (label, hub_label):
+        creds = read(claude_accounts_dir() / (name + '.hub') / '.credentials.json')
+        if isinstance(creds, dict):
+            break
+    if not isinstance(creds, dict):
+        return 'no_credentials'
+    oauth = creds.get('claudeAiOauth') if isinstance(creds.get('claudeAiOauth'), dict) else creds
+    if not oauth.get('accessToken'):
+        return 'no_credentials'
+    expires = number(oauth.get('expiresAt'))
+    if expires is not None and expires / 1000.0 <= now:
+        return 'expired'
+    return 'valid'
+
+
+def claude_profile(label=''):
+    """profile() for Claude: the pool label a launch would run on (given, else
+    FLEET_ACCOUNT_LABEL, else the active account), or ValueError. An empty label
+    with multi-account off is not a profile at all — raise, the caller decides."""
+    label = label or os.environ.get('FLEET_ACCOUNT_LABEL', '')
+    if not label:
+        label = run(['bash', BIN / 'fleet-account.sh', 'active'])
+    if not label:
+        raise ValueError('multi-account is off; no Claude pool account to verify')
+    login = claude_login(label)
+    if login not in LOGIN_OK:
+        raise ValueError('target-auth: Claude account %s needs a new login (%s)' % (label, login))
+    return dict(agent='claude', label=label, key='claude/' + label, login=login)
+
+
+def target_auth(agent, label='', profile_name='', home='', account=''):
+    """verdict `ok` | `refuse` | `unknown`, with key / login / reason. `refuse` is the
+    only answer that stops a switch. `unknown` = there is no registry to ask (no
+    ccquota, multi-account off, an unregistered Codex home on an install without
+    the failover planner) and the launch behaves exactly as it always did. The
+    Codex side mirrors fleet-codex.sh's own home resolution — FLEET_CODEX_HOME,
+    else a FLEET_CODEX_ACCOUNTS pool pick, else ~/.codex — so the verdict is
+    about the profile the launch would actually run."""
+    if agent == 'claude':
+        label = label or os.environ.get('FLEET_ACCOUNT_LABEL', '')
+        if not label:
+            try:
+                label = run(['bash', BIN / 'fleet-account.sh', 'active'])
+            except (OSError, subprocess.SubprocessError):
+                label = ''
+        if not label:
+            return dict(verdict='unknown', agent=agent, key='', login='unknown',
+                        reason='multi-account off; the ambient Claude login runs the target')
+        login = claude_login(label)
+        row = dict(agent=agent, key='claude/' + label, label=label, login=login)
+        if login in LOGIN_OK:
+            return dict(row, verdict='ok', reason='')
+        return dict(row, verdict='refuse', reason='Claude account %s needs a new login (%s)' % (label, login))
+    try:
+        rows = profiles()
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return dict(verdict='unknown', agent=agent, key='', login='unknown',
+                    reason='no ccquota Codex profile registry here; the login cannot be verified')
+    if not (profile_name or home or account):
+        home = os.environ.get('FLEET_CODEX_HOME', '')
+        if not home and os.environ.get('FLEET_CODEX_ACCOUNTS'):
+            pool = [p for p in rows if allowed_codex(p)]
+            good = [p for p in pool if p['login'] in LOGIN_OK and Path(p['home']).is_dir()]
+            if good:
+                p = good[0]
+                return dict(agent=agent, key='codex/' + p['account'], profile=p['profile'], home=p['home'],
+                            login=p['login'], verdict='ok', reason='')
+            states = ', '.join(sorted(set(p['login'] for p in pool))) or 'none registered'
+            return dict(verdict='refuse', agent=agent, key='', login=states,
+                        reason='no Codex profile in the pool can log in (%s)' % states)
+        home = home or str(Path.home() / '.codex')
+    found = [p for p in rows if (not profile_name or p['profile'] == profile_name)
+             and (not home or p['home'] == str(Path(home).resolve()))
+             and (not account or p['account'] == account)]
+    if len(found) != 1:
+        what = profile_name or account or home
+        if os.environ.get('FLEET_FAILOVER', '0') == '1':
+            # fleet-codex.sh asks profile() for this home under the planner and exits 1
+            return dict(verdict='refuse', agent=agent, key='', login='unknown',
+                        reason='no registered Codex profile for %s; the launcher would refuse' % what)
+        return dict(verdict='unknown', agent=agent, key='', login='unknown',
+                    reason='no registered Codex profile for %s' % what)
+    p = found[0]
+    row = dict(agent=agent, key='codex/' + p['account'], profile=p['profile'], home=p['home'], login=p['login'])
+    try:
+        profile(p['profile'], p['home'], p['account'])
+    except ValueError as error:
+        # profile()'s own words (C7, #1404): ccquota's reason when it has one, and
+        # a hub-managed lease names the agent, not a login, as the fix
+        login = 'no_home' if not Path(p['home']).is_dir() else p['login']
+        return dict(row, login=login, verdict='refuse', reason=str(error))
+    return dict(row, verdict='ok', reason='')
 
 
 def codex_reading(refresh=False):
@@ -271,7 +435,7 @@ def normalize_codex(p, reading, now=None, scope=None):
     row = dict(p, key='codex/' + p['account'], available=False, utilization=None,
                score=None, reset_at=0, hold_until=0, limited_until=0, windows=[],
                login_reason=p.get('login_reason', ''))
-    if not p.get('account') or p.get('login') not in ('valid', 'refresh_due'):
+    if not p.get('account') or p.get('login') not in LOGIN_OK:
         row['reason'] = 'hub-lease-lapsed' if p.get('source') == 'hub' else 'auth-unavailable'
         return row
     if not reading or reading.get('available') is not True:
@@ -339,10 +503,19 @@ def inventory(refresh=False):
             pace = number(fields[11]) if len(fields) > 12 else None
             pheld = fields[12] == '1' if len(fields) > 12 else False
             available = fresh == '1' and number(used) is not None
+            # the login the launch would meet (issue #1667): the shell row already
+            # read the token file (token=1); this layers the reauth mark and a hub
+            # token's expiry on it. A file python cannot see while the shell could
+            # (a sandboxed dir) is the shell's answer, never a refusal.
+            login = 'no_credentials'
+            if token == '1':
+                login = claude_login(label)
+                if login == 'no_credentials':
+                    login = 'valid'
             accounts.append(dict(agent='claude', label=label, account=account or label,
                 key='claude/' + (account or label), available=available, utilization=number(used),
                 score=number(score), limited_until=int(limited), hold_until=int(hold), reset_at=int(reset),
-                login='valid' if token == '1' else 'no_credentials', model_ok=model_ok == '1',
+                login=login, model_ok=model_ok == '1',
                 model_primary=primary, pace=0 if pace is None else int(pace), pace_held=pheld,
                 reason='available' if available else 'unreadable'))
     except (OSError, ValueError, subprocess.SubprocessError):
@@ -391,7 +564,7 @@ def allowed_codex(row):
 
 def eligible(row, now=None):
     now = time.time() if now is None else now
-    return (row.get('available') is True and row.get('login') in ('valid', 'refresh_due')
+    return (row.get('available') is True and row.get('login') in LOGIN_OK
             and (row.get('agent') != 'codex' or allowed_codex(row))
             and row.get('model_ok', True) and row.get('capable', True) and number(row.get('utilization')) is not None
             and row['utilization'] < float(os.environ.get('FLEET_ACCOUNT_CEILING', '85'))
@@ -445,7 +618,7 @@ def choose_spawn(data, agent, allowed=('claude', 'codex')):
     # Preserve the old gate's unknown-reading fail-open contract for new work,
     # never for a migration and never across providers on an unknown reading.
     for row in data['accounts']:
-        if (row['agent'] == agent and row.get('login') in ('valid','refresh_due')
+        if (row['agent'] == agent and row.get('login') in LOGIN_OK
                 and row.get('limited_until',0) <= time.time() and row.get('model_ok',True)
                 and row.get('capable',True)):
             if row['agent'] == 'codex' and not allowed_codex(row):
@@ -459,11 +632,22 @@ def check_target(target, quota=True):
     matches = [p for p in data['accounts'] if p['key'] == target.get('key') and p['agent'] == target.get('agent')
                and p.get('label') == target.get('label') and p.get('profile') == target.get('profile')
                and p.get('home') == target.get('home')]
-    if len(matches) != 1 or (quota and not eligible(matches[0])):
+    if len(matches) != 1:
+        raise ValueError('pinned destination is no longer eligible')
+    row = matches[0]
+    # A login that went bad since the pick is named as such (issue #1667): the
+    # planner files it as `target-auth: …`, where a bare «no longer eligible» read
+    # as quota and sent the operator to the wrong place.
+    if row.get('login') not in LOGIN_OK:
+        raise ValueError('target-auth: pinned destination %s needs a new login (%s)' % (row['key'], row.get('login') or 'unknown'))
+    if quota and not eligible(row):
         raise ValueError('pinned destination is no longer eligible')
     if target['agent'] == 'codex':
-        profile(target['profile'], target['home'], target['account'])
-    return matches[0]
+        try:
+            profile(target['profile'], target['home'], target['account'])
+        except ValueError as error:
+            raise ValueError('target-auth: ' + str(error))
+    return row
 
 
 def verify_codex_runtime(remote, source=None):
@@ -573,6 +757,10 @@ def main():
     q.add_argument('--name', default=''); q.add_argument('--home', default=''); q.add_argument('--account', default='')
     q = sub.add_parser('check-target'); q.add_argument('path')
     sub.add_parser('logins')
+    q = sub.add_parser('target-auth')   # issue #1667: may this target account start an agent?
+    q.add_argument('--agent', choices=('claude', 'codex'), required=True)
+    for name in ('label', 'profile', 'home', 'account'):
+        q.add_argument('--' + name, default='')
     q = sub.add_parser('bench-codex'); q.add_argument('key'); q.add_argument('until', type=int); q.add_argument('reason')
     q = sub.add_parser('launch'); q.add_argument('--agent', choices=('claude', 'codex'), required=True); q.add_argument('argv', nargs=argparse.REMAINDER)
     a = p.parse_args()
@@ -583,6 +771,15 @@ def main():
         result = choose_spawn(data,a.agent,a.allow.split(',')) if a.spawn else choose(data,a.agent,a.exclude,a.current,a.allow.split(','))
     elif a.command == 'check-target': result = check_target(read(a.path, {}))
     elif a.command == 'logins': result = logins()
+    elif a.command == 'target-auth':
+        # JSON on stdout for every verdict; `refuse` also says why on stderr and
+        # exits 1, so a shell caller needs only the exit code and that line.
+        result = target_auth(a.agent, a.label, a.profile, a.home, a.account)
+        print(json.dumps(result, ensure_ascii=False))
+        if result['verdict'] == 'refuse':
+            print('fleet-account: target-auth: ' + result['reason'], file=sys.stderr)
+            return 1
+        return 0
     elif a.command == 'bench-codex': bench(a.key, a.until, a.reason); return 0
     elif a.command == 'launch': return launch(a.agent, a.argv[1:] if a.argv[:1] == ['--'] else a.argv)
     print(json.dumps(result, ensure_ascii=False))

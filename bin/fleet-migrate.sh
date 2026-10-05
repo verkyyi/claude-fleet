@@ -385,8 +385,18 @@ migrate_one_body() {
       || { bgerr=$(tail -1 "$MIGRATE_TMP/bg.err" 2>/dev/null); bgjson=""; }
     [ "$(bg_count "$bgjson")" -gt 0 ] || bgjson=""
   fi
+  # The target account must be able to START before this session is asked to exit
+  # (issue #1667, EPIC #1665 C3): a label marked by mark-reauth, a hub token that
+  # expired, an unreadable token file. One judge — fleet-account.sh target-auth —
+  # read here, immediately before the plan is printed or the first state change;
+  # a refusal leaves the window running and says so (a close + resume onto an
+  # account that cannot log in is the 10-05 shape: window dead, conversation gone).
+  local ta_why=''
+  ta_why=$(bash "$BIN/fleet-account.sh" target-auth --agent claude --label "$ACTIVE" 2>&1 >/dev/null) && ta_why='' \
+    || { ta_why=${ta_why##*fleet-account: }; ta_why=${ta_why#target-auth: }; ta_why=${ta_why:-the login check itself failed}; }
   if [ "$DRY" = 1 ]; then
     say "  ↻ $name ($wid) [${label:-?} → ${ACTIVE:-?}${MODEL:+ on $MODEL}] would /exit pid $cpid and resume ${sid%%-*}… in $cwd${nudge:+ (nudged)}"
+    [ -z "$ta_why" ] || say "    ! target-auth: $ta_why — would be left running"
     if [ "$FORCE_BG" = 1 ]; then
       if [ -n "$bgerr" ]; then say "    ! background inventory failed: ${bgerr#fleet-failover: } — whatever it owns is stopped UNLISTED"
       elif [ -n "$bgjson" ]; then say "    would stop $(bg_count "$bgjson") background command(s):"; bg_lines "$bgjson"
@@ -398,6 +408,12 @@ migrate_one_body() {
   # account after inventory, immediately before the first state change or /exit.
   if [ -n "$TARGET_ACCOUNT" ] && ! bash "$BIN/fleet-manual-sub.sh" check "$SESS" "$TARGET_ACCOUNT"; then
     say "  – $name ($wid): target quota changed or cannot be verified — left running"
+    skipped=$((skipped+1)); return 0
+  fi
+  if [ -n "$ta_why" ]; then
+    say "  – $name ($wid): target-auth: $ta_why — left running (log in to ${ACTIVE:-the target}, then retry)"
+    [ -x "$BIN/fleet-alerts.sh" ] && bash "$BIN/fleet-alerts.sh" event ${SOCK:+-L "$SOCK"} transfer-refused \
+      "$name: 未切换：${ACTIVE:-claude} 需要重新登录 · not switched: $ta_why" >/dev/null 2>&1 || :
     skipped=$((skipped+1)); return 0
   fi
   if [ -n "$bgjson" ]; then
