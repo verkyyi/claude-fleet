@@ -19,7 +19,7 @@
 #               (#1210 ①) and the clone's stable sha.
 #   2 welcome   ~/<login>-onboard/welcome.txt exists, is 600, and carries the
 #               ssh line, the private key block, the ssh-config snippet, the key
-#               swap steps and `cf --guide`. An unset FLEET_SSH_PUBLIC_HOST is a
+#               swap steps and `fleet guide`. An unset FLEET_SSH_PUBLIC_HOST is a
 #               WARN in the line, not a FAIL: the letter is complete, the admin
 #               fills the host.
 #   3 login     `ssh -tt <login>@<host>` with the temporary key, inside a tmux
@@ -215,7 +215,7 @@ step_welcome() {
   grep -q 'BEGIN OPENSSH PRIVATE KEY' "$WELCOME" || missing="$missing private-key"
   grep -q '^Host ' "$WELCOME" || missing="$missing ssh-config"
   grep -q 'ssh-copy-id' "$WELCOME" || missing="$missing key-swap"
-  grep -q 'cf --guide' "$WELCOME" || missing="$missing cf--guide"
+  grep -q 'fleet guide' "$WELCOME" || missing="$missing fleet-guide"
   host=$(sed -n 's/^ *ssh -p \([0-9]*\) '"$LOGIN"'@\(.*\)$/\2/p' "$WELCOME" | head -n 1)
   port=$(sed -n 's/^ *ssh -p \([0-9]*\) '"$LOGIN"'@.*$/\1/p' "$WELCOME" | head -n 1)
   if [ -n "$missing" ]; then
@@ -224,7 +224,7 @@ step_welcome() {
     return 1
   fi
   M_WELCOME="ok (host ${host:-?}, port ${port:-?})"
-  pass welcome "$WELCOME (600): host ${host:-?} port ${port:-?} · temporary key inline · ssh config · key swap · cf --guide$([ "$host" = '<HOST>' ] && printf ' · WARN host is the <HOST> placeholder — set FLEET_SSH_PUBLIC_HOST')"
+  pass welcome "$WELCOME (600): host ${host:-?} port ${port:-?} · temporary key inline · ssh config · key swap · fleet guide$([ "$host" = '<HOST>' ] && printf ' · WARN host is the <HOST> placeholder — set FLEET_SSH_PUBLIC_HOST')"
 }
 
 # --- 3 login -----------------------------------------------------------------------

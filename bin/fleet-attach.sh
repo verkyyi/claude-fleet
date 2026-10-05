@@ -1,11 +1,15 @@
 #!/bin/bash
 # fleet-attach.sh — fast-path (re)attach to an ALREADY-RUNNING fleet (issue #212).
 #
-# `cf` with no args means "take me back to my running fleet." When a fleet is
+# A direct attach to the node's own session — no longer the way in: `cf` and the
+# SSH login open the client, bin/fleet (issue #1711). Kept for scripts and a
+# person who types it; it is not advertised.
+#
+# It meant "take me back to my running fleet." When a fleet is
 # already live on its named socket (issue #159) there is no reason to walk the
 # heavier fleet-up path (disk gate, conf write, hub rebuild, collector kick) or
 # any restore machinery — we just (re)attach to the live tmux server. This is
-# that fast path; cf calls it FIRST and only falls through to fleet-up.sh when
+# that fast path; cf called it FIRST and only falls through to fleet-up.sh when
 # nothing is running (exit 10).
 #
 # Selection:

@@ -102,7 +102,7 @@ want=$(printf '%s\n' \
   "fleet-up: reusing existing checkout $WORK/src/a" \
   "fleet-up: wrote $FLEET_CONF_DIR/fleets/fleet/conf" \
   "fleet-up: fleet 'fleet' is up (repo=o/a base=master [flag])" \
-  "fleet-up: not attaching (--no-attach) — later: cf")
+  "fleet-up: not attaching (--no-attach) — later: fleet")
 
 # ---- 1. the helper ----
 eq "1 prepends" "$(HOME=/h PATH=/usr/bin:/bin lib fleet_local_bin_path)" "/h/.local/bin:/usr/bin:/bin"

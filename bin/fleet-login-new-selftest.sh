@@ -58,7 +58,7 @@
 #                 ~/<login>-onboard/ (700; key 600), its public half installed,
 #                 its private half in welcome.txt (600) with the ssh line + config
 #                 snippet from FLEET_SSH_PUBLIC_HOST/PORT (env, or the login's
-#                 fleet.settings), the swap-the-key steps, cf --guide, the human
+#                 fleet.settings), the swap-the-key steps, fleet guide (no cf, #1711), the human
 #                 steps — never the password, never the key on the terminal;
 #                 --pubkey + --lang en → their own key's public line, no private
 #                 block, English; host unset → `<HOST>` in the letter + a WARN;
@@ -428,7 +428,7 @@ eq "I dry run nothing executed" 0 "$(mutations)"
 # No --pubkey: a temporary ed25519 pair in the ADMIN's onboard dir (700), its
 # public half installed as the login's authorized_keys, its private half INSIDE
 # ~/<login>-onboard/welcome.txt (600) — with the ssh line + config snippet from
-# FLEET_SSH_PUBLIC_HOST/PORT, the swap-the-key steps, the guide + cf, the human
+# FLEET_SSH_PUBLIC_HOST/PORT, the swap-the-key steps, the guide + fleet (no cf, #1711), the human
 # steps; NEVER the password, and the private key never on the terminal.
 if command -v ssh-keygen >/dev/null 2>&1; then
   : > "$LOG"; OUT=$(FLEET_SSH_PUBLIC_HOST=ssh.example.test FLEET_SSH_PUBLIC_PORT=22022 "$BASH_BIN" "$S" wen --full-name 'Wen W' --machine box --apply --no-daemons 2>&1); RC=$?
@@ -467,7 +467,10 @@ if command -v ssh-keygen >/dev/null 2>&1; then
   contains "J letter: config IdentityFile" "$W" "IdentityFile ~/.ssh/box-wen"
   contains "J letter: swap — ssh-copy-id the new key over the temp one" "$W" "ssh-copy-id -i ~/.ssh/box-wen-own.pub -o IdentityFile=~/.ssh/box-wen -p 22022 wen@ssh.example.test"
   contains "J letter: swap — drop the temp line" "$W" "grep -v ' wen-onboard-temp\$' ~/.ssh/authorized_keys"
-  contains "J letter: guide" "$W" "cf --guide"
+  contains "J letter: guide" "$W" "fleet guide"
+  contains "J letter: ssh opens the client (#1711)" "$W" "ssh box 后自动打开 fleet"
+  # no `cf` word anywhere outside the key material (base64 can spell one)
+  not_contains "J letter: no cf left (#1711)" "$(printf '%s\n' "$W" | sed '/BEGIN/,/END/d' | grep -v 'ssh-ed25519\|ssh-rsa' | grep -w cf)" cf
   contains "J letter: codex step" "$W" "ccquota codex login personal --device-auth"
   contains "J letter: gh step" "$W" "gh auth login"
   contains "J letter: Chinese by default" "$W" "怎么连"

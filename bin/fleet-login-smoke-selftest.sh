@@ -92,7 +92,7 @@ host=mini.example; [ "${FAKE_WELCOME:-full}" = nohost ] && host='<HOST>'
 {
   printf '你好：\n\n1. 怎么连\n\n   ssh -p 22022 %s@%s\n\n2. 钥匙\n\n' "$LOGIN" "$host"
   [ "${FAKE_WELCOME:-full}" = nokey ] || cat "$O/id_ed25519"
-  printf '\n3. ssh config 片段\n\nHost mini\n  HostName %s\n  Port 22022\n  User %s\n\n4. 换成你自己的钥匙\n      ssh-copy-id -i ~/.ssh/mini-own.pub ...\n\n5. 向导与 cf\n   - 向导窗口关了、或想再开：cf --guide\n' "$host" "$LOGIN"
+  printf '\n3. ssh config 片段\n\nHost mini\n  HostName %s\n  Port 22022\n  User %s\n\n4. 换成你自己的钥匙\n      ssh-copy-id -i ~/.ssh/mini-own.pub ...\n\n5. 向导与 fleet\n   - 向导窗口关了、或想再开：fleet guide\n' "$host" "$LOGIN"
 } > "$O/welcome.txt"; chmod 600 "$O/welcome.txt"
 n=0
 for t in "$FLEET_TEST_TMPL"/*.tmpl; do
@@ -270,7 +270,7 @@ eq 'B exit' 0 "$RC"
 has 'B banner' "$OUT" "fleet-login-smoke: login=smokey  ssh=127.0.0.1:22  share-pool=yes  timeout=3s  offboard=archive"
 has 'B open' "$OUT" "PASS  open      fleet-login-new.sh smokey --full-name 'Smoke Test (smokey)' --lang zh --share-pool --apply (from $HOME, a 0700 dir — #1210 ④): ok · daemons installed $NTMPL/$NTMPL · clone stable=abc1234"
 called 'B login-new from the admin home' "login-new cwd=$HOME args=smokey --full-name Smoke Test (smokey) --lang zh --share-pool --apply"
-has 'B welcome' "$OUT" "PASS  welcome   $OB/welcome.txt (600): host mini.example port 22022 · temporary key inline · ssh config · key swap · cf --guide"
+has 'B welcome' "$OUT" "PASS  welcome   $OB/welcome.txt (600): host mini.example port 22022 · temporary key inline · ssh config · key swap · fleet guide"
 not_has 'B welcome: no WARN' "$OUT" 'WARN host'
 has_re 'B login' "$OUT" '^PASS  login     ssh -tt smokey@127.0.0.1:22 \(temporary key\): bootstrapped after [0-9]+s · bootstrap.applied ok \(#1210 ②\)$'
 called 'B ssh with the temporary key' "ssh -tt -i $OB/id_ed25519 -p 22 -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=15 smokey@127.0.0.1"
@@ -460,7 +460,7 @@ has 'P reading' "$OUT" '说明): 1  — welcome.txt incomplete: private-key'
 has 'P the rest ran' "$OUT" 'PASS  login'
 FAKE_WELCOME=nohost run
 eq 'P2 exit' 0 "$RC"
-has 'P2 WARN, not FAIL' "$OUT" 'PASS  welcome   '"$OB"'/welcome.txt (600): host <HOST> port 22022 · temporary key inline · ssh config · key swap · cf --guide · WARN host is the <HOST> placeholder — set FLEET_SSH_PUBLIC_HOST'
+has 'P2 WARN, not FAIL' "$OUT" 'PASS  welcome   '"$OB"'/welcome.txt (600): host <HOST> port 22022 · temporary key inline · ssh config · key swap · fleet guide · WARN host is the <HOST> placeholder — set FLEET_SSH_PUBLIC_HOST'
 
 # --- Q. -v streams the child transcripts -------------------------------------------------
 run -v

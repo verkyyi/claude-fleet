@@ -568,8 +568,8 @@ prefix `None` (the session's own values saved in `@remote_view_saved`), and
 `@remote_view_solo 1`, which that machine's sidebar (`fleet-sidebar.py sync`)
 reads as "draw no list" — the proxy is drawn INSIDE the viewer's own sidebar
 (issue #1475), so two shells on one machine each see one list. Anyone who
-attaches at that machine without registering — a plain `tmux attach` after an
-ssh login — brings status, prefix and sidebar back at once; when they leave and
+attaches at that machine without registering — a plain `tmux attach` (an ssh
+login opens the client instead, issue #1711) — brings status, prefix and sidebar back at once; when they leave and
 only shells remain, it hides again; when the last shell leaves, everything is
 back and the hooks are gone. `fleet-remote-view.sh reconcile <sess>` applies the
 rule; the server's **global** `client-attached[77]` / `client-detached[77]` hooks
