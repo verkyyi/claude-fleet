@@ -59,6 +59,10 @@ type Server struct {
 	// off centrally without touching every machine.
 	LimitsPollIntervalS int
 
+	// Version is the binary's build stamp (main.Version, -ldflags), served
+	// on GET /version with the commit it names (claude-fleet#1696).
+	Version string
+
 	// UI is the built dashboard, or nil when the binary was built without one.
 	UI fs.FS
 
@@ -370,6 +374,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
+	// Which commit this image was built from (claude-fleet#1696): public like
+	// /healthz, so `fleet-doctor`'s hub-image row can compare it with
+	// refs/tags/stable from any machine, with no cluster access and no token.
+	mux.HandleFunc("/version", s.handleVersion)
 
 	mux.Handle("/v1/accounts", s.viewerOnly(http.HandlerFunc(s.handleAccounts)))
 	// Who the gate admitted, for the shared page header (claude-fleet#1467).

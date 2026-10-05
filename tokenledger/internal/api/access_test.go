@@ -48,6 +48,7 @@ func TestAccess_ListsEveryDoorIncludingTheOneThatIsNotHTTP(t *testing.T) {
 		"share":     "http",
 		"badges":    "http",
 		"healthz":   "http",
+		"version":   "http",
 		"cli":       "hub-shell",
 	}
 	got := map[string]Door{}

@@ -480,6 +480,13 @@ both sides, and leg E drives the installed `fleet`: a (fake) tmux ≥ 3.2 →
 no tmux → the one hint and `fleet-connect.py`. The hub image is deployed by
 hand: colleagues get the shell once the operator redeploys it; the connect
 page's command is the same line as before.
+Which commit the deployed image was built from is public on `GET /version`
+(`{"version":"prod-<sha>","commit":"<sha>"}`, issue #1696 — the commit is the
+hex run that ends the Dockerfile's `VERSION` build arg, so build with
+`VERSION=prod-$(git rev-parse --short HEAD)`), and `fleet-doctor`'s `hub-image`
+row compares it with `refs/tags/stable` (`bin/fleet-hub-image.sh`): WARN with the
+count when the hub hands out a client older than stable, INFO otherwise — no
+cluster access, no token.
 
 **…and steps into them** (issue #1424, EPIC #1419 C5). Enter on a remote row (the
 dash's `dash-enter.sh`, the sidebar's `jump`) runs `bin/fleet-remote-view.sh open`:

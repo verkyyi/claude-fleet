@@ -15,6 +15,9 @@ ENV GOPROXY=$GOPROXY
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
+# End VERSION with the commit (`prod-$(git rev-parse --short HEAD)`): the hub
+# serves it on GET /version and fleet-doctor's hub-image row compares that
+# commit with refs/tags/stable (claude-fleet#1696). `docker` names none.
 ARG VERSION=docker
 ARG TARGETOS
 ARG TARGETARCH
