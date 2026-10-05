@@ -14,9 +14,9 @@
 #   B. dash-reap.sh decisions (issue #289 merged ⌃x/⌥x into one confirming ⌃x),
 #      with a FAKE tmux + gh and a real git checkout:
 #        • hub/panel row (no @issue)           → refuse, no side effects
-#        • ⌃x on a dirty row                   → open a confirm POPUP, KEEP the
+#        • ⌃x on a dirty row                   → ask y/n (confirm-before), KEEP the
 #          worktree, no kill (the popup re-invokes with `confirm`)
-#        • ⌃x on a clean+unmerged row          → open a confirm POPUP, KEEP it
+#        • ⌃x on a clean+unmerged row          → ask y/n (confirm-before), KEEP it
 #        • ⌃x on a clean+merged row            → FULL reap STRAIGHT AWAY (no
 #          confirm): worktree removed, branch deleted, `gh issue close` issued,
 #          `tmux kill-window` issued.
@@ -35,7 +35,7 @@
 #          a `scratch-<N>` worktree (resolved via @worktree), reaped by the SAME
 #          one-key ⌃x rule (issue #289):
 #            - clean+ancestor  → window closed + worktree/branch removed (no confirm)
-#            - dirty/unmerged  → confirm POPUP first; confirm y keeps a dirty wt but
+#            - dirty/unmerged  → y/n (confirm-before) first; confirm y keeps a dirty wt but
 #                                removes a clean+unmerged one; the window closes
 #            - no @worktree    → degrade: just close the window (pre-#290 behavior)
 #          Nothing issue-bound is touched.
@@ -153,6 +153,9 @@ if [ "${1:-}" = "run-shell" ]; then
   exit 0
 fi
 case "$*" in
+  # the ⌃x y/n is a status-line confirm-before since #1620 (never a popup): log
+  # it, answer nothing — its y would re-run the reap --yes, a separate pass
+  confirm-before*) printf 'CONFIRM %s\n' "$*" >> "$TMLOG" ;;
   *'#{@claude_state}'*) printf '%s\n' "${REAP_STATE:-}" ;;
   *'#{pane_pid}'*) printf '%s\n' "${PANE_PID:-$PPID}" ;;  # this test's Python probe, or a fake agent (#1542)
   # attached-client probe (#596): CLIENTS unset ⇒ one fake client (the interactive
@@ -333,7 +336,7 @@ grep -q 'KILL' "$TMLOG" && fail "no-issue row must not kill a window"
 # B2: ⌃x on dirty (issue-3) → open a confirm popup, worktree kept, no kill (#289)
 : > "$TMLOG"; : > "$GHLOG"
 run_reap "3" "@9"
-grep -q 'POPUP' "$TMLOG" || fail "dirty ⌃x should open a confirm popup"
+grep -q 'CONFIRM' "$TMLOG" || fail "dirty ⌃x should ask y/n first (confirm-before)"
 grep -q 'KILL' "$TMLOG" && fail "dirty ⌃x must not kill the window before confirm"
 [ -s "$GHLOG" ] && fail "dirty ⌃x must not touch gh before confirm"
 [ -d "$WORK/wt3" ] || fail "dirty worktree must be kept"
@@ -341,7 +344,7 @@ grep -q 'KILL' "$TMLOG" && fail "dirty ⌃x must not kill the window before conf
 # B3: ⌃x on clean+unmerged (issue-2) → open a confirm popup, worktree kept (#289)
 : > "$TMLOG"; : > "$GHLOG"
 run_reap "2" "@9"
-grep -q 'POPUP' "$TMLOG" || fail "unmerged ⌃x should open a confirm popup"
+grep -q 'CONFIRM' "$TMLOG" || fail "unmerged ⌃x should ask y/n first (confirm-before)"
 grep -q 'KILL' "$TMLOG" && fail "unmerged ⌃x must not kill the window before confirm"
 [ -d "$WORK/wt2" ] || fail "unmerged worktree must be kept"
 
@@ -473,22 +476,17 @@ grep -q 'CLOSE' "$GHLOG" && fail "scratch reap must NOT close any issue (no @iss
 awk -F'\t' '$2=="scratch-9"{exit !($5 ~ /^[0-9a-f]{7,}$/)}' "$LEDGER" \
   || fail "the scratch-9 row must carry the worktree HEAD sha (recorded pre-removal)" "$(cat "$LEDGER")"
 
-# B8c: ⌃x on a scratch row WITH a DIRTY worktree → open a confirm POPUP first (#289
+# B8c: ⌃x on a scratch row WITH a DIRTY worktree → ask y/n (confirm-before) first (#289
 # one-key rule); do NOT close the window or touch the worktree yet.
 git -C "$BASEDIR" worktree add -q -b scratch-10 "$WORK/scr10" >/dev/null 2>&1
 printf 'exp\n' > "$WORK/scr10/untracked"
 : > "$TMLOG"; : > "$GHLOG"
 RAW=1 WID='@9' WT="$WORK/scr10" run_reap "" "@9"
-grep -q 'POPUP' "$TMLOG" || fail "dirty scratch ⌃x should open a confirm popup"
+grep -q 'CONFIRM' "$TMLOG" || fail "dirty scratch ⌃x should ask y/n first (confirm-before)"
 grep -q 'KILL' "$TMLOG" && fail "dirty scratch ⌃x must not close the window before confirm"
 [ -d "$WORK/scr10" ] || fail "dirty scratch ⌃x must KEEP the worktree"
-
-# A refused scratch popup must also fall back without disposing on cancel.
-: > "$TMLOG"; : > "$GHLOG"
-TOK=$(printf n | REFUSE_POPUP=1 RAW=1 WID='@9' WT="$WORK/scr10" run_reap "" "@9")
-case "$TOK" in *'[y] reap'*) ;; *) fail "refused scratch popup never reached the inline prompt" ;; esac
-grep -q KILL "$TMLOG" && fail "declining scratch fallback killed the window"
-[ -d "$WORK/scr10" ] || fail "declining scratch fallback removed the worktree"
+grep 'CONFIRM' "$TMLOG" | grep -q -- "dash-reap.sh' '@9' --yes" || fail "the scratch y/n's y must re-run this reap --yes" "$(cat "$TMLOG")"
+grep -q 'display-popup' "$TMLOG" && fail "the scratch ⌃x opened a popup (#1620)"
 
 # B8d: confirm y on the DIRTY scratch → still KEEP the worktree, close the window
 # only (git refuses a dirty remove; a confirmed reap never destroys uncommitted work).
@@ -540,7 +538,7 @@ for n in 12 13 14 15 16; do transcript_for "$WORK/wt$n" "$n"; done
 # question, never the dirty-worktree protection.
 : > "$TMLOG"; : > "$GHLOG"
 run_reap_tok "12" "@9" --yes
-grep -q 'POPUP' "$TMLOG" && fail "--yes on dirty must NOT open a confirm popup (#596)"
+grep -q 'CONFIRM' "$TMLOG" && fail "--yes on dirty must NOT open a confirm popup (#596)"
 [ -d "$WORK/wt12" ] || fail "--yes on dirty must KEEP the worktree (#596)"
 grep -q 'KILL' "$TMLOG" || fail "--yes on dirty should kill the window (#596)"
 grep -q 'CLOSE' "$GHLOG" && fail "--yes on dirty must leave the issue OPEN (#1542)"
@@ -553,7 +551,7 @@ grep -q 'CLOSE' "$GHLOG" && fail "--yes on dirty must leave the issue OPEN (#154
 : > "$TMLOG"; : > "$GHLOG"
 run_reap_tok "13" "@9" --yes 2>"$WORK/description"
 grep -q 'reap target: window=@9 .*issue=13 .*state=.*worktree=.*reason=unmerged' "$WORK/description" || fail "missing disposal target description"
-grep -q 'POPUP' "$TMLOG" && fail "--yes on unmerged must NOT open a confirm popup (#596)"
+grep -q 'CONFIRM' "$TMLOG" && fail "--yes on unmerged must NOT open a confirm popup (#596)"
 [ -d "$WORK/wt13" ] && fail "--yes on clean+unmerged should remove the worktree (#596)"
 git -C "$BASEDIR" show-ref --verify -q refs/heads/issue-13 && fail "--yes should delete the issue-13 branch (#596)"
 grep -q 'CLOSE' "$GHLOG" && fail "--yes on unmerged must leave the issue OPEN (#1542)"
@@ -564,7 +562,7 @@ grep -q 'CLOSE' "$GHLOG" && fail "--yes on unmerged must leave the issue OPEN (#
 # say so instead of returning a blanket success. Nothing is touched.
 : > "$TMLOG"; : > "$GHLOG"
 CLIENTS="" run_reap_tok "15" "@9"
-grep -q 'POPUP' "$TMLOG" && fail "a headless fleet must NOT get a confirm popup (#596)"
+grep -q 'CONFIRM' "$TMLOG" && fail "a headless fleet must NOT get a confirm popup (#596)"
 grep -q 'KILL' "$TMLOG" && fail "a refused confirm must not kill the window (#596)"
 [ -s "$GHLOG" ] && fail "a refused confirm must not touch gh (#596)"
 [ -d "$WORK/wt15" ] || fail "a refused confirm must keep the worktree (#596)"
@@ -576,19 +574,14 @@ grep -q 'KILL' "$TMLOG" && fail "a refused confirm must not kill the window (#59
 # (⌃x is unchanged), yet the CALLER now learns it reaped nothing.
 : > "$TMLOG"; : > "$GHLOG"
 run_reap_tok "15" "@9"
-grep -q 'POPUP' "$TMLOG" || fail "an attached client should still get the ⌃x confirm popup (#289)"
+grep -q 'CONFIRM' "$TMLOG" || fail "an attached client should still get the ⌃x y/n (#289)"
 grep -q 'KILL' "$TMLOG" && fail "the popup pass must not kill the window itself"
 [ "$TOK" = "skip:needs-confirm" ] || fail "the popup pass must report skip:needs-confirm (got [$TOK]) (#596)"
 [ "$RC" = 3 ] || fail "the popup pass must exit 3 — it reaped nothing (got $RC) (#596)"
 
-# Refused popup must expose the actual confirm inline; declining it stays safe.
-: > "$TMLOG"; : > "$GHLOG"
-TOK=$(printf n | REFUSE_POPUP=1 run_reap "15" "@9"); RC=$?
-case "$TOK" in *'[y] reap'*) ;; *) fail "refused issue popup never reached the inline prompt" ;; esac
-[ "$RC" = 3 ] || fail "refused issue popup lost its dispatch result"
-grep -q KILL "$TMLOG" && fail "declining inline confirm killed the issue window"
-[ -s "$GHLOG" ] && fail "declining inline confirm closed an issue"
-[ -d "$WORK/wt15" ] || fail "declining inline confirm removed the worktree"
+# The y/n is a confirm-before whose y re-runs this reap --yes — never a popup (#1620).
+grep 'CONFIRM' "$TMLOG" | grep -q -- "dash-reap.sh' '@9' --yes" || fail "the ⌃x y/n's y must re-run this reap --yes" "$(cat "$TMLOG")"
+grep -q 'display-popup' "$TMLOG" && fail "⌃x opened a popup (#1620)"
 
 # D5: --yes on a clean+merged row → reaped SYNCHRONOUSLY. The ⌃x path backgrounds
 # this (issue #304) so the bind returns instantly, but a script's `reaped:full`
@@ -605,7 +598,7 @@ grep '^MSG' "$TMLOG" | grep -qv ' -p ' && fail "a reap that works draws NO line 
 # D6: --force is an alias for --yes.
 : > "$TMLOG"; : > "$GHLOG"
 run_reap_tok "16" "@9" --force
-grep -q 'POPUP' "$TMLOG" && fail "--force must behave like --yes (no popup) (#596)"
+grep -q 'CONFIRM' "$TMLOG" && fail "--force must behave like --yes (no popup) (#596)"
 [ -d "$WORK/wt16" ] || fail "--force on dirty must KEEP the worktree (#596)"
 [ "$TOK" = "reaped:keep" ] || fail "--force must print reaped:keep (got [$TOK]) (#596)"
 
@@ -616,13 +609,13 @@ printf 'exp\n' > "$WORK/scr12/untracked"
 transcript_for "$WORK/scr12" 112   # a session id of its own: record-closed dedups on it
 : > "$TMLOG"; : > "$GHLOG"
 CLIENTS="" RAW=1 WID='@9' WT="$WORK/scr12" run_reap_tok "" "@9"
-grep -q 'POPUP' "$TMLOG" && fail "a headless dirty scratch must NOT get a popup (#596)"
+grep -q 'CONFIRM' "$TMLOG" && fail "a headless dirty scratch must NOT get a popup (#596)"
 grep -q 'KILL' "$TMLOG" && fail "a refused scratch confirm must not close the window (#596)"
 [ "$TOK" = "skip:needs-confirm" ] || fail "a headless dirty scratch must print skip:needs-confirm (got [$TOK]) (#596)"
 [ "$RC" = 3 ] || fail "a headless dirty scratch must exit 3 (got $RC) (#596)"
 : > "$TMLOG"; : > "$GHLOG"
 RAW=1 WID='@9' WT="$WORK/scr12" run_reap_tok "" "@9" --yes
-grep -q 'POPUP' "$TMLOG" && fail "--yes on a dirty scratch must NOT open a popup (#596)"
+grep -q 'CONFIRM' "$TMLOG" && fail "--yes on a dirty scratch must NOT open a popup (#596)"
 grep -q 'KILL' "$TMLOG" || fail "--yes on a dirty scratch should close the window (#596)"
 [ -d "$WORK/scr12" ] || fail "--yes on a dirty scratch must KEEP the worktree (#596)"
 [ "$TOK" = "reaped:keep" ] || fail "--yes on a dirty scratch must print reaped:keep (got [$TOK]) (#596)"
