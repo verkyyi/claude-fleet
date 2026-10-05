@@ -30,6 +30,23 @@
 #   5. runs `fleet`: the first QR appears right here, in this terminal — and
 #      with tmux ≥ 3.2 on this computer, `fleet` is the shell.
 #
+# NO HUB (issue #1712, EPIC #1710 C2) — only the tools, on this one computer:
+#
+#     curl -fsSL https://raw.githubusercontent.com/verkyyi/claude-fleet/stable/bin/fleet-install.sh | sh -s -- --no-hub
+#
+# The same script from GitHub's `stable`, with --no-hub (FLEET_INSTALL_NO_HUB=1):
+# step 1 takes the manifest and every file from FLEET_INSTALL_SRC (default
+# https://raw.githubusercontent.com/verkyyi/claude-fleet/stable — the manifest at
+# its repo path, tokenledger/internal/api/fleetclient/manifest; no SHA header
+# there, the script check still applies); step 2 writes NO hub address — so
+# `fleet` opens the client on this computer, reading its own fleet; and a node
+# step installs that fleet: ~/.claude/fleet cloned at stable (FLEET_INSTALL_ROOT,
+# FLEET_BOOTSTRAP_GIT_BASE) and its bin/fleet-login-bootstrap.sh run — the hooks,
+# commands, daemons and a first fleet, exactly a new login's setup — skipped when
+# that checkout is already there (FLEET_INSTALL_NO_NODE=1 skips it outright). Last,
+# the subscription accounts, which live on this computer: none yet → one line on
+# adding one (`claude setup-token`, saved under ~/.config/claude-fleet/accounts/).
+#
 # Only what a stock macOS or Linux has: sh, curl, python3 (macOS's own 3.9 is
 # enough — the client is standard library only), ssh and ssh-keygen. tmux is
 # optional: step 4 gets it where it can, and without it `fleet` goes the
@@ -46,21 +63,33 @@
 # 2 an unsupported system or a missing prerequisite · 1 a download failed.
 set -eu
 
-HUB="${FLEET_HUB_URL:-__FLEET_HUB_URL__}"
-case "$HUB" in
-  http://*|https://*) ;;
-  *) echo "fleet-install: no hub URL (this file is meant to be served by the hub at /install)" >&2; exit 2 ;;
-esac
-HUB="${HUB%/}"
-
 DEPS=1
 [ "${FLEET_INSTALL_NO_DEPS:-}" = 1 ] && DEPS=0
+NOHUB=0
+[ "${FLEET_INSTALL_NO_HUB:-}" = 1 ] && NOHUB=1
 for a in "$@"; do
   case "$a" in
     --no-deps) DEPS=0 ;;
-    *) printf 'fleet-install: 不认识的参数 %s（只有 --no-deps）\n' "$a" >&2; exit 2 ;;
+    --no-hub) NOHUB=1 ;;
+    *) printf 'fleet-install: 不认识的参数 %s（只有 --no-deps / --no-hub）\n' "$a" >&2; exit 2 ;;
   esac
 done
+
+if [ "$NOHUB" = 1 ]; then
+  # no hub (#1712): the files come from GitHub's stable; no address is written
+  HUB=''
+  SRC="${FLEET_INSTALL_SRC:-https://raw.githubusercontent.com/verkyyi/claude-fleet/stable}"
+  SRC="${SRC%/}"
+  FROM="$SRC"
+else
+  HUB="${FLEET_HUB_URL:-__FLEET_HUB_URL__}"
+  case "$HUB" in
+    http://*|https://*) ;;
+    *) echo "fleet-install: no hub URL (this file is meant to be served by the hub at /install; with no hub at all, run it with --no-hub)" >&2; exit 2 ;;
+  esac
+  HUB="${HUB%/}"
+  FROM="$HUB/install"
+fi
 
 say() { printf '%s\n' "$*" >&2; }
 sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
@@ -72,7 +101,9 @@ case "$(uname -s 2>/dev/null || echo unknown)" in
   *) say "fleet-install: 不支持的系统 $(uname -s)（支持 macOS 与 Linux；Windows 用 WSL）"; exit 2 ;;
 esac
 
-for tool in curl python3 ssh ssh-keygen; do
+TOOLS="curl python3 ssh ssh-keygen"
+[ "$NOHUB" = 1 ] && TOOLS="curl python3 git"     # no hub: no certificate, the node is a git checkout
+for tool in $TOOLS; do
   command -v "$tool" >/dev/null 2>&1 || {
     case "$tool" in
       python3) say "fleet-install: 需要 python3 —— macOS 执行 xcode-select --install；Linux 用包管理器安装 python3" ;;
@@ -89,13 +120,15 @@ mkdir -p "$BIN" "$ROOT" "$CONF_DIR"
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/fleet-install.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT INT TERM HUP
 
-# fetch <path> → $tmp/<path>. Each file's SHA-256 rides in a header; a download
-# that does not match it (a proxy's error page, a cut connection) is refused
-# rather than installed.
+# fetch <path> [<url>] → $tmp/<path>, from <url> (default $FROM/<path>: the
+# hub's /install/<path>, or with --no-hub the repo path on GitHub's stable). Each
+# file's SHA-256 rides in a header from the hub; a download that does not match
+# it (a proxy's error page, a cut connection) is refused rather than installed.
 fetch() {
+  src_url="${2:-$FROM/$1}"
   mkdir -p "$tmp/$(dirname "$1")"
-  if ! curl -fsSL -D "$tmp/$1.hdr" "$HUB/install/$1" -o "$tmp/$1"; then
-    say "fleet-install: 下载 $HUB/install/$1 失败"; exit 1
+  if ! curl -fsSL -D "$tmp/$1.hdr" "$src_url" -o "$tmp/$1"; then
+    say "fleet-install: 下载 $src_url 失败"; exit 1
   fi
   want="$(tr -d '\r' <"$tmp/$1.hdr" | awk 'tolower($1)=="x-ccquota-sha256:"{print $2}')"
   if [ -n "$want" ]; then
@@ -107,9 +140,9 @@ fetch() {
 # 1 — the client, from the hub: the manifest first (the list this hub's image
 # embeds — its `installer` line is this very script, not a download), then every
 # file on it. Nothing is installed until all of them are here and checked.
-fetch manifest
+if [ "$NOHUB" = 1 ]; then fetch manifest "$SRC/tokenledger/internal/api/fleetclient/manifest"; else fetch manifest; fi
 FILES="$(awk '!/^[[:space:]]*#/ && NF && $2 != "installer" { print $1 }' "$tmp/manifest" | tr '\n' ' ')"
-[ -n "${FILES% }" ] || { say "fleet-install: 入口的 /install/manifest 里没有文件"; exit 1; }
+[ -n "${FILES% }" ] || { say "fleet-install: $FROM 的 manifest 里没有文件"; exit 1; }
 for f in $FILES; do
   case "$f" in
     bin/*|conf/*) case "$f" in *..*|*/) say "fleet-install: manifest 里有不认识的路径 $f"; exit 1 ;; esac ;;
@@ -139,8 +172,8 @@ done
 # and a directory of symlinks relies on that (fleet-shell.sh's conf-free mirror,
 # bin/selftest-shadow-root.sh). Nothing to do when $BIN is the root's own bin/.
 if [ "$(cd "$BIN" && pwd -P)" != "$(cd "$ROOT/bin" && pwd -P)" ]; then
-  printf '#!/bin/sh\n# fleet — installed by `curl -fsSL %s/install | sh` (claude-fleet#1486); the client is %s\nexec %s "$@"\n' \
-    "$HUB" "$ROOT/bin" "$(sq "$ROOT/bin/fleet")" > "$tmp/fleet"
+  printf '#!/bin/sh\n# fleet — installed from %s (claude-fleet#1486, #1712); the client is %s\nexec %s "$@"\n' \
+    "$FROM" "$ROOT/bin" "$(sq "$ROOT/bin/fleet")" > "$tmp/fleet"
   chmod 0755 "$tmp/fleet"
   mv -f "$tmp/fleet" "$BIN/fleet"
   # the #1470 installer put the two helpers flat in $BIN; `fleet` no longer
@@ -158,7 +191,9 @@ fi
 # older client's files (shell.conf, hub.json's url) are folded in first, each
 # kept as .bak. hub.json is left to its token. Without the tool (a manifest
 # that predates it), hub.json gets the URL as before.
-if [ -f "$ROOT/bin/fleet-conf.sh" ] \
+if [ "$NOHUB" = 1 ]; then
+  :   # no hub (#1712): no address anywhere — `fleet` reads this computer
+elif [ -f "$ROOT/bin/fleet-conf.sh" ] \
    && FLEET_CONF_DIR="${FLEET_CONF_DIR:-$CONF_DIR}" bash "$ROOT/bin/fleet-conf.sh" migrate --quiet >/dev/null 2>&1 \
    && FLEET_CONF_DIR="${FLEET_CONF_DIR:-$CONF_DIR}" bash "$ROOT/bin/fleet-conf.sh" set-hub "$HUB" --role client; then
   :
@@ -212,7 +247,42 @@ case ":$PATH:" in
 esac
 
 say "✓ 已安装 fleet 到 ${BIN}（文件在 ${ROOT}）${path_note}"
-say "  入口 $HUB · 之后每次只敲：fleet"
+if [ "$NOHUB" = 1 ]; then
+  say "  没有入口：fleet 读这台电脑自己的 fleet · 之后每次只敲：fleet"
+else
+  say "  入口 $HUB · 之后每次只敲：fleet"
+fi
+
+# no hub (#1712) — the fleet itself lives here: ~/.claude/fleet at stable and a
+# new login's setup (fleet-login-bootstrap.sh: hooks, commands, daemons, a first
+# fleet). Already a checkout → left alone. A failure is said, never fatal: the
+# client still opens, and running this line again retries.
+if [ "$NOHUB" = 1 ] && [ "${FLEET_INSTALL_NO_NODE:-}" != 1 ]; then
+  NODE_ROOT="${FLEET_INSTALL_ROOT:-$HOME/.claude/fleet}"
+  if [ -d "$NODE_ROOT/.git" ]; then
+    say "fleet: $NODE_ROOT 已经在了，不动它"
+  else
+    mkdir -p "$(dirname "$NODE_ROOT")"
+    if git clone -q -b stable "${FLEET_BOOTSTRAP_GIT_BASE:-https://github.com}/verkyyi/claude-fleet.git" "$NODE_ROOT" 2>/dev/null; then
+      say "fleet: 已取 stable → $NODE_ROOT"
+    else
+      say "fleet: git clone 失败（离线？）— 客户端照样能开，再跑一次这行补上"
+    fi
+  fi
+  if [ -x "$NODE_ROOT/bin/fleet-login-bootstrap.sh" ]; then
+    FLEET_INSTALL_ROOT="$NODE_ROOT" "$NODE_ROOT/bin/fleet-login-bootstrap.sh" </dev/null >&2 \
+      || say "fleet: 本机设置有一步没成（上面几行说了哪步）— 再跑一次这行会只补缺的"
+  fi
+fi
+# no hub — the subscription accounts are this computer's own
+if [ "$NOHUB" = 1 ]; then
+  ACCTS="${FLEET_ACCOUNTS_DIR:-${FLEET_CONF_DIR:-$CONF_DIR}/accounts}"
+  if [ -n "$(ls -A "$ACCTS" 2>/dev/null)" ]; then
+    say "账号: $(ls -A "$ACCTS" | tr '\n' ' ')（在 $ACCTS）"
+  else
+    say "账号: 还没有 — 本机加一个：claude setup-token，把打出的 token 存成 $ACCTS/<名字>（chmod 600）；不加就用 claude 自己登录的那个"
+  fi
+fi
 
 # 4 — tmux ≥ 3.2, the one thing the shell needs that a stock system lacks. The
 # check and the install are fleet-client-lib.sh's (shared with

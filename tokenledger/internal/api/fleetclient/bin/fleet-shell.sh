@@ -76,8 +76,16 @@
 # (fail_start), exit 1 — never a fallback to ssh-ing into a machine's own list.
 # Run over ssh (an iPad / iPhone on a machine with the fleet), it is the same
 # client on that machine, and its bar says 客户端在 <machine> 上运行 (client_where).
-# Exit: 0 (the attach's); 1 no machine / no tmux / could not start; 2 no hub URL
-# (as `fleet` says it).
+# NO HUB (issue #1712, EPIC #1710 C2): with no hub address anywhere — a single
+# computer that only wants the tools, or the hub not set up yet — this is the
+# SAME client, reading this machine: `fleet connect --pick` answers THIS computer
+# (reason `local`), its window nests the attach right here (the ssh mode's
+# this_machine), and the list is this machine's own sessions —
+# FLEET_SIDEBAR_SOURCE=local + FLEET_HUB_SESSIONS_LOCAL=1, the loop asking
+# `fleet-remote-view.sh sessions` here instead of the hub. With an address the
+# environment is byte for byte what it was.
+# Exit: 0 (the attach's); 1 no machine / no tmux / could not start; 2 a picker
+# that still says «no hub URL» (an older fleet-connect.py).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"                      # the bin/ this runs from (the mirror, once started)
 SELF="$0"; [ -L "$SELF" ] && SELF=$(readlink "$SELF")   # the real file's dir has conf/ beside it
@@ -262,6 +270,21 @@ go_standby() {
   others_standby '' "${1:-未知设备}"
 }
 
+# have_hub — is a hub address configured anywhere `fleet connect` would look
+# (issue #1712)? FLEET_HUB_URL / CCQUOTA_HUB_URL (the env, fleet.conf's [common],
+# shell.conf — all sourced above), else hub.json's old "url". No address = the
+# client on THIS computer alone: the list is this machine's own sessions
+# (fleet-hub-sessions.sh FLEET_HUB_SESSIONS_LOCAL), FLEET_SIDEBAR_SOURCE=local.
+have_hub() {
+  [ -n "${FLEET_HUB_URL:-}${CCQUOTA_HUB_URL:-}" ] && return 0
+  [ -f "$CONF_DIR/hub.json" ] || return 1
+  python3 -c 'import json, sys
+try:
+    sys.exit(0 if str(json.load(open(sys.argv[1])).get("url") or "").strip() else 1)
+except Exception:
+    sys.exit(1)' "$CONF_DIR/hub.json" 2>/dev/null
+}
+
 # --- the environment the server gets --------------------------------------------
 # shell_env <machine-json> — sets SHELL_ENV (one `NAME=value` per line) and the
 # derived globals; the names listed are the ones the pieces read.
@@ -281,11 +304,15 @@ for m in d.get("machines") or []:
 print(" ".join(out))
 ' 2>/dev/null)
   FLEET_NODE_ALIASES="$node_aliases"
+  # The list's source follows the hub address (issue #1712): none → this machine
+  # answers for itself (FLEET_HUB_SESSIONS_LOCAL, appended last so a hub client's
+  # environment is byte for byte what it was).
+  SRC=hub; have_hub || SRC=local
   SHELL_ENV="FLEET_SHELL=1
 FLEET_SHELL_SESSION=$SESS
 FLEET_HUB_SESSIONS_CLIENT=$SESS
 CCQUOTA_FLEET=1
-FLEET_SIDEBAR_SOURCE=hub
+FLEET_SIDEBAR_SOURCE=$SRC
 TMPDIR=$CACHE/tmp
 FLEET_REMOTE_SSH_CMD=${FLEET_REMOTE_SSH_CMD:-$SHADOW/fleet-shell.sh ssh}
 FLEET_REMOTE_OPENER=${FLEET_REMOTE_OPENER:-$SHADOW/fleet-shell.sh open-url}
@@ -301,6 +328,8 @@ FLEET_NODE_ALIASES=$FLEET_NODE_ALIASES"
     [ -n "$v" ] && SHELL_ENV="$SHELL_ENV
 $n=$v"
   done
+  [ "$SRC" = local ] && SHELL_ENV="$SHELL_ENV
+FLEET_HUB_SESSIONS_LOCAL=1"
   return 0
 }
 # export_env — SHELL_ENV into this process (the keeper and the first refresh)
@@ -570,9 +599,10 @@ fi
 command -v python3 >/dev/null 2>&1 || fail_start '没有 python3'
 
 # 1. the certificate and the machine (fleet-connect.py --pick: renew or scan, then
-#    the hub's pick — or the name checked against the route list). No hub URL: its
-#    own words, exit 2. None online: exit 1 from it, the shell still opens (the
-#    list and the bar come from the hub; a row opens a window).
+#    the hub's pick — or the name checked against the route list). No hub URL
+#    (#1712): THIS computer, reason `local` — the client reads this machine. None
+#    online: exit 1 from it, the shell still opens (the list and the bar come
+#    from the hub; a row opens a window).
 pick=$(python3 "$BIN/fleet-connect.py" --pick ${machine:+"$machine"}); rc=$?
 case "$rc" in
   0) ;;

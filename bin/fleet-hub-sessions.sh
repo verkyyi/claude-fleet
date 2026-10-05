@@ -150,6 +150,18 @@
 # FLEET_HUB_SESSIONS_CLIENT) never does this: its own rows come from its own tmux
 # (#1483) and it holds no connection to anyone. FLEET_HUB_NODE_TIMEOUT (8s) bounds
 # each ask.
+#
+# NO HUB AT ALL, IN THE SHELL (issue #1712, EPIC #1710 C2) — client mode only.
+# A computer with no hub address still opens the same client (fleet-shell.sh
+# sets FLEET_HUB_SESSIONS_LOCAL=1 when no address is configured anywhere): every
+# round asks THIS machine for its sessions — `fleet-remote-view.sh sessions`, the
+# very answer a machine gives over the shell's connection above, run here from
+# the node's own bin/ (FLEET_REMOTE_BIN, relative to $HOME as on any machine) —
+# and feeds it through the same mapping, via=node: the machine answered for
+# itself, so no row reads 失联 for a hub that does not exist. Nothing goes on
+# the network, the summaries (hub_nodes / hub_limits) are not asked for, and
+# hub_ok records the last round that stood (--status reads it). Unset, or with a
+# hub address, nothing here differs.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
@@ -176,6 +188,8 @@ SUMMARY_NS='fleet-summary@claude-fleet'   # the status bar's two summaries (#150
 # anywhere ⇒ the environment decides for all, as before).
 CLIENT="${FLEET_HUB_SESSIONS_CLIENT:-}"
 case "$CLIENT" in *[!A-Za-z0-9._-]*) CLIENT='' ;; esac
+LOCAL=0      # the shell with no hub at all (#1712): this machine answers for itself
+[ -n "$CLIENT" ] && [ "${FLEET_HUB_SESSIONS_LOCAL:-0}" = 1 ] && LOCAL=1
 hub_on() { if [ -n "$CLIENT" ]; then [ "${CCQUOTA_FLEET:-0}" = 1 ]; else fleet_hub_any; fi; }
 local_fleets() {
   if [ -n "$CLIENT" ]; then printf '%s\t-\n' "$CLIENT"; return; fi
@@ -342,6 +356,17 @@ fetch() {
   return 1
 }
 
+# local_fetch <out> — no hub (#1712): THIS machine's sessions, hub-shaped, from
+# the node's own bin/ (FLEET_REMOTE_BIN, relative to $HOME — the path a machine
+# is asked by over ssh), outside any tmux client. rc 1 when it does not answer.
+local_fetch() {
+  local rbin="${FLEET_REMOTE_BIN:-.claude/fleet/bin}"
+  case "$rbin" in /*) ;; *) rbin="$HOME/$rbin" ;; esac
+  [ -f "$rbin/fleet-remote-view.sh" ] || {
+    printf 'fleet-hub-sessions: no hub, and no fleet installed here (%s) — nothing to list\n' "$rbin" >&2; return 1; }
+  ( unset TMUX TMUX_PANE; cd "$HOME" 2>/dev/null || :; bash "$rbin/fleet-remote-view.sh" sessions ) </dev/null >"$1" 2>/dev/null
+}
+
 # hub_ok <epoch> — the ONE word on 「入口通不通」 (issue #1483, EPIC #1479 C4):
 # written on every round whose answer stood (a 200 taken in refresh, a 304
 # restamped below), never on a failed one — so its age IS the hub's silence.
@@ -399,6 +424,16 @@ refresh() {
   done > "$lf" <<EOF
 $(local_fleets)
 EOF
+  if [ "$LOCAL" = 1 ]; then
+    # no hub (#1712): this machine's own answer, mapped as a machine's (via=node;
+    # every login it lists is this one — `*`, as over a connection)
+    rc=1; now=$(date +%s)
+    local_fetch "$json" && [ -s "$json" ] && map_write "$json" "$lf" "$mf" "$now" node '*' && rc=0
+    [ "$rc" = 0 ] && hub_ok "$now"
+    LAST_FETCH=$rc
+    rm -f "$json" "$lf" "$mf"
+    return "$rc"
+  fi
   fetch "$json" "$lf"; rc=$?; LAST_FETCH=$rc
   if [ "$rc" = 3 ]; then
     restamp "$lf"; rm -f "$json" "$lf" "$mf"; return 0
@@ -680,10 +715,12 @@ for f in local:
                                                r["state"], r["agent"], r["name"], origin, r["needs"],
                                                "1" if r["local"] else "0", r["lwid"], via, r["busy"])) + "\n")
     path = os.path.join(gdir, "remote_" + f["sess"])
-    if via == "node":
+    if via == "node" and not (client and os.environ.get("FLEET_HUB_SESSIONS_LOCAL") == "1"):
         # The machines that did not answer over a connection keep their last
         # lines (#1488) — header lines before any row, as every reader expects —
         # marked via=hub: not heard this round, so the hub's silence dims them.
+        # With no hub at all (#1712) this machine is the whole list: an earlier
+        # hub round's other machines are not carried.
         fresh = set(nodes)
         keep_nodes, keep_rows = [], []
         try:
@@ -898,6 +935,7 @@ SUMMARY_EVERY="${FLEET_HUB_SUMMARY_EVERY:-10}"; case "$SUMMARY_EVERY" in ''|*[!0
 SUMF="$G/hubsum.ts"
 refresh_summaries() {
   hub_on || return 0
+  [ "$LOCAL" = 1 ] && return 0     # no hub (#1712): nothing to summarize
   local nj lj now last=''
   mkdir -p "$G" 2>/dev/null || return 1
   now=$(date +%s)

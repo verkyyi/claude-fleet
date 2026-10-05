@@ -52,6 +52,13 @@
 #                    untouched, the ETag dropped; the hub's next answer takes the
 #                    cache back (via=hub everywhere). A NODE (no client knob) never
 #                    asks anyone.
+#   K. no hub      — (issue #1712) no hub address anywhere, every CCQUOTA_* cleared:
+#                    bare `fleet` with the REAL fleet-connect.py opens the client on
+#                    THIS computer (reason local), its window a real nested attach
+#                    into this machine's fleet (leg I's node), the loop writes that
+#                    fleet's rows via=node, the list has all of them and none lost,
+#                    and `open` on a row switches the right pane to it; with an
+#                    address in fleet.conf the env is the hub one, unchanged
 # tmux / python3 absent → SKIP (exit 0). Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -70,6 +77,9 @@ export FLEET_HUB_SESSIONS_LOOP_SECS=8 FLEET_HUB_SESSIONS_EVERY=1 FLEET_HUB_SESSI
 export FLEET_SHELL_WARM=0   # the warm connections (#1631) have their own test: fleet-shell-warm-selftest.sh
 unset TMUX TMUX_PANE CCQUOTA_FLEET FLEET_SESSION FLEET_SHELL FLEET_HUB_SESSIONS_CLIENT FLEET_SIDEBAR_SOURCE
 unset FLEET_HUB_URL CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN FLEET_NODE_ALIASES FLEET_REMOTE_SSH_CMD
+# A hub address (the fake connect and FLEET_HUB_SESSIONS_CMD stand in for the
+# hub itself): legs A–J are the hub client. Leg K takes it away (#1712).
+export FLEET_HUB_URL=https://hub.example
 
 FAIL=0; CHECKS=0
 fail() { FAIL=$((FAIL + 1)); printf 'FAIL: %s\n' "$1" >&2; [ $# -gt 1 ] && printf '      got: %s\n' "$2" >&2; }
@@ -90,6 +100,8 @@ cleanup() {
   "$REAL_TMUX" -L "$SESS" kill-server 2>/dev/null
   "$REAL_TMUX" -L "$NODE" kill-server 2>/dev/null
   pkill -f "fleet-shell.sh keeper $SESS" 2>/dev/null
+  "$REAL_TMUX" -L "fshK$$" kill-server 2>/dev/null
+  pkill -f "fleet-shell.sh keeper fshK$$" 2>/dev/null
   rm -rf "$WORK"
 }
 trap cleanup EXIT INT TERM
@@ -510,6 +522,66 @@ has 'I: machine_name is this host' "$out" "\"machine_name\": \"$(hostname -s | c
 has 'I: the fleet'"'"'s repo fills a one-repo window'"'"'s repo' "$out" '"repo": "acme/app"'
 has 'I: the fleet is named' "$out" "\"fleet_name\": \"$NODE\""
 eq 'I: nodes lists this machine once, with its count' '1 2' "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(len(d["nodes"]), d["nodes"][0]["sessions"])')"
+
+# ================================================================================
+# K. no hub (issue #1712, EPIC #1710 C2) — the SAME client on a computer with no
+#    hub address anywhere: the REAL fleet-connect.py picks THIS computer (reason
+#    local), the window nests a real attach into this machine's fleet (the node
+#    session of leg I, no ssh shim), and the list is that fleet's windows
+# ================================================================================
+SESSK="fshK$$"
+tk() { "$REAL_TMUX" -L "$SESSK" "$@"; }
+SBK="$WORK/sbinK"; mkdir -p "$SBK"
+for f in "$BIN"/*; do [ -f "$f" ] && ln -s "$f" "$SBK/${f##*/}"; done
+CHECKS=$((CHECKS + 1)); [ ! -e "$FLEET_CONF_DIR/hub.json" ] && [ ! -e "$FLEET_CONF_DIR/fleet.conf" ] || fail 'K: rig: the HOME holds a hub address'
+ME=$(hostname -s 2>/dev/null); ME=${ME%%.*}
+out=$( unset FLEET_REMOTE_SSH_CMD FLEET_HUB_SESSIONS_CMD FLEET_HUB_SESSIONS_USER FLEET_HUB_URL CCQUOTA_HUB_URL FLEET_REMOTE_VIA_HUB
+       for v in $(env | sed -n 's/^\(CCQUOTA_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
+       FLEET_SHELL_SESSION="$SESSK" FLEET_SHELL_CACHE="$WORK/cacheK" "$SBK/fleet" 2>"$WORK/upK.err" ); rc=$?
+eq 'K: bare fleet with no hub → the client started (exit 0)' 0 "$rc"
+eq 'K: it printed its session' "$SESSK" "$out"
+hasnt 'K: no «no hub URL» line' "$(cat "$WORK/upK.err")" 'no hub URL'
+wk=$(tk list-windows -t "=$SESSK" -F '#{window_id}' 2>/dev/null | head -1)
+eq 'K: the first window is THIS computer' "$ME" "$(tk display-message -p -t "$wk" '#{window_name}' 2>/dev/null)"
+eq 'K: @remote = <this computer>:' "$ME:" "$(tk show-options -wqv -t "$wk" @remote 2>/dev/null)"
+envk=$(tk show-environment -g 2>/dev/null)
+has 'K: server env local source' "$envk" 'FLEET_SIDEBAR_SOURCE=local'
+has 'K: server env: the loop reads this machine' "$envk" 'FLEET_HUB_SESSIONS_LOCAL=1'
+hasnt 'K: no hub address in the env' "$envk" 'FLEET_HUB_URL='
+# the right pane: a real nested attach (fleet-shell.sh ssh → this_machine) — a
+# client of the node's server, no ssh anywhere
+nodeclient() { tn list-clients -F '#{client_tty}' 2>/dev/null | grep -q .; }
+CHECKS=$((CHECKS + 1)); waitfor 15 nodeclient || fail 'K: the right pane attached to this machine'"'"'s fleet' "$(tk capture-pane -p -t "$wk" 2>/dev/null | grep -v '^$' | tail -3)"
+# the list: the loop wrote this machine's sessions, via=node, under the shell's cache
+GK="$WORK/cacheK/tmp/.claude-dash/global"
+CHECKS=$((CHECKS + 1)); waitfor 15 grep -q "issue-8" "$GK/remote_$SESSK" 2>/dev/null || fail 'K: the loop wrote this machine'"'"'s rows' "$(ls "$GK" 2>/dev/null)"
+cachek=$(tr '\037' '|' < "$GK/remote_$SESSK" 2>/dev/null)
+has 'K: the issue-7 row, on this computer, via=node' "$cachek" "wid:$U/issue-7|$ME|online|7|acme/app|"
+has 'K: …and issue-8' "$cachek" "wid:$U/issue-8|$ME|online|8|acme/app|"
+has 'K: a #node line for this computer, via=node' "$cachek" "#node|$ME|online|2|"
+CHECKS=$((CHECKS + 1)); [ -e "$GK/hub_nodes" ] && fail 'K: no hub summary asked for'
+rowsk=$( cd "$WORK/cacheK/bin" && TMUX="$(tk display-message -p '#{socket_path}'),0,0" FLEET_SHELL=1 FLEET_SESSION="$SESSK" FLEET_SIDEBAR_CURRENT="$wk" \
+         FLEET_SIDEBAR_SOURCE=local CCQUOTA_FLEET=1 TMPDIR="$WORK/cacheK/tmp" FLEET_HUB_SESSIONS_CLIENT="$SESSK" FLEET_HUB_SESSIONS_LOCAL=1 \
+         bash "$WORK/cacheK/bin/tmux-dashboard-rows.sh" --sidebar 2>/dev/null | tr '\037' '|' )
+has 'K: the list has issue-7' "$rowsk" 'issue-7'
+has 'K: the list has issue-8' "$rowsk" 'issue-8'
+hasnt 'K: no row reads lost (there is no hub to be silent)' "$rowsk" "$ME!"
+# pick a row: the right pane switches to it on this machine
+okk=$( TMUX="$(tk display-message -p '#{socket_path}'),0,0" FLEET_SHELL=1 FLEET_SESSION="$SESSK" CCQUOTA_FLEET=1 TMPDIR="$WORK/cacheK/tmp" \
+       FLEET_HUB_SESSIONS_LOCAL=1 FLEET_REMOTE_SSH_CMD="$WORK/cacheK/bin/fleet-shell.sh ssh" \
+       bash "$WORK/cacheK/bin/fleet-remote-view.sh" open "wid:$U/issue-8" 2>&1 )
+eq 'K: open answered the same window' "$wk" "$okk"
+eq 'K: @remote retargeted to issue-8' "$ME:$U/issue-8" "$(tk show-options -wqv -t "$wk" @remote 2>/dev/null)"
+nodeon8() { tn list-clients -F '#{window_name}' 2>/dev/null | grep -qx issue-8; }
+CHECKS=$((CHECKS + 1)); waitfor 15 nodeon8 || fail 'K: the right pane now shows issue-8' "$(tn list-clients -F '#{client_session} #{window_name}' 2>/dev/null)"
+"$REAL_TMUX" -L "$SESSK" kill-server 2>/dev/null
+pkill -f "fleet-shell.sh keeper $SESSK" 2>/dev/null
+# the degenerate: a hub address in fleet.conf → the hub source, byte for byte
+printf 'FLEET_HUB_URL=https://hub.example\n' > "$FLEET_CONF_DIR/fleet.conf"
+envh=$( unset FLEET_HUB_URL; FLEET_SHELL_SESSION="$SESSK" FLEET_SHELL_CACHE="$WORK/cacheK" bash "$SB/fleet-shell.sh" env 2>/dev/null )
+has 'K: with an address the source is hub' "$envh" 'FLEET_SIDEBAR_SOURCE=hub'
+hasnt 'K: …and the loop is not local' "$envh" 'FLEET_HUB_SESSIONS_LOCAL'
+rm -f "$FLEET_CONF_DIR/fleet.conf"
 
 printf 'fleet-shell selftest: %d checks, %d failures\n' "$CHECKS" "$FAIL"
 [ "$FAIL" = 0 ] && echo "PASS fleet-shell-selftest" || echo "FAIL fleet-shell-selftest"

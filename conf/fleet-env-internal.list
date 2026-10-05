@@ -114,6 +114,10 @@ FLEET_HANDOFF_VERIFY_TIMEOUT       knob: internal pacing/limit, safe in-code def
 FLEET_HEAVY_BIN                    seam: the fleet-heavy.sh path bash-guard.py prefixes (fleet-heavy-selftest.sh)
 FLEET_HEAVY_DIR                    path: the machine-wide heavy-slot dir (default /Users/Shared/claude-fleet/heavy)
 FLEET_HUB_RECEIPT_WAIT             knob: seconds a cross-machine send waits for the hub's delivery receipt before saying queued (fleet-report-parent.sh / fleet-peer-send.sh, 4, #1647)
+FLEET_HUB_SESSIONS_LOCAL           handoff: fleet-shell.sh tells the client loop there is no hub — ask this machine (#1712)
+FLEET_INSTALL_NO_HUB               handoff: = fleet-install.sh --no-hub, from the environment (#1712)
+FLEET_INSTALL_NO_NODE              seam: fleet-install.sh --no-hub skips installing this machine's fleet (#1712)
+FLEET_INSTALL_SRC                  seam: where fleet-install.sh --no-hub fetches files (default GitHub stable raw; #1712)
 FLEET_MACHINE_SESSIONS_DIR         path: the machine-wide per-login session-count dir (default /Users/Shared/claude-fleet/sessions)
 FLEET_HEAVY_HELD                   handoff: fleet-heavy.sh sets it for its child so nested heavies pass through
 FLEET_HISTORY_LEDGER               path: state/log location override (fleet-history.sh)

@@ -16,6 +16,36 @@
 INFO  mode     fleet hub (新会话 auto) · scratchpad local — 本机 / 联机各管什么: docs/LOCAL-AND-HUB.md
 ```
 
+## 只要工具不要入口
+
+只有一台电脑、不打算接入口（同事自己的机器、只想要这套工具的开发者，或者入口还没开），
+一条命令装好，之后照样只敲 `fleet`（issue #1712，EPIC #1710 C2）：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/verkyyi/claude-fleet/stable/bin/fleet-install.sh | sh -s -- --no-hub
+```
+
+- **装什么**：和入口装的是同一个 `fleet-install.sh`、同一份客户端清单
+  （`tokenledger/internal/api/fleetclient/manifest`），只是文件从 GitHub 的
+  `stable` 取（`FLEET_INSTALL_SRC` 可换源），**不写任何入口地址**。然后装 fleet 本身：
+  `~/.claude/fleet` 按 `stable` 克隆、跑 `fleet-login-bootstrap.sh`（钩子、命令、
+  守护进程、第一个 fleet——和新登录的设置一模一样；已有 checkout 就不动）。最后一行
+  说账号：订阅账号全在本机，`claude setup-token` 打出的 token 存成
+  `~/.config/claude-fleet/accounts/<名字>`（0600）。
+- **`fleet` 打开的还是同一个客户端**：没有入口地址时 `fleet connect --pick` 答「本机」
+  （reason `local`，`fleet connect --print` 打印 `local <机器>`），右窗格直接嵌套接入
+  这台机器的 fleet（不 ssh），左边列表是这台机器自己的会话——客户端的取数循环改问本机
+  `fleet-remote-view.sh sessions`（`FLEET_HUB_SESSIONS_LOCAL=1`，`via=node`，不会因为
+  「入口沉默」变灰），`FLEET_SIDEBAR_SOURCE=local`。开会话、切会话、跨 Agent 迁移
+  都是这台机器上那套工具，和一机一 fleet 时一样。
+- **什么时候是这个模式**：`FLEET_HUB_URL` / `CCQUOTA_HUB_URL`（环境、`fleet.conf`、
+  `shell.conf`）和 `hub.json` 的 `url` 都没有。以后接入口，写上地址（入口的
+  `curl -fsSL <入口>/install | sh` 会写）就回到入口来源，**有入口时客户端逐字节照旧**。
+- 守护：`bin/fleet-shell-selftest.sh` K 腿（隔离 socket、无入口地址、`CCQUOTA_*` 全清：
+  客户端起来、列表是本机 fleet 的全部会话、点一行右窗格切过去；写上地址就是入口环境）、
+  `bin/fleet-install-selftest.sh` G 腿（`--no-hub` 在临时 HOME 装好、不写入口地址）、
+  `bin/fleet-connect-selftest.sh` 第 7 段。
+
 ## 开关在哪一级
 
 从低到高：后一级在它管得到的地方赢。

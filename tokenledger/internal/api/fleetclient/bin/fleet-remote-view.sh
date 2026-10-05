@@ -690,7 +690,8 @@ EOF_PEER
 attach)
   shell=''
   while [ $# -gt 0 ]; do
-    case "$1" in --shell) shell=1; shift ;; --) shift; break ;; -*) note "attach: unknown option $1"; exit 2 ;; *) break ;; esac
+    # a bare `-` is the machine itself (the shell's first window), not an option (#1712)
+    case "$1" in --shell) shell=1; shift ;; --) shift; break ;; -) break ;; -*) note "attach: unknown option $1"; exit 2 ;; *) break ;; esac
   done
   wid="${1:-}"; view="${2:-}"; w=''
   if [ -z "$wid" ] || [ "$wid" = - ]; then
