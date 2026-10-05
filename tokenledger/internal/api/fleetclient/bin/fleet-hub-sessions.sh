@@ -364,7 +364,7 @@ local_fetch() {
   case "$rbin" in /*) ;; *) rbin="$HOME/$rbin" ;; esac
   [ -f "$rbin/fleet-remote-view.sh" ] || {
     printf 'fleet-hub-sessions: no hub, and no fleet installed here (%s) — nothing to list\n' "$rbin" >&2; return 1; }
-  ( unset TMUX TMUX_PANE; cd "$HOME" 2>/dev/null; bash "$rbin/fleet-remote-view.sh" sessions ) </dev/null >"$1" 2>/dev/null
+  ( unset TMUX TMUX_PANE; cd "$HOME" 2>/dev/null || :; bash "$rbin/fleet-remote-view.sh" sessions ) </dev/null >"$1" 2>/dev/null
 }
 
 # hub_ok <epoch> — the ONE word on 「入口通不通」 (issue #1483, EPIC #1479 C4):
