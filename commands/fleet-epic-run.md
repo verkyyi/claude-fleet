@@ -30,10 +30,12 @@ echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master
 ```
 
 - **`pkey=` is the key this loop's children ledger is kept under** (issue #1110)
-  — this pane's own key in a scratch, else the EPIC's (`[<slug>:]issue-<EPIC>`):
-  a hub pane has none, and a loop driven from one (or picked up there after a
-  handoff) used to spawn every member with an empty `@origin`, so no report was
-  ledgered and `fleet-children.sh` answered `no parent key` for the whole batch.
+  — this pane's own key: the scratch (or worker) the loop runs in IS the parent
+  every member reports to. **Empty `pkey=` ⇒ STOP** (issue #1355): a hub pane (or
+  one whose `$TMUX_PANE` was lost) has no key, and the old fallback — the EPIC's
+  own key — named a parent no window answers to, so every report was ledgered and
+  never relayed; every spawn now refuses such a parent with exit 4 anyway. Say in
+  one line that the loop must run from a scratch pane (dash ⌃s) and stop.
   Use the value it printed — literally — as `<PKEY>` below: every spawn passes it
   as `--origin`, every ledger read and backstop names it.
 
@@ -235,6 +237,11 @@ bash ~/.claude/fleet/bin/dash-issue-session.sh <N> --repo "$FLEET_REPO" --origin
 `--repo` is not optional: a fleet hosting 2+ repos refuses a spawn without it
 (exit 1 — `this fleet hosts several repos`, issue #972), and in a one-repo fleet
 it names the only repo, so it is always correct to pass.
+
+**Exit 4 = no live parent** (issue #1355): `<PKEY>` names no live session (this
+pane's window closed or lost its key) or the shell lost `$TMUX_PANE`. Nothing was
+opened. Never retry with a hand-exported `$TMUX` or a blank `--origin` — that is
+exactly the orphan this refuses; re-run step 0 from the loop's own pane.
 
 **Which machine** (issue #1425): with the hub module on (`CCQUOTA_FLEET=1`) the
 spawn is `--node auto` by default — after the issue's lease, the hub picks the

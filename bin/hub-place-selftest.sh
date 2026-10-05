@@ -189,6 +189,7 @@ run_spawn() { # $@ = args to dash-issue-session.sh
   rm -rf "$WORK/dash/.claude-dash"
   # INFLIGHT=1: one fresh spawn-in-flight marker, so FLEET_GLOBAL_MAX_SESSIONS=1 is full.
   if [ "${INFLIGHT:-0}" = 1 ]; then mkdir -p "$WORK/dash/.claude-dash/global/spawn-inflight"; : > "$WORK/dash/.claude-dash/global/spawn-inflight/x.1"; fi
+  FLEET_ORIGIN_GATE=0 \
   PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/dash" FLEET_CONF_DIR="${CONF_DIR:-$WORK/conf}" \
   FLEET_REPO="acme/widgets" FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH="master" \
     "$SPAWN" "$@" >"$WORK/spawn.out" 2>"$WORK/spawn.err"
@@ -572,6 +573,7 @@ run_raw() { # $@ = args to dash-raw-session.sh
   rm -f "$WORK/place.env" "$WORK/tmux.env" "$WORK/ccq.log"
   rm -rf "$WORK/dash/.claude-dash"
   if [ "${INFLIGHT:-0}" = 1 ]; then mkdir -p "$WORK/dash/.claude-dash/global/spawn-inflight"; : > "$WORK/dash/.claude-dash/global/spawn-inflight/x.1"; fi
+  FLEET_ORIGIN_GATE=0 \
   PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/dash" FLEET_CONF_DIR="$WORK/conf" \
   FLEET_REPO="acme/widgets" FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH="master" \
     "$RAW" "$@" >"$WORK/spawn.out" 2>"$WORK/spawn.err"

@@ -38,7 +38,8 @@
 #
 # Prints the created issue URL on stdout (exactly like `gh issue create`) so a
 # caller can parse the trailing #number; all diagnostics + refusals go to stderr.
-# Exit codes: 0 ok · 2 usage · 3 unknown label · 1 no-repo / create failure — so a
+# Exit codes: 0 ok · 2 usage · 3 unknown label · 1 no-repo / create failure ·
+# 4 --spawn with no live parent (issue #1355; filed first when the spawn said it) — so a
 # caller records an honest FAIL rather than a false success.
 #
 # Usage:
@@ -84,6 +85,11 @@ done
 # caller bug with no sane resolution, so refuse before filing anything.
 [ "$spawn" = 1 ] && [ "$bind" = 1 ] \
   && { printf 'fleet-issue-file: --spawn and --bind are mutually exclusive\n' >&2; exit 2; }
+# --spawn from a pane that lost $TMUX_PANE (issue #1355): the spawn cannot tell
+# who its parent is and refuses with exit 4 — say so BEFORE filing, so the caller
+# re-runs from its pane instead of leaving a filed issue with no worker behind.
+[ "$spawn" = 1 ] && fleet_pane_lost \
+  && { printf 'fleet-issue-file: --spawn needs the calling pane ($TMUX is set but $TMUX_PANE is not) — the worker would have no parent to report to; run it from your scratch/worker pane\n' >&2; exit 4; }
 
 # --priority pN is sugar for the priority:pN LABEL (the backlog sorts by it). Only
 # p0/p1/p2 exist; a bad value is a caller bug, so reject before touching the repo.
@@ -211,8 +217,13 @@ fi
 if [ "$spawn" = 1 ] && [ -n "$num" ]; then
   # --repo only where it is needed (issue #789): a one-repo fleet's call is unchanged.
   _sr=''; [ -n "$_fs" ] && _fleet_hosts_many "$_fs" && _sr=$repo
-  bash "$BIN/dash-issue-session.sh" "$num" --title "$title" ${_sr:+--repo "$_sr"} \
-    || printf 'fleet-issue-file: filed #%s but the spawn was refused — it is on the backlog\n' "$num" >&2
+  bash "$BIN/dash-issue-session.sh" "$num" --title "$title" ${_sr:+--repo "$_sr"}; _rc=$?
+  if [ "$_rc" -ne 0 ]; then
+    printf 'fleet-issue-file: filed #%s but the spawn was refused — it is on the backlog\n' "$num" >&2
+    # 4 = no live parent (issue #1355): not a backlog-and-move-on refusal — the
+    # caller must re-spawn from a pane that can be reported to. The URL is out.
+    [ "$_rc" = 4 ] && exit 4
+  fi
 fi
 
 # --- 5b. --bind: promote the CALLING scratch into this issue's worker ----------

@@ -79,12 +79,13 @@ if [ -n "$sess" ]; then
   prmap=$(fleet_cache prmap "$sess"); prdir="$FLEET_C/fleets"
 fi
 
-# Live windows → `wid|state|needs|key|origin|name`, keyed like the dash's okey_v.
+# Live windows → `wid|state|needs|key|origin|fleet_id|name`, keyed like the dash's
+# okey_v; the @fleet_id (issue #1646) lets a ledger row join its window by identity.
 # One list-windows; window_name rides LAST (free text), `|` separators (tmux ≤3.4
 # prints a 0x1f separator as a literal `\037`).
 rows() {
-  local line wid rest ws st needs loop iss wt pth repo norepo name key pre slug
-  fleet_lw '#{window_id}|#{session_name}|#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}|#{@claude_needs}|#{@loop}|#{@issue}|#{@worktree}|#{@repo}|#{@norepo}|#{@origin}|#{pane_current_path}|#{window_name}' TM |
+  local line wid rest ws st needs loop iss wt pth repo norepo name key pre slug fid
+  fleet_lw '#{window_id}|#{session_name}|#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}|#{@claude_needs}|#{@loop}|#{@issue}|#{@worktree}|#{@repo}|#{@norepo}|#{@origin}|#{pane_current_path}|#{@fleet_id}|#{window_name}' TM |
   while IFS= read -r line; do
     wid=${line%%|*};  rest=${line#*|}
     ws=${rest%%|*};   rest=${rest#*|}
@@ -96,7 +97,8 @@ rows() {
     repo=${rest%%|*}; rest=${rest#*|}
     norepo=${rest%%|*}; rest=${rest#*|}
     origin=${rest%%|*}; rest=${rest#*|}
-    pth=${rest%%|*}; name=${rest#*|}
+    pth=${rest%%|*}; rest=${rest#*|}
+    fid=${rest%%|*}; name=${rest#*|}
     [ -n "$sess" ] && [ "$ws" != "$sess" ] && continue
     case "$name" in dash|plan|backlog|home) continue ;; esac
     pre=''
@@ -119,7 +121,7 @@ rows() {
        && python3 "$BIN/fleet_loop_mark.py" status --value "$loop" >/dev/null 2>&1; then
       st=looping
     fi
-    printf '%s|%s|%s|%s|%s|%s\n' "$wid" "$st" "$needs" "$key" "$origin" "$name"
+    printf '%s|%s|%s|%s|%s|%s|%s\n' "$wid" "$st" "$needs" "$key" "$origin" "$fid" "$name"
   done
 }
 
@@ -130,7 +132,7 @@ remote_rows() {
   local k node st
   fleet_remote_children "$sess" "$KEY" 2>/dev/null | while IFS=$'\t' read -r k node _; do
     st=remote; case "$node" in *:lost) st=lost; node=${node%:lost} ;; esac
-    printf '%s|%s||%s|%s|\n' "$node" "$st" "$k" "$KEY"
+    printf '%s|%s||%s|%s||\n' "$node" "$st" "$k" "$KEY"
   done
   return 0  # no hub map is the one-machine case, not a failure (pipefail)
 }

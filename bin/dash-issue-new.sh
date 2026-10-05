@@ -132,10 +132,14 @@ create_issue() {
       # No "filed ✓" line (issue #1618): the new row / window is the answer.
       # --repo only where it is needed (issue #794): a one-repo fleet's call is unchanged.
       _sr=''; [ "$MULTI" = 1 ] && _sr=$REPO
+      # A bg pass (the popup's confirm, fleet_bg) has no $TMUX_PANE: say it is the
+      # operator's, as detection always read it there — the spawn refuses an
+      # unstated origin from a lost pane (issue #1355). From a pane, detect as before.
+      _og=''; fleet_pane_lost && _og=hub
       # The spawn's own refusal toast is muted (FLEET_UI_QUIET) and re-said here as
       # ONE line that also says the issue IS filed — a cap refusal must not read as
       # "nothing happened" (issue #1618: a failure is one line, reason + next step).
-      ( { _e=$(FLEET_UI_QUIET=1 bash "$BIN/dash-issue-session.sh" "$num" --title "$title" ${_sr:+--repo "$_sr"} ${node:+--node "$node"} 2>&1 >/dev/null) \
+      ( { _e=$(FLEET_UI_QUIET=1 bash "$BIN/dash-issue-session.sh" "$num" --title "$title" ${_sr:+--repo "$_sr"} ${node:+--node "$node"} ${_og:+--origin "$_og"} 2>&1 >/dev/null) \
           || { _e=${_e##*$'\n'}; fleet_ui_fail "$(fleet_ui_t ui_filed_no_worker_fmt "$num" "${_e#dash-issue-session: }")" "$(fleet_ui_t ui_filed_no_worker_next)"; }; } & )
     fi
   else
