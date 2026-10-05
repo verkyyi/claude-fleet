@@ -19,7 +19,7 @@
 #      agent took it, so it says `queued →`, exit 3 — never `reported` (#1647).
 #   E  fleet-peer-send.sh to a remote wid drops a message relay from the pane's
 #      worker_id (`queued →`, exit 3, until a receipt says delivered); with no pane
-#      it refuses.
+#      it goes as the operator, `<fleet UUID>/operator@<login>` (issue #1649).
 #   J  a STALE map (issue #1647): report-parent and peer-send still hand a full
 #      worker_id to the hub — queued, exit 3, a QUEUED row in the delivery book.
 #   K  a receipt (kind `receipt`): the sender's delivery book gets DELIVERED /
@@ -176,7 +176,10 @@ ok; [ "$rc" = 3 ] && [ -n "$f" ] && case "$out" in *"queued → issue-7 on m4"*)
   || fail "E: a message relay from the pane's worker_id" "rc=$rc out=$out err=$err $(cat "$f" 2>/dev/null)"
 rm -f "$OUTBOX"/*.json
 run bash "$BIN/fleet-peer-send.sh" -L "$L" "wid:$F/issue-7" hi
-ok; [ "$rc" = 1 ] && [ -z "$(ls "$OUTBOX"/*.json 2>/dev/null)" ] || fail "E: no pane ⇒ refused, nothing queued" "rc=$rc $err"
+f=$(ls "$OUTBOX"/*.json 2>/dev/null | head -1)
+ok; [ "$rc" = 3 ] && [ -n "$f" ] && python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); sys.exit(0 if r["from"]==sys.argv[2] else 1)' "$f" "$U/operator@$(id -un)" \
+  || fail "E: no pane ⇒ sent as the operator (issue #1649), queued" "rc=$rc $err"
+rm -f "$OUTBOX"/*.json
 
 # --- J: a stale map still hands it to the hub (issue #1647) -----------------------------
 BOOK="$FLEET_CONF_DIR/fleets/$L/delivery.ndjson"

@@ -4450,7 +4450,7 @@ _fleet_wid_split() {
 # rc 1 = another machine's fleet (or a fleet no longer configured here), rc 2 =
 # not a worker_id at all. Says nothing about whether the worker is live.
 fleet_wid_home() {
-  local sp u s _c
+  local sp u s
   sp=$(_fleet_wid_split "${1:-}") || return 2
   u=${sp%%$'\t'*}
   if [ -z "$u" ]; then
@@ -4458,13 +4458,65 @@ fleet_wid_home() {
     [ -n "$s" ] || return 1
     printf '%s' "$s"; return 0
   fi
+  fleet_uuid_home "$u"
+}
+
+# fleet_uuid_home <fleet UUID> → the fleet configured HERE under that UUID; rc 1
+# for another machine's (or a fleet no longer configured here).
+fleet_uuid_home() {
+  local s _c
+  [ -n "${1:-}" ] || return 1
   while IFS=$'\t' read -r s _c; do
     [ -n "$s" ] || continue
-    [ "$(fleet_uuid "$s")" = "$u" ] && { printf '%s' "$s"; return 0; }
+    [ "$(fleet_uuid "$s")" = "$1" ] && { printf '%s' "$s"; return 0; }
   done <<EOF
 $(fleet_each_conf)
 EOF
   return 1
+}
+
+# A message no worker sent (issue #1649, EPIC #1645 C10): a shell, a daemon or the
+# hub pane — no pane bound to a session key — sends as the PERSON at this login,
+# `<fleet UUID>/operator@<login>`. The hub takes it only from the node reporting
+# that fleet and only when <login> is the login the fleet runs under, so it labels
+# the message truthfully and cannot be picked. A `from`, never an address.
+#
+# fleet_sender_session [<socket>] → the fleet a pane-less sender speaks from: the
+# caller's session, else the one on <socket>, else this login's first fleet (one
+# fleet per login, issue #980). Empty (rc 1) when the login has none.
+fleet_sender_session() {
+  local s='' _c first=''
+  # Outside tmux a bare `tmux display-message` asks the DEFAULT server — not a fleet.
+  [ -n "${TMUX:-}" ] && s=$(fleet_current_session 2>/dev/null)
+  [ -n "$s" ] && { printf '%s' "$s"; return 0; }
+  while IFS=$'\t' read -r s _c; do
+    [ -n "$s" ] || continue
+    [ -n "$first" ] || first=$s
+    [ -n "${1:-}" ] && [ "$(fleet_socket "$s")" = "$1" ] && { printf '%s' "$s"; return 0; }
+  done <<EOF
+$(fleet_each_conf)
+EOF
+  [ -n "$first" ] && [ -z "${1:-}" ] || return 1
+  printf '%s' "$first"
+}
+
+# fleet_operator_sender <sess> → `<fleet UUID>/operator@<login>`; rc 1 without a
+# fleet UUID or with a login the hub's pattern would refuse.
+fleet_operator_sender() {
+  local u l
+  u=$(fleet_uuid "${1:-}") && [ -n "$u" ] || return 1
+  l=$(id -un 2>/dev/null)
+  case "$l" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
+  [ "${#l}" -le 64 ] || return 1
+  printf '%s/operator@%s' "$u" "$l"
+}
+
+# fleet_is_operator_sender <from> — 0 for `<fleet UUID>/operator@<login>`.
+fleet_is_operator_sender() {
+  case "${1:-}" in */operator@*) ;; *) return 1 ;; esac
+  fleet_is_fid "${1%%/*}" || return 1
+  case "${1#*/operator@}" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
+  return 0
 }
 
 # ---- the hub switch, per fleet (issue #1539) ---------------------------------

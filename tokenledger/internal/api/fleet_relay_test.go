@@ -557,3 +557,54 @@ func TestRelayQueuedForRecipientAndReceipts(t *testing.T) {
 		t.Fatalf("receipt %+v; want expired for %s", body, id2)
 	}
 }
+
+// A message from the person at a login (claude-fleet#1649): a shell or daemon
+// with no pane sends as `<fleet UUID>/operator@<login>`. The hub takes it from
+// the node that reports that fleet, under the login that fleet runs under —
+// and refuses another login's name, a fleet the node does not report, and an
+// operator "child report".
+func TestRelayOperatorSender(t *testing.T) {
+	h := newFleetHarness(t)
+	fa := fakeFleet(t, machineA, "fleet-a", "verkyyi/claude-fleet", "/a", 1)
+	fb := fakeFleet(t, machineB, "fleet-b", "verkyyi/claude-fleet", "/b", 2)
+	connectFakeNode(t, h, "a", false).beat("m5", "op", machineA, fa)
+	connectFakeNode(t, h, "b", false).beat("m4", "op", machineB, fb)
+	var afid, bfid string
+	waitFor(t, 5*time.Second, "fleets registered", func() bool {
+		rows, _ := h.srv.Store.Fleets()
+		for _, r := range rows {
+			if r.EndpointID == "ep_a" {
+				afid = r.FleetID
+			}
+			if r.EndpointID == "ep_b" {
+				bfid = r.FleetID
+			}
+		}
+		return afid != "" && bfid != ""
+	})
+	rel := func(kind, from string) control.Message {
+		m, _ := control.New(control.TypeRelay, control.Relay{ID: from + "#1", Kind: kind, From: from,
+			To: bfid + "/issue-2", Payload: json.RawMessage(`{"text":"hi"}`)})
+		return m
+	}
+	ep := store.Endpoint{ID: "ep_a"}
+	r, err := h.srv.checkRelay(ep, rel(control.RelayMessage, afid+"/operator@op"))
+	if err != nil || r.FromWID != afid+"/operator@op" || r.TargetEndpoint != "ep_b" {
+		t.Fatalf("operator message refused: %+v %v", r, err)
+	}
+	if fleetOf(r.FromWID) != afid {
+		t.Fatalf("fleetOf(operator) = %q", fleetOf(r.FromWID))
+	}
+	bad := [][3]string{
+		{"another login's name", control.RelayMessage, afid + "/operator@zhang"},
+		{"an operator child report", control.RelayChildReport, afid + "/operator@op"},
+	}
+	for _, c := range bad {
+		if _, err := h.srv.checkRelay(ep, rel(c[1], c[2])); err == nil {
+			t.Errorf("%s: accepted", c[0])
+		}
+	}
+	if _, err := h.srv.checkRelay(store.Endpoint{ID: "ep_b"}, rel(control.RelayMessage, afid+"/operator@op")); err == nil {
+		t.Error("a node spoke for another node's fleet's operator")
+	}
+}

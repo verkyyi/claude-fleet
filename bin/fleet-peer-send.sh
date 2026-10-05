@@ -54,6 +54,15 @@
 #                                      this fleet's delivery book.
 #   one line on stderr                 exit 1 — refused: not found / ambiguous / not a
 #                                      live session; nothing waits. 2 = usage.
+#   <target> 已于 <时间> 结束：<结果>    exit 2 — the target ENDED (issue #1649): this
+#                                      fleet's history, or the hub's copy of another
+#                                      machine's, says when and how; nothing sent.
+#
+# WHO SENDS (issue #1649). A pane bound to a session key sends as its worker; a
+# shell, a daemon or the hub pane sends as the person at this login,
+# `<fleet UUID>/operator@<login>` — the hub checks the login — so a message from
+# anywhere on this login reaches a worker on another machine. An `issue:<N>` /
+# `scratch-<N>` that is not live here but is in the hub map goes there too.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
@@ -73,7 +82,7 @@ while [ $# -gt 0 ]; do
     --expect-issue=*) EXPECT="${1#*=}"; shift ;;
     --repo) REPO="${2:-}"; shift 2 ;;
     --repo=*) REPO="${1#*=}"; shift ;;
-    -h|--help) sed -n '2,56p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,/^set -uo/p' "$0" | sed '$d'; exit 0 ;;
     *) break ;;
   esac
 done
@@ -83,6 +92,85 @@ tgt="${1:-}"; [ -n "$tgt" ] || usage
 shift
 if [ $# -eq 0 ] || [ "$1" = "-" ]; then text=$(cat); else text="$*"; fi
 [ -n "$text" ] || die 2 "empty message"
+
+# --- across machines: through the hub (issues #1421, #1647, #1649) ---------------
+# hub_send <full worker_id> <node[:lost] or ''> → hands the message to the hub and
+# exits with its outcome. The sender is THIS pane's worker — or, from a shell, a
+# daemon or the hub pane (no session key), the person at this login,
+# `<fleet UUID>/operator@<login>` (issue #1649, fleet_operator_sender), which the
+# hub checks against the login the fleet runs under. Either rides as `from`: it
+# labels the message and keys its idempotency; it is never an address. HUB_REPO,
+# when set, rides in the payload and the recipient's machine refuses the message
+# unless the target window works that repo (a bare `issue:<N>` matched by number).
+HUB_REPO=''
+hub_send() {
+  local full="$1" node="$2" where me='' mysess='' payload suf f how
+  where=${node%:lost}; where=${where:-another machine}
+  [ -n "${TMUX:-}" ] && mysess=$(fleet_current_session 2>/dev/null)
+  [ -n "${TMUX_PANE:-}" ] && [ -n "$mysess" ] && me=$(fleet_worker_id_key "$mysess" "$TMUX_PANE" 2>/dev/null)
+  if [ -z "$me" ]; then
+    [ -n "$mysess" ] || mysess=$(fleet_sender_session "$SOCK" 2>/dev/null)
+    me=$(fleet_operator_sender "$mysess" 2>/dev/null)
+  fi
+  [ -n "$me" ] || die 1 "'$tgt' lives on $where — no fleet on this login to send it from (its fleet UUID names the sender); nothing sent"
+  payload=$(python3 -c 'import json,sys; d={"text": sys.argv[1]}; d.update({"repo": sys.argv[2]} if sys.argv[2] else {}); print(json.dumps(d, ensure_ascii=False))' "$text" "$HUB_REPO") \
+    || die 1 "could not encode the message"
+  suf="$(date +%s).$$"
+  f=$(fleet_hub_put message "$me" "$full" "$suf" "$payload") \
+    || die 1 "'$tgt' lives on $where — the hub outbox is not available (CCQUOTA_FLEET=1 and a running ccquota agent carry it); nothing sent"
+  # Sent only on the hub's receipt that the recipient's machine delivered it.
+  if fleet_hub_wait_sent "$f" 3; then
+    case "$node" in
+      '') how='its machine is not in a fresh hub map' ;;
+      *:lost) how='its machine is offline' ;;
+      *) if bash "$BIN/fleet-peer-queue.sh" wait -L "$mysess" --rid "$me#$suf" \
+              --secs "${FLEET_HUB_RECEIPT_WAIT:-4}" >/dev/null 2>&1; then
+           printf 'sent → %s on %s (delivered)\n' "${full#*/}" "$node"
+           exit 0
+         fi
+         how='not delivered yet' ;;
+    esac
+  else
+    how='the hub is not reachable from here; this machine sends it when it is'
+  fi
+  bash "$BIN/fleet-peer-queue.sh" note -L "$mysess" --rid "$me#$suf" --state QUEUED --to "$full" \
+    --kind message --via hub --detail "$how" 2>/dev/null || :
+  printf 'queued → %s%s（对方不在线，上线后补送 · %s）\n' "${full#*/}" "${node:+ on ${node%:lost}}" "$how"
+  exit 3
+}
+
+# sender_repo [<key>] → the repo a key's issue number belongs to: --repo, else the
+# repo a `<slug>:` prefix names among the sender fleet's, else that fleet's first.
+sender_repo() {
+  local k="${1:-}" s r
+  [ -n "$REPO" ] && { fleet_norm_repo "$REPO"; return 0; }
+  s=$(fleet_sender_session "$SOCK" 2>/dev/null) || s=''
+  [ -n "$s" ] || return 0
+  case "$k" in
+    *:*) while IFS= read -r r; do
+           [ "$(fleet_slug "$r")" = "${k%%:*}" ] && { printf '%s' "$r"; return 0; }
+         done <<EOF
+$(fleet_repos "$s")
+EOF
+         return 0 ;;
+  esac
+  fleet_repos "$s" | head -n1
+}
+
+# ended_or_die <key> <refusal> — a session that is no longer live (issue #1649):
+# when this fleet's history — or the hub's copy of another machine's — says it
+# ENDED, say when and how, exit 2; otherwise the refusal, exit 1. Never sent,
+# never queued: a worker that has ended will not read it.
+ended_or_die() {
+  local k="${1:-}" repo e
+  [ -n "$k" ] && ! fleet_is_fid "$k" || die 1 "$2"   # an identity has no history key
+  repo=$(sender_repo "$k")
+  if e=$(bash "$BIN/fleet-history.sh" ended ${repo:+--repo "$repo"} "${k#*:}" 2>/dev/null) && [ -n "$e" ]; then
+    printf '%s 已于 %s 结束：%s\n' "$tgt" "${e%%$'\t'*}" "${e#*$'\t'}"
+    exit 2
+  fi
+  die 1 "$2"
+}
 
 # --- worker_id → where it lives (issue #1420) -------------------------------------
 case "$tgt" in
@@ -105,40 +193,14 @@ case "$tgt" in
         fi
         if [ -z "$full" ]; then
           [ "$rc" -eq 2 ] && die 2 "bad worker id '$tgt' (want wid:<fleet UUID>/<fleet_id>, wid:<fleet UUID>/issue-<N>, wid:issue-<N> or wid:scratch-<N>)"
-          die 1 "no live worker for '$tgt' on this machine; nothing sent"
+          # Ended? Only this machine's history can say, and only for its own fleet's
+          # key: another fleet's `#7` is not ours.
+          sp=$(_fleet_wid_split "$tgt"); u=${sp%%$'\t'*}
+          [ -z "$u" ] || fleet_uuid_home "$u" >/dev/null 2>&1 \
+            || die 1 "no live worker for '$tgt' on this machine; nothing sent"
+          ended_or_die "${sp#*$'\t'}" "no live worker for '$tgt' on this machine; nothing sent"
         fi
-        where=${node%:lost}; where=${where:-another machine}
-        # The sender is THIS pane's worker, or nobody — a message needs a from the
-        # hub can check belongs to this machine. It rides as its readable
-        # `<fleet UUID>/<key>` (issue #1646): `from` labels the message and keys its
-        # idempotency; it is never an address.
-        me=''; mysess=$(fleet_current_session 2>/dev/null)
-        [ -n "${TMUX_PANE:-}" ] && me=$(fleet_worker_id_key "$mysess" "$TMUX_PANE" 2>/dev/null)
-        [ -n "$me" ] || die 1 "'$tgt' lives on $where — a cross-machine message must come from a worker or scratch pane (its worker_id is the sender); nothing sent"
-        payload=$(python3 -c 'import json,sys; print(json.dumps({"text": sys.argv[1]}, ensure_ascii=False))' "$text") \
-          || die 1 "could not encode the message"
-        suf="$(date +%s).$$"
-        f=$(fleet_hub_put message "$me" "$full" "$suf" "$payload") \
-          || die 1 "'$tgt' lives on $where — the hub outbox is not available (CCQUOTA_FLEET=1 and a running ccquota agent carry it); nothing sent"
-        # Sent only on the hub's receipt that the recipient's machine delivered it.
-        if fleet_hub_wait_sent "$f" 3; then
-          case "$node" in
-            '') how='its machine is not in a fresh hub map' ;;
-            *:lost) how='its machine is offline' ;;
-            *) if bash "$BIN/fleet-peer-queue.sh" wait -L "$mysess" --rid "$me#$suf" \
-                    --secs "${FLEET_HUB_RECEIPT_WAIT:-4}" >/dev/null 2>&1; then
-                 printf 'sent → %s on %s (delivered)\n' "${full#*/}" "$node"
-                 exit 0
-               fi
-               how='not delivered yet' ;;
-          esac
-        else
-          how='the hub is not reachable from here; this machine sends it when it is'
-        fi
-        bash "$BIN/fleet-peer-queue.sh" note -L "$mysess" --rid "$me#$suf" --state QUEUED --to "$full" \
-          --kind message --via hub --detail "$how" 2>/dev/null || :
-        printf 'queued → %s%s（对方不在线，上线后补送 · %s）\n' "${full#*/}" "${node:+ on ${node%:lost}}" "$how"
-        exit 3 ;;
+        hub_send "$full" "$node" ;;
     esac ;;
 esac
 
@@ -186,7 +248,21 @@ EOF
     die 1 "$why"
   fi
   n=$(printf '%s' "$hits" | grep -c .)
-  [ "$n" -gt 0 ] || die 1 "no live window for '$tgt'${REPO:+ in $REPO}"
+  if [ "$n" -eq 0 ]; then
+    # Not live HERE (issue #1649). Live on another machine — the hub map holds it,
+    # by this key or the bare one a one-repo fleet there answers to — it goes
+    # through the hub, its repo checked on arrival; ENDED, it says when and how.
+    # `-L` pins one fleet of THIS machine (the hub's own inject, a node's deliver,
+    # a script that named its socket): no detour for it.
+    if [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ -z "$SOCK" ]; then
+      full=$(fleet_hub_wid "" "$key" 2>/dev/null)         || { [ "${key#*:}" != "$key" ] && full=$(fleet_hub_wid "" "${key#*:}" 2>/dev/null); } || full=''
+      if [ -n "$full" ] && ! fleet_wid_home "wid:$full" >/dev/null 2>&1; then
+        HUB_REPO=$(sender_repo "$key")
+        hub_send "$full" "$(_fleet_hub_node "${full%%/*}" "${full#*/}" 2>/dev/null)"
+      fi
+    fi
+    ended_or_die "$key" "no live window for '$tgt'${REPO:+ in $REPO}"
+  fi
   [ "$n" -eq 1 ] || die 1 "'$tgt' is ambiguous — found in $n fleets: $(printf '%s' "$hits" | cut -d'|' -f1 | paste -sd',' - | sed 's/,/, /g') (run it inside that fleet, or pass -L)"
   s=${hits%%|*}; rest=${hits#*|}; tgt=${rest%%$'\n'*}
   [ "$s" = "-" ] || SOCK="$s"

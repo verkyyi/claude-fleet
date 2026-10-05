@@ -18,6 +18,11 @@
 #     Wire it behind `gh webhook forward` / a cloudflared tunnel for sub-second
 #     latency. See docs/ISSUE-BRIDGE.md.
 #
+# One write door for another machine's bridge (issue #1649):
+#   • --apply-forward <repo> <issue> <cid> — a comment whose worker lives HERE,
+#     forwarded through the hub by the bridge that saw it on another machine
+#     (bridge_forward_remote): delivered once, deduped against this seen-set.
+#
 # One read-only side door, no ingress of its own:
 #   • --find-window <issue> <repo> — print the live bound worker window for that
 #     issue (empty if none). hooks/bash-guard.py asks this before rewriting a raw
@@ -420,6 +425,60 @@ bridge_fleet_for_repo() {
   return 0
 }
 
+# --- a worker on ANOTHER machine (issue #1649, EPIC #1645 C10) -----------------
+# The comment's worker is not live here but the hub map has it elsewhere: the
+# comment goes to it through the hub, as a message from the person at this login
+# (`<fleet UUID>/operator@<login>`), the same road a peer message takes. Its relay
+# id is `bridge-<cid>`, the hub's idempotency key — forwarded twice, delivered
+# once — and its payload names the repo + comment, so the recipient's machine
+# applies it through ITS bridge (--apply-forward): its seen-set is the one that
+# also records its own relays, and a comment both machines see lands once.
+# Prints `forwarded(#N->node)`; rc 1 when there is nothing to forward to (hub off,
+# no fresh map, no single remote row for this issue) — the caller goes on to
+# revive/gone as before.
+bridge_forward_remote() {
+  local repo="$1" slug="$2" issue="$3" cid="$4" msg="$5" full s from payload node
+  [ "${CCQUOTA_FLEET:-0}" = 1 ] || return 1
+  full=$(fleet_hub_wid "" "$slug:issue-$issue" 2>/dev/null) || full=$(fleet_hub_wid "" "issue-$issue" 2>/dev/null) || return 1
+  fleet_wid_home "wid:$full" >/dev/null 2>&1 && return 1     # this machine's own fleet: not remote
+  s=$(bridge_fleet_for_repo "$repo"); [ -n "$s" ] || s=$(fleet_sender_session 2>/dev/null) || return 1
+  from=$(fleet_operator_sender "$s") || return 1
+  payload=$(python3 -c 'import json,sys; print(json.dumps({"text": sys.argv[1], "repo": sys.argv[2],
+    "bridge": {"issue": int(sys.argv[3]), "cid": int(sys.argv[4])}}, ensure_ascii=False))' \
+    "$msg" "$(fleet_norm_repo "$repo")" "$issue" "$cid" 2>/dev/null) || return 1
+  fleet_hub_put message "$from" "$full" "bridge-$cid" "$payload" >/dev/null || return 1
+  node=$(_fleet_hub_node "${full%%/*}" "${full#*/}" 2>/dev/null)
+  printf 'forwarded(#%s->%s)' "$issue" "${node:-hub}"
+}
+
+# --apply-forward <repo> <issue> <cid> (the message on stdin) — the receiving end
+# of bridge_forward_remote, run by fleet-hub-node.sh on the WORKER's machine. Under
+# this repo's lease: a comment already in the seen-set is a dup (exit 0); else it
+# goes to the bound window through fleet-peer-send.sh and is marked seen (sent or
+# queued, exit 0). No window here for that repo's #N → 75 (the hub pushes it again
+# when the worker is listed live); the lease held → 75. Refused → 1.
+apply_forward() {
+  local repo="$1" issue="$2" cid="$3" slug lease hit win sess text out rc
+  case "$issue" in ''|*[!0-9]*) printf 'apply-forward: bad issue %s\n' "$issue" >&2; exit 1 ;; esac
+  case "$cid" in ''|*[!0-9]*) printf 'apply-forward: bad comment id %s\n' "$cid" >&2; exit 1 ;; esac
+  text=$(cat); [ -n "$text" ] || { printf 'apply-forward: empty message\n' >&2; exit 1; }
+  slug=$(fleet_slug "$(fleet_norm_repo "$repo")")
+  lease=$(bridge_lease_path "$slug")
+  bridge_lease_acquire "$lease" || { printf 'not now: bridge busy (lease held)\n' >&2; exit 75; }
+  trap 'rm -rf "$lease" 2>/dev/null' EXIT
+  if bridge_seen_has "$slug" "$cid"; then printf 'dup(#%s c%s): already relayed here\n' "$issue" "$cid" >&2; exit 0; fi
+  hit=$(bridge_find_window "$issue" "$repo")
+  [ -n "$hit" ] || { printf 'not now: no live worker for %s#%s here\n' "$repo" "$issue" >&2; exit 75; }
+  sess=$(printf '%s' "$hit" | cut -f1); win=$(printf '%s' "$hit" | cut -f2)
+  out=$(printf '%s' "$text" | bash "$BIN/fleet-peer-send.sh" -L "$(fleet_socket "$sess")" --expect-issue "$issue" "$win" - 2>&1); rc=$?
+  case "$rc" in
+    0|3) bridge_seen_add "$slug" "$cid"; bridge_typing_reset "$slug" "$cid"
+         printf 'relayed(#%s c%s->%s:%s) %s\n' "$issue" "$cid" "$sess" "$win" "${out##*$'\n'}" >&2; exit 0 ;;
+    1|2) printf '%s\n' "${out##*$'\n'}" >&2; exit 1 ;;
+    *)   printf 'not now: %s\n' "${out##*$'\n'}" >&2; exit 75 ;;
+  esac
+}
+
 # THE RELAY CORE. Args: repo slug issue comment_id assoc author body.
 # Prints one status token (for the log + the selftest) and returns:
 #   0  handled terminally (relayed|revived|suppress:*|gone|dup) → caller marks seen
@@ -457,6 +516,14 @@ bridge_relay() {
     # is re-attempted next tick, rather than silently dropped. (If the window is
     # truly gone, the next tick takes the revive/gone path instead.)
     echo "inject-failed(#$issue) — will retry"; return 3
+  fi
+
+  # No live window HERE — but the worker may be live on another machine (issue
+  # #1649): forward it there through the hub, once, rather than drop or revive it.
+  local fwd
+  if fwd=$(bridge_forward_remote "$repo" "$slug" "$issue" "$cid" \
+             "[issue #$issue — comment from @${author:-someone}]"$'\n\n'"$body"); then
+    echo "$fwd"; return 0
   fi
 
   # No live window. Revive (opt-in) if the issue is OPEN and a fleet serves it.
@@ -755,6 +822,10 @@ case "${1:-}" in
   # relayed INTO? Exposed as a subcommand rather than letting the guard source
   # this file, because sourcing runs the dispatch below and a bare source would
   # fire a full poll tick. Prints the bridge's own window line (or nothing).
+  # The receiving end of a comment another machine's bridge forwarded through the
+  # hub (issue #1649) — run by fleet-hub-node.sh deliver, the message on stdin.
+  --apply-forward)    shift; [ "$#" -ge 3 ] || { printf 'fleet-issue-bridge: --apply-forward needs <repo> <issue> <cid>\n' >&2; exit 2; }
+                      apply_forward "$1" "$2" "$3" ;;
   --find-window)      shift; [ "$#" -ge 2 ] || { printf 'fleet-issue-bridge: --find-window needs <issue> <repo>\n' >&2; exit 2; }
                       bridge_find_window "$1" "$2"; exit 0 ;;
   --poll|'')          poll ;;
