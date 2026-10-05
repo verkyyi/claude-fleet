@@ -157,6 +157,41 @@ def worker_identity(fleet_id, key):
     return fleet_id + "/" + key if key else None
 
 
+def inventory_row(parts):
+    """One row of `fleet-control-read.sh workers`, split on tabs → (the first 9
+    columns, the optional extras), or None when it is not a row. The ONE reader of
+    that shape (issue #1698): fleet_control.py's inventory and `fleet-remote-view.sh
+    sessions` (the shell's road while the hub is silent) both parse through it, so
+    a column added to the adapter cannot leave one of them a field behind — a
+    second copy missed #1607's `busy=` and glued @origin_wid onto the name.
+    Columns 10-12 (issues #1423, #1475): the window name, its @origin_wid and what
+    it needs of its person (@claude_needs). Optional — a 9-column adapter is still
+    whole — and the name takes every column between, joined back with the tabs it
+    held, so an odd window name can never make the inventory unreadable (the
+    adapter ships beside this file, so the trailing columns are always known).
+    Column 13 (issue #1646): the session's lifelong identity (@fleet_id); the last
+    three are then origin_wid, needs and identity. Column 14 (issue #1607):
+    `busy=<looping|bg|>` — prefixed, so it is never a stray piece of a name."""
+    parts = list(parts)
+    extra = {}
+    if len(parts) >= 14 and parts[-1].startswith("busy="):
+        extra["busy"] = parts.pop()[5:] or None
+    if len(parts) >= 13:
+        ident = parts[-1] if re.fullmatch(IDENTITY_RE, parts[-1]) else None
+        extra.update(name="\t".join(parts[9:-3]), origin_wid=parts[-3] or None, needs=parts[-2] or None,
+                     identity=ident)
+    elif len(parts) >= 12:
+        extra.update(name="\t".join(parts[9:-2]), origin_wid=parts[-2] or None, needs=parts[-1] or None)
+    elif len(parts) >= 10:
+        # the #1423 shape (name, origin_wid), from an adapter older than #1475
+        extra.update(name="\t".join(parts[9:-1]) if len(parts) > 10 else parts[9],
+                     origin_wid=(parts[-1] or None) if len(parts) > 10 else None)
+    parts = parts[:9]
+    if len(parts) != 9 or not re.fullmatch(r"@[0-9]+", parts[0]):
+        return None
+    return parts, extra
+
+
 def fields(value, required, optional=()):
     if not isinstance(value, dict) or not set(required) <= value.keys() or value.keys() - set(required) - set(optional):
         raise Fault("INVALID_ARGUMENT", "Missing or unsupported request fields")

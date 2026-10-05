@@ -881,29 +881,28 @@ sessions)
 $(fleet_sockets)
 EOF
   python3 - "$inv" "$(hostname -s 2>/dev/null)" "$(id -un 2>/dev/null)" "$BIN" <<'PY'
-import json, re, sys
+import json, sys
 from datetime import datetime, timezone
 ipath, host, user, bindir = sys.argv[1:5]
 sys.path.insert(0, bindir)
-from fleet_hub_common import worker_key, worker_identity
+from fleet_hub_common import inventory_row, worker_key, worker_identity
 now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 host = (host or "").split(".", 1)[0]
 sessions = []
 for line in open(ipath, encoding="utf-8"):
     p = line.rstrip("\n").split("\t")
-    # sess, uuid, the fleet's repo, then the adapter's 13 columns — the window
-    # name may hold tabs of its own, so (fleet_control.py's rule) the last three
-    # are always origin_wid, needs and the identity (issue #1646), the name
-    # everything between; a 12-column adapter (no identity) still reads
-    if len(p) < 15 or not re.fullmatch(r"@[0-9]+", p[3]):
+    # sess, uuid, the fleet's repo, then the adapter's columns, read by the SAME
+    # reader fleet_control.py's inventory uses (issue #1698): a hand copy of it
+    # here missed #1607's trailing `busy=` column and so glued @origin_wid onto
+    # the name and lost the parent chain — every row of a silent hub flat
+    if len(p) < 4:
         continue
     sess, uuid, frepo = p[0], p[1], p[2]
-    window, issue, scratch, worktree, state, agent, handle, lifecycle, repo = p[3:12]
-    ident = None
-    if len(p) >= 16:
-        ident = p[-1] if re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", p[-1]) else None
-        p = p[:-1]
-    name, owid, needs = " ".join(p[12:-2]), p[-2], p[-1]
+    row = inventory_row(p[3:])
+    if row is None:
+        continue
+    (window, issue, scratch, worktree, state, agent, handle, lifecycle, repo), extra = row
+    name, owid, needs, ident = extra.get("name") or "", extra.get("origin_wid"), extra.get("needs"), extra.get("identity")
     if not issue and scratch != "1":
         continue
     number = int(issue) if issue.isdigit() and int(issue) > 0 else None
@@ -917,7 +916,8 @@ for line in open(ipath, encoding="utf-8"):
                                 "repo": repo if repo and repo != "?" else (None if repo else frepo or None),
                                 "state": state or "unknown", "lifecycle": lifecycle or "awake",
                                 "agent": agent or None, "name": name, "origin_wid": owid or None,
-                                "needs": needs or None, "identity": ident}})
+                                "needs": needs or None, "identity": ident,
+                                "busy": extra.get("busy")}})
 print(json.dumps({"sessions": sessions,
                   "nodes": [{"machine_name": host, "availability": "online",
                              "sessions": len(sessions), "observed_at": now}]}, ensure_ascii=False))
