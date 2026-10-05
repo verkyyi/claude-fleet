@@ -184,6 +184,22 @@ case "$mode" in
     case "${3:-}" in ''|*[!0-9]*) exit 2 ;; esac
     exec bash "$BIN/fleet-comment.sh" "$3" --repo "$repo" --to-worker --from hub --body-file -
     ;;
+  # --- inject <sess> <key> (issue #1554) ---------------------------------------
+  # The hub's worker_message where `message` exited 5 (no issue bridge): hand the
+  # text, on stdin, to the live session directly through fleet-peer-send.sh — the
+  # same local inbox channel SendMessage uses (queued if the worker is mid-turn,
+  # wake-delivered to a sleeper, a Codex queue for Codex), never raw send-keys
+  # (#437). <key> is the inventory's one live key: `issue-<N>`, or
+  # `<slug>:issue-<N>` in a 2+ repo fleet, resolved by the peer-send resolver
+  # (fleet_win_for_key) on THIS fleet's socket only. stdout is peer-send's `sent →`
+  # line; its non-zero exit means nothing was sent, its stderr line says why.
+  inject)
+    fleet_load_conf "$sess"
+    case "${3:-}" in issue-*|*:issue-*) ;; *) exit 2 ;; esac
+    key_repo_split "$3"; n=${kbare#issue-}
+    case "$n" in ''|*[!0-9]*) exit 2 ;; esac
+    exec bash "$BIN/fleet-peer-send.sh" -L "$(fleet_socket "$sess")" ${krepo:+--repo "$krepo"} "issue:$n" -
+    ;;
   # --- GitHub through the fleet's own rails (issue #1274) ----------------------
   # gh <sess> issue|pr|checks <N> [<repo>] [<fields>] — fleet-gh.sh: the daemons'
   # local copy first, gh/REST only when it is too old. comment <sess> <N> [<repo>]

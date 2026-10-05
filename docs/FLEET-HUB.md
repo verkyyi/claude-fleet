@@ -532,7 +532,7 @@ and is treated as ready.
 | `fleet_status(fleet_id)` | Read current workers on the named socket, each with its durable `worker_id` | `fleet:read` on that Fleet |
 | `config_get(fleet_id)` | Read managed values and the Fleet-overlay revision | `fleet:read` on that Fleet |
 | `worker_start(fleet_id, issue, idempotency_key, agent?, repo?)` | Start an existing Issue through the headless Fleet launcher; `repo` (owner/name or a hosted repo's name) is REQUIRED when the Fleet hosts several repos, and an unhosted one fails `INVALID_ARGUMENT` before any gate runs (#984) | `worker:start` on that Fleet |
-| `worker_message(worker_id, text, idempotency_key)` | Post `text` as the worker's next turn through the fleet's issue bridge (a `--to-worker` comment on its Issue; never keystrokes) | `worker:message` on the worker's Fleet |
+| `worker_message(worker_id, text, idempotency_key)` | Post `text` as the worker's next turn through the fleet's issue bridge (a `--to-worker` comment on its Issue; never keystrokes) — or, on a fleet without the bridge, straight to the live session through the node's peer channel (`fleet-peer-send.sh`, #1554) | `worker:message` on the worker's Fleet |
 | `worker_stop(worker_id, idempotency_key)` | Graceful `/exit` of the live session; the fleet's own exit policy closes the window and records the `/fleet-history` row | `worker:stop` on the worker's Fleet |
 | `worker_resume(worker_id, idempotency_key)` | Reopen a stopped worker from its `/fleet-history` row in a new window (`dash-restore-session.sh`) | `worker:resume` on the worker's Fleet |
 | `worker_answer(worker_id, answer, idempotency_key)` | Answer what the worker's pane is asking (#1487): `answer` = `yes` / `no` presses the plain Yes / the No of an open **permission prompt** in the caller's name (`fleet-permission.sh --allow` / `--deny --by <actor>`; never a "don't ask again" row); option numbers (`2`, `1,3`; one per question, space-separated) answer an `AskUserQuestion` (`fleet-answer.sh --answer`). Refused — the script's own reason verbatim — when nothing is pending or the screen does not show the row | `worker:answer` on the worker's Fleet |
@@ -856,9 +856,16 @@ key, `unknown` when the outcome could not be confirmed — and each refuses
 before acting when its precondition does not hold, which is a plain `failed`
 with a code, never `unknown`:
 
-- `worker_message` requires a live worker and a fleet that has opted into the
-  issue bridge (`FLEET_ISSUE_BRIDGE=1`); otherwise `NOT_FOUND` / `UNAVAILABLE`,
-  and nothing is posted. It posts through `fleet-comment.sh --to-worker --from
+- `worker_message` requires a live worker; otherwise `NOT_FOUND`, and nothing
+  is posted. On a fleet WITHOUT the issue bridge (`FLEET_ISSUE_BRIDGE` off for
+  the worker's repo, issue #1554) the node delivers it itself: the node is the
+  worker's machine, so the text goes to the live session through
+  `fleet-peer-send.sh` — the local inbox channel SendMessage uses (queued while
+  the worker is mid-turn, wake-delivered to a sleeper, a Codex queue for Codex),
+  never keystrokes. That send leaves no GitHub record, so it needs exactly one
+  live window (`AMBIGUOUS` otherwise) and a refused send is `EXECUTION_FAILED`
+  with peer-send's reason; a confirmed one is `succeeded` with `channel:
+  "direct"` and peer-send's `sent →` line as `how`. With the bridge on, it posts through `fleet-comment.sh --to-worker --from
   hub`, so the comment is both the audit record and the delivery: the bridge
   relays it as the worker's next idle turn (subject to the bridge's association
   gate), typically within its ~15 s tick. A scratch session has no Issue and
