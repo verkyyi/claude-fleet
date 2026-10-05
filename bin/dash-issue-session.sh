@@ -396,6 +396,12 @@ if [ "$PLACING" = 1 ]; then
           refuse "#$num 不能开在 $NODE: ${_why:-${_pv:-hub unreachable}}"
           [ "$place_rc" = 4 ] && exit "$RC_CAP"; exit "$RC_INFRA"
         fi
+        # Every machine at its session cap (issue #1587): the hub says all-full.
+        # This one is full too, per its own gate ⇒ say 都满了, naming each machine;
+        # it freed a slot since its last beat ⇒ open here after all.
+        if [ "$_pv" = 'REFUSED AT_CAPACITY' ] && [ -n "$CAP_HELD" ]; then
+          refuse "#$num 都满了 — 没有机器有空位: ${_why#all-full: }"; exit "$RC_CAP"
+        fi
         [ "$place_rc" = 4 ] && printf 'dash-issue-session: 没有机器能接 #%s (%s) — 开在本机\n' "$num" "$_why" >&2 ;;
     esac
     unset _pw _u _pv _why _wait

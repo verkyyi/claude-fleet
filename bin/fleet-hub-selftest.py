@@ -642,6 +642,19 @@ class HubTests(HubFixture):
         with self.assertRaises(Fault):
             self.node.rpc("ready", {"fleet_id": self.fleet})
 
+    def test_discover_carries_the_logins_own_session_cap(self):
+        # Issue #1587: the heartbeat carries the cap the spawn gate refuses at
+        # (FLEET_GLOBAL_MAX_SESSIONS, default 8, read from the install's global
+        # fleet.conf) and the count it reads, so the hub never places a start on
+        # a full login. The per-fleet FLEET_MAX_SESSIONS=3 is not it.
+        found = self.node.rpc("discover", {})
+        self.assertEqual(found["capacity"]["max_sessions"], 8, found)
+        self.assertIsInstance(found["capacity"]["sessions"], int)
+        (self.node.root / "fleet.conf").write_text("FLEET_GLOBAL_MAX_SESSIONS=5\n")
+        self.assertEqual(self.node.rpc("discover", {})["capacity"]["max_sessions"], 5)
+        (self.node.root / "fleet.conf").write_text("FLEET_GLOBAL_MAX_SESSIONS=0\n")
+        self.assertEqual(self.node.rpc("discover", {})["capacity"]["max_sessions"], 0)
+
     def test_permissions_revocation_expiry_and_no_cross_fleet_routing(self):
         reader = self.hub.grant("reader", [self.fleet], ["fleet:read"])
         before = len(self.rpc_calls)

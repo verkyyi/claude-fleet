@@ -115,6 +115,17 @@ case "$mode" in
     sep=''; for w in $missing; do printf '%s"%s"' "$sep" "$w"; sep=','; done
     printf ']}\n'
     ;;
+  capacity)
+    # This login's own session cap and the count its spawn gate reads (issue
+    # #1587): the node's heartbeat carries both, and the hub never places a
+    # start on a login at its cap. The same numbers fleet_session_cap_ok
+    # refuses on — FLEET_GLOBAL_MAX_SESSIONS (default 8, 0 = unlimited) against
+    # the awake session windows of every fleet (a sleeper holds no slot). The
+    # in-flight spawns are left out: the asker's own spawn is one of them.
+    gmax="${FLEET_GLOBAL_MAX_SESSIONS:-8}"
+    case "$gmax" in ''|*[!0-9]*) gmax=8 ;; esac
+    printf '{"sessions":%d,"max_sessions":%d}\n' "$(fleet_session_count)" "$gmax"
+    ;;
   config)
     fleet_load_conf "$sess"
     printf '%s\0' "${FLEET_MAX_SESSIONS:-0}" "${FLEET_AUTOFILL:-0}" "${FLEET_AUTOFILL_MAX_PER_TICK:-1}"

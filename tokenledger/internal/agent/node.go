@@ -349,6 +349,10 @@ func (a *Agent) nodeHeartbeat(ctx context.Context, probe *fleetProbe) control.He
 		for _, f := range snap.fleets {
 			hb.Sessions += f.Count
 		}
+		if c := snap.capacity; c != nil && c.MaxSessions > 0 {
+			n := c.Sessions
+			hb.MaxSessions, hb.CapSessions = c.MaxSessions, &n
+		}
 	}
 	if fv := probe.reading(ctx, a.cfg.Home); fv != nil {
 		hb.FleetVersion = fv.Head
@@ -417,6 +421,15 @@ var fleetReadErrs = &sync.Map{} // fleet name → error string
 type fleetSnapshot struct {
 	machineID string
 	fleets    []control.Fleet
+	// capacity is the login's own cap and the count its gate reads
+	// (claude-fleet#1587); nil from a claude-fleet older than that.
+	capacity *fleetCapacity
+}
+
+// fleetCapacity is discover's capacity object (claude-fleet#1587).
+type fleetCapacity struct {
+	Sessions    int `json:"sessions"`
+	MaxSessions int `json:"max_sessions"`
 }
 
 // fleetControlCommand is the injection point for tests, like fleetCommand.
@@ -454,11 +467,12 @@ func readFleets(ctx context.Context, home string) (fleetSnapshot, error) {
 			Agent    string   `json:"agent"`
 			Repos    []string `json:"repos"`
 		} `json:"fleets"`
+		Capacity *fleetCapacity `json:"capacity"`
 	}
 	if err := fleetRPC(ctx, script, map[string]any{"protocol": 1, "method": "discover", "params": map[string]any{}}, &disc); err != nil {
 		return fleetSnapshot{}, fmt.Errorf("fleet discover: %w", err)
 	}
-	snap := fleetSnapshot{machineID: disc.MachineID, fleets: []control.Fleet{}}
+	snap := fleetSnapshot{machineID: disc.MachineID, fleets: []control.Fleet{}, capacity: disc.Capacity}
 	for _, f := range disc.Fleets {
 		var st struct {
 			State   string            `json:"state"`

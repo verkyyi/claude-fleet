@@ -832,7 +832,8 @@ calls `PickNode(person, repo)` — the placement EPIC B's dispatcher uses — ov
 the caller's own logins with a fleet hosting that repo (for the operator's
 doors: the `CCQUOTA_FLEET_ADMIN_USERS` logins, when set). It excludes a machine
 that is offline, above **0.8 load per core**, under **1 GiB free memory**, or
-where the person is already at their **per-person cap**; scores the rest 60% on
+where the person is already at their **per-person cap** or the login at
+**its own cap** (below); scores the rest 60% on
 the headroom of the account that login's Claude Code runs on (the busier of its
 5-hour and 7-day windows) and 40% on load; and journals the choice with every
 candidate's verdict as the operation's `placement`:
@@ -849,6 +850,20 @@ fleet too — a start or resume past it is `AT_CAPACITY`. The operator sets it:
 curl -X PUT -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"key":"fleet.node_cap.m4","value":"8"}' https://hub/v1/fleet/settings   # "" = back to the default
 ```
+
+**A login at its own cap is never a candidate** (claude-fleet#1587). Every
+heartbeat carries `max_sessions` — the login's `FLEET_GLOBAL_MAX_SESSIONS`, the
+cap its spawn gate refuses at (default 8, `0` = unlimited) — and `cap_sessions`,
+the count that gate reads (awake session windows; a sleeper holds no slot), both
+from `fleet-control.py discover`'s `capacity` (`fleet-control-read.sh
+capacity`). `cap_sessions >= max_sessions` excludes the candidate as `full
+(N/M sessions, the login's own cap)`, auto or named — its own gate would refuse
+the start anyway. When every candidate is out for want of a slot (its own cap or
+the per-person cap), placement refuses `AT_CAPACITY` with `all-full: …` naming
+each machine, and `dash-issue-session.sh` says 「都满了」 (exit 2) — unless this
+machine freed a slot since its last beat, in which case it opens here. A beat
+without the two fields (an agent or claude-fleet older than #1587) filters
+nothing, as before. Both show on `/v1/nodes` and on each `placement` candidate.
 
 **Grants.** Each tool has the Python hub's scope (`worker:start`,
 `worker:message`, `worker:stop`, `worker:resume`, `config:write` plus the key,

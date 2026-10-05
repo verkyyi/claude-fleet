@@ -323,6 +323,14 @@ type Heartbeat struct {
 	// so when UnreadableFleets is non-empty this number is a floor, never the
 	// count (claude-fleet#1465) — read it through SessionsCount.
 	Sessions int `json:"sessions"`
+	// MaxSessions is this login's OWN session cap (claude-fleet#1587): the
+	// FLEET_GLOBAL_MAX_SESSIONS its spawn gate refuses at, 0 = unlimited.
+	// CapSessions is the count that gate reads — awake worker + scratch
+	// windows, a sleeper holds no slot — so the two compare the way the node
+	// itself would. Both absent from an agent or claude-fleet older than
+	// #1587: placement then filters nothing, as it always did.
+	MaxSessions int  `json:"max_sessions,omitempty"`
+	CapSessions *int `json:"cap_sessions,omitempty"`
 	// MachineID is the claude-fleet control identity (fleet-control.py's
 	// machine_id), when the login has claude-fleet installed.
 	MachineID string `json:"machine_id,omitempty"`
@@ -387,6 +395,16 @@ func (hb Heartbeat) SessionsCount() *int {
 	}
 	n := hb.Sessions
 	return &n
+}
+
+// Full reports whether this login is at its own session cap
+// (claude-fleet#1587), with the count and cap it read. false when the beat
+// carries no cap, or the cap is unlimited.
+func (hb Heartbeat) Full() (bool, int, int) {
+	if hb.MaxSessions <= 0 || hb.CapSessions == nil {
+		return false, 0, 0
+	}
+	return *hb.CapSessions >= hb.MaxSessions, *hb.CapSessions, hb.MaxSessions
 }
 
 // NodeRoute is one way into a machine's sshd: a name people see ("tailnet",

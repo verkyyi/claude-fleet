@@ -259,6 +259,35 @@ func TestReadFleetsThroughFleetControl(t *testing.T) {
 	}
 }
 
+// discover's capacity (claude-fleet#1587) rides the snapshot: the login's own
+// cap and the count its gate reads. A claude-fleet older than that sends none.
+func TestReadFleetsCarriesCapacity(t *testing.T) {
+	home := t.TempDir()
+	script := filepath.Join(home, fleetControlScript)
+	os.MkdirAll(filepath.Dir(script), 0o755)
+	os.WriteFile(script, []byte("#!/bin/sh\n"), 0o755)
+	capacity := `,"capacity":{"sessions":9,"max_sessions":8}`
+	old := fleetControlCommand
+	fleetControlCommand = func(ctx context.Context, s string, stdin []byte) ([]byte, error) {
+		var req map[string]any
+		json.Unmarshal(stdin, &req)
+		if req["method"] == "discover" {
+			return []byte(`{"result":{"machine_id":"m-1","fleets":[{"fleet_id":"f-a","name":"fleet-a","repo":"o/a"}]` + capacity + `}}`), nil
+		}
+		return []byte(`{"result":{"state":"running","workers":[]}}`), nil
+	}
+	t.Cleanup(func() { fleetControlCommand = old })
+
+	snap, err := readFleets(context.Background(), home)
+	if err != nil || snap.capacity == nil || snap.capacity.Sessions != 9 || snap.capacity.MaxSessions != 8 {
+		t.Fatalf("snapshot capacity = %+v (%v); want 9/8", snap.capacity, err)
+	}
+	capacity = ""
+	if snap, _ := readFleets(context.Background(), home); snap.capacity != nil {
+		t.Fatalf("an older claude-fleet sent no capacity, got %+v", snap.capacity)
+	}
+}
+
 func TestReadFleetsWithoutClaudeFleet(t *testing.T) {
 	if _, err := readFleets(context.Background(), t.TempDir()); err != errNoFleet {
 		t.Fatalf("err = %v, want errNoFleet", err)

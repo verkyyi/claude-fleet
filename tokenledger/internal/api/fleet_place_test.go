@@ -289,3 +289,77 @@ func TestNodePlaceWaitZeroAnswersOnAcceptance(t *testing.T) {
 		t.Fatalf("place wait=0 = %d %v; want accepted and no outcome", st, out)
 	}
 }
+
+// beatCap sends a beat that carries the login's own cap (claude-fleet#1587):
+// max = 0 leaves both fields off, as an agent older than #1587 does.
+func beatCap(t *testing.T, h *harness, n *writeNode, host, machine string, load1 float64, used, max int, f control.Fleet) {
+	t.Helper()
+	hb := control.Heartbeat{Hostname: host, OSUser: "verk", MachineID: machine, Load1: load1, NCPU: 10,
+		MemFreeBytes: 8 << 30, MemTotalBytes: 16 << 30, Sessions: used, Fleets: []control.Fleet{f}, ObservedAt: time.Now()}
+	if max > 0 {
+		hb.MaxSessions, hb.CapSessions = max, &used
+	}
+	beat(t, n.conn, control.Proto, hb)
+	waitFor(t, 3*time.Second, host+"'s beat landed", func() bool {
+		got, _, _ := h.srv.nodeStatusOf("ep_"+host, time.Now())
+		return got.Load1 == load1 && got.MaxSessions == max
+	})
+}
+
+// claude-fleet#1587: a login at its own cap is no candidate. m4 is the idle
+// one and would win on score, but it runs 5 of its 5: the start stays on m5.
+func TestNodePlaceSkipsFullNode(t *testing.T) {
+	h, m5, m4, f5, f4 := twoNodes(t)
+	beatCap(t, h, m5, "m5", machineA, 3, 2, 8, f5) // 0.30/core, 2/8
+	beatCap(t, h, m4, "m4", machineB, 1, 5, 5, f4) // 0.10/core, 5/5
+	wid5 := issueWID(f5.FleetID, 21)
+	st, out := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 21, "worker_id": wid5})
+	pl, _ := out["placement"].(map[string]any)
+	if st != 200 || out["local"] != true || pl["machine"] != "m5" ||
+		!strings.Contains(pl["reason"].(string), "m4 excluded: full (5/5 sessions, the login's own cap)") {
+		t.Fatalf("place with m4 full = %d %v; want LOCAL m5, m4 excluded as full", st, out)
+	}
+	if m4.count() != 0 {
+		t.Fatal("a start was sent to the full machine")
+	}
+	// The roster shows both numbers.
+	for _, c := range pl["candidates"].([]any) {
+		if c := c.(map[string]any); c["machine"] == "m4" && (c["max_sessions"] != 5.0 || c["cap_sessions"] != 5.0) {
+			t.Fatalf("m4's candidate = %v; want max_sessions 5, cap_sessions 5", c)
+		}
+	}
+	// Named, it is refused the same way: its own spawn gate would say no.
+	if st, out := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 21, "worker_id": wid5, "node": "m4"}); st != 429 || m4.count() != 0 {
+		t.Fatalf("node=m4 while full = %d %v; want AT_CAPACITY, nothing sent", st, out)
+	}
+}
+
+// Every candidate full: the asker hears all-full, as AT_CAPACITY — not "no
+// machine", and nothing is sent anywhere.
+func TestNodePlaceAllFullRefuses(t *testing.T) {
+	h, m5, m4, f5, f4 := twoNodes(t)
+	beatCap(t, h, m5, "m5", machineA, 3, 8, 8, f5)
+	beatCap(t, h, m4, "m4", machineB, 1, 5, 5, f4)
+	st, out := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 22, "worker_id": issueWID(f5.FleetID, 22)})
+	e, _ := out["error"].(map[string]any)
+	msg, _ := e["message"].(string)
+	if st != 429 || e["code"] != "AT_CAPACITY" || !strings.HasPrefix(msg, "all-full:") ||
+		!strings.Contains(msg, "m5: full (8/8") || !strings.Contains(msg, "m4: full (5/5") {
+		t.Fatalf("all full = %d %v; want 429 AT_CAPACITY all-full naming both", st, out)
+	}
+	if m5.count()+m4.count() != 0 {
+		t.Fatal("an all-full placement sent a start")
+	}
+}
+
+// A beat without the fields (an older agent or claude-fleet) filters nothing:
+// m4 is chosen on score, as before #1587.
+func TestNodePlaceWithoutCapFieldsFiltersNothing(t *testing.T) {
+	h, m5, m4, f5, f4 := twoNodes(t)
+	beatCap(t, h, m5, "m5", machineA, 3, 2, 0, f5)
+	beatCap(t, h, m4, "m4", machineB, 1, 5, 0, f4)
+	st, out := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 23, "worker_id": issueWID(f5.FleetID, 23)})
+	if pl, _ := out["placement"].(map[string]any); st != 200 || out["local"] != false || pl["machine"] != "m4" {
+		t.Fatalf("place without cap fields = %d %v; want m4 on score", st, out)
+	}
+}
