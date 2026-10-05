@@ -485,7 +485,8 @@ class Control:
                 # No --force, arbitrary argv, paths, environment or shell input.
                 attempted = True
                 code, _, err = self.adapter("start", fleet["name"], str(params["issue"]), params.get("agent", ""),
-                                            params.get("repo", ""), params.get("origin_wid", ""), timeout=180)
+                                            params.get("repo", ""), params.get("origin_wid", ""),
+                                            params.get("account_class", ""), timeout=180)
                 if code:
                     # 6 = no repo named in a fleet hosting several, or one it does not host (#984).
                     reasons = {2: "AT_CAPACITY", 3: "ALREADY_CLAIMED", 4: "RESOURCE_GATE", 6: "INVALID_ARGUMENT"}

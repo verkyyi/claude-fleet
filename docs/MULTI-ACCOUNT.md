@@ -122,6 +122,30 @@ per spawn — a stale snapshot. Per-window truth lives in the window's
 `@cc_account` (the dash) and `fleet-account.sh whoami [<window-id>]` — with no
 window id it reports the pane you run it in.
 
+### One session, one kind of subscription (`--account`, issue #1540)
+
+Two kinds of account share the dir once a fleet is on the cross-machine hub
+([FLEET-HUB.md](FLEET-HUB.md)): **local** — this login's own subscriptions, the
+token in the file — and **pool** — accounts the hub leases out (the file holds
+`hub:<label>`, #1415). By default a spawn picks across both. To say «this
+session runs on my own subscription only» (or «on the pool only»):
+
+```sh
+dash-issue-session.sh 123 --account local     # local | pool | any
+```
+
+The choice is stamped on the window (`@account_class`) before the launcher
+runs, and `fleet-claude.sh` exports it as `FLEET_ACCOUNT_CLASS` so every pick
+in `fleet-account.sh` — `active`, the failover planner's inventory — sees only
+that class. A fleet can set the default in its conf (`FLEET_ACCOUNT_CLASS=local`;
+`--account any` on one spawn turns it off), and when the hub places the session
+on another machine the class goes with it (`ccquota place --account`), so that
+machine honours the same choice. A narrowed pick never moves
+`global/account.active`: it is one session's constraint, not the pool's choice.
+`--account pool` on a login with no pool account refuses to launch rather than
+fall back to the login's own subscription; `--account local` with no local token
+file is the ambient login, which *is* local.
+
 ## How it runs
 
 Two things authenticate against the pool, not one. The obvious one is a **worker

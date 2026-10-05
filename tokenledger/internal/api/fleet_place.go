@@ -44,7 +44,13 @@ type placeRequest struct {
 	// OriginWID is the worker that asked for this one, if any.
 	OriginWID string `json:"origin_wid"`
 	Agent     string `json:"agent"`
-	Idem      string `json:"idempotency_key"`
+	// AccountClass is the kind of subscription the session must run on
+	// (claude-fleet#1540): "local" (the opening login's own), "pool" (the
+	// hub's leased accounts) or "any" / absent (that fleet's ordinary pick).
+	// It travels with a REMOTE start so the choice made on one machine holds
+	// on the one that opens it.
+	AccountClass string `json:"account_class"`
+	Idem         string `json:"idempotency_key"`
 	// Wait is how many seconds a REMOTE start is waited on for its outcome
 	// (claude-fleet#1586): absent = placeWait, 0 = answer on acceptance.
 	Wait *int `json:"wait"`
@@ -109,6 +115,10 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Node != "auto" && !nodeNameRE.MatchString(req.Node) {
 		httpError(w, http.StatusBadRequest, "node must be auto or a machine name from the roster")
+		return
+	}
+	if !accountClassOK(req.AccountClass) {
+		httpError(w, http.StatusBadRequest, "account_class must be local, pool or any")
 		return
 	}
 	fl, err := s.Store.Fleet(fleetID)
@@ -186,6 +196,9 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.OriginWID != "" {
 		args["origin_wid"] = req.OriginWID
+	}
+	if accountClassBinds(req.AccountClass) {
+		args["account_class"] = req.AccountClass
 	}
 	op, err := s.submitWrite(r.Context(), p, "worker_start", args, &pl)
 	if err != nil {
@@ -344,4 +357,16 @@ func placeStatus(err error) int {
 func asString(v any) string {
 	s, _ := v.(string)
 	return s
+}
+
+// accountClassOK is the account_class rule (claude-fleet#1540): one of three
+// words or absent — it becomes an argv word and a window option on the node.
+func accountClassOK(c string) bool {
+	return c == "" || c == "any" || c == "local" || c == "pool"
+}
+
+// accountClassBinds says whether an account_class constrains the start: "any"
+// and absent add nothing to what the node is sent.
+func accountClassBinds(c string) bool {
+	return c == "local" || c == "pool"
 }

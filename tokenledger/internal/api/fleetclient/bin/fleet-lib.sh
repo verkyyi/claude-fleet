@@ -4540,8 +4540,9 @@ fleet_node_is_self() {
   printf '%s\n' ${FLEET_NODE_ALIASES:-} | tr '[:upper:]' '[:lower:]' | grep -qx -- "$h=$n"
 }
 
-# fleet_hub_place <sess> <repo> <issue> <node> [<origin_wid>] [<agent>] [<wait>] — ask
-# the hub which machine opens a session on (repo, issue) (issue #1425, EPIC #1419 C6).
+# fleet_hub_place <sess> <repo> <issue> <node> [<origin_wid>] [<agent>] [<wait>]
+# [<account_class>] — ask the hub which machine opens a session on (repo, issue)
+# (issue #1425, EPIC #1419 C6).
 # Run AFTER fleet_hub_lease granted the lease: a REMOTE answer means the hub
 # already handed that lease to the chosen machine's fleet and sent it the start
 # (a journalled worker_start carrying <origin_wid>, the parent) — and, since issue
@@ -4560,11 +4561,14 @@ fleet_node_is_self() {
 #   1  the hub could not be asked (no command, no node token — #1491 —, no fleet
 #      UUID, or the command failed) — one stderr note; open it here as today
 #  10  the hub module is off: nothing ran, nothing printed
+# <account_class> (issue #1540) is `local` / `pool` — the kind of subscription the
+# session must run on, carried to the machine that opens it as `--account`;
+# anything else (`any`, empty) adds nothing to the command.
 # The command is FLEET_HUB_PLACE_CMD, else `ccquota place`; it is run as
-# `<cmd> --node <node> [--origin-wid <wid>] [--agent <a>] <repo> <issue> <worker_id>`,
+# `<cmd> --node <node> [--origin-wid <wid>] [--agent <a>] [--account <c>] <repo> <issue> <worker_id>`,
 # with the node token from node.env in ITS environment only (`_fleet_hub_env`).
 fleet_hub_place() {
-  local sess="${1:-}" repo="${2:-}" num="${3:-}" node="${4:-auto}" owid="${5:-}" agent="${6:-}" wait="${7:-}" cmd u pre='' out rc why ef
+  local sess="${1:-}" repo="${2:-}" num="${3:-}" node="${4:-auto}" owid="${5:-}" agent="${6:-}" wait="${7:-}" acct="${8:-}" cmd u pre='' out rc why ef
   fleet_hub_on "$sess" || return 10
   case "$num" in ''|*[!0-9]*) return 1 ;; esac
   cmd="${FLEET_HUB_PLACE_CMD:-}"
@@ -4582,8 +4586,9 @@ fleet_hub_place() {
   [ "$node" != auto ] && node=$(printf '%s\n' ${FLEET_NODE_ALIASES:-} | awk -F= -v n="$node" '$2 == n { print $1; f = 1; exit } END { if (!f) print n }')
   ef=$(mktemp "${TMPDIR:-/tmp}/fleet-hub-err.XXXXXX" 2>/dev/null) || ef=/dev/null
   case "$wait" in *[!0-9]*) wait='' ;; esac
+  case "$acct" in local|pool) ;; *) acct='' ;; esac
   out=$(_fleet_hub_env; bash -c "$cmd \"\$@\"" place --node "$node" ${owid:+--origin-wid "$owid"} ${agent:+--agent "$agent"} \
-        ${wait:+--wait "$wait"} "$repo" "$num" "$u/${pre}issue-$num" </dev/null 2>"$ef"); rc=$?
+        ${wait:+--wait "$wait"} ${acct:+--account "$acct"} "$repo" "$num" "$u/${pre}issue-$num" </dev/null 2>"$ef"); rc=$?
   out=$(printf '%s\n' "$out" | head -n1 | awk -F'\t' -v al="${FLEET_NODE_ALIASES:-}" '
     BEGIN { n = split(al, a, " "); for (i = 1; i <= n; i++) if ((p = index(a[i], "=")) > 1) m[substr(a[i], 1, p - 1)] = substr(a[i], p + 1) }
     { k = split($1, w, " ")

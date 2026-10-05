@@ -19,6 +19,12 @@
 # window after a usage-limit hit whose banner carries no reset time (default:
 # FLEET_ACCOUNT_LIMIT_TTL).
 #
+# Two CLASSES of account share the dir (issue #1540): a LOCAL one (the token in
+# the file) and a POOL one the hub leases (`hub:<label>`, issue #1415).
+# FLEET_ACCOUNT_CLASS=local|pool narrows every command below to one class for
+# this process — a session that must run on «my own subscription only» (or the
+# pool only); `any` / unset = the whole dir, as before. See acct_class below.
+#
 # State (account-wide, like usage/ratelimit → the global/ cache dir, issue #181):
 #   global/account.active   — one line: the label new sessions should use
 #   global/account.limited  — label<TAB>until-epoch<TAB>banner  (one row per limited acct);
@@ -125,9 +131,16 @@
 #                          `models` prints nothing and seeds nothing.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+# The account class in the ENVIRONMENT wins over any conf's (issue #1540): the one
+# thing that puts it there is fleet-claude.sh, which already resolved window
+# (@account_class) ▸ fleet conf ▸ login for its pane — or an operator typing
+# `FLEET_ACCOUNT_CLASS=local fleet-account.sh active`. The confs sourced below
+# (and fleet_load_conf in account_adapter) would otherwise clobber it.
+_fa_cls_env="${FLEET_ACCOUNT_CLASS-}"
 # shellcheck source=/dev/null
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"                       # FLEET_C, FLEET_CONF_DIR
+[ -n "$_fa_cls_env" ] && FLEET_ACCOUNT_CLASS="$_fa_cls_env"
 
 ACCT_DIR="${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}"
 TTL="${FLEET_ACCOUNT_LIMIT_TTL:-18000}"     # how long a limited acct stays out (5h)
@@ -236,19 +249,40 @@ STATE_PHASE="$STATE_DIR/account.phase"
 
 now() { date +%s; }
 
+# --- account CLASS (issue #1540, EPIC #1529 R2) ---------------------------------
+# Two kinds of account live in $ACCT_DIR: a LOCAL one — this login's own
+# subscription, its token in the file — and a POOL one the hub leases out (issue
+# #1415: the file holds `hub:<label>`, the ccquota agent keeps the short-lived
+# token in <label>.hub/). FLEET_ACCOUNT_CLASS narrows EVERY pick in this process
+# to one kind — `local` / `pool`; `any`, empty or anything else is no filter, and
+# the answer is byte for byte the pre-#1540 one. A session's choice travels as
+# `dash-issue-session.sh --account <class>` → the window's @account_class →
+# fleet-claude.sh, which exports it before asking `active` / `launch`; the hub
+# carries it along with a remote placement (ccquota place --account).
+acct_class() { case "$(acct_token "$1")" in hub:*) printf pool ;; *) printf local ;; esac; }
+acct_class_filter() { case "${FLEET_ACCOUNT_CLASS:-}" in local|pool) printf '%s' "$FLEET_ACCOUNT_CLASS" ;; esac; }
+
 # Registered labels, in FLEET_ACCOUNTS order if pinned, else sorted filenames.
 # Skips dotfiles and editor backups (~). Empty output ⇒ multi-account is off.
+# Under a class filter (above) only that class's labels print — so every caller,
+# from pick_active to the inventory the provider-aware selector reads, is narrowed
+# by the one knob. No filter ⇒ no token file is read here, as before.
 acct_labels() {
   [ -d "$ACCT_DIR" ] || return 0
-  local l f
+  local l f cls; cls=$(acct_class_filter)
   if [ -n "${FLEET_ACCOUNTS:-}" ]; then
     # shellcheck disable=SC2086  # deliberate word-split of the space-separated list
-    for l in $FLEET_ACCOUNTS; do [ -f "$ACCT_DIR/$l" ] && printf '%s\n' "$l"; done
+    for l in $FLEET_ACCOUNTS; do
+      [ -f "$ACCT_DIR/$l" ] || continue
+      if [ -n "$cls" ] && [ "$(acct_class "$l")" != "$cls" ]; then continue; fi
+      printf '%s\n' "$l"
+    done
   else
     for f in "$ACCT_DIR"/*; do
       [ -f "$f" ] || continue
       l=${f##*/}
       case "$l" in .*|*~|*.conf) continue;; esac   # .conf = per-account settings, not a token
+      if [ -n "$cls" ] && [ "$(acct_class "$l")" != "$cls" ]; then continue; fi
       printf '%s\n' "$l"
     done
   fi
@@ -686,6 +720,7 @@ account_adapter() {
     adapter_session="$FLEET_LAUNCH_SESSION"
   fi
   [ -z "$adapter_session" ] || fleet_load_conf "$adapter_session" || return 1
+  [ -n "$_fa_cls_env" ] && FLEET_ACCOUNT_CLASS="$_fa_cls_env"   # the pane's choice beats the overlay (#1540)
   export FLEET_C FLEET_CONF_DIR FLEET_ACCOUNTS_DIR FLEET_QUOTA_BIN
   export CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN FLEET_MODEL FLEET_MODEL_FALLBACK
   export FLEET_FAILOVER FLEET_FAILOVER_AGENTS FLEET_ACCOUNT_QUOTA_TTL
@@ -981,7 +1016,10 @@ cmd_active() {
   cur=$(sed -n '1p' "$STATE_ACTIVE" 2>/dev/null || true)
   nxt=$(pick_active "$cur")
   [ -z "$nxt" ] && return 0
-  if [ "$nxt" != "$cur" ]; then acct_lock; printf '%s\n' "$nxt" | atomic_write "$STATE_ACTIVE"; acct_unlock; fi
+  # A class-narrowed pick (issue #1540) is ONE session's constraint, not the pool's
+  # choice: it never moves account.active, or the next unconstrained spawn would
+  # follow it there through the hysteresis.
+  if [ "$nxt" != "$cur" ] && [ -z "$(acct_class_filter)" ]; then acct_lock; printf '%s\n' "$nxt" | atomic_write "$STATE_ACTIVE"; acct_unlock; fi
   printf '%s' "$nxt"
 }
 
