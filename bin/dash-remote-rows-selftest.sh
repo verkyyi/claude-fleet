@@ -346,9 +346,9 @@ wf() {   # idx name path state wid issue pin norepo
   printf '%s\n' "$S$US$1$US$2$US$3$US$4$US$US$5$US$6$US$US$US$US$US$US$US$7$US$US$US$US$US$US$8$US$US$US$US" >> "$WLIST_FILE"
 }
 #  idx name    path                state    wid  issue  pin norepo
-wf 4   向导    /home/op            done     @4   ''     1   1          # the guide: pinned, no repo, no key
+wf 4   向导    /home/op            'done'   @4   ''     1   1          # the guide: pinned, no repo, no key
 wf 5   无仓库  /home/op            working  @5   ''     ''  1          # a no-repo session
-wf 6   钉住    /w/app-issue-1431   done     @6   1431   1   ''         # pinned, keyed, not in the cache
+wf 6   钉住    /w/app-issue-1431   'done'   @6   1431   1   ''         # pinned, keyed, not in the cache
 hs=$(FLEET_SIDEBAR_SOURCE=hub side)
 eq "H: hub source — a pinned or @norepo window the cache does not name is still a row; the keyed, unpinned one (solo) still is not" \
    "向导;钉住;无仓库;EPIC;C1;侧边栏;孙;草稿;" "$(sorder "$hs")"   # 无仓库 is working: it sorts ahead of looping as on the local source
