@@ -28,7 +28,7 @@
 # are, each 0600 on its own.
 #
 # `migrate` is idempotent and runs on its own: fleet-install-apply.sh (a node's
-# sync) and bin/fleet (a client's every start) call it with --quiet. Every value
+# sync) and fleet-shell.sh (a client's every start) call it with --quiet. Every value
 # resolves exactly as before — the old read order was install fleet.conf <
 # fleet.settings < the fleet conf, and the sections keep that order — and each old
 # file is kept as <file>.bak; every reader still reads the old paths for one

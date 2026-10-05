@@ -79,6 +79,13 @@ SELF="$0"; [ -L "$SELF" ] && SELF=$(readlink "$SELF")   # the real file's dir ha
 REAL_BIN="$(cd "$(dirname "$SELF")" && pwd)"
 
 CONF_DIR="${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}"
+# The machine's ONE config file (issue #1623): a client that still keeps its
+# settings the old way (shell.conf, hub.json's url) folds them in once, here —
+# each old file kept as .bak. Two file tests when there is nothing to do.
+if [ ! -f "$CONF_DIR/fleet.conf" ] && { [ -f "$CONF_DIR/shell.conf" ] || [ -f "$CONF_DIR/hub.json" ]; } \
+   && [ -f "$REAL_BIN/fleet-conf.sh" ]; then
+  FLEET_CONF_DIR=$CONF_DIR bash "$REAL_BIN/fleet-conf.sh" migrate --quiet >&2 || :
+fi
 # shellcheck source=/dev/null
 [ -f "$CONF_DIR/shell.conf" ] && . "$CONF_DIR/shell.conf"
 # The machine's ONE config file (issue #1623): its [common] + [client] sections —

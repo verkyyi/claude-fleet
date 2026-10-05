@@ -415,7 +415,7 @@ Do not install from memory: read the doc and work from it.
   `FLEET_SHELL=1`) and `[node]` (everything but the shell) are `if` guards, so
   every reader that sources the file gets its own sections with no mirror and no
   parser. Credentials never enter it: `bin/fleet-conf.sh migrate` (run by
-  `fleet-install-apply.sh`'s `conf` pass and by `bin/fleet`) moves any
+  `fleet-install-apply.sh`'s `conf` pass and by the shell's start, `fleet-shell.sh`) moves any
   `*TOKEN/*SECRET/*PASSWORD` line to `secrets.env` (0600, sourced from
   `[common]`), and node.env / hub.json's token / `~/.ssh/fleet-cert` stay apart.
   It folds the install `fleet.conf`, `fleet.settings`, the one fleet's conf (down
