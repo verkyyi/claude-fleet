@@ -1345,6 +1345,10 @@ try:
     # place — no popup (issue #1620: the restore popup was this list a second
     # time). A bare ⌃o is VDISCARD to a macOS tty — only a view that switched it
     # off ever sees the byte, which is what this pins too.
+    # ↵ on the landed row handed the keyboard back to the worker: tap the input
+    # line to put it on the sidebar again (a tap only focuses).
+    click(side, row=int(tm('display-message', '-p', '-t', side, '#{pane_height}')) - 1)
+    wait_for(navigation, 'tapping the input line did not put the keyboard back on the sidebar')
     for chord, label in ((b'\x0f', 'ctrl-o'), (b'\x1bo', 'alt-o (the prefix fallback)')):
         os.write(terminal, chord)
         wait_for(lambda: row_line('已落地') and not row_line('worker-one'), label + ' did not show the landed list')
