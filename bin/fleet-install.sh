@@ -211,6 +211,7 @@ if [ "$DEPS" = 0 ]; then
 else
   # shellcheck source=fleet-client-lib.sh
   . "$ROOT/bin/fleet-client-lib.sh"
+  # shellcheck disable=SC2034  # FC_LOG / FC_SUDO are read by the lib just sourced
   FC_LOG="$tmp/deps.log"
   if [ -n "${FLEET_INSTALL_SUDO+x}" ]; then FC_SUDO="$FLEET_INSTALL_SUDO"; fi
   if fc_tmux_ok; then
