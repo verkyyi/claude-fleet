@@ -137,6 +137,14 @@ remote_rows() {
   return 0  # no hub map is the one-machine case, not a failure (pipefail)
 }
 
+# The hub's copy of this fleet's progress streams first (issue #1648): a placement's
+# later states and a report the relay push missed land in the book before it is
+# read. At most once per FLEET_PROGRESS_MAX_AGE (30 s) per login, bounded; hub off
+# (or no node token) ⇒ nothing is asked — a one-machine fleet reads what it read.
+if [ -n "$sess" ] && fleet_hub_on "$sess"; then
+  fleet_timebox 15 bash "$BIN/fleet-hub-node.sh" progress --max-age "${FLEET_PROGRESS_MAX_AGE:-30}" >/dev/null 2>&1 || :
+fi
+
 args=(show --dir "$dir" --parent "$KEY" --session "$sess" --since "$SINCE" --prmap "$prmap" --prmap-dir "$prdir")
 [ "$JSON" = 1 ] && args+=(--json)
 { rows; remote_rows; } | python3 "$BIN/fleet-children.py" "${args[@]}"

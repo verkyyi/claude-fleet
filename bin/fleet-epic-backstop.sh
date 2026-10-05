@@ -101,6 +101,8 @@ if k is None and pr:
 if k is None:
     print("gone|||"); sys.exit()
 last = (k.get("last") or {}).get("state", "")
+if k.get("progress") == "merged":   # a MERGED a later STOPPED would hide (#1648)
+    last = "MERGED"
 if last == "MERGED":
     print("ship|%s|%s|%s" % (k.get("window", ""), k.get("state", ""), last))
 elif not k.get("live"):

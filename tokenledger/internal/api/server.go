@@ -290,6 +290,7 @@ func (s *Server) Handler() http.Handler {
 		// A worker's evidence and history, uploaded by the machine that
 		// reaped it and read back by its owner's others (claude-fleet#1609).
 		mux.HandleFunc("/v1/node/worker-records", s.handleNodeWorkerRecords)
+		mux.HandleFunc("/v1/node/progress", s.handleNodeProgress)
 		mux.Handle("/v1/fleet/peer-certs", s.viewerOnly(s.operatorOnly(http.HandlerFunc(s.handleFleetPeerCerts))))
 		mux.Handle("/v1/fleet/spot", s.viewerOnly(s.operatorOnly(http.HandlerFunc(s.handleFleetSpot))))
 		mux.Handle("/v1/nodes", s.viewerOnly(http.HandlerFunc(s.handleNodes)))

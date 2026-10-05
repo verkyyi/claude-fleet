@@ -200,6 +200,7 @@ FLEET_POPUP_NARROW                 knob: a client this many columns or narrower 
 FLEET_PRECOMPACT_GH_SECS           knob: internal pacing/limit, safe in-code default (precompact-hook.sh)
 FLEET_PRECOMPACT_TRIGGER           seam: the PreCompact trigger precompact-hook.sh acts on, instead of stdin
 FLEET_PROC_LOADAVG                 seam: the Linux /proc/loadavg the machine alert reads (fleet-alerts.sh, a selftest's own file)
+FLEET_PROGRESS_MAX_AGE             knob: seconds between the hub progress pulls fleet-children.sh makes before reading (default 30, #1648)
 FLEET_PR_REFRESH_CMD               seam: an injectable command/path for tests (fleet-webhook.sh)
 FLEET_PR_WAIT_BACKSTOP             knob: event-driven --wait re-reads at least this often with no delivery (fleet-pr-verdict.sh, 300, #1272)
 FLEET_PR_WAIT_TICK                 knob: seconds between event-stamp checks in an event-driven --wait (fleet-pr-verdict.sh, 1, #1272)
@@ -357,6 +358,7 @@ FLEET_JOIN_POLL                    seam: seconds between fleet-node-join.sh's /v
 FLEET_NODE_JOIN_ARGS               seam: extra fleet-node-join.sh options `fleet node join` passes through (fleet-node-selftest: --no-deps --service detached …) (#1627)
 FLEET_HUB_NODES_CMD                seam: command printing the hub's /v1/nodes JSON instead of a GET (fleet-hub-sessions.sh refresh_summaries, #1482)
 FLEET_HUB_LIMITS_CMD               seam: command printing the hub's /v1/limits?account=all JSON instead of a GET (fleet-hub-sessions.sh refresh_summaries, #1482)
+FLEET_HUB_PROGRESS                 knob: 0 turns the hub progress pull off (fleet-hub-node.sh progress exits 3; #1648)
 FLEET_STATUS_G                     path: the status bar's cache dir (global/, where hub_nodes / hub_limits / remote_<sess> live) — a selftest sandbox (fleet-status-lib.sh, #1482)
 FLEET_HUB_SUMMARY_EVERY            knob: seconds between the status-bar summaries (/v1/nodes + /v1/limits) a refresh round fetches, 0 = every round (fleet-hub-sessions.sh, 10, #1482)
 FLEET_DOCTOR_AGENT_TARGET          seam: the target the doctor's `agent` line compares against instead of `stable` (fleet-doctor.sh → fleet-node-upgrade.sh --status, #1525)

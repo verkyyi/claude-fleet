@@ -717,7 +717,11 @@ func (s *Server) reconcileOperation(ctx context.Context, o *store.FleetOperation
 	if err := s.Store.UpdateFleetOperation(o.ID, remote.Status, string(remote.Result), now); err != nil {
 		return err
 	}
+	changed := o.Status != remote.Status
 	o.Status, o.Result, o.Updated = remote.Status, string(remote.Result), now
+	if changed {
+		s.progressOp(*o) // the asking parent's stream (claude-fleet#1648)
+	}
 	return nil
 }
 

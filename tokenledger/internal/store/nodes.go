@@ -77,6 +77,10 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetWorkerRecords(); err != nil {
 		return err
 	}
+	// One progress stream per parent (claude-fleet#1648).
+	if err := s.ensureFleetProgress(); err != nil {
+		return err
+	}
 	// Registered devices + their audit (claude-fleet#1470).
 	if err := s.ensureFleetDevices(); err != nil {
 		return err
