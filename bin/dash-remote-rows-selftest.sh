@@ -616,10 +616,11 @@ print("name" in w, "origin_wid" in w, "needs" in w, w["key"])' "$FLEET_CONF_DIR"
 eq "G: a 9-column adapter still parses, with no new keys" "False False False issue-7" "$got"
 got=$(cd "$BIN" && python3 -c 'import sys, fleet_control as c
 ctl = c.Control(sys.argv[1]); f = {"name": "x", "agent": "claude", "fleet_id": sys.argv[2], "repo": "acme/app"}
-ctl.adapter = lambda *a, **k: (0, b"@5\t7\t0\t/w/app-issue-7\tworking\tclaude\ta1\t\t\ta\tb\t\t\n", b"")
+# the adapter's 13-column shape (issue #1646: column 13 is @fleet_id, the identity)
+ctl.adapter = lambda *a, **k: (0, b"@5\t7\t0\t/w/app-issue-7\tworking\tclaude\ta1\t\t\ta\tb\t\t\t9d1c6b7e-2f4a-4c3b-8e5d-6a7b8c9d0e1f\n", b"")
 w = ctl.workers(f)["workers"][0]
-print(w["name"] + "|" + str(w["origin_wid"]) + "|" + str(w["needs"]))' "$FLEET_CONF_DIR" "$U" 2>&1)
-eq "G: a tab inside the window name is absorbed, never a protocol error" "a b|None|None" "$got"
+print(w["name"] + "|" + str(w["origin_wid"]) + "|" + str(w["needs"]) + "|" + str(w["identity"]))' "$FLEET_CONF_DIR" "$U" 2>&1)
+eq "G: a tab inside the window name is absorbed, never a protocol error" "a b|None|None|9d1c6b7e-2f4a-4c3b-8e5d-6a7b8c9d0e1f" "$got"
 
 # ============================================================================
 # R. ready — can this login take a new session? (#1475)
