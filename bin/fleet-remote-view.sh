@@ -378,13 +378,13 @@ rv_hooks_off() { T set-hook -gu 'client-attached[77]' \; set-hook -gu 'client-de
 # (issue #1682). 0 = selected there; anything else (no channel, not live there,
 # no answer in 2 s) = the caller's one-shot path, which also says why.
 rv_chan_select() {
-  local c="$1" nonce n r i rc=1
+  local c="$1" nonce n r rc=1
   [ -p "$c.cmd" ] && [ -p "$c.ack" ] || return 1
   nonce="o$$-$RANDOM"
   exec 7<>"$c.ack" 8<>"$c.cmd" || return 1
   printf '%s select %s\n' "$nonce" "$2" >&8
   # Answers to an earlier, abandoned request may come first: skip to ours.
-  for i in 1 2 3 4 5 6 7 8; do
+  for _ in 1 2 3 4 5 6 7 8; do
     read -r -t 2 -u 7 n r || break
     [ "$n" = "$nonce" ] && { rc=$r; break; }
   done
