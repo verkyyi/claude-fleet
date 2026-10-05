@@ -121,6 +121,33 @@ ccquota, multi-account off) the verdict is `unknown` and the launch behaves as
 it always did. `fleet-account.sh migrate` makes the same check before each
 window's `/exit`; `clear-reauth <label>` lifts a mark after a new login.
 
+## Re-login, then the switch finishes itself
+
+A switch stopped by the TARGET's login leaves a retry record (issue #1669):
+a target-auth refusal of a switch the failover planner does not own (the
+planner re-picks a target every tick on its own), or a rollback after which
+`target-auth` refuses the target. One record per window, under
+`$FLEET_CONF_DIR/handoffs/retry/<fleet>-<id>/` (0700): the window's
+`@fleet_id`, the source session id, `--to`, and copies of the target file,
+notes and loop spec. Metadata only.
+
+↵ on the `▲ accounts · reauth · <profile>` alert runs
+`bin/fleet-relogin.sh login <agent>/<profile>` in the popup — Codex:
+`ccquota codex login <profile> --device-auth`, a link and a code you can open
+on a phone; Claude: `claude setup-token`, then the token pasted (hidden) into
+the pool file and `clear-reauth`. Once `target-auth` says `ok`, every pending
+record waiting on that login is run again with `fleet-transfer.sh --retry
+<dir>`. The status bar also hands pending records to `fleet-relogin.sh resume`
+on its minute refresh, so a login fixed anywhere else is picked up too.
+
+A record is retried ONCE: `pending → retrying → done | failed`. The retry runs
+with no record of its own, so a retry that is refused or rolls back again ends
+`failed` (`▲ transfer-retry-failed`) and nothing runs again. A target that still
+cannot log in leaves the record pending (`--retry` exits 3); a source mid-turn
+gives the claim back. A window that is gone or now runs another conversation
+cancels it; a switch done another way supersedes it; a record older than
+`FLEET_RELOGIN_RETRY_TTL` (24h) expires.
+
 ## Export without switching
 
 ```sh

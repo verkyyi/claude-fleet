@@ -406,10 +406,11 @@ reauth_json reauth_required
 fa14 write
 eq "14: one warning — the standing row, not the event too" "0 1 0" "$(fa14 counts)"
 l14=$(fa14 list --plain)
-case "$l14" in *"▲  accounts · reauth · work"*"see accounts"*) ok ;; *) fail "14: no accounts · reauth row for the dead profile" "$l14" ;; esac
+case "$l14" in *"▲  accounts · reauth · work"*"↵ re-login"*) ok ;; *) fail "14: no accounts · reauth row (↵ re-login) for the dead profile" "$l14" ;; esac
 case "$l14" in *fine*) fail "14: the valid profile drew a row" "$l14" ;; *) ok ;; esac
 r14=$(grep '"id":"account-reauth-codex-work"' "$G/alerts.ndjson")
 case "$r14" in *'"detail":"codex ops@example.com needs re-login — run: codex login --device-auth"'*) ok ;; *) fail "14: the row does not carry the login command" "$r14" ;; esac
+case "$r14" in *'"action":"relogin","healed_at":0,"target":"codex/work"'*) ok ;; *) fail "14: ↵ must re-login codex/work (issue #1669)" "$r14" ;; esac
 case "$(head -n 1 "$G/account.reauth")" in [0-9]*"	checked") ok ;; *) fail "14: the stamp has no checked header" "$(cat "$G/account.reauth")" ;; esac
 eq "14: a new dead profile is ONE account-reauth event" 1 "$(grep -c '	account-reauth	' "$G/alerts.events")"
 eq "14: …and it flashed once" 1 "$(grep -c 'display-message accounts: codex ops@example.com needs re-login' "$WORK/calls14")"
@@ -441,6 +442,26 @@ rm -f "$G"/alerts.* "$G/account.reauth"
 FLEET_QUOTA_BIN="$WORK/shim/ccquota" FLEET_C="$WORK/.claude-dash" FLEET_ALERTS_REAUTH_SECS=0 PATH="$WORK/shim:$PATH" bash "$WORK/bin14/fleet-alerts.sh" write
 [ -e "$G/account.reauth" ] && fail "14: a client with no .fleet-account.py wrote a stamp" "$(cat "$G/account.reauth")"; ok
 eq "14: …and drew nothing" "" "$(FLEET_C="$WORK/.claude-dash" bash "$FA" list --plain)"
+# issue #1669: ↵ on the row runs fleet-relogin.sh login <agent>/<profile>; a
+# pending retry record makes the refresh hand `resume` off, detached — and with
+# no record it forks nothing. A sandbox bin with a recording fake relogin.
+mkdir -p "$WORK/bin14r" "$WORK/conf14/handoffs/retry/x-1"
+for f in fleet-alerts.sh usage-lib.sh fleet-daemon-lib.sh fleet-lib.sh fleet-config-lib.sh .fleet-account.py; do [ -e "$BIN/$f" ] && ln -sf "$BIN/$f" "$WORK/bin14r/$f"; done
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/relogin14"\n' "$WORK" > "$WORK/bin14r/fleet-relogin.sh"
+fa14r() { FLEET_CONF_DIR="$WORK/conf14" FLEET_QUOTA_BIN="$WORK/shim/ccquota" FLEET_C="$WORK/.claude-dash" FLEET_ALERTS_REAUTH_SECS=0 PATH="$WORK/shim:$PATH" TMUX='' bash "$WORK/bin14r/fleet-alerts.sh" "$@"; }
+rm -f "$G"/alerts.* "$G/account.reauth" "$WORK/relogin14"
+reauth_json reauth_required
+fa14r write
+fa14r act account-reauth-codex-work </dev/null
+eq "14: ↵ runs fleet-relogin.sh login codex/work" "login codex/work" "$(cat "$WORK/relogin14" 2>/dev/null)"
+rm -f "$WORK/relogin14"
+touch "$WORK/conf14/handoffs/retry/x-1/pending"
+fa14r write
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$WORK/relogin14" ] && break; sleep 0.2; done
+eq "14: a pending retry → resume, detached" "resume" "$(cat "$WORK/relogin14" 2>/dev/null)"
+rm -f "$WORK/relogin14" "$WORK/conf14/handoffs/retry/x-1/pending"
+fa14r write; sleep 0.5
+[ -e "$WORK/relogin14" ] && fail "14: no pending record must not resume" "$(cat "$WORK/relogin14")"; ok
 rm -f "$WORK/shim/ccquota" "$WORK/shim/tmux"
 # the flash whitelist names the kind, in the ONE place it is written
 eq "14: account-reauth is a flash kind" 1 "$(grep -c "^FLEET_ALERT_FLASH_KINDS='.*account-reauth" "$FA")"

@@ -221,6 +221,8 @@ FLEET_REAP_LOCAL                   handoff: the node adapter tells dash-reap.sh 
 FLEET_REAP_MIN_AGE                 knob: internal pacing/limit, safe in-code default (dash-reap.sh)
 FLEET_REFOCUS_SOURCE               seam: the SessionStart source refocus-hook.sh acts on, instead of stdin
 FLEET_REFUSE_MS                    knob: internal pacing/limit, safe in-code default (dash-issue-session.sh)
+FLEET_RELOGIN_CLAUDE_BIN           seam: the claude binary fleet-relogin.sh runs for `setup-token` (#1669)
+FLEET_RELOGIN_RETRY_TTL            knob: seconds a switch waits for its target's re-login before the retry record expires (86400; fleet-relogin.sh, #1669)
 FLEET_REPORT_FROM                  handoff: the from-name a child report is sent under
 FLEET_REPOS                        legacy: pre-#788 cache pin list, superseded by repos/ overlays; kept as the collector selftests' repo seam
 FLEET_RESTORE_DIALOG_RE            knob: ERE for a dialog awaiting a human after resume (fleet-restore.sh outcome probe, #1265)
@@ -268,6 +270,7 @@ FLEET_TRANSFER_BOOT_WAIT           knob: internal pacing/limit, safe in-code def
 FLEET_TRANSFER_EXIT_WAIT           knob: internal pacing/limit, safe in-code default (fleet-transfer.sh)
 FLEET_TRANSFER_IDLE_WAIT           knob: internal pacing/limit, safe in-code default (fleet-transfer.sh)
 FLEET_TRANSFER_ROLLBACK_HOLD       knob: internal pacing/limit, safe in-code default (fleet-transfer.sh)
+FLEET_TRANSFER_RETRYING            handoff: fleet-transfer.sh --retry tells its child run not to record a retry of its own (#1669)
 FLEET_TRASH_PURGE_URGENT           handoff: the cleanup daemon marks an urgent trash purge (skips the load cap)
 FLEET_TRASH_SWEEP_BUDGET           knob: internal pacing/limit, safe in-code default (fleet-cleanup-daemon.sh)
 FLEET_UI_QUIET                     handoff: 1 = fleet_ui_fail draws nothing — the caller re-says the failure in its own one line (dash-issue-new.sh, issue #1618)
