@@ -233,6 +233,40 @@ curl -s -H "Authorization: Bearer $TOKEN" "$HUB/v1/fleet/fleet_alerts" | python3
 3. T0+3 分钟恢复入口，记 T1；`/nodes` 上 m5、m4 回到在线的时刻取较大者 − T1 = 读数（目标 ≤ 30 秒）。
 4. `GET /v1/fleet/fleet_alerts`：断开超过 2 分钟的机器各一条 `node_lost`——注意入口停着的时候没人记，所以这次演练里**它们不会出现**（入口从自己启动时起算）；要看 `node_lost`，改为断某台机器的网 3 分钟，入口照常。贴出 `raised_at` / `cleared_at`。
 
+## 5⅞. Codex 凭证只由入口一处刷新（#1666）
+
+Codex 的刷新凭证（refresh token）**一次性**：谁刷新，服务端就换一张新的，旧的作废。
+两方拿着同一张抢刷，后刷的那方被拒，登录状态变成 `reauth_required`——2026-10-04
+就是这样：13:11Z 入口导入并（经 m4 转发）刷新了一次，23:46Z m5 本机 ccquota 的
+自动刷新拿着旧的那张去刷，被拒；第二天切换撞上才发现，重登一次才恢复。
+
+**所以一个账号只有一个刷新方**，`ccquota codex list --json` 里 `login.source` 就是它：
+
+| `login.source` | 谁刷新 | `~/.codex/auth.json` 里 | 本机 `ccquota codex refresh` |
+|---|---|---|---|
+| `hub` 入口托管 | 入口（保险箱里的 refresh token；入口所在地被拒时经一台管理节点转发） | `refresh_token` 是占位符 `hub-managed`，节点程序 `ccquota agent`（`CCQUOTA_FLEET_CREDS=1`）到期前 2 小时续写 | **拒绝**，什么都不跑；登录状态只会是 `valid`，或续租没续上时的 `access_expired`（原因写明是节点程序，不是让你重登） |
+| `local` 本机自管 | 本机官方 Codex CLI（ccquota 到期前 24 小时催它） | 真的 refresh token | 照旧 |
+
+**把一台机器切为入口托管**（批后、你点头后，**一台一台**；入口已部署含本单的版本）：
+
+1. 入口保险箱里已有这个账号？`GET /v1/fleet/credentials` 看 `provider=codex` 的行
+   （今天：`pool/codex/default`，就是 m5 的 `personal` 那个账号，m4 已在用它）。
+   没有才导入：`bin/fleet-creds-import.sh --codex personal`——`personal` 住在 `~/.codex`，
+   所以入口标签是 `default`（节点程序按标签把租约写回 `~/.codex`），命令会把映射打出来，
+   并在导入后提醒**这台机器现在必须停止自己刷新**（第 2 步就是）。
+2. 这台机器 `~/.config/claude-fleet/node.env` 加 `CCQUOTA_FLEET_CREDS=1`，重启
+   `ccquota agent`（launchd：`launchctl kickstart -k gui/$(id -u)/com.ccquota.agent`）。
+   节点程序先向入口续租，再把 `~/.codex/auth.json` 整个换成短期那半（`last_refresh`
+   由它写）——切之前确认入口能续租：`~/.ccquota/agent.log` 里要有
+   `credentials:` 成功行，没有就别切。
+3. 验证：`ccquota codex list --json` 里 `login.source` 为 `hub`、`state` 为 `valid`；
+   `ccquota codex refresh` 被拒；起一个 Codex 会话能用。然后才轮到下一台。
+4. 之后 24 小时内 `auth.json` 的修改者应是节点程序（`last_refresh` 跟着
+   `agent.log` 的续租时刻走），不是 Codex 自己。
+
+**退回本机自管**：`codex logout` 再 `codex login`（新的一张，和入口那张互不相干），
+并把 `CCQUOTA_FLEET_CREDS` 去掉重启节点程序；否则下一次租约又把 `auth.json` 换回去。
+
 ## 6. 速查
 
 | 要做的事 | 命令 / 接口 |
@@ -243,6 +277,7 @@ curl -s -H "Authorization: Bearer $TOKEN" "$HUB/v1/fleet/fleet_alerts" | python3
 | 搬一个指定会话 | `fleet-move.sh <window> --via hub --to m4` |
 | 进某台机器 | `fleet`（入口选）· `fleet m4`（指名）· `fleet connect --print` 看选了哪条线 |
 | 认领释放 / 强取 | 自动：失联 30 分钟 · 手动：`ccquota lease acquire --force <repo> <N> <wid>` |
+| 这台机器的 Codex 谁在刷新 | `ccquota codex list --json` → `login.source`：`hub` 入口托管（本机刷新被拒）· `local` 本机自管；切换见 5⅞ |
 | 本机健康 | `fleet-doctor.sh` |
 | 入口记的告警（失联 / 重复认领） | `GET /v1/fleet/fleet_alerts`（第 5¾ 节） |
 | 审计 | 入口 `fleet_audit` 表：`node_maintenance`（ENTER/LEAVE/ALREADY/NOT_FLAGGED）、`lease_*`、`place`、`move` |

@@ -15,6 +15,12 @@ const refreshAhead = 24 * time.Hour
 
 var ErrProfileBusy = errors.New("Codex profile is in use by another ccquota login, run, or refresh")
 
+// ErrHubManaged: the home's refresh_token is the hub placeholder. The hub
+// refreshes this account and the node agent (ccquota agent with
+// CCQUOTA_FLEET_CREDS=1) rewrites auth.json before the access token expires;
+// a local refresh here is always wrong and is refused before anything runs.
+var ErrHubManaged = errors.New("Codex home is hub-managed: the hub refreshes it and the node agent renews auth.json; it is never refreshed on this machine")
+
 // AcquireProfile serializes ccquota maintenance and managed launches across
 // processes. The OS releases the lock after a crash. Direct Codex clients do
 // not participate; token persistence is always left to the official CLI.
@@ -94,6 +100,19 @@ func LoginHealth(home string, auth *Auth, enabled bool) *model.LoginHealth {
 		h.AccessExpiresAt = &t
 	}
 	h.State = "valid"
+	if auth.HubManaged {
+		// The hub is the one refresher (claude-fleet#1666): refresh_due,
+		// reauth_required and this machine's renewal record have no meaning
+		// here, so none of them is read. The only thing that can be wrong is a
+		// lease the node agent did not renew in time.
+		h.Source, h.AutoRefresh = "hub", false
+		if !auth.ExpiresAt.IsZero() && !auth.ExpiresAt.After(time.Now()) {
+			h.State = "access_expired"
+			h.Reason = "Hub lease expired and the node agent has not renewed it; check ccquota agent (CCQUOTA_FLEET_CREDS=1) on this machine"
+		}
+		return h
+	}
+	h.Source = "local"
 	if !auth.ExpiresAt.IsZero() && time.Until(auth.ExpiresAt) <= refreshAhead {
 		h.State = "refresh_due"
 		if !auth.HasRefreshToken {
@@ -124,6 +143,8 @@ func LoginHealth(home string, auth *Auth, enabled bool) *model.LoginHealth {
 // Maintain refreshes only near expiry (or after an authorization error), in
 // the original profile. It never copies a refresh token or rewrites auth.json.
 // Official Codex owns the refresh exchange and its credential persistence.
+// A hub-managed home is refused outright (ErrHubManaged) — before the official
+// CLI is started and without touching the renewal record.
 func Maintain(ctx context.Context, binary, home string, force bool) (*Auth, error) {
 	unlock, err := AcquireProfile(home)
 	if err != nil {
@@ -134,6 +155,9 @@ func Maintain(ctx context.Context, binary, home string, force bool) (*Auth, erro
 	a, err := ReadAuth(home)
 	if err != nil {
 		return a, err
+	}
+	if a.HubManaged {
+		return a, ErrHubManaged
 	}
 	if a.Mode != "subscription" {
 		return a, errors.New("ChatGPT file login is required for Codex renewal")
