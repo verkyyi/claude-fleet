@@ -35,6 +35,12 @@
 #                  every unparseable form falling back instead of guessing.
 #   • cmd_mark_limited — benches to that instant (+RESET_BUFFER) when there is
 #                  one, and to now+LIMIT_TTL (per-account conf included) when not.
+#   • acct_class / FLEET_ACCOUNT_CLASS — the account CLASS (issue #1540): a
+#                  `hub:<label>` file is `pool`, anything else `local`; the filter
+#                  narrows acct_labels (pinned list and directory listing alike),
+#                  pick_active never leaves the class, cmd_active prints the
+#                  narrowed pick but never moves account.active, and `any` /
+#                  unset / garbage leave every answer byte for byte as it was.
 #
 # Sourced (not run): fleet-account.sh guards its bottom dispatch with
 # `[ "${BASH_SOURCE[0]}" = "$0" ]`, so sourcing defines the helpers WITHOUT
@@ -636,4 +642,67 @@ eq "model reader: empty ledger" 0 "$(acct_model_limited_until a fable)"
 rm -f "$STATE_MODEL_LIMITED"
 eq "model reader: missing ledger" 0 "$(acct_model_limited_until a fable)"
 
-printf 'selftest OK: fleet-account rotation math (%s assertions — dur/human, acct_ttl, limited/eligible, pick_active, banner reset instant, ccquota quota/bench + #628 no-reading rail, #598 ranking + phase stagger, #1231 weekly pace)\n' "$CHECKS"
+# ============================================================================
+# FLEET_ACCOUNT_CLASS — one session, one kind of subscription (issue #1540)
+# ============================================================================
+# A `hub:<label>` token file is a POOL account the hub leases (#1415); any other
+# content is this login's own, LOCAL. The class filter narrows acct_labels — so
+# every pick downstream — and never writes the pool-wide active.
+rm -f "$STATE_QUOTA"; : > "$STATE_LIMITED"
+printf 'tok-a\n' > "$ACCT_DIR/a"; printf 'tok-b\n' > "$ACCT_DIR/b"
+printf 'hub:h1\n' > "$ACCT_DIR/h1"; printf 'hub:h2\n' > "$ACCT_DIR/h2"
+export FLEET_ACCOUNTS="a h1 b h2"
+eq "class: a plain token is local" local "$(acct_class a)"
+eq "class: hub:<label> is pool" pool "$(acct_class h1)"
+eq "class: an empty token file is local" local "$(acct_class c)"
+all=$'a\nh1\nb\nh2'
+eq "labels: no class → every account, byte for byte" "$all" "$(acct_labels)"
+eq "labels: any → unchanged" "$all" "$(FLEET_ACCOUNT_CLASS=any acct_labels)"
+eq "labels: garbage → unchanged, never an empty pool" "$all" "$(FLEET_ACCOUNT_CLASS='rm -rf /' acct_labels)"
+eq "labels: local → this login's own only" $'a\nb' "$(FLEET_ACCOUNT_CLASS=local acct_labels)"
+eq "labels: pool → hub: labels only" $'h1\nh2' "$(FLEET_ACCOUNT_CLASS=pool acct_labels)"
+# The directory listing (no FLEET_ACCOUNTS pin) filters the same way; a .conf is
+# still no account.
+_ad="$ACCT_DIR"; ACCT_DIR="$WORK/accounts-cls"; mkdir -p "$ACCT_DIR"
+printf 'tok\n' > "$ACCT_DIR/own"; printf 'hub:lease\n' > "$ACCT_DIR/lease"; printf 'LIMIT_TTL=1h\n' > "$ACCT_DIR/own.conf"
+eq "labels(dir): local" own "$(FLEET_ACCOUNTS= FLEET_ACCOUNT_CLASS=local acct_labels)"
+eq "labels(dir): pool" lease "$(FLEET_ACCOUNTS= FLEET_ACCOUNT_CLASS=pool acct_labels)"
+eq "labels(dir): none → both" $'lease\nown' "$(FLEET_ACCOUNTS= acct_labels)"
+ACCT_DIR="$_ad"
+# pick_active never leaves the class — here the pool-wide active is a hub account.
+eq "pick(local): active is pool → first local" a "$(FLEET_ACCOUNT_CLASS=local pick_active h1)"
+limit a
+eq "pick(local): first local limited → next local, never h1" b "$(FLEET_ACCOUNT_CLASS=local pick_active h1)"
+limit b
+eq "pick(local): every local limited → best effort stays local" a "$(FLEET_ACCOUNT_CLASS=local pick_active h1)"
+eq "pick(pool): active is local → first pool" h1 "$(FLEET_ACCOUNT_CLASS=pool pick_active a)"
+eq "pick(any): unchanged — keeps the eligible current" h1 "$(pick_active h1)"
+: > "$STATE_LIMITED"
+# cmd_active: a narrowed pick prints, but never moves account.active.
+printf 'h1\n' > "$STATE_ACTIVE"
+eq "active(local): prints a local label" a "$(FLEET_ACCOUNT_CLASS=local cmd_active)"
+eq "active(local): account.active untouched" h1 "$(cat "$STATE_ACTIVE")"
+eq "active(pool): the pool-wide current, eligible → kept" h1 "$(FLEET_ACCOUNT_CLASS=pool cmd_active)"
+printf 'zz\n' > "$STATE_ACTIVE"
+eq "active(pool): picks the first pool account" h1 "$(FLEET_ACCOUNT_CLASS=pool cmd_active)"
+eq "active(pool): account.active still zz" zz "$(cat "$STATE_ACTIVE")"
+eq "active(none): the ordinary pick" a "$(cmd_active)"
+eq "active(none): …and it IS written, as before" a "$(cat "$STATE_ACTIVE")"
+# A class with no account of its kind → nothing: the launcher decides what that
+# means (local = the ambient login; pool = refuse).
+eq "active(pool) with no pool account → empty" "" "$(FLEET_ACCOUNTS='a b' FLEET_ACCOUNT_CLASS=pool cmd_active)"
+# End to end, as a pane runs it: the class fleet-claude.sh EXPORTS wins over the
+# conf the script sources (a login conf saying `pool` cannot override a window
+# that chose `local`); with nothing in the environment the conf's line applies.
+mkdir -p "$WORK/sroot/bin" "$WORK/sconf"
+for f in "$BIN"/*; do ln -s "$f" "$WORK/sroot/bin/${f##*/}"; done
+printf 'FLEET_ACCOUNT_CLASS=pool\n' > "$WORK/sroot/fleet.conf"
+printf 'h1\n' > "$STATE_ACTIVE"
+_run() { env -i HOME="$WORK" PATH="$PATH" FLEET_CONF_DIR="$WORK/sconf" FLEET_ACCOUNTS_DIR="$ACCT_DIR" FLEET_ACCOUNTS="a h1 b h2" \
+           TMPDIR="$WORK" "$@" bash "$WORK/sroot/bin/fleet-account.sh" active 2>/dev/null; }
+eq "e2e: env local beats the conf's pool" a "$(_run FLEET_ACCOUNT_CLASS=local)"
+eq "e2e: no env → the conf's pool" h1 "$(_run FLEET_C="$FLEET_C")"
+eq "e2e: env any beats the conf's pool — the ordinary pick (first label, nothing pinned)" a "$(_run FLEET_ACCOUNT_CLASS=any FLEET_C="$FLEET_C")"
+rm -f "$ACCT_DIR/h1" "$ACCT_DIR/h2"; : > "$ACCT_DIR/a"; : > "$ACCT_DIR/b"; export FLEET_ACCOUNTS="a b c"
+
+printf 'selftest OK: fleet-account rotation math (%s assertions — dur/human, acct_ttl, limited/eligible, pick_active, banner reset instant, ccquota quota/bench + #628 no-reading rail, #598 ranking + phase stagger, #1231 weekly pace, #1540 account class)\n' "$CHECKS"

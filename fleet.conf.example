@@ -1551,6 +1551,20 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # every token file, sorted by name.
 # @label=Subscription accounts @group=accounts @tier=advanced @scope=global @edit=str
 #FLEET_ACCOUNTS="work personal spare"
+# Which KIND of subscription this fleet's new sessions run on (issue #1540, EPIC
+# #1529 R2). Two kinds share the accounts dir: `local` — this login's own token
+# files — and `pool` — accounts the cross-machine hub leases out (a `hub:<label>`
+# file, docs/FLEET-HUB.md). `any` (the default) is the pick as it always was.
+# One session chooses for itself with `dash-issue-session.sh --account
+# local|pool|any`, which wins over this line; the choice is stamped on the
+# window (@account_class) and travels with a remote placement, so the machine
+# that opens the session honours it. `pool` with no pool account on the login
+# refuses to launch rather than fall back to the login's own subscription.
+# Off the default config-panel face (@tier=internal, issue #1101 — the face is at
+# its 120-row cap, and the per-session flag is the usual way to say this); the
+# panel's `--all` / FLEET_CONFIG_SHOW_INTERNAL=1 edits it.
+# @label=Account class @group=accounts @tier=internal @scope=fleet @edit=enum
+#FLEET_ACCOUNT_CLASS=any
 # Unified per-session subscription failover. Existing account/quota, transfer and
 # quotawatch components remain the owners. Prefer another eligible subscription
 # of the current agent, then the allowed other agent; all unavailable => wait.

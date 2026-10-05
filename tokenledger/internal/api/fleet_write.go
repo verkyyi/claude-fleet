@@ -309,7 +309,7 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 	var err error
 	switch tool {
 	case "worker_start":
-		if err = checkFields(args, []string{"issue", "idempotency_key"}, "fleet_id", "agent", "repo", "node", "origin_wid"); err != nil {
+		if err = checkFields(args, []string{"issue", "idempotency_key"}, "fleet_id", "agent", "repo", "node", "origin_wid", "account_class"); err != nil {
 			break
 		}
 		var issue int
@@ -349,6 +349,20 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 				break
 			}
 			w.params["origin_wid"] = owid
+		}
+		// account_class (claude-fleet#1540): the kind of subscription the
+		// session runs on — local / pool bind the node's pick, any / absent
+		// leave it. One of three words, never free text.
+		var acls string
+		if acls, err = argString(args, "account_class"); err != nil {
+			break
+		}
+		if !accountClassOK(acls) {
+			err = fault("INVALID_ARGUMENT", "account_class must be local, pool or any")
+			break
+		}
+		if accountClassBinds(acls) {
+			w.params["account_class"] = acls
 		}
 		if w.node == "" {
 			w.node = "auto"

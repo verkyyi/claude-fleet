@@ -741,6 +741,24 @@ class HubTests(HubFixture):
         self.assertEqual((self.node.conf / "spawn.calls").read_text(),
                          "126 demo --agent claude --origin hub --origin-wid %s\n" % parent)
 
+    def test_start_carries_the_account_class(self):
+        # issue #1540: the asker's `--account local|pool` holds on the machine that
+        # opens the session — one of three words, never free text, replayed by
+        # fleet-control-read.sh start as --account; `any` adds nothing.
+        with self.assertRaises(Fault):
+            validate_write("worker_start", {"issue": 1, "account_class": "local; rm -rf ~"})
+        validate_write("worker_start", {"issue": 1, "account_class": "any"})
+        started = self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="classed",
+                                                 params={"issue": 127, "account_class": "local"}))
+        self.assertEqual(self.node.wait(started["operation_id"])["status"], "succeeded")
+        self.assertEqual((self.node.conf / "spawn.calls").read_text(),
+                         "127 demo --agent claude --origin hub --account local\n")
+        (self.node.conf / "spawn.calls").unlink()
+        plain = self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="unclassed",
+                                               params={"issue": 128, "account_class": "any"}))
+        self.assertEqual(self.node.wait(plain["operation_id"])["status"], "succeeded")
+        self.assertEqual((self.node.conf / "spawn.calls").read_text(), "128 demo --agent claude --origin hub\n")
+
     def test_move_in_runs_the_target_half_and_maps_its_outcome(self):
         # issue #1426: a session moved here through the hub. Every value is held
         # to the hub's own rule before it can become an argv word…

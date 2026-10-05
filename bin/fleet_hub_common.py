@@ -197,7 +197,7 @@ def validate_gh_read(params):
 
 def validate_write(action, params):
     if action == "worker_start":
-        fields(params, ("issue",), ("agent", "repo", "origin_wid"))
+        fields(params, ("issue",), ("agent", "repo", "origin_wid", "account_class"))
         check_number(params["issue"])
         if params.get("agent", "") not in ("", "claude", "codex"):
             raise Fault("INVALID_ARGUMENT", "agent must be claude or codex")
@@ -206,6 +206,11 @@ def validate_write(action, params):
             # The parent on another machine (issue #1425): a worker_id, never
             # free text — it becomes an argv word and a window option.
             parse_worker_id(params["origin_wid"])
+        # The asker's account class (issue #1540): which kind of subscription the
+        # session runs on — one of three words, never free text (an argv word and
+        # a window option on the machine that opens it).
+        if params.get("account_class", "") not in ("", "any", "local", "pool"):
+            raise Fault("INVALID_ARGUMENT", "account_class must be local, pool or any")
     elif action == "worker_move_in":
         validate_move_in(params)
     elif action == "gh_comment":

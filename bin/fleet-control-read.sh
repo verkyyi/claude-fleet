@@ -160,7 +160,13 @@ case "$mode" in
     owid="${6:-}"
     case "$owid" in ''|*[!A-Za-z0-9/:._-]*) owid='' ;; esac
     here=''; [ "${CCQUOTA_FLEET:-0}" = 1 ] && here=local
-    exec bash "$BIN/dash-issue-session.sh" "${3:-}" "$sess" --agent "$agent" --origin hub ${srepo:+--repo "$srepo"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"}
+    # $7 = the account class the asker chose (issue #1540): `local` / `pool`, the
+    # kind of subscription the session must run on, replayed as --account so the
+    # choice made on one machine holds on the one that opens it. Anything else
+    # adds nothing.
+    acls="${7:-}"
+    case "$acls" in local|pool) ;; *) acls='' ;; esac
+    exec bash "$BIN/dash-issue-session.sh" "${3:-}" "$sess" --agent "$agent" --origin hub ${srepo:+--repo "$srepo"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${acls:+--account "$acls"}
     ;;
   # --- worker lifecycle by DURABLE key (issue #834) ---------------------------
   # $3 is issue-<N> / scratch-<N>; the window is re-resolved on the fleet at

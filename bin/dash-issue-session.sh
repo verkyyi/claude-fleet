@@ -42,13 +42,13 @@ set -uo pipefail
 # GATE (cap / dedup / claim) still runs + refuses in the foreground; only its slow
 # tail is backgrounded. Opt-in, interactive-only (a headless TARGET_SESS caller
 # that needs the window id back stays synchronous).
-num=""; TARGET_SESS=""; WIN_TITLE=""; ORIGIN=""; AGENT=""; REPO_ARG=""; NODE_ARG=""; ORIGIN_WID=""; FORCE_FLAG=0; ASYNC_FLAG=0; _pos=0; _want=""
+num=""; TARGET_SESS=""; WIN_TITLE=""; ORIGIN=""; AGENT=""; REPO_ARG=""; NODE_ARG=""; ORIGIN_WID=""; ACCOUNT_ARG=""; FORCE_FLAG=0; ASYNC_FLAG=0; _pos=0; _want=""
 for _a in "$@"; do
   # A value-taking flag (--title <t>) consumes the NEXT arg: _want carries that
   # expectation across one loop turn so the value isn't mistaken for a positional.
   if [ -n "$_want" ]; then
     case "$_want" in title) WIN_TITLE="$_a" ;; origin) ORIGIN="$_a" ;; agent) AGENT="$_a" ;; repo) REPO_ARG="$_a" ;;
-      node) NODE_ARG="$_a" ;; origin-wid) ORIGIN_WID="$_a" ;; esac
+      node) NODE_ARG="$_a" ;; origin-wid) ORIGIN_WID="$_a" ;; account) ACCOUNT_ARG="$_a" ;; esac
     _want=""; continue
   fi
   # A FUSED "--flag value" (issue #1543) is --flag=value: zsh — Claude's Bash tool —
@@ -56,7 +56,7 @@ for _a in "$@"; do
   # us ONE arg, which fell to the unknown-flag branch and let the hub place a pinned
   # spawn on another machine.
   case "$_a" in
-    '--title '*|'--origin '*|'--agent '*|'--repo '*|'--node '*|'--origin-wid '*)
+    '--title '*|'--origin '*|'--agent '*|'--repo '*|'--node '*|'--origin-wid '*|'--account '*)
       _v=${_a#* }; _v=${_v#"${_v%%[! ]*}"}; _a="${_a%% *}=$_v" ;;
   esac
   case "$_a" in
@@ -94,6 +94,14 @@ for _a in "$@"; do
     # window's @origin_wid verbatim instead of being derived from --origin.
     --origin-wid) _want=origin-wid ;;
     --origin-wid=*) ORIGIN_WID="${_a#--origin-wid=}" ;;
+    # --account (issue #1540, EPIC #1529 R2): which kind of subscription THIS
+    # session runs on — `local` (this login's own token files), `pool` (the hub's
+    # leased accounts, #1415) or `any` (the pick as always). Default: the fleet
+    # conf's / login's FLEET_ACCOUNT_CLASS, else any. Stamped on the window as
+    # @account_class before the launcher runs, and sent along with a remote
+    # placement so the machine that opens it honours the same choice.
+    --account) _want=account ;;
+    --account=*) ACCOUNT_ARG="${_a#--account=}" ;;
     # An UNKNOWN dash-flag is almost always a typo (e.g. --forc). Do NOT let it
     # fall through to the positional slots — treating "--forc" as the issue number
     # strips to "" and silently spawns the wrong thing. Warn loudly and ignore it.
@@ -107,6 +115,11 @@ case "$AGENT" in
   ''|claude|codex) : ;;
   *) printf 'dash-issue-session: unknown --agent %s (claude|codex) — using the fleet default\n' "$AGENT" >&2
      tmux display-message "issues: unknown --agent $AGENT — using the fleet default" 2>/dev/null; AGENT="" ;;
+esac
+case "$ACCOUNT_ARG" in
+  ''|local|pool|any) : ;;
+  *) printf 'dash-issue-session: unknown --account %s (local|pool|any) — using the fleet default\n' "$ACCOUNT_ARG" >&2
+     tmux display-message "issues: unknown --account $ACCOUNT_ARG — using the fleet default" 2>/dev/null; ACCOUNT_ARG="" ;;
 esac
 BIN="$(cd "$(dirname "$0")" && pwd)"
 SELF="$BIN/$(basename "$0")"                   # absolute path for the --async re-invoke
@@ -268,6 +281,12 @@ if [ -z "$NODE" ] && [ "${CCQUOTA_FLEET:-0}" = 1 ]; then
   NODE="${FLEET_SPAWN_NODE:-auto}"
   case "$NODE" in ''|*[!A-Za-z0-9._-]*) NODE=auto ;; esac
 fi
+# The account class (issue #1540): --account, else the fleet conf's (fleet_load_conf
+# above) / login's FLEET_ACCOUNT_CLASS. Only `local` / `pool` are a constraint; `any`
+# on the command line switches a conf default OFF for this session. Empty ⇒ the
+# window command, the place command and the launcher are byte for byte unchanged.
+ACCOUNT="${ACCOUNT_ARG:-${FLEET_ACCOUNT_CLASS:-}}"
+case "$ACCOUNT" in local|pool) : ;; *) ACCOUNT='' ;; esac
 PLACING=0
 [ "$TAIL_ONLY" != 1 ] && [ -n "$NODE" ] && ! fleet_node_is_self "$NODE" && PLACING=1
 CAP_HELD=''
@@ -355,7 +374,7 @@ if [ "$PLACING" = 1 ]; then
       _u=$(fleet_uuid "$SESS") && [ -n "$_u" ] && _pw="$_u/$ORIGIN"
     fi
     _wait=''; [ "$ASYNC_FLAG" = 1 ] && _wait=0
-    place_out=$(fleet_hub_place "$SESS" "$REPO" "$num" "$NODE" "$_pw" "$AGENT" "$_wait"); place_rc=$?
+    place_out=$(fleet_hub_place "$SESS" "$REPO" "$num" "$NODE" "$_pw" "$AGENT" "$_wait" "$ACCOUNT"); place_rc=$?
     _pv=${place_out%%$'\t'*}; _why=''; case "$place_out" in *$'\t'*) _why=${place_out#*$'\t'} ;; esac
     case "$place_rc:$_pv" in
       0:REMOTE\ *)
@@ -531,7 +550,7 @@ if [ "$ASYNC_FLAG" = 1 ] && [ "$TAIL_ONLY" != 1 ] && [ -z "$TARGET_SESS" ]; then
   # separate client call independent of this process's fds (its stderr copy is what
   # this redirect drops, and the tail has no caller left to read it — the
   # interactive --async path is toast-only by construction).
-  _bg="$_bg exec $(shq "$SELF") $(shq "$num") --title $(shq "$title") --origin $(shq "$ORIGIN")${AGENT:+ --agent $AGENT}${REPO_ARG:+ --repo $(shq "$REPO_ARG")}${ORIGIN_WID:+ --origin-wid $(shq "$ORIGIN_WID")} >/dev/null 2>&1"
+  _bg="$_bg exec $(shq "$SELF") $(shq "$num") --title $(shq "$title") --origin $(shq "$ORIGIN")${AGENT:+ --agent $AGENT}${REPO_ARG:+ --repo $(shq "$REPO_ARG")}${ORIGIN_WID:+ --origin-wid $(shq "$ORIGIN_WID")}${ACCOUNT_ARG:+ --account $ACCOUNT_ARG} >/dev/null 2>&1"
   TM run-shell -b "$_bg" 2>/dev/null \
     || { refuse "spawn failed for #$num: dispatch"; exit "$RC_INFRA"; }
   exit 0
@@ -611,6 +630,10 @@ detach=(-d); [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && [ -z "$TARGET_SESS" ] && detac
 # after new-window would race it (repo A's trust/model/MCP for a repo-B worker). A
 # one-repo fleet's command string is unchanged.
 stamp=''; [ "$MULTI" = 1 ] && stamp=$(fleet_win_stamp_cmd @repo "$REPO" @worktree "$wt")
+# The session's account class (issue #1540) rides the same way: @account_class is on
+# the window before fleet-claude.sh reads it, and it is the window's — a conf
+# default changed later does not move a running session.
+[ -n "$ACCOUNT" ] && stamp="$stamp$(fleet_win_stamp_cmd @account_class "$ACCOUNT")"
 win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "$stamp'$BIN/fleet-claude.sh'${AGENT:+ --agent $AGENT} \"\$(cat '$tf')\"; exec \$SHELL") \
   || { refuse "spawn failed for #$num: new-window"; exit "$RC_INFRA"; }
 # A session is on its way: wake the idle-gated daemons so the dash is fresh on

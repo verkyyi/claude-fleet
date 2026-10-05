@@ -39,6 +39,26 @@ if command -v fleet_load_conf >/dev/null 2>&1; then
   unset _fc_sess
 fi
 
+# Account CLASS (issue #1540, EPIC #1529 R2): which kind of subscription this
+# session may run on — `local` (this login's own token files), `pool` (the hub's
+# leased `hub:<label>` accounts, #1415) or `any` (the pick as it always was). The
+# window's @account_class — stamped by dash-issue-session.sh --account inside the
+# pane's own command, before this runs — wins over the FLEET_ACCOUNT_CLASS the
+# fleet conf / environment carry: a session's choice beats the fleet's default.
+# Exported so fleet-account.sh (`active`, and `launch` under FLEET_FAILOVER)
+# narrows its pick; a class from the conf is stamped back so the window says what
+# it runs on. `any` / unset / garbage: the variable is gone and nothing changes.
+_fc_cls=''
+[ -n "${TMUX_PANE:-}" ] && _fc_cls=$(tmux show-options -wqv -t "$TMUX_PANE" @account_class 2>/dev/null)
+case "$_fc_cls" in local|pool) : ;; *) _fc_cls="${FLEET_ACCOUNT_CLASS:-}" ;; esac
+case "$_fc_cls" in
+  local|pool)
+    export FLEET_ACCOUNT_CLASS="$_fc_cls"
+    [ -n "${TMUX_PANE:-}" ] && tmux set-option -w -t "$TMUX_PANE" @account_class "$_fc_cls" 2>/dev/null ;;
+  *) unset FLEET_ACCOUNT_CLASS ;;
+esac
+unset _fc_cls
+
 # Agent CLI dispatch (issue #547). FLEET_AGENT — per-fleet overlay ▸ global ▸
 # `claude` — picks which agent a spawned session runs; a caller's `--agent <a>`
 # (dash-issue-session.sh / dash-raw-session.sh `--agent` — scripts and selftests;
@@ -139,6 +159,13 @@ fi
 # one whose cap ledger leaves it free (issue #1073).
 label="${FLEET_ACCOUNT_LABEL:-}"
 [ -n "$label" ] || label=$(FLEET_PICK_MODEL="${FLEET_MODEL-opus}" "$BIN/fleet-account.sh" active 2>/dev/null)
+# --account pool with no pool account registered here (issue #1540): refuse rather
+# than fall to this login's own subscription — the one thing the choice ruled out.
+# (`local` with no local token file is the ambient login, which IS local.)
+if [ -z "$label" ] && [ "${FLEET_ACCOUNT_CLASS:-}" = pool ]; then
+  echo 'fleet-claude: --account pool, but no hub-pool account is registered on this login (fleet-account.sh list) — refusing to launch on its own subscription' >&2
+  exit 1
+fi
 model_flag=()
 launch_model=""
 if [ -z "${FLEET_MODEL+x}" ]; then FLEET_MODEL="opus"; fi

@@ -356,6 +356,7 @@ fcfg_label_i18n() {
     FLEET_HANDOFF_IDLE_TIMEOUT) printf '交接等待 idle 上限' ;;
     FLEET_ACCOUNTS_DIR) printf '账号 token 目录' ;;
     FLEET_ACCOUNTS) printf '订阅账号' ;;
+    FLEET_ACCOUNT_CLASS) printf '订阅类别（local|pool|any）' ;;
     FLEET_FAILOVER) printf '订阅 failover' ;;
     FLEET_FAILOVER_AGENTS) printf '允许 failover 的 agents' ;;
     FLEET_FAILOVER_BG_GRACE) printf '硬墙后台宽限' ;;
@@ -819,6 +820,12 @@ fcfg_enum_options() {
       printf '%s%s%s\n' \
         claude "$FCFG_US" 'Claude Code (default)' \
         codex  "$FCFG_US" 'OpenAI Codex CLI (bin/fleet-codex.sh, issue #547)' ;;
+    FLEET_ACCOUNT_CLASS)
+      # local|pool|any (issue #1540): which kind of subscription new sessions run on.
+      printf '%s%s%s\n' \
+        any   "$FCFG_US" 'every registered account — the pick as always (default)' \
+        local "$FCFG_US" "this login's own subscriptions only" \
+        pool  "$FCFG_US" "the hub's leased pool accounts only (hub:<label>)" ;;
     FLEET_UI_LANG)
       printf '%s%s%s\n' \
         auto "$FCFG_US" 'follow this login locale (zh* => Chinese, en* => English; C/unset keeps Chinese)' \
@@ -906,6 +913,15 @@ fcfg_validate() {
         case "$val" in
           ''|claude|codex) : ;;
           *) printf '%s must be claude|codex or empty (got: %s)' "$key" "$val"; return 1 ;;
+        esac
+        return 0
+      fi
+      # FLEET_ACCOUNT_CLASS (issue #1540): the kind of subscription new sessions
+      # run on. Empty defers to any.
+      if [ "$key" = FLEET_ACCOUNT_CLASS ]; then
+        case "$val" in
+          ''|any|local|pool) : ;;
+          *) printf '%s must be any|local|pool or empty (got: %s)' "$key" "$val"; return 1 ;;
         esac
         return 0
       fi

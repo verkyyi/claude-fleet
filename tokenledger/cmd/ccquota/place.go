@@ -80,10 +80,11 @@ func place(args []string, stdout, stderr io.Writer) (int, error) {
 	node := fs.String("node", "auto", "auto, or the machine to open it on")
 	origin := fs.String("origin-wid", "", "the worker_id of the session that asked for this one")
 	agent := fs.String("agent", "", "claude or codex (default: the chosen fleet's)")
+	account := fs.String("account", "", "local, pool or any: the kind of subscription the session runs on (default: the opening fleet's pick)")
 	key := fs.String("key", "", "idempotency key (default: one per call)")
 	wait := fs.Int("wait", -1, "seconds the hub waits on a remote start's outcome (default: the hub's, 30; 0 = answer on acceptance)")
 	fs.Usage = func() {
-		fmt.Fprint(stderr, `Usage: ccquota place [--node auto|<machine>] [--origin-wid <wid>] [--agent a] <owner/repo> <issue> <worker_id>
+		fmt.Fprint(stderr, `Usage: ccquota place [--node auto|<machine>] [--origin-wid <wid>] [--agent a] [--account local|pool|any] <owner/repo> <issue> <worker_id>
 
 Ask the hub which machine should open a session on an issue (claude-fleet#1425).
 Exit 0 LOCAL/REMOTE, 3 held elsewhere, 4 refused, 5 the chosen machine
@@ -108,6 +109,9 @@ declined the start, 6 its outcome is unknown, 1 hub unreachable, 2 usage.
 	}
 	ask := map[string]any{"repo": rest[0], "issue": issue, "worker_id": rest[2],
 		"node": *node, "origin_wid": *origin, "agent": *agent, "idempotency_key": *key}
+	if *account != "" {
+		ask["account_class"] = *account
+	}
 	timeout := placeTimeout + placeWaitDefault*time.Second
 	if *wait >= 0 {
 		ask["wait"] = *wait

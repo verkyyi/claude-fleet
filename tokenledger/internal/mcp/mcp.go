@@ -1481,7 +1481,9 @@ func fleetToolSpecs() []toolSpec {
 			InputSchema: obj(map[string]any{"issue": numberProp, "idempotency_key": idemProp,
 				"fleet_id": fleetIDProp, "repo": fleetRepoProp,
 				"node":  map[string]any{"type": "string", "description": "auto (default) or a machine name from the roster."},
-				"agent": map[string]any{"type": "string", "enum": []string{"claude", "codex"}}},
+				"agent": map[string]any{"type": "string", "enum": []string{"claude", "codex"}},
+				"account_class": map[string]any{"type": "string", "enum": []string{"any", "local", "pool"},
+					"description": "The kind of subscription the session runs on: local (the opening login's own), pool (the hub's leased accounts) or any (default, that fleet's pick)."}},
 				"issue", "idempotency_key"),
 		},
 		{

@@ -532,6 +532,15 @@ every candidate full refuses `AT_CAPACITY` `all-full: …` — the spawn says
 「都满了」. A beat without the fields filters nothing. See
 `tokenledger/README.md`, "Sessions on every machine".
 
+**Which subscription a placed session runs on** (issue #1540). A spawn's
+`--account local|pool|any` (or the fleet conf's `FLEET_ACCOUNT_CLASS`) rides
+the placement as `ccquota place --account <c>` → `account_class` on the
+journalled `worker_start` → `fleet-control-read.sh start … --account <c>` on
+the machine that opens it, so a session asked to stay on «my own subscription»
+does so wherever it lands. `any` / absent adds nothing to the request; the hub
+and the node both refuse any other word (`INVALID_ARGUMENT`). See
+[MULTI-ACCOUNT.md](MULTI-ACCOUNT.md) for what each class means.
+
 ## Tools
 
 | MCP tool | Behavior | Required grant |

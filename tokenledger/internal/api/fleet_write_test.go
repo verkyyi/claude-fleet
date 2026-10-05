@@ -495,3 +495,27 @@ func TestFleetWriteIntegrationRealFleetControl(t *testing.T) {
 		t.Fatalf("the node's own journal for %s: %s (%v)", id, out, err)
 	}
 }
+
+// account_class on worker_start (claude-fleet#1540): local / pool reach the
+// node's params, any adds nothing, free text is refused.
+func TestFleetWriteAccountClass(t *testing.T) {
+	h, _, m4, _, f4 := twoNodes(t)
+	postFleet(t, h, "worker_start", map[string]any{"issue": 7, "fleet_id": f4.FleetID, "account_class": "pool", "idempotency_key": "ac-7"}, 200)
+	if m4.count() != 1 {
+		t.Fatalf("m4 writes = %d; want 1", m4.count())
+	}
+	if params := m4.writes[0]["params"].(map[string]any); params["account_class"] != "pool" {
+		t.Fatalf("params = %v; want account_class pool", params)
+	}
+	postFleet(t, h, "worker_start", map[string]any{"issue": 8, "fleet_id": f4.FleetID, "account_class": "any", "idempotency_key": "ac-8"}, 200)
+	if m4.count() != 2 {
+		t.Fatalf("m4 writes = %d; want 2", m4.count())
+	}
+	if params := m4.writes[1]["params"].(map[string]any); params["account_class"] != nil {
+		t.Fatalf("any must add nothing: %v", params)
+	}
+	e := postFleet(t, h, "worker_start", map[string]any{"issue": 9, "fleet_id": f4.FleetID, "account_class": "x", "idempotency_key": "ac-9"}, 400)["error"].(map[string]any)
+	if e["code"] != "INVALID_ARGUMENT" || m4.count() != 2 {
+		t.Fatalf("free text: %v (m4 writes %d); want INVALID_ARGUMENT and nothing sent", e, m4.count())
+	}
+}

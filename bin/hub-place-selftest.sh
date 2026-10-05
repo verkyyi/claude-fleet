@@ -40,6 +40,12 @@
 #           two fleets on one login, one conf `CCQUOTA_FLEET=0` and one `=1`, do
 #           not affect each other whichever way the login-wide value points; a
 #           fleet's FLEET_SPAWN_NODE beats the login's; no line ⇒ the login's.
+#   ACCOUNT (issue #1540) --account local|pool rides to the hub as `--account <c>`
+#           on the place command and onto the window as @account_class (stamped
+#           in the window's own command, before fleet-claude.sh); `any`, no flag
+#           and garbage (named on stderr) add nothing; the fleet conf's
+#           FLEET_ACCOUNT_CLASS is the default and `--account any` turns it off;
+#           with the hub off the window is still stamped, nothing is placed.
 #   TOKEN   (issue #1491) the place command sees node.env's CCQUOTA_TOKEN; the
 #           spawned window never inherits it; the default `ccquota place` with no
 #           token anywhere is not run and says 「no node token」, not 「unreachable」.
@@ -426,6 +432,55 @@ FLEET_SPAWN_NODE=m4 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWE
 place_has '--node m4 '                           || fail "PERFLEET a fleet with no line follows the login's FLEET_SPAWN_NODE"
 rm -f "$WORK/conf/fleets/testsess/conf"
 ok "PERFLEET FLEET_SPAWN_NODE: the fleet's line beats the login's; no line ⇒ the login's"
+
+# ===== ACCOUNT: --account local|pool|any — the subscription class (issue #1540) ====
+LOCAL_LINE=$'LOCAL m5\tchose m5'
+base=$(CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER="$LOCAL_LINE" run_spawn 258; snap)
+place_has '--account'                            && fail "ACCOUNT no flag → nothing on the place command"
+tmux_has '@account_class'                        && fail "ACCOUNT no flag → no stamp"
+for a in '--account any' '--account=any'; do
+  # shellcheck disable=SC2086  # deliberate: two words / one word
+  CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER="$LOCAL_LINE" run_spawn 258 $a
+  [ "$(snap)" = "$base" ]                        || fail "ACCOUNT ($a) must be byte-identical to no flag" "$(diff <(printf '%s\n' "$base") <(snap))"
+done
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER="$LOCAL_LINE" run_spawn 258 --account bogus
+err_has 'unknown --account bogus (local|pool|any)' || fail "ACCOUNT garbage is named on stderr" "$(cat "$WORK/spawn.err")"
+place_has '--account'                            && fail "ACCOUNT garbage must not reach the place command"
+tmux_has '@account_class'                        && fail "ACCOUNT garbage must not stamp the window"
+tmux_has 'new-window'                            || fail "ACCOUNT garbage still opens it here"
+ok "ACCOUNT no flag / any / garbage → nothing added (garbage named on stderr)"
+
+for c in local pool; do
+  CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER="$LOCAL_LINE" run_spawn 258 --account "$c"
+  [ "$(rc)" = 0 ]                                || fail "ACCOUNT --account $c spawns (rc=$(rc))" "$(cat "$WORK/spawn.err")"
+  place_has "--account $c acme/widgets 258 $WID" || fail "ACCOUNT --account $c is asked for on the place command"
+  tmux_has "@account_class '$c'"                 || fail "ACCOUNT --account $c stamps @account_class in the window's own command"
+  tmux_has 'new-window'                          || fail "ACCOUNT --account $c: a LOCAL answer opens it here"
+done
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER="$REMOTE_LINE" run_spawn 258 --account pool
+place_has '--account pool acme/widgets'          || fail "ACCOUNT remote: the class travels with the placement"
+tmux_has 'new-window'                            && fail "ACCOUNT remote: nothing opens here"
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER="$LOCAL_LINE" run_spawn 258 "--account local"
+place_has '--account local acme/widgets'         || fail "ACCOUNT a fused \"--account local\" (zsh's unsplit \$var) is read"
+ok "ACCOUNT --account local|pool → --account on the place command + @account_class on the window; fused form read"
+
+printf 'CCQUOTA_FLEET=1\nFLEET_ACCOUNT_CLASS=local\n' > "$WORK/conf/fleets/testsess/conf"
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER="$LOCAL_LINE" run_spawn 258
+place_has '--account local acme/widgets'         || fail "ACCOUNT the fleet conf's FLEET_ACCOUNT_CLASS is the default"
+tmux_has "@account_class 'local'"                || fail "ACCOUNT the conf default is stamped too"
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER="$LOCAL_LINE" run_spawn 258 --account pool
+place_has '--account pool acme/widgets'          || fail "ACCOUNT --account beats the conf default"
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER="$LOCAL_LINE" run_spawn 258 --account any
+place_has '--account'                            && fail "ACCOUNT --account any turns the conf default off"
+tmux_has '@account_class'                        && fail "ACCOUNT --account any: no stamp either"
+rm -f "$WORK/conf/fleets/testsess/conf"
+ok "ACCOUNT FLEET_ACCOUNT_CLASS in the fleet conf is the default; --account wins, any switches it off"
+
+CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET='' FLEET_HUB_PLACE_CMD='' FLEET_HUB_LEASE_CMD='' run_spawn 258 --account local
+[ -s "$PLACE_LOG" ]                              && fail "ACCOUNT hub off: nothing is placed"
+tmux_has "@account_class 'local'"                || fail "ACCOUNT hub off: the window is still stamped — the class is the local picker's too"
+tmux_has 'new-window'                            || fail "ACCOUNT hub off: opens here"
+ok "ACCOUNT with the hub off the class still reaches the window; nothing is placed"
 
 # ===== TOKEN: node.env's token reaches the place command only (issue #1491) =======
 NODE_ENV="$WORK/conf/node.env"

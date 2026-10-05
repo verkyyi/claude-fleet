@@ -363,3 +363,31 @@ func TestNodePlaceWithoutCapFieldsFiltersNothing(t *testing.T) {
 		t.Fatalf("place without cap fields = %d %v; want m4 on score", st, out)
 	}
 }
+
+// The asker's account class (claude-fleet#1540) rides with a REMOTE start:
+// local / pool reach the target's worker_start, any adds nothing, and anything
+// else is refused before any placement.
+func TestNodePlaceCarriesAccountClass(t *testing.T) {
+	h, _, m4, f5, _ := twoNodes(t)
+	tok5 := h.tokens["m5"]
+	st, out := placeCall(t, h, tok5, map[string]any{"repo": writeRepo, "issue": 7, "worker_id": issueWID(f5.FleetID, 7),
+		"account_class": "local", "idempotency_key": "place-7-local"})
+	if st != 200 || out["local"] != false || m4.count() != 1 {
+		t.Fatalf("place(local) = %d %v (m4 writes %d); want a remote placement", st, out, m4.count())
+	}
+	if params := m4.writes[0]["params"].(map[string]any); params["account_class"] != "local" || params["issue"].(float64) != 7 {
+		t.Fatalf("m4 was sent %v; want issue 7 with account_class local", params)
+	}
+	st, out = placeCall(t, h, tok5, map[string]any{"repo": writeRepo, "issue": 8, "worker_id": issueWID(f5.FleetID, 8),
+		"account_class": "any", "idempotency_key": "place-8-any"})
+	if st != 200 || m4.count() != 2 {
+		t.Fatalf("place(any) = %d %v (m4 writes %d); want a remote placement", st, out, m4.count())
+	}
+	if params := m4.writes[1]["params"].(map[string]any); params["account_class"] != nil {
+		t.Fatalf("any must add nothing: m4 was sent %v", params)
+	}
+	if st, out := placeCall(t, h, tok5, map[string]any{"repo": writeRepo, "issue": 9, "worker_id": issueWID(f5.FleetID, 9),
+		"account_class": "mine", "idempotency_key": "place-9-bad"}); st != 400 || m4.count() != 2 {
+		t.Fatalf("place(mine) = %d %v (m4 writes %d); want 400 and nothing sent", st, out, m4.count())
+	}
+}
