@@ -71,13 +71,16 @@ case "\$1" in -L|-S) shift 2 ;; esac
 exec "$REAL_TMUX" -S "$SOCK" "\$@"
 EOF
 chmod +x "$WORK/bin/tmux"
-# No fzf → the stand-in: the prompt, the header, then wait for a key.
-if ! command -v fzf >/dev/null 2>&1; then
+# No fzf (or TPL_FZF=shim) → the stand-in, shaped like fzf where it matters:
+# it DRAWS on the terminal (the picker captures stdout for the pick), reads the
+# key from the terminal, and aborts with 130 printing nothing.
+if [ "${TPL_FZF:-}" = shim ] || ! command -v fzf >/dev/null 2>&1; then
   cat > "$WORK/bin/fzf" <<'EOF'
 #!/bin/sh
 cat >/dev/null &
-printf '\033[2J\033[H task \xe2\x96\xb8 \n[\xef\xbc\x8b new] [\xe2\x8c\x82 hub] [\xe2\x9c\x95 close]\n'
-dd bs=1 count=1 2>/dev/null >/dev/null
+printf '\033[2J\033[H task \xe2\x96\xb8 \n[\xef\xbc\x8b new] [\xe2\x8c\x82 hub] [\xe2\x9c\x95 close]\n' > /dev/tty
+stty -icanon -echo min 1 time 0 < /dev/tty 2>/dev/null   # one key, not one line: Esc alone must end it
+dd if=/dev/tty bs=1 count=1 2>/dev/null >/dev/null
 exit 130
 EOF
   chmod +x "$WORK/bin/fzf"
