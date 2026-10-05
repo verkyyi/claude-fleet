@@ -25,8 +25,17 @@
 #   {"id":…,"severity":alarm|warning|needs|healed,"subject":…,"condition":…,
 #    "value":…,"since":<epoch>,"action":…,"healed_at":<epoch|0>,
 #    "target":…,"detail":…}
-# action ∈ accounts | kick-collect | kick-daemons | disk | machine | jump  (every row has
-# one: an alert with nothing to do about it is demoted or deleted, not shown).
+# action ∈ accounts | kick-collect | kick-daemons | disk | machine | jump | event  (every
+# row has one: an alert with nothing to do about it is demoted or deleted, not shown).
+#
+# EVENTS (issue #1617): a background script never flashes a `display-message`
+# of its own any more — a toast nobody was looking at is gone in 2s and cannot
+# be read back. It calls `fleet-alerts.sh event <kind> <text>` (fleet_alert,
+# THE one exit), which appends to $G/alerts.events (30-day rolling); compute
+# turns an event younger than FLEET_ALERTS_EVENT_LIVE (1h) into a ▲ row (the
+# bar's count goes up by one, ↵ in the popup reads the full text) and the popup
+# lists the older ones below the live rows. Only the kinds in
+# FLEET_ALERT_FLASH_KINDS — the three that need you NOW — still flash too.
 #
 # Usage:
 #   fleet-alerts.sh write [--kick]   compute + write $G/alerts.ndjson
@@ -36,8 +45,9 @@
 #                                    FLEET_ALERTS_TTL (5s), one writer at a time
 #   fleet-alerts.sh counts           "<alarm> <warning> <needs>" (muted excluded)
 #   fleet-alerts.sh bar              the status bar's fixed-width count segment
-#   fleet-alerts.sh list [--level L] [--plain]   the popup's rows (L = alarm |
-#                                    warning | needs | all)
+#   fleet-alerts.sh list [--level L] [--plain] [--history]   the popup's rows
+#                                    (L = alarm | warning | needs | all;
+#                                    --history: + the events past their hour)
 #   fleet-alerts.sh mute <id>        silence a warning/needs for 1h (never an alarm)
 #   fleet-alerts.sh act <id>         run the row's action (a kick detaches:
 #                                    `kick` is its background half, #1242)
@@ -48,6 +58,10 @@
 #                                    fleet-await.sh's stall ladder, issue #1268;
 #                                    FLEET_ALERTS_STALL_TTL, 6h, ends a forgotten one)
 #   fleet-alerts.sh unstall <id>     clear it
+#   fleet-alerts.sh event [-L sock] <kind> <text>
+#                                    record a background event (issue #1617);
+#                                    a FLEET_ALERT_FLASH_KINDS kind also flashes
+#                                    on <sock> (or the current server)
 #
 # Sourced (tmux-status.sh does, every 5s per client) it only defines functions;
 # the caller must already have usage-lib.sh + fleet-daemon-lib.sh loaded.
@@ -89,6 +103,82 @@ fleet_alerts_stall() {
 fleet_alerts_unstall() {
   local id; id=$(_fa_stall_id "${1:-}"); [ -n "$id" ] || return 2
   rm -f "$(fleet_alerts_stall_dir)/$id"
+}
+
+# --- events (issue #1617) -----------------------------------------------------
+# The flash whitelist — THE one place it is written. Everything else a daemon,
+# hook or background helper has to say is recorded, never flashed:
+#   quota-nowhere  an account is at its ceiling and no other one can take its sessions
+#   hub-lost       the hub has not answered for FLEET_ALERTS_HUB_FLASH_SECS (5 min)
+#   disk-red       free disk is at the spawn-refusal floor
+FLEET_ALERT_FLASH_KINDS='quota-nowhere hub-lost disk-red'
+fleet_alerts_events_file() { printf '%s/alerts.events' "$(fleet_usage_cache_dir)"; }
+fleet_alert_flashes() { case " $FLEET_ALERT_FLASH_KINDS " in *" ${1:-} "*) return 0 ;; esac; return 1; }
+
+# _fa_events_prune <file> <now> — drop rows past FLEET_ALERTS_EVENT_KEEP (30
+# days). The file is chronological, so only an old FIRST row costs a rewrite.
+_fa_events_prune() {
+  local f="$1" now="$2" keep="${FLEET_ALERTS_EVENT_KEEP:-2592000}" t=""
+  case "$keep" in ''|*[!0-9]*) keep=2592000 ;; esac
+  [ -s "$f" ] || return 0
+  IFS=$'\t' read -r t _ < "$f" 2>/dev/null
+  case "$t" in ''|*[!0-9]*) t=0 ;; esac
+  [ $(( now - t )) -ge "$keep" ] || return 0
+  awk -F '\t' -v c=$(( now - keep )) '$1 ~ /^[0-9]+$/ && $1 >= c' "$f" > "$f.$$" 2>/dev/null \
+    && mv -f "$f.$$" "$f" 2>/dev/null || rm -f "$f.$$"
+}
+
+# fleet_alert [-L sock] <kind> <text> — THE exit for anything a background path
+# has to tell the operator. One row `epoch<TAB>id<TAB>kind<TAB>text`; the same
+# kind + text within FLEET_ALERTS_EVENT_DEDUP (60s) is one event (a daemon fans
+# one message out over every fleet socket). A whitelisted kind also flashes on
+# <sock> — every call, so each fleet's screen gets it once.
+fleet_alert() {
+  local sock="" kind text f now dup=0 lt lk lx dd="${FLEET_ALERTS_EVENT_DEDUP:-60}"
+  [ "${1:-}" = -L ] && { sock="${2:-}"; shift 2 2>/dev/null || shift $#; }
+  kind=$(_fa_stall_id "${1:-}"); text=$(_fa_clean "${2:-}")
+  [ -n "$kind" ] && [ -n "$text" ] || { echo 'fleet-alerts.sh event [-L sock] <kind> <text>' >&2; return 2; }
+  case "$dd" in ''|*[!0-9]*) dd=60 ;; esac
+  f=$(fleet_alerts_events_file); mkdir -p "${f%/*}" 2>/dev/null || return 1
+  now=$(fleet_now)
+  if [ -s "$f" ]; then
+    while IFS=$'\t' read -r lt _ lk lx; do
+      case "$lt" in ''|*[!0-9]*) continue ;; esac
+      [ "$lk" = "$kind" ] && [ "$lx" = "$text" ] && [ $(( now - lt )) -lt "$dd" ] && dup=1
+    done <<EOF
+$(tail -n 20 "$f" 2>/dev/null)
+EOF
+  fi
+  if [ "$dup" = 0 ]; then
+    _fa_events_prune "$f" "$now"
+    printf '%s\t%s\t%s\t%s\n' "$now" "ev-$now-$$-${RANDOM:-0}" "$kind" "$text" >> "$f"
+  fi
+  if fleet_alert_flashes "$kind"; then
+    if [ -n "$sock" ]; then tmux -L "$sock" display-message "$text" 2>/dev/null
+    else tmux display-message "$text" 2>/dev/null; fi
+  fi
+  return 0
+}
+
+# _fa_hub_flash <now> — the hub-lost member of the whitelist: once per outage
+# (keyed on the hub's last answer), after FLEET_ALERTS_HUB_FLASH_SECS. Only where
+# the status lib is loaded (the bar) and only on a login that has a hub at all
+# (global/hub_ok exists, from fleet-hub-sessions.sh); an answer older than a day
+# is a hub switched off, not an outage.
+_fa_hub_flash() {
+  local now="$1" secs="${FLEET_ALERTS_HUB_FLASH_SECS:-300}" mk last=""
+  command -v fleet_status_hub_ok >/dev/null 2>&1 || return 0
+  [ -s "${FLEET_STATUS_G:-/nonexistent}/hub_ok" ] || return 0
+  case "$secs" in ''|*[!0-9]*) secs=300 ;; esac
+  fleet_status_hub_ok 0
+  [ "${FSH_TS:-0}" -gt 0 ] || return 0
+  fleet_status_hub_lost "$now" || return 0
+  [ "$FSH_AGE" -ge "$secs" ] && [ "$FSH_AGE" -lt 86400 ] || return 0
+  mk="$(fleet_usage_cache_dir)/alerts.hub-lost"
+  [ -f "$mk" ] && IFS= read -r last < "$mk" 2>/dev/null
+  [ "$last" = "$FSH_TS" ] && return 0
+  printf '%s\n' "$FSH_TS" > "$mk" 2>/dev/null || return 0
+  fleet_alert hub-lost "fleet: hub unreachable for $(fleet_usage_human_secs "$FSH_AGE") — remote sessions are not refreshing; sessions here keep working"
 }
 
 # _fa_clean <s> — a value safe inside a JSON string and a TSV field.
@@ -304,6 +394,19 @@ fleet_alerts_compute() {
       "$ssince" jump 0 "$star" "$sdet"
   done
 
+  # --- events (issue #1617): what a background path recorded in the last hour.
+  _fa_hub_flash "$now"
+  local ef et eid ek ex live="${FLEET_ALERTS_EVENT_LIVE:-3600}"
+  case "$live" in ''|*[!0-9]*) live=3600 ;; esac
+  ef=$(fleet_alerts_events_file)
+  if [ -s "$ef" ]; then
+    while IFS=$'\t' read -r et eid ek ex; do
+      case "$et" in ''|*[!0-9]*) continue ;; esac
+      [ $(( now - et )) -lt "$live" ] && [ -n "$eid" ] || continue
+      _fa_row "$eid" warning "$ek" event '' "$et" event 0 '' "$ex"
+    done < "$ef"
+  fi
+
   # --- needs: sessions waiting for a human, off each window's @claude_state.
   if [ -n "${TMUX:-}" ] && command -v tmux >/dev/null 2>&1; then
     # Every optional field has a `-`/0 sentinel: tab is IFS whitespace.
@@ -363,6 +466,8 @@ fleet_alerts_write() {
     # dash/daemon carry their OWN trace (the kick stamp, FLEET_*_KICK_TRACE):
     # compute emits it when there is one, so a generic trace would only outlive it.
     case "$id" in dash-stale|daemon-stale) continue ;; esac
+    # an event past its hour is history (the popup's tail), not a recovery
+    case "$id" in ev-*) continue ;; esac
     case "$sev" in
       alarm|warning)
         line="${line/\"severity\":\"$sev\"/\"severity\":\"healed\"}"
@@ -456,28 +561,32 @@ fleet_alerts_bar() {
   return 0
 }
 
-# fleet_alerts_list [--level L] [--plain] — the popup's rows, alarm → warning →
-# needs → ↻, longest-standing first within a level. Each line is
-# `<id>\t<rendered row>`; --plain drops the colour (fleet-doctor, selftests).
+# fleet_alerts_list [--level L] [--plain] [--history] — the popup's rows, alarm →
+# warning → needs → ↻, longest-standing first within a level; --history adds the
+# events past their hour (issue #1617), newest first, below everything (`all` and
+# `warning` only — they are what ▲ was). Each line is `<id>\t<rendered row>`;
+# --plain drops the colour (fleet-doctor, selftests).
 fleet_alerts_list() {
-  local level=all plain=0 f mf mutes="" now line rank dur icon r x tail mute pad
+  local level=all plain=0 hist=0 f mf mutes="" now line rank dur icon r x tail mute pad
   while [ $# -gt 0 ]; do
     case "$1" in
       --level) level="${2:-all}"; shift ;;
       --plain) plain=1 ;;
+      --history) hist=1 ;;
     esac
     shift
   done
   f=$(fleet_alerts_file); mf=$(fleet_alerts_mute_file)
-  [ -f "$f" ] || return 0
-  [ -f "$mf" ] && mutes=$(<"$mf")
+  [ -f "$f" ] && [ -f "$mf" ] && mutes=$(<"$mf")
   now=$(fleet_now)
   local R=$'\033[31m' Y=$'\033[33m' B=$'\033[34m' P=$'\033[35m' D=$'\033[2m' Z=$'\033[0m'
   [ "$plain" = 1 ] && { R=''; Y=''; B=''; P=''; D=''; Z=''; }
-  while IFS= read -r line; do
+  {
+  [ -f "$f" ] && while IFS= read -r line; do
     [[ $line =~ $_FA_RE ]] || continue
     local id=${BASH_REMATCH[1]} sev=${BASH_REMATCH[2]} su=${BASH_REMATCH[3]} co=${BASH_REMATCH[4]}
     local va=${BASH_REMATCH[5]} si=${BASH_REMATCH[6]} ac=${BASH_REMATCH[7]} he=${BASH_REMATCH[8]}
+    local de=${BASH_REMATCH[10]}
     case "$level" in all|"$sev") ;; *) continue ;; esac
     case "$sev" in
       alarm) rank=1; icon="${R}✖${Z}" ;;
@@ -487,9 +596,10 @@ fleet_alerts_list() {
       *) continue ;;
     esac
     r="$su · $co"; [ -n "$va" ] && r="$r · $va"
+    [ "$ac" = event ] && r="$de"                  # an event's row IS its text
     case "$ac" in
       accounts) x='see accounts' ;; kick-collect|kick-daemons) x='restart daemon' ;;
-      disk) x='see disk' ;; machine) x='see top' ;; jump) x='↵ go to window' ;; *) x='' ;;
+      disk) x='see disk' ;; machine) x='see top' ;; jump) x='↵ go to window' ;; event) x='↵ read' ;; *) x='' ;;
     esac
     tail=""
     if [ "$sev" = healed ]; then
@@ -498,14 +608,50 @@ fleet_alerts_list() {
       rank="$rank$(printf '%012d' $(( 999999999999 - he )))"
     else
       [ "$si" -gt 0 ] && dur=$(fleet_usage_human_secs $(( now - si ))) || dur='?'
-      rank="$rank$(printf '%012d' "$si")"
+      # an event is news: newest first; a condition: longest-standing first
+      if [ "$ac" = event ]; then rank="$rank$(printf '%012d' $(( 999999999999 - si )))"
+      else rank="$rank$(printf '%012d' "$si")"; fi
     fi
     mute=""
     [ "$sev" != alarm ] && _fa_muted "$id" "$mutes" "$now" && mute=" ${D}(muted)${Z}"
     # Pad by CHARACTERS: printf's %-Ns counts bytes, and `·` / `→` are several.
     pad=$(( 40 - ${#r} )); [ "$pad" -lt 1 ] && pad=1
     printf '%s\t%s\t%s  %s%*s%6s  %s%s%s\n' "$rank" "$id" "$icon" "$r" "$pad" '' "$dur" "${D}$x${Z}" "$tail" "$mute"
-  done < "$f" | LC_ALL=C sort -t "$(printf '\t')" -k1,1 | cut -f2-
+  done < "$f"
+  if [ "$hist" = 1 ]; then
+    case "$level" in all|warning) _fa_history_rows "$now" "$D" "$Z" ;; esac
+  fi
+  } | LC_ALL=C sort -t "$(printf '\t')" -k1,1 | cut -f2-
+}
+
+# _fa_history_rows <now> <dim> <reset> — the events past FLEET_ALERTS_EVENT_LIVE,
+# the newest FLEET_ALERTS_HISTORY_ROWS (100) of them, as list rows (rank 5).
+_fa_history_rows() {
+  local now="$1" D="$2" Z="$3" ef et eid ek ex pad live="${FLEET_ALERTS_EVENT_LIVE:-3600}" n="${FLEET_ALERTS_HISTORY_ROWS:-100}"
+  case "$live" in ''|*[!0-9]*) live=3600 ;; esac
+  case "$n" in ''|*[!0-9]*) n=100 ;; esac
+  ef=$(fleet_alerts_events_file); [ -s "$ef" ] || return 0
+  while IFS=$'\t' read -r et eid ek ex; do
+    case "$et" in ''|*[!0-9]*) continue ;; esac
+    pad=$(( 40 - ${#ex} )); [ "$pad" -lt 1 ] && pad=1
+    printf '5%012d\t%s\t%s·%s  %s%*s%6s  %s↵ read%s\n' $(( 999999999999 - et )) "$eid" "$D" "$Z" "$ex" "$pad" '' \
+      "$(fleet_usage_human_secs $(( now - et )))" "$D" "$Z"
+  done <<EOF
+$(awk -F '\t' -v c=$(( now - live )) '$1 ~ /^[0-9]+$/ && $1 < c' "$ef" | tail -n "$n")
+EOF
+}
+
+# fleet_alerts_event_show <id> — ↵ on an event row: the full text, its kind and
+# when, until a key (an event's popup row may be cut at the popup's width).
+fleet_alerts_event_show() {
+  local ef et eid ek ex
+  ef=$(fleet_alerts_events_file)
+  [ -s "$ef" ] && while IFS=$'\t' read -r et eid ek ex; do
+    [ "$eid" = "${1:-}" ] || continue
+    printf '\n  %s · %s\n\n  %s\n' "$(_fa_hhmm "$et")" "$ek" "$ex" | fold -s -w "${COLUMNS:-80}"
+    break
+  done < "$ef"
+  printf '\n  press any key to close\n'; IFS= read -rsn1 _ 2>/dev/null || true
 }
 
 # fleet_alerts_mute <id> — FLEET_ALERTS_MUTE_SECS (1h). Refuses an alarm.
@@ -604,6 +750,7 @@ fleet_alerts_act() {
     [[ $line =~ $_FA_RE ]] && [ "${BASH_REMATCH[1]}" = "$id" ] && { ac=${BASH_REMATCH[7]}; ta=${BASH_REMATCH[9]}; de=${BASH_REMATCH[10]}; break; }
   done < "$f"
   self="bash '$_FA_BIN/fleet-alerts.sh'"
+  case "$id" in ev-*) fleet_alerts_event_show "$id"; return 0 ;; esac
   case "$ac" in
     accounts) exec bash "$_FA_BIN/usage-modal.sh" ;;
     kick-collect)
@@ -647,7 +794,7 @@ _fa_prompt_level() {
 
 # fleet_alerts_rows <level> — the popup's body: the rows + a closing line.
 fleet_alerts_rows() {
-  fleet_alerts_list --level "${1:-all}"
+  fleet_alerts_list --level "${1:-all}" --history
   printf -- '-\t  \033[2m(no more alerts)\033[0m\n'
 }
 
@@ -707,6 +854,7 @@ if [ "${BASH_SOURCE[0]:-}" = "$0" ]; then
     popup-mute) fleet_alerts_popup_mute "$@" ;;  # the popup's `m`
     stall) fleet_alerts_stall "$@" ;;
     unstall) fleet_alerts_unstall "$@" ;;
-    *) echo "fleet-alerts.sh: unknown command '$cmd' (write|refresh|counts|bar|list|mute|act|popup|stall|unstall)" >&2; exit 2 ;;
+    event) fleet_alert "$@" ;;
+    *) echo "fleet-alerts.sh: unknown command '$cmd' (write|refresh|counts|bar|list|mute|act|popup|stall|unstall|event)" >&2; exit 2 ;;
   esac
 fi

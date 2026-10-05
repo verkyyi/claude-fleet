@@ -89,9 +89,8 @@ scratch_surface() {   # $1=worktree-dir  $2=branch  $3=reason-label
   local mk; mk="$SURF_DIR/$(scratch_key "$1")"
   [ -e "$mk" ] && return                    # already surfaced once — stay quiet
   mkdir -p "$SURF_DIR" 2>/dev/null || true; : > "$mk" 2>/dev/null || true
-  for _s in $SOCKETS; do
-    tmux -L "$_s" display-message "fleet: scratch $2 kept ($3) — ⌃x to dispose" 2>/dev/null || true
-  done
+  # recorded, not flashed (issue #1617) — the alerts popup keeps it for 30 days
+  bash "$BIN/fleet-alerts.sh" event scratch-kept "fleet: scratch $2 kept ($3) — ⌃x to dispose" >/dev/null 2>&1 || true
 }
 
 # --- the scratch IDLE age gate, issue #884 --------------------------------------
@@ -141,9 +140,7 @@ scratch_digest_flush() {   # once per run, after every fleet: at most one notify
   fi
   : > "$DIGEST_STAMP" 2>/dev/null || true
   log "DIGEST $msg"
-  for _s in $SOCKETS; do
-    tmux -L "$_s" display-message "$msg" 2>/dev/null || true
-  done
+  bash "$BIN/fleet-alerts.sh" event scratch-idle "$msg" >/dev/null 2>&1 || true   # issue #1617
 }
 
 command -v git >/dev/null 2>&1 || { say "git not found; abort"; exit 0; }

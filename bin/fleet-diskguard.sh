@@ -588,11 +588,8 @@ macOS's file-event daemon holds **${mb} MB** RSS at **${cpu}% CPU** (up ${et}); 
 warn line is ${FSEV_MB} MB / ${FSEV_CPU}%. This is what froze every new session
 6-8s at spawn on 2026-09-22 (issue #889). Fix: \`sudo killall fseventsd\` — launchd
 restarts it immediately. Reported once a day; the fleet never kills it."
-  if command -v fleet_sockets >/dev/null 2>&1; then
-    for s in $(fleet_sockets 2>/dev/null); do
-      tmux -L "$s" display-message "fleet: fseventsd at ${mb} MB / ${cpu}% CPU — new sessions stall at spawn; run \`sudo killall fseventsd\` (launchd restarts it)" 2>/dev/null || true
-    done
-  fi
+  # recorded, not flashed (issue #1617): once a day, nothing breaks before you look
+  bash "$BIN/fleet-alerts.sh" event fseventsd "fleet: fseventsd at ${mb} MB / ${cpu}% CPU — new sessions stall at spawn; run \`sudo killall fseventsd\` (launchd restarts it)" >/dev/null 2>&1 || true
   return 0
 }
 
@@ -865,6 +862,14 @@ EOF2
 Volume backing \`$TARGET\` is under the ${WARN_GB}GB warn line. Forensic snapshot:
 \`$inc\`
 Fleet spawn/auto-restore is now gated at ${FLOOR_GB}GB — inspect the incident for the runaway writer."
+    # Below the floor spawns are REFUSED — one of the three kinds that still flash
+    # (FLEET_ALERT_FLASH_KINDS, issue #1617); above it, the warn line is recorded.
+    if [ "$free" -lt "$FLOOR_GB" ]; then kind=disk-red; dmsg="fleet: disk ${free}GB free — below the ${FLOOR_GB}GB floor, new sessions are refused; free space now (incident: $inc)"
+    else kind=disk-low; dmsg="fleet: disk ${free}GB free — under the ${WARN_GB}GB warn line (floor ${FLOOR_GB}GB; incident: $inc)"; fi
+    socks=""; command -v fleet_sockets >/dev/null 2>&1 && socks=$(fleet_sockets 2>/dev/null)
+    if [ -n "$socks" ]; then
+      for s in $socks; do bash "$BIN/fleet-alerts.sh" event -L "$s" "$kind" "$dmsg" >/dev/null 2>&1 || true; done
+    else bash "$BIN/fleet-alerts.sh" event "$kind" "$dmsg" >/dev/null 2>&1 || true; fi
     ;;
   -h|--help|"")
     sed -n '2,99p' "$0"

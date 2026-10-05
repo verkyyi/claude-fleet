@@ -1266,9 +1266,26 @@ def xterm256(hexcolor):
 
 # A terminal of fewer than 256 colours cannot show the palette at all; it gets the
 # basic colour each palette name stands for — the sidebar's colours before #1534.
-PALETTE_BASIC = {"PAL_BG": curses.COLOR_BLACK, "PAL_CYAN": curses.COLOR_CYAN,
-                 "PAL_RED": curses.COLOR_RED, "PAL_GREEN": curses.COLOR_GREEN,
-                 "PAL_MAGENTA": curses.COLOR_MAGENTA, "PAL_YELLOW": curses.COLOR_YELLOW}
+# -1 is the terminal's own colour: text and dim text keep it there (dim then
+# comes from A_DIM, see `dim_attr`).
+PALETTE_BASIC = {"PAL_FG": -1, "PAL_DIM": -1, "PAL_SEL": curses.COLOR_BLUE,
+                 "PAL_CYAN": curses.COLOR_CYAN, "PAL_RED": curses.COLOR_RED,
+                 "PAL_GREEN": curses.COLOR_GREEN, "PAL_MAGENTA": curses.COLOR_MAGENTA}
+
+# The sidebar's colour pairs (issue #1622): a row's TEXT is one colour (PAL_FG,
+# or PAL_DIM for a dim one) and only its state glyph carries the state's colour
+# — the red 「等你」 dot is no longer drowned in rows painted whole. The current
+# row and the keyboard's row share one quiet PAL_SEL ground, told apart by ▶ / ›.
+# {pair: (fg, bg)}, None = the terminal's default.
+STATE_PAIR = {"working": 1, "needs": 2, "done": 3, "looping": 4}
+STATE_COLOR = {"working": "PAL_CYAN", "needs": "PAL_RED", "done": "PAL_GREEN",
+               "looping": "PAL_MAGENTA"}
+PAIR_SEL, PAIR_TOAST, PAIR_FG, PAIR_DIM, SEL_GLYPH = 5, 7, 8, 9, 10
+PAIRS = {PAIR_SEL: ("PAL_FG", "PAL_SEL"), PAIR_TOAST: ("PAL_RED", None),
+         PAIR_FG: ("PAL_FG", None), PAIR_DIM: ("PAL_DIM", None)}
+for _state, _pair in STATE_PAIR.items():
+    PAIRS[_pair] = (STATE_COLOR[_state], None)
+    PAIRS[_pair + SEL_GLYPH] = (STATE_COLOR[_state], "PAL_SEL")
 
 
 def palette_colors(table, colors):
@@ -1304,13 +1321,12 @@ def ui(screen, session, worker, lock):
     curses.curs_set(0)
     curses.use_default_colors()
     pal = palette_colors(palette(), curses.COLORS)
-    for number, name in enumerate(("PAL_CYAN", "PAL_RED", "PAL_GREEN", "PAL_MAGENTA"), 1):
-        curses.init_pair(number, pal[name], -1)
-    curses.init_pair(5, pal["PAL_BG"], pal["PAL_CYAN"])
-    curses.init_pair(6, pal["PAL_BG"], pal["PAL_YELLOW"])
+    for number, (fg, bg) in PAIRS.items():
+        curses.init_pair(number, pal[fg] if fg else -1, pal[bg] if bg else -1)
+    # Dim text is PAL_DIM; a terminal with no palette colour for it dims instead.
+    dim_attr = curses.color_pair(PAIR_DIM) | (curses.A_DIM if pal["PAL_DIM"] == -1 else 0)
     curses.mousemask(curses.ALL_MOUSE_EVENTS)
     curses.mouseinterval(0)
-    curses.init_pair(7, pal["PAL_RED"], -1)
     screen.keypad(True)
     curses.meta(True)
     # Bracketed paste (issue #1105): with it on, tmux writes a paste as
@@ -1566,23 +1582,25 @@ def ui(screen, session, worker, lock):
 
         screen.erase()
         if waiting:
-            put(0, tr("sidebar_refreshing"), curses.A_DIM)
-        colors = {"working": 1, "needs": 2, "done": 3, "looping": 4}
+            put(0, tr("sidebar_refreshing"), dim_attr)
         for y, row in enumerate(rows[offset:offset + page], waiting):
             wid, state, glyph, label, tree, badge, _depth, _detail, node = row[:9]
             if wid == "hdr":
                 if navigation and key_of((wid, state)) == selected:
-                    put(y, "› " + label, curses.color_pair(6) | curses.A_BOLD, fill=True)
+                    put(y, "› " + label, curses.color_pair(PAIR_SEL) | curses.A_BOLD, fill=True)
                 else:
-                    put(y, label, curses.A_DIM | curses.A_BOLD)
+                    put(y, label, dim_attr | curses.A_BOLD)
                 continue
-            attr = curses.color_pair(colors.get(state, 0))
-            if node.endswith("!"):
-                attr |= curses.A_DIM  # a lost machine's row (issue #1475)
-            if wid == current_row:
-                attr = curses.color_pair(5) | curses.A_BOLD
-            if navigation and wid == selected:
-                attr = curses.color_pair(6) | curses.A_BOLD
+            # The text is one colour; the glyph alone says the state (issue #1622).
+            raised = wid == current_row or (navigation and wid == selected)
+            attr = curses.color_pair(PAIR_SEL if raised else PAIR_FG)
+            lost = node.endswith("!") and not raised
+            if lost:
+                attr = dim_attr  # a lost machine's row (issue #1475)
+            pair = STATE_PAIR.get(state)
+            glyph_attr = curses.color_pair(pair + SEL_GLYPH if raised else pair) if pair else attr
+            if lost:
+                glyph_attr |= curses.A_DIM
             marker = "▶" if wid == current_row else "›" if navigation and wid == selected else " "
             # `marker glyph tree label` (issue #836): the hierarchy glyph is its own
             # fixed cell between the state glyph and the name, so at 30 columns every
@@ -1595,10 +1613,18 @@ def ui(screen, session, worker, lock):
             via = node.endswith("~") and w > 2
             text = row_text(marker, glyph, tree, label, badge, w - 2 if via else w,
                             info_text(row) if wide else "")
-            put(y, text, attr, fill=wid == current_row or (navigation and wid == selected))
+            put(y, text, attr, fill=raised)
+            # The state glyph, painted over its own cell in the state's colour —
+            # where row_left put it, and only when the row is wide enough for it.
+            at = width_of(marker) + 1
+            if glyph.strip() and at + width_of(glyph) <= w and 0 <= y < height:
+                try:
+                    screen.addstr(y, at, glyph, glyph_attr)
+                except curses.error:
+                    pass
             if via:
                 try:
-                    screen.addstr(y, w - 1, "⇄", curses.A_DIM)
+                    screen.addstr(y, w - 1, "⇄", dim_attr)
                 except curses.error:
                     pass
         # The selected row's whole name takes the `?` row while the keyboard is
@@ -1610,9 +1636,9 @@ def ui(screen, session, worker, lock):
             info = hint_line(row, width, wide)
         help_shown = help_y is not None and info is None
         if info is not None:
-            put(help_y, info, curses.A_BOLD)
+            put(help_y, info, curses.color_pair(PAIR_FG) | curses.A_BOLD)
         elif help_y is not None:
-            put(help_y, HELP_ROW, curses.A_DIM)
+            put(help_y, HELP_ROW, dim_attr)
         # ONE input line closes the list (issue #896): the hints moved to the
         # `?` sheet. Typing while the keyboard is here fills it; Enter starts a
         # scratch session named after it. Away from the sidebar only `›` shows.
@@ -1623,15 +1649,15 @@ def ui(screen, session, worker, lock):
             put(height - 1, prefix + line.view(max(0, room - sum(map(cells, prefix)))),
                 curses.A_BOLD)
         elif spawning is not None:
-            put(height - 1, "› " + line.view(max(0, room - 2), "") + " …", curses.A_DIM)
+            put(height - 1, "› " + line.view(max(0, room - 2), "") + " …", dim_attr)
         elif toast and time.monotonic() < toast_until:
-            put(height - 1, "› " + toast, curses.color_pair(7))
+            put(height - 1, "› " + toast, curses.color_pair(PAIR_TOAST))
         elif line.text:
             put(height - 1, "› " + line.view(room if navigation else room - 1,
                                              "▏" if navigation else ""),
-                curses.A_BOLD if navigation else curses.A_DIM)
+                curses.color_pair(PAIR_FG) | curses.A_BOLD if navigation else dim_attr)
         else:
-            put(height - 1, "› " + placeholder(selected) if navigation else "›", curses.A_DIM)
+            put(height - 1, "› " + placeholder(selected) if navigation else "›", dim_attr)
         screen.refresh()
         # Wake for whichever comes first: the next repaint, a pending follow or
         # a finished spawn.

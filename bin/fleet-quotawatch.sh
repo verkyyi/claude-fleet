@@ -502,7 +502,7 @@ if [ "$MODEL_SWEEP" = 1 ] && [ -x "$BIN/fleet-model-switch.sh" ]; then
       continue
     fi
     printf 'fleet-quotawatch: %s walled window(s) on %s — switching in place\n' "$mplan" "$ms" >&2
-    fleet_bg -L "$ms" "bash '$BIN/fleet-model-switch.sh' --capped --session '$ms' --toast"
+    fleet_bg -L "$ms" "bash '$BIN/fleet-model-switch.sh' --capped --session '$ms' --alert"
   done
   T_MODEL=$(( $(now) - m0 ))
   if [ -n "$DEFERRED" ]; then
@@ -764,19 +764,21 @@ qw_socket_budget() { local b; b=$(qw_left "$POLICY_T0" "$POLICY_BUDGET")
                      printf '%s' "$b"; }
 
 # qw_ceiling_socket <socket> <label> <util> <which> <resett> <to> — one fleet's
-# share of a ceiling episode: start the migrate fan-out, then toast. <to> empty =
-# the #567 nowhere-to-move case, which toasts and moves nobody.
+# share of a ceiling episode: start the migrate fan-out, then record it in the
+# alerts (issue #1617: a daemon never flashes its own toast). <to> empty = the
+# #567 nowhere-to-move case, which moves nobody — one of the three kinds that
+# still flash (FLEET_ALERT_FLASH_KINDS), because only you can do something.
 qw_ceiling_socket() {
   local qs="$1" ql="$2" qutil="$3" qwhich="$4" qresett="$5" qnew="$6"
   if qw_failover_enabled "$qs"; then
-    tmux -L "$qs" display-message "fleet: $ql at ${qutil}% — subscription planner will resume eligible sessions; unreadable/busy targets wait" 2>/dev/null
+    bash "$BIN/fleet-alerts.sh" event -L "$qs" quota-planner "fleet: $ql at ${qutil}% — subscription planner will resume eligible sessions; unreadable/busy targets wait"
     return 0
   fi
   if [ -n "$qnew" ]; then
-    fleet_bg -L "$qs" "bash '$BIN/fleet-account.sh' migrate --account '$ql' --session '$qs' --toast"
-    tmux -L "$qs" display-message "fleet: $ql at ${qutil}% of its $qwhich window ($qsrc) → benched until $qresett; moving its sessions to $qnew" 2>/dev/null
+    fleet_bg -L "$qs" "bash '$BIN/fleet-account.sh' migrate --account '$ql' --session '$qs' --alert"
+    bash "$BIN/fleet-alerts.sh" event -L "$qs" quota-benched "fleet: $ql at ${qutil}% of its $qwhich window ($qsrc) → benched until $qresett; moving its sessions to $qnew"
   else
-    tmux -L "$qs" display-message "fleet: $ql at ${qutil}% of its $qwhich window ($qsrc) → benched until $qresett; nowhere to move: no other account is readable and under the ceiling — sessions stay on $ql until $qresett" 2>/dev/null
+    bash "$BIN/fleet-alerts.sh" event -L "$qs" quota-nowhere "fleet: $ql at ${qutil}% of its $qwhich window ($qsrc) → benched until $qresett; nowhere to move: no other account is readable and under the ceiling — sessions stay on $ql until $qresett"
   fi
   return 0
 }
@@ -791,7 +793,7 @@ qw_warn_socket() {
     qp=$(fleet_pane_claude_pid "$qw" "$qs" 2>/dev/null) || continue
     [ -n "$qp" ] && fleet_peer_send "$qp" "$qmsg" fleet-quotawatch && n=$((n+1))
   done < <(fleet_lw '#{window_id} #{@cc_account}' tmux -L "$qs")
-  tmux -L "$qs" display-message "fleet: $ql at ${qutil}% of its $qwhich window ($qsrc) — sessions warned; moves at ${qceil}%" 2>/dev/null
+  bash "$BIN/fleet-alerts.sh" event -L "$qs" quota-warned "fleet: $ql at ${qutil}% of its $qwhich window ($qsrc) — sessions warned; moves at ${qceil}%"
   printf '%s' "$n"
 }
 POLICY_T0=$SECONDS
@@ -912,7 +914,7 @@ case "$PACE_COOLDOWN" in ''|*[!0-9]*) PACE_COOLDOWN=600 ;; esac
 qw_pace_socket() {
   local qs="$1" ql="$2"
   qw_failover_enabled "$qs" && return 0
-  fleet_bg -L "$qs" "bash '$BIN/fleet-account.sh' migrate --idle --from '$ql' --max 1 --session '$qs' --toast"
+  fleet_bg -L "$qs" "bash '$BIN/fleet-account.sh' migrate --idle --from '$ql' --max 1 --session '$qs' --alert"
   return 0
 }
 qpace=""
