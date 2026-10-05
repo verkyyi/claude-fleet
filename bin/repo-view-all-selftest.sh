@@ -7,7 +7,8 @@
 #   A. GONE — fleet-pick.sh, the pick key, the `fleet` footer range, the
 #      @fleet_repo_label wiring and fleet_current_repo_set / fleet_repo_label[_sync];
 #      nothing in bin/ or conf/ still names them.
-#   B. FOOTER — status-left renders `  ⌂   <login> · ● N 待处理  ` (issue #1534's
+#   B. FOOTER — status-left renders `  ☰  <login> ● N  ` (issue #1616; no client here,
+#      so the < 60-column layout — tmux-status-selftest.sh leg L drives the wide one) (issue #1534's
 #      one layout; the middle chip names the LOGIN, @login, issue #1099, never the
 #      fleet #S); no "· all" tail in a 2+ repo one; tmux-conf-reload.sh stamps
 #      @login.
@@ -124,11 +125,11 @@ NEW_SL=$_fpe
 render() { tmux display-message -p -t alpha:plan "$1" | sed 's/#\[[^]]*\]//g'; }
 tmux set -gu @fleet_repo_label
 tmux set -g @login op-login
-eq    "B: one-repo fleet footer renders the one layout (#1534)" "$(render "$NEW_SL")" "  ⌂   op-login "
+eq    "B: one-repo fleet footer renders the one layout (#1534, #1616)" "$(render "$NEW_SL")" "  ☰  op-login "
 tmux set -w -t alpha:plan @attn_needs 3 2>/dev/null; tmux set -t alpha @attn_needs 3
 case "$(render "$NEW_SL")" in
-  '  ⌂   op-login · ● '[0-9]' 待处理  ') CHECKS=$((CHECKS+1)) ;;
-  *) fail "B: …with the needs badge up: \`  ⌂   op-login · ● N 待处理  \`" "$(render "$NEW_SL")" ;;
+  '  ☰  op-login ● '[0-9]'  ') CHECKS=$((CHECKS+1)) ;;
+  *) fail "B: …with the needs badge up: \`  ☰  op-login ● N  \`" "$(render "$NEW_SL")" ;;
 esac
 tmux set -t alpha -u @attn_needs
 has   "B: the login name is drawn" "$(render "$NEW_SL")" " op-login "
