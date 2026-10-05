@@ -17,6 +17,11 @@ FLEET_ACCOUNT_PHASE_WINDOW         knob: internal pacing/limit, safe in-code def
 FLEET_ACCOUNT_SELECTED             handoff: the account pick already ran for this launch
 FLEET_ACCOUNT_TARGET               handoff: the account a migrate/move relaunches on
 FLEET_ALERTS_ALLCAPPED_SECS        knob: how long an `accounts · all capped` stamp stays an alert (fleet-alerts.sh, 900)
+FLEET_ALERTS_EVENT_DEDUP           knob: same kind + text within this many seconds is one alerts event (fleet-alerts.sh event, 60)
+FLEET_ALERTS_EVENT_KEEP            knob: how long alerts.events keeps a background event (fleet-alerts.sh, 2592000 = 30 days)
+FLEET_ALERTS_EVENT_LIVE            knob: how long a background event counts as a ▲ row before it is popup history (fleet-alerts.sh, 3600)
+FLEET_ALERTS_HISTORY_ROWS          knob: how many past events the alerts popup lists (fleet-alerts.sh, 100)
+FLEET_ALERTS_HUB_FLASH_SECS        knob: hub unreachable this long before the one hub-lost flash (fleet-alerts.sh, 300)
 FLEET_ALERTS_DISK                  seam: 0 skips the alerts producer's own df (a selftest that counts df calls)
 FLEET_ALERTS_MUTE_SECS             knob: how long `m` in the alerts popup mutes a row (fleet-alerts.sh, 3600)
 FLEET_ALERTS_STALL_TTL             knob: how long a forgotten `stalled` alert outlives its killed waiter (fleet-alerts.sh, 21600)

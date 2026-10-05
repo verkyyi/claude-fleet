@@ -69,7 +69,7 @@
 # Needs python3 (quota_parse). Exit 0 = pass, non-zero = fail.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
-for f in fleet-quotawatch.sh fleet-account.sh fleet-lib.sh usage-lib.sh; do
+for f in fleet-quotawatch.sh fleet-account.sh fleet-lib.sh usage-lib.sh fleet-alerts.sh fleet-daemon-lib.sh; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
 command -v python3 >/dev/null 2>&1 || { printf 'selftest: python3 not installed — SKIP\n' >&2; exit 0; }
@@ -83,7 +83,7 @@ trap '[ -n "$HOLDER" ] && kill "$HOLDER" 2>/dev/null
       pkill -9 -f "$HANGMARK" >/dev/null 2>&1
       rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/bin" "$WORK/fakepath" "$WORK/accounts" "$WORK/conf/fleets/sessA" "$WORK/.claude-dash/global"
-for f in fleet-quotawatch.sh fleet-account.sh fleet-lib.sh usage-lib.sh; do cp "$BIN/$f" "$WORK/bin/"; done
+for f in fleet-quotawatch.sh fleet-account.sh fleet-lib.sh usage-lib.sh fleet-alerts.sh fleet-daemon-lib.sh; do cp "$BIN/$f" "$WORK/bin/"; done
 chmod +x "$WORK/bin/"*.sh
 printf 'tok-a\n' > "$WORK/accounts/a"; printf 'tok-b\n' > "$WORK/accounts/b"
 printf 'FLEET_REPO="acme/widgets"\n' > "$WORK/conf/fleets/sessA/conf"
@@ -222,7 +222,9 @@ echo 72 > "$WORK/pct"; run_watch || fail "3: 72% tick must exit 0"
 grep -q 'approaching its limit' "$WORK/notify.log" || fail "3: 72% ⇒ 'approaching' notify"
 grep -q '\*\*a\*\* is at 72% of its 5-hour window' "$WORK/notify.log" || fail "3: notify names the account + %"
 grep -q '(~56 min to 100% at the current rate)' "$WORK/notify.log" || fail "3: notify carries the ETA from percent_per_hour"
-grep -q 'sessA display-message fleet: a at 72%.*sessions warned' "$WORK/tmux.calls" || fail "3: 72% ⇒ toast on the fleet socket"
+# issue #1617: a daemon never flashes — the warn is ONE alerts event, no toast
+grep -q 'display-message fleet: a at 72%' "$WORK/tmux.calls" && fail "3: 72% ⇒ NO toast (a background event is recorded, not flashed)"
+[ "$(grep -c '	quota-warned	fleet: a at 72%.*sessions warned' "$G/alerts.events" 2>/dev/null)" = 1 ] || fail "3: 72% ⇒ one quota-warned alerts event (alerts.events: $(cat "$G/alerts.events" 2>/dev/null))"
 grep -q '^a	' "$G/account.limited" 2>/dev/null && fail "3: 72% must NOT bench"
 [ "$(notifies)" = 1 ] || fail "3: exactly one notify at 72%"
 run_watch || fail "3b: second 72% tick must exit 0"
@@ -235,7 +237,10 @@ echo 90 > "$WORK/pct"; run_watch || fail "3c: 90% tick must exit 0"
 # wrapped form (issue #575): `( bash … --toast\n) >/dev/null 2>&1 || :`. Assert both
 # halves — the command AND the tail that keeps migrate's stdout (and a nonzero exit)
 # from becoming an Esc-to-dismiss view over whatever window the operator is in.
-grep -q "run-shell -b ( bash '$WORK/bin/fleet-account.sh' migrate --account 'a' --session 'sessA' --toast" "$WORK/tmux.calls" || fail "3c: migrate goes through fleet_bg (run-shell -b, subshell-wrapped) on the fleet socket with --session sessA"
+grep -q "run-shell -b ( bash '$WORK/bin/fleet-account.sh' migrate --account 'a' --session 'sessA' --alert" "$WORK/tmux.calls" || fail "3c: migrate goes through fleet_bg (run-shell -b, subshell-wrapped) on the fleet socket with --session sessA --alert"
+# the bench (issue #1617): no display-message at all, and the alerts grow by one
+grep -q 'display-message fleet: a at 90%' "$WORK/tmux.calls" && fail "3c: a bench with somewhere to move must NOT flash (tmux.calls: $(grep display-message "$WORK/tmux.calls" | tail -2))"
+[ "$(grep -c '	quota-benched	fleet: a at 90%.*benched until' "$G/alerts.events" 2>/dev/null)" = 1 ] || fail "3c: the bench is ONE quota-benched alerts event (alerts.events: $(cat "$G/alerts.events" 2>/dev/null))"
 grep -qx ') >/dev/null 2>&1 || :' "$WORK/tmux.calls" || fail "3c: the backgrounded migrate must be SILENCED by fleet_bg (#575) — run-shell paints a job's stdout, and a nonzero exit, over the operator's window"
 grep -q 'rotated early' "$WORK/notify.log" || fail "3c: 90% ⇒ 'rotated early' notify"
 grep -q 'new sessions now use \*\*b\*\*' "$WORK/notify.log" || fail "3c: active pointer rotated to b (notify: $(grep 'new sessions' "$WORK/notify.log"))"
@@ -348,7 +353,10 @@ run_watch || fail "8b: the every-account-capped tick must exit 0"
 [ "$(awk -F'\t' '$1=="b"{print $3}' "$G/account.limited" 2>/dev/null)" = "ccquota: 5-hour window at 95%" ] || fail "8b: b must be benched too (account.limited: $(cat "$G/account.limited" 2>/dev/null))"
 [ "$(migrates)" = "$m" ] || fail "8b: NO migrate --account a when every account is capped (got $(( $(migrates) - m )) new)"
 ! grep -q "migrate --account 'b'" "$WORK/tmux.calls" || fail "8b: NO migrate --account b either"
-grep -q 'display-message fleet: a at 90%.*nowhere to move: no other account is readable and under the ceiling' "$WORK/tmux.calls" || fail "8b: the toast must say nowhere to move (tmux.calls: $(grep display-message "$WORK/tmux.calls" | tail -2))"
+# nowhere to move is one of the three kinds that still FLASH (FLEET_ALERT_FLASH_KINDS,
+# issue #1617) — once on the fleet socket — and it is recorded too
+[ "$(grep -c 'sessA display-message fleet: a at 90%.*nowhere to move: no other account is readable and under the ceiling' "$WORK/tmux.calls")" = 1 ] || fail "8b: the flash must say nowhere to move, once (tmux.calls: $(grep display-message "$WORK/tmux.calls" | tail -2))"
+grep -q '	quota-nowhere	fleet: a at 90%.*nowhere to move' "$G/alerts.events" || fail "8b: nowhere-to-move must ALSO be an alerts event (alerts.events: $(cat "$G/alerts.events" 2>/dev/null))"
 grep -q '# subscription at its limit — nowhere to move' "$WORK/notify.log" || fail "8b: the notify must say nowhere to move"
 grep -q 'sessions were NOT moved: they stay on \*\*b\*\*' "$WORK/notify.log" || fail "8b: the notify names the account the sessions stay on (notify: $(tail -4 "$WORK/notify.log"))"
 [ "$(notifies)" = $((n+2)) ] || fail "8b: one notify per capped account (got $(( $(notifies) - n )))"
@@ -619,7 +627,7 @@ run_watch || fail "12: pace tick must exit 0"
 [ "$(grep -c . "$G/quota.pace")" = 2 ] || fail "12: quota.pace has one row per account (got: $(cat "$G/quota.pace"))"
 [ "$(awk -F'\t' '$1=="a"{print $3"/"$4}' "$G/quota.pace")" = "53/held" ] || fail "12: a reads pace +53, held (got: $(awk -F'\t' '$1=="a"' "$G/quota.pace"))"
 [ "$(awk -F'\t' '$1=="b"{print $3"/"$4}' "$G/quota.pace")" = "-63/ok" ]  || fail "12: b reads pace −63, ok (got: $(awk -F'\t' '$1=="b"' "$G/quota.pace"))"
-grep -q "run-shell -b ( bash '$WORK/bin/fleet-account.sh' migrate --idle --from 'a' --max 1 --session 'sessA' --toast" "$WORK/tmux.calls" \
+grep -q "run-shell -b ( bash '$WORK/bin/fleet-account.sh' migrate --idle --from 'a' --max 1 --session 'sessA' --alert" "$WORK/tmux.calls" \
   || fail "12: a lead of 116 ⇒ ONE idle session moved off a (migrate --idle --from a --max 1, via fleet_bg on the fleet socket) — tmux.calls: $(grep migrate "$WORK/tmux.calls")"
 [ "$(grep -c "migrate --idle --from 'a'" "$WORK/tmux.calls")" = 1 ] || fail "12: exactly one rebalance move"
 [ "$(migrates)" = "$m" ] || fail "12: a rebalance is NOT a ceiling fan-out (no migrate --account)"
@@ -676,7 +684,7 @@ printf '%s\n' "a $NOW 75 30 $RESET5 $RESET6" "b $NOW 99 - $RESET5 $RESET6" "- - 
 age_ccq; QTTL=3600 run_watch || fail "13a: tick must exit 0"
 [ "$(cat "$G/quota.warn.a" 2>/dev/null)" = "$RESET5" ] || fail "13a: the 75% STATUSLINE reading must warn on its own reset $RESET5 (got: $(cat "$G/quota.warn.a" 2>/dev/null); freshness: $(cat "$G/quota.freshness"))"
 grep -q '\*\*a\*\* is at 75% of its 5-hour window.*(statusline, exact)' "$WORK/notify.log" || fail "13a: the warn notify must name the statusline as the source ($(tail -3 "$WORK/notify.log"))"
-grep -q 'sessA display-message fleet: a at 75% of its 5-hour window (statusline)' "$WORK/tmux.calls" || fail "13a: the toast names the statusline"
+grep -q '	quota-warned	fleet: a at 75% of its 5-hour window (statusline)' "$G/alerts.events" || fail "13a: the alerts event names the statusline ($(tail -2 "$G/alerts.events" 2>/dev/null))"
 [ ! -e "$G/quota.warn.b" ] && [ ! -e "$G/quota.ceiling.b" ] || fail "13a: a half stamp (no 7d %) must not count — b stays on ccquota's 20%"
 [ "$(awk -F'\t' '$1=="a"{print $2}' "$G/quota.freshness")" = statusline ] || fail "13a: quota.freshness names a's source (got: $(cat "$G/quota.freshness"))"
 [ "$(awk -F'\t' '$1=="b"{print $2}' "$G/quota.freshness")" = ccquota ]    || fail "13a: b's reading is ccquota's"

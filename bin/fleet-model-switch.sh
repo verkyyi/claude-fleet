@@ -82,6 +82,8 @@
 #         --no-ledger        do NOT record the cap via `fleet-account.sh model-limited`
 #         --dry-run          print the plan, touch nothing
 #         --toast            tmux display-message the summary (for run-shell -b callers)
+#         --alert            record the summary in the alerts instead (a daemon
+#                            caller, issue #1617 — fleet-alerts.sh event)
 #
 # COST, and why it is a correctness property here (issue #706). `--capped
 # --dry-run` is the probe fleet-quotawatch runs for every fleet on every 60 s
@@ -304,6 +306,7 @@ main() {
       --no-ledger)   LEDGER=0 ;;
       --dry-run)     DRY=1 ;;
       --toast)       TOAST=1 ;;
+      --alert)       TOAST=2 ;;
       -h|--help)     sed -n '2,50p' "$0"; return 0 ;;
       -*)            printf 'fleet-model-switch: unknown option %s\n' "$1" >&2; return 2 ;;
       *)             WIDS+=("$1") ;;
@@ -683,7 +686,10 @@ main() {
   local sum
   sum="fleet-model-switch: $switched switched, $skipped skipped, $failed unverified$([ "$handed" -gt 0 ] && printf ', %s handed to migrate' "$handed")"
   printf '%s%s\n' "$sum" "$([ -n "$REPORT" ] && printf ' (%s)' "$REPORT")"
-  [ "$TOAST" = 1 ] && [ "$switched" -gt 0 ] && TM display-message "$sum" 2>/dev/null
+  if [ "$switched" -gt 0 ]; then
+    if [ "$TOAST" = 2 ]; then bash "$BIN/fleet-alerts.sh" event ${SOCK:+-L "$SOCK"} model-switch "$sum" >/dev/null 2>&1
+    elif [ "$TOAST" = 1 ]; then TM display-message "$sum" 2>/dev/null; fi   # toast-ok: --toast = a keypress
+  fi
   return 0
 }
 

@@ -53,7 +53,10 @@
 #         --nudge <text>      first prompt of the resumed session (default: the
 #                             interrupted-turn text for a `working` window; none if idle)
 #         --dry-run           print the plan, touch nothing
-#         --toast             tmux display-message the summary (for run-shell -b callers)
+#         --toast             tmux display-message the summary (for run-shell -b callers
+#                             a KEYPRESS started — the dash key, the usage modal)
+#         --alert             record the summary in the alerts instead (issue #1617:
+#                             a daemon-started move never flashes; fleet-alerts.sh)
 #         --force-bg          move even though the session owns background/tool
 #                             processes (issue #873 — the dash's migrate key): they are
 #                             inventoried BEFORE /exit, stopped after Claude is gone
@@ -158,6 +161,12 @@ session_id_for() {
 
 # wopt <wid> <format> — one expanded format off a window (empty + exit 1 if gone).
 wopt() { TM display-message -p -t "$1" "$2" 2>/dev/null; }
+# migrate_report <kind> <text> — the summary: a toast for a keypress (--toast),
+# an alerts event for a daemon (--alert, issue #1617).
+migrate_report() {
+  if [ "$TOAST" = 2 ]; then bash "$BIN/fleet-alerts.sh" event ${SOCK:+-L "$SOCK"} "$1" "$2" >/dev/null 2>&1 || :
+  else TM display-message "$2" 2>/dev/null || :; fi   # toast-ok: --toast = a keypress started this move
+}
 
 # window_closed <wid> — 0 iff the window is gone OR has no live pane. tmux keeps a
 # window object around for a moment after its last pane exits (and for good on a
@@ -592,6 +601,7 @@ migrate_main() {
       --model=*) MODEL="${1#--model=}"; shift ;;
       --dry-run) DRY=1; shift ;;
       --toast) TOAST=1; shift ;;
+      --alert) TOAST=2; shift ;;
       whoami) MODE=whoami; shift ;;
       --verified) verified=1; shift ;;
       -h|--help) sed -n '2,63p' "$0"; return 0 ;;
@@ -772,6 +782,7 @@ migrate_main() {
       elif [ "$FORCE_SELF" = 1 ]; then
         _log="$(fleet_state_dir "$SESS")/migrate-self.log"
         _args=(--session "$SESS" --toast)
+        [ "$TOAST" = 2 ] && _args=(--session "$SESS" --alert)
         [ -n "$MODEL" ] && _args+=(--model "$MODEL")
         [ "$NUDGE_SET" = 1 ] && _args+=(--nudge "$NUDGE")
         [ "$FORCE_BG" = 1 ] && _args+=(--force-bg)
@@ -792,12 +803,12 @@ migrate_main() {
   done
   LAST_SKIP="${LAST_SAY:-}"; LAST_SKIP="${LAST_SKIP#*: }"
   say "fleet-migrate: moved $moved, skipped $skipped$([ "$detached" = 0 ] || printf ', detached %s' "$detached")"
-  if [ "$TOAST" = 1 ] && [ "$moved" -gt 0 ]; then
-    TM display-message "fleet: moved $moved session$([ "$moved" = 1 ] || printf s) onto ${ACTIVE:-the active account} ($REPORT)" 2>/dev/null || :
-  elif [ "$TOAST" = 1 ] && [ "$skipped" -gt 0 ]; then
+  if [ "$TOAST" != 0 ] && [ "$moved" -gt 0 ]; then
+    migrate_report migrate-moved "fleet: moved $moved session$([ "$moved" = 1 ] || printf s) onto ${ACTIVE:-the active account} ($REPORT)"
+  elif [ "$TOAST" != 0 ] && [ "$skipped" -gt 0 ]; then
     # The dash key runs this detached (#873): a move that did not happen must still
     # say so, or the keypress looks dead.
-    TM display-message "fleet: migrate moved nothing ($skipped skipped: ${LAST_SKIP:-see fleet-account.sh migrate --dry-run})" 2>/dev/null || :
+    migrate_report migrate-nothing "fleet: migrate moved nothing ($skipped skipped: ${LAST_SKIP:-see fleet-account.sh migrate --dry-run})"
   fi
   # The only thing asked for was the caller's own window (issue #1474): say so in
   # the exit code too, so a script (a Bash tool call) cannot read the refusal as
