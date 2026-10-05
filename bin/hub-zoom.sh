@@ -48,23 +48,35 @@ while [ $# -gt 0 ]; do
   shift
 done
 BIN="$(cd "$(dirname "$0")" && pwd)"
-. "$BIN/fleet-lib.sh"
+# The ⌂ latency trace (issue #1611): t0 = run-shell's first line; every stage
+# down to the picker appends a mark, the hub-visits line carries them as `ms=…`.
+. "$BIN/fleet-trace-lib.sh"; fleet_home_trace_start
 SESS=$(tmux display-message -p '#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null)
 
 # The full-screen list retired (issue #1533): unless FLEET_DASH_WINDOW=1 brings
 # the hub window back, ⌂ / F9 land on the task list in the window you are in —
 # fleet-sidebar.sh home, whose contract is "always ends with the list focused"
-# (F9 a third time hides it). Everything below is the FLEET_DASH_WINDOW=1 hub,
-# kept one batch as the way back, unchanged.
-(
-  [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
-  _fs="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleet.settings"; [ -f "$_fs" ] && . "$_fs"
-  fleet_load_conf "$SESS"
-  [ "${FLEET_DASH_WINDOW:-0}" = 1 ]
-) || {
-  if [ "$mode" = --home ]; then m=home; else m=f9; fi
-  exec bash "$BIN/fleet-sidebar.sh" home '' "$m" "$client" "$nav"
+# (F9 a third time hides it). That one knob is read the CHEAP way (issue #1611):
+# the last `FLEET_DASH_WINDOW=` line across the same three layers, in the order a
+# full load sources them — the install's fleet.conf, the login's fleet.settings,
+# this fleet's conf — else the environment. This script used to load the library
+# and the whole conf (two tmux reads in a 2+ repo fleet) to ask one yes/no, and
+# the sidebar then loaded both again; the sidebar is where the conf is loaded
+# now, once. Everything below is the FLEET_DASH_WINDOW=1 hub, kept one batch as
+# the way back, unchanged.
+dash_window() {
+  local cd="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}" conf v
+  conf="$cd/fleets/$SESS/conf"; [ -f "$conf" ] || conf="$cd/$SESS.conf"   # fleet_conf_file's two layouts
+  v=$(grep -hE '^[[:space:]]*(export[[:space:]]+)?FLEET_DASH_WINDOW=' "$BIN/../fleet.conf" "$cd/fleet.settings" "$conf" 2>/dev/null | tail -n1)
+  v=${v#*=}; v=${v%%[[:space:]]#*}; v=${v%"${v##*[! 	]}"}; v=${v#\"}; v=${v%\"}; v=${v#\'}; v=${v%\'}
+  [ "${v:-${FLEET_DASH_WINDOW:-0}}" = 1 ]
 }
+if ! dash_window; then
+  if [ "$mode" = --home ]; then m=home; else m=f9; fi
+  fleet_home_mark conf
+  exec bash "$BIN/fleet-sidebar.sh" home '' "$m" "$client" "$nav"
+fi
+. "$BIN/fleet-lib.sh"
 
 # Task bar first — decided on this window's own options, before any hub lookup.
 if [ "$nav" = 0 ] &&
@@ -81,8 +93,9 @@ if [ "$nav" = 0 ] &&
     bash "$BIN/fleet-sidebar.sh" key "$sid" Escape >/dev/null 2>&1 || :
     tmux display-message ${client:+-c "$client"} "$(sh "$BIN/fleet-ui-lang.sh" t toast_sidebar_home)" 2>/dev/null || :
     if [ "$mode" = --home ]; then cause=home-sidebar; else cause=f9-sidebar; fi
+    fleet_home_end focus
     bash "$BIN/fleet-hub-visits.sh" record '' "$SESS" "$cause" \
-      "$(tmux display-message -p '#{?#{@wid},#{@wid},#{window_id}}' 2>/dev/null)" '' >/dev/null 2>&1 || :
+      "$(tmux display-message -p '#{?#{@wid},#{@wid},#{window_id}}' 2>/dev/null)" '' "$(fleet_home_extra)" >/dev/null 2>&1 || :
     exit 0
   fi
 fi
@@ -113,6 +126,7 @@ if [ "$nav" = 0 ] && [ -n "$target" ] &&
   fi
 fi
 if [ -z "$target" ]; then
+  fleet_home_trace_drop
   exec env HUB_SESSION="$SESS" bash "$(dirname "$0")/hub-session.sh"
 fi
 
@@ -139,4 +153,5 @@ else
 fi
 # run-shell shows a blocking error view on ANY nonzero exit (e.g. the zoom-flag
 # test above evaluating false) — always leave cleanly.
+fleet_home_trace_drop
 exit 0

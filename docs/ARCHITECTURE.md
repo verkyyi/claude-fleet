@@ -227,7 +227,17 @@ after the overlay closes: `select-window` by stable id, the bar's
 `dash-raw-session.sh --name … --origin hub` with `FLEET_SPAWN_FOCUS=1`, or
 `hub-zoom.sh --nav` (the second press). @popup_open brackets the popup like
 every modal bind. ⌂ / F9 opening it log `home-pick` / `f9-pick` to the hub-visit
-meter — kept out of the trip count like `*-sidebar`.
+meter — kept out of the trip count like `*-sidebar` — with a 4th column, the ⌂
+latency trace (issue #1611, `bin/fleet-trace-lib.sh`): `ms=<press→list> conf:…
+side:… sync:… pick:… popup:… open:… keys:… rows:… fzf:… close:… done:…`,
+cumulative ms from run-shell's first line, so a slow ⌂ says which stage.
+The press itself is kept short the same way (#1611): hub-zoom.sh reads its one
+knob with a grep instead of loading the library and the conf (the sidebar
+loads both, once); a window too narrow for the list skips the python sync and
+goes straight to the popup; the parent starts the row producer and the keymap
+(cached per prefix) in the background BEFORE the popup opens and the picker
+takes them off a FIFO. `bin/task-pick-latency-selftest.sh` replays the tap from
+a 54x50 pty client and holds the median to 0.5 s on an idle box.
 One dim ` ? 快捷键` row sits directly above the input line (issue #948; the
 operator's explicit exception to EPIC #894's no-resident-rows rule — on an iPad a
 whole row is a tap target). A tap on it (opened on the release, like the menu

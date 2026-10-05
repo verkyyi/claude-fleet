@@ -6,7 +6,7 @@
 # hub) had no way to say whether it made those trips rarer. This is the meter:
 # every arrival on the hub window appends ONE line to
 #
-#     logs/hub-visits-<session>.log        ts<TAB>from<TAB>cause
+#     logs/hub-visits-<session>.log        ts<TAB>from<TAB>cause[<TAB>ms=…]
 #
 #   ts    — UTC, ISO-8601 to the second (2026-09-22T15:04:05Z)
 #   from  — the window you came FROM: its `@wid` handle (issue #566) when it has
@@ -33,6 +33,11 @@
 #                            NOT an arrival either: the task had no bar on screen,
 #                            so ⌂ / F9 opened the task picker popup instead
 #                            (issue #902, fleet-task-pick.sh writes it).
+#   ms=…  — OPTIONAL 4th column (issue #1611): where a ⌂ / F9 press spent its
+#           time, as the server saw it — `ms=<press→list> conf:21 side:48 …`,
+#           cumulative ms from run-shell's first line (bin/fleet-trace-lib.sh).
+#           Only `*-pick` / `*-sidebar` lines carry it; every reader keys on the
+#           first three columns and ignores it.
 #
 # The writer is the indexed `session-window-changed[73]` / `client-attached[73]`
 # hooks in conf/tmux-attention.conf. Moving BETWEEN non-hub windows costs no fork:
@@ -53,9 +58,10 @@
 #   fleet-hub-visits.sh --brief [--since 24h] [--session S | --all]
 #       One line per fleet — `<session><TAB><count><TAB><top two causes>` — for
 #       fleet-doctor's `hub` row. Prints nothing when there are no logs.
-#   fleet-hub-visits.sh record <socket> <session> <marker> <from> <from-id>
+#   fleet-hub-visits.sh record <socket> <session> <marker> <from> <from-id> [<extra>]
 #       The hook's writer. <marker> = the one-shot @hub_nav_via value, or
-#       `attach`, or empty. Always exits 0 (run from a tmux hook).
+#       `attach`, or empty. <extra> (the ⌂ trace's `ms=…`, #1611) becomes the 4th
+#       column: one line, no tab. Always exits 0 (run from a tmux hook).
 #
 # Knobs: FLEET_HUB_VISITS_MAX (default 5000) — the log is trimmed to its last N
 # lines once it grows 10% past N, the same tail-and-move as needs.log/stuck.log.
@@ -73,7 +79,7 @@ log_for() {   # $1=session → its log path (session names are sanitized; be saf
 
 # ---- record (the hook's writer) ---------------------------------------------
 if [ "${1:-}" = record ]; then
-  sock="${2:-}" sess="${3:-}" marker="${4:-}" from="${5:-}" fromid="${6:-}"
+  sock="${2:-}" sess="${3:-}" marker="${4:-}" from="${5:-}" fromid="${6:-}" extra="${7:-}"
   sess=${sess%%@view-*}   # a hook may name a view session `<fleet>@view-<id>` (#1489; no lib here)
   [ -n "$sess" ] || exit 0
   T() { if [ -n "$sock" ]; then tmux -S "$sock" "$@"; else tmux "$@"; fi; }
@@ -130,7 +136,8 @@ EOF2
   [ -n "$from" ] || from=-
   mkdir -p "$LOGDIR" 2>/dev/null || exit 0
   f=$(log_for "$sess")
-  printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$from" "$cause" >> "$f" 2>/dev/null || exit 0
+  case "$extra" in *[!A-Za-z0-9=:.,_' '-]*) extra='' ;; esac   # one column: no tab, no newline
+  printf '%s\t%s\t%s%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$from" "$cause" "${extra:+	$extra}" >> "$f" 2>/dev/null || exit 0
   n=$(wc -l < "$f" 2>/dev/null | tr -d ' ')
   if [ "${n:-0}" -gt $(( MAX + MAX / 10 )) ]; then
     tail -n "$MAX" "$f" > "$f.tmp" 2>/dev/null && mv "$f.tmp" "$f" 2>/dev/null

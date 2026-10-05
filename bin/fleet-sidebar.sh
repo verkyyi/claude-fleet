@@ -10,20 +10,29 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -n "${TMUX:-}" ] || exit 0
 . "$BIN/fleet-lib.sh"
 . "$BIN/fleet-ui-lang.sh"
+. "$BIN/fleet-trace-lib.sh"   # the ⌂ latency trace (issue #1611): marks only on a hub-zoom.sh press
 verb="${1:-sync}"; target="${2:-}"
+socket_path=''
 if [ -n "$target" ]; then
   sess=$(tmux display-message -p -t "$target" '#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null) || exit 0
 else
-  sess=$(fleet_current_session) || exit 0
+  # The session and the server's socket in ONE read (issue #1611) — the same
+  # pane-bound $FLEET_SESSION_FMT fleet_current_session reads, which stays the
+  # fallback when the pane read says nothing.
+  IFS='|' read -r socket_path sess <<EOF
+$(tmux display-message -p -t "${TMUX_PANE:-}" "#{socket_path}|$FLEET_SESSION_FMT" 2>/dev/null)
+EOF
+  [ -n "${sess:-}" ] || { sess=$(fleet_current_session) || exit 0; socket_path=''; }
 fi
 [ -n "$sess" ] || exit 0
-socket_path=$(tmux display-message -p -t "$sess" '#{socket_path}' 2>/dev/null) || exit 0
+[ -n "$socket_path" ] || { socket_path=$(tmux display-message -p -t "$sess" '#{socket_path}' 2>/dev/null) || exit 0; }
 [ "${socket_path##*/}" = "$(fleet_socket "$sess")" ] || exit 0
 conf=$(fleet_conf_file "$sess")
 # The SHELL's server (bin/fleet-shell.sh, issue #1484) has no fleet conf: FLEET_SHELL=1
 # in its environment is its opt-in; the list, keys and menu run as in a fleet.
 [ -f "$conf" ] || [ "${FLEET_SHELL:-0}" = 1 ] || exit 0
 fleet_load_conf "$sess"
+fleet_home_mark side
 export FLEET_UI_LANG="${FLEET_UI_LANG:-}"
 # the auto-width ceiling (issue #1328) rides the env into the spawned view
 export FLEET_SIDEBAR_WIDTH_MAX="${FLEET_SIDEBAR_WIDTH_MAX:-44}"
@@ -111,19 +120,30 @@ can_host() {
 # PIPE-delimited, the name LAST (it may hold a '|'): tmux < 3.5 prints a control
 # character in -F output as an octal escape, so a \037 delimiter splits nothing.
 HFMT='#{@issue}|#{@raw}|#{@worktree}|#{@norepo}|#{@remote}|#{window_name}'
-view_up() {   # the current window shows the list, unzoomed
+# ONE read for everything the decision below needs (issue #1611 — it was five
+# round-trips to a tmux server every other process on the box is queueing on
+# too): the window's list state, its zoom, width and dragged list width, then
+# HFMT. Targeted at the window's top-left pane, so `@sidebar` is that pane's
+# and the window formats its window's. snap again after the window changes.
+snap() {
+  IFS='|' read -r sw_ zf_ sb_ cols_ manual_ i_ r_ w_ no_ re_ n_ <<EOF
+$(wdm '{top-left}' "#{@sidebar_worker}|#{window_zoomed_flag}|#{@sidebar}|#{window_width}|#{@sidebar_width_manual}|$HFMT")
+EOF
+}
+snap
+view_up() {   # the current window shows the list, unzoomed — the LIVE read
   [ "$(wdm '' '#{&&:#{@sidebar_worker},#{!=:#{window_zoomed_flag},1}}')" = 1 ] &&
     [ "$(wdm '{top-left}' '#{@sidebar}')" = 1 ]
 }
+view_up_snap() {   # the same test on the snapshot (tmux's &&: non-empty and not 0)
+  [ -n "${sw_:-}" ] && [ "${sw_:-}" != 0 ] && [ "${zf_:-}" != 1 ] && [ "${sb_:-}" = 1 ]
+}
 
 # F9 again with the keyboard already on the list: hide it.
-if [ "$mode" = f9 ] && [ "$nav" = 1 ] && view_up; then
+if [ "$mode" = f9 ] && [ "$nav" = 1 ] && view_up_snap; then
   exec bash "$BIN/fleet-sidebar.sh" hide "$sess"
 fi
 
-IFS='|' read -r i_ r_ w_ no_ re_ n_ <<EOF
-$(wdm '' "$HFMT")
-EOF
 if ! can_host "${n_:-}" "${i_:-}" "${r_:-}" "${w_:-}" "${no_:-}" "${re_:-}"; then
   pick='' best=-1
   while IFS='|' read -r wid last act i_ r_ w_ no_ re_ n_; do
@@ -143,20 +163,36 @@ EOF
     HUB_SESSION="$sess" bash "$BIN/hub-session.sh" >/dev/null 2>&1 || :
     win=$(tmux list-windows -t "$sess" -F '#{window_id} #{window_name}' 2>/dev/null | awk '$2=="home"{print $1; exit}')
   fi
+  snap
 fi
 
 # A window that can show the list: unzoom, switch it on, draw it now — unless it
 # is already on screen, where focusing it is the whole press.
-if ! view_up; then
-  [ "$(wdm '' '#{window_zoomed_flag}')" = 1 ] && tmux resize-pane -Z -t "$win" 2>/dev/null
+# A window too NARROW for the list goes straight to the popup (issue #1611):
+# the draw would only conclude "not wanted" after a python start and four tmux
+# reads — ~60 ms of the ⌂'s budget on the one path where the popup is the
+# answer. The rule is fleet-sidebar.py's own (sync: `cols >= width + 1 + 80`,
+# the dragged @sidebar_width_manual winning, both clamped 24..60) — KEEP THE TWO
+# IN STEP; task-pick-latency-selftest.sh pins that no view is drawn here. A
+# stale view on a window that shrank is the hooks' sync's to reap, as before.
+narrow=0
+if ! view_up_snap; then
+  [ "${zf_:-}" = 1 ] && tmux resize-pane -Z -t "$win" 2>/dev/null
   show_on
-  py sync
+  lw_=${FLEET_SIDEBAR_WIDTH:-30}
+  case "${manual_:-}" in ''|*[!0-9]*) ;; *) lw_=$manual_ ;; esac
+  case "$lw_" in ''|*[!0-9]*) lw_=30 ;; esac
+  [ "$lw_" -lt 24 ] && lw_=24; [ "$lw_" -gt 60 ] && lw_=60
+  case "${cols_:-}" in ''|*[!0-9]*) cols_=0 ;; esac
+  if [ "$cols_" -lt $(( lw_ + 1 + 80 )) ]; then narrow=1; else py sync; fi
+  fleet_home_mark sync
 fi
-if ! view_up; then
+if [ "$narrow" = 1 ] || ! view_up; then
   if [ "$nav" = 0 ]; then
     bash "$BIN/fleet-task-pick.sh" --popup --session "$sess" --cause "$mode" ${client:+--client "$client"} >/dev/null 2>&1
     [ $? = 3 ] || exit 0
   fi
+  fleet_home_trace_drop   # nothing records this press
   tmux display-message ${client:+-c "$client"} "$(fleet_ui_t toast_sidebar_narrow)" 2>/dev/null || :
   exit 0
 fi
@@ -166,6 +202,7 @@ tmux switch-client ${client:+-c "$client"} -T fleet-sidebar 2>/dev/null || :
 # name is left as it is.
 [ -z "$(wdm '{top-left}' '#{@sidebar_input}')" ] && py key Escape
 tmux display-message ${client:+-c "$client"} "$(fleet_ui_t toast_sidebar_focus)" 2>/dev/null || :
+fleet_home_end focus
 bash "$BIN/fleet-hub-visits.sh" record '' "$sess" "$mode-sidebar" \
-  "$(wdm '' '#{?#{@wid},#{@wid},#{window_id}}')" '' >/dev/null 2>&1 || :
+  "$(wdm '' '#{?#{@wid},#{@wid},#{window_id}}')" '' "$(fleet_home_extra)" >/dev/null 2>&1 || :
 exit 0

@@ -102,6 +102,8 @@ FLEET_HEAVY_HELD                   handoff: fleet-heavy.sh sets it for its child
 FLEET_HISTORY_LEDGER               path: state/log location override (fleet-history.sh)
 FLEET_HOST_TUNE_MAXFILES_PLIST     seam: the maxfiles LaunchDaemon plist path (fleet-host-tune.sh)
 FLEET_HUB                          handoff: marks the hub pane (operator seat), set at hub spawn
+FLEET_HOME_TRACE                   knob: 0 switches the ⌂ latency trace off (fleet-trace-lib.sh, #1611)
+FLEET_HOME_MS                      handoff: the ⌂ latency trace's marks, hub-zoom.sh → the picker inside the popup (fleet-trace-lib.sh, #1611)
 FLEET_HUB_VISITS_LOGDIR            path: state/log location override (fleet-hub-visits.sh)
 FLEET_HUB_VISITS_MAX               knob: internal pacing/limit, safe in-code default (fleet-hub-visits.sh)
 FLEET_INSTALL_BIN                  path: where `curl <hub>/install | sh` (fleet-install.sh) puts the fleet client — ~/.local/bin by default; the installer runs before any fleet.conf exists (#1470)
