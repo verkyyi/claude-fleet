@@ -69,6 +69,7 @@ FLEET_DAEMON_WEDGED_MULT           knob: internal pacing/limit, safe in-code def
 FLEET_DASH_LAUNCHER                seam: an injectable command/path for tests (fleet-ui-refresh.sh)
 FLEET_DASH_MANUAL_SUB_BIN           seam: fake manual quota gate for picker tests (dash-migrate.sh)
 FLEET_DASH_MIGRATE_BIN             seam: an injectable command/path for tests (dash-migrate.sh)
+FLEET_DASH_TOAST                   handoff: dash-migrate.sh `to` run from a confirm-before also shows its refusal (#1620)
 FLEET_DASH_POPUP_MAX_AGE           knob: internal pacing/limit, safe in-code default (dash-popup-wait.sh)
 FLEET_DASH_POPUP_POLL              knob: internal pacing/limit, safe in-code default (dash-popup-wait.sh)
 FLEET_DELIVERY_SIG                 handoff: the webhook delivery signature the bridge verifies
@@ -230,6 +231,7 @@ FLEET_SEED_REPO                    knob: the starter repo a new login's first-lo
 FLEET_SESSION                      handoff: the fleet session a pane/popup belongs to, exported by the spawner
 FLEET_SESSION_END_REASON           handoff: why the SessionEnd hook fired (set by the stopper)
 FLEET_SIDEBAR_CURRENT              handoff: the window id the sidebar is rendering for
+FLEET_SIDEBAR_TEXT                 handoff: the text the sidebar input line asked for, to fleet-sidebar-remote.sh (#1620)
 FLEET_SKIP_GLOBAL_CONF             seam: fleet-lib skips the install fleet.conf (tests / isolated tools)
 FLEET_SMOKE_ONBOARD_SECS           knob: internal pacing/limit, safe in-code default (fleet-login-smoke.sh)
 FLEET_SMOKE_POLL_SECS              knob: internal pacing/limit, safe in-code default (fleet-login-smoke.sh)
