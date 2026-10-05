@@ -11,6 +11,10 @@
 #   fleet-hub-node.sh env [--write [--force]] [--plist <file>]
 #                                → this login's node token file (issue #1491; the
 #                                  one subcommand meant to be run by hand — see below)
+#   fleet-hub-node.sh progress [--max-age S]
+#                                → pull the hub's progress streams of this login's
+#                                  fleets into their children ledgers (issue #1648;
+#                                  the cleanup tick and fleet-children.sh run it)
 #
 # A worker's parent, or the worker a message is for, may live on another machine.
 # The sending side drops a relay in the outbox (fleet_hub_put, bin/fleet-lib.sh);
@@ -161,13 +165,119 @@ PY
   esac
 }
 
+# --- progress: one stream per parent (issue #1648, EPIC #1645 C5) -----------------
+# The hub appends, under the PARENT's worker_id, every state of a placement it made
+# for that parent (accepted → running → done | refused | failed) and every report a
+# child on another machine relayed to it. This pulls the streams of this login's
+# fleets (GET /v1/node/progress, the node token — never in a pane's env) and merges
+# them into the ledger here, deduped on the event's rid: a report the relay push
+# already delivered is one row, a placement's later state is a new `.dispatch` row
+# (so a child never stays «accepted»), and a report the push never got here lands
+# anyway. The placements a book still holds open ride along as `ops=`: the hub asks
+# their machine once more, so an --async start reaches its final state too.
+#
+#   --max-age S   skip when the last pull is younger than S seconds (fleet-children.sh)
+#
+# Cursor + stamp: $FLEET_CONF_DIR/hub-progress/{seq,pulled}. A parent with no fleet
+# here, or whose window (identity form) is not live, is skipped — the push path holds
+# its reports. Merging only APPENDS: a pulled report goes through the same
+# `fleet-children.py append` as every other (rid dedup), never a delivery into a
+# pane — that stays the push path's. Exit: 0 pulled (or fresh enough) · 1 the hub
+# refused / did not answer · 3 not applicable: no fleet here has the hub on, no node
+# token, FLEET_HUB_PROGRESS=0, a hub that predates #1648 — nothing written, a
+# one-machine fleet reads what it always read.
+# Seams: FLEET_HUB_CURL (default curl), FLEET_HUB_TIMEOUT (default 10 s).
+progress_pull() {
+  local maxage='' pd seqf stamp since now last on s _c f ops resp rc code n=0 skip=0
+  local parent home pkey pwin book got
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --max-age) maxage="${2:-}"; maxage="${maxage//[^0-9]/}"; shift ;;
+      *) die 2 "usage: fleet-hub-node.sh progress [--max-age S]" ;;
+    esac
+    shift
+  done
+  [ "${FLEET_HUB_PROGRESS:-1}" != 0 ] || return 3
+  on=0
+  while IFS=$'\t' read -r s _c; do
+    [ -n "$s" ] && fleet_hub_on "$s" && { on=1; break; }
+  done <<EOF
+$(fleet_each_conf)
+EOF
+  [ "$on" = 1 ] || return 3
+  _fleet_hub_creds_missing >/dev/null && return 3
+  command -v python3 >/dev/null 2>&1 || return 3
+  pd="$FLEET_CONF_DIR/hub-progress"; seqf="$pd/seq"; stamp="$pd/pulled"
+  mkdir -p "$pd" 2>/dev/null || return 1
+  now=$(date +%s)
+  if [ -n "$maxage" ]; then
+    last=$(cat "$stamp" 2>/dev/null); case "$last" in ''|*[!0-9]*) last=0 ;; esac
+    [ $((now - last)) -lt "$maxage" ] && return 0
+  fi
+  printf '%s\n' "$now" > "$stamp"
+  since=$(cat "$seqf" 2>/dev/null); case "$since" in ''|*[!0-9]*) since=0 ;; esac
+  # The placements still open in any book here (each child's last row), ≤50.
+  : > "$pd/books"
+  while IFS=$'\t' read -r s _c; do
+    [ -n "$s" ] || continue
+    for f in "$(fleet_state_dir "$s")"/children/*.dispatch; do
+      [ -f "$f" ] && printf '%s\n' "$f" >> "$pd/books"
+    done
+  done <<EOF
+$(fleet_each_conf)
+EOF
+  ops=$(python3 "$BIN/fleet-children.py" open-ops < "$pd/books" 2>/dev/null)
+  resp=$(_fleet_hub_env
+    "${FLEET_HUB_CURL:-curl}" -sS --max-time "${FLEET_HUB_TIMEOUT:-10}" -o - -w '\n%{http_code}' \
+      -H "Authorization: Bearer $CCQUOTA_TOKEN" -G --data-urlencode "since=$since" \
+      ${ops:+--data-urlencode "ops=$ops"} "${CCQUOTA_HUB_URL%/}/v1/node/progress" 2>/dev/null); rc=$?
+  if [ "$rc" -ne 0 ] || [ -z "$resp" ]; then
+    printf 'fleet-hub-node: progress: hub unreachable (curl exit %s)\n' "$rc" >&2; return 1
+  fi
+  code=$(printf '%s\n' "$resp" | tail -n 1)
+  case "$code" in
+    200) ;;
+    404|405) return 3 ;;
+    *) printf 'fleet-hub-node: progress: the hub refused (HTTP %s)\n' "$code" >&2; return 1 ;;
+  esac
+  printf '%s\n' "$resp" | sed '$d' > "$pd/last.json"
+  # Each parent the answer names, resolved ONCE to its fleet here and the key its
+  # book is filed under — an identity-form parent through its live window.
+  while IFS= read -r parent; do
+    [ -n "$parent" ] || continue
+    home=$(fleet_wid_home "wid:$parent" 2>/dev/null) || { skip=$((skip + 1)); continue; }
+    fleet_hub_on "$home" || { skip=$((skip + 1)); continue; }
+    pkey=${parent#*/}
+    if fleet_is_fid "$pkey"; then
+      pwin=$(fleet_win_for_fid "$pkey" "$(fleet_socket "$home")" 2>/dev/null) || pwin=''
+      pkey=''; [ -n "$pwin" ] && pkey=$(fleet_window_okey "$home" "$pwin" 2>/dev/null)
+      [ -n "$pkey" ] || { skip=$((skip + 1)); continue; }
+    fi
+    book=$(fleet_load_conf "$home" >/dev/null 2>&1; . "$BIN/fleet-children-lib.sh"; children_file "$pkey" "$home") \
+      || { skip=$((skip + 1)); continue; }
+    got=$(python3 "$BIN/fleet-children.py" merge --file "$book" --parent "$parent" \
+      --multi "$(_fleet_hosts_many "$home" && echo 1)" < "$pd/last.json" 2>/dev/null) || got=0
+    case "$got" in ''|*[!0-9]*) got=0 ;; esac
+    n=$((n + got))
+  done <<EOF
+$(python3 "$BIN/fleet-children.py" merge --parents < "$pd/last.json" 2>/dev/null)
+EOF
+  python3 -c 'import json, sys; print(int(json.load(open(sys.argv[1])).get("seq") or 0))' "$pd/last.json" \
+    > "$seqf.tmp" 2>/dev/null && mv -f "$seqf.tmp" "$seqf"
+  if [ "$n" -gt 0 ] || [ "$skip" -gt 0 ]; then
+    printf 'progress: %s new row(s), %s parent(s) not here\n' "$n" "$skip"
+  fi
+  return 0
+}
+
 case "${1:-}" in
   paths)
     printf 'outbox\t%s\nworkers\t%s\nmovein\t%s\n' "$(fleet_hub_outbox)" "$(fleet_hub_cache)" "$(fleet_hub_movein)"
     exit 0 ;;
   env) shift; node_env "$@"; exit $? ;;
+  progress) shift; progress_pull "$@"; exit $? ;;
   deliver) ;;
-  *) die 2 "usage: fleet-hub-node.sh paths | deliver < relay.json | env [--write [--force]] [--plist <file>]" ;;
+  *) die 2 "usage: fleet-hub-node.sh paths | deliver < relay.json | env [--write [--force]] [--plist <file>] | progress [--max-age S]" ;;
 esac
 
 command -v python3 >/dev/null 2>&1 || die 75 "python3 is missing"

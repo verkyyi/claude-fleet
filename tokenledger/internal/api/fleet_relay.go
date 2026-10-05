@@ -118,6 +118,7 @@ func (s *Server) acceptRelay(ctx context.Context, conn *websocket.Conn, ep store
 	}
 	if inserted {
 		_ = s.Store.FleetAudit("node:"+ep.ID, "relay:"+r.Kind, fleetOf(r.ToWID), "stored", r.ID, time.Now())
+		s.progressReport(r) // the parent's stream (claude-fleet#1648)
 	}
 	ack := control.Message{Type: control.TypeAck, OpID: m.OpID, Proto: control.Proto}
 	wctx, cancel := context.WithTimeout(ctx, 5*time.Second)

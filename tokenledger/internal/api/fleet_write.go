@@ -641,6 +641,7 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 	if err != nil {
 		return nil, err
 	}
+	s.progressOp(stored) // the asking parent's stream (claude-fleet#1648)
 	return operationView(stored), nil
 }
 

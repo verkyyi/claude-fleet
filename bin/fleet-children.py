@@ -159,9 +159,17 @@ def cmd_append(a):
         return 2
     if not isinstance(ev, dict):
         return 2
-    raw, ev = ev, {k: ev.get(k, '') for k in FIELDS}
+    rc, out = append_row(a.file, ev)
+    if out:
+        print(out, file=sys.stderr if rc else sys.stdout)
+    return rc
+
+
+def append_row(path, raw):
+    """One report into the book at <path> → (rc, 'seq=N' | 'dup seq=N' | why)."""
+    ev = {k: raw.get(k, '') for k in FIELDS}
     ev['child'] = ''.join(ch for ch in str(ev['child']) if ch in KEY_OK)[:128]
-    pre = book_prefix(a.file)
+    pre = book_prefix(path)
     ev['state'] = str(ev['state']).upper()
     ev['pr'] = ''.join(ch for ch in str(ev['pr']) if ch.isdigit())
     ev['verdict'] = clean(ev['verdict'], 1, 64)
@@ -196,13 +204,12 @@ def cmd_append(a):
     deg = {'lines': ''.join(ch for ch in str(raw.get('lines') or '') if ch.isdigit())[:8],
            'sample': clean(str(raw.get('sample') or '').replace('<', '‹').replace('>', '›'), 1, 64)}
     if not ev['child'] or ev['state'] not in STATES:
-        print('fleet-children: need child + state (%s)' % '|'.join(STATES), file=sys.stderr)
-        return 2
+        return 2, 'fleet-children: need child + state (%s)' % '|'.join(STATES)
     ev['child'] = canon_child(ev['child'], pre, gens)
-    os.makedirs(os.path.dirname(a.file) or '.', exist_ok=True)
+    os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
     # a+ and an exclusive flock: two children reporting in the same second get
     # distinct seqs, and the read-then-append below is one critical section.
-    with open(a.file, 'a+', encoding='utf-8') as fh:
+    with open(path, 'a+', encoding='utf-8') as fh:
         fcntl.flock(fh, fcntl.LOCK_EX)
         fh.seek(0)
         seq, last = 0, None
@@ -221,14 +228,12 @@ def cmd_append(a):
                     and not is_wake(e):
                 last = e
             if rid and e.get('rid') == rid:
-                print('dup seq=%s' % e.get('seq'))
-                return 0
+                return 0, 'dup seq=%s' % e.get('seq')
         # Dedup against the child's LATEST event, not the whole file: a reaper
         # repeating the ship path's report is a no-op, while a real transition
         # back (WAITING → IDLE → WAITING) still lands and keeps "latest" true.
         if last and last.get('state') == ev['state'] and str(last.get('pr') or '') == ev['pr']:
-            print('dup seq=%s' % last.get('seq'))
-            return 0
+            return 0, 'dup seq=%s' % last.get('seq')
         ev = dict(seq=seq + 1,
                   ts=datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
                   **ev)
@@ -245,8 +250,7 @@ def cmd_append(a):
         fh.seek(0, os.SEEK_END)
         fh.write(json.dumps(ev, ensure_ascii=False) + '\n')
         fh.flush()
-    print('seq=%d' % ev['seq'])
-    return 0
+    return 0, 'seq=%d' % ev['seq']
 
 
 def win_key(iss, wt, path, pre):
@@ -336,7 +340,51 @@ def prmap_lookup(key, a, cache={}):
     return cache[f].get(bare, ('', ''))
 
 
-def bucket(live, last):
+# A turn-boundary / housekeeping report never un-lands a child (issue #1648): the
+# Stop fallback files STOPPED seconds after the ship path's MERGED, and the book's
+# latest row then read «ended unlanded» for a PR GitHub calls merged.
+QUIET_AFTER = ('STOPPED', 'IDLE', 'WAITING', 'REAPED', 'DEGENERATE')
+
+
+def settled(evs, prs=''):
+    """The event that says where the child stands: the latest, unless a MERGED
+    came before it and only QUIET_AFTER rows since — then that MERGED. A child
+    whose latest row is QUIET_AFTER and whose PR the dash's cache (GitHub, no gh
+    call here) calls MERGED reads as a MERGED of that PR."""
+    if not evs:
+        return None
+    last = evs[-1]
+    for e in reversed(evs):
+        if e.get('state') == 'MERGED':
+            return e
+        if e.get('state') not in QUIET_AFTER:
+            break
+    if last.get('state') in QUIET_AFTER and str(prs).upper() == 'MERGED':
+        return dict(last, state='MERGED')
+    return last
+
+
+def progress_of(live, st, disp):
+    """One word for how far the child has come (issue #1648) — accepted → running
+    → pr → merged / reaped, or failed / blocked / refused: the report when it
+    says, else the live window, else the placement's last state."""
+    lst = (st or {}).get('state', '')
+    if lst == 'MERGED':
+        return 'merged'
+    if lst in ('BLOCKED', 'FAILED'):
+        return lst.lower()
+    if lst == 'REAPED':
+        return 'merged' if (st.get('verdict') or '').startswith('merged') else 'reaped'
+    if lst == 'WAITING' and (st.get('pr') or st.get('verdict') == 'pr-open'):
+        return 'pr'
+    if live is not None:
+        return 'running'
+    if disp and not st:
+        return {'done': 'running', 'running': 'starting'}.get(disp.get('state'), disp.get('state') or '')
+    return lst.lower() or 'gone'
+
+
+def bucket(live, last, disp=None):
     """✓ done · ⏳ waiting on checks · ! needs a human · ▸ working · – ended unlanded."""
     lst = (last or {}).get('state', '')
     if live is not None:
@@ -356,6 +404,10 @@ def bucket(live, last):
         return '!'
     if lst == 'WAITING':
         return '⏳'
+    # A placement with no report yet (issue #1648): on its way or opened there is
+    # working; refused / failed / never heard of is for a human.
+    if not last and disp:
+        return '▸' if disp.get('state') in ('accepted', 'running', 'done') else '!'
     return '–'
 
 
@@ -514,7 +566,8 @@ def cmd_digest(a):
 
 def locked_append(path, row):
     """Stamp seq + ts under the ledger's flock and append — the same critical
-    section cmd_append uses, so a wake row and a report never share a seq."""
+    section cmd_append uses, so a wake row and a report never share a seq. A row
+    carrying a `rid` already in the file is not appended: None (issue #1648)."""
     os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
     with open(path, 'a+', encoding='utf-8') as fh:
         fcntl.flock(fh, fcntl.LOCK_EX)
@@ -522,9 +575,12 @@ def locked_append(path, row):
         seq = 0
         for line in fh:
             try:
-                seq = max(seq, int(json.loads(line).get('seq') or 0))
+                e = json.loads(line)
+                seq = max(seq, int(e.get('seq') or 0))
             except (ValueError, TypeError, AttributeError):
-                pass
+                continue
+            if row.get('rid') and e.get('rid') == row['rid']:
+                return None
         row = dict(seq=seq + 1,
                    ts=datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
                    **row)
@@ -579,30 +635,110 @@ def cmd_wake_state(a):
     return 0
 
 
-def cmd_dispatch(a):
-    """Append one cross-machine placement row (issue #1586)."""
-    child = canon_child(''.join(ch for ch in a.child if ch in KEY_OK)[:128], book_prefix(a.file))
-    if not child or a.state not in ('done', 'accepted', 'unknown', 'refused'):
-        print('fleet-children: dispatch needs child + state done|accepted|unknown|refused', file=sys.stderr)
-        return 2
-    row = dict(child=child, node=clean(a.node, 1, 64), op=clean(a.op, 1, 64), state=a.state,
-               window=clean(a.window, 1, 32), line=clean(a.line, 1, 200))
-    if a.exit != '':
+# A placement's states (issues #1586, #1648): what the spawn heard, then what the
+# hub's progress stream says the operation became. OPEN ones are still in flight.
+DISPATCH_STATES = ('accepted', 'running', 'done', 'refused', 'failed', 'unknown')
+DISPATCH_OPEN = ('accepted', 'running', 'unknown')
+
+
+def dispatch_row(path, child, state, node='', op='', window='', line='', exit='', rid=''):
+    """One placement row into <path> → its seq, None for a rid already there, or
+    -1 when the row is not one."""
+    child = canon_child(''.join(ch for ch in str(child) if ch in KEY_OK)[:128], book_prefix(path))
+    if not child or state not in DISPATCH_STATES:
+        return -1
+    row = dict(child=child, node=clean(node, 1, 64), op=clean(op, 1, 64), state=state,
+               window=clean(window, 1, 32), line=clean(line, 1, 200))
+    if str(exit) != '':
         try:
-            row['exit'] = int(a.exit)
+            row['exit'] = int(exit)
         except ValueError:
             pass
-    print('seq=%d' % locked_append(a.file, row))
+    rid = ''.join(ch for ch in str(rid or '') if ch in RID_OK)[:256]
+    if rid:                             # only then: a spawn's own row is unchanged
+        row['rid'] = rid
+    return locked_append(path, row)
+
+
+def cmd_dispatch(a):
+    """Append one cross-machine placement row (issue #1586)."""
+    seq = dispatch_row(a.file, a.child, a.state, a.node, a.op, a.window, a.line, a.exit, a.rid)
+    if seq == -1:
+        print('fleet-children: dispatch needs child + state %s' % '|'.join(DISPATCH_STATES), file=sys.stderr)
+        return 2
+    print('dup' if seq is None else 'seq=%d' % seq)
     return 0
+
+
+def cmd_open_ops(a):
+    """The operation ids of the placements still open (DISPATCH_OPEN) in the
+    `.dispatch` books named one per line on stdin — each child's LAST row, ≤50,
+    comma-joined: what a progress pull asks the hub about (issue #1648)."""
+    ops = set()
+    for path in sys.stdin.read().split('\n'):
+        if path:
+            ops.update(e.get('op') for e in last_per_child(path) if e.get('state') in DISPATCH_OPEN)
+    print(','.join(sorted(o for o in ops if o and set(o) <= FID_OK)[:50]))
+    return 0
+
+
+def cmd_merge(a):
+    """Merge a hub progress answer (stdin, GET /v1/node/progress) into the book
+    of ONE parent (issue #1648): its reports into <file>, its placements into
+    <file>'s `.dispatch` — both deduped on the event's rid, so an event the relay
+    push already brought, or a pull that is run twice, adds nothing. Prints how
+    many rows were new. `--parents` instead lists the parents the answer names."""
+    try:
+        d = json.load(sys.stdin)
+    except ValueError:
+        return 2
+    evs = [e for e in (d.get('events') or []) if isinstance(e, dict)]
+    if a.parents:
+        seen = []
+        for e in evs:
+            p = str(e.get('parent') or '')
+            if p and p not in seen:
+                seen.append(p)
+        print('\n'.join(seen))
+        return 0
+    if not a.file or not a.parent:
+        return 2
+    dfile = a.file[:-len('.ndjson')] + '.dispatch' if a.file.endswith('.ndjson') else a.file + '.dispatch'
+    new = 0
+    for e in evs:
+        if e.get('parent') != a.parent or not isinstance(e.get('event'), dict):
+            continue
+        ev, rid = e['event'], str(e.get('rid') or '')
+        if e.get('kind') == 'report':
+            row = dict(ev, rid=rid, node=ev.get('node') or '?')
+            rc, out = append_row(a.file, row)
+            new += rc == 0 and out.startswith('seq=')
+        elif e.get('kind') == 'dispatch':
+            iss = ''.join(ch for ch in str(ev.get('issue') or '') if ch.isdigit())
+            if not iss:
+                continue                # a scratch start names no child key here
+            child = 'issue-' + iss
+            if a.multi == '1' and ev.get('repo'):
+                child = ''.join(ch for ch in str(ev['repo']).replace('/', '-') if ch in NODE_OK) + ':' + child
+            seq = dispatch_row(dfile, child, str(ev.get('state') or ''), ev.get('node', ''), ev.get('op', ''),
+                               ev.get('window', ''), ev.get('line', ''), ev.get('exit', ''), rid)
+            new += isinstance(seq, int) and seq > 0
+    print(new)
+    return 0
+
+
+def last_per_child(path):
+    """The last row per child of one book, in seq order."""
+    last = {}
+    for e in read_rows(path):
+        if e.get('child'):
+            last[e['child']] = e
+    return sorted(last.values(), key=seq_of)
 
 
 def read_dispatches(d, parent):
     """The last placement row per child (issue #1586), in seq order."""
-    last = {}
-    for e in read_rows(os.path.join(d, parent + '.dispatch')):
-        if e.get('child'):
-            last[e['child']] = e
-    return sorted(last.values(), key=seq_of)
+    return last_per_child(os.path.join(d, parent + '.dispatch'))
 
 
 def cmd_show(a):
@@ -633,10 +769,14 @@ def cmd_show(a):
     events.pop(parent, None)
 
     # A placement on another machine (issue #1586) is the same child's third
-    # source: it rides that child's row (`dispatch`), and only one naming a child
-    # with no row of its own keeps a `↗` line of its own (issue #1351).
+    # source: it rides that child's row (`dispatch`) — and one naming a child with
+    # no report or window yet IS that child's row (issue #1648), counted like any
+    # other, its state the placement's until the first report says more.
     dispatches = read_dispatches(a.dir, parent)
     dmap = {d['child']: d for d in dispatches}
+    for d in dispatches:
+        if d['child'] != parent:
+            events.setdefault(d['child'], [])
 
     kids = []
     for child, evs in events.items():
@@ -648,11 +788,13 @@ def cmd_show(a):
         if live is not None and not descends(live['origin'], parent, wins):
             live = None
         prn, prs = prmap_lookup(child, a)
+        st = settled(evs, prs)
+        disp = dmap.get(child)
         # The machine a child runs on (issue #1421): a live remote row's, else the
-        # one its last report came from. '' = this machine.
-        node = (live or {}).get('node') or (last or {}).get('node', '')
+        # one its last report came from, else the one it was placed on. '' = here.
+        node = (live or {}).get('node') or (last or {}).get('node', '') or (disp or {}).get('node', '')
         kids.append(dict(
-            child=child, bucket=bucket(live, last),
+            child=child, bucket=bucket(live, st, disp),
             live=live is not None, window=live['wid'] if live else '',
             state=(live['state'] or 'idle') if live else 'gone',
             needs=live['needs'] if live else '',
@@ -662,8 +804,11 @@ def cmd_show(a):
             since=[e for e in evs if int(e.get('seq') or 0) > a.since]))
         if node:                        # only then: a one-machine answer is unchanged
             kids[-1]['node'] = node
-        if child in dmap:
-            kids[-1]['dispatch'] = dmap[child]
+        if disp:
+            kids[-1]['dispatch'] = disp
+        kids[-1]['progress'] = progress_of(live, st, disp)
+        if st is not last:              # a MERGED a later quiet row would have hidden
+            kids[-1]['settled'] = st
     kids.sort(key=lambda k: ('!⏳▸✓–'.index(k['bucket']), k['child']))
     n = {b: sum(1 for k in kids if k['bucket'] == b) for b in '✓⏳!▸–'}
     total = len(kids)
@@ -695,7 +840,8 @@ def cmd_show(a):
         return 0
     print('children of %s%s' % (parent, ' · ' + a.session if a.session else ''))
     for k in kids:
-        last = k['last'] or {}
+        last = k.get('settled') or k['last'] or {}
+        d = k.get('dispatch')
         rep = last.get('state', '-')
         if last.get('pr'):
             rep += ' #' + last['pr']
@@ -703,22 +849,18 @@ def cmd_show(a):
             rep += ' (PR #%s %s)' % (k['pr'], k['pr_state'].lower()) if k['pr_state'] else ''
         if last.get('ts'):
             rep += ' ' + age(last['ts'])
+        elif d:                         # placed, nothing reported yet (issue #1648)
+            rep = d.get('state', '')
+            if d.get('window'):
+                rep += ' ' + d['window']
+            if d.get('state') in ('refused', 'failed'):
+                rep += ' exit %s %s' % (d.get('exit', '?'), d.get('line', ''))
+            if d.get('ts'):
+                rep += ' ' + age(d['ts'])
         live = '%s %s' % (k['window'], k['state']) if k['live'] else 'gone'
         if k.get('node') and not k['live']:
-            live += ' · ' + k['node']
-        d = k.get('dispatch')
-        if d and not k['live']:
-            live += ' ↗' + d.get('node', '')
-        print('  %s %-16s %-18s %-22s %s' % (k['bucket'], k['child'], live, rep, k['title']))
-    for d in dispatches:
-        if d['child'] in events:
-            continue
-        how = d.get('state', '')
-        if d.get('window'):
-            how += ' ' + d['window']
-        if d.get('state') == 'refused':
-            how += ' exit %s %s' % (d.get('exit', '?'), d.get('line', ''))
-        print('  ↗ %-16s → %-8s %s (op %s)' % (d['child'], d.get('node', ''), how.strip(), d.get('op', '')))
+            live += (' ↗' if d else ' · ') + k['node']
+        print('  %s %-16s %-18s %-22s %s' % (k['bucket'], k['child'], live, rep.strip(), k['title']))
     print(text)
     return 0
 
@@ -755,12 +897,20 @@ def main():
     p.add_argument('--window', default='')
     p.add_argument('--exit', default='')
     p.add_argument('--line', default='')
+    p.add_argument('--rid', default='')
+    p = sub.add_parser('merge')
+    p.add_argument('--file', default='')
+    p.add_argument('--parent', default='')
+    p.add_argument('--multi', default='')
+    p.add_argument('--parents', action='store_true')
+    sub.add_parser('open-ops')
     p = sub.add_parser('wake-state')
     p.add_argument('--file', required=True)
     p.add_argument('--child', required=True)
     a = ap.parse_args()
     return dict(append=cmd_append, show=cmd_show, scan=cmd_scan, digest=cmd_digest,
-                wake=cmd_wake, dispatch=cmd_dispatch, **{'wake-state': cmd_wake_state})[a.cmd](a)
+                wake=cmd_wake, dispatch=cmd_dispatch, merge=cmd_merge,
+                **{'wake-state': cmd_wake_state, 'open-ops': cmd_open_ops})[a.cmd](a)
 
 
 if __name__ == '__main__':

@@ -154,6 +154,24 @@ ccquota agent's control channel is this machine's only door to the hub.
   `fleets/<sess>/delivery.ndjson` (`QUEUED` → `DELIVERED` / `FAILED` / `EXPIRED`).
   `reported` / `sent` therefore always means it arrived; a receipt that says the
   target's machine merely holds it stays `QUEUED`.
+- **One progress stream per parent** (issue #1648). The hub appends, under the
+  parent's worker_id, every state of a placement it made for it (the `worker_start`
+  operation: `accepted` → `running` → `done` / `refused` / `failed`) and every
+  `child_report` relayed to it (table `fleet_progress`, 30 days; a report's `rid` is
+  its relay id, an operation's `op:<id>:<state>`). The parent's machine pulls it —
+  `fleet-hub-node.sh progress` (`GET /v1/node/progress?since=<seq>[&ops=…]`, the
+  node token; the cleanup tick, and `fleet-children.sh` at most every
+  `FLEET_PROGRESS_MAX_AGE` s) — into its book, deduped on `rid`: a report the push
+  already delivered is one row, a placement's later state a new `.dispatch` row,
+  and the placements a book still holds open ride along as `ops=` so the hub asks
+  their machine once more (an `--async` start reaches its final state too). The
+  pull only APPENDS — delivery into a pane stays the push's. `fleet-children.sh`
+  folds the three sources into ONE row per child with a `progress` word
+  (accepted / starting / running / pr / merged / reaped / failed / blocked /
+  refused); a placement with no report yet is that row, not a `↗` line of its own;
+  and a later STOPPED / IDLE / WAITING never un-lands a MERGED (nor a PR the
+  dash's cache calls merged). Hub off, no node token, `FLEET_HUB_PROGRESS=0` or a
+  hub without the endpoint ⇒ exit 3, nothing asked, nothing written.
 - **Waiting and holding.** `fleet-await.sh wid:<child elsewhere>` (a child whose
   parent is you) waits on your ledger, which the hub feeds, and calls it GONE when
   the map drops it. `fleet-children.sh` lists a remote child as `m4 remote` (or

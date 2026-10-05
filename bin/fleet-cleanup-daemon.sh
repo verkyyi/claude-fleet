@@ -513,6 +513,17 @@ if [ "$DRY" != 1 ] && [ -f "$BIN/fleet-peer-queue.sh" ]; then
   done
 fi
 
+# --- the hub's progress streams (issue #1648) --------------------------------------
+# Every placement this login's fleets asked the hub for, and every report a child on
+# another machine relayed here, merged into the parents' books (rid-deduped) — so a
+# placement does not stay «accepted» and a report the push missed still lands. One
+# bounded call per tick for the whole login; exit 3 (hub off, no node token) is the
+# one-machine case and says nothing.
+if [ "$DRY" != 1 ] && [ -f "$BIN/fleet-hub-node.sh" ]; then
+  pout=$(fleet_timebox 30 bash "$BIN/fleet-hub-node.sh" progress 2>&1)
+  [ -z "$pout" ] || log "$pout"
+fi
+
 # Diskguard gate is a MACHINE-WIDE (per-volume) condition, so answer it ONCE per
 # tick. A cleanup does a base-checkout pull + worktree teardown; don't add that
 # I/O below the floor. Mirrors the other single-writer, disk-gated fleet daemons.
