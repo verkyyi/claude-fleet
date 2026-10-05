@@ -111,6 +111,7 @@ cat > "$IBIN/fleet-claude.sh" <<'SH'
 if [ "$1" = --agent ] && [ "$2" = claude ]; then
   sid=target-claude
   [ "${3:-}" != --resume ] || sid=$4
+  [ ! -f "$TRANSFER_TEST_ROOT/fail-source" ] || [ "${3:-}" != --resume ] || exit 38
   exec "$TRANSFER_TEST_ROOT/fakebin/claude" "$TRANSFER_TEST_ROOT/claude.pl" "$sid" normal
 fi
 [ "$1" = --agent ] && [ "$2" = codex ] || exit 90
@@ -294,11 +295,57 @@ assert not confirm(screen.replace('Enter to confirm · Esc to cancel', ''))
 PY
 ok
 
+# issue #1668: a target that exits at startup is ROLLED BACK in the same pane —
+# the source resumed under the SAME session id within the boot wait, stamps put
+# back, state.json rolled_back, @transfer_note + the pane itself say
+# 「切换失败，已退回」, a ▲ transfer-rolled-back event, lease + remain-on-exit
+# released, the package kept; an automatic retry is held off.
 spawn 44 issue normal
 touch "$WORK/fail-target"
-transfer && fail 'target startup failure must fail'; ok
+T0=$SECONDS
+transfer && fail 'target startup failure must not report success'; ok
 BUNDLE=$(packet)
-ok; [ -d "$WT" ] && [ "$(TM display-message -p -t "$PANE" '#{pane_dead}')" = 1 ] || fail 'failed target must leave retained pane and worktree'
+ok; [ $(( SECONDS - T0 )) -lt 60 ] || fail 'rollback must finish within 60 seconds'
+ok; printf '%s' "$OUT" | grep -q '^fleet-transfer: rolled-back: 切换失败，已退回：codex exited at startup (status 37)' || fail "rollback must say so: $OUT"
+BACK=$(fleet_pane_claude_pid "$PANE" "$LBL" 2>/dev/null) || BACK=''
+ok; [ -n "$BACK" ] && [ "$BACK" != "$PID" ] && [ "$(fleet_cc_session_id "$BACK")" = "$SID" ] \
+  || fail "the source must be resumed under the same session id: $(TM capture-pane -p -t "$PANE")"
+ok; [ -z "$(field cc_agent)" ] && [ -z "$(field handoff_manifest)" ] && [ -z "$(field source_session_id)" ] \
+  && [ -z "$(field migrated_at)" ] && [ "$(field claude_state)" = "done" ] || fail 'rollback must restore the source stamps'
+ok; [ "$(field transfer_note)" = '切换失败，已退回：codex exited at startup (status 37)' ] && [ -n "$(field transfer_rolled_back)" ] \
+  || fail "rollback must stamp @transfer_note: $(field transfer_note)"
+ok; TM capture-pane -p -S - -t "$PANE" | grep -q '▲ 切换失败，已退回' || fail 'the pane must say it rolled back'
+ok; grep -q $'\ttransfer-rolled-back\t.*切换失败，已退回' "$TMPDIR/.claude-dash/global/alerts.events" 2>/dev/null \
+  || fail 'rollback must raise a transfer-rolled-back event'
+ok; ! fleet_rotate_lease_held "$WT" >/dev/null 2>&1 && [ "$(TM display-message -p -t "$PANE" '#{remain-on-exit}')" != on ] \
+  || fail 'rollback must release the lease and remain-on-exit'
+python3 - "$BUNDLE" "$SID" <<'PY' || fail 'rolled-back package'
+import json, pathlib, sys
+b = pathlib.Path(sys.argv[1])
+st = json.loads((b/'state.json').read_text())
+assert st['state'] == 'rolled_back' and 'codex exited at startup (status 37)' in st['detail'], st
+assert json.loads((b/'manifest.json').read_text())['source']['session_id'] == sys.argv[2]
+assert (b/'pane-target-failed.txt').exists() and (b/'source.jsonl').stat().st_size > 0
+PY
+ok
+# The hold: an AUTOMATIC cutover (here an after-turn arm) of a just-rolled-back
+# window refuses before anything; a manual one is the operator's call and goes.
+printf '# 人工交接\n下一步：验证。\n' > "$WORK/notes44.md"
+transfer --after-turn --handoff "$WORK/notes44.md" && fail 'an automatic retry right after a rollback must be held'
+ok; printf '%s' "$OUT" | grep -q '^fleet-transfer: rolled-back: rolled back' && [ -z "$(field agent_transfer_request)" ] \
+  && kill -0 "$BACK" || fail "the hold must refuse without touching the source: $OUT"
+PID=$BACK
+# The source cannot come back either: one attempt, `failed`, pane retained,
+# ▲ transfer-failed — never a loop. A manual cutover is not held.
+touch "$WORK/fail-source"
+transfer && fail 'a double failure must fail'; ok
+BUNDLE=$(packet)
+ok; printf '%s' "$OUT" | grep -q 'did not resume either' || fail "double failure must say so: $OUT"
+ok; [ "$(TM display-message -p -t "$PANE" '#{pane_dead}')" = 1 ] && [ -d "$WT" ] || fail 'double failure must retain the dead pane'
+ok; [ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["state"])' "$BUNDLE/state.json")" = failed ] || fail 'double failure must stay failed'
+ok; case "$(field transfer_note)" in 切换失败，原会话也未能恢复*) ;; *) false ;; esac || fail "double-failure note: $(field transfer_note)"
+ok; grep -q $'\ttransfer-failed\t' "$TMPDIR/.claude-dash/global/alerts.events" || fail 'double failure must raise transfer-failed'
+ok; [ "$(grep -c $'\ttransfer-rolled-back\t' "$TMPDIR/.claude-dash/global/alerts.events")" = 1 ] || fail 'a double failure must not roll back twice'
 python3 - "$BUNDLE" <<'PY' || fail 'failed target recovery metadata'
 import json, pathlib, sys
 b = pathlib.Path(sys.argv[1])
@@ -307,6 +354,7 @@ assert (b/'source.jsonl').stat().st_size > 0
 assert '--resume source-44' in (b/'resume-source.sh').read_text()
 PY
 ok
+rm "$WORK/fail-source"
 rm "$WORK/fail-target"
 RLOCK=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["transfer_lock_path"])' "$BUNDLE/manifest.json")
 mkdir "$RLOCK" || fail 'recovery lock fixture'
