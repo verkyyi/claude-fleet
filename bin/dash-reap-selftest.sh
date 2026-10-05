@@ -154,7 +154,7 @@ if [ "${1:-}" = "run-shell" ]; then
 fi
 case "$*" in
   *'#{@claude_state}'*) printf '%s\n' "${REAP_STATE:-}" ;;
-  *'#{pane_pid}'*) printf '%s\n' "$PPID" ;;  # this test's Python probe, not a live pane
+  *'#{pane_pid}'*) printf '%s\n' "${PANE_PID:-$PPID}" ;;  # this test's Python probe, or a fake agent (#1542)
   # attached-client probe (#596): CLIENTS unset ⇒ one fake client (the interactive
   # ⌃x cases); CLIENTS="" ⇒ a headless fleet, where a popup must never be drawn.
   *list-clients*) [ -n "${CLIENTS-}" ] && printf '%s\n' "$CLIENTS" ;;
@@ -194,14 +194,19 @@ case "$*" in
   *"pr list"*)
     head=""; prev=""
     for a in "$@"; do [ "$prev" = "--head" ] && head="$a"; prev="$a"; done
-    if [ "$head" = issue-7 ]; then
+    # MERGED_HEADS (issue #1542): extra branches with a merged PR, merged at
+    # MERGED_ISO — the time the reaper hands the liveness probe.
+    case " issue-7 ${MERGED_HEADS:-} " in *" $head "*)
       case "$*" in
         *"--json number"*)      printf '7700\n' ;;
-        *"--json headRefName"*) printf 'issue-7\n' ;;
-      esac
-    fi ;;
+        *"headRefName,mergedAt"*) printf '%s\t%s\n' "$head" "${MERGED_ISO:-2026-01-01T00:00:00Z}" ;;
+        *"--json headRefName"*) printf '%s\n' "$head" ;;
+      esac ;;
+    esac ;;
   *"issue view"*)  printf 'OPEN\n' ;;
   *"issue close"*) printf 'CLOSE %s\n' "$*" >> "$GHLOG" ;;
+  *"issue edit"*)  printf 'EDIT %s\n' "$*" >> "$GHLOG" ;;
+  *"issue comment"*) printf 'COMMENT %s\n' "$*" >> "$GHLOG" ;;
 esac
 exit 0
 FAKE
@@ -235,6 +240,7 @@ run_reap() { # <ISS> <args...> — run dash-reap with the fakes + this base chec
   # TMPDIR is redirected under $WORK so fleet-lib's cache dir (FLEET_C) — and the
   # raw path's summary-cache rm — stay hermetic (never touch the real cache).
   ISS="$iss" RAW="${RAW:-}" WID="${WID:-}" WT="${WT:-}" TMLOG="$TMLOG" GHLOG="$GHLOG" \
+  MERGED_HEADS="${MERGED_HEADS:-}" MERGED_ISO="${MERGED_ISO:-}" PANE_PID="${PANE_PID:-}" \
   CLIENTS="${CLIENTS-fake-client}" \
   FLEET_REPO="fake/repo" FLEET_MAIN="$BASEDIR" FLEET_BASE_BRANCH="$BASE_BR" \
   FLEET_CONF_DIR="$WORK/noconf" TMPDIR="$WORK/rt" \
@@ -346,7 +352,7 @@ run_reap "1" "@9" --bg
 grep -q 'RUNSHELL .*--exec full' "$TMLOG" || fail "merged reap must be dispatched via run-shell -b (--exec full)"
 [ -d "$WORK/wt1" ] && fail "merged worktree should be removed"
 git -C "$BASEDIR" show-ref --verify -q refs/heads/issue-1 && fail "issue-1 branch should be deleted"
-grep -q 'CLOSE' "$GHLOG" || fail "merged reap should close the issue"
+[ -s "$GHLOG" ] && fail "a landed reap leaves the issue to its PR / worker (#1309)" "$(cat "$GHLOG")"
 grep -q 'KILL' "$TMLOG" || fail "merged reap should kill the window"
 # #471: the GATE verdict rides along to the bg pass, which records the row BEFORE
 # the removal. issue-1 is an ancestor (no PR) → a closed-unlanded row carrying the
@@ -381,11 +387,12 @@ PATH="$WORK/fakepath:$PATH" \
 [ -d "$WORK/wt8" ] && fail "a verdict-less --exec must still reap the worktree"
 [ "$(srows 8)" = 0 ] || fail "a verdict-less --exec must record NO row (no invented state)" "$(cat "$LEDGER")"
 
-# B5: confirm y on dirty (issue-3) → KEEP worktree, close + kill only
+# B5: confirm y on dirty (issue-3) → KEEP worktree, kill; issue OPEN, claim released (#1542)
 : > "$TMLOG"; : > "$GHLOG"
 printf 'y' | run_reap "3" "@9" confirm
 [ -d "$WORK/wt3" ] || fail "confirmed reap on dirty must KEEP the worktree"
-grep -q 'CLOSE' "$GHLOG" || fail "confirmed reap on dirty should close the issue"
+grep -q 'CLOSE' "$GHLOG" && fail "confirmed reap on dirty must leave the issue OPEN (#867)"
+grep -q 'EDIT .*--remove-assignee @me' "$GHLOG" || fail "confirmed reap on dirty must release the claim (#1542)" "$(cat "$GHLOG")"
 grep -q 'KILL' "$TMLOG" || fail "confirmed reap on dirty should kill the window"
 # #471: the confirm path threads its verdict too — a KEPT dirty worktree is exactly
 # the resumable case the ledger row exists for.
@@ -398,7 +405,8 @@ grep -qE "RUNSHELL .*--exec keep '?dirty'?" "$TMLOG" || fail "the confirm path m
 printf 'y' | run_reap "2" "@9" confirm
 [ -d "$WORK/wt2" ] && fail "confirmed reap on clean+unmerged should remove the worktree"
 git -C "$BASEDIR" show-ref --verify -q refs/heads/issue-2 && fail "issue-2 branch should be deleted"
-grep -q 'CLOSE' "$GHLOG" || fail "confirmed reap should close the issue"
+grep -q 'CLOSE' "$GHLOG" && fail "confirmed unmerged reap must leave the issue OPEN (#867)"
+grep -q 'COMMENT .*did not land' "$GHLOG" || fail "confirmed unmerged reap must say what happened (#1542)" "$(cat "$GHLOG")"
 # #471: a force-reaped unmerged worker is indexed WITH its sha before the removal.
 # (That sha lives only until git gc prunes the now-unreachable commit — documented
 # in dash-reap.sh's reap_record; the row is still strictly better than none.)
@@ -525,28 +533,28 @@ git -C "$BASEDIR" worktree add -q -b issue-16 "$WORK/wt16" >/dev/null 2>&1
 printf 'dirt\n' > "$WORK/wt16/untracked"                       # dirty, for the --force alias
 for n in 12 13 14 15 16; do transcript_for "$WORK/wt$n" "$n"; done
 
-# D1: --yes on a DIRTY row → the confirm branch, unasked: worktree KEPT, window +
-# issue closed, NO popup. Same semantics as a confirmed ⌃x — --yes skips the
+# D1: --yes on a DIRTY row → the confirm branch, unasked: worktree KEPT, window
+# closed, issue OPEN (#1542), NO popup. Same semantics as a confirmed ⌃x — --yes skips the
 # question, never the dirty-worktree protection.
 : > "$TMLOG"; : > "$GHLOG"
 run_reap_tok "12" "@9" --yes
 grep -q 'POPUP' "$TMLOG" && fail "--yes on dirty must NOT open a confirm popup (#596)"
 [ -d "$WORK/wt12" ] || fail "--yes on dirty must KEEP the worktree (#596)"
 grep -q 'KILL' "$TMLOG" || fail "--yes on dirty should kill the window (#596)"
-grep -q 'CLOSE' "$GHLOG" || fail "--yes on dirty should close the issue (#596)"
+grep -q 'CLOSE' "$GHLOG" && fail "--yes on dirty must leave the issue OPEN (#1542)"
 [ "$TOK" = "reaped:keep" ] || fail "--yes on dirty must print reaped:keep (got [$TOK]) (#596)"
 [ "$RC" = 0 ] || fail "--yes on dirty must exit 0 (got $RC) (#596)"
 [ "$(srows 12)" = 1 ] || fail "--yes must still record ONE /fleet-history row (#471+#596)" "$(cat "$LEDGER")"
 [ "$(scol 12 10)" = closed-unlanded ] || fail "a --yes dirty reap row must be closed-unlanded (got [$(scol 12 10)])"
 
-# D2: --yes on a clean+unmerged row → full reap (worktree + branch + issue), no popup.
+# D2: --yes on a clean+unmerged row → full reap (worktree + branch), issue OPEN, no popup.
 : > "$TMLOG"; : > "$GHLOG"
 run_reap_tok "13" "@9" --yes 2>"$WORK/description"
 grep -q 'reap target: window=@9 .*issue=13 .*state=.*worktree=.*reason=unmerged' "$WORK/description" || fail "missing disposal target description"
 grep -q 'POPUP' "$TMLOG" && fail "--yes on unmerged must NOT open a confirm popup (#596)"
 [ -d "$WORK/wt13" ] && fail "--yes on clean+unmerged should remove the worktree (#596)"
 git -C "$BASEDIR" show-ref --verify -q refs/heads/issue-13 && fail "--yes should delete the issue-13 branch (#596)"
-grep -q 'CLOSE' "$GHLOG" || fail "--yes on unmerged should close the issue (#596)"
+grep -q 'CLOSE' "$GHLOG" && fail "--yes on unmerged must leave the issue OPEN (#1542)"
 [ "$TOK" = "reaped:full" ] || fail "--yes on unmerged must print reaped:full (got [$TOK]) (#596)"
 [ "$RC" = 0 ] || fail "--yes on unmerged must exit 0 (got $RC) (#596)"
 
@@ -587,7 +595,7 @@ grep -q KILL "$TMLOG" && fail "declining inline confirm killed the issue window"
 run_reap_tok "14" "@9" --yes
 grep -q 'RUNSHELL' "$TMLOG" && fail "--yes must reap in the foreground, not via run-shell (#596)"
 [ -d "$WORK/wt14" ] && fail "--yes on a merged row should remove the worktree (#596)"
-grep -q 'CLOSE' "$GHLOG" || fail "--yes on a merged row should close the issue (#596)"
+grep -q 'CLOSE' "$GHLOG" && fail "--yes on a landed row must leave the issue to its PR (#1309)"
 [ "$TOK" = "reaped:full" ] || fail "--yes on a merged row must print reaped:full (got [$TOK]) (#596)"
 [ "$(srows 14)" = 1 ] || fail "the synchronous --yes reap must still record its row (#471+#596)" "$(cat "$LEDGER")"
 
@@ -705,6 +713,79 @@ KILL_FAILS=1 run_reap_tok 25 @9
 [ -s "$GHLOG" ] && fail "a failed kill must not close the issue"
 rm -f "$WORK/fakepath/python3"
 
+# --- F. a reap that judges right (issue #1542, R4 of EPIC #1529) ---------------
+# Five legs, one per source issue. A REAL bounded agent (sleep, invoked as
+# `claude`, via a symlink) stands under the fake pane, so the real probe meets a young agent.
+iso_ago() { python3 -c 'import sys,time;print(time.strftime("%Y-%m-%dT%H:%M:%SZ",time.gmtime(time.time()-int(sys.argv[1]))))' "$1"; }
+mkdir -p "$WORK/agentbin"; ln -s "$(command -v sleep)" "$WORK/agentbin/claude"   # a copy is SIGKILLed by macOS signing
+"$WORK/agentbin/claude" 60 & AG=$!
+trap 'kill "$AG" 2>/dev/null; rm -rf "$WORK"' EXIT
+for n in 30 31 32 34; do
+  git -C "$BASEDIR" worktree add -q -b "issue-$n" "$WORK/wt$n" >/dev/null 2>&1
+  git -C "$WORK/wt$n" commit --allow-empty -qm "work$n"
+done
+git -C "$BASEDIR" worktree add -q -b issue-33 "$WORK/wt33" >/dev/null 2>&1   # zero commits
+sleep 3   # the agent must be older than "merged 1s ago"
+IN_LIFE=$(iso_ago 1); BEFORE_LIFE=$(iso_ago 3600)
+
+# F1 (#1356): merged during the agent's life, still stamped `looping` → reaped.
+# The same stamp with a merge from BEFORE the agent started stays live.
+: > "$TMLOG"; : > "$GHLOG"
+REAP_STATE=looping PANE_PID=$AG MERGED_HEADS=issue-32 MERGED_ISO=$BEFORE_LIFE \
+  run_reap_tok 32 @9 --yes 2>"$WORK/f1-err"
+[ "$TOK" = skip:live ] && [ "$RC" = 3 ] || fail "looping + a merge before this agent must stay live (got [$TOK] rc $RC)"
+grep -q 'state:looping' "$WORK/f1-err" || fail "the refusal must say state:looping" "$(cat "$WORK/f1-err")"
+[ -d "$WORK/wt32" ] || fail "a live looping worker's worktree was removed"
+: > "$TMLOG"; : > "$GHLOG"
+REAP_STATE=looping PANE_PID=$AG MERGED_HEADS=issue-30 MERGED_ISO=$IN_LIFE \
+  run_reap_tok 30 @9 --yes 2>"$WORK/f1-err"
+[ "$TOK" = reaped:full ] && [ "$RC" = 0 ] || fail "a merged worker still looping must reap (#1356) (got [$TOK] rc $RC)" "$(cat "$WORK/f1-err")"
+grep -q 'waived:.*looping' "$WORK/f1-err" || fail "the looping waiver must be logged" "$(cat "$WORK/f1-err")"
+[ -d "$WORK/wt30" ] && fail "the merged looping worker's worktree must be removed"
+
+# F2 (#1309): a landed reap never touches the issue — the PR / worker owns it.
+: > "$TMLOG"; : > "$GHLOG"
+MERGED_HEADS=issue-34 run_reap_tok 34 @9 --yes
+[ "$TOK" = reaped:full ] || fail "a merged row must reap (got [$TOK])"
+[ -s "$GHLOG" ] && fail "a landed reap must not close / edit / comment the issue (#1309)" "$(cat "$GHLOG")"
+
+# F3 (#1248): a YOUNG agent that merged its own PR → reaped, also through the
+# dash's backgrounded tail (the merge epoch rides into --exec); a young agent
+# spawned onto an already-merged branch stays protected.
+: > "$TMLOG"; : > "$GHLOG"
+REAP_STATE=done PANE_PID=$AG MERGED_HEADS=issue-32 MERGED_ISO=$BEFORE_LIFE \
+  run_reap_tok 32 @9 --yes 2>"$WORK/f3-err"
+[ "$TOK" = skip:live ] && grep -q 'young-agent' "$WORK/f3-err" \
+  || fail "a young agent spawned after the merge must stay protected (got [$TOK])" "$(cat "$WORK/f3-err")"
+: > "$TMLOG"; : > "$GHLOG"
+REAP_STATE=done PANE_PID=$AG MERGED_HEADS=issue-31 MERGED_ISO=$IN_LIFE \
+  run_reap_tok 31 @9 --bg 2>"$WORK/f3-err"
+[ "$TOK" = dispatched:full ] || fail "young + merged in life must dispatch (#1248) (got [$TOK])" "$(cat "$WORK/f3-err")"
+grep -qE "RUNSHELL .*--exec full 'merged-pr' '[0-9]+'" "$TMLOG" || fail "the merge epoch must ride into the bg tail" "$(cat "$TMLOG")"
+[ -d "$WORK/wt31" ] && fail "the young merged worker's worktree must be removed by the tail (#1248)" "$(cat "$WORK/f3-err")"
+
+# F4 (#869): every refusal is non-zero, a `session:index` target included, and
+# the EPIC loop's doc names the form that works.
+: > "$TMLOG"; : > "$GHLOG"
+run_reap_tok 7 'fleet-x:c4-name-8558' --yes 2>/dev/null
+[ "$TOK" = refused:target ] && [ "$RC" = 4 ] || fail "a session:name target must refuse non-zero (#869) (got [$TOK] rc $RC)"
+grep -q 'dash-reap.sh <window-target>' "$BIN/../commands/fleet-epic-run.md" \
+  && fail "fleet-epic-run.md still teaches the refused <window-target> form (#869)"
+grep -q 'dash-reap.sh issue-<N>' "$BIN/../commands/fleet-epic-run.md" \
+  || fail "fleet-epic-run.md must name dash-reap.sh issue-<N> (#869)"
+
+# F5 (#867): a worker that never started is reaped, but its issue stays OPEN,
+# the claim is released and the note says "never started" — no false COMPLETED.
+: > "$TMLOG"; : > "$GHLOG"
+run_reap_tok 33 @9 --yes
+[ "$TOK" = reaped:full ] && [ "$RC" = 0 ] || fail "--yes on a zero-commit worker must reap (got [$TOK] rc $RC)"
+[ -d "$WORK/wt33" ] && fail "the zero-commit worktree must be removed"
+grep -q CLOSE "$GHLOG" && fail "a never-started issue must stay OPEN (#867)"
+grep -q 'EDIT .*--remove-assignee @me' "$GHLOG" || fail "the claim must be released (#867)" "$(cat "$GHLOG")"
+grep -q 'COMMENT .*never started' "$GHLOG" || fail "the note must say it never started (#867)" "$(cat "$GHLOG")"
+grep -q 'fleet:no-relay' "$GHLOG" || fail "the reap note must carry the no-relay marker"
+kill "$AG" 2>/dev/null; wait "$AG" 2>/dev/null
+
 # --- C. interactive terminal handoff (#451), asynchronous cleanup (#304) ------
 # execute() yields fzf's terminal for the inline confirm. B4 above still asserts
 # that the slow teardown is dispatched via run-shell -b after authorization.
@@ -714,5 +795,5 @@ grep -Fq '$DASH_KEY_REAP:execute(' "$DASH" \
 grep -Fq 'dash-reap.sh {2} --bg)' "$DASH" \
   || fail "the dash bind must ask for the backgrounded tail explicitly (#1244)"
 
-printf 'selftest PASS: reap gates, confirmation/cancel, ledger, async cleanup, CLI results, refused-popup fallback\n'
+printf 'selftest PASS: reap gates, confirmation/cancel, ledger, async cleanup, CLI results, refused-popup fallback, R4 judgement (#1542)\n'
 exit 0

@@ -1,7 +1,10 @@
 #!/bin/bash
 # dash-reap.sh <window-target> [confirm] — reap a finished worker row from the
 # dash on ONE key (⌃x, issue #289 merged the old ⌃x/⌥x pair): close its tmux
-# window, remove its git worktree (when clean), and close its bound GitHub issue.
+# window and remove its git worktree (when clean). The bound GitHub issue is NOT
+# closed by a reap (issue #1542, from #1309/#867): a landed one is the PR's /
+# worker's to close, an unlanded one stays OPEN with its claim released — see
+# settle_issue().
 # The gate is the SHARED fleet_reap_ok() (same guarantees as the
 # worktree-autoclean.sh janitor).
 #
@@ -10,14 +13,14 @@
 #      daemon reaps those anyway, so no confirm.
 #   ⌃x on anything else (dirty, or clean-but-not-merged) opens a y/n confirm
 #      popup FIRST, then force-reaps — but STILL never removes a dirty worktree
-#      (a dirty worktree is KEPT; only the window + issue close).
+#      (a dirty worktree is KEPT; only the window closes).
 # The same one-key rule applies to BOTH a bound worker row (issue-<N>) and a raw
 # `scratch-<N>` row (issue #290 gave scratch its own writable worktree).
 #
 #   Row state            ⌃x
-#   clean + merged       record row, reap wt+branch+issue+window   (no confirm)
-#   clean + NOT merged   confirm → record row, reap all (issue closed)
-#   dirty (any)          confirm → record row, close window+issue, KEEP wt
+#   clean + merged       record row, reap wt+branch+window, issue untouched (no confirm)
+#   clean + NOT merged   confirm → record row, reap wt+branch+window; issue OPEN, claim released
+#   dirty (any)          confirm → record row, close window, KEEP wt; issue OPEN, claim released
 #   raw scratch, merged  record row, dispose wt+branch, close window (no confirm)
 #   raw scratch, else    confirm → record row, dispose (dirty KEEPs the wt), close window
 #   raw scratch, no wt   close window (ephemeral, pre-#290 / hermetic — nothing to record)
@@ -30,8 +33,7 @@
 # no sha to rebuild from. See reap_record() for the ordering rules.
 #
 # Operates on THIS fleet only (the dash's resolved fleet); never another fleet's
-# worktree/issue. gh issue close is idempotent (a merge may have closed it
-# already); a kept dirty worktree stays on disk for later.
+# worktree/issue. A kept dirty worktree stays on disk for later.
 #
 # NON-INTERACTIVE CALLERS (issue #596). `dash-reap.sh <target>` is a PUBLIC script
 # interface — accepts @window-id, %pane-id, registered handle, issue-N/#N or
@@ -39,7 +41,7 @@
 # watching the fleet:
 #
 #   --yes | --force    skip the confirm popup and take the branch that popup would
-#                      have taken — dirty → KEEP the worktree (window + issue close
+#                      have taken — dirty → KEEP the worktree (window close
 #                      only), anything else → full reap. Semantics are IDENTICAL to
 #                      a confirmed ⌃x; only the question is skipped, so it opens NO
 #                      new data-loss path (a dirty worktree is still never removed,
@@ -54,8 +56,8 @@
 #   result token       one line on stdout + a distinct exit status, so a caller can
 #                      tell what actually happened instead of reading the blanket
 #                      `exit 0` this script used to answer everything with:
-#                        reaped:full         0  wt + branch + issue + window disposed
-#                        reaped:keep         0  window + issue closed, wt KEPT (dirty)
+#                        reaped:full         0  wt + branch + window disposed
+#                        reaped:keep         0  window closed, wt KEPT (dirty)
 #                        skip:needs-confirm  3  needs a y/n the caller did not grant
 #                        skip:live           3  active/young agent, a reap hold, or
 #                                               unknown liveness (the reason is on stderr)
@@ -65,6 +67,10 @@
 #                                               happen (sleep-record / kill-window)
 #                        refused:<slug>      4  nothing to reap here (no-target /
 #                                               no-git / no-issue / no-repo)
+#                      A refusal is never 0 (issue #869: `cmd && echo ok` read a
+#                      refused target as reaped). A window position (`sess:idx`) or
+#                      bare name is refused:target on purpose — positions shift and
+#                      names prefix-match (#565, #1537); use `issue-<N>` or `@id`.
 #                      The token names the ACTION taken, not which artifacts existed:
 #                      a scratch row with no worktree reports `reaped:full` because
 #                      closing its window IS its full disposal.
@@ -79,6 +85,12 @@
 # a sleeper with no agent under it (no state/age gate — there is nothing to
 # protect), the sleep record is retired (fleet_sleep_dispose) and the window killed.
 # A reap HOLD (`fleet-sleep.py hold <@id>`) retains any worker until `release`.
+#
+# A worker that SHIPPED ITS OWN PR (issue #1542): the merged PR's mergedAt is
+# handed to the liveness probe, which then waives the 30-minute young-agent gate
+# (#1248, as the cleanup daemon already did for #1329) and a stale `looping` stamp
+# (#1356) for an agent that was alive at the merge. An ACTIVE @loop mark, a
+# running child or bg job still retain it (#1331 ruling A, #1370).
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -111,8 +123,11 @@ have_client() { [ -n "$(tmux list-clients -F '#{client_name}' 2>/dev/null)" ]; }
 # done (or an empty state) and FLEET_REAP_MIN_AGE seconds (default 1800).
 guard_live() {
   local why
+  # MERGED_AT (issue #1542) = the branch's merged PR epoch, once known: the probe
+  # then waives the young-agent (#1248) and stale `looping` (#1356) gates for an
+  # agent that was alive at the merge — the worker shipped its own PR.
   if ! why=$(FLEET_REAP_MIN_AGE="${FLEET_REAP_MIN_AGE:-1800}" \
-    python3 "$BIN/fleet-reap-live.py" "$target" 2>/dev/null); then
+    python3 "$BIN/fleet-reap-live.py" "$target" ${MERGED_AT:+--merged-at "$MERGED_AT"} 2>/dev/null); then
     emit skip:live
     # A pending /loop (issue #1331) is not "live" in the busy sense — say what it is:
     # the window waits for its Loop to stop (stop:true / CronDelete / no renewal).
@@ -124,17 +139,19 @@ guard_live() {
     tmux display-message "reap refused: $target — ${why:-probe unavailable}" 2>/dev/null || :
     exit 3
   fi
+  case "$why" in waived:*) printf 'reap: %s %s (its PR merged during this agent'"'"'s life)\n' "$target" "$why" >&2 ;; esac
 }
 
 # Dispatch the --exec tail through the tmux server (issue #304). The tail re-runs
 # the liveness gate (#565), so it must run it under the SAME knob the foreground
 # did: run-shell does not inherit an inline `FLEET_REAP_MIN_AGE=…` (issue #1244),
 # so a numeric override is forwarded explicitly. $1 = action, $2 = verdict (both
-# fixed tokens, shell-safe to interpolate).
+# fixed tokens, shell-safe to interpolate). The merge epoch rides as $3 (digits or
+# empty, validated by the --exec parse) so the tail's gate waives what ours did.
 bg_exec() {
   local env=""
   case "${FLEET_REAP_MIN_AGE:-}" in ''|*[!0-9]*) ;; *) env="FLEET_REAP_MIN_AGE=$FLEET_REAP_MIN_AGE " ;; esac
-  fleet_bg "${env}bash '$BIN/dash-reap.sh' '$target' --exec $1 '$2'"
+  fleet_bg "${env}bash '$BIN/dash-reap.sh' '$target' --exec $1 '$2' '${MERGED_AT:-}'"
 }
 
 # stderr keeps the public one-token stdout protocol intact. Quote free text so
@@ -148,14 +165,33 @@ describe_target() {
     "$target" "$name" "${issue:--}" "${state:--}" "${2:--}" "$1" >&2
 }
 
-# close the bound issue (idempotent — a merge/janitor may have closed it already)
-close_issue() {
+# Settle the bound issue (issue #1542). A reap disposes of a WINDOW and a
+# WORKTREE; whether the issue is done is not its call:
+#   landed (merged-pr | ancestor) → untouched. A merged PR's `Closes #N` already
+#       closed it; one still OPEN is a worker that said "keep open until the
+#       read-back" (#1309), and the cleanup daemon never closed issues either.
+#   not landed (unmerged | dirty) → stays OPEN, the claim is released and one
+#       no-relay note says what happened. Closing it read as CLOSED/COMPLETED — a
+#       false "done" the EPIC report counts (#867), worst for a worker that
+#       never started (zero commits of its own: tip == base).
+#   no verdict (a pre-#471 dispatch in flight) → untouched: never guess.
+settle_issue() {
   command -v gh >/dev/null 2>&1 || return 0
+  case "${reason:-}" in unmerged|dirty) ;; *) return 0 ;; esac
   local st; st="$(gh -R "$REPO" issue view "$iss" --json state -q .state 2>/dev/null)"
   [ "$st" = OPEN ] || return 0
-  gh -R "$REPO" issue close "$iss" \
-    --comment "Reaped from the fleet dash: window closed and worktree cleaned." \
-    >/dev/null 2>&1 || true
+  local what="its work did not land" base n
+  if [ -n "${whead:-}" ] && [ -n "${MAIN:-}" ]; then
+    base="$(git -C "$MAIN" rev-parse --verify -q "origin/${FLEET_BASE_BRANCH:-main}" 2>/dev/null \
+      || git -C "$MAIN" rev-parse --verify -q "${FLEET_BASE_BRANCH:-main}" 2>/dev/null)"
+    n="$(git -C "$MAIN" rev-list --count "$base..$whead" 2>/dev/null)"
+    [ -n "$base" ] && [ "$n" = 0 ] && what="it never started (no commits of its own)"
+  fi
+  [ "$reason" = dirty ] && what="$what; its dirty worktree is kept"
+  gh -R "$REPO" issue edit "$iss" --remove-assignee @me >/dev/null 2>&1 || true
+  gh -R "$REPO" issue comment "$iss" --body "Reaped from the fleet: window closed — $what. The issue stays OPEN and the claim is released, so it can be picked up again.
+
+<!-- fleet:no-relay -->" >/dev/null 2>&1 || true
 }
 
 # RECORD this reap into the /fleet-history ledger (issue #471). ⌃x used to be the
@@ -208,13 +244,13 @@ reap_kill() {
   fi
 }
 
-# full reap: remove worktree + delete branch, close issue, kill window
+# full reap: remove worktree + delete branch, settle issue, kill window
 reap_full() {
   guard_live
   # Kill the window FIRST (issue #313): the dash row is driven live by
   # `tmux list-windows`, so dropping the window here makes the reaped row vanish
   # on the very next repaint instead of lingering behind the slow tail below (the
-  # network `gh issue close` + `git worktree remove`). This whole function already
+  # network `gh issue` settle + `git worktree remove`). This whole function already
   # runs backgrounded (fleet_bg / run-shell -b, #304), so it never blocks the bind.
   reap_kill
   reap_record                                          # index it BEFORE the remove (#471)
@@ -230,19 +266,19 @@ reap_full() {
       && git -C "$MAIN" branch -D "$branch" >/dev/null 2>&1
     git -C "$MAIN" worktree prune 2>/dev/null || true
   fi
-  close_issue
-  tmux display-message "reaped #$iss ✓ (window + worktree + issue)" 2>/dev/null || true
+  settle_issue
+  tmux display-message "reaped #$iss ✓ (window + worktree)" 2>/dev/null || true
 }
 
-# dirty force reap: KEEP the worktree, close issue + kill window only
+# dirty force reap: KEEP the worktree, settle issue + kill window only
 reap_keep() {
   guard_live
   reap_kill                                            # drop the row first (#313)
   reap_record                                          # the KEPT worktree is resumable (#471)
   # kept tree, but its detached LISTENERS go now — a `*` bind serves it to the LAN (#1154)
   [ -n "${wtdir:-}" ] && fleet_reap_worktree_listeners "$wtdir" >/dev/null 2>&1
-  close_issue
-  tmux display-message "reaped #$iss ✓ (window + issue) — worktree kept (dirty)" 2>/dev/null || true
+  settle_issue
+  tmux display-message "reaped #$iss ✓ (window) — worktree kept (dirty)" 2>/dev/null || true
 }
 
 # The disposal tail shared by the backgrounded --exec pass and the synchronous
@@ -270,7 +306,7 @@ reap_dispatch() {
 }
 
 # --- parse args ---------------------------------------------------------------
-confirm=0; yes=0; bg=0
+confirm=0; yes=0; bg=0; MERGED_AT=""
 target="${1:-}"
 # Nothing to act on (an empty {1} from a dash with no rows) — still answer the
 # caller with a token rather than a bare success, but stay silent on the status
@@ -283,9 +319,10 @@ target="${1:-}"
 # must never be silently ignored. --exec is the existing private background tail.
 shift || true
 if [ "${1:-}" = --exec ]; then
-  [ "$#" -ge 2 ] && [ "$#" -le 3 ] || refuse bad-args "--exec needs one action and optional verdict"
+  [ "$#" -ge 2 ] && [ "$#" -le 4 ] || refuse bad-args "--exec needs one action, optional verdict and merge epoch"
   case "$2" in full|keep) ;; *) refuse bad-args "invalid reap action" ;; esac
   case "${3:-}" in ''|merged-pr|ancestor|unmerged|dirty) ;; *) refuse bad-args "invalid reap verdict" ;; esac
+  case "${4:-}" in *[!0-9]*) refuse bad-args "invalid merge epoch" ;; esac
 else
   for a in "$@"; do case "$a" in
     confirm) confirm=1 ;;
@@ -308,7 +345,7 @@ command -v git >/dev/null 2>&1 || refuse no-git "git not found"
 # the interactive path dispatches (via fleet_bg) ONCE the merged-check decision is
 # made. Re-resolve only the CHEAP locals reap_full/reap_keep need — NO `gh pr list`
 # (the decision is already made) — then run the slow tail (git worktree remove + gh
-# issue close) off the interactive ⌃x bind so it returned instantly. $TMUX is
+# issue settle) off the interactive ⌃x bind so it returned instantly. $TMUX is
 # inherited from the run-shell job, so the bare tmux/gh calls below stay on THIS
 # fleet's server.
 #
@@ -316,7 +353,7 @@ command -v git >/dev/null 2>&1 || refuse no-git "git not found"
 # pass already computed — the one thing this pass cannot cheaply re-derive and the
 # one thing the ledger row needs (issue #471). $2 stays the ACTION (full|keep).
 if [ "${1:-}" = "--exec" ]; then
-  verdict="${2:-}"; reason="${3:-}"
+  verdict="${2:-}"; reason="${3:-}"; MERGED_AT="${4:-}"
   iss="$(tmux display-message -t "$target" -p '#{@issue}' 2>/dev/null)"; iss="${iss//[^0-9]/}"
   [ -z "$iss" ] && exit 0
   FLEET_SESSION="$(fleet_current_session)"; export FLEET_SESSION
@@ -498,13 +535,29 @@ FLEET_SESSION="$(fleet_current_session)"; export FLEET_SESSION
 # its branch, its PRs — never the conf repo's same-numbered issue.
 fleet_load_window_conf "$FLEET_SESSION" "$target" \
   || refuse no-repo "cannot tell which repo #$iss belongs to — not reaping"
-guard_live
 REPO="$(fleet_resolved_repo "$FLEET_SESSION")"
 [ -z "$REPO" ] && refuse no-repo "no repo resolved — cannot reap #$iss"
+branch="issue-$iss"
+
+# merged PRs for this branch (a --head filter keeps it to one branch), each with
+# its mergedAt. GraphQL rate-limited → REST `pulls?state=closed&head=` (issue
+# #1042): under the limit this read came back empty and a MERGED PR reaped as
+# `unmerged`. Read BEFORE the first liveness gate (issue #1542): the merge time is
+# what lets the gate tell a worker that shipped its own PR — young (#1248) or
+# still stamped `looping` (#1356) — from one that is genuinely still working.
+MERGED_PRS=""; MERGED_AT=""
+if command -v gh >/dev/null 2>&1; then
+  while IFS=$'\t' read -r mref miso; do
+    [ "$mref" = "$branch" ] || continue
+    MERGED_PRS="$mref"
+    mep="$(fleet_epoch_from_iso "$miso")"
+    case "$mep" in ''|*[!0-9]*) ;; *) [ "$mep" -gt "${MERGED_AT:-0}" ] && MERGED_AT="$mep" ;; esac
+  done < <(fleet_gh_merged_heads "$REPO" "$branch" --at 2>/dev/null)
+fi
+guard_live
 
 MAIN="${FLEET_MAIN:-}"
 [ -n "$MAIN" ] && [ ! -d "$MAIN/.git" ] && MAIN=""
-branch="issue-$iss"
 
 # worktree dir + HEAD for this branch (branch→worktree is authoritative).
 wtdir=""; whead=""
@@ -521,13 +574,7 @@ if [ -n "$MAIN" ]; then
     || git -C "$MAIN" rev-parse --verify -q "$BASE" 2>/dev/null)"
 fi
 
-# merged PR head-refs for this branch (a --head filter keeps it to one branch).
-# GraphQL rate-limited → REST `pulls?state=closed&head=` (issue #1042): under the
-# limit this read came back empty and a MERGED PR reaped as `unmerged`.
-MERGED_PRS=""
-command -v gh >/dev/null 2>&1 && MERGED_PRS="$(fleet_gh_merged_heads "$REPO" "$branch" 2>/dev/null)"
-
-reason="$(fleet_reap_ok "$wtdir" "$MAIN" "$branch" "$whead" "$MASTER" "$MERGED_PRS")"
+reason="$(fleet_reap_ok "$wtdir" "$MAIN" "$branch" "$whead" "$MASTER" "$MERGED_PRS" "$MERGED_AT")"
 [ "$reason" != live ] || { emit skip:live; printf 'reap: another live window uses this worktree\n' >&2; exit 3; }
 describe_target "$reason" "$wtdir"
 
@@ -561,7 +608,7 @@ if [ "$confirm" = 0 ]; then
       emit skip:needs-confirm
       exit 3 ;;
     # merged-pr | ancestor — clean+merged, no confirm. Background the reap (issue
-    # #304): the slow git worktree remove + gh issue close run off the ⌃x bind, which
+    # #304): the slow git worktree remove + gh issue settle run off the ⌃x bind, which
     # returns instantly; the row clears when the bg kill-window lands + the dash
     # refreshes.
     # The verdict rides along so the bg pass can record the right row kind (#471);
@@ -579,9 +626,9 @@ fi
 
 # running inside the confirm popup
 if [ "$reason" = dirty ]; then
-  msg="Force-reap #$iss? Worktree is DIRTY — it will be KEPT; window + issue close."
+  msg="Force-reap #$iss? Worktree is DIRTY — it will be KEPT; window closes. Issue stays open, claim released."
 else
-  msg="Force-reap #$iss? Removes worktree + branch, closes issue + window."
+  msg="Force-reap #$iss? Removes worktree + branch, closes the window. Issue stays open, claim released."
 fi
 printf '\n  %s\n\n  [y] reap    [n] cancel ' "$msg"
 read -rsn1 ans; echo

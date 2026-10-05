@@ -2102,6 +2102,10 @@ fleet_sleep_dispose() {
 # safe outcomes can just test the return code. Safe under a `set -u` caller.
 fleet_reap_ok() {
   local wtdir="${1:-}" root="${2:-}" branch="${3:-}" head="${4:-}" base="${5:-}" merged="${6:-}"
+  # $7 (optional, issue #1542): the merged PR's epoch — the probe waives the
+  # young-agent / `looping` gates for an agent alive at that merge (#1329, #1356).
+  local merged_at="${7:-}"
+  case "$merged_at" in ''|0|*[!0-9]*) merged_at="" ;; esac
   # Liveness precedes Git eligibility (#565). Scan the registered fleet sockets
   # using bound worktrees and every pane cwd; a failed probe is never permission
   # to remove data. Callers retain their additional identity/rotation guards.
@@ -2112,7 +2116,7 @@ fleet_reap_ok() {
       _reap_bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
       if ! FLEET_REAP_MIN_AGE="${FLEET_REAP_MIN_AGE:-1800}" \
         python3 "$_reap_bin/fleet-reap-live.py" --worktree "$wtdir" \
-          --socket-names "$_reap_sockets" >/dev/null 2>&1; then
+          --socket-names "$_reap_sockets" ${merged_at:+--merged-at "$merged_at"} >/dev/null 2>&1; then
         printf 'live'; return 1
       fi
     fi

@@ -110,7 +110,14 @@ def live_reason(target, minimum, socket_name=None, merged_at=None, waived=None, 
     if lifecycle and not sleeping:
         return "retained:" + lifecycle
     state = read(*tmux, "display-message", "-p", "-t", target, "#{@claude_state}").strip()
-    if state not in ("", "done"):
+    # A `looping` stamp on a worker whose PR merged (issue #1356, R4 of EPIC
+    # #1529): its own ship is done, and what holds the stamp is a round it
+    # scheduled to wait for that merge. It is waived ONLY with a merge time and
+    # only when the walk below finds an agent and every agent was alive at the
+    # merge — an ACTIVE @loop mark, a running child or bg job already returned above
+    # (#1331's ruling: a live Loop is kept), so this never takes a pending round.
+    looping = state == "looping" and merged_at is not None
+    if state not in ("", "done") and not looping:
         return "state:"+state
     roots = read(*tmux, "list-panes", "-t", target, "-F", "#{pane_pid}").split()
     if not roots or not all(p.isdigit() for p in roots):
@@ -131,7 +138,7 @@ def live_reason(target, minimum, socket_name=None, merged_at=None, waived=None, 
         parts = line.split(None, 1)
         if len(parts) == 2:
             commands[parts[0]] = parts[1]
-    seen, todo = set(), list(roots)
+    seen, todo, shipped = set(), list(roots), False
     while todo:
         pid = todo.pop()
         if pid in seen:
@@ -147,8 +154,12 @@ def live_reason(target, minimum, socket_name=None, merged_at=None, waived=None, 
         # mergedAt AFTER this agent started, the merge happened in its life. A
         # worker spawned onto an already-merged branch started after the merge
         # and keeps its protection.
+        if agent and looping:
+            if not merged_in_life(merged_at, age, now):
+                return "state:looping"
+            shipped = True
         if agent and age < minimum:
-            if state == "done" and merged_in_life(merged_at, age, now):
+            if state in ("done", "looping") and merged_in_life(merged_at, age, now):
                 if waived is not None:
                     waived.append(f"{agent}:{age}s<{minimum}s")
             else:
@@ -157,6 +168,12 @@ def live_reason(target, minimum, socket_name=None, merged_at=None, waived=None, 
         if re.fullmatch(r"node\d*|bun", Path(comm).name) and pid not in commands:
             return "unknown:agent-command"
         todo.extend(children.get(pid, []))
+    if looping:
+        # No agent under the pane proves nothing shipped: keep the stamp's word.
+        if not shipped:
+            return "state:looping"
+        if waived is not None:
+            waived.append("looping")
     return None
 
 
@@ -176,7 +193,8 @@ def main():
     waived = []
     try:
         if args.worktree:
-            reason = worktree_reason(args.worktree, minimum, args.socket_names.splitlines())
+            reason = worktree_reason(args.worktree, minimum, args.socket_names.splitlines(),
+                                     merged_at, int(time.time()) if merged_at is not None else None)
         elif args.target:
             reason = live_reason(args.target, minimum, args.socket_name, merged_at, waived,
                                  int(time.time()) if merged_at is not None else None)
@@ -189,11 +207,11 @@ def main():
         return 1
     if waived:
         # Exit 0 still means reapable; the line only lets the caller log the waiver.
-        print("waived:young-agent:" + ",".join(waived))
+        print("waived:" + ",".join(w if w == "looping" else "young-agent:" + w for w in waived))
     return 0
 
 
-def worktree_reason(worktree, minimum, sockets):
+def worktree_reason(worktree, minimum, sockets, merged_at=None, now=None):
     target = Path(worktree).resolve()
     for socket in sockets:
         prefix = ("tmux", "-L", socket)
@@ -210,7 +228,7 @@ def worktree_reason(worktree, minimum, sockets):
                     continue
                 resolved = Path(path).resolve()
                 if target == resolved or target in resolved.parents:
-                    reason = live_reason(window, minimum, socket)
+                    reason = live_reason(window, minimum, socket, merged_at, None, now)
                     if reason:
                         return reason
                     break
