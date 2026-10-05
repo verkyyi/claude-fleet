@@ -194,7 +194,10 @@ func (s *Server) leaseAudit(actor, action, fleetID, outcome string, at time.Time
 // the fleets the beat carried that the registry accepted; a fleet whose status
 // read failed (state "unknown") is left out of readFleets, so its leases are
 // neither renewed nor released on this beat.
-func (s *Server) renewLeases(ep store.Endpoint, reports []store.FleetReport, rejected []string, at time.Time) {
+//
+// reconnect marks a connection's first beat (claude-fleet#1630): its sessions
+// are also checked against leases other workers hold, before renewing.
+func (s *Server) renewLeases(ep store.Endpoint, host, user string, reports []store.FleetReport, rejected []string, reconnect bool, at time.Time) {
 	bad := map[string]bool{}
 	for _, id := range rejected {
 		bad[id] = true
@@ -205,32 +208,18 @@ func (s *Server) renewLeases(ep store.Endpoint, reports []store.FleetReport, rej
 		if bad[f.FleetID] || f.State == "unknown" {
 			continue
 		}
-		read[f.FleetID] = true
-		var ws []struct {
-			WorkerID *string `json:"worker_id"`
-			Issue    *int    `json:"issue"`
-			Repo     *string `json:"repo"`
-		}
-		if json.Unmarshal([]byte(f.WorkersJSON), &ws) != nil {
-			delete(read, f.FleetID)
+		ws, ok := parseWorkerSessions(f.FleetID, f.Repo, f.WorkersJSON)
+		if !ok {
 			continue
 		}
-		for _, x := range ws {
-			ss := store.LeaseSession{FleetID: f.FleetID, Repo: f.Repo}
-			if x.WorkerID != nil {
-				ss.WorkerID = *x.WorkerID
-			}
-			if x.Issue != nil {
-				ss.Issue = *x.Issue
-			}
-			if x.Repo != nil && *x.Repo != "" {
-				ss.Repo = *x.Repo
-			}
-			sessions = append(sessions, ss)
-		}
+		read[f.FleetID] = true
+		sessions = append(sessions, ws...)
 	}
 	if len(read) == 0 {
 		return
+	}
+	if reconnect {
+		s.checkLeaseConflicts(ep, host, user, sessions, at)
 	}
 	if _, released, err := s.Store.RenewLeases(ep.ID, read, sessions, leaseLostTTL, at); err != nil {
 		log.Printf("node %s: renew leases: %v", ep.ID, err)

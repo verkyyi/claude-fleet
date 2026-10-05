@@ -316,6 +316,9 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 	if idle < helloTimeout {
 		idle = helloTimeout
 	}
+	// The first beat on this connection is the node's full picture after a
+	// (re)connect: the one checked for leases handed on while it was away.
+	first := true
 	for {
 		rctx, cancel := context.WithTimeout(ctx, idle)
 		var m control.Message
@@ -349,7 +352,9 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 			}
 			// The Fleet Hub registry (claude-fleet#1409): this login's
 			// fleets, re-derived and checked before they are registered.
-			s.recordFleets(*ep, hb, nc.canRead, now)
+			s.nodeBack(*ep, now)
+			s.recordFleets(*ep, hb, nc.canRead, first, now)
+			first = false
 			if s.Spot != nil {
 				// A SPOT node's first beat makes it online; a beat with
 				// sessions — or an unknown count, #1465 — restarts its
