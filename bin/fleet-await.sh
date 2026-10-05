@@ -462,6 +462,7 @@ if [ -z "$wid" ]; then
     0) : ;;
     2) finish NO-WORKER "spawn refused — at capacity, retry later: ${err##*$'\n'}" ;;
     3) finish NO-WORKER "spawn refused — already claimed (another machine, or an open PR): ${err##*$'\n'}" ;;
+    4) finish NO-WORKER "spawn refused — no live parent to report to (run from a scratch/worker pane, or --parent <key>): ${err##*$'\n'}" ;;
     *) finish NO-WORKER "spawn failed (rc $rc): ${err##*$'\n'}" ;;
   esac
   row=$(child_win); wid=${row%%|*}
