@@ -300,6 +300,9 @@ func (s *Server) Handler() http.Handler {
 		// Where the owner is (claude-fleet#1716): the client they are
 		// connected through right now, read by a node with its own token.
 		mux.HandleFunc("/v1/node/client", s.handleNodeClient)
+		// Open it on the owner's device (claude-fleet#1717): a node sends
+		// an action to that client; the client polls for its lease's.
+		mux.HandleFunc("/v1/node/client/actions", s.handleNodeClientActions)
 		// A worker's evidence and history, uploaded by the machine that
 		// reaped it and read back by its owner's others (claude-fleet#1609).
 		mux.HandleFunc("/v1/node/worker-records", s.handleNodeWorkerRecords)
@@ -333,6 +336,7 @@ func (s *Server) Handler() http.Handler {
 		// client — a certificate proven by a signed timestamp, like the
 		// session list, so it authenticates itself outside the viewer gate.
 		mux.HandleFunc(control.ClientPath, s.handleFleetClient)
+		mux.HandleFunc(control.ClientPath+"/actions", s.handleFleetClientActions)
 		// Connection certificates (claude-fleet#1412). start/poll carry no
 		// credential — they are what a person runs before having one, and
 		// grant nothing until a signed-in person confirms the code.

@@ -346,6 +346,41 @@ section of the system prompt (「操作者此刻在：…」); Codex reads the s
 through the agent-defaults block. `TestNodeClientReadsOwnersLease`,
 `bin/fleet-client-where-selftest.sh` and `mod/fleet/tests/where.test.ts` pin it.
 
+**Open it on the device in your hands** (issue #1717, EPIC #1710 C7). A session
+anywhere that runs `fleet-open.sh` / `fleet-show.sh` first asks
+`fleet-client-where.sh`. A client holding the lease → the page or file goes to
+THAT client through the hub, never through the session's terminal: the node
+`POST /v1/node/client/actions` `{kind: open_url|show_file|notify, url | rport
+path scheme, file name size inline, title body, links {tailnet, hub}, wait}` with
+its own token (to its owner's lease, the C6 rule; `bin/fleet-client-actions.py
+send`), and the client's action loop (`fleet-shell.sh actions` →
+`fleet-client-actions.py run`) long-polls `POST /v1/fleet/client/actions`
+`{action: poll|done, lease}` with its connection certificate and does it on its
+own device: `open` / `xdg-open` (caps `open_url` / `show_file`); a page on the
+session's machine's loopback (`rport`) first forwarded over the client's ssh
+master to that machine (the warm one, else its own); a file fetched from that
+machine (`cat` over the master) into `~/Downloads`; an iTerm2 at the far end of
+an ssh (caps `iterm2`, no `open_url`) through `fleet-open.sh` / `fleet-show.sh` /
+OSC 9 on that terminal; a phone (caps `link` only) never opens anything — a line
+at the bottom of the client with a link to tap: the page's tailnet address
+(`tailscale serve` / doc-preview, worked out by `fleet-open-addr.py`) for a
+device on the tailnet, the hub's (`links.hub`) for one that is not, the URL
+itself for a page elsewhere, or 「回到电脑上再看」 with the link kept in
+`links.pending`. **Anti-forgery** — open.secret's rule on this road: every action
+is signed (HMAC-SHA256 over the payload) under its lease's action key, which the
+hub hands only to the lease's own client on acquire / renewal (`action_key`,
+written 0600 to `<cache>/tmp/client.key`, never on a read or to a node), and
+carries the lease id; the client runs one only when the signature checks, the
+lease is its own, it is under 5 minutes old and not a replay — anything else is
+logged `refused: …` and dropped. The machine an action came from is the hub's
+word (the node's roster name), not the body's. A takeover drops what was queued
+for the old lease. Every action is one line in `<cache>/tmp/actions.log`. No hub
+and the one client here runs on this computer's own screen → `open` right here
+(`sent:local`); nobody connected → the terminal road, unchanged. There is no
+hub page proxy yet, so a loopback page on a phone off the tailnet gets
+「回到电脑上再看」. `TestClientActionsReachTheOwnersLeaseSigned` and
+`bin/fleet-client-actions-selftest.sh` pin it.
+
 **Who the hub shows you** (issue #1475). `fleet-hub-sessions.sh` asks as **you**:
 your connection certificate (`~/.ssh/fleet-cert` + `-cert.pub`, from
 `fleet login`, `FLEET_CERT` to name another) signs `fleet-sessions <ts>` under
