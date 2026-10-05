@@ -323,7 +323,9 @@ PY
 eq 'E: the SAME list pane now sits in the m4 window' "$view" "$(view_of "$w2")"
 eq 'E: the list pane is on the left of m4' "$view" "$(ts list-panes -t "$w2" -F '#{pane_id} #{pane_left}' | awk '$2 == 0 { print $1; exit }')"
 eq 'E: the m5 window is still there' 'm5 issue-7' "$(ts display-message -p -t "$w1" '#{window_name}')"
-eq 'E: m5 window keeps its ssh pane' 1 "$(ts list-panes -t "$w1" -F x | grep -c x)"
+eq 'E: m5 window keeps its ssh pane' 1 "$(ts list-panes -t "$w1" -F '#{@sidebar_slot}' | grep -vc 1)"
+# …and a slot in the list's cell, so its ssh pane never widened back (#1702)
+eq 'E: m5 window keeps a slot where the list was' 1 "$(ts list-panes -t "$w1" -F '#{@sidebar_slot}' | grep -c 1)"
 
 # ================================================================================
 # F. the bar — tmux-status.sh in the shell's environment, for the m4 window

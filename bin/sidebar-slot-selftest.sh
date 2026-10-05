@@ -26,13 +26,14 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 REAL_TMUX=$(command -v tmux) || { echo 'selftest SKIP: tmux missing'; exit 0; }
 command -v python3 >/dev/null 2>&1 || { echo 'selftest SKIP: python3 missing'; exit 0; }
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/sbslot.XXXXXX")
-SOCK="sbslot$$"
+SOCK="$WORK/tmux.sock"
 mkdir -p "$WORK/shim"
-printf '#!/bin/sh\nexec %s -L %s "$@"\n' "$REAL_TMUX" "$SOCK" >"$WORK/shim/tmux"
+printf '#!/bin/sh\nexec %s -S %s "$@"\n' "$REAL_TMUX" "$SOCK" >"$WORK/shim/tmux"
 chmod +x "$WORK/shim/tmux"
-cleanup() { FLEET_ALLOW_TMUX_DESTROY=1 "$REAL_TMUX" -L "$SOCK" kill-server >/dev/null 2>&1; rm -rf "$WORK"; }
+cleanup() { FLEET_ALLOW_TMUX_DESTROY=1 "$REAL_TMUX" -S "$SOCK" kill-server >/dev/null 2>&1; rm -rf "$WORK"; }
 trap cleanup EXIT
 unset TMUX TMUX_PANE
+export TERM=xterm-256color   # a CI runner has none, and tmux refuses to start without one
 
 PATH="$WORK/shim:$PATH" python3 - "$BIN" "$WORK" <<'PY'
 import importlib.util, subprocess, sys, time
@@ -55,9 +56,13 @@ def eq(name, want, got):
         sys.exit(1)
 
 HOLD = "while :; do sleep 300; done"
-t("-f", "/dev/null", "new-session", "-d", "-s", "f", "-x", "152", "-y", "26", "-n", "issue-1", HOLD)
+NS = subprocess.run(["tmux", "-f", "/dev/null", "new-session", "-d", "-s", "f", "-x", "152", "-y", "26",
+                     "-n", "issue-1", HOLD], text=True, capture_output=True)
 t("set-option", "-g", "window-size", "manual")
 L = t("display-message", "-p", "-t", "f:issue-1", "#{window_id}")
+if not L.startswith("@"):
+    print("FAIL: setup: the isolated tmux server did not start (%s: %s)"
+          % (t("-V") or "tmux -V failed", NS.stderr.strip())); sys.exit(1)
 t("set-option", "-w", "-t", L, "@issue", "1")
 P = {}
 for node in ("m4", "m5"):
