@@ -1094,6 +1094,65 @@ decrypted for anything else.
   the audit keep working. Machines keep the access tokens they already have, so
   a short KMS outage costs nothing until those run out.
 
+#### Findings reach your phone — WeCom push (claude-fleet#1469, EPIC #1665 C2)
+
+A finding used to live only on the entrance page and the `/credentials` banner:
+a 5-second poll by whoever happened to be looking. The setup-token reminder
+above, a Codex account whose refresh died at 23:46 — found the next morning,
+when a switch ran into them (EPIC #1665 measured about ten hours). With a
+**WeCom group robot** webhook set, the hub pushes every **warning / critical**
+finding of the live (`view=now`) view to it within a minute:
+
+```
+CCQUOTA_WECOM_WEBHOOK=https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…
+```
+
+| variable | role | what it does |
+|---|---|---|
+| `CCQUOTA_WECOM_WEBHOOK` | hub | the robot's webhook URL — **it carries the robot's key**: environment only, like the SSO secrets; never a flag (`ps`), never logged, never in a page. Unset: the push is off and nothing about findings changes |
+| `CCQUOTA_WECOM_REPEAT_HOURS` | hub | remind about a problem that is still standing this often (default `6`, the operator's interval; `0` = announce once, never remind) |
+| `CCQUOTA_WECOM_LOCALE` | hub | the messages' language (`zh-CN`; `en`) |
+
+One message is one finding, as markdown: a bold head (`ccquota · 严重`), the
+finding's sentence in that language, its detail and its link
+(`CCQUOTA_FLEET_PUBLIC_URL` + the finding's anchor) quoted under it.
+
+**The dedup rules** — what keeps a 5-second page refresh from becoming a
+message every 5 seconds — live in one place (`internal/api/finding_notify.go`,
+backed by the `finding_notices` table):
+
+- The unit is the finding's **problem**: its kind + subject, without severity
+  or sentence (`Finding.Problem`, beside the `ID` a mute keys on). A problem is
+  announced **once** when first seen.
+- The same problem back **more severe** (a token's 30-day warning turning
+  critical in its last week) is announced again as `升级为严重`; the same
+  severity with another sentence (expiring → expired) as `（有变化）`; a
+  quieter one is recorded silently.
+- Still standing after `CCQUOTA_WECOM_REPEAT_HOURS`: one reminder per
+  interval (`仍在严重 · 已持续 6小时`).
+- **Gone**: one `已恢复` message carrying the sentence last sent — for the
+  kinds whose clearing means a person acted or a machine came back
+  (`cred_vault_locked`, `cred_setup_token`, `account_login`, `stale_agent`);
+  a rate-limit window cooling off on its own is not news. The row is dropped,
+  so the problem would be "new" again if it came back.
+- A **muted** finding is a problem already dealt with: neither announced nor
+  reminded while the mute holds, and not "gone" either. `info` is never pushed.
+- The findings are evaluated **uncapped** for this: the page's cap of eight
+  would let the ninth problem flap between new and recovered.
+- A failed send records nothing (it is retried) and pauses the notifier five
+  minutes; at most 10 messages leave per tick (a robot takes 20 a minute).
+
+**`account_login`** is the finding this was built for: an account that needs a
+PERSON to sign in again — critical, one per (provider, account), its title
+carrying the one command that fixes it (Codex `codex login --device-auth`,
+Claude `claude setup-token`). Two feeders: a machine's Codex collector reporting
+its profile's login as `reauth_required` (the reading `ccquota codex list`
+prints), and a vault credential whose refresh the hub itself could not complete
+once the access token it backed has run out. On the node, the same state draws
+`▲ accounts · reauth · <profile>` on the status bar (`bin/fleet-alerts.sh`, off
+`.fleet-account.py`'s `account.reauth` stamp — the one judge of a login) and
+flashes once — the fallback for a hub that is unreachable, or absent.
+
 ### One line to install, then just `fleet` (claude-fleet#1470)
 
 A colleague's whole setup is one line in their own terminal (macOS or Linux;

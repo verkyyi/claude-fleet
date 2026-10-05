@@ -163,6 +163,10 @@ type Server struct {
 	// the 120 s default.
 	NodeLostAfter time.Duration
 
+	// Notifier pushes warning / critical findings to a WeCom robot
+	// (claude-fleet#1469). Nil: off, and nothing about findings changes.
+	Notifier *FindingNotifier
+
 	// SSHCA signs people's connection certificates (claude-fleet#1412),
 	// loaded from CCQUOTA_FLEET_SSH_CA_KEY — a file from its own k8s Secret,
 	// never the database. Nil: no certificates, and no node is asked to trust

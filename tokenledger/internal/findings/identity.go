@@ -104,6 +104,14 @@ func findingID(kind, template, severity, subject string) string {
 	return hex.EncodeToString(sum[:])[:idLen]
 }
 
+// problemID is the identity with severity and template left out: what
+// Finding.Problem carries (claude-fleet#1469). Its own version tag, so a
+// change to either hash moves only the ids that depend on it.
+func problemID(kind, subject string) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{"p1", kind, subject}, "\x00")))
+	return hex.EncodeToString(sum[:])[:idLen]
+}
+
 // subjectKey joins the parts of a compound subject (window_high's account and
 // window). Unit separator, for the same reason findingID uses NUL: it does not
 // occur in any of these identifiers.

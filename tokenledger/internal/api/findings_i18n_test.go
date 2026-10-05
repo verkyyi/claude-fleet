@@ -37,6 +37,8 @@ func everyFinding(t *testing.T) []findings.Finding {
 	})
 	now := findings.Now(findings.NowInputs{
 		Now: time.Now().UTC(),
+		// Every template, not a page's eight: the fixtures below trip nine.
+		Uncapped: true,
 		Windows: []findings.WindowStat{
 			{Label: "team@example.com", FiveHourPct: 95},
 			{Label: "other@example.com", FiveHourPct: 80, Window: "weekly window"},
@@ -50,6 +52,10 @@ func everyFinding(t *testing.T) []findings.Finding {
 		SetupTokens: []findings.SetupToken{
 			{PrincipalID: "pool", Provider: "claude", Account: "icloud", ExpiresAt: time.Now().UTC().Add(20 * 24 * time.Hour)},
 			{PrincipalID: "wecom-bob", Provider: "claude", Account: "own", ExpiresAt: time.Now().UTC().Add(-2 * 24 * time.Hour)},
+		},
+		Logins: []findings.LoginState{
+			{Provider: "codex", Account: "ops@example.com", Where: "m5:default", State: "reauth_required",
+				Reason: "Access token expired and no refresh credential is available", Command: "codex login --device-auth"},
 		},
 	})
 	all := append(append([]findings.Finding{}, review...), now...)

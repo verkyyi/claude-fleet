@@ -35,6 +35,11 @@
 #  12. lint     — a daemon (every launchd/*.tmpl script) or background helper
 #                 carrying a bare `display-message` (no -p) is red unless the
 #                 line says `# toast-ok: <why>`; the whitelist lives in ONE file
+#  14. reauth   — issue #1469 / EPIC #1665 C2: a Codex profile in
+#                 reauth_required (via .fleet-account.py, the one judge) → one
+#                 `▲ accounts · reauth · <profile>` row carrying the login
+#                 command + ONE account-reauth flash (never a second live row);
+#                 the row keeps its since; valid again → ↻; no ccquota → nothing
 #   9. wording  — `pace spread` / `quota blind` / `via banner` /
 #                 `no locally reachable` appear nowhere in bin/; `prefix !` is
 #                 bound and on the cheatsheet
@@ -327,7 +332,7 @@ for f in $bg; do
 done
 eq "12: no bare display-message on a background path (mark a keypress-only one # toast-ok:)" "" "$lint"
 [ "$(grep -l "^FLEET_ALERT_FLASH_KINDS=" "$BIN"/*.sh | sed "s|.*/||" | grep -cv -- "-selftest\.sh$")" = 1 ] || fail "12: the flash whitelist must be written in ONE place" "$(grep -n FLEET_ALERT_FLASH_KINDS= "$BIN"/*.sh)"; ok
-eq "12: the whitelist is the three that need you now" "quota-nowhere hub-lost disk-red" "$(bash -c '. "$1"; printf %s "$FLEET_ALERT_FLASH_KINDS"' _ "$FA")"
+eq "12: the whitelist is the four that need you now" "quota-nowhere hub-lost disk-red account-reauth" "$(bash -c '. "$1"; printf %s "$FLEET_ALERT_FLASH_KINDS"' _ "$FA")"
 
 # --------------------------------------------------------------- 13. machine ----
 # 负载 / 内存 left the bar (issue #1616): red is a warning row now. Shims for both
@@ -379,5 +384,66 @@ zsheet=$(FLEET_UI_LANG=zh NO_COLOR=1 bash "$BIN/fleet-keys.sh" --plain)
 grep -q '^  prefix !  *告警弹窗' <<< "$zsheet" || fail "9: prefix ! missing from the zh cheatsheet"; ok
 grep -q 'fleet_alerts_refresh --kick' "$BIN/tmux-status.sh" || fail "9: the bar no longer refreshes the producer"; ok
 
-printf 'selftest PASS: %d assertions (counts · quota · since · mute · actions · accounts · needs · degenerate · act · events · lint · machine · wording)
+# ---------------------------------------------------------------- 14. reauth ----
+rm -f "$G"/alerts.* "$G/account.reauth" "$WORK/calls14"
+cat > "$WORK/shim/ccquota" <<EOF
+#!/bin/sh
+# the fake \`ccquota codex list --json\`: whatever codex-list.json says right now
+cat "$WORK/codex-list.json"
+EOF
+chmod +x "$WORK/shim/ccquota"
+cat > "$WORK/shim/tmux" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$WORK/calls14"
+EOF
+chmod +x "$WORK/shim/tmux"
+reauth_json() {  # $1 = work's login state
+  printf '[{"name":"work","home":"/tmp/codex-work","managed":true,"account":"acct-1","email":"ops@example.com","login":{"state":"%s","reason":"Access token expired and no refresh credential is available"}},
+ {"name":"fine","home":"/tmp/codex-fine","managed":true,"account":"acct-2","email":"fine@example.com","login":{"state":"valid"}}]\n' "$1" > "$WORK/codex-list.json"
+}
+fa14() { FLEET_QUOTA_BIN="$WORK/shim/ccquota" FLEET_C="$WORK/.claude-dash" FLEET_ALERTS_REAUTH_SECS=0 PATH="$WORK/shim:$PATH" bash "$FA" "$@"; }
+reauth_json reauth_required
+fa14 write
+eq "14: one warning — the standing row, not the event too" "0 1 0" "$(fa14 counts)"
+l14=$(fa14 list --plain)
+case "$l14" in *"▲  accounts · reauth · work"*"see accounts"*) ok ;; *) fail "14: no accounts · reauth row for the dead profile" "$l14" ;; esac
+case "$l14" in *fine*) fail "14: the valid profile drew a row" "$l14" ;; *) ok ;; esac
+r14=$(grep '"id":"account-reauth-codex-work"' "$G/alerts.ndjson")
+case "$r14" in *'"detail":"codex ops@example.com needs re-login — run: codex login --device-auth"'*) ok ;; *) fail "14: the row does not carry the login command" "$r14" ;; esac
+case "$(head -n 1 "$G/account.reauth")" in [0-9]*"	checked") ok ;; *) fail "14: the stamp has no checked header" "$(cat "$G/account.reauth")" ;; esac
+eq "14: a new dead profile is ONE account-reauth event" 1 "$(grep -c '	account-reauth	' "$G/alerts.events")"
+eq "14: …and it flashed once" 1 "$(grep -c 'display-message accounts: codex ops@example.com needs re-login' "$WORK/calls14")"
+s14a=$(sed -n 's/.*"since":\([0-9]*\),.*/\1/p' <<< "$r14")
+sleep 1
+fa14 write
+eq "14: a second tick adds no event" 1 "$(grep -c '	account-reauth	' "$G/alerts.events")"
+eq "14: …and no second flash" 1 "$(grep -c 'display-message' "$WORK/calls14")"
+eq "14: …and still one row" "0 1 0" "$(fa14 counts)"
+s14b=$(sed -n 's/.*"since":\([0-9]*\),.*/\1/p' <<< "$(grep '"id":"account-reauth-codex-work"' "$G/alerts.ndjson")")
+eq "14: the row keeps its first-seen time across stamps" "$s14a" "$s14b"
+lg14=$(FLEET_QUOTA_BIN="$WORK/shim/ccquota" FLEET_C="$WORK/.claude-dash" python3 "$BIN/.fleet-account.py" logins)
+case "$lg14" in *'"profile": "work"'*'"login": "reauth_required"'*) ok ;; *) fail "14: logins does not list the state" "$lg14" ;; esac
+reauth_json valid
+fa14 write
+eq "14: signed in again → the row heals" "0 0 0" "$(fa14 counts)"
+case "$(fa14 list --plain)" in *"↻"*"accounts · reauth · work"*) ok ;; *) fail "14: no ↻ trace for the healed reauth row" "$(fa14 list --plain)" ;; esac
+eq "14: recovery adds no event" 1 "$(grep -c '	account-reauth	' "$G/alerts.events")"
+# no ccquota at all: the header says so, nothing is drawn, nothing flashes
+rm -f "$G"/alerts.* "$G/account.reauth" "$WORK/calls14"
+FLEET_QUOTA_BIN="$WORK/nonexistent" FLEET_C="$WORK/.claude-dash" FLEET_ALERTS_REAUTH_SECS=0 PATH="$WORK/shim:$PATH" bash "$FA" write
+eq "14: no ccquota → no rows" "" "$(FLEET_C="$WORK/.claude-dash" bash "$FA" list --plain)"
+case "$(head -n 1 "$G/account.reauth")" in [0-9]*"	unavailable") ok ;; *) fail "14: no ccquota → header should say unavailable" "$(cat "$G/account.reauth" 2>&1)" ;; esac
+[ -f "$WORK/calls14" ] && fail "14: no ccquota must not flash" "$(cat "$WORK/calls14")"; ok
+# a shell-only client (#1484): fleet-alerts.sh with no .fleet-account.py beside it draws nothing and runs no python
+mkdir -p "$WORK/bin14"
+for f in fleet-alerts.sh usage-lib.sh fleet-daemon-lib.sh fleet-lib.sh fleet-config-lib.sh; do [ -e "$BIN/$f" ] && ln -sf "$BIN/$f" "$WORK/bin14/$f"; done
+rm -f "$G"/alerts.* "$G/account.reauth"
+FLEET_QUOTA_BIN="$WORK/shim/ccquota" FLEET_C="$WORK/.claude-dash" FLEET_ALERTS_REAUTH_SECS=0 PATH="$WORK/shim:$PATH" bash "$WORK/bin14/fleet-alerts.sh" write
+[ -e "$G/account.reauth" ] && fail "14: a client with no .fleet-account.py wrote a stamp" "$(cat "$G/account.reauth")"; ok
+eq "14: …and drew nothing" "" "$(FLEET_C="$WORK/.claude-dash" bash "$FA" list --plain)"
+rm -f "$WORK/shim/ccquota" "$WORK/shim/tmux"
+# the flash whitelist names the kind, in the ONE place it is written
+eq "14: account-reauth is a flash kind" 1 "$(grep -c "^FLEET_ALERT_FLASH_KINDS='.*account-reauth" "$FA")"
+
+printf 'selftest PASS: %d assertions (counts · quota · since · mute · actions · accounts · needs · degenerate · act · events · lint · machine · wording · reauth)
 ' "$CHECKS"

@@ -79,6 +79,10 @@ var findingTitles = map[string]i18n.Text{
 		i18n.EN:   "setup token {account} ({principal} · {provider}) expired {ago} ago — run `claude setup-token` and import it again",
 		i18n.ZhCN: "setup-token {account}（{principal} · {provider}）已于 {ago} 前到期 —— 请重新 `claude setup-token` 并重新导入",
 	},
+	findings.TmplAccountReauth: {
+		i18n.EN:   "account {account} ({provider} · {where}) needs re-login — run `{command}`",
+		i18n.ZhCN: "账号 {account}（{provider} · {where}）需要重新登录 —— 请运行 `{command}`",
+	},
 }
 
 var findingDetails = map[string]i18n.Text{
@@ -139,6 +143,10 @@ var findingDetails = map[string]i18n.Text{
 	findings.TmplCredSetupExpired: {
 		i18n.EN:   "expired {date}",
 		i18n.ZhCN: "{date} 已到期",
+	},
+	findings.TmplAccountReauth: {
+		i18n.EN:   "{reason}",
+		i18n.ZhCN: "{reason}",
 	},
 	// TmplWindowHigh carries no detail; a missing entry renders as none.
 }

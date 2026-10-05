@@ -297,13 +297,14 @@ func (s *Server) GatherNowSource(account, source string) (findings.NowInputs, er
 	in.Mutes = mutes
 	// The credential vault locked (claude-fleet#1417) is the whole hub's
 	// alarm, not one account's: it rides the unscoped view only.
+	var creds []store.Credential
 	if s.Vault != nil && account == store.AllAccounts {
 		if l := s.Vault.Locked(); l != nil {
 			in.VaultLock = &findings.VaultLock{Reason: l.Reason, Since: l.Since}
 		}
 		// Setup tokens (claude-fleet#1463) end on a date the operator has to
 		// act on; metadata only — the list never opens a blob.
-		if creds, err := s.Store.Credentials(""); err == nil {
+		if creds, err = s.Store.Credentials(""); err == nil {
 			for _, c := range creds {
 				if c.Kind == credvault.KindSetupToken && c.SecretExpiresAt != nil {
 					in.SetupTokens = append(in.SetupTokens, findings.SetupToken{PrincipalID: c.PrincipalID,
@@ -367,6 +368,11 @@ func (s *Server) GatherNowSource(account, source string) (findings.NowInputs, er
 			// one. Muting is keyed on the id -- see findings/identity.go.
 			ID: e.ID, Label: label, LastSeen: e.LastSeen, OSUser: e.OSUser, Team: e.Team,
 		})
+	}
+	// Accounts that need a person to sign in again (claude-fleet#1469): the
+	// whole hub's alarm, like the vault's — it rides the unscoped view only.
+	if account == store.AllAccounts {
+		in.Logins = s.loginStates(accts, eps, creds, in.Now)
 	}
 	// Same roster, reused: the live sessions below are filtered to the same
 	// account and source as eps, so this needs no second query.
