@@ -214,6 +214,12 @@ class Providers(unittest.TestCase):
                  patch.object(accounts, 'codex_reading', return_value={'accounts': [], 'reason': ''}):
                 rows = {r['label']: r['login'] for r in accounts.inventory()['accounts']}
             self.assertEqual(rows, {'plain': 'valid', 'marked': 'reauth_required', 'stale': 'expired'})
+            # …and C2's bar stamp (#1469) names the marked label beside ccquota's rows
+            accounts.stamp_reauth([dict(self.profile, login='reauth_required', profile='work', email='w@example.invalid')])
+            stamped = [l.split('\t') for l in (state/'account.reauth').read_text().splitlines()[1:]]
+            self.assertEqual([(r[1], r[2], r[4], r[5]) for r in stamped],
+                             [('codex', 'work', 'reauth_required', 'codex login --device-auth'),
+                              ('claude', 'marked', 'reauth_required', 'claude setup-token')])
 
     def test_target_auth_codex_refuses_reauth_passes_valid_unknown_without_registry(self):
         home = self.root/'codex-home'; home.mkdir(); home = home.resolve()
