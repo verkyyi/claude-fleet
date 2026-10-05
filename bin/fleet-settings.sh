@@ -1,6 +1,10 @@
 #!/bin/bash
 # fleet-settings.sh — the login's ONE settings file (issue #979).
 #
+# Superseded by bin/fleet-conf.sh (issue #1623): the machine's ONE config file,
+# $FLEET_CONF_DIR/fleet.conf, folds this one in too. Once it exists, `path`
+# prints it and `merge` refuses (already merged).
+#
 #   fleet-settings.sh path              print it ($FLEET_CONF_DIR/fleet.settings)
 #   fleet-settings.sh merge [--dry-run] fold the two old files into it
 #

@@ -178,8 +178,10 @@ observation) — and a local row goes only into its own fleet's cache. With
 list in one order with one set of marks; a local row is still rendered off its
 own tmux line (state, needs, glyph, fold, pin, Enter: today's row, and its id is
 its `@<n>` window, never a `wid:`), a local window the hub does not list is not a
-row (the sidebar's own window excepted), and a cached local row whose window is
-gone is not one either. On the default source the cache's local rows are skipped
+row — the sidebar's own window, a pinned window and a `@norepo` session excepted
+(issue #1643: the hub never lists those, a no-repo session has no worker_id and a
+pin is this machine's own mark, so the pinned guide vanished with the switch) —
+and a cached local row whose window is gone is not one either. On the default source the cache's local rows are skipped
 and nothing changes; the hub list (prefix+F9) always keeps its local rows.
 
 **The status bar reads the session you are on, and draws only what wants your
