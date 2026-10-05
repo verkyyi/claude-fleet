@@ -53,6 +53,9 @@ def eq(name, want, got):
     checks += 1
     if want != got:
         print("FAIL: %s\n  want: %r\n  got:  %r" % (name, want, got))
+        print(t("-V") + "\n" + t("list-panes", "-a", "-F",
+              "  #{window_id} #{pane_id} #{pane_width}x#{pane_height} dead=#{pane_dead} "
+              "sb=#{@sidebar} slot=#{@sidebar_slot} cmd=#{pane_current_command}"))
         sys.exit(1)
 
 HOLD = "while :; do sleep 300; done"
