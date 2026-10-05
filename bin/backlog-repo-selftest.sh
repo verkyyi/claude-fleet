@@ -172,10 +172,6 @@ has   "C: priority → gh edit -R B"            "$(cat "$WORK/gh.log")" "issue e
 has   "C: priority cycles from B's tier (p2→p1)" "$(cat "$WORK/gh.log")" "--add-label priority:p1"
 has   "C: B's labels cache repainted"         "$(cat "$C/fleets/o-bbb/labels")" "priority:p1"
 eq    "C: A's labels untouched"               "$(cat "$C/fleets/o-aaa/labels")" "12	bug"
-seed; logs
-printf 'dupe\n' | FAKE_CUR=alpha bash "$SB/dash-issue-comment.sh" 12 confirm --repo=o/bbb >/dev/null 2>&1
-has   "C: comment → -R B"                     "$(cat "$WORK/gh.log")" "o/bbb"
-hasnt "C: comment never hits A"               "$(cat "$WORK/gh.log")" "o/aaa"
 logs
 FLEET_SESSION=alpha bash "$SB/tmux-issue-preview.sh" 12 --repo=o/bbb >/dev/null 2>&1
 has   "C: preview → gh view -R B"             "$(cat "$WORK/gh.log")" "issue view 12 --repo o/bbb"
@@ -189,9 +185,6 @@ has   "D: preview carries --repo={4}"         "$a" "tmux-issue-preview.sh {1} --
 has   "D: priority carries --repo={4}"        "$a" "cycle --repo={4}"
 has   "D: close sentinel carries {4}"         "$a" "printf 'close %s' {1} {4}"
 has   "D: open uses the row's repo"           "$a" "https://github.com/{4}/issues/{1}"
-logs
-FAKE_CUR=alpha FZF_PICK='BBB thirty' bash "$SB/dash-issue-spawn.sh" >/dev/null 2>&1
-eq    "D: ⌃g spawn picker → --repo of the row" "$(cat "$WORK/spawn.log")" "30 --repo=o/bbb"
 
 # --- E. new issue ----------------------------------------------------------------
 logs

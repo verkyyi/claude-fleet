@@ -386,7 +386,7 @@ override them):
   `~/.claude/fleet/bin/fleet-open.sh <url | :port[/path] | file>` — it rides
   their SSH connection to their iTerm2, and a page on this machine is
   port-forwarded, not exposed. `share.sh --open <file>` hosts a doc and opens it
-  in one step. It prints `sent:iterm2` / `sent:tunnel` / `fallback:popup`; see
+  in one step. It prints `sent:iterm2` / `sent:tunnel` / `fallback:copied`; see
   the `fleet-open` skill for what each means.
 - **A temp server binds 127.0.0.1 and dies with your work** (issue #1154).
   `python3 -m http.server`, `vite`, `next dev`, a mock API — all bind `*` by

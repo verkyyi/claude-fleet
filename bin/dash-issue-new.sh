@@ -8,11 +8,10 @@
 #     its bound worker window (dash-issue-session.sh) — one keystroke → one line
 #     → issue filed + worker running, zero LLM tokens in the dispatch path.
 #
-# Called with no args it opens a small popup that reads just a TITLE — ^n is the
-# one-line fast filer (issue #297), so there is NO body prompt (add a body on
-# GitHub later if you need one). Esc — or an empty title — cancels the whole
-# create on the spot. The popup re-invokes it with `confirm` (carrying --spawn
-# when set), which files via the one issue channel (bin/fleet-issue-file.sh, #332)
+# It reads just a TITLE in the terminal it runs in — ^n is the one-line fast
+# filer (issue #297), so there is NO body prompt (add a body on GitHub later if
+# you need one). Esc — or an empty title — cancels the whole create on the spot.
+# It files via the one issue channel (bin/fleet-issue-file.sh, #332)
 # against this fleet's repo, optimistically
 # drops the new row into the issues cache (so the panel's reload shows it at
 # once), and kicks a background refetch to make it authoritative. In --spawn mode
@@ -22,7 +21,7 @@
 # leaves the issue filed (files-without-spawning — the backlog item is never lost).
 # A gh create failure surfaces in the popup and doesn't wedge the modal.
 #
-# Args (order-independent): `confirm` = phase 2 (running inside the popup);
+# Args (order-independent): `confirm` = accepted, means nothing now (#1620);
 # `--spawn` = quick-dispatch mode (spawn the worker after create);
 # `--selection=<row-id>` = the hub row highlighted under `all` (issue #997) names
 # the repo instead of asking (fleet_selection_repo);
@@ -48,10 +47,10 @@
 # the non-interactive create/naming paths.)
 export LANG="${LANG:-en_US.UTF-8}" LC_ALL="${LC_ALL:-en_US.UTF-8}"
 
-mode=""; spawn=0; title_file=""; sel=""; node=""
+spawn=0; title_file=""; sel=""; node=""
 for _a in "$@"; do
   case "$_a" in
-    confirm)        mode=confirm ;;
+    confirm)        ;;   # accepted; there is no other phase-1 now (#1620)
     --spawn)        spawn=1 ;;
     --title-file=*) title_file="${_a#--title-file=}" ;;
     --selection=*)  sel="${_a#--selection=}" ;;
@@ -94,16 +93,10 @@ command -v gh >/dev/null 2>&1 || { fleet_ui_fail "gh not found — cannot create
 # top like `gh` so BOTH phases fail with a toast instead of a broken popup if it's absent.
 command -v fzf >/dev/null 2>&1 || { fleet_ui_fail "fzf not found — cannot create issue"; exit 1; }
 
-# phase 1: pop the input dialog that re-invokes us in `confirm` mode. Carry
-# --spawn through so quick-dispatch (prefix+n) reaches phase 2 as a spawn.
-if [ "$mode" != confirm ]; then
-  popup_args=(confirm)
-  [ "$spawn" = 1 ] && popup_args+=(--spawn)
-  [ -n "$node" ] && popup_args+=("--node=$node")
-  bash "$BIN/dash-popup.sh" --size S --title popup_new_task ${node:+--object "$node"} -- \
-    env CF_REPO="$REPO" bash "$BIN/dash-issue-new.sh" ${popup_args[@]+"${popup_args[@]}"}
-  exit 0
-fi
+# No popup of its own (issue #1620): the title is read in the terminal this runs
+# in — the backlog's fzf execute(), or the retired hub's ⌃n popup; the task
+# sidebar asks it on its input line and comes straight to the create below
+# (--title-file). `confirm` is still accepted and means the same.
 
 # create_issue — the SLOW tail: file the issue, optimistically insert its row, kick
 # the authoritative refetch, and (in --spawn mode) background-spawn the worker. It

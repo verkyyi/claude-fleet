@@ -951,32 +951,23 @@ try:
     check(not popup_open() and bool(view_on(w1)) and 'FLEET_SIDEBAR=1' in conf.read_text(),
           'tapping the input line opened a popup, hid the view or changed the saved preference')
 
-    # ⌃n (dash-keymap.sh --panel sidebar `new`, and its ⌥n fallback) opens the
-    # hub's new-task popup from the sidebar pane (issue #821's action, moved off
-    # the letter `n` because letters type now). The popup's title prompt is
-    # stubbed — `fzf` on PATH drops a marker and waits — so it provably ran.
-    ran = work / 'new-task-ran'
-    (shim / 'fzf').write_text('#!/bin/sh\nprintf 1 > ' + shlex.quote(str(ran)) + '\nexec sleep 20\n')
-    (shim / 'fzf').chmod(0o755)
-    (shim / 'gh').write_text('#!/bin/sh\nexit 1\n')
-    (shim / 'gh').chmod(0o755)
+    # ⌃n (dash-keymap.sh --panel sidebar `new`, and its ⌥n fallback) asks for
+    # the new task's title on THIS input line (issue #1620 — it was the hub's
+    # new-task popup): no popup opens, the `?` row names where it goes, Esc
+    # cancels it and the keyboard stays here.
     conf.write_text(fleet_conf + 'FLEET_REPO=example/repo\n')
-    attached = tm('list-clients', '-t', 'fleet-test', '-F', '#{client_name}').splitlines()[0]
-    # ⌃o (`restore`, issue #901) opens the restore picker the same way; its fzf
-    # is the same stub. A bare ⌃o is VDISCARD to a macOS tty — only a view that
-    # switched it off ever sees the byte, which is what this pins.
-    for chord, label in ((b'\x0e', 'ctrl-n'), (b'\x1bn', 'alt-n (the prefix fallback)'),
-                         (b'\x0f', 'ctrl-o'), (b'\x1bo', 'alt-o (the prefix fallback)')):
+    for chord, label in ((b'\x0e', 'ctrl-n'), (b'\x1bn', 'alt-n (the prefix fallback)')):
         os.write(terminal, chord)
-        wait_for(ran.exists, label + ' did not open its popup')
-        check(popup_open() and bool(view_on(w1)), label + ' popup hid the sidebar or skipped @popup_open')
-        tm('display-popup', '-C', '-c', attached)
-        wait_for(lambda: not popup_open(), 'closing the ' + label + ' popup left @popup_open raised')
-        ran.unlink()
-        wait_for(lambda: tasks_cue(side), 'the input line did not repaint after the ' + label + ' popup')
-        check(input_line(side) == '› 新会话名…', label + ' leaked into the input line')
-    (shim / 'fzf').unlink()
-    (shim / 'gh').unlink()
+        wait_for(lambda: input_line(side) == '新任务› ▏', label + ' did not ask on the input line: %r' % input_line(side))
+        check(not popup_open() and bool(view_on(w1)), label + ' opened a popup or hid the sidebar')
+        check('→ repo' in tm('capture-pane', '-p', '-t', side).splitlines()[-2],
+              label + ': the ? row does not name the repo: %r' % tm('capture-pane', '-p', '-t', side))
+        type_keys('标题')
+        wait_for(lambda: input_line(side) == '新任务› 标题▏', label + ': the title did not type')
+        os.write(terminal, b'\x1b')
+        wait_for(lambda: tasks_cue(side), label + ': Esc did not cancel the title: %r' % input_line(side))
+        check(navigation(), label + ': Esc on the title took the keyboard off the sidebar')
+        check(not popup_open(), label + ' raised @popup_open')
     conf.write_text(fleet_conf)
 
     # The `? 快捷键` row (issue #948) sits right above the input line. A tap on
@@ -1350,6 +1341,16 @@ try:
              (hist_log.read_text() if hist_log.exists() else ''))
     wait_for(lambda: row_line('worker-one') and not row_line('已落地'),
              'after the restore the running list did not come back')
+    # ⌃o (`restore`, issue #901) and its ⌥o fallback: the same landed list, in
+    # place — no popup (issue #1620: the restore popup was this list a second
+    # time). A bare ⌃o is VDISCARD to a macOS tty — only a view that switched it
+    # off ever sees the byte, which is what this pins too.
+    for chord, label in ((b'\x0f', 'ctrl-o'), (b'\x1bo', 'alt-o (the prefix fallback)')):
+        os.write(terminal, chord)
+        wait_for(lambda: row_line('已落地') and not row_line('worker-one'), label + ' did not show the landed list')
+        check(not popup_open(), label + ' opened a popup')
+        os.write(terminal, b'\x14')
+        wait_for(lambda: row_line('worker-one') and not row_line('已落地'), '⌃t did not come back from ' + label)
     (bin_dir / 'fleet-history.sh').unlink()
     (bin_dir / 'fleet-history.sh').symlink_to(real_bin / 'fleet-history.sh')
 
@@ -1390,8 +1391,12 @@ try:
     tm('set-option', '-w', '-t', w2, '@claude_state', 'needs')
     items = menu_items(w1)
     check(set('rtpavxnos') <= set(items), 'the row menu lacks an action: %r' % items)
-    check(items['o'] == '恢复已收工…' and 'fleet-restore-pick.sh' in menu_commands(w1)['o'],
-          'the row menu\'s last item is not the restore picker (#901): %r' % items)
+    check(items['o'] == '恢复已收工…' and '@sidebar_ask' in menu_commands(w1)['o'] and 'landed' in menu_commands(w1)['o'],
+          'the row menu\'s last item does not show the landed list in place (#901/#1620): %r' % items)
+    # Every item that takes input asks on the view's line (issue #1620): no row
+    # menu item opens a popup any more.
+    check(not any('dash-popup.sh' in c or 'fleet-restore-pick.sh' in c for c in menu_commands(w1).values()),
+          'a row menu item still opens a popup: %r' % menu_commands(w1))
     check(items['p'].startswith('-') and items['a'].startswith('-'),
           'a row with no PR / no pending question must grey those items: %r' % items)
     check(items['s'].startswith('-') and not menu_commands(w1)['s'],
@@ -1473,8 +1478,10 @@ try:
     renamed = lambda: tm('display-message', '-p', '-t', w1, '#{window_name}')
     wait_for(lambda: renamed() == odd or (server_version() < (3, 5) and renamed().replace('\\', '') == odd),
              'the menu rename did not apply')
-    check(current() == w1 and tm('show-options', '-pqv', '-t', side, '@sidebar_rename') == '',
+    check(current() == w1 and tm('show-options', '-pqv', '-t', side, '@sidebar_rename') == ''
+          and tm('show-options', '-pqv', '-t', side, '@sidebar_ask') == '',
           'rename switched windows or left its parked id behind')
+    check(not popup_open(), 'the rename raised @popup_open (it must never be a popup, #1620)')
     wait_for(lambda: tasks_cue(side), 'the input line did not return to the placeholder after rename')
     tm('rename-window', '-t', w1, 'worker-one')
     os.write(terminal, b'\x1b')
@@ -1737,11 +1744,14 @@ try:
     remote_cmds = menu_commands(remote_wid)
     check({'e', 'm', 'a', 'q', 'c', 'x', 'n', '1', 'o', 'g'} <= set(remote_items),
           'the remote row menu lacks an action: %r' % remote_items)
-    for k in 'mqcx':
+    for k in 'qcx':
         check('fleet-sidebar-remote.sh' in remote_cmds[k], 'remote %s does not go through fleet-sidebar-remote.sh: %r' % (k, remote_cmds[k]))
+    # message asks for its text on the view's line (issue #1620), not in a popup
+    check('@sidebar_ask' in remote_cmds['m'] and 'message' in remote_cmds['m'] and 'dash-popup.sh' not in remote_cmds['m'],
+          'remote m does not ask on the input line: %r' % remote_cmds['m'])
     check(remote_items['a'].startswith('-'), 'a remote row that needs nothing greyed nothing: %r' % remote_items['a'])
     check('confirm-before' in remote_cmds['x'] and 'm4' in remote_cmds['x'], 'the remote reap does not confirm first, naming the machine: %r' % remote_cmds['x'])
-    check(remote_items['1'] == '新建到 m4…' and 'dash-issue-new.sh' in remote_cmds['1'] and '--node=m4' in remote_cmds['1'],
+    check(remote_items['1'] == '新建到 m4…' and '@sidebar_ask' in remote_cmds['1'] and 'new m4' in remote_cmds['1'],
           'the remote menu does not offer «new task on m4» with --node=m4: %r %r' % (remote_items.get('1'), remote_cmds.get('1')))
     t1, _ = menu_shape(w1)
     check(t1 == tm('display-message', '-p', '-t', w1, '#{window_name}') + ' · m5',
@@ -1769,7 +1779,7 @@ try:
           'the shell `?` sheet does not drop exactly the row-less items: %r' % sh_keys)
     local_items = menu_items(w1)
     local_cmds = menu_commands(w1)
-    check(local_items.get('1') == '新建到 m4…' and '--node=m4' in local_cmds['1'],
+    check(local_items.get('1') == '新建到 m4…' and 'new m4' in local_cmds['1'],
           'the local menu does not offer «new task on m4» while the hub is on: %r' % local_items.get('1'))
     check(not any('fleet-sidebar-remote.sh' in c or 'fleet-hub-write.sh' in c for c in local_cmds.values()),
           'a local row item goes through the hub write client: %r' % local_cmds)
@@ -1779,7 +1789,7 @@ try:
         US.join(('wid:' + F + '/issue-1423', 'm4', 'online', '1423', 'acme/app', 'working', 'claude', '侧边栏', '', '', '0', '')),
         US.join(('wid:' + F + '/issue-1423', 'm4', 'online', '1423', 'acme/app', 'needs', 'claude', '侧边栏', '', 'perm', '0', ''))))
     asking = menu_items(remote_wid)
-    check(not asking['a'].startswith('-') and 'fleet-sidebar-remote.sh' in menu_commands(remote_wid)['a'],
+    check(not asking['a'].startswith('-') and 'answer ' + remote_wid + ' perm' in menu_commands(remote_wid)['a'],
           'a remote row waiting on a permission prompt did not offer the answer item: %r' % asking['a'])
     # Run the printed stop / reap / answer commands' scripts with the write client
     # stubbed: each records ONE write with the row's worker_id; the answer popup
@@ -1807,6 +1817,15 @@ try:
     r = subprocess.run(['bash', str(bin_dir / 'fleet-sidebar-remote.sh'), 'stop', 'fleet-test', w1],
                        env=env_w, text=True, capture_output=True, timeout=30)
     check(r.returncode == 0 and len(writes.read_text().splitlines()) == 3, 'a local @ id reached the hub write client')
+    # The sidebar's input line hands the text over in FLEET_SIDEBAR_TEXT (issue
+    # #1620): no terminal is read, nothing waits on a key, the write carries it.
+    r = subprocess.run(['bash', str(bin_dir / 'fleet-sidebar-remote.sh'), 'message', 'fleet-test', remote_wid],
+                       env=dict(env_w, FLEET_SIDEBAR_TEXT='你好 $HOME'), text=True, stdin=subprocess.DEVNULL,
+                       capture_output=True, timeout=30)
+    last = writes.read_text().splitlines()[-1].split('\t')
+    check(r.returncode == 0 and last[0] == 'worker_message' and _json.loads(last[1]).get('text') == '你好 $HOME',
+          'the line-asked message did not go out verbatim: %r %s' % (last, r.stderr))
+    check('按任意键' not in r.stderr and 'press any' not in r.stderr, 'the line-asked message waited on a key')
     # 入口失联 (issue #1483, EPIC #1479 C4): global/hub_ok older than
     # FLEET_HUB_SESSIONS_STALE — the one word the rows and the bar read too — and
     # no action is sent: the popups say 入口失联 on stderr before asking anything,
@@ -1831,7 +1850,8 @@ try:
     lost_items, lost_cmds = menu_items(remote_wid), menu_commands(remote_wid)
     check(lost_items.get('1') == '-新建到 m4… · 入口失联 5m' and lost_cmds.get('1') == '',
           '«new task on m4» is not greyed with the reason while the hub is silent: %r %r' % (lost_items.get('1'), lost_cmds.get('1')))
-    check({'m', 'a', 'q', 'c', 'x'} <= set(lost_items) and all('fleet-sidebar-remote.sh' in lost_cmds[k] for k in 'maqcx'),
+    check({'m', 'a', 'q', 'c', 'x'} <= set(lost_items) and all('fleet-sidebar-remote.sh' in lost_cmds[k] for k in 'qcx')
+          and all('@sidebar_ask' in lost_cmds[k] for k in 'ma'),
           'the remote row actions left the menu while the hub is silent: %r' % lost_items)
     check(menu_items(w1).get('1') == '-新建到 m4… · 入口失联 5m', 'the local menu still offers «new task on m4» while the hub is silent: %r' % menu_items(w1).get('1'))
     (cache / 'hub_ok').write_text('%d\n' % int(time.time()))
