@@ -24,8 +24,14 @@
 #                   local report would be: tier silent = ledger only; batch mode =
 #                   the digest's (a loud one flushes now); else `msg` — the envelope
 #                   the child built — into the parent's pane (children_send).
-#   message       {text} → fleet-peer-send.sh to the target worker, with one
-#                 `[from <key> on <node>]` line in front so it knows who to answer.
+#   message       {text[, repo][, bridge]} → fleet-peer-send.sh to the target worker,
+#                 with one `[from <key> on <node>]` line in front so it knows who to
+#                 answer — `<key>` is `operator@<login>` for the person at a login
+#                 (issue #1649). `repo` (a bare issue:<N> the sender matched by
+#                 number): refused unless the target window works it. `bridge`
+#                 {issue, cid}: an issue comment the sender's bridge forwarded —
+#                 applied by this machine's bridge (`--apply-forward`), deduped
+#                 against its own relays, so the comment lands once.
 #   receipt       {rid, kind, to, status, detail} — the hub telling the SENDER what
 #                 became of a relay it sent (issue #1647): one row in the sending
 #                 fleet's delivery book (fleet-peer-queue.sh note), DELIVERED /
@@ -193,7 +199,11 @@ rid, kind, frm, to = (str(r.get(k) or "") for k in ("id", "kind", "from", "to"))
 node = re.sub(r"[^A-Za-z0-9._-]", "", str(r.get("from_node") or ""))[:64]
 if kind not in ("child_report", "message", "receipt"):
     sys.exit("unknown relay kind %r" % kind)
-if not wid.match(frm) or not wid.match(to):
+# The person at a login (issue #1649): a message's `from`, and so the `to` of its
+# receipt — never anything else. The hub checked the login against the fleet's.
+op = re.compile(r"^" + uuid + r"/operator@[A-Za-z0-9._-]{1,64}$")
+if not (wid.match(frm) or (kind == "message" and op.match(frm))) \
+        or not (wid.match(to) or (kind == "receipt" and op.match(to))):
     sys.exit("from/to is not a worker_id")
 # A receipt carries the id of the relay it answers for: that relay's sender is
 # its `to` (the hub swaps the two), so the id is scoped to `to`, not `from`.
@@ -225,6 +235,18 @@ else:
     if not text.strip():
         sys.exit("empty message")
     open(os.path.join(work, "msg"), "w").write(text)
+    # The repo the sender meant (issue #1649) — a bare issue:<N> matched by number
+    # — and an issue comment the sender's bridge forwarded: checked and applied below.
+    repo = str(p.get("repo") or "")
+    if repo and not re.match(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$", repo):
+        sys.exit("bad repo")
+    b = p.get("bridge")
+    if b is not None:
+        if not isinstance(b, dict) or not repo or not re.match(r"^[1-9][0-9]{0,19}$", str(b.get("cid") or "")) \
+                or not re.match(r"^[1-9][0-9]{0,9}$", str(b.get("issue") or "")):
+            sys.exit("bad bridge forward")
+        open(os.path.join(work, "bridge"), "w").write("%s\t%s\t%s" % (repo, b["issue"], b["cid"]))
+    open(os.path.join(work, "repo"), "w").write(repo)
 for v in (kind, frm, to, node, tier, rid):
     print(v)
 PY
@@ -235,7 +257,8 @@ EOF
 
 # --- receipt (issue #1647): the sender's book learns what became of its relay -----
 if [ "$KIND" = receipt ]; then
-  home=$(fleet_wid_home "wid:$TO") || die 1 "receipt for $TO, which is not a fleet on this machine"
+  if fleet_is_operator_sender "$TO"; then home=$(fleet_uuid_home "${TO%%/*}")
+  else home=$(fleet_wid_home "wid:$TO"); fi || die 1 "receipt for $TO, which is not a fleet on this machine"
   { read -r rst; read -r rkind; read -r rto; read -r rdet; } <<EOF
 $(python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); print("\n".join((d["state"], d["kind"], d["to"], d["detail"])))' "$WORK/row")
 EOF
@@ -262,16 +285,39 @@ if fleet_is_fid "$pkey"; then
 fi
 
 if [ "$KIND" = message ]; then
-  case "$(fleet_worker_locate "wid:$TO" "$home" 2>/dev/null)" in
+  loc=$(fleet_worker_locate "wid:$TO" "$home" 2>/dev/null)
+  case "$loc" in
     local\ *) ;;
     *) die 75 "not now: $TO has no live window here" ;;
   esac
+  # The repo rail (issue #1649): a sender that matched a bare issue:<N> by number
+  # names the repo it meant; a window here working ANOTHER repo's #N never gets it.
+  want=$(cat "$WORK/repo" 2>/dev/null)
+  if [ -n "$want" ]; then
+    loc=${loc#local }; twin=${loc%% *}
+    have=$(fleet_window_repo "$home" "$twin" 2>/dev/null)
+    [ -n "$have" ] || have=$(fleet_repos "$home" | head -n1)
+    [ "$(fleet_norm_repo "$have")" = "$(fleet_norm_repo "$want")" ] \
+      || die 1 "$TO works ${have:-an unknown repo}, not $want — refused"
+  fi
+  # An issue comment another machine's bridge forwarded (issue #1649): applied
+  # through THIS machine's bridge, under its lease and against its seen-set, so a
+  # comment this machine's own bridge already relayed is not delivered twice.
+  if [ -s "$WORK/bridge" ]; then
+    IFS=$'\t' read -r brepo biss bcid < "$WORK/bridge"
+    out=$(env -u TMUX bash "$BIN/fleet-issue-bridge.sh" --apply-forward "$brepo" "$biss" "$bcid" < "$WORK/msg" 2>&1); rc=$?
+    case "$rc" in
+      0) printf '%s\n' "${out##*$'\n'}" >&2; exit 0 ;;
+      1) die 1 "${out##*$'\n'}" ;;
+      *) die 75 "${out##*$'\n'}" ;;
+    esac
+  fi
   text="[from $fkey on ${NODE:-another machine}]"$'\n'"$(cat "$WORK/msg")"
   out=$(env -u TMUX bash "$BIN/fleet-peer-send.sh" -L "$sock" "wid:$TO" "$text" 2>&1); rc=$?
   case "$rc" in
     0) printf '%s\n' "$out" >&2; exit 0 ;;
     3) printf 'queued at %s: %s\n' "$(hostname -s 2>/dev/null)" "${out##*$'\n'}" >&2; exit 0 ;;
-    1) die 1 "${out##*$'\n'}" ;;           # refused (ambiguous, bad target): for good
+    1|2) die 1 "${out##*$'\n'}" ;;         # refused (ambiguous, bad target) or ended: for good
     *) die 75 "${out##*$'\n'}" ;;
   esac
 fi

@@ -114,6 +114,22 @@ func WorkerID(fleetID, key string) string {
 	return fleetID + "/" + key
 }
 
+// operatorRE is the sender of a message no worker sent (claude-fleet#1649): the
+// person at a login, from a shell or a daemon with no pane — `<fleet UUID>/
+// operator@<login>`. It is a relay's `from` only, never an address: nothing
+// routes TO it but the receipt for the message it sent.
+var operatorRE = regexp.MustCompile(`^(` + identityRE + `)/operator@([A-Za-z0-9._-]{1,64})$`)
+
+// ParseOperatorSender is (fleet UUID, login) for an operator sender, ok false
+// for anything else — a worker_id included.
+func ParseOperatorSender(id string) (fleetID, login string, ok bool) {
+	m := operatorRE.FindStringSubmatch(id)
+	if m == nil {
+		return "", "", false
+	}
+	return m[1], m[2], true
+}
+
 // ParseWorkerID is parse_worker_id: (fleet UUID, key), or ErrBadWorkerID. The
 // key half is a session identity (IsUUID) for the <fleet UUID>/<fleet_id> form;
 // a caller that needs a real key (a lease, a placement, a move) matches its own

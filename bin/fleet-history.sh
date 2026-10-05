@@ -77,6 +77,9 @@
 #           dash keeps its fold bit on the tmux window (@expand); a landed row has
 #           none, so the expanded set is one per-fleet file the dash clears at every
 #           (re)launch.
+#   ended   [--repo R] <key>         `<local time>\t<result>` for a session that has
+#           ended (newest row, this ledger, then the hub's rows from other
+#           machines); rc 1 when there is none. fleet-peer-send.sh's «已结束» line.
 #   resume  --repo R --main M <key|#pr>     Reconstruct the worktree off the SHA and
 #           print how to resume (RESUME/CODEX-RESUME/FROM-PR/REVIEW-ONLY); --exec recreates the worktree.
 #           Reuses an already-present worktree (skips the slow `git worktree add`, #319) —
@@ -1177,6 +1180,43 @@ cmd_row() {
   find_row "$repo" "$key"
 }
 
+# ended — how a session that is no longer live ENDED (issue #1649): one line,
+# `<local time>\t<result>`, from the newest row for <key> in this ledger, else the
+# newest the hub holds of it from another machine (remote_stream). rc 1 = no row:
+# never live, or not ended. fleet-peer-send.sh prints it as
+# `<target> 已于 <time> 结束：<result>` instead of a bare «no live window».
+cmd_ended() {
+  local repo="" key="" row
+  while [ $# -gt 0 ]; do
+    case "$1" in --repo) repo="${2:-}"; shift 2;; *) key="$1"; shift;; esac
+  done
+  case "$key" in issue-*) key=${key#issue-} ;; esac
+  [ -n "$key" ] || return 1
+  row=$(find_row "$repo" "$key")
+  if [ -z "$row" ] && [ -z "${FLEET_HISTORY_LEDGER:-}" ]; then
+    row=$(remote_stream "$repo" | cut -f2- | awk -F'\t' -v k="$key" '$2 == k' | ledger_sort_desc | head -n1)
+  fi
+  [ -n "$row" ] || return 1
+  python3 -c '
+import sys, datetime
+f = (sys.argv[1].split("\t") + [""] * 11)[:11]
+when = f[0]
+try:
+    when = datetime.datetime.strptime(f[0], "%Y-%m-%dT%H:%M:%SZ").replace(
+        tzinfo=datetime.timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
+except ValueError:
+    pass
+val = lambda v: "" if v in ("", "-") else v
+pr, title, summary, state = val(f[3]).lstrip("#"), val(f[2]), val(f[8]), f[9]
+if pr and state != "closed-unlanded":
+    res = "已合并 PR #%s" % pr
+else:
+    res = "未合并就关闭"
+detail = summary or title
+print("%s\t%s%s" % (when, res, (" — " + detail) if detail else ""))
+' "$row"
+}
+
 usage() {
   sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
 }
@@ -1409,6 +1449,7 @@ case "$cmd" in
   resume) cmd_resume "$@";;
   path)   cmd_path "$@";;
   meta)   cmd_meta "$@";;
+  ended)  cmd_ended "$@";;
   row)    cmd_row "$@";;
   fold)   cmd_fold "$@";;
   ''|-h|--help|help) usage;;

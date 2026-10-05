@@ -184,6 +184,10 @@ def send_message(to, text):
     # when it can. Not delivered — and not an error either.
     if result.returncode == 3:
         return {"delivered": False, "queued": True, "receipt": result.stdout.strip(), "to": to}
+    # Exit 2 with a stdout line = the peer has ENDED (issue #1649): when and how,
+    # nothing sent. Exit 2 with only stderr is a usage refusal, raised below.
+    if result.returncode == 2 and result.stdout.strip():
+        return {"delivered": False, "ended": True, "receipt": result.stdout.strip(), "to": to}
     if result.returncode != 0:
         raise ToolFault((result.stderr or result.stdout or "command failed").strip().replace("\n", " "))
     return {"delivered": True, "receipt": result.stdout.strip(), "to": to}

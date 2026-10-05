@@ -35,7 +35,10 @@ import (
 // within relayResendAfter, and an applied relay is never pushed again.
 //
 // Who may relay to whom: the sender's worker_id must belong to a fleet on the
-// SENDING node (the hub checks, a node's claim is not enough), and the target
+// SENDING node (the hub checks, a node's claim is not enough) — or, for a
+// message from a shell or daemon with no pane, be that fleet's
+// `<fleet UUID>/operator@<login>` with <login> the one the fleet runs under
+// (claude-fleet#1649) — and the target
 // fleet must belong to the same owner — the operator's logins with each other,
 // a person's logins with each other — never across people. Anything else is
 // NOT_FOUND, the same answer as a worker that does not exist.
@@ -127,7 +130,10 @@ func (s *Server) acceptRelay(ctx context.Context, conn *websocket.Conn, ep store
 }
 
 func fleetOf(wid string) string {
-	fid, _, _ := fleetid.ParseWorkerID(wid)
+	fid, _, err := fleetid.ParseWorkerID(wid)
+	if err != nil {
+		fid, _, _ = fleetid.ParseOperatorSender(wid)
+	}
 	return fid
 }
 
@@ -142,9 +148,18 @@ func (s *Server) checkRelay(ep store.Endpoint, m control.Message) (store.FleetRe
 	default:
 		return store.FleetRelay{}, fault("INVALID_ARGUMENT", "unknown relay kind "+in.Kind)
 	}
+	// A message may come from the person at the sending login rather than a
+	// worker (claude-fleet#1649) — `<fleet UUID>/operator@<login>`, checked
+	// below against the login that fleet runs under. A child report is a
+	// worker's by definition.
 	fromFleet, _, err := fleetid.ParseWorkerID(in.From)
+	opLogin := ""
 	if err != nil {
-		return store.FleetRelay{}, fault("INVALID_ARGUMENT", "from: "+fleetid.ErrBadWorkerID.Error())
+		fid, login, ok := fleetid.ParseOperatorSender(in.From)
+		if !ok || in.Kind != control.RelayMessage {
+			return store.FleetRelay{}, fault("INVALID_ARGUMENT", "from: "+fleetid.ErrBadWorkerID.Error())
+		}
+		fromFleet, opLogin = fid, login
 	}
 	toFleet, _, err := fleetid.ParseWorkerID(in.To)
 	if err != nil {
@@ -164,6 +179,11 @@ func (s *Server) checkRelay(ep store.Endpoint, m control.Message) (store.FleetRe
 	if err != nil || from.EndpointID != ep.ID {
 		// A node speaks only for its own workers.
 		return store.FleetRelay{}, fault("FORBIDDEN", "from names a fleet this node does not report")
+	}
+	if opLogin != "" && opLogin != from.OSUser {
+		// The operator is the login the fleet runs under, never a name the
+		// sender picks: a node cannot sign a message as another person.
+		return store.FleetRelay{}, fault("FORBIDDEN", "from: operator@"+opLogin+" is not the login this fleet runs under")
 	}
 	to, err := s.Store.Fleet(toFleet)
 	if err != nil || !to.Present {

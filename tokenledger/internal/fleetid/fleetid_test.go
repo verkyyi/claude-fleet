@@ -90,6 +90,24 @@ func TestParseWorkerID(t *testing.T) {
 	}
 }
 
+// An operator sender (claude-fleet#1649) parses as (fleet, login) and is never
+// a worker_id; a worker_id is never an operator sender.
+func TestParseOperatorSender(t *testing.T) {
+	f := fleetGolden[0].want
+	if fid, login, ok := ParseOperatorSender(f + "/operator@verkyyi"); !ok || fid != f || login != "verkyyi" {
+		t.Fatalf("ParseOperatorSender = %q %q %v", fid, login, ok)
+	}
+	if _, _, err := ParseWorkerID(f + "/operator@verkyyi"); err == nil {
+		t.Error("an operator sender parsed as a worker_id")
+	}
+	for _, bad := range []string{"", f + "/issue-1", f + "/operator@", f + "/operator@a b", f + "/operator@x/y",
+		"x/operator@a", f + "/root@a", strings.ToUpper(f) + "/operator@a"} {
+		if _, _, ok := ParseOperatorSender(bad); ok {
+			t.Errorf("ParseOperatorSender(%q) accepted", bad)
+		}
+	}
+}
+
 // TestMatchesPython runs the Python implementation on the same inputs and
 // compares every value — the issue's 完成判据, one input at a time. Skipped
 // only when there is no python3 or no bin/ beside tokenledger/ (a module
