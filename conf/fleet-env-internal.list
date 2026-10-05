@@ -185,6 +185,7 @@ FLEET_NEEDS_PLAIN_SECS             knob: internal pacing/limit, safe in-code def
 FLEET_NEEDS_RECONCILE_SECS         knob: internal pacing/limit, safe in-code default (tmux-spinner.sh)
 FLEET_NEEDS_STRIKE_TTL             knob: internal pacing/limit, safe in-code default (tmux-spinner.sh)
 FLEET_NEEDS_TRACE                  knob: debug trace for the needs-reconcile spinner
+FLEET_ORIGIN_GATE                  seam: 0 skips the spawn's live-parent gate (fleet_origin_gate, issue #1355) — tests whose parent key has no window
 FLEET_PEER_MODE                    handoff: the sender's permission mode stamped on a cross-session message
 FLEET_PICK_MODEL                   handoff: the model an account pick is evaluated for
 FLEET_PLUGIN_NAME                  knob: the Claude plugin namespace fleet commands resolve under

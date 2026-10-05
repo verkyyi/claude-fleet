@@ -1541,7 +1541,9 @@ try:
     # @issue / @raw / @worktree — it still gets the view, and prefix e hides and
     # brings it back there. A plain window with none of the four marks: none.
     before = set(windows())
-    spawned = command(['bash', str(bin_dir / 'dash-raw-session.sh'), '--no-repo',
+    # --origin hub: this harness has $TMUX but no pane, which the spawn refuses
+    # unstated (issue #1355).
+    spawned = command(['bash', str(bin_dir / 'dash-raw-session.sh'), '--no-repo', '--origin', 'hub',
                        '--name', 'home-work', 'fleet-test'], stdin=subprocess.DEVNULL)
     check(spawned.returncode == 0, 'the no-repo spawn failed: ' + spawned.stderr)
     wait_for(lambda: set(windows()) - before, 'dash-raw-session.sh --no-repo made no window')

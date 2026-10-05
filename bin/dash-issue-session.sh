@@ -20,6 +20,8 @@
 #   1  infrastructure — bad conf / worktree add / new-window / dispatch failed
 #   2  at capacity — the global or per-fleet session cap (retry later)
 #   3  already claimed — assignee / not OPEN / open PR (pick another, or --force)
+#   4  no live parent — inside tmux with no $TMUX_PANE and no --origin, or an
+#      --origin key no live session answers to (issue #1355); `--origin hub` = you
 # Every refusal ALSO prints its one-line reason on stderr, `dash-issue-session: …`,
 # beside the sticky tmux toast a human at the client sees.
 set -uo pipefail
@@ -155,6 +157,7 @@ TM() { tmux -L "$SOCK" "$@"; }
 # with no caller pane, so the foreground bakes the resolved value into the tail's
 # --origin (canon is idempotent on it). Sanitized inside canon — it becomes a
 # window option and a run-shell embed.
+ORIGIN_RAW=$ORIGIN                             # pre-canon: `hub` canonicalizes to empty
 _det=''; [ "$TAIL_ONLY" != 1 ] && _det=$(fleet_origin_key)
 _src=''; [ -n "$_det" ] && [ -n "$TARGET_SESS" ] && _src=$(fleet_current_session)
 ORIGIN=$(fleet_origin_canon "$ORIGIN" "$_det" "$TARGET_SESS" "$_src")
@@ -178,7 +181,7 @@ shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 # stderr — the one channel a pipe / log / `$( )` capture can read — and the exit
 # code names the class (header: 1 infra · 2 cap · 3 claimed). stderr is the
 # record; the status line is the glance (the same split as fleet-bind.sh's die).
-RC_INFRA=1; RC_CAP=2; RC_CLAIMED=3
+RC_INFRA=1; RC_CAP=2; RC_CLAIMED=3; RC_ORPHAN=4
 REFUSE_MS="${FLEET_REFUSE_MS:-4000}"
 case "$REFUSE_MS" in ''|*[!0-9]*) REFUSE_MS=4000;; esac
 # The toast is fleet_ui_fail's (issue #1618): the one failure line, the palette's
@@ -268,6 +271,15 @@ case "$ORIGIN_WID" in ''|*[!A-Za-z0-9/:._-]*) ORIGIN_WID='' ;; esac
 # silent; with @origin_wid beside it, it routes by worker_id, never to a local
 # window that merely shares the key (issue #1421).
 if [ -n "$ORIGIN_WID" ] && [ -z "$ORIGIN" ]; then ORIGIN=$(fleet_origin_canon "${ORIGIN_WID#*/}" '' '' ''); fi
+# The parent must be a LIVE session (issue #1355, EPIC #1645 C2): no $TMUX_PANE
+# and no --origin, or a key no window answers to, would open a worker whose
+# reports reach nobody. Foreground only — the --async tail carries the value this
+# pass already vetted.
+if [ "$TAIL_ONLY" != 1 ]; then
+  _why=$(fleet_origin_gate "$SESS" "$ORIGIN_RAW" "$ORIGIN" "$ORIGIN_WID") \
+    || { refuse "#$num: $_why"; exit "$RC_ORPHAN"; }
+  unset _why
+fi
 NODE="$NODE_ARG"
 # No --node: FLEET_SPAWN_NODE (issue #1475) — `auto` (the default), `local`, or
 # a machine name — is what every spawn on this login follows, autofill included

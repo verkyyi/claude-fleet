@@ -4016,12 +4016,55 @@ fleet_origin_key() {
 # fleet-children.sh / fleet-epic-backstop.sh, so the book is the same on every
 # tick whichever pane drives it. No window answers to the EPIC's key, so a report
 # is ledgered (never relayed) — the loop reads the ledger each tick anyway.
+#
+# No pane key ⇒ rc 1 and one stderr line, never the EPIC's key (issue #1355, EPIC
+# #1645 C2). The EPIC fallback named a parent no window answers to: every member's
+# report was ledgered and never relayed, and a spawn's live-parent gate
+# (fleet_origin_gate) now refuses such a key anyway. Drive the loop from a scratch
+# (or a worker) pane — that window IS the parent the children report to.
 fleet_epic_parent_key() {
-  local k n="${3:-}"
+  local k
   k=$(fleet_origin_key)
   [ -n "$k" ] && { printf '%s' "$k"; return 0; }
-  case "$n" in ''|*[!0-9]*) return 1 ;; esac
-  printf '%sissue-%s' "$(fleet_okey_prefix "${1:-}" "${2:-}")" "$n"
+  printf 'fleet: this pane has no session key (hub, or no $TMUX_PANE) — run the EPIC loop from a scratch or worker pane, so its children have a live parent to report to\n' >&2
+  return 1
+}
+
+# fleet_origin_gate <sess> <explicit> <origin> [<origin-wid>] — a spawn's parent
+# must be a LIVE session (issue #1355, EPIC #1645 C2). Run by both spawners
+# (dash-issue-session.sh, dash-raw-session.sh) after fleet_origin_canon, before any
+# window exists. rc 0 = go; rc 4 = refuse, the reason on stdout (the caller says
+# it through its own refuse/exit 4). <explicit> is the caller's RAW --origin
+# (before canon: `hub` canonicalizes to empty), <origin> the canonical value.
+#   - Inside tmux with no $TMUX_PANE (fleet_pane_lost) and no --origin: detection
+#     read nothing, so an empty @origin here is not "the hub", it is "unknown" — the
+#     orphan #1355 found (a reset hub env, rc 0, no child-report ever delivered).
+#     `--origin hub` (the operator), `--origin <key>` or a pane says who it is.
+#   - A key (`[<slug>:]issue-<N>` / `scratch-<N>`): fleet_worker_locate must place
+#     it — `local` (a window answers here) or `remote` (the hub sees it on another
+#     machine; <origin-wid> is the address then). `unknown` (closed, never was, or
+#     ambiguous) ⇒ refuse: a report to it could only be ledgered, never delivered.
+#   - <origin-wid> given: the parent is on ANOTHER machine, which placed this
+#     spawn here and ran this same gate before asking — trusted, not re-asked
+#     (a node with no hub session cache could only answer `unknown`).
+#   - Empty (hub / headless), the literals (`autofill`, `bridge`) and a free label
+#     (a #516 source-fleet name) pass: none of them is a session to report to.
+fleet_origin_gate() {
+  local sess="${1:-}" ex="${2:-}" o="${3:-}" ow="${4:-}" v
+  [ "${FLEET_ORIGIN_GATE:-1}" = 0 ] && return 0   # seam: a test whose subject is not the parent
+  [ -n "$ow" ] && return 0
+  if [ -z "$ex" ] && fleet_pane_lost; then
+    printf 'cannot tell who is spawning — $TMUX is set but $TMUX_PANE is not; run it from a scratch/worker pane, or pass --origin hub (you, the operator) / --origin <key>'
+    return 4
+  fi
+  case "$o" in
+    issue-[0-9]*|scratch-[0-9]*|*:issue-[0-9]*|*:scratch-[0-9]*) ;;
+    *) return 0 ;;
+  esac
+  v=$(fleet_worker_locate "wid:$o" "$sess" 2>/dev/null)
+  case "$v" in local\ *|remote\ *) return 0 ;; esac
+  printf '上级 %s 不是活着的会话 (parent %s is not a live session) — no window answers to it here and the hub cannot place it; pass --origin hub to spawn it as your own' "$o" "$o"
+  return 4
 }
 
 # fleet_origin_canon <explicit> <detected> [<target-sess>] [<src-sess>] — the ONE

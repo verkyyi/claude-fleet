@@ -202,7 +202,8 @@ TM() { tmux -L "$SOCK" "$@"; }
 # headless too — a script's seeded scratch, dash-enter's guarded --name-file
 # path — and a toast is on no screen that caller can read.
 # stderr is the record; the status line is the glance. Exit 2 = at capacity
-# (retry later), 1 = infrastructure, matching dash-issue-session.sh.
+# (retry later), 1 = infrastructure, 4 = no live parent (issue #1355), matching
+# dash-issue-session.sh.
 refuse() { printf 'dash-raw-session: %s\n' "${1#raw: }" >&2; FLEET_UI_SOCK=$SOCK fleet_ui_fail "$1"; }
 # No spawning into ANOTHER fleet (issue #980): a caller sitting in a fleet pane may
 # name only its own fleet. A caller outside any fleet (no pane, or an ad-hoc
@@ -225,6 +226,7 @@ fi
 # key; garbage yields to the detected key). The spawn never crosses fleets (#980,
 # refused above), so canon's #516 source-fleet rule has no source to apply here.
 # Sanitized inside canon (window option + re-exec embed).
+ORIGIN_RAW=$ORIGIN                             # pre-canon: `hub` canonicalizes to empty
 _det=$(fleet_origin_key)
 ORIGIN=$(fleet_origin_canon "$ORIGIN" "$_det" "$TARGET_SESS" "")
 unset _det
@@ -232,6 +234,11 @@ unset _det
 # dash-issue-session.sh does): the child-report path treats an empty @origin as
 # hub-spawned and stays silent; with @origin_wid beside it, it routes by worker_id.
 if [ -n "$ORIGIN_WID" ] && [ -z "$ORIGIN" ]; then ORIGIN=$(fleet_origin_canon "${ORIGIN_WID#*/}" '' '' ''); fi
+# The parent must be a LIVE session (issue #1355, EPIC #1645 C2) — exit 4, as
+# dash-issue-session.sh: no $TMUX_PANE and no --origin, or a dead parent key.
+_why=$(fleet_origin_gate "$SESS" "$ORIGIN_RAW" "$ORIGIN" "$ORIGIN_WID") \
+  || { refuse "raw: $_why"; exit 4; }
+unset _why
 
 # Which machine (issue #1541; the issue path's rule, #1425/#1475): --node, else —
 # with the hub module on — FLEET_SPAWN_NODE, else auto. PLACING = the hub may
@@ -318,7 +325,7 @@ if [ "$BG" = 1 ]; then
   # as is --origin-wid.
   nodearg=''; [ -n "$NODE" ] && nodearg=" --node=$NODE"
   owarg=''; [ -n "$ORIGIN_WID" ] && owarg=" --origin-wid=$ORIGIN_WID"
-  fleet_bg "FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg$pfarg$pinarg$nodearg$owarg${ORIGIN:+ --origin='$ORIGIN'}${AGENT:+ --agent=$AGENT}$rarg${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1" \
+  fleet_bg "FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg$pfarg$pinarg$nodearg$owarg --origin='${ORIGIN:-hub}'${AGENT:+ --agent=$AGENT}$rarg${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1" \
     || { [ -n "$nfarg" ] && rm -f "$nf"; [ -n "$pfarg" ] && rm -f "$pf"
          refuse "raw: background dispatch failed"; exit 1; }
   exit 0

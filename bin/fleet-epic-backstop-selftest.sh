@@ -111,10 +111,11 @@ case "$out" in *'cannot rule out a session elsewhere: hub silent'*) CHECKS=$((CH
 rm -f "$G/remote_s" "$G/hub_ok"
 hrun issue-97; eq "#1110 hub on but no session cache → skip" 'backstop skipped: child busy (issue-97 cannot rule out a session elsewhere: no hub session cache)' "$out"
 
-# fleet_epic_parent_key: a keyless (hub) pane keeps its ledger under the EPIC's key.
-pk=$(TMUX='' bash -c '. "$1/fleet-lib.sh" >/dev/null 2>&1; fleet_epic_parent_key s verkyyi/x 1585' _ "$BIN")
-eq "#1110 a pane with no key → the EPIC's key" 'issue-1585' "$pk"
-TMUX='' bash -c '. "$1/fleet-lib.sh" >/dev/null 2>&1; fleet_epic_parent_key s verkyyi/x nope' _ "$BIN" >/dev/null
-eq "#1110 …and no EPIC number → rc 1, nothing invented" 1 "$?"
+# fleet_epic_parent_key: a keyless (hub) pane is REFUSED (issue #1355) — the
+# EPIC's key named a parent no window answers to; spawn-origin-gate-selftest.sh B
+# pins the pane cases.
+pk=$(TMUX='' bash -c '. "$1/fleet-lib.sh" >/dev/null 2>&1; fleet_epic_parent_key s verkyyi/x 1585' _ "$BIN" 2>/dev/null)
+eq "#1355 a pane with no key → rc 1" 1 "$?"
+eq "#1355 …and never the EPIC's key" '' "$pk"
 
 printf 'fleet-epic-backstop selftest: OK (%d checks)\n' "$CHECKS"

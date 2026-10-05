@@ -85,7 +85,7 @@ if [ ! -f "$flag" ] && [ ! -f "$bindflag" ] && [ -n "${q//[[:space:]]/}" ]; then
     qf=$(mktemp "$gdir/spawn_q.XXXXXX" 2>/dev/null)
     if [ -n "$qf" ]; then
       printf '%s' "$q" > "$qf" 2>/dev/null
-      fleet_bg "sleep $GUARD_SLEEP; _l=\$(cat '$lastf' 2>/dev/null); case \"\$_l\" in ''|*[!0-9]*) _l=0;; esac; if [ \"\$_l\" -le $now ]; then bash '$BIN/dash-raw-session.sh' --name-file='$qf' --selection='$sel' >/dev/null 2>&1; else rm -f '$qf'; tmux display-message 'dash: pasted text is not a name — the prompt line takes ONE scratch name. Paste long text into a Claude window or the file inbox (see ONBOARDING).' 2>/dev/null; fi"
+      fleet_bg "sleep $GUARD_SLEEP; _l=\$(cat '$lastf' 2>/dev/null); case \"\$_l\" in ''|*[!0-9]*) _l=0;; esac; if [ \"\$_l\" -le $now ]; then bash '$BIN/dash-raw-session.sh' --origin hub --name-file='$qf' --selection='$sel' >/dev/null 2>&1; else rm -f '$qf'; tmux display-message 'dash: pasted text is not a name — the prompt line takes ONE scratch name. Paste long text into a Claude window or the file inbox (see ONBOARDING).' 2>/dev/null; fi"
     fi
   fi
   echo "clear-query+reload(bash $ROWS)"; exit 0

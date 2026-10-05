@@ -103,6 +103,15 @@ Do not install from memory: read the doc and work from it.
   (`fleet_worker_id`); `<fleet UUID>/<key>` stays a readable alias for one
   version (`fleet_worker_id_key` — a relay's `from`, a lease). `worker-identity-selftest.sh`
   pins it.
+- **A spawn's parent is a LIVE session, or the spawn refuses** (issue #1355,
+  EPIC #1645 C2). `fleet_origin_gate` (`bin/fleet-lib.sh`) runs in both spawners
+  after `fleet_origin_canon`, before any window: a key no window answers to
+  (`fleet_worker_locate` → `unknown`) or a caller inside tmux with no
+  `$TMUX_PANE` and no `--origin` exits **4** with one stderr line, no window —
+  an empty `@origin` there is "unknown", not "the hub". `--origin hub` is the
+  operator; a backgrounded pass (`fleet_bg` / run-shell -b has no pane) states
+  its origin explicitly. `fleet_epic_parent_key` has no EPIC-key fallback: no
+  pane key ⇒ rc 1. `spawn-origin-gate-selftest.sh` pins it.
 - **A recycled scratch number is a new GENERATION, not the old session** (issue
   #1538). `fleet_scratch_alloc <main> <base> <sess>` mints one per allocation
   (`children/.gen`, `fleet_key_gen`): the last holder's child ledger retires to

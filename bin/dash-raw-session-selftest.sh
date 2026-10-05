@@ -131,6 +131,7 @@ chmod +x "$WORK/fakebin/tmux"
 # <target-session>).
 run_raw() {
   : > "$NEWWIN_LOG"; : > "$OPTS_LOG"; : > "$DISPLAY_LOG"; : > "$SELECT_LOG"; : > "$RS_LOG"; : > "$PREFILL_LOG"
+  FLEET_ORIGIN_GATE=0 \
   PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/tmp" FLEET_CONF_DIR="$WORK/conf" \
   FLEET_REPO="acme/widgets" FLEET_MAIN="$MAIN" FLEET_BASE_BRANCH="$BASE_BR" \
   FLEET_GLOBAL_MAX_SESSIONS="${GMAX:-0}" \
