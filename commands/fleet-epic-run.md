@@ -174,10 +174,15 @@ off on its own while this loop's heartbeat is fresh (step 1).
 A finished worker holds a slot until something reaps it. Don't wait to be told:
 for each member whose PR is MERGED (and deploy-green, if applicable) while its
 window still exists, reap it —
-`bash ~/.claude/fleet/bin/dash-reap.sh issue-<N>` (in a multi-repo fleet
+`bash ~/.claude/fleet/bin/dash-reap.sh issue-<N> --yes` (in a multi-repo fleet
 `<slug>:issue-<N>`; never a `session:index` or a window name — those are
 `refused:target`, exit 4, issue #869) — which records a
-`/fleet-history` row before disposing of anything.
+`/fleet-history` row before disposing of anything. A member whose window lives
+on ANOTHER machine is reaped by the same command (issue #1589): with the hub on,
+`dash-reap.sh` asks that machine's node to run the reap there and answers with
+its token and exit status (`reaped:*` 0 · `skip:live` 3 with the node's reason ·
+`failed:*` 5 = unknown, not a reap — re-check next tick). Never ssh over and set
+`TMUX` by hand.
 
 **A member still running its `/loop` is delivered, and KEPT** (issue #1331, the
 operator's ruling A on EPIC #1312). Merged is done — the DoD and the closing

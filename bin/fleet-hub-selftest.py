@@ -151,7 +151,7 @@ printf '%s\\n' "$*" >> "$FLEET_CONF_DIR/answer.calls"
 echo 'answered (pane %5): 2 — "Ship it"'
 ''')
         self.script(self.bin / "dash-reap.sh", '''#!/bin/bash
-printf '%s\\n' "$* TMUX=${TMUX:-}" >> "$FLEET_CONF_DIR/reap.calls"
+printf '%s\\n' "$* TMUX=${TMUX:-} LOCAL=${FLEET_REAP_LOCAL:-}" >> "$FLEET_CONF_DIR/reap.calls"
 [ ! -f "$FLEET_CONF_DIR/reap-live" ] || { echo skip:live; echo 'reap: issue-124 is live or could not be checked (working for 12s) — leaving window and worktree alone' >&2; exit 3; }
 [ ! -f "$FLEET_CONF_DIR/reap-fail" ] || { echo failed:kill-window; exit 5; }
 n="${1#issue-}"
@@ -320,6 +320,7 @@ class HubTests(HubFixture):
         self.node.windows(("@12", 124, False, "/fixture/issue-124"))
         gone = self.lifecycle("worker_stop", idem="stop-again")
         self.assertEqual((gone["status"], gone["result"]["error"]["code"]), ("failed", "NOT_FOUND"))
+        self.assertNotIn("token", gone["result"]["error"])
         self.node.windows(("@12", 124, False, "/fixture/issue-124"), ("@21", 124, False, "/fixture/issue-124"))
         twice = self.lifecycle("worker_stop", "issue-124")
         self.assertEqual((twice["status"], twice["result"]["error"]["code"]), ("failed", "AMBIGUOUS"))
@@ -387,6 +388,7 @@ class HubTests(HubFixture):
         self.assertEqual((asleep["status"], asleep["result"]["error"]["code"]), ("failed", "INVALID_STATE"))
         gone = self.lifecycle("worker_answer", "issue-99", idem="gone", answer="yes")
         self.assertEqual((gone["status"], gone["result"]["error"]["code"]), ("failed", "NOT_FOUND"))
+        self.assertNotIn("token", gone["result"]["error"])
         self.assertEqual((len(self.node.calls("perm")), len(self.node.calls("answer"))), before)
         # the grammar is the whitelist: nothing else becomes an argv word
         for bad in ("yes; rm -rf /", "", "0", "y", "YES", "1,,2", 2, True, "1 2 3 4 5 6 7 8 9"):
@@ -409,7 +411,10 @@ class HubTests(HubFixture):
         done = self.lifecycle("worker_reap")
         self.assertEqual(done["status"], "succeeded", done)
         self.assertEqual((done["result"]["how"], done["result"]["reaped"]["window_id"]), ("reaped:full", "@12"))
-        self.assertEqual(self.node.calls("reap"), ["issue-123 --yes TMUX=/tmp/fleet-hub-selftest.sock,0,0"])
+        self.assertEqual(self.node.calls("reap"), ["issue-123 --yes TMUX=/tmp/fleet-hub-selftest.sock,0,0 LOCAL=1"])
+        # #1586's terminal fields ride back (issue #1589): what fleet_hub_reap answers with.
+        self.assertEqual((done["result"]["token"], done["result"]["exit"], done["result"]["window"]),
+                         ("reaped:full", 0, "@12"))
         self.assertEqual([w["issue"] for w in self.call("fleet_status", {"fleet_id": self.fleet})["workers"]], [124])
         self.assertEqual(self.lifecycle("worker_reap")["operation_id"], done["operation_id"])
         (self.node.conf / "reap-live").touch()
@@ -417,6 +422,8 @@ class HubTests(HubFixture):
         self.assertEqual((live["status"], live["result"]["error"]["code"]), ("failed", "INVALID_STATE"))
         self.assertIn("skip:live", live["result"]["error"]["message"])
         self.assertIn("leaving window and worktree alone", live["result"]["error"]["message"])
+        self.assertEqual((live["result"]["error"]["token"], live["result"]["error"]["exit"]), ("skip:live", 3))
+        self.assertIn("leaving window and worktree alone", live["result"]["error"]["stderr1"])
         (self.node.conf / "reap-live").unlink()
         (self.node.conf / "reap-dirty").touch()
         keep = self.lifecycle("worker_reap", "issue-124", idem="keep")
@@ -426,11 +433,13 @@ class HubTests(HubFixture):
         n = len(self.node.calls("reap"))
         gone = self.lifecycle("worker_reap", "issue-124", idem="gone")
         self.assertEqual((gone["status"], gone["result"]["error"]["code"]), ("failed", "NOT_FOUND"))
+        self.assertNotIn("token", gone["result"]["error"])
         self.assertEqual(len(self.node.calls("reap")), n)
         self.node.windows(("@30", 125, False, "/fixture/issue-125"))
         (self.node.conf / "reap-fail").touch()
         bad = self.lifecycle("worker_reap", "issue-125")
         self.assertEqual((bad["status"], bad["result"]["error"]["code"]), ("unknown", "UNKNOWN_OUTCOME"))
+        self.assertEqual((bad["result"]["error"]["token"], bad["result"]["error"]["exit"]), ("failed:kill-window", 5))
         (self.node.conf / "reap-fail").unlink()
         reader = self.hub.grant("stopper2", [self.fleet], ["fleet:read", "worker:stop", "worker:answer"])
         with self.assertRaisesRegex(Fault, "outside this caller"):
@@ -454,6 +463,7 @@ class HubTests(HubFixture):
         self.node.windows(("@13", None, True, "/fixture/project-scratch-4"))
         gone = self.lifecycle("worker_message", idem="msg-gone", text="anyone?")
         self.assertEqual((gone["status"], gone["result"]["error"]["code"]), ("failed", "NOT_FOUND"))
+        self.assertNotIn("token", gone["result"]["error"])
         self.node.windows(("@12", 123, False, "/fixture/issue-123"))
         self.node.fleet_conf.write_text(self.node.fleet_conf.read_text().replace("FLEET_ISSUE_BRIDGE=1\n", ""))
         # No issue bridge (issue #1554): the node delivers to the live session

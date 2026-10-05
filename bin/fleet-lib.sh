@@ -4675,6 +4675,79 @@ fleet_worker_locate() {
   echo unknown; return 2
 }
 
+# fleet_hub_reap <worker_id> [<wait-secs>] — reap a worker that lives on ANOTHER
+# machine through the hub's worker_reap (issue #1589): the node runs `dash-reap.sh
+# <key> --yes` on its own server, by its own rules, and writes back #1586's
+# terminal fields (exit / stderr1 / token). Answers exactly as a local
+# `dash-reap.sh … --yes` would: the result token on stdout, the reason as one
+# `reap: …` line on stderr, the same exit status —
+#   reaped:full | reaped:keep        0
+#   skip:live | skip:<why>           3   nothing touched there (the node's reason)
+#   refused:<slug>                   4   nothing touched; refused:hub = the hub said
+#                                        no, or could not be asked (nothing was sent)
+#   failed:<slug>                    5   the outcome is UNKNOWN — never counted as
+#                                        reaped (an old node, a timeout, a lost write)
+# An older node that does not write the fields back is read off its error message.
+# The write goes through fleet-hub-write.sh (FLEET_HUB_WRITE_CMD is its test seam).
+fleet_hub_reap() {
+  local wid="${1:-}" wait="${2:-90}" ef rec rc out
+  case "$wid" in */*) ;; *) printf 'refused:hub\n'; printf 'reap: %s is not a worker_id\n' "$wid" >&2; return 4 ;; esac
+  case "$wait" in ''|*[!0-9]*) wait=90 ;; esac
+  ef=$(mktemp "${TMPDIR:-/tmp}/fleet-hub-reap.XXXXXX" 2>/dev/null) || ef=/dev/null
+  rec=$(bash "$_FLEET_LIB_DIR/fleet-hub-write.sh" worker_reap \
+        "$(printf '{"worker_id":"%s"}' "$wid")" --wait "$wait" 2>"$ef" </dev/null)
+  out=$(printf '%s' "$rec" | FHR_NOTE="$(tail -n1 "$ef" 2>/dev/null)" FHR_WAIT="$wait" python3 -c '
+import json, os, re, sys
+note = os.environ.get("FHR_NOTE", "").replace("fleet-hub-write: ", "", 1)
+def say(token, rc, why):
+    print("%d\t%s\t%s" % (rc, token, " ".join(str(why or "no detail").split())[:300]))
+    sys.exit(0)
+try:
+    o = json.loads(sys.stdin.read() or "null")
+except ValueError:
+    o = None
+if not isinstance(o, dict):
+    say("refused:hub", 4, "nothing sent — " + (note or "the hub gave no answer"))
+if "error" in o and not o.get("operation_id"):
+    e = o["error"] if isinstance(o["error"], dict) else {"message": str(o["error"])}
+    say("refused:hub", 4, "the hub refused — %s: %s" % (e.get("code", "?"), e.get("message", "")))
+st = o.get("status", "?")
+res = o.get("result") if isinstance(o.get("result"), dict) else {}
+err = res.get("error") if isinstance(res.get("error"), dict) else {}
+op = o.get("operation_id", "?")
+if st == "succeeded":
+    tok = str(res.get("token") or res.get("how") or "")
+    if tok.startswith("reaped:"):
+        say(tok, 0, res.get("kept", ""))
+    say("failed:unconfirmed", 5, "the node answered succeeded without a reap token (op=%s)" % op)
+msg = err.get("message", "")
+tok = str(err.get("token") or "")
+if not tok:
+    m = re.search(r"\b((?:skip|refused|failed):[a-z0-9-]+)", msg)
+    tok = m.group(1) if m else ""
+why = err.get("stderr1") or msg
+if st == "failed":
+    if err.get("code") == "NOT_FOUND" and not tok:
+        tok = "refused:no-target"
+    if tok.startswith("skip:"):
+        say(tok, 3, why)
+    if tok.startswith("refused:"):
+        say(tok, 4, why)
+    say("refused:" + (err.get("code") or "node").lower().replace("_", "-"), 4, why)
+if st == "unknown":
+    say(tok if tok.startswith("failed:") else "failed:unknown", 5,
+        "outcome unknown — not counted as reaped: %s (op=%s)" % (why, op))
+say("failed:unconfirmed", 5, "still %s on the node after %ss — not counted as reaped (op=%s)"
+    % (st, os.environ.get("FHR_WAIT", "?"), op))
+' 2>/dev/null)
+  [ "$ef" = /dev/null ] || rm -f "$ef"
+  [ -n "$out" ] || out=$(printf '5\tfailed:unreadable\tthe hub answer could not be read')
+  rc=${out%%	*}; out=${out#*	}
+  printf '%s\n' "${out%%	*}"
+  printf 'reap: %s\n' "${out#*	}" >&2
+  return "$rc"
+}
+
 # fleet_stamp_origin_wid <sess> <window> <origin> [<sock>] — beside the @origin key a spawn
 # stamps, record the PARENT's worker_id as @origin_wid, so a child that ends up on
 # another machine can still address its parent. Only for a key-shaped origin (not
