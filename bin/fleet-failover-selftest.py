@@ -99,6 +99,33 @@ class Failover(unittest.TestCase):
         self.assertEqual((r['state'],r['detail']),('waiting','target-auth: Codex profile work needs a new login (reauth_required)'))
         self.assertIn('codex/second',r['failed_targets'])
 
+    def test_a_rolled_back_cutover_ends_the_episode_and_the_hold_is_filed_by_name(self):
+        # issue #1668: the target never bound, fleet-transfer.sh resumed the SOURCE
+        # in place (state.json rolled_back) — a finished episode, not «ambiguous»;
+        # the next request meeting the transfer's hold waits on `rolled-back: …`.
+        bundle=self.root/'bundle'; bundle.mkdir()
+        flow.save(bundle/'manifest.json',dict(quota_request=str(self.path),target={}))
+        flow.save(bundle/'state.json',dict(state='rolled_back',detail='codex exited at startup (status 37)'))
+        r=dict(source=self.source,episode='turn:1',hard=True,attempts=1,failed_targets={})
+        self.path.mkdir(); flow.save(self.path/'request.json',r)
+        with patch.object(flow,'validate'), patch.object(flow,'opt',return_value=str(bundle/'manifest.json')), \
+             patch.object(flow,'inspect',side_effect=AssertionError('a rollback is not ambiguous')), \
+             patch.object(flow.subprocess,'run',return_value=subprocess.CompletedProcess([],1)):
+            flow.move(self.path,r,dict(key='codex/second',agent='codex'))
+        r=self.request()
+        self.assertEqual((r['state'],r['detail']),('cancelled','rolled-back: codex exited at startup (status 37)'))
+        def held(cmd,**_):
+            flow.save(self.path/'refused.json',dict(reason='rolled-back',to='codex',detail='rolled back 5s ago: 切换失败，已退回：x'))
+            return subprocess.CompletedProcess(cmd,1)
+        r=dict(source=self.source,episode='turn:2',hard=True,attempts=1,failed_targets={})
+        flow.save(self.path/'request.json',r)
+        with patch.object(flow,'validate'), patch.object(flow,'opt',return_value=''), \
+             patch.object(flow,'inspect',return_value=dict(self.source)), \
+             patch.object(flow.subprocess,'run',side_effect=held):
+            flow.move(self.path,r,dict(key='codex/second',agent='codex'))
+        self.assertEqual(self.request()['state'],'waiting')
+        self.assertTrue(self.request()['detail'].startswith('rolled-back: rolled back 5s ago'))
+
     def test_failed_target_cooldown_uses_another_available_subscription(self):
         flow.reconcile_one(self.source,self.account,self.data)
         r=self.request();r['failed_targets']={'codex/second':time.time()+120};flow.save(self.path/'request.json',r)
