@@ -375,7 +375,7 @@ from the rest goes to a second login. A login that ended up with two fleets fold
 one into the other with `bin/fleet-repo.sh fold` (below).
 
 ```sh
-cf                                         # already running? (re)attach fast. else: infer the repo + bring it up
+fleet                                      # open the client — the one way in (on this machine, or through the hub)
 bin/fleet-up.sh you/webapp                 # first repo: clone-or-reuse ~/projects/webapp, bring the fleet up
 bin/fleet-repo.sh add you/infra ~/src/infra   # another repo in the same fleet (explicit checkout dir) — or ⌃z on the dash
 bin/fleet-list.sh                          # ● live / ○ down · name · repo · checkout (+ ↳ each further repo)
@@ -383,10 +383,12 @@ bin/fleet-down.sh fleet --purge            # kill the fleet (+ drop its conf/cac
 ```
 
 On SSH login, `shell/fleet-intro.sh` prints a short, phone-width banner: this
-login's fleet and its repo count, the `cf` line to get in, and any machine-local
-`intro.d` lines — and then goes straight in: an interactive SSH login runs
-`cf` itself, starting the fleet first if it isn't up (scp / rsync / `ssh host cmd`
-are never touched; `~/.hushfleet-attach` keeps the banner only). See
+login's fleet and its repo count, the `fleet` line to get in, and any machine-local
+`intro.d` lines — and then opens the **client**: an interactive SSH login runs
+`bin/fleet`, the same client you run on your own computer, here reading this
+machine (its bar says 客户端在 <机器> 上运行) — never a direct attach to the node's
+own session (issue #1711). scp / rsync / `ssh host cmd` are never touched;
+`~/.hushfleet-attach` keeps the banner only. See
 [docs/INSTALL.md](docs/INSTALL.md) step 7 for the one `~/.zshrc` line,
 `source ~/.claude/fleet/shell/fleet-login.zsh`.
 
@@ -427,20 +429,18 @@ server goes down and its conf is archived under
 
 `bin/multirepo-e2e-selftest.sh` proves the whole path end to end. One crash of
 the fleet's tmux server takes every repo in it down — and a login runs exactly
-**one fleet** (issue #979): `fleet-up <owner/repo>` / `cf <owner/repo>` with a fleet
+**one fleet** (issue #979): `fleet-up <owner/repo>` / `fleet repo add <owner/repo>` with a fleet
 already configured ADDS the repo to it, and a second
 fleet is refused. A repo you want isolated needs a second login. A brand-new fleet
 is named `fleet`; an existing one keeps its name.
 
-`cf` (from `shell/cw.zsh`) is your one-key way to a fleet. With **no args** it
-first tries to (re)attach to an already-running fleet (`bin/fleet-attach.sh`,
-issue #212): one live fleet → straight in; a leftover second one → the
-most recently active (there is no fleet picker, issue #980); already inside the
-only one → a no-op. Only when
-**nothing** is running does it fall through to `fleet-up.sh` — inferring the repo
-from the current checkout's `origin` and reusing that worktree (no clone), or
-bringing your fleet up on its own repo from outside a checkout. With args it
-forwards them straight to `fleet-up.sh`, which adds that repo to your fleet.
+`fleet` is your one way into a fleet (issue #1711, EPIC #1710): the client, on
+your own computer or after an ssh login. `cf` (from `shell/cw.zsh`) is folded into
+it — for one version it prints `cf 已并入 fleet` and runs `bin/fleet`
+(`cf --guide` → `fleet guide`; `cf <owner/repo>` → `fleet-up.sh <owner/repo>
+--no-attach`, which adds that repo to your fleet, then the client), and then it
+goes. `bin/fleet-attach.sh` — a direct attach to the node's own session — still
+works for a script or a person who types it, but is no longer advertised.
 
 Each fleet keeps its durable state in **one directory per fleet** —
 `~/.config/claude-fleet/fleets/<session>/` (its `conf` overlay, restore map,

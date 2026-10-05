@@ -67,7 +67,7 @@
 #      via fleet-hook-conf.sh; unset ⇒ `<HOST>` placeholder + a WARN, port ⇒ 22),
 #      the temporary private key inline when step 4 generated one (an attachment
 #      does not leave this machine's mail; a file the admin reads does), an
-#      ssh-config snippet, the swap-the-key steps, what the guide and `cf` do,
+#      ssh-config snippet, the swap-the-key steps, what the guide and `fleet` do,
 #      and what is still theirs (Codex device code, `gh auth login`). NEVER the
 #      password. `--lang zh` (default) or `en`. You send it; the script only
 #      writes it — and never prints the key to the terminal.
@@ -520,12 +520,12 @@ EOF
   fi
   cat <<EOF
 
-5. 向导与 cf
+5. 向导与 fleet
 
-   - 每次 ssh 登录都直接进你的 fleet；断开后再 ssh 就回来了。
+   - ssh $MACHINE 后自动打开 fleet（客户端，底栏写「客户端在 $MACHINE 上运行」）；断开后再 ssh 就回来了。
    - 向导（一个 Claude 会话）会带你走一遍：加自己的仓库 → 提第一个 issue → 看 worker 跑 → 合并 PR。
-   - 向导窗口关了、或想再开：cf --guide
-   - 在 shell 里：cf 回到 fleet；cf owner/repo 把一个仓库加进来。
+   - 向导窗口关了、或想再开：fleet guide
+   - 在 shell 里：fleet 打开客户端；fleet repo add owner/repo 把一个仓库加进来。
    - 想离开但不关会话：按 tmux 的 prefix 键（默认 Ctrl-b）再按 d；下次 ssh 回来接着用。
 
 6. 还要你自己做的
@@ -619,12 +619,12 @@ EOF
   fi
   cat <<EOF
 
-5. The guide and cf
+5. The guide and fleet
 
-   - Every ssh login lands you straight in your fleet; disconnect and ssh again to return.
+   - ssh $MACHINE opens fleet (the client; its bar says it runs on $MACHINE); disconnect and ssh again to return.
    - The guide (a Claude session) walks you through: add your own repo → file your first issue → watch the worker → merge the PR.
-   - Guide window closed, or want it back: cf --guide
-   - In a shell: cf returns to the fleet; cf owner/repo adds a repo to it.
+   - Guide window closed, or want it back: fleet guide
+   - In a shell: fleet opens the client; fleet repo add owner/repo adds a repo to it.
    - To leave without closing anything: the tmux prefix (Ctrl-b by default), then d; your next ssh picks up where you left.
 
 6. Still yours to do

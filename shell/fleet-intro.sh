@@ -8,19 +8,20 @@
 #
 # Phone-width (#1255): every line ≤ 40 terminal columns (CJK = 2), no rules, no
 # host, no repo names. Conf files only — NO tmux calls, no git, no gh, no
-# network: it runs on every login, and `cf` starts-or-attaches, so a running and
-# a stopped fleet print the same banner.
+# network: it runs on every login, and `fleet` opens the client either way, so a
+# running and a stopped fleet print the same banner. The way in is `fleet` alone
+# (issue #1711, EPIC #1710 C1) — `cf` is folded into it.
 #
 #   0 fleets  → "○ 未配置" + a pointer at docs/INSTALL.md
 #   2+ fleets → "⚠ 有 N 个，只能留一个" + `fleet-repo.sh fold` (guards #979)
 #   1 fleet   → "claude fleet · N 个仓库" (the fleet conf's repo + repos/*.conf,
-#               a repeat dropped, as fleet_repos), the `cf` line, any intro.d
+#               a repeat dropped, as fleet_repos), the `fleet` line, any intro.d
 #               lines, then the hide hint.
 #
 # intro.d: machine-local extra lines (e.g. a `vnc` row) the repo knows nothing
 # about. Every executable in $FLEET_INTRO_SYS_D (/usr/local/etc/claude-fleet/
 # intro.d) then $CONF_DIR/intro.d, in file order, runs with stdin closed; its
-# stdout prints verbatim between the cf line and the hide hint. A failing or
+# stdout prints verbatim between the fleet line and the hide hint. A failing or
 # silent hook prints nothing. Each hook owns its gating (SSH-only, …) and must
 # keep its own lines ≤ 40 columns. A hook runs with FLEET_UI_LANG set to the
 # banner's RESOLVED language — exactly `zh` or `en` (#1259): the fleet conf's
@@ -68,11 +69,11 @@ done
 
 if zh; then
   printf '%sclaude fleet%s · %s 个仓库\n' "$b" "$r" "$nr"
-  printf '%scf%s   进入 fleet\n' "$b" "$r"
+  printf '%sfleet%s   打开客户端\n' "$b" "$r"
 else
   [ "$nr" -eq 1 ] && rw=repo || rw=repos
   printf '%sclaude fleet%s · %s %s\n' "$b" "$r" "$nr" "$rw"
-  printf '%scf%s   enter fleet\n' "$b" "$r"
+  printf '%sfleet%s   open the client\n' "$b" "$r"
 fi
 ui=$(fleet_ui_lang)
 for hd in "$SYS_D" "$CONF_DIR/intro.d"; do

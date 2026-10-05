@@ -4,37 +4,33 @@
 # cw <branch> [window-name]  — create a worktree + tmux window running claude
 # cwrm <branch>              — remove a worktree + its branch
 # cwclean [--prune]          — audit worktrees; --prune removes merged+clean+idle ones
-# cf [<owner/repo>] [dir]    — go to your fleet; with a repo, add it + make it current
-# cf --guide                 — reopen or jump to the onboarding guide
+# cf [<owner/repo>] [dir]    — folded into `fleet` (#1711): prints so, opens the client
+# cf --guide                 — the same, `fleet guide`
 #
 # It also installs a tmux() destroy-guard (issue #158) — see the bottom of the
 # file — so an accidental `tmux kill-server` from a bypass-perms worker can't
 # take down every fleet sharing the default socket.
 
-# cf — go to your fleet. One login runs ONE fleet (issue #979). With NO args it
-# first tries to (re)attach to it when it is running (issue #212) — fleet-attach.sh
-# exits 10 only when nothing is running, and then fleet-up brings it up (creating
-# it, named "fleet", when this login has none; inferring the repo from this
-# checkout, else using the fleet's own). `cf <owner/repo>` goes straight to
-# fleet-up, which ADDS that repo to the fleet (fleet-repo.sh add) and makes it the
-# current repo — it never creates a second fleet. Any fleet-up flag except
-# --guide passes through; --guide recalls the pinned onboarding window.
+# cf — folded into `fleet` (issue #1711, EPIC #1710 C1): the one way in is the
+# client, bin/fleet. Kept ONE version as an alias that says so and goes there:
+#   cf               → fleet            (the client)
+#   cf --guide       → fleet guide      (the onboarding window)
+#   cf <owner/repo>  → fleet-up.sh <owner/repo> --no-attach (adds the repo,
+#                      fleet-repo.sh add), then fleet — never the node's session
+# Any other fleet-up flag passes through the same way. Removed next version.
 cf() {
   local bin="${${(%):-%x}:h:h}/bin"   # this file lives at <fleet>/shell/cw.zsh
+  echo "cf 已并入 fleet，以后直接敲 fleet（cf 下个版本移除）" >&2
+  [ -x "$bin/fleet" ] || { echo "cf: $bin/fleet not found" >&2; return 1; }
   if [ "$#" -eq 1 ] && [ "$1" = --guide ]; then
-    [ -x "$bin/fleet-guide.sh" ] || { echo "cf: $bin/fleet-guide.sh not found" >&2; return 1; }
-    "$bin/fleet-guide.sh"
+    "$bin/fleet" guide
     return $?
   fi
-  if [ $# -eq 0 ] && [ -x "$bin/fleet-attach.sh" ]; then
-    "$bin/fleet-attach.sh" && return 0
-    local rc=$?
-    # 10 = no live fleet → fall through to fleet-up. Any other non-zero is a real
-    # attach failure (already reported by fleet-attach.sh) — surface it.
-    [ $rc -eq 10 ] || return $rc
+  if [ "$#" -gt 0 ]; then
+    [ -x "$bin/fleet-up.sh" ] || { echo "cf: $bin/fleet-up.sh not found" >&2; return 1; }
+    "$bin/fleet-up.sh" "$@" --no-attach || return $?
   fi
-  [ -x "$bin/fleet-up.sh" ] || { echo "cf: $bin/fleet-up.sh not found"; return 1; }
-  "$bin/fleet-up.sh" "$@"
+  "$bin/fleet"
 }
 
 cw() {

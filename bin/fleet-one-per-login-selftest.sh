@@ -25,7 +25,7 @@
 #      inside its speak grace leaves it be, a cooled-down tick restarts it once
 #      in the same scratch, a dead agent likewise; onboarded lands only after an
 #      agent runs brief, and then no tick restarts anything.
-#   9. cf --guide opens/focuses one guide, reuses a live guide, and respawns a
+#   9. cf --guide (now `fleet guide`) opens/focuses one guide, reuses a live guide, and respawns a
 #      guide that fell back to a bare shell.
 # The hub, collector, disk gate and trust check are stubbed in a sandbox bin/;
 # tmux: a PATH shim maps every `-L <label>` to a private socket under $SOCKD.
@@ -376,7 +376,7 @@ eq "8 no extra restart" "$(wc -l < "$launches" | tr -d ' ')" 4
 "$REAL_TMUX" -S "$SOCKD/fleet" kill-server 2>/dev/null
 leg "8 a guide that never spoke is not onboarded; ticks restart silent and dead guides"
 
-# ---- 9. cf --guide recalls the existing or failed guide (issue #1171) ----
+# ---- 9. cf --guide (= fleet guide, #1711) recalls the existing or failed guide (issue #1171) ----
 export FLEET_CONF_DIR="$WORK/conf9" FLEET_ONBOARD=0
 : > "$launches"
 cat > "$SB/fleet-claude.sh" <<EOF
@@ -412,11 +412,16 @@ out=$(guide); eq "9 live rc" "$?" 0
 eq "9 live reused" "$(wc -l < "$launches" | tr -d ' ')" 1
 eq "9 live focused" "$(wins '#{window_name} #{window_active}' | grep ' 1$')" "guide 1"
 
-# From an ordinary login shell, select the guide before attaching to the fleet.
+# From an ordinary login shell, select the guide, then open the CLIENT (bin/fleet,
+# issue #1711) — never a direct attach to the node's own session.
 tmux -L fleet select-window -t fleet:plan
+rm -f "$SB/fleet" "$WORK/attach"
+printf '#!/bin/sh\necho "client $*" > "%s/client"\n' "$WORK" > "$SB/fleet"; chmod +x "$SB/fleet"
 out=$(FLEET_TEST_ATTACH_LOG="$WORK/attach" bash "$SB/fleet-guide.sh" 2>&1)
 eq "9 outside rc" "$?" 0
-eq "9 outside attach" "$(cat "$WORK/attach")" "attach -t fleet"
+eq "9 outside opens the client" "$(cat "$WORK/client" 2>/dev/null)" "client "
+eq "9 outside no direct attach" "$(cat "$WORK/attach" 2>/dev/null)" ""
+rm -f "$SB/fleet"; ln -s "$BIN/fleet" "$SB/fleet"
 eq "9 outside focused" "$(wins '#{window_name} #{window_active}' | grep ' 1$')" "guide 1"
 eq "9 outside reused" "$(wc -l < "$launches" | tr -d ' ')" 1
 

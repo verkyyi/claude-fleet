@@ -31,7 +31,8 @@ machines you may reach and every way into each — its tailnet name, the public
 port the gateway forwards to it, and the relay through the hub itself (#1413)
 — measures each with FLEET_CONNECT_PROBES (3) TCP + SSH-banner handshakes,
 and ssh's in over the winner: most handshakes answered first, lowest median
-latency next. The interactive login on the far side attaches your fleet.
+latency next. The interactive login on the far side opens the fleet client
+there (shell/fleet-login.zsh, claude-fleet#1711).
 
 The choice is remembered for FLEET_CONNECT_CACHE_SECS (600). Inside that
 window one handshake re-checks the remembered route before it is used; if that

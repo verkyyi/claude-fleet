@@ -8,22 +8,25 @@
 #
 #   A. 0 fleets            → "○ 未配置" + the INSTALL.md pointer, nothing else.
 #   B. 2 fleets            → "⚠ 有 2 个" + `fleet-repo.sh fold` (#979), no repos.
-#   C. 1 fleet, 1 repo     → "claude fleet · 1 个仓库", the cf line, the hide
+#   C. 1 fleet, 1 repo     → "claude fleet · 1 个仓库", the fleet line, the hide
 #                            line — and nothing about running / sessions / branch.
 #   D. 1 fleet, 3 repos (+1 repeat, dropped) → "3 个仓库"; a LIVE tmux session
 #        on the shim's socket changes nothing.
 #   F. intro.d             → system dir then $CONF_DIR/intro.d, file order, lines
-#        verbatim between cf and the hide line; a failing / silent /
+#        verbatim between the fleet line and the hide line; a failing / silent /
 #        non-executable hook prints nothing.
 #   G. intro.d language    → a hook's FLEET_UI_LANG is the resolved zh/en (conf
 #        beats login locale), #1259.
 #
-#   E. shell/fleet-login.zsh (issue #1166), the ~/.zshrc block that shows the
-#      banner and then auto-attaches an SSH login: no $SSH_TTY / inside $TMUX /
-#      non-interactive / ~/.hushfleet / ~/.hushfleet-attach → cf NOT called;
-#      interactive SSH → cf called exactly once, and the shell carries on after
-#      it (a failing cf too); a login without $SSH_TTY prints the banner byte for
-#      byte as fleet-intro.sh itself does. zsh absent → E SKIPs.
+#   E. shell/fleet-login.zsh (issues #1166, #1711), the ~/.zshrc block that shows
+#      the banner and then opens the CLIENT for an SSH login: no $SSH_TTY / inside
+#      $TMUX / non-interactive / ~/.hushfleet / ~/.hushfleet-attach → bin/fleet
+#      NOT run; interactive SSH → bin/fleet run exactly once, never
+#      fleet-attach.sh / cf, and the shell carries on after it (a failing client
+#      too); a login without $SSH_TTY prints the banner byte for byte as
+#      fleet-intro.sh itself does. `cf` (shell/cw.zsh) prints that it is folded
+#      into fleet and runs bin/fleet (`--guide` → `fleet guide`). zsh absent →
+#      E SKIPs.
 #
 # tmux never touches the operator's server: a PATH shim counts any call (there
 # must be none), drops `-L <sess>` and routes it onto one throwaway -S socket,
@@ -111,7 +114,7 @@ echo "A. no fleet"
 mkdir -p "$T/a/fleets"
 both A "$T/a" "claude fleet ○ 未配置" "claude fleet ○ not set up"
 has "见 ~/.claude/fleet/docs/INSTALL.md" "points at INSTALL.md"
-hasnot "cf " "no action line"
+hasnot "打开客户端" "no action line"
 hasnot "hushfleet" "no hide line"
 
 echo "B. two fleets"
@@ -123,10 +126,10 @@ hasnot "o/one" "lists no repos"
 echo "C. one fleet, one repo"
 mkfleet "$T/c" idlefleet me/app main
 both C "$T/c" "claude fleet · 1 个仓库" "claude fleet · 1 repo
-cf   enter fleet
+fleet   open the client
 hide: touch ~/.hushfleet"
 want="claude fleet · 1 个仓库
-cf   进入 fleet
+fleet   打开客户端
 隐藏：touch ~/.hushfleet"
 [ "$out" = "$want" ] && ok "zh banner is exactly 3 lines" || { bad "zh banner"; printf 'got:\n%s\nwant:\n%s\n' "$out" "$want"; }
 for x in me/app main 运行 未启动 会话 ───; do hasnot "$x" "no [$x]"; done
@@ -160,13 +163,13 @@ chmod +x "$FLEET_INTRO_SYS_D/10-a" "$FLEET_INTRO_SYS_D/20-b" "$FLEET_INTRO_SYS_D
          "$FLEET_INTRO_SYS_D/40-empty" "$T/f/intro.d/05-u"
 run "$T/f"
 want="claude fleet · 1 个仓库
-cf   进入 fleet
+fleet   打开客户端
 sys1
 sys2  两行
 sys2b
 user1
 隐藏：touch ~/.hushfleet"
-[ "$out" = "$want" ] && ok "hooks: system dir then conf dir, file order, between cf and hide; failing/empty/non-exec silent" \
+[ "$out" = "$want" ] && ok "hooks: system dir then conf dir, file order, between fleet and hide; failing/empty/non-exec silent" \
   || { bad "hooks"; printf 'got:\n%s\nwant:\n%s\n' "$out" "$want"; }
 narrow F; notmux F
 rm -f "$FLEET_INTRO_SYS_D"/*
@@ -185,65 +188,83 @@ done
 unset FLEET_UI_LANG
 hasline() { printf '%s\n' "$out" | grep -qx "$1" && ok "$2" || { bad "$2 — no line [$1]"; printf '%s\n' "$out"; }; }
 LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 run "$T/g-zh"
-hasline "lang=zh" "zh conf (zh_CN) under en_US login → hook sees exactly zh"; has "进入 fleet" "  … under a zh banner"
+hasline "lang=zh" "zh conf (zh_CN) under en_US login → hook sees exactly zh"; has "打开客户端" "  … under a zh banner"
 LANG=zh_CN.UTF-8 LC_ALL=zh_CN.UTF-8 run "$T/g-en"
-hasline "lang=en" "en conf (english) under zh_CN login → hook sees exactly en"; has "enter fleet" "  … under an en banner"
+hasline "lang=en" "en conf (english) under zh_CN login → hook sees exactly en"; has "open the client" "  … under an en banner"
 LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 run "$T/g-auto"
 hasline "lang=en" "no conf value → hook sees the login locale's en"
 export FLEET_UI_LANG=zh
 rm -f "$FLEET_INTRO_SYS_D"/*
 
-echo "E. fleet-login.zsh — banner + SSH auto-attach"
+echo "E. fleet-login.zsh — banner + SSH opens the client"
 if ! command -v zsh >/dev/null 2>&1; then
   echo "  SKIP: zsh not installed"
 else
   LOGIN="$here/../shell/fleet-login.zsh"
-  # a stand-in shell/ dir: the real fleet-login.zsh beside a stub intro + a stub
-  # cw.zsh whose cf only counts itself, so nothing attaches or spawns
-  mkdir -p "$T/sh" "$T/home"
-  cp "$LOGIN" "$T/sh/fleet-login.zsh"
-  printf '#!/bin/sh\necho INTRO\n' > "$T/sh/fleet-intro.sh"; chmod +x "$T/sh/fleet-intro.sh"
-  printf 'cf() { echo CF >> "%s/cf"; return "${CF_RC:-0}"; }\n' "$T" > "$T/sh/cw.zsh"
-  # login <interactive:-i|""> [VAR=val…] → output in $out, cf calls in $cfn
+  # a stand-in install root: the real fleet-login.zsh + cw.zsh beside a stub intro,
+  # a stub bin/fleet (the client) and a stub fleet-attach.sh that only count
+  # themselves, so nothing attaches or spawns
+  mkdir -p "$T/r/shell" "$T/r/bin" "$T/home"
+  cp "$LOGIN" "$T/r/shell/fleet-login.zsh"
+  cp "$here/../shell/cw.zsh" "$T/r/shell/cw.zsh"
+  printf '#!/bin/sh\necho INTRO\n' > "$T/r/shell/fleet-intro.sh"; chmod +x "$T/r/shell/fleet-intro.sh"
+  printf '#!/bin/sh\necho "FLEET $*" >> "%s/calls"; exit "${CLIENT_RC:-0}"\n' "$T" > "$T/r/bin/fleet"
+  printf '#!/bin/sh\necho ATTACH >> "%s/calls"\n' "$T" > "$T/r/bin/fleet-attach.sh"
+  printf '#!/bin/sh\necho "UP $*" >> "%s/calls"\n' "$T" > "$T/r/bin/fleet-up.sh"
+  chmod +x "$T/r/bin/fleet" "$T/r/bin/fleet-attach.sh" "$T/r/bin/fleet-up.sh"
+  # login <interactive:-i|""> [VAR=val…] → output in $out, client runs in $fn,
+  # direct attaches in $an
   login() {
     local i=$1; shift
-    : > "$T/cf"; rm -f "$T/home/.hushfleet" "$T/home/.hushfleet-attach"
+    : > "$T/calls"; rm -f "$T/home/.hushfleet" "$T/home/.hushfleet-attach"
     out=$(env -u TMUX -u SSH_TTY HOME="$T/home" "$@" \
-          zsh -f $i -c ". '$T/sh/fleet-login.zsh'; echo AFTER" 2>&1)
-    cfn=$(grep -c CF "$T/cf")
+          zsh -f $i -c ". '$T/r/shell/fleet-login.zsh'; echo AFTER" 2>&1)
+    fn=$(grep -c '^FLEET' "$T/calls"); an=$(grep -c '^ATTACH' "$T/calls")
   }
   login -i SSH_TTY=/dev/ttys999
-  [ "$cfn" = 1 ] && ok "SSH interactive → cf once" || bad "SSH interactive → cf ${cfn}×"
-  case "$out" in INTRO*AFTER) ok "banner first, shell continues after cf" ;; *) bad "order: $out" ;; esac
-  login -i SSH_TTY=/dev/ttys999 CF_RC=1
-  [ "$cfn" = 1 ] && case "$out" in *AFTER) true ;; *) false ;; esac \
-    && ok "a failing cf still leaves the shell" || bad "failing cf: $out"
+  [ "$fn" = 1 ] && ok "SSH interactive → bin/fleet once" || bad "SSH interactive → bin/fleet ${fn}×"
+  [ "$(cat "$T/calls")" = "FLEET " ] && ok "  … with no arguments" || bad "client args: $(cat "$T/calls")"
+  [ "$an" = 0 ] && ok "SSH interactive → never fleet-attach.sh" || bad "SSH interactive attached ${an}×"
+  case "$out" in INTRO*AFTER) ok "banner first, shell continues after the client" ;; *) bad "order: $out" ;; esac
+  login -i SSH_TTY=/dev/ttys999 CLIENT_RC=1
+  [ "$fn" = 1 ] && case "$out" in *AFTER) true ;; *) false ;; esac \
+    && ok "a failing client still leaves the shell" || bad "failing client: $out"
   login -i
-  [ "$cfn" = 0 ] && ok "no SSH_TTY → no cf" || bad "no SSH_TTY → cf ${cfn}×"
+  [ "$fn" = 0 ] && ok "no SSH_TTY → no client" || bad "no SSH_TTY → client ${fn}×"
   [ "$out" = "INTRO
 AFTER" ] && ok "no SSH_TTY → banner only" || bad "no SSH_TTY out: $out"
   login -i SSH_TTY=/dev/ttys999 TMUX=/tmp/x,1,0
-  [ "$cfn" = 0 ] && [ "$out" = AFTER ] && ok "inside tmux → nothing" || bad "in tmux: cf ${cfn}× out=$out"
+  [ "$fn" = 0 ] && [ "$out" = AFTER ] && ok "inside tmux → nothing" || bad "in tmux: client ${fn}× out=$out"
   login "" SSH_TTY=/dev/ttys999
-  [ "$cfn" = 0 ] && [ "$out" = AFTER ] && ok "non-interactive (scp/rsync/ssh cmd) → nothing" \
-    || bad "non-interactive: cf ${cfn}× out=$out"
-  : > "$T/cf"; touch "$T/home/.hushfleet"
-  out=$(env -u TMUX HOME="$T/home" SSH_TTY=/dev/ttys999 zsh -f -i -c ". '$T/sh/fleet-login.zsh'; echo AFTER" 2>&1)
-  [ "$(grep -c CF "$T/cf")" = 0 ] && [ "$out" = AFTER ] && ok "hush file .hushfleet → nothing" || bad "hushfleet: $out"
-  rm -f "$T/home/.hushfleet"; : > "$T/cf"; touch "$T/home/.hushfleet-attach"
-  out=$(env -u TMUX HOME="$T/home" SSH_TTY=/dev/ttys999 zsh -f -i -c ". '$T/sh/fleet-login.zsh'; echo AFTER" 2>&1)
-  [ "$(grep -c CF "$T/cf")" = 0 ] && [ "$out" = "INTRO
-AFTER" ] && ok "hush file .hushfleet-attach → banner, no cf" || bad "hushfleet-attach: $out"
+  [ "$fn" = 0 ] && [ "$out" = AFTER ] && ok "non-interactive (scp/rsync/ssh cmd) → nothing" \
+    || bad "non-interactive: client ${fn}× out=$out"
+  : > "$T/calls"; touch "$T/home/.hushfleet"
+  out=$(env -u TMUX HOME="$T/home" SSH_TTY=/dev/ttys999 zsh -f -i -c ". '$T/r/shell/fleet-login.zsh'; echo AFTER" 2>&1)
+  [ ! -s "$T/calls" ] && [ "$out" = AFTER ] && ok "hush file .hushfleet → nothing" || bad "hushfleet: $out"
+  rm -f "$T/home/.hushfleet"; : > "$T/calls"; touch "$T/home/.hushfleet-attach"
+  out=$(env -u TMUX HOME="$T/home" SSH_TTY=/dev/ttys999 zsh -f -i -c ". '$T/r/shell/fleet-login.zsh'; echo AFTER" 2>&1)
+  [ ! -s "$T/calls" ] && [ "$out" = "INTRO
+AFTER" ] && ok "hush file .hushfleet-attach → banner, nothing run" || bad "hushfleet-attach: $out"
   rm -f "$T/home/.hushfleet-attach"
-  # a cf already defined (cw.zsh sourced earlier in .zshrc) is used, not re-sourced
-  : > "$T/cf"
+  # a cf defined earlier in .zshrc is neither called nor needed
+  : > "$T/calls"
   out=$(env -u TMUX HOME="$T/home" SSH_TTY=/dev/ttys999 zsh -f -i -c \
-        "cf() { echo MINE; }; . '$T/sh/fleet-login.zsh'" 2>&1)
-  [ "$(grep -c CF "$T/cf")" = 0 ] && [ "$out" = "INTRO
-MINE" ] && ok "an existing cf is kept" || bad "existing cf: $out"
-  # nothing but cf leaks into the login shell
-  out=$(env -u TMUX HOME="$T/home" zsh -f -i -c ". '$T/sh/fleet-login.zsh' >/dev/null; echo \"\${here-unset}\"" 2>&1)
-  [ "$out" = unset ] && ok "no helper variable leaks" || bad "leaked here=$out"
+        "cf() { echo MINE; }; . '$T/r/shell/fleet-login.zsh'" 2>&1)
+  [ "$(cat "$T/calls")" = "FLEET " ] && [ "$out" = INTRO ] && ok "a defined cf is not called" || bad "defined cf: $out"
+  # nothing leaks into the login shell — no helper variable, no cf
+  out=$(env -u TMUX HOME="$T/home" zsh -f -i -c ". '$T/r/shell/fleet-login.zsh' >/dev/null; echo \"\${here-unset} \${+functions[cf]}\"" 2>&1)
+  [ "$out" = "unset 0" ] && ok "no helper variable or cf leaks" || bad "leaked: $out"
+  # cf (shell/cw.zsh) is folded into fleet: one line saying so, then bin/fleet
+  cfrun() { : > "$T/calls"; out=$(env -u TMUX HOME="$T/home" zsh -f -c ". '$T/r/shell/cw.zsh'; cf $*" 2>&1); }
+  cfrun
+  [ "$(cat "$T/calls")" = "FLEET " ] && ok "cf → bin/fleet" || bad "cf calls: $(cat "$T/calls")"
+  case "$out" in *"cf 已并入 fleet"*) ok "cf says it is folded into fleet" ;; *) bad "cf notice: $out" ;; esac
+  cfrun --guide
+  [ "$(cat "$T/calls")" = "FLEET guide" ] && ok "cf --guide → fleet guide" || bad "cf --guide calls: $(cat "$T/calls")"
+  cfrun o/r
+  [ "$(cat "$T/calls")" = "UP o/r --no-attach
+FLEET " ] && ok "cf o/r → fleet-up --no-attach, then bin/fleet" || bad "cf o/r calls: $(cat "$T/calls")"
+  ! grep -q ATTACH "$T/calls" && ok "cf never attaches directly" || bad "cf attached"
   # the real pair: a non-SSH login's banner is fleet-intro.sh's, byte for byte
   mkdir -p "$T/e/fleets"
   want=$(env -u TMUX FLEET_CONF_DIR="$T/e" sh "$INTRO" 2>&1)

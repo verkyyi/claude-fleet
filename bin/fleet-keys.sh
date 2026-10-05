@@ -166,7 +166,7 @@ print_sheet() {
   key "prefix !" "$(fleet_ui_t keys_prefix_12)"
   key "prefix ?" "$(fleet_ui_t keys_prefix_13)"
   key "F9" "$(fleet_ui_t keys_prefix_14)"
-  key "cf --guide" "$(fleet_ui_t keys_prefix_15)"
+  key "fleet guide" "$(fleet_ui_t keys_prefix_15)"
   key "click ● N" "$(fleet_ui_t keys_prefix_16)"
   key "click ✖ / ▲" "$(fleet_ui_t keys_prefix_17)"
   fi

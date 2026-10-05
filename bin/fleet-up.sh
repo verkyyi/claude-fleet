@@ -28,7 +28,7 @@
 #
 # --no-attach (issue #1165): bring the fleet up and stop — no attach, no client
 # switch. For a script that sets a login up (fleet-login-bootstrap.sh) and must
-# carry on past this line; the login's next `cf` attaches.
+# carry on past this line; the login's next `fleet` opens the client.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
@@ -339,7 +339,7 @@ rm -f "$FLEET_CONF_DIR/fleets/$NAME/current-repo" 2>/dev/null
 # Already inside this fleet: nothing to switch.
 _here=${TMUX:-}; _here=${_here%%,*}; _here=${_here##*/}
 if [ "$NOATTACH" = 1 ]; then
-  echo "fleet-up: not attaching (--no-attach) — later: cf"
+  echo "fleet-up: not attaching (--no-attach) — later: fleet"
 elif [ -n "${TMUX:-}" ] && [ "$_here" = "$SOCK" ]; then
   :
 elif [ -n "${TMUX:-}" ]; then
