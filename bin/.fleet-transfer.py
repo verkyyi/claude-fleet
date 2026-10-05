@@ -481,9 +481,173 @@ def target_ready(bundle, socket_label, pane):
     print(sid)
 
 
+# --- retry records (issue #1669, EPIC #1665 C5) -------------------------------
+# A switch that did not happen because the TARGET needs a person to sign in
+# again — refused up front (#1667) or rolled back with the target's login now
+# refused (#1668) — leaves ONE record per window under handoffs/retry/, holding
+# exactly what `fleet-transfer.sh --retry <dir>` needs to run it again. After
+# the login, fleet-relogin.sh retries every pending record once. States:
+#   pending → retrying → done | failed      (claimed once: never a loop)
+#   pending → cancelled                     (window gone / other conversation / too old)
+#   pending → superseded                    (the window switched some other way)
+# The `pending` FILE beside request.json exists exactly while the state is
+# pending, so the status bar asks «anything waiting?» with a glob, not a fork.
+# Metadata only: no conversation text, no credential.
+RETRY_FIELDS = ('session', 'fid', 'to', 'sid', 'target_file', 'codex_home', 'handoff', 'loop')
+
+
+def retry_root():
+    conf = os.environ.get('FLEET_CONF_DIR', str(Path.home() / '.config/claude-fleet'))
+    return Path(conf) / 'handoffs' / 'retry'
+
+
+def retry_dir(session, fid):
+    return retry_root() / ('%s-%s' % (session, hashlib.sha256(fid.encode()).hexdigest()[:16]))
+
+
+@contextmanager
+def retry_locked(path):
+    import fcntl
+    with open(path / '.lock', 'a') as stream:
+        fcntl.flock(stream, fcntl.LOCK_EX)
+        yield
+
+
+def retry_read(path):
+    try:
+        r = json.loads((path / 'request.json').read_text())
+    except (OSError, ValueError):
+        raise ValueError('no retry request at %s' % path) from None
+    if not isinstance(r, dict):
+        raise ValueError('no retry request at %s' % path)
+    return r
+
+
+def retry_save(path, r, state, detail=''):
+    r.update(state=state, detail=detail, updated_at=time.time())
+    write_json(path / 'request.json', r)
+    flag = path / 'pending'
+    if state == 'pending':
+        flag.touch(mode=0o600)
+    else:
+        flag.unlink(missing_ok=True)
+
+
+def retry_ttl():
+    try:
+        return max(60, int(os.environ.get('FLEET_RELOGIN_RETRY_TTL', '86400')))
+    except ValueError:
+        return 86400
+
+
+def retry_record(a):
+    path = retry_dir(a.session, a.fid)
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with retry_locked(path):
+        try:
+            old = retry_read(path)
+        except ValueError:
+            old = {}
+        if old.get('state') == 'retrying':
+            raise ValueError('a retry of this window is running; not recording another')
+        r = dict(session=a.session, fid=a.fid, window=a.window, handle=a.handle, to=a.to, sid=a.sid,
+                 wait=a.wait, why=a.why, origin=a.origin, bundle=a.bundle, codex_home=a.codex_home,
+                 created_at=time.time(), attempts=0)
+        # Copies, so a planner request dir or a notes file cleaned up meanwhile
+        # cannot take the retry's arguments with it.
+        for key, name in (('target_file', 'target.json'), ('handoff', 'handoff.md'), ('loop', 'loop.json')):
+            src = getattr(a, key)
+            r[key] = ''
+            if src and Path(src).is_file():
+                dst = path / name
+                dst.write_bytes(Path(src).read_bytes())
+                dst.chmod(0o600)
+                r[key] = str(dst)
+        retry_save(path, r, 'pending', a.why)
+    print(path)
+
+
+def retry_line(r):
+    # \x1f, not a tab: bash's `read` collapses runs of a whitespace IFS, so an
+    # empty field (no target file) would shift every field after it.
+    return '\x1f'.join(str(r.get(k) or '').replace('\x1f', ' ').replace('\n', ' ') for k in RETRY_FIELDS)
+
+
+def retry_show(path):
+    """The pending record's arguments, one \\x1f-separated line; refuses anything not pending."""
+    r = retry_read(path)
+    if r.get('state') != 'pending':
+        raise ValueError('retry request is %s, not pending — a request is retried once' % r.get('state'))
+    if time.time() - float(r.get('created_at') or 0) > retry_ttl():
+        with retry_locked(path):
+            retry_save(path, r, 'cancelled', 'expired before the login was fixed')
+        raise ValueError('retry request expired before the login was fixed')
+    print(retry_line(r))
+
+
+def retry_claim(path):
+    """pending → retrying under the record's lock: of two resumes, one runs it."""
+    with retry_locked(path):
+        r = retry_read(path)
+        if r.get('state') != 'pending':
+            raise ValueError('retry request is %s, not pending — a request is retried once' % r.get('state'))
+        r['attempts'] = int(r.get('attempts') or 0) + 1
+        r['retried_at'] = time.time()
+        retry_save(path, r, 'retrying', 'retrying after the login was fixed')
+
+
+def retry_finish(path, state, detail):
+    with retry_locked(path):
+        r = retry_read(path)
+        if state == 'pending':
+            # Not consumed (the source was mid-turn): the claim is given back.
+            r['attempts'] = max(0, int(r.get('attempts') or 0) - 1)
+        retry_save(path, r, state, detail)
+
+
+def retry_list(wait=''):
+    """Pending record dirs, oldest first; `wait` keeps the ones waiting on that
+    login (`<agent>/<profile>`) or on any login of that agent (`<agent>/*`)."""
+    rows = []
+    for flag in retry_root().glob('*/pending'):
+        try:
+            r = retry_read(flag.parent)
+        except ValueError:
+            continue
+        if r.get('state') != 'pending':
+            continue
+        w = str(r.get('wait') or '')
+        if wait and w not in (wait, wait.split('/')[0] + '/*'):
+            continue
+        rows.append((float(r.get('created_at') or 0), str(flag.parent)))
+    for _, path in sorted(rows):
+        print(path)
+
+
+def retry_supersede(session, fid):
+    path = retry_dir(session, fid)
+    if not (path / 'pending').exists():
+        return
+    with retry_locked(path):
+        r = retry_read(path)
+        if r.get('state') == 'pending':
+            retry_save(path, r, 'superseded', 'the window switched before the retry')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
+    c = sub.add_parser('retry-record')
+    for name in ('session', 'fid', 'to', 'sid', 'why'):
+        c.add_argument('--' + name, required=True)
+    for name in ('window', 'handle', 'wait', 'origin', 'bundle', 'target-file', 'codex-home', 'handoff', 'loop'):
+        c.add_argument('--' + name, default='')
+    for name in ('retry-show', 'retry-claim'):
+        c = sub.add_parser(name); c.add_argument('dir', type=Path)
+    c = sub.add_parser('retry-finish'); c.add_argument('dir', type=Path)
+    c.add_argument('state', choices=('pending', 'done', 'failed', 'cancelled')); c.add_argument('detail', nargs='?', default='')
+    c = sub.add_parser('retry-list'); c.add_argument('--wait', default='')
+    c = sub.add_parser('retry-supersede'); c.add_argument('session'); c.add_argument('fid')
     r = sub.add_parser("resolve")
     for name in ("registry", "projects", "worktree"):
         r.add_argument("--" + name, required=True)
@@ -514,7 +678,19 @@ def main():
     c = sub.add_parser('launcher'); c.add_argument('bundle', type=Path); c.add_argument('launch')
     c = sub.add_parser('target-ready'); c.add_argument('bundle', type=Path); c.add_argument('socket'); c.add_argument('pane')
     a = parser.parse_args()
-    if a.command == "resolve":
+    if a.command == 'retry-record':
+        retry_record(a)
+    elif a.command == 'retry-show':
+        retry_show(a.dir)
+    elif a.command == 'retry-claim':
+        retry_claim(a.dir)
+    elif a.command == 'retry-finish':
+        retry_finish(a.dir, a.state, a.detail)
+    elif a.command == 'retry-list':
+        retry_list(a.wait)
+    elif a.command == 'retry-supersede':
+        retry_supersede(a.session, a.fid)
+    elif a.command == "resolve":
         resolve(a.registry, a.projects, a.worktree)
     elif a.command == "source-codex":
         codex_source(a)

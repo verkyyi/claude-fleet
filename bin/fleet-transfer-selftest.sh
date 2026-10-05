@@ -24,7 +24,7 @@ ok() { checks=$((checks+1)); }
 
 IBIN="$WORK/install/bin"; FB="$WORK/fakebin"
 mkdir -p "$IBIN" "$FB" "$WORK/sessions" "$WORK/projects/actual" "$WORK/conf/fleets/$LBL"
-for f in fleet-codex-rpc.py fleet-codex-runtime.py fleet-input.py .fleet-account.py .fleet-failover.py fleet-codex-attention.py fleet-codex-session.py fleet-transfer.sh .fleet-transfer.py .fleet-transfer-wait.py fleet-loop.py fleet-sleep.py fleet_sleep_argv.py fleet_sleep_mcp.py fleet_sleep_park.py fleet-lib.sh usage-lib.sh fleet-lang.sh session-end-hook.sh set-claude-state.sh fleet-hook-conf.sh fleet-account.sh fleet-alerts.sh fleet-daemon-lib.sh; do cp "$BIN/$f" "$IBIN/$f"; done
+for f in fleet-codex-rpc.py fleet-codex-runtime.py fleet-input.py .fleet-account.py .fleet-failover.py fleet-codex-attention.py fleet-codex-session.py fleet-transfer.sh .fleet-transfer.py .fleet-transfer-wait.py fleet-loop.py fleet-sleep.py fleet_sleep_argv.py fleet_sleep_mcp.py fleet_sleep_park.py fleet-lib.sh usage-lib.sh fleet-lang.sh session-end-hook.sh set-claude-state.sh fleet-hook-conf.sh fleet-account.sh fleet-alerts.sh fleet-daemon-lib.sh fleet-relogin.sh; do cp "$BIN/$f" "$IBIN/$f"; done
 export FLEET_CONF_DIR="$WORK/conf" FLEET_CC_SESSIONS_DIR="$WORK/sessions" FLEET_CC_PROJECTS_DIR="$WORK/projects"
 # The fake ccquota (issue #1667): the ONE registered Codex profile, its login
 # state read from a file; no file = no profiles, so every leg that does not set
@@ -35,6 +35,9 @@ cat > "$FB/ccquota" <<SH
 case "\$1 \$2" in
   'codex list') [ -f "$WORK/login-state" ] || { echo '[]'; exit 0; }
      printf '[{"name":"work","home":"%s","account":"codex:acct:1","email":"w@example.invalid","plan":"plus","default":true,"login":{"state":"%s"}}]\n' "$WORK/codex-home" "\$(cat "$WORK/login-state")" ;;
+  # issue #1669: the device-auth login the alert's ↵ runs — here it just succeeds
+  'codex login') [ "\$3" = work ] && [ "\$4" = --device-auth ] || exit 64
+     printf 'Open https://auth.example.invalid/device and enter ABCD-1234\n'; printf 'valid\n' > "$WORK/login-state" ;;
   *) echo '{}' ;;
 esac
 SH
@@ -116,6 +119,8 @@ if [ "$1" = --agent ] && [ "$2" = claude ]; then
 fi
 [ "$1" = --agent ] && [ "$2" = codex ] || exit 90
 [ ! -f "$TRANSFER_TEST_ROOT/fail-target" ] || exit 37
+# issue #1669: the target's credential dies as it starts (a login prompt)
+if [ -f "$TRANSFER_TEST_ROOT/auth-dies" ]; then printf 'reauth_required\n' > "$TRANSFER_TEST_ROOT/login-state"; exit 37; fi
 if [ "${3:-}" = --codex-home ]; then export CODEX_HOME="$4"; fi
 exec "$TRANSFER_TEST_ROOT/fakebin/codex" "$TRANSFER_TEST_ROOT/codex.pl" "$@"
 SH
@@ -380,19 +385,88 @@ ok; [ "$(TM display-message -p -t "$PANE" '#{pane_current_command}')" = sleep ] 
 # profile is valid the same cutover goes through.
 printf 'reauth_required\n' > "$WORK/login-state"
 spawn 52 issue normal
-PKGS=$(ls "$FLEET_CONF_DIR/handoffs" | wc -l | tr -d ' ')
+PKGS=$(find "$FLEET_CONF_DIR/handoffs" -mindepth 1 -maxdepth 1 ! -name retry | wc -l | tr -d ' ')
 transfer --codex-home "$WORK/codex-home" --dry-run && fail 'dry-run onto a reauth_required profile must refuse'
 ok; printf '%s' "$OUT" | grep -q 'target auth: REFUSED · Codex profile needs a verified subscription login: work (reauth_required)' || fail "dry-run must name the login: $OUT"
 transfer --codex-home "$WORK/codex-home" && fail 'cutover onto a reauth_required profile must refuse'
 ok; printf '%s' "$OUT" | grep -q '^fleet-transfer: target-auth: Codex profile needs a verified subscription login: work (reauth_required)' || fail "the refusal must be target-auth: $OUT"
 ok; kill -0 "$PID" && [ -z "$(field cc_agent)" ] && TM capture-pane -p -t "$PANE" | grep -q "Claude ready $SID" || fail 'a refused target must leave the source running, untouched'
-ok; [ "$(ls "$FLEET_CONF_DIR/handoffs" | wc -l | tr -d ' ')" = "$PKGS" ] && ! fleet_rotate_lease_held "$WT" >/dev/null 2>&1 || fail 'a refusal must write no package and take no lease'
+ok; [ "$(find "$FLEET_CONF_DIR/handoffs" -mindepth 1 -maxdepth 1 ! -name retry | wc -l | tr -d ' ')" = "$PKGS" ] && ! fleet_rotate_lease_held "$WT" >/dev/null 2>&1 || fail 'a refusal must write no package and take no lease'
 ok; grep -q $'\ttransfer-refused\t.*reauth_required' "$TMPDIR/.claude-dash/global/alerts.events" 2>/dev/null \
   || fail "a refusal must record a transfer-refused event: $(cat "$TMPDIR/.claude-dash/global/alerts.events" 2>/dev/null)"
+ok; R52=$(ls -d "$FLEET_CONF_DIR/handoffs/retry/$LBL"-* 2>/dev/null | head -n 1) && [ -e "$R52/pending" ] \
+  && grep -q '"origin": "refused"' "$R52/request.json" && grep -q '"wait": "codex/work"' "$R52/request.json" \
+  || fail "a refused manual switch must leave a pending retry record (issue #1669): $(cat "$R52/request.json" 2>/dev/null)"
+ok; grep -q $'\ttransfer-refused\t.*登录后自动重试' "$TMPDIR/.claude-dash/global/alerts.events" || fail 'the refusal event must say it will be retried'
 printf 'valid\n' > "$WORK/login-state"
 transfer --codex-home "$WORK/codex-home" || fail "a valid profile must still cut over: $OUT"
 ok; ! fleet_pid_alive "$PID" && [ "$(field cc_agent)" = codex ] || fail 'the valid-login cutover must switch'
 ok; printf '%s' "$OUT" | grep -q 'codex started' || fail "valid-login cutover output: $OUT"
+ok; [ ! -e "$R52/pending" ] && grep -q '"state": "superseded"' "$R52/request.json" || fail 'a switch done by hand must supersede the waiting retry'
+
+# issue #1669 (EPIC #1665 C5): the TARGET's credential dies as it starts → the
+# switch rolls back AND leaves a retry record; while the login is still dead a
+# resume touches nothing; ↵ re-login (`fleet-relogin.sh login codex/work`, the
+# fake device flow) makes it valid and the SAME conversation is switched — once.
+spawn 53 issue normal
+touch "$WORK/auth-dies"
+transfer --codex-home "$WORK/codex-home" && fail 'a target whose login dies at start must not report success'
+ok; printf '%s' "$OUT" | grep -q '^fleet-transfer: rolled-back:' || fail "it must roll back: $OUT"
+R53=$(printf '%s\n' "$OUT" | sed -n 's/^fleet-transfer: retry recorded: //p')
+python3 - "$R53" <<'PY2' || fail "the rollback must record a pending retry: $OUT"
+import json, pathlib, sys
+d = pathlib.Path(sys.argv[1]); r = json.loads((d/'request.json').read_text())
+assert r['state'] == 'pending' and r['origin'] == 'rolled_back' and r['wait'] == 'codex/work', r
+assert r['sid'] == 'source-53' and r['to'] == 'codex' and r['why'].startswith('target-auth: '), r
+assert (d/'pending').exists() and oct(d.stat().st_mode & 0o777) == '0o700'
+PY2
+ok; grep -q $'\ttransfer-rolled-back\t.*登录后自动重试' "$TMPDIR/.claude-dash/global/alerts.events" || fail 'the rollback event must say it will be retried'
+rm "$WORK/auth-dies"
+BACK=$(fleet_pane_claude_pid "$PANE" "$LBL" 2>/dev/null) || fail 'source must be back after the rollback'
+OUT=$(bash "$IBIN/fleet-relogin.sh" resume 2>&1) || fail "resume: $OUT"
+ok; printf '%s' "$OUT" | grep -q 'still waiting' && [ -e "$R53/pending" ] && kill -0 "$BACK" && [ -z "$(field cc_agent)" ] \
+  || fail "a resume while the login is still dead must leave everything as it is: $OUT"
+bash "$IBIN/fleet-transfer.sh" --retry "$R53" >/dev/null 2>&1; rc=$?
+ok; [ "$rc" = 3 ] && [ -e "$R53/pending" ] || fail "--retry on a still-dead login must exit 3 and stay pending (rc=$rc)"
+# a slow runner: the retry child boots Codex under the same wait as any cutover
+OUT=$(FLEET_TRANSFER_BOOT_WAIT=10 bash "$IBIN/fleet-relogin.sh" login codex/work </dev/null 2>&1) || fail "re-login: $OUT"
+ok; printf '%s' "$OUT" | grep -q 'https://auth.example.invalid/device' && printf '%s' "$OUT" | grep -q '已自动接着切换' \
+  || fail "the re-login must show the device link and then switch: $OUT
+--- retry transfer.log:
+$(cat "$R53/transfer.log" "$R53/retry.err" 2>&1)"
+ok; ! fleet_pid_alive "$BACK" && [ "$(field cc_agent)" = codex ] && [ "$(field source_session_id)" = source-53 ] \
+  || fail "after the login the same conversation must be on Codex: $(TM capture-pane -p -t "$PANE")"
+python3 - "$R53" <<'PY2' || fail 'the retried record must be done, attempted once'
+import json, pathlib, sys
+d = pathlib.Path(sys.argv[1]); r = json.loads((d/'request.json').read_text())
+assert r['state'] == 'done' and r['attempts'] == 1 and not (d/'pending').exists(), r
+PY2
+ok; grep -q $'\ttransfer-retried\t' "$TMPDIR/.claude-dash/global/alerts.events" || fail 'a landed retry must leave a transfer-retried event'
+OUT=$(bash "$IBIN/fleet-relogin.sh" resume 2>&1)
+ok; printf '%s' "$OUT" | grep -q 'no switch was waiting' || fail "a second resume must find nothing: $OUT"
+OUT=$(bash "$IBIN/fleet-transfer.sh" --retry "$R53" 2>&1) && fail 'a done record must not be retried'
+ok; printf '%s' "$OUT" | grep -q 'not pending' || fail "a second --retry must say it was retried already: $OUT"
+
+# …and a retry that fails AGAIN is final: no new record, `failed`, never a loop.
+printf 'reauth_required\n' > "$WORK/login-state"
+spawn 54 issue normal
+transfer --codex-home "$WORK/codex-home" && fail 'refused'
+R54=$(printf '%s\n' "$OUT" | sed -n 's/^fleet-transfer: retry recorded: //p')
+ok; [ -e "$R54/pending" ] || fail "the refusal must record a retry: $OUT"
+printf 'valid\n' > "$WORK/login-state"; touch "$WORK/auth-dies"
+OUT=$(bash "$IBIN/fleet-relogin.sh" resume 2>&1)
+ok; printf '%s' "$OUT" | grep -q '重试失败，不再重试' || fail "a failing retry must say it is final: $OUT"
+ok; grep -q '"state": "failed"' "$R54/request.json" && [ ! -e "$R54/pending" ] \
+  && [ -z "$(ls "$FLEET_CONF_DIR"/handoffs/retry/*/pending 2>/dev/null)" ] || fail "a failed retry must not re-record: $(cat "$R54/request.json")"
+BACK=$(fleet_pane_claude_pid "$PANE" "$LBL" 2>/dev/null) || BACK=''
+ok; [ -n "$BACK" ] && [ "$(fleet_cc_session_id "$BACK")" = source-54 ] || fail 'the failed retry must still roll the source back'
+rm "$WORK/auth-dies"; printf 'valid\n' > "$WORK/login-state"
+PKGS=$(ls "$FLEET_CONF_DIR/handoffs" | wc -l | tr -d ' ')
+OUT=$(bash "$IBIN/fleet-relogin.sh" resume 2>&1)
+ok; printf '%s' "$OUT" | grep -q 'no switch was waiting' && kill -0 "$BACK" && [ -z "$(field cc_agent)" ] \
+  && [ "$(ls "$FLEET_CONF_DIR/handoffs" | wc -l | tr -d ' ')" = "$PKGS" ] \
+  || fail "after a failed retry nothing runs again, even once the login is fine: $OUT"
+ok; grep -q $'\ttransfer-retry-failed\t' "$TMPDIR/.claude-dash/global/alerts.events" || fail 'a failed retry must leave a transfer-retry-failed event'
 rm -f "$WORK/login-state"
 
 spawn 46 raw normal

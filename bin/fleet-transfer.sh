@@ -4,6 +4,7 @@
 # Usage: fleet-transfer.sh --session <fleet> --window <handle|name|@id> --to claude|codex
 #                         [--handoff <notes.md>] [--loop <spec.json>] [--codex-home DIR]
 #                         [--dry-run | --prepare-only | --after-turn]
+#        fleet-transfer.sh --retry <retry-request-dir>
 #
 # --dry-run       Resolve exact provenance and print the plan; write nothing.
 # --prepare-only  Save the handoff package; leave Claude and tmux unchanged.
@@ -12,6 +13,9 @@
 # --loop          Explicit recurring prompt + interval to continue on Codex.
 # --handoff       Optional source-agent notes. Without notes, Codex reconstructs
 #                 the task from the captured conversation and current git state.
+# --retry         Run a switch that a dead TARGET login stopped (issue #1669) once
+#                 more, with its original arguments: exit 0 switched, 3 the target
+#                 still cannot log in (left pending), 1 failed (never retried again).
 #
 # Supports Claude → Codex and Codex context cycling. No bulk mode, transcript guessing, git mutation,
 # automatic source restart, or forced agent termination. A cutover requires @claude_state
@@ -30,6 +34,12 @@
 # pane retained — one rollback, never a loop. For FLEET_TRANSFER_ROLLBACK_HOLD
 # (1800s) after a rollback an AUTOMATIC cutover (quota failover, after-turn) on
 # that window refuses; a manual one, or `tmux set -wu @transfer_rolled_back`, goes.
+# Either stop caused by the TARGET's login — a target-auth refusal of a switch the
+# planner does not own, or a rollback after which the target's login is refused —
+# leaves a retry record (issue #1669, EPIC #1665 C5): handoffs/retry/<fleet>-<id>/,
+# one per window. Once that login is fixed, fleet-relogin.sh runs `--retry <dir>`:
+# the same arguments, the same conversation (session id checked), ONCE — the retry
+# writes no record of its own, so a retry that fails again ends `failed`.
 # Run an immediate cutover from another pane/terminal. Inside the source agent,
 # use --after-turn as the final tool call, then end the turn.
 #
@@ -52,12 +62,12 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 HELPER="$BIN/.fleet-transfer.py"
 
 die() { FAILURE=$*; printf 'fleet-transfer: %s\n' "$*" >&2; exit 1; }
-usage() { sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; }
 SESS='' TARGET='' TO='' NOTES='' LOOP='' DRY=0 PREPARE=0 AFTER=0 EXPECT='' REQUEST='' CODEX_TARGET_HOME='' REQUIRE_IDLE=0
-TARGET_FILE='' QUOTA_REQUEST='' DRAFT='' INSPECT=0 NATIVE=0
+TARGET_FILE='' QUOTA_REQUEST='' DRAFT='' INSPECT=0 NATIVE=0 RETRY='' EXPECT_SID=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --session|--window|--to|--handoff|--loop|--expected-source|--armed-request|--target-file|--quota-request|--draft-file|--codex-home)
+    --session|--window|--to|--handoff|--loop|--expected-source|--armed-request|--target-file|--quota-request|--draft-file|--codex-home|--retry|--expected-session-id)
       [ "$#" -ge 2 ] && [ -n "$2" ] || die "$1 needs a value"
       case "$1" in
         --session) SESS=$2 ;;
@@ -67,6 +77,7 @@ while [ "$#" -gt 0 ]; do
         --target-file) TARGET_FILE=$2 ;; --quota-request) QUOTA_REQUEST=$2 ;; --draft-file) DRAFT=$2 ;;
         --codex-home) CODEX_TARGET_HOME=$2 ;;
         --expected-source) EXPECT=$2 ;; --armed-request) REQUEST=$2 ;;
+        --retry) RETRY=$2 ;; --expected-session-id) EXPECT_SID=$2 ;;
       esac
       shift 2 ;;
     --dry-run) DRY=1; shift ;;
@@ -79,6 +90,106 @@ while [ "$#" -gt 0 ]; do
     *) die "unknown argument $1 (exactly one --window is required)" ;;
   esac
 done
+# target_auth — may the TARGET account start an agent? (issue #1667, EPIC #1665 C3)
+# Asked BEFORE anything is written and again right before /exit, so a target whose
+# login ccquota has marked reauth_required — or a Claude label marked by
+# mark-reauth, or whose hub token expired — is refused while the source still
+# runs. 2026-10-05 was the opposite order: source /exit'ed, Codex at a login
+# prompt, conversation gone. The ONE judge is fleet-account.sh target-auth
+# (check-target for the planner's pinned target); `unknown` — no ccquota registry,
+# multi-account off — is NOT a refusal, the launch then behaves as it always did,
+# but a judge that cannot answer at all is (never guess a login). On 0 TARGET_AUTH
+# carries the verdict line; on 1 TARGET_AUTH_WHY carries the reason, and
+# TARGET_AUTH_WAIT the login a retry waits on (`<agent>/<profile>`, `<agent>/*`
+# for a pool with none usable — issue #1669). Defined before anything else runs:
+# `--retry` asks it before any window is resolved.
+TARGET_AUTH='' TARGET_AUTH_WHY='' TARGET_AUTH_WAIT=''
+_json_field() { printf '%s\n' "$1" | sed -n "s/.*\"$2\": *\"\([^\"]*\)\".*/\1/p" | sed -n '1p'; }
+target_auth() {
+  local out rc=0 verdict reason pin
+  TARGET_AUTH='' TARGET_AUTH_WHY='' TARGET_AUTH_WAIT=''
+  if [ -n "$TARGET_FILE" ]; then
+    pin=$(cat "$TARGET_FILE" 2>/dev/null)
+    TARGET_AUTH_WAIT="$TO/$(_json_field "$pin" profile)"; [ "$TARGET_AUTH_WAIT" != "$TO/" ] || TARGET_AUTH_WAIT="$TO/$(_json_field "$pin" label)"
+    out=$(bash "$BIN/fleet-account.sh" check-target "$TARGET_FILE" 2>&1 >/dev/null) || rc=$?
+    if [ "$rc" = 0 ]; then TARGET_AUTH="ok · pinned $(_json_field "$(cat "$TARGET_FILE" 2>/dev/null)" key)"; return 0; fi
+    out=${out##*fleet-account: }; TARGET_AUTH_WHY="${out#target-auth: }"
+    [ -n "$TARGET_AUTH_WHY" ] || TARGET_AUTH_WHY='pinned target is unavailable'
+    return 1
+  fi
+  out=$(bash "$BIN/fleet-account.sh" target-auth --agent "$TO" ${CODEX_TARGET_HOME:+--home "$CODEX_TARGET_HOME"} 2>&1) || rc=$?
+  verdict=$(_json_field "$out" verdict); reason=$(_json_field "$out" reason)
+  TARGET_AUTH_WAIT="$TO/$(_json_field "$out" profile)"; [ "$TARGET_AUTH_WAIT" != "$TO/" ] || TARGET_AUTH_WAIT="$TO/$(_json_field "$out" label)"
+  case "$verdict" in
+    ok) TARGET_AUTH="ok · $(_json_field "$out" key)"; return 0 ;;
+    unknown) TARGET_AUTH="unknown · $reason"; return 0 ;;
+    refuse) TARGET_AUTH_WHY="$reason"; return 1 ;;
+  esac
+  [ "$TARGET_AUTH_WAIT" != "$TO/" ] || TARGET_AUTH_WAIT="$TO/*"
+  TARGET_AUTH_WHY="the login check itself failed: $(printf '%s\n' "$out" | sed -n '/./{p;q;}')"
+  return 1
+}
+# retry_main <dir> — `--retry` (issue #1669, EPIC #1665 C5): run a switch a dead
+# TARGET login stopped once more, with the arguments its record kept. The target
+# is asked first — still refused ⇒ exit 3 and the record stays pending (nothing
+# consumed, the next login retries it). Then the record is CLAIMED (pending →
+# retrying, atomic: of two resumes one runs it) and this script runs again as a
+# child with FLEET_TRANSFER_RETRYING set, so the child writes no record of its
+# own: a retry that is refused or rolls back again ends `failed` — once, never a
+# loop. A source mid-turn is the one outcome that gives the claim back (pending).
+# The window is found by its lifelong @fleet_id, and the child refuses unless it
+# still runs the SAME conversation (--expected-session-id).
+retry_main() {
+  local dir=$1 line sess fid sid tf ch notes loop win rc out why
+  dir=$(cd "$dir" 2>/dev/null && pwd -P) || die "--retry: no retry request at $1"
+  line=$(python3 "$HELPER" retry-show "$dir") || exit 1
+  IFS=$'\x1f' read -r sess fid TO sid tf ch notes loop <<< "$line"
+  case "$sess" in ''|*[!A-Za-z0-9_-]*) die '--retry: the request names no valid fleet' ;; esac
+  [ -f "$FLEET_CONF_DIR/fleets/$sess/conf" ] && fleet_load_conf "$sess" || die "--retry: cannot load fleet $sess"
+  SOCK=$(fleet_socket "$sess")
+  if ! win=$(fleet_win_for_fid "$fid" "$SOCK") || [ -z "$win" ]; then
+    python3 "$HELPER" retry-finish "$dir" cancelled 'the window is gone' || :
+    die '--retry: the window that was to switch is gone; cancelled'
+  fi
+  TARGET_FILE=$tf CODEX_TARGET_HOME=$ch
+  # A positive `ok` only: the record exists because the judge once said refuse,
+  # so a judge that cannot answer now (`unknown`) is no evidence of a fixed login.
+  if ! target_auth || [ "${TARGET_AUTH%% *}" != ok ]; then
+    printf 'fleet-transfer: retry waits: %s still cannot log in · %s\n' "$TARGET_AUTH_WAIT" "${TARGET_AUTH_WHY:-$TARGET_AUTH}" >&2
+    exit 3
+  fi
+  python3 "$HELPER" retry-claim "$dir" || exit 1
+  set -- --session "$sess" --window "$win" --to "$TO" --expected-session-id "$sid"
+  [ -z "$tf" ] || set -- "$@" --target-file "$tf"
+  [ -z "$ch" ] || set -- "$@" --codex-home "$ch"
+  [ -z "$notes" ] || [ ! -s "$notes" ] || set -- "$@" --handoff "$notes"
+  [ -z "$loop" ] || [ ! -s "$loop" ] || set -- "$@" --loop "$loop"
+  out=$(FLEET_TRANSFER_RETRYING="$dir" bash "$0" "$@" 2>&1); rc=$?
+  printf '%s\n' "$out" > "$dir/transfer.log"; chmod 600 "$dir/transfer.log" 2>/dev/null
+  printf '%s\n' "$out"
+  if [ "$rc" = 0 ]; then
+    python3 "$HELPER" retry-finish "$dir" 'done' "switched to $TO after the login was fixed" || :
+    [ -x "$BIN/fleet-alerts.sh" ] && bash "$BIN/fleet-alerts.sh" event -L "$SOCK" transfer-retried \
+      "$(TM_RETRY "$win" '#{?@wid,#{@wid},#{window_name}}'): 重新登录后已自动切到 $TO · switched after the login was fixed" >/dev/null 2>&1 || :
+    return 0
+  fi
+  case "$out" in
+    *'source is not safely idle'*)
+      python3 "$HELPER" retry-finish "$dir" pending 'the source was mid-turn; retried at the next login check' || :
+      printf 'fleet-transfer: retry deferred: the source is mid-turn; still pending\n' >&2
+      exit 3 ;;
+  esac
+  why=$(printf '%s\n' "$out" | grep '^fleet-transfer: ' | tail -n 1); why=${why#fleet-transfer: }
+  python3 "$HELPER" retry-finish "$dir" failed "${why:-the retry did not switch (exit $rc)}" || :
+  [ -x "$BIN/fleet-alerts.sh" ] && bash "$BIN/fleet-alerts.sh" event -L "$SOCK" transfer-retry-failed \
+    "$(TM_RETRY "$win" '#{?@wid,#{@wid},#{window_name}}'): 登录后重试切换失败，不再重试 · retry failed: ${why:-exit $rc}" >/dev/null 2>&1 || :
+  exit 1
+}
+TM_RETRY() { tmux -L "$SOCK" display-message -p -t "$1" "$2" 2>/dev/null; }
+if [ -n "$RETRY" ]; then
+  [ -z "$TARGET$TO$SESS" ] || die '--retry takes its arguments from the request; pass nothing else'
+  retry_main "$RETRY"; exit $?
+fi
 [ -n "$TARGET" ] || { usage >&2; exit 2; }
 case "$TO" in claude|codex) ;; *) usage >&2; exit 2;; esac
 [ "$((DRY + PREPARE + AFTER))" -le 1 ] || die '--dry-run, --prepare-only and --after-turn are mutually exclusive'
@@ -146,6 +257,7 @@ SID=${RESOLVED%%$'\n'*}; TRANSCRIPT=${RESOLVED#*$'\n'}
 fi
 [ -n "$CODEX_TARGET_HOME" ] || CODEX_TARGET_HOME="$CODEX_SOURCE_HOME"
 [ -z "$EXPECT" ] || [ "$EXPECT" = "$PANE:$PID:$SID" ] || die 'the armed source pane/process/session changed; leaving it alone'
+[ -z "$EXPECT_SID" ] || [ "$EXPECT_SID" = "$SID" ] || die "retry: the window now runs a different conversation ($SID, not $EXPECT_SID); not switching it"
 HANDLE=$(opt '#{@wid}'); ORIGIN=$(opt '#{@origin}'); PREVIOUS=$(opt '#{@handoff_manifest}')
 STATE=$(opt '#{@claude_state}')
 if [ "$INSPECT" = 1 ]; then
@@ -181,44 +293,31 @@ source_ready() {
     esac
   fi
 }
-# target_auth — may the TARGET account start an agent? (issue #1667, EPIC #1665 C3)
-# Asked BEFORE anything is written and again right before /exit, so a target whose
-# login ccquota has marked reauth_required — or a Claude label marked by
-# mark-reauth, or whose hub token expired — is refused while the source still
-# runs. 2026-10-05 was the opposite order: source /exit'ed, Codex at a login
-# prompt, conversation gone. The ONE judge is fleet-account.sh target-auth
-# (check-target for the planner's pinned target); `unknown` — no ccquota registry,
-# multi-account off — is NOT a refusal, the launch then behaves as it always did,
-# but a judge that cannot answer at all is (never guess a login). On 0 TARGET_AUTH
-# carries the verdict line; on 1 TARGET_AUTH_WHY carries the reason.
-TARGET_AUTH='' TARGET_AUTH_WHY=''
-_json_field() { printf '%s\n' "$1" | sed -n "s/.*\"$2\": *\"\([^\"]*\)\".*/\1/p" | sed -n '1p'; }
-target_auth() {
-  local out rc=0 verdict reason
-  TARGET_AUTH='' TARGET_AUTH_WHY=''
-  if [ -n "$TARGET_FILE" ]; then
-    out=$(bash "$BIN/fleet-account.sh" check-target "$TARGET_FILE" 2>&1 >/dev/null) || rc=$?
-    if [ "$rc" = 0 ]; then TARGET_AUTH="ok · pinned $(_json_field "$(cat "$TARGET_FILE" 2>/dev/null)" key)"; return 0; fi
-    out=${out##*fleet-account: }; TARGET_AUTH_WHY="${out#target-auth: }"
-    [ -n "$TARGET_AUTH_WHY" ] || TARGET_AUTH_WHY='pinned target is unavailable'
-    return 1
-  fi
-  out=$(bash "$BIN/fleet-account.sh" target-auth --agent "$TO" ${CODEX_TARGET_HOME:+--home "$CODEX_TARGET_HOME"} 2>&1) || rc=$?
-  verdict=$(_json_field "$out" verdict); reason=$(_json_field "$out" reason)
-  case "$verdict" in
-    ok) TARGET_AUTH="ok · $(_json_field "$out" key)"; return 0 ;;
-    unknown) TARGET_AUTH="unknown · $reason"; return 0 ;;
-    refuse) TARGET_AUTH_WHY="$reason"; return 1 ;;
-  esac
-  TARGET_AUTH_WHY="the login check itself failed: $(printf '%s\n' "$out" | sed -n '/./{p;q;}')"
-  return 1
-}
 # refuse_target — the one exit for a target-auth refusal on a real cutover: the
 # planner's `refused.json` (its request dir, so failover-status can name the
 # reason), a ▲ row in the alerts popup (a toast nobody was looking at is gone in
 # 2s, #1617), then die. Nothing has been written to the pane or the worktree at
 # either call site; after the lease is held the EXIT trap tidies as for any die.
+# record_retry <origin> — leave the retry record for a switch the TARGET's login
+# stopped (issue #1669), and say so in RETRY_NOTE. Never from a retry's own run
+# (FLEET_TRANSFER_RETRYING: that is what keeps a retry from looping), never for a
+# dry run or a prepare. A failure to record never changes the exit it rides on.
+RETRY_NOTE=''
+record_retry() {
+  local fid dir
+  [ -z "${FLEET_TRANSFER_RETRYING:-}" ] && [ "$DRY" != 1 ] && [ "$PREPARE" != 1 ] || return 0
+  fid=$(fleet_window_fid "$SESS" "$WIN" "$SOCK") || return 0
+  dir=$(python3 "$HELPER" retry-record --session "$SESS" --fid "$fid" --window "$WIN" --handle "${HANDLE:-$WIN}" \
+    --to "$TO" --sid "$SID" --why "target-auth: $TARGET_AUTH_WHY" --wait "$TARGET_AUTH_WAIT" --origin "$1" \
+    --bundle "${BUNDLE:-}" --target-file "$TARGET_FILE" --codex-home "$CODEX_TARGET_HOME" \
+    --handoff "$NOTES" --loop "$LOOP" 2>/dev/null) || return 0
+  RETRY_NOTE=" · 登录后自动重试 · retried after $TARGET_AUTH_WAIT logs in again"
+  printf 'fleet-transfer: retry recorded: %s\n' "$dir" >&2
+}
 refuse_target() {
+  # A refusal the failover planner owns is retried by the planner (it re-picks a
+  # target every tick); any other is retried once the login is fixed.
+  [ -n "$QUOTA_REQUEST" ] || record_retry refused
   if [ -n "$QUOTA_REQUEST" ] && [ -d "$QUOTA_REQUEST" ]; then
     python3 - "$QUOTA_REQUEST/refused.json" "$TARGET_AUTH_WHY" "$TO" <<'PY' 2>/dev/null || :
 import json, os, sys, time
@@ -229,7 +328,7 @@ with os.fdopen(fd, 'w') as stream:
 PY
   fi
   [ -x "$BIN/fleet-alerts.sh" ] && bash "$BIN/fleet-alerts.sh" event -L "$SOCK" transfer-refused \
-    "${HANDLE:-$WIN}: 未切换：$TO 需要重新登录 · not switched: $TARGET_AUTH_WHY" >/dev/null 2>&1 || :
+    "${HANDLE:-$WIN}: 未切换：$TO 需要重新登录 · not switched: $TARGET_AUTH_WHY$RETRY_NOTE" >/dev/null 2>&1 || :
   die "target-auth: $TARGET_AUTH_WHY — not switched; the source keeps running (log in to the target, then retry)"
 }
 # rollback_hold — a window rolled back by issue #1668 within FLEET_TRANSFER_ROLLBACK_HOLD
@@ -505,12 +604,16 @@ rollback() {
   fi
   python3 "$HELPER" state "$BUNDLE" rolled_back "$why; source $SOURCE_AGENT $SID resumed as pid $back" >/dev/null 2>&1 || :
   ROLLED=1
+  # Was it the target's LOGIN (issue #1669)? Ask the one judge again now: a target
+  # that died on a login prompt, or whose credential lapsed after the first ask,
+  # is refused here — and is switched again once someone signs in.
+  target_auth || record_retry rolled_back
   TM set-option -w -t "$WIN" @claude_state "done" 2>/dev/null || :
   TM set-option -w -t "$WIN" @transfer_note "$note" 2>/dev/null || :
   TM set-option -w -t "$WIN" @transfer_rolled_back "$(date +%s)" 2>/dev/null || :
   fleet_hub_nudge
   [ -x "$BIN/fleet-alerts.sh" ] && bash "$BIN/fleet-alerts.sh" event -L "$SOCK" transfer-rolled-back \
-    "${HANDLE:-$WIN}: $note" >/dev/null 2>&1 || :
+    "${HANDLE:-$WIN}: $note$RETRY_NOTE" >/dev/null 2>&1 || :
   printf 'fleet-transfer: rolled-back: %s\n' "$note" >&2
   exit 1
 }
@@ -551,6 +654,9 @@ done
 TM clear-history -t "$PANE" 2>/dev/null || :   # a resume's replay, out of history (#870)
 python3 "$HELPER" state "$BUNDLE" started "$TO identity $CPID; task completion is not implied." || die 'cannot record target startup'
 SUCCESS=1
+# A switch that landed some other way ends a retry still waiting on this window.
+_fid=$(TM show-options -wqv -t "$WIN" @fleet_id 2>/dev/null)
+[ -z "$_fid" ] || python3 "$HELPER" retry-supersede "$SESS" "$_fid" 2>/dev/null || :
 TM set-option -wu -t "$WIN" @transfer_note 2>/dev/null || :
 TM set-option -wu -t "$WIN" @transfer_rolled_back 2>/dev/null || :
 printf '%s started in %s/%s (identity %s). Source provenance: %s\n' "$TO" "$SESS" "${HANDLE:-$WIN}" "$CPID" "$BUNDLE/manifest.json"

@@ -25,7 +25,7 @@
 #   {"id":…,"severity":alarm|warning|needs|healed,"subject":…,"condition":…,
 #    "value":…,"since":<epoch>,"action":…,"healed_at":<epoch|0>,
 #    "target":…,"detail":…}
-# action ∈ accounts | kick-collect | kick-daemons | disk | machine | jump | event  (every
+# action ∈ accounts | relogin | kick-collect | kick-daemons | disk | machine | jump | event  (every
 # row has one: an alert with nothing to do about it is demoted or deleted, not shown).
 #
 # EVENTS (issue #1617): a background script never flashes a `display-message`
@@ -195,6 +195,12 @@ _fa_hub_flash() {
 # in that state is also an account-reauth EVENT — the flash kind — which is
 # never a live row of its own (see the events loop): the standing row is the
 # alert, the event is the toast plus its line in the history.
+# ↵ on the row signs that profile in again (action `relogin`, target
+# `<agent>/<profile>` → fleet-relogin.sh login, issue #1669). And on every refresh
+# a switch the dead login stopped (handoffs/retry/*/pending — a glob, no fork
+# while there is none) is handed to `fleet-relogin.sh resume`, detached: it
+# retries each one whose target can log in now, so a login fixed ANYWHERE (the
+# popup, another terminal, the hub) finishes the switch within a minute.
 # Degenerate: no .fleet-account.py beside this script (a shell-only client,
 # #1484) ⇒ nothing is refreshed or drawn; no ccquota / no Codex ⇒ the header
 # says `unavailable` and nothing is drawn, retried a minute later.
@@ -213,6 +219,8 @@ _fa_reauth() {
     if ! python3 "$py" logins >/dev/null 2>&1; then
       mkdir -p "${af%/*}" 2>/dev/null
       printf '%s\tunavailable\n' "$now" > "$af.$$" 2>/dev/null && mv -f "$af.$$" "$af" 2>/dev/null
+    else
+      _fa_retry_kick
     fi
   fi
   [ -s "$af" ] || return 0
@@ -221,9 +229,21 @@ _fa_reauth() {
     [ -n "$agent" ] && [ -n "$prof" ] && [ "$st" = reauth_required ] || continue
     key="$agent/$prof"
     text="$agent ${acct:-$prof} needs re-login — run: ${cmd:-sign in again}"
-    _fa_row "account-reauth-$(_fa_stall_id "$agent-$prof")" warning accounts reauth "$prof" "$since" accounts 0 '' "$text"
+    _fa_row "account-reauth-$(_fa_stall_id "$agent-$prof")" warning accounts reauth "$prof" "$since" relogin 0 "$key" "$text"
     case "$old" in *"|$key|"*) ;; *) fleet_alert account-reauth "accounts: $text" ;; esac
   done < <(tail -n +2 "$af")
+}
+
+# _fa_retry_kick — a pending retry record (issue #1669) ⇒ `fleet-relogin.sh resume`,
+# detached; it holds its own one-at-a-time lock and asks each target's login.
+_fa_retry_kick() {
+  local f
+  [ -f "$_FA_BIN/fleet-relogin.sh" ] || return 0
+  for f in "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"/handoffs/retry/*/pending; do
+    [ -e "$f" ] || return 0
+    _fa_detach "bash '$_FA_BIN/fleet-relogin.sh' resume"
+    return 0
+  done
 }
 
 # _fa_clean <s> — a value safe inside a JSON string and a TSV field.
@@ -649,7 +669,7 @@ fleet_alerts_list() {
     r="$su · $co"; [ -n "$va" ] && r="$r · $va"
     [ "$ac" = event ] && r="$de"                  # an event's row IS its text
     case "$ac" in
-      accounts) x='see accounts' ;; kick-collect|kick-daemons) x='restart daemon' ;;
+      accounts) x='see accounts' ;; relogin) x='↵ re-login' ;; kick-collect|kick-daemons) x='restart daemon' ;;
       disk) x='see disk' ;; machine) x='see top' ;; jump) x='↵ go to window' ;; event) x='↵ read' ;; *) x='' ;;
     esac
     tail=""
@@ -804,6 +824,10 @@ fleet_alerts_act() {
   case "$id" in ev-*) fleet_alerts_event_show "$id"; return 0 ;; esac
   case "$ac" in
     accounts) exec bash "$_FA_BIN/usage-modal.sh" ;;
+    relogin)
+      # sign <agent>/<profile> in again, then finish what it stopped (issue #1669)
+      [ -f "$_FA_BIN/fleet-relogin.sh" ] || exec bash "$_FA_BIN/usage-modal.sh"
+      exec bash "$_FA_BIN/fleet-relogin.sh" login "$ta" ;;
     kick-collect)
       tmux display-message 'fleet: dash (collector) restart requested…' 2>/dev/null
       _fa_detach "$self kick kick-collect" ;;
