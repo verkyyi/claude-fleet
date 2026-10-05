@@ -1493,6 +1493,27 @@ fleet_repo_register() {
 #     per-fleet logic against each socket (writes stay on the same `-L` label).
 fleet_socket() { printf '%s' "$1"; }
 
+# fleet_fallback_stamp <socket> — a client about to attach from OUTSIDE tmux:
+# when it came the fallback way (issue #1628 — `fleet` on the person's computer
+# could not open the shell and ssh'd in directly, carrying LC_FLEET_FALLBACK=
+# `<machine>|<reason>`), stamp `@fleet_fallback_reason` = `<tty>|<machine>|<reason>`
+# on that server, so tmux-status.sh draws 直连 <machine>（本地壳不可用：<reason>）
+# for THAT tty's client only. A plain attach on a tty that holds the stamp clears
+# it (a recycled tty never inherits someone's line). No tty, no stamp: nothing.
+fleet_fallback_stamp() {
+  local sk="${1:-}" tt cur fb
+  [ -n "$sk" ] || return 0
+  tt=$(tty 2>/dev/null) || return 0
+  case "$tt" in /dev/*) ;; *) return 0 ;; esac
+  fb=$(printf '%s' "${LC_FLEET_FALLBACK:-}" | tr -d '#\000-\037' | cut -c1-200)
+  case "$fb" in
+    ?*'|'?*) tmux -L "$sk" set -g @fleet_fallback_reason "$tt|$fb" 2>/dev/null ;;
+    *) cur=$(tmux -L "$sk" show -gv @fleet_fallback_reason 2>/dev/null)
+       [ -n "$cur" ] && [ "${cur%%|*}" = "$tt" ] && tmux -L "$sk" set -gu @fleet_fallback_reason 2>/dev/null ;;
+  esac
+  return 0
+}
+
 # ---- the first-login guide (issues #1169 / #1204 / #1215) --------------------
 # The guide is a pinned scratch window running /fleet-onboard. Two halves decide
 # whether it is ALIVE, and both must hold:

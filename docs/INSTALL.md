@@ -608,6 +608,18 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    banner and leaves `cf` for you to type. It replaces any hand-written
    per-account `~/.config/claude-fleet/intro.sh` — delete that copy.
 
+   **The SSH auto-attach is the FALLBACK, not the way in** (issue #1628). From
+   a computer of your own the default is the local shell — run `fleet` there
+   (`curl -fsSL <hub>/install | sh` installs it): the hub's list, its bar and
+   the machine's sessions in one tmux of your own, never an ssh session you
+   type `cf` into. `fleet` ssh's into a machine's own list only on one of four —
+   no tmux / tmux older than 3.2, an iPad or iPhone, the shell failing to
+   start, or you asking (`fleet connect`, `FLEET_SHELL=0`) — and says why: one
+   line in your terminal and the same on that client's bar,
+   `直连 m5（本地壳不可用：<reason>）` (carried as `LC_FLEET_FALLBACK`, which a
+   stock sshd accepts with `AcceptEnv LANG LC_*`). So on a laptop that used to
+   `ssh m5` at login, drop that and run `fleet` instead.
+
    **Machine-local banner lines** (issue #1255) go in `intro.d` hooks, never in
    the repo: every executable in `/usr/local/etc/claude-fleet/intro.d/*` (all
    logins on the machine), then `~/.config/claude-fleet/intro.d/*` (this login),

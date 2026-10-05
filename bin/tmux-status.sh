@@ -18,6 +18,14 @@
 #   ○ 入口 Nm        hub mode, and the hub has been silent past
 #                    FLEET_HUB_SESSIONS_STALE (fleet_status_hub_lost, #1483)
 #   <ctr> ○          FLEET_STATUS_CONTAINER is set and that container is down
+#   直连 m5（本地壳不可用：<reason>）  this CLIENT came in the fallback way — ssh
+#                    straight into this machine's list, not the shell (issue #1628):
+#                    `fb=` is `<client_tty>:<@fleet_fallback_reason>`, the option
+#                    `<tty>|<machine>|<reason>` fleet-attach.sh stamped from the
+#                    ssh's LC_FLEET_FALLBACK; drawn only for the tty that stamped
+#                    it, first (narrow: 直连 m5（<reason>）)
+#   <machine> · 中转   (hub mode) that proxy window's connection is on the hub
+#                    relay (`@remote_route relay`, `rr=`, fleet-remote-view.sh)
 # Narrower than 60 columns (`cw=`, the client's width) the account's label goes
 # and only the highest window is drawn, so a 54-column iPad / iPhone in portrait
 # keeps the bad news whole. 本机名, 负载, 内存, 盘 and ● 入口 are not drawn while
@@ -48,7 +56,7 @@ _fs="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"; [ -f "$_fs/fleet.settings" 
 # The current window, as the conf's status-right passes it (issue #1482). Absent
 # (an older conf) → every value empty → never hub mode.
 STATUS_SESS='' STATUS_REMOTE='' STATUS_ACCT='' STATUS_WSF='' STATUS_WSCF='' STATUS_WSAVED=''
-STATUS_CW='' STATUS_RL5='' STATUS_RL7=''
+STATUS_CW='' STATUS_RL5='' STATUS_RL7='' STATUS_RR='' STATUS_FB=''
 for _a in "$@"; do
     case "$_a" in
         sess=*)   STATUS_SESS=${_a#sess=} ;;
@@ -61,6 +69,8 @@ for _a in "$@"; do
         cw=*)     STATUS_CW=${_a#cw=} ;;
         rl5=*)    STATUS_RL5=${_a#rl5=} ;;
         rl7=*)    STATUS_RL7=${_a#rl7=} ;;
+        rr=*)     STATUS_RR=${_a#rr=} ;;
+        fb=*)     STATUS_FB=${_a#fb=} ;;
     esac
 done
 
@@ -309,6 +319,7 @@ status_hub_render() {
     have=0; fleet_status_hub_node "$FSN_NODE" && have=1
     if [ "$FSN_KIND" != local ]; then
         MACH_SEG="${BLUE}${FSN_NODE}"
+        [ "$STATUS_RR" = relay ] && MACH_SEG="${MACH_SEG} · 中转"
         if [ -n "$HUB_SEG" ]; then
             :   # the hub silent (#1483): ○ 入口 says it — nothing here hears that machine
         elif [ "$have" = 1 ] && [ "$HN_AV" != online ]; then
@@ -336,10 +347,22 @@ status_hub_render() {
     return 0
 }
 
+# --- The fallback's line (issue #1628): this client's tty, the stamp's tty.
+FB_SEG=''
+if [ -n "$STATUS_FB" ]; then
+    _fbc=${STATUS_FB%%:*}; _fbr=${STATUS_FB#*:}; _fbt=${_fbr%%|*}; _fbr=${_fbr#*|}
+    _fbm=${_fbr%%|*}; _fbr=${_fbr#*|}
+    if [ -n "$_fbc" ] && [ "$_fbc" = "$_fbt" ] && [ -n "$_fbm" ] && [ -n "$_fbr" ]; then
+        if [ "$STATUS_NARROW" = 1 ]; then FB_SEG="${YELLOW}直连 ${_fbm}（${_fbr}）"
+        else FB_SEG="${YELLOW}直连 ${_fbm}（本地壳不可用：${_fbr}）"; fi
+    fi
+fi
+
 # --- Output: the segments in their order, nothing at all while all is well.
 MACH_SEG='' HUB_SEG=''
 [ "$HUB_MODE" = 1 ] && status_hub_render
 status_account
+status_seg "$FB_SEG"
 status_seg "$MACH_SEG"
 status_seg "$_sq"
 status_seg "$gh_seg"

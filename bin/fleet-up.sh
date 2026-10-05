@@ -346,5 +346,6 @@ elif [ -n "${TMUX:-}" ]; then
   tmux detach-client -E "exec tmux -L '$SOCK' attach -t '$NAME'" 2>/dev/null \
     || echo "          attach:  tmux -L $SOCK attach -t $NAME"
 else
+  fleet_fallback_stamp "$SOCK"   # the fallback way in says why on its bar (#1628)
   tmux -L "$SOCK" attach -t "$NAME" || echo "          attach:  tmux -L $SOCK attach -t $NAME"
 fi

@@ -31,7 +31,8 @@
 #                    `jump` moves the SAME list pane into it; m5's window stays
 #   F. bar         — tmux-status.sh with the shell's env and the m4 window's args
 #                    renders hub mode: the m4 chip (online, off the #node line —
-#                    no hub_nodes), ● 入口; the window list is blanked
+#                    no hub_nodes), ● 入口; the window list is blanked; `rr=relay`
+#                    (the window on the hub relay, #1628) → `m4 · 中转`
 #   G. lost        — hub_ok aged past FLEET_HUB_SESSIONS_STALE: the rows are still
 #                    listed (dimmed, `!`), the bar says ○ 入口 失联
 #   H. ssh mode    — `fleet-shell.sh ssh` turns a ControlMaster call into
@@ -328,10 +329,11 @@ eq 'E: m5 window keeps its ssh pane' 1 "$(ts list-panes -t "$w1" -F x | grep -c 
 # ================================================================================
 # F. the bar — tmux-status.sh in the shell's environment, for the m4 window
 # ================================================================================
-bar() {  # <window> — the bar as the conf's status-right runs it
+bar() {  # <window> [k=v…] — the bar as the conf's status-right runs it
+  local w=$1; shift
   ( cd "$WORK/cache/bin" && FLEET_SHELL=1 FLEET_SIDEBAR_SOURCE=hub CCQUOTA_FLEET=1 TMPDIR="$WORK/cache/tmp" FLEET_CONF_DIR="$FLEET_CONF_DIR" FLEET_NODE_ALIASES='macmini=m5 mini2=m4' \
     TMUX="$(ts display-message -p '#{socket_path}'),0,0" HOSTNAME=laptop \
-    bash "$WORK/cache/bin/tmux-status.sh" "sess=$SESS" "win=$1" "remote=$(ts show-options -wqv -t "$1" @remote)" acct= wsf=x wscf=y wsaved= 2>/dev/null )
+    bash "$WORK/cache/bin/tmux-status.sh" "sess=$SESS" "win=$w" "remote=$(ts show-options -wqv -t "$w" @remote)" acct= wsf=x wscf=y wsaved= "$@" 2>/dev/null )
 }
 b=$(bar "$w2")
 has 'F: the bar names m4 (the right pane machine)' "$b" 'm4 '
@@ -339,6 +341,11 @@ hasnt 'F: m4 online off the #node line (no hub_nodes) → its name, no 失联' "
 hasnt 'F: no `?` for a machine the hub lists' "$b" '?'
 hasnt 'F: a healthy hub draws no ● 入口 (issue #1616: only what wants a hand)' "$b" '入口'
 hasnt 'F: no local 负载 for a remote window' "$b" '负载'
+hasnt 'F: a direct line (rr= empty) draws no 中转' "$b" '中转'
+# issue #1628: the window's connection on the hub relay (@remote_route relay, which
+# fleet-remote-view.sh stamps) → the machine chip says so; empty → byte for byte
+has 'F: rr=relay → m4 · 中转' "$(bar "$w2" rr=relay)" 'm4 · 中转'
+eq 'F: rr= / fb= empty → the bar byte for byte as without them' "$b" "$(bar "$w2" rr= fb=)"
 b5=$(bar "$w1")
 has 'F: the m5 window says m5' "$b5" 'm5 '
 eq 'F: the window list was blanked (hub mode)' '1' "$(ts show-options -gqv @status_wlist_saved)"

@@ -69,10 +69,13 @@
 # FLEET_SHELL_WIDTH (the list's width, 30), FLEET_UI_LANG, and any FLEET_HUB_* /
 # FLEET_REMOTE_* knob fleet-hub-sessions.sh and fleet-remote-view.sh read.
 #
-# No tmux, or tmux < 3.2, or FLEET_SHELL=0: bin/fleet falls back to `fleet connect`
-# (today's direct way in) and prints one line on how to install tmux — the shell
-# is an enhancement, not a gate. Exit: 0 (the attach's); 1 no machine / tmux
-# missing when run directly; 2 no hub URL (as `fleet` says it).
+# The shell is the default way in; bin/fleet falls back to `fleet connect --enter`
+# (ssh into the machine's own list) only on one of four (issue #1628): no tmux /
+# tmux < 3.2 (plus one line on how to install it), an iPad / iPhone, you asking
+# (`fleet connect`, FLEET_SHELL=0) — or THIS script failing before it attaches:
+# then it writes why to FLEET_SHELL_FAIL_FILE (fail_start) and exits 1, and the
+# fallback's bar carries that reason. Exit: 0 (the attach's); 1 no machine / tmux
+# missing when run directly / could not start; 2 no hub URL (as `fleet` says it).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"                      # the bin/ this runs from (the mirror, once started)
 SELF="$0"; [ -L "$SELF" ] && SELF=$(readlink "$SELF")   # the real file's dir has conf/ beside it
@@ -102,6 +105,14 @@ CACHE="${FLEET_SHELL_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet/shell}"
 PREFIX="${FLEET_SHELL_PREFIX:-C-b}"
 
 note() { printf 'fleet: %s\n' "$*" >&2; }
+# fail_start <why> — the shell could not start (nothing attached yet): say so, and
+# tell bin/fleet why (FLEET_SHELL_FAIL_FILE), which then takes the direct way with
+# that reason on its bar (issue #1628). Exit 1.
+fail_start() {
+  note "$*"
+  [ -n "${FLEET_SHELL_FAIL_FILE:-}" ] && printf '%s' "$*" > "$FLEET_SHELL_FAIL_FILE" 2>/dev/null
+  exit 1
+}
 sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 T() { tmux -L "$SESS" "$@"; }
 
@@ -186,7 +197,7 @@ EOF
 mirror() {
   local f
   SHADOW="$CACHE/bin"
-  mkdir -p "$SHADOW" "$CACHE/tmp" || { note "cannot write $CACHE"; return 1; }
+  mkdir -p "$SHADOW" "$CACHE/tmp" || fail_start "写不了 $CACHE"
   for f in "$REAL_BIN"/*; do [ -f "$f" ] && ln -sf "$f" "$SHADOW/${f##*/}"; done
   # the colour table (issue #1534): the bar, the rows and the list read it as
   # $BIN/../conf/fleet-palette.conf — a table, not a config, so the mirror has it
@@ -198,7 +209,7 @@ mirror() {
 write_conf() {
   local tpl="$BIN/../conf/tmux-shell.conf" line
   [ -f "$tpl" ] || tpl="$REAL_BIN/../conf/tmux-shell.conf"   # run from the mirror: beside the real bin/
-  [ -f "$tpl" ] || { note "missing $tpl"; return 1; }
+  [ -f "$tpl" ] || fail_start "缺 $tpl"
   {
     sed -e "s|__BIN__|$SHADOW|g" -e "s|__PREFIX__|$PREFIX|g" "$tpl"
     while IFS= read -r line; do
@@ -293,7 +304,7 @@ if [ "$mode" != env ] && ! tmux_ok; then
   tmux_hint
   exec python3 "$BIN/fleet-connect.py" --enter ${machine:+"$machine"}
 fi
-command -v python3 >/dev/null 2>&1 || { note 'needs python3'; exit 1; }
+command -v python3 >/dev/null 2>&1 || fail_start '没有 python3'
 
 # 1. the certificate and the machine (fleet-connect.py --pick: renew or scan, then
 #    the hub's pick — or the name checked against the route list). No hub URL: its
@@ -326,7 +337,7 @@ if T has-session -t "=$SESS" 2>/dev/null; then
 fi
 
 # 3. the server: conf (keys, hooks, bar, environment) + the first window
-write_conf || exit 1
+write_conf || fail_start "写不了 $CACHE/tmux.conf"
 if [ -n "$node" ]; then
   title="⇄$node"
   cmd="exec bash $(sq "$SHADOW/fleet-remote-view.sh") run --shell $(sq "$node") -"
@@ -337,7 +348,7 @@ else
   remote="-:"
 fi
 w=$(tmux -L "$SESS" -f "$CACHE/tmux.conf" new-session -d -P -F '#{window_id}' -s "$SESS" -n "$title" -c "$HOME" -x 220 -y 60 "$cmd") \
-  || { note 'tmux could not start the shell'; exit 1; }
+  || fail_start 'tmux 开不了会话'
 T set-window-option -t "$w" @remote "$remote" \; set-window-option -t "$w" automatic-rename off 2>/dev/null
 # 4. the data: the refresh loop, kept alive while the server lives
 ( nohup bash "$SHADOW/fleet-shell.sh" keeper "$SESS" </dev/null >/dev/null 2>&1 & )

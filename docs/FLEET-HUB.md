@@ -327,12 +327,30 @@ Both menus also list **「新建到 m4…」** — one item per other machine th
 (`dash-issue-new.sh --node=<m>` → `dash-issue-session.sh --node`, #1475); no
 cache, no item.
 
-**The shell on your own computer** (issue #1484, EPIC #1479 C5). `fleet` on a
-laptop with tmux ≥ 3.2 (`bin/fleet` → `bin/fleet-shell.sh`; `FLEET_SHELL=0`
-keeps today's direct ssh, no tmux prints one line on installing it; a `fleet`
-with no terminal — a pipe, a script — and a `fleet m4 --print` with more words
-than the machine are `fleet connect`'s, the direct way, since the shell is a
-tmux client) opens the
+**The shell on your own computer** (issue #1484, EPIC #1479 C5) — **the default
+way in; ssh into a machine's own list is only the fallback** (issue #1628).
+`fleet` on a laptop with tmux ≥ 3.2 (`bin/fleet` → `bin/fleet-shell.sh`) opens
+the shell; it falls back to the direct ssh on exactly four conditions, written
+into `bin/fleet`: no tmux (plus one line on installing it) or tmux < 3.2; an
+iPad / iPhone (`uname -m`); the shell failing before it attaches
+(`fleet-shell.sh` writes why to `FLEET_SHELL_FAIL_FILE`); or you asking —
+`fleet connect`, `FLEET_SHELL=0`. A fallback says why, in the terminal and on
+that client's bar on the far end: `直连 m5（本地壳不可用：<reason>）`
+(`fleet-connect.py` sends `LC_FLEET_FALLBACK=<machine>|<reason>` over ssh;
+`fleet_fallback_stamp` in `fleet-attach.sh` / `fleet-up.sh` stamps
+`@fleet_fallback_reason` = `<tty>|<machine>|<reason>`, and `tmux-status.sh`
+draws it for that tty's client alone). A `fleet` with no terminal — a pipe, a
+script — and a `fleet m4 --print` with more words than the machine are
+`fleet connect`'s, the direct way, silently, since the shell is a tmux client.
+The shell's right pane always rides the fastest line: every reconnect re-measures
+every route (`FLEET_CONNECT_RETEST=1`, never the 600 s memory), and while it is
+on the hub relay the window carries `@remote_route relay` — the bar's machine
+chip reads `m4 · 中转` — and one direct handshake runs every
+`FLEET_CONNECT_UPGRADE_SECS` (15; `fleet connect --probe-direct`, ~0.1–0.2 s);
+when one answers, the pane waits for the keys to rest
+`FLEET_REMOTE_IDLE_SECS` (2), closes the relay's ControlMaster and reconnects
+direct in about a second — ≤ 20 s from the line coming back.
+`bin/fleet-fallback-selftest.sh` pins all of it. The shell opens the
 same three things a fleet pane shows, without a fleet on that computer: LEFT the
 hub's list, BOTTOM the hub's bar, RIGHT a direct ssh into the session you look
 at. Nothing is rendered anew — the shell is a composition: its own tmux server
@@ -428,7 +446,8 @@ list it twice in every `list-windows -a`, and `fleet-peer-send` would call the
 worker AMBIGUOUS while the proxy is open. So there is **one proxy window per
 machine** — Enter on another row of the same machine retargets it. Closing
 the window only drops the connection; a drop reconnects (backing off, and
-alternating with the hub relay `fleet connect --proxy` when one is configured).
+alternating with the hub relay `fleet connect --proxy` when one is configured;
+in the shell, `fleet connect` re-measures every route instead, #1628).
 The ssh host is the machine label unless `FLEET_REMOTE_SSH` (`m4=m4-lan`) maps it.
 
 **The machine's own list gets out of the way — by one rule** (issue #1485, EPIC

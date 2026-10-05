@@ -5,6 +5,7 @@
     fleet connect [MACHINE] [--verbose] [--retest] [--print] [-o SSH-OPTION]… [-- SSH-ARGS…]
     fleet connect --proxy MACHINE
     fleet connect --pick [MACHINE]
+    fleet connect --probe-direct MACHINE
 
 `fleet` with nothing after it (claude-fleet#1470; `bin/fleet` runs this file
 with --enter) is the whole way in, in one go:
@@ -36,6 +37,20 @@ The choice is remembered for FLEET_CONNECT_CACHE_SECS (600). Inside that
 window one handshake re-checks the remembered route before it is used; if that
 route has gone dark, every route is measured again — so closing any one line
 moves the next `fleet connect` onto another, with nothing to edit.
+FLEET_CONNECT_RETEST=1 is --retest from the environment: the shell's right pane
+sets it on every RECONNECT (claude-fleet#1628), so a dropped connection always
+comes back over whatever is fastest now, never the remembered line.
+
+The shell's seams (claude-fleet#1628): FLEET_CONNECT_ROUTE_FILE names a file
+this writes the chosen route to just before ssh starts — one JSON line,
+{"machine", "kind": "direct"|"relay", "name"} — so the pane knows it is on the
+relay (its bar's 「· 中转」); `--probe-direct MACHINE` is one handshake on each
+of that machine's remembered DIRECT routes (no hub, no ssh): exit 0 when one
+answers — what the pane runs every FLEET_CONNECT_UPGRADE_SECS while on the relay.
+FLEET_FALLBACK_REASON (bin/fleet sets it when the shell is not the way in) is
+said here as 「fleet · 直连 m5（本地壳不可用：<reason>）」 and carried to the
+far end as LC_FLEET_FALLBACK=<machine>|<reason> (SendEnv; sshd accepts LC_*
+by default), where fleet-attach.sh puts it on this client's bar.
 
 MACHINE is an alias or hostname from the hub's list (default: the one you
 connected to last, else the hub's first). --verbose prints the measurement
@@ -690,6 +705,7 @@ def connect(want, hub, token, verbose, retest, print_only, ssh_args, info=None, 
     name = m.get("alias") or m.get("hostname")
     route = {k: best[k] for k in ("name", "kind", "host", "port")}
     ent = {"at": now, "hub": hub, "label": label, "machine": m, "login": login, "route": route,
+           "routes": [{k: r[k] for k in ("name", "kind", "host", "port")} for r in rows if r["kind"] != "relay"],
            "table": [{"name": r["name"], "ok": len(r["ms"]), "median_ms": median(r["ms"]),
                       "skip": r.get("skip")} for r in rows]}
     entries[name] = ent
@@ -701,7 +717,22 @@ def connect(want, hub, token, verbose, retest, print_only, ssh_args, info=None, 
 
 
 def run_ssh(machine, route, login, hub, print_only, ssh_args, ssh_opts=()):
+    alias = machine.get("alias") or machine.get("hostname") or "?"
+    why = " ".join(os.environ.pop("FLEET_FALLBACK_REASON", "").replace("|", "/").split())
+    if why:
+        # the shell is not the way in (bin/fleet, claude-fleet#1628): say why, here
+        # and on the far bar (fleet-attach.sh reads LC_FLEET_FALLBACK)
+        sys.stderr.write("fleet · 直连 %s（本地壳不可用：%s）\n" % (alias, why))
+        os.environ["LC_FLEET_FALLBACK"] = "%s|%s" % (alias, why)
+        ssh_opts = tuple(ssh_opts) + ("SendEnv=LC_FLEET_FALLBACK",)
     cmd = ssh_command(machine, route, login, hub, ssh_opts) + list(ssh_args)
+    rf = os.environ.get("FLEET_CONNECT_ROUTE_FILE")
+    if rf and not print_only:
+        try:
+            with open(rf, "w") as f:
+                f.write(json.dumps({"machine": alias, "kind": route["kind"], "name": route["name"]}) + "\n")
+        except OSError:
+            pass  # the pane then just does not know its route: no 「· 中转」, no upgrade
     if print_only:
         print(" ".join(shlex.quote(c) for c in cmd))
         return 0
@@ -710,6 +741,24 @@ def run_ssh(machine, route, login, hub, print_only, ssh_args, ssh_opts=()):
         os.execvp(cmd[0], cmd)
     except OSError as e:
         die("cannot run ssh: %s" % e, 1)
+
+
+def probe_remembered_direct(want):
+    """--probe-direct MACHINE (claude-fleet#1628): one handshake on each DIRECT
+    route remembered for MACHINE; 0 (its name on stdout) when one answers, 1 when
+    none does or nothing is remembered. No hub, no ssh: ~0.1–0.2 s."""
+    cache = load_cache()
+    entries = cache.get("machines") if isinstance(cache.get("machines"), dict) else {}
+    ent = entries.get(want) or {}
+    rows = [dict(r, order=i, ms=[], errors=[]) for i, r in enumerate(ent.get("routes") or [])
+            if isinstance(r, dict) and r.get("kind") == "direct" and r.get("host")]
+    if not rows:
+        return 1
+    rows = measure(rows, "", "", 1, env_num("FLEET_CONNECT_PROBE_TIMEOUT", 2.0))
+    if rows and rows[0]["ms"]:
+        print(rows[0]["name"])
+        return 0
+    return 1
 
 
 # ── `fleet` (claude-fleet#1470): certificate → machine → route → ssh ───────
@@ -884,9 +933,15 @@ def main(argv):
     ap.add_argument("--print", dest="print_only", action="store_true", help="print the ssh command, don't run it")
     ap.add_argument("-o", "--ssh-option", dest="ssh_opts", action="append", default=[], metavar="KEY=VALUE",
                     help="an ssh option placed before the host (repeatable): ControlPath=…, RequestTTY=force, …")
+    ap.add_argument("--probe-direct", metavar="MACHINE",
+                    help="one handshake on MACHINE's remembered direct routes; exit 0 when one answers (the shell)")
     ap.add_argument("--pick", action="store_true",
                     help="certificate + the hub's machine pick as one JSON line; no measuring, no ssh (the shell)")
     a = ap.parse_args(argv)
+    if a.probe_direct:
+        return probe_remembered_direct(a.probe_direct)
+    if os.environ.get("FLEET_CONNECT_RETEST") == "1":
+        a.retest = True
     conf = load_hub_conf()
     # The address lives in fleet.conf (issue #1623); hub.json keeps the token, and
     # its old "url" is read for one version.
