@@ -29,7 +29,7 @@ workers_busy() {
   while IFS=$'\037' read -r wid ppid st loop agent; do
     [ -n "$wid" ] || continue
     case "$st" in working|looping|waking) continue ;; esac
-    if [ "$st" = done ] && [ -n "$loop" ] \
+    if [ "$st" = 'done' ] && [ -n "$loop" ] \
        && python3 "$BIN/fleet_loop_mark.py" status --value "$loop" >/dev/null 2>&1; then
       printf '%s looping\n' "$wid"; continue
     fi
@@ -39,7 +39,7 @@ workers_busy() {
   [ -n "$cands" ] || return 0
   # `<pane pid> <claude pid>` pairs, then: does that Claude have a Bash-tool
   # shell (`…/shell-snapshots/snapshot-…` in its argv) among its direct children?
-  # shellcheck disable=SC2086  # the pane pids are one word each
+  # shellcheck disable=SC2046,SC2086  # the pane pids are one word each
   pairs=$(fleet_pane_claude_pids $(printf '%s\n' $cands | sed 's/^.*://')) || pairs=''
   [ -n "$pairs" ] || return 0
   ps -axo ppid=,command= 2>/dev/null | awk -v cands="$cands" -v pairs="$pairs" '
