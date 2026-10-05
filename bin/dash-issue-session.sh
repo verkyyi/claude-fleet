@@ -321,6 +321,21 @@ fi
 # hub that cannot be asked, or no machine that can take it, falls back to opening
 # it here for `auto` — and refuses for a machine named explicitly, which the
 # caller asked for by name. Sync-only, like the lease.
+# Issue #1586: a REMOTE start is waited on (the hub's 30 s) until that machine
+# really opened the window or really refused it. Refused ⇒ its reason on stderr
+# and the same exit a refusal here gives (2 full · 3 claimed · 1 anything else),
+# and the lease — the hub gave it back — released by the EXIT trap, so a re-send
+# needs no --force. No final state in time ⇒ unknown: exit 1, never a success.
+# --async asks without waiting and leaves the operation id for fleet-children.sh.
+# Every REMOTE answer is written to the parent's `children/<key>.dispatch`.
+_place_note() {  # <state> <machine> <op> [<window>] [<exit>] [<line>]
+  case "$ORIGIN" in issue-[0-9]*|scratch-[0-9]*|*:issue-[0-9]*) ;; *) return 0 ;; esac
+  local ck="issue-$num"
+  [ "$MULTI" = 1 ] && ck="$(fleet_slug "$REPO"):issue-$num"
+  python3 "$BIN/fleet-children.py" dispatch \
+    --file "$(fleet_state_dir "$SESS")/children/$(printf '%s' "$ORIGIN" | LC_ALL=C tr -cd 'A-Za-z0-9._:-').dispatch" \
+    --child "$ck" --state "$1" --node "$2" --op "$3" --window "${4:-}" --exit "${5:-}" --line "${6:-}" >/dev/null 2>&1 || :
+}
 if [ "$PLACING" = 1 ]; then
   if [ "${CCQUOTA_FLEET:-0}" != 1 ] || [ -z "$REPO" ]; then
     if [ "$NODE" != auto ]; then
@@ -331,16 +346,39 @@ if [ "$PLACING" = 1 ]; then
     if [ -z "$_pw" ] && _fleet_wid_split "$ORIGIN" >/dev/null 2>&1; then
       _u=$(fleet_uuid "$SESS") && [ -n "$_u" ] && _pw="$_u/$ORIGIN"
     fi
-    place_out=$(fleet_hub_place "$SESS" "$REPO" "$num" "$NODE" "$_pw" "$AGENT"); place_rc=$?
+    _wait=''; [ "$ASYNC_FLAG" = 1 ] && _wait=0
+    place_out=$(fleet_hub_place "$SESS" "$REPO" "$num" "$NODE" "$_pw" "$AGENT" "$_wait"); place_rc=$?
     _pv=${place_out%%$'\t'*}; _why=''; case "$place_out" in *$'\t'*) _why=${place_out#*$'\t'} ;; esac
     case "$place_rc:$_pv" in
       0:REMOTE\ *)
         # The lease is the remote fleet's now: the EXIT trap must not hand it back.
         LEASE_HELD=0
-        read -r _ _m _op _st <<<"$_pv"
-        printf 'dash-issue-session: #%s → %s (hub operation %s, %s) — %s\n' "$num" "$_m" "$_op" "$_st" "$_why" >&2
+        read -r _ _m _op _st _w <<<"$_pv"
+        if [ "$_st" = done ]; then
+          printf 'dash-issue-session: #%s → %s 已开窗 %s (hub operation %s) — %s\n' "$num" "$_m" "$_w" "$_op" "$_why" >&2
+          _place_note done "$_m" "$_op" "$_w" 0
+        else
+          printf 'dash-issue-session: #%s → %s (hub operation %s, %s) — %s\n' "$num" "$_m" "$_op" "$_st" "$_why" >&2
+          _place_note accepted "$_m" "$_op"
+        fi
         [ -z "$TARGET_SESS" ] && TM display-message "#$num → $_m (${_why%%;*})" 2>/dev/null
         exit 0 ;;
+      5:DECLINED\ *)
+        # That machine's spawn refused it. The hub handed the lease back to us,
+        # so the EXIT trap (LEASE_HELD=1) releases it: the next send needs no --force.
+        read -r _ _m _op _x <<<"$_pv"
+        _place_note refused "$_m" "$_op" '' "$_x" "$_why"
+        refuse "#$num 被 $_m 拒绝 (exit $_x): ${_why:-no reason given}"
+        case "$_x" in 2) exit "$RC_CAP" ;; 3) exit "$RC_CLAIMED" ;; esac
+        exit "$RC_INFRA" ;;
+      6:UNKNOWN\ *)
+        # Sent, but no final state in time: that machine may still open it, so the
+        # lease stays its own — and this is not a success.
+        LEASE_HELD=0
+        read -r _ _m _op <<<"$_pv"
+        _place_note unknown "$_m" "$_op" '' '' "$_why"
+        refuse "#$num 已派到 $_m (hub operation $_op)，但没等到结果 — 未知，不当成功: ${_why:-no final state}"
+        exit "$RC_INFRA" ;;
       0:LOCAL\ *)
         printf 'dash-issue-session: #%s 开在本机 %s — %s\n' "$num" "${_pv#LOCAL }" "$_why" >&2 ;;
       3:*)
@@ -352,7 +390,7 @@ if [ "$PLACING" = 1 ]; then
         fi
         [ "$place_rc" = 4 ] && printf 'dash-issue-session: 没有机器能接 #%s (%s) — 开在本机\n' "$num" "$_why" >&2 ;;
     esac
-    unset _pw _u _pv _why
+    unset _pw _u _pv _why _wait
   fi
 fi
 # Opening here after all: this machine's cap verdict, held above, now applies.

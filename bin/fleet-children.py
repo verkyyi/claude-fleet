@@ -39,6 +39,18 @@ child made progress and the ladder starts over. A wake row is NOT a report:
 read_events() skips it, so show/scan/digest/dedup never see one — it only shares
 the seq counter (so "a report after this wake" is one comparison) and surfaces in
 `show --json` as the top-level `wakes` list.
+
+A placement the hub sent to ANOTHER machine (issue #1586) is written beside the
+ledger, never in it — `<parent-key>.dispatch`, a file no `*.ndjson` reader globs:
+
+  {"seq": 1, "ts": "…", "child": "issue-101", "node": "m4", "op": "<uuid>",
+   "state": "done", "window": "@42", "exit": 0, "line": ""}
+
+state done (a window opened there) · accepted (an --async spawn: the operation id
+is the handle) · unknown (no final state in time) · refused (that machine's spawn
+said no: exit + line). `show --json` carries the last row per child as the
+top-level `dispatches` list, and the text view lists one under the children —
+neither changes a count.
 """
 import argparse
 import datetime
@@ -507,6 +519,32 @@ def cmd_wake_state(a):
     return 0
 
 
+def cmd_dispatch(a):
+    """Append one cross-machine placement row (issue #1586)."""
+    child = ''.join(ch for ch in a.child if ch in KEY_OK)[:128]
+    if not child or a.state not in ('done', 'accepted', 'unknown', 'refused'):
+        print('fleet-children: dispatch needs child + state done|accepted|unknown|refused', file=sys.stderr)
+        return 2
+    row = dict(child=child, node=clean(a.node, 1, 64), op=clean(a.op, 1, 64), state=a.state,
+               window=clean(a.window, 1, 32), line=clean(a.line, 1, 200))
+    if a.exit != '':
+        try:
+            row['exit'] = int(a.exit)
+        except ValueError:
+            pass
+    print('seq=%d' % locked_append(a.file, row))
+    return 0
+
+
+def read_dispatches(d, parent):
+    """The last placement row per child (issue #1586), in seq order."""
+    last = {}
+    for e in read_rows(os.path.join(d, parent + '.dispatch')):
+        if e.get('child'):
+            last[e['child']] = e
+    return sorted(last.values(), key=seq_of)
+
+
 def cmd_show(a):
     wins = read_windows(sys.stdin)
     parent = a.parent
@@ -575,6 +613,9 @@ def cmd_show(a):
                    wakes=sorted((w for w in read_wakes(os.path.join(a.dir, parent + '.ndjson'))
                                  if w.get('child') in events and seq_of(w) > a.since),
                                 key=seq_of))
+        dispatches = read_dispatches(a.dir, parent)
+        if dispatches:                  # only then: an answer without one is unchanged
+            out['dispatches'] = dispatches
         if a.since:
             out['events'] = sorted((e for kid in kids for e in kid['since']),
                                    key=lambda e: int(e.get('seq') or 0))
@@ -594,6 +635,13 @@ def cmd_show(a):
         if k.get('node') and not k['live']:
             live += ' · ' + k['node']
         print('  %s %-16s %-18s %-22s %s' % (k['bucket'], k['child'], live, rep, k['title']))
+    for d in read_dispatches(a.dir, parent):
+        how = d.get('state', '')
+        if d.get('window'):
+            how += ' ' + d['window']
+        if d.get('state') == 'refused':
+            how += ' exit %s %s' % (d.get('exit', '?'), d.get('line', ''))
+        print('  ↗ %-16s → %-8s %s (op %s)' % (d['child'], d.get('node', ''), how.strip(), d.get('op', '')))
     print(text)
     return 0
 
@@ -621,12 +669,21 @@ def main():
     p.add_argument('--force', action='store_true')
     p = sub.add_parser('wake')
     p.add_argument('--file', required=True)
+    p = sub.add_parser('dispatch')
+    p.add_argument('--file', required=True)
+    p.add_argument('--child', required=True)
+    p.add_argument('--state', required=True)
+    p.add_argument('--node', default='')
+    p.add_argument('--op', default='')
+    p.add_argument('--window', default='')
+    p.add_argument('--exit', default='')
+    p.add_argument('--line', default='')
     p = sub.add_parser('wake-state')
     p.add_argument('--file', required=True)
     p.add_argument('--child', required=True)
     a = ap.parse_args()
     return dict(append=cmd_append, show=cmd_show, scan=cmd_scan, digest=cmd_digest,
-                wake=cmd_wake, **{'wake-state': cmd_wake_state})[a.cmd](a)
+                wake=cmd_wake, dispatch=cmd_dispatch, **{'wake-state': cmd_wake_state})[a.cmd](a)
 
 
 if __name__ == '__main__':

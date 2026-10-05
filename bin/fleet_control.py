@@ -31,6 +31,18 @@ class Unattempted(Fault):
     """A refusal raised before any side effect was attempted: always `failed`."""
 
 
+class Refused(Fault):
+    """A spawn the fleet refused (issue #1586): its exit code and refusal line
+    go into the operation's error, so the machine that placed it can say why."""
+
+    def __init__(self, code, message, exit_code, line):
+        super().__init__(code, message)
+        self.exit_code, self.line = exit_code, line
+
+    def as_dict(self):
+        return dict(super().as_dict(), exit=self.exit_code, stderr1=self.line)
+
+
 class Control:
     def __init__(self, conf_dir=None, bin_dir=BIN):
         self.conf_dir = Path(conf_dir or os.environ.get("FLEET_CONF_DIR", Path.home() / ".config/claude-fleet")).absolute()
@@ -427,13 +439,17 @@ class Control:
             elif req["action"] == "worker_start":
                 # No --force, arbitrary argv, paths, environment or shell input.
                 attempted = True
-                code, _, _ = self.adapter("start", fleet["name"], str(params["issue"]), params.get("agent", ""),
-                                          params.get("repo", ""), params.get("origin_wid", ""), timeout=180)
+                code, _, err = self.adapter("start", fleet["name"], str(params["issue"]), params.get("agent", ""),
+                                            params.get("repo", ""), params.get("origin_wid", ""), timeout=180)
                 if code:
                     # 6 = no repo named in a fleet hosting several, or one it does not host (#984).
                     reasons = {2: "AT_CAPACITY", 3: "ALREADY_CLAIMED", 4: "RESOURCE_GATE", 6: "INVALID_ARGUMENT"}
                     attempted = code not in reasons
-                    raise Fault(reasons.get(code, "EXECUTION_FAILED"), "Fleet refused to start the worker; inspect local Fleet logs")
+                    # The spawn's own exit code and refusal line ride back to
+                    # whoever placed it (issue #1586): a refusal there prints
+                    # what a refusal here would.
+                    raise Refused(reasons.get(code, "EXECUTION_FAILED"),
+                                  "Fleet refused to start the worker: " + refusal_line(err), code, refusal_line(err))
                 snapshot = self.workers(fleet)
                 # Match the spawned repo too (issue #1018): another repo's issue-N
                 # is a different worker.
@@ -441,7 +457,8 @@ class Control:
                            and (not params.get("repo") or repo_named(w["repo"], params["repo"]))]
                 if not matches:
                     raise Fault("UNKNOWN_OUTCOME", "Spawn returned but no matching worker is visible")
-                result = {"workers": matches, "observed_at": snapshot["observed_at"]}
+                result = {"workers": matches, "observed_at": snapshot["observed_at"],
+                          "exit": 0, "window": matches[0].get("window_id", "")}
             elif req["action"] == "worker_move_in":
                 result = self.execute_move_in(fleet, params)
                 attempted = True
@@ -498,6 +515,14 @@ class Control:
 def last_line(err):
     lines = (err or b"").decode("utf-8", "replace").strip().splitlines()
     return lines[-1][:200] if lines else "no detail"
+
+
+def refusal_line(err):
+    """The spawn's refusal: its last `dash-issue-session:` line (a lease note
+    can come first), else its last stderr line."""
+    lines = [l.strip() for l in (err or b"").decode("utf-8", "replace").splitlines() if l.strip()]
+    said = [l for l in lines if l.startswith("dash-issue-session:")]
+    return (said or lines or ["no detail"])[-1][:200]
 
 
 def main(argv=None):

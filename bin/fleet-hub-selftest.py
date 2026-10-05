@@ -94,6 +94,12 @@ esac
 [ ! -f "$FLEET_CONF_DIR/blocked" ]
 ''')
         self.script(self.bin / "dash-issue-session.sh", '''#!/bin/bash
+if [ -f "$FLEET_CONF_DIR/spawn-full" ]; then
+  echo "dash-issue-session: #$1 的入口租约已拿到 (m4)" >&2
+  echo "dash-issue-session: at capacity: 6/6 sessions" >&2
+  echo "tmux: toast" >&2
+  exit 2
+fi
 printf '%s\\n' "$*" >> "$FLEET_CONF_DIR/spawn.calls"
 repo=''; [ "${7:-}" = --repo ] && repo=$8
 printf '@12\\t%s\\t0\\t/fixture/issue-%s\\tdone\\tclaude\\ta1\\t\\t%s\\n' "$1" "$1" "$repo" >> "$FLEET_CONF_DIR/workers.tsv"
@@ -654,6 +660,19 @@ class HubTests(HubFixture):
         changed = dict(envelope, params={"issue": 125})
         with self.assertRaises(Fault):
             self.node.rpc("submit", changed)
+
+    def test_start_reports_its_window_and_a_refusal_verbatim(self):
+        # issue #1586: whoever placed the start hears what became of it — the
+        # window on success, the spawn's exit code + refusal line on a refusal.
+        done = self.node.wait(self.submit(key="w")["operation_id"])
+        self.assertEqual((done["status"], done["result"]["exit"], done["result"]["window"]), ("succeeded", 0, "@12"))
+        (self.node.conf / "spawn-full").touch()
+        refused = self.node.wait(self.submit(key="full", issue=126)["operation_id"])
+        self.assertEqual(refused["status"], "failed")
+        err = refused["result"]["error"]
+        self.assertEqual((err["code"], err["exit"]), ("AT_CAPACITY", 2))
+        self.assertEqual(err["stderr1"], "dash-issue-session: at capacity: 6/6 sessions")
+        self.assertIn("at capacity: 6/6", err["message"])
 
     def test_start_names_the_repo_in_a_multi_repo_fleet(self):
         # issue #984: two repos can both have an issue-123, so the spawn needs --repo.

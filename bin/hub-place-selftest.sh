@@ -27,6 +27,15 @@
 #   SELF    --node local / this host's alias → never asks the hub.
 #   CAP     this machine is full → still placed on m4 (exit 0); a LOCAL answer
 #           then refuses with the cap reason (exit 2).
+#   DONE    (issue #1586) the hub waited and m4 opened it → exit 0, the window id
+#           on stderr and in the parent's children/<key>.dispatch.
+#   DECLINED m4's spawn refused it → the same exit a refusal here gives (2 full ·
+#           3 claimed · 1 else), its reason on stderr, the lease released, nothing
+#           opened here (never the auto fallback); a re-send is granted, no --force.
+#   UNKNOWN no final state in time → exit 1 saying 未知, never a success; the
+#           lease stays the remote's; nothing opened here.
+#   ASYNC   --async asks with --wait 0; the operation id is left in the dispatch
+#           file and `fleet-children.py show --json` lists it.
 #   TOKEN   (issue #1491) the place command sees node.env's CCQUOTA_TOKEN; the
 #           spawned window never inherits it; the default `ccquota place` with no
 #           token anywhere is not run and says 「no node token」, not 「unreachable」.
@@ -300,6 +309,51 @@ base=$(CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET='' FLEET_HUB_PLACE_CMD='' FLEET_HUB_
 CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET='' FLEET_HUB_PLACE_CMD='' FLEET_HUB_LEASE_CMD='' FLEET_SPAWN_NODE=m4 run_spawn 258
 [ "$(snap)" = "$base" ]                          || fail "SPAWN_NODE with the hub off must change nothing" "$(diff <(printf '%s\n' "$base") <(snap))"
 ok "SPAWN_NODE off → byte-identical (the knob is never read without the hub)"
+
+# ===== issue #1586: the outcome of a REMOTE start comes back ======================
+DISPATCH="$WORK/conf/fleets/testsess/children/issue-77.dispatch"
+rm -f "$DISPATCH"
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER=$'REMOTE m4 op_43 done @42\tchose m4' run_spawn 258 --origin issue-77
+[ "$(rc)" = 0 ]                                  || fail "DONE exits 0 (rc=$(rc))"
+err_has '#258 → m4 已开窗 @42 (hub operation op_43)' || fail "DONE names the window that opened there"
+place_has '--wait'                               && fail "DONE a sync spawn leaves the wait to the hub's default"
+tmux_has 'new-window'                            && fail "DONE must not open a window here"
+lease_has release                                && fail "DONE the lease is the remote's"
+grep -q '"child": "issue-258".*"op": "op_43".*"state": "done".*"window": "@42"' "$DISPATCH" \
+                                                 || fail "DONE the parent's dispatch file records the window" "$(cat "$DISPATCH" 2>/dev/null)"
+ok "DONE m4 opened it → exit 0, window @42 on stderr and in the dispatch file"
+
+for x in 2 3 1; do
+  CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_RC=5 \
+    PLACE_ANSWER=$'DECLINED m4 op_44 '"$x"$'\tdash-issue-session: at capacity: 6/6 sessions on m4' run_spawn 258 --origin issue-77
+  [ "$(rc)" = "$x" ]                             || fail "DECLINED exit $x comes back as $x (rc=$(rc))"
+  err_has "#258 被 m4 拒绝 (exit $x): dash-issue-session: at capacity: 6/6 sessions on m4" || fail "DECLINED $x carries m4's reason"
+  tmux_has 'new-window'                          && fail "DECLINED $x must not open it here (no auto fallback)"
+  lease_has 'release'                            || fail "DECLINED $x releases the lease the hub gave back"
+done
+grep -q '"state": "refused"' "$DISPATCH"         || fail "DECLINED is recorded" "$(cat "$DISPATCH")"
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER=$'LOCAL m5\tchose m5' run_spawn 258
+grep -q -- '--force' "$LEASE_LOG"                && fail "DECLINED a re-send must not need --force"
+ok "DECLINED m4 refused → exit 2/3/1 with its reason, lease released, nothing opened"
+
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_RC=6 \
+  PLACE_ANSWER=$'UNKNOWN m4 op_45\tno final state from m4 (operation accepted)' run_spawn 258 --origin issue-77
+[ "$(rc)" = 1 ]                                  || fail "UNKNOWN exits 1, never 0 (rc=$(rc))"
+err_has '未知，不当成功: no final state from m4' || fail "UNKNOWN says so"
+tmux_has 'new-window'                            && fail "UNKNOWN must not open it here too"
+lease_has release                                && fail "UNKNOWN the lease stays with m4, which may yet open it"
+ok "UNKNOWN no final state → exit 1 saying 未知; lease kept remote; nothing here"
+
+rm -f "$DISPATCH"
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER=$'REMOTE m4 op_46 accepted\tchose m4' run_spawn 258 --origin issue-77 --async
+[ "$(rc)" = 0 ]                                  || fail "ASYNC exits 0 (rc=$(rc))"
+place_has '--wait 0 acme/widgets 258'            || fail "ASYNC asks with --wait 0"
+grep -q '"op": "op_46".*"state": "accepted"' "$DISPATCH" || fail "ASYNC leaves the operation id" "$(cat "$DISPATCH" 2>/dev/null)"
+shown=$(python3 "$BIN/fleet-children.py" show --dir "$(dirname "$DISPATCH")" --parent issue-77 --json </dev/null)
+printf '%s' "$shown" | grep -q '"dispatches": \[{.*"op": "op_46"' || fail "ASYNC fleet-children lists the dispatch" "$shown"
+shown=$(python3 "$BIN/fleet-children.py" show --dir "$WORK/conf/none" --parent issue-77 --json </dev/null)
+printf '%s' "$shown" | grep -q dispatches         && fail "ASYNC no dispatch file → no dispatches key (unchanged answer)"
+ok "ASYNC --async → --wait 0, operation id in the dispatch file, listed by fleet-children"
 
 # ===== TOKEN: node.env's token reaches the place command only (issue #1491) =======
 NODE_ENV="$WORK/conf/node.env"

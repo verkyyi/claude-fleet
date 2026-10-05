@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -44,6 +45,32 @@ type placeRequest struct {
 	OriginWID string `json:"origin_wid"`
 	Agent     string `json:"agent"`
 	Idem      string `json:"idempotency_key"`
+	// Wait is how many seconds a REMOTE start is waited on for its outcome
+	// (claude-fleet#1586): absent = placeWait, 0 = answer on acceptance.
+	Wait *int `json:"wait"`
+}
+
+// placeWait is how long a REMOTE start is waited on by default, and
+// placeWaitMax the most a node may ask for; placePoll is how often the
+// target is asked in between. Variables so tests can move them.
+var (
+	placeWait    = 30 * time.Second
+	placeWaitMax = 60 * time.Second
+	placePoll    = time.Second
+)
+
+// placeOutcome is what became of a REMOTE start (claude-fleet#1586):
+// done (a window opened), refused (the target's fleet said no, with the
+// spawn's own exit code and refusal line), failed (it never ran), or
+// unknown (no final state within the wait — never read as success). Exit
+// is dash-issue-session.sh's: 0 opened · 1 infrastructure · 2 at capacity ·
+// 3 claimed elsewhere.
+type placeOutcome struct {
+	State  string `json:"state"`
+	Exit   *int   `json:"exit,omitempty"`
+	Stderr string `json:"stderr1,omitempty"`
+	Window string `json:"window,omitempty"`
+	Node   string `json:"node"`
 }
 
 func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
@@ -167,13 +194,112 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, placeStatus(err), map[string]any{"error": errorObject(err), "placement": pl})
 		return
 	}
-	if op["status"] == "failed" {
-		// The node refused before running anything: the issue is the
-		// asker's again, so its fallback can still open it.
-		giveBack()
+	wait := placeWait
+	if req.Wait != nil {
+		wait = min(max(time.Duration(*req.Wait)*time.Second, 0), placeWaitMax)
 	}
-	s.leaseAudit(p.Actor, "place", fleetID, "REMOTE "+nodeLabel(pl.Machine)+" "+asString(op["status"]), now)
-	writeJSON(w, http.StatusOK, map[string]any{"local": false, "placement": pl, "operation": op})
+	resp := map[string]any{"local": false, "placement": pl}
+	if wait > 0 {
+		op = s.awaitOperation(r.Context(), op, time.Now().Add(wait))
+		oc := outcomeOf(op, nodeLabel(pl.Machine))
+		resp["outcome"] = oc
+		if oc.State == "refused" || oc.State == "failed" {
+			// Nothing opened there: the issue is the asker's again, which
+			// gives it back to the pool when it exits on the refusal.
+			giveBack()
+		}
+		s.leaseAudit(p.Actor, "place", fleetID, "REMOTE "+nodeLabel(pl.Machine)+" "+oc.State, now)
+	} else {
+		if op["status"] == "failed" {
+			// The node refused before running anything: the issue is the
+			// asker's again, so its fallback can still open it.
+			giveBack()
+		}
+		s.leaseAudit(p.Actor, "place", fleetID, "REMOTE "+nodeLabel(pl.Machine)+" "+asString(op["status"]), now)
+	}
+	resp["operation"] = op
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// awaitOperation asks the target for a REMOTE start's state until it is
+// final or the deadline passes, and returns the latest view. A target that
+// cannot be asked is asked again; the view stays what was last known.
+func (s *Server) awaitOperation(ctx context.Context, op map[string]any, deadline time.Time) map[string]any {
+	id := asString(op["operation_id"])
+	for !operationFinal(asString(op["status"])) && time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return op
+		case <-time.After(min(placePoll, time.Until(deadline))):
+		}
+		o, err := s.Store.FleetOperation(id)
+		if err != nil {
+			return op
+		}
+		if !operationFinal(o.Status) && s.reconcileOperation(ctx, &o) != nil {
+			continue
+		}
+		op = operationView(o)
+	}
+	return op
+}
+
+func operationFinal(status string) bool {
+	return status == "succeeded" || status == "failed" || status == "unknown"
+}
+
+// outcomeOf reads a REMOTE start's operation as a placeOutcome.
+func outcomeOf(op map[string]any, node string) placeOutcome {
+	var res struct {
+		Window  string `json:"window"`
+		Workers []struct {
+			WindowID string `json:"window_id"`
+		} `json:"workers"`
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+			Exit    *int   `json:"exit"`
+			Stderr  string `json:"stderr1"`
+		} `json:"error"`
+	}
+	if raw, ok := op["result"].(json.RawMessage); ok {
+		_ = json.Unmarshal(raw, &res)
+	}
+	exit := func(n int) *int { return &n }
+	switch asString(op["status"]) {
+	case "succeeded":
+		win := res.Window
+		if win == "" && len(res.Workers) > 0 {
+			win = res.Workers[0].WindowID
+		}
+		return placeOutcome{State: "done", Exit: exit(0), Window: win, Node: node}
+	case "failed":
+		why := res.Error.Stderr
+		if why == "" {
+			why = res.Error.Message
+		}
+		// The spawn's own code when the node sent it (fleet-control-read.sh
+		// start: 2 at capacity, 3 claimed, 4 a disk/quota gate), else the
+		// node's reason for it; a gate is "cannot take it now", as a cap is.
+		code := -1
+		if res.Error.Exit != nil {
+			code = *res.Error.Exit
+		}
+		switch {
+		case code == 2 || code == 4 || res.Error.Code == "AT_CAPACITY" || res.Error.Code == "RESOURCE_GATE":
+			return placeOutcome{State: "refused", Exit: exit(2), Stderr: why, Node: node}
+		case code == 3 || res.Error.Code == "ALREADY_CLAIMED":
+			return placeOutcome{State: "refused", Exit: exit(3), Stderr: why, Node: node}
+		case code > 0:
+			return placeOutcome{State: "refused", Exit: exit(1), Stderr: why, Node: node}
+		}
+		return placeOutcome{State: "failed", Exit: exit(1), Stderr: why, Node: node}
+	}
+	why := res.Error.Message
+	if why == "" {
+		why = "no final state from " + node + " (operation " + asString(op["status"]) + "); its node may predate outcome reports — check that machine before re-dispatching"
+	}
+	return placeOutcome{State: "unknown", Stderr: why, Node: node}
 }
 
 // nodePrincipal is who a node's placement acts for: the person who owns this

@@ -36,6 +36,17 @@ func TestPlaceCLIContract(t *testing.T) {
 		{"remote", `{"local":false,"placement":{"machine":"m4","reason":"chose m4;\n m5 excluded: load 1.00/core > 0.8"},
 			"operation":{"operation_id":"op_1","status":"accepted"}}`, 200,
 			0, "REMOTE m4 op_1 accepted\tchose m4; m5 excluded: load 1.00/core > 0.8"},
+		// claude-fleet#1586: what became of the start there.
+		{"remote done", `{"local":false,"placement":{"machine":"m4","reason":"chose m4"},
+			"operation":{"operation_id":"op_2","status":"succeeded"},"outcome":{"state":"done","exit":0,"window":"@42","node":"m4"}}`, 200,
+			0, "REMOTE m4 op_2 done @42\tchose m4"},
+		{"remote declined", `{"local":false,"placement":{"machine":"m4","reason":"chose m4"},
+			"operation":{"operation_id":"op_3","status":"failed"},
+			"outcome":{"state":"refused","exit":2,"stderr1":"dash-issue-session: at capacity:\n 6/6","node":"m4"}}`, 200,
+			5, "DECLINED m4 op_3 2\tdash-issue-session: at capacity: 6/6"},
+		{"remote unknown", `{"local":false,"placement":{"machine":"m4","reason":"chose m4"},
+			"operation":{"operation_id":"op_4","status":"accepted"},"outcome":{"state":"unknown","stderr1":"no final state from m4","node":"m4"}}`, 200,
+			6, "UNKNOWN m4 op_4\tno final state from m4"},
 		{"held", `{"error":{"code":"ALREADY_CLAIMED","message":"#7 is leased to m4"},"holder":{"node":"m4"}}`, 409,
 			3, "HELD m4\t#7 is leased to m4"},
 		{"no machine", `{"error":{"code":"NO_ELIGIBLE_NODE","message":"No machine can take a new session now"}}`, 503,
@@ -56,6 +67,15 @@ func TestPlaceCLIContract(t *testing.T) {
 	}
 	if got["node"] != "auto" || got["issue"] != float64(7) || got["worker_id"] != wid || got["origin_wid"] != "p/issue-1" {
 		t.Fatalf("last request body %v", got)
+	}
+	if _, has := got["wait"]; has {
+		t.Fatalf("no --wait sent a wait: %v; the hub's default must apply", got)
+	}
+	ts := answer(200, `{"local":true,"placement":{"machine":"m5"}}`)
+	defer ts.Close()
+	var out, errb bytes.Buffer
+	if code, _ := place([]string{"--hub", ts.URL, "--token", "tok", "--wait", "0", "o/r", "7", wid}, &out, &errb); code != 0 || got["wait"] != float64(0) {
+		t.Fatalf("--wait 0: code %d, body %v; want wait 0 sent", code, got)
 	}
 
 	t.Setenv("CCQUOTA_HUB_URL", "")

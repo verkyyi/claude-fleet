@@ -24,18 +24,42 @@ import (
 //	0  LOCAL <machine>\t<reason>                     open it here, as always
 //	0  REMOTE <machine> <operation_id> <status>\t<reason>
 //	                                                 the hub sent the start there
+//	0  REMOTE <machine> <operation_id> done <window>\t<reason>
+//	                                                 ... and a window opened there
 //	3  HELD <machine>\t<message>                     the issue is leased elsewhere
 //	4  REFUSED <code>\t<message>                     no machine can take it (or
 //	                                                 the chosen one refused)
+//	5  DECLINED <machine> <operation_id> <exit>\t<line>
+//	                                                 the start was sent and that
+//	                                                 machine's spawn refused it:
+//	                                                 its exit code (2 at capacity,
+//	                                                 3 claimed, 1 anything else)
+//	                                                 and its refusal line
+//	6  UNKNOWN <machine> <operation_id>\t<message>   no final state within the
+//	                                                 wait — not a success
 //	1  the hub could not be asked (stderr says why)
 //	2  usage
+//
+// The hub waits on a REMOTE start's outcome (claude-fleet#1586) — --wait
+// seconds, its own default (30) when not given; --wait 0 answers on acceptance,
+// the status-only REMOTE line. A hub predating #1586 always answers that way.
 
-// placeRefused is the exit code of a placement the hub answered with no.
-const placeRefused = 4
+// placeRefused is the exit code of a placement the hub answered with no;
+// placeDeclined of a start the chosen machine's spawn refused; placeUnknown
+// of one with no final state in time.
+const (
+	placeRefused  = 4
+	placeDeclined = 5
+	placeUnknown  = 6
+)
 
 // placeTimeout covers the hub's own wait for the remote node to take the
-// start (fleetWriteWait, 25s) plus the round trip.
-const placeTimeout = 40 * time.Second
+// start (fleetWriteWait, 25s) plus the round trip; the outcome wait comes on
+// top (placeWaitDefault when --wait is not given, as the hub's default).
+const (
+	placeTimeout     = 40 * time.Second
+	placeWaitDefault = 30
+)
 
 func runPlace(args []string) error {
 	code, err := place(args, os.Stdout, os.Stderr)
@@ -57,11 +81,13 @@ func place(args []string, stdout, stderr io.Writer) (int, error) {
 	origin := fs.String("origin-wid", "", "the worker_id of the session that asked for this one")
 	agent := fs.String("agent", "", "claude or codex (default: the chosen fleet's)")
 	key := fs.String("key", "", "idempotency key (default: one per call)")
+	wait := fs.Int("wait", -1, "seconds the hub waits on a remote start's outcome (default: the hub's, 30; 0 = answer on acceptance)")
 	fs.Usage = func() {
 		fmt.Fprint(stderr, `Usage: ccquota place [--node auto|<machine>] [--origin-wid <wid>] [--agent a] <owner/repo> <issue> <worker_id>
 
 Ask the hub which machine should open a session on an issue (claude-fleet#1425).
-Exit 0 LOCAL/REMOTE, 3 held elsewhere, 4 refused, 1 hub unreachable, 2 usage.
+Exit 0 LOCAL/REMOTE, 3 held elsewhere, 4 refused, 5 the chosen machine
+declined the start, 6 its outcome is unknown, 1 hub unreachable, 2 usage.
 `)
 		fs.PrintDefaults()
 	}
@@ -80,15 +106,21 @@ Exit 0 LOCAL/REMOTE, 3 held elsewhere, 4 refused, 1 hub unreachable, 2 usage.
 	if *hub == "" || *token == "" {
 		return 1, errors.New("no hub configured (CCQUOTA_HUB_URL and CCQUOTA_TOKEN)")
 	}
-	body, _ := json.Marshal(map[string]any{"repo": rest[0], "issue": issue, "worker_id": rest[2],
-		"node": *node, "origin_wid": *origin, "agent": *agent, "idempotency_key": *key})
+	ask := map[string]any{"repo": rest[0], "issue": issue, "worker_id": rest[2],
+		"node": *node, "origin_wid": *origin, "agent": *agent, "idempotency_key": *key}
+	timeout := placeTimeout + placeWaitDefault*time.Second
+	if *wait >= 0 {
+		ask["wait"] = *wait
+		timeout = placeTimeout + time.Duration(*wait)*time.Second
+	}
+	body, _ := json.Marshal(ask)
 	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(*hub, "/")+"/v1/node/place", bytes.NewReader(body))
 	if err != nil {
 		return 1, err
 	}
 	req.Header.Set("Authorization", "Bearer "+*token)
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := (&http.Client{Timeout: placeTimeout}).Do(req)
+	resp, err := (&http.Client{Timeout: timeout}).Do(req)
 	if err != nil {
 		return 1, err
 	}
@@ -104,6 +136,12 @@ Exit 0 LOCAL/REMOTE, 3 held elsewhere, 4 refused, 1 hub unreachable, 2 usage.
 			ID     string `json:"operation_id"`
 			Status string `json:"status"`
 		} `json:"operation"`
+		Outcome *struct {
+			State  string `json:"state"`
+			Exit   *int   `json:"exit"`
+			Stderr string `json:"stderr1"`
+			Window string `json:"window"`
+		} `json:"outcome"`
 		Error struct {
 			Code    string `json:"code"`
 			Message string `json:"message"`
@@ -120,6 +158,25 @@ Exit 0 LOCAL/REMOTE, 3 held elsewhere, 4 refused, 1 hub unreachable, 2 usage.
 	case resp.StatusCode == http.StatusOK && out.Local != nil && *out.Local:
 		fmt.Fprintf(stdout, "LOCAL %s\t%s\n", out.Placement.Machine, oneLine(out.Placement.Reason))
 		return 0, nil
+	case resp.StatusCode == http.StatusOK && out.Local != nil && out.Operation.ID != "" && out.Outcome != nil:
+		// What became of the start there (claude-fleet#1586).
+		oc := out.Outcome
+		switch {
+		case oc.State == "done":
+			win := oc.Window
+			if win == "" {
+				win = "-"
+			}
+			fmt.Fprintf(stdout, "REMOTE %s %s done %s\t%s\n", out.Placement.Machine, out.Operation.ID,
+				oneLine(win), oneLine(out.Placement.Reason))
+			return 0, nil
+		case (oc.State == "refused" || oc.State == "failed") && oc.Exit != nil && *oc.Exit > 0:
+			fmt.Fprintf(stdout, "DECLINED %s %s %d\t%s\n", out.Placement.Machine, out.Operation.ID,
+				*oc.Exit, oneLine(oc.Stderr))
+			return placeDeclined, nil
+		}
+		fmt.Fprintf(stdout, "UNKNOWN %s %s\t%s\n", out.Placement.Machine, out.Operation.ID, oneLine(oc.Stderr))
+		return placeUnknown, nil
 	case resp.StatusCode == http.StatusOK && out.Local != nil && out.Operation.ID != "":
 		fmt.Fprintf(stdout, "REMOTE %s %s %s\t%s\n", out.Placement.Machine, out.Operation.ID,
 			out.Operation.Status, oneLine(out.Placement.Reason))
