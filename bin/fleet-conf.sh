@@ -48,7 +48,7 @@ usage() { sed -n '4,8p' "$0" | sed 's/^# //' >&2; exit 2; }
 
 CD="$FLEET_CONF_DIR"
 MC="$CD/fleet.conf"
-INST="$BIN/../fleet.conf"
+INST="$(cd "$BIN/.." && pwd)/fleet.conf"
 CLIENT_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/claude-fleet"
 SECRET_RE='^[[:space:]]*(export[[:space:]]+)?[A-Z0-9_]*(TOKEN|SECRET|PASSWORD)='
 HUB_RE='^[[:space:]]*(export[[:space:]]+)?(CCQUOTA_HUB_URL|FLEET_HUB_URL)='
