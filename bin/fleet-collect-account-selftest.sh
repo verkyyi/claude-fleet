@@ -15,7 +15,7 @@ python3 - "$BIN/tmux-dash-collect.sh" "$WORK/phase.sh" <<'PY'
 import re,sys
 s=open(sys.argv[1]).read()
 out=[]
-for name in ('atomic_write','ph_banner'):
+for name in ('atomic_write','ph_banner','banner_scan_one'):
     f=re.search(r'^'+name+r'\(\) \{\n.*?^\}',s,re.M|re.S)
     assert f, name
     out.append(f.group(0))

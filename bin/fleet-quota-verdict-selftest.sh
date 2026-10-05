@@ -103,7 +103,7 @@ python3 - "$BIN/tmux-dash-collect.sh" "$WORK/phase.sh" <<'PY'
 import re,sys
 s=open(sys.argv[1]).read()
 out=[]
-for name in ('atomic_write','ph_banner'):
+for name in ('atomic_write','ph_banner','banner_scan_one'):
     m=re.search(r'^'+name+r'\(\) \{\n.*?^\}',s,re.M|re.S); assert m, name
     out.append(m.group(0))
 open(sys.argv[2],'w').write('\n'.join(out)+'\n')

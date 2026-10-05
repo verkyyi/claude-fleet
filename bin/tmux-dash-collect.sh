@@ -31,6 +31,9 @@
 #                           `sessmap` (issue #653)
 #   global/collect.issues.cursor — repo CLAIMED before its GitHub fetch; after a
 #                           timeout the next issues phase resumes after that repo
+#   global/banner.cursor — "<socket>TAB<window-id>" the banner phase CLAIMED last among
+#                           the non-working windows; the next tick resumes after it
+#                           (working windows are scanned first, every tick — #1588)
 #   global/collect.phase.cursor — the phase the last tick was TRUNCATED at (whole-tick
 #                           budget); the next tick starts there and wraps round, so a
 #                           truncated phase waits one round instead of starving. Absent
@@ -297,14 +300,22 @@ fleet_gh_share_on && fleet_gh_lead_tick >/dev/null
 HB="$G/collect.heartbeat"; HB_START=$(now); HB_PHASE=''; HB_PHASE_TS=$HB_START; HB_PHASES=''
 HB_OVER=''      # phases that spent their own budget this tick (issue #653)
 HB_SKIP=''      # phases the TICK budget truncated away this tick (issue #653)
+HB_BSCAN=''; HB_BTOTAL=''   # banner windows scanned / due this tick (issue #1588)
 hb_phase() {  # $1 = the phase now starting ('' = the tick is done)
   local t; t=$(now)
   [ -n "$HB_PHASE" ] && HB_PHASES="${HB_PHASES}${HB_PHASES:+ }${HB_PHASE}=$(( t - HB_PHASE_TS ))"
+  # banner_scanned=/banner_total= (issue #1588): how far the banner phase got —
+  # its own progress file, since it ran in fleet_timebox's subshell.
+  if [ "$HB_PHASE" = banner ] && [ -f "$G/collect.banner.prog.$$" ]; then
+    read -r HB_BSCAN HB_BTOTAL < "$G/collect.banner.prog.$$" || true
+    rm -f "$G/collect.banner.prog.$$"
+  fi
   HB_PHASE="$1"; HB_PHASE_TS=$t
   { printf 'pid=%s\nstart=%s\nphase=%s\nphase_ts=%s\nphases=%s\n' "$$" "$HB_START" "${HB_PHASE:-done}" "$t" "$HB_PHASES"
     # over=/skipped= are APPENDED keys (issue #653): every reader looks its key up
     # with `sed -n 's/^k=//p'`, so adding lines cannot move an existing one.
     printf 'over=%s\nskipped=%s\n' "$HB_OVER" "$HB_SKIP"
+    printf 'banner_scanned=%s\nbanner_total=%s\n' "$HB_BSCAN" "$HB_BTOTAL"
     [ -z "$HB_PHASE" ] && printf 'end=%s\ndur=%s\n' "$t" "$(( t - HB_START ))"; } | atomic_write "$HB"
 }
 
@@ -376,12 +387,34 @@ phase_budget() {
     ctx)        printf '%s' "${FLEET_COLLECT_CTX_BUDGET:-45}" ;;
     usage)      printf '%s' "${FLEET_COLLECT_USAGE_BUDGET:-60}" ;;
     scrape)     printf '%s' "${FLEET_COLLECT_SCRAPE_BUDGET:-30}" ;;
-    banner)     printf '%s' "${FLEET_COLLECT_BANNER_BUDGET:-30}" ;;
+    banner)     banner_budget ;;
     escalate)   printf '%s' "${FLEET_COLLECT_ESCALATE_BUDGET:-30}" ;;
     snapshot)   printf '%s' "${FLEET_COLLECT_SNAPSHOT_BUDGET:-30}" ;;
     hubsess)    printf '%s' "${FLEET_COLLECT_HUBSESS_BUDGET:-10}" ;;
     *)          printf '30' ;;
   esac
+}
+
+# banner_budget — the banner phase scans every window each tick (issue #1588), so its
+# budget follows the window count: max(FLEET_COLLECT_BANNER_BUDGET, windows ×
+# FLEET_COLLECT_BANNER_PER_WINDOW_MS). The knob keeps its meaning as the FLOOR; a
+# fixed 30s was killed in 10 of 29 ticks on a 20-plus-window machine. 0 stays
+# "unbudgeted", and no accounts dir (the phase is a no-op) is just the floor.
+banner_budget() {
+  local base="${FLEET_COLLECT_BANNER_BUDGET:-30}" per="${FLEET_COLLECT_BANNER_PER_WINDOW_MS:-1500}" n=0 sock c b
+  case "$base" in ''|*[!0-9]*) base=30 ;; esac
+  case "$per" in ''|*[!0-9]*) per=1500 ;; esac
+  if [ "$base" = 0 ] || [ ! -d "${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}" ]; then
+    printf '%s' "$base"; return 0
+  fi
+  for sock in ${SOCKETS:-}; do
+    c=$(fleet_lw '#{?@remote,,x}' tmux -L "$sock" | grep -c x)
+    case "$c" in ''|*[!0-9]*) c=0 ;; esac
+    n=$((n + c))
+  done
+  b=$(( (n * per + 999) / 1000 ))
+  [ "$b" -gt "$base" ] || b="$base"
+  printf '%s' "$b"
 }
 
 # phase_knob NAME — the env var that tunes it, named in the over-budget line so the
@@ -1010,126 +1043,180 @@ if [ -n "$line" ]; then printf '%s\t%s' "$(now)" "$line" | atomic_write "$G/rate
 # stamp, an unreadable token, or a non-Claude pane cannot bench another account.
 # No-op unless accounts are registered — so single-account installs skip it.
 ph_banner() {
-local sock win wid acct repair banner kind lm fb muntil mig msw mk muntilt newact rc axis verdict hk
-if [ -d "${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}" ]; then
-  for sock in $SOCKETS; do
-  bash "$BIN/fleet-account-truth.sh" --socket "$sock" | \
+local sock wid win acct repair row working i n pos cur scanned=0 total
+local -a hot cold order
+hot=(); cold=(); order=()
+[ -d "${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}" ] || return 0
+# One verified-row list for the whole phase (issue #1588), so it can be ORDERED and
+# COUNTED before any window is scanned: `working` windows first (hot), the rest in
+# a rotation that resumes after global/banner.cursor (cold) — the git phase's
+# round-robin shape. A tick the budget cuts short costs the windows it did not
+# reach ONE tick, never a starve: the next one starts where this one stopped.
+for sock in $SOCKETS; do
+  working=" $(fleet_lw '#{?#{==:#{@claude_state},working},#{window_id},}' tmux -L "$sock" | tr '\n' ' ') "
   while IFS=$'\t' read -r wid win acct repair; do
     [ -n "$acct" ] || continue
-    # Target the exact pane whose process was checked, on this fleet's socket.
-    if [ "$repair" = 1 ]; then
-      tmux -L "$sock" set-window-option -t "$win" @cc_account "$acct" 2>/dev/null || continue
-    fi
-    # fleet_limit_banner (usage-lib.sh, issue #511) prefers the classic "hit your
-    # <session|weekly|Opus> limit · resets …" line — its tail is what mark-limited
-    # benches to (issue #490), so the whole banner is passed, not just the head —
-    # and falls back to the newer sticky "Usage limit reached · continuing
-    # automatically at …" footer, which outlives the classic line on screen.
-    banner=$(tmux -L "$sock" capture-pane -p -S -200 -t "$win" 2>/dev/null | fleet_limit_banner)
-    [ -n "$banner" ] || continue
-    # The wall this window's session was MOVED away from (issue #870): a
-    # `--resume` re-renders it on the new pane, where it is not about $acct.
-    fleet_banner_replayed "$banner" \
-      "$(tmux -L "$sock" display-message -p -t "$wid" '#{@migrated_banner}' 2>/dev/null)" && continue
-    # A PER-MODEL cap (issue #524) — "hit your Fable 5 limit · resets Sep 6" /
-    # "reached your Fable limit" — is NOT the subscription wall: the account keeps
-    # its 5h/7d headroom for every other model. Benching it here moved every
-    # session onto an account with the same cap (the 2026-09-02 cascade). Instead:
-    # record the (account, model) cap (fleet-claude.sh launches new sessions on
-    # FLEET_MODEL_FALLBACK while it holds), clear the wall on THIS window IN
-    # PLACE (fleet-model-switch.sh types `/model <fallback>` at its prompt: ~5s,
-    # process and background agents and context all kept; it falls back to
-    # fleet-migrate.sh --model itself when it cannot verify the flip, issue #569),
-    # and notify once per episode. @model_migrating guards the window across ticks
-    # and is SHARED with the quotawatch sweep, which normally gets here first —
-    # this branch is the backstop for a daemon set that predates #569. No usable
-    # fallback (knob empty, or it IS the capped model) → the pre-#524
-    # subscription path below, unchanged.
-    kind=$(printf '%s\n' "$banner" | fleet_limit_kind)
-    case "$kind" in
-      model:*)
-        lm=${kind#model:}; fb="${FLEET_MODEL_FALLBACK-opus}"
-        if [ -n "$fb" ] && [ "$fb" != "$lm" ]; then
-          muntil=$("$BIN/fleet-account.sh" model-limited "$acct" "$lm" "$banner" 2>/dev/null)
-          case "$muntil" in ''|*[!0-9]*) muntil=0;; esac
-          mig=$(tmux -L "$sock" display-message -p -t "$wid" '#{@model_migrating}' 2>/dev/null)
-          case "$mig" in ''|*[!0-9]*) mig=0;; esac
-          if [ $(( $(now) - mig )) -gt 180 ]; then
-            tmux -L "$sock" set-window-option -t "$wid" @model_migrating "$(now)" 2>/dev/null
-            msw="$BIN/fleet-model-switch.sh"; [ -x "$msw" ] || msw="$BIN/fleet-migrate.sh"
-            fleet_bg -L "$sock" "bash '$msw' --model '$fb' --session '$sock' --toast '$wid'"
-          fi
-          mk="$G/model.limited.$acct.$lm"
-          if ! fleet_same_window "$mk" "$muntil"; then
-            printf '%s' "$muntil" | atomic_write "$mk"
-            muntilt=$(date -r "$muntil" '+%b %d %H:%M' 2>/dev/null || date -d "@$muntil" '+%b %d %H:%M' 2>/dev/null || echo "?")
-            tmux -L "$sock" display-message "fleet: $acct hit its $lm cap (until $muntilt) — switching walled sessions to $fb in place; new sessions on it launch on $fb" 2>/dev/null
-            if [ -n "${FLEET_NOTIFY_CMD:-}" ]; then
-              $FLEET_NOTIFY_CMD "# model cap reached — falling back to $fb
-account **$acct** hit its **$lm** cap (until $muntilt); the subscription itself is fine, so the account stays active — sessions showing the wall are switched to **$fb** IN PLACE (\`/model\` typed at their own prompt: same process, same transcript, background agents kept) and new sessions on this account launch on **$fb** until the cap resets
-> ${banner}" >/dev/null 2>&1
-            fi
-          fi
-          continue
-        fi ;;
-    esac
-    # A SUBSCRIPTION banner is a HINT, not a verdict (issue #874). The screen is a
-    # guess at a fact ccquota states exactly, and the guess false-benched healthy
-    # accounts twice (#782: a Codex banner; 2026-09-22: a `--resume` replayed an old
-    # weekly banner and benched an account at 7d 34%, cascading across the pool).
-    # So the banner buys one forced refetch (deduped across windows: quota-verdict
-    # skips it while the cache is younger than FLEET_ACCOUNT_VERDICT_REFETCH), and
-    # the refreshed reading of the window the banner names decides:
-    #   ok       → no bench. Either the banner is replayed history, or the hub is
-    #              still behind a real wall — the banner stays on screen, so the
-    #              next tick asks again; one stderr line per banner, not per tick.
-    #   limited  → bench until ccquota's own reset instant.
-    #   unknown  → no fresh reading (stale / blind / not on the hub): the pre-#874
-    #              banner bench, and $G/quota.via-banner raises `▲ quota · from banner`.
-    axis=$(printf '%s\n' "$banner" | fleet_limit_axis)
-    verdict=$("$BIN/fleet-account.sh" quota-verdict "$acct" ${axis:+--axis "$axis"} --refresh 2>/dev/null)
-    case "$verdict" in
-      ok)
-        hk="$G/banner-hint.$(printf '%s' "$acct" | tr -c 'A-Za-z0-9._@-' '_')"
-        if [ "$(cat "$hk" 2>/dev/null)" != "$banner" ]; then
-          printf '%s' "$banner" | atomic_write "$hk"
-          printf '%s collect: %s banner ignored — ccquota %s reading has headroom (quota-verdict ok): %s\n' \
-            "$(date '+%F %T')" "$acct" "${axis:-5h+7d}" "$banner" >&2
-        fi
-        continue ;;
-      "limited "*)
-        newact=$("$BIN/fleet-account.sh" bench "$acct" "${verdict#limited }" "ccquota ${axis:-5h+7d} at ceiling · $banner" 2>/dev/null); rc=$? ;;
-      *)
-        printf '%s\t%s\n' "$(now)" "$acct" | atomic_write "$G/quota.via-banner"
-        newact=$("$BIN/fleet-account.sh" mark-limited "$acct" "$banner" 2>/dev/null); rc=$? ;;
-    esac
-    # exit 10 = this call rotated the active account away → fires ONCE per bench.
-    # A running session cannot hot-swap its token (apiKeyHelper only carries
-    # API-key credentials, not subscription OAuth tokens — verified on #495), so
-    # following the rotation means moving sessions: every window still running on
-    # a benched account — the banner window and any other on that account, mid-
-    # turn or idle (their next request fails anyway) — is closed and `--resume`d
-    # in a new window under the new active account (fleet-migrate.sh, issue
-    # #512), backgrounded via fleet_bg so the collector never blocks on the
-    # per-window exit/boot waits. run-shell sets $TMUX for the job, so migrate's
-    # bare tmux calls stay on THIS fleet's server; --toast reports the count.
-    # fleet_bg, not a hand-rolled `run-shell -b` (#575): migrate's say() report is
-    # stdout, which run-shell would overlay on the operator's window (Esc to
-    # dismiss) — fleet_bg silences it; the status-line --toast is unchanged.
-    if ( fleet_load_conf "$sock"; [ "${FLEET_FAILOVER:-0}" = 1 ] ); then
-      fleet_bg -L "$sock" "bash '$BIN/fleet-account.sh' reconcile --session '$sock'"
-    elif [ "$rc" -eq 10 ]; then
-      fleet_bg -L "$sock" "bash '$BIN/fleet-account.sh' migrate --limited --session '$sock' --toast"
-      if [ -n "${FLEET_NOTIFY_CMD:-}" ]; then
-        $FLEET_NOTIFY_CMD "# subscription limit reached
-account **$acct** hit its usage limit — new sessions now use **${newact:-?}**; every session still on it is being moved (close + \`--resume\` in a new window)
-> ${banner}" >/dev/null 2>&1
-      fi
-    fi
-  done
+    row="$sock"$'\t'"$wid"$'\t'"$win"$'\t'"$acct"$'\t'"$repair"
+    case "$working" in *" $wid "*) hot+=("$row") ;; *) cold+=("$row") ;; esac
+  done < <(bash "$BIN/fleet-account-truth.sh" --socket "$sock")
+done
+n=${#cold[@]}; pos=0
+cur=$(cat "$G/banner.cursor" 2>/dev/null)
+if [ -n "$cur" ]; then
+  i=0
+  while [ "$i" -lt "$n" ]; do
+    row="${cold[$i]}"
+    [ "$(printf '%s' "$row" | cut -f1-2)" = "$cur" ] && { pos=$(( (i + 1) % n )); break; }
+    i=$((i+1))
   done
 fi
+order=(${hot[@]+"${hot[@]}"})
+i=0
+while [ "$i" -lt "$n" ]; do order+=("${cold[$(( (pos + i) % n ))]}"); i=$((i+1)); done
+total=${#order[@]}
+# "scanned total", read back for the heartbeat (banner_scanned=/banner_total=) and
+# by ph_banner_over — this runs in fleet_timebox's subshell, so a counter variable
+# would not survive a kill. The $$ suffix puts it in the EXIT trap's sweep.
+printf '%s %s' 0 "$total" > "$G/collect.banner.prog.$$"
+i=0
+while [ "$i" -lt "$total" ]; do
+  IFS=$'\t' read -r sock wid win acct repair <<< "${order[$i]}"
+  # A cold window is CLAIMED before its scan, so one that wedges is passed over by
+  # the next tick's rotation instead of eating its budget again.
+  [ "$i" -ge "${#hot[@]}" ] && printf '%s\t%s' "$sock" "$wid" > "$G/banner.cursor"
+  banner_scan_one "$sock" "$wid" "$win" "$acct" "$repair"
+  i=$((i+1)); scanned=$i
+  printf '%s %s' "$scanned" "$total" > "$G/collect.banner.prog.$$"
+done
+return 0
+}
 
+# banner_scan_one SOCK WID PANE ACCT REPAIR — one verified window of the banner phase.
+banner_scan_one() {
+local sock="$1" wid="$2" win="$3" acct="$4" repair="$5"
+local banner kind lm fb muntil mig msw mk muntilt newact rc axis verdict hk
+  # Target the exact pane whose process was checked, on this fleet's socket.
+  if [ "$repair" = 1 ]; then
+    tmux -L "$sock" set-window-option -t "$win" @cc_account "$acct" 2>/dev/null || return 0
+  fi
+  # fleet_limit_banner (usage-lib.sh, issue #511) prefers the classic "hit your
+  # <session|weekly|Opus> limit · resets …" line — its tail is what mark-limited
+  # benches to (issue #490), so the whole banner is passed, not just the head —
+  # and falls back to the newer sticky "Usage limit reached · continuing
+  # automatically at …" footer, which outlives the classic line on screen.
+  banner=$(tmux -L "$sock" capture-pane -p -S -200 -t "$win" 2>/dev/null | fleet_limit_banner)
+  [ -n "$banner" ] || return 0
+  # The wall this window's session was MOVED away from (issue #870): a
+  # `--resume` re-renders it on the new pane, where it is not about $acct.
+  fleet_banner_replayed "$banner" \
+    "$(tmux -L "$sock" display-message -p -t "$wid" '#{@migrated_banner}' 2>/dev/null)" && return 0
+  # A PER-MODEL cap (issue #524) — "hit your Fable 5 limit · resets Sep 6" /
+  # "reached your Fable limit" — is NOT the subscription wall: the account keeps
+  # its 5h/7d headroom for every other model. Benching it here moved every
+  # session onto an account with the same cap (the 2026-09-02 cascade). Instead:
+  # record the (account, model) cap (fleet-claude.sh launches new sessions on
+  # FLEET_MODEL_FALLBACK while it holds), clear the wall on THIS window IN
+  # PLACE (fleet-model-switch.sh types `/model <fallback>` at its prompt: ~5s,
+  # process and background agents and context all kept; it falls back to
+  # fleet-migrate.sh --model itself when it cannot verify the flip, issue #569),
+  # and notify once per episode. @model_migrating guards the window across ticks
+  # and is SHARED with the quotawatch sweep, which normally gets here first —
+  # this branch is the backstop for a daemon set that predates #569. No usable
+  # fallback (knob empty, or it IS the capped model) → the pre-#524
+  # subscription path below, unchanged.
+  kind=$(printf '%s\n' "$banner" | fleet_limit_kind)
+  case "$kind" in
+    model:*)
+      lm=${kind#model:}; fb="${FLEET_MODEL_FALLBACK-opus}"
+      if [ -n "$fb" ] && [ "$fb" != "$lm" ]; then
+        muntil=$("$BIN/fleet-account.sh" model-limited "$acct" "$lm" "$banner" 2>/dev/null)
+        case "$muntil" in ''|*[!0-9]*) muntil=0;; esac
+        mig=$(tmux -L "$sock" display-message -p -t "$wid" '#{@model_migrating}' 2>/dev/null)
+        case "$mig" in ''|*[!0-9]*) mig=0;; esac
+        if [ $(( $(now) - mig )) -gt 180 ]; then
+          tmux -L "$sock" set-window-option -t "$wid" @model_migrating "$(now)" 2>/dev/null
+          msw="$BIN/fleet-model-switch.sh"; [ -x "$msw" ] || msw="$BIN/fleet-migrate.sh"
+          fleet_bg -L "$sock" "bash '$msw' --model '$fb' --session '$sock' --toast '$wid'"
+        fi
+        mk="$G/model.limited.$acct.$lm"
+        if ! fleet_same_window "$mk" "$muntil"; then
+          printf '%s' "$muntil" | atomic_write "$mk"
+          muntilt=$(date -r "$muntil" '+%b %d %H:%M' 2>/dev/null || date -d "@$muntil" '+%b %d %H:%M' 2>/dev/null || echo "?")
+          tmux -L "$sock" display-message "fleet: $acct hit its $lm cap (until $muntilt) — switching walled sessions to $fb in place; new sessions on it launch on $fb" 2>/dev/null
+          if [ -n "${FLEET_NOTIFY_CMD:-}" ]; then
+            $FLEET_NOTIFY_CMD "# model cap reached — falling back to $fb
+account **$acct** hit its **$lm** cap (until $muntilt); the subscription itself is fine, so the account stays active — sessions showing the wall are switched to **$fb** IN PLACE (\`/model\` typed at their own prompt: same process, same transcript, background agents kept) and new sessions on this account launch on **$fb** until the cap resets
+> ${banner}" >/dev/null 2>&1
+          fi
+        fi
+        return 0
+      fi ;;
+  esac
+  # A SUBSCRIPTION banner is a HINT, not a verdict (issue #874). The screen is a
+  # guess at a fact ccquota states exactly, and the guess false-benched healthy
+  # accounts twice (#782: a Codex banner; 2026-09-22: a `--resume` replayed an old
+  # weekly banner and benched an account at 7d 34%, cascading across the pool).
+  # So the banner buys one forced refetch (deduped across windows: quota-verdict
+  # skips it while the cache is younger than FLEET_ACCOUNT_VERDICT_REFETCH), and
+  # the refreshed reading of the window the banner names decides:
+  #   ok       → no bench. Either the banner is replayed history, or the hub is
+  #              still behind a real wall — the banner stays on screen, so the
+  #              next tick asks again; one stderr line per banner, not per tick.
+  #   limited  → bench until ccquota's own reset instant.
+  #   unknown  → no fresh reading (stale / blind / not on the hub): the pre-#874
+  #              banner bench, and $G/quota.via-banner raises `▲ quota · from banner`.
+  axis=$(printf '%s\n' "$banner" | fleet_limit_axis)
+  verdict=$("$BIN/fleet-account.sh" quota-verdict "$acct" ${axis:+--axis "$axis"} --refresh 2>/dev/null)
+  case "$verdict" in
+    ok)
+      hk="$G/banner-hint.$(printf '%s' "$acct" | tr -c 'A-Za-z0-9._@-' '_')"
+      if [ "$(cat "$hk" 2>/dev/null)" != "$banner" ]; then
+        printf '%s' "$banner" | atomic_write "$hk"
+        printf '%s collect: %s banner ignored — ccquota %s reading has headroom (quota-verdict ok): %s\n' \
+          "$(date '+%F %T')" "$acct" "${axis:-5h+7d}" "$banner" >&2
+      fi
+      return 0 ;;
+    "limited "*)
+      newact=$("$BIN/fleet-account.sh" bench "$acct" "${verdict#limited }" "ccquota ${axis:-5h+7d} at ceiling · $banner" 2>/dev/null); rc=$? ;;
+    *)
+      printf '%s\t%s\n' "$(now)" "$acct" | atomic_write "$G/quota.via-banner"
+      newact=$("$BIN/fleet-account.sh" mark-limited "$acct" "$banner" 2>/dev/null); rc=$? ;;
+  esac
+  # exit 10 = this call rotated the active account away → fires ONCE per bench.
+  # A running session cannot hot-swap its token (apiKeyHelper only carries
+  # API-key credentials, not subscription OAuth tokens — verified on #495), so
+  # following the rotation means moving sessions: every window still running on
+  # a benched account — the banner window and any other on that account, mid-
+  # turn or idle (their next request fails anyway) — is closed and `--resume`d
+  # in a new window under the new active account (fleet-migrate.sh, issue
+  # #512), backgrounded via fleet_bg so the collector never blocks on the
+  # per-window exit/boot waits. run-shell sets $TMUX for the job, so migrate's
+  # bare tmux calls stay on THIS fleet's server; --toast reports the count.
+  # fleet_bg, not a hand-rolled `run-shell -b` (#575): migrate's say() report is
+  # stdout, which run-shell would overlay on the operator's window (Esc to
+  # dismiss) — fleet_bg silences it; the status-line --toast is unchanged.
+  if ( fleet_load_conf "$sock"; [ "${FLEET_FAILOVER:-0}" = 1 ] ); then
+    fleet_bg -L "$sock" "bash '$BIN/fleet-account.sh' reconcile --session '$sock'"
+  elif [ "$rc" -eq 10 ]; then
+    fleet_bg -L "$sock" "bash '$BIN/fleet-account.sh' migrate --limited --session '$sock' --toast"
+    if [ -n "${FLEET_NOTIFY_CMD:-}" ]; then
+      $FLEET_NOTIFY_CMD "# subscription limit reached
+account **$acct** hit its usage limit — new sessions now use **${newact:-?}**; every session still on it is being moved (close + \`--resume\` in a new window)
+> ${banner}" >/dev/null 2>&1
+    fi
+  fi
+return 0
+}
+
+# ph_banner_over — how far the banner rotation got when its budget killed it (the
+# generic line names only the phase). The windows it did not reach wait one tick;
+# the next resumes after the claimed one, working windows first.
+# shellcheck disable=SC2329  # invoked as run_phase's "ph_${name}_over", not by name
+ph_banner_over() {
+  local prog; prog=$(cat "$G/collect.banner.prog.$$" 2>/dev/null)
+  [ -n "$prog" ] || prog='0 ?'   # killed before the window list was even built
+  printf 'fleet-collect: banner covered %s/%s window(s) — next tick resumes after %s\n' \
+    "${prog%% *}" "${prog##* }" "$(tr '\t' ' ' < "$G/banner.cursor" 2>/dev/null)" >&2
 }
 
 # NB: the ccquota-driven PRE-EMPTIVE rotation (issue #513) — warn at
