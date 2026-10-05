@@ -364,4 +364,5 @@ FLEET_NODE_UPGRADE_OS              seam: overrides `uname -s` (fleet-node-upgrad
 FLEET_NODE_UPGRADE_POLL            seam: seconds between post-restart hub polls (default 2) (fleet-node-upgrade.sh, #1525)
 FLEET_PEER_CERT                    escape hatch: 0 = never ask the hub for a machine-to-machine certificate, plain ssh (fleet-peer-cert.sh, #1626)
 FLEET_PEER_CERT_SECS               seam: life asked for a peer certificate (default 300; the hub caps it at 300) (fleet-peer-cert.sh, #1626)
+FLEET_PEER_CERT_CONNECT_SECS       seam: connect bound for the peer-cert request — a down hub is refused inside 1 s (default 0.8) (fleet-peer-cert.sh, #1630)
 FLEET_PEER_KEY                     path: the peer key the hub signs (default ~/.ssh/fleet-peer) (fleet-peer-cert.sh, #1626)
