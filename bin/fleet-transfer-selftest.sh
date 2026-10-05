@@ -385,13 +385,13 @@ ok; [ "$(TM display-message -p -t "$PANE" '#{pane_current_command}')" = sleep ] 
 # profile is valid the same cutover goes through.
 printf 'reauth_required\n' > "$WORK/login-state"
 spawn 52 issue normal
-PKGS=$(ls "$FLEET_CONF_DIR/handoffs" | grep -vx retry | wc -l | tr -d ' ')
+PKGS=$(find "$FLEET_CONF_DIR/handoffs" -mindepth 1 -maxdepth 1 ! -name retry | wc -l | tr -d ' ')
 transfer --codex-home "$WORK/codex-home" --dry-run && fail 'dry-run onto a reauth_required profile must refuse'
 ok; printf '%s' "$OUT" | grep -q 'target auth: REFUSED · Codex profile needs a verified subscription login: work (reauth_required)' || fail "dry-run must name the login: $OUT"
 transfer --codex-home "$WORK/codex-home" && fail 'cutover onto a reauth_required profile must refuse'
 ok; printf '%s' "$OUT" | grep -q '^fleet-transfer: target-auth: Codex profile needs a verified subscription login: work (reauth_required)' || fail "the refusal must be target-auth: $OUT"
 ok; kill -0 "$PID" && [ -z "$(field cc_agent)" ] && TM capture-pane -p -t "$PANE" | grep -q "Claude ready $SID" || fail 'a refused target must leave the source running, untouched'
-ok; [ "$(ls "$FLEET_CONF_DIR/handoffs" | grep -vx retry | wc -l | tr -d ' ')" = "$PKGS" ] && ! fleet_rotate_lease_held "$WT" >/dev/null 2>&1 || fail 'a refusal must write no package and take no lease'
+ok; [ "$(find "$FLEET_CONF_DIR/handoffs" -mindepth 1 -maxdepth 1 ! -name retry | wc -l | tr -d ' ')" = "$PKGS" ] && ! fleet_rotate_lease_held "$WT" >/dev/null 2>&1 || fail 'a refusal must write no package and take no lease'
 ok; grep -q $'\ttransfer-refused\t.*reauth_required' "$TMPDIR/.claude-dash/global/alerts.events" 2>/dev/null \
   || fail "a refusal must record a transfer-refused event: $(cat "$TMPDIR/.claude-dash/global/alerts.events" 2>/dev/null)"
 ok; R52=$(ls -d "$FLEET_CONF_DIR/handoffs/retry/$LBL"-* 2>/dev/null | head -n 1) && [ -e "$R52/pending" ] \
@@ -428,7 +428,8 @@ ok; printf '%s' "$OUT" | grep -q 'still waiting' && [ -e "$R53/pending" ] && kil
   || fail "a resume while the login is still dead must leave everything as it is: $OUT"
 bash "$IBIN/fleet-transfer.sh" --retry "$R53" >/dev/null 2>&1; rc=$?
 ok; [ "$rc" = 3 ] && [ -e "$R53/pending" ] || fail "--retry on a still-dead login must exit 3 and stay pending (rc=$rc)"
-OUT=$(bash "$IBIN/fleet-relogin.sh" login codex/work </dev/null 2>&1) || fail "re-login: $OUT"
+# a slow runner: the retry child boots Codex under the same wait as any cutover
+OUT=$(FLEET_TRANSFER_BOOT_WAIT=10 bash "$IBIN/fleet-relogin.sh" login codex/work </dev/null 2>&1) || fail "re-login: $OUT"
 ok; printf '%s' "$OUT" | grep -q 'https://auth.example.invalid/device' && printf '%s' "$OUT" | grep -q '已自动接着切换' \
   || fail "the re-login must show the device link and then switch: $OUT
 --- retry transfer.log:

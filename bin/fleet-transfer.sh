@@ -168,7 +168,7 @@ retry_main() {
   printf '%s\n' "$out" > "$dir/transfer.log"; chmod 600 "$dir/transfer.log" 2>/dev/null
   printf '%s\n' "$out"
   if [ "$rc" = 0 ]; then
-    python3 "$HELPER" retry-finish "$dir" done "switched to $TO after the login was fixed" || :
+    python3 "$HELPER" retry-finish "$dir" 'done' "switched to $TO after the login was fixed" || :
     [ -x "$BIN/fleet-alerts.sh" ] && bash "$BIN/fleet-alerts.sh" event -L "$SOCK" transfer-retried \
       "$(TM_RETRY "$win" '#{?@wid,#{@wid},#{window_name}}'): 重新登录后已自动切到 $TO · switched after the login was fixed" >/dev/null 2>&1 || :
     return 0
