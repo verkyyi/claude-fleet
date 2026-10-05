@@ -131,12 +131,21 @@ cmd_resume() {
     case "$rc" in
       0) say "↻ 已自动接着切换 · switched: $(_retry_label "$dir")" ;;
       3) say "… 仍在等待 · still waiting: $(_retry_label "$dir") · $(tail -n 1 "$dir/retry.err")" ;;
-      *) say "✖ 重试失败，不再重试 · retry failed: $(_retry_label "$dir") · $(tail -n 1 "$dir/retry.err")" ;;
+      *) say "✖ 重试失败，不再重试 · retry failed: $(_retry_label "$dir") · $(_retry_detail "$dir")" ;;
     esac
   done < <(python3 "$HELPER" retry-list ${1:+--wait "$1"} 2>/dev/null)
   [ "$n" -gt 0 ] || say "没有等待重试的切换 · no switch was waiting on ${1:-a login}"
   rm -rf "$lock"; trap - EXIT
   return 0
+}
+
+# _retry_detail <dir> — why a retry ended: the record's own detail (the child's
+# last `fleet-transfer:` line), else the last stderr line of --retry itself.
+_retry_detail() {
+  local d
+  d=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("detail") or "")' "$1/request.json" 2>/dev/null)
+  [ -n "$d" ] || d=$(tail -n 1 "$1/retry.err" 2>/dev/null)
+  printf '%s' "$d"
 }
 
 _retry_label() {

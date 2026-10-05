@@ -430,7 +430,9 @@ bash "$IBIN/fleet-transfer.sh" --retry "$R53" >/dev/null 2>&1; rc=$?
 ok; [ "$rc" = 3 ] && [ -e "$R53/pending" ] || fail "--retry on a still-dead login must exit 3 and stay pending (rc=$rc)"
 OUT=$(bash "$IBIN/fleet-relogin.sh" login codex/work </dev/null 2>&1) || fail "re-login: $OUT"
 ok; printf '%s' "$OUT" | grep -q 'https://auth.example.invalid/device' && printf '%s' "$OUT" | grep -q '已自动接着切换' \
-  || fail "the re-login must show the device link and then switch: $OUT"
+  || fail "the re-login must show the device link and then switch: $OUT
+--- retry transfer.log:
+$(cat "$R53/transfer.log" "$R53/retry.err" 2>&1)"
 ok; ! fleet_pid_alive "$BACK" && [ "$(field cc_agent)" = codex ] && [ "$(field source_session_id)" = source-53 ] \
   || fail "after the login the same conversation must be on Codex: $(TM capture-pane -p -t "$PANE")"
 python3 - "$R53" <<'PY2' || fail 'the retried record must be done, attempted once'
