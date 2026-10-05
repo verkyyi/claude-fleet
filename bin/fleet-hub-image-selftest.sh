@@ -49,7 +49,7 @@ BARE="$WORK/origin.git" SEED="$WORK/seed" CO="$WORK/co" HUB="$WORK/hub"
 git init -q --bare -b master "$BARE"
 git clone -q "$BARE" "$SEED" 2>/dev/null
 commit() { echo "$1" >> "$SEED/f"; git -C "$SEED" add f; git -C "$SEED" commit -qm "$1"; git -C "$SEED" rev-parse --short HEAD; }
-C1=$(commit one); C2=$(commit two); C3=$(commit three); C4=$(commit four)
+C1=$(commit one); commit two >/dev/null; C3=$(commit three); C4=$(commit four)
 git -C "$SEED" push -q origin HEAD:master
 git -C "$SEED" push -q origin "$C3:refs/tags/stable"
 git clone -q "$BARE" "$CO" 2>/dev/null
