@@ -226,6 +226,8 @@ autosync_off() {
   _cd=$(conf_dir_of "$1" "$2" "$3")
   _s=$(conf_val "$(oread "$1" "$_cd/fleet.settings")" FLEET_INSTALL_SYNC)
   [ -n "$_s" ] && _v=$_s
+  _s=$(conf_val "$(oread "$1" "$_cd/fleet.conf")" FLEET_INSTALL_SYNC)   # the one file (#1623)
+  [ -n "$_s" ] && _v=$_s
   [ "$_v" = 0 ]
 }
 # to_https <url> — an origin URL as its https form (git@host:path, ssh://…)

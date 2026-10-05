@@ -75,7 +75,8 @@ The hub admits you on one of (first that is present):
                                        login` fetches (proven by signing with
                                        ssh-keygen -Y sign)
 
-The hub's URL: --hub, else FLEET_HUB_URL, else "url" in
+The hub's URL: --hub, else FLEET_HUB_URL, else FLEET_HUB_URL in fleet.conf
+(issue #1623), else (one version) "url" in
 ~/.config/claude-fleet/hub.json.
 
 Exit: --proxy: 0 the stream ended; 1 the hub refused (the reason is on
@@ -91,6 +92,7 @@ import os
 import socket
 import ssl
 import struct
+import re
 import shlex
 import subprocess
 import sys
@@ -133,6 +135,22 @@ def env_num(name, default, cast=float):
 def config_dir():
     base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
     return os.path.join(base, "claude-fleet")
+
+
+def machine_conf_hub():
+    """FLEET_HUB_URL from the machine's ONE config file (issue #1623) — its last
+    assignment, `export` and quotes allowed; '' with no file or no line."""
+    d = os.environ.get("FLEET_CONF_DIR") or config_dir()
+    url = ""
+    try:
+        with open(os.path.join(d, "fleet.conf")) as f:
+            for line in f:
+                m = re.match(r"\s*(?:export\s+)?FLEET_HUB_URL=(.*)$", line)
+                if m:
+                    url = m.group(1).split(" #")[0].strip().strip("\"'")
+    except OSError:
+        pass
+    return url
 
 
 def load_hub_conf():
@@ -870,12 +888,13 @@ def main(argv):
                     help="certificate + the hub's machine pick as one JSON line; no measuring, no ssh (the shell)")
     a = ap.parse_args(argv)
     conf = load_hub_conf()
-    hub = a.hub or os.environ.get("FLEET_HUB_URL") or conf.get("url") or ""
+    # The address lives in fleet.conf (issue #1623); hub.json keeps the token, and
+    # its old "url" is read for one version.
+    hub = a.hub or os.environ.get("FLEET_HUB_URL") or machine_conf_hub() or conf.get("url") or ""
     token = os.environ.get("FLEET_HUB_TOKEN") or conf.get("token") or ""
     if a.proxy:
         if not hub:
-            die("no hub URL: pass --hub, set FLEET_HUB_URL, or put {\"url\": …} in %s"
-                % os.path.join(config_dir(), "hub.json"))
+            die("no hub URL: pass --hub, set FLEET_HUB_URL, or run `fleet login --hub <入口地址>` once")
         return proxy(a.proxy, hub, token)
     if a.enter or a.pick:
         return enter(a.machine, hub, token, a.verbose, a.retest, a.print_only, ssh_args, a.ssh_opts, a.pick)

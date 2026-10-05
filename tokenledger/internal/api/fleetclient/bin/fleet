@@ -44,6 +44,14 @@ shell_ok() {
   case $min in ''|*[!0-9]*) return 1 ;; esac
   [ "$min" -ge 2 ]
 }
+# The machine's ONE config file (issue #1623): a client that still keeps its
+# settings the old way (shell.conf, hub.json's url) folds them in once, here —
+# each old file kept as .bak. Two file tests when there is nothing to do.
+cdir=${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}
+if [ ! -f "$cdir/fleet.conf" ] && { [ -f "$cdir/shell.conf" ] || [ -f "$cdir/hub.json" ]; } \
+   && [ -f "$here/fleet-conf.sh" ]; then
+  FLEET_CONF_DIR=$cdir bash "$here/fleet-conf.sh" migrate --quiet >&2 || :
+fi
 cmd=${1-}
 case $cmd in
   -h|--help|help)

@@ -57,6 +57,11 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
+# the machine's one config file (issue #1623): FLEET_HUB_URL is written there
+_fcd="${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}"
+# shellcheck source=/dev/null
+[ -f "$_fcd/fleet.conf" ] && . "$_fcd/fleet.conf"
+unset _fcd
 
 WRITE_NS="fleet-write@claude-fleet"
 WRITE_TOOLS=" worker_message worker_stop worker_resume worker_answer worker_reap worker_start gh_comment config_set "

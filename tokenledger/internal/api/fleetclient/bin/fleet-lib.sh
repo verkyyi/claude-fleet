@@ -71,6 +71,11 @@ if [ -z "${_FLEET_GLOBAL_CONF_SOURCED:-}" ] && [ -z "${FLEET_SKIP_GLOBAL_CONF:-}
   # legacy $FLEET_CONF_DIR/*.conf as a fleet, and `fleet.conf` there would be read
   # as a fleet named `fleet` — the new default session name.
   [ -f "$FLEET_CONF_DIR/fleet.settings" ] && . "$FLEET_CONF_DIR/fleet.settings"
+  # The machine's ONE config file (issue #1623), read last so it wins: once
+  # fleet-conf.sh migrate has folded the files above into it (each kept as .bak),
+  # it is the only one there. Its [node] section sits in a FLEET_SHELL guard, so
+  # the shell reads [common] + [client] from the same file, with no mirror.
+  [ -f "$FLEET_CONF_DIR/fleet.conf" ] && . "$FLEET_CONF_DIR/fleet.conf"
   # eval so the space-separated NAME list re-tokenizes under zsh too (an unquoted
   # $var is NOT word-split there); export of a name the conf left unset is harmless.
   eval "export $_FLEET_GLOBAL_ONLY"
@@ -113,7 +118,14 @@ unset _flib_here
 
 # The login's ONE settings file (issue #979) — machine-wide keys and the fleet's
 # settings together. Sourced at the top of this lib after the install fleet.conf.
-fleet_settings_file() { printf '%s/fleet.settings' "$FLEET_CONF_DIR"; }
+# Once the machine has its ONE config file (issue #1623) that file is the login's
+# settings file — a write lands there, never in a fleet.settings it replaced.
+fleet_settings_file() {
+  if [ -f "$FLEET_CONF_DIR/fleet.conf" ]; then printf '%s/fleet.conf' "$FLEET_CONF_DIR"
+  else printf '%s/fleet.settings' "$FLEET_CONF_DIR"; fi
+}
+# The machine's ONE config file (issue #1623) — may not exist yet (fleet-conf.sh).
+fleet_machine_conf_file() { printf '%s/fleet.conf' "$FLEET_CONF_DIR"; }
 
 # Durable per-fleet state dir for <sess> (created on demand). WRITERS use this.
 fleet_state_dir() {
@@ -160,8 +172,11 @@ fleet_epic_running() {
 fleet_conf_file() {
   local sess="${1:-}" new old
   new="$FLEET_CONF_DIR/fleets/$sess/conf"; old="$FLEET_CONF_DIR/$sess.conf"
+  # $FLEET_CONF_DIR/fleet.conf is the MACHINE's config (issue #1623), never the
+  # legacy flat conf of a fleet named `fleet` — the default session name.
+  case "$sess" in fleet|shell) old='' ;; esac     # …nor the shell's shell.conf
   if   [ -f "$new" ]; then printf '%s' "$new"
-  elif [ -f "$old" ]; then printf '%s' "$old"
+  elif [ -n "$old" ] && [ -f "$old" ]; then printf '%s' "$old"
   else                     printf '%s' "$new"; fi
 }
 
@@ -190,6 +205,7 @@ fleet_each_conf() {
   for conf in "$FLEET_CONF_DIR"/*.conf; do
     [ -f "$conf" ] || continue
     sess=${conf##*/}; sess=${sess%.conf}          # basename … .conf, no fork (#888)
+    case "$sess" in fleet|shell) continue ;; esac  # the machine's config + the shell's (#1623), not fleets
     # dedup only when the NEW-layout conf FILE exists — a fleets/<sess>/ dir that
     # holds just restore.map/bridge/watch (no conf yet) must NOT hide the legacy conf.
     [ -f "$FLEET_CONF_DIR/fleets/$sess/conf" ] && continue
@@ -4226,6 +4242,7 @@ fleet_identity_triplet() {
     if [ -z "${FLEET_SKIP_GLOBAL_CONF:-}" ]; then
       [ -n "${_FLEET_LIB_DIR:-}" ] && [ -f "$_FLEET_LIB_DIR/../fleet.conf" ] && . "$_FLEET_LIB_DIR/../fleet.conf" >/dev/null 2>&1
       [ -f "$FLEET_CONF_DIR/fleet.settings" ] && . "$FLEET_CONF_DIR/fleet.settings" >/dev/null 2>&1
+      [ -f "$FLEET_CONF_DIR/fleet.conf" ] && . "$FLEET_CONF_DIR/fleet.conf" >/dev/null 2>&1
     fi
     fleet_load_conf "$sess" >/dev/null 2>&1
     printf '%s\0' "$sess" "${FLEET_REPO:-}" "${FLEET_MAIN:-}" )

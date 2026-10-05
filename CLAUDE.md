@@ -400,5 +400,20 @@ Do not install from memory: read the doc and work from it.
   for one. Both run on every `fleet-install-apply.sh` move (`settings`, `agents`
   passes) — never add a second place that writes these files; `fleet-doctor`'s
   `settings` / `agents` rows count what a login still lacks.
+- **A machine has ONE fleet config file, `$FLEET_CONF_DIR/fleet.conf`** (issue
+  #1623). `FLEET_ROLE=client|node|client,node` and `FLEET_HUB_URL` (the hub's
+  address — written nowhere else) sit in `[common]`; `[client]` (only the shell,
+  `FLEET_SHELL=1`) and `[node]` (everything but the shell) are `if` guards, so
+  every reader that sources the file gets its own sections with no mirror and no
+  parser. Credentials never enter it: `bin/fleet-conf.sh migrate` (run by
+  `fleet-install-apply.sh`'s `conf` pass and by `bin/fleet`) moves any
+  `*TOKEN/*SECRET/*PASSWORD` line to `secrets.env` (0600, sourced from
+  `[common]`), and node.env / hub.json's token / `~/.ssh/fleet-cert` stay apart.
+  It folds the install `fleet.conf`, `fleet.settings`, the one fleet's conf (down
+  to its identity), `shell.conf` and hub.json's url, keeping each as `.bak`; every
+  reader still reads the old paths for ONE version (EPIC #1615 decision 11) — the
+  next batch deletes them, and the shell's conf-free mirror with them. The legacy
+  flat-conf scans skip `fleet.conf` / `shell.conf` (not fleets). `fleet-doctor`'s
+  `role` row; `bin/fleet-conf-selftest.sh` pins all three roles + the degenerate.
 - Claude Code re-reads `settings.json` hooks per turn, so running sessions pick
   up hook changes without a restart.

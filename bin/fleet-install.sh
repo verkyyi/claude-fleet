@@ -134,7 +134,16 @@ if [ "$(cd "$BIN" && pwd -P)" != "$(cd "$ROOT/bin" && pwd -P)" ]; then
   done
 fi
 
-# 2 — hub.json: the URL, everything else kept.
+# 2 — the hub address goes to the machine's ONE config file (issue #1623):
+# fleet.conf's [common] gets FLEET_HUB_URL and FLEET_ROLE gains `client`; an
+# older client's files (shell.conf, hub.json's url) are folded in first, each
+# kept as .bak. hub.json is left to its token. Without the tool (a manifest
+# that predates it), hub.json gets the URL as before.
+if [ -f "$ROOT/bin/fleet-conf.sh" ] \
+   && FLEET_CONF_DIR="${FLEET_CONF_DIR:-$CONF_DIR}" bash "$ROOT/bin/fleet-conf.sh" migrate --quiet >/dev/null 2>&1 \
+   && FLEET_CONF_DIR="${FLEET_CONF_DIR:-$CONF_DIR}" bash "$ROOT/bin/fleet-conf.sh" set-hub "$HUB" --role client; then
+  :
+else
 python3 - "$CONF_DIR/hub.json" "$HUB" <<'PY'
 import json, os, sys
 path, hub = sys.argv[1], sys.argv[2]
@@ -153,6 +162,7 @@ with open(tmp, "w") as f:
 os.chmod(tmp, 0o600)
 os.replace(tmp, path)
 PY
+fi
 
 # 3 — PATH, once. The marker is what makes a second run a no-op; an rc file
 # that already puts $BIN on PATH some other way is left alone too.

@@ -16,9 +16,10 @@
 #                 in): every manifest file lands under
 #                 ~/.local/share/claude-fleet/<path>, identical, bin/ executable;
 #                 ~/.local/bin/fleet is the two-line runner of the real one and
-#                 works; a stale copy (an older install's) is removed; hub.json
-#                 gets the URL and keeps a token already there; the rc file gets
-#                 ONE PATH line
+#                 works; a stale copy (an older install's) is removed; the URL
+#                 lands in fleet.conf (FLEET_HUB_URL, FLEET_ROLE client — the
+#                 machine's one config file, issue #1623) and hub.json keeps a
+#                 token already there; the rc file gets ONE PATH line
 #   C. again      a second run changes nothing: no second PATH line
 #   D. refusals   a Windows uname → exit 2 with the WSL note; a download whose
 #                 SHA-256 does not match → exit 1, nothing installed
@@ -103,7 +104,7 @@ grep -q "$HUB" "$WORK/install.sh" || { bad "placeholder __FLEET_HUB_URL__ missin
 
 export HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/home/.config" SHELL=/bin/zsh
 export FLEET_INSTALL_NO_RUN=1
-unset FLEET_HUB_URL FLEET_INSTALL_BIN FLEET_INSTALL_HOME FLEET_INSTALL_RC XDG_DATA_HOME XDG_CACHE_HOME
+unset FLEET_CONF_DIR FLEET_HUB_URL FLEET_INSTALL_BIN FLEET_INSTALL_HOME FLEET_INSTALL_RC XDG_DATA_HOME XDG_CACHE_HOME
 ROOT="$HOME/.local/share/claude-fleet"
 mkdir -p "$HOME/.config/claude-fleet" "$ROOT/bin" "$HOME/.local/bin"
 echo '{"token": "keep-me"}' > "$HOME/.config/claude-fleet/hub.json"
@@ -141,7 +142,10 @@ echo "$out" | grep -q 'fleet-gone.sh' && ok "B the removal is said" || bad "B re
 [ -x "$HOME/.local/bin/fleet" ] && [ ! -L "$HOME/.local/bin/fleet" ] && grep -q "exec '$ROOT/bin/fleet'" "$HOME/.local/bin/fleet" \
   && ok "B ~/.local/bin/fleet runs the real one" || bad "B ~/.local/bin/fleet: $(cat "$HOME/.local/bin/fleet" 2>&1)"
 url=$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(d.get("url",""), d.get("token",""))' "$HOME/.config/claude-fleet/hub.json")
-[ "$url" = "$HUB keep-me" ] && ok "B hub.json: url written, token kept" || bad "B hub.json: $url"
+[ "$url" = " keep-me" ] && ok "B hub.json: token kept, no url" || bad "B hub.json: $url"
+grep -qx "export FLEET_HUB_URL=\"$HUB\"" "$HOME/.config/claude-fleet/fleet.conf" 2>/dev/null \
+  && grep -qx 'FLEET_ROLE="client"' "$HOME/.config/claude-fleet/fleet.conf" \
+  && ok "B fleet.conf: the hub URL + role client" || bad "B fleet.conf: $(cat "$HOME/.config/claude-fleet/fleet.conf" 2>&1)"
 [ "$(grep -c 'claude-fleet#1470' "$HOME/.zshrc")" = 1 ] && grep -q "$HOME/.local/bin" "$HOME/.zshrc" && ok "B one PATH line in ~/.zshrc" || bad "B zshrc: $(cat "$HOME/.zshrc" 2>&1)"
 echo "$out" | grep -q '已安装 fleet' && echo "$out" | grep -q '之后每次只敲：fleet' && ok "B says what to type next" || bad "B output: $out"
 # The installed dispatcher works from the sandbox through the runner.

@@ -57,7 +57,7 @@ set -uo pipefail
 case "$0" in */*) BIN="${0%/*}" ;; *) BIN=. ;; esac   # forkless dirname (issue #888)
 BIN="$(cd "${BIN:-/}" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
-_fs="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleet.settings"; [ -f "$_fs" ] && . "$_fs"   # the login's settings win (#979)
+_fs="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"; [ -f "$_fs/fleet.settings" ] && . "$_fs/fleet.settings"; [ -f "$_fs/fleet.conf" ] && . "$_fs/fleet.conf"   # the login's settings win (#979); the machine's one file (#1623)
 . "$BIN/usage-lib.sh"
 . "$BIN/fleet-status-lib.sh"
 

@@ -237,6 +237,9 @@ resolve_target
 # $(…) — the note must survive.
 HUB_URL="${CCQUOTA_HUB_URL:-${FLEET_HUB_URL:-}}" HUB_TOK="" HUB_NOTE="" HR=""
 if [ -z "${FLEET_NODE_UPGRADE_NODES_CMD:-}" ] && [ "$NOHUB" != 1 ]; then
+  # the machine's one config file (issue #1623) holds the address, FLEET_HUB_URL
+  [ -n "$HUB_URL" ] || HUB_URL=$(sed -nE 's/^[[:space:]]*(export[[:space:]]+)?FLEET_HUB_URL=//p' \
+      "${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}/fleet.conf" 2>/dev/null | tail -n1 | tr -d "\"' ")
   [ -n "$HUB_URL" ] || HUB_URL=$(python3 -c 'import json,sys
 try: print(json.load(open(sys.argv[1])).get("url") or "")
 except Exception: pass' "${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet/hub.json" 2>/dev/null)

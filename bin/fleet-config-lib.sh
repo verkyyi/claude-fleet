@@ -40,7 +40,14 @@ fcfg_example()     { printf '%s' "${FCFG_EXAMPLE:-$FCFG_DIR/../fleet.conf.exampl
 # issue #1102 every global-only write lands there — the first one creates it — and
 # the install's fleet.conf is a READ-ONLY legacy layer (still read, never written).
 fcfg_install_conf() { printf '%s' "${FCFG_GLOBAL_CONF:-$FCFG_DIR/../fleet.conf}"; }
-fcfg_settings_conf() { printf '%s' "${FCFG_SETTINGS_CONF:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleet.settings}"; }
+# Once the machine has its ONE config file (issue #1623) that file is the login
+# layer — every write lands there, never in the fleet.settings it replaced.
+fcfg_settings_conf() {
+  local d="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
+  if [ -n "${FCFG_SETTINGS_CONF:-}" ]; then printf '%s' "$FCFG_SETTINGS_CONF"
+  elif [ -f "$d/fleet.conf" ]; then printf '%s' "$d/fleet.conf"
+  else printf '%s' "$d/fleet.settings"; fi
+}
 fcfg_global_conf() { fcfg_settings_conf; }
 # The per-fleet overlay for a session. FCFG_FLEET_CONF overrides (tests); else the
 # per-fleet layout fleets/<session>/conf (issue #181), falling back to a legacy

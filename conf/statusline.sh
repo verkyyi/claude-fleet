@@ -143,6 +143,7 @@ if [[ "$CTX_PCT" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
   SL_FILES=()
   [[ -f "$SL_HERE/../fleet.conf" ]] && SL_FILES+=("$SL_HERE/../fleet.conf")
   [[ -f "$SL_CONF_DIR/fleet.settings" ]] && SL_FILES+=("$SL_CONF_DIR/fleet.settings")
+  [[ -f "$SL_CONF_DIR/fleet.conf" ]] && SL_FILES+=("$SL_CONF_DIR/fleet.conf")   # the one file (#1623)
   if [[ -n "$SL_SOCK" ]]; then
     if   [[ -f "$SL_CONF_DIR/fleets/$SL_SOCK/conf" ]]; then SL_FILES+=("$SL_CONF_DIR/fleets/$SL_SOCK/conf")
     elif [[ -f "$SL_CONF_DIR/$SL_SOCK.conf" ]];        then SL_FILES+=("$SL_CONF_DIR/$SL_SOCK.conf")
