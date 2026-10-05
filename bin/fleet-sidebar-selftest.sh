@@ -450,6 +450,42 @@ try:
     check(len(views()) == 1, 'sync must be idempotent')
     wait_for(lambda: '修复侧栏' in tm('capture-pane', '-p', '-t', side), 'sidebar did not render tasks')
     wait_for(lambda: worker_cue(side), 'worker focus cue missing')
+    # Only the state glyph has a colour (issue #1622): every other painted cell
+    # is PAL_FG or PAL_DIM text, on the default ground or the PAL_SEL raise that
+    # the current row (▶) shares with the keyboard's row (›).
+    pal = sidebar.palette_colors(sidebar.palette(), 256)
+    states = {pal[n] for n in ('PAL_CYAN', 'PAL_RED', 'PAL_GREEN', 'PAL_MAGENTA')}
+    text_fg = {pal['PAL_FG'], pal['PAL_DIM']}
+    glyphs = {}
+    for y, line in enumerate(tm('capture-pane', '-e', '-p', '-t', side).splitlines()):
+        fg = bg = None
+        x = 0
+        for code, ch in re.findall(r'\x1b\[([0-9;]*)m|(.)', line):
+            if not ch:
+                parts = [int(n) if n else 0 for n in code.split(';')]
+                while parts:
+                    n = parts.pop(0)
+                    if n in (38, 48) and parts[:1] == [5]:
+                        if n == 38:
+                            fg = parts[1]
+                        else:
+                            bg = parts[1]
+                        parts = parts[2:]
+                    elif n == 0:
+                        fg = bg = None
+                    elif n == 39:
+                        fg = None
+                    elif n == 49:
+                        bg = None
+                continue
+            if ch != ' ' and x == 2 and fg in states:
+                glyphs[(y, ch)] = fg
+            elif ch != ' ':
+                check(fg in text_fg, 'sidebar cell %r at %d,%d is colour %r, not PAL_FG/PAL_DIM' % (ch, y, x, fg))
+            check(bg in (None, pal['PAL_SEL']), 'sidebar cell %r at %d,%d sits on colour %r' % (ch, y, x, bg))
+            x += max(1, sidebar.width_of(ch))
+    check(pal['PAL_RED'] in glyphs.values() and pal['PAL_CYAN'] in glyphs.values(),
+          'the needs / working glyphs lost their state colour: %r' % glyphs)
     check('worker-one' in tm('capture-pane', '-p', '-t', side).splitlines()[0] or
           '修复侧栏' in tm('capture-pane', '-p', '-t', side).splitlines()[0],
           'sidebar should start with a task, not an internal title row')
