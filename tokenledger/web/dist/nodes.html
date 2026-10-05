@@ -107,10 +107,14 @@ pre.cmd { margin:10px 0 4px; padding:10px 12px; background:var(--plane); border:
   </div>
   <div id="join" class="card" hidden style="margin-top:28px">
     <h2>加一台机器</h2>
-    <div class="muted">生成一个加入码（只能用一次，10 分钟内有效），在新机器上以要跑 fleet 的那个登录执行下面这条命令：装依赖、装 fleet、装并登记 agent，几分钟后它就出现在上面的列表里。</div>
+    <div class="muted">在新机器上，以要跑 fleet 的那个登录运行这一条命令，用企业微信扫屏幕上的码确认：装依赖、装并登记 agent、装 fleet，几分钟后它就出现在上面的列表里。中途失败，重跑同一条命令即可。</div>
+    <pre id="nodejoin" class="cmd mono">fleet node join</pre>
+    <div class="muted">还没装 fleet 的机器先运行：<code id="nodeinstall" class="mono"></code></div>
+    <details id="joinold" hidden style="margin-top:10px"><summary class="muted">旧方式：加入码（保留一个版本）</summary>
     <div style="margin-top:10px"><button id="joinbtn" type="button">生成加入码</button> <span id="joinexp" class="muted"></span></div>
     <pre id="joincmd" class="cmd mono" hidden></pre>
     <div id="joinerr" class="err"></div>
+    </details>
   </div>
   <div id="error" class="err"></div>
 </div>
@@ -252,13 +256,19 @@ async function tick() {
 tick();
 setInterval(tick, 3000);
 
-// Join codes (claude-fleet#1418) and SPOT starts (claude-fleet#1428) are the
-// operator's: a WeCom session has a principal, and the hub answers 403 to it
-// anyway.
+// Adding a machine is one command and a scan (claude-fleet#1627), for anyone
+// signed in. Join codes (claude-fleet#1418, kept one version) and SPOT starts
+// (claude-fleet#1428) stay the operator's: a WeCom session has a principal,
+// and the hub answers 403 to it anyway.
 let isOperator = false;
+$("nodeinstall").textContent = "curl -fsSL " + location.origin + "/install | sh";
 fetch("/v1/fleet/me", { credentials: "same-origin", cache: "no-store" })
   .then((r) => r.ok ? r.json() : null)
-  .then((me) => { if (me && !me.principal) { isOperator = true; $("join").hidden = false; } })
+  .then((me) => {
+    if (!me) return;
+    $("join").hidden = false;
+    if (!me.principal) { isOperator = true; $("joinold").hidden = false; }
+  })
   .catch(() => {});
 async function spotPost(body) {
   $("spoterr").textContent = "";

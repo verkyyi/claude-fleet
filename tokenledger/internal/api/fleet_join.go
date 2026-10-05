@@ -188,8 +188,26 @@ func (s *Server) handleNodeJoin(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusUnauthorized, store.ErrJoinCode.Error())
 		return
 	}
-	host := sanitizeJoinField(req.Hostname)
-	osUser := sanitizeJoinField(req.OSUser)
+	out, err := s.redeemJoin(r, req.Code, req.Hostname, req.OSUser)
+	if err != nil {
+		if errors.Is(err, store.ErrJoinCode) {
+			httpError(w, http.StatusUnauthorized, err.Error())
+			return
+		}
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, out)
+}
+
+// redeemJoin spends a join code for a machine and enrolls its agent endpoint:
+// the one place a node token is minted, for the code a person pasted
+// (handleNodeJoin) and for the code the hub mints itself when a scan adds a
+// node (enrollNode, `fleet node join`, claude-fleet#1627).
+func (s *Server) redeemJoin(r *http.Request, code, hostname, osUser string) (*NodeJoinResponse, error) {
+	host := sanitizeJoinField(hostname)
+	osUser = sanitizeJoinField(osUser)
 	label := host
 	if osUser != "" && host != "" {
 		label = host + "-" + osUser
@@ -199,24 +217,17 @@ func (s *Server) handleNodeJoin(w http.ResponseWriter, r *http.Request) {
 	}
 	tok, err := MintToken()
 	if err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
-		return
+		return nil, err
 	}
 	now := s.joinNow()
 	id := fmt.Sprintf("ep_%d", now.UnixNano())
-	if err := s.Store.RedeemJoinCode(HashToken(req.Code), now, id, label, HashToken(tok), host, osUser); err != nil {
-		if errors.Is(err, store.ErrJoinCode) {
-			httpError(w, http.StatusUnauthorized, err.Error())
-			return
-		}
-		httpError(w, http.StatusInternalServerError, err.Error())
-		return
+	if err := s.Store.RedeemJoinCode(HashToken(code), now, id, label, HashToken(tok), host, osUser); err != nil {
+		return nil, err
 	}
-	ep, err := s.Store.EndpointByTokenHash(HashToken(tok))
-	if err == nil {
+	if ep, err := s.Store.EndpointByTokenHash(HashToken(tok)); err == nil {
 		label = ep.Label
 	}
-	out := NodeJoinResponse{
+	out := &NodeJoinResponse{
 		EndpointID: id, Label: label, Token: tok, Hub: s.hubURL(r),
 		Admin: s.isFleetAdmin(osUser), Dist: s.distNames(), Kind: store.NodeKindFixed,
 	}
@@ -226,8 +237,22 @@ func (s *Server) handleNodeJoin(w http.ResponseWriter, r *http.Request) {
 	if s.SSHCA != nil {
 		out.SSHCA = s.SSHCA.PublicKey()
 	}
-	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, out)
+	return out, nil
+}
+
+// enrollNode is the scan's half of adding a machine (claude-fleet#1627): the
+// person confirmed `fleet node join` on the same page as `fleet login`, so the
+// hub mints a fixed-kind code for that confirmation and spends it at once.
+// The code row stays as the audit trail — who added which machine, when.
+func (s *Server) enrollNode(r *http.Request, hostname, osUser string) (*NodeJoinResponse, error) {
+	code, err := MintJoinCode()
+	if err != nil {
+		return nil, err
+	}
+	if err := s.Store.CreateJoinCodeKind(HashToken(code), "", store.NodeKindFixed, s.joinNow(), JoinCodeTTL); err != nil {
+		return nil, err
+	}
+	return s.redeemJoin(r, code, hostname, osUser)
 }
 
 // sanitizeJoinField keeps a reported hostname / login to a label-safe form.

@@ -5,6 +5,8 @@
     fleet login renew [--hub URL] [--quiet]
     fleet login status
     fleet login check
+    fleet login hub [--hub URL]                  print the hub URL it would use
+    fleet login node --out FILE [--hub URL] [--invert]
 
 `bin/fleet` dispatches `fleet login` here. Logging in (claude-fleet#1412) is the device-code flow against the fleet hub
 (tokenledger, CCQUOTA_FLEET=1):
@@ -30,6 +32,12 @@ registered, that the device is not revoked and was used inside the last seven
 days, and signs again. `fleet` (no argument) runs this for you before every
 connection, so a scan is needed only after seven idle days or a revocation.
 
+`node` is the scan half of `fleet node join` (claude-fleet#1627): the same key,
+start, QR, page and poll, with purpose=node — the page reads 「把 <机器名> 加为
+节点」, and the confirmation returns this machine's node pass beside the
+certificate. The pass (the hub's NodeJoinResponse JSON, a credential) goes to
+FILE (0600) for fleet-node-join.sh --joined; it is never printed.
+
 `check` prints the certificate's state (valid <seconds left> · expired · none)
 and exits 0 only while it is valid. `status` is `ssh-keygen -L` on it.
 
@@ -41,6 +49,7 @@ Exit: 0 certificate written · 1 refused/expired/denied (renew: the hub could
 not be reached, or any other error) · 2 usage/config · 3 (renew only) this
 device must scan again — not registered, revoked, or idle too long.
 """
+import getpass
 import json
 import os
 import re
@@ -266,8 +275,8 @@ def renew(hub, quiet=False, include=True):
     return 1
 
 
-def cmd_login(argv):
-    hub_arg, invert, include = "", False, True
+def parse_scan_opts(argv, node=False):
+    hub_arg, invert, include, out = "", False, True, ""
     it = iter(argv)
     for a in it:
         if a == "--hub":
@@ -278,17 +287,28 @@ def cmd_login(argv):
             invert = True
         elif a == "--no-include":
             include = False
+        elif node and a == "--out":
+            out = next(it, "")
         else:
             die("unknown option " + a)
-    hub = hub_url(hub_arg)
-    pub = ensure_key()
+    return hub_arg, invert, include, out
 
-    code, st = post(hub + "/v1/fleet/login/start", {"public_key": pub, "device_name": device_name()})
+
+def scan(hub, invert, purpose=""):
+    """The device-code flow: start, draw the QR, wait for the confirmation.
+    Returns the hub's answer (a CertResponse; with purpose=node it also
+    carries `node`, the node pass — claude-fleet#1627)."""
+    pub = ensure_key()
+    body = {"public_key": pub, "device_name": device_name()}
+    if purpose:
+        body.update(purpose=purpose, os_user=getpass.getuser())
+    code, st = post(hub + "/v1/fleet/login/start", body)
     if code == 404:
         die("this hub does not issue certificates (no CA or no WeCom sign-in configured)", 1)
     if code != 200:
         die("start refused (HTTP %d): %s" % (code, st.get("error", "")), 1)
-    remember_hub(hub)
+    if not purpose:
+        remember_hub(hub)
 
     print("\n用企业微信扫码，确认验证码 %s：\n" % st["user_code"])
     draw_qr(st.get("qr") or [], invert)
@@ -306,11 +326,14 @@ def cmd_login(argv):
         if code == 202:
             continue
         if code == 200:
-            break
+            return res
         die("not issued (HTTP %d): %s" % (code, res.get("error", "")), 1)
-    else:
-        die("timed out waiting for the scan — run it again", 1)
+    die("timed out waiting for the scan — run it again", 1)
 
+
+def cmd_login(argv):
+    hub_arg, invert, include, _ = parse_scan_opts(argv)
+    res = scan(hub_url(hub_arg), invert)
     added = write_cert(res, include)
     print("✓ 证书已写入 %s（%s 前有效，账号 %s）" % (CERT, res["valid_before"], ",".join(res["principals"])))
     print("✓ ssh 配置 %s%s" % (SSH_CONFIG_SNIPPET, "（已在 ~/.ssh/config 末尾 Include）" if added else ""))
@@ -318,6 +341,33 @@ def cmd_login(argv):
     hosts = [l.split()[1] for l in res["ssh_config"].splitlines() if l.startswith("Host ")]
     if hosts:
         print("  现在可以：fleet（或 ssh %s）" % hosts[0])
+    return 0
+
+
+def cmd_node(argv):
+    """`fleet node join`'s scan (claude-fleet#1627): the certificate is written
+    exactly as `fleet login` writes it; the node pass goes to --out."""
+    hub_arg, invert, include, out = parse_scan_opts(argv, node=True)
+    if not out:
+        die("node: --out FILE is required")
+    res = scan(hub_url(hub_arg), invert, purpose="node")
+    node = res.get("node")
+    if not isinstance(node, dict) or not node.get("token"):
+        # an older hub ignores purpose and answers a plain login (#1627)
+        die("the hub signed a certificate but sent no node pass — it predates `fleet node join`"
+            " (claude-fleet#1627); redeploy the hub, or use a join code from its /nodes page", 1)
+    # compact, as the hub writes it: fleet-node-join.sh reads it with sed
+    write_file(out, json.dumps(node, separators=(",", ":")) + "\n", 0o600)
+    added = write_cert(res, include)
+    print("✓ 证书已写入 %s（%s 前有效，账号 %s）" % (CERT, res["valid_before"], ",".join(res["principals"])))
+    print("✓ ssh 配置 %s%s" % (SSH_CONFIG_SNIPPET, "（已在 ~/.ssh/config 末尾 Include）" if added else ""))
+    print("✓ 已登记为节点 %s（%s）" % (node.get("label", "?"), node.get("endpoint_id", "?")))
+    return 0
+
+
+def cmd_hub(argv):
+    hub_arg, _, _, _ = parse_scan_opts(argv)
+    print(hub_url(hub_arg))
     return 0
 
 
@@ -369,6 +419,10 @@ def main(argv):
         return cmd_check(argv[1:])
     if argv and argv[0] == "renew":
         return cmd_renew(argv[1:])
+    if argv and argv[0] == "node":
+        return cmd_node(argv[1:])
+    if argv and argv[0] == "hub":
+        return cmd_hub(argv[1:])
     if argv and argv[0] == "login":  # `fleet-login.py login …` reads naturally too
         argv = argv[1:]
     return cmd_login(argv)
