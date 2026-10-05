@@ -106,7 +106,7 @@ hdr="pick the account new sessions start from (re-picked per spawn on quota head
 # fits 54 columns; a tap on its ✕ closes, as the header chip did.
 . "$BIN/fleet-ui-lang.sh"; . "$BIN/fleet-popup-lib.sh"
 fleet_fzf_hint "$(fleet_ui_t hint_usage)" "$hdr"
-fleet_fzf_click 'transform:case "$FZF_CLICK_FOOTER_WORD$FZF_CLICK_HEADER_WORD" in *✕*|*close*|*关闭*) echo abort ;; esac'
+fleet_fzf_click 'transform:case "$FZF_CLICK_FOOTER_WORD$FZF_CLICK_HEADER_WORD" in *✕*|*close*) echo abort ;; esac'
 
 # --header-lines=1 pins the table's column-title row (line 1 of `list`) so it
 # stays aligned with the data rows and out of the selectable set; the usage

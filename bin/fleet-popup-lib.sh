@@ -69,15 +69,20 @@ fleet_popup_geom() {
 # _fleet_fzf_caps → $FLEET_FZF_FOOTER: 1 when this fzf takes --footer, a footer
 # colour, a click-footer bind and --gutter; 0 when it does not (or no fzf).
 # The cache file is versioned (-v2) by what the probe asks.
+# --cached: read the cache only, never run fzf — the popup DOOR uses this. The
+# door runs before the popup opens and holds @popup_open while it does, so an fzf
+# that blocks (a stub, a wrapper that waits on a tty) must never run there; with
+# no cache yet it leaves FLEET_FZF_FOOTER unset and the popup's own script probes.
 _fleet_fzf_caps() {
   [ -n "${FLEET_FZF_FOOTER:-}" ] && return 0
-  FLEET_FZF_FOOTER=0
   local f c v
-  f=$(command -v fzf 2>/dev/null) || return 0
+  f=$(command -v fzf 2>/dev/null) || { FLEET_FZF_FOOTER=0; return 0; }
   c="${TMPDIR:-/tmp}/.claude-dash/fzf-caps-v2-$(printf '%s' "$f" | tr -c 'A-Za-z0-9' _)"
   if [ -f "$c" ] && [ "$c" -nt "$f" ]; then
     read -r v < "$c" 2>/dev/null; FLEET_FZF_FOOTER=${v:-0}; return 0
   fi
+  [ "${1:-}" = --cached ] && return 0
+  FLEET_FZF_FOOTER=0
   fzf --filter= --footer=x --color=footer:1 --bind click-footer:abort --gutter=' ' </dev/null >/dev/null 2>&1
   [ $? -le 1 ] && FLEET_FZF_FOOTER=1   # 0/1 = ran (match/no match); 2 = refused an option
   mkdir -p "${c%/*}" 2>/dev/null && printf '%s\n' "$FLEET_FZF_FOOTER" > "$c" 2>/dev/null
@@ -85,7 +90,7 @@ _fleet_fzf_caps() {
 }
 
 fleet_fzf_opts() {
-  _fleet_fzf_caps
+  _fleet_fzf_caps "${1:-}"
   FLEET_FZF_OPTS='--border=none --info=hidden --pointer=›'
   fleet_palette_load || return 0   # no palette ⇒ fzf's own colours, never one of ours
   local c="fg:$PAL_FG,bg:-1,hl:$PAL_BLUE,fg+:$PAL_FG,bg+:$PAL_SEL,hl+:$PAL_BLUE"
@@ -94,7 +99,7 @@ fleet_fzf_opts() {
   c="$c,separator:$PAL_DIM,scrollbar:$PAL_DIM,label:$PAL_FG,gutter:-1"
   FLEET_FZF_OPTS="--color=$c $FLEET_FZF_OPTS"
   # a blank gutter: the selected row's › is the only mark in that column
-  [ "$FLEET_FZF_FOOTER" = 1 ] && FLEET_FZF_OPTS="--color=footer:$PAL_DIM --gutter=' ' $FLEET_FZF_OPTS"
+  [ "${FLEET_FZF_FOOTER:-}" = 1 ] && FLEET_FZF_OPTS="--color=footer:$PAL_DIM --gutter=' ' $FLEET_FZF_OPTS"
 }
 
 fleet_fzf_hint() {
@@ -135,7 +140,7 @@ fleet_popup_draw() {
   local client="$1" width="$2" title="$3" cmd="$4" env
   fleet_popup_geom "$width" "${5:-}" "${6:-}"
   fleet_popup_title "$title"
-  fleet_fzf_opts
+  fleet_fzf_opts --cached
   # FZF_DEFAULT_OPTS is exported ahead of the command (an `export`, not a
   # prefix: <cmd> may be a list): a popup starts from the SERVER's environment,
   # not ours. The operator's own defaults stay first, so ours win where they
@@ -144,7 +149,7 @@ fleet_popup_draw() {
   # POSIX sh (dash) running the popup's command does not read.
   local q="${FZF_DEFAULT_OPTS:+$FZF_DEFAULT_OPTS }$FLEET_FZF_OPTS"
   q=${q//\'/\'\\\'\'}
-  env="export FZF_DEFAULT_OPTS='$q' FLEET_FZF_FOOTER=$FLEET_FZF_FOOTER FLEET_POPUP=1;"
+  env="export FZF_DEFAULT_OPTS='$q' ${FLEET_FZF_FOOTER:+FLEET_FZF_FOOTER=$FLEET_FZF_FOOTER }FLEET_POPUP=1;"
   local geom=()
   [ -n "$FPOP_W" ] && geom+=(-w "$FPOP_W")
   [ -n "$FPOP_H" ] && geom+=(-h "$FPOP_H")

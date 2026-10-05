@@ -100,7 +100,7 @@ if [ -n "${POPUP:-}" ]; then
   K_BIND="?:execute-silent(printf 'keys' > '$ACT')+abort"
   # The clicked header word is a single whitespace token, so a bracketed multi-word
   # chip `[＋ new]` arrives as `[＋` OR `new]` — glob both (issue #381).
-  fleet_fzf_click "transform:case \"\$FZF_CLICK_FOOTER_WORD\$FZF_CLICK_HEADER_WORD\" in *＋*|*new*|*新建*) printf 'new' > '$ACT'; echo abort ;; *✕*|*close*|*关闭*) echo abort ;; esac"
+  fleet_fzf_click "transform:case \"\$FZF_CLICK_FOOTER_WORD\$FZF_CLICK_HEADER_WORD\" in *＋*|*new*|*新建*) printf 'new' > '$ACT'; echo abort ;; *✕*|*close*) echo abort ;; esac"
 else
   ENTER_TAIL=''
   N_BIND="$DASH_KEY_NEW:execute(bash $BIN/dash-issue-new.sh)+reload(sleep 2; bash $ROWS $MODE)"
