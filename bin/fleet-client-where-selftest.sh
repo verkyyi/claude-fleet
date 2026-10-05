@@ -188,15 +188,21 @@ class H(http.server.BaseHTTPRequestHandler):
         b = json.dumps({"state": "active", "lease": {"id": "L9", "device": "MacBook", "terminal": "iTerm2", "caps": ["open_url"]}}).encode()
         self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(b)
 s = http.server.HTTPServer(("127.0.0.1", 0), H)
-open(work + "/hub.port", "w").write(str(s.server_address[1]))
+with open(work + "/hub.port.tmp", "w") as f:
+    f.write(str(s.server_address[1]))
+import os
+os.replace(work + "/hub.port.tmp", work + "/hub.port")
 s.serve_forever()
 PY
 python3 "$WORK/hub.py" "$WORK" & HUBPID=$!
-n=50; while [ ! -s "$WORK/hub.port" ] && [ "$n" -gt 0 ]; do sleep 0.1; n=$((n - 1)); done
+n=300; while [ ! -s "$WORK/hub.port" ] && [ "$n" -gt 0 ]; do sleep 0.1; n=$((n - 1)); done
 port=$(cat "$WORK/hub.port" 2>/dev/null)
+[ -n "$port" ] || fail "G the fake hub never listened"
+export NO_PROXY='*' no_proxy='*'   # a runner's proxy must not stand between us and 127.0.0.1
 printf 'CCQUOTA_HUB_URL=http://127.0.0.1:%s\nCCQUOTA_TOKEN=NODETOK\n' "$port" > "$FLEET_CONF_DIR/node.env"
-w=$(python3 "$BIN/fleet-client-lease.py" where); rc=$?
+w=$(python3 "$BIN/fleet-client-lease.py" where 2>"$WORK/g.err"); rc=$?
 eq "G rc" "0" "$rc"
+[ "$rc" = 0 ] || printf '      stderr: %s\n' "$(cat "$WORK/g.err")" >&2
 has "G the owner's lease" "$w" '"device": "MacBook"'
 has "G asked with the node token" "$(cat "$WORK/hub.log" 2>/dev/null)" "GET /v1/node/client Bearer NODETOK"
 eq "G through the reader" "MacBook · iTerm2 · 能：打开网页" "$(env -u FLEET_CLIENT_WHERE_CMD bash "$BIN/fleet-client-where.sh")"
