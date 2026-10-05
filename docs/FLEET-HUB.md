@@ -75,6 +75,22 @@ is required independently of this application-level identity check.
   is unknown there gets `worker_id` `null`, never a guessed one. A one-repo
   fleet's keys stay bare. A bare `issue-<N>` sent to a multi-repo fleet matches
   every repo's window and is refused as `AMBIGUOUS` when more than one holds it.
+- `identity` — the session's **lifelong** identity (issue #1646): its window's
+  `@fleet_id`, a UUID minted once when the session is spawned and carried
+  verbatim by every restore, migration and move (local or through the hub, in
+  the transcript bundle as `<sid>.fleet-id`); never re-minted, untouched by
+  `/clear` and a handoff. A key can change under a live session — a scratch bound
+  to an issue (`fleet-bind.sh`) stops answering to `scratch-<N>` — the identity
+  cannot. `<fleet UUID>/<identity>` is a worker_id too, accepted wherever one is
+  (`worker_*`, relays, `origin_wid`), and the worker map lists every worker
+  under both. A spawn records its parent's as `@origin_fid` (and
+  `@origin_wid` = `<fleet UUID>/<parent identity>`); `fleet-report-parent.sh`,
+  `fleet_worker_locate`, the peer channel and the inbound relay resolve the
+  identity first and fall back to the key, and `fleet_origin_heal` re-points a
+  child's `@origin` at its parent's current key, so everything that joins on keys
+  follows. The key form stays an alias for one version (EPIC #1645 rule 2);
+  `worker_id` in the inventory is still the key form, and a lease, a placement
+  and a move still name a key.
 - `window_id`, `handle` — **observations** of where that identity lives right
   now. They are re-minted by every migration, restore and warm-pool claim and are
   never accepted as a target.

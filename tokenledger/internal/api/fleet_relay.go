@@ -288,6 +288,7 @@ func (s *Server) workerMap(endpointID, hostname, osUser string, now time.Time) [
 		var ws []struct {
 			WorkerID  string  `json:"worker_id"`
 			OriginWID *string `json:"origin_wid"`
+			Identity  *string `json:"identity"`
 		}
 		if json.Unmarshal([]byte(r.WorkersJSON), &ws) != nil {
 			continue
@@ -309,6 +310,13 @@ func (s *Server) workerMap(endpointID, hostname, osUser string, now time.Time) [
 				}
 			}
 			out = append(out, loc)
+			// The session's lifelong identity (claude-fleet#1646): it answers as
+			// <fleet UUID>/<identity> too — the worker_id its children hold.
+			if w.Identity != nil && fleetid.IsUUID(*w.Identity) {
+				alias := loc
+				alias.WorkerID = r.FleetID + "/" + *w.Identity
+				out = append(out, alias)
+			}
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].WorkerID < out[j].WorkerID })

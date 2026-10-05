@@ -210,6 +210,10 @@ snapshot() {
     # stamped @worktree over a wandered cwd; give the resolver THIS fleet's base
     # so legacy shared-base raw windows stay excluded. The map appends @raw at
     # column 14, after provider/home/transcript and handoff_manifest (column 13).
+    # Leading-most field (issue #1646): @fleet_id, the session's lifelong identity —
+    # the resolver writes it as a FID row just before the window's WIN row, and
+    # restore() stamps it back, so a child reporting to this session by identity
+    # still finds it after a crash restore.
     # Leading field (issue #789): the window's repo — `@repo` in a fleet hosting 2+
     # repos, `norepo:<sid>` for a no-repo session, empty otherwise, so a one-repo
     # fleet's WIN rows stay byte-identical (the resolver writes column 16 only when
@@ -226,9 +230,9 @@ snapshot() {
     # it is another machine's session, never one to `claude --resume` here.
     # Leading-most field (issue #1296): @cc_session_id, the pane's own session id as
     # its hooks recorded it — the resolver resumes THAT before guessing by mtime.
-    { tmux -L "$sock" list-windows -t "$sess" -F "#{@cc_session_id}|#{?@norepo,norepo:#{@norepo_sid},$rfmt}|"'#{?@remote,,#{window_name}}|#{?@raw,#{?@worktree,#{@worktree},#{pane_current_path}},#{pane_current_path}}|#{@issue}|#{@claude_state}|#{@prci}|#{@pfg}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@handoff_manifest}|#{?@worker_lifecycle,#{@sleep_record},}|#{@codex_identity}' 2>/dev/null
-      [ -n "$spath" ] && printf '||__HUB__|%s|-\n' "$spath"
-    } | python3 "$BIN/.fleet-restore-resolve.py" "$main" --lead --sid >> "$tmp" 2>/dev/null
+    { tmux -L "$sock" list-windows -t "$sess" -F "#{@fleet_id}|#{@cc_session_id}|#{?@norepo,norepo:#{@norepo_sid},$rfmt}|"'#{?@remote,,#{window_name}}|#{?@raw,#{?@worktree,#{@worktree},#{pane_current_path}},#{pane_current_path}}|#{@issue}|#{@claude_state}|#{@prci}|#{@pfg}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@handoff_manifest}|#{?@worker_lifecycle,#{@sleep_record},}|#{@codex_identity}' 2>/dev/null
+      [ -n "$spath" ] && printf '|||__HUB__|%s|-\n' "$spath"
+    } | python3 "$BIN/.fleet-restore-resolve.py" "$main" --lead --sid --fid >> "$tmp" 2>/dev/null
     # Destructive-shrink guard (issue #160): a fleet caught MID-RESTORE is
     # hub-only — fleet-up has rebuilt its panels but restore hasn't reopened the
     # work windows yet — so a snapshot taken in that window has FEWER WIN rows
@@ -371,7 +375,7 @@ restore() {
     # actually had a window to reopen, for the "fully up" note after the loop.
     local wname wpath wid wissue wstate wagent whome wmanifest wraw wsleep wrepo reopened=0 multi=0
     _fleet_hosts_many "$sess" && multi=1
-    while IFS=$'\t' read -r _ wname wpath wid wissue wstate _ _ worigin wagent whome _ wmanifest wraw wsleep wrepo; do
+    while IFS=$'\t' read -r wtag wname wpath wid wissue wstate _ _ worigin wagent whome _ wmanifest wraw wsleep wrepo; do
       [ -z "$wname" ] && continue
       # A no-repo session (issue #789) lives in $HOME, not a worktree: its transcript
       # belongs to $HOME's project dir, so it resumes there whatever its cwd was.
@@ -511,6 +515,9 @@ restore() {
 
         [ -n "$wissue" ] && [ "$wissue" != "-" ] \
           && tmux -L "$sock" set-window-option -t "$nw" @issue "$wissue" 2>/dev/null
+        # The session's lifelong identity (issue #1646), as the snapshot saw it —
+        # never re-minted: its children's @origin_fid still names it.
+        case "$wtag" in WIN:?*) tmux -L "$sock" set-window-option -t "$nw" @fleet_id "${wtag#WIN:}" 2>/dev/null ;; esac
         # Re-stamp the spawn provenance too (issue #503) so a crash-restored
         # worker keeps its dash grouping; old maps (pre-#503, 8-field WIN rows)
         # leave $worigin empty → nothing stamped, exactly as before.
@@ -574,7 +581,7 @@ restore() {
 " ;;
         esac
       fi
-    done < <(awk -F'\t' '$1=="WIN"' "$mf")
+    done < <(fleet_restore_wins "$mf")
     [ "$live" = 1 ] && [ "$reopened" = 0 ] && say "· $sess fully up — no missing work windows"
   done < <(each_restore_map)
   [ "$found" = 0 ] && say "no restore maps under $FLEET_CONF_DIR/fleets/*/ — nothing to restore"

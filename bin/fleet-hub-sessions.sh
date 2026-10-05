@@ -502,9 +502,23 @@ def write(path, text):
 
 # The C1 locator cache: worker_id → machine, for every routable session — a
 # node's; the shell (client mode) has no control adapter to serve.
+# A session's lifelong identity (issue #1646): the worker's `identity` (its
+# @fleet_id) answers as `<fleet UUID>/<identity>` too — the locator finds the
+# session by the worker_id its children hold, and an identity-form @origin_wid
+# reads back as the key-form worker_id the rows below are keyed by.
+IDRE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+def ident_wid(s):
+    i, wid = (s.get("worker") or {}).get("identity"), s.get("worker_id") or ""
+    return wid.split("/", 1)[0] + "/" + i if isinstance(i, str) and IDRE.fullmatch(i) and "/" in wid else None
+by_ident = {}
+for s in sessions:
+    iw = ident_wid(s)
+    if iw:
+        by_ident[iw] = s["worker_id"]
 if not client:
-    write(wpath, "".join("%s\t%s\n" % (s["worker_id"], label(s.get("machine_name")))
-                         for s in sessions if s.get("worker_id")))
+    write(wpath, "".join("%s\t%s\n" % (w, label(s.get("machine_name")))
+                         for s in sessions if s.get("worker_id")
+                         for w in (s["worker_id"], ident_wid(s)) if w))
 
 is_local = lambda s: not client and (s.get("fleet_id") in local_uuids or short(s.get("machine_name")) == me)
 def local_fleet(s):
@@ -541,7 +555,7 @@ for s in sessions:
                      issue=w.get("issue") or "", repo=w.get("repo") or "",
                      state=w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or ""),
                      agent=w.get("agent") or "", name=w.get("name") or w.get("key") or wid.split("/", 1)[1],
-                     owid=w.get("origin_wid") or "", needs=w.get("needs") or "", seen=epoch(s.get("observed_at")),
+                     owid=by_ident.get(w.get("origin_wid") or "", w.get("origin_wid") or ""), needs=w.get("needs") or "", seen=epoch(s.get("observed_at")),
                      local=here["sess"] if here else None,
                      lwid=windows.get((here["sess"], wid.split("/", 1)[1]), "") if here else ""))
 

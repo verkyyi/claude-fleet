@@ -151,6 +151,9 @@ tmux set-window-option -t snap:issue-9 @issue 9
 tmux set-window-option -t snap:issue-9 @claude_state working
 tmux set-window-option -t snap:issue-9 @prci "✓"
 tmux set-window-option -t snap:issue-9 @pfg "#9ece6a"
+# issue #1646: the session's lifelong identity rides the map as a FID row.
+FID9=0f1e2d3c-4b5a-4968-8776-5a4b3c2d1e0f
+tmux set-window-option -t snap:issue-9 @fleet_id "$FID9"
 # issue-10 was parked at 'done' — captured too, but restore must NOT auto-continue it.
 tmux new-window -t snap: -n issue-10 -c "$WORK_PATH"
 tmux set-window-option -t snap:issue-10 @issue 10
@@ -201,6 +204,18 @@ grep -qE '^WIN	issue-9	.*	working	✓	#9ece6a	-$' "$MAP" \
   || fail "snapshot: issue-9's @claude_state|@prci|@pfg trio should be captured (map: $(cat "$MAP"))"
 grep -qE '^WIN	issue-10	.*	done	-	-	-$' "$MAP" \
   || fail "snapshot: issue-10's 'done' state should be captured, unset prci/pfg as '-' (map: $(cat "$MAP"))"
+# issue #1646: a FID row right before issue-9's WIN row — and none for issue-10,
+# which has no @fleet_id — and restore's reader tags exactly that row with it.
+awk -F'\t' -v f="$FID9" 'prev == "FID\t" f && $1 == "WIN" && $2 == "issue-9" { ok = 1 } { prev = $0 } END { exit !ok }' "$MAP" \
+  || fail "snapshot: issue-9's @fleet_id must ride a FID row just before its WIN row (map: $(cat "$MAP"))"
+[ "$(grep -c '^FID	' "$MAP")" = 1 ] || fail "snapshot: only a window with an @fleet_id gets a FID row (map: $(cat "$MAP"))"
+WINS=$(bash -c '. "$1/fleet-lib.sh"; fleet_restore_wins "$2"' _ "$BIN" "$MAP")
+printf '%s\n' "$WINS" | grep -q "^WIN:$FID9	issue-9	" \
+  || fail "restore: fleet_restore_wins must tag issue-9's row WIN:<fleet_id> (got: $WINS)"
+[ "$(printf '%s\n' "$WINS" | sed 's/^WIN:[^	]*	/WIN	/')" = "$(awk -F'\t' '$1=="WIN"' "$MAP")" ] \
+  || fail "restore: apart from the tag, fleet_restore_wins must be the map's WIN rows byte for byte"
+grep -q '@fleet_id "${wtag#WIN:}"' "$RESTORE" \
+  || fail "restore: a reopened window must be stamped with the FID row's @fleet_id"
 
 # restore() must IGNORE the HUB row: the hub is dash-only, so there is no Claude
 # session to bring back. --dry-run exercises the parse+wiring without spawning

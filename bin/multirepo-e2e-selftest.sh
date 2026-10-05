@@ -298,7 +298,7 @@ case "$invS" in *" o/alpha") ok "(id) the inventory names the fleet's first repo
   || fail "(id) fleet_uuid in B's pane [$uB] ≠ the inventory's [$invS]"
 uA=$(inpane "$wA" fleet_uuid "$S")
 [ "$uA" = "$uB" ] && ok "(id) A's and B's panes mint one fleet UUID" || fail "(id) A's pane [$uA] ≠ B's pane [$uB]"
-[ "$(inpane "$wB" env FLEET_REPO=o/beta FLEET_MAIN="$MB" bash -c '. "$1/fleet-lib.sh"; fleet_worker_id "$2" "$3"' _ "$BIN" "$S" "$wB")" = "$uB/o-beta:issue-12" ] \
+[ "$(inpane "$wB" env FLEET_REPO=o/beta FLEET_MAIN="$MB" bash -c '. "$1/fleet-lib.sh"; fleet_worker_id_key "$2" "$3"' _ "$BIN" "$S" "$wB")" = "$uB/o-beta:issue-12" ] \
   && ok "(id) B#12's worker_id carries the fleet UUID" || fail "(id) B#12's worker_id"
 # degenerate: the one-repo fleet's UUID is the same formula over its conf as ever
 MID=$(python3 -c 'import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute("SELECT value FROM metadata WHERE key=\"machine_id\"").fetchone()[0])' "$FLEET_CONF_DIR/control/state.sqlite3")

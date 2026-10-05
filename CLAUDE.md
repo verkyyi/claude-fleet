@@ -90,6 +90,19 @@ Do not install from memory: read the doc and work from it.
   `TMUX_PANE`, which is why `dash-popup.sh` hands it ours. An `@wid` handle no
   live window carries is refused by `fleet_wid_target` (nothing, rc 1) and every
   caller checks the rc. `bin/worker-locate-selftest.sh` F pins all of it.
+- **A session's address is its lifelong IDENTITY, a key is only its name**
+  (issue #1646, EPIC #1645 C1). Every spawned window carries `@fleet_id` (a UUID,
+  minted once — `fleet_window_fid` mints lazily for an older window) and every
+  road to another window carries it verbatim: fleet-restore (a `FID` row before
+  the `WIN` row), fleet-migrate, fleet-move (the bundle's `<sid>.fleet-id`). A
+  spawn stamps the parent's as `@origin_fid` beside `@origin`; resolve a parent
+  through `fleet_origin_win` / `fleet_win_for_addr` (identity first, key second),
+  never a bare `@origin` scan. `fleet_origin_heal` re-points `@origin` when a
+  parent's key moves (`fleet-bind.sh`, dash rebind, the cleanup tick), so
+  key-joined readers need no change. worker_id is `<fleet UUID>/<fleet_id>`
+  (`fleet_worker_id`); `<fleet UUID>/<key>` stays a readable alias for one
+  version (`fleet_worker_id_key` — a relay's `from`, a lease). `worker-identity-selftest.sh`
+  pins it.
 - **A recycled scratch number is a new GENERATION, not the old session** (issue
   #1538). `fleet_scratch_alloc <main> <base> <sess>` mints one per allocation
   (`children/.gen`, `fleet_key_gen`): the last holder's child ledger retires to

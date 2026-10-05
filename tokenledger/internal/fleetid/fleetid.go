@@ -28,7 +28,13 @@ var uuidRE = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4
 // keyRE is WORKER_KEY_RE: [<repo slug>:](issue|scratch)-<N>.
 const keyRE = `(?:[A-Za-z0-9][A-Za-z0-9._-]{0,127}:)?(?:issue|scratch)-[1-9][0-9]{0,9}`
 
-var workerIDRE = regexp.MustCompile(`^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/(` + keyRE + `)$`)
+// identityRE is a session's lifelong identity (claude-fleet#1646): its window's
+// @fleet_id, a canonical UUID.
+const identityRE = `[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`
+
+// workerIDRE is WORKER_ID_RE: <fleet UUID>/<fleet_id> (claude-fleet#1646), or —
+// an alias kept for one version — the old <fleet UUID>/<key>.
+var workerIDRE = regexp.MustCompile(`^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/(` + keyRE + `|` + identityRE + `)$`)
 
 var (
 	slugDropRE   = regexp.MustCompile(`[^A-Za-z0-9._-]`)
@@ -40,7 +46,7 @@ var (
 var ErrNotUUID = errors.New("expected a canonical UUID")
 
 // ErrBadWorkerID is parse_worker_id's refusal.
-var ErrBadWorkerID = errors.New("worker_id must be <fleet UUID>/[<repo>:]issue-<N> or <fleet UUID>/[<repo>:]scratch-<N>")
+var ErrBadWorkerID = errors.New("worker_id must be <fleet UUID>/<fleet_id>, <fleet UUID>/[<repo>:]issue-<N> or <fleet UUID>/[<repo>:]scratch-<N>")
 
 // IsUUID reports whether s is a canonical UUID.
 func IsUUID(s string) bool { return uuidRE.MatchString(s) }
@@ -108,7 +114,10 @@ func WorkerID(fleetID, key string) string {
 	return fleetID + "/" + key
 }
 
-// ParseWorkerID is parse_worker_id: (fleet UUID, key), or ErrBadWorkerID.
+// ParseWorkerID is parse_worker_id: (fleet UUID, key), or ErrBadWorkerID. The
+// key half is a session identity (IsUUID) for the <fleet UUID>/<fleet_id> form;
+// a caller that needs a real key (a lease, a placement, a move) matches its own
+// key pattern on it, which an identity never passes.
 func ParseWorkerID(id string) (fleetID, key string, err error) {
 	m := workerIDRE.FindStringSubmatch(id)
 	if m == nil {

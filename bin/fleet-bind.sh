@@ -192,6 +192,10 @@ tmux set-window-option -t "$WIN" @issue "$num" 2>/dev/null
 [ -n "$REPO" ] && tmux set-window-option -t "$WIN" @repo "$(fleet_norm_repo "$REPO")" 2>/dev/null
 tmux set-window-option -t "$WIN" -u @raw 2>/dev/null
 tmux rename-window -t "$WIN" -- "$wname" 2>/dev/null
+# The children this session spawned as `scratch-<K>` follow it to `issue-<N>`
+# (issue #1646): found by their @origin_fid, their @origin is rewritten now, so the
+# dash keeps them nested and their reports land in this worker's book.
+[ -n "$SESS" ] && fleet_origin_heal "$SESS" >/dev/null 2>&1 || :
 
 # Lifecycle fact (issue #625): a scratch just became the worker for #N. Without
 # THIS transition every scratch that turned into real work is attributed to

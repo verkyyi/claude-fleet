@@ -208,6 +208,16 @@ home=$(fleet_wid_home "wid:$TO") || die 1 "target $TO is not a fleet on this mac
 sock=$(fleet_socket "$home")
 pkey=${TO#*/}
 fkey=${FROM#*/}
+# An identity-form target (issue #1646): the parent session by its @fleet_id, booked
+# under the key it answers to NOW — a scratch bound to an issue since it spawned
+# the child is still that child's parent. Not live here ⇒ refused below as before.
+pfwin=''
+if fleet_is_fid "$pkey"; then
+  pfwin=$(fleet_win_for_fid "$pkey" "$sock" 2>/dev/null) || pfwin=''
+  _pk=''; [ -n "$pfwin" ] && _pk=$(fleet_window_okey "$home" "$pfwin" 2>/dev/null)
+  [ -n "$_pk" ] || die 1 "parent $pkey has no live window here"
+  pkey=$_pk
+fi
 
 if [ "$KIND" = message ]; then
   text="[from $fkey on ${NODE:-another machine}]"$'\n'"$(cat "$WORK/msg")"
@@ -235,7 +245,8 @@ if [ "$MODE" = batch ]; then
     && bash "$BIN/fleet-children-flush.sh" -L "$sock" --parent "$pkey" >/dev/null 2>&1
   exit 0
 fi
-pwin=$(fleet_win_for_key "$pkey" "$sock") || pwin=''
+pwin=$pfwin
+[ -n "$pwin" ] || pwin=$(fleet_win_for_key "$pkey" "$sock") || pwin=''
 [ -n "$pwin" ] || { printf 'fleet-hub-node: parent %s has no window here — ledgered only\n' "$pkey" >&2; exit 0; }
 [ -s "$WORK/msg" ] || exit 0
 if children_send "$home" "$sock" "$pwin" "$(cat "$WORK/msg")"; then

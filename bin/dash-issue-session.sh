@@ -385,7 +385,7 @@ if [ "$PLACING" = 1 ]; then
   else
     _pw="$ORIGIN_WID"
     if [ -z "$_pw" ] && _fleet_wid_split "$ORIGIN" >/dev/null 2>&1; then
-      _u=$(fleet_uuid "$SESS") && [ -n "$_u" ] && _pw="$_u/$ORIGIN"
+      _pw=$(fleet_key_wid "$SESS" "$ORIGIN") || _pw=''   # by identity (#1646)
     fi
     _wait=''; [ "$ASYNC_FLAG" = 1 ] && _wait=0
     # Was the issue unassigned before we asked (issue #1610)? Only then may a
@@ -668,6 +668,9 @@ CLAIMED_HERE=0   # a window holds the issue now: its claim is the worker's
 # their very next tick, not up to FLEET_DAEMON_IDLE_AFTER later (issue #1077).
 [ -f "$BIN/fleet-daemon-lib.sh" ] && ( . "$BIN/fleet-daemon-lib.sh" && fleet_daemon_wake "$BIN/.." ) 2>/dev/null || true
 TM set-window-option -t "$win" @issue "$num" 2>/dev/null   # bind window ↔ issue
+# The session's lifelong identity (issue #1646): minted once, here, and carried by
+# every restore / migrate / move after — the address its children report to.
+fleet_window_fid "$SESS" "$win" "$SOCK" >/dev/null 2>&1 || :
 # The window's repo + worktree (issue #789) — every worker carries both, so any
 # consumer resolves its repo via fleet_window_repo without a git read.
 [ -n "$REPO" ] && TM set-window-option -t "$win" @repo "$REPO" 2>/dev/null

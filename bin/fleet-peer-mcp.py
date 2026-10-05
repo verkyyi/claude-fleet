@@ -153,7 +153,12 @@ def parent_window():
     # The ONE resolver (fleet_win_for_key, issue #1537): rc 2 = the key is
     # ambiguous (two windows, or a bare issue key in a 2+ repo fleet) — said on
     # stderr; never a pick. A warm-pool window never answers.
-    script = ". " + shquote(str(BIN / "fleet-lib.sh")) + "; fleet_win_for_key " + shquote(parent) + " " + shquote(session)
+    # By IDENTITY first (issue #1646): fleet_origin_win reads this pane's
+    # @origin_fid — the parent may have changed its key since it spawned us —
+    # and falls back to the key through the same resolver.
+    script = ". " + shquote(str(BIN / "fleet-lib.sh")) + "; " + (
+        "fleet_origin_win " + shquote(session) + " " + shquote(os.environ["TMUX_PANE"])
+        if os.environ.get("TMUX_PANE") else "fleet_win_for_key " + shquote(parent) + " " + shquote(session))
     res = run(["bash", "-lc", script], check=False)
     wid = res.stdout.strip()
     if res.returncode == 2:

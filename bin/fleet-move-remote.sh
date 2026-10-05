@@ -162,6 +162,15 @@ case "$cmd" in
     nw=$(TM new-window -d -t "$sess:" -n "$name" -c "$wt" -P -F '#{window_id}' "$cmdline" 2>/dev/null)
     [ -n "$nw" ] || die 'tmux new-window failed'
     TM set-window-option -t "$nw" @worktree "$wt" 2>/dev/null
+    # The session's lifelong identity (issue #1646) rode the bundle as
+    # `<sid>.fleet-id` (fleet-move.sh fid_bundle) — stamped verbatim, never
+    # re-minted. Either project-dir spelling: the hub road and the ssh road differ.
+    for _d in "$(fleet_mangle_path "$wt")" "$(printf '%s' "$wt" | tr '/.' '--')"; do
+      _ff="$HOME/.claude/projects/$_d/$sid.fleet-id"
+      [ -f "$_ff" ] || continue
+      _fid=$(head -c 64 "$_ff" 2>/dev/null | tr -d '[:space:]'); rm -f "$_ff"
+      fleet_is_fid "$_fid" && TM set-window-option -t "$nw" @fleet_id "$_fid" 2>/dev/null
+    done
     TM set-window-option -t "$nw" @raw "$raw" 2>/dev/null
     [ -n "$issue" ] && TM set-window-option -t "$nw" @issue "$issue" 2>/dev/null
     [ -n "$origin" ] && TM set-window-option -t "$nw" @origin "$origin" 2>/dev/null

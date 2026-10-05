@@ -473,6 +473,18 @@ EOF
   done
 fi
 
+# --- a child's @origin follows its parent's key (issue #1646) --------------------
+# A parent found by its identity (@origin_fid) whose key moved — a scratch bound to
+# an issue by a road that did not heal it at once — gets its children re-pointed,
+# so the dash nests them and the digest below books them under the key it
+# answers to now. One list-windows a fleet; a child with no @origin_fid is skipped.
+if [ "$DRY" != 1 ]; then
+  for s in ${SESSIONS[@]+"${SESSIONS[@]}"}; do
+    hout=$(fleet_origin_heal "$s" "$(fleet_socket "$s")" 2>/dev/null)
+    [ -z "$hout" ] || log "$s: $(printf '%s' "$hout" | paste -sd';' -)"
+  done
+fi
+
 # --- the children digest (issue #939) --------------------------------------------
 # FLEET_CHILD_REPORT=batch parks quiet child reports in the parent's ledger; this
 # tick is what delivers them, merged into one `[children-digest]` (no daemon of its

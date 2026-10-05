@@ -126,12 +126,14 @@ func TestRelayIntegrationTwoAgents(t *testing.T) {
 	installFakeFleetControl(t, py, bin, childHome, "fleet-m4", "verkyyi/claude-fleet")
 	// The child's machine: its issue-42 window carries the parent's worker_id
 	// as @origin_wid (inventory column 11, issue #1423; column 12 is
-	// @claude_needs, #1475) once we know it.
+	// @claude_needs, #1475) once we know it, and its lifelong identity as
+	// column 13 (@fleet_id, claude-fleet#1646).
+	const childIdentity = "9d1c6b7e-2f4a-4c3b-8e5d-6a7b8c9d0e1f"
 	adapter := filepath.Join(childHome, ".claude", "fleet", "bin", "fleet-control-read.sh")
 	b, _ := os.ReadFile(adapter)
 	b = []byte(strings.Replace(string(b),
 		`workers) printf '@1\t42\t\t/w/x-issue-42\tworking\tclaude\tw1\t\t\n@2\t\t1\t/w/x-scratch-3\tidle\tclaude\tw2\t\t\n' ;;`,
-		`workers) printf '@1\t42\t\t/w/x-issue-42\tworking\tclaude\tw1\t\t\tissue-42\t%s\t\n' "$(cat `+shQuote(filepath.Join(childHome, "origin"))+` 2>/dev/null)" ;;`, 1))
+		`workers) printf '@1\t42\t\t/w/x-issue-42\tworking\tclaude\tw1\t\t\tissue-42\t%s\t\t`+childIdentity+`\n' "$(cat `+shQuote(filepath.Join(childHome, "origin"))+` 2>/dev/null)" ;;`, 1))
 	if err := os.WriteFile(adapter, b, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -165,6 +167,17 @@ func TestRelayIntegrationTwoAgents(t *testing.T) {
 	waitFor(t, 10*time.Second, "the parent's map to list the remote child with its parent", func() bool {
 		for _, l := range lines(parentMap) {
 			if f := strings.Split(l, "\t"); len(f) == 3 && f[0] == childWID && f[1] != "" && f[2] == parentWID {
+				return true
+			}
+		}
+		return false
+	})
+
+	// …and by its lifelong identity (claude-fleet#1646): the same child, same
+	// node, same parent, under <fleet UUID>/<fleet_id>.
+	waitFor(t, 10*time.Second, "the parent's map to list the remote child by its identity", func() bool {
+		for _, l := range lines(parentMap) {
+			if f := strings.Split(l, "\t"); len(f) == 3 && f[0] == childFleet+"/"+childIdentity && f[1] != "" && f[2] == parentWID {
 				return true
 			}
 		}

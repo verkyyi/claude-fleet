@@ -127,7 +127,7 @@ TM() { if [ -n "$SOCK" ]; then tmux -L "$SOCK" "$@"; else tmux "$@"; fi; }
 target="${WIN:-${TMUX_PANE:-}}"
 [ -n "$target" ] || quiet 'no child window (no --win and no $TMUX_PANE)'
 row=$(TM display-message -p -t "$target" \
-        '#{window_id}|#{@origin}|#{@issue}|#{@reported}|#{@worktree}|#{@claude_state}|#{@origin_wid}|#{@origin_gen}|#{@origin_retired}|#{window_name}' 2>/dev/null)
+        '#{window_id}|#{@origin}|#{@issue}|#{@reported}|#{@worktree}|#{@claude_state}|#{@origin_wid}|#{@origin_gen}|#{@origin_retired}|#{@origin_fid}|#{window_name}' 2>/dev/null)
 [ -n "$row" ] || quiet "child window '$target' is gone"
 selfwin=${row%%|*};  row=${row#*|}
 worigin=${row%%|*};  row=${row#*|}
@@ -137,11 +137,14 @@ wworktree=${row%%|*}; row=${row#*|}
 wstate=${row%%|*};   row=${row#*|}
 owid=${row%%|*};     row=${row#*|}
 wogen=${row%%|*};    row=${row#*|}
-wretired=${row%%|*}; wname=${row#*|}
+wretired=${row%%|*}; row=${row#*|}
+ofid=${row%%|*};     wname=${row#*|}
 
 case "$ORIGIN" in
-  wid:*) owid=${ORIGIN#wid:}; worigin=${owid#*/} ;;
-  ?*)    worigin="$ORIGIN"; [ "${owid#*/}" = "$ORIGIN" ] || owid='' ;;
+  wid:*) owid=${ORIGIN#wid:}; worigin=${owid#*/}; ofid=''
+         # an identity-form worker_id (issue #1646) names its session, not a key
+         fleet_is_fid "$worigin" && { ofid=$worigin; worigin=$(TM display-message -p -t "$target" '#{@origin}' 2>/dev/null); } ;;
+  ?*)    worigin="$ORIGIN"; ofid=''; [ "${owid#*/}" = "$ORIGIN" ] || owid='' ;;
 esac
 [ -n "$ISSUE" ]  && wissue="${ISSUE//[^0-9]/}"
 [ -n "$TITLE" ]  && wname="$TITLE"
@@ -206,6 +209,28 @@ case "$worigin" in
   '') quiet 'hub-spawned (@origin empty)' ;;
   *)  quiet "@origin '$worigin' is not a window key (daemon / cross-fleet parent)" ;;
 esac
+
+# --- the parent by IDENTITY (issue #1646) ----------------------------------------
+# A spawn records the parent's @fleet_id as @origin_fid. The key in @origin is only
+# the NAME the parent wore at spawn time — a scratch bound to an issue since answers
+# to `issue-<N>`, and the key-only lookup below lost every report to it. Found by
+# identity on this fleet's socket, the parent's CURRENT key becomes the one this
+# report is booked and sent under, and the child's @origin follows it (so the dash
+# nests it and fleet-children.sh counts it there). Its generation check is moot —
+# the identity IS the session. Not found here ⇒ the key path below, as before.
+PFOUND=''
+if [ -z "$RETIRED_GEN" ] && fleet_is_fid "$ofid"; then
+  if _pw=$(fleet_win_for_fid "$ofid" "$SOCK" 2>/dev/null) && [ -n "$_pw" ]; then
+    _pk=$(fleet_window_okey "$sess" "$_pw" 2>/dev/null)
+    if [ -n "$_pk" ]; then
+      PFOUND=$_pw
+      if [ "$_pk" != "$worigin" ]; then
+        [ "$DRY" = 1 ] || TM set-window-option -t "$selfwin" @origin "$_pk" 2>/dev/null
+        worigin=$_pk; wogen=''
+      fi
+    fi
+  fi
+fi
 
 # --- the child's own identity, for the envelope --------------------------------
 selfkey="$KEY"
@@ -374,10 +399,12 @@ envelope() {
 # is `<this child's worker_id>#<epoch>.<n>` — the hub's idempotency key, so the
 # agent's resends are one delivery. No hub (CCQUOTA_FLEET off, no fleet UUID, no
 # outbox) ⇒ C1's answer: ledgered here, not sent, said on stderr.
-if [ -n "$owid" ] && ! fleet_wid_home "$owid" "$sess" >/dev/null 2>&1; then
+if [ -z "$PFOUND" ] && [ -n "$owid" ] && ! fleet_wid_home "$owid" "$sess" >/dev/null 2>&1; then
   _loc=$(fleet_worker_locate "$owid" "$sess" 2>/dev/null)
   _self=''
-  [ -n "${selfwin:-}" ] && _self=$(fleet_worker_id "$sess" "$selfwin" 2>/dev/null)
+  # `from` is the readable `<fleet UUID>/<key>` (issue #1646): a label + the
+  # relay's idempotency prefix, never an address.
+  [ -n "${selfwin:-}" ] && _self=$(fleet_worker_id_key "$sess" "$selfwin" 2>/dev/null)
   case "$_loc" in
     remote\ *)
       if [ -n "$_self" ] && [ "${CCQUOTA_FLEET:-0}" = 1 ]; then
@@ -417,7 +444,7 @@ fi
 # answering to the key never heard of it. The report goes to the RETIRED book
 # (`<key>.ndjson.<gen>`, where that generation's other reports were moved) and
 # nowhere else — not to the new holder, and not up the new holder's ancestry.
-if [ -n "$RETIRED_GEN" ] || { [ -n "$sess" ] && fleet_key_gen_stale "$sess" "$worigin" "$wogen"; }; then
+if [ -n "$RETIRED_GEN" ] || { [ -z "$PFOUND" ] && [ -n "$sess" ] && fleet_key_gen_stale "$sess" "$worigin" "$wogen"; }; then
   RETIRED_GEN=${RETIRED_GEN:-${wogen:-0}}
   if [ "$DRY" != 1 ] && command -v children_append_retired >/dev/null 2>&1; then
     children_append_retired "$worigin" "$RETIRED_GEN" "$(row_json \
@@ -454,7 +481,8 @@ fi
 # `relayed_from` row so `fleet-children.sh` there shows it too. Nobody alive above
 # (hub-spawned, cross-fleet, never reported) ⇒ the old silent success, below.
 SENDKEY="$worigin" RELAY_FROM='' pwin=''
-pwin=$(fleet_win_for_key "$worigin" "$SOCK") || pwin=''
+pwin=$PFOUND
+[ -n "$pwin" ] || pwin=$(fleet_win_for_key "$worigin" "$SOCK") || pwin=''
 if [ -z "$pwin" ] && _anc=$(fleet_live_ancestor "$worigin" "$sess" "$SOCK"); then
   SENDKEY=${_anc%%$'\t'*}; pwin=${_anc#*$'\t'}; RELAY_FROM="$worigin"
   if [ "$DRY" != 1 ] && command -v children_append >/dev/null 2>&1; then

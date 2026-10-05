@@ -33,6 +33,9 @@
 #
 # `wid:<fleet UUID>/<key>` (issue #1420) is the address that survives a machine
 # boundary (docs/FLEET-HUB.md «Worker identity»); fleet_worker_locate resolves it.
+# Since issue #1646 its lifelong form is `wid:<fleet UUID>/<fleet_id>` (the
+# window's @fleet_id — it survives a rename, a restore, a migrate and a move);
+# the key form stays an alias.
 # Live on this machine → the window it found, then the path below as for any
 # window. On another machine → the hub (issue #1421): `sent → … on <node>` once
 # this machine's agent has handed it over (or `queued` — it will be), exit 0.
@@ -85,7 +88,9 @@ case "$tgt" in
         sp=$(_fleet_wid_split "$tgt"); full=$(fleet_hub_wid "${sp%%$'\t'*}" "${sp#*$'\t'}") \
           || die 1 "'$tgt' lives on $node, but the hub map has no full worker_id for it; nothing sent"
         me=''
-        [ -n "${TMUX_PANE:-}" ] && me=$(fleet_worker_id "$(fleet_current_session)" "$TMUX_PANE" 2>/dev/null)
+        # The sender rides as its readable `<fleet UUID>/<key>` (issue #1646): `from`
+        # labels the message and keys its idempotency; it is never an address.
+        [ -n "${TMUX_PANE:-}" ] && me=$(fleet_worker_id_key "$(fleet_current_session)" "$TMUX_PANE" 2>/dev/null)
         [ -n "$me" ] || die 1 "'$tgt' lives on $node — a cross-machine message must come from a worker or scratch pane (its worker_id is the sender); nothing sent"
         payload=$(python3 -c 'import json,sys; print(json.dumps({"text": sys.argv[1]}, ensure_ascii=False))' "$text") \
           || die 1 "could not encode the message"
@@ -94,7 +99,7 @@ case "$tgt" in
         if fleet_hub_wait_sent "$f" 3; then how='handed to the hub'; else how='queued for the hub'; fi
         printf 'sent → %s on %s (%s)\n' "${full#*/}" "$node" "$how"
         exit 0 ;;
-      *) [ "$rc" -eq 2 ] && die 2 "bad worker id '$tgt' (want wid:<fleet UUID>/issue-<N>, wid:issue-<N> or wid:scratch-<N>)"
+      *) [ "$rc" -eq 2 ] && die 2 "bad worker id '$tgt' (want wid:<fleet UUID>/<fleet_id>, wid:<fleet UUID>/issue-<N>, wid:issue-<N> or wid:scratch-<N>)"
          die 1 "no live worker for '$tgt' on this machine; nothing sent" ;;
     esac ;;
 esac

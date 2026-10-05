@@ -52,6 +52,12 @@ def separate_raw_path(path):
 # --lead one: the window's @cc_session_id — the pane's own session id, stamped by
 # its SessionStart and Stop hooks. Empty for a window whose CLI predates them.
 SID = "--sid" in sys.argv[2:]
+# --fid (issue #1646): one more leading field, BEFORE the --sid one: the window's
+# @fleet_id, the session's lifelong identity. A canonical UUID is written as a
+# `FID<TAB><fleet_id>` row immediately BEFORE that window's WIN row, so every reader
+# that keeps to `$1=="WIN"` reads the map it always did, and restore() re-stamps it.
+FID = "--fid" in sys.argv[2:]
+FID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 HELPER_MARKERS = (
     # fleet_internal_transcript's rubrics + the sleep digest's — keep in lockstep
     # with fleet_is_helper_transcript in fleet-lib.sh (fleet-restore-helper-selftest.sh).
@@ -121,6 +127,10 @@ for line in sys.stdin:
     line = line.rstrip("\n")
     if not line:
         continue
+    fid = ''
+    if FID:
+        fid, _, line = line.partition(SEP)
+        fid = fid if FID_RE.fullmatch(fid) else ''
     hook_sid = ''
     if SID:
         hook_sid, _, line = line.partition(SEP)
@@ -232,4 +242,6 @@ for line in sys.stdin:
         row += "\t-" * (14 - len(row.split("\t"))) + "\t" + sleep_record
     if lead:
         row += "\t-" * (15 - len(row.split("\t"))) + "\t" + lead
+    if fid:
+        print(f"FID\t{fid}")
     print(row)

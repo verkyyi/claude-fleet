@@ -125,6 +125,8 @@ fi
 if [ -f "$bindflag" ]; then                       # bind-issue mode (empty q unbinds)
   t=$(cat "$bindflag"); rm -f "$bindflag"
   tmux set-window-option -t "$t" @issue "$q" 2>/dev/null
+  # its children follow the window's new key (issue #1646)
+  command -v fleet_origin_heal >/dev/null 2>&1 && fleet_origin_heal "$(fleet_current_session 2>/dev/null)" >/dev/null 2>&1
   echo "rebind(?)+change-prompt($PROMPT)+clear-query+reload(bash $ROWS)"
 elif [ -f "$flag" ]; then                         # rename mode
   t=$(cat "$flag"); rm -f "$flag"
