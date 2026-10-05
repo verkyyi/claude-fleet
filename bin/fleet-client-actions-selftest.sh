@@ -356,7 +356,7 @@ has "G a phone: the file waits for the computer" "$(cat "$CL/links.shown" 2>/dev
 rm -f "$WORK/k"
 out=$(env FLEET_HUB_URL="$HUB" FLEET_HUB_TOKEN=CLIENTTOK FLEET_CLIENT_KEY_FILE="$WORK/k" python3 "$BIN/fleet-client-lease.py" acquire --device MacBook 2>&1)
 eq "H the key file holds the hub's key" "$KEY" "$(cat "$WORK/k" 2>/dev/null)"
-mode=$(stat -f '%Lp' "$WORK/k" 2>/dev/null || stat -c '%a' "$WORK/k" 2>/dev/null)
+mode=$(python3 -c 'import os, sys; print("%o" % (os.stat(sys.argv[1]).st_mode & 0o777))' "$WORK/k" 2>/dev/null)
 eq "H … mode 0600" "600" "$mode"
 hasnt "H … and is never printed" "$out" "$KEY"
 has "H the lease line as before" "$out" "active	$LEASE"
