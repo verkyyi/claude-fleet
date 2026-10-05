@@ -135,8 +135,10 @@ run bash "$BIN/fleet-peer-send.sh" -L "$L" issue:7 hi; base="$rc|$out|$err"
 run bash "$BIN/fleet-peer-send.sh" -L "$L" "wid:$U/issue-7" hi
 ok; [ "$rc|$out|$err" = "$base" ] || fail "D: peer-send wid (local) must match issue:7 exactly" "[$rc|$out|$err] vs [$base]"
 run bash "$BIN/fleet-peer-send.sh" -L "$L" "wid:$F/issue-7" hi
-ok; [ "$rc" = 1 ] && case "$err" in *"lives on m4"*) true ;; *) false ;; esac \
-  || fail "D: peer-send remote wid → exit 1, says m4" "rc=$rc $err"
+# No pane: sent as the operator (issue #1649) — handed to the hub, queued, says m4.
+ok; [ "$rc" = 3 ] && case "$out" in *"on m4"*) true ;; *) false ;; esac \
+  || fail "D: peer-send remote wid from no pane → queued as the operator, says m4" "rc=$rc $out $err"
+rm -f "$FLEET_CONF_DIR/control/hub-outbox/"*.json 2>/dev/null
 run bash "$BIN/fleet-peer-send.sh" -L "$L" "wid:$U/issue-8" hi
 ok; [ "$rc" = 1 ] && case "$err" in *"no live worker"*) true ;; *) false ;; esac || fail "D: peer-send unknown wid → exit 1" "rc=$rc $err"
 run bash "$BIN/fleet-peer-send.sh" -L "$L" "wid:bogus" hi
