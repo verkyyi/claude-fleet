@@ -128,13 +128,21 @@
 #   FLEET_REMOTE_VIA_HUB     1 (default) = after a failed direct attempt, try the
 #                            hub relay (`fleet connect --proxy`, #1413) when one is
 #                            configured; 0 = direct only
+#   FLEET_CONNECT_UPGRADE_SECS  15 — on the hub relay in the shell, how often one
+#                            direct handshake is tried (`fleet connect
+#                            --probe-direct`); one answers → the pane switches to
+#                            it once no key has been pressed for
+#                            FLEET_REMOTE_IDLE_SECS (2). The window carries
+#                            `@remote_route relay` while on the relay (the bar's
+#                            「· 中转」, issue #1628)
 #   FLEET_REMOTE_SSH_CMD     (selftests) the ssh program
+#   FLEET_CONNECT_PROBE_CMD  (selftests) the direct probe, given the host
+#   FLEET_REMOTE_OPENER      (selftests) what re-issues a request (fleet-open.sh)
 #
 # Machine to machine (issue #1626): with plain ssh on a hub node, every connect
 # first asks the hub for a five-minute certificate to that machine
 # (fleet-peer-cert.sh) — no standing key in the far end's authorized_keys is
 # needed or used; a hub that says no or is down pauses the view and says why.
-#   FLEET_REMOTE_OPENER      (selftests) what re-issues a request (fleet-open.sh)
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
@@ -392,11 +400,16 @@ run)
   # `open` retargets through the one, in the far end's view session named by the other.
   [ -n "${TMUX:-}" ] && tmux set-window-option -t "${TMUX_PANE:-}" @remote_ctl "$ctl" \; \
                              set-window-option -t "${TMUX_PANE:-}" @remote_view "$view" 2>/dev/null
-  side=''
+  side='' upg=''
+  stop_bg() {   # the sidecar + the upgrader, and whatever they are waiting in
+    local p
+    for p in $side $upg; do pkill -P "$p" 2>/dev/null; kill "$p" 2>/dev/null; done
+    side='' upg=''
+  }
   cleanup() {
-    [ -n "$side" ] && kill "$side" 2>/dev/null
+    stop_bg
     $SSH -S "$ctl" -O exit "$host" >/dev/null 2>&1
-    rm -f "$ctl"
+    rm -f "$ctl" "$ctl.route" "$ctl.upgrade"
   }
   trap 'cleanup; exit 0' INT TERM HUP
   trap cleanup EXIT
@@ -432,7 +445,64 @@ for line in sys.stdin:
             subprocess.call(["bash", opener, ":%d%s" % (lport, path)], stdout=subprocess.DEVNULL)
 ' "$SSH" "$ctl" "$host" "${FLEET_REMOTE_OPENER:-$BIN/fleet-open.sh}"
   }
-  route=direct; delay=1
+  # The line this connection took (issue #1628): `fleet connect`'s own word in the
+  # shell (FLEET_CONNECT_ROUTE_FILE — it chose), else this loop's (`hub` = relay).
+  route_kind() {
+    local k=''
+    [ -s "$ctl.route" ] && k=$(sed -n 's/.*"kind": *"\([a-z]*\)".*/\1/p' "$ctl.route" | head -n 1)
+    [ -n "$k" ] || { [ "$route" = hub ] && k=relay || k=direct; }
+    printf '%s' "$k"
+  }
+  # @remote_route on the window: `relay` → the bar's machine chip says 「· 中转」
+  mark_route() {
+    [ -n "${TMUX:-}" ] || return 0
+    if [ "${1:-}" = relay ]; then tmux set-window-option -t "${TMUX_PANE:-}" @remote_route relay 2>/dev/null
+    else tmux set-window-option -u -t "${TMUX_PANE:-}" @remote_route 2>/dev/null; fi
+    return 0
+  }
+  # keys_idle <secs> — no key on any client of this tmux for that long
+  keys_idle() {
+    local last
+    [ -n "${TMUX:-}" ] || return 0
+    last=$(tmux list-clients -F '#{client_activity}' 2>/dev/null | sort -n | tail -n 1)
+    case "$last" in ''|*[!0-9]*) return 0 ;; esac
+    [ $(( $(date +%s) - last )) -ge "$1" ]
+  }
+  probe_direct() {
+    if [ -n "${FLEET_CONNECT_PROBE_CMD:-}" ]; then $FLEET_CONNECT_PROBE_CMD "$host"
+    else python3 "$BIN/fleet-connect.py" --probe-direct "$host"; fi
+  }
+  # The upgrader (issue #1628): once the master is up, mark its line; on the hub
+  # relay (the shell, where `fleet connect` picks the line), one direct handshake
+  # every FLEET_CONNECT_UPGRADE_SECS (15) — when one answers, wait for the keys to
+  # rest FLEET_REMOTE_IDLE_SECS (2), flag the switch and close the master: the loop
+  # reconnects at once and re-measures, so the pane is back on the direct line in
+  # about a second. A failed probe costs ~0.1–0.2 s and nothing else.
+  upgrader() {
+    local every="${FLEET_CONNECT_UPGRADE_SECS:-15}" idle="${FLEET_REMOTE_IDLE_SECS:-2}" _ up='' kind
+    for _ in $(seq 1 50); do
+      $SSH -S "$ctl" -O check "$host" >/dev/null 2>&1 && { up=1; break; }
+      sleep 0.2
+    done
+    [ -n "$up" ] || return 0
+    kind=$(route_kind); mark_route "$kind"
+    [ "$kind" = relay ] && [ -n "$shellopt" ] || return 0
+    while sleep "$every"; do
+      $SSH -S "$ctl" -O check "$host" >/dev/null 2>&1 || return 0
+      probe_direct >/dev/null 2>&1 || continue
+      until keys_idle "$idle"; do
+        sleep 0.5
+        $SSH -S "$ctl" -O check "$host" >/dev/null 2>&1 || return 0
+      done
+      : > "$ctl.upgrade"
+      $SSH -S "$ctl" -O exit "$host" >/dev/null 2>&1
+      return 0
+    done
+  }
+  # In the shell (`--shell`) `fleet connect` picks the line on every connect, and
+  # every RECONNECT re-measures them all (FLEET_CONNECT_RETEST, issue #1628) —
+  # never the remembered one. A fleet's own proxy alternates direct / hub below.
+  route=direct; delay=1; retest=''
   while :; do
     # Machine to machine (issue #1626): a plain-ssh view from a hub node asks the
     # hub for a five-minute certificate to THIS machine first. rc 3 = no hub here
@@ -460,12 +530,21 @@ EOF_PEER
     opts=(-tt -o ServerAliveInterval=5 -o ServerAliveCountMax=3 -o ConnectTimeout=8
           -o ControlMaster=yes -o "ControlPath=$ctl" -o ControlPersist=no ${peer[@]+"${peer[@]}"})
     [ "$route" = hub ] && opts+=(-o "ProxyCommand=$(sq "$BIN/fleet") connect --proxy $(sq "$(hub_node "$node")")")
-    rm -f "$ctl"
+    rm -f "$ctl" "$ctl.route" "$ctl.upgrade"
     sidecar & side=$!
+    upgrader & upg=$!
     started=$(date +%s)
-    $SSH ${opts[@]+"${opts[@]}"} "$host" "bash $rbin/fleet-remote-view.sh attach$shellopt $(sq "$wid") $(sq "$view")"
+    FLEET_CONNECT_ROUTE_FILE="$ctl.route" FLEET_CONNECT_RETEST="$retest" \
+      $SSH ${opts[@]+"${opts[@]}"} "$host" "bash $rbin/fleet-remote-view.sh attach$shellopt $(sq "$wid") $(sq "$view")"
     rc=$?
-    kill "$side" 2>/dev/null; side=''
+    stop_bg
+    mark_route ''
+    retest=1
+    if [ -f "$ctl.upgrade" ]; then
+      # the upgrader closed the relay: a direct line answered — over to it now
+      printf '\n%s 的直连通了，切回直连 …\n' "$node"
+      delay=1; continue
+    fi
     case "$rc" in
       0) exit 0 ;;                                   # the remote client ended on purpose
       3) if [ "$wid" = - ]; then printf '\n%s 上没有活着的 fleet 会话。按任意键关闭。\n' "$node"
@@ -476,7 +555,7 @@ EOF_PEER
     # when the hub relay is configured, alternates with it.
     if [ $(( $(date +%s) - started )) -gt 30 ]; then delay=1
     else
-      hub_relay_ok && { [ "$route" = direct ] && route=hub || route=direct; }
+      [ -z "$shellopt" ] && hub_relay_ok && { [ "$route" = direct ] && route=hub || route=direct; }
       [ "$delay" -lt 10 ] && delay=$(( delay * 2 ))
     fi
     printf '\n与 %s 的连接断了（exit %s），%ss 后重连 · Ctrl-C 关闭窗口\n' "$node" "$rc" "$delay"

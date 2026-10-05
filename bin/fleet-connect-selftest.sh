@@ -162,17 +162,17 @@ case "$rc:$out" in
   *) bad "no hub URL: rc=$rc out=$out" ;;
 esac
 
-# 6 — the dispatcher: a first word that is no command is a MACHINE (#1470:
-# `fleet m4`), handed to `fleet-connect.py --enter`; with no hub configured
-# that is the usage error (exit 2), naming the installer.
-out=$("$BIN/fleet" nosuch 2>&1); rc=$?
+# 6 — the dispatcher: `fleet connect <machine>` is connect's (no hub → the usage
+# error, exit 2); a first word that is no command is a MACHINE for the CLIENT
+# (#1628 — never connect's), so `fleet m4 --print` is refused, naming connect.
+out=$("$BIN/fleet" connect nosuch 2>&1); rc=$?
 case "$rc:$out" in
-  2:*"no hub URL"*install*) ok "dispatcher: a non-command word is a machine; no hub → exit 2" ;;
+  2:*"no hub URL"*) ok "dispatcher: fleet connect <machine>; no hub → exit 2" ;;
   *) bad "dispatcher: rc=$rc out=$out" ;;
 esac
-out=$("$BIN/fleet" 2>&1); rc=$?
+out=$("$BIN/fleet" nosuch extra 2>&1); rc=$?
 case "$rc:$out" in
-  2:*"no hub URL"*) ok "dispatcher: bare fleet → --enter; no hub → exit 2" ;;
+  2:*"fleet connect"*) ok "dispatcher: fleet <machine> <more> is not connect's (#1628) → exit 2, naming fleet connect" ;;
   *) bad "dispatcher bare: rc=$rc out=$out" ;;
 esac
 "$BIN/fleet" --help 2>&1 | grep -q 'fleet login renew' && ok "dispatcher: --help lists the commands" || bad "dispatcher --help"

@@ -16,12 +16,13 @@
 # `ssh-keygen -Y check-novalidate`); the hub unreachable → the snippet's
 # routes; an unknown machine exits 1 naming the ones there are.
 #
-# Then `fleet` with no argument (#1470, `bin/fleet` → `--enter`): a certificate
+# Then `fleet-connect.py --enter` (#1470 — the certificate + machine half the client
+# runs; `bin/fleet` itself only opens the client since #1628): a certificate
 # with under 6h left is renewed by the device key first (the fake hub signs
 # again, no scan); the hub's /v1/fleet/home pick — signed under
 # fleet-home@claude-fleet, carrying the client's last-used hint — is entered,
 # its route list used without a second fetch; "你的机器都不在线" exits 1 and
-# lists the candidates; `fleet m4` names the machine and never asks for a pick;
+# lists the candidates; `--enter m4` names the machine and never asks for a pick;
 # the hub down falls back to the remembered machine.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -305,7 +306,7 @@ if command -v ssh-keygen >/dev/null 2>&1; then
   #     rides along.
   echo '{"tailnet_up": true, "relay_ok": true, "home": "m4"}' > "$WORK/state"
   r_before=$(hits routes_hits)
-  out=$("$BIN/fleet" --print -v 2>"$WORK/err9"); rc=$?
+  out=$("$BIN/fleet-connect.py" --enter --print -v 2>"$WORK/err9"); rc=$?
   if [ "$rc" = 0 ] && [ "$(hits renew_hits)" = 1 ] && [ "$(hits home_hits)" = 1 ] && [ "$(hits routes_hits)" = "$r_before" ] \
      && grep -q '证书已续期' "$WORK/err9" && grep -q '入口选了 m4（上次用的机器在线）' "$WORK/err9" \
      && [[ "$out" == *"HostKeyAlias=fleet-m4"* ]] && [ "$(cat "$WORK/home_last")" = m4 ] \
@@ -316,7 +317,7 @@ if command -v ssh-keygen >/dev/null 2>&1; then
   # 10 — a 12h certificate is kept (no renew); none of the machines online →
   #      exit 1, the hub's words, the candidates.
   echo '{"tailnet_up": true, "relay_ok": true, "home": "none"}' > "$WORK/state"
-  out=$("$BIN/fleet" --print 2>"$WORK/err10"); rc=$?
+  out=$("$BIN/fleet-connect.py" --enter --print 2>"$WORK/err10"); rc=$?
   if [ "$rc" = 1 ] && [ "$(hits renew_hits)" = 1 ] && grep -q '你的机器都不在线' "$WORK/err10" \
      && grep -q 'm4.*离线' "$WORK/err10" && grep -q 'm5.*离线' "$WORK/err10"; then
     ok "fleet: all machines offline → exit 1, 你的机器都不在线 + candidates; fresh certificate not renewed"
@@ -324,7 +325,7 @@ if command -v ssh-keygen >/dev/null 2>&1; then
 
   # 11 — `fleet m4`: the machine is named, the hub is not asked for a pick.
   h_before=$(hits home_hits)
-  out=$("$BIN/fleet" m4 --print 2>"$WORK/err11"); rc=$?
+  out=$("$BIN/fleet-connect.py" --enter m4 --print 2>"$WORK/err11"); rc=$?
   if [ "$rc" = 0 ] && [ "$(hits home_hits)" = "$h_before" ] && [[ "$out" == *"HostKeyAlias=fleet-m4"* ]]; then
     ok "fleet m4: named machine, no pick asked"
   else bad "fleet m4: rc=$rc home $h_before→$(hits home_hits) out=$out $(cat "$WORK/err11")"; fi
@@ -332,7 +333,7 @@ if command -v ssh-keygen >/dev/null 2>&1; then
   # 12 — the hub down: the certificate in hand is kept, the remembered machine
   #      is entered the old way.
   echo '{"down": true}' > "$WORK/state"
-  out=$("$BIN/fleet" --print 2>"$WORK/err12"); rc=$?
+  out=$("$BIN/fleet-connect.py" --enter --print 2>"$WORK/err12"); rc=$?
   if [ "$rc" = 0 ] && grep -q '按上次的记录直连' "$WORK/err12" && [[ "$out" == *"HostKeyAlias=fleet-m4"* ]]; then
     ok "fleet, hub down: falls back to the remembered machine"
   else bad "fleet hub down: rc=$rc out=$out $(cat "$WORK/err12")"; fi

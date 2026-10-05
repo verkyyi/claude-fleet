@@ -3,57 +3,60 @@
 # person types on their own computer (claude-fleet#1413, #1470).
 #
 #   fleet                       sign in if needed (QR once; the device renews
-#                               after that), let the hub pick your machine —
-#                               and, with tmux ≥ 3.2 here, open the SHELL
-#                               (#1484): the hub's list on the left, its bar at
-#                               the bottom, a direct ssh into that machine on
-#                               the right; no tmux (or FLEET_SHELL=0): measure
-#                               the routes and ssh in, as before      (#1470)
-#   fleet m4                    the same, into a machine you name; any more
-#                               words (fleet m4 --print, -v) are connect's —
-#                               the direct way, as is a fleet with no terminal
-#   fleet shell [m4]            the shell, explicitly (fleet-shell.sh)
+#                               after that), let the hub pick your machine and
+#                               open the CLIENT (#1484): the hub's list on the
+#                               left, its bar at the bottom, that machine's
+#                               session on the right
+#   fleet m4                    the same, onto a machine you name
+#   fleet shell [m4]            the client, by its script's name (fleet-shell.sh)
 #   fleet login                 scan for a 12-hour connection certificate
 #   fleet login renew           renew it with this device's key, no scan
-#   fleet connect [machine]     measure every route, ssh in over the best
+#   fleet connect [machine]     route + ssh only — what the client runs inside;
+#                               for debugging (`fleet connect m4 --print`)
 #   fleet connect --proxy <m>   ssh's ProxyCommand through the hub
+#
+# The client is the ONLY way in (issue #1628): there is no fallback to ssh-ing
+# into a machine's own list. It needs tmux ≥ 3.2 and a terminal; without either
+# `fleet` says how to get it and exits non-zero, and a client that cannot start
+# says why and exits non-zero. An iPad / iPhone ssh's into any machine with the
+# fleet installed and runs this same `fleet` there — the client then runs on
+# that machine, and its bar says so (客户端在 m5 上运行).
 #
 # Each command is its own script beside this one, `fleet-<command>.py` or
 # `fleet-<command>.sh`, so adding one is adding a file, not editing here. A
 # first word that is not a command is a machine name.
 here=$(cd "$(dirname "$0")" && pwd -P)
-# The shell (#1484) is the way in when tmux ≥ 3.2 is here and FLEET_SHELL is not
-# 0; with no tmux at all, one line says how to get it, then the direct way in.
-# It is a tmux client, so it needs a terminal: a pipe or a script gets the
-# direct way, silently (the selftest seam FLEET_SHELL_NO_ATTACH=1 starts the
-# server without attaching, so it needs none).
-shell_ok() {
-  [ "${FLEET_SHELL:-1}" != 0 ] || return 1
-  [ -x "$here/fleet-shell.sh" ] || return 1
-  if [ "${FLEET_SHELL_NO_ATTACH:-0}" != 1 ]; then
-    [ -t 0 ] && [ -t 1 ] || return 1
-  fi
+# client — the client, or one line on why it cannot open here and a non-zero exit
+client() {
   if ! command -v tmux >/dev/null 2>&1; then
-    echo 'fleet · 装上 tmux 就是这套壳（左边列表、底下一栏、右边直连）：macOS `brew install tmux`，Debian/Ubuntu `sudo apt install tmux`；先按今天的方式直连。' >&2
-    return 1
+    echo 'fleet · 客户端要 tmux：macOS `brew install tmux`，Debian/Ubuntu `sudo apt install tmux`（安装行 curl -fsSL <入口>/install | sh 会顺手装上），装好再敲 fleet。' >&2
+    exit 1
   fi
   v=$(tmux -V 2>/dev/null); v=${v#tmux }; maj=${v%%.*}; min=${v#*.}; min=${min%%[!0-9]*}
-  case $maj in ''|*[!0-9]*) return 1 ;; esac
-  [ "$maj" -gt 3 ] && return 0
-  [ "$maj" -eq 3 ] || return 1
-  case $min in ''|*[!0-9]*) return 1 ;; esac
-  [ "$min" -ge 2 ]
+  case $maj in ''|*[!0-9]*) maj=0 ;; esac
+  case $min in ''|*[!0-9]*) min=0 ;; esac
+  if [ "$maj" -lt 3 ] || { [ "$maj" -eq 3 ] && [ "$min" -lt 2 ]; }; then
+    echo "fleet · 客户端要 tmux ≥ 3.2，这里是 ${v:-?}：macOS \`brew upgrade tmux\`，Debian/Ubuntu 装新版 tmux 后再敲 fleet。" >&2
+    exit 1
+  fi
+  # a tmux client needs a terminal (the selftest seam FLEET_SHELL_NO_ATTACH=1
+  # starts the server without attaching, so it needs none)
+  if [ "${FLEET_SHELL_NO_ATTACH:-0}" != 1 ] && { [ ! -t 0 ] || [ ! -t 1 ]; }; then
+    echo 'fleet · 客户端要在终端里运行（这里是管道或脚本）；调试选路用 fleet connect <机器> --print。' >&2
+    exit 2
+  fi
+  exec "$here/fleet-shell.sh" "$@"
 }
 cmd=${1-}
 case $cmd in
   -h|--help|help)
-    sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'
     exit 0 ;;
   '')
-    shell_ok && exec "$here/fleet-shell.sh"
-    exec "$here/fleet-connect.py" --enter ;;
+    client ;;
   -*)
-    exec "$here/fleet-connect.py" --enter "$@" ;;
+    echo "fleet · 不认识的选项 $cmd；选路调试用 fleet connect $* （fleet --help）" >&2
+    exit 2 ;;
 esac
 for ext in py sh; do
   if [ -x "$here/fleet-$cmd.$ext" ]; then
@@ -61,6 +64,9 @@ for ext in py sh; do
     exec "$here/fleet-$cmd.$ext" "$@"
   fi
 done
-# one word = a machine → the shell; more words are connect's own options
-[ $# -eq 1 ] && shell_ok && exec "$here/fleet-shell.sh" "$@"
-exec "$here/fleet-connect.py" --enter "$@"
+# a word that is no command = a machine → the client, always
+if [ $# -gt 1 ]; then
+  echo "fleet · fleet $1 只开客户端；选路调试用 fleet connect $* （fleet --help）" >&2
+  exit 2
+fi
+client "$1"

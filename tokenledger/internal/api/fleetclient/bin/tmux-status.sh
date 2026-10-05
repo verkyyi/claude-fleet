@@ -18,6 +18,13 @@
 #   ○ 入口 Nm        hub mode, and the hub has been silent past
 #                    FLEET_HUB_SESSIONS_STALE (fleet_status_hub_lost, #1483)
 #   <ctr> ○          FLEET_STATUS_CONTAINER is set and that container is down
+#   客户端在 m5 上运行  (the client, fleet-shell.sh) this CLIENT runs on m5 over
+#                    ssh — an iPad / iPhone's way in (issue #1628): `cr=` is
+#                    `<client_tty>:<@fleet_client_remote>`, the option `<tty>|<m>`
+#                    fleet-shell.sh's client_where stamped; drawn first, and only
+#                    for the tty that stamped it
+#   <machine> · 中转   (hub mode) that proxy window's connection is on the hub
+#                    relay (`@remote_route relay`, `rr=`, fleet-remote-view.sh)
 # Narrower than 60 columns (`cw=`, the client's width) the account's label goes
 # and only the highest window is drawn, so a 54-column iPad / iPhone in portrait
 # keeps the bad news whole. 本机名, 负载, 内存, 盘 and ● 入口 are not drawn while
@@ -48,7 +55,7 @@ _fs="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"; [ -f "$_fs/fleet.settings" 
 # The current window, as the conf's status-right passes it (issue #1482). Absent
 # (an older conf) → every value empty → never hub mode.
 STATUS_SESS='' STATUS_REMOTE='' STATUS_ACCT='' STATUS_WSF='' STATUS_WSCF='' STATUS_WSAVED=''
-STATUS_CW='' STATUS_RL5='' STATUS_RL7=''
+STATUS_CW='' STATUS_RL5='' STATUS_RL7='' STATUS_RR='' STATUS_CR=''
 for _a in "$@"; do
     case "$_a" in
         sess=*)   STATUS_SESS=${_a#sess=} ;;
@@ -61,6 +68,8 @@ for _a in "$@"; do
         cw=*)     STATUS_CW=${_a#cw=} ;;
         rl5=*)    STATUS_RL5=${_a#rl5=} ;;
         rl7=*)    STATUS_RL7=${_a#rl7=} ;;
+        rr=*)     STATUS_RR=${_a#rr=} ;;
+        cr=*)     STATUS_CR=${_a#cr=} ;;
     esac
 done
 
@@ -309,6 +318,7 @@ status_hub_render() {
     have=0; fleet_status_hub_node "$FSN_NODE" && have=1
     if [ "$FSN_KIND" != local ]; then
         MACH_SEG="${BLUE}${FSN_NODE}"
+        [ "$STATUS_RR" = relay ] && MACH_SEG="${MACH_SEG} · 中转"
         if [ -n "$HUB_SEG" ]; then
             :   # the hub silent (#1483): ○ 入口 says it — nothing here hears that machine
         elif [ "$have" = 1 ] && [ "$HN_AV" != online ]; then
@@ -336,10 +346,20 @@ status_hub_render() {
     return 0
 }
 
+# --- Where the client runs (issue #1628): this client's tty, the mark's tty.
+CR_SEG=''
+if [ -n "$STATUS_CR" ]; then
+    _crc=${STATUS_CR%%:*}; _crr=${STATUS_CR#*:}; _crt=${_crr%%|*}; _crm=${_crr#*|}
+    if [ -n "$_crc" ] && [ "$_crc" = "$_crt" ] && [ -n "$_crm" ] && [ "$_crm" != "$_crr" ]; then
+        CR_SEG="${BLUE}客户端在 ${_crm} 上运行"
+    fi
+fi
+
 # --- Output: the segments in their order, nothing at all while all is well.
 MACH_SEG='' HUB_SEG=''
 [ "$HUB_MODE" = 1 ] && status_hub_render
 status_account
+status_seg "$CR_SEG"
 status_seg "$MACH_SEG"
 status_seg "$_sq"
 status_seg "$gh_seg"
