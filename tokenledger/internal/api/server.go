@@ -278,6 +278,11 @@ func (s *Server) Handler() http.Handler {
 		// outage, with its own token; the operator flags any machine through
 		// /v1/fleet/settings.
 		mux.HandleFunc("/v1/node/maintenance", s.handleNodeMaintenance)
+		// Machine-to-machine access (claude-fleet#1626): a node asks, with its
+		// own token, for a five-minute certificate to one other machine of
+		// the same owner; the operator reads every issuance.
+		mux.HandleFunc("/v1/node/peer-cert", s.handleNodePeerCert)
+		mux.Handle("/v1/fleet/peer-certs", s.viewerOnly(s.operatorOnly(http.HandlerFunc(s.handleFleetPeerCerts))))
 		mux.Handle("/v1/fleet/spot", s.viewerOnly(s.operatorOnly(http.HandlerFunc(s.handleFleetSpot))))
 		mux.Handle("/v1/nodes", s.viewerOnly(http.HandlerFunc(s.handleNodes)))
 		mux.Handle("/nodes", s.viewerOnly(http.HandlerFunc(s.serveNodesPage)))

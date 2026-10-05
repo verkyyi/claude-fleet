@@ -69,6 +69,10 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetCerts(); err != nil {
 		return err
 	}
+	// Machine-to-machine certificates (claude-fleet#1626).
+	if err := s.ensureFleetPeerCerts(); err != nil {
+		return err
+	}
 	// Registered devices + their audit (claude-fleet#1470).
 	if err := s.ensureFleetDevices(); err != nil {
 		return err
