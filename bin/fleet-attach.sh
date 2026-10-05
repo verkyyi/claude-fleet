@@ -47,7 +47,6 @@ attach_to() {
       || { echo "fleet-attach: could not switch — attach by hand: tmux -L $sock attach -t $sess" >&2; return 1; }
   else
     # Outside tmux: just attach. exec so the client owns this terminal directly.
-    fleet_fallback_stamp "$sock"   # the fallback way in says why on its bar (#1628)
     exec tmux -L "$sock" attach -t "$sess" \
       || { echo "fleet-attach: could not attach — try: tmux -L $sock attach -t $sess" >&2; return 1; }
   fi

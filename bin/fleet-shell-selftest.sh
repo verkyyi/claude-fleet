@@ -10,9 +10,10 @@
 # (FLEET_REMOTE_SSH_CMD) that records the remote command instead of running it,
 # and the shell's tmux server is its own isolated socket (`-L <session>`), killed
 # at the end. The shell starts with FLEET_SHELL_NO_ATTACH=1 (no terminal here).
-#   A. degenerate  — FLEET_SHELL=0: bare `fleet` goes to `fleet-connect.py --enter`
-#                    exactly as before; no tmux on PATH: the same, plus ONE hint line
-#                    on installing tmux; fleet-hub-sessions.sh without
+#   A. degenerate  — the client is the only way in (#1628): no tmux on PATH → ONE
+#                    hint line, exit 1, fleet-connect.py never run; no terminal →
+#                    exit 2, no server; `fleet m5 --print` → exit 2 naming `fleet
+#                    connect`, never run; fleet-hub-sessions.sh without
 #                    FLEET_HUB_SESSIONS_CLIENT lists the conf dir's fleets, not a
 #                    pseudo-fleet
 #   B. up          — bare `fleet` (tmux present) starts the shell: the hub's pick
@@ -176,34 +177,28 @@ export FLEET_HUB_SESSIONS_USER=verk
 # ================================================================================
 # A. degenerate
 # ================================================================================
-: > "$WORK/connect.argv"
-out=$(FLEET_SHELL=0 "$SB/fleet" 2>&1); rc=$?
-eq 'A: FLEET_SHELL=0 bare fleet → connect --enter, exit 0' 0 "$rc"
-has 'A: connect saw --enter' "$(cat "$WORK/connect.argv")" '--enter'
-hasnt 'A: FLEET_SHELL=0 prints no tmux hint' "$out" 'tmux'
-: > "$WORK/connect.argv"
 # no tmux on PATH: a PATH with only what the dispatcher needs
+: > "$WORK/connect.argv"
 NOTMUX="$WORK/notmux"; mkdir -p "$NOTMUX"
 for t in sh sed dirname python3 bash env cat; do p=$(command -v "$t") && ln -sf "$p" "$NOTMUX/$t"; done
 out=$(PATH="$NOTMUX" "$SB/fleet" 2>&1); rc=$?
-eq 'A: no tmux → connect --enter, exit 0' 0 "$rc"
+eq 'A: no tmux → exit 1 (no fallback, #1628)' 1 "$rc"
 has 'A: no tmux → the hint names tmux' "$out" 'brew install tmux'
 eq 'A: the hint is ONE line' 1 "$(printf '%s\n' "$out" | grep -c 'install tmux')"
-has 'A: no tmux → connect saw --enter' "$(cat "$WORK/connect.argv")" '--enter'
-# no terminal and no seam (a pipe, a script): the shell is a tmux client and
-# cannot attach → the direct way, without the tmux hint, no server started
+eq 'A: no tmux → fleet-connect.py never ran' '' "$(cat "$WORK/connect.argv")"
+# no terminal and no seam (a pipe, a script): the client needs one → exit 2
 : > "$WORK/connect.argv"
 out=$(FLEET_SHELL_NO_ATTACH='' "$SB/fleet" 2>&1 </dev/null); rc=$?
-eq 'A: no terminal → connect --enter, exit 0' 0 "$rc"
-has 'A: no terminal → connect saw --enter' "$(cat "$WORK/connect.argv")" '--enter'
-hasnt 'A: no terminal → no tmux hint' "$out" 'tmux'
+eq 'A: no terminal → exit 2' 2 "$rc"
+has 'A: no terminal → says so' "$out" '终端'
+eq 'A: no terminal → fleet-connect.py never ran' '' "$(cat "$WORK/connect.argv")"
 CHECKS=$((CHECKS + 1)); ts has-session -t "=$SESS" 2>/dev/null && fail 'A: no terminal must not start the shell server'
-# more words than a machine are connect's own options (fleet-connect-route-selftest's
-# `fleet m4 --print`): the direct way, no pick asked
+# more words than a machine: the client only — connect's options are `fleet connect`'s
 : > "$WORK/connect.argv"
-"$SB/fleet" m5 --print >/dev/null 2>&1
-has 'A: fleet m5 --print → connect --enter m5 --print' "$(cat "$WORK/connect.argv")" '--enter m5 --print'
-hasnt 'A: fleet m5 --print asked for no pick' "$(cat "$WORK/connect.argv")" '--pick'
+out=$("$SB/fleet" m5 --print 2>&1); rc=$?
+eq 'A: fleet m5 --print → exit 2' 2 "$rc"
+has 'A: … naming fleet connect' "$out" 'fleet connect m5 --print'
+eq 'A: fleet m5 --print ran no connect' '' "$(cat "$WORK/connect.argv")"
 # fleet-hub-sessions.sh without the client knob: the conf dir's fleets, byte for byte
 mkdir -p "$WORK/degen-conf/fleets/plainfleet"; printf 'FLEET_REPO=acme/app\n' > "$WORK/degen-conf/fleets/plainfleet/conf"
 ( export TMPDIR="$WORK/degen" FLEET_CONF_DIR="$WORK/degen-conf"; mkdir -p "$TMPDIR"; CCQUOTA_FLEET=1 bash "$SB/fleet-hub-sessions.sh" --refresh >/dev/null 2>&1 )
@@ -345,7 +340,7 @@ hasnt 'F: a direct line (rr= empty) draws no 中转' "$b" '中转'
 # issue #1628: the window's connection on the hub relay (@remote_route relay, which
 # fleet-remote-view.sh stamps) → the machine chip says so; empty → byte for byte
 has 'F: rr=relay → m4 · 中转' "$(bar "$w2" rr=relay)" 'm4 · 中转'
-eq 'F: rr= / fb= empty → the bar byte for byte as without them' "$b" "$(bar "$w2" rr= fb=)"
+eq 'F: rr= / cr= empty → the bar byte for byte as without them' "$b" "$(bar "$w2" rr= cr=)"
 b5=$(bar "$w1")
 has 'F: the m5 window says m5' "$b5" 'm5 '
 eq 'F: the window list was blanked (hub mode)' '1' "$(ts show-options -gqv @status_wlist_saved)"

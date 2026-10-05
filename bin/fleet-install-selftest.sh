@@ -26,8 +26,8 @@
 #   E. dispatch   from the clean install: with a (fake) tmux ≥ 3.2 on PATH,
 #                 `fleet` runs fleet-shell.sh — the server is started from the
 #                 install root's own bin/ and conf/; with no tmux, `fleet` prints
-#                 the one install hint and goes to fleet-connect.py (the direct
-#                 way), starting no server
+#                 the one install hint and exits 1 — no server, no fleet-connect.py
+#                 (the client is the only way in, issue #1628)
 #   F. tmux       the install's tmux step (issue #1629), on a PATH holding only
 #                 what the installer needs plus fakes: macOS + brew + no tmux →
 #                 `brew install tmux` once, then ok; no brew → the brew.sh hint,
@@ -224,7 +224,8 @@ out=$(cd "$HOME" && PATH="$NOTMUX" FLEET_SHELL_NO_ATTACH=1 "$HOME/.local/bin/fle
 echo "$out" | grep -q 'brew install tmux' && ok "E no tmux: the one install hint" || bad "E no tmux hint: $out"
 [ "$(printf '%s\n' "$out" | grep -c 'install tmux')" = 1 ] && ok "E the hint is ONE line" || bad "E hint lines: $out"
 [ -s "$WORK/tmux.log" ] && bad "E no tmux: a server was asked for anyway: $(cat "$WORK/tmux.log")" || ok "E no tmux: no server started"
-[ "$rc" != 0 ] && ok "E no tmux: went to fleet-connect.py, which the fake hub refused (rc=$rc)" || bad "E no tmux: connect exited 0 against a hub that issues nothing"
+[ "$rc" = 1 ] && ok "E no tmux: exit 1, no fallback" || bad "E no tmux: rc=$rc out=$out"
+echo "$out" | grep -q 'fleet connect' && bad "E no tmux: it went to connect: $out" || ok "E no tmux: fleet-connect.py never ran"
 
 # ── F — the tmux step ───────────────────────────────────────────────────────
 fnbody() { awk '/^fc_tmux_ok\(\) \{/{p=1} p{print} p&&/^}/{exit}' "$1"; }

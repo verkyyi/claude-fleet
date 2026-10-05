@@ -69,13 +69,13 @@
 # FLEET_SHELL_WIDTH (the list's width, 30), FLEET_UI_LANG, and any FLEET_HUB_* /
 # FLEET_REMOTE_* knob fleet-hub-sessions.sh and fleet-remote-view.sh read.
 #
-# The shell is the default way in; bin/fleet falls back to `fleet connect --enter`
-# (ssh into the machine's own list) only on one of four (issue #1628): no tmux /
-# tmux < 3.2 (plus one line on how to install it), an iPad / iPhone, you asking
-# (`fleet connect`, FLEET_SHELL=0) — or THIS script failing before it attaches:
-# then it writes why to FLEET_SHELL_FAIL_FILE (fail_start) and exits 1, and the
-# fallback's bar carries that reason. Exit: 0 (the attach's); 1 no machine / tmux
-# missing when run directly / could not start; 2 no hub URL (as `fleet` says it).
+# The client is the ONLY way in (issue #1628): no tmux / tmux < 3.2 → one line on
+# installing it, exit 1; a start that fails before the attach → one line on why
+# (fail_start), exit 1 — never a fallback to ssh-ing into a machine's own list.
+# Run over ssh (an iPad / iPhone on a machine with the fleet), it is the same
+# client on that machine, and its bar says 客户端在 <machine> 上运行 (client_where).
+# Exit: 0 (the attach's); 1 no machine / no tmux / could not start; 2 no hub URL
+# (as `fleet` says it).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"                      # the bin/ this runs from (the mirror, once started)
 SELF="$0"; [ -L "$SELF" ] && SELF=$(readlink "$SELF")   # the real file's dir has conf/ beside it
@@ -105,12 +105,11 @@ CACHE="${FLEET_SHELL_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet/shell}"
 PREFIX="${FLEET_SHELL_PREFIX:-C-b}"
 
 note() { printf 'fleet: %s\n' "$*" >&2; }
-# fail_start <why> — the shell could not start (nothing attached yet): say so, and
-# tell bin/fleet why (FLEET_SHELL_FAIL_FILE), which then takes the direct way with
-# that reason on its bar (issue #1628). Exit 1.
+# fail_start <why> — the client could not start (nothing attached yet): one line
+# saying why, exit 1. Nothing else opens instead (issue #1628: the client is the
+# only way in).
 fail_start() {
-  note "$*"
-  [ -n "${FLEET_SHELL_FAIL_FILE:-}" ] && printf '%s' "$*" > "$FLEET_SHELL_FAIL_FILE" 2>/dev/null
+  note "客户端起不来：$*"
   exit 1
 }
 sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
@@ -128,7 +127,26 @@ tmux_ok() {
   esac
 }
 tmux_hint() {
-  note '装上 tmux 就是这套壳（左边列表、底下一栏、右边直连）：macOS `brew install tmux`，Debian/Ubuntu `sudo apt install tmux`；先按今天的方式直连。'
+  note '客户端要 tmux ≥ 3.2：macOS `brew install tmux`，Debian/Ubuntu `sudo apt install tmux`，装好再敲 fleet。'
+}
+# client_where — a client run over ssh (an iPad / iPhone has no client of its own:
+# it ssh's into a machine with the fleet and runs `fleet` there, issue #1628) says
+# so on its bar — 客户端在 <machine> 上运行 — for THIS tty's client alone
+# (`@fleet_client_remote` = `<tty>|<machine>`, tmux-status.sh's `cr=`). A local
+# attach on the tty that holds the mark clears it; no tty, nothing.
+client_where() {
+  local tt me a cur
+  tt=$(tty 2>/dev/null) || return 0
+  case "$tt" in /dev/*) ;; *) return 0 ;; esac
+  if [ -n "${SSH_CONNECTION:-}" ]; then
+    me=$(hostname -s 2>/dev/null); me=${me%%.*}
+    for a in ${FLEET_NODE_ALIASES:-}; do case "$a" in "$me="*) me=${a#*=} ;; esac; done
+    [ -n "$me" ] && T set-option -g @fleet_client_remote "$tt|$me" 2>/dev/null
+  else
+    cur=$(T show-options -gqv @fleet_client_remote 2>/dev/null)
+    [ -n "$cur" ] && [ "${cur%%|*}" = "$tt" ] && T set-option -gu @fleet_client_remote 2>/dev/null
+  fi
+  return 0
 }
 # this_machine <host-label> — is that machine THIS computer? (its hostname, or
 # FLEET_NODE_ALIASES mapping this hostname to that label)
@@ -302,7 +320,7 @@ esac
 # --- start (or re-attach) --------------------------------------------------------
 if [ "$mode" != env ] && ! tmux_ok; then
   tmux_hint
-  exec python3 "$BIN/fleet-connect.py" --enter ${machine:+"$machine"}
+  exit 1
 fi
 command -v python3 >/dev/null 2>&1 || fail_start '没有 python3'
 
@@ -333,6 +351,7 @@ if T has-session -t "=$SESS" 2>/dev/null; then
     [ -n "$w" ] && T select-window -t "$w" 2>/dev/null
   fi
   ( nohup bash "$SHADOW/fleet-shell.sh" keeper "$SESS" </dev/null >/dev/null 2>&1 & )
+  client_where
   exec tmux -L "$SESS" attach-session -t "=$SESS"
 fi
 
@@ -352,5 +371,6 @@ w=$(tmux -L "$SESS" -f "$CACHE/tmux.conf" new-session -d -P -F '#{window_id}' -s
 T set-window-option -t "$w" @remote "$remote" \; set-window-option -t "$w" automatic-rename off 2>/dev/null
 # 4. the data: the refresh loop, kept alive while the server lives
 ( nohup bash "$SHADOW/fleet-shell.sh" keeper "$SESS" </dev/null >/dev/null 2>&1 & )
+client_where
 [ "${FLEET_SHELL_NO_ATTACH:-0}" = 1 ] && { printf '%s\n' "$SESS"; exit 0; }
 exec tmux -L "$SESS" attach-session -t "=$SESS"

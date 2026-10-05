@@ -323,8 +323,6 @@ FLEET_SHELL_CACHE                  path: the shell's own cache root — its bin/
 FLEET_SHELL_PREFIX                 knob: the shell's tmux prefix (fleet-shell.sh, C-b, #1484)
 FLEET_SHELL_WIDTH                  knob: the shell's list width (fleet-shell.sh → FLEET_SIDEBAR_WIDTH, 30, #1484)
 FLEET_SHELL_NO_ATTACH              seam: 1 = start the shell's server and print its session instead of attaching, so bin/fleet picks the shell with no terminal (fleet-shell-selftest.sh)
-FLEET_SHELL_FAIL_FILE              handoff: bin/fleet → fleet-shell.sh, where the shell writes why it could not start before attaching, so bin/fleet falls back with that reason (#1628)
-FLEET_FALLBACK_REASON              handoff: bin/fleet → fleet-connect.py, why the shell is not the way in — said in the terminal and sent as LC_FLEET_FALLBACK (#1628)
 FLEET_CONNECT_ROUTE_FILE           handoff: fleet-remote-view.sh → fleet-connect.py, where the chosen route is written for the pane (#1628)
 FLEET_CONNECT_RETEST               handoff: fleet-remote-view.sh → fleet-connect.py, 1 = re-measure every route on a reconnect (#1628)
 FLEET_CONNECT_PROBE_CMD            seam: the direct probe the shell's upgrader runs (fleet-fallback-selftest.sh)

@@ -18,12 +18,11 @@
 #   ○ 入口 Nm        hub mode, and the hub has been silent past
 #                    FLEET_HUB_SESSIONS_STALE (fleet_status_hub_lost, #1483)
 #   <ctr> ○          FLEET_STATUS_CONTAINER is set and that container is down
-#   直连 m5（本地壳不可用：<reason>）  this CLIENT came in the fallback way — ssh
-#                    straight into this machine's list, not the shell (issue #1628):
-#                    `fb=` is `<client_tty>:<@fleet_fallback_reason>`, the option
-#                    `<tty>|<machine>|<reason>` fleet-attach.sh stamped from the
-#                    ssh's LC_FLEET_FALLBACK; drawn only for the tty that stamped
-#                    it, first (narrow: 直连 m5（<reason>）)
+#   客户端在 m5 上运行  (the client, fleet-shell.sh) this CLIENT runs on m5 over
+#                    ssh — an iPad / iPhone's way in (issue #1628): `cr=` is
+#                    `<client_tty>:<@fleet_client_remote>`, the option `<tty>|<m>`
+#                    fleet-shell.sh's client_where stamped; drawn first, and only
+#                    for the tty that stamped it
 #   <machine> · 中转   (hub mode) that proxy window's connection is on the hub
 #                    relay (`@remote_route relay`, `rr=`, fleet-remote-view.sh)
 # Narrower than 60 columns (`cw=`, the client's width) the account's label goes
@@ -56,7 +55,7 @@ _fs="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"; [ -f "$_fs/fleet.settings" 
 # The current window, as the conf's status-right passes it (issue #1482). Absent
 # (an older conf) → every value empty → never hub mode.
 STATUS_SESS='' STATUS_REMOTE='' STATUS_ACCT='' STATUS_WSF='' STATUS_WSCF='' STATUS_WSAVED=''
-STATUS_CW='' STATUS_RL5='' STATUS_RL7='' STATUS_RR='' STATUS_FB=''
+STATUS_CW='' STATUS_RL5='' STATUS_RL7='' STATUS_RR='' STATUS_CR=''
 for _a in "$@"; do
     case "$_a" in
         sess=*)   STATUS_SESS=${_a#sess=} ;;
@@ -70,7 +69,7 @@ for _a in "$@"; do
         rl5=*)    STATUS_RL5=${_a#rl5=} ;;
         rl7=*)    STATUS_RL7=${_a#rl7=} ;;
         rr=*)     STATUS_RR=${_a#rr=} ;;
-        fb=*)     STATUS_FB=${_a#fb=} ;;
+        cr=*)     STATUS_CR=${_a#cr=} ;;
     esac
 done
 
@@ -347,14 +346,12 @@ status_hub_render() {
     return 0
 }
 
-# --- The fallback's line (issue #1628): this client's tty, the stamp's tty.
-FB_SEG=''
-if [ -n "$STATUS_FB" ]; then
-    _fbc=${STATUS_FB%%:*}; _fbr=${STATUS_FB#*:}; _fbt=${_fbr%%|*}; _fbr=${_fbr#*|}
-    _fbm=${_fbr%%|*}; _fbr=${_fbr#*|}
-    if [ -n "$_fbc" ] && [ "$_fbc" = "$_fbt" ] && [ -n "$_fbm" ] && [ -n "$_fbr" ]; then
-        if [ "$STATUS_NARROW" = 1 ]; then FB_SEG="${YELLOW}直连 ${_fbm}（${_fbr}）"
-        else FB_SEG="${YELLOW}直连 ${_fbm}（本地壳不可用：${_fbr}）"; fi
+# --- Where the client runs (issue #1628): this client's tty, the mark's tty.
+CR_SEG=''
+if [ -n "$STATUS_CR" ]; then
+    _crc=${STATUS_CR%%:*}; _crr=${STATUS_CR#*:}; _crt=${_crr%%|*}; _crm=${_crr#*|}
+    if [ -n "$_crc" ] && [ "$_crc" = "$_crt" ] && [ -n "$_crm" ] && [ "$_crm" != "$_crr" ]; then
+        CR_SEG="${BLUE}客户端在 ${_crm} 上运行"
     fi
 fi
 
@@ -362,7 +359,7 @@ fi
 MACH_SEG='' HUB_SEG=''
 [ "$HUB_MODE" = 1 ] && status_hub_render
 status_account
-status_seg "$FB_SEG"
+status_seg "$CR_SEG"
 status_seg "$MACH_SEG"
 status_seg "$_sq"
 status_seg "$gh_seg"

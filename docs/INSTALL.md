@@ -608,17 +608,17 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    banner and leaves `cf` for you to type. It replaces any hand-written
    per-account `~/.config/claude-fleet/intro.sh` — delete that copy.
 
-   **The SSH auto-attach is the FALLBACK, not the way in** (issue #1628). From
-   a computer of your own the default is the local shell — run `fleet` there
-   (`curl -fsSL <hub>/install | sh` installs it): the hub's list, its bar and
-   the machine's sessions in one tmux of your own, never an ssh session you
-   type `cf` into. `fleet` ssh's into a machine's own list only on one of four —
-   no tmux / tmux older than 3.2, an iPad or iPhone, the shell failing to
-   start, or you asking (`fleet connect`, `FLEET_SHELL=0`) — and says why: one
-   line in your terminal and the same on that client's bar,
-   `直连 m5（本地壳不可用：<reason>）` (carried as `LC_FLEET_FALLBACK`, which a
-   stock sshd accepts with `AcceptEnv LANG LC_*`). So on a laptop that used to
-   `ssh m5` at login, drop that and run `fleet` instead.
+   **The `fleet` client is the only way in** (issue #1628). From a computer of
+   your own run `fleet` (`curl -fsSL <hub>/install | sh` installs it, tmux
+   included): the hub's list, its bar and the machine's sessions in one tmux of
+   your own. There is no fallback to ssh-ing into a machine and using its own
+   list: with no tmux (or one older than 3.2) `fleet` says how to install it and
+   exits non-zero; a client that cannot start says why and exits non-zero. An
+   iPad / iPhone ssh's into any machine with the fleet installed and runs the
+   same `fleet` there — the client then runs on that machine (its own
+   `-L fleet-shell` server, not that machine's fleet session) and its bar says
+   `客户端在 m5 上运行`. The SSH auto-attach above stays for now (a separate
+   issue retires it), but it is no longer a way in to document or rely on.
 
    **Machine-local banner lines** (issue #1255) go in `intro.d` hooks, never in
    the repo: every executable in `/usr/local/etc/claude-fleet/intro.d/*` (all

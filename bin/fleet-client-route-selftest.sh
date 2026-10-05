@@ -1,54 +1,51 @@
 #!/bin/bash
-# fleet-fallback-selftest.sh — the shell is the default, the direct way is the
-# fallback, and the line is always the fastest one (issue #1628, EPIC #1615 C11):
-# bin/fleet's four fallback reasons, fleet-shell.sh's fail_start, fleet-connect.py's
-# FLEET_FALLBACK_REASON / FLEET_CONNECT_ROUTE_FILE / FLEET_CONNECT_RETEST /
-# --probe-direct, fleet-lib.sh's fleet_fallback_stamp, tmux-status.sh's 直连 line,
-# and fleet-remote-view.sh's upgrader (relay → direct on the next quiet moment).
+# fleet-client-route-selftest.sh — the `fleet` client is the ONLY way in, and its
+# line is always the fastest one (issue #1628, EPIC #1615 C11, after the
+# 2026-10-05 change of course: no fallback to ssh-ing into a machine's own list).
+# Covers bin/fleet, fleet-shell.sh's fail_start + client_where, tmux-status.sh's
+# `cr=`, fleet-connect.py's FLEET_CONNECT_ROUTE_FILE / FLEET_CONNECT_RETEST /
+# --probe-direct, and fleet-remote-view.sh's upgrader (relay → direct).
 #
 # Nothing real is reached: fleet-connect.py is a FAKE in the dispatcher legs (it
-# records its argv + FLEET_FALLBACK_REASON), the real one in C runs against a
-# loopback SSH-banner server and a fake `ssh` on PATH, tmux is either a fake (B)
-# or an isolated socket (`-L <label>`, killed at the end) — never the operator's.
-#   A. degenerate — the shell starts (a fake fleet-shell.sh exiting 0): nothing
-#                   falls back, no reason set, connect never runs
-#   B. fallback   — the shell fails before attaching (a fake tmux whose
-#                   new-session fails): bin/fleet says so in one line and runs
-#                   `fleet-connect.py --enter` with FLEET_FALLBACK_REASON
-#                   「壳起不来：tmux 开不了会话」; FLEET_SHELL=0, tmux 3.1, an iPad
-#                   (`uname -m`) and `fleet connect` each carry their own reason;
-#                   no terminal (a pipe) carries none
-#   C. connect    — the real fleet-connect.py: FLEET_FALLBACK_REASON → the 直连
-#                   line on stderr + SendEnv=LC_FLEET_FALLBACK, LC_FLEET_FALLBACK
-#                   in ssh's environment; FLEET_CONNECT_ROUTE_FILE gets the route;
-#                   the cache keeps the direct routes; --probe-direct answers 0
-#                   while the banner server is up, 1 once it is gone;
-#                   FLEET_CONNECT_RETEST=1 skips the remembered route
-#   D. bar        — fleet_fallback_stamp stamps `<tty>|m5|<reason>` from
-#                   LC_FLEET_FALLBACK, a plain attach on that tty clears it, on
-#                   another tty leaves it; tmux-status.sh draws
-#                   直连 m5（本地壳不可用：…） for THAT tty only, the short form
-#                   under 60 columns, nothing with no fb=
-#   E. upgrade    — fleet-remote-view.sh `run --shell` in an isolated tmux, a fake
-#                   ssh whose first connect says relay: the window gets
-#                   @remote_route relay; the direct probe starts answering → within
-#                   FLEET_CONNECT_UPGRADE_SECS + FLEET_REMOTE_IDLE_SECS + a reconnect
-#                   (scaled clock: 1 s for the 15 s tick) the master is closed, the
-#                   reconnect runs with FLEET_CONNECT_RETEST=1 and lands direct
-#                   (@remote_route gone)
+# records its argv), the real one in C runs against a loopback SSH-banner server
+# and a fake `ssh` on PATH; tmux is a fake (A) or an isolated socket (`-L
+# <label>`, killed at the end) — never the operator's.
+#   A. client only — the client starts (a fake fleet-shell.sh): connect never runs;
+#                    the client failing before its attach (a fake tmux whose
+#                    new-session fails) → ONE line 客户端起不来：…, exit 1, no
+#                    `--enter`; tmux 3.1 / no tmux → the install hint, exit 1,
+#                    connect never run
+#   B. over ssh    — the iPad / iPhone way: the real fleet-shell.sh run with
+#                    SSH_CONNECTION set on a tty starts the same client on this
+#                    machine (its own -L server) and marks `@fleet_client_remote`
+#                    = `<tty>|<machine>`; a local start on another tty leaves it,
+#                    on that tty clears it
+#   C. connect     — the real fleet-connect.py: FLEET_CONNECT_ROUTE_FILE gets the
+#                    route; --probe-direct answers 0 while the banner server is
+#                    up, 1 once it is gone or for an unknown machine;
+#                    FLEET_CONNECT_RETEST=1 skips the remembered route
+#   D. bar         — tmux-status.sh draws 客户端在 m5 上运行 for THAT tty only,
+#                    at 54 columns too; no `cr=` → byte for byte
+#   E. upgrade     — fleet-remote-view.sh `run --shell` in an isolated tmux, a fake
+#                    ssh whose first connect says relay: the window gets
+#                    @remote_route relay; the direct probe starts answering →
+#                    within FLEET_CONNECT_UPGRADE_SECS + FLEET_REMOTE_IDLE_SECS + a
+#                    reconnect (scaled clock: 1 s for the 15 s tick) the master is
+#                    closed, the reconnect runs with FLEET_CONNECT_RETEST=1 and
+#                    lands direct (@remote_route gone)
 # tmux / python3 absent → SKIP (exit 0). Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
-REAL_TMUX=$(command -v tmux) || { printf 'fleet-fallback selftest: tmux absent — SKIP\n'; exit 0; }
-command -v python3 >/dev/null 2>&1 || { printf 'fleet-fallback selftest: python3 absent — SKIP\n'; exit 0; }
+REAL_TMUX=$(command -v tmux) || { printf 'fleet-client-route selftest: tmux absent — SKIP\n'; exit 0; }
+command -v python3 >/dev/null 2>&1 || { printf 'fleet-client-route selftest: python3 absent — SKIP\n'; exit 0; }
 
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-fallback.XXXXXX")
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-client-route.XXXXXX")
 SOCK="ffb$$"
 export HOME="$WORK/home"; mkdir -p "$HOME/.ssh" "$HOME/.config/claude-fleet"
 export XDG_CONFIG_HOME="$HOME/.config" XDG_CACHE_HOME="$HOME/.cache"
 export FLEET_CONF_DIR="$HOME/.config/claude-fleet"
-unset TMUX TMUX_PANE FLEET_SHELL FLEET_HUB_URL FLEET_HUB_TOKEN FLEET_FALLBACK_REASON LC_FLEET_FALLBACK \
-      FLEET_CONNECT_RETEST FLEET_CONNECT_ROUTE_FILE FLEET_SHELL_FAIL_FILE FLEET_REMOTE_SSH_CMD
+unset TMUX TMUX_PANE FLEET_SHELL FLEET_HUB_URL FLEET_HUB_TOKEN SSH_CONNECTION FLEET_NODE_ALIASES \
+      FLEET_CONNECT_RETEST FLEET_CONNECT_ROUTE_FILE FLEET_REMOTE_SSH_CMD
 
 FAIL=0; CHECKS=0
 fail() { FAIL=$((FAIL + 1)); printf 'FAIL: %s\n' "$1" >&2; [ $# -gt 1 ] && printf '      got: %s\n' "$2" >&2; }
@@ -64,6 +61,8 @@ SRV_PID=''
 cleanup() {
   [ -n "$SRV_PID" ] && kill "$SRV_PID" 2>/dev/null
   "$REAL_TMUX" -L "$SOCK" kill-server 2>/dev/null
+  "$REAL_TMUX" -L "$FLEET_SHELL_SESSION" kill-server 2>/dev/null
+  pkill -f "fleet-shell.sh keeper $FLEET_SHELL_SESSION" 2>/dev/null
   [ -f "$WORK/master.pids" ] && while read -r p; do kill "$p" 2>/dev/null; done < "$WORK/master.pids"
   rm -rf "$WORK"
 }
@@ -78,14 +77,14 @@ cat > "$SB/fleet-connect.py" <<EOF
 #!/usr/bin/env python3
 import json, os, sys
 with open(os.path.join("$WORK", "connect.log"), "a") as f:
-    f.write(" ".join(sys.argv[1:]) + "\\treason=" + os.environ.get("FLEET_FALLBACK_REASON", "") + "\\n")
+    f.write(" ".join(sys.argv[1:]) + "\\n")
 if "--pick" in sys.argv:
     print(json.dumps({"machine": "m5", "hostname": "macmini", "reason": "last", "login": "verk",
                       "machines": [{"alias": "m5", "hostname": "macmini"}]}))
 sys.exit(0)
 EOF
 chmod +x "$SB/fleet-connect.py"
-SH="$WORK/sh-bin"; mkdir -p "$SH"     # tools for a PATH with a fake tmux / uname
+SH="$WORK/sh-bin"; mkdir -p "$SH"     # tools for a PATH with a fake tmux
 for t in sh bash sed dirname readlink python3 env cat mktemp rm mkdir ln hostname tr awk head grep date sleep seq uname; do
   p=$(command -v "$t") && ln -sf "$p" "$SH/$t"
 done
@@ -99,57 +98,57 @@ EOF
 }
 export FLEET_SHELL_CACHE="$WORK/shcache" FLEET_SHELL_SESSION="ffbshell$$"
 
+
 # ================================================================================
-# A. degenerate — the shell opens: no fallback, no reason
+# A. client only — no fallback
 # ================================================================================
 rm -f "$SB/fleet-shell.sh"
 printf '#!/bin/sh\necho "shell $*" >> "%s/shell.log"; exit 0\n' "$WORK" > "$SB/fleet-shell.sh"; chmod +x "$SB/fleet-shell.sh"
 fake_tmux 3.4 0
 : > "$WORK/connect.log"
-out=$(PATH="$SH" FLEET_SHELL_NO_ATTACH=1 "$SB/fleet" 2>&1); rc=$?
-eq 'A: the shell opens → exit 0' 0 "$rc"
-has 'A: the shell ran' "$(cat "$WORK/shell.log" 2>/dev/null)" 'shell'
+PATH="$SH" FLEET_SHELL_NO_ATTACH=1 "$SB/fleet" m5 >/dev/null 2>&1; rc=$?
+eq 'A: the client opens → exit 0' 0 "$rc"
+has 'A: the client ran for m5' "$(cat "$WORK/shell.log" 2>/dev/null)" 'shell m5'
 eq 'A: connect never ran' '' "$(cat "$WORK/connect.log")"
-hasnt 'A: no 本地壳 line' "$out" '本地壳'
-# the shell exiting non-zero AFTER an attach (nothing written): its own exit, no fallback
-printf '#!/bin/sh\nexit 4\n' > "$SB/fleet-shell.sh"
-PATH="$SH" FLEET_SHELL_NO_ATTACH=1 "$SB/fleet" >/dev/null 2>&1; rc=$?
-eq 'A: a shell exit with no reason is its own (4), no fallback' 4 "$rc"
-eq 'A: … and connect never ran' '' "$(cat "$WORK/connect.log")"
-
-# ================================================================================
-# B. fallback — each of the four, with its reason
-# ================================================================================
 rm -f "$SB/fleet-shell.sh"; ln -s "$BIN/fleet-shell.sh" "$SB/fleet-shell.sh"
-fake_tmux 3.4 1                                   # new-session fails: the shell cannot start
+fake_tmux 3.4 1                                   # new-session fails: the client cannot start
 : > "$WORK/connect.log"
 out=$(PATH="$SH" FLEET_SHELL_NO_ATTACH=1 "$SB/fleet" 2>&1); rc=$?
-eq 'B: shell fails → connect exit 0' 0 "$rc"
-has 'B: one line says the shell could not start' "$out" '本地壳起不来（tmux 开不了会话），改为直连'
-has 'B: connect --enter with the reason' "$(cat "$WORK/connect.log")" $'--enter\treason=壳起不来：tmux 开不了会话'
-: > "$WORK/connect.log"
-PATH="$SH" FLEET_SHELL_NO_ATTACH=1 "$SB/fleet" m5 >/dev/null 2>&1
-has 'B: fleet m5 → connect --enter m5 with the reason' "$(cat "$WORK/connect.log")" $'--enter m5\treason=壳起不来：tmux 开不了会话'
-: > "$WORK/connect.log"
-FLEET_SHELL=0 "$SB/fleet" >/dev/null 2>&1
-has 'B: FLEET_SHELL=0 → its reason' "$(cat "$WORK/connect.log")" $'--enter\treason=你设了 FLEET_SHELL=0'
+eq 'A: the client cannot start → exit 1' 1 "$rc"
+has 'A: one line says why' "$out" '客户端起不来：tmux 开不了会话'
+eq 'A: … and only that line' 1 "$(printf '%s\n' "$out" | grep -c .)"
+hasnt 'A: no --enter (nothing else opens)' "$(cat "$WORK/connect.log")" '--enter'
 fake_tmux 3.1 0
 : > "$WORK/connect.log"
-PATH="$SH" FLEET_SHELL_NO_ATTACH=1 "$SB/fleet" >/dev/null 2>&1
-has 'B: tmux 3.1 → too old' "$(cat "$WORK/connect.log")" 'reason=tmux 3.1 太旧（要 ≥ 3.2）'
-fake_tmux 3.4 0
-rm -f "$SH/uname"; printf '#!/bin/sh\necho iPad13,4\n' > "$SH/uname"; chmod +x "$SH/uname"
-: > "$WORK/connect.log"
-PATH="$SH" FLEET_SHELL_NO_ATTACH=1 "$SB/fleet" >/dev/null 2>&1
-has 'B: an iPad → its reason' "$(cat "$WORK/connect.log")" 'reason=iPad 上没有本地壳'
-rm -f "$SH/uname"; ln -s "$(command -v uname)" "$SH/uname"
-: > "$WORK/connect.log"
-"$SB/fleet" connect m5 >/dev/null 2>&1
-has 'B: fleet connect → you asked' "$(cat "$WORK/connect.log")" $'m5\treason=你选了直连（fleet connect）'
-: > "$WORK/connect.log"
-PATH="$SH" "$SB/fleet" </dev/null >/dev/null 2>&1
-has 'B: no terminal → the direct way' "$(cat "$WORK/connect.log")" '--enter'
-eq 'B: no terminal → no reason' $'--enter\treason=' "$(cat "$WORK/connect.log")"
+out=$(PATH="$SH" FLEET_SHELL_NO_ATTACH=1 "$SB/fleet" 2>&1); rc=$?
+eq 'A: tmux 3.1 → exit 1' 1 "$rc"
+has 'A: tmux 3.1 → says ≥ 3.2' "$out" 'tmux ≥ 3.2'
+eq 'A: tmux 3.1 → connect never ran' '' "$(cat "$WORK/connect.log")"
+rm -f "$SH/tmux"
+out=$(PATH="$SH" FLEET_SHELL_NO_ATTACH=1 "$SB/fleet" 2>&1); rc=$?
+eq 'A: no tmux → exit 1' 1 "$rc"
+has 'A: no tmux → the install hint' "$out" 'brew install tmux'
+eq 'A: no tmux → connect never ran' '' "$(cat "$WORK/connect.log")"
+
+# ================================================================================
+# B. over ssh — the iPad / iPhone way: the same client, on this machine
+# ================================================================================
+TTYBIN="$WORK/ttybin"; mkdir -p "$TTYBIN"
+tty_is() { printf '#!/bin/sh\necho %s\n' "$1" > "$TTYBIN/tty"; chmod +x "$TTYBIN/tty"; }
+mark() { "$REAL_TMUX" -L "$FLEET_SHELL_SESSION" show-options -gqv @fleet_client_remote 2>/dev/null; }
+tty_is /dev/ttys901
+PATH="$TTYBIN:$PATH" SSH_CONNECTION='10.0.0.9 50000 10.0.0.5 22' FLEET_NODE_ALIASES="$(hostname -s | cut -d. -f1)=m5" \
+  FLEET_SHELL_NO_ATTACH=1 FLEET_REMOTE_SSH_CMD=/usr/bin/false "$SB/fleet" >/dev/null 2>"$WORK/b.err"; rc=$?
+eq 'B: over ssh the client starts here (exit 0)' 0 "$rc"
+CHECKS=$((CHECKS + 1)); "$REAL_TMUX" -L "$FLEET_SHELL_SESSION" has-session -t "=$FLEET_SHELL_SESSION" 2>/dev/null \
+  || fail 'B: its own -L server is up' "$(cat "$WORK/b.err")"
+eq 'B: the mark names this tty and this machine' '/dev/ttys901|m5' "$(mark)"
+tty_is /dev/ttys902
+PATH="$TTYBIN:$PATH" FLEET_SHELL_NO_ATTACH=1 FLEET_REMOTE_SSH_CMD=/usr/bin/false "$SB/fleet-shell.sh" >/dev/null 2>&1 </dev/null
+eq 'B: a local start on ANOTHER tty leaves it' '/dev/ttys901|m5' "$(mark)"
+tty_is /dev/ttys901
+PATH="$TTYBIN:$PATH" FLEET_SHELL_NO_ATTACH=1 FLEET_REMOTE_SSH_CMD=/usr/bin/false "$SB/fleet-shell.sh" >/dev/null 2>&1 </dev/null
+eq 'B: a local start on THAT tty clears it' '' "$(mark)"
 
 # ================================================================================
 # C. connect — the real fleet-connect.py
@@ -177,55 +176,34 @@ json.dump({"last": "m5", "machines": {"m5": {"at": time.time(), "hub": "", "labe
           "machine": {"alias": "m5", "hostname": "macmini"}, "route": r, "routes": [r]}}}, open(sys.argv[1], "w"))
 EOF
 FAKESSH="$WORK/fakessh"; mkdir -p "$FAKESSH"
-printf '#!/bin/sh\necho "LC=$LC_FLEET_FALLBACK ARGS=$*"\n' > "$FAKESSH/ssh"; chmod +x "$FAKESSH/ssh"
-out=$(PATH="$FAKESSH:$PATH" FLEET_FALLBACK_REASON='没有 tmux' FLEET_CONNECT_ROUTE_FILE="$WORK/route.json" \
+printf '#!/bin/sh\necho "SSH-RAN ARGS=$*"\n' > "$FAKESSH/ssh"; chmod +x "$FAKESSH/ssh"
+out=$(PATH="$FAKESSH:$PATH" FLEET_CONNECT_ROUTE_FILE="$WORK/route.json" \
       python3 "$BIN/fleet-connect.py" m5 2>&1); rc=$?
 eq 'C: connect → ssh ran, exit 0' 0 "$rc"
-has 'C: the 直连 line on stderr' "$out" 'fleet · 直连 m5（本地壳不可用：没有 tmux）'
-has 'C: LC_FLEET_FALLBACK in ssh env' "$out" 'LC=m5|没有 tmux'
-has 'C: ssh sends it' "$out" 'SendEnv=LC_FLEET_FALLBACK'
+has 'C: … over the remembered line' "$out" 'SSH-RAN'
+hasnt 'C: no fallback words, ever' "$out" '直连'
 has 'C: the route file' "$(cat "$WORK/route.json" 2>/dev/null)" '"kind": "direct"'
-out=$(PATH="$FAKESSH:$PATH" python3 "$BIN/fleet-connect.py" m5 2>&1)
-hasnt 'C: no reason → no 直连 line' "$out" '直连'
-hasnt 'C: no reason → no SendEnv' "$out" 'SendEnv'
 python3 "$BIN/fleet-connect.py" --probe-direct m5 >/dev/null 2>&1; rc=$?
 eq 'C: --probe-direct with the line up → 0' 0 "$rc"
 python3 "$BIN/fleet-connect.py" --probe-direct m9 >/dev/null 2>&1; rc=$?
 eq 'C: --probe-direct for an unknown machine → 1' 1 "$rc"
 out=$(PATH="$FAKESSH:$PATH" FLEET_CONNECT_RETEST=1 python3 "$BIN/fleet-connect.py" m5 2>&1); rc=$?
-hasnt 'C: FLEET_CONNECT_RETEST=1 skips the remembered line' "$out" 'LC='
+hasnt 'C: FLEET_CONNECT_RETEST=1 skips the remembered line' "$out" 'SSH-RAN'
 kill "$SRV_PID" 2>/dev/null; wait "$SRV_PID" 2>/dev/null; SRV_PID=''
 FLEET_CONNECT_PROBE_TIMEOUT=1 python3 "$BIN/fleet-connect.py" --probe-direct m5 >/dev/null 2>&1; rc=$?
 eq 'C: --probe-direct with the line down → 1' 1 "$rc"
 
 # ================================================================================
-# D. the bar — the stamp and the 直连 line
+# D. the bar — 客户端在 m5 上运行, for that tty only
 # ================================================================================
-"$REAL_TMUX" -L "$SOCK" -f /dev/null new-session -d -s "$SOCK" -x 120 -y 30 'sleep 600' || fail 'D: isolated tmux'
-TTYBIN="$WORK/ttybin"; mkdir -p "$TTYBIN"
-tty_is() { printf '#!/bin/sh\necho %s\n' "$1" > "$TTYBIN/tty"; chmod +x "$TTYBIN/tty"; }
-stamp() { ( PATH="$TTYBIN:$PATH"; export PATH; . "$BIN/fleet-lib.sh"; tmux() { "$REAL_TMUX" "$@"; }; fleet_fallback_stamp "$SOCK" ); }
-opt() { "$REAL_TMUX" -L "$SOCK" show -gv @fleet_fallback_reason 2>/dev/null; }
-tty_is /dev/ttys901
-LC_FLEET_FALLBACK='m5|没有 tmux' stamp
-eq 'D: stamped <tty>|<machine>|<reason>' '/dev/ttys901|m5|没有 tmux' "$(opt)"
-tty_is /dev/ttys902
-stamp
-eq 'D: a plain attach on ANOTHER tty leaves it' '/dev/ttys901|m5|没有 tmux' "$(opt)"
-tty_is /dev/ttys901
-stamp
-eq 'D: a plain attach on THAT tty clears it' '' "$(opt)"
 st() { ( cd "$SB" && TMPDIR="$WORK/st" bash "$SB/tmux-status.sh" sess=x win=@1 remote= acct= wsf= wscf= wsaved= rl5= rl7= "$@" 2>/dev/null ); }
 mkdir -p "$WORK/st"
-base=$(st cw=120 rr= fb=)
-eq 'D: no fb= → the bar byte for byte' "$(st cw=120)" "$base"
-b=$(st cw=120 rr= 'fb=/dev/ttys901:/dev/ttys901|m5|没有 tmux')
-has 'D: the 直连 line for that tty' "$b" '直连 m5（本地壳不可用：没有 tmux）'
-b=$(st cw=54 rr= 'fb=/dev/ttys901:/dev/ttys901|m5|没有 tmux')
-has 'D: narrow → the short form' "$b" '直连 m5（没有 tmux）'
-hasnt 'D: narrow → no 本地壳不可用' "$b" '本地壳不可用'
-b=$(st cw=120 rr= 'fb=/dev/ttys902:/dev/ttys901|m5|没有 tmux')
-eq 'D: another client (tty) → nothing' "$base" "$b"
+base=$(st cw=120 rr= cr=)
+eq 'D: no cr= → the bar byte for byte' "$(st cw=120)" "$base"
+has 'D: the line for that tty' "$(st cw=120 rr= 'cr=/dev/ttys901:/dev/ttys901|m5')" '客户端在 m5 上运行'
+has 'D: at 54 columns too' "$(st cw=54 rr= 'cr=/dev/ttys901:/dev/ttys901|m5')" '客户端在 m5 上运行'
+eq 'D: another client (tty) → nothing' "$base" "$(st cw=120 rr= 'cr=/dev/ttys902:/dev/ttys901|m5')"
+"$REAL_TMUX" -L "$SOCK" -f /dev/null new-session -d -s "$SOCK" -x 120 -y 30 'sleep 600' || fail 'E: isolated tmux'
 
 # ================================================================================
 # E. upgrade — relay → direct on the next quiet moment
@@ -288,5 +266,5 @@ waitfor 5 not_relay || fail 'E: on the direct line @remote_route is gone' "$(rou
 sleep 2
 eq 'E: on the direct line no further switch' 2 "$(cat "$WORK/connects")"
 
-printf 'fleet-fallback selftest: %d checks, %d failed\n' "$CHECKS" "$FAIL"
+printf 'fleet-client-route selftest: %d checks, %d failed\n' "$CHECKS" "$FAIL"
 [ "$FAIL" -eq 0 ]
