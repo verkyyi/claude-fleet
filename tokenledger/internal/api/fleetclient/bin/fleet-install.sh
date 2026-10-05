@@ -19,19 +19,28 @@
 #      there, a token say, is kept);
 #   3. puts ~/.local/bin on PATH by appending ONE line to the shell's rc file,
 #      once — running the installer again adds nothing;
-#   4. runs `fleet`: the first QR appears right here, in this terminal — and
+#   4. tmux (issue #1629): with no tmux ≥ 3.2 here, installs it — macOS
+#      `brew install tmux` when Homebrew is there (Homebrew itself is never
+#      installed for you), Linux apt-get / dnf / yum / apk as root or through
+#      `sudo -n` (never a password prompt). Can't? One line says the command to
+#      run and that `fleet` goes the direct way until then. Never fatal.
+#      `--no-deps` (`curl … | sh -s -- --no-deps`) or FLEET_INSTALL_NO_DEPS=1
+#      skips it;
+#   5. runs `fleet`: the first QR appears right here, in this terminal — and
 #      with tmux ≥ 3.2 on this computer, `fleet` is the shell.
 #
 # Only what a stock macOS or Linux has: sh, curl, python3 (macOS's own 3.9 is
 # enough — the client is standard library only), ssh and ssh-keygen. tmux is
-# optional: without it `fleet` says how to get it and goes the direct way.
+# optional: step 4 gets it where it can, and without it `fleet` goes the
+# direct way.
 # Windows: run it inside WSL. Piped from curl, stdin is the script itself, so
 # anything interactive — the ssh session `fleet` opens — reads from /dev/tty.
 #
 # Env: FLEET_INSTALL_HOME (the files; default ${XDG_DATA_HOME:-~/.local/share}/
 # claude-fleet) · FLEET_INSTALL_BIN (the `fleet` on PATH; default ~/.local/bin)
 # · FLEET_INSTALL_NO_RUN=1 installs without running `fleet` · FLEET_INSTALL_RC
-# overrides the rc file.
+# overrides the rc file · FLEET_INSTALL_NO_DEPS=1 = --no-deps · FLEET_INSTALL_SUDO
+# (the sudo prefix; default `sudo -n`, empty = none).
 # Exit: 0 installed (and `fleet` is running, which replaces this process) ·
 # 2 an unsupported system or a missing prerequisite · 1 a download failed.
 set -eu
@@ -42,6 +51,15 @@ case "$HUB" in
   *) echo "fleet-install: no hub URL (this file is meant to be served by the hub at /install)" >&2; exit 2 ;;
 esac
 HUB="${HUB%/}"
+
+DEPS=1
+[ "${FLEET_INSTALL_NO_DEPS:-}" = 1 ] && DEPS=0
+for a in "$@"; do
+  case "$a" in
+    --no-deps) DEPS=0 ;;
+    *) printf 'fleet-install: 不认识的参数 %s（只有 --no-deps）\n' "$a" >&2; exit 2 ;;
+  esac
+done
 
 say() { printf '%s\n' "$*" >&2; }
 sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
@@ -185,7 +203,32 @@ esac
 say "✓ 已安装 fleet 到 ${BIN}（文件在 ${ROOT}）${path_note}"
 say "  入口 $HUB · 之后每次只敲：fleet"
 
-# 4 — the first `fleet`, right here.
+# 4 — tmux ≥ 3.2, the one thing the shell needs that a stock system lacks. The
+# check and the install are fleet-client-lib.sh's (shared with
+# fleet-node-join.sh's deps step); one `tmux: …` line, like node join's steps.
+if [ "$DEPS" = 0 ]; then
+  say "tmux: skipped (--no-deps)"
+else
+  # shellcheck source=fleet-client-lib.sh
+  . "$ROOT/bin/fleet-client-lib.sh"
+  FC_LOG="$tmp/deps.log"
+  if [ -n "${FLEET_INSTALL_SUDO+x}" ]; then FC_SUDO="$FLEET_INSTALL_SUDO"; fi
+  if fc_tmux_ok; then
+    say "tmux: $FC_TMUX_V 已就绪"
+  else
+    old="$FC_TMUX_V"
+    if [ -n "$old" ]; then say "tmux: $old 低于 3.2，安装新版本…"; else say "tmux: 没有，安装中…"; fi
+    if fc_pkg_install tmux && fc_tmux_ok; then
+      say "tmux: ok $FC_TMUX_V — fleet 直接进本地壳"
+    elif [ -n "$FC_WHY" ]; then
+      say "tmux: 没装上 — ${FC_WHY}；现在 fleet 先用直连"
+    else
+      say "tmux: 装完仍是 ${FC_TMUX_V:-没有}（要 3.2 以上）— 换个来源装新版 tmux；现在 fleet 先用直连"
+    fi
+  fi
+fi
+
+# 5 — the first `fleet`, right here.
 if [ "${FLEET_INSTALL_NO_RUN:-}" = 1 ]; then
   exit 0
 fi
