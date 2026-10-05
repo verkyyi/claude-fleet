@@ -1084,9 +1084,22 @@ issues exactly as before.
 - No admin node online → the leasing machine gets `refresh_unavailable`, not
   the provider's 403; a still-valid cached access token is issued meanwhile.
 
+**A hub-leased Codex home is refreshed by nobody on the machine
+(claude-fleet#1666).** Its `auth.json` carries the `hub-managed` placeholder in
+place of a refresh token; `ccquota codex list --json` reports it as
+`login.source: hub` (a self-managed home: `local`), its login stays `valid`
+until the lease itself lapses, and `ccquota codex refresh` / the agent's
+auto-refresh refuse it before the official CLI runs — a Codex refresh token is
+single-use, and two refreshers lock each other out. The fleet's account gate
+(`bin/.fleet-account.py`) carries that source through: a lapsed lease is named
+as the node agent's, never as a re-login.
+
 Importing: `bin/fleet-creds-import.sh` for Claude setup tokens,
 `bin/fleet-creds-import.sh --codex [profile]` for a Codex refresh token (reads
-`~/.codex/auth.json`); neither changes a file on the importing machine. Details
+`~/.codex/auth.json`, or the home a ccquota-registered profile name points at —
+one living in `~/.codex` imports as the hub label `default`); neither changes
+a file on the importing machine, and the Codex form ends by saying that THIS
+machine must now stop refreshing the account. Details
 and the environment table: `tokenledger/README.md`, "Credentials live at the
 entrance".
 

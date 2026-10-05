@@ -106,10 +106,16 @@ def profiles():
             continue
         homes.add(home)
         # Only metadata crosses this boundary. Do not persist the raw response.
+        # `source` is who refreshes the login (issue #1666): 'hub' = a
+        # hub-leased home the node agent renews (refresh_token is the hub
+        # placeholder; nothing local ever refreshes it), 'local' = this
+        # machine's Codex CLI. An older ccquota prints no source: local.
+        login = row.get('login') or {}
         out.append(dict(agent='codex', profile=name, home=home,
                         account=row.get('account', ''), email=row.get('email', ''),
                         plan=row.get('plan', ''), default=row.get('default', False),
-                        login=(row.get('login') or {}).get('state', 'unknown')))
+                        login=login.get('state', 'unknown'),
+                        source=login.get('source') or 'local'))
     return out
 
 
@@ -121,6 +127,10 @@ def profile(name='', home='', account=''):
         raise ValueError('expected one registered Codex profile with the pinned account/home')
     p = found[0]
     if not p['account'] or p['login'] not in ('valid', 'refresh_due') or not Path(p['home']).is_dir():
+        if p.get('source') == 'hub':
+            # The hub refreshes this one; a re-login here would not fix it.
+            raise ValueError('hub-managed Codex profile %s has no valid lease (login=%s): the node agent renews it, '
+                             'check `ccquota agent` / CCQUOTA_FLEET_CREDS=1 on this machine' % (p['profile'], p['login']))
         raise ValueError('Codex profile needs a verified subscription login: ' + p['profile'])
     return p
 
@@ -185,7 +195,7 @@ def normalize_codex(p, reading, now=None, scope=None):
     row = dict(p, key='codex/' + p['account'], available=False, utilization=None,
                score=None, reset_at=0, hold_until=0, limited_until=0, windows=[])
     if not p.get('account') or p.get('login') not in ('valid', 'refresh_due'):
-        row['reason'] = 'auth-unavailable'
+        row['reason'] = 'hub-lease-lapsed' if p.get('source') == 'hub' else 'auth-unavailable'
         return row
     if not reading or reading.get('available') is not True:
         row['reason'] = 'unreadable'

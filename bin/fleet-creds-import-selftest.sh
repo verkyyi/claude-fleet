@@ -22,6 +22,12 @@
 #               named profile reads <codex-homes>/<profile>/auth.json under its
 #               own label; a `hub-managed` home is skipped; --dry-run sends
 #               nothing; no token in the output; --expires-at is refused
+#   • BYNAME    (issue #1666) a name ccquota has registered resolves through
+#               `ccquota codex list --json`: a profile living in ~/.codex
+#               imports under the hub label `default` and the mapping is shown;
+#               one at <codex-homes>/<name> keeps its label; a put is followed
+#               by the stop-refreshing reminder; without ccquota (or an
+#               unregistered name) the <codex-homes>/<name> rule is byte for byte
 #
 # Exit 0 = pass. Non-zero = fail (prints which assertion diverged).
 set -uo pipefail
@@ -229,6 +235,49 @@ out=$(bash "$IMPORT" --codex --expires-at 2027-01-01T00:00:00Z 2>&1); rc=$?
 [ "$rc" = 2 ] && [ "$(nreq)" = 0 ] || fail "codex --expires-at: rc=$rc n=$(nreq)" "$out"
 case "$out" in *"does not apply to --codex"*) ;; *) fail "codex --expires-at refusal" "$out" ;; esac
 ok "CODEX --expires-at is refused (a refresh token rotates)"
+
+# --- BYNAME (issue #1666): a ccquota-registered profile name -------------------
+mkdir -p "$WORK/fakebin"
+cat > "$WORK/fakebin/ccquota" <<EOF
+#!/bin/sh
+# fake ccquota: answers only "codex list --json", two registered profiles.
+[ "\$1 \$2 \$3" = "codex list --json" ] || exit 2
+printf '[{"name":"personal","home":"%s","default":true,"managed":true,"login":{"state":"valid","source":"local"}},{"name":"work","home":"%s","login":{"state":"valid"}}]\n' "$HOME/.codex" "$CCQUOTA_FLEET_CODEX_HOMES/work"
+EOF
+chmod +x "$WORK/fakebin/ccquota"
+
+: > "$LOG"
+out=$(FLEET_QUOTA_BIN=ccquota PATH="$WORK/fakebin:$PATH" bash "$IMPORT" --codex personal 2>&1); rc=$?
+no_codex_token "codex by name" "$out"
+[ "$rc" = 0 ] || fail "codex personal exit $rc" "$out"
+[ "$(nreq)" = 1 ] || fail "codex personal: expected 1 put, got $(nreq)" "$out"
+[ "$(field 0 'b["provider"]+" "+b["account"]+" "+b["secret"]["account_id"]')" = "codex default acct-1" ] || fail "personal (= ~/.codex) must import under the hub label default" "$(field 0 'b')"
+case "$out" in *"note   personal"*"~/.codex → hub label default"*) ;; *) fail "name → label mapping not shown" "$out" ;; esac
+case "$out" in *"put    personal → default"*) ;; *) fail "put line does not carry the mapping" "$out" ;; esac
+case "$out" in *"NOW this machine must stop refreshing"*"CCQUOTA_FLEET_CREDS=1"*) ;; *) fail "no stop-refreshing reminder after a codex put" "$out" ;; esac
+ok "BYNAME --codex personal (registered at ~/.codex) → put pool · codex · default, mapping shown, stop-refreshing reminder"
+
+: > "$LOG"
+out=$(FLEET_QUOTA_BIN=ccquota PATH="$WORK/fakebin:$PATH" bash "$IMPORT" --codex work 2>&1); rc=$?
+no_codex_token "codex by name work" "$out"
+[ "$rc" = 0 ] && [ "$(nreq)" = 1 ] || fail "codex work by name: rc=$rc n=$(nreq)" "$out"
+[ "$(field 0 'b["account"]+" "+b["secret"]["account_id"]')" = "work acct-2" ] || fail "a profile at <codex-homes>/<name> keeps its own label" "$(field 0 'b')"
+case "$out" in *"note   "*) fail "no mapping note for a plain <codex-homes>/<name> profile" "$out" ;; esac
+ok "BYNAME a registered profile at <codex-homes>/<name> keeps its label, no note"
+
+: > "$LOG"
+out=$(FLEET_QUOTA_BIN=ccquota PATH="$WORK/fakebin:$PATH" bash "$IMPORT" --codex --dry-run personal 2>&1); rc=$?
+[ "$rc" = 0 ] && [ "$(nreq)" = 0 ] || fail "codex by-name dry-run sent $(nreq)" "$out"
+case "$out" in *"note   personal"*"would  personal → default"*"nothing sent"*) ;; *) fail "by-name dry-run plan" "$out" ;; esac
+case "$out" in *"stop refreshing"*) fail "dry-run must not print the reminder" "$out" ;; esac
+ok "BYNAME --dry-run shows the mapping, sends nothing, no reminder"
+
+: > "$LOG"
+out=$(FLEET_QUOTA_BIN="$WORK/no-such-ccquota" bash "$IMPORT" --codex personal 2>&1); rc=$?
+[ "$rc" = 0 ] && [ "$(nreq)" = 0 ] || fail "no-ccquota personal: rc=$rc n=$(nreq)" "$out"
+case "$out" in *"skip   personal"*"/personal/auth.json"*"0 imported, 1 skipped"*) ;; *) fail "without ccquota the <codex-homes>/<name> rule must hold" "$out" ;; esac
+case "$out" in *"note   "*|*"stop refreshing"*) fail "degenerate run printed a note or reminder" "$out" ;; esac
+ok "BYNAME without ccquota, <codex-homes>/<name> is byte for byte what it was"
 
 # The Claude mode is byte-for-byte what it was: a codex home on the machine
 # changes nothing about a plain run.

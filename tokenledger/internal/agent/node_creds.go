@@ -14,6 +14,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/codex"
 )
 
 // The node half of "credentials live at the entrance; machines lease the
@@ -41,7 +43,7 @@ import (
 
 // CodexRefreshPlaceholder fills auth.json's refresh_token on a hub-managed
 // home. It is not a credential.
-const CodexRefreshPlaceholder = "hub-managed"
+const CodexRefreshPlaceholder = codex.HubManagedRefreshToken
 
 // HubMarkerPrefix starts the contents of a hub-managed label file.
 const HubMarkerPrefix = "hub:"
