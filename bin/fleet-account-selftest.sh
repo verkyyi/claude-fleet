@@ -276,7 +276,11 @@ printf 'LIMIT_TTL=7d\n' > "$ACCT_DIR/a.conf"
 # A rejected LOGIN is not a bench: one row per label, no reset ends it, only
 # clear-reauth does. Repointed like the limited file above; the lock follows so
 # a sandbox without the operator's global dir never waits on a missing parent.
-STATE_REAUTH="$FLEET_C/account.reauth"; STATE_DIR="$FLEET_C"; LOCK="$FLEET_C/account.lock"
+STATE_REAUTH="$FLEET_C/account.reauth"
+# shellcheck disable=SC2034  # read by the sourced cmd_mark_reauth (mkdir -p) at CALL time
+STATE_DIR="$FLEET_C"
+# shellcheck disable=SC2034  # read by the sourced acct_lock / acct_unlock at CALL time
+LOCK="$FLEET_C/account.lock"
 eq "reauth-since: unmarked → 0" 0 "$(acct_reauth_since a)"
 cmd_mark_reauth a 'auth error' >/dev/null; rc_is "mark-reauth: known label" 0 $?
 CHECKS=$((CHECKS + 1)); [ "$(acct_reauth_since a)" -gt 0 ] || fail "mark-reauth: must record the epoch it was marked"
