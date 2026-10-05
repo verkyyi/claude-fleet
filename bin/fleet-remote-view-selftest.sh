@@ -119,6 +119,7 @@ if [ -n "$op" ]; then
   case "$op" in check) [ -S "$ctl" ]; exit $? ;; exit) rm -f "$ctl"; exit 0 ;; *) exit 0 ;; esac
 fi
 shift                                    # the host
+[ -n "${FRV_SSH_LOG:-}" ] && printf '%s\n' "$*" >> "$FRV_SSH_LOG"
 unset TMUX TMUX_PANE
 case "$*" in *" attach"*) [ -n "$ctl" ] && python3 -c 'import socket, sys
 s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$ctl" 2>/dev/null ;; esac
@@ -126,7 +127,7 @@ cd "$HOME" && exec bash -c "$*"
 EOF
 chmod +x "$SHIM/tmux" "$SHIM/ssh"
 export PATH="$SHIM:$PATH"
-export FLEET_REMOTE_SSH_CMD="$SHIM/ssh"
+export FLEET_REMOTE_SSH_CMD="$SHIM/ssh" FRV_SSH_LOG="$WORK/ssh.log"
 export FLEET_REMOTE_OPENER="$WORK/opener.sh"
 printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %q\n' "$WORK/opened" > "$FLEET_REMOTE_OPENER"; chmod +x "$FLEET_REMOTE_OPENER"
 
@@ -281,8 +282,15 @@ hook71() { [ -s "$WORK/hook71" ]; }
 waitfor 5 hook71 || fail "C: the fleet's own global client-attached hook did not fire for the proxy (shadowed by a session-level hook?)"
 eq "C: the rule's hooks are on the server, not the session" "2 " "$(tr_ show-hooks -g | grep -c '\[77\]') $(tr_ show-hooks -t "=$RS:" 2>/dev/null)"
 
+# M (#1682): the proxy holds a `serve` channel on its own connection, and a
+# retarget rides it — no one-shot `select` (a fresh remote bash) per click.
+chanup() { [ -n "$(tl show-options -wqv -t "$PW" @remote_chan)" ]; }
+waitfor 10 chanup || fail "M: the proxy window never got its serve channel (@remote_chan)"
+has "M: …a serve session on the proxy's connection, for its view id" "$(cat "$WORK/ssh.log")" "fleet-remote-view.sh serve '$(tl show-options -wqv -t "$PW" @remote_view)'"
+: > "$WORK/ssh.log"
 # B (cont.): another row of the same machine retargets the SAME window
 PW2=$(FLEET_SESSION=$LS bash "$BIN/fleet-remote-view.sh" open "$WID2" 2>/dev/null)
+eq "M: the retarget opened no ssh session of its own (the channel carried it)" "" "$(cat "$WORK/ssh.log")"
 eq "B: a second row of m4 reuses the proxy window" "$PW" "$PW2"
 eq "B: still exactly one proxy, now on the new worker" "$PW m4:$WID2" "$(proxies)"
 on8() { [ "$(vcur "$VS")" = "$RW8" ] && attached; }
@@ -373,6 +381,22 @@ eq "J: the nested shell shows worker 7, the proxy still worker 8, the fleet sess
 bash "$BIN/fleet-remote-view.sh" select "$WID2" >/dev/null 2>&1
 eq "J: select with no view id moves the fleet session and nobody's view" "$RW8 $RW $RW8" "$(tr_ display-message -p -t "=$RS:" '#{window_id}') $(vcur "$S2V") $(vcur "$VS")"
 tr_ select-window -t "=$RS:plan"
+# `serve` (#1682) — what the channel runs: one answer per request, a window found
+# once is remembered but re-checked by its identity, never trusted blind.
+out=$(printf 'a select %s\nb select %s\nc ping -\nd bogus x\n' "$WID" "$WID" | bash "$BIN/fleet-remote-view.sh" serve "$S2ID" 2>/dev/null | tr '\n' ' ')
+eq "M: serve answers each request by its nonce" "a 0 b 0 c 0 d 2 " "$out"
+eq "M: …and moved that view alone" "$RW $RW8 plan" "$(vcur "$S2V") $(vcur "$VS") $(rscur)"
+# A window born while hidden (#1549) has its own header until the next client
+# change — selecting it takes it now, without the full rule (issue #1682).
+RW9=$(tr_ new-window -d -P -F '#{window_id}' -t "$RS:" -n worker9 'while :; do sleep 300; done')
+tr_ set-window-option -t "$RW9" @issue 9; tr_ set-window-option -t "$RW9" @fleet_id 99999999-0000-4000-8000-000000000009
+eq "M: a window born while hidden still has its header" "1 " "$(tr_ show-options -qv -t "=$RS:" @remote_view_solo) $(tr_ show-options -wqv -t "$RW9" @remote_view_saved)"
+out=$(printf 'a select %s\n' "$U/issue-9" | bash "$BIN/fleet-remote-view.sh" serve "$S2ID" 2>/dev/null)
+eq "M: …selecting it takes the header now (saved, off)" "a 0|pane-border-status=-|off" "$out|$(tr_ show-options -wqv -t "$RW9" @remote_view_saved)|$(tr_ show-options -wqv -t "$RW9" pane-border-status)"
+out=$( { printf 'a select %s\n' "$U/issue-9"; sleep 0.3; tr_ kill-window -t "$RW9"; printf 'b select %s\n' "$U/issue-9"; } \
+       | bash "$BIN/fleet-remote-view.sh" serve "$S2ID" 2>/dev/null | tr '\n' ' ')
+eq "M: selected, then gone: the remembered window is re-checked, not trusted" "a 0 b 3 " "$out"
+tr_ select-window -t "=$S2V:$RW"
 # The fleet's scans: every window once, under the fleet's name — so the worker
 # is not AMBIGUOUS to fleet-peer-send (why #1424 had settled for a plain client).
 eq "J: fleet_lw lists each window once while two view sessions hold them" "$(tr_ list-windows -t "=$RS" -F '#{session_name} #{window_id}')" "$(. "$BIN/fleet-lib.sh"; fleet_lw '#{session_name} #{window_id}' tr_)"

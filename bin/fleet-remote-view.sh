@@ -236,14 +236,16 @@ rv_sync() {   # the sidebar follows the solo marker (issue #1475); the script wa
 # scoped `@remote_view_saved` and goes off — the viewer's `m4 …` header is then
 # the only title line, not a second one nested under it. Re-run on every
 # reconcile, so a window born while hidden is covered at the next client change.
+rv_hide_border() {   # <window-id> — one window's header off, its own value saved
+  local w="$1" v
+  [ -z "$(T show-options -wqv -t "$w" @remote_view_saved 2>/dev/null)" ] || return 0
+  v=$(T show-options -wqv -t "$w" pane-border-status 2>/dev/null)
+  T set-option -w -t "$w" @remote_view_saved "pane-border-status=${v:--}" \; \
+    set-option -w -t "$w" pane-border-status off 2>/dev/null
+}
 rv_hide_borders() {
-  local s="$1" w v
-  for w in $(T list-windows -t "=$s" -F '#{window_id}' 2>/dev/null); do
-    [ -z "$(T show-options -wqv -t "$w" @remote_view_saved 2>/dev/null)" ] || continue
-    v=$(T show-options -wqv -t "$w" pane-border-status 2>/dev/null)
-    T set-option -w -t "$w" @remote_view_saved "pane-border-status=${v:--}" \; \
-      set-option -w -t "$w" pane-border-status off 2>/dev/null
-  done
+  local s="$1" w
+  for w in $(T list-windows -t "=$s" -F '#{window_id}' 2>/dev/null); do rv_hide_border "$w"; done
 }
 rv_restore_borders() {
   local s="$1" w v
@@ -322,6 +324,47 @@ rv_reconcile() {
   if [ "$n" -gt 0 ] && rv_shells_only "$s"; then rv_hide "$s"; else rv_restore "$s"; fi
   rv_unlock "$s"
 }
+# select's share of the rule (issue #1682): a window born since the hide still has
+# its own header (#1549) — the one a viewer is about to look at gets it taken now,
+# while the session is hidden. The full rule is the client-attached/-detached
+# hooks' job: switching rows changes no client, so it does not run here.
+rv_header_for() {   # <sess> <window-id>
+  [ "$(T show-options -qv -t "=$1:" @remote_view_solo 2>/dev/null)" = 1 ] || return 0
+  [ -z "$(T show-options -wqv -t "$2" @remote_view_saved 2>/dev/null)" ] || return 0
+  rv_lock "$1"
+  [ "$(T show-options -qv -t "=$1:" @remote_view_solo 2>/dev/null)" = 1 ] && rv_hide_border "$2"
+  rv_unlock "$1"
+}
+# rv_select <worker_id> [<view>] — the worker's window becomes the current one of
+# the view session (the fleet session when none is named or live). 3 = not live
+# here. A window found once is remembered for the life of this process (`serve`
+# answers every row of one connection) as `<wid> <window> <sess> <@fleet_id>`
+# and re-checked by its identity — a window that no longer carries that
+# @fleet_id (closed, recycled) is located afresh, the 61 ms fleet_worker_locate
+# paid once per row, not per click (issue #1682).
+RV_SEEN=''
+rv_select() {
+  local wid="${1#wid:}" view="${2:-}" hit loc fid tgt w='' s=''
+  hit=$(printf '%s\n' "$RV_SEEN" | awk -v k="$wid" '$1 == k { print $2, $3, $4; exit }')
+  if [ -n "$hit" ]; then
+    set -- $hit; sock=$(fleet_socket "$2")
+    [ "$(T display-message -p -t "=$2:$1" '#{@fleet_id}' 2>/dev/null)" = "$3" ] && { w=$1; s=$2; }
+  fi
+  if [ -z "$w" ]; then
+    loc=$(fleet_worker_locate "wid:$wid" 2>/dev/null)
+    case "$loc" in local\ *) ;; *) note "${wid#*/} is not live on $(hostname -s)"; return 3 ;; esac
+    set -- $loc; w=$2; s=$3; sock=$(fleet_socket "$s")
+    fid=$(T display-message -p -t "=$s:$w" '#{@fleet_id}' 2>/dev/null)
+    RV_SEEN=$(printf '%s\n' "$RV_SEEN" | awk -v k="$wid" '$1 != k && NF')
+    [ -n "$fid" ] && RV_SEEN="$RV_SEEN
+$wid $w $s $fid"
+  fi
+  tgt="$s"
+  case "$view" in ''|*[!A-Za-z0-9-]*) ;; *) T has-session -t "=$s@view-$view" 2>/dev/null && tgt="$s@view-$view" ;; esac
+  T select-window -t "=$tgt:$w" 2>/dev/null || { note "cannot select $w"; return 3; }
+  rv_header_for "$s" "$w"
+  return 0
+}
 # The server's hooks run the rule on every client change while a shell is registered.
 rv_hooks_on() {
   local s="$1" cmd
@@ -330,6 +373,24 @@ rv_hooks_on() {
   rv_unshadow "$s"
 }
 rv_hooks_off() { T set-hook -gu 'client-attached[77]' \; set-hook -gu 'client-detached[77]' 2>/dev/null; }
+
+# rv_chan_select <chan> <worker_id> — `select` over a proxy's `serve` channel
+# (issue #1682). 0 = selected there; anything else (no channel, not live there,
+# no answer in 2 s) = the caller's one-shot path, which also says why.
+rv_chan_select() {
+  local c="$1" nonce n r rc=1
+  [ -p "$c.cmd" ] && [ -p "$c.ack" ] || return 1
+  nonce="o$$-$RANDOM"
+  exec 7<>"$c.ack" 8<>"$c.cmd" || return 1
+  printf '%s select %s\n' "$nonce" "$2" >&8
+  # Answers to an earlier, abandoned request may come first: skip to ours.
+  for _ in 1 2 3 4 5 6 7 8; do
+    read -r -t 2 -u 7 n r || break
+    [ "$n" = "$nonce" ] && { rc=$r; break; }
+  done
+  exec 7<&- 8>&-
+  [ "$rc" = 0 ]
+}
 
 case "$mode" in
 # ---------------------------------------------------------------------------------
@@ -363,10 +424,16 @@ open)
       # connection (`@remote_ctl`, the ControlMaster `run` holds), select that
       # worker's window there — the proxy, a client of that session, follows at
       # once. No master up, or the worker not live there: reconnect, as before.
+      # Fastest first (issue #1682): the `serve` channel `run` keeps open on that
+      # connection (`@remote_chan`) — one round trip, nothing started at either end.
       ctl=$(tmux show-options -wqv -t "$w" @remote_ctl 2>/dev/null)
       rview=$(tmux show-options -wqv -t "$w" @remote_view 2>/dev/null)   # its view session (#1489)
+      chn=$(tmux show-options -wqv -t "$w" @remote_chan 2>/dev/null)
       SSH="${FLEET_REMOTE_SSH_CMD:-ssh}"; host=$(ssh_host "$node"); rbin="${FLEET_REMOTE_BIN:-.claude/fleet/bin}"
-      if [ -n "$ctl" ] && [ -S "$ctl" ] && $SSH -S "$ctl" -O check "$host" >/dev/null 2>&1 \
+      if [ -n "$chn" ] && rv_chan_select "$chn" "$wid"; then
+        tmux set-window-option -t "$w" @remote "$node:$wid" 2>/dev/null
+        tmux rename-window -t "$w" -- "$title" 2>/dev/null
+      elif [ -n "$ctl" ] && [ -S "$ctl" ] && $SSH -S "$ctl" -O check "$host" >/dev/null 2>&1 \
          && $SSH -S "$ctl" "$host" "bash $rbin/fleet-remote-view.sh select $(sq "$wid")${rview:+ $(sq "$rview")}" >/dev/null 2>&1; then
         tmux set-window-option -t "$w" @remote "$node:$wid" 2>/dev/null
         tmux rename-window -t "$w" -- "$title" 2>/dev/null
@@ -400,11 +467,13 @@ run)
   # `open` retargets through the one, in the far end's view session named by the other.
   [ -n "${TMUX:-}" ] && tmux set-window-option -t "${TMUX_PANE:-}" @remote_ctl "$ctl" \; \
                              set-window-option -t "${TMUX_PANE:-}" @remote_view "$view" 2>/dev/null
-  side='' upg=''
-  stop_bg() {   # the sidecar + the upgrader, and whatever they are waiting in
+  side='' upg='' chn=''
+  stop_bg() {   # the sidecar, the upgrader, the channel, and whatever they are waiting in
     local p
-    for p in $side $upg; do pkill -P "$p" 2>/dev/null; kill "$p" 2>/dev/null; done
-    side='' upg=''
+    for p in $side $upg $chn; do pkill -P "$p" 2>/dev/null; kill "$p" 2>/dev/null; done
+    side='' upg='' chn=''
+    [ -n "${TMUX:-}" ] && tmux set-window-option -u -t "${TMUX_PANE:-}" @remote_chan 2>/dev/null
+    rm -f "$ctl.cmd" "$ctl.ack"
   }
   cleanup() {
     stop_bg
@@ -446,6 +515,36 @@ for line in sys.stdin:
                 path = "/" + path
             subprocess.call(["bash", opener, ":%d%s" % (lport, path)], stdout=subprocess.DEVNULL)
 ' "$SSH" "$use" "$host" "${FLEET_REMOTE_OPENER:-$BIN/fleet-open.sh}"
+  }
+  # The forward channel (issue #1682): a third session on the same master runs the
+  # far end's `serve` for as long as the connection lives, its stdin/stdout two
+  # FIFOs beside the control socket (`$ctl.cmd` / `$ctl.ack`, both opened
+  # read-write so neither side ever blocks on an open or sees an EOF). Once a
+  # `ping` comes back the window carries `@remote_chan` = "$ctl" and `open`
+  # retargets through it: one ssh round trip, no new session, no remote bash.
+  # An older far end with no `serve` never answers the ping — no `@remote_chan`,
+  # and `open` keeps the one-shot `select`.
+  chan() {
+    local _ up='' n r sp
+    [ -n "${TMUX:-}" ] || return 0
+    for _ in $(seq 1 50); do
+      $SSH -S "$use" -O check "$host" >/dev/null 2>&1 && { up=1; break; }
+      sleep 0.2
+    done
+    [ -n "$up" ] || return 0
+    rm -f "$ctl.cmd" "$ctl.ack"
+    mkfifo "$ctl.cmd" "$ctl.ack" 2>/dev/null || return 0
+    $SSH -S "$use" "$host" "bash $rbin/fleet-remote-view.sh serve $(sq "$view")" \
+      0<>"$ctl.cmd" 1<>"$ctl.ack" 2>/dev/null &
+    sp=$!
+    exec 7<>"$ctl.ack" 8<>"$ctl.cmd"
+    printf 'hello ping -\n' >&8
+    if read -r -t 10 -u 7 n r && [ "$n" = hello ] && [ "$r" = 0 ]; then
+      tmux set-window-option -t "${TMUX_PANE:-}" @remote_chan "$ctl" 2>/dev/null
+    fi
+    exec 7<&- 8>&-
+    wait "$sp"
+    tmux set-window-option -u -t "${TMUX_PANE:-}" @remote_chan 2>/dev/null
   }
   # The line this connection took (issue #1628): `fleet connect`'s own word in the
   # shell (FLEET_CONNECT_ROUTE_FILE — it chose), else this loop's (`hub` = relay).
@@ -555,6 +654,7 @@ EOF_PEER
     rm -f "$use.upgrade"
     sidecar & side=$!
     upgrader & upg=$!
+    chan & chn=$!
     started=$(date +%s)
     FLEET_CONNECT_ROUTE_FILE="$ctl.route" FLEET_CONNECT_RETEST="$retest" \
       $SSH ${opts[@]+"${opts[@]}"} "$host" "bash $rbin/fleet-remote-view.sh attach$shellopt $(sq "$wid") $(sq "$view")"
@@ -679,14 +779,28 @@ select)
   # becomes the current one of the proxy's VIEW SESSION (issue #1489) — named by
   # the <view> id `run` gave `attach`; the fleet session itself when none is
   # named (an older `open`) or live. Not live here → 3, and `open` reconnects.
-  wid="${1:-}"; view="${2:-}"
-  loc=$(fleet_worker_locate "wid:${wid#wid:}" 2>/dev/null)
-  case "$loc" in local\ *) ;; *) note "${wid#*/} is not live on $(hostname -s)"; exit 3 ;; esac
-  set -- $loc; w=$2; s=$3; sock=$(fleet_socket "$s")
-  tgt="$s"
-  case "$view" in ''|*[!A-Za-z0-9-]*) ;; *) T has-session -t "=$s@view-$view" 2>/dev/null && tgt="$s@view-$view" ;; esac
-  T select-window -t "=$tgt:$w" 2>/dev/null || { note "cannot select $w"; exit 3; }
-  rv_reconcile "$s"   # a window spawned since the hide loses its header too (#1549)
+  # The one-shot form: `open` uses it when the proxy's `serve` channel (below) is
+  # not up. A window spawned since the hide loses its header too (#1549).
+  rv_select "${1:-}" "${2:-}"; exit $?
+  ;;
+
+# ---------------------------------------------------------------------------------
+serve)
+  # ON <node>, over the proxy's own connection, for as long as it lives (issue
+  # #1682): `select` without a fresh ssh session, bash and fleet-lib per click.
+  # `run` holds its stdin/stdout; one request per line, `<nonce> select <wid>`
+  # (or `<nonce> ping -`), one answer per line, `<nonce> <rc>`. The view id is
+  # this connection's, fixed at start. EOF (the proxy went) ends it.
+  view="${1:-}"
+  while IFS=' ' read -r nonce op arg; do
+    case "$nonce" in ''|*[!A-Za-z0-9._-]*) continue ;; esac
+    case "$op" in
+      ping) rc=0 ;;
+      select) rv_select "$arg" "$view" 2>/dev/null; rc=$? ;;
+      *) rc=2 ;;
+    esac
+    printf '%s %s\n' "$nonce" "$rc" || exit 0
+  done
   exit 0
   ;;
 
