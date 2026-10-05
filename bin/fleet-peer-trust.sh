@@ -47,6 +47,7 @@ names=$(
 )
 # This machine's own names: its hostname and what FLEET_NODE_ALIASES calls it.
 me=$(hostname -s 2>/dev/null || hostname)
+# shellcheck disable=SC2046  # the aliases are space-separated words, split on purpose
 me_alias=$(printf '%s\n' $(_val FLEET_NODE_ALIASES) | awk -F= -v h="$me" 'tolower($1) == tolower(h) { print $2; exit }')
 
 printf '%s\n' "$names" | awk 'NF' | grep -q . || exit 3

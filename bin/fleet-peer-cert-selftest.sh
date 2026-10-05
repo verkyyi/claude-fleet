@@ -192,7 +192,7 @@ chmod +x "$WORK/shim/ssh"
 export SSH_LOG="$WORK/ssh.log"
 reset; rm -f "$SSH_LOG"
 export FAKE_BODY="$GRANT"
-( PATH="$WORK/shim:$PATH"; . "$BIN/fleet-move.sh"; TO=m4; move_ssh "$TO" true ) || fail "H: move_ssh failed"
+( PATH="$WORK/shim:$PATH"; . "$BIN/fleet-move.sh"; TO='m4'; move_ssh "$TO" true ) || fail "H: move_ssh failed"
 want=$(printf '%s\n' -o BatchMode=yes -i "$HOME/.ssh/fleet-peer" -o "CertificateFile=$FLEET_CONF_DIR/peer/m4.move-cert.pub" -o IdentitiesOnly=yes -l verk m4 true)
 [ "$(cat "$SSH_LOG")" = "$want" ] || fail "H: ssh argv:
 $(cat "$SSH_LOG")
@@ -200,11 +200,11 @@ want:
 $want"
 reset; rm -f "$SSH_LOG"
 export FAKE_CODE=403 FAKE_BODY='{"error":"no"}'
-( PATH="$WORK/shim:$PATH"; . "$BIN/fleet-move.sh"; TO=m4; move_ssh "$TO" true ) 2>/dev/null; rc=$?
+( PATH="$WORK/shim:$PATH"; . "$BIN/fleet-move.sh"; TO='m4'; move_ssh "$TO" true ) 2>/dev/null; rc=$?
 [ "$rc" -eq 255 ] || fail "H: refused → exit $rc, want 255"
 [ ! -e "$SSH_LOG" ] || fail "H: ssh ran after the hub refused: $(cat "$SSH_LOG")"
 reset; rm -f "$SSH_LOG"; mv "$FLEET_CONF_DIR/node.env" "$WORK/node.env.off"
-( PATH="$WORK/shim:$PATH"; . "$BIN/fleet-move.sh"; TO=m4; move_ssh "$TO" true ) || fail "H: plain move_ssh failed"
+( PATH="$WORK/shim:$PATH"; . "$BIN/fleet-move.sh"; TO='m4'; move_ssh "$TO" true ) || fail "H: plain move_ssh failed"
 [ "$(cat "$SSH_LOG")" = "$(printf '%s\n' -o BatchMode=yes m4 true)" ] || fail "H: not a node, yet ssh got: $(cat "$SSH_LOG")"
 mv "$WORK/node.env.off" "$FLEET_CONF_DIR/node.env"
 ok
