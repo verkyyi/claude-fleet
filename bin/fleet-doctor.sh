@@ -825,6 +825,29 @@ if [ -n "$_rl_role" ] && [ "$_rl_role" != none ]; then
   fi
 fi
 
+# --- hub-image (issue #1696): which commit the hub serves, vs the stable tag -----
+# The hub image is deployed by hand, and its commit used to live only in the
+# image tag (cluster access to read). bin/fleet-hub-image.sh reads the hub's
+# public GET /version and compares it with refs/tags/stable: behind = WARN with
+# the count (the hub hands out an older client than installs follow), anything
+# else INFO with the sha. No hub URL configured prints nothing: the degenerate case.
+_hi="$(dirname "$0")/fleet-hub-image.sh"
+if [ -f "$_hi" ]; then
+  _hi_dir="${FLEET_LIVE_DIR:-$HOME/.claude/fleet}"
+  git -C "$_hi_dir" rev-parse --git-dir >/dev/null 2>&1 || _hi_dir="$(cd "$(dirname "$0")/.." && pwd)"
+  _hi_out=$(sh "$_hi" --dir "$_hi_dir" 2>/dev/null)
+  _hif() { printf '%s\n' "$_hi_out" | sed -n "s/^$1:  *//p"; }
+  _hi_c=$(_hif commit); _hi_s=$(_hif stable); _hi_img=$(_hif image)
+  case "$(_hif verdict)" in
+    CURRENT)  info hub-image "入口镜像 $_hi_img (commit $_hi_c) — 与 stable 同一 commit" ;;
+    BEHIND)   warn hub-image "入口镜像 commit $_hi_c 落后 stable ($_hi_s) $(_hif behind) 个 commit — 入口发的客户端比各机 install 旧；按 stable 重新发布入口镜像" ;;
+    AHEAD)    info hub-image "入口镜像 commit $_hi_c 比 stable ($_hi_s) 新 $(_hif ahead) 个 commit" ;;
+    DIVERGED) warn hub-image "入口镜像 commit $_hi_c 与 stable ($_hi_s) 分叉 — 镜像独有 $(_hif ahead) 个、stable 独有 $(_hif behind) 个 commit" ;;
+    NOHUB|'') ;;
+    *)        info hub-image "入口镜像的 commit 未知（不是「最新」）: $(_hif note)" ;;
+  esac
+fi
+
 # --- sshtrust (issue #1626): no standing key from another fleet machine ----------
 # Cross-machine ssh rides a five-minute certificate the hub signs per connection
 # (fleet-peer-cert.sh); a key another fleet machine left in ~/.ssh/authorized_keys

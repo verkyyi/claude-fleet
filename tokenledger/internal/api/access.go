@@ -340,6 +340,14 @@ func (s *Server) doors(f HubFacts) []Door {
 			Note:       "Here: always on, and deliberately incapable of saying anything else.",
 		},
 		{
+			ID: "version", Name: "Build version", Via: "http",
+			Where:      []string{"/version"},
+			Credential: "nothing",
+			Can:        `Learn which build this is: the version stamp and the git commit it names (claude-fleet#1696), so fleet-doctor can compare the hub with the stable tag without cluster access. Reads nothing else.`,
+			State:      "public",
+			Note:       "Here: always on. The commit is of a public repository; it says which client this hub hands out, nothing about who uses it.",
+		},
+		{
 			ID: "cli", Name: "The CLI, on the hub machine", Via: "hub-shell",
 			Where: []string{"ccquota enroll", "ccquota share", "ccquota team", "ccquota plan", "ccquota name"},
 			Credential: "a shell on the machine running the hub, and read/write on its SQLite file — " +

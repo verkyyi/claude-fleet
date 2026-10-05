@@ -472,6 +472,7 @@ func runHub(args []string) error {
 		Tailnet:             tailnet,
 		PublicBadges:        *publicBadges,
 		LimitsPollIntervalS: *pollInterval,
+		Version:             Version,
 		UI:                  web.Assets(),
 		LiveStore:           api.NewLive(),
 		Fleet:               fleetOn,
