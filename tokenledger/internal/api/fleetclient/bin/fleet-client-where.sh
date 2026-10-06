@@ -6,7 +6,7 @@
 #
 #   fleet-client-where.sh           one line:  MacBook · macOS · iTerm2 3.6 · 能：打开网页、收文件、系统通知、iTerm2
 #                                              verkyyi-iphone · iOS · Termius（客户端在 m5 上运行）· 能：给链接
-#   fleet-client-where.sh --json    {"state","device","os","terminal","caps","since","via","host","source"}
+#   fleet-client-where.sh --json    {"state","device","os","terminal","caps","since","via","host","source","hub"}
 #
 # Two sources, one output:
 #   hub    the person's client lease (#1715) — a node asks with its own token
@@ -17,6 +17,9 @@
 #          (<cache>/tmp/client.where.json, written by fleet-shell.sh when a
 #          client becomes the one in use), else the first attached client's
 #          device + tmux client_termname
+# `hub` says which: up (the hub answered) · nohub (no hub here, or one without the
+# lease) · down (a hub is set but could not be asked) — the status bar's
+# 「⌂ … · 入口连不上」 (fleet-client-badge.sh, issue #1779) reads it here.
 # Nothing is cached: every call reads the source afresh, so a takeover shows on
 # the very next call.
 #
@@ -71,16 +74,23 @@ def iso(t):
     return datetime.datetime.fromtimestamp(t, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+HUB = "up"
+
+
 def from_hub():
     """(state, where) off the hub, or None when there is no hub to ask."""
+    global HUB
     if os.environ.get("HRC") != "0":
+        HUB = "down"
         return None
     try:
         d = json.loads(os.environ.get("HUBREAD") or "{}")
     except ValueError:
+        HUB = "down"
         return None
     st = d.get("state")
     if st == "nohub" or not st:
+        HUB = "nohub"
         return None
     lease = d.get("lease") or {}
     if st != "active" or not lease:
@@ -125,6 +135,7 @@ out = {"state": state, "source": src}
 for k in KEYS:
     v = w.get(k)
     out[k] = list(v or []) if k == "caps" else (v or "")
+out["hub"] = HUB
 if os.environ.get("JSON") == "1":
     print(json.dumps(out, ensure_ascii=False))
     sys.exit(0 if state == "active" else 3)

@@ -164,6 +164,7 @@ eq "F json caps" "open_url show_file notify iterm2" "$(jf caps)"
 eq "F json since" "2026-10-05T12:00:00Z" "$(jf since)"
 eq "F json via" "local" "$(jf via)"
 eq "F json source" "hub" "$(jf source)"
+eq "F json hub up" "up" "$(jf hub)"
 for k in device os terminal caps since via host; do has "F json has $k" "$j" "\"$k\""; done
 # the phone takes over: the very next call follows (nothing cached)
 cat > "$WORK/lease.json" <<'EOF'
@@ -229,6 +230,7 @@ if command -v tmux >/dev/null 2>&1; then
   eq "H local line" "LocalMac · macOS · iTerm2 3.6 · 能：打开网页、收文件、系统通知、iTerm2" "$line"
   j=$(bash "$BIN/fleet-client-where.sh" --json)
   eq "H source local" "local" "$(jf source)"
+  eq "H no hub → hub nohub" "nohub" "$(jf hub)"
   [ -n "$(jf since)" ] || fail "H since from the file's mtime"
   # a client from before #1716: no where saved — its device + tmux's terminal word
   rm -f "$WORK/shellcache/tmp/client.where.json"
@@ -239,6 +241,8 @@ if command -v tmux >/dev/null 2>&1; then
   # the hub out of reach: the same local answer
   printf '#!/bin/bash\nexit 1\n' > "$WORK/hubread"
   has "H hub out of reach → local" "$(bash "$BIN/fleet-client-where.sh")" "OldMac"
+  j=$(bash "$BIN/fleet-client-where.sh" --json)
+  eq "H hub out of reach → hub down (issue #1779)" "down" "$(jf hub)"
 else
   printf 'skip H attached legs: no tmux\n'
 fi
