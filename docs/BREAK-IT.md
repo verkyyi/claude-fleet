@@ -33,6 +33,12 @@
 | 非交互 shell（ssh、守护进程）PATH 里没有 claude | 会话开出来停在 shell，`exec claude` 失败 | `fleet_find_tool` 依次找 `FLEET_CLAUDE_BIN` → PATH → `~/.local/bin` → `/opt/homebrew/bin` → `/usr/local/bin`（#1774/#1784） | `no-claude-on-path` |
 | install-sync 跟随中途被 kill -9（`launchctl kickstart -k`、OOM、重启、注销） | trap 不跑，锁目录留下；之后每一拍都 `another tick holds … skip`，这台登录停在旧版本，最多白等一小时（锁 TTL） | 下一拍读锁里的 `pid`，进程不在了就立即接管并记一行 `took over … holder pid=<n> is dead`；TTL 仍兜底（#1691） | `install-sync-killed` |
 | 个人 tmux 配置（`~/.tmux.conf`）写坏一行，或把 fleet 的 source 行注释掉 | fleet 层只经 `~/.tmux.conf` 的 source 行载入，文件一出语法错整份跳过：回收 hook、改名保护、窗口基线全悄悄失效；`reapply-tmux-attention.sh` 把注释掉的行当成「已引入」，补不回来 | fleet 服务器直接用 `-f conf/tmux-fleet-server.conf` 起：先载入 fleet 层（末尾打 `@fleet_conf_loaded`），再 `source-file -q` 你的个人配置——个人设置照常生效，出错只跳过它自己；`fleet doctor` 的 `tmuxconf` 行逐个 fleet 服务器核对标记和回收 hook；reapply 只认没注释的行（#1845） | `personal-tmux-conf` |
+| 个人自动规则卡死（个人配置里一条 hook 一直不返回） | 每次工具调用都要等它：C3 之前会话直接卡住；有了超时也每次白等 10 秒，而且这个人所有机器上的会话一起慢 | `fleet-hook-personal.sh` 到 `FLEET_PERSONAL_HOOK_TIMEOUT`（默认 10 秒）整组切断；本会话里连续失败 `FLEET_PERSONAL_HOOK_STRIKES`（默认 3）次就停用这一条、之后立即放行，stderr 说一句，会话退出后恢复页点名（#1862） | `personal-hook-hangs` |
+| 个人自动规则一直报错（`exit 1`、脚本里的命令不存在） | 每次工具调用都报一条 hook 错误，看不出是个人配置的锅 | 同上：连续失败 3 次停用、恢复页点名；故意的拒绝（exit 2）是规则在干活，不算失败（#1862） | `personal-hook-errors` |
+| 个人 MCP 的命令在这台机器上没有（个人笔记本上装了，m4 上没装） | 写进每台机器的 `~/.claude.json` / `config.toml`，每个会话一开就报 MCP 启动失败，换哪台机器都一样 | 合成时先查命令在不在这台机器（PATH + 常见工具目录）：不在就这台机器不带这一项、退回下一层，同步输出一行 `skip`，会话启动行点名「哪一项、找不到哪个命令」（#1862） | `personal-mcp-missing` |
+| 个人层把 fleet 默认的 MCP（如 `github`）换成坏的（命令不存在） | 个人 > fleet 默认，fleet 自带的那一项在这个人所有机器上都坏了 | 同上：坏的个人项不算数，fleet 默认（或团队的）照常生效，启动行点名（#1862） | `personal-mcp-over-default` |
+| 个人配置缓存 `person-bundle.json` 被截断（写到一半磁盘满、崩溃、手改坏） | 读不出来就当「没有个人层」：会话悄悄少了个人项，下一次同步还把本机文件里的个人项全收回 | 每次取到新版本同时存一份 `person-bundle.good.json`；缓存读不出时用这份完好的、照常合成，启动行告警，下次同步重新取（#1862） | `personal-cache-truncated` |
+| 个人配置让会话一开就没法干活（个人规则拒绝每次调用、个人设置把会话弄坏） | 只能去改个人配置；而它跟着人走，所有机器一起坏，眼前这个会话救不回来 | 有个人层时恢复页多一个键 `p`：同一对话、只这个窗口不带个人配置重开（`FLEET_PERSONAL=0`：个人规则不跑、合成不带个人层）；长期退回用 `fleet config restore N`（#1862） | `personal-breaks-session` |
 | 客户端里 prefix x / prefix & / 右键菜单 Kill | 侧栏或右侧面板、甚至整个窗口和服务器被删 | 这些键和菜单在客户端里都不存在了（#1785） | `client-kill-keys` |
 | 客户端的侧栏 / 右侧进程被杀 | 一半屏幕空着，只能重开 | 侧栏 5 秒内重画，右侧窗格 5 秒内重开（#1785） | `client-pane-killed` |
 | 侧栏上按 Ctrl+C / Ctrl+\\ / Ctrl+Z | 侧栏进程退出或被挂起 | 侧栏忽略这三个键，还是同一个进程（#1785） | `sidebar-ctrl-c` |
