@@ -257,9 +257,9 @@ cat > "$WORK/nodes.json" <<EOF
  {"hostname":"macmini","status":"online","sessions":14,"load1":5.65234375,"ncpu":15,"mem_free_bytes":29886201856,"mem_total_bytes":68719476736,"last_heartbeat":"$HB"},
  {"hostname":"mini2","status":"lost","sessions":0,"load1":0,"ncpu":10,"mem_free_bytes":0,"mem_total_bytes":0,"last_heartbeat":null},
  {"hostname":"box3","status":"online","sessions":null,"sessions_unknown":["u/f: UNAVAILABLE"],"load1":1,"ncpu":10,"mem_free_bytes":0,"mem_total_bytes":0,"last_heartbeat":"$HB"},
- {"hostname":"box4","status":"online","sessions":1,"load1":1,"ncpu":4,"mem_free_bytes":1,"mem_total_bytes":2,"last_heartbeat":"$HB"},
+ {"hostname":"box4","status":"maintenance","sessions":1,"load1":1,"ncpu":4,"mem_free_bytes":1,"mem_total_bytes":2,"last_heartbeat":"$HB"},
  {"hostname":"box5","status":"online","sessions":1,"load1":1,"ncpu":4,"mem_free_bytes":1,"mem_total_bytes":2,"last_heartbeat":"$HB"},
- {"hostname":"box6","status":"online","sessions":1,"load1":1,"ncpu":4,"mem_free_bytes":1,"mem_total_bytes":2,"last_heartbeat":"$HB"},
+ {"hostname":"box6","status":"online","compute_off":true,"sessions":1,"load1":1,"ncpu":4,"mem_free_bytes":1,"mem_total_bytes":2,"last_heartbeat":"$HB"},
  {"hostname":"","status":"online"}],
  "nodes":[
  {"hostname":"macmini","os_user":"a","fleet_version":"old","last_heartbeat":"2026-10-04T13:15:20Z"},
@@ -298,11 +298,16 @@ eq "G: a failed sessions round leaves hub_ok as it was (#1483)" "$OK" "$(cat "$G
 has "G: …and says how long the hub has been silent" "hub unreachable for" "$(cat "$WORK/err")"
 rows=$(tr '\037' '|' < "$G/hub_nodes")
 case "$rows" in "#ts|"[0-9]*) CHECKS=$((CHECKS+1)) ;; *) fail "G: hub_nodes starts with #ts" "$rows" ;; esac
-row=$(printf '%s\n' "$rows" | grep '^m5|'); row=${row%|*|*|*}   # drop mem_used/mem_total/ver_state (exact below)
+row=$(printf '%s\n' "$rows" | grep '^m5|'); row=${row%|*|*|*|*|*}   # drop mem_used/mem_total/ver_state/place/hostname (exact below)
 case "$row" in "m5|online|5.65|15|56|14|$C2|"[0-9]|"m5|online|5.65|15|56|14|$C2|"[0-9][0-9]) CHECKS=$((CHECKS+1)) ;;
   *) fail "G: m5's row: alias, mem %, the newest login's version, a small age" "$row" ;; esac
 has "G: m5's memory in MB" "|37034|65536|" "$(printf '%s\n' "$rows" | grep '^m5|')"
-eq "G: a lost machine with no reading: empty mem %, no version, no age, no version word" "m4|lost|0.00|10||0|||0|0|" "$(printf '%s\n' "$rows" | grep '^m4|')"
+eq "G: a lost machine with no reading: empty mem %, no version, no age, no version word" "m4|lost|0.00|10||0|||0|0|||mini2" "$(printf '%s\n' "$rows" | grep '^m4|')"
+# 「开在哪」's two columns (issue #1778): what may be placed there, and the hostname
+pw() { printf '%s\n' "$rows" | awk -F'|' -v n="$1" '$1 == n { print $12 "|" $13 }'; }
+eq "G: a machine that takes sessions → no place word, its hostname" "|macmini" "$(pw m5)"
+eq "G: compute_off (#1719) → coord" "coord|box6" "$(pw box6)"
+eq "G: 维护中 (#1427) → maint, and still lost in field 2" "maint|box4|lost" "$(pw box4)|$(printf '%s\n' "$rows" | awk -F'|' '$1 == "box4" { print $2 }')"
 has "G: sessions null (#1465) → ? in the sessions field, never 0" "box3|online|1.00|10||?|" "$(printf '%s\n' "$rows" | grep '^box3|')"
 eq "G: a machine with no hostname is not a row" "7" "$(printf '%s\n' "$rows" | grep -c .)"
 # the version's word (issue #644): judged against $LIVE's refs/tags/stable (c2)

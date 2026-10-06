@@ -45,7 +45,8 @@
 #
 # hub_nodes  (one per machine the hub shows; written by fleet-hub-sessions.sh):
 #   #ts<US><epoch>
-#   node<US>online|lost<US>load1<US>ncpu<US>mem_pct<US>sessions<US>fleet_version<US>age<US>mem_used_mb<US>mem_total_mb<US>ver_state
+#   node<US>online|lost<US>load1<US>ncpu<US>mem_pct<US>sessions<US>fleet_version<US>age<US>mem_used_mb<US>mem_total_mb<US>ver_state<US>place<US>hostname
+#   (place / hostname, issue #1778: read by the sidebar's 「开在哪」, not here)
 #   sessions is `?` when the hub could not read a fleet there (#1465), never 0;
 #   ver_state is the version's word against the stable mark (#644, HN_VST above).
 # hub_limits (one per subscription with a reading):
@@ -101,10 +102,10 @@ fleet_status_hub_lost() {
 }
 
 fleet_status_hub_node() {
-  local f="$FLEET_STATUS_G/hub_nodes" want="${1:-}" k a b c d e g h i j l
+  local f="$FLEET_STATUS_G/hub_nodes" want="${1:-}" k a b c d e g h i j l _r
   HN_TS=0 HN_AV='' HN_LOAD1='' HN_NCPU='' HN_MEM='' HN_SESS='' HN_VER='' HN_AGE='' HN_USED='' HN_TOTAL='' HN_VST=''
   [ -n "$want" ] && [ -s "$f" ] || return 1
-  while IFS=$_FS_US read -r k a b c d e g h i j l; do
+  while IFS=$_FS_US read -r k a b c d e g h i j l _r; do
     case "$k" in
       '#ts')   HN_TS=$a; case "$HN_TS" in ''|*[!0-9]*) HN_TS=0 ;; esac ;;
       "$want") HN_AV=$a; HN_LOAD1=$b; HN_NCPU=$c; HN_MEM=$d; HN_SESS=$e; HN_VER=$g; HN_AGE=$h; HN_USED=$i; HN_TOTAL=$j; HN_VST=$l
