@@ -392,6 +392,7 @@ if [ "${FLEET_AGENT_CFG:-1}" != 0 ] && [ -f "$BIN/fleet-agent-team.py" ] && comm
       c)    flags+=(-c "$_cfg_v") ;;
       lock) _cfg_locks="${_cfg_locks:+$_cfg_locks; }$_cfg_v" ;;
       note) printf 'fleet-codex: %s (issue #1862)\n' "$_cfg_v" >&2 ;;   # the personal layer written badly
+      hint) printf 'fleet-codex: 本机新加了 %s — 要带到别的机器：fleet config %s\n' "${_cfg_v#promote }" "$_cfg_v" >&2 ;;   # said once (issue #1863)
     esac
   done < <(FLEET_CONF_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}" \
              python3 "$BIN/fleet-agent-team.py" session codex ${_cfg_args[@]+"${_cfg_args[@]}"} 2>/dev/null)
