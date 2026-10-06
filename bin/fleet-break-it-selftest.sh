@@ -1856,11 +1856,14 @@ class H(BaseHTTPRequestHandler):
         self.send_response(code); self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
 s = HTTPServer(("127.0.0.1", 0), H)
-open(os.path.join(D, "port"), "w").write(str(s.server_address[1]))
+with open(os.path.join(D, "port.tmp"), "w") as f:
+    f.write(str(s.server_address[1]))
+os.replace(os.path.join(D, "port.tmp"), os.path.join(D, "port"))
 s.serve_forever()
 PY2
-  ( python3 "$hub/hub.py" "$hub" "$((CAP + 10))" </dev/null >/dev/null 2>&1 & )
-  until_ok 5 test -s "$hub/port" || { WHY="the fake hub did not start"; return 1; }
+  ( python3 -u "$hub/hub.py" "$hub" "$((CAP + 10))" </dev/null >"$hub/out" 2>&1 & )
+  until_ok 15 test -s "$hub/port" \
+    || { WHY="the fake hub did not start: $(tr '\n' ' ' < "$hub/out" | tail -c 400)"; return 1; }
   port=$(cat "$hub/port")
   lease() {  # <env…> -- lease args
     local e=()
