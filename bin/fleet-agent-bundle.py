@@ -4,7 +4,7 @@
 Issue #1725 (EPIC #1718 C7). conf/agent-bundle.manifest lists it: Claude's
 hooks, skills, commands, MCP servers and the fleet mod; Codex's skills, MCP
 servers and default keys. A full install (~/.claude/fleet) and a client-only
-computer (~/.local/share/claude-fleet) carry the same files and apply them the
+computer (the base in ~/.claude/fleet, #1804) carry the same files and apply them the
 same way — fleet-install-apply.sh, fill only, the login's override files first.
 
   files   [--root R] [--category]

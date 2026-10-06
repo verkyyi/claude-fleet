@@ -4,7 +4,7 @@
 #
 # hooks/settings-hooks.json wires every hook at the full install's path,
 # `<interp> ~/.claude/fleet/{hooks,bin}/<name> [args]`. A computer that has only
-# the client (~/.local/share/claude-fleet) has no such path — and a PreToolUse
+# the client (the base in ~/.claude/fleet, #1804) lacks most of them — and a PreToolUse
 # `python3 <missing>.py` exits 2, which Claude Code reads as BLOCK. So the
 # client's apply (fleet-install-apply.sh --bundle → fleet-hooks-merge.py merge
 # --via <root>) wires each one through this shim instead:

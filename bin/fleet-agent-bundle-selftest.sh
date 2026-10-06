@@ -62,7 +62,9 @@ install() {
 }
 # snap <home> — a digest of every file the apply may write
 snap() {
-  (cd "$1" && find .claude .claude.json .codex .config/claude-fleet -type f 2>/dev/null | LC_ALL=C sort \
+  # never the install itself: ~/.claude/fleet IS the files' directory now (#1804),
+  # where python leaves its __pycache__
+  (cd "$1" && find .claude .claude.json .codex .config/claude-fleet -path .claude/fleet -prune -o -type f -print 2>/dev/null | LC_ALL=C sort \
     | while IFS= read -r f; do printf '%s %s\n' "$(cksum < "$f")" "$f"; done)
 }
 

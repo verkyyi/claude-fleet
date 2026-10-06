@@ -93,7 +93,7 @@
 #
 #   --bundle  (issue #1725, EPIC #1718 C7) the Agent configuration package alone,
 #             on an install that is NOT a git checkout — a client-only computer's
-#             ~/.local/share/claude-fleet, which the installer (bin/fleet-install.sh)
+#             ~/.claude/fleet without bin/fleet-up.sh (#1804), which the installer (bin/fleet-install.sh)
 #             fills from the hub's /install or GitHub's stable. No --from/--to:
 #             every file conf/agent-bundle.manifest lists counts as changed (each
 #             pass below compares before it writes, so a current login writes
