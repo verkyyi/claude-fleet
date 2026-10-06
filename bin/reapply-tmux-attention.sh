@@ -1,5 +1,7 @@
 #!/bin/sh
 # reapply-tmux-attention.sh — ensure ~/.tmux.conf sources the attention layer.
+# A fleet's own server no longer depends on it (it starts from
+# conf/tmux-fleet-server.conf, issue #1845); this keeps a plain tmux in step.
 # Run once at install, and again after anything regenerates ~/.tmux.conf.
 # Idempotent: does nothing if the source line is already present.
 set -u  # POSIX sh: pipefail is bash-only (dash has none)
@@ -9,7 +11,9 @@ CONF="$HOME/.tmux.conf"
 LINE="if-shell '[ -f $FLEET/conf/tmux-attention.conf ]' 'source-file $FLEET/conf/tmux-attention.conf'"
 
 [ -f "$CONF" ] || : > "$CONF"
-if grep -qF 'tmux-attention.conf' "$CONF"; then
+# Only a line that is not commented out counts (issue #1845): a `# if-shell …
+# tmux-attention.conf …` the person disabled used to read as "already present".
+if grep -q '^[[:space:]]*[^#[:space:]].*tmux-attention\.conf' "$CONF"; then
   echo "already present in $CONF"
 else
   { echo ""; echo "# --- claude-fleet: Claude session attention layer ---"; echo "$LINE"; } >> "$CONF"

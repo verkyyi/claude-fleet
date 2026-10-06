@@ -163,7 +163,7 @@ else
 fi
 
 # --- tmux ---------------------------------------------------------------------
-if grep -q 'tmux-attention.conf' "$HOME/.tmux.conf" 2>/dev/null; then
+if grep -q '^[[:space:]]*[^#[:space:]].*tmux-attention\.conf' "$HOME/.tmux.conf" 2>/dev/null; then
   say "tmux: ok — ~/.tmux.conf already sources the fleet conf"
 elif sh "$ROOT/bin/reapply-tmux-attention.sh" >/dev/null 2>&1; then
   say "tmux: ok — ~/.tmux.conf sources the fleet conf"

@@ -1805,6 +1805,40 @@ fleet_server_resident() {
   return 0
 }
 
+# fleet_server_conf — the file a fleet's tmux server starts from (issue #1845):
+# conf/tmux-fleet-server.conf loads the fleet layer first, then the person's own
+# tmux conf with -q, so an error in theirs skips only theirs.
+fleet_server_conf() { printf '%s\n' "${_FLEET_LIB_DIR%/}/../conf/tmux-fleet-server.conf"; }
+
+# fleet_server_new_session <socket> <new-session args…> — `new-session` on a fleet's
+# socket, starting the server from fleet_server_conf when it is not running yet
+# (`-f` is read only at server start; a live server ignores it). No such file (a
+# partial install) → tmux's default config, as before.
+fleet_server_new_session() {
+  local sock="$1" cf; shift
+  cf=$(fleet_server_conf)
+  if [ -f "$cf" ]; then tmux -L "$sock" -f "$cf" new-session "$@"
+  else tmux -L "$sock" new-session "$@"; fi
+}
+
+# fleet_tmuxconf_check <socket> — is the fleet layer live on that server? One line:
+#   ok <marker>                     — the marker matches conf/tmux-attention.conf's,
+#                                     the reap hook and the rename guard are on
+#   stale <live> (want <marker>)    — rules on, from an older conf (rc 2)
+#   missing <what…>                 — the layer is not on that server (rc 1)
+# `fleet doctor`'s tmuxconf row (issue #1845).
+fleet_tmuxconf_check() {
+  local want live miss=''
+  want=$(sed -n 's/^set -g @fleet_conf_loaded "\([^"]*\)".*/\1/p' "${_FLEET_LIB_DIR%/}/../conf/tmux-attention.conf" 2>/dev/null | tail -1)
+  live=$(tmux -L "$1" show-options -gqv @fleet_conf_loaded 2>/dev/null)
+  [ -n "$live" ] || miss="$miss @fleet_conf_loaded"
+  tmux -L "$1" show-hooks -g window-unlinked 2>/dev/null | grep -q 'fleet-window-reap\.sh' || miss="$miss 回收hook"
+  [ "$(tmux -L "$1" show-options -gv allow-rename 2>/dev/null)" = off ] || miss="$miss 改名保护"
+  if [ -n "$miss" ]; then printf 'missing%s\n' "$miss"; return 1; fi
+  if [ -n "$want" ] && [ "$live" != "$want" ]; then printf 'stale %s (want %s)\n' "$live" "$want"; return 2; fi
+  printf 'ok %s\n' "$live"
+}
+
 # fleet_home_resident <socket> <session> [window] — the fleet's `home` window never closes
 # (issue #1784): its shell exiting (a stray Ctrl+D, `exit`) leaves the pane in
 # place (`remain-on-exit`) and a window `pane-died` hook starts a fresh shell in
