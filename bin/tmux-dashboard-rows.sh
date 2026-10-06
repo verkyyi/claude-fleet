@@ -72,7 +72,9 @@ R="${E}0m"; US=$'\x1f'
 # After it (issue #1783): @agent_cfg, the fingerprint of the configuration the
 # session was launched with (#1782) — compared per row against the one expected
 # NOW (fleet_cfg_state, the file read once per frame below), so 配置旧 costs no fork.
-WFMT="#{session_name}${US}#{window_index}${US}#{?@remote,,#{window_name}}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}${US}#{?@born,#{@born},#{window_created}}${US}#{@agent_cfg}"
+# Inside the same field (issue #1895), `/<@agent_ver>` when the window has one —
+# the fleet version it runs, so 待换新 costs no field and no fork either.
+WFMT="#{session_name}${US}#{window_index}${US}#{?@remote,,#{window_name}}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}${US}#{?@born,#{@born},#{window_created}}${US}#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -742,16 +744,18 @@ buf=""
 # 配置旧 (issue #1783): the fingerprint a fresh session would get NOW, read once a
 # frame — every row below is a compare against it, no fork.
 fleet_cfg_expected_load
-CFG_STALE_T=''
+CFG_STALE_T='' CFG_RENEW_T=''
 while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp wrepo wnorepo slept _ wloop wtitle wborn wcfg; do
   [ -z "$name" ] && continue
   # Is this session's configuration the one it would get now? A local row
   # compares its @agent_cfg (fleet_cfg_state); a row on another machine carries
   # that machine's own verdict (the hub cache's `cfg`, judged there against ITS
-  # expected file). stale | ok | unknown — only stale draws.
+  # expected file). stale | renew | ok | unknown — stale draws 配置旧, renew 待换新
+  # (issue #1895: the same configuration on an older fleet version).
   case "$wid" in
-    wid:*) case "$wcfg" in stale|ok) cfgst=$wcfg ;; *) cfgst=unknown ;; esac ;;
-    *)     fleet_cfg_state "$agent" "$wcfg"; cfgst=$FCFG_STATE ;;
+    wid:*) case "$wcfg" in stale|renew|ok) cfgst=$wcfg ;; *) cfgst=unknown ;; esac ;;
+    *)     case "$wcfg" in */*) wver=${wcfg#*/}; wcfg=${wcfg%%/*} ;; *) wver='' ;; esac
+           fleet_cfg_state "$agent" "$wcfg" "$wver"; cfgst=$FCFG_STATE ;;
   esac
   cfgf=''; [ "$cfgst" = unknown ] || cfgf="$US$cfgst"
   # strict per-fleet: only windows from the viewing dash's own tmux session.
@@ -1230,9 +1234,9 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     # fields 10-12 (issue #1532): the hub's issue · PR · ctx% cells, bare text
     # (`#1532` · `#1552✓` · `45%`; `—` / `·` when there is none). The view draws
     # them only while its info column is open (⌃i), right-aligned.
-    # field 13 (issue #1783): `stale` / `ok` — whether the session's configuration
-    # is the one it would get now; the view draws a yellow 配置旧 left of the @
-    # mark on a stale one. Absent when unknown, so a login with no expected file
+    # field 13 (issue #1783): `stale` / `renew` / `ok` — whether the session's
+    # configuration is the one it would get now; the view draws a yellow 配置旧
+    # left of the @ mark on a stale one, 待换新 on a renew one (issue #1895). Absent when unknown, so a login with no expected file
     # (or a session from before #1782) emits its rows byte for byte as before.
     buf+="$rgrp	$pinned	$gpath	$wid$US$state$US$gl$US$label$US${treed:- }$US$kidd$US$depth$US$ndet$US${rnode:+$hnd}$US$issd$US$ptxt$US$pct$cfgf"$'\n'
     continue
@@ -1280,11 +1284,18 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
                        tagpfx+="${AM}${zwait}${R}"; dwidth=$(( dwidth + ${#zwait} )); }
   # 配置旧 (issue #1783), amber, just before the @ mark: the session runs an older
   # configuration than a fresh one would get (fleet_cfg_state above).
-  if [ "$cfgst" = stale ]; then
-    [ -n "$CFG_STALE_T" ] || CFG_STALE_T=$(fleet_ui_t sidebar_cfg_stale)
-    _a=${CFG_STALE_T//[![:ascii:]]/}
+  # 待换新 (issue #1895) the same way: same configuration, older fleet version.
+  if [ "$cfgst" = stale ] || [ "$cfgst" = renew ]; then
+    if [ "$cfgst" = stale ]; then
+      [ -n "$CFG_STALE_T" ] || CFG_STALE_T=$(fleet_ui_t sidebar_cfg_stale)
+      _ct=$CFG_STALE_T
+    else
+      [ -n "$CFG_RENEW_T" ] || CFG_RENEW_T=$(fleet_ui_t sidebar_cfg_renew)
+      _ct=$CFG_RENEW_T
+    fi
+    _a=${_ct//[![:ascii:]]/}
     [ -n "$tagpfx" ] && { tagpfx+=' '; dwidth=$((dwidth+1)); }
-    tagpfx+="${AM}${CFG_STALE_T}${R}"; dwidth=$(( dwidth + ${#CFG_STALE_T} * 2 - ${#_a} ))
+    tagpfx+="${AM}${_ct}${R}"; dwidth=$(( dwidth + ${#_ct} * 2 - ${#_a} ))
   fi
   # A row on another machine ends its tags in that machine's `@m4` (issue #1780,
   # the sidebar's mark): `@m4!` once it is lost (the row dims too), `@m5~` heard

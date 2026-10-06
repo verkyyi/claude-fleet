@@ -30,6 +30,8 @@
 #      --short`'s 「团队 vN · 个人 vM · 本机独有 K 项（…）」, the client doctor
 #      (fleet-agent-bundle.py) carries the same line, and K = the 本机 rows
 #      `fleet config show` lists; with none (A–F) no launch prints a 配置 line
+#   H  the fleet version (issue #1895): a launch from a version directory stamps
+#      @agent_ver and `expected` writes `ver <sha>`; no version, neither
 #
 # Hermetic: a temp install root (bin/ symlinks + the real conf/ + hooks/), a temp
 # HOME and FLEET_CONF_DIR, fake `claude` / `codex` / `tmux` on PATH.
@@ -257,5 +259,27 @@ sp = importlib.util.spec_from_file_location("b", sys.argv[1]); m = importlib.uti
 print(m.team_status(sys.argv[2]))' "$BIN/fleet-agent-bundle.py" "$WORK/new" ) )
 [ "$cli" = "$line" ] || fail "G: the client doctor's line differs" "$cli / $line"
 ok "G with a personal layer: launch (Claude + Codex), client doctor and status --short print one line; 本机独有 $nloc = show's 本机 rows"
+
+# --- H: the fleet version it runs (issue #1895, EPIC #1906 C2) -------------------------
+# A launch from a version directory (C1's ~/.claude/fleet → fleet.versions/<sha>/)
+# stamps @agent_ver = that sha's 12 hex and `expected` carries `ver <sha>`; the
+# sandbox root of A–G (no versions layout, no checkout) stamps none and writes none.
+fresh_home
+launch new fleet-claude.sh -- '/fleet-claim' >/dev/null
+[ -z "$(stamp @agent_ver)" ] || fail "H: a root with no version stamped @agent_ver" "$(cat "$WORK/stamps")"
+team expected --write --root "$WORK/new" | grep -q '^ver ' && fail "H: a root with no version wrote a ver line"
+H40=0123456789abcdef0123456789abcdef01234567
+VD="$WORK/vh.versions/$H40"; mkdir -p "$VD"
+for f in bin conf hooks mod fleet.conf; do ln -s "$WORK/new/$f" "$VD/$f"; done
+ln -s "$VD" "$WORK/vh"
+launch vh fleet-claude.sh -- '/fleet-claim' >/dev/null
+[ "$(stamp @agent_ver)" = "${H40:0:12}" ] || fail "H: the Claude launch did not stamp @agent_ver ${H40:0:12}" "$(cat "$WORK/stamps" "$WORK/err" 2>/dev/null)"
+fph=$(stamp @agent_cfg)
+launch vh fleet-codex.sh FLEET_AGENT=codex -- 'hello' >/dev/null
+[ "$(stamp @agent_ver)" = "${H40:0:12}" ] || fail "H: the Codex launch did not stamp @agent_ver" "$(cat "$WORK/stamps" "$WORK/err" 2>/dev/null)"
+exph=$(team expected --write --root "$WORK/vh")
+printf '%s\n' "$exph" | grep -qx "ver ${H40:0:12}" || fail "H: expected has no ver line" "$exph"
+[ "$(printf '%s\n' "$exph" | awk '$1=="claude"{print $2}')" = "$fph" ] || fail "H: the fingerprint moved with the version" "$exph / $fph"
+ok "H a version directory → @agent_ver ${H40:0:12} (Claude + Codex), expected's ver line; @agent_cfg unchanged; none without one"
 
 printf 'fleet-agent-cfg-selftest: %d passed\n' "$pass"

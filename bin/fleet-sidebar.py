@@ -1213,7 +1213,8 @@ def row_layout(marker, glyph, tree, name, badge, width, info="", node="", cfg=""
     (text, tag) — `row_text` in what the mark leaves, the mark (`fit_tag`) to
     paint at the row's last cells. No mark: the row is exactly `row_text`.
     A stale configuration (`cfg` == "stale", issue #1783) puts 配置旧 in front of
-    the mark, one space between — `cfg_part(tag)` is that word, painted yellow."""
+    the mark, one space between — `cfg_part(tag)` is that word, painted yellow;
+    `renew` (issue #1895) puts 待换新 there the same way."""
     right = row_right(badge, info)
     room = width - width_of(row_left(marker, glyph, tree, "")) - (width_of(right) + 1 if right else 0)
     tag = fit_tag(node, room)
@@ -1307,10 +1308,14 @@ def fit_tag(node, room):
 
 def cfg_tag(cfg, narrow=False):
     """The 配置旧 word a row whose configuration is stale carries left of its @
-    mark (issue #1783) — `旧` when narrow; "" for `ok` / unknown (empty)."""
-    if cfg != "stale":
-        return ""
-    return tr("sidebar_cfg_stale_narrow" if narrow else "sidebar_cfg_stale")
+    mark (issue #1783) — `旧` when narrow; 待换新 (`换`) for a `renew` row, the
+    same configuration on an older fleet version (issue #1895); "" for `ok` /
+    unknown (empty)."""
+    if cfg == "stale":
+        return tr("sidebar_cfg_stale_narrow" if narrow else "sidebar_cfg_stale")
+    if cfg == "renew":
+        return tr("sidebar_cfg_renew_narrow" if narrow else "sidebar_cfg_renew")
+    return ""
 
 
 def fit_cfg_tag(cfg, room):
@@ -1326,8 +1331,8 @@ def fit_cfg_tag(cfg, room):
 
 
 def cfg_part(tag, cfg):
-    """The leading 配置旧 (or its narrow word) of a row_layout tag, else ""."""
-    if cfg != "stale" or not tag:
+    """The leading 配置旧 / 待换新 (or its narrow word) of a row_layout tag, else ""."""
+    if cfg not in ("stale", "renew") or not tag:
         return ""
     for word in (cfg_tag(cfg), cfg_tag(cfg, narrow=True)):
         if tag == word or tag.startswith(word + " "):
@@ -1902,7 +1907,7 @@ def collect_rows(proc):
 
 
 # wid state glyph name tree badge depth detail node issue pr ctx cfg (issues
-# #1328, #1475, #1532, #1783 — cfg is `stale` / `ok`, absent when unknown)
+# #1328, #1475, #1532, #1783 — cfg is `stale` / `renew` (#1895) / `ok`, absent when unknown)
 ROW_FIELDS = 13
 
 
