@@ -514,8 +514,8 @@ resume	c	resume — a row on another machine only: reopen a just-stopped one thr
     en:keys_dashboard_20)      printf %s 'relaunch the dash (it'"'"'s the always-on hub pane)' ;;
     zh:keys_g_backlog)         printf %s '议题列表' ;;
     en:keys_g_backlog)         printf %s 'backlog' ;;
-    zh:keys_g_backlog_sub)     printf %s '— prefix b 内' ;;
-    en:keys_g_backlog_sub)     printf %s '— inside prefix b' ;;
+    zh:keys_g_backlog_sub)     printf %s '— 议题列表弹窗内' ;;
+    en:keys_g_backlog_sub)     printf %s '— inside the backlog popup' ;;
     zh:keys_backlog_01)        printf %s '显示/隐藏预览窗（正文、标签、评论）' ;;
     en:keys_backlog_01)        printf %s 'toggle the preview pane (body/labels/comments) — off by default' ;;
     zh:keys_backlog_02)        printf %s '筛选 issues' ;;
@@ -538,8 +538,8 @@ resume	c	resume — a row on another machine only: reopen a just-stopped one thr
     en:keys_backlog_10)        printf %s 'close' ;;
     zh:keys_g_config)          printf %s '配置弹窗' ;;
     en:keys_g_config)          printf %s 'config modal' ;;
-    zh:keys_g_config_sub)      printf %s '— prefix c 内' ;;
-    en:keys_g_config_sub)      printf %s '— inside prefix c' ;;
+    zh:keys_g_config_sub)      printf %s '— 配置弹窗内' ;;
+    en:keys_g_config_sub)      printf %s '— inside the config popup' ;;
     zh:keys_config_01)         printf %s '编辑高亮配置项 / 展开分组' ;;
     en:keys_config_01)         printf %s 'edit the highlighted key / expand the section' ;;
     zh:keys_config_02)         printf %s '展开/折叠分组' ;;
