@@ -140,7 +140,7 @@ fetch() {
 # 1 — the client, from the hub: the manifest first (the list this hub's image
 # embeds — its `installer` line is this very script, not a download), then every
 # file on it. Nothing is installed until all of them are here and checked.
-if [ "$NOHUB" = 1 ]; then fetch manifest "$SRC/tokenledger/internal/api/fleetclient/manifest"; else fetch manifest-DELIBERATELY-BROKEN; fi
+if [ "$NOHUB" = 1 ]; then fetch manifest "$SRC/tokenledger/internal/api/fleetclient/manifest"; else fetch manifest; fi
 FILES="$(awk '!/^[[:space:]]*#/ && NF && $2 != "installer" { print $1 }' "$tmp/manifest" | tr '\n' ' ')"
 [ -n "${FILES% }" ] || { say "fleet-install: $FROM 的 manifest 里没有文件"; exit 1; }
 for f in $FILES; do
