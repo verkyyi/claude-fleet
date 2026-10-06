@@ -173,7 +173,11 @@ else:
 print(json.dumps({"protocol": 1, "machine_id": "$MID", "result": r}))
 EOF
 chmod +x "$NH/.claude/fleet/bin/fleet-control.py"
+# Its route is configured, as an operator configures a node's (no tailnet route:
+# CI has none, and a dev box's would make the run depend on it). The client's
+# ssh never dials it — the shim below stands in for the node's sshd.
 ( cd "$NH" && exec env HOME="$NH" CCQUOTA_HUB_URL="$HUB" CCQUOTA_TOKEN="$NTOK" CCQUOTA_FLEET=1 \
+    CCQUOTA_FLEET_NODE_ROUTES=lan=127.0.0.1:22 CCQUOTA_FLEET_NODE_TAILNET=0 \
     "$CCQ" agent --hub "$HUB" --home "$NH" --state "$NH/state" ) >"$WORK/agent.log" 2>&1 &
 AGENT_PID=$!
 has_rows() {
