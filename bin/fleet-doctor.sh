@@ -2128,6 +2128,12 @@ if [ -f "$_ad" ] && [ -d "$(dirname "$0")/../conf/agent-defaults" ] && command -
   command -v uvx >/dev/null 2>&1 || command -v pipx >/dev/null 2>&1 || _arun='fetch needs uvx (brew install uv)'
   command -v github-mcp-server >/dev/null 2>&1 || _arun="${_arun:+$_arun; }github runs via npx until brew install github-mcp-server"
   _ahead="$(printf '%s\n' "$_aout" | head -1)"
+  # The team layer (issue #1726): the version applied here, from
+  # agent-effective.json — nothing at all when this login never had one.
+  _ateam=''
+  [ -f "$(dirname "$0")/fleet-agent-team.py" ] \
+    && _ateam="$(FLEET_CONF_DIR="$conf_dir" python3 "$(dirname "$0")/fleet-agent-team.py" status --short 2>/dev/null)"
+  [ -n "$_ateam" ] && _ahead="$_ahead · $_ateam"
   case "$_arc" in
     0) pass agents "${_ahead#ok } (conf/agent-defaults)${_arun:+ — $_arun}" ;;
     1) warn agents "$_ahead — $(printf '%s\n' "$_aout" | sed '1d; s/^missing *//; s/  */ /g' | paste -sd ';' - | sed 's/;/; /g') (fix: the next sync fills them, or now: python3 $_ad apply; keep one for this login by listing it in $conf_dir/agent-overrides.json)${_arun:+ — $_arun}" ;;

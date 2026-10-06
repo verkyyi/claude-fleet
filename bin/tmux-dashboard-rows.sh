@@ -359,8 +359,11 @@ WLIST=${WLIST//\\037/$US}
 #              hub itself has been silent longer than FLEET_HUB_SESSIONS_STALE
 #              (60s; global/hub_ok, #1483): the row stays, dimmed, under its
 #              machine's 失联 heading
-#   @expand    1, so a remote parent never hides its subtree behind a caret no key
-#              can open
+#   @expand    THIS machine's word on it (issue #1749): a remote row's fold bit
+#              lives here, never on the other machine — global/remote_fold_<sess>,
+#              one expanded worker_id per line, written by dash-fold-toggle.sh.
+#              Absent ⇒ collapsed, the local rows' polarity, so a client (where
+#              EVERY row is remote) folds like a node does
 # Off, or no cache: not one extra line, and no file read at all when off.
 #   needs      the window's @claude_needs (cache field 10, #1475), so a remote
 #              row's `!` says which — ask / perm / blocked — like a local one
@@ -395,6 +398,8 @@ RME=''; RN_IDX=' '; RN_K=0; LGRP_BASE=1000000
 HUBSRC=0; [ "$SIDEBAR" = 1 ] && [ "${FLEET_SIDEBAR_SOURCE:-local}" = hub ] && HUBSRC=1
 if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remote_$FLEET_SESSION" ]; then
   RLIST=''; _rn=90000; _rts=0; _rstale=0; _rlostn=' '; _rlostw=' '; _rrows=(); _lwids=' '
+  # the remote rows' fold bits (issue #1749): the worker_ids opened on THIS machine
+  _rexpd=$'\n'; [ -s "$G/remote_fold_$FLEET_SESSION" ] && _rexpd+="$(cat "$G/remote_fold_$FLEET_SESSION")"$'\n'
   # 失联 is decided ONCE, off global/hub_ok (#1483) — the cache's own #ts only
   # for a cache from before that file existed (fleet_status_hub_ok's fallback)
   # shellcheck disable=SC2034  # FLEET_STATUS_G is read by the lib sourced on the same line
@@ -450,9 +455,10 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
     # parent lost: _rlostw holds row ids (`wid:`-prefixed), the origin is bare
     [ -n "$r_orig" ] && case "$_rlostw" in *" wid:$r_orig "*) r_orig='' ;; esac
     _rn=$((_rn + 1)); _rno=''; [ -n "$r_repo" ] || _rno=1   # no repo = @norepo
-    RLIST+="$FLEET_SESSION$US$_rn$US$r_name$US$US$r_state$US$US$r_wid$US$r_iss$US$r_orig$US$US$r_agent$US${r_node:-?}$US$r_needs${US}1$US$US$US$US$US$US$r_repo$US$_rno$US$US$US$US"$'\n'
+    _rexp=''; case "$_rexpd" in *$'\n'"${r_wid#wid:}"$'\n'*) _rexp=1 ;; esac
+    RLIST+="$FLEET_SESSION$US$_rn$US$r_name$US$US$r_state$US$US$r_wid$US$r_iss$US$r_orig$US$US$r_agent$US${r_node:-?}$US$r_needs$US$_rexp$US$US$US$US$US$US$r_repo$US$_rno$US$US$US$US"$'\n'
   done
-  unset _rrows _rr
+  unset _rrows _rr _rexpd _rexp
   WLIST="$RLIST$WLIST"
   if [ "$HUBSRC" = 1 ] && [ "$_rstale" != 1 ]; then
     # the hub source (#1480): of this fleet's own lines keep the windows the cache

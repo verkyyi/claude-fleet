@@ -640,6 +640,27 @@ shell_env "$pick"
 if [ "$mode" = env ]; then printf '%s\n' "$SHELL_ENV"; exit 0; fi
 export_env
 
+# team_check — the hub's team layer (issue #1726, EPIC #1718 C8): its version
+# moved since the last start → composed again (fleet default < team < local), in
+# the background, never in the way of the start. $BIN may be the conf-free
+# mirror, so the package root is the script's REAL directory's parent. A computer
+# with the full install (~/.claude/fleet) leaves it to that install's tick; no
+# hub is nothing at all (exit 3, no file written).
+team_check() {
+  local tt root nr sr=()
+  tt="$BIN/fleet-agent-team.py"
+  [ -f "$tt" ] || return 0
+  root=$(python3 -c 'import os, sys; print(os.path.dirname(os.path.dirname(os.path.realpath(sys.argv[1]))))' "$tt") || return 0
+  nr="${FLEET_INSTALL_NODE_ROOT:-$HOME/.claude/fleet}"
+  if [ "$(cd "$root" && pwd -P)" != "$(cd "$nr" 2>/dev/null && pwd -P)" ]; then
+    [ -f "$nr/bin/fleet-lib.sh" ] && return 0
+    sr=(--scripts-root "$root")
+  fi
+  mkdir -p "$CACHE" 2>/dev/null
+  ( nohup python3 "$root/bin/fleet-agent-team.py" sync --root "$root" ${sr[@]+"${sr[@]}"} </dev/null >"$CACHE/team.log" 2>&1 & )
+}
+team_check
+
 # client_open — this run is THE client (issue #1715): its device remembered for
 # its tty (the name tmux gives its client), the lease taken, the clients already
 # attached here to standby. A hub out of reach does not stop the start: the

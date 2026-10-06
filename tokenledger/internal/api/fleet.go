@@ -67,6 +67,11 @@ type fleetPrincipal struct {
 	// scope is nil for the operator (sees everything), else the (machine,
 	// login) pairs this caller may see.
 	scope func(hostname, osUser string) bool
+	// From is the machine a node's own request came from (its roster
+	// hostname, /v1/node/place and /v1/node/move): a personal machine takes
+	// work asked from itself only (claude-fleet#1721). "" for a person's or
+	// the operator's door — their client lease's host stands in.
+	From string
 }
 
 // All reports whether the caller sees every machine.
@@ -201,7 +206,11 @@ func consistentWorkers(fleetID string, raw json.RawMessage) json.RawMessage {
 			continue
 		}
 		fid, k, err := fleetid.ParseWorkerID(id)
-		if err != nil || fid != fleetID || k != key {
+		// A keyless window (a no-repo session, claude-fleet#1749) is listed under
+		// its identity: <fleet UUID>/<fleet_id>, the id half its own "identity".
+		ident, _ := w["identity"].(string)
+		byIdent := key == "" && ident != "" && k == ident && fleetid.IsUUID(k)
+		if err != nil || fid != fleetID || (k != key && !byIdent) {
 			w["worker_id"] = nil
 		}
 	}

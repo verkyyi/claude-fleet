@@ -308,7 +308,12 @@ class HubTests(HubFixture):
             self.assertEqual(len(result["workers"]), 1)
             self.assertEqual(result["workers"][0]["worktree"], "/fixture/中文")
             self.assertEqual(result["workers"][0]["handle"], "a1")
-            self.assertEqual((result["workers"][0]["worker_id"], result["workers"][0]["lifecycle"]), (None, "awake"))
+            # no key (its worktree is no scratch-<N>): listed under the identity the
+            # adapter mints for it (issue #1749), never a borrowed key
+            ident = result["workers"][0]["identity"]
+            self.assertRegex(ident or "", r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+            self.assertEqual((result["workers"][0]["worker_id"], result["workers"][0]["key"], result["workers"][0]["lifecycle"]),
+                             (self.fleet + "/" + ident, None, "awake"))
         finally:
             subprocess.run([*argv, "kill-server"], env=env, stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL, timeout=10)

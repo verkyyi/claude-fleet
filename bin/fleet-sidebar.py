@@ -1200,7 +1200,9 @@ def fold_now(rows, key, verb, current, cache):
     """The ←/→ guess: (rows, holder) — holder is the row whose block opened or
     shut, None when this key folds nothing here (the producer still decides)."""
     keys = [key_of(row) for row in rows]
-    if not key or key.startswith("wid:") or key not in keys:
+    # a `wid:` row (another machine's) folds too (issue #1749): its bit is this
+    # machine's own file, so on a client — where every row is one — ←/→ work
+    if not key or key not in keys:
         return rows, None
     i = keys.index(key)
     if verb == "expand":

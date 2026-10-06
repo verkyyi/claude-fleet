@@ -122,6 +122,19 @@ difference; `/fleet-epic-plan` step 4 numbers them 0 and 16–23, same wording.
 - **有空再做 only extends the same theme.** An unrelated backlog bug stays on the
   backlog, however cheap; the 「更多风险与拆分理由」 fold names what was left out
   and why, so leaving it out reads as a choice.
+- **A visual member ships a clickable prototype** (issue #1754; rule 24 in
+  `/fleet-epic-plan`). A member that changes something the user sees — dash /
+  侧栏 rows, 状态栏, 弹出菜单, 网页, 小程序 pages, a report page's 样式 — gets a
+  single-file HTML prototype in the scratchpad, hosted by `share.sh`, linked
+  from the card's **upper layer** with the frame's
+  `<p class="proto"><a href="…">▶ 打开可交互原型</a></p>` (under 怎么算成功,
+  never in the fold). It uses the real data shape (no lorem), switches the key
+  scenarios (another device, 失联, 空态, 出错), compares 现在 / 改后, answers
+  clicks AND keys, works at phone width, and explains itself without the design
+  page. An ASCII sketch or a still is not a delivery. Edit the design → edit the
+  prototype, `share.sh --refresh` (same URL). At filing the link rides in the
+  member's body as `**交互原型**：<url>` beside 上线证据. A non-visual member
+  drops the `.proto` line.
 - **需要你定的事 is real decisions only** — each row a genuine either/or with one
   concrete recommendation, no code, no paths, no parameter spelling. The 不做 list
   lives in 范围, never here.
@@ -137,7 +150,8 @@ Read your page the way the decider will — surface only — and walk the rules 
 
 `--lint` catches what a machine can see — keys, implementation nouns, file names,
 metrics with no / meaningless / mismatched numbers, a 为谁 with no count, code or
-不做 in the decision table. Treat each WARN as a question, not a verdict (#787
+不做 in the decision table, a visual member card (侧栏 / 状态栏 / 菜单 / 页面 /
+界面 / 样式 …) with no upper-layer 「▶ 打开可交互原型」 link (`prototype`). Treat each WARN as a question, not a verdict (#787
 itself warns on its 「PR / CI」 card), and know what it cannot see: whether the
 surface answers the theme's question, whether the subtitle says where it stops,
 whether 有空再做 is on theme. Those are yours.
@@ -149,7 +163,7 @@ whether 有空再做 is on theme. Those are yours.
 | `#delivered` | report | **first section**: what a user can do now that they could not before — capabilities in the reader's words, not PR counts, no keys |
 | `#metrics` | both | 指标 — surface 指标 / 现在 / 目标 (report: 之前 / 现在 / 目标), numbers only; the 「怎么量」 fold carries 成员 / 多久能读出来 / 读数口径. The plan writes it from the theme's diagnosis (「本批不量」 when there is none, never blank, never invented); the report fills 现在 row by row (「⟨date⟩ 再看」 / 「本批未声明指标」, never back-filled) |
 | `#charter` | plan | 先回答 (optional — only when the theme is a question: 别人怎么做 / 我们怎么做 table + 我们的价值, sources folded), then 范围 — 做 / 不做 as short plain items; 共同约定 folded — verbatim into the parent body |
-| `#members` | both | 要做的事 — one `.ob` per member, `id="m-<key>"`, wrapping a `<details class="card">` that is ONE line (名称 + 一句) until tapped, grouped by theme (`h3.grp`), 有空再做 last. Tap 1: 目标 / 为谁 / 解决什么 / 怎么算成功 (+ the report's `.proof` grid); tap 2, `<details class="fold">`: 编号 / 来源 · 方案 · 接口·约定 · 依赖 · 完成判据 · **上线证据** — the card IS the sub-issue body, both layers |
+| `#members` | both | 要做的事 — one `.ob` per member, `id="m-<key>"`, wrapping a `<details class="card">` that is ONE line (名称 + 一句) until tapped, grouped by theme (`h3.grp`), 有空再做 last. Tap 1: 目标 / 为谁 / 解决什么 / 怎么算成功 (+ the report's `.proof` grid); a visual member adds its `p.proto` 「▶ 打开可交互原型」 link here (plan only); tap 2, `<details class="fold">`: 编号 / 来源 · 方案 · 接口·约定 · 依赖 · 完成判据 · **上线证据** — the card IS the sub-issue body, both layers |
 | `#gaps` | report | **还差什么 · 下一步** (issue #929) — one two-column table 还差什么 / 建议下一步, one row per gap, one short clause per cell; an empty kind (待部署, 要人做的) is no row; the next-batch suggestion is a row (「下一批主题：…」); no lede, no trailing note, no 这批不做. Carries the `#next` anchor. The band's 还差什么 = its row count |
 | `#risks` | plan | 可能出的问题 — one plain sentence each; technical risks + why this split in the fold |
 | `#signoff` | plan | 需要你定的事 — 待决 + 发起人拍板 in one 事项 / 建议 table, a default on every row, 「（批后）」 marks; carries the `#open` anchor. Recorded with the date after the nod |

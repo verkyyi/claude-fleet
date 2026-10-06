@@ -4669,6 +4669,20 @@ _fleet_node_env_val() {
   sed -n "s/^$1=//p" "$f" | head -n 1
 }
 
+# fleet_spawn_node_default → what a spawn follows when neither --node nor
+# FLEET_SPAWN_NODE names a machine (issue #1721, EPIC #1718 C3): `local` on a
+# person's own computer (node.env CCQUOTA_FLEET_PERSONAL=1 while compute is on —
+# `fleet node compute on --personal`, a laptop's default), so what its client
+# opens runs on it; `auto` everywhere else, exactly as before.
+fleet_spawn_node_default() {
+  if [ "$(_fleet_node_env_val CCQUOTA_FLEET_PERSONAL 2>/dev/null)" = 1 ] \
+     && [ "$(_fleet_node_env_val CCQUOTA_FLEET_COMPUTE 2>/dev/null)" != 0 ]; then
+    echo local
+  else
+    echo auto
+  fi
+}
+
 # _fleet_hub_env — export the hub credentials the environment lacks, from node.env.
 # Call it ONLY inside the subshell that runs the hub command
 # (`out=$(_fleet_hub_env; bash -c … )`): the exports must die with that call and

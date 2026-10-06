@@ -294,6 +294,12 @@ type Hello struct {
 	// sessions (claude-fleet#1720) — nil when bin/fleet-node-probe.sh never
 	// ran here, which the hub reads exactly as before the probe existed.
 	Probe *NodeProbe `json:"probe,omitempty"`
+	// Personal is a person's own computer (claude-fleet#1721, `fleet node
+	// compute on --personal`, a laptop's default): an auto placement never
+	// picks it, and a start lands on it only when it was asked for FROM it —
+	// its own client, or a session already running there. false/absent is a
+	// shared machine, as every node was.
+	Personal bool `json:"personal,omitempty"`
 }
 
 // NodeProbe is bin/fleet-node-probe.sh's verdict (claude-fleet#1720), read off
@@ -420,6 +426,8 @@ type Heartbeat struct {
 	// probe reach the hub without a reconnect.
 	ComputeForce bool       `json:"compute_force,omitempty"`
 	Probe        *NodeProbe `json:"probe,omitempty"`
+	// Personal repeats the hello's (claude-fleet#1721), re-read every beat.
+	Personal bool `json:"personal,omitempty"`
 
 	AgentVersion string    `json:"agent_version,omitempty"`
 	ObservedAt   time.Time `json:"observed_at"`
@@ -869,4 +877,20 @@ type SSHRelayHello struct {
 	Sig     string `json:"sig,omitempty"`
 	Code    string `json:"code,omitempty"`
 	Message string `json:"message,omitempty"`
+}
+
+// The team configuration (claude-fleet#1726, EPIC #1718 C8): the layer the
+// hub hands every computer between the fleet's defaults and the login's own.
+// GET reads it by any of the hub's doors (a viewer door, a node's enrollment
+// token); a client-only computer, which holds neither, POSTs {cert, sig, ts}
+// signed under TeamBundleSigNamespace over TeamBundleSigMessage(ts). PUT is
+// the operator's alone.
+const (
+	TeamBundlePath         = "/v1/fleet/team-bundle"
+	TeamBundleSigNamespace = "fleet-team@claude-fleet"
+)
+
+// TeamBundleSigMessage is what a client signs to read the team layer.
+func TeamBundleSigMessage(unix int64) string {
+	return fmt.Sprintf("fleet-team %d", unix)
 }

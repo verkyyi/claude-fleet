@@ -785,11 +785,11 @@ for line in open(ipath, encoding="utf-8"):
         continue
     (window, issue, scratch, worktree, state, agent, handle, lifecycle, repo), extra = row
     name, owid, needs, ident = extra.get("name") or "", extra.get("origin_wid"), extra.get("needs"), extra.get("identity")
-    if not issue and scratch != "1":
-        continue
+    if not issue and scratch != "1" and not ident:
+        continue                                     # keyless: listed by identity (#1749)
     number = int(issue) if issue.isdigit() and int(issue) > 0 else None
     key = worker_key(number, scratch == "1", worktree, repo)
-    wid = worker_identity(uuid, key)
+    wid = worker_identity(uuid, key or ident)
     if not wid:
         continue
     sessions.append({"worker_id": wid, "fleet_id": uuid, "fleet_name": sess, "machine_name": host,

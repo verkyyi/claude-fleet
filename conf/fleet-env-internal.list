@@ -138,6 +138,7 @@ FLEET_PROBE_CURL                   seam: the curl fleet-node-probe.sh measures t
 FLEET_PROBE_OS                     seam: fleet-node-probe.sh's uname -s (Darwin → pmset, else BAT*; #1720)
 FLEET_PROBE_PMSET                  seam: the pmset fleet-node-probe.sh reads the battery + sleep setting with (#1720)
 FLEET_PROBE_UNSUPPORTED            knob: the egress regions fleet-node-probe.sh calls unsupported_region (default CN HK MO RU BY IR KP SY CU; #1720)
+FLEET_SLEEPWATCH_SELFTEST          seam: fleet-node-sleepwatch.sh posts one sleep + one wake to itself and exits (#1721)
 FLEET_MACHINE_SESSIONS_DIR         path: the machine-wide per-login session-count dir (default /Users/Shared/claude-fleet/sessions)
 FLEET_HEAVY_HELD                   handoff: fleet-heavy.sh sets it for its child so nested heavies pass through
 FLEET_HISTORY_LEDGER               path: state/log location override (fleet-history.sh)
@@ -294,6 +295,8 @@ FLEET_SYNC_LOGINS_PGREP            seam: an injectable command/path for tests (f
 FLEET_SYNC_LOGINS_SUDO             seam: an injectable command/path for tests (fleet-sync-logins.sh)
 FLEET_SYNC_LOGINS_TMP              seam: an injectable command/path for tests (fleet-sync-logins.sh)
 FLEET_SYSTEMD_USER_DIR             path: systemd user unit dir override (fleet-install-apply.sh)
+FLEET_TEAM_BUNDLE_CMD              seam: fleet-agent-team.py prints the hub's team-bundle answer from this command (#1726)
+FLEET_TEAM_TIMEOUT                 knob: seconds fleet-agent-team.py waits on the hub's team-bundle read (8, #1726)
 FLEET_TMUX_PREFIX                  handoff: the operator's tmux prefix, read by fleet-up into the keymap
 FLEET_TMUX_PREFIX2                 handoff: the operator's second tmux prefix, read by fleet-up into the keymap
 FLEET_TOKEN_PROBE                  seam: a fake token-probe command

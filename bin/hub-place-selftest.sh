@@ -44,6 +44,9 @@
 #           Hub on only: with CCQUOTA_FLEET unset a failed spawn is as today (OFF).
 #   ASYNC   --async asks with --wait 0; the operation id is left in the dispatch
 #           file and `fleet-children.py show --json` lists it.
+#   PERSONAL (issue #1721) a personal login (node.env CCQUOTA_FLEET_PERSONAL=1,
+#           compute on) opens its spawns here when nothing names a machine;
+#           FLEET_SPAWN_NODE still wins; compute off / no line ⇒ auto
 #   PERFLEET (issue #1539) the hub switch and FLEET_SPAWN_NODE are read PER FLEET:
 #           two fleets on one login, one conf `CCQUOTA_FLEET=0` and one `=1`, do
 #           not affect each other whichever way the login-wide value points; a
@@ -378,6 +381,23 @@ ok "SPAWN_NODE --node m4 overrides the knob"
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER="$REMOTE_LINE" FLEET_SPAWN_NODE='m4; rm -rf /' run_spawn 258
 place_has '--node auto '                         || fail "SPAWN_NODE a value that is no machine name reads as auto"
 ok "SPAWN_NODE garbage → auto"
+
+# ===== PERSONAL (issue #1721): a person's own computer opens its spawns here by default
+[ -e "$WORK/conf/node.env" ] && fail "setup: a node.env already in the sandbox conf"
+printf 'CCQUOTA_FLEET_COMPUTE=1\nCCQUOTA_FLEET_PERSONAL=1\n' > "$WORK/conf/node.env"
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER="$REMOTE_LINE" run_spawn 258
+[ -s "$PLACE_LOG" ]                              && fail "PERSONAL with no knob must not ask the hub"
+tmux_has 'new-window'                            || fail "PERSONAL opens it here"
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER="$REMOTE_LINE" FLEET_SPAWN_NODE=auto run_spawn 258
+place_has '--node auto '                         || fail "PERSONAL an explicit FLEET_SPAWN_NODE=auto still asks the hub"
+printf 'CCQUOTA_FLEET_COMPUTE=0\nCCQUOTA_FLEET_PERSONAL=1\n' > "$WORK/conf/node.env"
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER="$REMOTE_LINE" run_spawn 258
+place_has '--node auto '                         || fail "PERSONAL a login that only coordinates is not personal: auto"
+printf 'CCQUOTA_FLEET_COMPUTE=1\n' > "$WORK/conf/node.env"
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER="$REMOTE_LINE" run_spawn 258
+place_has '--node auto '                         || fail "PERSONAL no personal line: auto, as before"
+rm -f "$WORK/conf/node.env"
+ok "PERSONAL node.env CCQUOTA_FLEET_PERSONAL=1 → local by default; the knob, compute off, or no line → auto"
 
 base=$(CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET='' FLEET_HUB_PLACE_CMD='' FLEET_HUB_LEASE_CMD='' run_spawn 258; snap)
 CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET='' FLEET_HUB_PLACE_CMD='' FLEET_HUB_LEASE_CMD='' FLEET_SPAWN_NODE=m4 run_spawn 258

@@ -74,7 +74,8 @@ case "$verb" in expand|collapse) ;; *) exit 0 ;; esac
 # the hub's heading shape ({1}=hdr, {4}=target) folds onto the sidebar's `hdr:<target>`
 [ "$target" = hdr ] && target="hdr:${4:-}"
 case "$target" in ''|hdr:|none) exit 0 ;; esac
-case "$target" in wid:*) exit 0 ;; esac   # another machine's row: read-only (#1423)
+# another machine's row (`wid:<worker_id>`, #1423): its fold is THIS machine's —
+# handled below, once the session is known (issue #1749)
 # landed rows have no tmux window to hang @expand on — fleet-history.sh owns that
 # view's fold, keyed by ledger key in a per-fleet file.
 case "$target" in landed:*) exec bash "$BIN/fleet-history.sh" fold "$verb" "$target" ;; esac
@@ -123,6 +124,63 @@ if [ "${target#hdr:}" != "$target" ]; then
   fi
   # The heading keeps its index either way (only rows BELOW it come and go), so
   # a plain reload leaves the cursor on it.
+  echo "reload(bash $ROWS)"
+  exit 0
+fi
+
+# --- another machine's row: fold it HERE (issue #1749) -------------------------
+# A remote row has no tmux window to hang @expand on, and the other machine's
+# tmux is never written (#1423: a remote row is read-only THERE). So its bit is
+# this machine's own: global/remote_fold_<sess>, one OPENED worker_id per line —
+# absent ⇒ collapsed, @expand's polarity, so a client (where every row is a
+# `wid:`) folds exactly as a node's own list does. The tree is the remote cache's
+# own (fleet-hub-sessions.sh: field 1 `wid:<worker_id>`, field 9 the parent's
+# bare worker_id), the one the producer nests by; a chain that leaves it (a
+# parent on this machine) stops there. The file is per-fleet and holds only ids
+# still in the cache once rewritten, so it cannot grow past the live list.
+if [ "${target#wid:}" != "$target" ]; then
+  [ -n "$SESS" ] || exit 0
+  G="${TMPDIR:-/tmp}/.claude-dash/global"
+  RC="$G/remote_$SESS"; RF="$G/remote_fold_$SESS"
+  [ -s "$RC" ] || exit 0
+  self=${target#wid:}
+  RTAB=$'\n'   # worker_id \t parent worker_id
+  while IFS=$US read -r r_wid _ _ _ _ _ _ _ r_orig _; do
+    case "$r_wid" in wid:*/*) RTAB+="${r_wid#wid:}"$'\t'"$r_orig"$'\n' ;; esac
+  done < "$RC"
+  case "$RTAB" in *$'\n'"$self"$'\t'*) ;; *) exit 0 ;; esac
+  OPEN=$'\n'; [ -s "$RF" ] && OPEN+="$(cat "$RF")"$'\n'
+  r_isopen() { case "$OPEN" in *$'\n'"$1"$'\n'*) return 0 ;; esac; return 1; }
+  r_haskids() { case "$RTAB" in *$'\t'"$1"$'\n'*) return 0 ;; esac; return 1; }
+  r_parent() { local m=${RTAB#*$'\n'"$1"$'\t'}; rpar=${m%%$'\n'*}; }
+  if [ "$verb" = expand ]; then
+    r_isopen "$self" && exit 0
+    r_haskids "$self" || exit 0
+    OPEN+="$self"$'\n'
+  else
+    holder=''; cur=$self; hops=0
+    while [ "$hops" -lt 16 ]; do
+      if r_isopen "$cur" && r_haskids "$cur"; then holder=$cur; break; fi
+      r_parent "$cur"
+      [ -n "$rpar" ] || break
+      case "$RTAB" in *$'\n'"$rpar"$'\t'*) ;; *) break ;; esac
+      cur=$rpar; hops=$((hops + 1))
+    done
+    [ -n "$holder" ] || exit 0
+    OPEN=${OPEN//$'\n'"$holder"$'\n'/$'\n'}
+  fi
+  # keep only ids the cache still lists — a reaped session's bit goes with it
+  new=''
+  while IFS= read -r w; do
+    [ -n "$w" ] || continue
+    case "$RTAB" in *$'\n'"$w"$'\t'*) new+="$w"$'\n' ;; esac
+  done <<< "$OPEN"
+  mkdir -p "$G" 2>/dev/null || true
+  if [ -n "$new" ]; then
+    printf '%s' "$new" > "$RF.$$" && mv -f "$RF.$$" "$RF" || { rm -f "$RF.$$"; exit 0; }
+  else
+    rm -f "$RF"
+  fi
   echo "reload(bash $ROWS)"
   exit 0
 fi
