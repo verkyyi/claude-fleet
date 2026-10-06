@@ -33,7 +33,12 @@
 #      repo paths on GitHub's stable (不接, FLEET_INSTALL_SRC), in the repo's own
 #      layout, no git. A copy the manifest no longer lists goes, so the tree is
 #      exactly the manifest's; `.client-version` records which client it is
-#      (#1722, with a hub). Already a full install here (a git checkout, or one
+#      (#1722, with a hub). Run again on a client it installed (one with a
+#      .client-version), the new client goes BESIDE the one in use, whole, into
+#      <home>.versions/<version>/ and <home> — a link — is switched in one
+#      rename(2), the version before kept as .prev; with the client running it
+#      is only staged, and the client's keeper switches it once you are idle
+#      (#1900). Already a full install here (a git checkout, or one
 #      with bin/fleet-up.sh) → not one file is downloaded or removed: that
 #      install follows stable by itself. A ~/.local/bin/fleet of two lines runs
 #      the real one. Two trees on one computer (the client's
@@ -257,7 +262,8 @@ done
 
 mkdir -p "$BIN" "$CONF"
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/fleet-install.XXXXXX")"
-trap 'rm -rf "$tmp"' EXIT INT TERM HUP
+LOCK='' STG=''
+trap 'rm -rf "$tmp"; [ -z "$STG" ] || rm -rf "$STG"; [ -z "$LOCK" ] || rm -rf "$LOCK"' EXIT INT TERM HUP
 
 # fetch <path> [<rel>] → $tmp/<path>, from $FROM/<rel> (default <path>), and
 # when that fails from $ALT/<rel> (GitHub's raw host at the same commit, #1805).
@@ -277,6 +283,126 @@ fetch() {
     got="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$tmp/$1")"
     [ "$got" = "$want" ] || { say "fleet-install: $1 下载不完整（校验不符）"; exit 1; }
   fi
+}
+
+# stale_in <dir> — what an earlier install left in <dir> that the manifest no
+# longer lists (bin/ conf/ at the top, the Agent package's hooks/ commands/
+# skills/ mod/ at all depths, #1725), one relative path per line
+stale_in() {
+  for d in bin conf; do
+    [ -d "$1/$d" ] || continue
+    for old in "$1/$d"/*; do
+      [ -f "$old" ] || continue
+      rel="$d/${old##*/}"
+      case " $FILES" in *" $rel "*) ;; *) printf '%s\n' "$rel" ;; esac
+    done
+  done
+  for d in hooks commands skills mod; do
+    [ -d "$1/$d" ] || continue
+    find "$1/$d" -type f 2>/dev/null | while IFS= read -r old; do
+      rel="${old#"$1"/}"
+      case " $FILES" in *" $rel "*) ;; *) printf '%s\n' "$rel" ;; esac
+    done
+  done
+}
+# mark_get <file> <key> — one `key=value` line of a .client-version
+mark_get() { sed -n "s/^$2=//p" "$1" 2>/dev/null | head -n 1; }
+# vkey <version> — a version as a directory name (fleet-client-update.sh's)
+vkey() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_' | cut -c1-80; }
+# client_running — the client's tmux server is up (fleet-client-update.sh's
+# shell_live): its files are in use, so they are staged, not switched
+client_running() {
+  _s="${FLEET_SHELL_SESSION:-fleet-shell}"
+  case "$_s" in ''|*[!A-Za-z0-9._-]*) _s=fleet-shell ;; esac
+  command -v tmux >/dev/null 2>&1 && tmux -L "$_s" has-session -t "=$_s" 2>/dev/null
+}
+
+# install_in_place — the downloaded files over the ones in $ROOT, file by file
+# (a first install; a home the line did not install, which carries no
+# .client-version; an install with no version to name)
+install_in_place() {
+  mkdir -p "$ROOT"
+  for f in $FILES; do
+    mkdir -p "$ROOT/$(dirname "$f")"
+    mv -f "$tmp/$f" "$ROOT/$f"
+  done
+  # A copy the manifest no longer lists — an earlier install's — goes: the tree
+  # is the manifest's, file for file. Never in a full install.
+  stale_in "$ROOT" > "$tmp/stale.list"
+  while IFS= read -r rel; do
+    rm -f "${ROOT}/${rel}"; say "  去掉了不再发的旧文件 ${rel}"
+  done < "$tmp/stale.list"
+  for d in hooks commands skills mod; do
+    [ -d "$ROOT/$d" ] && find "$ROOT/$d" -depth -type d -empty -exec rmdir {} \; 2>/dev/null
+  done
+  # unchanged but for the time → the file is left as it was (a rerun changes nothing)
+  if [ "$MARK" = 1 ] && [ "$(grep -v '^at=' "$tmp/client-version" 2>/dev/null)" != "$(grep -v '^at=' "$ROOT/.client-version" 2>/dev/null)" ]; then
+    mv -f "$tmp/client-version" "$ROOT/.client-version"
+  fi
+  return 0
+}
+
+# install_versioned — the downloaded client into <home>.versions/<version>/,
+# then <home> switched to it (or, with the client running, staged as .next)
+install_versioned() {
+  VERS="$ROOT.versions"
+  # shellcheck source=fleet-versions-lib.sh
+  . "$tmp/bin/fleet-versions-lib.sh"
+  # the client in use already is this one, file for file: nothing to do
+  _same=1
+  for f in $FILES; do cmp -s "$tmp/$f" "$ROOT/$f" || { _same=0; break; }; done
+  [ "$_same" = 1 ] && [ -n "$(stale_in "$ROOT")" ] && _same=0
+  [ "$(grep -v '^at=' "$tmp/client-version")" = "$(grep -v '^at=' "$ROOT/.client-version" 2>/dev/null)" ] || _same=0
+  if [ "$_same" = 1 ]; then
+    say "fleet: ${ROOT} 已是这一版，不重装"
+    return 0
+  fi
+  # one stager at a time — the keeper's `stage` takes the same lock
+  mkdir -p "${VERS}" || { say "fleet-install: 写不了 ${VERS}"; exit 1; }
+  _n=0
+  while ! mkdir "$VERS/.lock" 2>/dev/null; do
+    if [ "$_n" -ge 120 ] || [ -n "$(find "$VERS/.lock" -maxdepth 0 -mmin +15 2>/dev/null)" ]; then
+      rm -rf "$VERS/.lock"
+      mkdir "$VERS/.lock" 2>/dev/null && break
+      say "fleet-install: 拿不到 ${VERS}/.lock"; exit 1
+    fi
+    [ "${_n}" = 0 ] && say "fleet: 后台正在取新版，等它取完…"
+    _n=$((_n + 1)); sleep 1
+  done
+  LOCK="$VERS/.lock"
+  _cur=$(fleet_versions_current "$ROOT")
+  _key=$(vkey "$VER"); [ -n "$_key" ] || _key="install-$(date +%s)"
+  # the same version again, but not the same files (a repair): beside it too
+  [ "$_key" = "$_cur" ] && _key="$_key-$(date +%s)"
+  STG="$VERS/.staging-install.$$"
+  rm -rf "$STG"; mkdir -p "$STG"
+  for f in $FILES; do
+    mkdir -p "$STG/$(dirname "$f")"
+    mv -f "$tmp/$f" "$STG/$f"
+  done
+  mv -f "$tmp/client-version" "$STG/.client-version"
+  : > "$STG/.staged"
+  rm -rf "${VERS:?}/$_key"
+  mv "$STG" "$VERS/$_key"; STG=''
+  if client_running; then
+    printf '%s\n' "$_key" > "$VERS/.next.tmp" && mv -f "$VERS/.next.tmp" "$VERS/.next"
+    say "fleet: 客户端正在运行 — 新版装在 ${VERS}/${_key}，等你空闲时原地换上（正在用的一个字节不动）"
+  else
+    _old=$_cur
+    if [ -z "$_old" ]; then
+      # a home that is still a plain directory becomes a version of its own
+      _old=$(vkey "$(mark_get "$ROOT/.client-version" version)"); [ -n "$_old" ] || _old=adopted
+      { [ "$_old" != "$_key" ] && [ ! -e "$VERS/$_old" ]; } || _old="$_old-$(date +%s)"
+      fleet_versions_adopt "${ROOT}" "${_old}" || { say "fleet-install: ${ROOT} 挪不进 ${VERS}，旧版照旧在用；新版留在 ${VERS}/${_key}"; exit 1; }
+    fi
+    fleet_versions_point "${ROOT}" "${VERS}/${_key}" || { say "fleet-install: 切不到新版，旧版照旧在用；新版留在 ${VERS}/${_key}"; exit 1; }
+    printf '%s\n' "$_old" > "$VERS/.prev"
+    rm -f "$VERS/.next"
+    fleet_versions_prune "$ROOT" "$_key" "$_old"
+    say "fleet: 已整版切到 ${_key}（${VERS}/${_key}）· 上一版 ${_old} 留作 .prev — 退回：ln -sfn ${VERS}/${_old} ${ROOT}"
+  fi
+  rm -rf "$LOCK"; LOCK=''
+  return 0
 }
 
 # ── 1 — the part everyone has, into the one directory ─────────────────────
@@ -336,43 +462,29 @@ PYV
     # a script or a sourced lib (a comment first; a proxy's HTML page starts with '<')
     case "$f" in bin/*) [ "$(head -c 1 "$tmp/$f")" = '#' ] || { say "fleet-install: $f 不是脚本（入口返回了别的东西）"; exit 1; } ;; esac
   done
-  mkdir -p "$ROOT"
+  # bin/ is executable; elsewhere a script (a skill's share.sh) keeps its #!
   for f in $FILES; do
-    mkdir -p "$ROOT/$(dirname "$f")"
-    # bin/ is executable; elsewhere a script (a skill's share.sh) keeps its #!
     case "$f" in bin/*) chmod 0755 "$tmp/$f" ;; *) if [ "$(head -c 2 "$tmp/$f")" = '#!' ]; then chmod 0755 "$tmp/$f"; else chmod 0644 "$tmp/$f"; fi ;; esac
-    mv -f "$tmp/$f" "$ROOT/$f"
-  done
-  # A copy the manifest no longer lists — an earlier install's — goes: the tree
-  # is the manifest's, file for file (bin/ conf/, and the Agent package's hooks/
-  # commands/ skills/ mod/ at all depths, #1725). Never in a full install.
-  for d in bin conf; do
-    [ -d "$ROOT/$d" ] || continue
-    for old in "$ROOT/$d"/*; do
-      [ -f "$old" ] || continue
-      rel="$d/${old##*/}"
-      case " $FILES" in *" $rel "*) ;; *) rm -f "$old"; say "  去掉了不再发的旧文件 $rel" ;; esac
-    done
-  done
-  for d in hooks commands skills mod; do
-    [ -d "$ROOT/$d" ] || continue
-    find "$ROOT/$d" -type f > "$tmp/have.list" 2>/dev/null || continue
-    while IFS= read -r old; do
-      rel="${old#"$ROOT"/}"
-      case " $FILES" in *" $rel "*) ;; *) rm -f "$old"; say "  去掉了不再发的旧文件 $rel" ;; esac
-    done < "$tmp/have.list"
-    find "$ROOT/$d" -depth -type d -empty -exec rmdir {} \; 2>/dev/null || true
   done
   # Which client this is (#1722): the hub's /version answer, so `fleet` can
-  # tell on its next start whether the hub hands out a newer one. Unchanged
-  # but for the time → the file is left as it was (a rerun changes nothing).
-  # 不接 too (#1805): `fleet` then follows GitHub's stable by itself.
+  # tell on its next start whether the hub hands out a newer one. 不接 too
+  # (#1805): `fleet` then follows GitHub's stable by itself.
   if [ "$MARK" = 1 ]; then
     _mhub=''; [ "$HUB_ANS" = 1 ] && _mhub=$HUBURL
     printf 'version=%s\ncompat=%s\ncommit=%s\nhub=%s\nat=%s\n' "$VER" "$COMPAT" "$COMMIT" "$_mhub" "$(date +%s)" > "$tmp/client-version"
-    if [ "$(grep -v '^at=' "$tmp/client-version" 2>/dev/null)" != "$(grep -v '^at=' "$ROOT/.client-version" 2>/dev/null)" ]; then
-      mv -f "$tmp/client-version" "$ROOT/.client-version"
-    fi
+  fi
+  if [ "$MARK" = 1 ] && [ -f "$ROOT/.client-version" ] && [ -f "$tmp/bin/fleet-versions-lib.sh" ]; then
+    # A client the line installed before (issue #1900): the new one goes BESIDE
+    # it, whole, into <home>.versions/<version>/, and <home> — a link — is
+    # switched in one rename(2) (fleet-versions-lib.sh, the switch the updater
+    # and a 承载 machine's install-sync use). The one in use is never written:
+    # a run that fails half way leaves it as it was, and the version before
+    # stays as .prev. A client that is RUNNING is not switched under itself —
+    # the new one is staged (.next) and its keeper takes it in place once you
+    # are idle (fleet-client-update.sh tick), as it takes one it fetched.
+    install_versioned
+  else
+    install_in_place
   fi
 fi
 
