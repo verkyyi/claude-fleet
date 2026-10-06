@@ -16,9 +16,11 @@ codex  ──(Bearer fcp1.<session cred>)──▶ 127.0.0.1:PORT/codex ──(B
   signed with the proxy's own key (`<state>/key`, 0600).
 - On each request the proxy verifies it, picks the account (`<state>/bind.json`
   overrides the minted one — that is the no-restart account switch), reads the real
-  token from `~/.config/claude-fleet/accounts/<acct>.hub/.credentials.json` (or
-  `~/.codex/auth.json`) **in memory, per request**, drops `x-api-key`, sets
-  `Authorization: Bearer <real>` and streams the response back untouched.
+  token from `~/.config/claude-fleet/accounts/<acct>.hub/.credentials.json` (Codex:
+  `~/.codex/auth.json` for `default`, else `~/.codex-accounts/<acct>/auth.json` —
+  where the node agent leases them) **in memory, per request**, drops `x-api-key`,
+  sets `Authorization: Bearer <real>` (Codex: and ALWAYS the bound account's
+  `chatgpt-account-id`) and streams the response back untouched.
 - Every credential-shaped header is logged as `<redacted:len>`.
 - Binds `127.0.0.1` only. Stop it when you are done (Ctrl-C).
 
@@ -45,4 +47,15 @@ Other subcommands:
 | `rebind --state S --sid X --account L` | move session X to account L — its next request uses L, no restart |
 | `echo X >> S/revoked` | revoke session X (next request → 401 `session credential revoked`) |
 | `serve … --no-beta` | don't add `anthropic-beta: oauth-2025-04-20` (not needed, see doc §2) |
+| `serve … --codex-upstream URL --codex-homes DIR` | where `/codex/*` goes (loopback `http://` allowed — the simulator) and where Codex accounts live |
+| `serve … --max-seconds N` | exit on its own after N s, so a forgotten one cannot linger |
+| `serve … --audit --sinkhole --mitm-cert C --mitm-key K` | the OFFLINE audit (issue #1912): answer every CONNECT locally, log method/path + which kind of credential it carried, never connect out |
 | `serve … --audit [--mitm-cert C --mitm-key K]` | also act as `HTTPS_PROXY`: log every CONNECT; with a throwaway CA the client trusts (`NODE_EXTRA_CA_CERTS`), log the method/path/status of traffic that BYPASSES the base URL. Research only. |
+
+## Codex, with no ChatGPT login: `sim/`
+
+[`sim/`](sim/) is a fake ChatGPT backend + a one-command harness that runs a real
+`codex` CLI through this proxy and checks everything the proxy is responsible for
+(issue #1912): `python3 -I extras/cred-proxy/sim/simtest.py --codex <codex>`.
+`sim/real-check.sh` is the same against the real backend, for a machine that has
+a valid login.
