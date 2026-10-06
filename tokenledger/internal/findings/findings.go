@@ -30,6 +30,7 @@ const (
 	TmplCredSetupExpiring = "cred_setup_token_expiring"
 	TmplCredSetupExpired  = "cred_setup_token_expired"
 	TmplAccountReauth     = "account_reauth"
+	TmplComputeRegion     = "compute_region"
 )
 
 // Templates is every id above, so a translation table can be checked for
@@ -40,6 +41,7 @@ var Templates = []string{
 	TmplStaleAgentNever, TmplStaleAgentLast, TmplLiveRunaway,
 	TmplFreeAllowanceGone, TmplFreeAllowanceNear, TmplCredVaultLocked,
 	TmplCredSetupExpiring, TmplCredSetupExpired, TmplAccountReauth,
+	TmplComputeRegion,
 }
 
 // Owner is "who should this finding go to". Both halves are optional and an
@@ -75,6 +77,7 @@ var Templates = []string{
 //	cred_vault_locked no -- the hub's own vault, everyone's credentials
 //	cred_setup_token  no -- a pool account's token, which every machine leases
 //	account_login     no -- an account, which several machines' profiles share
+//	compute_region   yes -- a node IS a (machine, login) pair
 //
 // The "no" rows are not gaps waiting to be filled in. Each one's subject is an
 // aggregate over several people, so any single name on it would be the guess
@@ -727,7 +730,10 @@ type NowInputs struct {
 	VaultLock   *VaultLock
 	SetupTokens []SetupToken
 	Logins      []LoginState
-	Now         time.Time
+	// ComputeClosed are the logins whose egress region closed them
+	// (claude-fleet#1720).
+	ComputeClosed []ComputeClosed
+	Now           time.Time
 
 	// Mutes as on Inputs: the silences in force, keyed by Finding.ID.
 	Mutes Mutes
@@ -758,6 +764,7 @@ func Now(in NowInputs) []Finding {
 	}
 	fs = append(fs, setupTokens(in.SetupTokens, in.Now)...)
 	fs = append(fs, logins(in.Logins)...)
+	fs = append(fs, computeRegion(in.ComputeClosed)...)
 	for _, w := range in.Windows {
 		if w.FiveHourPct < windowWarnPct {
 			continue
@@ -946,6 +953,42 @@ func logins(ls []LoginState) []Finding {
 			Template: TmplAccountReauth,
 			Args:     map[string]string{"account": l.Account, "provider": l.Provider, "where": where, "command": cmd, "reason": reason},
 			subject:  subjectKey(l.Provider, l.Account)})
+	}
+	return fs
+}
+
+// ComputeClosed is a login that asked to run sessions and that the hub
+// closed because its last probe put its egress in a region Claude / OpenAI do
+// not serve (claude-fleet#1720, EPIC #1718 C2): it is no longer placed on nor
+// leased an account. The person learns it here — the change happened to
+// their machine (a trip, another network), not to anything they did.
+type ComputeClosed struct {
+	EndpointID string
+	Hostname   string
+	OSUser     string
+	Loc        string // the probe's egress region ("" = unknown)
+	Reason     string // the probe's own sentence
+}
+
+func computeRegion(cs []ComputeClosed) []Finding {
+	var fs []Finding
+	for _, c := range cs {
+		label := c.OSUser + "@" + c.Hostname
+		loc := c.Loc
+		if loc == "" {
+			loc = "unknown"
+		}
+		reason := c.Reason
+		if reason == "" {
+			reason = "egress region not served by Claude / OpenAI"
+		}
+		fs = append(fs, Finding{Severity: "warning", Kind: "compute_region", Link: "/nodes",
+			Title:    fmt.Sprintf("%s stopped running sessions — its egress region %s is not supported", label, loc),
+			Detail:   reason,
+			Template: TmplComputeRegion,
+			Args:     map[string]string{"node": label, "loc": loc, "reason": reason},
+			Owner:    owner(c.OSUser, ""),
+			subject:  firstNonEmpty(c.EndpointID, label)})
 	}
 	return fs
 }

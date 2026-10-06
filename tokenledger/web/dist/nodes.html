@@ -159,7 +159,13 @@ function sessCell(x) {
 function kindTag(n) { return n.kind === "ephemeral" ? ` <span class="tag" title="SPOT 节点（临时）">SPOT</span>` : ""; }
 // 只协调 (claude-fleet#1719): a login started with CCQUOTA_FLEET_COMPUTE=0 —
 // identity and certificates, no sessions placed, no account leased.
-function computeTag(n) { return n.compute_off ? ` <span class="tag" title="只协调：入口不往这里派会话、不借账号（CCQUOTA_FLEET_COMPUTE=0）">只协调</span>` : ""; }
+// 能不能跑 (claude-fleet#1720): its egress region closed it, or the team
+// policy fleet.compute_auto opened it.
+function computeTag(n) {
+  if (n.compute_closed) return ` <span class="tag" title="${esc(n.compute_why || "")}">地区不支持·已停</span>`;
+  if (n.compute_auto) return ` <span class="tag" title="本机判断合适，团队设置 fleet.compute_auto 自动打开">自动打开</span>`;
+  return n.compute_off ? ` <span class="tag" title="${esc(n.compute_why || "只协调：入口不往这里派会话、不借账号（CCQUOTA_FLEET_COMPUTE=0）")}">只协调</span>` : "";
+}
 function when(t) { return t ? new Date(t).toLocaleString() : "—"; }
 function dur(s) {
   if (s == null) return "—";

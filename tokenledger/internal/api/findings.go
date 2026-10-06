@@ -313,6 +313,9 @@ func (s *Server) GatherNowSource(account, source string) (findings.NowInputs, er
 			}
 		}
 	}
+	if account == store.AllAccounts {
+		in.ComputeClosed = s.computeClosed(in.Now)
+	}
 	accts, err := s.Store.ListAccounts()
 	if err != nil {
 		return in, err
