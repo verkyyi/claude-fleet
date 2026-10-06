@@ -30,7 +30,7 @@
 #   D. same machine— `open` on an m5 row with the pane's control socket answering:
 #                    `select <wid>` goes over it, the stage window is retargeted
 #                    (`@remote=m5:<wid>`), NO respawn, the list pane's id unchanged
-#   E. other machine— `open` on an m4 row: a second STAGE window `m4 <name>` (no ⇄,
+#   E. other machine— `open` on an m4 row: a second STAGE window `<name> · @m4` (no ⇄,
 #                    #1621), current there; `jump` leaves the list where it is — the
 #                    shell's server still holds one window, the same two panes; m5's
 #                    stage window stays (shell-switch-repaint-selftest.sh measures
@@ -84,6 +84,8 @@ export FLEET_HUB_SESSIONS_LOOP_SECS=8 FLEET_HUB_SESSIONS_EVERY=1 FLEET_HUB_SESSI
 export FLEET_SHELL_WARM=0   # the warm connections (#1631) have their own test: fleet-shell-warm-selftest.sh
 unset TMUX TMUX_PANE CCQUOTA_FLEET FLEET_SESSION FLEET_SHELL FLEET_HUB_SESSIONS_CLIENT FLEET_SIDEBAR_SOURCE
 unset FLEET_HUB_URL CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN FLEET_NODE_ALIASES FLEET_REMOTE_SSH_CMD
+# the client's own machine for the @本机 mark (#1780): never m5/m4, whatever box runs this
+export FLEET_SIDEBAR_HOST=selftest-host
 # A hub address (the fake connect and FLEET_HUB_SESSIONS_CMD stand in for the
 # hub itself): legs A–J are the hub client. Leg K takes it away (#1712).
 export FLEET_HUB_URL=https://hub.example
@@ -327,7 +329,7 @@ openrow() {
 out=$(openrow 'wid:11111111-1111-4111-8111-111111111111/issue-7')
 eq 'D: open printed the SAME (stage) window' "$w1" "$out"
 eq 'D: @remote retargeted to the worker' 'm5:11111111-1111-4111-8111-111111111111/issue-7' "$(tsg show-options -wqv -t "$w1" @remote)"
-eq 'D: the window is renamed after the row' 'm5 issue-7' "$(tsg display-message -p -t "$w1" '#{window_name}')"
+eq 'D: the window is renamed after the row' 'issue-7 · @m5' "$(tsg display-message -p -t "$w1" '#{window_name}')"
 has 'D: select went over the connection' "$(cat "$WORK/ssh.log")" "fleet-remote-view.sh select '11111111-1111-4111-8111-111111111111/issue-7'"
 hasnt 'D: no second attach (no respawn)' "$(cat "$WORK/ssh.log")" 'attach'
 eq 'D: the ssh pane was NOT respawned (same pid)' "$pane_pid" "$(tsg list-panes -t "$w1" -F '#{pane_pid}' | head -1)"
@@ -343,7 +345,7 @@ w2=$(openrow 'wid:22222222-2222-4222-8222-222222222222/issue-9')
 CHECKS=$((CHECKS + 1)); case "$w2" in @*) [ "$w2" != "$w1" ] || fail 'E: a NEW window for m4' "$w2" ;; *) fail 'E: open printed a window id' "$w2" ;; esac
 eq 'E: two stage windows now' 2 "$(tsg list-windows -t "=$SESS-stage" -F x | grep -c x)"
 eq 'E: the m4 window is current on the stage' "$w2" "$(tsg display-message -p -t "=$SESS-stage:" '#{window_id}')"
-eq 'E: named m4 <name>, no ⇄ (#1621)' 'm4 issue-9' "$(tsg display-message -p -t "$w2" '#{window_name}')"
+eq 'E: titled <name> · @m4 (#1780), no prefix, no ⇄ (#1621)' 'issue-9 · @m4' "$(tsg display-message -p -t "$w2" '#{window_name}')"
 eq 'E: @remote = m4:<wid>' 'm4:22222222-2222-4222-8222-222222222222/issue-9' "$(tsg show-options -wqv -t "$w2" @remote)"
 eq 'E: the shell still holds ONE window' 1 "$(ts list-windows -t "=$SESS" -F x | grep -c x)"
 CHECKS=$((CHECKS + 1)); waitfor 10 grep -q "^m4	.*run\|^m4	" "$WORK/ssh.log" || fail 'E: the far end m4 was asked to attach' "$(cat "$WORK/ssh.log")"
@@ -361,7 +363,7 @@ eq 'E: jump: the m5 window is current on the stage again' "$w1" "$(tsg display-m
 eq 'E: jump: the list pane did not move' "$view" "$(view_of "$wh")"
 eq 'E: jump: home still has its two panes, no slot' 2 "$(ts list-panes -t "$wh" -F x | grep -c x)"
 eq 'E: jump: still one shell window' 1 "$(ts list-windows -t "=$SESS" -F x | grep -c x)"
-eq 'E: the m4 window is still there' 'm4 issue-9' "$(tsg display-message -p -t "$w2" '#{window_name}')"
+eq 'E: the m4 window is still there' 'issue-9 · @m4' "$(tsg display-message -p -t "$w2" '#{window_name}')"
 
 # ================================================================================
 # F. the bar — tmux-status.sh in the shell's environment, for the m4 window
@@ -459,17 +461,17 @@ has 'J: the producer lists the node row' "$rows" 'issue-12'
 has 'J: …marked as heard over the connection (m5~)' "$rows" '|m5~'
 hasnt 'J: …never lost' "$rows" 'm5!'
 has 'J: the m4 row still reads lost' "$rows" 'm4!'
-# the view: a `~` row ends in its machine's dim short name (`m5`, never a ⇄,
-# #1621) and asks the name's cells plus a gap for it
+# the view: a `~` row ends in its machine's `@m5~` (issue #1780; a name, never
+# a ⇄, #1621) and asks the mark's cells plus a gap for it
 CHECKS=$((CHECKS + 1)); ( cd "$WORK/cache/bin" && python3 - <<'PY'
 import importlib.util
 spec = importlib.util.spec_from_file_location("sb", "fleet-sidebar.py"); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 plain = m.row_fields("\x1f".join(("wid:x/issue-12", "working", "●", "issue-12", " ", "", "0", "", "m5")))
 via = m.row_fields("\x1f".join(("wid:x/issue-12", "working", "●", "issue-12", " ", "", "0", "", "m5~")))
-assert m.via_tag("m5~") == "m5" and m.via_tag("m5") == "" and m.via_tag("m4!") == "", m.via_tag("m5~")
-assert m.row_need(via) == m.row_need(plain) + 3, (m.row_need(via), m.row_need(plain))
+assert (m.machine_tag("m5~"), m.machine_tag("m5"), m.machine_tag("m4!")) == ("@m5~", "@m5", "@m4!"), m.machine_tag("m5~")
+assert m.row_need(via) == m.row_need(plain) + 1, (m.row_need(via), m.row_need(plain))
 PY
-) || fail 'J: a ~ row ends in its machine name and row_need gives it the cells'
+) || fail 'J: a ~ row ends in @m5~ and row_need gives it the cells'
 # the hub answers again: its rows take the cache back, via=hub everywhere
 ( export TMPDIR="$WORK/cache/tmp" FLEET_HUB_SESSIONS_CLIENT="$SESS" CCQUOTA_FLEET=1 FLEET_NODE_ALIASES='macmini=m5 mini2=m4'
   bash "$WORK/cache/bin/fleet-hub-sessions.sh" --refresh >/dev/null 2>&1 )

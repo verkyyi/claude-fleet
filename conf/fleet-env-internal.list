@@ -67,6 +67,7 @@ FLEET_CLIENT_OPEN_CMD              seam: the opener the action loop runs (defaul
 FLEET_CLIENT_TTY                   seam: the terminal fleet-client-lease.py asks XTVERSION on (default /dev/tty; fleet-client-where-selftest.sh hands it a pty, #1716)
 FLEET_CLIENT_BADGE_CACHE           path: where fleet-client-badge.sh keeps its last where read (~/.cache/claude-fleet/shell/tmp, #1779)
 FLEET_CLIENT_BADGE_HOST            seam: this machine's hostname as the status-bar badge reads it (fleet-client-badge.sh, #1779)
+FLEET_SIDEBAR_HOST                 seam: this computer's hostname for the sidebar's @本机 mark and the proxy title (fleet-sidebar.py, fleet-remote-view.sh, #1780)
 FLEET_CLIENT_BADGE_TTL             knob: seconds between the badge's where reads (fleet-client-badge.sh, 10, #1779)
 FLEET_CLIENT_BADGE_WHERE_CMD       seam: the where read fleet-client-badge.sh runs (default fleet-client-where.sh --json, #1779)
 FLEET_CLIENT_WHERE_CMD             seam: the hub read fleet-client-where.sh runs (default python3 fleet-client-lease.py where; the selftest swaps in a file, #1716)
