@@ -19,6 +19,9 @@
 #                FLEET_ROLE gains node; the token never printed; the output is
 #                the fixed snapshot below — and its scan half is line for line
 #                `fleet login`'s against the same hub
+#                and (issue #1719) node.env says CCQUOTA_FLEET_COMPUTE=0, the
+#                ssh snippet carries the peer-certificate Match for every other
+#                machine and peer/machines lists them
 #   B. rerun     a second `fleet node join` does not scan again (no new start)
 #                and says it is already a node
 #   C. resume    a run that fails mid-way (the agent's hash) prints ONE ✗ line
@@ -155,6 +158,16 @@ grep -qx 'CCQUOTA_TOKEN=ccq_nodepass0123456789abcdefXYZ' "$ENVF" 2>/dev/null && 
 grep -q 'ccq_nodepass' "$SB/out" && bad "A the token was printed" || ok "A the token is never printed"
 role=$(sed -n 's/^ *FLEET_ROLE="\{0,1\}\([^"]*\)"\{0,1\}/\1/p' "$SB/h1/.config/claude-fleet/fleet.conf")
 case ",$role," in *,node,*) ok "A FLEET_ROLE has node ($role)" ;; *) bad "A FLEET_ROLE=$role: $(cat "$SB/h1/.config/claude-fleet/fleet.conf")" ;; esac
+# issue #1719: a first join only coordinates, and the scan wrote the
+# machine-to-machine Match for every other machine (here m4, from a hub that
+# predates `machines`: the alias stands for the hostname).
+grep -qx 'CCQUOTA_FLEET_COMPUTE=0' "$ENVF" 2>/dev/null && ok "A node.env says CCQUOTA_FLEET_COMPUTE=0 (只协调)" \
+  || bad "A node.env compute: $(grep COMPUTE "$ENVF" 2>/dev/null)"
+SNIP="$SB/h1/.ssh/fleet-ssh-config"
+if grep -q "^Match originalhost m4,m4-\*,fleet-m4,fleet-m4-\* exec \"'$BIN/fleet-peer-cert.sh' m4 view" "$SNIP" 2>/dev/null \
+   && grep -q '^  IdentityFile ~/.ssh/fleet-peer$' "$SNIP" && grep -qx 'm4 m4' "$SB/h1/.config/claude-fleet/peer/machines" 2>/dev/null; then
+  ok "A the ssh snippet carries the peer Match for m4; peer/machines lists it"
+else bad "A peer section: $(cat "$SNIP" 2>/dev/null) / $(cat "$SB/h1/.config/claude-fleet/peer/machines" 2>/dev/null)"; fi
 norm <"$SB/out" >"$SB/node.out"
 cat >"$SB/node.want" <<'EOF'
 
@@ -167,11 +180,13 @@ cat >"$SB/node.want" <<'EOF'
 
 ✓ 证书已写入 <HOME>/.ssh/fleet-cert-cert.pub（2026-10-05T12:00:00Z 前有效，账号 alice）
 ✓ ssh 配置 <HOME>/.ssh/fleet-ssh-config（已在 ~/.ssh/config 末尾 Include）
+✓ 到其它机器的 ssh 段已写好（1 台，每次连接先向入口要 5 分钟证书）
 ✓ 已登记为节点 <HOST>-<ME>（ep_1）
 ✓ agent 已装好：<HOME>/.local/bin/ccquota
 ! agent 已在后台运行，但重启后不会自己起来（--service detached）
 ✓ 入口看到它在线：<HUB>/nodes
 ! 入口没把 <ME> 列为管理登录：这台机器不开账号、不装 SSH CA（要的话在入口的 CCQUOTA_FLEET_ADMIN_USERS 里加上它）
+✓ 只协调：入口不往这台派会话、不借账号（本机跑会话用自己的账号）
 ✓ 已上线：<HOST>/<ME> 是 <HUB> 的节点
 EOF
 diff "$SB/node.want" "$SB/node.out" >"$SB/diff" && ok "A output matches the snapshot" || bad "A output snapshot:

@@ -112,6 +112,13 @@ type Config struct {
 	// account op is refused.
 	FleetAdmin bool
 
+	// FleetComputeOff makes this login coordinate only (CCQUOTA_FLEET_COMPUTE=0,
+	// claude-fleet#1719): it says so in its hello and every heartbeat, the hub
+	// never places a session on it nor answers its credential lease, and it
+	// asks for none even with FleetCreds set. A fresh `fleet node join` writes
+	// the 0; unset is compute on, so a node joined before #1719 keeps working.
+	FleetComputeOff bool
+
 	// FleetCreds makes this agent lease its login's credentials from the
 	// hub's vault (CCQUOTA_FLEET_CREDS=1, claude-fleet#1415) and keep them
 	// written where Claude Code, Codex and gh re-read them: Claude under
@@ -361,7 +368,9 @@ func (a *Agent) Run(ctx context.Context) error {
 		var node sync.WaitGroup
 		node.Add(1)
 		go func() { defer node.Done(); a.runNode(ctx) }()
-		if a.cfg.FleetCreds {
+		if a.cfg.FleetCreds && a.cfg.FleetComputeOff {
+			log.Printf("credentials: not leasing — this login only coordinates (CCQUOTA_FLEET_COMPUTE=0)")
+		} else if a.cfg.FleetCreds {
 			node.Add(1)
 			go func() { defer node.Done(); a.runCredLeases(ctx) }()
 		}

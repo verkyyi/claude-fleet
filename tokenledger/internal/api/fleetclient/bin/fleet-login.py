@@ -69,6 +69,15 @@ SSH_CONFIG = os.path.join(SSH_DIR, "config")
 HUB_FILE = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.join(HOME, ".config"), "claude-fleet", "hub.json")
 # The machine's ONE config file (issue #1623): the hub address lives there.
 MACHINE_CONF = os.path.join(os.environ.get("FLEET_CONF_DIR") or os.path.dirname(HUB_FILE), "fleet.conf")
+# A node's machine-to-machine ssh (claude-fleet#1719): the node pass lives in
+# node.env; the peer key, the certificates and the machine list under peer/.
+CONF_DIR = os.environ.get("FLEET_CONF_DIR") or os.path.dirname(HUB_FILE)
+NODE_ENV = os.path.join(CONF_DIR, "node.env")
+PEER_DIR = os.path.join(CONF_DIR, "peer")
+MACHINES_FILE = os.path.join(PEER_DIR, "machines")
+PEER_CERT_SH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fleet-peer-cert.sh")
+PEER_BEGIN = "# >>> machine-to-machine (claude-fleet#1719) >>>"
+PEER_END = "# <<< machine-to-machine <<<"
 INCLUDE_BEGIN = "# >>> fleet login (claude-fleet#1412) >>>"
 INCLUDE_END = "# <<< fleet login <<<"
 RENEW_PATH = "/v1/fleet/login/renew"
@@ -213,11 +222,129 @@ def ensure_include():
     return True
 
 
+def cert_machines(res):
+    """[(hostname, alias)] from a CertResponse: its `machines` (claude-fleet#1719),
+    else — a hub older than that — each machine's first Host line
+    (`Host <alias> fleet-<alias> …`), the alias standing for the hostname."""
+    tok = re.compile(r"^[A-Za-z0-9._:][A-Za-z0-9._:-]*$")
+    out = []
+    for m in res.get("machines") or []:
+        h, a = str(m.get("hostname", "")), str(m.get("alias", "") or m.get("hostname", ""))
+        if tok.match(h) and tok.match(a):
+            out.append((h, a))
+    if out or res.get("machines") is not None:
+        return out
+    for line in (res.get("ssh_config") or "").splitlines():
+        w = line.split()
+        if len(w) >= 3 and w[0] == "Host" and w[2] == "fleet-" + w[1] and tok.match(w[1]):
+            out.append((w[1], w[1]))
+    return out
+
+
+def self_names():
+    names = set()
+    for n in (socket.gethostname(), os.uname().nodename):
+        if n:
+            names.add(n.split(".")[0].lower())
+    return names
+
+
+def tilde(path):
+    return "~" + path[len(HOME):] if path.startswith(HOME + "/") else path
+
+
+def peer_section(machines):
+    """One Match per OTHER machine (claude-fleet#1719): whatever name ssh is
+    given for it — the alias, a route of it (`m4-lan`), the hub's hostname,
+    `fleet-<alias>…` — asks fleet-peer-cert.sh for a five-minute certificate
+    first (exit 0 = there is one) and offers it. The certificate's file is keyed
+    on the hostname, so every name shares one (the script resolves them
+    through peer/machines)."""
+    me = self_names()
+    blocks = []
+    for host, alias in machines:
+        if host.lower() in me or alias.lower() in me:
+            continue
+        pats = []
+        for n in (alias, host, "fleet-" + alias):
+            for p in (n, n + "-*"):
+                if p not in pats:
+                    pats.append(p)
+        blocks.append("Match originalhost %s exec \"'%s' %s view >/dev/null 2>&1\"\n"
+                      "  IdentityFile ~/.ssh/fleet-peer\n"
+                      "  CertificateFile \"%s\"\n"
+                      % (",".join(pats), PEER_CERT_SH, host, tilde(os.path.join(PEER_DIR, host + ".view-cert.pub"))))
+    if not blocks:
+        return ""
+    return ("%s\n# This machine is a hub node: reaching another machine asks the hub for a\n"
+            "# five-minute certificate first (fleet-peer-cert.sh), never a standing key.\n%s%s\n"
+            % (PEER_BEGIN, "".join(blocks), PEER_END))
+
+
+def adopt_handwritten():
+    """Take over a hand-written `Match … exec "…fleet-peer-cert.sh …"` block in
+    ~/.ssh/config (the one m5 carried before claude-fleet#1719), with the
+    comment lines right above it: the generated section now does that job.
+    The old file is kept beside it. Returns the backup's path, or ""."""
+    try:
+        with open(SSH_CONFIG) as f:
+            lines = f.read().splitlines(True)
+    except OSError:
+        return ""
+    keep, drop, i, inside = [], False, 0, False
+    while i < len(lines):
+        ln = lines[i]
+        if ln.startswith(INCLUDE_BEGIN):
+            inside = True
+        if ln.startswith(INCLUDE_END):
+            inside = False
+        if not inside and re.match(r"\s*Match\s.*\bexec\s.*fleet-peer-cert\.sh", ln):
+            while keep and keep[-1].lstrip().startswith("#"):
+                keep.pop()
+            i += 1
+            while i < len(lines) and lines[i].strip() and lines[i][:1] in " \t":
+                i += 1
+            while i < len(lines) and not lines[i].strip() and (not keep or not keep[-1].strip()):
+                i += 1
+            drop = True
+            continue
+        keep.append(ln)
+        i += 1
+    if not drop:
+        return ""
+    bak = SSH_CONFIG + ".fleet-bak-" + time.strftime("%Y%m%d%H%M%S")
+    write_file(bak, "".join(lines), 0o600)
+    write_file(SSH_CONFIG, "".join(keep), 0o600)
+    return bak
+
+
+# What write_cert did beyond the certificate, for the caller to say.
+NOTES = []
+
+
 def write_cert(res, include):
-    """The certificate and the ssh snippet from a CertResponse; the Include once."""
+    """The certificate and the ssh snippet from a CertResponse; the Include once.
+    On a hub node (a node pass in this answer, or node.env already here) the
+    snippet also gets the machine-to-machine Match blocks (claude-fleet#1719)."""
     write_file(CERT, res["certificate"], 0o644)
-    write_file(SSH_CONFIG_SNIPPET, res["ssh_config"], 0o644)
-    return include and ensure_include()
+    snippet = res["ssh_config"]
+    machines = cert_machines(res)
+    if machines:
+        os.makedirs(PEER_DIR, mode=0o700, exist_ok=True)
+        write_file(MACHINES_FILE, "".join("%s %s\n" % m for m in machines), 0o644)
+    peer = peer_section(machines) if (res.get("node") or os.path.exists(NODE_ENV)) else ""
+    if peer:
+        snippet = snippet.rstrip("\n") + "\n\n" + peer
+    write_file(SSH_CONFIG_SNIPPET, snippet, 0o644)
+    if peer and include:
+        # before the Include goes in, so the backup is the file as it was
+        bak = adopt_handwritten()
+        if bak:
+            NOTES.append("✓ ~/.ssh/config 里手写的机器间证书段已由 %s 接管（原文件备份在 %s）" % (tilde(SSH_CONFIG_SNIPPET), tilde(bak)))
+    added = include and ensure_include()
+    if peer:
+        NOTES.append("✓ 到其它机器的 ssh 段已写好（%d 台，每次连接先向入口要 5 分钟证书）" % peer.count("\nMatch "))
+    return added
 
 
 def cert_remaining(cert=CERT):
@@ -266,6 +393,9 @@ def renew(hub, quiet=False, include=True):
         added = write_cert(res, include)
         say("✓ 证书已续期（%s 前有效，账号 %s）%s" % (res.get("valid_before", "?"), ",".join(res.get("principals", [])),
                                                "；ssh 配置已 Include" if added else ""))
+        for n in NOTES:
+            if "接管" in n:   # the one-time takeover; the section itself is every renew's
+                say(n)
         return 0
     why = res.get("error", "HTTP %d" % code)
     if code in (403, 404) or res.get("code") in ("unknown_device", "device_revoked", "device_idle", "no_account"):
@@ -337,6 +467,8 @@ def cmd_login(argv):
     added = write_cert(res, include)
     print("✓ 证书已写入 %s（%s 前有效，账号 %s）" % (CERT, res["valid_before"], ",".join(res["principals"])))
     print("✓ ssh 配置 %s%s" % (SSH_CONFIG_SNIPPET, "（已在 ~/.ssh/config 末尾 Include）" if added else ""))
+    for n in NOTES:
+        print(n)
     print("✓ 这台电脑已登记为设备：之后 fleet 自动续证书，连续 7 天不用才需再扫")
     hosts = [l.split()[1] for l in res["ssh_config"].splitlines() if l.startswith("Host ")]
     if hosts:
@@ -361,6 +493,8 @@ def cmd_node(argv):
     added = write_cert(res, include)
     print("✓ 证书已写入 %s（%s 前有效，账号 %s）" % (CERT, res["valid_before"], ",".join(res["principals"])))
     print("✓ ssh 配置 %s%s" % (SSH_CONFIG_SNIPPET, "（已在 ~/.ssh/config 末尾 Include）" if added else ""))
+    for n in NOTES:
+        print(n)
     print("✓ 已登记为节点 %s（%s）" % (node.get("label", "?"), node.get("endpoint_id", "?")))
     return 0
 
