@@ -12,11 +12,13 @@
 #   B. sidebar   — fleet-sidebar.py: 配置旧 left of the @ mark, narrow 旧, cfg_part,
 #                  row_need; ok / unknown ⇒ the row is exactly as before
 #   C. judge     — fleet_cfg_restart_why on an isolated tmux socket: only a stale,
-#                  `done`, idle ≥ FLEET_CFG_RESTART_IDLE Claude session qualifies;
-#                  working / needs / looping / recent / codex / ok / unknown never
+#                  `done`, idle ≥ FLEET_CFG_RESTART_IDLE session qualifies — a
+#                  Codex one alike (issue #1896); working / needs / looping /
+#                  recent / ok / unknown never
 #   D. tick      — fleet-cfg-restart.sh (fleet-migrate.sh faked): auto hands the
 #                  eligible window to `--cfg-stale`, never the working one, at most
-#                  FLEET_CFG_RESTART_MAX, not again within the idle span; off /
+#                  FLEET_CFG_RESTART_MAX, the Codex one on a later tick, not again
+#                  within the idle span; off /
 #                  ask reopen nothing (ask marks @cfg_asked); --count / --list
 #   E. history   — fleet-history.sh resumed --reason cfg-stale: one `reason=cfg-stale`
 #                  row after a closed-unlanded one, after the hook's own resumed one,
@@ -163,7 +165,7 @@ eq "C: working → never"                        "state:working rc=1"   "$(why "
 eq "C: needs (a pending question) → never"     "state:needs rc=1"     "$(why "$WNEED")"
 eq "C: looping → never"                        "state:looping rc=1"   "$(why "$WLOOP")"
 eq "C: idle < FLEET_CFG_RESTART_IDLE → not yet" "recent rc=1"         "$(why "$WRECENT")"
-eq "C: a Codex session → not this road"        "codex rc=1"           "$(why "$WCDX")"
+eq "C: a Codex session → reopened alike (#1896)" "rc=0"                "$(why "$WCDX")"
 eq "C: current configuration → nothing"        "ok rc=1"              "$(why "$WOK")"
 eq "C: no fingerprint → nothing"               "unknown rc=1"         "$(why "$WNONE")"
 eq "C: a panel → nothing"                      "panel rc=1"           "$(why "$(T display-message -p -t "$S:home" '#{window_id}')")"
@@ -194,6 +196,11 @@ has "D: auto — reopens the idle one" "$o" "reopen: $S:idle ($WIDLE)"
 waitlog || fail "D: the fake migrate never ran" "$o"
 eq "D: …through fleet-migrate.sh --cfg-stale, that window only" "--cfg-stale --session $S --alert $WIDLE" "$(cat "$MLOG")"
 has "D: …stamped @cfg_restart_ts" "$(T display-message -p -t "$WIDLE" '#{@cfg_restart_ts}')" "1"
+: > "$MLOG"
+o=$(tick)
+has "D: the next tick takes the idle Codex session (#1896)" "$o" "reopen: $S:cdx ($WCDX)"
+waitlog || fail "D: the fake migrate never ran for the Codex window" "$o"
+eq "D: …the same --cfg-stale road" "--cfg-stale --session $S --alert $WCDX" "$(cat "$MLOG")"
 : > "$MLOG"
 o=$(tick)
 hasnt "D: not again within the idle span" "$o" "reopen:"

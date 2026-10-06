@@ -53,7 +53,8 @@
     "UserPromptSubmit": [
       {
         "hooks": [
-          { "type": "command", "command": "sh ~/.claude/fleet/bin/set-claude-state.sh working" }
+          { "type": "command", "command": "sh ~/.claude/fleet/bin/set-claude-state.sh working" },
+          { "type": "command", "command": "bash ~/.claude/fleet/bin/fleet-whats-new.sh --hook" }
         ]
       }
     ],

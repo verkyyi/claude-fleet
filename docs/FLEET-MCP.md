@@ -71,6 +71,7 @@ lints it): a script path appears only under a heading marked `运营者` or `排
 | `transfer` | `action` (`check` · `arm` · `export_loop`); `to` (`claude` · `codex`) for check/arm; `handoff` + `loop`? for arm; `transcript` + `output` for export_loop | `fleet-transfer.sh --session S --window $TMUX_PANE --to T --dry-run` · `… --handoff DOC [--loop L] --after-turn` · `fleet-loop.py from-claude --transcript F --output F` | the script's |
 | `handoff` `arm` | `doc` (a stored file's path) \| `issue` (+ `repo`?) | `fleet-handoff-cycle.sh --pane $TMUX_PANE --doc D \| --issue N [--repo R]`, **detached** — the call returns at once with its pid; it must be the turn's last call | 0 armed |
 | `where` | `json`? | `fleet-client-where.sh [--json]` | 0 named · 3 nobody connected · 1 could not tell |
+| `whats_new` | `from`?, `to`? (shas; default this session's `@agent_ver` → the current version) | `fleet-whats-new.sh --full [<from> [<to>]]` | 0 printed · 1 nothing changed / no version |
 | `show` | `file`, `inline`? | `fleet-show.sh [--inline] -- <file>` | 0 SENT · 2 PATH (say the path) |
 | `open` | `target` (URL · `:port[/path]` · file) | `fleet-open.sh -- <target>` | 0 sent / copied · 2 fallback:path |
 
@@ -311,6 +312,33 @@ A version that fails its probe is refused (`tool=(reload) verdict=refused` in
 `verdict=exec` and `verdict=resumed` under the one pid. `FLEET_MCP_RELOAD=0` turns
 it off. The legacy `fleet-peer` shim never reloads.
 
+## What changed, told at the next turn (issue #1897, EPIC #1906 C4)
+
+A session that keeps working across a version move is not reopened (C3 only
+reopens an idle one), so it is TOLD: `hooks/settings-hooks.json`'s
+`UserPromptSubmit` runs `fleet-whats-new.sh --hook` — Claude and Codex alike
+(`hooks/codex-map.json`) — and when the expected version (`agent-cfg.expected`'s
+`ver` line, C2) differs from the one this session last heard of (`@ver_told`,
+else its launch `@agent_ver`), it hands the agent a note of at most five lines as
+`hookSpecificOutput.additionalContext`, then stamps `@ver_told=<sha>` so the same
+version is never told twice:
+
+```
+fleet 已从 69be1df 更新到 7c2a0e1，和你有关的：
+· 新工具 fleet.whats_new
+· 技能 /fleet-claim：交付前多一步 fleet.evidence after
+· 守卫：直接敲 fleet-comment.sh 会被记录，请用 fleet.comment
+另有 6 项内部改动。
+```
+
+Relevant = a tool added or retired (`TOOLS` of the two versions), a commit that
+touches `docs/FLEET-MCP.md`, a worker-owned skill (`owner: worker`) or a guard
+(`hooks/*guard.py`, `bin/tmux-shim/`, the hook table); everything else is counted.
+A rollback is one line. Only at a turn boundary — nothing in a running turn is
+interrupted. No `ver` expected, no pane, or no move ⇒ nothing (as before); a session
+with neither stamp is baselined silently. `FLEET_WHATS_NEW=0` turns it off; each
+note is logged in `logs/whats-new.log`. `whats_new` prints the full list any time.
+
 ## Protocol
 
 Newline-delimited JSON-RPC 2.0 on stdin/stdout, stdlib only (macOS python 3.9):
@@ -333,6 +361,9 @@ tampered / another pane / another fleet / revoked, migration, renewal, no leak.
 `bin/fleet-mcp-selftest.sh` M — a new version between calls: the in-flight call
 finishes on the old code, exec keeps pid + connection + credential, `list_changed`,
 the new tool listed, a broken version refused, the quiet poll, `FLEET_MCP_RELOAD=0`.
+`bin/whats-new-selftest.sh` — the C4 note: ≤ 5 lines, unrelated-only = one line,
+overflow, rollback, told once per version per session (`@ver_told`), the Codex
+wiring, the `whats_new` tool, and the degenerate (no `ver` / no move ⇒ nothing).
 `bin/fleet-mcp-selftest.sh` K — the hub route: assertion only with hub + token +
 credential, its signature and claims, zero network with no hub, `fleet_hub_put`'s
 `worker`. Hub: `TestWorkerAssertion*` (`internal/api/fleet_worker_assert_test.go`)
