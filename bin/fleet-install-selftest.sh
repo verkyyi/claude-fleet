@@ -608,6 +608,13 @@ jinst() {
 }
 jsum() { (cd "$1" 2>/dev/null && find . -type f -exec cksum {} + | sort); }
 jtail() { tail -n 1 "$JR/bin/fleet"; }
+# jextra <name>... — what <versions>/ holds besides the names given
+jextra() {
+  for e in "$JV"/* "$JV"/.[!.]*; do
+    [ -e "$e" ] || continue
+    case " $* " in *" ${e##*/} "*) ;; *) printf '%s\n' "${e##*/}" ;; esac
+  done
+}
 out=$(jinst); rc=$?
 [ "$rc" = 0 ] && [ -d "$JR" ] && [ ! -L "$JR" ] && [ ! -e "$JV" ] && grep -qx version=v1 "$JR/.client-version" \
   && ok "J first install: a plain directory, version v1" || bad "J first install rc=$rc: $out"
@@ -621,7 +628,7 @@ out=$(jinst); rc=$?
 [ "$rc" = 0 ] && [ "$(jsum "$JR")" = "$before" ] && [ ! -L "$JR" ] && grep -qx version=v1 "$JR/.client-version" \
   && ok "J client running: the version in use is not changed by one byte" || bad "J in use changed rc=$rc: $out"
 [ "$(cat "$JV/.next" 2>/dev/null)" = v2 ] && [ -f "$JV/v2/.staged" ] && grep -qx version=v2 "$JV/v2/.client-version" \
-  && [ "$(tail -n 1 "$JV/v2/bin/fleet")" = '# v2' ] && [ -z "$(ls -A "$JV" | grep -v -e '^v2$' -e '^\.next$')" ] \
+  && [ "$(tail -n 1 "$JV/v2/bin/fleet")" = '# v2' ] && [ -z "$(jextra v2 .next)" ] \
   && echo "$out" | grep -q '等你空闲时原地换上' \
   && ok "J …the new version is staged whole beside it (.next = v2), and said" || bad "J staged: $(ls -A "$JV" 2>&1) $out"
 nmiss=''
@@ -642,7 +649,7 @@ cp "$JS/bin/fleet-shell.sh" "$JV/v2/bin/fleet-shell.sh"
 rm -f "$J/running"; echo v3 > "$J/ver"; echo '# v3' >> "$JS/bin/fleet"
 out=$(jinst); rc=$?
 [ "$rc" = 0 ] && [ "$JR" -ef "$JV/v3" ] && [ "$(jtail)" = '# v3' ] && [ "$(cat "$JV/.prev")" = v2 ] \
-  && [ ! -e "$JV/v1" ] && [ -z "$(ls -A "$JV" | grep -v -e '^v[23]$' -e '^\.prev$')" ] && echo "$out" | grep -q '已整版切到 v3' \
+  && [ ! -e "$JV/v1" ] && [ -z "$(jextra v2 v3 .prev)" ] && echo "$out" | grep -q '已整版切到 v3' \
   && ok "J client not running: switched to v3 at once, v2 is .prev, v1 pruned" || bad "J switch v3 rc=$rc: $(ls -A "$JV") $out"
 # a run that fails half way (a download that does not match) stays on v3
 echo v4 > "$J/ver"; echo '# v4' >> "$JS/bin/fleet"; touch "$J/corrupt"
