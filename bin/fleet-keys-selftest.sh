@@ -428,14 +428,15 @@ $ndiff"; }
   # the client: every sheet key is bound, and to something that is not tmux's stock
   while IFS= read -r k; do
     [ -n "$k" ] || continue
-    sk=$(ktm stock list-keys -T prefix -- "$k" 2>/dev/null)
-    ck=$(ktm shell list-keys -T prefix -- "$k" 2>/dev/null)
+    # the whole table, filtered: `list-keys -T <table> <key>` prints nothing on tmux 3.7
+    sk=$(ktm stock list-keys -T prefix 2>/dev/null | awk -v k="$k" '$4 == k')
+    ck=$(ktm shell list-keys -T prefix 2>/dev/null | awk -v k="$k" '$4 == k')
     [ -n "$ck" ] || fail "8: the client does not bind 'prefix $k'"
     [ "$ck" != "$sk" ] || fail "8: the client's 'prefix $k' is still tmux's stock bind"
   done <<EOF
 $sheet_prefix_keys
 EOF
-  ktm shell list-keys -T root F9 | grep -q 'resize-pane' || fail "8: the client does not bind F9"
+  ktm shell list-keys -T root | awk '$4 == "F9"' | grep -q 'resize-pane' || fail "8: the client does not bind F9"
   ktm shell list-keys -T fleet-sidebar | grep -q . || fail "8: the client has no fleet-sidebar key table"
   ktm stock kill-server; ktm node kill-server; ktm shell kill-server
   rm -rf "$KW"
