@@ -26,8 +26,9 @@
 #   D. proxy down    the hub's client_url fails → each file from GitHub's raw
 #                    host at the same commit; the install is that version
 #   E. 承载 follows  a checkout + `fleet update tick --root`: stable moved → the
-#                    next tick moves it (install-sync's `updated`); an EPIC
-#                    heartbeat → `deferred`, HEAD untouched; `fleet update` on
+#                    next tick switches it (install-sync's `switched`, the
+#                    install now a link into fleet.versions/, issue #1894); an
+#                    EPIC heartbeat no longer holds it back; `fleet update` on
 #                    each layer names the same short commit (the doctor's
 #                    first-row word)
 #   F. degenerate    a home with no .client-version → start / tick touch nothing
@@ -187,18 +188,18 @@ htick() { OUT=$(env HOME="$WORK/host" FLEET_CONF_DIR="$HCONF" FLEET_SKIP_GLOBAL_
 hst() { sed -n "s/^$1: //p" "$HCONF/global/install-sync.state" | head -n 1; }
 git --git-dir="$BARE" update-ref refs/tags/stable "$H2"
 htick
-if [ "$(hst result)" = updated ] && [ "$(git -C "$CO" rev-parse HEAD)" = "$H2" ] && grep -q "^apply --from $H1 --to $H2" "$LOG"; then
-  ok "E stable moved: the next tick moves the checkout to it (install-sync updated)"
+if [ "$(hst result)" = switched ] && [ -L "$CO" ] && [ "$(git -C "$CO" rev-parse HEAD)" = "$H2" ] && grep -q "^apply --from $H1 --to $H2" "$LOG"; then
+  ok "E stable moved: the next tick switches the install to it (install-sync switched)"
 else bad "E follow: rc=$RC result=$(hst result) reason=$(hst reason) head=$(git -C "$CO" rev-parse HEAD) out=$OUT"; fi
 env FLEET_CONF_DIR="$HCONF" bash "$BIN/fleet-epic-heartbeat.sh" 1813 --tick 1 --repo o/r --session f1 >/dev/null 2>&1
 git --git-dir="$BARE" update-ref refs/tags/stable "$H3"
 htick
-if [ "$(hst result)" = deferred ] && [ "$(git -C "$CO" rev-parse HEAD)" = "$H2" ] && case "$(hst reason)" in *EPIC*) true ;; *) false ;; esac; then
-  ok "E an EPIC heartbeat: deferred, HEAD untouched ($(hst reason | cut -c1-40)…)"
+if [ "$(hst result)" = switched ] && [ "$(git -C "$CO" rev-parse HEAD)" = "$H3" ]; then
+  ok "E an EPIC heartbeat no longer holds the install back (#1894): switched to $H3"
 else bad "E epic: result=$(hst result) reason=$(hst reason) head=$(git -C "$CO" rev-parse HEAD)"; fi
 env FLEET_CONF_DIR="$HCONF" bash "$BIN/fleet-epic-heartbeat.sh" --clear >/dev/null 2>&1
 htick
-[ "$(git -C "$CO" rev-parse HEAD)" = "$H3" ] && ok "E heartbeat gone: the next tick takes $H3" || bad "E after epic: $(hst result) $(hst reason)"
+[ "$(hst result)" = current ] && ok "E next tick: current at $H3" || bad "E after epic: $(hst result) $(hst reason)"
 s=$(env HOME="$WORK/host" FLEET_CONF_DIR="$HCONF" FLEET_UPDATE_ROOT="$CO" FLEET_STABLE_API="file://$WORK/nothing" bash "$BIN/fleet-update.sh" 2>&1)
 case "$s" in "承载 · 版本 ${H3:0:7} · 跟 stable 同版"*) ok "E fleet update: $s" ;; *) bad "E fleet update: $s" ;; esac
 # one stable, one word: a client and a checkout on the same commit say the same 版本

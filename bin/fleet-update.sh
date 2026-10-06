@@ -46,7 +46,7 @@ case "$TMO" in ''|*[!0-9]*) TMO=3 ;; esac
 
 # layer <root> — full | client | none
 layer() {
-  if [ -d "$1/.git" ] || [ -f "$1/bin/fleet-up.sh" ]; then echo full
+  if [ -e "$1/.git" ] || [ -f "$1/bin/fleet-up.sh" ]; then echo full
   elif [ -f "$1/.client-version" ]; then echo client
   else echo none; fi
 }
