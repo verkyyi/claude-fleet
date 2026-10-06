@@ -2,7 +2,8 @@
 # fleet-node.sh — `fleet node join` / `fleet node status` (issue #1627): adding
 # a machine as a node is the same one command and one scan as `fleet login`.
 #
-#   fleet node join [--hub URL] [--invert]
+#   fleet node join [--hub URL] [--invert] [--compute 0|1]
+#                   [--no-fleet] [--no-deps] [--no-admin]
 #       Run on the new machine, as the login that will run the fleet. No code,
 #       no web page, no switches: the hub address is the one `fleet login` uses
 #       (FLEET_HUB_URL / fleet.conf — fleet-login.py hub), the device key is the
@@ -13,6 +14,12 @@
 #       each, and a failure is one `✗ …` line ending 「重跑同一条命令即可」.
 #       A rerun whose node.env token the hub still accepts skips the scan and
 #       redoes only what is missing. FLEET_ROLE gains `node` (fleet-conf.sh).
+#       A first join only COORDINATES (issue #1719): node.env gets
+#       CCQUOTA_FLEET_COMPUTE=0, so the hub places no session here and leases no
+#       account; --compute 1 opens it. --no-fleet / --no-deps / --no-admin go to
+#       fleet-node-join.sh as they are — the install line (fleet-install.sh)
+#       joins with all three: the client is already there, and a laptop needs
+#       no Homebrew packages and runs no account ops.
 #   fleet node status
 #       Like `fleet login status`: is this login a node, of which hub, and does
 #       the hub see it online. Exit 0 only when it does.
@@ -42,11 +49,14 @@ jfield() { sed -n "s/.*\"$1\":\"\\([^\"]*\\)\".*/\\1/p" | head -n 1; }
 
 cmd_join() {
   local hub_arg="" invert="" hub tok work rc
+  local pass=()
   while [ $# -gt 0 ]; do
     case "$1" in
       --hub) hub_arg="${2:-}"; shift ;;
       --hub=*) hub_arg="${1#--hub=}" ;;
       --invert) invert=--invert ;;
+      --compute) pass+=(--compute "${2:-}"); shift ;;
+      --no-fleet|--no-deps|--no-admin) pass+=("$1") ;;
       -h|--help) usage; return 0 ;;
       *) echo "fleet node join: unknown option $1 (see fleet node --help)" >&2; return 2 ;;
     esac
@@ -72,7 +82,7 @@ cmd_join() {
     || echo "! 没能在 $CONF/fleet.conf 里记下 node 角色（fleet-conf.sh set-hub）" >&2
 
   # shellcheck disable=SC2086
-  "$here/fleet-node-join.sh" --hub "$hub" --ui ${joined[@]+"${joined[@]}"} ${FLEET_NODE_JOIN_ARGS:-}
+  "$here/fleet-node-join.sh" --hub "$hub" --ui ${joined[@]+"${joined[@]}"} ${pass[@]+"${pass[@]}"} ${FLEET_NODE_JOIN_ARGS:-}
   rc=$?
   rm -rf "$work"
   return "$rc"

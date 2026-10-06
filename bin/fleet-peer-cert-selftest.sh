@@ -20,6 +20,9 @@
 #                   per line (-i key, CertificateFile, IdentitiesOnly, -l login)
 #   C. names        `verkyyi@m5.tail.ts.net` → m5 → its hub name through
 #                   FLEET_NODE_ALIASES (`macmini=m5` → macmini)
+#   C2. hub list    (issue #1719) peer/machines `mini2 m4`: m4, m4-lan,
+#                   user@mini2 and fleet-m4-public all ask for mini2 — once,
+#                   one certificate file; an unknown name passes through
 #   D. refused      403 → exit 1 naming the hub's reason; curl failing → exit 1
 #                   「入口失联，机器间访问暂停；你可直接 `fleet <机器>` 进去」 —
 #                   paused, never a fallback; nothing on stdout. A down hub is
@@ -124,6 +127,28 @@ export FAKE_BODY="$GRANT"
 FLEET_NODE_ALIASES='macmini=m5 mini2=m4' "$SUT" verkyyi@m5.tail.ts.net upgrade >/dev/null 2>&1 || fail "C: exit $?"
 python3 -c 'import json,sys; b=json.load(open(sys.argv[1])); assert b["target"]=="macmini" and b["purpose"]=="upgrade", b' "$STUB_BODY" \
   || fail "C: body: $(cat "$STUB_BODY")"
+ok
+# C2 (issue #1719): the hub's own list, peer/machines (`fleet login` writes it):
+# m4, m4-lan, mini2 and fleet-m4-public are ONE machine — the hub is asked for
+# mini2 once, and every name gets the same certificate file.
+reset
+export FAKE_BODY="$GRANT" STUB_COUNT="$WORK/c2.count"
+rm -f "$STUB_COUNT" "$FLEET_CONF_DIR"/peer/*-cert.pub*
+mkdir -p "$FLEET_CONF_DIR/peer"
+printf 'macmini m5\nmini2 m4\n' > "$FLEET_CONF_DIR/peer/machines"
+for n in m4 m4-lan verkyyi@mini2 fleet-m4-public; do
+  o=$("$SUT" "$n" view 2>"$WORK/err") || fail "C2: $n exit $?: $(cat "$WORK/err")"
+  case "$o" in *"CertificateFile=$FLEET_CONF_DIR/peer/mini2.view-cert.pub"*) ;; *) fail "C2: $n → $o" ;; esac
+done
+python3 -c 'import json,sys; b=json.load(open(sys.argv[1])); assert b["target"]=="mini2", b' "$STUB_BODY" \
+  || fail "C2: body: $(cat "$STUB_BODY")"
+[ "$(wc -l < "$STUB_COUNT" | tr -d ' ')" = 1 ] || fail "C2: the hub was asked $(wc -l < "$STUB_COUNT") times, want once"
+# a name the list does not know is passed through as before
+reset
+"$SUT" m9 view >/dev/null 2>&1
+python3 -c 'import json,sys; b=json.load(open(sys.argv[1])); assert b["target"]=="m9", b' "$STUB_BODY" || fail "C2: m9 body: $(cat "$STUB_BODY")"
+unset STUB_COUNT
+rm -f "$FLEET_CONF_DIR/peer/machines" "$FLEET_CONF_DIR"/peer/*-cert.pub*
 ok
 
 # D. refused / down

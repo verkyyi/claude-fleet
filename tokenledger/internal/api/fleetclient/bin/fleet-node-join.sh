@@ -40,6 +40,13 @@
 #             the CA + sshd_config.d snippet itself (sshd -t first, rollback on
 #             failure, never a restart). Refuses to replace an agent service it
 #             did not write unless --force.
+#             COMPUTE (issue #1719): a FIRST join writes CCQUOTA_FLEET_COMPUTE=0
+#             into node.env — the login heartbeats, holds its identity and
+#             certificates, and coordinates, but the hub places no session on it
+#             and leases it no account (it uses its own). `--compute 1` opens it
+#             (EPIC #1718: «默认不在本机跑»). A rerun keeps what node.env says —
+#             a node joined before #1719 has no line and keeps running sessions —
+#             unless --compute is given.
 #   online    polls <hub>/v1/node/self until the hub sees this agent (--wait).
 #   fleet     ~/.claude/fleet cloned at `stable` (or --fleet-src/--ref), then
 #             bin/fleet-login-bootstrap.sh: Claude Code, hooks, daemons, a seed
@@ -51,7 +58,7 @@
 #                      [--joined <file>] [--ui]
 #                      [--no-fleet] [--fleet-src <git url|dir>] [--ref <ref>]
 #                      [--ccquota <file>] [--service auto|detached|none]
-#                      [--wait <secs>] [--force]
+#                      [--wait <secs>] [--force] [--compute 0|1]
 #
 # Env (test seams): FLEET_JOIN_SUDO (the sudo prefix; default `sudo -n`) ·
 #   FLEET_JOIN_OS / FLEET_JOIN_ARCH (override uname) · FLEET_JOIN_POLL (poll
@@ -64,6 +71,7 @@ PROG=fleet-node-join
 HUB="" CODE="" JOINED="" UI=0 ADMIN=1 DEPS=1 FLEET=1 SERVICE=auto WAIT=180 FORCE=0
 SRC_REPO="https://github.com/verkyyi/claude-fleet.git" SRC_REF="" CCQ_SRC=""
 SRC_SET=0
+COMPUTE=""   # "" = a first join's 0, a rerun's whatever node.env says (issue #1719)
 
 usage() {
   if [ -f "$0" ]; then sed -n '2,/^set -uo pipefail/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
@@ -104,6 +112,7 @@ while [ $# -gt 0 ]; do
     --service) SERVICE="${2:-}"; shift ;;
     --wait) WAIT="${2:-}"; shift ;;
     --force) FORCE=1 ;;
+    --compute) COMPUTE="${2:-}"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown argument: $1 (see --help)" 2 ;;
   esac
@@ -118,6 +127,7 @@ if [ -n "$JOINED" ]; then
 fi
 case "$SERVICE" in auto|detached|none) ;; *) die "--service: auto | detached | none" 2 ;; esac
 case "$WAIT" in ''|*[!0-9]*) die "--wait: seconds" 2 ;; esac
+case "$COMPUTE" in ''|0|1) ;; *) die "--compute: 0 | 1" 2 ;; esac
 # fj_ + 26 base32 characters — checked here so a typo fails before anything runs.
 if [ -n "$CODE" ] && ! printf '%s' "$CODE" | grep -Eq '^fj_[a-z2-7]{26}$'; then
   die "--token does not look like a join code (fj_ + 26 characters)" 2
@@ -183,9 +193,10 @@ priv() {
 }
 can_priv() { [ "$UID_N" = 0 ] || { [ -n "$SUDO" ] && priv true >/dev/null 2>&1; }; }
 
-load_env() { # → TOKEN, saved HUB match, KIND
-  TOKEN="" SAVED_HUB="" KIND=""
+load_env() { # → TOKEN, saved HUB match, KIND, SAVED_COMPUTE
+  TOKEN="" SAVED_HUB="" KIND="" SAVED_COMPUTE=""
   [ -f "$ENVF" ] || return 1
+  SAVED_COMPUTE="$(sed -n 's/^CCQUOTA_FLEET_COMPUTE=//p' "$ENVF" | head -n 1)"
   TOKEN="$(sed -n 's/^CCQUOTA_TOKEN=//p' "$ENVF" | head -n 1)"
   SAVED_HUB="$(sed -n 's/^CCQUOTA_HUB_URL=//p' "$ENVF" | head -n 1)"
   KIND="$(sed -n 's/^CCQUOTA_FLEET_NODE_KIND=//p' "$ENVF" | head -n 1)"
@@ -205,6 +216,8 @@ write_env() {
       # ephemeral = a SPOT node, whose agent treats SIGTERM as the cloud
       # taking the machine (tell the hub, move idle sessions off, then stop).
       if [ "${KIND:-}" = ephemeral ]; then printf 'CCQUOTA_FLEET_NODE_KIND=ephemeral\n'; fi
+      # Coordinate only (issue #1719): no placement, no lease. Absent = on.
+      if [ -n "$COMPUTE" ]; then printf 'CCQUOTA_FLEET_COMPUTE=%s\n' "$COMPUTE"; fi
     } > "$ENVF.tmp" ) && mv "$ENVF.tmp" "$ENVF" && chmod 600 "$ENVF"
 }
 
@@ -213,7 +226,12 @@ self_status() { # → the /v1/node/self body on stdout; exit 0 iff 200
 }
 
 # ── join ────────────────────────────────────────────────────────────────────
-TOKEN="" SAVED_HUB="" KIND=""
+TOKEN="" SAVED_HUB="" KIND="" SAVED_COMPUTE=""
+# compute (issue #1719): --compute wins; else a node.env already here keeps its
+# word (no line = a node from before #1719, still on); else a first join is 0.
+if [ -z "$COMPUTE" ]; then
+  if [ -f "$ENVF" ]; then load_env; COMPUTE="$SAVED_COMPUTE"; else COMPUTE=0; fi
+fi
 if [ -z "$JOINED" ] && load_env && [ "$SAVED_HUB" = "$HUB" ] && self_status >/dev/null; then
   say "join: already registered with $HUB — the join code was not spent"
   # Keep the admin choice of THIS run.
@@ -597,6 +615,10 @@ else
   say "fleet: skipped (--no-fleet)"
 fi
 
+if [ "$COMPUTE" = 0 ]; then
+  say "compute: off (CCQUOTA_FLEET_COMPUTE=0) — the hub places no session here and leases no account"
+  ui "✓ 只协调：入口不往这台派会话、不借账号（本机跑会话用自己的账号）"
+fi
 [ "$ONLINE" = 1 ] || [ "$SERVICE" = none ] || exit 1
 say "done: $HOSTN/$ME joined $HUB"
 ui "✓ 已上线：$HOSTN/$ME 是 $HUB 的节点"

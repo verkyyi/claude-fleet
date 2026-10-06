@@ -281,7 +281,16 @@ type Hello struct {
 	// Capabilities lists optional message families this node serves
 	// (CapRead). Absent on an agent older than claude-fleet#1409.
 	Capabilities []string `json:"capabilities,omitempty"`
+	// Compute is false when this login only coordinates (claude-fleet#1719,
+	// CCQUOTA_FLEET_COMPUTE=0): heartbeat, identity and certificates, but no
+	// placement and no credential lease. nil — an agent older than #1719, or
+	// one started without the setting — is compute on, as every node was.
+	Compute *bool `json:"compute,omitempty"`
 }
+
+// ComputeOn reads a hello's or heartbeat's Compute: only an explicit false is
+// off (claude-fleet#1719).
+func ComputeOn(c *bool) bool { return c == nil || *c }
 
 // HasCap reports whether a hello listed capability c.
 func (h Hello) HasCap(c string) bool {
@@ -374,6 +383,10 @@ type Heartbeat struct {
 	// silently dropped. NotReady names what is missing when it is false.
 	Ready    *bool  `json:"ready,omitempty"`
 	NotReady string `json:"not_ready,omitempty"`
+
+	// Compute repeats the hello's (claude-fleet#1719) so the roster row the
+	// hub keeps says it too: false = coordinate only, never placed or leased.
+	Compute *bool `json:"compute,omitempty"`
 
 	AgentVersion string    `json:"agent_version,omitempty"`
 	ObservedAt   time.Time `json:"observed_at"`

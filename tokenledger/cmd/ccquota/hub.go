@@ -915,6 +915,9 @@ func runAgent(args []string) error {
 		// Only meaningful with the fleet module on: the admin agent is a
 		// role on the control channel.
 		FleetAdmin: fleetEnabled() && os.Getenv("CCQUOTA_FLEET_ADMIN") == "1",
+		// Coordinate only (claude-fleet#1719): no placement, no lease. Only
+		// an explicit 0 — a node joined before #1719 has no line and runs.
+		FleetComputeOff: fleetEnabled() && os.Getenv("CCQUOTA_FLEET_COMPUTE") == "0",
 		// Lease this login's credentials from the hub's vault (#1415).
 		FleetCreds:         fleetEnabled() && os.Getenv("CCQUOTA_FLEET_CREDS") == "1",
 		FleetCodexHomesDir: os.Getenv("CCQUOTA_FLEET_CODEX_HOMES"),

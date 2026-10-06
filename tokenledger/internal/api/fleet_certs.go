@@ -144,6 +144,11 @@ type CertResponse struct {
 	// SSHConfig is the snippet for FleetSSHConfigPath.
 	SSHConfig string `json:"ssh_config"`
 	Hub       string `json:"hub"`
+	// Machines names every machine the snippet covers, the hub's hostname
+	// beside the alias people type (claude-fleet#1719): a node's `fleet login`
+	// writes a peer-certificate Match per machine from it, and
+	// fleet-peer-cert.sh turns any of the names back into the hostname.
+	Machines []CertMachine `json:"machines,omitempty"`
 	// Node is the machine's node pass (claude-fleet#1627): present only when
 	// the scan was `fleet node join` (purpose=node), never on a plain login.
 	Node *NodeJoinResponse `json:"node,omitempty"`
@@ -215,8 +220,28 @@ func (s *Server) issueCert(r *http.Request, pid, keyLine, via string) (*CertResp
 		ValidAfter:  iss.ValidAfter,
 		ValidBefore: iss.ValidBefore,
 		SSHConfig:   s.sshConfigFor(p.Login, hosts),
+		Machines:    s.certMachines(hosts),
 		Hub:         s.hubURL(r),
 	}, nil
+}
+
+// CertMachine is one machine of CertResponse.Machines.
+type CertMachine struct {
+	Hostname string `json:"hostname"`
+	Alias    string `json:"alias"`
+}
+
+// certMachines is the machines the snippet is for (every one when hosts is
+// nil), each name held to sshToken — it goes into an ssh config.
+func (s *Server) certMachines(hosts map[string]bool) []CertMachine {
+	var out []CertMachine
+	for _, m := range s.fleetMachines() {
+		if (hosts != nil && !hosts[m.Hostname]) || !sshToken(m.Hostname) || !sshToken(m.alias()) {
+			continue
+		}
+		out = append(out, CertMachine{Hostname: m.Hostname, Alias: m.alias()})
+	}
+	return out
 }
 
 // hubURL is the address people know the hub by.

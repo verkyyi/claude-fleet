@@ -961,6 +961,18 @@ func (s *Server) nodeStatusOf(endpointID string, now time.Time) (control.Heartbe
 	return control.Heartbeat{}, "lost", false
 }
 
+// excludedComputeOff is placement's word for a login that only coordinates.
+const excludedComputeOff = "compute off (只协调: CCQUOTA_FLEET_COMPUTE=0)"
+
+// computeOff reports whether a login only coordinates (claude-fleet#1719):
+// its live connection's hello said so, or its last heartbeat did.
+func (s *Server) computeOff(endpointID string, hb control.Heartbeat) bool {
+	if c := s.nodes.get(endpointID); c != nil && c.computeOff {
+		return true
+	}
+	return !control.ComputeOn(hb.Compute)
+}
+
 // checkNodeCap refuses a start or resume that would take a person past their
 // cap on the fleet's machine.
 func (s *Server) checkNodeCap(r store.FleetRow, now time.Time) error {
@@ -1135,6 +1147,10 @@ func (s *Server) judge(r store.FleetRow, settings map[string]string, accounts ma
 	switch {
 	case status != "online":
 		c.Excluded = "offline"
+	case s.computeOff(r.EndpointID, hb):
+		// 只协调 (claude-fleet#1719): the login asked for no sessions —
+		// out for auto AND for a start that names it.
+		c.Excluded = excludedComputeOff
 	case flagged:
 		// 维护中 (claude-fleet#1427): the operator is taking the machine down.
 		// Out for auto AND for a start that names it — unlike not-ready, this
