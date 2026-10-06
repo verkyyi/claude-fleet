@@ -60,12 +60,20 @@
 #                 a process running from the old path keeps running; an old
 #                 client-update layout (<old> → <old>.versions/<v>) in use is
 #                 kept until nothing runs from it, then goes on the next run
+#   J. in use     (issue #1900) a rerun on a client the line installed, against
+#                 a hub naming a version: the same version → nothing moves;
+#                 v2 while the client runs → the version in use unchanged by one
+#                 byte, v2 staged whole beside it (.next), and the keeper's idle
+#                 `tick` switches to it (v1 → .prev); v3 with the client closed →
+#                 the line switches itself in one rename (v2 → .prev, v1 pruned);
+#                 a run that fails half way stays on v3; .prev rolls back
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-install-selftest.XXXXXX") || exit 2
 HUB_PID=""
 cleanup() {
   if [ -n "$HUB_PID" ]; then kill "$HUB_PID" 2>/dev/null; fi
+  if [ -n "${JHUB_PID:-}" ]; then kill "$JHUB_PID" 2>/dev/null; fi
   rm -rf "${WORK:?}"
 }
 trap cleanup EXIT INT TERM HUP
@@ -543,6 +551,111 @@ kill "$RUNPID" 2>/dev/null; wait "$RUNPID" 2>/dev/null
 out=$(env -i HOME="$I1" PATH="$SYSPATH" SHELL=/bin/zsh TMPDIR="$WORK" FLEET_INSTALL_NO_RUN=1 FLEET_INSTALL_NO_DEPS=1 \
       FLEET_INSTALL_NO_AGENTS=1 FLEET_INSTALL_NO_NODE=1 FLEET_INSTALL_ASK=0 sh < "$WORK/install.sh" 2>&1); rc=$?
 [ "$rc" = 0 ] && [ ! -e "$OLDT.versions" ] && ok "I …and go on the next run once nothing runs from them" || bad "I versions left: rc=$rc $(ls "$I1/.local/share") $out"
+
+# ── J — a rerun on a client in use: whole versions, never in place (#1900) ──
+# Its own fake hub: /version names a version (a file the leg rewrites) and the
+# files come from a copy of the manifest's, so a "new version" is a changed copy.
+J="$WORK/j"; JS="$J/src"; JH="$J/home"; JR="$JH/.claude/fleet"; JV="$JR.versions"
+mkdir -p "$JS" "$JH" "$J/tm"
+for f in $FILES; do mkdir -p "$JS/$(dirname "$f")"; cp "$REPO/$f" "$JS/$f"; done
+echo v1 > "$J/ver"
+cat > "$J/hub.py" <<'PYJ'
+import hashlib, json, os, sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+SRC, MAN, W = sys.argv[1:4]
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_GET(self):
+        p = self.path
+        if p == "/version":
+            v = open(os.path.join(W, "ver")).read().strip()
+            b = json.dumps({"client_version": v, "client_compat": "1", "commit": v}).encode()
+        elif p == "/install/manifest":
+            b = open(MAN, "rb").read()
+        elif p.startswith("/install/") and ".." not in p and os.path.isfile(os.path.join(SRC, p[9:])):
+            b = open(os.path.join(SRC, p[9:]), "rb").read()
+        else:
+            self.send_response(404); self.end_headers(); return
+        sha = hashlib.sha256(b).hexdigest()
+        if os.path.exists(os.path.join(W, "corrupt")) and p == "/install/bin/fleet-connect.py":
+            b = b"<html>proxy error</html>\n"
+        self.send_response(200); self.send_header("X-Ccquota-Sha256", sha)
+        self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+s = HTTPServer(("127.0.0.1", 0), H)
+open(os.path.join(W, "port.tmp"), "w").write(str(s.server_port)); os.rename(os.path.join(W, "port.tmp"), os.path.join(W, "port"))
+s.serve_forever()
+PYJ
+python3 "$J/hub.py" "$JS" "$MANIFEST" "$J" & JHUB_PID=$!
+for _ in $(seq 1 300); do [ -s "$J/port" ] && break; sleep 0.1; done
+JHUB="http://127.0.0.1:$(cat "$J/port" 2>/dev/null)"
+sed "s|__FLEET_HUB_URL__|$JHUB|g" "$BIN/fleet-install.sh" > "$J/install.sh"
+# a tmux that says the client's server runs while $J/running exists; nobody
+# has typed for an hour; the running servers were loaded from version v1
+cat > "$J/tm/tmux" <<EOT
+#!/bin/sh
+case " \$* " in
+  *" has-session "*) [ -f "$J/running" ] ;;
+  *" list-clients "*) [ -f "$J/running" ] && echo \$(( \$(date +%s) - 3600 )) ;;
+  *" show-options "*) echo v1 ;;
+  *) exit 0 ;;
+esac
+EOT
+chmod +x "$J/tm/tmux"
+jinst() {
+  env -i HOME="$JH" XDG_CONFIG_HOME="$JH/.config" PATH="$J/tm:$SYSPATH" SHELL=/bin/zsh TMPDIR="$WORK" \
+    FLEET_INSTALL_NO_RUN=1 FLEET_INSTALL_NO_DEPS=1 FLEET_INSTALL_NO_AGENTS=1 FLEET_INSTALL_NO_NODE=1 \
+    FLEET_INSTALL_ASK=0 sh "$J/install.sh" 2>&1
+}
+jsum() { (cd "$1" 2>/dev/null && find . -type f -exec cksum {} + | sort); }
+jtail() { tail -n 1 "$JR/bin/fleet"; }
+out=$(jinst); rc=$?
+[ "$rc" = 0 ] && [ -d "$JR" ] && [ ! -L "$JR" ] && [ ! -e "$JV" ] && grep -qx version=v1 "$JR/.client-version" \
+  && ok "J first install: a plain directory, version v1" || bad "J first install rc=$rc: $out"
+out=$(jinst); rc=$?
+[ "$rc" = 0 ] && [ ! -L "$JR" ] && [ ! -e "$JV" ] && echo "$out" | grep -q '已是这一版' \
+  && ok "J the same version again: nothing moves, said" || bad "J rerun same rc=$rc: $out"
+# v2 on the hub; the client is running
+echo v2 > "$J/ver"; echo '# v2' >> "$JS/bin/fleet"; touch "$J/running"
+before=$(jsum "$JR")
+out=$(jinst); rc=$?
+[ "$rc" = 0 ] && [ "$(jsum "$JR")" = "$before" ] && [ ! -L "$JR" ] && grep -qx version=v1 "$JR/.client-version" \
+  && ok "J client running: the version in use is not changed by one byte" || bad "J in use changed rc=$rc: $out"
+[ "$(cat "$JV/.next" 2>/dev/null)" = v2 ] && [ -f "$JV/v2/.staged" ] && grep -qx version=v2 "$JV/v2/.client-version" \
+  && [ "$(tail -n 1 "$JV/v2/bin/fleet")" = '# v2' ] && [ -z "$(ls -A "$JV" | grep -v -e '^v2$' -e '^\.next$')" ] \
+  && echo "$out" | grep -q '等你空闲时原地换上' \
+  && ok "J …the new version is staged whole beside it (.next = v2), and said" || bad "J staged: $(ls -A "$JV" 2>&1) $out"
+nmiss=''
+for f in $FILES; do cmp -s "$JS/$f" "$JV/v2/$f" || nmiss="$nmiss $f"; done
+[ -z "$nmiss" ] && ok "J …every manifest file is in the new version dir, identical" || bad "J v2 differs:$nmiss"
+# the keeper, once idle, takes it in place: the stock `tick`, the new client's
+# reload stubbed (fleet-client-live-update-selftest drives the real one)
+printf '#!/bin/sh\necho "$@" >> "%s/reload.log"\n' "$J" > "$JV/v2/bin/fleet-shell.sh"
+mkdir -p "$J/state"; date +%s > "$J/state/checked"
+env -i HOME="$JH" XDG_CONFIG_HOME="$JH/.config" PATH="$J/tm:$SYSPATH" TMPDIR="$WORK" \
+  FLEET_CLIENT_ROOT="$JR" FLEET_CLIENT_STATE="$J/state" FLEET_SHELL_CACHE="$J/cache" FLEET_CLIENT_UPDATE_STATE="$J/update.state" \
+  bash "$JR/bin/fleet-client-update.sh" tick fleet-shell >/dev/null 2>&1; rc=$?
+[ "$rc" = 4 ] && [ -L "$JR" ] && [ "$JR" -ef "$JV/v2" ] && [ "$(jtail)" = '# v2' ] && [ "$(cat "$JV/.prev" 2>/dev/null)" = v1 ] \
+  && [ ! -e "$JV/.next" ] && grep -q '^reload fleet-shell' "$J/reload.log" 2>/dev/null \
+  && ok "J the keeper, idle: switched to v2 in place (exit 4), v1 kept as .prev" || bad "J keeper rc=$rc: $(ls -la "$JH/.claude" "$JV" 2>&1)"
+cp "$JS/bin/fleet-shell.sh" "$JV/v2/bin/fleet-shell.sh"
+# v3, client not running: the line switches itself, in one rename
+rm -f "$J/running"; echo v3 > "$J/ver"; echo '# v3' >> "$JS/bin/fleet"
+out=$(jinst); rc=$?
+[ "$rc" = 0 ] && [ "$JR" -ef "$JV/v3" ] && [ "$(jtail)" = '# v3' ] && [ "$(cat "$JV/.prev")" = v2 ] \
+  && [ ! -e "$JV/v1" ] && [ -z "$(ls -A "$JV" | grep -v -e '^v[23]$' -e '^\.prev$')" ] && echo "$out" | grep -q '已整版切到 v3' \
+  && ok "J client not running: switched to v3 at once, v2 is .prev, v1 pruned" || bad "J switch v3 rc=$rc: $(ls -A "$JV") $out"
+# a run that fails half way (a download that does not match) stays on v3
+echo v4 > "$J/ver"; echo '# v4' >> "$JS/bin/fleet"; touch "$J/corrupt"
+before=$(jsum "$JV")
+out=$(jinst); rc=$?
+rm -f "$J/corrupt"
+[ "$rc" = 1 ] && [ "$JR" -ef "$JV/v3" ] && [ "$(jsum "$JV")" = "$before" ] \
+  && ok "J a run that fails half way: still v3, the versions untouched (exit 1)" || bad "J failure rc=$rc: $(ls -A "$JV") $out"
+# .prev rolls back
+ln -sfn "$JV/$(cat "$JV/.prev")" "$JR"
+[ "$(jtail)" = '# v2' ] && grep -qx version=v2 "$JR/.client-version" \
+  && ok "J .prev rolls back: ln -sfn <versions>/<.prev> <home> → v2" || bad "J rollback: $(jtail)"
+kill "$JHUB_PID" 2>/dev/null; wait "$JHUB_PID" 2>/dev/null
 
 [ "$fail" = 0 ] && echo "PASS fleet-install-selftest" || echo "FAIL fleet-install-selftest"
 exit "$fail"

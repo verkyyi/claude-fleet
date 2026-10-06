@@ -55,6 +55,9 @@ bin/fleet-client-lib.sh
 # keeps up with stable by itself (#1722, #1805): newer client + the team's
 # defaults; `fleet update` says where this computer stands
 bin/fleet-client-update.sh
+# the one whole-version switch (#1894, #1900): the updater's and the install
+# line's — a rerun of the line installs beside the client in use, never over it
+bin/fleet-versions-lib.sh
 bin/fleet-update.sh
 bin/fleet-shell.sh
 bin/fleet-client-lease.py

@@ -1,6 +1,8 @@
 #!/bin/bash
 # fleet-versions-lib.sh — ONE way to switch an install between whole versions
-# (issue #1894, EPIC #1906 C1; the client's half is C7 #1900).
+# (issue #1894, EPIC #1906 C1; the client's half — fleet-client-update.sh and
+# the install line, fleet-install.sh — is C7 #1900). POSIX sh, not just bash:
+# the install line sources it from the client it just downloaded.
 #
 # An install HOME (~/.claude/fleet) is a SYMLINK to one directory under
 # <home>.versions/<key>/; a switch is ONE rename(2) of a link made beside it, so
@@ -49,4 +51,19 @@ fleet_versions_current() {
   vt=$(readlink "$1") || return 0
   vt=${vt%/}
   printf '%s\n' "${vt##*/}"
+}
+
+# fleet_versions_prune <home> <keep>... — every version dir under
+# <home>.versions/ but the ones named goes (the client keeps the current one,
+# .prev's and .next's; a dot-dir — .staging, .lock — is never touched).
+fleet_versions_prune() {
+  local vh="$1" vd vn
+  shift
+  for vd in "$vh.versions"/*/; do
+    [ -d "$vd" ] || continue
+    vn=${vd%/}; vn=${vn##*/}
+    case " $* " in *" $vn "*) continue ;; esac
+    rm -rf "$vd"
+  done
+  return 0
 }
