@@ -21,7 +21,9 @@
 #
 #   open <worker_id>        (dash Enter, in a fleet pane) — open the proxy window
 #                           for the row's machine, or retarget + select the one
-#                           already open: ONE proxy window per machine, because
+#                           already open: ONE proxy window per machine (in the
+#                           shell, on its STAGE server, FLEET_SHELL_STAGE —
+#                           issue #1759), because
 #                           it is a client of that machine's one fleet session
 #                           (one fleet per login).
 #   run [--shell] <node> <worker_id>  the proxy pane's program: connect, reconnect,
@@ -315,10 +317,20 @@ open)
   title="$node ${name:-${wid#*/}}"
   shellopt=''; [ "${FLEET_SHELL:-0}" = 1 ] && shellopt=' --shell'   # the shell's panes (#1484)
   cmd="exec bash $(sq "$BIN/fleet-remote-view.sh") run$shellopt $(sq "$node") $(sq "$wid")"
-  w=$(tmux list-windows -t "=$sess" -F '#{window_id} #{@remote}' 2>/dev/null \
+  # The shell's STAGE (issue #1759): there the proxy windows live on a server of
+  # their own (FLEET_SHELL_STAGE, conf/tmux-shell-stage.conf) that the shell's one
+  # window shows in its right pane — every window op below happens THERE, so a
+  # switch repaints the right pane and nothing else. No stage (a fleet, or a
+  # shell started before it): this server, as before.
+  OT() { tmux "$@"; }; osess=$sess
+  if [ "${FLEET_SHELL:-0}" = 1 ] && [ -n "${FLEET_SHELL_STAGE:-}" ] \
+     && tmux -L "$FLEET_SHELL_STAGE" has-session -t "=$FLEET_SHELL_STAGE" 2>/dev/null; then
+    OT() { tmux -L "$FLEET_SHELL_STAGE" "$@"; }; osess=$FLEET_SHELL_STAGE
+  fi
+  w=$(OT list-windows -t "=$osess" -F '#{window_id} #{@remote}' 2>/dev/null \
       | awk -v n="$node:" 'index($2, n) == 1 { print $1; exit }')
   if [ -n "$w" ]; then
-    cur=$(tmux show-options -wqv -t "$w" @remote 2>/dev/null)
+    cur=$(OT show-options -wqv -t "$w" @remote 2>/dev/null)
     if [ "$cur" != "$node:$wid" ]; then
       # Another row of the SAME machine (issue #1484): over the proxy's own ssh
       # connection (`@remote_ctl`, the ControlMaster `run` holds), select that
@@ -326,29 +338,29 @@ open)
       # once. No master up, or the worker not live there: reconnect, as before.
       # Fastest first (issue #1682): the `serve` channel `run` keeps open on that
       # connection (`@remote_chan`) — one round trip, nothing started at either end.
-      ctl=$(tmux show-options -wqv -t "$w" @remote_ctl 2>/dev/null)
-      rview=$(tmux show-options -wqv -t "$w" @remote_view 2>/dev/null)   # its view session (#1489)
-      chn=$(tmux show-options -wqv -t "$w" @remote_chan 2>/dev/null)
+      ctl=$(OT show-options -wqv -t "$w" @remote_ctl 2>/dev/null)
+      rview=$(OT show-options -wqv -t "$w" @remote_view 2>/dev/null)   # its view session (#1489)
+      chn=$(OT show-options -wqv -t "$w" @remote_chan 2>/dev/null)
       SSH="${FLEET_REMOTE_SSH_CMD:-ssh}"; host=$(ssh_host "$node"); rbin="${FLEET_REMOTE_BIN:-.claude/fleet/bin}"
       if [ -n "$chn" ] && rv_chan_select "$chn" "$wid"; then
-        tmux set-window-option -t "$w" @remote "$node:$wid" 2>/dev/null
-        tmux rename-window -t "$w" -- "$title" 2>/dev/null
+        OT set-window-option -t "$w" @remote "$node:$wid" 2>/dev/null
+        OT rename-window -t "$w" -- "$title" 2>/dev/null
       elif [ -n "$ctl" ] && [ -S "$ctl" ] && $SSH -S "$ctl" -O check "$host" >/dev/null 2>&1 \
          && $SSH -S "$ctl" "$host" "bash $rbin/fleet-remote-view.sh select $(sq "$wid")${rview:+ $(sq "$rview")}" >/dev/null 2>&1; then
-        tmux set-window-option -t "$w" @remote "$node:$wid" 2>/dev/null
-        tmux rename-window -t "$w" -- "$title" 2>/dev/null
+        OT set-window-option -t "$w" @remote "$node:$wid" 2>/dev/null
+        OT rename-window -t "$w" -- "$title" 2>/dev/null
       else
-        tmux set-window-option -t "$w" @remote "$node:$wid" 2>/dev/null
-        tmux rename-window -t "$w" -- "$title" 2>/dev/null
-        tmux respawn-pane -k -t "$w" -c "$HOME" "$cmd" 2>/dev/null
+        OT set-window-option -t "$w" @remote "$node:$wid" 2>/dev/null
+        OT rename-window -t "$w" -- "$title" 2>/dev/null
+        OT respawn-pane -k -t "$w" -c "$HOME" "$cmd" 2>/dev/null
       fi
     fi
   else
-    w=$(tmux new-window -d -P -F '#{window_id}' -t "=$sess:" -n "$title" -c "$HOME" "$cmd" 2>/dev/null) || exit 1
-    tmux set-window-option -t "$w" @remote "$node:$wid" 2>/dev/null
-    tmux set-window-option -t "$w" automatic-rename off 2>/dev/null
+    w=$(OT new-window -d -P -F '#{window_id}' -t "=$osess:" -n "$title" -c "$HOME" "$cmd" 2>/dev/null) || exit 1
+    OT set-window-option -t "$w" @remote "$node:$wid" 2>/dev/null
+    OT set-window-option -t "$w" automatic-rename off 2>/dev/null
   fi
-  tmux select-window -t "$w" 2>/dev/null
+  OT select-window -t "$w" 2>/dev/null
   printf '%s\n' "$w"
   ;;
 

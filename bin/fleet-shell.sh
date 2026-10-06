@@ -14,19 +14,31 @@
 # routed by `fleet connect` — tailnet / gateway port / hub relay last, #1413). A
 # row on the SAME machine as the right pane is selected over that pane's own ssh
 # connection (`fleet-remote-view.sh select`, no reconnect); a row on ANOTHER machine
-# switches to that machine's window. The list and the bar never move.
+# switches the right pane to that machine. The list and the bar never move — and
+# never repaint: a switch, to the same machine or another, rewrites the right
+# pane alone (issue #1759).
 #
 # How it is built — nothing new is rendered here (EPIC #1479 「两套行生成器漂移」):
 #   · its OWN tmux server, `-L fleet-shell` (FLEET_SHELL_SESSION), one session of
 #     that name — a fleet's socket label IS its session name, so every in-pane
 #     script resolves this server the way it resolves a fleet's; never a fleet's
 #     server, never its conf;
-#   · ONE WINDOW PER MACHINE, each a proxy window (`m4 <name>`, `@remote=<node>:
-#     <wid>`) exactly as a fleet opens one on a remote row (#1424/#1475), its pane
+#   · ONE WINDOW on it, `home` (`@shell_frame`): the list pane on the left, and on
+#     the right a NESTED client of the STAGE (`viewer` below) — a second server of
+#     the shell's, `-L <session>-stage` (conf/tmux-shell-stage.conf), holding ONE
+#     WINDOW PER MACHINE, each a proxy window (`m4 <name>`, `@remote=<node>:<wid>`)
+#     exactly as a fleet opens one on a remote row (#1424/#1475), its pane
 #     `fleet-remote-view.sh run --shell`: the far end registers a SHELL client and
-#     hides its own list, bar and prefix while only shells are attached (#1485);
-#   · the list pane joins whichever window is current (fleet-sidebar.py `jump`),
-#     and the conf's hooks put one back after a window closes (`sync`);
+#     hides its own list, bar and prefix while only shells are attached (#1485).
+#     Switching machines is a `select-window` on the stage (fleet-remote-view.sh
+#     `open`, FLEET_SHELL_STAGE): tmux repaints every client of the server a
+#     window op runs on, so on the stage that is the nested client — the right
+#     pane — and the shell's own server, with the list, its borders and the bar,
+#     sees nothing at all (issue #1759; #1702's window-per-machine swap repainted
+#     the whole screen). The stage's status line, on its top, is the right pane's
+#     title (the machine, the session, 中转 / 失联 / 旧);
+#   · the list pane sits in `home` and never moves; the conf's hooks draw it
+#     (`sync`), and it reads which row is current off the stage;
 #   · the data: `fleet-hub-sessions.sh --loop` in CLIENT MODE
 #     (FLEET_HUB_SESSIONS_CLIENT=<session>) — one pseudo-fleet, every row remote,
 #     signed by THIS device's certificate (`fleet-sessions@claude-fleet`, so the
@@ -59,8 +71,11 @@
 #                          device (issue #1717) — see `actions` below
 #   warm <session> [--once] keeps ONE ssh master per machine you have sessions on
 #                          (issue #1631) — see `warm` below
-#   wait <session>         the first window when no machine is online: a note,
-#                          gone as soon as a row opens a real one
+#   viewer <session>       the right pane of `home`: a nested client of the stage,
+#                          started again (with the stage, when it is gone) for as
+#                          long as the shell's server lives
+#   wait <session>         the stage's first window when no machine is online: a
+#                          note, gone as soon as a row opens a real one
 #   env [MACHINE]          print the environment the server would get (debug, tests)
 #
 # ~/.config/claude-fleet/fleet.conf — the machine's one config file (issue #1623):
@@ -115,6 +130,7 @@ SESS="${FLEET_SHELL_SESSION:-fleet-shell}"
 case "$SESS" in ''|*[!A-Za-z0-9._-]*) SESS=fleet-shell ;; esac
 CACHE="${FLEET_SHELL_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet/shell}"
 PREFIX="${FLEET_SHELL_PREFIX:-C-b}"
+STAGE="$SESS-stage"                      # the proxies' server (issue #1759): label = session
 
 note() { printf 'fleet: %s\n' "$*" >&2; }
 # fail_start <why> — the client could not start (nothing attached yet): one line
@@ -126,6 +142,7 @@ fail_start() {
 }
 sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 T() { tmux -L "$SESS" "$@"; }
+TS() { tmux -L "$STAGE" "$@"; }
 
 # tmux_ok — tmux ≥ 3.2 on PATH (the key-table binds and `-e` need it).
 tmux_ok() {
@@ -316,6 +333,7 @@ print(" ".join(out))
   SRC=hub; have_hub || SRC=local
   SHELL_ENV="FLEET_SHELL=1
 FLEET_SHELL_SESSION=$SESS
+FLEET_SHELL_STAGE=$STAGE
 FLEET_HUB_SESSIONS_CLIENT=$SESS
 CCQUOTA_FLEET=1
 FLEET_SIDEBAR_SOURCE=$SRC
@@ -362,21 +380,44 @@ mirror() {
   [ -f "$f" ] && mkdir -p "$CACHE/conf" && ln -sf "$f" "$CACHE/conf/fleet-palette.conf"
   return 0
 }
-# write_conf — conf/tmux-shell.conf with the paths filled + the environment
+# write_conf — conf/tmux-shell.conf (the shell's server) and conf/tmux-shell-stage.conf
+# (the stage's, issue #1759) with the paths filled + the environment
 write_conf() {
-  local tpl="$BIN/../conf/tmux-shell.conf" line
-  [ -f "$tpl" ] || tpl="$REAL_BIN/../conf/tmux-shell.conf"   # run from the mirror: beside the real bin/
-  [ -f "$tpl" ] || fail_start "缺 $tpl"
-  {
-    sed -e "s|__BIN__|$SHADOW|g" -e "s|__PREFIX__|$PREFIX|g" "$tpl"
-    while IFS= read -r line; do
-      [ -n "$line" ] || continue
-      case "$line" in *"'"*) continue ;; esac     # a value no single-quoted tmux string can hold
-      printf "set-environment -g %s '%s'\n" "${line%%=*}" "${line#*=}"
-    done <<EOF
+  local name out line tpl
+  for name in tmux-shell tmux-shell-stage; do
+    tpl="$BIN/../conf/$name.conf"
+    [ -f "$tpl" ] || tpl="$REAL_BIN/../conf/$name.conf"   # run from the mirror: beside the real bin/
+    [ -f "$tpl" ] || fail_start "缺 $tpl"
+    out="$CACHE/tmux.conf"; [ "$name" = tmux-shell ] || out="$CACHE/tmux-stage.conf"
+    {
+      sed -e "s|__BIN__|$SHADOW|g" -e "s|__PREFIX__|$PREFIX|g" -e "s|__STAGE__|$STAGE|g" -e "s|__SESS__|$SESS|g" "$tpl"
+      while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        case "$line" in *"'"*) continue ;; esac     # a value no single-quoted tmux string can hold
+        printf "set-environment -g %s '%s'\n" "${line%%=*}" "${line#*=}"
+      done <<EOF
 $SHELL_ENV
 EOF
-  } > "$CACHE/tmux.conf"
+    } > "$out" || return 1
+  done
+}
+# stage_up [<command> <@remote> <name>] — the stage server and its session, with
+# that first window (default: the `wait` note, `@remote=-:`). Already up: nothing.
+stage_up() {
+  local cmd="${1:-}" remote="${2:--:}" title="${3:-fleet}" w
+  TS has-session -t "=$STAGE" 2>/dev/null && return 0
+  [ -f "$CACHE/tmux-stage.conf" ] || return 1
+  [ -n "$cmd" ] || cmd="exec bash $(sq "$SHADOW/fleet-shell.sh") wait $(sq "$SESS")"
+  w=$(TS -f "$CACHE/tmux-stage.conf" new-session -d -P -F '#{window_id}' -s "$STAGE" -n "$title" -c "$HOME" -x 180 -y 50 "$cmd") \
+    || return 1
+  TS set-window-option -t "$w" @remote "$remote" \; set-window-option -t "$w" automatic-rename off 2>/dev/null
+  return 0
+}
+# stage_select <machine> — the stage's window on that machine current (rc 1: none)
+stage_select() {
+  local w
+  w=$(TS list-windows -t "=$STAGE" -F '#{window_id} #{@remote}' 2>/dev/null | awk -v n="$1:" 'index($2, n) == 1 { print $1; exit }')
+  [ -n "$w" ] && TS select-window -t "$w" 2>/dev/null
 }
 
 mode="${1:-}"
@@ -468,6 +509,9 @@ keeper)
   id=''; { read -r id < "$CL_DIR/client.lease"; } 2>/dev/null
   [ -n "$id" ] && lease release --lease "$id"
   rm -f "$CL_DIR/client.lease" "$CL_DIR/client.lease.old" "$CL_DIR/client.standby" "$CL_DIR/client.nohub" "$CL_DIR/keeper.pid" "$CL_DIR/client.where.json" "$CL_DIR/client.key"
+  # the stage (issue #1759) holds the connections: it goes with the shell — our
+  # own server, never a fleet's
+  tmux -L "$s-stage" kill-server 2>/dev/null
   exit 0
   ;;
 # ---------------------------------------------------------------------------------
@@ -572,7 +616,11 @@ warm)
     rm -f "$sock" "$sock.route" "$sock.pending"
   }
   # riding <sock> — a window's proxy session is on it right now
-  riding() { tmux -L "$s" list-windows -t "=$s" -F '#{@remote_ctl}' 2>/dev/null | grep -qxF "$1"; }
+  # (the stage's windows, issue #1759 — and a shell's own, started before it)
+  riding() {
+    { tmux -L "$s-stage" list-windows -t "=$s-stage" -F '#{@remote_ctl}' 2>/dev/null
+      tmux -L "$s" list-windows -t "=$s" -F '#{@remote_ctl}' 2>/dev/null; } | grep -qxF "$1"
+  }
   while :; do
     if ! tmux -L "$s" has-session -t "=$s" 2>/dev/null && [ -z "$once" ]; then
       for f in "$WD"/*.sock; do [ -e "$f" ] || continue; f=${f##*/}; wstop "${f%.sock}"; done
@@ -598,7 +646,31 @@ warm)
 wait)
   s="${2:-$SESS}"
   printf '\n  入口没有在线的机器，或者连不上入口。\n  左边是入口给的列表（缓存也算）：点一行就进那台机器；底下一栏说入口通不通。\n  prefix d 离开；再敲 fleet 回来。\n'
-  while [ "$(tmux -L "$s" list-windows -t "=$s" -F x 2>/dev/null | grep -c x)" -le 1 ]; do sleep 1; done
+  # its own server's windows: the stage's (issue #1759), or — a shell started
+  # before it — the shell's own
+  while [ "$(tmux list-windows -F x 2>/dev/null | grep -c x)" -le 1 ]; do
+    tmux -L "$s" has-session -t "=$s" 2>/dev/null || exit 0
+    sleep 1
+  done
+  exit 0
+  ;;
+# ---------------------------------------------------------------------------------
+# The right pane of `home` (issue #1759): a nested client of the stage — its
+# TMUX unset, so tmux does not refuse the nesting. The stage gone (its last
+# window closed) is started again with the `wait` note; the shell's server gone,
+# this ends with it.
+viewer)
+  s="${2:-$SESS}"
+  SESS=$s; STAGE="$s-stage"; SHADOW=$BIN
+  while tmux -L "$s" has-session -t "=$s" 2>/dev/null; do
+    if stage_up; then
+      env -u TMUX -u TMUX_PANE tmux -L "$STAGE" attach-session -t "=$STAGE"
+    else
+      printf '\033[2J\033[H  fleet: 右侧起不来（%s）· 1 秒后再试\n' "$CACHE/tmux-stage.conf"
+      sleep 1
+    fi
+    sleep 0.2
+  done
   exit 0
   ;;
 # ---------------------------------------------------------------------------------
@@ -680,7 +752,11 @@ client_open() {
 
 # 2. already running? Re-attach — onto the named machine's window when there is one.
 if T has-session -t "=$SESS" 2>/dev/null; then
-  if [ -n "$node" ]; then
+  if [ -n "$(T show-options -wqv -t "=$SESS:" @shell_frame 2>/dev/null)" ]; then
+    # the stage (issue #1759): the named machine's window current there
+    [ -n "$node" ] && stage_select "$node"
+  elif [ -n "$node" ]; then
+    # a shell started before the stage: one window per machine on its own server
     w=$(T list-windows -t "=$SESS" -F '#{window_id} #{@remote}' 2>/dev/null | awk -v n="$node:" 'index($2, n) == 1 { print $1; exit }')
     [ -n "$w" ] && T select-window -t "$w" 2>/dev/null
   fi
@@ -692,7 +768,9 @@ if T has-session -t "=$SESS" 2>/dev/null; then
   exec tmux -L "$SESS" attach-session -t "=$SESS"
 fi
 
-# 3. the server: conf (keys, hooks, bar, environment) + the first window
+# 3. the servers: conf (keys, hooks, bar, environment); the stage with the first
+#    machine's window (issue #1759), then the shell's one window, `home`, whose
+#    right pane looks at the stage
 write_conf || fail_start "写不了 $CACHE/tmux.conf"
 if [ -n "$node" ]; then
   title="$node"
@@ -700,12 +778,22 @@ if [ -n "$node" ]; then
   remote="$node:"
 else
   title="fleet"   # no machine picked yet; known by @remote=-:, not the name (#1621)
-  cmd="exec bash $(sq "$SHADOW/fleet-shell.sh") wait $(sq "$SESS")"
+  cmd=''          # stage_up's default: the `wait` note
   remote="-:"
 fi
-w=$(tmux -L "$SESS" -f "$CACHE/tmux.conf" new-session -d -P -F '#{window_id}' -s "$SESS" -n "$title" -c "$HOME" -x 220 -y 60 "$cmd") \
+if TS has-session -t "=$STAGE" 2>/dev/null; then
+  # a stage the last shell left (its keeper ends it, but not if it was killed):
+  # its connections are kept, its conf is read again
+  TS source-file "$CACHE/tmux-stage.conf" >/dev/null 2>&1
+  [ -n "$node" ] && { stage_select "$node" || TS new-window -t "=$STAGE:" -n "$title" -c "$HOME" "$cmd" \; \
+    set-window-option @remote "$remote" \; set-window-option automatic-rename off >/dev/null 2>&1; }
+else
+  stage_up "$cmd" "$remote" "$title" || fail_start 'tmux 开不了右侧'
+fi
+w=$(tmux -L "$SESS" -f "$CACHE/tmux.conf" new-session -d -P -F '#{window_id}' -s "$SESS" -n home -c "$HOME" -x 220 -y 60 \
+      "exec bash $(sq "$SHADOW/fleet-shell.sh") viewer $(sq "$SESS")") \
   || fail_start 'tmux 开不了会话'
-T set-window-option -t "$w" @remote "$remote" \; set-window-option -t "$w" automatic-rename off 2>/dev/null
+T set-window-option -t "$w" @shell_frame 1 \; set-window-option -t "$w" automatic-rename off 2>/dev/null
 # 4. the lease (#1715) before anything renews it; the data: the refresh loop,
 #    kept alive while the server lives; the warm connections (#1631) beside it
 client_open

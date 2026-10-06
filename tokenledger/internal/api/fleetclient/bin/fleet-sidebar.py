@@ -26,7 +26,7 @@ import unicodedata
 
 BIN = Path(__file__).absolute().parent  # preserve the selftest shadow root
 US = "\x1f"
-VIEW_VERSION = "24"  # #1702: a move into a proxy window swaps into its slot, never re-lays it out
+VIEW_VERSION = "25"  # #1759: in the shell the current row is the STAGE's window, read off its server
 # ↑↓ follow (issue #822): an arrow moves the highlight at once and switches to
 # it only after this much quiet. A held key on a slow link is one switch, not
 # one per row, and a row passed over is never selected — so the wake hook's
@@ -102,6 +102,22 @@ KEY_ALIASES = {"。": ".", "．": ".", "？": "?"}
 # scripts a new task / restore / scratch spawn runs. There every row is on a
 # machine, so those keys say so (issue #1518) instead of doing nothing.
 SHELL = os.environ.get("FLEET_SHELL") == "1"
+
+
+# The shell's STAGE (issue #1759, bin/fleet-shell.sh): a tmux server of its own
+# holding one proxy window per machine, shown by a nested client in the right pane
+# of the shell's one window. A switch is its `select-window` — never one here, so
+# this server (the list, its borders, the bar) is not repainted. Unset (a fleet,
+# or a shell started before the stage): everything below is as it was.
+STAGE = os.environ.get("FLEET_SHELL_STAGE", "") if SHELL else ""
+
+
+def stage_remote():
+    """`@remote` of the stage's current window — the row the right pane shows."""
+    if not STAGE:
+        return ""
+    return run(["tmux", "-L", STAGE, "display-message", "-p", "-t", "=" + STAGE + ":",
+                "#{@remote}"]).stdout.strip()
 
 
 def shell_refusal():
@@ -435,6 +451,10 @@ def jump(session, window, pane, lock):
         env = dict(os.environ, FLEET_SESSION=session)
         out = run(["bash", str(BIN / "fleet-remote-view.sh"), "open", window], env=env,
                   stdin=subprocess.DEVNULL)
+        if STAGE and stage_remote():
+            # The shell's stage (issue #1759): `open` selected the row's window
+            # THERE, and the right pane shows it — the list stays where it is.
+            return True
         window = out.stdout.strip().split("\n")[-1] if out.returncode == 0 else ""
     # Never resolve a stale row through a recycled index, or another fleet.
     if not window.startswith("@") or fields(window, "#{?#{session_group},#{session_group},#{session_name}}") != [session]:
@@ -1542,6 +1562,7 @@ def stall_log(session, pane, reason, result):
 def ui(screen, session, worker, lock):
     pane = os.environ["TMUX_PANE"]
     window, remote = (fields(worker, US.join(("#{window_id}", "#{@remote}"))) + ["", ""])[:2]
+    remote = stage_remote() or remote   # the shell's stage (issue #1759)
     current_row = shown_row(window, remote)
     # Two consumers, two values (issue #1697): the local window id for what joins
     # on a tmux window, the ROW key for the producer's keep-current fold rails —
@@ -1707,7 +1728,7 @@ def ui(screen, session, worker, lock):
                 # A proxy window onto another machine is RETARGETED in place by
                 # fleet-remote-view.sh open — same window id, a new `@remote` —
                 # so the row it stands for is the test, not the id (issue #1697).
-                row = shown_row(info[4], info[7])
+                row = shown_row(info[4], stage_remote() or info[7])
                 if info[4] != window or row != current_row:
                     window, current_row, selected = info[4], row, row
                     env["FLEET_SIDEBAR_CURRENT"] = window
