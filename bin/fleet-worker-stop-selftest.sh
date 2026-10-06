@@ -19,6 +19,12 @@
 #   7. a scratch key resolves through @raw + @worktree, Codex gets its bracketed /exit
 #   8. usage: a window NUMBER is not a key (2)
 #   9. multi-repo: `<repo>:issue-N` stops only that repo's window (issue #1018)
+#  10. fid:<@fleet_id> (issue #1873): a --no-repo window (no key) stops by identity,
+#      no ledger row; a keyed worker stops by fid too, keyed row as by key; an
+#      unknown fid → 5, a fid two windows carry → 6, a malformed one → 2; a
+#      pool window / the hub never answer
+#  11. dash-reap.sh on a no-repo row: done → the same graceful stop (reaped:full),
+#      working → skip:live, untouched (no more refused:no-issue)
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 REAL_TMUX=$(command -v tmux) || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
@@ -151,6 +157,67 @@ for bad in "@12" "12" "issue-" "issue-x" "scratch-0"; do
   [ "$rc" = 2 ] || fail "8: '$bad' should be a usage refusal (2)" "rc=$rc out=$out"
 done
 has_win "$w2" || fail "8: a usage refusal closed a window"
+
+# --- 10. fid:<@fleet_id> (issue #1873) -------------------------------------------
+F1=11111111-1111-4111-8111-111111111111; F2=22222222-2222-4222-8222-222222222222
+F3=33333333-3333-4333-8333-333333333333; F4=44444444-4444-4444-8444-444444444444
+w10=$(mkwin daily-x "$SHELLED" -); tf set-window-option -t "$w10" @norepo 1
+tf set-window-option -t "$w10" @fleet_id "$F1"
+w10n=$(mkwin daily-y "$SHELLED" -); tf set-window-option -t "$w10n" @norepo 1
+tf set-window-option -t "$w10n" @fleet_id "$F2"
+sleep 0.4
+p10=$(pid_of "$w10"); p10n=$(pid_of "$w10n")
+rows0=$(wc -l < "$FLEET_HISTORY_LEDGER" 2>/dev/null | tr -d ' ')
+run_stop fleetS "fid:$F1"
+[ "$rc" = 0 ] && [ "$out" = stopped:closed ] || fail "10: no-repo by fid expected stopped:closed/0" "rc=$rc out=$out err=$(cat "$WORK/err")"
+has_win "$w10" && fail "10: no-repo window survived its fid stop"
+kill -0 "${p10:-0}" 2>/dev/null && fail "10: no-repo agent still alive after /exit"
+has_win "$w10n" || fail "10: the other no-repo window was closed"
+kill -0 "${p10n:-0}" 2>/dev/null || fail "10: the other no-repo agent died"
+[ "$(wc -l < "$FLEET_HISTORY_LEDGER" 2>/dev/null | tr -d ' ')" = "$rows0" ] \
+  || fail "10: a no-repo stop wrote a ledger row" "$(tail -1 "$FLEET_HISTORY_LEDGER")"
+run_stop fleetS "fid:$F3"
+[ "$rc" = 5 ] && [ "$out" = refused:not-found ] || fail "10: unknown fid expected refused:not-found/5" "rc=$rc out=$out"
+for bad in "fid:" "fid:nope" "fid:AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA" "$F2" "daily-y"; do
+  run_stop fleetS "$bad"
+  [ "$rc" = 2 ] || fail "10: '$bad' should be a usage refusal (2)" "rc=$rc out=$out"
+done
+has_win "$w10n" || fail "10: a refused fid stop closed a window"
+# two windows carrying one identity (a copy made by hand) — never a pick
+tf set-window-option -t "$w2" @fleet_id "$F2"
+run_stop fleetS "fid:$F2"
+[ "$rc" = 6 ] && [ "$out" = refused:ambiguous ] || fail "10: shared fid expected refused:ambiguous/6" "rc=$rc out=$out"
+has_win "$w10n" && has_win "$w2" || fail "10: an ambiguous fid stop closed a window"
+tf set-window-option -u -t "$w2" @fleet_id
+# a keyed worker by fid: its row is keyed issue-<N>, exactly as a stop by key
+tf set-window-option -t "$w2" @fleet_id "$F4"
+run_stop fleetS "fid:$F4"
+[ "$rc" = 0 ] && [ "$out" = stopped:closed ] || fail "10: worker by fid expected stopped:closed/0" "rc=$rc out=$out"
+has_win "$w2" && fail "10: worker window survived its fid stop"
+ledger_has 2 || fail "10: a worker stopped by fid recorded no row keyed 2"
+# the hub and a warm-pool window never answer to an identity
+w10h=$(mkwin hubby 'while :; do sleep 300; done' -); tf set-window-option -t "$w10h" @hub 1
+tf set-window-option -t "$w10h" @fleet_id "$F3"
+run_stop fleetS "fid:$F3"
+[ "$rc" = 5 ] || fail "10: the hub answered to its fid" "rc=$rc out=$out"
+tf set-window-option -u -t "$w10h" @hub; tf set-window-option -t "$w10h" @pool 1
+run_stop fleetS "fid:$F3"
+[ "$rc" = 5 ] || fail "10: a pool window answered to its fid" "rc=$rc out=$out"
+has_win "$w10h" || fail "10: a refused hub/pool fid stop closed the window"
+
+# --- 11. dash-reap.sh on a no-repo row (issue #1873) -------------------------------
+#        Inside the fleet: bare tmux reaches the isolated server through $TMUX.
+SPATH=$(tf display-message -p '#{socket_path}')
+reap() { out=$(TMUX="$SPATH,1,0" bash "$BIN/dash-reap.sh" "$@" 2>"$WORK/err"); rc=$?; }
+tf set-window-option -t "$w10n" @claude_state working
+reap "$w10n" --yes
+[ "$rc" = 3 ] && [ "$out" = skip:live ] || fail "11: a working no-repo row expected skip:live/3" "rc=$rc out=$out err=$(cat "$WORK/err")"
+has_win "$w10n" || fail "11: a working no-repo row was closed"
+tf set-window-option -t "$w10n" @claude_state "done"
+reap "$w10n"
+[ "$rc" = 0 ] && [ "$out" = reaped:full ] || fail "11: a done no-repo row expected reaped:full/0" "rc=$rc out=$out err=$(cat "$WORK/err")"
+has_win "$w10n" && fail "11: the done no-repo row survived ⌃x"
+kill -0 "${p10n:-0}" 2>/dev/null && fail "11: the reaped no-repo agent is still alive (not a graceful /exit)"
 
 # --- 9. a multi-repo fleet (issue #1018): `<repo>:issue-N` stops THAT repo's -----
 #        window only; a bare key two repos hold is ambiguous; an unhosted repo is

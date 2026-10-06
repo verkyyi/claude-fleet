@@ -24,6 +24,7 @@
 #   raw scratch, merged  record row, dispose wt+branch, close window (no confirm)
 #   raw scratch, else    confirm → record row, dispose (dirty KEEPs the wt), close window
 #   raw scratch, no wt   close window (ephemeral, pre-#290 / hermetic — nothing to record)
+#   no-repo, done/exited graceful stop by @fleet_id (fleet-worker-stop.sh fid:, #1873)
 #   hub/panel (no issue) refuse
 #
 # EVERY ⌃x records a /fleet-history row before it disposes of anything (issue #471
@@ -569,6 +570,39 @@ if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
   case "$ans" in y|Y) ;; *) exit 0;; esac
   scratch_dispose
   exit 0
+fi
+
+# --- no-repo row (issue #1873): stop it the graceful way, by identity ---------
+# A `--no-repo` session (@norepo 1) has no @issue, no @raw and no worktree, so
+# there is nothing on disk to gate, record or keep — before this ⌃x refused it as
+# a hub/panel row and nothing could close a finished one. A DONE / EXITED one is
+# stopped the way fleet-worker-stop.sh stops any session (Escape, /exit, wait for
+# the agent, close), addressed by its @fleet_id, never killed. No confirm: the
+# worktree confirm guards work on disk, and a no-repo session has none. A busy one
+# (working / needs / any other state) is skip:live — only a finished turn is ours.
+if [ "$(tmux display-message -t "$target" -p '#{@norepo}' 2>/dev/null)" = 1 ]; then
+  FLEET_SESSION="$(fleet_current_session)"; export FLEET_SESSION
+  nstate=$(tmux display-message -t "$target" -p '#{@claude_state}' 2>/dev/null)
+  case "$nstate" in
+    done|exited) ;;
+    *) emit skip:live
+       printf 'reap: %s is a no-repo session that is %s — only a done/exited one is stopped\n' \
+         "$target" "${nstate:-unknown}" >&2
+       fleet_ui_fail "reap refused: $target — ${nstate:-unknown}"
+       exit 3 ;;
+  esac
+  nfid=$(fleet_window_fid "$FLEET_SESSION" "$target" 2>/dev/null) || nfid=''
+  [ -n "$nfid" ] || { emit failed:no-identity; fleet_ui_fail "reap: $target has no @fleet_id"; exit 5; }
+  describe_target norepo ""
+  if [ "$bg" = 1 ]; then
+    fleet_bg "bash '$BIN/fleet-worker-stop.sh' '$FLEET_SESSION' 'fid:$nfid' >/dev/null 2>&1"
+    emit dispatched:full; exit 0
+  fi
+  nout=$(bash "$BIN/fleet-worker-stop.sh" "$FLEET_SESSION" "fid:$nfid" 2>/dev/null)
+  case "$nout" in stopped:*) emit reaped:full; exit 0 ;; esac
+  emit "failed:${nout#*:}"
+  fleet_ui_fail "reap: could not stop $target (${nout:-no answer})"
+  exit 5
 fi
 
 # --- resolve the row: bound issue, repo, branch, worktree, base ---------------

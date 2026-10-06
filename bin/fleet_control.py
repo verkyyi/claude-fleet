@@ -530,7 +530,7 @@ class Control:
                     # adapter's start with `scratch` for the issue, the account class
                     # in its usual slot and the name (validated above) as one more
                     # argv word; dash-raw-session.sh opens it and prints its receipt
-                    # (`<window_id>\t<name>\t<worktree>`).
+                    # (`<window_id>\t<name>\t<worktree>\t<fleet_id>`).
                     code, output, err = self.adapter("start", fleet["name"], "scratch", params.get("agent", ""),
                                                      params.get("repo", ""), params.get("origin_wid", ""),
                                                      params.get("account_class", ""), params.get("name", "").strip(), timeout=180)

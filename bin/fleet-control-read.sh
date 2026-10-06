@@ -276,7 +276,7 @@ case "$mode" in
       # A raw scratch session the hub placed here (issue #1541): no issue, no
       # claim — dash-raw-session.sh in its headless form, with $8 (the name the
       # asker typed, validated by the controller) as --name and --print for the
-      # receipt the controller reads back (`<window_id>\t<name>\t<worktree>`).
+      # receipt the controller reads back (`<window_id>\t<name>\t<worktree>\t<fleet_id>`).
       # $7 is read like an issue's but not replayed: dash-raw-session.sh has no
       # --account yet, so a scratch runs on the opening fleet's pick.
       sname="${8:-}"

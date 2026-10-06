@@ -697,8 +697,10 @@ PLACE_ANSWER="$REMOTE_LINE" run_raw testsess --origin hub --origin-wid "$MACHINE
 tmux_has 'new-window'                            || fail "SCRATCH-HUBSENT opens it here"
 tmux_has "@origin_wid $MACHINE/issue-77"         || fail "SCRATCH-HUBSENT stamps the given parent worker_id verbatim" "$(cat "$TMUX_LOG")"
 tmux_has "@origin issue-77"                      || fail "SCRATCH-HUBSENT stamps the parent's key as @origin too — the report path needs it" "$(cat "$TMUX_LOG")"
-[ "$(head -n1 "$WORK/spawn.out")" = "$(printf '@9\t试一下\t%s/main-scratch-1' "$WORK")" ] \
-                                                 || fail "SCRATCH-HUBSENT --print prints the receipt <window_id>\\t<name>\\t<worktree>" "$(cat "$WORK/spawn.out")"
+# the 4th column is the window's @fleet_id (issue #1873) — present, whatever this fake tmux mints
+[ "$(head -n1 "$WORK/spawn.out" | cut -f1-3)" = "$(printf '@9\t试一下\t%s/main-scratch-1' "$WORK")" ] \
+  && [ "$(head -n1 "$WORK/spawn.out" | awk -F'\t' '{print NF}')" = 4 ] \
+                                                 || fail "SCRATCH-HUBSENT --print prints the receipt <window_id>\\t<name>\\t<worktree>\\t<fleet_id>" "$(cat "$WORK/spawn.out")"
 run_raw testsess --origin hub --node local
 [ -s "$WORK/spawn.out" ]                         && fail "SCRATCH-HUBSENT without --print nothing is printed" "$(cat "$WORK/spawn.out")"
 ok "SCRATCH HUBSENT --origin hub --node local → no re-placement; @origin_wid verbatim + @origin key; --print receipt"

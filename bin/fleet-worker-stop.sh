@@ -1,6 +1,7 @@
 #!/bin/bash
-# fleet-worker-stop.sh <session> [<repo>:]<issue-N|scratch-N> — GRACEFUL stop of ONE live
-# worker, addressed by its DURABLE key, never by a window number (issue #834).
+# fleet-worker-stop.sh <session> [<repo>:]<issue-N|scratch-N> | fid:<fleet_id> — GRACEFUL
+# stop of ONE live worker, addressed by its DURABLE key, never by a window number
+# (issue #834) — or by its lifelong IDENTITY (issue #1873).
 #
 # The Fleet Hub's `worker_stop` lands here. A tmux window id is an observation:
 # `renumber-windows on` shifts indexes, `/fleet-handoff` swaps the native session
@@ -34,6 +35,15 @@
 # branch is merged or a strict ancestor of base — never uncommitted or unmerged
 # work); a stop is not exempt from that policy, and not a reap either.
 #
+# `fid:<fleet_id>` (issue #1873) addresses the session by its @fleet_id (#1646) —
+# the one address a `--no-repo` session has: no @issue, no @raw, no worktree, so
+# no key. It resolves through fleet_win_for_fid (a warm-pool window never answers;
+# two windows carrying it refuse as ambiguous), works for a keyed worker too, and
+# never matches the hub or a panel. A window NAME is never an address (tmux
+# prefix-matches it). A no-repo session records no /fleet-history row (it has no
+# repo ledger) and no SessionEnd hook closes its window on a plain /exit, so once
+# its agent is verified gone the window is closed here after a short grace.
+#
 # Refusals (nothing typed, nothing closed):
 #   refused:not-found    5   no live window holds this key on the fleet
 #   refused:ambiguous    6   more than one live window holds it — resolve on the fleet
@@ -53,6 +63,12 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-lib.sh"
 
 SESS="${1:-}"; KEY="${2:-}"
+# `fid:<fleet_id>` first: an identity is not a `<repo>:` prefix (issue #1873).
+FID=''
+case "$KEY" in fid:*)
+  FID=${KEY#fid:}; KEY=''
+  fleet_is_fid "$FID" || FID='' ;;
+esac
 # A multi-repo fleet (issue #1018) names the repo too: `<repo>:issue-N` (the #789
 # spelling; <repo> = owner/name, slug or bare name), because two hosted repos can
 # both have an issue-12. WREPO is then that hosted repo and only its windows
@@ -64,8 +80,8 @@ case "$KEY" in *:*)
 esac
 case "$KEY" in issue-[1-9]*|scratch-[1-9]*) ;; *) KEY="" ;; esac
 case "${KEY#*-}" in *[!0-9]*) KEY="" ;; esac
-if [ -z "$SESS" ] || [ -z "$KEY" ]; then
-  printf 'usage: fleet-worker-stop.sh <session> [<repo>:]<issue-N|scratch-N>\n' >&2; exit 2
+if [ -z "$SESS" ] || { [ -z "$KEY" ] && [ -z "$FID" ]; }; then
+  printf 'usage: fleet-worker-stop.sh <session> [<repo>:]<issue-N|scratch-N> | fid:<fleet_id>\n' >&2; exit 2
 fi
 fleet_load_conf "$SESS"
 SOCK=$(fleet_socket "$SESS")
@@ -99,7 +115,19 @@ window_closed() {
 # One display-message per field, not a joined format split on a control byte:
 # tmux ≤3.4 vis-escapes 0x1f in format output (memory: tmux-34-escapes-control-bytes).
 found=''; count=0
-while read -r wid; do
+if [ -n "$FID" ]; then
+  # An identity (issue #1873): the one resolver, never a scan of our own. The
+  # hub pane and a panel are not sessions, whatever they carry.
+  found=$(fleet_win_for_fid "$FID" "$SOCK"); frc=$?
+  [ "$frc" = 2 ] && { printf 'refused:ambiguous\n'; exit 6; }
+  [ "$frc" = 0 ] && [ -n "$found" ] || { printf 'refused:not-found\n'; exit 5; }
+  [ "$(wopt "$found" '#{@hub}')" = 1 ] && { printf 'refused:not-found\n'; exit 5; }
+  case "$(wopt "$found" '#{window_name}')" in dash|plan|backlog|home) printf 'refused:not-found\n'; exit 5 ;; esac
+  # Its key, when it has one, is what the ledger row is keyed on below.
+  KEY=$(fleet_window_okey "$SESS" "$found"); KEY=${KEY#*:}
+  count=1
+fi
+[ -n "$FID" ] || while read -r wid; do
   [ -n "$wid" ] || continue
   iss=$(wopt "$wid" '#{@issue}'); iss="${iss//[^0-9]/}"
   k=''
@@ -139,6 +167,7 @@ cpid=$(fleet_pane_claude_pid "$wid" "$SOCK" 2>/dev/null) || cpid=''
 # transcript), never fails the caller; `unmerged` is the KEEP verdict: worktree
 # + branch + issue stay, the row stays resumable (issue #466/#471).
 record_row() {
+  [ -n "$KEY" ] || return 0   # a no-repo session (fid:) has no ledger row to write
   [ -n "${FLEET_REPO:-}" ] || ! fleet_has_repo_overlays "$SESS" || return 0
   fleet_reap_record unmerged "${FLEET_REPO:-}" "${FLEET_MAIN:-}" "$iss" "$wt" "$wid" \
     "$SESS" "" "$KEY" "$wname" "$origin" >/dev/null 2>&1 || :
@@ -175,6 +204,9 @@ if [ "$alive" = 1 ]; then
 fi
 
 # --- 4. the SessionEnd hook closes the window and records the row … -----------
+# A keyless (no-repo) session's hook closes nothing on /exit: a short grace for a
+# pane that dies with its agent, never the full wait for a hook that won't come.
+[ -n "$KEY" ] || [ "$CLOSE_WAIT" -le 2 ] || CLOSE_WAIT=2
 for ((i = 1; i <= CLOSE_WAIT; i++)); do
   window_closed "$wid" && break
   sleep 1
