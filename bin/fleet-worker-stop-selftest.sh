@@ -213,7 +213,7 @@ tf set-window-option -t "$w10n" @claude_state working
 reap "$w10n" --yes
 [ "$rc" = 3 ] && [ "$out" = skip:live ] || fail "11: a working no-repo row expected skip:live/3" "rc=$rc out=$out err=$(cat "$WORK/err")"
 has_win "$w10n" || fail "11: a working no-repo row was closed"
-tf set-window-option -t "$w10n" @claude_state done
+tf set-window-option -t "$w10n" @claude_state "done"
 reap "$w10n"
 [ "$rc" = 0 ] && [ "$out" = reaped:full ] || fail "11: a done no-repo row expected reaped:full/0" "rc=$rc out=$out err=$(cat "$WORK/err")"
 has_win "$w10n" && fail "11: the done no-repo row survived ⌃x"
