@@ -128,7 +128,8 @@ asks you a question, grey only while its machine is out of reach.
 It reads ONE record, `switch-bar.json` beside the switch history, which the list
 writes off the very rows it paints (`fleet-sidebar.py bar_record`) — so the line
 and the list never disagree — and bumps the stage's `@fleet_bar_gen`, which the
-line's command names: tmux draws it again at once. The title is the row's name
-until the hub carries the issue title itself (#1921).
+line's command names: tmux draws it again at once. The title is the issue's
+own title (the list's 14th field, carried from the session's machine — #1921),
+else the row's name.
 `bin/fleet-client-layout-selftest.sh` pins the layout, the keys, a real tap on
 the line through the nested client, and the widths.
