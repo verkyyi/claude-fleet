@@ -194,7 +194,7 @@ cache m5:online:2
 FLEET_REMOTE_SSH_CMD="$SB/fleet-shell.sh ssh" FLEET_REMOTE_BIN=rb bash "$SB/fleet-remote-view.sh" run --shell m5 "$WID" >/dev/null 2>&1; rc=$?
 eq 'D: the pane ended cleanly' 0 "$rc"
 sl=$(cat "$WORK/ssh.log")
-has 'D: the session rode the warm master' "$sl" "RUN -tt -o ControlMaster=no -S $WD/m5.sock m5 bash rb/fleet-remote-view.sh attach --shell"
+has 'D: the session rode the warm master' "$sl" "RUN -tt -o ControlMaster=no -o ClearAllForwardings=yes -S $WD/m5.sock m5 bash rb/fleet-remote-view.sh attach --shell"
 hasnt 'D: fleet connect never ran' "$(cat "$WORK/fc.log" 2>/dev/null)" 'm5'
 hasnt 'D: the warm master was not closed by the pane' "$sl" "EXIT $WD/m5.sock"
 [ -S "$WD/m5.sock" ] || fail 'D: the warm master is gone after the pane'

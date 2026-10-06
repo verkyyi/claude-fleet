@@ -647,7 +647,7 @@ EOF_PEER
       # no compression (a LAN / tailnet only pays its latency), low-delay QoS
       opts=(-tt -o ServerAliveInterval=2 -o ServerAliveCountMax=3 -o ConnectTimeout=8
             -o "IPQoS=lowdelay throughput" -o Compression=no
-            -o ControlMaster=yes -o "ControlPath=$ctl" -o ControlPersist=no "${MASTERO[@]}" ${peer[@]+"${peer[@]}"})
+            -o ControlMaster=yes -o "ControlPath=$ctl" "${MASTERO[@]}" -o ControlPersist=no ${peer[@]+"${peer[@]}"})
       [ "$route" = hub ] && opts+=(-o "ProxyCommand=$(sq "$BIN/fleet") connect --proxy $(sq "$(hub_node "$node")")")
       rm -f "$ctl" "$ctl.route" "$ctl.upgrade"
     fi
