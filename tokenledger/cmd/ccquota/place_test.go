@@ -122,3 +122,25 @@ func TestPlaceCLIScratch(t *testing.T) {
 		t.Fatalf("--name on an issue: exit %d, want 2", code)
 	}
 }
+
+// claude-fleet#1810: the worker assertion a session's tool service hands the
+// spawn travels as the X-Fleet-Worker header, from the environment only —
+// and with none set, no header at all (the node's own call, as before).
+func TestPlaceCarriesWorkerAssertion(t *testing.T) {
+	var hdr []string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hdr = r.Header.Values("X-Fleet-Worker")
+		_, _ = w.Write([]byte(`{"local":true,"placement":{"machine":"m5"}}`))
+	}))
+	defer ts.Close()
+	wid := "11111111-1111-4111-8111-111111111111/issue-7"
+	args := []string{"--hub", ts.URL, "--token", "tok", "o/r", "7", wid}
+	t.Setenv(workerAssertEnv, "")
+	if code, _ := place(args, &bytes.Buffer{}, &bytes.Buffer{}); code != 0 || len(hdr) != 0 {
+		t.Fatalf("no assertion: code %d, header %q; want 0 and none", code, hdr)
+	}
+	t.Setenv(workerAssertEnv, "fwa1.e30.c2ln")
+	if code, _ := place(args, &bytes.Buffer{}, &bytes.Buffer{}); code != 0 || len(hdr) != 1 || hdr[0] != "fwa1.e30.c2ln" {
+		t.Fatalf("assertion: code %d, header %q; want it sent once", code, hdr)
+	}
+}

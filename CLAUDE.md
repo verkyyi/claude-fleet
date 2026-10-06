@@ -111,7 +111,12 @@ Do not install from memory: read the doc and work from it.
   session. It travels in the environment only — never an argv, file, config, log
   or tmux option; Codex forwards it by name (`env_vars`). No credential = the old
   marker path, logged `via=marker` in `logs/mcp-calls.log`. Spec:
-  `docs/FLEET-MCP.md` «Identity»; `fleet-mcp-selftest.sh` J pins it.
+  `docs/FLEET-MCP.md` «Identity»; `fleet-mcp-selftest.sh` J pins it. **With the hub on**
+  (issue #1810, C8), a credentialed `spawn`/`await`/`send` also hands its script a
+  node-signed worker assertion (`FLEET_WORKER_ASSERT`, HMAC keyed with the node
+  token's hash) that `ccquota place` / the relay carry; the hub verifies it (401),
+  keeps it to that session (404) and writes `worker_id` into `fleet_audit` and the
+  journal. No hub ⇒ nothing minted, no request (`fleet-mcp-selftest.sh` K).
 - **A spawn's parent is a LIVE session, or the spawn refuses** (issue #1355,
   EPIC #1645 C2). `fleet_origin_gate` (`bin/fleet-lib.sh`) runs in both spawners
   after `fleet_origin_canon`, before any window: a key no window answers to

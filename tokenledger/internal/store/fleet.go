@@ -131,6 +131,9 @@ type FleetOperation struct {
 	// (claude-fleet#1410): the chosen machine and every candidate's verdict,
 	// JSON. Empty for an operation that named its fleet.
 	Placement string
+	// WorkerID is the session a node's call was made for (claude-fleet#1810):
+	// the worker_id of a verified worker assertion, "" for everyone else.
+	WorkerID string
 }
 
 // fleetStateUnknown is control.FleetStateUnknown (claude-fleet#1465): a fleet
@@ -287,14 +290,14 @@ func (s *Store) FleetOperationByIdem(actor, idem string) (FleetOperation, error)
 		WHERE actor = ? AND idem = ?`, actor, idem))
 }
 
-const fleetOpCols = `id, fleet_id, action, request, actor, idem, status, created, updated, result, placement`
+const fleetOpCols = `id, fleet_id, action, request, actor, idem, status, created, updated, result, placement, worker_id`
 
 func scanFleetOperation(row *sql.Row) (FleetOperation, error) {
 	var o FleetOperation
 	var created, updated string
 	var result sql.NullString
 	err := row.Scan(&o.ID, &o.FleetID, &o.Action, &o.Request, &o.Actor,
-		&o.Idem, &o.Status, &created, &updated, &result, &o.Placement)
+		&o.Idem, &o.Status, &created, &updated, &result, &o.Placement, &o.WorkerID)
 	o.Created, _ = time.Parse(rfc, created)
 	o.Updated, _ = time.Parse(rfc, updated)
 	o.Result = result.String
@@ -314,11 +317,11 @@ var ErrIdemTaken = errors.New("idempotency key already journalled")
 // one key never both reach a node.
 func (s *Store) InsertFleetOperation(o FleetOperation) error {
 	res, err := s.write.Exec(`INSERT INTO fleet_operations
-		(id, fleet_id, action, request, actor, idem, status, created, updated, result, placement)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?)
+		(id, fleet_id, action, request, actor, idem, status, created, updated, result, placement, worker_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?)
 		ON CONFLICT(actor, idem) DO NOTHING`,
 		o.ID, o.FleetID, o.Action, o.Request, o.Actor, o.Idem, o.Status,
-		o.Created.UTC().Format(rfc), o.Updated.UTC().Format(rfc), o.Result, o.Placement)
+		o.Created.UTC().Format(rfc), o.Updated.UTC().Format(rfc), o.Result, o.Placement, o.WorkerID)
 	if err != nil {
 		return err
 	}
@@ -354,6 +357,20 @@ func (s *Store) ensureFleetColumns() error {
 	if n == 0 {
 		if _, err := s.write.Exec(`ALTER TABLE fleet_fleets ADD COLUMN repos_json TEXT NOT NULL DEFAULT ''`); err != nil {
 			return fmt.Errorf("add fleet_fleets.repos_json: %w", err)
+		}
+	}
+	// claude-fleet#1810: the session a node's call was made for (a verified
+	// worker assertion) — in the journal and in the audit.
+	for _, c := range []struct{ table, col string }{
+		{"fleet_operations", "worker_id"}, {"fleet_audit", "worker_id"}, {"fleet_audit", "worker_key"},
+	} {
+		if err := s.write.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('`+c.table+`') WHERE name = ?`, c.col).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			if _, err := s.write.Exec(`ALTER TABLE ` + c.table + ` ADD COLUMN ` + c.col + ` TEXT NOT NULL DEFAULT ''`); err != nil {
+				return fmt.Errorf("add %s.%s: %w", c.table, c.col, err)
+			}
 		}
 	}
 	return nil
@@ -394,7 +411,15 @@ func (s *Store) SetFleetSetting(key, value string, at time.Time) error {
 // FleetAudit records one fleet tool call: who, what, on which fleet, and how
 // it ended. Every call is recorded, refusals included.
 func (s *Store) FleetAudit(actor, action, fleetID, outcome, operationID string, at time.Time) error {
-	_, err := s.write.Exec(`INSERT INTO fleet_audit (actor, action, fleet_id, outcome, operation_id, created)
-		VALUES (?, ?, ?, ?, ?, ?)`, actor, action, fleetID, outcome, operationID, at.UTC().Format(rfc))
+	return s.FleetAuditWorker(actor, "", "", action, fleetID, outcome, operationID, at)
+}
+
+// FleetAuditWorker is FleetAudit for a node's call made for one of its
+// sessions (claude-fleet#1810): workerID is the verified worker_id
+// (<fleet UUID>/<fleet_id>), workerKey the key it had (issue-N), both "" for
+// a call that named no session.
+func (s *Store) FleetAuditWorker(actor, workerID, workerKey, action, fleetID, outcome, operationID string, at time.Time) error {
+	_, err := s.write.Exec(`INSERT INTO fleet_audit (actor, worker_id, worker_key, action, fleet_id, outcome, operation_id, created)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, actor, workerID, workerKey, action, fleetID, outcome, operationID, at.UTC().Format(rfc))
 	return err
 }

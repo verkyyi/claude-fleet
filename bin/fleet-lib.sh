@@ -5382,13 +5382,19 @@ fleet_hub_put() {
   mkdir -p "$d" 2>/dev/null || return 1
   tmp=$(mktemp "$d/.put.XXXXXX" 2>/dev/null) || return 1
   if ! python3 - "$kind" "$from" "$to" "$suf" "$payload" >"$tmp" 2>/dev/null <<'PY'
-import json, sys
+import json, os, sys
 kind, frm, to, suf, payload = sys.argv[1:6]
 p = json.loads(payload or "{}")
 if not isinstance(p, dict):
     sys.exit(1)
-print(json.dumps(dict(id=frm + "#" + suf, kind=kind, **{"from": frm}, to=to, payload=p),
-                 ensure_ascii=False, separators=(",", ":")))
+r = dict(id=frm + "#" + suf, kind=kind, **{"from": frm}, to=to, payload=p)
+# The session's worker assertion (issue #1810): handed to the sending script by its
+# tool service (fleet-mcp.py), in the environment only; the hub checks it and
+# audits the session. Absent = the node's own relay, byte for byte as before.
+w = os.environ.get("FLEET_WORKER_ASSERT", "").strip()
+if w:
+    r["worker"] = w
+print(json.dumps(r, ensure_ascii=False, separators=(",", ":")))
 PY
   then rm -f "$tmp"; return 1; fi
   # The name sorts oldest-first (the agent sends in name order); the suffix keeps

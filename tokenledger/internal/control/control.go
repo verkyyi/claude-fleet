@@ -153,6 +153,10 @@ type Relay struct {
 	// FromNode is the sender's machine as the hub's roster names it; set by
 	// the hub on the way down, never trusted from a sender.
 	FromNode string `json:"from_node,omitempty"`
+	// Worker is the sender node's worker assertion (claude-fleet#1810): which
+	// of its sessions sent this, signed by the node. Sender → hub only; the
+	// hub checks it, audits it, and never passes it on.
+	Worker string `json:"worker,omitempty"`
 }
 
 // RelayResult is the payload of TypeRelayResult.

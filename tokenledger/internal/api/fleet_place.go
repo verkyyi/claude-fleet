@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -187,14 +188,39 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	w.Header().Set("Cache-Control", "no-store")
 
+	// A session's own call (claude-fleet#1810): the node vouches for which of
+	// its sessions asked. A statement that does not verify is refused (401),
+	// never read as the node's own call; one naming a session of another
+	// fleet, or a start whose parent is not that session, is NOT_FOUND — a
+	// session opens work as itself the parent, nothing else.
+	if a := r.Header.Get(workerAssertHeader); a != "" {
+		c, err := verifyWorkerAssertion(a, HashToken(tok), now)
+		if err != nil {
+			s.placeAudit(p, fleetID, "refused:UNAUTHENTICATED", now)
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": errorObject(err)})
+			return
+		}
+		if c.FleetUUID != fleetID || (req.OriginWID != "" && !c.speaksAs(req.OriginWID)) {
+			p.Worker = c
+			s.placeAudit(p, fleetID, "refused:NOT_FOUND", now)
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": map[string]string{"code": "NOT_FOUND",
+				"message": "no such session on this node"}})
+			return
+		}
+		if req.OriginWID == "" {
+			req.OriginWID = c.WorkerID
+		}
+		p.Worker = c
+	}
+
 	pl, err := s.pickNode(p, req.Repo, req.Node, now)
 	if err != nil {
-		s.leaseAudit(p.Actor, "place", fleetID, errorObject(err)["code"], now)
+		s.placeAudit(p, fleetID, errorObject(err)["code"], now)
 		writeJSON(w, placeStatus(err), map[string]any{"error": errorObject(err), "placement": pl})
 		return
 	}
 	if pl.FleetID == fleetID {
-		s.leaseAudit(p.Actor, "place", fleetID, "LOCAL "+nodeLabel(pl.Machine), now)
+		s.placeAudit(p, fleetID, "LOCAL "+nodeLabel(pl.Machine), now)
 		writeJSON(w, http.StatusOK, map[string]any{"local": true, "placement": pl})
 		return
 	}
@@ -219,7 +245,7 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 			// the hub): take it for the target the ordinary way.
 			var held store.Lease
 			if moved, held, _, err = s.Store.AcquireLease(tclaim, leaseStartGrace, now); err == nil && !moved {
-				s.leaseAudit(p.Actor, "place", fleetID, "HELD by "+held.WorkerID+" on "+nodeLabel(held.Hostname), now)
+				s.placeAudit(p, fleetID, "HELD by "+held.WorkerID+" on "+nodeLabel(held.Hostname), now)
 				writeJSON(w, http.StatusConflict, map[string]any{"error": map[string]string{"code": "ALREADY_CLAIMED",
 					"message": "#" + strconv.Itoa(req.Issue) + " is leased to " + nodeLabel(held.Hostname)},
 					"holder": leaseView(held), "placement": pl})
@@ -234,7 +260,7 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 			mine := store.LeaseClaim{Repo: req.Repo, Issue: req.Issue, WorkerID: req.WorkerID, FleetID: fleetID,
 				EndpointID: ep.ID, Hostname: fl.Hostname, OSUser: fl.OSUser}
 			if _, err := s.Store.HandOverLease(req.Repo, req.Issue, tclaim.WorkerID, mine, leaseStartGrace, time.Now()); err != nil {
-				s.leaseAudit(p.Actor, "place", fleetID, "lease give-back failed: "+err.Error(), time.Now())
+				s.placeAudit(p, fleetID, "lease give-back failed: "+err.Error(), time.Now())
 			}
 		}
 	}
@@ -268,7 +294,7 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 	op, err := s.submitWrite(r.Context(), p, "worker_start", args, &pl)
 	if err != nil {
 		giveBack()
-		s.leaseAudit(p.Actor, "place", fleetID, "REMOTE "+nodeLabel(pl.Machine)+" refused: "+errorObject(err)["code"], now)
+		s.placeAudit(p, fleetID, "REMOTE "+nodeLabel(pl.Machine)+" refused: "+errorObject(err)["code"], now)
 		writeJSON(w, placeStatus(err), map[string]any{"error": errorObject(err), "placement": pl})
 		return
 	}
@@ -293,14 +319,14 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 			// is held off by the GitHub claim, the second guard.
 			giveBack()
 		}
-		s.leaseAudit(p.Actor, "place", fleetID, "REMOTE "+nodeLabel(pl.Machine)+" "+oc.State, now)
+		s.placeAudit(p, fleetID, "REMOTE "+nodeLabel(pl.Machine)+" "+oc.State, now)
 	} else {
 		if op["status"] == "failed" {
 			// The node refused before running anything: the issue is the
 			// asker's again, so its fallback can still open it.
 			giveBack()
 		}
-		s.leaseAudit(p.Actor, "place", fleetID, "REMOTE "+nodeLabel(pl.Machine)+" "+asString(op["status"]), now)
+		s.placeAudit(p, fleetID, "REMOTE "+nodeLabel(pl.Machine)+" "+asString(op["status"]), now)
 	}
 	resp["operation"] = op
 	writeJSON(w, http.StatusOK, resp)
@@ -446,10 +472,18 @@ func (s *Server) nodePrincipal(ep *store.Endpoint, fl store.FleetRow) (fleetPrin
 	return fleetPrincipal{Actor: actor, scope: func(_, u string) bool { return u == user }, From: host}, nil
 }
 
+// placeAudit is one placement's audit row, naming the session it was made
+// for when a worker assertion said so (claude-fleet#1810).
+func (s *Server) placeAudit(p fleetPrincipal, fleetID, outcome string, at time.Time) {
+	if err := s.Store.FleetAuditWorker(p.Actor, p.Worker.id(), p.Worker.label(), "place", fleetID, outcome, "", at); err != nil {
+		log.Printf("fleet audit: %v", err)
+	}
+}
+
 // placeStatus is the HTTP status of a placement fault, as /v1/fleet/ maps it.
 func placeStatus(err error) int {
 	code := errorObject(err)["code"]
-	if st := map[string]int{"INVALID_ARGUMENT": 400, "NOT_FOUND": 404, "FORBIDDEN": 403,
+	if st := map[string]int{"INVALID_ARGUMENT": 400, "NOT_FOUND": 404, "FORBIDDEN": 403, "UNAUTHENTICATED": 401,
 		"UNAVAILABLE": 503, "TIMEOUT": 504, control.CodeProtoMismatch: 409,
 		"IDEMPOTENCY_CONFLICT": 409, "AT_CAPACITY": 429, "NO_ELIGIBLE_NODE": 503}[code]; st != 0 {
 		return st

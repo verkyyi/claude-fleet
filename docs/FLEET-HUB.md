@@ -59,6 +59,14 @@ is required independently of this application-level identity check.
 
 ### Worker identity
 
+A node's own request (`/v1/node/*`, a relay) speaks for the machine and login. One
+made **for one of its sessions** — the session's tool service verified its worker
+credential first — also carries a node-signed worker assertion (`X-Fleet-Worker`
+on `/v1/node/place`, `worker` on a relay; issue #1810): the hub verifies it
+against the node's token hash (401 if it does not hold), keeps the call to that
+session (404 otherwise), and writes its `worker_id` into `fleet_audit` and the
+operation journal. Spec: [FLEET-MCP.md](FLEET-MCP.md) «The hub route».
+
 `fleet_status` returns two kinds of value per worker, side by side:
 
 - `worker_id` — the **durable identity**: `<fleet UUID>/issue-<N>` for a worker

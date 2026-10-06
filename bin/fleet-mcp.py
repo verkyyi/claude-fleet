@@ -42,6 +42,14 @@ environment ($FLEET_WORKER_CRED); every tool call verifies it first and then act
 the session it names, refusing what is outside that session's scope. A call without
 one (a person in a shell, an older session) runs as before, by the window's options,
 and the call log says so. docs/FLEET-MCP.md «Identity» is the spec.
+
+The hub route (issue #1810, EPIC #1813 C8): when THIS fleet runs with the hub
+(fleet_hub_on + a node token) and the call carries a credential that held, the
+tools whose script may act on another machine — spawn, await, send — hand that
+script a worker assertion in $FLEET_WORKER_ASSERT: who the call is for, signed by
+the node (HMAC keyed with its token's hash). `ccquota place` sends it to the hub,
+a hub relay carries it, and the hub audits the session by it. No hub = nothing is
+minted, nothing is read, no request is made: everything stays on this machine.
 """
 import base64
 import hashlib
@@ -88,9 +96,9 @@ class Refused(ToolFault):
     """Arguments that do not fit: said with the reason, nothing ran."""
 
 
-def run(argv, *, input_text=None, check=True, timeout=None):
+def run(argv, *, input_text=None, check=True, timeout=None, env=None):
     try:
-        result = subprocess.run(argv, input=input_text, text=True, capture_output=True, timeout=timeout)
+        result = subprocess.run(argv, input=input_text, text=True, capture_output=True, timeout=timeout, env=env)
     except subprocess.TimeoutExpired:
         raise ToolFault("%s did not answer within %ss" % (Path(argv[0]).name, timeout))
     except OSError as exc:
@@ -109,8 +117,8 @@ def shquote(value):
     return "'" + value.replace("'", "'\\''") + "'"
 
 
-def lib(script, check=True):
-    return run(["bash", "-c", ". " + shquote(str(BIN / "fleet-lib.sh")) + "; " + script],
+def lib(script, check=True, args=()):
+    return run(["bash", "-c", ". " + shquote(str(BIN / "fleet-lib.sh")) + "; " + script, "fleet-lib", *args],
                check=check, timeout=STATUS_TIMEOUT_S)
 
 
@@ -344,6 +352,64 @@ def log_path():
     return Path(os.environ.get("FLEET_MCP_LOG") or (BIN.parent / "logs" / "mcp-calls.log"))
 
 
+# --- the hub route: a worker assertion (issue #1810, EPIC #1813 C8) ---------------
+#
+# fwa1.<base64url claims JSON>.<base64url HMAC-SHA256>, keyed with HashToken of the
+# node's enrollment token (SHA-256 hex — the hub stores exactly that, so it checks
+# the signature without a new secret). Minted per call, only for a call whose
+# credential held, only when the hub is on for this fleet; handed to the script in
+# its environment only. tokenledger/internal/api/fleet_worker_assert.go verifies it.
+
+ASSERT_ENV = "FLEET_WORKER_ASSERT"
+ASSERT_PREFIX = "fwa1"
+ASSERT_TTL_S = 600              # a placement: the call is happening now
+ASSERT_RELAY_TTL_S = 24 * 3600  # a message may wait in the hub outbox while the hub is away
+SIGNED = {"assert": False}      # whether the call being served handed one out (the call log says so)
+
+
+def node_token_hash():
+    """HashToken of this fleet's node token when the hub is on for it, else None.
+    The token is read the way _fleet_hub_env reads it (the environment, else
+    node.env) and never leaves this process: only its hash is kept."""
+    r = lib('fleet_hub_on "$1" || exit 10; t="${CCQUOTA_TOKEN:-}"; '
+            '[ -n "$t" ] || t=$(_fleet_node_env_val CCQUOTA_TOKEN 2>/dev/null); '
+            '[ -n "$t" ] || exit 11; printf %s "$t"', check=False, args=[current_session()])
+    token = r.stdout.strip() if r.returncode == 0 else ""
+    return hashlib.sha256(token.encode()).hexdigest() if token else None
+
+
+def worker_assertion(ttl):
+    """The assertion for the call being served, or None: no credential, no fleet
+    UUID, or no hub for this fleet (then nothing about the hub was touched)."""
+    claims = CALLER["claims"]
+    if not claims or not claims.get("fleet_uuid"):
+        return None
+    key_hash = node_token_hash()
+    if not key_hash:
+        return None
+    now = int(time.time())
+    body = {"v": 1, "worker_id": worker_id(claims), "fleet_uuid": claims["fleet_uuid"], "fid": claims["fid"],
+            # the key it has NOW: a relay's `from` names the session by it
+            "key": origin_key() or claims.get("key", ""), "repo": claims.get("repo", ""),
+            "issue": claims.get("issue", ""), "origin": claims.get("origin", ""),
+            "node": os.uname()[1].split(".", 1)[0], "iat": now, "exp": now + ttl}
+    head = ASSERT_PREFIX + "." + b64e(json.dumps(body, sort_keys=True, separators=(",", ":")).encode())
+    return head + "." + b64e(hmac.new(key_hash.encode(), head.encode(), hashlib.sha256).digest())
+
+
+def hub_env(ttl):
+    """The environment for a script that may act on another machine: this one,
+    plus $FLEET_WORKER_ASSERT when the call is a session's own and the hub is on.
+    None (inherit, unchanged) otherwise."""
+    a = worker_assertion(ttl)
+    if not a:
+        return None
+    SIGNED["assert"] = True
+    env = dict(os.environ)
+    env[ASSERT_ENV] = a
+    return env
+
+
 def log_call(tool, claims, verdict, why="", via=None):
     """One line per call: who (worker_id from the credential, or the window's marker),
     how it was known (cred | marker | badcred: one was presented and refused), and the
@@ -356,8 +422,9 @@ def log_call(tool, claims, verdict, why="", via=None):
             who = pane_opt("#{?@fleet_id,#{@fleet_id},#{window_name}}") if os.environ.get("TMUX_PANE") else ""
         except ToolFault:
             who = ""
-    line = "%s tool=%s via=%s who=%s verdict=%s%s\n" % (
+    line = "%s tool=%s via=%s who=%s verdict=%s%s%s\n" % (
         time.strftime("%Y-%m-%dT%H:%M:%S%z"), tool, via, who or "-", verdict,
+        " hub=asserted" if SIGNED["assert"] else "",
         (" why=" + json.dumps(why, ensure_ascii=False)) if why else "")
     try:
         log_path().parent.mkdir(parents=True, exist_ok=True)
@@ -511,7 +578,7 @@ def send_message(to, text):
     if target == "parent":
         target = parent_window()
     result = run(["bash", str(BIN / "fleet-peer-send.sh"), target, "-"], input_text=text, check=False,
-                 timeout=STATUS_TIMEOUT_S)
+                 timeout=STATUS_TIMEOUT_S, env=hub_env(ASSERT_RELAY_TTL_S))
     # Exit 3 = queued (issue #1647): the peer cannot take it now; it is delivered
     # when it can. Not delivered — and not an error either.
     if result.returncode == 3:
@@ -527,9 +594,9 @@ def send_message(to, text):
 
 # --- the script-backed tools (same contract as mod/fleet/hooks/tools.ts) --------
 
-def script(argv, timeout):
+def script(argv, timeout, env=None):
     """Run a script unchanged; its exit code, stdout and stderr come back as they came."""
-    r = run(argv, check=False, timeout=timeout)
+    r = run(argv, check=False, timeout=timeout, env=env)
     return {"command": Path(argv[0]).name, "exit": r.returncode, "stdout": r.stdout, "stderr": r.stderr}
 
 
@@ -585,14 +652,15 @@ def tool_repos(_args):
 
 def tool_spawn(args):
     repo = check_repo(args)
-    return script([str(BIN / "dash-issue-session.sh"), str(args["issue"])] + repo, SPAWN_TIMEOUT_S)
+    return script([str(BIN / "dash-issue-session.sh"), str(args["issue"])] + repo, SPAWN_TIMEOUT_S,
+                  env=hub_env(ASSERT_TTL_S))
 
 
 def tool_await(args):
     repo = check_repo(args)
     t = args.get("timeout", AWAIT_DEFAULT_S)
     return script([str(BIN / "fleet-await.sh"), str(args["issue"]), "--timeout", str(t)] + repo,
-                  t + AWAIT_SLACK_S)
+                  t + AWAIT_SLACK_S, env=hub_env(ASSERT_TTL_S))
 
 
 def tool_agents(_args):
@@ -936,6 +1004,7 @@ def tool_result(name, data, error=False):
 
 
 def tool_call(table, name, args):
+    SIGNED["assert"] = False
     entry = table.get(name)
     if entry is None:
         log_call(str(name), None, "refused", "unknown tool")

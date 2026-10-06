@@ -62,6 +62,10 @@ const (
 // placeTimeout covers the hub's own wait for the remote node to take the
 // start (fleetWriteWait, 25s) plus the round trip; the outcome wait comes on
 // top (placeWaitDefault when --wait is not given, as the hub's default).
+// workerAssertEnv names the worker assertion a session's tool service hands
+// the spawn it runs (claude-fleet#1810).
+const workerAssertEnv = "FLEET_WORKER_ASSERT"
+
 const (
 	placeTimeout     = 40 * time.Second
 	placeWaitDefault = 60
@@ -147,6 +151,13 @@ declined the start, 6 its outcome is unknown, 1 hub unreachable, 2 usage.
 	}
 	req.Header.Set("Authorization", "Bearer "+*token)
 	req.Header.Set("Content-Type", "application/json")
+	// The session this placement is for (claude-fleet#1810): its tool service
+	// (bin/fleet-mcp.py) verified the session's credential and signed this
+	// with the node's token. Environment only, never an argv; absent = the
+	// node's own call, as before.
+	if a := strings.TrimSpace(os.Getenv(workerAssertEnv)); a != "" {
+		req.Header.Set("X-Fleet-Worker", a)
+	}
 	resp, err := (&http.Client{Timeout: timeout}).Do(req)
 	if err != nil {
 		return 1, err
