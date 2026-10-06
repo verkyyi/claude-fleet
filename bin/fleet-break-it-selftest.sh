@@ -729,6 +729,7 @@ drill_shell_kill_fleet() {
   t0=$(now)
   ( kf_env
     for sh in 'bash -c' 'sh -c' 'zsh -fc'; do
+      command -v "${sh%% *}" >/dev/null 2>&1 || continue      # no zsh on a linux runner
       for cmd in 'tmux -L kf kill-server' 'tmux -L kf kill-session -t kf' 'tmux -L kf kill-window -t kf:issue-7' \
                  "tmux -S $TMUX_TMPDIR/tmux-$(id -u)/kf kill-server"; do
         out=$(kf_agent "$sh '$cmd'")
