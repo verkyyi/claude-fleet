@@ -190,7 +190,7 @@ tf set-option -wu -t sw:c @wrap_quiet
   PATH="$WORK/tbin:$PATH"; HOME="$WORK"; FLEET_CONF_DIR="$WORK/dconf"; export PATH HOME FLEET_CONF_DIR
   . "$BIN/fleet-lib.sh"
   tf new-window -d -t sw: -n home 'exec sh'
-  fleet_server_resident whatever
+  fleet_server_resident whatever sw
 )
 eq "D: exit-empty is off" off "$(tf show-options -sv exit-empty)"
 eq "D: home keeps its pane when its shell exits" on "$(tf show-options -wv -t sw:home remain-on-exit)"

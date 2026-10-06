@@ -1730,23 +1730,23 @@ fleet_find_tool() {
   return 1
 }
 
-# fleet_server_resident <socket> — a fleet's server outlives its last session
+# fleet_server_resident <socket> [session] — a fleet's server outlives its last session
 # (issue #1784): `exit-empty off`, so the last window closing never takes the
 # server — and with it every client view of this machine — down.
 fleet_server_resident() {
   tmux -L "$1" set-option -s exit-empty off 2>/dev/null
-  fleet_home_resident "$1"
+  [ -n "${2:-}" ] && fleet_home_resident "$1" "$2"
   return 0
 }
 
-# fleet_home_resident <socket> [window] — the fleet's `home` window never closes
+# fleet_home_resident <socket> <session> [window] — the fleet's `home` window never closes
 # (issue #1784): its shell exiting (a stray Ctrl+D, `exit`) leaves the pane in
 # place (`remain-on-exit`) and a window `pane-died` hook starts a fresh shell in
 # it, so the session always keeps one window however many tasks end. No home
 # window → nothing (a FLEET_DASH_WINDOW=1 fleet rests on its dash instead).
 fleet_home_resident() {
-  local sock="$1" win="${2:-}"
-  [ -n "$win" ] || win=$(tmux -L "$sock" list-windows -a -F '#{window_id} #{window_name}' 2>/dev/null \
+  local sock="$1" sess="$2" win="${3:-}"
+  [ -n "$win" ] || win=$(tmux -L "$sock" list-windows -t "$sess" -F '#{window_id} #{window_name}' 2>/dev/null \
                          | awk '$2=="home"{print $1; exit}')
   [ -n "$win" ] || return 0
   tmux -L "$sock" set-option -w -t "$win" remain-on-exit on 2>/dev/null

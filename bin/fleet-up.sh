@@ -311,7 +311,7 @@ fi
 fleet_server_local_bin "$SOCK"
 # The server outlives its last window (issue #1784): an exit that closes the last
 # session must not take every view of this machine down with it.
-fleet_server_resident "$SOCK"
+fleet_server_resident "$SOCK" "$NAME"
 rm -f "$FLEET_CONF_DIR/fleets/$NAME/restore.down" 2>/dev/null   # up again: --auto may restore it (#1784)
 
 # --- a repo the fleet does not host yet: add it ---

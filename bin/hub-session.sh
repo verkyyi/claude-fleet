@@ -86,7 +86,7 @@ if [ "${FLEET_DASH_WINDOW:-0}" != 1 ]; then
       tmux -L "$SOCK" move-window -d -s "$win" -t "$SESS:1" 2>/dev/null
     fi
   fi
-  fleet_home_resident "$SOCK" "$win"   # its shell exiting never closes it (#1784)
+  fleet_home_resident "$SOCK" "$SESS" "$win"   # its shell exiting never closes it (#1784)
   tmux -L "$SOCK" select-window -t "$win"
   exit 0
 fi

@@ -29,10 +29,13 @@ LAUNCH="${FLEET_WRAP_LAUNCH:-$BIN/fleet-claude.sh}"   # selftest seam: a fake la
 FAST="${FLEET_WRAP_FAST_FAIL:-5}"
 case "$FAST" in ''|*[!0-9]*) FAST=5 ;; esac
 # tmux off a bare PATH (issue #1774): the wrapper stamps the window before the
-# launcher runs, so it needs the same lookup fleet-claude.sh does (fleet_path_fill).
-# shellcheck source=/dev/null
-[ -f "$BIN/fleet-lib.sh" ] && . "$BIN/fleet-lib.sh" >/dev/null 2>&1 \
-  && command -v fleet_path_fill >/dev/null 2>&1 && { PATH=$(fleet_path_fill); export PATH; }
+# launcher runs. fleet-lib.sh's fleet_path_fill, inline — the wrapper stays light
+# (no lib) between the pane and the agent: append each tool dir PATH lacks.
+for d in ${FLEET_TOOL_DIRS:-$HOME/.local/bin /opt/homebrew/bin /usr/local/bin}; do
+  [ -d "$d" ] || continue
+  case ":$PATH:" in *":$d:"*) ;; *) PATH="${PATH:+$PATH:}$d" ;; esac
+done
+export PATH
 
 # The launch POLICY a resume / new session keeps: its Codex home and an explicit
 # model (the agent is the one that just ran, @cc_agent). The rest — a seed prompt,
