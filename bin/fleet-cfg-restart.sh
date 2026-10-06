@@ -14,13 +14,17 @@
 #
 # Each tick (fleet-sleep-daemon.sh, after the reeval), per fleet: the windows whose
 # @agent_cfg differs from the expected one are judged by fleet_cfg_restart_why —
-# a Claude session, `done` for FLEET_CFG_RESTART_IDLE seconds (600), no /loop
+# a Claude or Codex session (issue #1896), `done` for FLEET_CFG_RESTART_IDLE
+# seconds (600), no /loop
 # round held, no Bash-tool job running, not asleep; a working / looping / needs
 # session is never touched — and at most FLEET_CFG_RESTART_MAX (1) of them is
 # handed to `fleet-migrate.sh --cfg-stale` (fleet_bg, detached: a reopen is a cold
 # boot). That is the same close + `claude --resume <same session>` road a quota
-# move takes, so the conversation goes on in the new window; migrate asks the
-# judge AGAIN right before its /exit, and records a `reason=cfg-stale` row in
+# move takes — `codex resume <same thread>` in the same CODEX_HOME for a Codex
+# session — so the conversation goes on in the new window, its first prompt the
+# one line 「fleet 已从 <old> 更新到 <new>」; migrate asks the judge AGAIN right
+# before its /exit (a Codex thread is also asked natively, over its app-server),
+# and records a `reason=cfg-stale` (配置旧) or `reason=ver-stale` (待换新) row in
 # /fleet-history. @cfg_restart_ts holds a window off for the idle span after a try,
 # so a reopen that did not happen is retried, never hammered.
 #
@@ -28,7 +32,6 @@
 #   auto  reopen as above
 #   ask   reopen nothing; one alert per window per fingerprint names it instead
 #   off   nothing (the sidebar still marks the row; --list / --count still answer)
-# A Codex session is marked but never reopened here (migrate is Claude's road).
 #
 # Usage: fleet-cfg-restart.sh [--dry-run] [--quiet] [--] [<session>...]
 #        fleet-cfg-restart.sh --list  [<session>...]   one `sess wid name verdict` row
@@ -110,7 +113,8 @@ for sess in $sockets; do
     [ -n "$DRY" ] && continue
     tmux -L "$sess" set-option -w -t "$wid" @cfg_restart_ts "$(date +%s)" 2>/dev/null
     mkdir -p "${LOG%/*}" 2>/dev/null
-    printf '%s reopen %s:%s (%s) reason=cfg-stale\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$sess" "$nm" "$wid" >> "$LOG" 2>/dev/null
+    printf '%s reopen %s:%s (%s) reason=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$sess" "$nm" "$wid" \
+      "$([ "$st" = renew ] && printf ver-stale || printf cfg-stale)" >> "$LOG" 2>/dev/null
     fleet_bg -L "$sess" "bash '$MIGRATE' --cfg-stale --session '$sess' --alert '$wid'"
   done <<< "$stale"
 done
