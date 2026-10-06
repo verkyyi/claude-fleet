@@ -56,8 +56,8 @@ since() { python3 -c 'import sys, time; print("%.1f" % (time.time() - float(sys.
 le() { python3 -c 'import sys; sys.exit(0 if float(sys.argv[1]) <= float(sys.argv[2]) else 1)' "$1" "$2"; }
 # until_ok <secs> <command…> — true as soon as the command is
 until_ok() {
-  local secs="$1" i; shift
-  for i in $(seq 1 $((secs * 10))); do "$@" && return 0; sleep 0.1; done
+  local secs="$1" _; shift
+  for _ in $(seq 1 $((secs * 10))); do "$@" && return 0; sleep 0.1; done
   "$@"
 }
 
@@ -303,6 +303,7 @@ EOF
 # client_start <socket label> [VAR=val…] — `fleet`, as the person types it
 client_start() {
   local s="$1"; shift
+  # shellcheck disable=SC2163  # "$@" are VAR=val words, exported as given
   ( client_env; export FLEET_SHELL_SESSION="$s"; [ $# -gt 0 ] && export "$@"
     "$WORK/sbin/fleet" >"$WORK/up-$s.out" 2>"$WORK/up-$s.err" )
   [ "$(cat "$WORK/up-$s.out" 2>/dev/null)" = "$s" ]
