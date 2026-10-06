@@ -209,9 +209,14 @@ Do not install from memory: read the doc and work from it.
   in lockstep.
 - **Never run destructive tmux on the live server**, and test tmux tooling on an
   **isolated socket** — `tmux -L scratch …`, or the `-S <sock>` PATH-shim pattern
-  the selftests use (`bin/dash-marker-selftest.sh`). A `tmux()` guard in
-  `shell/cw.zsh` refuses the common accidental forms; `FLEET_ALLOW_TMUX_DESTROY=1`
-  passes a deliberate destroy through.
+  the selftests use (`bin/dash-marker-selftest.sh`). A delete aimed at a FLEET's
+  server (kill-server / kill-session / a session's kill-window, on `-L <fleet>`
+  or the ambient one) is refused by ONE rule, `bin/tmux-shim/tmux` (issue #1841):
+  `fleet-session-wrap.sh` puts it first on every agent's PATH, `shell/cw.zsh`'s
+  `tmux()` hands it any `-L`/`-S` call, and `hooks/bash-guard.py` asks it
+  (`FLEET_TMUX_SHIM_CHECK=1`) before a Bash statement runs — a login shell's
+  path_helper reorders PATH. A test server and the fleet's own scripts pass;
+  `FLEET_ALLOW_TMUX_DESTROY=1` passes a deliberate destroy through.
 - **Load experiments go through `bin/fleet-loadgen.sh` — never a hand-written
   `trap`** (issue #697). Putting the box under CPU pressure is legitimate work
   (#691/#693 exist to ask whether a real-time assertion survives a busy machine);

@@ -19,6 +19,8 @@
 | 会话进程被杀（kill -9、OOM） | 同上 | 同上，恢复页写「被结束（信号 9）」 | `session-killed` |
 | 最后一个窗口关闭（home 的 shell 退出、最后一个会话结束） | tmux 服务器随之退出，整台 fleet 停 | 服务器 `exit-empty off`，home 窗格死了立即重开 shell（#1784）；tmux ≤ 3.4 忙时会漏掉 shell 退出的信号、窗格停在死状态，diskguard 节拍的 `home_watch` 补救重开（#1801） | `last-window` |
 | 节点 tmux 服务器被关（`kill-server`、崩溃） | 整台 fleet 停，没人拉起 | diskguard 节拍跑 `fleet-restore.sh --auto`，只拉起没做完的会话（#1784） | `kill-server` |
+| 执行会话里用 bash / `sh -c` / `zsh -c` / Codex 的 shell / Claude 的 `!` 敲 `tmux -L <fleet> kill-server`（或 kill-session、删执行会话窗口），或 Bash 工具里敲 | 只有 source 过 cw.zsh 的交互 zsh 有守卫，其余直接到 tmux：整台 fleet 或那个会话没了 | 每个会话的 PATH 最前面是 `bin/tmux-shim`（fleet-session-wrap.sh 放的），指向 fleet socket 的删除一律拒绝并说明怎么正确关；Bash 工具另有 bash-guard 同一条规则；`-L scratch` / `-S <路径>` 测试服务器、fleet 自己的脚本照常；逃生口 `FLEET_ALLOW_TMUX_DESTROY=1`（#1841） | `shell-kill-fleet` |
+| 交互 zsh 里敲 `tmux -L <fleet> kill-server` | cw.zsh 的守卫把任何 `-L` 都当成「测试用的隔离服务器」放过，而 #159 之后每个 fleet 都是 `-L`：整台 fleet 没了 | `tmux()` 把带 `-L` / `-S` 的调用交给同一个 shim：名字是 fleet 的照样拦，测试服务器放行（#1841） | `zsh-guard-fleet-label` |
 | 节点 tmux 服务器退出时被一个不回应的客户端（网络冻住的 ssh 里的 attach）拖住 | 服务器不死不活：每个新连接都被它接下就关，`tmux -L fleet` 的一切（含 `fleet-up.sh`）都报 `server exited unexpectedly`，只能手工 `rm` socket | `fleet_socket_heal` 认出这种 socket，清掉并记一行（restore.log、`socket-heal.log`），`fleet-restore.sh --auto` / `fleet-up.sh` 随即起新服务器；守护进程的「no fleet sessions found」带上 WEDGED，`fleet-doctor` 的 `socket` 行报出来（#1729） | `wedged-socket` |
 | 磁盘满 | 拉起 → 写满 → 再崩的循环 | `--auto` 先问磁盘门：低于下限只记一行不拉起；腾出空间后下一拍拉起 | `disk-full` |
 | 非交互 shell（ssh、守护进程）PATH 里没有 claude | 会话开出来停在 shell，`exec claude` 失败 | `fleet_find_tool` 依次找 `FLEET_CLAUDE_BIN` → PATH → `~/.local/bin` → `/opt/homebrew/bin` → `/usr/local/bin`（#1774/#1784） | `no-claude-on-path` |

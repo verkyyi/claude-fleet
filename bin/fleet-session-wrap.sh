@@ -36,6 +36,15 @@ for d in ${FLEET_TOOL_DIRS:-$HOME/.local/bin /opt/homebrew/bin /usr/local/bin}; 
   case ":$PATH:" in *":$d:"*) ;; *) PATH="${PATH:+$PATH:}$d" ;; esac
 done
 export PATH
+# The agent's `tmux` is the fleet's shim (issue #1841): every shell the session
+# opens — the Bash tool, `bash -c`, Codex's, Claude's `!` — finds bin/tmux-shim
+# first, and a delete aimed at a fleet's server is refused there. Only the agent
+# gets it: the wrapper's own tmux calls (and the recycle) stay on the real one.
+SHIM_PATH="$PATH"
+[ -x "$BIN/tmux-shim/tmux" ] && case ":$PATH:" in
+  *":$BIN/tmux-shim:"*) ;;
+  *) SHIM_PATH="$BIN/tmux-shim:$PATH" ;;
+esac
 
 # The launch POLICY a resume / new session keeps: its Codex home and an explicit
 # model (the agent is the one that just ran, @cc_agent). The rest — a seed prompt,
@@ -75,7 +84,7 @@ while :; do
       && export FLEET_WORKER_CRED || unset FLEET_WORKER_CRED
   fi
   t0=$(date +%s)
-  "$LAUNCH" ${cmd[@]+"${cmd[@]}"}
+  PATH="$SHIM_PATH" "$LAUNCH" ${cmd[@]+"${cmd[@]}"}
   rc=$?
   if [ -n "${FLEET_WORKER_CRED:-}" ]; then
     python3 "$BIN/fleet-mcp.py" --cred revoke 2>/dev/null
