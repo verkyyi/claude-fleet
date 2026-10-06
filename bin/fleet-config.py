@@ -42,8 +42,21 @@ itself stays in fleet-agent-team.py, which it imports — no second set of rules
         content (`history --person ID`, then read a version on the hub). Help
         someone back with `restore N --person ID`: the version row and the
         hub's audit name you.
-  --team  on add|set|rm|history|restore: the same on the team layer, through
-        fleet-agent-team.py put/restore/history — the operator's only.
+  export [--personal|--team] > f.json
+        the layer's bundle as one JSON file, plus a `"_from": "personal vN"`
+        note key (issue #1865). Personal is the default; --team reads the team
+        layer (CCQUOTA_VIEWER_TOKEN, else this computer's own credentials).
+  import F [--merge] [--yes] [--personal|--team]
+        F (`-` = stdin) becomes the layer — ONE PUT, base = the version read.
+        `_from` is stripped; the file goes through the same check as every
+        write (a credential is refused, naming the field) and the differences
+        print (+ new · ~ changed · - removed) before anything is sent; --yes
+        sends them (without it: exit 4). --merge only adds: the file's items
+        are set over the layer's, nothing the layer has is removed. A base that
+        moved meanwhile is refused (exit 1) — read the differences again.
+  --team  on add|set|rm|history|restore|export|import: the same on the team
+        layer, through fleet-agent-team.py put/restore/history — the operator's
+        only (export excepted).
 
 Credentials, as the team fetch: the node token ($FLEET_CONF_DIR/node.env, read,
 never exported) as Bearer, else the connection certificate (~/.ssh/fleet-cert,
@@ -52,7 +65,7 @@ the hub: run as `bash -c "$FLEET_PERSON_HUB_CMD" - METHOD QUERY` with the reques
 JSON on stdin, it prints {"status": N, …response}. No local state is added.
 
 Exit: 0 ok · 1 the hub refused / did not answer · 2 usage / refused here ·
-3 no hub (show still works) · 4 promote needs --yes.
+3 no hub (show still works) · 4 promote / import needs --yes.
 """
 import argparse
 import getpass
@@ -575,6 +588,144 @@ def people(a):
     return 0
 
 
+# --- export / import (issue #1865) ----------------------------------------------------------
+
+FROM_KEY = "_from"
+
+
+def layer_name(a):
+    return "team" if a.team else "personal"
+
+
+def layer_get(a):
+    if a.team:
+        return team_get(a)
+    code, cur = person_call(a, "GET")
+    if code != 200:
+        hub_err(code, cur)
+    return cur
+
+
+def export(a):
+    cur = layer_get(a)
+    out = dict(cur.get("bundle") or {})
+    out[FROM_KEY] = "%s v%d" % (layer_name(a), int(cur.get("version") or 0))
+    print(json.dumps(out, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0
+
+
+def read_import(path):
+    try:
+        if path == "-":
+            txt = sys.stdin.read()
+        else:
+            with open(path, encoding="utf-8") as f:
+                txt = f.read()
+        b = json.loads(txt)
+    except OSError as e:
+        die("读不了 %s：%s" % (path, e))
+    except ValueError as e:
+        die("%s 不是 JSON：%s" % (path, e))
+    if isinstance(b, dict) and isinstance(b.get("bundle"), dict) and set(b) <= {"bundle", "version", "prev",
+                                                                                  "created", "actor", "note"}:
+        b = b["bundle"]     # the hub's own answer, saved as is
+    if not isinstance(b, dict):
+        die("%s 不是一份配置（要一个 JSON 对象）" % path)
+    b = dict(b)
+    b.pop(FROM_KEY, None)
+    return b
+
+
+def items_of(b):
+    """item path → value: one per MCP server / setting / skill / program; a hook is
+    `hooks.<Event>.<key>` (its command's key, as show prints it)."""
+    out = {}
+    for kind, sec in (b or {}).items():
+        if not isinstance(sec, dict):
+            continue
+        for name, v in sec.items():
+            if kind == "hooks" and isinstance(v, list):
+                for h in v:
+                    if isinstance(h, dict):
+                        out["hooks.%s.%s" % (name, T.hook_key(str(h.get("command", ""))))] = h
+            else:
+                out["%s.%s" % (kind, name)] = v
+    return out
+
+
+def merged(cur, inc):
+    """Only adds: the file's items set over the layer's, nothing removed."""
+    b = json.loads(json.dumps(cur))
+    for kind, sec in inc.items():
+        dst = b.setdefault(kind, {})
+        for name, v in sec.items():
+            if kind == "hooks":
+                keep = [h for h in dst.get(name) or [] if h.get("command") not in {x.get("command") for x in v}]
+                dst[name] = keep + list(v)
+            else:
+                dst[name] = v
+    return b
+
+
+def diff_lines(old, new):
+    o, n = items_of(old), items_of(new)
+    out = []
+    for k in sorted(set(o) | set(n)):
+        if k not in o:
+            out.append("+ %-40s %s" % (k, summary(k, n[k])))
+        elif k not in n:
+            out.append("- %-40s %s" % (k, summary(k, o[k])))
+        elif o[k] != n[k]:
+            out.append("~ %-40s %s → %s" % (k, summary(k, o[k]), summary(k, n[k])))
+    return out
+
+
+def import_(a):
+    if not a.args:
+        die("用法：fleet config import F [--merge] [--yes] [--personal|--team]（F 是 fleet config export 的输出，- = 标准输入）")
+    layer = layer_name(a)
+    inc = read_import(a.args[0])
+    why = T.validate(inc, layer)
+    if why:
+        die("拒收，没发出去：%s" % credential_hint(why))
+    cur = layer_get(a) if not a.team else team_get(a, operator=True)
+    base = int(cur.get("version") or 0)
+    old = cur.get("bundle") or {}
+    new = merged(old, inc) if a.merge else inc
+    why = T.validate(new, layer)
+    if why:
+        die("拒收，没发出去：%s" % credential_hint(why))
+    word = WORD[layer]
+    lines = diff_lines(old, new)
+    if not lines:
+        print("%s配置 v%d 和文件内容一致 — 不用导入" % (word, base))
+        return 0
+    print("%s配置 v%d → 导入后（%s）：" % (word, base, "只加不删" if a.merge else "整份替换"))
+    for ln in lines:
+        print("  " + ln)
+    if not a.yes:
+        print("确认导入，加 --yes", file=sys.stderr)
+        return 4
+    note = a.note or "import %s%s" % (os.path.basename(a.args[0]) if a.args[0] != "-" else "stdin",
+                                      " --merge" if a.merge else "")
+    if a.team:
+        fd, tmp = tempfile.mkstemp(prefix="fleet-config-team.", suffix=".json")
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(new, f, ensure_ascii=False)
+            return team_pass(a, ["put", tmp, "--base", str(base), "--note", note])
+        finally:
+            os.unlink(tmp)
+    code, resp = person_call(a, "PUT", {"bundle": new, "base": base, "note": note})
+    if code == 409:
+        die("导入期间个人配置被改过（不再是 v%d）— 没写进去；重跑一次，看清新的差异再确认" % base, 1)
+    if code != 200:
+        hub_err(code, resp)
+    print("个人配置 v%s（上一版 v%s）— 其余机器下次同步就带上" % (resp.get("version"), resp.get("prev")))
+    sync_here(a)
+    return 0
+
+
 # --- the team layer: fleet-agent-team.py does it -----------------------------------------
 
 def team_pass(a, argv):
@@ -583,6 +734,38 @@ def team_pass(a, argv):
     if p.returncode == 0 and argv[0] != "history":
         sync_here(a)
     return p.returncode
+
+
+def team_get(a, operator=False):
+    """The team layer as the hub answers it ({version, bundle, …}). operator=True
+    (a write follows) needs CCQUOTA_VIEWER_TOKEN; a read alone falls back to this
+    computer's own credentials, as fleet-agent-team.py's fetch."""
+    if os.environ.get("FLEET_TEAM_BUNDLE_CMD"):
+        p = subprocess.run(["bash", "-c", os.environ["FLEET_TEAM_BUNDLE_CMD"]], capture_output=True)
+        code, cur = (200, decode(p.stdout)) if p.returncode == 0 else (0, {"error": "seam exit %d" % p.returncode})
+    else:
+        url = T.hub_url(a.hub)
+        if not url:
+            no_hub()
+        hdr = {"Accept": "application/json"}
+        tok = os.environ.get("CCQUOTA_VIEWER_TOKEN") or ""
+        if not tok and operator:
+            die("团队配置只有操作者能改：要 CCQUOTA_VIEWER_TOKEN 在环境里")
+        tok = tok or T.env_file_val(os.path.join(T.CONF_DIR, "node.env"), "CCQUOTA_TOKEN")
+        code, raw_ = 0, b""
+        if tok:
+            code, raw_ = T.http(url + T.TEAM_PATH, "GET", dict(hdr, Authorization="Bearer " + tok), None, a.timeout)
+        if not operator and (code in (0, 401, 403) or not tok):
+            proof = T.cert_proof()
+            if proof:
+                code, raw_ = T.http(url + T.TEAM_PATH, "POST", dict(hdr, **{"Content-Type": "application/json"}),
+                                    json.dumps(proof).encode(), a.timeout)
+            elif not tok:
+                die("没有节点 token，也没有连接证书（fleet login）— 读不了团队配置", 1)
+        cur = decode(raw_)
+    if code != 200:
+        hub_err(code, cur)
+    return cur
 
 
 def team_edit(a):
@@ -594,21 +777,7 @@ def team_edit(a):
     name = a.args[1]
     raw = a.args[2] if len(a.args) > 2 else None
     value = raw if a.action == "rm" else parse_value(a, raw)
-    if os.environ.get("FLEET_TEAM_BUNDLE_CMD"):
-        p = subprocess.run(["bash", "-c", os.environ["FLEET_TEAM_BUNDLE_CMD"]], capture_output=True)
-        code, cur = (200, decode(p.stdout)) if p.returncode == 0 else (0, {"error": "seam exit %d" % p.returncode})
-    else:
-        url = T.hub_url(a.hub)
-        if not url:
-            no_hub()
-        tok = os.environ.get("CCQUOTA_VIEWER_TOKEN") or ""
-        if not tok:
-            die("团队配置只有操作者能改：要 CCQUOTA_VIEWER_TOKEN 在环境里")
-        code, raw_ = T.http(url + T.TEAM_PATH, "GET", {"Authorization": "Bearer " + tok,
-                                                        "Accept": "application/json"}, None, a.timeout)
-        cur = decode(raw_)
-    if code != 200:
-        hub_err(code, cur)
+    cur = team_get(a, operator=True)
     bundle = cur.get("bundle") or {}
     mutate(bundle, kind, name, value, a.action)
     fd, tmp = tempfile.mkstemp(prefix="fleet-config-team.", suffix=".json")
@@ -624,13 +793,15 @@ def team_edit(a):
 def main():
     ap = argparse.ArgumentParser(prog="fleet config", description=__doc__.split("\n")[0])
     ap.add_argument("action", nargs="?", default="show",
-                    choices=("show", "add", "set", "rm", "promote", "history", "restore", "people"))
+                    choices=("show", "add", "set", "rm", "promote", "history", "restore", "people",
+                             "export", "import"))
     ap.add_argument("args", nargs="*")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--personal", action="store_true")
     ap.add_argument("--team", action="store_true")
     ap.add_argument("--file", default="")
     ap.add_argument("--yes", action="store_true")
+    ap.add_argument("--merge", action="store_true", help="import: only add, never remove")
     ap.add_argument("--note", default="")
     ap.add_argument("--person", default="", help="the operator: whose personal layer (history / restore)")
     ap.add_argument("--hub", default="")
@@ -641,7 +812,8 @@ def main():
     if a.person and a.action not in ("history", "restore"):
         die("--person 只用于 history / restore（操作者只能帮人退回到他自己的某一版）")
     return {"show": show, "add": edit, "set": edit, "rm": edit, "promote": promote,
-            "history": history, "restore": restore, "people": people}[a.action](a)
+            "history": history, "restore": restore, "people": people, "export": export,
+            "import": import_}[a.action](a)
 
 
 if __name__ == "__main__":
