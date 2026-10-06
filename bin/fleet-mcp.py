@@ -13,6 +13,13 @@ see the same tools (Claude shows them as mcp__fleet__<action>):
   spawn     issue [+ repo]          → bin/dash-issue-session.sh
   await     issue [+ repo, timeout] → bin/fleet-await.sh
   send      to + text               → bin/fleet-peer-send.sh
+  report    state [+ pr, summary]   → bin/fleet-report-parent.sh        (报, issue #1808)
+  ask       question [+ kind]       → bin/fleet-comment.sh + set-claude-state.sh blocked  (问)
+  comment   issue + body [+ mode]   → bin/fleet-comment.sh              (记)
+  evidence  action [+ file|text|pane, note] → bin/fleet-evidence.sh     (记)
+  handoff   action [+ slug|doc]     → bin/fleet-handoff-file.sh         (记)
+  pr_verdict pr [+ repo, wait]      → bin/fleet-pr-verdict.sh           (合)
+  pr_merge  pr [+ repo]             → bin/fleet-pr-merge.sh             (合)
 
 docs/FLEET-MCP.md is the one spec; later EPIC members add tools there and here.
 
@@ -43,6 +50,9 @@ AWAIT_DEFAULT_S = 540
 AWAIT_SLACK_S = 25
 SPAWN_TIMEOUT_S = 120
 STATUS_TIMEOUT_S = 30
+WRITE_TIMEOUT_S = 90       # a comment / a report / an evidence copy: one gh or peer round-trip
+MERGE_TIMEOUT_S = 180      # gate + merge + confirm
+VERDICT_TIMEOUT_S = 60     # the one-shot read
 
 # Codex hands an MCP server only a short env allowlist (HOME, PATH, USER, …);
 # these are what the scripts need to find the pane, the fleet and the install.
@@ -319,6 +329,134 @@ def tool_send(args):
     return send_message(args.get("to"), args.get("text"))
 
 
+# --- 报 问 记 合 (issue #1808, EPIC #1813 C6) ------------------------------------
+
+def stdin_script(argv, text, timeout):
+    """script(), with `text` on stdin (a body / a doc — never through argv)."""
+    r = run(argv, input_text=text, check=False, timeout=timeout)
+    return {"command": Path(argv[0]).name, "exit": r.returncode, "stdout": r.stdout, "stderr": r.stderr}
+
+
+def pane_issue():
+    """This window's @issue, or "" — read off THIS pane, never `-t ""` (#1537)."""
+    pane = os.environ.get("TMUX_PANE", "")
+    if not os.environ.get("TMUX") or not pane:
+        return ""
+    r = run(["tmux", "display-message", "-p", "-t", pane, "#{@issue}"], check=False, timeout=STATUS_TIMEOUT_S)
+    v = r.stdout.strip()
+    return v if v.isdigit() else ""
+
+
+def tool_report(args):
+    argv = [str(BIN / "fleet-report-parent.sh"), "--state", args["state"]]
+    if "pr" in args:
+        argv += ["--pr", str(args["pr"])]
+    if "summary" in args:
+        argv += ["--summary", args["summary"]]
+    if args.get("dry_run"):
+        argv.append("--dry-run")
+    return script(argv, WRITE_TIMEOUT_S)
+
+
+ASK_HEAD = {"question": "⛔ blocked: ", "permission": "⛔ blocked — needs authorization: "}
+
+
+def tool_ask(args):
+    issue = str(args["issue"]) if "issue" in args else pane_issue()
+    if not issue:
+        raise Refused("this window has no bound issue to ask on — pass issue, or ask in your reply")
+    body = ASK_HEAD[args.get("kind", "question")] + args["question"]
+    said = stdin_script([str(BIN / "fleet-comment.sh"), issue, "--note", "--body-file", "-"], body,
+                        WRITE_TIMEOUT_S)
+    # The red stamp goes on whether or not the comment posted: the session IS
+    # blocked either way, and a blocker nobody can see is the failure this exists
+    # to prevent. stdin pinned shut — `blocked` reads no hook payload.
+    red = stdin_script(["sh", str(BIN / "set-claude-state.sh"), "blocked"], "", STATUS_TIMEOUT_S)
+    red["command"] = "set-claude-state.sh"
+    return dict(said, issue=int(issue), body=body, state=red)
+
+
+def tool_comment(args):
+    argv = [str(BIN / "fleet-comment.sh"), str(args["issue"]),
+            "--to-worker" if args.get("mode") == "to-worker" else "--note"]
+    if args.get("close"):
+        argv.append("--close")
+    argv += check_repo(args)
+    return stdin_script(argv + ["--body-file", "-"], args["body"], WRITE_TIMEOUT_S)
+
+
+EVIDENCE_SOURCES = ("file", "text", "pane")
+
+
+def tool_evidence(args):
+    action = args["action"]
+    given = [k for k in EVIDENCE_SOURCES if k in args]
+    if action in ("before", "after"):
+        if len(given) != 1:
+            raise Refused("%s takes exactly one of file, text, pane (got %s)"
+                          % (action, ", ".join(given) if given else "none"))
+    else:
+        extra = [k for k in EVIDENCE_SOURCES + ("name", "mv") if k in args]
+        if extra:
+            raise Refused("%s takes no %s" % (action, ", ".join(extra)))
+    if "mv" in args and "file" not in args:
+        raise Refused("mv applies to a file only")
+    if "name" in args and "file" in args:
+        raise Refused("name applies to text or pane only (a file keeps its own name)")
+    argv = [str(BIN / "fleet-evidence.sh"), action]
+    if "issue" in args:
+        argv += ["--issue", str(args["issue"])]
+    if "note" in args:
+        argv += ["--note", args["note"]]
+    if "name" in args:
+        argv += ["--name", args["name"]]
+    if args.get("mv"):
+        argv.append("--mv")
+    if "pane" in args:
+        argv += ["--pane", args["pane"]]
+    if "file" in args:
+        return script(argv + [args["file"]], WRITE_TIMEOUT_S)
+    if "text" in args:
+        return stdin_script(argv + ["-"], args["text"], WRITE_TIMEOUT_S)
+    return script(argv, WRITE_TIMEOUT_S)
+
+
+def tool_handoff(args):
+    action = args["action"]
+    if "slug" in args and action != "path":
+        raise Refused("slug applies to path only")
+    if action == "check" and "doc" not in args:
+        raise Refused('check needs doc (the composed handoff text)')
+    if action != "check" and ("doc" in args or "issue" in args):
+        raise Refused("doc and issue apply to check only")
+    argv = [str(BIN / "fleet-handoff-file.sh"), action]
+    if "slug" in args:
+        argv += ["--slug", args["slug"]]
+    if action == "check":
+        argv.append("-")
+        if "issue" in args:
+            argv += ["--issue", str(args["issue"])]
+        return stdin_script(argv, args["doc"], STATUS_TIMEOUT_S)
+    return script(argv, STATUS_TIMEOUT_S)
+
+
+def tool_pr_verdict(args):
+    if not args.get("wait") and ("until_merged" in args or "timeout" in args):
+        raise Refused("until_merged and timeout apply with wait only")
+    argv = [str(BIN / "fleet-pr-verdict.sh"), str(args["pr"])] + check_repo(args)
+    if not args.get("wait"):
+        return script(argv, VERDICT_TIMEOUT_S)
+    t = args.get("timeout", AWAIT_DEFAULT_S)
+    argv += ["--wait", "--timeout", str(t)]
+    if args.get("until_merged"):
+        argv.append("--until-merged")
+    return script(argv, t + AWAIT_SLACK_S)
+
+
+def tool_pr_merge(args):
+    return script([str(BIN / "fleet-pr-merge.sh"), str(args["pr"])] + check_repo(args), MERGE_TIMEOUT_S)
+
+
 ISSUE = {"type": "integer", "minimum": 1, "description": 'The GitHub issue number (a positive integer, no "#").'}
 REPO = {"type": "string", "pattern": r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
         "description": "owner/name of a repo THIS fleet hosts (the repos tool lists them). "
@@ -364,6 +502,90 @@ TOOLS = {
                        "to is issue:<N>, scratch-<N> or parent.",
         "inputSchema": {"type": "object", "properties": {"to": {"type": "string"}, "text": {"type": "string"}},
                         "required": ["to", "text"], "additionalProperties": False}}),
+    "report": (tool_report, {
+        "description": "报 — tell the session that SPAWNED this one how it ended (bin/fleet-report-parent.sh). "
+                       "Exit 0 reported (or no parent to tell — a hub-spawned session), 3 queued: the parent "
+                       "cannot take it now and it is delivered when it can (do not resend), 1 refused. A merged "
+                       "report is checked against the PR's real state: report merged only after pr_merge says "
+                       "MERGED.",
+        "inputSchema": {"type": "object", "properties": {
+            "state": {"type": "string", "enum": ["merged", "blocked", "failed", "stopped", "waiting"],
+                      "description": "How it ended."},
+            "pr": {"type": "integer", "minimum": 1, "description": "The PR number (merged / failed)."},
+            "summary": {"type": "string", "description": "1-3 lines: what changed, what the parent must know."},
+            "dry_run": {"type": "boolean", "description": "Print the target and the envelope; send nothing."}},
+            "required": ["state"], "additionalProperties": False}}),
+    "ask": (tool_ask, {
+        "description": "问 — you are blocked on the operator: a question only they can answer, or an "
+                       "authorization you cannot grant yourself. Posts the question on the bound issue "
+                       "(bin/fleet-comment.sh --note, as `⛔ blocked: …`) and turns this window red on the dash "
+                       "(set-claude-state.sh blocked) until the next prompt arrives. The answer comes back as "
+                       "your next turn, by the existing channels. Then end your turn — do not spin.",
+        "inputSchema": {"type": "object", "properties": {
+            "question": {"type": "string", "description": "What you need, and why you cannot go on without it."},
+            "kind": {"type": "string", "enum": ["question", "permission"],
+                     "description": "question (default) or permission (an authorization you need)."},
+            "issue": dict(ISSUE, description="Ask on this issue instead of the window's bound one.")},
+            "required": ["question"], "additionalProperties": False}}),
+    "comment": (tool_comment, {
+        "description": "记 — comment on an issue through bin/fleet-comment.sh (the marker + sender footer). "
+                       "mode note (the DEFAULT) is RECORD-ONLY: the issue's worker never sees it. mode to-worker "
+                       "is relayed into that issue's worker as its next turn (to just tell a peer something, "
+                       "send is direct). close closes the issue after the comment (a no-PR wrap-up).",
+        "inputSchema": {"type": "object", "properties": {
+            "issue": ISSUE, "body": {"type": "string", "description": "The comment, Markdown."},
+            "mode": {"type": "string", "enum": ["note", "to-worker"], "description": "note (default) or to-worker."},
+            "close": {"type": "boolean", "description": "Close the issue after posting."},
+            "repo": REPO},
+            "required": ["issue", "body"], "additionalProperties": False}}),
+    "evidence": (tool_evidence, {
+        "description": "记 — store before/after evidence for the EPIC report (bin/fleet-evidence.sh). "
+                       "line prints the issue's 上线证据 line (exit 1 = none); before (prior to touching code) "
+                       "and after (PR open, not landed) store ONE capture: a file path, text (a command's "
+                       "output), or a tmux pane; post leaves ONE record-only comment listing every capture.",
+        "inputSchema": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["line", "before", "after", "post"]},
+            "file": {"type": "string", "description": "Path of the capture (before / after)."},
+            "text": {"type": "string", "description": "The capture's text, e.g. a command's output (before / after)."},
+            "pane": {"type": "string", "description": "A tmux target to capture (before / after)."},
+            "name": {"type": "string", "description": "File name for a text or pane capture."},
+            "note": {"type": "string", "description": "One line: what the capture shows."},
+            "mv": {"type": "boolean", "description": "Move the file instead of copying (a .playwright-mcp/ shot)."},
+            "issue": dict(ISSUE, description="The member issue (default: this window's).")},
+            "required": ["action"], "additionalProperties": False}}),
+    "handoff": (tool_handoff, {
+        "description": "记 — where a file handoff goes and which one a pickup resumes (bin/fleet-handoff-file.sh). "
+                       "path: the file to write (slug optional); find: the one to resume (exit 1 none, 4 "
+                       "ambiguous — candidates listed, ask); repo: the doc's Repo: line; check: is the composed "
+                       "doc short enough to hand on (exit 3 = findings, advice only).",
+        "inputSchema": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["path", "find", "repo", "check"]},
+            "slug": {"type": "string", "description": "A short name for the handoff file (path)."},
+            "doc": {"type": "string", "description": "The composed handoff text (check)."},
+            "issue": dict(ISSUE, description="Compare the doc against this issue's body (check).")},
+            "required": ["action"], "additionalProperties": False}}),
+    "pr_verdict": (tool_pr_verdict, {
+        "description": "合 — the ONE merge-gate read (bin/fleet-pr-verdict.sh): READY (exit 0) · PENDING · BEHIND · "
+                       "FAILING · CONFLICT · BLOCKED · DRAFT · MERGED · CLOSED (exit 1), 2 error. wait blocks "
+                       "while PENDING and answers the first settled verdict; TIMEOUT (exit 3) is undetermined, "
+                       "never red — call again.",
+        "inputSchema": {"type": "object", "properties": {
+            "pr": {"type": "integer", "minimum": 1, "description": "The PR number."},
+            "repo": REPO,
+            "wait": {"type": "boolean", "description": "Block while the verdict is PENDING."},
+            "until_merged": {"type": "boolean", "description": "With wait: READY with auto-merge armed keeps "
+                                                               "waiting until MERGED."},
+            "timeout": {"type": "integer", "minimum": 1, "maximum": AWAIT_MAX_S,
+                        "description": "With wait: seconds before TIMEOUT (default %d, at most %d)."
+                                       % (AWAIT_DEFAULT_S, AWAIT_MAX_S)}},
+            "required": ["pr"], "additionalProperties": False}}),
+    "pr_merge": (tool_pr_merge, {
+        "description": "合 — merge a READY PR with this fleet's method, branch deleted, then confirm "
+                       "(bin/fleet-pr-merge.sh): MERGED exit 0; anything not READY is printed and refused (exit "
+                       "1) — it never merges red. Falls back to REST when GraphQL is rate-limited.",
+        "inputSchema": {"type": "object", "properties": {
+            "pr": {"type": "integer", "minimum": 1, "description": "The PR number."}, "repo": REPO},
+            "required": ["pr"], "additionalProperties": False}}),
 }
 
 # The pre-#1807 fleet-peer server, for a config that still mounts it (one version).
@@ -395,9 +617,14 @@ def check_args(schema, args):
                 return '"%s" must be ≥ %d, got %d' % (key, p["minimum"], v)
             if "maximum" in p and v > p["maximum"]:
                 return '"%s" must be ≤ %d, got %d' % (key, p["maximum"], v)
+        elif p["type"] == "boolean":
+            if not isinstance(v, bool):
+                return '"%s" must be true or false, got %s' % (key, json.dumps(v))
         elif p["type"] == "string":
-            if not isinstance(v, str) or v == "":
+            if not isinstance(v, str) or v.strip() == "":
                 return '"%s" must be a non-empty string, got %s' % (key, json.dumps(v))
+            if "enum" in p and v not in p["enum"]:
+                return '"%s" must be one of %s, got %s' % (key, " · ".join(p["enum"]), json.dumps(v))
             if "pattern" in p and not re.match(p["pattern"], v):
                 return '"%s" must be owner/name, got %s' % (key, json.dumps(v))
     return None
@@ -415,6 +642,10 @@ def report(data):
     return "\n".join(parts)
 
 
+def ask_text(data):
+    return report(data) + "\n\n" + report(data["state"])
+
+
 def status_text(data):
     head = "window: " + (data["window"] or "(not in tmux)")
     return "\n\n".join([head, report(data["children"]), data["repo_list"]])
@@ -423,7 +654,7 @@ def status_text(data):
 def tool_result(name, data, error=False):
     if error:
         return {"content": [{"type": "text", "text": data}], "isError": True}
-    text = status_text(data) if name == "status" else report(data)
+    text = status_text(data) if name == "status" else ask_text(data) if name == "ask" else report(data)
     return {"content": [{"type": "text", "text": text}], "structuredContent": data}
 
 

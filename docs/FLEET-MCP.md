@@ -35,6 +35,29 @@ them are listed and run locally.
 | `await` | `issue`, `repo`?, `timeout`? (1–570 s, default 540) | `fleet-await.sh <issue> --timeout T [--repo R]` | 0 MERGED · 3 TIMEOUT (call again) · others per the script |
 | `send` | `to` (`issue:<N>` · `scratch-<N>` · `parent`), `text` | `fleet-peer-send.sh <target> -` (text on stdin) | `{delivered}` · `{queued}` (exit 3) · `{ended}` (exit 2 + stdout) |
 
+### 报 问 记 合 (issue #1808, EPIC #1813 C6)
+
+The rest of a worker's day — the commands `commands/fleet-claim.md` used to have
+it type. Each argument is one flag of the script; a body or a doc travels on
+**stdin**, never through argv. Arguments that only make sense together are checked
+together (refused, nothing ran): `evidence before|after` takes exactly one of
+`file` / `text` / `pane`; `post` / `line` take none; `mv` needs a `file`; `slug` is
+`path`'s, `doc` / `issue` are `check`'s; `until_merged` / `timeout` need `wait`.
+
+| tool | arguments | runs | exit codes |
+|---|---|---|---|
+| `report` 报 | `state` (`merged` · `blocked` · `failed` · `stopped` · `waiting`), `pr`?, `summary`?, `dry_run`? | `fleet-report-parent.sh --state S [--pr N] [--summary T] [--dry-run]` | 0 reported / no parent · 3 queued (delivered later — don't resend) · 1 refused; `merged` is checked against the PR's real state |
+| `ask` 问 | `question`, `kind`? (`question` · `permission`), `issue`? (default the window's `@issue`; none → refused) | `fleet-comment.sh <issue> --note --body-file -` with `⛔ blocked: <question>` (`⛔ blocked — needs authorization: …` for `permission`), **then** `set-claude-state.sh blocked` — stamped even if the comment failed | the comment's; `structuredContent.state` is the stamp's. The answer arrives as the next turn by the existing channels (issue-bridge, a prompt) |
+| `comment` 记 | `issue`, `body`, `mode`? (`note` default · `to-worker`), `close`?, `repo`? | `fleet-comment.sh <issue> --note\|--to-worker [--close] [--repo R] --body-file -` | the script's. `note` is RECORD-ONLY |
+| `evidence` 记 | `action` (`line` · `before` · `after` · `post`), `file` \| `text` \| `pane`, `name`?, `note`?, `mv`?, `issue`? | `fleet-evidence.sh <action> [--issue M] [--note …] [--name F] [--mv] [--pane T] [<file> \| -]` (`text` on stdin as `-`) | 0 ok · 1 none / failure · 2 usage · 4 no issue |
+| `handoff` 记 | `action` (`path` · `find` · `repo` · `check`), `slug`?, `doc`?, `issue`? | `fleet-handoff-file.sh <action> [--slug S]` · `check - [--issue N]` (doc on stdin) | 0 · 1 none · 3 check findings (advice) · 4 ambiguous |
+| `pr_verdict` 合 | `pr`, `repo`?, `wait`?, `until_merged`?, `timeout`? (1–570 s, default 540 with `wait`) | `fleet-pr-verdict.sh <PR> [--repo R] [--wait --timeout T [--until-merged]]` | 0 READY · 1 any other verdict · 2 error · 3 TIMEOUT (call again) |
+| `pr_merge` 合 | `pr`, `repo`? | `fleet-pr-merge.sh <PR> [--repo R]` (the fleet's merge method) | 0 MERGED · 1 not READY / refused · 2 error |
+
+Reverse delivery is untouched (EPIC #1813 rule 3): a report the parent cannot take
+waits in the peer queue / hub outbox, an answer comes back through the issue-bridge
+or a prompt — no tool polls for one.
+
 `repo` is `owner/name` of a repo **this fleet hosts** — checked against
 `fleet-repo.sh list` before anything runs. Omitted = the window's repo, as the
 script decides.
@@ -81,7 +104,10 @@ Newline-delimited JSON-RPC 2.0 on stdin/stdout, stdlib only (macOS python 3.9):
 ## Tests
 
 `bin/fleet-mcp-selftest.sh` — the list, every refusal (nothing ran), each tool once
-against fake scripts, no-hub degenerate, the legacy shim, the Codex mount.
+against fake scripts, no-hub degenerate, the legacy shim, the Codex mount; for 报问记合
+(G–I) every new tool's refusals, its exact argv + stdin, and script ≡ tool through the
+REAL `fleet-comment.sh` (the byte-identical comment) and `fleet-report-parent.sh
+--dry-run` (the same envelope, on an isolated tmux server).
 `bin/fleet-claude-selftest.sh` #1807 and `bin/fleet-codex-selftest.sh` I — the
 launch command lines carry the server. `mod/fleet/tests/tools.test.ts` — the mod
 registers none of its own when the server is mounted.
