@@ -32,6 +32,7 @@ mkdir -p "$WORK/fakepath"
 # --disarm branch instead of spawning the real collector.
 cat > "$WORK/fakepath/tmux" <<'FAKE'
 #!/bin/bash
+[ "${1:-}" = -L ] && shift 2          # every fleet call names its socket (#159)
 case "${1:-}" in
   has-session) exit 1 ;;
   info)        exit 1 ;;
