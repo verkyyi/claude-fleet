@@ -1807,6 +1807,102 @@ drill_conf_keys_lost() {
   SECS=$(since "$t0"); WHAT="同步后手加的键还在、有备份；只协调的机器 FLEET_HOST=0，真承载的仍是 1"
 }
 
+# A session's test takes the person's client (issue #1931, EPIC #1906 C12): on
+# 2026-10-06 a drill (#1901) on m4 connected to the hub as the operator and took
+# their one client lease — the MacBook fell to its standby screen again and again.
+# A fake hub on loopback keeps the hub's rules (an acquire takes the slot over; a
+# request marked X-Fleet-Worker that asks for the person's lease is 403, with the
+# reason; the test door is its own slot) and dies on its own deadline. The person
+# acquires first; then, from a SESSION's environment (a worker credential):
+# fleet-client-lease.py acquire asks at the test door, as test, marked — and the
+# person's lease and where are unchanged; FLEET_CLIENT_IDENTITY=person is refused
+# 403 with the reason; outside a session the person's acquire is unmarked; and
+# bash-guard refuses a session starting `fleet` / `fleet m4` / fleet-shell.sh /
+# `ssh m4 fleet` without --test-identity, lets `fleet --test-identity`,
+# `fleet doctor` and the hatch through.
+drill_session_takes_client() {
+  CAP=30; local t0 hub port out rc h before after
+  t0=$(now)
+  hub="$WORK/fakehub-$$"; mkdir -p "$hub"
+  cat > "$hub/hub.py" <<'PY2'
+import json, os, signal, sys, uuid
+from http.server import BaseHTTPRequestHandler, HTTPServer
+signal.alarm(int(sys.argv[2]))           # never outlives the drill
+D = sys.argv[1]
+cur = {}
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+        worker = (self.headers.get("X-Fleet-Worker") or "").strip()
+        test = self.path == "/v1/fleet/client/test" or body.get("identity") == "test"
+        with open(os.path.join(D, "log"), "a") as f:
+            f.write("%s %s worker=%s identity=%s\n" % (self.path, body.get("action"), "yes" if worker else "no", body.get("identity", "")))
+        if self.path not in ("/v1/fleet/client", "/v1/fleet/client/test"):
+            self.send_response(404); self.end_headers(); return
+        if worker and not test:
+            out, code = {"error": "a session may not take the person's client lease — run as the test identity"}, 403
+        else:
+            slot = "test" if test else "person"
+            a = body.get("action")
+            if a == "acquire":
+                cur[slot] = {"id": uuid.uuid4().hex[:12], "device": body.get("device", "")}
+            out = {"state": "active" if cur.get(slot) else "none", "lease": cur.get(slot)}
+            if test: out["identity"] = "test"
+            code = 200
+        with open(os.path.join(D, "person"), "w") as f:
+            json.dump(cur.get("person"), f)
+        b = json.dumps(out).encode()
+        self.send_response(code); self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+s = HTTPServer(("127.0.0.1", 0), H)
+open(os.path.join(D, "port"), "w").write(str(s.server_address[1]))
+s.serve_forever()
+PY2
+  ( python3 "$hub/hub.py" "$hub" "$((CAP + 10))" </dev/null >/dev/null 2>&1 & )
+  until_ok 5 test -s "$hub/port" || { WHY="the fake hub did not start"; return 1; }
+  port=$(cat "$hub/port")
+  lease() {  # <env…> -- lease args
+    local e=()
+    while [ "$1" != -- ]; do e+=("$1"); shift; done; shift
+    env -u FLEET_WORKER_CRED -u FLEET_WORKER_ASSERT -u FLEET_SEAT -u FLEET_CLIENT_IDENTITY -u SSH_CONNECTION \
+      HOME="$WORK/home" FLEET_CONF_DIR="$hub/conf" FLEET_HUB_URL="http://127.0.0.1:$port" FLEET_HUB_TOKEN=tok \
+      FLEET_CLIENT_XTVERSION=0 ${e[@]+"${e[@]}"} python3 "$BIN/fleet-client-lease.py" "$@"
+  }
+  # the person, at their own terminal
+  out=$(lease FLEET_CLIENT_DEVICE=MacBook -- acquire 2>&1) || { WHY="the person's acquire failed: $out"; return 1; }
+  before=$(cat "$hub/person")
+  grep -q '^/v1/fleet/client acquire worker=no identity=$' "$hub/log" \
+    || { WHY="the person's acquire went out marked or as test: $(cat "$hub/log")"; return 1; }
+  # a session's test, default identity
+  out=$(lease FLEET_WORKER_CRED=fwc1.x FLEET_CLIENT_DEVICE=m4-drill -- acquire 2>&1); rc=$?
+  after=$(cat "$hub/person")
+  [ "$rc" = 0 ] && [ "$after" = "$before" ] \
+    || { WHY="a session's acquire took the person's lease (rc $rc): $before → $after [$out]"; return 1; }
+  grep -q '^/v1/fleet/client/test acquire worker=yes identity=test$' "$hub/log" \
+    || { WHY="a session's acquire did not ask as the marked test identity: $(cat "$hub/log")"; return 1; }
+  # a session asking for the person's lease outright: 403 + why
+  out=$(lease FLEET_WORKER_CRED=fwc1.x FLEET_CLIENT_IDENTITY=person -- acquire 2>&1); rc=$?
+  [ "$rc" = 1 ] || { WHY="FLEET_CLIENT_IDENTITY=person in a session was not refused (rc $rc): $out"; return 1; }
+  case "$out" in *403*test\ identity*) ;; *) WHY="the refusal does not say why: [$out]"; return 1 ;; esac
+  [ "$(cat "$hub/person")" = "$before" ] || { WHY="a refused acquire still moved the person's lease"; return 1; }
+  # the guard: a session's client start must say --test-identity
+  h=( env -u FLEET_HUB FLEET_WORKER_CRED=fwc1.x FLEET_HEAVY=0 FLEET_LIB=/nonexistent python3 "$ROOT/hooks/bash-guard.py" )
+  for cmd in 'fleet' 'fleet m4' 'FLEET_HUB_URL=https://hub.example fleet' "$BIN/fleet-shell.sh" 'ssh m4 fleet' 'ssh -p 22022 m4 "fleet shell"'; do
+    out=$(python3 -c 'import json, sys; print(json.dumps({"tool_name": "Bash", "tool_input": {"command": sys.argv[1]}}))' "$cmd" | "${h[@]}" 2>&1)
+    [ $? = 2 ] || { WHY="bash-guard let a session's [$cmd] through"; return 1; }
+    case "$out" in *--test-identity*FLEET_ALLOW_PERSON_CLIENT=1*) ;; *) WHY="bash-guard gave no way out for [$cmd]: [$out]"; return 1 ;; esac
+  done
+  for cmd in 'fleet --test-identity m4' 'FLEET_CLIENT_IDENTITY=test fleet' 'fleet doctor' 'ssh m4 fleet --test-identity' 'FLEET_ALLOW_PERSON_CLIENT=1 fleet'; do
+    out=$(python3 -c 'import json, sys; print(json.dumps({"tool_name": "Bash", "tool_input": {"command": sys.argv[1]}}))' "$cmd" | "${h[@]}" 2>&1)
+    [ $? = 0 ] || { WHY="bash-guard refused [$cmd]: [$out]"; return 1; }
+  done
+  out=$(printf '%s' '{"tool_name":"Bash","tool_input":{"command":"fleet m4"}}' \
+        | env -u FLEET_WORKER_CRED -u FLEET_HUB FLEET_HEAVY=0 FLEET_LIB=/nonexistent python3 "$ROOT/hooks/bash-guard.py" 2>&1)
+  [ $? = 0 ] || { WHY="bash-guard refused a person's own fleet: [$out]"; return 1; }
+  SECS=$(since "$t0"); WHAT="执行会话的客户端只拿测试身份：运营者租约不变，要运营者租约被拒（403 + 原因），守卫拦没写 --test-identity 的启动"
+}
+
 # ================================================================ run ===========
 FAILS=$LINT; PASSES=0
 printf 'fleet-break-it: %d rows in docs/BREAK-IT.md\n' "$NROWS"

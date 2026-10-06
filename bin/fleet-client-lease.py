@@ -44,6 +44,16 @@ itself, never a key or a name someone gave it:
                  device at the far end of an ssh: link (a link to tap); an
                  iTerm2 adds iterm2.
   host           the machine this client runs on.
+
+A test identity (issue #1931, EPIC #1906 C12) — a session's test or drill is
+never the person: `--test-identity` / FLEET_CLIENT_IDENTITY=test asks at the
+hub's test door (POST /v1/fleet/client/test) for a lease of its own that takes
+nothing over and leaves where the person is untouched. Inside a session (its
+worker credential or assertion in the environment, or FLEET_SEAT=worker) the
+test identity is the default, and every request says so (X-Fleet-Worker): the
+hub refuses such a request the person's lease (403, the reason on stderr). A
+hub without the test door (404) is answered `nohub` — the person's lease is
+never asked for instead. `where` always reads the person's.
 """
 import importlib.util
 import json
@@ -259,6 +269,24 @@ def device():
     return where()["device"]
 
 
+def in_session():
+    """A Claude / Codex session's own process (fleet-session-wrap.sh mints the
+    credential per launch) — never the person at their terminal."""
+    return bool(os.environ.get("FLEET_WORKER_CRED", "").strip() or os.environ.get("FLEET_WORKER_ASSERT", "").strip()
+                or os.environ.get("FLEET_SEAT", "").strip() == "worker")
+
+
+def identity(flag):
+    """test or person: the flag, else FLEET_CLIENT_IDENTITY, else test inside a
+    session and the person outside one."""
+    if flag:
+        return "test"
+    v = os.environ.get("FLEET_CLIENT_IDENTITY", "").strip().lower()
+    if v in ("test", "person"):
+        return v
+    return "test" if in_session() else "person"
+
+
 def out(state, lease="", holder="", took=""):
     print("\t".join(x.replace("\t", " ").replace("\n", " ") for x in (state, lease, holder, took)))
 
@@ -272,6 +300,7 @@ def main(argv):
     ap.add_argument("--terminal", default="")
     ap.add_argument("--save", default="")
     ap.add_argument("--where-file", default="")
+    ap.add_argument("--test-identity", action="store_true")
     a = ap.parse_args(argv)
     if a.action == "device":
         w = where(ask=True)
@@ -296,7 +325,11 @@ def main(argv):
     if not hub:
         out("nohub")
         return 0
+    ident = identity(a.test_identity)
+    path = PATH + "/test" if ident == "test" else PATH
     body = {"action": a.action, "lease": a.lease}
+    if ident == "test":
+        body["identity"] = "test"
     if a.action == "acquire":
         w = None
         if a.where_file:
@@ -313,6 +346,9 @@ def main(argv):
         body["terminal"] = a.terminal or w.get("terminal") or terminal()
         body["version"] = run(["git", "-C", HERE, "rev-parse", "--short", "HEAD"], 2)
     headers = {"Content-Type": "application/json"}
+    if in_session():
+        # a session's request says so: the hub never hands it the person's lease
+        headers["X-Fleet-Worker"] = os.environ.get("FLEET_WORKER_ASSERT", "").strip() or "session"
     if token:
         headers["Authorization"] = "Bearer " + token
     else:
@@ -323,20 +359,31 @@ def main(argv):
             sys.stderr.write("fleet-client-lease: %s\n" % e)
             return 1
         body.update(cert=cert, sig=sig, ts=ts)
-    req = urllib.request.Request(hub.rstrip("/") + PATH, data=json.dumps(body).encode(), method="POST", headers=headers)
+    req = urllib.request.Request(hub.rstrip("/") + path, data=json.dumps(body).encode(), method="POST", headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=float(os.environ.get("FLEET_CLIENT_LEASE_TIMEOUT") or 8)) as r:
             d = json.loads(r.read() or b"{}")
     except urllib.error.HTTPError as e:
         if e.code == 404:
-            # An older hub without the lease: treat it as none — the client
-            # runs as it always has.
+            # An older hub without the lease (or, for the test identity,
+            # without its door): treat it as none — the client runs as it
+            # always has, and the person's lease is never asked for instead.
+            if ident == "test":
+                sys.stderr.write("fleet-client-lease: this hub has no test identity yet — no lease taken\n")
             out("nohub")
             return 0
-        sys.stderr.write("fleet-client-lease: hub answered HTTP %d\n" % e.code)
+        why = ""
+        try:
+            why = (json.loads(e.read() or b"{}").get("error") or "").strip()
+        except (OSError, ValueError, AttributeError):
+            pass
+        sys.stderr.write("fleet-client-lease: hub answered HTTP %d%s\n" % (e.code, (" — " + why) if why else ""))
         return 1
     except (OSError, ValueError) as e:
         sys.stderr.write("fleet-client-lease: %s\n" % e)
+        return 1
+    if ident == "test" and d.get("identity") != "test":
+        sys.stderr.write("fleet-client-lease: the hub did not answer as the test identity — refused\n")
         return 1
     save_key(d.get("action_key") or "")
     lease = d.get("lease") or {}

@@ -41,6 +41,17 @@ import (
 // (Via: local, tailnet, lan or public), that machine (Host) and what it can do
 // for a session (Caps: open_url, show_file, notify, link, iterm2). A node reads
 // its owner's at GET /v1/node/client (bin/fleet-client-where.sh).
+//
+// A test identity (claude-fleet#1931, EPIC #1906 C12): a session's drill or
+// test that runs a real client is never the person. It asks with `identity:
+// test` (or at ClientTestPath, which a hub without test identities answers
+// 404 — so a client never takes the person's lease from an older hub by
+// mistake) and gets its own lease, in its own slot beside the person's: it
+// takes nothing over, it is never ClientLeaseOf (where the person is), it is
+// handed no action and cannot place a session — it can only look. A request
+// that says it comes from a session (the X-Fleet-Worker header: its worker
+// assertion, or any word) may only be the test identity: asking for the
+// person's lease is refused 403, with the reason.
 
 const (
 	// ClientLeaseRenew is how often a client renews.
@@ -50,6 +61,11 @@ const (
 	// clientGoneKeep is how long a replaced lease is remembered, so a client
 	// that slept through its replacement still reads taken_over on waking.
 	clientGoneKeep = 24 * time.Hour
+	// ClientTestPath is the test identity's door: the lease at ClientPath, as
+	// identity test.
+	ClientTestPath = control.ClientPath + "/test"
+	// clientTestSlot marks the test identity's slot in the lease table.
+	clientTestSlot = "#test"
 )
 
 // ClientLease is one person's connected client.
@@ -108,6 +124,8 @@ type ClientLeaseRequest struct {
 	Host     string   `json:"host,omitempty"`
 	Caps     []string `json:"caps,omitempty"`
 	Version  string   `json:"version,omitempty"`
+	// Identity is "" / person (the person themself) or test (#1931).
+	Identity string `json:"identity,omitempty"`
 }
 
 // ClientLeaseResponse is the answer.
@@ -127,6 +145,8 @@ type ClientLeaseResponse struct {
 	ActionKey string `json:"action_key,omitempty"`
 	RenewSecs int    `json:"renew_secs"`
 	TTLSecs   int    `json:"ttl_secs"`
+	// Identity echoes a test identity's lease ("test"); absent for the person.
+	Identity string `json:"identity,omitempty"`
 }
 
 func newClientLeaseID() string {
@@ -321,6 +341,21 @@ func clientLeaseKey(id sshRelayIdentity) string {
 	return "p:" + id.Principal
 }
 
+// slotOf is the slot a lease id lives in: the test identity's when that slot
+// holds (or held) it, else the person's key itself.
+func (t *clientLeaseTable) slotOf(key, lease string) string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	tk := key + clientTestSlot
+	if c := t.cur[tk]; c != nil && c.ID == lease {
+		return tk
+	}
+	if g, ok := t.gone[lease]; ok && g.key == tk {
+		return tk
+	}
+	return key
+}
+
 // ClientLeaseOf is the client a person is connected through right now, if any
 // (principal "" = the operator).
 func (s *Server) ClientLeaseOf(principal string, now time.Time) (ClientLease, bool) {
@@ -354,18 +389,48 @@ func (s *Server) handleFleetClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := clientLeaseKey(id)
+	ident := strings.TrimSpace(req.Identity)
+	if r.URL.Path == ClientTestPath {
+		if ident != "" && ident != "test" {
+			httpError(w, http.StatusBadRequest, "this door is the test identity's: identity must be test")
+			return
+		}
+		ident = "test"
+	}
+	switch ident {
+	case "", "person":
+		if strings.TrimSpace(r.Header.Get(workerAssertHeader)) != "" {
+			// A session's test or drill (#1931): never the person's lease.
+			httpError(w, http.StatusForbidden, "a session may not take the person's client lease — "+
+				"a session's test or drill runs as the test identity (fleet --test-identity / "+
+				"FLEET_CLIENT_IDENTITY=test), which leaves the person's client and where untouched")
+			return
+		}
+		ident = ""
+	case "test":
+		key += clientTestSlot
+	default:
+		httpError(w, http.StatusBadRequest, "identity must be person or test")
+		return
+	}
+	if ident == "test" {
+		req.Caps = []string{} // it only looks: nothing to ask of it
+	}
 	var out ClientLeaseResponse
 	switch req.Action {
 	case "", "get":
 		out = s.clientLeases.get(key, now)
 	case "acquire":
 		out = s.clientLeases.acquire(key, req, now)
-		outcome := "OK"
+		outcome, what := "OK", "client_acquire"
 		if out.TookOver != nil {
 			outcome = "TAKEOVER"
 		}
+		if ident == "test" {
+			what = "client_acquire_test"
+		}
 		if s.Store != nil {
-			if err := s.Store.FleetAudit(id.Actor, "client_acquire", out.Lease.Device, outcome, out.Lease.ID, now); err != nil {
+			if err := s.Store.FleetAudit(id.Actor, what, out.Lease.Device, outcome, out.Lease.ID, now); err != nil {
 				log.Printf("fleet audit: %v", err)
 			}
 		}
@@ -392,6 +457,7 @@ func (s *Server) handleFleetClient(w http.ResponseWriter, r *http.Request) {
 		out.ActionKey = s.clientLeases.actionKey(out.Lease.ID)
 	}
 	out.RenewSecs, out.TTLSecs = int(ClientLeaseRenew/time.Second), int(ClientLeaseTTL/time.Second)
+	out.Identity = ident
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, out)
 }

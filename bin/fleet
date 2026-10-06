@@ -20,6 +20,10 @@
 #                               see where each Agent setting comes from (fleet ·
 #                               团队 · 个人 · 本机) and change your own (#1860);
 #                               export / import a layer as one file (#1865)
+#   fleet --test-identity [m4]  the client as the TEST identity (#1931): its
+#                               own lease beside yours — takes nothing over,
+#                               never where you are; the default inside a
+#                               session (FLEET_CLIENT_IDENTITY=test)
 #   fleet doctor                with only the client here: its `fleet` row
 #                               (version, hub, tmux, cert — #1722) and its
 #                               `能力` row (基础 · 承载, #1806), then this
@@ -68,6 +72,12 @@ client() {
   fi
   exec "$here/fleet-shell.sh" "$@"
 }
+# a session's test or drill connects as the test identity (#1931): the flag
+# travels as FLEET_CLIENT_IDENTITY, which fleet-client-lease.py reads
+if [ "${1-}" = --test-identity ]; then
+  FLEET_CLIENT_IDENTITY=test; export FLEET_CLIENT_IDENTITY
+  shift
+fi
 cmd=${1-}
 case $cmd in
   -h|--help|help)
