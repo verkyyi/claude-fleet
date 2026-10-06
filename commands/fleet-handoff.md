@@ -31,23 +31,19 @@ Transfer notes and conversation evidence stay in private local files (§T).
   types into the cleared session; you can also run it by hand if an auto-cycle
   didn't complete.
 
-## 0. Resolve fleet + guard seat (run FIRST, every time)
+## 0. Resolve fleet + seat (run FIRST, every time)
 
-Env vars do NOT persist across separate Bash tool calls — run this once, then
-reuse the literal values it prints:
+Every fleet step in this skill is a call to the fleet's tool service — Claude
+shows its tools as `mcp__fleet__<name>`, a Codex session reaches the same tools
+on its `fleet` server (docs/FLEET-MCP.md). Call **`mcp__fleet__status`** once and
+reuse the literal values its `window` line prints (`issue=` · `repo=`):
 
-```sh
-source ~/.claude/fleet/bin/fleet-lib.sh
-S=$(fleet_current_session); fleet_load_conf "$S"   # → FLEET_REPO / FLEET_MAIN / FLEET_BASE_BRANCH
-SEAT=$(fleet_seat)                                 # → worker | "" (the hub pane / a stray shell)
-echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master} seat=${SEAT:-unknown} session=$S pane=${TMUX_PANE:-none}"
-```
-
-- **No fleet** (`FLEET_REPO` empty) → **ABORT** in one line: *"not inside a
-  fleet — run this from a fleet session."* Never guess a repo.
+- **No fleet** (`window: (not in tmux)`, or no repo this fleet hosts) → **ABORT**
+  in one line: *"not inside a fleet — run this from a fleet session."* Never guess
+  a repo.
 - **Seat** — `owner: either`, so a worker pane and the operator hub pane may both
-  run it. Only the **doc path** differs by seat (below): a `worker` seat stores
-  against its bound issue, anything else stores to a local file.
+  run it. Only the **doc path** differs by seat (below): a pane with an `issue=`
+  stores against its bound issue, anything else stores to a local file.
 
 Route exactly: empty → **§C**; `pickup [<source>]` → **§P**; `--to claude|codex` → **§T**.
 For unknown arguments or unsupported targets, report the supported forms and
@@ -60,8 +56,7 @@ change coding agent must name the target; don't infer it from context pressure.
 
 > **Not sure it's time yet?** You can't see your own context meter — Claude Code
 > shows it to the human, not to the model — so don't estimate it. Read it:
-> `~/.claude/fleet/bin/fleet-context.sh` (or [`/fleet-context`](fleet-context.md),
-> issue #464) prints the percentage and a verdict on the same bands the
+> `mcp__fleet__context` (or [`/fleet-context`](fleet-context.md), issue #464) prints the percentage and a verdict on the same bands the
 > auto-handoff nudge uses. `HANDOFF` ⇒ proceed with C1 below; `OK` ⇒ you have room,
 > keep working. This is a check *before* handing off, never a gate on one the
 > operator or the Stop hook already asked for.
@@ -95,14 +90,11 @@ that label is fixed.
 **Check its length before storing it** (issue #1322). Every line is context the
 pickup session spends before it does anything, so a doc that keeps growing — or
 that pastes the issue body the pickup can read for itself — hands on a smaller
-window. Pipe the composed text through the check (the issue-bound case passes its
-`@issue`; the pane's is used when you omit it):
+window. Check the composed text: `mcp__fleet__handoff` with `action: check`,
+`doc: <the text>` (and `issue` for the issue-bound case; the pane's is used when
+you omit it).
 
-```sh
-printf '%s\n' "$DOC_TEXT" | ~/.claude/fleet/bin/fleet-handoff-file.sh check - [--issue "$ISSUE"]; echo "rc=$?"
-```
-
-`rc=0` is clean. `rc=3` printed `HANDOFF-CHECK:` lines — over
+Exit `0` is clean. Exit `3` printed `HANDOFF-CHECK:` lines — over
 `FLEET_HANDOFF_MAX_LINES` (default 200), or a block copied from the issue body:
 trim to the NEXT ACTION, live state and dead-ends, replace the copy with a pointer
 to the issue, and re-run once. It is advice, never a gate — if a second pass still
@@ -115,13 +107,12 @@ Hold the composed doc text; **where** it is stored is C2's job.
 The handoff must land somewhere a *cleared* session can recover it. Resolve the
 destination once, store it, and **verify** before arming anything.
 
-**Resolve the destination.** Read the knob + this pane's binding:
+**Resolve the destination.** `ISSUE` is the `issue=` §0's `status` printed (the
+hub pane has none — it always takes the file path below); `DEST` is the
+operator's knob:
 
 ```sh
-DEST="${FLEET_HANDOFF_DEST:-comment}"                                  # comment (default) | file
-ISSUE=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{@issue}' 2>/dev/null | tr -dc 0-9)
-# the hub pane has no @issue — it always takes the file path below.
-echo "dest=$DEST issue=${ISSUE:-none} seat=${SEAT:-hub}"
+echo "dest=${FLEET_HANDOFF_DEST:-comment}"   # comment (default) | file
 ```
 
 Then take the FIRST matching case:
@@ -129,17 +120,13 @@ Then take the FIRST matching case:
 1. **`DEST=comment` AND `$ISSUE` non-empty** → **COMMENT storage** (the primary
    case — a worker's `@issue`). Post the
    SCRUBBED doc (see the scrub rule below) as a comment carrying the pickup marker
-   `<!-- fleet:handoff -->`, via `bin/fleet-comment.sh --note` so it also gets the
-   `<!-- fleet:no-relay -->` marker (the issue-bridge must NOT relay a handoff back
-   into the worker as a turn) and the per-role footer:
+   `<!-- fleet:handoff -->`, via `mcp__fleet__comment` (`mode: note`, the default)
+   so it also gets the `<!-- fleet:no-relay -->` marker (the issue-bridge must NOT
+   relay a handoff back into the worker as a turn) and the per-role footer:
+   `issue: <ISSUE>`, `body:` the scrubbed doc text, a blank line, then
+   `<!-- fleet:handoff -->` on its own last line — the marker is how pickup finds it.
 
-   ```sh
-   # $SCRUBBED = the doc text with the scrub rule applied; the marker makes pickup find it.
-   printf '%s\n\n%s\n' "$SCRUBBED" '<!-- fleet:handoff -->' \
-     | ~/.claude/fleet/bin/fleet-comment.sh "$ISSUE" --repo "$FLEET_REPO" --note
-   ```
-
-   The command prints the created comment URL on success. **If it fails / prints
+   The tool returns the created comment URL on success. **If it fails / prints
    no URL, DO NOT arm comment-mode** — fall through to file storage (case 3) so the
    handoff is never lost.
 
@@ -149,19 +136,16 @@ Then take the FIRST matching case:
 
 3. **`DEST=file`, OR any fall-through from above** → **FILE storage**, always
    **OUTSIDE the repo**, same convention for every seat:
-   the path the helper prints (create the dir). **Never commit it.**
-   Pass `--slug <slug>` when a session hands off more than one task.
-
-   ```sh
-   DOC=$(~/.claude/fleet/bin/fleet-handoff-file.sh path [--slug <slug>])
-   ~/.claude/fleet/bin/fleet-handoff-file.sh repo   # → the doc's `Repo:` line value
-   ```
+   the path `mcp__fleet__handoff` (`action: path`) prints — that is `DOC` (create
+   the dir). **Never commit it.** Pass `slug` when a session hands off more than
+   one task. `mcp__fleet__handoff` with `action: repo` prints the doc's `Repo:` line
+   value.
 
    A one-repo fleet gets `~/.claude/handoff/<session>-<YYYY-MM-DD>[-<slug>].md`, as
    always. A fleet hosting 2+ repos puts this pane's repo in the name —
    `<session>-<owner-name>-<YYYY-MM-DD>[-<slug>].md` — because every repo's file
    handoffs share one directory and pickup must not resume another repo's (issue
-   #992). Either way, fill the skeleton's `Repo:` line with the second command's
+   #992). Either way, fill the skeleton's `Repo:` line with the `repo` action's
    output.
 
    > A handoff written *into* the repo used to be the worker path
@@ -181,7 +165,7 @@ Then take the FIRST matching case:
 
 > **Scrub before COMMENT storage — a HARD rule at any repo visibility.**
 > Never assume the fleet's repo is public or private. If a decision turns on it,
-> read it: `gh repo view "$FLEET_REPO" --json visibility`. (An earlier revision of
+> read it: `gh repo view <repo from §0> --json visibility`. (An earlier revision of
 > this file asserted "this repo is public" as fact; that was wrong for at least one
 > fleet, and an agent that trusted it mis-rated a routine hygiene finding as an
 > urgent public-credential leak.) The scrub below stands either way — a comment is
@@ -205,20 +189,14 @@ Then take the FIRST matching case:
 DOC). Never arm around a missing store. The helper waits for THIS turn to end
 (Stop hook → `@claude_state` leaves `working`) before it touches anything, so
 arming it as the final tool call is what lets it clear the pane you're still in.
-Arm with the mode that matches how you stored it:
+Arm with the mode that matches how you stored it — **`mcp__fleet__handoff`
+with `action: arm`**, which starts the helper detached and returns at once:
 
-```sh
-# COMMENT storage — the helper re-confirms the marked comment on the issue, then
-# injects an ARGUMENT-FREE pickup (the cleared pane's @issue self-resolves it):
-nohup ~/.claude/fleet/bin/fleet-handoff-cycle.sh \
-  --pane "$TMUX_PANE" --issue "$ISSUE" --repo "$FLEET_REPO" >/dev/null 2>&1 &
-disown 2>/dev/null || true
-
-# FILE storage — the helper gates on the doc + injects `pickup <DOC>`:
-nohup ~/.claude/fleet/bin/fleet-handoff-cycle.sh \
-  --pane "$TMUX_PANE" --doc "$DOC" >/dev/null 2>&1 &
-disown 2>/dev/null || true
-```
+- **COMMENT storage** → `issue: <ISSUE>` (+ `repo` from §0 in a fleet hosting
+  several): the helper re-confirms the marked comment on the issue, then injects
+  an ARGUMENT-FREE pickup (the cleared pane's `@issue` self-resolves it);
+- **FILE storage** → `doc: <DOC>`: the helper gates on the doc + injects
+  `pickup <DOC>`.
 
 The helper is fail-safe by construction (see `bin/fleet-handoff-cycle.sh`): it
 re-validates the store (marked comment fetchable, or doc non-empty) BEFORE the
@@ -254,9 +232,9 @@ may use the operator CLI described in `~/.claude/fleet/docs/SESSION-TRANSFER.md`
 to select a different window, but this skill never guesses another source pane.
 Do not use C2–C4: no issue comment, `/clear`, or clear-cycle helper in this mode.
 
-1. **Resolve the exact source before writing notes.** Run
-   `~/.claude/fleet/bin/fleet-transfer.sh --session <S from §0> --window "$TMUX_PANE" --to "$TARGET" --dry-run`.
-   It must find this pane's live process, exact native session, original
+1. **Resolve the exact source before writing notes.** Call
+   `mcp__fleet__transfer` with `action: check`, `to: <TARGET>` (it passes this
+   session and pane itself). It must find this pane's live process, exact native session, original
    transcript and linked worktree. On refusal, report it and stop. Never guess a
    session from the newest transcript. A `working` state is expected during this
    skill; the after-turn helper below waits for the real Stop hook.
@@ -276,24 +254,18 @@ Do not use C2–C4: no issue comment, `/clear`, or clear-cycle helper in this mo
    Use the loop's current delay (30..604800 seconds), not an invented cadence.
    `next_run_at` may preserve its due time as a Unix timestamp; omit it to wait
    one interval after transfer. A `ScheduleWakeup` record can be exported with
-   `python3 ~/.claude/fleet/bin/fleet-loop.py from-claude --transcript <exact source path> --output <private JSON>`;
-   verify it is still intended (an old transcript cannot prove a timer is live).
-   Pass that path as `--loop <private JSON>` in step 3. Fleet will bind the new
+   `mcp__fleet__transfer` (`action: export_loop`, `transcript: <exact source
+   path>`, `output: <private JSON>`); verify it is still intended (an old
+   transcript cannot prove a timer is live). Pass that path as `loop` in step 3. Fleet will bind the new
    target session and own its timer. Existing active Fleet loops transfer automatically, including their identity, cadence and ownership generation. Calendar-based `CronCreate` jobs and external
    schedulers are not automatically converted to interval loops.
-3. **Arm as the LAST tool call**, with the verified note path as `DOC` and the
-   literal fleet name resolved in §0 as `S`:
-
-   ```sh
-   ~/.claude/fleet/bin/fleet-transfer.sh --session "$S" \
-     --window "$TMUX_PANE" --to "$TARGET" --handoff "$DOC" --after-turn
-   ```
-
-   Add `--loop <private JSON>` only when importing the native loop above. The
+3. **Arm as the LAST tool call**: `mcp__fleet__transfer` with `action: arm`,
+   `to: <TARGET>` and the verified note path as `handoff`. Add `loop: <private
+   JSON>` only when importing the native loop above. The
    controller binds the exact target session; the owner can `defer --seconds N` or
    `stop` through `fleet-loop.py`. Do not re-arm Claude's timer during cutover.
 
-   The command returns a request directory containing `state.json` and `wait.log`.
+   The call returns a request directory containing `state.json` and `wait.log`.
    It pins this pane/process/session, saves a private copy of the notes, and
    arms a detached waiter. A clean Stop releases it; stale idle stamps do not.
    It defers while the operator is typing and aborts on timeout or identity
@@ -327,32 +299,25 @@ before reading it:
 2. **Newest `<!-- fleet:handoff -->`-marked comment** on this pane's `@issue`.
    This is what an argument-free pickup resolves to after a comment-mode cycle:
 
-   ```sh
-   ISSUE=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{@issue}' 2>/dev/null | tr -dc 0-9)
-   # newest comment carrying the handoff marker:
-   gh issue view "$ISSUE" --repo "$FLEET_REPO" --json comments \
-     -q 'last(.comments[] | select(.body | contains("<!-- fleet:handoff -->"))) | .body'
-   ```
-3. **File-fallback search**, when neither above resolves — ask the helper, never
-   `ls -t` the directory yourself:
+   `mcp__fleet__gh` with `kind: issue`, `number: <issue= from mcp__fleet__status>`,
+   `fields: comments`, `max_age: 0` — then take the LAST comment whose body
+   contains `<!-- fleet:handoff -->`.
+3. **File-fallback search**, when neither above resolves — ask
+   `mcp__fleet__handoff` (`action: find`), never `ls -t` the directory yourself:
 
-   ```sh
-   ~/.claude/fleet/bin/fleet-handoff-file.sh find; echo "rc=$?"
-   ```
-
-   - **rc 0** → the path it printed is this pane's handoff. A one-repo fleet gets
+   - **exit 0** → the path it printed is this pane's handoff. A one-repo fleet gets
      the newest `<session>-*.md`, as always. A fleet hosting 2+ repos gets the
      newest file attributed to THIS pane's repo (`fleet_window_repo`): by the
      repo in its name, else its `Repo:` line, else the repo named in its text —
      and it also searches the old names of fleets folded into this one
      (`fleet-repo.sh fold`'s archive), attributed to the repo that fleet hosted.
-   - **rc 4 (AMBIGUOUS)** → it did NOT pick: every line is
+   - **exit 4 (AMBIGUOUS)** → it did NOT pick: every line is
      `<path>\t<repo|?>\t<mtime>`, either because a file whose repo is unknown is
      newer than this repo's newest, or because only other repos' / unknown files
      exist. **Never pick one yourself** — ask the operator which to resume
      (`AskUserQuestion`, one option per path, newest first; resume none is a fine
      answer), then treat the choice as an explicit `<source>`.
-   - **rc 1** → no file handoff exists; say so.
+   - **exit 1** → no file handoff exists; say so.
 
    An old repo-committed handoff may still exist in a repo that has not been
    cleaned up (`git grep -lI 'Handoff:' -- doc`); read it as history, never write
@@ -390,7 +355,15 @@ plain `claude` session, and this pickup arrives as its first user turn.
 
 ---
 
-Rails: operate on YOUR fleet's `$FLEET_REPO` only — never another fleet's repo,
+## 排障
+
+No `fleet` tool in this session (`FLEET_MCP=0`, a session older than the tool
+service): docs/FLEET-MCP.md lists the exact script each call above runs, from
+`~/.claude/fleet/bin/` — the arm is
+`nohup ~/.claude/fleet/bin/fleet-handoff-cycle.sh --pane "$TMUX_PANE" --doc "$DOC" >/dev/null 2>&1 &`
+(or `--issue "$ISSUE"` for comment storage), detached exactly as the tool does.
+
+Rails: operate on YOUR fleet's repo only — never another fleet's repo,
 sessions, or ledgers. The base checkout is read-only (hook-enforced): a worker
 edits inside its `issue-<N>` worktree and lands via PR; the operator files/triages
 from the hub and hands implementation to a worker. The detached helper drives ONLY this pane,

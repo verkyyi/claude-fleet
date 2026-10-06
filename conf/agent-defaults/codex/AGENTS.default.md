@@ -12,11 +12,12 @@ fleet's hooks are its rails. Whatever the project:
   `kill-session`, `kill-window` aimed at a sibling): every window on that socket
   is another live session. Test tmux tooling on an isolated socket (`tmux -L scratch`).
 - **The operator's screen is their own computer**, reached over SSH. `open <url|file>`
-  here shows it to nobody — use `~/.claude/fleet/bin/fleet-open.sh` /
-  `fleet-show.sh`, or the doc-preview skill for a document.
+  here shows it to nobody — in a fleet session use the `fleet` tools `open` /
+  `show` (`fleet-open.sh` / `fleet-show.sh` outside one), or the doc-preview
+  skill for a document.
 - **Where the operator is right now** — which device, system and terminal, and
-  what it can do (open a page, take a file, a link only) — is
-  `~/.claude/fleet/bin/fleet-client-where.sh` (`--json`): the one reader. Never
+  what it can do (open a page, take a file, a link only) — is the `fleet` tool
+  `where` (`fleet-client-where.sh` outside a session): the one reader. Never
   guess a terminal or a device yourself.
 - **A temp server binds `127.0.0.1`, never `*`**, and dies with the work.
 - **Credentials never enter a config, a commit, an issue or a comment.** Tokens

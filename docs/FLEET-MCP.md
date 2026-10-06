@@ -54,6 +54,37 @@ together (refused, nothing ran): `evidence before|after` takes exactly one of
 | `pr_verdict` 合 | `pr`, `repo`?, `wait`?, `until_merged`?, `timeout`? (1–570 s, default 540 with `wait`) | `fleet-pr-verdict.sh <PR> [--repo R] [--wait --timeout T [--until-merged]]` | 0 READY · 1 any other verdict · 2 error · 3 TIMEOUT (call again) |
 | `pr_merge` 合 | `pr`, `repo`? | `fleet-pr-merge.sh <PR> [--repo R]` (the fleet's merge method) | 0 MERGED · 1 not READY / refused · 2 error |
 
+### The rest of a worker skill (issue #1811, EPIC #1813 C9)
+
+What `commands/fleet-claim.md`, `fleet-handoff.md`, `fleet-compact-resume.md` and
+`fleet-context.md` still had a session type by path. With these the worker-run
+steps of every skill name a **tool**, never a script (`bin/skill-tools-selftest.sh`
+lints it): a script path appears only under a heading marked `运营者` or `排障`.
+
+| tool | arguments | runs | exit codes |
+|---|---|---|---|
+| `brief` | `kind`? (`claim` default · `resume`), `issue`?, `repo`?, `no_comments`? (claim only) | `fleet-claim-brief.sh [--issue N] [--repo R] [--no-comments]` · `fleet-compact-resume.sh --brief` | claim: 0 go · 2 not in a fleet · 3 wrong seat · 4 no issue · 5 the read failed |
+| `file_issue` | `title`, `body`?, `labels`? (comma list), `priority`? (`p0`–`p3`), `parent`?, `spawn`? \| `bind`?, `repo`? | `fleet-issue-file.sh --title T [--body B] [--label L]… [--priority P] [--parent N] [--repo R] [--spawn\|--bind]` | 0 · 2 usage · 3 unknown label · 4 spawn with no live parent · 1 failure |
+| `gh` | `kind` (`issue` · `pr` · `checks`), `number`, `fields`?, `max_age`? (≥ 0), `repo`? | `fleet-gh.sh issue view\|pr view\|pr checks <N> [--repo R] [--json F] [--max-age S]` | the script's |
+| `context` | `json`? | `fleet-context.sh [--json]` | 0 OK · 1 another verdict · 2 nothing to read |
+| `transfer` | `action` (`check` · `arm` · `export_loop`); `to` (`claude` · `codex`) for check/arm; `handoff` + `loop`? for arm; `transcript` + `output` for export_loop | `fleet-transfer.sh --session S --window $TMUX_PANE --to T --dry-run` · `… --handoff DOC [--loop L] --after-turn` · `fleet-loop.py from-claude --transcript F --output F` | the script's |
+| `handoff` `arm` | `doc` (a stored file's path) \| `issue` (+ `repo`?) | `fleet-handoff-cycle.sh --pane $TMUX_PANE --doc D \| --issue N [--repo R]`, **detached** — the call returns at once with its pid; it must be the turn's last call | 0 armed |
+| `where` | `json`? | `fleet-client-where.sh [--json]` | 0 named · 3 nobody connected · 1 could not tell |
+| `show` | `file`, `inline`? | `fleet-show.sh [--inline] -- <file>` | 0 SENT · 2 PATH (say the path) |
+| `open` | `target` (URL · `:port[/path]` · file) | `fleet-open.sh -- <target>` | 0 sent / copied · 2 fallback:path |
+
+`file_issue`'s body goes as `--body` (the script takes no stdin); it never passes
+through a shell. `--` before a file / target keeps a name starting with `-` a name.
+
+### In a skill
+
+A worker step names the tool as `mcp__fleet__<tool>` — the name Claude shows; a
+Codex session reaches the same tool on its `fleet` server. The script stays the
+implementation and the 排障 path (`FLEET_MCP=0`, a session without the server);
+it is written only under a `运营者` / `排障` heading. Operator skills
+(`fleet-epic-*`, `fleet-sync-install`, `fleet-move`, `fleet-history`,
+`fleet-onboard`) keep their script form — the operator is not a worker session.
+
 Reverse delivery is untouched (EPIC #1813 rule 3): a report the parent cannot take
 waits in the peer queue / hub outbox, an answer comes back through the issue-bridge
 or a prompt — no tool polls for one.
@@ -232,6 +263,7 @@ Newline-delimited JSON-RPC 2.0 on stdin/stdout, stdlib only (macOS python 3.9):
 against fake scripts, no-hub degenerate, the legacy shim, the Codex mount; for 报问记合
 (G–I) every new tool's refusals, its exact argv + stdin, and script ≡ tool through the
 REAL `fleet-comment.sh` (the byte-identical comment) and `fleet-report-parent.sh
+<<<<<<< HEAD
 --dry-run` (the same envelope, on an isolated tmux server).
 `bin/fleet-mcp-selftest.sh` J — the credential: valid / expired / forged /
 tampered / another pane / another fleet / revoked, migration, renewal, no leak.
@@ -241,6 +273,12 @@ credential, its signature and claims, zero network with no hub, `fleet_hub_put`'
 — valid → placed + audited + journalled, forged → 401, out of scope → 404, the
 relay; `TestPlaceCarriesWorkerAssertion` (`cmd/ccquota`).
 `bin/session-wrap-selftest.sh` B' — the wrapper mints per launch and revokes on exit.
+=======
+--dry-run` (the same envelope, on an isolated tmux server); L the C9 tools the same way,
+and `handoff arm` answering before its detached helper ends.
+`bin/skill-tools-selftest.sh` — no worker-run skill step names a `~/.claude/fleet/bin`
+script, and every `mcp__fleet__<tool>` a skill names is a real tool.
+>>>>>>> 82ad0e36 (技能只写「用哪个工具」 (#1811))
 `bin/fleet-claude-selftest.sh` #1807 and `bin/fleet-codex-selftest.sh` I — the
 launch command lines carry the server. `mod/fleet/tests/tools.test.ts` — the mod
 registers none of its own when the server is mounted.

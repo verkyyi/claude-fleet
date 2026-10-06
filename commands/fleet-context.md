@@ -12,31 +12,14 @@ or a scratch session).
 
 **Argument** (`$ARGUMENTS`): none — it measures the session it is run from.
 
-## 0. Resolve fleet + guard seat (run FIRST, every time)
-
-Env vars do NOT persist across separate Bash tool calls — run this once, then
-reuse the literal values it prints:
-
-```sh
-source ~/.claude/fleet/bin/fleet-lib.sh
-S=$(fleet_current_session); fleet_load_conf "$S"   # → FLEET_REPO / FLEET_MAIN / FLEET_BASE_BRANCH
-SEAT=$(fleet_seat)                                 # → worker | "" (the hub pane / a stray shell)
-echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master} seat=${SEAT:-unknown}"
-```
-
-- **No fleet** (`FLEET_REPO` empty) → **ABORT** in one line: *"not inside a
-  fleet — run this from a fleet session."* Never guess a repo.
-- **Seat**: this skill's owner is `either`, so both the worker seat and the hub
-  pane may run it. There is no refusal path beyond the fleet guard above.
-
 ## 1. Read the meter
 
-One call — it resolves *this* session's transcript and this pane's statusline
-stamp on its own, so pass nothing:
-
-```sh
-~/.claude/fleet/bin/fleet-context.sh
-```
+One call — **`mcp__fleet__context`**, the fleet's tool service (a Codex session
+reaches the same tool on its `fleet` server; docs/FLEET-MCP.md). It resolves
+*this* session's transcript and this pane's statusline stamp on its own, so pass
+nothing. Outside a fleet pane it says so — then **ABORT** in one line: *"not
+inside a fleet — run this from a fleet session."* Any seat may run it (`owner:
+either`).
 
 It prints five lines — `context` (the percentage, the token count, which source
 it came from and **which denominator** it used), `session` (turns, output tokens
@@ -44,10 +27,9 @@ spent, and the pre-compact peak when the window has already been cleared),
 `handoff` (the thresholds in force), `account` (the pool label verified from this
 pane’s Claude process token, or `unknown`), and `verdict:` — plus a `cross` line when the
 two sources disagree and a `bus` line when this pane's measurement bus is dead
-(see below). Add `--json` when you want to branch on a field, or `-q`
-for the bare verdict token. Exit code mirrors
-[`fleet-pr-verdict.sh`](../bin/fleet-pr-verdict.sh): **0 ⇔ `OK`**, 1 for any
-other verdict, 2 for a hard error.
+(see below). Pass `json: true` when you want to branch on a field. Exit code
+mirrors `mcp__fleet__pr_verdict`'s: **0 ⇔ `OK`**, 1 for any other verdict, 2 for
+a hard error.
 
 ### Where the number comes from
 

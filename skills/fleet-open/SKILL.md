@@ -16,15 +16,18 @@ when nobody is connected.
 The operator reads this machine over SSH from iTerm2. `open <url>` here pops the page up on
 the mini's own screen, which nobody is looking at. `fleet-open` sends it down the SSH
 connection the operator already has, to their iTerm2, whose fleet script (issue #1380)
-opens it in their browser:
+opens it in their browser. It is a call to the fleet's tool service (issue #1811) —
+**`mcp__fleet__open`** (`target`) in Claude, the same `open` tool on a Codex session's
+`fleet` server:
 
-```bash
-~/.claude/fleet/bin/fleet-open.sh https://github.com/owner/repo/pull/12   # any URL
-~/.claude/fleet/bin/fleet-open.sh :5173/                                  # a server HERE, by port
-~/.claude/fleet/bin/fleet-open.sh http://localhost:3000/dashboard         # same thing
-~/.claude/fleet/bin/fleet-open.sh report.pdf                              # a file → their ~/Downloads
-~/.claude/skills/doc-preview/share.sh --open report.md                    # host a doc + open it
-```
+| `target` | what opens |
+|---|---|
+| `https://github.com/owner/repo/pull/12` | any URL |
+| `:5173/` | a server HERE, by port |
+| `http://localhost:3000/dashboard` | same thing |
+| `report.pdf` | a file → their ~/Downloads |
+
+A doc to host and open in one step: `~/.claude/skills/doc-preview/share.sh --open report.md`.
 
 A page served on THIS machine (`:port`, `localhost`, `127.0.0.1`, or this machine's own
 tailnet name) is opened through an SSH port forward the operator's side sets up — so a dev
@@ -33,7 +36,7 @@ and without a tailnet on their side. Everything else is opened as is.
 
 ## What it prints — relay it
 
-One line on stdout:
+One line in the tool's output:
 
 | result | meaning | what to tell the operator |
 |---|---|---|
@@ -50,16 +53,20 @@ popup URL `http://127.0.0.1:<port>/…` means nothing on their computer without 
 
 ## Rules
 
-- **Read where the operator is first** — `~/.claude/fleet/bin/fleet-client-where.sh`
-  (issue #1716, the one reader): which device and terminal, and its `能：` — `打开网页`
+- **Read where the operator is first** — `mcp__fleet__where` (issue #1716, the one reader): which device and terminal, and its `能：` — `打开网页`
   (the client runs on their computer), `给链接` only (a phone / iPad at the far end of an
   ssh: give them a link they can tap, tailnet address first), `iTerm2`. Never guess it.
 - **Never `open`** a URL or file from a fleet session. Use `fleet-open`.
 - **Docs to READ** (Markdown / HTML) still go through doc-preview — `share.sh --open <file>`
   hosts it and opens it in one step (add `--local` when there is no tailnet).
-- **Images / PDFs to LOOK at** can also go through `fleet-show.sh` (`--inline` draws an image
-  in the terminal); `fleet-open <file>` is the same download.
+- **Images / PDFs to LOOK at** can also go through `mcp__fleet__show` (`inline: true` draws
+  an image in the terminal); `open` with a file is the same download.
 - **Never print or log the secret** (`~/.config/claude-fleet/open.secret`, 0600). It is what
   stops any other text printed to the operator's terminal from opening URLs on their machine.
-- `--print` shows the payload JSON without sending anything — use it to check a rewrite.
 - `fleet-doctor`'s `open` line shows whether the secret exists and the last result.
+
+## 排障
+
+The script behind the tool is `~/.claude/fleet/bin/fleet-open.sh <url | :port[/path] | file>`
+(`fleet-client-where.sh`, `fleet-show.sh` beside it) — run it by hand only when the session
+has no `fleet` tool, or with `--print` to see the payload JSON without sending anything.

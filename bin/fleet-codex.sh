@@ -251,7 +251,7 @@ expand_slash() {
   body=$(cat "$f")
   body="${body//\$ARGUMENTS/$rest}"
   pre=$(cat "$ROOT/conf/codex-preamble.md" 2>/dev/null)
-  [ -n "$pre" ] || pre='You are a claude-fleet WORKER running on OpenAI Codex CLI. The text below is a Claude Code skill: slash commands and Claude-only tools (AskUserQuestion, SendMessage, Artifact, /fleet-handoff, /fleet-context) are not available to you — run the shell scripts it names directly, never wait on the operator, and every rail (worktree-only edits, no destructive tmux, land your own PR) applies unchanged.'
+  [ -n "$pre" ] || pre='You are a claude-fleet WORKER running on OpenAI Codex CLI. The text below is a Claude Code skill: slash commands and Claude-only tools (AskUserQuestion, SendMessage, Artifact, /fleet-handoff, /fleet-context) are not available to you — call each mcp__fleet__<name> it names as the tool <name> on your fleet MCP server, never wait on the operator, and every rail (worktree-only edits, no destructive tmux, land your own PR) applies unchanged.'
   EXPANDED="$pre"$'\n\n'"$body"
   return 0
 }
