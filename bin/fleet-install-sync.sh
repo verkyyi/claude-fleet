@@ -521,11 +521,21 @@ main() {
   # --- one tick at a time (an apply + doctor may outlive a short interval) -----
   if [ "$DRY" = 0 ]; then
     [ -d "$STATE_DIR" ] || mkdir -p "$STATE_DIR" 2>/dev/null
+    # A holder SIGKILLed mid-tick (launchctl kickstart -k, OOM, a reboot) runs no
+    # trap, so its lock stays behind (issue #1691): a holder whose pid is gone is
+    # taken over at once; LOCK_TTL stays the backstop for a reused pid or a hung
+    # holder. No pid yet (a holder between mkdir and the write) = the TTL alone.
     if ! mkdir "$LOCK" 2>/dev/null; then
-      local lts
+      local lts lpid lage
       lts=$(cat "$LOCK/ts" 2>/dev/null); case "$lts" in ''|*[!0-9]*) lts=0 ;; esac
-      if [ $(( $(now) - lts )) -lt "$LOCK_TTL" ]; then
-        say "another tick holds $LOCK (since $lts) — skip"; exit 0
+      lpid=$(cat "$LOCK/pid" 2>/dev/null); case "$lpid" in *[!0-9]*) lpid='' ;; esac
+      lage=$(( $(now) - lts ))
+      if [ -n "$lpid" ] && ! kill -0 "$lpid" 2>/dev/null; then
+        say "took over $LOCK: holder pid=$lpid is dead (since $lts, ${lage}s ago)"
+      elif [ "$lage" -lt "$LOCK_TTL" ]; then
+        say "another tick holds $LOCK (pid=${lpid:-?} ${lpid:+alive }since $lts, ${lage}s ago) — skip"; exit 0
+      else
+        say "took over $LOCK: older than ${LOCK_TTL}s (pid=${lpid:-?}, since $lts)"
       fi
       rm -rf "$LOCK"; mkdir "$LOCK" 2>/dev/null || exit 0
     fi

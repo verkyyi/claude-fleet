@@ -30,7 +30,9 @@
 #   H. off           FLEET_INSTALL_SYNC=0 → no fetch, no move, state says off
 #   I. not seen      a failed fetch is fetch-failed (not refused); no tag = none
 #   J. dry-run       prints the move, changes nothing, writes no state
-#   N. lock          a live lock skips the tick
+#   N. lock          a live lock skips the tick (the skip names its pid); a dead
+#                    holder's lock (SIGKILL mid-tick, #1691) is taken over at once;
+#                    LOCK_TTL takes over a live-pid lock as the backstop
 #   L. --status      prints the state file
 #   P. notify        (issue #1125) a stuck tick sends ONE FLEET_NOTIFY_CMD per
 #                    (login, why, stable): the same refusal three ticks = one
@@ -343,13 +345,28 @@ eq "J: still no state written" "$before" "$(st last_check)"
 git -C "$CO" checkout -q -- f
 
 # --- N. lock ---------------------------------------------------------------------------------------------
-mkdir -p "$CONF/global/install-sync.lock"; date +%s > "$CONF/global/install-sync.lock/ts"; run
+LK="$CONF/global/install-sync.lock"
+mkdir -p "$LK"; date +%s > "$LK/ts"; run                   # no pid yet: the TTL alone decides
+contains "N: a fresh lock skips the tick" "$OUT" "another tick holds"
+contains "N: no pid says so" "$OUT" "pid=?"
+printf '%s' "$$" > "$LK/pid"; run                          # a live holder (this shell)
 contains "N: a live lock skips the tick" "$OUT" "another tick holds"
+contains "N: the skip names the live pid" "$OUT" "pid=$$ alive"
 eq "N: HEAD untouched" "$C6" "$(hd)"
-printf '1\n' > "$CONF/global/install-sync.lock/ts"; run     # a dead tick's lock is taken over
-eq "N: a stale lock is taken over" updated "$(st result)"
+printf '1\n' > "$LK/ts"; touch "$WORK/gate-closed"; run   # live pid, past the TTL (the gate keeps HEAD put)
+contains "N: an old lock is taken over (TTL backstop)" "$OUT" "older than 3600s (pid=$$"
+eq "N: the tick ran past the lock" deferred "$(st result)"
+eq "N: HEAD still put" "$C6" "$(hd)"
+[ -d "$LK" ] && fail "N: lock left behind (TTL)"; CHECKS=$((CHECKS + 1))
+rm -f "$WORK/gate-closed"; mkdir -p "$LK"; date +%s > "$LK/ts"
+# a holder SIGKILLed mid-tick (kickstart -k) left a fresh lock: taken over at once (#1691)
+bash -c 'echo $$' > "$WORK/deadpid"; dead=$(cat "$WORK/deadpid")
+printf '%s' "$dead" > "$LK/pid"; run
+contains "N: the takeover names the dead pid" "$OUT" "took over $LK: holder pid=$dead is dead"
+not_contains "N: a dead holder is not skipped" "$OUT" "another tick holds"
+eq "N: a dead holder's lock is taken over" updated "$(st result)"
 eq "N: moved" "$C7" "$(hd)"
-[ -d "$CONF/global/install-sync.lock" ] && fail "N: lock left behind"; CHECKS=$((CHECKS + 1))
+[ -d "$LK" ] && fail "N: lock left behind"; CHECKS=$((CHECKS + 1))
 
 # --- L. --status -------------------------------------------------------------------------------------------
 run --status
