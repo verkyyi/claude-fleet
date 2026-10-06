@@ -151,14 +151,22 @@ cwclean() {
 #                                      merged worker's window). The hub is read from
 #                                      the inherited FLEET_HUB=1 env (issue #202),
 #                                      with the $TMUX_PANE→@hub pane read as backup.
-#   • anything on an isolated server (a global -L/-S is present) → allowed: that
-#                                      is exactly the safe testing convention.
+#   • a global -L/-S is present      → handed to bin/tmux-shim/tmux (issue
+#                                      #1841): since #159 every fleet IS a -L
+#                                      label, so "-L means an isolated test
+#                                      server" let every fleet through. The shim
+#                                      refuses a delete aimed at a FLEET's socket
+#                                      and passes a test server (-L scratch, a -S
+#                                      path) straight through — the one rule the
+#                                      session panes' PATH and bash-guard share.
 #   • FLEET_ALLOW_TMUX_DESTROY=1     → guard disabled entirely (maintenance, and
 #                                      what the fleet's own scripts set if needed).
 #
 # Fleet scripts (fleet-down.sh, fleet-restore.sh, the selftests) are unaffected:
-# a shell function is not inherited by the bash processes they run in, so they
-# always reach the real tmux binary.
+# a shell function is not inherited by the bash processes they run in. In a
+# session pane they do reach bin/tmux-shim (it leads the agent's PATH), which
+# passes the fleet's own scripts through and judges everything else the same way.
+typeset -g _CW_FLEET_BIN="${${(%):-%x}:A:h:h}/bin"   # <fleet>/bin, for tmux() below
 tmux() {
   emulate -L zsh
   # Escape hatch first — never stand between a deliberate operator and tmux.
@@ -199,10 +207,24 @@ tmux() {
   case "$sub" in
     kill-ser*) dest=server ;;   # kill-server (prefixes: tmux accepts abbreviations)
     kill-ses*) dest=session ;;  # kill-session
-    kill-w*)   dest=window ;;   # kill-window
+    kill-w*|killw) dest=window ;;   # kill-window
+    kill-p*|killp) dest=pane ;;     # kill-pane: judged on a named server only (the shim)
   esac
-  # Isolated server, or a subcommand we don't guard → straight through.
-  if (( isolated )) || [[ -z "$dest" ]]; then command tmux "$@"; return; fi
+  # A subcommand we don't guard → straight through.
+  [[ -z "$dest" ]] && { command tmux "$@"; return; }
+  # A named server (-L/-S): a fleet's, or a test server? The shim decides. Found
+  # on PATH in a session pane, else beside this file — or, in a shell snapshot
+  # that re-homed this function, in the default install.
+  if (( isolated )); then
+    local shim="" d
+    for d in ${(s.:.)PATH} "${_CW_FLEET_BIN:-}" "$HOME/.claude/fleet/bin"; do
+      case "$d" in */tmux-shim) [[ -x "$d/tmux" ]] && { shim="$d/tmux"; break; } ;; esac
+      [[ -n "$d" && -x "$d/tmux-shim/tmux" ]] && { shim="$d/tmux-shim/tmux"; break; }
+    done
+    if [[ -n "$shim" ]]; then "$shim" "$@"; return; fi
+    command tmux "$@"; return
+  fi
+  [[ "$dest" == pane ]] && { command tmux "$@"; return; }
 
   # Hub exemption — issue #177. The operator's hub pane legitimately
   # manages fleet windows/sessions: a manual reap (and the cleanup daemon) kill a

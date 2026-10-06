@@ -1,0 +1,193 @@
+#!/bin/bash
+# bin/tmux-shim/tmux — the fleet panes' `tmux` (issue #1841, EPIC #1851 C2).
+#
+# fleet-session-wrap.sh puts this directory at the FRONT of the agent's PATH, so
+# every `tmux` a session runs — the Bash tool's zsh, a `bash -c`, Codex's
+# non-interactive shell, Claude's `!` — reaches this file first. It forwards to
+# the real tmux untouched, except a delete aimed at a FLEET's server:
+#
+#   • kill-server                        → refused (it is the whole fleet)
+#   • kill-session (or -a)               → refused; a view session
+#                                          (`<fleet>@view-<id>`) is not the fleet
+#   • kill-window / kill-pane            → refused when the window is a fleet
+#                                          session (@fleet_id, @cc_session_id,
+#                                          @issue, @claude_state) or a panel
+#                                          (home/dash/plan/backlog); kill-pane only
+#                                          when it would take the window with it;
+#                                          `-a` on such a window is refused too
+#
+# A fleet server = a socket whose label owns a fleet conf ($FLEET_CONF_DIR/
+# fleets/<label>/conf, or the legacy <label>.conf): `-L <label>`, `-S` to that
+# label's socket, or the ambient $TMUX server. Anything else — `-L scratch`, a
+# `-S <path>` test socket, the person's own default server — goes straight
+# through: that is the isolated-socket testing convention.
+#
+# Passed through as well:
+#   • FLEET_ALLOW_TMUX_DESTROY=1 — the one escape hatch (EPIC #1851 rule 3);
+#   • the fleet's OWN plumbing — the nearest script among the caller's ancestors
+#     (stopping at the agent, the session wrapper or an interactive shell) is a
+#     file in a claude-fleet bin/ or hooks/ (fleet-down.sh, session-end-hook.sh,
+#     dash-reap.sh, the cleanup's python, a selftest): those are the right way
+#     to close things, and they inherit this PATH from the hooks that run them.
+#
+# FLEET_TMUX_SHIM_CHECK=1 answers without running the command: exit 0 allowed,
+# exit 1 refused with the reason on stderr (hooks/bash-guard.py asks it, so the
+# Bash tool and this file share ONE rule). The plumbing pass is skipped there:
+# a command the agent typed is never plumbing.
+set -u
+SELF="$0"
+
+# The real tmux: the first one on PATH that is not this file. No fork — every
+# tmux call a session's hooks make passes here first.
+REAL=''
+if [ -n "${FLEET_REAL_TMUX:-}" ] && [ -x "$FLEET_REAL_TMUX" ]; then REAL="$FLEET_REAL_TMUX"
+else
+  IFS=: read -r -a _dirs <<< "$PATH:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+  for d in ${_dirs[@]+"${_dirs[@]}"}; do
+    [ -n "$d" ] && [ -f "$d/tmux" ] && [ -x "$d/tmux" ] || continue
+    [ "$d/tmux" -ef "$SELF" ] && continue
+    case "$d" in */tmux-shim) continue ;; esac
+    REAL="$d/tmux"; break
+  done
+fi
+[ -n "$REAL" ] || { echo "tmux: not found on PATH (the fleet shim found no real tmux)" >&2; exit 127; }
+check="${FLEET_TMUX_SHIM_CHECK:-}"
+pass() { [ -n "$check" ] && exit 0; exec "$REAL" "$@"; }
+
+[ "${FLEET_ALLOW_TMUX_DESTROY:-}" = 1 ] && pass "$@"
+
+# ---- the global options and every command (tmux chains them with a `;` arg) --
+G=(); n=$#; i=1; sock_l=''; sock_s=''
+while [ "$i" -le "$n" ]; do
+  a="${!i}"
+  case "$a" in
+    -L) i=$((i + 1)); sock_l="${!i:-}" ;;
+    -L*) sock_l="${a#-L}" ;;
+    -S) i=$((i + 1)); sock_s="${!i:-}" ;;
+    -S*) sock_s="${a#-S}" ;;
+    -f|-c|-T) i=$((i + 1)) ;;
+    --) i=$((i + 1)); break ;;
+    -*) ;;
+    *) break ;;
+  esac
+  i=$((i + 1))
+done
+gend=$((i - 1))
+[ "$gend" -ge 1 ] && G=("${@:1:$gend}")
+
+# Any delete at all? The common call (display-message, set-option…) leaves here.
+kills=0; j=$i
+while [ "$j" -le "$n" ]; do
+  case "${!j}" in kill-ser*|kill-ses*|kill-w*|kill-p*|killw|killp) kills=1; break ;; esac
+  j=$((j + 1))
+done
+[ "$kills" = 1 ] || pass "$@"
+
+# ---- which server: a fleet's? ----------------------------------------------------
+CONFD="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
+is_fleet_label() {
+  case "$1" in ''|fleet|shell|hub-defaults|*/*) return 1 ;; esac
+  [ -f "$CONFD/fleets/$1/conf" ] || [ -f "$CONFD/$1.conf" ]
+}
+sock_label() {   # a socket path → its -L label when it sits in this user's tmux dir
+  local p="$1" dir
+  dir="${p%/*}"
+  case "$dir" in */tmux-"$(id -u)") printf '%s' "${p##*/}" ;; esac
+}
+label=''
+if [ -n "$sock_l" ]; then label="$sock_l"
+elif [ -n "$sock_s" ]; then label="$(sock_label "$sock_s")"
+elif [ -n "${TMUX:-}" ]; then label="$(sock_label "${TMUX%%,*}")"
+else label=default
+fi
+is_fleet_label "${label}" || pass "$@"
+
+# ---- the fleet's own plumbing ---------------------------------------------------
+fleet_script() {  # <path> → rc 0 when it is a file of a claude-fleet bin/ or hooks/
+  local f="$1" d
+  case "$f" in /*) ;; *) return 1 ;; esac
+  [ -f "$f" ] || return 1
+  d="${f%/*}"
+  [ -f "$d/fleet-lib.sh" ] || [ -f "$d/../bin/fleet-lib.sh" ]
+}
+plumbing() {
+  local pid="$PPID" lvl=0 line ppid args t1 rest s base
+  while [ "$lvl" -lt 12 ] && [ "${pid:-0}" -gt 1 ]; do
+    line="$(ps -o ppid=,args= -p "$pid" 2>/dev/null)" || return 1
+    [ -n "$line" ] || return 1
+    read -r ppid args <<EOF
+$line
+EOF
+    t1="${args%% *}"; rest="${args#"$t1"}"; rest="${rest# }"
+    base="${t1##*/}"; base="${base#-}"
+    case "$base" in claude|codex|node) return 1 ;; esac      # the agent: what it typed
+    s=''
+    if fleet_script "$t1"; then s="$t1"
+    else
+      case "$rest" in -*|'') ;; *) s="${rest%% *}" ;; esac   # `bash /x.sh`, not `bash -c …`
+      fleet_script "$s" || s=''
+    fi
+    if [ -n "$s" ]; then
+      case "${s##*/}" in fleet-session-wrap.sh|fleet-claude.sh|fleet-shell.sh) return 1 ;; esac
+      return 0
+    fi
+    # an interactive shell (`-zsh`, `zsh`, `bash -l`): a person typed it
+    case "$t1" in -*) return 1 ;; esac
+    case "$base" in sh|bash|zsh|dash|ksh|fish)
+      case "$rest" in ''|-l|--login|-i|-i\ *|-[a-z]*i*) return 1 ;; esac ;;   # -i, -fic …
+    esac
+    pid="$ppid"; lvl=$((lvl + 1))
+  done
+  return 1
+}
+[ -z "$check" ] && plumbing && pass "$@"
+
+# ---- the rule, command by command ------------------------------------------------
+hint="要停整台 fleet：fleet down；要关一个会话：让它退出，在恢复页按 q。测试请用隔离服务器（tmux -L scratch … 或 -S <路径>）；确实要删：FLEET_ALLOW_TMUX_DESTROY=1。"
+refuse() { printf 'tmux：拒绝 %s —— %s。%s\n' "$1" "$2" "$hint" >&2; exit 1; }
+q() { "$REAL" ${G[@]+"${G[@]}"} display-message -p "$@" 2>/dev/null; }
+protected_window() {  # <target or ''> → rc 0 when the window is a fleet session or panel
+  local t=() row nm
+  [ -n "$1" ] && t=(-t "$1")
+  [ -z "$1" ] && [ -z "$sock_l$sock_s" ] && [ -n "${TMUX_PANE:-}" ] && t=(-t "$TMUX_PANE")
+  row="$(q ${t[@]+"${t[@]}"} '#{@fleet_id}#{@cc_session_id}#{@issue}#{@claude_state}|#{window_name}|#{window_panes}')" || return 2
+  [ -n "$row" ] || return 2
+  PANES="${row##*|}"; nm="${row#*|}"; nm="${nm%|*}"
+  [ -n "${row%%|*}" ] && return 0
+  case "$nm" in home|dash|plan|backlog) return 0 ;; esac
+  return 1
+}
+
+while [ "$i" -le "$n" ]; do
+  sub="${!i}"; tgt=''; all=0; i=$((i + 1))
+  while [ "$i" -le "$n" ]; do
+    a="${!i}"
+    case "$a" in
+      ';') i=$((i + 1)); break ;;
+      -t) i=$((i + 1)); tgt="${!i:-}" ;;
+      -t*) tgt="${a#-t}" ;;
+      -a) all=1 ;;
+    esac
+    i=$((i + 1))
+  done
+  what="tmux -L ${label} $sub${tgt:+ -t $tgt}"
+  case "$sub" in
+    kill-ser*)
+      refuse "$what" "这是 fleet「${label}」的服务器，删了这台 fleet 的每个会话都没了" ;;
+    kill-ses*)
+      [ "$all" = 1 ] && refuse "$what -a" "会删掉 fleet「${label}」除当前外的所有会话"
+      if [ -n "$tgt" ]; then s="$(q -t "$tgt" '#{session_name}')"; else s="$(q '#{session_name}')"; fi
+      case "$s" in ''|*@view-*) ;; *) refuse "$what" "这是 fleet「${label}」本身，里面的每个会话都会被删" ;; esac ;;
+    kill-w*|killw)
+      PANES=''; protected_window "$tgt"; rc=$?
+      [ "$rc" = 0 ] && refuse "$what" "这个窗口是 fleet 的执行会话（或 home 等面板）"
+      [ "$all" = 1 ] && refuse "$what -a" "会删掉 fleet「${label}」里其余所有窗口，包括执行会话" ;;
+    kill-p*|killp)
+      PANES=''; protected_window "$tgt"; rc=$?
+      if [ "$rc" = 0 ]; then
+        [ "$all" = 1 ] && refuse "$what -a" "会删掉执行会话窗口里的其它窗格"
+        [ "${PANES:-1}" -le 1 ] && refuse "$what" "这是执行会话窗口唯一的窗格，删了窗口跟着没"
+      fi ;;
+  esac
+done
+pass "$@"

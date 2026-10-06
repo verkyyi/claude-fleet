@@ -36,6 +36,9 @@
 #   hub-unreachable                                 bin/fleet, fleet-client-badge.sh
 #   static-forward / proxy-orphan                   bin/fleet-remote-view.sh (run), fleet-shell.sh
 #   client-files-swapped                            bin/fleet-client-update.sh (tick), fleet-shell.sh reload
+# Shell half — a sandbox fleet on -L kf (TMUX_TMPDIR under $WORK), the real wrapper:
+#   shell-kill-fleet                                bin/tmux-shim/tmux, fleet-session-wrap.sh, hooks/bash-guard.py
+#   zsh-guard-fleet-label                           shell/cw.zsh tmux()
 #
 # tmux / python3 absent → SKIP (exit 0). BREAK_KEEP=1 keeps the work dir.
 # BREAK_ONLY="<id> <id>" runs only those drills (the lockstep lint always runs).
@@ -53,6 +56,7 @@ CSESS="brk$$"                                    # the client's socket label
 cleanup() {
   local s
   for s in "$WORK"/sock-*; do [ -S "$s" ] && "$REAL_TMUX" -S "$s" kill-server 2>/dev/null; done
+  for s in kf "kscr$$"; do TMUX_TMPDIR="$WORK/ktt" "$REAL_TMUX" -L "$s" kill-server 2>/dev/null; done
   for s in "$CSESS" "$CSESS-stage" "${CSESS}h" "${CSESS}h-stage" "${CSESS}u" "${CSESS}u-stage"; do "$REAL_TMUX" -L "$s" kill-server 2>/dev/null; done
   pkill -f "fleet-shell.sh keeper $CSESS" 2>/dev/null
   pkill -f "$WORK/" 2>/dev/null
@@ -983,6 +987,91 @@ drill_client_files_swapped() {
   SECS=$(since "$t0")
   grep -q '"phase": "done"' "$WORK/ucache/update.state" 2>/dev/null || { WHY="no trace of the update: update.state is not done"; return 1; }
   WHAT="新文件载入正在跑的客户端，旧代理换掉，留下「已更新到」"
+}
+
+# ============================================ a fleet's tmux, deleted from a shell ======
+# (issue #1841, EPIC #1851 C2) A fleet is `-L <its label>` since #159, so the old
+# guard's "a -L means an isolated test server" let every fleet through; and only an
+# interactive zsh that sourced cw.zsh had a guard at all — a session's `bash -c`,
+# `sh -c`, Codex's shell, Claude's `!` went straight to tmux. The sandbox: a fleet
+# `kf` (its conf in a sandbox FLEET_CONF_DIR) on a -L label under a sandbox
+# TMUX_TMPDIR, one session window (@fleet_id) beside home, and the real
+# fleet-session-wrap.sh launching a fake agent that types the deletes.
+kf_env() {
+  export FLEET_CONF_DIR="$WORK/kconf" TMUX_TMPDIR="$WORK/ktt" ZDOTDIR="$WORK/kzd"
+  unset TMUX TMUX_PANE FLEET_ALLOW_TMUX_DESTROY FLEET_HUB
+  mkdir -p "$FLEET_CONF_DIR/fleets/kf" "$TMUX_TMPDIR" "$ZDOTDIR"
+  printf 'FLEET_REPO=acme/widgets\n' > "$FLEET_CONF_DIR/fleets/kf/conf"
+  "$REAL_TMUX" -L kf has-session -t kf 2>/dev/null && return 0
+  "$REAL_TMUX" -L kf new-session -d -s kf -n home 'exec sleep 600' \
+    && "$REAL_TMUX" -L kf new-window -d -t kf -n issue-7 'exec sleep 600' \
+    && "$REAL_TMUX" -L kf set-option -w -t kf:issue-7 @fleet_id 7f7f7f7f
+}
+kf_up() { "$REAL_TMUX" -L kf has-session -t kf 2>/dev/null && [ "$("$REAL_TMUX" -L kf list-windows -t kf -F '#{window_name}' 2>/dev/null | sort | tr '\n' ' ')" = "home issue-7 " ]; }
+# kf_agent <script> — run <script> (bash) as the agent the real wrapper launches
+kf_agent() {
+  printf '#!/bin/bash\n%s\n' "$1" > "$WORK/kagent"; chmod +x "$WORK/kagent"
+  FLEET_WRAP_LAUNCH="$WORK/kagent" FLEET_MCP=0 bash "$BIN/fleet-session-wrap.sh" 2>&1
+}
+
+drill_shell_kill_fleet() {
+  CAP=30; local t0 out sh cmd
+  t0=$(now)
+  ( kf_env
+    for sh in 'bash -c' 'sh -c' 'zsh -fc'; do
+      command -v "${sh%% *}" >/dev/null 2>&1 || continue      # no zsh on a linux runner
+      for cmd in 'tmux -L kf kill-server' 'tmux -L kf kill-session -t kf' 'tmux -L kf kill-window -t kf:issue-7' \
+                 "tmux -S $TMUX_TMPDIR/tmux-$(id -u)/kf kill-server"; do
+        out=$(kf_agent "$sh '$cmd'")
+        kf_up || { echo "WHY=$sh '$cmd' deleted it: [$out]"; exit 1; }
+        case "$out" in *拒绝*FLEET_ALLOW_TMUX_DESTROY=1*) ;; *) echo "WHY=$sh '$cmd' gave no reason/hatch: [$out]"; exit 1 ;; esac
+      done
+    done
+    # the test server and a non-session window are not the fleet's
+    "$REAL_TMUX" -L "kscr$$" new-session -d -s s 'exec sleep 600'
+    out=$(kf_agent "bash -c 'tmux -L kscr$$ kill-server'")
+    "$REAL_TMUX" -L "kscr$$" has-session 2>/dev/null && { echo "WHY=-L kscr$$ kill-server was not let through: [$out]"; exit 1; }
+    "$REAL_TMUX" -L kf new-window -d -t kf -n scratchpad 'exec sleep 600'
+    out=$(kf_agent "bash -c 'tmux -L kf kill-window -t kf:scratchpad'")
+    kf_up || { echo "WHY=a plain window's kill-window was refused or took more: [$out]"; exit 1; }
+    # the Bash tool (Claude's and Codex's): hooks/bash-guard.py says the same,
+    # before it runs — a login shell's path_helper puts the real tmux back in front
+    for cmd in 'tmux -L kf kill-server' "bash -lc 'tmux -L kf kill-server'" \
+               "zsh -lc \"echo hi; tmux -L kf kill-session -t kf\"" "${REAL_TMUX} -L kf kill-window -t kf:issue-7"; do
+      out=$(python3 -c 'import json, sys; print(json.dumps({"tool_name": "Bash", "tool_input": {"command": sys.argv[1]}}))' "$cmd" \
+            | python3 "$ROOT/hooks/bash-guard.py" 2>&1)
+      [ $? = 2 ] || { echo "WHY=bash-guard let [$cmd] through: [$out]"; exit 1; }
+    done
+    out=$(printf '%s' '{"tool_name":"Bash","tool_input":{"command":"tmux -L scratch kill-server"}}' | python3 "$ROOT/hooks/bash-guard.py" 2>&1)
+    [ $? = 0 ] || { echo "WHY=bash-guard refused -L scratch: [$out]"; exit 1; }
+    # the escape hatch, last: it really deletes
+    out=$(FLEET_ALLOW_TMUX_DESTROY=1 kf_agent "bash -c 'tmux -L kf kill-server'")
+    "$REAL_TMUX" -L kf has-session 2>/dev/null && { echo "WHY=FLEET_ALLOW_TMUX_DESTROY=1 did not let it through: [$out]"; exit 1; }
+    exit 0
+  ) > "$WORK/kf.out"; local rc=$?
+  [ "$rc" = 0 ] || { WHY=$(sed -n 's/^WHY=//p' "$WORK/kf.out" | head -1); WHY=${WHY:-"the drill died (rc $rc)"}; return 1; }
+  SECS=$(since "$t0"); WHAT="bash / sh / zsh -c / 登录 shell / Bash 工具里删 fleet 都被拒，-L 测试服务器和逃生口放行"
+}
+
+drill_zsh_guard_fleet_label() {
+  CAP=30; local t0 out
+  command -v zsh >/dev/null 2>&1 || { SECS=0; WHAT="zsh 不在，跳过"; return 0; }
+  t0=$(now)
+  ( kf_env
+    # an interactive zsh, as the person's: -i stops the shim's plumbing walk there
+    z() { zsh -fic "source '$ROOT/shell/cw.zsh' >/dev/null 2>&1; $1" 2>&1 </dev/null; }
+    out=$(PATH="/usr/bin:/bin:${REAL_TMUX%/*}" z 'tmux -L kf kill-server')
+    kf_up || { echo "WHY=cw.zsh's tmux() let -L kf kill-server through: [$out]"; exit 1; }
+    case "$out" in *拒绝*) ;; *) echo "WHY=no reason given: [$out]"; exit 1 ;; esac
+    "$REAL_TMUX" -L "kscr$$" new-session -d -s s 'exec sleep 600'
+    out=$(z "tmux -L kscr$$ kill-server")
+    "$REAL_TMUX" -L "kscr$$" has-session 2>/dev/null && { echo "WHY=cw.zsh refused -L kscr$$: [$out]"; exit 1; }
+    out=$(FLEET_ALLOW_TMUX_DESTROY=1 z 'tmux -L kf kill-server')
+    "$REAL_TMUX" -L kf has-session 2>/dev/null && { echo "WHY=the hatch did not pass: [$out]"; exit 1; }
+    exit 0
+  ) > "$WORK/kz.out"; local rc=$?
+  [ "$rc" = 0 ] || { WHY=$(sed -n 's/^WHY=//p' "$WORK/kz.out" | head -1); WHY=${WHY:-"the drill died (rc $rc)"}; return 1; }
+  SECS=$(since "$t0"); WHAT="交互 zsh 的 tmux() 不再把 -L <fleet> 当测试服务器"
 }
 
 # ================================================================ run ===========

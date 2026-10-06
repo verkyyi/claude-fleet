@@ -9,7 +9,9 @@ are genuinely irreversible, this deny-list is the only thing between a stray
 token and a destroyed working tree. It ships GENERIC rails only — the ones that
 are dangerous in ANY repo (rm -rf on / ~ .git; a force-push onto the base
 branch) — plus the fleet messaging rails (raw `tmux` send-keys, issue #437; a
-raw `gh` issue-comment from a fleet pane, issue #483), which self-scope to fleet
+raw `gh` issue-comment from a fleet pane, issue #483) and the fleet-delete rail
+(a `tmux` kill-server / kill-session / session kill-window aimed at a FLEET's
+server, issue #1841 — judged by bin/tmux-shim/tmux), which self-scope to fleet
 context. Operator-specific rails (prod hosts, DB/k8s guards) live in a local
 overlay, `~/.claude/hooks/bash-guard-local.py`, that this skeleton runs if
 present and NEVER ships (see the OVERLAY section at the bottom).
@@ -424,6 +426,24 @@ def check_segment(masked_seg, raw_seg, orig_seg, span, masked_cmd):
                 "the command) only for sanctioned fleet plumbing"
             )
 
+    # 3b) A delete aimed at a FLEET's tmux server (issue #1841, EPIC #1851 C2):
+    #    kill-server / kill-session / killing a session's window, on `-L <fleet>`,
+    #    `-S` to its socket or the ambient fleet server. The session's PATH already
+    #    leads to bin/tmux-shim, which refuses it at run time; this is the same
+    #    rule read BEFORE the statement runs — so an absolute `/opt/…/tmux` or a
+    #    PATH a snapshot reordered is caught too — and it asks the shim itself
+    #    (FLEET_TMUX_SHIM_CHECK=1), so the two cannot drift. A test server
+    #    (-L scratch, a -S path) passes; FLEET_ALLOW_TMUX_DESTROY=1 is the hatch.
+    #    A login shell (`bash -lc '…'`, Codex's `zsh -lc`) runs macOS path_helper,
+    #    which puts /opt/homebrew/bin back in front of the shim — so the quoted
+    #    script of a `<shell> -c` is read here too (raw_seg: quoting hides nothing).
+    if re.search(r"(?:^|[\s'\x22;&|(])(?:kill-(?:ser|ses|w|p)\S*|killw|killp)(?=[\s'\x22;&|)]|$)", raw_seg) \
+            and re.search(r"(?:^|[\s/'\x22;&|(])tmux(?=\s)", raw_seg) \
+            and not _hatched(masked_cmd, "FLEET_ALLOW_TMUX_DESTROY"):
+        why = _tmux_destroy_refused(orig_seg)
+        if why:
+            block(why)
+
     # 4) A raw `gh` issue-comment from a FLEET pane is REWRITTEN onto
     #    fleet-comment.sh (issue #483, repaired-not-denied in #528). Every fleet
     #    actor comments as the SAME gh account, so the issue-bridge cannot tell a
@@ -549,6 +569,50 @@ def _broad_kill(orig_seg):
         if len(core) < 8:
             return "pkill -f %r matches any command line containing it" % patterns[0]
     return None
+
+
+_TMUX_SHIM = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bin", "tmux-shim", "tmux")
+
+
+_SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
+
+
+def _tmux_destroy_refused(orig_seg, depth=0):
+    """The shim's refusal for this `tmux … kill-*` statement — or for one inside
+    the script of a `<shell> -c '…'` — or None (allowed, not a tmux command, or
+    anything unreadable — fail open: the shim on PATH still stands at run time)."""
+    try:
+        toks = shlex.split(orig_seg, comments=False)
+    except ValueError:
+        return None
+    if depth < 3 and toks and os.path.basename(toks[0]) in _SHELLS:
+        for k, t in enumerate(toks[1:], 1):
+            if re.fullmatch(r"-[a-z]*c[a-z]*", t) and k + 1 < len(toks):
+                for part in re.split(r"(?:;|&&|\|\||\||&|\n)+", toks[k + 1]):
+                    why = _tmux_destroy_refused(part, depth + 1)
+                    if why:
+                        return why
+                break
+        return None
+    env = dict(os.environ)
+    while toks and (toks[0] in ("sudo", "command", "exec", "env", "nohup")
+                    or re.match(r"[A-Za-z_]\w*=", toks[0])):
+        t = toks.pop(0)
+        if "=" in t and t not in ("sudo", "command", "exec", "env", "nohup"):
+            k, v = t.split("=", 1)
+            env[k] = v
+    if not toks or os.path.basename(toks[0]) != "tmux" or not os.access(_TMUX_SHIM, os.X_OK):
+        return None
+    env["FLEET_TMUX_SHIM_CHECK"] = "1"
+    env.pop("FLEET_ALLOW_TMUX_DESTROY", None)
+    try:
+        r = subprocess.run([_TMUX_SHIM] + toks[1:], env=env, capture_output=True,
+                           text=True, timeout=10)
+    except Exception:
+        return None
+    if r.returncode != 1:
+        return None
+    return (r.stderr.strip() or "a delete aimed at a fleet's tmux server")
 
 
 def _sendkeys_targets_fleet(masked_seg):
