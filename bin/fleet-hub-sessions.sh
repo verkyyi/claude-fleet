@@ -741,6 +741,21 @@ for f in local:
         except OSError:
             pass
         out = out[:len(head)] + keep_nodes + out[len(head):] + keep_rows
+    unk = {lb for lb, n in nodes.items() if n.get("unk")}
+    if via == "hub" and unk:
+        # A machine whose fleet the hub could not read this beat (`sessions`
+        # null, #1465) is "could not read", never "no windows" (#1795): its
+        # rows the answer lacks keep their last lines. A hub that blanked them
+        # dropped every row of that machine for the seconds a node's read
+        # timed out — the sidebar collapsed to the one row it stood on.
+        have = {r["wid"] for r in rows}
+        try:
+            for line in open(path, encoding="utf-8"):
+                p = line.rstrip("\n").split("\x1f")
+                if p[0].startswith("wid:") and len(p) >= 2 and p[1] in unk and p[0][4:] not in have:
+                    out.append(line if line.endswith("\n") else line + "\n")
+        except OSError:
+            pass
     if client and via == "hub":
         e2e_log(path, rows)
     write(path, "".join(out))
