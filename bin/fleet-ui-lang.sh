@@ -515,6 +515,12 @@ resume	c	resume — a row on another machine only: reopen a just-stopped one thr
     en:keys_switch_help)       printf %s 'every key' ;;
     zh:keys_switch_quickopen)  printf %s '快速跳转：打几个字（名字、机器、状态都算），↵ 切过去；不打字 ↵ = 上一个看的' ;;
     en:keys_switch_quickopen)  printf %s 'quick open: type a few letters (name, machine, state), ↵ switches; ↵ on nothing = the one you saw before' ;;
+    zh:keys_single_f1)         printf %s '窄屏（手机）：全屏切换器 —— 在等你的 · 最近 1–9 · 全部，点一行切过去；顶栏点名字同此' ;;
+    en:keys_single_f1)         printf %s 'narrow (a phone): the full-screen switcher — waiting on you · recent 1–9 · all, tap a row; tapping the name on the top line too' ;;
+    zh:keys_single_f23)        printf %s '窄屏：上一个 / 下一个会话（顶栏 ‹ › 同此）' ;;
+    en:keys_single_f23)        printf %s 'narrow: the session above / below (the top line ‹ › too)' ;;
+    zh:keys_single_f4)         printf %s '窄屏：下一个在等你的会话' ;;
+    en:keys_single_f4)         printf %s 'narrow: the next session waiting on you' ;;
     zh:keys_g_sidebar)         printf %s '任务栏' ;;
     en:keys_g_sidebar)         printf %s 'task sidebar' ;;
     zh:keys_g_sidebar_sub)     printf %s '— prefix E 或点击任务栏后可用' ;;

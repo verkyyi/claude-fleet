@@ -178,6 +178,11 @@ print_sheet() {
   done <<EOF
 $(bash "$BIN/dash-keymap.sh" --panel switch list 2>/dev/null)
 EOF
+  # the one-pane layout's keys (issue #1904): a phone / a narrow window, where the
+  # Termius extra-key row carries them; anywhere else they go to the session
+  key "F1" "$(fleet_ui_t keys_single_f1)"
+  key "F2 F3" "$(fleet_ui_t keys_single_f23)"
+  key "F4" "$(fleet_ui_t keys_single_f4)"
   fi
 
   if want sidebar; then

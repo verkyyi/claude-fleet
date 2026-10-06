@@ -81,3 +81,55 @@ pick are queued on the list pane's `@sidebar_do` and the list is woken with F12
 proxy window onto another machine from a local one, and two quick presses are
 two steps. `bin/fleet-switch-selftest.sh` sends every code to a real list on a
 private tmux socket.
+
+## On a phone — one pane, and the top line (issue #1904)
+
+On a screen too narrow for the list beside 80 columns of session — an iPhone or
+an iPad in portrait in Termius, a small window anywhere — the client shows **one
+pane**: the session, full screen, with its **top line** above it. The list keeps
+running behind it (the session is zoomed over it, the window is marked
+`@fleet_single`), so every switch still goes through the list's own `jump()`.
+Turn the phone, or widen the window, and the list comes back; the session in
+view does not change.
+
+    ‹ 3/8 ›  ● working  #1894 机器上一直有会话在忙…   PR #1885 ● 11/13  claude-fleet  @m5
+
+| Tap | Does |
+|---|---|
+| `‹` / `›` | the session above / below (as ⌘↑ ⌘↓) |
+| the title | the **full-screen switcher**: 在等你的 · 最近 (numbered 1–9) · 全部, two-line rows big enough for a thumb; type to filter (`m4`, `?` = only those waiting on you), tap a row or ↵; a digit on an empty filter picks that recent one |
+| the key (`#1894`) | the issue, opened on your computer (`fleet-open.sh`) |
+| `PR …` | the PR, the same way |
+| `@m5` | what is known of that machine, as a note |
+
+**Keys for the Termius extra-key row** (add F1–F4 to it once): **F1** the
+switcher · **F2 / F3** the session above / below · **F4** the next one waiting on
+you. They act only in the one-pane layout; in the wide layout they go to the
+session as they always did. Two taps reach any session: the title, then its row.
+*Whether Termius sends F1–F4 and taps on the top line on your own phone is to be
+confirmed there; the taps need no setup, and the prefix keys (prefix / · n · p ·
+k) do the same jobs if a key does not arrive.*
+
+**The layout**: `FLEET_CLIENT_LAYOUT=auto` (default — one pane when the list does
+not fit beside 80 columns, i.e. under `FLEET_SHELL_WIDTH` + 81 columns, where
+the list used to be taken away with nothing in its place) · `single` (always) ·
+`split` (never — the old rule, byte for byte).
+
+**The top line is the same at every width** — the stage's own status line
+(`conf/tmux-shell-stage.conf` → `bin/fleet-topbar.py`): `‹ i/n ›` · state (●
+working · ? asking you · ⊘ needs OK · ↻ looping · ✓ done · ○ idle) · key · title
+…… PR · repo (only when the client shows more than one) · `@machine` (`⟳ 4s`
+while this computer reconnects to it, `offline` when the hub calls it lost, `·
+中转` on the hub relay, `旧` behind stable). Narrow, it drops the repo (< 130
+columns), the PR (< 110), the state's word (< 70), then clips the title; `‹ i/n
+›`, the key and the machine stay. The whole line is red only while the session
+asks you a question, grey only while its machine is out of reach.
+
+It reads ONE record, `switch-bar.json` beside the switch history, which the list
+writes off the very rows it paints (`fleet-sidebar.py bar_record`) — so the line
+and the list never disagree — and bumps the stage's `@fleet_bar_gen`, which the
+line's command names: tmux draws it again at once. The title is the issue's
+own title (the list's 14th field, carried from the session's machine — #1921),
+else the row's name.
+`bin/fleet-client-layout-selftest.sh` pins the layout, the keys, a real tap on
+the line through the nested client, and the widths.

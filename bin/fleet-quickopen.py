@@ -10,6 +10,15 @@ session (issue #1903, EPIC #1906 C10) — and the switch history ⌘[ / ⌘] wal
                                               (`key<TAB>name`) — the selftest's view;
                                               --all reads every session as the popup does
     fleet-quickopen.py jump <key>             hand <key> to the list, as ↵ does
+    fleet-quickopen.py --full [--session S]   the FULL-SCREEN switcher (issue #1904:
+                                              F1 / a tap on the top line's title at
+                                              phone width): 在等你的 · 最近 (1–9) ·
+                                              全部, two-line rows big enough for a
+                                              thumb; type to filter, tap or ↵ to go
+    fleet-quickopen.py do <verb>              next | prev | back | fwd | needs — the
+                                              one-pane layout's F2–F4 and ⌘ keys
+                                              (the list is zoomed away there, so
+                                              {top-left} is not it): as the binds do
 
 Two files, ONE writer each, under the client's state dir
 (FLEET_SWITCH_STATE, else $XDG_STATE_HOME/claude-fleet, else
@@ -289,6 +298,18 @@ def hand(pane, verb):
     return True
 
 
+def do(verb):
+    """F2 / F3 / F4 and the ⌘ keys in the one-pane layout (issue #1904): the
+    verb onto the list's queue — or, for `needs`, F10, the list's own ⌃k."""
+    pane = list_pane()
+    if not pane:
+        return False
+    if verb == "needs":
+        tmux("send-keys", "-t", pane, "F10")
+        return True
+    return hand(pane, verb)
+
+
 # --- the popup --------------------------------------------------------------------
 
 def cells(text):
@@ -376,8 +397,175 @@ def popup(screen, pane, session=""):
             query, at = query + key, 0
 
 
+NEEDS = ("needs", "failed")
+STATE_SAY = {"needs": "在问你", "failed": "失败", "working": "在干活", "looping": "循环中",
+             "done": "完成", "idle": "空闲", "exited": "已退出", "sleeping": "睡着"}
+
+
+def full_items(rows, query, mru, current):
+    """The full-screen switcher's lines (issue #1904): [(kind, text, row, num)],
+    kind `sec` (a heading) or `row`. Empty query: 在等你的 (rows waiting on you),
+    最近 (the most recent first, the one in view left out, numbered 1–9 — the
+    digit picks it), 全部 (every row, the list's order). `?` alone: the waiting
+    rows. Anything else: the ranked matches, as ⌘P ranks them."""
+    q = query.strip()
+    if q and q != "?":
+        return [("row", "", r, 0) for r, _ in rank(rows, q, mru, current)]
+    out = []
+    loud = [r for r in rows if r["state"] in NEEDS]
+    if loud:
+        out.append(("sec", "在等你的", None, 0))
+        out += [("row", "", r, 0) for r in loud]
+    if q == "?":
+        return out
+    by = {r["key"]: r for r in rows}
+    recent = [by[k] for k in mru if k in by and k != current][:9]
+    if recent:
+        out.append(("sec", "最近", None, 0))
+        out += [("row", "", r, i) for i, r in enumerate(recent, 1)]
+    out.append(("sec", "全部", None, 0))
+    out += [("row", "", r, 0) for r in rows]
+    return out
+
+
+def full(screen, pane, session=""):
+    curses.use_default_colors()
+    for n, (fg, bg) in enumerate(((curses.COLOR_YELLOW, -1), (-1, curses.COLOR_BLUE),
+                                  (curses.COLOR_RED, -1), (curses.COLOR_CYAN, -1)), 1):
+        curses.init_pair(n, fg, bg)
+    screen.keypad(True)
+    curses.mousemask(curses.ALL_MOUSE_EVENTS | getattr(curses, "REPORT_MOUSE_POSITION", 0))
+    curses.mouseinterval(0)
+    rows, hist = read_rows(), load()
+    current = hist["stack"][hist["at"]] if hist["stack"] else ""
+    query, at, top = "", 0, 0
+    fetched = []
+    reader = threading.Thread(target=lambda: fetched.append(full_rows(session)), daemon=True)
+    reader.start()
+    while True:
+        if fetched and fetched[0]:
+            rows, fetched[:] = fetched[0], [None]
+        screen.timeout(150 if reader.is_alive() else -1)
+        items = full_items(rows, query, hist["mru"], current)
+        picks = [i for i, it in enumerate(items) if it[0] == "row"]
+        at = max(0, min(at, len(picks) - 1))
+        height, width = screen.getmaxyx()
+        # every item two lines (a row: its name, then where / what it is): a thumb's
+        # height on a phone; a heading one line
+        lines, spot = [], {}
+        for i, (kind, text, row, num) in enumerate(items):
+            if kind == "sec":
+                lines.append(("sec", text, i))
+                continue
+            spot[i] = len(lines)
+            lines += [("name", row, i, num), ("info", row, i, num)]
+        body = max(1, height - 3)
+        sel = picks[at] if picks else -1
+        if sel in spot:
+            y = spot[sel]
+            top = min(top, y)
+            if y + 1 >= top + body:
+                top = y + 2 - body
+        top = max(0, min(top, max(0, len(lines) - body)))
+        screen.erase()
+        try:
+            screen.addstr(0, 0, clip(" ✕  切换会话  · 打字过滤 · 点一行或 ↵ 切过去 · 1–9 最近 · Esc 关", width - 1),
+                          curses.A_BOLD)
+            prompt = " › " + (query or "")
+            screen.addstr(1, 0, clip(prompt, width - 1), curses.A_BOLD)
+            if not query:
+                screen.addstr(1, cells(prompt), clip("名字、m4、? …", max(0, width - 1 - cells(prompt))),
+                              curses.A_DIM)
+            screen.addstr(2, 0, "─" * (width - 1), curses.A_DIM)
+        except curses.error:
+            pass
+        rowmap = {}
+        for y, line in enumerate(lines[top:top + body], 3):
+            kind, idx = line[0], line[2]
+            rowmap[y] = idx
+            try:
+                if kind == "sec":
+                    screen.addstr(y, 1, clip(line[1], width - 2), curses.color_pair(4) | curses.A_BOLD)
+                    continue
+                row, num = line[1], line[3]
+                on = idx == sel
+                base = curses.color_pair(2) if on else curses.A_NORMAL
+                screen.addstr(y, 0, " " * (width - 1), base)
+                if kind == "name":
+                    lead = " %s %s " % (str(num) if num else " ", row["glyph"] or " ")
+                    gl = curses.color_pair(3) if row["state"] in NEEDS else 0
+                    screen.addstr(y, 0, lead, base | gl)
+                    screen.addstr(y, cells(lead), clip(row["name"], max(0, width - 1 - cells(lead))),
+                                  base | curses.A_BOLD)
+                else:
+                    info = "     " + " · ".join(x for x in (
+                        "@" + row["node"] if row["node"] else "", row["group"],
+                        STATE_SAY.get(row["state"], row["state"])) if x)
+                    screen.addstr(y, 0, clip(info, width - 1), base | curses.A_DIM)
+            except curses.error:
+                pass
+        try:
+            screen.move(1, min(width - 1, cells(" › " + query)))
+        except curses.error:
+            pass
+        screen.refresh()
+        try:
+            key = screen.get_wch()
+        except curses.error:
+            continue
+        if key == curses.KEY_MOUSE:
+            try:
+                _, mx, my, _, bstate = curses.getmouse()
+            except curses.error:
+                continue
+            if not bstate & (curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED | curses.BUTTON1_RELEASED):
+                continue
+            if my == 0 and mx < 4:
+                return 0
+            idx = rowmap.get(my)
+            if idx is not None and items[idx][0] == "row":
+                hand(pane or list_pane(), "jump=" + items[idx][2]["key"])
+                return 0
+            continue
+        if key in ("\x1b", "\x03", "\x07") or key == curses.KEY_EXIT:
+            return 0
+        if key in ("\n", "\r") or key == curses.KEY_ENTER:
+            if picks:
+                hand(pane or list_pane(), "jump=" + items[picks[at]][2]["key"])
+            return 0
+        if isinstance(key, str) and key in "123456789" and not query:
+            hit = [it for it in items if it[3] == int(key)]
+            if hit:
+                hand(pane or list_pane(), "jump=" + hit[0][2]["key"])
+                return 0
+            continue
+        if key in (curses.KEY_UP, "\x10"):
+            at -= 1
+        elif key in (curses.KEY_DOWN, "\x0e", "\t"):
+            at += 1
+        elif key == curses.KEY_PPAGE:
+            at -= max(1, body // 2)
+        elif key == curses.KEY_NPAGE:
+            at += max(1, body // 2)
+        elif key in (curses.KEY_BACKSPACE, "\x7f", "\x08"):
+            query, at, top = query[:-1], 0, 0
+        elif key == "\x15":
+            query, at, top = "", 0, 0
+        elif isinstance(key, str) and key.isprintable():
+            query, at, top = query + key, 0, 0
+
+
 def main(argv):
     locale.setlocale(locale.LC_ALL, "")
+    if argv[:1] == ["do"] and len(argv) == 2:
+        return 0 if do(argv[1]) else 1
+    if argv[:1] == ["items"]:
+        # the full switcher's lines, plain (the selftest's view of --full)
+        hist = load()
+        current = hist["stack"][hist["at"]] if hist["stack"] else ""
+        for kind, text, row, num in full_items(read_rows(), " ".join(argv[1:]), hist["mru"], current):
+            print(("# " + text) if kind == "sec" else "%s\t%s\t%s" % (num or "", row["key"], row["name"]))
+        return 0
     if argv[:1] == ["rank"]:
         hist = load()
         current = hist["stack"][hist["at"]] if hist["stack"] else ""
@@ -393,7 +581,7 @@ def main(argv):
     pane = argv[argv.index("--pane") + 1] if "--pane" in argv[:-1] else ""
     session = argv[argv.index("--session") + 1] if "--session" in argv[:-1] else ""
     os.environ.setdefault("ESCDELAY", "25")
-    return curses.wrapper(popup, pane, session)
+    return curses.wrapper(full if "--full" in argv else popup, pane, session)
 
 
 if __name__ == "__main__":
