@@ -946,7 +946,10 @@ off_wait() {   # <socket> <secs> <grep -E pattern> [v] — until the rows (do no
 drill_offline_list_moves() {
   CAP=30; local s="${CSESS}o" t0 before during
   client_setup; off_hub
-  client_start "$s" FLEET_HUB_SESSIONS_CMD="$WORK/off/hub" FLEET_HUB_SESSIONS_STALE=12 FLEET_HUB_SESSIONS_LOOP_SECS=1 \
+  # its own cache + TMPDIR (refresher, hub_ok, the remote list): an earlier
+  # drill's client may still run a refresher on the shared ones
+  mkdir -p "$WORK/off/tmp"
+  client_start "$s" FLEET_SHELL_CACHE="$WORK/off/cache" TMPDIR="$WORK/off/tmp" FLEET_HUB_SESSIONS_CMD="$WORK/off/hub" FLEET_HUB_SESSIONS_STALE=12 FLEET_HUB_SESSIONS_LOOP_SECS=150 \
     || { WHY="the client did not start: $(head -3 "$WORK/up-$s.err")"; return 1; }
   # a terminal stays attached for the whole drill (the list is drawn for a
   # client); it leaves on its own at the stop file or after 150s, never later
