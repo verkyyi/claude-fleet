@@ -60,7 +60,7 @@ if [ -n "$REAL_TMUX" ]; then
   T set-option -w -t "=$S:uncached" @issue 12
   T set-option -w -t "=$S:draft" @raw 1
   T set-option -w -t "=$S:draft" @worktree "$WORK/app-scratch-3"
-  col17() { printf '%s\n' "$1" | awk -F'\t' -v n="$2" '$10 == n { print $NF }'; }
+  col17() { printf '%s\n' "$1" | awk -F'\t' -v n="$2" '$10 == n { print $17 }'; }
   rm -f "$IC/issues"
   out0=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || fail "A: workers failed" "$(cat "$WORK/err")"
   eq "A: no issue cache — the column is there, empty" "title=" "$(col17 "$out0" fix-sidebar-slug)"
@@ -70,11 +70,12 @@ if [ -n "$REAL_TMUX" ]; then
   eq "A: a tab inside a title becomes a space" "title=A tabbed title" "$(col17 "$out" tabbed)"
   eq "A: an issue the cache does not hold → empty" "title=" "$(col17 "$out" uncached)"
   eq "A: a scratch → empty" "title=" "$(col17 "$out" draft)"
-  eq "A: column 17 is the last; 16 before it as they were" "16" \
-     "$(printf '%s\n' "$out" | awk -F'\t' '$10 == "fix-sidebar-slug" { print NF - 1 }')"
+  # column 18 is the reap policy (issue #1902): 16 before the title as they were
+  eq "A: column 17, then the reap column 18; 16 before it as they were" "16 reap=" \
+     "$(printf '%s\n' "$out" | awk -F'\t' '$10 == "fix-sidebar-slug" { print NF - 2, $18 }')"
   eq "A: every other column is unchanged by the cache" \
-     "$(printf '%s\n' "$out0" | awk -F'\t' '{ NF--; print }' OFS='\t' | sort)" \
-     "$(printf '%s\n' "$out" | awk -F'\t' '{ NF--; print }' OFS='\t' | sort)"
+     "$(printf '%s\n' "$out0" | awk -F'\t' '{ $17 = ""; print }' OFS='\t' | sort)" \
+     "$(printf '%s\n' "$out" | awk -F'\t' '{ $17 = ""; print }' OFS='\t' | sort)"
   T kill-server 2>/dev/null
 else
   echo 'session-title selftest: tmux absent — leg A skipped'
