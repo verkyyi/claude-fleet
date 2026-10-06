@@ -151,7 +151,14 @@ Do not install from memory: read the doc and work from it.
   is `home`, a plain shell the task list draws beside (the ⌂ / F9 / prefix g keys
   that ended on it left the node with #1714; `fleet-sidebar.sh home` retires in #1739). `FLEET_DASH_WINDOW=1`
   brings the old dash hub back for one batch; adding a panel name means adding
-  it everywhere `dash|plan|backlog` is spelled. **The task list is the CLIENT's
+  it everywhere `dash|plan|backlog` is spelled. **A window is told by its
+  `@fleet_role` (home | panel | worker), never its name** (issue #1844): the
+  person may rename any window, so home's heal, "is this a fleet" and the
+  session caps read `FLEET_ROLE_FMT` + `FLEET_ROLE_AWK` / `fleet_win_role` (an
+  unstamped window prints its name and falls back to the name rule), every opener stamps through
+  `fleet_win_role_stamp`, restore reconciles by `@fleet_id` first, and a
+  broken-out agent pane (`prefix !`) takes its window's `@` options along
+  (`fleet-window-carry.sh`, the node conf's `window-linked[74]` hook). **The task list is the CLIENT's
   only** (issue #1713): `fleet-sidebar.sh` draws it on the shell's server
   (`FLEET_SHELL=1`), never in a node's fleet session — so there is no make-way
   rule, and a viewer arriving or leaving changes no pane on the node.

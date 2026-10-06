@@ -552,6 +552,7 @@ fi
 # session until this claim. Minted once; restore / migrate / move carry it.
 fleet_window_fid "$SESS" "$win" "$SOCK" >/dev/null 2>&1 || :
 fleet_window_born "$SESS" "$win" "$SOCK" >/dev/null 2>&1 || :   # its place on the list (#1750)
+fleet_win_role_stamp "$win" worker "$SOCK"   # what it IS, whatever it is renamed to (#1844)
 # Every repo scratch carries its repo (issue #789), warm or cold.
 [ -n "$REPO_ARG" ] && TM set-window-option -t "$win" @repo "$REPO_ARG" 2>/dev/null
 [ "$NOREPO" != 1 ] && [ "$MULTI" = 0 ] && [ -n "${FLEET_REPO:-}" ] \

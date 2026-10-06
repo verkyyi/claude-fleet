@@ -22,6 +22,8 @@
 #   kill-server / disk-full                         bin/fleet-restore.sh --auto, fleet-diskguard.sh --gate
 #   wedged-socket                                   fleet_socket_heal (fleet-restore.sh, fleet-up.sh)
 #   no-claude-on-path                               bin/fleet-claude.sh, fleet_find_tool
+#   window-renamed                                  fleet_win_role (fleet-lib.sh), fleet-restore.sh
+#   break-pane                                      bin/fleet-window-carry.sh (conf/tmux-attention.conf hook)
 #   install-sync-killed                             bin/fleet-install-sync.sh (the tick lock)
 #   personal-tmux-conf                              conf/tmux-fleet-server.conf, fleet_server_new_session,
 #                                                   fleet_tmuxconf_check, reapply-tmux-attention.sh
@@ -429,6 +431,99 @@ drill_disk_full() {
   auto                                            # space freed: the next tick
   until_ok "$CAP" nt has-session -t oc 2>/dev/null || { WHY="space freed, still not restored"; return 1; }
   SECS=$(since "$t0"); WHAT="盘满时只记 held 不拉起，腾出空间后下一拍拉起"
+}
+
+# window-renamed (issue #1844): a name is not an identity. Home renamed, a worker
+# renamed `home`, a restored session renamed — every automatic reader still finds
+# the right window, because it reads @fleet_role / @fleet_id, not the name.
+# rlib <fn> <args…> — one fleet-lib call against this drill's sandbox server
+rlib() {
+  ( PATH="$WORK/tbin:$PATH" HOME="$WORK/home" FLEET_CONF_DIR="$WORK/rconf"; export PATH HOME FLEET_CONF_DIR BREAK_SOCK
+    . "$BIN/fleet-lib.sh"; "$@" )
+}
+drill_window_renamed() {
+  CAP=20; BREAK_SOCK="$WORK/sock-rn"; local t0 hw ww hpid wpid n wins
+  for f in dash-issue-session.sh dash-raw-session.sh; do
+    grep -q 'fleet_win_role_stamp .*worker' "$BIN/$f" || { WHY="$f no longer stamps its window @fleet_role worker"; return 1; }
+  done
+  nt -f /dev/null new-session -d -s rn -n home -x 100 -y 30 'exec sh' || { WHY="cannot start the isolated tmux server"; return 1; }
+  ww=$(nt new-window -d -P -F '#{window_id}' -t rn: -n issue-3 'exec sleep 600')
+  hw=$(o rn:home window_id)
+  rlib fleet_server_resident rn rn                # as fleet-up leaves home
+  rlib fleet_win_role_stamp "$ww" worker rn       # as a spawner leaves its window
+  t0=$(now)
+  nt rename-window -t "$hw" 'my shell'            # the break: home renamed …
+  n=$(rlib fleet_session_count_for rn)
+  [ "$n" = 1 ] || { WHY="with home renamed, the fleet counts $n sessions, want 1: it is no longer known as a fleet"; return 1; }
+  nt rename-window -t "$ww" home                  # … and the worker named `home`
+  n=$(rlib fleet_session_count_for rn)
+  [ "$n" = 1 ] || { WHY="with the worker named home, the fleet counts $n sessions, want 1"; return 1; }
+  # home's shell exits and tmux misses the SIGCHLD (#1801): the tick's heal
+  nt set-hook -uw -t "$hw" pane-died
+  hpid=$(o "$hw" pane_pid); wpid=$(o "$ww" pane_pid)
+  nt send-keys -t "$hw" 'exit' Enter
+  until_ok 5 sh -c "[ \"\$('$REAL_TMUX' -S '$BREAK_SOCK' display-message -p -t '$hw' '#{pane_dead}')\" = 1 ]" || { WHY="home's shell did not exit"; return 1; }
+  rlib fleet_home_heal rn rn >/dev/null
+  until_ok 5 sh -c "p=\$('$REAL_TMUX' -S '$BREAK_SOCK' display-message -p -t '$hw' '#{pane_pid} #{pane_dead}'); [ \"\${p% *}\" != '$hpid' ] && [ \"\${p#* }\" = 0 ]" \
+    || { WHY="the renamed home stayed dead: the tick's fleet_home_heal looked for it by name"; return 1; }
+  [ "$(o "$ww" pane_pid)" = "$wpid" ] || { WHY="the heal respawned the worker that wears the name home"; return 1; }
+  # a restored session renamed: the next tick must not open a second one
+  write_fid_map() {
+    { printf 'FLEET\toc\tacme/widgets\t%s\tmain\n' "$WORK/emain"
+      printf 'FID\t1f0e0000-0000-4000-8000-000000000001\n'
+      printf 'WIN\tissue-1\t%s\tsid-1\t1\tworking\t-\t-\n' "$WORK/wt-1"
+    } > "$WORK/econf/fleets/oc/restore.map"
+  }
+  BREAK_SOCK="$WORK/sock-rr"
+  write_fid_map; auto
+  until_ok 10 sh -c "'$REAL_TMUX' -S '$BREAK_SOCK' list-windows -t oc -F '#{window_name}' 2>/dev/null | grep -qx issue-1" \
+    || { WHY="the sandbox fleet never restored issue-1"; return 1; }
+  nt rename-window -t oc:issue-1 'my task'
+  write_fid_map                                   # a reconcile run on the live fleet
+  env PATH="$WORK/tbin:$PATH" HOME="$WORK/home" FLEET_CONF_DIR="$WORK/econf" FLEET_SKIP_GLOBAL_CONF=1 \
+    BREAK_SOCK="$BREAK_SOCK" SHELL=/bin/sh FLEET_RESTORE_PROBE_SECS=2 FLEET_DISK_FLOOR_GB=0 \
+    bash "$WORK/inst/bin/fleet-restore.sh" >/dev/null 2>&1
+  wins=$(nt list-windows -t oc -F '#{window_name}' | sort | tr '\n' ' ')
+  [ "$wins" = "home my task " ] || { WHY="after renaming issue-1 a reconcile left [$wins], want [home my task ] (no duplicate)"; return 1; }
+  SECS=$(since "$t0"); WHAT="home 改名照样自愈、计数照旧、改名的会话不被重开"
+}
+
+# break-pane (issue #1844): the agent pane broken out with prefix ! takes the
+# session's identity with it, so its recovery page still resumes the conversation.
+drill_break_pane() {
+  CAP=10; BREAK_SOCK="$WORK/sock-bp"; local c="$WORK/bp" t0 hook ap ow nw v
+  hook=$(grep 'fleet-window-carry.sh' "$ROOT/conf/tmux-attention.conf" | grep '^set-hook' | sed "s#~/.claude/fleet/bin/#$BIN/#")
+  [ -n "$hook" ] || { WHY="conf/tmux-attention.conf has no hook carrying a broken-out pane's identity"; return 1; }
+  wrapped sb issue-5 "$c" || { WHY="cannot start the isolated tmux server"; return 1; }
+  printf '%s\n' "$hook" > "$WORK/bp-hook.conf"
+  nt source-file "$WORK/bp-hook.conf" || { WHY="the conf's hook line does not parse"; return 1; }
+  ow=$(o sb:issue-5 window_id)
+  nt set-option -w -t "$ow" @issue 5; nt set-option -w -t "$ow" @fleet_id 1f0e0000-0000-4000-8000-000000000005
+  nt set-option -w -t "$ow" @fleet_role worker
+  until_ok 10 grep -q . "$c/argv" || { WHY="the agent never started"; return 1; }
+  until_ok 5 sh -c "[ -n \"\$('$REAL_TMUX' -S '$BREAK_SOCK' show-options -wqv -t '$ow' @cc_session_id)\" ]" || { WHY="the agent never stamped its id"; return 1; }
+  ap=$(o "$ow" pane_id)
+  nt split-window -d -t "$ow" 'exec sleep 600'
+  t0=$(now)
+  nt break-pane -d -s "$ap"                       # the break: prefix !
+  wopt() { "$REAL_TMUX" -S "$BREAK_SOCK" show-options -wqv -t "$1" "$2" 2>/dev/null; }
+  until_ok "$CAP" sh -c "[ \"\$('$REAL_TMUX' -S '$BREAK_SOCK' show-options -wqv -t '$ap' @issue)\" = 5 ]" \
+    || { WHY="the broken-out window has no @issue: the identity stayed behind"; return 1; }
+  SECS=$(since "$t0")
+  nw=$(o "$ap" window_id)
+  [ "$nw" != "$ow" ] || { WHY="break-pane did not make a new window"; return 1; }
+  for v in "@fleet_id 1f0e0000-0000-4000-8000-000000000005" "@cc_session_id SID-1" "@fleet_role worker"; do
+    [ "$(wopt "$nw" "${v%% *}")" = "${v#* }" ] || { WHY="the new window's ${v%% *} is [$(wopt "$nw" "${v%% *}")], want ${v#* }"; return 1; }
+  done
+  [ "$(o "$nw" window_name)" = issue-5 ] || { WHY="the new window is named [$(o "$nw" window_name)], not issue-5"; return 1; }
+  [ -z "$(wopt "$ow" @fleet_id)$(wopt "$ow" @issue)" ] || { WHY="the old window still carries the identity: two windows answer to it"; return 1; }
+  [ "$(wopt "$ow" @fleet_role)" = panel ] || { WHY="the left-behind window is [$(wopt "$ow" @fleet_role)], not a panel"; return 1; }
+  printf rc0 > "$c/mode"; : > "$c/go"             # the agent then exits …
+  until_ok 10 sh -c "'$REAL_TMUX' -S '$BREAK_SOCK' capture-pane -p -t '$ap' | grep -qF '这个窗口不会关'" || { WHY="no recovery page in the new window"; return 1; }
+  nt send-keys -t "$ap" Enter                     # … and ↵ resumes it
+  until_ok 10 sh -c "[ \$(grep -c . '$c/argv') = 2 ]" || { WHY="↵ relaunched nothing"; return 1; }
+  [ "$(sed -n 2p "$c/argv")" = "--agent claude --resume SID-1" ] || { WHY="↵ ran [$(sed -n 2p "$c/argv")], not the same conversation"; return 1; }
+  WHAT="拆出的窗口带着 @issue / @fleet_id / 对话 id 和名字，恢复页 ↵ 续上同一对话"
 }
 
 # wedged-socket (issue #1729): the server is told to exit while one client never

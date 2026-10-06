@@ -142,6 +142,10 @@ while :; do
   if [ "$intmux" = 1 ]; then
     wset -u @wrap_quiet
     tmux set-option -p -t "$TMUX_PANE" @session_wrap "$$" 2>/dev/null
+    # The window this agent's identity lives on (issue #1844): when the pane is
+    # broken out (prefix !), fleet-window-carry.sh sees it arrive elsewhere and
+    # moves the identity after it.
+    tmux set-option -p -t "$TMUX_PANE" @wrap_win "$(opt window_id)" 2>/dev/null
   fi
   export FLEET_SESSION_WRAP=$$
   # The session's own credential (issue #1809, docs/FLEET-MCP.md «Identity»): minted

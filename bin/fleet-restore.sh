@@ -355,7 +355,7 @@ restore() {
     # the hub REBUILD and still reconcile the work windows below,
     # reopening any mapped WIN whose window isn't currently present.
     local sock; sock=$(fleet_socket "$sess")   # this fleet's own socket (== session, issue #159)
-    local live=0 livewins="" livewt="" healed
+    local live=0 livewins="" livewt="" livefid="" healed
     # A socket left by a dying server (issue #1729): clear it, and log that the
     # server died, before has-session reads it as down and fleet-up trips on it.
     if [ -z "$dry" ] && healed=$(fleet_socket_heal "$sock"); then say "$healed"; log "$healed"; fi
@@ -363,6 +363,7 @@ restore() {
       live=1
       livewins=$(tmux -L "$sock" list-windows -t "$sess" -F '#{window_name}' 2>/dev/null)
       livewt=$(tmux -L "$sock" list-windows -t "$sess" -F '#{window_name}|#{?@worktree,#{@worktree},#{pane_current_path}}' 2>/dev/null)
+      livefid=$(tmux -L "$sock" list-windows -t "$sess" -F '#{@fleet_id}' 2>/dev/null | grep .)
       say "▸ reconciling fleet $sess ($repo) — already up, checking for missing work windows"
     else
       say "▸ restoring fleet $sess ($repo)"
@@ -407,7 +408,11 @@ restore() {
           continue ;;
         esac
       fi
-      # reconcile path: a window with this name is already live — don't duplicate.
+      # reconcile path: the session is already live — don't duplicate. Its
+      # @fleet_id answers first (issue #1844): a window the person renamed is
+      # still that session, and a name is only the fallback for a map row or a
+      # window with no identity.
+      case "$wtag" in WIN:?*) [ -n "$livefid" ] && printf '%s\n' "$livefid" | grep -qxF "${wtag#WIN:}" && continue ;; esac
       # In a fleet hosting 2+ repos (issue #789) a name is not an identity — A#12
       # and B#12 are both `issue-12` — so a live window counts only when it also
       # sits in this row's worktree.
@@ -544,6 +549,7 @@ restore() {
         # The session's lifelong identity (issue #1646), as the snapshot saw it —
         # never re-minted: its children's @origin_fid still names it.
         case "$wtag" in WIN:?*) tmux -L "$sock" set-window-option -t "$nw" @fleet_id "${wtag#WIN:}" 2>/dev/null ;; esac
+        fleet_win_role_stamp "$nw" worker "$sock"   # by role, not name (#1844)
         # Re-stamp the spawn provenance too (issue #503) so a crash-restored
         # worker keeps its dash grouping; old maps (pre-#503, 8-field WIN rows)
         # leave $worigin empty → nothing stamped, exactly as before.
