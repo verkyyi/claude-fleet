@@ -104,11 +104,18 @@ func shortNode(hostname string) string {
 // acceptRelay is a node handing the hub one relay. It answers the sender at
 // once — TypeAck when the relay is stored (or was already), TypeError when it
 // is refused for good — and then pushes it on.
-func (s *Server) acceptRelay(ctx context.Context, conn *websocket.Conn, ep store.Endpoint, m control.Message) {
+//
+// tokenHash is the sender's HashToken, what its worker assertion — the session
+// that sent the relay (claude-fleet#1810) — is checked against.
+func (s *Server) acceptRelay(ctx context.Context, conn *websocket.Conn, ep store.Endpoint, tokenHash string, m control.Message) {
 	r, err := s.checkRelay(ep, m)
+	var wk *workerClaims
+	if err == nil {
+		wk, err = relayWorker(m, r, tokenHash, time.Now())
+	}
 	if err != nil {
 		e := errorObject(err)
-		_ = s.Store.FleetAudit("node:"+ep.ID, "relay", "", "refused:"+e["code"], "", time.Now())
+		_ = s.Store.FleetAuditWorker("node:"+ep.ID, wk.id(), wk.label(), "relay", "", "refused:"+e["code"], "", time.Now())
 		refuse(ctx, conn, m.OpID, e["code"], e["message"])
 		return
 	}
@@ -120,7 +127,7 @@ func (s *Server) acceptRelay(ctx context.Context, conn *websocket.Conn, ep store
 		return
 	}
 	if inserted {
-		_ = s.Store.FleetAudit("node:"+ep.ID, "relay:"+r.Kind, fleetOf(r.ToWID), "stored", r.ID, time.Now())
+		_ = s.Store.FleetAuditWorker("node:"+ep.ID, wk.id(), wk.label(), "relay:"+r.Kind, fleetOf(r.ToWID), "stored", r.ID, time.Now())
 		s.progressReport(r) // the parent's stream (claude-fleet#1648)
 	}
 	ack := control.Message{Type: control.TypeAck, OpID: m.OpID, Proto: control.Proto}
@@ -128,6 +135,27 @@ func (s *Server) acceptRelay(ctx context.Context, conn *websocket.Conn, ep store
 	_ = wsjson.Write(wctx, conn, ack)
 	cancel()
 	go s.dispatchRelays(r.TargetEndpoint)
+}
+
+// relayWorker checks a relay's worker assertion, if it carries one
+// (claude-fleet#1810): it must verify against the sending node's token
+// (UNAUTHENTICATED otherwise) and name the session the relay is from
+// (NOT_FOUND otherwise — a session speaks only as itself). nil, nil = no
+// assertion: the node's own relay, as before. A refused assertion's claims
+// still come back, so the audit names who was refused.
+func relayWorker(m control.Message, r store.FleetRelay, tokenHash string, now time.Time) (*workerClaims, error) {
+	var in control.Relay
+	if json.Unmarshal(m.Payload, &in) != nil || in.Worker == "" {
+		return nil, nil
+	}
+	c, err := verifyWorkerAssertion(in.Worker, tokenHash, now)
+	if err != nil {
+		return nil, err
+	}
+	if c.FleetUUID != fleetOf(r.FromWID) || !c.speaksAs(r.FromWID) {
+		return c, fault("NOT_FOUND", "from: no such session on this node")
+	}
+	return c, nil
 }
 
 func fleetOf(wid string) string {

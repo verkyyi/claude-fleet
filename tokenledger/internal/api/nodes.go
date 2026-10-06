@@ -423,7 +423,7 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 				refuse(ctx, conn, m.OpID, control.CodeRefused, "relays need the relay capability in the hello")
 				break
 			}
-			s.acceptRelay(ctx, conn, *ep, m)
+			s.acceptRelay(ctx, conn, *ep, HashToken(tok), m)
 		case control.TypeRelayResult:
 			s.relayResult(ep.ID, m)
 		case control.TypeAck:

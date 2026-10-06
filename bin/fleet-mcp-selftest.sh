@@ -30,6 +30,13 @@
 #      ran; the same session in a new window (a migration) still holds; renewal
 #      keeps the nonce; no credential runs as before and logs `via=marker`; and the
 #      credential appears in no file, log, reply or tmux option the run left behind
+#   K  the hub route (issue #1810): with the hub on for the fleet and a node token,
+#      a credentialed spawn / await / send hands its script $FLEET_WORKER_ASSERT,
+#      HMAC'd with HashToken(node token), naming the session; no hub, no token or no
+#      credential → none, and with no hub not one network request (a sitecustomize
+#      traps every Python socket; curl and ccquota are tripwires); the real
+#      fleet_hub_put carries it as the relay's `worker`, and without it the outbox
+#      file is byte for byte as before
 set -u
 
 BIN=$(cd "$(dirname "$0")" && pwd)
@@ -577,5 +584,102 @@ for c in "$CRED" "$EXPIRED"; do
   [ -z "$hits" ] || fail "J: the credential leaked into a file" "$hits"
 done
 ok "J the credential appears in no file, log, reply or tmux option"
+
+# --- K: the hub route — a worker assertion (issue #1810) ----------------------
+# A session's spawn / await / send hand their script $FLEET_WORKER_ASSERT only when
+# the hub is on for this fleet AND the call's credential held; it verifies against
+# HashToken(node token) and names the session. With no hub configured: no
+# assertion, and not one network request — from the server or anything it ran.
+K="$WORK/hub"; mkdir -p "$K/py"
+cat >> "$WORK/bin/fleet-lib.sh" <<'SH'
+fleet_hub_on() { [ "${CCQUOTA_FLEET:-0}" = 1 ]; }
+_fleet_node_env_val() { [ -r "$FLEET_CONF_DIR/node.env" ] || return 1; sed -n "s/^$1=//p" "$FLEET_CONF_DIR/node.env" | head -n 1; }
+SH
+# The scripts record whether they were handed an assertion (its value to a file).
+for sc in dash-issue-session.sh fleet-await.sh fleet-peer-send.sh; do
+  printf '#!/bin/sh\n[ "%s" = fleet-peer-send.sh ] && cat >/dev/null\nprintf "%%s %%s\\n" "%s" "${FLEET_WORKER_ASSERT:-none}" >> "%s"\necho done\n' \
+    "$sc" "$sc" "$K/asserts" > "$WORK/bin/$sc"
+  chmod +x "$WORK/bin/$sc"
+done
+# Any network a Python process opens (the server, or a script it runs) is logged.
+cat > "$K/py/sitecustomize.py" <<PY2
+import socket
+_log = "$K/net"
+def _deny(*a, **k):
+    open(_log, "a").write("network: %r\\n" % (a[:2],))
+    raise OSError("no network in this selftest")
+socket.socket.connect = _deny
+socket.create_connection = _deny
+socket.getaddrinfo = _deny
+PY2
+printf '#!/bin/sh\necho "$0 $*" >> "%s"\nexit 1\n' "$K/net" > "$G/sbin/curl"
+cp "$G/sbin/curl" "$G/sbin/ccquota"; chmod +x "$G/sbin/curl" "$G/sbin/ccquota"
+ksrv() { # ksrv <out> [CCQUOTA_FLEET value] — gsrv, with the hub variable chosen
+  env -u CCQUOTA_FLEET -u FLEET_HUB_URL -u CCQUOTA_TOKEN -u FLEET_WORKER_CRED -u FLEET_WORKER_ASSERT \
+    ${2:+CCQUOTA_FLEET="$2"} PYTHONPATH="$K/py" PATH="$G/sbin:$PATH" TMUX=1 TMUX_PANE=%1 \
+    FLEET_CONF_DIR="$G/conf" FLEET_MCP_LOG="$G/calls.log" FAKE_FID="$FID" \
+    ${CRED:+FLEET_WORKER_CRED="$CRED"} python3 "$WORK/bin/fleet-mcp.py" > "$1"
+}
+kcalls() {
+  call 90 spawn '{"issue":5}'; call 91 await '{"issue":5,"timeout":5}'; call 92 send '{"to":"issue:77","text":"hi"}'
+}
+CRED=$(CRED='' gcred mint) || fail "K: --cred mint failed"
+rm -f "$G/conf/node.env"; : > "$K/asserts"; : > "$K/net"; : > "$G/calls.log"
+kcalls | ksrv "$K/d"
+[ "$(grep -c ' none$' "$K/asserts")" = 3 ] || fail "K: with no hub a script was handed an assertion" "$(cat "$K/asserts")"
+[ ! -s "$K/net" ] || fail "K: with no hub something opened the network" "$(cat "$K/net")"
+grep -q 'hub=' "$G/calls.log" && fail "K: with no hub the call log says an assertion went out" "$(cat "$G/calls.log")"
+ok "K no hub: spawn/await/send run with no assertion and not one network request (server, scripts, curl, ccquota)"
+
+# The fleet runs with the hub but this node has no token: still nothing.
+: > "$K/asserts"
+kcalls | ksrv "$K/t" 1
+[ "$(grep -c ' none$' "$K/asserts")" = 3 ] || fail "K: no node token, yet an assertion" "$(cat "$K/asserts")"
+ok "K hub on, no node token: no assertion"
+
+# Hub on + node token: each of the three gets one, signed for THIS node, naming the session.
+printf 'CCQUOTA_TOKEN=ccq_selftest\nCCQUOTA_HUB_URL=http://127.0.0.1:9\n' > "$G/conf/node.env"
+: > "$K/asserts"; : > "$K/net"; : > "$G/calls.log"
+kcalls | ksrv "$K/h" 1
+python3 - "$K/asserts" "$FID" <<'PY2' || fail "K: the assertion is wrong" "$(cat "$K/asserts")"
+import base64, hashlib, hmac, json, sys, time
+rows = [l.split(" ", 1) for l in open(sys.argv[1]).read().splitlines()]
+assert [r[0] for r in rows] == ["dash-issue-session.sh", "fleet-await.sh", "fleet-peer-send.sh"], rows
+key = hashlib.sha256(b"ccq_selftest").hexdigest().encode()
+for script, a in rows:
+    head, sig = a.rsplit(".", 1)
+    assert head.startswith("fwa1."), a
+    want = base64.urlsafe_b64encode(hmac.new(key, head.encode(), hashlib.sha256).digest()).decode().rstrip("=")
+    assert hmac.compare_digest(want, sig), "signature does not verify with HashToken(node token)"
+    c = json.loads(base64.urlsafe_b64decode(head.split(".")[1] + "=" * 4))
+    assert c["worker_id"] == "11111111-2222-4333-8444-555555555555/" + sys.argv[2], c
+    assert (c["fid"], c["key"], c["repo"], c["issue"], c["origin"]) == (sys.argv[2], "issue-1807", "acme/app", "1809", "issue-77"), c
+    ttl = c["exp"] - c["iat"]
+    assert ttl == (24 * 3600 if script == "fleet-peer-send.sh" else 600), (script, ttl)
+    assert abs(c["iat"] - time.time()) < 60, c
+PY2
+[ ! -s "$K/net" ] || fail "K: the server itself opened the network" "$(cat "$K/net")"
+[ "$(grep -c 'via=cred .* hub=asserted' "$G/calls.log")" = 3 ] || fail "K: the call log does not say an assertion went out" "$(cat "$G/calls.log")"
+ok "K hub on: spawn/await/send each handed an assertion — HMAC(HashToken(node token)), the session's worker_id/key/repo/issue/origin, 10 min (a message: 24h)"
+
+# No credential (or one that does not hold): never an assertion, even with the hub on.
+: > "$K/asserts"
+kcalls | CRED='' ksrv "$K/n" 1
+[ "$(grep -c ' none$' "$K/asserts")" = 3 ] || fail "K: a call with no credential was handed an assertion" "$(cat "$K/asserts")"
+ok "K hub on, no credential: no assertion (the node speaks for itself, as before)"
+
+# The real fleet_hub_put carries it as the relay's `worker`; absent = byte for byte as before.
+put() {
+  FLEET_CONF_DIR="$K/conf" CCQUOTA_FLEET=1 bash -c '. "$1/fleet-lib.sh" >/dev/null 2>&1
+    f=$(fleet_hub_put message 11111111-2222-4333-8444-555555555555/issue-1 \
+          11111111-2222-4333-8444-666666666666/issue-2 s1 "{\"text\":\"hi\"}") && cat "$f" && rm -f "$f"' put "$BIN"
+}
+plain=$(unset FLEET_WORKER_ASSERT; put)
+[ "$plain" = '{"id":"11111111-2222-4333-8444-555555555555/issue-1#s1","kind":"message","from":"11111111-2222-4333-8444-555555555555/issue-1","to":"11111111-2222-4333-8444-666666666666/issue-2","payload":{"text":"hi"}}' ] \
+  || fail "K: fleet_hub_put with no assertion is not byte for byte as before" "$plain"
+signed=$(FLEET_WORKER_ASSERT=fwa1.e30.c2ln put)
+python3 -c 'import json, sys; r = json.loads(sys.argv[1]); assert r["worker"] == "fwa1.e30.c2ln" and r["payload"] == {"text": "hi"}, r' "$signed" \
+  || fail "K: fleet_hub_put does not carry the assertion" "$signed"
+ok "K fleet_hub_put: the relay carries it as \`worker\`; with none, the file is byte for byte as before"
 
 printf 'fleet-mcp-selftest: %d passed\n' "$pass"

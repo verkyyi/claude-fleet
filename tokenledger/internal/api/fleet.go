@@ -72,6 +72,11 @@ type fleetPrincipal struct {
 	// work asked from itself only (claude-fleet#1721). "" for a person's or
 	// the operator's door — their client lease's host stands in.
 	From string
+	// Worker is the session a node's call was made for (claude-fleet#1810):
+	// a verified worker assertion, nil when the node spoke for itself. It
+	// never widens scope — the node's own rules still hold — it narrows what
+	// the call may name to that session, and the journal and audit carry it.
+	Worker *workerClaims
 }
 
 // All reports whether the caller sees every machine.

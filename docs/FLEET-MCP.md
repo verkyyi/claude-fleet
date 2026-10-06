@@ -161,7 +161,58 @@ call, never the credential:
 
 What it is not: the key and the session share a uid, so a session that wants to
 can read the key — this is an identity rail against a moved window or a borrowed
-pane, not a wall against a hostile session. The hub checks again (C8).
+pane, not a wall against a hostile session. The hub checks again (C8, below).
+
+## The hub route — a worker assertion (issue #1810, EPIC #1813 C8)
+
+Whether a call goes through the hub is the **node's** configuration, never the
+session's: the tools look the same either way (EPIC #1813 rule 2). When this
+fleet runs with the hub (`fleet_hub_on` — the fleet conf's / environment's
+`CCQUOTA_FLEET=1`) **and** the node has its token (`$CCQUOTA_TOKEN`, else
+`node.env`), the three tools whose script may act on another machine hand that
+script a **worker assertion** — who the call is for, signed by the node — in
+**`$FLEET_WORKER_ASSERT`**, the environment only:
+
+| tool | how it reaches the hub | lifetime |
+|---|---|---|
+| `spawn` · `await` | `dash-issue-session.sh` → `fleet_hub_place` → `ccquota place`, header `X-Fleet-Worker` on `POST /v1/node/place` | 10 min |
+| `send` | `fleet-peer-send.sh` → `fleet_hub_put` → the relay's `worker` field (outbox → agent → hub) | 24 h — a relay may wait in the outbox while the hub is away |
+
+**Only a call whose credential held** gets one (C7): no credential, a hub that is
+off, no node token, no fleet UUID → nothing is minted and nothing about the hub is
+read. **With no hub configured not one network request is made** — not by the
+server, not by anything it runs on its behalf (`fleet-mcp-selftest.sh` K traps
+every socket). A cross-machine call through a hub that cannot be reached fails in
+its script as it always has; everything local runs unchanged.
+
+**Format** — `fwa1.<base64url claims>.<base64url HMAC-SHA256>`, keyed with
+`HashToken(node token)` (SHA-256 hex): the hub already stores exactly that, so it
+verifies without a new secret, and nothing but the node holding the token (or the
+hub) can sign. Claims: `v` 1 · `worker_id` (`<fleet UUID>/<fid>`) · `fleet_uuid` ·
+`fid` · `key` (the session's key **now** — a relay's `from` names it by that) ·
+`repo` · `issue` · `origin` · `node` (this host's short name) · `iat` · `exp`.
+
+**The hub** (`tokenledger/internal/api/fleet_worker_assert.go`) adds a caller
+kind, the 执行会话 — a node's call made for one of its sessions:
+
+| the assertion | answer |
+|---|---|
+| absent | the node's own call, byte for byte as before |
+| not signed with this node's token hash · tampered · expired · `exp-iat` over 24 h · malformed | **401** `UNAUTHENTICATED` (a relay: refused) — never read as "no assertion" |
+| a session of a fleet this node does not run · a start whose `origin_wid` is not that session (by fid or key) · a relay whose `from` is not that session | **404** `NOT_FOUND` — a session acts only as itself: what it opens is its own child |
+| holds | the call runs; a start with no `origin_wid` gets the session's |
+
+Every such call — refused ones too — writes `worker_id` and `worker_key` beside
+the node's `actor` in **`fleet_audit`**, and a placed start's journal row
+(`fleet_operations.worker_id`) names the session. So the audit line for
+「执行会话 issue-N @ m5 → 在 m4 上开会话」 reads
+`actor=node:<login>@m5 worker_key=issue-N action=place outcome=REMOTE m4 done`.
+The envelope sent to the target node is unchanged (its `fields()` check is
+strict). The call log marks a call that handed one out with ` hub=asserted`.
+
+Needs, to take effect: the hub deployed with this change, and on each node a
+`ccquota` (place) and agent (relay) built from it. An older `ccquota` / agent
+drops the assertion — the node's own call, exactly as before.
 
 ## Compatibility
 
@@ -184,6 +235,11 @@ REAL `fleet-comment.sh` (the byte-identical comment) and `fleet-report-parent.sh
 --dry-run` (the same envelope, on an isolated tmux server).
 `bin/fleet-mcp-selftest.sh` J — the credential: valid / expired / forged /
 tampered / another pane / another fleet / revoked, migration, renewal, no leak.
+`bin/fleet-mcp-selftest.sh` K — the hub route: assertion only with hub + token +
+credential, its signature and claims, zero network with no hub, `fleet_hub_put`'s
+`worker`. Hub: `TestWorkerAssertion*` (`internal/api/fleet_worker_assert_test.go`)
+— valid → placed + audited + journalled, forged → 401, out of scope → 404, the
+relay; `TestPlaceCarriesWorkerAssertion` (`cmd/ccquota`).
 `bin/session-wrap-selftest.sh` B' — the wrapper mints per launch and revokes on exit.
 `bin/fleet-claude-selftest.sh` #1807 and `bin/fleet-codex-selftest.sh` I — the
 launch command lines carry the server. `mod/fleet/tests/tools.test.ts` — the mod

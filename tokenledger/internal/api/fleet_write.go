@@ -623,6 +623,9 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 	now := time.Now()
 	op := store.FleetOperation{ID: newOperationID(), FleetID: target.FleetID, Action: tool,
 		Request: w.canonical, Actor: p.Actor, Idem: idem, Status: "pending", Created: now, Updated: now}
+	if p.Worker != nil {
+		op.WorkerID = p.Worker.WorkerID // the session the node asked for (claude-fleet#1810)
+	}
 	if placement != nil {
 		b, _ := json.Marshal(placement)
 		op.Placement = string(b)
