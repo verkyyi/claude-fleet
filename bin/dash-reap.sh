@@ -198,10 +198,7 @@ settle_issue() {
     [ -n "$base" ] && [ "$n" = 0 ] && what="it never started (no commits of its own)"
   fi
   [ "$reason" = dirty ] && what="$what; its dirty worktree is kept"
-  gh -R "$REPO" issue edit "$iss" --remove-assignee @me >/dev/null 2>&1 || true
-  gh -R "$REPO" issue comment "$iss" --body "Reaped from the fleet: window closed — $what. The issue stays OPEN and the claim is released, so it can be picked up again.
-
-<!-- fleet:no-relay -->" >/dev/null 2>&1 || true
+  fleet_issue_release_claim "$REPO" "$iss" "Reaped from the fleet: window closed — $what"
 }
 
 # RECORD this reap into the /fleet-history ledger (issue #471). ⌃x used to be the
@@ -474,7 +471,7 @@ if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
   SMASTER="$(git -C "$MAIN" rev-parse --verify -q "origin/$SBASE" 2>/dev/null \
     || git -C "$MAIN" rev-parse --verify -q "$SBASE" 2>/dev/null)"
   SMERGED=""
-  command -v gh >/dev/null 2>&1 && SMERGED="$(fleet_gh_merged_heads "${FLEET_REPO:-}" "$sbranch" 2>/dev/null)"
+  command -v gh >/dev/null 2>&1 && SMERGED="$(fleet_gh_merged_heads "${FLEET_REPO:-}" "$sbranch" --sha 2>/dev/null)"
   sreason="$(fleet_reap_ok "$swt" "$MAIN" "$sbranch" "$shead" "$SMASTER" "$SMERGED")"
   [ "$sreason" != live ] || { emit skip:live; printf 'reap: another live window uses this worktree\n' >&2; exit 3; }
 
@@ -599,12 +596,15 @@ branch="issue-$iss"
 # still stamped `looping` (#1356) — from one that is genuinely still working.
 MERGED_PRS=""; MERGED_AT=""
 if command -v gh >/dev/null 2>&1; then
-  while IFS=$'\t' read -r mref miso; do
+  while IFS=$'\t' read -r mref miso msha; do
     [ "$mref" = "$branch" ] || continue
-    MERGED_PRS="$mref"
+    # Each PR's head sha rides along (issue #1842): fleet_reap_ok keeps a branch
+    # that moved on after its merge.
+    MERGED_PRS="${MERGED_PRS:+$MERGED_PRS
+}$mref $msha"
     mep="$(fleet_epoch_from_iso "$miso")"
     case "$mep" in ''|*[!0-9]*) ;; *) [ "$mep" -gt "${MERGED_AT:-0}" ] && MERGED_AT="$mep" ;; esac
-  done < <(fleet_gh_merged_heads "$REPO" "$branch" --at 2>/dev/null)
+  done < <(fleet_gh_merged_heads "$REPO" "$branch" --at --sha 2>/dev/null)
 fi
 guard_live
 

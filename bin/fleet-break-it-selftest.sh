@@ -16,6 +16,8 @@
 # sandbox install, a fake agent and a fake claude:
 #   session-exit / session-ctrl-c / session-killed   bin/fleet-session-wrap.sh
 #   session-ctrl-z                                  bin/fleet-session-wrap.sh (the TSTP guard)
+#   resume-fails-fast / codex-no-id                 bin/fleet-session-wrap.sh, fleet-session-page.py
+#   merged-then-commit / q-releases-claim           bin/session-end-hook.sh --recycle, fleet_reap_ok
 #   last-window                                     fleet_server_resident (fleet-up.sh)
 #   kill-server / disk-full                         bin/fleet-restore.sh --auto, fleet-diskguard.sh --gate
 #   wedged-socket                                   fleet_socket_heal (fleet-restore.sh, fleet-up.sh)
@@ -128,9 +130,15 @@ cat > "$WORK/fake-agent" <<'EOF'
 #!/bin/bash
 # The agent: logs its argv, stamps its session id as the hooks do, waits for
 # `go`, then leaves the way $CTL/mode says.
+# $CTL/agent = codex: a Codex session whose id was never recorded (#1842 ④).
+# $CTL/resume-fails: a resume dies at once, the way a lost conversation does.
 printf '%s\n' "$*" >> "$CTL/argv"
-tmux set-option -w -t "$TMUX_PANE" @cc_session_id SID-1
-tmux set-option -w -t "$TMUX_PANE" @cc_agent claude
+agent=$(cat "$CTL/agent" 2>/dev/null); [ -n "$agent" ] || agent=claude
+case " $* " in *" --resume "*|*" resume "*)
+  [ -e "$CTL/resume-fails" ] && { printf 'Error: No conversation found with session ID: SID-1\n' >&2; exit 1; } ;;
+esac
+[ "$agent" = claude ] && tmux set-option -w -t "$TMUX_PANE" @cc_session_id SID-1
+tmux set-option -w -t "$TMUX_PANE" @cc_agent "$agent"
 echo $$ > "$CTL/pid"
 while [ ! -e "$CTL/go" ]; do
   # `z`: suspend the way Claude Code does on Ctrl+Z — tear the UI down, hook
@@ -174,7 +182,7 @@ o()  { nt display-message -p -t "$1" "#{$2}" 2>/dev/null; }
 # wrapped <session> <win> <ctl> — a window running the wrapper as every spawner does
 wrapped() {
   mkdir -p "$3"; : > "$3/argv"
-  local cmd="env CTL='$3' FLEET_WRAP_LAUNCH='$WORK/fake-agent' FLEET_WRAP_FAST_FAIL=0 FLEET_UI_LANG=zh"
+  local cmd="env CTL='$3' FLEET_WRAP_LAUNCH='$WORK/fake-agent' FLEET_WRAP_FAST_FAIL=${WRAP_FAST:-0} FLEET_UI_LANG=zh"
   cmd="$cmd '$WORK/wbin/fleet-session-wrap.sh' --agent claude 'the seed'; exec sleep 600"
   if nt has-session -t "$1" 2>/dev/null; then nt new-window -d -t "$1:" -n "$2" "$cmd"
   else nt -f /dev/null new-session -d -s "$1" -n "$2" -x 100 -y 30 "$cmd"; fi
@@ -229,6 +237,125 @@ drill_session_ctrl_z() {
   [ "$(o sz:w @claude_state)" != exited ] || { WHY="the window went to exited"; return 1; }
   [ -n "$(o sz:w @wrap_ctrl_z)" ] || { WHY="the guard left no @wrap_ctrl_z stamp"; return 1; }
   WHAT="Ctrl+Z / kill -TSTP / 自挂起后 ${SECS}s 内收到 SIGCONT、照常运行"
+}
+
+# page_says <ctl-free text> — the recovery page on sx:w shows it
+page_says() { "$REAL_TMUX" -S "$BREAK_SOCK" capture-pane -p -t sx:w 2>/dev/null | grep -qF -- "$1"; }
+
+# A resume that dies within the fast-fail window (the conversation is gone, the
+# login lapsed): the window stays on the page and says why (#1842 ③).
+drill_resume_fails_fast() {
+  CAP=6; BREAK_SOCK="$WORK/sock-rf"; local c="$WORK/rf" t0
+  WRAP_FAST=1 wrapped sx w "$c" || { WHY="cannot start the isolated tmux server"; return 1; }
+  until_ok 10 grep -q . "$c/argv" || { WHY="the agent never started"; return 1; }
+  sleep 1.2; printf rc0 > "$c/mode"; : > "$c/go"     # a real session: it ran past the window
+  until_ok 10 page_says '这个窗口不会关' || { WHY="no recovery page after the first exit"; return 1; }
+  : > "$c/resume-fails"
+  t0=$(now); nt send-keys -t sx:w Enter
+  until_ok 10 sh -c "[ \$(grep -c . '$c/argv') = 2 ]" || { WHY="↵ relaunched nothing"; return 1; }
+  until_ok 5 page_says '续上原对话失败' \
+    || { WHY="no page after the failed resume — the window shows: $(nt capture-pane -p -t sx:w 2>/dev/null | grep . | tail -2 | tr '\n' ' ')"; return 1; }
+  nt list-windows -t sx -F '#{window_name}' 2>/dev/null | grep -qx w || { WHY="the window closed"; return 1; }
+  page_says '找不到这个对话' || { WHY="the page does not say why (找不到这个对话)"; return 1; }
+  SECS=$(since "$t0"); WHAT="续对话 1 秒内失败，窗口留在恢复页写「找不到这个对话」"
+}
+
+# A Codex session with no recorded id: ↵ must never `resume --last` — in a shared
+# Codex home that is somebody else's conversation (#1842 ④). The window's own
+# thread (@codex_thread_id) is resumed; with none, a new conversation.
+drill_codex_no_id() {
+  CAP=8; BREAK_SOCK="$WORK/sock-cx"; local c="$WORK/cx" t0
+  mkdir -p "$c"; printf codex > "$c/agent"
+  wrapped sx w "$c" || { WHY="cannot start the isolated tmux server"; return 1; }
+  until_ok 10 grep -q . "$c/argv" || { WHY="the agent never started"; return 1; }
+  t0=$(now); printf rc0 > "$c/mode"; : > "$c/go"
+  until_ok 10 page_says '这个窗口不会关' || { WHY="no recovery page"; return 1; }
+  page_says '回车新开' || { WHY="the page does not say ↵ starts a new conversation"; return 1; }
+  nt send-keys -t sx:w Enter
+  until_ok 10 sh -c "[ \$(grep -c . '$c/argv') = 2 ]" || { WHY="↵ relaunched nothing"; return 1; }
+  [ "$(sed -n 2p "$c/argv")" = "--agent codex" ] || { WHY="no id, no thread: ↵ ran [$(sed -n 2p "$c/argv")], not a new conversation"; return 1; }
+  nt set-option -w -t sx:w @codex_thread_id T-9
+  printf rc0 > "$c/mode"; : > "$c/go"
+  until_ok 10 page_says '这个窗口不会关' || { WHY="no recovery page the second time"; return 1; }
+  nt send-keys -t sx:w Enter
+  until_ok 10 sh -c "[ \$(grep -c . '$c/argv') = 3 ]" || { WHY="↵ relaunched nothing the second time"; return 1; }
+  [ "$(sed -n 3p "$c/argv")" = "--agent codex resume T-9" ] || { WHY="with the window's thread: ↵ ran [$(sed -n 3p "$c/argv")], not resume T-9"; return 1; }
+  grep -q -- '--last' "$c/argv" && { WHY="a relaunch ran resume --last"; return 1; }
+  SECS=$(since "$t0"); WHAT="无 id：↵ 新开；有本窗口 thread：续它；从不 resume --last"
+}
+
+# ---- the recovery page's q, on the real session-end-hook (#1842 ① ②) ----------
+# A real git repo with an issue worktree, a fake gh (one merged PR, with its head
+# sha) and a fake tmux that runs run-shell inline — session-end-hook-selftest's rig.
+seh_rig() {
+  local R="$WORK/seh"; [ -d "$R" ] && return 0
+  mkdir -p "$R/fp" "$R/conf" "$R/proj"
+  git init -q "$R/main"; git -C "$R/main" config user.email t@t; git -C "$R/main" config user.name t
+  printf 'seed\n' > "$R/main/f"; git -C "$R/main" add f; git -C "$R/main" commit -qm seed
+  git -C "$R/main" branch -M main
+  cat > "$R/fp/tmux" <<'FAKE'
+#!/bin/bash
+if [ "${1:-}" = run-shell ]; then shift; [ "${1:-}" = -b ] && shift; sh -c "$1"; exit 0; fi
+case "$*" in
+  *@issue*) printf '%s\n' "${ISS:-}" ;;
+  *window_id*) printf '@9\n' ;;
+  *session_name*) printf 's1\n' ;;
+  *kill-window*) printf 'KILL\n' >> "$SEHLOG" ;;
+esac
+exit 0
+FAKE
+  cat > "$R/fp/gh" <<'FAKE'
+#!/bin/bash
+head=""; prev=""; for a in "$@"; do [ "$prev" = --head ] && head="$a"; prev="$a"; done
+case "$*" in
+  *"pr list"*headRefOid*) [ "$head" = "${GH_MERGED_HEAD:-}" ] && printf '%s\t%s\n' "$head" "$GH_MERGED_OID" ;;
+  *"pr list"*headRefName*) [ "$head" = "${GH_MERGED_HEAD:-}" ] && printf '%s\n' "$head" ;;
+  *"issue view"*) printf 'OPEN\n' ;;
+  *issue*) printf 'GH %s\n' "$*" >> "$SEHLOG" ;;
+esac
+exit 0
+FAKE
+  chmod +x "$R/fp/tmux" "$R/fp/gh"
+}
+# seh_q <issue> [VAR=val…] — press q on issue-<N>'s recovery page
+seh_q() {
+  local R="$WORK/seh" n="$1"; shift
+  env "$@" ISS="$n" SEHLOG="$R/log" PATH="$R/fp:$PATH" HOME="$WORK/home" \
+    FLEET_REPO=acme/widgets FLEET_MAIN="$R/main" FLEET_BASE_BRANCH=main \
+    FLEET_CONF_DIR="$R/conf" FLEET_SKIP_GLOBAL_CONF=1 TMPDIR="$R" \
+    FLEET_HISTORY_LEDGER="$R/ledger" CLAUDE_PROJECTS_DIR="$R/proj" TMUX=fake TMUX_PANE=%1 \
+    bash "$BIN/session-end-hook.sh" --recycle >/dev/null 2>&1
+}
+
+# Merged, then one more commit, then q: the branch and the commit stay (#1842 ①).
+drill_merged_then_commit() {
+  CAP=10; seh_rig; local R="$WORK/seh" wt="$WORK/seh/wt-7" t0 pr_head n
+  git -C "$R/main" worktree add -q -b issue-7 "$wt" >/dev/null 2>&1
+  printf 'a\n' > "$wt/a"; git -C "$wt" add a; git -C "$wt" commit -qm 'the PR'
+  pr_head=$(git -C "$wt" rev-parse HEAD)
+  printf 'b\n' > "$wt/b"; git -C "$wt" add b; git -C "$wt" commit -qm 'after the merge'   # the break
+  : > "$R/log"; t0=$(now)
+  seh_q 7 GH_MERGED_HEAD=issue-7 GH_MERGED_OID="$pr_head"
+  SECS=$(since "$t0")
+  git -C "$R/main" rev-parse -q --verify refs/heads/issue-7 >/dev/null || { WHY="q deleted branch issue-7 and the commit made after the merge"; return 1; }
+  [ -d "$wt" ] || { WHY="q removed the worktree"; return 1; }
+  n=$(git -C "$R/main" rev-list --count main..issue-7)
+  [ "$n" = 2 ] || { WHY="branch issue-7 holds $n commits, want 2"; return 1; }
+  grep -q 'issue close' "$R/log" && { WHY="q closed the issue as landed"; return 1; }
+  WHAT="合并后再提交再按 q：分支 issue-7 仍在，$n 个提交（1 个在合并之后）"
+}
+
+# q on an unmerged issue: the claim goes, the issue can be dispatched again (#1842 ②).
+drill_q_releases_claim() {
+  CAP=10; seh_rig; local R="$WORK/seh" wt="$WORK/seh/wt-8" t0
+  git -C "$R/main" worktree add -q -b issue-8 "$wt" >/dev/null 2>&1
+  printf 'w\n' > "$wt/w"; git -C "$wt" add w; git -C "$wt" commit -qm 'half done'
+  : > "$R/log"; t0=$(now)
+  seh_q 8
+  SECS=$(since "$t0")
+  grep -q 'issue edit 8 .*--remove-assignee @me' "$R/log" || { WHY="q left the claim on #8 (gh: $(tr '\n' ' ' < "$R/log"))"; return 1; }
+  [ -d "$wt" ] || { WHY="q removed the unmerged worktree"; return 1; }
+  WHAT="未合并单按 q：认领放开、可再派，worktree 留着"
 }
 
 # home_back <old pid> — home holds a live shell other than <old pid>
