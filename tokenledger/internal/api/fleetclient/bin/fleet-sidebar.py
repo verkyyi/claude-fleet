@@ -101,7 +101,8 @@ KEY_ALIASES = {"。": ".", "．": ".", "？": "?"}
 # The SHELL (bin/fleet-shell.sh, issue #1484) runs this view on a computer with
 # no fleet: no conf, no gh, no worktree, and its install ships none of the
 # scripts a new task / restore / scratch spawn runs. There every row is on a
-# machine, so those keys say so (issue #1518) instead of doing nothing.
+# machine, so those keys open the session ON one, through the hub (place_start,
+# issue #1778 — they only said so before, #1518).
 SHELL = os.environ.get("FLEET_SHELL") == "1"
 
 
@@ -121,9 +122,6 @@ def stage_remote():
                 "#{@remote}"]).stdout.strip()
 
 
-def shell_refusal():
-    """The toast (text, until) a local-only key shows in the shell."""
-    return tr("sidebar_shell_local_only"), time.monotonic() + TOAST_SECS
 # The paste route's PIN (issue #1105). tmux forwards a bracketed paste to the
 # CLIENT's pane before any key table, so no bind can catch one; under the
 # `active-pane` client flag `select-pane` moves that client's own pane instead of
@@ -547,10 +545,26 @@ class Ask:
     new task's repo in a 2+ repo fleet, a subscription's account; `keys` makes
     it a one-key question (restore: y / r, anything else cancels)."""
 
-    def __init__(self, kind, prompt, arg="", hint="", node="", repo="", keys=""):
+    def __init__(self, kind, prompt, arg="", hint="", node="", repo="", keys="", menu=None, plan=None):
         self.kind, self.prompt, self.arg, self.hint = kind, prompt, arg, hint
         self.node, self.repo, self.keys = node, repo, keys
         self.choices, self.at, self.where = [], -1, ""
+        # A menu (issue #1778): (value, label, note, greyed) lines painted above
+        # the input line, ↑↓ / Tab between the ones that are not greyed, ↵ picks.
+        # `plan` is the shell's open-a-session flow it is one step of.
+        self.menu, self.plan = menu, plan
+        if menu:
+            self.at = next((i for i, item in enumerate(menu) if not item[3]), 0)
+
+    def move(self, step):
+        """↑↓ on a menu: the next line that is not greyed, wrapping round."""
+        n = len(self.menu or [])
+        i = self.at
+        for _ in range(n):
+            i = (i + step) % n
+            if not self.menu[i][3]:
+                self.at = i
+                return
 
     def step(self):
         """Tab: the next choice. A repo choice re-targets the task; an account
@@ -660,6 +674,261 @@ def restore_asked(session, target):
     return done
 
 
+# The shell's new / restore / scratch (issue #1778): the computer has no fleet,
+# so each opens a session ON a machine through the hub — fleet-client-place.sh
+# (#1777). First the repo (the list's own repo headings), then — ⌃n / ⌃o — the
+# issue or the key on the input line, then 「开在哪」: 自动 · each machine that
+# can take one, idlest first · the ones that cannot, greyed. Off the hub's
+# /v1/nodes, as the refresh loop cached it (global/hub_nodes). The place runs in
+# the background, the top row says where it is opening, and when the hub's list
+# carries the new session it is selected and switched to.
+PLACE_WORDS = ("REMOTE", "LOCAL", "HELD", "REFUSED", "DECLINED", "UNKNOWN")
+# How long the new row may take to show in the list after the hub said done:
+# the refresh loop's round (2 s while someone looks) plus the node's report.
+PLACE_FIND_SECS = 30
+
+
+def status_dir():
+    """The refresh loop's cache dir (fleet-status-lib.sh FLEET_STATUS_G)."""
+    return os.environ.get("FLEET_STATUS_G") or os.path.join(
+        os.environ.get("TMPDIR") or "/tmp", ".claude-dash", "global")
+
+
+def hub_down():
+    """The bar's 入口连不上 (fleet_status_hub_lost): the last round of the refresh
+    loop that stood is older than FLEET_HUB_SESSIONS_STALE. No hub_ok at all — a
+    shell with no hub — is not «down»: fleet-client-place.sh decides there."""
+    try:
+        with open(os.path.join(status_dir(), "hub_ok")) as f:
+            ts = int((f.read().split() or ["0"])[0])
+    except (OSError, ValueError):
+        return False
+    return time.time() - ts > env_int("FLEET_HUB_SESSIONS_STALE", 60)
+
+
+def where_menu():
+    """「开在哪」: (node, label, note, greyed) — 自动 first, then every machine
+    that can take a session by its count of running ones, then the ones that
+    cannot (only coordinates, 维护中, 失联), greyed. node is the hostname the hub
+    resolves (hub_nodes' 13th field), the label what this login calls it."""
+    try:
+        with open(os.path.join(status_dir(), "hub_nodes"), encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        lines = []
+    can, cannot = [], []
+    for line in lines:
+        f = line.split(US)
+        if not f[0] or f[0].startswith("#") or len(f) < 6:
+            continue
+        f += [""] * (13 - len(f))
+        label, av, sess, word, host = f[0], f[1], f[5], f[11], f[12] or f[0]
+        if word == "coord":
+            cannot.append((0, (host, label, tr("sidebar_place_coord"), True)))
+        elif word == "maint":
+            cannot.append((1, (host, label, tr("sidebar_place_maint"), True)))
+        elif av != "online":
+            cannot.append((2, (host, label, tr("sidebar_place_lost"), True)))
+        else:
+            n = int(sess) if sess.isdigit() else 1 << 30   # `?`: unknown, last
+            can.append((n, (host, label, tr("sidebar_place_running_fmt", sess), False)))
+    return ([("auto", tr("sidebar_place_auto"), tr("sidebar_place_rec"), False)] +
+            [item for _, item in sorted(can, key=lambda c: c[0])] +
+            [item for _, item in sorted(cannot, key=lambda c: c[0])])
+
+
+def shell_repos(rows):
+    """The repos the shell's list shows — its `hdr:<owner/name>` headings."""
+    out = []
+    for row in rows:
+        key = key_of(row)
+        if key.startswith("hdr:") and "/" in key and key[4:] not in out:
+            out.append(key[4:])
+    return out
+
+
+def repo_of(rows, key):
+    """The repo a highlighted row is in: a heading's own, else the nearest
+    heading above the row. "" when neither names one."""
+    if key.startswith("hdr:"):
+        return key[4:] if "/" in key else ""
+    repo = ""
+    for row in rows:
+        k = key_of(row)
+        if k.startswith("hdr:"):
+            repo = k[4:] if "/" in k else ""
+        elif k == key:
+            return repo
+    return ""
+
+
+def place_start(verb, rows, anchor, name="", pin=False):
+    """⌃n (`new`), ⌃o (`restore`), ⌃s / a typed name (`scratch`) in the shell:
+    the first question — or (None, toast) when nothing can be opened. `pin` (a
+    heading's second tap) skips the repo question: the heading named it."""
+    if hub_down():
+        return None, tr("sidebar_place_hubdown")
+    repos = shell_repos(rows)
+    if not repos:
+        return None, tr("sidebar_place_norepo")
+    plan = {"verb": verb, "name": name, "repo": repo_of(rows, anchor)}
+    if (pin and plan["repo"]) or len(repos) == 1:
+        plan["repo"] = plan["repo"] or repos[0]
+        return place_after_repo(plan), ""
+    ask = Ask("place-repo", tr("sidebar_place_repo"), hint=tr("sidebar_place_keys"), plan=plan,
+              menu=[(r, r.rsplit("/", 1)[-1], r.split("/", 1)[0], False) for r in repos])
+    if plan["repo"] in repos:
+        ask.at = repos.index(plan["repo"])
+    return ask, ""
+
+
+def place_after_repo(plan):
+    """The repo is known: ⌃n asks the issue, ⌃o the key; a scratch goes on."""
+    short = plan["repo"].rsplit("/", 1)[-1]
+    if plan["verb"] == "new":
+        return Ask("place-issue", tr("sidebar_place_issue"), plan=plan,
+                   hint=tr("sidebar_place_issue_hint_fmt", short))
+    if plan["verb"] == "restore":
+        return Ask("place-restore", tr("sidebar_place_restore"), plan=plan,
+                   hint=tr("sidebar_place_restore_hint_fmt", short))
+    plan["what"] = "scratch"
+    return place_where(plan)
+
+
+def place_where(plan):
+    """The last question: 「开在哪」, 自动 highlighted."""
+    short = plan["repo"].rsplit("/", 1)[-1]
+    what = plan["what"]
+    if what == "scratch":
+        what = tr("sidebar_place_draft_fmt", plan.get("name") or "").strip()
+    elif what.startswith("restore:"):
+        what = what[len("restore:"):]
+    else:
+        what = "#" + what
+    return Ask("place-where", tr("sidebar_place_where_fmt", short + " " + what),
+               hint=tr("sidebar_place_keys"), menu=where_menu(), plan=plan)
+
+
+def place_answer(ask, value):
+    """One answer to a step of the flow: (the next Ask, a toast, start?) —
+    start is True once 「开在哪」 is answered and the place should run."""
+    plan = ask.plan
+    if ask.kind == "place-repo":
+        plan["repo"] = value
+        return place_after_repo(plan), "", False
+    if ask.kind == "place-issue":
+        text = value.strip().lstrip("#")
+        if not text:
+            return None, "", False
+        if text.isdigit() and int(text) > 0:
+            plan["what"] = text
+        else:
+            plan["what"], plan["name"] = "scratch", value.strip()
+        return place_where(plan), "", False
+    if ask.kind == "place-restore":
+        text = value.strip().lstrip("#")
+        if text.isdigit():
+            text = "issue-" + text
+        if not re.fullmatch(r"(issue|scratch)-[1-9][0-9]*", text):
+            return None, ("✗ " + tr("sidebar_place_restore_hint_fmt", plan["repo"].rsplit("/", 1)[-1])
+                          if text else ""), False
+        plan["what"] = "restore:" + text
+        return place_where(plan), "", False
+    if ask.kind == "place-where":
+        item = next((m for m in ask.menu if m[0] == value), None)
+        if item is None or item[3]:
+            return None, ("✗ " + tr("sidebar_place_cant_fmt", item[1], item[2]) if item else ""), False
+        plan["node"], plan["label"] = item[0], "" if item[0] == "auto" else item[1]
+        return None, "", True
+    return None, "", False
+
+
+def place_job(plan, rows, env):
+    """fleet-client-place.sh for the answered flow, in the background. The keys
+    the list holds now are kept: the new session is the row that was not there."""
+    plan["known"] = {key_of(row) for row in rows}
+    plan["note"] = (tr("sidebar_place_opening_fmt", plan["label"]) if plan["label"]
+                    else tr("sidebar_place_opening_auto"))
+    plan["state"] = "placing"
+    args = ["bash", str(BIN / "fleet-client-place.sh"), plan["repo"], plan["what"],
+            "--node", plan["node"]]
+    if plan.get("name") and plan["what"] == "scratch":
+        args += ["--name", plan["name"]]   # an argv word: no shell parses it
+    return start_job(args, env, placed(plan))
+
+
+def placed(plan):
+    """fleet-client-place.sh's one line, in words (its exit codes, #1777): done →
+    wait for the row; the issue held elsewhere → «y 切过去»; a refusal → its
+    reason as the hub said it; the hub not reachable → 入口连不上."""
+    def done(rc, text):
+        line = next((l for l in reversed(text.splitlines()) if l.split(" ", 1)[0] in PLACE_WORDS), "")
+        head, _, why = line.partition("\t")
+        words = head.split()
+        machine = words[1] if len(words) > 1 else plan.get("label") or ""
+        plan["state"] = "end"
+        if rc == 0 and words[:1] in (["REMOTE"], ["LOCAL"]):
+            who = words[4] if words[0] == "REMOTE" and len(words) > 4 else ""
+            plan.update(state="await", machine=machine, key="wid:" + who if "/" in who else "",
+                        until=time.monotonic() + PLACE_FIND_SECS,
+                        note=tr("sidebar_place_opening_fmt", machine))
+            return "", None
+        if rc == 3:
+            return "", Ask("place-held", tr("sidebar_place_held_fmt", machine), hint=why.strip(),
+                           keys="yY", node=machine, plan=plan)
+        if rc == 4:
+            return "✗ " + tr("sidebar_place_refused_fmt", why.strip() or head), None
+        if rc == 5:
+            return "✗ " + tr("sidebar_place_declined_fmt", machine, why.strip() or head), None
+        if rc == 6:
+            return tr("sidebar_place_unknown_fmt", machine), None
+        last = last_line(text)
+        if rc == 1 and re.search(r"HTTP 4(0[0-9]|[1-9][0-9])", last) and "HTTP 401" not in last:
+            # the hub answered and said no (a bad scratch name, …): its words
+            return "✗ " + tr("sidebar_place_refused_fmt", last.split(": ", 2)[-1]), None
+        if rc == 1:
+            return "✗ " + tr("sidebar_place_hubdown"), None
+        return failed(rc, text)
+    return done
+
+
+def place_found(rows, plan):
+    """The new session's row once the list carries it: the worker_id the hub
+    named; else the row of this issue / key on that machine; else a row that was
+    not there when the place started, on that machine. "" until then."""
+    keys = [key_of(row) for row in rows if row[0] != "hdr"]
+    if plan.get("key") in keys:
+        return plan["key"]
+    return held_row(rows, plan, plan.get("machine", ""), fresh=True)
+
+
+def held_row(rows, plan, machine, fresh=False):
+    """A row of the plan's issue / restore key — on `machine` first, then on
+    any (the hub's name for a machine and this login's may differ); `fresh`
+    adds a row the list did not hold when the place started, likewise."""
+    what = plan.get("what", "")
+    want = ("issue-" + what if what.isdigit() else
+            what[len("restore:"):] if what.startswith("restore:") else "")
+    known = plan.get("known") or set()
+    live = [row for row in rows if row[0] != "hdr"]
+
+    def on(row):
+        return not machine or (row[8] if len(row) > 8 else "").rstrip("!~") in (machine, "")
+
+    def ours(row):
+        return bool(want) and (row[0].endswith("/" + want) or
+                               (what.isdigit() and len(row) > 9 and row[9] == what))
+
+    tests = [lambda r: on(r) and ours(r), ours]
+    if fresh:
+        tests += [lambda r: on(r) and r[0] not in known, lambda r: r[0] not in known]
+    for test in tests:
+        hit = [row[0] for row in live if test(row)]
+        if hit:
+            return hit[-1]
+    return ""
+
+
 def submit(ask, text, session, env):
     """↵ (or a one-key answer) on a question: the job that does it, or None when
     there is nothing to do (an empty line cancels, as an empty name always has)."""
@@ -731,8 +1000,9 @@ def open_tap(session, action, key, env):
     """A second tap (issue #1032): a session row's menu, or — on a selected
     heading — a new task's title on the input line with that repo pinned
     (selection_repo resolves `hdr:…` exactly as it does for a typed name, so both
-    paths agree on the target). Returns that Ask; "refused" when the shell
-    refuses it (issue #1518); None after opening a menu."""
+    paths agree on the target). Returns that Ask; "refused" in the shell, which
+    has no fleet to file into — the caller asks there instead (place_start,
+    issue #1778); None after opening a menu."""
     if action == "new":
         if SHELL:
             return "refused"
@@ -1804,6 +2074,26 @@ def ui(screen, session, worker, lock):
     # ⌃t back paints at once, when the landed rows were last read (⌃r: now), and
     # whether the info column is open (⌃i).
     view, live_rows, landed, landed_at, wide = "live", [], None, NEVER, False
+    # The shell's open-a-session flow in flight (issue #1778): the plan whose
+    # fleet-client-place.sh runs, then waits for its row — one at a time.
+    placing = None
+
+    def place_step(nxt, said, go, plan):
+        """One answered step of the shell's flow: the next question, a toast,
+        or — 「开在哪」 answered — the place itself, in the background."""
+        nonlocal asking, toast, toast_until, placing
+        if said:
+            toast, toast_until = said, time.monotonic() + TOAST_SECS
+        if go and placing is None:
+            placing = plan
+            jobs.append(place_job(plan, rows, env))
+        elif go:
+            toast, toast_until = placing.get("note", ""), time.monotonic() + TOAST_SECS
+        elif nxt is not None:
+            asking = nxt
+            line.clear()
+            mark_input(pane, "1")
+
     while True:
         now = time.monotonic()
         if folding is not None and folding.poll() is not None:
@@ -1875,6 +2165,24 @@ def ui(screen, session, worker, lock):
                 line.clear()
                 mark_input(pane, "1")
             refresh_at = 0
+        if placing is not None and placing.get("state") == "end":
+            placing = None
+        elif placing is not None and placing.get("state") == "await" and view == "live":
+            # The hub said done: the new session is selected and switched to as
+            # soon as the list carries it (issue #1778) — read every second meanwhile.
+            hit = place_found(rows, placing) if loaded else ""
+            if hit:
+                selected, follow_at = hit, None
+                toast, toast_until = tr("sidebar_place_opened_fmt", placing["machine"]), now + TOAST_SECS
+                placing = None
+                if not jump(session, selected, pane, lock):
+                    follow_at = time.monotonic() + LOCK_RETRY  # lock busy (#1536)
+                refresh_at = 0
+            elif now >= placing["until"]:
+                toast, toast_until = tr("sidebar_place_notyet_fmt", placing["machine"]), now + TOAST_SECS
+                placing = None
+            else:
+                refresh_at = min(refresh_at, now + 1)
         if follow_at is not None and now >= follow_at:
             # The highlight settled: switch once. Nothing here touches the
             # client's key table, and the Up/Down binds re-enter fleet-sidebar
@@ -2015,7 +2323,7 @@ def ui(screen, session, worker, lock):
         # The 「刷新中…」 row (issue #1536): the list waits on a frame that has not
         # come — the first, or one past STALE_SECS. The rows it has stay painted
         # one row lower; the top row says what the view is waiting for.
-        waiting = 1 if height >= 4 and (not loaded or age > STALE_SECS) else 0
+        waiting = 1 if height >= 4 and (not loaded or age > STALE_SECS or placing is not None) else 0
         page = max(1, height - waiting - (1 if help_y is None else 2))
         offset = max(0, min(offset, max(0, len(rows) - page)))
         if index == 0:
@@ -2035,7 +2343,9 @@ def ui(screen, session, worker, lock):
                     pass  # a resize may race this paint
 
         screen.erase()
-        if waiting:
+        if waiting and placing is not None:
+            put(0, placing.get("note", ""), curses.color_pair(PAIR_TOAST))  # 「正在 m5 上开…」
+        elif waiting:
             put(0, tr("sidebar_refreshing"), dim_attr)
         for y, row in enumerate(rows[offset:offset + page], waiting):
             wid, state, glyph, label, tree, badge, _depth, _detail, node = row[:9]
@@ -2110,6 +2420,23 @@ def ui(screen, session, worker, lock):
             row = next((r for r in rows if r[0] == selected and r[0] != "hdr"), None)
             info = hint_line(row, width, wide)
         help_shown = help_y is not None and info is None
+        if asking is not None and asking.menu:
+            # A menu (issue #1778): its lines over the bottom of the list, just
+            # above the `?` row — the highlighted one raised, a greyed one dim.
+            bottom = help_y if help_y is not None else height - 1
+            fit = max(0, bottom - waiting)
+            items = list(enumerate(asking.menu))
+            if len(items) > fit:  # too short for all: the highlighted one stays in view
+                first = min(max(0, asking.at - fit + 1), len(items) - fit)
+                items = items[first:first + fit]
+            span = max(0, width - 1)
+            for y, (i, (_value, label, note, greyed)) in enumerate(items, bottom - len(items)):
+                text = ("› " if i == asking.at else "  ") + label
+                if note and width_of(text) + 2 + width_of(note) <= span:
+                    text += " " * (span - width_of(text) - width_of(note)) + note
+                attr = (curses.color_pair(PAIR_SEL) | curses.A_BOLD if i == asking.at else
+                        dim_attr if greyed else curses.color_pair(PAIR_FG))
+                put(y, text, attr, fill=True)
         if info is not None:
             put(help_y, info, curses.color_pair(PAIR_FG) | curses.A_BOLD)
         elif help_y is not None:
@@ -2125,7 +2452,9 @@ def ui(screen, session, worker, lock):
         # (PIN_KEY) makes this view exactly while the client navigates, so it
         # shows here with the keyboard and goes back to the session with it.
         caret = None
-        if asking is not None:
+        if asking is not None and asking.menu:
+            put(height - 1, asking.prompt, curses.A_BOLD)  # the menu's title; no caret
+        elif asking is not None:
             prefix = asking.prompt
             glyph = "" if asking.keys else "▏"
             put(height - 1, prefix + line.view(max(0, room - sum(map(cells, prefix))), glyph),
@@ -2256,6 +2585,23 @@ def ui(screen, session, worker, lock):
             continue
         if key == 27:
             key = escape_word(screen)
+        if asking is not None and asking.menu and key != curses.KEY_MOUSE:
+            # A menu (issue #1778) takes every key: ↑↓ / Tab move, ↵ picks,
+            # Esc cancels; what is typed meanwhile is dropped.
+            if key in (curses.KEY_UP, curses.KEY_BTAB):
+                asking.move(-1)
+            elif key in (curses.KEY_DOWN, 9):
+                asking.move(1)
+            elif key in (10, 13, curses.KEY_ENTER):
+                ask, asking = asking, None
+                mark_input(pane, line.text)
+                place_step(*place_answer(ask, ask.menu[ask.at][0]), ask.plan)
+                refresh_at = 0
+            elif key == 27:
+                asking = None
+                mark_input(pane, line.text)
+            decoder.reset()
+            continue
         if isinstance(key, str):
             # A bracketed paste (issue #1105): one insert at the cursor, on the
             # name or the rename alike. A spawn in flight owns the name.
@@ -2289,7 +2635,14 @@ def ui(screen, session, worker, lock):
             ask, asking = asking, None
             mark_input(pane, line.text)
             decoder.reset()
-            if press and press in ask.keys:
+            if press and press in ask.keys and ask.kind == "place-held":
+                # 「已在别处跑」→ y: over to the row that runs it (issue #1778)
+                hit = held_row(rows, ask.plan, ask.node)
+                if hit:
+                    selected, follow_at = hit, None
+                    if not jump(session, selected, pane, lock):
+                        follow_at = time.monotonic() + LOCK_RETRY  # lock busy (#1536)
+            elif press and press in ask.keys:
                 jobs.append(submit(ask, press, session, env))
             refresh_at = 0
             continue
@@ -2345,6 +2698,8 @@ def ui(screen, session, worker, lock):
             mark_input(pane, line.text)
             if ask.kind == "rename":
                 run(["bash", str(BIN / "dash-rename.sh"), "--wid", ask.arg, text], env=env)
+            elif ask.kind.startswith("place-"):
+                place_step(*place_answer(ask, text), ask.plan)
             else:
                 job = submit(ask, text, session, env)
                 if job is not None:
@@ -2364,9 +2719,11 @@ def ui(screen, session, worker, lock):
             # A typed name: start its scratch session (the bind kept the
             # keyboard here while @sidebar_input was set). One spawn at a time.
             follow_at = None
-            if SHELL:
-                toast, toast_until = shell_refusal()
-            elif spawning is None:
+            if SHELL and asking is None:
+                # a scratch session by that name, on a machine (issue #1778)
+                nxt, said = place_start("scratch", rows, selected or window, name=line.text.strip())
+                place_step(nxt, said, False, None)
+            elif spawning is None and not SHELL:
                 toast = ""
                 spawning = spawn_scratch(line.text.strip(), env,
                                          selection_repo(session, selected or window, env))
@@ -2417,9 +2774,10 @@ def ui(screen, session, worker, lock):
             # just before must not fire after it and switch away from the window
             # the spawn made current.
             follow_at = None
-            if SHELL:
-                toast, toast_until = shell_refusal()
-            elif asking is None and spawning is None:
+            if SHELL and asking is None:
+                # new: repo, then the issue, then 「开在哪」 (issue #1778)
+                place_step(*place_start("new", rows, selected or window), False, None)
+            elif asking is None and spawning is None and not SHELL:
                 # The title on the input line (issue #1620; it was a popup) —
                 # whatever is typed already starts it.
                 asking = ask_new(session, env, selection_repo(session, selected or window, env))
@@ -2429,9 +2787,11 @@ def ui(screen, session, worker, lock):
             # ⌃o (`restore`; its ⌥o fallback is rewritten to ⌃o by the bind). The
             # restored window becomes current; the hook moves this view there.
             follow_at = None
-            if SHELL:
-                toast, toast_until = shell_refusal()
-            elif view == "live":
+            if SHELL and asking is None:
+                # restore: repo, then the key, then 「开在哪」 (issue #1778) — the
+                # landed list is the machines' ledger, not this computer's
+                place_step(*place_start("restore", rows, selected or window), False, None)
+            elif view == "live" and not SHELL:
                 # The landed list, in place — ⌃t's (issue #1620: the restore
                 # popup was the same list a second time).
                 curses.ungetch(20)
@@ -2441,8 +2801,13 @@ def ui(screen, session, worker, lock):
             # unnamed (a typed name, if any, names it), its repo the highlighted
             # row's. It becomes current like a typed ↵'s; a refusal toasts.
             follow_at = None
-            if SHELL:
-                toast, toast_until = shell_refusal()
+            if SHELL and asking is None:
+                # a scratch session, unnamed unless a name is typed: repo, then
+                # 「开在哪」 (issue #1778)
+                anchor = window if not selected or selected.startswith("landed:") else selected
+                place_step(*place_start("scratch", rows, anchor, name=line.text.strip()), False, None)
+            elif SHELL:
+                pass
             elif spawning is None and asking is not None and asking.kind == "new":
                 # ⌃s on a new task's title: a scratch session by that name
                 # instead, there (its repo, its machine) — the popup's ⌃s (#1541).
@@ -2533,8 +2898,11 @@ def ui(screen, session, worker, lock):
                     follow_at = None
                     if buttons & curses.BUTTON1_CLICKED:
                         nxt = open_tap(session, action, hit, env)
-                        if nxt == "refused":
-                            toast, toast_until = shell_refusal()
+                        if nxt == "refused" and asking is None:
+                            # a heading's second tap: new, its repo pinned (#1778)
+                            place_step(*place_start("new", rows, hit, pin=True), False, None)
+                        elif nxt == "refused":
+                            pass
                         elif nxt is not None and asking is None and spawning is None:
                             asking = nxt
                             mark_input(pane, "1")
@@ -2573,8 +2941,10 @@ def ui(screen, session, worker, lock):
                     refresh_at = 0
                 elif armed is not None and hit == armed:
                     nxt = open_tap(session, "new" if armed.startswith("hdr:") else "menu", armed, env)
-                    if nxt == "refused":
-                        toast, toast_until = shell_refusal()
+                    if nxt == "refused" and asking is None:
+                        place_step(*place_start("new", rows, armed, pin=True), False, None)
+                    elif nxt == "refused":
+                        pass
                     elif nxt is not None and asking is None and spawning is None:
                         asking = nxt
                         mark_input(pane, "1")

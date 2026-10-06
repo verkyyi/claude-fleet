@@ -869,8 +869,9 @@ EOF
 # Written on the same round as the sessions, read by bin/fleet-status-lib.sh (the
 # bar, C4's 入口 chip, C5's shell) — never fetched on a render path.
 #   $G/hub_nodes   #ts<US><epoch>, then one line per machine the hub shows:
-#     node<US>online|lost<US>load1<US>ncpu<US>mem_pct<US>sessions<US>fleet_version<US>age<US>mem_used_mb<US>mem_total_mb<US>ver_state
-#     (sessions `?` when the hub could not read a fleet there — #1465)
+#     node<US>online|lost<US>load1<US>ncpu<US>mem_pct<US>sessions<US>fleet_version<US>age<US>mem_used_mb<US>mem_total_mb<US>ver_state<US>place<US>hostname
+#     (sessions `?` when the hub could not read a fleet there — #1465; place is
+#     `coord` / `maint` / '' — what the sidebar's 「开在哪」 greys, issue #1778)
 #     (/v1/nodes `machines`: one load per machine; fleet_version is its newest
 #     login's; age is seconds since its last heartbeat when written; ver_state
 #     is that version's word against the stable mark — issue #644, below)
@@ -1046,10 +1047,14 @@ for m in machines:
     used = max(total - free, 0)
     hb = epoch(m.get("last_heartbeat"))
     ver = version.get(h, (0, ""))[1]
+    # 12th: what may be placed there (issue #1778) — `coord` when every login
+    # only coordinates (#1719), `maint` while flagged 维护中 (#1427), else '';
+    # 13th: the hostname, which the hub resolves whatever this login calls it.
+    word = "coord" if m.get("compute_off") else "maint" if m.get("status") == "maintenance" else ""
     lines.append("\x1f".join(clean(v) for v in (
         label(h), "online" if m.get("status") == "online" else "lost", "%.2f" % load1, ncpu,
         used * 100 // total if total else "", sess, ver,
-        max(now - hb, 0) if hb else "", used // 1048576, total // 1048576, vstate(ver))) + "\n")
+        max(now - hb, 0) if hb else "", used // 1048576, total // 1048576, vstate(ver), word, h)) + "\n")
 fd, tmp = tempfile.mkstemp(dir=os.path.dirname(out), prefix=".hubnodes.")
 with os.fdopen(fd, "w", encoding="utf-8") as f:
     f.write("".join(lines))
