@@ -134,8 +134,12 @@ async function pollOnce($: EngineInterface): Promise<void> {
 
 /** Start-up work of every feature, run once the gate is open. */
 async function onReady($: EngineInterface): Promise<void> {
-  // The fleet tools (tools.ts serves them): registered before the first prompt.
-  for (const spec of TOOL_SPECS) {
+  // The fleet tools (tools.ts serves them): registered before the first prompt —
+  // unless the launcher mounted the fleet tool service (bin/fleet-mcp.py, issue
+  // #1807), which owns the `fleet` name and serves the same three (and more). The
+  // mod's copy stays one version as the fallback for a session without it.
+  const served = (await $.env.get('FLEET_MCP_SERVER')) === '1'
+  for (const spec of served ? [] : TOOL_SPECS) {
     try {
       await $.tool.register(spec)
     } catch {

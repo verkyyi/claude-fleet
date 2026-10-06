@@ -873,17 +873,18 @@ pays that 36 times.
 
 The fleet ships a minimal worker set, **`conf/mcp-worker.json`**, installed with
 `conf/` and kept current by `/fleet-sync-install` like every other tracked file.
-Today it contains only the fleet-peer bridge, which gives workers `list_agents`
-and `send_message` without loading unrelated MCP servers:
+It contains only the fleet's own tool service, `fleet` (`bin/fleet-mcp.py`,
+issue #1807 — spec in [`FLEET-MCP.md`](FLEET-MCP.md)), which every Claude and Codex
+session mounts whatever this key says (`FLEET_MCP=0` is the off switch):
 
 ```json
 {
   "mcpServers": {
-    "fleet-peer": {
+    "fleet": {
       "command": "bash",
       "args": [
-        "-lc",
-        "exec python3 \"$HOME/.claude/fleet/bin/fleet-peer-mcp.py\""
+        "-c",
+        "exec python3 \"${FLEET_MCP_BIN:-$HOME/.claude/fleet/bin}/fleet-mcp.py\""
       ]
     }
   }
@@ -898,7 +899,7 @@ FLEET_MCP_CONFIG="$HOME/.claude/fleet/conf/mcp-worker.json"
 ```
 
 `bin/fleet-claude.sh` then launches with `--strict-mcp-config
---mcp-config=<file>`: only fleet-peer loads, and the remote connectors are dropped
+--mcp-config=<file>`: only the `fleet` server loads, and the remote connectors are dropped
 too. Codex workers inherit the same value unless `FLEET_CODEX_MCP_CONFIG` is set;
 the Codex launcher disables every other configured server plus apps/connectors
 (`bin/fleet-codex-policy.py`).

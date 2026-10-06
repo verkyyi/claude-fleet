@@ -23,7 +23,7 @@ function ran(exitCode: number, stdout = '', stderr = ''): ProcessRunResult {
   return { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false }
 }
 
-function engine(on: On, scripts: Record<string, ProcessRunResult> = {}) {
+function engine(on: On, scripts: Record<string, ProcessRunResult> = {}, env: Record<string, string> = {}) {
   const runs: string[][] = []
   on('session.version', () => ({ value: { version: SUPPORTED.min, base: SUPPORTED.min } }))
   on('process.run', (_$, e) => {
@@ -34,7 +34,7 @@ function engine(on: On, scripts: Record<string, ProcessRunResult> = {}) {
     return { value: scripts[name] ?? ran(0) }
   })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
-  mock.env(on, { TMUX_PANE: '%7' })
+  mock.env(on, { TMUX_PANE: '%7', ...env })
   mock.clock(on, { now: 1_000_000_000_000 })
   /** The script runs only — not tmux, not the repo lookup. */
   const scriptRuns = () =>
@@ -78,6 +78,17 @@ test('the three tools are registered at session.start', async ($, on) => {
   engine(on)
   await $.session.start(START)
   expect(names).toEqual(['fleet_status', 'fleet_spawn', 'fleet_await'])
+})
+
+test('the fleet tool service mounted (FLEET_MCP_SERVER=1, #1807): the mod registers none of its own', async ($, on) => {
+  const names: string[] = []
+  on('tool.register', (_$, e) => {
+    names.push(e.name)
+    return { value: { tool: `mcp__fleet__${e.name}` } }
+  })
+  engine(on, {}, { FLEET_MCP_SERVER: '1' })
+  await $.session.start(START)
+  expect(names).toEqual([])
 })
 
 test('bad arguments are refused with the reason, and nothing runs', async ($, on) => {

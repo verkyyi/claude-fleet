@@ -400,5 +400,30 @@ grep -q "not trusted" "$WORK/err" && fail "H no codex config at all → skip the
 printf '%s\n' "$before" > "$CODEX_HOME/config.toml"
 ok "H untrusted base checkout → pane note + needs stamp, codex still runs, config never written; trusted → silent"
 
+# ============================================================================
+# I. the fleet tool service (issue #1807): Codex mounts the same `fleet` server
+# ============================================================================
+# Every case above ran with no conf/mcp-worker.json / fleet-mcp.py beside bin/,
+# so its argv is byte for byte what it was. With them, a Codex launch carries
+# `-c mcp_servers.fleet={…}` — derived from that one file, with the env Codex
+# withholds from a server — and the Claude launch the matching --mcp-config.
+cp "$ROOT/conf/mcp-worker.json" "$WORK/install/conf/mcp-worker.json"
+ln -s "$BIN/fleet-mcp.py" "$IBIN/fleet-mcp.py"
+printf 'FLEET_AGENT="codex"\n' > "$WORK/conf/fleets/f1/conf"
+run '/fleet-claim'
+[ "$(ran)" = codex ] || fail "I codex must run" "$(cat "$WORK/err")"
+m=$(argv1l | grep '^mcp_servers\.fleet=' || true)
+case "$m" in
+  'mcp_servers.fleet={command="bash",args=["-c",'*'fleet-mcp.py'*'env_vars=["TMUX","TMUX_PANE",'*'tool_timeout_sec='*'}') : ;;
+  *) fail "I a Codex launch did not mount the fleet tool service" "$(argv1l)" ;;
+esac
+case "$(last)" in *fleet-claim) : ;; *) fail "I the seed prompt is no longer last" "$(argv1l)" ;; esac
+( export FLEET_MCP=0; run '/fleet-claim' )
+argv1l | grep '^mcp_servers\.fleet=' >/dev/null && fail "I FLEET_MCP=0 still mounted it" "$(argv1l)"
+: > "$WORK/conf/fleets/f1/conf"
+run '/fleet-claim'
+[ "$(ran)" = claude ] && hasprefix '--mcp-config=.*/conf/mcp-worker\.json$' || fail "I the Claude launch lacks the same server" "$(argv1l)"
+ok "I Codex: -c mcp_servers.fleet (from conf/mcp-worker.json, TMUX env forwarded); Claude: --mcp-config of that file; FLEET_MCP=0 off"
+
 printf '\nselftest OK: %s assertions passed (FLEET_AGENT / fleet-codex.sh, issue #547)\n' "$pass"
 exit 0

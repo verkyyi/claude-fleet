@@ -152,14 +152,14 @@ ok "a file path passes through verbatim, in the =form (the CLI takes either valu
 # live install IS a checkout that sync fast-forwards.
 WORKER_MCP="$BIN/../conf/mcp-worker.json"
 [ -f "$WORKER_MCP" ] || fail "conf/mcp-worker.json is missing — the recommended FLEET_MCP_CONFIG target"
-python3 - "$WORKER_MCP" <<'PY' || fail "conf/mcp-worker.json does not contain only the fleet-peer server"
+python3 - "$WORKER_MCP" <<'PY' || fail "conf/mcp-worker.json does not contain only the fleet tool service"
 import json, sys
 d = json.load(open(sys.argv[1]))
 assert isinstance(d, dict) and set(d) == {"mcpServers"}, d
 servers = d["mcpServers"]
-assert set(servers) == {"fleet-peer"}, servers
-server = servers["fleet-peer"]
-assert server["command"] == "bash" and server["args"][:2] == ["-lc", 'exec python3 "$HOME/.claude/fleet/bin/fleet-peer-mcp.py"'], server
+assert set(servers) == {"fleet"}, servers                     # issue #1807: the one tool service
+server = servers["fleet"]
+assert server["command"] == "bash" and server["args"] == ["-c", 'exec python3 "${FLEET_MCP_BIN:-$HOME/.claude/fleet/bin}/fleet-mcp.py"'], server
 PY
 if git -C "$BIN/.." rev-parse --git-dir >/dev/null 2>&1; then
   git -C "$BIN/.." ls-files --error-unmatch conf/mcp-worker.json >/dev/null 2>&1 \
@@ -171,7 +171,7 @@ has "$argv" "--strict-mcp-config" || fail "FLEET_MCP_CONFIG=conf/mcp-worker.json
 has "$argv" "--mcp-config=$WORKER_MCP" || fail "conf/mcp-worker.json was not the ONLY config passed" "$argv"
 [ "$(printf '%s\n' "$argv" | grep -c -- '--mcp-config')" = 1 ] || fail "more than one --mcp-config alongside mcp-worker.json" "$argv"
 has "$argv" "/fleet-claim" || fail "the seed prompt was swallowed with mcp-worker.json" "$argv"
-ok "conf/mcp-worker.json ships (tracked, fleet-peer only) and FLEET_MCP_CONFIG→it launches strict with only that file"
+ok "conf/mcp-worker.json ships (tracked, the fleet server only) and FLEET_MCP_CONFIG→it launches strict with only that file"
 
 # an explicit caller flag wins over the conf
 printf 'FLEET_MODEL="fable"\nFLEET_MCP_CONFIG="none"\n' > "$WORK/conf/fleets/f1/conf"
@@ -327,5 +327,47 @@ runt
 grep -q "not valid JSON" "$WORK/err" || fail "#563 a real pre-trust failure must be shown in the pane" "$(cat "$WORK/err")"
 [ -s "$WORK/argv" ] || fail "#563 a pre-trust failure must not block the launch (claude is the authority)"
 ok "a refused cwd is silent, a real write failure is shown — and neither blocks the launch"
+
+# --- #1807: every session mounts the fleet tool service ------------------------
+# A sandbox bin WITH conf/mcp-worker.json + fleet-mcp.py beside it (every check
+# above runs without them, so it stays byte for byte what it was). The launcher
+# adds --mcp-config=<that file> — additive, never --strict on its own — beside any
+# FLEET_MCP_CONFIG, not twice when the allowlist IS that file, never over a
+# caller's own MCP flags, never with FLEET_MCP=0; and it tells the server which
+# bin/ to run (FLEET_MCP_BIN) and the mod not to register its own copy.
+mkdir -p "$WORK/conf"
+cp "$BIN/../conf/mcp-worker.json" "$WORK/conf/mcp-worker.json"
+ln -s "$BIN/fleet-mcp.py" "$WORK/bin/fleet-mcp.py"
+MW="$(cd "$WORK/bin" && pwd)/../conf/mcp-worker.json"
+cat > "$WORK/fakebin/claude" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" > "$WORK/argv"
+printf '%s|%s\n' "\${FLEET_MCP_BIN:-}" "\${FLEET_MCP_SERVER:-}" > "$WORK/mcpenv"
+exit 0
+EOF
+chmod +x "$WORK/fakebin/claude"
+printf 'FLEET_MODEL="fable"\n' > "$WORK/conf/fleets/f1/conf"
+argv="$(run /fleet-claim)"
+has "$argv" "--mcp-config=$MW" || fail "#1807 the default launch did not mount conf/mcp-worker.json" "$argv"
+case "$argv" in *--strict-mcp-config*) fail "#1807 the mount alone made the launch strict" "$argv" ;; esac
+has "$argv" "/fleet-claim" || fail "#1807 the seed prompt was swallowed by the mount" "$argv"
+[ "$(cat "$WORK/mcpenv")" = "$(cd "$WORK/bin" && pwd)|1" ] || fail "#1807 FLEET_MCP_BIN / FLEET_MCP_SERVER not exported" "$(cat "$WORK/mcpenv")"
+ok "#1807 default: --mcp-config=conf/mcp-worker.json (additive, =form, seed intact), FLEET_MCP_BIN + FLEET_MCP_SERVER set"
+
+printf 'FLEET_MODEL="fable"\nFLEET_MCP_CONFIG="none"\n' > "$WORK/conf/fleets/f1/conf"
+argv="$(run)"
+has "$argv" "--strict-mcp-config" && has "$argv" "--mcp-config=$MW" || fail "#1807 FLEET_MCP_CONFIG=none dropped the fleet server" "$argv"
+printf 'FLEET_MODEL="fable"\nFLEET_MCP_CONFIG="%s"\n' "$MW" > "$WORK/conf/fleets/f1/conf"
+argv="$(run)"
+[ "$(printf '%s\n' "$argv" | grep -o -- '--mcp-config' | wc -l | tr -d ' ')" = 1 ] || fail "#1807 the allowlist IS the file, yet it was mounted twice" "$argv"
+ok "#1807 beside an allowlist (none too) it rides along; an allowlist that IS the file is not mounted twice"
+
+printf 'FLEET_MODEL="fable"\n' > "$WORK/conf/fleets/f1/conf"
+argv="$(run --mcp-config "$WORK/other.json")"
+case "$argv" in *"--mcp-config=$MW"*) fail "#1807 mounted over a caller's own --mcp-config" "$argv" ;; esac
+argv="$( (export FLEET_MCP=0; run) )"
+case "$argv" in *--mcp-config*) fail "#1807 FLEET_MCP=0 still mounted it" "$argv" ;; esac
+[ "$(cat "$WORK/mcpenv")" = "|" ] || fail "#1807 FLEET_MCP=0 still exported the mount env" "$(cat "$WORK/mcpenv")"
+ok "#1807 a caller's own MCP flag or FLEET_MCP=0: nothing mounted, nothing exported"
 
 printf 'selftest OK: %s checks — the launcher reads the per-fleet conf, honours FLEET_MCP_CONFIG, and pre-trusts the checkout (issues #472, #473, #476, #563)\n' "$pass"

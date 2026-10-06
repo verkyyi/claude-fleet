@@ -77,7 +77,7 @@ Do not install from memory: read the doc and work from it.
   answers — a closed scratch's number is recycled there, and before this a
   child's report "found" its gone parent in the pool; a stamped `@worktree` is
   never second-guessed by the pane cwd. `fleet-await.sh`, `fleet-peer-send.sh`,
-  `fleet-peer-mcp.py`, the children digest, the hub relay and report-parent all
+  `fleet-mcp.py`, the children digest, the hub relay and report-parent all
   go through it; never add a bare `@issue` / window-name scan beside it. A
   `<sess>:<idx>` position and a bare window NAME are not addresses:
   `fleet-peer-send.sh`, `fleet-answer.sh`, `fleet-permission.sh` refuse them
