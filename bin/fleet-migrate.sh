@@ -50,6 +50,14 @@
 #                             FLEET_MODEL_FALLBACK). Rides ahead of --resume so the
 #                             launcher takes it as the caller's explicit choice; the
 #                             default nudge then names the MODEL cap, not the account.
+#         --cfg-stale         reopen the named window(s) onto the CURRENT configuration
+#                             (issue #1783): the same close + resume, on the active
+#                             account, exempt from "already on it" like --model —
+#                             but only while fleet_cfg_restart_why still says yes
+#                             (stale @agent_cfg, `done` and idle, no /loop round, no
+#                             Bash-tool job), asked again right before the /exit; a
+#                             reopened session leaves a `reason=cfg-stale` row in
+#                             /fleet-history. fleet-cfg-restart.sh is the caller.
 #         --nudge <text>      first prompt of the resumed session (default: the
 #                             interrupted-turn text for a `working` window; none if idle)
 #         --dry-run           print the plan, touch nothing
@@ -365,7 +373,12 @@ migrate_one_body() {
   if ! migrate_eligible "$name" "$(TM display-message -p -t "$wid" '#{@hub}' 2>/dev/null)" "$raw" "$cwd" "$wmain" "$sid"; then
     say "  – $name ($wid): not eligible (panel/hub/main-cwd) — skipped"; skipped=$((skipped+1)); return 0
   fi
-  if migrate_noop "$label" "$ACTIVE" "$MODEL" "$ACTIVE_BENCHED"; then
+  # --cfg-stale (issue #1783): the one judge, asked again NOW — the pick was a
+  # tick ago, and a session that has started a turn since is never interrupted.
+  if [ "$CFG" = 1 ]; then
+    local cwhy; cwhy=$(fleet_cfg_restart_why "$SESS" "$wid")       || { say "  – $name ($wid): not reopened for its configuration — ${cwhy:-?}"; skipped=$((skipped+1)); return 0; }
+  fi
+  if [ "$CFG" != 1 ] && migrate_noop "$label" "$ACTIVE" "$MODEL" "$ACTIVE_BENCHED"; then
     if [ "$label" = "$ACTIVE" ]; then say "  – $name ($wid): already on $label — skipped"
     else say "  – $name ($wid): nowhere to move (${label:-ambient login} → $ACTIVE, benched too) — skipped"; fi
     skipped=$((skipped+1)); return 0
@@ -588,6 +601,12 @@ migrate_one_body() {
   else
     say "  ✓ $name ($wid → $nw): ${label:-?} → ${nl:-?}${MODEL:+ on $MODEL} (pid $ncp, session ${sid%%-*}…)"
   fi
+  # A configuration reopen leaves its row in /fleet-history (issue #1783): the
+  # same transcript, `reason=cfg-stale`, so "was this session restarted onto the
+  # new configuration?" has an answer.
+  if [ "$CFG" = 1 ]; then
+    bash "$BIN/fleet-history.sh" resumed --session-id "$sid" --session "$SESS" --reason cfg-stale       --key "$(fleet_window_okey "$SESS" "$nw" 2>/dev/null)" --worktree "${wt:-$cwd}" --title "$name"       ${wrepo:+--repo "$wrepo"} >/dev/null 2>&1 || :
+  fi
   moved=$((moved+1)); note "$name"
   return 0
 }
@@ -597,7 +616,7 @@ migrate_one_body() {
 # Sourced (fleet-migrate-selftest.sh pins the pure matrices) → define only; a
 # direct run dispatches. Same guard idiom as fleet-account.sh.
 migrate_main() {
-  MODE=""; ACCOUNT=""; TARGET_ACCOUNT=""; NUDGE=""; NUDGE_SET=0; DRY=0; TOAST=0; SESS=""; MODEL=""; WIDS=(); FORCE_BG=0; MAX=0; FORCE_SELF=0
+  MODE=""; ACCOUNT=""; TARGET_ACCOUNT=""; NUDGE=""; NUDGE_SET=0; DRY=0; TOAST=0; SESS=""; MODEL=""; WIDS=(); FORCE_BG=0; MAX=0; FORCE_SELF=0; CFG=0
   local pinned_target='' quota_request='' pinned_loop='' verified=0
   FLEET_MIGRATION_LOCKED=''
   MIGRATE_TMP=''
@@ -607,6 +626,7 @@ migrate_main() {
       --limited|--idle|--all|--stuck) MODE="${1#--}"; shift ;;
       --force-bg) FORCE_BG=1; shift ;;
       --force-self) FORCE_SELF=1; shift ;;
+      --cfg-stale) CFG=1; shift ;;
       --account) MODE=account; ACCOUNT="${2:-}"; shift 2 ;;
       --account=*) MODE=account; ACCOUNT="${1#--account=}"; shift ;;
       --from) ACCOUNT="${2:-}"; [ -n "$ACCOUNT" ] || { echo 'fleet-migrate: --from needs a label' >&2; return 2; }; shift 2 ;;
@@ -629,12 +649,12 @@ migrate_main() {
       --alert) TOAST=2; shift ;;
       whoami) MODE=whoami; shift ;;
       --verified) verified=1; shift ;;
-      -h|--help) sed -n '2,63p' "$0"; return 0 ;;
+      -h|--help) sed -n '2,71p' "$0"; return 0 ;;
       --*) echo "fleet-migrate: unknown option '$1'" >&2; return 2 ;;
       *) WIDS+=("$1"); shift ;;
     esac
   done
-  [ -n "$MODE" ] || [ "${#WIDS[@]}" -gt 0 ] || { sed -n '30,63p' "$0" >&2; return 2; }
+  [ -n "$MODE" ] || [ "${#WIDS[@]}" -gt 0 ] || { sed -n '30,71p' "$0" >&2; return 2; }
   [ "$MODE" = account ] && [ -z "$ACCOUNT" ] && { echo "fleet-migrate: --account needs a label" >&2; return 2; }
   case "$MODE" in idle|all|account|"") ;; *) [ -z "$ACCOUNT" ] || { echo "fleet-migrate: --from only narrows --idle / --all" >&2; return 2; } ;; esac
   if [ -n "$TARGET_ACCOUNT" ]; then
@@ -828,7 +848,9 @@ migrate_main() {
   done
   LAST_SKIP="${LAST_SAY:-}"; LAST_SKIP="${LAST_SKIP#*: }"
   say "fleet-migrate: moved $moved, skipped $skipped$([ "$detached" = 0 ] || printf ', detached %s' "$detached")"
-  if [ "$TOAST" != 0 ] && [ "$moved" -gt 0 ]; then
+  if [ "$TOAST" != 0 ] && [ "$moved" -gt 0 ] && [ "$CFG" = 1 ]; then
+    migrate_report migrate-moved "fleet: 已把 $moved 个配置旧的会话重开到当前配置 · reopened $moved session$([ "$moved" = 1 ] || printf s) on the current configuration ($REPORT)"
+  elif [ "$TOAST" != 0 ] && [ "$moved" -gt 0 ]; then
     migrate_report migrate-moved "fleet: moved $moved session$([ "$moved" = 1 ] || printf s) onto ${ACTIVE:-the active account} ($REPORT)"
   elif [ "$TOAST" != 0 ] && [ "$skipped" -gt 0 ]; then
     # The dash key runs this detached (#873): a move that did not happen must still

@@ -863,13 +863,18 @@ def row_text(marker, glyph, tree, name, badge, width, info=""):
     return text
 
 
-def row_layout(marker, glyph, tree, name, badge, width, info="", node=""):
+def row_layout(marker, glyph, tree, name, badge, width, info="", node="", cfg=""):
     """A session row in `width` cells with its machine's @ mark (issue #1780):
     (text, tag) — `row_text` in what the mark leaves, the mark (`fit_tag`) to
-    paint at the row's last cells. No mark: the row is exactly `row_text`."""
+    paint at the row's last cells. No mark: the row is exactly `row_text`.
+    A stale configuration (`cfg` == "stale", issue #1783) puts 配置旧 in front of
+    the mark, one space between — `cfg_part(tag)` is that word, painted yellow."""
     right = row_right(badge, info)
-    tag = fit_tag(node, width - width_of(row_left(marker, glyph, tree, ""))
-                  - (width_of(right) + 1 if right else 0))
+    room = width - width_of(row_left(marker, glyph, tree, "")) - (width_of(right) + 1 if right else 0)
+    tag = fit_tag(node, room)
+    ctag = fit_cfg_tag(cfg, room - (width_of(tag) + 1 if tag else 0))
+    if ctag:
+        tag = ctag + (" " + tag if tag else "")
     cut = width_of(tag) + 1 if tag else 0
     return row_text(marker, glyph, tree, name, badge, width - cut, info), tag
 
@@ -883,7 +888,9 @@ def row_need(row, info=False):
     need = width_of(row_left(" ", glyph, tree, name)) + 1
     right = row_right(badge, info_text(row) if info else "")
     need += width_of(right) + 1 if right else 0
-    return need + tag_need(row[8] if len(row) > 8 else "")   # the @ mark (#1780)
+    need += tag_need(row[8] if len(row) > 8 else "")   # the @ mark (#1780)
+    ctag = cfg_tag(row[12] if len(row) > 12 else "")    # 配置旧 (#1783)
+    return need + (width_of(ctag) + 1 if ctag else 0)
 
 
 def alias_of(name):
@@ -951,6 +958,36 @@ def fit_tag(node, room):
     if room - (width_of(tag) + 1) < NAME_MIN:
         tag = machine_tag(node, narrow=True)
     return tag if room - (width_of(tag) + 1) > 0 else ""
+
+
+def cfg_tag(cfg, narrow=False):
+    """The 配置旧 word a row whose configuration is stale carries left of its @
+    mark (issue #1783) — `旧` when narrow; "" for `ok` / unknown (empty)."""
+    if cfg != "stale":
+        return ""
+    return tr("sidebar_cfg_stale_narrow" if narrow else "sidebar_cfg_stale")
+
+
+def fit_cfg_tag(cfg, room):
+    """配置旧 for a row with `room` cells left beside the @ mark: whole while the
+    name keeps NAME_MIN cells, else the narrow word; "" when even that leaves no
+    name — the same rule as fit_tag, and the @ mark is fitted first."""
+    tag = cfg_tag(cfg)
+    if not tag:
+        return ""
+    if room - (width_of(tag) + 1) < NAME_MIN:
+        tag = cfg_tag(cfg, narrow=True)
+    return tag if room - (width_of(tag) + 1) > 0 else ""
+
+
+def cfg_part(tag, cfg):
+    """The leading 配置旧 (or its narrow word) of a row_layout tag, else ""."""
+    if cfg != "stale" or not tag:
+        return ""
+    for word in (cfg_tag(cfg), cfg_tag(cfg, narrow=True)):
+        if tag == word or tag.startswith(word + " "):
+            return word
+    return ""
 
 
 def auto_width(rows, cols, base, top, info=False):
@@ -1519,9 +1556,9 @@ def collect_rows(proc):
     return [row_fields(line) for line in text.split("\n") if line.count(US) >= 4]
 
 
-# wid state glyph name tree badge depth detail node issue pr ctx (issues #1328,
-# #1475, #1532)
-ROW_FIELDS = 12
+# wid state glyph name tree badge depth detail node issue pr ctx cfg (issues
+# #1328, #1475, #1532, #1783 — cfg is `stale` / `ok`, absent when unknown)
+ROW_FIELDS = 13
 
 
 def row_fields(line):
@@ -1679,7 +1716,8 @@ def xterm256(hexcolor):
 # comes from A_DIM, see `dim_attr`).
 PALETTE_BASIC = {"PAL_FG": -1, "PAL_DIM": -1, "PAL_SEL": curses.COLOR_BLUE,
                  "PAL_CYAN": curses.COLOR_CYAN, "PAL_RED": curses.COLOR_RED,
-                 "PAL_GREEN": curses.COLOR_GREEN, "PAL_MAGENTA": curses.COLOR_MAGENTA}
+                 "PAL_GREEN": curses.COLOR_GREEN, "PAL_MAGENTA": curses.COLOR_MAGENTA,
+                 "PAL_YELLOW": curses.COLOR_YELLOW}
 
 # The sidebar's colour pairs (issue #1622): a row's TEXT is one colour (PAL_FG,
 # or PAL_DIM for a dim one) and only its state glyph carries the state's colour
@@ -1693,10 +1731,13 @@ PAIR_SEL, PAIR_HERE, PAIR_TOAST, PAIR_FG, PAIR_DIM, SEL_GLYPH = 5, 6, 7, 8, 9, 1
 # The @ mark (issue #1780): `@本机` magenta, any other machine's dim — on the
 # raised row's ground too (PAIR_HERE + SEL_GLYPH, PAIR_DIM_SEL).
 PAIR_DIM_SEL = 17
+# 配置旧 (issue #1783): yellow, on the raised row's ground too (PAIR_STALE + SEL_GLYPH).
+PAIR_STALE = 18
 PAIRS = {PAIR_SEL: ("PAL_FG", "PAL_SEL"), PAIR_TOAST: ("PAL_RED", None),
          PAIR_FG: ("PAL_FG", None), PAIR_DIM: ("PAL_DIM", None),
          PAIR_HERE: ("PAL_MAGENTA", None), PAIR_HERE + SEL_GLYPH: ("PAL_MAGENTA", "PAL_SEL"),
-         PAIR_DIM_SEL: ("PAL_DIM", "PAL_SEL")}
+         PAIR_DIM_SEL: ("PAL_DIM", "PAL_SEL"),
+         PAIR_STALE: ("PAL_YELLOW", None), PAIR_STALE + SEL_GLYPH: ("PAL_YELLOW", "PAL_SEL")}
 for _state, _pair in STATE_PAIR.items():
     PAIRS[_pair] = (STATE_COLOR[_state], None)
     PAIRS[_pair + SEL_GLYPH] = (STATE_COLOR[_state], "PAL_SEL")
@@ -2080,8 +2121,10 @@ def ui(screen, session, worker, lock):
             # NAME_MIN of them; narrower, the mark is `@` + its first letter. The
             # badge keeps its place left of it.
             w = max(0, width - 1)
+            # A stale configuration (issue #1783): a yellow 配置旧 left of the mark.
+            cfg = row[12] if len(row) > 12 else ""
             text, tag = row_layout(marker, glyph, tree, label, badge, w,
-                                   info_text(row) if wide else "", node)
+                                   info_text(row) if wide else "", node, cfg)
             put(y, text, attr, fill=raised)
             # The state glyph, painted over its own cell in the state's colour —
             # where row_left put it, and only when the row is wide enough for it.
@@ -2098,6 +2141,10 @@ def ui(screen, session, worker, lock):
                     tag_attr |= curses.A_DIM
                 try:
                     screen.addstr(y, w - width_of(tag), tag, tag_attr)
+                    ctag = cfg_part(tag, cfg)
+                    if ctag:
+                        screen.addstr(y, w - width_of(tag), ctag, curses.color_pair(
+                            PAIR_STALE + SEL_GLYPH if raised else PAIR_STALE) | curses.A_BOLD)
                 except curses.error:
                     pass
         # The selected row's whole name takes the `?` row while the keyboard is

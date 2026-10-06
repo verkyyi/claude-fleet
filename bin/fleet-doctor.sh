@@ -2157,6 +2157,12 @@ if [ -f "$_at" ] && command -v python3 >/dev/null 2>&1; then
   _cout="$(FLEET_CONF_DIR="$conf_dir" python3 "$_at" check --root "$(dirname "$0")/.." \
              --claude-config "${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json" --claude-settings "$settings" \
              --override "$conf_dir/agent-overrides.json" --lock "${_alock:-warn}" $_amodf 2>&1)"; _crc=$?
+  # …and how many open sessions still run an OLDER configuration than that one
+  # (issue #1783): marked 配置旧 on the sidebar, reopened once idle
+  # (fleet-cfg-restart.sh, FLEET_CFG_RESTART). Never a WARN on its own — right
+  # after a sync every session is stale until its idle reopen.
+  _cst=$(FLEET_CONF_DIR="$conf_dir" bash "$(dirname "$0")/fleet-cfg-restart.sh" --count 2>/dev/null)
+  case "$_cst" in ''|*[!0-9]*|0) ;; *) _cout="$_cout · $_cst 个会话配置旧 / $_cst session(s) on an old configuration" ;; esac
   case "$_crc" in
     0) pass agentcfg "${_cout#ok }" ;;
     1) warn agentcfg "$_cout (fix: drop the login's own value, or remove it from $conf_dir/agent-overrides.json — these are what fleet itself runs on)" ;;

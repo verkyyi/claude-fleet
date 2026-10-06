@@ -442,3 +442,4 @@ FLEET_CLIENT_UPDATED               env handoff: bin/fleet re-execs the switched 
 FLEET_INSTALL_NODE_UPGRADE         seam: the fleet-node-upgrade.sh an install-sync tick drives (default $ROOT/bin/…) (fleet-install-sync.sh, #1723)
 FLEET_INSTALL_NODE_SUDO_CHECK      seam: the command that says sudo -n works, so this login upgrades LaunchDaemon logins (default `sudo -n true`) (fleet-install-sync.sh, #1723)
 FLEET_NODE_UPGRADE_DIST_CMD        seam: stands in for the --dist curl — `<cmd> <os-arch> <body> <headers>` prints the HTTP code (fleet-node-upgrade.sh, #1723)
+FLEET_CFG_RESTART_MIGRATE          seam: the fleet-migrate.sh a stale-config reopen hands its window to (fleet-cfg-restart.sh, #1783)

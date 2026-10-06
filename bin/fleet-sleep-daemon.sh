@@ -21,6 +21,11 @@ fleet_timebox 15 python3 "$BIN/fleet-state-reconcile.py" --cache-dir "$(fleet_ca
 # that finished, a background job that ended, a window that stopped before #1370.
 # shellcheck disable=SC2086
 fleet_timebox 15 bash "$BIN/fleet-wait-reeval.sh" --quiet -- $sockets >/dev/null 2>&1 || :
+# A session on an OLD configuration (issue #1783) that has been idle long enough
+# is reopened onto the current one — same conversation, new window; the move
+# itself runs detached (fleet-migrate.sh --cfg-stale), so this only picks.
+# shellcheck disable=SC2086
+fleet_timebox 10 bash "$BIN/fleet-cfg-restart.sh" --quiet -- $sockets >/dev/null 2>&1 || :
 last=$(cat "$cursor" 2>/dev/null || :)
 # Rotate after the previous fleet so a slow fleet cannot starve later sockets.
 ordered=$(printf '%s\n' "$sockets" | awk -v last="$last" '

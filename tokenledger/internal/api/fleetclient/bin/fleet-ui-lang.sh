@@ -245,6 +245,10 @@ fleet_ui_t() {
     en:sidebar_rename)          printf 'rename› ' ;;
     zh:sidebar_here)            printf '本机' ;;
     en:sidebar_here)            printf 'here' ;;
+    zh:sidebar_cfg_stale)       printf '配置旧' ;;
+    en:sidebar_cfg_stale)       printf 'old cfg' ;;
+    zh:sidebar_cfg_stale_narrow) printf '旧' ;;
+    en:sidebar_cfg_stale_narrow) printf 'old' ;;
     zh:sidebar_refreshing)      printf '刷新中…' ;;
     en:sidebar_refreshing)      printf 'refreshing…' ;;
     zh:sidebar_landed_heading_fmt) printf '已落地 (%s) · ↵ 恢复' "${1:-}" ;;

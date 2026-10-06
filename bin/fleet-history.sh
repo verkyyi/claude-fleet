@@ -63,6 +63,12 @@
 #           session records afresh instead of deduping away. The SessionStart hook
 #           (matcher `resume`) runs the --stdin-json form; nothing to supersede ⇒
 #           nothing written.
+#           --reason R [--key K --worktree W --title T] (issue #1783): the fleet
+#           itself reopened the session — `fleet-migrate.sh --cfg-stale` passes
+#           `cfg-stale`. The `resumed` row is written even when the hook's own
+#           already superseded the close, with `reason=R` in its summary column —
+#           built from K/W/T when the session has no row yet — so the reopen has
+#           its own line. Like every `resumed` row, no listing shows it.
 #   list    [--repo R] [--local] [filter]  Human table, newest first (optional substring filter).
 #           Merges the rows of workers reaped on the owner's OTHER machines, from
 #           the hub (issue #1609, summary `@<machine> …`); --local skips them.
@@ -1381,8 +1387,13 @@ cmd_fold() {
 #                          model context), a note on stderr.
 cmd_resumed() {
   local sid="" repo="" sess="" quiet=0 stdin=0 src="" repos="" r ledger row now n=0
+  local why="" rkey="" rwt="" rtitle="" first=""
   while [ $# -gt 0 ]; do
     case "$1" in
+      --reason) why=$(printf '%s' "${2:-}" | tr -cd 'A-Za-z0-9._-'); shift 2;;
+      --key) rkey="${2:-}"; shift 2;;
+      --worktree) rwt="${2:-}"; shift 2;;
+      --title) rtitle="${2:-}"; shift 2;;
       --session-id) sid="${2:-}"; shift 2;;
       --repo) repo="${2:-}"; shift 2;;
       --session) sess="${2:-}"; shift 2;;
@@ -1418,23 +1429,40 @@ cmd_resumed() {
     [ -n "$r" ] || continue
     [ "$r" = '-' ] && r=''
     ledger=$(ledger_path "$r")
+    [ -n "$first" ] || first=$ledger
     [ -f "$ledger" ] || continue
     # the NEWEST row for this session, in append order — only a closed-unlanded one
     # has anything to supersede (a landed row IS the session's final word; a prior
-    # `resumed` is already in force).
+    # `resumed` is already in force). A --reason row (#1783) also follows a
+    # `resumed` one: the hook may have superseded the close first.
     row=$(awk -F'\t' -v s="$sid" '$8 == s { last = $0 } END { if (last != "") print last }' "$ledger")
     [ -n "$row" ] || continue
-    [ "$(printf '%s\n' "$row" | cut -f10)" = closed-unlanded ] || continue
-    printf '%s\n' "$row" | awk -F'\t' -v OFS='\t' -v now="$now" '{ $1 = now; $10 = "resumed"; print }' >> "$ledger" || continue
+    case "$(printf '%s\n' "$row" | cut -f10)" in
+      closed-unlanded) ;;
+      resumed) [ -n "$why" ] || continue ;;
+      *) continue ;;
+    esac
+    printf '%s\n' "$row" | awk -F'\t' -v OFS='\t' -v now="$now" -v why="$why" \
+      '{ $1 = now; $10 = "resumed"; if (why != "") $9 = "reason=" why; print }' >> "$ledger" || continue
     n=$((n + 1))
     if [ "$quiet" = 1 ]; then
       printf 'fleet-history: resumed %s → ledger %s (session %s): closed-unlanded row superseded\n' "$(key_label "$(printf '%s\n' "$row" | cut -f2)")" "$ledger" "$sid" >&2
     else
       printf 'resumed %s → ledger %s (session %s): closed-unlanded row superseded\n' "$(key_label "$(printf '%s\n' "$row" | cut -f2)")" "$ledger" "$sid"
     fi
+    [ -z "$why" ] || break                       # one reopen, one row
   done <<EOF
 $repos
 EOF
+  # A reopen of a session with no row anywhere yet (issue #1783): its own line,
+  # built from what the caller knows, in the first ledger this fleet writes.
+  if [ "$n" = 0 ] && [ -n "$why" ] && [ -n "$first" ]; then
+    case "$rkey" in *:*) rkey=${rkey#*:} ;; esac
+    case "$rkey" in issue-[0-9]*) rkey=${rkey#issue-} ;; esac
+    mkdir -p "$(dirname "$first")" 2>/dev/null
+    printf '%s\t%s\t%s\t-\t-\t%s\t-\t%s\treason=%s\tresumed\t-\n' "$now" "${rkey:--}" \
+      "$(printf '%s' "${rtitle:--}" | tr '\t\n' '  ')" "${rwt:--}" "$sid" "$why" >> "$first" && n=1
+  fi
   [ "$n" -gt 0 ] || [ "$quiet" = 1 ] || printf 'resumed: no closed-unlanded row for session %s — nothing to supersede\n' "$sid"
   return 0
 }
