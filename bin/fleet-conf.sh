@@ -2,10 +2,12 @@
 # fleet-conf.sh — this machine's ONE fleet config file (issue #1623).
 #
 #   fleet-conf.sh path                   print it ($FLEET_CONF_DIR/fleet.conf)
-#   fleet-conf.sh role [--why]           client | node | client,node — FLEET_ROLE, else inferred
+#   fleet-conf.sh host [--why]           1 | 0 — does this machine 承载 (host) sessions? FLEET_HOST, else inferred
+#   fleet-conf.sh set-host 1|0           write FLEET_HOST (creates the file; drops an old FLEET_ROLE line)
 #   fleet-conf.sh migrate [--dry-run] [--quiet]   fold the old files into it (each kept as .bak)
-#   fleet-conf.sh set-hub <url> [--role client|node]   write FLEET_HUB_URL (+ add a role)
-#   fleet-conf.sh add-role client|node   add a role to FLEET_ROLE (creates the file)
+#   fleet-conf.sh set-hub <url> [--host] write FLEET_HUB_URL (+ FLEET_HOST=1 with --host)
+#   fleet-conf.sh role [--why] · add-role client|node · set-hub … --role client|node — the
+#                                        FLEET_ROLE spellings, read for ONE more version (issue #1806)
 #
 # A machine used to spread its settings over up to five files — the install's
 # fleet.conf, $FLEET_CONF_DIR/fleet.settings (#979), fleets/<sess>/conf, the
@@ -13,7 +15,7 @@
 # conf-free mirror of bin/ so a node's settings never reached it. Now there is
 # one, in three sections:
 #
-#   [common]  FLEET_ROLE, FLEET_HUB_URL (the hub address, written ONLY here), and
+#   [common]  FLEET_HOST, FLEET_HUB_URL (the hub address, written ONLY here), and
 #             the secrets.env include — read by everything
 #   [client]  what the shell (fleet / fleet-shell.sh) needs — was shell.conf —
 #             inside an `if [ "${FLEET_SHELL:-0}" = 1 ]` guard: only the shell
@@ -37,6 +39,14 @@
 # fleet, and keeps its identity (FLEET_REPO / FLEET_MAIN / FLEET_BASE_BRANCH /
 # FLEET_SEED — fleet-up.sh's registry entry, like repos/*.conf).
 #
+# One capability key (issue #1806, EPIC #1813 C4): every machine has the fleet —
+# the part everyone has — and FLEET_HOST=1 says it also 承载 (hosts) sessions. It
+# replaces FLEET_ROLE="client|node|client,node": `node` in the old list is
+# FLEET_HOST=1, `client` is the fleet itself and needs no key. `migrate` rewrites
+# an old FLEET_ROLE line in place (an existing file too), and every reader still
+# reads FLEET_ROLE where no FLEET_HOST is written — for one version. The hub's
+# protocol keeps its own word, node (node.env, /v1/node/*): docs/TERMS.md.
+#
 # Exit 0 ok (or nothing to do), 1 failed, 2 usage.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -44,7 +54,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 FLEET_SKIP_GLOBAL_CONF=1 . "$BIN/fleet-lib.sh"
 
 die()   { echo "fleet-conf: $*" >&2; exit 1; }
-usage() { sed -n '4,8p' "$0" | sed 's/^# //' >&2; exit 2; }
+usage() { sed -n '4,10p' "$0" | sed 's/^# //' >&2; exit 2; }
 
 CD="$FLEET_CONF_DIR"
 MC="$CD/fleet.conf"
@@ -54,6 +64,7 @@ SECRET_RE='^[[:space:]]*(export[[:space:]]+)?[A-Z0-9_]*(TOKEN|SECRET|PASSWORD)='
 HUB_RE='^[[:space:]]*(export[[:space:]]+)?(CCQUOTA_HUB_URL|FLEET_HUB_URL)='
 COMMON_RE='^[[:space:]]*(export[[:space:]]+)?(FLEET_UI_LANG|FLEET_NODE_ALIASES)='
 ROLE_RE='^[[:space:]]*(export[[:space:]]+)?FLEET_ROLE='
+HOST_RE='^[[:space:]]*(export[[:space:]]+)?FLEET_HOST='
 NODE_OPEN='if [ "${FLEET_SHELL:-0}" != 1 ]; then'
 NODE_CLOSE='fi  # ---- [node] end ----'
 CLIENT_OPEN='if [ "${FLEET_SHELL:-0}" = 1 ]; then'
@@ -96,15 +107,93 @@ _role_infer() {
   printf '%s\t%s' "$r" "${WHY_C:+client: $WHY_C}${WHY_C:+${WHY_N:+ · }}${WHY_N:+node: $WHY_N}"
 }
 
+# ---- host (issue #1806) ----------------------------------------------------------
+# _host_file → FLEET_HOST as the file spells it ('' with no file / no line).
+_host_file() {
+  [ -f "$MC" ] || return 0
+  grep -E "$HOST_RE" "$MC" 2>/dev/null | tail -n1 | sed -E 's/^[^=]*=//; s/[[:space:]]+#.*$//' | tr -d "\"' "
+}
+
+# _host_of_role <roles> → 1 when the old list says this machine runs sessions.
+# `node` alone is not enough: a computer joined only to COORDINATE (issue #1719 —
+# node.env CCQUOTA_FLEET_COMPUTE=0, no fleet of its own, the install line's
+# --no-fleet join) is a node that hosts nothing — 承载 未开. A node with a fleet
+# here, or one the hub may place on (no COMPUTE line = a node from before #1719),
+# hosts.
+_host_of_role() {
+  _role_has "$1" node || { printf 0; return 0; }
+  if [ -n "$(fleet_each_conf)" ] || [ "$(_fleet_node_env_val CCQUOTA_FLEET_COMPUTE 2>/dev/null)" != 0 ]; then
+    printf 1
+  else
+    printf 0
+  fi
+}
+
+# _host_now → <1|0>\t<how>: FLEET_HOST, else the old FLEET_ROLE (one version),
+# else inferred from what the machine holds (a fleet conf / node.env = it hosts).
+_host_now() {
+  local h r ri
+  h=$(_host_file)
+  case "$h" in
+    1|0) printf '%s\tFLEET_HOST' "$h"; return 0 ;;
+    '') ;;
+    *) printf '0\tFLEET_HOST=%s 不认识，按 0' "$h"; return 0 ;;
+  esac
+  r=$(_role_file)
+  if [ -n "$r" ]; then printf '%s\tFLEET_ROLE=%s（旧键）' "$(_host_of_role "$r")" "$r"; return 0; fi
+  local why
+  ri=$(_role_infer); r=${ri%%	*}; why=''
+  case "${ri#*	}" in *node:*) why=" — ${ri#*node: }" ;; esac
+  printf '%s\tinferred%s' "$(_host_of_role "$r")" "$why"
+}
+
+# _migrate_key — an old FLEET_ROLE line becomes FLEET_HOST, in place (the line's
+# position and every other line kept). Prints what it did; nothing when there was
+# nothing to do. A file with both keeps FLEET_HOST and drops the old one.
+_migrate_key() {
+  local r h tmp
+  [ -f "$MC" ] || return 0
+  r=$(_role_file)
+  [ -n "$r" ] || grep -Eq "$ROLE_RE" "$MC" || return 0
+  h=$(_host_file)
+  if [ -n "$h" ]; then
+    _drop_role || return 1
+  else
+    h=$(_host_of_role "$r")
+    _set_common "$MC" FLEET_ROLE "FLEET_HOST=$h" || return 1
+  fi
+  printf 'FLEET_ROLE="%s" → FLEET_HOST=%s' "$r" "$h"
+}
+
+_drop_role() {
+  local tmp="$MC.tmp.$$"
+  grep -Ev "$ROLE_RE" "$MC" > "$tmp" \
+    && { chmod "$(stat -c '%a' "$MC" 2>/dev/null || stat -f '%Lp' "$MC")" "$tmp" 2>/dev/null; mv -f "$tmp" "$MC"; } \
+    || { rm -f "$tmp"; return 1; }
+}
+
+set_host() {   # $1 1|0
+  _ensure_file "$1" || die "cannot write $MC"
+  if grep -Eq "$HOST_RE" "$MC"; then
+    _set_common "$MC" FLEET_HOST "FLEET_HOST=$1" || die "cannot write $MC"
+    _drop_role || die "cannot write $MC"
+  elif grep -Eq "$ROLE_RE" "$MC"; then
+    _set_common "$MC" FLEET_ROLE "FLEET_HOST=$1" || die "cannot write $MC"
+  else
+    _set_common "$MC" FLEET_HOST "FLEET_HOST=$1" || die "cannot write $MC"
+  fi
+}
+
 # ---- editing the file -----------------------------------------------------------
-# _skeleton <role> <hub> — a fresh file: header, the three sections, nothing else.
+# _skeleton <host 1|0> <hub> — a fresh file: header, the three sections, nothing else.
 _skeleton() {
   printf "# claude-fleet — this machine's ONE config file (issue #1623). Assignments only.\n"
   printf '# Credentials never live here: node.env, hub.json (its token), secrets.env and\n'
-  printf '# ~/.ssh/fleet-cert are separate, each 0600. FLEET_ROLE says what this machine is;\n'
-  printf '# the shell (FLEET_SHELL=1) reads [common] + [client]; everything else [common] + [node].\n'
+  printf '# ~/.ssh/fleet-cert are separate, each 0600. FLEET_HOST=1: this machine also 承载\n'
+  printf '# (hosts) sessions (issue #1806); the shell (FLEET_SHELL=1) reads [common] + [client];\n'
+  printf '# everything else [common] + [node].\n'
   printf '\n# ---- [common] ----\n'
-  printf 'FLEET_ROLE="%s"\n' "$1"
+  printf 'FLEET_HOST=%s\n' "$1"
   [ -n "$2" ] && printf 'export FLEET_HUB_URL="%s"\n' "$2"
   printf '_fcs="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/secrets.env"; [ -f "$_fcs" ] && . "$_fcs"; unset _fcs\n'
   printf '\n# ---- [client] — only the shell (FLEET_SHELL=1) reads this section ----\n'
@@ -113,31 +202,35 @@ _skeleton() {
   printf '%s\n:\n%s\n' "$NODE_OPEN" "$NODE_CLOSE"
 }
 
-# _set_common <file> <KEY> <assignment-line> — replace KEY's line, else add it
-# right under the [common] header. Atomic (tmp + mv), mode kept.
+# _set_common <file> <KEY> <assignment-line> — replace KEY's line where it is,
+# else add it right under the [common] header (else at the end). Atomic (tmp +
+# mv), mode kept.
 _set_common() {
-  local f="$1" key="$2" line="$3" tmp="$1.tmp.$$"
-  awk -v key="$key" -v line="$line" '
-    BEGIN { re = "^[[:space:]]*(export[[:space:]]+)?" key "=" }
-    $0 ~ re { if (!done) print line; done = 1; next }
+  local f="$1" key="$2" line="$3" tmp="$1.tmp.$$" had=0
+  grep -Eq "^[[:space:]]*(export[[:space:]]+)?$key=" "$f" && had=1
+  awk -v key="$key" -v line="$line" -v done="$had" '
+    BEGIN { re = "^[[:space:]]*(export[[:space:]]+)?" key "="; put = 0 }
+    $0 ~ re { if (!put) print line; put = 1; next }
     { print }
-    /^# ---- \[common\] ----$/ && !done { print line; done = 1 }
+    /^# ---- \[common\] ----$/ && !done { print line; done = 1; put = 1 }
+    END { if (!done && !put) print line }
   ' "$f" > "$tmp" && { chmod "$(stat -c '%a' "$f" 2>/dev/null || stat -f '%Lp' "$f")" "$tmp" 2>/dev/null; mv -f "$tmp" "$f"; } \
     || { rm -f "$tmp"; return 1; }
 }
 
-_ensure_file() {   # $1 role to start a new file with
+_ensure_file() {   # $1 FLEET_HOST (1|0) to start a new file with
   [ -f "$MC" ] && return 0
   mkdir -p "$CD" || return 1
   ( umask 077; _skeleton "$1" '' > "$MC.tmp.$$" ) && mv -f "$MC.tmp.$$" "$MC"
 }
 
-add_role() {   # $1 client|node
-  local cur
-  _ensure_file "$1" || die "cannot write $MC"
-  cur=$(_role_file)
-  _role_has "$cur" "$1" && return 0
-  _set_common "$MC" FLEET_ROLE "FLEET_ROLE=\"$(_role_norm "$cur,$1")\"" || die "cannot write $MC"
+# add_role client|node — the old spelling (one version): node = FLEET_HOST=1;
+# client = the fleet itself, which every file has — it only makes sure there is
+# one (and turns an old FLEET_ROLE line into FLEET_HOST). Never turns hosting off.
+add_role() {
+  if [ "$1" = node ]; then set_host 1; return; fi
+  _ensure_file 0 || die "cannot write $MC"
+  _migrate_key >/dev/null || die "cannot write $MC"
 }
 
 # ---- migrate -------------------------------------------------------------------
@@ -155,17 +248,25 @@ _hub_of() {
 }
 
 # _body <file> <drop-ERE> — the file's lines minus our own fleet-up header, the
-# hub lines, the secrets, FLEET_ROLE and <drop-ERE> (if not empty).
+# hub lines, the secrets, FLEET_ROLE / FLEET_HOST and <drop-ERE> (if not empty).
 _body() {
   local ourhdr='^# (claude-fleet: fleet .* written by fleet-up\.sh|Overlays the global fleet\.conf|FLEET_\* keys \(see fleet\.conf\.example\))'
   local drop="${2:-^\$^}"
-  grep -Ev "$HUB_RE" "$1" | grep -Ev "$SECRET_RE" | grep -Ev "$ROLE_RE" | grep -Ev "$ourhdr" | grep -Ev "$drop"
+  grep -Ev "$HUB_RE" "$1" | grep -Ev "$SECRET_RE" | grep -Ev "$ROLE_RE" | grep -Ev "$HOST_RE" | grep -Ev "$ourhdr" | grep -Ev "$drop"
 }
 
 migrate() {
   local DRY="$1" QUIET="$2"
   local SET="$CD/fleet.settings" SH="$CD/shell.conf" HJ="$CD/hub.json"
   if [ -f "$MC" ]; then
+    # the one-key rename (issue #1806) runs on a file that is already one
+    local mk
+    if [ "$DRY" = 1 ]; then
+      grep -Eq "$ROLE_RE" "$MC" && { echo "fleet-conf: would rewrite FLEET_ROLE=\"$(_role_file)\" as FLEET_HOST=$(_host_of_role "$(_role_file)") in $MC"; return 0; }
+    else
+      mk=$(_migrate_key) || die "cannot rewrite FLEET_ROLE in $MC"
+      [ -n "$mk" ] && { echo "fleet-conf: $mk ($MC)"; return 0; }
+    fi
     [ "$QUIET" = 1 ] || echo "fleet-conf: already one file — $MC"
     return 0
   fi
@@ -184,6 +285,7 @@ migrate() {
     return 0
   fi
   [ -n "$role" ] || role=node     # settings with no fleet / hub sign-in: a node's
+  local host; host=$(_host_of_role "$role")
 
   # The hub address — written once. Precedence is the old read order (the fleet
   # conf over fleet.settings over the install file), then what the shell and the
@@ -215,10 +317,11 @@ except Exception: print("")' "$HJ" 2>/dev/null)
     printf '# Migrated by fleet-conf.sh %s from: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" \
       "$(printf '%s ' ${INST:+"${INST/#$HOME/~}"} ${SET:+fleet.settings} ${FC:+"${FC#$CD/}"} ${SH:+shell.conf} ${hub_json:+hub.json(url)} | sed 's/ $//; s/^$/nothing — a new file/')"
     printf '# Credentials never live here: node.env, hub.json (its token), secrets.env and\n'
-    printf '# ~/.ssh/fleet-cert are separate, each 0600. FLEET_ROLE says what this machine is;\n'
-    printf '# the shell (FLEET_SHELL=1) reads [common] + [client]; everything else [common] + [node].\n'
+    printf '# ~/.ssh/fleet-cert are separate, each 0600. FLEET_HOST=1: this machine also 承载\n'
+    printf '# (hosts) sessions (issue #1806); the shell (FLEET_SHELL=1) reads [common] + [client];\n'
+    printf '# everything else [common] + [node].\n'
     printf '\n# ---- [common] ----\n'
-    printf 'FLEET_ROLE="%s"\n' "$role"
+    printf 'FLEET_HOST=%s\n' "$host"
     if [ -n "$hub" ]; then
       printf 'export FLEET_HUB_URL="%s"\n' "$hub"
       # The node's scripts read CCQUOTA_HUB_URL; it is FLEET_HUB_URL, not a copy.
@@ -273,7 +376,7 @@ except Exception: print("")' "$HJ" 2>/dev/null)
   fi
 
   if [ "$DRY" = 1 ]; then
-    printf 'fleet-conf: would write %s (role %s):\n' "$MC" "$role"
+    printf 'fleet-conf: would write %s (FLEET_HOST=%s):\n' "$MC" "$host"
     sed 's/^/  | /' "$tmp"
     [ "$nsec" -gt 0 ] && printf 'fleet-conf: would move %s credential line(s) to %s (0600): %s\n' "$nsec" "$CD/secrets.env" \
       "$(sed -E 's/^[[:space:]]*(export[[:space:]]+)?([A-Z0-9_]+)=.*/\2/' "$stmp" | tr '\n' ' ')"
@@ -330,11 +433,11 @@ PY
     moved="$moved hub.json(url)"
   fi
   [ "$QUIET" = 1 ] || {
-    echo "fleet-conf: one file — $MC (role $role)"
+    echo "fleet-conf: one file — $MC (FLEET_HOST=$host)"
     echo "fleet-conf: folded in:${moved:- nothing}; each old file kept as .bak"
     [ "$nsec" -gt 0 ] && echo "fleet-conf: $nsec credential line(s) moved to $CD/secrets.env (0600)"
   }
-  [ "$QUIET" = 1 ] && [ -n "$moved" ] && echo "fleet-conf: migrated to $MC (role $role):$moved"
+  [ "$QUIET" = 1 ] && [ -n "$moved" ] && echo "fleet-conf: migrated to $MC (FLEET_HOST=$host):$moved"
   return 0
 }
 
@@ -342,9 +445,21 @@ PY
 cmd="${1:-}"; [ -n "$cmd" ] || usage; shift
 case "$cmd" in
   path) printf '%s\n' "$MC" ;;
-  role)
+  host)
+    hn=$(_host_now)
+    if [ "${1:-}" = --why ]; then printf '%s\n' "$hn"; else printf '%s\n' "${hn%%	*}"; fi ;;
+  set-host)
+    case "${1:-}" in 1|0) set_host "$1" ;; on) set_host 1 ;; off) set_host 0 ;; *) usage ;; esac ;;
+  role)   # the old word, one version (issue #1806): FLEET_HOST=1 reads client,node
     r=$(_role_file); how='FLEET_ROLE'
-    if [ -z "$r" ]; then ri=$(_role_infer); r=${ri%%	*}; why=${ri#*	}; how="inferred${why:+ — $why}"; fi
+    if [ -z "$r" ]; then
+      h=$(_host_file)
+      case "$h" in
+        1) r=client,node; how='FLEET_HOST=1' ;;
+        0) r=client; how='FLEET_HOST=0' ;;
+        *) ri=$(_role_infer); r=${ri%%	*}; why=${ri#*	}; how="inferred${why:+ — $why}" ;;
+      esac
+    fi
     r=$(_role_norm "$r")
     if [ "${1:-}" = --why ]; then printf '%s\t%s\n' "${r:-none}" "$how"; else printf '%s\n' "${r:-none}"; fi ;;
   migrate)
@@ -358,7 +473,10 @@ case "$cmd" in
   set-hub)
     url="${1:-}"; [ -n "$url" ] || usage; shift
     r=client
-    [ "${1:-}" = --role ] && { r="${2:-}"; case "$r" in client|node) ;; *) usage ;; esac; }
+    case "${1:-}" in
+      --host) r=node ;;
+      --role) r="${2:-}"; case "$r" in client|node) ;; *) usage ;; esac ;;
+    esac
     # a client signing in again on an older layout folds that in first
     [ -f "$MC" ] || migrate 0 1 >/dev/null
     add_role "$r"

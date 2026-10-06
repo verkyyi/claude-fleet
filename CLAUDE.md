@@ -488,8 +488,9 @@ Do not install from memory: read the doc and work from it.
   `$FLEET_CONF_DIR/agent-effective.json`; the doctor's `agents` row prints the
   version. No hub ⇒ nothing fetched, nothing written (`fleet-agent-team-selftest.sh` A).
 - **A machine has ONE fleet config file, `$FLEET_CONF_DIR/fleet.conf`** (issue
-  #1623). `FLEET_ROLE=client|node|client,node` and `FLEET_HUB_URL` (the hub's
-  address — written nowhere else) sit in `[common]`; `[client]` (only the shell,
+  #1623). `FLEET_HOST=1` (承载: this computer runs sessions — issue #1806; the old
+  `FLEET_ROLE` is rewritten by `migrate` and read one more version) and
+  `FLEET_HUB_URL` (the hub's address — written nowhere else) sit in `[common]`; `[client]` (only the shell,
   `FLEET_SHELL=1`) and `[node]` (everything but the shell) are `if` guards, so
   every reader that sources the file gets its own sections with no mirror and no
   parser. Credentials never enter it: `bin/fleet-conf.sh migrate` (run by
@@ -501,7 +502,11 @@ Do not install from memory: read the doc and work from it.
   reader still reads the old paths for ONE version (EPIC #1615 decision 11) — the
   next batch deletes them, and the shell's conf-free mirror with them. The legacy
   flat-conf scans skip `fleet.conf` / `shell.conf` (not fleets). `fleet-doctor`'s
-  `role` row; `bin/fleet-conf-selftest.sh` pins all three roles + the degenerate.
+  `能力` row (the `role` row before #1806); `bin/fleet-conf-selftest.sh` pins all
+  three kinds of computer + the degenerate. **A person reads two words, fleet and
+  承载** (issue #1806): `fleet host on|off|status` is the switch, the doctor's first
+  rows are `fleet` / `能力` / `承载`, and the hub's protocol keeps `node`
+  (docs/TERMS.md).
 - **Machine-to-machine ssh rides a five-minute hub certificate, never a
   standing key** (issue #1626). `fleet-remote-view.sh`, `fleet-node-upgrade.sh
   --host` and `fleet-move.sh` get their ssh options from `bin/fleet-peer-cert.sh

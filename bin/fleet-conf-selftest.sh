@@ -1,28 +1,37 @@
 #!/bin/bash
 # fleet-conf-selftest.sh — a machine's ONE config file (issue #1623, EPIC #1615 C8):
-# bin/fleet-conf.sh migrate / role / set-hub, the readers that now take
+# bin/fleet-conf.sh migrate / host / set-hub, the readers that now take
 # $FLEET_CONF_DIR/fleet.conf (fleet-lib.sh, fleet-shell.sh's FLEET_SHELL guard,
 # fleet_config_write.py, fleet-connect.py / fleet-login.py's hub address), and
-# fleet-doctor.sh's `role` row — on three role fixtures in a sandbox install.
+# fleet-doctor.sh's `能力` row (the `role` row before issue #1806) — on three
+# kinds of computer in a sandbox install. The one capability key is FLEET_HOST
+# (issue #1806): `node` in the old FLEET_ROLE list ⇒ 1, unless the node only
+# coordinates (node.env COMPUTE=0 and no fleet here).
 #
 #   A. degenerate   — a login that is neither client nor node: migrate writes
-#                     nothing, role says none, the doctor prints no role row;
+#                     nothing, host says 0, the doctor's 能力 row is 基础 · 承载 未开;
 #                     $FLEET_CONF_DIR/fleet.conf is never listed as a fleet
 #   B. node (m4)    — install fleet.conf (hub URL, a viewer TOKEN, CCQUOTA_FLEET,
 #                     aliases) + fleets/fleet/conf + node.env: every key resolves
 #                     byte for byte as before; the token moved to secrets.env
 #                     (0600) and is in no config; each old file kept as .bak; the
-#                     fleet conf trimmed to its identity; doctor role PASS; a
-#                     second migrate changes nothing
-#   C. client (MacBook) — hub.json {url, token} + shell.conf: role client,
+#                     fleet conf trimmed to its identity; FLEET_HOST=1; doctor
+#                     能力 PASS; a second migrate changes nothing
+#   C. client (MacBook) — hub.json {url, token} + shell.conf: FLEET_HOST=0,
 #                     FLEET_HUB_URL in [common], hub.json keeps ONLY its token;
 #                     fleet-connect.py / fleet-login.py read the address there
 #   D. client,node (m5) — all of the above at once: the shell (FLEET_SHELL=1)
 #                     reads [common]+[client] and none of [node]; a node reader
 #                     sees everything as before
 #   E. writes       — the config modal's writer puts a new key INSIDE [node];
-#                     set-hub on a fresh login makes a client file
-#   F. doctor before— an unmigrated node: role INFO, inferred, names the command
+#                     set-hub on a fresh login makes a FLEET_HOST=0 file; the old
+#                     add-role node / set-hub --role node turn hosting on
+#   F. doctor before— an unmigrated node: 能力 INFO, inferred, names the command
+#   G. the old key  — a file that still says FLEET_ROLE (m5 client,node · a laptop
+#                     node that only coordinates · a client) is rewritten in place
+#                     by migrate: FLEET_HOST 1 · 0 · 0, every other line kept, and
+#                     until then host / the doctor read the old key (one version);
+#                     `role` still answers from FLEET_HOST
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 for f in fleet-conf.sh fleet-lib.sh fleet-doctor.sh fleet_config_write.py fleet-connect.py fleet-login.py; do
@@ -61,7 +70,9 @@ view() {
     [ "${FLEET_SHELL:-}" = 1 ] || fleet_load_conf fleet
     for k in $KEYS; do eval "printf \"%s=%s\\n\" $k \"\${$k-<unset>}\""; done' "$INS/bin"
 }
-role_line() { run bash "$INS/bin/fleet-doctor.sh" 2>/dev/null | grep -E '^[[:space:]]+(PASS|WARN|FAIL|INFO)[[:space:]]+role([[:space:]]|$)'; }
+cap_line() { run bash "$INS/bin/fleet-doctor.sh" 2>/dev/null | grep -E '^[[:space:]]+(PASS|WARN|FAIL|INFO)[[:space:]]+能力([[:space:]]|$)'; }
+# the doctor's rows that describe what this computer is — ONE (issue #1806)
+what_rows() { run bash "$INS/bin/fleet-doctor.sh" 2>/dev/null | grep -cE '^[[:space:]]+(PASS|WARN|FAIL|INFO)[[:space:]]+(client|role|node|能力)([[:space:]]|$)'; }
 
 # ---------------------------------------------------------------------------- A
 mkbox a
@@ -69,7 +80,9 @@ out=$(run bash "$INS/bin/fleet-conf.sh" migrate 2>&1); rc=$?
 is "A: migrate on an empty login exits 0" "$rc" 0
 [ -e "$CD/fleet.conf" ] && bad "A: no file may be written for a login that is neither" || ok
 is "A: role none" "$(run bash "$INS/bin/fleet-conf.sh" role)" none
-is "A: no doctor role row" "$(role_line)" ""
+is "A: host 0" "$(run bash "$INS/bin/fleet-conf.sh" host)" 0
+is "A: doctor 能力: the base only" "$(cap_line | sed -E 's/^[[:space:]]+//')" "PASS  能力     基础 · 承载 未开（fleet host on）"
+is "A: one row says what this computer is" "$(what_rows)" 1
 # the machine conf is never a legacy flat fleet named `fleet`
 printf 'FLEET_ROLE="node"\n' > "$CD/fleet.conf"
 lst=$(run bash -c '. "$0/fleet-lib.sh"; fleet_each_conf; printf "conf=%s\n" "$(fleet_conf_file fleet)"' "$INS/bin")
@@ -108,11 +121,12 @@ mkbox b; node_fixture
 before=$(view)
 out=$(run bash "$INS/bin/fleet-conf.sh" migrate 2>&1); rc=$?
 is "B: migrate exits 0" "$rc" 0
-has "B: says one file" "$out" "one file — $CD/fleet.conf (role node)"
+has "B: says one file" "$out" "one file — $CD/fleet.conf (FLEET_HOST=1)"
 after=$(view)
 is "B: every key resolves as before" "$after" "$before"
 mc=$(cat "$CD/fleet.conf")
-has "B: FLEET_ROLE node" "$mc" 'FLEET_ROLE="node"'
+has "B: FLEET_HOST=1" "$mc" 'FLEET_HOST=1'
+hasnt "B: no FLEET_ROLE" "$mc" 'FLEET_ROLE'
 has "B: the hub address, once" "$mc" 'export FLEET_HUB_URL="https://hub.example"'
 is "B: the URL is spelled once in the file" "$(grep -c 'hub.example' "$CD/fleet.conf")" 1
 hasnt "B: no credential in the config" "$mc" "vt-secret-123"
@@ -131,10 +145,12 @@ snap=$(cat "$CD/fleet.conf")
 out=$(run bash "$INS/bin/fleet-conf.sh" migrate 2>&1)
 has "B: a second migrate is a no-op" "$out" "already one file"
 is "B: …and changes nothing" "$(cat "$CD/fleet.conf")" "$snap"
-is "B: role" "$(run bash "$INS/bin/fleet-conf.sh" role --why)" "$(printf 'node\tFLEET_ROLE')"
-l=$(role_line)
-has "B: doctor role PASS" "$l" "PASS  role"
-has "B: doctor names the role and the one file" "$l" "node (FLEET_ROLE) — 配置只有一份"
+is "B: host" "$(run bash "$INS/bin/fleet-conf.sh" host --why)" "$(printf '1\tFLEET_HOST')"
+is "B: the old word still answers (one version)" "$(run bash "$INS/bin/fleet-conf.sh" role)" client,node
+l=$(cap_line)
+has "B: doctor 能力 PASS" "$l" "PASS  能力     基础 · 承载 — FLEET_HOST"
+has "B: …and the one file" "$l" "配置只有一份"
+is "B: one row says what this computer is" "$(what_rows)" 1
 
 # ---------------------------------------------------------------------------- C
 client_fixture() {
@@ -145,7 +161,7 @@ mkbox c; rm -rf "$INS/conf"; client_fixture
 out=$(run bash "$INS/bin/fleet-conf.sh" migrate 2>&1); rc=$?
 is "C: migrate exits 0" "$rc" 0
 mc=$(cat "$CD/fleet.conf")
-has "C: FLEET_ROLE client" "$mc" 'FLEET_ROLE="client"'
+has "C: FLEET_HOST=0" "$mc" 'FLEET_HOST=0'
 has "C: the address from hub.json" "$mc" 'export FLEET_HUB_URL="https://hub.example"'
 has "C: shell.conf's keys in [client]" "$(sed -n '/^# ---- \[client\]/,$p' "$CD/fleet.conf")" "FLEET_SHELL_WIDTH=34"
 hasnt "C: a client file has no [node] section" "$mc" 'FLEET_SHELL:-0}" != 1'
@@ -163,7 +179,8 @@ is "C: fleet-login.py reads the address from fleet.conf" "$got" "https://hub.exa
 sv=$(view shell)
 has "C: the shell sees the hub address" "$(run FLEET_SHELL=1 bash -c '. "$0/fleet-lib.sh"; printf "%s" "$FLEET_HUB_URL"' "$INS/bin")" "https://hub.example"
 has "C: the shell sees [client]" "$sv" "FLEET_SHELL_WIDTH=34"
-is "C: role" "$(run bash "$INS/bin/fleet-conf.sh" role)" client
+is "C: host" "$(run bash "$INS/bin/fleet-conf.sh" host)" 0
+has "C: doctor 能力: 承载 未开" "$(cap_line)" "基础 · 承载 未开（fleet host on）"
 
 # ---------------------------------------------------------------------------- D
 mkbox d; node_fixture; client_fixture
@@ -171,7 +188,7 @@ printf 'FLEET_INSTALL_SYNC=0\n' > "$CD/fleet.settings"
 before=$(view)
 out=$(run bash "$INS/bin/fleet-conf.sh" migrate 2>&1); rc=$?
 is "D: migrate exits 0" "$rc" 0
-has "D: role client,node" "$(cat "$CD/fleet.conf")" 'FLEET_ROLE="client,node"'
+has "D: FLEET_HOST=1" "$(cat "$CD/fleet.conf")" 'FLEET_HOST=1'
 after=$(view)
 is "D: a node reader resolves every key as before" "$after" "$before"
 has "D: fleet.settings folded" "$(cat "$CD/fleet.conf")" "FLEET_INSTALL_SYNC=0"
@@ -182,7 +199,7 @@ has "D: the shell reads [common]" "$sv" "FLEET_NODE_ALIASES=macmini=m5 mini2=m4"
 has "D: the shell gets the hub URL" "$sv" "CCQUOTA_HUB_URL=https://hub.example"
 has "D: the shell does NOT read the node's FLEET_SIDEBAR_SOURCE" "$sv" "FLEET_SIDEBAR_SOURCE=<unset>"
 has "D: …nor its CCQUOTA_FLEET" "$sv" "CCQUOTA_FLEET=<unset>"
-is "D: doctor role" "$(role_line | sed -E 's/^[[:space:]]+//; s/ — .*//')" "PASS  role     client,node (FLEET_ROLE)"
+is "D: doctor 能力" "$(cap_line | sed -E 's/^[[:space:]]+//; s/ — .*//')" "PASS  能力     基础 · 承载"
 is "D: fleet_settings_file is the one file" "$(run bash -c '. "$0/fleet-lib.sh"; fleet_settings_file' "$INS/bin")" "$CD/fleet.conf"
 
 # ---------------------------------------------------------------------------- E
@@ -197,19 +214,56 @@ mkbox e
 run bash "$INS/bin/fleet-conf.sh" set-hub https://hub.example --role client; rc=$?
 is "E: set-hub on a fresh login exits 0" "$rc" 0
 mc=$(cat "$CD/fleet.conf" 2>/dev/null)
-has "E: …makes a client file" "$mc" 'FLEET_ROLE="client"'
+has "E: …makes a FLEET_HOST=0 file" "$mc" 'FLEET_HOST=0'
 has "E: …with the address" "$mc" 'export FLEET_HUB_URL="https://hub.example"'
 run bash "$INS/bin/fleet-conf.sh" add-role node
-has "E: add-role node → client,node" "$(cat "$CD/fleet.conf")" 'FLEET_ROLE="client,node"'
-is "E: one FLEET_ROLE line" "$(grep -c '^FLEET_ROLE=' "$CD/fleet.conf")" 1
+has "E: add-role node (the old word) → FLEET_HOST=1" "$(cat "$CD/fleet.conf")" 'FLEET_HOST=1'
+is "E: one FLEET_HOST line" "$(grep -c '^FLEET_HOST=' "$CD/fleet.conf")" 1
+run bash "$INS/bin/fleet-conf.sh" set-hub https://hub.example
+is "E: set-hub never turns hosting off" "$(run bash "$INS/bin/fleet-conf.sh" host)" 1
+run bash "$INS/bin/fleet-conf.sh" set-host 0
+is "E: set-host 0" "$(grep '^FLEET_HOST=' "$CD/fleet.conf")" 'FLEET_HOST=0'
+sh -n "$CD/fleet.conf" && ok || bad "E: still parses after set-host"
 
 # ---------------------------------------------------------------------------- F
 mkbox f; node_fixture
-l=$(role_line)
-has "F: unmigrated → INFO" "$l" "INFO  role"
-has "F: inferred" "$l" "node (inferred — node: a fleet conf)"
+l=$(cap_line)
+has "F: unmigrated → INFO" "$l" "INFO  能力"
+has "F: inferred" "$l" "基础 · 承载 — inferred — a fleet conf"
 has "F: names the command" "$l" "fleet-conf.sh migrate"
 hasnt "F: no credential printed" "$l" "vt-secret"
+
+# ---------------------------------------------------------------------------- G
+oldkey() {   # $1 FLEET_ROLE value — a file one version old, in the [common] it had
+  printf '# claude-fleet — one file\n\n# ---- [common] ----\nFLEET_ROLE="%s"\nexport FLEET_HUB_URL="https://hub.example"\nFLEET_UI_LANG=zh\n' "$1" > "$CD/fleet.conf"
+}
+# m5: client,node with a fleet here
+mkbox g1; node_fixture; rm -f "$INS/fleet.conf"; oldkey client,node
+is "G m5: before migrate, host reads the old key" "$(run bash "$INS/bin/fleet-conf.sh" host --why)" "$(printf '1\tFLEET_ROLE=client,node（旧键）')"
+l=$(cap_line)
+has "G m5: doctor says the old key and the command" "$l" "FLEET_ROLE=client,node（旧键） — 同步时自动改写成 FLEET_HOST"
+has "G m5: …as INFO" "$l" "INFO  能力"
+want=$(sed 's/^FLEET_ROLE="client,node"$/FLEET_HOST=1/' "$CD/fleet.conf")
+out=$(run bash "$INS/bin/fleet-conf.sh" migrate --quiet 2>&1)
+has "G m5: migrate says what it rewrote" "$out" 'FLEET_ROLE="client,node" → FLEET_HOST=1'
+is "G m5: rewritten in place, every other line kept" "$(cat "$CD/fleet.conf")" "$want"
+is "G m5: host 1" "$(run bash "$INS/bin/fleet-conf.sh" host --why)" "$(printf '1\tFLEET_HOST')"
+out=$(run bash "$INS/bin/fleet-conf.sh" migrate 2>&1)
+has "G m5: a second migrate is a no-op" "$out" "already one file"
+# a laptop joined only to coordinate: node.env COMPUTE=0, no fleet here
+mkbox g2; oldkey client,node
+printf 'CCQUOTA_HUB_URL=https://hub.example\nCCQUOTA_TOKEN=t\nCCQUOTA_FLEET_COMPUTE=0\n' > "$CD/node.env"; chmod 600 "$CD/node.env"
+run bash "$INS/bin/fleet-conf.sh" migrate --quiet >/dev/null 2>&1
+has "G laptop: a coordinate-only node is not 承载" "$(cat "$CD/fleet.conf")" "FLEET_HOST=0"
+hasnt "G laptop: no FLEET_ROLE left" "$(cat "$CD/fleet.conf")" "FLEET_ROLE"
+has "G laptop: doctor 能力 未开" "$(cap_line)" "基础 · 承载 未开（fleet host on）"
+is "G laptop: one row says what this computer is" "$(what_rows)" 1
+# a client
+mkbox g3; oldkey client
+run bash "$INS/bin/fleet-conf.sh" migrate --quiet >/dev/null 2>&1
+has "G client: FLEET_HOST=0" "$(cat "$CD/fleet.conf")" "FLEET_HOST=0"
+is "G client: role still answers (one version)" "$(run bash "$INS/bin/fleet-conf.sh" role)" client
+sh -n "$CD/fleet.conf" && ok || bad "G: the rewritten file parses"
 
 printf 'fleet-conf-selftest: %d checks, %d failed\n' "$CHECKS" "$FAILS"
 [ "$FAILS" = 0 ]

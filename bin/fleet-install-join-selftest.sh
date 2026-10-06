@@ -25,7 +25,7 @@
 #                 and mini2's certificate
 #   C. one cert   the installed fleet-peer-cert.sh, for m4 / m4-lan / mini2:
 #                 the hub asked ONCE, for mini2; every name the same file
-#   D. again      a second install: 「已是 … 的节点」, no new scan, node.env
+#   D. again      a second install: 「入口: 这台已登记在 …」, no new scan, node.env
 #                 unchanged
 #   E. no node    --no-node: no scan, no node.env (the degenerate case)
 #   F. no tty     stderr not a terminal (CI, a log): no scan, no wait — the
@@ -189,7 +189,7 @@ if [ "$mode" = 600 ] && grep -qx 'CCQUOTA_TOKEN=ccq_nodepass0123456789abcdefXYZ'
   ok "A node.env (0600): the pass, CCQUOTA_FLEET_COMPUTE=0, no admin"
 else bad "A node.env mode=$mode: $(sed 's/TOKEN=.*/TOKEN=…/' "$ENVF" 2>/dev/null)"; fi
 [ "$(hubstate online)" = True ] && ok "A the agent checked in" || bad "A the agent never checked in: $(cat "$WORK/out")"
-grep -q '✓ 只协调' "$WORK/out" && grep -q '✓ 已登记为节点' "$WORK/out" && ok "A the output says 已登记 + 只协调" || bad "A output: $(cat "$WORK/out")"
+grep -q '✓ 只协调' "$WORK/out" && grep -q '✓ 已登记到入口' "$WORK/out" && ok "A the output says 已登记 + 只协调" || bad "A output: $(cat "$WORK/out")"
 grep -q 'ccq_nodepass' "$WORK/out" && bad "A the token was printed" || ok "A the token is never printed"
 
 # ── B. ssh ──────────────────────────────────────────────────────────────────
@@ -236,7 +236,7 @@ else bad "C certs=$certs hub asked for $peer"; fi
 kill "$(cat "$H1/.ccquota/agent.pid")" 2>/dev/null
 cp "$ENVF" "$WORK/env.before"
 install_in h1
-if [ "$(cat "$WORK/rc")" = 0 ] && [ "$(hubstate starts)" = 1 ] && grep -q "节点: 已是 $HUB 的节点" "$WORK/out" && cmp -s "$ENVF" "$WORK/env.before"; then
+if [ "$(cat "$WORK/rc")" = 0 ] && [ "$(hubstate starts)" = 1 ] && grep -q "入口: 这台已登记在 $HUB" "$WORK/out" && cmp -s "$ENVF" "$WORK/env.before"; then
   ok "D a second install leaves the node alone (no scan, node.env unchanged)"
 else bad "D rc=$(cat "$WORK/rc") starts=$(hubstate starts): $(cat "$WORK/out")"; fi
 
@@ -244,14 +244,14 @@ else bad "D rc=$(cat "$WORK/rc") starts=$(hubstate starts): $(cat "$WORK/out")";
 # output to a file and no FORCE: nobody could scan, so no join — one line instead
 FORCE='' install_in h3
 if [ "$(cat "$WORK/rc")" = 0 ] && [ "$(hubstate starts)" = 1 ] && [ ! -e "$WORK/h3/.config/claude-fleet/node.env" ] \
-   && grep -q '节点: 这里没有终端可显示二维码' "$WORK/out"; then
+   && grep -q '入口: 这里没有终端可显示二维码' "$WORK/out"; then
   ok "F no terminal: no scan, no wait, the fleet node join line"
 else bad "F rc=$(cat "$WORK/rc") starts=$(hubstate starts): $(cat "$WORK/out")"; fi
 
 # ── E. no node ──────────────────────────────────────────────────────────────
 install_in h2 --no-node
 if [ "$(cat "$WORK/rc")" = 0 ] && [ "$(hubstate starts)" = 1 ] && [ ! -e "$WORK/h2/.config/claude-fleet/node.env" ] \
-   && ! grep -q '节点:' "$WORK/out"; then
+   && ! grep -q '入口:' "$WORK/out"; then
   ok "E --no-node: no scan, no node.env"
 else bad "E rc=$(cat "$WORK/rc") starts=$(hubstate starts): $(cat "$WORK/out")"; fi
 

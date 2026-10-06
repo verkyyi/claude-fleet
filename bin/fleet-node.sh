@@ -13,7 +13,9 @@
 #       agent / service / online / fleet steps on their defaults, one `✓ …` line
 #       each, and a failure is one `✗ …` line ending 「重跑同一条命令即可」.
 #       A rerun whose node.env token the hub still accepts skips the scan and
-#       redoes only what is missing. FLEET_ROLE gains `node` (fleet-conf.sh).
+#       redoes only what is missing. The hub address lands in fleet.conf
+#       (fleet-conf.sh set-hub); joining is not 承载 by itself — FLEET_HOST
+#       is `fleet host on`'s (issue #1806), which runs this join for you.
 #       A first join only COORDINATES (issue #1719): node.env gets
 #       CCQUOTA_FLEET_COMPUTE=0, so the hub places no session here and leases no
 #       account; --compute 1 opens it. --no-fleet / --no-deps / --no-admin go to
@@ -97,14 +99,14 @@ cmd_join() {
     "$here/fleet-login.py" node --hub "$hub" --out "$work/node.json" $invert || { rc=$?; rm -rf "$work"; return "$rc"; }
     joined=(--joined "$work/node.json")
   fi
-  "$here/fleet-conf.sh" set-hub "$hub" --role node >/dev/null 2>&1 \
-    || echo "! 没能在 $CONF/fleet.conf 里记下 node 角色（fleet-conf.sh set-hub）" >&2
+  "$here/fleet-conf.sh" set-hub "$hub" >/dev/null 2>&1 \
+    || echo "! 没能在 $CONF/fleet.conf 里记下入口地址（fleet-conf.sh set-hub）" >&2
 
   # shellcheck disable=SC2086
   "$here/fleet-node-join.sh" --hub "$hub" --ui ${joined[@]+"${joined[@]}"} ${pass[@]+"${pass[@]}"} ${FLEET_NODE_JOIN_ARGS:-}
   rc=$?
   rm -rf "$work"
-  # Can it run sessions? One line, plus 「可以打开：fleet node compute on」 when
+  # Can it run sessions? One line, plus 「可以打开：fleet host on」 when
   # it can (issue #1720) — never a reason to fail the join.
   [ "$rc" = 0 ] && FLEET_CONF_DIR="$CONF" "$here/fleet-node-probe.sh" 2>/dev/null
   return "$rc"
@@ -124,7 +126,7 @@ nudge() { mkdir -p "$CONF/global" 2>/dev/null && touch "$CONF/global/hub-nudge" 
 laptop() { [ -f "$CONF/node-probe.json" ] && sed -n 's/.*"laptop":\([a-z]*\).*/\1/p' "$CONF/node-probe.json" | head -n 1; }
 
 personal_line() {
-  echo "个人电脑：只跑在这台上开的会话，别的机器不往这台派；睡眠前提醒还有几个会话在跑，并标「维护中」，醒来恢复（改为共享：fleet node compute on --shared）"
+  echo "个人电脑：只跑在这台上开的会话，别的机器不往这台派；睡眠前提醒还有几个会话在跑，并标「维护中」，醒来恢复（改为共享：fleet host on --shared）"
 }
 
 cmd_compute() {
@@ -140,7 +142,7 @@ cmd_compute() {
     shift
   done
   if [ -z "$(envval CCQUOTA_TOKEN)" ]; then
-    echo "这台机器（$(id -un)）还不是节点 — 先运行：fleet node join"
+    echo "这台机器（$(id -un)）还没登记到入口 — 先运行：fleet host on（或只登记：fleet node join）"
     return 1
   fi
   case "$verb" in
@@ -149,7 +151,7 @@ cmd_compute() {
       [ "$rc" -le 1 ] || { echo "✗ 没测成：$line"; return 1; }
       printf '%s\n' "$line" | grep -v '^可以打开：'
       if [ "$rc" != 0 ] && [ "$force" != 1 ]; then
-        echo "✗ 不打开：这台电脑不适合跑会话（上面一行是原因）。确要打开：fleet node compute on --force（会记进入口审计）"
+        echo "✗ 不打开：这台电脑不适合跑会话（上面一行是原因）。确要打开：fleet host on --force（会记进入口审计）"
         return 1
       fi
       setenv CCQUOTA_FLEET_COMPUTE 1 || { echo "✗ 写不了 $ENVF"; return 1; }
@@ -164,7 +166,7 @@ cmd_compute() {
       if [ "$rc" != 0 ]; then
         echo "✓ 已强制打开：入口会往这台派会话、借账号（越过了本机判断，入口已记审计）"
       else
-        echo "✓ 已打开：入口可以往这台派会话、借账号（下一次心跳生效；fleet node compute off 关回只协调）"
+        echo "✓ 已打开：入口可以往这台派会话、借账号（下一次心跳生效；fleet host off 关回只协调）"
       fi
       if [ "$personal" = 1 ]; then personal_line; fi
       ;;
@@ -175,7 +177,7 @@ cmd_compute() {
       ;;
     status)
       case "$(envval CCQUOTA_FLEET_COMPUTE)" in
-        0) echo "只协调：入口不往这台派会话、不借账号（打开：fleet node compute on）" ;;
+        0) echo "只协调：入口不往这台派会话、不借账号（打开：fleet host on）" ;;
         *) if [ "$(envval CCQUOTA_FLEET_COMPUTE_FORCE)" = 1 ]; then echo "已强制打开（--force）"; else echo "已打开：入口可以往这台派会话"; fi
            [ "$(envval CCQUOTA_FLEET_PERSONAL)" = 1 ] && personal_line ;;
       esac
@@ -191,19 +193,19 @@ cmd_status() {
   tok=$(envval CCQUOTA_TOKEN)
   hub=$(envval CCQUOTA_HUB_URL)
   if [ -z "$tok" ] || [ -z "$hub" ]; then
-    echo "这台机器（$(id -un)）还不是节点 — 运行：fleet node join"
+    echo "这台机器（$(id -un)）还没登记到入口 — 运行：fleet host on（或只登记：fleet node join）"
     return 1
   fi
   if ! body=$(self "$hub" "$tok"); then
-    echo "✗ $hub 不认这台机器的节点通行证（${ENVF}）— 重跑：fleet node join"
+    echo "✗ $hub 不认这台机器的入口通行证（${ENVF}）— 重跑：fleet node join"
     return 1
   fi
   st=$(printf '%s' "$body" | jfield status)
   label="$(printf '%s' "$body" | jfield hostname)"
   [ -n "$label" ] || label=$(hostname -s 2>/dev/null || hostname)
   case "$st" in
-    online) echo "✓ $label/$(id -un) 是 $hub 的节点：在线" ;;
-    *) echo "✗ $label/$(id -un) 是 $hub 的节点，但入口看到的状态是「${st:-?}」— 看 ~/.ccquota/agent.log，或重跑：fleet node join"
+    online) echo "✓ $label/$(id -un) 连着 ${hub}：在线" ;;
+    *) echo "✗ $label/$(id -un) 连着 ${hub}，但入口看到的状态是「${st:-?}」— 看 ~/.ccquota/agent.log，或重跑：fleet node join"
        return 1 ;;
   esac
 }

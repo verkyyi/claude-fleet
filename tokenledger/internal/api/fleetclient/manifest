@@ -40,6 +40,9 @@ bin/fleet-login.py
 bin/fleet-node.sh
 bin/fleet-node-join.sh
 bin/fleet-node-probe.sh
+# bin/fleet-host.sh is `fleet host on|off|status` (#1806): 承载 — the person's
+# word for the node steps above (join, compute on/off).
+bin/fleet-host.sh
 # bin/fleet-node-sleepwatch.sh: a personal computer's agent runs it from here
 # to say when it sleeps and wakes (#1721).
 bin/fleet-node-sleepwatch.sh

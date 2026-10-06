@@ -50,10 +50,19 @@ conf_dir="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
 _dlib="$(dirname "$0")/fleet-daemon-lib.sh"
 # shellcheck source=/dev/null
 [ -f "$_dlib" ] && . "$_dlib"
-pass() { printf '  %sPASS%s  %-8s %s\n'  "$G" "$Z" "$1" "$2"; }
-warn() { printf '  %sWARN%s  %-8s %s\n'  "$Y" "$Z" "$1" "$2"; warns=$((warns+1)); }
-fail() { printf '  %sFAIL%s  %-8s %s\n'  "$R" "$Z" "$1" "$2"; fails=$((fails+1)); }
-info() { printf '  %sINFO%s  %-8s %s\n'  "$B" "$Z" "$1" "$2"; }   # advice; never counted
+# _pr <LEVEL> <color> <label> <msg> — one row. A two-character CJK label (能力 /
+# 承载, issue #1806) is padded by hand: printf's %-8s counts bytes in one shell
+# and characters in another, and either way it is not the 8 columns it shows.
+_pr() {
+  case "$3" in
+    能力|承载) printf '  %s%s%s  %s     %s\n' "$2" "$1" "$Z" "$3" "$4" ;;
+    *)         printf '  %s%s%s  %-8s %s\n' "$2" "$1" "$Z" "$3" "$4" ;;
+  esac
+}
+pass() { _pr PASS "$G" "$1" "$2"; }
+warn() { _pr WARN "$Y" "$1" "$2"; warns=$((warns+1)); }
+fail() { _pr FAIL "$R" "$1" "$2"; fails=$((fails+1)); }
+info() { _pr INFO "$B" "$1" "$2"; }   # advice; never counted
 
 # vge A B → 0 (true) if dotted-numeric version A >= B (compares up to 3 parts).
 vge() {
@@ -65,6 +74,180 @@ vge() {
 }
 
 printf '%sclaude-fleet doctor%s\n' "$B" "$Z"
+
+# --- per-fleet conf enumeration (shared by the optional-daemon checks below) ---
+# $conf_dir is defaulted once at the top of the file (see the note there).
+
+# Enumerate configured fleet conf paths, dual-layout (issue #203): the new
+# per-fleet layout (fleets/<sess>/conf, #181) preferred, with the legacy flat
+# <sess>.conf read only when that session has no new-layout dir. POSIX inline copy
+# (doctor is /bin/sh; it can't source the bash-only fleet-lib.sh) — KEEP IN SYNC
+# with fleet_each_conf() in bin/fleet-lib.sh. A flat `for cf in "$conf_dir"/*.conf`
+# glob matches nothing after the #181 migration, so this under-counts armed fleets.
+_fleet_confs() {
+  _cd="$1"
+  if [ -d "$_cd/fleets" ]; then
+    for _d in "$_cd"/fleets/*/; do
+      [ -d "$_d" ] || continue
+      [ -f "${_d}conf" ] || continue
+      printf '%s\n' "${_d}conf"
+    done
+  fi
+  for _c in "$_cd"/*.conf; do
+    [ -f "$_c" ] || continue
+    _s=$(basename "$_c" .conf)
+    case "$_s" in fleet|shell) continue ;; esac   # the machine's config + the shell's (#1623), not fleets
+    [ -f "$_cd/fleets/$_s/conf" ] && continue
+    printf '%s\n' "$_c"
+  done
+}
+
+# _conf_val <file> <KEY> → the LAST uncommented assignment's value, quotes/blanks
+# stripped ('' if none) — what sourcing the file would leave in KEY.
+_conf_val() {
+  [ -f "$1" ] || return 0
+  sed -n 's/^[[:space:]]*'"$2"'[[:space:]]*=[[:space:]]*\([^#]*\).*/\1/p' "$1" | tail -1 | tr -d "\"' 	"
+}
+
+# _gconf_val <KEY> → the login-wide value: the machine's one config file (issue
+# #1623), else the login's settings file (issue #979), else the install's
+# fleet.conf they replace (dual-read).
+_gconf_val() {
+  _gv=$(_conf_val "$conf_dir/fleet.conf" "$1")
+  [ -n "$_gv" ] || _gv=$(_conf_val "$conf_dir/fleet.settings" "$1")
+  [ -n "$_gv" ] || _gv=$(_conf_val "$(dirname "$0")/../fleet.conf" "$1")
+  printf '%s' "$_gv"
+}
+
+# _conf_has <file> <KEY> → 0 iff the file assigns KEY (uncommented), even to "".
+_conf_has() {
+  [ -f "$1" ] && grep -Eq "^[[:space:]]*(export[[:space:]]+)?$2[[:space:]]*=" "$1"
+}
+
+# _xconf_val <file> <KEY> → the last assignment's value, `export` allowed
+# (`export CCQUOTA_FLEET=1` is how the install's fleet.conf spells it;
+# _conf_val does not allow the prefix).
+_xconf_val() {  # <file> <KEY> → the last assignment's value, `export` allowed
+  [ -f "$1" ] || return 0
+  sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}'"$2"'[[:space:]]*=[[:space:]]*\([^#]*\).*/\2/p' "$1" | tail -1 | tr -d "\"' 	"
+}
+
+# --- fleet · 能力 · 承载 (issue #1806, EPIC #1813 C4): what this computer IS ----
+# Three words used to describe one computer — `client` (the installed client),
+# `role` (FLEET_ROLE client|node|client,node) and `node` (the hub token) — and a
+# newcomer had to learn all three to know whether theirs runs sessions. Now the
+# first rows say it the way everything else does:
+#   fleet  what is installed — the client's own verdict (version vs the hub,
+#          tmux, cert — bin/fleet-client-update.sh doctor, issue #1722) when the
+#          install-line client is here, else this checkout's commit + the hub
+#   能力   基础 (everyone) · 承载 (FLEET_HOST=1 — fleet-conf.sh host, the old
+#          FLEET_ROLE read for one version) + the ONE config file's state
+#          (issue #1623): PASS one file · INFO not folded yet / an old key ·
+#          WARN the file AND an old one still read
+#   承载   only on a computer that hosts (or has the hub switch on): which
+#          machine, and the node token verdict (issue #1491 — WARN when the
+#          entry's lease / placement / move would fall back silently)
+# The hub protocol's word stays node (node.env, /v1/node/*): docs/TERMS.md.
+_hub_url=${FLEET_HUB_URL:-}
+[ -n "$_hub_url" ] || _hub_url=$(_xconf_val "$conf_dir/fleet.conf" FLEET_HUB_URL)
+[ -n "$_hub_url" ] || _hub_url=$(_xconf_val "$conf_dir/fleet.conf" CCQUOTA_HUB_URL)
+_hub_url=${_hub_url%/}
+_cu="$(dirname "$0")/fleet-client-update.sh"
+_cu_root="${FLEET_INSTALL_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/claude-fleet}"
+_cu_out=''
+if [ -f "$_cu" ] && [ -f "$_cu_root/.client-version" ]; then
+  _cu_out=$(bash "$_cu" doctor --root "$_cu_root" 2>/dev/null)
+fi
+case "$_cu_out" in
+  PASS*) pass fleet "${_cu_out#*	}" ;;
+  WARN*) warn fleet "${_cu_out#*	}" ;;
+  INFO*) info fleet "${_cu_out#*	}" ;;
+  *)
+    _fl_root=$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)
+    _fl_sha=$(git -C "$_fl_root" rev-parse --short HEAD 2>/dev/null)
+    if [ -n "$_hub_url" ]; then _fl_hub="入口 $(printf '%s' "$_hub_url" | sed 's#^[a-z]*://##')"; else _fl_hub='入口 不接'; fi
+    pass fleet "$(printf '%s' "$_fl_root" | sed "s#^$HOME#~#")${_fl_sha:+ @ $_fl_sha} · $_fl_hub" ;;
+esac
+
+_hub_on=${CCQUOTA_FLEET:-}
+[ -n "$_hub_on" ] || _hub_on=$(_xconf_val "$conf_dir/fleet.conf" CCQUOTA_FLEET)
+[ -n "$_hub_on" ] || _hub_on=$(_xconf_val "$conf_dir/fleet.settings" CCQUOTA_FLEET)
+[ -n "$_hub_on" ] || _hub_on=$(_xconf_val "$(dirname "$0")/../fleet.conf" CCQUOTA_FLEET)
+if [ -z "$_hub_on" ] && [ -d "$conf_dir" ]; then
+  while IFS= read -r _cf; do
+    [ -n "$_cf" ] || continue
+    _hub_on=$(_xconf_val "$_cf" CCQUOTA_FLEET); [ -n "$_hub_on" ] && break
+  done <<EOF
+$(_fleet_confs "$conf_dir")
+EOF
+fi
+if [ "$_hub_on" = 1 ]; then
+  _nenv="$conf_dir/node.env"
+  _nfix="\`bash $(dirname "$0")/fleet-hub-node.sh env --write\` (fills it from this login's agent service), or re-join with fleet-node-join.sh"
+  if ! command -v ccquota >/dev/null 2>&1; then
+    _tok_lv=WARN _tok_msg="CCQUOTA_FLEET=1 but ccquota is not on PATH — the entry's lease / placement / move all fall back: spawns are guarded by the GitHub claim alone, every session opens here, no move lands. Install the agent (fleet-node-join.sh, or \`go install github.com/verkyyi/claude-fleet/tokenledger/cmd/ccquota@latest\`)"
+  elif [ -n "${CCQUOTA_TOKEN:-}" ]; then
+    # Reaches the hub, but the wrong way round: a token exported into the shell is
+    # inherited by every worker a pane spawns (a node credential in each session's
+    # environment) — the stop-gap the operator added to fleet.conf before #1491.
+    if [ -f "$_nenv" ] && grep -q '^CCQUOTA_TOKEN=.' "$_nenv" 2>/dev/null; then
+      _tok_lv=WARN _tok_msg="CCQUOTA_TOKEN is exported into this environment — every worker spawned from a pane inherits a node credential; fleet_hub_* read $_nenv per call now, so drop the export (the fleet.conf stop-gap, issue #1491)"
+    else
+      _tok_lv=WARN _tok_msg="CCQUOTA_TOKEN is exported into this environment and $_nenv is missing — the hub is reached only while the export stays, and every worker inherits a node credential; write the file, then drop the export: $_nfix"
+    fi
+  elif [ -f "$_nenv" ] && grep -q '^CCQUOTA_TOKEN=.' "$_nenv" 2>/dev/null; then
+    # ls -ld perms: char 5 = group-read, char 8 = other-read (as the account check)
+    _nm=$(ls -ld "$_nenv" 2>/dev/null | cut -c1-10)
+    if [ "$(printf '%s' "$_nm" | cut -c5)" = r ] || [ "$(printf '%s' "$_nm" | cut -c8)" = r ]; then
+      _tok_lv=WARN _tok_msg="$_nenv holds this login's node token but is group/other-readable ($_nm) — \`chmod 600 $_nenv\`"
+    else
+      _tok_lv=PASS _tok_msg="通行证 $(printf '%s' "$_nenv" | sed "s#^$HOME#~#")（0600，ccquota 每次调用时读，不进窗格环境）"
+    fi
+  elif [ -f "$_nenv" ]; then
+    _tok_lv=WARN _tok_msg="CCQUOTA_FLEET=1 but $_nenv has no CCQUOTA_TOKEN= line — the entry's lease / placement / move all fall back silently (issue #1491); rewrite it: \`bash $(dirname "$0")/fleet-hub-node.sh env --write --force\`"
+  else
+    _tok_lv=WARN _tok_msg="CCQUOTA_FLEET=1 but no node token: CCQUOTA_TOKEN unset and $_nenv missing — the entry's lease / placement / move all fall back silently: spawns are guarded by the GitHub claim alone, every session opens here, no move lands (issue #1491). Write it: $_nfix"
+  fi
+fi
+
+
+_ho=$(bash "$(dirname "$0")/fleet-conf.sh" host --why 2>/dev/null)
+_ho_on=${_ho%%	*}; _ho_how=${_ho#*	}
+[ "$_ho_on" = 1 ] || _ho_on=0
+_ho_old=''
+for _rf in "$(dirname "$0")/../fleet.conf" "$conf_dir/fleet.settings" "$conf_dir/shell.conf"; do
+  [ -f "$_rf" ] && _ho_old="${_ho_old:+$_ho_old, }$(printf '%s' "$_rf" | sed "s#^$HOME#~#")"
+done
+_ho_mc=$(printf '%s' "$conf_dir/fleet.conf" | sed "s#^$HOME#~#")
+if [ "$_ho_on" = 1 ]; then _ho_w='基础 · 承载'; else _ho_w='基础 · 承载 未开（fleet host on）'; fi
+case "$_ho_how" in
+  *FLEET_ROLE*) _ho_how="$_ho_how — 同步时自动改写成 FLEET_HOST（\`bash $(dirname "$0")/fleet-conf.sh migrate\`）" ;;
+esac
+if [ -f "$conf_dir/fleet.conf" ] && [ -n "$_ho_old" ]; then
+  warn 能力 "$_ho_w — $_ho_how; $_ho_mc 之外还在读旧文件: $_ho_old — 并进去后改名 .bak"
+elif [ -f "$conf_dir/fleet.conf" ]; then
+  case "$_ho_how" in
+    *FLEET_ROLE*) info 能力 "$_ho_w — $_ho_how" ;;
+    *)            pass 能力 "$_ho_w — $_ho_how; 配置只有一份: $_ho_mc" ;;
+  esac
+elif [ -n "$_ho_old" ] || [ -n "$(_fleet_confs "$conf_dir")" ]; then
+  info 能力 "$_ho_w — $_ho_how; 设置仍分散在: ${_ho_old:-fleets/<会话>/conf · hub.json} — \`bash $(dirname "$0")/fleet-conf.sh migrate\` 并成一份（同步时自动跑）"
+else
+  pass 能力 "$_ho_w"
+fi
+if [ "$_ho_on" = 1 ] || [ "$_hub_on" = 1 ]; then
+  _hs_name=$(hostname -s 2>/dev/null || hostname 2>/dev/null)
+  if [ "$_hub_on" != 1 ]; then
+    pass 承载 "${_hs_name:-本机} · 不接入口（只走本机）"
+  elif [ "${_tok_lv:-}" = WARN ]; then
+    warn 承载 "${_hs_name:-本机} · $_tok_msg"
+  else
+    _hs_cp=$(sed -n 's/^CCQUOTA_FLEET_COMPUTE=//p' "$conf_dir/node.env" 2>/dev/null | head -n 1)
+    if [ "$_hs_cp" = 0 ]; then _hs_cw='入口只协调，不往这台派会话（fleet host on 打开）'; else _hs_cw='入口可往这台派会话'; fi
+    pass 承载 "${_hs_name:-本机} · $_hs_cw · ${_tok_msg:-}"
+  fi
+fi
+
 
 # --- tmux ≥ 3.2 (core) ---
 if command -v tmux >/dev/null 2>&1; then
@@ -661,112 +844,6 @@ daemon_verdict() {   # $1=tag $2=label $3=pass-msg $4=what-is-lost-when-missing
   esac
 }
 
-# --- per-fleet conf enumeration (shared by the optional-daemon checks below) ---
-# $conf_dir is defaulted once at the top of the file (see the note there).
-
-# Enumerate configured fleet conf paths, dual-layout (issue #203): the new
-# per-fleet layout (fleets/<sess>/conf, #181) preferred, with the legacy flat
-# <sess>.conf read only when that session has no new-layout dir. POSIX inline copy
-# (doctor is /bin/sh; it can't source the bash-only fleet-lib.sh) — KEEP IN SYNC
-# with fleet_each_conf() in bin/fleet-lib.sh. A flat `for cf in "$conf_dir"/*.conf`
-# glob matches nothing after the #181 migration, so this under-counts armed fleets.
-_fleet_confs() {
-  _cd="$1"
-  if [ -d "$_cd/fleets" ]; then
-    for _d in "$_cd"/fleets/*/; do
-      [ -d "$_d" ] || continue
-      [ -f "${_d}conf" ] || continue
-      printf '%s\n' "${_d}conf"
-    done
-  fi
-  for _c in "$_cd"/*.conf; do
-    [ -f "$_c" ] || continue
-    _s=$(basename "$_c" .conf)
-    case "$_s" in fleet|shell) continue ;; esac   # the machine's config + the shell's (#1623), not fleets
-    [ -f "$_cd/fleets/$_s/conf" ] && continue
-    printf '%s\n' "$_c"
-  done
-}
-
-# _conf_val <file> <KEY> → the LAST uncommented assignment's value, quotes/blanks
-# stripped ('' if none) — what sourcing the file would leave in KEY.
-_conf_val() {
-  [ -f "$1" ] || return 0
-  sed -n 's/^[[:space:]]*'"$2"'[[:space:]]*=[[:space:]]*\([^#]*\).*/\1/p' "$1" | tail -1 | tr -d "\"' 	"
-}
-
-# _gconf_val <KEY> → the login-wide value: the machine's one config file (issue
-# #1623), else the login's settings file (issue #979), else the install's
-# fleet.conf they replace (dual-read).
-_gconf_val() {
-  _gv=$(_conf_val "$conf_dir/fleet.conf" "$1")
-  [ -n "$_gv" ] || _gv=$(_conf_val "$conf_dir/fleet.settings" "$1")
-  [ -n "$_gv" ] || _gv=$(_conf_val "$(dirname "$0")/../fleet.conf" "$1")
-  printf '%s' "$_gv"
-}
-
-# _conf_has <file> <KEY> → 0 iff the file assigns KEY (uncommented), even to "".
-_conf_has() {
-  [ -f "$1" ] && grep -Eq "^[[:space:]]*(export[[:space:]]+)?$2[[:space:]]*=" "$1"
-}
-
-# --- node token: can the entry act for this login? (issue #1491) ------------------
-# With CCQUOTA_FLEET=1 every spawn / placement / move asks the hub through
-# `ccquota lease|place|move`, which acts as THIS machine's agent and needs its
-# token: CCQUOTA_TOKEN in the environment, else $conf_dir/node.env (0600, written
-# by fleet-node-join.sh; fleet_hub_* read it per call and never export it into a
-# pane). Without either, all three fall back SILENTLY — the lease to the GitHub
-# claim alone, placement to "here", a move to a refusal — which is how EPIC #1419's
-# C3/C6/C7 ran dark on two machines. A login whose agent predates node.env (its
-# token only in the launchd plist) is WARNed here, with the one command that fixes
-# it. Silent while the hub module is off: the degenerate case prints no line.
-# `export CCQUOTA_FLEET=1` is how the install's fleet.conf spells it, so the
-# read allows the prefix (_conf_val does not).
-_xconf_val() {  # <file> <KEY> → the last assignment's value, `export` allowed
-  [ -f "$1" ] || return 0
-  sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}'"$2"'[[:space:]]*=[[:space:]]*\([^#]*\).*/\2/p' "$1" | tail -1 | tr -d "\"' 	"
-}
-_hub_on=${CCQUOTA_FLEET:-}
-[ -n "$_hub_on" ] || _hub_on=$(_xconf_val "$conf_dir/fleet.conf" CCQUOTA_FLEET)
-[ -n "$_hub_on" ] || _hub_on=$(_xconf_val "$conf_dir/fleet.settings" CCQUOTA_FLEET)
-[ -n "$_hub_on" ] || _hub_on=$(_xconf_val "$(dirname "$0")/../fleet.conf" CCQUOTA_FLEET)
-if [ -z "$_hub_on" ] && [ -d "$conf_dir" ]; then
-  while IFS= read -r _cf; do
-    [ -n "$_cf" ] || continue
-    _hub_on=$(_xconf_val "$_cf" CCQUOTA_FLEET); [ -n "$_hub_on" ] && break
-  done <<EOF
-$(_fleet_confs "$conf_dir")
-EOF
-fi
-if [ "$_hub_on" = 1 ]; then
-  _nenv="$conf_dir/node.env"
-  _nfix="\`bash $(dirname "$0")/fleet-hub-node.sh env --write\` (fills it from this login's agent service), or re-join with fleet-node-join.sh"
-  if ! command -v ccquota >/dev/null 2>&1; then
-    warn node "CCQUOTA_FLEET=1 but ccquota is not on PATH — the entry's lease / placement / move all fall back: spawns are guarded by the GitHub claim alone, every session opens here, no move lands. Install the agent (fleet-node-join.sh, or \`go install github.com/verkyyi/claude-fleet/tokenledger/cmd/ccquota@latest\`)"
-  elif [ -n "${CCQUOTA_TOKEN:-}" ]; then
-    # Reaches the hub, but the wrong way round: a token exported into the shell is
-    # inherited by every worker a pane spawns (a node credential in each session's
-    # environment) — the stop-gap the operator added to fleet.conf before #1491.
-    if [ -f "$_nenv" ] && grep -q '^CCQUOTA_TOKEN=.' "$_nenv" 2>/dev/null; then
-      warn node "CCQUOTA_TOKEN is exported into this environment — every worker spawned from a pane inherits a node credential; fleet_hub_* read $_nenv per call now, so drop the export (the fleet.conf stop-gap, issue #1491)"
-    else
-      warn node "CCQUOTA_TOKEN is exported into this environment and $_nenv is missing — the hub is reached only while the export stays, and every worker inherits a node credential; write the file, then drop the export: $_nfix"
-    fi
-  elif [ -f "$_nenv" ] && grep -q '^CCQUOTA_TOKEN=.' "$_nenv" 2>/dev/null; then
-    # ls -ld perms: char 5 = group-read, char 8 = other-read (as the account check)
-    _nm=$(ls -ld "$_nenv" 2>/dev/null | cut -c1-10)
-    if [ "$(printf '%s' "$_nm" | cut -c5)" = r ] || [ "$(printf '%s' "$_nm" | cut -c8)" = r ]; then
-      warn node "$_nenv holds this login's node token but is group/other-readable ($_nm) — \`chmod 600 $_nenv\`"
-    else
-      pass node "node token in $_nenv (0600) — ccquota lease / place / move read it per call; it never enters a pane's environment"
-    fi
-  elif [ -f "$_nenv" ]; then
-    warn node "CCQUOTA_FLEET=1 but $_nenv has no CCQUOTA_TOKEN= line — the entry's lease / placement / move all fall back silently (issue #1491); rewrite it: \`bash $(dirname "$0")/fleet-hub-node.sh env --write --force\`"
-  else
-    warn node "CCQUOTA_FLEET=1 but no node token: CCQUOTA_TOKEN unset and $_nenv missing — the entry's lease / placement / move all fall back silently: spawns are guarded by the GitHub claim alone, every session opens here, no move lands (issue #1491). Write it: $_nfix"
-  fi
-fi
-
 # --- mode (issue #1539): local or hub, per fleet ---------------------------------
 # Which of the two modes each fleet on this login runs in — docs/LOCAL-AND-HUB.md
 # is the matrix of what that decides. The login-wide value (environment ▸
@@ -801,29 +878,6 @@ EOF
 fi
 [ -n "$_mode_out" ] || { [ "$_mode_g" = 1 ] && _mode_out=hub || _mode_out=local; }
 info mode "$_mode_out — 本机 / 联机各管什么: docs/LOCAL-AND-HUB.md"
-
-# --- role (issue #1623): what this machine is, and its ONE config file ----------
-# client / node / client,node — FLEET_ROLE in $conf_dir/fleet.conf, else inferred
-# from what the machine holds (fleet-conf.sh role). One file = PASS; settings still
-# spread over the old files = INFO with the one command that folds them (the next
-# sync runs it on its own); a half-migrated machine (the file AND an old one still
-# read) = WARN. A machine that is neither prints nothing: the degenerate case.
-_rl=$(bash "$(dirname "$0")/fleet-conf.sh" role --why 2>/dev/null)
-_rl_role=${_rl%%	*}; _rl_how=${_rl#*	}
-_rl_old=''
-for _rf in "$(dirname "$0")/../fleet.conf" "$conf_dir/fleet.settings" "$conf_dir/shell.conf"; do
-  [ -f "$_rf" ] && _rl_old="${_rl_old:+$_rl_old, }$(printf '%s' "$_rf" | sed "s#^$HOME#~#")"
-done
-_rl_mc=$(printf '%s' "$conf_dir/fleet.conf" | sed "s#^$HOME#~#")
-if [ -n "$_rl_role" ] && [ "$_rl_role" != none ]; then
-  if [ -f "$conf_dir/fleet.conf" ] && [ -z "$_rl_old" ]; then
-    pass role "$_rl_role ($_rl_how) — 配置只有一份: $_rl_mc"
-  elif [ -f "$conf_dir/fleet.conf" ]; then
-    warn role "$_rl_role ($_rl_how) — $_rl_mc 之外还在读旧文件: $_rl_old — 并进去后改名 .bak"
-  else
-    info role "$_rl_role ($_rl_how) — 设置仍分散在: ${_rl_old:-fleets/<会话>/conf · hub.json} — \`bash $(dirname "$0")/fleet-conf.sh migrate\` 并成一份（同步时自动跑）"
-  fi
-fi
 
 # --- tools (issue #1774, #1784): can a PATH-less shell find claude and tmux? -----
 # What a daemon, an ssh command or a restore sees — not this terminal's PATH. Asked
@@ -885,23 +939,6 @@ if [ -f "$_hi" ]; then
     DIVERGED) warn hub-image "入口镜像 commit $_hi_c 与 stable ($_hi_s) 分叉 — 镜像独有 $(_hif ahead) 个、stable 独有 $(_hif behind) 个 commit" ;;
     NOHUB|'') ;;
     *)        info hub-image "入口镜像的 commit 未知（不是「最新」）: $(_hif note)" ;;
-  esac
-fi
-
-# --- client (issue #1722): the installed client — version vs the hub, tmux, cert -
-# bin/fleet-client-update.sh doctor answers for the install-line client
-# (~/.local/share/claude-fleet, FLEET_INSTALL_HOME): its version against the
-# hub's client_version, the hub reachable, tmux ≥ 3.2, the certificate. A
-# machine with no installed client prints nothing: the degenerate case. A
-# client-only computer gets the same row from `fleet doctor` (bin/fleet).
-_cu="$(dirname "$0")/fleet-client-update.sh"
-_cu_root="${FLEET_INSTALL_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/claude-fleet}"
-if [ -f "$_cu" ] && [ -f "$_cu_root/.client-version" ]; then
-  _cu_out=$(bash "$_cu" doctor --root "$_cu_root" 2>/dev/null)
-  case "$_cu_out" in
-    PASS*) pass client "${_cu_out#*	}" ;;
-    WARN*) warn client "${_cu_out#*	}" ;;
-    INFO*) info client "${_cu_out#*	}" ;;
   esac
 fi
 

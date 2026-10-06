@@ -18,7 +18,7 @@
 #      `.client-version` beside them records which client it is (#1722) —
 #      `fleet` compares it with the hub's /version on start and keeps up;
 #   2. writes the hub's URL to ~/.config/claude-fleet/fleet.conf, the machine's
-#      one config file (FLEET_HUB_URL, FLEET_ROLE client — issue #1623);
+#      one config file (FLEET_HUB_URL — issue #1623; FLEET_HOST is `fleet host`'s, #1806);
 #      hub.json keeps its token;
 #   3. puts ~/.local/bin on PATH by appending ONE line to the shell's rc file,
 #      once — running the installer again adds nothing;
@@ -240,7 +240,7 @@ if [ "$(cd "$BIN" && pwd -P)" != "$(cd "$ROOT/bin" && pwd -P)" ]; then
 fi
 
 # 2 — the hub address goes to the machine's ONE config file (issue #1623):
-# fleet.conf's [common] gets FLEET_HUB_URL and FLEET_ROLE gains `client`; an
+# fleet.conf's [common] gets FLEET_HUB_URL (FLEET_HOST stays as it is, #1806); an
 # older client's files (shell.conf, hub.json's url) are folded in first, each
 # kept as .bak. hub.json is left to its token. Without the tool (a manifest
 # that predates it), hub.json gets the URL as before.
@@ -248,7 +248,7 @@ if [ "$NOHUB" = 1 ]; then
   :   # no hub (#1712): no address anywhere — `fleet` reads this computer
 elif [ -f "$ROOT/bin/fleet-conf.sh" ] \
    && FLEET_CONF_DIR="${FLEET_CONF_DIR:-$CONF_DIR}" bash "$ROOT/bin/fleet-conf.sh" migrate --quiet >/dev/null 2>&1 \
-   && FLEET_CONF_DIR="${FLEET_CONF_DIR:-$CONF_DIR}" bash "$ROOT/bin/fleet-conf.sh" set-hub "$HUB" --role client; then
+   && FLEET_CONF_DIR="${FLEET_CONF_DIR:-$CONF_DIR}" bash "$ROOT/bin/fleet-conf.sh" set-hub "$HUB"; then
   :
 else
 python3 - "$CONF_DIR/hub.json" "$HUB" <<'PY'
@@ -390,17 +390,26 @@ fi
 if [ "$NOHUB" = 0 ] && [ "${FLEET_INSTALL_NO_NODE:-}" != 1 ]; then
   NODE_ENV="${FLEET_CONF_DIR:-$CONF_DIR}/node.env"
   if [ -f "$NODE_ENV" ] && grep -qx "CCQUOTA_HUB_URL=$HUB" "$NODE_ENV" && grep -q '^CCQUOTA_TOKEN=.' "$NODE_ENV"; then
-    say "节点: 已是 $HUB 的节点（${NODE_ENV}），不重登记"
+    say "入口: 这台已登记在 ${HUB}（${NODE_ENV}），不重登记"
   elif [ ! -t 2 ] && [ "${FLEET_INSTALL_NODE_FORCE:-}" != 1 ]; then
-    say "节点: 这里没有终端可显示二维码，先不登记 — 在终端里敲 fleet node join 补上"
+    say "入口: 这里没有终端可显示二维码，先不登记 — 在终端里敲 fleet node join 补上"
   else
-    say "节点: 登记这台电脑（只协调：不在本机跑别人派的会话、不借入口的账号）…"
+    say "入口: 登记这台电脑（只看只派：不在本机跑别人派的会话、不借入口的账号）…"
     if FLEET_CONF_DIR="${FLEET_CONF_DIR:-$CONF_DIR}" "$ROOT/bin/fleet" node join --no-fleet --no-deps --no-admin </dev/null >&2; then
       :
     else
-      say "节点: 没登记成（上面一行说了哪步）— 客户端照样能用；再跑一次这行，或敲 fleet node join 补上"
+      say "入口: 没登记成（上面一行说了哪步）— fleet 照样能用；再跑一次这行，或敲 fleet node join 补上"
     fi
   fi
+fi
+
+# 6 — what this computer does, in the doctor's words (issue #1806): one line,
+# 能力 基础 · 承载 已开 / 未开, and how to open it.
+if [ -f "$ROOT/bin/fleet-conf.sh" ] \
+   && [ "$(FLEET_CONF_DIR="${FLEET_CONF_DIR:-$CONF_DIR}" bash "$ROOT/bin/fleet-conf.sh" host 2>/dev/null)" = 1 ]; then
+  say "能力: 基础 · 承载 已开（关掉：fleet host off）"
+else
+  say "能力: 基础 · 承载 未开 — 要在这台跑会话：fleet host on"
 fi
 
 # 7 — the first `fleet`, right here.

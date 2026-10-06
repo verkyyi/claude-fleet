@@ -11,7 +11,7 @@
 #                (a user cert, principal alice, ~12h, signed by the CA) and
 #                ~/.ssh/fleet-ssh-config verbatim; remembers the hub URL as
 #                FLEET_HUB_URL in ~/.config/claude-fleet/fleet.conf, the machine's
-#                one config file, with FLEET_ROLE client (issue #1623) — hub.json
+#                one config file, with FLEET_HOST=0 (issues #1623, #1806) — hub.json
 #                is left to its token (a token already there is kept);
 #                draws a QR (block characters) and prints the user code
 #   B. include   appends `Match all` + `Include ~/.ssh/fleet-ssh-config` to an
@@ -133,7 +133,7 @@ echo "$L" | grep -A1 'Principals:' | grep -qx '[[:space:]]*alice' && ok "A princ
 echo "$L" | grep -q "Signing CA: ED25519 $(ssh-keygen -lf "$SB/ca.pub" | awk '{print $2}')" && ok "A signed by the CA" || bad "A signing CA: $L"
 grep -q '^Host m4 fleet-m4 fleet-m4-public$' "$HOME/.ssh/fleet-ssh-config" && ok "A ssh config written" || bad "A ssh config"
 grep -qx "export FLEET_HUB_URL=\"http://127.0.0.1:$PORT\"" "$HOME/.config/claude-fleet/fleet.conf" 2>/dev/null && ok "A hub remembered in fleet.conf" || bad "A hub not remembered: $(cat "$HOME/.config/claude-fleet/fleet.conf" 2>&1)"
-grep -qx 'FLEET_ROLE="client"' "$HOME/.config/claude-fleet/fleet.conf" 2>/dev/null && ok "A role client" || bad "A no FLEET_ROLE client"
+grep -qx 'FLEET_HOST=0' "$HOME/.config/claude-fleet/fleet.conf" 2>/dev/null && ok "A FLEET_HOST=0 (#1806)" || bad "A no FLEET_HOST=0: $(cat "$HOME/.config/claude-fleet/fleet.conf" 2>&1)"
 [ -f "$HOME/.config/claude-fleet/hub.json" ] && grep -q '"url"' "$HOME/.config/claude-fleet/hub.json" && bad "A the url went to hub.json too" || ok "A hub.json holds no url"
 echo "$out" | grep -q 'BCDF-GHJK' && echo "$out" | grep -q '█\|▀\|▄' && ok "A code + QR shown" || bad "A no code/QR: $out"
 
