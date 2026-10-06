@@ -1018,7 +1018,7 @@ drill_fleet_down_confirm() {
   # their hooks stamp the session id; the conversation is on disk (the snapshot keeps an id only then)
   nt set-option -w -t oc:issue-1 @cc_session_id sid-1; nt set-option -w -t oc:issue-2 @cc_session_id sid-2
   loop_transcript "$WORK/wt-1" sid-1 x; loop_transcript "$WORK/wt-2" sid-2 x
-  nt set-option -w -t oc:issue-1 @claude_state working; nt set-option -w -t oc:issue-2 @claude_state done
+  nt set-option -w -t oc:issue-1 @claude_state working; nt set-option -w -t oc:issue-2 @claude_state 'done'
   # 1. a script, no --yes: nothing goes down, and it says what would have
   env $fenv bash "$WORK/inst/bin/fleet-down.sh" oc </dev/null > "$WORK/fd.out" 2>&1; rc=$?
   [ "$rc" != 0 ] || { WHY="fleet-down with no terminal and no --yes went ahead (exit 0)"; return 1; }

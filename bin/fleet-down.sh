@@ -91,7 +91,9 @@ if tmux -L "$SOCK" has-session -t "$NAME" 2>/dev/null; then
       break
     done
     # older downs: the newest five are plenty
-    ls -1 "$FLEET_CONF_DIR/fleets/$NAME"/restore.map.down-* 2>/dev/null | grep -v '\.disarmed$' | sort -r | sed -n '6,$p' \
+    for m in "$FLEET_CONF_DIR/fleets/$NAME"/restore.map.down-*; do
+      case "$m" in *.disarmed) ;; *) [ -f "$m" ] && printf '%s\n' "$m" ;; esac
+    done | sort -r | sed -n '6,$p' \
       | while IFS= read -r m; do rm -f "$m" "$m.disarmed"; done
   fi
   tmux -L "$SOCK" kill-session -t "$NAME" && echo "fleet-down: killed tmux session '$NAME'"

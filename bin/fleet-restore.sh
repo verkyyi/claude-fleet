@@ -987,7 +987,9 @@ undo_down() {
     [ -n "$sess" ] || { echo "fleet-restore: --undo: 认不出是哪个 fleet，请写名字：fleet up --undo <fleet>" >&2; return 2; }
   fi
   case "$sess" in */*|.|..) echo "fleet-restore: --undo: 不是 fleet 名：$sess" >&2; return 2 ;; esac
-  m=$(ls -1 "$FLEET_CONF_DIR/fleets/$sess"/restore.map.down-* 2>/dev/null | grep -v '\.disarmed$' | sort | tail -1)
+  m=$(for m in "$FLEET_CONF_DIR/fleets/$sess"/restore.map.down-*; do
+         case "$m" in (*.disarmed) ;; (*) [ -f "$m" ] && printf '%s\n' "$m" ;; esac
+       done | sort | tail -1)
   [ -n "$m" ] || { echo "fleet-restore: --undo: fleet「$sess」没有可撤销的 fleet down（fleets/$sess/restore.map.down-*）" >&2; return 1; }
   rm -f "$FLEET_CONF_DIR/fleets/$sess/restore.down"
   if [ -f "$m.disarmed" ]; then mkdir -p "$RDIR"; : > "$ARM"; rm -f "$RDIR/autorestore.off"; fi
