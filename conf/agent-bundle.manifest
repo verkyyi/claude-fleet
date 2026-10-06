@@ -1,0 +1,58 @@
+# conf/agent-bundle.manifest — the fleet's Agent configuration as ONE package
+# (issue #1725, EPIC #1718 C7): what a full install (~/.claude/fleet, a git
+# checkout) and a client-only computer (~/.local/share/claude-fleet, from the
+# hub's /install or GitHub's stable) both get, from the same files.
+#
+#   <repo-relative path>  <category>
+#
+# A path ending in `/` is every file under it, recursively, except a name that
+# starts with `.` or `_` (list such a file on its own line). `#` starts a
+# comment. Categories are what `fleet doctor`'s agents line counts — hooks ·
+# skills · mcp · mod (the four the EPIC's metric reads), plus settings /
+# commands (filled with them) and tool (what applies the rest).
+#
+# Read in three places, maintained here only:
+#   · bin/fleet-agent-bundle.py   files / version / check — the expansion
+#   · bin/fleet-client-mirror.sh  writes the expansion into the hub's client
+#                                 manifest (its generated `agent bundle` block)
+#                                 and copies the files beside it
+#   · bin/fleet-install-apply.sh  --bundle: the apply a client runs (fill only;
+#                                 the override files always win)
+# Version = a digest of these files' bytes (`fleet-agent-bundle.py version`),
+# so a checkout at stable and a client installed from it print the same one.
+
+# hooks — the table, the guards it wires, and the shim a client wires them through
+hooks/settings-hooks.json           hooks
+hooks/agent-guard.py                hooks
+hooks/artifact-guard.py             hooks
+hooks/base-readonly-guard.py        hooks
+hooks/bash-guard.py                 hooks
+bin/fleet-hook-run.sh               hooks
+
+# settings — the default Claude Code keys (#1558)
+conf/claude-settings.default.json   settings
+
+# MCP + the doc block + Codex's posture (#1559), and the two servers' wrappers
+conf/agent-defaults/                mcp
+bin/mcp-github.sh                   mcp
+bin/mcp-fetch.sh                    mcp
+
+# skills — Claude's ~/.claude/skills and Codex's $CODEX_HOME/skills
+skills/                             skills
+
+# commands — Claude's slash commands, and Codex's native-skill copies of them
+commands/                           commands
+conf/codex-preamble.md              commands
+
+# mod — the in-session plugin (#1335) every fleet-launched Claude loads
+mod/fleet/.claude-plugin/plugin.json  mod
+mod/fleet/hooks/                    mod
+mod/fleet/types/                    mod
+mod/fleet/tsconfig.json             mod
+
+# tool — what applies the package
+bin/fleet-agent-bundle.py           tool
+bin/fleet-install-apply.sh          tool
+bin/fleet-hooks-merge.py            tool
+bin/fleet-agent-defaults.py         tool
+bin/fleet-daemon-lib.sh             tool

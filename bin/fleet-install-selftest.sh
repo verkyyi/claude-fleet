@@ -141,12 +141,14 @@ while IFS= read -r f; do
   if ! cmp -s "$ROOT/$f" "$REPO/$f"; then missing="$missing $f(differs)"; continue; fi
   case "$f" in
     bin/*) [ -x "$ROOT/$f" ] || missing="$missing $f(not executable)" ;;
-    *) [ -x "$ROOT/$f" ] && missing="$missing $f(executable)" ;;
+    *) # elsewhere (the Agent configuration package, #1725) a script keeps its #!
+       if [ "$(head -c 2 "$REPO/$f")" = '#!' ]; then [ -x "$ROOT/$f" ] || missing="$missing $f(not executable)"
+       else [ -x "$ROOT/$f" ] && missing="$missing $f(executable)"; fi ;;
   esac
 done <<EOT
 $FILES
 EOT
-[ -z "$missing" ] && ok "B all $nfiles manifest files installed under $ROOT, identical, bin/ executable" || bad "B installed files:$missing"
+[ -z "$missing" ] && ok "B all $nfiles manifest files installed under $ROOT, identical, bin/ + scripts executable" || bad "B installed files:$missing"
 [ -f "$ROOT/conf/tmux-shell.conf" ] && ok "B conf/tmux-shell.conf beside bin/ (\$BIN/../conf resolves)" || bad "B no conf/tmux-shell.conf under the root"
 [ -e "$ROOT/bin/fleet-gone.sh" ] && bad "B a copy the manifest no longer lists survived" || ok "B stale fleet-gone.sh removed"
 echo "$out" | grep -q 'fleet-gone.sh' && ok "B the removal is said" || bad "B removal not mentioned: $out"

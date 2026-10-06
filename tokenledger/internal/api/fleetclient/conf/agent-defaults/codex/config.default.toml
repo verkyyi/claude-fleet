@@ -1,0 +1,35 @@
+# conf/agent-defaults/codex/config.default.toml — the fleet's default Codex
+# configuration for every login on a managed machine (issue #1559, EPIC #1524 C12).
+# Filled into $CODEX_HOME/config.toml by `bin/fleet-agent-defaults.py apply`
+# (fleet-install-apply.sh's `agents` pass): FILL ONLY — a top-level key the login
+# already has, whatever its value, is never changed; an [mcp_servers.<name>]
+# the login already has is never rewritten; `model` is never shipped. Names /
+# keys listed in ~/.config/claude-fleet/agent-overrides.json are never written.
+# Shape kept deliberately small: top-level scalars + [mcp_servers.<name>] tables
+# with command/args — the merge reads it without tomllib (macOS python 3.9).
+
+# A fleet session's footing: hooks are the rails (bash-guard, the read-only base
+# checkout), not approval prompts — the same posture fleet-codex.sh passes on the
+# command line, so a resumed / non-fleet Codex on this login stops asking too.
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+model_reasoning_effort = "high"
+
+# The same four MCP servers conf/agent-defaults/claude/mcp.default.json gives Claude.
+[mcp_servers.context7]
+command = "npx"
+args = ["-y", "@upstash/context7-mcp"]
+
+[mcp_servers.playwright]
+command = "npx"
+args = ["@playwright/mcp@latest"]
+
+# github: the token is taken from `gh auth token` when the server STARTS, by the
+# wrapper — it is never written into this file or any merged config.
+[mcp_servers.github]
+command = "bash"
+args = ["-lc", "exec \"$HOME/.claude/fleet/bin/mcp-github.sh\""]
+
+[mcp_servers.fetch]
+command = "bash"
+args = ["-lc", "exec \"$HOME/.claude/fleet/bin/mcp-fetch.sh\""]

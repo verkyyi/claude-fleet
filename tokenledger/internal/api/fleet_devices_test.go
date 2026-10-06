@@ -514,7 +514,12 @@ func TestFleetClientMatchesBin(t *testing.T) {
 		}
 	}
 	// The shell (claude-fleet#1484) ships: #1486 is what put it on the list.
-	for _, must := range []string{"bin/fleet", "bin/fleet-shell.sh", "bin/fleet-sidebar.py", "bin/tmux-status.sh", "conf/tmux-shell.conf"} {
+	// …and the Agent configuration package (claude-fleet#1725): its list, the
+	// hook table + shim, a skill, and the mod's manifest under a dot directory
+	// (embedded only through `all:mod`).
+	for _, must := range []string{"bin/fleet", "bin/fleet-shell.sh", "bin/fleet-sidebar.py", "bin/tmux-status.sh", "conf/tmux-shell.conf",
+		"conf/agent-bundle.manifest", "bin/fleet-agent-bundle.py", "hooks/settings-hooks.json", "bin/fleet-hook-run.sh",
+		"skills/doc-preview/SKILL.md", "mod/fleet/.claude-plugin/plugin.json"} {
 		if !listed[must] {
 			t.Errorf("manifest does not list %s", must)
 		}
