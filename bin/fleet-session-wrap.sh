@@ -28,6 +28,11 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 LAUNCH="${FLEET_WRAP_LAUNCH:-$BIN/fleet-claude.sh}"   # selftest seam: a fake launcher
 FAST="${FLEET_WRAP_FAST_FAIL:-5}"
 case "$FAST" in ''|*[!0-9]*) FAST=5 ;; esac
+# tmux off a bare PATH (issue #1774): the wrapper stamps the window before the
+# launcher runs, so it needs the same lookup fleet-claude.sh does (fleet_path_fill).
+# shellcheck source=/dev/null
+[ -f "$BIN/fleet-lib.sh" ] && . "$BIN/fleet-lib.sh" >/dev/null 2>&1 \
+  && command -v fleet_path_fill >/dev/null 2>&1 && { PATH=$(fleet_path_fill); export PATH; }
 
 # The launch POLICY a resume / new session keeps: its Codex home and an explicit
 # model (the agent is the one that just ran, @cc_agent). The rest — a seed prompt,
