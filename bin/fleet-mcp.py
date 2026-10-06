@@ -20,6 +20,12 @@ see the same tools (Claude shows them as mcp__fleet__<action>):
   handoff   action [+ slug|doc]     → bin/fleet-handoff-file.sh         (记)
   pr_verdict pr [+ repo, wait]      → bin/fleet-pr-verdict.sh           (合)
   pr_merge  pr [+ repo]             → bin/fleet-pr-merge.sh             (合)
+  brief     [kind, issue, repo]     → bin/fleet-claim-brief.sh | fleet-compact-resume.sh --brief  (issue #1811)
+  file_issue title [+ body, parent, spawn|bind, …] → bin/fleet-issue-file.sh
+  gh        kind + number [+ fields, max_age, repo] → bin/fleet-gh.sh
+  context   [json]                  → bin/fleet-context.sh
+  transfer  action [+ to, handoff, loop, …] → bin/fleet-transfer.sh | fleet-loop.py from-claude
+  where / show / open               → bin/fleet-client-where.sh / fleet-show.sh / fleet-open.sh
 
 docs/FLEET-MCP.md is the one spec; later EPIC members add tools there and here.
 
@@ -77,6 +83,9 @@ STATUS_TIMEOUT_S = 30
 WRITE_TIMEOUT_S = 90       # a comment / a report / an evidence copy: one gh or peer round-trip
 MERGE_TIMEOUT_S = 180      # gate + merge + confirm
 VERDICT_TIMEOUT_S = 60     # the one-shot read
+BRIEF_TIMEOUT_S = 90       # one gh read of the issue + its comments
+FILE_TIMEOUT_S = 180       # gh issue create + sub-issue link + a spawn
+SHOW_TIMEOUT_S = 300       # --inline holds the screen until the operator presses a key
 
 # Codex hands an MCP server only a short env allowlist (HOME, PATH, USER, …);
 # these are what the scripts need to find the pane, the fleet and the install —
@@ -765,6 +774,13 @@ def tool_evidence(args):
 
 def tool_handoff(args):
     action = args["action"]
+    if action == "arm":
+        extra = [k for k in ("slug",) if k in args]
+        if extra:
+            raise Refused("arm takes no slug")
+        return tool_handoff_arm(args)
+    if "repo" in args:
+        raise Refused("repo applies to arm only")
     if "slug" in args and action != "path":
         raise Refused("slug applies to path only")
     if action == "check" and "doc" not in args:
@@ -797,6 +813,120 @@ def tool_pr_verdict(args):
 
 def tool_pr_merge(args):
     return script([str(BIN / "fleet-pr-merge.sh"), str(args["pr"])] + check_repo(args), MERGE_TIMEOUT_S)
+
+
+# --- the rest of a worker skill (issue #1811, EPIC #1813 C9) --------------------
+
+def tool_brief(args):
+    if args.get("kind") == "resume":
+        extra = [k for k in ("issue", "repo", "no_comments") if k in args]
+        if extra:
+            raise Refused("resume takes no %s" % ", ".join(extra))
+        return script([str(BIN / "fleet-compact-resume.sh"), "--brief"], STATUS_TIMEOUT_S)
+    argv = [str(BIN / "fleet-claim-brief.sh")]
+    if "issue" in args:
+        argv += ["--issue", str(args["issue"])]
+    argv += check_repo(args)
+    if args.get("no_comments"):
+        argv.append("--no-comments")
+    return script(argv, BRIEF_TIMEOUT_S)
+
+
+def tool_file_issue(args):
+    if args.get("spawn") and args.get("bind"):
+        raise Refused("spawn and bind are exclusive (bind makes THIS scratch session the worker)")
+    argv = [str(BIN / "fleet-issue-file.sh"), "--title", args["title"]]
+    if "body" in args:
+        argv += ["--body", args["body"]]
+    for label in [x.strip() for x in args.get("labels", "").split(",") if x.strip()]:
+        argv += ["--label", label]
+    if "priority" in args:
+        argv += ["--priority", args["priority"]]
+    if "parent" in args:
+        argv += ["--parent", str(args["parent"])]
+    argv += check_repo(args)
+    if args.get("spawn"):
+        argv.append("--spawn")
+    if args.get("bind"):
+        argv.append("--bind")
+    return script(argv, FILE_TIMEOUT_S)
+
+
+GH_KIND = {"issue": ["issue", "view"], "pr": ["pr", "view"], "checks": ["pr", "checks"]}
+
+
+def tool_gh(args):
+    argv = [str(BIN / "fleet-gh.sh")] + GH_KIND[args["kind"]] + [str(args["number"])] + check_repo(args)
+    if "fields" in args:
+        argv += ["--json", args["fields"]]
+    if "max_age" in args:
+        argv += ["--max-age", str(args["max_age"])]
+    return script(argv, VERDICT_TIMEOUT_S)
+
+
+def tool_context(args):
+    return script([str(BIN / "fleet-context.sh")] + (["--json"] if args.get("json") else []), STATUS_TIMEOUT_S)
+
+
+def tool_handoff_arm(args):
+    """Arm bin/fleet-handoff-cycle.sh DETACHED: it waits for this turn to end, so
+    the call returns at once — and it must outlive the tool call."""
+    given = [k for k in ("doc", "issue") if k in args]
+    if len(given) != 1:
+        raise Refused("arm takes exactly one of doc (file storage) or issue (comment storage)")
+    pane = os.environ.get("TMUX_PANE", "")
+    if not os.environ.get("TMUX") or not pane:
+        raise Refused("arm needs this session's tmux pane (TMUX / TMUX_PANE unset)")
+    argv = [str(BIN / "fleet-handoff-cycle.sh"), "--pane", pane]
+    if "doc" in args:
+        argv += ["--doc", args["doc"]]
+    else:
+        argv += ["--issue", str(args["issue"])] + check_repo(args)
+    try:
+        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError as exc:
+        raise ToolFault("fleet-handoff-cycle.sh could not start: %s" % exc)
+    return {"command": "fleet-handoff-cycle.sh", "exit": 0, "pid": proc.pid,
+            "stdout": "armed (pid %d): clears this pane and types the pickup after this turn ends — "
+                      "end the turn now, no further tool call\n" % proc.pid, "stderr": ""}
+
+
+def tool_transfer(args):
+    action = args["action"]
+    allowed = {"check": {"to"}, "arm": {"to", "handoff", "loop"}, "export_loop": {"transcript", "output"}}[action]
+    extra = [k for k in ("to", "handoff", "loop", "transcript", "output") if k in args and k not in allowed]
+    if extra:
+        raise Refused("%s takes no %s" % (action, ", ".join(extra)))
+    missing = [k for k in sorted(allowed - {"loop"}) if k not in args]
+    if missing:
+        raise Refused("%s needs %s" % (action, ", ".join(missing)))
+    if action == "export_loop":
+        return script(["python3", str(BIN / "fleet-loop.py"), "from-claude", "--transcript", args["transcript"],
+                       "--output", args["output"]], STATUS_TIMEOUT_S)
+    pane = os.environ.get("TMUX_PANE", "")
+    if not pane:
+        raise Refused("transfer needs this session's tmux pane (TMUX_PANE unset)")
+    argv = [str(BIN / "fleet-transfer.sh"), "--session", current_session(), "--window", pane, "--to", args["to"]]
+    if action == "check":
+        return script(argv + ["--dry-run"], VERDICT_TIMEOUT_S)
+    argv += ["--handoff", args["handoff"]]
+    if "loop" in args:
+        argv += ["--loop", args["loop"]]
+    return script(argv + ["--after-turn"], VERDICT_TIMEOUT_S)
+
+
+def tool_where(args):
+    return script([str(BIN / "fleet-client-where.sh")] + (["--json"] if args.get("json") else []), STATUS_TIMEOUT_S)
+
+
+def tool_show(args):
+    argv = [str(BIN / "fleet-show.sh")] + (["--inline"] if args.get("inline") else []) + ["--", args["file"]]
+    return script(argv, SHOW_TIMEOUT_S)
+
+
+def tool_open(args):
+    return script([str(BIN / "fleet-open.sh"), "--", args["target"]], STATUS_TIMEOUT_S)
 
 
 ISSUE = {"type": "integer", "minimum": 1, "description": 'The GitHub issue number (a positive integer, no "#").'}
@@ -899,12 +1029,17 @@ TOOLS = {
         "description": "记 — where a file handoff goes and which one a pickup resumes (bin/fleet-handoff-file.sh). "
                        "path: the file to write (slug optional); find: the one to resume (exit 1 none, 4 "
                        "ambiguous — candidates listed, ask); repo: the doc's Repo: line; check: is the composed "
-                       "doc short enough to hand on (exit 3 = findings, advice only).",
+                       "doc short enough to hand on (exit 3 = findings, advice only); arm: start the detached "
+                       "clear+resume helper (bin/fleet-handoff-cycle.sh) for a stored handoff — the LAST tool call "
+                       "of the turn.",
         "inputSchema": {"type": "object", "properties": {
-            "action": {"type": "string", "enum": ["path", "find", "repo", "check"]},
+            "action": {"type": "string", "enum": ["path", "find", "repo", "check", "arm"]},
             "slug": {"type": "string", "description": "A short name for the handoff file (path)."},
-            "doc": {"type": "string", "description": "The composed handoff text (check)."},
-            "issue": dict(ISSUE, description="Compare the doc against this issue's body (check).")},
+            "doc": {"type": "string", "description": "check: the composed handoff text. arm: the stored doc's PATH "
+                                                     "(file storage)."},
+            "issue": dict(ISSUE, description="check: compare the doc against this issue's body. arm: the issue the "
+                                             "marked handoff comment is on (comment storage)."),
+            "repo": dict(REPO, description="arm with issue: the issue's repo (owner/name, hosted by this fleet).")},
             "required": ["action"], "additionalProperties": False}}),
     "pr_verdict": (tool_pr_verdict, {
         "description": "合 — the ONE merge-gate read (bin/fleet-pr-verdict.sh): READY (exit 0) · PENDING · BEHIND · "
@@ -928,6 +1063,92 @@ TOOLS = {
         "inputSchema": {"type": "object", "properties": {
             "pr": {"type": "integer", "minimum": 1, "description": "The PR number."}, "repo": REPO},
             "required": ["pr"], "additionalProperties": False}}),
+    "brief": (tool_brief, {
+        "description": "The one opening read (issue #1811). kind claim (default): bin/fleet-claim-brief.sh — fleet, "
+                       "seat, the bound issue with every comment, the claim, the charter layers, the directive, "
+                       "origin. Exit 0 go · 2 not in a fleet · 3 wrong seat · 4 no issue bound · 5 the issue read "
+                       "failed. kind resume: bin/fleet-compact-resume.sh --brief — the recovery map after an "
+                       "in-place compaction.",
+        "inputSchema": {"type": "object", "properties": {
+            "kind": {"type": "string", "enum": ["claim", "resume"], "description": "claim (default) or resume."},
+            "issue": dict(ISSUE, description="claim: read this issue instead of the window's bound one."),
+            "repo": REPO,
+            "no_comments": {"type": "boolean", "description": "claim: skip the comment thread."}},
+            "additionalProperties": False}}),
+    "file_issue": (tool_file_issue, {
+        "description": "File a GitHub issue through the ONE filer channel (bin/fleet-issue-file.sh): the "
+                       "provenance marker, the label taxonomy, the default milestone. parent links it as a "
+                       "sub-issue; spawn hands it to a new worker (caps + dedup apply; a cap refusal leaves it "
+                       "filed); bind makes THIS scratch session its worker (refused from a worker). Prints the "
+                       "issue URL. Exit 0 ok · 2 usage · 3 unknown label · 4 spawn with no live parent · 1 failure.",
+        "inputSchema": {"type": "object", "properties": {
+            "title": {"type": "string"},
+            "body": {"type": "string", "description": "The issue body, Markdown."},
+            "labels": {"type": "string", "description": "Comma-separated labels (the fleet's fixed taxonomy)."},
+            "priority": {"type": "string", "enum": ["p0", "p1", "p2", "p3"]},
+            "parent": dict(ISSUE, description="File it as a sub-issue of this issue."),
+            "spawn": {"type": "boolean", "description": "Start a worker on it now."},
+            "bind": {"type": "boolean", "description": "Scratch only: become its worker in place."},
+            "repo": REPO},
+            "required": ["title"], "additionalProperties": False}}),
+    "gh": (tool_gh, {
+        "description": "Read an issue, a PR or a PR's checks from the fleet's local copy first, GitHub only when "
+                       "it is too old (bin/fleet-gh.sh) — one JSON object with the gh --json field names plus "
+                       "_source (cache|gh|rest) and _age. Use it instead of a bare gh view; the merge gate is "
+                       "pr_verdict.",
+        "inputSchema": {"type": "object", "properties": {
+            "kind": {"type": "string", "enum": ["issue", "pr", "checks"]},
+            "number": {"type": "integer", "minimum": 1, "description": "The issue / PR number."},
+            "fields": {"type": "string", "description": "Comma-separated gh --json fields, e.g. title,state."},
+            "max_age": {"type": "integer", "minimum": 0,
+                        "description": "Oldest cached copy to accept, seconds (0 = always ask GitHub)."},
+            "repo": REPO},
+            "required": ["kind", "number"], "additionalProperties": False}}),
+    "context": (tool_context, {
+        "description": "How full is THIS session's context window (bin/fleet-context.sh): the percentage and a "
+                       "verdict on the auto-handoff bands — OK · WATCH (finish this thread, then hand off) · "
+                       "HANDOFF (now). Exit 0 OK · 1 any other verdict · 2 nothing to read.",
+        "inputSchema": {"type": "object", "properties": {
+            "json": {"type": "boolean", "description": "The machine-readable form."}},
+            "additionalProperties": False}}),
+    "transfer": (tool_transfer, {
+        "description": "Hand THIS session's task to the named coding agent in the same pane and worktree "
+                       "(bin/fleet-transfer.sh). check: resolve the exact source (--dry-run), refused = stop. "
+                       "arm: the LAST tool call of the turn, with the private handoff note's path — the switch "
+                       "happens after the turn ends; it prints the request directory. export_loop: write an "
+                       "active ScheduleWakeup loop as the private JSON arm's loop takes (bin/fleet-loop.py "
+                       "from-claude).",
+        "inputSchema": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["check", "arm", "export_loop"]},
+            "to": {"type": "string", "enum": ["claude", "codex"]},
+            "handoff": {"type": "string", "description": "arm: path of the private handoff note."},
+            "loop": {"type": "string", "description": "arm: path of the private loop JSON (optional)."},
+            "transcript": {"type": "string", "description": "export_loop: the exact source transcript."},
+            "output": {"type": "string", "description": "export_loop: where to write the loop JSON."}},
+            "required": ["action"], "additionalProperties": False}}),
+    "where": (tool_where, {
+        "description": "Read-only. Where the operator is right now — device, system, terminal and what it can do "
+                       "(open a page, take a file, a link only) — bin/fleet-client-where.sh. The one reader; "
+                       "never guess a terminal. Exit 0 a client named · 3 nobody connected · 1 could not tell.",
+        "inputSchema": {"type": "object", "properties": {
+            "json": {"type": "boolean", "description": "The machine-readable form."}},
+            "additionalProperties": False}}),
+    "show": (tool_show, {
+        "description": "Show a file (image, PDF, QR code, screenshot) on the OPERATOR's terminal, never this "
+                       "machine's screen (bin/fleet-show.sh): SENT (exit 0) offered as a download; PATH (exit 2) "
+                       "no iTerm2 attached — tell them the path. inline draws it and holds the screen until they "
+                       "press a key.",
+        "inputSchema": {"type": "object", "properties": {
+            "file": {"type": "string", "description": "Path of the file."},
+            "inline": {"type": "boolean", "description": "Draw it in the terminal instead of a download."}},
+            "required": ["file"], "additionalProperties": False}}),
+    "open": (tool_open, {
+        "description": "Open a URL, a page served here (:port[/path], localhost) or a file in the OPERATOR's own "
+                       "browser over their SSH connection (bin/fleet-open.sh) — never `open` on this machine. "
+                       "Prints sent:<how> or fallback:copied (exit 0), fallback:path (exit 2) — say the path.",
+        "inputSchema": {"type": "object", "properties": {
+            "target": {"type": "string", "description": "A URL, :port[/path], or a file path."}},
+            "required": ["target"], "additionalProperties": False}}),
 }
 
 # The pre-#1807 fleet-peer server, for a config that still mounts it (one version).

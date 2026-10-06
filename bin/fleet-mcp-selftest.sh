@@ -3,7 +3,7 @@
 #
 # bin/fleet-mcp.py is the ONE stdio MCP server Claude and Codex sessions both mount
 # (docs/FLEET-MCP.md). Driven against fake scripts in a sandbox bin/:
-#   A  initialize + tools/list: server `fleet`, exactly the fourteen tools, every
+#   A  initialize + tools/list: server `fleet`, exactly the twenty-two tools, every
 #      schema closed (additionalProperties false)
 #   B  refusals: an unknown argument, a wrong type, a missing argument, an
 #      out-of-range timeout, a malformed repo, a repo this fleet does not host,
@@ -37,6 +37,10 @@
 #      traps every Python socket; curl and ccquota are tripwires); the real
 #      fleet_hub_put carries it as the relay's `worker`, and without it the outbox
 #      file is byte for byte as before
+#   L  the rest of a worker skill (issue #1811): brief · file_issue · gh · context ·
+#      transfer · where · show · open · handoff arm — refusals run nothing, each runs
+#      its script with exactly the documented argv, and handoff arm returns at once
+#      with the cycle helper DETACHED (it outlives the call)
 set -u
 
 BIN=$(cd "$(dirname "$0")" && pwd)
@@ -87,6 +91,18 @@ fakein fleet-evidence.sh 'echo "/ev/$1"'
 fakein fleet-handoff-file.sh 'echo "/h/$1"; [ "$1" = check ] && exit 3; exit 0'
 fake fleet-pr-verdict.sh 'echo PENDING; exit 1'
 fake fleet-pr-merge.sh 'echo MERGED'
+# the rest of a worker skill (issue #1811)
+fake fleet-claim-brief.sh 'echo "===== fleet ====="'
+fake fleet-compact-resume.sh 'echo map'
+fake fleet-issue-file.sh 'echo "https://github.com/acme/app/issues/900"'
+fake fleet-gh.sh 'echo "{}"'
+fake fleet-context.sh 'echo "ctx 41% OK"'
+fake fleet-transfer.sh 'echo /req/1'
+fake fleet-client-where.sh 'echo "m5 iTerm2"; exit 3'
+fake fleet-show.sh 'echo "SENT a.png"'
+fake fleet-open.sh 'echo sent:iterm2'
+fake fleet-handoff-cycle.sh "sleep 2; echo cycle-done >> '$LOG.cycle'"
+printf 'import sys\nopen("%s", "a").write("fleet-loop.py " + " ".join(sys.argv[1:]) + "\\n")\n' "$LOG" > "$WORK/bin/fleet-loop.py"
 
 cat > "$WORK/tmux" <<'SH'
 #!/bin/sh
@@ -134,7 +150,8 @@ assert rows[0]["result"]["serverInfo"]["name"] == "fleet", rows[0]
 assert rows[0]["result"]["protocolVersion"] == "2025-06-18", rows[0]
 tools = {t["name"]: t for t in rows[1]["result"]["tools"]}
 assert set(tools) == {"status", "children", "repos", "agents", "spawn", "await", "send",
-                      "report", "ask", "comment", "evidence", "handoff", "pr_verdict", "pr_merge"}, sorted(tools)
+                      "report", "ask", "comment", "evidence", "handoff", "pr_verdict", "pr_merge",
+                      "brief", "file_issue", "gh", "context", "transfer", "where", "show", "open"}, sorted(tools)
 for t in tools.values():
     assert t["inputSchema"]["additionalProperties"] is False, t
     assert t["description"], t
@@ -147,7 +164,7 @@ for n in ("report", "evidence", "handoff"):
 for n in ("pr_verdict", "pr_merge"):
     assert tools[n]["inputSchema"]["required"] == ["pr"], n
 PY
-ok "A server \`fleet\`, the fourteen tools, every schema closed"
+ok "A server \`fleet\`, the twenty-two tools, every schema closed"
 
 # --- B: refusals — nothing runs -----------------------------------------------
 : > "$LOG"
@@ -240,12 +257,12 @@ ok "C status · children · repos · agents · spawn · await · send each ran i
 python3 - "$WORK/d" <<'PY' || fail "D: with no hub a tool was missing or failed" "$(cat "$WORK/d")"
 import json, sys
 rows = {r["id"]: r["result"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
-assert len(rows[1]["tools"]) == 14, rows[1]
+assert len(rows[1]["tools"]) == 22, rows[1]
 assert rows[40]["structuredContent"]["exit"] == 2 and not rows[40].get("isError"), rows[40]
 assert rows[41]["structuredContent"]["exit"] == 0, rows[41]
 PY
 grep -qx 'fleet-await.sh 3 --timeout 540' "$LOG" || fail "D: await's default timeout is not 540" "$(cat "$LOG")"
-ok "D no hub configured: all fourteen tools listed, spawn/await run locally (await default 540s)"
+ok "D no hub configured: all twenty-two tools listed, spawn/await run locally (await default 540s)"
 
 # --- E: the legacy fleet-peer shim --------------------------------------------
 env -u FLEET_WORKER_CRED PATH="$WORK:$PATH" TMUX=1 TMUX_PANE=%1 python3 "$WORK/bin/fleet-peer-mcp.py" > "$WORK/e" <<'EOF'
@@ -681,5 +698,100 @@ signed=$(FLEET_WORKER_ASSERT=fwa1.e30.c2ln put)
 python3 -c 'import json, sys; r = json.loads(sys.argv[1]); assert r["worker"] == "fwa1.e30.c2ln" and r["payload"] == {"text": "hi"}, r' "$signed" \
   || fail "K: fleet_hub_put does not carry the assertion" "$signed"
 ok "K fleet_hub_put: the relay carries it as \`worker\`; with none, the file is byte for byte as before"
+# --- L: the rest of a worker skill (issue #1811) --------------------------------
+: > "$LOG"
+{
+  call 100 brief '{"kind":"resume","issue":5}'
+  call 101 file_issue '{"title":"x","spawn":true,"bind":true}'
+  call 102 gh '{"kind":"pull","number":5}'
+  call 103 gh '{"kind":"pr","number":5,"max_age":-1}'
+  call 104 transfer '{"action":"arm","to":"codex"}'
+  call 105 transfer '{"action":"check","to":"codex","handoff":"/n.md"}'
+  call 106 transfer '{"action":"arm","to":"gemini","handoff":"/n.md"}'
+  call 107 handoff '{"action":"arm"}'
+  call 108 handoff '{"action":"arm","doc":"/d.md","issue":5}'
+  call 109 handoff '{"action":"arm","doc":"/d.md","slug":"x"}'
+  call 110 handoff '{"action":"path","repo":"acme/app"}'
+  call 111 file_issue '{"title":"x","repo":"acme/zzz"}'
+  call 112 show '{"inline":true}'
+  call 113 open '{"target":""}'
+} | serve "$WORK/j1"
+python3 - "$WORK/j1" <<'PY' || fail "L: a C9 refusal is wrong" "$(cat "$WORK/j1")"
+import json, sys
+rows = {r["id"]: r["result"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
+want = {100: "resume takes no issue", 101: "spawn and bind are exclusive", 102: "must be one of",
+        103: "must be ≥ 0", 104: "arm needs handoff", 105: "check takes no handoff", 106: "must be one of",
+        107: "exactly one of doc", 108: "exactly one of doc", 109: "arm takes no slug",
+        110: "repo applies to arm only", 111: "not hosted by this fleet", 112: 'missing required argument "file"',
+        113: "non-empty string"}
+for i, w in want.items():
+    r = rows[i]
+    assert r.get("isError"), (i, r)
+    t = r["content"][0]["text"]
+    assert w in t and t.endswith("Nothing ran."), (i, t)
+PY
+grep -v '^fleet-repo.sh list$' "$LOG" > "$WORK/j1.ran"
+[ -s "$WORK/j1.ran" ] && fail "L: a refused C9 call ran a script" "$(cat "$WORK/j1.ran")"
+: > "$LOG"; rm -f "$LOG.cycle"
+{
+  call 120 brief '{}'
+  call 121 brief '{"issue":5,"repo":"acme/lib","no_comments":true}'
+  call 122 brief '{"kind":"resume"}'
+  call 123 file_issue '{"title":"follow-up","body":"why now","labels":"bug, area:dash","priority":"p2","parent":1811,"spawn":true}'
+  call 124 file_issue '{"title":"scratch req","bind":true,"repo":"acme/lib"}'
+  call 125 gh '{"kind":"issue","number":5,"fields":"title,state"}'
+  call 126 gh '{"kind":"pr","number":42,"fields":"state,mergeStateStatus","max_age":0}'
+  call 127 gh '{"kind":"checks","number":42,"repo":"acme/app"}'
+  call 128 context '{}'
+  call 129 context '{"json":true}'
+  call 130 transfer '{"action":"check","to":"codex"}'
+  call 131 transfer '{"action":"arm","to":"claude","handoff":"/n.md","loop":"/l.json"}'
+  call 132 transfer '{"action":"export_loop","transcript":"/t.jsonl","output":"/l.json"}'
+  call 133 where '{"json":true}'
+  call 134 show '{"file":"a.png"}'
+  call 135 show '{"file":"-x.png","inline":true}'
+  call 136 open '{"target":":5173/"}'
+  call 137 handoff '{"action":"arm","doc":"/d.md"}'
+} | serve "$WORK/j2"
+python3 - "$WORK/j2" <<'PY' || fail "L: a C9 tool's result is wrong" "$(cat "$WORK/j2")"
+import json, sys
+rows = {r["id"]: r["result"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
+for i, r in rows.items():
+    assert not r.get("isError"), (i, r)
+def sc(i): return rows[i]["structuredContent"]
+assert (sc(133)["command"], sc(133)["exit"]) == ("fleet-client-where.sh", 3), sc(133)   # nobody connected = data
+assert sc(137)["command"] == "fleet-handoff-cycle.sh" and sc(137)["exit"] == 0 and sc(137)["pid"] > 0, sc(137)
+assert "end the turn" in sc(137)["stdout"], sc(137)
+PY
+# The detached helper was still running when the tool answered, and finishes on its own.
+[ -f "$LOG.cycle" ] && fail "L: handoff arm waited for the cycle helper instead of detaching it"
+i=0; while [ ! -f "$LOG.cycle" ] && [ "$i" -lt 60 ]; do sleep 0.1; i=$((i + 1)); done
+[ -f "$LOG.cycle" ] || fail "L: the detached cycle helper never finished" "$(cat "$LOG")"
+cat > "$WORK/j.want" <<'WANT'
+fleet-claim-brief.sh
+fleet-repo.sh list
+fleet-claim-brief.sh --issue 5 --repo acme/lib --no-comments
+fleet-compact-resume.sh --brief
+fleet-issue-file.sh --title follow-up --body why now --label bug --label area:dash --priority p2 --parent 1811 --spawn
+fleet-repo.sh list
+fleet-issue-file.sh --title scratch req --repo acme/lib --bind
+fleet-gh.sh issue view 5 --json title,state
+fleet-gh.sh pr view 42 --json state,mergeStateStatus --max-age 0
+fleet-repo.sh list
+fleet-gh.sh pr checks 42 --repo acme/app
+fleet-context.sh
+fleet-context.sh --json
+fleet-transfer.sh --session tf --window %1 --to codex --dry-run
+fleet-transfer.sh --session tf --window %1 --to claude --handoff /n.md --loop /l.json --after-turn
+fleet-loop.py from-claude --transcript /t.jsonl --output /l.json
+fleet-client-where.sh --json
+fleet-show.sh -- a.png
+fleet-show.sh --inline -- -x.png
+fleet-open.sh -- :5173/
+fleet-handoff-cycle.sh --pane %1 --doc /d.md
+WANT
+sed 's/ $//' "$LOG" > "$WORK/j.got"   # a no-argument run logs "<name> "
+diff "$WORK/j.want" "$WORK/j.got" > "$WORK/j.diff" || fail "L: a C9 tool ran the wrong argv" "$(cat "$WORK/j.diff")"
+ok "L brief · file_issue · gh · context · transfer · where · show · open · handoff arm: refusals run nothing, exact argv, arm detaches"
 
 printf 'fleet-mcp-selftest: %d passed\n' "$pass"

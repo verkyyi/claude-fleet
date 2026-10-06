@@ -572,7 +572,12 @@ rollback() {
   # private to the package (0600) and never copied into a note or an alert.
   TM capture-pane -p -S - -t "$PANE" > "$BUNDLE/pane-target-failed.txt" 2>/dev/null && chmod 600 "$BUNDLE/pane-target-failed.txt"
   if [ "$(opt '#{pane_dead}')" = 1 ]; then
-    st=$(opt '#{pane_dead_status}'); why="$TO exited at startup (status ${st:-?})"
+    # tmux ≤3.4 can mark the pane dead (EOF) before it reaps the child, so the
+    # status reads empty for a moment (#1801's missed SIGCHLD): ask again briefly.
+    st=$(opt '#{pane_dead_status}')
+    for i in 1 2 3 4 5 6 7 8 9 10; do [ -z "$st" ] || break; sleep 0.1; st=$(opt '#{pane_dead_status}'); done
+    [ -n "$st" ] || st=$(opt '#{@wrap_last_rc}')
+    why="$TO exited at startup (status ${st:-?})"
   fi
   python3 "$HELPER" state "$BUNDLE" target_failed "$why" >/dev/null 2>&1 || :
   for i in "${!ROLLBACK_KEYS[@]}"; do

@@ -281,12 +281,12 @@ FLEET_CODEX_NATIVE_SKILLS=0 run '/fleet-claim'
 p="$(last)"
 case "$p" in /fleet-claim|'$fleet-claim') fail "F old-Codex fallback must expand the slash seed into prose" ;; esac
 case "$p" in *'running on OpenAI Codex CLI'*) : ;; *) fail "F the expanded seed must start with the Codex preamble" "$(printf '%s' "$p" | head -5)" ;; esac
-case "$p" in *'fleet-claim-brief.sh'*) : ;; *) fail "F the expanded seed must carry the /fleet-claim skill body (the brief command)" "$(printf '%s' "$p" | head -20)" ;; esac
-case "$p" in *'fleet-pr-verdict.sh'*) : ;; *) fail "F the expanded seed must carry the ship+land step" ;; esac
+case "$p" in *'mcp__fleet__brief'*) : ;; *) fail "F the expanded seed must carry the /fleet-claim skill body (the brief tool, #1811)" "$(printf '%s' "$p" | head -20)" ;; esac
+case "$p" in *'mcp__fleet__pr_verdict'*) : ;; *) fail "F the expanded seed must carry the ship+land step" ;; esac
 case "$p" in *'$ARGUMENTS'*) fail "F \$ARGUMENTS must be substituted (empty here)" ;; esac
 # preamble first, skill body after it
 pre_at=$(printf '%s' "$p" | grep -n 'running on OpenAI Codex CLI' | head -1 | cut -d: -f1)
-body_at=$(printf '%s' "$p" | grep -n 'fleet-claim-brief.sh' | head -1 | cut -d: -f1)
+body_at=$(printf '%s' "$p" | grep -n '^# /fleet-claim' | head -1 | cut -d: -f1)
 [ "$pre_at" -lt "$body_at" ] || fail "F the preamble must precede the skill body" "pre=$pre_at body=$body_at"
 ok "F old-Codex /fleet-claim fallback expands to preamble + skill prose"
 

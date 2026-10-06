@@ -277,8 +277,8 @@ printf 'session_name\ts1\n@raw\t1\nwindow_id\t@3\n' > "$OPTS"
 out=$(cd "$WORK/widgets-scratch-3" && penv bash "$RESUME" --brief 2>&1)
 case "$out" in *'[fleet compact-resume] scratch'*'CHECK FIRST'*'next step = draft the issue'*) : ;;
   *) fail "BRIEF: a scratch gets its own check line + its map" "$out" ;; esac
-grep -q 'fleet-compact-resume.sh --brief' "$BIN/../commands/fleet-compact-resume.md" \
-  || fail "BRIEF: the command must run fleet-compact-resume.sh --brief"
+grep -q 'mcp__fleet__brief.*kind: resume' "$BIN/../commands/fleet-compact-resume.md" \
+  || fail "BRIEF: the command must call the brief tool with kind: resume (it runs fleet-compact-resume.sh --brief, #1811)"
 ok "BRIEF: --brief restates the worker / scratch check line with the recovery map"
 
 printf 'compact-resume-selftest: all legs PASS\n'
