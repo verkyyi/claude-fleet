@@ -52,6 +52,15 @@ A personal HOOK is add-only (issue #1858, EPIC #1855 C3): its item is
 settings.json carries it wrapped, `sh "<root>/bin/fleet-hook-personal.sh" <Event>
 -- '<command>'` (fleet-hooks-merge.py's personal_wrap), which drops any
 `updatedInput` and cuts it off at FLEET_PERSONAL_HOOK_TIMEOUT (default 10s).
+The programs those hooks run travel with the layer (issue #1859, EPIC #1855
+C4): `hook_scripts` {name: text} lands as $FLEET_CONF_DIR/personal-hooks/<name>
+(directory and file 0700, rewritten only when the text moved), item
+`hook_scripts.<name>`; a hook spells it `$FLEET_PERSONAL_HOOKS/<name>`, which
+the wrapper sets. Each carries the line `# fleet personal hook` (added after the
+`#!` when missing); a program the layer drops is removed only when it still
+carries it and holds what was written — a file of the person's own in that
+directory is never touched. `session claude` lands a missing one (add only), so
+a session on a computer that never applied the layer still finds its programs.
 
 agent-effective.json is the composed picture: one row per item — MCP servers,
 Codex keys, settings keys, hooks, skills — with its source (default / team /
@@ -132,6 +141,11 @@ LAYERS = ("personal", "team")
 PERSONAL_HOOKS = "claude.hooks.personal"    # a personal hook's items (#1858): add-only, outside the hooks lock
 WHOSE = {"team": "team's", "personal": "personal layer's"}
 SKILL_MARK = "<!-- fleet team skill -->"
+# The personal layer's hook programs (issue #1859, EPIC #1855 C4): one file per
+# name here, 0700, carrying SCRIPT_MARK — the only files a drop ever removes.
+HOOK_SCRIPTS_DIR = os.path.join(CONF_DIR, "personal-hooks")
+SCRIPT_MARK = "fleet personal hook"
+SCRIPT_MAX = 32 << 10
 
 ALLOWED = ("mcp", "hooks", "skills", "claude_settings", "codex_config")
 HOOK_EVENTS = {"PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop", "SubagentStop",
@@ -242,6 +256,11 @@ def validate(b, layer="team"):
     for k in b.get("claude_settings", {}):
         if k in CLAUDE_DENIED or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", k):
             return "bundle.claude_settings.%s is never handed out" % k
+    for n, t in b.get("hook_scripts", {}).items():
+        if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", n) or not isinstance(t, str) or not t.strip():
+            return "bundle.hook_scripts.%s needs a name [a-z0-9._-] and the program's text" % n
+        if len(t.encode("utf-8")) > SCRIPT_MAX:
+            return "bundle.hook_scripts.%s is over 32 KiB" % n
     for k, v in b.get("codex_config", {}).items():
         if k in CODEX_DENIED or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", k):
             return "bundle.codex_config.%s is never handed out" % k
@@ -658,6 +677,59 @@ def skill_body(text):
     return text if SKILL_MARK in text else text.rstrip("\n") + "\n\n" + SKILL_MARK + "\n"
 
 
+def script_get(name):
+    try:
+        with open(os.path.join(HOOK_SCRIPTS_DIR, name), encoding="utf-8") as f:
+            return f.read()
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def script_body(text):
+    """The program as landed: carries SCRIPT_MARK on a line of its own — after a
+    `#!` line, `# fleet personal hook` is added when the text has no such line
+    (a language whose comment is not `#` writes the mark itself, `// fleet
+    personal hook`)."""
+    if any(SCRIPT_MARK in ln for ln in text.splitlines()):
+        return text
+    if text.startswith("#!"):
+        first, _, rest = text.partition("\n")
+        return first + "\n# " + SCRIPT_MARK + "\n" + rest
+    return "# " + SCRIPT_MARK + "\n" + text
+
+
+def script_ours(text):
+    return text is not None and any(SCRIPT_MARK in ln for ln in text.splitlines())
+
+
+def script_write(name, text):
+    """Land one program: the directory 0700, the file 0700, written whole and
+    renamed in (a hook running it never reads half a file)."""
+    if not os.path.isdir(HOOK_SCRIPTS_DIR):
+        os.makedirs(HOOK_SCRIPTS_DIR, mode=0o700, exist_ok=True)
+        os.chmod(HOOK_SCRIPTS_DIR, 0o700)
+    path = os.path.join(HOOK_SCRIPTS_DIR, name)
+    tmp = os.path.join(HOOK_SCRIPTS_DIR, ".%s.tmp.%d" % (name, os.getpid()))
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o700)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.chmod(tmp, 0o700)
+    os.replace(tmp, path)
+
+
+def scripts_fill(pbundle):
+    """A session's start (issue #1859): the personal layer's programs missing on
+    this computer are landed — add only, never overwritten, never removed (that
+    is apply's), no network. So a hook handed by `session claude` finds its
+    program even before this computer's first sync applied the layer."""
+    for n, t in sorted((pbundle.get("hook_scripts") or {}).items()):
+        if not os.path.lexists(os.path.join(HOOK_SCRIPTS_DIR, n)):
+            try:
+                script_write(n, script_body(t))
+            except OSError:
+                pass
+
+
 # --- compose -----------------------------------------------------------------------
 
 def compose(c, path, cur, layers, default, prev, blocked, ad, write, drop):
@@ -923,6 +995,27 @@ def apply(a):
             if row:
                 items[path] = row
 
+    # --- the personal layer's hook programs: $FLEET_CONF_DIR/personal-hooks/<name> (#1859) ---
+    script_writes = []
+    for n in sorted(set(pbundle.get("hook_scripts") or {})
+                    | {k[len("hook_scripts."):] for k in prev_items if k.startswith("hook_scripts.")}):
+        path = "hook_scripts." + n
+        t = (pbundle.get("hook_scripts") or {}).get(n)
+        want = None if t is None else script_body(t)
+        cur = script_get(n)
+        prev = prev_items.get(path)
+        if prev is None and want is not None and cur == want:
+            prev = {"source": "personal", "hash": digest(cur)}    # landed by a session's start: ours
+
+        def w(v, n=n):
+            script_writes.append(("w", n, v))
+
+        def dr(n=n):
+            script_writes.append(("d", n, None))
+        row = compose(c, path, cur, [("personal", want), ("team", None)], None, prev, blocked, ad, w, dr)
+        if row:
+            items[path] = row
+
     # --- Codex: config.toml keys + servers, each home ---
     confs = []
     for h in homes:
@@ -978,6 +1071,14 @@ def apply(a):
                     os.remove(os.path.join(d, "SKILL.md"))
                     if not os.listdir(d):
                         os.rmdir(d)
+                except OSError:
+                    pass
+        for op, n, v in script_writes:
+            if op == "w":
+                script_write(n, v)
+            elif script_ours(script_get(n)):     # only a file carrying the mark is ever removed
+                try:
+                    os.remove(os.path.join(HOOK_SCRIPTS_DIR, n))
                 except OSError:
                     pass
         counts = {}
@@ -1331,6 +1432,8 @@ def session(a):
     if agent not in ("claude", "codex"):
         die("session takes claude|codex")
     s = Session(a, agent).compose()
+    if agent == "claude" and s.pbundle.get("hook_scripts"):
+        scripts_fill(s.pbundle)
     print("fp\t%s" % s.fingerprint())
     print("src\t%s" % s.src())
     if agent == "claude":

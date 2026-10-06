@@ -9,7 +9,9 @@
 #
 #   · forward   the hook's stdin to the command (sh -c), its stderr and exit
 #               code back — a deny (exit 2, or permissionDecision "deny") goes
-#               through unchanged
+#               through unchanged; FLEET_PERSONAL_HOOKS is set to
+#               $FLEET_CONF_DIR/personal-hooks, where the layer's programs land
+#               (issue #1859), so a command spells `$FLEET_PERSONAL_HOOKS/<name>`
 #   · filter    a JSON answer loses `updatedInput` from hookSpecificOutput (and
 #               from a PermissionRequest's decision): a personal hook may let a
 #               call through or refuse it, never rewrite what the fleet's own
@@ -37,6 +39,9 @@ try:
         raise ValueError
 except ValueError:
     limit = 10.0
+# the programs the personal layer lands (#1859): a hook spells `$FLEET_PERSONAL_HOOKS/<name>`
+os.environ["FLEET_PERSONAL_HOOKS"] = os.path.join(
+    os.environ.get("FLEET_CONF_DIR") or os.path.expanduser("~/.config/claude-fleet"), "personal-hooks")
 data = sys.stdin.buffer.read()
 run = ["/bin/sh", "-c", cmd[0]] if len(cmd) == 1 else cmd
 try:
