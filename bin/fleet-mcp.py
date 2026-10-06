@@ -32,13 +32,29 @@ came. Caps, claim dedup and guards live in the scripts, once.
   fleet-mcp.py                 serve on stdin/stdout
   fleet-mcp.py --mount codex   print the `-c` value bin/fleet-codex.sh mounts it with
   fleet-mcp.py --legacy-peer   the old fleet-peer server (list_agents/send_message)
+  fleet-mcp.py --cred mint     print a fresh worker credential for THIS pane (stdout only)
+  fleet-mcp.py --cred check    verify $FLEET_WORKER_CRED; print its claims (never the credential)
+  fleet-mcp.py --cred revoke   revoke $FLEET_WORKER_CRED (its nonce goes on the revoked list)
+
+The worker credential (issue #1809, EPIC #1813 C7): bin/fleet-session-wrap.sh mints
+one per launch and hands it to the agent — and so to this server — ONLY through the
+environment ($FLEET_WORKER_CRED); every tool call verifies it first and then acts as
+the session it names, refusing what is outside that session's scope. A call without
+one (a person in a shell, an older session) runs as before, by the window's options,
+and the call log says so. docs/FLEET-MCP.md «Identity» is the spec.
 """
+import base64
+import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
 import re
+import secrets
 import subprocess
 import sys
+import threading
+import time
 
 BIN = Path(__file__).resolve().parent
 SERVER = "fleet"
@@ -55,8 +71,9 @@ MERGE_TIMEOUT_S = 180      # gate + merge + confirm
 VERDICT_TIMEOUT_S = 60     # the one-shot read
 
 # Codex hands an MCP server only a short env allowlist (HOME, PATH, USER, …);
-# these are what the scripts need to find the pane, the fleet and the install.
-CODEX_ENV = ["TMUX", "TMUX_PANE", "FLEET_CONF_DIR", "FLEET_SESSION", "FLEET_MCP_BIN"]
+# these are what the scripts need to find the pane, the fleet and the install —
+# and the session's credential (issue #1809): forwarded by NAME, never its value.
+CODEX_ENV = ["TMUX", "TMUX_PANE", "FLEET_CONF_DIR", "FLEET_SESSION", "FLEET_WORKER_CRED", "FLEET_MCP_BIN"]
 # A blocking await outlives Codex's 60s default per-call timeout.
 CODEX_TOOL_TIMEOUT_S = AWAIT_MAX_S + AWAIT_SLACK_S + 5
 
@@ -118,6 +135,259 @@ def origin_option():
 
 def fleet_hosts_many(session):
     return lib("_fleet_hosts_many " + shquote(session), check=False).returncode == 0
+
+
+# --- the worker credential (issue #1809, EPIC #1813 C7) -------------------------
+#
+# fwc1.<base64url claims JSON>.<base64url HMAC-SHA256> — signed with this login's
+# key ($FLEET_CONF_DIR/worker-cred/key, 0600, made on first use). The claims name
+# the session (fleet, fid = its lifelong @fleet_id, worker_id, and the key / repo /
+# issue / origin it had when the credential was issued), when it expires, and a
+# nonce the revoked list can name. The credential itself is never written down:
+# minted to stdout, carried in the environment, renewed in this process's memory.
+# Same uid, same key: this is an IDENTITY rail (a moved window, a pane that is not
+# the session's), not a wall against a hostile session — the hub checks again (C8).
+
+CRED_ENV = "FLEET_WORKER_CRED"
+CRED_PREFIX = "fwc1"
+CRED_TTL_S = 24 * 3600          # decision 7: at most 24h, renewed while the session lives
+CRED_RENEW_S = 3600
+CRED_FID_WAIT_S = 1.5           # a spawner stamps @fleet_id just after new-window
+HELD = {"cred": None}           # the credential this server acts with (renewed in place)
+CALLER = {"claims": None}       # the verified claims of the call being served
+
+
+class CredRefused(ToolFault):
+    """A credential was presented and does not hold: the call is refused."""
+
+
+def conf_dir():
+    return Path(os.environ.get("FLEET_CONF_DIR") or (Path.home() / ".config" / "claude-fleet"))
+
+
+def cred_dir():
+    return conf_dir() / "worker-cred"
+
+
+def cred_key(create=False):
+    path = cred_dir() / "key"
+    try:
+        key = bytes.fromhex(path.read_text().strip())
+        if len(key) >= 32:
+            return key
+    except (OSError, ValueError):
+        pass
+    if not create:
+        raise CredRefused("this login has no worker-credential key")
+    cred_dir().mkdir(mode=0o700, parents=True, exist_ok=True)
+    tmp = cred_dir() / (".key.%d" % os.getpid())
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(secrets.token_hex(32) + "\n")
+    try:
+        os.link(str(tmp), str(path))     # first writer wins; a racing mint reads the winner's
+    except FileExistsError:
+        pass
+    finally:
+        os.unlink(str(tmp))
+    return bytes.fromhex(path.read_text().strip())
+
+
+def b64e(raw):
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def b64d(text):
+    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+
+def cred_sign(claims, key):
+    body = CRED_PREFIX + "." + b64e(json.dumps(claims, sort_keys=True, separators=(",", ":")).encode())
+    return body + "." + b64e(hmac.new(key, body.encode(), hashlib.sha256).digest())
+
+
+def revoked_path():
+    return cred_dir() / "revoked"
+
+
+def cred_revoked(nonce):
+    try:
+        lines = revoked_path().read_text().splitlines()
+    except OSError:
+        return False
+    return any(line.split(" ", 1)[0] == nonce for line in lines)
+
+
+def cred_verify(cred, now=None):
+    """The claims of a credential that holds, else CredRefused with why (never the credential)."""
+    parts = (cred or "").split(".")
+    if len(parts) != 3 or parts[0] != CRED_PREFIX:
+        raise CredRefused("credential is malformed")
+    want = hmac.new(cred_key(), (parts[0] + "." + parts[1]).encode(), hashlib.sha256).digest()
+    try:
+        got = b64d(parts[2])
+        claims = json.loads(b64d(parts[1]).decode())
+    except (ValueError, UnicodeDecodeError):
+        raise CredRefused("credential is malformed")
+    if not hmac.compare_digest(want, got):
+        raise CredRefused("credential signature does not verify (forged, or another login's)")
+    if not isinstance(claims, dict) or claims.get("v") != 1 or not claims.get("fid") or not claims.get("nonce"):
+        raise CredRefused("credential claims are incomplete")
+    if int(claims.get("exp", 0)) <= int(now if now is not None else time.time()):
+        raise CredRefused("credential expired")
+    if cred_revoked(claims["nonce"]):
+        raise CredRefused("credential was revoked (its session exited)")
+    return claims
+
+
+def worker_id(claims):
+    return "%s/%s" % (claims["fleet_uuid"], claims["fid"]) if claims.get("fleet_uuid") else claims["fid"]
+
+
+def fleet_label():
+    """This pane's FLEET: the socket label (== the fleet session, issue #159) — the same
+    for a warm-pool window parked in <fleet>-pool and for a view session's client."""
+    sock = os.environ.get("TMUX", "").split(",", 1)[0]
+    if "/" in sock:
+        return sock.rsplit("/", 1)[-1]
+    return current_session()
+
+
+def pane_opt(fmt):
+    return tmux("display-message", "-p", "-t", os.environ["TMUX_PANE"], fmt)
+
+
+def cred_mint():
+    if not os.environ.get("TMUX") or not os.environ.get("TMUX_PANE"):
+        raise ToolFault("not running inside a fleet tmux pane")
+    deadline = time.time() + float(os.environ.get("FLEET_CRED_FID_WAIT", CRED_FID_WAIT_S))
+    fid = pane_opt("#{@fleet_id}")
+    while not fid and time.time() < deadline:
+        time.sleep(0.2)
+        fid = pane_opt("#{@fleet_id}")
+    session = current_session()
+    if not fid:   # a warm-pool window, a road that does not stamp: mint it now (fleet_window_fid)
+        wid = pane_opt("#{window_id}")
+        fid = lib("fleet_window_fid " + shquote(session) + " " + shquote(wid)).stdout.strip()
+    if not fid:
+        raise ToolFault("this window has no @fleet_id and none could be minted")
+    row = pane_opt("#{@repo}\t#{@issue}\t#{@origin}").split("\t")
+    row += [""] * (3 - len(row))
+    now = int(time.time())
+    claims = {
+        "v": 1, "fleet": fleet_label(), "fid": fid,
+        "fleet_uuid": lib("fleet_uuid " + shquote(session) + " 2>/dev/null || true").stdout.strip(),
+        "key": origin_key(), "repo": row[0], "issue": row[1], "origin": row[2],
+        "iat": now, "exp": now + CRED_TTL_S, "nonce": secrets.token_hex(12),
+    }
+    return cred_sign(claims, cred_key(create=True))
+
+
+def cred_revoke(cred):
+    claims = cred_verify(cred)
+    path = revoked_path()
+    now = int(time.time())
+    keep = []
+    try:   # drop the entries whose credential has expired anyway
+        keep = [l for l in path.read_text().splitlines() if l.split(" ")[-1].isdigit() and int(l.split(" ")[-1]) > now]
+    except OSError:
+        pass
+    keep.append("%s %d" % (claims["nonce"], int(claims["exp"])))
+    tmp = path.with_name(".revoked.%d" % os.getpid())
+    tmp.write_text("\n".join(keep) + "\n")
+    os.replace(str(tmp), str(path))
+    return claims
+
+
+def cred_renew():
+    """Re-sign the held credential with a fresh 24h, while it still holds (decision 7)."""
+    cred = HELD["cred"]
+    if not cred:
+        return
+    try:
+        claims = cred_verify(cred)
+    except ToolFault:
+        return
+    now = int(time.time())
+    claims.update(iat=now, exp=now + CRED_TTL_S)
+    HELD["cred"] = cred_sign(claims, cred_key())
+    os.environ[CRED_ENV] = HELD["cred"]
+
+
+def renew_loop():
+    while True:
+        time.sleep(CRED_RENEW_S)
+        cred_renew()
+
+
+def identify():
+    """Who is calling: the verified claims, or None for a call with no credential.
+    A credential that does not hold — or is presented from a pane that is not its
+    session's, or from another fleet — refuses the call (CredRefused)."""
+    cred = HELD["cred"]
+    if not cred:
+        return None
+    claims = cred_verify(cred)
+    if not os.environ.get("TMUX") or not os.environ.get("TMUX_PANE"):
+        raise CredRefused("credential presented outside a fleet pane")
+    here = fleet_label()
+    if here != claims["fleet"]:
+        raise CredRefused("credential is for fleet %s, this pane is in %s" % (claims["fleet"], here))
+    fid = pane_opt("#{@fleet_id}")
+    if fid != claims["fid"]:
+        raise CredRefused("this pane's window (%s) is not the credential's session (%s)"
+                          % (fid or "no @fleet_id", claims["fid"]))
+    return claims
+
+
+def log_path():
+    return Path(os.environ.get("FLEET_MCP_LOG") or (BIN.parent / "logs" / "mcp-calls.log"))
+
+
+def log_call(tool, claims, verdict, why="", via=None):
+    """One line per call: who (worker_id from the credential, or the window's marker),
+    how it was known (cred | marker | badcred: one was presented and refused), and the
+    verdict. Never the credential."""
+    if claims:
+        who, via = worker_id(claims), "cred"
+    else:
+        via = via or "marker"
+        try:
+            who = pane_opt("#{?@fleet_id,#{@fleet_id},#{window_name}}") if os.environ.get("TMUX_PANE") else ""
+        except ToolFault:
+            who = ""
+    line = "%s tool=%s via=%s who=%s verdict=%s%s\n" % (
+        time.strftime("%Y-%m-%dT%H:%M:%S%z"), tool, via, who or "-", verdict,
+        (" why=" + json.dumps(why, ensure_ascii=False)) if why else "")
+    try:
+        log_path().parent.mkdir(parents=True, exist_ok=True)
+        with open(str(log_path()), "a") as fh:
+            fh.write(line)
+    except OSError:
+        pass
+
+
+def cred_main(action):
+    try:
+        if action == "mint":
+            print(cred_mint())
+            return 0
+        cred = os.environ.get(CRED_ENV, "")
+        if not cred:
+            print("fleet-mcp: no $%s in the environment" % CRED_ENV, file=sys.stderr)
+            return 1
+        if action == "check":
+            claims = cred_verify(cred)
+            print(json.dumps(dict(claims, worker_id=worker_id(claims)), sort_keys=True))
+            return 0
+        if action == "revoke":
+            cred_revoke(cred)
+            return 0
+    except ToolFault as exc:
+        print("fleet-mcp: " + exc.message, file=sys.stderr)
+        return 1
+    print("usage: fleet-mcp.py --cred mint|check|revoke", file=sys.stderr)
+    return 2
 
 
 # --- agents / send (moved from fleet-peer-mcp.py, issue #1185) ------------------
@@ -295,7 +565,11 @@ def tool_status(_args):
                      check=False, timeout=STATUS_TIMEOUT_S).stdout.strip() or None
     kids = script([str(BIN / "fleet-children.sh")], STATUS_TIMEOUT_S)
     repos, listed = hosted_repos()
-    return {"window": window, "children": kids, "repos": repos,
+    claims = CALLER["claims"]
+    identity = ({"worker_id": worker_id(claims), "via": "credential",
+                 "expires": time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(int(claims["exp"])))}
+                if claims else {"worker_id": None, "via": "window options (no credential)"})
+    return {"window": window, "identity": identity, "children": kids, "repos": repos,
             "repo_list": listed.stdout.rstrip("\n")}
 
 
@@ -648,6 +922,9 @@ def ask_text(data):
 
 def status_text(data):
     head = "window: " + (data["window"] or "(not in tmux)")
+    ident = data.get("identity") or {}
+    head += "\nidentity: " + ("%s (credential, expires %s)" % (ident["worker_id"], ident["expires"])
+                              if ident.get("worker_id") else "(no credential — known by the window's options)")
     return "\n\n".join([head, report(data["children"]), data["repo_list"]])
 
 
@@ -661,17 +938,31 @@ def tool_result(name, data, error=False):
 def tool_call(table, name, args):
     entry = table.get(name)
     if entry is None:
+        log_call(str(name), None, "refused", "unknown tool")
         return tool_result(name, "%s.%s: unknown tool. Nothing ran." % (SERVER, name), error=True)
     fn, spec = entry
+    # Identity first (issue #1809): a credential that does not hold — or a pane that
+    # is not its session's — refuses every tool, read-only ones included.
+    try:
+        claims = identify()
+    except ToolFault as exc:
+        log_call(name, None, "refused", exc.message, via="badcred")
+        return tool_result(name, "%s.%s: %s. Nothing ran." % (SERVER, name, exc.message), error=True)
+    CALLER["claims"] = claims
     bad = check_args(spec["inputSchema"], args if args is not None else {})
     if bad is not None:
+        log_call(name, claims, "refused", bad)
         return tool_result(name, "%s.%s: %s. Nothing ran." % (SERVER, name, bad), error=True)
     try:
-        return tool_result(name, fn(args or {}))
+        data = fn(args or {})
     except Refused as exc:
+        log_call(name, claims, "refused", exc.message)
         return tool_result(name, "%s.%s: %s. Nothing ran." % (SERVER, name, exc.message), error=True)
     except ToolFault as exc:
+        log_call(name, claims, "fault", exc.message)
         return tool_result(name, "%s.%s: %s" % (SERVER, name, exc.message), error=True)
+    log_call(name, claims, "ok" if not isinstance(data, dict) or "exit" not in data else "exit=%s" % data["exit"])
+    return tool_result(name, data)
 
 
 def respond(request, result=None, error=None):
@@ -705,6 +996,11 @@ def handle(request, table, name):
 
 
 def serve(table, name):
+    # The credential this session was launched with (issue #1809): taken once, renewed
+    # in memory while it holds — the environment never hands the server a new one.
+    HELD["cred"] = os.environ.get(CRED_ENV) or None
+    if HELD["cred"]:
+        threading.Thread(target=renew_loop, daemon=True).start()
     for line in sys.stdin:
         if not line.strip():
             continue
@@ -741,11 +1037,13 @@ def main(argv):
     if argv[:2] == ["--mount", "codex"]:
         print(mount_codex())
         return 0
+    if argv[:1] == ["--cred"] and len(argv) == 2:
+        return cred_main(argv[1])
     if argv[:1] == ["--legacy-peer"]:
         serve(LEGACY, "fleet-peer")
         return 0
     if argv:
-        print("usage: fleet-mcp.py [--mount codex | --legacy-peer]", file=sys.stderr)
+        print("usage: fleet-mcp.py [--mount codex | --legacy-peer | --cred mint|check|revoke]", file=sys.stderr)
         return 2
     serve(TOOLS, SERVER)
     return 0
