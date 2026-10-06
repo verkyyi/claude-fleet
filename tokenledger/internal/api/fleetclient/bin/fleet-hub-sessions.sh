@@ -113,7 +113,7 @@
 #       sessions there, last-seen the hub's newest observation of it. From the
 #       hub's `nodes` list; derived from the sessions on a hub older than #1475.
 # then one row per session:
-#   wid:<worker_id>  node  online|lost  issue  repo  state  agent  name  origin  needs  local  wid  via  busy
+#   wid:<worker_id>  node  online|lost  issue  repo  state  agent  name  origin  needs  local  wid  via  busy  born
 # `origin` is already in the viewing fleet's terms: a parent in THIS fleet is its
 # bare key (`issue-1419`, exactly what a local @origin holds), a parent elsewhere is
 # its full worker_id; no @origin_wid ⇒ the issue's sub-issue parent (the collector's
@@ -132,7 +132,10 @@
 # (a /loop round still held) or `bg` (a Bash-tool job still running) — empty
 # otherwise; fleet-epic-backstop.sh reads it so a member mid-acceptance on
 # another machine is never merged under it. A `read` naming `via` last must name
-# one more.
+# one more. `born` (#1750, rows only) is the session's birth, epoch seconds (the
+# node's @born, else window_created; empty from a node older than it) — the order
+# tmux-dashboard-rows.sh draws every machine's rows in. A `read` naming `busy`
+# last must name it too.
 #
 # THE HUB SILENT, IN THE SHELL (issue #1488, EPIC #1479 R3) — client mode only.
 # The shell has no fleet of its own, so when the hub goes quiet its list has
@@ -589,6 +592,11 @@ def local_fleet(s):
             if s.get("fleet_name") == f["sess"]:
                 return f
     return None
+def born_of(w):
+    """A session's birth, epoch seconds (issue #1750) — the node's `born`, or ""."""
+    b = w.get("born")
+    return str(b) if isinstance(b, int) and not isinstance(b, bool) and b > 0 else ""
+
 rows = []
 for s in sessions:
     w = s.get("worker") or {}
@@ -609,7 +617,7 @@ for s in sessions:
                      issue=w.get("issue") or "", repo=w.get("repo") or "",
                      state=w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or ""),
                      agent=w.get("agent") or "", name=w.get("name") or w.get("key") or wid.split("/", 1)[1],
-                     owid=by_ident.get(w.get("origin_wid") or "", w.get("origin_wid") or ""), needs=w.get("needs") or "", busy=w.get("busy") or "", seen=epoch(s.get("observed_at")), seenf=fepoch(s.get("observed_at")),
+                     owid=by_ident.get(w.get("origin_wid") or "", w.get("origin_wid") or ""), needs=w.get("needs") or "", busy=w.get("busy") or "", born=born_of(w), seen=epoch(s.get("observed_at")), seenf=fepoch(s.get("observed_at")),
                      local=here["sess"] if here else None,
                      lwid=windows.get((here["sess"], wid.split("/", 1)[1]), "") if here else ""))
 
@@ -713,7 +721,7 @@ for f in local:
                     origin = (slug(r["repo"]) + ":" if f["multi"] else "") + "issue-" + p
         out.append("\x1f".join(clean(v) for v in ("wid:" + r["wid"], r["node"], r["av"], r["issue"], r["repo"],
                                                r["state"], r["agent"], r["name"], origin, r["needs"],
-                                               "1" if r["local"] else "0", r["lwid"], via, r["busy"])) + "\n")
+                                               "1" if r["local"] else "0", r["lwid"], via, r["busy"], r["born"])) + "\n")
     path = os.path.join(gdir, "remote_" + f["sess"])
     if via == "node" and not (client and os.environ.get("FLEET_HUB_SESSIONS_LOCAL") == "1"):
         # The machines that did not answer over a connection keep their last

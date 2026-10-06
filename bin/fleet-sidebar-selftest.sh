@@ -153,8 +153,19 @@ import curses
 for key in (curses.KEY_LEFT, curses.KEY_RIGHT, curses.KEY_HOME, curses.KEY_END):
     assert sidebar.edit_of(key, '') == '' and sidebar.edit_of(key, 'x'), key
 assert sidebar.edit_of(curses.KEY_UP, 'x') == '' and sidebar.edit_of(curses.KEY_DOWN, 'x') == ''
-assert [sidebar.edit_of(k, '') for k in (1, 5, 23, 11, 21)] == \
-    ['home', 'end', 'kill_word', 'kill_eol', 'clear']
+assert [sidebar.edit_of(k, '') for k in (1, 5, 23, 21)] == \
+    ['home', 'end', 'kill_word', 'clear']
+# ⌃k (issue #1750): kills to the end of a typed line; on an EMPTY one it is the
+# list's jump to the next row waiting on you
+assert sidebar.edit_of(11, 'x') == 'kill_eol' and sidebar.edit_of(11, '') == ''
+R = lambda k, st: [k, st, '', k] + [''] * 8
+rows = [['hdr', '', '!', '! 2'] + [''] * 8, R('@1', 'done'), R('@2', 'needs'),
+        R('@3', 'working'), R('@4', 'failed'), R('@5', 'done')]
+assert sidebar.next_attention(rows, '@1') == '@2'
+assert sidebar.next_attention(rows, '@2') == '@4'
+assert sidebar.next_attention(rows, '@5') == '@2'          # wraps round
+assert sidebar.next_attention(rows, 'gone') == '@2'
+assert sidebar.next_attention([R('@1', 'done')], '@1') == ''
 assert sidebar.edit_of(sidebar.WORD_LEFT, '') == 'word_left' and sidebar.edit_of(ord('a'), 'x') == ''
 
 real_tmux = shutil.which('tmux')

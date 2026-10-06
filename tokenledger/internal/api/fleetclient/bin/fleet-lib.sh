@@ -4395,6 +4395,33 @@ fleet_window_fid() {
   printf '%s' "$f"
 }
 
+# ---- a session's birth: @born (issue #1750) ------------------------------------
+# The epoch a session was spawned — the list's ORDER (tmux-dashboard-rows.sh seg_v):
+# a row sits where it was born, whatever its state, so it never jumps. Stamped once
+# at spawn (dash-issue-session.sh / dash-raw-session.sh) with the time of the
+# spawn — NOT the window's window_created: a warm-pool window (#448) was built
+# long before the session it now holds was asked for — and carried verbatim beside
+# @fleet_id by fleet-migrate and fleet-move (the bundle's `<sid>.born`, beside
+# `<sid>.fleet-id`), so a session taken over on another machine keeps its place
+# on every list. A window with no @born (spawned before #1750, or by a road that
+# does not stamp) reads as its window_created: the list and the hub's inventory
+# both read `#{?@born,#{@born},#{window_created}}`.
+
+# fleet_window_born <sess> <window> [<sock>] → that window's @born, stamping it with
+# NOW first if it has none (the spawn). Never re-stamped: a window that already
+# carries one (a migrated / moved session) keeps it. rc 1: no such window.
+fleet_window_born() {
+  local sess="${1:-}" w="${2:-}" sock="${3:-}" b
+  [ -n "$w" ] || return 1
+  if [ -n "$sock" ]; then b=$(tmux -L "$sock" show-options -wqv -t "$w" @born 2>/dev/null)
+  else b=$(_fleet_tmux "$sess" show-options -wqv -t "$w" @born 2>/dev/null); fi
+  case "$b" in ''|*[!0-9]*) ;; *) printf '%s' "$b"; return 0 ;; esac
+  b=$(date +%s)
+  if [ -n "$sock" ]; then tmux -L "$sock" set-window-option -t "$w" @born "$b" 2>/dev/null || return 1
+  else _fleet_tmux "$sess" set-window-option -t "$w" @born "$b" 2>/dev/null || return 1; fi
+  printf '%s' "$b"
+}
+
 # fleet_win_for_fid <fleet_id> [<sock>] — fleet_win_for_key's twin for an identity:
 # the live window carrying @fleet_id <fleet_id> on this fleet's socket. Same rails:
 # rc 0 + the id, rc 1 NOTFOUND, rc 2 AMBIGUOUS (two windows carry it — a copy made
