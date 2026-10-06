@@ -53,6 +53,16 @@
 #                  the wrapped personal ones; an event / tool Codex lacks → note
 #   Q. refused     a credential in the personal layer is refused (the cache is
 #                  kept); hook_scripts is personal-only
+#
+# The hub's push (issue #1899, EPIC #1906 C6) — the node agent runs
+# `sync --hub-version N` when the hub says the team is at vN:
+#   A. degenerate  never fetched, never pushed → `status --team` prints nothing,
+#                  exit 3 (the doctor shows no team row); no team-push.json
+#   T. push        sync --hub-version N applies vN in the one run, records
+#                  team-push.json, refreshes global/agent-cfg.expected; the
+#                  doctor row reads 入口 vN · 本机 vN · 拉到 <UTC>; a failed sync
+#                  is recorded (rc) and, past FLEET_TEAM_PUSH_WARN_SECS, WARNs
+#                  尚未生效; the retry clears it
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 real="$BIN/fleet-agent-team.py"
@@ -119,6 +129,9 @@ SEAM='' out=$(team sync); rc=$?
   && ok "A no hub → exit 3, no file written ($out)" || bad "A rc=$rc out=$out"
 out=$(SEAM='' team apply); [ ! -e "$CONF/agent-effective.json" ] && [ "$(snap)" = "$before" ] \
   && ok "A apply with no layer writes nothing" || bad "A apply wrote: $out"
+out=$(status --team); rc=$?
+[ "$rc" = 3 ] && [ -z "$out" ] && [ ! -e "$CONF/team-push.json" ] \
+  && ok "A no team layer → status --team prints nothing, exit 3 (no doctor row)" || bad "A status --team rc=$rc: $out"
 
 SEAM="cat $WORK/resp.json"
 # ── B — the team adds ─────────────────────────────────────────────────────────
@@ -478,6 +491,36 @@ out=$(PSEAM='printf ""' team sync)
   && [ "$(j "$CONF/agent-effective.json" "'personal' in d or 'personal_version' in d or 'hinted' in d or 'local_seen' in d")" = false ] \
   && [ "$(status --short)" = "team v10" ] && ! team session claude | grep -q personal \
   && ok "L the person's layer gone (404) → taken back, no personal anywhere" || bad "L gone: $out"
+
+# ── T — the hub's push (#1899): one run applies it, records it, moves expected ──
+team expected --write >/dev/null
+exp0=$(cat "$CONF/global/agent-cfg.expected" 2>/dev/null)
+resp '{"version":11,"prev":10,"bundle":{"mcp":{"shared":{"command":"team-shared"}},
+  "claude_settings":{"includeCoAuthoredBy":false},"codex_config":{"sandbox_mode":"read-only"}}}'
+out=$(PSEAM='printf ""' team sync --hub-version 11); rc=$?
+[ "$rc" = 0 ] && [ "$(j "$CONF/agent-effective.json" "d['team']['version']")" = 11 ] \
+  && [ "$(j "$CONF/team-push.json" "[d['hub_version'], d['rc'], d['synced'] == d['heard']]")" = '[11, 0, true]' ] \
+  && ok "T push v11 → applied in the one run, team-push.json recorded" || bad "T push rc=$rc: $out $(cat "$CONF/team-push.json" 2>&1)"
+exp1=$(cat "$CONF/global/agent-cfg.expected" 2>/dev/null)
+[ -n "$exp0" ] && [ "$exp1" != "$exp0" ] && printf '%s\n' "$exp1" | grep -q '^codex [0-9a-f]\{12\} .*team:v11' \
+  && ok "T the expected fingerprint moved with the push" || bad "T expected: before=$exp0 after=$exp1"
+out=$(status --team); rc=$?
+printf '%s\n' "$out" | grep -Eq '^入口 v11 · 本机 v11 · 拉到 20[0-9-]+T[0-9:]+Z$' && [ "$rc" = 0 ] \
+  && ok "T doctor row: $out" || bad "T status --team rc=$rc: $out"
+out=$(PSEAM='printf ""' SEAM='exit 7' team sync --hub-version 12); rc=$?
+[ "$rc" = 1 ] && [ "$(j "$CONF/team-push.json" "[d['hub_version'], d['rc']]")" = '[12, 1]' ] \
+  && ok "T a failed sync is recorded (rc 1, hub v12)" || bad "T failed rc=$rc: $out"
+out=$(status --team); rc=$?
+[ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q '入口 v12 · 本机 v11 .*尚未生效' \
+  && ok "T just pushed, behind: named, not yet a WARN" || bad "T behind rc=$rc: $out"
+out=$(env -i PATH="$PATH" HOME="$H" FLEET_CONF_DIR="$CONF" FLEET_TEAM_PUSH_WARN_SECS=-1 "$PY" "$T" status --team 2>&1); rc=$?
+[ "$rc" = 1 ] && ok "T behind past FLEET_TEAM_PUSH_WARN_SECS → exit 1 (WARN)" || bad "T warn rc=$rc: $out"
+resp '{"version":12,"prev":11,"bundle":{"mcp":{"shared":{"command":"team-shared"}},
+  "claude_settings":{"includeCoAuthoredBy":true},"codex_config":{"sandbox_mode":"read-only"}}}'
+out=$(PSEAM='printf ""' team sync --hub-version 12); rc=$?
+out2=$(env -i PATH="$PATH" HOME="$H" FLEET_CONF_DIR="$CONF" FLEET_TEAM_PUSH_WARN_SECS=-1 "$PY" "$T" status --team 2>&1); rc2=$?
+[ "$rc" = 0 ] && [ "$rc2" = 0 ] && printf '%s\n' "$out2" | grep -q '^入口 v12 · 本机 v12 · 拉到 ' \
+  && ok "T the retry applies v12 and clears the WARN" || bad "T retry rc=$rc/$rc2: $out / $out2"
 
 [ "$fail" = 0 ] && echo "fleet-agent-team-selftest: PASS" || echo "fleet-agent-team-selftest: FAIL"
 exit "$fail"

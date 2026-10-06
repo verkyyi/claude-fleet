@@ -101,12 +101,20 @@ doctor` on a client print the version from it.
           (byte for byte a login with no team layer). Prints one `set …` /
           `drop …` / `own …` line per item and ends `team: v<N> — …`.
   sync    fetch, then apply when the version moved, the record is missing, or
-          --force. What install-sync's tick and the client's start run.
+          --force. What install-sync's tick and the client's start run. After an
+          apply it refreshes global/agent-cfg.expected (the fingerprint the
+          stale-session readers compare) when that cache exists.
+          --hub-version N: the node agent's run on the hub's push (issue #1899,
+          EPIC #1906 C6) — also records $FLEET_CONF_DIR/team-push.json
+          {hub_version, heard, rc, synced} for the doctor's `team` row.
   status  [--short]  the applied version(s) and the source counts (doctor):
           `team v<N>`. With a personal layer (EPIC #1855 C6) --short prints the
           ONE person-facing line instead — `团队 v<N> · 个人 v<M> · 本机独有 <K> 项
           （fleet config promote 可带走）`, K = the 本机 rows `fleet config show`
           lists; the doctor rows and the launch line only reprint it.
+          --team: the doctor's `team` row (issue #1899) — `入口 v<N> · 本机 v<M> ·
+          拉到 <UTC>`; exit 0 ok · 1 behind the hub's push for over
+          FLEET_TEAM_PUSH_WARN_SECS (600) · 3 no team layer here (no row).
 
 A session's configuration, fixed at launch (issue #1782 — see "the session's
 configuration" below):
@@ -153,6 +161,7 @@ CACHE = os.path.join(CONF_DIR, "team-bundle.json")
 PERSON_CACHE = os.path.join(CONF_DIR, "person-bundle.json")
 PERSON_GOOD = os.path.join(CONF_DIR, "person-bundle.good.json")   # the last copy that parsed (#1862)
 EFFECTIVE = os.path.join(CONF_DIR, "agent-effective.json")
+PUSH = os.path.join(CONF_DIR, "team-push.json")     # the hub's last push, as heard here (#1899)
 TEAM_PATH = "/v1/fleet/team-bundle"
 PERSON_PATH = "/v1/fleet/person-bundle"
 SIG_NS = "fleet-team@claude-fleet"
@@ -1272,7 +1281,44 @@ def human_line(a):
     return line
 
 
+def utc(ts):
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts)) if isinstance(ts, (int, float)) and ts > 0 else "-"
+
+
+def status_team(a):
+    """The doctor's `team` row (issue #1899): the hub's version as last pushed
+    here, the version applied here, and when this computer fetched it."""
+    rec, cache, push = read_json_quiet(EFFECTIVE), read_json_quiet(CACHE), read_json_quiet(PUSH)
+    t = (rec or {}).get("team") if isinstance(rec, dict) else None
+    if not isinstance(cache, dict) and not isinstance(push, dict):
+        return 3
+    local = t.get("version") if isinstance(t, dict) and t.get("state") != "off" else None
+    if isinstance(t, dict) and t.get("state") == "off":
+        loc = "本机 off"
+    else:
+        loc = "本机 v%s" % (local if local is not None else (cache or {}).get("version", "-"))
+    fetched = (cache or {}).get("fetched") if isinstance(cache, dict) else None
+    parts = [loc, "拉到 %s" % utc(fetched)]
+    rc = 0
+    if isinstance(push, dict):
+        hv, heard = push.get("hub_version"), push.get("heard")
+        parts.insert(0, "入口 v%s" % hv)
+        behind = isinstance(hv, int) and isinstance(local, int) and local < hv
+        if behind or push.get("rc") not in (0, 3):
+            lag = int(time.time() - heard) if isinstance(heard, (int, float)) else 0
+            parts.append("入口推送于 %s，尚未生效" % utc(heard) if behind else "上次同步 exit %s" % push.get("rc"))
+            warn = int(os.environ.get("FLEET_TEAM_PUSH_WARN_SECS") or 600)
+            if lag > warn:
+                rc = 1
+    else:
+        parts.insert(0, "入口未推送（随 install-sync 拉）")
+    print(" · ".join(parts))
+    return rc
+
+
 def status(a):
+    if getattr(a, "team", False):
+        return status_team(a)
     rec = read_json_quiet(EFFECTIVE)
     cache = read_json_quiet(CACHE)
     if not isinstance(rec, dict):
@@ -1852,6 +1898,9 @@ def build_parser():
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--short", action="store_true")
+    ap.add_argument("--team", action="store_true", help="status: the doctor's `team` row (#1899)")
+    ap.add_argument("--hub-version", type=int, default=None,
+                    help="sync: the version the hub pushed (the node agent, #1899); recorded in team-push.json")
     ap.add_argument("--lock", default="", help="session/expected/check: warn|enforce (default $FLEET_AGENT_LOCK, else warn)")
     ap.add_argument("--mod-off", action="store_true", default=conf_val("FLEET_MOD") == "0", help="session/expected/check: this login runs FLEET_MOD=0")
     ap.add_argument("--no-mcp", action="store_true", help="session: an MCP allowlist governs — hand no servers")
@@ -1897,10 +1946,39 @@ def main():
     pc, pstate, _ = personal_layer(a.override)
     prec = rec.get("personal") or {}
     pmoved = (prec.get("version"), prec.get("state")) != ((pc.get("version") or 0) if pc else None, pstate)
+    out = rc
     if a.force or not rec or applied != v or state != ("off" if team_off(a.override) else "on") or pmoved:
         arc = apply(a)
-        return arc if rc in (0, 3) else rc
-    return rc
+        out = arc if rc in (0, 3) else rc
+        if arc == 0 and not a.dry_run:
+            refresh_expected(a)
+    if a.hub_version is not None:
+        record_push(a.hub_version, out)
+    return out
+
+
+def refresh_expected(a):
+    """After an apply: the fingerprint a fresh session would get moved with it,
+    so the stale-session readers see it now, not at the next install sync.
+    Only a cache that exists is refreshed — install-apply writes the first."""
+    if not os.path.exists(os.path.join(CONF_DIR, "global", "agent-cfg.expected")):
+        return
+    try:
+        a.write, a.quiet = True, True
+        expected(a)
+    except Exception as e:      # the apply stands; the next install sync rewrites it
+        print("fleet-agent-team: expected not refreshed: %s" % e, file=sys.stderr)
+
+
+def record_push(hv, rc):
+    prev = read_json_quiet(PUSH) or {}
+    now = int(time.time())
+    rec = {"hub_version": hv, "heard": now, "rc": rc,
+           "synced": now if rc in (0, 3) else (prev.get("synced") if isinstance(prev, dict) else None)}
+    try:
+        write_json_atomic(PUSH, rec)
+    except OSError as e:
+        print("fleet-agent-team: %s not written: %s" % (PUSH, e), file=sys.stderr)
 
 
 if __name__ == "__main__":

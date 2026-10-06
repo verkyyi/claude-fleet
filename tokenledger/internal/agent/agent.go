@@ -272,6 +272,9 @@ type Agent struct {
 	// (claude-fleet#1421); made on first use.
 	relay     *relayState
 	relayOnce sync.Once
+	// The pushed team version (claude-fleet#1899, node_team.go).
+	teamState *teamFollow
+	teamOnce  sync.Once
 	// moveIn is where a moved-in session's transcript bundle is downloaded
 	// (claude-fleet#1426): claude-fleet's `fleet-hub-node.sh paths` movein
 	// line, set per connection before its reader starts; "" = no CapMove.

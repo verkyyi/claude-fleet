@@ -528,6 +528,11 @@ Do not install from memory: read the doc and work from it.
   agent-overrides.json leaves the layer. Every item's source lands in
   `$FLEET_CONF_DIR/agent-effective.json`; the doctor's `agents` row prints the
   version. No hub ⇒ nothing fetched, nothing written (`fleet-agent-team-selftest.sh` A).
+  **A new team version is pushed, not waited for** (issue #1899): the hub sends
+  `team` {team_version} to every node whose hello listed `CapTeam` — on a PUT, and
+  on each connection's first beat — and the agent runs `fleet-agent-team.py sync
+  --hub-version N` (retried every beat until it succeeds; `team-push.json` feeds
+  the doctor's `team` row 入口 vN · 本机 vM · 拉到 …). No team layer ⇒ nothing sent.
 - **A machine has ONE fleet config file, `$FLEET_CONF_DIR/fleet.conf`** (issue
   #1623). `FLEET_HOST=1` (承载: this computer runs sessions — issue #1806; the old
   `FLEET_ROLE` is rewritten by `migrate` and read one more version) and
