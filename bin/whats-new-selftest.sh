@@ -60,11 +60,11 @@ printf '<!-- fleet skill · owner: hub -->\nv1\n'    > "$WORK/repo/commands/flee
 printf 'v1\n' > "$WORK/repo/hooks/bash-guard.py"
 printf 'v1\n' > "$WORK/repo/lib.sh"
 V0=$(commit "base")
-mcp status brief whats_new; echo whats_new > "$WORK/repo/docs/FLEET-MCP.md"; V1=$(commit "新工具 whats_new (#1897) (#2001)")
-printf 'v2\n' >> "$WORK/repo/commands/fleet-claim.md"; V2=$(commit "交付前多一步 fleet.evidence after (#1810)")
+mcp status brief whats_new; echo whats_new > "$WORK/repo/docs/FLEET-MCP.md"; commit "新工具 whats_new (#1897) (#2001)" >/dev/null
+printf 'v2\n' >> "$WORK/repo/commands/fleet-claim.md"; commit "交付前多一步 fleet.evidence after (#1810)" >/dev/null
 printf 'v2\n' >> "$WORK/repo/hooks/bash-guard.py";   V3=$(commit "直接敲 fleet-comment.sh 会被记录")
-printf 'v2\n' >> "$WORK/repo/lib.sh";                V4=$(commit "内部一")
-printf 'v3\n' >> "$WORK/repo/lib.sh";                V5=$(commit "内部二")
+printf 'v2\n' >> "$WORK/repo/lib.sh";                commit "内部一" >/dev/null
+printf 'v3\n' >> "$WORK/repo/lib.sh";                commit "内部二" >/dev/null
 printf 'v2\n' >> "$WORK/repo/commands/fleet-epic-run.md"; V6=$(commit "hub 技能改了")
 
 # --- A: the brief -------------------------------------------------------------
