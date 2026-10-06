@@ -797,7 +797,11 @@ fi
 w=$(tmux -L "$SESS" -f "$CACHE/tmux.conf" new-session -d -P -F '#{window_id}' -s "$SESS" -n home -c "$HOME" -x 220 -y 60 \
       "exec bash $(sq "$SHADOW/fleet-shell.sh") viewer $(sq "$SESS")") \
   || fail_start 'tmux 开不了会话'
-T set-window-option -t "$w" @shell_frame 1 \; set-window-option -t "$w" automatic-rename off 2>/dev/null
+T set-window-option -t "$w" @shell_frame 1 \; set-window-option -t "$w" automatic-rename off \; \
+  set-option -p -t "$w" @shell_viewer 1 \; set-option -p -t "$w" remain-on-exit on 2>/dev/null
+# the right pane outlives whatever ends it (issue #1785): kept dead, the hooks'
+# sync respawns it (fleet-sidebar.py heal_frame) — the window, so the server,
+# never closes under the person
 # 4. the lease (#1715) before anything renews it; the data: the refresh loop,
 #    kept alive while the server lives; the warm connections (#1631) beside it
 client_open
