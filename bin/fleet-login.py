@@ -129,13 +129,13 @@ def read_hub_file():
 
 def remember_hub(url):
     """The address goes to fleet.conf's [common] (issue #1623) — written in ONE
-    place, with FLEET_ROLE gaining `client`; hub.json is left to its token."""
+    place (FLEET_HOST is left as it is, issue #1806); hub.json is left to its token."""
     if machine_conf_hub() == url:
         return
     tool = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fleet-conf.sh")
     if os.path.exists(tool):
         env = dict(os.environ, FLEET_CONF_DIR=os.path.dirname(MACHINE_CONF))
-        r = subprocess.run(["bash", tool, "set-hub", url, "--role", "client"], env=env,
+        r = subprocess.run(["bash", tool, "set-hub", url], env=env,
                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
         if r.returncode == 0:
             return
@@ -495,7 +495,7 @@ def cmd_node(argv):
     print("✓ ssh 配置 %s%s" % (SSH_CONFIG_SNIPPET, "（已在 ~/.ssh/config 末尾 Include）" if added else ""))
     for n in NOTES:
         print(n)
-    print("✓ 已登记为节点 %s（%s）" % (node.get("label", "?"), node.get("endpoint_id", "?")))
+    print("✓ 已登记到入口：%s（%s）" % (node.get("label", "?"), node.get("endpoint_id", "?")))
     return 0
 
 

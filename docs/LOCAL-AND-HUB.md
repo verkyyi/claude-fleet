@@ -16,6 +16,38 @@
 INFO  mode     fleet hub (新会话 auto) · scratchpad local — 本机 / 联机各管什么: docs/LOCAL-AND-HUB.md
 ```
 
+## 一台电脑是什么：fleet 和「承载」
+
+人看到的只有两个词（issue #1806，EPIC #1813 C4）：**fleet**——每台电脑都有的那部分
+（`fleet` 命令、它打开的客户端、Agent 配置包）；**承载**——可选能力：这台也跑会话。
+配置里只有一个键，`fleet.conf` 的 **`FLEET_HOST=1`**；开关是一条命令：
+
+```sh
+fleet host on       # 先说清会发生什么、问 y/N，再打开（--yes 跳过问；没终端又没 --yes 就什么都不改）
+fleet host off      # 关掉；是 on 让这台登记到入口的，就连入口程序一起停、通行证放到一边
+fleet host status   # 能力: 基础 · 承载 已开 / 未开
+```
+
+接了入口时，`fleet host on` 就是入口那边的 node：这台还没登记就先跑 `fleet node join`
+（装 tmux、git、`~/.claude/fleet`，已有就跳过），再跑 `fleet node compute on`（先测
+这台合不合适，不合适就说原因、不打开；`--force` / `--personal` / `--shared` 原样传过去）；
+没接入口时就是这台自己的 fleet 跑会话。入口协议里的名字照旧叫 node（`node.env`、
+`/v1/node/*`），对照见 [TERMS.md](TERMS.md)「What a computer is」。
+
+`fleet doctor` 用一行说这台是什么：
+
+```
+PASS  fleet    1.0.3 · 入口 在线 · tmux 3.5a · 证书 还有 9h
+PASS  能力     基础 · 承载 未开（fleet host on）
+```
+
+承载的电脑多一行 `承载`（哪台机器、入口给不给它派会话、节点通行证的检查——#1491 那行）。
+旧键 `FLEET_ROLE="client,node"` 由 `fleet-conf.sh migrate`（同步和客户端启动时自动跑）
+原地改写成 `FLEET_HOST`：含 `node` 且这台有自己的 fleet、或入口可往这台派会话 ⇒ `1`；
+只协调的笔记本（`CCQUOTA_FLEET_COMPUTE=0`、没有自己的 fleet）⇒ `0`。改写之前，读的地方
+照旧认旧键，再认一个版本。守护：`bin/fleet-conf-selftest.sh` G 腿、
+`bin/fleet-host-selftest.sh`。
+
 ## 只要工具不要入口
 
 只有一台电脑、不打算接入口（同事自己的机器、只想要这套工具的开发者，或者入口还没开），
@@ -60,6 +92,7 @@ curl -fsSL https://raw.githubusercontent.com/verkyyi/claude-fleet/stable/bin/fle
 | `FLEET_ACCOUNTS` 订阅账号 | — | 有（全局） | — | — | — |
 | **`FLEET_ACCOUNT_CLASS`** 用哪一类订阅 | — | 默认值 | **这个 fleet 的值，赢过登录的**（#1540） | — | `--account local\|pool\|any`（`dash-issue-session.sh`，赢过 fleet 的；盖在窗口 `@account_class` 上，远程派单一起带过去） |
 | 入口地址 `CCQUOTA_HUB_URL` | — | 有（全局；没有就 `hub.json`） | — | — | — |
+| **`FLEET_HOST`** 承载：这台跑不跑会话 | 每台一份（`fleet.conf` 的 `[common]`；`fleet host on\|off`） | — | — | — | — |
 | 节点凭据 `node.env` | — | 每个登录一份，0600 | — | — | — |
 | 维护中 `fleet.node_maintenance.<机器>` | 入口上，每台机器一份 | — | — | — | — |
 

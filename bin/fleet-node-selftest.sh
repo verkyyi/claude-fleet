@@ -16,13 +16,13 @@
 #                purpose=node, the login and the device name, with the key
 #                `fleet login` uses (~/.ssh/fleet-cert, made here); exit 0;
 #                node.env 0600 with the scan's token; the agent online;
-#                FLEET_ROLE gains node; the token never printed; the output is
+#                FLEET_HOST=0 (a join is not 承载, #1806); the token never printed; the output is
 #                the fixed snapshot below — and its scan half is line for line
 #                `fleet login`'s against the same hub
 #                and (issue #1719) node.env says CCQUOTA_FLEET_COMPUTE=0, the
 #                ssh snippet carries the peer-certificate Match for every other
 #                machine and peer/machines lists them; and (issue #1720) the
-#                join ends with the probe's line + 「可以打开：fleet node compute on」
+#                join ends with the probe's line + 「可以打开：fleet host on」
 #   B. rerun     a second `fleet node join` does not scan again (no new start)
 #                and says it is already a node
 #   C. resume    a run that fails mid-way (the agent's hash) prints ONE ✗ line
@@ -170,8 +170,11 @@ grep -qx 'CCQUOTA_TOKEN=ccq_nodepass0123456789abcdefXYZ' "$ENVF" 2>/dev/null && 
   && ok "A node.env (0600) holds the scan's node pass" || bad "A node.env mode=$mode: $(cat "$ENVF" 2>/dev/null)"
 [ "$(hubstate online)" = True ] && ok "A the agent checked in with it" || bad "A the agent never checked in"
 grep -q 'ccq_nodepass' "$SB/out" && bad "A the token was printed" || ok "A the token is never printed"
-role=$(sed -n 's/^ *FLEET_ROLE="\{0,1\}\([^"]*\)"\{0,1\}/\1/p' "$SB/h1/.config/claude-fleet/fleet.conf")
-case ",$role," in *,node,*) ok "A FLEET_ROLE has node ($role)" ;; *) bad "A FLEET_ROLE=$role: $(cat "$SB/h1/.config/claude-fleet/fleet.conf")" ;; esac
+# issue #1806: a join that only coordinates is not 承载 — FLEET_HOST=0, and the
+# old FLEET_ROLE key is never written again
+if grep -qx 'FLEET_HOST=0' "$SB/h1/.config/claude-fleet/fleet.conf" && ! grep -q 'FLEET_ROLE' "$SB/h1/.config/claude-fleet/fleet.conf"; then
+  ok "A fleet.conf: FLEET_HOST=0 (joined, only coordinates), no FLEET_ROLE"
+else bad "A fleet.conf: $(cat "$SB/h1/.config/claude-fleet/fleet.conf")"; fi
 # issue #1719: a first join only coordinates, and the scan wrote the
 # machine-to-machine Match for every other machine (here m4, from a hub that
 # predates `machines`: the alias stands for the hostname).
@@ -196,15 +199,15 @@ cat >"$SB/node.want" <<'EOF'
 ✓ 证书已写入 <HOME>/.ssh/fleet-cert-cert.pub（2026-10-05T12:00:00Z 前有效，账号 alice）
 ✓ ssh 配置 <HOME>/.ssh/fleet-ssh-config（已在 ~/.ssh/config 末尾 Include）
 ✓ 到其它机器的 ssh 段已写好（1 台，每次连接先向入口要 5 分钟证书）
-✓ 已登记为节点 <HOST>-<ME>（ep_1）
+✓ 已登记到入口：<HOST>-<ME>（ep_1）
 ✓ agent 已装好：<HOME>/.local/bin/ccquota
 ! agent 已在后台运行，但重启后不会自己起来（--service detached）
 ✓ 入口看到它在线：<HUB>/nodes
 ! 入口没把 <ME> 列为管理登录：这台机器不开账号、不装 SSH CA（要的话在入口的 CCQUOTA_FLEET_ADMIN_USERS 里加上它）
 ✓ 只协调：入口不往这台派会话、不借账号（本机跑会话用自己的账号）
-✓ 已上线：<HOST>/<ME> 是 <HUB> 的节点
+✓ 已上线：<HOST>/<ME> 连着 <HUB>
 本机判断：合适 — 出口 US，Anthropic / OpenAI 都能直连
-可以打开：fleet node compute on
+可以打开：fleet host on
 EOF
 diff "$SB/node.want" "$SB/node.out" >"$SB/diff" && ok "A output matches the snapshot" || bad "A output snapshot:
 $(cat "$SB/diff")"
@@ -220,7 +223,7 @@ $(diff <(head -n 10 "$SB/login.out") <(head -n 10 "$SB/node.out"))"; fi
 kill "$(cat "$SB/h1/.ccquota/agent.pid")" 2>/dev/null
 starts=$(hubstate starts)
 fleet_in h1 node join
-if [ "$(cat "$SB/rc")" = 0 ] && [ "$(hubstate starts)" = "$starts" ] && grep -q "^✓ 已是 $HUB 的节点" "$SB/out" \
+if [ "$(cat "$SB/rc")" = 0 ] && [ "$(hubstate starts)" = "$starts" ] && grep -q "^✓ 已登记在 $HUB" "$SB/out" \
    && ! grep -q 用企业微信扫码 "$SB/out"; then
   ok "B a rerun does not scan again"
 else bad "B rc=$(cat "$SB/rc") starts $starts→$(hubstate starts): $(cat "$SB/out")"; fi
@@ -249,9 +252,9 @@ rm -f "$SB/deny"
 
 # ── E. status ────────────────────────────────────────────────────────────
 fleet_in h1 node status
-[ "$(cat "$SB/rc")" = 0 ] && grep -q "^✓ .* 是 $HUB 的节点：在线" "$SB/out" && ok "E status: online" || bad "E status rc=$(cat "$SB/rc"): $(cat "$SB/out")"
+[ "$(cat "$SB/rc")" = 0 ] && grep -q "^✓ .* 连着 ${HUB}：在线" "$SB/out" && ok "E status: online" || bad "E status rc=$(cat "$SB/rc"): $(cat "$SB/out")"
 fleet_in h4 node status
-[ "$(cat "$SB/rc")" = 1 ] && grep -q '还不是节点 — 运行：fleet node join' "$SB/out" && ok "E status: not a node" || bad "E status (none) rc=$(cat "$SB/rc"): $(cat "$SB/out")"
+[ "$(cat "$SB/rc")" = 1 ] && grep -q '还没登记到入口 — 运行：fleet host on' "$SB/out" && ok "E status: not a node" || bad "E status (none) rc=$(cat "$SB/rc"): $(cat "$SB/out")"
 
 [ "$fail" = 0 ] && echo "PASS fleet-node-selftest" || echo "FAIL fleet-node-selftest"
 exit "$fail"

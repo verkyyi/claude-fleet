@@ -14,7 +14,7 @@
 # What it pins:
 #   A. ok          US + both APIs answer 401 → verdict ok, exit 0, the JSON's
 #                  fields; a coordinate-only node gets the ONE hint
-#                  「可以打开：fleet node compute on」, a node already on and a
+#                  「可以打开：fleet host on」, a node already on and a
 #                  machine that is no node get none
 #   B. 境内        egress CN → unsupported_region, exit 1; `fleet node compute on`
 #                  is REFUSED (exit 1, node.env still 0) with the reason;
@@ -113,7 +113,7 @@ if [ "$(rc)" = 0 ] && J a | grep -q '"loc":"US","anthropic":"reachable","openai"
    && J a | grep -q '"verdict":"ok"' && J a | grep -Eq '"ts":"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z"'; then
   ok "A US + both APIs answer → verdict ok, exit 0, every field"
 else bad "A rc=$(rc) json=$(J a) out=$(out)"; fi
-[ "$(grep -c . "$SB/out")" = 2 ] && grep -q '^本机判断：合适 — 出口 US' "$SB/out" && grep -qx '可以打开：fleet node compute on' "$SB/out" \
+[ "$(grep -c . "$SB/out")" = 2 ] && grep -q '^本机判断：合适 — 出口 US' "$SB/out" && grep -qx '可以打开：fleet host on' "$SB/out" \
   && ok "A a coordinate-only node gets exactly the one hint" || bad "A hint: $(out)"
 node_env a2 'CCQUOTA_FLEET_COMPUTE=1'; probe_in a2
 grep -q '可以打开' "$SB/out" && bad "A a node already on was told to open: $(out)" || ok "A no hint for a node already on"
@@ -176,7 +176,7 @@ fleet_in f node compute off
 fleet_in f node compute status
 grep -q '^只协调' "$SB/out" && ok "F status: 只协调" || bad "F status off: $(out)"
 fleet_in f0 node compute on
-[ "$(rc)" = 1 ] && grep -q '还不是节点' "$SB/out" && [ ! -e "$SB/f0/.config/claude-fleet/node.env" ] \
+[ "$(rc)" = 1 ] && grep -q '还没登记到入口' "$SB/out" && [ ! -e "$SB/f0/.config/claude-fleet/node.env" ] \
   && ok "F not a node: refused, nothing written" || bad "F no node rc=$(rc): $(out)"
 fleet_in f node compute sideways
 [ "$(rc)" = 2 ] && ok "F an unknown verb is usage (exit 2)" || bad "F usage rc=$(rc)"

@@ -173,6 +173,30 @@ they repaint instantly:
   sessions fail over to a fresh subscription. Off unless token files exist. See
   [MULTI-ACCOUNT](MULTI-ACCOUNT.md).
 
+## What a computer is — fleet and 承载
+
+A person sees two words for a computer, and only two (issue #1806, EPIC #1813):
+
+- **fleet** — the part every computer has: the `fleet` command, the client it
+  opens, the Agent configuration package. Installed with the one install line.
+  This is what used to be called the **client**.
+- **承载 (host)** — the optional capability on top: this computer also **runs
+  sessions**. One key in `fleet.conf`, **`FLEET_HOST=1`**; switched with
+  **`fleet host on|off|status`** (`bin/fleet-host.sh`). `fleet doctor` says it in
+  one row — `能力  基础 · 承载` or `能力  基础 · 承载 未开（fleet host on）` — and
+  a hosting computer gets a `承载` row (which machine, the hub's verdict).
+
+| What you read | What the code and the hub call it | Note |
+|---|---|---|
+| fleet | client (`fleet-client-update.sh`, `.client-version`, the hub's client manifest) | the installed part everyone has |
+| 承载 (host) | **node** — `node.env`, `/v1/node/*`, `fleet node join` / `fleet node compute`, `ccquota agent` | the hub protocol keeps `node`; `fleet host on` runs `fleet node join` (when needed) + `fleet node compute on` |
+| 只看只派 / 承载 未开 | a node with `CCQUOTA_FLEET_COMPUTE=0` and no fleet of its own (the install line's coordinate-only join, #1719) | not 承载 |
+| `FLEET_HOST=1` | `FLEET_ROLE="client,node"` / `"node"` (issue #1623) | the old key is rewritten by `fleet-conf.sh migrate` and read for one more version |
+
+⚠️ **"host" is overloaded.** `docs/HOST.md` and the doctor's spotlight / pmset
+rows (EPIC #1074) mean *the machine itself*; **承载 / `FLEET_HOST`** means the
+capability. When it matters, the docs say 承载.
+
 ## Configuration
 
 - **`fleet.conf`** — the per-fleet config (`fleet.conf.example` is the template):

@@ -161,7 +161,7 @@ fi
 step_zh() {
   case "$1" in
     join:*) echo 登记 ;; deps:*) echo 装依赖 ;; agent:*) echo 装 agent ;;
-    service:*) echo 起服务 ;; online:*) echo 等上线 ;; fleet:*) echo 装 fleet ;; *) echo 加节点 ;;
+    service:*) echo 起服务 ;; online:*) echo 等上线 ;; fleet:*) echo 装 fleet ;; *) echo 登记 ;;
   esac
 }
 on_exit() {
@@ -237,7 +237,7 @@ if [ -z "$JOINED" ] && load_env && [ "$SAVED_HUB" = "$HUB" ] && self_status >/de
   # Keep the admin choice of THIS run.
   write_env "$TOKEN" || die "join: cannot rewrite $ENVF"
   ADMIN_OK="?"; SSH_CA=""
-  ui "✓ 已是 $HUB 的节点（沿用 $ENVF 的通行证）"
+  ui "✓ 已登记在 ${HUB}（沿用 $ENVF 的通行证）"
 else
   if [ -n "$JOINED" ]; then
     # The scan's node pass (fleet node join, #1627): the hub already enrolled
@@ -267,7 +267,7 @@ else
   kind_note=""
   [ "$KIND" = ephemeral ] && kind_note=" · SPOT node (ephemeral): SIGTERM moves idle sessions off, then stops"
   say "join: registered as $(jfield label < "$WORK/join") ($(jfield endpoint_id < "$WORK/join")); token in $ENVF$kind_note"
-  [ -n "$JOINED" ] || ui "✓ 已登记为节点 $(jfield label < "$WORK/join")（通行证在 ${ENVF}）"
+  [ -n "$JOINED" ] || ui "✓ 已登记到入口：$(jfield label < "$WORK/join")（通行证在 ${ENVF}）"
 fi
 DIST_LIST=""
 [ -f "$WORK/join" ] && DIST_LIST="$(sed -n 's/.*"dist":\[\([^]]*\)\].*/\1/p' "$WORK/join" | tr -d '"')"
@@ -606,10 +606,10 @@ if [ "$FLEET" = 1 ]; then
     if [ "$FLEET_RC" = 0 ]; then say "fleet: ok"; ui "✓ fleet 已装好：$ROOT"
     else
       say "fleet: WARN — bootstrap exited $FLEET_RC; this machine is on the hub already. Fix the step above and rerun: $ROOT/bin/fleet-login-bootstrap.sh"
-      ui "! fleet 没装完（初始化退出码 $FLEET_RC${LOG:+，见 $LOG}）：节点已在线；修好后重跑同一条命令即可"
+      ui "! fleet 没装完（初始化退出码 $FLEET_RC${LOG:+，见 $LOG}）：这台已在线；修好后重跑同一条命令即可"
     fi
   else
-    ui "! fleet 没装完（git clone 失败${LOG:+，见 $LOG}）：节点已在线；重跑同一条命令即可"
+    ui "! fleet 没装完（git clone 失败${LOG:+，见 $LOG}）：这台已在线；重跑同一条命令即可"
   fi
 else
   say "fleet: skipped (--no-fleet)"
@@ -621,5 +621,5 @@ if [ "$COMPUTE" = 0 ]; then
 fi
 [ "$ONLINE" = 1 ] || [ "$SERVICE" = none ] || exit 1
 say "done: $HOSTN/$ME joined $HUB"
-ui "✓ 已上线：$HOSTN/$ME 是 $HUB 的节点"
+ui "✓ 已上线：$HOSTN/$ME 连着 $HUB"
 exit 0

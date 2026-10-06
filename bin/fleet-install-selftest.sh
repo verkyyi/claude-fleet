@@ -18,7 +18,7 @@
 #                 ~/.local/share/claude-fleet/<path>, identical, bin/ executable;
 #                 ~/.local/bin/fleet is the two-line runner of the real one and
 #                 works; a stale copy (an older install's) is removed; the URL
-#                 lands in fleet.conf (FLEET_HUB_URL, FLEET_ROLE client — the
+#                 lands in fleet.conf (FLEET_HUB_URL, FLEET_HOST=0 — the
 #                 machine's one config file, issue #1623) and hub.json keeps a
 #                 token already there; the rc file gets ONE PATH line
 #   C. again      a second run changes nothing: no second PATH line
@@ -178,10 +178,12 @@ echo "$out" | grep -q 'fleet-gone.sh' && ok "B the removal is said" || bad "B re
 url=$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(d.get("url",""), d.get("token",""))' "$HOME/.config/claude-fleet/hub.json")
 [ "$url" = " keep-me" ] && ok "B hub.json: token kept, no url" || bad "B hub.json: $url"
 grep -qx "export FLEET_HUB_URL=\"$HUB\"" "$HOME/.config/claude-fleet/fleet.conf" 2>/dev/null \
-  && grep -qx 'FLEET_ROLE="client"' "$HOME/.config/claude-fleet/fleet.conf" \
-  && ok "B fleet.conf: the hub URL + role client" || bad "B fleet.conf: $(cat "$HOME/.config/claude-fleet/fleet.conf" 2>&1)"
+  && grep -qx 'FLEET_HOST=0' "$HOME/.config/claude-fleet/fleet.conf" \
+  && ! grep -q 'FLEET_ROLE' "$HOME/.config/claude-fleet/fleet.conf" \
+  && ok "B fleet.conf: the hub URL + FLEET_HOST=0 (#1806)" || bad "B fleet.conf: $(cat "$HOME/.config/claude-fleet/fleet.conf" 2>&1)"
 [ "$(grep -c 'claude-fleet#1470' "$HOME/.zshrc")" = 1 ] && grep -q "$HOME/.local/bin" "$HOME/.zshrc" && ok "B one PATH line in ~/.zshrc" || bad "B zshrc: $(cat "$HOME/.zshrc" 2>&1)"
 echo "$out" | grep -q '已安装 fleet' && echo "$out" | grep -q '之后每次只敲：fleet' && ok "B says what to type next" || bad "B output: $out"
+echo "$out" | grep -q '能力: 基础 · 承载 未开 — 要在这台跑会话：fleet host on' && ok "B says 能力 in one line (#1806)" || bad "B no 能力 line: $out"
 # The installed dispatcher works from the sandbox through the runner.
 out2=$("$HOME/.local/bin/fleet" --help 2>&1); rc=$?
 [ "$rc" = 0 ] && echo "$out2" | grep -q 'fleet login renew' && ok "B installed fleet --help" || bad "B installed fleet: rc=$rc $out2"
@@ -245,6 +247,13 @@ grep -q 'set-environment -g FLEET_SIDEBAR_SOURCE .hub.' "$CACHE/tmux.conf" && ok
 # no tmux at all: a PATH with only what the dispatcher and connect need
 NOTMUX="$WORK/notmux"; mkdir -p "$NOTMUX"
 for t in sh sed dirname python3 bash env cat ssh ssh-keygen uname; do p=$(command -v "$t") && ln -sf "$p" "$NOTMUX/$t"; done
+# The shell above left detached loops (fleet-shell.sh warm …) whose first act is
+# a has-session; let the log go quiet first, or a late one lands in this leg's
+# log — a race only the start's own speed decided.
+q=0; n=-1
+while [ "$q" -lt 20 ]; do
+  m=$(wc -c < "$WORK/tmux.log"); [ "$m" = "$n" ] && break; n=$m; q=$((q + 1)); sleep 0.5
+done
 : > "$WORK/tmux.log"
 out=$(cd "$HOME" && PATH="$NOTMUX" FLEET_SHELL_NO_ATTACH=1 "$HOME/.local/bin/fleet" 2>&1 </dev/null); rc=$?
 echo "$out" | grep -q 'brew install tmux' && ok "E no tmux: the one install hint" || bad "E no tmux hint: $out"

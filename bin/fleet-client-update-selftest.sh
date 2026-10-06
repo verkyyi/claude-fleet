@@ -30,7 +30,7 @@
 #   G. off         FLEET_CLIENT_AUTO_UPDATE=0 → no stage; the defaults still land
 #   H. doctor      `doctor` prints one PASS/WARN/INFO row naming 版本 · 入口 ·
 #                  tmux · 证书; `fleet doctor` on a client-only home prints it as
-#                  the `client` row; no installed client → INFO
+#                  the `fleet` row (the `client` row before #1806); no installed client → INFO
 #   I. bin/fleet   a staged client is switched by `fleet` itself, which then runs
 #                  the NEW bin/fleet (once — FLEET_CLIENT_UPDATED); staged at the
 #                  old <home>.next, it is taken over as a version first
@@ -205,8 +205,10 @@ case "$row" in *有新版\ v2*) ok "H doctor: a newer client on the hub is said"
 row=$(bash "$ROOT/bin/fleet-client-update.sh" doctor --root "$WORK/none")
 case "$row" in INFO*没有*) ok "H doctor: no installed client → INFO" ;; *) bad "H doctor none: $row" ;; esac
 cp "$BIN/fleet" "$ROOT/bin/fleet"
+cp "$BIN/fleet-conf.sh" "$BIN/fleet-lib.sh" "$ROOT/bin/"   # the 能力 row's reader (#1806)
 out=$(sh "$ROOT/bin/fleet" doctor 2>&1)
-case "$out" in *client*版本*) ok "H \`fleet doctor\` on a client-only home: the client row" ;; *) bad "H fleet doctor: $out" ;; esac
+case "$out" in *fleet*版本*) ok "H \`fleet doctor\` on a client-only home: the fleet row" ;; *) bad "H fleet doctor: $out" ;; esac
+case "$out" in *能力*基础*) ok "H …and the 能力 row (#1806)" ;; *) bad "H no 能力 row: $out" ;; esac
 
 # --- I. bin/fleet switches and runs the new client ---------------------------
 install_client v1; cp "$BIN/fleet" "$ROOT/bin/fleet"; hub v2 1 1

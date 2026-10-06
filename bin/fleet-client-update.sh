@@ -163,7 +163,7 @@ try:
 except Exception:
     sys.exit(1)
 key_ok = re.compile(r"^FLEET_[A-Z0-9_]{1,64}$")
-deny = re.compile(r"(TOKEN|SECRET|PASSWORD|_KEY$|^FLEET_HUB_URL$|^FLEET_ROLE$|^FLEET_CONF_DIR$|^FLEET_SHELL$)")
+deny = re.compile(r"(TOKEN|SECRET|PASSWORD|_KEY$|^FLEET_HUB_URL$|^FLEET_ROLE$|^FLEET_HOST$|^FLEET_CONF_DIR$|^FLEET_SHELL$)")
 val_ok = re.compile(r"^[A-Za-z0-9 ._:=,@/+%-]{0,200}$")
 secret = re.compile(r"(?:^|[^A-Za-z0-9])(?:sk-|ghp_|gho_|ghs_|ghu_|github_pat_|xox[abprs]-|glpat-)|AKIA[0-9A-Z]{16}|[A-Za-z0-9+/_=-]{32,}")
 lines = []

@@ -23,7 +23,7 @@
 # What the verdict does is the hub's (tokenledger/internal/api/fleet_compute.go):
 # unsupported_region closes a login that runs sessions and raises an alert;
 # ok opens one only when the team policy fleet.compute_auto is on — otherwise
-# it is this one line:  可以打开：fleet node compute on
+# it is this one line:  可以打开：fleet host on  (承载, issue #1806 — `fleet node compute on` inside)
 #
 # Run at `fleet node join` (so at install) and daily by the node agent; `fleet
 # node compute on` runs it first and refuses on anything but ok.
@@ -155,6 +155,6 @@ case "$verdict" in
 esac
 # The one hint (EPIC #1718 decision 2): suitable, a node, compute off.
 if [ "$verdict" = ok ] && [ -f "$ENVF" ] && grep -qx 'CCQUOTA_FLEET_COMPUTE=0' "$ENVF"; then
-  echo "可以打开：fleet node compute on"
+  echo "可以打开：fleet host on"
 fi
 exit "$rc"
