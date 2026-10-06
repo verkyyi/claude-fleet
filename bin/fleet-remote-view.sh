@@ -832,7 +832,8 @@ EOF_PEER
     # over it, and the far end's tmux never got to turn its mouse reporting (and
     # bracketed paste) off in this pane — the outer tmux would keep handing it
     # SGR reports nobody reads. Off here, as the far end's exit would have.
-    [ -n "${TMUX:-}" ] && tmux set-window-option -t "${TMUX_PANE:-}" @remote_down 1 2>/dev/null
+    # when it dropped (issue #1904): the top line says `⟳ <secs>` off it
+    [ -n "${TMUX:-}" ] && tmux set-window-option -t "${TMUX_PANE:-}" @remote_down "$(date +%s)" 2>/dev/null
     printf '\033[?1000l\033[?1002l\033[?1003l\033[?1005l\033[?1006l\033[?1015l\033[?2004l'
     [ -t 0 ] && stty -echo 2>/dev/null
     stop_bg

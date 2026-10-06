@@ -13,6 +13,7 @@ import codecs
 import curses
 import errno
 import fcntl
+import json
 import os
 from pathlib import Path
 import re
@@ -27,7 +28,7 @@ import unicodedata
 
 BIN = Path(__file__).absolute().parent  # preserve the selftest shadow root
 US = "\x1f"
-VIEW_VERSION = "25"  # #1759: in the shell the current row is the STAGE's window, read off its server
+VIEW_VERSION = "26"  # #1904: the one-pane layout (@fleet_single) + the stage's top line record
 # ↑↓ follow (issue #822): an arrow moves the highlight at once and switches to
 # it only after this much quiet. A held key on a slow link is one switch, not
 # one per row, and a row passed over is never selected — so the wake hook's
@@ -66,7 +67,7 @@ def load_text():
     locale exactly as every other fleet surface does, and a printf argument
     comes back as a \\001 slot for tr() to fill."""
     try:
-        out = subprocess.run(["sh", str(BIN / "fleet-ui-lang.sh"), "dump", "sidebar_", "no_repo"],
+        out = subprocess.run(["sh", str(BIN / "fleet-ui-lang.sh"), "dump", "sidebar_", "no_repo", "needs_"],
                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10).stdout
     except (OSError, subprocess.SubprocessError):
         out = b""
@@ -187,6 +188,57 @@ def switch_target(verbs, rows, current, live, session=""):
         if nxt:
             base = target = nxt
     return target
+
+
+def bar_record(rows, current):
+    """What the stage's top line says about the row in view (issue #1904), off
+    the rows this list paints — so the line and the list never disagree: its
+    place among the session rows (‹ i/n ›), state, needs kind, key, title, PR,
+    repo (only in a fleet showing more than one), machine and whether it is lost,
+    and how many rows wait on you. None when the row is not on the list."""
+    ids = [key for key in selectable(rows) if acts(key)]
+    repos, repo, slug, hit = set(), "", "", None
+    for row in rows:
+        if row[0] == "hdr":
+            if len(row) > 3 and row[1] and row[1] != PIN_HEADING[4:]:
+                repo, slug = row[3].strip().lstrip("▸ ").strip(), row[1]
+                repos.add(slug)
+            continue
+        if row[0] == current:
+            hit = (row, repo, slug)
+    if hit is None:
+        return None
+    row, repo, slug = hit
+    row = list(row) + [""] * (14 - len(row))
+    kind = ""
+    if row[1] == "needs":
+        kind = "perm" if row[7] == tr("needs_perm") else "ask"
+    node = row[8]
+    pr = row[10] if row[10] not in ("", "—", "·") else ""
+    return {
+        "i": ids.index(current) + 1 if current in ids else 0, "n": len(ids),
+        "state": row[1], "kind": kind, "key": row[9] if row[9] not in ("—", "·") else "",
+        "title": (row[13] or row[3]).strip(), "pr": pr,
+        "repo": repo if len(repos) > 1 else "", "slug": slug if slug != "none" else "",
+        "node": machine_tag(node.rstrip("!~"))[1:] if node.rstrip("!~") else tr("sidebar_here"),
+        "lost": node.endswith("!"), "direct": node.endswith("~"),
+        "ask": sum(1 for r in rows if r[0] != "hdr" and r[1] in FOLD_KEEP),
+    }
+
+
+def publish_bar(rows, current, last):
+    """Write the top line's record (bar_record) for the stage, only on change, and
+    bump the stage session's `@fleet_bar_gen`: the stage's status-left names it,
+    so tmux runs the line again at once (bin/fleet-topbar.py)."""
+    rec = bar_record(rows, current)
+    text = json.dumps(rec, ensure_ascii=False, sort_keys=True)
+    if text == last:
+        return last
+    if switch_lib().write_atomic(switch_lib().state_dir() / "switch-bar.json", text + "\n"):
+        run(["tmux", "-L", STAGE, "set-option", "-t", "=" + STAGE, "@fleet_bar_gen",
+             str(time.time_ns())])
+        return text
+    return last
 
 
 def stage_remote():
@@ -425,6 +477,44 @@ def heal_frame(session, window):
     return True
 
 
+def single_layout(frame, cols, width):
+    """Whether the client's `home` shows ONE pane (issue #1904): only the
+    client's frame (`@shell_frame`), never a fleet window. FLEET_CLIENT_LAYOUT is
+    auto (the default: one pane when the list does not fit beside 80 columns of
+    session — the width under which the list used to be taken away with nothing
+    in its place), single (always) or split (never: the old rule, byte for byte)."""
+    if not (SHELL and frame) or not cols.isdigit():
+        return False
+    layout = os.environ.get("FLEET_CLIENT_LAYOUT", "auto")
+    if layout == "single":
+        return True
+    if layout == "split":
+        return False
+    return int(cols) < width + 1 + 80
+
+
+def fit_single(window, workers, single, wanted, zoomed):
+    """Hold the one-pane layout (issue #1904) on the client's `home`: single →
+    the session pane zoomed and `@fleet_single` on the window (the conf's keys
+    and F1–F4 read it); not single → `@fleet_single` off and the zoom it made
+    undone — a zoom the person made (F9) is theirs and stays. Returns the
+    window's zoom flag after it, as sync reads it."""
+    was = fields(window, "#{@fleet_single}") == ["1"]
+    if single and wanted and workers:
+        if not was:
+            tmux("set-option", "-w", "-t", window, "@fleet_single", "1")
+        if zoomed != "1":
+            worker = next((p[0] for p in workers if p[3] == "1"), workers[0][0])
+            tmux("resize-pane", "-Z", "-t", worker)
+        return "1"
+    if was:
+        tmux("set-option", "-uw", "-t", window, "@fleet_single")
+        if zoomed == "1":
+            tmux("resize-pane", "-Z", "-t", window)
+            return "0"
+    return zoomed
+
+
 def sync(session, enabled, width, lock):
     info = fields(session + ":", US.join(("#{window_id}", "#{window_name}",
                   "#{window_width}", "#{session_attached}", "#{@issue}",
@@ -441,6 +531,12 @@ def sync(session, enabled, width, lock):
         width = max(24, min(60, int(manual)))
     all_panes = panes(session)
     workers = [p for p in all_panes if p[1] == window and is_worker(p)]
+    # The client's one-pane layout (issue #1904): the client's `home` on a
+    # screen too narrow for the list beside 80 columns of session (a phone, an
+    # iPad in portrait), or FLEET_CLIENT_LAYOUT=single. The list stays — zoomed
+    # away behind the session, still reading rows and taking the queued switches
+    # — and the stage's top line is the way round (‹ › and the switcher).
+    single = single_layout(frame, cols, width)
     # A node's fleet session never gets here with enabled == "1" (issue #1713:
     # fleet-sidebar.sh draws the list only on the client's server), so a viewer
     # needs no marker of its own any more — one list, the client's.
@@ -454,7 +550,13 @@ def sync(session, enabled, width, lock):
               # a fleet with no task yet starts one, so the list shows there too.
               bool(issue or raw == "1" or worktree or norepo == "1" or remote or
                    name == "home") and
-              bool(workers) and int(cols) >= width + 1 + 80)
+              bool(workers) and (single or int(cols) >= width + 1 + 80))
+    if frame and not (single and wanted):
+        zoomed = fit_single(window, workers, False, wanted, zoomed)
+    elif frame and zoomed == "1" and not any(p[1] == window and p[2] == "1" for p in all_panes):
+        # one pane, and no list behind it yet: unzoom so it can be drawn (below)
+        tmux("resize-pane", "-Z", "-t", window)
+        zoomed = "0"
     if not wanted or zoomed == "1":
         leave_navigation(session)
     # Slots (issue #1702): none at all while the list is off; none in a window
@@ -479,6 +581,8 @@ def sync(session, enabled, width, lock):
     if current:
         for pane in reusable:
             remove_view(pane[0])
+    if single and wanted and current:
+        zoomed = fit_single(window, workers, True, wanted, zoomed)
     if not wanted or current or zoomed == "1":
         # The window on screen shows no list: its slot would be a blank column.
         if here and zoomed != "1":
@@ -512,6 +616,8 @@ def sync(session, enabled, width, lock):
          "set-option", "-p", "-t", pane, "@sidebar_version", VIEW_VERSION, ";",
          "set-option", "-w", "-t", pane, "@sidebar_worker", worker, ";",
          "set-option", "-p", "-t", pane, "remain-on-exit", "off")
+    if single:
+        fit_single(window, workers, True, wanted, "0")
     pin_view(session)
 
 
@@ -2179,6 +2285,7 @@ def ui(screen, session, worker, lock):
     mark_input(pane, "")
     published = None  # the (window, candidates) last written to @sidebar_next
     switch_rows = None  # the switch-rows.tsv last written (issue #1903)
+    bar_gen = None  # the stage top line's record last published (issue #1904)
     switch_visit(current_row)
     # The row producer in flight (issue #1033), and whether any run has landed:
     # only the FIRST frame waits for one — every later frame paints the last
@@ -2339,9 +2446,13 @@ def ui(screen, session, worker, lock):
                                              "#{session_attached}", "#{@popup_open}",
                                              "#{window_id}", "#{@sidebar_worker}",
                                              "#{client_key_table}", "#{@remote}",
-                                             "#{@popup_pid}")))
-                if len(info) != 9:
+                                             "#{@popup_pid}", "#{@fleet_single}")))
+                if len(info) != 10:
                     return
+                if info[9] == "1":
+                    # The one-pane layout (issue #1904): zoomed away behind the
+                    # session on purpose — read rows and take keys as if shown.
+                    info[1] = "0"
                 # The pane (and curses grid) survives navigation. Follow its new
                 # worker before testing liveness or building current-row exemptions.
                 # A proxy window onto another machine is RETARGETED in place by
@@ -2360,7 +2471,7 @@ def ui(screen, session, worker, lock):
                 # Never let this view keep an otherwise closed worker window alive.
                 if fields(worker, "#{pane_dead}") != ["0"]:
                     return
-                shown = visible(info[:4] + info[8:], time.time())
+                shown = visible(info[:4] + info[8:9], time.time())
                 if not shown and info[3] not in ("", "0"):
                     # Under a popup: look again soon, so its close repaints the
                     # list within a second (issue #1536), not at the next tick.
@@ -2387,6 +2498,8 @@ def ui(screen, session, worker, lock):
                 # view — a blank strip until the next hook sync. Paint the rows we
                 # have and try again next tick; the watchdog logs it if it lasts.
                 failure, refresh_at = "tmux call timed out", time.monotonic() + 1
+        if STAGE and loaded and view == "live":
+            bar_gen = publish_bar(rows, current_row, bar_gen)
         if not shown:
             follow_at = None  # a hidden view never switches windows
             shown_at = None   # nor does its frame age

@@ -271,7 +271,8 @@ env_g=$(ts show-environment -g)
 has 'B: server env FLEET_SHELL=1' "$env_g" 'FLEET_SHELL=1'
 has 'B: server env names the stage' "$env_g" "FLEET_SHELL_STAGE=$SESS-stage"
 has 'B: the stage has the same env' "$(tsg show-environment -g)" 'FLEET_SHELL=1'
-has 'B: the stage'"'"'s title asks the bar for its words' "$(cat "$WORK/cache/tmux-stage.conf")" "tmux-status.sh part=title sess=$SESS"
+has 'B: the stage'"'"'s title is the session'"'"'s top line (#1904)' "$(cat "$WORK/cache/tmux-stage.conf")" "fleet-topbar.py render cw=#{client_width}"
+has 'B: a tap on the top line goes to its click (#1904)' "$(cat "$WORK/cache/tmux-stage.conf")" "fleet-topbar.py click '#{mouse_status_range}' $SESS"
 has 'B: server env client mode' "$env_g" "FLEET_HUB_SESSIONS_CLIENT=$SESS"
 has 'B: server env hub source' "$env_g" 'FLEET_SIDEBAR_SOURCE=hub'
 has 'B: server env TMPDIR under the cache' "$env_g" "TMPDIR=$WORK/cache/tmp"
