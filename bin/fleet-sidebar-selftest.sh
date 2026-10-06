@@ -166,6 +166,10 @@ assert sidebar.next_attention(rows, '@2') == '@4'
 assert sidebar.next_attention(rows, '@5') == '@2'          # wraps round
 assert sidebar.next_attention(rows, 'gone') == '@2'
 assert sidebar.next_attention([R('@1', 'done')], '@1') == ''
+# the summary line is a tap target, never a cursor stop (issue #1771)
+assert sidebar.is_attn_summary(rows[0]) and not sidebar.is_attn_summary(rows[1])
+assert not sidebar.is_attn_summary(None) and sidebar.key_of(rows[0]) == 'hdr'
+assert not sidebar.is_attn_summary(['hdr', 'o/b', '', 'b (1)'])
 assert sidebar.edit_of(sidebar.WORD_LEFT, '') == 'word_left' and sidebar.edit_of(ord('a'), 'x') == ''
 
 real_tmux = shutil.which('tmux')
@@ -396,7 +400,7 @@ try:
                 ('fleet-sidebar' in line or 'after-select-pane[71]' in line or 'client-detached' in line or
                  'MouseDown1Pane' in line or 'MouseDown1Border' in line or 'DoubleClick1Pane' in line or
                  line.startswith('bind -n F9 ') or line.startswith('bind -n C-M-S-F12 ') or
-                 line.startswith('bind z ') or line.startswith('bind [ '))]
+                 line.startswith('bind z ') or line.startswith('bind [ ') or line.startswith('bind k '))]
     selected += [line for line in node_conf.splitlines() if
                  line.startswith('set -g pane-border') or line.startswith('set -g default-terminal') or
                  line.startswith('set -g assume-paste-time ') or line.startswith('set -g @pct_sign ') or
@@ -1373,6 +1377,53 @@ try:
         wait_for(lambda: row_line('worker-one') and not row_line('已落地'), '⌃t did not come back from ' + label)
     (bin_dir / 'fleet-history.sh').unlink()
     (bin_dir / 'fleet-history.sh').symlink_to(real_bin / 'fleet-history.sh')
+
+    # The 要你处理 summary is a tap target (issue #1771): a tap on it is one ⌃k —
+    # onto the next row waiting on you, and over to it; prefix k does the same
+    # with the keyboard on the worker; nothing waiting, no line.
+    was_on = tm('display-message', '-p', '-t', 'fleet-test:', '#{window_id}')
+    was_state = tm('show-options', '-wqv', '-t', w2, '@claude_state')
+    def on_window():
+        return tm('display-message', '-p', '-t', 'fleet-test:', '#{window_id}')
+    def summary_y():
+        lines = tm('capture-pane', '-p', '-t', side).splitlines()
+        return next((y for y, l in enumerate(lines) if '个在问你' in l), None)
+    tm('select-window', '-t', w1)
+    wait_for(lambda: bool(view_on(w1)), 'the summary-tap leg needs the sidebar on the first worker')
+    tm('set-option', '-w', '-t', w2, '@claude_state', 'needs')
+    tm('set-option', '-w', '-t', w2, '@claude_needs', 'ask')
+    wait_for(lambda: summary_y() is not None, 'no 要你处理 summary line with a row waiting on you')
+    summary = tm('capture-pane', '-p', '-t', side).splitlines()[summary_y()]
+    check('点这里' in summary, 'the summary line lost 「点这里」 at the sidebar width: %r' % summary)
+    click(side, row=summary_y())
+    wait_for(lambda: bool(view_on(w2)) and on_window() == w2,
+             'a tap on the 要你处理 summary did not switch to the row waiting on you')
+    asked = next(r[3] for r in row_data() if r[0] == w2).strip()[:8]
+    wait_for(lambda: any(l.lstrip().startswith(('▶', '›')) and asked in l
+                         for l in tm('capture-pane', '-p', '-t', side).splitlines()),
+             'a tap on the 要你处理 summary did not land the list on the row waiting on you')
+    # prefix k: the keyboard on the worker pane, never the list's
+    tm('select-window', '-t', w1)
+    wait_for(lambda: bool(view_on(w1)), 'the sidebar did not come back to the first worker')
+    click(p1, row=3)
+    wait_for(lambda: not navigation(), 'a tap on the worker did not take the keyboard off the list')
+    wait_for(lambda: tm('display-message', '-p', '-t', w1 + '.{top-left}', '#{pane_id}') == side and
+             any(l.startswith('▶') and 'worker-one' in l for l in tm('capture-pane', '-p', '-t', side).splitlines()),
+             'the list on the first worker did not settle')
+    # prefix, then k, as a person types them: one write is a paste burst
+    # (assume-paste-time), and tmux runs no key binding inside a paste
+    os.write(terminal, b'\x02')
+    time.sleep(.3)
+    os.write(terminal, b'k')
+    wait_for(lambda: bool(view_on(w2)) and on_window() == w2,
+             'prefix k did not switch to the row waiting on you')
+    tm('set-option', '-w', '-t', w2, '@claude_state', 'done')
+    tm('set-option', '-uw', '-t', w2, '@claude_needs')
+    wait_for(lambda: summary_y() is None, 'the 要你处理 summary outlived the last row waiting on you')
+    if was_state:
+        tm('set-option', '-w', '-t', w2, '@claude_state', was_state)
+    tm('select-window', '-t', was_on)
+    wait_for(lambda: bool(view_on(was_on)), 'the sidebar did not come back after the summary-tap leg')
 
     # The row menu (issue #898): `.` on an EMPTY input line, or a tap on the
     # highlighted row (the second tap on a row the first one switched to), opens
