@@ -29,7 +29,7 @@ see the same tools (Claude shows them as mcp__fleet__<action>):
 
 docs/FLEET-MCP.md is the one spec; later EPIC members add tools there and here.
 
-The rule (EPIC #1813 decision 4, same as mod/fleet/hooks/tools.ts): a tool only
+The rule (EPIC #1813 decision 4, the one the retired mod tools kept): a tool only
 CHECKS its arguments — an unknown or missing argument, a wrong type, a repo this
 fleet does not host is refused with the reason and NOTHING runs — then runs the
 existing script unchanged and hands back its exit code, stdout and stderr as they
@@ -74,7 +74,7 @@ BIN = Path(__file__).resolve().parent
 SERVER = "fleet"
 VERSION = "0.1.0"
 
-# fleet-await.sh blocks; the cap and default match the mod's (tools.ts).
+# fleet-await.sh blocks: a ten-minute tool call at most, with head-room.
 AWAIT_MAX_S = 570
 AWAIT_DEFAULT_S = 540
 AWAIT_SLACK_S = 25
@@ -601,7 +601,7 @@ def send_message(to, text):
     return {"delivered": True, "receipt": result.stdout.strip(), "to": to}
 
 
-# --- the script-backed tools (same contract as mod/fleet/hooks/tools.ts) --------
+# --- the script-backed tools ----------------------------------------------------
 
 def script(argv, timeout, env=None):
     """Run a script unchanged; its exit code, stdout and stderr come back as they came."""

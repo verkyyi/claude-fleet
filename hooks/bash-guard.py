@@ -929,13 +929,228 @@ def _run_overlay(seg):
         pass                   # any other overlay error → fail open
 
 
+# --- DIRECT-SCRIPT RAIL (issue #1812, EPIC #1813 C10) --------------------------
+# A WORKER session reaches the fleet through its tool service (bin/fleet-mcp.py,
+# mounted as `fleet`: mcp__fleet__<tool>), never by running the script the tool
+# wraps — while the old road stays open, new skills and old habits mix and the
+# call log cannot say which session did what. ONE table, two roads: a Bash
+# statement whose COMMAND is one of these scripts, and a call to one of the mod's
+# retired tools (mod/fleet/hooks/tools.ts, gone in mod 0.4.0) by its MCP name.
+#
+#   FLEET_DIRECT_SCRIPTS=log    (default) allow, and append a line to
+#                               logs/mcp-bypass.log — the week of record
+#   FLEET_DIRECT_SCRIPTS=block  deny, naming the tool to call instead
+#   FLEET_DIRECT_SCRIPTS=off    neither
+#   FLEET_ALLOW_DIRECT_SCRIPTS=1  the escape hatch (env or inline): allowed,
+#                               logged as `hatch`
+#
+# The seat is the whole scope: only a worker seat (fleet_seat — a bound issue in
+# its own worktree) is logged or blocked; the operator's hub, a scratch draft and
+# a person's own shell never are. Only the COMMAND word counts (a `grep`/`cat`/
+# `sed` of the script is not a call), and only the live install's copy or a bare
+# name — a worker on this repo running its own branch's bin/ is testing, not
+# bypassing. The log carries the script and the tool, never the command line.
+_DIRECT_TOOLS = {
+    # script            : (tool, first-argument predicate or None)
+    "fleet-children.sh": ("children", None),
+    "fleet-repo.sh": ("repos", ("list",)),
+    "dash-issue-session.sh": ("spawn", None),
+    "fleet-await.sh": ("await", None),
+    "fleet-peer-send.sh": ("send", None),
+    "fleet-report-parent.sh": ("report", None),
+    "fleet-comment.sh": ("comment", None),
+    "set-claude-state.sh": ("ask", ("blocked",)),
+    "fleet-evidence.sh": ("evidence", None),
+    "fleet-handoff-file.sh": ("handoff", None),
+    "fleet-pr-verdict.sh": ("pr_verdict", None),
+    "fleet-pr-merge.sh": ("pr_merge", None),
+    "fleet-claim-brief.sh": ("brief", None),
+    "fleet-issue-file.sh": ("file_issue", None),
+    "fleet-gh.sh": ("gh", None),
+}
+# The mod's retired tools, by the name Claude showed them under.
+_RETIRED_TOOLS = {
+    "mcp__fleet__fleet_status": "status",
+    "mcp__fleet__fleet_spawn": "spawn",
+    "mcp__fleet__fleet_await": "await",
+}
+_DIRECT_WRAPPERS = {"bash", "sh", "zsh", "exec", "command", "env", "nohup", "time"}
+_DIRECT_KEYWORDS = {"if", "then", "else", "elif", "do", "while", "until"}
+_DIRECT_SEAT = None
+
+
+def _fleet_conf_value(key):
+    """<key> from env > install fleet.conf > fleet.settings > the machine's
+    fleet.conf (#1623) — the order _heavy_conf reads FLEET_HEAVY* in."""
+    if key in os.environ:
+        return os.environ[key].strip()
+    val = None
+    here = os.path.dirname(os.path.abspath(__file__))
+    for path in (os.path.join(here, "..", "fleet.conf"),
+                 os.path.join(_conf_dir(), "fleet.settings"),
+                 os.path.join(_conf_dir(), "fleet.conf")):
+        try:
+            with open(path) as f:
+                for line in f:
+                    m = re.match(r"\s*(?:export\s+)?" + key + r"=(.*)$", line)
+                    if m:
+                        try:
+                            toks = shlex.split(m.group(1), comments=True)
+                        except ValueError:
+                            continue
+                        val = toks[0] if toks else ""
+        except OSError:
+            pass
+    return (val or "").strip()
+
+
+def _direct_mode():
+    m = _fleet_conf_value("FLEET_DIRECT_SCRIPTS").lower()
+    return m if m in ("log", "block", "off") else "log"
+
+
+def _install_roots():
+    roots = [os.path.expanduser("~/.claude/fleet"),
+             os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")]
+    out = []
+    for r in roots:
+        try:
+            out.append(os.path.realpath(r))
+        except Exception:
+            pass
+    return out
+
+
+def _direct_script(orig_seg, cwd):
+    """(script, tool) when this statement RUNS a covered script, else None."""
+    try:
+        toks = shlex.split(orig_seg, comments=True)
+    except ValueError:
+        toks = orig_seg.split()
+    # `(cd x && …`, `if …; then …`, `X=$(script …)`: what RUNS is the word
+    # after the openers, keywords, assignments and pass-through wrappers.
+    i, word = 0, None
+    while i < len(toks):
+        t = toks[i].lstrip("({!")
+        sub = re.match(r"^(?:[A-Za-z_][A-Za-z0-9_]*=)?[\"']?\$\((.+)$", t)
+        if sub:
+            t = sub.group(1)
+        elif (not t or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", t) or t in _DIRECT_WRAPPERS
+              or t in _DIRECT_KEYWORDS
+              or (t.startswith("-") and i > 0 and toks[i - 1] in _DIRECT_WRAPPERS)):
+            i += 1
+            continue
+        word = t.rstrip(")")
+        break
+    if not word:
+        return None
+    entry = _DIRECT_TOOLS.get(os.path.basename(word))
+    if entry is None:
+        return None
+    tool, first = entry
+    if first is not None:
+        nxt = toks[i + 1] if i + 1 < len(toks) else ""
+        if nxt not in first:
+            return None
+    if "/" in word:
+        home = os.path.expanduser("~")
+        path = re.sub(r"^\$\{?HOME\}?(?=/)", lambda _m: home, word)
+        path = os.path.expanduser(path)
+        if not os.path.isabs(path):
+            path = os.path.join(cwd, path)
+        try:
+            path = os.path.realpath(path)
+        except Exception:
+            return None
+        if not any(path.startswith(r + os.sep) for r in _install_roots()):
+            return None              # a worktree's own bin/: testing, not bypassing
+    return os.path.basename(word), "mcp__fleet__" + tool
+
+
+def _direct_seat(cwd):
+    """(seat, issue) of THIS pane via fleet-lib's fleet_seat; any failure ⇒ ('', '')
+    — fail open: a guard that cannot tell the seat never blocks."""
+    global _DIRECT_SEAT
+    if _DIRECT_SEAT is not None:
+        return _DIRECT_SEAT
+    _DIRECT_SEAT = ("", "")
+    if os.environ.get("FLEET_HUB", "").strip() == "1":
+        return _DIRECT_SEAT
+    lib = os.path.expanduser(
+        os.environ.get("FLEET_LIB", "~/.claude/fleet/bin/fleet-lib.sh"))
+    if not os.path.exists(lib):
+        return _DIRECT_SEAT
+    script = ('source "$1" >/dev/null 2>&1 || exit 9\n'
+              'printf "%s|%s" "$(fleet_seat 2>/dev/null)" '
+              '"$(fleet_pane_fmt "#{@issue}" 2>/dev/null)"\n')
+    try:
+        out = subprocess.run(["bash", "-c", script, "_", lib], cwd=cwd or None,
+                             capture_output=True, text=True, timeout=10)
+        if out.returncode == 0:
+            seat, _, issue = out.stdout.strip().partition("|")
+            _DIRECT_SEAT = (seat.strip(), issue.strip())
+    except Exception:
+        pass
+    return _DIRECT_SEAT
+
+
+def _bypass_log(verdict, issue, script, tool):
+    path = os.environ.get("FLEET_MCP_BYPASS_LOG", "").strip() or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "logs", "mcp-bypass.log")
+    import time
+    line = "%s\t%s\tissue=%s\tscript=%s\ttool=%s\n" % (
+        time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), verdict,
+        issue or "-", script, tool)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a") as f:
+            f.write(line)
+    except OSError:
+        pass
+
+
+def check_direct(script, tool, masked_cmd, cwd):
+    """The one verdict for both roads: log / block / hatch, worker seat only."""
+    mode = _direct_mode()
+    if mode == "off":
+        return
+    seat, issue = _direct_seat(cwd)
+    if seat != "worker":
+        return
+    if _hatched(masked_cmd, "FLEET_ALLOW_DIRECT_SCRIPTS"):
+        _bypass_log("hatch", issue, script, tool)
+        return
+    if mode != "block":
+        _bypass_log("logged", issue, script, tool)
+        return
+    _bypass_log("blocked", issue, script, tool)
+    sys.stderr.write(
+        "⛔ BLOCKED by ~/.claude/fleet/hooks/bash-guard.py: a worker session calls the "
+        "fleet through its tools — use %s instead of %s (issue #1812).\n"
+        "Codex shows the same tool as `fleet` → %s. Arguments: docs/FLEET-MCP.md.\n"
+        "Truly need the script itself? Prefix FLEET_ALLOW_DIRECT_SCRIPTS=1.\n"
+        % (tool, script, tool[len("mcp__fleet__"):])
+    )
+    sys.exit(2)
+
+
 def main():
     try:
         data = json.load(sys.stdin)
     except Exception:
         allow()  # fail open
 
-    if data.get("tool_name") != "Bash":
+    name = data.get("tool_name") or ""
+    if name in _RETIRED_TOOLS:          # the same rule on the MCP road (#1812)
+        try:
+            check_direct(name, "mcp__fleet__" + _RETIRED_TOOLS[name], "",
+                         data.get("cwd") or os.getcwd())
+        except SystemExit:
+            raise
+        except Exception:
+            pass
+        allow()
+    if name != "Bash":
         allow()
     ti = data.get("tool_input") or {}
     if not isinstance(ti, dict):
@@ -963,6 +1178,14 @@ def main():
             raise
         except Exception:
             pass                         # fail open, as every rail here
+        try:
+            hit = _direct_script(cmd[a:b], cwd)
+            if hit:
+                check_direct(hit[0], hit[1], masked, cwd)
+        except SystemExit:
+            raise
+        except Exception:
+            pass                         # fail open
         try:
             check_heavy(masked[a:b], (a, b), masked, ti)
         except Exception:

@@ -58,6 +58,20 @@ test('in range: @mod_state on, @mod_ver, and a heartbeat every 15s', async ($, o
   expect(option(runs, '@mod_alive')).toEqual(['1000000000', '1000000015', '1000000030'])
 })
 
+test('retired tools (#1812): in range, with or without the tool service, the mod registers no tool', async ($, on) => {
+  const names: string[] = []
+  on('tool.register', (_$, e) => {
+    names.push(e.name)
+    return { value: { tool: `mcp__fleet__${e.name}` } }
+  })
+  const { runs } = engine(on, SUPPORTED.min, { TMUX_PANE: '%7' })
+  await $.session.start(START)
+  expect(names).toEqual([])
+  // Everything else still starts: the gate opens and the heartbeat is written.
+  expect(option(runs, '@mod_state')).toEqual(['on'])
+  expect(option(runs, '@mod_alive')).toEqual(['1000000000'])
+})
+
 test('out of range: registers nothing past the gate — off:version, no heartbeat', async ($, on) => {
   const { runs, clock } = engine(on, '9.0.0')
   await $.session.start(START)

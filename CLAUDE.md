@@ -117,6 +117,13 @@ Do not install from memory: read the doc and work from it.
   token's hash) that `ccquota place` / the relay carry; the hub verifies it (401),
   keeps it to that session (404) and writes `worker_id` into `fleet_audit` and the
   journal. No hub ⇒ nothing minted, no request (`fleet-mcp-selftest.sh` K).
+  **The old road closes on the worker seat** (issue #1812, C10): `hooks/bash-guard.py`'s
+  `_DIRECT_TOOLS` table maps each script a tool wraps to its tool, and a worker
+  that runs one (or calls the mod's retired `mcp__fleet__fleet_*`) is logged to
+  `logs/mcp-bypass.log` (`FLEET_DIRECT_SCRIPTS=log`, the default) or refused with
+  the tool's name (`block`); `FLEET_ALLOW_DIRECT_SCRIPTS=1` is the hatch, the
+  operator / scratch / a person's shell are never touched. The mod registers no
+  tool (0.4.0). Spec: `docs/FLEET-MCP.md` «The old road».
 - **A spawn's parent is a LIVE session, or the spawn refuses** (issue #1355,
   EPIC #1645 C2). `fleet_origin_gate` (`bin/fleet-lib.sh`) runs in both spawners
   after `fleet_origin_canon`, before any window: a key no window answers to

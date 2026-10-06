@@ -645,14 +645,11 @@ younger than half `FLEET_ACCOUNT_QUOTA_STALE`, it reads that cache instead of
 calling the hub (`fleet-quotawatch: … ccquota fetch skipped`). No mod ⇒ no `mod`
 stamp ⇒ every fetch runs as before.
 
-**Tools** (`mod/fleet/hooks/tools.ts`, issue #1340): once the gate is open the
-session carries `mcp__fleet__fleet_status` (read-only: this window's binding +
-`fleet-children.sh` + `fleet-repo.sh list`), `mcp__fleet__fleet_spawn`
-(`issue`, optional `repo` → `dash-issue-session.sh`) and `mcp__fleet__fleet_await`
-(`issue`, optional `repo` / `timeout` ≤ 570s → `fleet-await.sh`). A missing,
-mistyped or unknown argument, or a repo the fleet does not host, is refused with
-the reason before anything runs; a valid call runs the script unchanged and
-returns its exit code, stdout and stderr — every cap and guard is the script's.
+**Tools** — none since mod 0.4.0 (issue #1812, EPIC #1813 C10). The mod's
+`fleet_status` / `fleet_spawn` / `fleet_await` (issue #1340) retired: the fleet
+tool service (`bin/fleet-mcp.py`, `docs/FLEET-MCP.md`) serves `status` / `spawn` /
+`await` and the rest to Claude and Codex alike, and `hooks/bash-guard.py` logs or
+refuses a worker that still calls the old names.
 
 **The state, said by the session (#1336).** `mod/fleet/hooks/state.ts` writes
 the same `@claude_state` the settings hooks do, as the engine knows it:
