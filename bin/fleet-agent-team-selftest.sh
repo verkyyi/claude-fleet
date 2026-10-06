@@ -25,7 +25,23 @@
 #   K. fetch       over HTTP (a loopback stub of /v1/fleet/team-bundle): the
 #                  node token from node.env as Bearer, If-None-Match → 304 is
 #                  "unchanged", a 401 without a certificate is exit 1 and the
-#                  cache stays
+#                  cache stays; the personal read answered 404 is no layer
+#
+# The personal layer (issue #1857, EPIC #1855 C2): local > personal > team >
+# default, the person's answer through FLEET_PERSON_BUNDLE_CMD:
+#   L. degenerate  no personal layer (no answer / version 0 / 404) → every output
+#                  — sync, status, session, expected, agent-effective.json, the
+#                  files — byte for byte what it is with no personal read at all
+#   M. layers      personal over team (MCP, setting, Codex key, hook, skill);
+#                  this login's own value over the personal layer's
+#   N. rollback    a personal version that drops items takes back only what the
+#                  personal layer wrote and nobody touched: a team item returns
+#                  to the team's value, a hand-edited one stays
+#   O. off         agent-overrides.json `personal: off` leaves the layer
+#   P. session     `session claude` src names personal:vN; its fingerprint moves
+#                  with the personal layer's values; `expected` with it
+#   Q. refused     a credential in the personal layer is refused (the cache is
+#                  kept); hook_scripts is personal-only
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 real="$BIN/fleet-agent-team.py"
@@ -63,14 +79,17 @@ EOF
 # team <args…> — the script, sandboxed; the hub's answer is $WORK/resp.json
 team() {
   env -i PATH="$PATH" HOME="$H" FLEET_CONF_DIR="$CONF" CODEX_HOME="$H/.codex" \
-    ${SEAM:+FLEET_TEAM_BUNDLE_CMD="$SEAM"} "$PY" "$T" "$@" --root "$REPO" \
+    ${SEAM:+FLEET_TEAM_BUNDLE_CMD="$SEAM"} ${PSEAM:+FLEET_PERSON_BUNDLE_CMD="$PSEAM"} "$PY" "$T" "$@" --root "$REPO" \
     --claude-config "$H/.claude.json" --claude-settings "$H/.claude/settings.json" \
     --claude-skills "$H/.claude/skills" --codex-home "$H/.codex" 2>&1
 }
 status() { env -i PATH="$PATH" HOME="$H" FLEET_CONF_DIR="$CONF" "$PY" "$T" status "$@" 2>&1; }
+PSEAM=''
+presp() { printf '%s\n' "$1" > "$WORK/presp.json"; }
 resp() { printf '%s\n' "$1" > "$WORK/resp.json"; }
 snap() {
-  (cd "$H" && find . -type f 2>/dev/null | LC_ALL=C sort \
+  # ./Library/Caches: macOS's python writes its .pyc cache under $HOME on first run
+  (cd "$H" && find . -type f ! -path './Library/Caches/*' 2>/dev/null | LC_ALL=C sort \
     | while IFS= read -r f; do printf '%s %s\n' "$(cksum < "$f")" "$f"; done)
 }
 j() { "$PY" -c "import json,sys; d=json.load(open(sys.argv[1])); print(json.dumps(eval(sys.argv[2]), sort_keys=True))" "$@" 2>/dev/null; }
@@ -208,6 +227,8 @@ class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         with open(sys.argv[2], "a") as f:
             f.write("%s %s %s\n" % (self.path, self.headers.get("Authorization"), self.headers.get("If-None-Match")))
+        if self.path.startswith("/v1/fleet/person-bundle"):
+            self.send_response(404); self.end_headers(); self.wfile.write(b'{"error":"no person for this login"}'); return
         if self.headers.get("Authorization") != "Bearer node-tok":
             self.send_response(401); self.end_headers(); self.wfile.write(b'{"error":"no"}'); return
         if self.headers.get("If-None-Match") == '"team-v9"':
@@ -235,14 +256,147 @@ out=$(SEAM='' team sync); rc=$?
 [ "$rc" = 0 ] && [ "$(j "$CONF/team-bundle.json" "d['version']")" = 9 ] && grep -q 'Bearer node-tok' "$WORK/req.log" \
   && [ "$(j "$CONF/agent-effective.json" "d['team']['version']")" = 9 ] \
   && ok "K fetched v9 with the node token and composed it" || bad "K fetch rc=$rc: $out"
+grep -q '^/v1/fleet/person-bundle Bearer node-tok' "$WORK/req.log" && [ ! -e "$CONF/person-bundle.json" ] \
+  && ! printf '%s' "$out" | grep -q '^personal' \
+  && [ "$(j "$CONF/agent-effective.json" "'personal' in d or 'personal_version' in d")" = false ] \
+  && ok "K the personal read answered 404 (no person) → no cache, no line, no record" || bad "K person 404: $out"
 out=$(SEAM='' team fetch); rc=$?
-[ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'unchanged' && tail -1 "$WORK/req.log" | grep -q '"team-v9"' \
+[ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'unchanged' && grep '^/v1/fleet/team-bundle' "$WORK/req.log" | tail -1 | grep -q '"team-v9"' \
   && ok "K If-None-Match the cached version → 304, unchanged" || bad "K 304: rc=$rc $out"
 printf 'CCQUOTA_TOKEN=wrong\nCCQUOTA_HUB_URL=http://127.0.0.1:%s\n' "$PORT" > "$CONF/node.env"
 out=$(SEAM='' team sync); rc=$?
 [ "$rc" = 1 ] && [ "$(j "$CONF/team-bundle.json" "d['version']")" = 9 ] \
   && ok "K a refused token (no certificate) is exit 1; v9 stays cached" || bad "K 401: rc=$rc $out"
 kill "$STUB" 2>/dev/null; wait "$STUB" 2>/dev/null
+rm -f "$CONF/node.env"
+
+# ── L — no personal layer: byte for byte ──────────────────────────────────────
+SEAM="cat $WORK/resp.json"
+resp '{"version":10,"prev":9,"bundle":{"mcp":{"shared":{"command":"team-shared"}},
+  "claude_settings":{"includeCoAuthoredBy":false},"codex_config":{"sandbox_mode":"workspace-write"}}}'
+team sync >/dev/null
+# everything a reader sees, minus agent-effective.json's applied clock
+picture() {
+  team sync --force; team session claude; team session codex; team expected; status; status --short
+  j "$CONF/agent-effective.json" "{k: v for k, v in d.items() if k != 'team'}"
+  j "$CONF/agent-effective.json" "{k: v for k, v in d['team'].items() if k != 'applied'}"
+  snap | grep -v -e agent-effective.json -e agent-cfg
+}
+base=$(PSEAM='' picture)
+for ps in 'printf ""' "printf '%s' '{\"version\":0,\"bundle\":{}}'"; do
+  got=$(PSEAM="$ps" picture)
+  [ "$got" = "$base" ] && [ ! -e "$CONF/person-bundle.json" ] \
+    && ok "L no personal layer ($ps) → every output byte for byte as without one" \
+    || bad "L degenerate differs ($ps): $(diff <(printf '%s\n' "$base") <(printf '%s\n' "$got") | head -8)"
+done
+
+# ── M — personal over team, local over personal ───────────────────────────────
+PSEAM="cat $WORK/presp.json"
+presp '{"version":1,"prev":0,"bundle":{
+  "mcp":{"shared":{"command":"me-shared"},"pmine":{"command":"p-mcp"}},
+  "hooks":{"Stop":[{"command":"echo me-stop"}]},
+  "skills":{"me-notes":"---\nname: me-notes\n---\n# mine\n"},
+  "claude_settings":{"includeCoAuthoredBy":true},
+  "codex_config":{"sandbox_mode":"read-only"}}}'
+out=$(team sync); rc=$?
+[ "$rc" = 0 ] && printf '%s' "$out" | grep -q '^personal: v1 (new)' || bad "M sync rc=$rc: $out"
+[ "$(j "$H/.claude.json" "d['mcpServers']['shared']['command']")" = '"me-shared"' ] && [ "$(src claude.mcp.shared)" = '"personal"' ] \
+  && [ "$(src claude.mcp.pmine)" = '"personal"' ] \
+  && grep -A1 '^\[mcp_servers.shared\]' "$H/.codex/config.toml" | grep -q me-shared && [ "$(src codex.mcp.shared)" = '"personal"' ] \
+  && ok "M a personal MCP server wins over the team's of the same name (Claude + Codex)" || bad "M mcp: $out"
+[ "$(j "$H/.claude/settings.json" "d['includeCoAuthoredBy']")" = true ] && [ "$(src claude.settings.includeCoAuthoredBy)" = '"personal"' ] \
+  && grep -q '^sandbox_mode = "read-only"' "$H/.codex/config.toml" && [ "$(src codex.sandbox_mode)" = '"personal"' ] \
+  && ok "M a personal setting / Codex key wins over the team's" || bad "M keys: $(cat "$H/.codex/config.toml")"
+[ "$(j "$H/.claude/settings.json" "[h['command'] for g in d['hooks']['Stop'] for h in g['hooks']]")" = '["echo me-stop"]' ] \
+  && [ -f "$H/.claude/skills/me-notes/SKILL.md" ] && [ "$(src claude.skills.me-notes)" = '"personal"' ] \
+  && ok "M a personal hook + skill land, source personal" || bad "M hook/skill: $(cat "$H/.claude/settings.json")"
+[ "$(j "$CONF/agent-effective.json" "[d['personal']['version'], d['personal']['state'], d['personal_version']]")" = '[1, "on", 1]' ] \
+  && ok "M agent-effective.json records personal v1" || bad "M record: $(cat "$CONF/agent-effective.json")"
+case "$(status --short)" in "team v10 · personal v1") ok "M status: team v10 · personal v1" ;; *) bad "M status: $(status --short)" ;; esac
+"$PY" - "$H/.claude.json" <<'PY'
+import json, sys
+p = sys.argv[1]; d = json.load(open(p)); d["mcpServers"]["pmine"]["command"] = "by-hand"; json.dump(d, open(p, "w"))
+PY
+presp '{"version":2,"prev":1,"bundle":{
+  "mcp":{"shared":{"command":"me-shared"},"pmine":{"command":"p-mcp@2"}},
+  "hooks":{"Stop":[{"command":"echo me-stop"}]},
+  "skills":{"me-notes":"---\nname: me-notes\n---\n# mine\n"},
+  "claude_settings":{"includeCoAuthoredBy":true},
+  "codex_config":{"sandbox_mode":"read-only"}}}'
+out=$(team sync)
+[ "$(j "$H/.claude.json" "d['mcpServers']['pmine']['command']")" = '"by-hand"' ] && [ "$(src claude.mcp.pmine)" = '"local"' ] \
+  && printf '%s' "$out" | grep -q "own .*claude.mcp.pmine — this login's value wins over the personal layer's" \
+  && grep -A1 '^\[mcp_servers.pmine\]' "$H/.codex/config.toml" | grep -q 'p-mcp@2' \
+  && ok "M this login's hand edit wins over the personal layer's v2; untouched items follow v2" || bad "M local: $out"
+
+# ── P — the session (taken here, before the rollback) ─────────────────────────
+s1=$(team session claude)
+printf '%s\n' "$s1" | grep -q $'^src\tdefault:[0-9a-f]* team:v10 personal:v2 local:' \
+  && ok "P session src names personal:v2" || bad "P src: $s1"
+presp '{"version":3,"prev":2,"bundle":{
+  "mcp":{"shared":{"command":"me-shared@3"},"pmine":{"command":"p-mcp@2"}},
+  "hooks":{"Stop":[{"command":"echo me-stop"}]},
+  "skills":{"me-notes":"---\nname: me-notes\n---\n# mine\n"},
+  "claude_settings":{"includeCoAuthoredBy":true},
+  "codex_config":{"sandbox_mode":"read-only"}}}'
+team sync >/dev/null
+s2=$(team session claude)
+[ "$(printf '%s\n' "$s1" | grep '^fp')" != "$(printf '%s\n' "$s2" | grep '^fp')" ] \
+  && printf '%s\n' "$s2" | grep -q 'personal:v3' \
+  && ok "P a new personal version moves the session fingerprint" || bad "P fp: $s1 // $s2"
+fp3=$(team session claude | sed -n 's/^fp	//p')
+grep -q "^claude $fp3 .*personal:v3" "$CONF/global/agent-cfg.expected" \
+  && ok "P the cached expected fingerprint carries the personal layer" || bad "P expected: $(cat "$CONF/global/agent-cfg.expected")"
+
+# ── N — the personal rollback takes back only its own ─────────────────────────
+presp '{"version":4,"prev":3,"bundle":{"mcp":{"pmine":{"command":"p-mcp@2"}}}}'
+out=$(team sync)
+[ "$(j "$H/.claude.json" "d['mcpServers']['shared']['command']")" = '"team-shared"' ] && [ "$(src claude.mcp.shared)" = '"team"' ] \
+  && [ "$(j "$H/.claude/settings.json" "d['includeCoAuthoredBy']")" = false ] && [ "$(src claude.settings.includeCoAuthoredBy)" = '"team"' ] \
+  && grep -q '^sandbox_mode = "workspace-write"' "$H/.codex/config.toml" \
+  && ok "N items the team also hands go back to the team's value" || bad "N team back: $out"
+[ ! -e "$H/.claude/skills/me-notes" ] && [ "$(j "$H/.claude/settings.json" "'hooks' in d")" = false ] \
+  && printf '%s' "$out" | grep -q 'drop .*claude.skills.me-notes (the personal layer no longer hands it out)' \
+  && [ "$(j "$H/.claude.json" "d['mcpServers']['pmine']['command']")" = '"by-hand"' ] \
+  && ok "N personal-only items are dropped; the hand-edited one stays" || bad "N dropped: $out"
+
+# ── O — personal: off ──────────────────────────────────────────────────────────
+presp '{"version":5,"prev":4,"bundle":{"mcp":{"pnew":{"command":"p-new"},"shared":{"command":"me-shared"}}}}'
+team sync >/dev/null
+[ "$(src claude.mcp.pnew)" = '"personal"' ] || bad "O pnew not applied"
+echo '{"personal": "off"}' > "$CONF/agent-overrides.json"
+out=$(team sync)
+[ "$(j "$H/.claude.json" "'pnew' in d['mcpServers']")" = false ] \
+  && [ "$(j "$H/.claude.json" "d['mcpServers']['shared']['command']")" = '"team-shared"' ] \
+  && [ "$(j "$H/.claude.json" "d['mcpServers']['pmine']['command']")" = '"by-hand"' ] \
+  && ok "O personal: off takes back what the personal layer wrote; the team's and this login's stay" || bad "O: $out"
+case "$(status --short)" in "team v10 · personal off") ok "O status: personal off" ;; *) bad "O status: $(status --short)" ;; esac
+team session claude | grep -q 'personal:off' && ok "O session src: personal:off" || bad "O src"
+rm -f "$CONF/agent-overrides.json"
+out=$(team sync)
+[ "$(src claude.mcp.pnew)" = '"personal"' ] && ok "O back on: v5 applies" || bad "O back on: $out"
+
+# ── Q — refused ────────────────────────────────────────────────────────────────
+before=$(snap)
+presp '{"version":6,"prev":5,"bundle":{"mcp":{"gh":{"command":"x","env":{"GITHUB_TOKEN":"abc123"}}}}}'
+out=$(team sync)
+printf '%s' "$out" | grep -q '^personal: refused v6: .*GITHUB_TOKEN looks like a credential — the personal layer' \
+  && [ "$(j "$CONF/person-bundle.json" "d['version']")" = 5 ] && [ "$(snap | grep -v agent-)" = "$(printf '%s\n' "$before" | grep -v agent-)" ] \
+  && ok "Q a credential in the personal layer is refused; v5 kept, nothing written" || bad "Q: $out"
+presp '{"version":6,"prev":5,"bundle":{"hook_scripts":{"x.sh":"echo hi"},"mcp":{"pnew":{"command":"p-new"}}}}'
+out=$(team sync)
+printf '%s' "$out" | grep -q '^personal: v6 (new)' && ok "Q hook_scripts is accepted in the personal layer" || bad "Q hook_scripts: $out"
+resp '{"version":11,"prev":10,"bundle":{"hook_scripts":{"x.sh":"echo hi"}}}'
+out=$(team sync); [ "$?" = 2 ] && ok "Q hook_scripts is refused in the team layer" || bad "Q team hook_scripts: $out"
+
+# ── L again — the personal layer goes away (404): everything it wrote goes ────
+resp '{"version":10,"prev":9,"bundle":{"mcp":{"shared":{"command":"team-shared"}},
+  "claude_settings":{"includeCoAuthoredBy":false},"codex_config":{"sandbox_mode":"workspace-write"}}}'
+out=$(PSEAM='printf ""' team sync)
+[ ! -e "$CONF/person-bundle.json" ] && [ "$(j "$H/.claude.json" "'pnew' in d['mcpServers']")" = false ] \
+  && [ "$(j "$CONF/agent-effective.json" "'personal' in d or 'personal_version' in d")" = false ] \
+  && [ "$(status --short)" = "team v10" ] && ! team session claude | grep -q personal \
+  && ok "L the person's layer gone (404) → taken back, no personal anywhere" || bad "L gone: $out"
 
 [ "$fail" = 0 ] && echo "fleet-agent-team-selftest: PASS" || echo "fleet-agent-team-selftest: FAIL"
 exit "$fail"

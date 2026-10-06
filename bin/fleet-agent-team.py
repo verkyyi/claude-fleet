@@ -38,6 +38,16 @@ bare `<name>`, `codex.<key>`, `claude.settings.<key>`, `claude.hooks`,
 in the array form) leaves the whole layer: what the team wrote and nobody
 touched is taken back, nothing new is added.
 
+The personal layer (issue #1857, EPIC #1855 C2) sits between: local > personal
+> team > default. It is the person's own bundle (GET /v1/fleet/person-bundle,
+cached in $FLEET_CONF_DIR/person-bundle.json, the seam FLEET_PERSON_BUNDLE_CMD),
+the same allow-list plus `hook_scripts`, the same credential rules. A row
+records WHICH layer wrote it, so a layer that drops an item takes back only what
+it wrote and nobody touched — a personal item the team also hands goes back to
+the team's value. `"personal": "off"` in agent-overrides.json leaves it. No
+person behind the login (404), or one who never wrote (version 0): no cache, and
+every output below is byte for byte what it is with no personal layer at all.
+
 agent-effective.json is the composed picture: one row per item — MCP servers,
 Codex keys, settings keys, hooks, skills — with its source (default / team /
 local), plus the team version applied. fleet-doctor's `agents` row and `fleet
@@ -49,7 +59,9 @@ doctor` on a client print the version from it.
           ($FLEET_CONF_DIR/node.env CCQUOTA_TOKEN, read — never exported), then
           this person's connection certificate (~/.ssh/fleet-cert, a signed POST
           under fleet-team@claude-fleet). FLEET_TEAM_BUNDLE_CMD (a seam) prints
-          the response JSON instead. Prints `team: v<N> (new|unchanged)`.
+          the response JSON instead. Prints `team: v<N> (new|unchanged)`, then
+          the personal layer's read the same way (`personal: v<N> (…)` — only
+          when there is one; its failure never changes the exit code).
           Exit 0 · 2 refused (credential-shaped / not on the allow-list — the
           cache is kept) · 3 no hub configured (the degenerate case: nothing
           fetched, nothing written) · 1 the hub did not answer.
@@ -60,13 +72,15 @@ doctor` on a client print the version from it.
           `drop …` / `own …` line per item and ends `team: v<N> — …`.
   sync    fetch, then apply when the version moved, the record is missing, or
           --force. What install-sync's tick and the client's start run.
-  status  [--short]  the applied version and the source counts (doctor).
+  status  [--short]  the applied version(s) and the source counts (doctor):
+          `team v<N>[ · personal v<M>|off]`.
 
 A session's configuration, fixed at launch (issue #1782 — see "the session's
 configuration" below):
   session  claude|codex [--lock warn|enforce] [--mod-off] [--no-mcp] [--no-settings]
            Compose fleet default < team < local NOW and print, TAB-separated, what
-           the launcher hands: `fp <12 hex>`, `src <each layer's version>`,
+           the launcher hands: `fp <12 hex>`, `src <each layer's version>` (a
+           `personal:v<N>|off` segment only when there is a personal layer),
            `mod on|off|na`, `mcp <file>` / `settings <file>` (Claude: only what the
            login's files lack, in content-addressed files under global/agent-cfg/),
            `c <key=toml>` (Codex -c values), `lock <path> used|ignored (…)`.
@@ -100,9 +114,17 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_ROOT = os.path.dirname(HERE)
 CONF_DIR = os.environ.get("FLEET_CONF_DIR") or os.path.expanduser("~/.config/claude-fleet")
 CACHE = os.path.join(CONF_DIR, "team-bundle.json")
+PERSON_CACHE = os.path.join(CONF_DIR, "person-bundle.json")
 EFFECTIVE = os.path.join(CONF_DIR, "agent-effective.json")
 TEAM_PATH = "/v1/fleet/team-bundle"
+PERSON_PATH = "/v1/fleet/person-bundle"
 SIG_NS = "fleet-team@claude-fleet"
+PERSON_SIG_NS = "fleet-person@claude-fleet"
+# The layers a fleet write can come from, high → low (EPIC #1855: local >
+# personal > team > default). A row whose source is one of these is the
+# fleet's to follow while it still holds what that layer wrote.
+LAYERS = ("personal", "team")
+WHOSE = {"team": "team's", "personal": "personal layer's"}
 SKILL_MARK = "<!-- fleet team skill -->"
 
 ALLOWED = ("mcp", "hooks", "skills", "claude_settings", "codex_config")
@@ -186,12 +208,14 @@ def scalar(v):
     return isinstance(v, (str, bool, int, float)) and not isinstance(v, type(None))
 
 
-def validate(b):
-    """'' when the bundle may be applied, else the one-line reason."""
+def validate(b, layer="team"):
+    """'' when the bundle may be applied, else the one-line reason. The personal
+    layer (#1857) has the team's allow-list plus `hook_scripts` (C4's)."""
     if not isinstance(b, dict):
         return "bundle is not an object"
+    allowed = ALLOWED + (("hook_scripts",) if layer == "personal" else ())
     for k in b:
-        if k not in ALLOWED:
+        if k not in allowed:
             return "bundle.%s is not something a team hands out" % k
         if not isinstance(b[k], dict):
             return "bundle.%s must be an object" % k
@@ -219,7 +243,7 @@ def validate(b):
             return "bundle.codex_config.%s must be a scalar or a list of them" % k
     p = secret_in("bundle", b)
     if p:
-        return "%s looks like a credential — the team layer never carries one" % p
+        return "%s looks like a credential — the %s layer never carries one" % (p, layer)
     return ""
 
 
@@ -256,15 +280,15 @@ def read_json_quiet(path):
         return None
 
 
-def cert_proof():
+def cert_proof(ns=SIG_NS, word="fleet-team"):
     key = os.environ.get("FLEET_CERT") or os.path.join(os.path.expanduser("~"), ".ssh", "fleet-cert")
     cert = key + "-cert.pub"
     if not (os.path.exists(key) and os.path.exists(cert)):
         return None
     ts = int(time.time())
     try:
-        sig = subprocess.run(["ssh-keygen", "-Y", "sign", "-f", key, "-n", SIG_NS],
-                             input=("fleet-team %d" % ts).encode(), capture_output=True, check=True).stdout.decode()
+        sig = subprocess.run(["ssh-keygen", "-Y", "sign", "-f", key, "-n", ns],
+                             input=("%s %d" % (word, ts)).encode(), capture_output=True, check=True).stdout.decode()
         with open(cert) as f:
             line = f.readline().strip()
     except (OSError, subprocess.CalledProcessError):
@@ -272,10 +296,13 @@ def cert_proof():
     return {"cert": line, "sig": sig, "ts": ts}
 
 
-def http(url, method, headers, body, timeout):
+def http(url, method, headers, body, timeout, got=None):
+    """(status, body); `got` (a dict) receives the response's headers."""
     req = urllib.request.Request(url, data=body, method=method, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
+            if got is not None:
+                got.update({k.lower(): v for k, v in r.headers.items()})
             return r.status, r.read()
     except urllib.error.HTTPError as e:
         return e.code, e.read()
@@ -331,6 +358,76 @@ def fetch(a):
         return 0, have, "unchanged"
     write_json_atomic(CACHE, {"version": version, "prev": resp.get("prev"), "created": resp.get("created"),
                               "actor": resp.get("actor"), "bundle": bundle, "fetched": int(time.time())})
+    return 0, version, "new"
+
+
+def fetch_person(a):
+    """The personal layer (issue #1857, EPIC #1855 C2): this login's person's own
+    bundle, GET /v1/fleet/person-bundle with the same credentials as the team's.
+    (rc, version, note). No person behind this login (404), or one who never
+    wrote (version 0) → note "none" and NO cache — the degenerate case; a cache
+    that was there is removed so the next apply takes back what it wrote."""
+    cached = read_json_quiet(PERSON_CACHE)
+    cached = cached if isinstance(cached, dict) else None
+    have = cached.get("version") if cached else None
+    got = {}
+    if os.environ.get("FLEET_PERSON_BUNDLE_CMD"):
+        p = subprocess.run(["bash", "-c", os.environ["FLEET_PERSON_BUNDLE_CMD"]], capture_output=True)
+        if p.returncode != 0:
+            return 1, have, "FLEET_PERSON_BUNDLE_CMD exit %d" % p.returncode
+        code, raw = (200 if p.stdout.strip() else 404), p.stdout
+    else:
+        url = hub_url(a.hub)
+        if not url:
+            return 3, have, "no hub configured — no personal layer on this computer"
+        hdr = {"Accept": "application/json"}
+        if cached and cached.get("etag"):
+            hdr["If-None-Match"] = cached["etag"]
+        tok = env_file_val(os.path.join(CONF_DIR, "node.env"), "CCQUOTA_TOKEN")
+        code, raw = 0, b""
+        if tok:
+            code, raw = http(url + PERSON_PATH, "GET", dict(hdr, Authorization="Bearer " + tok), None, a.timeout, got)
+        if code in (0, 401, 403) or not tok:
+            proof = cert_proof(PERSON_SIG_NS, "fleet-person")
+            if proof:
+                code, raw = http(url + PERSON_PATH, "POST", dict(hdr, **{"Content-Type": "application/json"}),
+                                 json.dumps(proof).encode(), a.timeout, got)
+            elif not tok:
+                return 1, have, "no node token and no connection certificate (fleet login) to read the personal layer with"
+        if code == 304:
+            return 0, have, "unchanged"
+        if code not in (200, 404):
+            msg = raw.decode(errors="replace").strip()
+            try:
+                msg = json.loads(msg).get("error", msg)
+            except (ValueError, AttributeError):
+                pass
+            return 1, have, "the hub answered %s: %s" % (code or "nothing", msg[:200])
+    resp = {}
+    if code == 200:
+        try:
+            resp = json.loads(raw.decode())
+            version, bundle = int(resp.get("version") or 0), resp.get("bundle") or {}
+        except (ValueError, AttributeError, TypeError):
+            return 2, have, "the hub's answer is not a personal bundle"
+    else:
+        version, bundle = 0, {}
+    if version == 0 and not bundle:
+        if cached is None:
+            return 0, None, "none"
+        try:
+            os.remove(PERSON_CACHE)
+        except OSError:
+            pass
+        return 0, None, "none (v%s taken back)" % have
+    why = validate(bundle, "personal")
+    if why:
+        return 2, have, "refused v%d: %s (kept v%s)" % (version, why, have)
+    if version == have and cached.get("bundle") == bundle:
+        return 0, have, "unchanged"
+    write_json_atomic(PERSON_CACHE, {"version": version, "prev": resp.get("prev"), "created": resp.get("created"),
+                               "actor": resp.get("actor"), "bundle": bundle, "fetched": int(time.time()),
+                               "etag": got.get("etag")})
     return 0, version, "new"
 
 
@@ -526,46 +623,57 @@ def skill_body(text):
 
 # --- compose -----------------------------------------------------------------------
 
-def compose(c, path, cur, want, default, prev, blocked, ad, write, drop):
-    """One item. Returns the row for agent-effective.json, or None (nothing here)."""
+def compose(c, path, cur, layers, default, prev, blocked, ad, write, drop):
+    """One item. `layers` = [(source, value)] high → low (personal, team; a value
+    None = that layer does not hand it out). Returns the row for
+    agent-effective.json, or None (nothing here). A row records which layer
+    wrote it (+ the hash of what it wrote), so a layer that stops handing an item
+    out takes back only what IT wrote and nobody touched since (#1857)."""
+    want, wsrc = None, None
+    for lsrc, v in layers:
+        if v is not None:
+            want, wsrc = v, lsrc
+            break
     hcur = digest(cur) if cur is not None else None
-    team_owned = bool(prev and prev.get("source") == "team" and prev.get("hash") == hcur and cur is not None)
+    owner = prev.get("source") if prev and prev.get("source") in LAYERS and prev.get("hash") == hcur \
+        and cur is not None else None
     if ad.shielded(path, blocked):
         if cur is None:
             return None
         return {"source": "local", "why": "override"}
-    target = want if want is not None else (default if team_owned else None)
+    target = want if want is not None else (default if owner else None)
     if cur is None:
         if want is None:
             return None
         write(want)
-        c.say("set            %s (team)" % path)
+        c.say("set            %s (%s)" % (path, wsrc))
         c.changed += 1
-        return {"source": "team", "hash": digest(want)}
-    if team_owned:
+        return {"source": wsrc, "hash": digest(want)}
+    if owner:
         if target is None:
             drop()
-            c.say("drop           %s (the team no longer hands it out)" % path)
+            c.say("drop           %s (the %s no longer hands it out)"
+                  % (path, "team" if owner == "team" else "personal layer"))
             c.changed += 1
             return None
         if digest(target) != hcur:
             write(target)
-            c.say("set            %s (%s)" % (path, "team" if want is not None else "back to the fleet default"))
+            c.say("set            %s (%s)" % (path, wsrc if want is not None else "back to the fleet default"))
             c.changed += 1
         if want is None:
             return {"source": "default"}
-        return {"source": "team", "hash": digest(want)}
+        return {"source": wsrc, "hash": digest(want)}
     if default is not None and hcur == digest(default):
         if want is not None and digest(want) != hcur:
             write(want)
-            c.say("set            %s (team over the fleet default)" % path)
+            c.say("set            %s (%s over the fleet default)" % (path, wsrc))
             c.changed += 1
-            return {"source": "team", "hash": digest(want)}
+            return {"source": wsrc, "hash": digest(want)}
         if want is not None:
-            return {"source": "team", "hash": digest(want)}
+            return {"source": wsrc, "hash": digest(want)}
         return {"source": "default"}
     if want is not None and digest(want) != hcur:
-        c.say("own            %s — this login's value wins over the team's" % path)
+        c.say("own            %s — this login's value wins over the %s" % (path, WHOSE[wsrc]))
     return {"source": "local"}
 
 
@@ -589,20 +697,43 @@ def defaults_for(ad, a):
     return out
 
 
-def team_off(override_path):
+def layer_off(override_path, layer):
+    """agent-overrides.json leaves a whole layer: `"team": "off"` / `"personal": "off"`
+    (or the layer's name in the array form)."""
     d = read_json_quiet(override_path)
     if isinstance(d, list):
-        return "team" in d or "team:off" in d or "team: off" in d
-    if isinstance(d, dict) and "team" in d:
-        v = d["team"]
+        return layer in d or layer + ":off" in d or layer + ": off" in d
+    if isinstance(d, dict) and layer in d:
+        v = d[layer]
         return v is False or str(v).strip().lower() in ("off", "false", "0", "no")
     return False
+
+
+def team_off(override_path):
+    return layer_off(override_path, "team")
+
+
+def personal_off(override_path):
+    return layer_off(override_path, "personal")
+
+
+def personal_layer(override_path):
+    """(cache dict | None, state 'on'|'off'|None, bundle). None state = no personal
+    layer on this login — the degenerate case, where nothing anywhere mentions one."""
+    pc = read_json_quiet(PERSON_CACHE)
+    if not isinstance(pc, dict):
+        return None, None, {}
+    if personal_off(override_path):
+        return pc, "off", {}
+    b = pc.get("bundle") or {}
+    return pc, "on", (b if isinstance(b, dict) and not validate(b, "personal") else {})
 
 
 def apply(a):
     cache = read_json_quiet(CACHE)
     record = read_json_quiet(EFFECTIVE)
-    if cache is None and record is None:
+    pcache, pstate, pbundle = personal_layer(a.override)
+    if cache is None and record is None and pcache is None:
         print("team: none — no team layer on this computer (nothing fetched, nothing written)")
         return 0
     cache = cache if isinstance(cache, dict) else {}
@@ -610,6 +741,10 @@ def apply(a):
     why = validate(bundle)
     if why:
         die("the cached team bundle is refused: %s — nothing applied" % why)
+    if pcache is not None:
+        why = validate(pcache.get("bundle") or {}, "personal")
+        if why:
+            die("the cached personal bundle is refused: %s — nothing applied" % why)
     off = team_off(a.override)
     if off:
         bundle = {}
@@ -619,6 +754,18 @@ def apply(a):
     dfl = defaults_for(ad, a)
     blocked = ad.override_paths(a.override, [])
     blocked.discard("team")
+    blocked.discard("personal")
+
+    def L(kind, name, conv=None):
+        """The layers' values for one item, high → low."""
+        out = []
+        for lsrc, b in (("personal", pbundle), ("team", bundle)):
+            v = (b.get(kind) or {}).get(name)
+            out.append((lsrc, conv(v) if conv and v is not None else v))
+        return out
+
+    def names(kind):
+        return set(bundle.get(kind) or {}) | set(pbundle.get(kind) or {})
     prev_items = (record or {}).get("items") or {}
     items = {}
     c = Ctx(a, dfl)
@@ -634,14 +781,14 @@ def apply(a):
 
     def claude_mcp(cj):
         if not isinstance(cj.data, dict):
-            if cj.data is None and bundle.get("mcp"):
-                c.say("absent  %s — Claude Code has not run on this login yet; the team's servers wait for the next sync"
-                      % a.claude_config)
+            if cj.data is None and (bundle.get("mcp") or pbundle.get("mcp")):
+                c.say("absent  %s — Claude Code has not run on this login yet; the %s servers wait for the next sync"
+                      % (a.claude_config, "team's" if bundle.get("mcp") else "personal layer's"))
             return
         servers = cj.data.get("mcpServers") if isinstance(cj.data.get("mcpServers"), dict) else None
-        names = set(bundle.get("mcp", {})) | set(dfl["mcp"]) | set(servers or {}) \
+        ns = names("mcp") | set(dfl["mcp"]) | set(servers or {}) \
             | {k.split(".", 2)[2] for k in prev_items if k.startswith("claude.mcp.")}
-        for n in sorted(names):
+        for n in sorted(ns):
             path = "claude.mcp." + n
             cur = (servers or {}).get(n)
 
@@ -650,7 +797,7 @@ def apply(a):
 
             def dr(n=n):
                 cj.data.get("mcpServers", {}).pop(n, None)
-            row = compose(c, path, cur, bundle.get("mcp", {}).get(n), dfl["mcp"].get(n), prev_items.get(path),
+            row = compose(c, path, cur, L("mcp", n), dfl["mcp"].get(n), prev_items.get(path),
                           blocked, ad, w, dr)
             if row:
                 items[path] = row
@@ -663,10 +810,11 @@ def apply(a):
 
     # --- Claude: settings.json keys + hooks ---
     sj = JsonFile(a.claude_settings, False)
-    if sj.data is None and (bundle.get("claude_settings") or bundle.get("hooks")):
+    if sj.data is None and (bundle.get("claude_settings") or bundle.get("hooks")
+                            or pbundle.get("claude_settings") or pbundle.get("hooks")):
         sj.data = {}
     if isinstance(sj.data, dict):
-        keys = set(bundle.get("claude_settings", {})) \
+        keys = names("claude_settings") \
             | {k.split(".", 2)[2] for k in prev_items if k.startswith("claude.settings.")}
         for k in sorted(keys):
             path = "claude.settings." + k
@@ -676,16 +824,18 @@ def apply(a):
 
             def dr(k=k):
                 sj.data.pop(k, None)
-            row = compose(c, path, sj.data.get(k), bundle.get("claude_settings", {}).get(k),
+            row = compose(c, path, sj.data.get(k), L("claude_settings", k),
                           dfl["settings"].get(k), prev_items.get(path), blocked, ad, w, dr)
             if row:
                 items[path] = row
-        want_hooks = {}
-        for ev, lst in bundle.get("hooks", {}).items():
-            for h in lst:
-                want_hooks["claude.hooks.%s.%s" % (ev, hook_key(h["command"]))] = (ev, h)
+        want_hooks = {}         # path → {layer: (event, hook)}
+        for lsrc, b in (("personal", pbundle), ("team", bundle)):
+            for ev, lst in (b.get("hooks") or {}).items():
+                for h in lst:
+                    want_hooks.setdefault("claude.hooks.%s.%s" % (ev, hook_key(h["command"])), {})[lsrc] = (ev, h)
         for path in sorted(set(want_hooks) | {k for k in prev_items if k.startswith("claude.hooks.")}):
-            ev, h = want_hooks.get(path, (None, None))
+            per = want_hooks.get(path, {})
+            ev, h = per.get("personal") or per.get("team") or (None, None)
             if h is None:
                 prow = prev_items[path]
                 ev, cmd = prow.get("event"), prow.get("command")
@@ -694,9 +844,11 @@ def apply(a):
             if not ev or not cmd:
                 continue
             f = hook_find(sj.data, ev, cmd)
-            want = None
-            if h is not None:
-                want = {k: h[k] for k in ("matcher", "command", "timeout") if k in h and h[k] not in ("", None)}
+            want = []
+            for lsrc in ("personal", "team"):
+                hh = per.get(lsrc, (None, None))[1]
+                want.append((lsrc, None if hh is None else
+                             {k: hh[k] for k in ("matcher", "command", "timeout") if k in hh and hh[k] not in ("", None)}))
 
             def w(v, ev=ev):
                 hook_set(sj.data, ev, v)
@@ -723,11 +875,10 @@ def apply(a):
                            os.path.join(h, "skills")))
     skill_writes = []
     for tag, d in skill_dirs:
-        names = set(bundle.get("skills", {})) | {k[len(tag) + 1:] for k in prev_items if k.startswith(tag + ".")}
-        for n in sorted(names):
+        ns = names("skills") | {k[len(tag) + 1:] for k in prev_items if k.startswith(tag + ".")}
+        for n in sorted(ns):
             path = "%s.%s" % (tag, n)
-            t = bundle.get("skills", {}).get(n)
-            want = skill_body(t) if t is not None else None
+            want = L("skills", n, skill_body)
 
             def w(v, d=d, n=n):
                 skill_writes.append(("w", os.path.join(d, n), v))
@@ -745,26 +896,26 @@ def apply(a):
         tag = "codex" if len(homes) == 1 else "codex[%s]" % ad.tilde(h)
         cc = CodexConf(ad, h)
         sc = cc.scan()
-        keys = set(bundle.get("codex_config", {})) | set(dfl["codex"]) \
+        keys = names("codex_config") | set(dfl["codex"]) \
             | {k[len(tag) + 1:] for k in prev_items if k.startswith(tag + ".") and "." not in k[len(tag) + 1:]}
         for k in sorted(keys):
             path = "%s.%s" % (tag, k)
-            row = compose(c, "codex." + k, cc.get_top(k), bundle.get("codex_config", {}).get(k), dfl["codex"].get(k),
+            row = compose(c, "codex." + k, cc.get_top(k), L("codex_config", k), dfl["codex"].get(k),
                           prev_items.get(path), blocked, ad, lambda v, k=k, cc=cc: cc.set_top(k, v),
                           lambda k=k, cc=cc: cc.del_top(k))
             if row:
                 items[path] = row
         if sc.mcp_inline():
-            if bundle.get("mcp"):
+            if bundle.get("mcp") or pbundle.get("mcp"):
                 c.say("own            %s mcp — mcp_servers is an inline table, not extended" % tag)
         else:
             known = {p[1] for p in sc.tables if len(p) >= 2 and p[0] == "mcp_servers"} \
                 | {p[1] for p in sc.keys if len(p) >= 2 and p[0] == "mcp_servers"}
-            names = set(bundle.get("mcp", {})) | set(dfl["codex_mcp"]) | known \
+            ns = names("mcp") | set(dfl["codex_mcp"]) | known \
                 | {k[len(tag) + 5:] for k in prev_items if k.startswith(tag + ".mcp.")}
-            for n in sorted(names):
+            for n in sorted(ns):
                 path = "%s.mcp.%s" % (tag, n)
-                row = compose(c, "codex.mcp." + n, cc.get_server(n), bundle.get("mcp", {}).get(n),
+                row = compose(c, "codex.mcp." + n, cc.get_server(n), L("mcp", n),
                               dfl["codex_mcp"].get(n), prev_items.get(path), blocked, ad,
                               lambda v, n=n, cc=cc: cc.set_server(n, v), lambda n=n, cc=cc: cc.del_server(n))
                 if row:
@@ -799,16 +950,22 @@ def apply(a):
         counts = {}
         for row in items.values():
             counts[row["source"]] = counts.get(row["source"], 0) + 1
-        write_json_atomic(EFFECTIVE, {
-            "team": {"version": version, "state": "off" if off else ("on" if cache else "none"),
-                     "created": cache.get("created"), "actor": cache.get("actor"), "applied": int(time.time())},
-            "counts": counts, "items": items})
+        rec = {"team": {"version": version, "state": "off" if off else ("on" if cache else "none"),
+                        "created": cache.get("created"), "actor": cache.get("actor"), "applied": int(time.time())},
+               "counts": counts, "items": items}
+        if pcache is not None:     # only when there is a personal layer (#1857): else byte for byte as before
+            rec["personal"] = {"version": pcache.get("version") or 0, "state": pstate, "created": pcache.get("created"),
+                               "actor": pcache.get("actor"), "applied": rec["team"]["applied"]}
+            rec["personal_version"] = pcache.get("version") or 0
+        write_json_atomic(EFFECTIVE, rec)
         try:                     # the layer moved: what a fresh session gets moved with it (#1782)
             expected(argparse.Namespace(**dict(vars(a), write=True, quiet=True)))
         except SystemExit:
             pass
     word = "would change" if a.dry_run else "changed"
     state = "off (agent-overrides.json team: off)" if off else "v%d" % version
+    if pcache is not None:
+        state += " · personal %s" % ("off" if pstate == "off" else "v%s" % (pcache.get("version") or 0))
     print("team: %s — %s %d item(s)%s" % (state, word, c.changed, "" if a.dry_run else "; %s" % EFFECTIVE))
     return 0
 
@@ -827,10 +984,15 @@ def status(a):
     head = "team off" if t.get("state") == "off" else "team v%s" % t.get("version")
     if isinstance(cache, dict) and cache.get("version") != t.get("version") and t.get("state") != "off":
         head += " (v%s fetched, not applied)" % cache.get("version")
+    p = rec.get("personal")
+    if isinstance(p, dict):         # the personal layer (#1857) — absent, the line is as before
+        ph = "personal off" if p.get("state") == "off" else "personal v%s" % p.get("version")
+        head = ph if t.get("state") == "none" else "%s · %s" % (head, ph)
     if a.short:
         print(head)
     else:
-        print("%s · %s" % (head, " · ".join("%s %d" % (k, counts.get(k, 0)) for k in ("default", "team", "local"))))
+        kinds = ("default", "team", "personal", "local") if isinstance(p, dict) else ("default", "team", "local")
+        print("%s · %s" % (head, " · ".join("%s %d" % (k, counts.get(k, 0)) for k in kinds)))
     return 0
 
 
@@ -958,6 +1120,9 @@ class Session:
         self.dfl = defaults_for(self.ad, a)
         self.blocked = self.ad.override_paths(a.override, [])
         self.blocked.discard("team")
+        self.blocked.discard("personal")
+        pc, pstate, self.pbundle = personal_layer(a.override)
+        self.personal = None if pc is None else ("off" if pstate == "off" else "v%s" % (pc.get("version") or 0))
         cache = read_json_quiet(CACHE)
         bundle = (cache or {}).get("bundle") if isinstance(cache, dict) else None
         if team_off(a.override):
@@ -969,10 +1134,12 @@ class Session:
         self.rows, self.overrides, self.notes = {}, [], []
         self.hand = {}          # path → value the launcher must pass
 
-    def item(self, path, local, team, default, present=None):
+    def item(self, path, local, personal, team, default, present=None):
         """Compose one item; returns nothing. `present` = the login has it at all
         (for a value that can legitimately be None)."""
-        if team is not None:
+        if personal is not None:
+            fv, fsrc = personal, "personal"
+        elif team is not None:
             fv, fsrc = team, "team"
         elif default is not None:
             fv, fsrc = default, "default"
@@ -1014,7 +1181,7 @@ class Session:
         if self.agent == "codex":
             self.rows["mod"] = {"value": "na", "source": "default", "locked": False}
         elif mv is not None:
-            self.item("mod", "off" if a.mod_off else None, None, mv)
+            self.item("mod", "off" if a.mod_off else None, None, None, mv)
         table = self.hook_table()
         if self.agent == "claude":
             self.claude(table)
@@ -1040,27 +1207,35 @@ class Session:
                             if i:
                                 idents.add(i)
                 have = [r for r in table if (r[0], r[1], self.hm.script_of(r[2])) in idents]
-            self.item("claude.hooks", have if have else None, None, table)
+            self.item("claude.hooks", have if have else None, None, None, table)
             if "claude.hooks" in self.hand:     # hand only the identities missing here
                 got = {json.dumps(r) for r in have}
                 self.hand["claude.hooks"] = [r for r in table if json.dumps(r) not in got]
-        for ev, lst in sorted((b.get("hooks") or {}).items()):
-            for h in lst:
-                want = {k: h[k] for k in ("matcher", "command", "timeout") if k in h and h[k] not in ("", None)}
-                f = hook_find(settings, ev, h["command"])
-                self.item("claude.hooks.%s.%s" % (ev, hook_key(h["command"])), f[2] if f else None, want, None)
+        pb = self.pbundle
+        hooks = {}              # path → [event, {layer: want}]
+        for lsrc, bb in (("personal", pb), ("team", b)):
+            for ev, lst in sorted((bb.get("hooks") or {}).items()):
+                for h in lst:
+                    want = {k: h[k] for k in ("matcher", "command", "timeout") if k in h and h[k] not in ("", None)}
+                    hooks.setdefault("claude.hooks.%s.%s" % (ev, hook_key(h["command"])), [ev, {}])[1][lsrc] = want
+        for path in sorted(hooks):
+            ev, per = hooks[path]
+            f = hook_find(settings, ev, (per.get("personal") or per.get("team"))["command"])
+            self.item(path, f[2] if f else None, per.get("personal"), per.get("team"), None)
         cj = read_json_quiet(a.claude_config)
         servers = (cj or {}).get("mcpServers") if isinstance(cj, dict) else None
         servers = servers if isinstance(servers, dict) else {}
-        for n in sorted(set(self.dfl["mcp"]) | set(b.get("mcp") or {})):
-            self.item("claude.mcp." + n, servers.get(n), (b.get("mcp") or {}).get(n), self.dfl["mcp"].get(n))
+        for n in sorted(set(self.dfl["mcp"]) | set(b.get("mcp") or {}) | set(pb.get("mcp") or {})):
+            self.item("claude.mcp." + n, servers.get(n), (pb.get("mcp") or {}).get(n), (b.get("mcp") or {}).get(n),
+                      self.dfl["mcp"].get(n))
         team_keys = b.get("claude_settings") or {}
+        pers_keys = pb.get("claude_settings") or {}
         dleaves = {}
         for k, v in self.dfl["settings"].items():
-            if k not in team_keys:
+            if k not in team_keys and k not in pers_keys:
                 dleaves.update(leaves_of(v, k))
-        for k in sorted(set(dleaves) | set(team_keys)):
-            self.item("claude.settings." + k, leaf_get(settings, k), team_keys.get(k), dleaves.get(k))
+        for k in sorted(set(dleaves) | set(team_keys) | set(pers_keys)):
+            self.item("claude.settings." + k, leaf_get(settings, k), pers_keys.get(k), team_keys.get(k), dleaves.get(k))
 
     def codex(self, table):
         a, b = self.a, self.bundle
@@ -1068,13 +1243,16 @@ class Session:
         home = os.path.abspath(os.path.expanduser(a.codex_home[0] if a.codex_home
                                                   else os.environ.get("CODEX_HOME") or "~/.codex"))
         cc = CodexConf(self.ad, home)
-        for k in sorted(set(self.dfl["codex"]) | set(b.get("codex_config") or {})):
-            self.item("codex." + k, cc.get_top(k), (b.get("codex_config") or {}).get(k), self.dfl["codex"].get(k))
+        pb = self.pbundle
+        for k in sorted(set(self.dfl["codex"]) | set(b.get("codex_config") or {}) | set(pb.get("codex_config") or {})):
+            self.item("codex." + k, cc.get_top(k), (pb.get("codex_config") or {}).get(k),
+                      (b.get("codex_config") or {}).get(k), self.dfl["codex"].get(k))
         if cc.scan().mcp_inline():
             self.notes.append("codex mcp_servers is an inline table — servers not handed")
             return
-        for n in sorted(set(self.dfl["codex_mcp"]) | set(b.get("mcp") or {})):
-            self.item("codex.mcp." + n, cc.get_server(n), (b.get("mcp") or {}).get(n), self.dfl["codex_mcp"].get(n))
+        for n in sorted(set(self.dfl["codex_mcp"]) | set(b.get("mcp") or {}) | set(pb.get("mcp") or {})):
+            self.item("codex.mcp." + n, cc.get_server(n), (pb.get("mcp") or {}).get(n), (b.get("mcp") or {}).get(n),
+                      self.dfl["codex_mcp"].get(n))
 
     def fingerprint(self):
         vals = {p: r["value"] for p, r in self.rows.items()}
@@ -1085,7 +1263,8 @@ class Session:
         dv = {p: r["value"] for p, r in self.rows.items() if r["source"] == "default"}
         lv = {p: r["value"] for p, r in self.rows.items() if r["source"] == "local"}
         local = "local:%d" % len(lv) + ("@" + digest(lv)[:8] if lv else "")
-        return "default:%s team:%s %s lock:%s" % (digest(dv)[:8], self.team, local, self.mode)
+        pers = " personal:%s" % self.personal if self.personal else ""   # absent with no personal layer (#1857)
+        return "default:%s team:%s%s %s lock:%s" % (digest(dv)[:8], self.team, pers, local, self.mode)
 
 
 def project_has(cwd, dotted):
@@ -1238,7 +1417,8 @@ def operator(a):
     return 0
 
 
-def main():
+def build_parser():
+    """The one argument set (fleet-config.py parses `session claude` with it, #1860)."""
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("action", choices=("fetch", "apply", "sync", "status", "put", "restore", "history",
                                        "session", "expected", "check"))
@@ -1264,7 +1444,11 @@ def main():
     ap.add_argument("--no-mcp", action="store_true", help="session: an MCP allowlist governs — hand no servers")
     ap.add_argument("--no-settings", action="store_true", help="session: the caller passed its own --settings")
     ap.add_argument("--write", action="store_true", help="expected: also cache it in global/agent-cfg.expected")
-    a = ap.parse_args()
+    return ap
+
+
+def main():
+    a = build_parser().parse_args()
     if a.action == "session":
         return session(a)
     if a.action == "expected":
@@ -1279,14 +1463,28 @@ def main():
         return apply(a)
     rc, v, note = fetch(a)
     print("team: v%s (%s)" % (v if v is not None else "-", note) if rc == 0 else "team: %s" % note)
+    # the personal layer (#1857): its own line only when there is one — no person,
+    # or one who never wrote, prints nothing (the degenerate case). A hub that did
+    # not answer the team's read is not asked again; the cached layer stands.
+    if rc == 1 and not os.environ.get("FLEET_PERSON_BUNDLE_CMD"):
+        prc, pnote = 1, ""
+    else:
+        prc, pv, pnote = fetch_person(a)
+        if prc == 0 and pnote != "none":
+            print("personal: v%s (%s)" % (pv, pnote) if pv is not None else "personal: %s" % pnote)
+        elif prc not in (0, 3):
+            print("personal: %s" % pnote)
     if a.action == "fetch":
         return rc
-    if rc == 3 and not os.path.exists(EFFECTIVE):
+    if rc == 3 and prc == 3 and not os.path.exists(EFFECTIVE):
         return 3
     rec = read_json_quiet(EFFECTIVE) or {}
     applied = (rec.get("team") or {}).get("version")
     state = (rec.get("team") or {}).get("state")
-    if a.force or not rec or applied != v or state != ("off" if team_off(a.override) else "on"):
+    pc, pstate, _ = personal_layer(a.override)
+    prec = rec.get("personal") or {}
+    pmoved = (prec.get("version"), prec.get("state")) != ((pc.get("version") or 0) if pc else None, pstate)
+    if a.force or not rec or applied != v or state != ("off" if team_off(a.override) else "on") or pmoved:
         arc = apply(a)
         return arc if rc in (0, 3) else rc
     return rc
