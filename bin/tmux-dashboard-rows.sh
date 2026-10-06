@@ -1109,7 +1109,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   gfold=0
   if [ "$pinned" = 0 ]; then gfold=$PINFOLD
   elif [ "$RGRP" = 1 ]; then gfold=${RGFOLD[rgrp]:-0}; fi
-  if [ "$gfold" = 1 ] && [ "$rk" != 0 ] &&
+  if [ "$gfold" = 1 ] && [ "$rk" != 0 ] && [ "${FLEET_ROWS_UNFOLD:-0}" != 1 ] &&
      { [ "$SIDEBAR" = 0 ] || [ "$wid" != "${FLEET_SIDEBAR_CURRENT_ROW:-${FLEET_SIDEBAR_CURRENT:-}}" ]; }; then
     continue
   fi
@@ -1128,10 +1128,12 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   #     surfacing the row that is waiting on you: the quiet layer folds, the loud
   #     one never does;
   #   • the sidebar's current window is never hidden from itself.
+  # FLEET_ROWS_UNFOLD=1 (issue #1903) skips both fold filters: ⌘P
+  # (fleet-quickopen.py) lists every session, a folded one too.
   # Hiding is a RENDER filter only: KIDTAB was counted in pass A2 over every window,
   # so a collapsed parent's `3/5` badge still describes its whole subtree — which
   # is exactly what makes the fold safe to have on by default.
-  if [ "$depth" -gt 0 ] && [ "$rk" != 0 ] &&
+  if [ "$depth" -gt 0 ] && [ "$rk" != 0 ] && [ "${FLEET_ROWS_UNFOLD:-0}" != 1 ] &&
      { [ "$SIDEBAR" = 0 ] || [ "$wid" != "${FLEET_SIDEBAR_CURRENT_ROW:-${FLEET_SIDEBAR_CURRENT:-}}" ]; }; then
     _i=0; _hid=0
     while [ "$_i" -lt "$depth" ]; do
