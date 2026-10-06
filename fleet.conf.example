@@ -353,7 +353,7 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 #   <path|JSON>    ONLY these servers; the CLI takes a file path OR inline JSON
 # RECOMMENDED (issue #1078): point it at the minimal worker set the fleet ships,
 #   (e.g.)  FLEET_MCP_CONFIG="$HOME/.claude/fleet/conf/mcp-worker.json"
-# — today just fleet-peer (`list_agents` / `send_message`), as a FILE: a fleet
+# — just the fleet's own tool service `fleet` (issue #1807), as a FILE: a fleet
 # that needs another server copies it to its own conf dir, adds what it needs
 # (docs/INSTALL.md "MCP servers on demand" has the common add-backs), and
 # points this key there. On a machine running dozens of sessions every server is
@@ -367,6 +367,14 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # Codex workers read the same value unless FLEET_CODEX_MCP_CONFIG is set (below).
 # @label=MCP servers for this fleet @group=spawn @tier=advanced @scope=fleet @edit=str
 #FLEET_MCP_CONFIG=""
+
+# The fleet's own tool service (issue #1807, docs/FLEET-MCP.md): every Claude and
+# Codex session mounts bin/fleet-mcp.py as the MCP server `fleet` — status ·
+# children · repos · agents · spawn · await · send, the same tools for both
+# agents — beside whatever FLEET_MCP_CONFIG chose (`none` included). 0 = don't
+# mount it: the launch argv is byte for byte what it was before #1807.
+# @label=Fleet tool service @group=spawn @tier=internal @scope=fleet @edit=bool
+#FLEET_MCP=1
 
 # Which agent CLI a spawned session runs (issue #547). Every spawn path — the
 # backlog Enter / `▸ issue`, the dash ⌃s / prompt-line scratch, autofill, the
