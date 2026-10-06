@@ -107,7 +107,9 @@ configuration" below):
            the launcher hands: `fp <12 hex>`, `src <each layer's version>` (a
            `personal:v<N>|off` segment only when there is a personal layer),
            `mod on|off|na`, `say <the status --short line>` (only with a
-           personal layer: the launcher prints it), `mcp <file>` / `settings <file>` (Claude: only what the
+           personal layer: the launcher prints it), `hint promote <item>` (a
+           本机 item new since the last launch, said once — #1863; only with a
+           personal layer; FLEET_PROMOTE_HINT=0 off), `mcp <file>` / `settings <file>` (Claude: only what the
            login's files lack, in content-addressed files under global/agent-cfg/),
            `c <key=toml>` (Codex -c values), `lock <path> used|ignored (…)`.
   expected [--write]   the fingerprint a fresh session would get, per agent
@@ -1168,6 +1170,10 @@ def apply(a):
             rec["personal"] = {"version": pcache.get("version") or 0, "state": pstate, "created": pcache.get("created"),
                                "actor": pcache.get("actor"), "applied": rec["team"]["applied"]}
             rec["personal_version"] = pcache.get("version") or 0
+            last = read_json_quiet(EFFECTIVE)    # what the launches remember saying (#1863), re-read late
+            for k in ("local_seen", "hinted"):
+                if isinstance(last, dict) and isinstance(last.get(k), list):
+                    rec[k] = last[k]
         write_json_atomic(EFFECTIVE, rec)
         try:                     # the layer moved: what a fresh session gets moved with it (#1782)
             expected(argparse.Namespace(**dict(vars(a), write=True, quiet=True)))
@@ -1185,10 +1191,10 @@ def layer_word(state, version):
     return {"off": "已关", "none": "无"}.get(state) or "v%s" % version
 
 
-def local_only(a):
-    """How many rows `fleet config show` lists as 本机 — counted BY that command's
-    own composition (fleet-config.py compose_rows), so the two never disagree.
-    None when it cannot be counted (no fleet-config.py beside this script)."""
+def local_items(a):
+    """The rows `fleet config show` lists as 本机 — taken BY that command's own
+    composition (fleet-config.py compose_rows), so the two never disagree. None
+    when it cannot be counted (no fleet-config.py beside this script)."""
     try:
         fc = load_mod("fleet_config", "fleet-config.py")
         args = fc.team_args(["--root", a.root, "--claude-config", a.claude_config,
@@ -1197,7 +1203,40 @@ def local_only(a):
         rows, _ = fc.compose_rows(args)
     except (Exception, SystemExit):
         return None
-    return sum(1 for r in rows.values() if r.get("source") == "local")
+    return sorted(p for p, r in rows.items() if r.get("source") == "local")
+
+
+def local_only(a):
+    items = local_items(a)
+    return None if items is None else len(items)
+
+
+def promote_hints(a):
+    """The 本机 items new since the last launch (EPIC #1855 R1, issue #1863): each is
+    one `hint promote <item>` line, said ONCE — agent-effective.json keeps the set
+    last seen (`local_seen`) and every item already said (`hinted`). The first
+    launch with a personal layer only records the set (no flood of what was always
+    here). Only with a personal layer (the caller's gate) — none, nothing is read or
+    written; FLEET_PROMOTE_HINT=0 is off. Nothing leaves this computer."""
+    if os.environ.get("FLEET_PROMOTE_HINT") == "0":
+        return []
+    rec = read_json_quiet(EFFECTIVE)
+    if not isinstance(rec, dict) or not isinstance(rec.get("personal"), dict):
+        return []
+    items = local_items(a)
+    if items is None:
+        return []
+    seen = rec.get("local_seen")
+    hinted = rec.get("hinted") if isinstance(rec.get("hinted"), list) else []
+    new = [] if not isinstance(seen, list) else [p for p in items if p not in seen and p not in hinted]
+    if seen != items or new:
+        rec["local_seen"] = items
+        rec["hinted"] = sorted(set(hinted) | set(new))
+        try:
+            write_json_atomic(EFFECTIVE, rec)
+        except OSError:
+            return []           # cannot remember it said so — say nothing rather than say it every launch
+    return new
 
 
 def human_line(a):
@@ -1581,6 +1620,9 @@ def session(a):
             print("say\t%s" % say)
     for n in s.notes_p:          # the personal layer written badly (#1862) — none, no line
         print("note\t%s" % n)
+    if s.personal:                  # a new 本机 item, said once (#1863) — no personal layer, no line
+        for p in promote_hints(a):
+            print("hint\tpromote %s" % p)
     if agent == "claude":
         mr = s.rows.get("mod")
         print("mod\t%s" % ("on" if mr and mr["value"] != "off" else "off"))

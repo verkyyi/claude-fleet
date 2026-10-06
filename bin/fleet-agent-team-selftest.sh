@@ -44,6 +44,10 @@
 #                  `say` line is `status --short`'s person-facing line verbatim
 #                  (团队 vN · 个人 vM · 本机独有 K 项 — EPIC #1855 C6; L pins that
 #                  with no personal layer neither changes)
+#   R. hint        a 本机 item new since the last launch → ONE `hint promote <item>`
+#                  line from `session` (#1863); the next launch none; a sync keeps
+#                  `hinted`; FLEET_PROMOTE_HINT=0 none (L pins: no personal layer,
+#                  no hint and no field)
 #   Q. refused     a credential in the personal layer is refused (the cache is
 #                  kept); hook_scripts is personal-only
 set -uo pipefail
@@ -88,7 +92,8 @@ EOF
 # team <args…> — the script, sandboxed; the hub's answer is $WORK/resp.json
 team() {
   env -i PATH="$PATH" HOME="$H" FLEET_CONF_DIR="$CONF" CODEX_HOME="$H/.codex" \
-    ${SEAM:+FLEET_TEAM_BUNDLE_CMD="$SEAM"} ${PSEAM:+FLEET_PERSON_BUNDLE_CMD="$PSEAM"} "$PY" "$T" "$@" --root "$REPO" \
+    ${SEAM:+FLEET_TEAM_BUNDLE_CMD="$SEAM"} ${PSEAM:+FLEET_PERSON_BUNDLE_CMD="$PSEAM"} \
+    ${PHINT:+FLEET_PROMOTE_HINT="$PHINT"} "$PY" "$T" "$@" --root "$REPO" \
     --claude-config "$H/.claude.json" --claude-settings "$H/.claude/settings.json" \
     --claude-skills "$H/.claude/skills" --codex-home "$H/.codex" 2>&1
 }
@@ -267,7 +272,7 @@ out=$(SEAM='' team sync); rc=$?
   && ok "K fetched v9 with the node token and composed it" || bad "K fetch rc=$rc: $out"
 grep -q '^/v1/fleet/person-bundle Bearer node-tok' "$WORK/req.log" && [ ! -e "$CONF/person-bundle.json" ] \
   && ! printf '%s' "$out" | grep -q '^personal' \
-  && [ "$(j "$CONF/agent-effective.json" "'personal' in d or 'personal_version' in d")" = false ] \
+  && [ "$(j "$CONF/agent-effective.json" "'personal' in d or 'personal_version' in d or 'hinted' in d or 'local_seen' in d")" = false ] \
   && ok "K the personal read answered 404 (no person) → no cache, no line, no record" || bad "K person 404: $out"
 out=$(SEAM='' team fetch); rc=$?
 [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'unchanged' && grep '^/v1/fleet/team-bundle' "$WORK/req.log" | tail -1 | grep -q '"team-v9"' \
@@ -363,6 +368,33 @@ fp3=$(team session claude | sed -n 's/^fp	//p')
 grep -q "^claude $fp3 .*personal:v3" "$CONF/global/agent-cfg.expected" \
   && ok "P the cached expected fingerprint carries the personal layer" || bad "P expected: $(cat "$CONF/global/agent-cfg.expected")"
 
+# ── R — a new 本机 item is said once (issue #1863) ─────────────────────────────
+hints() { team session claude | grep $'^hint\t'; }
+[ -z "$(hints)" ] && [ "$(j "$CONF/agent-effective.json" "'claude.mcp.mine' in d['local_seen']")" = true ] \
+  && ok "R what was always here is recorded, never hinted" || bad "R baseline: $(hints) // $(cat "$CONF/agent-effective.json")"
+addmcp() {
+  "$PY" - "$H/.claude.json" "$1" <<'PY2'
+import json, sys
+p = sys.argv[1]; d = json.load(open(p)); d["mcpServers"][sys.argv[2]] = {"command": "here-only"}; json.dump(d, open(p, "w"))
+PY2
+}
+addmcp fresh
+[ "$(hints)" = "$(printf 'hint\tpromote claude.mcp.fresh')" ] \
+  && ok "R a new local MCP → one hint line (hint promote claude.mcp.fresh)" || bad "R new: $(team session claude)"
+[ -z "$(hints)" ] && ok "R the next launch says nothing" || bad "R again: $(hints)"
+team sync --force >/dev/null
+[ -z "$(hints)" ] && [ "$(j "$CONF/agent-effective.json" "d['hinted']")" = '["claude.mcp.fresh"]' ] \
+  && ok "R a sync keeps what was said (hinted survives apply)" || bad "R after sync: $(hints)"
+addmcp quiet
+[ -z "$(PHINT=0 hints)" ] && ok "R FLEET_PROMOTE_HINT=0 → no hint" || bad "R off: $(PHINT=0 hints)"
+for f in fleet-claude.sh fleet-codex.sh; do
+  grep -q '^ *hint) .*本机新加了' "$REPO/bin/$f" && ok "R $f prints the hint on its start line" || bad "R $f has no hint) arm"
+done
+"$PY" - "$H/.claude.json" <<'PY2'
+import json, sys
+p = sys.argv[1]; d = json.load(open(p)); [d["mcpServers"].pop(k) for k in ("fresh", "quiet")]; json.dump(d, open(p, "w"))
+PY2
+
 # ── N — the personal rollback takes back only its own ─────────────────────────
 presp '{"version":4,"prev":3,"bundle":{"mcp":{"pmine":{"command":"p-mcp@2"}}}}'
 out=$(team sync)
@@ -409,7 +441,7 @@ resp '{"version":10,"prev":9,"bundle":{"mcp":{"shared":{"command":"team-shared"}
   "claude_settings":{"includeCoAuthoredBy":false},"codex_config":{"sandbox_mode":"workspace-write"}}}'
 out=$(PSEAM='printf ""' team sync)
 [ ! -e "$CONF/person-bundle.json" ] && [ "$(j "$H/.claude.json" "'pnew' in d['mcpServers']")" = false ] \
-  && [ "$(j "$CONF/agent-effective.json" "'personal' in d or 'personal_version' in d")" = false ] \
+  && [ "$(j "$CONF/agent-effective.json" "'personal' in d or 'personal_version' in d or 'hinted' in d or 'local_seen' in d")" = false ] \
   && [ "$(status --short)" = "team v10" ] && ! team session claude | grep -q personal \
   && ok "L the person's layer gone (404) → taken back, no personal anywhere" || bad "L gone: $out"
 
