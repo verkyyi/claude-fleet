@@ -57,7 +57,7 @@ case "$TTL" in ''|*[!0-9]*) TTL=10 ;; esac
 
 fresh=0
 if [ "$TTL" -gt 0 ] && [ -f "$CF" ]; then
-  m=$(stat -f %m "$CF" 2>/dev/null || stat -c %Y "$CF" 2>/dev/null)
+  m=$(stat -c %Y "$CF" 2>/dev/null || stat -f %m "$CF" 2>/dev/null)   # GNU first: its `stat -f` is filesystem status, exit 0
   case "$m" in ''|*[!0-9]*) ;; *) [ $(( $(date +%s) - m )) -lt "$TTL" ] && fresh=1 ;; esac
 fi
 if [ "$fresh" = 0 ]; then
