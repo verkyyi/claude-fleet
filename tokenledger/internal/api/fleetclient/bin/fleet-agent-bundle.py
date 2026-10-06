@@ -297,6 +297,31 @@ def summary(root):
     return len(have) == 4, head, lines
 
 
+def iterm_clipboard():
+    """The `clipboard` row (issue #1766): text selected in another machine's
+    session reaches this computer as OSC 52, which iTerm2 drops unless
+    「Applications in terminal may access clipboard」 is on. Advice only —
+    never counted in the exit code, never changed for the person. None = no
+    iTerm2 here (not macOS, or never run), so no row."""
+    val = os.environ.get("FLEET_ITERM_CLIPBOARD")  # selftest seam
+    if val is None:
+        plist = os.path.expanduser("~/Library/Preferences/com.googlecode.iterm2.plist")
+        if sys.platform != "darwin" or not os.path.exists(plist):
+            return None
+        try:
+            r = subprocess.run(["defaults", "read", "com.googlecode.iterm2", "AllowClipboardAccess"],
+                               capture_output=True, text=True, timeout=5)
+        except Exception:
+            return None
+        val = r.stdout.strip() if r.returncode == 0 else ""  # unset = iTerm2's default, off
+    if val == "none":
+        return None
+    if val in ("1", "true", "YES"):
+        return "  PASS  %-8s iTerm2 lets programs set the clipboard — a selection in a session pastes here" % "clipboard"
+    return ("  WARN  %-8s iTerm2 drops the clipboard a program sends: text selected in a session will not paste here "
+            "(iTerm2 → Settings → General → Selection → 「Applications in terminal may access clipboard」)" % "clipboard")
+
+
 def main(argv):
     if not argv or argv[0] in ("-h", "--help", "help"):
         print(__doc__.strip())
@@ -338,6 +363,9 @@ def main(argv):
         print("  %s  %-8s %s%s" % (word, "agents", head, fix))
         for l in lines:
             print("            " + l)
+        clip = iterm_clipboard()
+        if clip is not None:
+            print(clip)
         return 0 if ok else 1
     if action == "apply":
         cmd = ["bash", os.path.join(root, "bin", "fleet-install-apply.sh"), "--bundle", "--root", root]

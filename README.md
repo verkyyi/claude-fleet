@@ -652,6 +652,22 @@ SSH. Everything here routes URLs through `bin/open-url.sh` instead:
    the URL (cmd-clickable in iTerm) already OSC52-copied to your local
    clipboard (`set-clipboard on` is in the shipped tmux conf).
 
+### Copying text out of a session
+
+In the `fleet` client, text you select in the right pane — another machine's
+session — lands in your own clipboard (#1766). The machine's tmux copies it and
+sends it outward as OSC 52; the stage and the shell (`conf/tmux-shell-stage.conf`,
+`conf/tmux-shell.conf`) pass it on with `set-clipboard on` (tmux's default,
+`external`, drops it), and the terminal must accept it:
+
+- **iTerm2** — Settings → General → Selection → 「Applications in terminal may
+  access clipboard」 (`AllowClipboardAccess`). `fleet doctor` on the client
+  prints a `clipboard` row: WARN while it is off; it never changes it for you.
+- **Termius (phone)** — not yet measured whether its OSC 52 reaches the iOS
+  clipboard. Until it is, use Termius's own selection: long-press in the
+  terminal → Select → Copy. `bin/clipboard-osc52-selftest.sh` pins the chain up
+  to the terminal.
+
 ### `fleet-open`'s laptop half (iTerm2)
 
 `fleet-open` (#1379) asks the iTerm2 you are typing in to open a link — and, for
