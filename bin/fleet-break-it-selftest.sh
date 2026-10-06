@@ -610,7 +610,7 @@ drill_install_sync_killed() {
   isync() { HOME="$d/home" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 \
             bash "$BIN/fleet-install-sync.sh" --root "$d/install"; }
   touch "$d/hold"; isync >"$d/tick1.out" 2>&1 &              # held in its baseline doctor run
-  until_ok 10 grep -q updating "$d/tick1.out" || { WHY="the first tick never got to updating: $(tail -2 "$d/tick1.out")"; return 1; }
+  until_ok 10 grep -q switching "$d/tick1.out" || { WHY="the first tick never got to switching: $(tail -2 "$d/tick1.out")"; return 1; }
   pid=$(cat "$d/conf/global/install-sync.lock/pid" 2>/dev/null)
   kill -9 "$pid" 2>/dev/null || { WHY="no live holder pid in the lock [$pid]"; return 1; }
   wait 2>/dev/null; rm -f "$d/hold"                           # killed mid-tick: no trap ran
