@@ -17,9 +17,17 @@
 #   D. retry: the same spawn after the reading drops succeeds (what dispatch's
 #      next tick does — it already treats rc 2 as "stop this tick, retry").
 #   E. continuation paths never pass the gate: crash restore, handoff.
+#   F. admission is the only gate by default (issue #1831): the per-session cost
+#      (median agent RSS × growth, floored, or pinned), the room it leaves above
+#      the kept-back floor, a RESERVATION per admission so a burst — sequential or
+#      concurrent — admits exactly the room and no more, reservations + in-flight
+#      markers age out, hysteresis after a hold, and the count caps default off.
 set -uo pipefail
 unset FLEET_ADMIT FLEET_ADMIT_MEM_FREE_PCT FLEET_ADMIT_PRESSURE FLEET_ADMIT_LOAD_PER_CORE \
-      FLEET_LOADGEN_LOAD_PER_CORE FLEET_MEM_PROBE_CMD FLEET_LOAD_PROBE_CMD 2>/dev/null
+      FLEET_LOADGEN_LOAD_PER_CORE FLEET_MEM_PROBE_CMD FLEET_LOAD_PROBE_CMD \
+      FLEET_ADMIT_RESERVE_MB FLEET_ADMIT_HYST_MB FLEET_ADMIT_SESSION_MB FLEET_ADMIT_SESSION_MB_MIN \
+      FLEET_ADMIT_SESSION_GROWTH FLEET_ADMIT_SETTLE_SECS FLEET_MEM_TOTAL_MB FLEET_MEM_PS_CMD \
+      FLEET_GLOBAL_MAX_SESSIONS FLEET_MAX_SESSIONS FLEET_MACHINE_MAX_SESSIONS 2>/dev/null
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 SPAWN="$BIN/dash-issue-session.sh"
@@ -30,9 +38,17 @@ pass=0
 ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output ---\n%s\n' "$2" >&2; exit 1; }
 
-# admit <mem-stub> <load-stub> [VAR=val …] → "<rc>|<stdout>"
+# The machine every leg runs on: 16000 MB of RAM and three agents of 400/200/100 MB
+# (median 200 × growth 3 ⇒ ~600 MB a session) — never this box's own ps.
+U=$(id -u)
+PSSTUB="printf '101 1 $U 409600 01:00 claude\\n102 1 $U 204800 01:00 claude\\n103 1 $U 102400 02:00 claude\\n'"
+export FLEET_MEM_TOTAL_MB=16000 FLEET_MEM_PS_CMD="$PSSTUB"
+
+# admit <mem-stub> <load-stub> [VAR=val …] → "<rc>|<stdout>". A fresh state dir
+# each call (no hold, no reservation left from the last) unless KEEP=1.
 admit() {
   local m="$1" l="$2"; shift 2
+  [ "${KEEP:-0}" = 1 ] || rm -rf "$WORK/t"; mkdir -p "$WORK/t"
   env "$@" FLEET_MEM_PROBE_CMD="$m" FLEET_LOAD_PROBE_CMD="$l" TMPDIR="$WORK/t" \
     bash -c 'source "$1/fleet-lib.sh"; out=$(fleet_machine_admit ${2:+"$2"}); printf "%s|%s" "$?" "$out"' _ "$BIN" "${SHORT:-}"
 }
@@ -43,8 +59,8 @@ r=$(admit 'echo 4 5 97 0' 'echo 0.50')
 case "$r" in 1\|*内存紧张*critical*5%\ free*) ;; *) fail "A critical pressure must hold with a readable reason (got '$r')" ;; esac
 r=$(admit 'echo 2 40 5 0' 'echo 0.50');            case "$r" in 1\|*pressure\ warn*) ;; *) fail "A warn pressure holds by default (got '$r')" ;; esac
 r=$(admit 'echo 1 9 5 0' 'echo 0.50');             case "$r" in 1\|*9%\ free,\ floor\ 15%*) ;; *) fail "A avail% under the floor holds (got '$r')" ;; esac
-r=$(admit 'echo 1 66 5 6' 'echo 3.10')
-case "$r" in 1\|*负载过高*3.10/core*FLEET_ADMIT_LOAD_PER_CORE=2*) ;; *) fail "A load over the default 2/core holds (got '$r')" ;; esac
+r=$(admit 'echo 1 66 5 6' 'echo 1.60')
+case "$r" in 1\|*负载过高*1.60/core*FLEET_ADMIT_LOAD_PER_CORE=1.5*) ;; *) fail "A load over the default 1.5/core holds (#1831: 2 never fired) (got '$r')" ;; esac
 r=$(admit 'echo 1 66 5 6' 'echo 1.30');            [ "$r" = "0|" ] || fail "A 1.3/core (a normal busy afternoon) must admit (got '$r')"
 r=$(admit 'echo 1 66 5 6' 'echo 1.30' FLEET_LOADGEN_LOAD_PER_CORE=1)
 case "$r" in 1\|*FLEET_ADMIT_LOAD_PER_CORE=1*) ;; *) fail "A load bound defaults to FLEET_LOADGEN_LOAD_PER_CORE when set (got '$r')" ;; esac
@@ -53,7 +69,9 @@ r=$(SHORT=--short admit 'echo 1 66 5 6' 'echo 9');   [ "$r" = "1|暂停开新：
 r=$(admit 'true' 'true');                          [ "$r" = "0|" ] || fail "A unreadable probes must admit (got '$r')"
 r=$(admit 'echo 2 40 5 0' 'echo 0.5' FLEET_ADMIT_PRESSURE=critical); [ "$r" = "0|" ] || fail "A PRESSURE=critical admits a warn (got '$r')"
 r=$(admit 'echo 4 40 5 0' 'echo 0.5' FLEET_ADMIT_PRESSURE=off);      [ "$r" = "0|" ] || fail "A PRESSURE=off ignores the level (got '$r')"
-r=$(admit 'echo 1 3 5 0' 'echo 0.5' FLEET_ADMIT_MEM_FREE_PCT=0);     [ "$r" = "0|" ] || fail "A MEM_FREE_PCT=0 turns the floor off (got '$r')"
+r=$(admit 'echo 1 10 5 0' 'echo 0.5' FLEET_ADMIT_MEM_FREE_PCT=0 FLEET_ADMIT_RESERVE_MB=0); [ "$r" = "0|" ] || fail "A MEM_FREE_PCT=0 + RESERVE_MB=0 turn the floor off (got '$r')"
+r=$(admit 'echo 1 10 5 0' 'echo 0.5' FLEET_ADMIT_MEM_FREE_PCT=0)
+case "$r" in 1\|*2048\ MB\ kept\ back*) ;; *) fail "A with the % floor off the absolute FLEET_ADMIT_RESERVE_MB still keeps 2 GB back (got '$r')" ;; esac
 r=$(admit 'echo 1 66 5 0' 'echo 9' FLEET_ADMIT_LOAD_PER_CORE=0);     [ "$r" = "0|" ] || fail "A LOAD_PER_CORE=0 turns the load bound off (got '$r')"
 r=$(admit 'echo 4 5 97 0' 'echo 9' FLEET_ADMIT=0);                   [ "$r" = "0|" ] || fail "A FLEET_ADMIT=0 admits whatever the readings (got '$r')"
 ok "A fleet_machine_admit: memory pressure / avail% / load each hold with a reason; knobs + FLEET_ADMIT=0"
@@ -127,6 +145,54 @@ grep -q 'rc" = 3' "$BIN/fleet-dispatch.sh" && grep -q 'stop this tick' "$BIN/fle
   || fail "D dispatch must still treat a non-claim refusal as 'stop this tick, retry next'"
 ok "D the next attempt after the reading drops spawns (dispatch retries rc 2 on its next tick)"
 
+# ===== F: admission is the only gate by default (issue #1831) ==================
+hr() { rm -rf "$WORK/t"; mkdir -p "$WORK/t"; env "$@" TMPDIR="$WORK/t" bash -c 'source "$1/fleet-lib.sh"; fleet_machine_headroom' _ "$BIN"; }
+# cost: median 200 × 3 = 600; the 512 floor wins under it; a pin wins over both.
+[ "$(hr FLEET_MEM_PROBE_CMD='echo 1 50 0 0' | awk '{print $2, $7, $8}')" = "600 200 3" ] || fail "F cost = median 200 × growth 3 over 3 agents"
+[ "$(hr FLEET_MEM_PROBE_CMD='echo 1 50 0 0' FLEET_ADMIT_SESSION_GROWTH=2 | awk '{print $2}')" = 512 ] || fail "F cost never under FLEET_ADMIT_SESSION_MB_MIN (400 → 512)"
+[ "$(hr FLEET_MEM_PROBE_CMD='echo 1 50 0 0' FLEET_ADMIT_SESSION_MB=1000 | awk '{print $2}')" = 1000 ] || fail "F FLEET_ADMIT_SESSION_MB pins the cost"
+[ "$(hr FLEET_MEM_PROBE_CMD='echo 1 50 0 0' FLEET_MEM_PS_CMD=true | awk '{print $2, $8}')" = "512 0" ] || fail "F no agent running → the floor"
+# room: 16000 × 50% = 8000 avail, floor max(15% = 2400, 2048) → (8000 − 2400) / 600 = 9.
+[ "$(hr FLEET_MEM_PROBE_CMD='echo 1 50 0 0' | awk '{print $1, $3, $4}')" = "9 8000 2400" ] || fail "F room = (avail − floor) / cost"
+[ -z "$(hr FLEET_MEM_PROBE_CMD=true)" ] || fail "F unreadable memory → no headroom line"
+ok "F cost (median × growth, floor, pin) and room above the kept-back floor"
+
+# A burst against room for exactly 3: 10000 MB × 40% = 4000, floor 2048 → 1952 / 600 = 3.
+capf() { env PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/t" FLEET_LOAD_PROBE_CMD='echo 0.5' FLEET_MEM_TOTAL_MB=10000 \
+           FLEET_MEM_PROBE_CMD='echo 1 40 0 0' "$@" \
+           bash -c 'source "$1/fleet-lib.sh"; out=$(fleet_session_cap_ok testsess); printf "%s|%s" "$?" "$out"' _ "$BIN"; }
+rm -rf "$WORK/t"; mkdir -p "$WORK/t"; seq_rc=''
+for i in 1 2 3 4 5; do r=$(capf); seq_rc="$seq_rc${r%%|*}"; done
+[ "$seq_rc" = 00011 ] || fail "F a sequential burst admits exactly the room (3), then holds (got $seq_rc)"
+r=$(capf); case "$r" in 1\|*room\ for\ 0\ more*3\ admitted\ not\ yet\ counted*) ;; *) fail "F the hold names the reservations (got '$r')" ;; esac
+ok "F sequential burst: 3 admitted into room for 3, the 4th held — reason names the 3 reserved"
+rm -rf "$WORK/t"; mkdir -p "$WORK/t"
+for i in 1 2 3 4 5 6 7 8; do capf > "$WORK/par.$i" & done; wait
+npass=0; for f in "$WORK"/par.*; do case "$(cat "$f")" in 0\|*) npass=$((npass + 1)) ;; esac; done
+[ "$npass" = 3 ] || fail "F 8 CONCURRENT spawns into room for 3 must admit exactly 3 (got $npass)" "$(cat "$WORK"/par.*)"
+ok "F concurrent burst: 8 at once into room for 3 → exactly 3 admitted (read + reserve under one lock)"
+# Reservations age out after FLEET_ADMIT_SETTLE_SECS (the session now shows in avail).
+touch -t 202001010000 "$WORK"/t/.claude-dash/global/admit-reserve/* 2>/dev/null
+r=$(capf); [ "${r%%|*}" = 0 ] || fail "F a settled reservation no longer counts (got '$r')"
+# In-flight spawn markers (#531) count when they outnumber the reservations.
+rm -rf "$WORK/t"; mkdir -p "$WORK/t/.claude-dash/global/spawn-inflight"
+for i in 1 2 3; do : > "$WORK/t/.claude-dash/global/spawn-inflight/x.$i"; done
+r=$(capf); case "$r" in 1\|*3\ admitted\ not\ yet\ counted*) ;; *) fail "F 3 in-flight spawns fill room for 3 (got '$r')" ;; esac
+ok "F reservations settle out; in-flight markers count when more"
+# Hysteresis: after a hold, FLEET_ADMIT_HYST_MB more must free up before it reopens.
+rm -rf "$WORK/t"; mkdir -p "$WORK/t"
+r=$(KEEP=1 admit 'echo 4 5 0 0' 'echo 0.5' FLEET_MEM_TOTAL_MB=10000); [ "${r%%|*}" = 1 ] || fail "F setup: hold"
+r=$(KEEP=1 admit 'echo 1 40 0 0' 'echo 0.5' FLEET_MEM_TOTAL_MB=10000 FLEET_ADMIT_HYST_MB=1500)
+case "$r" in 1\|*1500\ MB\ until\ it\ recovers*) ;; *) fail "F after a hold, room for 3 minus the hysteresis stays held (got '$r')" ;; esac
+r=$(KEEP=1 admit 'echo 1 50 0 0' 'echo 0.5' FLEET_MEM_TOTAL_MB=10000 FLEET_ADMIT_HYST_MB=1500); [ "$r" = "0|" ] || fail "F past the recovery line it reopens (got '$r')"
+r=$(KEEP=1 admit 'echo 1 40 0 0' 'echo 0.5' FLEET_MEM_TOTAL_MB=10000 FLEET_ADMIT_HYST_MB=1500); [ "$r" = "0|" ] || fail "F once reopened the plain line applies again (got '$r')"
+ok "F hysteresis: held until the recovery line, then the plain line"
+# The count caps default OFF: nothing set ⇒ no count refusal, only admission.
+r=$(env TMPDIR="$WORK/t" bash -c 'source "$1/fleet-lib.sh"; fleet_session_count() { printf 50; }; fleet_inflight_count() { printf 0; }
+  FLEET_ADMIT=0 fleet_session_cap_ok s; printf "%s|" "$?"; fleet_cap_full s; printf "%s" "$?"' _ "$BIN")
+[ "$r" = "0|1" ] || fail "F 50 sessions and no cap set: neither cap_ok nor cap_full binds (got '$r')"
+ok "F FLEET_GLOBAL_MAX_SESSIONS defaults to 0: 50 sessions, no count refusal"
+
 # ===== E: continuation paths do not pass the gate ==============================
 for f in fleet-restore.sh fleet-handoff-cycle.sh; do
   [ -f "$BIN/$f" ] || continue
@@ -136,5 +202,5 @@ for f in fleet-restore.sh fleet-handoff-cycle.sh; do
 done
 ok "E crash restore / handoff never reach the admission gate"
 
-printf '\nselftest OK: %s assertions passed (machine admission, issue #1090)\n' "$pass"
+printf '\nselftest OK: %s assertions passed (machine admission, issues #1090 #1831)\n' "$pass"
 exit 0

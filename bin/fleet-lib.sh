@@ -6137,8 +6137,9 @@ fleet_session_sleepers_for() { local t; t=$(_fleet_session_tally_for "$1"); prin
 
 # Cap on concurrent Claude working sessions (issues #28, #70). Returns 0 if a new
 # session may be spawned, non-zero if a cap is already reached. Two ceilings:
-#   • GLOBAL   FLEET_GLOBAL_MAX_SESSIONS (default 8) — SYSTEM-WIDE across all
-#              fleets; 0 ⇒ unlimited. Always checked.
+#   • GLOBAL   FLEET_GLOBAL_MAX_SESSIONS (default 0 = off since #1831 — the machine
+#              admission below is the gate; set one to cap hard) — SYSTEM-WIDE
+#              across all fleets. Checked whenever it is non-zero.
 #   • PER-FLEET FLEET_MAX_SESSIONS (default 0 = unlimited) — checked ONLY when a
 #              session name is passed as $1 (so existing no-arg callers keep the
 #              global-only behaviour unchanged) AND the cap is a positive number.
@@ -6247,10 +6248,18 @@ fleet_inflight_mark() {   # <sess> → create a marker for THIS process; echo it
   printf '%s' "$f"
 }
 fleet_inflight_count() {  # [sess] → count FRESH markers (all fleets, or one), reaping stale
-  local sess="${1:-}" ttl="${FLEET_INFLIGHT_TTL:-180}" now cut n=0 f m pat
-  [ -d "$FLEET_INFLIGHT_DIR" ] || { printf 0; return; }
+  local pat='*'
+  [ -n "${1:-}" ] && pat="$(fleet_slug "$1").*"
+  _fleet_fresh_markers "$FLEET_INFLIGHT_DIR" "${FLEET_INFLIGHT_TTL:-180}" "$pat"
+}
+# _fleet_fresh_markers <dir> <ttl-secs> <glob> → how many files matching <glob> in
+# <dir> were touched within <ttl>; an older one is deleted on the way (a crashed
+# writer ages out instead of holding its slot forever).
+_fleet_fresh_markers() {
+  local dir="$1" ttl="$2" pat="$3" now cut n=0 f m
+  [ -d "$dir" ] || { printf 0; return; }
+  case "$ttl" in ''|*[!0-9]*) ttl=180 ;; esac
   now=$(date +%s 2>/dev/null || echo 0); cut=$((now - ttl))
-  pat='*'; [ -n "$sess" ] && pat="$(fleet_slug "$sess").*"
   while IFS= read -r f; do
     [ -e "$f" ] || continue
     # GNU stat FIRST: `stat -f %m` on GNU means "filesystem status" and exits 0 with
@@ -6259,24 +6268,105 @@ fleet_inflight_count() {  # [sess] → count FRESH markers (all fleets, or one),
     case "$m" in ''|*[!0-9]*) m=0;; esac
     if [ "$m" -ge "$cut" ]; then n=$((n + 1)); else rm -f "$f" 2>/dev/null; fi
   done <<EOF
-$(find "$FLEET_INFLIGHT_DIR" -maxdepth 1 -type f -name "$pat" 2>/dev/null)
+$(find "$dir" -maxdepth 1 -type f -name "$pat" 2>/dev/null)
 EOF
   printf '%s' "$n"
 }
 
+# ---- admission is the ONLY capacity gate by default (issue #1831) --------------
+# The count caps (FLEET_GLOBAL_MAX_SESSIONS / FLEET_MACHINE_MAX_SESSIONS) default
+# to 0: a per-login number does not add up across logins, and the real limit is
+# memory, which differs 4× between two machines. So fleet_machine_admit answers
+# "is there room for ONE MORE" from three things it can measure:
+#   cost      what one session takes — the median RSS of the live agent processes
+#             × FLEET_ADMIT_SESSION_GROWTH (3: a transcript grows), never below
+#             FLEET_ADMIT_SESSION_MB_MIN (512). FLEET_ADMIT_SESSION_MB pins it.
+#   reserved  sessions admitted but not yet visible in the memory reading: the
+#             reservations cap_ok drops at each admission (they live
+#             FLEET_ADMIT_SETTLE_SECS, 120 — a window's agent needs that long to
+#             boot and show up in `avail`), or the #531 in-flight markers when a
+#             slow `worktree add` has outlived that — whichever is more. Without
+#             it a burst of N spawns all read the same free memory and all pass.
+#   floor     max(FLEET_ADMIT_MEM_FREE_PCT % of RAM, FLEET_ADMIT_RESERVE_MB 2048)
+#             is never handed out; after a hold, FLEET_ADMIT_HYST_MB (1024) more
+#             must free up before the gate opens again, so one session growing
+#             back and forth across the line does not flap it.
+# room = (avail − floor [− hyst] − reserved × cost) / cost; admit iff room ≥ 1.
+FLEET_ADMIT_RESERVE_DIR="$FLEET_C/global/admit-reserve"
+FLEET_ADMIT_HELD_FILE="$FLEET_C/global/admit-held"
+
+# _fleet_session_cost → "<cost_mb>\t<median_mb>\t<agents>" (median 0 with no agent).
+_fleet_session_cost() {
+  local fixed="${FLEET_ADMIT_SESSION_MB:-0}" lo="${FLEET_ADMIT_SESSION_MB_MIN:-512}" g="${FLEET_ADMIT_SESSION_GROWTH:-3}"
+  case "$fixed" in ''|*[!0-9]*) fixed=0 ;; esac
+  case "$lo" in ''|*[!0-9]*) lo=512 ;; esac
+  case "$g" in ''|*[!0-9.]*) g=3 ;; esac
+  # fleet_proc_mem_rows is sorted by RSS descending, so the middle row IS the median.
+  fleet_proc_mem_rows 2>/dev/null | awk -F'\t' -v fx="$fixed" -v lo="$lo" -v g="$g" '
+    $5 == "agent" { r[n++] = $3 + 0 }
+    END { med = (n > 0) ? r[int(n / 2)] : 0
+          c = (fx > 0) ? fx : int(med * g + 0.5)
+          if (fx <= 0 && c < lo) c = lo
+          if (c < 1) c = 1
+          printf "%d\t%d\t%d\n", c, med, n }'
+}
+fleet_session_cost_mb() { local c; c=$(_fleet_session_cost); printf '%s\n' "${c%%$'\t'*}"; }
+
+# fleet_admit_reserved → sessions admitted and not yet in the memory reading.
+fleet_admit_reserved() {
+  local r i
+  r=$(_fleet_fresh_markers "$FLEET_ADMIT_RESERVE_DIR" "${FLEET_ADMIT_SETTLE_SECS:-120}" '*')
+  i=$(fleet_inflight_count)
+  [ "${i:-0}" -gt "${r:-0}" ] 2>/dev/null && r=$i
+  printf '%s\n' "${r:-0}"
+}
+# fleet_admit_reserve [sess] — hold ONE session's cost for the settle time.
+fleet_admit_reserve() {
+  mkdir -p "$FLEET_ADMIT_RESERVE_DIR" 2>/dev/null || return 0
+  : > "$FLEET_ADMIT_RESERVE_DIR/$(fleet_slug "${1:-_}").$$.${RANDOM:-0}" 2>/dev/null
+  return 0
+}
+
+# fleet_machine_headroom [avail_pct] — how many MORE sessions this machine takes
+# right now. One line, space-separated, or nothing (rc 1) when memory is unreadable:
+#   <room> <cost_mb> <avail_mb> <floor_mb> <reserved> <hyst_mb> <median_mb> <agents>
+fleet_machine_headroom() {
+  local ap="${1:-}" total c cost med agents pct rmb hyst=0 floor avail res room
+  [ -n "$ap" ] || ap=$(fleet_mem_probe 2>/dev/null | awk 'NF>=2{print $2+0; exit}')
+  total=$(fleet_mem_total_mb 2>/dev/null)
+  case "$ap" in ''|*[!0-9]*) return 1 ;; esac
+  case "$total" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$total" -gt 0 ] || return 1
+  c=$(_fleet_session_cost); cost=${c%%$'\t'*}; c=${c#*$'\t'}; med=${c%%$'\t'*}; agents=${c#*$'\t'}
+  case "$cost" in ''|*[!0-9]*) cost=512 ;; esac
+  pct="${FLEET_ADMIT_MEM_FREE_PCT:-15}"; case "$pct" in ''|*[!0-9]*) pct=15 ;; esac
+  rmb="${FLEET_ADMIT_RESERVE_MB:-2048}"; case "$rmb" in ''|*[!0-9]*) rmb=2048 ;; esac
+  if [ -e "$FLEET_ADMIT_HELD_FILE" ]; then
+    hyst="${FLEET_ADMIT_HYST_MB:-1024}"; case "$hyst" in ''|*[!0-9]*) hyst=1024 ;; esac
+  fi
+  avail=$(( total * ap / 100 ))
+  floor=$(( total * pct / 100 )); [ "$rmb" -gt "$floor" ] && floor=$rmb
+  res=$(fleet_admit_reserved)
+  room=$(( (avail - floor - hyst - res * cost) / cost ))
+  [ "$room" -lt 0 ] && room=0
+  printf '%s %s %s %s %s %s %s %s\n' "$room" "$cost" "$avail" "$floor" "$res" "$hyst" "${med:-0}" "${agents:-0}"
+}
+
 # fleet_machine_admit [--short] — may the machine take ONE MORE session right now
-# (issue #1090, EPIC #1291 C4)? The session caps count windows; this reads what
-# the machine has left. Exit 0 = admit (prints nothing). Exit 1 = hold, and stdout
-# says why — the full line, or with --short just the dash/backlog tag
-# (`暂停开新：内存紧张` / `暂停开新：负载过高`). Three readings, any one holds:
+# (issue #1090, EPIC #1291 C4; the only gate by default since #1831)? Exit 0 =
+# admit (prints nothing). Exit 1 = hold, and stdout says why — the full line, or
+# with --short just the dash/backlog tag (`暂停开新：内存紧张` / `暂停开新：负载过高`).
+# Three readings, any one holds:
 #   memory pressure  fleet_mem_probe level ≥ FLEET_ADMIT_PRESSURE (warn|critical|off,
 #                    default warn = the kernel's own level 2)
-#   memory free      avail% < FLEET_ADMIT_MEM_FREE_PCT (default 15; 0 = off)
+#   memory room      fleet_machine_headroom < 1 — the cost of one more session
+#                    does not fit above the floor once the reserved ones are paid
+#                    for (block above). Unreadable total → the old avail% rule.
 #   CPU load         1-min load/core > FLEET_ADMIT_LOAD_PER_CORE (0 = off). Defaults
 #                    to FLEET_LOADGEN_LOAD_PER_CORE when the operator set one, else
-#                    2 — NOT loadgen's own 1: that bound is for ADDING a burn, and a
-#                    healthy 20-session afternoon already reads 1.3/core (measured
-#                    2026-10-03), which would hold every spawn all day.
+#                    1.5 — a healthy 20-session afternoon reads 1.3/core (measured
+#                    2026-10-03); the old 2 meant load 30 on 15 cores, which never
+#                    fired (issue #1831).
 # An unreadable probe admits (no reading is not a reason to stop the fleet).
 # FLEET_ADMIT=0 switches it off. A hold is transient by design: every caller of
 # fleet_session_cap_ok already treats a refusal as "retry later" (dispatch's next
@@ -6284,20 +6374,41 @@ EOF
 fleet_machine_admit() {
   [ "${FLEET_ADMIT:-1}" = 0 ] && return 0
   local short=0 free_min="${FLEET_ADMIT_MEM_FREE_PCT:-15}" pres="${FLEET_ADMIT_PRESSURE:-warn}"
-  local lmax="${FLEET_ADMIT_LOAD_PER_CORE:-${FLEET_LOADGEN_LOAD_PER_CORE:-2}}" plim m lvl avail per pname
+  local lmax="${FLEET_ADMIT_LOAD_PER_CORE:-${FLEET_LOADGEN_LOAD_PER_CORE:-1.5}}" plim m lvl avail per pname
+  local hr='' room=1 tight=0 why
   [ "${1:-}" = --short ] && short=1
   case "$free_min" in ''|*[!0-9]*) free_min=15 ;; esac
-  case "$lmax" in ''|*[!0-9.]*) lmax=2 ;; esac
+  case "$lmax" in ''|*[!0-9.]*) lmax=1.5 ;; esac
   case "$pres" in critical|4) plim=4 ;; off|0|none) plim=0 ;; *) plim=2 ;; esac
   m="$(fleet_mem_probe 2>/dev/null)"
   lvl=$(printf '%s\n' "$m" | awk 'NF{print $1+0; exit}')
   avail=$(printf '%s\n' "$m" | awk 'NF>=2{print $2+0; exit}')
-  if [ -n "$lvl" ] && { { [ "$plim" -gt 0 ] && [ "$lvl" -ge "$plim" ]; } || \
-       { [ -n "$avail" ] && [ "$free_min" -gt 0 ] && [ "$avail" -lt "$free_min" ]; }; }; then
+  if [ -n "$lvl" ]; then
+    [ "$plim" -gt 0 ] && [ "$lvl" -ge "$plim" ] && tight=1
+    if [ -n "$avail" ]; then
+      if hr=$(fleet_machine_headroom "$avail"); then
+        room=${hr%% *}; [ "$room" -lt 1 ] && tight=1
+      elif [ "$free_min" -gt 0 ] && [ "$avail" -lt "$free_min" ]; then
+        tight=1
+      fi
+    fi
+  fi
+  if [ "$tight" = 1 ]; then
+    mkdir -p "${FLEET_ADMIT_HELD_FILE%/*}" 2>/dev/null && : > "$FLEET_ADMIT_HELD_FILE" 2>/dev/null
     if [ "$short" = 1 ]; then printf '暂停开新：内存紧张'; return 1; fi
     case "$lvl" in 4) pname=critical ;; 2) pname=warn ;; *) pname=normal ;; esac
-    printf 'machine memory tight — 暂停开新：内存紧张 (pressure %s, %s%% free, floor %s%%): new sessions are held until it drops; running ones are untouched — retry later, or FLEET_ADMIT=0 to override' \
-      "$pname" "${avail:-?}" "$free_min"
+    why=''
+    if [ -n "$hr" ]; then   # `read`, not `set -- $hr`: zsh (a skill's shell) does not split
+      local h_room h_cost h_avail h_floor h_res h_hyst h_rest
+      read -r h_room h_cost h_avail h_floor h_res h_hyst h_rest <<EOF
+$hr
+EOF
+      why="; room for $h_room more at ~$h_cost MB each: $h_avail MB available, $h_floor MB kept back"
+      [ "${h_hyst:-0}" -gt 0 ] && why="$why + $h_hyst MB until it recovers"
+      why="$why, $h_res admitted not yet counted"
+    fi
+    printf 'machine memory tight — 暂停开新：内存紧张 (pressure %s, %s%% free, floor %s%%%s): new sessions are held until it drops; running ones are untouched — retry later, or FLEET_ADMIT=0 to override' \
+      "$pname" "${avail:-?}" "$free_min" "$why"
     return 1
   fi
   per="$(_fleet_load_per_core)"
@@ -6307,6 +6418,7 @@ fleet_machine_admit() {
       "$per" "$lmax"
     return 1
   fi
+  [ -n "$hr" ] && rm -f "$FLEET_ADMIT_HELD_FILE" 2>/dev/null
   return 0
 }
 
@@ -6385,8 +6497,8 @@ fleet_machine_sessions_summary() {
 
 fleet_session_cap_ok() {
   local sess="${1:-}"
-  local gmax="${FLEET_GLOBAL_MAX_SESSIONS:-8}" fmax="${FLEET_MAX_SESSIONS:-0}" n
-  case "$gmax" in ''|*[!0-9]*) gmax=8;; esac   # tolerate a garbled conf value
+  local gmax="${FLEET_GLOBAL_MAX_SESSIONS:-0}" fmax="${FLEET_MAX_SESSIONS:-0}" n
+  case "$gmax" in ''|*[!0-9]*) gmax=0;; esac   # tolerate a garbled conf value
   case "$fmax" in ''|*[!0-9]*) fmax=0;; esac
   if [ "$gmax" -ne 0 ]; then                   # 0 ⇒ unlimited
     # count LIVE session windows PLUS spawns still building their window (#531), so
@@ -6424,8 +6536,21 @@ fleet_session_cap_ok() {
   # The machine's own headroom (issue #1090) — after the counts, so a full fleet
   # still reads as "at capacity". Crash restore, quota migration and a handoff's
   # continuation never come through here: they re-house a RUNNING session.
-  fleet_machine_admit || return 1
-  return 0
+  # An admission RESERVES its session's cost until the memory reading can see it
+  # (issue #1831), and the read + reserve is one step under a lock, so N
+  # concurrent spawns cannot all read the same free memory and all pass.
+  [ "${FLEET_ADMIT:-1}" = 0 ] && return 0
+  local lk="$FLEET_C/global/admit.lock" i=0 rc
+  mkdir -p "${lk%/*}" 2>/dev/null
+  while ! mkdir "$lk" 2>/dev/null; do   # a holder dead > 10 s left it behind
+    i=$((i + 1))
+    [ "$i" -ge 50 ] && { rmdir "$lk" 2>/dev/null; mkdir "$lk" 2>/dev/null; break; }
+    sleep 0.2 2>/dev/null || sleep 1
+  done
+  fleet_machine_admit; rc=$?
+  [ "$rc" = 0 ] && fleet_admit_reserve "$sess"
+  rmdir "$lk" 2>/dev/null
+  return "$rc"
 }
 _fleet_sleepers_note() { [ "${1:-0}" -gt 0 ] 2>/dev/null && printf ' · z%s sleeping' "$1"; return 0; }
 
@@ -6437,8 +6562,8 @@ _fleet_sleepers_note() { [ "${1:-0}" -gt 0 ] 2>/dev/null && printf ' · z%s slee
 # the pair as `fleet full N/M — waking makes N+1`.
 fleet_cap_full() {
   local sess="${1:-}"
-  local gmax="${FLEET_GLOBAL_MAX_SESSIONS:-8}" fmax="${FLEET_MAX_SESSIONS:-0}" n
-  case "$gmax" in ''|*[!0-9]*) gmax=8;; esac
+  local gmax="${FLEET_GLOBAL_MAX_SESSIONS:-0}" fmax="${FLEET_MAX_SESSIONS:-0}" n
+  case "$gmax" in ''|*[!0-9]*) gmax=0;; esac
   case "$fmax" in ''|*[!0-9]*) fmax=0;; esac
   if [ "$gmax" -ne 0 ]; then
     n=$(( $(fleet_session_count) + $(fleet_inflight_count) ))
@@ -6452,7 +6577,7 @@ fleet_cap_full() {
 }
 
 # Compact "slots N/max" chip for the backlog header / dash (issue #331): the
-# GLOBAL session cap (FLEET_GLOBAL_MAX_SESSIONS, default 8) silently blocks EVERY
+# GLOBAL session cap (FLEET_GLOBAL_MAX_SESSIONS, default 0 = off) silently blocks EVERY
 # spawn path, but nothing surfaces fullness today — so a cap refusal is an ambush.
 # This makes it expected: reuse fleet_session_count (the SAME cross-fleet count the
 # cap measures — pure tmux+awk, no network) and render an ANSI-truecolor chip:
@@ -6461,9 +6586,9 @@ fleet_cap_full() {
 # second scan (and for hermetic tests); sleepers render as `· zN` (#1058). With the
 # cap disabled (gmax=0 ⇒ unlimited) it shows a bare "slots N" (no denominator/color).
 fleet_slots_chip() {
-  local n="${1:-}" z="${2:-}" gmax="${FLEET_GLOBAL_MAX_SESSIONS:-8}" col reset t zs=''
+  local n="${1:-}" z="${2:-}" gmax="${FLEET_GLOBAL_MAX_SESSIONS:-0}" col reset t zs=''
   reset=$(printf '\033[0m')                          # POSIX ESC[0m — $'…' is a bashism dash ignores
-  case "$gmax" in ''|*[!0-9]*) gmax=8;; esac
+  case "$gmax" in ''|*[!0-9]*) gmax=0;; esac
   if [ -z "$n" ]; then t=$(_fleet_session_tally); n=${t%% *}; [ -n "$z" ] || z=${t##* }; fi
   case "$n" in ''|*[!0-9]*) n=0;; esac
   case "$z" in ''|*[!0-9]*) z=0;; esac

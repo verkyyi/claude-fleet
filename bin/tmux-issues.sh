@@ -71,7 +71,13 @@ SLOTS=$(fleet_slots_chip)
 # …and when the machine itself is holding new sessions (issue #1090 — memory tight
 # or load high), say so beside the count: the slots may read free while Enter is
 # refused for a reason the count cannot show.
-ADMIT_TAG=$(fleet_machine_admit --short) || SLOTS="$SLOTS · $(printf '\033[38;2;247;118;142m')$ADMIT_TAG$(printf '\033[0m')"
+# Otherwise, with the count caps off by default (issue #1831), what the gate will
+# still let in is the number to show: `余≈N` more at the measured per-session cost.
+if ADMIT_TAG=$(fleet_machine_admit --short); then
+  ROOM=$(fleet_machine_headroom 2>/dev/null) && SLOTS="$SLOTS · $(printf '\033[38;2;86;95;137m')余≈${ROOM%% *}$(printf '\033[0m')"
+else
+  SLOTS="$SLOTS · $(printf '\033[38;2;247;118;142m')$ADMIT_TAG$(printf '\033[0m')"
+fi
 eval "$(bash "$BIN/dash-keymap.sh" --panel backlog env)"
 HDR="$SLOTS · ↵ work · $DASH_GLYPH_NEW new · ? keys"
 ACT="${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}/global/issues_act_${FLEET_SESSION:-_}.$$"

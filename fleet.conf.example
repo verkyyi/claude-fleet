@@ -313,9 +313,11 @@ FLEET_CTX_WINDOW=200000
 # SYSTEM-WIDE ceiling on how many Claude working sessions may run at once across
 # ALL fleets on this machine. Every spawn path — the new-session box and the
 # backlog's Enter — refuses once this many are live (panels — the dash/plan/
-# backlog windows — don't count). Default 8; set to 0 to disable entirely.
+# backlog windows — don't count). Default 0 = off (issue #1831): a per-login number
+# does not add up across logins and the real limit is memory, so the machine
+# admission below decides. Set one only to cap hard.
 # @label=Max sessions — all fleets @group=caps @tier=common @scope=global @edit=int @unit=sessions
-FLEET_GLOBAL_MAX_SESSIONS=8
+FLEET_GLOBAL_MAX_SESSIONS=0
 
 # MACHINE-WIDE ceiling across every LOGIN on this box (issue #1301). The cap above
 # counts only THIS login's fleets; on a shared machine five logins at 36 each add
@@ -2121,7 +2123,27 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Admission memory pressure @group=disk @tier=internal @scope=global @edit=str
 #FLEET_ADMIT_PRESSURE=warn          # warn (default) | critical | off — kernel pressure level that holds
 # @label=Admission load per core @group=disk @tier=internal @scope=global @edit=str
-#FLEET_ADMIT_LOAD_PER_CORE=2        # hold above this 1-min load/core; 0 = off (default: FLEET_LOADGEN_LOAD_PER_CORE if set, else 2)
+#FLEET_ADMIT_LOAD_PER_CORE=1.5      # hold above this 1-min load/core; 0 = off (default: FLEET_LOADGEN_LOAD_PER_CORE if set, else 1.5)
+# Since issue #1831 admission is the ONLY gate by default, so it answers "room for
+# one more?" in MB: one session's cost (the median RSS of the live agents × a
+# growth factor, never under a floor) must fit above the kept-back floor
+# (max(FLEET_ADMIT_MEM_FREE_PCT of RAM, FLEET_ADMIT_RESERVE_MB)) after paying for
+# every session admitted in the last FLEET_ADMIT_SETTLE_SECS (or still building
+# its window) — so a burst of spawns cannot all read the same free memory. After a
+# hold, FLEET_ADMIT_HYST_MB more must free up before it reopens. `fleet-doctor`'s
+# `admit` row and the backlog's 「余≈N」 show the room left.
+# @label=Admission reserve MB @group=disk @tier=internal @scope=global @edit=int @unit=MB
+#FLEET_ADMIT_RESERVE_MB=2048        # never hand out the last this-many MB (the % floor above wins when larger)
+# @label=Admission recovery MB @group=disk @tier=internal @scope=global @edit=int @unit=MB
+#FLEET_ADMIT_HYST_MB=1024           # after a hold, this much more must free up before it reopens
+# @label=Session cost MB (pinned) @group=disk @tier=internal @scope=global @edit=int @unit=MB
+#FLEET_ADMIT_SESSION_MB=0           # pin one session's cost; 0 = measure it
+# @label=Session cost floor MB @group=disk @tier=internal @scope=global @edit=int @unit=MB
+#FLEET_ADMIT_SESSION_MB_MIN=512     # a measured cost is never under this
+# @label=Session cost growth @group=disk @tier=internal @scope=global @edit=str
+#FLEET_ADMIT_SESSION_GROWTH=3       # median live-agent RSS × this = one session's cost (a transcript grows)
+# @label=Admission settle secs @group=disk @tier=internal @scope=global @edit=int @unit=s
+#FLEET_ADMIT_SETTLE_SECS=120        # an admitted session is reserved this long, until memory shows it
 
 # The load line on `fleet-doctor`'s `machine` check (issue #697): 1-minute load
 # average divided by core count. Warns at or above this, so the number means the

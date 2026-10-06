@@ -294,17 +294,26 @@ fi
 # the run keeps 4–6 busy within the cap and retries a full one next tick. A WARN
 # here read as advice to change the cap, and the plan page turned it into a
 # 「开跑前要处理」 the operator never asked for.
-fmax="${FLEET_MAX_SESSIONS:-0}"; gmax="${FLEET_GLOBAL_MAX_SESSIONS:-8}"
+fmax="${FLEET_MAX_SESSIONS:-0}"; gmax="${FLEET_GLOBAL_MAX_SESSIONS:-0}"
 case "$fmax" in ''|*[!0-9]*) fmax=0 ;; esac
-case "$gmax" in ''|*[!0-9]*) gmax=8 ;; esac
+case "$gmax" in ''|*[!0-9]*) gmax=0 ;; esac
 if [ "$fmax" -gt 0 ]; then
-  eff=$fmax; [ "$gmax" -lt "$eff" ] && eff=$gmax
-  src="FLEET_MAX_SESSIONS=$fmax, global $gmax"
+  eff=$fmax; [ "$gmax" -gt 0 ] && [ "$gmax" -lt "$eff" ] && eff=$gmax
+  src="FLEET_MAX_SESSIONS=$fmax"; [ "$gmax" -gt 0 ] && src="$src, global $gmax"
 else
   eff=$gmax
   src="this fleet sets no FLEET_MAX_SESSIONS, so the machine-wide $gmax applies"
 fi
-if [ "$eff" -lt 4 ]; then
+if [ "$eff" -eq 0 ]; then
+  # No count cap (the default since #1831): the machine's admission decides, and
+  # what it would let in right now is the number worth stating.
+  hr=$(fleet_machine_headroom 2>/dev/null) || hr=''
+  if [ -n "$hr" ]; then
+    pass slots "no count cap — the machine's admission decides: room for ~${hr%% *} more now at ~$(printf '%s' "$hr" | awk '{print $2}') MB each; the run keeps 4–6 busy within it"
+  else
+    pass slots "no count cap — the machine's admission decides (memory unreadable here); the run keeps 4–6 busy within it"
+  fi
+elif [ "$eff" -lt 4 ]; then
   pass slots "up to $eff concurrent session(s) — the run keeps as many busy as the cap allows ($src)"
 else
   pass slots "up to $eff concurrent sessions — the run keeps 4–6 busy within it ($src)"

@@ -285,7 +285,7 @@ EOF
 EOF
         ;;
       FLEET_GLOBAL_MAX_SESSIONS) cat <<'EOF'
-这个登录下所有 fleets 合计的最大会话数。用于保护账号、机器资源和 Claude/Codex 配额。
+这个登录下所有 fleets 合计的最大会话数。默认 0 = 不按数封顶：开不开新会话由机器的实测余量（内存、负载）决定；只在想硬性封顶时设。
 EOF
         ;;
       FLEET_AUTOFILL) cat <<'EOF'

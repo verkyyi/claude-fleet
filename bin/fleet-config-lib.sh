@@ -425,6 +425,12 @@ fcfg_label_i18n() {
     FLEET_ADMIT_MEM_FREE_PCT) printf '开新会话所需可用内存 %%' ;;
     FLEET_ADMIT_PRESSURE) printf '开新会话的内存压力上限' ;;
     FLEET_ADMIT_LOAD_PER_CORE) printf '开新会话的每核心负载上限' ;;
+    FLEET_ADMIT_RESERVE_MB) printf '开新会话保留内存 MB' ;;
+    FLEET_ADMIT_HYST_MB) printf '暂停后恢复所需余量 MB' ;;
+    FLEET_ADMIT_SESSION_MB) printf '单会话内存估计 MB（固定）' ;;
+    FLEET_ADMIT_SESSION_MB_MIN) printf '单会话内存估计下限 MB' ;;
+    FLEET_ADMIT_SESSION_GROWTH) printf '单会话内存增长系数' ;;
+    FLEET_ADMIT_SETTLE_SECS) printf '新会话内存计入前的预留秒数' ;;
     FLEET_MEM_PROC_HARD_PCT) printf '单进程内存上限 %%' ;;
     FLEET_MEM_EXEMPT_RE) printf '内存守护豁免规则' ;;
     FLEET_MEM_ORPHAN_MB) printf '遗留进程内存 MB' ;;

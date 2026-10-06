@@ -65,7 +65,7 @@
 #   FLEET_AUTOFILL              1 to enable for this fleet          (default 0/off)
 #                               (per repo in a multi-repo fleet, #799)
 #   FLEET_MAX_SESSIONS          per-fleet session ceiling           (default 0/unlimited)
-#   FLEET_GLOBAL_MAX_SESSIONS   system-wide ceiling (shared)        (default 8)
+#   FLEET_GLOBAL_MAX_SESSIONS   system-wide ceiling (shared)        (default 0 = off, #1831)
 #   FLEET_AUTOFILL_MAX_PER_TICK max spawns per fleet per tick       (default 1)
 #   FLEET_DISPATCH_LEASE_TTL    lease lifetime, seconds             (default 300)
 #   FLEET_DISPATCH_LEASE_DIR    lease dir             (default ~/.claude/leases)
@@ -112,8 +112,8 @@ log() { printf '%s fleet-dispatch: %s\n' "$(date '+%H:%M:%S' 2>/dev/null || echo
 # global headroom: FLEET_GLOBAL_MAX_SESSIONS - live sessions across ALL fleets.
 # 0 (unlimited) → a large sentinel so it never bounds the min().
 global_headroom() {
-  local gmax="${FLEET_GLOBAL_MAX_SESSIONS:-8}"
-  case "$gmax" in ''|*[!0-9]*) gmax=8;; esac
+  local gmax="${FLEET_GLOBAL_MAX_SESSIONS:-0}"
+  case "$gmax" in ''|*[!0-9]*) gmax=0;; esac
   [ "$gmax" -eq 0 ] && { echo 9999; return; }
   echo $(( gmax - $(fleet_session_count) ))
 }
