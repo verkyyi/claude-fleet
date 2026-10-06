@@ -272,14 +272,14 @@ eq "E: a live fleet is left alone" "$wins" "$(tf list-windows -t oc -F '#{window
 mkdir -p "$WORK/fhome/.local/bin"
 printf '#!/bin/sh\necho "fake-claude $*"\n' > "$WORK/fhome/.local/bin/claude"; chmod +x "$WORK/fhome/.local/bin/claude"
 printf '#!/bin/sh\necho "pinned-claude $*"\n' > "$WORK/pinned-claude"; chmod +x "$WORK/pinned-claude"
-out=$(env -i HOME="$WORK/fhome" PATH=/usr/bin:/bin FLEET_CONF_DIR="$WORK/fconf" FLEET_MOD=0 \
+out=$(env -i HOME="$WORK/fhome" PATH=/usr/bin:/bin FLEET_CONF_DIR="$WORK/fconf" FLEET_MOD=0 FLEET_AGENT_CFG=0 \
       bash "$BIN/fleet-claude.sh" --version 2>&1)
 CHECKS=$((CHECKS + 1)); case "$out" in "fake-claude "*" --version") ;; *) fail "F: ~/.local/bin/claude not found off PATH=/usr/bin:/bin" "$out" ;; esac
-out=$(env -i HOME="$WORK/fhome" PATH=/usr/bin:/bin FLEET_CONF_DIR="$WORK/fconf" FLEET_MOD=0 \
+out=$(env -i HOME="$WORK/fhome" PATH=/usr/bin:/bin FLEET_CONF_DIR="$WORK/fconf" FLEET_MOD=0 FLEET_AGENT_CFG=0 \
       FLEET_CLAUDE_BIN="$WORK/pinned-claude" bash "$BIN/fleet-claude.sh" -p hi 2>&1)
 CHECKS=$((CHECKS + 1)); case "$out" in "pinned-claude "*" -p hi") ;; *) fail "F: FLEET_CLAUDE_BIN does not win over PATH" "$out" ;; esac
 rm -f "$WORK/fhome/.local/bin/claude"
-out=$(env -i HOME="$WORK/fhome" PATH=/usr/bin:/bin FLEET_CONF_DIR="$WORK/fconf" FLEET_MOD=0 FLEET_TOOL_DIRS="$WORK/nowhere" \
+out=$(env -i HOME="$WORK/fhome" PATH=/usr/bin:/bin FLEET_CONF_DIR="$WORK/fconf" FLEET_MOD=0 FLEET_AGENT_CFG=0 FLEET_TOOL_DIRS="$WORK/nowhere" \
       bash "$BIN/fleet-claude.sh" --version 2>&1); rc=$?
 eq "F: nowhere → exit 127" 127 "$rc"
 CHECKS=$((CHECKS + 1)); case "$out" in *"claude not found — tried PATH $WORK/nowhere/claude"*) ;; *) fail "F: the miss does not name the places tried" "$out" ;; esac
