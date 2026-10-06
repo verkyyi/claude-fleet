@@ -847,6 +847,61 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    now → target → command ([HOST.md → All at once](HOST.md#tune)); show the user
    that plan, and run `--apply` (it asks per item) only on their yes.
 
+## 新同事第一次（issue #1901）
+
+A colleague gets ONE line from the operator — `curl -fsSL https://<入口>/install | sh` — and
+nothing else. What they then see, press and wait for, as
+`bin/fleet-onboard-drill.sh` recorded it on a throwaway login on m4
+(2026-10-06; 「要人帮」 = a step they would have had to ask someone about):
+
+| # | 看到什么 | 按了什么 | 用时 | 要人帮 |
+|---|---|---|---|---|
+| 1 | 终端提示符 | 粘贴 `curl -fsSL https://<入口>/install \| sh`，回车 | — | 否 |
+| 2 | 「这台电脑要做什么？ 1 只看、只派（推荐）· 2 也跑会话（承载）」 | 回车（1） | ~2s | 否 |
+| 3 | 「接入口吗？ 1 接（推荐）· 2 不接」 | 回车（1） | ~2s | 否 |
+| 4 | 下载、装 tmux、登记这台电脑 | 等 | ~2min | 否（#1901 前：每个文件一行 `curl: (56) … 502`，装不完 — 是） |
+| 5 | 企业微信二维码 + 验证码，600 秒有效 | 用企业微信扫码、点确认 | 本人 | 本人的一步 |
+| 6 | ✓ 证书 · ✓ ssh 配置 · ✓ 已登记到入口 · ✓ agent · 「能力: 基础 · 承载 未开 · 入口 接」 | 等 | ~20s | 否 |
+| 7 | 客户端：左边任务列表、右边主页 | —（装完自己打开） | ~5s | 否（#1901 前：`open terminal failed: can't use /dev/tty` — 是） |
+| 8 | 空列表 `No sessions — type a name` | prefix 空格 到列表，敲名字，回车；「开在哪」回车（自动） | — | 是，直到 #1927：空列表没有仓库可开 |
+
+What the drill found and where it went:
+
+- **The hub could not serve stable from China.** `raw.githubusercontent.com` is reset from the
+  hub's cluster while `api.github.com` and `codeload.github.com` answer, so every
+  `/install/stable/<sha>/<path>` waited 15 s and answered 502. The hub now loads a commit's
+  client files from ONE codeload tarball (raw per file only as the fallback,
+  `tokenledger/internal/api/fleet_stable.go`), and the installer stops asking the hub after its
+  first failed file and takes the rest from GitHub quietly (`bin/fleet-install.sh` `fetch`).
+- **The install's last step never opened the client.** `exec fleet </dev/tty` hands tmux a stdin
+  whose `ttyname()` is `/dev/tty`, which tmux refuses; the installer now hands it the terminal's
+  own device (stderr's).
+- **An empty list cannot open its first session** — #1927.
+- **A joined computer cannot be taken off the hub** except by `ccquota endpoint retire` on the
+  hub's own database — #1928.
+
+**The person's own steps** (never counted as 要人帮): the WeCom scan, and — when the hub has not
+yet given them a login on any machine — the hub's page says so; that one IS the operator's
+(`fleet_accounts.go`: only the operator assigns logins), so give the colleague a login BEFORE
+sending the line.
+
+**Re-run the drill after any change to the install path** (on a machine meant for drills — it
+opens a real OS login and runs sudo, so never from a fleet worker on that same machine):
+
+```sh
+sudo -v
+CCQUOTA_VIEWER_TOKEN=… ~/.claude/fleet/bin/fleet-onboard-drill.sh --hub https://<入口> \
+  --scan-cmd '~/.claude/fleet/bin/fleet-open.sh'      # the QR's confirm page to whoever scans
+~/.claude/fleet/bin/fleet-onboard-drill.sh --teardown <login>   # a run left up with --keep
+```
+
+It opens a bare login (no fleet clone, no daemons — a colleague's computer), types the line,
+answers every question with Enter, waits for the scan, opens a scratch session from the list,
+then revokes the device, retires the node (`FLEET_DRILL_RETIRE_CMD <ep_id>`, until #1928) and
+deletes the login; one PASS/FAIL line a step, `steps.md` (the table above) and one
+`screen-NN-<step>.txt` per screen in its log dir. Its selftest
+(`fleet-onboard-drill-selftest.sh`) drives only the refusals, against PATH shims.
+
 ## Publishing to installs — the `stable` tag (发布到各安装)
 
 Merging to `master` does not, by itself, reach any machine. What installs follow

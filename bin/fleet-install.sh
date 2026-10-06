@@ -270,13 +270,31 @@ trap 'rm -rf "$tmp"; [ -z "$STG" ] || rm -rf "$STG"; [ -z "$LOCK" ] || rm -rf "$
 # Each file's SHA-256 rides in a header from the hub; a download that does not
 # match it (a proxy's error page, a cut connection) is refused rather than
 # installed.
+
+# fetch_from <url> <out>: FROM's copy — quiet and bounded when ALT backs it up
+fetch_from() {
+  if [ -n "$ALT" ]; then
+    curl -fsL --max-time 30 -D "$2.hdr" "$1" -o "$2"
+  else
+    curl -fsSL -D "$2.hdr" "$1" -o "$2"
+  fi
+}
+
 fetch() {
   src_url="$FROM/${2:-$1}"
   mkdir -p "$tmp/$(dirname "$1")"
-  if ! curl -fsSL -D "$tmp/$1.hdr" "$src_url" -o "$tmp/$1"; then
+  # Once FROM failed a file and ALT served it, the rest come from ALT straight
+  # (issue #1901): a hub that cannot reach GitHub's raw host answered every
+  # file with a 15 s 502 — ~300 of them, each one a `curl: (56)` line on the
+  # newcomer's screen. With an ALT the first try is quiet (no -S).
+  if [ "${ALT_ONLY:-0}" = 1 ]; then
+    curl -fsSL -D "$tmp/$1.hdr" "$ALT/${2:-$1}" -o "$tmp/$1" || { say "fleet-install: 下载 $ALT/${2:-$1} 失败"; exit 1; }
+  elif ! fetch_from "$src_url" "$tmp/$1"; then
     if [ -z "$ALT" ] || ! curl -fsSL -D "$tmp/$1.hdr" "$ALT/${2:-$1}" -o "$tmp/$1"; then
       say "fleet-install: 下载 $src_url 失败"; exit 1
     fi
+    ALT_ONLY=1
+    say "fleet: 入口这会儿给不了 stable 的文件，其余直接从 GitHub 下（${ALT}）"
   fi
   want="$(tr -d '\r' <"$tmp/$1.hdr" | awk 'tolower($1)=="x-ccquota-sha256:"{print $2}')"
   if [ -n "$want" ]; then
@@ -684,6 +702,11 @@ if [ "${FLEET_INSTALL_NO_RUN:-}" = 1 ]; then
 fi
 export PATH="$BIN:$PATH"
 if [ "$TTY" = 1 ]; then
+  # The terminal's own device, not /dev/tty (issue #1901): stdin opened as
+  # /dev/tty has ttyname() «/dev/tty», which tmux refuses — `open terminal
+  # failed: can't use /dev/tty` was the last line of every `curl | sh`. stderr
+  # is that terminal whenever there is one to show this on.
+  if [ -t 2 ]; then exec "$BIN/fleet" 0<&2; fi
   exec "$BIN/fleet" </dev/tty
 fi
 exec "$BIN/fleet"
