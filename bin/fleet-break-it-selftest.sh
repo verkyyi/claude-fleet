@@ -35,6 +35,7 @@
 #   client-kill-server                              bin/fleet (run again)
 #   hub-unreachable                                 bin/fleet, fleet-client-badge.sh
 #   static-forward / proxy-orphan                   bin/fleet-remote-view.sh (run), fleet-shell.sh
+#   reconnect-stale-view / reconnect-mouse          bin/fleet-remote-view.sh (run, open, select)
 #   client-files-swapped                            bin/fleet-client-update.sh (tick), fleet-shell.sh reload
 # Shell half — a sandbox fleet on -L kf (TMUX_TMPDIR under $WORK), the real wrapper:
 #   shell-kill-fleet                                bin/tmux-shim/tmux, fleet-session-wrap.sh, hooks/bash-guard.py
@@ -913,13 +914,18 @@ if [ -n "${mux:-}" ] && [ -z "$clear" ]; then   # the config's RemoteForward 222
   echo 'muxclient: master forward request failed' >&2
   exit 255
 fi
-case "$*" in *" attach"*) [ "${RV_HANG:-}" = 1 ] && { printf '%s\n' $$ > "$RV_DIR/attach.pid"; exec sleep 300; }; sleep 0.3 ;; esac
+case "$*" in *" attach"*)
+  # the line is down (issue #1876): the connect fails, as ssh says it
+  [ -f "$RV_DIR/down" ] && { echo 'ssh: connect to host m9 port 22: Network is unreachable' >&2; exit 255; }
+  # the far end's tmux turns the mouse on in the pane it draws (issue #1876)
+  [ "${RV_MOUSE:-}" = 1 ] && printf '\033[?1000h\033[?1002h\033[?1006hFAR-END\n'
+  [ "${RV_HANG:-}" = 1 ] && { printf '%s\n' $$ > "$RV_DIR/attach.pid"; exec sleep 300; }; sleep 0.3 ;; esac
 exit 0
 SH
   chmod +x "$WORK/rv/ssh"
   python3 -c 'import socket, sys
 s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$WORK/rv/tmp/warm/m9.sock" 2>/dev/null
-  : > "$WORK/rv/ssh.log"; rm -f "$WORK/rv/attach.pid"
+  : > "$WORK/rv/ssh.log"; rm -f "$WORK/rv/attach.pid" "$WORK/rv/down"
 }
 RVWID=00000000-0000-0000-0000-000000000000/issue-1
 rv_env() {
@@ -950,6 +956,98 @@ drill_proxy_orphan() {
   until_ok "$CAP" sh -c "! kill -0 $run 2>/dev/null && ! kill -0 $att 2>/dev/null" \
     || { kill -KILL "$run" "$att" 2>/dev/null; WHY="the pane is gone, its run loop / attach still live after ${CAP}s"; return 1; }
   SECS=$(since "$t0"); WHAT="窗格关掉，run 循环和它的 ssh 一起退出"
+}
+
+# A dropped line, then a switch (issue #1876). The proxy pane (run --shell, on
+# the warm master) is attached to worker 1; the line goes down (the attach dies,
+# reconnects are refused), comes back while the loop still waits out its
+# back-off, and the person clicks worker 2 of the same machine. Before: `open`
+# saw the warm master answer `-O check`, sent a one-shot `select` that the far
+# end "did" in the fleet session (no view session was live) and kept the pane —
+# whose next round attached worker 1 again. The recovery: the pane attaches
+# worker 2 within CAP seconds of the click.
+rv_tmux() { printf '#!/bin/sh\nexec "%s" -S "%s" "$@"\n' "$REAL_TMUX" "$1" > "$WORK/rv/tbin/tmux"; chmod +x "$WORK/rv/tbin/tmux"; }
+rv_drop() {   # <socket> <session> — the line goes down; true once the wait page shows
+  : > "$WORK/rv/down"
+  kill "$(cat "$WORK/rv/attach.pid" 2>/dev/null)" 2>/dev/null
+  until_ok 5 sh -c "\"$REAL_TMUX\" -S \"$1\" capture-pane -p -t \"=$2:\" | grep -q 回车立即重连"
+}
+rv_reconnect_stale_view() {
+  CAP=3; local t0 so="$WORK/sock-rs" wid2="${RVWID%/*}/issue-2" w
+  rv_shim; mkdir -p "$WORK/rv/tbin" "$WORK/rv/tmp/.claude-dash/global"; rv_tmux "$so"
+  printf 'wid:%s\037m9\037online\0372\037acme/app\037working\037claude\037第二个\n' "$wid2" \
+    > "$WORK/rv/tmp/.claude-dash/global/remote_rs"
+  # shellcheck disable=SC2046  # rv_env is KEY=VALUE words on purpose (no spaces in $WORK)
+  env $(rv_env) RV_HANG=1 "$REAL_TMUX" -S "$so" -f /dev/null new-session -d -s rs -x 100 -y 20 \
+    "bash $BIN/fleet-remote-view.sh run --shell m9 $RVWID"
+  w=$("$REAL_TMUX" -S "$so" display-message -p -t '=rs:' '#{window_id}')
+  "$REAL_TMUX" -S "$so" set-window-option -t "$w" @remote "m9:$RVWID"
+  until_ok 5 test -s "$WORK/rv/attach.pid" || { WHY="the proxy's first attach never came up"; return 1; }
+  rv_drop "$so" rs || { WHY="the drop page never showed: $("$REAL_TMUX" -S "$so" capture-pane -p -t '=rs:' | grep . | tr '\n' '|')"; return 1; }
+  rm -f "$WORK/rv/down"; : > "$WORK/rv/ssh.log"        # the line is back; the loop still waits
+  t0=$(now)
+  # shellcheck disable=SC2046
+  env $(rv_env) PATH="$WORK/rv/tbin:$PATH" FLEET_SESSION=rs CCQUOTA_FLEET=1 FLEET_SHELL=1 \
+    bash "$BIN/fleet-remote-view.sh" open "wid:$wid2" > /dev/null 2>&1
+  until_ok "$CAP" sh -c "grep ' attach' \"$WORK/rv/ssh.log\" | tail -n 1 | grep -q 'issue-2'" \
+    || { WHY="the right pane did not follow the switch in ${CAP}s — attached: $(grep -o "attach.*" "$WORK/rv/ssh.log" | tail -n 1 | cut -c1-90); shows: $("$REAL_TMUX" -S "$so" capture-pane -p -t '=rs:' | grep . | tail -n 2 | tr '\n' '|')"; return 1; }
+  SECS=$(since "$t0"); WHAT="断线重连期间切换，右侧立即换到新会话"
+}
+drill_reconnect_stale_view() {   # its own server goes with it: a later drill's shim must not feed it
+  local rc; rv_reconnect_stale_view; rc=$?
+  "$REAL_TMUX" -S "$WORK/sock-rs" kill-server 2>/dev/null
+  return $rc
+}
+# The same drop with the far end's mouse on (issue #1876): the outer tmux keeps
+# handing the pane SGR mouse reports nobody reads, and the wait page echoed them
+# — a drag across the right pane wrote `^[[<32;14;6M…` on the screen. The
+# recovery: the pane's mouse reporting is off and a drag leaves no `[<` behind.
+rv_reconnect_mouse() {
+  CAP=3; local t0 so="$WORK/sock-rm" p cap
+  rv_shim
+  # shellcheck disable=SC2046
+  env $(rv_env) RV_HANG=1 RV_MOUSE=1 "$REAL_TMUX" -S "$so" -f /dev/null new-session -d -s rm -x 100 -y 20 \
+    "bash $BIN/fleet-remote-view.sh run --shell m9 $RVWID"
+  "$REAL_TMUX" -S "$so" set-option -g mouse on
+  p=$("$REAL_TMUX" -S "$so" display-message -p -t '=rm:' '#{pane_id}')
+  until_ok 5 sh -c "[ \"\$(\"$REAL_TMUX\" -S \"$so\" display-message -p -t $p '#{mouse_any_flag}')\" = 1 ]" \
+    || { WHY="the far end's mouse never came on in the pane"; return 1; }
+  t0=$(now)
+  rv_drop "$so" rm || { WHY="the drop page never showed"; return 1; }
+  python3 - "$REAL_TMUX" "$so" <<'PYDRAG'
+import fcntl, os, pty, select, signal, struct, sys, termios, time
+tmux, so = sys.argv[1:3]
+pid, fd = pty.fork()
+if pid == 0:
+    os.environ.update(TERM="xterm-256color", LANG="en_US.UTF-8", LC_ALL="en_US.UTF-8")
+    os.environ.pop("TMUX", None)
+    os.execvp(tmux, [tmux, "-S", so, "attach-session", "-t", "=rm"])
+fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 20, 100, 0, 0))
+def pump(secs):
+    end = time.time() + secs
+    while time.time() < end:
+        r, _, _ = select.select([fd], [], [], 0.05)
+        if r:
+            try: os.read(fd, 65536)
+            except OSError: return
+pump(0.3)                     # inside the wait page's 2 s back-off
+for seq in (b"\x1b[<0;10;5M", b"\x1b[<32;12;5M", b"\x1b[<32;14;6M", b"\x1b[<0;14;6m", b"\x1b[<0;20;8M", b"\x1b[<0;20;8m"):
+    os.write(fd, seq); pump(0.05)
+pump(0.2)
+try: os.kill(pid, signal.SIGTERM)
+except OSError: pass
+PYDRAG
+  "$REAL_TMUX" -S "$so" send-keys -t "$p" -X cancel 2>/dev/null   # a drag the outer tmux took: copy mode
+  cap=$("$REAL_TMUX" -S "$so" capture-pane -p -t "$p")
+  case "$cap" in *'[<'*|*';6M'*|*';5M'*) WHY="the drag left mouse reports on the screen: $(printf '%s' "$cap" | grep -F '[<' | head -n 2 | tr '\n' '|')"; return 1 ;; esac
+  [ "$("$REAL_TMUX" -S "$so" display-message -p -t "$p" '#{mouse_any_flag}')" = 0 ] \
+    || { WHY="the dropped pane still has the far end's mouse reporting on"; return 1; }
+  SECS=$(since "$t0"); WHAT="断线后右侧不再收鼠标上报，拖动、点击不留乱码"
+}
+drill_reconnect_mouse() {   # its own server goes with it: a later drill's shim must not feed it
+  local rc; rv_reconnect_mouse; rc=$?
+  "$REAL_TMUX" -S "$WORK/sock-rm" kill-server 2>/dev/null
+  return $rc
 }
 
 # The client's files replaced under the running client with no reload (issue
