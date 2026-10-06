@@ -60,7 +60,7 @@ mkdir -p "$CONF" "$HUBD/v1/fleet" "$HUBD/new"
 install_client() {
   rm -rf "$ROOT" "$ROOT.next" "$ROOT.prev" "$ROOT.next.lock" "$ROOT.versions" "$STATE"
   mkdir -p "$ROOT/bin"
-  cp "$BIN/fleet-client-update.sh" "$ROOT/bin/"
+  cp "$BIN/fleet-client-update.sh" "$BIN/fleet-versions-lib.sh" "$ROOT/bin/"   # the switch ships beside it (#1900)
   printf '#!/bin/sh\necho OLD\n' > "$ROOT/bin/fleet"; chmod +x "$ROOT/bin/fleet"
   printf 'version=%s\ncompat=%s\ncommit=c0ffee1\nhub=%s\n' "$1" "${2:-1}" "$HUB" > "$ROOT/.client-version"
 }
@@ -82,7 +82,7 @@ v=$(sed -n 's/.*"client_version":"\([^"]*\)".*/\1/p' "$d/version")
 c=$(sed -n 's/.*"commit":"\([^"]*\)".*/\1/p' "$d/version")
 printf 'version=%s\ncompat=1\ncommit=%s\nhub=%s\n' "$v" "$c" "$FLEET_HUB_URL" > "$FLEET_INSTALL_HOME/.client-version"
 SH
-cp "$BIN/fleet-client-update.sh" "$HUBD/new/"
+cp "$BIN/fleet-client-update.sh" "$BIN/fleet-versions-lib.sh" "$HUBD/new/"
 printf '#!/bin/sh\necho NEW "$@"\n' > "$HUBD/new/fleet"
 printf 'FLEET_HUB_URL=%s\n' "$HUB" > "$CONF/fleet.conf"
 cat > "$HUBD/v1/fleet/client-settings" <<'JSON'
