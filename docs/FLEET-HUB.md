@@ -265,7 +265,11 @@ moment you switch windows. Data: the same refresh loop writes, every
 fleet_version age mem_used_mb mem_total_mb ver_state`) and `global/hub_limits`
 (`/v1/limits?account=all`: `label pct5h pctweek account_uuid hub_label`, the
 label being this login's `accounts/<label>.conf` whose `CCQUOTA_ACCOUNT` is that
-uuid, else the hub's). Both are viewer routes; a login whose identity (the
+uuid, else the hub's). Beside `hub_nodes` it writes `global/hub_repos` (#1927):
+every machine's `repos` — the repos its registered fleets host, narrowed like the
+machines — one `owner/name` per line, which the client's list offers as the repo
+of a first session while it shows no repo heading yet (no file from a hub older
+than `repos`). Both are viewer routes; a login whose identity (the
 #1475 ladder) is a connection certificate asks the hub's cert door instead —
 `POST /v1/fleet/summary` (#1502), signed under `fleet-summary@claude-fleet` like
 the session list, ONE body carrying both `machines` and `per_account`, narrowed

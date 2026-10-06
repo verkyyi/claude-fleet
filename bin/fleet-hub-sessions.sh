@@ -899,6 +899,9 @@ EOF
 #     (/v1/nodes `machines`: one load per machine; fleet_version is its newest
 #     login's; age is seconds since its last heartbeat when written; ver_state
 #     is that version's word against the stable mark — issue #644, below)
+#   $G/hub_repos   #ts<US><epoch>, then one owner/name per line: the repos those
+#     machines' fleets host (`repos`, issue #1927) — the sidebar's candidates
+#     for a first session while its list has no repo heading
 #   $G/hub_limits  #ts<US><epoch>, then one line per subscription with a reading:
 #     label<US>pct5h<US>pctweek<US>account_uuid<US>hub_label
 #     (/v1/limits?account=all; `label` is this login's accounts/<label>.conf name
@@ -1083,6 +1086,22 @@ fd, tmp = tempfile.mkstemp(dir=os.path.dirname(out), prefix=".hubnodes.")
 with os.fdopen(fd, "w", encoding="utf-8") as f:
     f.write("".join(lines))
 os.replace(tmp, out)
+# hub_repos (issue #1927): every repo a fleet on these machines hosts, the
+# sidebar's repo candidates while its list has no heading yet. A hub older
+# than `repos` sends no key: then no file, and the sidebar says what it did.
+hub_repos = os.path.join(os.path.dirname(out), "hub_repos")
+if machines and not any(isinstance(m, dict) and "repos" in m for m in machines):
+    try:
+        os.unlink(hub_repos)
+    except OSError:
+        pass
+    sys.exit(0)
+repos = sorted({r for m in machines if isinstance(m, dict) for r in (m.get("repos") or [])
+                if isinstance(r, str) and re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", r)})
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(out), prefix=".hubrepos.")
+with os.fdopen(fd, "w", encoding="utf-8") as f:
+    f.write("#ts\x1f%d\n" % now + "".join(r + "\n" for r in repos))
+os.replace(tmp, hub_repos)
 PY
   fi
   rm -f "$nj"
