@@ -191,7 +191,7 @@ ok; [ "$(printf '%s\n' "$row" | head -1)" = "FID	$PF" ] && [ "$(printf '%s\n' "$
 row=$(printf 'not-a-uuid|wrk-1|r/x|issue-7|%s|7|done|-|-|0|-\n' "$WORK/app-scratch-5" \
       | python3 "$BIN/.fleet-restore-resolve.py" "$WORK/main" --lead --sid --fid 2>/dev/null)
 ok; ! printf '%s\n' "$row" | grep -q '^FID' || fail "E: a malformed identity writes no FID row" "$row"
-ok; grep -q '"#{@fleet_id}|#{@cc_session_id}|' "$BIN/fleet-restore.sh" && grep -q -- '--lead --sid --fid' "$BIN/fleet-restore.sh" \
+ok; grep -q '|#{@fleet_id}|#{@cc_session_id}|' "$BIN/fleet-restore.sh" && grep -q -- '--lead --sid --fid' "$BIN/fleet-restore.sh" \
   || fail "E: the snapshot feeds @fleet_id to the resolver"
 ok; grep -q "wopt \"\$wid\" '#{@fleet_id}'" "$BIN/fleet-migrate.sh" && grep -q '@fleet_id "$fid"' "$BIN/fleet-migrate.sh" \
   || fail "E: fleet-migrate.sh carries @fleet_id to the new window"

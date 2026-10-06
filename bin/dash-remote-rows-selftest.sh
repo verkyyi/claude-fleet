@@ -612,7 +612,7 @@ eq   "E: this fleet's own session is a LOCAL row (#1480): local=1, this machine'
      "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$U/issue-1420" '$1 == w { print $8 "|" $11 "|" $12 "|" $2 "|" $3 }')"
 eq   "E: a row on another machine says local=0, no wid" "0|" \
      "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$F/issue-1423" '$1 == w { print $11 "|" $12 }')"
-eq   "E: every row carries the six appended fields (local, wid, via, busy, born, cfg — #1480, #1488, #1607, #1750, #1783)" "" "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" '/^wid:/ && NF != 16')"
+eq   "E: every row carries the seven appended fields (local, wid, via, busy, born, cfg, reap — #1480, #1488, #1607, #1750, #1783, #1902)" "" "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" '/^wid:/ && NF != 17')"
 eq   "E: a hub answer's rows are via=hub" "" "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" '/^wid:/ && $13 != "hub"')"
 hasnt "E: another login's session is not shown" "$R" "theirs"
 hasnt "E: a session with no worker_id is not shown" "$R" "no-id"
