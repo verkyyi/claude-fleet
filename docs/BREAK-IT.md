@@ -18,6 +18,8 @@
 | 会话里连按 Ctrl+C 退出 | 同上 | 同上，恢复页写「按了 Ctrl+C」 | `session-ctrl-c` |
 | 会话进程被杀（kill -9、OOM） | 同上 | 同上，恢复页写「被结束（信号 9）」 | `session-killed` |
 | 最后一个窗口关闭（home 的 shell 退出、最后一个会话结束） | tmux 服务器随之退出，整台 fleet 停 | 服务器 `exit-empty off`，home 窗格死了立即重开 shell（#1784）；tmux ≤ 3.4 忙时会漏掉 shell 退出的信号、窗格停在死状态，diskguard 节拍的 `home_watch` 补救重开（#1801） | `last-window` |
+| 改窗口名（`prefix ,`、`rename-window`）：把 home 改成别的名字，或把执行会话改叫 `home`、改掉它恢复时用的名字 | fleet 按名字认窗口：改名后的 home 漏了 SIGCHLD 时节拍不再补救、整个 fleet 不再被认作 fleet（上限计数归零）；改叫 `home` 的执行会话不算进上限；恢复认不出改名的会话，再开一个重复的 | 认窗口只看窗口自己的 `@fleet_role`（home / panel / worker，开窗时打上，读一律经 `fleet_win_role`），没打过的老窗口才按名字；恢复先按 `@fleet_id` 认活着的会话（#1844） | `window-renamed` |
+| 执行会话的窗格被 `prefix !`（break-pane）拆成单独的窗口 | 身份（`@issue`、`@fleet_id`、`@cc_session_id`…）留在原窗口、跟着的只有进程：新窗口谁也不认，原窗口顶着身份跑一个 shell；会话退出后恢复页拿不到对话 id，↵ 续不上 | 节点配置的 `window-linked` hook 看到 wrapper 窗格（`@wrap_win`）到了新窗口，`fleet-window-carry.sh` 把原窗口的 `@` 选项和名字搬过去，原窗口改名 `<名>-shell`、记作 panel（#1844） | `break-pane` |
 | 节点 tmux 服务器被关（`kill-server`、崩溃） | 整台 fleet 停，没人拉起 | diskguard 节拍跑 `fleet-restore.sh --auto`，只拉起没做完的会话（#1784） | `kill-server` |
 | 节点 tmux 服务器退出时被一个不回应的客户端（网络冻住的 ssh 里的 attach）拖住 | 服务器不死不活：每个新连接都被它接下就关，`tmux -L fleet` 的一切（含 `fleet-up.sh`）都报 `server exited unexpectedly`，只能手工 `rm` socket | `fleet_socket_heal` 认出这种 socket，清掉并记一行（restore.log、`socket-heal.log`），`fleet-restore.sh --auto` / `fleet-up.sh` 随即起新服务器；守护进程的「no fleet sessions found」带上 WEDGED，`fleet-doctor` 的 `socket` 行报出来（#1729） | `wedged-socket` |
 | 磁盘满 | 拉起 → 写满 → 再崩的循环 | `--auto` 先问磁盘门：低于下限只记一行不拉起；腾出空间后下一拍拉起 | `disk-full` |

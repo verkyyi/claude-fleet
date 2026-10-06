@@ -685,6 +685,7 @@ TM set-window-option -t "$win" @issue "$num" 2>/dev/null   # bind window ↔ iss
 # every restore / migrate / move after — the address its children report to.
 fleet_window_fid "$SESS" "$win" "$SOCK" >/dev/null 2>&1 || :
 fleet_window_born "$SESS" "$win" "$SOCK" >/dev/null 2>&1 || :   # its place on the list (#1750)
+fleet_win_role_stamp "$win" worker "$SOCK"   # what it IS, whatever it is renamed to (#1844)
 # The window's repo + worktree (issue #789) — every worker carries both, so any
 # consumer resolves its repo via fleet_window_repo without a git read.
 [ -n "$REPO" ] && TM set-window-option -t "$win" @repo "$REPO" 2>/dev/null

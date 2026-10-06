@@ -75,7 +75,8 @@ if [ "${FLEET_DASH_WINDOW:-0}" != 1 ]; then
     if [ "$HUB_PRINT_CMD" = cwd ]; then printf '%s\n' "$BASE"; else printf 'home\n'; fi
     exit 0
   fi
-  win=$(tmux -L "$SOCK" list-windows -t "$SESS" -F '#{window_id} #{window_name}' 2>/dev/null | awk '$2=="home"{print $1; exit}')
+  # By role, not name (issue #1844): a home the person renamed is still home.
+  win=$(tmux -L "$SOCK" list-windows -t "$SESS" -F "#{window_id} $FLEET_ROLE_FMT" 2>/dev/null | awk '$2=="home"{print $1; exit}')
   if [ -z "$win" ]; then
     win=$(tmux -L "$SOCK" new-window -P -F '#{window_id}' -t "$SESS:" -n home -c "$BASE") || exit 0
     # A name tmux's automatic-rename must not change: the panel rules key on it.
@@ -127,6 +128,7 @@ done
 # `tmux-dashboard.sh` runs ON this socket (tmux new-window inherits it via $TMUX),
 # so it self-marks @dash correctly with bare tmux.
 win=$(tmux -L "$SOCK" new-window -P -F '#{window_id}' -t "$SESS:" -n plan -c "$BASE" "$DASH_CMD")
+fleet_win_role_stamp "$win" panel "$SOCK"   # a panel by role, whatever it is renamed to (#1844)
 # Re-affirm the top pane-border on this window. Since issue #267 the conf sets
 # pane-border-status top GLOBALLY (every window shows a top-of-window header), so
 # this is now a redundant safety net for a hub built before that conf is live.
