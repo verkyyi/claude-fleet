@@ -112,6 +112,7 @@ const defaultKfDest = "alerts.prod"
 // redone, the vault unlocked) or a machine came back.
 var recoverKinds = map[string]bool{
 	"cred_vault_locked": true, "cred_setup_token": true, "account_login": true, "stale_agent": true,
+	"compute_region": true,
 }
 
 // FindingNotifier is the push side of the findings page: what to send where.

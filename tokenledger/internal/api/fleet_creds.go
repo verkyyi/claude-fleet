@@ -57,6 +57,9 @@ const (
 	LeaseRevoked     = "revoked"
 	LeaseNoPrincipal = "no_principal"
 	LeaseVaultOff    = "vault_off"
+	// LeaseComputeOff: the login only coordinates (claude-fleet#1719,
+	// CCQUOTA_FLEET_COMPUTE=0) — it borrows no account; it uses its own.
+	LeaseComputeOff = "compute_off"
 	// LeaseVaultLocked: the vault's key lives in KMS and KMS has not
 	// unwrapped it (claude-fleet#1417). Nothing is issued meanwhile — there
 	// is no plain key to fall back to — and the hub raises a critical finding.
@@ -134,6 +137,12 @@ func (s *Server) handleNodeCredentials(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	hb, _, _ := s.nodeStatusOf(ep.ID, time.Now())
+	settings, _ := s.Store.FleetSettings()
+	if cv := s.computeOf(ep.ID, hb, settings, time.Now()); cv.Off {
+		deny(http.StatusForbidden, LeaseComputeOff, "", osUser+" on "+host+" only coordinates — "+cv.Why+": no credentials are leased to it")
+		return
+	}
 	principal, err := s.Store.PrincipalForLogin(host, osUser)
 	if errors.Is(err, store.ErrNoPrincipal) {
 		deny(http.StatusForbidden, LeaseNoPrincipal, "", "no active fleet account is "+osUser+" on "+host)

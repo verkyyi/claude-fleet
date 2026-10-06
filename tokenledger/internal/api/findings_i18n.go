@@ -83,6 +83,10 @@ var findingTitles = map[string]i18n.Text{
 		i18n.EN:   "account {account} ({provider} · {where}) needs re-login — run `{command}`",
 		i18n.ZhCN: "账号 {account}（{provider} · {where}）需要重新登录 —— 请运行 `{command}`",
 	},
+	findings.TmplComputeRegion: {
+		i18n.EN:   "{node} stopped running sessions — its egress region {loc} is not supported",
+		i18n.ZhCN: "{node} 已停止在本机跑会话 —— 出口地区 {loc} 不在支持范围",
+	},
 }
 
 var findingDetails = map[string]i18n.Text{
@@ -145,6 +149,10 @@ var findingDetails = map[string]i18n.Text{
 		i18n.ZhCN: "{date} 已到期",
 	},
 	findings.TmplAccountReauth: {
+		i18n.EN:   "{reason}",
+		i18n.ZhCN: "{reason}",
+	},
+	findings.TmplComputeRegion: {
 		i18n.EN:   "{reason}",
 		i18n.ZhCN: "{reason}",
 	},

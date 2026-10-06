@@ -74,6 +74,17 @@ type nodeConn struct {
 	// one token refresh to the provider from its own network and hands the
 	// answer back (claude-fleet#1490). Set once, before the conn is published.
 	canOAuthRefresh bool
+	// computeOff is the hello's Compute=false (claude-fleet#1719): this login
+	// only coordinates. Set once, before the conn is published, with the
+	// hello's force and probe (claude-fleet#1720).
+	computeOff   bool
+	computeForce bool
+	probe        *control.NodeProbe
+	// beatSaidOn: a heartbeat on this link said compute=true — `fleet node
+	// compute on` overrode the hello's off without a reconnect (#1720).
+	beatSaidOn atomic.Bool
+	// forceAudited: this link's --force is already in fleet_audit.
+	forceAudited atomic.Bool
 	// osUser is the login this agent runs as, refreshed by heartbeats.
 	osUser atomic.Value // string
 	// pending routes read and write replies to their waiter.
@@ -268,7 +279,8 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 
 	nc := &nodeConn{conn: conn, admin: hp.Admin && s.isFleetAdmin(ep.OSUser), canRead: hp.HasCap(control.CapRead),
 		canWrite: hp.HasCap(control.CapWrite), canRelay: hp.HasCap(control.CapRelay),
-		canMove: hp.HasCap(control.CapMove), canSSHRelay: hp.HasCap(control.CapSSHRelay)}
+		canMove: hp.HasCap(control.CapMove), canSSHRelay: hp.HasCap(control.CapSSHRelay),
+		computeOff: !control.ComputeOn(hp.Compute), computeForce: hp.ComputeForce, probe: hp.Probe}
 	// The refresh relay is an ADMIN role: a node that offers it without
 	// being on the hub's admin list is never handed a refresh token's form.
 	nc.canOAuthRefresh = nc.admin && hp.HasCap(control.CapOAuthRefresh)
@@ -281,6 +293,7 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	s.nodes.put(ep.ID, nc)
 	defer s.nodes.drop(ep.ID, nc)
+	s.auditComputeForce(*ep, nc, hp.ComputeForce, hp.Probe, time.Now())
 	if nc.canRelay {
 		// Relays that waited for this node while it was away go now
 		// (claude-fleet#1421).
@@ -346,6 +359,12 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 			// without reconnecting is re-judged on its next beat.
 			nc.proto.Store(int64(m.Proto))
 			now := time.Now()
+			if hb.Compute != nil && *hb.Compute {
+				nc.beatSaidOn.Store(true)
+			} else if hb.Compute != nil {
+				nc.beatSaidOn.Store(false)
+			}
+			s.auditComputeForce(*ep, nc, hb.ComputeForce, hb.Probe, now)
 			if err := s.Store.NodeHeartbeat(ep.ID, hb.Hostname, hb.OSUser, hb.MachineID,
 				m.Proto, string(m.Payload), now); err != nil {
 				log.Printf("node %s: record heartbeat: %v", ep.ID, err)
@@ -439,6 +458,18 @@ type NodeView struct {
 	// SSHCA is an admin node's last answer to the SSH user CA install
 	// (claude-fleet#1412): sent | trusted… | failed….
 	SSHCA string `json:"ssh_ca,omitempty"`
+	// ComputeOff is a login that only coordinates (claude-fleet#1719,
+	// CCQUOTA_FLEET_COMPUTE=0): placement skips it and its credential lease is
+	// refused. The /nodes page reads it as 「只协调」.
+	ComputeOff bool `json:"compute_off,omitempty"`
+	// ComputeWhy says why when ComputeOff; ComputeAuto is a login the team
+	// policy fleet.compute_auto opened; ComputeClosed is one that asked to run
+	// and whose egress region closed it; Probe is its last probe
+	// (claude-fleet#1720). All absent with no probe and no policy.
+	ComputeWhy    string             `json:"compute_why,omitempty"`
+	ComputeAuto   bool               `json:"compute_auto,omitempty"`
+	ComputeClosed bool               `json:"compute_closed,omitempty"`
+	Probe         *control.NodeProbe `json:"probe,omitempty"`
 
 	Load1         float64 `json:"load1"`
 	NCPU          int     `json:"ncpu"`
@@ -496,6 +527,9 @@ type MachineView struct {
 	MemTotal        uint64   `json:"mem_total_bytes"`
 	// LastHeartbeat is the newest from any login.
 	LastHeartbeat *time.Time `json:"last_heartbeat"`
+	// ComputeOff: every login of the machine only coordinates
+	// (claude-fleet#1719) — nothing is placed on it.
+	ComputeOff bool `json:"compute_off,omitempty"`
 	// Kind is ephemeral when the machine is a SPOT node (claude-fleet#1428).
 	Kind string `json:"kind"`
 	// Maintenance is the 维护中 record when the operator flagged the machine
@@ -572,6 +606,13 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 				v.Status = "maintenance"
 			}
 		}
+		var hb control.Heartbeat
+		_ = json.Unmarshal([]byte(n.StatusJSON), &hb)
+		cv := s.computeOf(n.EndpointID, hb, settings, now)
+		v.ComputeOff, v.ComputeAuto, v.ComputeClosed, v.Probe = cv.Off, cv.Auto, cv.Closed, cv.Probe
+		if cv.Off {
+			v.ComputeWhy = cv.Why
+		}
 		if c := s.nodes.get(n.EndpointID); c != nil {
 			v.Connected, v.Admin = true, c.admin
 			if c.admin {
@@ -597,6 +638,8 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 		// Heard: online, or maintenance when flagged — the machine's word is
 		// its logins' word, since the flag is per machine.
 		m.Status, m.Maintenance = v.Status, v.Maintenance
+		// 只协调 is the machine's word only when every heard login says it.
+		m.ComputeOff = v.ComputeOff && (m.Online == 0 || m.ComputeOff)
 		m.Online++
 		// One unreadable login makes the machine's count unknown: a sum
 		// that silently drops it would read a busy machine as idle.

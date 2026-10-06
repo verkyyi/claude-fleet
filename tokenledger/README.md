@@ -695,6 +695,40 @@ online, then clones claude-fleet at `stable` and runs
 new code unspent. `CCQUOTA_FLEET_JOIN_SCRIPT_URL` changes the URL the printed
 command fetches.
 
+**Coordinate only — the default for a new node** (claude-fleet#1719). A FIRST
+join writes `CCQUOTA_FLEET_COMPUTE=0` into `node.env`: the agent says
+`"compute":false` in its hello and every heartbeat, and the hub then never
+places a session on that login (auto or named — the candidate reads
+`compute off (只协调 …)`) and refuses its credential lease (`403 compute_off`,
+audited like any deny; the agent does not even ask). It keeps everything else:
+the roster row (the /nodes page tags it 「只协调」, `compute_off` in /v1/nodes),
+its certificates, peer certificates, the relay. `--compute 1` on the join opens
+it; a rerun keeps what `node.env` says — and a node joined before #1719 has no
+line, which reads as compute ON, so nothing that ran sessions stops. The
+install line (`/install`) joins every computer this way (`fleet node join
+--no-fleet --no-deps --no-admin`), and the same scan writes the ssh snippet
+with a peer-certificate `Match` per other machine: the hub's answer carries
+`machines` (`[{hostname, alias}]`), which `fleet login` keeps in
+`peer/machines` so `fleet-peer-cert.sh` turns `m4`, `m4-lan` and `mini2` into
+one machine and one certificate.
+
+**Can it run? The probe and the team policy** (claude-fleet#1720).
+`bin/fleet-node-probe.sh` — run at `fleet node join` and daily by the agent —
+writes `node-probe.json` (`{loc, anthropic, openai, laptop, ts, verdict}`,
+verdict `ok | unsupported_region | unreachable`: the egress region from
+Cloudflare's trace crossed with ipinfo, and one credential-less request to each
+provider's API), and the agent carries it in its hello and every heartbeat with
+`node.env`'s compute word, both re-read live — `fleet node compute on|off`
+needs no restart. The hub decides in one place (`internal/api/fleet_compute.go`):
+`unsupported_region` closes a login that asked to run (placement skips it, its
+lease is refused) and raises the `compute_region` finding, unless the person
+forced it on (`fleet node compute on --force`, written to `fleet_audit`
+as `compute_force`); the fleet setting `fleet.compute_auto=on` (default off,
+`PUT /v1/fleet/settings`, audited) opens a coordinate-only login whose probe is
+`ok` and under two days old. `unreachable` only refuses `compute on` and the
+auto-open — it never closes a running login. No probe and no setting =
+#1719 exactly.
+
 ### People and their logins — WeCom sign-in opens the account (claude-fleet#1411)
 
 With the fleet module on, a person signing in through WeCom (`/enter`) becomes
@@ -943,6 +977,8 @@ What a machine can do with only the short-lived half was **measured first**
 | hub | `CCQUOTA_FLEET_CRED_KEY_FILE=/secrets/cred-key` (or `CCQUOTA_FLEET_CRED_KEY`) | 32 bytes, base64 (`openssl rand -base64 32`). Unset = vault off: credential routes answer 503, the rest of the fleet module is unaffected |
 | hub | `CCQUOTA_FLEET_CRED_MIN_TTL=3h` (default) | a cached access token with less left is refreshed before it is issued |
 | agent | `CCQUOTA_FLEET_CREDS=1` | lease this login's credentials (its own + the shared pool's) and keep them written (with `CCQUOTA_FLEET=1`) |
+| agent | `CCQUOTA_FLEET_COMPUTE=0` | this login only coordinates (claude-fleet#1719): the hub refuses its lease (`compute_off`) and placement skips it. Unset = on. Re-read from `node.env` every beat (claude-fleet#1720) |
+| agent | `CCQUOTA_FLEET_COMPUTE_FORCE=1` | `fleet node compute on --force` (claude-fleet#1720): open over a probe that says the region is unsupported; the hub audits it |
 | agent | `CCQUOTA_ACCOUNTS_DIR` (default `~/.config/claude-fleet/accounts`), `CCQUOTA_FLEET_CODEX_HOMES` (default `~/.codex-accounts`) | where the Claude / Codex files go |
 | hub | `CCQUOTA_FLEET_OAUTH_REFRESH_VIA=node` | refresh through an online admin node instead of the hub's own network (claude-fleet#1490, below). Unset / `direct` = the hub posts itself |
 | agent | `CCQUOTA_FLEET_OAUTH_REFRESH=0` | an admin agent stops offering to carry the hub's refreshes (on by default with `CCQUOTA_FLEET_ADMIN=1`) |

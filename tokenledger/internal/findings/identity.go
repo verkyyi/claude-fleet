@@ -72,6 +72,7 @@ import (
 //	window_high       the account uuid (or label) plus the window id
 //	stale_agent       the endpoint id when the caller supplies one, else its
 //	                  label
+//	compute_region    the endpoint id, else user@host
 //
 // The uuid/id-over-label preference matters: a label is the operator's display
 // name, editable through POST /v1/accounts/label, and two subscriptions may

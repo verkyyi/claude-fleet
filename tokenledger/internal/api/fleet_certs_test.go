@@ -177,6 +177,11 @@ func TestFleetLoginDeviceFlow(t *testing.T) {
 	if strings.Contains(cr.SSHConfig, "spare") {
 		t.Fatalf("ssh config lists a machine Alice has no login on:\n%s", cr.SSHConfig)
 	}
+	// The machine list beside it (claude-fleet#1719): the same machines,
+	// hostname and alias, for the peer-certificate Match blocks.
+	if got, _ := json.Marshal(cr.Machines); !bytes.Contains(got, []byte(`"alias":"m4"`)) || !bytes.Contains(got, []byte(`"alias":"m5"`)) || bytes.Contains(got, []byte("spare")) {
+		t.Fatalf("machines = %s", got)
+	}
 
 	// Handed out once.
 	if code, _ := postJSON(t, h, "/v1/fleet/login/poll", map[string]string{"device_code": st.DeviceCode}); code != http.StatusGone {

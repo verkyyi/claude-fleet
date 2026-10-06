@@ -185,6 +185,9 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 		AgentVersion: a.cfg.Version,
 		Admin:        a.cfg.FleetAdmin,
 		Capabilities: caps,
+		Compute:      a.computeClaim(),
+		ComputeForce: a.computeForce(),
+		Probe:        a.nodeProbe(),
 	})
 	if err != nil {
 		return false, err
@@ -379,6 +382,11 @@ func (a *Agent) nodeHeartbeat(ctx context.Context, probe *fleetProbe) control.He
 	}
 	hb.Ready, hb.NotReady = probe.ready.reading(ctx, a.cfg.Home, time.Now())
 	hb.Routes = a.nodeRoutes(ctx)
+	// Explicit either way in a beat (claude-fleet#1720): a true tells the hub
+	// that `fleet node compute on` overrode a hello that said off.
+	on := !a.computeOffNow()
+	hb.Compute = &on
+	hb.ComputeForce, hb.Probe = a.computeForce(), a.nodeProbe()
 	return hb
 }
 

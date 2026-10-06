@@ -29,8 +29,22 @@
 #      run and that `fleet` goes the direct way until then. Never fatal.
 #      `--no-deps` (`curl … | sh -s -- --no-deps`) or FLEET_INSTALL_NO_DEPS=1
 #      skips it;
-#   5. runs `fleet`: the first QR appears right here, in this terminal — and
-#      with tmux ≥ 3.2 on this computer, `fleet` is the shell.
+#   5. joins the hub as a node (issue #1719, EPIC #1718 C1) — `fleet node join
+#      --no-fleet --no-deps --no-admin`: ONE scan, right here, that writes the
+#      12-hour certificate, the ssh snippet (a Host block per machine, plus the
+#      machine-to-machine Match per machine — ~/.ssh/fleet-ssh-config, one
+#      Include in ~/.ssh/config) and the node pass; then the ccquota agent under
+#      launchd / systemd. The node only COORDINATES: node.env says
+#      CCQUOTA_FLEET_COMPUTE=0, so the hub places no session here and leases no
+#      account (this computer runs sessions on its own). Already a node of this
+#      hub → left alone (no scan, no agent restart, nothing rewritten). No
+#      terminal to draw the QR on (stderr is not a tty — a CI job, a log file)
+#      → skipped with the one line to run later, never a wait nobody can end
+#      (FLEET_INSTALL_NODE_FORCE=1 joins anyway: the selftests' fake hub
+#      confirms by itself). A failure is said, never fatal. --no-node
+#      (FLEET_INSTALL_NO_NODE=1) skips it;
+#   6. runs `fleet`: with the certificate the join just wrote, no second QR —
+#      and with tmux ≥ 3.2 on this computer, `fleet` is the shell.
 #
 # NO HUB (issue #1712, EPIC #1710 C2) — only the tools, on this one computer:
 #
@@ -73,7 +87,8 @@ for a in "$@"; do
   case "$a" in
     --no-deps) DEPS=0 ;;
     --no-hub) NOHUB=1 ;;
-    *) printf 'fleet-install: 不认识的参数 %s（只有 --no-deps / --no-hub）\n' "$a" >&2; exit 2 ;;
+    --no-node) FLEET_INSTALL_NO_NODE=1 ;;
+    *) printf 'fleet-install: 不认识的参数 %s（只有 --no-deps / --no-hub / --no-node）\n' "$a" >&2; exit 2 ;;
   esac
 done
 
@@ -298,7 +313,7 @@ fi
 if [ "$NOHUB" = 1 ]; then
   ACCTS="${FLEET_ACCOUNTS_DIR:-${FLEET_CONF_DIR:-$CONF_DIR}/accounts}"
   if [ -n "$(ls -A "$ACCTS" 2>/dev/null)" ]; then
-    say "账号: $(ls -A "$ACCTS" | tr '\n' ' ')（在 $ACCTS）"
+    say "账号: $(ls -A "$ACCTS" | tr '\n' ' ')（在 ${ACCTS}）"
   else
     say "账号: 还没有 — 本机加一个：claude setup-token，把打出的 token 存成 $ACCTS/<名字>（chmod 600）；不加就用 claude 自己登录的那个"
   fi
@@ -331,7 +346,26 @@ else
   fi
 fi
 
-# 5 — the first `fleet`, right here.
+# 5 — this computer joins the hub as a node that only coordinates (issue
+# #1719). stdin is /dev/null: piped from curl, sh is still reading this very
+# script from it. Already a node of this hub → nothing to do.
+if [ "$NOHUB" = 0 ] && [ "${FLEET_INSTALL_NO_NODE:-}" != 1 ]; then
+  NODE_ENV="${FLEET_CONF_DIR:-$CONF_DIR}/node.env"
+  if [ -f "$NODE_ENV" ] && grep -qx "CCQUOTA_HUB_URL=$HUB" "$NODE_ENV" && grep -q '^CCQUOTA_TOKEN=.' "$NODE_ENV"; then
+    say "节点: 已是 $HUB 的节点（${NODE_ENV}），不重登记"
+  elif [ ! -t 2 ] && [ "${FLEET_INSTALL_NODE_FORCE:-}" != 1 ]; then
+    say "节点: 这里没有终端可显示二维码，先不登记 — 在终端里敲 fleet node join 补上"
+  else
+    say "节点: 登记这台电脑（只协调：不在本机跑别人派的会话、不借入口的账号）…"
+    if FLEET_CONF_DIR="${FLEET_CONF_DIR:-$CONF_DIR}" "$ROOT/bin/fleet" node join --no-fleet --no-deps --no-admin </dev/null >&2; then
+      :
+    else
+      say "节点: 没登记成（上面一行说了哪步）— 客户端照样能用；再跑一次这行，或敲 fleet node join 补上"
+    fi
+  fi
+fi
+
+# 6 — the first `fleet`, right here.
 if [ "${FLEET_INSTALL_NO_RUN:-}" = 1 ]; then
   exit 0
 fi

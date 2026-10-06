@@ -112,6 +112,19 @@ type Config struct {
 	// account op is refused.
 	FleetAdmin bool
 
+	// FleetComputeOff makes this login coordinate only (CCQUOTA_FLEET_COMPUTE=0,
+	// claude-fleet#1719): it says so in its hello and every heartbeat, the hub
+	// never places a session on it nor answers its credential lease. A fresh `fleet node join` writes the 0; unset is
+	// compute on, so a node joined before #1719 keeps working. It is the
+	// start-time reading: FleetNodeEnvPath, when readable, is re-read every
+	// beat so `fleet node compute on|off` needs no restart (claude-fleet#1720).
+	FleetComputeOff bool
+	// FleetNodeEnvPath is claude-fleet's node.env ($FLEET_CONF_DIR/node.env)
+	// and FleetProbePath its node-probe.json (claude-fleet#1720); empty
+	// derives both from Home's default conf dir.
+	FleetNodeEnvPath string
+	FleetProbePath   string
+
 	// FleetCreds makes this agent lease its login's credentials from the
 	// hub's vault (CCQUOTA_FLEET_CREDS=1, claude-fleet#1415) and keep them
 	// written where Claude Code, Codex and gh re-read them: Claude under
@@ -312,6 +325,12 @@ func New(cfg Config) (*Agent, error) {
 	if cfg.Fleet && cfg.FleetNudgePath == "" {
 		cfg.FleetNudgePath = defaultNudgePath(cfg.Home)
 	}
+	if cfg.Fleet && cfg.FleetNodeEnvPath == "" {
+		cfg.FleetNodeEnvPath = defaultConfPath(cfg.Home, "node.env")
+	}
+	if cfg.Fleet && cfg.FleetProbePath == "" {
+		cfg.FleetProbePath = defaultConfPath(cfg.Home, "node-probe.json")
+	}
 	if cfg.SessionsDir == "" {
 		h, err := os.UserHomeDir()
 		if err != nil {
@@ -361,6 +380,12 @@ func (a *Agent) Run(ctx context.Context) error {
 		var node sync.WaitGroup
 		node.Add(1)
 		go func() { defer node.Done(); a.runNode(ctx) }()
+		// The daily probe (claude-fleet#1720): is this machine somewhere
+		// Claude / OpenAI serve? Not waited for — it only writes a file.
+		go a.runProbe(ctx)
+		// A login that only coordinates still asks (claude-fleet#1720): the
+		// hub is the one gate — it refuses compute_off, and answers once the
+		// person (`fleet node compute on`) or the team policy opens the login.
 		if a.cfg.FleetCreds {
 			node.Add(1)
 			go func() { defer node.Done(); a.runCredLeases(ctx) }()

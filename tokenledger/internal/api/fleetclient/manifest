@@ -28,11 +28,19 @@
 # bin/fleet-node.sh + bin/fleet-node-join.sh are `fleet node join` (#1627): the
 # one command that turns THIS computer into a node — a scan, then the join
 # script's steps (which install the node's own tooling from git themselves).
+# bin/fleet-peer-cert.sh is how a node reaches another machine (#1626): the
+# install line joins every computer as a node (#1719), and the ssh snippet
+# `fleet login` writes then runs it for each connection.
+# bin/fleet-node-probe.sh is `fleet node compute` and the join's last line
+# (#1720): can this computer run sessions — and the node agent runs it daily
+# from here on a computer with only the client installed.
 bin/fleet-install.sh  installer
 bin/fleet
 bin/fleet-login.py
 bin/fleet-node.sh
 bin/fleet-node-join.sh
+bin/fleet-node-probe.sh
+bin/fleet-peer-cert.sh
 bin/fleet-connect.py
 bin/fleet-client-lib.sh
 # keeps up with the hub by itself (#1722): newer client + the team's defaults
