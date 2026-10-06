@@ -9,7 +9,26 @@
 # hand sync, 4 of the Mac mini's 5 logins sat 60–265 commits behind, every daemon
 # green. This tick closes that gap the only safe way: each login follows the ONE
 # mark the operator vouches for — `refs/tags/stable` on the public repo
-# (bin/fleet-stable.sh, C1 #1118) — never master, and only when nothing is busy.
+# (bin/fleet-stable.sh, C1 #1118) — never master.
+#
+# VERSIONS (issue #1894, EPIC #1906 C1). The install is never rewritten in
+# place: ~/.claude/fleet is a LINK to ~/.claude/fleet.versions/<sha>/, every
+# version a git worktree of its own, and a move is ONE rename(2) of that link
+# (bin/fleet-versions-lib.sh — the client's switch shares it). A script already
+# running keeps the files it opened (and every sibling it reaches by its
+# physical path); the next call through ~/.claude/fleet reads the new version.
+# So a busy session no longer holds the machine back: this tick used to wait
+# for every window to go idle, and on 2026-10-06 the busiest machine sat 9h+ on
+# the old version while stable moved on. An EPIC batch running is no reason to
+# wait either (发起人拍板 2026-10-06: 跑批期间也换). What every version shares
+# — logs/, epic-pages/, the fleet.conf backups, anything else untracked at the
+# top level — lives once in fleet.versions/.shared/ and is linked into each
+# version. fleet.versions/.prev names the version before the last switch; a
+# retired version is kept FLEET_INSTALL_VERSIONS_KEEP_SECS (7 days) for the
+# sessions still running from it, then removed. The checkout that was the
+# install before the first switch holds the repository (its .git/) and is never
+# removed. MIGRATION: a plain-directory install is adopted at its first move —
+# moved to fleet.versions/<its HEAD>/ and the link put in its place.
 #
 # One tick, in order (each gate is a line in the state file + one log line):
 #
@@ -32,36 +51,29 @@
 #              sideways; the next stable move past HEAD aligns it.
 #   refused    TRACKED local changes → never touched; the doctor names them.
 #              Untracked litter (fleet.conf.bak*) is fine.
-#   deferred   any window on any of this login's live fleets is
-#              working / looping / waking (the same busy trio
-#              fleet-epic-backstop.sh uses) → wait — except a `looping` window
-#              that waits on nothing but a Loop whose next round is more than
-#              FLEET_INSTALL_LOOP_MARGIN_SECS (600) away: a cron / wakeup parked
-#              between rounds is an idle session (issue #1690). `deferred_since` keeps the
-#              first deferral's time so the doctor (C7 #1123) can say
-#              "waiting 26h". Also deferred while an EPIC batch is running on
-#              this login — /fleet-epic-run stamps $FLEET_CONF_DIR/global/
-#              epic-running as its first command every tick
-#              (bin/fleet-epic-heartbeat.sh, issue #953; a 45-min lease, cleared
-#              at the closing tick): the loop's pane and its workers are idle
-#              between ticks, so the busy trio alone would let this tick swap the
-#              floor under a running batch. And while the disk gate is closed.
-#   updated    `git merge --ff-only <stable>` → the NEW version's
+#   deferred   the disk gate is closed (fleet-diskguard.sh --gate) — a new
+#              version is a new checkout. `deferred_since` keeps the first
+#              deferral's time so the doctor (C7 #1123) can say "waiting 26h".
+#              Busy windows and a running EPIC batch no longer defer (#1894).
+#   switched   the new version checked out beside the old one
+#              (`git worktree add` → fleet.versions/<stable>/), checked (every
+#              bin/*.sh parses with `bash -n`, every bin/ + hooks/ *.py
+#              compiles), the link switched, then the NEW version's
 #              bin/fleet-install-apply.sh --from <old> --to <stable> (C2 #1119:
 #              the one implementation of "sync once" — daemons reloaded, hooks
 #              merged, commands/skills installed) → the NEW version's
 #              bin/fleet-doctor.sh.
-#   rolled-back the doctor printed a FAIL line the pre-update doctor did NOT
-#              (a FAIL this login already had — a stale quota cache, a missing
-#              tool — is not the new version's fault and must not roll every
-#              version back forever; WARN lines never count) →
-#              `git reset --hard <old>` (safe: the tree was clean, see refused
-#              above) → the OLD version's apply --from <stable> --to <old> →
-#              `skip: <stable>` recorded, so this version is not retried until
-#              stable moves.
+#   rolled-back the check failed (nothing switched), or the doctor printed a
+#              FAIL line the pre-update doctor did NOT (a FAIL this login
+#              already had — a stale quota cache, a missing tool — is not the
+#              new version's fault and must not roll every version back forever;
+#              WARN lines never count) → the link back to the old version (.prev
+#              names the rejected one) → the OLD version's apply --from <stable>
+#              --to <old> → `skip: <stable>` recorded, so this version is not
+#              retried until stable moves.
 #
 # NODE → the node agent follows too (issue #1723, EPIC #1718 C5). A tick that
-# ends `current` or `updated` (the install IS stable) then asks THIS version's
+# ends `current` or `switched` (the install IS stable) then asks THIS version's
 # bin/fleet-node-upgrade.sh for the plan at stable (`--dry-run`): every login on
 # the machine whose ccquota agent is not prod-<stable short> — on disk, or as the
 # hub sees it running — is behind. A tokenledger/ change is the usual reason,
@@ -74,8 +86,8 @@
 # this login's own LaunchAgent; a LaunchDaemon login needs `sudo -n`, so a login
 # that has it (the admin login) upgrades every behind login on the machine, its
 # own first, and one that has not leaves its own to that tick (`delegated`).
-# Only at an idle moment: a `current` tick checks the same EPIC / busy gates an
-# update does (`updated` already passed them). A failure is `node_upgrade_failed`
+# Only at an idle moment: the agent half keeps the EPIC / busy gates the
+# install switch dropped (#1894). A failure is `node_upgrade_failed`
 # — ONE FLEET_NOTIFY_CMD per (login · stable), a `node-node_upgrade_failed` log
 # line, and no retry of that stable for FLEET_NODE_FOLLOW_RETRY_SECS (6h,
 # `backoff`) — so a broken machine never loops and the other logins never wait
@@ -95,9 +107,9 @@
 # channel quotawatch / diskguard / the collector use (nothing when it is unset).
 # Stuck is what the doctor calls STUCK: `refused`, `rolled-back` (and the
 # `skipped` ticks that follow it — the same episode), `failed`, or `deferred`
-# longer than FLEET_INSTALL_FOLLOW_STUCK_SECS (24h; a shorter deferral is normal).
+# (the disk gate) longer than FLEET_INSTALL_FOLLOW_STUCK_SECS (24h).
 # Dedup key = login + why + stable (`notified:` in the state): the same stuck
-# tick again is silent; a tick that is NOT stuck (`current`, `updated`, `off`, a
+# tick again is silent; a tick that is NOT stuck (`current`, `switched`, `off`, a
 # short `deferred`) clears the key, so a login that followed and then stuck
 # again — even for the same reason — is announced again. `fetch-failed` / `none`
 # say nothing about the login and leave the key as it was. A send that fails is
@@ -123,6 +135,9 @@
 #   <UTC> notified <from>..<to> <login> <why> <stable> via <FLEET_NOTIFY_CMD>
 # The apply and doctor transcripts go to stderr (the launchd/systemd log).
 #
+# Log results: current · switched · rolled-back · refused · deferred · skipped ·
+# off · none · fetch-failed · failed (`updated` was a pre-#1894 move in place).
+#
 # Ships as launchd/com.claude-fleet.install-sync.plist.tmpl (StartInterval 1800,
 # ProcessType Standard — it rewrites bin/ under every other daemon, issue #588)
 # and systemd/claude-fleet-install-sync.{service,timer}. It is installed by the
@@ -131,9 +146,9 @@
 # LaunchDaemon + UserName — apply decides). Switch it off per login with
 # FLEET_INSTALL_SYNC=0.
 #
-# A tick that moves the install rewrites THIS script on disk: the whole body is
+# A tick that moves the install switches THIS script's link: the whole body is
 # a function and the last line is `main "$@"; exit`, so bash has parsed
-# everything it will ever run before the tree changes under it.
+# everything it will ever run before the link moves under it.
 #
 # Exit: always 0 from a tick (a daemon's exit code is nobody's signal — the
 # state file is); 2 on a usage error; --status exits 0 (state printed) / 1 (none).
@@ -146,6 +161,8 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
   fleet_daemon_stamp_tick install-sync "$BIN/.."; }
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
+# shellcheck source=/dev/null
+. "$BIN/fleet-versions-lib.sh"
 
 ROOT="${FLEET_INSTALL_ROOT:-$(cd "$BIN/.." && pwd)}"
 REMOTE=origin TAG=stable TIMEOUT="${FLEET_INSTALL_SYNC_TIMEOUT:-30}"
@@ -166,7 +183,7 @@ case "$NODE_RETRY" in ''|*[!0-9]*) NODE_RETRY=21600 ;; esac
 LOGIN=$(id -un 2>/dev/null || printf '%s' "${USER:-?}")
 HOST=$(hostname -s 2>/dev/null || hostname 2>/dev/null || printf '?')
 
-usage() { sed -n '2,139p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,154p' "$0" | sed 's/^# \{0,1\}//'; }
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run|-n) DRY=1 ;;
@@ -180,6 +197,14 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 case "$TIMEOUT" in ''|*[!0-9]*|0) TIMEOUT=30 ;; esac
+ROOT=${ROOT%/}
+# run by its physical path (from inside a version dir): the install is the
+# link that fleet.versions/ belongs to
+case "$ROOT" in *.versions/*) [ -L "${ROOT%.versions/*}" ] && ROOT=${ROOT%.versions/*} ;; esac
+VERS="$ROOT.versions"
+# a retired version is kept this long for the sessions still running from it
+VKEEP="${FLEET_INSTALL_VERSIONS_KEEP_SECS:-604800}"
+case "$VKEEP" in ''|*[!0-9]*) VKEEP=604800 ;; esac
 
 CONF_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
 STATE_DIR="$CONF_DIR/global"
@@ -341,15 +366,14 @@ node_follow() {
     NODE=backoff; NODE_REASON="the upgrade to prod-$(short "$STABLE_SHA") failed at $(iso_of "$NODE_FAILED_AT") — next try after $(iso_of $((NODE_FAILED_AT + NODE_RETRY)))"
     node_log; return 0
   fi
-  if [ "$1" = current ]; then   # `updated` passed these gates on the way in
-    local epic busy
-    if epic=$(fleet_epic_running 2>/dev/null); then
-      NODE=deferred; NODE_REASON="EPIC batch running ($epic) — the agent waits for the closing tick"; node_log; return 0
-    fi
-    busy=$(busy_fleets | tr '\n' ' ')
-    if [ -n "$busy" ]; then
-      NODE=deferred; NODE_REASON="busy window(s) on ${busy% } — the agent waits for an idle tick"; node_log; return 0
-    fi
+  # The install switch no longer waits for idle (#1894); an agent restart still does.
+  local epic busy
+  if epic=$(fleet_epic_running 2>/dev/null); then
+    NODE=deferred; NODE_REASON="EPIC batch running ($epic) — the agent waits for the closing tick"; node_log; return 0
+  fi
+  busy=$(busy_fleets | tr '\n' ' ')
+  if [ -n "$busy" ]; then
+    NODE=deferred; NODE_REASON="busy window(s) on ${busy% } — the agent waits for an idle tick"; node_log; return 0
   fi
   if [ "$DRY" = 1 ]; then printf 'node: would upgrade %s to prod-%s (fleet-node-upgrade.sh --dist --rollback)\n' "$sel" "$(short "$STABLE_SHA")"; return 0; fi
   say "node: upgrading $sel to prod-$(short "$STABLE_SHA")"
@@ -417,7 +441,7 @@ finish() {
   # The install is stable now: the node agent follows it (issue #1723). Logged
   # AFTER the tick's own line, so a grep of the result stays the first field.
   local nodeq=0
-  case "$1" in current|updated) nodeq=1 ;; esac
+  case "$1" in current|switched) nodeq=1 ;; esac
   if [ "$nodeq" = 1 ]; then
     log_line "$1" "$2"; say "$1 — $2"
     node_follow "$1"
@@ -470,6 +494,109 @@ WIN
   done <<EOF
 $(fleet_sockets 2>/dev/null)
 EOF
+  return 0
+}
+
+# --- versions (issue #1894) -----------------------------------------------------
+# vers_build <sha> — a git worktree of <sha> at $VERS/<sha>/ on its own branch
+# fleet-live/<key> (tracking the install's trunk, so `git pull --ff-only` in it
+# still works), printed. A stale dir of that name is replaced — unless it is the
+# version in use, which gets a fresh name instead.
+vers_build() {
+  local vsha="$1" vd up
+  vd="$VERS/$vsha"
+  if [ -e "$vd" ]; then
+    if [ "$(fleet_versions_current "$ROOT")" = "$vsha" ]; then vd="$VERS/$vsha-$(now)"; else vers_drop "$vd"; fi
+  fi
+  [ -e "$vd" ] && return 1
+  mkdir -p "$VERS" || return 1
+  up=$(git -C "$ROOT" rev-parse -q --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null) || up=''
+  [ -n "$up" ] || up=$(git -C "$ROOT" symbolic-ref -q --short "refs/remotes/$REMOTE/HEAD" 2>/dev/null) || up=''
+  [ -n "$up" ] || up="$REMOTE/master"
+  git -C "$ROOT" worktree add -q -B "fleet-live/${vd##*/}" "$vd" "$vsha" >/dev/null 2>&1 </dev/null || { rm -rf "$vd"; return 1; }
+  git -C "$vd" branch -q --set-upstream-to="$up" >/dev/null 2>&1 </dev/null || :
+  printf '%s\n' "$vd"
+}
+
+# vers_check <dir> — every bin/*.sh parses (bash -n) and every bin/ + hooks/ *.py
+# compiles. rc 1 + the first broken file on stdout.
+vers_check() {
+  local f
+  for f in "$1"/bin/*.sh; do
+    [ -f "$f" ] || continue
+    bash -n "$f" 2>/dev/null </dev/null || { printf '%s does not parse (bash -n)\n' "${f#"$1"/}"; return 1; }
+  done
+  command -v python3 >/dev/null 2>&1 || return 0
+  python3 -c 'import glob, os, sys
+root = sys.argv[1]
+for d in ("bin", "hooks"):
+    for f in sorted(glob.glob(os.path.join(root, d, "*.py"))):
+        try:
+            with open(f, encoding="utf-8") as fh:
+                compile(fh.read(), f, "exec")
+        except Exception:
+            print("%s does not compile (python3)" % os.path.relpath(f, root))
+            sys.exit(1)' "$1" </dev/null
+}
+
+# vers_shared <dir> — what every version shares: <dir>'s top-level untracked or
+# ignored entries (logs/, epic-pages/, fleet.conf.bak*, …) move to
+# $VERS/.shared/ and are linked back; then every .shared entry <dir> lacks is
+# linked in. A name .shared already holds is left where it is.
+vers_shared() {
+  local vd="$1" p
+  [ -d "$vd" ] || return 0
+  mkdir -p "$VERS/.shared" 2>/dev/null || return 0
+  while IFS= read -r p; do
+    p=${p%/}
+    case "$p" in ''|*/*|.git|__pycache__|.DS_Store|*.switch.*) continue ;; esac
+    [ -L "$vd/$p" ] && continue
+    { [ -e "$VERS/.shared/$p" ] || [ -L "$VERS/.shared/$p" ]; } && continue
+    mv "$vd/$p" "$VERS/.shared/$p" 2>/dev/null || continue
+    [ -e "$vd/$p" ] || ln -s "../.shared/$p" "$vd/$p" 2>/dev/null
+  done <<SHARED
+$(git -C "$vd" status --porcelain --ignored --untracked-files=normal 2>/dev/null </dev/null | awk '$1 == "??" || $1 == "!!" { print substr($0, 4) }')
+SHARED
+  for p in "$VERS/.shared"/* "$VERS/.shared"/.[!.]*; do
+    { [ -e "$p" ] || [ -L "$p" ]; } || continue
+    p=${p##*/}
+    { [ -e "$vd/$p" ] || [ -L "$vd/$p" ]; } || ln -s "../.shared/$p" "$vd/$p" 2>/dev/null
+  done
+  return 0
+}
+
+# vers_retire <key> / vers_unretire <key> — when a version stopped being the one
+# in use; vers_prune counts its keep time from here.
+vers_retire() { mkdir -p "$VERS/.retired" 2>/dev/null && now > "$VERS/.retired/$1"; }
+vers_unretire() { rm -f "$VERS/.retired/$1"; }
+
+# vers_drop <dir> — one version dir and its branch, gone. Never the checkout
+# that holds the repository (a .git DIRECTORY), never the one in use.
+vers_drop() {
+  local vd="$1"
+  [ -d "$vd/.git" ] && return 1
+  [ "$(fleet_versions_current "$ROOT")" = "${vd##*/}" ] && return 1
+  git -C "$ROOT" worktree remove --force "$vd" >/dev/null 2>&1 </dev/null || rm -rf "$vd"
+  git -C "$ROOT" worktree prune >/dev/null 2>&1 </dev/null
+  git -C "$ROOT" branch -q -D "fleet-live/${vd##*/}" >/dev/null 2>&1 </dev/null
+  [ ! -e "$vd" ]
+}
+
+# vers_prune — every version but the one in use, .prev's and the repository's,
+# once retired longer than VKEEP. A dir with no retire time starts its clock now.
+vers_prune() {
+  local cur prev='' vd n t
+  cur=$(fleet_versions_current "$ROOT")
+  { read -r prev < "$VERS/.prev"; } 2>/dev/null
+  for vd in "$VERS"/*/; do
+    vd=${vd%/}; n=${vd##*/}
+    [ -d "$vd" ] || continue
+    case "$n" in "$cur"|"$prev") continue ;; esac
+    [ -d "$vd/.git" ] && continue
+    t=$(cat "$VERS/.retired/$n" 2>/dev/null); case "$t" in ''|*[!0-9]*) vers_retire "$n"; continue ;; esac
+    [ $(( $(now) - t )) -ge "$VKEEP" ] || continue
+    vers_drop "$vd" && vers_unretire "$n" && say "pruned version $n"
+  done
   return 0
 }
 
@@ -595,61 +722,71 @@ main() {
     finish refused "tracked local changes in $ROOT (${dirty% }$more) — not touching an edited install; commit or discard them, then the next tick follows" dirty
   fi
 
-  # --- quiet? ----------------------------------------------------------------------------
-  # A running EPIC batch first (issue #953): its pane and its workers are idle
-  # between ticks, so the busy trio below sees a quiet machine while the loop is
-  # still merging onto this install.
-  local epic
-  if epic=$(fleet_epic_running 2>/dev/null); then
-    [ -n "$DEFERRED_SINCE" ] || DEFERRED_SINCE=$(now)
-    finish deferred "EPIC batch running on this login ($epic) — not swapping the floor under a running batch (issue #953); the run loop clears the mark at its closing tick, else it expires"
-  fi
-  local busy
-  busy=$(busy_fleets | tr '\n' ' ')
-  if [ -n "$busy" ]; then
-    [ -n "$DEFERRED_SINCE" ] || DEFERRED_SINCE=$(now)
-    finish deferred "busy window(s) on ${busy% } — waiting for every session to go idle (since $DEFERRED_SINCE)"
-  fi
+  # --- the disk gate (busy windows and a running EPIC no longer wait, #1894) ------
   if [ "$DRY" = 0 ] && [ -x "$ROOT/bin/fleet-diskguard.sh" ] \
      && ! "$ROOT/bin/fleet-diskguard.sh" --gate >/dev/null 2>&1; then
     [ -n "$DEFERRED_SINCE" ] || DEFERRED_SINCE=$(now)
-    finish deferred "disk gate closed (fleet-diskguard.sh --gate) — not rewriting the install below the floor"
+    finish deferred "disk gate closed (fleet-diskguard.sh --gate) — not checking out a new version below the floor"
   fi
   DEFERRED_SINCE=''
 
   if [ "$DRY" = 1 ]; then
-    printf 'would ff %s %s..%s, then fleet-install-apply.sh --from %s --to %s, then fleet-doctor.sh (dry-run)\n' \
-      "$ROOT" "$(short "$HEAD_SHA")" "$(short "$STABLE_SHA")" "$(short "$HEAD_SHA")" "$(short "$STABLE_SHA")"
+    printf 'would switch %s %s..%s (check out %s/%s, check, switch the link), then fleet-install-apply.sh --from %s --to %s, then fleet-doctor.sh (dry-run)\n' \
+      "$ROOT" "$(short "$HEAD_SHA")" "$(short "$STABLE_SHA")" "$VERS" "$STABLE_SHA" "$(short "$HEAD_SHA")" "$(short "$STABLE_SHA")"
     exit 0
   fi
 
-  # --- move ---------------------------------------------------------------------------------
+  # --- switch ---------------------------------------------------------------------------------
   # Baseline first: FAIL lines this login already has are not the new version's.
-  local pre post new merr
-  say "updating $(short "$HEAD_SHA") -> $(short "$STABLE_SHA")"
+  local pre post new oldkey olddir newdir newkey bad migrated=''
+  say "switching $(short "$HEAD_SHA") -> $(short "$STABLE_SHA")"
   pre=$(doctor_fail_tags)
-  if ! merr=$(git -C "$ROOT" merge --ff-only -q "$STABLE_SHA" 2>&1 </dev/null); then
-    finish refused "git merge --ff-only $(short "$STABLE_SHA") failed: $(printf '%s\n' "$merr" | tail -1)" ff
+  # A plain-directory install becomes the versions layout first (migration):
+  # moved to fleet.versions/<HEAD>/, the link in its place.
+  if [ ! -L "$ROOT" ]; then
+    oldkey="$HEAD_SHA"; [ -e "$VERS/$oldkey" ] && oldkey="$HEAD_SHA-$(now)"
+    fleet_versions_adopt "$ROOT" "$oldkey" \
+      || finish refused "could not move $ROOT into $VERS/ (the versions layout, #1894) — nothing changed; check the permissions on $(dirname "$ROOT")" adopt
+    migrated="; $ROOT is now a link into $VERS/ (moved to $oldkey)"
+    say "migrated: $ROOT -> $VERS/$oldkey"
   fi
+  oldkey=$(fleet_versions_current "$ROOT"); olddir="$VERS/$oldkey"
+  if ! newdir=$(vers_build "$STABLE_SHA"); then
+    finish refused "could not check out stable $(short "$STABLE_SHA") into $VERS/ (git worktree add failed) — still at $(short "$HEAD_SHA")$migrated" build
+  fi
+  newkey=${newdir##*/}
+  if ! bad=$(vers_check "$newdir"); then
+    vers_retire "$newkey"
+    SKIP="$STABLE_SHA"; FROM="$STABLE_SHA"; TO="$HEAD_SHA"
+    finish rolled-back "pre-switch check failed at $(short "$STABLE_SHA"): $bad — nothing switched, still at $(short "$HEAD_SHA"); not retried until stable moves$migrated"
+  fi
+  vers_shared "$olddir"; vers_shared "$newdir"
+  if ! fleet_versions_point "$ROOT" "$newdir"; then
+    vers_retire "$newkey"
+    finish failed "could not switch the link $ROOT -> $newdir — still at $(short "$HEAD_SHA")$migrated"
+  fi
+  printf '%s\n' "$oldkey" > "$VERS/.prev"; vers_retire "$oldkey"
   run_apply "$HEAD_SHA" "$STABLE_SHA" || :
   post=$(doctor_fail_tags)
   new=$(comm -13 <(printf '%s\n' "$pre" | sed '/^$/d') <(printf '%s\n' "$post" | sed '/^$/d') | tr '\n' ',')
   new=${new%,}
   if [ -z "$new" ]; then
-    finish updated "apply: ${APPLY_LINE}$([ -n "$post" ] && printf '; doctor FAIL already present before: %s' "$(printf '%s\n' "$pre" | tr '\n' ',' | sed 's/,$//')")"
+    vers_prune
+    finish switched "$(short "$HEAD_SHA") -> $(short "$STABLE_SHA") in one link switch (.prev $(short "$oldkey")); apply: ${APPLY_LINE}$([ -n "$post" ] && printf '; doctor FAIL already present before: %s' "$(printf '%s\n' "$pre" | tr '\n' ',' | sed 's/,$//')")$migrated"
   fi
 
   # --- roll back ----------------------------------------------------------------------------
-  say "doctor FAIL after update: $new — rolling back to $(short "$HEAD_SHA")"
+  say "doctor FAIL after the switch: $new — back to $(short "$HEAD_SHA")"
   local fwd="$APPLY_LINE"
-  if ! git -C "$ROOT" reset --hard -q "$HEAD_SHA" >/dev/null 2>&1 </dev/null; then
+  if ! fleet_versions_point "$ROOT" "$olddir"; then
     SKIP="$STABLE_SHA"
-    finish failed "doctor FAIL ($new) at $(short "$STABLE_SHA") and git reset --hard $(short "$HEAD_SHA") FAILED — the install is at $(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null); fix by hand"
+    finish failed "doctor FAIL ($new) at $(short "$STABLE_SHA") and the link back to $olddir FAILED — the install is at $(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null); fix by hand: ln -sfn $olddir $ROOT"
   fi
+  printf '%s\n' "$newkey" > "$VERS/.prev"; vers_retire "$newkey"; vers_unretire "$oldkey"
   run_apply "$STABLE_SHA" "$HEAD_SHA" || :
   SKIP="$STABLE_SHA"
   FROM="$STABLE_SHA"; TO="$HEAD_SHA"
-  finish rolled-back "doctor FAIL after update: $new — back at $(short "$HEAD_SHA"); stable $(short "$STABLE_SHA") is not retried until it moves (forward apply: $fwd; rollback apply: $APPLY_LINE)"
+  finish rolled-back "doctor FAIL after the switch: $new — the link is back at $(short "$HEAD_SHA"); stable $(short "$STABLE_SHA") is not retried until it moves (forward apply: $fwd; rollback apply: $APPLY_LINE)"
 }
 
 main "$@"; exit

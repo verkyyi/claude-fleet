@@ -28,9 +28,10 @@
 #
 # Readers call fleet_epic_running (bin/fleet-lib.sh): exit 0 fresh / 1 stale /
 # 2 none, printing `epic=<N> session=<s> tick=<n> age=<s>s ttl=<s>s`. --status is
-# exactly that read. The install-sync daemon defers on 0 and says so in its state
-# file's reason (the doctor's install row shows it); fleet-install-apply.sh WARNs
-# on 0 — a hand sync under a running batch — but does not stop.
+# exactly that read. The install-sync daemon no longer defers on it (issue
+# #1894: a version is switched in one link move, so a batch is not hurt by it);
+# its node-agent half still waits on 0, and fleet-install-apply.sh WARNs on 0 —
+# a hand sync under a running batch — but does not stop.
 #
 # File, one `key: value` per line:
 #   epoch: <n>  iso: <UTC>  ttl: <s>  epic: <N>  repo: <owner/name|->

@@ -337,8 +337,7 @@ override them):
   of the batch. This binds doubly when your issue is an EPIC member
   (`<!-- fleet:epic-member -->` in its body): the run loop syncs **once, at its
   closing tick**, and the install-sync daemon follows `stable` when the operator
-  moves it — it defers on its own while the loop's heartbeat is fresh
-  (`bin/fleet-epic-heartbeat.sh`). When the `上线证据:` line asks for something
+  moves it — one whole-version link switch, never your job to stage. When the `上线证据:` line asks for something
   only the live install shows (a daemon's log, a doctor row, an installed
   command), your `after` is the **branch's** — run the script from this
   worktree's `bin/`, grep the file here — and its note says

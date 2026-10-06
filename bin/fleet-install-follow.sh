@@ -207,17 +207,19 @@ judge() {
       F_VERDICT=OK; F_WHY="switched on since the last tick (which saw FLEET_INSTALL_SYNC=0) — the next tick follows stable" ;;
     current)
       F_VERDICT=OK; F_WHY="at stable ${F_STABLE:-?}" ;;
-    updated)
+    switched)
+      F_VERDICT=OK; F_WHY="switched $(short "$j_from")..$(short "$j_to") to stable — $j_reason" ;;
+    updated)   # a pre-#1894 daemon's move in place
       F_VERDICT=OK; F_WHY="updated $(short "$j_from")..$(short "$j_to") to stable — $j_reason" ;;
     deferred)
       j_wait=''
       case "$j_since" in ''|*[!0-9]*) ;; *) j_wait=$(( now - j_since )); [ "$j_wait" -lt 0 ] && j_wait=0 ;; esac
       if [ -n "$j_wait" ] && [ "$j_wait" -gt "$STUCK_SECS" ]; then
         F_VERDICT=STUCK
-        F_WHY="deferred for $(fmt_age "$j_wait") — $j_reason; a session busy for over a day is usually a stuck one (check the dash), or sync by hand: /fleet-sync-install"
+        F_WHY="deferred for $(fmt_age "$j_wait") — $j_reason; free some disk, or sync by hand: /fleet-sync-install"
       else
         F_VERDICT=OK
-        F_WHY="deferred${j_wait:+ for $(fmt_age "$j_wait")} (a session is busy) — follows when every window is idle; stable ${F_STABLE:-?} waiting"
+        F_WHY="deferred${j_wait:+ for $(fmt_age "$j_wait")} — $j_reason; stable ${F_STABLE:-?} waiting"
       fi ;;
     refused|rolled-back|skipped|failed)
       F_VERDICT=STUCK; F_WHY="$j_result — $j_reason" ;;
