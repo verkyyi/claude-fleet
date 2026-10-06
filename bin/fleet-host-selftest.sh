@@ -28,6 +28,7 @@ done
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-host-selftest.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
 AGENTS=''
+# shellcheck disable=SC2154  # p is the trap's own loop variable
 trap 'for p in $AGENTS; do kill "$p" 2>/dev/null; done; rm -rf "$WORK"' EXIT
 
 CHECKS=0 FAILS=0
@@ -125,7 +126,7 @@ is "B: FLEET_HOST=1 again" "$(hostv)" 1
 mkbox c
 run bash "$INS/bin/fleet-conf.sh" set-hub https://hub.test --host
 printf 'CCQUOTA_HUB_URL=https://hub.test\nCCQUOTA_TOKEN=m5\nCCQUOTA_FLEET_COMPUTE=1\n' > "$CD/node.env"; chmod 600 "$CD/node.env"
-mkdir -p "$H/.ccquota"; sleep 300 >/dev/null 2>&1 < /dev/null & pc=$!; AGENTS="$AGENTS $pc"; echo "$pc" > "$H/.ccquota/agent.pid"
+mkdir -p "$H/.ccquota"; sleep 300 >/dev/null 2>&1 & pc=$!; AGENTS="$AGENTS $pc"; echo "$pc" > "$H/.ccquota/agent.pid"
 out=$(host on --yes)
 has "C: a host already: nothing to do" "$out" "承载 已开 — 什么都不用做"
 [ -e "$CD/node-calls" ] && bad "C: on ran fleet node on a host: $(calls)" || ok
