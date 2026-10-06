@@ -497,7 +497,9 @@ while read -r sa sg sk sc sp; do
   case "$sp" in F[0-9]*) pb=$(body_of root "$sp") ;; *) pb=$(body_of prefix "$sp") ;; esac
   [ -n "$pb" ] || fail "10: $sa: its prefix key '$sp' is not bound in the conf"
   if [ "$sa" = back ]; then
-    case "$pb" in "${ub% \}}"*) ;; *) fail "10: back: prefix h does not run ⌘['s body first: $pb" ;; esac
+    # ⌘['s body less its last two closers (the one-pane branch's else, #1904, and
+    # the bind's own): prefix h carries on from there with its no-list else
+    case "$pb" in "${ub% \} \}}"*) ;; *) fail "10: back: prefix h does not run ⌘['s body first: $pb" ;; esac
   else
     [ "$ub" = "$pb" ] || fail "10: $sa: ⌘ (User$sc) and '$sp' run different bodies:
   $ub

@@ -243,8 +243,8 @@ def note(sess, client, text):
 
 def switcher_cmd(sess, client):
     """The full-screen switcher on the shell's client (F1's body, a tap on the title)."""
-    return ["bash", str(BIN / "dash-popup.sh"), "--client", client, "--no-inline", "-w", "100%",
-            "-h", "100%", "--title", "popup_quickopen", "--", "python3",
+    return ["bash", str(BIN / "dash-popup.sh"), "--title", "popup_quickopen", "--client", client,
+            "--no-inline", "-w", "100%", "-h", "100%", "--", "python3",
             str(BIN / "fleet-quickopen.py"), "--full", "--session", sess]
 
 
