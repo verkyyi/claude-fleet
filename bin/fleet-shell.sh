@@ -453,7 +453,15 @@ ssh)
     cd "$HOME" 2>/dev/null || :
     exec bash -c "$cmd"
   fi
-  [ "$master" = 1 ] || exec ssh "$@"
+  # A session on a master (`-S`, no `-O`) never re-asks the config's static
+  # forwards (issue #1775): a `RemoteForward 2226` the master already holds is
+  # refused the second time, and a refused mux client never attaches. The `-O
+  # forward -L` of fleet-open's page bridge is an `-O`, untouched.
+  if [ "$master" != 1 ]; then
+    mux=0; for a in "$@"; do [ "$a" = -S ] && mux=1; done
+    [ "$mux" = 1 ] && [ -z "$op" ] && exec ssh -o ClearAllForwardings=yes "$@"
+    exec ssh "$@"
+  fi
   # A master: `fleet connect` picks the route and the identity; keep the control /
   # keepalive options, drop what it decides (ProxyCommand, the key), -tt → RequestTTY.
   opts=(); i=0; host=''
@@ -613,7 +621,10 @@ warm)
       set -- "$m" -o ControlMaster=yes -o "ControlPath=$sock" -o ControlPersist=10m \
              -o SessionType=none -o ForkAfterAuthentication=yes -o StdinNull=yes -o BatchMode=yes \
              -o ServerAliveInterval=2 -o ServerAliveCountMax=3 -o ConnectTimeout=8 \
-             -o "IPQoS=lowdelay throughput" -o Compression=no
+             -o "IPQoS=lowdelay throughput" -o Compression=no \
+             -o ExitOnForwardFailure=no
+      # ↑ a static forward another line already holds (issue #1775) costs the
+      #   opener, never the warm master
       if [ -n "${FLEET_SHELL_WARM_CONNECT:-}" ]; then exec $FLEET_SHELL_WARM_CONNECT "$@"
       else exec python3 "$BIN/fleet-connect.py" "$@"; fi
     ) </dev/null >>"$WD/warm.log" 2>&1 &

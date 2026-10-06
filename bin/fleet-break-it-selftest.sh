@@ -27,6 +27,7 @@
 #                                                   fleet-remote-view.sh
 #   client-kill-server                              bin/fleet (run again)
 #   hub-unreachable                                 bin/fleet, fleet-client-badge.sh
+#   static-forward / proxy-orphan                   bin/fleet-remote-view.sh (run), fleet-shell.sh
 #
 # tmux / python3 absent → SKIP (exit 0). BREAK_KEEP=1 keeps the work dir.
 # BREAK_ONLY="<id> <id>" runs only those drills (the lockstep lint always runs).
@@ -563,6 +564,70 @@ drill_hub_unreachable() {
            FLEET_CLIENT_BADGE_CACHE="$WORK/badge" bash "$BIN/fleet-client-badge.sh" cw=120 )
   case "$badge" in *入口连不上*) ;; *) WHY="the bar does not say 入口连不上: [$badge]"; return 1 ;; esac
   WHAT="客户端照常打开，状态栏写「入口连不上」"
+}
+
+# The proxy pane's `run` loop (fleet-remote-view.sh) against an ssh shim: a
+# session on a shared master that re-asks the person's static `RemoteForward`
+# (open-url.sh's 2226) is refused like ssh refuses it (issue #1775); an attach
+# that never returns is what kept a closed pane's loop alive (issue #1704).
+rv_shim() {
+  mkdir -p "$WORK/rv/tmp/warm"
+  cat > "$WORK/rv/ssh" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >> "$RV_LOG"
+op='' ctl='' clear=''
+for a in "$@"; do [ "$a" = ClearAllForwardings=yes ] && clear=1; done
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -O) op=$2; shift 2 ;;
+    -o) case "$2" in ControlPath=*) ctl=${2#ControlPath=} ;; esac; shift 2 ;;
+    -S) ctl=$2; mux=1; shift 2 ;;
+    -*) shift ;;
+    *) break ;;
+  esac
+done
+if [ -n "$op" ]; then case "$op" in check) [ -S "$ctl" ]; exit $? ;; *) exit 0 ;; esac; fi
+if [ -n "${mux:-}" ] && [ -z "$clear" ]; then   # the config's RemoteForward 2226, asked again
+  echo 'mux_client_forward: forwarding request failed: remote port forwarding failed for listen port 2226' >&2
+  echo 'muxclient: master forward request failed' >&2
+  exit 255
+fi
+case "$*" in *" attach"*) [ "${RV_HANG:-}" = 1 ] && { printf '%s\n' $$ > "$RV_DIR/attach.pid"; exec sleep 300; }; sleep 0.3 ;; esac
+exit 0
+SH
+  chmod +x "$WORK/rv/ssh"
+  python3 -c 'import socket, sys
+s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$WORK/rv/tmp/warm/m9.sock" 2>/dev/null
+  : > "$WORK/rv/ssh.log"; rm -f "$WORK/rv/attach.pid"
+}
+RVWID=00000000-0000-0000-0000-000000000000/issue-1
+rv_env() {
+  printf 'HOME=%s TMPDIR=%s FLEET_CONF_DIR=%s FLEET_REMOTE_SSH_CMD=%s RV_LOG=%s RV_DIR=%s FLEET_REMOTE_VIA_HUB=0 FLEET_REMOTE_GUARD_SECS=1' \
+    "$WORK/rv" "$WORK/rv/tmp" "$WORK/rv/conf" "$WORK/rv/ssh" "$WORK/rv/ssh.log" "$WORK/rv"
+}
+drill_static_forward() {
+  CAP=5; local t0 n
+  rv_shim; t0=$(now)
+  env $(rv_env) bash "$BIN/fleet-remote-view.sh" run --shell m9 "$RVWID" > "$WORK/rv/out" 2>&1 < /dev/null
+  n=$(grep -c ' attach' "$WORK/rv/ssh.log")
+  [ "$n" = 1 ] || { WHY="the attach on the warm master was refused and retried ($n attaches): $(tail -n 1 "$WORK/rv/out")"; return 1; }
+  SECS=$(since "$t0"); WHAT="骑共享连接的会话不再重复要 2226，一次 attach 成功"
+}
+drill_proxy_orphan() {
+  CAP=8; local t0 so="$WORK/sock-rv" run att _
+  rv_shim
+  "$REAL_TMUX" -S "$so" -f /dev/null new-session -d -s rv -x 80 -y 20 \
+    "env $(rv_env) RV_HANG=1 bash $BIN/fleet-remote-view.sh run m9 $RVWID"
+  "$REAL_TMUX" -S "$so" new-window -d -t rv: 'sleep 600'
+  for _ in $(seq 1 50); do [ -s "$WORK/rv/attach.pid" ] && break; sleep 0.1; done
+  att=$(cat "$WORK/rv/attach.pid" 2>/dev/null)
+  run=$("$REAL_TMUX" -S "$so" display-message -p -t rv:0 '#{pane_pid}' 2>/dev/null)
+  [ -n "$att" ] && [ -n "$run" ] || { WHY="the proxy's attach never came up"; return 1; }
+  t0=$(now)
+  "$REAL_TMUX" -S "$so" kill-pane -t rv:0                       # the break
+  until_ok "$CAP" sh -c "! kill -0 $run 2>/dev/null && ! kill -0 $att 2>/dev/null" \
+    || { kill -KILL "$run" "$att" 2>/dev/null; WHY="the pane is gone, its run loop / attach still live after ${CAP}s"; return 1; }
+  SECS=$(since "$t0"); WHAT="窗格关掉，run 循环和它的 ssh 一起退出"
 }
 
 # ================================================================ run ===========
