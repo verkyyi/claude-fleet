@@ -3,7 +3,7 @@
 # machines (issue #1423, EPIC #1419 C4; the #1475 look + identity), mixed in with
 # this machine's, nested under their real parents, drawn like them (no machine
 # name on a row — #1475); no machine status line on top (#1531); a lost machine's rows dimmed
-# in their own group at the foot. Drives tmux-dashboard-rows.sh, fleet-hub-sessions.sh,
+# where they stand (#1882). Drives tmux-dashboard-rows.sh, fleet-hub-sessions.sh,
 # fleet-control-read.sh + fleet_control.py, and the read-only guards in
 # dash-fold-toggle.sh, dash-pin-toggle.sh and dash-migrate.sh.
 #
@@ -20,10 +20,11 @@
 #                   common width; its id is `wid:<worker_id>`
 #   S. status     — NO machine status line (issue #1531): the first row is the first
 #                   group, in the sidebar and the hub list alike; which machine is
-#                   online / 维护中 / lost lives in the bar and the lost headings only
+#                   online / 维护中 / lost lives in the bar and each row's @m4! only
 #   C. lost       — a lost machine's rows (the hub says lost, or the cache is older than
-#                   FLEET_HUB_SESSIONS_STALE) are `m4!` for the view, un-nested, in their
-#                   own group at the foot under `─ m4 失联 N 分钟 ─` — never vanish
+#                   FLEET_HUB_SESSIONS_STALE) are `m4!` for the view and STAY PUT (#1882):
+#                   same order, same nesting, no heading of their own — the frame is the
+#                   online one line by line but for the `!`; never vanish
 #   N. needs      — a remote row that is asking its person draws the local `!` + detail
 #   D. no network — rendering with the hub on runs no curl/wget/nc/ccquota, and the
 #                   producer names none of them (nor the refresher)
@@ -41,7 +42,7 @@
 #   L. hub silent — issue #1483 (EPIC #1479 C4): global/hub_ok older than
 #                   FLEET_HUB_SESSIONS_STALE is 失联 — the ONE word (the bar and the
 #                   remote-row actions read it too). The other machines' rows stay,
-#                   dimmed in their 失联 group, dated by the hub's silence; on the hub
+#                   dimmed where they stand (#1882); on the hub
 #                   source THIS machine's rows are tmux's set again (a window the cache
 #                   never named is back) with their live state — byte for byte the
 #                   local source under the same silence; a fresh hub_ok restores the
@@ -53,8 +54,8 @@
 #                   `无仓库`; ←/→ folds a group through the shell's OWN @repo_fold;
 #                   one repo ⇒ no heading; a node on the hub source (no FLEET_SHELL)
 #                   renders the same cache flat, byte for byte as before
-#                   (#1770: a lost machine's rows keep their `─ m4 失联 ─` heading on
-#                   a client too — `#me` empty never hides it under 无仓库)
+#                   (#1882: a lost machine's rows stay in their repo's group, dimmed —
+#                   the frame is the online one but for the `!`, 入口连不上 included)
 #   E. refresher  — fleet-hub-sessions.sh --refresh keeps YOUR sessions with a
 #                   worker_id: the other machines' (local=0) and, since #1480, this
 #                   fleet's own, marked local=1 with the window that holds them (empty
@@ -195,12 +196,12 @@ export CCQUOTA_FLEET=1
 # A remote parent starts FOLDED, as a local one does (issue #1749): its bit is
 # this machine's global/remote_fold_<sess>, absent ⇒ collapsed.
 s=$(side)
-eq "B: a remote parent starts folded — its done grandchild hidden" "solo;EPIC;C1;侧边栏;草稿;" "$(sorder "$s")"
+eq "B: a remote parent starts folded — its done grandchild hidden" "solo;草稿;EPIC;C1;侧边栏;" "$(sorder "$s")"
 eq "B: …its caret says so" "wid:$F/issue-1423|└▸|1/1|1|m4" "$(srow "$s" '侧边栏')"
 printf '%s/issue-1423\n' "$F" > "$G/remote_fold_$S"   # opened HERE: the rows below read it open
 s=$(side)
-eq "B: mixed with the local rows, each under its real parent; the lost one at the foot" \
-   "solo;EPIC;C1;侧边栏;孙;草稿;" "$(sorder "$s")"
+eq "B: mixed with the local rows, each under its real parent; the lost one where it would be online (#1882)" \
+   "solo;草稿;EPIC;C1;侧边栏;孙;" "$(sorder "$s")"
 eq "B: the local parent counts its remote descendants" "@1|▾|1/3|0|" "$(srow "$s" EPIC)"
 eq "B: a remote child under a LOCAL parent: depth 1, its own subtree, its machine in field 9" \
    "wid:$F/issue-1423|└▾|1/1|1|m4" "$(srow "$s" '侧边栏')"
@@ -266,40 +267,42 @@ eq "S: the hub list's first row is its column header, as with the hub off" \
 # ============================================================================
 # C. lost
 # ============================================================================
-eq "C: a row the hub calls lost: at the foot, un-nested, m4! for the view" \
-   "wid:$F/scratch-2| ||0|m4!" "$(srow "$s" '草稿')"
-eq "C: …under its machine's heading (no duration: the node itself is heard)" \
-   "─ m4 失联 ─;" "$(shdrs "$s")"
+# The list does not move (issue #1882): a lost row keeps its place, its group
+# and its parent; only field 9 gains `!` (the view dims the row off it). So the
+# whole frame with every row lost is the online frame with `m4` → `m4!`.
+online_s=$(side); online_h=$(hub)
+eq "C: a row the hub calls lost: in its place, at its depth, m4! for the view" \
+   "wid:$F/scratch-2| ||0|m4!" "$(srow "$online_s" '草稿')"
+hasnt "C: …no lost heading of its own (#1882 — no ─ m4 失联 ─ group)" "$(shdrs "$online_s")" "失联"
+unlost() { LC_ALL=C sed -e 's/m4!/m4/g'; }
 remote_cache $((NOW - 600)) online $((NOW - 600))
 s=$(side)
-eq "C: a stale cache: every remote row is lost — the foot, by rank, none nested" \
-   "solo;EPIC;C1;孙;侧边栏;草稿;" "$(sorder "$s")"
+eq "C: a stale cache: every remote row is lost — the SAME order as online" \
+   "$(sorder "$online_s")" "$(sorder "$s")"
 eq "C: …each m4!" "m4!|m4!|m4!" \
    "$(printf '%s|%s|%s' "$(srow "$s" '侧边栏' | cut -d'|' -f5)" "$(srow "$s" '孙' | cut -d'|' -f5)" "$(srow "$s" '草稿' | cut -d'|' -f5)")"
-eq "C: …not nested: the remote child lost its └" "wid:$F/issue-1423| ||0|m4!" "$(srow "$s" '侧边栏')"
-eq "C: …the local parent no longer counts them (only its local child C1 remains)" "@1|▾|0/1|0|" "$(srow "$s" EPIC)"
-eq "C: …the heading says how long" \
-   "─ m4 失联 10 分钟 ─;" "$(shdrs "$s")"
+eq "C: …still nested under its real parent" "wid:$F/issue-1423|└▾|1/1|1|m4!" "$(srow "$s" '侧边栏')"
+eq "C: …the local parent still counts them" "$(srow "$online_s" EPIC)" "$(srow "$s" EPIC)"
+eq "C: …the whole sidebar frame is the online one but for the ! (line by line)" \
+   "$(printf '%s\n' "$online_s" | unlost)" "$(printf '%s\n' "$s" | unlost)"
 h=$(hub)
-has "C: the hub list draws the heading too" "$h" "─ m4 失联 10 分钟 ─"
-eq "C: FLEET_HUB_SESSIONS_STALE widens the window" \
-   "solo;EPIC;C1;侧边栏;孙;草稿;" "$(sorder "$(FLEET_HUB_SESSIONS_STALE=900 side)")"
+hasnt "C: the hub list draws no lost heading either" "$h" "失联"
+eq "C: …and keeps its row order" \
+   "$(printf '%s\n' "$online_h" | LC_ALL=C awk -F"$US" '{ print $2 }')" "$(printf '%s\n' "$h" | LC_ALL=C awk -F"$US" '{ print $2 }')"
 remote_cache "$NOW" lost $((NOW - 180))
 s=$(side)
-eq "C: the hub says the machine is lost: its last observation dates the silence" \
-   "─ m4 失联 3 分钟 ─;" "$(shdrs "$s")"
+eq "C: the hub says the machine is lost: the same order" "$(sorder "$online_s")" "$(sorder "$s")"
+hasnt "C: …no heading" "$(shdrs "$s")" "失联"
 eq "C: …and every row of it is lost, whatever its own word" "m4!" "$(srow "$s" '侧边栏' | cut -d'|' -f5)"
 # 维护中 (#1427): the hub's third word for a machine — heard, the operator is
 # taking it down. The bar's machine cell says so; nothing about its rows
-# changes: not lost, not dimmed (no m4!), no lost group, nesting intact.
+# changes: not lost, not dimmed (no m4!), nesting intact.
 remote_cache "$NOW" maintenance "$NOW"
 s=$(side)
-eq "C: a 维护中 machine: no lost heading of its own — only the row the hub calls lost gathers under one" \
-   "─ m4 失联 ─;" "$(shdrs "$s")"
+eq "C: a 维护中 machine: no heading, the same order" "$(sorder "$online_s")" "$(sorder "$s")"
 eq "C: …its online rows are live rows (no m4!), still nested under the local parent, their own child counted" \
    "wid:$F/issue-1423|└▾|1/1|1|m4" "$(srow "$s" '侧边栏')"
 eq "C: …only the row the hub itself calls lost is lost" "m4!" "$(srow "$s" '草稿' | cut -d'|' -f5)"
-eq "C: …English says lost" "─ m4 lost ─;" "$(shdrs "$(FLEET_UI_LANG=en side)")"
 remote_cache "$NOW"
 
 # ============================================================================
@@ -341,14 +344,14 @@ eq "H: …and the hub list" "$golden_h" "$(hub)"
 eq "H: …FLEET_SIDEBAR_SOURCE=local says the same" "$golden_s" "$(FLEET_SIDEBAR_SOURCE=local side)"
 hs=$(FLEET_SIDEBAR_SOURCE=hub side)
 eq "H: hub source — the row set is the cache's: the local rows it names, the remote rows; solo (unnamed), gone (@9), nowin (no window) are not rows" \
-   "EPIC;C1;侧边栏;孙;草稿;" "$(sorder "$hs")"
+   "草稿;EPIC;C1;侧边栏;孙;" "$(sorder "$hs")"
 eq "H: a local row is its tmux line: its @ id, its LIVE state (tmux says looping, the cache said done), its caret + k/N, no machine" \
    "@1|looping|▾|1/3|0|" "$(srow9 "$hs" EPIC)"
 eq "H: …its child nests under it as today" "@2|└||1|" "$(srow "$hs" C1)"
 eq "H: …and the remote child under the local parent, as today" "wid:$F/issue-1423|└▾|1/1|1|m4" "$(srow "$hs" '侧边栏')"
 hasnt "H: hub source — no machine status line either" "$(shdrs "$hs")" "●"
 eq "H: the sidebar's own window stays on its list before the hub has it" \
-   "solo;EPIC;C1;侧边栏;孙;草稿;" "$(sorder "$(FLEET_SIDEBAR_SOURCE=hub FLEET_SIDEBAR_CURRENT=@3 side)")"
+   "solo;草稿;EPIC;C1;侧边栏;孙;" "$(sorder "$(FLEET_SIDEBAR_SOURCE=hub FLEET_SIDEBAR_CURRENT=@3 side)")"
 eq "H: the hub list ignores the switch" "$golden_h" "$(FLEET_SIDEBAR_SOURCE=hub hub)"
 eq "H: hub off — \`hub\` is the no-cache output" "$base_s" "$(CCQUOTA_FLEET='' FLEET_SIDEBAR_SOURCE=hub side)"
 mv "$G/remote_$S" "$WORK/remote.keep"
@@ -370,7 +373,7 @@ wf 5   无仓库  /home/op            working  @5   ''     ''  1          # a no
 wf 6   钉住    /w/app-issue-1431   'done'   @6   1431   1   ''         # pinned, keyed, not in the cache
 hs=$(FLEET_SIDEBAR_SOURCE=hub side)
 eq "H: hub source — a pinned or @norepo window the cache does not name is still a row; the keyed, unpinned one (solo) still is not" \
-   "向导;钉住;无仓库;EPIC;C1;侧边栏;孙;草稿;" "$(sorder "$hs")"   # 无仓库 is working: it sorts ahead of looping as on the local source
+   "向导;钉住;无仓库;草稿;EPIC;C1;侧边栏;孙;" "$(sorder "$hs")"   # 无仓库 is working: it sorts ahead of looping as on the local source
 has "H: …in the 置顶 group" "$(shdrs "$hs")" "置顶 (2)"
 eq "H: …the local source's rows minus solo (keyed, unlisted: #1480's rule stands)" "$(sorder "$(side)" | sed 's/solo;//')" "$(sorder "$hs")"
 mv "$WORK/wlist.keep" "$WLIST_FILE"
@@ -390,12 +393,11 @@ eq "L: a fresh hub_ok changes nothing on the hub source" "$hs" "$(FLEET_SIDEBAR_
 eq "L: …nor on the default source" "$golden_s" "$(side)"
 printf '%s\n' $(( NOW - 600 )) > "$G/hub_ok"            # silent 10 minutes; the cache itself fresh
 ls_=$(FLEET_SIDEBAR_SOURCE=hub side)
-eq "L: hub source, the hub silent — this machine's rows are tmux's set again (solo, never in the cache, is back), the other machine's at the foot, none nested" \
-   "solo;EPIC;C1;孙;侧边栏;草稿;" "$(sorder "$ls_")"
+eq "L: hub source, the hub silent — this machine's rows are tmux's set again (solo, never in the cache, is back), the other machine's where they were (#1882)" \
+   "solo;草稿;EPIC;C1;侧边栏;孙;" "$(sorder "$ls_")"
 eq "L: …byte for byte the local source under the same silence: one code path, not a second" "$(FLEET_SIDEBAR_SOURCE=local side)" "$ls_"
-eq "L: …the other machine's rows are 失联, dated by the hub's silence (its #node says seen just now — unheard at least since the hub was)" \
-   "─ m4 失联 10 分钟 ─;" "$(shdrs "$ls_")"
-eq "L: …each of them m4! for the view, un-nested" "wid:$F/issue-1423| ||0|m4!" "$(srow "$ls_" '侧边栏')"
+hasnt "L: …the other machine's rows are 失联 without a heading of their own (#1882)" "$(shdrs "$ls_")" "失联"
+eq "L: …each of them m4! for the view, still nested" "wid:$F/issue-1423|└▾|1/1|1|m4!" "$(srow "$ls_" '侧边栏')"
 eq "L: …a local row is still its tmux line: its @ id, its live state" "@1|looping" "$(srow9 "$ls_" EPIC | cut -d'|' -f1,2)"
 cp "$WLIST_FILE" "$WORK/wlist.keep"
 LC_ALL=C awk -F"$US" -v OFS="$US" '$3 == "EPIC" { $5 = "working" } 1' "$WORK/wlist.keep" > "$WLIST_FILE"
@@ -460,11 +462,11 @@ PATH="$SHIMPATH" FLEET_SESSION=$SH DASH_FOLD_PLAIN=1 bash "$BIN/dash-fold-toggle
 hasnt "P: …a node with no conf repos writes nothing" "$(cat "$TMUX_LOG")" "@repo_fold"
 LC_ALL=C grep -v 'acme/tool' "$G/remote_$SH" > "$WORK/one" && mv "$WORK/one" "$G/remote_$SH"
 eq "P: one repo among the rows — no repo heading (a one-repo fleet's frame)" "" "$(shdrs "$(FLEET_SHELL=1 shell_side)")"
-# Issue #1770: on the client (`#me` empty) a row with a repo goes to its repo's
-# group, a no-repo row to 无仓库 — and a LOST machine's row to that machine's
-# group at the foot, under its own `─ m4 失联 ─` heading. The heading used to be
-# keyed on `#me`, so on a client the lost row sank below 无仓库 with no heading
-# and read as a no-repo session (counted nowhere: `无仓库 (1)` above two rows).
+# Issues #1770/#1882: on the client (`#me` empty) a row with a repo goes to its
+# repo's group, a no-repo row to 无仓库 — and a LOST machine's row STAYS there,
+# dimmed (`m4!`): no `─ m4 失联 ─` group at the foot, so the list does not
+# reshuffle when a network drops and again when it comes back (#1882). Before
+# #1770 the foot group had no heading on a client and read as 无仓库's rows.
 FP=33333333-4444-5555-6666-888888888888            # a fleet on m5
 { printf '#ts\037%s\n#me\037\n#node\037m4\037lost\0371\037%s\n#node\037m5\037online\0373\037%s\n' "$NOW" "$((NOW - 600))" "$NOW"
   printf 'wid:%s/acme-app:issue-41\037m5\037online\03741\037acme/app\037working\037claude\037应用活\037\037\0370\037\n' "$FP"
@@ -473,16 +475,18 @@ FP=33333333-4444-5555-6666-888888888888            # a fleet on m5
   printf 'wid:%s/acme-app:issue-43\037m4\037online\03743\037acme/app\037looping\037claude\037活页\037\037\0370\037\n' "$F"
 } > "$G/remote_$SH"
 lr=$(FLEET_SHELL=1 shell_side)
-eq "P: #1770 — a client's lost machine gets its heading after 无仓库, not 无仓库's rows" \
-   "app (1);tool (1);无仓库 (1);─ m4 失联 10 分钟 ─;" "$(shdrs "$lr")"
-eq "P: #1770 — …its row sits under that heading, last" "应用活;工具活;无仓活;活页;" "$(sorder "$lr")"
-eq "P: #1770 — …the heading right above it" "─ m4 失联 10 分钟 ─|活页" \
-   "$(printf '%s\n' "$lr" | LC_ALL=C awk -F"$US" '{ if ($1 != "hdr" && $4 == "活页") { print h "|" $4; exit } h = $4 }')"
-sed -e "s/^#node\x1fm4\x1flost/#node\x1fm4\x1fonline/" "$G/remote_$SH" > "$WORK/l" && mv "$WORK/l" "$G/remote_$SH"
-lr=$(FLEET_SHELL=1 shell_side)
-eq "P: #1770 — m4 back online: the row with a repo is in its repo's group, no lost heading" \
+eq "P: #1882 — a client's lost machine: its row stays in its repo's group, no lost heading" \
    "app (2);tool (1);无仓库 (1);" "$(shdrs "$lr")"
-eq "P: #1770 — …under app, the no-repo row alone in 无仓库" "应用活;活页;工具活;无仓活;" "$(sorder "$lr")"
+eq "P: #1882 — …in its place, dimmed (m4!)" "应用活;活页;工具活;无仓活;|m4!" "$(sorder "$lr")|$(srow "$lr" '活页' | cut -d'|' -f5)"
+sed -e "s/^#node\x1fm4\x1flost/#node\x1fm4\x1fonline/" "$G/remote_$SH" > "$WORK/l" && mv "$WORK/l" "$G/remote_$SH"
+lo=$(FLEET_SHELL=1 shell_side)
+eq "P: #1882 — m4 back online: the frame is the lost one line by line but for the !" \
+   "$(printf '%s\n' "$lr" | LC_ALL=C sed 's/m4!/m4/g')" "$lo"
+# the whole entrance silent (hub_ok stale): every row lost, still the same frame
+printf '%s\n' $(( NOW - 600 )) > "$G/hub_ok"
+eq "P: #1882 — 入口连不上: every row m4!/m5!, the frame otherwise unchanged" \
+   "$lo" "$(FLEET_SHELL=1 shell_side | LC_ALL=C sed -e 's/m4!/m4/g' -e 's/m5!/m5/g')"
+rm -f "$G/hub_ok"
 
 # K. kinship on the shell (issue #1698): a row's key is `wid:<worker_id>`, its
 # parent `<worker_id>` bare — pass A strips the `wid:` off the key (KEYTAB), so
@@ -491,7 +495,7 @@ eq "P: #1770 — …under app, the no-repo row alone in 无仓库" "应用活;�
 # machine (by design, #1423: a worker_id names one session wherever it runs —
 # the sidebar shows the real tree, not a per-machine one) and in another repo
 # (it follows its root's group, #1031, its own repo as a ⇢ tag); a parent whose
-# machine is lost un-nests its child (the `wid:$r_orig` lost test), and a parent
+# machine is lost keeps its child nested (#1882 — the list does not move), and a parent
 # no row names (another login's fleet) leaves the child at the top.
 F5=33333333-4444-5555-6666-777777777777            # a fleet on a third machine, m5
 { printf '#ts\037%s\n#me\037\n#node\037m4\037online\0373\037%s\n#node\037m5\037online\0371\037%s\n' "$NOW" "$NOW" "$NOW"
@@ -525,7 +529,8 @@ eq "K: a parent no row names leaves its child at the top" " |0" "$(srow "$ks" '�
 eq "K: …and the children sort right under their parent" "父;" "$(sorder "$ks" | cut -d';' -f1);"
 sed -e "s/^#node\x1fm4\x1fonline/#node\x1fm4\x1flost/" "$G/remote_$SH" > "$WORK/k" && mv "$WORK/k" "$G/remote_$SH"
 kl=$(FLEET_SHELL=1 shell_side)
-eq "K: the parent's machine lost — the m5 child un-nests (the wid:\$r_orig lost test)" " |0" "$(srow "$kl" '跨机子' | cut -d'|' -f2,4)"
+eq "K: the parent's machine lost — the m5 child stays nested under it (#1882)" "└|1" "$(srow "$kl" '跨机子' | cut -d'|' -f2,4)"
+eq "K: …the same order as online" "$(sorder "$ks")" "$(sorder "$kl")"
 rm -f "$G/remote_$SH" "$G/remote_fold_$SH" "$G/hub_ok"
 mv "$WORK/wlist.keep" "$WLIST_FILE"
 

@@ -34,6 +34,7 @@
 #                                                   fleet-remote-view.sh
 #   client-kill-server                              bin/fleet (run again)
 #   hub-unreachable                                 bin/fleet, fleet-client-badge.sh
+#   offline-list-moves                              tmux-dashboard-rows.sh (lost rows stay put), fleet-sidebar.py
 #   static-forward / proxy-orphan                   bin/fleet-remote-view.sh (run), fleet-shell.sh
 #   reconnect-stale-view / reconnect-mouse          bin/fleet-remote-view.sh (run, open, select)
 #   client-files-swapped                            bin/fleet-client-update.sh (tick), fleet-shell.sh reload
@@ -58,7 +59,7 @@ cleanup() {
   local s
   for s in "$WORK"/sock-*; do [ -S "$s" ] && "$REAL_TMUX" -S "$s" kill-server 2>/dev/null; done
   for s in kf "kscr$$"; do TMUX_TMPDIR="$WORK/ktt" "$REAL_TMUX" -L "$s" kill-server 2>/dev/null; done
-  for s in "$CSESS" "$CSESS-stage" "${CSESS}h" "${CSESS}h-stage" "${CSESS}u" "${CSESS}u-stage"; do "$REAL_TMUX" -L "$s" kill-server 2>/dev/null; done
+  for s in "$CSESS" "$CSESS-stage" "${CSESS}h" "${CSESS}h-stage" "${CSESS}o" "${CSESS}o-stage" "${CSESS}u" "${CSESS}u-stage"; do "$REAL_TMUX" -L "$s" kill-server 2>/dev/null; done
   pkill -f "fleet-shell.sh keeper $CSESS" 2>/dev/null
   pkill -f "$WORK/" 2>/dev/null
   [ -n "${BREAK_KEEP:-}" ] && { printf 'kept %s\n' "$WORK" >&2; return; }
@@ -886,6 +887,115 @@ drill_hub_unreachable() {
            FLEET_CLIENT_BADGE_CACHE="$WORK/badge" bash "$BIN/fleet-client-badge.sh" cw=120 )
   case "$badge" in *入口连不上*) ;; *) WHY="the bar does not say 入口连不上: [$badge]"; return 1 ;; esac
   WHAT="客户端照常打开，状态栏写「入口连不上」"
+}
+
+# The list does not move while a line is down (issue #1882): the real client on
+# its own -L socket, a fake hub serving sessions in two repos on two machines.
+# Before, a lost machine's rows moved into a `─ m4 失联 ─` group at the foot and
+# came back when it answered again — the list reshuffled twice. The sidebar pane
+# is captured before / during / after: during, the same lines in the same order,
+# only the lost rows' `@m4!` (the colour is the view's, never in a capture).
+off_hub() {   # the fake hub: `down` = unreachable, else the current answer
+  mkdir -p "$WORK/off"
+  printf '#!/bin/bash\n[ -f "%s/off/down" ] && exit 1\ncat "%s/off/cur.json"\n' "$WORK" "$WORK" > "$WORK/off/hub"
+  chmod +x "$WORK/off/hub"
+  python3 - "$WORK/off" <<'PY'
+import json, sys
+d = sys.argv[1]
+def s(host, key, name, repo, origin=None, state="working"):
+    f = "11111111-2222-3333-4444-55555555555" + ("4" if host == "m4" else "5")
+    w = dict(key=key, name=name, repo=repo, state=state, lifecycle="awake", agent="claude")
+    if origin:
+        w["origin_wid"] = f + "/" + origin
+    return dict(worker_id=f + "/" + key, machine_name=host, os_user="verk", fleet_id=f,
+                fleet_name="x", availability="online", worker=w, observed_at="2026-10-06T10:00:00Z")
+rows = [s("m5", "acme-app:scratch-1", "app-root", "acme/app", state="looping"),
+        s("m4", "acme-app:issue-2", "app-kid", "acme/app", origin="acme-app:scratch-1"),
+        s("m4", "acme-app:issue-3", "app-m4", "acme/app"),
+        s("m5", "acme-tool:issue-4", "tool-m5", "acme/tool"),
+        s("m4", "acme-tool:issue-5", "tool-m4", "acme/tool", state="done"),
+        s("m4", "acme-x:scratch-6", "loose-m4", None)]
+def node(host, av):
+    return dict(machine_name=host, availability=av, sessions=3, observed_at="2026-10-06T10:00:00Z")
+on = dict(sessions=rows, nodes=[node("m4", "online"), node("m5", "online")])
+lost = dict(sessions=[dict(r, availability="lost") if r["machine_name"] == "m4" else r for r in rows],
+            nodes=[node("m4", "lost"), node("m5", "online")])
+json.dump(on, open(d + "/on.json", "w")); json.dump(lost, open(d + "/m4lost.json", "w"))
+PY
+  cp "$WORK/off/on.json" "$WORK/off/cur.json"; rm -f "$WORK/off/down" "$WORK/off/stop"
+}
+off_list() {   # the sidebar pane as it reads (text only), blank lines dropped
+  local p
+  p=$("$REAL_TMUX" -L "$1" list-panes -t "=$1:home" -F '#{@sidebar} #{pane_id}' 2>/dev/null | awk '$1 == 1 { print $2; exit }')
+  [ -n "$p" ] && "$REAL_TMUX" -L "$1" capture-pane -p -t "$p" 2>/dev/null | sed -e 's/[[:space:]]*$//' | grep -v '^$'
+}
+# the rows only: from the first row naming a session to the last — the footer
+# (input line, hints) is the bar's business, not the list's
+off_rows() { off_list "$1" | awk '/app-root|app-kid|app-m4|tool-m5|tool-m4|loose-m4|\([0-9]+\)$|失联/ { print }' | spin_off; }
+spin_off() { sed -e 's/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/*/g'; }       # the working spinner turns on its own
+off_norm() { LC_ALL=C sed -e 's/!//g' -e 's/  */ /g'; }
+off_wait() {   # <socket> <secs> <grep -E pattern> [v] — until the rows (do not) show it
+  local _
+  for _ in $(seq 1 $(($2 * 5))); do
+    if [ "${4:-}" = v ]; then off_rows "$1" | grep -qE "$3" || return 0
+    else off_rows "$1" | grep -qE "$3" && return 0; fi
+    sleep 0.2
+  done
+  return 1
+}
+drill_offline_list_moves() {
+  CAP=30; local s="${CSESS}o" t0 before during
+  client_setup; off_hub
+  # its own cache + TMPDIR (refresher, hub_ok, the remote list): an earlier
+  # drill's client may still run a refresher on the shared ones
+  mkdir -p "$WORK/off/tmp"
+  client_start "$s" FLEET_SHELL_CACHE="$WORK/off/cache" TMPDIR="$WORK/off/tmp" FLEET_HUB_SESSIONS_CMD="$WORK/off/hub" FLEET_HUB_SESSIONS_STALE=12 FLEET_HUB_SESSIONS_LOOP_SECS=150 \
+    || { WHY="the client did not start: $(head -3 "$WORK/up-$s.err")"; return 1; }
+  # a terminal stays attached for the whole drill (the list is drawn for a
+  # client); it leaves on its own at the stop file or after 150s, never later
+  python3 - "$REAL_TMUX" "$s" "$WORK/off/stop" <<'PY' &
+import os, pty, select, signal, struct, fcntl, sys, termios, time
+tmux, sess, stop = sys.argv[1:4]
+pid, fd = pty.fork()
+if pid == 0:
+    os.environ.update(TERM="xterm-256color", LANG="en_US.UTF-8", LC_ALL="en_US.UTF-8")
+    os.environ.pop("TMUX", None)
+    os.execvp(tmux, [tmux, "-L", sess, "attach-session", "-t", "=" + sess])
+fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 160, 0, 0))
+end = time.time() + 150
+while time.time() < end and not os.path.exists(stop):
+    r, _, _ = select.select([fd], [], [], 0.2)
+    if r:
+        try: os.read(fd, 65536)
+        except OSError: break
+try: os.kill(pid, signal.SIGTERM)
+except OSError: pass
+PY
+  off_wait "$s" 30 'loose-m4' || { WHY="the hub's rows never reached the list: [$(off_list "$s" | tr '\n' '|')]"; : > "$WORK/off/stop"; return 1; }
+  sleep 1; before=$(off_rows "$s")
+  # 1. one machine lost: the hub says m4 is lost
+  cp "$WORK/off/m4lost.json" "$WORK/off/cur.json"
+  off_wait "$s" 20 '@m4!|@m!' || { WHY="m4 lost never showed on its rows: $(off_rows "$s" | tr '\n' '|')"; return 1; }
+  sleep 1; during=$(off_rows "$s")
+  case "$during" in *'@本!'*|*'@m5!'*) WHY="m4 lost dimmed m5's rows too (the hub went stale?): $(printf '%s' "$during" | tr '\n' '|')"; return 1 ;; esac
+  case "$during" in *失联*) WHY="a 失联 heading came back: $(printf '%s' "$during" | tr '\n' '|')"; return 1 ;; esac
+  [ "$(printf '%s\n' "$during" | off_norm)" = "$(printf '%s\n' "$before" | off_norm)" ] \
+    || { WHY="m4 lost moved the list: before [$(printf '%s' "$before" | tr '\n' '|')] during [$(printf '%s' "$during" | tr '\n' '|')]"; return 1; }
+  # 2. the hub unreachable: every row lost, still the same lines
+  cp "$WORK/off/on.json" "$WORK/off/cur.json"
+  off_wait "$s" 20 '@m4!|@m!' v || { WHY="m4 never came back after its loss"; return 1; }
+  : > "$WORK/off/down"
+  off_wait "$s" 40 '@m5!|@本!|@本机!' || { WHY="入口连不上 never dimmed the m5 rows: $(off_rows "$s" | tr '\n' '|')"; return 1; }
+  sleep 1; during=$(off_rows "$s")
+  [ "$(printf '%s\n' "$during" | off_norm)" = "$(printf '%s\n' "$before" | off_norm)" ] \
+    || { WHY="入口连不上 moved the list: before [$(printf '%s' "$before" | tr '\n' '|')] during [$(printf '%s' "$during" | tr '\n' '|')]"; return 1; }
+  # 3. back: the very lines of before, no `!` left
+  t0=$(now); rm -f "$WORK/off/down"
+  off_wait "$s" "$CAP" '!' v || { WHY="the rows stayed lost after the hub answered: $(off_rows "$s" | tr '\n' '|')"; return 1; }
+  [ "$(off_rows "$s")" = "$before" ] || { WHY="back online, the list differs from before: [$(off_rows "$s" | tr '\n' '|')]"; return 1; }
+  SECS=$(since "$t0"); : > "$WORK/off/stop"
+  "$REAL_TMUX" -L "$s" kill-server 2>/dev/null; "$REAL_TMUX" -L "$s-stage" kill-server 2>/dev/null
+  WHAT="m4 失联 / 入口连不上：行数、顺序、分组不变，只多 @m4!；恢复后与断开前逐行一致"
 }
 
 # The proxy pane's `run` loop (fleet-remote-view.sh) against an ssh shim: a
