@@ -18,6 +18,8 @@
 #   G. machine    a value naming this login's home asks for --yes (exit 4)
 #   H. restore    back to the previous version's body, as a new version
 #   I. package    the client manifests carry the script; `fleet config` dispatches
+#   J. people     the operator's list (#1866): two fake people, version · items ·
+#                 who changed it, never a bundle; no viewer token over HTTP = exit 2
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 real="$BIN/fleet-config.py"
@@ -62,6 +64,8 @@ def cur():
 m = sys.argv[1]; q = sys.argv[2] if len(sys.argv) > 2 else ""
 if m == "raw":
     print(json.dumps(cur()) if st["versions"] else ""); sys.exit(0)
+if m == "GET" and "all=1" in q:
+    print(json.dumps({"status": 200, "people": json.load(open(os.path.join(d, "people.json")))})); sys.exit(0)
 if m == "GET":
     r = dict(cur(), status=200)
     if "history=1" in q:
@@ -210,6 +214,21 @@ grep -q '^bin/fleet-config.py' "$REPO/conf/agent-bundle.manifest" && ok "I agent
 grep -q '^bin/fleet-config.py' "$REPO/tokenledger/internal/api/fleetclient/manifest" && ok "I the hub client manifest carries it" || bad "I not in fleetclient/manifest"
 out=$(env -i PATH="$PATH" HOME="$H" FLEET_CONF_DIR="$CONF" CODEX_HOME="$H/.codex" sh "$REPO/bin/fleet" config show claude.mcp.context7 2>&1)
 printf '%s' "$out" | grep -q 'claude.mcp.context7' && ok "I \`fleet config\` dispatches" || bad "I dispatch: $out"
+
+# ── J — people: every person's version, the operator's ───────────────────────
+cat > "$WORK/hub/people.json" <<'EOF'
+[{"principal": "wx-alice", "display_name": "Alice", "version": 4, "updated": "2026-10-06T08:00:00Z", "actor": "operator", "items": 3},
+ {"principal": "wx-bob", "version": 0, "items": 0}]
+EOF
+out=$(cfg people); rc=$?
+{ [ $rc = 0 ] && printf '%s\n' "$out" | grep 'wx-alice' | grep -q 'v4.*3.*2026-10-06 08:00:00.*operator' \
+  && printf '%s\n' "$out" | grep 'wx-bob' | grep -q '未写过'; } \
+  && ok "J people lists two people: version · items · when · by whom" || bad "J people: rc=$rc $out"
+out=$(cfg people --json); rc=$?
+[ $rc = 0 ] && [ "$(printf '%s' "$out" | "$PY" -c 'import json,sys; print(len(json.load(sys.stdin)))')" = 2 ] \
+  && ! printf '%s' "$out" | grep -q '"bundle"' && ok "J --json: two rows, no bundle" || bad "J --json: rc=$rc $out"
+out=$(env -i PATH="$PATH" HOME="$H" FLEET_CONF_DIR="$CONF" "$PY" "$C" people --hub http://127.0.0.1:9 2>&1); rc=$?
+[ $rc = 2 ] && printf '%s' "$out" | grep -q 'CCQUOTA_VIEWER_TOKEN' && ok "J no viewer token → exit 2 before asking the hub" || bad "J no token: rc=$rc $out"
 
 [ "$fail" = 0 ] && echo "fleet-config-selftest: PASS" || echo "fleet-config-selftest: FAIL"
 exit "$fail"

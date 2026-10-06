@@ -228,3 +228,52 @@ func TestPersonBundleOffAddsNothing(t *testing.T) {
 		t.Fatal("fleet_person_bundles exists although the fleet module is off")
 	}
 }
+
+// ?all=1 (claude-fleet#1866): the operator lists every person's current
+// version, updated time and item count — never a body; anyone else is 403.
+func TestPersonBundlePeopleSummary(t *testing.T) {
+	h, _, n := peerHarness(t) // Alice and Bob
+	if code, _, raw, _ := personCall(t, h, http.MethodPut, asSession("Alice"), personV1, ""); code != 200 {
+		t.Fatalf("Alice PUT: HTTP %d %s", code, raw)
+	}
+	if code, _, raw, _ := personCall(t, h, http.MethodPut, asSession("Alice"), map[string]any{"base": 1, "bundle": map[string]any{
+		"skills": map[string]any{"my-notes": "# notes\n"},
+		"hooks":  map[string]any{"Stop": []any{map[string]any{"command": "echo a"}, map[string]any{"command": "echo b"}}},
+	}}, ""); code != 200 {
+		t.Fatalf("Alice PUT v2: HTTP %d %s", code, raw)
+	}
+
+	for name, auth := range map[string]func(http.Header){"a session": asSession("Alice"), "a node": asNode(n["alice4"].token)} {
+		if code, _, raw, _ := personCall(t, h, http.MethodGet, auth, nil, "?all=1"); code != http.StatusForbidden {
+			t.Fatalf("%s ?all=1: HTTP %d %s, want 403", name, code, raw)
+		}
+	}
+	if code, _, raw, _ := personCall(t, h, http.MethodPut, asOperator, map[string]any{"restore": 1}, "?all=1"); code != http.StatusForbidden {
+		t.Fatalf("operator PUT ?all=1: HTTP %d %s, want 403", code, raw)
+	}
+
+	code, _, raw, _ := personCall(t, h, http.MethodGet, asOperator, nil, "?all=1")
+	if code != 200 {
+		t.Fatalf("operator ?all=1: HTTP %d %s", code, raw)
+	}
+	for _, leak := range []string{`"bundle"`, "my-notes", "say-done", "NOTES_TOKEN", "echo a"} {
+		if strings.Contains(raw, leak) {
+			t.Fatalf("?all=1 carries %s — a summary never holds the body: %s", leak, raw)
+		}
+	}
+	var got PersonSummaries
+	if err := json.Unmarshal([]byte(raw), &got); err != nil {
+		t.Fatal(err)
+	}
+	by := map[string]PersonSummary{}
+	for _, p := range got.People {
+		by[p.Principal] = p
+	}
+	a, b := by["Alice"], by["Bob"]
+	if a.Version != 2 || a.Items != 3 || a.Updated == nil || a.Actor != "Alice" {
+		t.Fatalf("Alice: %+v, want version 2, 3 items (1 skill + 2 Stop hooks), updated, by Alice", a)
+	}
+	if _, ok := by["Bob"]; !ok || b.Version != 0 || b.Items != 0 || b.Updated != nil {
+		t.Fatalf("Bob: %+v (present %v), want listed at version 0", b, ok)
+	}
+}

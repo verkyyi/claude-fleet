@@ -29,6 +29,9 @@ import (
 //        POST {cert, sig, ts} by a connection certificate. The operator's
 //        doors read anyone's with ?principal=<id>. ETag
 //        "person-<pid8>-v<N>"; If-None-Match answers 304.
+//   GET  ?all=1   the operator's alone (claude-fleet#1866): every person's
+//        current version, updated time and item count — a summary, never a
+//        body; reading one stays ?principal=<id>&version=N.
 //   PUT  {bundle, base?, note?} | {restore: N, base?, note?}
 //        the person's own — session, node token or the same signed body.
 //        Someone else's (?principal= naming another) is 403. The operator
@@ -115,6 +118,15 @@ func (s *Server) handleFleetPersonBundle(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		w.Header().Set("WWW-Authenticate", `Bearer realm="ccquota"`)
 		httpError(w, http.StatusUnauthorized, "a session, a viewer token, a node token or a connection certificate is required")
+		return
+	}
+
+	if r.URL.Query().Get("all") != "" {
+		if !id.Operator || r.Method != http.MethodGet {
+			httpError(w, http.StatusForbidden, "every person's versions are the operator's view")
+			return
+		}
+		s.writePersonBundlePeople(w)
 		return
 	}
 
@@ -261,6 +273,86 @@ func (s *Server) writePersonBundle(w http.ResponseWriter, r *http.Request, perso
 	if v <= 0 && !history && r.Header.Get("If-None-Match") == tag {
 		w.WriteHeader(http.StatusNotModified)
 		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// PersonSummary is one person's line in ?all=1 — never the bundle.
+type PersonSummary struct {
+	Principal   string     `json:"principal"`
+	Login       string     `json:"login,omitempty"`
+	DisplayName string     `json:"display_name,omitempty"`
+	Version     int        `json:"version"`
+	Updated     *time.Time `json:"updated,omitempty"`
+	Actor       string     `json:"actor,omitempty"`
+	Items       int        `json:"items"`
+}
+
+// PersonSummaries is the ?all=1 answer.
+type PersonSummaries struct {
+	People []PersonSummary `json:"people"`
+}
+
+// bundleItems counts what a layer carries: one per MCP server, setting,
+// codex key, skill, hook program, and one per hook entry under each event.
+func bundleItems(raw string) int {
+	var b map[string]json.RawMessage
+	if json.Unmarshal([]byte(raw), &b) != nil {
+		return 0
+	}
+	n := 0
+	for k, v := range b {
+		if k == "hooks" {
+			var ev map[string][]json.RawMessage
+			if json.Unmarshal(v, &ev) == nil {
+				for _, l := range ev {
+					n += len(l)
+				}
+			}
+			continue
+		}
+		var m map[string]json.RawMessage
+		if json.Unmarshal(v, &m) == nil {
+			n += len(m)
+		}
+	}
+	return n
+}
+
+// writePersonBundlePeople lists every known person (version 0 = never
+// written) plus any layer whose person has since gone from the roster.
+func (s *Server) writePersonBundlePeople(w http.ResponseWriter) {
+	ps, err := s.Store.Principals()
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	heads, err := s.Store.PersonBundleHeads()
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	byID := map[string]store.PersonBundleHead{}
+	for _, h := range heads {
+		byID[h.Principal] = h
+	}
+	out := PersonSummaries{People: []PersonSummary{}}
+	add := func(sum PersonSummary, h store.PersonBundleHead, ok bool) {
+		if ok {
+			created := h.Created
+			sum.Version, sum.Updated, sum.Actor, sum.Items = h.Version, &created, h.Actor, bundleItems(h.Bundle)
+		}
+		out.People = append(out.People, sum)
+	}
+	for _, p := range ps {
+		h, ok := byID[p.ID]
+		delete(byID, p.ID)
+		add(PersonSummary{Principal: p.ID, Login: p.Login, DisplayName: p.DisplayName}, h, ok)
+	}
+	for _, h := range heads {
+		if _, left := byID[h.Principal]; left {
+			add(PersonSummary{Principal: h.Principal}, h, true)
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
 }
