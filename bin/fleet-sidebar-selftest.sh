@@ -602,8 +602,10 @@ try:
              'click did not visibly focus the sidebar')
     check(WORKER_FOCUS not in border(p1),
           'worker still advertises input focus after a sidebar click')
-    check(TASKS_FOCUS in border(side),
-          'sidebar border did not advertise keyboard focus')
+    # Focus is the cursor on the input line (issue #1764): TASKS keeps one dim
+    # colour whichever pane holds the keys.
+    check(TASKS_FOCUS not in border(side),
+          'sidebar border still paints keyboard focus')
     nav_text = [border_text(p1), border_text(side)]
     # ↑↓ follow (issue #822): an arrow through the key table switches to the
     # highlighted worker once the highlight settles, keeps the client in the
