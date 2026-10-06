@@ -57,4 +57,5 @@ bin/fleet-install-apply.sh          tool
 bin/fleet-hooks-merge.py            tool
 bin/fleet-agent-defaults.py         tool
 bin/fleet-agent-team.py             tool
+bin/fleet-config.py                 tool
 bin/fleet-daemon-lib.sh             tool
