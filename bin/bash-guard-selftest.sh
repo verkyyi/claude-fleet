@@ -433,6 +433,7 @@ fleet_seat() { printf '%s' "${STUB_SEAT:-}"; }
 fleet_pane_fmt() { printf '%s' "${STUB_ISSUE:-}"; }
 STUB
 DLOG="$TMP/direct.log"
+# shellcheck disable=SC2088  # the literal ~ is the point: the guard expands it, as a worker types it
 LIVE='~/.claude/fleet/bin'
 mcp_json() { printf '{"tool_name":"%s","tool_input":{}}' "$1"; }
 direct() {   # direct <want-exit> <label> <json> [<mode>] — a worker seat unless STUB_SEAT is set
@@ -441,6 +442,7 @@ direct() {   # direct <want-exit> <label> <json> [<mode>] — a worker seat unle
            STUB_SEAT="${STUB_SEAT-worker}" STUB_ISSUE=1812
     unset FLEET_HUB FLEET_ALLOW_DIRECT_SCRIPTS FLEET_DIRECT_SCRIPTS
     [ -n "${4:-}" ] && export FLEET_DIRECT_SCRIPTS="$4"
+    # shellcheck disable=SC2163  # DIRECT_ENV holds NAME=value — export the assignment it carries
     [ -n "${DIRECT_ENV:-}" ] && export "$DIRECT_ENV"
     fails=0; assert_exit "$1" "direct: $2" "$GUARD" "$3"; exit "$fails" ) || fails=$((fails + 1))
 }
