@@ -14,6 +14,8 @@
 #   fleet connect [machine]     route + ssh only — what the client runs inside;
 #                               for debugging (`fleet connect m4 --print`)
 #   fleet connect --proxy <m>   ssh's ProxyCommand through the hub
+#   fleet doctor                this computer's health; with only the client,
+#                               its one `client` row (version, hub, tmux, cert)
 #
 # The client is the ONLY way in (issue #1628): there is no fallback to ssh-ing
 # into a machine's own list. It needs tmux ≥ 3.2 and a terminal; without either
@@ -28,6 +30,16 @@
 here=$(cd "$(dirname "$0")" && pwd -P)
 # client — the client, or one line on why it cannot open here and a non-zero exit
 client() {
+  # keep up with the hub (issue #1722): an installed client asks it, at most
+  # hourly, for a newer client and the team's defaults; 3 = files switched,
+  # so the new `fleet` opens instead (once — FLEET_CLIENT_UPDATED)
+  if [ -z "${FLEET_CLIENT_UPDATED:-}" ] && [ -x "$here/fleet-client-update.sh" ]; then
+    "$here/fleet-client-update.sh" start
+    if [ $? -eq 3 ]; then
+      FLEET_CLIENT_UPDATED=1; export FLEET_CLIENT_UPDATED
+      exec "$here/fleet" "$@"
+    fi
+  fi
   if ! command -v tmux >/dev/null 2>&1; then
     echo 'fleet · 客户端要 tmux：macOS `brew install tmux`，Debian/Ubuntu `sudo apt install tmux`（安装行 curl -fsSL <入口>/install | sh 会顺手装上），装好再敲 fleet。' >&2
     exit 1
@@ -50,7 +62,7 @@ client() {
 cmd=${1-}
 case $cmd in
   -h|--help|help)
-    sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'
     exit 0 ;;
   '')
     client ;;
@@ -58,6 +70,13 @@ case $cmd in
     echo "fleet · 不认识的选项 $cmd；选路调试用 fleet connect $* （fleet --help）" >&2
     exit 2 ;;
 esac
+# fleet doctor on a computer with only the client (issue #1722): its one row
+if [ "$cmd" = doctor ] && [ ! -x "$here/fleet-doctor.sh" ] && [ -x "$here/fleet-client-update.sh" ]; then
+  r=$("$here/fleet-client-update.sh" doctor); tab=$(printf '\t')
+  printf '  %-4s  %-8s %s\n' "${r%%"$tab"*}" client "${r#*"$tab"}"
+  case $r in WARN*) exit 1 ;; esac
+  exit 0
+fi
 for ext in py sh; do
   if [ -x "$here/fleet-$cmd.$ext" ]; then
     shift

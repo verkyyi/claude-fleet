@@ -101,6 +101,10 @@ if [ ! -f "$CONF_DIR/fleet.conf" ] && { [ -f "$CONF_DIR/shell.conf" ] || [ -f "$
    && [ -f "$REAL_BIN/fleet-conf.sh" ]; then
   FLEET_CONF_DIR=$CONF_DIR bash "$REAL_BIN/fleet-conf.sh" migrate --quiet >&2 || :
 fi
+# The team's defaults from the hub (issue #1722), FIRST so every file below
+# wins: written only by fleet-client-update.sh, each line fills a gap only.
+# shellcheck source=/dev/null
+[ -f "$CONF_DIR/hub-defaults.conf" ] && . "$CONF_DIR/hub-defaults.conf"
 # shellcheck source=/dev/null
 [ -f "$CONF_DIR/shell.conf" ] && . "$CONF_DIR/shell.conf"
 # The machine's ONE config file (issue #1623): its [common] + [client] sections —

@@ -35,6 +35,8 @@ bin/fleet-node.sh
 bin/fleet-node-join.sh
 bin/fleet-connect.py
 bin/fleet-client-lib.sh
+# keeps up with the hub by itself (#1722): newer client + the team's defaults
+bin/fleet-client-update.sh
 bin/fleet-shell.sh
 bin/fleet-client-lease.py
 # open it on the device in your hands (#1717): the executor and what it drives

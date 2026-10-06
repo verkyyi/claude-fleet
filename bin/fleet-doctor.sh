@@ -848,6 +848,23 @@ if [ -f "$_hi" ]; then
   esac
 fi
 
+# --- client (issue #1722): the installed client — version vs the hub, tmux, cert -
+# bin/fleet-client-update.sh doctor answers for the install-line client
+# (~/.local/share/claude-fleet, FLEET_INSTALL_HOME): its version against the
+# hub's client_version, the hub reachable, tmux ≥ 3.2, the certificate. A
+# machine with no installed client prints nothing: the degenerate case. A
+# client-only computer gets the same row from `fleet doctor` (bin/fleet).
+_cu="$(dirname "$0")/fleet-client-update.sh"
+_cu_root="${FLEET_INSTALL_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/claude-fleet}"
+if [ -f "$_cu" ] && [ -f "$_cu_root/.client-version" ]; then
+  _cu_out=$(bash "$_cu" doctor --root "$_cu_root" 2>/dev/null)
+  case "$_cu_out" in
+    PASS*) pass client "${_cu_out#*	}" ;;
+    WARN*) warn client "${_cu_out#*	}" ;;
+    INFO*) info client "${_cu_out#*	}" ;;
+  esac
+fi
+
 # --- sshtrust (issue #1626): no standing key from another fleet machine ----------
 # Cross-machine ssh rides a five-minute certificate the hub signs per connection
 # (fleet-peer-cert.sh); a key another fleet machine left in ~/.ssh/authorized_keys

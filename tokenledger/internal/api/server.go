@@ -363,6 +363,9 @@ func (s *Server) Handler() http.Handler {
 		// 404 until the hub can sign someone in with nothing in hand.
 		mux.HandleFunc("/install", s.handleInstall)
 		mux.HandleFunc("/install/", s.handleInstallFile)
+		// A client's team defaults (claude-fleet#1722): whitelisted, never
+		// a credential, read by every client's start — public like /install.
+		mux.HandleFunc("/v1/fleet/client-settings", s.handleClientSettings)
 		// Credentials (claude-fleet#1415): the lease authenticates with the
 		// node's enrollment token, like the control channel; everything else
 		// is the operator's.

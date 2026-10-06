@@ -355,11 +355,21 @@ if [ -n "$STATUS_CR" ]; then
     fi
 fi
 
+# --- A client that just updated itself (issue #1722): bin/fleet-client-update.sh
+# leaves `已更新到 <commit>` in its note when it switches; the client's bar says
+# it for an hour. No note (every node, every client that did not update): nothing.
+CU_SEG=''
+_cun="${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet/client/note"
+if [ "${FLEET_SHELL:-0}" = 1 ] && [ -f "$_cun" ] && [ -n "$(find "$_cun" -mmin -60 2>/dev/null)" ]; then
+    IFS= read -r _cut < "$_cun" && [ -n "$_cut" ] && CU_SEG="${BLUE}${_cut}"
+fi
+
 # --- Output: the segments in their order, nothing at all while all is well.
 MACH_SEG='' HUB_SEG=''
 [ "$HUB_MODE" = 1 ] && status_hub_render
 status_account
 status_seg "$CR_SEG"
+status_seg "$CU_SEG"
 status_seg "$MACH_SEG"
 status_seg "$_sq"
 status_seg "$gh_seg"

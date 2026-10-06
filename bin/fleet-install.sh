@@ -15,6 +15,8 @@
 #      puts a two-line `fleet` in ~/.local/bin that runs the real one — no sudo.
 #      A copy the manifest no longer lists is removed, so running the line
 #      again IS the update, and the tree is exactly the hub's;
+#      `.client-version` beside them records which client it is (#1722) —
+#      `fleet` compares it with the hub's /version on start and keeps up;
 #   2. writes the hub's URL to ~/.config/claude-fleet/fleet.conf, the machine's
 #      one config file (FLEET_HUB_URL, FLEET_ROLE client — issue #1623);
 #      hub.json keeps its token;
@@ -167,6 +169,24 @@ for d in bin conf; do
     case " $FILES" in *" $rel "*) ;; *) rm -f "$old"; say "  去掉了入口不再发的旧文件 $rel" ;; esac
   done
 done
+# Which client this is (issue #1722): the hub's /version answer for it, so
+# `fleet` can tell on its next start whether the hub hands out a newer one
+# (bin/fleet-client-update.sh). Written with the hub only; a hub that does not
+# say leaves the fields empty — still the mark of an installed client.
+if [ "$NOHUB" = 0 ]; then
+  curl -fsS --max-time 10 "$HUB/version" -o "$tmp/version.json" 2>/dev/null || : > "$tmp/version.json"
+  python3 - "$tmp/version.json" "$HUB" > "$ROOT/.client-version" <<'PY' || :
+import json, sys, time
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    d = {}
+def s(k):
+    v = d.get(k)
+    return "" if v is None else str(v)
+print("version=%s\ncompat=%s\ncommit=%s\nhub=%s\nat=%d" % (s("client_version"), s("client_compat"), s("commit"), sys.argv[2], time.time()))
+PY
+fi
 # The `fleet` on PATH: two lines that run the real one — a script, not a
 # symlink, because `fleet` finds its siblings in the directory of ITS OWN path
 # and a directory of symlinks relies on that (fleet-shell.sh's conf-free mirror,

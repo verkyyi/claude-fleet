@@ -17,7 +17,9 @@ package fleetclient
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"strings"
 )
 
@@ -52,6 +54,43 @@ func init() {
 	if Installer == "" {
 		panic("fleetclient: the manifest names no `installer` line")
 	}
+	Version = Digest(func(name string) ([]byte, error) { return Files.ReadFile(name) }, Names)
+}
+
+// Version is this build's CLIENT version (claude-fleet#1722): a digest of
+// every file a client downloads, so it changes exactly when what a colleague
+// would install changes — and a client asks GET /version whether its own
+// (recorded by the installer in <install home>/.client-version) is still it.
+// A digest has no order; "older" is Compat's job.
+var Version string
+
+// Compat is the client↔hub protocol level of the client this build serves,
+// and MinCompat the lowest level this hub still serves (claude-fleet#1722).
+// A client whose level is below MinCompat updates BEFORE it opens; one that is
+// only behind Version updates in the background and switches on its next
+// start. The promise is that a hub serves the current client and the one
+// before it — so MinCompat never rises above Compat-1 (TestClientCompatPromise):
+// a change an older client cannot survive bumps Compat, and the NEXT one may
+// raise MinCompat. bin/fleet-client-update.sh carries the same Compat for a
+// client that has none recorded.
+const (
+	Compat    = 1
+	MinCompat = 1
+)
+
+// Digest is the client version of a file list: the first 12 hex of the
+// SHA-256 over "<name>\x00<sha256 hex of the file>\n" for each, in order.
+func Digest(read func(string) ([]byte, error), names []string) string {
+	h := sha256.New()
+	for _, n := range names {
+		b, err := read(n)
+		if err != nil {
+			continue
+		}
+		sum := sha256.Sum256(b)
+		h.Write([]byte(n + "\x00" + hex.EncodeToString(sum[:]) + "\n"))
+	}
+	return hex.EncodeToString(h.Sum(nil))[:12]
 }
 
 // ParseManifest reads a manifest: one repo-relative path per line, an optional
