@@ -154,8 +154,8 @@ Do not install from memory: read the doc and work from it.
   it everywhere `dash|plan|backlog` is spelled. **A window is told by its
   `@fleet_role` (home | panel | worker), never its name** (issue #1844): the
   person may rename any window, so home's heal, "is this a fleet" and the
-  session caps read `FLEET_ROLE_FMT` / `fleet_win_role` (an unstamped window
-  falls back to the name rule), every opener stamps through
+  session caps read `FLEET_ROLE_FMT` + `FLEET_ROLE_AWK` / `fleet_win_role` (an
+  unstamped window prints its name and falls back to the name rule), every opener stamps through
   `fleet_win_role_stamp`, restore reconciles by `@fleet_id` first, and a
   broken-out agent pane (`prefix !`) takes its window's `@` options along
   (`fleet-window-carry.sh`, the node conf's `window-linked[74]` hook). **The task list is the CLIENT's

@@ -76,7 +76,8 @@ if [ "${FLEET_DASH_WINDOW:-0}" != 1 ]; then
     exit 0
   fi
   # By role, not name (issue #1844): a home the person renamed is still home.
-  win=$(tmux -L "$SOCK" list-windows -t "$SESS" -F "#{window_id} $FLEET_ROLE_FMT" 2>/dev/null | awk '$2=="home"{print $1; exit}')
+  win=$(tmux -L "$SOCK" list-windows -t "$SESS" -F "#{window_id} $FLEET_ROLE_FMT" 2>/dev/null \
+        | awk "$FLEET_ROLE_AWK"' { t=$0; sub(/^[^ ]* /, "", t) } frole(t)=="home" {print $1; exit}')
   if [ -z "$win" ]; then
     win=$(tmux -L "$SOCK" new-window -P -F '#{window_id}' -t "$SESS:" -n home -c "$BASE") || exit 0
     # A name tmux's automatic-rename must not change: the panel rules key on it.

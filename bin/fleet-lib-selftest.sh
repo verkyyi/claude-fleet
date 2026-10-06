@@ -69,9 +69,8 @@ case "${1:-}" in
     for d in ${FAKE_DOWN:-}; do [ "$d" = "$label" ] && exit 1; done
     exit 0 ;;
   list-windows)
-    # fleet_hub_sessions / fleet_session_count use the '<session> <role>' fmt
-    # (FLEET_ROLE_FMT, issue #1844): a 'plan' panel + one worker.
-    case "$*" in *fleet_role*) printf '%s panel\n%s worker\n' "$label" "$label" ;; esac
+    # fleet_hub_sessions / fleet_session_count use the '<session> <window>' fmt.
+    case "$*" in *window_name*) printf '%s plan\n%s work1\n' "$label" "$label" ;; esac
     exit 0 ;;
   display-message)
     for a in "$@"; do case "$a" in *'@issue'*) printf '%s\n' "${FAKE_ISSUE:-}"; exit 0 ;; esac; done

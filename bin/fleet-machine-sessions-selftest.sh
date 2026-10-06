@@ -43,9 +43,8 @@ case "\${1:-}" in
   list-windows)
     n="\${FAKE_WINDOWS:-0}"
     case "\$*" in *session_name*) pre='f ' ;; *) pre='' ;; esac
-    # the tally's fmt is '<role> @L=…' (FLEET_ROLE_FMT, issue #1844)
-    printf '%spanel @L=\n' "\$pre"
-    i=0; while [ "\$i" -lt "\$n" ]; do printf '%sworker @L=\n' "\$pre"; i=\$((i+1)); done ;;
+    printf '%sdash @L=\n' "\$pre"
+    i=0; while [ "\$i" -lt "\$n" ]; do printf '%sw%s @L=\n' "\$pre" "\$i"; i=\$((i+1)); done ;;
   has-session) exit 0 ;;
   display-message) case "\$*" in *-p*) case "\$*" in *window_id*) echo @9 ;; *session_name*) echo f ;; *) echo '' ;; esac ;; esac ;;
   new-window) printf '%s\n' "\$*" >> "$NEWWIN_LOG"; echo @9 ;;

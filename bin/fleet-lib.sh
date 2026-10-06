@@ -1805,7 +1805,13 @@ fleet_find_tool() {
 # through FLEET_ROLE_FMT / fleet_win_role, never the name. A window with no stamp
 # (opened by an older version) falls back to the old name rule — so a fleet with
 # no stamps reads byte for byte as before.
-FLEET_ROLE_FMT='#{?@fleet_role,#{@fleet_role},#{?#{==:#{window_name},home},home,#{?#{||:#{==:#{window_name},plan},#{||:#{==:#{window_name},dash},#{==:#{window_name},backlog}}},panel,worker}}}'
+# The format prints `=<role>` for a stamped window and the bare NAME otherwise;
+# FLEET_ROLE_AWK's frole() turns either into the role — one rule, in one place,
+# and a reader handed plain names (an older server, a test's canned rows) sees
+# exactly the old name rule. A window name may hold spaces: the format goes LAST
+# on a row that has to stay split on spaces, or the caller cuts it off itself.
+FLEET_ROLE_FMT='#{?@fleet_role,=#{@fleet_role},#{window_name}}'
+FLEET_ROLE_AWK='function frole(t) { if (t ~ /^=/) return substr(t, 2); if (t == "home") return "home"; if (t == "plan" || t == "dash" || t == "backlog") return "panel"; return "worker" }'
 
 # fleet_win_role <window> [socket] → home | panel | worker (rc 1: no such window)
 fleet_win_role() {
@@ -1813,7 +1819,7 @@ fleet_win_role() {
   if [ -n "${2:-}" ]; then r=$(tmux -L "$2" display-message -p -t "$1" "$FLEET_ROLE_FMT" 2>/dev/null)
   else r=$(tmux display-message -p -t "$1" "$FLEET_ROLE_FMT" 2>/dev/null); fi
   [ -n "$r" ] || return 1
-  printf '%s\n' "$r"
+  printf '%s\n' "$r" | awk "$FLEET_ROLE_AWK"' { print frole($0) }'
 }
 
 # fleet_win_role_stamp <window> <home|panel|worker> [socket] — the one writer.
@@ -1840,7 +1846,7 @@ fleet_server_resident() {
 fleet_home_resident() {
   local sock="$1" sess="$2" win="${3:-}"
   [ -n "$win" ] || win=$(tmux -L "$sock" list-windows -t "$sess" -F "#{window_id} $FLEET_ROLE_FMT" 2>/dev/null \
-                         | awk '$2=="home"{print $1; exit}')
+                         | awk "$FLEET_ROLE_AWK"' { t=$0; sub(/^[^ ]* /, "", t) } frole(t)=="home" {print $1; exit}')
   [ -n "$win" ] || return 0
   fleet_win_role_stamp "$win" home "$sock"       # found by name once; by role from now on (#1844)
   tmux -L "$sock" set-option -w -t "$win" remain-on-exit on 2>/dev/null
@@ -1855,8 +1861,8 @@ fleet_home_resident() {
 # pane found dead is respawned here. Prints `healed <window id>` when it did; rc 0.
 fleet_home_heal() {
   local win
-  win=$(tmux -L "$1" list-windows -t "$2" -F "#{window_id} $FLEET_ROLE_FMT #{pane_dead}" 2>/dev/null \
-        | awk '$2=="home" && $3==1 {print $1; exit}')
+  win=$(tmux -L "$1" list-windows -t "$2" -F "#{window_id} #{pane_dead} $FLEET_ROLE_FMT" 2>/dev/null \
+        | awk "$FLEET_ROLE_AWK"' { t=$0; sub(/^[^ ]* [^ ]* /, "", t) } $2==1 && frole(t)=="home" {print $1; exit}')
   [ -n "$win" ] || return 0
   tmux -L "$1" respawn-pane -k -t "$win" 2>/dev/null && printf 'healed %s\n' "$win"
   return 0
@@ -6100,8 +6106,8 @@ _fleet_sessmap_field() {
 # plan/dash hub rule is otherwise copy-pasted across callers. Fans out across
 # every live fleet socket (issue #159), since no single server sees them all now.
 fleet_hub_sessions() {
-  fleet_list_windows_all "#{session_name} $FLEET_ROLE_FMT" | awk '
-    { if ($2=="home" || $2=="panel") f[$1]=1 } END { for (s in f) print s }'
+  fleet_list_windows_all "#{session_name} $FLEET_ROLE_FMT" | awk "$FLEET_ROLE_AWK"'
+    { r=frole($2); if (r=="home" || r=="panel") f[$1]=1 } END { for (s in f) print s }'
 }
 
 # CHEAP: count the live Claude WORKING-session windows across every fleet (the
@@ -6121,11 +6127,11 @@ fleet_hub_sessions() {
 # server) counts exactly as before. A PROXY window onto another machine's session
 # (@remote, issue #1424) rides the same field as `remote` and is no session here.
 _fleet_session_tally() {   # → "<awake> <sleepers>" across every fleet
-  fleet_list_windows_all "#{session_name} $FLEET_ROLE_FMT @L=#{?@remote,remote,#{@worker_lifecycle}}" | awk '
-    { rows[NR]=$0; if ($2=="home" || $2=="panel") fleet[$1]=1 }
+  fleet_list_windows_all "#{session_name} $FLEET_ROLE_FMT @L=#{?@remote,remote,#{@worker_lifecycle}}" | awk "$FLEET_ROLE_AWK"'
+    { rows[NR]=$0; r=frole($2); if (r=="home" || r=="panel") fleet[$1]=1 }
     END {
       for (i=1; i<=NR; i++) {
-        n=split(rows[i], a, " "); s=a[1]; w=a[2]; l=""
+        n=split(rows[i], a, " "); s=a[1]; w=frole(a[2]); l=""
         if (n>=3 && a[n] ~ /^@L=/) l=substr(a[n], 4)
         if (!fleet[s] || w!="worker" || l=="remote") continue
         if (l=="sleeping" || l=="failed") z++; else c++
@@ -6147,9 +6153,9 @@ fleet_session_sleepers() { local t; t=$(_fleet_session_tally); printf '%s\n' "${
 # AND the sleeping/failed rule are duplicated in _fleet_session_tally above — keep BOTH in sync, or the global and
 # per-fleet caps count different sets.
 _fleet_session_tally_for() {   # <sess> → "<awake> <sleepers>" in that fleet
-  tmux -L "$(fleet_socket "$1")" list-windows -t "$1" -F "$FLEET_ROLE_FMT @L=#{?@remote,remote,#{@worker_lifecycle}}" 2>/dev/null | awk '
+  tmux -L "$(fleet_socket "$1")" list-windows -t "$1" -F "$FLEET_ROLE_FMT @L=#{?@remote,remote,#{@worker_lifecycle}}" 2>/dev/null | awk "$FLEET_ROLE_AWK"'
     { l=""
-      if (match($0, / @L=[^ ]*$/)) { l=substr($0, RSTART+4); role=substr($0, 1, RSTART-1) } else role=$0
+      if (match($0, / @L=[^ ]*$/)) { l=substr($0, RSTART+4); role=frole(substr($0, 1, RSTART-1)) } else role=frole($0)
       if (role=="home" || role=="panel") hub=1; rows[NR]=role; life[NR]=l }
     END {
       if (!hub) { print 0, 0; exit }
