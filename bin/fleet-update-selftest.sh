@@ -126,7 +126,7 @@ srv.serve_forever()
 PY
 SRV_PID=$!
 for _ in $(seq 1 300); do [ -s "$WORK/port" ] && break; sleep 0.1; done   # a cold CI runner is slow
-[ -s "$WORK/port" ] || { echo "FAIL C/D: the loopback hub never started"; exit 1; }
+[ -s "$WORK/port" ] || { echo "FAIL C/D: the loopback hub never started: $(cat "$WORK/srv.log" 2>&1)"; exit 1; }
 HUB="http://127.0.0.1:$(cat "$WORK/port")"
 # hub_version <sha> [<client_url>] — what the hub's stable lookup reports
 hub_version() {
