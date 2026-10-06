@@ -112,9 +112,9 @@ printf '  home=%s  home-policy=%s\n' "$H" "$([ "$KEEP" = 1 ] && echo "archive â†
 # stopping one; the last fleet-down disarms that login's crash restore.
 step 1 "stop $LOGIN's live fleet"
 # shellcheck disable=SC2016 # $1/$2 are expanded by the target login's bash.
-show sudo -u "$LOGIN" -H env "HOME=$H" "FLEET_CONF_DIR=$H/.config/claude-fleet" bash -c 'source "$1"; while IFS= read -r sess; do [ -n "$sess" ] || continue; bash "$2" "$sess" || exit; done < <(fleet_sockets)' _ "$BIN/fleet-lib.sh" "$BIN/fleet-down.sh"
+show sudo -u "$LOGIN" -H env "HOME=$H" "FLEET_CONF_DIR=$H/.config/claude-fleet" bash -c 'source "$1"; while IFS= read -r sess; do [ -n "$sess" ] || continue; bash "$2" "$sess" --yes || exit; done < <(fleet_sockets)' _ "$BIN/fleet-lib.sh" "$BIN/fleet-down.sh"
 if [ "$APPLY" = 1 ]; then
-  sudo -u "$LOGIN" -H env "HOME=$H" "FLEET_CONF_DIR=$H/.config/claude-fleet" bash -c 'source "$1"; while IFS= read -r sess; do [ -n "$sess" ] || continue; bash "$2" "$sess" || exit; done < <(fleet_sockets)' _ "$BIN/fleet-lib.sh" "$BIN/fleet-down.sh" || exit 1
+  sudo -u "$LOGIN" -H env "HOME=$H" "FLEET_CONF_DIR=$H/.config/claude-fleet" bash -c 'source "$1"; while IFS= read -r sess; do [ -n "$sess" ] || continue; bash "$2" "$sess" --yes || exit; done < <(fleet_sockets)' _ "$BIN/fleet-lib.sh" "$BIN/fleet-down.sh" || exit 1
 fi
 
 # System shape belongs to this login by label. GUI shape belongs to the login's

@@ -238,9 +238,10 @@ capability. When it matters, the docs say 承载.
 - **`fleet-up.sh <owner/repo> [<dir>]`** — bring up a fleet: reuse-or-clone the
   checkout, write the per-fleet conf, open the `work` + `dash` windows, kick the
   collector. A fleet ≡ a tmux session ≡ one repo.
-- **`fleet-down.sh <session> [--purge]`** — kill the session (the checkout is
-  always left on disk); `--purge` also removes the conf + this fleet's slug'd
-  cache.
+- **`fleet-down.sh <session> [--yes] [--purge]`** — kill the session (the checkout is
+  always left on disk) once you type its name (`--yes` from a script); `--purge`
+  also removes the conf + this fleet's slug'd cache. `fleet up --undo` brings the
+  last down back.
 - **`fleet-list.sh`** — list fleets: `●` live / `○` down · name · repo · checkout,
   then `↳` each further repo a fleet hosts.
 - **Repo ask** — `fleet-repo-ask.sh`, the per-spawn "which repo?" popup ⌃n opens

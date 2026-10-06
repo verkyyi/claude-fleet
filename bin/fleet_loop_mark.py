@@ -8,6 +8,7 @@ Usage: fleet_loop_mark.py hook                         (PostToolUse, stdin JSON)
        fleet_loop_mark.py backfill <target> [--transcript P] [--socket-name S]
                                              [--max-bytes N] [--now N]
        fleet_loop_mark.py sweep [--socket-name S]      (every window of one fleet)
+       fleet_loop_mark.py rearm --transcript P [--now N]
 
 A worker that ran `/loop` ends every turn with a ScheduleWakeup (or holds a
 CronCreate job), so the Stop hook used to stamp it `done` — and the dash counted it
@@ -47,6 +48,16 @@ ScheduleWakeup / CronCreate / CronDelete, at its result's timestamp) and writes 
 result ONLY when the window has no `@loop` and the replay is still active now. It
 never clears: expiry stays the reader's. Run by the Stop hook (a window with neither
 `@loop` nor a mod heartbeat) and by fleet-install-apply.sh's `loopmark` step.
+
+REARM (issue #1846): the Loop itself lives in the agent PROCESS — a window that is
+killed (or a fleet brought back after a crash or `fleet down`) is reopened with
+`claude --resume`, which brings the conversation back but not the ScheduleWakeup /
+CronCreate it had pending. `rearm` replays the transcript the same way backfill
+does and, when a Loop is still pending, prints the ONE line the reopened session
+should take as its first turn: `/loop <the input it was scheduled with>` (a
+recurring job's spec as `/loop <N>m|h|d …`; the autonomous sentinel as a bare
+`/loop`). Nothing pending → nothing printed, exit 1. fleet-restore.sh hands the
+line to the resume of a window it snapshotted `looping`.
 
 The fleet-loop.py ledger (`<manifest dir>/loop/state.json`, a transferred Codex /
 Claude loop) counts as a Loop too while its status is one that will still deliver.
@@ -246,6 +257,67 @@ def replay(lines, now=None):
             continue
         value = apply(value, {'tool_name': name, 'tool_input': inp, 'tool_response': resp}, at)
     return fmt(prune(parse(value), now))
+
+
+
+def loop_input(prompt):
+    """The `/loop …` line that re-enters a Loop scheduled with <prompt>."""
+    prompt = ' '.join(str(prompt or '').split())
+    if not prompt or prompt.startswith('<<autonomous-loop'):
+        return '/loop'
+    return prompt if prompt == '/loop' or prompt.startswith('/loop ') else '/loop ' + prompt
+
+
+def cron_every(spec):
+    """A recurring cron spec → `/loop`'s interval word (`5m`, `2h`, `1d`), else None."""
+    f = (spec or '').split()
+    if len(f) != 5 or f[2:] != ['*', '*', '*']:
+        return None
+    mi, hr = f[0], f[1]
+    if hr == '*' and mi == '*':
+        return '1m'
+    if hr == '*' and re.fullmatch(r'\*/\d+', mi):
+        return mi[2:] + 'm'
+    if mi.isdigit() and re.fullmatch(r'\*/\d+', hr):
+        return hr[2:] + 'h'
+    if mi.isdigit() and hr == '*':
+        return '1h'
+    if mi.isdigit() and hr.isdigit():
+        return '1d'
+    return None
+
+
+def rearm(lines, now=None):
+    """The first turn that puts a reopened session's pending Loop back, or ''."""
+    now = int(time.time()) if now is None else int(now)
+    value, wake, jobs = '', None, {}
+    for name, inp, resp, use_ts, res_ts in claude_tool_results(
+            lines, ('ScheduleWakeup', 'CronCreate', 'CronDelete')):
+        at = _epoch(res_ts) or _epoch(use_ts)
+        if at is None:
+            continue
+        value = apply(value, {'tool_name': name, 'tool_input': inp, 'tool_response': resp}, at)
+        if name == 'ScheduleWakeup':
+            wake = None if inp.get('stop') is True else inp.get('prompt')
+        elif name == 'CronCreate':
+            job = cron_id(resp)
+            if job:
+                jobs[job] = inp
+        elif name == 'CronDelete':
+            jobs.pop(str(inp.get('id') or ''), None)
+    d = prune(parse(value), now)
+    if d['next'] and isinstance(wake, str):
+        return loop_input(wake)
+    for job, _ in reversed(d['ids']):
+        inp = jobs.get(job) or {}
+        if inp.get('recurring') is False or not isinstance(inp.get('prompt'), str):
+            continue                   # a one-shot reminder is not a Loop
+        every = cron_every(inp.get('cron'))
+        line = loop_input(inp['prompt'])
+        if every:
+            line = '/loop %s%s' % (every, line[5:])
+        return line
+    return ''
 
 
 TAIL_BYTES = 262144                # the Stop hook's read budget: a few hundred turns
@@ -504,7 +576,19 @@ def main():
     u.add_argument('--manifest', default='')
     u.add_argument('--within', type=int, default=600)
     u.add_argument('--now', type=int)
+    r = sub.add_parser('rearm')
+    r.add_argument('--transcript', required=True)
+    r.add_argument('--max-bytes', type=int, default=TAIL_BYTES)
+    r.add_argument('--now', type=int)
     a = p.parse_args()
+    if a.cmd == 'rearm':
+        try:
+            line = rearm(tail_lines(a.transcript, a.max_bytes), a.now)
+        except OSError:
+            return 1
+        if line:
+            print(line)
+        return 0 if line else 1
     if a.cmd == 'hook':
         return hook()
     if a.cmd == 'sweep':

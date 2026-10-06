@@ -33,6 +33,9 @@
 #                     than FLEET_AUTO_RESTORE_MAX_AGE (default 86400s). No arm
 #                     needed; FLEET_AUTO_RESTORE=0 or --disarm turn it off. One
 #                     pass at a time (a lock), quiet, logged.
+#   --undo [<sess>]   `fleet up --undo` (issue #1846): bring back every session of
+#                     the newest restore.map.down-<UTC> fleet-down.sh kept, and
+#                     re-arm what that down turned off.
 #   --fresh <win> [--session <s>]
 #                     start a FRESH session in a window restore left `awaiting`
 #                     (no transcript) or `failed` (resume refused) — the only path
@@ -611,6 +614,22 @@ restore() {
       # restored worker launches under the active subscription account (multi-account
       # failover) + the fleet's default model — a bare `claude` would strand it on
       # an exhausted account. Transparent `exec claude` when no accounts registered.
+      # A window that was between /loop rounds (issue #1846): its ScheduleWakeup /
+      # CronCreate lived in the process that is gone, so a bare resume comes back
+      # idle and the loop stops. The transcript says what it had pending; the
+      # resume's first turn is `/loop <that input>` (fleet_loop_mark.py rearm),
+      # quoted for the shell since it is the person's text. Nothing pending → a
+      # plain resume, exactly as before.
+      local loopq=''
+      if [ "$wstate" = looping ] && [ "$wagent" != codex ] && [ -n "$wid" ] && [ "$wid" != - ] \
+         && { [ -z "$wsleep" ] || [ "$wsleep" = - ]; }; then
+        local loopline sq="'" esc="'\\''"
+        loopline=$(python3 "$BIN/fleet_loop_mark.py" rearm --transcript "$(fleet_transcript_dir "$wpath")/$wid.jsonl" 2>/dev/null)
+        if [ -n "$loopline" ]; then
+          loopq="'${loopline//$sq/$esc}'"
+          log "loop $sess/$wname re-armed on resume: $loopline"
+        fi
+      fi
       local launch="'$BIN/fleet-session-wrap.sh'"
       local cmd
       local agent_label=claude resume_flag=--resume home_arg
@@ -633,8 +652,12 @@ restore() {
       # kept on the window as @restore_fresh_cmd, for `--fresh <win>` only.
       local kind=resume fresh_cmd="$launch; exec \$SHELL"
       if [ -n "$wid" ] && [ "$wid" != "-" ]; then
-        cmd="$launch $resume_flag '$wid'${nudge:+ '$nudge'} ; $(fleet_win_stamp_cmd @restore_exit 1)exec \$SHELL"
-        say "    ↻ $wname → $agent_label $resume_flag ${wid%%-*}…${nudge:+ (auto-continue)}"
+        if [ -n "$loopq" ]; then
+          cmd="$launch $resume_flag '$wid' $loopq ; $(fleet_win_stamp_cmd @restore_exit 1)exec \$SHELL"
+        else
+          cmd="$launch $resume_flag '$wid'${nudge:+ '$nudge'} ; $(fleet_win_stamp_cmd @restore_exit 1)exec \$SHELL"
+        fi
+        say "    ↻ $wname → $agent_label $resume_flag ${wid%%-*}…${nudge:+ (auto-continue)}${loopq:+ (/loop re-armed)}"
       else
         kind=awaiting
         cmd='exec "$SHELL"'
@@ -945,6 +968,34 @@ auto_restore() {
   rm -rf "$lk"
 }
 
+# ------------------------------------------------------------------- undo -----
+# undo_down [<sess>] — `fleet up --undo` (issue #1846): fleet-down.sh keeps the map
+# it is about to lose as fleets/<sess>/restore.map.down-<UTC>; this brings EVERY
+# session on the newest one back — finished ones too: they were open when the
+# fleet went down — each on its own conversation and identity, through restore()'s
+# usual path. The fleet is no longer down on purpose (restore.down goes), and the
+# crash auto-restore that down switched off (the last fleet: a `.disarmed` sidecar)
+# is armed again. The map is kept, renamed .undone-<UTC>, so the same down is never
+# undone twice.
+undo_down() {
+  local sess="${1:-}" m
+  if [ -z "$sess" ]; then
+    sess=$(fleet_login_fleet 2>/dev/null) || sess=''
+    [ -n "$sess" ] || { echo "fleet-restore: --undo: 认不出是哪个 fleet，请写名字：fleet up --undo <fleet>" >&2; return 2; }
+  fi
+  case "$sess" in */*|.|..) echo "fleet-restore: --undo: 不是 fleet 名：$sess" >&2; return 2 ;; esac
+  m=$(ls -1 "$FLEET_CONF_DIR/fleets/$sess"/restore.map.down-* 2>/dev/null | grep -v '\.disarmed$' | sort | tail -1)
+  [ -n "$m" ] || { echo "fleet-restore: --undo: fleet「$sess」没有可撤销的 fleet down（fleets/$sess/restore.map.down-*）" >&2; return 1; }
+  rm -f "$FLEET_CONF_DIR/fleets/$sess/restore.down"
+  if [ -f "$m.disarmed" ]; then mkdir -p "$RDIR"; : > "$ARM"; rm -f "$RDIR/autorestore.off"; fi
+  log "undo: fleet down of $sess ← ${m##*/}"
+  say "▸ fleet up --undo: $sess ← ${m##*/}"
+  RESTORE_ONLY_MAP="$m" restore
+  mv "$m" "${m%/*}/$(basename "$m" | sed 's/\.down-/.undone-/')" 2>/dev/null
+  rm -f "$m.disarmed"
+  return 0
+}
+
 # ------------------------------------------------------------------- main -----
 case "${1:-}" in
   --snapshot) snapshot ;;
@@ -983,6 +1034,7 @@ case "${1:-}" in
       case "$1" in --session) fr_sess="${2:-}"; shift 2 ;; *) echo "fleet-restore: unknown arg $1" >&2; exit 2 ;; esac
     done
     fresh_window "$fr_win" "$fr_sess"; exit $? ;;
+  --undo)     undo_down "${2:-}"; exit $? ;;
   ""|--restore) restore ;;
-  *) echo "usage: fleet-restore.sh [--snapshot|--dry-run|--if-down|--auto|--arm|--disarm|--fresh <win> [--session <s>]]" >&2; exit 2;;
+  *) echo "usage: fleet-restore.sh [--snapshot|--dry-run|--if-down|--auto|--arm|--disarm|--fresh <win> [--session <s>]|--undo [<session>]]" >&2; exit 2;;
 esac

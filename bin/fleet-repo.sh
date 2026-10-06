@@ -405,7 +405,7 @@ PEND
   fi
 
   # ---- retire: the server goes, the conf is archived (never deleted) ----
-  bash "$BIN/fleet-down.sh" "$FROM" || die "fleet-down $FROM failed"
+  bash "$BIN/fleet-down.sh" "$FROM" --yes || die "fleet-down $FROM failed"
   local adir dest
   adir="$FLEET_CONF_DIR/archive"; dest="$adir/$FROM-folded-into-${SESS#fleet-}-$(date +%Y%m%d)"
   [ -e "$dest" ] && dest="$dest-$(date +%H%M%S)"

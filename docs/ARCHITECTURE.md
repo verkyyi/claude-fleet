@@ -1097,7 +1097,12 @@ WARN with the one-line fix. `bin/fleet-base-branch-selftest.sh` pins the order.
 
 Teardown: `fleet-down.sh <session>` kills the session (checkout always left on
 disk); `--purge` also removes exactly `fleets/<session>/` (its whole durable
-state) + this fleet's `fleets/<slug>/` runtime cache.
+state) + this fleet's `fleets/<slug>/` runtime cache. It asks first (issue
+#1846): it lists the sessions that would stop and wants the fleet's name typed on
+a terminal, `--yes` from a script (no terminal and no `--yes` = exit 2, nothing
+closed). Before the kill it keeps `fleets/<session>/restore.map.down-<UTC>`, and
+`fleet-up.sh --undo [<session>]` (`fleet up --undo`) brings every session on it
+back on its own conversation and re-arms the auto-restore that down turned off.
 
 ## The fleet CLI
 
@@ -1105,7 +1110,7 @@ state) + this fleet's `fleets/<slug>/` runtime cache.
 |---|---|
 | `fleet-up.sh [<owner/repo>] [<dir>] [--name <s>] [--base <b>]` | bring up a fleet: reuse-or-clone the checkout, write the per-fleet conf, open `work`+`dash` windows, kick the collector. No `<owner/repo>` → infer from the current checkout (see `cf`) |
 | `fleet-attach.sh` | fast-path (re)attach to an already-running fleet — the no-arg `cf` tries this first (single → straight in, a leftover second → the most recently active, never a picker #980); exits 10 when nothing is live so `cf` falls through to `fleet-up.sh` (issue #212) |
-| `fleet-down.sh <session> [--purge]` | kill the session; `--purge` also drops the conf + slug'd cache |
+| `fleet-down.sh <session> [--yes] [--purge]` | kill the session after a typed confirmation (`--yes` for a script); `--purge` also drops the conf + slug'd cache; `fleet-up.sh --undo` takes the last down back |
 | `fleet-list.sh` | list fleets — `●` live / `○` down · name · repo · checkout, then `↳` each further repo the fleet hosts |
 
 `FLEET_CONF_DIR` (default `~/.config/claude-fleet`) is the knob.
