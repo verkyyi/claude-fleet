@@ -249,10 +249,13 @@ Do not install from memory: read the doc and work from it.
   gate or `--changed`. A new selftest is selected when its own file changes or
   a file it NAMES does — name the scripts you drive.
 - **CI SHARDS the gate; the tests themselves still run one at a time**
-  (issue #681). `run-selftests.sh --shard K/N` takes every N-th test of the
-  sorted list, and `.github/workflows/selftests.yml` fans that over an 8-job
-  matrix — ~1-2 min a shard, where the whole suite was 9 minutes against a
-  10-minute bound. Edit the `shard:` list to change the width and nothing else:
+  (issue #681). `run-selftests.sh --shard K/N` packs the N slices by each
+  test's recorded cost — `bin/selftest-durations.txt`, longest first into the
+  lightest slice (issue #1390: a stride once stacked the six slowest tests into
+  one shard); no row ⇒ the table's median, no table ⇒ exactly the old stride —
+  and `.github/workflows/selftests.yml` fans that over an 8-job matrix, each
+  shard printing its predicted load (WARN past 400s of the 480s step bound).
+  Refresh the table with `bin/selftest-durations.sh --run <run id>`. Edit the `shard:` list to change the width and nothing else:
   the split reads `strategy.job-total`. The width is set by measured runner
   VARIANCE, not suite size — at 4 the same shard ran 2m36s and 4m2s on the same
   commit in sibling runs. In-runner concurrency was built, measured
