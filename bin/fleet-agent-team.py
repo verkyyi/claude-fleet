@@ -61,6 +61,14 @@ the wrapper sets. Each carries the line `# fleet personal hook` (added after the
 carries it and holds what was written — a file of the person's own in that
 directory is never touched. `session claude` lands a missing one (add only), so
 a session on a computer that never applied the layer still finds its programs.
+Written badly, the personal layer never stops a session (issue #1862,
+docs/BREAK-IT.md): a cache that does not parse falls back to
+person-bundle.good.json; a server whose command is not on this machine is left
+out here (the item falls to the layer below; FLEET_PERSONAL_MCP_CHECK=0 skips
+the check); each is a `skip` line from apply and a `note` line from session (the
+launcher's start line). FLEET_PERSONAL=0 in a launch's environment (the recovery
+page's p) leaves the layer for that session only — `session` hands the layer
+below over what the personal layer wrote into the login's files.
 
 agent-effective.json is the composed picture: one row per item — MCP servers,
 Codex keys, settings keys, hooks, skills — with its source (default / team /
@@ -133,6 +141,7 @@ DEFAULT_ROOT = os.path.dirname(HERE)
 CONF_DIR = os.environ.get("FLEET_CONF_DIR") or os.path.expanduser("~/.config/claude-fleet")
 CACHE = os.path.join(CONF_DIR, "team-bundle.json")
 PERSON_CACHE = os.path.join(CONF_DIR, "person-bundle.json")
+PERSON_GOOD = os.path.join(CONF_DIR, "person-bundle.good.json")   # the last copy that parsed (#1862)
 EFFECTIVE = os.path.join(CONF_DIR, "agent-effective.json")
 TEAM_PATH = "/v1/fleet/team-bundle"
 PERSON_PATH = "/v1/fleet/person-bundle"
@@ -442,21 +451,25 @@ def fetch_person(a):
     else:
         version, bundle = 0, {}
     if version == 0 and not bundle:
-        if cached is None:
+        if cached is None and not os.path.exists(PERSON_CACHE) and not os.path.exists(PERSON_GOOD):
             return 0, None, "none"
-        try:
-            os.remove(PERSON_CACHE)
-        except OSError:
-            pass
+        if have is None:
+            have = (read_json_quiet(PERSON_GOOD) or {}).get("version") if isinstance(read_json_quiet(PERSON_GOOD), dict) else None
+        for f in (PERSON_CACHE, PERSON_GOOD):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
         return 0, None, "none (v%s taken back)" % have
     why = validate(bundle, "personal")
     if why:
         return 2, have, "refused v%d: %s (kept v%s)" % (version, why, have)
     if version == have and cached.get("bundle") == bundle:
         return 0, have, "unchanged"
-    write_json_atomic(PERSON_CACHE, {"version": version, "prev": resp.get("prev"), "created": resp.get("created"),
-                               "actor": resp.get("actor"), "bundle": bundle, "fetched": int(time.time()),
-                               "etag": got.get("etag")})
+    body = {"version": version, "prev": resp.get("prev"), "created": resp.get("created"),
+            "actor": resp.get("actor"), "bundle": bundle, "fetched": int(time.time()), "etag": got.get("etag")}
+    write_json_atomic(PERSON_CACHE, body)
+    write_json_atomic(PERSON_GOOD, body)    # what a cut-short cache falls back to (#1862)
     return 0, version, "new"
 
 
@@ -830,22 +843,82 @@ def personal_off(override_path):
     return layer_off(override_path, "personal")
 
 
-def personal_layer(override_path):
+# What the personal layer's last read had to say (issue #1862): a cut-short cache,
+# a server whose command is not on this machine. `session` prints each as a `note`
+# line (the launcher's start line), apply as a `skip` line; empty = no line at all.
+PERSONAL_NOTES = []
+TOOL_DIRS = ("~/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "~/.bun/bin",
+             "~/.cargo/bin", "~/.volta/bin", "~/.deno/bin")
+
+
+def command_missing(server):
+    """The command a stdio MCP server runs, when it is not on this machine; None
+    when it is, or when it cannot be told here (a url server, a ${VAR} in it). A
+    person's layer follows them to every machine, and the tool it names may be on
+    their laptop only (#1862). Searched: PATH, then the usual tool directories —
+    install-sync's tick runs under launchd's short PATH."""
+    if os.environ.get("FLEET_PERSONAL_MCP_CHECK") == "0" or not isinstance(server, dict):
+        return None
+    cmd = server.get("command")
+    if not isinstance(cmd, str) or not cmd.strip():
+        return None
+    c = os.path.expanduser(cmd.strip())
+    if "$" in c:
+        return None
+    if "/" in c:
+        return None if os.path.isfile(c) and os.access(c, os.X_OK) else cmd
+    dirs = (os.environ.get("PATH") or "").split(os.pathsep) + [os.path.expanduser(d) for d in TOOL_DIRS]
+    nvm = os.path.expanduser("~/.nvm/versions/node")
+    if os.path.isdir(nvm):
+        dirs += [os.path.join(nvm, v, "bin") for v in sorted(os.listdir(nvm))]
+    return None if shutil.which(c, path=os.pathsep.join(d for d in dirs if d)) else cmd
+
+
+def personal_layer(override_path, session=False):
     """(cache dict | None, state 'on'|'off'|None, bundle). None state = no personal
-    layer on this login — the degenerate case, where nothing anywhere mentions one."""
+    layer on this login — the degenerate case, where nothing anywhere mentions one.
+
+    Written badly is never fatal (issue #1862): a cache that does not parse falls
+    back to person-bundle.good.json (the last copy that did) with a note; a server
+    whose command is not on this machine is left out of the bundle here — the item
+    falls to the layer below — with a note. `session` = a launch, where
+    FLEET_PERSONAL=0 (the recovery page's p) leaves the layer for this one session;
+    a sync never reads it, so the login's files are not taken back by a session."""
+    del PERSONAL_NOTES[:]
     pc = read_json_quiet(PERSON_CACHE)
     if not isinstance(pc, dict):
-        return None, None, {}
-    if personal_off(override_path):
+        if not os.path.exists(PERSON_CACHE):
+            return None, None, {}
+        pc = read_json_quiet(PERSON_GOOD)
+        if not isinstance(pc, dict):
+            PERSONAL_NOTES.append("个人配置缓存 %s 读不出来，也没有上一份完好的——这次不带个人配置；下次同步重新取" % PERSON_CACHE)
+            return None, None, {}
+        PERSONAL_NOTES.append("个人配置缓存 %s 读不出来，先用上一份完好的 v%s；下次同步重新取"
+                              % (PERSON_CACHE, pc.get("version") or 0))
+    if personal_off(override_path) or (session and os.environ.get("FLEET_PERSONAL") == "0"):
         return pc, "off", {}
     b = pc.get("bundle") or {}
-    return pc, "on", (b if isinstance(b, dict) and not validate(b, "personal") else {})
+    if not isinstance(b, dict) or validate(b, "personal"):
+        return pc, "on", {}
+    if isinstance(b.get("mcp"), dict):
+        keep = {}
+        for n, srv in sorted(b["mcp"].items()):
+            miss = command_missing(srv)
+            if miss is None:
+                keep[n] = srv
+            else:
+                PERSONAL_NOTES.append("个人 MCP「%s」的命令 %s 在这台机器上找不到——这台机器不带这一项（用下一层的）" % (n, miss))
+        if len(keep) != len(b["mcp"]):
+            b = dict(b, mcp=keep)
+    return pc, "on", b
 
 
 def apply(a):
     cache = read_json_quiet(CACHE)
     record = read_json_quiet(EFFECTIVE)
     pcache, pstate, pbundle = personal_layer(a.override)
+    for n in PERSONAL_NOTES:
+        print("skip           %s" % n)
     if cache is None and record is None and pcache is None:
         print("team: none — no team layer on this computer (nothing fetched, nothing written)")
         return 0
@@ -1297,7 +1370,7 @@ def fleet_plugin_wires_hooks():
 class Session:
     """One composition: rows {path: {value, source, locked}} + what to hand."""
 
-    def __init__(self, a, agent):
+    def __init__(self, a, agent, launch=False):
         self.a, self.agent = a, agent
         self.mode = lock_mode(a.lock)
         self.locked = locked_set(a.root)
@@ -1307,8 +1380,19 @@ class Session:
         self.blocked = self.ad.override_paths(a.override, [])
         self.blocked.discard("team")
         self.blocked.discard("personal")
-        pc, pstate, self.pbundle = personal_layer(a.override)
+        pc, pstate, self.pbundle = personal_layer(a.override, session=launch)
         self.personal = None if pc is None else ("off" if pstate == "off" else "v%s" % (pc.get("version") or 0))
+        self.notes_p = list(PERSONAL_NOTES)     # the launcher's start line (#1862); empty with no personal layer
+        # FLEET_PERSONAL=0 (the recovery page's p, #1862): what the personal layer
+        # wrote into the login's files is not this login's own for this session —
+        # the layer below is handed over it where there is one.
+        self.pwrote = {}
+        self.soff = launch and pc is not None and os.environ.get("FLEET_PERSONAL") == "0" and not personal_off(a.override)
+        if self.soff:
+            rec = read_json_quiet(EFFECTIVE)
+            for p, row in (((rec or {}).get("items") or {}) if isinstance(rec, dict) else {}).items():
+                if isinstance(row, dict) and row.get("source") == "personal" and row.get("hash"):
+                    self.pwrote[p] = row["hash"]
         cache = read_json_quiet(CACHE)
         bundle = (cache or {}).get("bundle") if isinstance(cache, dict) else None
         if team_off(a.override):
@@ -1323,6 +1407,8 @@ class Session:
     def item(self, path, local, personal, team, default, present=None):
         """Compose one item; returns nothing. `present` = the login has it at all
         (for a value that can legitimately be None)."""
+        if self.pwrote.get(path) and local is not None and digest(local) == self.pwrote[path]:
+            local, present = None, None          # the personal layer's write, left out this session
         if personal is not None:
             fv, fsrc = personal, "personal"
         elif team is not None:
@@ -1373,6 +1459,12 @@ class Session:
             self.claude(table)
         else:
             self.codex(table)
+        if self.soff:
+            pre = "claude." if self.agent == "claude" else "codex"
+            left = sorted(p for p in self.pwrote if p.startswith(pre) and p not in self.rows
+                          and not p.startswith(PERSONAL_HOOKS + "."))
+            self.notes_p.append("这次会话不带个人配置（FLEET_PERSONAL=0）：个人自动规则不跑，个人层不交给会话"
+                                + ("；本机文件里个人层写下的 %d 项这次仍会读到：%s" % (len(left), ", ".join(left)) if left else ""))
         return self
 
     def claude(self, table):
@@ -1478,7 +1570,7 @@ def session(a):
     agent = a.arg or "claude"
     if agent not in ("claude", "codex"):
         die("session takes claude|codex")
-    s = Session(a, agent).compose()
+    s = Session(a, agent, launch=True).compose()
     if agent == "claude" and s.pbundle.get("hook_scripts"):
         scripts_fill(s.pbundle)
     print("fp\t%s" % s.fingerprint())
@@ -1487,6 +1579,8 @@ def session(a):
         say = human_line(a)
         if say:
             print("say\t%s" % say)
+    for n in s.notes_p:          # the personal layer written badly (#1862) — none, no line
+        print("note\t%s" % n)
     if agent == "claude":
         mr = s.rows.get("mod")
         print("mod\t%s" % ("on" if mr and mr["value"] != "off" else "off"))

@@ -8,12 +8,18 @@ and the three keys — and exits with the operator's choice:
     10  ↵  resume the same conversation
     11  r  start a new one in this window
     12  q  recycle the window (the old close-on-exit, now on purpose)
+    13  p  the same conversation WITHOUT the personal layer (issue #1862) —
+           offered only when this login has one (--personal on)
 
 Two more facts it can carry (issue #1842): commits on the branch that are on no
 remote (「未推送：N 个提交（分支 issue-N）」 — q keeps them, but the operator
 should know they exist), and a relaunch from this page that died within the
 fast-fail window (the conversation is gone, the login lapsed): the headline then
 says what failed and why, instead of the window closing.
+
+And the personal layer written badly (issue #1862): personal hooks that kept
+failing in the run that just ended and were switched off are named, and `p`
+reopens this window without the layer. No personal layer → not a byte of it.
 
 Every other byte is discarded, so nothing typed here reaches the next agent. It
 is the sleeping page's frame (bin/fleet_sleep_park.py: the same clip / width /
@@ -32,7 +38,7 @@ import termios
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fleet_sleep_park import BOLD, DIM, RED, RESET, YELLOW, SGR_MOUSE, clip, ui_lang, width  # noqa: E402
 
-RESUME, NEW, QUIT = 10, 11, 12
+RESUME, NEW, QUIT, PERSONAL = 10, 11, 12, 13
 
 TEXT = {
     'zh': {'exited': '会话已退出', 'ctrl_c': '（按了 Ctrl+C）', 'signal': '会话被结束（信号 {n}）',
@@ -43,7 +49,9 @@ TEXT = {
            'failed_resume': '续上原对话失败', 'failed_new': '新开会话失败',
            'why_conversation': '找不到这个对话', 'why_auth': '认证失效，需要重新登录',
            'fail_rc': '（{s} 秒内退出，退出码 {n}）',
-           'resume': '接着原对话', 'new': '新开', 'quit': '回收这个窗口'},
+           'hooks_off': '个人自动规则 {n} 条这次连续失败、已停用：{w}',
+           'personal_off': '这个窗口已不带个人配置（FLEET_PERSONAL=0）；长期退回：fleet config restore N',
+           'resume': '接着原对话', 'new': '新开', 'quit': '回收这个窗口', 'personal': '不带个人配置重开'},
     'en': {'exited': 'Session exited', 'ctrl_c': ' (Ctrl+C)', 'signal': 'Session ended (signal {n})',
            'failed': 'Session exited abnormally (code {n})', 'kept': 'This window stays open; the conversation is still here.', 'kept_win': 'This window stays open.',
            'no_sid': 'No conversation id recorded: Enter resumes the latest one in this directory.',
@@ -52,7 +60,10 @@ TEXT = {
            'failed_resume': 'Resuming the conversation failed', 'failed_new': 'Starting a new session failed',
            'why_conversation': 'conversation not found', 'why_auth': 'authentication expired — log in again',
            'fail_rc': ' (exited within {s}s, code {n})',
-           'resume': 'resume the conversation', 'new': 'new session', 'quit': 'recycle this window'},
+           'hooks_off': '{n} personal hook(s) kept failing and were switched off: {w}',
+           'personal_off': 'This window runs without the personal layer (FLEET_PERSONAL=0); to roll it back: fleet config restore N',
+           'resume': 'resume the conversation', 'new': 'new session', 'quit': 'recycle this window',
+           'personal': 'reopen without personal config'},
 }
 
 
@@ -70,9 +81,11 @@ def headline(rc, words, failed='', why='', secs=0):
     return words['failed'].format(n=rc), RED
 
 
-def keys_line(words):
-    return (BOLD + '↵' + RESET + ' ' + words['resume'] + '   ' + BOLD + 'r' + RESET + ' ' + words['new']
+def keys_line(words, personal=''):
+    line = (BOLD + '↵' + RESET + ' ' + words['resume'] + '   ' + BOLD + 'r' + RESET + ' ' + words['new']
             + '   ' + BOLD + 'q' + RESET + ' ' + words['quit'])
+    if personal == 'on': line += '   ' + BOLD + 'p' + RESET + ' ' + words['personal']
+    return line
 
 
 def render(facts, cols, rows):
@@ -94,16 +107,20 @@ def render(facts, cols, rows):
     if n > 0:
         b = facts.get('branch') or ''
         body.append(YELLOW + (words['unpushed'].format(n=n, b=b) if b else words['unpushed_nob'].format(n=n)) + RESET)
+    off = int(facts.get('hooks_off') or 0)
+    if off > 0: body.append(YELLOW + words['hooks_off'].format(n=off, w=facts.get('hooks_off_what') or '') + RESET)
+    if facts.get('personal') == 'off': body.append(DIM + words['personal_off'] + RESET)
     rule = DIM + '─' * (cols - 1) + RESET
     lines = [fit(first), rule, ''] + [fit(l) for l in body]
     lines = lines[:max(rows - 2, 1)]
-    lines += [''] * max(rows - len(lines) - 2, 0) + [rule, fit(keys_line(words))]
+    lines += [''] * max(rows - len(lines) - 2, 0) + [rule, fit(keys_line(words, facts.get('personal') or ''))]
     return '\n'.join(lines[:rows])
 
 
-def choice(chunk, key_row):
+def choice(chunk, key_row, personal=False):
     """The first press a read holds: ↵ (or a left click on the keys row) resumes,
-    r starts new, q recycles. None = nothing on this page's keys (discarded)."""
+    r starts new, q recycles, p (only when offered) reopens without the personal
+    layer. None = nothing on this page's keys (discarded)."""
     text = chunk.decode('utf-8', 'replace') if isinstance(chunk, bytes) else chunk
     for m in SGR_MOUSE.finditer(text):
         button, row = int(m.group(1)), int(m.group(3))
@@ -114,6 +131,7 @@ def choice(chunk, key_row):
         if ch in '\r\n': return RESUME
         if ch in 'rR': return NEW
         if ch in 'qQ': return QUIT
+        if personal and ch in 'pP': return PERSONAL
     return None
 
 
@@ -129,10 +147,15 @@ def main():
     p.add_argument('--why', default='', help='conversation | auth | (unknown)')
     p.add_argument('--detail', default='', help="the failed agent's last line")
     p.add_argument('--secs', type=int, default=0)
+    p.add_argument('--personal', default='', choices=['', 'on', 'off'],
+                   help='this login has a personal layer: on = offer p, off = this window already runs without it (#1862)')
+    p.add_argument('--hooks-off', type=int, default=0, help='personal hooks switched off in the run that ended')
+    p.add_argument('--hooks-off-what', default='')
     p.add_argument('--print', action='store_true', help='draw once at 80x24 and exit 0 (selftest)')
     a = p.parse_args()
     facts = {'rc': a.rc, 'agent': a.agent, 'sid': a.sid, 'title': a.title, 'unpushed': a.unpushed,
-             'branch': a.branch, 'failed': a.failed, 'why': a.why, 'detail': a.detail, 'secs': a.secs}
+             'branch': a.branch, 'failed': a.failed, 'why': a.why, 'detail': a.detail, 'secs': a.secs,
+             'personal': a.personal, 'hooks_off': a.hooks_off, 'hooks_off_what': a.hooks_off_what}
     if a.print:
         sys.stdout.write(render(facts, 80, 24) + '\n')
         return 0
@@ -169,7 +192,7 @@ def main():
             if 0 in ready:
                 chunk = os.read(0, 4096)
                 if not chunk: return 1          # the pane's input went away
-                pick = choice(chunk, rows)
+                pick = choice(chunk, rows, a.personal == 'on')
                 if pick: return pick
     finally:
         try:

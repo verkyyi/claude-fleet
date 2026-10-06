@@ -33,6 +33,11 @@ fail=0
 ok()  { echo "ok   $*"; }
 bad() { echo "FAIL $*"; fail=1; }
 PY="$(command -v python3)"
+# The personal layer's MCP commands exist on this "machine": a server whose command
+# is not here is left out of the layer (issue #1862, fleet-break-it personal-mcp-*).
+mkdir -p "$WORK/stubs"
+for c in pers-mcp r gh-mcp x my-mcp team-mcp; do printf '#!/bin/sh\n' > "$WORK/stubs/$c"; chmod +x "$WORK/stubs/$c"; done
+PATH="$WORK/stubs:$PATH"
 
 H="$WORK/home"
 CONF="$H/.config/claude-fleet"

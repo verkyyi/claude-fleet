@@ -665,8 +665,8 @@ drill_personal_tmux_conf() {
 # runs it (bin/fleet-hook-personal.sh), <calls> times in ONE session ($PH_LAUNCH);
 # prints each call's "<rc>:<secs>" on one line.
 ph_hook() {
-  local i out='' t
-  for i in $(seq 1 "$3"); do
+  local out='' t
+  for _ in $(seq 1 "$3"); do
     t=$(now)
     echo '{"session_id":"S-1"}' | env HOME="$WORK/ph" FLEET_CONF_DIR="$WORK/ph/conf" FLEET_PERSONAL_HOOK_TIMEOUT="$1" \
       FLEET_WRAP_LAUNCH_ID="$PH_LAUNCH" sh "$BIN/fleet-hook-personal.sh" PreToolUse -- "$2" >/dev/null 2>"$WORK/ph-hook.err"
@@ -683,7 +683,7 @@ drill_personal_hook_hangs() {
   case "$r" in 1:*' '1:*' '1:*) ;; *) WHY="the first three calls were not cut off at 1s: [$r]"; return 1 ;; esac
   [ "${last%%:*}" = 0 ] && le "${last#*:}" 0.5 \
     || { WHY="after 3 timeouts the hook still runs — every tool call waits on it again: [$r]"; return 1; }
-  ls "$WORK/ph/conf/personal-hooks/$PH_LAUNCH/"*.off >/dev/null 2>&1 \
+  ls "$WORK/ph/conf/personal-hook-strikes/$PH_LAUNCH/"*.off >/dev/null 2>&1 \
     || { WHY="nothing records the hook as off (the recovery page has nothing to say)"; return 1; }
   SECS=$(since "$t0"); WHAT="个人规则卡死：每次 1s 切断，连续 3 次后本会话停用（第 5 次 ${last#*:}s）"
 }
@@ -713,7 +713,7 @@ json.dump({"numStartups": 1, "mcpServers": {"github": gh}}, open(sys.argv[2], "w
 }
 pt() {
   local H="$WORK/pt"
-  ( cd "$H" && env -i PATH="$PATH" HOME="$H" FLEET_CONF_DIR="$H/conf" CODEX_HOME="$H/.codex" ${PT_ENV:-} \
+  ( cd "$H" && env -i PATH="$PATH" HOME="$H" FLEET_CONF_DIR="$H/conf" CODEX_HOME="$H/.codex" ${PT_ENV:+"$PT_ENV"} \
     FLEET_TEAM_BUNDLE_CMD="cat '$H/tresp.json'" FLEET_PERSON_BUNDLE_CMD="cat '$H/presp.json'" \
     python3 "$ROOT/bin/fleet-agent-team.py" "$@" --root "$ROOT" --claude-config "$H/.claude.json" \
     --claude-settings "$H/.claude/settings.json" --claude-skills "$H/.claude/skills" --codex-home "$H/.codex" 2>&1 )

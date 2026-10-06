@@ -26,6 +26,12 @@
 #     with the same three keys, never an exit.
 #   • commits on the worktree's branch that are on no remote are counted on the
 #     page (「未推送：N 个提交（分支 issue-N）」); q keeps them (fleet_reap_ok).
+#   • a personal layer written badly (issue #1862): personal hooks that kept
+#     failing in this launch were switched off by fleet-hook-personal.sh (its
+#     record, keyed FLEET_WRAP_LAUNCH_ID, is read here for the page and cleared);
+#     with a personal layer on this login the page offers p — the same
+#     conversation with FLEET_PERSONAL=0 for this window: personal hooks stand
+#     down, the composer leaves the layer out.
 #   • Codex with no recorded id never `resume --last` — in a shared Codex home
 #     that is the latest conversation of ANY session. ↵ resumes the window's own
 #     thread (@codex_thread_id, which /loop binds) or starts a new one. The last
@@ -140,11 +146,12 @@ plain_page() {
     printf '\n会话已退出（退出码 %s）。这个窗口不会关。\n↵ 接着原对话   r 新开   q 回收这个窗口\n' "$1"
   fi
   while IFS= read -rsn1 k; do
-    case "$k" in '') return 10 ;; r|R) return 11 ;; q|Q) return 12 ;; esac
+    case "$k" in '') return 10 ;; r|R) return 11 ;; q|Q) return 12 ;; p|P) [ "$pers" = on ] && return 13 ;; esac
   done
   return 1
 }
 
+PCONF="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
 cmd=("$@")
 first=1; last=''; last_sid=''; last_agent=''
 while :; do
@@ -168,6 +175,7 @@ while :; do
       && export FLEET_WORKER_CRED || unset FLEET_WORKER_CRED
   fi
   t0=$(date +%s)
+  export FLEET_WRAP_LAUNCH_ID="$$-$t0"     # the session a personal hook's strikes count in (#1862)
   PATH="$SHIM_PATH" "$LAUNCH" ${cmd[@]+"${cmd[@]}"}
   rc=$?
   if [ -n "${FLEET_WORKER_CRED:-}" ]; then
@@ -216,11 +224,30 @@ while :; do
   pargs=(--rc "$rc" --agent "$agent" --sid "$sid" --title "$(opt window_name)")
   [ "$unp" -gt 0 ] && pargs+=(--unpushed "$unp" --branch "$br")
   [ -n "$failed" ] && pargs+=(--failed "$failed" --why "$fail_why" --detail "$fail_line" --secs "$dur")
+  # The personal layer (#1862): absent on this login → nothing passed, the page as before.
+  pers=''
+  if [ -e "$PCONF/person-bundle.json" ] || [ -e "$PCONF/person-bundle.good.json" ]; then
+    pers=on; [ "${FLEET_PERSONAL:-}" = 0 ] && pers=off
+    pargs+=(--personal "$pers")
+  fi
+  hdir="$PCONF/personal-hook-strikes/$FLEET_WRAP_LAUNCH_ID"
+  if [ -d "$hdir" ]; then
+    hoff=0; hwhat=''
+    for f in "$hdir"/*.off; do
+      [ -f "$f" ] || continue
+      hoff=$((hoff + 1))
+      [ -n "$hwhat" ] || hwhat=$(head -n 1 "$f" | cut -f1-2 | tr '\t' ' ' | cut -c1-80)
+    done
+    [ "$hoff" -gt 0 ] && pargs+=(--hooks-off "$hoff" --hooks-off-what "$hwhat")
+    rm -rf "$hdir"
+  fi
   python3 "$BIN/fleet-session-page.py" ${pargs[@]+"${pargs[@]}"}
   act=$?
-  case "$act" in 10|11|12) ;; *) plain_page "$rc"; act=$? ;; esac
+  case "$act" in 10|11|12|13) ;; *) plain_page "$rc"; act=$? ;; esac
   # Back from the page: a relaunch is a fresh turn as far as the list knows.
   wset -u @wrap_exit_rc
+  # p — ↵ without the personal layer, for this window from now on (#1862)
+  [ "$act" = 13 ] && { export FLEET_PERSONAL=0; act=10; }
   case "$act" in
     10)  # ↵ — the same conversation; a Codex window with none starts a new one
       last=resume
