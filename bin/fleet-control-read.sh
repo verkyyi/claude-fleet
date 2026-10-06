@@ -178,7 +178,7 @@ case "$mode" in
       fi
       row=$wid$'\t'$c2$'\t'$c3$'\t'$wt$'\t'$rest
       b=''; [ -z "$busy" ] || b=$(printf '%s\n' "$busy" | awk -v w="$wid" '$1 == w { print $2; exit }')
-      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\n' "$row" "$b" "$born" "$FLEET_CFG_STATE"
+      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\n' "$row" "$b" "$born" "$FCFG_STATE"
     done <<<"$rows"
     ;;
   ready)

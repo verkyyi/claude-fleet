@@ -763,7 +763,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # expected file). stale | ok | unknown — only stale draws.
   case "$wid" in
     wid:*) case "$wcfg" in stale|ok) cfgst=$wcfg ;; *) cfgst=unknown ;; esac ;;
-    *)     fleet_cfg_state "$agent" "$wcfg"; cfgst=$FLEET_CFG_STATE ;;
+    *)     fleet_cfg_state "$agent" "$wcfg"; cfgst=$FCFG_STATE ;;
   esac
   cfgf=''; [ "$cfgst" = unknown ] || cfgf="$US$cfgst"
   # strict per-fleet: only windows from the viewing dash's own tmux session.

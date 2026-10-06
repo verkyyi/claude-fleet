@@ -6828,28 +6828,28 @@ fleet_child_busy() {
 # by every install-apply and every team apply). The two differ ⇒ the session runs
 # an old configuration: the sidebar marks it 配置旧, the doctor counts it, and
 # fleet-cfg-restart.sh reopens it once it has been idle long enough.
-# fleet_cfg_expected_load — read that file ONCE into FLEET_CFG_EXP_CLAUDE /
-# FLEET_CFG_EXP_CODEX (no fork: the rows producer runs it per frame).
+# fleet_cfg_expected_load — read that file ONCE into FCFG_EXP_CLAUDE /
+# FCFG_EXP_CODEX (no fork: the rows producer runs it per frame).
 fleet_cfg_expected_load() {
-  FLEET_CFG_EXP_CLAUDE=''; FLEET_CFG_EXP_CODEX=''
+  FCFG_EXP_CLAUDE=''; FCFG_EXP_CODEX=''
   local f="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/global/agent-cfg.expected" ag fp _rest
   [ -f "$f" ] || return 0
   while read -r ag fp _rest; do
-    case "$ag" in claude) FLEET_CFG_EXP_CLAUDE=$fp ;; codex) FLEET_CFG_EXP_CODEX=$fp ;; esac
+    case "$ag" in claude) FCFG_EXP_CLAUDE=$fp ;; codex) FCFG_EXP_CODEX=$fp ;; esac
   done < "$f"
   return 0
 }
-# fleet_cfg_state <agent> <fp> → FLEET_CFG_STATE = stale | ok | unknown (no fork,
+# fleet_cfg_state <agent> <fp> → FCFG_STATE = stale | ok | unknown (no fork,
 # nothing printed). <agent> is @cc_agent (`codex`, `codex:…` as the rows format
 # spells it, else Claude); <fp> the window's @agent_cfg. No fingerprint on the
 # window (a session from before #1782, FLEET_AGENT_CFG=0, a plain shell) or none
 # expected ⇒ unknown — never stale: a window we cannot judge is never reopened.
 fleet_cfg_state() {
   local exp
-  case "${1:-}" in codex|codex:*) exp=${FLEET_CFG_EXP_CODEX:-} ;; *) exp=${FLEET_CFG_EXP_CLAUDE:-} ;; esac
-  if [ -z "${2:-}" ] || [ -z "$exp" ]; then FLEET_CFG_STATE=unknown
-  elif [ "$2" = "$exp" ]; then FLEET_CFG_STATE=ok
-  else FLEET_CFG_STATE=stale; fi
+  case "${1:-}" in codex|codex:*) exp=${FCFG_EXP_CODEX:-} ;; *) exp=${FCFG_EXP_CLAUDE:-} ;; esac
+  if [ -z "${2:-}" ] || [ -z "$exp" ]; then FCFG_STATE=unknown
+  elif [ "$2" = "$exp" ]; then FCFG_STATE=ok
+  else FCFG_STATE=stale; fi
 }
 # fleet_cfg_restart_why <session> <win> [idle-secs] — may <win> be reopened onto
 # the current configuration NOW (issue #1783)? Exit 0 = yes. Else exit 1 and ONE
@@ -6872,7 +6872,7 @@ fleet_cfg_restart_why() {
   [ -z "$rem" ] && [ "$hub" != 1 ] || { echo remote; return 1; }
   [ "$ag" != codex ] || { echo codex; return 1; }
   fleet_cfg_expected_load; fleet_cfg_state "$ag" "$fp"
-  [ "$FLEET_CFG_STATE" = stale ] || { echo "$FLEET_CFG_STATE"; return 1; }
+  [ "$FCFG_STATE" = stale ] || { echo "$FCFG_STATE"; return 1; }
   [ -z "$slp" ] || { echo asleep; return 1; }
   [ "$st" = done ] || { echo "state:${st:-none}"; return 1; }
   case "$ts" in ''|*[!0-9]*) ts=0 ;; esac

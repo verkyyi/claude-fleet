@@ -72,7 +72,7 @@ for sess in $sockets; do
   while IFS='|' read -r wid ag fp ts; do
     [ -n "$wid" ] || continue
     fleet_cfg_state "$ag" "$fp"
-    [ "$FLEET_CFG_STATE" = stale ] && stale+="$wid|$fp|$ts"$'\n'
+    [ "$FCFG_STATE" = stale ] && stale+="$wid|$fp|$ts"$'\n'
   done < <(tmux -L "$sess" list-windows -t "=$sess" \
              -F '#{window_id}|#{@cc_agent}|#{@agent_cfg}|#{@cfg_restart_ts}' 2>/dev/null)
   [ -n "$stale" ] || continue
