@@ -185,6 +185,12 @@ mv "$WORK/remote.keep" "$G/remote_$S"
 # B. rows
 # ============================================================================
 export CCQUOTA_FLEET=1
+# A remote parent starts FOLDED, as a local one does (issue #1749): its bit is
+# this machine's global/remote_fold_<sess>, absent ⇒ collapsed.
+s=$(side)
+eq "B: a remote parent starts folded — its done grandchild hidden" "solo;EPIC;C1;侧边栏;草稿;" "$(sorder "$s")"
+eq "B: …its caret says so" "wid:$F/issue-1423|└▸|1/1|1|m4" "$(srow "$s" '侧边栏')"
+printf '%s/issue-1423\n' "$F" > "$G/remote_fold_$S"   # opened HERE: the rows below read it open
 s=$(side)
 eq "B: mixed with the local rows, each under its real parent; the lost one at the foot" \
    "solo;EPIC;C1;侧边栏;孙;草稿;" "$(sorder "$s")"
@@ -465,6 +471,21 @@ F5=33333333-4444-5555-6666-777777777777            # a fleet on a third machine,
   printf 'wid:%s/acme-app:issue-33\037m5\037online\03733\037acme/app\037working\037claude\037跨机子\037%s/acme-app:scratch-5\037\0370\037\n' "$F5" "$F"
   printf 'wid:%s/acme-app:issue-34\037m4\037online\03734\037acme/app\037working\037claude\037孤儿\037%s/acme-app:scratch-9\037\0370\037\n' "$F" "$F5"
 } > "$G/remote_$SH"
+# A client's list is ALL `wid:` rows (issue #1749): it folds like a node's — the
+# parent starts shut (▸, its children hidden), → opens it, ← on a child shuts it
+# again — every bit in the client's own file, nothing written to any tmux.
+ks=$(FLEET_SHELL=1 shell_side)
+eq "K: on a client the parent starts folded" "wid:$F/acme-app:scratch-5|▸|0" "$(srow "$ks" '父' | cut -d'|' -f1,2,4)"
+eq "K: …its children hidden" "" "$(srow "$ks" '同机子')"
+kfold() { PATH="$SHIMPATH" FLEET_SHELL=1 FLEET_SESSION=$SH DASH_FOLD_PLAIN=1 bash "$BIN/dash-fold-toggle.sh" "$1" "$2" >/dev/null 2>&1; }
+: > "$TMUX_LOG"
+kfold expand "wid:$F/acme-app:scratch-5"
+ks=$(FLEET_SHELL=1 shell_side)
+eq "K: → opens it" "wid:$F/acme-app:scratch-5|▾|0" "$(srow "$ks" '父' | cut -d'|' -f1,2,4)"
+kfold collapse "wid:$F/acme-app:issue-31"
+eq "K: ← on a child shuts the parent's block" "▸" "$(srow "$(FLEET_SHELL=1 shell_side)" '父' | cut -d'|' -f2)"
+hasnt "K: the fold wrote no tmux option" "$(cat "$TMUX_LOG")" "set-"
+kfold expand "wid:$F/acme-app:scratch-5"
 ks=$(FLEET_SHELL=1 shell_side)
 eq "K: the parent is a top row with its fold caret" "wid:$F/acme-app:scratch-5|▾|0" "$(srow "$ks" '父' | cut -d'|' -f1,2,4)"
 eq "K: a child on the same machine nests under it" "wid:$F/acme-app:issue-31|└|1" "$(srow "$ks" '同机子' | cut -d'|' -f1,2,4)"
@@ -475,7 +496,7 @@ eq "K: …and the children sort right under their parent" "父;" "$(sorder "$ks"
 sed -e "s/^#node\x1fm4\x1fonline/#node\x1fm4\x1flost/" "$G/remote_$SH" > "$WORK/k" && mv "$WORK/k" "$G/remote_$SH"
 kl=$(FLEET_SHELL=1 shell_side)
 eq "K: the parent's machine lost — the m5 child un-nests (the wid:\$r_orig lost test)" " |0" "$(srow "$kl" '跨机子' | cut -d'|' -f2,4)"
-rm -f "$G/remote_$SH" "$G/hub_ok"
+rm -f "$G/remote_$SH" "$G/remote_fold_$SH" "$G/hub_ok"
 mv "$WORK/wlist.keep" "$WLIST_FILE"
 
 # ============================================================================
@@ -657,13 +678,28 @@ export FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'"
 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
 
 # ============================================================================
-# F. read-only
+# F. read-only — and the fold is THIS machine's (issue #1749)
 # ============================================================================
 : > "$TMUX_LOG"
-PATH="$SHIMPATH" FLEET_SESSION=$S bash "$BIN/dash-fold-toggle.sh" expand "wid:$F/issue-1423" >/dev/null 2>&1
+rm -f "$G/remote_fold_$S"; cp "$G/remote_$S" "$WORK/remote.f"; remote_cache "$NOW"   # B's tree
+fold() { PATH="$SHIMPATH" FLEET_SESSION=$S DASH_FOLD_PLAIN=1 bash "$BIN/dash-fold-toggle.sh" "$1" "$2" 2>/dev/null; }
+eq "F: → on a remote parent opens it" "reload(bash $BIN/tmux-dashboard-rows.sh)" "$(fold expand "wid:$F/issue-1423")"
+eq "F: …written to this machine's own file" "$F/issue-1423" "$(cat "$G/remote_fold_$S" 2>/dev/null)"
+eq "F: → on an open parent is a dead key" "" "$(fold expand "wid:$F/issue-1423")"
+eq "F: → on a remote leaf is a dead key" "" "$(fold expand "wid:$F/issue-1500")"
+eq "F: → on a row the cache does not list is a dead key" "" "$(fold expand "wid:$F/issue-9")"
+fold collapse "wid:$F/issue-1500" >/dev/null
+[ -e "$G/remote_fold_$S" ] && fail "F: ← on a remote child should shut its parent's block (the file goes)" "$(cat "$G/remote_fold_$S")"
+CHECKS=$((CHECKS + 1))
+eq "F: ← with nothing open is a dead key" "" "$(fold collapse "wid:$F/issue-1423")"
+printf '%s/issue-1423\n%s/issue-gone\n' "$F" "$F" > "$G/remote_fold_$S"
+fold expand "wid:$F/scratch-2" >/dev/null   # a leaf: no write, nothing pruned
+fold collapse "wid:$F/issue-1423" >/dev/null; fold expand "wid:$F/issue-1423" >/dev/null
+eq "F: a rewrite drops an id the cache no longer lists" "$F/issue-1423" "$(cat "$G/remote_fold_$S")"
 PATH="$SHIMPATH" FLEET_SESSION=$S bash "$BIN/dash-pin-toggle.sh" "wid:$F/issue-1423" >/dev/null 2>&1
 PATH="$SHIMPATH" FLEET_SESSION=$S bash "$BIN/dash-migrate.sh" "wid:$F/issue-1423" >/dev/null 2>&1
 hasnt "F: fold/pin/migrate on a remote row set no tmux option" "$(cat "$TMUX_LOG")" "set-"
+mv "$WORK/remote.f" "$G/remote_$S"; rm -f "$G/remote_fold_$S"
 
 # ============================================================================
 # G. inventory columns 10-12
@@ -705,6 +741,29 @@ print(repr(w["name"]) + "|" + str(w["origin_wid"]) + "|" + str(w["needs"]))' 2>&
   CCQUOTA_FLEET=1 bash "$HUBS" --refresh 2>/dev/null
   eq "G: …and empty again once that window is gone" "1|" \
      "$(LC_ALL=C awk -F"$US" -v w="wid:$U/issue-1420" '$1 == w { print $11 "|" $12 }' "$G/remote_$S")"
+  # Every session the node's own list shows is reported (issue #1749): a no-repo
+  # window with no key is listed under the identity the adapter mints for it, and
+  # a raw scratch whose @worktree was never stamped keys off its scratch cwd —
+  # fleet_window_okey's fallback. A panel is never a session.
+  mkdir -p "$WORK/wt/acme-scratch-21"
+  wg=$("$REAL_TMUX" -L "$S" new-window -d -P -F '#{window_id}' -n guide -c "$WORK" 'while :; do sleep 300; done')
+  "$REAL_TMUX" -L "$S" set-window-option -t "$wg" @norepo 1
+  wr=$("$REAL_TMUX" -L "$S" new-window -d -P -F '#{window_id}' -n 'SPACE' -c "$WORK/wt/acme-scratch-21" 'while :; do sleep 300; done')
+  "$REAL_TMUX" -L "$S" set-window-option -t "$wr" @raw 1
+  sleep 1   # pane_current_path is read off the process: let the shell start
+  got=$(cd "$BIN" && python3 -c 'import sys, fleet_control as c
+ctl = c.Control(sys.argv[1]); f = [x for x in ctl.inventory() if x["name"] == sys.argv[2]][0]
+ws = {w["name"]: w for w in ctl.workers(f)["workers"]}
+g, r = ws.get("guide") or {}, ws.get("SPACE") or {}
+print(str(g.get("key")) + "|" + str(g.get("worker_id")) + "|" + str(r.get("key")) + "|" + str("plan" in ws))' "$FLEET_CONF_DIR" "$S" 2>&1)
+  gfid=$("$REAL_TMUX" -L "$S" show-options -wqv -t "$wg" @fleet_id)
+  case "$gfid" in ????????-????-????-????-????????????) ;; *) fail "G: the adapter minted no @fleet_id for a keyless window (got '$gfid')" ;; esac
+  eq "G: a keyless no-repo window is listed under its minted identity; a raw scratch keys off its cwd; no panel" \
+     "None|$U/$gfid|scratch-21|False" "$got"
+  got=$(bash "$BIN/fleet-remote-view.sh" sessions 2>&1 | python3 -c 'import json, sys
+d = json.load(sys.stdin); print(";".join(sorted(s["worker_id"].split("/", 1)[1] for s in d["sessions"])))' 2>&1)
+  has "G: remote-view sessions lists the keyless window too" "$got" "$gfid"
+  has "G: …and the cwd-keyed scratch" "$got" "scratch-21"
 else
   printf 'dash-remote-rows selftest: no isolated tmux server — leg G (live adapter) skipped\n' >&2
 fi

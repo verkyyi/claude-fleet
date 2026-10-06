@@ -125,9 +125,40 @@ case "$mode" in
       done <<<"$rows")
     fi
     busy=$(workers_busy "$sock" "$sess")
+    # Two fills (issue #1749), so every session the operator's own list shows is
+    # one the other machines see too:
+    # - an empty @worktree takes the pane cwd when — and only when — its basename
+    #   is a scratch worktree's (`…scratch-<N>`): fleet_window_okey's own fallback,
+    #   so a raw scratch whose @worktree was never stamped keys as `scratch-<N>`
+    #   here exactly as on its own sidebar, instead of reporting no key at all;
+    # - a session window with no @fleet_id gets one minted (fleet_window_fid, the
+    #   lazy mint #1646 built for an older window), so a no-repo / keyless window
+    #   has an identity to be listed under. A panel never does: it is not a session.
+    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" -F $'#{window_id}\t#{pane_current_path}' 2>/dev/null) || cwds=''
     while IFS= read -r row; do
       [ -n "$row" ] || continue
-      b=''; [ -z "$busy" ] || b=$(printf '%s\n' "$busy" | awk -v w="${row%%$'\t'*}" '$1 == w { print $2; exit }')
+      wid=${row%%$'\t'*}; rest=${row#*$'\t'}
+      c2=${rest%%$'\t'*}; rest=${rest#*$'\t'}
+      c3=${rest%%$'\t'*}; rest=${rest#*$'\t'}
+      wt=${rest%%$'\t'*}; rest=${rest#*$'\t'}
+      if [ -z "$wt" ]; then
+        cwd=$(printf '%s\n' "$cwds" | awk -F'\t' -v w="$wid" '$1 == w { print $2; exit }')
+        case "${cwd##*/}" in scratch-[1-9]*|*-scratch-[1-9]*)
+          sn=${cwd##*scratch-}; case "$sn" in *[!0-9]*) ;; *) wt=$cwd ;; esac ;;
+        esac
+      fi
+      fi=${rest##*$'\t'}
+      if [ -z "$fi" ]; then
+        # column 10 is the window name in both shapes (the multi-repo one put
+        # @repo at 9): the 6th field from here, counting from @claude_state
+        nm=$(printf '%s' "$rest" | cut -f6)
+        case "$nm" in ''|dash|plan|backlog|home) ;; *)
+          fi=$(fleet_window_fid "$sess" "$wid" "$sock" 2>/dev/null) || fi=''
+          rest=${rest%$'\t'*}$'\t'$fi ;;
+        esac
+      fi
+      row=$wid$'\t'$c2$'\t'$c3$'\t'$wt$'\t'$rest
+      b=''; [ -z "$busy" ] || b=$(printf '%s\n' "$busy" | awk -v w="$wid" '$1 == w { print $2; exit }')
       printf '%s\tbusy=%s\n' "$row" "$b"
     done <<<"$rows"
     ;;
