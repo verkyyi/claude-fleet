@@ -42,6 +42,17 @@
 #                    short one none; rolled-back once (its skipped ticks are
 #                    silent); a failed send is retried; no channel / dry-run /
 #                    off send nothing; the send is a `notified` log line
+#   Q. node agent    (issue #1723) a fake fleet-node-upgrade.sh: stable moves and
+#                    the agent is behind → ONE upgrade (--dist --rollback --logins
+#                    <me>) and node: upgraded; the next tick, agent current → no
+#                    upgrade call; a failure → node_upgrade_failed + ONE notify +
+#                    the next tick is backoff (no call, no 2nd message), a retry
+#                    after the window fails silently, a stable move retries at
+#                    once; a current tick with a busy window → deferred; a
+#                    LaunchDaemon login without sudo → delegated, with sudo it
+#                    upgrades the others too (own first); FLEET_NODE_FOLLOW=0 →
+#                    off; no agent → none; dry-run prints, calls only --dry-run;
+#                    no fleet-node-upgrade.sh → no node record (the degenerate)
 #   K. registry      plist StartInterval / systemd timer / daemon table agree
 #
 # Exit 0 = pass.
@@ -446,6 +457,89 @@ OUT=$(FLEET_NOTIFY_CMD="$NOTE" FLEET_INSTALL_SYNC=0 bash "$IS" --root "$CO" 2>&1
 eq "P: off" off "$(st result)"; eq "P: off clears an announced key" - "$(st notified)"; eq "P: off sends nothing" 7 "$(sends)"
 eq "P: seven send log lines" 7 "$(nlog)"
 git -C "$CO" checkout -q -- f
+
+# --- Q. node agent follows (issue #1723) ---------------------------------------------------------
+# The fake: --dry-run prints the plan line for each login in $WORK/node-logins
+# ("<name> <domain>"), behind unless $WORK/node-ver says prod-<short sha>; an
+# upgrade writes node-ver, or fails when $WORK/node-fail exists.
+NU="$WORK/fake-node-upgrade.sh"
+cat > "$NU" <<EOF
+#!/bin/bash
+echo "nodeup \$*" >> "$LOG"
+sha=\$1; ver=prod-\$(printf '%.7s' "\$sha")
+[ -f "$WORK/node-none" ] && { echo "fleet-node-upgrade: no ccquota agent service on testhost (looked in x)" >&2; exit 1; }
+case " \$* " in
+  *" --dry-run "*)
+    while read -r n d; do
+      [ "\$(cat "$WORK/node-ver" 2>/dev/null)" = "\$ver" ] && act="current — skip" || act=upgrade
+      echo "  \$n  \$d/com.ccquota.agent  /p  disk x · hub x  → \$act"
+    done < "$WORK/node-logins"
+    exit 0 ;;
+esac
+[ -f "$WORK/node-fail" ] && { echo "fleet-node-upgrade: FAIL — me: restarted, but no control channel on \$ver within 90s; rolled back: /p" >&2; exit 1; }
+echo "\$ver" > "$WORK/node-ver"
+echo "done: 1/1 login(s) on \$ver"
+EOF
+chmod +x "$NU"
+printf '%s gui\n' "$me" > "$WORK/node-logins"; echo prod-0000000 > "$WORK/node-ver"
+rm -f "$WORK/notify-fail" "$WORK/gate-closed" "$WORK/apply-partial" "$WORK/doctor-fail-always"
+printf 'done\n' > "$WORK/tmux-states/f1"
+nodeups() { grep -c '^nodeup .*--rollback' "$LOG"; }
+qrun() { OUT=$(FLEET_INSTALL_NODE_UPGRADE="$NU" FLEET_INSTALL_NODE_SUDO_CHECK=false FLEET_NOTIFY_CMD="$NOTE" bash "$IS" --root "$CO" "$@" 2>&1); RC=$?; }
+C20=$(commit twenty); C21=$(commit twentyone); C22=$(commit twentytwo); C23=$(commit twentythree)
+git -C "$SEED" push -q origin master
+stable "$C20"; n0=$(sends); qrun
+eq "Q: updated" updated "$(st result)"
+eq "Q: node upgraded" upgraded "$(st node)"
+eq "Q: one upgrade, own login, hub first, rollback armed" "nodeup $C20 --dist --rollback --logins $me" "$(grep '^nodeup .*--rollback' "$LOG" | tail -1)"
+eq "Q: reason = the done line" "done: 1/1 login(s) on prod-$(short "$C20")" "$(st node_reason)"
+contains "Q: node log line after the tick's" "$(lastlog)" "node-upgraded "
+contains "Q: tick line still there" "$(tail -2 "$CO/logs/install-sync.log" | head -1)" " updated "
+n=$(nodeups); qrun
+eq "Q: current" current "$(st result)"; eq "Q: node current" current "$(st node)"
+eq "Q: current agent → no upgrade call" "$n" "$(nodeups)"
+contains "Q: no node log line when nothing to do" "$(lastlog)" " current "
+# failure: alarm once, back off, never loop
+touch "$WORK/node-fail"; stable "$C21"; qrun
+eq "Q: fail result" node_upgrade_failed "$(st node)"
+contains "Q: fail reason" "$(st node_reason)" "no control channel on prod-$(short "$C21")"
+eq "Q: fail stable" "$C21" "$(st node_fail_stable)"
+eq "Q: one alert" $((n0 + 1)) "$(sends)"
+contains "Q: alert names it" "$(tail -4 "$NLOG")" "node agent upgrade failed — $me@"
+eq "Q: notified key" "$me node_upgrade_failed $C21" "$(st node_notified)"
+eq "Q: the install itself still followed" updated "$(st result)"
+n=$(nodeups); qrun
+eq "Q: backoff" backoff "$(st node)"; eq "Q: backoff → no call" "$n" "$(nodeups)"
+eq "Q: backoff → no 2nd alert" $((n0 + 1)) "$(sends)"
+OUT=$(FLEET_NODE_FOLLOW_RETRY_SECS=0 FLEET_INSTALL_NODE_UPGRADE="$NU" FLEET_INSTALL_NODE_SUDO_CHECK=false FLEET_NOTIFY_CMD="$NOTE" bash "$IS" --root "$CO" 2>&1)
+eq "Q: retry after the window" $((n + 1)) "$(nodeups)"; eq "Q: still failing" node_upgrade_failed "$(st node)"
+eq "Q: same episode → no 2nd alert" $((n0 + 1)) "$(sends)"
+rm -f "$WORK/node-fail"; stable "$C22"; qrun
+eq "Q: a stable move retries at once" upgraded "$(st node)"
+eq "Q: failure cleared" - "$(st node_fail_stable)"; eq "Q: key cleared" - "$(st node_notified)"
+# a current tick waits for idle
+echo prod-0000000 > "$WORK/node-ver"; printf 'working\n' > "$WORK/tmux-states/f1"; n=$(nodeups); qrun
+eq "Q: busy → deferred" deferred "$(st node)"; eq "Q: busy → no call" "$n" "$(nodeups)"
+contains "Q: deferred says why" "$(st node_reason)" "busy window(s) on f1:1"
+printf 'done\n' > "$WORK/tmux-states/f1"
+# LaunchDaemon logins: sudo decides
+printf '%s system\nzz system\n' "$me" > "$WORK/node-logins"; qrun
+eq "Q: no sudo → delegated" delegated "$(st node)"; eq "Q: delegated → no call" "$n" "$(nodeups)"
+OUT=$(FLEET_INSTALL_NODE_SUDO_CHECK=true FLEET_INSTALL_NODE_UPGRADE="$NU" bash "$IS" --root "$CO" 2>&1)
+eq "Q: sudo → own first, then the others" "nodeup $C22 --dist --rollback --logins $me zz" "$(grep '^nodeup .*--rollback' "$LOG" | tail -1)"
+printf '%s gui\n' "$me" > "$WORK/node-logins"
+# off / none / dry-run / degenerate
+echo prod-0000000 > "$WORK/node-ver"; n=$(nodeups)
+OUT=$(FLEET_NODE_FOLLOW=0 FLEET_INSTALL_NODE_UPGRADE="$NU" bash "$IS" --root "$CO" 2>&1)
+eq "Q: FLEET_NODE_FOLLOW=0 → off" off "$(st node)"; eq "Q: off → no call" "$n" "$(nodeups)"
+touch "$WORK/node-none"; qrun; rm -f "$WORK/node-none"
+eq "Q: no agent → none" none "$(st node)"
+before=$(st last_check); qrun --dry-run
+contains "Q: dry-run says it would" "$OUT" "node: would upgrade $me to prod-$(short "$C22")"
+eq "Q: dry-run → no upgrade" "$n" "$(nodeups)"; eq "Q: dry-run writes no state" "$before" "$(st last_check)"
+stable "$C23"; ln=$(grep -c '' "$LOG"); run
+not_contains "Q: degenerate: no node call" "$(tail -n +$((ln + 1)) "$LOG")" "nodeup"
+contains "Q: degenerate: tick line last" "$(lastlog)" " updated "
 
 # --- K. registry lockstep ------------------------------------------------------------------------------------
 ROOT="$(cd "$BIN/.." && pwd)"

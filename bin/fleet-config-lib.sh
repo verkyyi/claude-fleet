@@ -235,6 +235,8 @@ fcfg_label_i18n() {
     FLEET_INSTALL_SYNC_TIMEOUT) printf '安装同步 fetch 超时' ;;
     FLEET_INSTALL_FOLLOW_STUCK_SECS) printf '安装跟随卡住阈值' ;;
     FLEET_INSTALL_LOOP_MARGIN_SECS) printf '安装同步 loop 余量' ;;
+    FLEET_NODE_FOLLOW) printf '节点程序跟随 stable 升级' ;;
+    FLEET_NODE_FOLLOW_RETRY_SECS) printf '节点升级失败后重试间隔' ;;
     FLEET_KEEP_AGENTS_KEY) printf '保留 ← 打开 agents 界面' ;;
     FLEET_REAP_KEPT_PROCS) printf '清理保留 worktree 的孤儿进程' ;;
     FLEET_REAP_KEPT_MINAGE) printf '保留 worktree 清理最小年龄' ;;

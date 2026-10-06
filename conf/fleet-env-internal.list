@@ -422,3 +422,6 @@ FLEET_CLIENT_ROOT                  path: the installed client's home (default th
 FLEET_CLIENT_STATE                 path: the client update's stamp / log / bar note dir (default ~/.cache/claude-fleet/client) (fleet-client-update.sh, #1722)
 FLEET_CLIENT_TIMEOUT               seam: seconds per hub request on a client start (default 3) (fleet-client-update.sh, #1722)
 FLEET_CLIENT_UPDATED               env handoff: bin/fleet re-execs the switched client once with it set, so it never loops (#1722)
+FLEET_INSTALL_NODE_UPGRADE         seam: the fleet-node-upgrade.sh an install-sync tick drives (default $ROOT/bin/…) (fleet-install-sync.sh, #1723)
+FLEET_INSTALL_NODE_SUDO_CHECK      seam: the command that says sudo -n works, so this login upgrades LaunchDaemon logins (default `sudo -n true`) (fleet-install-sync.sh, #1723)
+FLEET_NODE_UPGRADE_DIST_CMD        seam: stands in for the --dist curl — `<cmd> <os-arch> <body> <headers>` prints the HTTP code (fleet-node-upgrade.sh, #1723)
