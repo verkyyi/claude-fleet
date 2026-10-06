@@ -368,7 +368,7 @@ pullback_scan() {
   [ -f "$mf" ] && grep -q '^FID' "$mf" 2>/dev/null || return 0
   # Every session on this server, the warm pool included (a recycled scratch
   # parked there is not gone). An empty read is a transient, never "all killed".
-  live=$(tmux -L "$sock" list-windows -a -F '#{window_id} #{@fleet_id}' 2>/dev/null)
+  live=$(fleet_lw '#{window_id} #{@fleet_id}' tmux -L "$sock")
   [ -n "$live" ] || return 0
   live=$(printf '%s\n' "$live" | awk 'NF > 1 { print $2 }')
   # A mark outlives its window only until the same identity is live again (a
@@ -444,7 +444,7 @@ pullback_run() {
     while IFS= read -r line; do
       fid=${line%%$'\t'*}; fid=${fid#WIN:}
       IFS=$'\t' read -r _ wname wpath wsid wissue _ <<<"$line"
-      if tmux -L "$sock" list-windows -a -F '#{@fleet_id}' 2>/dev/null | grep -qxF "$fid"; then continue; fi
+      if fleet_lw '#{@fleet_id}' tmux -L "$sock" | grep -qxF "$fid"; then continue; fi
       fleet_fid_retired "$fid" && { log "pullback: $sess/$wname retired by the fleet since — not reopened"; continue; }
       pullback_merged "$repo" "$wissue" && { log "pullback: $sess/$wname issue #$wissue has a merged PR — not reopened"; continue; }
       printf 'FID\t%s\n%s\n' "$fid" "WIN${line#WIN:"$fid"}" >> "$keep"

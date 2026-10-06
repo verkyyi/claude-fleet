@@ -163,6 +163,7 @@ case "$*" in
   *list-clients*) [ -n "${CLIENTS-}" ] && printf '%s\n' "$CLIENTS" ;;
   *@reap_hold*)   printf '%s\n' "${HOLD:-}" ;;       # issue #1244
   *@worker_lifecycle*) printf '%s\n' "${LIFE:-}" ;;
+  *@fleet_id*)    printf '%s\n' "${FID:-}" ;;       # fleet_win_retire's read (#1840)
   *@raw*)         printf '%s\n' "${RAW:-}" ;;
   *@worktree*)    printf '%s\n' "${WT:-}" ;;         # scratch worktree path (#290)
   *@issue*)       printf '%s\n' "${ISS:-}" ;;
