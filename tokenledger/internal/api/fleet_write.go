@@ -584,6 +584,15 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 		if placed != nil && placed.FleetID == target.FleetID {
 			placement = placed
 		}
+		if tool == "worker_start" && placement == nil {
+			// A start named straight at a personal machine's fleet
+			// (claude-fleet#1721) is held to placement's rule: only from it.
+			now := time.Now()
+			hb, _, _ := s.nodeStatusOf(target.EndpointID, now)
+			if s.personalOf(target.EndpointID, hb) && !s.isMachine(target.Hostname, s.askedFrom(p, now)) {
+				return nil, fault("NO_ELIGIBLE_NODE", target.Hostname+": "+excludedPersonal+" — open it from that computer's own client")
+			}
+		}
 	default:
 		pl, err := s.pickNode(p, w.repo, w.node, time.Now())
 		if err != nil {
@@ -878,6 +887,9 @@ type Candidate struct {
 	// never picks a node that says false — only a name asks for it.
 	Ready    *bool  `json:"ready,omitempty"`
 	NotReady string `json:"not_ready,omitempty"`
+	// Personal is a person's own computer (claude-fleet#1721): a candidate
+	// only for a start asked from it.
+	Personal bool `json:"personal,omitempty"`
 }
 
 // Placement is pickNode's answer, journalled with the operation.
@@ -1027,6 +1039,7 @@ func (s *Server) pickNode(p fleetPrincipal, repo, node string, now time.Time) (P
 		}
 	}
 	weight := s.spotWeight(settings)
+	from := s.askedFrom(p, now) // claude-fleet#1721: who may land on a personal machine
 	seen := map[string]bool{}
 	for _, r := range rows {
 		if !r.Present || seen[r.EndpointID] || !hostsRepo(r, repo) {
@@ -1047,6 +1060,11 @@ func (s *Server) pickNode(p fleetPrincipal, repo, node string, now time.Time) (P
 			// no gh login, no credential, a missing checkout). auto never
 			// sends work there; naming it with --node still does.
 			c.Eligible, c.Excluded = false, "not ready: "+c.NotReady
+		}
+		if c.Eligible && c.Personal && !s.isMachine(r.Hostname, from) {
+			// A person's own computer (claude-fleet#1721): only what is
+			// asked from it lands there — auto or named.
+			c.Eligible, c.Excluded = false, excludedPersonal
 		}
 		if k := kinds[r.EndpointID]; k != "" {
 			c.Kind = k
@@ -1112,6 +1130,7 @@ func (s *Server) judge(r store.FleetRow, settings map[string]string, accounts ma
 		c.SessionsUnknown = strings.Join(hb.UnreadableFleets(), "; ")
 	}
 	c.Ready, c.NotReady = hb.Ready, hb.NotReady
+	c.Personal = s.personalOf(r.EndpointID, hb)
 	if hb.Ready == nil || *hb.Ready {
 		c.NotReady = ""
 	}

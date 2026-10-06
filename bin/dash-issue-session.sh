@@ -286,7 +286,7 @@ NODE="$NODE_ARG"
 # (FLEET_AUTOFILL_NODE, when set, is autofill's own override and arrives as
 # --node). Only read with the hub on: off, nothing is placed anyway.
 if [ -z "$NODE" ] && [ "${CCQUOTA_FLEET:-0}" = 1 ]; then
-  NODE="${FLEET_SPAWN_NODE:-auto}"
+  NODE="${FLEET_SPAWN_NODE:-$(fleet_spawn_node_default)}"   # personal machine → local (#1721)
   case "$NODE" in ''|*[!A-Za-z0-9._-]*) NODE=auto ;; esac
 fi
 # The account class (issue #1540): --account, else the fleet conf's (fleet_load_conf

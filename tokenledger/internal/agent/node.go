@@ -188,6 +188,7 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 		Compute:      a.computeClaim(),
 		ComputeForce: a.computeForce(),
 		Probe:        a.nodeProbe(),
+		Personal:     a.personalNow(),
 	})
 	if err != nil {
 		return false, err
@@ -387,6 +388,12 @@ func (a *Agent) nodeHeartbeat(ctx context.Context, probe *fleetProbe) control.He
 	on := !a.computeOffNow()
 	hb.Compute = &on
 	hb.ComputeForce, hb.Probe = a.computeForce(), a.nodeProbe()
+	hb.Personal = a.personalNow()
+	if n := hb.SessionsCount(); n != nil {
+		a.lastSessions.Store(int64(*n))
+	} else {
+		a.lastSessions.Store(-1)
+	}
 	return hb
 }
 

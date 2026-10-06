@@ -23,7 +23,7 @@
 #   fleet node status
 #       Like `fleet login status`: is this login a node, of which hub, and does
 #       the hub see it online. Exit 0 only when it does.
-#   fleet node compute on [--force] | off | status
+#   fleet node compute on [--force] [--personal|--shared] | off | status
 #       Whether the hub may run sessions here (issue #1720, EPIC #1718 C2) —
 #       node.env's CCQUOTA_FLEET_COMPUTE, the agent re-reads it every beat (no
 #       restart). `on` probes first (fleet-node-probe.sh: egress region, Claude /
@@ -32,6 +32,15 @@
 #       it open over the region rule. `off` = coordinate only. A laptop is only
 #       noted. The other place compute is decided is the hub's team policy
 #       fleet.compute_auto (default off).
+#       --personal (issue #1721, EPIC #1718 C3; a laptop's default, --shared
+#       says no): this is a person's own computer — node.env's
+#       CCQUOTA_FLEET_PERSONAL=1. The hub places on it only what is asked from
+#       it (its own client, a session already there): never another machine's
+#       auto, never a start named at it from elsewhere. Its spawns default to
+#       local (FLEET_SPAWN_NODE), and before it sleeps the agent flags it
+#       维护中 (reason sleep), tells the client how many sessions still run,
+#       and clears the flag on waking. Neither flag: a laptop is personal, a
+#       machine that already chose keeps its choice, anything else is shared.
 #
 # The old way — a join code from the hub's /nodes page and
 # `fleet-node-join.sh --hub … --token fj_…` — still works for one version
@@ -111,13 +120,22 @@ setenv() {
 # nudge — the agent sends a beat now rather than at its next interval.
 nudge() { mkdir -p "$CONF/global" 2>/dev/null && touch "$CONF/global/hub-nudge" 2>/dev/null; }
 
+# laptop — the last probe's word on a battery (node-probe.json): true | false | ''
+laptop() { [ -f "$CONF/node-probe.json" ] && sed -n 's/.*"laptop":\([a-z]*\).*/\1/p' "$CONF/node-probe.json" | head -n 1; }
+
+personal_line() {
+  echo "个人电脑：只跑在这台上开的会话，别的机器不往这台派；睡眠前提醒还有几个会话在跑，并标「维护中」，醒来恢复（改为共享：fleet node compute on --shared）"
+}
+
 cmd_compute() {
-  local verb="${1:-status}" force=0 line rc
+  local verb="${1:-status}" force=0 personal='' line rc
   [ $# -gt 0 ] && shift
   while [ $# -gt 0 ]; do
     case "$1" in
       --force) force=1 ;;
-      *) echo "fleet node compute: unknown option $1 — fleet node compute on [--force] | off | status" >&2; return 2 ;;
+      --personal) personal=1 ;;
+      --shared) personal=0 ;;
+      *) echo "fleet node compute: unknown option $1 — fleet node compute on [--force] [--personal|--shared] | off | status" >&2; return 2 ;;
     esac
     shift
   done
@@ -136,12 +154,19 @@ cmd_compute() {
       fi
       setenv CCQUOTA_FLEET_COMPUTE 1 || { echo "✗ 写不了 $ENVF"; return 1; }
       if [ "$rc" != 0 ]; then setenv CCQUOTA_FLEET_COMPUTE_FORCE 1; else setenv CCQUOTA_FLEET_COMPUTE_FORCE ''; fi
+      # personal (#1721): the flag, else the choice already made, else a laptop
+      if [ -z "$personal" ]; then
+        personal=$(envval CCQUOTA_FLEET_PERSONAL)
+        [ -n "$personal" ] || { [ "$(laptop)" = true ] && personal=1; }
+      fi
+      [ -z "$personal" ] || setenv CCQUOTA_FLEET_PERSONAL "$personal"
       nudge
       if [ "$rc" != 0 ]; then
         echo "✓ 已强制打开：入口会往这台派会话、借账号（越过了本机判断，入口已记审计）"
       else
         echo "✓ 已打开：入口可以往这台派会话、借账号（下一次心跳生效；fleet node compute off 关回只协调）"
       fi
+      if [ "$personal" = 1 ]; then personal_line; fi
       ;;
     off)
       setenv CCQUOTA_FLEET_COMPUTE 0 && setenv CCQUOTA_FLEET_COMPUTE_FORCE '' || { echo "✗ 写不了 $ENVF"; return 1; }
@@ -151,7 +176,8 @@ cmd_compute() {
     status)
       case "$(envval CCQUOTA_FLEET_COMPUTE)" in
         0) echo "只协调：入口不往这台派会话、不借账号（打开：fleet node compute on）" ;;
-        *) if [ "$(envval CCQUOTA_FLEET_COMPUTE_FORCE)" = 1 ]; then echo "已强制打开（--force）"; else echo "已打开：入口可以往这台派会话"; fi ;;
+        *) if [ "$(envval CCQUOTA_FLEET_COMPUTE_FORCE)" = 1 ]; then echo "已强制打开（--force）"; else echo "已打开：入口可以往这台派会话"; fi
+           [ "$(envval CCQUOTA_FLEET_PERSONAL)" = 1 ] && personal_line ;;
       esac
       FLEET_CONF_DIR="$CONF" "$here/fleet-node-probe.sh" --max-age 86400 2>/dev/null | grep -v '^可以打开：'
       return 0

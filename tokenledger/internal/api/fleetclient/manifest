@@ -40,6 +40,9 @@ bin/fleet-login.py
 bin/fleet-node.sh
 bin/fleet-node-join.sh
 bin/fleet-node-probe.sh
+# bin/fleet-node-sleepwatch.sh: a personal computer's agent runs it from here
+# to say when it sleeps and wakes (#1721).
+bin/fleet-node-sleepwatch.sh
 bin/fleet-peer-cert.sh
 bin/fleet-connect.py
 bin/fleet-client-lib.sh

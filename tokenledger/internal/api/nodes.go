@@ -80,6 +80,8 @@ type nodeConn struct {
 	computeOff   bool
 	computeForce bool
 	probe        *control.NodeProbe
+	// personal is the hello's Personal (claude-fleet#1721).
+	personal bool
 	// beatSaidOn: a heartbeat on this link said compute=true — `fleet node
 	// compute on` overrode the hello's off without a reconnect (#1720).
 	beatSaidOn atomic.Bool
@@ -280,7 +282,8 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 	nc := &nodeConn{conn: conn, admin: hp.Admin && s.isFleetAdmin(ep.OSUser), canRead: hp.HasCap(control.CapRead),
 		canWrite: hp.HasCap(control.CapWrite), canRelay: hp.HasCap(control.CapRelay),
 		canMove: hp.HasCap(control.CapMove), canSSHRelay: hp.HasCap(control.CapSSHRelay),
-		computeOff: !control.ComputeOn(hp.Compute), computeForce: hp.ComputeForce, probe: hp.Probe}
+		computeOff: !control.ComputeOn(hp.Compute), computeForce: hp.ComputeForce, probe: hp.Probe,
+		personal: hp.Personal}
 	// The refresh relay is an ADMIN role: a node that offers it without
 	// being on the hub's admin list is never handed a refresh token's form.
 	nc.canOAuthRefresh = nc.admin && hp.HasCap(control.CapOAuthRefresh)
@@ -470,6 +473,9 @@ type NodeView struct {
 	ComputeAuto   bool               `json:"compute_auto,omitempty"`
 	ComputeClosed bool               `json:"compute_closed,omitempty"`
 	Probe         *control.NodeProbe `json:"probe,omitempty"`
+	// Personal is a person's own computer (claude-fleet#1721): auto never
+	// places on it, and nothing asked from another machine lands there.
+	Personal bool `json:"personal,omitempty"`
 
 	Load1         float64 `json:"load1"`
 	NCPU          int     `json:"ncpu"`
@@ -530,6 +536,8 @@ type MachineView struct {
 	// ComputeOff: every login of the machine only coordinates
 	// (claude-fleet#1719) — nothing is placed on it.
 	ComputeOff bool `json:"compute_off,omitempty"`
+	// Personal: a login of the machine is personal (claude-fleet#1721).
+	Personal bool `json:"personal,omitempty"`
 	// Kind is ephemeral when the machine is a SPOT node (claude-fleet#1428).
 	Kind string `json:"kind"`
 	// Maintenance is the 维护中 record when the operator flagged the machine
@@ -613,6 +621,7 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 		if cv.Off {
 			v.ComputeWhy = cv.Why
 		}
+		v.Personal = s.personalOf(n.EndpointID, hb)
 		if c := s.nodes.get(n.EndpointID); c != nil {
 			v.Connected, v.Admin = true, c.admin
 			if c.admin {
@@ -629,6 +638,7 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 			order = append(order, v.Hostname)
 		}
 		m.Logins++
+		m.Personal = m.Personal || v.Personal
 		if m.Maintenance == nil {
 			m.Maintenance = v.Maintenance // a lost machine still shows why it was flagged
 		}

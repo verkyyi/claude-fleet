@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
@@ -124,6 +125,9 @@ type Config struct {
 	// derives both from Home's default conf dir.
 	FleetNodeEnvPath string
 	FleetProbePath   string
+	// SleepRetry is how often a wake's maintenance leave is retried
+	// (claude-fleet#1721); 0 = wakeRetry. A seam for tests.
+	SleepRetry time.Duration
 
 	// FleetCreds makes this agent lease its login's credentials from the
 	// hub's vault (CCQUOTA_FLEET_CREDS=1, claude-fleet#1415) and keep them
@@ -223,6 +227,10 @@ type Agent struct {
 	spool           *spool.Spool
 	limits          *limits.Client
 	http            *http.Client
+
+	// lastSessions is the newest beat's session count, -1 unknown — what a
+	// sleeping personal machine tells its person (claude-fleet#1721).
+	lastSessions atomic.Int64
 
 	// lastLimitsPoll throttles the Anthropic call independently of the scan
 	// loop, so a fast scan cadence does not hammer the usage endpoint.
@@ -383,6 +391,8 @@ func (a *Agent) Run(ctx context.Context) error {
 		// The daily probe (claude-fleet#1720): is this machine somewhere
 		// Claude / OpenAI serve? Not waited for — it only writes a file.
 		go a.runProbe(ctx)
+		// A personal machine says when it sleeps (claude-fleet#1721).
+		go a.runSleepWatch(ctx)
 		// A login that only coordinates still asks (claude-fleet#1720): the
 		// hub is the one gate — it refuses compute_off, and answers once the
 		// person (`fleet node compute on`) or the team policy opens the login.

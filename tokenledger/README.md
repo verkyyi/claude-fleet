@@ -729,6 +729,23 @@ as `compute_force`); the fleet setting `fleet.compute_auto=on` (default off,
 auto-open — it never closes a running login. No probe and no setting =
 #1719 exactly.
 
+**A person's own computer** (claude-fleet#1721). `fleet node compute on
+--personal` — a laptop's default, `--shared` to say no — writes
+`CCQUOTA_FLEET_PERSONAL=1`; the agent carries `personal` in its hello and every
+beat, and `/v1/nodes` shows it. Placement (`internal/api/fleet_personal.go`)
+takes a personal login only for a start asked FROM it: its own fleet's
+`/v1/node/place` / `/v1/node/move`, or a person's door while that person's
+client lease (claude-fleet#1715) says the client runs on it. Anything else —
+another machine's auto, a start named at it, a `worker_start` naming its
+fleet — is excluded as `personal`. The node's own spawns default to `local`
+(`fleet_spawn_node_default`). Before the machine sleeps,
+`bin/fleet-node-sleepwatch.sh` (NSWorkspace's will-sleep / did-wake) tells the
+agent, which flags it 维护中 with reason `sleep` (`POST /v1/node/maintenance`)
+and notifies the person's client how many sessions still run; on waking — or
+when its wall clock jumped past its monotonic one, or at start — it sends
+`leave` with `if_reason: sleep`, which never ends an operator's maintenance.
+No personal login = nothing changes (`TestPersonalUnsetAddsNothing`).
+
 ### People and their logins — WeCom sign-in opens the account (claude-fleet#1411)
 
 With the fleet module on, a person signing in through WeCom (`/enter`) becomes
@@ -978,6 +995,7 @@ What a machine can do with only the short-lived half was **measured first**
 | hub | `CCQUOTA_FLEET_CRED_MIN_TTL=3h` (default) | a cached access token with less left is refreshed before it is issued |
 | agent | `CCQUOTA_FLEET_CREDS=1` | lease this login's credentials (its own + the shared pool's) and keep them written (with `CCQUOTA_FLEET=1`) |
 | agent | `CCQUOTA_FLEET_COMPUTE=0` | this login only coordinates (claude-fleet#1719): the hub refuses its lease (`compute_off`) and placement skips it. Unset = on. Re-read from `node.env` every beat (claude-fleet#1720) |
+| agent | `CCQUOTA_FLEET_PERSONAL=1` | a person's own computer (claude-fleet#1721, `fleet node compute on --personal`, a laptop's default): placed on only from itself; flags itself 维护中 while asleep. Re-read from `node.env` every beat |
 | agent | `CCQUOTA_FLEET_COMPUTE_FORCE=1` | `fleet node compute on --force` (claude-fleet#1720): open over a probe that says the region is unsupported; the hub audits it |
 | agent | `CCQUOTA_ACCOUNTS_DIR` (default `~/.config/claude-fleet/accounts`), `CCQUOTA_FLEET_CODEX_HOMES` (default `~/.codex-accounts`) | where the Claude / Codex files go |
 | hub | `CCQUOTA_FLEET_OAUTH_REFRESH_VIA=node` | refresh through an online admin node instead of the hub's own network (claude-fleet#1490, below). Unset / `direct` = the hub posts itself |

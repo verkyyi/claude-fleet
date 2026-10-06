@@ -162,6 +162,10 @@ func (s *Server) maintenanceAudit(actor, machine, outcome string, at time.Time) 
 //	GET                                    → {"machine", "status", "maintenance": record|null}
 //	POST {"action":"enter","reason":…}     → flag this machine (idempotent; keeps the first clock)
 //	POST {"action":"leave"}                → clear it
+//	POST {"action":"leave","if_reason":r}  → clear it only when its reason is r
+//	                                         (a waking machine clears its own
+//	                                         "sleep" flag, never the operator's,
+//	                                         claude-fleet#1721)
 //
 // Only its own machine: a node has no say over another one — that is the
 // operator's route (/v1/fleet/settings).
@@ -205,8 +209,9 @@ func (s *Server) handleNodeMaintenance(w http.ResponseWriter, r *http.Request) {
 		answer()
 	case http.MethodPost:
 		var req struct {
-			Action string `json:"action"`
-			Reason string `json:"reason"`
+			Action   string `json:"action"`
+			Reason   string `json:"reason"`
+			IfReason string `json:"if_reason"`
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			httpError(w, http.StatusBadRequest, "the body must be one JSON object")
@@ -234,6 +239,20 @@ func (s *Server) handleNodeMaintenance(w http.ResponseWriter, r *http.Request) {
 			s.maintenanceAudit(actor, host, outcome, now)
 			answer()
 		case "leave":
+			if want := strings.TrimSpace(req.IfReason); want != "" {
+				settings, err := s.Store.FleetSettings()
+				if err != nil {
+					httpError(w, http.StatusInternalServerError, err.Error())
+					return
+				}
+				if m, flagged := maintenanceOf(host, settings); flagged && m.Reason != want {
+					// Someone else's maintenance: the machine's own
+					// wake does not end it.
+					s.maintenanceAudit(actor, host, "KEPT: "+m.Reason, now)
+					answer()
+					return
+				}
+			}
 			was, err := s.leaveMaintenance(host, now)
 			if err != nil {
 				httpError(w, http.StatusInternalServerError, err.Error())

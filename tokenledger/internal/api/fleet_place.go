@@ -432,11 +432,11 @@ func (s *Server) nodePrincipal(ep *store.Endpoint, fl store.FleetRow) (fleetPrin
 		if err != nil {
 			return fleetPrincipal{}, err
 		}
-		return fleetPrincipal{Actor: actor, Person: person, scope: scope}, nil
+		return fleetPrincipal{Actor: actor, Person: person, scope: scope, From: host}, nil
 	case err != nil && !errors.Is(err, store.ErrNoPrincipal):
 		return fleetPrincipal{}, err
 	}
-	return fleetPrincipal{Actor: actor, scope: func(_, u string) bool { return u == user }}, nil
+	return fleetPrincipal{Actor: actor, scope: func(_, u string) bool { return u == user }, From: host}, nil
 }
 
 // placeStatus is the HTTP status of a placement fault, as /v1/fleet/ maps it.

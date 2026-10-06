@@ -27,6 +27,12 @@
 #                  off writes 0; status says which; not a node → refused
 #   G. laptop      a battery is noted, never refused (Darwin pmset, Linux BAT*)
 #   H. --max-age   a fresh node-probe.json is reused: no request at all
+#   I. personal    (issue #1721) `compute on` on a laptop writes
+#                  CCQUOTA_FLEET_PERSONAL=1 and says 个人电脑; --shared writes 0
+#                  and a later plain `on` keeps it; --personal on a desktop;
+#                  a desktop with no flag writes no line; status says it
+#   J. sleepwatch  bin/fleet-node-sleepwatch.sh: not macOS → exit 3; on macOS
+#                  its selftest seam prints ready / sleep / wake
 set -u
 BIN="$(cd "$(dirname "$0")" && pwd)"
 SB="$(mktemp -d "${TMPDIR:-/tmp}/fleet-probe-st.XXXXXX")"
@@ -197,6 +203,36 @@ probe_in a --json
   && ok "H --json prints the JSON" || bad "H --json: $(out)"
 probe_in a --bogus
 [ "$(rc)" = 2 ] && ok "H an unknown option is usage (exit 2)" || bad "H usage rc=$(rc)"
+
+# ── I. personal ──────────────────────────────────────────────────────────
+node_env i 'CCQUOTA_FLEET_COMPUTE=0'
+E="$SB/i/.config/claude-fleet/node.env"
+FAKE_BATTERY=1 fleet_in i node compute on
+[ "$(rc)" = 0 ] && grep -qx 'CCQUOTA_FLEET_PERSONAL=1' "$E" && grep -q '^个人电脑：' "$SB/out" \
+  && ok "I a laptop's compute on is personal" || bad "I laptop rc=$(rc): $(out) / $(cat "$E")"
+fleet_in i node compute status
+grep -q '^个人电脑：' "$SB/out" && ok "I status says 个人电脑" || bad "I status: $(out)"
+FAKE_BATTERY=1 fleet_in i node compute on --shared
+[ "$(rc)" = 0 ] && grep -qx 'CCQUOTA_FLEET_PERSONAL=0' "$E" && [ "$(grep -c '^CCQUOTA_FLEET_PERSONAL=' "$E")" = 1 ] && ! grep -q '个人电脑' "$SB/out" \
+  && ok "I --shared: PERSONAL=0 (one line)" || bad "I shared rc=$(rc): $(out) / $(cat "$E")"
+FAKE_BATTERY=1 fleet_in i node compute on
+grep -qx 'CCQUOTA_FLEET_PERSONAL=0' "$E" && ok "I a later plain on keeps the laptop shared" || bad "I keep: $(cat "$E")"
+node_env i2 'CCQUOTA_FLEET_COMPUTE=0'
+fleet_in i2 node compute on
+[ "$(rc)" = 0 ] && ! grep -q PERSONAL "$SB/i2/.config/claude-fleet/node.env" && ! grep -q '个人电脑' "$SB/out" \
+  && ok "I a desktop with no flag: no personal line" || bad "I desktop: $(out) / $(cat "$SB/i2/.config/claude-fleet/node.env")"
+fleet_in i2 node compute on --personal
+grep -qx 'CCQUOTA_FLEET_PERSONAL=1' "$SB/i2/.config/claude-fleet/node.env" && grep -q '^个人电脑：' "$SB/out" \
+  && ok "I --personal on a desktop" || bad "I --personal: $(out)"
+
+# ── J. sleepwatch ────────────────────────────────────────────────────────
+if [ "$(uname -s)" != Darwin ]; then
+  "$BIN/fleet-node-sleepwatch.sh" >/dev/null 2>&1 </dev/null
+  [ $? = 3 ] && ok "J sleepwatch off macOS: exit 3" || bad "J sleepwatch off macOS did not exit 3"
+else
+  w=$(FLEET_SLEEPWATCH_SELFTEST=1 "$BIN/fleet-node-sleepwatch.sh" 2>&1 </dev/null | tr '\n' ' ')
+  [ "$w" = 'ready sleep wake ' ] && ok "J sleepwatch on macOS: ready / sleep / wake" || bad "J sleepwatch said: $w"
+fi
 
 [ "$fail" = 0 ] && echo "PASS fleet-node-probe-selftest" || echo "FAIL fleet-node-probe-selftest"
 exit "$fail"
