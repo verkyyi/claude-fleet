@@ -768,7 +768,8 @@ drill_zsh_guard_fleet_label() {
   command -v zsh >/dev/null 2>&1 || { SECS=0; WHAT="zsh 不在，跳过"; return 0; }
   t0=$(now)
   ( kf_env
-    z() { zsh -fc "source '$ROOT/shell/cw.zsh' >/dev/null 2>&1; $1" 2>&1; }
+    # an interactive zsh, as the person's: -i stops the shim's plumbing walk there
+    z() { zsh -fic "source '$ROOT/shell/cw.zsh' >/dev/null 2>&1; $1" 2>&1 </dev/null; }
     out=$(PATH="/usr/bin:/bin:${REAL_TMUX%/*}" z 'tmux -L kf kill-server')
     kf_up || { echo "WHY=cw.zsh's tmux() let -L kf kill-server through: [$out]"; exit 1; }
     case "$out" in *拒绝*) ;; *) echo "WHY=no reason given: [$out]"; exit 1 ;; esac

@@ -133,7 +133,9 @@ EOF
     fi
     # an interactive shell (`-zsh`, `zsh`, `bash -l`): a person typed it
     case "$t1" in -*) return 1 ;; esac
-    case "$base" in sh|bash|zsh|dash|fish) case "$rest" in ''|-l|-i|--login) return 1 ;; esac ;; esac
+    case "$base" in sh|bash|zsh|dash|ksh|fish)
+      case "$rest" in ''|-l|--login|-i|-i\ *|-[a-z]*i*) return 1 ;; esac ;;   # -i, -fic …
+    esac
     pid="$ppid"; lvl=$((lvl + 1))
   done
   return 1
