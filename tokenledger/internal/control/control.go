@@ -870,3 +870,19 @@ type SSHRelayHello struct {
 	Code    string `json:"code,omitempty"`
 	Message string `json:"message,omitempty"`
 }
+
+// The team configuration (claude-fleet#1726, EPIC #1718 C8): the layer the
+// hub hands every computer between the fleet's defaults and the login's own.
+// GET reads it by any of the hub's doors (a viewer door, a node's enrollment
+// token); a client-only computer, which holds neither, POSTs {cert, sig, ts}
+// signed under TeamBundleSigNamespace over TeamBundleSigMessage(ts). PUT is
+// the operator's alone.
+const (
+	TeamBundlePath         = "/v1/fleet/team-bundle"
+	TeamBundleSigNamespace = "fleet-team@claude-fleet"
+)
+
+// TeamBundleSigMessage is what a client signs to read the team layer.
+func TeamBundleSigMessage(unix int64) string {
+	return fmt.Sprintf("fleet-team %d", unix)
+}

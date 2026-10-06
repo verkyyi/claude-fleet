@@ -267,6 +267,18 @@ def _ls(d):
         return []
 
 
+def team_status(root):
+    """The team layer applied here (issue #1726) — '' when there never was one."""
+    t = os.path.join(root, "bin", "fleet-agent-team.py")
+    if not os.path.isfile(t):
+        return ""
+    try:
+        return subprocess.run([sys.executable, t, "status", "--short"], capture_output=True,
+                              text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
 def summary(root):
     files, missing, notes = check(root)
     have = [c for c in CATEGORIES if not missing[c]]
@@ -278,6 +290,9 @@ def summary(root):
         else:
             parts.append("%s %s" % (c, notes.get(c, "ok")))
     head = "%d/4 · %s · package %s" % (len(have), " · ".join(parts), ver)
+    team = team_status(root)
+    if team:
+        head += " · " + team
     lines = [l for c in CATEGORIES for l in missing[c]]
     return len(have) == 4, head, lines
 

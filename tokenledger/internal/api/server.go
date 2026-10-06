@@ -317,6 +317,10 @@ func (s *Server) Handler() http.Handler {
 		mux.Handle("/v1/fleet/accounts", s.viewerOnly(s.operatorOnly(http.HandlerFunc(s.handleFleetAccounts))))
 		// Per-person node caps (claude-fleet#1410), the operator's.
 		mux.Handle("/v1/fleet/settings", s.viewerOnly(s.operatorOnly(http.HandlerFunc(s.handleFleetSettings))))
+		// The team configuration layer (claude-fleet#1726): read by every
+		// door — a node's token and a client's certificate included — so it
+		// authenticates itself; a PUT is the operator's alone.
+		mux.HandleFunc(control.TeamBundlePath, s.handleFleetTeamBundle)
 		// The Fleet Hub's read tools (claude-fleet#1409), the same ones
 		// /mcp lists when the module is on.
 		mux.Handle("/v1/fleet/", s.viewerOnly(http.HandlerFunc(s.handleFleet)))
