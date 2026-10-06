@@ -747,7 +747,7 @@ def open_menu(session, wid, env):
     Not waited on: a tmux display-menu can hold its caller until it closes, and
     this view keeps painting meanwhile."""
     # A row on another machine (`wid:…`) has one too (issue #1475): its title
-    # names the machine (`<name> · 在 m4`) — the one place the list says it.
+    # names the machine (`<name> · 在 m4`), as the row's own @ mark does (#1780).
     if wid.startswith("@") or (wid.startswith("wid:") and "/" in wid):
         subprocess.Popen(["bash", str(BIN / "fleet-sidebar.sh"), "menu", session, wid],
                          env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
@@ -826,10 +826,8 @@ def row_left(marker, glyph, tree, name):
 
 def row_right(badge, info=""):
     """What sits at a row's right edge: the subtree badge (`· k/N`), then — while
-    the info column is open (⌃i, issue #1532) — `info_text`. A row on
-    another machine shows NO machine name (issue #1475, the operator's call): a
-    local row and a remote row look the same; the machine is in the row menu's
-    title (fleet-sidebar-menu.sh) and the status line on top."""
+    the info column is open (⌃i, issue #1532) — `info_text`. The machine's `@`
+    mark (issue #1780) is painted after it, in its own colour: `machine_tag`."""
     return " ".join(part for part in ("· " + badge if badge else "", info) if part)
 
 
@@ -865,6 +863,17 @@ def row_text(marker, glyph, tree, name, badge, width, info=""):
     return text
 
 
+def row_layout(marker, glyph, tree, name, badge, width, info="", node=""):
+    """A session row in `width` cells with its machine's @ mark (issue #1780):
+    (text, tag) — `row_text` in what the mark leaves, the mark (`fit_tag`) to
+    paint at the row's last cells. No mark: the row is exactly `row_text`."""
+    right = row_right(badge, info)
+    tag = fit_tag(node, width - width_of(row_left(marker, glyph, tree, ""))
+                  - (width_of(right) + 1 if right else 0))
+    cut = width_of(tag) + 1 if tag else 0
+    return row_text(marker, glyph, tree, name, badge, width - cut, info), tag
+
+
 def row_need(row, info=False):
     """The cells `row` needs to show whole, plus the one the paint keeps free —
     its info column too while that is open."""
@@ -874,19 +883,74 @@ def row_need(row, info=False):
     need = width_of(row_left(" ", glyph, tree, name)) + 1
     right = row_right(badge, info_text(row) if info else "")
     need += width_of(right) + 1 if right else 0
-    return need + via_need(row[8] if len(row) > 8 else "")   # the via mark (#1488)
+    return need + tag_need(row[8] if len(row) > 8 else "")   # the @ mark (#1780)
 
 
-def via_tag(node):
-    """The dim mark a row heard over the shell's own connection (`m5~`, issue
-    #1488) ends in: that machine's short name — `m5`, never an arrow (issue #1621)."""
-    return node[:-1] if node.endswith("~") else ""
+def alias_of(name):
+    """The short name FLEET_NODE_ALIASES gives a machine (`macmini=m5`, any case,
+    domain dropped), else the name itself — fleet-client-badge.sh's alias_of."""
+    name = (name or "").split(".", 1)[0]
+    for pair in os.environ.get("FLEET_NODE_ALIASES", "").split():
+        key, _, val = pair.partition("=")
+        if val and key.lower() == name.lower():
+            return val
+    return name
 
 
-def via_need(node):
-    """The cells the via mark takes at a row's end: the tag plus its gap."""
-    tag = via_tag(node)
+def here_names():
+    """The names THIS computer goes by (issue #1780): its short hostname and its
+    alias — the client's own machine, as the status bar's ⌂ names it (C3, #1779).
+    FLEET_SIDEBAR_HOST stands in for the hostname (tests)."""
+    host = os.environ.get("FLEET_SIDEBAR_HOST") or os.uname().nodename
+    return {n.lower() for n in (host.split(".", 1)[0], alias_of(host)) if n}
+
+
+HERE = here_names()
+# The name column keeps at least this many cells beside the @ mark (issue #1780);
+# narrower, the mark shrinks to `@` + its first letter.
+NAME_MIN = 18
+
+
+def machine_tag(node, narrow=False):
+    """The `@` mark a session row ends in (issue #1780): the machine the session
+    runs on — `@m4`; `@本机` when that is the computer this list runs on; `@m4!`
+    once that machine is lost; `@m5~` when the row came over the shell's own
+    connection while the hub is silent (#1488). `narrow` keeps `@` + the first
+    letter (+ its mark). An empty field 9 — this machine's own row on a node's
+    list — has none: a node's list marks the OTHER machines' rows only."""
+    base = node.rstrip("!~")
+    if not base:
+        return ""
+    name = tr("sidebar_here") if base.lower() in HERE else base
+    return "@" + (name[:1] if narrow else name) + node[len(base):]
+
+
+def tag_pair(node, raised=False):
+    """The @ mark's colour pair (issue #1780): `@本机` magenta, every other
+    machine's — a lost one's included, even this computer's — dim; on the
+    raised row's ground when the row is raised."""
+    base = node.rstrip("!~")
+    if base and base.lower() in HERE and not node.endswith("!"):
+        return PAIR_HERE + SEL_GLYPH if raised else PAIR_HERE
+    return PAIR_DIM_SEL if raised else PAIR_DIM
+
+
+def tag_need(node):
+    """The cells the @ mark takes at a row's end: the tag plus its gap."""
+    tag = machine_tag(node)
     return width_of(tag) + 1 if tag else 0
+
+
+def fit_tag(node, room):
+    """The @ mark for a row whose name and badge have `room` cells beside the mark
+    (issue #1780): whole while the name keeps NAME_MIN cells, else `@` + the first
+    letter; "" when even that leaves no name."""
+    tag = machine_tag(node)
+    if not tag:
+        return ""
+    if room - (width_of(tag) + 1) < NAME_MIN:
+        tag = machine_tag(node, narrow=True)
+    return tag if room - (width_of(tag) + 1) > 0 else ""
 
 
 def auto_width(rows, cols, base, top, info=False):
@@ -1466,8 +1530,8 @@ def row_fields(line):
     its machine — empty for a local row, `m4` for a row on another machine, `m4!`
     when that machine is lost (issue #1475), `m5~` when the row came over the
     shell's own connection to it while the hub is silent (issue #1488). The view
-    never DRAWS the machine (the rows look alike); `!` dims the row, `~` ends it
-    in that machine's dim short name (`m5`, #1621), and the menu titles it."""
+    ends the row in it as an `@` mark (`machine_tag`, issue #1780); `!` dims the
+    row too, and the menu titles it."""
     parts = line.split(US, ROW_FIELDS - 1)
     return parts + [""] * (ROW_FIELDS - len(parts))
 
@@ -1625,9 +1689,14 @@ PALETTE_BASIC = {"PAL_FG": -1, "PAL_DIM": -1, "PAL_SEL": curses.COLOR_BLUE,
 STATE_PAIR = {"working": 1, "needs": 2, "done": 3, "looping": 4}
 STATE_COLOR = {"working": "PAL_CYAN", "needs": "PAL_RED", "done": "PAL_GREEN",
                "looping": "PAL_MAGENTA"}
-PAIR_SEL, PAIR_TOAST, PAIR_FG, PAIR_DIM, SEL_GLYPH = 5, 7, 8, 9, 10
+PAIR_SEL, PAIR_HERE, PAIR_TOAST, PAIR_FG, PAIR_DIM, SEL_GLYPH = 5, 6, 7, 8, 9, 10
+# The @ mark (issue #1780): `@本机` magenta, any other machine's dim — on the
+# raised row's ground too (PAIR_HERE + SEL_GLYPH, PAIR_DIM_SEL).
+PAIR_DIM_SEL = 17
 PAIRS = {PAIR_SEL: ("PAL_FG", "PAL_SEL"), PAIR_TOAST: ("PAL_RED", None),
-         PAIR_FG: ("PAL_FG", None), PAIR_DIM: ("PAL_DIM", None)}
+         PAIR_FG: ("PAL_FG", None), PAIR_DIM: ("PAL_DIM", None),
+         PAIR_HERE: ("PAL_MAGENTA", None), PAIR_HERE + SEL_GLYPH: ("PAL_MAGENTA", "PAL_SEL"),
+         PAIR_DIM_SEL: ("PAL_DIM", "PAL_SEL")}
 for _state, _pair in STATE_PAIR.items():
     PAIRS[_pair] = (STATE_COLOR[_state], None)
     PAIRS[_pair + SEL_GLYPH] = (STATE_COLOR[_state], "PAL_SEL")
@@ -1674,7 +1743,8 @@ def ui(screen, session, worker, lock):
     for number, (fg, bg) in PAIRS.items():
         curses.init_pair(number, pal[fg] if fg else -1, pal[bg] if bg else -1)
     # Dim text is PAL_DIM; a terminal with no palette colour for it dims instead.
-    dim_attr = curses.color_pair(PAIR_DIM) | (curses.A_DIM if pal["PAL_DIM"] == -1 else 0)
+    pal_dim_default = pal["PAL_DIM"] == -1
+    dim_attr = curses.color_pair(PAIR_DIM) | (curses.A_DIM if pal_dim_default else 0)
     curses.mousemask(curses.ALL_MOUSE_EVENTS)
     curses.mouseinterval(0)
     screen.keypad(True)
@@ -2003,16 +2073,15 @@ def ui(screen, session, worker, lock):
             # fixed cell between the state glyph and the name, so at 30 columns every
             # name starts in the same place instead of a child's text sitting two
             # columns right of its parent's.
-            # A row heard over the shell's own connection while the hub is silent
-            # (`m5~`, issue #1488) gives up its last cells to that machine's short
-            # name, dim — the source mark the operator asked for, a name rather
-            # than a ⇄ (issue #1621); the badge keeps its place left of it.
+            # The machine the session runs on (issue #1780): `@m4` grey at the
+            # row's end, `@本机` magenta for this computer's own, `@m4!` dim on a
+            # lost machine's (dimmed) row, `@m5~` heard over the shell's own
+            # connection (#1488). Its cells come off the name, which keeps
+            # NAME_MIN of them; narrower, the mark is `@` + its first letter. The
+            # badge keeps its place left of it.
             w = max(0, width - 1)
-            tag = via_tag(node)
-            cut = via_need(node)
-            via = bool(tag) and w > cut + 1
-            text = row_text(marker, glyph, tree, label, badge, w - cut if via else w,
-                            info_text(row) if wide else "")
+            text, tag = row_layout(marker, glyph, tree, label, badge, w,
+                                   info_text(row) if wide else "", node)
             put(y, text, attr, fill=raised)
             # The state glyph, painted over its own cell in the state's colour —
             # where row_left put it, and only when the row is wide enough for it.
@@ -2022,9 +2091,13 @@ def ui(screen, session, worker, lock):
                     screen.addstr(y, at, glyph, glyph_attr)
                 except curses.error:
                     pass
-            if via:
+            if tag:
+                tpair = tag_pair(node, raised)
+                tag_attr = dim_attr if tpair == PAIR_DIM else curses.color_pair(tpair)
+                if tpair == PAIR_DIM_SEL and pal_dim_default:
+                    tag_attr |= curses.A_DIM
                 try:
-                    screen.addstr(y, w - width_of(tag), tag, dim_attr)
+                    screen.addstr(y, w - width_of(tag), tag, tag_attr)
                 except curses.error:
                     pass
         # The selected row's whole name takes the `?` row while the keyboard is

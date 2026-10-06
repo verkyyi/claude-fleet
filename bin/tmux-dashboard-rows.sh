@@ -382,8 +382,8 @@ WLIST=${WLIST//\\037/$US}
 #   born       the session's birth (cache field 15, issue #1750: @born, else its
 #              window_created, as the node reported it) — the one ruler this
 #              machine's rows and the other machines' are ordered by
-#   @wid       the machine the row is on (`m4`; sidebar field 9, never drawn —
-#              the rows look alike), `m4!` once that machine is lost — or the
+#   @wid       the machine the row is on (`m4`; sidebar field 9, drawn as the
+#              row's `@m4` mark, #1780), `m4!` once that machine is lost — or the
 #              hub itself has been silent longer than FLEET_HUB_SESSIONS_STALE
 #              (60s; global/hub_ok, #1483): the row stays, dimmed, under its
 #              machine's 失联 heading
@@ -1224,10 +1224,8 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     fi
     # field 9 (issue #1475): the machine of a row on another machine — `m4`,
     # `m4!` when lost, `m5~` when heard over the shell's own connection (#1488)
-    # — empty for a local row. The view never draws it (a local row and a remote
-    # row LOOK the same; the machine is the row menu's title): `!` dims the row,
-    # `~` puts the machine's dim short name at its end (#1621), that is all
-    # the paint reads.
+    # — empty for a local row. The view ends the row in it as `@m4` (`@本机` for
+    # the client's own computer, issue #1780); `!` dims the row too.
     # fields 10-12 (issue #1532): the hub's issue · PR · ctx% cells, bare text
     # (`#1532` · `#1552✓` · `45%`; `—` / `·` when there is none). The view draws
     # them only while its info column is open (⌃i), right-aligned.
@@ -1275,9 +1273,13 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # An automatic wake held at the session limit (issue #1058) says so here.
   [ -n "$zwait" ] && { [ -n "$tagpfx" ] && { tagpfx+=' '; dwidth=$((dwidth+1)); }
                        tagpfx+="${AM}${zwait}${R}"; dwidth=$(( dwidth + ${#zwait} )); }
-  # No machine name on a row on another machine (issue #1475): it is laid out
-  # exactly like a local one — the status line on top says which machines, the
-  # lost heading says which rows, and $rnode only dims a lost row here.
+  # A row on another machine ends its tags in that machine's `@m4` (issue #1780,
+  # the sidebar's mark): `@m4!` once it is lost (the row dims too), `@m5~` heard
+  # over the shell's own connection. This machine's own rows carry none.
+  if [ -n "$rnode" ]; then
+    [ -n "$tagpfx" ] && { tagpfx+=' '; dwidth=$((dwidth+1)); }
+    tagpfx+="${GY}@${hnd}${R}"; dwidth=$(( dwidth + 1 + ${#hnd} ))
+  fi
   pad=$(( USABLE - LEFTW - dwidth - RIGHTW )); [ "$pad" -lt 1 ] && pad=1
   printf -v gap '%*s' "$pad" ''
   # tree cell: exactly two cells of source text. Like the old caret it is a

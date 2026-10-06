@@ -243,6 +243,8 @@ fleet_ui_t() {
     zh:sidebar_shell_local_only) printf '这台电脑上没有 fleet：新建 / 恢复请在机器上做' ;;
     en:sidebar_shell_local_only) printf 'no fleet on this computer — new / restore happen on a machine' ;;
     en:sidebar_rename)          printf 'rename› ' ;;
+    zh:sidebar_here)            printf '本机' ;;
+    en:sidebar_here)            printf 'here' ;;
     zh:sidebar_refreshing)      printf '刷新中…' ;;
     en:sidebar_refreshing)      printf 'refreshing…' ;;
     zh:sidebar_landed_heading_fmt) printf '已落地 (%s) · ↵ 恢复' "${1:-}" ;;

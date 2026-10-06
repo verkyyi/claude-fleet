@@ -3,9 +3,9 @@
 # sidebar (issue #1424, EPIC #1419 C5).
 #
 # The sidebar already SHOWS your sessions on the other machines (#1423: rows keyed
-# `wid:<worker_id>`, drawn like the local ones — the machine is the row menu's
-# title and the status line on top, #1475). Enter on one opens a PROXY WINDOW
-# here — named `m4 <name>` (#1475; no ⇄ since #1621), so the window list and the
+# `wid:<worker_id>`, each ending in its machine's `@m4` mark, #1780). Enter on
+# one opens a PROXY WINDOW here — titled `<name> · @m4` (issue #1780: the mark
+# the row ends in, never a machine prefix on the name), so the window list and the
 # pane header both say the keys go elsewhere — a window marked `@remote=<node>:<worker_id>` whose
 # pane is an ssh client attached to that session's tmux window on <node>. Typing
 # and scrolling are the remote window's own; closing the proxy window only drops
@@ -89,7 +89,7 @@
 # with that session's status line and prefix off for good. The one thing a
 # window carries for everyone is its top header (pane-border-status, a WINDOW
 # option): a window a shell/view looks at loses it ONE WAY (issue #1549 — the
-# viewer's `m4 …` header is the one title line) and never gets it back, so no
+# viewer's `<name> · @m4` header is the one title line) and never gets it back, so no
 # client change ever resizes a pane. Never `resize-pane -Z`.
 #
 # The registry $FLEET_CONF_DIR/remote-views/<id>: one line per client,
@@ -145,6 +145,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
+. "$BIN/fleet-ui-lang.sh"   # the proxy title's 本机 (issue #1780)
 
 # A non-interactive ssh session has a bare PATH: find tmux where Homebrew puts it.
 command -v tmux >/dev/null 2>&1 || PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
@@ -205,8 +206,25 @@ rv_prune() {
     T kill-session -t "=$g" 2>/dev/null
   done
 }
+# rv_machine_word <label> — the proxy title's machine (issue #1780): `本机` when
+# the label names this computer (its short hostname, or that name's
+# FLEET_NODE_ALIASES alias, any case — the sidebar's `@本机` rule), else the label.
+# FLEET_SIDEBAR_HOST stands in for the hostname (tests), as in the sidebar.
+rv_machine_word() {
+  local n h lh a la
+  n=$1; h=${FLEET_SIDEBAR_HOST:-$(hostname -s 2>/dev/null)}; h=${h%%.*}
+  lh=$(printf '%s' "$h" | tr '[:upper:]' '[:lower:]')
+  for a in $lh ${FLEET_NODE_ALIASES:-}; do
+    case "$a" in
+      *=*) la=$(printf '%s' "${a%%=*}" | tr '[:upper:]' '[:lower:]'); [ "$la" = "$lh" ] || continue; a=${a#*=} ;;
+    esac
+    [ "$(printf '%s' "$a" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$n" | tr '[:upper:]' '[:lower:]')" ] \
+      && { fleet_ui_t sidebar_here; return 0; }
+  done
+  printf '%s' "$n"
+}
 # A window a shell/view looks at loses its own top header, ONE WAY (issues #1549,
-# #1713): the viewer's `m4 …` header is the one title line, and since it never
+# #1713): the viewer's `<name> · @m4` header is the one title line, and since it never
 # comes back no client arriving or leaving resizes a pane on this machine.
 rv_hide_border() {   # <window-id>
   [ "$(T show-options -wqv -t "$1" pane-border-status 2>/dev/null)" = off ] ||
@@ -309,12 +327,13 @@ open)
   node="${row%%$'\037'*}"; name="${row#*$'\037'}"
   [ -n "$node" ] || { tmux display-message "fleet: $wid 不在侧边栏的远程清单里" 2>/dev/null; exit 1; }
   case "$node" in *[!A-Za-z0-9._-]*) note "bad machine label: $node"; exit 2 ;; esac
-  # `m4 <name>` (issue #1475): the window name is also the pane header
-  # (conf/tmux-attention.conf's pane-border-format), so the top of the pane says
-  # at a glance that the keys go to another machine. The machine's name alone
-  # carries it — no ⇄ (issue #1621): a proxy window is known by `@remote`, never
-  # by its name.
-  title="$node ${name:-${wid#*/}}"
+  # `<name> · @m4` (issue #1780): the window name is also the pane header
+  # (conf/tmux-attention.conf's pane-border-format; the stage's title line,
+  # conf/tmux-shell-stage.conf), so the top of the pane says at a glance where
+  # the keys go — in the sidebar row's own words: `@m4`, `@本机` when that machine
+  # is this computer. No machine PREFIX on the name (#1475's `m4 <name>`), no ⇄
+  # (#1621): a proxy window is known by `@remote`, never by its name.
+  title="${name:-${wid#*/}} · @$(rv_machine_word "$node")"
   shellopt=''; [ "${FLEET_SHELL:-0}" = 1 ] && shellopt=' --shell'   # the shell's panes (#1484)
   cmd="exec bash $(sq "$BIN/fleet-remote-view.sh") run$shellopt $(sq "$node") $(sq "$wid")"
   # The shell's STAGE (issue #1759): there the proxy windows live on a server of
